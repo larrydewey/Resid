@@ -1,0 +1,8 @@
+[package]
+name = "resid-fmt"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+resid-lexer = { path = "../../crates/resid-lexer" }
+resid-parser = { path = "../../crates/resid-parser" }

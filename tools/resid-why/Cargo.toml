@@ -1,0 +1,8 @@
+[package]
+name = "resid-why"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+resid-ir = { path = "../../crates/resid-ir" }
+resid-type = { path = "../../crates/resid-type" }

@@ -1,0 +1,18 @@
+[package]
+name = "residc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+resid-build = { path = "../resid-build" }
+resid-lexer = { path = "../resid-lexer" }
+resid-parser = { path = "../resid-parser" }
+resid-ir = { path = "../resid-ir" }
+resid-type = { path = "../resid-type" }
+resid-codegen = { path = "../resid-codegen" }
+resid-builtin = { path = "../resid-builtin" }
+inkwell = { version = "0.9", features = ["llvm22-1"] }
+
+[[bin]]
+name = "residc"
+path = "src/main.rs"

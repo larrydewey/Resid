@@ -1,0 +1,821 @@
+==================================================
+RESID LANGUAGE DESIGN DOCUMENT
+Version 2.9 — Production Ready
+==================================================
+
+
+LANGUAGE DESIGN CONTEXT
+==================================================
+
+Resid is an eager compile-time programming language.
+The compiler’s primary obligation is maximal authorized
+reduction of first-class knowledge.
+
+Runtime behavior consists solely of the residual computation
+that remains after all provable reductions have been performed.
+
+The name Resid (pronounced re-SEED) denotes this residual core.
+
+Core statement:
+
+    Compilation is maximal authorized reduction
+    of first-class knowledge.
+
+
+==================================================
+FUNDAMENTAL LAWS
+==================================================
+
+  1. Everything begins as compile-time reducible.
+  2. The compiler must reduce all provable computation.
+  3. Unknown information must be explicitly introduced.
+  4. Residual computation enters through rt.
+  5. Compile-time computation cannot depend on unresolved
+     residual information.
+  6. The compiler preserves knowledge whenever possible.
+  7. Residual dependencies should be minimized.
+  8. Authorized external knowledge enters through providers.
+  9. Knowledge acquisition is an effect.
+ 10. Effects determine reducibility.
+ 11. External information has provenance.
+ 12. Runtime uncertainty is explicit.
+ 13. Knowledge is first-class.
+
+
+==================================================
+1. KNOWLEDGE IS FIRST-CLASS
+==================================================
+
+Knowledge may be represented, transformed, reduced,
+composed, serialized, transmitted, and inspected.
+
+Knowledge includes values, types, constraints, proofs,
+behaviors, capabilities, provider results, residual
+values, and effects.
+
+
+==================================================
+2. EXECUTION MODEL
+==================================================
+
+A program is progressively reduced until only irreducible
+computations remain. Compilation is knowledge reduction.
+
+
+==================================================
+3. INTERNAL REPRESENTATION — KNOWLEDGE GRAPH
+==================================================
+
+Programs are represented as a knowledge graph (enriched
+expression DAG). Each node tracks expression, type,
+knowledge state, dependencies, effects, capabilities,
+and provenance.
+
+Knowledge states: KNOWN, EFFECT, RESIDUAL, INVALID.
+
+
+==================================================
+4. VALUE MODEL
+==================================================
+
+Values are immutable, have no observable identity, and
+may be freely copied. Handles are identity-bearing
+runtime resources under capability control. Only handles
+may represent mutable state.
+
+
+==================================================
+5. MEMORY MODEL
+==================================================
+
+Resid does not expose stack, heap, or register allocation.
+The compiler decides storage. The implementation may use
+any target ISA extensions (AVX-512, NEON, SVE, …) for
+optimization; raw intrinsics are not exposed.
+
+
+==================================================
+6. PRIMITIVE NUMERIC TYPES (FIRST-CLASS)
+==================================================
+
+Numeric types are first-class nominal types.
+
+Integer family (distinct types for every width):
+
+  Int(8)   Int(16)   Int(32)   Int(64)
+  Int(128) Int(256)  Int(512)
+
+  UInt(8)  UInt(16)  UInt(32)  UInt(64)
+  UInt(128) UInt(256) UInt(512)
+
+Aliases (fixed, reproducible):
+
+  Int  = Int(64)
+  UInt = UInt(64)
+
+Pointer-sized (target-dependent):
+
+  ISize    // signed, width of a pointer
+  USize    // unsigned, width of a pointer
+
+Floating-point family:
+
+  Float(16)  Float(32)  Float(64)  Float(128)
+  Float(256) Float(512)            // backend-dependent
+
+Alias:
+
+  Float = Float(64)
+
+Each width is a distinct type. There is no subtyping
+between any numeric types.
+
+
+--------------------------------------------------
+6.1  Interoperability — Integer Arithmetic
+--------------------------------------------------
+
+Mixed-width integer operations are permitted when both
+operands are signed or both are unsigned.
+
+The result type is the smallest width W ∈ {8,16,32,64,128,256,512}
+such that every mathematically possible result of the
+operation on values of the two operand types fits in
+that width.
+
+Examples (unsigned addition):
+
+  UInt(8)  + UInt(8)  → UInt(16)   // 255+255 = 510
+  UInt(16) + UInt(8)  → UInt(32)   // 65535+255 = 65790
+  UInt(32) + UInt(32) → UInt(64)   // needs 33 bits
+
+The same range rule applies to subtraction, multiplication,
+division, remainder, and shifts (shift amount is treated
+as a pure integer; the left operand determines the base
+width before the range rule is applied).
+
+ISize / USize participate with their actual target width.
+
+Signed and unsigned operands may never be mixed in a
+single arithmetic operation; an explicit cast is required.
+
+
+--------------------------------------------------
+6.2  Interoperability — Floating-Point
+--------------------------------------------------
+
+Integer + floating-point:
+
+  The integer operand is converted to the floating-point
+  type of the other operand; the result is that floating-
+  point type.
+
+  Int(32) + Float(64)  →  Float(64)
+
+Floating-point + floating-point:
+
+  The result is the wider of the two floating-point types
+  (using the order 16 < 32 < 64 < 128 < 256 < 512).
+
+
+--------------------------------------------------
+6.3  Comparisons
+--------------------------------------------------
+
+Relational and equality operators follow the same
+widening rules as arithmetic, except that a signed/
+unsigned mix is always a hard error.
+
+The result of a comparison is Bool.
+
+
+--------------------------------------------------
+6.4  Assignment and Narrowing
+--------------------------------------------------
+
+Narrowing conversions are never implicit.
+
+  UInt(16) x = some_u32;     // hard error
+  UInt(16) x = u16(some_u32); // ok (explicit)
+
+Widening assignments likewise require an explicit cast
+or conversion helper; interoperability applies only to
+operators, not to binding.
+
+
+--------------------------------------------------
+6.5  Checked Arithmetic
+--------------------------------------------------
+
+After operands have been brought to the common result
+type, the operation itself is still checked by default.
+Overflow of the result type is an error (compile-time
+when provable, residual error when forced at runtime).
+
+Wrapping and saturating variants are supplied by the
+standard library for every width.
+
+
+--------------------------------------------------
+6.6  Behaviors
+--------------------------------------------------
+
+Eq, Ord and Hash are supplied for the entire numeric
+family by generic behavior definitions. The compiler
+instantiates them for every concrete width. Users never
+need to declare per-width instances.
+
+
+--------------------------------------------------
+6.7  Conversion Helpers
+--------------------------------------------------
+
+  i8 i16 i32 i64 i128 i256 i512
+  u8 u16 u32 u64 u128 u256 u512
+  f16 f32 f64 f128 f256 f512
+  isize usize
+
+Plus the ordinary C-style cast (Type)expr.
+
+
+==================================================
+7. BINDINGS AND IDENTITY
+==================================================
+
+  Type x = expression;
+
+Bindings are immutable. Shadowing is forbidden everywhere.
+There are no assignment operators.
+
+Discard:
+
+  _ = expression;
+
+
+==================================================
+8. FUNCTIONS
+==================================================
+
+  Ret name(Type1 p1, Type2 p2 = default) {
+      body
+  }
+
+Defaults must be pure compile-time expressions.
+Named arguments are permitted:
+
+  draw(x = 10, y = 20, color = red);
+
+Entry point: Int main().
+
+
+==================================================
+9. RESIDUAL COMPUTATION
+==================================================
+
+  Type x = rt expression;
+  @residual Type y = expression;
+
+Residual values are first-class knowledge.
+Top-level residual force or unwrap failure aborts the
+process. Inside a concurrent region, failure is delivered
+as Result.
+
+  known(x);        // compile-time hard error if residual
+  rt_known(x);     // residual check
+
+
+==================================================
+10. EFFECTS
+==================================================
+
+Effects are first-class. They do not appear in signatures;
+capabilities (@requires) are the sole authorization surface.
+
+
+==================================================
+11. BEHAVIORS
+==================================================
+
+Behaviors are ordinary compile-time knowledge.
+
+  Ord(Int) = ... ;
+  sort(values, using = Reverse(Ord(Int)));
+
+Unique behaviors are inserted automatically; ambiguity
+requires explicit selection.
+
+Numeric Eq / Ord / Hash are supplied generically for
+the whole family (see §6.6).
+
+
+==================================================
+12. TYPES
+==================================================
+
+Product:  type Point = { x: Int, y: Int };
+Sum:      type Option(T) = Some(T) | None;
+Constraint: type Positive = Int[value > 0];
+            type Positive = Int where value > 0;
+
+Residual types are permitted. Edge-case rules R1–R5 remain
+in force.
+
+Numeric types are first-class (see §6).
+
+
+==================================================
+13. PATTERN MATCHING AND DESTRUCTURING
+==================================================
+
+  match expression {
+      Some(x) => expression,
+      None    => expression
+  }
+
+Irrefutable destructuring:
+
+  Point { x, y } = p;
+  Some(v) = opt;          // hard error if refutable
+
+if-let / while-let:
+
+  if (Some(x) = opt) { ... }
+  while (Some(x) = it.next()) { ... }
+
+
+==================================================
+14. LITERALS AND COMPOSITES
+==================================================
+
+  42  0x2A  3.14  'a'  "hello"  true  false  null
+  [1, 2, 3]   {"a": 1}   Point { x = 1, y = 2 }
+
+  f"hello {name}"
+  r"C:\path\file"
+  b"bytes"
+
+Literals default to Int / Float. Width is changed only
+by explicit cast or conversion helper.
+
+
+==================================================
+15. RANGES AND SLICING
+==================================================
+
+  start..end        // half-open
+  start..=end       // closed
+  xs[start..end]
+
+
+==================================================
+16. HANDLES AND LIFETIME
+==================================================
+
+  with (Type h = expression) { body }
+  with (T a = e1, U b = e2) { body }
+
+Method sugar (handles only): h.m(args) ≡ m(h, args).
+Immutable views may be shared across regions; mutable
+handles must be moved.
+
+
+==================================================
+17. FIELD AND INDEX ACCESS
+==================================================
+
+  p.x   xs[i]   m[k]
+
+
+==================================================
+18. CONTROL FLOW
+==================================================
+
+Classic C plus:
+
+  for (Type x in xs) { ... }
+
+  if (Some(x) = opt) { ... }
+  while (Some(x) = it.next()) { ... }
+
+
+==================================================
+19. CONCURRENCY
+==================================================
+
+Structured concurrency:
+
+  Result(T, RegionError) r = spawn (cap1, cap2) {
+      return value;
+  };
+
+Rules:
+
+  - Capabilities listed explicitly; child ≤ parent.
+  - Child receives a fresh CapEnv.
+  - Residual forcing uses only the child’s CapEnv.
+  - Returns pure values or residuals.
+  - Mutable handles moved; immutable views shareable.
+  - Child failure → Err(RegionError) to parent.
+  - Nested spawn permitted.
+  - Scheduler implementation-defined.
+  - Work may run in parallel; completion is structured.
+
+
+==================================================
+20. CAPABILITIES AND SECURITY
+==================================================
+
+No ambient authority. Capabilities form a lattice and
+travel with effects, handles, and residuals. Revocation
+is monotonic within an execution / region.
+
+
+==================================================
+21. MODULES AND VISIBILITY
+==================================================
+
+  import "math.resid";
+  import "math.resid" (sin, cos);
+  import "math.resid" as M;
+
+Default private; `pub` exports.
+
+
+==================================================
+22. RESULT / OPTION SUGAR
+==================================================
+
+Inside a function that returns Result or Option:
+
+  T x = value?;              // early-return on Err / None
+  T y = value else { … };    // explicit fallback
+
+
+==================================================
+23. ASSERTIONS AND DEBUGGING
+==================================================
+
+  assert(cond, "message");       // compile-time obligation
+  rt_assert(cond, "message");    // residual check
+
+  known(x);                      // must be known at compile time
+  rt_known(x);                   // residual check
+
+  comptime_print(f"size = {size}");  // compile-time only
+
+  todo("message");
+  unimplemented("message");
+
+
+==================================================
+24. SOURCE LOCATION
+==================================================
+
+  SourceLoc loc = #location;     // pure value
+
+
+==================================================
+25. DOCUMENTATION COMMENTS
+==================================================
+
+  /// Line documentation
+  /** Block documentation */
+
+Doc comments flow into residual notes and IDE hover.
+
+
+==================================================
+26. SURFACE SYNTAX SUMMARY
+==================================================
+
+  // numeric types are first-class
+  UInt(8) a = u8(1);
+  UInt(16) b = u16(2);
+  UInt(32) c = a + b;          // range rule → UInt(32)
+
+  // functions with defaults and named args
+  Ret f(Type a, Type b = 0) { … }
+  f(1, b = 2);
+
+  // bindings
+  Type x = expression;
+  @residual Type y = expression;
+  Point { x, y } = p;
+  _ = expression;
+
+  // residual
+  rt expression
+
+  // capabilities
+  @requires(filesystem, git(readonly))
+
+  // concurrency
+  spawn (cap1, cap2) { body }
+
+  // types
+  type T = { f: Type };
+  type T = A(Type) | B;
+  type T = U[P];
+  type T = Int(32);
+
+  // strings
+  f"hello {name}"
+  r"raw"   b"bytes"
+
+  // ranges & slices
+  0..n   0..=n   xs[1..3]
+
+  // control
+  if / while / for / for-in / match / return / break / continue
+  if (Some(x) = opt) { … }
+
+  // resources
+  with (T a = e1, U b = e2) { … }
+
+  // modules
+  import "file.resid";
+  import "file.resid" (a, b);
+  import "file.resid" as M;
+  pub declaration
+
+  // sugar & helpers
+  value?    value else { … }
+  assert / rt_assert / known / rt_known
+  comptime_print / todo / unimplemented
+  i32(42)  u64(n)  f32(x)  usize(len)
+  #location
+
+
+==================================================
+27. OPERATORS AND PRECEDENCE
+==================================================
+
+  1. Primary        id literal (e) rt e call index field method
+                    range slice
+  2. Unary          + - ! ~ (Type)e
+  3. Multiplicative * / %
+  4. Additive       + -
+  5. Shift          << >>
+  6. Relational     < <= > >=
+  7. Equality       == !=
+  8. Bitwise AND    &
+  9. Bitwise XOR    ^
+ 10. Bitwise OR     |
+ 11. Logical AND    &&
+ 12. Logical OR     ||
+ 13. Conditional    e ? e : e
+ 14. using          e, using = behavior
+
+No assignment operators.
+No pure-value method chaining or pipeline operator.
+
+Numeric operators obey the interoperability rules of §6.
+
+
+==================================================
+28. CORE EBNF (ESSENTIAL)
+==================================================
+
+  translation-unit ::= { import-decl | declaration }
+
+  import-decl ::= "import" string-literal
+                  [ "(" id-list ")" | "as" identifier ] ";"
+
+  declaration ::= [ "pub" ] (function-def | type-def
+                  | behavior-def | capability-annotation declaration)
+
+  function-def ::= type identifier "(" [ parameter-list ] ")"
+                   compound-statement
+
+  parameter    ::= type identifier [ "=" expression ]
+
+  type-def     ::= "type" identifier "=" type-body ";"
+
+  spawn-expression ::= "spawn" "(" capability-list ")"
+                       compound-statement
+
+  match-expression ::= "match" expression
+                       "{" match-arm { "," match-arm } "}"
+
+  for-in-statement ::= "for" "(" type identifier "in" expression ")"
+                       statement
+
+  primary ::= identifier | literal | "(" expression ")"
+            | "rt" expression | f-string | raw-string | byte-string
+            | list-literal | map-literal | struct-literal
+            | provider-call | spawn-expression | "#location"
+
+  range-expression ::= expression ".." expression
+                     | expression "..=" expression
+
+  slice-expression ::= primary "[" range-expression "]"
+
+  type ::= identifier [ "(" type-list ")" ]
+         | "rt" type
+         | "Int" "(" int ")" | "UInt" "(" int ")"
+         | "Float" "(" int ")" | "ISize" | "USize"
+
+
+==================================================
+29. STANDARD LIBRARY (v1)
+==================================================
+
+Trusted providers: filesystem, environment, git
+(all volatile by default).
+
+Core types: Bool, full Int/UInt/Float family, ISize,
+USize, Str, Bytes, Option, Result, List, Map, Set,
+RegionError, SourceLoc.
+
+Conversion helpers: i8…i512, u8…u512, f16…f512,
+isize, usize.
+
+Checked arithmetic (default) + wrapping_* + saturating_*
+for every width.
+
+Core behaviors: Eq, Ord, Hash (generic over the numeric
+family), Serialize, Allocator, Reverse.
+
+
+==================================================
+30. ARTIFACTS AND CODE GENERATION
+==================================================
+
+Native binary / object files via LLVM plus optional
+CBOR residual-notes sidecar. Residuals become LLVM
+thunks carrying computation, provenance, and
+capabilities.
+
+The implementation may employ any target ISA extensions
+(AVX-512, NEON, SVE, etc.) for code generation and for
+the realization of wide numeric types.
+
+
+==================================================
+31. CBOR SCHEMAS
+==================================================
+
+Provenance, Capability, ResidualNotes, ResidualNote,
+KnowledgeCache, CacheEntry — as previously defined
+(RFC 8949 preferred serialization).
+
+Files:
+
+  <artifact>.resid-notes.cbor
+  <project>.resid-cache.cbor
+
+
+==================================================
+32. BUILD SYSTEM
+==================================================
+
+resid.toml with [package], [capabilities], [reduction],
+[target]. Profiles: debug, release, check.
+
+
+==================================================
+33. PURE REDUCTION RELATION
+==================================================
+
+Κ ⊢ e → e′ covers β-reduction, constant folding,
+constraint discharge, provider substitution, behavior
+insertion, method desugaring (handles), pattern matching,
+destructuring, checked arithmetic, numeric interoperability
+widening, string interpolation, range/slice construction,
+and structural identity.
+
+
+==================================================
+34. PACKAGES, DEBUGGING, TOOLING
+==================================================
+
+Content-addressed packages. Canonical debug artifact
+is CBOR residual notes.
+
+“Why is this residual?” is a tooling query (IDE / resid
+why), not a language construct.
+
+Normative tooling expectations:
+
+  residc          – compiler driver
+  resid fmt       – canonical formatter
+  resid-notes     – residual-notes viewer
+  resid-cache     – knowledge-cache inspector
+  resid-graph     – dependency graph emitter
+  resid why       – residual provenance query
+  LSP surface     – residual status, capabilities,
+                    knowledge state, doc comments,
+                    exhaustiveness diagnostics
+
+
+==================================================
+35. NON-GOALS
+==================================================
+
+  - mutable values or bindings
+  - variable shadowing
+  - assignment operators
+  - null references
+  - ambient authority
+  - hidden identity
+  - trait / interface systems
+  - programmer-controlled allocation
+  - exceptions outside concurrent Result
+  - implicit numeric conversions (except the explicit
+    interoperability rules of §6)
+  - operator overloading beyond Behaviors
+  - unstructured concurrency
+  - raw target intrinsics
+  - pure-value method chaining / pipeline operator
+
+
+==================================================
+36. BOOTSTRAP AND CONFORMANCE
+==================================================
+
+Phase 1 – Hosted interpreter
+Phase 2 – LLVM lowering
+Phase 3 – Self-hosting
+
+Conformance includes all prior rules plus the numeric
+interoperability rules of §6, for-in, destructuring,
+if-let/while-let, ranges, slicing, known/rt_known,
+comptime_print, raw/byte strings, #location, discard
+binding, and the normative tooling surface.
+
+
+==================================================
+37. PRODUCTION-READY STATUS
+==================================================
+
+Resid 2.9 is production-ready as a language specification.
+
+All core semantics, syntax, numeric types (first-class
+with interoperability), concurrency, DX conveniences,
+and tooling expectations are locked. Implementation may
+proceed against this document.
+
+
+==================================================
+38. RESOLVED DECISIONS (CARRIED FORWARD)
+==================================================
+
+38.1 Float(16) representation
+
+  Primary: LLVM half (i16 with IEEE 754 binary16 semantics).
+  Failover: software-emulated via f32 conversion when target
+  lacks native half support.
+
+38.2 Float(128) representation
+
+  Primary: __float128 via LLVM libcall (soft-float).
+  Failover: software-emulated via arrays + runtime lib.
+
+38.3 Float(256) and Float(512) representation
+
+  Software emulation via arrays of i64 + runtime library.
+
+38.4 Provider volatility
+
+  filesystem, environment, and git are volatile by default.
+  Provider calls require runtime capability checks and are
+  not constant-folded unless explicitly annotated non-volatile
+  in a future extension.
+
+38.5 Spawn scheduler
+
+  One OS thread per spawn. Structured join via thread join.
+  Task pools deferred to a future scheduler abstraction.
+
+38.6 Doc comment storage
+
+  Vec<String> per declaration. Flows into residual notes
+  and LSP hover. No structured parsing required.
+
+38.7 Incremental cache granularity
+
+  Cache reductions per source file hash. Per-node content-
+  addressed caching is future work.
+
+
+==================================================
+39. NUMERIC INTEROPERABILITY SUMMARY
+==================================================
+
+  - Every width is a distinct first-class type.
+  - No subtyping, no implicit narrowing or widening
+    on assignment.
+  - Arithmetic and comparison on same-sign integers
+    use a range-based result width (smallest fitting
+    available width).
+  - Signed/unsigned mix is a hard error.
+  - Integer + float yields the float type.
+  - Float + float yields the wider float.
+  - Checked arithmetic remains the default after
+    widening.
+  - Behaviors Eq/Ord/Hash are generic over the family.
+
+
+==================================================
+END OF DOCUMENT
+==================================================
