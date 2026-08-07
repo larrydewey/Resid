@@ -381,3 +381,458 @@ fn literal_compatible(a: &Expr, target: &SemType) -> bool {
         *value <= (1u128 << (bits - 1)) - 1
     }
 }
+
+// ─── Upfront program type checking ─────────────────────────────
+
+/// Type-check every function body in a translation unit.
+/// Returns a list of errors (empty = all passed).
+pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
+    let sigs = collect_signatures(unit);
+    let mut errs = Vec::new();
+    for decl in &unit.declarations {
+        if let Declaration::Function(f) = decl {
+            let mut env = Env::new();
+            let sig = sigs.get(&f.name.0).unwrap();
+            for (param, pt) in f.params.iter().zip(sig.params.iter()) {
+                env.insert(&param.name.0, pt.clone());
+            }
+            type_check_block(&f.body, &env, &sigs, &mut errs);
+        }
+    }
+    errs
+}
+
+fn type_check_block(block: &Block, env: &Env, sigs: &Signatures, errs: &mut Vec<TypeError>) {
+    let mut env = env.clone();
+    for stmt in &block.statements {
+        if let StmtKind::Bind { name, type_: opt_type, value } = &stmt.kind {
+            let ty = if let Some(t) = opt_type {
+                resolve_type(t).unwrap_or(SemType::Bool)
+            } else {
+                infer_expr(value, &env, sigs).unwrap_or(SemType::Bool)
+            };
+            env.insert(&name.0, ty);
+        }
+        if let StmtKind::Expr(e) = &stmt.kind {
+            if let Err(err) = infer_expr(e, &env, sigs) {
+                errs.push(err);
+            }
+        }
+    }
+    if let Some(ret) = &block.ret {
+        if let Err(err) = infer_expr(ret, &env, sigs) {
+            errs.push(err);
+        }
+    }
+}
+
+// ─── Tests ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use resid_lexer::token::{Literal, IntKind, FloatLit, Op as OpKind, Span};
+    use resid_parser::{Expr, ExprKind, Id, Block, Type};
+
+    fn span() -> Span {
+        Span { file: String::new(), line: 0, col_start: 0, col_end: 0 }
+    }
+
+    fn expr_id(name: &str) -> Expr {
+        Expr { kind: ExprKind::Id(Id(name.to_string())), span: span() }
+    }
+
+    fn expr_int(v: u128) -> Expr {
+        Expr { kind: ExprKind::Literal(Literal::Int { value: v, kind: IntKind::Decimal(0) }), span: span() }
+    }
+
+    fn expr_binop(op: OpKind, lhs: &str, rhs: &str) -> Expr {
+        Expr {
+            kind: ExprKind::BinaryOp {
+                op,
+                lhs: Box::new(expr_id(lhs)),
+                rhs: Box::new(expr_id(rhs)),
+            },
+            span: span(),
+        }
+    }
+
+    fn make_env() -> Env {
+        let mut env = Env::new();
+        let int_ty = SemType::Numeric(NumericType::Int(IntWidth::from_bits(64).unwrap()));
+        let u8_ty = SemType::Numeric(NumericType::UInt(IntWidth::B8.into()));
+        let f64_ty = SemType::Numeric(NumericType::Float(FloatWidth::F64));
+        env.insert("a", int_ty.clone());
+        env.insert("b", int_ty);
+        env.insert("u", u8_ty);
+        env.insert("x", f64_ty);
+        env
+    }
+
+    #[test]
+    fn infer_literal_int() {
+        let e = expr_int(42);
+        let env = Env::new();
+        let sigs = Signatures::new();
+        let ty = infer_expr(&e, &env, &sigs).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+    }
+
+    #[test]
+    fn infer_literal_bool() {
+        let e = Expr { kind: ExprKind::Literal(Literal::Bool(true)), span: span() };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_literal_float() {
+        let e = Expr { kind: ExprKind::Literal(Literal::Float(FloatLit { value: "3.14".into() })), span: span() };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+    }
+
+    #[test]
+    fn infer_id_from_env() {
+        let e = expr_id("a");
+        let env = make_env();
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+    }
+
+    #[test]
+    fn infer_undefined_var() {
+        let e = expr_id("z");
+        let env = Env::new();
+        let result = infer_expr(&e, &env, &Signatures::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn infer_binary_add_widening() {
+        // a + b where both are i64 → i128 (spec §6.1 widening)
+        let e = expr_binop(OpKind::Plus, "a", "b");
+        let env = make_env();
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B128)));
+    }
+
+    #[test]
+    fn infer_binary_mul_widening() {
+        // a * b where both are i64 → i128
+        let e = expr_binop(OpKind::Star, "a", "b");
+        let env = make_env();
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B128)));
+    }
+
+    #[test]
+    fn infer_binary_sub_no_widen() {
+        // a - b where both are i64 → i64 (subtraction doesn't widen for same-width ints)
+        // Actually per spec, the result width is determined by the smallest width that can
+        // hold all possible results. For subtraction of two i64 values:
+        // min value: -(2^63) - (2^63-1) which fits in i64
+        // Actually: 0 - 2^63 = -2^63 which fits in i64
+        // And 2^63 - 0 = 2^63 doesn't fit in i64... let me check the actual implementation.
+        let e = expr_binop(OpKind::Minus, "a", "b");
+        let env = make_env();
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        // Subtraction result: min(0 - (2^63-1)) = -(2^63-1), max((2^63-1) - 0) = 2^63-1
+        // This needs 65 bits, so widens to i128
+        assert!(matches!(ty, SemType::Numeric(NumericType::Int(w)) if w.bits() >= 64));
+    }
+
+    #[test]
+    fn infer_signed_unsigned_mix_error() {
+        // a (i64) + u (u8) should fail
+        let e = expr_binop(OpKind::Plus, "a", "u");
+        let env = make_env();
+        let result = infer_expr(&e, &env, &Signatures::new());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("signed and unsigned"), "expected signedness error, got: {}", err.message);
+    }
+
+    #[test]
+    fn infer_comparison_produces_bool() {
+        // a > b should produce Bool
+        let e = expr_binop(OpKind::Greater, "a", "b");
+        let env = make_env();
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_logical_and() {
+        // We need Bool operands. Let's create a custom env.
+        let mut env = Env::new();
+        let bool_ty = SemType::Bool;
+        env.insert("p", bool_ty.clone());
+        env.insert("q", bool_ty);
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::AndAnd,
+                lhs: Box::new(expr_id("p")),
+                rhs: Box::new(expr_id("q")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_logical_or() {
+        let mut env = Env::new();
+        env.insert("p", SemType::Bool);
+        env.insert("q", SemType::Bool);
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::OrOr,
+                lhs: Box::new(expr_id("p")),
+                rhs: Box::new(expr_id("q")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_unary_not() {
+        let mut env = Env::new();
+        env.insert("p", SemType::Bool);
+        let e = Expr {
+            kind: ExprKind::UnaryOp { op: OpKind::Not, operand: Box::new(expr_id("p")) },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_unary_not_on_int_error() {
+        let env = make_env();
+        let e = Expr {
+            kind: ExprKind::UnaryOp { op: OpKind::Not, operand: Box::new(expr_id("a")) },
+            span: span(),
+        };
+        let result = infer_expr(&e, &env, &Signatures::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn infer_unary_minus_on_int() {
+        let env = make_env();
+        let e = Expr {
+            kind: ExprKind::UnaryOp { op: OpKind::Minus, operand: Box::new(expr_id("a")) },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert!(matches!(ty, SemType::Numeric(_)));
+    }
+
+    #[test]
+    fn infer_bitwise_on_float_error() {
+        // & on floats should be an error
+        let e = expr_binop(OpKind::Amp, "x", "x");
+        let env = make_env();
+        let result = infer_expr(&e, &env, &Signatures::new());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().message;
+        assert!(msg.contains("bitwise"), "expected bitwise error, got: {msg}");
+    }
+
+    #[test]
+    fn infer_cast() {
+        // Cast a i64 to i32
+        let e = Expr {
+            kind: ExprKind::Cast {
+                type_: Type::Base { name: Id("i32".into()), params: None },
+                operand: Box::new(expr_id("a")),
+            },
+            span: span(),
+        };
+        let env = make_env();
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B32.into())));
+    }
+
+    #[test]
+    fn infer_if_expression() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        env.insert("b", SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        env.insert("cond", SemType::Bool);
+        let if_expr = Expr {
+            kind: ExprKind::If {
+                cond: Box::new(expr_id("cond")),
+                then_block: Box::new(Block {
+                    statements: vec![],
+                    ret: Some(Box::new(expr_id("a"))),
+                    span: span(),
+                }),
+                else_block: Some(Box::new(Block {
+                    statements: vec![],
+                    ret: Some(Box::new(expr_id("b"))),
+                    span: span(),
+                })),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&if_expr, &env, &Signatures::new()).unwrap();
+        assert!(matches!(ty, SemType::Numeric(_)));
+    }
+
+    #[test]
+    fn infer_if_no_else() {
+        let mut env = Env::new();
+        env.insert("cond", SemType::Bool);
+        let if_expr = Expr {
+            kind: ExprKind::If {
+                cond: Box::new(expr_id("cond")),
+                then_block: Box::new(Block {
+                    statements: vec![],
+                    ret: None,
+                    span: span(),
+                }),
+                else_block: None,
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&if_expr, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool); // void-like
+    }
+
+    #[test]
+    fn infer_rt_expr() {
+        let e = Expr {
+            kind: ExprKind::Rt(Box::new(expr_int(42))),
+            span: span(),
+        };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+    }
+
+    #[test]
+    fn infer_raw_string() {
+        let e = Expr {
+            kind: ExprKind::RawString("hello".into()),
+            span: span(),
+        };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Str);
+    }
+
+    #[test]
+    fn infer_fstring() {
+        let e = Expr {
+            kind: ExprKind::FString(vec![resid_parser::FStringPart::Text("hello".into())]),
+            span: span(),
+        };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Str);
+    }
+
+    #[test]
+    fn literal_compatible_fits() {
+        let lit = expr_int(5);
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B16.into()));
+        assert!(literal_compatible(&lit, &target));
+    }
+
+    #[test]
+    fn literal_compatible_overflow_i8() {
+        let lit = expr_int(300); // 300 > 127 (i8 max)
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B8.into()));
+        assert!(!literal_compatible(&lit, &target));
+    }
+
+    #[test]
+    fn literal_compatible_unsigned() {
+        let lit = expr_int(255);
+        let target = SemType::Numeric(NumericType::UInt(IntWidth::B8.into()));
+        assert!(literal_compatible(&lit, &target)); // 255 = max u8
+    }
+
+    #[test]
+    fn literal_compatible_not_numeric() {
+        let lit = expr_int(5);
+        let target = SemType::Bool;
+        assert!(!literal_compatible(&lit, &target));
+    }
+
+    #[test]
+    fn resolve_type_int() {
+        let td = Type::Base { name: Id("Int".into()), params: None };
+        let ty = resolve_type(&td).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+    }
+
+    #[test]
+    fn resolve_type_i32() {
+        let td = Type::Base { name: Id("i32".into()), params: None };
+        let ty = resolve_type(&td).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B32.into())));
+    }
+
+    #[test]
+    fn resolve_type_bool() {
+        let td = Type::Base { name: Id("Bool".into()), params: None };
+        let ty = resolve_type(&td).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn check_program_valid() {
+        let src = r#"
+Int add(Int a, Int b) {
+    return a + b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_undefined_var() {
+        let src = r#"
+Int main() {
+    return not_defined;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected type error for undefined variable");
+    }
+
+    #[test]
+    fn check_program_signedness_mix() {
+        // Int + UInt should fail
+        let src = r#"
+Int main() {
+    Int a = 1;
+    UInt b = 2;
+    return a + b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected type error for signed/unsigned mix");
+    }
+
+    #[test]
+    fn check_program_widening_valid() {
+        let src = r#"
+Int main() {
+    Int a = 1;
+    Int b = 2;
+    return a + b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+}

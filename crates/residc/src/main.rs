@@ -1,7 +1,10 @@
 //! `residc` — the Resid compiler driver.
 //!
-//! Phase 1: lex + parse a source file and report any diagnostics.
-//! `residc <file> emit-ir` also runs the LLVM code generator and prints IR.
+//! Full pipeline: lex → parse → type check → (emit-ir) LLVM codegen.
+//!
+//! Usage:
+//!   residc <file.resid>          — lex + parse, report diagnostics
+//!   residc <file.resid> emit-ir  — full pipeline → print LLVM IR
 
 use std::env;
 use std::fs;
@@ -53,6 +56,22 @@ fn main() -> ExitCode {
 }
 
 fn emit_ir(unit: &resid_parser::TranslationUnit) -> ExitCode {
+    // Run upfront type checking.
+    let type_errors = resid_type::check_program(unit);
+    for e in &type_errors {
+        eprintln!(
+            "{}:{}:{}: type error: {}",
+            e.span.file, e.span.line, e.span.col_start, e.message
+        );
+    }
+    if !type_errors.is_empty() {
+        eprintln!(
+            "error: type checking failed with {} diagnostic(s)",
+            type_errors.len()
+        );
+        return ExitCode::FAILURE;
+    }
+
     let cx = inkwell::context::Context::create();
     let mut cg = resid_codegen::CodeGen::new(&cx, "resid");
     match cg.generate(unit) {
