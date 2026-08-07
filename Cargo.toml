@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/resid-lexer",
+    "crates/resid-parser",
+    "crates/resid-ir",
+    "crates/resid-type",
+    "crates/resid-codegen",
+    "crates/resid-builtin",
+    "crates/resid-build",
+    "crates/residc",
+    "tools/resid-fmt",
+    "tools/resid-notes",
+    "tools/resid-cache",
+    "tools/resid-graph",
+    "tools/resid-why",
+]

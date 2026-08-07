@@ -1,0 +1,13 @@
+[package]
+name = "resid-build"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+resid-lexer = { path = "../resid-lexer" }
+resid-parser = { path = "../resid-parser" }
+resid-ir = { path = "../resid-ir" }
+resid-type = { path = "../resid-type" }
+resid-codegen = { path = "../resid-codegen" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

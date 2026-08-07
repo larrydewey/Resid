@@ -1,0 +1,12 @@
+[package]
+name = "resid-codegen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+resid-ir = { path = "../resid-ir" }
+resid-lexer = { path = "../resid-lexer" }
+resid-parser = { path = "../resid-parser" }
+resid-type = { path = "../resid-type" }
+inkwell = { version = "0.9", features = ["llvm22-1"] }
+
