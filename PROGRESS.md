@@ -1668,8 +1668,8 @@ Before considering the compiler complete:
 |-------|--------|-------|
 | 1. Lexer, Parser, AST | ✅ Complete | `resid-lexer` (7) + `resid-parser` (10) pass. |
 | 2. Knowledge Graph IR | Partial | `resid-ir`: numeric family + §6.1 widening (9 tests). |
-| 3. Types, Behaviors | Partial | `resid-type`: type inference, widening, signed/unsigned check. |
-| 4. LLVM Code Generation | ✅ Functional | `resid-codegen` (4 tests): functions, arithmetic, casts, calls, verify. `residc <f> emit-ir` works end-to-end. |
+| 3. Types, Behaviors | Partial | `resid-type`: 33 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, RT, `check_program`. |
+| 4. LLVM Code Generation | ✅ Functional | `resid-codegen` (4 tests): functions, arithmetic, casts, calls, verify. `residc <f> emit-ir` runs lex → parse → type check → LLVM IR. |
 | 5. Stdlib, Build System | Stub | `resid-builtin`/`resid-build` stubs; compile clean. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. |
 
@@ -1678,9 +1678,10 @@ Build/test notes:
   (inkwell `0.9` with `llvm22-1`; no env var needed).
 - `residc <file.resid>` runs the lexer + parser and prints diagnostics; exit 0 on
   success, 1 on parse errors.
-- `residc <file.resid> emit-ir` runs the full pipeline (parse → type → LLVM IR)
+- `residc <file.resid> emit-ir` runs the full pipeline (lex → parse → type check → LLVM IR)
   and prints the IR, verifying the module before output.
-- 30 tests total: lexer 7, parser 10, resid-ir 9, resid-codegen 4.
+  Type errors (undefined vars, signed/unsigned mixing) are reported with file:line:col.
+- 63 tests total: lexer 7, parser 10, resid-type 33, resid-codegen 4.
 
 ---
 
@@ -1704,4 +1705,4 @@ All resolved in Resid 2.9. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-06*
+*Last updated: 2026-08-07*
