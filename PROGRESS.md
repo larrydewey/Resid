@@ -1,6 +1,6 @@
-# Resid Compiler v2.9 — Implementation Plan
+# Resid Compiler v3.0 — Implementation Plan
 
-**Specification**: `resid_specification.txt` v2.9 (Production Ready)
+**Specification**: `resid_specification.txt` v3.0 (Production Ready)
 **Target**: Stable Rust + LLVM (via inkwell)
 **Workspace**: Monorepo, Cargo workspace
 **Stdlib**: Rust first, then migrate to Resid
@@ -159,7 +159,7 @@ TokenKind:
     - Eof
 ```
 
-**Lexical rules** (from spec §14, §27, §28):
+**Lexical rules** (from spec §14, §30, §31):
 - Comments: `//` line comments, `///` doc comments, `/** */` block doc comments
 - Keywords: `import`, `pub`, `type`, `with`, `rt`, `match`, `if`, `else`, `while`, `for`, `return`, `break`, `continue`, `spawn`, `known`, `rt_known`, `comptime_print`, `todo`, `unimplemented`, `@residual`
 - Literals: integer (decimal, hex 0x, binary 0b, octal 0o), float, char, string, f-string, raw string, byte string, bool, null, `#location`
@@ -178,7 +178,7 @@ TokenKind:
 
 ### 4.2 `resid-parser` — Parsing
 
-**Responsibility**: Convert token stream into an AST per EBNF in spec §28.
+**Responsibility**: Convert token stream into an AST per EBNF in spec §31.
 
 **AST Node types** (enum-based tagged union):
 
@@ -203,7 +203,7 @@ enum AstNode {
     BehaviorDef { name: Id, type_params: Vec<Type>, body: Expr },
     CapabilityAnnotation { annotations: Vec<CapabilityAnnotation>, inner: Box<AstNode> },
 
-    // Parameters (spec §28)
+    // Parameters (spec §31)
     Param { type_: Type, name: Id, default: Option<Expr> },
 
     // Types
@@ -213,7 +213,7 @@ enum AstNode {
     ConstraintType { inner: Box<TypeBody>, constraint: Expr },
     ResidualType(Box<Type>),
 
-    // Expressions (full hierarchy per §27 precedence)
+    // Expressions (full hierarchy per §30 precedence)
     Expr(Box<ExprKind>),
 
     // Statements
@@ -337,7 +337,7 @@ enum PatternKind {
     RangePattern { start: Lit, end: Lit, closed: bool },
 }
 
-// Type variants (spec §28)
+// Type variants (spec §31)
 enum TypeKind {
     Base { name: Id, params: Option<Vec<Type>> },  // Int, Option(T), Int(32)
     Residual(Box<Type>),                          // rt Type
@@ -366,7 +366,7 @@ Parser {
 - `parse_fstring()` — parses interpolated string parts
 - `parse_param()` — handles optional default values
 
-**Precedence climbing** (per spec §27):
+**Precedence climbing** (per spec §30):
 ```
 14: conditional  (?:)
 13: using        (, using =)
@@ -726,7 +726,7 @@ pub struct BehaviorDef {
     requirements: Vec<(Identifier, Type)>,
 }
 
-/// Conversion helpers (spec §6, §29)
+/// Conversion helpers (spec §6, §32)
 pub enum ConversionHelper {
     I8, I16, I32, I64, I128, I256, I512,
     U8, U16, U32, U64, U128, U256, U512,
@@ -874,7 +874,7 @@ impl CodeGenerator {
 
 1. **Functions**: Each function becomes an LLVM function. Parameter defaults → default arguments inserted at call sites or as wrapper functions. Named args → reordered at call site.
 
-2. **Residual thunks** (spec §30): Each `rt expr` or `@residual` becomes a first-class LLVM function carrying:
+2. **Residual thunks** (spec §33): Each `rt expr` or `@residual` becomes a first-class LLVM function carrying:
    - The residual computation
    - Provenance metadata
    - Capability requirements (runtime checks)
@@ -934,7 +934,7 @@ impl CodeGenerator {
     }
     ```
 
-**Artifacts** (spec §30, §31):
+**Artifacts** (spec §33, §34):
 - Native binary: `<name>` (ELF on Linux)
 - Residual notes CBOR: `<name>.resid-notes.cbor`
 
@@ -973,7 +973,7 @@ pub mod handles {
     // Future: Socket, Arena, Mutex
 }
 
-/// Provider backends (spec §29)
+/// Provider backends (spec §32)
 pub mod providers {
     pub mod filesystem {
         pub fn open(path: &str, mode: &str) -> Result<File, IoError>;
@@ -1006,7 +1006,7 @@ pub mod behaviors {
     pub fn reverse_ord<T: Ord>(a: T, b: T) -> Ordering;
 }
 
-/// Conversion helpers (spec §6, §29)
+/// Conversion helpers (spec §6, §32)
 pub mod conversions {
     pub fn i8(v: impl Into<i64>) -> ResidInt<8>;
     pub fn i16(v: impl Into<i64>) -> ResidInt<16>;
@@ -1019,7 +1019,7 @@ pub mod conversions {
     pub fn usize(v: u64) -> USize;
 }
 
-/// Checked arithmetic + wrapping + saturating (spec §6, §29)
+/// Checked arithmetic + wrapping + saturating (spec §6, §32)
 pub mod arithmetic {
     // Checked (default) — returns Option/Err on overflow
     pub fn checked_add<T>(a: T, b: T) -> Result<T, OverflowError>;
@@ -1038,7 +1038,7 @@ pub mod arithmetic {
     // ... saturating_sub, saturating_div, etc.
 }
 
-/// Wide numeric runtime library (spec §5, §30)
+/// Wide numeric runtime library (spec §5, §33)
 pub mod wide_num {
     // Int/UInt/Float emulation for >128-bit
     pub fn wide_add_256(a: [u64; 4], b: [u64; 4]) -> [u64; 4];
@@ -1074,7 +1074,7 @@ pub mod concurrency {
 
 **Responsibility**: Parse `resid.toml`, manage dependencies, profiles, and orchestrate compilation.
 
-**Config types** (spec §32):
+**Config types** (spec §35):
 
 ```rust
 pub struct ResidConfig {
@@ -1237,7 +1237,7 @@ enum Commands {
 
 ## 5. REDUCTION ENGINE DESIGN (Phase 2)
 
-The reduction engine implements the pure reduction relation Κ ⊢ e → e′ (spec §33).
+The reduction engine implements the pure reduction relation Κ ⊢ e → e′ (spec §36).
 
 ### 5.1 Reduction State
 
@@ -1251,7 +1251,7 @@ pub struct ReductionContext {
 }
 ```
 
-### 5.2 Reduction Rules (per spec §33)
+### 5.2 Reduction Rules (per spec §36)
 
 | Rule | Description | Example |
 |------|-------------|---------|
@@ -1357,7 +1357,7 @@ After reduction completes:
 
 ### Phase 1: Lexer, Parser, AST
 
-**Deliverables**: Working lexer and parser that can parse all spec §26 syntax.
+**Deliverables**: Working lexer and parser that can parse all spec §29 syntax.
 
 **Tasks**:
 1. [ ] Setup workspace with all crates
@@ -1380,7 +1380,7 @@ After reduction completes:
 
 **Status**: ✅ Complete. 17 tests (7 lexer + 10 parser) pass.
 
-All spec §26 syntax constructs are lexed and parsed. The `residc` driver binary
+All spec §29 syntax constructs are lexed and parsed. The `residc` driver binary
 lexes + parses source files and reports diagnostics (exit 0 on success, 1 on errors).
 Top-level grammar is imports + types + functions.
 
@@ -1447,8 +1447,9 @@ Top-level grammar is imports + types + functions.
 
 ### Phase 4: LLVM Code Generation ✅ Complete
 
-**Status**: LLVM code generation implemented and verified. The `residc <file> emit-ir`
-subcommand runs the full pipeline: lex → parse → type-check → LLVM IR emission.
+**Status**: `residc <file> emit-ir` runs the full pipeline: lex → parse → type-check →
+LLVM IR emission (module verified before output). `residc <file> build|run` links a
+native binary via clang + `crates/residc/resid_rt.c`, propagating exit codes.
 
 **Coverage**:
 - Functions with typed parameters and return values
@@ -1457,15 +1458,21 @@ subcommand runs the full pipeline: lex → parse → type-check → LLVM IR emis
   mixed-width widening (e.g. Int64 + Int64 → Int128)
 - Signed/unsigned widening and truncation back to declared types on `return`
 - Comparison operators (`==` `!=` `<` `<=` `>` `>=`) producing Bool (i1)
-- Logical connectives (`&&` `||`) on Bool operands
-- Unary operators (`-` `!` `~`)
-- Type casts `(T) expr`
-- Function calls (direct, with named args resolved)
-- Module verification via `module.verify()` before IR output
+- Logical connectives (`&&` `||`) on Bool operands; unary operators (`-` `!` `~`)
+- Type casts `(T) expr`; `if`-expressions with phi joins (then/else blocks, merge)
+- Function calls (direct, with named args resolved); extern built-ins
+  (`print`/`println` from `resid-type::builtin_signatures`)
+- String literals, f-strings, raw strings (global constants) and string-concat folding
+- Boxed composite values: `List`/`Struct`/`Option` via `resid_box_*` runtime calls,
+  `match` with tag checks + phi joins, struct construction + field access
+- **Pattern-based destructuring** (`Point { x, y } = p`) via `bind_pattern_vars`
+- **Discard** (`_ = expr`) — type-checked and lowered, value dropped
+- **`while` loops** with `break`/`continue` — condition block, body block, exit block,
+  loop-stack context for break/continue targets
 
-**Coverage (deferred)**: float arithmetic, `if`-expressions with phi nodes,
-`while`/`for` loops, strings, structured spawn, `comptime_print`,
-`@residual`, `value?` sugar, pattern matching, destructuring.
+**Coverage (deferred)**: float arithmetic, `for-in` loops, structured spawn,
+`comptime_print`, `@residual`, `value?` sugar, if-let/while-let, range/slice notation,
+provider linkage, checked/wrapping/saturating arithmetic, main() boilerplate folding.
 
 **Estimated effort**: 3-4 weeks
 
@@ -1492,7 +1499,7 @@ subcommand runs the full pipeline: lex → parse → type-check → LLVM IR emis
 18. [ ] Implement assertion lowering (assert, rt_assert, known, rt_known)
 19. [ ] Implement Result/Option sugar lowering
 20. [ ] Implement binary emission
-21. [ ] Implement CBOR residual notes generation (spec §31)
+21. [ ] Implement CBOR residual notes generation (spec §34)
 22. [ ] Write tests for code generation output
 
 **Estimated effort**: 5-6 weeks
@@ -1549,7 +1556,7 @@ subcommand runs the full pipeline: lex → parse → type-check → LLVM IR emis
 
 ---
 
-## 7. ERROR MODEL (spec §9, §23)
+## 7. ERROR MODEL (spec §9, §24)
 
 - **Compile-time errors**: Shadowing, type mismatch, capability violation, invalid constraints, unrefutable pattern at binding site → hard error, compilation fails
 - **Runtime errors (top-level)**: Residual force failure, unwrap failure → process abort
@@ -1579,7 +1586,7 @@ error[E0003]: unrefutable pattern at binding site
 
 ---
 
-## 8. CBOR ARTIFACTS (spec §31)
+## 8. CBOR ARTIFACTS (spec §34)
 
 **Residual Notes** (`<artifact>.resid-notes.cbor`):
 ```cbor
@@ -1624,18 +1631,18 @@ error[E0003]: unrefutable pattern at binding site
 | Spawn concurrency complexity | One OS thread per spawn (spec §19); task pool deferred |
 | Float(16) target compatibility | LLVM half primary, f32 software failover |
 | Float(128) libcall availability | `__float128` libcall primary, software failover |
-| Content-addressed caching deferred | Per-file hash cache in v2.8; per-node in future |
+| Content-addressed caching deferred | Per-file hash cache; per-node in future |
 
 ---
 
-## 10. CONFORMANCE CHECKLIST (spec §36)
+## 10. CONFORMANCE CHECKLIST (spec §39)
 
 Before considering the compiler complete:
 
-- [ ] Pure reduction relation implemented (spec §33)
+- [ ] Pure reduction relation implemented (spec §36)
 - [ ] Residual-machine semantics correct (spec §9)
 - [ ] Residual-type rules R1-R5 enforced (spec §12)
-- [ ] CBOR schemas implemented (spec §31)
+- [ ] CBOR schemas implemented (spec §34)
 - [ ] Capability checks working (spec §20)
 - [ ] Absolute identifier uniqueness enforced (spec §7)
 - [ ] Behavior inference rules correct (spec §11)
@@ -1645,19 +1652,19 @@ Before considering the compiler complete:
 - [ ] if-let/while-let works (spec §13)
 - [ ] Visibility rules enforced (spec §21)
 - [ ] Structured spawn semantics correct (spec §19)
-- [ ] Full primitive numeric set implemented (spec §6, §29)
+- [ ] Full primitive numeric set implemented (spec §6, §32)
 - [ ] Checked arithmetic defaults working (spec §6)
-- [ ] For-in iteration works (spec §18, §26)
+- [ ] For-in iteration works (spec §18, §29)
 - [ ] Ranges and slicing work (spec §15)
-- [ ] known/rt_known work (spec §9, §23)
-- [ ] comptime_print works (spec §23)
+- [ ] known/rt_known work (spec §9, §24)
+- [ ] comptime_print works (spec §24)
 - [ ] Raw/byte strings work (spec §14)
-- [ ] #location works (spec §24)
+- [ ] #location works (spec §25)
 - [ ] Discard binding works (spec §7)
 - [ ] Default parameters work (spec §8)
 - [ ] Named arguments work (spec §8)
 - [ ] @residual sugar works (spec §9)
-- [ ] value? / value else {} sugar works (spec §22)
+- [ ] value? / value else {} sugar works (spec §23)
 - [ ] Failure model correct: abort at top-level, Err(RegionError) in concurrent regions (spec §9)
 
 ---
@@ -1667,9 +1674,9 @@ Before considering the compiler complete:
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 1. Lexer, Parser, AST | ✅ Complete | `resid-lexer` (7) + `resid-parser` (10) pass. |
-| 2. Knowledge Graph IR | Partial | `resid-ir`: numeric family + §6.1 widening (9 tests). |
-| 3. Types, Behaviors | Partial | `resid-type`: 33 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, RT, `check_program`. |
-| 4. LLVM Code Generation | ✅ Functional | `resid-codegen` (4 tests): functions, arithmetic, casts, calls, verify. `residc <f> emit-ir` runs lex → parse → type check → LLVM IR. |
+| 2. Knowledge Graph IR | Partial | `resid-ir`: implements spec §6 primitive numeric types, mixed-width widening, list/rangetype member types (41 tests). |
+| 3. Types, Behaviors | Partial | `resid-type`: 35 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, while, RT, built-in extern signatures, `Str + Str`, `check_program`, and Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors). |
+| 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (9 tests) + `residc` (3 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, strings/f-strings (global constants), concat folding, extern built-ins, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, and `_ = expr` discard. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. |
 | 5. Stdlib, Build System | Stub | `resid-builtin`/`resid-build` stubs; compile clean. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. |
 
@@ -1681,13 +1688,23 @@ Build/test notes:
 - `residc <file.resid> emit-ir` runs the full pipeline (lex → parse → type check → LLVM IR)
   and prints the IR, verifying the module before output.
   Type errors (undefined vars, signed/unsigned mixing) are reported with file:line:col.
-- 63 tests total: lexer 7, parser 10, resid-type 33, resid-codegen 4.
+- `residc <file.resid> build [-o <out>]` compiles to a native binary via clang + the
+  bootstrap runtime (`crates/residc/resid_rt.c`); `run` builds to a temp dir and executes
+  it, propagating the exit code (including POSIX signal exits as 128+signal).
+- **105 tests total**: lexer 7, parser 10, resid-ir 41, resid-type 35, resid-codegen 9,
+  residc 3 (e2e). Destructuring (`Point { x, y } = p`, `Some(v)` rejection at binding
+  sites), `_ = expr` discard, `if`-expressions with phi joins, and `while` loops with
+  `break`/`continue` now type-check and lower end-to-end: `residc <f> run` binds pattern
+  variables from a boxed struct, discards values, and runs control-flow statements.
+- **Self-host roadmap** (spec §39 Phase 3): next frontiers are data structures
+  (List/Option/struct + pattern matching) and runtime value formatting (numeric→Str) so a
+  Resid lexer/parser can be written in Resid; then the compiler pipeline itself.
 
 ---
 
 ## 12. OPEN QUESTIONS
 
-All resolved in Resid 2.9. See `resid_specification.txt`.
+All resolved in Resid 3.0. See `resid_specification.txt`.
 
 ### Resolved
 
@@ -1705,4 +1722,4 @@ All resolved in Resid 2.9. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-07*
+*Last updated: 2026-08-08*
