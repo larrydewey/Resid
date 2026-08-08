@@ -294,17 +294,17 @@ impl Op {
     /// Get precedence level (higher = binds tighter). Per spec §27.
     pub fn precedence(self) -> Option<u8> {
         match self {
-            Self::Question => Some(14),    // conditional
-            Self::Pipe => Some(10),        // bitwise OR
-            Self::Caret => Some(9),        // bitwise XOR
-            Self::Amp => Some(8),          // bitwise AND
+            Self::Question => Some(14),       // conditional
+            Self::Pipe => Some(10),           // bitwise OR
+            Self::Caret => Some(9),           // bitwise XOR
+            Self::Amp => Some(8),             // bitwise AND
             Self::EqEq | Self::Ne => Some(7), // equality
             Self::Less | Self::LessEq | Self::Greater | Self::GreaterEq => Some(6), // relational
             Self::ShiftLeft | Self::ShiftRight => Some(5), // shift
             Self::Plus | Self::Minus => Some(4), // additive
             Self::Star | Self::Slash | Self::Percent => Some(3), // multiplicative
-            Self::AndAnd => Some(11),      // logical AND
-            Self::OrOr => Some(12),        // logical OR
+            Self::AndAnd => Some(11),         // logical AND
+            Self::OrOr => Some(12),           // logical OR
             Self::DotDot | Self::DotDotEq => Some(1), // range
             _ => None,
         }
@@ -315,15 +315,15 @@ impl Op {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntKind {
     Decimal(u128),
-    Hex(String),     // 0x prefix, stored as string for large widths
-    Binary(String),  // 0b prefix
-    Octal(String),   // 0o prefix
+    Hex(String),    // 0x prefix, stored as string for large widths
+    Binary(String), // 0b prefix
+    Octal(String),  // 0o prefix
 }
 
 /// Float literal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FloatLit {
-    pub value: String,  // stored as string for full precision
+    pub value: String, // stored as string for full precision
 }
 
 /// String literal (processed, escapes resolved).
@@ -354,7 +354,7 @@ pub struct FStringLit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FStringPart {
     Text(String),
-    Expr(String),  // expression text (parsed later)
+    Expr(String), // expression text (parsed later)
 }
 
 /// Literal variants.
@@ -403,8 +403,8 @@ pub enum TokenKind {
     FString(FStringLit),
     Op(Op),
     DocComment(DocComment),
-    At,              // @ (standalone annotation)
-    AtResidual,      // @residual
+    At,         // @ (standalone annotation)
+    AtResidual, // @residual
     Eof,
 }
 

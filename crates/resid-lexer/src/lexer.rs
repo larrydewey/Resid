@@ -112,12 +112,30 @@ impl Lexer {
             if c == '\\' {
                 self.bump(); // skip \
                 match self.peek() {
-                    Some('"') => { value.push('"'); self.bump(); }
-                    Some('n') => { value.push('\n'); self.bump(); }
-                    Some('t') => { value.push('\t'); self.bump(); }
-                    Some('r') => { value.push('\r'); self.bump(); }
-                    Some('\\') => { value.push('\\'); self.bump(); }
-                    Some('0') => { value.push('\0'); self.bump(); }
+                    Some('"') => {
+                        value.push('"');
+                        self.bump();
+                    }
+                    Some('n') => {
+                        value.push('\n');
+                        self.bump();
+                    }
+                    Some('t') => {
+                        value.push('\t');
+                        self.bump();
+                    }
+                    Some('r') => {
+                        value.push('\r');
+                        self.bump();
+                    }
+                    Some('\\') => {
+                        value.push('\\');
+                        self.bump();
+                    }
+                    Some('0') => {
+                        value.push('\0');
+                        self.bump();
+                    }
                     Some('u') => {
                         self.bump(); // skip u
                         let mut hex = String::new();
@@ -133,7 +151,11 @@ impl Lexer {
                             }
                         }
                     }
-                    Some(c) => { value.push('\\'); value.push(c); self.bump(); }
+                    Some(c) => {
+                        value.push('\\');
+                        value.push(c);
+                        self.bump();
+                    }
                     None => {
                         self.errors.push(LexerError {
                             span: start.clone(),
@@ -317,12 +339,30 @@ impl Lexer {
                 Some('\\') => {
                     self.bump(); // skip \
                     match self.peek() {
-                        Some('"') => { value.push(b'"'); self.bump(); }
-                        Some('n') => { value.push(b'\n'); self.bump(); }
-                        Some('t') => { value.push(b'\t'); self.bump(); }
-                        Some('r') => { value.push(b'\r'); self.bump(); }
-                        Some('\\') => { value.push(b'\\'); self.bump(); }
-                        Some('0') => { value.push(b'\0'); self.bump(); }
+                        Some('"') => {
+                            value.push(b'"');
+                            self.bump();
+                        }
+                        Some('n') => {
+                            value.push(b'\n');
+                            self.bump();
+                        }
+                        Some('t') => {
+                            value.push(b'\t');
+                            self.bump();
+                        }
+                        Some('r') => {
+                            value.push(b'\r');
+                            self.bump();
+                        }
+                        Some('\\') => {
+                            value.push(b'\\');
+                            self.bump();
+                        }
+                        Some('0') => {
+                            value.push(b'\0');
+                            self.bump();
+                        }
                         Some(c) => {
                             value.push(b'\\');
                             value.push(c as u8);
@@ -940,7 +980,8 @@ impl Lexer {
 
     /// Peek at the next N characters as a string.
     fn peek_n(&self, n: usize) -> Option<String> {
-        self.chars.get(self.pos..self.pos + n)
+        self.chars
+            .get(self.pos..self.pos + n)
             .map(|slice| slice.iter().collect::<String>())
     }
 
@@ -992,13 +1033,13 @@ mod tests {
 
     #[test]
     fn test_operators() {
-        let (tokens, errors) = Lexer::new("t.resid", "+ - * / << >> && ||").tokenize();
+        let (_, errors) = Lexer::new("t.resid", "+ - * / << >> && ||").tokenize();
         assert!(errors.is_empty());
     }
 
     #[test]
     fn test_strings() {
-        let (tokens, errors) = Lexer::new("t.resid", r#""hello""#).tokenize();
+        let (_, errors) = Lexer::new("t.resid", r#""hello""#).tokenize();
         assert!(errors.is_empty());
     }
 
@@ -1011,14 +1052,13 @@ mod tests {
 
     #[test]
     fn test_int_literals() {
-        let (tokens, errors) = Lexer::new("t.resid", "42 0xFF 0b1010 0o77").tokenize();
+        let (_, errors) = Lexer::new("t.resid", "42 0xFF 0b1010 0o77").tokenize();
         assert!(errors.is_empty());
     }
 
     #[test]
     fn test_location() {
-        let (tokens, errors) = Lexer::new("t.resid", "#location").tokenize();
+        let (_, errors) = Lexer::new("t.resid", "#location").tokenize();
         assert!(errors.is_empty());
-
     }
 }

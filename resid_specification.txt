@@ -1,6 +1,6 @@
 ==================================================
 RESID LANGUAGE DESIGN DOCUMENT
-Version 2.9 — Production Ready
+Version 3.0 — Production Ready
 ==================================================
 
 
@@ -40,6 +40,8 @@ FUNDAMENTAL LAWS
  11. External information has provenance.
  12. Runtime uncertainty is explicit.
  13. Knowledge is first-class.
+ 14. Authority is never ambient and may only be attenuated,
+      never amplified, across trust boundaries.
 
 
 ==================================================
@@ -429,9 +431,76 @@ No ambient authority. Capabilities form a lattice and
 travel with effects, handles, and residuals. Revocation
 is monotonic within an execution / region.
 
+Authority may only be attenuated across trust boundaries;
+it may never be amplified.
+
 
 ==================================================
-21. MODULES AND VISIBILITY
+21. SANDBOXING AND LIBRARY ATTENUATION
+==================================================
+
+A program may restrict the capabilities available to a
+third-party library or any untrusted region of code.
+
+--------------------------------------------------
+21.1  Policy Ceiling (Manifest)
+--------------------------------------------------
+
+The project manifest supplies the maximum set of
+capabilities any dependency may receive:
+
+  [dependencies.http]
+  path = "vendor/http"
+  capabilities = ["filesystem(readonly)", "network"]
+
+This is a ceiling. Source code may only further restrict;
+it may never enlarge the set.
+
+--------------------------------------------------
+21.2  Source-Level Attenuation
+--------------------------------------------------
+
+Capabilities may be narrowed at the import site or with
+an explicit sandbox:
+
+  import "http.resid" (get, post)
+      @requires(filesystem(readonly));
+
+  sandbox (filesystem(readonly)) {
+      // all code and transitive imports herein
+      // see only the listed capabilities
+  }
+
+--------------------------------------------------
+21.3  Enforcement
+--------------------------------------------------
+
+  - When a required capability is statically apparent
+    and exceeds the sandbox, compilation fails with a
+    hard error.
+  - When the requirement is dynamic or residual, the
+    call remains residual and fails at force time with
+    a capability error.
+  - Transitive dependencies are closed under the same
+    sandbox; attenuation applies to the entire closure.
+  - A handle may enter a sandbox only when every
+    capability it requires is ≤ the sandbox’s set.
+    Otherwise the program is rejected at compile time
+    or the handle use becomes a residual capability
+    error.
+
+--------------------------------------------------
+21.4  Knowledge Cache Interaction
+--------------------------------------------------
+
+Sandboxed compilation may read the global knowledge
+cache. It may write cache entries only when the
+capabilities associated with those entries are ≤ the
+sandbox’s granted set.
+
+
+==================================================
+22. MODULES AND VISIBILITY
 ==================================================
 
   import "math.resid";
@@ -442,56 +511,135 @@ Default private; `pub` exports.
 
 
 ==================================================
-22. RESULT / OPTION SUGAR
+23. RESULT / OPTION SUGAR
 ==================================================
 
-Inside a function that returns Result or Option:
-
-  T x = value?;              // early-return on Err / None
-  T y = value else { … };    // explicit fallback
+  T x = value?;
+  T y = value else { … };
 
 
 ==================================================
-23. ASSERTIONS AND DEBUGGING
+24. ASSERTIONS AND DEBUGGING
 ==================================================
 
-  assert(cond, "message");       // compile-time obligation
-  rt_assert(cond, "message");    // residual check
-
-  known(x);                      // must be known at compile time
-  rt_known(x);                   // residual check
-
-  comptime_print(f"size = {size}");  // compile-time only
-
+  assert(cond, "message");
+  rt_assert(cond, "message");
+  known(x);
+  rt_known(x);
+  comptime_print(f"…");
   todo("message");
   unimplemented("message");
 
 
 ==================================================
-24. SOURCE LOCATION
+25. SOURCE LOCATION
 ==================================================
 
-  SourceLoc loc = #location;     // pure value
+  SourceLoc loc = #location;
 
 
 ==================================================
-25. DOCUMENTATION COMMENTS
+26. DOCUMENTATION COMMENTS
 ==================================================
 
   /// Line documentation
   /** Block documentation */
 
-Doc comments flow into residual notes and IDE hover.
+
+==================================================
+27. RUNTIME OPTIMIZATION AND MINIMIZATION
+==================================================
+
+The implementation shall reduce every provable
+computation. It shall not retain residual work that can
+be discharged under the granted capabilities and the
+available knowledge cache.
+
+Residual notes should make remaining residual work
+visible so that later compilations, with additional
+knowledge, can eliminate it.
+
+The compiler’s primary performance obligation is
+therefore:
+
+  1. Maximize compile-time reduction.
+  2. Minimize the residual surface that reaches runtime.
+  3. Lower only what remains to efficient native code
+     (LLVM).
+
+Release builds may omit diagnostic metadata from residual
+thunks. Capability checks may be elided when the required
+set is statically known to be present for the relevant
+lifetime. Pure prefixes of residual graphs should be
+evaluated at compile time whenever possible.
 
 
 ==================================================
-26. SURFACE SYNTAX SUMMARY
+28. PACKAGES, SIGNATURES, AND INTEGRITY
+==================================================
+
+A package is a directory containing resid.toml, source
+files (*.resid), and optional knowledge-cache /
+residual-notes artifacts.
+
+Distribution units are content-addressed archives.
+
+--------------------------------------------------
+28.1  Package Signature
+--------------------------------------------------
+
+Every published package carries a cryptographic
+signature over:
+
+  - package name and version
+  - content hash of the entire source tree
+  - dependency hashes
+  - declared capability requirements
+  - provenance of any included knowledge-cache entries
+  - the public key identity of the publisher
+
+The signature is stored alongside the package
+(e.g. <package>.resid-sig or inside the archive
+manifest).
+
+--------------------------------------------------
+28.2  Verification
+--------------------------------------------------
+
+Before a package is accepted into a build:
+
+  1. The content hash is recomputed and must match.
+  2. The signature must verify against a trusted key
+     (project keyring or explicitly pinned keys).
+  3. All dependency hashes must match the resolved
+     artifacts.
+  4. Required capabilities must be grantable under the
+     current manifest policy.
+
+Failure of any check rejects the package.
+
+--------------------------------------------------
+28.3  Key Management
+--------------------------------------------------
+
+Projects maintain a keyring of trusted publisher keys.
+Keys may be pinned per dependency. Unsigned packages
+are rejected unless the project explicitly allows them
+under a development profile.
+
+
+==================================================
+29. SURFACE SYNTAX SUMMARY
 ==================================================
 
   // numeric types are first-class
   UInt(8) a = u8(1);
   UInt(16) b = u16(2);
   UInt(32) c = a + b;          // range rule → UInt(32)
+
+  // sandboxing
+  import "http.resid" @requires(filesystem(readonly));
+  sandbox (filesystem(readonly)) { … }
 
   // functions with defaults and named args
   Ret f(Type a, Type b = 0) { … }
@@ -547,7 +695,7 @@ Doc comments flow into residual notes and IDE hover.
 
 
 ==================================================
-27. OPERATORS AND PRECEDENCE
+30. OPERATORS AND PRECEDENCE
 ==================================================
 
   1. Primary        id literal (e) rt e call index field method
@@ -573,13 +721,17 @@ Numeric operators obey the interoperability rules of §6.
 
 
 ==================================================
-28. CORE EBNF (ESSENTIAL)
+31. CORE EBNF (ESSENTIAL)
 ==================================================
 
-  translation-unit ::= { import-decl | declaration }
+  translation-unit ::= { import-decl | declaration | sandbox-decl }
 
   import-decl ::= "import" string-literal
-                  [ "(" id-list ")" | "as" identifier ] ";"
+                  [ "(" id-list ")" | "as" identifier ]
+                  [ capability-annotation ] ";"
+
+  sandbox-decl ::= "sandbox" "(" capability-list ")"
+                   compound-statement
 
   declaration ::= [ "pub" ] (function-def | type-def
                   | behavior-def | capability-annotation declaration)
@@ -617,7 +769,7 @@ Numeric operators obey the interoperability rules of §6.
 
 
 ==================================================
-29. STANDARD LIBRARY (v1)
+32. STANDARD LIBRARY (v1)
 ==================================================
 
 Trusted providers: filesystem, environment, git
@@ -638,7 +790,7 @@ family), Serialize, Allocator, Reverse.
 
 
 ==================================================
-30. ARTIFACTS AND CODE GENERATION
+33. ARTIFACTS AND CODE GENERATION
 ==================================================
 
 Native binary / object files via LLVM plus optional
@@ -652,7 +804,7 @@ the realization of wide numeric types.
 
 
 ==================================================
-31. CBOR SCHEMAS
+34. CBOR SCHEMAS
 ==================================================
 
 Provenance, Capability, ResidualNotes, ResidualNote,
@@ -666,15 +818,39 @@ Files:
 
 
 ==================================================
-32. BUILD SYSTEM
+35. BUILD SYSTEM
 ==================================================
 
-resid.toml with [package], [capabilities], [reduction],
-[target]. Profiles: debug, release, check.
+resid.toml:
+
+  [package]
+  name    = "example"
+  version = "0.1.0"
+
+  [capabilities]
+  grant = ["filesystem(scope=[\"config/**\"])", "git(readonly)"]
+
+  [dependencies.http]
+  path = "vendor/http"
+  capabilities = ["filesystem(readonly)"]
+
+  [reduction]
+  residual_notes        = true
+  residual_notes_format = "cbor"
+  knowledge_cache       = true
+
+  [target]
+  triple = "x86_64-unknown-linux-gnu"
+
+  [signing]
+  keyring = "keys/"
+  require_signatures = true
+
+Profiles: debug, release, check.
 
 
 ==================================================
-33. PURE REDUCTION RELATION
+36. PURE REDUCTION RELATION
 ==================================================
 
 Κ ⊢ e → e′ covers β-reduction, constant folding,
@@ -684,13 +860,15 @@ destructuring, checked arithmetic, numeric interoperability
 widening, string interpolation, range/slice construction,
 and structural identity.
 
+The implementation shall eliminate every residual that
+is dischargeable under current knowledge and capabilities.
+
 
 ==================================================
-34. PACKAGES, DEBUGGING, TOOLING
+37. DEBUGGING AND TOOLING
 ==================================================
 
-Content-addressed packages. Canonical debug artifact
-is CBOR residual notes.
+Canonical debug artifact: CBOR residual notes.
 
 “Why is this residual?” is a tooling query (IDE / resid
 why), not a language construct.
@@ -703,13 +881,15 @@ Normative tooling expectations:
   resid-cache     – knowledge-cache inspector
   resid-graph     – dependency graph emitter
   resid why       – residual provenance query
+  resid verify    – package signature verification
   LSP surface     – residual status, capabilities,
                     knowledge state, doc comments,
-                    exhaustiveness diagnostics
+                    exhaustiveness diagnostics,
+                    sandbox attenuation view
 
 
 ==================================================
-35. NON-GOALS
+38. NON-GOALS
 ==================================================
 
   - mutable values or bindings
@@ -727,79 +907,53 @@ Normative tooling expectations:
   - unstructured concurrency
   - raw target intrinsics
   - pure-value method chaining / pipeline operator
+  - amplification of authority across sandboxes
 
 
 ==================================================
-36. BOOTSTRAP AND CONFORMANCE
+39. BOOTSTRAP AND CONFORMANCE
 ==================================================
 
 Phase 1 – Hosted interpreter
 Phase 2 – LLVM lowering
 Phase 3 – Self-hosting
 
-Conformance includes all prior rules plus the numeric
-interoperability rules of §6, for-in, destructuring,
-if-let/while-let, ranges, slicing, known/rt_known,
-comptime_print, raw/byte strings, #location, discard
-binding, and the normative tooling surface.
+Conformance includes all prior rules plus:
+
+  - numeric interoperability (§6)
+  - sandbox attenuation and transitive closure (§21)
+  - package signature verification (§28)
+  - normative reduction/minimization obligation (§27)
+  - for-in, destructuring, if-let/while-let, ranges,
+    slicing, known/rt_known, comptime_print, raw/byte
+    strings, #location, discard binding
+  - the normative tooling surface
 
 
 ==================================================
-37. PRODUCTION-READY STATUS
+40. PRODUCTION-READY STATUS
 ==================================================
 
-Resid 2.9 is production-ready as a language specification.
+Resid 3.0 is production-ready as a language specification.
 
 All core semantics, syntax, numeric types (first-class
-with interoperability), concurrency, DX conveniences,
-and tooling expectations are locked. Implementation may
-proceed against this document.
+with interoperability), concurrency, sandboxing,
+package integrity, DX conveniences, minimization
+obligations, and tooling expectations are locked.
+Implementation may proceed against this document.
 
 
 ==================================================
-38. RESOLVED DECISIONS (CARRIED FORWARD)
+41. RESOLVED DECISIONS (CARRIED FORWARD)
 ==================================================
 
-38.1 Float(16) representation
-
-  Primary: LLVM half (i16 with IEEE 754 binary16 semantics).
-  Failover: software-emulated via f32 conversion when target
-  lacks native half support.
-
-38.2 Float(128) representation
-
-  Primary: __float128 via LLVM libcall (soft-float).
-  Failover: software-emulated via arrays + runtime lib.
-
-38.3 Float(256) and Float(512) representation
-
-  Software emulation via arrays of i64 + runtime library.
-
-38.4 Provider volatility
-
-  filesystem, environment, and git are volatile by default.
-  Provider calls require runtime capability checks and are
-  not constant-folded unless explicitly annotated non-volatile
-  in a future extension.
-
-38.5 Spawn scheduler
-
-  One OS thread per spawn. Structured join via thread join.
-  Task pools deferred to a future scheduler abstraction.
-
-38.6 Doc comment storage
-
-  Vec<String> per declaration. Flows into residual notes
-  and LSP hover. No structured parsing required.
-
-38.7 Incremental cache granularity
-
-  Cache reductions per source file hash. Per-node content-
-  addressed caching is future work.
+Float representations, provider volatility, spawn
+scheduler, doc-comment storage, and incremental-cache
+granularity remain as decided in earlier versions.
 
 
 ==================================================
-39. NUMERIC INTEROPERABILITY SUMMARY
+42. NUMERIC INTEROPERABILITY SUMMARY
 ==================================================
 
   - Every width is a distinct first-class type.
@@ -814,6 +968,23 @@ proceed against this document.
   - Checked arithmetic remains the default after
     widening.
   - Behaviors Eq/Ord/Hash are generic over the family.
+
+
+==================================================
+43. SANDBOXING SUMMARY
+==================================================
+
+  - Manifest supplies the capability ceiling per
+    dependency.
+  - Source may only further restrict (import annotation
+    or sandbox block).
+  - Enforcement is static when possible, residual
+    otherwise.
+  - Transitive closure is fully attenuated.
+  - Handles enter a sandbox only if their capabilities
+    are ≤ the sandbox.
+  - Knowledge-cache writes from a sandbox are limited
+    to entries whose capabilities fit the sandbox.
 
 
 ==================================================

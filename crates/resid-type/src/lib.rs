@@ -8,11 +8,13 @@
 use std::collections::HashMap;
 
 pub use resid_ir::{
-    BinOp, FloatWidth, IntWidth, NumericError, NumericType, ResultType,
-    numeric_result_type,
+    BinOp, FloatWidth, IntWidth, NumericError, NumericType, ResultType, numeric_result_type,
 };
 use resid_lexer::token::{Literal, Op as OpKind, Span};
-use resid_parser::{Block, Declaration, Expr, ExprKind, FuncDef, Id, StmtKind, Type, TranslationUnit};
+use resid_parser::{
+    Block, Declaration, Expr, ExprKind, FuncDef, Id, Pattern, PatternKind, StmtKind, SumVariant,
+    TranslationUnit, Type, TypeBody, TypeDef,
+};
 
 /// A semantic type for the supported core.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +22,21 @@ pub enum SemType {
     Bool,
     Numeric(NumericType),
     Str,
+    /// An immutable list of homogeneous elements.
+    List(Box<SemType>),
+    /// A user-declared product type.
+    Struct {
+        name: String,
+        fields: Vec<(String, SemType)>,
+    },
+    /// A user-declared (or built-in `Option`) sum type.
+    Sum {
+        name: String,
+        variants: Vec<(String, Option<SemType>)>,
+    },
+    /// Generic pointer type — matches any composite/boxed value for extern
+    /// functions. LLVM emits this as `ptr`.
+    Ptr,
 }
 
 impl core::fmt::Display for SemType {
@@ -28,8 +45,160 @@ impl core::fmt::Display for SemType {
             SemType::Bool => write!(f, "Bool"),
             SemType::Numeric(n) => write!(f, "{n}"),
             SemType::Str => write!(f, "Str"),
+            SemType::List(e) => write!(f, "List({e})"),
+            SemType::Struct { name, .. } => write!(f, "{name}"),
+            SemType::Sum { name, .. } => write!(f, "{name}"),
+            SemType::Ptr => write!(f, "ptr"),
         }
     }
+}
+
+impl SemType {
+    /// Variant index of `name` inside a sum type.
+    pub fn variant_index(&self, name: &str) -> Option<usize> {
+        match self {
+            SemType::Sum { variants, .. } => variants.iter().position(|(n, _)| n == name),
+            _ => None,
+        }
+    }
+
+    /// Index of `name` if it names a zero-payload (unit) variant — the kind a
+    /// bare `None`-style pattern refers to.
+    pub fn unit_variant_index(&self, name: &str) -> Option<usize> {
+        match self {
+            SemType::Sum { variants, .. } => {
+                let idx = variants.iter().position(|(n, _)| n == name)?;
+                if variants[idx].1.is_none() {
+                    Some(idx)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The set of user-declared named types (`type T = …`), used to resolve
+/// `Type::Base` references and variant constructors.
+pub type Types = HashMap<String, SemType>;
+
+/// Collect the named product/sum types declared in a translation unit.
+pub fn collect_types(unit: &TranslationUnit) -> Types {
+    let mut types = Types::new();
+    let mut order: Vec<TypeDef> = unit
+        .declarations
+        .iter()
+        .filter_map(|d| match d {
+            Declaration::Type(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect();
+    // Resolve in a fixed point so a field/variant may reference another
+    // declared type regardless of declaration order.
+    let mut progress = true;
+    while progress && !order.is_empty() {
+        progress = false;
+        let mut remaining = Vec::new();
+        for td in order.drain(..) {
+            if let Some(st) = resolve_type_def(&td, &types) {
+                types.insert(td.name.0.clone(), st);
+                progress = true;
+            } else {
+                remaining.push(td);
+            }
+        }
+        order = remaining;
+    }
+    // Materialize synthesized parametric types (Option(T), List(T), Map…)
+    // wherever they're referenced so variant constructors (`Some`, `None`)
+    // resolve even though no `type` declaration names them.
+    collect_parametric_types(unit, &mut types);
+    types
+}
+
+/// Walk every type annotation in the unit and insert the parametric types it
+/// mentions (as synthesized `List`/`Sum` values) into the type map so
+/// `find_constructor` can locate variant constructors for them.
+fn collect_parametric_types(unit: &TranslationUnit, types: &mut Types) {
+    fn insert_t(t: &Type, types: &mut Types) {
+        let Some(st) = resolve_type_ctx(t, types) else {
+            return;
+        };
+        let key = format!("{st}");
+        let want = matches!(
+            &st,
+            SemType::List(_) | SemType::Sum { .. } | SemType::Struct { .. }
+        );
+        if want && !types.contains_key(&key) {
+            types.insert(key, st);
+        }
+    }
+    for decl in &unit.declarations {
+        match decl {
+            Declaration::Function(f) => {
+                for p in &f.params {
+                    insert_t(&p.type_, types);
+                }
+                insert_t(&f.ret, types);
+                for stmt in &f.body.statements {
+                    if let StmtKind::Bind { type_: Some(t), .. } = &stmt.kind {
+                        insert_t(t, types);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn resolve_type_def(td: &TypeDef, types: &Types) -> Option<SemType> {
+    match &td.body {
+        TypeBody::Product(fields) => {
+            let mut out = Vec::new();
+            for (name, ft) in fields {
+                out.push((name.0.clone(), resolve_type_ctx(ft, types)?));
+            }
+            Some(SemType::Struct {
+                name: td.name.0.clone(),
+                fields: out,
+            })
+        }
+        TypeBody::Sum(variants) => {
+            let mut out = Vec::new();
+            for SumVariant { name, type_param } in variants {
+                let payload = match type_param {
+                    Some(t) => Some(resolve_type_ctx(t, types)?),
+                    None => None,
+                };
+                out.push((name.0.clone(), payload));
+            }
+            Some(SemType::Sum {
+                name: td.name.0.clone(),
+                variants: out,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Find a sum type whose variants include `name` (for constructor resolution).
+/// Prefers the built-in `Option` when the name matches.
+pub fn find_constructor<'t>(types: &'t Types, name: &str) -> Option<&'t SemType> {
+    let mut first: Option<&'t SemType> = None;
+    for ty in types.values() {
+        if let SemType::Sum { variants, .. } = ty {
+            if variants.iter().any(|(n, _)| n == name) {
+                if let SemType::Sum { name: sn, .. } = ty {
+                    if sn == "Option" {
+                        return Some(ty);
+                    }
+                }
+                first.get_or_insert(ty);
+            }
+        }
+    }
+    first
 }
 
 /// Type-checking failure surfaced to the driver.
@@ -110,32 +279,83 @@ pub fn type_from_name(name: &str) -> Option<SemType> {
     }
 }
 
-/// Resolve a parsed type descriptor to a semantic type.
+/// Resolve a parsed type descriptor to a semantic type, using the primitives
+/// and (syntactic) built-in `List`/`Option` spellings only.
 pub fn resolve_type(td: &Type) -> Option<SemType> {
+    resolve_type_ctx(td, &Types::new())
+}
+
+/// Resolve a parsed type descriptor to a semantic type, in the context of the
+/// unit's declared named types.
+pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
     match td {
         Type::Base { name, params } => {
+            // Built-in `List(T)`.
+            if name.0 == "List" {
+                if let Some(ps) = params {
+                    if ps.len() == 1 {
+                        let Some(inner) = resolve_type_ctx(&ps[0], types) else {
+                            return None;
+                        };
+                        return Some(SemType::List(Box::new(inner)));
+                    }
+                }
+                return None; // a bare `List` needs an element type
+            }
+            // Built-in `Option(T)` sum.
+            if name.0 == "Option" {
+                let Some(ps) = params else {
+                    return None;
+                };
+                if ps.len() != 1 {
+                    return None;
+                }
+                let Some(inner) = resolve_type_ctx(&ps[0], types) else {
+                    return None;
+                };
+                return Some(SemType::Sum {
+                    name: "Option".into(),
+                    variants: vec![("None".into(), None), ("Some".into(), Some(inner))],
+                });
+            }
             // Parameterized spellings Int(16) / UInt(8) / Float(32) carry a
             // single numeric-literal width; blend into the iN/uN/fN name.
             if let Some(ps) = params {
                 if ps.len() == 1 {
-                    if let Type::Base { name: width, params: None } = &ps[0] {
+                    let width_str = match &ps[0] {
+                        // Parsed as numeric literal: Int(8) → Type::Literal(Int { value: 8, .. })
+                        Type::Literal(Literal::Int { value: w, .. }) => Ok(w.to_string()),
+                        // Fallback: type param that's a Base type (legacy)
+                        Type::Base {
+                            name: width,
+                            params: None,
+                        } => Ok(width.0.clone()),
+                        _ => Err(()),
+                    };
+                    if let Ok(width) = width_str {
                         let kind = match name.0.as_str() {
                             "Int" => "i",
                             "UInt" => "u",
                             "Float" => "f",
                             _ => return type_from_name(&name.0),
                         };
-                        if let Ok(w) = width.0.parse::<u16>() {
+                        if let Ok(w) = width.parse::<u16>() {
                             return type_from_name(&format!("{kind}{w}"));
                         }
                     }
                 }
             }
+            // A user-declared named type.
+            if let Some(st) = types.get(&name.0) {
+                return Some(st.clone());
+            }
             type_from_name(&name.0)
         }
         Type::ISize => Some(SemType::Numeric(NumericType::ISize)),
         Type::USize => Some(SemType::Numeric(NumericType::USize)),
-        Type::Residual(inner) => resolve_type(inner),
+        Type::Residual(inner) => resolve_type_ctx(inner, types),
+        // Literal used standalone (shouldn't happen; only valid as Base param).
+        Type::Literal(_) => None,
     }
 }
 
@@ -165,31 +385,122 @@ pub fn to_bin_op(op: &OpKind) -> Option<BinOp> {
 fn lit_type(lit: &Literal) -> SemType {
     match lit {
         Literal::Int { .. } => SemType::Numeric(NumericType::Int(IntWidth::from_bits(64).unwrap())),
-        Literal::Float(_) => SemType::Numeric(NumericType::Float(FloatWidth::from_bits(64).unwrap())),
+        Literal::Float(_) => {
+            SemType::Numeric(NumericType::Float(FloatWidth::from_bits(64).unwrap()))
+        }
         Literal::Bool(_) => SemType::Bool,
         _ => SemType::Str,
     }
 }
 
-/// Collect all function signatures declared in a translation unit.
+/// Runtime-exposed built-in functions (the tiny bootstrap runtime linked by
+/// `residc build|run` provides their native bodies).
+const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
+    ("println", &[SemType::Str], SemType::Bool),
+    ("print", &[SemType::Str], SemType::Bool),
+    // ─── Integer stringification (bootstrap runtime) ───
+    (
+        "IntToString",
+        &[SemType::Numeric(NumericType::Int(IntWidth::B8))],
+        SemType::Str,
+    ),
+    (
+        "IntToString",
+        &[SemType::Numeric(NumericType::Int(IntWidth::B16))],
+        SemType::Str,
+    ),
+    (
+        "IntToString",
+        &[SemType::Numeric(NumericType::Int(IntWidth::B32))],
+        SemType::Str,
+    ),
+    (
+        "IntToString",
+        &[SemType::Numeric(NumericType::Int(IntWidth::B64))],
+        SemType::Str,
+    ),
+    (
+        "UIntToString",
+        &[SemType::Numeric(NumericType::UInt(IntWidth::B8))],
+        SemType::Str,
+    ),
+    (
+        "UIntToString",
+        &[SemType::Numeric(NumericType::UInt(IntWidth::B16))],
+        SemType::Str,
+    ),
+    (
+        "UIntToString",
+        &[SemType::Numeric(NumericType::UInt(IntWidth::B32))],
+        SemType::Str,
+    ),
+    (
+        "UIntToString",
+        &[SemType::Numeric(NumericType::UInt(IntWidth::B64))],
+        SemType::Str,
+    ),
+    // ─── Float stringification (bootstrap runtime) ───
+    (
+        "FloatToString",
+        &[SemType::Numeric(NumericType::Float(FloatWidth::F16))],
+        SemType::Str,
+    ),
+    (
+        "FloatToString",
+        &[SemType::Numeric(NumericType::Float(FloatWidth::F32))],
+        SemType::Str,
+    ),
+    (
+        "FloatToString",
+        &[SemType::Numeric(NumericType::Float(FloatWidth::F64))],
+        SemType::Str,
+    ),
+    // ─── Bool stringification (bootstrap runtime) ───
+    ("BoolToString", &[SemType::Bool], SemType::Str),
+    // ─── Composite stringification (bootstrap runtime) ───
+    // Generic ToString for any boxed value (List/Struct/Sum).
+    // Takes a ptr — the runtime inspects the tag to determine format.
+    ("ToString", &[SemType::Ptr], SemType::Str),
+];
+
+/// Return the set of built-in (extern) function signatures.
+pub fn builtin_signatures() -> Signatures {
+    BUILTIN_SIGS
+        .iter()
+        .map(|(name, params, ret)| {
+            (
+                name.to_string(),
+                FunctionSig {
+                    name: name.to_string(),
+                    params: params.to_vec(),
+                    ret: ret.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+/// Collect all function signatures declared in a translation unit, merged with
+/// the built-in extern signatures (a unit definition of the same name wins).
 pub fn collect_signatures(unit: &TranslationUnit) -> Signatures {
-    let mut sigs = Signatures::new();
+    let types = collect_types(unit);
+    let mut sigs = builtin_signatures();
     for decl in &unit.declarations {
         if let Declaration::Function(f) = decl {
-            let sig = signature_of(f);
+            let sig = signature_of(f, &types);
             sigs.insert(sig.name.clone(), sig);
         }
     }
     sigs
 }
 
-fn signature_of(f: &FuncDef) -> FunctionSig {
+fn signature_of(f: &FuncDef, types: &Types) -> FunctionSig {
     let params = f
         .params
         .iter()
-        .map(|p| resolve_type(&p.type_).unwrap_or(SemType::Bool))
+        .map(|p| resolve_type_ctx(&p.type_, types).unwrap_or(SemType::Bool))
         .collect();
-    let ret = resolve_type(&f.ret).unwrap_or(SemType::Bool);
+    let ret = resolve_type_ctx(&f.ret, types).unwrap_or(SemType::Bool);
     FunctionSig {
         name: f.name.0.clone(),
         params,
@@ -197,27 +508,52 @@ fn signature_of(f: &FuncDef) -> FunctionSig {
     }
 }
 
-/// Infer the type of an expression, applying the spec widening rules.
+/// Infer the type of an expression without any user-declared named types in
+/// scope (primitives, `List`, `Option` spellings only).
 pub fn infer_expr(expr: &Expr, env: &Env, sigs: &Signatures) -> Result<SemType, TypeError> {
+    infer_expr_ctx(expr, env, sigs, &Types::new())
+}
+
+/// Infer the type of an expression, in the context of the unit's named types.
+pub fn infer_expr_ctx(
+    expr: &Expr,
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+) -> Result<SemType, TypeError> {
     match &expr.kind {
         ExprKind::Literal(lit) => Ok(lit_type(lit)),
 
-        ExprKind::Id(id) => env.get(&id.0).cloned().ok_or_else(|| {
-            err(
-                &expr.span,
-                format!("undefined variable `{}`", id.0),
-            )
-        }),
+        ExprKind::Id(id) => {
+            if let Some(ty) = env.get(&id.0) {
+                return Ok(ty.clone());
+            }
+            // A bare unit-variant constructor (e.g. `None`).
+            if let Some(sum) = find_constructor(types, &id.0) {
+                let SemType::Sum { variants, .. } = sum else {
+                    unreachable!()
+                };
+                let idx = sum.variant_index(&id.0).unwrap();
+                if variants[idx].1.is_none() {
+                    return Ok(sum.clone());
+                }
+                return Err(err(
+                    &expr.span,
+                    format!("`{}` requires its payload argument", id.0),
+                ));
+            }
+            Err(err(&expr.span, format!("undefined variable `{}`", id.0)))
+        }
 
         ExprKind::Cast { type_, operand } => {
-            let target = resolve_type(type_)
+            let target = resolve_type_ctx(type_, types)
                 .ok_or_else(|| err(&expr.span, "unknown cast target type"))?;
-            let _ = infer_expr(operand, env, sigs)?;
+            let _ = infer_expr_ctx(operand, env, sigs, types)?;
             Ok(target)
         }
 
         ExprKind::UnaryOp { op, operand } => {
-            let inner = infer_expr(operand, env, sigs)?;
+            let inner = infer_expr_ctx(operand, env, sigs, types)?;
             match op {
                 OpKind::Not => match inner {
                     SemType::Bool => Ok(SemType::Bool),
@@ -225,42 +561,336 @@ pub fn infer_expr(expr: &Expr, env: &Env, sigs: &Signatures) -> Result<SemType, 
                 },
                 OpKind::Plus | OpKind::Minus | OpKind::Tilde => match inner {
                     SemType::Numeric(_) => Ok(inner),
-                    other => Err(err(&expr.span, format!("unary `{op:?}` requires numeric, found {other}"))),
+                    other => Err(err(
+                        &expr.span,
+                        format!("unary `{op:?}` requires numeric, found {other}"),
+                    )),
                 },
-                _ => Err(err(&expr.span, format!("unsupported unary operator {op:?}"))),
+                _ => Err(err(
+                    &expr.span,
+                    format!("unsupported unary operator {op:?}"),
+                )),
             }
         }
 
-        ExprKind::BinaryOp { op, lhs, rhs } => infer_binary(op, lhs, rhs, env, sigs, &expr.span),
+        ExprKind::BinaryOp { op, lhs, rhs } => {
+            infer_binary(op, lhs, rhs, env, sigs, types, &expr.span)
+        }
 
-        ExprKind::If { cond, then_block, else_block } => {
-            match infer_expr(cond, env, sigs)? {
+        ExprKind::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
+            match infer_expr_ctx(cond, env, sigs, types)? {
                 SemType::Bool => {}
-                other => return Err(err(&expr.span, format!("if condition must be Bool, found {other}"))),
+                other => {
+                    return Err(err(
+                        &expr.span,
+                        format!("if condition must be Bool, found {other}"),
+                    ));
+                }
             }
             match else_block {
                 Some(b) => {
-                    let t = block_ret(then_block, env, sigs)?;
-                    let e = block_ret(b, env, sigs)?;
+                    let t = block_ret(then_block, env, sigs, types)?;
+                    let e = block_ret(b, env, sigs, types)?;
                     if t != e {
                         return Err(err(&expr.span, format!("if arms disagree: {t} vs {e}")));
                     }
                     Ok(t)
                 }
-                None => block_ret(then_block, env, sigs),
+                None => block_ret(then_block, env, sigs, types),
             }
         }
 
-        ExprKind::Call { func, args } => infer_call(func, args, env, sigs, &expr.span),
+        ExprKind::Call { func, args } => infer_call(func, args, env, sigs, types, &expr.span),
 
-        ExprKind::Rt(inner) => infer_expr(inner, env, sigs),
-        ExprKind::AtResidual { inner, .. } => infer_expr(inner, env, sigs),
+        ExprKind::Match {
+            scrutinee,
+            arms,
+        } => infer_match(scrutinee, arms, env, sigs, types, &expr.span),
+
+        // Composite literals and their accessors.
+        ExprKind::ListLit(elems) => infer_list(elems, env, sigs, types, &expr.span),
+        ExprKind::StructLit { name, fields } => {
+            infer_struct_lit(name, fields, env, sigs, types, &expr.span)
+        }
+        ExprKind::FieldAccess { target, field } => {
+            let tt = infer_expr_ctx(target, env, sigs, types)?;
+            match &tt {
+                SemType::Struct { fields, .. } => match fields.iter().find(|(n, _)| n == &field.0) {
+                    Some((_, ft)) => Ok(ft.clone()),
+                    None => Err(err(
+                        &expr.span,
+                        format!("type `{tt}` has no field `{}`", field.0),
+                    )),
+                },
+                other => Err(err(
+                    &expr.span,
+                    format!("cannot access field `{}` on {other}", field.0),
+                )),
+            }
+        }
+        ExprKind::Index { target, index } => {
+            let tt = infer_expr_ctx(target, env, sigs, types)?;
+            match &tt {
+                SemType::List(elem) => {
+                    let it = infer_expr_ctx(index, env, sigs, types)?;
+                    match it {
+                        SemType::Numeric(_) => {}
+                        other => {
+                            return Err(err(
+                                &index.span,
+                                format!("list index must be numeric, found {other}"),
+                            ));
+                        }
+                    }
+                    Ok((**elem).clone())
+                }
+                other => Err(err(
+                    &expr.span,
+                    format!("cannot index value of type {other}"),
+                )),
+            }
+        }
+        ExprKind::MethodCall { target, method, args } => {
+            // Built-in list methods surface here as sugar; only `len` and
+            // `get` are recognized for now.
+            let tt = infer_expr_ctx(target, env, sigs, types)?;
+            let method_name = &method.0;
+            if args.is_empty() {
+                match (method_name.as_str(), &tt) {
+                    ("len", SemType::List(_)) => {
+                        return Ok(SemType::Numeric(NumericType::ISize));
+                    }
+                    _ => {}
+                }
+            }
+            Err(err(
+                &expr.span,
+                format!("unsupported method `{method_name}` on {tt}"),
+            ))
+        }
+
+        ExprKind::Rt(inner) => infer_expr_ctx(inner, env, sigs, types),
+        ExprKind::AtResidual { inner, .. } => infer_expr_ctx(inner, env, sigs, types),
         ExprKind::RawString(_) | ExprKind::FString(_) => Ok(SemType::Str),
+        ExprKind::Discard(inner) => infer_expr_ctx(inner, env, sigs, types),
+
+ExprKind::While { cond, body } => {
+            match infer_expr_ctx(cond, env, sigs, types)? {
+                SemType::Bool => {}
+                other => {
+                    return Err(err(
+                        &expr.span,
+                        format!("while condition must be Bool, found {other}"),
+                    ));
+                }
+            }
+            let mut errs = Vec::new();
+            type_check_block(body, env, sigs, types, &mut errs);
+            if let Some(e) = errs.into_iter().next() {
+                return Err(e);
+            }
+            Ok(SemType::Bool)
+        }
+
+        ExprKind::ForIn { type_, name, collection, body } => {
+            let col_ty = infer_expr_ctx(collection, env, sigs, types)?;
+            let declared = resolve_type_ctx(type_, types).unwrap_or(SemType::Bool);
+            let elem_ty = match &col_ty {
+                SemType::List(inner) => {
+                    if declared != **inner {
+                        return Err(err(
+                            &expr.span,
+                            format!(
+                                "for-in element type mismatch: declared {declared}, collection has {inner}"
+                            ),
+                        ));
+                    }
+                    inner.as_ref().clone()
+                }
+                other => {
+                    return Err(err(
+                        &expr.span,
+                        format!("for-in collection must be List, found {other}"),
+                    ));
+                }
+            };
+            let mut errs = Vec::new();
+            let mut for_env = env.clone();
+            for_env.insert(&name.0, elem_ty);
+            type_check_block(body, &for_env, sigs, types, &mut errs);
+            if let Some(e) = errs.into_iter().next() {
+                return Err(e);
+            }
+            Ok(SemType::Bool)
+        }
 
         other => Err(err(
             &expr.span,
             format!("type checking not yet supported for `{}`", kind_tag(other)),
         )),
+    }
+}
+
+/// Infer a list literal: homogeneous element type, or an explicit element type.
+fn infer_list(
+    elems: &[Expr],
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+    span: &Span,
+) -> Result<SemType, TypeError> {
+    let mut elem_ty: Option<SemType> = None;
+    for e in elems {
+        let t = infer_expr_ctx(e, env, sigs, types)?;
+        match &elem_ty {
+            None => elem_ty = Some(t),
+            Some(known) => {
+                if &t != known {
+                    return Err(err(
+                        span,
+                        format!("list elements differ: {known} vs {t}"),
+                    ));
+                }
+            }
+        }
+    }
+    match elem_ty {
+        Some(e) => Ok(SemType::List(Box::new(e))),
+        None => Err(err(
+            span,
+            "cannot infer element type of an empty list literal (add an explicit type)",
+        )),
+    }
+}
+
+fn infer_struct_lit(
+    name: &Id,
+    fields: &[(Id, Expr)],
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+    span: &Span,
+) -> Result<SemType, TypeError> {
+    let ty = types
+        .get(&name.0)
+        .ok_or_else(|| err(span, format!("unknown type `{}`", name.0)))?;
+    let SemType::Struct { fields: defs, .. } = ty else {
+        return Err(err(span, format!("`{}` is not a struct type", name.0)));
+    };
+    for (fname, fval) in fields {
+        let want = defs
+            .iter()
+            .find(|(n, _)| n == &fname.0)
+            .ok_or_else(|| err(span, format!("`{}` has no field `{}`", name.0, fname.0)))?;
+        let has = infer_expr_ctx(fval, env, sigs, types)?;
+        if &has != &want.1 {
+            return Err(err(
+                span,
+                format!(
+                    "field `{}` of `{}`: expected {}, found {}",
+                    fname.0, name.0, want.1, has
+                ),
+            ));
+        }
+    }
+    Ok(ty.clone())
+}
+
+/// Type a match: bind pattern variables per arm and check the arms agree.
+fn infer_match(
+    scrutinee: &Expr,
+    arms: &[(Pattern, Expr)],
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+    span: &Span,
+) -> Result<SemType, TypeError> {
+    let st = infer_expr_ctx(scrutinee, env, sigs, types)?;
+    let mut result: Option<SemType> = None;
+    for (pat, body) in arms {
+        let mut arm_env = env.clone();
+        bind_pattern(pat, &st, &mut arm_env, types, sigs)?;
+        let bt = infer_expr_ctx(body, &arm_env, sigs, types)?;
+        match &result {
+            None => result = Some(bt),
+            Some(expect) => {
+                if expect != &bt {
+                    return Err(err(
+                        span,
+                        format!("match arms disagree: {expect} vs {bt}"),
+                    ));
+                }
+            }
+        }
+    }
+    match result {
+        Some(t) => Ok(t),
+        None => Err(err(span, "match with no arms")),
+    }
+}
+
+/// Bind the variables a pattern introduces, checking it against a value type.
+fn bind_pattern(
+    pat: &Pattern,
+    ty: &SemType,
+    env: &mut Env,
+    types: &Types,
+    sigs: &Signatures,
+) -> Result<(), TypeError> {
+    match &pat.kind {
+        PatternKind::Wildcard | PatternKind::Literal(_) => Ok(()),
+        PatternKind::Bind(name) => {
+            // A bare identifier that names a unit variant of the value type is
+            // the variant itself (`None`), not a capture binding.
+            if ty.unit_variant_index(&name.0).is_some() {
+                return Ok(());
+            }
+            env.insert(&name.0, ty.clone());
+            Ok(())
+        }
+        PatternKind::Variant { name, param } => {
+            let SemType::Sum { variants, .. } = ty else {
+                return Err(err(&pat.span, format!("cannot match variants of {ty}")));
+            };
+            let idx = ty
+                .variant_index(&name.0)
+                .ok_or_else(|| err(&pat.span, format!("`{ty}` has no variant `{}`", name.0)))?;
+            let (_, payload) = &variants[idx];
+            match (param, payload) {
+                (Some(b), Some(pt)) => {
+                    env.insert(&b.0, pt.clone());
+                    Ok(())
+                }
+                (None, None) => Ok(()),
+                (Some(b), None) => Err(err(
+                    &pat.span,
+                    format!("variant `{}` carries no value to bind to `{}`", name.0, b.0),
+                )),
+                (None, Some(_)) => Err(err(
+                    &pat.span,
+                    format!("variant `{}` carries a payload that must be bound", name.0),
+                )),
+            }
+        }
+        PatternKind::Struct { name: _, fields } => {
+            let SemType::Struct { fields: defs, .. } = ty else {
+                return Err(err(&pat.span, format!("cannot destructure {ty}")));
+            };
+            let _ = defs;
+            for (fname, sub) in fields {
+                let fty = defs
+                    .iter()
+                    .find(|(n, _)| n == &fname.0)
+                    .map(|(_, t)| t.clone())
+                    .ok_or_else(|| err(&pat.span, format!("no field `{}`", fname.0)))?;
+                bind_pattern(sub, &fty, env, types, sigs)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -270,36 +900,59 @@ fn infer_binary(
     rhs: &Expr,
     env: &Env,
     sigs: &Signatures,
+    types: &Types,
     span: &Span,
 ) -> Result<SemType, TypeError> {
     // Logical connectives require Bool operands.
     if matches!(op, OpKind::AndAnd | OpKind::OrOr) {
-        require_bool(lhs, env, sigs, span, "left operand of logical operator")?;
-        require_bool(rhs, env, sigs, span, "right operand of logical operator")?;
+        require_bool(lhs, env, sigs, types, span, "left operand of logical operator")?;
+        require_bool(rhs, env, sigs, types, span, "right operand of logical operator")?;
         return Ok(SemType::Bool);
     }
 
     let binop = to_bin_op(op).ok_or_else(|| err(span, format!("unsupported operator {op:?}")))?;
-    let lt = infer_expr(lhs, env, sigs)?;
-    let rt = infer_expr(rhs, env, sigs)?;
+
+    // String concatenation: Str + Str → Str (folds to a constant in codegen
+    // when both sides are literal; runtime concat arrives with the stdlib).
+    if matches!(binop, BinOp::Add) {
+        let lt = infer_expr_ctx(lhs, env, sigs, types)?;
+        let rt = infer_expr_ctx(rhs, env, sigs, types)?;
+        if lt == SemType::Str && rt == SemType::Str {
+            return Ok(SemType::Str);
+        }
+    }
+
+    let lt = infer_expr_ctx(lhs, env, sigs, types)?;
+    let rt = infer_expr_ctx(rhs, env, sigs, types)?;
     let (ln, rn) = match (&lt, &rt) {
         (SemType::Numeric(a), SemType::Numeric(b)) => (*a, *b),
-        _ => return Err(err(span, format!("numeric operator requires numeric operands ({lt} {op:?} {rt})"))),
+        _ => {
+            return Err(err(
+                span,
+                format!("numeric operator requires numeric operands ({lt} {op:?} {rt})"),
+            ));
+        }
     };
 
     // Bitwise/shift operators require integer operands.
-    if matches!(binop, BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::And | BinOp::Or | BinOp::Xor)
-        && (ln.is_float() || rn.is_float())
+    if matches!(
+        binop,
+        BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::And | BinOp::Or | BinOp::Xor
+    ) && (ln.is_float() || rn.is_float())
     {
-        return Err(err(span, "bitwise/shift operator requires integer operands"));
+        return Err(err(
+            span,
+            "bitwise/shift operator requires integer operands",
+        ));
     }
 
     match numeric_result_type(&ln, binop, &rn) {
         ResultType::Bool => Ok(SemType::Bool),
         ResultType::Numeric(n) => Ok(SemType::Numeric(n)),
-        ResultType::Error(NumericError::SignednessMix) => {
-            Err(err(span, "cannot mix signed and unsigned operands in one operation"))
-        }
+        ResultType::Error(NumericError::SignednessMix) => Err(err(
+            span,
+            "cannot mix signed and unsigned operands in one operation",
+        )),
     }
 }
 
@@ -307,22 +960,28 @@ fn require_bool(
     e: &Expr,
     env: &Env,
     sigs: &Signatures,
+    types: &Types,
     span: &Span,
     who: &str,
 ) -> Result<(), TypeError> {
-    match infer_expr(e, env, sigs)? {
+    match infer_expr_ctx(e, env, sigs, types)? {
         SemType::Bool => Ok(()),
         other => Err(err(span, format!("{who} must be Bool, found {other}"))),
     }
 }
 
-fn block_ret(block: &Block, env: &Env, sigs: &Signatures) -> Result<SemType, TypeError> {
+fn block_ret(
+    block: &Block,
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+) -> Result<SemType, TypeError> {
     if let Some(ret) = &block.ret {
-        return infer_expr(ret, env, sigs);
+        return infer_expr_ctx(ret, env, sigs, types);
     }
     if let Some(stmt) = block.statements.last() {
         if let StmtKind::Expr(e) = &stmt.kind {
-            return infer_expr(e, env, sigs);
+            return infer_expr_ctx(e, env, sigs, types);
         }
     }
     Ok(SemType::Bool)
@@ -333,29 +992,82 @@ fn infer_call(
     args: &[(Option<Id>, Expr)],
     env: &Env,
     sigs: &Signatures,
+    types: &Types,
     span: &Span,
 ) -> Result<SemType, TypeError> {
     let name = match &callee.kind {
         ExprKind::Id(id) => id.0.clone(),
         _ => return Err(err(span, "only direct function calls are supported")),
     };
-    let sig = sigs
-        .get(&name)
-        .ok_or_else(|| err(span, format!("call to undefined function `{name}`")))?;
+    // A variant constructor (Some(x), None, …) — resolve to the owning sum.
+    if !sigs.contains_key(&name) {
+        if let Some(sum) = find_constructor(types, &name) {
+            let SemType::Sum { variants, .. } = sum else {
+                unreachable!()
+            };
+            let idx = sum
+                .variant_index(&name)
+                .ok_or_else(|| err(span, format!("unknown variant `{name}`")))?;
+            let (_, payload) = &variants[idx];
+            match payload {
+                None => {
+                    if args.is_empty() {
+                        return Ok(sum.clone());
+                    }
+                    return Err(err(span, format!("`{name}` takes no arguments")));
+                }
+                Some(pt) => {
+                    if args.len() != 1 {
+                        return Err(err(
+                            span,
+                            format!("`{name}` expects exactly one payload argument"),
+                        ));
+                    }
+                    let at = infer_expr_ctx(&args[0].1, env, sigs, types)?;
+                    if &at != pt && !literal_compatible(&args[0].1, pt) {
+                        return Err(err(
+                            &args[0].1.span,
+                            format!("`{name}` payload: expected {pt}, found {at}"),
+                        ));
+                    }
+                    return Ok(sum.clone());
+                }
+            }
+        }
+    }
+    let sig = best_overload(
+        &args
+            .iter()
+            .map(|(_, a)| infer_expr_ctx(a, env, sigs, types).unwrap_or(SemType::Bool))
+            .collect::<Vec<_>>(),
+        sigs,
+        &name,
+    )
+    .ok_or_else(|| err(span, format!("call to undefined function `{name}`")))?;
     if args.len() != sig.params.len() {
         return Err(err(
             span,
-            format!("`{name}` expects {} argument(s), got {}", sig.params.len(), args.len()),
+            format!(
+                "`{name}` expects {} argument(s), got {}",
+                sig.params.len(),
+                args.len()
+            ),
         ));
     }
     // Check each argument against the parameter type.
     for (i, (_, a)) in args.iter().enumerate() {
-        let at = infer_expr(a, env, sigs)?;
+        let at = infer_expr_ctx(a, env, sigs, types)?;
         let want = &sig.params[i];
-        if &at != want && !literal_compatible(a, want) {
+        if !param_matches(&at, want)
+            && !literal_compatible(a, want)
+            && !numeric_can_widen(&at, want)
+        {
             return Err(err(
                 &a.span,
-                format!("argument {} of `{name}`: expected {want}, found {at}", i + 1),
+                format!(
+                    "argument {} of `{name}`: expected {want}, found {at}",
+                    i + 1
+                ),
             ));
         }
     }
@@ -382,11 +1094,159 @@ fn literal_compatible(a: &Expr, target: &SemType) -> bool {
     }
 }
 
+/// Check if a parameter type matches an argument type. `Ptr` matches any
+/// composite (List/Struct/Sum).
+fn param_matches(arg: &SemType, param: &SemType) -> bool {
+    if arg == param {
+        return true;
+    }
+    // Ptr parameter matches any composite type.
+    if matches!(param, SemType::Ptr) {
+        matches!(arg, SemType::List(_) | SemType::Struct { .. } | SemType::Sum { .. })
+    } else {
+        false
+    }
+}
+
+/// Check if a numeric argument type can be widened to the parameter type
+/// (same sign, target width >= source width). Used for function call arguments
+/// where `IntToString(i8_val)` should match `IntToString(Int(64))`.
+fn numeric_can_widen(arg: &SemType, target: &SemType) -> bool {
+    let SemType::Numeric(a) = arg else {
+        return false;
+    };
+    let SemType::Numeric(t) = target else {
+        return false;
+    };
+    // Same signedness.
+    if a.is_signed() != t.is_signed() {
+        return false;
+    }
+    // For floats, allow widening to wider float types.
+    if a.is_float() && t.is_float() {
+        return a.target_width().unwrap_or(64) <= t.target_width().unwrap_or(64);
+    }
+    // For ints/uints, target must be at least as wide.
+    if a.is_float() || t.is_float() {
+        return false; // int↔float requires explicit cast
+    }
+    let target_bits = t.target_width().unwrap_or(64) as u32;
+    let arg_bits = a.target_width().unwrap_or(64) as u32;
+    target_bits >= arg_bits
+}
+
+/// Select the best overload from a list of signatures whose first parameter
+/// matches the argument type. For ToString-style functions with numeric
+/// overloads this picks the most specific (narrowest) type that the argument
+/// can safely be widened to.
+pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Option<FunctionSig> {
+    let candidate = sigs.get(func)?;
+    if candidate.params.len() != 1 {
+        return Some(candidate.clone());
+    }
+    let want = &args_ty[0];
+
+    // For ToString functions, find the best numeric match.
+    if matches!(func, "IntToString" | "UIntToString" | "FloatToString") {
+        let SemType::Numeric(arg) = want else {
+            return Some(candidate.clone());
+        };
+        // Look for all overloads whose numeric type matches or is wider.
+        let matching: Vec<(&SemType, FunctionSig)> = sigs
+            .iter()
+            .filter(|(n, _)| *n == func)
+            .filter_map(|(_, sig)| {
+                if sig.params.len() == 1 {
+                    if let SemType::Numeric(_p) = &sig.params[0] {
+                        return Some((&sig.params[0], sig.clone()));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        // For IntToString/UIntToString, find the narrowest width that can
+        // hold the argument value. Pick the one closest to (but >=) arg width.
+        if func == "IntToString" || func == "UIntToString" {
+            let arg_bits = arg.target_width().unwrap_or(64);
+            let same_sign = |nt: &NumericType| {
+                (func == "IntToString" && nt.is_signed()) || (func == "UIntToString" && nt.is_unsigned())
+            };
+            let best = matching
+                .iter()
+                .filter(|(p, _)| {
+                    if let SemType::Numeric(np) = p {
+                        same_sign(np) && np.target_width().unwrap_or(64) >= arg_bits
+                    } else {
+                        false
+                    }
+                })
+                .min_by_key(|(p, _)| {
+                    if let SemType::Numeric(np) = p {
+                        np.target_width().unwrap_or(u16::MAX)
+                    } else {
+                        u16::MAX
+                    }
+                });
+            if let Some((_, sig)) = best {
+                return Some(sig.clone());
+            }
+            // Fall back to widest available
+            if let Some((_, sig)) = matching.iter().max_by_key(|(p, _)| {
+                if let SemType::Numeric(np) = p { np.target_width().unwrap_or(0) } else { 0 }
+            }) {
+                return Some(sig.clone());
+            }
+        }
+        // FloatToString: find the narrowest float that can hold the arg
+        if func == "FloatToString" {
+            let arg_bits = arg.target_width().unwrap_or(64);
+            let best = matching
+                .iter()
+                .filter(|(p, _)| {
+                    if let SemType::Numeric(np) = p {
+                        np.is_float() && np.target_width().unwrap_or(64) >= arg_bits
+                    } else {
+                        false
+                    }
+                })
+                .min_by_key(|(p, _)| {
+                    if let SemType::Numeric(np) = p { np.target_width().unwrap_or(u16::MAX) } else { u16::MAX }
+                });
+            if let Some((_, sig)) = best {
+                return Some(sig.clone());
+            }
+            if let Some((_, sig)) = matching.iter().max_by_key(|(p, _)| {
+                if let SemType::Numeric(np) = p { np.target_width().unwrap_or(0) } else { 0 }
+            }) {
+                return Some(sig.clone());
+            }
+        }
+        return Some(candidate.clone());
+    }
+
+    // For BoolToString, exact match on Bool.
+    if func == "BoolToString" {
+        if matches!(want, SemType::Bool) {
+            return Some(candidate.clone());
+        }
+        return Some(candidate.clone());
+    }
+
+    // For ToString on composites, exact match or fallback to first match.
+    if func == "ToString" {
+        return Some(candidate.clone());
+    }
+
+    Some(candidate.clone())
+}
+
 // ─── Upfront program type checking ─────────────────────────────
 
 /// Type-check every function body in a translation unit.
 /// Returns a list of errors (empty = all passed).
 pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
+    let types = collect_types(unit);
     let sigs = collect_signatures(unit);
     let mut errs = Vec::new();
     for decl in &unit.declarations {
@@ -396,33 +1256,73 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
             for (param, pt) in f.params.iter().zip(sig.params.iter()) {
                 env.insert(&param.name.0, pt.clone());
             }
-            type_check_block(&f.body, &env, &sigs, &mut errs);
+            type_check_block(&f.body, &env, &sigs, &types, &mut errs);
         }
     }
     errs
 }
 
-fn type_check_block(block: &Block, env: &Env, sigs: &Signatures, errs: &mut Vec<TypeError>) {
+fn type_check_block(
+    block: &Block,
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+    errs: &mut Vec<TypeError>,
+) {
     let mut env = env.clone();
     for stmt in &block.statements {
-        if let StmtKind::Bind { name, type_: opt_type, value } = &stmt.kind {
+        if let StmtKind::Bind {
+            name,
+            type_: opt_type,
+            value,
+        } = &stmt.kind
+        {
             let ty = if let Some(t) = opt_type {
-                resolve_type(t).unwrap_or(SemType::Bool)
+                resolve_type_ctx(t, types).unwrap_or(SemType::Bool)
             } else {
-                infer_expr(value, &env, sigs).unwrap_or(SemType::Bool)
+                infer_expr_ctx(value, &env, sigs, types).unwrap_or(SemType::Bool)
             };
             env.insert(&name.0, ty);
         }
+        if let StmtKind::Destructure { pattern, source } = &stmt.kind {
+            match infer_expr_ctx(source, &env, sigs, types) {
+                Ok(st) => {
+                    if is_refutable_pattern(pattern) {
+                        errs.push(err(
+                            &pattern.span,
+                            "refutable pattern is not allowed in an irrefutable declaration",
+                        ));
+                    } else if let Err(b) = bind_pattern(pattern, &st, &mut env, types, sigs) {
+                        errs.push(b);
+                    }
+                }
+                Err(e) => errs.push(e),
+            }
+        }
         if let StmtKind::Expr(e) = &stmt.kind {
-            if let Err(err) = infer_expr(e, &env, sigs) {
+            if let Err(err) = infer_expr_ctx(e, &env, sigs, types) {
+                errs.push(err);
+            }
+        }
+        if let StmtKind::Discard(e) = &stmt.kind {
+            if let Err(err) = infer_expr_ctx(e, &env, sigs, types) {
                 errs.push(err);
             }
         }
     }
     if let Some(ret) = &block.ret {
-        if let Err(err) = infer_expr(ret, &env, sigs) {
+        if let Err(err) = infer_expr_ctx(ret, &env, sigs, types) {
             errs.push(err);
         }
+    }
+}
+
+/// `_`-style irrefutable patterns are required for declarations; any tagged
+/// (variant) pattern is refutable.
+fn is_refutable_pattern(pat: &Pattern) -> bool {
+    match &pat.kind {
+        PatternKind::Variant { .. } => true,
+        _ => false,
     }
 }
 
@@ -431,19 +1331,33 @@ fn type_check_block(block: &Block, env: &Env, sigs: &Signatures, errs: &mut Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use resid_lexer::token::{Literal, IntKind, FloatLit, Op as OpKind, Span};
-    use resid_parser::{Expr, ExprKind, Id, Block, Type};
+    use resid_lexer::token::{FloatLit, IntKind, Literal, Op as OpKind, Span};
+    use resid_parser::{Block, Expr, ExprKind, Id, Type};
 
     fn span() -> Span {
-        Span { file: String::new(), line: 0, col_start: 0, col_end: 0 }
+        Span {
+            file: String::new(),
+            line: 0,
+            col_start: 0,
+            col_end: 0,
+        }
     }
 
     fn expr_id(name: &str) -> Expr {
-        Expr { kind: ExprKind::Id(Id(name.to_string())), span: span() }
+        Expr {
+            kind: ExprKind::Id(Id(name.to_string())),
+            span: span(),
+        }
     }
 
     fn expr_int(v: u128) -> Expr {
-        Expr { kind: ExprKind::Literal(Literal::Int { value: v, kind: IntKind::Decimal(0) }), span: span() }
+        Expr {
+            kind: ExprKind::Literal(Literal::Int {
+                value: v,
+                kind: IntKind::Decimal(0),
+            }),
+            span: span(),
+        }
     }
 
     fn expr_binop(op: OpKind, lhs: &str, rhs: &str) -> Expr {
@@ -480,14 +1394,22 @@ mod tests {
 
     #[test]
     fn infer_literal_bool() {
-        let e = Expr { kind: ExprKind::Literal(Literal::Bool(true)), span: span() };
+        let e = Expr {
+            kind: ExprKind::Literal(Literal::Bool(true)),
+            span: span(),
+        };
         let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
         assert_eq!(ty, SemType::Bool);
     }
 
     #[test]
     fn infer_literal_float() {
-        let e = Expr { kind: ExprKind::Literal(Literal::Float(FloatLit { value: "3.14".into() })), span: span() };
+        let e = Expr {
+            kind: ExprKind::Literal(Literal::Float(FloatLit {
+                value: "3.14".into(),
+            })),
+            span: span(),
+        };
         let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
         assert_eq!(ty, SemType::Numeric(NumericType::Float(FloatWidth::F64)));
     }
@@ -550,7 +1472,11 @@ mod tests {
         let result = infer_expr(&e, &env, &Signatures::new());
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.message.contains("signed and unsigned"), "expected signedness error, got: {}", err.message);
+        assert!(
+            err.message.contains("signed and unsigned"),
+            "expected signedness error, got: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -603,7 +1529,10 @@ mod tests {
         let mut env = Env::new();
         env.insert("p", SemType::Bool);
         let e = Expr {
-            kind: ExprKind::UnaryOp { op: OpKind::Not, operand: Box::new(expr_id("p")) },
+            kind: ExprKind::UnaryOp {
+                op: OpKind::Not,
+                operand: Box::new(expr_id("p")),
+            },
             span: span(),
         };
         let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
@@ -614,7 +1543,10 @@ mod tests {
     fn infer_unary_not_on_int_error() {
         let env = make_env();
         let e = Expr {
-            kind: ExprKind::UnaryOp { op: OpKind::Not, operand: Box::new(expr_id("a")) },
+            kind: ExprKind::UnaryOp {
+                op: OpKind::Not,
+                operand: Box::new(expr_id("a")),
+            },
             span: span(),
         };
         let result = infer_expr(&e, &env, &Signatures::new());
@@ -625,7 +1557,10 @@ mod tests {
     fn infer_unary_minus_on_int() {
         let env = make_env();
         let e = Expr {
-            kind: ExprKind::UnaryOp { op: OpKind::Minus, operand: Box::new(expr_id("a")) },
+            kind: ExprKind::UnaryOp {
+                op: OpKind::Minus,
+                operand: Box::new(expr_id("a")),
+            },
             span: span(),
         };
         let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
@@ -640,7 +1575,10 @@ mod tests {
         let result = infer_expr(&e, &env, &Signatures::new());
         assert!(result.is_err());
         let msg = result.unwrap_err().message;
-        assert!(msg.contains("bitwise"), "expected bitwise error, got: {msg}");
+        assert!(
+            msg.contains("bitwise"),
+            "expected bitwise error, got: {msg}"
+        );
     }
 
     #[test]
@@ -648,7 +1586,10 @@ mod tests {
         // Cast a i64 to i32
         let e = Expr {
             kind: ExprKind::Cast {
-                type_: Type::Base { name: Id("i32".into()), params: None },
+                type_: Type::Base {
+                    name: Id("i32".into()),
+                    params: None,
+                },
                 operand: Box::new(expr_id("a")),
             },
             span: span(),
@@ -661,8 +1602,14 @@ mod tests {
     #[test]
     fn infer_if_expression() {
         let mut env = Env::new();
-        env.insert("a", SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
-        env.insert("b", SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        env.insert(
+            "a",
+            SemType::Numeric(NumericType::Int(IntWidth::B64.into())),
+        );
+        env.insert(
+            "b",
+            SemType::Numeric(NumericType::Int(IntWidth::B64.into())),
+        );
         env.insert("cond", SemType::Bool);
         let if_expr = Expr {
             kind: ExprKind::If {
@@ -764,21 +1711,30 @@ mod tests {
 
     #[test]
     fn resolve_type_int() {
-        let td = Type::Base { name: Id("Int".into()), params: None };
+        let td = Type::Base {
+            name: Id("Int".into()),
+            params: None,
+        };
         let ty = resolve_type(&td).unwrap();
         assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
     }
 
     #[test]
     fn resolve_type_i32() {
-        let td = Type::Base { name: Id("i32".into()), params: None };
+        let td = Type::Base {
+            name: Id("i32".into()),
+            params: None,
+        };
         let ty = resolve_type(&td).unwrap();
         assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B32.into())));
     }
 
     #[test]
     fn resolve_type_bool() {
-        let td = Type::Base { name: Id("Bool".into()), params: None };
+        let td = Type::Base {
+            name: Id("Bool".into()),
+            params: None,
+        };
         let ty = resolve_type(&td).unwrap();
         assert_eq!(ty, SemType::Bool);
     }
@@ -804,7 +1760,10 @@ Int main() {
 "#;
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
-        assert!(!errs.is_empty(), "expected type error for undefined variable");
+        assert!(
+            !errs.is_empty(),
+            "expected type error for undefined variable"
+        );
     }
 
     #[test]
@@ -819,7 +1778,10 @@ Int main() {
 "#;
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
-        assert!(!errs.is_empty(), "expected type error for signed/unsigned mix");
+        assert!(
+            !errs.is_empty(),
+            "expected type error for signed/unsigned mix"
+        );
     }
 
     #[test]
@@ -829,6 +1791,35 @@ Int main() {
     Int a = 1;
     Int b = 2;
     return a + b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_while_cond_must_be_bool() {
+        let src = r#"
+Int main() {
+    while (5) { break; }
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected while condition to require Bool"
+        );
+    }
+
+    #[test]
+    fn check_while_valid() {
+        let src = r#"
+Int main() {
+    while (true) { break; }
+    return 0;
 }
 "#;
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);

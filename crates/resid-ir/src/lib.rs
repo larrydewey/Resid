@@ -5,13 +5,13 @@
 
 #![allow(dead_code)]
 
-pub mod types;
-pub mod graph;
 pub mod convert;
+pub mod graph;
 pub mod reduce;
+pub mod types;
 
-pub use graph::GraphKey;
-pub use types::*;
-pub use graph::*;
 pub use convert::*;
+pub use graph::GraphKey;
+pub use graph::*;
 pub use reduce::*;
+pub use types::*;

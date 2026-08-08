@@ -8,11 +8,13 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 
 use inkwell::builder::Builder;
+use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FloatType, FunctionType, IntType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FloatValue, FunctionValue, IntValue,
+    PointerValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
@@ -20,7 +22,7 @@ use resid_ir::{BinOp, NumericType, numeric_result_type};
 use resid_lexer::token::Literal;
 use resid_lexer::token::Op as OpKind;
 use resid_parser::{Block, Declaration, Expr, ExprKind, Id, StmtKind, TranslationUnit};
-use resid_type::{FunctionSig, SemType};
+use resid_type::{best_overload, FunctionSig, SemType, Types};
 
 /// A lowered value plus the semantic type the checker attributed to it.
 pub struct Val<'ctx> {
@@ -47,10 +49,15 @@ pub struct CodeGen<'ctx> {
     pub module: Module<'ctx>,
     builder: Builder<'ctx>,
     pub sigs: HashMap<String, FunctionSig>,
+    /// The user-declared named types (for resolving `Type::Base` references and
+    /// variant/struct layout).
+    types: Types,
     /// The function currently being lowered (used to place branch blocks).
     cur_fn: Option<FunctionValue<'ctx>>,
     /// Return type of the current function (single-block body).
     cur_ret: Option<SemType>,
+    /// In-flight loop targets: innermost `(continue_bb, break_bb)`.
+    loops: Vec<(BasicBlock<'ctx>, BasicBlock<'ctx>)>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -62,14 +69,29 @@ impl<'ctx> CodeGen<'ctx> {
             module,
             builder,
             sigs: HashMap::new(),
+            types: Types::new(),
             cur_fn: None,
             cur_ret: None,
+            loops: Vec::new(),
         }
     }
 
     /// Generate a module for the whole translation unit.
     pub fn generate(&mut self, unit: &TranslationUnit) -> Result<(), String> {
         self.sigs = resid_type::collect_signatures(unit);
+        self.types = resid_type::collect_types(unit);
+        self.declare_runtime();
+        // Declare extern symbols for every signature without a definition here
+        // (built-ins like `println`, and - later - the stdlib).
+        for (name, sig) in &self.sigs {
+            if !unit
+                .declarations
+                .iter()
+                .any(|d| matches!(d, Declaration::Function(f) if f.name.0 == *name))
+            {
+                self.declare_extern(name, sig)?;
+            }
+        }
         let names: Vec<String> = unit
             .declarations
             .iter()
@@ -95,7 +117,8 @@ impl<'ctx> CodeGen<'ctx> {
             16 => Ok(self.cx.i16_type()),
             32 => Ok(self.cx.i32_type()),
             64 => Ok(self.cx.i64_type()),
-            _ => self.cx
+            _ => self
+                .cx
                 .custom_width_int_type(NonZeroU32::new(bits as u32).unwrap())
                 .map_err(|e| format!("codegen: int width {bits}: {e}")),
         }
@@ -106,7 +129,9 @@ impl<'ctx> CodeGen<'ctx> {
             16 => Ok(self.cx.f16_type()),
             32 => Ok(self.cx.f32_type()),
             64 => Ok(self.cx.f64_type()),
-            _ => Err(format!("codegen: float width {bits} not yet supported in LLVM")),
+            _ => Err(format!(
+                "codegen: float width {bits} not yet supported in LLVM"
+            )),
         }
     }
 
@@ -115,10 +140,14 @@ impl<'ctx> CodeGen<'ctx> {
             SemType::Bool => self.cx.bool_type().into(),
             SemType::Str => self.cx.ptr_type(AddressSpace::default()).into(),
             SemType::Numeric(n) => match n {
-                Numeric::Int(w) | Numeric::UInt(w) => self.int_type(w.bits())?.into(),
-                Numeric::Float(w) => self.float_type(w.bits())?.into(),
-                Numeric::ISize | Numeric::USize => self.int_type(64)?.into(),
+                NumericType::Int(w) | NumericType::UInt(w) => self.int_type(w.bits())?.into(),
+                NumericType::Float(w) => self.float_type(w.bits())?.into(),
+                NumericType::ISize | NumericType::USize => self.int_type(64)?.into(),
             },
+            // Composites are untyped heap pointers.
+            SemType::List(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr => {
+                self.cx.ptr_type(AddressSpace::default()).into()
+            }
         };
         Ok(bt)
     }
@@ -130,25 +159,84 @@ impl<'ctx> CodeGen<'ctx> {
         name: &str,
         unit: &TranslationUnit,
     ) -> Result<FunctionValue<'ctx>, String> {
-        let f = self.find_func(unit, name).ok_or("internal: function not found")?;
+        let f = self
+            .find_func(unit, name)
+            .ok_or("internal: function not found")?;
         let params: Vec<SemType> = f
             .params
             .iter()
-            .map(|p| resid_type::resolve_type(&p.type_).unwrap_or(SemType::Bool))
+            .map(|p| resid_type::resolve_type_ctx(&p.type_, &self.types).unwrap_or(SemType::Bool))
             .collect();
-        let ret = resid_type::resolve_type(&f.ret).unwrap_or(SemType::Bool);
+        let ret = resid_type::resolve_type_ctx(&f.ret, &self.types).unwrap_or(SemType::Bool);
         let ret_ll = self.llvm_type(&ret)?;
-        let param_ll: Vec<BasicTypeEnum<'ctx>> = params
-            .iter()
-            .map(|t| self.llvm_type(t).unwrap())
-            .collect();
+        let param_ll: Vec<BasicTypeEnum<'ctx>> =
+            params.iter().map(|t| self.llvm_type(t).unwrap()).collect();
         let param_meta: Vec<BasicMetadataTypeEnum<'ctx>> =
             param_ll.iter().map(|t| (*t).into()).collect();
         let ft = make_fn_type(ret_ll, &param_meta);
         Ok(self.module.add_function(&f.name.0, ft, None))
     }
 
-    fn find_func<'a>(&self, unit: &'a TranslationUnit, name: &str) -> Option<&'a resid_parser::FuncDef> {
+    /// Declare an external (runtime-provided) function.
+    /// Note: C ABI uses i8 for bool parameters (not i1).
+    fn declare_extern(&self, name: &str, sig: &FunctionSig) -> Result<(), String> {
+        if self.module.get_function(name).is_some() {
+            return Ok(());
+        }
+        let ret_ll = self.llvm_type(&sig.ret)?;
+        let param_ll: Result<Vec<BasicTypeEnum<'ctx>>, String> = sig
+            .params
+            .iter()
+            .map(|t| self.param_type(t))
+            .collect();
+        let param_ll = param_ll?;
+        let param_meta: Vec<BasicMetadataTypeEnum<'ctx>> =
+            param_ll.iter().map(|t| (*t).into()).collect();
+        let ft = make_fn_type(ret_ll, &param_meta);
+        self.module.add_function(name, ft, None);
+        Ok(())
+    }
+
+    /// LLVM type for a function parameter — matches the C ABI.
+    /// Bool parameters are i8 (C `int8_t`), everything else matches llvm_type.
+    fn param_type(&self, t: &SemType) -> Result<BasicTypeEnum<'ctx>, String> {
+        match t {
+            SemType::Bool => Ok(self.cx.i8_type().into()),
+            _ => self.llvm_type(t),
+        }
+    }
+
+    /// A string constant: canonicalize into a global `[N x i8]` and return a
+    /// pointer to its first byte.
+    fn lower_str(&mut self, s: &str) -> PointerValue<'ctx> {
+        let bytes: Vec<u8> = s.bytes().chain(std::iter::once(0)).collect();
+        let elems: Vec<inkwell::values::IntValue<'ctx>> = bytes
+            .iter()
+            .map(|b| self.cx.i8_type().const_int(*b as u64, false))
+            .collect();
+        let arr = self.cx.i8_type().const_array(&elems);
+        let arr_ty = arr.get_type();
+        let gv = self
+            .module
+            .add_global(arr_ty, Some(AddressSpace::default()), "str");
+        gv.set_initializer(&arr);
+        gv.set_constant(true);
+        gv.set_unnamed_addr(true);
+        let zero = self.cx.i32_type().const_zero();
+        let ptr = gv.as_pointer_value();
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(arr_ty, ptr, &[zero, zero], "str")
+                .map_err(to_err)
+                .unwrap()
+        }
+    }
+
+    fn find_func<'a>(
+        &self,
+        unit: &'a TranslationUnit,
+        name: &str,
+    ) -> Option<&'a resid_parser::FuncDef> {
         unit.declarations.iter().find_map(|d| match d {
             Declaration::Function(f) if f.name.0 == name => Some(f),
             _ => None,
@@ -162,14 +250,14 @@ impl<'ctx> CodeGen<'ctx> {
         fv: FunctionValue<'ctx>,
     ) -> Result<(), String> {
         let f = self.find_func(unit, name).ok_or("?")?;
-        let enter_ret = resid_type::resolve_type(&f.ret).unwrap_or(SemType::Bool);
+        let enter_ret = resid_type::resolve_type_ctx(&f.ret, &self.types).unwrap_or(SemType::Bool);
         self.cur_ret = Some(enter_ret.clone());
         let entry = self.cx.append_basic_block(fv, "entry");
         self.builder.position_at_end(entry);
 
         let mut sc = Scope::new();
         for (i, p) in f.params.iter().enumerate() {
-            let ty = resid_type::resolve_type(&p.type_).unwrap_or(SemType::Bool);
+            let ty = resid_type::resolve_type_ctx(&p.type_, &self.types).unwrap_or(SemType::Bool);
             let ll = self.llvm_type(&ty)?;
             let ptr = self.builder.build_alloca(ll, &p.name.0).map_err(to_err)?;
             let arg = fv.get_nth_param(i as u32).ok_or("missing param")?;
@@ -194,18 +282,18 @@ impl<'ctx> CodeGen<'ctx> {
                                 inkwell::types::BasicTypeEnum::IntType(i) => i.const_zero(),
                                 _ => self.cx.bool_type().const_zero(),
                             };
-                            self.builder
-                                .build_return(Some(&zero))
-                                .map_err(to_err)?;
+                            self.builder.build_return(Some(&zero)).map_err(to_err)?;
                         }
                         SemType::Bool => {
                             self.builder
                                 .build_return(Some(&self.cx.bool_type().const_zero()))
                                 .map_err(to_err)?;
                         }
-                        SemType::Str => {
+                        SemType::Str | SemType::List(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr => {
                             self.builder
-                                .build_return(Some(&self.cx.ptr_type(AddressSpace::default()).const_null()))
+                                .build_return(Some(
+                                    &self.cx.ptr_type(AddressSpace::default()).const_null(),
+                                ))
                                 .map_err(to_err)?;
                         }
                     }
@@ -217,21 +305,40 @@ impl<'ctx> CodeGen<'ctx> {
 
     // ─── Statements ──────────────────────────────────────────────
 
-    /// Lower a block. Returns true if it ends with a terminator (return).
+    /// Lower a block. Returns true if it ends with a terminator (return/break).
     fn lower_block(&mut self, sc: &mut Scope<'ctx>, block: &Block) -> Result<bool, String> {
+        Ok(self.lower_block_with_tail(sc, block, false)?.0)
+    }
+
+    /// Lower a block, optionally capturing the block's tail value (from
+    /// `block.ret`, or the final expression statement when there is no `ret`).
+    /// Returns `(terminated, tail_value)`.
+    fn lower_block_with_tail(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        block: &Block,
+        capture_tail: bool,
+    ) -> Result<(bool, Option<Val<'ctx>>), String> {
         let mut terminated = false;
-        for stmt in &block.statements {
+        let mut tail: Option<Val<'ctx>> = None;
+        let last_is_tail =
+            capture_tail && block.ret.is_none() && matches!(block.statements.last(), Some(s) if matches!(s.kind, StmtKind::Expr(_)));
+        for (idx, stmt) in block.statements.iter().enumerate() {
             if terminated {
                 break;
             }
+            let is_tail = last_is_tail && idx == block.statements.len() - 1;
             match &stmt.kind {
                 StmtKind::Bind { type_, name, value } => {
                     let ty = match type_ {
-                        Some(t) => resid_type::resolve_type(t).unwrap_or(SemType::Bool),
-                        None => resid_type::infer_expr(
+                        Some(t) => {
+                            resid_type::resolve_type_ctx(t, &self.types).unwrap_or(SemType::Bool)
+                        }
+                        None => resid_type::infer_expr_ctx(
                             value,
                             &self.env(sc),
                             &self.sigs,
+                            &self.types,
                         )
                         .unwrap_or(SemType::Bool),
                     };
@@ -247,14 +354,17 @@ impl<'ctx> CodeGen<'ctx> {
                     sc.vars.insert(name.0.clone(), (ptr, ty));
                 }
                 StmtKind::Expr(e) | StmtKind::Discard(e) => {
-                    self.lower_expr(sc, e, None)?;
+                    let v = self.lower_expr(sc, e, None)?;
+                    if is_tail {
+                        tail = Some(v);
+                    }
                 }
                 StmtKind::Return(v) => {
                     match v {
                         Some(e) => {
                             let raw = self.lower_expr(sc, e, None)?;
-                            let val =
-                                self.cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
+                            let val = self
+                                .cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
                             self.builder.build_return(Some(&val.v)).map_err(to_err)?;
                         }
                         None => {
@@ -263,10 +373,279 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     terminated = true;
                 }
-                StmtKind::Break | StmtKind::Continue | StmtKind::Destructure { .. } => {}
+                StmtKind::Destructure { pattern, source } => {
+                    let v = self.lower_expr(sc, source, None)?;
+                    self.bind_pattern_vars(sc, pattern, v.v, &v.ty)?;
+                }
+                StmtKind::Break | StmtKind::Continue => {
+                    if let Some(&(_, break_bb)) = self.loops.last() {
+                        let target = match &stmt.kind {
+                            StmtKind::Continue => self.loops.last().map(|&(c, _)| c),
+                            _ => Some(break_bb),
+                        };
+                        if let Some(t) = target {
+                            self.builder
+                                .build_unconditional_branch(t)
+                                .map_err(to_err)?;
+                        }
+                    } else {
+                        return Err("codegen: break/continue outside a loop".into());
+                    }
+                    terminated = true;
+                }
             }
         }
-        Ok(terminated)
+        if let Some(ret) = &block.ret {
+            let v = self.lower_expr(sc, ret, None)?;
+            if capture_tail {
+                tail = Some(v);
+            }
+        }
+        Ok((terminated, tail))
+    }
+
+    /// Lower a top-level `if` expression: condition → then/else blocks joined
+    /// at a merge with a phi (mirrors `match`).
+    fn lower_if(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        cond: &Expr,
+        then_block: &Block,
+        else_block: &Option<Box<Block>>,
+    ) -> Result<Val<'ctx>, String> {
+        let fv = self
+            .cur_fn
+            .ok_or_else(|| "codegen: if outside a function".to_string())?;
+        let cond_v = self.lower_expr(sc, cond, None)?;
+        let cond_bool = self.cast_val(cond_v, &SemType::Bool)?;
+        let cond = cond_bool.v.into_int_value();
+
+        let then_bb = self.cx.append_basic_block(fv, "if_then");
+        let else_bb = self.cx.append_basic_block(fv, "if_else");
+        let merge_bb = self.cx.append_basic_block(fv, "if_merge");
+
+        self.builder
+            .build_conditional_branch(cond, then_bb, else_bb)
+            .map_err(to_err)?;
+
+        // Then arm.
+        self.builder.position_at_end(then_bb);
+        let (t_term, t_tail) = self.lower_block_with_tail(sc, then_block, true)?;
+        let then_reaches = if t_term {
+            None
+        } else {
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(to_err)?;
+            Some(then_bb)
+        };
+
+        // Else arm (or default-zero for the missing branch).
+        self.builder.position_at_end(else_bb);
+        let (e_term, e_tail) = match else_block {
+            Some(b) => self.lower_block_with_tail(sc, b, true)?,
+            None => (false, None),
+        };
+        let else_reaches = if e_term {
+            None
+        } else {
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(to_err)?;
+            Some(else_bb)
+        };
+
+        // Join the arms with a phi.
+        self.builder.position_at_end(merge_bb);
+        let join_ty = t_tail
+            .as_ref()
+            .map(|v| v.ty.clone())
+            .or_else(|| e_tail.as_ref().map(|v| v.ty.clone()))
+            .unwrap_or(SemType::Bool);
+        let ll = self.llvm_type(&join_ty)?;
+        let t_val = t_tail.unwrap_or_else(|| self.zero_val());
+        let e_val = e_tail.unwrap_or_else(|| self.zero_val());
+        let tv = self.cast_val(t_val, &join_ty)?;
+        let ev = self.cast_val(e_val, &join_ty)?;
+        let theta = match (then_reaches, else_reaches) {
+            (Some(tb), Some(eb)) => {
+                let phi = self.builder.build_phi(ll, "iff").map_err(to_err)?;
+                phi.add_incoming(&[(&tv.v, tb), (&ev.v, eb)]);
+                phi.as_basic_value()
+            }
+            (Some(tb), None) => {
+                let phi = self.builder.build_phi(ll, "iff").map_err(to_err)?;
+                phi.add_incoming(&[(&tv.v, tb)]);
+                phi.as_basic_value()
+            }
+            (None, Some(eb)) => {
+                let phi = self.builder.build_phi(ll, "iff").map_err(to_err)?;
+                phi.add_incoming(&[(&ev.v, eb)]);
+                phi.as_basic_value()
+            }
+            (None, None) => tv.v,
+        };
+        Ok(Val {
+            v: theta,
+            ty: join_ty,
+        })
+    }
+
+    /// Lower a `while` loop: cond block, body block, loop back-edge, and an
+    /// exit block that `break` targets.
+    fn lower_while(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        cond: &Expr,
+        body: &Block,
+    ) -> Result<Val<'ctx>, String> {
+        let fv = self
+            .cur_fn
+            .ok_or_else(|| "codegen: while outside a function".to_string())?;
+
+        let cond_bb = self.cx.append_basic_block(fv, "while_cond");
+        let body_bb = self.cx.append_basic_block(fv, "while_body");
+        let exit_bb = self.cx.append_basic_block(fv, "while_exit");
+
+        self.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(to_err)?;
+
+        // Condition.
+        self.builder.position_at_end(cond_bb);
+        let c = self.lower_expr(sc, cond, None)?;
+        let cb = self.cast_val(c, &SemType::Bool)?.v.into_int_value();
+        self.builder
+            .build_conditional_branch(cb, body_bb, exit_bb)
+            .map_err(to_err)?;
+
+        // Body.
+        self.builder.position_at_end(body_bb);
+        self.loops.push((cond_bb, exit_bb));
+        let (terminated, _) = self.lower_block_with_tail(sc, body, false)?;
+        self.loops.pop();
+        if !terminated {
+            self.builder
+                .build_unconditional_branch(cond_bb)
+                .map_err(to_err)?;
+        }
+
+        self.builder.position_at_end(exit_bb);
+        Ok(Val {
+            v: self.cx.bool_type().const_zero().into(),
+            ty: SemType::Bool,
+        })
+    }
+
+    fn lower_for_in(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        collection: &Expr,
+        name: &Id,
+        body: &Block,
+        _type_: &resid_parser::Type,
+    ) -> Result<Val<'ctx>, String> {
+        let fv = self
+            .cur_fn
+            .ok_or_else(|| "codegen: for-in outside a function".to_string())?;
+
+        let col = self.lower_expr(sc, collection, None)?;
+        let elem_ty = match &col.ty {
+            SemType::List(inner) => inner.as_ref().clone(),
+            other => return Err(format!("codegen: for-in on non-List type {other}")),
+        };
+
+        let cond_bb = self.cx.append_basic_block(fv, "forin_cond");
+        let body_entry_bb = self.cx.append_basic_block(fv, "forin_body_entry");
+        let body_bb = self.cx.append_basic_block(fv, "forin_body");
+        let inc_bb = self.cx.append_basic_block(fv, "forin_inc");
+        let exit_bb = self.cx.append_basic_block(fv, "forin_exit");
+
+        // Position at current builder location (function entry or previous stmt)
+        // and emit unconditional branch to cond block
+        let cur_pos = self.builder.get_insert_block().unwrap();
+        self.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(to_err)?;
+
+        // ── Condition ──────────────────────────────────────────────
+        // Phi must be the first instruction in the block.
+        self.builder.position_at_end(cond_bb);
+        let i_phi = self
+            .builder
+            .build_phi(self.cx.i64_type(), "forin_i")
+            .map_err(to_err)?;
+        // The first incoming is from the function's entry block (where we branched from)
+        let func_entry = cur_pos;
+        i_phi.add_incoming(&[(&self.cx.i64_type().const_zero(), func_entry),]);
+        let len_v = self.rt_call("resid_list_len", vec![col.v])?;
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let cmp = self
+            .builder
+            .build_int_compare(
+                IntPredicate::SLT,
+                i_val,
+                len_v.into_int_value(),
+                "forin_cmp",
+            )
+            .map_err(to_err)?;
+        self.builder
+            .build_conditional_branch(cmp, body_entry_bb, exit_bb)
+            .map_err(to_err)?;
+
+        // ── Body entry: load element and store into loop var slot ──
+        self.builder.position_at_end(body_entry_bb);
+        let idx = i_phi.as_basic_value().into_int_value();
+        let elem = self.load_slot(col.v, idx, &elem_ty)?;
+
+        // Allocate slot for loop variable
+        let ll = self.llvm_type(&elem_ty)?;
+        let ptr = self.builder.build_alloca(ll, &name.0).map_err(to_err)?;
+        self.builder.build_store(ptr, elem.v).map_err(to_err)?;
+        sc.vars.insert(name.0.clone(), (ptr, elem_ty.clone()));
+
+        self.builder
+            .build_unconditional_branch(body_bb)
+            .map_err(to_err)?;
+
+        // ── Body ───────────────────────────────────────────────────
+        self.builder.position_at_end(body_bb);
+        self.loops.push((inc_bb, exit_bb));
+        let (terminated, _) = self.lower_block_with_tail(sc, body, false)?;
+        if !terminated {
+            self.builder
+                .build_unconditional_branch(inc_bb)
+                .map_err(to_err)?;
+        }
+        self.loops.pop();
+
+        // ── Increment ──────────────────────────────────────────────
+        self.builder.position_at_end(inc_bb);
+        // cond_bb dominates inc_bb (through the loop), so cond_bb's phi value
+        // is available here. Both natural loop exit and continue paths use it.
+        let inc = self
+            .builder
+            .build_int_add(i_val, self.cx.i64_type().const_int(1, false), "forin_inc")
+            .map_err(to_err)?;
+        self.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(to_err)?;
+        // cond_bb's predecessors are entry_bb and inc_bb — phi has exactly these two incoming.
+        i_phi.add_incoming(&[(&inc, inc_bb)]);
+
+        self.builder.position_at_end(exit_bb);
+        Ok(Val {
+            v: self.cx.bool_type().const_zero().into(),
+            ty: SemType::Bool,
+        })
+    }
+
+    /// A zero/undef value for a block with no tail expression.
+    fn zero_val(&self) -> Val<'ctx> {
+        Val {
+            v: self.cx.bool_type().const_zero().into(),
+            ty: SemType::Bool,
+        }
     }
 
     /// Build a `resid-type` environment mirroring the current LLVM scope so
@@ -291,20 +670,24 @@ impl<'ctx> CodeGen<'ctx> {
             ExprKind::Literal(lit) => self.lower_literal(lit, target),
 
             ExprKind::Id(id) => {
-                let (ptr, ty) = sc
-                    .vars
-                    .get(&id.0)
-                    .ok_or_else(|| format!("codegen: undefined variable `{}`", id.0))?;
-                let pointee_ty = self.llvm_type(&ty)?;
-                let v = self
-                    .builder
-                    .build_load(pointee_ty, *ptr, &id.0)
-                    .map_err(to_err)?;
-                Ok(Val { v, ty: ty.clone() })
+                if let Some((ptr, ty)) = sc.vars.get(&id.0) {
+                    let pointee_ty = self.llvm_type(ty)?;
+                    let v = self
+                        .builder
+                        .build_load(pointee_ty, *ptr, &id.0)
+                        .map_err(to_err)?;
+                    return Ok(Val {
+                        v,
+                        ty: ty.clone(),
+                    });
+                }
+                // A bare unit variant constructor (`None`).
+                self.lower_unit_variant(sc, &id.0)
             }
 
             ExprKind::Cast { type_, operand } => {
-                let to = resid_type::resolve_type(type_).ok_or("codegen: unknown cast type")?;
+                let to = resid_type::resolve_type_ctx(type_, &self.types)
+                    .ok_or("codegen: unknown cast type")?;
                 let raw = self.lower_expr(sc, operand, None)?;
                 self.cast_val(raw, &to)
             }
@@ -314,15 +697,68 @@ impl<'ctx> CodeGen<'ctx> {
                 self.lower_unary(op, raw)
             }
 
-            ExprKind::BinaryOp { op, lhs, rhs } => {
-                self.lower_binary(sc, op, lhs, rhs)
+            ExprKind::BinaryOp { op, lhs, rhs } => self.lower_binary(sc, op, lhs, rhs),
+
+            ExprKind::If {
+                cond,
+                then_block,
+                else_block,
+            } => self.lower_if(sc, cond, then_block, else_block),
+
+            ExprKind::While { cond, body } => self.lower_while(sc, cond, body),
+
+            ExprKind::ForIn { type_, name, collection, body } => {
+                self.lower_for_in(sc, collection, name, body, type_)
             }
 
             ExprKind::Call { func, args } => self.lower_call(sc, func, args),
 
+            ExprKind::ListLit(elems) => self.lower_list_lit(sc, elems),
+            ExprKind::StructLit { name, fields } => self.lower_struct_lit(sc, name, fields),
+            ExprKind::FieldAccess { target, field } => {
+                self.lower_field_access(sc, target, field)
+            }
+            ExprKind::Index { target, index } => self.lower_index(sc, target, index),
+            ExprKind::Match {
+                scrutinee,
+                arms,
+            } => self.lower_match(sc, scrutinee, arms),
+            ExprKind::MethodCall {
+                target,
+                method,
+                args,
+            } => self.lower_method_call(sc, target, method, args),
+
+            ExprKind::RawString(s) => {
+                let ptr = self.lower_str(s);
+                Ok(Val {
+                    v: ptr.into(),
+                    ty: SemType::Str,
+                })
+            }
+
+            ExprKind::FString(parts) => {
+                let mut out = String::new();
+                for part in parts {
+                    match part {
+                        resid_parser::FStringPart::Text(t) => out.push_str(t),
+                        resid_parser::FStringPart::Expr(_) => {
+                            return Err("codegen: f-string interpolation not yet supported".into());
+                        }
+                    }
+                }
+                let ptr = self.lower_str(&out);
+                Ok(Val {
+                    v: ptr.into(),
+                    ty: SemType::Str,
+                })
+            }
+
             ExprKind::Rt(inner) | ExprKind::AtResidual { inner, .. } => {
                 self.lower_expr(sc, inner, target)
             }
+
+            ExprKind::Discard(inner) => self.lower_expr(sc, inner, target),
 
             other => Err(format!(
                 "codegen: `{}` not yet supported",
@@ -383,7 +819,34 @@ impl<'ctx> CodeGen<'ctx> {
 
             Literal::Bool(b) => {
                 let v = self.cx.bool_type().const_int(*b as u64, false);
-                Ok(Val { v: v.into(), ty: SemType::Bool })
+                Ok(Val {
+                    v: v.into(),
+                    ty: SemType::Bool,
+                })
+            }
+
+            Literal::Str(lit) => {
+                let ptr = self.lower_str(&lit.value);
+                Ok(Val {
+                    v: ptr.into(),
+                    ty: SemType::Str,
+                })
+            }
+
+            Literal::RawStr(lit) => {
+                let ptr = self.lower_str(&lit.value);
+                Ok(Val {
+                    v: ptr.into(),
+                    ty: SemType::Str,
+                })
+            }
+
+            Literal::Char(c) => {
+                let ptr = self.lower_str(&c.to_string());
+                Ok(Val {
+                    v: ptr.into(),
+                    ty: SemType::Str,
+                })
             }
 
             _ => Err(format!("codegen: literal `{lit}` not supported yet")),
@@ -395,8 +858,14 @@ impl<'ctx> CodeGen<'ctx> {
             OpKind::Plus => Ok(raw),
             OpKind::Minus => {
                 let v = match raw.v {
-                    BasicValueEnum::IntValue(i) => self.builder.build_int_neg(i, "neg").map_err(to_err)?.into(),
-                    BasicValueEnum::FloatValue(f) => self.builder.build_float_neg(f, "fneg").map_err(to_err)?.into(),
+                    BasicValueEnum::IntValue(i) => {
+                        self.builder.build_int_neg(i, "neg").map_err(to_err)?.into()
+                    }
+                    BasicValueEnum::FloatValue(f) => self
+                        .builder
+                        .build_float_neg(f, "fneg")
+                        .map_err(to_err)?
+                        .into(),
                     _ => return Err("codegen: unary minus needs numeric".into()),
                 };
                 Ok(Val { v, ty: raw.ty })
@@ -404,12 +873,18 @@ impl<'ctx> CodeGen<'ctx> {
             OpKind::Not => {
                 let i = raw.v.into_int_value();
                 let v = self.builder.build_not(i, "not").map_err(to_err)?;
-                Ok(Val { v: v.into(), ty: SemType::Bool })
+                Ok(Val {
+                    v: v.into(),
+                    ty: SemType::Bool,
+                })
             }
             OpKind::Tilde => {
                 let i = raw.v.into_int_value();
                 let v = self.builder.build_not(i, "bvnot").map_err(to_err)?;
-                Ok(Val { v: v.into(), ty: raw.ty })
+                Ok(Val {
+                    v: v.into(),
+                    ty: raw.ty,
+                })
             }
             _ => Err(format!("codegen: unary {op:?} unsupported")),
         }
@@ -422,6 +897,17 @@ impl<'ctx> CodeGen<'ctx> {
         lhs: &Expr,
         rhs: &Expr,
     ) -> Result<Val<'ctx>, String> {
+        // String concatenation: fold constant string operands at compile time.
+        if matches!(op, OpKind::Plus) {
+            if let (Some(l), Some(r)) = (const_str(lhs), const_str(rhs)) {
+                let ptr = self.lower_str(&format!("{l}{r}"));
+                return Ok(Val {
+                    v: ptr.into(),
+                    ty: SemType::Str,
+                });
+            }
+        }
+
         // Logical connectives on Bools.
         if matches!(op, OpKind::AndAnd | OpKind::OrOr) {
             let l = self.lower_expr(sc, lhs, None)?;
@@ -433,7 +919,10 @@ impl<'ctx> CodeGen<'ctx> {
             } else {
                 self.builder.build_or(li, ri, "lor").map_err(to_err)?
             };
-            return Ok(Val { v: v.into(), ty: SemType::Bool });
+            return Ok(Val {
+                v: v.into(),
+                ty: SemType::Bool,
+            });
         }
 
         let binop = resid_type::to_bin_op(op)
@@ -464,14 +953,13 @@ impl<'ctx> CodeGen<'ctx> {
         let ln = self.widen(l, res)?;
         let rn = self.widen(r, res)?;
         let v = self.apply_binop(binop, ln, rn, res)?;
-        Ok(Val { v, ty: SemType::Numeric(res) })
+        Ok(Val {
+            v,
+            ty: SemType::Numeric(res),
+        })
     }
 
-    fn widen(
-        &mut self,
-        v: Val<'ctx>,
-        res: Numeric,
-    ) -> Result<BasicValueEnum<'ctx>, String> {
+    fn widen(&mut self, v: Val<'ctx>, res: Numeric) -> Result<BasicValueEnum<'ctx>, String> {
         let src = match &v.ty {
             SemType::Numeric(n) => *n,
             _ => return Err("codegen: numeric required".into()),
@@ -483,7 +971,11 @@ impl<'ctx> CodeGen<'ctx> {
             if f.get_type().get_bit_width() == w as u32 {
                 return Ok(f.into());
             }
-            return Ok(self.builder.build_float_cast(f, ft, "wid").map_err(to_err)?.into());
+            return Ok(self
+                .builder
+                .build_float_cast(f, ft, "wid")
+                .map_err(to_err)?
+                .into());
         }
         let it = self.int_type(w)?;
         let srcbits = src.target_width().unwrap_or(64);
@@ -500,7 +992,11 @@ impl<'ctx> CodeGen<'ctx> {
             };
             return Ok(ext.map_err(to_err)?.into());
         }
-        Ok(self.builder.build_int_truncate(i, it, "trunc").map_err(to_err)?.into())
+        Ok(self
+            .builder
+            .build_int_truncate(i, it, "trunc")
+            .map_err(to_err)?
+            .into())
     }
 
     fn apply_binop(
@@ -563,12 +1059,21 @@ impl<'ctx> CodeGen<'ctx> {
         rt: Numeric,
     ) -> Result<Val<'ctx>, String> {
         if lt.is_float() || rt.is_float() {
-            let w = lt.target_width().unwrap_or(64).max(rt.target_width().unwrap_or(64));
+            let w = lt
+                .target_width()
+                .unwrap_or(64)
+                .max(rt.target_width().unwrap_or(64));
             let ft = self.float_type(w)?;
             let lf = to_float(l)?;
             let rf = to_float(r)?;
-            let lf = self.builder.build_float_cast(lf, ft, "fc").map_err(to_err)?;
-            let rf = self.builder.build_float_cast(rf, ft, "fc").map_err(to_err)?;
+            let lf = self
+                .builder
+                .build_float_cast(lf, ft, "fc")
+                .map_err(to_err)?;
+            let rf = self
+                .builder
+                .build_float_cast(rf, ft, "fc")
+                .map_err(to_err)?;
             let pred = match binop {
                 BinOp::Eq => FloatPredicate::OEQ,
                 BinOp::Ne => FloatPredicate::ONE,
@@ -578,16 +1083,31 @@ impl<'ctx> CodeGen<'ctx> {
                 BinOp::Ge => FloatPredicate::OGE,
                 _ => unreachable!(),
             };
-            let i = self.builder.build_float_compare(pred, lf, rf, "fcmp").map_err(to_err)?;
-            return Ok(Val { v: i.into(), ty: SemType::Bool });
+            let i = self
+                .builder
+                .build_float_compare(pred, lf, rf, "fcmp")
+                .map_err(to_err)?;
+            return Ok(Val {
+                v: i.into(),
+                ty: SemType::Bool,
+            });
         }
-        let w = lt.target_width().unwrap_or(64).max(rt.target_width().unwrap_or(64));
+        let w = lt
+            .target_width()
+            .unwrap_or(64)
+            .max(rt.target_width().unwrap_or(64));
         let signed = lt.is_signed() && rt.is_signed();
         let li = self.to_int(l, w)?;
         let ri = self.to_int(r, w)?;
         let pred = int_pred(binop, signed);
-        let i = self.builder.build_int_compare(pred, li, ri, "icmp").map_err(to_err)?;
-        Ok(Val { v: i.into(), ty: SemType::Bool })
+        let i = self
+            .builder
+            .build_int_compare(pred, li, ri, "icmp")
+            .map_err(to_err)?;
+        Ok(Val {
+            v: i.into(),
+            ty: SemType::Bool,
+        })
     }
 
     fn to_int(&mut self, v: Val<'ctx>, w: u16) -> Result<IntValue<'ctx>, String> {
@@ -610,10 +1130,21 @@ impl<'ctx> CodeGen<'ctx> {
             };
             return ext.map_err(to_err);
         }
-        self.builder.build_int_truncate(i, it, "trunc").map_err(to_err)
+        self.builder
+            .build_int_truncate(i, it, "trunc")
+            .map_err(to_err)
     }
 
     fn cast_val(&mut self, raw: Val<'ctx>, to: &SemType) -> Result<Val<'ctx>, String> {
+        // Identical semantic type — no conversion needed (covers composite
+        // pointer values, Str, and already-typed numeric values).
+        if raw.ty == *to {
+            return Ok(raw);
+        }
+        // Ptr target accepts any pointer-typed source (composites, Str).
+        if matches!(to, SemType::Ptr) {
+            return Ok(raw);
+        }
         let to_ll = self.llvm_type(to)?;
         let v = match (raw.v, to_ll) {
             (BasicValueEnum::IntValue(i), BasicTypeEnum::IntType(t)) => {
@@ -621,19 +1152,30 @@ impl<'ctx> CodeGen<'ctx> {
                 if a == b {
                     BasicValueEnum::IntValue(i)
                 } else if a > b {
-                    self.builder.build_int_truncate(i, t, "cast").map_err(to_err)?.into()
+                    self.builder
+                        .build_int_truncate(i, t, "cast")
+                        .map_err(to_err)?
+                        .into()
                 } else {
                     let signed = matches!(&raw.ty, SemType::Numeric(n) if n.is_signed());
                     if signed {
-                        self.builder.build_int_s_extend(i, t, "cast").map_err(to_err)?.into()
+                        self.builder
+                            .build_int_s_extend(i, t, "cast")
+                            .map_err(to_err)?
+                            .into()
                     } else {
-                        self.builder.build_int_z_extend(i, t, "cast").map_err(to_err)?.into()
+                        self.builder
+                            .build_int_z_extend(i, t, "cast")
+                            .map_err(to_err)?
+                            .into()
                     }
                 }
             }
-            (BasicValueEnum::FloatValue(f), BasicTypeEnum::FloatType(t)) => {
-                self.builder.build_float_cast(f, t, "cast").map_err(to_err)?.into()
-            }
+            (BasicValueEnum::FloatValue(f), BasicTypeEnum::FloatType(t)) => self
+                .builder
+                .build_float_cast(f, t, "cast")
+                .map_err(to_err)?
+                .into(),
             (BasicValueEnum::IntValue(i), BasicTypeEnum::FloatType(t)) => {
                 let signed = matches!(&raw.ty, SemType::Numeric(n) if n.is_signed());
                 let v = if signed {
@@ -657,7 +1199,114 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(Val { v, ty: to.clone() })
     }
 
+    /// Widen an argument value to match a function parameter type.
+    /// Handles:
+    /// - Bool (i1) → i8 for C ABI (extern param_type uses i8 for Bool)
+    /// - Numeric widening/truncation to the target bit width
+    /// - Passthrough for pointer types (Str, List, Struct, Sum)
+    fn widen_call_arg(&mut self, raw: Val<'ctx>, target: &SemType) -> Result<Val<'ctx>, String> {
+        // Bool argument → i8 param (C ABI for extern functions) — must run
+        // before the equality check below, since both sides are SemType::Bool
+        // but the LLVM types differ (i1 vs i8).
+        if raw.ty == SemType::Bool && matches!(target, SemType::Bool) {
+            let i = raw.v.into_int_value();
+            let b8 = self
+                .builder
+                .build_int_z_extend(i, self.cx.i8_type(), "bool_to_i8")
+                .map_err(to_err)?;
+            return Ok(Val {
+                v: b8.into(),
+                ty: SemType::Bool,
+            });
+        }
+        if raw.ty == *target {
+            return Ok(raw);
+        }
+        // Composite types (List/Struct/Sum) → Ptr parameter — passthrough.
+        if matches!(target, SemType::Ptr) {
+            match &raw.ty {
+                SemType::List(_) | SemType::Struct { .. } | SemType::Sum { .. } => return Ok(raw),
+                _ => {}
+            }
+        }
+        // Numeric widening / truncation (ints and floats).
+        if let (SemType::Numeric(src), SemType::Numeric(dst)) = (&raw.ty, target) {
+            let dst_bits = dst.target_width().unwrap_or(64);
+            if src.is_float() {
+                let ft = self.float_type(dst_bits)?;
+                let f = raw.v.into_float_value();
+                let src_bits = src.target_width().unwrap_or(64);
+                if src_bits == dst_bits {
+                    return Ok(raw);
+                }
+                let v = self
+                    .builder
+                    .build_float_cast(f, ft, "widen_float")
+                    .map_err(to_err)?;
+                return Ok(Val {
+                    v: v.into(),
+                    ty: target.clone(),
+                });
+            }
+            // Integer widening / truncation.
+            let src_bits = src.target_width().unwrap_or(64);
+            if src_bits == dst_bits {
+                return Ok(raw);
+            }
+            let i = raw.v.into_int_value();
+            let v = if src_bits < dst_bits {
+                let signed = src.is_signed();
+                let ext = if signed {
+                    self.builder.build_int_s_extend(i, self.int_type(dst_bits)?, "widen")
+                } else {
+                    self.builder.build_int_z_extend(i, self.int_type(dst_bits)?, "widen")
+                };
+                ext.map_err(to_err)?.into()
+            } else {
+                self.builder
+                    .build_int_truncate(i, self.int_type(dst_bits)?, "widen")
+                    .map_err(to_err)?
+                    .into()
+            };
+            return Ok(Val { v, ty: target.clone() });
+        }
+        // Pointer types (Str, List, Struct, Sum) — passthrough.
+        Ok(raw)
+    }
+
     // ─── Calls ───────────────────────────────────────────────────
+
+    /// Declare the bootstrap runtime helpers (boxed composite values).
+    fn declare_runtime(&mut self) {
+        let ptr = self.cx.ptr_type(AddressSpace::default());
+        let i64t = self.cx.i64_type();
+        let i8t = self.cx.i8_type();
+        let f64t = self.cx.f64_type();
+        self.decl_rt("resid_box_new", vec![i64t.into(), i64t.into(), ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_box_tag", vec![ptr.into()], i64t.into());
+        self.decl_rt("resid_box_slot", vec![ptr.into(), i64t.into()], ptr.into());
+        self.decl_rt("resid_box_i64", vec![i64t.into()], ptr.into());
+        self.decl_rt("resid_box_f64", vec![f64t.into()], ptr.into());
+        self.decl_rt("resid_box_bool", vec![i8t.into()], ptr.into());
+        self.decl_rt("resid_unbox_i64", vec![ptr.into()], i64t.into());
+        self.decl_rt("resid_unbox_f64", vec![ptr.into()], f64t.into());
+        self.decl_rt("resid_unbox_bool", vec![ptr.into()], i8t.into());
+        self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
+    }
+
+    fn decl_rt(
+        &mut self,
+        name: &str,
+        params: Vec<BasicTypeEnum<'ctx>>,
+        ret: BasicTypeEnum<'ctx>,
+    ) {
+        if self.module.get_function(name).is_some() {
+            return;
+        }
+        let meta: Vec<BasicMetadataTypeEnum<'ctx>> = params.iter().map(|t| (*t).into()).collect();
+        let ft = make_fn_type(ret, &meta);
+        self.module.add_function(name, ft, None);
+    }
 
     fn lower_call(
         &mut self,
@@ -669,30 +1318,505 @@ impl<'ctx> CodeGen<'ctx> {
             ExprKind::Id(id) => &id.0,
             _ => return Err("codegen: only direct calls supported".into()),
         };
-        let fnv = self
-            .module
-            .get_function(name)
-            .ok_or_else(|| format!("codegen: no such function `{name}`"))?;
-        let sig = self.sigs.get(name).cloned().unwrap_or(FunctionSig {
+
+        // A variant constructor like `Some(x)`.
+        if let Some(sum) = resid_type::find_constructor(&self.types, name).cloned() {
+            let SemType::Sum { variants, .. } = &sum else {
+                unreachable!()
+            };
+            let idx = sum
+                .variant_index(name)
+                .ok_or_else(|| format!("codegen: no variant `{name}`"))?;
+            let (_, payload) = &variants[idx];
+            return match payload {
+                None => {
+                    if !args.is_empty() {
+                        return Err(format!("codegen: `{name}` takes no arguments"));
+                    }
+                    self.build_constructor(idx as i64, &sum, Vec::new())
+                }
+                Some(pt) => {
+                    if args.len() != 1 {
+                        return Err(format!(
+                            "codegen: `{name}` expects one payload argument"
+                        ));
+                    }
+                    let raw = self.lower_expr(sc, &args[0].1, None)?;
+                    let raw = self.cast_val(raw, pt)?;
+                    let boxed = self.box_scalar(raw)?;
+                    self.build_constructor(idx as i64, &sum, vec![boxed])
+                }
+            };
+        }
+
+        // Infer argument types, then pick the best overload (handles multiple
+        // signatures with the same name but different parameter types, e.g.
+        // IntToString(i8/i16/i32/i64) and ToString(List(T) / Struct / Sum).
+        let arg_types: Vec<SemType> = args
+            .iter()
+            .map(|(_, a)| self.lower_expr(sc, a, None).map(|v| v.ty).unwrap_or(SemType::Bool))
+            .collect();
+        let sig = best_overload(&arg_types, &self.sigs, name).unwrap_or(FunctionSig {
             name: name.clone(),
             params: Vec::new(),
             ret: SemType::Bool,
         });
+        let fnv = self
+            .module
+            .get_function(name)
+            .ok_or_else(|| format!("codegen: no such function `{name}`"))?;
         let mut llargs: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
         for (i, (_, a)) in args.iter().enumerate() {
+            // Infer the target width from the selected signature's param type.
             let want = sig.params.get(i).and_then(|t| match t {
                 SemType::Numeric(n) => Some(*n),
                 _ => None,
             });
             let av = self.lower_expr(sc, a, want)?;
+            // Widen the argument to exactly match the parameter type,
+            // handling Bool↔i8 conversion for C ABI compatibility.
+            let param_ty = sig.params.get(i).cloned().unwrap_or(SemType::Bool);
+            let av = self.widen_call_arg(av, &param_ty)?;
             llargs.push(av.v.into());
         }
-        let cs = self.builder.build_call(fnv, &llargs, "call").map_err(to_err)?;
-        let v = cs.try_as_basic_value().expect_basic("call of void function");
+        let cs = self
+            .builder
+            .build_call(fnv, &llargs, "call")
+            .map_err(to_err)?;
+        let v = cs
+            .try_as_basic_value()
+            .expect_basic("call of void function");
         Ok(Val {
             v,
             ty: sig.ret.clone(),
         })
+    }
+
+    // ─── Composites ─────────────────────────────────────────────
+
+    fn build_constructor(
+        &mut self,
+        tag: i64,
+        sum: &SemType,
+        slots: Vec<BasicValueEnum<'ctx>>,
+    ) -> Result<Val<'ctx>, String> {
+        let tagv = self.cx.i64_type().const_int(tag as u64, false);
+        let cntv = self.cx.i64_type().const_int(slots.len() as u64, false);
+        let slotarray = if slots.is_empty() {
+            self.cx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
+        } else {
+            let elem = self.cx.ptr_type(AddressSpace::default());
+            let arr_ty = elem.array_type(slots.len() as u32);
+            let alloca = self.builder.build_alloca(arr_ty, "slots").map_err(to_err)?;
+            for (i, s) in slots.iter().enumerate() {
+                let g = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(
+                            arr_ty,
+                            alloca,
+                            &[
+                                self.cx.i32_type().const_int(0, false),
+                                self.cx.i32_type().const_int(i as u64, false),
+                            ],
+                            "slot",
+                        )
+                        .map_err(to_err)?
+                };
+                self.builder.build_store(g, *s).map_err(to_err)?;
+            }
+            alloca.as_basic_value_enum()
+        };
+        let type_str = self.lower_str(&format!("{sum}"));
+        let v = self.rt_call(
+            "resid_box_new",
+            vec![tagv.into(), cntv.into(), slotarray, type_str.into()],
+        )?;
+        Ok(Val { v, ty: sum.clone() })
+    }
+
+    /// A bare unit-variant constructor (`None`).
+    fn lower_unit_variant(&mut self, _sc: &mut Scope<'ctx>, name: &str) -> Result<Val<'ctx>, String> {
+        let sum = resid_type::find_constructor(&self.types, name)
+            .cloned()
+            .ok_or_else(|| format!("codegen: undefined variable `{name}`"))?;
+        let idx = sum
+            .variant_index(name)
+            .ok_or_else(|| format!("codegen: no variant `{name}`"))?;
+        let SemType::Sum { variants, .. } = &sum else {
+            unreachable!()
+        };
+        if variants[idx].1.is_some() {
+            return Err(format!("codegen: `{name}` requires an argument"));
+        }
+        self.build_constructor(idx as i64, &sum, Vec::new())
+    }
+
+    /// Box a scalar (numeric/bool) or pass a pointer-typed value through.
+    fn box_scalar(&mut self, v: Val<'ctx>) -> Result<BasicValueEnum<'ctx>, String> {
+        match &v.ty {
+            SemType::Numeric(n) if !n.is_float() => {
+                let i64v = self.cast_val(
+                    v,
+                    &SemType::Numeric(NumericType::Int(
+                        resid_ir::IntWidth::from_bits(64).unwrap(),
+                    )),
+                )?;
+                self.rt_call("resid_box_i64", vec![i64v.v])
+            }
+            SemType::Numeric(_) => {
+                let f = self.cast_val(
+                    v,
+                    &SemType::Numeric(NumericType::Float(resid_ir::FloatWidth::F64)),
+                )?;
+                self.rt_call("resid_box_f64", vec![f.v])
+            }
+            SemType::Bool => {
+                let b = v.v.into_int_value();
+                let it = self.cx.i8_type();
+                let b8 = self.builder.build_int_z_extend(b, it, "bbi").map_err(to_err)?;
+                self.rt_call("resid_box_bool", vec![b8.into()])
+            }
+            // Str and nested composites are already pointers.
+            _ => Ok(v.v),
+        }
+    }
+
+    /// Read slot `idx` of a boxed object, unboxing per the field type.
+    fn load_slot(
+        &mut self,
+        obj: BasicValueEnum<'ctx>,
+        idx: IntValue<'ctx>,
+        fty: &SemType,
+    ) -> Result<Val<'ctx>, String> {
+        let slot = self.rt_call("resid_box_slot", vec![obj, idx.into()])?;
+        match fty {
+            SemType::Numeric(n) if !n.is_float() => {
+                let raw = self.rt_call("resid_unbox_i64", vec![slot])?;
+                let v = Val {
+                    v: raw,
+                    ty: SemType::Numeric(NumericType::Int(
+                        resid_ir::IntWidth::from_bits(64).unwrap(),
+                    )),
+                };
+                self.cast_val(v, fty)
+            }
+            SemType::Numeric(_) => {
+                let raw = self.rt_call("resid_unbox_f64", vec![slot])?;
+                let v = Val {
+                    v: raw,
+                    ty: SemType::Numeric(NumericType::Float(resid_ir::FloatWidth::F64)),
+                };
+                self.cast_val(v, fty)
+            }
+            SemType::Bool => {
+                let u = self.rt_call("resid_unbox_bool", vec![slot])?;
+                let b = u.into_int_value();
+                let b1 = self
+                    .builder
+                    .build_int_truncate(b, self.cx.bool_type(), "unbox_b")
+                    .map_err(to_err)?;
+                Ok(Val {
+                    v: b1.into(),
+                    ty: SemType::Bool,
+                })
+            }
+            SemType::Str => Ok(Val {
+                v: slot,
+                ty: SemType::Str,
+            }),
+            _ => Ok(Val {
+                v: slot,
+                ty: fty.clone(),
+            }),
+        }
+    }
+
+    fn lower_list_lit(&mut self, sc: &mut Scope<'ctx>, elems: &[Expr]) -> Result<Val<'ctx>, String> {
+        let mut slots = Vec::new();
+        let mut elem_ty: Option<SemType> = None;
+        for e in elems {
+            let v = self.lower_expr(sc, e, None)?;
+            let t = v.ty.clone();
+            match &elem_ty {
+                None => elem_ty = Some(t.clone()),
+                Some(k) if k == &t => {}
+                Some(k) => {
+                    return Err(format!(
+                        "codegen: list elements differ ({k} vs {t})"
+                    ));
+                }
+            }
+            slots.push(self.box_scalar(v)?);
+        }
+        let elem_ty = elem_ty.ok_or_else(|| "codegen: cannot lower an empty list literal".to_string())?;
+        let ty = SemType::List(Box::new(elem_ty));
+        self.build_constructor(0, &ty, slots)
+    }
+
+    fn lower_struct_lit(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        name: &Id,
+        fields: &[(Id, Expr)],
+    ) -> Result<Val<'ctx>, String> {
+        let st = self
+            .types
+            .get(&name.0)
+            .cloned()
+            .ok_or_else(|| format!("codegen: unknown type `{}`", name.0))?;
+        let SemType::Struct { fields: defs, .. } = &st else {
+            return Err(format!("codegen: `{}` is not a struct", name.0));
+        };
+        let mut slots = Vec::new();
+        for (fname, _) in defs {
+            let (_, vexpr) = fields
+                .iter()
+                .find(|(n, _)| n.0 == *fname)
+                .ok_or_else(|| format!("codegen: missing field `{}`", fname))?;
+            let v = self.lower_expr(sc, vexpr, None)?;
+            slots.push(self.box_scalar(v)?);
+        }
+        self.build_constructor(0, &st, slots)
+    }
+
+    fn lower_field_access(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        target: &Expr,
+        field: &Id,
+    ) -> Result<Val<'ctx>, String> {
+        let tv = self.lower_expr(sc, target, None)?;
+        let SemType::Struct { fields, .. } = &tv.ty else {
+            return Err(format!("codegen: field access on non-struct {}", tv.ty));
+        };
+        let idx = fields
+            .iter()
+            .position(|(n, _)| n == &field.0)
+            .ok_or_else(|| format!("codegen: no field `{}`", field.0))?;
+        let fty = fields[idx].1.clone();
+        let iv = self.cx.i64_type().const_int(idx as u64, false);
+        self.load_slot(tv.v, iv, &fty)
+    }
+
+    fn lower_index(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        target: &Expr,
+        index: &Expr,
+    ) -> Result<Val<'ctx>, String> {
+        let tv = self.lower_expr(sc, target, None)?;
+        let SemType::List(elem) = &tv.ty else {
+            return Err(format!("codegen: cannot index {}", tv.ty));
+        };
+        let iv = self.lower_expr(sc, index, None)?;
+        let iw = self.cast_val(
+            iv,
+            &SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        )?;
+        let idx = iw.v.into_int_value();
+        self.load_slot(tv.v, idx, elem)
+    }
+
+    fn lower_method_call(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        target: &Expr,
+        method: &Id,
+        args: &[Box<Expr>],
+    ) -> Result<Val<'ctx>, String> {
+        let tv = self.lower_expr(sc, target, None)?;
+        match (method.0.as_str(), &tv.ty) {
+            ("len", SemType::List(_)) if args.is_empty() => {
+                let v = self.rt_call("resid_list_len", vec![tv.v])?;
+                Ok(Val {
+                    v,
+                    ty: SemType::Numeric(NumericType::ISize),
+                })
+            }
+            _ => Err(format!(
+                "codegen: unsupported method `{}` on {}",
+                method.0, tv.ty
+            )),
+        }
+    }
+
+    /// Lower a `match`: chain tag comparisons, execute the matched arm, join
+    /// with a phi.
+    fn lower_match(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        scrutinee: &Expr,
+        arms: &[(resid_parser::Pattern, Expr)],
+    ) -> Result<Val<'ctx>, String> {
+        let sv = self.lower_expr(sc, scrutinee, None)?;
+        let st = sv.ty.clone();
+        let fv = self
+            .cur_fn
+            .ok_or_else(|| "codegen: match outside a function".to_string())?;
+
+        let tag = self.rt_call("resid_box_tag", vec![sv.v])?;
+        let tag = tag.into_int_value();
+
+        let n = arms.len();
+        let mut checks: Vec<inkwell::basic_block::BasicBlock<'ctx>> = Vec::new();
+        let mut bodies: Vec<inkwell::basic_block::BasicBlock<'ctx>> = Vec::new();
+        for i in 0..n {
+            checks.push(self.cx.append_basic_block(fv, &format!("match_check{i}")));
+        }
+        let merge = self.cx.append_basic_block(fv, "match_merge");
+        let unreachable_bb = self.cx.append_basic_block(fv, "match_unreachable");
+        for i in 0..n {
+            bodies.push(self.cx.append_basic_block(fv, &format!("match_arm{i}")));
+        }
+
+        self.builder.build_unconditional_branch(checks[0]).map_err(to_err)?;
+        for i in 0..n {
+            self.builder.position_at_end(checks[i]);
+            // A variant name (Some/None or a bare unit-variant like `None`) is
+            // a refutable, tagged arm; literal/wildcard/Bind/struct patterns
+            // match unconditionally.
+            let tagged_idx = match &arms[i].0.kind {
+                resid_parser::PatternKind::Variant { name, .. } => st.variant_index(&name.0),
+                resid_parser::PatternKind::Bind(id) if st.unit_variant_index(&id.0).is_some() => {
+                    st.variant_index(&id.0)
+                }
+                _ => None,
+            };
+            let cond = match tagged_idx {
+                None => self.cx.bool_type().const_int(1, false),
+                Some(idx) => {
+                    let target = self.cx.i64_type().const_int(idx as u64, false);
+                    self.builder
+                        .build_int_compare(IntPredicate::EQ, tag, target, "tseq")
+                        .map_err(to_err)?
+                }
+            };
+            let next = if i + 1 < n {
+                checks[i + 1]
+            } else {
+                unreachable_bb
+            };
+            self.builder
+                .build_conditional_branch(cond, bodies[i], next)
+                .map_err(to_err)?;
+        }
+
+        let mut phi_vals: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let mut arm_ty: Option<SemType> = None;
+        for i in 0..n {
+            self.builder.position_at_end(bodies[i]);
+            self.bind_pattern_vars(sc, &arms[i].0, sv.v, &st)?;
+            let bv = self.lower_expr(sc, &arms[i].1, None)?;
+            // Normalize arms to a single result type (the checker guarantees
+            // they agree); use the first computed arm's type as the join.
+            let target_ty = match &arm_ty {
+                None => bv.ty.clone(),
+                Some(t) => t.clone(),
+            };
+            if arm_ty.is_none() {
+                arm_ty = Some(target_ty.clone());
+            }
+            let cv = self.cast_val(bv, &target_ty)?;
+            let block = self.builder.get_insert_block();
+            phi_vals.push((cv.v, block.unwrap()));
+            self.builder.build_unconditional_branch(merge).map_err(to_err)?;
+        }
+
+        self.builder.position_at_end(unreachable_bb);
+        self.builder.build_unreachable().map_err(to_err)?;
+
+        self.builder.position_at_end(merge);
+        let ty = arm_ty.unwrap_or(SemType::Bool);
+        let ll = self.llvm_type(&ty)?;
+        let phi = self.builder.build_phi(ll, "match").map_err(to_err)?;
+        let clones: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = phi_vals;
+        for (val, block) in clones {
+            phi.add_incoming(&[(&val, block)]);
+        }
+        let v = phi.as_basic_value();
+        Ok(Val { v, ty })
+    }
+
+    /// Bind the variables a pattern introduces into the current scope.
+    fn bind_pattern_vars(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        pat: &resid_parser::Pattern,
+        obj: BasicValueEnum<'ctx>,
+        ty: &SemType,
+    ) -> Result<(), String> {
+        match &pat.kind {
+            resid_parser::PatternKind::Wildcard | resid_parser::PatternKind::Literal(_) => Ok(()),
+            resid_parser::PatternKind::Bind(id) => {
+                // A bare identifier naming a unit variant (`None`) is the
+                // variant itself, not a capture.
+                if ty.unit_variant_index(&id.0).is_some() {
+                    return Ok(());
+                }
+                let ll = self.llvm_type(ty)?;
+                let ptr = self.builder.build_alloca(ll, &id.0).map_err(to_err)?;
+                self.builder.build_store(ptr, obj).map_err(to_err)?;
+                sc.vars.insert(id.0.clone(), (ptr, ty.clone()));
+                Ok(())
+            }
+            resid_parser::PatternKind::Variant { name, param } => {
+                let SemType::Sum { variants, .. } = ty else {
+                    return Err(format!("codegen: not a sum type: {ty}"));
+                };
+                let idx = ty
+                    .variant_index(&name.0)
+                    .ok_or_else(|| format!("codegen: no variant `{}`", name.0))?;
+                let (_, payload) = &variants[idx];
+                match (param, payload) {
+                    (Some(b), Some(pt)) => {
+                        let zero = self.cx.i64_type().const_int(0, false);
+                        let slot = self.load_slot(obj, zero, pt)?;
+                        let inner = resid_parser::Pattern {
+                            kind: resid_parser::PatternKind::Bind(b.clone()),
+                            span: pat.span.clone(),
+                        };
+                        self.bind_pattern_vars(sc, &inner, slot.v, pt)
+                    }
+                    _ => Ok(()),
+                }
+            }
+            resid_parser::PatternKind::Struct { name: _, fields } => {
+                let SemType::Struct { fields: defs, .. } = ty else {
+                    return Err(format!("codegen: not a struct pattern: {ty}"));
+                };
+                for (fname, sub) in fields {
+                    let pos = defs
+                        .iter()
+                        .position(|(n, _)| n == &fname.0)
+                        .ok_or_else(|| format!("codegen: no field `{}`", fname))?;
+                    let fty = defs[pos].1.clone();
+                    let iv = self.cx.i64_type().const_int(pos as u64, false);
+                    let slot = self.load_slot(obj, iv, &fty)?;
+                    self.bind_pattern_vars(sc, sub, slot.v, &fty)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Call an extern runtime function declared in the module.
+    fn rt_call(
+        &mut self,
+        name: &str,
+        args: Vec<BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let f = self
+            .module
+            .get_function(name)
+            .ok_or_else(|| format!("codegen: missing runtime decl `{name}`"))?;
+        let meta: Vec<BasicMetadataValueEnum<'ctx>> = args.into_iter().map(|a| a.into()).collect();
+        let cs = self
+            .builder
+            .build_call(f, &meta, name)
+            .map_err(to_err)?;
+        cs.try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("codegen: runtime `{name}` returned void"))
     }
 }
 
@@ -749,8 +1873,50 @@ fn int_pred(binop: BinOp, signed: bool) -> IntPredicate {
 // Re-export the numeric primitive types for convenience.
 pub use resid_ir::{FloatWidth, IntWidth};
 
+/// Extract the compile-time string value of an expression, if it is a plain
+/// string literal/raw string/f-string-of-text/folded concat.
+pub fn const_str(e: &Expr) -> Option<String> {
+    fn walk(e: &Expr, out: &mut String) -> bool {
+        match &e.kind {
+            ExprKind::Literal(Literal::Str(l)) => {
+                out.push_str(&l.value);
+                true
+            }
+            ExprKind::Literal(Literal::RawStr(l)) => {
+                out.push_str(&l.value);
+                true
+            }
+            ExprKind::Literal(Literal::Char(c)) => {
+                out.push_str(&c.to_string());
+                true
+            }
+            ExprKind::RawString(s) => {
+                out.push_str(s);
+                true
+            }
+            ExprKind::FString(parts) => {
+                let mut ok = true;
+                for p in parts {
+                    match p {
+                        resid_parser::FStringPart::Text(t) => out.push_str(t),
+                        resid_parser::FStringPart::Expr(_) => ok = false,
+                    }
+                }
+                ok
+            }
+            ExprKind::BinaryOp {
+                op: OpKind::Plus,
+                lhs,
+                rhs,
+            } => walk(lhs, out) && walk(rhs, out),
+            _ => false,
+        }
+    }
+    let mut out = String::new();
+    walk(e, &mut out).then_some(out)
+}
+
 /// Shorthand for the IR primitive type shared across this module.
 type Numeric = NumericType;
 #[cfg(test)]
 mod tests;
-
