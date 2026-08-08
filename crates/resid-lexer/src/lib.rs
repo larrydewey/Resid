@@ -2,8 +2,8 @@
 //!
 //! All tokens from spec §28 with span tracking (file, line, col_start, col_end).
 
-pub mod token;
 mod lexer;
+pub mod token;
 
-pub use token::*;
 pub use lexer::*;
+pub use token::*;

@@ -5,41 +5,72 @@ use std::fmt;
 // ─── Integer / Float Widths ────────────────────────────────────────
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum IntWidth { B8, B16, B32, B64, B128, B256, B512 }
+pub enum IntWidth {
+    B8,
+    B16,
+    B32,
+    B64,
+    B128,
+    B256,
+    B512,
+}
 
 impl IntWidth {
     pub fn bits(self) -> u16 {
         match self {
-            IntWidth::B8 => 8, IntWidth::B16 => 16, IntWidth::B32 => 32,
-            IntWidth::B64 => 64, IntWidth::B128 => 128,
-            IntWidth::B256 => 256, IntWidth::B512 => 512,
+            IntWidth::B8 => 8,
+            IntWidth::B16 => 16,
+            IntWidth::B32 => 32,
+            IntWidth::B64 => 64,
+            IntWidth::B128 => 128,
+            IntWidth::B256 => 256,
+            IntWidth::B512 => 512,
         }
     }
     pub fn from_bits(bits: u16) -> Option<Self> {
         match bits {
-            8 => Some(IntWidth::B8), 16 => Some(IntWidth::B16),
-            32 => Some(IntWidth::B32), 64 => Some(IntWidth::B64),
-            128 => Some(IntWidth::B128), 256 => Some(IntWidth::B256),
-            512 => Some(IntWidth::B512), _ => None,
+            8 => Some(IntWidth::B8),
+            16 => Some(IntWidth::B16),
+            32 => Some(IntWidth::B32),
+            64 => Some(IntWidth::B64),
+            128 => Some(IntWidth::B128),
+            256 => Some(IntWidth::B256),
+            512 => Some(IntWidth::B512),
+            _ => None,
         }
     }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum FloatWidth { F16, F32, F64, F128, F256, F512 }
+pub enum FloatWidth {
+    F16,
+    F32,
+    F64,
+    F128,
+    F256,
+    F512,
+}
 
 impl FloatWidth {
     pub fn bits(self) -> u16 {
         match self {
-            FloatWidth::F16 => 16, FloatWidth::F32 => 32, FloatWidth::F64 => 64,
-            FloatWidth::F128 => 128, FloatWidth::F256 => 256, FloatWidth::F512 => 512,
+            FloatWidth::F16 => 16,
+            FloatWidth::F32 => 32,
+            FloatWidth::F64 => 64,
+            FloatWidth::F128 => 128,
+            FloatWidth::F256 => 256,
+            FloatWidth::F512 => 512,
         }
     }
     pub fn from_bits(bits: u16) -> Option<Self> {
         match bits {
-            16 => Some(FloatWidth::F16), 32 => Some(FloatWidth::F32),
-            64 => Some(FloatWidth::F64), 128 => Some(FloatWidth::F128),
-            256 => Some(FloatWidth::F256), 512 => Some(FloatWidth::F512), _ => None,
+            16 => Some(FloatWidth::F16),
+            32 => Some(FloatWidth::F32),
+            64 => Some(FloatWidth::F64),
+            128 => Some(FloatWidth::F128),
+            256 => Some(FloatWidth::F256),
+            512 => Some(FloatWidth::F512),
+            _ => None,
         }
     }
 }
@@ -48,14 +79,26 @@ impl FloatWidth {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NumericType {
-    Int(IntWidth), UInt(IntWidth), Float(FloatWidth), ISize, USize,
+    Int(IntWidth),
+    UInt(IntWidth),
+    Float(FloatWidth),
+    ISize,
+    USize,
 }
 
 impl NumericType {
-    pub fn is_signed(&self) -> bool { matches!(self, NumericType::Int(_) | NumericType::ISize) }
-    pub fn is_unsigned(&self) -> bool { matches!(self, NumericType::UInt(_) | NumericType::USize) }
-    pub fn is_integer(&self) -> bool { self.is_signed() || self.is_unsigned() }
-    pub fn is_float(&self) -> bool { matches!(self, NumericType::Float(_)) }
+    pub fn is_signed(&self) -> bool {
+        matches!(self, NumericType::Int(_) | NumericType::ISize)
+    }
+    pub fn is_unsigned(&self) -> bool {
+        matches!(self, NumericType::UInt(_) | NumericType::USize)
+    }
+    pub fn is_integer(&self) -> bool {
+        self.is_signed() || self.is_unsigned()
+    }
+    pub fn is_float(&self) -> bool {
+        matches!(self, NumericType::Float(_))
+    }
     pub fn target_width(&self) -> Option<u16> {
         match self {
             NumericType::Int(w) | NumericType::UInt(w) => Some(w.bits()),
@@ -69,12 +112,18 @@ impl NumericType {
             "Int" => Some(NumericType::Int(IntWidth::from_bits(D).unwrap())),
             "UInt" => Some(NumericType::UInt(IntWidth::from_bits(D).unwrap())),
             "Float" => Some(NumericType::Float(FloatWidth::from_bits(D).unwrap())),
-            "ISize" => Some(NumericType::ISize), "USize" => Some(NumericType::USize),
+            "ISize" => Some(NumericType::ISize),
+            "USize" => Some(NumericType::USize),
             _ => {
-                let (k, s) = if name.starts_with('u') { ('u', &name[1..]) }
-                    else if name.starts_with('i') { ('i', &name[1..]) }
-                    else if name.starts_with('f') { ('f', &name[1..]) }
-                    else { return None };
+                let (k, s) = if name.starts_with('u') {
+                    ('u', &name[1..])
+                } else if name.starts_with('i') {
+                    ('i', &name[1..])
+                } else if name.starts_with('f') {
+                    ('f', &name[1..])
+                } else {
+                    return None;
+                };
                 match s.parse::<u16>() {
                     Ok(w) => match k {
                         'i' => IntWidth::from_bits(w).map(NumericType::Int),
@@ -95,7 +144,8 @@ impl fmt::Display for NumericType {
             NumericType::Int(w) => write!(f, "Int({})", w.bits()),
             NumericType::UInt(w) => write!(f, "UInt({})", w.bits()),
             NumericType::Float(w) => write!(f, "Float({})", w.bits()),
-            NumericType::ISize => write!(f, "ISize"), NumericType::USize => write!(f, "USize"),
+            NumericType::ISize => write!(f, "ISize"),
+            NumericType::USize => write!(f, "USize"),
         }
     }
 }
@@ -104,19 +154,38 @@ impl fmt::Display for NumericType {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
-    Bool, Numeric(NumericType), Str, Bytes, Null, Void,
-    Option(Box<Type>), Result(Box<Type>, Box<Type>),
-    List(Box<Type>), Map(Box<Type>, Box<Type>), Set(Box<Type>),
+    Bool,
+    Numeric(NumericType),
+    Str,
+    Bytes,
+    Null,
+    Void,
+    Option(Box<Type>),
+    Result(Box<Type>, Box<Type>),
+    List(Box<Type>),
+    Map(Box<Type>, Box<Type>),
+    Set(Box<Type>),
     Struct(Identifier, Vec<(Identifier, Type)>),
     Enum(Identifier, Vec<SumVariant>),
     Constrained(Box<Type>, Box<ExprNode>),
     Residual(Box<Type>),
-    Behavior(BehaviorRef), Handle(Identifier, Lifetime),
-    Function { params: Vec<Type>, ret: Box<Type> },
+    Behavior(BehaviorRef),
+    Handle(Identifier, Lifetime),
+    Function {
+        params: Vec<Type>,
+        ret: Box<Type>,
+    },
     SourceLoc,
-    Range { start_type: Box<Type>, end_type: Box<Type>, closed: bool },
-    Slice { element_type: Box<Type> },
-    RegionError, UserDefined(String),
+    Range {
+        start_type: Box<Type>,
+        end_type: Box<Type>,
+        closed: bool,
+    },
+    Slice {
+        element_type: Box<Type>,
+    },
+    RegionError,
+    UserDefined(String),
 }
 
 impl fmt::Display for Type {
@@ -144,7 +213,11 @@ impl fmt::Display for Type {
                 write!(f, "fn({}) -> {}", params_str.join(", "), ret)
             }
             Type::SourceLoc => write!(f, "sourceloc"),
-            Type::Range { start_type, end_type, closed } => {
+            Type::Range {
+                start_type,
+                end_type,
+                closed,
+            } => {
                 let range_str = if *closed { "..=" } else { ".." };
                 write!(f, "{}{}{}", start_type, range_str, end_type)
             }
@@ -156,49 +229,102 @@ impl fmt::Display for Type {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SumVariant { pub name: Identifier, pub type_param: Option<Type> }
+pub struct SumVariant {
+    pub name: Identifier,
+    pub type_param: Option<Type>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BehaviorRef { pub name: Identifier, pub type_params: Vec<Type> }
+pub struct BehaviorRef {
+    pub name: Identifier,
+    pub type_params: Vec<Type>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Lifetime { pub name: String }
+pub struct Lifetime {
+    pub name: String,
+}
 
 // ─── Operators ─────────────────────────────────────────────────────
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BinOp {
-    Add, Sub, Mul, Div, Rem, ShiftLeft, ShiftRight,
-    And, Or, Xor, Eq, Ne, Lt, Le, Gt, Ge,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    ShiftLeft,
+    ShiftRight,
+    And,
+    Or,
+    Xor,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 }
 impl BinOp {
     pub fn is_comparison(self) -> bool {
-        matches!(self, BinOp::Eq|BinOp::Ne|BinOp::Lt|BinOp::Le|BinOp::Gt|BinOp::Ge)
+        matches!(
+            self,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+        )
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum UnaryOp { Neg, Not, BitNot, Cast(Box<Type>) }
+pub enum UnaryOp {
+    Neg,
+    Not,
+    BitNot,
+    Cast(Box<Type>),
+}
 
 // ─── Effects, Capabilities, Provider ───────────────────────────────
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[derive(Hash)]
-pub enum Effect { Io, Provider(Provider), ResourceMutation, RuntimeForce, ConcurrencySpawn }
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Effect {
+    Io,
+    Provider(Provider),
+    ResourceMutation,
+    RuntimeForce,
+    ConcurrencySpawn,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Provider { Filesystem, Environment, Git }
+pub enum Provider {
+    Filesystem,
+    Environment,
+    Git,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Capability { pub kind: CapabilityKind, pub params: Vec<ExprNode> }
+pub struct Capability {
+    pub kind: CapabilityKind,
+    pub params: Vec<ExprNode>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum CapabilityKind { Filesystem, Git, Environment, Compute }
+pub enum CapabilityKind {
+    Filesystem,
+    Git,
+    Environment,
+    Compute,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Provenance {
-    Source { file: String, line: usize, col_start: usize },
-    Provider(Provider), Residual, Inferred,
+    Source {
+        file: String,
+        line: usize,
+        col_start: usize,
+    },
+    Provider(Provider),
+    Residual,
+    Inferred,
 }
 
 // ─── Pattern ───────────────────────────────────────────────────────
@@ -207,24 +333,50 @@ pub enum Provenance {
 pub enum PatternKind {
     Wildcard,
     Bind(Identifier),
-    Variant { name: Identifier, param: Option<Identifier> },
+    Variant {
+        name: Identifier,
+        param: Option<Identifier>,
+    },
     Literal(LiteralValue),
-    Struct { name: Identifier, fields: Vec<(Identifier, Pattern)> },
-    RangePattern { start: LiteralValue, end: LiteralValue, closed: bool },
+    Struct {
+        name: Identifier,
+        fields: Vec<(Identifier, Pattern)>,
+    },
+    RangePattern {
+        start: LiteralValue,
+        end: LiteralValue,
+        closed: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Pattern { pub kind: PatternKind }
+pub struct Pattern {
+    pub kind: PatternKind,
+}
 
 // ─── Literal Value (known) ─────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiteralValue {
-    Int { value: u128, width: IntWidth, signed: bool },
+    Int {
+        value: u128,
+        width: IntWidth,
+        signed: bool,
+    },
     UInt(u128, IntWidth),
-    Float { value: String, width: FloatWidth },
-    Str(String), Bool(bool), Null, Bytes(Vec<u8>), Char(char),
-    Struct { name: Identifier, fields: Vec<(Identifier, LiteralValue)> },
+    Float {
+        value: String,
+        width: FloatWidth,
+    },
+    Str(String),
+    Bool(bool),
+    Null,
+    Bytes(Vec<u8>),
+    Char(char),
+    Struct {
+        name: Identifier,
+        fields: Vec<(Identifier, LiteralValue)>,
+    },
     List(Vec<LiteralValue>),
 }
 impl fmt::Display for LiteralValue {
@@ -241,7 +393,9 @@ impl fmt::Display for LiteralValue {
             LiteralValue::Struct { name, fields } => {
                 write!(f, "{} {{", name)?;
                 for (i, (k, v)) in fields.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", k, v)?;
                 }
                 write!(f, "}}")
@@ -249,7 +403,10 @@ impl fmt::Display for LiteralValue {
             LiteralValue::List(elts) => {
                 write!(f, "[")?;
                 for (i, v) in elts.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; } write!(f, "{}", v)?;
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", v)?;
                 }
                 write!(f, "]")
             }
@@ -261,11 +418,19 @@ impl fmt::Display for LiteralValue {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Span {
-    pub file: String, pub line: usize, pub col_start: usize, pub col_end: usize,
+    pub file: String,
+    pub line: usize,
+    pub col_start: usize,
+    pub col_end: usize,
 }
 impl Span {
     pub fn unknown() -> Self {
-        Span { file: "<unknown>".into(), line: 0, col_start: 0, col_end: 0 }
+        Span {
+            file: "<unknown>".into(),
+            line: 0,
+            col_start: 0,
+            col_end: 0,
+        }
     }
 }
 impl fmt::Display for Span {
@@ -277,14 +442,22 @@ impl fmt::Display for Span {
 // ─── Identifier ─────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Identifier { pub name: String, pub id: u64 }
+pub struct Identifier {
+    pub name: String,
+    pub id: u64,
+}
 impl Identifier {
     pub fn new(name: impl Into<String>, id: u64) -> Self {
-        Identifier { name: name.into(), id }
+        Identifier {
+            name: name.into(),
+            id,
+        }
     }
 }
 impl fmt::Display for Identifier {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{}", self.name) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
 }
 
 // ─── AST Expression Nodes ──────────────────────────────────────────
@@ -297,116 +470,298 @@ use crate::GraphKey;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AstExpr {
     Id(String),
-    Literal { value: u128, kind: AstIntKind, span: Span },
-    FloatLit { value: String, span: Span },
-    StrLit { value: String, span: Span },
+    Literal {
+        value: u128,
+        kind: AstIntKind,
+        span: Span,
+    },
+    FloatLit {
+        value: String,
+        span: Span,
+    },
+    StrLit {
+        value: String,
+        span: Span,
+    },
     BoolLit(bool, Span),
     NullLit(Span),
     CharLit(char, Span),
     Location(Span),
-    BinaryOp { op: BinOp, lhs: Box<AstExpr>, rhs: Box<AstExpr>, span: Span },
-    UnaryOp { op: UnaryOp, operand: Box<AstExpr>, span: Span },
-    Call { func: Box<AstExpr>, args: Vec<(Option<String>, AstExpr)>, span: Span },
+    BinaryOp {
+        op: BinOp,
+        lhs: Box<AstExpr>,
+        rhs: Box<AstExpr>,
+        span: Span,
+    },
+    UnaryOp {
+        op: UnaryOp,
+        operand: Box<AstExpr>,
+        span: Span,
+    },
+    Call {
+        func: Box<AstExpr>,
+        args: Vec<(Option<String>, AstExpr)>,
+        span: Span,
+    },
     Rt(Box<AstExpr>, Span),
-    AtResidual { type_: Type, inner: Box<AstExpr>, span: Span },
-    If { cond: Box<AstExpr>, then_block: Box<AstBlock>, else_block: Option<Box<AstBlock>>, span: Span },
-    While { cond: Box<AstExpr>, body: Box<AstBlock>, span: Span },
-    ForIn { type_: String, name: String, collection: Box<AstExpr>, body: Box<AstBlock>, span: Span },
-    Match { scrutinee: Box<AstExpr>, arms: Vec<(AstPattern, AstExpr)>, span: Span },
-    For { init: Option<AstStmt>, cond: Box<AstExpr>, step: Option<AstStmt>, body: Box<AstBlock>, span: Span },
-    Spawn { capabilities: Vec<Capability>, body: AstBlock, span: Span },
-    Assert { cond: Box<AstExpr>, message: Box<AstExpr>, span: Span },
-    RtAssert { cond: Box<AstExpr>, message: Box<AstExpr>, span: Span },
+    AtResidual {
+        type_: Type,
+        inner: Box<AstExpr>,
+        span: Span,
+    },
+    If {
+        cond: Box<AstExpr>,
+        then_block: Box<AstBlock>,
+        else_block: Option<Box<AstBlock>>,
+        span: Span,
+    },
+    While {
+        cond: Box<AstExpr>,
+        body: Box<AstBlock>,
+        span: Span,
+    },
+    ForIn {
+        type_: String,
+        name: String,
+        collection: Box<AstExpr>,
+        body: Box<AstBlock>,
+        span: Span,
+    },
+    Match {
+        scrutinee: Box<AstExpr>,
+        arms: Vec<(AstPattern, AstExpr)>,
+        span: Span,
+    },
+    For {
+        init: Option<AstStmt>,
+        cond: Box<AstExpr>,
+        step: Option<AstStmt>,
+        body: Box<AstBlock>,
+        span: Span,
+    },
+    Spawn {
+        capabilities: Vec<Capability>,
+        body: AstBlock,
+        span: Span,
+    },
+    Assert {
+        cond: Box<AstExpr>,
+        message: Box<AstExpr>,
+        span: Span,
+    },
+    RtAssert {
+        cond: Box<AstExpr>,
+        message: Box<AstExpr>,
+        span: Span,
+    },
     Known(Box<AstExpr>, Span),
     RtKnown(Box<AstExpr>, Span),
     ComptimePrint(Box<AstExpr>, Span),
-    Todo(Span), Unimplemented(Span),
-    StructLit { name: String, fields: Vec<(String, AstExpr)>, span: Span },
+    Todo(Span),
+    Unimplemented(Span),
+    StructLit {
+        name: String,
+        fields: Vec<(String, AstExpr)>,
+        span: Span,
+    },
     ListLit(Vec<AstExpr>, Span),
     MapLit(Vec<(AstExpr, AstExpr)>, Span),
-    Range { start: Box<AstExpr>, end: Box<AstExpr>, closed: bool, span: Span },
+    Range {
+        start: Box<AstExpr>,
+        end: Box<AstExpr>,
+        closed: bool,
+        span: Span,
+    },
     FString(Vec<AstFStringPart>, Span),
     RawString(String, Span),
     ByteString(Vec<u8>, Span),
-    FieldAccess { target: Box<AstExpr>, field: String, span: Span },
-    Index { target: Box<AstExpr>, index: Box<AstExpr>, span: Span },
-    Slice { target: Box<AstExpr>, range: Box<AstRange>, span: Span },
-    MethodCall { target: Box<AstExpr>, method: String, args: Vec<AstExpr>, span: Span },
+    FieldAccess {
+        target: Box<AstExpr>,
+        field: String,
+        span: Span,
+    },
+    Index {
+        target: Box<AstExpr>,
+        index: Box<AstExpr>,
+        span: Span,
+    },
+    Slice {
+        target: Box<AstExpr>,
+        range: Box<AstRange>,
+        span: Span,
+    },
+    MethodCall {
+        target: Box<AstExpr>,
+        method: String,
+        args: Vec<AstExpr>,
+        span: Span,
+    },
     EarlyReturn(Box<AstExpr>, Span),
-    ElseFallback { value: Box<AstExpr>, fallback: AstBlock, span: Span },
-    Destructure { pattern: AstPattern, source: Box<AstExpr>, span: Span },
-    IfLet { pattern: AstPattern, source: Box<AstExpr>, then_block: Box<AstBlock>, else_block: Option<Box<AstBlock>>, span: Span },
-    WhileLet { pattern: AstPattern, source: Box<AstExpr>, body: Box<AstBlock>, span: Span },
-    With { bindings: Vec<AstWithBinding>, body: AstBlock, span: Span },
-    Using { value: Box<AstExpr>, behavior: String, span: Span },
+    ElseFallback {
+        value: Box<AstExpr>,
+        fallback: AstBlock,
+        span: Span,
+    },
+    Destructure {
+        pattern: AstPattern,
+        source: Box<AstExpr>,
+        span: Span,
+    },
+    IfLet {
+        pattern: AstPattern,
+        source: Box<AstExpr>,
+        then_block: Box<AstBlock>,
+        else_block: Option<Box<AstBlock>>,
+        span: Span,
+    },
+    WhileLet {
+        pattern: AstPattern,
+        source: Box<AstExpr>,
+        body: Box<AstBlock>,
+        span: Span,
+    },
+    With {
+        bindings: Vec<AstWithBinding>,
+        body: AstBlock,
+        span: Span,
+    },
+    Using {
+        value: Box<AstExpr>,
+        behavior: String,
+        span: Span,
+    },
     Discard(Box<AstExpr>, Span),
-    ProviderCall { provider: String, args: Vec<AstExpr>, span: Span },
+    ProviderCall {
+        provider: String,
+        args: Vec<AstExpr>,
+        span: Span,
+    },
     Span(Span),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AstIntKind { Decimal, Hex, Binary, Octal }
+pub enum AstIntKind {
+    Decimal,
+    Hex,
+    Binary,
+    Octal,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AstFStringPart { Text(String), Expr(Box<AstExpr>) }
+pub enum AstFStringPart {
+    Text(String),
+    Expr(Box<AstExpr>),
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AstRange { pub start: Option<AstExpr>, pub end: Option<AstExpr>, pub closed: bool }
+pub struct AstRange {
+    pub start: Option<AstExpr>,
+    pub end: Option<AstExpr>,
+    pub closed: bool,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AstPatternKind {
-    Wildcard, Bind(String),
-    Variant { name: String, param: Option<String> },
+    Wildcard,
+    Bind(String),
+    Variant {
+        name: String,
+        param: Option<String>,
+    },
     Literal(u128),
-    Struct { name: String, fields: Vec<(String, AstPattern)> },
+    Struct {
+        name: String,
+        fields: Vec<(String, AstPattern)>,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AstPattern { pub kind: AstPatternKind, pub span: Span }
+pub struct AstPattern {
+    pub kind: AstPatternKind,
+    pub span: Span,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AstBlock { pub statements: Vec<AstStmt>, pub ret: Option<Box<AstExpr>> }
+pub struct AstBlock {
+    pub statements: Vec<AstStmt>,
+    pub ret: Option<Box<AstExpr>>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AstStmtKind {
-    Bind { type_: Option<String>, name: String, value: Box<AstExpr> },
+    Bind {
+        type_: Option<String>,
+        name: String,
+        value: Box<AstExpr>,
+    },
     Discard(Box<AstExpr>),
-    Destructure { pattern: AstPattern, source: Box<AstExpr> },
+    Destructure {
+        pattern: AstPattern,
+        source: Box<AstExpr>,
+    },
     Expr(Box<AstExpr>),
-    Return(Option<Box<AstExpr>>), Break, Continue,
+    Return(Option<Box<AstExpr>>),
+    Break,
+    Continue,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AstStmt { pub kind: AstStmtKind, pub span: Span }
+pub struct AstStmt {
+    pub kind: AstStmtKind,
+    pub span: Span,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AstWithBinding { pub type_: Option<String>, pub name: String, pub init: Box<AstExpr> }
+pub struct AstWithBinding {
+    pub type_: Option<String>,
+    pub name: String,
+    pub init: Box<AstExpr>,
+}
 
 // ─── AST Function / Translation Unit ───────────────────────────────
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AstFuncDef {
-    pub public: bool, pub name: String,
-    pub params: Vec<AstParam>, pub ret: Option<String>,
-    pub body: AstBlock, pub doc_comments: Vec<String>,
-    pub capabilities: Vec<Capability>, pub span: Span,
+    pub public: bool,
+    pub name: String,
+    pub params: Vec<AstParam>,
+    pub ret: Option<String>,
+    pub body: AstBlock,
+    pub doc_comments: Vec<String>,
+    pub capabilities: Vec<Capability>,
+    pub span: Span,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AstParam { pub type_: Option<String>, pub name: String, pub default: Option<AstExpr> }
+pub struct AstParam {
+    pub type_: Option<String>,
+    pub name: String,
+    pub default: Option<AstExpr>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AstTranslationUnit {
-    pub imports: Vec<AstImport>, pub functions: Vec<AstFuncDef>,
+    pub imports: Vec<AstImport>,
+    pub functions: Vec<AstFuncDef>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AstImport { pub path: String }
+pub struct AstImport {
+    pub path: String,
+}
 
 // ─── Numeric Result Type ───────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResultType { Numeric(NumericType), Bool, Error(NumericError) }
+pub enum ResultType {
+    Numeric(NumericType),
+    Bool,
+    Error(NumericError),
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NumericError { SignednessMix }
+pub enum NumericError {
+    SignednessMix,
+}
 
 pub fn numeric_result_type(lhs: &NumericType, op: BinOp, rhs: &NumericType) -> ResultType {
-    if lhs.is_float() || rhs.is_float() { return float_result(lhs, op, rhs, 64); }
+    if lhs.is_float() || rhs.is_float() {
+        return float_result(lhs, op, rhs, 64);
+    }
     if op.is_comparison() {
         if (lhs.is_signed() && rhs.is_unsigned()) || (lhs.is_unsigned() && rhs.is_signed()) {
             return ResultType::Error(NumericError::SignednessMix);
@@ -416,34 +771,279 @@ pub fn numeric_result_type(lhs: &NumericType, op: BinOp, rhs: &NumericType) -> R
     if lhs.is_signed() && rhs.is_unsigned() || lhs.is_unsigned() && rhs.is_signed() {
         return ResultType::Error(NumericError::SignednessMix);
     }
-    let a = concrete_width(lhs); let b = concrete_width(rhs);
+    let a = concrete_width(lhs);
+    let b = concrete_width(rhs);
     let needed = needed_bits(op, a, b);
-    let width = IntWidth::from_bits(needed).or_else(|| {
-        let supported = [8u16, 16, 32, 64, 128, 256, 512];
-        supported.iter().find(|&&w| w > needed).map(|&w| IntWidth::from_bits(w).unwrap())
-    }).unwrap_or(IntWidth::B512);
-    let ty = if lhs.is_signed() { NumericType::Int(width) } else { NumericType::UInt(width) };
+    let width = IntWidth::from_bits(needed)
+        .or_else(|| {
+            let supported = [8u16, 16, 32, 64, 128, 256, 512];
+            supported
+                .iter()
+                .find(|&&w| w > needed)
+                .map(|&w| IntWidth::from_bits(w).unwrap())
+        })
+        .unwrap_or(IntWidth::B512);
+    let ty = if lhs.is_signed() {
+        NumericType::Int(width)
+    } else {
+        NumericType::UInt(width)
+    };
     ResultType::Numeric(ty)
 }
 
 fn concrete_width(ty: &NumericType) -> u16 {
-    match ty { NumericType::Int(w)|NumericType::UInt(w) => w.bits(),
-               NumericType::Float(w) => w.bits(),
-               NumericType::ISize|NumericType::USize => 64 }
+    match ty {
+        NumericType::Int(w) | NumericType::UInt(w) => w.bits(),
+        NumericType::Float(w) => w.bits(),
+        NumericType::ISize | NumericType::USize => 64,
+    }
 }
 fn needed_bits(op: BinOp, a: u16, b: u16) -> u16 {
-    match op { BinOp::Add|BinOp::Sub => a.max(b)+1, BinOp::Mul => a+b,
-               BinOp::Div|BinOp::Rem|BinOp::ShiftLeft|BinOp::ShiftRight
-               |BinOp::And|BinOp::Or|BinOp::Xor|BinOp::Eq|BinOp::Ne|BinOp::Lt|BinOp::Le|BinOp::Gt|BinOp::Ge => a.max(b) }
+    match op {
+        BinOp::Add | BinOp::Sub => a.max(b) + 1,
+        BinOp::Mul => a + b,
+        BinOp::Div
+        | BinOp::Rem
+        | BinOp::ShiftLeft
+        | BinOp::ShiftRight
+        | BinOp::And
+        | BinOp::Or
+        | BinOp::Xor
+        | BinOp::Eq
+        | BinOp::Ne
+        | BinOp::Lt
+        | BinOp::Le
+        | BinOp::Gt
+        | BinOp::Ge => a.max(b),
+    }
 }
 fn float_result(lhs: &NumericType, op: BinOp, rhs: &NumericType, _tw: u16) -> ResultType {
-    if op.is_comparison() { return ResultType::Bool; }
+    if op.is_comparison() {
+        return ResultType::Bool;
+    }
     match (lhs, rhs) {
         (NumericType::Float(a), NumericType::Float(b)) => {
             let w = if a.bits() >= b.bits() { *a } else { *b };
-            ResultType::Numeric(NumericType::Float(w)) }
+            ResultType::Numeric(NumericType::Float(w))
+        }
         (l, NumericType::Float(b)) if l.is_integer() => ResultType::Numeric(NumericType::Float(*b)),
         (NumericType::Float(w), r) if r.is_integer() => ResultType::Numeric(NumericType::Float(*w)),
         _ => ResultType::Error(NumericError::SignednessMix),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_int_width_bits() {
+        assert_eq!(IntWidth::B8.bits(), 8);
+        assert_eq!(IntWidth::B64.bits(), 64);
+        assert_eq!(IntWidth::B512.bits(), 512);
+    }
+
+    #[test]
+    fn test_int_width_from_bits() {
+        assert_eq!(IntWidth::from_bits(8), Some(IntWidth::B8));
+        assert_eq!(IntWidth::from_bits(64), Some(IntWidth::B64));
+        assert_eq!(IntWidth::from_bits(100), None);
+    }
+
+    #[test]
+    fn test_float_width_bits() {
+        assert_eq!(FloatWidth::F16.bits(), 16);
+        assert_eq!(FloatWidth::F64.bits(), 64);
+        assert_eq!(FloatWidth::F512.bits(), 512);
+    }
+
+    #[test]
+    fn test_numeric_type_from_name() {
+        assert_eq!(
+            NumericType::from_name("Int"),
+            Some(NumericType::Int(IntWidth::B64))
+        );
+        assert_eq!(
+            NumericType::from_name("UInt"),
+            Some(NumericType::UInt(IntWidth::B64))
+        );
+        assert_eq!(
+            NumericType::from_name("Float"),
+            Some(NumericType::Float(FloatWidth::F64))
+        );
+        assert_eq!(NumericType::from_name("ISize"), Some(NumericType::ISize));
+        assert_eq!(NumericType::from_name("USize"), Some(NumericType::USize));
+        assert_eq!(
+            NumericType::from_name("i32"),
+            Some(NumericType::Int(IntWidth::B32))
+        );
+        assert_eq!(
+            NumericType::from_name("u16"),
+            Some(NumericType::UInt(IntWidth::B16))
+        );
+        assert_eq!(
+            NumericType::from_name("f32"),
+            Some(NumericType::Float(FloatWidth::F32))
+        );
+        assert_eq!(
+            NumericType::from_name("f128"),
+            Some(NumericType::Float(FloatWidth::F128))
+        );
+        assert_eq!(NumericType::from_name("invalid"), None);
+    }
+
+    #[test]
+    fn test_numeric_type_is_signed() {
+        assert!(NumericType::Int(IntWidth::B64).is_signed());
+        assert!(NumericType::ISize.is_signed());
+        assert!(!NumericType::UInt(IntWidth::B64).is_signed());
+        assert!(!NumericType::Float(FloatWidth::F64).is_signed());
+    }
+
+    #[test]
+    fn test_numeric_type_is_unsigned() {
+        assert!(NumericType::UInt(IntWidth::B64).is_unsigned());
+        assert!(NumericType::USize.is_unsigned());
+        assert!(!NumericType::Int(IntWidth::B64).is_unsigned());
+    }
+
+    #[test]
+    fn test_numeric_type_is_integer() {
+        assert!(NumericType::Int(IntWidth::B64).is_integer());
+        assert!(NumericType::UInt(IntWidth::B64).is_integer());
+        assert!(!NumericType::Float(FloatWidth::F64).is_integer());
+    }
+
+    #[test]
+    fn test_numeric_type_is_float() {
+        assert!(NumericType::Float(FloatWidth::F64).is_float());
+        assert!(!NumericType::Int(IntWidth::B64).is_float());
+    }
+
+    #[test]
+    fn test_numeric_type_target_width() {
+        assert_eq!(NumericType::Int(IntWidth::B32).target_width(), Some(32));
+        assert_eq!(NumericType::UInt(IntWidth::B64).target_width(), Some(64));
+        assert_eq!(
+            NumericType::Float(FloatWidth::F128).target_width(),
+            Some(128)
+        );
+        assert_eq!(NumericType::ISize.target_width(), Some(64));
+    }
+
+    #[test]
+    fn test_binop_is_comparison() {
+        assert!(BinOp::Eq.is_comparison());
+        assert!(BinOp::Lt.is_comparison());
+        assert!(!BinOp::Add.is_comparison());
+        assert!(!BinOp::Mul.is_comparison());
+    }
+
+    #[test]
+    fn test_numeric_result_type_add_widening() {
+        let i8_t = NumericType::Int(IntWidth::B8);
+        let i8_t2 = NumericType::Int(IntWidth::B8);
+        let result = numeric_result_type(&i8_t, BinOp::Add, &i8_t2);
+        match result {
+            ResultType::Numeric(NumericType::Int(w)) => assert_eq!(w, IntWidth::B16),
+            _ => panic!("expected Int(16)"),
+        }
+    }
+
+    #[test]
+    fn test_numeric_result_type_signedness_mix_error() {
+        let signed = NumericType::Int(IntWidth::B64);
+        let unsigned = NumericType::UInt(IntWidth::B64);
+        assert!(matches!(
+            numeric_result_type(&signed, BinOp::Add, &unsigned),
+            ResultType::Error(_)
+        ));
+        assert!(matches!(
+            numeric_result_type(&unsigned, BinOp::Add, &signed),
+            ResultType::Error(_)
+        ));
+    }
+
+    #[test]
+    fn test_numeric_result_type_comparison_produces_bool() {
+        let i64 = NumericType::Int(IntWidth::B64);
+        assert!(matches!(
+            numeric_result_type(&i64, BinOp::Lt, &i64),
+            ResultType::Bool
+        ));
+        assert!(matches!(
+            numeric_result_type(&i64, BinOp::Eq, &i64),
+            ResultType::Bool
+        ));
+    }
+
+    #[test]
+    fn test_numeric_result_type_float_widening() {
+        let f32 = NumericType::Float(FloatWidth::F32);
+        let f64 = NumericType::Float(FloatWidth::F64);
+        let result = numeric_result_type(&f32, BinOp::Add, &f64);
+        assert!(matches!(
+            result,
+            ResultType::Numeric(NumericType::Float(FloatWidth::F64))
+        ));
+    }
+
+    #[test]
+    fn test_numeric_result_type_int_float_mixed() {
+        let i32 = NumericType::Int(IntWidth::B32);
+        let f64 = NumericType::Float(FloatWidth::F64);
+        let result = numeric_result_type(&i32, BinOp::Add, &f64);
+        assert!(matches!(
+            result,
+            ResultType::Numeric(NumericType::Float(FloatWidth::F64))
+        ));
+    }
+
+    #[test]
+    fn test_literal_value_display() {
+        let int_lit = LiteralValue::Int {
+            value: 42,
+            width: IntWidth::B64,
+            signed: true,
+        };
+        assert_eq!(format!("{}", int_lit), "42_64");
+
+        let bool_lit = LiteralValue::Bool(true);
+        assert_eq!(format!("{}", bool_lit), "true");
+
+        let str_lit = LiteralValue::Str("hello".into());
+        assert_eq!(format!("{}", str_lit), "\"hello\"");
+    }
+
+    #[test]
+    fn test_type_display() {
+        assert_eq!(format!("{}", Type::Bool), "bool");
+        assert_eq!(
+            format!("{}", Type::Numeric(NumericType::Int(IntWidth::B64))),
+            "Int(64)"
+        );
+        assert_eq!(format!("{}", Type::Str), "str");
+        assert_eq!(format!("{}", Type::Void), "void");
+    }
+
+    #[test]
+    fn test_span_unknown() {
+        let s = Span::unknown();
+        assert_eq!(s.file, "<unknown>");
+        assert_eq!(s.line, 0);
+    }
+
+    #[test]
+    fn test_identifier_new() {
+        let id = Identifier::new("foo", 42);
+        assert_eq!(id.name, "foo");
+        assert_eq!(id.id, 42);
+        assert_eq!(format!("{}", id), "foo");
+    }
+
+    #[test]
+    fn test_provenance_display() {
+        let p = Provenance::Inferred;
+        let _ = format!("{:?}", p);
     }
 }

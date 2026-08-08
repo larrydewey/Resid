@@ -4,8 +4,8 @@
 //! Operator precedence per spec §27.
 
 use crate::ast::*;
-use resid_lexer::{DocComment, *};
 use resid_lexer::Lexer;
+use resid_lexer::{DocComment, *};
 
 /// Parse error with span.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,15 +34,18 @@ impl Parser {
         let mut parser = Parser {
             tokens,
             pos: 0,
-            errors: lexer_errors.into_iter().map(|e| ParseError {
-                span: Span {
-                    file: e.span.file,
-                    line: e.span.line,
-                    col_start: e.span.col_start,
-                    col_end: e.span.col_end,
-                },
-                message: e.message,
-            }).collect(),
+            errors: lexer_errors
+                .into_iter()
+                .map(|e| ParseError {
+                    span: Span {
+                        file: e.span.file,
+                        line: e.span.line,
+                        col_start: e.span.col_start,
+                        col_end: e.span.col_end,
+                    },
+                    message: e.message,
+                })
+                .collect(),
         };
         let unit = parser.parse_translation_unit();
         (unit, parser.errors)
@@ -97,7 +100,10 @@ impl Parser {
             }
         }
 
-        TranslationUnit { imports, declarations }
+        TranslationUnit {
+            imports,
+            declarations,
+        }
     }
 
     // ─── Import ─────────────────────────────────────────────────
@@ -154,7 +160,12 @@ impl Parser {
             self.bump();
         }
 
-        ImportDecl { path, names, alias, span }
+        ImportDecl {
+            path,
+            names,
+            alias,
+            span,
+        }
     }
 
     // ─── Declarations ───────────────────────────────────────────
@@ -169,7 +180,9 @@ impl Parser {
         match self.peek() {
             Some(TokenKind::Keyword(Keyword::Type)) => {
                 self.bump();
-                let name = self.expect_ident("type: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+                let name = self
+                    .expect_ident("type: expected identifier")
+                    .unwrap_or_else(|| Id("__error__".to_string()));
                 if self.peek_is_op(Op::LParen) {
                     self.bump();
                     while !self.peek_is_op(Op::RParen) && !self.at_eof() {
@@ -210,7 +223,9 @@ impl Parser {
         let ret = self.parse_type();
 
         // Parse function name
-        let name = self.expect_ident("function: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+        let name = self
+            .expect_ident("function: expected identifier")
+            .unwrap_or_else(|| Id("__error__".to_string()));
 
         // Parse parameter list
         self.expect_op(Op::LParen, "function: expected (");
@@ -227,7 +242,11 @@ impl Parser {
         let body = self.parse_block();
 
         FuncDef {
-            pub_, name, params, ret, body,
+            pub_,
+            name,
+            params,
+            ret,
+            body,
             doc_comments: doc_comments.to_vec(),
             capabilities: capabilities.to_vec(),
             span,
@@ -236,12 +255,18 @@ impl Parser {
 
     fn parse_param(&mut self) -> Param {
         let type_ = self.parse_type();
-        let name = self.expect_ident("parameter: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+        let name = self
+            .expect_ident("parameter: expected identifier")
+            .unwrap_or_else(|| Id("__error__".to_string()));
         let mut default = None;
         if self.eat_op(Op::Equals) {
             default = Some(self.parse_expression());
         }
-        Param { type_, name, default }
+        Param {
+            type_,
+            name,
+            default,
+        }
     }
 
     fn parse_type_body(&mut self) -> TypeBody {
@@ -249,7 +274,9 @@ impl Parser {
             self.bump();
             let mut fields = Vec::new();
             while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
-                let name = self.expect_ident("type: expected field name").unwrap_or_else(|| Id("__error__".to_string()));
+                let name = self
+                    .expect_ident("type: expected field name")
+                    .unwrap_or_else(|| Id("__error__".to_string()));
                 self.expect_op(Op::Colon, "type: expected :");
                 let type_ = self.parse_type();
                 fields.push((name, type_));
@@ -265,7 +292,9 @@ impl Parser {
             // Sum type: A | B
             let mut variants = Vec::new();
             loop {
-                let name = self.expect_ident("sum type: expected variant name").unwrap_or_else(|| Id("__error__".to_string()));
+                let name = self
+                    .expect_ident("sum type: expected variant name")
+                    .unwrap_or_else(|| Id("__error__".to_string()));
                 let mut type_param = None;
                 if self.peek_is_op(Op::LParen) {
                     self.bump();
@@ -288,9 +317,8 @@ impl Parser {
                 let mut variants = Vec::new();
                 match type_ {
                     Type::Base { name, params } => {
-                        let type_param = params.and_then(|mut p| {
-                            if p.len() == 1 { p.pop() } else { None }
-                        });
+                        let type_param =
+                            params.and_then(|mut p| if p.len() == 1 { p.pop() } else { None });
                         variants.push(SumVariant { name, type_param });
                     }
                     _ => {
@@ -302,7 +330,9 @@ impl Parser {
                 }
                 while self.peek_is_op(Op::Pipe) {
                     self.bump();
-                    let name = self.expect_ident("sum type: expected variant name").unwrap_or_else(|| Id("__error__".to_string()));
+                    let name = self
+                        .expect_ident("sum type: expected variant name")
+                        .unwrap_or_else(|| Id("__error__".to_string()));
                     let mut type_param = None;
                     if self.peek_is_op(Op::LParen) {
                         self.bump();
@@ -357,14 +387,22 @@ impl Parser {
         }
 
         // Base type with optional params
-        let name = self.expect_ident("type: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+        let name = self
+            .expect_ident("type: expected identifier")
+            .unwrap_or_else(|| Id("__error__".to_string()));
         let mut params = None;
 
         if self.peek_is_op(Op::LParen) {
             self.bump();
             let mut ps = Vec::new();
             while !self.peek_is_op(Op::RParen) && !self.at_eof() {
-                ps.push(self.parse_type());
+                // Support numeric literals as type parameters: Int(8), Float(32)
+                if let Some(TokenKind::Literal(Literal::Int { value: v, kind: k })) = self.peek() {
+                    self.bump();
+                    ps.push(Type::Literal(Literal::Int { value: v, kind: k.clone() }));
+                } else {
+                    ps.push(self.parse_type());
+                }
                 if self.peek_is_op(Op::Comma) {
                     self.bump();
                 }
@@ -494,7 +532,10 @@ impl Parser {
                 self.expect_op(Op::Equals, "@residual: expected =");
                 let inner = self.parse_expression();
                 Expr {
-                    kind: ExprKind::AtResidual { type_, inner: Box::new(inner) },
+                    kind: ExprKind::AtResidual {
+                        type_,
+                        inner: Box::new(inner),
+                    },
                     span,
                 }
             }
@@ -511,7 +552,10 @@ impl Parser {
                 self.expect_op(Op::RParen, "spawn: expected )");
                 let body = self.parse_block();
                 Expr {
-                    kind: ExprKind::Spawn { capabilities: caps, body },
+                    kind: ExprKind::Spawn {
+                        capabilities: caps,
+                        body,
+                    },
                     span,
                 }
             }
@@ -697,13 +741,19 @@ impl Parser {
             // F-string
             Some(TokenKind::FString(fs)) => {
                 self.bump();
-                let parts = fs.parts.iter().map(|p| match p {
-                    resid_lexer::FStringPart::Text(t) => crate::ast::FStringPart::Text(t.clone()),
-                    resid_lexer::FStringPart::Expr(e) => {
-                        let (expr, _) = Parser::parse_partial(e);
-                        crate::ast::FStringPart::Expr(Box::new(expr))
-                    }
-                }).collect();
+                let parts = fs
+                    .parts
+                    .iter()
+                    .map(|p| match p {
+                        resid_lexer::FStringPart::Text(t) => {
+                            crate::ast::FStringPart::Text(t.clone())
+                        }
+                        resid_lexer::FStringPart::Expr(e) => {
+                            let (expr, _) = Parser::parse_partial(e);
+                            crate::ast::FStringPart::Expr(Box::new(expr))
+                        }
+                    })
+                    .collect();
                 Expr {
                     kind: ExprKind::FString(parts),
                     span,
@@ -749,7 +799,10 @@ impl Parser {
                 self.expect_op(Op::RParen, "cast: expected )");
                 let operand = self.parse_primary();
                 Expr {
-                    kind: ExprKind::Cast { type_, operand: Box::new(operand) },
+                    kind: ExprKind::Cast {
+                        type_,
+                        operand: Box::new(operand),
+                    },
                     span,
                 }
             }
@@ -759,7 +812,10 @@ impl Parser {
                 self.bump();
                 let operand = self.parse_primary();
                 Expr {
-                    kind: ExprKind::UnaryOp { op, operand: Box::new(operand) },
+                    kind: ExprKind::UnaryOp {
+                        op,
+                        operand: Box::new(operand),
+                    },
                     span,
                 }
             }
@@ -771,10 +827,16 @@ impl Parser {
                 let mut bindings = Vec::new();
                 while !self.peek_is_op(Op::RParen) && !self.at_eof() {
                     let type_ = self.parse_type();
-                    let name = self.expect_ident("with: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+                    let name = self
+                        .expect_ident("with: expected identifier")
+                        .unwrap_or_else(|| Id("__error__".to_string()));
                     self.expect_op(Op::Equals, "with: expected =");
                     let init = self.parse_expression();
-                    bindings.push(WithBinding { type_, name, init: Box::new(init) });
+                    bindings.push(WithBinding {
+                        type_,
+                        name,
+                        init: Box::new(init),
+                    });
                     if self.peek_is_op(Op::Comma) {
                         self.bump();
                     }
@@ -808,7 +870,9 @@ impl Parser {
                     self.bump();
                     let mut args = Vec::new();
                     while !self.peek_is_op(Op::RParen) && !self.at_eof() {
-                        let name = if self.peek_is_ident("") { None } else {
+                        let name = if self.peek_is_ident("") {
+                            None
+                        } else {
                             let id_str = match self.peek() {
                                 Some(TokenKind::Ident(s)) => s.clone(),
                                 _ => String::new(),
@@ -839,7 +903,9 @@ impl Parser {
                 // Check for field access: expr.field
                 if self.peek_is_op(Op::Dot) {
                     self.bump();
-                    let field = self.expect_ident("field access: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+                    let field = self
+                        .expect_ident("field access: expected identifier")
+                        .unwrap_or_else(|| Id("__error__".to_string()));
                     expr = Expr {
                         kind: ExprKind::FieldAccess {
                             target: Box::new(expr),
@@ -866,7 +932,9 @@ impl Parser {
                 // Check for method call: expr.method(args)
                 if self.peek_is_op(Op::Dot) {
                     self.bump();
-                    let method = self.expect_ident("method call: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+                    let method = self
+                        .expect_ident("method call: expected identifier")
+                        .unwrap_or_else(|| Id("__error__".to_string()));
                     self.expect_op(Op::LParen, "method call: expected (");
                     let mut args = Vec::new();
                     while !self.peek_is_op(Op::RParen) && !self.at_eof() {
@@ -928,7 +996,9 @@ impl Parser {
                     if self.peek_is_ident("using") {
                         self.bump();
                         self.expect_op(Op::Equals, "using: expected =");
-                        let behavior = self.expect_ident("using: expected behavior name").unwrap_or_else(|| Id("__error__".to_string()));
+                        let behavior = self
+                            .expect_ident("using: expected behavior name")
+                            .unwrap_or_else(|| Id("__error__".to_string()));
                         expr = Expr {
                             kind: ExprKind::Using {
                                 value: Box::new(expr),
@@ -937,6 +1007,42 @@ impl Parser {
                             span: span.clone(),
                         };
                     }
+                }
+
+// Check for struct literal: Name { field: value, ... }
+                // Only a `{` followed by a `field :` pair is a struct literal;
+                // otherwise the `{` opens a block/match-arms.
+                let lbrace_then_field = {
+                    let in_bounds = self.pos + 1 < self.tokens.len();
+                    in_bounds
+                        && matches!(
+                            self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                            Some(TokenKind::Ident(_))
+                        )
+                        && matches!(
+                            self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                            Some(TokenKind::Op(Op::Colon))
+                        )
+                };
+                if self.peek_is_op(Op::LBrace) && lbrace_then_field {
+                    self.bump();
+                    let mut fields = Vec::new();
+                    while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
+                        let field_name = self
+                            .expect_ident("struct literal: expected field name")
+                            .unwrap_or_else(|| Id("__error__".to_string()));
+                        self.expect_op(Op::Colon, "struct literal: expected :");
+                        let field_value = self.parse_expression();
+                        fields.push((field_name, field_value));
+                        if self.peek_is_op(Op::Comma) {
+                            self.bump();
+                        }
+                    }
+                    self.expect_op(Op::RBrace, "struct literal: expected }");
+                    expr = Expr {
+                        kind: ExprKind::StructLit { name: Id(id), fields },
+                        span: span.clone(),
+                    };
                 }
 
                 expr
@@ -993,7 +1099,9 @@ impl Parser {
                         if self.peek_is_op(Op::LBrace) {
                             self.bump();
                             while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
-                                let field_name = self.expect_ident("struct field: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+                                let field_name = self
+                                    .expect_ident("struct field: expected identifier")
+                                    .unwrap_or_else(|| Id("__error__".to_string()));
                                 self.expect_op(Op::Colon, "struct: expected :");
                                 let field_value = self.parse_expression();
                                 fields.push((field_name, field_value));
@@ -1004,7 +1112,10 @@ impl Parser {
                             self.expect_op(Op::RBrace, "struct: expected }");
                         }
                         Expr {
-                            kind: ExprKind::StructLit { name: Id(name_str), fields },
+                            kind: ExprKind::StructLit {
+                                name: Id(name_str),
+                                fields,
+                            },
                             span,
                         }
                     }
@@ -1087,7 +1198,9 @@ impl Parser {
                         self.bump();
                         let mut fields = Vec::new();
                         while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
-                            let field_name = self.expect_ident("struct pattern: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+                            let field_name = self
+                                .expect_ident("struct pattern: expected identifier")
+                                .unwrap_or_else(|| Id("__error__".to_string()));
                             let field_pat = if self.peek_is_op(Op::Colon) {
                                 self.bump();
                                 self.parse_pattern()
@@ -1236,7 +1349,9 @@ impl Parser {
 
         if is_for_in {
             let type_ = self.parse_type();
-            let name = self.expect_ident("for-in: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+            let name = self
+                .expect_ident("for-in: expected identifier")
+                .unwrap_or_else(|| Id("__error__".to_string()));
             self.expect_keyword(Keyword::In, "for-in: expected in");
             let collection = self.parse_expression();
             self.expect_op(Op::RParen, "for-in: expected )");
@@ -1291,7 +1406,12 @@ impl Parser {
                 }
             };
             Expr {
-                kind: ExprKind::For { init, cond: Box::new(cond), step, body: Box::new(body) },
+                kind: ExprKind::For {
+                    init,
+                    cond: Box::new(cond),
+                    step,
+                    body: Box::new(body),
+                },
                 span,
             }
         }
@@ -1338,7 +1458,11 @@ impl Parser {
 
         self.expect_op(Op::RBrace, "block: expected }");
 
-        Block { statements, ret, span }
+        Block {
+            statements,
+            ret,
+            span,
+        }
     }
 
     fn parse_block_expr(&mut self) -> Expr {
@@ -1359,7 +1483,10 @@ impl Parser {
             // Return
             Some(TokenKind::Keyword(Keyword::Return)) => {
                 self.bump();
-                let expr = if !self.at_eof() && !self.peek_is_op(Op::RBrace) && !self.peek_is_op(Op::Equals) {
+                let expr = if !self.at_eof()
+                    && !self.peek_is_op(Op::RBrace)
+                    && !self.peek_is_op(Op::Equals)
+                {
                     Some(self.parse_expression())
                 } else {
                     None
@@ -1399,6 +1526,15 @@ impl Parser {
 
             // Destructuring: Pattern = expression
             Some(TokenKind::Ident(_)) => {
+                if !self.looks_like_binding() {
+                    // Leading ident is a plain expression (call/field/etc.),
+                    // not the start of `Type name = …` or `Pattern = …`.
+                    let expr = self.parse_expression();
+                    return Stmt {
+                        kind: StmtKind::Expr(Box::new(expr)),
+                        span,
+                    };
+                }
                 // Save position to check if this is a binding or expression
                 let saved_pos = self.pos;
                 let first_type = self.parse_type();
@@ -1412,9 +1548,11 @@ impl Parser {
                     Some(name) => {
                         // Could be: Type name = expr  OR  Pattern = expr
                         if self.peek_is_op(Op::Equals) {
-                            // Check if this is a destructuring pattern
-                            // If the type has params like Some(x), it's a pattern
-                            let is_pattern = first_type.has_params() || name.0 == "_";
+                            // A bare `_` target is a destructure/discard; any
+                            // named target — even with a parameterized type
+                            // like `List(Int) xs` or `Option(Int) mx` — is a
+                            // typed binding.
+                            let is_pattern = name.0 == "_";
 
                             if is_pattern {
                                 // Destructuring: Pattern = expression
@@ -1425,7 +1563,10 @@ impl Parser {
                                 self.bump(); // skip =
                                 let source = self.parse_expression();
                                 Stmt {
-                                    kind: StmtKind::Destructure { pattern, source: Box::new(source) },
+                                    kind: StmtKind::Destructure {
+                                        pattern,
+                                        source: Box::new(source),
+                                    },
                                     span,
                                 }
                             } else {
@@ -1454,12 +1595,91 @@ impl Parser {
                         }
                     }
                     None => {
-                        // No second id — restore and parse as expression
-                        self.pos = saved_pos;
-                        let expr = self.parse_expression();
-                        Stmt {
-                            kind: StmtKind::Expr(Box::new(expr)),
-                            span,
+                        // No second identifier: either a pattern
+                        // destructuring (`Some(v) = expr`, `Point { x } = p`)
+                        // or a plain parenthesized expression statement.
+                        if self.peek_is_op(Op::LBrace) {
+                            // Struct pattern: Name { fieldPattern, ... } = expr
+                            let name = match &first_type {
+                                Type::Base { name, params: None } => name.clone(),
+                                _ => Id("__error__".to_string()),
+                            };
+                            self.bump();
+                            let mut fields = Vec::new();
+                            while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
+                                let field_name = self
+                                    .expect_ident("struct pattern: expected field name")
+                                    .unwrap_or_else(|| Id("__name__".to_string()));
+                                let field_pat = if self.peek_is_op(Op::Colon) {
+                                    self.bump();
+                                    self.parse_pattern()
+                                } else {
+                                    // `name` shorthand for `name: name`.
+                                    Pattern {
+                                        kind: PatternKind::Bind(field_name.clone()),
+                                        span: self.current_span(),
+                                    }
+                                };
+                                fields.push((field_name, field_pat));
+                                if self.peek_is_op(Op::Comma) {
+                                    self.bump();
+                                }
+                            }
+                            self.expect_op(Op::RBrace, "struct pattern: expected }");
+                            self.expect_op(Op::Equals, "destructure: expected =");
+                            let source = self.parse_expression();
+                            let pattern = Pattern {
+                                kind: PatternKind::Struct { name, fields },
+                                span: self.current_span(),
+                            };
+                            Stmt {
+                                kind: StmtKind::Destructure {
+                                    pattern,
+                                    source: Box::new(source),
+                                },
+                                span,
+                            }
+                        } else if self.peek_is_op(Op::Equals)
+                            && matches!(
+                                &first_type,
+                                Type::Base {
+                                    params: Some(_),
+                                    ..
+                                }
+                            )
+                        {
+                            // Variant pattern: `Some(v) = expr`
+                            let name = match &first_type {
+                                Type::Base { name, .. } => name.clone(),
+                                _ => Id("__error__".to_string()),
+                            };
+                            let param = match &first_type {
+                                Type::Base { params: Some(ps), .. } if ps.len() == 1 => {
+                                    ps[0].head_name().map(Id)
+                                }
+                                _ => None,
+                            };
+                            self.bump(); // skip =
+                            let source = self.parse_expression();
+                            let pattern = Pattern {
+                                kind: PatternKind::Variant { name, param },
+                                span: self.current_span(),
+                            };
+                            Stmt {
+                                kind: StmtKind::Destructure {
+                                    pattern,
+                                    source: Box::new(source),
+                                },
+                                span,
+                            }
+                        } else {
+                            // Restore and parse as an expression.
+                            self.pos = saved_pos;
+                            let expr = self.parse_expression();
+                            Stmt {
+                                kind: StmtKind::Expr(Box::new(expr)),
+                                span,
+                            }
                         }
                     }
                 }
@@ -1504,7 +1724,9 @@ impl Parser {
     }
 
     fn parse_capability_annotation(&mut self) -> CapabilityAnnotation {
-        let name = self.expect_ident("capability: expected identifier").unwrap_or_else(|| Id("__error__".to_string()));
+        let name = self
+            .expect_ident("capability: expected identifier")
+            .unwrap_or_else(|| Id("__error__".to_string()));
         let mut params = Vec::new();
         if self.peek_is_op(Op::LParen) {
             self.bump();
@@ -1558,7 +1780,10 @@ impl Parser {
 
     fn at_eof(&self) -> bool {
         self.pos >= self.tokens.len()
-            || matches!(self.tokens.get(self.pos).map(|t| &t.kind), Some(TokenKind::Eof))
+            || matches!(
+                self.tokens.get(self.pos).map(|t| &t.kind),
+                Some(TokenKind::Eof)
+            )
     }
 
     fn current_span(&self) -> Span {
@@ -1639,12 +1864,32 @@ impl Parser {
         match self.peek() {
             Some(TokenKind::Ident(s)) => {
                 // Known type names
-                matches!(s.as_str(), "Int" | "UInt" | "Float" | "ISize" | "USize" | "Bool" | "Str" | "Bytes"
-                    | "Option" | "Result" | "List" | "Map" | "Set" | "SourceLoc" | "RegionError"
-                    | "Null" | "Void" | "Handle" | "rt")
-                    || Keyword::from_str(s.as_str()).is_none() // not a keyword
+                matches!(
+                    s.as_str(),
+                    "Int"
+                        | "UInt"
+                        | "Float"
+                        | "ISize"
+                        | "USize"
+                        | "Bool"
+                        | "Str"
+                        | "Bytes"
+                        | "Option"
+                        | "Result"
+                        | "List"
+                        | "Map"
+                        | "Set"
+                        | "SourceLoc"
+                        | "RegionError"
+                        | "Null"
+                        | "Void"
+                        | "Handle"
+                        | "rt"
+                ) || Keyword::from_str(s.as_str()).is_none() // not a keyword
             }
-            Some(TokenKind::Keyword(kw)) => !matches!(kw, Keyword::Import | Keyword::Pub | Keyword::Type),
+            Some(TokenKind::Keyword(kw)) => {
+                !matches!(kw, Keyword::Import | Keyword::Pub | Keyword::Type)
+            }
             _ => false,
         }
     }
@@ -1653,13 +1898,80 @@ impl Parser {
         self.peek() == Some(TokenKind::At)
     }
 
+    /// Look ahead from a leading identifier to decide whether a statement is a
+    /// binding (`Type name = …` / `Pattern = …`) or a plain expression
+    /// statement. After the leading ident, a binding continues with an
+    /// identifier and `=` (possibly after a balanced `(...)` type/pattern
+    /// group); a plain expression continues directly with `(`, `.`, an
+    /// operator, etc.
+    fn looks_like_binding(&self) -> bool {
+        let toks = &self.tokens;
+        if self.pos + 1 >= toks.len() {
+            return false;
+        }
+        let mut i = self.pos + 1;
+        // Skip a balanced `(...)` section (parameterized type / pattern).
+        if matches!(toks[i].kind, TokenKind::Op(Op::LParen)) {
+            let mut depth = 0usize;
+            loop {
+                if i >= toks.len() {
+                    return false;
+                }
+                let this = toks[i].kind.clone();
+                i += 1;
+                match this {
+                    TokenKind::Op(Op::LParen) => depth += 1,
+                    TokenKind::Op(Op::RParen) => {
+                        if depth == 1 {
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // Skip a balanced `{ ... }` section (struct pattern / literal).
+        if matches!(toks.get(i).map(|t| &t.kind), Some(TokenKind::Op(Op::LBrace))) {
+            let mut depth = 0usize;
+            loop {
+                if i >= toks.len() {
+                    return false;
+                }
+                let this = toks[i].kind.clone();
+                i += 1;
+                match this {
+                    TokenKind::Op(Op::LBrace) => depth += 1,
+                    TokenKind::Op(Op::RBrace) => {
+                        if depth == 1 {
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        i < toks.len()
+            && matches!(
+                toks[i].kind,
+                TokenKind::Keyword(Keyword::True)
+                    | TokenKind::Ident(_)
+                    | TokenKind::Op(Op::Equals)
+            )
+    }
+
     fn expect_ident(&mut self, msg: &str) -> Option<Id> {
         match self.bump() {
             Some(TokenKind::Ident(s)) => Some(Id(s)),
             Some(TokenKind::Keyword(kw)) => {
                 self.errors.push(ParseError {
                     span: self.current_span(),
-                    message: format!("{}: expected identifier, found keyword '{}'", msg, kw.as_str()),
+                    message: format!(
+                        "{}: expected identifier, found keyword '{}'",
+                        msg,
+                        kw.as_str()
+                    ),
                 });
                 Some(Id(kw.as_str().to_string()))
             }
@@ -1737,14 +2049,12 @@ impl Parser {
 // ─── Type helpers ─────────────────────────────────────────────────
 
 impl Type {
-    /// Check if this type has explicit parameters (e.g., Option(T), Int(32)).
-    fn has_params(&self) -> bool {
+    /// The identifier a type annotation builds on (its head name), if any.
+    fn head_name(&self) -> Option<String> {
         match self {
-            Type::Base { params: Some(p), .. } => !p.is_empty(),
-            Type::Base { .. } => false,
-            Type::Residual(_) => false,
-            Type::ISize => false,
-            Type::USize => false,
+            Type::Base { name, .. } => Some(name.0.clone()),
+            Type::Residual(inner) => inner.head_name(),
+            _ => None,
         }
     }
 }
@@ -1772,7 +2082,7 @@ Int main() {
     Int x = 42;
 }
 "#;
-        let (unit, errors) = Parser::parse("test.resid", src);
+        let (_, errors) = Parser::parse("test.resid", src);
         assert!(errors.is_empty(), "Errors: {:?}", errors);
     }
 
@@ -1783,7 +2093,7 @@ Int add(Int a, Int b) {
     return a + b;
 }
 "#;
-        let (unit, errors) = Parser::parse("test.resid", src);
+        let (_, errors) = Parser::parse("test.resid", src);
         assert!(errors.is_empty(), "Errors: {:?}", errors);
     }
 
@@ -1794,7 +2104,7 @@ Int main() {
     Int x = if (true) { 1 } else { 2 };
 }
 "#;
-        let (unit, errors) = Parser::parse("test.resid", src);
+        let (_, errors) = Parser::parse("test.resid", src);
         assert!(errors.is_empty(), "Errors: {:?}", errors);
     }
 
@@ -1808,7 +2118,7 @@ Int main() {
     }
 }
 "#;
-        let (unit, errors) = Parser::parse("test.resid", src);
+        let (_, errors) = Parser::parse("test.resid", src);
         assert!(errors.is_empty(), "Errors: {:?}", errors);
     }
 
@@ -1819,7 +2129,7 @@ Int main() {
     [1, 2, 3]
 }
 "#;
-        let (unit, errors) = Parser::parse("test.resid", src);
+        let (_, errors) = Parser::parse("test.resid", src);
         assert!(errors.is_empty(), "Errors: {:?}", errors);
     }
 
@@ -1830,7 +2140,7 @@ Int main() {
     f"hello {name}"
 }
 "#;
-        let (unit, errors) = Parser::parse("test.resid", src);
+        let (_, errors) = Parser::parse("test.resid", src);
         assert!(errors.is_empty(), "Errors: {:?}", errors);
     }
 
@@ -1852,7 +2162,7 @@ import "math.resid" as M;
 type Point = { x: Int, y: Int };
 type Option(T) = Some(T) | None;
 "#;
-        let (unit, errors) = Parser::parse("test.resid", src);
+        let (_, errors) = Parser::parse("test.resid", src);
         assert!(errors.is_empty(), "Errors: {:?}", errors);
     }
 
@@ -1864,7 +2174,7 @@ Int main() {
     0..=5
 }
 "#;
-        let (unit, errors) = Parser::parse("test.resid", src);
+        let (_, errors) = Parser::parse("test.resid", src);
         assert!(errors.is_empty(), "Errors: {:?}", errors);
     }
 }

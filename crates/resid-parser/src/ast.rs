@@ -103,7 +103,10 @@ pub struct CapabilityAnnotation {
 pub enum TypeBody {
     Product(Vec<(Id, Type)>),
     Sum(Vec<SumVariant>),
-    Constraint { inner: Box<TypeBody>, constraint: Expr },
+    Constraint {
+        inner: Box<TypeBody>,
+        constraint: Expr,
+    },
     Residual(Box<Type>),
 }
 
@@ -121,6 +124,7 @@ pub enum Type {
     Residual(Box<Type>),
     ISize,
     USize,
+    Literal(Literal),
 }
 
 // ─── Expression Kinds ───────────────────────────────────────────
@@ -133,22 +137,53 @@ pub enum ExprKind {
     Location, // #location
 
     // Operations
-    BinaryOp { op: Op, lhs: Box<Expr>, rhs: Box<Expr> },
-    UnaryOp { op: Op, operand: Box<Expr> },
-    Cast { type_: Type, operand: Box<Expr> },
+    BinaryOp {
+        op: Op,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    UnaryOp {
+        op: Op,
+        operand: Box<Expr>,
+    },
+    Cast {
+        type_: Type,
+        operand: Box<Expr>,
+    },
 
     // Function call with named args
-    Call { func: Box<Expr>, args: Vec<(Option<Id>, Expr)> },
+    Call {
+        func: Box<Expr>,
+        args: Vec<(Option<Id>, Expr)>,
+    },
 
     // Residual marker
     Rt(Box<Expr>),
-    AtResidual { type_: Type, inner: Box<Expr> },
+    AtResidual {
+        type_: Type,
+        inner: Box<Expr>,
+    },
 
     // Control flow
-    If { cond: Box<Expr>, then_block: Box<Block>, else_block: Option<Box<Block>> },
-    While { cond: Box<Expr>, body: Box<Block> },
-    ForIn { type_: Type, name: Id, collection: Box<Expr>, body: Box<Block> },
-    Match { scrutinee: Box<Expr>, arms: Vec<(Pattern, Expr)> },
+    If {
+        cond: Box<Expr>,
+        then_block: Box<Block>,
+        else_block: Option<Box<Block>>,
+    },
+    While {
+        cond: Box<Expr>,
+        body: Box<Block>,
+    },
+    ForIn {
+        type_: Type,
+        name: Id,
+        collection: Box<Expr>,
+        body: Box<Block>,
+    },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<(Pattern, Expr)>,
+    },
     For {
         init: Option<Stmt>,
         cond: Box<Expr>,
@@ -163,8 +198,14 @@ pub enum ExprKind {
     },
 
     // Assertions and debugging
-    Assert { cond: Box<Expr>, message: Box<Expr> },
-    RtAssert { cond: Box<Expr>, message: Box<Expr> },
+    Assert {
+        cond: Box<Expr>,
+        message: Box<Expr>,
+    },
+    RtAssert {
+        cond: Box<Expr>,
+        message: Box<Expr>,
+    },
     Known(Box<Expr>),
     RtKnown(Box<Expr>),
     ComptimePrint(Box<Expr>),
@@ -172,10 +213,17 @@ pub enum ExprKind {
     Unimplemented(String),
 
     // Composite literals
-    StructLit { name: Id, fields: Vec<(Id, Expr)> },
+    StructLit {
+        name: Id,
+        fields: Vec<(Id, Expr)>,
+    },
     ListLit(Vec<Expr>),
     MapLit(Vec<(Expr, Expr)>),
-    Range { start: Box<Expr>, end: Box<Expr>, closed: bool },
+    Range {
+        start: Box<Expr>,
+        end: Box<Expr>,
+        closed: bool,
+    },
 
     // Strings
     FString(Vec<FStringPart>),
@@ -183,14 +231,30 @@ pub enum ExprKind {
     ByteString(Vec<u8>),
 
     // Access
-    FieldAccess { target: Box<Expr>, field: Id },
-    Index { target: Box<Expr>, index: Box<Expr> },
-    Slice { target: Box<Expr>, range: Box<RangeExpr> },
-    MethodCall { target: Box<Expr>, method: Id, args: Vec<Box<Expr>> },
+    FieldAccess {
+        target: Box<Expr>,
+        field: Id,
+    },
+    Index {
+        target: Box<Expr>,
+        index: Box<Expr>,
+    },
+    Slice {
+        target: Box<Expr>,
+        range: Box<RangeExpr>,
+    },
+    MethodCall {
+        target: Box<Expr>,
+        method: Id,
+        args: Vec<Box<Expr>>,
+    },
 
     // Result/Option sugar
-    EarlyReturn(Box<Expr>),       // value?
-    ElseFallback { value: Box<Expr>, fallback: Block }, // value else { … }
+    EarlyReturn(Box<Expr>), // value?
+    ElseFallback {
+        value: Box<Expr>,
+        fallback: Block,
+    }, // value else { … }
 
     // Destructuring bindings
     Destructure {
@@ -218,10 +282,16 @@ pub enum ExprKind {
     },
 
     // Using clause (explicit behavior selection)
-    Using { value: Box<Expr>, behavior: Id },
+    Using {
+        value: Box<Expr>,
+        behavior: Id,
+    },
 
     // Provider call
-    ProviderCall { provider: Id, args: Vec<Box<Expr>> },
+    ProviderCall {
+        provider: Id,
+        args: Vec<Box<Expr>>,
+    },
 
     // Discard
     Discard(Box<Expr>), // _ = expression
@@ -258,7 +328,9 @@ pub struct Expr {
 }
 
 impl Expr {
-    pub fn span(&self) -> &Span { &self.span }
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
 }
 
 // ─── Pattern ────────────────────────────────────────────────────
@@ -267,9 +339,15 @@ impl Expr {
 pub enum PatternKind {
     Wildcard,
     Bind(Id),
-    Variant { name: Id, param: Option<Id> },  // Some(x)
+    Variant {
+        name: Id,
+        param: Option<Id>,
+    }, // Some(x)
     Literal(Literal),
-    Struct { name: Id, fields: Vec<(Id, Pattern)> },
+    Struct {
+        name: Id,
+        fields: Vec<(Id, Pattern)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,7 +370,7 @@ pub enum StmtKind {
         pattern: Pattern,
         source: Box<Expr>,
     },
-    Expr(Box<Expr>),           // expression statement
+    Expr(Box<Expr>), // expression statement
     Return(Option<Box<Expr>>),
     Break,
     Continue,
