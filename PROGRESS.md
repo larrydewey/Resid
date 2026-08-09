@@ -1470,9 +1470,14 @@ native binary via clang + `crates/residc/resid_rt.c`, propagating exit codes.
 - **`while` loops** with `break`/`continue` — condition block, body block, exit block,
   loop-stack context for break/continue targets
 
-**Coverage (deferred)**: float arithmetic, `for-in` loops, structured spawn,
-`comptime_print`, `@residual`, `value?` sugar, if-let/while-let, range/slice notation,
-provider linkage, checked/wrapping/saturating arithmetic, main() boilerplate folding.
+**Coverage (deferred)**: structured spawn, `value?` sugar, if-let/while-let,
+provider linkage, checked/wrapping/saturating arithmetic, C-style `for` loops,
+map literals.
+
+**Coverage (next)**: float arithmetic, for-in loops, `comptime_print`,
+`@residual`, the assertion family (`assert`/`known`/`rt_known`/`todo`/
+`unimplemented`), and range/slice notation (for-in over numeric ranges,
+`0..n` half-open and `0..=n` inclusive) are implemented.
 
 **Estimated effort**: 3-4 weeks
 
@@ -1654,7 +1659,7 @@ Before considering the compiler complete:
 - [ ] Structured spawn semantics correct (spec §19)
 - [ ] Full primitive numeric set implemented (spec §6, §32)
 - [ ] Checked arithmetic defaults working (spec §6)
-- [ ] For-in iteration works (spec §18, §29)
+- [x] For-in iteration works (spec §18, §29)
 - [ ] Ranges and slicing work (spec §15)
 - [ ] known/rt_known work (spec §9, §24)
 - [ ] comptime_print works (spec §24)
@@ -1673,10 +1678,10 @@ Before considering the compiler complete:
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 1. Lexer, Parser, AST | ✅ Complete | `resid-lexer` (7) + `resid-parser` (11) pass. |
+| 1. Lexer, Parser, AST | ✅ Complete | `resid-lexer` (7) + `resid-parser` (13) pass. Ranges parse as `ExprKind::Range` (`..` half-open, `..=` inclusive). |
 | 2. Knowledge Graph IR | Partial | `resid-ir`: implements spec §6 primitive numeric types, mixed-width widening, list/rangetype member types (41 tests). |
-| 3. Types, Behaviors | Partial | `resid-type`: 39 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, while, RT, built-in extern signatures, `Str + Str`, `check_program`, Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors), and assertion/debug expressions (`assert`/`rt_assert` cond must be Bool, message Str; `known`/`rt_known` pass-through). |
-| 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (9 tests) + `residc` (7 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, strings/f-strings (global constants), concat folding, extern built-ins, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime), `@residual Type y = expr`, assertions (`assert`/`rt_assert` → `resid_abort` on failure; `known`/`rt_known` static/runtime checks; `todo`/`unimplemented` trap). Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. |
+| 3. Types, Behaviors | Partial | `resid-type`: 42 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, while, RT, built-in extern signatures, `Str + Str`, `check_program`, Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors), assertion/debug expressions (`assert`/`rt_assert` cond must be Bool, message Str; `known`/`rt_known` pass-through), and ranges (`Range(Elem)` from numeric bounds; for-in over a Range requires the declared type match the element type). |
+| 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (10 tests) + `residc` (8 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime), `@residual Type y = expr`, assertions (`assert`/`rt_assert` → `resid_abort` on failure; `known`/`rt_known` static/runtime checks; `todo`/`unimplemented` trap). Range `for-in` (`0..n` half-open, `0..=n` inclusive) lowers to a scalar i64 counter via `slt`/`sle`, with bounds widened/truncated to the declared width. Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. |
 | 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. |
 
@@ -1691,11 +1696,11 @@ Build/test notes:
 - `residc <file.resid> build [-o <out>]` compiles to a native binary via clang + the
   bootstrap runtime (`crates/residc/resid_rt.c`); `run` builds to a temp dir and executes
   it, propagating the exit code (including POSIX signal exits as 128+signal).
-- **114 tests total**: lexer 7, parser 11, resid-ir 41, resid-type 39, resid-codegen 9,
-  residc 7 (e2e). Destructuring, `_ = expr` discard,
-  `if`-expressions with phi joins, `while` loops with
+- **121 tests total**: lexer 7, parser 13, resid-ir 41, resid-type 42, resid-codegen 10,
+  residc 8 (e2e). Destructuring, `_ = expr` discard,
+  `if`-expressions with phi joins, `while` and range `for-in` loops with
   `break`/`continue`, `for-in` over boxed lists, `comptime_print` (compile-time
-  evidence side effect), `@residual Type y = expr`, and the assertion family
+  evidence side effect), `@residual Type y = expr`, the assertion family
   (`assert`/`rt_assert`/`known`/`rt_known`/`todo`/`unimplemented`) all type-check
   and lower end-to-end: `residc <f> run` binds
   pattern variables from a boxed struct, discards values, prints at compile time,

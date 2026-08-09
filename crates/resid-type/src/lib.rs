@@ -37,6 +37,8 @@ pub enum SemType {
     /// Generic pointer type — matches any composite/boxed value for extern
     /// functions. LLVM emits this as `ptr`.
     Ptr,
+    /// A numeric range `a..b` / `a..=b` (spec §15).
+    Range(Box<SemType>),
 }
 
 impl core::fmt::Display for SemType {
@@ -49,6 +51,7 @@ impl core::fmt::Display for SemType {
             SemType::Struct { name, .. } => write!(f, "{name}"),
             SemType::Sum { name, .. } => write!(f, "{name}"),
             SemType::Ptr => write!(f, "ptr"),
+            SemType::Range(e) => write!(f, "Range({e})"),
         }
     }
 }
@@ -614,6 +617,17 @@ pub fn infer_expr_ctx(
 
         // Composite literals and their accessors.
         ExprKind::ListLit(elems) => infer_list(elems, env, sigs, types, &expr.span),
+        ExprKind::Range { start, end, .. } => {
+            let st = infer_expr_ctx(start, env, sigs, types)?;
+            let et = infer_expr_ctx(end, env, sigs, types)?;
+            match (&st, &et) {
+                (SemType::Numeric(_), SemType::Numeric(_)) => Ok(SemType::Range(Box::new(st))),
+                _ => Err(err(
+                    &expr.span,
+                    format!("range bounds must be numeric, found {st} and {et}"),
+                )),
+            }
+        }
         ExprKind::StructLit { name, fields } => {
             infer_struct_lit(name, fields, env, sigs, types, &expr.span)
         }
@@ -758,10 +772,21 @@ ExprKind::While { cond, body } => {
                     }
                     inner.as_ref().clone()
                 }
+                SemType::Range(inner) => {
+                    if declared != **inner {
+                        return Err(err(
+                            &expr.span,
+                            format!(
+                                "for-in element type mismatch: declared {declared}, range has {inner}"
+                            ),
+                        ));
+                    }
+                    inner.as_ref().clone()
+                }
                 other => {
                     return Err(err(
                         &expr.span,
-                        format!("for-in collection must be List, found {other}"),
+                        format!("for-in collection must be List or Range, found {other}"),
                     ));
                 }
             };
@@ -1761,6 +1786,84 @@ mod tests {
         };
         let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
         assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_range_is_range_of_start() {
+        let e = Expr {
+            kind: ExprKind::Range {
+                start: Box::new(expr_int(0)),
+                end: Box::new(expr_int(3)),
+                closed: false,
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(
+            ty,
+            SemType::Range(Box::new(SemType::Numeric(NumericType::Int(
+                IntWidth::B64.into()
+            ))))
+        );
+    }
+
+    #[test]
+    fn infer_range_for_in_ok() {
+        let e = Expr {
+            kind: ExprKind::ForIn {
+                type_: Type::Base {
+                    name: Id("Int".into()),
+                    params: None,
+                },
+                name: Id("i".into()),
+                collection: Box::new(Expr {
+                    kind: ExprKind::Range {
+                        start: Box::new(expr_int(0)),
+                        end: Box::new(expr_int(3)),
+                        closed: true,
+                    },
+                    span: span(),
+                }),
+                body: Box::new(Block {
+                    statements: vec![],
+                    ret: None,
+                    span: span(),
+                }),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_range_for_in_mismatch_rejected() {
+        // Declared Float, range of Int → rejected.
+        let e = Expr {
+            kind: ExprKind::ForIn {
+                type_: Type::Base {
+                    name: Id("Float".into()),
+                    params: None,
+                },
+                name: Id("i".into()),
+                collection: Box::new(Expr {
+                    kind: ExprKind::Range {
+                        start: Box::new(expr_int(0)),
+                        end: Box::new(expr_int(3)),
+                        closed: false,
+                    },
+                    span: span(),
+                }),
+                body: Box::new(Block {
+                    statements: vec![],
+                    ret: None,
+                    span: span(),
+                }),
+            },
+            span: span(),
+        };
+        let r = infer_expr(&e, &Env::new(), &Signatures::new());
+        assert!(r.is_err());
     }
 
     #[test]
