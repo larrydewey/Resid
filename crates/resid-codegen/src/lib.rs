@@ -760,6 +760,17 @@ impl<'ctx> CodeGen<'ctx> {
 
             ExprKind::Discard(inner) => self.lower_expr(sc, inner, target),
 
+            ExprKind::ComptimePrint(inner) => {
+                let v = self.lower_expr(sc, inner, target)?;
+                let msg = match &inner.kind {
+                    ExprKind::Literal(lit) => format!("{lit}"),
+                    other => resid_type::kind_tag(other).to_string(),
+                };
+                eprintln!("[comptime_print] {msg}");
+                let _ = v.v; // value dropped; only the compile-time side effect matters
+                Ok(self.zero_val())
+            }
+
             other => Err(format!(
                 "codegen: `{}` not yet supported",
                 resid_type::kind_tag(other)

@@ -151,6 +151,44 @@ fn run_if_while_control_flow() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `comptime_print` fires during compilation (to stderr) and is dropped at
+/// runtime, so the program still runs.
+#[test]
+fn run_comptime_print_fires_at_compile_time() {
+    let dir =
+        std::env::temp_dir().join(format!("residc-e2e-ctp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("ctp.resid");
+    std::fs::write(
+        &file,
+        "Int main() {\n    comptime_print(\"building now\");\n    println(\"ran\");\n    return 0;\n}\n",
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.contains("[comptime_print]"),
+        "expected comptime_print to fire during compile, stderr: {stderr:?}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout.trim(), "ran", "unexpected runtime output: {stdout:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// All value formatting helpers: Int/UInt/Float/Bool → Str and composites.
 #[test]
 fn run_value_formatting() {
