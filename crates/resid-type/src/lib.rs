@@ -82,6 +82,23 @@ impl SemType {
     }
 }
 
+/// For an Option/Residual sum (`Some(T) | None`), return the payload type `T`
+/// that a `value?` / `value else` unwrap produces.
+pub fn residual_payload(ty: &SemType) -> Option<SemType> {
+    match ty {
+        SemType::Sum { variants, .. } => {
+            let has_unit = variants.iter().any(|(_, p)| p.is_none());
+            if !has_unit {
+                return None;
+            }
+            variants
+                .iter()
+                .find_map(|(_, p)| p.clone())
+        }
+        _ => None,
+    }
+}
+
 /// The set of user-declared named types (`type T = …`), used to resolve
 /// `Type::Base` references and variant constructors.
 pub type Types = HashMap<String, SemType>;
@@ -262,6 +279,8 @@ pub fn kind_tag(kind: &ExprKind) -> &'static str {
         ExprKind::IfLet { .. } => "if-let",
         ExprKind::WhileLet { .. } => "while-let",
         ExprKind::Range { .. } => "range",
+        ExprKind::EarlyReturn(_) => "value `?`",
+        ExprKind::ElseFallback { .. } => "value else",
         ExprKind::StructLit { .. } => "struct literal",
         ExprKind::ListLit(_) => "list literal",
         ExprKind::MapLit(_) => "map literal",
@@ -802,6 +821,47 @@ ExprKind::While { cond, body } => {
                 return Err(e);
             }
             Ok(SemType::Bool)
+        }
+
+        ExprKind::EarlyReturn(inner) => {
+            // `value?` — unwrap a residual/Option: the enclosing function
+            // returns the unit variant early; here the payload type is the
+            // expression's type.
+            let st = infer_expr_ctx(inner, env, sigs, types)?;
+            match residual_payload(&st) {
+                Some(pt) => Ok(pt),
+                None => Err(err(
+                    &expr.span,
+                    format!("`?` requires an Option, found {st}"),
+                )),
+            }
+        }
+
+        ExprKind::ElseFallback { value, fallback } => {
+            // `value else { … }` — unwrap; on the unit variant run the block.
+            let st = infer_expr_ctx(value, env, sigs, types)?;
+            let pt = match residual_payload(&st) {
+                Some(pt) => pt,
+                None => {
+                    return Err(err(
+                        &expr.span,
+                        format!("`value else` requires an Option, found {st}"),
+                    ));
+                }
+            };
+            let mut errs = Vec::new();
+            type_check_block(fallback, env, sigs, types, &mut errs);
+            if let Some(e) = errs.into_iter().next() {
+                return Err(e);
+            }
+            let ft = block_ret(fallback, env, sigs, types)?;
+            if ft != pt {
+                return Err(err(
+                    &expr.span,
+                    format!("`else` block yields {ft}, need payload {pt}"),
+                ));
+            }
+            Ok(pt)
         }
 
         ExprKind::ForIn { type_, name, collection, body } => {
@@ -1988,6 +2048,129 @@ mod tests {
             "mx",
             SemType::Numeric(NumericType::Int(IntWidth::B64)),
         );
+        let r = infer_expr(&e, &env, &Signatures::new());
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn infer_early_return_payload() {
+        // `v?` where v : Option(Int) → Int
+        let e = Expr {
+            kind: ExprKind::EarlyReturn(Box::new(expr_id("v"))),
+            span: span(),
+        };
+        let mut env = Env::new();
+        env.insert(
+            "v",
+            SemType::Sum {
+                name: "Option".into(),
+                variants: vec![
+                    ("None".into(), None),
+                    (
+                        "Some".into(),
+                        Some(SemType::Numeric(NumericType::Int(IntWidth::B64))),
+                    ),
+                ],
+            },
+        );
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64)));
+    }
+
+    #[test]
+    fn infer_early_return_rejects_non_option() {
+        let e = Expr {
+            kind: ExprKind::EarlyReturn(Box::new(expr_id("v"))),
+            span: span(),
+        };
+        let mut env = Env::new();
+        env.insert("v", SemType::Bool);
+        let r = infer_expr(&e, &env, &Signatures::new());
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn infer_else_fallback_payload() {
+        // `v else { 0 }` where v : Option(Int) → Int
+        let e = Expr {
+            kind: ExprKind::ElseFallback {
+                value: Box::new(expr_id("v")),
+                fallback: Block {
+                    statements: vec![],
+                    ret: Some(Box::new(expr_int(0))),
+                    span: span(),
+                },
+            },
+            span: span(),
+        };
+        let mut env = Env::new();
+        env.insert(
+            "v",
+            SemType::Sum {
+                name: "Option".into(),
+                variants: vec![
+                    ("None".into(), None),
+                    (
+                        "Some".into(),
+                        Some(SemType::Numeric(NumericType::Int(IntWidth::B64))),
+                    ),
+                ],
+            },
+        );
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64)));
+    }
+
+    #[test]
+    fn infer_else_fallback_type_mismatch() {
+        // `v else { true }` where v : Option(Int) → error (Bool ≠ Int)
+        let e = Expr {
+            kind: ExprKind::ElseFallback {
+                value: Box::new(expr_id("v")),
+                fallback: Block {
+                    statements: vec![],
+                    ret: Some(Box::new(Expr {
+                        kind: ExprKind::Literal(Literal::Bool(true)),
+                        span: span(),
+                    })),
+                    span: span(),
+                },
+            },
+            span: span(),
+        };
+        let mut env = Env::new();
+        env.insert(
+            "v",
+            SemType::Sum {
+                name: "Option".into(),
+                variants: vec![
+                    ("None".into(), None),
+                    (
+                        "Some".into(),
+                        Some(SemType::Numeric(NumericType::Int(IntWidth::B64))),
+                    ),
+                ],
+            },
+        );
+        let r = infer_expr(&e, &env, &Signatures::new());
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn infer_else_fallback_rejects_non_option() {
+        let e = Expr {
+            kind: ExprKind::ElseFallback {
+                value: Box::new(expr_id("v")),
+                fallback: Block {
+                    statements: vec![],
+                    ret: Some(Box::new(expr_int(0))),
+                    span: span(),
+                },
+            },
+            span: span(),
+        };
+        let mut env = Env::new();
+        env.insert("v", SemType::Bool);
         let r = infer_expr(&e, &env, &Signatures::new());
         assert!(r.is_err());
     }
