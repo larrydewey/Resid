@@ -928,18 +928,32 @@ impl Parser {
                     };
                 }
 
-                // Check for index: expr[index]
+                // Check for index/slice: expr[index] or expr[start..end]
                 if self.peek_is_op(Op::LBracket) {
                     self.bump();
-                    let index = self.parse_expression();
-                    self.expect_op(Op::RBracket, "index: expected ]");
-                    expr = Expr {
-                        kind: ExprKind::Index {
-                            target: Box::new(expr),
-                            index: Box::new(index),
-                        },
-                        span: span.clone(),
-                    };
+                    if self.is_range_syntax_in_bracket() {
+                        // Slice: expr[start..end]
+                        let range = self.parse_range_expr();
+                        self.expect_op(Op::RBracket, "slice: expected ]");
+                        expr = Expr {
+                            kind: ExprKind::Slice {
+                                target: Box::new(expr),
+                                range: Box::new(range),
+                            },
+                            span: span.clone(),
+                        };
+                    } else {
+                        // Index: expr[index]
+                        let index = self.parse_expression();
+                        self.expect_op(Op::RBracket, "index: expected ]");
+                        expr = Expr {
+                            kind: ExprKind::Index {
+                                target: Box::new(expr),
+                                index: Box::new(index),
+                            },
+                            span: span.clone(),
+                        };
+                    }
                 }
 
                 // Check for method call: expr.method(args)
@@ -962,20 +976,6 @@ impl Parser {
                             target: Box::new(expr),
                             method,
                             args,
-                        },
-                        span: span.clone(),
-                    };
-                }
-
-                // Check for slice: expr[start..end]
-                if self.peek_is_op(Op::LBracket) {
-                    self.bump();
-                    let range = self.parse_range_expr();
-                    self.expect_op(Op::RBracket, "slice: expected ]");
-                    expr = Expr {
-                        kind: ExprKind::Slice {
-                            target: Box::new(expr),
-                            range: Box::new(range),
                         },
                         span: span.clone(),
                     };
@@ -1996,6 +1996,36 @@ impl Parser {
                 message: format!("{}: expected '{}'", msg, Self::op_to_str(op)),
             });
             false
+        }
+    }
+
+    /// Lookahead: check if the next tokens in brackets form range syntax.
+    /// Detects: `..end`, `..=end`, `start..end`, `start..=end`, or `..` alone.
+    fn is_range_syntax_in_bracket(&self) -> bool {
+        match self.peek() {
+            // `..end` or `..=end` — range operator at start
+            Some(TokenKind::Op(Op::DotDotEq)) => true,
+            Some(TokenKind::Op(Op::DotDot)) => true,
+            // `start..end` or `start..=end` — need to peek past first token
+            _ => {
+                if let Some(first) = self.peek() {
+                    // Skip past the first token (identifier, literal, parenthesized expr, etc.)
+                    let mut p = self.pos + 1;
+                    while p < self.tokens.len() {
+                        match &self.tokens[p].kind {
+                            TokenKind::Op(Op::DotDotEq) | TokenKind::Op(Op::DotDot) => {
+                                return true;
+                            }
+                            TokenKind::Op(Op::RParen) | TokenKind::Op(Op::RBracket) | TokenKind::Eof => {
+                                // Hit a closing bracket without a range operator
+                                return false;
+                            }
+                            _ => p += 1,
+                        }
+                    }
+                }
+                false
+            }
         }
     }
 

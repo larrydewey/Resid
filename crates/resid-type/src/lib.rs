@@ -12,8 +12,8 @@ pub use resid_ir::{
 };
 use resid_lexer::token::{Literal, Op as OpKind, Span};
 use resid_parser::{
-    Block, Declaration, Expr, ExprKind, FuncDef, Id, Pattern, PatternKind, StmtKind, SumVariant,
-    TranslationUnit, Type, TypeBody, TypeDef,
+    Block, Declaration, Expr, ExprKind, FuncDef, Id, Pattern, PatternKind, RangeExpr, StmtKind,
+    SumVariant, TranslationUnit, Type, TypeBody, TypeDef,
 };
 
 /// A semantic type for the supported core.
@@ -39,6 +39,8 @@ pub enum SemType {
     Ptr,
     /// A numeric range `a..b` / `a..=b` (spec §15).
     Range(Box<SemType>),
+    /// A slice view into a List's data (spec §15).
+    Slice(Box<SemType>),
 }
 
 impl core::fmt::Display for SemType {
@@ -52,6 +54,7 @@ impl core::fmt::Display for SemType {
             SemType::Sum { name, .. } => write!(f, "{name}"),
             SemType::Ptr => write!(f, "ptr"),
             SemType::Range(e) => write!(f, "Range({e})"),
+            SemType::Slice(e) => write!(f, "Slice({e})"),
         }
     }
 }
@@ -343,6 +346,32 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                     variants: vec![("None".into(), None), ("Some".into(), Some(inner))],
                 });
             }
+            // Built-in `Slice(T)` — slice of a List's elements.
+            if name.0 == "Slice" {
+                let Some(ps) = params else {
+                    return None;
+                };
+                if ps.len() != 1 {
+                    return None;
+                }
+                let Some(inner) = resolve_type_ctx(&ps[0], types) else {
+                    return None;
+                };
+                return Some(SemType::Slice(Box::new(inner)));
+            }
+            // Built-in `Range(T)` — range of numeric values.
+            if name.0 == "Range" {
+                let Some(ps) = params else {
+                    return None;
+                };
+                if ps.len() != 1 {
+                    return None;
+                }
+                let Some(inner) = resolve_type_ctx(&ps[0], types) else {
+                    return None;
+                };
+                return Some(SemType::Range(Box::new(inner)));
+            }
             // Parameterized spellings Int(16) / UInt(8) / Float(32) carry a
             // single numeric-literal width; blend into the iN/uN/fN name.
             if let Some(ps) = params {
@@ -510,6 +539,32 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     // isize / usize: pointer-sized.
     ("isize", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::ISize)),
     ("usize", &[SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::USize)),
+    // ─── Checked/wrapping/saturating arithmetic (spec §6.5) ───
+    // Checked (default overflow check emitted by codegen).
+    ("checked_add", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("checked_sub", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("checked_mul", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("checked_div", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("checked_uadd", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    ("checked_usub", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    ("checked_umul", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    ("checked_udiv", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    // Wrapping arithmetic.
+    ("wrapping_add", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("wrapping_sub", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("wrapping_mul", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("wrapping_div", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("wrapping_uadd", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    ("wrapping_usub", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    ("wrapping_umul", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    ("wrapping_udiv", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    // Saturating arithmetic.
+    ("saturating_add", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("saturating_sub", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("saturating_mul", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("saturating_uadd", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    ("saturating_usub", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    ("saturating_umul", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
 ];
 
 /// Return the set of built-in (extern) function signatures.
@@ -670,6 +725,16 @@ pub fn infer_expr_ctx(
                 _ => Err(err(
                     &expr.span,
                     format!("range bounds must be numeric, found {st} and {et}"),
+                )),
+            }
+        }
+        ExprKind::Slice { target, range: _ } => {
+            let tt = infer_expr_ctx(target, env, sigs, types)?;
+            match &tt {
+                SemType::List(elem) => Ok(SemType::Slice(elem.clone())),
+                other => Err(err(
+                    &expr.span,
+                    format!("cannot slice value of type {other}"),
                 )),
             }
         }
@@ -2497,5 +2562,47 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no type errors for usize(123), got: {:?}", errs);
+    }
+
+    #[test]
+    fn infer_slice_is_slice_of_list_elem() {
+        let e = Expr {
+            kind: ExprKind::Slice {
+                target: Box::new(Expr {
+                    kind: ExprKind::ListLit(vec![expr_int(1), expr_int(2)]),
+                    span: span(),
+                }),
+                range: Box::new(RangeExpr {
+                    start: Some(expr_int(0)),
+                    end: Some(expr_int(3)),
+                    closed: false,
+                }),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(
+            ty,
+            SemType::Slice(Box::new(SemType::Numeric(
+                NumericType::Int(IntWidth::B64.into())
+            )))
+        );
+    }
+
+    #[test]
+    fn infer_slice_rejects_non_list() {
+        let e = Expr {
+            kind: ExprKind::Slice {
+                target: Box::new(expr_int(42)),
+                range: Box::new(RangeExpr {
+                    start: Some(expr_int(0)),
+                    end: Some(expr_int(3)),
+                    closed: false,
+                }),
+            },
+            span: span(),
+        };
+        let result = infer_expr(&e, &Env::new(), &Signatures::new());
+        assert!(result.is_err(), "expected error slicing non-list");
     }
 }
