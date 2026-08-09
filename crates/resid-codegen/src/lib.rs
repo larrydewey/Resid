@@ -21,7 +21,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use resid_ir::{BinOp, NumericType, numeric_result_type};
 use resid_lexer::token::Literal;
 use resid_lexer::token::Op as OpKind;
-use resid_parser::{Block, Declaration, Expr, ExprKind, Id, StmtKind, TranslationUnit};
+use resid_parser::{Block, Declaration, Expr, ExprKind, Id, RangeExpr, StmtKind, TranslationUnit};
 use resid_type::{best_overload, FunctionSig, SemType, Types};
 
 /// A lowered value plus the semantic type the checker attributed to it.
@@ -146,7 +146,7 @@ impl<'ctx> CodeGen<'ctx> {
             },
             SemType::Range(_) => self.int_type(64)?.into(),
             // Composites are untyped heap pointers.
-            SemType::List(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr => {
+            SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr => {
                 self.cx.ptr_type(AddressSpace::default()).into()
             }
         };
@@ -295,7 +295,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 .build_return(Some(&self.cx.i64_type().const_zero()))
                                 .map_err(to_err)?;
                         }
-                        SemType::Str | SemType::List(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr => {
+                        SemType::Str | SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr => {
                             self.builder
                                 .build_return(Some(
                                     &self.cx.ptr_type(AddressSpace::default()).const_null(),
@@ -1265,6 +1265,14 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(self.zero_val())
             }
 
+            ExprKind::Range { start, end, closed } => {
+                self.lower_range(sc, start, end, *closed)
+            }
+
+            ExprKind::Slice { target, range } => {
+                self.lower_slice(sc, target, range)
+            }
+
             other => Err(format!(
                 "codegen: `{}` not yet supported",
                 resid_type::kind_tag(other)
@@ -1786,7 +1794,7 @@ impl<'ctx> CodeGen<'ctx> {
 
     // ─── Calls ───────────────────────────────────────────────────
 
-    /// Declare the bootstrap runtime helpers (boxed composite values).
+    /// Declare the bootstrap runtime helpers (boxed composite values + arithmetic).
     fn declare_runtime(&mut self) {
         let ptr = self.cx.ptr_type(AddressSpace::default());
         let i64t = self.cx.i64_type();
@@ -1803,6 +1811,34 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_unbox_bool", vec![ptr.into()], i8t.into());
         self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
+        // Checked arithmetic (called after overflow check passes).
+        self.decl_rt("checked_add", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("checked_sub", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("checked_mul", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("checked_div", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("checked_uadd", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("checked_usub", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("checked_umul", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("checked_udiv", vec![i64t.into(), i64t.into()], i64t.into());
+        // Wrapping arithmetic.
+        self.decl_rt("wrapping_add", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("wrapping_sub", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("wrapping_mul", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("wrapping_div", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("wrapping_uadd", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("wrapping_usub", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("wrapping_umul", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("wrapping_udiv", vec![i64t.into(), i64t.into()], i64t.into());
+        // Saturating arithmetic.
+        self.decl_rt("saturating_add", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("saturating_sub", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("saturating_mul", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("saturating_uadd", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("saturating_usub", vec![i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("saturating_umul", vec![i64t.into(), i64t.into()], i64t.into());
+        // Range and Slice construction (spec §15).
+        self.decl_rt("resid_range_new", vec![i64t.into(), i64t.into(), i8t.into()], ptr.into());
+        self.decl_rt("resid_slice_new", vec![ptr.into(), i64t.into(), i64t.into()], ptr.into());
     }
 
     fn decl_rt(
@@ -2138,8 +2174,14 @@ impl<'ctx> CodeGen<'ctx> {
         index: &Expr,
     ) -> Result<Val<'ctx>, String> {
         let tv = self.lower_expr(sc, target, None)?;
-        let SemType::List(elem) = &tv.ty else {
-            return Err(format!("codegen: cannot index {}", tv.ty));
+        let (list_val, elem) = match &tv.ty {
+            SemType::List(elem) => (tv.v, elem),
+            SemType::Slice(inner_list) => {
+                // Resolve slice to its underlying list via first slot.
+                let list_slot = self.rt_call("resid_box_slot", vec![tv.v, self.cx.i64_type().const_int(0, false).into()])?;
+                (list_slot, inner_list)
+            }
+            other => return Err(format!("codegen: cannot index {}", other)),
         };
         let iv = self.lower_expr(sc, index, None)?;
         let iw = self.cast_val(
@@ -2147,7 +2189,79 @@ impl<'ctx> CodeGen<'ctx> {
             &SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
         )?;
         let idx = iw.v.into_int_value();
-        self.load_slot(tv.v, idx, elem)
+        self.load_slot(list_val, idx, elem)
+    }
+
+    /// Lower a range expression `start..end` or `start..=end` to a boxed Range value.
+    fn lower_range(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        start: &Expr,
+        end: &Expr,
+        closed: bool,
+    ) -> Result<Val<'ctx>, String> {
+        let start_val = self.lower_expr(sc, start, None)?;
+        let start_ty = start_val.ty.clone();
+        let start_w = self.cast_val(
+            start_val,
+            &SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        )?;
+        let end_val = self.lower_expr(sc, end, None)?;
+        let end_w = self.cast_val(
+            end_val,
+            &SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        )?;
+        let closed_val = self.cx.i8_type().const_int(if closed { 1 } else { 0 }, false);
+        let v = self.rt_call(
+            "resid_range_new",
+            vec![start_w.v.into(), end_w.v.into(), closed_val.into()],
+        )?;
+        let range_ty = SemType::Range(Box::new(start_ty));
+        Ok(Val { v, ty: range_ty })
+    }
+
+    /// Lower a slice expression `target[start..end]` to a boxed Slice value.
+    fn lower_slice(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        target: &Expr,
+        range: &RangeExpr,
+    ) -> Result<Val<'ctx>, String> {
+        let target_val = self.lower_expr(sc, target, None)?;
+        let SemType::List(_) = &target_val.ty else {
+            return Err(format!("codegen: cannot slice {}", target_val.ty));
+        };
+        let start_val = match &range.start {
+            Some(e) => self.lower_expr(sc, e, None)?,
+            None => {
+                let zero = self.cx.i64_type().const_int(0, false);
+                Val { v: zero.into(), ty: SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())) }
+            }
+        };
+        let start_w = self.cast_val(
+            start_val,
+            &SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        )?;
+        let end_val = match &range.end {
+            Some(e) => self.lower_expr(sc, e, None)?,
+            None => {
+                let len = self.rt_call("resid_list_len", vec![target_val.v])?;
+                Val { v: len, ty: SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())) }
+            }
+        };
+        let end_w = self.cast_val(
+            end_val,
+            &SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        )?;
+        let v = self.rt_call(
+            "resid_slice_new",
+            vec![target_val.v.into(), start_w.v.into(), end_w.v.into()],
+        )?;
+        let slice_ty = match &target_val.ty {
+            SemType::List(e) => SemType::Slice(e.clone()),
+            _ => SemType::Slice(Box::new(SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())))),
+        };
+        Ok(Val { v, ty: slice_ty })
     }
 
     fn lower_method_call(

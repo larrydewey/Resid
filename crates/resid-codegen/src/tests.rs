@@ -306,3 +306,375 @@ Int main() {
         "expected tag runtime call: {ir}"
     );
 }
+
+// ─── Checked/wrapping/saturating arithmetic ─────────────────────
+
+/// Wrapping operations are callable extern functions.
+#[test]
+fn test_wrapping_add_call() {
+    let src = r#"
+Int main() {
+    Int a = 10;
+    Int b = 20;
+    Int c = wrapping_add(a, b);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("wrap.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "wrap");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call i64 @wrapping_add"), "expected wrapping_add call: {ir}");
+}
+
+#[test]
+fn test_wrapping_mul_call() {
+    let src = r#"
+Int main() {
+    Int a = 7;
+    Int b = 8;
+    Int c = wrapping_mul(a, b);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("wrapmul.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "wrapmul");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call i64 @wrapping_mul"), "expected wrapping_mul call: {ir}");
+}
+
+#[test]
+fn test_saturating_add_call() {
+    let src = r#"
+Int main() {
+    Int a = 42;
+    Int b = 58;
+    Int c = saturating_add(a, b);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("sat.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "sat");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call i64 @saturating_add"), "expected saturating_add call: {ir}");
+}
+
+#[test]
+fn test_saturating_sub_call() {
+    let src = r#"
+Int main() {
+    Int a = 10;
+    Int b = 20;
+    Int c = saturating_sub(a, b);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("satsub.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "satsub");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("call i64 @saturating_sub"),
+        "expected saturating_sub call: {ir}"
+    );
+}
+
+#[test]
+fn test_checked_add_call() {
+    let src = r#"
+Int main() {
+    Int a = 10;
+    Int b = 20;
+    Int c = checked_add(a, b);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("chk.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "chk");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call i64 @checked_add"), "expected checked_add call: {ir}");
+}
+
+#[test]
+fn test_checked_mul_call() {
+    let src = r#"
+Int main() {
+    Int a = 6;
+    Int b = 7;
+    Int c = checked_mul(a, b);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("chkmul.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "chkmul");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call i64 @checked_mul"), "expected checked_mul call: {ir}");
+}
+
+#[test]
+fn test_wrapping_div_call() {
+    let src = r#"
+Int main() {
+    Int a = 100;
+    Int b = 3;
+    Int c = wrapping_div(a, b);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("wrapdiv.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "wrapdiv");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("call i64 @wrapping_div"),
+        "expected wrapping_div call: {ir}"
+    );
+}
+
+#[test]
+fn test_checked_div_call() {
+    let src = r#"
+Int main() {
+    Int a = 100;
+    Int b = 3;
+    Int c = checked_div(a, b);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("chkdiv.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "chkdiv");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("call i64 @checked_div"),
+        "expected checked_div call: {ir}"
+    );
+}
+
+#[test]
+fn test_saturating_mul_call() {
+    let src = r#"
+Int main() {
+    Int a = 999999999;
+    Int b = 999999999;
+    Int c = saturating_mul(a, b);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("satmul.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "satmul");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("call i64 @saturating_mul"),
+        "expected saturating_mul call: {ir}"
+    );
+}
+
+/// All arithmetic runtime decls are present after codegen.
+#[test]
+fn test_arithmetic_runtime_decls() {
+    let src = r#"
+Int main() {
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("decls.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "decls");
+    cg.generate(&unit).expect("codegen failed");
+
+    let ir = cg.module.print_to_string().to_string();
+
+    // All checked arithmetic decls.
+    for name in ["checked_add", "checked_sub", "checked_mul", "checked_div"] {
+        assert!(
+            ir.contains(&format!("declare i64 @{name}")),
+            "expected declare for {name}: {ir}"
+        );
+    }
+    for name in ["checked_uadd", "checked_usub", "checked_umul", "checked_udiv"] {
+        assert!(
+            ir.contains(&format!("declare i64 @{name}")),
+            "expected declare for {name}: {ir}"
+        );
+    }
+    // All wrapping arithmetic decls.
+    for name in [
+        "wrapping_add", "wrapping_sub", "wrapping_mul", "wrapping_div",
+        "wrapping_uadd", "wrapping_usub", "wrapping_umul", "wrapping_udiv",
+    ] {
+        assert!(
+            ir.contains(&format!("declare i64 @{name}")),
+            "expected declare for {name}: {ir}"
+        );
+    }
+    // All saturating arithmetic decls.
+    for name in [
+        "saturating_add", "saturating_sub", "saturating_mul",
+        "saturating_uadd", "saturating_usub", "saturating_umul",
+    ] {
+        assert!(
+            ir.contains(&format!("declare i64 @{name}")),
+            "expected declare for {name}: {ir}"
+        );
+    }
+}
+
+/// Mixed wrapping + saturating calls in the same function.
+#[test]
+fn test_wrapping_saturating_mixed() {
+    let src = r#"
+Int main() {
+    Int a = 10;
+    Int b = 20;
+    Int w = wrapping_mul(a, b);
+    Int s = saturating_add(w, a);
+    return s;
+}
+"#;
+    let (unit, errors) = Parser::parse("mixed.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "mixed");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call i64 @wrapping_mul"), "expected wrapping_mul: {ir}");
+    assert!(ir.contains("call i64 @saturating_add"), "expected saturating_add: {ir}");
+}
+
+#[test]
+fn test_range_construction() {
+    // Range `0..5` in a for-in loop generates a resid_range_new call.
+    let src = r#"
+Range(Int) main() {
+    Range(Int) r = 0..5;
+    return r;
+}
+"#;
+    let (unit, errors) = Parser::parse("range_constr.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "range_constr");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call ptr @resid_range_new"), "expected range_new call: {ir}");
+}
+
+#[test]
+fn test_range_construction_closed() {
+    // Closed range `0..=4` generates resid_range_new with closed=true.
+    let src = r#"
+Range(Int) main() {
+    Range(Int) r = 0..=4;
+    return r;
+}
+"#;
+    let (unit, errors) = Parser::parse("range_constr_closed.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "range_constr_closed");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call ptr @resid_range_new"), "expected range_new call: {ir}");
+}
+
+#[test]
+fn test_slice_syntax() {
+    let src = r#"
+Int main() {
+    List(Int) xs = [1, 2, 3, 4, 5];
+    Int a = xs[0];
+    Int b = xs[4];
+    return a + b;
+}
+"#;
+    let (unit, errors) = Parser::parse("slice.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "slice");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call ptr @resid_box_slot"), "expected box_slot for indexing: {ir}");
+}
+
+#[test]
+fn test_slice_partial_open() {
+    let src = r#"
+Int main() {
+    List(Int) xs = [1, 2, 3, 4, 5];
+    Int a = xs[0];
+    return a;
+}
+"#;
+    let (unit, errors) = Parser::parse("slice_partial.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "slice_partial");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}

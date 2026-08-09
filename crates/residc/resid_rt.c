@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <limits.h>
 
 bool print(const char* s) {
     if (fputs(s, stdout) == EOF) return false;
@@ -283,3 +284,111 @@ double f64(double v) { return v; }
 /* ── Pointer-sized helpers ─────────────────────────────────────── */
 int64_t isize(int64_t v) { return v; }
 uint64_t usize(uint64_t v) { return v; }
+
+/*
+ * Checked/wrapping/saturating arithmetic (spec §6.5).
+ *
+ * Checked arithmetic for the default operators (+, -, *, /, %) is handled
+ * in LLVM codegen: overflow is detected with icmp + select/branch, and on
+ * overflow the runtime calls resid_abort.
+ *
+ * Wrapping and saturating variants are exposed here as extern functions.
+ * They are callable from Resid source (e.g. `wrapping_add(a, b)`).
+ */
+
+/* ── Wrapping operations (C integer overflow is well-defined: wrap) ─ */
+int64_t wrapping_add(int64_t a, int64_t b) { return a + b; }
+int64_t wrapping_sub(int64_t a, int64_t b) { return a - b; }
+int64_t wrapping_mul(int64_t a, int64_t b) { return a * b; }
+int64_t wrapping_div(int64_t a, int64_t b) {
+    if (b == 0) resid_abort("wrapping_div: division by zero");
+    return a / b;
+}
+uint64_t wrapping_uadd(uint64_t a, uint64_t b) { return a + b; }
+uint64_t wrapping_usub(uint64_t a, uint64_t b) { return a - b; }
+uint64_t wrapping_umul(uint64_t a, uint64_t b) { return a * b; }
+uint64_t wrapping_udiv(uint64_t a, uint64_t b) {
+    if (b == 0) resid_abort("wrapping_udiv: division by zero");
+    return a / b;
+}
+
+/* ── Saturating operations ─────────────────────────────────────── */
+int64_t saturating_add(int64_t a, int64_t b) {
+    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
+    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
+    return a + b;
+}
+int64_t saturating_sub(int64_t a, int64_t b) {
+    if (b < 0 && a > INT64_MAX + b) return INT64_MAX;
+    if (b > 0 && a < INT64_MIN + b) return INT64_MIN;
+    return a - b;
+}
+int64_t saturating_mul(int64_t a, int64_t b) {
+    if (a == 0 || b == 0) return 0;
+    int64_t r = a * b;
+    /* Check overflow: if (a > 0 && b > 0 && r < 0) || (a < 0 && b < 0 && r > 0) ||
+       (a > 0 && b < 0 && r > 0) || (a < 0 && b > 0 && r < 0) */
+    if ((a > 0 && b > 0 && r < 0) || (a < 0 && b < 0 && r > 0) ||
+        (a > 0 && b < 0 && r > 0) || (a < 0 && b > 0 && r < 0)) {
+        return (a > 0) == (b > 0) ? INT64_MAX : INT64_MIN;
+    }
+    return r;
+}
+uint64_t saturating_uadd(uint64_t a, uint64_t b) {
+    if (b > 0 && a > UINT64_MAX - b) return UINT64_MAX;
+    return a + b;
+}
+uint64_t saturating_usub(uint64_t a, uint64_t b) {
+    if (b > a) return 0;
+    return a - b;
+}
+uint64_t saturating_umul(uint64_t a, uint64_t b) {
+    if (a == 0 || b == 0) return 0;
+    uint64_t r = a * b;
+    if (a != 0 && r / a != b) return UINT64_MAX;
+    return r;
+}
+
+/* ── Checked operations (returns result; caller checks via overflow flag) ─ */
+/* These return the computation result; the caller must have emitted an
+   overflow check before calling. For division by zero, resid_abort is called. */
+int64_t checked_add(int64_t a, int64_t b) { return a + b; }
+int64_t checked_sub(int64_t a, int64_t b) { return a - b; }
+int64_t checked_mul(int64_t a, int64_t b) { return a * b; }
+int64_t checked_div(int64_t a, int64_t b) {
+    if (b == 0) resid_abort("checked_div: division by zero");
+    return a / b;
+}
+uint64_t checked_uadd(uint64_t a, uint64_t b) { return a + b; }
+uint64_t checked_usub(uint64_t a, uint64_t b) { return a - b; }
+uint64_t checked_umul(uint64_t a, uint64_t b) { return a * b; }
+uint64_t checked_udiv(uint64_t a, uint64_t b) {
+    if (b == 0) resid_abort("checked_udiv: division by zero");
+    return a / b;
+}
+/*
+ * Range and Slice runtime support (spec §15).
+ *
+ * Range: a boxed value with start, end, and closed flag.
+ * Slice: a boxed value pointing into a list's data with start/end indices.
+ */
+void* resid_range_new(int64_t start, int64_t end, int8_t closed) {
+    int64_t* s = (int64_t*)malloc(sizeof(int64_t));
+    *s = start;
+    int64_t* e = (int64_t*)malloc(sizeof(int64_t));
+    *e = end;
+    int8_t* c = (int8_t*)malloc(sizeof(int8_t));
+    *c = closed;
+    void* slots[3] = { s, e, c };
+    return resid_box_new(10, 3, slots, "Range");
+}
+
+void* resid_slice_new(void* target, int64_t start, int64_t end) {
+    void* t = target;
+    int64_t* s = (int64_t*)malloc(sizeof(int64_t));
+    *s = start;
+    int64_t* e = (int64_t*)malloc(sizeof(int64_t));
+    *e = end;
+    void* slots[3] = { t, s, e };
+    return resid_box_new(11, 3, slots, "Slice");
+}
