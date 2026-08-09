@@ -486,6 +486,30 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     // Generic ToString for any boxed value (List/Struct/Sum).
     // Takes a ptr — the runtime inspects the tag to determine format.
     ("ToString", &[SemType::Ptr], SemType::Str),
+    // ─── Conversion helpers (spec §6.7) ───
+    // Integer helpers accept Int(64) — the default for integer literals.
+    ("i8", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B8))),
+    ("i16", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B16))),
+    ("i32", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B32))),
+    ("i64", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("i128", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B128))),
+    ("i256", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B256))),
+    ("i512", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B512))),
+    // Unsigned integer helpers accept UInt(64).
+    ("u8", &[SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B8))),
+    ("u16", &[SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B16))),
+    ("u32", &[SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B32))),
+    ("u64", &[SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    ("u128", &[SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B128))),
+    ("u256", &[SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B256))),
+    ("u512", &[SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B512))),
+    // Float helpers accept Float(64) — the default for float literals.
+    ("f16", &[SemType::Numeric(NumericType::Float(FloatWidth::F64))], SemType::Numeric(NumericType::Float(FloatWidth::F16))),
+    ("f32", &[SemType::Numeric(NumericType::Float(FloatWidth::F64))], SemType::Numeric(NumericType::Float(FloatWidth::F32))),
+    ("f64", &[SemType::Numeric(NumericType::Float(FloatWidth::F64))], SemType::Numeric(NumericType::Float(FloatWidth::F64))),
+    // isize / usize: pointer-sized.
+    ("isize", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::ISize)),
+    ("usize", &[SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::USize)),
 ];
 
 /// Return the set of built-in (extern) function signatures.
@@ -1314,10 +1338,30 @@ fn numeric_can_widen(arg: &SemType, target: &SemType) -> bool {
     target_bits >= arg_bits
 }
 
+/// Check if the argument type can be converted to the parameter type for
+/// conversion helpers. `i32(some_i8)` should match `i32(Int(64))` by widening
+/// the arg from Int(8) to Int(64).
+fn conversion_helper_match(arg: &SemType, param: &SemType, first_char: char) -> bool {
+    if let (SemType::Numeric(a), SemType::Numeric(p)) = (arg, param) {
+        match first_char {
+            'i' => matches!(a, NumericType::Int(_)) && matches!(p, NumericType::Int(_))
+                    && p.target_width().unwrap_or(64) >= a.target_width().unwrap_or(64),
+            'u' => matches!(a, NumericType::UInt(_)) && matches!(p, NumericType::UInt(_))
+                    && p.target_width().unwrap_or(64) >= a.target_width().unwrap_or(64),
+            'f' => a.is_float() && p.is_float()
+                    && p.target_width().unwrap_or(64) >= a.target_width().unwrap_or(64),
+            _ => false,
+        }
+    } else {
+        false
+    }
+}
+
 /// Select the best overload from a list of signatures whose first parameter
 /// matches the argument type. For ToString-style functions with numeric
 /// overloads this picks the most specific (narrowest) type that the argument
-/// can safely be widened to.
+/// can safely be widened to. For conversion helpers (i8/i16/.../u8/.../f16/...)
+/// this picks the narrowest parameter type that the argument can be widened to.
 pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Option<FunctionSig> {
     let candidate = sigs.get(func)?;
     if candidate.params.len() != 1 {
@@ -1415,6 +1459,40 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
     // For ToString on composites, exact match or fallback to first match.
     if func == "ToString" {
         return Some(candidate.clone());
+    }
+
+    // For conversion helpers (i8..i512, u8..u512, f16..f512, isize, usize),
+    // find the narrowest parameter type that the argument can be widened to.
+    let first_char = func.chars().next();
+    if let Some(fc) = first_char {
+        if matches!(fc, 'i' | 'u' | 'f') {
+            let matching: Vec<(&SemType, FunctionSig)> = sigs
+                .iter()
+                .filter(|(n, _)| *n == func)
+                .filter_map(|(_, sig)| {
+                    if sig.params.len() == 1 {
+                        if let SemType::Numeric(_) = &sig.params[0] {
+                            return Some((&sig.params[0], sig.clone()));
+                        }
+                    }
+                    None
+                })
+                .collect();
+            let _arg_bits = match want {
+                SemType::Numeric(n) => n.target_width().unwrap_or(64),
+                _ => 64,
+            };
+            let best = matching
+                .iter()
+                .filter(|(p, _)| conversion_helper_match(want, p, fc))
+                .min_by_key(|(p, _)| {
+                    if let SemType::Numeric(n) = p { n.target_width().unwrap_or(u16::MAX) } else { u16::MAX }
+                });
+            if let Some((_, sig)) = best {
+                return Some(sig.clone());
+            }
+            return Some(candidate.clone());
+        }
     }
 
     Some(candidate.clone())
@@ -2339,5 +2417,85 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_conversion_helper_i32() {
+        let src = r#"
+Int main() {
+    Int(32) a = i32(42);
+    return a;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors for i32(42), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_conversion_helper_u16() {
+        let src = r#"
+Int main() {
+    UInt(16) b = u16(256);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors for u16(256), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_conversion_helper_f32() {
+        let src = r#"
+Int main() {
+    Float(32) c = f32(3.14);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors for f32(3.14), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_conversion_helper_f64() {
+        let src = r#"
+Int main() {
+    Float(64) d = f64(2.71);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors for f64(2.71), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_conversion_helper_isize() {
+        let src = r#"
+Int main() {
+    Int(64) e = 99;
+    Int x = isize(e);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors for isize(99), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_conversion_helper_usize() {
+        let src = r#"
+Int main() {
+    UInt(64) f = 123;
+    UInt x = usize(f);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors for usize(123), got: {:?}", errs);
     }
 }

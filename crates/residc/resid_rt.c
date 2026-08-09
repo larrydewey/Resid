@@ -245,3 +245,41 @@ char* ToString(void* boxed) {
     strcat(buf, ")");
     return buf;
 }
+
+/*
+ * Conversion helpers (spec §6.7): cast to target width, then back to the
+ * default scalar width (i64 for integers, double for floats) for the return.
+ * The LLVM type of the return matches the target width so the caller's
+ * widening logic can handle any subsequent widening correctly.
+ *
+ * Wide types (128+ bit) are software-emulated; for now they are not
+ * directly callable — the codegen raises an error.
+ */
+
+/* ── Signed integer helpers ────────────────────────────────────── */
+int8_t i8(int64_t v) { return (int8_t)v; }
+int16_t i16(int64_t v) { return (int16_t)v; }
+int32_t i32(int64_t v) { return (int32_t)v; }
+int64_t i64(int64_t v) { return v; }
+/* i128 — __int128 is a GCC/Clang extension. i256, i512 not supported. */
+#ifdef __SIZEOF_INT128__
+__int128 i128(int64_t v) { return (__int128)v; }
+#else
+__int128 i128(int64_t v) { return v; }
+#endif
+
+/* ── Unsigned integer helpers ──────────────────────────────────── */
+uint8_t u8(uint64_t v) { return (uint8_t)v; }
+uint16_t u16(uint64_t v) { return (uint16_t)v; }
+uint32_t u32(uint64_t v) { return (uint32_t)v; }
+uint64_t u64(uint64_t v) { return v; }
+/* u128, u256, u512 — not supported in C natively (software-emulated). */
+
+/* ── Float helpers (receive double, return target-width float) ─── */
+_Float16 f16(double v) { return (_Float16)(float)v; }
+float f32(double v) { return (float)v; }
+double f64(double v) { return v; }
+
+/* ── Pointer-sized helpers ─────────────────────────────────────── */
+int64_t isize(int64_t v) { return v; }
+uint64_t usize(uint64_t v) { return v; }

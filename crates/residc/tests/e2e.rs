@@ -487,3 +487,71 @@ fn run_if_let_and_while_let() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Conversion helpers (spec §6.7): i32, u16, f32, f64, isize, usize narrow/
+/// widen values.  Values that fit are preserved; narrowing truncates.
+#[test]
+fn run_conversion_helpers() {
+    let dir = std::env::temp_dir().join(format!(
+        "residc-e2e-conv-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("conv.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    // i32 from Int(64) literal (default)
+    Int(32) a = i32(42);
+    println(IntToString(a));
+
+    // u16 from Int(64) literal
+    UInt(16) b = u16(256);
+    println(UIntToString(b));
+
+    // f32 from Float(64) literal (default)
+    Float(32) c = f32(3.14);
+    println(FloatToString(c));
+
+    // f64 identity
+    Float(64) d = f64(2.71);
+    println(FloatToString(d));
+
+    // isize / usize
+    Int(64) e = 99;
+    println(IntToString(isize(e)));
+
+    UInt(64) f = 123;
+    println(UIntToString(usize(f)));
+
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert!(lines.len() >= 6, "expected at least 6 lines, got {}:\n{}", lines.len(), stdout);
+    assert!(lines[0].contains("42"), "i32(42): {}", lines[0]);
+    assert!(lines[1].contains("256"), "u16(256): {}", lines[1]);
+    assert!(lines[2].contains("3.14"), "f32(3.14): {}", lines[2]);
+    assert!(lines[3].contains("2.71"), "f64(2.71): {}", lines[3]);
+    assert!(lines[4].contains("99"), "isize(99): {}", lines[4]);
+    assert!(lines[5].contains("123"), "usize(123): {}", lines[5]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
