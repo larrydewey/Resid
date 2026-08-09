@@ -669,8 +669,153 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(self.zero_val())
     }
 
-    /// Lower an `assert`/`rt_assert`: evaluate the condition, abort with the
-    /// message when false.
+    /// Locate the `Some`-style payload variant (has a payload) and the unit
+    /// `None`-like variant of an Option sum. Returns (payload_idx, unit_idx,
+    /// payload_type).
+    fn option_variant_ix(ty: &SemType) -> Option<(usize, usize, SemType)> {
+        let SemType::Sum { variants, .. } = ty else {
+            return None;
+        };
+        let payload = variants
+            .iter()
+            .enumerate()
+            .find(|(_, (_, p))| p.is_some())
+            .and_then(|(i, (_, p))| p.clone().map(|pt| (i, pt)))?;
+        let unit = variants
+            .iter()
+            .enumerate()
+            .find(|(_, (_, p))| p.is_none())
+            .map(|(i, _)| i)?;
+        Some((payload.0, unit, payload.1))
+    }
+
+    /// Lower `value?`: unwrap an Option in a value position. On the unit
+    /// variant the enclosing function early-returns (a boxed None); otherwise
+    /// the payload becomes the expression's value.
+    fn lower_early_return(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        value: &Expr,
+    ) -> Result<Val<'ctx>, String> {
+        let fv = self
+            .cur_fn
+            .ok_or_else(|| "codegen: `?` outside a function".to_string())?;
+        let sv = self.lower_expr(sc, value, None)?;
+        let (payload_idx, unit_idx, payload_ty) =
+            Self::option_variant_ix(&sv.ty).ok_or_else(|| {
+                format!("codegen: `?` requires an Option, found {}", sv.ty)
+            })?;
+
+        let tag = self.rt_call("resid_box_tag", vec![sv.v])?;
+        let tag = tag.into_int_value();
+        let is_unit = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                tag,
+                self.cx
+                    .i64_type()
+                    .const_int(unit_idx as u64, false),
+                "q_is_unit",
+            )
+            .map_err(to_err)?;
+
+        let payload_bb = self.cx.append_basic_block(fv, "q_payload");
+        let ret_bb = self.cx.append_basic_block(fv, "q_return_none");
+        self.builder
+            .build_conditional_branch(is_unit, ret_bb, payload_bb)
+            .map_err(to_err)?;
+
+        // Early return: box a None of the enclosing function's return value.
+        self.builder.position_at_end(ret_bb);
+        let ret_ty = self.cur_ret.clone().unwrap_or_else(|| sv.ty.clone());
+        if let SemType::Sum { variants, .. } = &ret_ty {
+            if let Some(ni) = variants.iter().position(|(_, p)| p.is_none()) {
+                let none_val = self.build_constructor(ni as i64, &ret_ty, Vec::new())?;
+                self.builder.build_return(Some(&none_val.v)).map_err(to_err)?;
+                self.builder.position_at_end(payload_bb);
+                let slot = self.cx.i64_type().const_int(payload_idx as u64, false);
+                return self.load_slot(sv.v, slot, &payload_ty);
+            }
+        }
+        Err(format!(
+            "codegen: `?` needs the enclosing function to return an Option"
+        ))
+    }
+
+    /// Lower `value else { … }`: unwrap the Option; the unit variant runs the
+    /// fallback block whose tail type must equal the payload type.
+    fn lower_else_fallback(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        value: &Expr,
+        fallback: &Block,
+    ) -> Result<Val<'ctx>, String> {
+        let fv = self
+            .cur_fn
+            .ok_or_else(|| "codegen: `value else` outside a function".to_string())?;
+        let sv = self.lower_expr(sc, value, None)?;
+        let (payload_idx, unit_idx, payload_ty) =
+            Self::option_variant_ix(&sv.ty).ok_or_else(|| {
+                format!("codegen: `value else` requires an Option, found {}", sv.ty)
+            })?;
+        let _ = unit_idx;
+
+        let tag = self.rt_call("resid_box_tag", vec![sv.v])?;
+        let tag = tag.into_int_value();
+        let is_payload = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                tag,
+                self.cx.i64_type().const_int(payload_idx as u64, false),
+                "ve_is_payload",
+            )
+            .map_err(to_err)?;
+
+        let payload_bb = self.cx.append_basic_block(fv, "ve_payload");
+        let fallback_bb = self.cx.append_basic_block(fv, "ve_fallback");
+        let merge_bb = self.cx.append_basic_block(fv, "ve_merge");
+        self.builder
+            .build_conditional_branch(is_payload, payload_bb, fallback_bb)
+            .map_err(to_err)?;
+
+        // Payload branch: use the boxed payload.
+        self.builder.position_at_end(payload_bb);
+        let slot = self.cx.i64_type().const_int(payload_idx as u64, false);
+        let payload = self.load_slot(sv.v, slot, &payload_ty)?;
+        self.builder
+            .build_unconditional_branch(merge_bb)
+            .map_err(to_err)?;
+
+        // Fallback branch: lower the block and capture its tail.
+        self.builder.position_at_end(fallback_bb);
+        let (f_terms, f_tail) = self.lower_block_with_tail(sc, fallback, true)?;
+
+        // Join with a phi over the payload type.
+        self.builder.position_at_end(merge_bb);
+        let ll = self.llvm_type(&payload_ty)?;
+        let phi = self.builder.build_phi(ll, "ve").map_err(to_err)?;
+        phi.add_incoming(&[(&payload.v, payload_bb)]);
+        if !f_terms {
+            match f_tail {
+                Some(tail) => {
+                    let tv = self.cast_val(tail, &payload_ty)?;
+                    phi.add_incoming(&[(&tv.v, fallback_bb)]);
+                }
+                None => {
+                    let zero = self.zero_of_ty(&payload_ty)?;
+                    phi.add_incoming(&[(&zero, fallback_bb)]);
+                }
+            }
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(to_err)?;
+            self.builder.position_at_end(merge_bb);
+        }
+        let v = phi.as_basic_value();
+        Ok(Val { v, ty: payload_ty })
+    }
     fn lower_assert(
         &mut self,
         sc: &mut Scope<'ctx>,
@@ -958,6 +1103,16 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    /// A zero constant of the LLVM type for a semantic type (used for phi
+    /// placeholders on branches that produce no value).
+    fn zero_of_ty(&self, ty: &SemType) -> Result<BasicValueEnum<'ctx>, String> {
+        match self.llvm_type(ty)? {
+            inkwell::types::BasicTypeEnum::IntType(i) => Ok(i.const_zero().into()),
+            inkwell::types::BasicTypeEnum::FloatType(f) => Ok(f.const_zero().into()),
+            t => Ok(t.const_zero()),
+        }
+    }
+
     /// Build a `resid-type` environment mirroring the current LLVM scope so
     /// untyped bindings and operands can be inferred to widths.
     fn env(&self, sc: &Scope<'ctx>) -> resid_type::Env {
@@ -1029,6 +1184,11 @@ impl<'ctx> CodeGen<'ctx> {
                 source,
                 body,
             } => self.lower_while_let(sc, pattern, source, body),
+
+            ExprKind::EarlyReturn(value) => self.lower_early_return(sc, value),
+            ExprKind::ElseFallback { value, fallback } => {
+                self.lower_else_fallback(sc, value, fallback)
+            }
 
             ExprKind::ForIn { type_, name, collection, body } => {
                 self.lower_for_in(sc, collection, name, body, type_)
