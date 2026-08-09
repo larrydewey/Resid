@@ -189,6 +189,44 @@ fn run_comptime_print_fires_at_compile_time() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `@residual Type y = expr` (spec §9) lowers like a typed binding: the value
+/// is computed at runtime and printed.
+#[test]
+fn run_at_residual_binding() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-atr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("atresid.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Int src = 6;
+    @residual Int x = src * 7;
+    println(IntToString(x));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout.trim(), "42", "unexpected program output: {stdout:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// All value formatting helpers: Int/UInt/Float/Bool → Str and composites.
 #[test]
 fn run_value_formatting() {

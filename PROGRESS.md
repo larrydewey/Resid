@@ -1673,10 +1673,10 @@ Before considering the compiler complete:
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 1. Lexer, Parser, AST | ✅ Complete | `resid-lexer` (7) + `resid-parser` (10) pass. |
+| 1. Lexer, Parser, AST | ✅ Complete | `resid-lexer` (7) + `resid-parser` (11) pass. |
 | 2. Knowledge Graph IR | Partial | `resid-ir`: implements spec §6 primitive numeric types, mixed-width widening, list/rangetype member types (41 tests). |
 | 3. Types, Behaviors | Partial | `resid-type`: 35 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, while, RT, built-in extern signatures, `Str + Str`, `check_program`, and Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors). |
-| 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (9 tests) + `residc` (5 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, strings/f-strings (global constants), concat folding, extern built-ins, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime). Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. |
+| 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (9 tests) + `residc` (6 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, strings/f-strings (global constants), concat folding, extern built-ins, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime), `@residual Type y = expr`. Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. |
 | 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. |
 
@@ -1691,11 +1691,12 @@ Build/test notes:
 - `residc <file.resid> build [-o <out>]` compiles to a native binary via clang + the
   bootstrap runtime (`crates/residc/resid_rt.c`); `run` builds to a temp dir and executes
   it, propagating the exit code (including POSIX signal exits as 128+signal).
-- **108 tests total**: lexer 7, parser 10, resid-ir 41, resid-type 36, resid-codegen 9,
-  residc 5 (e2e). Destructuring (`Point { x, y } = p`, `Some(v)` rejection at binding
-  sites), `_ = expr` discard, `if`-expressions with phi joins, `while` loops with
-  `break`/`continue`, `for-in` over boxed lists, and `comptime_print` (compile-time
-  stderr side effect) now type-check and lower end-to-end: `residc <f> run` binds
+- **110 tests total**: lexer 7, parser 11, resid-ir 41, resid-type 36, resid-codegen 9,
+  residc 6 (e2e). Destructuring (loop-stack context), `_ = expr` discard,
+  `if`-expressions with phi joins, `while` loops with
+  `break`/`continue`, `for-in` over boxed lists, `comptime_print` (compile-time
+  evidence side effect), and `@residual Type y = expr` now type-check and lower
+  end-to-end: `residc <f> run` binds
   pattern variables from a boxed struct, discards values, prints at compile time,
   and runs control-flow statements.
 - **Self-host roadmap** (spec §39 Phase 3): next frontiers are data structures
