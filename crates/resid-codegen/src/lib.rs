@@ -144,6 +144,7 @@ impl<'ctx> CodeGen<'ctx> {
                 NumericType::Float(w) => self.float_type(w.bits())?.into(),
                 NumericType::ISize | NumericType::USize => self.int_type(64)?.into(),
             },
+            SemType::Range(_) => self.int_type(64)?.into(),
             // Composites are untyped heap pointers.
             SemType::List(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr => {
                 self.cx.ptr_type(AddressSpace::default()).into()
@@ -287,6 +288,11 @@ impl<'ctx> CodeGen<'ctx> {
                         SemType::Bool => {
                             self.builder
                                 .build_return(Some(&self.cx.bool_type().const_zero()))
+                                .map_err(to_err)?;
+                        }
+                        SemType::Range(_) => {
+                            self.builder
+                                .build_return(Some(&self.cx.i64_type().const_zero()))
                                 .map_err(to_err)?;
                         }
                         SemType::Str | SemType::List(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr => {
@@ -595,10 +601,16 @@ impl<'ctx> CodeGen<'ctx> {
             .cur_fn
             .ok_or_else(|| "codegen: for-in outside a function".to_string())?;
 
+        // A numeric range iterates a counter; a List iterates its slots.
+        if let ExprKind::Range { start, end, closed } = &collection.kind {
+            return self.lower_for_in_range(sc, fv, start, end, *closed, name, body);
+        }
+
         let col = self.lower_expr(sc, collection, None)?;
         let elem_ty = match &col.ty {
             SemType::List(inner) => inner.as_ref().clone(),
-            other => return Err(format!("codegen: for-in on non-List type {other}")),
+            SemType::Range(inner) => inner.as_ref().clone(),
+            other => return Err(format!("codegen: for-in on non-List/non-Range type {other}")),
         };
 
         let cond_bb = self.cx.append_basic_block(fv, "forin_cond");
@@ -684,6 +696,132 @@ impl<'ctx> CodeGen<'ctx> {
             v: self.cx.bool_type().const_zero().into(),
             ty: SemType::Bool,
         })
+    }
+
+    /// Lower `for (T x in start..end)` / `start..=end`: iterate a numeric
+    /// counter from `start` to (inclusive/exclusive) `end`.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_for_in_range(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        fv: inkwell::values::FunctionValue<'ctx>,
+        start: &Expr,
+        end: &Expr,
+        closed: bool,
+        name: &Id,
+        body: &Block,
+    ) -> Result<Val<'ctx>, String> {
+        let elem_ty = self
+            .lower_expr(sc, start, None)?
+            .ty
+            .clone();
+        let elem_ty = match elem_ty {
+            SemType::Numeric(n) if !n.is_float() => SemType::Numeric(n),
+            other => {
+                return Err(format!(
+                    "codegen: range bounds must be integral numeric, got {other}"
+                ))
+            }
+        };
+
+        let cond_bb = self.cx.append_basic_block(fv, "forin_r_cond");
+        let body_bb = self.cx.append_basic_block(fv, "forin_r_body");
+        let inc_bb = self.cx.append_basic_block(fv, "forin_r_inc");
+        let exit_bb = self.cx.append_basic_block(fv, "forin_r_exit");
+
+        // Evaluate bounds once, before the loop.
+        let elem_num = match &elem_ty {
+            SemType::Numeric(n) => *n,
+            _ => unreachable!("range bounds numeric only"),
+        };
+        let start_v = self.lower_expr(sc, start, Some(elem_num))?;
+        let end_v = self.lower_expr(sc, end, Some(elem_num))?;
+
+        let cur_pos = self.builder.get_insert_block().unwrap();
+        self.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(to_err)?;
+
+        // ── Condition: i < end (i <= end when closed) ───────────────
+        self.builder.position_at_end(cond_bb);
+        let i_phi = self
+            .builder
+            .build_phi(self.cx.i64_type(), "forin_r_i")
+            .map_err(to_err)?;
+        // Start value, widened to the phi's i64 domain.
+        let start_val = Val {
+            v: start_v.v,
+            ty: elem_ty.clone(),
+        };
+        let start_i = self
+            .cast_val(
+                start_val,
+                &SemType::Numeric(NumericType::Int(IntWidth::B64.into())),
+            )?
+            .v
+            .into_int_value();
+        i_phi.add_incoming(&[(&start_i, cur_pos)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let end_val = Val {
+            v: end_v.v,
+            ty: elem_ty.clone(),
+        };
+        let end_i = self
+            .cast_val(
+                end_val,
+                &SemType::Numeric(NumericType::Int(IntWidth::B64.into())),
+            )?
+            .v
+            .into_int_value();
+        let bound_cmp = if closed {
+            IntPredicate::SLE
+        } else {
+            IntPredicate::SLT
+        };
+        let cmp = self
+            .builder
+            .build_int_compare(bound_cmp, i_val, end_i, "forin_r_cmp")
+            .map_err(to_err)?;
+        self.builder
+            .build_conditional_branch(cmp, body_bb, exit_bb)
+            .map_err(to_err)?;
+
+        // ── Body: loop var is the current counter ──────────────────
+        self.builder.position_at_end(body_bb);
+        let ll = self.llvm_type(&elem_ty)?;
+        let ptr = self.builder.build_alloca(ll, &name.0).map_err(to_err)?;
+        let loop_val = self.cast_val(
+            Val {
+                v: i_val.into(),
+                ty: SemType::Numeric(NumericType::Int(IntWidth::B64.into())),
+            },
+            &elem_ty,
+        )?;
+        self.builder.build_store(ptr, loop_val.v).map_err(to_err)?;
+        sc.vars.insert(name.0.clone(), (ptr, elem_ty.clone()));
+
+        self.loops.push((inc_bb, exit_bb));
+        let (terminated, _) = self.lower_block_with_tail(sc, body, false)?;
+        if !terminated {
+            self.builder
+                .build_unconditional_branch(inc_bb)
+                .map_err(to_err)?;
+        }
+        self.loops.pop();
+
+        // ── Increment ──────────────────────────────────────────────
+        self.builder.position_at_end(inc_bb);
+        let inc = self
+            .builder
+            .build_int_add(i_val, self.cx.i64_type().const_int(1, false), "forin_r_inc")
+            .map_err(to_err)?;
+        self.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(to_err)?;
+        i_phi.add_incoming(&[(&inc, inc_bb)]);
+
+        self.builder.position_at_end(exit_bb);
+        Ok(self.zero_val())
     }
 
     /// A zero/undef value for a block with no tail expression.

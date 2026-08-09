@@ -236,3 +236,41 @@ Int main() {
     assert!(ir.contains("while_body"), "expected body block: {ir}");
     assert!(ir.contains("while_exit"), "expected exit block: {ir}");
 }
+
+#[test]
+fn test_range_for_in() {
+    let src = r#"
+Int main() {
+    for (Int i in 0..3) {
+        println(IntToString(i));
+    }
+    for (Int j in 0..=2) {
+        println(IntToString(j));
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("range.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "rangetest");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("forin_r_cond"),
+        "expected range cond block: {ir}"
+    );
+    assert!(
+        ir.contains("forin_r_body"),
+        "expected range body block: {ir}"
+    );
+    assert!(ir.contains("slt"), "expected signed < compare: {ir}");
+    assert!(ir.contains("sle"), "expected signed <= compare: {ir}");
+    assert!(
+        ir.contains("add i64 %forin_r_i, 1"),
+        "expected i64 loop increment: {ir}"
+    );
+}

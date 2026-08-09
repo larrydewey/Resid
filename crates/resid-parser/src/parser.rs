@@ -471,6 +471,19 @@ impl Parser {
 
                     let rhs = self.parse_expression_with_precedence(rhs_precedence);
 
+                    // Ranges desugar to `Range` expressions, not binary ops.
+                    if op == Op::DotDot || op == Op::DotDotEq {
+                        left = Expr {
+                            kind: ExprKind::Range {
+                                start: Box::new(left),
+                                end: Box::new(rhs),
+                                closed: op == Op::DotDotEq,
+                            },
+                            span: op_span,
+                        };
+                        continue;
+                    }
+
                     left = Expr {
                         kind: ExprKind::BinaryOp {
                             op,
@@ -2224,5 +2237,70 @@ Int main() {
 "#;
         let (_, errors) = Parser::parse("test.resid", src);
         assert!(errors.is_empty(), "Errors: {:?}", errors);
+    }
+
+    #[test]
+    fn test_range_desugars_to_range_expr() {
+        // `a..b` and `a..=b` must become ExprKind::Range, not a binary DotDot.
+        let src = "Int main() {\n    1..3;\n    1..=3\n}\n";
+        let (unit, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+
+        let decl = &unit.declarations[0];
+        let body = match decl {
+            crate::Declaration::Function(f) => &f.body.statements,
+            other => panic!("expected function, got {other:?}"),
+        };
+        let kinds: Vec<&ExprKind> = body
+            .iter()
+            .filter_map(|s| match &s.kind {
+                crate::StmtKind::Expr(e) => Some(&e.kind),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kinds.len(), 2);
+        let closeds: Vec<bool> = kinds
+            .iter()
+            .map(|k| match k {
+                ExprKind::Range { closed, .. } => *closed,
+                other => panic!("expected ExprKind::Range, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(closeds, vec![false, true]);
+    }
+
+    #[test]
+    fn test_range_closed_and_open() {
+        let src = r#"
+Int main() {
+    for (Int i in 0..3) {
+        i;
+    }
+    for (Int j in 0..=2) {
+        j;
+    }
+}
+"#;
+        let (unit, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let decl = &unit.declarations[0];
+        let body = match decl {
+            Declaration::Function(f) => &f.body.statements,
+            _ => panic!("expected function"),
+        };
+        let ranges: Vec<bool> = body
+            .iter()
+            .filter_map(|s| match &s.kind {
+                crate::StmtKind::Expr(e) => match &e.kind {
+                    ExprKind::ForIn { collection, .. } => match &collection.kind {
+                        ExprKind::Range { closed, .. } => Some(*closed),
+                        other => panic!("expected Range collection, got {other:?}"),
+                    },
+                    other => panic!("expected ForIn, got {other:?}"),
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ranges, vec![false, true]);
     }
 }

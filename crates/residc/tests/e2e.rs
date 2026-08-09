@@ -369,3 +369,52 @@ fn run_value_formatting() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Iterating a numeric range: `0..3` half-open, `0..=2` inclusive, and a
+/// nonzero start.
+#[test]
+fn run_range_for_in() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-range-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("range.res");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    for (Int i in 0..3) {
+        println(IntToString(i));
+    }
+    for (Int j in 0..=2) {
+        println(IntToString(j));
+    }
+    for (Int k in 2..5) {
+        println(IntToString(k));
+    }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec!["0", "1", "2", "0", "1", "2", "2", "3", "4"],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
