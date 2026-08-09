@@ -266,6 +266,7 @@ pub fn kind_tag(kind: &ExprKind) -> &'static str {
         ExprKind::Slice { .. } => "slice",
         ExprKind::Spawn { .. } => "spawn",
         ExprKind::ProviderCall { .. } => "provider call",
+        ExprKind::ComptimePrint(_) => "comptime_print",
         _ => "expression",
     }
 }
@@ -677,6 +678,10 @@ pub fn infer_expr_ctx(
         ExprKind::AtResidual { inner, .. } => infer_expr_ctx(inner, env, sigs, types),
         ExprKind::RawString(_) | ExprKind::FString(_) => Ok(SemType::Str),
         ExprKind::Discard(inner) => infer_expr_ctx(inner, env, sigs, types),
+        ExprKind::ComptimePrint(inner) => {
+            // Compile-time debug print of a statically-known value.
+            infer_expr_ctx(inner, env, sigs, types)
+        }
 
 ExprKind::While { cond, body } => {
             match infer_expr_ctx(cond, env, sigs, types)? {
@@ -1655,6 +1660,16 @@ mod tests {
     fn infer_rt_expr() {
         let e = Expr {
             kind: ExprKind::Rt(Box::new(expr_int(42))),
+            span: span(),
+        };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+    }
+
+    #[test]
+    fn infer_comptime_print() {
+        let e = Expr {
+            kind: ExprKind::ComptimePrint(Box::new(expr_int(42))),
             span: span(),
         };
         let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
