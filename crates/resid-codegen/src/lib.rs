@@ -1736,6 +1736,11 @@ impl<'ctx> CodeGen<'ctx> {
         }
         // Numeric widening / truncation (ints and floats).
         if let (SemType::Numeric(src), SemType::Numeric(dst)) = (&raw.ty, target) {
+            // If the source is float and the target is integer (or vice versa),
+            // do NOT widen — the conversion helper expects the original type.
+            if src.is_float() != dst.is_float() && src.is_integer() != dst.is_integer() {
+                return Ok(raw);
+            }
             let dst_bits = dst.target_width().unwrap_or(64);
             if src.is_float() {
                 let ft = self.float_type(dst_bits)?;
