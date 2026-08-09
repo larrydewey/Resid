@@ -227,6 +227,66 @@ fn run_at_residual_binding() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `assert`/`rt_assert` pass through when conditions hold; `known`/`rt_known`
+/// type-check and lower. A failing assert aborts with the message.
+#[test]
+fn run_assertions_and_todo() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-ast-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("asserts.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    assert(1 < 2, "one is less than two");
+    rt_assert(2 == 2, "two equals two");
+    Int x = 42;
+    known(x);
+    rt_known(x);
+    println("asserted ok");
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout.trim(), "asserted ok", "unexpected output: {stdout:?}");
+
+    // A failing assert must abort with the message on stderr.
+    let fail = dir.join("fail.resid");
+    std::fs::write(
+        &fail,
+        "Int main() {\n    assert(1 > 2, \"boom\");\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let out2 = Command::new(residc_bin())
+        .arg(&fail)
+        .arg("run")
+        .output()
+        .unwrap();
+    assert_ne!(out2.status.code(), Some(0), "failing assert must not exit 0");
+    let stderr = String::from_utf8_lossy(&out2.stderr).into_owned();
+    assert!(
+        stderr.contains("boom"),
+        "failing assert should print message, stderr: {stderr:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// All value formatting helpers: Int/UInt/Float/Bool → Str and composites.
 #[test]
 fn run_value_formatting() {

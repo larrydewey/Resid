@@ -682,6 +682,48 @@ pub fn infer_expr_ctx(
             // Compile-time debug print of a statically-known value.
             infer_expr_ctx(inner, env, sigs, types)
         }
+        ExprKind::Assert { cond, message } => {
+            match infer_expr_ctx(cond, env, sigs, types)? {
+                SemType::Bool => {}
+                other => {
+                    return Err(err(
+                        &cond.span,
+                        format!("assert condition must be Bool, found {other}"),
+                    ));
+                }
+            }
+            let mt = infer_expr_ctx(message, env, sigs, types)?;
+            if mt != SemType::Str {
+                return Err(err(
+                    &message.span,
+                    format!("assert message must be Str, found {mt}"),
+                ));
+            }
+            Ok(SemType::Bool)
+        }
+        ExprKind::RtAssert { cond, message } => {
+            match infer_expr_ctx(cond, env, sigs, types)? {
+                SemType::Bool => {}
+                other => {
+                    return Err(err(
+                        &cond.span,
+                        format!("rt_assert condition must be Bool, found {other}"),
+                    ));
+                }
+            }
+            let mt = infer_expr_ctx(message, env, sigs, types)?;
+            if mt != SemType::Str {
+                return Err(err(
+                    &message.span,
+                    format!("rt_assert message must be Str, found {mt}"),
+                ));
+            }
+            Ok(SemType::Bool)
+        }
+        ExprKind::Known(inner) | ExprKind::RtKnown(inner) => {
+            infer_expr_ctx(inner, env, sigs, types)
+        }
+        ExprKind::Todo(_) | ExprKind::Unimplemented(_) => Ok(SemType::Bool),
 
 ExprKind::While { cond, body } => {
             match infer_expr_ctx(cond, env, sigs, types)? {
@@ -1674,6 +1716,51 @@ mod tests {
         };
         let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
         assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+    }
+
+    #[test]
+    fn infer_assert_ok() {
+        let e = Expr {
+            kind: ExprKind::Assert {
+                cond: Box::new(Expr {
+                    kind: ExprKind::Literal(Literal::Bool(true)),
+                    span: span(),
+                }),
+                message: Box::new(Expr {
+                    kind: ExprKind::RawString("boom".into()),
+                    span: span(),
+                }),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_assert_rejects_non_bool_cond() {
+        let e = Expr {
+            kind: ExprKind::Assert {
+                cond: Box::new(expr_int(42)),
+                message: Box::new(Expr {
+                    kind: ExprKind::RawString("boom".into()),
+                    span: span(),
+                }),
+            },
+            span: span(),
+        };
+        let r = infer_expr(&e, &Env::new(), &Signatures::new());
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn infer_todo_ok() {
+        let e = Expr {
+            kind: ExprKind::Todo("finish".into()),
+            span: span(),
+        };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
     }
 
     #[test]

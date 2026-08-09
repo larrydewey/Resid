@@ -28,6 +28,16 @@ bool println(const char* s) {
     return true;
 }
 
+/* Abort with a message: `todo(...)`/`unimplemented(...)` trap here. */
+_Noreturn void resid_abort(const char* msg) {
+    if (msg && msg[0]) {
+        fprintf(stderr, "resid: abort: %s\n", msg);
+    } else {
+        fprintf(stderr, "resid: abort\n");
+    }
+    abort();
+}
+
 static char* resid_box_str(const char* s) {
     size_t n = strlen(s);
     char* p = (char*)malloc(n + 1);
