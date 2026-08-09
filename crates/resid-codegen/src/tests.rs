@@ -274,3 +274,35 @@ Int main() {
         "expected i64 loop increment: {ir}"
     );
 }
+
+#[test]
+fn test_if_let_tag_check() {
+    let src = r#"
+Int main() {
+    Option(Int) mx = Some(7);
+    if (Some(n) = mx) {
+        println(IntToString(n));
+    } else {
+        println("none");
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("iflet.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "iflettest");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("iflet_then"), "expected then block: {ir}");
+    assert!(ir.contains("iflet_else"), "expected else block: {ir}");
+    assert!(ir.contains("iflet_merge"), "expected merge block: {ir}");
+    assert!(ir.contains("iflet_tag"), "expected tag comparison: {ir}");
+    assert!(
+        ir.contains("@resid_box_tag"),
+        "expected tag runtime call: {ir}"
+    );
+}
