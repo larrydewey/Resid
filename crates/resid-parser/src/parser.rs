@@ -1524,6 +1524,31 @@ impl Parser {
                 }
             }
 
+            // @residual Type name = expr  (spec §9: residual binding)
+            Some(TokenKind::AtResidual) => {
+                self.bump();
+                let type_ = self.parse_type();
+                let name = self
+                    .expect_ident("@residual: expected binding name")
+                    .unwrap_or_else(|| Id("__error__".to_string()));
+                self.expect_op(Op::Equals, "@residual: expected =");
+                let value = self.parse_expression();
+                Stmt {
+                    kind: StmtKind::Bind {
+                        type_: Some(type_.clone()),
+                        name,
+                        value: Box::new(Expr {
+                            kind: ExprKind::AtResidual {
+                                type_,
+                                inner: Box::new(value),
+                            },
+                            span: self.current_span(),
+                        }),
+                    },
+                    span,
+                }
+            }
+
             // Destructuring: Pattern = expression
             Some(TokenKind::Ident(_)) => {
                 if !self.looks_like_binding() {
@@ -2084,6 +2109,29 @@ Int main() {
 "#;
         let (_, errors) = Parser::parse("test.resid", src);
         assert!(errors.is_empty(), "Errors: {:?}", errors);
+    }
+
+    #[test]
+    fn test_residual_binding() {
+        let src = r#"
+Int main() {
+    @residual Int x = 42;
+}
+"#;
+        let (unit, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let func = match &unit.declarations[0] {
+            Declaration::Function(f) => f,
+            _ => panic!("expected a function"),
+        };
+        let stmt = &func.body.statements[0];
+        match &stmt.kind {
+            StmtKind::Bind { name, value, .. } => {
+                assert_eq!(name.0, "x");
+                assert!(matches!(value.kind, ExprKind::AtResidual { .. }));
+            }
+            other => panic!("expected a binding, got {other:?}"),
+        }
     }
 
     #[test]
