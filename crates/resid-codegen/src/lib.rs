@@ -537,6 +537,52 @@ impl<'ctx> CodeGen<'ctx> {
         })
     }
 
+    /// Lower an `assert`/`rt_assert`: evaluate the condition, abort with the
+    /// message when false.
+    fn lower_assert(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        cond: &Expr,
+        message: &Expr,
+    ) -> Result<Val<'ctx>, String> {
+        let fv = self
+            .cur_fn
+            .ok_or_else(|| "codegen: assert outside a function".to_string())?;
+
+        let ok_bb = self.cx.append_basic_block(fv, "assert_ok");
+        let fail_bb = self.cx.append_basic_block(fv, "assert_fail");
+
+        let c = self.lower_expr(sc, cond, None)?;
+        let cb = self.cast_val(c, &SemType::Bool)?.v.into_int_value();
+        self.builder
+            .build_conditional_branch(cb, ok_bb, fail_bb)
+            .map_err(to_err)?;
+
+        // Fail: print the message via resid_abort and (unreachably) continue.
+        self.builder.position_at_end(fail_bb);
+        let msg = self.lower_expr(sc, message, None)?;
+        let msg_str = match &msg.ty {
+            SemType::Str => msg.v.into_pointer_value(),
+            _ => {
+                return Err(format!(
+                    "codegen: assert message must be Str, got {}",
+                    msg.ty
+                ))
+            }
+        };
+        let abort = self
+            .module
+            .get_function("resid_abort")
+            .ok_or("codegen: missing resid_abort decl")?;
+        let meta = vec![msg_str.into()];
+        self.builder.build_call(abort, &meta, "assert_fail").map_err(to_err)?;
+        self.builder.build_unreachable().map_err(to_err)?;
+
+        // Ok: continue with a unit value.
+        self.builder.position_at_end(ok_bb);
+        Ok(self.zero_val())
+    }
+
     fn lower_for_in(
         &mut self,
         sc: &mut Scope<'ctx>,
@@ -759,6 +805,17 @@ impl<'ctx> CodeGen<'ctx> {
             }
 
             ExprKind::Discard(inner) => self.lower_expr(sc, inner, target),
+
+            ExprKind::Assert { cond, message } => self.lower_assert(sc, cond, message),
+
+            ExprKind::RtAssert { cond, message } => self.lower_assert(sc, cond, message),
+
+            ExprKind::Known(inner) | ExprKind::RtKnown(inner) => {
+                self.lower_expr(sc, inner, target)
+            }
+
+            ExprKind::Todo(msg) => self.lower_abort(&format!("todo: {msg}")),
+            ExprKind::Unimplemented(msg) => self.lower_abort(&format!("unimplemented: {msg}")),
 
             ExprKind::ComptimePrint(inner) => {
                 let v = self.lower_expr(sc, inner, target)?;
@@ -1303,6 +1360,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_unbox_f64", vec![ptr.into()], f64t.into());
         self.decl_rt("resid_unbox_bool", vec![ptr.into()], i8t.into());
         self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
+        self.decl_rt_void("resid_abort", vec![ptr.into()]);
     }
 
     fn decl_rt(
@@ -1317,6 +1375,28 @@ impl<'ctx> CodeGen<'ctx> {
         let meta: Vec<BasicMetadataTypeEnum<'ctx>> = params.iter().map(|t| (*t).into()).collect();
         let ft = make_fn_type(ret, &meta);
         self.module.add_function(name, ft, None);
+    }
+
+    /// Declare a void-returning runtime helper (`void f(…)`).
+    fn decl_rt_void(&mut self, name: &str, params: Vec<BasicTypeEnum<'ctx>>) {
+        if self.module.get_function(name).is_some() {
+            return;
+        }
+        let meta: Vec<BasicMetadataTypeEnum<'ctx>> = params.iter().map(|t| (*t).into()).collect();
+        let ft = self.cx.void_type().fn_type(&meta, false);
+        self.module.add_function(name, ft, None);
+    }
+
+    /// Emit `resid_abort(msg)` for the given string value.
+    fn lower_abort(&mut self, msg: &str) -> Result<Val<'ctx>, String> {
+        let ptr = self.lower_str(msg);
+        let f = self
+            .module
+            .get_function("resid_abort")
+            .ok_or("codegen: missing resid_abort decl")?;
+        let meta = vec![ptr.into()];
+        self.builder.build_call(f, &meta, "abort").map_err(to_err)?;
+        Ok(self.zero_val())
     }
 
     fn lower_call(
