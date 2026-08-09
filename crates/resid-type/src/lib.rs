@@ -259,6 +259,8 @@ pub fn kind_tag(kind: &ExprKind) -> &'static str {
         ExprKind::ForIn { .. } => "for-in",
         ExprKind::For { .. } => "for",
         ExprKind::Match { .. } => "match",
+        ExprKind::IfLet { .. } => "if-let",
+        ExprKind::WhileLet { .. } => "while-let",
         ExprKind::Range { .. } => "range",
         ExprKind::StructLit { .. } => "struct literal",
         ExprKind::ListLit(_) => "list literal",
@@ -751,6 +753,51 @@ ExprKind::While { cond, body } => {
             }
             let mut errs = Vec::new();
             type_check_block(body, env, sigs, types, &mut errs);
+            if let Some(e) = errs.into_iter().next() {
+                return Err(e);
+            }
+            Ok(SemType::Bool)
+        }
+
+        ExprKind::IfLet {
+            pattern,
+            source,
+            then_block,
+            else_block,
+        } => {
+            let st = infer_expr_ctx(source, env, sigs, types)?;
+            // The pattern must be applicable to the source type; bindings live
+            // inside the then-branch only.
+            let mut then_env = env.clone();
+            bind_pattern(pattern, &st, &mut then_env, types, sigs)?;
+            let mut errs = Vec::new();
+            type_check_block(then_block, &then_env, sigs, types, &mut errs);
+            if let Some(e) = errs.into_iter().next() {
+                return Err(e);
+            }
+            match else_block {
+                Some(b) => {
+                    let mut errs = Vec::new();
+                    type_check_block(b, env, sigs, types, &mut errs);
+                    if let Some(e) = errs.into_iter().next() {
+                        return Err(e);
+                    }
+                    Ok(SemType::Bool)
+                }
+                None => Ok(SemType::Bool),
+            }
+        }
+
+        ExprKind::WhileLet {
+            pattern,
+            source,
+            body,
+        } => {
+            let st = infer_expr_ctx(source, env, sigs, types)?;
+            let mut body_env = env.clone();
+            bind_pattern(pattern, &st, &mut body_env, types, sigs)?;
+            let mut errs = Vec::new();
+            type_check_block(body, &body_env, sigs, types, &mut errs);
             if let Some(e) = errs.into_iter().next() {
                 return Err(e);
             }
@@ -1404,7 +1451,9 @@ fn is_refutable_pattern(pat: &Pattern) -> bool {
 mod tests {
     use super::*;
     use resid_lexer::token::{FloatLit, IntKind, Literal, Op as OpKind, Span};
-    use resid_parser::{Block, Expr, ExprKind, Id, Type};
+    use resid_parser::{
+        Block, Expr, ExprKind, Id, Pattern, PatternKind, Stmt, StmtKind, Type,
+    };
 
     fn span() -> Span {
         Span {
@@ -1863,6 +1912,83 @@ mod tests {
             span: span(),
         };
         let r = infer_expr(&e, &Env::new(), &Signatures::new());
+        assert!(r.is_err());
+    }
+
+#[test]
+    fn infer_if_let_binds_pattern_vars() {
+        // `if (Some(n) = mx) { n; }` — n must be in the body.
+        let then_block = Block {
+            statements: vec![Stmt {
+                kind: StmtKind::Expr(Box::new(expr_id("n"))),
+                span: span(),
+            }],
+            ret: None,
+            span: span(),
+        };
+        let e = Expr {
+            kind: ExprKind::IfLet {
+                pattern: Pattern {
+                    kind: PatternKind::Variant {
+                        name: Id("Some".into()),
+                        param: Some(Id("n".into())),
+                    },
+                    span: span(),
+                },
+                source: Box::new(expr_id("mx")),
+                then_block: Box::new(then_block),
+                else_block: None,
+            },
+            span: span(),
+        };
+        // mx : Option(Int)
+        let mut env = Env::new();
+        env.insert(
+            "mx",
+            SemType::Sum {
+                name: "Option".into(),
+                variants: vec![
+                    ("None".into(), None),
+                    (
+                        "Some".into(),
+                        Some(SemType::Numeric(NumericType::Int(IntWidth::B64))),
+                    ),
+                ],
+            },
+        );
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_if_let_rejects_unknown_variant() {
+        // `if (Some(n) = mx)` where mx is Int → bind_pattern must fail.
+        let o_block = Block {
+            statements: vec![],
+            ret: None,
+            span: span(),
+        };
+        let e = Expr {
+            kind: ExprKind::IfLet {
+                pattern: Pattern {
+                    kind: PatternKind::Variant {
+                        name: Id("Some".into()),
+                        param: Some(Id("n".into())),
+                    },
+                    span: span(),
+                },
+                source: Box::new(expr_id("mx")),
+                then_block: Box::new(o_block),
+                else_block: None,
+            },
+            span: span(),
+        };
+        let mut env = Env::new();
+        env.insert(
+            "mx",
+            SemType::Numeric(NumericType::Int(IntWidth::B64)),
+        );
+        let r = infer_expr(&e, &env, &Signatures::new());
         assert!(r.is_err());
     }
 

@@ -1279,6 +1279,10 @@ impl Parser {
     }
 
     fn parse_if_expr(&mut self, span: Span) -> Expr {
+        // if-let: `if (Pattern = expr) { ... }`
+        if self.peek_is_op(Op::LParen) && self.paren_let_assignment() {
+            return self.parse_if_let_expr(span);
+        }
         let cond = self.parse_paren_expr();
 
         let then_block = if self.peek_is_op(Op::LBrace) {
@@ -1328,6 +1332,10 @@ impl Parser {
     }
 
     fn parse_while_expr(&mut self, span: Span) -> Expr {
+        // while-let: `while (Pattern = expr) { ... }`
+        if self.peek_is_op(Op::LParen) && self.paren_let_assignment() {
+            return self.parse_while_let_expr(span);
+        }
         let cond = self.parse_paren_expr();
         let body = if self.peek_is_op(Op::LBrace) {
             self.parse_block()
@@ -1346,6 +1354,118 @@ impl Parser {
         Expr {
             kind: ExprKind::While {
                 cond: Box::new(cond),
+                body: Box::new(body),
+            },
+            span,
+        }
+    }
+
+    /// Look ahead from the current `(` to see whether the parenthesized
+    /// condition is a pattern binding `PAT = expr` (if-let / while-let) rather
+    /// than an ordinary Boolean condition. Scans to the matching close paren,
+    /// skipping nested groups, tracking a single `=` at depth 0.
+    fn paren_let_assignment(&self) -> bool {
+        if !self.peek_is_op(Op::LParen) {
+            return false;
+        }
+        let mut depth = 0usize;
+        for tok in self.tokens.iter().skip(self.pos) {
+            match &tok.kind {
+                TokenKind::Op(Op::LParen) => depth += 1,
+                TokenKind::Op(Op::RParen) => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                    if depth == 0 {
+                        // Reached the matching close paren without a binding `=`.
+                        return false;
+                    }
+                }
+                TokenKind::Op(Op::Equals) if depth == 1 => return true,
+                TokenKind::Op(Op::Semi) if depth == 1 => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn parse_if_let_expr(&mut self, span: Span) -> Expr {
+        self.expect_op(Op::LParen, "if-let: expected (");
+        let pattern = self.parse_pattern();
+        self.expect_op(Op::Equals, "if-let: expected =");
+        let source = self.parse_expression();
+        self.expect_op(Op::RParen, "if-let: expected )");
+
+        let then_block = if self.peek_is_op(Op::LBrace) {
+            self.parse_block()
+        } else {
+            let expr = self.parse_expression();
+            Block {
+                statements: vec![Stmt {
+                    kind: StmtKind::Expr(Box::new(expr)),
+                    span: self.current_span(),
+                }],
+                ret: None,
+                span: self.current_span(),
+            }
+        };
+
+        let else_block = if self.peek_is_keyword(Keyword::Else) {
+            self.bump();
+            if self.peek_is_op(Op::LBrace) {
+                Some(Box::new(self.parse_block()))
+            } else {
+                let expr = self.parse_expression();
+                Some(Box::new(Block {
+                    statements: vec![Stmt {
+                        kind: StmtKind::Expr(Box::new(expr)),
+                        span: self.current_span(),
+                    }],
+                    ret: None,
+                    span: self.current_span(),
+                }))
+            }
+        } else {
+            None
+        };
+
+        Expr {
+            kind: ExprKind::IfLet {
+                pattern,
+                source: Box::new(source),
+                then_block: Box::new(then_block),
+                else_block,
+            },
+            span,
+        }
+    }
+
+    fn parse_while_let_expr(&mut self, span: Span) -> Expr {
+        self.expect_op(Op::LParen, "while-let: expected (");
+        let pattern = self.parse_pattern();
+        self.expect_op(Op::Equals, "while-let: expected =");
+        let source = self.parse_expression();
+        self.expect_op(Op::RParen, "while-let: expected )");
+
+        let body = if self.peek_is_op(Op::LBrace) {
+            self.parse_block()
+        } else {
+            let expr = self.parse_expression();
+            Block {
+                statements: vec![Stmt {
+                    kind: StmtKind::Expr(Box::new(expr)),
+                    span: self.current_span(),
+                }],
+                ret: None,
+                span: self.current_span(),
+            }
+        };
+
+        Expr {
+            kind: ExprKind::WhileLet {
+                pattern,
+                source: Box::new(source),
                 body: Box::new(body),
             },
             span,
@@ -2302,5 +2422,50 @@ Int main() {
             })
             .collect();
         assert_eq!(ranges, vec![false, true]);
+    }
+
+    #[test]
+    fn test_if_let_parses_as_if_let() {
+        let src = r#"
+Int main() {
+    if (Some(x) = opt) {
+        x;
+    } else {
+        println("none");
+    }
+    while (Some(y) = it) {
+        y;
+    }
+    return 0;
+}
+type Opt(T) = Some(T) | None;
+"#;
+        let (unit, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let decl = &unit.declarations[0];
+        let body = match decl {
+            Declaration::Function(f) => &f.body.statements,
+            _ => panic!("expected function"),
+        };
+        let kinds: Vec<&ExprKind> = body
+            .iter()
+            .filter_map(|s| match &s.kind {
+                crate::StmtKind::Expr(e) => Some(&e.kind),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kinds.len(), 2);
+        assert!(
+            matches!(kinds[0], ExprKind::IfLet { pattern, source, .. }
+                if matches!(pattern.kind, PatternKind::Variant { ref name, .. } if name.0 == "Some")
+                    && matches!(source.kind, ExprKind::Id(ref id) if id.0 == "opt")),
+            "first stmt not if-let: {:?}",
+            kinds[0]
+        );
+        assert!(
+            matches!(kinds[1], ExprKind::WhileLet { .. }),
+            "second stmt not while-let: {:?}",
+            kinds[1]
+        );
     }
 }

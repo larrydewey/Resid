@@ -543,6 +543,132 @@ impl<'ctx> CodeGen<'ctx> {
         })
     }
 
+    /// The Boolean test for whether `obj` (of type `ty`) matches `pattern`.
+    /// Tagged (variant / unit-variant) patterns compare the runtime tag; all
+    /// other patterns are irrefutable and always match.
+    fn pattern_match_test(
+        &mut self,
+        pattern: &resid_parser::Pattern,
+        obj: BasicValueEnum<'ctx>,
+        ty: &SemType,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let idx = match &pattern.kind {
+            resid_parser::PatternKind::Variant { name, .. } => ty.variant_index(&name.0),
+            resid_parser::PatternKind::Bind(id) if ty.unit_variant_index(&id.0).is_some() => {
+                ty.variant_index(&id.0)
+            }
+            _ => None,
+        };
+        match idx {
+            Some(i) => {
+                let tag = self.rt_call("resid_box_tag", vec![obj])?;
+                let tag = tag.into_int_value();
+                let target = self.cx.i64_type().const_int(i as u64, false);
+                self.builder
+                    .build_int_compare(IntPredicate::EQ, tag, target, "iflet_tag")
+                    .map_err(to_err)
+            }
+            None => Ok(self.cx.bool_type().const_all_ones()),
+        }
+    }
+
+    /// Lower `if (Pattern = value) { ... } else { ... }`: test whether the
+    /// source matches the pattern; bind the pattern's variables inside the
+    /// then-branch only.
+    fn lower_if_let(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        pattern: &resid_parser::Pattern,
+        source: &Expr,
+        then_block: &Block,
+        else_block: &Option<Box<Block>>,
+    ) -> Result<Val<'ctx>, String> {
+        let fv = self
+            .cur_fn
+            .ok_or_else(|| "codegen: if-let outside a function".to_string())?;
+        let sv = self.lower_expr(sc, source, None)?;
+        let test = self.pattern_match_test(pattern, sv.v, &sv.ty)?;
+
+        let then_bb = self.cx.append_basic_block(fv, "iflet_then");
+        let else_bb = self.cx.append_basic_block(fv, "iflet_else");
+        let merge_bb = self.cx.append_basic_block(fv, "iflet_merge");
+        self.builder
+            .build_conditional_branch(test, then_bb, else_bb)
+            .map_err(to_err)?;
+
+        self.builder.position_at_end(then_bb);
+        self.bind_pattern_vars(sc, pattern, sv.v, &sv.ty)?;
+        let (t_term, _) = self.lower_block_with_tail(sc, then_block, false)?;
+        if !t_term {
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(to_err)?;
+        }
+
+        self.builder.position_at_end(else_bb);
+        match else_block {
+            Some(b) => {
+                let (e_term, _) = self.lower_block_with_tail(sc, b, false)?;
+                if !e_term {
+                    self.builder
+                        .build_unconditional_branch(merge_bb)
+                        .map_err(to_err)?;
+                }
+            }
+            None => {
+                self.builder
+                    .build_unconditional_branch(merge_bb)
+                    .map_err(to_err)?;
+            }
+        }
+
+        self.builder.position_at_end(merge_bb);
+        Ok(self.zero_val())
+    }
+
+    /// Lower `while (Pattern = source) { ... }`: keep matching while the
+    /// source matches the pattern, binding the vars in each iteration.
+    fn lower_while_let(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        pattern: &resid_parser::Pattern,
+        source: &Expr,
+        body: &Block,
+    ) -> Result<Val<'ctx>, String> {
+        let fv = self
+            .cur_fn
+            .ok_or_else(|| "codegen: while-let outside a function".to_string())?;
+
+        let cond_bb = self.cx.append_basic_block(fv, "while_cond");
+        let body_bb = self.cx.append_basic_block(fv, "while_body");
+        let exit_bb = self.cx.append_basic_block(fv, "while_exit");
+
+        self.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(to_err)?;
+
+        self.builder.position_at_end(cond_bb);
+        let sv = self.lower_expr(sc, source, None)?;
+        let test = self.pattern_match_test(pattern, sv.v, &sv.ty)?;
+        self.builder
+            .build_conditional_branch(test, body_bb, exit_bb)
+            .map_err(to_err)?;
+
+        self.builder.position_at_end(body_bb);
+        self.bind_pattern_vars(sc, pattern, sv.v, &sv.ty)?;
+        self.loops.push((cond_bb, exit_bb));
+        let (terminated, _) = self.lower_block_with_tail(sc, body, false)?;
+        self.loops.pop();
+        if !terminated {
+            self.builder
+                .build_unconditional_branch(cond_bb)
+                .map_err(to_err)?;
+        }
+
+        self.builder.position_at_end(exit_bb);
+        Ok(self.zero_val())
+    }
+
     /// Lower an `assert`/`rt_assert`: evaluate the condition, abort with the
     /// message when false.
     fn lower_assert(
@@ -890,6 +1016,19 @@ impl<'ctx> CodeGen<'ctx> {
             } => self.lower_if(sc, cond, then_block, else_block),
 
             ExprKind::While { cond, body } => self.lower_while(sc, cond, body),
+
+            ExprKind::IfLet {
+                pattern,
+                source,
+                then_block,
+                else_block,
+            } => self.lower_if_let(sc, pattern, source, then_block, else_block),
+
+            ExprKind::WhileLet {
+                pattern,
+                source,
+                body,
+            } => self.lower_while_let(sc, pattern, source, body),
 
             ExprKind::ForIn { type_, name, collection, body } => {
                 self.lower_for_in(sc, collection, name, body, type_)

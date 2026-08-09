@@ -418,3 +418,72 @@ fn run_range_for_in() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// if-let / while-let over an `Option`: matching `Some(n)` binds `n` in the
+/// then/body scope; a `None` falls through to else / skips the loop.
+#[test]
+fn run_if_let_and_while_let() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-iflet-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("iflet.res");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Option(Int) a = Some(5);
+    Option(Int) b = None;
+
+    if (Some(v) = a) {
+        println(IntToString(v));
+    } else {
+        println("none");
+    }
+
+    if (Some(v) = b) {
+        println(IntToString(v));
+    } else {
+        println("none");
+    }
+
+    // else-if chain: first arm fails (None), second matches.
+    if (Some(v) = b) {
+        println(IntToString(v));
+    } else if (Some(w) = a) {
+        println(IntToString(w));
+    } else {
+        println("none");
+    }
+
+    while (Some(n) = b) {
+        println(IntToString(n));
+    }
+    println("done");
+
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec!["5", "none", "5", "done"],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
