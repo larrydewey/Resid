@@ -834,7 +834,16 @@ pub fn infer_expr_ctx(
 
         ExprKind::Rt(inner) => infer_expr_ctx(inner, env, sigs, types),
         ExprKind::AtResidual { inner, .. } => infer_expr_ctx(inner, env, sigs, types),
-        ExprKind::RawString(_) | ExprKind::FString(_) => Ok(SemType::Str),
+        ExprKind::RawString(_) => Ok(SemType::Str),
+        ExprKind::FString(parts) => {
+            // Validate each interpolated expression; f-strings are Str.
+            for p in parts {
+                if let resid_parser::FStringPart::Expr(e) = p {
+                    infer_expr_ctx(e, env, sigs, types)?;
+                }
+            }
+            Ok(SemType::Str)
+        }
         ExprKind::ByteString(_) => Ok(SemType::Bytes),
         ExprKind::Location => Ok(SemType::SourceLoc),
         ExprKind::Discard(inner) => infer_expr_ctx(inner, env, sigs, types),
@@ -2670,5 +2679,37 @@ Int main() {
         };
         let result = infer_expr(&e, &Env::new(), &Signatures::new());
         assert!(result.is_err(), "expected error slicing non-list");
+    }
+
+    #[test]
+    fn check_fstring_interpolation_valid() {
+        let src = r#"
+Int main() {
+    Str name = "resid";
+    Int n = 7;
+    println(f"hello {name} n={n}");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected no type errors for f-string interpolation, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_fstring_undefined_var_rejected() {
+        let src = r#"
+Int main() {
+    println(f"hello {nope}");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected undefined var in f-string to error");
     }
 }

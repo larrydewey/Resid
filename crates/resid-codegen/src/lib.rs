@@ -1256,16 +1256,53 @@ impl<'ctx> CodeGen<'ctx> {
             ExprKind::Location => self.lower_source_loc(&e.span),
 
             ExprKind::FString(parts) => {
-                let mut out = String::new();
-                for part in parts {
-                    match part {
-                        resid_parser::FStringPart::Text(t) => out.push_str(t),
-                        resid_parser::FStringPart::Expr(_) => {
-                            return Err("codegen: f-string interpolation not yet supported".into());
-                        }
+                // Fold pure-text f-strings to a single constant.
+                let mut all_text = true;
+                for p in parts {
+                    if let resid_parser::FStringPart::Expr(_) = p {
+                        all_text = false;
+                        break;
                     }
                 }
-                let ptr = self.lower_str(&out);
+                if all_text {
+                    let mut out = String::new();
+                    for p in parts {
+                        if let resid_parser::FStringPart::Text(t) = p {
+                            out.push_str(t);
+                        }
+                    }
+                    let ptr = self.lower_str(&out);
+                    return Ok(Val {
+                        v: ptr.into(),
+                        ty: SemType::Str,
+                    });
+                }
+                // Interpolated: eval each part to a string, then concat.
+                let mut acc: Option<PointerValue<'ctx>> = None;
+                for part in parts {
+                    let part_ptr: PointerValue<'ctx> = match part {
+                        resid_parser::FStringPart::Text(t) => self.lower_str(t),
+                        resid_parser::FStringPart::Expr(e) => {
+                            let v = self.lower_expr(sc, e, None)?;
+                            self.value_to_str(v)?
+                        }
+                    };
+                    acc = match acc {
+                        None => Some(part_ptr),
+                        Some(prev) => {
+                            let f = self
+                                .module
+                                .get_function("resid_str_concat")
+                                .ok_or("codegen: resid_str_concat not declared")?;
+                            let cs = self
+                                .builder
+                                .build_call(f, &[prev.into(), part_ptr.into()], "concat")
+                                .map_err(to_err)?;
+                            Some(cs.try_as_basic_value().expect_basic("concat").into_pointer_value())
+                        }
+                    };
+                }
+                let ptr = acc.unwrap_or_else(|| self.lower_str(""));
                 Ok(Val {
                     v: ptr.into(),
                     ty: SemType::Str,
@@ -1459,6 +1496,24 @@ impl<'ctx> CodeGen<'ctx> {
                 let ptr = self.lower_str(&format!("{l}{r}"));
                 return Ok(Val {
                     v: ptr.into(),
+                    ty: SemType::Str,
+                });
+            }
+            // Runtime Str + Str (non-constant operand): concatenate at runtime.
+            let l = self.lower_expr(sc, lhs, None)?;
+            let r = self.lower_expr(sc, rhs, None)?;
+            if l.ty == SemType::Str && r.ty == SemType::Str {
+                let f = self
+                    .module
+                    .get_function("resid_str_concat")
+                    .ok_or("codegen: resid_str_concat not declared")?;
+                let cs = self
+                    .builder
+                    .build_call(f, &[l.v.into(), r.v.into()], "concat")
+                    .map_err(to_err)?;
+                let v = cs.try_as_basic_value().expect_basic("concat");
+                return Ok(Val {
+                    v,
                     ty: SemType::Str,
                 });
             }
@@ -1835,6 +1890,60 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(raw)
     }
 
+    /// Convert an arbitrary lowered value to a string pointer, for f-string
+    /// interpolation. Strings pass through; numerics go through the
+    /// `*ToString` runtime helpers (widened to the widest supported width);
+    /// boxed composites go through `ToString`.
+    fn value_to_str(&mut self, raw: Val<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        match &raw.ty {
+            SemType::Str => Ok(raw.v.into_pointer_value()),
+            SemType::Numeric(n) => {
+                let (name, want): (&str, Numeric) = match n {
+                    NumericType::Int(_) | NumericType::ISize => (
+                        "IntToString",
+                        Numeric::Int(resid_ir::IntWidth::B64),
+                    ),
+                    NumericType::UInt(_) | NumericType::USize => (
+                        "UIntToString",
+                        Numeric::UInt(resid_ir::IntWidth::B64),
+                    ),
+                    NumericType::Float(_) => (
+                        "FloatToString",
+                        Numeric::Float(resid_ir::FloatWidth::F64),
+                    ),
+                };
+                let arg = self.widen(raw, want)?;
+                self.call_to_string(name, arg.into())
+            }
+            SemType::Bool => {
+                let i = raw.v.into_int_value();
+                let b8 = self
+                    .builder
+                    .build_int_z_extend(i, self.cx.i8_type(), "bool_to_i8")
+                    .map_err(to_err)?;
+                self.call_to_string("BoolToString", b8.into())
+            }
+            SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. }
+            | SemType::SourceLoc | SemType::Ptr => self.call_to_string("ToString", raw.v.into()),
+            other => Err(format!("codegen: cannot interpolate value of type {other}")),
+        }
+    }
+
+    /// Call a runtime `*ToString` helper and return the resulting string ptr.
+    fn call_to_string(
+        &self,
+        name: &str,
+        arg: BasicMetadataValueEnum<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let f = self
+            .module
+            .get_function(name)
+            .ok_or_else(|| format!("codegen: `{name}` not declared"))?;
+        let cs = self.builder.build_call(f, &[arg], "call").map_err(to_err)?;
+        let v = cs.try_as_basic_value().expect_basic("to_string");
+        Ok(v.into_pointer_value())
+    }
+
     // ─── Calls ───────────────────────────────────────────────────
 
     /// Declare the bootstrap runtime helpers (boxed composite values + arithmetic).
@@ -1854,6 +1963,8 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_unbox_bool", vec![ptr.into()], i8t.into());
         self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
+        // String concatenation (f-string interpolation, Str + Str).
+        self.decl_rt("resid_str_concat", vec![ptr.into(), ptr.into()], ptr.into());
         // Checked arithmetic (called after overflow check passes).
         self.decl_rt("checked_add", vec![i64t.into(), i64t.into()], i64t.into());
         self.decl_rt("checked_sub", vec![i64t.into(), i64t.into()], i64t.into());

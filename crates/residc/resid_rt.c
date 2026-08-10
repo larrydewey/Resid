@@ -47,6 +47,19 @@ static char* resid_box_str(const char* s) {
 }
 
 /*
+ * Runtime string concatenation: f-string interpolation and `Str + Str`
+ * (spec §32) build string values out of parts that aren't constant-foldable.
+ */
+char* resid_str_concat(const char* a, const char* b) {
+    size_t la = strlen(a);
+    size_t lb = strlen(b);
+    char* p = (char*)malloc(la + lb + 1);
+    memcpy(p, a, la);
+    memcpy(p + la, b, lb + 1);
+    return p;
+}
+
+/*
  * Boxed value objects.
  *
  * Every composite Resid value (list, product struct, sum variant) is a

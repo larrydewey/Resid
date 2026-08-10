@@ -657,3 +657,64 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// F-string interpolation and runtime Str + Str run end-to-end.
+#[test]
+fn run_fstring_interpolation() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-fstr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("fstr.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    Str name = "resid";
+    Int n = 7;
+    Float pi = 3.5;
+    Bool ok = true;
+    println(f"hello {name}");
+    println(f"n={n}");
+    println(f"pi={pi}");
+    println(f"ok={ok}");
+    println(f"both={name}{n}");
+    Str a = "foo";
+    Str c = a + "bar";
+    println(c);
+    println(f"{c}!");
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec![
+            "hello resid",
+            "n=7",
+            "pi=3.5",
+            "ok=true",
+            "both=resid7",
+            "foobar",
+            "foobar!",
+        ],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
