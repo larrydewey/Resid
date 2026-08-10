@@ -1153,7 +1153,10 @@ impl Parser {
 
     fn parse_range_expr(&mut self) -> RangeExpr {
         let start = if !self.peek_is_op(Op::DotDot) && !self.peek_is_op(Op::DotDotEq) {
-            Some(self.parse_expression())
+            // Parse the start bound at a precedence above the range operator
+            // (prec 1) so `xs[1..4]` doesn't greedily consume `1..4` as a
+            // full Range expression.
+            Some(self.parse_expression_with_precedence(2))
         } else {
             None
         };
@@ -1166,7 +1169,7 @@ impl Parser {
         } else {
             false
         };
-        let end = if !self.at_eof() {
+        let end = if !self.peek_is_op(Op::RBracket) && !self.at_eof() {
             Some(self.parse_expression())
         } else {
             None
@@ -2008,7 +2011,7 @@ impl Parser {
             Some(TokenKind::Op(Op::DotDot)) => true,
             // `start..end` or `start..=end` — need to peek past first token
             _ => {
-                if let Some(first) = self.peek() {
+                if self.peek().is_some() {
                     // Skip past the first token (identifier, literal, parenthesized expr, etc.)
                     let mut p = self.pos + 1;
                     while p < self.tokens.len() {
@@ -2452,6 +2455,35 @@ Int main() {
             })
             .collect();
         assert_eq!(ranges, vec![false, true]);
+    }
+
+    #[test]
+    fn test_slice_syntax_parses_as_slice() {
+        // `xs[1..4]`, `xs[..4]`, `xs[1..]`, and `xs[..]` must parse as
+        // ExprKind::Slice (not Index + Range).
+        for src in [
+            "Int main() { List(Int) xs = [1]; Slice(Int) s = xs[1..4]; return 0; }\n",
+            "Int main() { List(Int) xs = [1]; Slice(Int) s = xs[..4]; return 0; }\n",
+            "Int main() { List(Int) xs = [1]; Slice(Int) s = xs[1..]; return 0; }\n",
+            "Int main() { List(Int) xs = [1]; Slice(Int) s = xs[..]; return 0; }\n",
+            "Int main() { List(Int) xs = [1]; Slice(Int) s = xs[0..=3]; return 0; }\n",
+        ] {
+            let (unit, errors) = Parser::parse("slice.resid", src);
+            assert!(errors.is_empty(), "Errors: {errors:?} for {src}");
+            let decl = &unit.declarations[0];
+            let body = match decl {
+                Declaration::Function(f) => &f.body.statements,
+                other => panic!("expected function, got {other:?}"),
+            };
+            let has_slice = body.iter().any(|s| match &s.kind {
+                crate::StmtKind::Expr(e) => matches!(e.kind, ExprKind::Slice { .. }),
+                crate::StmtKind::Bind { value, .. } => {
+                    matches!(value.kind, ExprKind::Slice { .. })
+                }
+                _ => false,
+            });
+            assert!(has_slice, "expected ExprKind::Slice for {src}");
+        }
     }
 
     #[test]

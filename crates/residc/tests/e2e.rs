@@ -555,3 +555,58 @@ fn run_conversion_helpers() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Range construction (`0..5`, `0..=4`) and slice construction (`xs[1..4]`,
+/// partial-open `xs[..4]`, `xs[1..]`, `xs[..]`) lower and run end-to-end.
+#[test]
+fn run_range_and_slice_construction() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-rngslc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("rngslc.res");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    // Range construction.
+    Range(Int) r = 0..5;
+    Range(Int) rc = 0..=4;
+    for (Int i in 0..3) {
+        println(IntToString(i));
+    }
+
+    // Slice construction + indexing back into the list.
+    List(Int) xs = [10, 20, 30, 40, 50];
+    Slice(Int) s = xs[1..4];
+    Slice(Int) po1 = xs[..4];
+    Slice(Int) po2 = xs[1..];
+    Slice(Int) po3 = xs[..];
+    println(IntToString(xs[1]));
+    println(IntToString(xs[3]));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec!["0", "1", "2", "20", "40"],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

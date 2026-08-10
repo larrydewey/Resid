@@ -12,7 +12,7 @@ pub use resid_ir::{
 };
 use resid_lexer::token::{Literal, Op as OpKind, Span};
 use resid_parser::{
-    Block, Declaration, Expr, ExprKind, FuncDef, Id, Pattern, PatternKind, RangeExpr, StmtKind,
+    Block, Declaration, Expr, ExprKind, FuncDef, Id, Pattern, PatternKind, StmtKind,
     SumVariant, TranslationUnit, Type, TypeBody, TypeDef,
 };
 
@@ -1655,7 +1655,7 @@ mod tests {
     use super::*;
     use resid_lexer::token::{FloatLit, IntKind, Literal, Op as OpKind, Span};
     use resid_parser::{
-        Block, Expr, ExprKind, Id, Pattern, PatternKind, Stmt, StmtKind, Type,
+        Block, Expr, ExprKind, Id, Pattern, PatternKind, RangeExpr, Stmt, StmtKind, Type,
     };
 
     fn span() -> Span {

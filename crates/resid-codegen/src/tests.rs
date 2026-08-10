@@ -662,6 +662,82 @@ Int main() {
 }
 
 #[test]
+fn test_slice_lowering() {
+    // A real slice `xs[1..4]` must lower to a resid_slice_new call.
+    let src = r#"
+Int main() {
+    List(Int) xs = [1, 2, 3, 4, 5];
+    Slice(Int) s = xs[1..4];
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("slice_lowering.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "slice_lowering");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("call ptr @resid_slice_new"),
+        "expected slice_new call: {ir}"
+    );
+}
+
+#[test]
+fn test_slice_lowering_partial_open() {
+    // Partial-open slices `xs[..4]`, `xs[1..]`, `xs[..]` all lower to
+    // resid_slice_new with resolved bounds.
+    for (src, needle) in [
+        (
+            r#"
+Int main() {
+    List(Int) xs = [1, 2, 3, 4, 5];
+    Slice(Int) s = xs[..4];
+    return 0;
+}
+"#,
+            &["call ptr @resid_slice_new", "i64 0, i64 4"][..],
+        ),
+        (
+            r#"
+Int main() {
+    List(Int) xs = [1, 2, 3, 4, 5];
+    Slice(Int) s = xs[1..];
+    return 0;
+}
+"#,
+            &["call ptr @resid_slice_new", "i64 1, i64"][..],
+        ),
+        (
+            r#"
+Int main() {
+    List(Int) xs = [1, 2, 3, 4, 5];
+    Slice(Int) s = xs[..];
+    return 0;
+}
+"#,
+            &["call ptr @resid_slice_new", "i64 0, i64"][..],
+        ),
+    ] {
+        let (unit, errors) = Parser::parse("slice_po.resid", src);
+        assert!(errors.is_empty(), "parse errors: {errors:?} for {needle:?}");
+
+        let cx = Context::create();
+        let mut cg = CodeGen::new(&cx, "slice_po");
+        cg.generate(&unit).expect("codegen failed");
+        cg.module.verify().expect("module failed verification");
+
+        let ir = cg.module.print_to_string().to_string();
+        for n in needle {
+            assert!(ir.contains(n), "expected `{n}`: {ir}");
+        }
+    }
+}
+
+#[test]
 fn test_slice_partial_open() {
     let src = r#"
 Int main() {
