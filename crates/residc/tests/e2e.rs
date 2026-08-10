@@ -610,3 +610,50 @@ fn run_range_and_slice_construction() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Raw strings, byte strings, and #location all run to completion.
+#[test]
+fn run_raw_bytes_and_location() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-rbl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("raw_bytes_loc.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    Str raw = r"C:\path\file";
+    println(raw);
+    Bytes b = b"bytes";
+    SourceLoc loc = #location;
+    println(loc.file);
+    println(IntToString(loc.line));
+    println(IntToString(loc.col));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(lines[0], r"C:\path\file", "raw string: {stdout:?}");
+    assert_eq!(lines.len(), 4, "unexpected output: {stdout:?}");
+    assert!(lines[1].ends_with("raw_bytes_loc.resid"), "file: {stdout:?}");
+    assert!(lines[2].parse::<i64>().is_ok(), "line num: {stdout:?}");
+    assert!(lines[3].parse::<i64>().is_ok(), "col num: {stdout:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

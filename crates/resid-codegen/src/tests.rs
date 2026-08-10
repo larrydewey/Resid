@@ -754,3 +754,54 @@ Int main() {
     cg.generate(&unit).expect("codegen failed");
     cg.module.verify().expect("module failed verification");
 }
+
+#[test]
+fn test_byte_string_lowering() {
+    let src = r#"
+Int main() {
+    Bytes b = b"bestil\0bytes";
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("bytes.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "bytes");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    // A byte string lowers to a packed constant global holding the raw bytes.
+    assert!(
+        ir.contains("@bytes = unnamed_addr constant [12 x i8] c\"bestil\\00bytes\""),
+        "expected packed byte constant global: {ir}"
+    );
+}
+
+#[test]
+fn test_location_lowering() {
+    let src = r#"
+Int main() {
+    SourceLoc loc = #location;
+    Str f = loc.file;
+    Int l = loc.line;
+    Int c = loc.col;
+    return l;
+}
+"#;
+    let (unit, errors) = Parser::parse("loc.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "loc");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    // #location boxes a SourceLoc struct via resid_box_* calls.
+    assert!(
+        ir.contains("call ptr @resid_box_"),
+        "expected SourceLoc to be boxed: {ir}"
+    );
+}

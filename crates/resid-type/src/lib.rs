@@ -22,6 +22,8 @@ pub enum SemType {
     Bool,
     Numeric(NumericType),
     Str,
+    /// Raw byte string (`b"..."`), spec §14. A pointer to a byte array.
+    Bytes,
     /// An immutable list of homogeneous elements.
     List(Box<SemType>),
     /// A user-declared product type.
@@ -41,6 +43,9 @@ pub enum SemType {
     Range(Box<SemType>),
     /// A slice view into a List's data (spec §15).
     Slice(Box<SemType>),
+    /// A source location (`#location`), spec §25. Boxed struct with
+    /// `file: Str`, `line: Int`, `col: Int` slots.
+    SourceLoc,
 }
 
 impl core::fmt::Display for SemType {
@@ -49,12 +54,14 @@ impl core::fmt::Display for SemType {
             SemType::Bool => write!(f, "Bool"),
             SemType::Numeric(n) => write!(f, "{n}"),
             SemType::Str => write!(f, "Str"),
+            SemType::Bytes => write!(f, "Bytes"),
             SemType::List(e) => write!(f, "List({e})"),
             SemType::Struct { name, .. } => write!(f, "{name}"),
             SemType::Sum { name, .. } => write!(f, "{name}"),
             SemType::Ptr => write!(f, "ptr"),
             SemType::Range(e) => write!(f, "Range({e})"),
             SemType::Slice(e) => write!(f, "Slice({e})"),
+            SemType::SourceLoc => write!(f, "SourceLoc"),
         }
     }
 }
@@ -303,8 +310,26 @@ pub fn type_from_name(name: &str) -> Option<SemType> {
     match name {
         "Bool" => Some(SemType::Bool),
         "Str" => Some(SemType::Str),
+        "Bytes" => Some(SemType::Bytes),
+        "SourceLoc" => Some(SemType::SourceLoc),
         _ => resid_ir::NumericType::from_name(name).map(SemType::Numeric),
     }
+}
+
+/// The `SourceLoc` field layout (`file: Str`, `line: Int`, `col: Int`), used by
+/// `#location` lowering and field access.
+pub fn source_loc_fields() -> Vec<(String, SemType)> {
+    vec![
+        ("file".into(), SemType::Str),
+        (
+            "line".into(),
+            SemType::Numeric(NumericType::Int(IntWidth::from_bits(64).unwrap())),
+        ),
+        (
+            "col".into(),
+            SemType::Numeric(NumericType::Int(IntWidth::from_bits(64).unwrap())),
+        ),
+    ]
 }
 
 /// Resolve a parsed type descriptor to a semantic type, using the primitives
@@ -751,6 +776,15 @@ pub fn infer_expr_ctx(
                         format!("type `{tt}` has no field `{}`", field.0),
                     )),
                 },
+                SemType::SourceLoc => {
+                    match source_loc_fields().iter().find(|(n, _)| n == &field.0) {
+                        Some((_, ft)) => Ok(ft.clone()),
+                        None => Err(err(
+                            &expr.span,
+                            format!("type `{tt}` has no field `{}`", field.0),
+                        )),
+                    }
+                }
                 other => Err(err(
                     &expr.span,
                     format!("cannot access field `{}` on {other}", field.0),
@@ -801,6 +835,8 @@ pub fn infer_expr_ctx(
         ExprKind::Rt(inner) => infer_expr_ctx(inner, env, sigs, types),
         ExprKind::AtResidual { inner, .. } => infer_expr_ctx(inner, env, sigs, types),
         ExprKind::RawString(_) | ExprKind::FString(_) => Ok(SemType::Str),
+        ExprKind::ByteString(_) => Ok(SemType::Bytes),
+        ExprKind::Location => Ok(SemType::SourceLoc),
         ExprKind::Discard(inner) => infer_expr_ctx(inner, env, sigs, types),
         ExprKind::ComptimePrint(inner) => {
             // Compile-time debug print of a statically-known value.
@@ -2469,6 +2505,36 @@ Int main() {
             !errs.is_empty(),
             "expected while condition to require Bool"
         );
+    }
+
+    #[test]
+    fn check_bytes_and_location() {
+        let src = r#"
+Int main() {
+    Bytes b = b"bytes";
+    SourceLoc loc = #location;
+    Str f = loc.file;
+    Int l = loc.line;
+    Int c = loc.col;
+    return l;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_location_unknown_field_rejected() {
+        let src = r#"
+Int main() {
+    SourceLoc loc = #location;
+    return loc.nope;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected missing field to error");
     }
 
     #[test]

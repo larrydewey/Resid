@@ -1680,9 +1680,9 @@ Before calling compiler done:
 |-------|--------|-------|
 | 1. Lexer, Parser, AST | ✅ Complete | `resid-lexer` (7) + `resid-parser` (15) pass. Ranges parse as `ExprKind::Range`; `if (PAT = expr)` / `while (PAT = expr)` detect a depth-0 binding `=` and parse as `IfLet`/`WhileLet`. Slice syntax (`xs[1..4]`, `xs[..4]`, `xs[1..]`, `xs[..]`, `xs[0..=3]`) parses as `ExprKind::Slice` — the start bound is parsed at a precedence above the range operator so `1..4` isn't greedily consumed. |
 | 2. Knowledge Graph IR | Partial | `resid-ir`: implements spec §6 primitive numeric types, mixed-width widening, list/rangetype member types (41 tests). |
-| 3. Types, Behaviors | Partial | `resid-type`: 49 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, `@residual`, while, RT, built-in extern signatures, `Str + Str`, `check_program`, `ListToString` (List(Int/UInt/Float) → Str), Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors), assertion/debug expressions (`assert`/`rt_assert` cond must be Bool, message Str; `known`/`rt_known` pass-through), ranges (`Range(Elem)` from numeric bounds; for-in over a Range requires the declared type match the element type), and if-let/while-let (`bind_pattern` against the source type; vars scoped to the then/body block). |
-| 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (28 tests) + `residc` (11 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime), `@residual Type y = expr`, assertions (`assert`/`rt_assert` → `resid_abort` on failure; `known`/`rt_known` static/runtime checks; `todo`/`unimplemented` trap), if-let/while-let (`pattern_match_test` compares the runtime tag via `resid_box_tag`; bindings scoped to the then/body block). Range `for-in` (`0..n` half-open, `0..=n` inclusive) lowers to a scalar i64 counter via `slt`/`sle`, with bounds widened/truncated to the declared width. Range/slice construction lower to `resid_range_new` / `resid_slice_new` (boxed, partial-open `..n`, `n..`, `..` resolve bounds via the list length). Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. |
-| 5. Stdlib, Build System | Missing | `resid-builtin`/`resid-build` stubs; compile clean. No runtime helpers yet (conversion helpers, checked arithmetic, ranges, raw strings, #location, providers, handles, spawn, wide numerics). |
+| 3. Types, Behaviors | Partial | `resid-type`: 59 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, `@residual`, while, RT, built-in extern signatures, `Str + Str`, `check_program`, `ListToString` (List(Int/UInt/Float) → Str), Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors), assertion/debug expressions (`assert`/`rt_assert` cond must be Bool, message Str; `known`/`rt_known` pass-through), ranges (`Range(Elem)` from numeric bounds; for-in over a Range requires the declared type match the element type), if-let/while-let (`bind_pattern` against the source type; vars scoped to the then/body block), byte strings (`b"..."` → `Bytes`), and `#location` → `SourceLoc` with `file`/`line`/`col` field access (unknown fields rejected). |
+| 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (30 tests) + `residc` (12 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime), `@residual Type y = expr`, assertions (`assert`/`rt_assert` → `resid_abort` on failure; `known`/`rt_known` static/runtime checks; `todo`/`unimplemented` trap), if-let/while-let (`pattern_match_test` compares the runtime tag via `resid_box_tag`; bindings scoped to the then/body block). Range `for-in` (`0..n` half-open, `0..=n` inclusive) lowers to a scalar i64 counter via `slt`/`sle`, with bounds widened/truncated to the declared width. Range/slice construction lower to `resid_range_new` / `resid_slice_new` (boxed, partial-open `..n`, `n..`, `..` resolve bounds via the list length). Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. Raw strings (`r"..."`) lower as `Str` globals; byte strings (`b"..."`) lower as constant global byte arrays (`Bytes`, no NUL terminator); `#location` boxes a `SourceLoc { file, line, col }` from the current span with field access via the boxed-slot runtime. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. |
+| 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. Runtime helpers landed: conversion helpers, checked/wrapping/saturating arithmetic, ranges/slicing, raw strings, byte strings, `#location`. Still missing: f-string interpolation, providers, handles, spawn, wide numerics, `resid-build` crate. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
 
 Build/test notes:
@@ -1696,8 +1696,8 @@ Build/test notes:
 - `residc <file.resid> build [-o <out>]` compiles to a native binary via clang + the
   bootstrap runtime (`crates/residc/resid_rt.c`); `run` builds to a temp dir and executes
   it, propagating the exit code (including POSIX signal exits as 128+signal).
-- **159 tests total**: lexer 7, parser 15, resid-ir 41, resid-type 57, resid-codegen 28,
-  residc 11 (e2e). Destructuring, `_ = expr` discard,
+- **164 tests total**: lexer 7, parser 15, resid-ir 41, resid-type 59, resid-codegen 30,
+  residc 12 (e2e). Destructuring, `_ = expr` discard,
   `if`-expressions with phi joins, `while` and range `for-in` loops with
   `break`/`continue`, `for-in` over boxed lists, `comptime_print` (compile-time
   evidence side effect), `@residual Type y = expr`, the assertion family
@@ -1708,10 +1708,10 @@ Build/test notes:
   aborts on failed asserts, and runs control-flow statements.
   Wrapping/saturating/checked arithmetic extern functions (`wrapping_add`,
   `saturating_mul`, `checked_div`, etc.) declared and callable from Resid source.
-- **Self-host roadmap**: detailed in §12. Conversion helpers (§12.1, task 5.1) and
-  ranges/slicing (§12.1, task 5.3) are done. Next: raw/byte strings (§12.1, task 5.4)
-  and `#location` (§12.1, task 5.5) → M2 bootstrap milestone (string building for the
-  Resid lexer).
+- **Self-host roadmap**: detailed in §12. Conversion helpers (§12.1, task 5.1),
+  ranges/slicing (§12.1, task 5.3), raw/byte strings (§12.1, task 5.4) and
+  `#location` (§12.1, task 5.5) are done → M2 bootstrap milestone (string building for the
+  Resid lexer). Next: f-string interpolation (§12.1, task 5.12) and provider backends.
 
 ---
 
@@ -1729,14 +1729,15 @@ strings.
 | **5.1** | Conversion helpers (`i8..i512`, `u8..u512`, `f16..f512`, `isize`, `usize`) | ✅ Done | — | Extern functions. Narrow/widen numeric types at call sites. Bootstrap runtime: C casts. Typed in `BUILTIN_SIGS`, declared in codegen, implemented in `resid_rt.c`. Needed to write Resid lexer (codepoint→char). |
 | **5.2** | Checked + wrapping + saturating arithmetic (`checked_add`, `wrapping_mul`, `saturating_sub`) | ✅ Done | 5.1 | Spec §6.5. Extern functions in `resid_rt.c`: `wrapping_add/sub/mul/div`, `saturating_add/sub/mul`, `checked_add/sub/mul/div` (signed + unsigned). Declared in codegen, typed in `BUILTIN_SIGS`. 11 new codegen tests. |
 | **5.3** | Ranges and slicing (`xs[start..end]`, `0..=n` construction) | ✅ Done | — | Type: `Range(Elem)`/`Slice(Elem)`. `for-in` over a range lowers to a scalar counter. Construction lowers to `resid_range_new`/`resid_slice_new` (boxed). Parser fix: slice start/end bounds parsed above range precedence so `1..4` inside `[ ]` isn't consumed as a Range expr; `xs[..n]`, `xs[n..]`, `xs[..]` supported (defaults 0 / list length). |
-| **5.4** | Raw strings + byte strings (`r"...\0"`, `b"bytes"`) | P2 | — | Lexer/parser done. Codegen: emit as global byte arrays. Runtime: no formatting needed. |
-| **5.5** | `#location` → `SourceLoc` type | P2 | — | AST/IR nodes exist. Codegen: emit `SourceLoc { file: str, line: i32, col: i32 }`. |
+| **5.4** | Raw strings + byte strings (`r"...\0"`, `b"bytes"`) | ✅ Done | — | `Bytes` core type (type + codegen). Raw strings (`r"..."`) lower as `Str` globals; byte strings (`b"..."`) lower as constant global byte arrays (`[N x i8]`, no NUL terminator), backed by the lexer's escape handling (`\"`, `\n`, `\t`, `\r`, `\\`, `\0`). |
+| **5.5** | `#location` → `SourceLoc` type | ✅ Done | — | Type: `SourceLoc` with `file: Str`, `line: Int`, `col: Int` (`source_loc_fields()`); unknown fields rejected. Codegen: boxes a `SourceLoc { file, line, col }` from the current span (`e.span.file/line/col_start`) via the boxed-slot runtime; field access lowers through `load_slot`. |
 | **5.6** | Provider backends (filesystem, environment, git) | P3 | 5.1 | `resid_rt.c` stubs only. Real I/O behind capability authorization. |
 | **5.7** | Handle types (`with (File h = open(...))`) | P3 | 5.6 | RAII lifetime, reverse-order release, mutable ownership. |
 | **5.8** | Spawn / `RegionError` / structured concurrency | P3 | 5.6 | `spawn (caps) { body }` → OS thread + structured join. |
 | **5.9** | Wide numeric runtime (Int256, Int512, Float256, Float512) | P3 | — | Software emulation: `[u64; N]` arrays + runtime lib (add, mul, cmp). |
 | **5.10** | `resid-build` crate (resid.toml, profiles, deps) | P3 | — | Config parsing, dependency resolution, build orchestration. |
 | **5.11** | `resid-builtin` crate (full stdlib types) | P3 | — | `Option`, `Result`, `List`, `Map`, `Set`, `SourceLoc`, `Range`, behaviors. |
+| **5.12** | F-string interpolation (`f"hello {name}"`) | P2 | — | Type inference done (f-string → `Str`). Codegen: interpolate a `Str` expression into the folded literal (string building for the bootstrap lexer). |
 
 ### 12.2 Phase 4 — Codegen Gaps
 

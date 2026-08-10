@@ -138,7 +138,7 @@ impl<'ctx> CodeGen<'ctx> {
     fn llvm_type(&self, t: &SemType) -> Result<BasicTypeEnum<'ctx>, String> {
         let bt: BasicTypeEnum<'ctx> = match t {
             SemType::Bool => self.cx.bool_type().into(),
-            SemType::Str => self.cx.ptr_type(AddressSpace::default()).into(),
+            SemType::Str | SemType::Bytes => self.cx.ptr_type(AddressSpace::default()).into(),
             SemType::Numeric(n) => match n {
                 NumericType::Int(w) | NumericType::UInt(w) => self.int_type(w.bits())?.into(),
                 NumericType::Float(w) => self.float_type(w.bits())?.into(),
@@ -146,7 +146,7 @@ impl<'ctx> CodeGen<'ctx> {
             },
             SemType::Range(_) => self.int_type(64)?.into(),
             // Composites are untyped heap pointers.
-            SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr => {
+            SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc => {
                 self.cx.ptr_type(AddressSpace::default()).into()
             }
         };
@@ -233,6 +233,31 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    /// A byte array constant (`b"..."`): a global `[N x i8]` with the raw
+    /// bytes (no NUL terminator), returning a pointer to its first byte.
+    fn lower_bytes(&mut self, bytes: &[u8]) -> PointerValue<'ctx> {
+        let elems: Vec<inkwell::values::IntValue<'ctx>> = bytes
+            .iter()
+            .map(|b| self.cx.i8_type().const_int(*b as u64, false))
+            .collect();
+        let arr = self.cx.i8_type().const_array(&elems);
+        let arr_ty = arr.get_type();
+        let gv = self
+            .module
+            .add_global(arr_ty, Some(AddressSpace::default()), "bytes");
+        gv.set_initializer(&arr);
+        gv.set_constant(true);
+        gv.set_unnamed_addr(true);
+        let zero = self.cx.i32_type().const_zero();
+        let ptr = gv.as_pointer_value();
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(arr_ty, ptr, &[zero, zero], "bytes")
+                .map_err(to_err)
+                .unwrap()
+        }
+    }
+
     fn find_func<'a>(
         &self,
         unit: &'a TranslationUnit,
@@ -295,7 +320,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 .build_return(Some(&self.cx.i64_type().const_zero()))
                                 .map_err(to_err)?;
                         }
-                        SemType::Str | SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr => {
+                        SemType::Str | SemType::Bytes | SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc => {
                             self.builder
                                 .build_return(Some(
                                     &self.cx.ptr_type(AddressSpace::default()).const_null(),
@@ -1220,6 +1245,16 @@ impl<'ctx> CodeGen<'ctx> {
                 })
             }
 
+            ExprKind::ByteString(bytes) => {
+                let ptr = self.lower_bytes(bytes);
+                Ok(Val {
+                    v: ptr.into(),
+                    ty: SemType::Bytes,
+                })
+            }
+
+            ExprKind::Location => self.lower_source_loc(&e.span),
+
             ExprKind::FString(parts) => {
                 let mut out = String::new();
                 for part in parts {
@@ -1351,6 +1386,14 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(Val {
                     v: ptr.into(),
                     ty: SemType::Str,
+                })
+            }
+
+            Literal::ByteStr(lit) => {
+                let ptr = self.lower_bytes(&lit.value);
+                Ok(Val {
+                    v: ptr.into(),
+                    ty: SemType::Bytes,
                 })
             }
 
@@ -2155,8 +2198,14 @@ impl<'ctx> CodeGen<'ctx> {
         field: &Id,
     ) -> Result<Val<'ctx>, String> {
         let tv = self.lower_expr(sc, target, None)?;
-        let SemType::Struct { fields, .. } = &tv.ty else {
-            return Err(format!("codegen: field access on non-struct {}", tv.ty));
+        let fields: Vec<(String, SemType)> = match &tv.ty {
+            SemType::Struct { fields, .. } => fields.clone(),
+            SemType::SourceLoc => resid_type::source_loc_fields(),
+            other => {
+                return Err(format!(
+                    "codegen: field access on non-struct {other}"
+                ))
+            }
         };
         let idx = fields
             .iter()
@@ -2190,6 +2239,30 @@ impl<'ctx> CodeGen<'ctx> {
         )?;
         let idx = iw.v.into_int_value();
         self.load_slot(list_val, idx, elem)
+    }
+
+    /// Lower `#location` to a boxed SourceLoc carrying the current span's
+    /// file, line, and column. Fields are `file: Str`, `line: Int`, `col: Int`.
+    fn lower_source_loc(&mut self, span: &resid_lexer::token::Span) -> Result<Val<'ctx>, String> {
+        let i64t = self.cx.i64_type();
+        let file_ptr = self.lower_str(&span.file);
+        let file_box = self.box_scalar(Val {
+            v: file_ptr.into(),
+            ty: SemType::Str,
+        })?;
+        let line_v = i64t.const_int(span.line as u64, false);
+        let line_box = self.box_scalar(Val {
+            v: line_v.into(),
+            ty: SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        })?;
+        let col_v = i64t.const_int(span.col_start as u64, false);
+        let col_box = self.box_scalar(Val {
+            v: col_v.into(),
+            ty: SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        })?;
+        let st = SemType::SourceLoc;
+        let slots = vec![file_box, line_box, col_box];
+        self.build_constructor(0, &st, slots)
     }
 
     /// Lower a range expression `start..end` or `start..=end` to a boxed Range value.
