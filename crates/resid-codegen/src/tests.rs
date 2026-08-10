@@ -805,3 +805,62 @@ Int main() {
         "expected SourceLoc to be boxed: {ir}"
     );
 }
+
+#[test]
+fn test_fstring_interpolation_lowering() {
+    let src = r#"
+Int main() {
+    Str name = "world";
+    Int n = 42;
+    println(f"hello {name} n={n}");
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("fstr.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fstr");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    // Interpolated parts stitch together via resid_str_concat.
+    assert!(
+        ir.contains("call ptr @resid_str_concat"),
+        "expected runtime string concat: {ir}"
+    );
+    assert!(
+        ir.contains("call ptr @IntToString"),
+        "expected IntToString for interpolated Int: {ir}"
+    );
+}
+
+#[test]
+fn test_str_plus_str_runtime_concat() {
+    let src = r#"
+Str make(Str x) {
+    return x + "!";
+}
+
+Int main() {
+    Str a = "foo";
+    Str b = "bar";
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("sconcat.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "sconcat");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    // Non-constant Str + Str lowers to a runtime concat call.
+    assert!(
+        ir.contains("call ptr @resid_str_concat"),
+        "expected runtime string concat: {ir}"
+    );
+}
