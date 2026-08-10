@@ -287,9 +287,10 @@ pub enum ExprKind {
         behavior: Id,
     },
 
-    // Provider call
+    // Provider call: `provider.verb(args)` — authorized external knowledge.
     ProviderCall {
         provider: Id,
+        verb: Id,
         args: Vec<Box<Expr>>,
     },
 

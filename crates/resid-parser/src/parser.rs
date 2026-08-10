@@ -7,6 +7,12 @@ use crate::ast::*;
 use resid_lexer::Lexer;
 use resid_lexer::{DocComment, *};
 
+/// Trusted external-knowledge providers (spec §32). A `provider.verb(args)`
+/// call where the base identifier is one of these parses as a provider call.
+pub fn is_provider_name(name: &str) -> bool {
+    matches!(name, "filesystem" | "environment" | "git")
+}
+
 /// Parse error with span.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
@@ -913,19 +919,58 @@ impl Parser {
                     };
                 }
 
-                // Check for field access: expr.field
+                // Check for field access / method call / provider call:
+                // expr.field, expr.m(args), provider.verb(args)
                 if self.peek_is_op(Op::Dot) {
                     self.bump();
                     let field = self
                         .expect_ident("field access: expected identifier")
                         .unwrap_or_else(|| Id("__error__".to_string()));
-                    expr = Expr {
-                        kind: ExprKind::FieldAccess {
-                            target: Box::new(expr),
-                            field,
-                        },
-                        span: span.clone(),
-                    };
+                    if self.peek_is_op(Op::LParen) {
+                        self.bump();
+                        let mut args = Vec::new();
+                        while !self.peek_is_op(Op::RParen) && !self.at_eof() {
+                            args.push(Box::new(self.parse_expression()));
+                            if self.peek_is_op(Op::Comma) {
+                                self.bump();
+                            }
+                        }
+                        self.expect_op(Op::RParen, "method call: expected )");
+                        // Provider call: `provider.verb(args)` where the base
+                        // identifier is a trusted external-knowledge provider
+                        // (filesystem, environment, git — spec §32).
+                        let provider_name = match &expr.kind {
+                            ExprKind::Id(id) => id.0.clone(),
+                            _ => String::new(),
+                        };
+                        if is_provider_name(&provider_name) {
+                            expr = Expr {
+                                kind: ExprKind::ProviderCall {
+                                    provider: Id(provider_name),
+                                    verb: field.to_owned(),
+                                    args,
+                                },
+                                span: span.clone(),
+                            };
+                        } else {
+                            expr = Expr {
+                                kind: ExprKind::MethodCall {
+                                    target: Box::new(expr),
+                                    method: field.to_owned(),
+                                    args,
+                                },
+                                span: span.clone(),
+                            };
+                        }
+                    } else {
+                        expr = Expr {
+                            kind: ExprKind::FieldAccess {
+                                target: Box::new(expr),
+                                field,
+                            },
+                            span: span.clone(),
+                        };
+                    }
                 }
 
                 // Check for index/slice: expr[index] or expr[start..end]
@@ -954,31 +999,6 @@ impl Parser {
                             span: span.clone(),
                         };
                     }
-                }
-
-                // Check for method call: expr.method(args)
-                if self.peek_is_op(Op::Dot) {
-                    self.bump();
-                    let method = self
-                        .expect_ident("method call: expected identifier")
-                        .unwrap_or_else(|| Id("__error__".to_string()));
-                    self.expect_op(Op::LParen, "method call: expected (");
-                    let mut args = Vec::new();
-                    while !self.peek_is_op(Op::RParen) && !self.at_eof() {
-                        args.push(Box::new(self.parse_expression()));
-                        if self.peek_is_op(Op::Comma) {
-                            self.bump();
-                        }
-                    }
-                    self.expect_op(Op::RParen, "method call: expected )");
-                    expr = Expr {
-                        kind: ExprKind::MethodCall {
-                            target: Box::new(expr),
-                            method,
-                            args,
-                        },
-                        span: span.clone(),
-                    };
                 }
 
                 // Check for ? (early return sugar)
@@ -2529,5 +2549,125 @@ type Opt(T) = Some(T) | None;
             "second stmt not while-let: {:?}",
             kinds[1]
         );
+    }
+
+    #[test]
+    fn parse_provider_call() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { filesystem.read(\"x\"); }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Expr(expr) => match &expr.kind {
+                        ExprKind::ProviderCall { provider, verb, args } => {
+                            assert_eq!(provider.0, "filesystem");
+                            assert_eq!(verb.0, "read");
+                            assert_eq!(args.len(), 1);
+                        }
+                        _ => panic!("expected ProviderCall, got {:?}", expr.kind),
+                    },
+                    _ => panic!("expected expr stmt, got {:?}", stmt.kind),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_method_call() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { obj.method(1, 2); }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Expr(expr) => match &expr.kind {
+                        ExprKind::MethodCall { target, method, args } => {
+                            match &target.kind {
+                                ExprKind::Id(id) => assert_eq!(id.0, "obj"),
+                                _ => panic!("expected Id, got {:?}", target.kind),
+                            }
+                            assert_eq!(method.0, "method");
+                            assert_eq!(args.len(), 2);
+                        }
+                        _ => panic!("expected MethodCall, got {:?}", expr.kind),
+                    },
+                    _ => panic!("expected expr stmt, got {:?}", stmt.kind),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_field_access() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { obj.field; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Expr(expr) => match &expr.kind {
+                        ExprKind::FieldAccess { target, field } => {
+                            match &target.kind {
+                                ExprKind::Id(id) => assert_eq!(id.0, "obj"),
+                                _ => panic!("expected Id, got {:?}", target.kind),
+                            }
+                            assert_eq!(field.0, "field");
+                        }
+                        _ => panic!("expected FieldAccess, got {:?}", expr.kind),
+                    },
+                    _ => panic!("expected expr stmt, got {:?}", stmt.kind),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_nested_provider_call() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { filesystem.read(1, 2).method(); }");
+        assert!(errors.len() >= 1, "expected parse error for chained postfix");
+    }
+
+    #[test]
+    fn parse_field_access_then_method() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { obj.field.method(); }");
+        assert!(errors.len() >= 1, "expected parse error for chained postfix");
+    }
+
+    #[test]
+    fn parse_provider_call_with_string_arg() {
+        let (result, errors) = Parser::parse("test.resid", r#"Int f() { filesystem.read("hello"); }"#);
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Expr(expr) => match &expr.kind {
+                        ExprKind::ProviderCall { provider, verb, args } => {
+                            assert_eq!(provider.0, "filesystem");
+                            assert_eq!(verb.0, "read");
+                            assert_eq!(args.len(), 1);
+                            match &args[0].kind {
+                                ExprKind::Literal(Literal::Str(s)) => assert_eq!(s.value, "hello"),
+                                _ => panic!("expected string literal, got {:?}", args[0].kind),
+                            }
+                        }
+                        _ => panic!("expected ProviderCall, got {:?}", expr.kind),
+                    },
+                    _ => panic!("expected expr stmt, got {:?}", stmt.kind),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_method_call_on_integer() {
+        // 42.method() parses without error (42. is float literal, method() is separate expr)
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { 42.method(); }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 }
