@@ -1236,6 +1236,11 @@ impl<'ctx> CodeGen<'ctx> {
                 method,
                 args,
             } => self.lower_method_call(sc, target, method, args),
+            ExprKind::ProviderCall {
+                provider,
+                verb,
+                args,
+            } => self.lower_provider_call(sc, provider, verb, args),
 
             ExprKind::RawString(s) => {
                 let ptr = self.lower_str(s);
@@ -1944,6 +1949,94 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(v.into_pointer_value())
     }
 
+    /// Lower a trusted provider call `provider.verb(args)` (spec §32).
+    ///
+    /// Dispatch table mirrors `resid_type::PROVIDER_VERBS`. To add a verb:
+    /// add the runtime helper in `resid_rt.c`, declare it in
+    /// `declare_runtime`, and add a `(provider, verb) -> runtime name` arm
+    /// here. Result coercion: bool results are zextended i1 → i8 (the C ABI
+    /// the runtime helpers return); lists/strings pass through as pointers.
+    fn lower_provider_call(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        provider: &Id,
+        verb: &Id,
+        args: &[Box<Expr>],
+    ) -> Result<Val<'ctx>, String> {
+        let rt_name = match (provider.0.as_str(), verb.0.as_str()) {
+            ("filesystem", "exists") => "resid_fs_exists",
+            ("filesystem", "list_dir") => "resid_fs_list_dir",
+            ("environment", "get") => "resid_env_get",
+            ("environment", "has") => "resid_env_has",
+            ("git", "rev") => "resid_git_rev",
+            ("git", "branch") => "resid_git_branch",
+            (p, v) => return Err(format!("codegen: unknown provider call `{p}.{v}`")),
+        };
+        let f = self
+            .module
+            .get_function(rt_name)
+            .ok_or_else(|| format!("codegen: `{rt_name}` not declared"))?;
+        let mut llargs: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+        for a in args {
+            let v = self.lower_expr(sc, a, None)?;
+            llargs.push(self.as_rt_arg(v)?);
+        }
+        let cs = self.builder.build_call(f, &llargs, rt_name).map_err(to_err)?;
+        let v = cs.try_as_basic_value().expect_basic("provider call");
+        // Recover the checker's return type to coerce appropriately.
+        let ret = resid_type::provider_verbs()
+            .iter()
+            .find(|(p, vv, _, _)| p == &provider.0 && vv == &verb.0)
+            .map(|(_, _, _, r)| r.clone())
+            .unwrap_or(SemType::Str);
+        match &ret {
+            SemType::Bool => Ok(Val {
+                v: v.into_int_value().into(),
+                ty: SemType::Bool,
+            }),
+            SemType::Str => Ok(Val {
+                v: v.into_pointer_value().into(),
+                ty: SemType::Str,
+            }),
+            SemType::List(_) => Ok(Val {
+                v: v.into_pointer_value().into(),
+                ty: ret.clone(),
+            }),
+            other => Err(format!(
+                "codegen: provider call returns unsupported type {other}"
+            )),
+        }
+    }
+
+    /// Prepare a lowered value as a C-ABI runtime argument: Str/Bytes/list/
+    /// struct pointers pass through; Bool widens to i8.
+    fn as_rt_arg(&mut self, v: Val<'ctx>) -> Result<BasicMetadataValueEnum<'ctx>, String> {
+        match &v.ty {
+            SemType::Bool => {
+                let i = v.v.into_int_value();
+                let b8 = self
+                    .builder
+                    .build_int_z_extend(i, self.cx.i8_type(), "bool_to_i8")
+                    .map_err(to_err)?;
+                Ok(b8.into())
+            }
+            SemType::Str
+            | SemType::Bytes
+            | SemType::List(_)
+            | SemType::Slice(_)
+            | SemType::Struct { .. }
+            | SemType::Sum { .. }
+            | SemType::Ptr
+            | SemType::SourceLoc => Ok(v.v.into_pointer_value().into()),
+            SemType::Numeric(n) => {
+                let n = *n;
+                let w = self.widen(v, n)?;
+                Ok(w.into())
+            }
+            _ => Err(format!("codegen: unsupported rt arg type {}", v.ty)),
+        }
+    }
+
     // ─── Calls ───────────────────────────────────────────────────
 
     /// Declare the bootstrap runtime helpers (boxed composite values + arithmetic).
@@ -1965,6 +2058,14 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
         // String concatenation (f-string interpolation, Str + Str).
         self.decl_rt("resid_str_concat", vec![ptr.into(), ptr.into()], ptr.into());
+        // Trusted providers (spec §32): filesystem, environment, git.
+        // Names must match the `resid_<provider>_<verb>` helpers in resid_rt.c.
+        self.decl_rt("resid_fs_exists", vec![ptr.into()], i8t.into());
+        self.decl_rt("resid_fs_list_dir", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_env_get", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_env_has", vec![ptr.into()], i8t.into());
+        self.decl_rt("resid_git_rev", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_git_branch", vec![], ptr.into());
         // Checked arithmetic (called after overflow check passes).
         self.decl_rt("checked_add", vec![i64t.into(), i64t.into()], i64t.into());
         self.decl_rt("checked_sub", vec![i64t.into(), i64t.into()], i64t.into());

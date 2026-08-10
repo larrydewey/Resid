@@ -405,3 +405,79 @@ void* resid_slice_new(void* target, int64_t start, int64_t end) {
     void* slots[3] = { t, s, e };
     return resid_box_new(11, 3, slots, "Slice");
 }
+
+/*
+ * Trusted providers (spec §32): filesystem, environment, git.
+ *
+ * Bootstrap: the kernel allows these unconditionally (a real build will gate
+ * them behind capability authorization). Verbaturn links backward to the
+ * `PROVIDER_VERBS` table in resid-type; adding a verb here must be mirrored
+ * there and in resid-codegen's `lower_provider_call`.
+ */
+int8_t resid_fs_exists(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
+void* resid_fs_list_dir(const char* path) {
+    /* Shell out to `ls` since POSIX globbing/readdir adds surface; the
+     * runtime is allowed to use libc, so this is a pragmatic bootstrap. */
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd), "ls -1 \"%s\" 2>/dev/null", path);
+    FILE* p = popen(cmd, "r");
+    if (!p) {
+        void* slots[1] = { NULL };
+        return resid_box_new(0, 0, slots, "List(Str)");
+    }
+    char line[4096];
+    void* slots[4096];
+    size_t n = 0;
+    while (n < 4096 && fgets(line, sizeof(line), p)) {
+        size_t len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+        slots[n++] = resid_box_str(line);
+    }
+    pclose(p);
+    return resid_box_new(0, (int64_t)n, slots, "List(Str)");
+}
+
+char* resid_env_get(const char* name) {
+    const char* v = getenv(name);
+    return v ? resid_box_str(v) : resid_box_str("");
+}
+
+int8_t resid_env_has(const char* name) {
+    return getenv(name) != NULL ? 1 : 0;
+}
+
+char* resid_git_rev(const char* ref) {
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd), "git rev-parse %s 2>/dev/null", ref);
+    FILE* p = popen(cmd, "r");
+    if (!p) return resid_box_str("");
+    char line[256];
+    if (!fgets(line, sizeof(line), p)) {
+        pclose(p);
+        return resid_box_str("");
+    }
+    pclose(p);
+    size_t len = strlen(line);
+    if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+    return resid_box_str(line);
+}
+
+char* resid_git_branch(void) {
+    FILE* p = popen("git rev-parse --abbrev-ref HEAD 2>/dev/null", "r");
+    if (!p) return resid_box_str("");
+    char line[256];
+    if (!fgets(line, sizeof(line), p)) {
+        pclose(p);
+        return resid_box_str("");
+    }
+    pclose(p);
+    size_t len = strlen(line);
+    if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+    return resid_box_str(line);
+}

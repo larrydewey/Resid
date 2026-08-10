@@ -864,3 +864,93 @@ Int main() {
         "expected runtime string concat: {ir}"
     );
 }
+
+#[test]
+fn test_provider_call_env_get() {
+    let src = r#"
+Int main() {
+    Str x = environment.get("HOME");
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("prov.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "prov");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call ptr @resid_env_get"), "expected resid_env_get: {ir}");
+}
+
+#[test]
+fn test_provider_call_env_has() {
+    let src = r#"
+Int main() {
+    Bool x = environment.has("PATH");
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("prov.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "prov");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call i8 @resid_env_has"), "expected resid_env_has: {ir}");
+}
+
+#[test]
+fn test_provider_call_git_branch() {
+    let src = r#"
+Int main() {
+    Str x = git.branch();
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("prov.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "prov");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call ptr @resid_git_branch"), "expected resid_git_branch: {ir}");
+}
+
+#[test]
+fn test_provider_call_fs_exists() {
+    let src = r#"
+Int main() {
+    Bool x = filesystem.exists("test.txt");
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("prov.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "prov");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call i8 @resid_fs_exists"), "expected resid_fs_exists: {ir}");
+}
+
+#[test]
+fn test_provider_call_fs_list_dir() {
+    let src = r#"
+Int main() {
+    List(Str) dir = filesystem.list_dir(".");
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("prov.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "prov");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call ptr @resid_fs_list_dir"), "expected resid_fs_list_dir: {ir}");
+}

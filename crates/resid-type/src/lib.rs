@@ -316,6 +316,42 @@ pub fn type_from_name(name: &str) -> Option<SemType> {
     }
 }
 
+/// Trusted provider verbs (spec §32): `(provider, verb, param types, result)`.
+///
+/// This is the single source of truth for what each provider exposes. To add a
+/// verb, add a row here, a matching `resid_<provider>_<verb>` helper in
+/// `crates/residc/resid_rt.c`, and a dispatch arm in `resid-codegen`'s
+/// `lower_provider_call`. Any new provider name must also be added to the
+/// parser's `is_provider_name` and enabled as a callable root there.
+pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemType)> {
+    vec![
+        // filesystem
+        (
+            "filesystem",
+            "exists",
+            vec![SemType::Str],
+            SemType::Bool,
+        ),
+        (
+            "filesystem",
+            "list_dir",
+            vec![SemType::Str],
+            SemType::List(Box::new(SemType::Str)),
+        ),
+        // environment
+        ("environment", "get", vec![SemType::Str], SemType::Str),
+        (
+            "environment",
+            "has",
+            vec![SemType::Str],
+            SemType::Bool,
+        ),
+        // git
+        ("git", "rev", vec![SemType::Str], SemType::Str),
+        ("git", "branch", vec![], SemType::Str),
+    ]
+}
+
 /// The `SourceLoc` field layout (`file: Str`, `line: Int`, `col: Int`), used by
 /// `#location` lowering and field access.
 pub fn source_loc_fields() -> Vec<(String, SemType)> {
@@ -1041,11 +1077,72 @@ ExprKind::While { cond, body } => {
             Ok(SemType::Bool)
         }
 
+        ExprKind::ProviderCall { provider, verb, args } => {
+            infer_provider_call(provider, verb, args, env, sigs, types, &expr.span)
+        }
+
         other => Err(err(
             &expr.span,
             format!("type checking not yet supported for `{}`", kind_tag(other)),
         )),
     }
+}
+
+/// Infer a provider call `provider.verb(args)` (spec §32). The provider must
+/// be trusted and the verb known; each verb declares its parameter arity and
+/// return type. Interpolated/provided external knowledge is volatile.
+///
+/// To add a verb: extend `PROVIDER_VERBS` (and the matching runtime helper in
+/// `resid_rt.c`, plus the codegen dispatch in `resid-codegen`'s
+/// `lower_provider_call`).
+fn infer_provider_call(
+    provider: &Id,
+    verb: &Id,
+    args: &[Box<Expr>],
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+    span: &Span,
+) -> Result<SemType, TypeError> {
+    if !resid_parser::is_provider_name(&provider.0) {
+        return Err(err(span, format!("unknown provider `{}`", provider.0)));
+    }
+    let verbs = provider_verbs();
+    let entry = verbs
+        .iter()
+        .find(|(p, v, _, _)| p == &provider.0 && v == &verb.0)
+        .ok_or_else(|| {
+            err(
+                span,
+                format!("provider `{}` has no verb `{}`", provider.0, verb.0),
+            )
+        })?;
+    let (_, _, param_tys, ret) = entry;
+    if args.len() != param_tys.len() {
+        return Err(err(
+            span,
+            format!(
+                "`{}.{}` expects {} argument(s), found {}",
+                provider.0,
+                verb.0,
+                param_tys.len(),
+                args.len()
+            ),
+        ));
+    }
+    for (a, pt) in args.iter().zip(param_tys.iter()) {
+        let at = infer_expr_ctx(a, env, sigs, types)?;
+        if &at != pt {
+            return Err(err(
+                span,
+                format!(
+                    "`{}.{}` argument must be {pt}, found {at}",
+                    provider.0, verb.0
+                ),
+            ));
+        }
+    }
+    Ok(ret.clone())
 }
 
 /// Infer a list literal: homogeneous element type, or an explicit element type.
@@ -1645,6 +1742,12 @@ fn type_check_block(
         } = &stmt.kind
         {
             let ty = if let Some(t) = opt_type {
+                // Even with an explicit declared type the value expression is
+                // validated, so e.g. `filesystem.exists()` still errors despite
+                // `Bool ex = ...` giving a concrete binding type.
+                if let Err(e) = infer_expr_ctx(value, &env, sigs, types) {
+                    errs.push(e);
+                }
                 resolve_type_ctx(t, types).unwrap_or(SemType::Bool)
             } else {
                 infer_expr_ctx(value, &env, sigs, types).unwrap_or(SemType::Bool)
@@ -2637,6 +2740,134 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no type errors for usize(123), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_provider_scalar_verbs_valid() {
+        let src = r#"
+Int main() {
+    Bool ex = filesystem.exists("a.txt");
+    Bool has = environment.has("PATH");
+    Str home = environment.get("HOME");
+    Str branch = git.branch();
+    return 0;
+}
+"#;
+        let (unit, errors) = resid_parser::Parser::parse("check.resid", src);
+        assert!(errors.is_empty(), "parse errors: {errors:?}");
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_provider_list_dir_returns_list_of_str() {
+        let src = r#"
+Int main() {
+    List(Str) dir = filesystem.list_dir(".");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_provider_unknown_provider_rejected() {
+        let src = r#"
+Int main() {
+    Str x = nebulon.get("PATH");
+    return 0;
+}
+"#;
+        let (unit, errors) = resid_parser::Parser::parse("check.resid", src);
+        assert!(errors.is_empty(), "parse errors: {errors:?}");
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected unknown provider `nebulon` to be rejected"
+        );
+    }
+
+    #[test]
+    fn check_provider_unknown_verb_rejected() {
+        let src = r#"
+Int main() {
+    Str x = filesystem.teleport();
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected unknown verb `filesystem.teleport` to be rejected"
+        );
+    }
+
+    #[test]
+    fn check_provider_arg_count_rejected() {
+        let src = r#"
+Int main() {
+    Bool ex = filesystem.exists();
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected `filesystem.exists()` (no args) to be rejected"
+        );
+    }
+
+    #[test]
+    fn check_provider_arg_type_rejected() {
+        let src = r#"
+Int main() {
+    Bool ex = filesystem.exists(42);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected `filesystem.exists(42)` (Int arg) to be rejected"
+        );
+    }
+
+    #[test]
+    fn check_method_call_on_value_rejected() {
+        // §38 bans pure-value method chaining; only handles carry methods.
+        let src = r#"
+Int main() {
+    Int x = 5;
+    Int y = x.add(1);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected method call on plain value `x.add(1)` to be rejected"
+        );
+    }
+
+    #[test]
+    fn check_provider_tail_call_in_rt_allowed() {
+        // rt wins over provider substitution: an rt provider call stays residual.
+        let src = r#"
+Int main() {
+    Str home = rt environment.get("HOME");
+    return 0;
+}
+"#;
+        let (unit, errors) = resid_parser::Parser::parse("check.resid", src);
+        assert!(errors.is_empty(), "parse errors: {errors:?}");
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected rt provider call to typecheck, got: {:?}", errs);
     }
 
     #[test]
