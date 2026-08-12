@@ -59,6 +59,11 @@ char* resid_str_concat(const char* a, const char* b) {
     return p;
 }
 
+/* Str == Str / Str != Str. Returns 1 when equal (C ABI Bool = i8). */
+int8_t resid_str_eq(const char* a, const char* b) {
+    return strcmp(a, b) == 0;
+}
+
 /* UTF-8 decoding helpers for the string introspection functions. */
 static int utf8_seq_len(const unsigned char c) {
     if (c < 0x80) return 1;

@@ -1359,6 +1359,11 @@ fn infer_binary(
         if lt == SemType::Bool && rt == SemType::Bool {
             return Ok(SemType::Bool);
         }
+        // Str equality/inequality: Str == Str → Bool, Str != Str → Bool.
+        // Needed by the bootstrap lexer to match keywords/identifiers.
+        if lt == SemType::Str && rt == SemType::Str {
+            return Ok(SemType::Bool);
+        }
     }
 
     let binop = to_bin_op(op).ok_or_else(|| err(span, format!("unsupported operator {op:?}")))?;
@@ -3315,8 +3320,60 @@ Int main() {
     // ─── Unary operators ─────────────────────────────────────────
 
     #[test]
-    fn check_program_string_introspection() {
+    fn check_program_str_eq_valid() {
         let src = r#"
+Int main() {
+    Str a = "if";
+    Bool same = a == "if";
+    Bool diff = a != "while";
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected Str == Str to type-check, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_str_eq_int_rejected() {
+        let src = r#"
+Int main() {
+    Bool b = "hello" == 42;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected Str == Int to be rejected, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_str_lt_rejected() {
+        let src = r#"
+Int main() {
+    Bool b = "hello" < "world";
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected Str < Str to be rejected, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_string_introspection() {        let src = r#"
 Int main() {
     Str s = "hello";
     Int n = str_len(s);

@@ -1551,6 +1551,43 @@ impl<'ctx> CodeGen<'ctx> {
             });
         }
 
+        // Str == Str / Str != Str: compare via the runtime (strcmp-based).
+        // Needed by the bootstrap lexer to match keywords/identifiers.
+        if matches!(op, OpKind::EqEq | OpKind::Ne) {
+            let l = self.lower_expr(sc, lhs, None)?;
+            let r = self.lower_expr(sc, rhs, None)?;
+            if l.ty == SemType::Str && r.ty == SemType::Str {
+                let f = self
+                    .module
+                    .get_function("resid_str_eq")
+                    .ok_or("codegen: resid_str_eq not declared")?;
+                let cs = self
+                    .builder
+                    .build_call(f, &[l.v.into(), r.v.into()], "streq")
+                    .map_err(to_err)?;
+                let v = cs.try_as_basic_value().expect_basic("streq");
+                let eq = v.into_int_value();
+                let cmp = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::NE,
+                        eq,
+                        self.cx.i8_type().const_zero(),
+                        "strcmpne",
+                    )
+                    .map_err(to_err)?;
+                let res = if matches!(op, OpKind::EqEq) {
+                    cmp
+                } else {
+                    self.builder.build_not(cmp, "strnot").map_err(to_err)?
+                };
+                return Ok(Val {
+                    v: res.into(),
+                    ty: SemType::Bool,
+                });
+            }
+        }
+
         let binop = resid_type::to_bin_op(op)
             .ok_or_else(|| format!("codegen: unsupported operator {op:?}"))?;
 
@@ -2068,6 +2105,8 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
         // String concatenation (f-string interpolation, Str + Str).
         self.decl_rt("resid_str_concat", vec![ptr.into(), ptr.into()], ptr.into());
+        // String equality (Str == Str / Str != Str) for the bootstrap lexer.
+        self.decl_rt("resid_str_eq", vec![ptr.into(), ptr.into()], i8t.into());
         // Trusted providers (spec §32): filesystem, environment, git.
         // Names must match the `resid_<provider>_<verb>` helpers in resid_rt.c.
         self.decl_rt("resid_fs_exists", vec![ptr.into()], i8t.into());

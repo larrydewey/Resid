@@ -473,6 +473,31 @@ Int main() {
 }
 
 #[test]
+fn test_str_eq_call() {
+    let src = r#"
+Int main() {
+    Str a = "if";
+    Bool same = a == "if";
+    Bool diff = a != "while";
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("streq.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "streq");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("call i8 @resid_str_eq"),
+        "expected resid_str_eq call: {ir}"
+    );
+}
+
+#[test]
 fn test_checked_mul_call() {
     let src = r#"
 Int main() {

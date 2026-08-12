@@ -718,3 +718,49 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Str == Str / Str != Str run end-to-end (bootstrap lexer keyword matching).
+#[test]
+fn run_str_equality() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-streq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("streq.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    Str kw = "if";
+    Bool is_if = kw == "if";
+    Bool is_else = kw == "else";
+    Bool not_while = kw != "while";
+    if (is_if && !is_else && not_while) {
+        println("lexer-keyword-ok");
+    }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "lexer-keyword-ok",
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
