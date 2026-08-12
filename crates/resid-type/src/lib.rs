@@ -338,6 +338,12 @@ pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemTyp
             vec![SemType::Str],
             SemType::List(Box::new(SemType::Str)),
         ),
+        (
+            "filesystem",
+            "read_all",
+            vec![SemType::Str],
+            SemType::Str,
+        ),
         // environment
         ("environment", "get", vec![SemType::Str], SemType::Str),
         (

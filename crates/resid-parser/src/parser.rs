@@ -468,11 +468,13 @@ impl Parser {
                         continue;
                     }
 
-                    // Range operators are right-associative
+                    // Range operators are right-associative; all other binary
+                    // operators are left-associative: the right operand is
+                    // parsed at prec+1 so equal-precedence ops stay on the left.
                     let rhs_precedence = if op == Op::DotDot || op == Op::DotDotEq {
-                        prec + 1
-                    } else {
                         prec
+                    } else {
+                        prec + 1
                     };
 
                     let rhs = self.parse_expression_with_precedence(rhs_precedence);
@@ -3409,5 +3411,108 @@ type Opt(T) = Some(T) | None;
         assert_eq!(errors.len(), 0, "should parse fine");
         let (_result2, errors2) = Parser::parse("test.resid", "Int f() { return 1;");
         assert!(errors2.len() >= 1, "expected error for mismatched braces");
+    }
+
+    /// Extract the single expression statement from `Int main() { EXPR }`.
+    fn parse_single_expr(src: &str) -> ExprKind {
+        let (unit, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "parse errors: {errors:?}");
+        let body = match &unit.declarations[0] {
+            crate::Declaration::Function(f) => &f.body.statements,
+            other => panic!("expected function, got {other:?}"),
+        };
+        let exprs: Vec<&ExprKind> = body
+            .iter()
+            .filter_map(|s| match &s.kind {
+                crate::StmtKind::Expr(e) => Some(&e.kind),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(exprs.len(), 1, "expected one expr statement");
+        exprs[0].clone()
+    }
+
+    #[test]
+    fn parse_precedence_mul_over_add() {
+        // 2 + 3 * 4 → 2 + (3 * 4): multiplicative binds tighter than additive.
+        let e = parse_single_expr("Int main() { 2 + 3 * 4; }");
+        match &e {
+            ExprKind::BinaryOp { op, lhs, rhs } => {
+                assert_eq!(*op, Op::Plus);
+                assert!(matches!(lhs.kind, ExprKind::Literal(_)), "lhs = 2");
+                match &rhs.kind {
+                    ExprKind::BinaryOp { op, .. } => assert_eq!(*op, Op::Star),
+                    other => panic!("rhs must be 3 * 4, got {other:?}"),
+                }
+            }
+            other => panic!("expected top-level Plus, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_precedence_eq_over_and() {
+        // a == b && c → (a == b) && c: equality binds tighter than logical AND.
+        let e = parse_single_expr("Int main() { a == b && c; }");
+        match &e {
+            ExprKind::BinaryOp { op, lhs, rhs } => {
+                assert_eq!(*op, Op::AndAnd);
+                match &lhs.kind {
+                    ExprKind::BinaryOp { op, .. } => assert_eq!(*op, Op::EqEq),
+                    other => panic!("lhs must be a == b, got {other:?}"),
+                }
+                assert!(matches!(rhs.kind, ExprKind::Id(_)), "rhs = c");
+            }
+            other => panic!("expected top-level AndAnd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_associativity_left_for_sub() {
+        // 10 - 3 - 2 → (10 - 3) - 2: additive is left-associative.
+        let e = parse_single_expr("Int main() { 10 - 3 - 2; }");
+        match &e {
+            ExprKind::BinaryOp { op, lhs, rhs } => {
+                assert_eq!(*op, Op::Minus);
+                match &lhs.kind {
+                    ExprKind::BinaryOp { op, .. } => assert_eq!(*op, Op::Minus),
+                    other => panic!("lhs must be 10 - 3, got {other:?}"),
+                }
+                assert!(matches!(rhs.kind, ExprKind::Literal(_)), "rhs = 2");
+            }
+            other => panic!("expected top-level Minus, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_associativity_left_for_div() {
+        // 8 / 4 / 2 → (8 / 4) / 2: multiplicative is left-associative.
+        let e = parse_single_expr("Int main() { 8 / 4 / 2; }");
+        match &e {
+            ExprKind::BinaryOp { op, lhs, rhs } => {
+                assert_eq!(*op, Op::Slash);
+                match &lhs.kind {
+                    ExprKind::BinaryOp { op, .. } => assert_eq!(*op, Op::Slash),
+                    other => panic!("lhs must be 8 / 4, got {other:?}"),
+                }
+                assert!(matches!(rhs.kind, ExprKind::Literal(_)), "rhs = 2");
+            }
+            other => panic!("expected top-level Slash, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_associativity_right_for_range() {
+        // 1..2..3 nests right: 1..(2..3).
+        let e = parse_single_expr("Int main() { 1..2..3; }");
+        match &e {
+            ExprKind::Range { start, end, .. } => {
+                assert!(matches!(start.kind, ExprKind::Literal(_)), "start = 1");
+                match &end.kind {
+                    ExprKind::Range { .. } => {}
+                    other => panic!("end must be 2..3, got {other:?}"),
+                }
+            }
+            other => panic!("expected Range, got {other:?}"),
+        }
     }
 }

@@ -517,6 +517,31 @@ int8_t resid_fs_exists(const char* path) {
     return 1;
 }
 
+/* Read an entire file into a NUL-terminated Str (bootstrap lexer input).
+ * On error, returns an empty string (mirrors the env/empty-string default). */
+char* resid_fs_read_all(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return resid_box_str("");
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return resid_box_str("");
+    }
+    long sz = ftell(f);
+    if (sz < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return resid_box_str("");
+    }
+    char* p = (char*)malloc((size_t)sz + 1);
+    if (!p) {
+        fclose(f);
+        return resid_box_str("");
+    }
+    size_t n = fread(p, 1, (size_t)sz, f);
+    fclose(f);
+    p[n] = '\0';
+    return p;
+}
+
 void* resid_fs_list_dir(const char* path) {
     /* Shell out to `ls` since POSIX globbing/readdir adds surface; the
      * runtime is allowed to use libc, so this is a pragmatic bootstrap. */
