@@ -427,10 +427,14 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
         if let Some(ret) = &block.ret {
-            let v = self.lower_expr(sc, ret, None)?;
-            if capture_tail {
-                tail = Some(v);
-            }
+            // A `return` inside a nested block (if-branch, while body, …) is a
+            // real early return: emit it and terminate the block. (The
+            // function-body `ret` is additionally handled by `lower_function`,
+            // which only runs when the block was not terminated.)
+            let raw = self.lower_expr(sc, ret, None)?;
+            let val = self.cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
+            self.builder.build_return(Some(&val.v)).map_err(to_err)?;
+            terminated = true;
         }
         Ok((terminated, tail))
     }
