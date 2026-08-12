@@ -523,6 +523,10 @@ fn lit_type(lit: &Literal) -> SemType {
             SemType::Numeric(NumericType::Float(FloatWidth::from_bits(64).unwrap()))
         }
         Literal::Bool(_) => SemType::Bool,
+        // Char literals are Unicode codepoints (spec §14: literals default to
+        // Int; §32 has no `Char` core type). `str_char_at` / `str_from_code`
+        // bridge codepoints and 1-char strings for the bootstrap lexer.
+        Literal::Char(_) => SemType::Numeric(NumericType::Int(IntWidth::from_bits(64).unwrap())),
         _ => SemType::Str,
     }
 }
@@ -645,6 +649,15 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("saturating_uadd", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
     ("saturating_usub", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
     ("saturating_umul", &[SemType::Numeric(NumericType::UInt(IntWidth::B64)), SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::UInt(IntWidth::B64))),
+    // ─── String introspection (bootstrap lexer) ───
+    // Codepoint count of `s`.
+    ("str_len", &[SemType::Str], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    // Codepoint at index `i` (0-based), or -1 when out of bounds.
+    ("str_char_at", &[SemType::Str, SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    // Build a 1-codepoint `Str` from a codepoint (spec §14 char literal).
+    ("str_from_code", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
+    // Half-open substring `s[start..end]` by codepoint index.
+    ("str_slice", &[SemType::Str, SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
 ];
 
 /// Return the set of built-in (extern) function signatures.
@@ -3300,6 +3313,61 @@ Int main() {
     }
 
     // ─── Unary operators ─────────────────────────────────────────
+
+    #[test]
+    fn check_program_string_introspection() {
+        let src = r#"
+Int main() {
+    Str s = "hello";
+    Int n = str_len(s);
+    Int c = str_char_at(s, 0);
+    Str one = str_from_code(c);
+    Str sub = str_slice(s, 1, 3);
+    return n;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected no type errors for string introspection, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_char_literal_is_int() {
+        let src = r#"
+Int main() {
+    Int a = 'a';
+    return a;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected char literal to type as Int, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_str_wrong_args_rejected() {
+        let src = r#"
+Int main() {
+    Int n = str_len(42);
+    return n;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected error for str_len(42), got: {:?}",
+            errs
+        );
+    }
 
     #[test]
     fn infer_unary_not_bool() {

@@ -424,6 +424,55 @@ Int main() {
 }
 
 #[test]
+fn test_string_introspection_calls() {
+    let src = r#"
+Int main() {
+    Str s = "hello";
+    Int n = str_len(s);
+    Int c = str_char_at(s, 0);
+    Str one = str_from_code(c);
+    Str sub = str_slice(s, 1, 3);
+    return n;
+}
+"#;
+    let (unit, errors) = Parser::parse("strintr.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "strintr");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("call i64 @str_len"), "expected str_len: {ir}");
+    assert!(ir.contains("call i64 @str_char_at"), "expected str_char_at: {ir}");
+    assert!(ir.contains("call ptr @str_from_code"), "expected str_from_code: {ir}");
+    assert!(ir.contains("call ptr @str_slice"), "expected str_slice: {ir}");
+}
+
+#[test]
+fn test_char_literal_is_i64() {
+    let src = r#"
+Int main() {
+    Int a = 'a';
+    return a;
+}
+"#;
+    let (unit, errors) = Parser::parse("charlit.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "charlit");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    // 'a' = 97, stored to the alloca; look for the constant.
+    assert!(ir.contains("97"), "expected char literal 97 in IR: {ir}");
+    assert!(!ir.contains("c\"a\\00\""), "char literal should not be a string: {ir}");
+}
+
+#[test]
 fn test_checked_mul_call() {
     let src = r#"
 Int main() {
