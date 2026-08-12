@@ -291,20 +291,23 @@ impl Op {
         )
     }
 
-    /// Get precedence level (higher = binds tighter). Per spec §27.
+    /// Get precedence level (higher = binds tighter). Per spec §27 the levels
+    /// are 1 (Primary, tightest) … 14 (using, loosest); we invert so the
+    /// climbing algorithm sees higher numbers as tighter.
     pub fn precedence(self) -> Option<u8> {
         match self {
-            Self::Question => Some(14),       // conditional
-            Self::Pipe => Some(10),           // bitwise OR
-            Self::Caret => Some(9),           // bitwise XOR
-            Self::Amp => Some(8),             // bitwise AND
-            Self::EqEq | Self::Ne => Some(7), // equality
-            Self::Less | Self::LessEq | Self::Greater | Self::GreaterEq => Some(6), // relational
-            Self::ShiftLeft | Self::ShiftRight => Some(5), // shift
-            Self::Plus | Self::Minus => Some(4), // additive
-            Self::Star | Self::Slash | Self::Percent => Some(3), // multiplicative
-            Self::AndAnd => Some(11),         // logical AND
-            Self::OrOr => Some(12),           // logical OR
+            // spec level 3 → highest binary precedence
+            Self::Star | Self::Slash | Self::Percent => Some(12), // multiplicative
+            Self::Plus | Self::Minus => Some(11),                 // additive
+            Self::ShiftLeft | Self::ShiftRight => Some(10),       // shift
+            Self::Less | Self::LessEq | Self::Greater | Self::GreaterEq => Some(9), // relational
+            Self::EqEq | Self::Ne => Some(8), // equality
+            Self::Amp => Some(7),             // bitwise AND
+            Self::Caret => Some(6),           // bitwise XOR
+            Self::Pipe => Some(5),            // bitwise OR
+            Self::AndAnd => Some(4),          // logical AND
+            Self::OrOr => Some(3),            // logical OR
+            Self::Question => Some(2),        // conditional
             Self::DotDot | Self::DotDotEq => Some(1), // range
             _ => None,
         }
