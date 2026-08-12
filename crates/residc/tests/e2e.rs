@@ -764,3 +764,56 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `return` inside an if/else branch is a real early return (not a fall-through
+/// phi tail), so branches return immediately and recursion terminates.
+#[test]
+fn run_early_return_in_branch_and_recursion() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-recur-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("recur.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int f(Int n) {
+    if (n <= 0) { return 42; }
+    return 7;
+}
+Int sum(Int n) {
+    if (n <= 0) { return 0; }
+    Int m = n - 1;
+    return n + sum(m);
+}
+Int main() {
+    println(IntToString(f(-5)));
+    println(IntToString(f(5)));
+    println(IntToString(sum(5)));
+    println(IntToString(sum(10)));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "42\n7\n15\n55",
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
