@@ -1680,8 +1680,8 @@ Before calling compiler done:
 |-------|--------|-------|
 | 1. Lexer, Parser, AST | ✅ Complete | `resid-lexer` (13) + `resid-parser` (83) pass. Ranges parse as `ExprKind::Range`; `if (PAT = expr)` / `while (PAT = expr)` detect a depth-0 binding `=` and parse as `IfLet`/`WhileLet`. Slice syntax (`xs[1..4]`, `xs[..4]`, `xs[1..]`, `xs[..]`, `xs[0..=3]`) parses as `ExprKind::Slice` — the start bound is parsed at a precedence above the range operator so `1..4` isn't greedily consumed. Provider call syntax: `filesystem.verb(args)`, `environment.verb(args)`, `git.verb(args)` parse as `ExprKind::ProviderCall { provider, verb, args }` (trusted provider names: filesystem, environment, git). Method call syntax: `obj.method(args)` → `ExprKind::MethodCall { target, method, args }`. Field access: `obj.field` → `ExprKind::FieldAccess { target, field }`. C-style casts `(Int(32))x` parse via a `paren_is_cast` lookahead; named call args `add(a = 1, b = 2)`; raw/byte strings map to `RawString`/`ByteString`; `_ = expr;` → `StmtKind::Discard`; bare `{ … }` block statements (a `{` not followed by `ident :` is a block, not a struct/map literal); type defs require the spec `type Point = { … };` form.
 | 2. Knowledge Graph IR | Partial | `resid-ir`: implements spec §6 primitive numeric types, mixed-width widening, list/rangetype member types (41 tests). |
-| 3. Types, Behaviors | Partial | `resid-type`: 137 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, `@residual`, while, RT, built-in extern signatures, `Str + Str`, `check_program`, `ListToString` (List(Int/UInt/Float) → Str), Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors), assertion/debug expressions (`assert`/`rt_assert` cond must be Bool, message Str; `known`/`rt_known` pass-through), ranges (`Range(Elem)` from numeric bounds; for-in over a Range requires the declared type match the element type), if-let/while-let (`bind_pattern` against the source type; vars scoped to the then/body block), byte strings (`b"..."` → `Bytes`), f-string interpolation (each interpolated expr is inferred/validated; the f-string is `Str`), and `#location` → `SourceLoc` with `file`/`line`/`col` field access (unknown fields rejected), provider type checking (unknown providers rejected, unknown verbs rejected, arg count mismatches rejected, arg type mismatches rejected, method calls on value types rejected, provider calls allowed inside RT expressions). Numeric overload resolution (`IntToString`/`UIntToString`/`FloatToString`/`BoolToString`/`ToString`) and numeric widening at call sites. The type checker — not the parser — rejects undefined variables (`check_program_undefined_var`).
-| 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (111 tests) + `residc` (13 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime), `@residual Type y = expr`, assertions (`assert`/`rt_assert` → `resid_abort` on failure; `known`/`rt_known` static/runtime checks; `todo`/`unimplemented` trap), if-let/while-let (`pattern_match_test` compares the runtime tag via `resid_box_tag`; bindings scoped to the then/body block). Range `for-in` (`0..n` half-open, `0..=n` inclusive) lowers to a scalar i64 counter via `slt`/`sle`, with bounds widened/truncated to the declared width. Range/slice construction lower to `resid_range_new` / `resid_slice_new` (boxed, partial-open `..n`, `n..`, `..` resolve bounds via the list length). Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. Raw strings (`r"..."`) lower as `Str` globals; byte strings (`b"..."`) lower as constant global byte arrays (`Bytes`, no NUL terminator); `#location` boxes a `SourceLoc { file, line, col }` from the current span with field access via the boxed-slot runtime. F-string interpolation (spec §14) stringifies interpolated values (`Str` passthrough, `*ToString` helpers for numerics/bools, `ToString` for composites) and stitches them with `resid_str_concat`; pure-text f-strings fold to a constant. Runtime `Str + Str` with a non-constant operand concatenates via `resid_str_concat`. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. |
+| 3. Types, Behaviors | Partial | `resid-type`: 140 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, `@residual`, while, RT, built-in extern signatures, `Str + Str`, `check_program`, `ListToString` (List(Int/UInt/Float) → Str), Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors), assertion/debug expressions (`assert`/`rt_assert` cond must be Bool, message Str; `known`/`rt_known` pass-through), ranges (`Range(Elem)` from numeric bounds; for-in over a Range requires the declared type match the element type), if-let/while-let (`bind_pattern` against the source type; vars scoped to the then/body block), byte strings (`b"..."` → `Bytes`), f-string interpolation (each interpolated expr is inferred/validated; the f-string is `Str`), and `#location` → `SourceLoc` with `file`/`line`/`col` field access (unknown fields rejected), provider type checking (unknown providers rejected, unknown verbs rejected, arg count mismatches rejected, arg type mismatches rejected, method calls on value types rejected, provider calls allowed inside RT expressions). Numeric overload resolution (`IntToString`/`UIntToString`/`FloatToString`/`BoolToString`/`ToString`) and numeric widening at call sites. String introspection built-ins (`str_len`, `str_char_at`, `str_from_code`, `str_slice`) type-check; char literals infer as `Int(64)`. The type checker — not the parser — rejects undefined variables (`check_program_undefined_var`).
+| 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (113 tests) + `residc` (13 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime), `@residual Type y = expr`, assertions (`assert`/`rt_assert` → `resid_abort` on failure; `known`/`rt_known` static/runtime checks; `todo`/`unimplemented` trap), if-let/while-let (`pattern_match_test` compares the runtime tag via `resid_box_tag`; bindings scoped to the then/body block). Range `for-in` (`0..n` half-open, `0..=n` inclusive) lowers to a scalar i64 counter via `slt`/`sle`, with bounds widened/truncated to the declared width. Range/slice construction lower to `resid_range_new` / `resid_slice_new` (boxed, partial-open `..n`, `n..`, `..` resolve bounds via the list length). Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. Raw strings (`r"..."`) lower as `Str` globals; byte strings (`b"..."`) lower as constant global byte arrays (`Bytes`, no NUL terminator); `#location` boxes a `SourceLoc { file, line, col }` from the current span with field access via the boxed-slot runtime. F-string interpolation (spec §14) stringifies interpolated values (`Str` passthrough, `*ToString` helpers for numerics/bools, `ToString` for composites) and stitches them with `resid_str_concat`; pure-text f-strings fold to a constant. Runtime `Str + Str` with a non-constant operand concatenates via `resid_str_concat`. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. UTF-8-codepoint string helpers (`str_len`/`str_char_at`/`str_from_code`/`str_slice`) declared via the extern path and callable from Resid source (bootstrap lexer groundwork); char literals lower as `i64` codepoints rather than strings. |
 | 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. Runtime helpers landed: conversion helpers, checked/wrapping/saturating arithmetic, ranges/slicing, raw strings, byte strings, `#location`, f-string interpolation, runtime `Str + Str` concat. Still missing: providers, handles, spawn, wide numerics, `resid-build` crate. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
 
@@ -1696,7 +1696,7 @@ Build/test notes:
 - `residc <file.resid> build [-o <out>]` compiles to a native binary via clang + the
   bootstrap runtime (`crates/residc/resid_rt.c`); `run` builds to a temp dir and executes
   it, propagating the exit code (including POSIX signal exits as 128+signal).
-- **398 tests total**: lexer 13, parser 83, resid-ir 41, resid-type 137, resid-codegen 111,
+- **403 tests total**: lexer 13, parser 83, resid-ir 41, resid-type 140, resid-codegen 113,
   residc 13 (e2e). Destructuring, `_ = expr` discard,
   `if`-expressions with phi joins, `while` and range `for-in` loops with
   `break`/`continue`, `for-in` over boxed lists, `comptime_print` (compile-time
@@ -1748,8 +1748,8 @@ strings.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| **4.1** | Float arithmetic (`+`, `-`, `*`, `/` on Float types) | ❌ Not yet | Int arithmetic done. Need float_type + fadd/fsub/fmul/fdiv. |
-| **4.2** | Conversion helpers lowering | ❌ Not yet | Must declare extern, widen args to target width, return result. |
+| **4.1** | Float arithmetic (`+`, `-`, `*`, `/` on Float types) | ✅ Done | `float_type(bits)` + fadd/fsub/fmul/fdiv; float literals → `Float(64)`. |
+| **4.2** | Conversion helpers lowering | ✅ Done | Declared extern, args widened to helper's expected width, result returned at target width. `test_conversion_helper_i32`. |
 | **4.3** | `@residual Type y = expr` codegen | ✅ Done | Lowers as typed binding with residual marker. |
 | **4.4** | `known`/`rt_known` codegen | ✅ Done | `known` → compile-time check abort; `rt_known` → runtime check abort. |
 | **4.5** | `todo`/`unimplemented` codegen | ✅ Done | Lower to `resid_abort("message")`. |
@@ -1763,8 +1763,8 @@ strings.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| **3.1** | Conversion helper type resolution | ❌ Not yet | `i32(42)` must resolve to `Int(32)` type. |
-| **3.2** | Float type inference | ❌ Not yet | Float literals → `Float(64)` default. |
+| **3.1** | Conversion helper type resolution | ✅ Done | `i8..i512`, `u8..u512`, `f16..f512`, `isize`, `usize` in `BUILTIN_SIGS`; `conversion_helper_match` widens call-site args. |
+| **3.2** | Float type inference | ✅ Done | Float literals → `Float(64)` default; all `FloatWidth` variants typed. |
 | **3.3** | `Range(Elem)` type construction | ✅ Done | From numeric bounds; for-in requires element type match. |
 | **3.4** | `ListToString` | ✅ Done | List(Int/UInt/Float) → Str. |
 | **3.5** | `Str + Str` concat type | ✅ Done | String concatenation produces Str. |
@@ -1820,23 +1820,23 @@ Updated from §10. **Checked = done, unchecked = missing.**
 | Visibility rules (§22) | ❌ |
 | Structured spawn (§19) | ❌ |
 | Full numeric family (§6, §32) | Partial — Int8..Int64, UInt8..UInt64, Float16/32/64 |
-| Checked arithmetic (§6.5) | ❌ |
+| Checked arithmetic (§6.5) | ✅ | `checked_add/sub/mul/div`, `checked_uadd/usub/umul/udiv`. |
 | **For-in (§18, §29)** | ✅ |
 | Ranges and slicing (§15) | ✅ |
 | known/rt_known (§9, §24) | ✅ |
 | comptime_print (§24) | ✅ |
-| Raw/byte strings (§14) | ❌ |
-| #location (§25) | ❌ |
+| Raw/byte strings (§14) | ✅ |
+| #location (§25) | ✅ | `SourceLoc` boxed; field access through `load_slot`. |
 | Discard binding (§7) | ✅ |
-| Default parameters (§8) | ❌ |
-| Named arguments (§8) | ❌ |
+| Default parameters (§8) | Partial | Parse + AST carries default; not substituted at call sites (FunctionSig has no names/defaults). |
+| Named arguments (§8) | Partial | Parse into `(Option<Id>, Expr)`; type-check/codegen treat args positionally (names ignored). |
 | **@residual (§9)** | ✅ |
-| value? / value else {} (§23) | ❌ |
+| value? / value else {} (§23) | ✅ | Unwrap reads box slot 0; `else` fallback via phi join; `?` requires enclosing Option return. |
 | Failure model (§9) | Partial — abort works, RegionError not |
 | Conversion helpers (§6.7) | ✅ |
 | Wrapping/saturating arithmetic (§6.5) | ✅ |
 | **Provider call syntax (§32)** | ✅ | `filesystem.verb(args)`, `environment.verb(args)`, `git.verb(args)` parse as ProviderCall; type-check rejects unknown providers, unknown verbs, wrong arg counts/types; codegen dispatches to extern functions. |
-| Float arithmetic (§6.2) | ❌ |
+| Float arithmetic (§6.2) | ✅ | fadd/fsub/fmul/fdiv; Float(16/32/64). |
 
 ### 12.7 Bootstrap Milestones
 
@@ -1844,13 +1844,16 @@ Updated from §10. **Checked = done, unchecked = missing.**
    Enables Resid codepoint→char conversion for lexer.
 
 2. **M2 — String + char support**: byte strings, `#location`, ranges, `Str + Str`.
-   Enables Resid string building for lexer output.
+   ✅ Done. Enables Resid string building for lexer output. **Blocked on:** `Str`
+   length/indexing/char iteration (see task list).
 
-3. **M3 — List + Option + struct + pattern matching**: already mostly working in
-   codegen, needs type system + IR glue. Enables Resid data structures for parser.
+3. **M3 — List + Option + struct + pattern matching**: ✅ Done — type system + codegen
+   both cover lists, structs, options, destructuring, if-let/while-let. Enables Resid
+   data structures for parser.
 
 4. **M4 — Resid lexer**: Write a Resid program that lexes `.resid` source.
    Proof: `cargo run` on a `.resid` file produces tokens.
+   **Blocked on:** `Str` char iteration (`len`, indexing, codepoint access).
 
 5. **M5 — Resid parser**: Write a Resid program that parses tokens into AST.
    Proof: `cargo run` on `.resid` source produces AST output.

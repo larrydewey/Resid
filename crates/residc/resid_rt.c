@@ -59,6 +59,97 @@ char* resid_str_concat(const char* a, const char* b) {
     return p;
 }
 
+/* UTF-8 decoding helpers for the string introspection functions. */
+static int utf8_seq_len(const unsigned char c) {
+    if (c < 0x80) return 1;
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xF8) == 0xF0) return 4;
+    return 1; /* invalid continuation byte — treat as 1 */
+}
+
+static int64_t utf8_decode(const unsigned char* p, int len) {
+    switch (len) {
+        case 1: return p[0];
+        case 2: return ((p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+        case 3: return ((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+        default: return ((p[0] & 0x07) << 18) | ((p[1] & 0x3F) << 12)
+                        | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+    }
+}
+
+/* Number of Unicode codepoints in a UTF-8 string. */
+int64_t str_len(const char* s) {
+    int64_t n = 0;
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        n++;
+        p += utf8_seq_len(*p);
+    }
+    return n;
+}
+
+/* Codepoint at index `i` (0-based), or -1 when out of bounds. */
+int64_t str_char_at(const char* s, int64_t i) {
+    if (i < 0) return -1;
+    int64_t n = 0;
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        if (n == i) return utf8_decode(p, utf8_seq_len(*p));
+        p += utf8_seq_len(*p);
+        n++;
+    }
+    return -1;
+}
+
+/* Build a 1-codepoint string from a Unicode codepoint. */
+char* str_from_code(int64_t cp) {
+    char buf[5];
+    int n = 0;
+    if (cp < 0x80) {
+        buf[n++] = (char)cp;
+    } else if (cp < 0x800) {
+        buf[n++] = (char)(0xC0 | (cp >> 6));
+        buf[n++] = (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        buf[n++] = (char)(0xE0 | (cp >> 12));
+        buf[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[n++] = (char)(0x80 | (cp & 0x3F));
+    } else {
+        buf[n++] = (char)(0xF0 | (cp >> 18));
+        buf[n++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[n++] = (char)(0x80 | (cp & 0x3F));
+    }
+    buf[n] = '\0';
+    char* p = (char*)malloc(n + 1);
+    memcpy(p, buf, n + 1);
+    return p;
+}
+
+/* Half-open substring `s[start..end]` by codepoint index (clamped). */
+char* str_slice(const char* s, int64_t start, int64_t end) {
+    if (start < 0) start = 0;
+    if (end < start) end = start;
+    const unsigned char* p = (const unsigned char*)s;
+    const unsigned char* begin = p;
+    int64_t i = 0;
+    while (*p && i < start) {
+        p += utf8_seq_len(*p);
+        i++;
+    }
+    begin = p;
+    while (*p && i < end) {
+        p += utf8_seq_len(*p);
+        i++;
+    }
+    size_t n = (size_t)(p - begin);
+    char* out = (char*)malloc(n + 1);
+    memcpy(out, begin, n);
+    out[n] = '\0';
+    return out;
+}
+
 /*
  * Boxed value objects.
  *

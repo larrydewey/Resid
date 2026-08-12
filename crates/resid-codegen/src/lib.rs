@@ -1444,11 +1444,16 @@ impl<'ctx> CodeGen<'ctx> {
                 })
             }
 
+            // Char literals are Unicode codepoints (spec §14: literals default
+            // to Int; §32 has no Char core type). Lowered as Int(64).
             Literal::Char(c) => {
-                let ptr = self.lower_str(&c.to_string());
+                let cp = i64::from(u32::from(*c));
+                let iv = self.cx.i64_type().const_int(cp as u64, true);
                 Ok(Val {
-                    v: ptr.into(),
-                    ty: SemType::Str,
+                    v: iv.into(),
+                    ty: SemType::Numeric(NumericType::Int(
+                        resid_ir::IntWidth::from_bits(64).unwrap(),
+                    )),
                 })
             }
 
@@ -2821,10 +2826,6 @@ pub fn const_str(e: &Expr) -> Option<String> {
             }
             ExprKind::Literal(Literal::RawStr(l)) => {
                 out.push_str(&l.value);
-                true
-            }
-            ExprKind::Literal(Literal::Char(c)) => {
-                out.push_str(&c.to_string());
                 true
             }
             ExprKind::RawString(s) => {
