@@ -100,8 +100,16 @@ impl<'ctx> CodeGen<'ctx> {
                 _ => None,
             })
             .collect();
+        // Declare every function up front so forward references and mutual
+        // recursion resolve (a caller may name a function defined later).
         for name in &names {
-            let fv = self.declare_function(name, unit)?;
+            self.declare_function(name, unit)?;
+        }
+        for name in &names {
+            let fv = self
+                .module
+                .get_function(name)
+                .ok_or_else(|| format!("codegen: missing declaration for `{name}`"))?;
             self.cur_fn = Some(fv);
             self.lower_function(&name, unit, fv)?;
         }

@@ -2383,6 +2383,37 @@ Int main() {
 }
 
 #[test]
+fn test_forward_reference_and_mutual_recursion() {
+    // A function may call another defined later in source order; mutual
+    // recursion must resolve because all functions are declared up front.
+    let src = r#"
+Bool is_even(Int n) {
+    if (n == 0) { return true; }
+    Int m = n - 1;
+    return is_odd(m);
+}
+Bool is_odd(Int n) {
+    if (n == 0) { return false; }
+    Int m = n - 1;
+    return is_even(m);
+}
+Int main() {
+    if (is_even(10)) { return 1; }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("fwd.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fwd");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("define"), "expected function defs");
+    assert!(ir.contains("call i1 @is_odd"), "expected is_odd call");
+}
+
+#[test]
 fn test_complex_expression() {
     let src = r#"
 Int main() {
