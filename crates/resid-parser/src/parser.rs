@@ -751,10 +751,12 @@ impl Parser {
             // Literals
             Some(TokenKind::Literal(lit)) => {
                 self.bump();
-                Expr {
-                    kind: ExprKind::Literal(lit.clone()),
-                    span,
-                }
+                let kind = match lit {
+                    resid_lexer::Literal::RawStr(s) => ExprKind::RawString(s.value.clone()),
+                    resid_lexer::Literal::ByteStr(s) => ExprKind::ByteString(s.value.clone()),
+                    other => ExprKind::Literal(other.clone()),
+                };
+                Expr { kind, span }
             }
 
             // F-string
@@ -868,12 +870,26 @@ impl Parser {
                 }
             }
 
-            // Parenthesized expression
+            // Cast: (Type) expression  —  or a parenthesized expression.
             Some(TokenKind::Op(Op::LParen)) => {
-                self.bump();
-                let inner = self.parse_expression();
-                self.expect_op(Op::RParen, "expression: expected )");
-                inner
+                if self.paren_is_cast() {
+                    self.bump();
+                    let type_ = self.parse_type();
+                    self.expect_op(Op::RParen, "cast: expected )");
+                    let operand = self.parse_primary();
+                    Expr {
+                        kind: ExprKind::Cast {
+                            type_,
+                            operand: Box::new(operand),
+                        },
+                        span,
+                    }
+                } else {
+                    self.bump();
+                    let inner = self.parse_expression();
+                    self.expect_op(Op::RParen, "expression: expected )");
+                    inner
+                }
             }
 
             // Identifier — could be a value, function call, or keyword for value?
@@ -889,22 +905,32 @@ impl Parser {
                     self.bump();
                     let mut args = Vec::new();
                     while !self.peek_is_op(Op::RParen) && !self.at_eof() {
-                        let name = if self.peek_is_ident("") {
-                            None
-                        } else {
-                            let id_str = match self.peek() {
-                                Some(TokenKind::Ident(s)) => s.clone(),
-                                _ => String::new(),
-                            };
-                            if id_str.is_empty() {
-                                None
-                            } else {
-                                Some(Id(id_str))
+                        // Named argument: `name = expr`. Detect an identifier
+                        // that is followed by `=` and consume it as the name;
+                        // otherwise fall through to a full positional argument.
+                        let named = match self.peek() {
+                            Some(TokenKind::Ident(s))
+                                if matches!(
+                                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                                    Some(TokenKind::Op(Op::Equals))
+                                ) =>
+                            {
+                                self.bump();
+                                self.bump();
+                                Some(Id(s.clone()))
                             }
+                            _ => None,
                         };
-                        let arg_name = name.clone();
-                        let arg = self.parse_expression();
-                        args.push((arg_name, arg));
+                        match named {
+                            Some(id) => {
+                                let arg = self.parse_expression();
+                                args.push((Some(id), arg));
+                            }
+                            None => {
+                                let arg = self.parse_expression();
+                                args.push((None, arg));
+                            }
+                        }
                         if self.peek_is_op(Op::Comma) {
                             self.bump();
                         }
@@ -1100,57 +1126,30 @@ impl Parser {
 
             // Map literal
             Some(TokenKind::Op(Op::LBrace)) => {
-                // Could be map or struct literal
-                // Check if next token is an identifier followed by : (map)
-                // or an identifier followed by { (struct)
-                self.bump();
-                if let Some(TokenKind::Ident(name)) = self.peek() {
-                    let name_str = name.clone();
-                    if self.peek_after_is_op(Op::Colon) {
-                        // Map: { key: value, ... }
-                        let mut entries = Vec::new();
-                        loop {
-                            let key = self.parse_expression();
-                            self.expect_op(Op::Colon, "map: expected :");
-                            let value = self.parse_expression();
-                            entries.push((key, value));
-                            if self.peek_is_op(Op::Comma) {
-                                self.bump();
-                            } else {
-                                break;
-                            }
-                        }
-                        self.expect_op(Op::RBrace, "map: expected }");
-                        Expr {
-                            kind: ExprKind::MapLit(entries),
-                            span,
-                        }
-                    } else {
-                        // Struct: Name { field: value, ... }
-                        self.bump(); // skip name
-                        let mut fields = Vec::new();
-                        if self.peek_is_op(Op::LBrace) {
+                // Map: `{ key: value, ... }`. A `{` NOT followed by an
+                // identifier + `:` opens a bare block, not a struct literal —
+                // struct literals are `Name { … }` with the name outside.
+                let is_map = matches!(self.peek(), Some(TokenKind::Ident(_)))
+                    && self.peek_after_is_op(Op::Colon);
+                if is_map {
+                    self.bump(); // {
+                    // Map: { key: value, ... }
+                    let mut entries = Vec::new();
+                    loop {
+                        let key = self.parse_expression();
+                        self.expect_op(Op::Colon, "map: expected :");
+                        let value = self.parse_expression();
+                        entries.push((key, value));
+                        if self.peek_is_op(Op::Comma) {
                             self.bump();
-                            while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
-                                let field_name = self
-                                    .expect_ident("struct field: expected identifier")
-                                    .unwrap_or_else(|| Id("__error__".to_string()));
-                                self.expect_op(Op::Colon, "struct: expected :");
-                                let field_value = self.parse_expression();
-                                fields.push((field_name, field_value));
-                                if self.peek_is_op(Op::Comma) {
-                                    self.bump();
-                                }
-                            }
-                            self.expect_op(Op::RBrace, "struct: expected }");
+                        } else {
+                            break;
                         }
-                        Expr {
-                            kind: ExprKind::StructLit {
-                                name: Id(name_str),
-                                fields,
-                            },
-                            span,
-                        }
+                    }
+                    self.expect_op(Op::RBrace, "map: expected }");
+                    Expr {
+                        kind: ExprKind::MapLit(entries),
+                        span,
                     }
                 } else {
                     // Just a block — handled in parse_block
@@ -1411,6 +1410,67 @@ impl Parser {
             }
         }
         false
+    }
+
+    /// Look ahead from the current `(` to determine whether the parenthesized
+    /// form is a C-style cast `(Type) expr` (spec §6.7) rather than an ordinary
+    /// parenthesized expression. A cast has: `(`, a type name (identifier,
+    /// possibly `rt`- or sized/generic-parameterized), `)`, then an expression.
+    /// Heuristic: a cast is recognized when `(` is followed immediately by a
+    /// type-shaped token run that closes with `)` and is then followed by a
+    /// value-starting token (ident, literal, string, `(`, or `[`). Binary
+    /// operators or statement terminators after the `)` indicate a plain
+    /// parenthesized expression (e.g. `(a + b) * c`, `return (f(x));`).
+    fn paren_is_cast(&self) -> bool {
+        if !self.peek_is_op(Op::LParen) {
+            return false;
+        }
+        let mut i = self.pos + 1;
+        // Optional `rt` residual type marker.
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Keyword(Keyword::Rt))) {
+            i += 1;
+        }
+        // ISize / USize (identifier-shaped) or a user/builtin type name.
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
+            return false;
+        }
+        i += 1;
+        // Optional generic/sized parameters: Int(32), List(Int), Option(Int).
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Op(Op::LParen))) {
+            i += 1;
+            let mut depth = 1usize;
+            while i < self.tokens.len() {
+                match &self.tokens[i].kind {
+                    TokenKind::Op(Op::LParen) => depth += 1,
+                    TokenKind::Op(Op::RParen) => {
+                        depth -= 1;
+                        if depth == 0 {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            if depth != 0 {
+                return false;
+            }
+        }
+        // The type run must close with `)`.
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Op(Op::RParen))) {
+            return false;
+        }
+        i += 1;
+        // The next token must start a value expression.
+        matches!(
+            self.tokens.get(i).map(|t| &t.kind),
+            Some(TokenKind::Ident(_))
+                | Some(TokenKind::Literal(_))
+                | Some(TokenKind::FString(_))
+                | Some(TokenKind::Op(Op::LParen))
+                | Some(TokenKind::Op(Op::LBracket))
+        )
     }
 
     fn parse_if_let_expr(&mut self, span: Span) -> Expr {
@@ -1706,7 +1766,17 @@ impl Parser {
             }
 
             // Destructuring: Pattern = expression
-            Some(TokenKind::Ident(_)) => {
+            Some(TokenKind::Ident(id)) => {
+                // Bare discard: `_ = expression;`
+                if id == "_" {
+                    self.bump();
+                    self.expect_op(Op::Equals, "discard: expected =");
+                    let value = self.parse_expression();
+                    return Stmt {
+                        kind: StmtKind::Discard(Box::new(value)),
+                        span,
+                    };
+                }
                 if !self.looks_like_binding() {
                     // Leading ident is a plain expression (call/field/etc.),
                     // not the start of `Type name = …` or `Pattern = …`.
@@ -2669,5 +2739,675 @@ type Opt(T) = Some(T) | None;
         // 42.method() parses without error (42. is float literal, method() is separate expr)
         let (_result, errors) = Parser::parse("test.resid", "Int f() { 42.method(); }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    // ─── Additional parser tests ─────────────────────────────────
+
+    #[test]
+    fn parse_float_literal() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Float x = 3.14; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::Literal(Literal::Float(fl)) => {
+                                assert_eq!(fl.value, "3.14");
+                            }
+                            other => panic!("expected float literal, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected bind, got {:?}", other),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_hex_int() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = 0xff; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::Literal(Literal::Int { kind, .. }) => {
+                                assert!(matches!(kind, IntKind::Hex(_)));
+                            }
+                            other => panic!("expected int literal, got {:?}", other),
+                        }
+                    }
+                    _ => panic!("expected bind"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_binary_int() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = 0b1010; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::Literal(Literal::Int { kind, .. }) => {
+                                assert!(matches!(kind, IntKind::Binary(_)));
+                            }
+                            other => panic!("expected int literal, got {:?}", other),
+                        }
+                    }
+                    _ => panic!("expected bind"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_octal_int() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = 0o77; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::Literal(Literal::Int { kind, .. }) => {
+                                assert!(matches!(kind, IntKind::Octal(_)));
+                            }
+                            other => panic!("expected int literal, got {:?}", other),
+                        }
+                    }
+                    _ => panic!("expected bind"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_byte_string() {
+        let (result, errors) = Parser::parse("test.resid", r#"Int f() { Bytes b = b"hello"; }"#);
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::ByteString(bytes) => {
+                                assert_eq!(bytes, b"hello");
+                            }
+                            other => panic!("expected byte string, got {:?}", other),
+                        }
+                    }
+                    _ => panic!("expected bind"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_raw_string() {
+        let (result, errors) = Parser::parse("test.resid", r#"Int f() { Str s = r"C:\path"; }"#);
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::RawString(s) => {
+                                assert_eq!(s, "C:\\path");
+                            }
+                            other => panic!("expected raw string, got {:?}", other),
+                        }
+                    }
+                    _ => panic!("expected bind"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_location() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { SourceLoc l = #location; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::Location => {}
+                            other => panic!("expected Location, got {:?}", other),
+                        }
+                    }
+                    _ => panic!("expected bind"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_fstring_text_only() {
+        let (result, errors) = Parser::parse("test.resid", r#"Int f() { Str s = f"hello"; }"#);
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::FString(parts) => {
+                                assert_eq!(parts.len(), 1);
+                                match &parts[0] {
+                                    crate::ast::FStringPart::Text(t) => assert_eq!(t.as_str(), "hello"),
+                                    _ => panic!("expected text part"),
+                                }
+                            }
+                            other => panic!("expected f-string, got {:?}", other),
+                        }
+                    }
+                    _ => panic!("expected bind"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_fstring_with_interpolation() {
+        let (result, errors) = Parser::parse(
+            "test.resid",
+            r#"Int f() { Str name = "world"; println(f"hello {name}"); }"#,
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_range_half_open() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int r = 0..10; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::Range { start, end, closed } => {
+                                assert!(!closed);
+                                match &start.kind {
+                                    ExprKind::Literal(Literal::Int { value, .. }) => assert_eq!(*value, 0),
+                                    _ => panic!("expected int literal start"),
+                                }
+                                match &end.kind {
+                                    ExprKind::Literal(Literal::Int { value, .. }) => assert_eq!(*value, 10),
+                                    _ => panic!("expected int literal end"),
+                                }
+                            }
+                            other => panic!("expected Range, got {:?}", other),
+                        }
+                    }
+                    _ => panic!("expected bind"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_range_inclusive() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int r = 0..=5; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::Range { closed, .. } => {
+                                assert!(*closed);
+                            }
+                            other => panic!("expected Range, got {:?}", other),
+                        }
+                    }
+                    _ => panic!("expected bind"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_slice_from_list() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { List(Int) xs = [1,2,3]; List(Int) s = xs[1..3]; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_slice_partial_open_end() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[3..]; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_slice_partial_open_start() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[..3]; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_slice_open_both() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[..]; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_slice_inclusive() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[0..=3]; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_list_lit() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { List(Int) xs = [1, 2, 3]; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Bind { value, .. } => {
+                        match &value.kind {
+                            ExprKind::ListLit(elems) => {
+                                assert_eq!(elems.len(), 3);
+                            }
+                            other => panic!("expected ListLit, got {:?}", other),
+                        }
+                    }
+                    _ => panic!("expected bind"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_struct_lit() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { Point p = Point { x: 1, y: 2 }; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_if_let_some() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { if (Some(n) = x) { return n; } }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Expr(expr) => match &expr.kind {
+                        ExprKind::IfLet { pattern, .. } => {
+                            match &pattern.kind {
+                                PatternKind::Variant { name, param } => {
+                                    assert_eq!(name.0, "Some");
+                                    assert!(param.is_some());
+                                }
+                                _ => panic!("expected variant pattern"),
+                            }
+                        }
+                        _ => panic!("expected IfLet"),
+                    },
+                    _ => panic!("expected expr stmt"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_while_let() {
+        let (result, errors) = Parser::parse(
+            "test.resid",
+            "Int f() { while (Some(n) = source) { n; } }",
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_for_in_range() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { for (Int i in 0..10) { i; } }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Expr(expr) => match &expr.kind {
+                        ExprKind::ForIn { type_, name, collection, .. } => {
+                            match type_ {
+                                Type::Base { name: n, .. } => assert_eq!(n.0, "Int"),
+                                _ => panic!("expected Type::Base"),
+                            }
+                            assert_eq!(name.0, "i");
+                            match &collection.kind {
+                                ExprKind::Range { .. } => {}
+                                _ => panic!("expected range collection"),
+                            }
+                        }
+                        _ => panic!("expected ForIn"),
+                    },
+                    _ => panic!("expected expr stmt"),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_for_in_list() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { for (Int x in [1,2,3]) { x; } }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_match() {
+        let (result, errors) = Parser::parse(
+            "test.resid",
+            "Int f() { return match x { Some(n) => n, None => 0 }; }",
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_destructure() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { Int { x, y } = p; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_discard() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { _ = 42; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        match &result.declarations[0] {
+            Declaration::Function(f) => {
+                let stmt = &f.body.statements[0];
+                match &stmt.kind {
+                    StmtKind::Discard(expr) => {
+                        match &expr.kind {
+                            ExprKind::Literal(Literal::Int { value, .. }) => assert_eq!(*value, 42),
+                            _ => panic!("expected int literal in discard"),
+                        }
+                    }
+                    other => panic!("expected Discard, got {:?}", other),
+                }
+            }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parse_assert() {
+        let (result, errors) =
+            Parser::parse("test.resid", r#"Int f() { assert(1 == 1, "ok"); }"#);
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_rt_assert() {
+        let (result, errors) =
+            Parser::parse("test.resid", r#"Int f() { rt_assert(1 == 1, "ok"); }"#);
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_known() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { known(1 == 1); }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_rt_known() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { rt_known(1 == 1); }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_todo() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { todo(\"not done\"); }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_unimplemented() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { unimplemented(\"not done\"); }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_comptime_print() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { comptime_print(42); }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_at_residual() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { @residual Int x = 42; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_at_residual_float() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { @residual Float x = 3.14; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_rt_expression() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = rt 42; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_early_return() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Option(Int) f() { return x?; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_else_fallback() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { Int y = x else { 0 }; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_with_binding() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { with (File h = open(\"path\")) { h; } }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_cast() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int(32) x = (Int(32))y; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_index() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { return xs[0]; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_function_with_defaults() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f(Int x = 1, Int y = 2) { return x + y; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_named_args() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { return add(a = 1, b = 2); }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_bool_literal_true() {
+        let (result, errors) = Parser::parse("test.resid", "Bool f() { return true; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_bool_literal_false() {
+        let (result, errors) = Parser::parse("test.resid", "Bool f() { return false; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_def() {
+        let (result, errors) =
+            Parser::parse("test.resid", "type Point = { x: Int, y: Int };");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_pub_function() {
+        let (result, errors) =
+            Parser::parse("test.resid", "pub Int f() { return 42; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_nested_block() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { { Int x = 1; { Int y = 2; return x + y; } } }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_empty_function() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { return 0; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_multiple_declarations() {
+        let (result, errors) = Parser::parse(
+            "test.resid",
+            "Int f() { return 1; }\nInt g() { return 2; }",
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        assert_eq!(result.declarations.len(), 2, "expected 2 declarations");
+    }
+
+    #[test]
+    fn parse_char_literal() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Char c = 'a'; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_null_literal() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Null n = null; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_ternary_like_if() {
+        let (result, errors) = Parser::parse(
+            "test.resid",
+            "Int f() { Bool c = true; return if (c) { 1 } else { 0 }; }",
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_while_with_break() {
+        let (result, errors) = Parser::parse(
+            "test.resid",
+            "Int f() { while (true) { break; } return 0; }",
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_while_with_continue() {
+        let (result, errors) = Parser::parse(
+            "test.resid",
+            "Int f() { while (true) { continue; } return 0; }",
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_if_without_else() {
+        let (result, errors) =
+            Parser::parse("test.resid", "Int f() { if (true) { return 1; } return 0; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_param_int32() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Int(32) x = 42; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_param_float32() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { Float(32) x = 3.14; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_param_uint8() {
+        let (result, errors) = Parser::parse("test.resid", "Int f() { UInt(8) x = 255; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_complex_fstring() {
+        let (result, errors) = Parser::parse(
+            "test.resid",
+            r#"Int f() { Str s = f"count = {n}, name = {name}, pi = {pi}"; }"#,
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_string_with_escapes() {
+        let (result, errors) =
+            Parser::parse("test.resid", r#"Int f() { Str s = "hello\nworld\t!"; }"#);
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_mismatched_braces() {
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { return 1; }");
+        assert_eq!(errors.len(), 0, "should parse fine");
+        let (_result2, errors2) = Parser::parse("test.resid", "Int f() { return 1;");
+        assert!(errors2.len() >= 1, "expected error for mismatched braces");
     }
 }

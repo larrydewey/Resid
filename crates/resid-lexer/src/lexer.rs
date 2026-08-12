@@ -76,23 +76,30 @@ impl Lexer {
         }
     }
 
-    /// Scan a // line comment (skip it).
-    fn scan_comment(&mut self, _start: Span) {
+    /// Scan a `//` line comment (skip it). A lone `/` is the division
+    /// operator and must be emitted as `Op::Slash`.
+    fn scan_comment(&mut self, start: Span) {
         self.bump(); // skip first /
-        if self.peek() == Some('/') {
-            self.bump(); // skip second /
-            // Check for doc comment
-            let is_doc = self.peek() == Some('/');
-            while let Some(c) = self.peek() {
-                if c == '\n' {
-                    break;
-                }
-                self.bump();
+        if self.peek() != Some('/') {
+            // Not a comment — it's the division operator.
+            self.tokens.push(Token {
+                kind: TokenKind::Op(Op::Slash),
+                span: start,
+            });
+            return;
+        }
+        self.bump(); // skip second /
+        // Check for doc comment
+        let is_doc = self.peek() == Some('/');
+        while let Some(c) = self.peek() {
+            if c == '\n' {
+                break;
             }
-            if is_doc {
-                // We'll collect doc comments via a separate pass or store them
-                // For now, skip — doc comments are handled by the parser
-            }
+            self.bump();
+        }
+        if is_doc {
+            // We'll collect doc comments via a separate pass or store them
+            // For now, skip — doc comments are handled by the parser
         }
     }
 
@@ -1060,5 +1067,50 @@ mod tests {
     fn test_location() {
         let (_, errors) = Lexer::new("t.resid", "#location").tokenize();
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_raw_string() {
+        let (tokens, errors) = Lexer::new("t.resid", r#"r"hello""#).tokenize();
+        assert!(errors.is_empty(), "lexer errors: {:?}", errors);
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn test_byte_string() {
+        let (tokens, errors) = Lexer::new("t.resid", r#"b"hello""#).tokenize();
+        assert!(errors.is_empty(), "lexer errors: {:?}", errors);
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn test_float_literal() {
+        let (tokens, errors) = Lexer::new("t.resid", "3.14 0.0 1e10").tokenize();
+        assert!(errors.is_empty(), "lexer errors: {:?}", errors);
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn test_bool_literals() {
+        let (tokens, errors) = Lexer::new("t.resid", "true false").tokenize();
+        assert!(errors.is_empty(), "lexer errors: {:?}", errors);
+        let kinds: Vec<String> = tokens.iter().map(|t| format!("{:?}", t.kind)).collect();
+        assert!(kinds.iter().any(|k| k.contains("Keyword(True)")));
+        assert!(kinds.iter().any(|k| k.contains("Keyword(False)")));
+    }
+
+    #[test]
+    fn test_char_literal() {
+        let (tokens, errors) = Lexer::new("t.resid", "'a'").tokenize();
+        assert!(errors.is_empty(), "lexer errors: {:?}", errors);
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn test_null_literal() {
+        let (tokens, errors) = Lexer::new("t.resid", "null").tokenize();
+        assert!(errors.is_empty(), "lexer errors: {:?}", errors);
+        let kinds: Vec<String> = tokens.iter().map(|t| format!("{:?}", t.kind)).collect();
+        assert!(kinds.iter().any(|k| k.contains("Null")));
     }
 }
