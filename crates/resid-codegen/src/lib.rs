@@ -465,10 +465,11 @@ impl<'ctx> CodeGen<'ctx> {
         let then_reaches = if t_term {
             None
         } else {
+            let from = self.builder.get_insert_block().unwrap();
             self.builder
                 .build_unconditional_branch(merge_bb)
                 .map_err(to_err)?;
-            Some(then_bb)
+            Some(from)
         };
 
         // Else arm (or default-zero for the missing branch).
@@ -480,10 +481,11 @@ impl<'ctx> CodeGen<'ctx> {
         let else_reaches = if e_term {
             None
         } else {
+            let from = self.builder.get_insert_block().unwrap();
             self.builder
                 .build_unconditional_branch(merge_bb)
                 .map_err(to_err)?;
-            Some(else_bb)
+            Some(from)
         };
 
         // Join the arms with a phi.
@@ -726,7 +728,7 @@ impl<'ctx> CodeGen<'ctx> {
             .cur_fn
             .ok_or_else(|| "codegen: `?` outside a function".to_string())?;
         let sv = self.lower_expr(sc, value, None)?;
-        let (payload_idx, unit_idx, payload_ty) =
+        let (_payload_idx, unit_idx, payload_ty) =
             Self::option_variant_ix(&sv.ty).ok_or_else(|| {
                 format!("codegen: `?` requires an Option, found {}", sv.ty)
             })?;
@@ -759,7 +761,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let none_val = self.build_constructor(ni as i64, &ret_ty, Vec::new())?;
                 self.builder.build_return(Some(&none_val.v)).map_err(to_err)?;
                 self.builder.position_at_end(payload_bb);
-                let slot = self.cx.i64_type().const_int(payload_idx as u64, false);
+                let slot = self.cx.i64_type().const_int(0, false);
                 return self.load_slot(sv.v, slot, &payload_ty);
             }
         }
@@ -807,7 +809,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Payload branch: use the boxed payload.
         self.builder.position_at_end(payload_bb);
-        let slot = self.cx.i64_type().const_int(payload_idx as u64, false);
+        let slot = self.cx.i64_type().const_int(0, false);
         let payload = self.load_slot(sv.v, slot, &payload_ty)?;
         self.builder
             .build_unconditional_branch(merge_bb)
@@ -816,6 +818,13 @@ impl<'ctx> CodeGen<'ctx> {
         // Fallback branch: lower the block and capture its tail.
         self.builder.position_at_end(fallback_bb);
         let (f_terms, f_tail) = self.lower_block_with_tail(sc, fallback, true)?;
+
+        // If the fallback did not terminate, route it to the merge block.
+        if !f_terms {
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(to_err)?;
+        }
 
         // Join with a phi over the payload type.
         self.builder.position_at_end(merge_bb);
@@ -833,10 +842,6 @@ impl<'ctx> CodeGen<'ctx> {
                     phi.add_incoming(&[(&zero, fallback_bb)]);
                 }
             }
-            self.builder
-                .build_unconditional_branch(merge_bb)
-                .map_err(to_err)?;
-            self.builder.position_at_end(merge_bb);
         }
         let v = phi.as_basic_value();
         Ok(Val { v, ty: payload_ty })

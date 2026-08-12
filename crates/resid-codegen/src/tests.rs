@@ -954,3 +954,1375 @@ Int main() {
     let ir = cg.module.print_to_string().to_string();
     assert!(ir.contains("call ptr @resid_fs_list_dir"), "expected resid_fs_list_dir: {ir}");
 }
+
+// ─── Float arithmetic codegen tests ─────────────────────────────
+
+#[test]
+fn test_float_literal() {
+    let src = r#"
+Float main() {
+    Float a = 3.14;
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("f.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "f");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_float_add() {
+    let src = r#"
+Float main() {
+    Float a = 1.5;
+    Float b = 2.5;
+    return a + b;
+}
+"#;
+    let (unit, errors) = Parser::parse("fa.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fa");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fadd"), "expected fadd: {ir}");
+}
+
+#[test]
+fn test_float_sub() {
+    let src = r#"
+Float main() {
+    Float a = 5.0;
+    Float b = 3.0;
+    return a - b;
+}
+"#;
+    let (unit, errors) = Parser::parse("fs.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fs");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fsub"), "expected fsub: {ir}");
+}
+
+#[test]
+fn test_float_mul() {
+    let src = r#"
+Float main() {
+    Float a = 3.0;
+    Float b = 4.0;
+    return a * b;
+}
+"#;
+    let (unit, errors) = Parser::parse("fm.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fm");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fmul"), "expected fmul: {ir}");
+}
+
+#[test]
+fn test_float_div() {
+    let src = r#"
+Float main() {
+    Float a = 10.0;
+    Float b = 3.0;
+    return a / b;
+}
+"#;
+    let (unit, errors) = Parser::parse("fd.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fd");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fdiv"), "expected fdiv: {ir}");
+}
+
+#[test]
+fn test_float_rem() {
+    let src = r#"
+Float main() {
+    Float a = 10.0;
+    Float b = 3.0;
+    return a % b;
+}
+"#;
+    let (unit, errors) = Parser::parse("fr.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fr");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("frem"), "expected frem: {ir}");
+}
+
+#[test]
+fn test_float_unary_neg() {
+    let src = r#"
+Float main() {
+    Float a = 3.14;
+    Float b = -a;
+    return b;
+}
+"#;
+    let (unit, errors) = Parser::parse("fn.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fn");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_float_comparison_lt() {
+    let src = r#"
+Int main() {
+    Float a = 1.0;
+    Float b = 2.0;
+    if (a < b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("fl.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fl");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fcmp olt"), "expected fcmp olt: {ir}");
+}
+
+#[test]
+fn test_float_comparison_gt() {
+    let src = r#"
+Int main() {
+    Float a = 3.0;
+    Float b = 1.0;
+    if (a > b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("fg.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fg");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fcmp ogt"), "expected fcmp ogt: {ir}");
+}
+
+#[test]
+fn test_float_comparison_eq() {
+    let src = r#"
+Int main() {
+    Float a = 1.0;
+    Float b = 1.0;
+    if (a == b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("fe.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fe");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fcmp oeq"), "expected fcmp oeq: {ir}");
+}
+
+#[test]
+fn test_float_ne() {
+    let src = r#"
+Int main() {
+    Float a = 1.0;
+    Float b = 2.0;
+    if (a != b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("fne.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fne");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fcmp one"), "expected fcmp one: {ir}");
+}
+
+#[test]
+fn test_float_le() {
+    let src = r#"
+Int main() {
+    Float a = 1.0;
+    Float b = 2.0;
+    if (a <= b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("fle.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fle");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fcmp ole"), "expected fcmp ole: {ir}");
+}
+
+#[test]
+fn test_float_ge() {
+    let src = r#"
+Int main() {
+    Float a = 2.0;
+    Float b = 1.0;
+    if (a >= b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("fge.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fge");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fcmp oge"), "expected fcmp oge: {ir}");
+}
+
+#[test]
+fn test_float_float_if() {
+    let src = r#"
+Float main() {
+    Float a = 1.5;
+    Float b = 2.5;
+    return if (a < b) { a } else { b };
+}
+"#;
+    let (unit, errors) = Parser::parse("ffi.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ffi");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_float_while() {
+    let src = r#"
+Float main() {
+    Float x = 1.0;
+    while (x < 10.0) {
+        break;
+    }
+    return x;
+}
+"#;
+    let (unit, errors) = Parser::parse("fw.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fw");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+// ─── More integer edge case tests ───────────────────────────────
+
+#[test]
+fn test_int_add() {
+    let src = r#"
+Int main() {
+    Int a = 40;
+    Int b = 2;
+    return a + b;
+}
+"#;
+    let (unit, errors) = Parser::parse("ia.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ia");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_sub() {
+    let src = r#"
+Int main() {
+    Int a = 10;
+    Int b = 3;
+    return a - b;
+}
+"#;
+    let (unit, errors) = Parser::parse("is.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "is");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_mul() {
+    let src = r#"
+Int main() {
+    Int a = 6;
+    Int b = 7;
+    return a * b;
+}
+"#;
+    let (unit, errors) = Parser::parse("im.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "im");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_div() {
+    let src = r#"
+Int main() {
+    Int a = 20;
+    Int b = 4;
+    return a / b;
+}
+"#;
+    let (unit, errors) = Parser::parse("id.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "id");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_rem() {
+    let src = r#"
+Int main() {
+    Int a = 10;
+    Int b = 3;
+    return a % b;
+}
+"#;
+    let (unit, errors) = Parser::parse("ir.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ir");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_shift_left() {
+    let src = r#"
+Int main() {
+    Int a = 1;
+    return a << 3;
+}
+"#;
+    let (unit, errors) = Parser::parse("isl.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "isl");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_shift_right() {
+    let src = r#"
+Int main() {
+    Int a = 8;
+    return a >> 2;
+}
+"#;
+    let (unit, errors) = Parser::parse("isr.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "isr");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_bitwise_and() {
+    let src = r#"
+Int main() {
+    Int a = 15;
+    Int b = 7;
+    return a & b;
+}
+"#;
+    let (unit, errors) = Parser::parse("iba.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "iba");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_bitwise_or() {
+    let src = r#"
+Int main() {
+    Int a = 15;
+    Int b = 8;
+    return a | b;
+}
+"#;
+    let (unit, errors) = Parser::parse("ibo.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ibo");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_bitwise_xor() {
+    let src = r#"
+Int main() {
+    Int a = 15;
+    Int b = 8;
+    return a ^ b;
+}
+"#;
+    let (unit, errors) = Parser::parse("ibx.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ibx");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_bitwise_not() {
+    let src = r#"
+Int main() {
+    Int a = 15;
+    return ~a;
+}
+"#;
+    let (unit, errors) = Parser::parse("ibn.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ibn");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+// ─── Comparison codegen tests ───────────────────────────────────
+
+#[test]
+fn test_int_eq() {
+    let src = r#"
+Int main() {
+    Int a = 5;
+    Int b = 5;
+    if (a == b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ieq.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ieq");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_ne() {
+    let src = r#"
+Int main() {
+    Int a = 5;
+    Int b = 3;
+    if (a != b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ine.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ine");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_lt() {
+    let src = r#"
+Int main() {
+    Int a = 3;
+    Int b = 5;
+    if (a < b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ilt.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ilt");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_le() {
+    let src = r#"
+Int main() {
+    Int a = 5;
+    Int b = 5;
+    if (a <= b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ile.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ile");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_gt() {
+    let src = r#"
+Int main() {
+    Int a = 7;
+    Int b = 5;
+    if (a > b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("igt.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "igt");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_int_ge() {
+    let src = r#"
+Int main() {
+    Int a = 5;
+    Int b = 3;
+    if (a >= b) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ige.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ige");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+// ─── More string tests ─────────────────────────────────────────
+
+#[test]
+fn test_string_concat_runtime() {
+    let src = r#"
+Int main() {
+    Str a = "hello";
+    Str b = " world";
+    Str c = a + b;
+    println(c);
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("sc.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "sc");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_string_concat_fold() {
+    let src = r#"
+Int main() {
+    Str c = "hello" + " world";
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("sfc.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "sfc");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    // Constant folding means no resid_str_concat *call* (the runtime
+    // declaration itself is always present).
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        !ir.contains("call ptr @resid_str_concat"),
+        "expected constant-folded string: {ir}"
+    );
+}
+
+// ─── More control flow tests ────────────────────────────────────
+
+#[test]
+fn test_nested_if() {
+    let src = r#"
+Int main() {
+    Int a = 1;
+    Int b = 2;
+    Int c = 3;
+    if (a < b) {
+        if (b < c) {
+            return 1;
+        }
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ni.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ni");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_while_break_continue() {
+    let src = r#"
+Int main() {
+    Int i = 0;
+    while (i < 10) {
+        if (i == 5) {
+            continue;
+        }
+        if (i == 8) {
+            break;
+        }
+        Int d = i;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("wbc.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "wbc");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+// ─── Assertion family codegen tests ─────────────────────────────
+
+#[test]
+fn test_assert_pass() {
+    let src = r#"
+Int main() {
+    assert(1 == 1, "should be true");
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ap.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ap");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_known() {
+    let src = r#"
+Int main() {
+    known(42 > 0);
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("tk.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "tk");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+// ─── More composite tests ───────────────────────────────────────
+
+#[test]
+fn test_option_some() {
+    let src = r#"
+Int main() {
+    Option(Int) x = Some(42);
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("os.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "os");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_option_none() {
+    let src = r#"
+Int main() {
+    Option(Int) x = None;
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("on.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "on");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_list_lit() {
+    let src = r#"
+Int main() {
+    List(Int) xs = [1, 2, 3];
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ll.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ll");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_match_option() {
+    let src = r#"
+Int main() {
+    Option(Int) x = Some(42);
+    return match x {
+        Some(n) => n,
+        None => 0,
+    };
+}
+"#;
+    let (unit, errors) = Parser::parse("mo.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "mo");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_struct_field_access() {
+    let src = r#"
+type Pair = { x: Int, y: Int };
+Int main() {
+    Int x = 1;
+    Int y = 2;
+    Pair s = Pair { x: x, y: y };
+    Int fx = s.x;
+    return fx + 1;
+}
+"#;
+    let (unit, errors) = Parser::parse("sf.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "sf");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_list_index() {
+    let src = r#"
+Int main() {
+    List(Int) xs = [10, 20, 30];
+    Int first = xs[0];
+    return first;
+}
+"#;
+    let (unit, errors) = Parser::parse("li.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "li");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_list_for_in() {
+    let src = r#"
+Int main() {
+    for (Int x in [1, 2, 3]) {
+        if (x == 2) {
+            return x;
+        }
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("lf.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "lf");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_match_list_tags() {
+    let src = r#"
+Int main() {
+    List(Int) xs = [1, 2, 3];
+    return match xs {
+        EmptyList => 0,
+        NonEmptyList => 1,
+    };
+}
+"#;
+    let (unit, errors) = Parser::parse("ml.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ml");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_cast_i64_to_i32() {
+    let src = r#"
+Int main() {
+    Int x = 42;
+    Int(32) y = (Int(32))x;
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ci.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ci");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_fstring_interpolation() {
+    let src = r#"
+Int main() {
+    Str name = "world";
+    println(f"hello {name}");
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("fs.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fs");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_fstring_pure_text() {
+    let src = r#"
+Int main() {
+    Str s = f"hello";
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ftp.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ftp");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_raw_string() {
+    let src = r#"
+Int main() {
+    Str s = r"C:\path\file";
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("rs.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "rs");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_byte_string() {
+    let src = r#"
+Bytes main() {
+    Bytes b = b"hello";
+    return b;
+}
+"#;
+    let (unit, errors) = Parser::parse("bs.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "bs");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_discard() {
+    let src = r#"
+Int main() {
+    _ = 42;
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("dc.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "dc");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_destructure() {
+    let src = r#"
+type Pair = { a: Int, b: Int };
+Int main() {
+    Int x = 1;
+    Int y = 2;
+    Pair p = Pair { a: x, b: y };
+    Pair { a, b } = p;
+    return a + b;
+}
+"#;
+    let (unit, errors) = Parser::parse("ds.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ds");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_if_let_some() {
+    let src = r#"
+Int main() {
+    Option(Int) x = Some(42);
+    if (Some(n) = x) {
+        return n;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("il.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "il");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_while_let() {
+    let src = r#"
+Int main() {
+    Int x = 10;
+    Option(Int) o = None;
+    while (Some(v) = o) {
+        return v;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("wl.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "wl");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_at_residual() {
+    let src = r#"
+Int main() {
+    @residual Int x = 42;
+    return x;
+}
+"#;
+    let (unit, errors) = Parser::parse("ar.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ar");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_comptime_print() {
+    let src = r#"
+Int main() {
+    comptime_print(42);
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("cp.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "cp");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_unary_bitwise_not() {
+    let src = r#"
+Int main() {
+    Int a = 15;
+    return ~a;
+}
+"#;
+    let (unit, errors) = Parser::parse("ubn.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ubn");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_bool_ops() {
+    let src = r#"
+Int main() {
+    Bool a = true;
+    Bool b = false;
+    Bool c = a && b;
+    Bool d = a || b;
+    Bool e = !c;
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("bo.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "bo");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_conversion_helper_i32() {
+    let src = r#"
+Int main() {
+    Int(32) x = i32(42);
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ci32.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ci32");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_conversion_helper_f64() {
+    let src = r#"
+Int main() {
+    Float(64) x = f64(3.14);
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("cf64.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "cf64");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_wrapping_add() {
+    let src = r#"
+Int main() {
+    Int x = 1;
+    Int y = 2;
+    Int z = wrapping_add(x, y);
+    return z;
+}
+"#;
+    let (unit, errors) = Parser::parse("wa.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "wa");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_saturating_mul() {
+    let src = r#"
+Int main() {
+    Int x = 10;
+    Int y = 20;
+    Int z = saturating_mul(x, y);
+    return z;
+}
+"#;
+    let (unit, errors) = Parser::parse("sm.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "sm");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_checked_div() {
+    let src = r#"
+Int main() {
+    Int x = 20;
+    Int y = 4;
+    Int z = checked_div(x, y);
+    return z;
+}
+"#;
+    let (unit, errors) = Parser::parse("cd.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "cd");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_location() {
+    let src = r#"
+Int main() {
+    SourceLoc loc = #location;
+    return loc.line;
+}
+"#;
+    let (unit, errors) = Parser::parse("loc.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "loc");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_range_slice() {
+    let src = r#"
+Int main() {
+    List(Int) xs = [1, 2, 3, 4, 5];
+    Slice(Int) s = xs[1..4];
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("rs.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "rs");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_method_call() {
+    let src = r#"
+Int main() {
+    Int x = 42;
+    return x;
+}
+"#;
+    let (unit, errors) = Parser::parse("mc.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "mc");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_early_return() {
+    let src = r#"
+Option(Int) main() {
+    Option(Int) x = Some(42);
+    Int v = x?;
+    return Some(v);
+}
+"#;
+    let (unit, errors) = Parser::parse("er.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "er");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_else_fallback() {
+    let src = r#"
+Int main() {
+    Option(Int) x = None;
+    Int y = x else { 0 };
+    return y;
+}
+"#;
+    let (unit, errors) = Parser::parse("ef.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ef");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_for_in_inclusive_range() {
+    let src = r#"
+Int main() {
+    Int total = 0;
+    for (Int i in 0..=5) {
+        if (i == 3) {
+            break;
+        }
+        Int part = i;
+    }
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("firc.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "firc");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_fn_with_params() {
+    let src = r#"
+Int add(Int a, Int b) {
+    return a + b;
+}
+
+Int main() {
+    return add(10, 20);
+}
+"#;
+    let (unit, errors) = Parser::parse("fwp.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "fwp");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_fn_with_float_params() {
+    let src = r#"
+Float add(Float a, Float b) {
+    return a + b;
+}
+
+Int main() {
+    Float x = add(1.5, 2.5);
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("ffp.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ffp");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_multiple_statements() {
+    let src = r#"
+Int main() {
+    Int a = 1;
+    Int b = 2;
+    Int c = a + b;
+    Int d = c * 2;
+    return d;
+}
+"#;
+    let (unit, errors) = Parser::parse("ms.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ms");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}
+
+#[test]
+fn test_complex_expression() {
+    let src = r#"
+Int main() {
+    Int a = 1;
+    Int b = 2;
+    Int c = 3;
+    Int d = (a + b) * c;
+    return d;
+}
+"#;
+    let (unit, errors) = Parser::parse("ce.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ce");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+}

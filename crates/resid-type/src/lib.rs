@@ -460,6 +460,25 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                     }
                 }
             }
+            // Fallback: parse width from name string itself (e.g. "Float(32)" or "Int(8)")
+            // when params is None but name contains parameterized spelling.
+            if params.is_none() {
+                if let Some(rest) = name.0.strip_prefix("Int(") {
+                    if let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
+                        return type_from_name(&format!("i{w}"));
+                    }
+                }
+                if let Some(rest) = name.0.strip_prefix("UInt(") {
+                    if let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
+                        return type_from_name(&format!("u{w}"));
+                    }
+                }
+                if let Some(rest) = name.0.strip_prefix("Float(") {
+                    if let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
+                        return type_from_name(&format!("f{w}"));
+                    }
+                }
+            }
             // A user-declared named type.
             if let Some(st) = types.get(&name.0) {
                 return Some(st.clone());
@@ -1318,6 +1337,15 @@ fn infer_binary(
         require_bool(lhs, env, sigs, types, span, "left operand of logical operator")?;
         require_bool(rhs, env, sigs, types, span, "right operand of logical operator")?;
         return Ok(SemType::Bool);
+    }
+
+    // Bool equality/inequality: Bool == Bool → Bool, Bool != Bool → Bool
+    if matches!(op, OpKind::EqEq | OpKind::Ne) {
+        let lt = infer_expr_ctx(lhs, env, sigs, types)?;
+        let rt = infer_expr_ctx(rhs, env, sigs, types)?;
+        if lt == SemType::Bool && rt == SemType::Bool {
+            return Ok(SemType::Bool);
+        }
     }
 
     let binop = to_bin_op(op).ok_or_else(|| err(span, format!("unsupported operator {op:?}")))?;
@@ -2942,5 +2970,996 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(!errs.is_empty(), "expected undefined var in f-string to error");
+    }
+
+    // ─── Float arithmetic inference ───────────────────────────────
+
+    #[test]
+    fn infer_float_literal() {
+        let e = Expr {
+            kind: ExprKind::Literal(Literal::Float(FloatLit {
+                value: "3.14".into(),
+            })),
+            span: span(),
+        };
+        let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(
+            ty,
+            SemType::Numeric(NumericType::Float(FloatWidth::from_bits(64).unwrap()))
+        );
+    }
+
+    #[test]
+    fn infer_float_add() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        env.insert("b", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Plus,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+    }
+
+    #[test]
+    fn infer_float_sub() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        env.insert("b", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Minus,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+    }
+
+    #[test]
+    fn infer_float_mul() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        env.insert("b", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Star,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+    }
+
+    #[test]
+    fn infer_float_div() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        env.insert("b", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Slash,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+    }
+
+    #[test]
+    fn infer_float_rem() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        env.insert("b", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Percent,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+    }
+
+    #[test]
+    fn infer_float_comparison_produces_bool() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        env.insert("b", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Greater,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_float_unary_neg() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        let e = Expr {
+            kind: ExprKind::UnaryOp {
+                op: OpKind::Minus,
+                operand: Box::new(expr_id("a")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+    }
+
+    #[test]
+    fn infer_float_f64_cast() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        let e = Expr {
+            kind: ExprKind::Cast {
+                type_: Type::Base {
+                    name: Id("Float(32)".into()),
+                    params: None,
+                },
+                operand: Box::new(expr_id("a")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Float(FloatWidth::F32)));
+    }
+
+    #[test]
+    fn check_program_float_arithmetic() {
+        let src = r#"
+Float main() {
+    Float a = 1.5;
+    Float b = 2.5;
+    return a + b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors for float arithmetic, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_float_comparison() {
+        let src = r#"
+Bool main() {
+    Float a = 1.5;
+    Float b = 2.5;
+    return a < b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors for float comparison, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_mixed_float_int_ops() {
+        // Float + Int converts Int to Float (spec §6.2)
+        let src = r#"
+Float main() {
+    Float a = 1.5;
+    Int b = 2;
+    return a + b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for float + int mix, got: {:?}", errs);
+    }
+
+    // ─── Integer overflow / edge cases ────────────────────────────
+
+    #[test]
+    fn infer_int_widening_add() {
+        // Int64 + Int64 → Int128
+        let mut env = Env::new();
+        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        env.insert("a", int64.clone());
+        env.insert("b", int64);
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Plus,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert!(matches!(ty, SemType::Numeric(NumericType::Int(w)) if w.bits() >= 64));
+    }
+
+    #[test]
+    fn infer_int_widening_mul() {
+        // Int64 * Int64 → Int128
+        let mut env = Env::new();
+        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        env.insert("a", int64.clone());
+        env.insert("b", int64);
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Star,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert!(matches!(ty, SemType::Numeric(NumericType::Int(w)) if w.bits() >= 64));
+    }
+
+    #[test]
+    fn infer_int_sub_no_widening() {
+        // Int64 - Int64 does not widen (result fits in same width)
+        let mut env = Env::new();
+        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        env.insert("a", int64.clone());
+        env.insert("b", int64);
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Minus,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert!(matches!(ty, SemType::Numeric(NumericType::Int(w)) if w.bits() >= 64));
+    }
+
+    #[test]
+    fn infer_uint_add_same_sign_ok() {
+        // UInt64 + UInt64 → UInt128 (same sign, widening)
+        let mut env = Env::new();
+        let uint64 = SemType::Numeric(NumericType::UInt(IntWidth::B64.into()));
+        env.insert("a", uint64.clone());
+        env.insert("b", uint64);
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Plus,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert!(matches!(ty, SemType::Numeric(NumericType::UInt(_))));
+    }
+
+    #[test]
+    fn infer_int_mix_with_uint_error() {
+        // Int64 + UInt64 → error
+        let mut env = Env::new();
+        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        let uint64 = SemType::Numeric(NumericType::UInt(IntWidth::B64.into()));
+        env.insert("a", int64);
+        env.insert("b", uint64);
+        let e = Expr {
+            kind: ExprKind::BinaryOp {
+                op: OpKind::Plus,
+                lhs: Box::new(expr_id("a")),
+                rhs: Box::new(expr_id("b")),
+            },
+            span: span(),
+        };
+        let result = infer_expr(&e, &env, &Signatures::new());
+        assert!(result.is_err());
+    }
+
+    // ─── String operations ───────────────────────────────────────
+
+    #[test]
+    fn check_program_string_concat() {
+        let src = r#"
+Str main() {
+    Str a = "hello";
+    Str b = " world";
+    return a + b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors for string concat, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_string_int_concat_rejected() {
+        let src = r#"
+Int main() {
+    Str s = "hello";
+    Int n = 42;
+    return s + n;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected error for Str + Int, got: {:?}",
+            errs
+        );
+    }
+
+    // ─── Unary operators ─────────────────────────────────────────
+
+    #[test]
+    fn infer_unary_not_bool() {
+        let mut env = Env::new();
+        env.insert("p", SemType::Bool);
+        let e = Expr {
+            kind: ExprKind::UnaryOp {
+                op: OpKind::Not,
+                operand: Box::new(expr_id("p")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn infer_unary_not_int_rejected() {
+        let env = Env::new();
+        let e = Expr {
+            kind: ExprKind::UnaryOp {
+                op: OpKind::Not,
+                operand: Box::new(expr_id("x")),
+            },
+            span: span(),
+        };
+        let result = infer_expr(&e, &env, &Signatures::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn infer_unary_neg_int() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        let e = Expr {
+            kind: ExprKind::UnaryOp {
+                op: OpKind::Minus,
+                operand: Box::new(expr_id("a")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert!(matches!(ty, SemType::Numeric(NumericType::Int(_))));
+    }
+
+    #[test]
+    fn infer_unary_neg_float() {
+        let mut env = Env::new();
+        env.insert("a", SemType::Numeric(NumericType::Float(FloatWidth::F64)));
+        let e = Expr {
+            kind: ExprKind::UnaryOp {
+                op: OpKind::Minus,
+                operand: Box::new(expr_id("a")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
+        assert!(matches!(ty, SemType::Numeric(NumericType::Float(_))));
+    }
+
+    // ─── Block return type inference ─────────────────────────────
+
+    #[test]
+    fn block_ret_empty_returns_bool() {
+        let block = Block {
+            statements: vec![],
+            ret: None,
+            span: span(),
+        };
+        let env = Env::new();
+        let sigs = Signatures::new();
+        let ty = block_ret(&block, &env, &sigs, &Types::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+    }
+
+    #[test]
+    fn block_ret_expr_returns_expr_type() {
+        let e = expr_int(42);
+        let block = Block {
+            statements: vec![Stmt {
+                kind: StmtKind::Expr(Box::new(e)),
+                span: span(),
+            }],
+            ret: None,
+            span: span(),
+        };
+        let env = Env::new();
+        let sigs = Signatures::new();
+        let ty = block_ret(&block, &env, &sigs, &Types::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+    }
+
+    #[test]
+    fn block_ret_explicit_returns_declared_type() {
+        let e = expr_int(42);
+        let block = Block {
+            statements: vec![],
+            ret: Some(Box::new(e)),
+            span: span(),
+        };
+        let env = Env::new();
+        let sigs = Signatures::new();
+        let ty = block_ret(&block, &env, &sigs, &Types::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+    }
+
+    // ─── Numeric literal bounds ──────────────────────────────────
+
+    #[test]
+    fn literal_compatible_i8_positive() {
+        let lit = expr_int(127);
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B8.into()));
+        assert!(literal_compatible(&lit, &target));
+    }
+
+    #[test]
+    fn literal_compatible_i8_negative_max() {
+        // -128 can hold 127 as positive, but 128 overflows
+        let lit = expr_int(128);
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B8.into()));
+        assert!(!literal_compatible(&lit, &target));
+    }
+
+    #[test]
+    fn literal_compatible_u8_max() {
+        let lit = expr_int(255);
+        let target = SemType::Numeric(NumericType::UInt(IntWidth::B8.into()));
+        assert!(literal_compatible(&lit, &target));
+    }
+
+    #[test]
+    fn literal_compatible_u8_overflow() {
+        let lit = expr_int(256);
+        let target = SemType::Numeric(NumericType::UInt(IntWidth::B8.into()));
+        assert!(!literal_compatible(&lit, &target));
+    }
+
+    #[test]
+    fn literal_compatible_i16() {
+        let lit = expr_int(32767);
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B16.into()));
+        assert!(literal_compatible(&lit, &target));
+    }
+
+    #[test]
+    fn literal_compatible_i32() {
+        let lit = expr_int(2147483647);
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B32.into()));
+        assert!(literal_compatible(&lit, &target));
+    }
+
+    #[test]
+    fn literal_compatible_128_bit() {
+        // 128-bit ints should accept any literal
+        let lit = expr_int(u128::MAX);
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B128));
+        assert!(literal_compatible(&lit, &target));
+    }
+
+    // ─── Conversion helpers type checking ────────────────────────
+
+    #[test]
+    fn check_i8_conversion_helper() {
+        let src = r#"
+Int main() {
+    Int(8) x = i8(42);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for i8(42), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_i64_conversion_helper() {
+        let src = r#"
+Int main() {
+    Int(64) x = i64(99);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for i64(99), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_u32_conversion_helper() {
+        let src = r#"
+Int main() {
+    UInt(32) x = u32(65535);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for u32(65535), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_isize_conversion_helper() {
+        let src = r#"
+Int main() {
+    Int(64) x = isize(100);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for isize(100), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_usize_conversion_helper() {
+        let src = r#"
+Int main() {
+    UInt(64) x = usize(200);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for usize(200), got: {:?}", errs);
+    }
+
+    // ─── Provider type checking ──────────────────────────────────
+
+    #[test]
+    fn check_program_filesystem_exists() {
+        let src = r#"
+Int main() {
+    Bool ex = filesystem.exists("test.txt");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for filesystem.exists, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_filesystem_list_dir() {
+        let src = r#"
+Int main() {
+    List(Str) files = filesystem.list_dir(".");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for filesystem.list_dir, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_environment_get() {
+        let src = r#"
+Int main() {
+    Str home = environment.get("HOME");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for environment.get, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_environment_has() {
+        let src = r#"
+Int main() {
+    Bool has = environment.has("PATH");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for environment.has, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_git_branch() {
+        let src = r#"
+Int main() {
+    Str branch = git.branch();
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for git.branch, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_git_rev() {
+        let src = r#"
+Int main() {
+    Str rev = git.rev("HEAD");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for git.rev, got: {:?}", errs);
+    }
+
+    // ─── If/while type inference ─────────────────────────────────
+
+    #[test]
+    fn check_program_if_expression_types() {
+        let src = r#"
+Int main() {
+    Int a = 1;
+    Int b = 2;
+    Bool c = true;
+    return if (c) { a } else { b };
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for if expr, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_while_loop() {
+        let src = r#"
+Int main() {
+    Int i = 0;
+    while (i < 10) {
+        Int x = i + 1;
+    }
+    return i;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for while, got: {:?}", errs);
+    }
+
+    // ─── Range type inference ────────────────────────────────────
+
+    #[test]
+    fn check_program_range_construction() {
+        let src = r#"
+Int main() {
+    Int(64) r = 0..10;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for range, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_range_inclusive_construction() {
+        let src = r#"
+Int main() {
+    Int(64) r = 0..=5;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for inclusive range, got: {:?}", errs);
+    }
+
+    // ─── For-in over ranges ──────────────────────────────────────
+
+    #[test]
+    fn check_program_for_in_range() {
+        let src = r#"
+Int main() {
+    for (Int(64) i in 0..10) {
+        Int(64) x = i + 1;
+    }
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for for-in range, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_for_in_range_inclusive() {
+        let src = r#"
+Int main() {
+    for (Int(64) i in 0..=5) {
+        Int(64) x = i + 1;
+    }
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for for-in inclusive range, got: {:?}", errs);
+    }
+
+    // ─── Cast type inference ─────────────────────────────────────
+
+    #[test]
+    fn check_program_int_to_int_cast() {
+        let src = r#"
+Int main() {
+    Int x = 42;
+    Int y = x;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for int cast, got: {:?}", errs);
+    }
+
+    // ─── Assertion expressions ───────────────────────────────────
+
+    #[test]
+    fn check_program_assert() {
+        let src = r#"
+Int main() {
+    assert(1 == 1, "should be true");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for assert, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_assert_non_bool_cond() {
+        let src = r#"
+Int main() {
+    assert(42, "should fail");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected error for assert with non-bool cond, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_known() {
+        let src = r#"
+Int main() {
+    known(1 == 1);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for known, got: {:?}", errs);
+    }
+
+    // ─── RT expressions ──────────────────────────────────────────
+
+    #[test]
+    fn check_program_rt_expression() {
+        let src = r#"
+Int main() {
+    Int x = rt 42;
+    return x;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for rt, got: {:?}", errs);
+    }
+
+    // ─── @residual type inference ────────────────────────────────
+
+    #[test]
+    fn check_program_at_residual() {
+        let src = r#"
+Int main() {
+    @residual Int x = 42;
+    return x;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for @residual, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_at_residual_float() {
+        let src = r#"
+Int main() {
+    @residual Float x = 3.14;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for @residual float, got: {:?}", errs);
+    }
+
+    // ─── Destructure / discard ───────────────────────────────────
+
+    #[test]
+    fn check_program_discard() {
+        let src = r#"
+Int main() {
+    _ = 42;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for discard, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_destructure() {
+        let src = r#"
+type Pair { a: Int, b: Int }
+
+Int main() {
+    Pair p = Pair { a: 1, b: 2 };
+    Pair { a, b } = p;
+    return a + b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for destructure, got: {:?}", errs);
+    }
+
+    // ─── Bool operations ─────────────────────────────────────────
+
+    #[test]
+    fn check_program_bool_and() {
+        let src = r#"
+Bool main() {
+    Bool a = true;
+    Bool b = false;
+    return a && b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for &&, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_bool_or() {
+        let src = r#"
+Bool main() {
+    Bool a = true;
+    Bool b = false;
+    return a || b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for ||, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_bool_not() {
+        let src = r#"
+Bool main() {
+    Bool a = true;
+    return !a;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for !, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_bool_comparison() {
+        let src = r#"
+Bool main() {
+    Bool a = true;
+    Bool b = false;
+    return a == b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for bool ==, got: {:?}", errs);
+    }
+
+    // ─── Struct type checking ────────────────────────────────────
+
+    #[test]
+    fn check_program_struct_def_and_use() {
+        let src = r#"
+type Point { x: Int, y: Int }
+
+Int main() {
+    Point p = Point { x: 1, y: 2 };
+    return p.x + p.y;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for struct, got: {:?}", errs);
+    }
+
+    // ─── Option type checking ────────────────────────────────────
+
+    #[test]
+    fn check_program_option_some() {
+        let src = r#"
+Int main() {
+    Option(Int) x = Some(42);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for Option, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_option_none() {
+        let src = r#"
+Int main() {
+    Option(Int) x = None;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for None, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_early_return() {
+        let src = r#"
+Option(Int) main() {
+    Option(Int) x = Some(42);
+    return x?;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for early return, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_else_fallback() {
+        let src = r#"
+Int main() {
+    Option(Int) x = None;
+    Int y = x else { 0 };
+    return y;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for else fallback, got: {:?}", errs);
     }
 }
