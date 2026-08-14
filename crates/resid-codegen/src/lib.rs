@@ -22,7 +22,7 @@ use resid_ir::{BinOp, NumericType, numeric_result_type};
 use resid_lexer::token::Literal;
 use resid_lexer::token::Op as OpKind;
 use resid_parser::{Block, Declaration, Expr, ExprKind, Id, RangeExpr, StmtKind, TranslationUnit};
-use resid_type::{best_overload, FunctionSig, SemType, Types};
+use resid_type::{FunctionSig, SemType, Types};
 
 /// A lowered value plus the semantic type the checker attributed to it.
 pub struct Val<'ctx> {
@@ -397,7 +397,13 @@ impl<'ctx> CodeGen<'ctx> {
                         SemType::Numeric(n) => Some(*n),
                         _ => None,
                     };
-                    let v = self.lower_expr(sc, value, target)?;
+                    let v = if matches!(&value.kind, ExprKind::ListLit(elems) if elems.is_empty())
+                        && matches!(ty, SemType::List(_))
+                    {
+                        self.build_constructor(0, &ty, Vec::new())?
+                    } else {
+                        self.lower_expr(sc, value, target)?
+                    };
                     let v = self.cast_val(v, &ty)?;
                     self.builder.build_store(ptr, v.v).map_err(to_err)?;
                     sc.vars.insert(name.0.clone(), (ptr, ty));
@@ -2125,6 +2131,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_unbox_f64", vec![ptr.into()], f64t.into());
         self.decl_rt("resid_unbox_bool", vec![ptr.into()], i8t.into());
         self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
+        self.decl_rt("resid_list_concat", vec![ptr.into(), ptr.into()], ptr.into());
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
         // String concatenation (f-string interpolation, Str + Str).
         self.decl_rt("resid_str_concat", vec![ptr.into(), ptr.into()], ptr.into());
@@ -2246,24 +2253,16 @@ impl<'ctx> CodeGen<'ctx> {
             };
         }
 
-        // Infer argument types, then pick the best overload (handles multiple
-        // signatures with the same name but different parameter types, e.g.
-        // IntToString(i8/i16/i32/i64) and ToString(List(T) / Struct / Sum).
-        let arg_types: Vec<SemType> = args
-            .iter()
-            .map(|(_, a)| self.lower_expr(sc, a, None).map(|v| v.ty).unwrap_or(SemType::Bool))
-            .collect();
-        let sig = best_overload(&arg_types, &self.sigs, name).unwrap_or(FunctionSig {
-            name: name.clone(),
-            params: Vec::new(),
-            ret: SemType::Bool,
-        });
+        // Resolve named arguments: map each arg's name (if provided) to the
+        // corresponding position in the function's param list.
+        let (resolved_args, sig) = self.resolve_call_args(name, args)?;
+
         let fnv = self
             .module
             .get_function(name)
             .ok_or_else(|| format!("codegen: no such function `{name}`"))?;
         let mut llargs: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
-        for (i, (_, a)) in args.iter().enumerate() {
+        for (i, (_, a)) in resolved_args.iter().enumerate() {
             // Infer the target width from the selected signature's param type.
             let want = sig.params.get(i).and_then(|t| match t {
                 SemType::Numeric(n) => Some(*n),
@@ -2287,6 +2286,77 @@ impl<'ctx> CodeGen<'ctx> {
             v,
             ty: sig.ret.clone(),
         })
+    }
+
+    /// Resolve named arguments and fill in default parameters, returning the
+    /// args reordered into positional form plus the selected FunctionSig.
+    fn resolve_call_args(
+        &self,
+        name: &str,
+        args: &[(Option<Id>, Expr)],
+    ) -> Result<(Vec<(Option<Id>, Expr)>, FunctionSig), String> {
+        // Pick the best overload — we don't have full type info at this
+        // stage, so use the first matching signature by name.
+        let sig = self.sigs.get(name).cloned().unwrap_or(FunctionSig {
+            name: name.to_string(),
+            params: Vec::new(),
+            param_names: Vec::new(),
+            param_defaults: Vec::new(),
+            ret: SemType::Bool,
+        });
+
+        let total_params = sig.params.len();
+        let provided = args.len();
+
+        if provided > total_params {
+            return Err(format!(
+                "codegen: `{}` expects {} args, got {}",
+                name,
+                total_params,
+                provided
+            ));
+        }
+
+        // If all args are provided positionally, return as-is.
+        if provided == total_params {
+            return Ok((args.to_vec(), sig));
+        }
+
+        // Resolve by name: build a map from param name → expr.
+        let mut by_name: HashMap<String, (Option<Id>, Expr)> = HashMap::new();
+        let mut positional = Vec::new();
+        for (name_opt, expr) in args {
+            match name_opt {
+                Some(n) => {
+                    by_name.insert(n.0.clone(), (name_opt.clone(), expr.clone()));
+                }
+                None => {
+                    positional.push((name_opt.clone(), expr.clone()));
+                }
+            }
+        }
+
+        // Build resolved args in param order.
+        let mut resolved = Vec::new();
+        let mut used_positional = 0;
+        for i in 0..total_params {
+            if let Some(entry) = by_name.get(&sig.param_names.get(i).cloned().unwrap_or_default()) {
+                resolved.push(entry.clone());
+            } else if used_positional < positional.len() {
+                resolved.push(positional[used_positional].clone());
+                used_positional += 1;
+            } else if let Some(default) = sig.param_defaults.get(i).and_then(|d| d.clone()) {
+                resolved.push((None, Expr { kind: default, span: resid_lexer::token::Span { file: "<default>".into(), line: 0, col_start: 0, col_end: 0 } }));
+            } else {
+                return Err(format!(
+                    "codegen: `{}` param `{}` has no default and was not provided",
+                    name,
+                    sig.param_names.get(i).map(|s| s.as_str()).unwrap_or("?")
+                ));
+            }
+        }
+
+        Ok((resolved, sig))
     }
 
     // ─── Composites ─────────────────────────────────────────────
@@ -2465,12 +2535,18 @@ impl<'ctx> CodeGen<'ctx> {
             return Err(format!("codegen: `{}` is not a struct", name.0));
         };
         let mut slots = Vec::new();
-        for (fname, _) in defs {
+        for (fname, fty) in defs {
             let (_, vexpr) = fields
                 .iter()
                 .find(|(n, _)| n.0 == *fname)
                 .ok_or_else(|| format!("codegen: missing field `{}`", fname))?;
-            let v = self.lower_expr(sc, vexpr, None)?;
+            let v = if matches!(&vexpr.kind, ExprKind::ListLit(elems) if elems.is_empty())
+                && matches!(fty, SemType::List(_))
+            {
+                self.build_constructor(0, fty, Vec::new())?
+            } else {
+                self.lower_expr(sc, vexpr, None)?
+            };
             slots.push(self.box_scalar(v)?);
         }
         self.build_constructor(0, &st, slots)
@@ -2636,6 +2712,14 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(Val {
                     v,
                     ty: SemType::Numeric(NumericType::ISize),
+                })
+            }
+            ("concat", SemType::List(elem)) if args.len() == 1 => {
+                let av = self.lower_expr(sc, &args[0], None)?;
+                let v = self.rt_call("resid_list_concat", vec![tv.v.into(), av.v.into()])?;
+                Ok(Val {
+                    v,
+                    ty: SemType::List(elem.clone()),
                 })
             }
             _ => Err(format!(

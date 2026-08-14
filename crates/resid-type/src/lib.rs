@@ -249,6 +249,8 @@ impl core::fmt::Display for TypeError {
 pub struct FunctionSig {
     pub name: String,
     pub params: Vec<SemType>,
+    pub param_names: Vec<String>,
+    pub param_defaults: Vec<Option<ExprKind>>,
     pub ret: SemType,
 }
 
@@ -676,6 +678,8 @@ pub fn builtin_signatures() -> Signatures {
                 FunctionSig {
                     name: name.to_string(),
                     params: params.to_vec(),
+                    param_names: Vec::new(),
+                    param_defaults: Vec::new(),
                     ret: ret.clone(),
                 },
             )
@@ -703,10 +707,18 @@ fn signature_of(f: &FuncDef, types: &Types) -> FunctionSig {
         .iter()
         .map(|p| resolve_type_ctx(&p.type_, types).unwrap_or(SemType::Bool))
         .collect();
+    let param_names = f.params.iter().map(|p| p.name.0.clone()).collect();
+    let param_defaults = f
+        .params
+        .iter()
+        .map(|p| p.default.as_ref().map(|d| d.kind.clone()))
+        .collect();
     let ret = resolve_type_ctx(&f.ret, types).unwrap_or(SemType::Bool);
     FunctionSig {
         name: f.name.0.clone(),
         params,
+        param_names,
+        param_defaults,
         ret,
     }
 }
@@ -715,6 +727,31 @@ fn signature_of(f: &FuncDef, types: &Types) -> FunctionSig {
 /// scope (primitives, `List`, `Option` spellings only).
 pub fn infer_expr(expr: &Expr, env: &Env, sigs: &Signatures) -> Result<SemType, TypeError> {
     infer_expr_ctx(expr, env, sigs, &Types::new())
+}
+
+/// Infer the type of an expression with an expected type hint. The hint only
+/// matters for constructs whose type the expression cannot carry by itself —
+/// an empty list literal `[]`, whose element type comes from the declared
+/// type at the bind/field/return/argument site.
+pub fn infer_expr_expected(
+    expr: &Expr,
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+    expected: Option<&SemType>,
+) -> Result<SemType, TypeError> {
+    if let ExprKind::ListLit(elems) = &expr.kind {
+        if elems.is_empty() {
+            return match expected {
+                Some(SemType::List(elem)) => Ok(SemType::List(elem.clone())),
+                _ => Err(err(
+                    &expr.span,
+                    "cannot infer element type of an empty list literal (add an explicit type)",
+                )),
+            };
+        }
+    }
+    infer_expr_ctx(expr, env, sigs, types)
 }
 
 /// Infer the type of an expression, in the context of the unit's named types.
@@ -888,8 +925,8 @@ pub fn infer_expr_ctx(
             }
         }
         ExprKind::MethodCall { target, method, args } => {
-            // Built-in list methods surface here as sugar; only `len` and
-            // `get` are recognized for now.
+            // Built-in list methods surface here as sugar; only `len`,
+            // `get` and `concat` are recognized for now.
             let tt = infer_expr_ctx(target, env, sigs, types)?;
             let method_name = &method.0;
             if args.is_empty() {
@@ -898,6 +935,35 @@ pub fn infer_expr_ctx(
                         return Ok(SemType::Numeric(NumericType::ISize));
                     }
                     _ => {}
+                }
+            }
+            // `a.concat(b)` joins two lists of the same element type.
+            if method_name == "concat" {
+                let SemType::List(elem) = &tt else {
+                    return Err(err(
+                        &expr.span,
+                        format!("cannot call `.concat` on {tt}; only lists support it"),
+                    ));
+                };
+                if args.len() != 1 {
+                    return Err(err(
+                        &expr.span,
+                        "`.concat` takes exactly one list argument",
+                    ));
+                }
+                let at = infer_expr_ctx(&args[0], env, sigs, types)?;
+                match at {
+                    SemType::List(ae) if &ae == elem => {
+                        return Ok(SemType::List(elem.clone()));
+                    }
+                    _ => {
+                        return Err(err(
+                            &expr.span,
+                            format!(
+                                "`.concat` expects `List({elem})`, found {at}"
+                            ),
+                        ));
+                    }
                 }
             }
             Err(err(
@@ -1234,7 +1300,7 @@ fn infer_struct_lit(
             .iter()
             .find(|(n, _)| n == &fname.0)
             .ok_or_else(|| err(span, format!("`{}` has no field `{}`", name.0, fname.0)))?;
-        let has = infer_expr_ctx(fval, env, sigs, types)?;
+        let has = infer_expr_expected(fval, env, sigs, types, Some(&want.1))?;
         if &has != &want.1 {
             return Err(err(
                 span,
@@ -1450,8 +1516,9 @@ fn block_ret(
                 value,
             } => {
                 let ty = if let Some(t) = opt_type {
-                    let _ = infer_expr_ctx(value, &env, sigs, types)?;
-                    resolve_type_ctx(t, types).unwrap_or(SemType::Bool)
+                    let declared = resolve_type_ctx(t, types).unwrap_or(SemType::Bool);
+                    let _ = infer_expr_expected(value, &env, sigs, types, Some(&declared))?;
+                    declared
                 } else {
                     infer_expr_ctx(value, &env, sigs, types)?
                 };
@@ -1578,7 +1645,8 @@ fn infer_call(
         &name,
     )
     .ok_or_else(|| err(span, format!("call to undefined function `{name}`")))?;
-    if args.len() != sig.params.len() {
+    // Check: no more args than total params.
+    if args.len() > sig.params.len() {
         return Err(err(
             span,
             format!(
@@ -1588,10 +1656,30 @@ fn infer_call(
             ),
         ));
     }
-    // Check each argument against the parameter type.
-    for (i, (_, a)) in args.iter().enumerate() {
-        let at = infer_expr_ctx(a, env, sigs, types)?;
-        let want = &sig.params[i];
+
+    // Check: each provided arg maps to a real param or a param with a default.
+    let mut used_positional = 0usize;
+    for (name_opt, a) in args {
+        let wanted_param = if let Some(n) = name_opt {
+            // Named arg: find the param index by name.
+            sig.param_names.iter().position(|p| p == &n.0).ok_or_else(|| {
+                err(&a.span, format!("unknown parameter `{}` for `{}`", n.0, name))
+            })?
+        } else {
+            // Positional arg: next available param.
+            used_positional
+        };
+
+        if wanted_param >= sig.params.len() {
+            return Err(err(
+                span,
+                format!("`{name}` expects {} argument(s), got {}", sig.params.len(), args.len()),
+            ));
+        }
+        used_positional += 1;
+
+        let want = &sig.params[wanted_param];
+        let at = infer_expr_expected(a, env, sigs, types, Some(want))?;
         if !param_matches(&at, want)
             && !literal_compatible(a, want)
             && !numeric_can_widen(&at, want)
@@ -1600,11 +1688,32 @@ fn infer_call(
                 &a.span,
                 format!(
                     "argument {} of `{name}`: expected {want}, found {at}",
-                    i + 1
+                    wanted_param + 1
                 ),
             ));
         }
     }
+
+    // Check that any gap between provided positional args and total params
+    // is covered by defaults.
+    let max_positional = args
+        .iter()
+        .filter(|(n, _)| n.is_none())
+        .count();
+    let last_pos_param = max_positional.saturating_sub(1);
+    for i in (last_pos_param + 1)..sig.params.len() {
+        if sig.param_defaults.get(i).is_none() {
+            return Err(err(
+                span,
+                format!(
+                    "`{}` parameter `{}` has no default and is not provided",
+                    name,
+                    sig.param_names.get(i).map(|s| s.as_str()).unwrap_or("?")
+                ),
+            ));
+        }
+    }
+
     Ok(sig.ret.clone())
 }
 
@@ -1869,10 +1978,11 @@ fn type_check_block(
                 // Even with an explicit declared type the value expression is
                 // validated, so e.g. `filesystem.exists()` still errors despite
                 // `Bool ex = ...` giving a concrete binding type.
-                if let Err(e) = infer_expr_ctx(value, &env, sigs, types) {
+                let declared = resolve_type_ctx(t, types).unwrap_or(SemType::Bool);
+                if let Err(e) = infer_expr_expected(value, &env, sigs, types, Some(&declared)) {
                     errs.push(e);
                 }
-                resolve_type_ctx(t, types).unwrap_or(SemType::Bool)
+                declared
             } else {
                 infer_expr_ctx(value, &env, sigs, types).unwrap_or(SemType::Bool)
             };
@@ -2976,6 +3086,74 @@ Int main() {
         assert!(
             !errs.is_empty(),
             "expected method call on plain value `x.add(1)` to be rejected"
+        );
+    }
+
+    #[test]
+    fn check_list_concat_same_elem_type_ok() {
+        let src = r#"
+Int main() {
+    List(Str) a = ["x", "y"];
+    List(Str) b = ["z"];
+    List(Str) c = a.concat(b);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected concat to typecheck, got: {errs:?}");
+    }
+
+    #[test]
+    fn check_list_concat_mismatched_elem_rejected() {
+        let src = r#"
+Int main() {
+    List(Str) a = ["x"];
+    List(Int) b = [1];
+    List(Str) c = a.concat(b);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected mismatched `.concat` element type to be rejected"
+        );
+    }
+
+    #[test]
+    fn check_empty_list_with_declared_type_ok() {
+        let src = r#"
+Int main() {
+    List(Str) a = [];
+    List(Int) b = [];
+    Int n = a.len();
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected typed empty list to typecheck, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn check_empty_list_struct_field_ok() {
+        let src = r#"
+type T = { names: List(Str) };
+Int main() {
+    T t = T { names: [] };
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected typed empty struct-field list to typecheck, got: {errs:?}"
         );
     }
 
