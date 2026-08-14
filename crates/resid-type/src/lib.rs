@@ -1438,12 +1438,84 @@ fn block_ret(
     sigs: &Signatures,
     types: &Types,
 ) -> Result<SemType, TypeError> {
+    // Register bindings declared by the block's statements (and recurse into
+    // nested control flow) so the tail expression can reference them — e.g.
+    // `if (c) { Int k = 1; return k; }`.
+    let mut env = env.clone();
+    for stmt in &block.statements {
+        match &stmt.kind {
+            StmtKind::Bind {
+                name,
+                type_: opt_type,
+                value,
+            } => {
+                let ty = if let Some(t) = opt_type {
+                    let _ = infer_expr_ctx(value, &env, sigs, types)?;
+                    resolve_type_ctx(t, types).unwrap_or(SemType::Bool)
+                } else {
+                    infer_expr_ctx(value, &env, sigs, types)?
+                };
+                env.insert(&name.0, ty);
+            }
+            StmtKind::Destructure { pattern, source } => {
+                let st = infer_expr_ctx(source, &env, sigs, types)?;
+                if !is_refutable_pattern(pattern) {
+                    bind_pattern(pattern, &st, &mut env, types, sigs)?;
+                }
+            }
+            StmtKind::Expr(e) => {
+                match &e.kind {
+                    ExprKind::If {
+                        then_block,
+                        else_block,
+                        ..
+                    } => {
+                        block_ret(then_block, &env, sigs, types)?;
+                        if let Some(eb) = else_block {
+                            block_ret(eb, &env, sigs, types)?;
+                        }
+                    }
+                    ExprKind::While { body, .. } => {
+                        block_ret(body, &env, sigs, types)?;
+                    }
+                    ExprKind::IfLet {
+                        pattern,
+                        source,
+                        then_block,
+                        else_block,
+                    } => {
+                        let st = infer_expr_ctx(source, &env, sigs, types)?;
+                        let mut then_env = env.clone();
+                        bind_pattern(pattern, &st, &mut then_env, types, sigs)?;
+                        block_ret(then_block, &then_env, sigs, types)?;
+                        if let Some(eb) = else_block {
+                            block_ret(eb, &env, sigs, types)?;
+                        }
+                    }
+                    ExprKind::WhileLet {
+                        pattern,
+                        source,
+                        body,
+                    } => {
+                        let st = infer_expr_ctx(source, &env, sigs, types)?;
+                        let mut body_env = env.clone();
+                        bind_pattern(pattern, &st, &mut body_env, types, sigs)?;
+                        block_ret(body, &body_env, sigs, types)?;
+                    }
+                    _ => {
+                        let _ = infer_expr_ctx(e, &env, sigs, types)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     if let Some(ret) = &block.ret {
-        return infer_expr_ctx(ret, env, sigs, types);
+        return infer_expr_ctx(ret, &env, sigs, types);
     }
     if let Some(stmt) = block.statements.last() {
         if let StmtKind::Expr(e) = &stmt.kind {
-            return infer_expr_ctx(e, env, sigs, types);
+            return infer_expr_ctx(e, &env, sigs, types);
         }
     }
     Ok(SemType::Bool)
@@ -3411,6 +3483,30 @@ Int main() {
         assert!(
             errs.is_empty(),
             "expected char literal to type as Int, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn bindings_in_if_block_visible_to_return() {
+        let src = r#"
+Int f(Int i) {
+    if (i > 0) {
+        Int k = i + 1;
+        return k;
+    }
+    return i;
+}
+Int main() {
+    Int x = f(5);
+    return x;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("bind.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected clean check, got: {:?}",
             errs
         );
     }
