@@ -866,3 +866,93 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A Resid program parses a `.resid` source file into an AST (bootstrap
+/// parser, M5).
+#[test]
+fn bootstrap_parser_builds_ast() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-parse-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let parser = dir.join("parser.res");
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("examples/parser.res"), &parser).unwrap();
+    let src = dir.join("ast_sample.resid");
+    std::fs::write(
+        &src,
+        r#"type Point = { x: Int, y: Int };
+Int add(Int a, Int b) {
+    Int c = a + b;
+    return c;
+}
+Int main() {
+    List(Int) xs = [1, 2, 3];
+    Point p = Point { x: 3, y: 4 };
+    Int n = add(1, 2) * 3 - 4;
+    if (n > 5) {
+        println("big");
+    } else {
+        println("small");
+    }
+    for (Int i in 0..5) {
+        println(IntToString(i));
+    }
+    Option(Int) mx = Some(7);
+    Int out = match mx {
+        Some(k) => k,
+        None => 0,
+    };
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&parser)
+        .arg("run")
+        .env("RESID_PARSER_SRC", &src)
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines.last(), Some(&"EOF"), "unexpected parser output: {stdout:?}");
+    assert_eq!(
+        lines[0],
+        "(type-def Point (x (type Int)) (y (type Int)))",
+        "unexpected type-def: {stdout:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("(func add -> (type Int)")),
+        "missing add: {stdout:?}"
+    );
+    assert!(
+        lines.iter().any(|l| {
+            l.contains("(bind n Int (bin * (call (id add)  (int 1) (int 2)) (bin - (int 3) (int 4)))")
+        }),
+        "missing precedence: {stdout:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("(match (id mx)")),
+        "missing match: {stdout:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("(for-in Int i")),
+        "missing for-in: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
