@@ -1696,8 +1696,8 @@ Build/test notes:
 - `residc <file.resid> build [-o <out>]` compiles to a native binary via clang + the
   bootstrap runtime (`crates/residc/resid_rt.c`); `run` builds to a temp dir and executes
   it, propagating the exit code (including POSIX signal exits as 128+signal).
-- **414 tests total**: lexer 13, parser 88, resid-ir 41, resid-type 143, resid-codegen 114,
-  residc 15 (e2e). Destructuring, `_ = expr` discard,
+- **417 tests total**: lexer 13, parser 88, resid-ir 41, resid-type 144, resid-codegen 115,
+  residc 16 (e2e). Destructuring, `_ = expr` discard,
   `if`-expressions with phi joins, `while` and range `for-in` loops with
   `break`/`continue`, `for-in` over boxed lists, `comptime_print` (compile-time
   evidence side effect), `@residual Type y = expr`, the assertion family
@@ -1719,6 +1719,22 @@ Build/test notes:
   `#location` (§12.1, task 5.5), and f-string interpolation (§12.1, task 5.12)
   are done → M2 bootstrap milestone (string building for the Resid lexer).
   Next: provider backends (§12.1, task 5.6).
+- **M4 — Resid lexer done** (`examples/lexer.res`): a Resid program reads a
+  `.resid` source file via `filesystem.read_all(RESID_LEX_SRC)` and prints the
+  token stream (`ident(x)`, `literal(Int 42)`, `literal(Str hi)`, `op(+)`,
+  `keyword(return)`, `raw(...)`, `bytes(...)`, `f-string(...)`, `char(...)`,
+  `#`, `@`, `EOF`). Handles C-style comments (`//` line + `/* */` block),
+  string/raw/byte/f-string/char literals with escapes, integers in
+  dec/hex/bin/oct, floats, identifiers (keyword vs ident), and operators
+  (including multi-char `==`/`!=`/`<=`/`>=`/`&&`/`||`). Verified end-to-end by
+  e2e test `bootstrap_lexer_tokenizes_source` (runs `lexer.res` via `residc run`
+  with `RESID_LEX_SRC` pointing at a sample).
+  Type-checker fix enabling this: `block_ret` now walks a block's statements,
+  registering bindings into a cloned env and recursing into nested control flow
+  (if/while/if-let/while-let), so `Int k = ...; return k;` inside an `if`
+  block type-checks (previously "undefined variable"). Codegen fix: functions
+  are all declared before any are lowered, so forward references and mutual
+  recursion work.
 
 ---
 
@@ -1853,9 +1869,11 @@ Updated from §10. **Checked = done, unchecked = missing.**
    both cover lists, structs, options, destructuring, if-let/while-let. Enables Resid
    data structures for parser.
 
-4. **M4 — Resid lexer**: Write a Resid program that lexes `.resid` source.
-   Proof: `cargo run` on a `.resid` file produces tokens.
-   **Blocked on:** `Str` char iteration (`len`, indexing, codepoint access).
+4. **M4 — Resid lexer**: ✅ Done — `examples/lexer.res` (see status §11). Reads a
+   `.resid` source file via `filesystem.read_all`, prints the token stream, handles
+   C-style comments, string/raw/byte/f-string/char literals, dec/hex/bin/oct
+   integers, floats, identifiers/keywords, and operators. Proven by e2e test
+   `bootstrap_lexer_tokenizes_source`.
 
 5. **M5 — Resid parser**: Write a Resid program that parses tokens into AST.
    Proof: `cargo run` on `.resid` source produces AST output.

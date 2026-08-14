@@ -817,3 +817,52 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A Resid program lexes a `.resid` source file (bootstrap lexer, M4).
+#[test]
+fn bootstrap_lexer_tokenizes_source() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-lex-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let lexer = dir.join("lexer.res");
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("examples/lexer.res"), &lexer).unwrap();
+    let src = dir.join("sample.resid");
+    std::fs::write(
+        &src,
+        r#"// C-style line comment
+/* block comment */
+Int main() {
+    println("hi");
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&lexer)
+        .arg("run")
+        .env("RESID_LEX_SRC", &src)
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "ident(Int)\nident(main)\nop(()\nop())\nop({)\nident(println)\nop(()\nliteral(Str hi)\nop())\nop(;)\nkeyword(return)\nliteral(Int 0)\nop(;)\nop(})\nEOF",
+        "unexpected lexer output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
