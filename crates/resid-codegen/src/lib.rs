@@ -179,7 +179,7 @@ impl<'ctx> CodeGen<'ctx> {
         let ret = resid_type::resolve_type_ctx(&f.ret, &self.types).unwrap_or(SemType::Bool);
         let ret_ll = self.llvm_type(&ret)?;
         let param_ll: Vec<BasicTypeEnum<'ctx>> =
-            params.iter().map(|t| self.llvm_type(t).unwrap()).collect();
+            params.iter().map(|t| self.param_type(t).unwrap()).collect();
         let param_meta: Vec<BasicMetadataTypeEnum<'ctx>> =
             param_ll.iter().map(|t| (*t).into()).collect();
         let ft = make_fn_type(ret_ll, &param_meta);
@@ -295,6 +295,16 @@ impl<'ctx> CodeGen<'ctx> {
             let ll = self.llvm_type(&ty)?;
             let ptr = self.builder.build_alloca(ll, &p.name.0).map_err(to_err)?;
             let arg = fv.get_nth_param(i as u32).ok_or("missing param")?;
+            // Bool params arrive as i8 (C ABI); narrow to i1 for the body.
+            let arg = if ty == SemType::Bool {
+                let i8 = arg.into_int_value();
+                self.builder
+                    .build_int_truncate(i8, self.cx.bool_type(), "bool_narrow")
+                    .map_err(to_err)?
+                    .into()
+            } else {
+                arg
+            };
             self.builder.build_store(ptr, arg).map_err(to_err)?;
             sc.vars.insert(p.name.0.clone(), (ptr, ty));
         }

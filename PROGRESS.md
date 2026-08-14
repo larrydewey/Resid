@@ -1696,8 +1696,8 @@ Build/test notes:
 - `residc <file.resid> build [-o <out>]` compiles to a native binary via clang + the
   bootstrap runtime (`crates/residc/resid_rt.c`); `run` builds to a temp dir and executes
   it, propagating the exit code (including POSIX signal exits as 128+signal).
-- **417 tests total**: lexer 13, parser 88, resid-ir 41, resid-type 144, resid-codegen 115,
-  residc 16 (e2e). Destructuring, `_ = expr` discard,
+- **418 tests total**: lexer 13, parser 88, resid-ir 41, resid-type 144, resid-codegen 115,
+  residc 17 (e2e). Destructuring, `_ = expr` discard,
   `if`-expressions with phi joins, `while` and range `for-in` loops with
   `break`/`continue`, `for-in` over boxed lists, `comptime_print` (compile-time
   evidence side effect), `@residual Type y = expr`, the assertion family
@@ -1735,6 +1735,17 @@ Build/test notes:
   block type-checks (previously "undefined variable"). Codegen fix: functions
   are all declared before any are lowered, so forward references and mutual
   recursion work.
+- **M5 — Resid parser done** (`examples/parser.res`): reads `.resid` source via
+  `filesystem.read_all(RESID_PARSER_SRC)`, recursively descends with position
+  threaded through a `{ pos, ast }` struct, and prints one S-expression AST line
+  per declaration (type-def product/sum, func with params + defaults, bind/
+  discard/return/if-else/while/for-in/expr/block statements, precedence-climbing
+  binary expr per spec §30, unary, calls, field/index/slice, list/struct
+  literals, match, ranges, f-strings/raw/bytes/chars, provider calls). Proves the
+  milestone by parsing `examples/lexer.res` itself cleanly to EOF. Verified by
+  e2e test `bootstrap_parser_builds_ast`. Codegen fix enabling this: user
+  functions now declare Bool params as i8 (C ABI, matching extern decls) and
+  narrow to i1 on entry, so calls passing Bool literals/vars verify.
 
 ---
 
@@ -1875,8 +1886,19 @@ Updated from §10. **Checked = done, unchecked = missing.**
    integers, floats, identifiers/keywords, and operators. Proven by e2e test
    `bootstrap_lexer_tokenizes_source`.
 
-5. **M5 — Resid parser**: Write a Resid program that parses tokens into AST.
-   Proof: `cargo run` on `.resid` source produces AST output.
+5. **M5 — Resid parser**: ✅ Done — `examples/parser.res` (see status §11). Reads a
+   `.resid` source file via `filesystem.read_all`, recursively descends with
+   position threaded through a `{ pos, ast }` struct (immutable bindings), and
+   prints one S-expression AST line per declaration. Handles type defs
+   (product + sum), functions with params/defaults, bind/discard/return/if-else/
+   while/for-in/expression/block statements, full precedence-climbing binary
+   expressions (§30), unary, calls, field/index/slice access, list/struct
+   literals, match, ranges, f-strings/raw/bytes/chars, and provider calls.
+   Proof: parses `examples/lexer.res` (its own sibling milestone) cleanly to
+   EOF. Proven by e2e test `bootstrap_parser_builds_ast`.
+   Codegen fix enabling Bool-param user functions: user functions now declare
+   Bool params as i8 (C ABI, matching extern decls) and narrow to i1 on entry,
+   so calls passing Bool literals/vars verify.
 
 6. **M6 — Full compiler in Resid**: Type checking, codegen, LLVM backend.
    Self-hosting achieved.
