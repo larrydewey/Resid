@@ -195,6 +195,24 @@ void* resid_box_slot(void* b, int64_t i) { return ((ResidVal*)b)->slots[i]; }
 /* Length of a list = its slot count. */
 int64_t resid_list_len(void* b) { return ((ResidVal*)b)->count; }
 
+/* Concatenate two lists: a new boxed list with a's slots then b's. */
+void* resid_list_concat(void* a, void* b) {
+    ResidVal* x = (ResidVal*)a;
+    ResidVal* y = (ResidVal*)b;
+    int64_t total = x->count + y->count;
+    ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
+    out->tag = x->tag;
+    out->count = total;
+    out->type = x->type;
+    out->slots = NULL;
+    if (total > 0) {
+        out->slots = (void**)malloc((size_t)total * sizeof(void*));
+        for (int64_t i = 0; i < x->count; i++) out->slots[i] = x->slots[i];
+        for (int64_t i = 0; i < y->count; i++) out->slots[x->count + i] = y->slots[i];
+    }
+    return out;
+}
+
 /* Scalar boxes: ResidVal with tag=-1 and one slot holding the value. */
 void* resid_box_i64(int64_t v) {
     ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));

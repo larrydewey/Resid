@@ -956,3 +956,160 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `List.concat(b)` joins two lists of the same element type.
+#[test]
+fn run_list_concat() {
+    let dir =
+        std::env::temp_dir().join(format!("residc-e2e-conc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("concat.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    List(Int) a = [1, 2];
+    List(Int) b = [3, 4, 5];
+    List(Int) c = a.concat(b);
+    println(IntToString(c[0]));
+    println(IntToString(c[2]));
+    println(IntToString(c[4]));
+
+    List(Str) sa = ["hello", " "];
+    List(Str) sb = ["world"];
+    List(Str) sc = sa.concat(sb);
+    println(sc[0]);
+
+    // Empty list concat — empty list takes element type from declared binding
+    List(Int) empty = [];
+    List(Int) d = a.concat(empty);
+    println(IntToString(d[0]));
+
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec!["1", "3", "5", "hello", "1"],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Empty list literals type-check with declared element type and run.
+#[test]
+fn run_empty_list_with_declared_type() {
+    let dir = std::env::temp_dir().join(format!(
+        "residc-e2e-empty-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("empty.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    List(Int) empty = [];
+    List(Str) words = [];
+    println(IntToString(empty.len()));
+    println(IntToString(words.len()));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "0\n0",
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Default parameters: functions with default values for trailing params can
+/// be called with fewer arguments. Named args skip over defaults.
+#[test]
+fn run_default_params() {
+    let dir = std::env::temp_dir().join(format!(
+        "residc-e2e-defpar-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("defpar.resid");
+    std::fs::write(
+        &file,
+        r#"
+Str greet(Int count, Str msg = "hello", Str suffix = " world") {
+    return msg + suffix;
+}
+Int main() {
+    // Use defaults for msg and suffix
+    println(greet(2));
+    // Override only suffix
+    println(greet(1, "hi", "!"));
+    // All explicit
+    println(greet(1, "hey", "."));
+    // Named args: skip over msg, override suffix
+    println(greet(1, suffix = "!"));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec!["hello world", "hi!", "hey.", "hello!"],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
