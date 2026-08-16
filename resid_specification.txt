@@ -14,7 +14,9 @@ reduction of first-class knowledge.
 Runtime behavior consists solely of the residual computation
 that remains after all provable reductions have been performed.
 
-The name Resid (pronounced re-SEED) denotes this residual core.
+The name Resid denotes this residual core.
+
+The pronunciation /ˈrɛz.ɪd/ (REZ-id) or /ˈriː.zɪd/ (REE-zid) is the correct and standard pronunciation for the name.
 
 Core statement:
 
