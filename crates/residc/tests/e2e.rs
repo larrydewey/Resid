@@ -1113,3 +1113,53 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// String introspection built-ins (`str_len`, `str_char_at`, `str_from_code`,
+/// `str_slice`) run end-to-end — unblocking M2 string building in Resid.
+#[test]
+fn run_str_introspection() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-stri-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("stri.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    Str s = "hello";
+    Int n = str_len(s);
+    println(IntToString(n));
+    Int c = str_char_at(s, 1);
+    println(IntToString(c));
+    Str one = str_from_code(c);
+    println(one);
+    Str sub = str_slice(s, 1, 3);
+    println(sub);
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec!["5", "101", "e", "el"],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
