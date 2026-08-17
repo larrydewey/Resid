@@ -607,6 +607,29 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
         &[SemType::Numeric(NumericType::UInt(IntWidth::B128))],
         SemType::Str,
     ),
+    // ─── Wide (256/512-bit) integer stringification ───
+    // Codegen decomposes the value into little-endian u64 limbs before the
+    // call (the C ABI has no native 256-bit type).
+    (
+        "Int256ToString",
+        &[SemType::Numeric(NumericType::Int(IntWidth::B256))],
+        SemType::Str,
+    ),
+    (
+        "UInt256ToString",
+        &[SemType::Numeric(NumericType::UInt(IntWidth::B256))],
+        SemType::Str,
+    ),
+    (
+        "Int512ToString",
+        &[SemType::Numeric(NumericType::Int(IntWidth::B512))],
+        SemType::Str,
+    ),
+    (
+        "UInt512ToString",
+        &[SemType::Numeric(NumericType::UInt(IntWidth::B512))],
+        SemType::Str,
+    ),
     // ─── Float stringification (bootstrap runtime) ───
     (
         "FloatToString",
@@ -3861,6 +3884,48 @@ Int main() {
         assert!(
             !errs.is_empty(),
             "expected Int128ToString(Str) to be rejected, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_wide_256_512_tostring() {
+        let src = r#"
+Int main() {
+    Int(256) a = 5;
+    Str sa = Int256ToString(a);
+    UInt(256) u = 18446744073709551617;
+    Str su = UInt256ToString(u);
+    Int(512) b = 7;
+    Str sb = Int512ToString(b);
+    UInt(512) v = 9;
+    Str sv = UInt512ToString(v);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected wide 256/512-bit ToString built-ins to type-check, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_wide_256_tostring_wrong_type_rejected() {
+        let src = r#"
+Int main() {
+    Str s = "hi";
+    Str sa = Int256ToString(s);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected Int256ToString(Str) to be rejected, got: {:?}",
             errs
         );
     }

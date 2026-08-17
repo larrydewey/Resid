@@ -2195,6 +2195,33 @@ impl<'ctx> CodeGen<'ctx> {
         // Range and Slice construction (spec §15).
         self.decl_rt("resid_range_new", vec![i64t.into(), i64t.into(), i8t.into()], ptr.into());
         self.decl_rt("resid_slice_new", vec![ptr.into(), i64t.into(), i64t.into()], ptr.into());
+        // Wide (256/512-bit) integer stringification — C ABI takes u64 limbs.
+        self.decl_rt(
+            "Int256ToString",
+            vec![i64t.into(), i64t.into(), i64t.into(), i64t.into()],
+            ptr.into(),
+        );
+        self.decl_rt(
+            "UInt256ToString",
+            vec![i64t.into(), i64t.into(), i64t.into(), i64t.into()],
+            ptr.into(),
+        );
+        self.decl_rt(
+            "Int512ToString",
+            vec![
+                i64t.into(), i64t.into(), i64t.into(), i64t.into(),
+                i64t.into(), i64t.into(), i64t.into(), i64t.into(),
+            ],
+            ptr.into(),
+        );
+        self.decl_rt(
+            "UInt512ToString",
+            vec![
+                i64t.into(), i64t.into(), i64t.into(), i64t.into(),
+                i64t.into(), i64t.into(), i64t.into(), i64t.into(),
+            ],
+            ptr.into(),
+        );
     }
 
     fn decl_rt(
@@ -2272,6 +2299,68 @@ impl<'ctx> CodeGen<'ctx> {
                     self.build_constructor(idx as i64, &sum, vec![boxed])
                 }
             };
+        }
+
+        // Wide (256/512-bit) integer stringification. The C ABI has no native
+        // 256-bit type, so decompose the value into little-endian u64 limbs and
+        // call the runtime helper (declared with `u64` params in
+        // `declare_wide_tostring`).
+        if let Some(bits) = ["Int256ToString", "UInt256ToString", "Int512ToString", "UInt512ToString"]
+            .iter()
+            .find(|n| *n == name)
+            .and_then(|n| {
+                if n.ends_with("256ToString") {
+                    Some(256)
+                } else {
+                    Some(512)
+                }
+            })
+        {
+            if args.len() != 1 {
+                return Err(format!("codegen: `{name}` expects one argument"));
+            }
+            let (_, a) = &args[0];
+            let target_sem = if name.starts_with("UInt") {
+                SemType::Numeric(NumericType::UInt(IntWidth::from_bits(bits).unwrap()))
+            } else {
+                SemType::Numeric(NumericType::Int(IntWidth::from_bits(bits).unwrap()))
+            };
+            let target = if name.starts_with("UInt") {
+                NumericType::UInt(IntWidth::from_bits(bits).unwrap())
+            } else {
+                NumericType::Int(IntWidth::from_bits(bits).unwrap())
+            };
+            let av = self.lower_expr(sc, a, Some(target))?;
+            let av = self.widen_call_arg(av, &target_sem)?;
+            let iv = av.v.into_int_value();
+            let it = self.int_type(bits)?;
+            let i64t = self.cx.i64_type();
+            let mut limbs: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+            let mut cur = iv;
+            for _ in 0..(bits / 64) {
+                let lo = self
+                    .builder
+                    .build_int_truncate(cur, i64t, "limb")
+                    .map_err(to_err)?;
+                limbs.push(lo.into());
+                let shifted = self
+                    .builder
+                    .build_right_shift(cur, it.const_int(64, false), false, "shr")
+                    .map_err(to_err)?;
+                cur = shifted;
+            }
+            let f = self
+                .module
+                .get_function(name)
+                .ok_or_else(|| format!("codegen: `{name}` not declared"))?;
+            let cs = self.builder.build_call(f, &limbs, name).map_err(to_err)?;
+            let v = cs
+                .try_as_basic_value()
+                .expect_basic("wide tostring");
+            return Ok(Val {
+                v,
+                ty: SemType::Str,
+            });
         }
 
         // Resolve named arguments: map each arg's name (if provided) to the
