@@ -314,13 +314,99 @@ impl Op {
     }
 }
 
-/// Integer literal variants.
+/// Integer literal variants. Digits are stored as strings so literals wider
+/// than `u128` survive lexing without silent truncation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntKind {
-    Decimal(u128),
-    Hex(String),    // 0x prefix, stored as string for large widths
+    Decimal(String),
+    Hex(String),    // 0x prefix
     Binary(String), // 0b prefix
     Octal(String),  // 0o prefix
+}
+
+impl IntKind {
+    /// The digit string without any radix prefix.
+    pub fn digits(&self) -> &str {
+        match self {
+            IntKind::Decimal(s) | IntKind::Hex(s) | IntKind::Binary(s) | IntKind::Octal(s) => s,
+        }
+    }
+
+    /// The radix the digit string is written in.
+    pub fn radix(&self) -> u32 {
+        match self {
+            IntKind::Decimal(_) => 10,
+            IntKind::Hex(_) => 16,
+            IntKind::Binary(_) => 2,
+            IntKind::Octal(_) => 8,
+        }
+    }
+
+    /// The source spelling, e.g. `42`, `0xFF`, `0b1010`, `0o77`.
+    pub fn source_str(&self) -> String {
+        match self {
+            IntKind::Decimal(s) => s.clone(),
+            IntKind::Hex(s) => format!("0x{s}"),
+            IntKind::Binary(s) => format!("0b{s}"),
+            IntKind::Octal(s) => format!("0o{s}"),
+        }
+    }
+
+    /// The number of bits needed to hold this literal's magnitude. Computed
+    /// from the digit string so values beyond `u128` report a true width.
+    pub fn required_bits(&self) -> u16 {
+        match self {
+            IntKind::Binary(s) => s.trim_start_matches('0').len() as u16,
+            IntKind::Octal(s) => (s.trim_start_matches('0').len() as u16) * 3,
+            IntKind::Hex(s) => (s.trim_start_matches('0').len() as u16) * 4,
+            IntKind::Decimal(s) => {
+                let s = s.trim_start_matches('0');
+                if s.is_empty() {
+                    return 1; // zero
+                }
+                // Find the smallest k such that the value < 2^k, by comparing
+                // the decimal string against 2^k written in decimal.
+                let mut pow = String::from("1");
+                for k in 1u16..=512 {
+                    pow = dec_double(&pow);
+                    if dec_lt(s, &pow) {
+                        return k;
+                    }
+                }
+                512
+            }
+        }
+    }
+
+    /// The literal as an unsigned magnitude, if it fits in a u128 (used by the
+    /// value-level code paths; wide literals return `None`).
+    pub fn as_u128(&self) -> Option<u128> {
+        u128::from_str_radix(self.digits(), self.radix()).ok()
+    }
+}
+
+/// Multiply a decimal digit string by two.
+fn dec_double(s: &str) -> String {
+    let mut carry = 0u8;
+    let mut out: Vec<char> = Vec::with_capacity(s.len() + 1);
+    for ch in s.chars().rev() {
+        let d = (ch as u8 - b'0') * 2 + carry;
+        out.push((b'0' + (d % 10)) as char);
+        carry = d / 10;
+    }
+    if carry > 0 {
+        out.push((b'0' + carry) as char);
+    }
+    out.iter().rev().collect()
+}
+
+/// True if the decimal magnitude `a` (no leading zeros) is strictly less than
+/// the decimal magnitude `b`.
+fn dec_lt(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return a.len() < b.len();
+    }
+    a < b
 }
 
 /// Float literal.
@@ -376,7 +462,7 @@ pub enum Literal {
 impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Int { value, .. } => write!(f, "{value}"),
+            Self::Int { kind, .. } => write!(f, "{}", kind.source_str()),
             Self::Float(lit) => write!(f, "{}", lit.value),
             Self::Char(c) => write!(f, "'{c}'"),
             Self::Str(lit) => write!(f, "\"{}\"", lit.value),

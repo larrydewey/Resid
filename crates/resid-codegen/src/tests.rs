@@ -76,6 +76,58 @@ Int main() {
 }
 
 #[test]
+fn test_wide_256_decimal_literal_preserved() {
+    // A 2^256-1 decimal literal (well past u128) must survive lexing and be
+    // emitted as a full i256 constant rather than silently truncating to 0.
+    let src = r#"
+Int main() {
+    UInt(256) big = 115792089237316195423570985008687907853269984665640564039457584007913129639935;
+    println(UInt256ToString(big));
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("wid256.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "wid256");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("i256") && !ir.contains("add i256"),
+        "expected a full i256 literal constant, not one assembled from ops: {ir}"
+    );
+}
+
+#[test]
+fn test_wide_hex_literal_preserved() {
+    // Hex literals >u128 were already carried as strings; ensure the constant
+    // is built from the hex digits (0xFFFF... ) at full width.
+    let src = r#"
+Int main() {
+    UInt(256) big = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+    println(UInt256ToString(big));
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("widhex.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "widhex");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("i256"),
+        "expected i256 for wide hex literal: {ir}"
+    );
+}
+
+#[test]
 fn test_wide_128_arith_and_tostring() {
     let src = r#"
 Int main() {

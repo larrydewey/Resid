@@ -1396,10 +1396,12 @@ impl<'ctx> CodeGen<'ctx> {
         target: Option<Numeric>,
     ) -> Result<Val<'ctx>, String> {
         match lit {
-            Literal::Int { value, .. } => {
+            Literal::Int { kind, .. } => {
                 if let Some(Numeric::Float(fw)) = target {
                     let ft = self.float_type(fw.bits() as u16)?; // cfg
-                    let c = self.cx.f64_type().const_float(*value as f64);
+                    let c = self.cx.f64_type().const_float(
+                        kind.as_u128().unwrap_or(u128::MAX) as f64,
+                    );
                     let v = if fw.bits() == 64 {
                         c
                     } else {
@@ -1420,7 +1422,7 @@ impl<'ctx> CodeGen<'ctx> {
                         // exceeds it (the type checker infers Int(64) for
                         // integer literals; only widen when needed so wide
                         // values aren't truncated to i64).
-                        let bits = 128u16 - (*value).leading_zeros() as u16;
+                        let bits = kind.required_bits();
                         if bits <= 64 {
                             64
                         } else {
@@ -1434,11 +1436,16 @@ impl<'ctx> CodeGen<'ctx> {
                 let it = self.int_type(width)?;
                 let v = it
                     .const_int_from_string(
-                        &value.to_string(),
-                        inkwell::types::StringRadix::Decimal,
+                        kind.digits(),
+                        match kind.radix() {
+                            2 => inkwell::types::StringRadix::Binary,
+                            8 => inkwell::types::StringRadix::Octal,
+                            16 => inkwell::types::StringRadix::Hexadecimal,
+                            _ => inkwell::types::StringRadix::Decimal,
+                        },
                     )
                     .ok_or_else(|| {
-                        format!("codegen: cannot build Int({width}) literal {value}")
+                        format!("codegen: cannot build Int({width}) literal {}", kind.source_str())
                     })?;
                 let ty = if unsigned {
                     SemType::Numeric(Numeric::UInt(IntWidth::from_bits(width).unwrap()))

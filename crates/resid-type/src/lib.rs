@@ -455,8 +455,8 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
             if let Some(ps) = params {
                 if ps.len() == 1 {
                     let width_str = match &ps[0] {
-                        // Parsed as numeric literal: Int(8) → Type::Literal(Int { value: 8, .. })
-                        Type::Literal(Literal::Int { value: w, .. }) => Ok(w.to_string()),
+                        // Parsed as numeric literal: Int(8) → Type::Literal(Int { kind: Decimal("8"), .. })
+                        Type::Literal(Literal::Int { kind, .. }) => Ok(kind.digits().to_string()),
                         // Fallback: type param that's a Base type (legacy)
                         Type::Base {
                             name: width,
@@ -535,7 +535,21 @@ pub fn to_bin_op(op: &OpKind) -> Option<BinOp> {
 
 fn lit_type(lit: &Literal) -> SemType {
     match lit {
-        Literal::Int { .. } => SemType::Numeric(NumericType::Int(IntWidth::from_bits(64).unwrap())),
+        Literal::Int { kind, .. } => {
+            // Match the codegen's magnitude-derived width: literals that need
+            // more than 64 bits infer Int(128)/Int(256)/Int(512) so untyped
+            // binds of wide literals don't truncate.
+            let bits = kind.required_bits();
+            let width = if bits <= 64 {
+                64
+            } else {
+                [128u16, 256, 512]
+                    .into_iter()
+                    .find(|&w| w >= bits)
+                    .unwrap_or(512)
+            };
+            SemType::Numeric(NumericType::Int(IntWidth::from_bits(width).unwrap()))
+        }
         Literal::Float(_) => {
             SemType::Numeric(NumericType::Float(FloatWidth::from_bits(64).unwrap()))
         }
@@ -794,6 +808,28 @@ pub fn infer_expr_expected(
                     "cannot infer element type of an empty list literal (add an explicit type)",
                 )),
             };
+        }
+    }
+    // Spec §6: overflow of the result type is a compile-time error. A literal
+    // written against an expected numeric type must fit its range (e.g.
+    // `Int(8) x = 300` or `Int(64) y = <2^256-1 literal>`). Wide targets
+    // (>= 128 bits) accept any literal by design.
+    if let Some(SemType::Numeric(_)) = expected {
+        if matches!(&expr.kind, ExprKind::Literal(Literal::Int { .. }))
+            && !literal_compatible(expr, expected.unwrap())
+        {
+            let ExprKind::Literal(Literal::Int { kind, .. }) = &expr.kind else {
+                unreachable!()
+            };
+            return Err(err(
+                &expr.span,
+format!(
+                    "integer literal `{}` does not fit the expected type {} (needs {} bits)",
+                    kind.source_str(),
+                    expected.unwrap(),
+                    kind.required_bits()
+                ),
+            ));
         }
     }
     infer_expr_ctx(expr, env, sigs, types)
@@ -1776,17 +1812,18 @@ fn literal_compatible(a: &Expr, target: &SemType) -> bool {
     let SemType::Numeric(t) = target else {
         return false;
     };
-    let ExprKind::Literal(Literal::Int { value, .. }) = &a.kind else {
+    let ExprKind::Literal(Literal::Int { kind, .. }) = &a.kind else {
         return false;
     };
     let bits = t.target_width().unwrap_or(64) as u32;
     if bits >= 128 {
         return true;
     }
+    let required = kind.required_bits() as u32;
     if t.is_unsigned() {
-        *value < (1u128 << bits)
+        required <= bits
     } else {
-        *value <= (1u128 << (bits - 1)) - 1
+        required <= bits - 1
     }
 }
 
@@ -2123,7 +2160,7 @@ mod tests {
         Expr {
             kind: ExprKind::Literal(Literal::Int {
                 value: v,
-                kind: IntKind::Decimal(0),
+                kind: IntKind::Decimal(v.to_string()),
             }),
             span: span(),
         }
@@ -3829,7 +3866,8 @@ Int main() {
     }
 
     #[test]
-    fn check_program_string_introspection() {        let src = r#"
+    fn check_program_string_introspection() {
+        let src = r#"
 Int main() {
     Str s = "hello";
     Int n = str_len(s);
@@ -3926,6 +3964,58 @@ Int main() {
         assert!(
             !errs.is_empty(),
             "expected Int256ToString(Str) to be rejected, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_wide_256_literal_fits() {
+        let src = r#"
+Int main() {
+    UInt(256) big = 115792089237316195423570985008687907853269984665640564039457584007913129639935;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected 2^256-1 literal to fit UInt(256), got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_literal_overflow_rejected() {
+        // Spec §6: overflow of the result type is a compile-time error.
+        let src = r#"
+Int main() {
+    Int(8) x = 300;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected Int(8) x = 300 to be rejected, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_wide_256_literal_into_64_rejected() {
+        let src = r#"
+Int main() {
+    Int(64) x = 115792089237316195423570985008687907853269984665640564039457584007913129639935;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected 2^256-1 literal into Int(64) to be rejected, got: {:?}",
             errs
         );
     }

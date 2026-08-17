@@ -668,19 +668,19 @@ impl Lexer {
             // Push back and emit number
             self.tokens.push(Token {
                 kind: TokenKind::Literal(Literal::Int {
-                    value: digits.parse().unwrap_or(0),
-                    kind: IntKind::Decimal(0),
+                    value: digits.parse().unwrap_or(u128::MAX),
+                    kind: IntKind::Decimal(digits),
                 }),
                 span: start,
             });
             return;
         }
 
-        let value = digits.parse().unwrap_or(0);
+        let value = digits.parse().unwrap_or(u128::MAX);
         self.tokens.push(Token {
             kind: TokenKind::Literal(Literal::Int {
                 value,
-                kind: IntKind::Decimal(value),
+                kind: IntKind::Decimal(digits),
             }),
             span: start,
         });
@@ -1061,6 +1061,22 @@ mod tests {
     fn test_int_literals() {
         let (_, errors) = Lexer::new("t.resid", "42 0xFF 0b1010 0o77").tokenize();
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_wide_decimal_literal_digits_preserved() {
+        // A decimal literal wider than u128 must keep its digits (not truncate).
+        let big = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+        let (tokens, errors) = Lexer::new("t.resid", big).tokenize();
+        assert!(errors.is_empty(), "lexer errors: {errors:?}");
+        let kind = &tokens[0].kind;
+        let TokenKind::Literal(Literal::Int { kind, .. }) = kind else {
+            panic!("expected int literal, got {kind:?}");
+        };
+        match kind {
+            IntKind::Decimal(digits) => assert_eq!(digits, big),
+            other => panic!("expected Decimal, got {other:?}"),
+        }
     }
 
     #[test]
