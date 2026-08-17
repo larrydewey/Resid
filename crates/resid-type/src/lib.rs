@@ -594,6 +594,19 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
         &[SemType::Numeric(NumericType::UInt(IntWidth::B64))],
         SemType::Str,
     ),
+    // ─── Wide (128-bit) integer stringification ───
+    // LLVM lowers Int(128)/UInt(128) to native i128; the runtime exposes a
+    // dedicated symbol (C `__int128` ABI) since the i64 helpers can't hold it.
+    (
+        "Int128ToString",
+        &[SemType::Numeric(NumericType::Int(IntWidth::B128))],
+        SemType::Str,
+    ),
+    (
+        "UInt128ToString",
+        &[SemType::Numeric(NumericType::UInt(IntWidth::B128))],
+        SemType::Str,
+    ),
     // ─── Float stringification (bootstrap runtime) ───
     (
         "FloatToString",
@@ -3808,6 +3821,46 @@ Int main() {
         assert!(
             errs.is_empty(),
             "expected no type errors for string introspection, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_wide_128_tostring() {
+        let src = r#"
+Int main() {
+    Int(128) a = 5;
+    Str sa = Int128ToString(a);
+    UInt(128) u = 18446744073709551617;
+    Str su = UInt128ToString(u);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected wide Int128ToString/UInt128ToString to type-check, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_wide_128_tostring_wrong_type_rejected() {
+        // Int128ToString takes a numeric Int; passing Str is a type error.
+        // (Int(64) widens losslessly to Int(128), so that is accepted.)
+        let src = r#"
+Int main() {
+    Str s = "hi";
+    Str sa = Int128ToString(s);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected Int128ToString(Str) to be rejected, got: {:?}",
             errs
         );
     }

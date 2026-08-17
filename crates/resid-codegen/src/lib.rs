@@ -1415,10 +1415,31 @@ impl<'ctx> CodeGen<'ctx> {
                 let width = target
                     .filter(|n| !n.is_float())
                     .and_then(|n| n.target_width())
-                    .unwrap_or(64);
+                    .unwrap_or_else(|| {
+                        // No target: keep 64-bit default unless the value
+                        // exceeds it (the type checker infers Int(64) for
+                        // integer literals; only widen when needed so wide
+                        // values aren't truncated to i64).
+                        let bits = 128u16 - (*value).leading_zeros() as u16;
+                        if bits <= 64 {
+                            64
+                        } else {
+                            [128u16, 256, 512]
+                                .into_iter()
+                                .find(|&w| w >= bits)
+                                .unwrap_or(512)
+                        }
+                    });
                 let unsigned = matches!(target, Some(Numeric::UInt(_)));
                 let it = self.int_type(width)?;
-                let v = it.const_int(*value as u64, false);
+                let v = it
+                    .const_int_from_string(
+                        &value.to_string(),
+                        inkwell::types::StringRadix::Decimal,
+                    )
+                    .ok_or_else(|| {
+                        format!("codegen: cannot build Int({width}) literal {value}")
+                    })?;
                 let ty = if unsigned {
                     SemType::Numeric(Numeric::UInt(IntWidth::from_bits(width).unwrap()))
                 } else {
