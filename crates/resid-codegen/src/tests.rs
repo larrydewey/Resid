@@ -52,6 +52,65 @@ Int main() {
 }
 
 #[test]
+fn test_wide_128_literal_not_truncated() {
+    // A 128-bit literal that exceeds i64 must not be truncated to 64 bits.
+    let src = r#"
+Int main() {
+    Int(128) big = 18446744073709551617;
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("wid128.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "wid128");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("i128"),
+        "expected i128 type for wide literal: {ir}"
+    );
+}
+
+#[test]
+fn test_wide_128_arith_and_tostring() {
+    let src = r#"
+Int main() {
+    Int(128) a = 5;
+    Int(128) b = 7;
+    Int(128) c = a + b;
+    println(Int128ToString(c));
+    UInt(128) u = 18446744073709551617;
+    println(UInt128ToString(u));
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("wid128arith.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "wid128arith");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    // Int(128) + Int(128) widens to Int(256) per spec (carry bit).
+    assert!(ir.contains("sext i128"), "expected sext i128: {ir}");
+    assert!(ir.contains("add i256"), "expected i256 add: {ir}");
+    assert!(
+        ir.contains("@Int128ToString"),
+        "expected Int128ToString call: {ir}"
+    );
+    assert!(
+        ir.contains("@UInt128ToString"),
+        "expected UInt128ToString call: {ir}"
+    );
+}
+
+#[test]
 fn test_bool_return() {
     let src = r#"
 Int main() {

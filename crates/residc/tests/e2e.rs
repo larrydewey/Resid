@@ -1163,3 +1163,62 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Wide 128-bit integer literals, arithmetic, casts, and stringification run
+/// end-to-end (Int128ToString / UInt128ToString).
+#[test]
+fn run_wide_int_128() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-wid-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("wid.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    Int(128) big = 18446744073709551617;
+    println(Int128ToString(big));
+    Int(128) a = 5;
+    Int(128) b = 7;
+    Int(128) s = a + b;
+    println(Int128ToString(s));
+    Int(128) neg = 0 - 170141183460469231731687303715884105728;
+    println(Int128ToString(neg));
+    UInt(128) max = 340282366920938463463374607431768211455;
+    println(UInt128ToString(max));
+    Int(128) hi = (Int(128))9223372036854775807;
+    println(Int128ToString(hi));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec![
+            "18446744073709551617",
+            "12",
+            "-170141183460469231731687303715884105728",
+            "340282366920938463463374607431768211455",
+            "9223372036854775807",
+        ],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -278,6 +278,48 @@ char* UIntToString(uint64_t v) {
     return resid_box_str(buf);
 }
 
+/* 128-bit integer stringification (wide numeric family, spec §6).
+ * LLVM lowers Int(128)/UInt(128) to native i128; the C runtime takes
+ * `__int128` / `unsigned __int128` directly (i128 is the C ABI for both). */
+char* Int128ToString(__int128 v) {
+    char buf[48];
+    int neg = v < 0;
+    unsigned __int128 u = neg ? (unsigned __int128)(-(v + 1)) + 1 : (unsigned __int128)v;
+    char tmp[48];
+    int i = 0;
+    if (u == 0) {
+        tmp[i++] = '0';
+    } else {
+        while (u > 0) {
+            tmp[i++] = (char)('0' + (int)(u % 10));
+            u /= 10;
+        }
+    }
+    if (neg) tmp[i++] = '-';
+    int j = 0;
+    while (i > 0) buf[j++] = tmp[--i];
+    buf[j] = '\0';
+    return resid_box_str(buf);
+}
+
+char* UInt128ToString(unsigned __int128 u) {
+    char buf[48];
+    char tmp[48];
+    int i = 0;
+    if (u == 0) {
+        tmp[i++] = '0';
+    } else {
+        while (u > 0) {
+            tmp[i++] = (char)('0' + (int)(u % 10));
+            u /= 10;
+        }
+    }
+    int j = 0;
+    while (i > 0) buf[j++] = tmp[--i];
+    buf[j] = '\0';
+    return resid_box_str(buf);
+}
+
 char* FloatToString(double v) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%.17g", v);
