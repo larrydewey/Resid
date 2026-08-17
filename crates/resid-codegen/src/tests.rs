@@ -111,6 +111,40 @@ Int main() {
 }
 
 #[test]
+fn test_wide_256_tostring_decomposes_limbs() {
+    // Int(256)/UInt(256)/Int(512)/UInt(512) stringify by decomposing the
+    // value into little-endian u64 limbs for the C ABI runtime helpers.
+    let src = r#"
+Int main() {
+    Int(256) a = 340282366920938463463374607431768211455;
+    println(Int256ToString(a));
+    UInt(512) u = 7;
+    println(UInt512ToString(u));
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("wid256.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "wid256");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    // 256-bit call takes 4 i64 limbs; 512-bit takes 8.
+    assert!(
+        ir.contains("@Int256ToString(i64, i64, i64, i64)"),
+        "expected 4-limb Int256ToString decl: {ir}"
+    );
+    assert!(
+        ir.contains("@UInt512ToString(i64, i64, i64, i64, i64, i64, i64, i64)"),
+        "expected 8-limb UInt512ToString decl: {ir}"
+    );
+    assert!(ir.contains("lshr i256"), "expected i256 limb shift: {ir}");
+}
+
+#[test]
 fn test_bool_return() {
     let src = r#"
 Int main() {

@@ -320,6 +320,75 @@ char* UInt128ToString(unsigned __int128 u) {
     return resid_box_str(buf);
 }
 
+/* 256/512-bit decimal stringification via u64-limb long division.
+ * LLVM lowers Int(256)/Int(512) to arbitrary-width integers; codegen
+ * truncates the value into little-endian u64 limbs before calling these,
+ * since the C ABI has no native 256-bit type. */
+static char* u64_limbs_to_str(const uint64_t* limbs, int count, int neg) {
+    char buf[200];
+    uint64_t work[8];
+    int k;
+    for (k = 0; k < count; k++) work[k] = limbs[k];
+    if (neg) {
+        uint64_t carry = 1;
+        for (k = 0; k < count; k++) {
+            uint64_t inv = ~work[k];
+            work[k] = inv + carry;
+            carry = (carry && inv == UINT64_MAX) ? 1 : 0;
+        }
+    }
+    int allzero = 1;
+    for (k = 0; k < count; k++) {
+        if (work[k]) { allzero = 0; break; }
+    }
+    char tmp[200];
+    int i = 0;
+    if (allzero) {
+        tmp[i++] = '0';
+    } else {
+        while (!allzero) {
+            uint64_t r = 0;
+            for (k = count - 1; k >= 0; k--) {
+                __uint128_t cur = ((__uint128_t)r << 64) | work[k];
+                work[k] = (uint64_t)(cur / 10);
+                r = (uint64_t)(cur % 10);
+            }
+            tmp[i++] = (char)('0' + (int)r);
+            allzero = 1;
+            for (k = 0; k < count; k++) {
+                if (work[k]) { allzero = 0; break; }
+            }
+        }
+    }
+    if (neg) tmp[i++] = '-';
+    int j = 0;
+    while (i > 0) buf[j++] = tmp[--i];
+    buf[j] = '\0';
+    return resid_box_str(buf);
+}
+
+char* Int256ToString(uint64_t l0, uint64_t l1, uint64_t l2, uint64_t l3) {
+    uint64_t limbs[4] = {l0, l1, l2, l3};
+    return u64_limbs_to_str(limbs, 4, (int)(l3 >> 63));
+}
+
+char* UInt256ToString(uint64_t l0, uint64_t l1, uint64_t l2, uint64_t l3) {
+    uint64_t limbs[4] = {l0, l1, l2, l3};
+    return u64_limbs_to_str(limbs, 4, 0);
+}
+
+char* Int512ToString(uint64_t l0, uint64_t l1, uint64_t l2, uint64_t l3,
+                     uint64_t l4, uint64_t l5, uint64_t l6, uint64_t l7) {
+    uint64_t limbs[8] = {l0, l1, l2, l3, l4, l5, l6, l7};
+    return u64_limbs_to_str(limbs, 8, (int)(l7 >> 63));
+}
+
+char* UInt512ToString(uint64_t l0, uint64_t l1, uint64_t l2, uint64_t l3,
+                      uint64_t l4, uint64_t l5, uint64_t l6, uint64_t l7) {
+    uint64_t limbs[8] = {l0, l1, l2, l3, l4, l5, l6, l7};
+    return u64_limbs_to_str(limbs, 8, 0);
+}
+
 char* FloatToString(double v) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%.17g", v);
