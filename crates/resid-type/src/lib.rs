@@ -267,6 +267,15 @@ impl Env {
     pub fn insert(&mut self, name: &str, ty: SemType) {
         self.map.insert(name.to_string(), ty);
     }
+    /// Insert a binding, rejecting shadowing (spec §7: "Shadowing is forbidden
+    /// everywhere"). Returns the existing type if the name is already bound.
+    pub fn try_insert(&mut self, name: &str, ty: SemType) -> Result<(), SemType> {
+        if let Some(existing) = self.map.get(name) {
+            return Err(existing.clone());
+        }
+        self.map.insert(name.to_string(), ty);
+        Ok(())
+    }
     pub fn get(&self, name: &str) -> Option<&SemType> {
         self.map.get(name)
     }
@@ -1173,7 +1182,12 @@ ExprKind::While { cond, body } => {
             };
             let mut errs = Vec::new();
             let mut for_env = env.clone();
-            for_env.insert(&name.0, elem_ty);
+            if let Err(_) = for_env.try_insert(&name.0, elem_ty) {
+                return Err(err(
+                    &expr.span,
+                    format!("loop variable `{}` is already bound; shadowing is forbidden", name.0),
+                ));
+            }
             type_check_block(body, &for_env, sigs, types, &mut errs);
             if let Some(e) = errs.into_iter().next() {
                 return Err(e);
@@ -1363,7 +1377,8 @@ fn bind_pattern(
             if ty.unit_variant_index(&name.0).is_some() {
                 return Ok(());
             }
-            env.insert(&name.0, ty.clone());
+            env.try_insert(&name.0, ty.clone())
+                .map_err(|_| err(&pat.span, format!("identifier `{}` is already bound; shadowing is forbidden", name.0)))?;
             Ok(())
         }
         PatternKind::Variant { name, param } => {
@@ -1376,7 +1391,8 @@ fn bind_pattern(
             let (_, payload) = &variants[idx];
             match (param, payload) {
                 (Some(b), Some(pt)) => {
-                    env.insert(&b.0, pt.clone());
+                    env.try_insert(&b.0, pt.clone())
+                        .map_err(|_| err(&pat.span, format!("identifier `{}` is already bound; shadowing is forbidden", b.0)))?;
                     Ok(())
                 }
                 (None, None) => Ok(()),
@@ -1522,7 +1538,8 @@ fn block_ret(
                 } else {
                     infer_expr_ctx(value, &env, sigs, types)?
                 };
-                env.insert(&name.0, ty);
+                env.try_insert(&name.0, ty)
+                    .map_err(|_| err(&stmt.span, format!("identifier `{}` is already bound; shadowing is forbidden", name.0)))?;
             }
             StmtKind::Destructure { pattern, source } => {
                 let st = infer_expr_ctx(source, &env, sigs, types)?;
@@ -1951,7 +1968,12 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
             let mut env = Env::new();
             let sig = sigs.get(&f.name.0).unwrap();
             for (param, pt) in f.params.iter().zip(sig.params.iter()) {
-                env.insert(&param.name.0, pt.clone());
+                if let Err(_) = env.try_insert(&param.name.0, pt.clone()) {
+                    errs.push(err(
+                        &f.span,
+                        format!("parameter `{}` is already bound; shadowing is forbidden", param.name.0),
+                    ));
+                }
             }
             type_check_block(&f.body, &env, &sigs, &types, &mut errs);
         }
@@ -1986,7 +2008,12 @@ fn type_check_block(
             } else {
                 infer_expr_ctx(value, &env, sigs, types).unwrap_or(SemType::Bool)
             };
-            env.insert(&name.0, ty);
+            if let Err(_) = env.try_insert(&name.0, ty) {
+                errs.push(err(
+                    &stmt.span,
+                    format!("identifier `{}` is already bound; shadowing is forbidden", name.0),
+                ));
+            }
         }
         if let StmtKind::Destructure { pattern, source } = &stmt.kind {
             match infer_expr_ctx(source, &env, sigs, types) {
@@ -2802,6 +2829,143 @@ Int main() {
         assert!(
             !errs.is_empty(),
             "expected type error for undefined variable"
+        );
+    }
+
+    #[test]
+    fn check_program_shadowing_same_block() {
+        let src = r#"
+Int main() {
+    Int x = 1;
+    Int x = 2;
+    return x;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected shadowing error for duplicate binding in same block"
+        );
+        assert!(
+            errs.iter().any(|e| e.message.contains("shadowing is forbidden")),
+            "expected shadowing message, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_shadowing_nested_block() {
+        // Rebinding an outer name inside a nested block is still shadowing.
+        let src = r#"
+Int main() {
+    Int x = 1;
+    Bool c = true;
+    if (c) {
+        Int x = 2;
+    }
+    return x;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected shadowing error for nested block rebind"
+        );
+        assert!(
+            errs.iter().any(|e| e.message.contains("shadowing is forbidden")),
+            "expected shadowing message, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_shadowing_for_loop_var() {
+        let src = r#"
+Int main() {
+    Int x = 0;
+    for (Int x in [1, 2, 3]) {
+        return x;
+    }
+    return x;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected shadowing error for for-in loop variable"
+        );
+        assert!(
+            errs.iter().any(|e| e.message.contains("shadowing is forbidden")),
+            "expected shadowing message, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_duplicate_param_names() {
+        let src = r#"
+Int add(Int a, Int a) {
+    return a;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected shadowing error for duplicate parameter names"
+        );
+        assert!(
+            errs.iter().any(|e| e.message.contains("shadowing is forbidden")),
+            "expected shadowing message, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_shadowing_param_in_body() {
+        // Rebinding a parameter inside the function body is shadowing.
+        let src = r#"
+Int add(Int a, Int b) {
+    Int a = 10;
+    return a + b;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected shadowing error for rebinding a parameter"
+        );
+        assert!(
+            errs.iter().any(|e| e.message.contains("shadowing is forbidden")),
+            "expected shadowing message, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_no_shadowing_sibling_blocks() {
+        // Bindings in sibling if branches do not shadow each other.
+        let src = r#"
+Int main() {
+    Bool c = true;
+    Int r = 0;
+    if (c) {
+        Int x = 1;
+        return x;
+    }
+    return r;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "sibling block bindings should not shadow, got: {:?}",
+            errs
         );
     }
 
