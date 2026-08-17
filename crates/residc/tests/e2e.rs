@@ -1222,6 +1222,59 @@ Int main() {
 }
 
 /// Wide 128-bit integer literals, arithmetic, casts, and stringification run
+
+#[test]
+fn run_wide_literal_beyond_u128() {
+    // A decimal literal wider than u128 (2^256-1) must survive lexing and
+    // print exactly, not silently truncate to 0.
+    let dir = std::env::temp_dir().join(format!("residc-e2e-wid3-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("wid3.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    UInt(256) a = 115792089237316195423570985008687907853269984665640564039457584007913129639935;
+    println(UInt256ToString(a));
+    UInt(512) b = 340282366920938463463374607431768211455;
+    println(UInt512ToString(b));
+    Int(256) c = 57896044618658097711785492504343953926634992332820282019728792003956564819967;
+    println(Int256ToString(c));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec![
+            "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+            "340282366920938463463374607431768211455",
+            "57896044618658097711785492504343953926634992332820282019728792003956564819967",
+        ],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Wide 128-bit integer literals, arithmetic, casts, and stringification run
 /// end-to-end (Int128ToString / UInt128ToString).
 #[test]
 fn run_wide_int_128() {
