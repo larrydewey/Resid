@@ -78,6 +78,9 @@ pub enum NumericType {
     Float(FloatWidth),
     ISize,
     USize,
+    /// Exact decimal: N significant digits + i32 exponent (spec §6.6a).
+    /// Has no fixed binary width; arithmetic is `Dec(N) op Dec(M) -> Dec(max)`.
+    Dec(u16),
 }
 
 impl NumericType {
@@ -93,19 +96,25 @@ impl NumericType {
     pub fn is_float(&self) -> bool {
         matches!(self, NumericType::Float(_))
     }
+    pub fn is_dec(&self) -> bool {
+        matches!(self, NumericType::Dec(_))
+    }
     pub fn target_width(&self) -> Option<u16> {
         match self {
             NumericType::Int(w) | NumericType::UInt(w) => Some(w.bits()),
             NumericType::Float(w) => Some(w.bits()),
             NumericType::ISize | NumericType::USize => Some(64),
+            NumericType::Dec(_) => None,
         }
     }
     pub fn from_name(name: &str) -> Option<NumericType> {
         const D: u16 = 64;
+        const DEC: u16 = 34;
         match name {
             "Int" => Some(NumericType::Int(IntWidth::from_bits(D).unwrap())),
             "UInt" => Some(NumericType::UInt(IntWidth::from_bits(D).unwrap())),
             "Float" => Some(NumericType::Float(FloatWidth::from_bits(D).unwrap())),
+            "Dec" => Some(NumericType::Dec(DEC)),
             "ISize" => Some(NumericType::ISize),
             "USize" => Some(NumericType::USize),
             _ => {
@@ -115,6 +124,8 @@ impl NumericType {
                     ('i', &name[1..])
                 } else if name.starts_with('f') {
                     ('f', &name[1..])
+                } else if name.starts_with('d') {
+                    ('d', &name[1..])
                 } else {
                     return None;
                 };
@@ -123,6 +134,7 @@ impl NumericType {
                         'i' => IntWidth::from_bits(w).map(NumericType::Int),
                         'u' => IntWidth::from_bits(w).map(NumericType::UInt),
                         'f' => FloatWidth::from_bits(w).map(NumericType::Float),
+                        'd' if w >= 1 => Some(NumericType::Dec(w)),
                         _ => None,
                     },
                     Err(_) => None,
@@ -140,6 +152,7 @@ impl fmt::Display for NumericType {
             NumericType::Float(w) => write!(f, "Float({})", w.bits()),
             NumericType::ISize => write!(f, "ISize"),
             NumericType::USize => write!(f, "USize"),
+            NumericType::Dec(n) => write!(f, "Dec({n})"),
         }
     }
 }
@@ -750,14 +763,35 @@ pub enum ResultType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NumericError {
     SignednessMix,
+    /// Dec mixed with Int/UInt/Float in one operation (spec §6.6a: hard error).
+    DecMix,
+    /// An operator not defined on Dec (bitwise/shift).
+    DecOp,
 }
 
 pub fn numeric_result_type(lhs: &NumericType, op: BinOp, rhs: &NumericType) -> ResultType {
+    if lhs.is_dec() || rhs.is_dec() {
+        if op.is_comparison() {
+            return ResultType::Bool;
+        }
+        if matches!(
+            op,
+            BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::And | BinOp::Or | BinOp::Xor
+        ) {
+            return ResultType::Error(NumericError::DecOp);
+        }
+        match (lhs, rhs) {
+            (NumericType::Dec(a), NumericType::Dec(b)) => {
+                return ResultType::Numeric(NumericType::Dec(*a.max(b)));
+            }
+            _ => return ResultType::Error(NumericError::DecMix),
+        }
+    }
     if lhs.is_float() || rhs.is_float() {
         return float_result(lhs, op, rhs, 64);
     }
     if op.is_comparison() {
-        if (lhs.is_signed() && rhs.is_unsigned()) || (lhs.is_unsigned() && rhs.is_signed()) {
+        if lhs.is_signed() && rhs.is_unsigned() || lhs.is_unsigned() && rhs.is_signed() {
             return ResultType::Error(NumericError::SignednessMix);
         }
         return ResultType::Bool;
@@ -790,6 +824,8 @@ fn concrete_width(ty: &NumericType) -> u16 {
         NumericType::Int(w) | NumericType::UInt(w) => w.bits(),
         NumericType::Float(w) => w.bits(),
         NumericType::ISize | NumericType::USize => 64,
+        // Dec never reaches width widening (short-circuited in numeric_result_type).
+        NumericType::Dec(_) => 0,
     }
 }
 fn needed_bits(op: BinOp, a: u16, b: u16) -> u16 {
@@ -982,6 +1018,88 @@ mod tests {
             result,
             ResultType::Numeric(NumericType::Float(FloatWidth::F64))
         ));
+    }
+
+    #[test]
+    fn test_dec_arithmetic_max_digits() {
+        let d2 = NumericType::Dec(2);
+        let d5 = NumericType::Dec(5);
+        assert!(matches!(
+            numeric_result_type(&d2, BinOp::Add, &d5),
+            ResultType::Numeric(NumericType::Dec(5))
+        ));
+        assert!(matches!(
+            numeric_result_type(&d2, BinOp::Mul, &d2),
+            ResultType::Numeric(NumericType::Dec(2))
+        ));
+    }
+
+    #[test]
+    fn test_dec_mix_is_hard_error() {
+        let d = NumericType::Dec(4);
+        let i = NumericType::Int(IntWidth::B64);
+        let f = NumericType::Float(FloatWidth::F64);
+        let u = NumericType::UInt(IntWidth::B64);
+        assert!(matches!(
+            numeric_result_type(&d, BinOp::Add, &i),
+            ResultType::Error(NumericError::DecMix)
+        ));
+        assert!(matches!(
+            numeric_result_type(&i, BinOp::Add, &d),
+            ResultType::Error(NumericError::DecMix)
+        ));
+        assert!(matches!(
+            numeric_result_type(&d, BinOp::Add, &f),
+            ResultType::Error(NumericError::DecMix)
+        ));
+        assert!(matches!(
+            numeric_result_type(&u, BinOp::Add, &d),
+            ResultType::Error(NumericError::DecMix)
+        ));
+    }
+
+    #[test]
+    fn test_dec_comparison_and_bitwise() {
+        let d = NumericType::Dec(4);
+        assert!(matches!(
+            numeric_result_type(&d, BinOp::Lt, &d),
+            ResultType::Bool
+        ));
+        assert!(matches!(
+            numeric_result_type(&d, BinOp::Eq, &d),
+            ResultType::Bool
+        ));
+        assert!(matches!(
+            numeric_result_type(&d, BinOp::And, &d),
+            ResultType::Error(NumericError::DecOp)
+        ));
+        assert!(matches!(
+            numeric_result_type(&d, BinOp::ShiftLeft, &d),
+            ResultType::Error(NumericError::DecOp)
+        ));
+    }
+
+    #[test]
+    fn test_dec_from_name() {
+        assert_eq!(
+            NumericType::from_name("Dec"),
+            Some(NumericType::Dec(34))
+        );
+        assert_eq!(NumericType::from_name("d12"), Some(NumericType::Dec(12)));
+        assert_eq!(NumericType::from_name("d1"), Some(NumericType::Dec(1)));
+        assert_eq!(NumericType::from_name("d0"), None);
+        assert_eq!(NumericType::from_name("dabc"), None);
+        assert_eq!(NumericType::from_name("Dec(8)"), None);
+    }
+
+    #[test]
+    fn test_dec_target_width_none() {
+        assert_eq!(NumericType::Dec(4).target_width(), None);
+        assert!(!NumericType::Dec(4).is_signed());
+        assert!(!NumericType::Dec(4).is_unsigned());
+        assert!(!NumericType::Dec(4).is_integer());
+        assert!(!NumericType::Dec(4).is_float());
+        assert!(NumericType::Dec(4).is_dec());
     }
 
     #[test]
