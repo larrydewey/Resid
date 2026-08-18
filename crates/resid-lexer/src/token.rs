@@ -415,6 +415,42 @@ pub struct FloatLit {
     pub value: String, // stored as string for full precision
 }
 
+/// Decimal literal (spec §6.6a): `digits × 10^exp`. Digits are carried
+/// verbatim — never round-tripped through binary. Examples: `1.5m` →
+/// digits "15", exp -1; `5m` → digits "5", exp 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecLit {
+    pub digits: String,
+    pub exp: i32,
+}
+
+impl fmt::Display for DecLit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let d = if self.digits.is_empty() {
+            "0"
+        } else {
+            self.digits.as_str()
+        };
+        let e = self.exp;
+        if e >= 0 {
+            return write!(f, "{}m", d);
+        }
+        let frac = (-e) as usize;
+        let sign = if let Some(stripped) = d.strip_prefix('-') {
+            write!(f, "-")?;
+            stripped
+        } else {
+            d
+        };
+        if frac >= sign.len() {
+            write!(f, "0.{}{}m", "0".repeat(frac - sign.len()), sign)
+        } else {
+            let (int, frac) = sign.split_at(sign.len() - frac);
+            write!(f, "{}.{}m", int, frac)
+        }
+    }
+}
+
 /// String literal (processed, escapes resolved).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StrLit {
@@ -451,6 +487,7 @@ pub enum FStringPart {
 pub enum Literal {
     Int { value: u128, kind: IntKind },
     Float(FloatLit),
+    Dec(DecLit),
     Char(char),
     Str(StrLit),
     RawStr(RawStrLit),
@@ -464,6 +501,7 @@ impl fmt::Display for Literal {
         match self {
             Self::Int { kind, .. } => write!(f, "{}", kind.source_str()),
             Self::Float(lit) => write!(f, "{}", lit.value),
+            Self::Dec(lit) => write!(f, "{lit}"),
             Self::Char(c) => write!(f, "'{c}'"),
             Self::Str(lit) => write!(f, "\"{}\"", lit.value),
             Self::RawStr(lit) => write!(f, "r\"{}\"", lit.value),

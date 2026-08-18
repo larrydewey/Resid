@@ -181,6 +181,9 @@ impl<'ctx> CodeGen<'ctx> {
                 NumericType::Int(w) | NumericType::UInt(w) => self.int_type(w.bits())?.into(),
                 NumericType::Float(w) => self.float_type(w.bits())?.into(),
                 NumericType::ISize | NumericType::USize => self.int_type(64)?.into(),
+                NumericType::Dec(_) => {
+                    return Err("Dec(N) codegen is not yet implemented".to_string());
+                }
             },
             SemType::Range(_) => self.int_type(64)?.into(),
             // Composites are untyped heap pointers.
@@ -2077,6 +2080,9 @@ impl<'ctx> CodeGen<'ctx> {
                         "FloatToString",
                         Numeric::Float(resid_ir::FloatWidth::F64),
                     ),
+                    NumericType::Dec(_) => {
+                        return Err("Dec(N) value formatting is not yet implemented".to_string());
+                    }
                 };
                 let arg = self.widen(raw, want)?;
                 self.call_to_string(name, arg.into())

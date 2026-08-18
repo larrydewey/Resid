@@ -469,6 +469,7 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                             "Int" => "i",
                             "UInt" => "u",
                             "Float" => "f",
+                            "Dec" => "d",
                             _ => return type_from_name(&name.0),
                         };
                         if let Ok(w) = width.parse::<u16>() {
@@ -493,6 +494,11 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                 if let Some(rest) = name.0.strip_prefix("Float(") {
                     if let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
                         return type_from_name(&format!("f{w}"));
+                    }
+                }
+                if let Some(rest) = name.0.strip_prefix("Dec(") {
+                    if let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
+                        return type_from_name(&format!("d{w}"));
                     }
                 }
             }
@@ -553,6 +559,8 @@ fn lit_type(lit: &Literal) -> SemType {
         Literal::Float(_) => {
             SemType::Numeric(NumericType::Float(FloatWidth::from_bits(64).unwrap()))
         }
+        // Decimal literals (spec §6.6a) default to Dec(34).
+        Literal::Dec(_) => SemType::Numeric(NumericType::Dec(34)),
         Literal::Bool(_) => SemType::Bool,
         // Char literals are Unicode codepoints (spec §14: literals default to
         // Int; §32 has no `Char` core type). `str_char_at` / `str_from_code`
@@ -887,7 +895,15 @@ pub fn infer_expr_ctx(
                     other => Err(err(&expr.span, format!("`!` requires Bool, found {other}"))),
                 },
                 OpKind::Plus | OpKind::Minus | OpKind::Tilde => match inner {
-                    SemType::Numeric(_) => Ok(inner),
+                    SemType::Numeric(n) => {
+                        if op == &OpKind::Tilde && n.is_dec() {
+                            return Err(err(
+                                &expr.span,
+                                "`~` requires an integer operand",
+                            ));
+                        }
+                        Ok(inner)
+                    }
                     other => Err(err(
                         &expr.span,
                         format!("unary `{op:?}` requires numeric, found {other}"),
@@ -1560,7 +1576,7 @@ fn infer_binary(
     if matches!(
         binop,
         BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::And | BinOp::Or | BinOp::Xor
-    ) && (ln.is_float() || rn.is_float())
+    ) && (ln.is_float() || rn.is_float() || ln.is_dec() || rn.is_dec())
     {
         return Err(err(
             span,
@@ -1574,6 +1590,14 @@ fn infer_binary(
         ResultType::Error(NumericError::SignednessMix) => Err(err(
             span,
             "cannot mix signed and unsigned operands in one operation",
+        )),
+        ResultType::Error(NumericError::DecMix) => Err(err(
+            span,
+            "cannot mix Dec with Int/UInt/Float in one operation (convert explicitly via dN/iN/fN)",
+        )),
+        ResultType::Error(NumericError::DecOp) => Err(err(
+            span,
+            "bitwise/shift operator requires integer operands",
         )),
     }
 }
@@ -1775,9 +1799,16 @@ fn infer_call(
 
         let want = &sig.params[wanted_param];
         let at = infer_expr_expected(a, env, sigs, types, Some(want))?;
+        let conversion_ok = match name.chars().next() {
+            Some(fc) if matches!(fc, 'i' | 'u' | 'f' | 'd') => {
+                conversion_helper_match(&at, want, fc)
+            }
+            _ => false,
+        };
         if !param_matches(&at, want)
             && !literal_compatible(a, want)
             && !numeric_can_widen(&at, want)
+            && !conversion_ok
         {
             return Err(err(
                 &a.span,
@@ -1818,6 +1849,11 @@ fn literal_compatible(a: &Expr, target: &SemType) -> bool {
     let SemType::Numeric(t) = target else {
         return false;
     };
+    // A decimal literal fits any Dec(N) target: narrowing rounds once to N
+    // significant digits (spec §6.6a). Widening keeps the value exactly.
+    if matches!(&a.kind, ExprKind::Literal(Literal::Dec(_))) && t.is_dec() {
+        return true;
+    }
     let ExprKind::Literal(Literal::Int { kind, .. }) = &a.kind else {
         return false;
     };
@@ -1857,6 +1893,15 @@ fn numeric_can_widen(arg: &SemType, target: &SemType) -> bool {
     let SemType::Numeric(t) = target else {
         return false;
     };
+    // Dec never implicitly converts to/from Int/UInt/Float (spec §6.6a:
+    // mixing is a hard error; conversion is explicit via dN/iN/fN). Dec→Dec
+    // widens to at least as many significant digits.
+    if a.is_dec() || t.is_dec() {
+        return match (a, t) {
+            (NumericType::Dec(ad), NumericType::Dec(td)) => td >= ad,
+            _ => false,
+        };
+    }
     // Same signedness.
     if a.is_signed() != t.is_signed() {
         return false;
@@ -1880,16 +1925,28 @@ fn numeric_can_widen(arg: &SemType, target: &SemType) -> bool {
 fn conversion_helper_match(arg: &SemType, param: &SemType, first_char: char) -> bool {
     if let (SemType::Numeric(a), SemType::Numeric(p)) = (arg, param) {
         match first_char {
-            'i' => matches!(a, NumericType::Int(_)) && matches!(p, NumericType::Int(_))
-                    && p.target_width().unwrap_or(64) >= a.target_width().unwrap_or(64),
-            'u' => matches!(a, NumericType::UInt(_)) && matches!(p, NumericType::UInt(_))
-                    && p.target_width().unwrap_or(64) >= a.target_width().unwrap_or(64),
-            'f' => a.is_float() && p.is_float()
-                    && p.target_width().unwrap_or(64) >= a.target_width().unwrap_or(64),
+            'i' => (matches!(a, NumericType::Int(_)) || a.is_dec())
+                && matches!(p, NumericType::Int(_))
+                && (a.is_dec()
+                    || p.target_width().unwrap_or(64) >= a.target_width().unwrap_or(64)),
+            'u' => (matches!(a, NumericType::UInt(_)) || a.is_dec())
+                && matches!(p, NumericType::UInt(_))
+                && (a.is_dec()
+                    || p.target_width().unwrap_or(64) >= a.target_width().unwrap_or(64)),
+            'f' => (a.is_float() || a.is_dec())
+                && p.is_float()
+                && (a.is_dec()
+                    || p.target_width().unwrap_or(64) >= a.target_width().unwrap_or(64)),
+            // dN accepts Dec (widening or narrowing — dN is "exact conversion"
+            // which rounds once when narrowing), Int (exact), or Str (exact
+            // decimal parse) per spec §6.7.
+            'd' => p.is_dec() && (a.is_dec() || a.is_integer() || matches!(arg, SemType::Str)),
             _ => false,
         }
     } else {
-        false
+        first_char == 'd'
+            && matches!(param, SemType::Numeric(NumericType::Dec(_)))
+            && matches!(arg, SemType::Str)
     }
 }
 
@@ -1899,6 +1956,35 @@ fn conversion_helper_match(arg: &SemType, param: &SemType, first_char: char) -> 
 /// can safely be widened to. For conversion helpers (i8/i16/.../u8/.../f16/...)
 /// this picks the narrowest parameter type that the argument can be widened to.
 pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Option<FunctionSig> {
+    // dN conversion helpers (spec §6.7) are open-ended (any N >= 1) and so are
+    // not enumerated in BUILTIN_SIGS — synthesize the signature here. Accepted
+    // from: Dec (exact, narrowing rounds once), Int (exact), Str (exact parse).
+    if let Some(rest) = func.strip_prefix('d') {
+        if let Ok(n) = rest.parse::<u16>() {
+            if n >= 1 {
+                let tgt = SemType::Numeric(NumericType::Dec(n));
+                if let Some(arg) = args_ty.first() {
+                    if conversion_helper_match(arg, &tgt, 'd') {
+                        return Some(FunctionSig {
+                            name: func.to_string(),
+                            params: vec![tgt.clone()],
+                            param_names: vec!["value".to_string()],
+                            param_defaults: vec![None],
+                            ret: tgt,
+                        });
+                    }
+                    return None;
+                }
+                return Some(FunctionSig {
+                    name: func.to_string(),
+                    params: vec![tgt.clone()],
+                    param_names: vec!["value".to_string()],
+                    param_defaults: vec![None],
+                    ret: tgt,
+                });
+            }
+        }
+    }
     let candidate = sigs.get(func)?;
     if candidate.params.len() != 1 {
         return Some(candidate.clone());
@@ -3150,6 +3236,120 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no type errors for i32(42), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_dec_literal_bind() {
+        let src = r#"
+Int main() {
+    Dec(4) a = 1.5m;
+    Dec(34) b = 5m;
+    Dec c = 123.456m;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_dec_arithmetic_max_digits() {
+        let src = r#"
+Int main() {
+    Dec(4) a = 1.5m;
+    Dec(2) b = 0.5m;
+    Dec(4) s = a + b;
+    Dec(4) p = a * a;
+    Bool lt = a < b;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_dec_mix_with_int_is_error() {
+        let src = r#"
+Int main() {
+    Dec x = 1.5m + 2;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected Dec/Int mix to error");
+    }
+
+    #[test]
+    fn check_dec_mix_with_float_is_error() {
+        let src = r#"
+Int main() {
+    Dec x = 1.5m + 2.5;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected Dec/Float mix to error");
+    }
+
+    #[test]
+    fn check_dec_bitwise_is_error() {
+        let src = r#"
+Int main() {
+    Dec x = 1.5m & 1.5m;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected Dec bitwise to error");
+    }
+
+    #[test]
+    fn check_dec_tilde_is_error() {
+        let src = r#"
+Int main() {
+    Dec x = ~1.5m;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected `~` on Dec to error");
+    }
+
+    #[test]
+    fn check_dec_conversion_helpers() {
+        let src = r#"
+Int main() {
+    Dec(4) a = d4(1.5m);
+    Dec(8) b = d8(42);
+    Dec x = d12("3.14159");
+    Int(32) n = i32(1.5m);
+    Dec(12) y = d12(a);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_dec_conversion_from_float_rejected() {
+        let src = r#"
+Int main() {
+    Dec x = d4(3.14);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected dN(Float) to error (dN takes Int/Str/Dec only)");
     }
 
     #[test]

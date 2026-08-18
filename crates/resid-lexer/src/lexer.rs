@@ -652,9 +652,31 @@ impl Lexer {
                     break;
                 }
             }
+            // Decimal literal `m`-suffix (spec §6.6a): 1.5m, 123.456m.
+            if self.peek() == Some('m') {
+                self.bump(); // skip m
+                let mut digits = digits.clone();
+                digits.push_str(&frac);
+                let exp = -(frac.len() as i32);
+                self.tokens.push(Token {
+                    kind: TokenKind::Literal(Literal::Dec(DecLit { digits, exp })),
+                    span: start,
+                });
+                return;
+            }
             let value = format!("{}.{}", digits, frac);
             self.tokens.push(Token {
                 kind: TokenKind::Literal(Literal::Float(FloatLit { value })),
+                span: start,
+            });
+            return;
+        }
+
+        // Integer decimal literal with `m`-suffix: 5m.
+        if self.peek() == Some('m') {
+            self.bump(); // skip m
+            self.tokens.push(Token {
+                kind: TokenKind::Literal(Literal::Dec(DecLit { digits, exp: 0 })),
                 span: start,
             });
             return;
@@ -1061,6 +1083,49 @@ mod tests {
     fn test_int_literals() {
         let (_, errors) = Lexer::new("t.resid", "42 0xFF 0b1010 0o77").tokenize();
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_dec_literals() {
+        let (tokens, errors) = Lexer::new("t.resid", "5m 1.5m 123.456m 0.001m").tokenize();
+        assert!(errors.is_empty(), "lexer errors: {errors:?}");
+        let cases: Vec<(String, i32)> = vec![
+            ("5".to_string(), 0),
+            ("15".to_string(), -1),
+            ("123456".to_string(), -3),
+            ("0001".to_string(), -3),
+        ];
+        for (i, (digits, exp)) in cases.iter().enumerate() {
+            let TokenKind::Literal(Literal::Dec(lit)) = &tokens[i].kind else {
+                panic!("token {i}: expected Dec literal, got {:?}", tokens[i].kind);
+            };
+            assert_eq!(&lit.digits, digits, "token {i} digits");
+            assert_eq!(lit.exp, *exp, "token {i} exp");
+        }
+    }
+
+    #[test]
+    fn test_dec_literal_vs_plain_number() {
+        // `m`-suffix only attaches to decimal literals; plain ints/floats stay.
+        let (tokens, errors) = Lexer::new("t.resid", "5 1.5 5m").tokenize();
+        assert!(errors.is_empty());
+        assert!(matches!(&tokens[0].kind, TokenKind::Literal(Literal::Int { .. })));
+        assert!(matches!(&tokens[1].kind, TokenKind::Literal(Literal::Float(_))));
+        assert!(matches!(&tokens[2].kind, TokenKind::Literal(Literal::Dec(_))));
+    }
+
+    #[test]
+    fn test_dec_literal_display() {
+        let a = DecLit { digits: "15".into(), exp: -1 };
+        assert_eq!(format!("{a}"), "1.5m");
+        let b = DecLit { digits: "5".into(), exp: 0 };
+        assert_eq!(format!("{b}"), "5m");
+        let c = DecLit { digits: "123456".into(), exp: -3 };
+        assert_eq!(format!("{c}"), "123.456m");
+        let d = DecLit { digits: "15".into(), exp: -3 };
+        assert_eq!(format!("{d}"), "0.015m");
+        let e = DecLit { digits: "1500".into(), exp: -4 };
+        assert_eq!(format!("{e}"), "0.1500m");
     }
 
     #[test]
