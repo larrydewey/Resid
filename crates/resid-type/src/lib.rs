@@ -660,6 +660,11 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
         &[SemType::Numeric(NumericType::Float(FloatWidth::F64))],
         SemType::Str,
     ),
+    (
+        "Float128ToString",
+        &[SemType::Numeric(NumericType::Float(FloatWidth::F128))],
+        SemType::Str,
+    ),
     // ─── Bool stringification (bootstrap runtime) ───
     ("BoolToString", &[SemType::Bool], SemType::Str),
     // ─── Composite stringification (bootstrap runtime) ───
@@ -687,6 +692,7 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("f16", &[SemType::Numeric(NumericType::Float(FloatWidth::F64))], SemType::Numeric(NumericType::Float(FloatWidth::F16))),
     ("f32", &[SemType::Numeric(NumericType::Float(FloatWidth::F64))], SemType::Numeric(NumericType::Float(FloatWidth::F32))),
     ("f64", &[SemType::Numeric(NumericType::Float(FloatWidth::F64))], SemType::Numeric(NumericType::Float(FloatWidth::F64))),
+    ("f128", &[SemType::Numeric(NumericType::Float(FloatWidth::F64))], SemType::Numeric(NumericType::Float(FloatWidth::F128))),
     // isize / usize: pointer-sized.
     ("isize", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::ISize)),
     ("usize", &[SemType::Numeric(NumericType::UInt(IntWidth::B64))], SemType::Numeric(NumericType::USize)),
@@ -3183,6 +3189,37 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no type errors for f64(2.71), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_conversion_helper_f128() {
+        let src = r#"
+Int main() {
+    Float(128) x = f128(3.14);
+    Float(128) y = x + f128(1.0);
+    println(Float128ToString(y));
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors for f128/Float(128), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_float128_widens_f64() {
+        let src = r#"
+Int main() {
+    Float(128) x = f128(1.0);
+    Float(64) y = f64(1.0);
+    Float(128) z = x + y;
+    println(Float128ToString(z));
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected Float(128) + Float(64) to widen to Float(128) per spec §6.2, got: {:?}", errs);
     }
 
     #[test]

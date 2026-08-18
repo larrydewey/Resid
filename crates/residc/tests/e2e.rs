@@ -1332,3 +1332,72 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Float(128) end-to-end: f128() conversion, arithmetic, comparison,
+/// quad-precision Float128ToString, and f-string interpolation.
+#[test]
+fn run_float128() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-f128-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("f128.resid");
+    std::fs::write(
+        &file,
+        r#"
+Float(128) pow2(Int(64) n) {
+    if (n == 0) {
+        return f128(1.0);
+    } else {
+        return pow2((Int(64))(n - 1)) * f128(2.0);
+    }
+}
+
+Int main() {
+    Float(128) a = f128(1.5);
+    Float(128) b = f128(2.25);
+    println(Float128ToString(a + b));
+    println(Float128ToString(a * b));
+    println(Float128ToString(f128(1.0) / f128(3.0)));
+    println(Float128ToString(f128(2.5)));
+    println(Float128ToString(pow2(100)));
+    println(Float128ToString(f128(0.0001)));
+    println(f"sum = {a + b}");
+    if (a < b) { println("lt"); }
+    if (a == b) { println("eq"); }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec![
+            "3.75",
+            "3.375",
+            "0.333333333333333333333333333333333317",
+            "2.5",
+            "1267650600228229401496703205376",
+            "0.000100000000000000004792173602385929598",
+            "sum = 3.75",
+            "lt",
+        ],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

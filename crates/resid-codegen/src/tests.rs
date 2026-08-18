@@ -1193,6 +1193,49 @@ Float main() {
 }
 
 #[test]
+fn test_float128_arithmetic() {
+    let src = r#"
+Float(128) main() {
+    Float(128) a = f128(1.5);
+    Float(128) b = f128(2.25);
+    return a * b + f128(1.0);
+}
+"#;
+    let (unit, errors) = Parser::parse("f128.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "f128");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("fp128"), "expected fp128 type: {ir}");
+    assert!(ir.contains("fmul"), "expected fp128 fmul: {ir}");
+    assert!(ir.contains("fadd"), "expected fp128 fadd: {ir}");
+}
+
+#[test]
+fn test_float128_fstring() {
+    let src = r#"
+Int main() {
+    Float(128) x = f128(0.1);
+    println(f"x = {x}");
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("f128s.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "f128s");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("Float128ToString"),
+        "expected Float128ToString for interpolated Float(128): {ir}"
+    );
+}
+
+#[test]
 fn test_float_add() {
     let src = r#"
 Float main() {

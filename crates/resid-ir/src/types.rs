@@ -47,8 +47,6 @@ pub enum FloatWidth {
     F32,
     F64,
     F128,
-    F256,
-    F512,
 }
 
 impl FloatWidth {
@@ -58,8 +56,6 @@ impl FloatWidth {
             FloatWidth::F32 => 32,
             FloatWidth::F64 => 64,
             FloatWidth::F128 => 128,
-            FloatWidth::F256 => 256,
-            FloatWidth::F512 => 512,
         }
     }
     pub fn from_bits(bits: u16) -> Option<Self> {
@@ -68,8 +64,6 @@ impl FloatWidth {
             32 => Some(FloatWidth::F32),
             64 => Some(FloatWidth::F64),
             128 => Some(FloatWidth::F128),
-            256 => Some(FloatWidth::F256),
-            512 => Some(FloatWidth::F512),
             _ => None,
         }
     }
@@ -854,7 +848,9 @@ mod tests {
     fn test_float_width_bits() {
         assert_eq!(FloatWidth::F16.bits(), 16);
         assert_eq!(FloatWidth::F64.bits(), 64);
-        assert_eq!(FloatWidth::F512.bits(), 512);
+        assert_eq!(FloatWidth::F128.bits(), 128);
+        assert_eq!(FloatWidth::from_bits(256), None);
+        assert_eq!(FloatWidth::from_bits(512), None);
     }
 
     #[test]
