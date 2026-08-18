@@ -30,6 +30,35 @@ pub struct Val<'ctx> {
     pub ty: SemType,
 }
 
+/// Does `block` end in a guaranteed terminator (return or an if whose both
+/// branches return)? Used to propagate early-return termination out of nested
+/// if/else arms so an enclosing block is not double-terminated.
+fn block_terminates(block: &Block) -> bool {
+    if block.ret.is_some() {
+        return true;
+    }
+    match block.statements.last() {
+        Some(s) => match &s.kind {
+            StmtKind::Return(_) => true,
+            StmtKind::Expr(e) => {
+                if let ExprKind::If {
+                    then_block,
+                    else_block,
+                    ..
+                } = &e.kind
+                {
+                    block_terminates(then_block)
+                        && else_block.as_ref().is_some_and(|b| block_terminates(b))
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        },
+        None => false,
+    }
+}
+
 /// Per-function local scope: symbol → (alloca address, type).
 struct Scope<'ctx> {
     vars: HashMap<String, (PointerValue<'ctx>, SemType)>,
@@ -137,6 +166,7 @@ impl<'ctx> CodeGen<'ctx> {
             16 => Ok(self.cx.f16_type()),
             32 => Ok(self.cx.f32_type()),
             64 => Ok(self.cx.f64_type()),
+            128 => Ok(self.cx.f128_type()),
             _ => Err(format!(
                 "codegen: float width {bits} not yet supported in LLVM"
             )),
@@ -322,9 +352,14 @@ impl<'ctx> CodeGen<'ctx> {
                     match ret_ty {
                         SemType::Numeric(_) => {
                             let it = self.llvm_type(&ret_ty)?;
-                            let zero = match it {
-                                inkwell::types::BasicTypeEnum::IntType(i) => i.const_zero(),
-                                _ => self.cx.bool_type().const_zero(),
+                            let zero: inkwell::values::BasicValueEnum<'ctx> = match it {
+                                inkwell::types::BasicTypeEnum::IntType(i) => {
+                                    i.const_zero().into()
+                                }
+                                inkwell::types::BasicTypeEnum::FloatType(ft) => {
+                                    ft.const_zero().into()
+                                }
+                                _ => self.cx.bool_type().const_zero().into(),
                             };
                             self.builder.build_return(Some(&zero)).map_err(to_err)?;
                         }
@@ -412,6 +447,20 @@ impl<'ctx> CodeGen<'ctx> {
                     let v = self.lower_expr(sc, e, None)?;
                     if is_tail {
                         tail = Some(v);
+                    }
+                    // An `if` whose then/else branches both return terminates the
+                    // enclosing block too (early return out of both arms).
+                    if let ExprKind::If {
+                        then_block,
+                        else_block,
+                        ..
+                    } = &e.kind
+                    {
+                        if block_terminates(then_block)
+                            && else_block.as_ref().is_some_and(|b| block_terminates(b))
+                        {
+                            terminated = true;
+                        }
                     }
                 }
                 StmtKind::Return(v) => {
@@ -544,7 +593,12 @@ impl<'ctx> CodeGen<'ctx> {
                 phi.add_incoming(&[(&ev.v, eb)]);
                 phi.as_basic_value()
             }
-            (None, None) => tv.v,
+            (None, None) => {
+                // Both arms returned early — merge_bb is unreachable. It still
+                // needs a terminator for verification.
+                self.builder.build_unreachable().map_err(to_err)?;
+                tv.v
+            }
         };
         Ok(Val {
             v: theta,
@@ -2014,6 +2068,10 @@ impl<'ctx> CodeGen<'ctx> {
                     NumericType::UInt(_) | NumericType::USize => (
                         "UIntToString",
                         Numeric::UInt(resid_ir::IntWidth::B64),
+                    ),
+                    NumericType::Float(FloatWidth::F128) => (
+                        "Float128ToString",
+                        Numeric::Float(resid_ir::FloatWidth::F128),
                     ),
                     NumericType::Float(_) => (
                         "FloatToString",

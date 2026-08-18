@@ -1,6 +1,6 @@
 ==================================================
 RESID LANGUAGE DESIGN DOCUMENT
-Version 3.0 — Production Ready
+Version 3.1 — Production Ready
 ==================================================
 
 
@@ -125,11 +125,23 @@ Pointer-sized (target-dependent):
 Floating-point family:
 
   Float(16)  Float(32)  Float(64)  Float(128)
-  Float(256) Float(512)            // backend-dependent
+
+  Float(128) is the widest floating-point type.
+  Wider binary floats are not part of the language;
+  arbitrary precision is carried by the decimal
+  family below.
 
 Alias:
 
   Float = Float(64)
+
+Arbitrary-precision decimal family:
+
+  Dec(N)    // N significant decimal digits, any N >= 1
+
+Alias:
+
+  Dec = Dec(34)
 
 Each width is a distinct type. There is no subtyping
 between any numeric types.
@@ -179,7 +191,7 @@ Integer + floating-point:
 Floating-point + floating-point:
 
   The result is the wider of the two floating-point types
-  (using the order 16 < 32 < 64 < 128 < 256 < 512).
+  (using the order 16 < 32 < 64 < 128).
 
 
 --------------------------------------------------
@@ -221,6 +233,66 @@ standard library for every width.
 
 
 --------------------------------------------------
+6.6a Decimals — Dec(N) Semantics
+--------------------------------------------------
+
+Dec(N) holds an exact decimal value with N
+significant decimal digits:
+
+  sign        + or -
+  digits      exactly N significant decimal digits
+  exponent    i32, range [-1_000_000, +1_000_000]
+
+Dec(N) values have no NaN and no Inf. Division by
+zero, exponent-range overflow, and non-integer
+Dec-to-Int conversion are errors: compile-time when
+provable, residual errors when forced at runtime.
+
+Rounding:
+
+  When a result must be narrowed to N significant
+  digits it is rounded half away from zero:
+
+    0.255    ->  0.26     // to 2 digits
+    -0.255   ->  -0.26    // to 2 digits
+
+  Additive and multiplicative arithmetic computes
+  the exact decimal result, then rounds once. Division
+  computes to N + 2 guard digits, then rounds once.
+
+Interoperability:
+
+  Dec(N) op Dec(M)  ->  Dec(max(N, M))
+
+  Mixing Dec with Int, UInt, or Float in either
+  direction is a hard error. Conversion is always
+  explicit via dN / iN / fN helpers.
+
+  Dec-to-Int conversion requires the value to be
+  integral; a fractional part is an error.
+
+Literals:
+
+  1.5m   123.456m   5m
+
+  Decimal literals carry their digits verbatim; they
+  never round-trip through binary. The default type
+  is Dec(34). Scientific notation is not part of v1
+  decimal literals.
+
+Display:
+
+  Dec values print in fixed notation with all N
+  significant digits; trailing zeros are preserved.
+
+    Dec(4) 1.5   ->   "1.5000"
+
+  The f-string specifier ":." trims trailing zeros:
+
+    f"{x:.}"
+
+
+--------------------------------------------------
 6.6  Behaviors
 --------------------------------------------------
 
@@ -236,7 +308,9 @@ need to declare per-width instances.
 
   i8 i16 i32 i64 i128 i256 i512
   u8 u16 u32 u64 u128 u256 u512
-  f16 f32 f64 f128 f256 f512
+  f16 f32 f64 f128
+  dN            // any N >= 1: exact conversion to Dec(N),
+                // from Int (exact) or Str (exact decimal parse)
   isize usize
 
 Plus the ordinary C-style cast (Type)expr.
@@ -351,15 +425,17 @@ if-let / while-let:
 14. LITERALS AND COMPOSITES
 ==================================================
 
-  42  0x2A  3.14  'a'  "hello"  true  false  null
+  42  0x2A  3.14  1.5m  'a'  "hello"  true  false  null
   [1, 2, 3]   {"a": 1}   Point { x = 1, y = 2 }
 
   f"hello {name}"
+  f"price: {price:.}"
   r"C:\path\file"
   b"bytes"
 
-Literals default to Int / Float. Width is changed only
-by explicit cast or conversion helper.
+Literals default to Int / Float / Dec (for m-suffix
+decimals). Width is changed only by explicit cast or
+conversion helper.
 
 
 ==================================================
@@ -767,7 +843,8 @@ Numeric operators obey the interoperability rules of §6.
   type ::= identifier [ "(" type-list ")" ]
          | "rt" type
          | "Int" "(" int ")" | "UInt" "(" int ")"
-         | "Float" "(" int ")" | "ISize" | "USize"
+         | "Float" "(" int ")" | "Dec" "(" int ")"
+         | "ISize" | "USize"
 
 
 ==================================================
@@ -777,12 +854,12 @@ Numeric operators obey the interoperability rules of §6.
 Trusted providers: filesystem, environment, git
 (all volatile by default).
 
-Core types: Bool, full Int/UInt/Float family, ISize,
-USize, Str, Bytes, Option, Result, List, Map, Set,
-RegionError, SourceLoc.
+Core types: Bool, full Int/UInt/Float/Dec family,
+ISize, USize, Str, Bytes, Option, Result, List, Map,
+Set, RegionError, SourceLoc.
 
-Conversion helpers: i8…i512, u8…u512, f16…f512,
-isize, usize.
+Conversion helpers: i8…i512, u8…u512, f16…f128,
+dN (any N >= 1), isize, usize.
 
 Checked arithmetic (default) + wrapping_* + saturating_*
 for every width.
@@ -953,6 +1030,11 @@ Float representations, provider volatility, spawn
 scheduler, doc-comment storage, and incremental-cache
 granularity remain as decided in earlier versions.
 
+v3.1: wide binary floating point is capped at
+Float(128). Float(256)/Float(512) are removed from
+the type system; arbitrary precision is carried by
+the Dec(N) decimal family (§6.6a).
+
 
 ==================================================
 42. NUMERIC INTEROPERABILITY SUMMARY
@@ -967,6 +1049,9 @@ granularity remain as decided in earlier versions.
   - Signed/unsigned mix is a hard error.
   - Integer + float yields the float type.
   - Float + float yields the wider float.
+  - Dec(N) op Dec(M) yields Dec(max(N, M)).
+  - Mixing Dec with Int/UInt/Float is a hard error.
+  - Dec has no NaN/Inf; invalid operations are errors.
   - Checked arithmetic remains the default after
     widening.
   - Behaviors Eq/Ord/Hash are generic over the family.

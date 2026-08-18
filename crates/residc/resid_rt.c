@@ -395,6 +395,260 @@ char* FloatToString(double v) {
     return resid_box_str(buf);
 }
 
+/* ── Float(128) stringification (spec §6.2 — Float(128) is the widest) ───
+ * IEEE 754 quadruple: 1 sign + 15 exponent + 112 fraction. Printed as
+ * %.36g-style decimal (round-trip for quad) via binary bignum — no
+ * libquadmath dependency. */
+#define F128_WORDS 260 /* >= 16384/64 + slack: covers the full exponent range */
+
+static void f128_zero(uint64_t* w) { memset(w, 0, F128_WORDS * 8); }
+
+static int f128_is_zero(uint64_t* w) {
+    int i;
+    for (i = 0; i < F128_WORDS; i++)
+        if (w[i]) return 0;
+    return 1;
+}
+
+static void f128_shl(uint64_t* w, int bits) {
+    int ws = bits / 64, bs = bits % 64;
+    int i;
+    if (bs == 0) {
+        for (i = F128_WORDS - 1; i >= ws; i--) w[i] = w[i - ws];
+        for (i = 0; i < ws; i++) w[i] = 0;
+    } else {
+        for (i = F128_WORDS - 1; i >= ws; i--) {
+            uint64_t hi = (i - ws - 1 >= 0) ? (w[i - ws - 1] >> (64 - bs)) : 0;
+            w[i] = (w[i - ws] << bs) | hi;
+        }
+        for (i = 0; i < ws; i++) w[i] = 0;
+    }
+}
+
+static void f128_shr(uint64_t* w, int bits) {
+    int ws = bits / 64, bs = bits % 64;
+    int i;
+    if (bs == 0) {
+        for (i = 0; i + ws < F128_WORDS; i++) w[i] = w[i + ws];
+        for (i = F128_WORDS - ws; i < F128_WORDS; i++) w[i] = 0;
+    } else {
+        for (i = 0; i + ws < F128_WORDS; i++) {
+            uint64_t lo = (i + ws + 1 < F128_WORDS) ? (w[i + ws + 1] << (64 - bs)) : 0;
+            w[i] = (w[i + ws] >> bs) | lo;
+        }
+        for (i = F128_WORDS - ws; i < F128_WORDS; i++) w[i] = 0;
+    }
+}
+
+/* w *= 10, keeping the low bits (top carry is dropped). */
+static void f128_mul10(uint64_t* w) {
+    uint64_t carry = 0;
+    int i;
+    for (i = 0; i < F128_WORDS; i++) {
+        __uint128_t t = (__uint128_t)w[i] * 10 + carry;
+        w[i] = (uint64_t)t;
+        carry = (uint64_t)(t >> 64);
+    }
+}
+
+/* Divide w by 10 in place, returning the remainder digit. */
+static uint64_t f128_div10(uint64_t* w) {
+    uint64_t r = 0;
+    int i;
+    for (i = F128_WORDS - 1; i >= 0; i--) {
+        __uint128_t cur = ((__uint128_t)r << 64) | w[i];
+        w[i] = (uint64_t)(cur / 10);
+        r = (uint64_t)(cur % 10);
+    }
+    return r;
+}
+
+/* Copy a small (<= 128-bit) value into the bignum. */
+static void f128_load(uint64_t* w, unsigned __int128 v) {
+    f128_zero(w);
+    w[0] = (uint64_t)v;
+    w[1] = (uint64_t)(v >> 64);
+}
+
+char* Float128ToString(_Float128 v) {
+    unsigned __int128 u;
+    memcpy(&u, &v, 16);
+    int neg = (int)(u >> 127);
+    unsigned expf = (unsigned)((u >> 112) & 0x7FFF);
+    unsigned __int128 mask = (((unsigned __int128)1) << 112) - 1;
+    unsigned __int128 frac = u & mask;
+
+    char buf[96];
+    if (expf == 0x7FFF) {
+        snprintf(buf, sizeof(buf), frac ? "nan" : (neg ? "-inf" : "inf"));
+        return resid_box_str(buf);
+    }
+
+    unsigned __int128 M;
+    int E;
+    if (expf == 0) { /* zero or subnormal */
+        M = frac;
+        E = -16382 - 112;
+    } else {
+        M = (((unsigned __int128)1) << 112) | frac;
+        E = (int)expf - 16383 - 112;
+    }
+
+    uint64_t m[F128_WORDS];
+    f128_load(m, M);
+
+    char ibuf[5000]; /* integer digits, reversed; 2^16384 ~= 10^4932 digits max */
+    int ilen = 0;
+    int dec_exp; /* decimal exponent of the leading digit (units = 0) */
+    char fdig[64]; /* fraction digits */
+    int flen = 0;
+
+    if (E >= 0) {
+        f128_shl(m, E);
+        if (f128_is_zero(m)) {
+            return resid_box_str("0");
+        }
+        while (!f128_is_zero(m) && ilen < 5000) {
+            ibuf[ilen++] = (char)('0' + (int)f128_div10(m));
+        }
+        dec_exp = ilen - 1;
+    } else {
+        int nb = -E;
+        uint64_t ipart[F128_WORDS];
+        uint64_t rem[F128_WORDS];
+        f128_zero(rem);
+        f128_load(rem, M);
+        f128_shr(rem, nb);
+        if (f128_is_zero(rem)) {
+            /* no integer part */
+            dec_exp = -1;
+            /* fraction = M mod 2^nb */
+            f128_zero(m);
+            f128_load(m, M);
+            {
+                int widx = nb / 64, rem = nb % 64;
+                for (int i = widx + 1; i < F128_WORDS; i++) m[i] = 0;
+                if (rem != 0) m[widx] &= ((((uint64_t)1) << rem) - 1);
+            }
+            /* else nb >= 128: M < 2^113 so the whole M is the fraction */
+        } else {
+            memcpy(ipart, rem, F128_WORDS * 8);
+            while (!f128_is_zero(ipart) && ilen < 5000) {
+                ibuf[ilen++] = (char)('0' + (int)f128_div10(ipart));
+            }
+            dec_exp = ilen - 1;
+            /* fraction = M mod 2^nb */
+            f128_zero(m);
+            f128_load(m, M);
+            {
+                int widx = nb / 64, rem = nb % 64;
+                for (int i = widx + 1; i < F128_WORDS; i++) m[i] = 0;
+                if (rem != 0) m[widx] &= ((((uint64_t)1) << rem) - 1);
+            }
+        }
+        /* generate fraction digits from m (remainder scaled by 2^nb) */
+        if (!f128_is_zero(m)) {
+            int widx = nb / 64, rem = nb % 64;
+            for (int k = 0; k < 44; k++) {
+                f128_mul10(m);
+                /* digit = (m*10) >> nb  (top bits, in [0,9]) */
+                uint64_t hi;
+                if (rem == 0) hi = m[widx];
+                else hi = (m[widx] >> rem) | (m[widx + 1] << (64 - rem));
+                fdig[flen++] = (char)('0' + (int)(hi & 0xF));
+                /* m &= (2^nb - 1) */
+                {
+                    int i;
+                    for (i = widx + 1; i < F128_WORDS; i++) m[i] = 0;
+                    if (rem != 0) m[widx] &= ((((uint64_t)1) << rem) - 1);
+                }
+                if (f128_is_zero(m)) break;
+            }
+        }
+    }
+
+    /* Now: ilen integer digits (reversed in ibuf), flen fraction digits.
+     * For the no-integer-part case dec_exp was set to -1; if the fraction
+     * starts with zeros, adjust dec_exp accordingly. */
+    int i = ilen - 1;
+    if (ilen == 0) {
+        /* leading zeros in fraction */
+        int lead = 0;
+        while (lead < flen && fdig[lead] == '0') lead++;
+        if (lead == flen) {
+            return resid_box_str(neg ? "-0" : "0");
+        }
+        dec_exp = -lead - 1;
+        /* shift fraction digits left by `lead` */
+        for (int k = lead; k < flen; k++) fdig[k - lead] = fdig[k];
+        flen -= lead;
+    }
+
+    /* Assemble up to 36 significant digits (round-trip for quad) with rounding
+     * (half away from zero). */
+    char digits[40];
+    int ndig = 0;
+    /* integer digits */
+    for (int k = ilen - 1; k >= 0 && ndig < 37; k--) digits[ndig++] = ibuf[k];
+    /* fraction digits */
+    for (int k = 0; k < flen && ndig < 37; k++) digits[ndig++] = fdig[k];
+    if (ndig > 36) {
+        /* round 37th */
+        if (digits[36] >= '5') {
+            int k = 35;
+            while (k >= 0) {
+                if (digits[k] == '9') { digits[k] = '0'; k--; }
+                else { digits[k]++; break; }
+            }
+            if (k < 0) {
+                /* all 9s: 9.999... -> 1.000... with dec_exp+1 */
+                digits[0] = '1';
+                for (int j = 1; j < 36; j++) digits[j] = '0';
+                dec_exp++;
+            }
+        }
+        ndig = 36;
+    }
+    /* strip trailing zeros */
+    while (ndig > 1 && digits[ndig - 1] == '0') ndig--;
+
+    /* format like %.36g */
+    char out[96];
+    int o = 0;
+    if (neg) out[o++] = '-';
+    if (dec_exp >= -6 && dec_exp <= 36) {
+        /* fixed notation */
+        if (dec_exp < 0) {
+            out[o++] = '0'; out[o++] = '.';
+            for (int z = 0; z < -dec_exp - 1 && o < 90; z++) out[o++] = '0';
+            for (int k = 0; k < ndig; k++) out[o++] = digits[k];
+        } else {
+            for (int k = 0; k <= dec_exp; k++) {
+                out[o++] = (k < ndig) ? digits[k] : '0';
+            }
+            if (dec_exp + 1 < ndig) {
+                out[o++] = '.';
+                for (int k = dec_exp + 1; k < ndig; k++) out[o++] = digits[k];
+            }
+        }
+    } else {
+        /* scientific: d.ddd...E±ee */
+        out[o++] = digits[0];
+        if (ndig > 1) {
+            out[o++] = '.';
+            for (int k = 1; k < ndig; k++) out[o++] = digits[k];
+        }
+        out[o++] = 'E';
+        if (dec_exp >= 0) out[o++] = '+';
+        else { out[o++] = '-'; dec_exp = -dec_exp; }
+        if (dec_exp < 10) out[o++] = '0';
+        snprintf(out + o, sizeof(out) - o, "%d", dec_exp);
+        o = (int)strlen(out);
+    }
+    out[o] = '\0';
+    return resid_box_str(out);
+}
+
 char* BoolToString(int8_t v) {
     char buf[16];
     snprintf(buf, sizeof(buf), "%s", v ? "true" : "false");
@@ -518,6 +772,7 @@ uint64_t u64(uint64_t v) { return v; }
 _Float16 f16(double v) { return (_Float16)(float)v; }
 float f32(double v) { return (float)v; }
 double f64(double v) { return v; }
+_Float128 f128(double v) { return (_Float128)v; }
 
 /* ── Pointer-sized helpers ─────────────────────────────────────── */
 int64_t isize(int64_t v) { return v; }
