@@ -1004,10 +1004,8 @@ char* resid_git_branch(void) {
  * overflow are errors (resid_abort).
  *
  * Display is fixed notation with all N significant digits; trailing
- * zeros are preserved. NOTE: the v3.1 spec's example `Dec(4) 1.5 ->
- * "1.5000"` shows five digits; under the "exactly N significant
- * digits" definition (which the rounding semantics force) this prints
- * as "1.500". The example appears to have an extra zero.
+ * zeros are preserved: `Dec(4) 1.5` prints as "1.500" (the v3.1 spec
+ * example `"1.5000"` showed one extra zero and was corrected).
  */
 #define RESID_DEC_MAX_DIGITS 512
 #define RESID_DEC_WORK_DIGITS 2048

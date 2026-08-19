@@ -285,7 +285,7 @@ Display:
   Dec values print in fixed notation with all N
   significant digits; trailing zeros are preserved.
 
-    Dec(4) 1.5   ->   "1.5000"
+    Dec(4) 1.5   ->   "1.500"
 
   The f-string specifier ":." trims trailing zeros:
 
