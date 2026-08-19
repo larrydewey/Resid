@@ -1401,3 +1401,90 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Dec(N) exact decimals (spec §6.6a) compile and run end-to-end: literals,
+/// exact arithmetic, comparisons, rounding casts, and conversion helpers.
+#[test]
+fn run_dec_exact_arithmetic() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-dec-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("dec.resid");
+    std::fs::write(
+        &file,
+        r#"Dec main() {
+    Dec(4) a = 1.5m;
+    Dec(4) b = 2.25m;
+    Dec(4) s = a + b;
+    Dec(4) d = a - b;
+    Dec(4) m = a * b;
+    Dec(4) q = a / b;
+    Dec(4) q2 = 10.0m / 3.0m;
+    Dec(4) neg = -a;
+    println(f"a={a}");
+    println(f"a+b={s}");
+    println(f"a-b={d}");
+    println(f"a*b={m}");
+    println(f"a/b={q}");
+    println(f"10/3={q2}");
+    println(f"-a={neg}");
+    Bool lb = a < b;
+    Bool eq = (a == 1.5m);
+    println(f"a<b={lb}");
+    println(f"a==1.5m={eq}");
+    Dec(6) di = (Dec(6)) 7;
+    println(f"7 as Dec(6)={di}");
+    Dec(6) r = (Dec(6)) 1.23456789m;
+    println(f"round={r}");
+    Int i = i32(12.0m);
+    Float fl = f64(12.5m);
+    Dec(8) y = d8(123.456m);
+    Dec(8) z = d8("9.87654321");
+    println(f"i32={i}");
+    println(f"f64={fl}");
+    println(f"d8={y}");
+    println(f"d8str={z}");
+    return 0m;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(
+        lines,
+        vec![
+            "a=1.500",
+            "a+b=3.750",
+            "a-b=-0.7500",
+            "a*b=3.375",
+            "a/b=0.6667",
+            "10/3=3.333",
+            "-a=-1.500",
+            "a<b=true",
+            "a==1.5m=true",
+            "7 as Dec(6)=7.00000",
+            "round=1.23457",
+            "i32=12",
+            "f64=12.5",
+            "d8=123.45600",
+            "d8str=9.8765432",
+        ],
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

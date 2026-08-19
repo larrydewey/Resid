@@ -87,6 +87,11 @@ pub struct CodeGen<'ctx> {
     cur_ret: Option<SemType>,
     /// In-flight loop targets: innermost `(continue_bb, break_bb)`.
     loops: Vec<(BasicBlock<'ctx>, BasicBlock<'ctx>)>,
+    /// True when the entry `main` returns a Dec struct by value. LLVM lowers
+    /// the 520-byte struct through a hidden sret pointer, which libc does not
+    /// provide when it calls `int main(int, char**)` — so the user function is
+    /// emitted as `resid_main` and a real `main` wrapper is synthesized.
+    wrap_main: bool,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -102,6 +107,7 @@ impl<'ctx> CodeGen<'ctx> {
             cur_fn: None,
             cur_ret: None,
             loops: Vec::new(),
+            wrap_main: false,
         }
     }
 
@@ -109,6 +115,15 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn generate(&mut self, unit: &TranslationUnit) -> Result<(), String> {
         self.sigs = resid_type::collect_signatures(unit);
         self.types = resid_type::collect_types(unit);
+        // A `Dec main()` returns a struct by value; wrap it so the real entry
+        // point stays C-ABI compatible (see `wrap_main`).
+        self.wrap_main = unit.declarations.iter().any(|d| {
+            matches!(d, Declaration::Function(f) if f.name.0 == "main"
+                && matches!(
+                    resid_type::resolve_type_ctx(&f.ret, &self.types),
+                    Some(SemType::Numeric(NumericType::Dec(_)))
+                ))
+        });
         self.declare_runtime();
         // Declare extern symbols for every signature without a definition here
         // (built-ins like `println`, and - later - the stdlib).
@@ -132,17 +147,50 @@ impl<'ctx> CodeGen<'ctx> {
         // Declare every function up front so forward references and mutual
         // recursion resolve (a caller may name a function defined later).
         for name in &names {
-            self.declare_function(name, unit)?;
+            let sym = self.decl_name(name);
+            self.declare_function(name, &sym, unit)?;
         }
         for name in &names {
+            let sym = self.decl_name(name);
             let fv = self
                 .module
-                .get_function(name)
+                .get_function(&sym)
                 .ok_or_else(|| format!("codegen: missing declaration for `{name}`"))?;
             self.cur_fn = Some(fv);
-            self.lower_function(&name, unit, fv)?;
+            self.lower_function(name, unit, fv)?;
         }
         self.cur_fn = None;
+        if self.wrap_main {
+            self.emit_main_wrapper()?;
+        }
+        Ok(())
+    }
+
+    /// LLVM symbol for a user function; a wrapped `Dec main` lives under
+    /// `resid_main` so the C-ABI `main` wrapper can own the real name.
+    fn decl_name(&self, name: &str) -> String {
+        if self.wrap_main && name == "main" {
+            "resid_main".to_string()
+        } else {
+            name.to_string()
+        }
+    }
+
+    /// Synthesize `int main()` → call `resid_main`, discard the Dec result.
+    fn emit_main_wrapper(&mut self) -> Result<(), String> {
+        let i32t = self.cx.i32_type();
+        let fty = i32t.fn_type(&[], false);
+        let main = self.module.add_function("main", fty, None);
+        let entry = self.cx.append_basic_block(main, "entry");
+        self.builder.position_at_end(entry);
+        let user = self
+            .module
+            .get_function("resid_main")
+            .ok_or("codegen: resid_main missing")?;
+        self.builder.build_call(user, &[], "main_call").map_err(to_err)?;
+        self.builder
+            .build_return(Some(&i32t.const_zero()))
+            .map_err(to_err)?;
         Ok(())
     }
 
@@ -173,6 +221,21 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    /// The `resid_dec` LLVM struct type: `{ i8 sign, i16 nd,
+    /// [512 x i8] digits, i32 exp }` (byte-identical to the C struct in
+    /// resid_rt.c, so by-value passing matches the SysV ABI).
+    fn dec_type(&self) -> inkwell::types::StructType<'ctx> {
+        self.cx.struct_type(
+            &[
+                self.cx.i8_type().into(),
+                self.cx.i16_type().into(),
+                self.cx.i8_type().array_type(512).into(),
+                self.cx.i32_type().into(),
+            ],
+            false,
+        )
+    }
+
     fn llvm_type(&self, t: &SemType) -> Result<BasicTypeEnum<'ctx>, String> {
         let bt: BasicTypeEnum<'ctx> = match t {
             SemType::Bool => self.cx.bool_type().into(),
@@ -181,9 +244,10 @@ impl<'ctx> CodeGen<'ctx> {
                 NumericType::Int(w) | NumericType::UInt(w) => self.int_type(w.bits())?.into(),
                 NumericType::Float(w) => self.float_type(w.bits())?.into(),
                 NumericType::ISize | NumericType::USize => self.int_type(64)?.into(),
-                NumericType::Dec(_) => {
-                    return Err("Dec(N) codegen is not yet implemented".to_string());
-                }
+                // Dec(N) is the exact-decimal struct `{ i8 sign, i16 nd,
+                // [512 x i8] digits, i32 exp }` — byte-layout compatible with
+                // the `resid_dec` C struct in resid_rt.c (spec §6.6a).
+                NumericType::Dec(_) => self.dec_type().into(),
             },
             SemType::Range(_) => self.int_type(64)?.into(),
             // Composites are untyped heap pointers.
@@ -194,11 +258,53 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(bt)
     }
 
+    /// Allocate a `resid_dec` slot, store `v` into it, return the pointer.
+    /// Dec values always cross the LLVM↔C boundary as pointers (the aggregate
+    /// by-value ABI differs between clang and LLVM for this 520-byte struct).
+    fn dec_slot(&mut self, v: BasicValueEnum<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        let ptr = self
+            .builder
+            .build_alloca(self.dec_type(), "decs")
+            .map_err(to_err)?;
+        self.builder.build_store(ptr, v).map_err(to_err)?;
+        Ok(ptr)
+    }
+
+    /// Call a void-returning Dec helper that writes its result through the
+    /// first (out) pointer, then load the result as a struct value.
+    fn dec_call_out(
+        &mut self,
+        name: &str,
+        in_ptrs: &[PointerValue<'ctx>],
+        extra: &[BasicMetadataValueEnum<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let out = self
+            .builder
+            .build_alloca(self.dec_type(), "decout")
+            .map_err(to_err)?;
+        let f = self
+            .module
+            .get_function(name)
+            .ok_or_else(|| format!("codegen: {name} not declared"))?;
+        let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![out.into()];
+        for p in in_ptrs {
+            args.push(BasicMetadataValueEnum::PointerValue(*p));
+        }
+        args.extend(extra.iter().copied());
+        self.builder.build_call(f, &args, name).map_err(to_err)?;
+        let v = self
+            .builder
+            .build_load(self.dec_type(), out, "decout")
+            .map_err(to_err)?;
+        Ok(v.into())
+    }
+
     // ─── Functions ───────────────────────────────────────────────
 
     fn declare_function(
         &self,
         name: &str,
+        sym: &str,
         unit: &TranslationUnit,
     ) -> Result<FunctionValue<'ctx>, String> {
         let f = self
@@ -216,7 +322,7 @@ impl<'ctx> CodeGen<'ctx> {
         let param_meta: Vec<BasicMetadataTypeEnum<'ctx>> =
             param_ll.iter().map(|t| (*t).into()).collect();
         let ft = make_fn_type(ret_ll, &param_meta);
-        Ok(self.module.add_function(&f.name.0, ft, None))
+        Ok(self.module.add_function(sym, ft, None))
     }
 
     /// Declare an external (runtime-provided) function.
@@ -353,6 +459,20 @@ impl<'ctx> CodeGen<'ctx> {
                 None => {
                     let ret_ty = enter_ret;
                     match ret_ty {
+                        SemType::Numeric(NumericType::Dec(_)) => {
+                            let st = self.dec_type();
+                            let zeros: Vec<inkwell::values::IntValue<'ctx>> = (0..512)
+                                .map(|_| self.cx.i8_type().const_zero())
+                                .collect();
+                            let arr = self.cx.i8_type().const_array(&zeros);
+                            let z = st.const_named_struct(&[
+                                self.cx.i8_type().const_zero().into(),
+                                self.cx.i16_type().const_zero().into(),
+                                arr.into(),
+                                self.cx.i32_type().const_zero().into(),
+                            ]);
+                            self.builder.build_return(Some(&z)).map_err(to_err)?;
+                        }
                         SemType::Numeric(_) => {
                             let it = self.llvm_type(&ret_ty)?;
                             let zero: inkwell::values::BasicValueEnum<'ctx> = match it {
@@ -1525,6 +1645,31 @@ impl<'ctx> CodeGen<'ctx> {
                 })
             }
 
+            // Decimal literal (spec §6.6a): digits carried verbatim (never
+            // through binary); built via `resid_dec_from_digits`, which pads
+            // or rounds to the literal's precision (the bind target, or the
+            // Dec(34) default).
+            Literal::Dec(lit) => {
+                let prec: u32 = match target {
+                    Some(NumericType::Dec(n)) => n as u32,
+                    _ => 34,
+                };
+                let dstr = self.lower_str(&lit.digits);
+                let v = self.dec_call_out(
+                    "resid_dec_from_digits",
+                    &[],
+                    &[
+                        dstr.into(),
+                        self.cx.i32_type().const_int(lit.exp as u64, false).into(),
+                        self.cx.i16_type().const_int(prec as u64, false).into(),
+                    ],
+                )?;
+                Ok(Val {
+                    v,
+                    ty: SemType::Numeric(NumericType::Dec(prec as u16)),
+                })
+            }
+
             Literal::Bool(b) => {
                 let v = self.cx.bool_type().const_int(*b as u64, false);
                 Ok(Val {
@@ -1587,6 +1732,11 @@ impl<'ctx> CodeGen<'ctx> {
                         .build_float_neg(f, "fneg")
                         .map_err(to_err)?
                         .into(),
+                    // Dec(N) negation flips the sign field (spec §6.6a).
+                    BasicValueEnum::StructValue(_) if matches!(&raw.ty, SemType::Numeric(NumericType::Dec(_))) => {
+                        let sp = self.dec_slot(raw.v)?;
+                        self.dec_call_out("resid_dec_neg", &[sp], &[])?
+                    }
                     _ => return Err("codegen: unary minus needs numeric".into()),
                 };
                 Ok(Val { v, ty: raw.ty })
@@ -1740,6 +1890,14 @@ impl<'ctx> CodeGen<'ctx> {
             SemType::Numeric(n) => *n,
             _ => return Err("codegen: numeric required".into()),
         };
+        // Dec values carry their own precision; the runtime helpers round to
+        // the result precision internally (spec §6.6a Dec(max)).
+        if res.is_dec() {
+            if !src.is_dec() {
+                return Err("codegen: cannot widen non-Dec to Dec".into());
+            }
+            return Ok(v.v);
+        }
         let w = res.target_width().unwrap_or(64);
         if res.is_float() {
             let ft = self.float_type(w)?;
@@ -1782,6 +1940,20 @@ impl<'ctx> CodeGen<'ctx> {
         r: BasicValueEnum<'ctx>,
         res: Numeric,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Dec arithmetic (spec §6.6a): exact add/sub/mul, division to N+2
+        // guard digits — all rounded once inside the runtime helper.
+        if res.is_dec() {
+            let name = match binop {
+                BinOp::Add => "resid_dec_add",
+                BinOp::Sub => "resid_dec_sub",
+                BinOp::Mul => "resid_dec_mul",
+                BinOp::Div => "resid_dec_div",
+                _ => return Err("codegen: unsupported Dec op".into()),
+            };
+            let lp = self.dec_slot(l)?;
+            let rp = self.dec_slot(r)?;
+            return self.dec_call_out(name, &[lp, rp], &[]);
+        }
         if res.is_float() {
             let lf = l.into_float_value();
             let rf = r.into_float_value();
@@ -1834,6 +2006,33 @@ impl<'ctx> CodeGen<'ctx> {
         lt: Numeric,
         rt: Numeric,
     ) -> Result<Val<'ctx>, String> {
+        // Dec comparisons go through `resid_dec_cmp` (an i32 sign), then a
+        // signed compare against zero.
+        if lt.is_dec() || rt.is_dec() {
+            if !(lt.is_dec() && rt.is_dec()) {
+                return Err("codegen: Dec compared with non-Dec".into());
+            }
+            let lp = self.dec_slot(l.v)?;
+            let rp = self.dec_slot(r.v)?;
+            let f = self
+                .module
+                .get_function("resid_dec_cmp")
+                .ok_or("codegen: resid_dec_cmp not declared")?;
+            let cs = self
+                .builder
+                .build_call(f, &[lp.into(), rp.into()], "dcmp")
+                .map_err(to_err)?;
+            let c = cs.try_as_basic_value().expect_basic("dcmp").into_int_value();
+            let pred = int_pred(binop, true);
+            let i = self
+                .builder
+                .build_int_compare(pred, c, self.cx.i32_type().const_zero(), "dcmpz")
+                .map_err(to_err)?;
+            return Ok(Val {
+                v: i.into(),
+                ty: SemType::Bool,
+            });
+        }
         if lt.is_float() || rt.is_float() {
             let w = lt
                 .target_width()
@@ -1921,6 +2120,17 @@ impl<'ctx> CodeGen<'ctx> {
         if matches!(to, SemType::Ptr) {
             return Ok(raw);
         }
+        // ── Dec(N) conversions (spec §6.6a) ─────────────────────────
+        // These bypass the LLVM cast below: Dec is an aggregate struct, and
+        // all Dec conversions go through the C runtime (the type checker
+        // permits C-style casts to any target, so Dec sources/targets must be
+        // handled generically here).
+        if matches!(to, SemType::Numeric(NumericType::Dec(_))) {
+            return self.cast_to_dec(raw, to);
+        }
+        if matches!(&raw.ty, SemType::Numeric(NumericType::Dec(_))) {
+            return self.cast_from_dec(raw, to);
+        }
         let to_ll = self.llvm_type(to)?;
         let v = match (raw.v, to_ll) {
             (BasicValueEnum::IntValue(i), BasicTypeEnum::IntType(t)) => {
@@ -1973,6 +2183,142 @@ impl<'ctx> CodeGen<'ctx> {
             _ => return Err(format!("codegen: cannot cast {} to {to}", raw.ty)),
         };
         Ok(Val { v, ty: to.clone() })
+    }
+
+    /// Cast any supported source value to Dec(prec). Sources: Dec (round),
+    /// Int/UInt (exact via i64 or i128), Float (lossy via %.17g), Str (parse).
+    fn cast_to_dec(&mut self, raw: Val<'ctx>, to: &SemType) -> Result<Val<'ctx>, String> {
+        let prec = match to {
+            SemType::Numeric(NumericType::Dec(n)) => *n,
+            _ => return Err("codegen: cast_to_dec needs Dec target".into()),
+        };
+        let p = self.cx.i16_type().const_int(prec as u64, false);
+        let v = match &raw.ty {
+            SemType::Numeric(NumericType::Dec(_)) => {
+                let sp = self.dec_slot(raw.v)?;
+                self.dec_call_out("resid_dec_round", &[sp], &[p.into()])?
+            }
+            SemType::Numeric(NumericType::Int(w)) | SemType::Numeric(NumericType::UInt(w)) => {
+                if w.bits() == 128 {
+                    let i128t = self.int_type(128)?;
+                    let i = raw.v.into_int_value();
+                    let wide = if i.get_type().get_bit_width() == 128 {
+                        i
+                    } else if matches!(&raw.ty, SemType::Numeric(n) if n.is_signed()) {
+                        self.builder.build_int_s_extend(i, i128t, "sext").map_err(to_err)?
+                    } else {
+                        self.builder.build_int_z_extend(i, i128t, "zext").map_err(to_err)?
+                    };
+                    self.dec_call_out("resid_dec_from_i128", &[], &[wide.into(), p.into()])?
+                } else {
+                    let i64t = self.cx.i64_type();
+                    let i = raw.v.into_int_value();
+                    let wide = if i.get_type().get_bit_width() == 64 {
+                        i
+                    } else if matches!(&raw.ty, SemType::Numeric(n) if n.is_signed()) {
+                        self.builder.build_int_s_extend(i, i64t, "sext").map_err(to_err)?
+                    } else {
+                        self.builder.build_int_z_extend(i, i64t, "zext").map_err(to_err)?
+                    };
+                    self.dec_call_out("resid_dec_from_int", &[], &[wide.into(), p.into()])?
+                }
+            }
+            SemType::Numeric(NumericType::Float(_)) => {
+                let fd = self.cx.f64_type();
+                let fl = raw.v.into_float_value();
+                let dbl = if fl.get_type().get_bit_width() == 64 {
+                    fl
+                } else {
+                    self.builder
+                        .build_float_cast(fl, fd, "fcast")
+                        .map_err(to_err)?
+                };
+                self.dec_call_out("resid_dec_from_f64", &[], &[dbl.into(), p.into()])?
+            }
+            SemType::Str => self.dec_call_out(
+                "resid_dec_from_str",
+                &[],
+                &[raw.v.into_pointer_value().into(), p.into()],
+            )?,
+            other => return Err(format!("codegen: cannot cast {other} to Dec")),
+        };
+        Ok(Val {
+            v,
+            ty: to.clone(),
+        })
+    }
+
+    /// Cast a Dec source to Int/UInt/Float (runtime checks bounds and
+    /// integrality per spec §6.6a; `resid_dec_to_int` aborts on error).
+    fn cast_from_dec(&mut self, raw: Val<'ctx>, to: &SemType) -> Result<Val<'ctx>, String> {
+        match to {
+            SemType::Numeric(NumericType::Int(w)) | SemType::Numeric(NumericType::UInt(w)) => {
+                let (lo, hi): (i64, i64) = if matches!(to, SemType::Numeric(NumericType::Int(_))) {
+                    if w.bits() == 64 {
+                        (i64::MIN, i64::MAX)
+                    } else {
+                        let half = 1i64 << (w.bits() - 1);
+                        (-half, half - 1)
+                    }
+                } else if w.bits() <= 63 {
+                    (0, (1i64 << w.bits()) - 1)
+                } else {
+                    (0, i64::MAX)
+                };
+                let f = self
+                    .module
+                    .get_function("resid_dec_to_int")
+                    .ok_or("codegen: resid_dec_to_int not declared")?;
+                let sp = self.dec_slot(raw.v)?;
+                let cs = self
+                    .builder
+                    .build_call(
+                        f,
+                        &[
+                            sp.into(),
+                            self.cx.i64_type().const_int(lo as u64, false).into(),
+                            self.cx.i64_type().const_int(hi as u64, false).into(),
+                        ],
+                        "dectoint",
+                    )
+                    .map_err(to_err)?;
+                let i64v = cs.try_as_basic_value().expect_basic("dec to int").into_int_value();
+                let it = self.int_type(w.bits())?;
+                let i = if i64v.get_type().get_bit_width() == w.bits() as u32 {
+                    i64v
+                } else if i64v.get_type().get_bit_width() > w.bits() as u32 {
+                    self.builder.build_int_truncate(i64v, it, "trunc").map_err(to_err)?
+                } else if matches!(to, SemType::Numeric(NumericType::Int(_))) {
+                    self.builder.build_int_s_extend(i64v, it, "sext").map_err(to_err)?
+                } else {
+                    self.builder.build_int_z_extend(i64v, it, "zext").map_err(to_err)?
+                };
+                Ok(Val { v: i.into(), ty: to.clone() })
+            }
+            SemType::Numeric(NumericType::Float(w)) => {
+                let f = self
+                    .module
+                    .get_function("resid_dec_to_f64")
+                    .ok_or("codegen: resid_dec_to_f64 not declared")?;
+                let sp = self.dec_slot(raw.v)?;
+                let cs = self
+                    .builder
+                    .build_call(f, &[sp.into()], "dectof")
+                    .map_err(to_err)?;
+                let dbl = cs
+                    .try_as_basic_value()
+                    .expect_basic("dec to float")
+                    .into_float_value();
+                let ft = self.float_type(w.bits())?;
+                let fl = if dbl.get_type().get_bit_width() == w.bits() as u32 {
+                    dbl
+                } else {
+                    self.builder.build_float_cast(dbl, ft, "fcast").map_err(to_err)?
+                };
+                Ok(Val { v: fl.into(), ty: to.clone() })
+            }
+            _ => Err(format!("codegen: cannot cast Dec to {to}")),
+        }
     }
 
     /// Widen an argument value to match a function parameter type.
@@ -2080,8 +2426,20 @@ impl<'ctx> CodeGen<'ctx> {
                         "FloatToString",
                         Numeric::Float(resid_ir::FloatWidth::F64),
                     ),
+                    // Dec(N) prints in fixed notation with all N significant
+                    // digits, trailing zeros preserved (spec §6.6a).
                     NumericType::Dec(_) => {
-                        return Err("Dec(N) value formatting is not yet implemented".to_string());
+                        let sp = self.dec_slot(raw.v)?;
+                        let f = self
+                            .module
+                            .get_function("resid_dec_to_string")
+                            .ok_or("codegen: resid_dec_to_string not declared")?;
+                        let cs = self
+                            .builder
+                            .build_call(f, &[sp.into()], "dstr")
+                            .map_err(to_err)?;
+                        let v = cs.try_as_basic_value().expect_basic("dec str");
+                        return Ok(v.into_pointer_value());
                     }
                 };
                 let arg = self.widen(raw, want)?;
@@ -2293,6 +2651,27 @@ impl<'ctx> CodeGen<'ctx> {
             ],
             ptr.into(),
         );
+        // Dec(N) exact-decimal runtime (spec §6.6a). `resid_dec` crosses the
+        // LLVM boundary as pointers (out-ptr for results, const ptrs for
+        // operands) — clang and LLVM disagree on by-value aggregate ABI, so
+        // the struct is never passed by value.
+        let i16t = self.cx.i16_type();
+        let i32t = self.cx.i32_type();
+        self.decl_rt_void("resid_dec_from_digits", vec![ptr.into(), ptr.into(), i32t.into(), i16t.into()]);
+        self.decl_rt_void("resid_dec_from_int", vec![ptr.into(), i64t.into(), i16t.into()]);
+        self.decl_rt_void("resid_dec_from_i128", vec![ptr.into(), self.int_type(128).unwrap().into(), i16t.into()]);
+        self.decl_rt_void("resid_dec_from_str", vec![ptr.into(), ptr.into(), i16t.into()]);
+        self.decl_rt_void("resid_dec_from_f64", vec![ptr.into(), f64t.into(), i16t.into()]);
+        self.decl_rt_void("resid_dec_round", vec![ptr.into(), ptr.into(), i16t.into()]);
+        self.decl_rt_void("resid_dec_neg", vec![ptr.into(), ptr.into()]);
+        self.decl_rt_void("resid_dec_add", vec![ptr.into(), ptr.into(), ptr.into()]);
+        self.decl_rt_void("resid_dec_sub", vec![ptr.into(), ptr.into(), ptr.into()]);
+        self.decl_rt_void("resid_dec_mul", vec![ptr.into(), ptr.into(), ptr.into()]);
+        self.decl_rt_void("resid_dec_div", vec![ptr.into(), ptr.into(), ptr.into()]);
+        self.decl_rt("resid_dec_cmp", vec![ptr.into(), ptr.into()], i32t.into());
+        self.decl_rt("resid_dec_to_string", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_dec_to_int", vec![ptr.into(), i64t.into(), i64t.into()], i64t.into());
+        self.decl_rt("resid_dec_to_f64", vec![ptr.into()], f64t.into());
     }
 
     fn decl_rt(
@@ -2434,13 +2813,33 @@ impl<'ctx> CodeGen<'ctx> {
             });
         }
 
+        // Conversion helpers (spec §6.7 and §6.6a). `dN` is synthesized by
+        // the type checker — no extern exists — so any `dN` call not shadowed
+        // by a user definition is a Dec conversion. `iN`/`uN`/`fN` are extern
+        // C functions for scalar args, but a Dec argument must be converted
+        // through the runtime instead (the extern expects an i64/double).
+        if let Some((kind, n)) = Self::parse_conv_helper(name) {
+            if kind == 'd' {
+                if self.module.get_function(name).is_none() {
+                    return self.lower_dec_conversion(sc, kind, n, args);
+                }
+            } else if args.len() == 1 {
+                let arg_ty =
+                    resid_type::infer_expr_ctx(&args[0].1, &self.env(sc), &self.sigs, &self.types)
+                        .unwrap_or(SemType::Bool);
+                if matches!(arg_ty, SemType::Numeric(NumericType::Dec(_))) {
+                    return self.lower_dec_conversion(sc, kind, n, args);
+                }
+            }
+        }
+
         // Resolve named arguments: map each arg's name (if provided) to the
         // corresponding position in the function's param list.
         let (resolved_args, sig) = self.resolve_call_args(name, args)?;
 
         let fnv = self
             .module
-            .get_function(name)
+            .get_function(&self.decl_name(name))
             .ok_or_else(|| format!("codegen: no such function `{name}`"))?;
         let mut llargs: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
         for (i, (_, a)) in resolved_args.iter().enumerate() {
@@ -2467,6 +2866,59 @@ impl<'ctx> CodeGen<'ctx> {
             v,
             ty: sig.ret.clone(),
         })
+    }
+
+    /// Match a conversion-helper name (`d34`, `i32`, `u64`, `f128`) to its
+    /// kind letter and numeric parameter.
+    fn parse_conv_helper(name: &str) -> Option<(char, u32)> {
+        let mut cs = name.chars();
+        let k = cs.next()?;
+        if !matches!(k, 'd' | 'i' | 'u' | 'f') {
+            return None;
+        }
+        let rest = &name[k.len_utf8()..];
+        if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let n: u32 = rest.parse().ok()?;
+        if n == 0 {
+            return None;
+        }
+        Some((k, n))
+    }
+
+    /// Lower a conversion-helper call whose argument is (or becomes) a Dec
+    /// value: `dN` from Dec/Int/Str, `iN`/`uN`/`fN` from Dec (spec §6.6a).
+    fn lower_dec_conversion(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        kind: char,
+        n: u32,
+        args: &[(Option<Id>, Expr)],
+    ) -> Result<Val<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!("codegen: `{kind}{n}` expects one argument"));
+        }
+        let (_, a) = &args[0];
+        let want = match kind {
+            'd' => None,
+            'i' => Some(NumericType::Int(
+                IntWidth::from_bits(n as u16).ok_or("codegen: invalid `iN` width")?,
+            )),
+            'u' => Some(NumericType::UInt(
+                IntWidth::from_bits(n as u16).ok_or("codegen: invalid `uN` width")?,
+            )),
+            'f' => Some(NumericType::Float(
+                FloatWidth::from_bits(n as u16).ok_or("codegen: invalid `fN` width")?,
+            )),
+            _ => unreachable!(),
+        };
+        let av = self.lower_expr(sc, a, want)?;
+        if kind == 'd' {
+            self.cast_to_dec(av, &SemType::Numeric(NumericType::Dec(n as u16)))
+        } else {
+            self.cast_from_dec(av, &SemType::Numeric(want.expect("want")))
+        }
     }
 
     /// Resolve named arguments and fill in default parameters, returning the
@@ -3104,6 +3556,7 @@ fn make_fn_type<'ctx>(
         BasicTypeEnum::FloatType(f) => f.fn_type(params, false),
         BasicTypeEnum::PointerType(p) => p.fn_type(params, false),
         BasicTypeEnum::ArrayType(a) => a.fn_type(params, false),
+        BasicTypeEnum::StructType(s) => s.fn_type(params, false),
         _ => unreachable!("unsupported return type in make_fn_type"),
     }
 }
