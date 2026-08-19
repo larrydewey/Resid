@@ -1,11 +1,30 @@
-# Resid Compiler v3.0 — Implementation Plan
+# Resid Compiler v3.1 — Implementation Plan
 
-**Specification**: `resid_specification.txt` v3.0 (Production Ready)
+**Specification**: `resid_specification.txt` v3.1 (Production Ready)
 **Target**: Rust stable + LLVM (inkwell)
 **Workspace**: Monorepo, Cargo workspace
 **Stdlib**: Rust first, later move to Resid
-**Wide numeric types**: Software emulate via arrays + runtime lib
+**Wide numeric types**: Int(128)..Int(512) via LLVM arbitrary-width integers; binary floats capped at Float(128); arbitrary precision via the Dec(N) decimal family
 **Interpreter**: None — direct LLVM
+
+---
+
+## 0. CURRENT SNAPSHOT
+
+- **Tests**: 477 pass (lexer 17, parser 88, resid-ir 46, resid-type 171,
+  resid-codegen 129, residc 26 e2e).
+- **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
+  clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
+  Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
+  with `match`/destructuring/if-let/while-let; ranges + slicing; raw/byte strings;
+  f-strings; providers (filesystem/environment/git); `@residual`/`rt`/assertions;
+  string introspection (`str_len`/`str_char_at`/`str_from_code`/`str_slice`);
+  `Str + Str`; `#location`; `value?`.
+- **Bootstrap**: M1–M5 done (`examples/lexer.res` and `examples/parser.res` each
+  parse their own source). M6 — the full compiler written in Resid — not started.
+- **Next**: handles (§12.1 task 5.7), spawn (§12.1 task 5.8), `resid-build` crate
+  (§12.1 task 5.10).
+- Full status table in §11; self-hosting roadmap in §12.
 
 ---
 
@@ -21,7 +40,7 @@ Resid = eager compile-time lang. Compiler job: **max authorized reduction of fir
 | Backend | LLVM via `inkwell` crate |
 | Interpreter | None — direct LLVM |
 | Workspace | Monorepo (cargo workspace) |
-| Wide types | Software emulation (arrays of i64 + runtime lib) |
+| Wide types | Int(256)/Int(512) via LLVM arbitrary-width ints; Float capped at F128; Dec(N) decimal |
 | Target | LLVM all-arch (x86_64, aarch64, etc.) |
 
 ---
@@ -730,7 +749,7 @@ pub struct BehaviorDef {
 pub enum ConversionHelper {
     I8, I16, I32, I64, I128, I256, I512,
     U8, U16, U32, U64, U128, U256, U512,
-    F16, F32, F64, F128, F256, F512,
+    F16, F32, F64, F128,
     ISize,
     USize,
 }
@@ -849,8 +868,7 @@ impl CodeGenerator {
 | Float(16) | half (or i16 with conversion) |
 | Float(32) | float |
 | Float(64) | double |
-| Float(128) | double (fallback) or __float128 via libcall |
-| Float(256), Float(512) | Software emulation + runtime lib |
+| Float(128) | fp128 (native LLVM quad-precision) |
 | ISize / USize | pointer-sized integer |
 | Str | struct with ptr + len (or String wrapper) |
 | Bytes | struct with ptr + len |
@@ -1014,7 +1032,7 @@ pub mod conversions {
     pub fn u8(v: impl Into<u64>) -> ResidUInt<8>;
     // ... u16, u32, u64, u128, u256, u512
     pub fn f16(v: f64) -> ResidFloat<16>;
-    // ... f32, f64, f128, f256, f512
+    // ... f32, f64, f128
     pub fn isize(v: i64) -> ISize;
     pub fn usize(v: u64) -> USize;
 }
@@ -1425,7 +1443,7 @@ Top-level grammar = imports + types + functions.
 
 **Tasks**:
 1. [ ] Implement `resid-type` crate (Type enum, TypeChecker)
-2. [ ] Implement parameterized numeric types (Int(8)..Int(512), Float(16)..Float(512))
+2. [ ] Implement parameterized numeric types (Int(8)..Int(512), Float(16)..Float(128))
 3. [ ] Implement ISize/USize handling (target-dependent width)
 4. [ ] Implement type checking for all expression forms
 5. [ ] Implement conversion helper resolution (i32(42), usize(len), etc.)
@@ -1474,14 +1492,13 @@ native binary via clang + `crates/residc/resid_rt.c`, propagating exit codes.
 C-style `for` loops, map literals.
 
 **Coverage (done)**: float arithmetic, for-in loops, `comptime_print`,
-`@residual`, assertion family, range/slice notation, if-let/while-let,
-named args + default param injection, list `.concat()` and empty list literals.
-**Coverage (next)**: `resid-build` crate, provider backends, spawn/concurrency,
-wide numerics, LSP server, conformance suite.
 `@residual`, the assertion family (`assert`/`known`/`rt_known`/`todo`/
 `unimplemented`), range/slice notation (for-in over numeric ranges, `0..n`
-half-open and `0..=n` inclusive), and if-let / while-let destructuring
-(`if (Some(x) = opt)`, `while (PAT = source)`) are implemented.
+half-open and `0..=n` inclusive), if-let / while-let destructuring
+(`if (Some(x) = opt)`, `while (PAT = source)`), named args + default param
+injection, list `.concat()` and empty list literals.
+**Coverage (next)**: `resid-build` crate, spawn/concurrency,
+LSP server, conformance suite.
 
 **Est effort**: 3-4 weeks
 
@@ -1532,7 +1549,7 @@ half-open and `0..=n` inclusive), and if-let / while-let destructuring
 7. [ ] Implement full numeric family (Int(8)..Int(512), UInt, Float, ISize, USize)
 8. [ ] Implement core collections (Option, Result, List, Map, Set)
 9. [ ] Implement core behaviors (Eq, Ord, Hash, Reverse)
-10. [ ] Implement conversion helpers (i8..i512, u8..u512, f16..f512, isize, usize)
+10. [ ] Implement conversion helpers (i8..i512, u8..u512, f16..f128, isize, usize)
 11. [x] Implement checked + wrapping + saturating arithmetic
 12. [ ] Implement provider backends (filesystem, environment, git)
 13. [ ] Implement handle types (Buffer, File)
@@ -1689,7 +1706,7 @@ Before calling compiler done:
 | 2. Knowledge Graph IR | Partial | `resid-ir`: implements spec §6 primitive numeric types, mixed-width widening, list/rangetype member types (41 tests). |
 | 3. Types, Behaviors | Partial | `resid-type`: 171 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, `@residual`, while, RT, built-in extern signatures, `Str + Str`, `check_program`, `ListToString` (List(Int/UInt/Float) → Str), Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors), assertion/debug expressions (`assert`/`rt_assert` cond must be Bool, message Str; `known`/`rt_known` pass-through), ranges (`Range(Elem)` from numeric bounds; for-in over a Range requires the declared type match the element type), if-let/while-let (`bind_pattern` against the source type; vars scoped to the then/body block), byte strings (`b"..."` → `Bytes`), f-string interpolation (each interpolated expr is inferred/validated; the f-string is `Str`), and `#location` → `SourceLoc` with `file`/`line`/`col` field access (unknown fields rejected), provider type checking (unknown providers rejected, unknown verbs rejected, arg count mismatches rejected, arg type mismatches rejected, method calls on value types rejected, provider calls allowed inside RT expressions). Numeric overload resolution (`IntToString`/`UIntToString`/`FloatToString`/`BoolToString`/`ToString`) and numeric widening at call sites. String introspection built-ins (`str_len`, `str_char_at`, `str_from_code`, `str_slice`) type-check; char literals infer as `Int(64)`. `Str == Str` / `Str != Str` → Bool (Str < Str rejected). The type checker — not the parser — rejects undefined variables (`check_program_undefined_var`). Shadowing rejected everywhere (spec §7): `Env::try_insert` errors on rebinding any name already in scope — same-block, nested-block, for-in loop vars, pattern binds, and duplicate params; sibling blocks still bind freely. Wide ToString built-ins type-check: `Int128ToString`/`UInt128ToString` for `Int(128)`/`UInt(128)`, `Int256ToString`/`UInt256ToString` for 256-bit, `Int512ToString`/`UInt512ToString` for 512-bit (smaller same-signed ints widen losslessly; non-numeric types rejected). Float(128) type-checks end-to-end: `f128()` conversion helper, `Float128ToString`, and Float(128) + Float(64) → Float(128) widening per spec §6.2. Literal overflow is a compile error (spec §6): `infer_expr_expected` rejects a literal that doesn't fit the expected numeric range (`Int(8) x = 300`, `2^256-1` into `Int(64)`), and `lit_type`/`literal_compatible` derive widths from the literal's magnitude string so >u128 literals infer Int(128)/Int(256)/Int(512). Dec(N) type system (spec v3.1 §6.6a): `Dec`/`Dec(N)` resolve to `NumericType::Dec(N)` (default 34); `1.5m`/`5m` literals infer Dec(34) and fit any Dec(N) target (literal narrowing rounds once); `Dec(N) op Dec(M) → Dec(max)`; Dec mixed with Int/UInt/Float is a hard error; bitwise/shift and `~` on Dec rejected; open-ended `dN` helpers accept Dec/Int/Str (Float rejected) and `iN`/`uN`/`fN` accept Dec args.
 | 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (129 tests) + `residc` (26 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime), `@residual Type y = expr`, assertions (`assert`/`rt_assert` → `resid_abort` on failure; `known`/`rt_known` static/runtime checks; `todo`/`unimplemented` trap), if-let/while-let (`pattern_match_test` compares the runtime tag via `resid_box_tag`; bindings scoped to the then/body block). Range `for-in` (`0..n` half-open, `0..=n` inclusive) lowers to a scalar i64 counter via `slt`/`sle`, with bounds widened/truncated to the declared width. Range/slice construction lower to `resid_range_new` / `resid_slice_new` (boxed, partial-open `..n`, `n..`, `..` resolve bounds via the list length). Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `Float128ToString` (quad, 36 sig digits), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. Float(128) (spec v3.1 widest binary float): `float_type(128)` → LLVM `fp128`; `fadd`/`fsub`/`fmul`/`fdiv`/`frem`, comparisons, casts and the `f128()` helper all lower; f-string interpolation of Float(128) goes through `Float128ToString` (not a lossy f64 widen); `Float128ToString` prints 36 significant digits with full exponent range via binary bignum (no libquadmath), verified end-to-end (2^100 exact, 2^200, 2^16383, 0.0001, 0.1 quad-exact). Also fixed: float-typed functions with no trailing return emitted `ret i1 false` (module verification failure) — now a proper fp32/64/128 zero; and an `if` whose then/else both return marks the enclosing block terminated with `unreachable` in the dead merge block. Wide 128-bit support: `Int(128)`/`UInt(128)` lower to LLVM `i128`; literals exceeding 64 bits build from their full decimal value via `const_int_from_string` (not `as u64`, which truncated), picking a holding width from magnitude when no target type is present; `Int128ToString`/`UInt128ToString` call runtime decimal printers (verified end-to-end: 2^64+1, −2^127, UInt(128) max, mul/comparison/cast). Wide 256/512-bit: `Int(256)`/`Int(512)` arithmetic/comparison/casts via LLVM arbitrary-width integers (`custom_width_int_type`); `Int256ToString`/`UInt256ToString`/`Int512ToString`/`UInt512ToString` decompose the value into little-endian u64 limbs (`lshr` + truncate) for the C-ABI runtime helpers. Wide literals beyond `u128` survive lexing (`IntKind` keeps digits as strings for every radix) and codegen builds constants from the raw digit string + radix at the full target width (verified end-to-end: 2^256−1 in `UInt(256)`, 2^255−1 in `Int(256)`, 2^128−1 in `UInt(512)`); small-target literal overflow is rejected by the type checker before codegen. Raw strings (`r"..."`) lower as `Str` globals; byte strings (`b"..."`) lower as constant global byte arrays (`Bytes`, no NUL terminator); `#location` boxes a `SourceLoc { file, line, col }` from the current span with field access via the boxed-slot runtime. F-string interpolation (spec §14) stringifies interpolated values (`Str` passthrough, `*ToString` helpers for numerics/bools, `ToString` for composites) and stitches them with `resid_str_concat`; pure-text f-strings fold to a constant. Runtime `Str + Str` with a non-constant operand concatenates via `resid_str_concat`. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. UTF-8-codepoint string helpers (`str_len`/`str_char_at`/`str_from_code`/`str_slice`) declared via the extern path and callable from Resid source (bootstrap lexer groundwork); char literals lower as `i64` codepoints rather than strings. `Str == Str` / `Str != Str` lower to `resid_str_eq` (strcmp-based) yielding a Bool; `filesystem.read_all(path)` reads a whole file into a `Str` (bootstrap lexer input). |
-| 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. Runtime helpers landed: conversion helpers, checked/wrapping/saturating arithmetic, ranges/slicing, raw strings, byte strings, `#location`, f-string interpolation, runtime `Str + Str` concat, Dec(N) exact decimal arithmetic/display/conversions. Still missing: providers, handles, spawn, `resid-build` crate. |
+| 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. Runtime helpers landed: conversion helpers, checked/wrapping/saturating arithmetic, ranges/slicing, raw strings, byte strings, `#location`, f-string interpolation, runtime `Str + Str` concat, Dec(N) exact decimal arithmetic/display/conversions. Still missing: handles, spawn, `resid-build` crate, full `resid-builtin` stdlib. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
 
 Build/test notes:
@@ -1742,7 +1759,7 @@ Build/test notes:
   trailing zeros so `Dec(34) 12.0m → 12` and `12.5m → 12.5` exactly. A
   `Dec main()` is emitted as `resid_main` with a synthesized C-ABI `i32 @main`
   wrapper (LLVM's sret return for the struct doesn't match libc's `main`).
-  Next: remaining wide numerics (wide Float types), handles (§12.1, task 5.7),
+  Next: handles (§12.1, task 5.7),
   spawn (§12.1, task 5.8), or the `resid-build` crate (§12.1, task 5.10).
 - **M4 — Resid lexer done** (`examples/lexer.res`): a Resid program reads a
   `.resid` source file via `filesystem.read_all(RESID_LEX_SRC)` and prints the
@@ -1777,15 +1794,14 @@ Build/test notes:
 ## 12. REMAINING TASKS — Self-Hosting Roadmap
 
 Self-hosting (spec §39 Phase 3) requires a Resid program that can write the
-compiler. The first milestone: **write a Resid lexer** — needs conversion
-helpers (`i8(n)`, `u16(n)`, `f64(n)`) to turn ASCII codepoints into character
-strings.
+compiler. Milestones M1–M5 are done (§12.7); the remaining step to self-hosting
+is M6 — the full compiler in Resid (type checking + codegen + LLVM backend).
 
 ### 12.1 Phase 5 — Stdlib + Build System (blockers first)
 
 | # | Task | Priority | Blocked on | Notes |
 |---|------|----------|------------|-------|
-| **5.1** | Conversion helpers (`i8..i512`, `u8..u512`, `f16..f512`, `isize`, `usize`) | ✅ Done | — | Extern functions. Narrow/widen numeric types at call sites. Bootstrap runtime: C casts. Typed in `BUILTIN_SIGS`, declared in codegen, implemented in `resid_rt.c`. Needed to write Resid lexer (codepoint→char). |
+| **5.1** | Conversion helpers (`i8..i512`, `u8..u512`, `f16..f128`, `isize`, `usize`) | ✅ Done | — | Extern functions. Narrow/widen numeric types at call sites. Bootstrap runtime: C casts. Typed in `BUILTIN_SIGS`, declared in codegen, implemented in `resid_rt.c`. Needed to write Resid lexer (codepoint→char). |
 | **5.2** | Checked + wrapping + saturating arithmetic (`checked_add`, `wrapping_mul`, `saturating_sub`) | ✅ Done | 5.1 | Spec §6.5. Extern functions in `resid_rt.c`: `wrapping_add/sub/mul/div`, `saturating_add/sub/mul`, `checked_add/sub/mul/div` (signed + unsigned). Declared in codegen, typed in `BUILTIN_SIGS`. 11 new codegen tests. |
 | **5.3** | Ranges and slicing (`xs[start..end]`, `0..=n` construction) | ✅ Done | — | Type: `Range(Elem)`/`Slice(Elem)`. `for-in` over a range lowers to a scalar counter. Construction lowers to `resid_range_new`/`resid_slice_new` (boxed). Parser fix: slice start/end bounds parsed above range precedence so `1..4` inside `[ ]` isn't consumed as a Range expr; `xs[..n]`, `xs[n..]`, `xs[..]` supported (defaults 0 / list length). |
 | **5.4** | Raw strings + byte strings (`r"...\0"`, `b"bytes"`) | ✅ Done | — | `Bytes` core type (type + codegen). Raw strings (`r"..."`) lower as `Str` globals; byte strings (`b"..."`) lower as constant global byte arrays (`[N x i8]`, no NUL terminator), backed by the lexer's escape handling (`\"`, `\n`, `\t`, `\r`, `\\`, `\0`). |
@@ -1793,7 +1809,7 @@ strings.
 | **5.6** | Provider backends (filesystem, environment, git) | ✅ Done | — | `resid_rt.c` implements `resid_fs_exists`/`resid_fs_read_all`/`resid_fs_list_dir`, `resid_env_get`/`resid_env_has`, `resid_git_rev`/`resid_git_branch`; codegen dispatches via `lower_provider_call`; typed by `provider_verbs()` (single source of truth). Proven by M4/M5 bootstrap lexer/parser (`filesystem.read_all`). Real I/O currently allowed unconditionally (bootstrap); capability authorization gates it in a real build. |
 | **5.7** | Handle types (`with (File h = open(...))`) | P3 | 5.6 | RAII lifetime, reverse-order release, mutable ownership. |
 | **5.8** | Spawn / `RegionError` / structured concurrency | P3 | 5.6 | `spawn (caps) { body }` → OS thread + structured join. |
-| **5.9** | Wide numeric runtime (Int256, Int512, Float256, Float512) | 🚧 In progress | — | Software emulation: `[u64; N]` arrays + runtime lib (add, mul, cmp). **Int(128)/UInt(128) done**: `i128` LLVM lowering, wide literal construction via `const_int_from_string` (magnitude-derived holding width when no target), `Int128ToString`/`UInt128ToString` decimal printers in `resid_rt.c`. **Int(256)/Int(512) done**: arithmetic via LLVM arbitrary-width integers (`custom_width_int_type`); `Int256ToString`/`UInt256ToString`/`Int512ToString`/`UInt512ToString` stringify by decomposing the value into little-endian u64 limbs (C ABI has no native 256-bit type). **Literals > u128 done**: `IntKind` keeps all radices as digit strings (`Decimal(String)`), codegen builds constants from raw digits+radix, `lit_type`/`literal_compatible` derive width from the magnitude string, and bind overflow (`Int(8) x = 300`, `2^256-1` into `Int(64)`) is now a compile error per spec §6. **Float(128) done (v3.1 caps binary floats at F128)**: `f128()` conversion helper, `Float128ToString` quad-precision printer (bignum decimal, 36 sig digits, full exponent range, no libquadmath), fp128 arithmetic/casts/comparisons, f-string interpolation via `Float128ToString`. Also fixed: float-typed implicit zero return emitted `i1 false` (verification error); both-branches-return `if` now propagates block termination and puts `unreachable` in the dead merge block. **Dec(N) type system done (spec §6.6a)**: `NumericType::Dec(u16)`, `Dec(N) op Dec(M) -> Dec(max)`, Dec/Int/UInt/Float mixing is a hard error, `m`-suffix literals (`1.5m`/`5m`) carry digits verbatim + i32 exponent, Dec(34) default, `Dec`/`Dec(N)` spellings, open-ended `dN` helpers (Dec/Int/Str; Float rejected), `iN`/`uN`/`fN` accept Dec args. **Dec(N) runtime done**: exact add/sub/mul + div to N+2 guard digits rounded once, fixed-notation display preserving trailing zeros (`Dec(4) 1.5m` → `"1.500"`), pointer ABI across the LLVM↔C boundary (aggregate by-value ABI mismatch), `dN` synthesized in codegen, `iN`/`uN`/`fN` Dec args via `resid_dec_to_int`/`resid_dec_to_f64`, and a synthesized C-ABI `main` wrapper for `Dec main()` (sret vs libc). Proven by e2e `run_dec_exact_arithmetic`. |
+| **5.9** | Wide numeric runtime (Int128/256/512, Float128, Dec) | ✅ Done | — | **Int(128)/UInt(128) done**: `i128` LLVM lowering, wide literal construction via `const_int_from_string` (magnitude-derived holding width when no target), `Int128ToString`/`UInt128ToString` decimal printers in `resid_rt.c`. **Int(256)/Int(512) done**: arithmetic via LLVM arbitrary-width integers (`custom_width_int_type`); `Int256ToString`/`UInt256ToString`/`Int512ToString`/`UInt512ToString` stringify by decomposing the value into little-endian u64 limbs (C ABI has no native 256-bit type). **Literals > u128 done**: `IntKind` keeps all radices as digit strings (`Decimal(String)`), codegen builds constants from raw digits+radix, `lit_type`/`literal_compatible` derive width from the magnitude string, and bind overflow (`Int(8) x = 300`, `2^256-1` into `Int(64)`) is now a compile error per spec §6. **Float(128) done (v3.1 caps binary floats at F128)**: `f128()` conversion helper, `Float128ToString` quad-precision printer (bignum decimal, 36 sig digits, full exponent range, no libquadmath), fp128 arithmetic/casts/comparisons, f-string interpolation via `Float128ToString`. Also fixed: float-typed implicit zero return emitted `i1 false` (verification error); both-branches-return `if` now propagates block termination and puts `unreachable` in the dead merge block. **Dec(N) type system done (spec §6.6a)**: `NumericType::Dec(u16)`, `Dec(N) op Dec(M) -> Dec(max)`, Dec/Int/UInt/Float mixing is a hard error, `m`-suffix literals (`1.5m`/`5m`) carry digits verbatim + i32 exponent, Dec(34) default, `Dec`/`Dec(N)` spellings, open-ended `dN` helpers (Dec/Int/Str; Float rejected), `iN`/`uN`/`fN` accept Dec args. **Dec(N) runtime done**: exact add/sub/mul + div to N+2 guard digits rounded once, fixed-notation display preserving trailing zeros (`Dec(4) 1.5m` → `"1.500"`), pointer ABI across the LLVM↔C boundary (aggregate by-value ABI mismatch), `dN` synthesized in codegen, `iN`/`uN`/`fN` Dec args via `resid_dec_to_int`/`resid_dec_to_f64`, and a synthesized C-ABI `main` wrapper for `Dec main()` (sret vs libc). Proven by e2e `run_dec_exact_arithmetic`. |
 | **5.10** | `resid-build` crate (resid.toml, profiles, deps) | P3 | — | Config parsing, dependency resolution, build orchestration. |
 | **5.11** | `resid-builtin` crate (full stdlib types) | P3 | — | `Option`, `Result`, `List`, `Map`, `Set`, `SourceLoc`, `Range`, behaviors. |
 | **5.12** | F-string interpolation (`f"hello {name}"`) | ✅ Done | — | Type checker validates interpolated exprs (undefined vars/type errors surface at check time; f-string is `Str`). Codegen: pure-text f-strings fold to a constant; interpolated parts stringify each value (`Str` passthrough; `IntToString`/`UIntToString`/`FloatToString` widened to 64-bit; `BoolToString`; `ToString` for boxed composites, `SourceLoc`, `Ptr`) and stitch with runtime `resid_str_concat`. Runtime `Str + Str` with a non-constant operand also concatenates via `resid_str_concat` (constant operands still fold). |
@@ -1817,7 +1833,7 @@ strings.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| **3.1** | Conversion helper type resolution | ✅ Done | `i8..i512`, `u8..u512`, `f16..f512`, `isize`, `usize` in `BUILTIN_SIGS`; `conversion_helper_match` widens call-site args. |
+| **3.1** | Conversion helper type resolution | ✅ Done | `i8..i512`, `u8..u512`, `f16..f128`, `isize`, `usize` in `BUILTIN_SIGS`; `conversion_helper_match` widens call-site args. |
 | **3.2** | Float type inference | ✅ Done | Float literals → `Float(64)` default; all `FloatWidth` variants typed. |
 | **3.3** | `Range(Elem)` type construction | ✅ Done | From numeric bounds; for-in requires element type match. |
 | **3.4** | `ListToString` | ✅ Done | List(Int/UInt/Float) → Str. |
@@ -1894,7 +1910,7 @@ Updated from §10. **Checked = done, unchecked = missing.**
 
 ### 12.7 Bootstrap Milestones
 
-1. **M1 — Conversion helpers**: `i8..i512`, `u8..u512`, `f16..f512`, `isize`, `usize`.
+1. **M1 — Conversion helpers**: `i8..i512`, `u8..u512`, `f16..f128`, `isize`, `usize`.
    Enables Resid codepoint→char conversion for lexer.
 
 2. **M2 — String + char support**: byte strings, `#location`, ranges, `Str + Str`,
@@ -1940,7 +1956,7 @@ All resolved in Resid 3.0. See `resid_specification.txt`.
 
 1. ~~**Float(16)**~~ → **RESOLVED**: LLVM half (i16, IEEE 754 binary16). Failover to software-emulated via f32 conversion on targets lacking native half support.
 
-2. ~~**Float(128/256/512)**~~ → **RESOLVED**: Float(128) → `__float128` libcall with software failover. Float(256/512) → software emulation via `[u64; N]` + runtime lib.
+2. ~~**Float(128/256/512)**~~ → **RESOLVED (v3.1)**: binary floats capped at Float(128) → native LLVM `fp128` (arithmetic/casts/comparisons, bignum decimal printer). Float(256)/Float(512) are **removed** from the type system; arbitrary precision is carried by the Dec(N) decimal family (§6.6a).
 
 3. ~~**Provider volatility**~~ → **RESOLVED**: All three providers (`filesystem`, `environment`, `git`) are volatile. Cannot be constant-folded at compile time.
 
@@ -1952,4 +1968,4 @@ All resolved in Resid 3.0. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-10 — Self-hosting roadmap added in §12.*
+*Last updated: 2026-08-18 — Float(256/512) cleanup (spec v3.1 caps at F128); current-snapshot header added; §12 self-hosting intro updated for M1–M5 done.*
