@@ -11,19 +11,20 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 477 pass (lexer 17, parser 88, resid-ir 46, resid-type 171,
-  resid-codegen 129, residc 26 e2e).
+- **Tests**: 480 pass (lexer 17, parser 88, resid-ir 46, resid-type 173,
+  resid-codegen 129, residc 27 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
   with `match`/destructuring/if-let/while-let; ranges + slicing; raw/byte strings;
-  f-strings; providers (filesystem/environment/git); `@residual`/`rt`/assertions;
+  f-strings; providers (filesystem read/write, environment, git); `@residual`/`rt`/assertions;
   string introspection (`str_len`/`str_char_at`/`str_from_code`/`str_slice`);
   `Str + Str`; `#location`; `value?`.
 - **Bootstrap**: M1–M5 done (`examples/lexer.res` and `examples/parser.res` each
-  parse their own source). M6 — the full compiler written in Resid — not started.
-- **Next**: handles (§12.1 task 5.7), spawn (§12.1 task 5.8), `resid-build` crate
-  (§12.1 task 5.10).
+  parse their own source). M6 — the full compiler written in Resid — not started;
+  prereq P1 (`filesystem.write_all`) done, P2 (`Result` + spawn) not started.
+- **Next**: M6 P2 (`Result(T, RegionError)` + spawn), handles (§12.1 task 5.7),
+  `resid-build` crate (§12.1 task 5.10).
 - Full status table in §11; self-hosting roadmap in §12.
 
 ---
@@ -1706,7 +1707,7 @@ Before calling compiler done:
 | 2. Knowledge Graph IR | Partial | `resid-ir`: implements spec §6 primitive numeric types, mixed-width widening, list/rangetype member types (41 tests). |
 | 3. Types, Behaviors | Partial | `resid-type`: 171 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, `@residual`, while, RT, built-in extern signatures, `Str + Str`, `check_program`, `ListToString` (List(Int/UInt/Float) → Str), Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors), assertion/debug expressions (`assert`/`rt_assert` cond must be Bool, message Str; `known`/`rt_known` pass-through), ranges (`Range(Elem)` from numeric bounds; for-in over a Range requires the declared type match the element type), if-let/while-let (`bind_pattern` against the source type; vars scoped to the then/body block), byte strings (`b"..."` → `Bytes`), f-string interpolation (each interpolated expr is inferred/validated; the f-string is `Str`), and `#location` → `SourceLoc` with `file`/`line`/`col` field access (unknown fields rejected), provider type checking (unknown providers rejected, unknown verbs rejected, arg count mismatches rejected, arg type mismatches rejected, method calls on value types rejected, provider calls allowed inside RT expressions). Numeric overload resolution (`IntToString`/`UIntToString`/`FloatToString`/`BoolToString`/`ToString`) and numeric widening at call sites. String introspection built-ins (`str_len`, `str_char_at`, `str_from_code`, `str_slice`) type-check; char literals infer as `Int(64)`. `Str == Str` / `Str != Str` → Bool (Str < Str rejected). The type checker — not the parser — rejects undefined variables (`check_program_undefined_var`). Shadowing rejected everywhere (spec §7): `Env::try_insert` errors on rebinding any name already in scope — same-block, nested-block, for-in loop vars, pattern binds, and duplicate params; sibling blocks still bind freely. Wide ToString built-ins type-check: `Int128ToString`/`UInt128ToString` for `Int(128)`/`UInt(128)`, `Int256ToString`/`UInt256ToString` for 256-bit, `Int512ToString`/`UInt512ToString` for 512-bit (smaller same-signed ints widen losslessly; non-numeric types rejected). Float(128) type-checks end-to-end: `f128()` conversion helper, `Float128ToString`, and Float(128) + Float(64) → Float(128) widening per spec §6.2. Literal overflow is a compile error (spec §6): `infer_expr_expected` rejects a literal that doesn't fit the expected numeric range (`Int(8) x = 300`, `2^256-1` into `Int(64)`), and `lit_type`/`literal_compatible` derive widths from the literal's magnitude string so >u128 literals infer Int(128)/Int(256)/Int(512). Dec(N) type system (spec v3.1 §6.6a): `Dec`/`Dec(N)` resolve to `NumericType::Dec(N)` (default 34); `1.5m`/`5m` literals infer Dec(34) and fit any Dec(N) target (literal narrowing rounds once); `Dec(N) op Dec(M) → Dec(max)`; Dec mixed with Int/UInt/Float is a hard error; bitwise/shift and `~` on Dec rejected; open-ended `dN` helpers accept Dec/Int/Str (Float rejected) and `iN`/`uN`/`fN` accept Dec args.
 | 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (129 tests) + `residc` (26 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime), `@residual Type y = expr`, assertions (`assert`/`rt_assert` → `resid_abort` on failure; `known`/`rt_known` static/runtime checks; `todo`/`unimplemented` trap), if-let/while-let (`pattern_match_test` compares the runtime tag via `resid_box_tag`; bindings scoped to the then/body block). Range `for-in` (`0..n` half-open, `0..=n` inclusive) lowers to a scalar i64 counter via `slt`/`sle`, with bounds widened/truncated to the declared width. Range/slice construction lower to `resid_range_new` / `resid_slice_new` (boxed, partial-open `..n`, `n..`, `..` resolve bounds via the list length). Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `Float128ToString` (quad, 36 sig digits), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. Float(128) (spec v3.1 widest binary float): `float_type(128)` → LLVM `fp128`; `fadd`/`fsub`/`fmul`/`fdiv`/`frem`, comparisons, casts and the `f128()` helper all lower; f-string interpolation of Float(128) goes through `Float128ToString` (not a lossy f64 widen); `Float128ToString` prints 36 significant digits with full exponent range via binary bignum (no libquadmath), verified end-to-end (2^100 exact, 2^200, 2^16383, 0.0001, 0.1 quad-exact). Also fixed: float-typed functions with no trailing return emitted `ret i1 false` (module verification failure) — now a proper fp32/64/128 zero; and an `if` whose then/else both return marks the enclosing block terminated with `unreachable` in the dead merge block. Wide 128-bit support: `Int(128)`/`UInt(128)` lower to LLVM `i128`; literals exceeding 64 bits build from their full decimal value via `const_int_from_string` (not `as u64`, which truncated), picking a holding width from magnitude when no target type is present; `Int128ToString`/`UInt128ToString` call runtime decimal printers (verified end-to-end: 2^64+1, −2^127, UInt(128) max, mul/comparison/cast). Wide 256/512-bit: `Int(256)`/`Int(512)` arithmetic/comparison/casts via LLVM arbitrary-width integers (`custom_width_int_type`); `Int256ToString`/`UInt256ToString`/`Int512ToString`/`UInt512ToString` decompose the value into little-endian u64 limbs (`lshr` + truncate) for the C-ABI runtime helpers. Wide literals beyond `u128` survive lexing (`IntKind` keeps digits as strings for every radix) and codegen builds constants from the raw digit string + radix at the full target width (verified end-to-end: 2^256−1 in `UInt(256)`, 2^255−1 in `Int(256)`, 2^128−1 in `UInt(512)`); small-target literal overflow is rejected by the type checker before codegen. Raw strings (`r"..."`) lower as `Str` globals; byte strings (`b"..."`) lower as constant global byte arrays (`Bytes`, no NUL terminator); `#location` boxes a `SourceLoc { file, line, col }` from the current span with field access via the boxed-slot runtime. F-string interpolation (spec §14) stringifies interpolated values (`Str` passthrough, `*ToString` helpers for numerics/bools, `ToString` for composites) and stitches them with `resid_str_concat`; pure-text f-strings fold to a constant. Runtime `Str + Str` with a non-constant operand concatenates via `resid_str_concat`. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. UTF-8-codepoint string helpers (`str_len`/`str_char_at`/`str_from_code`/`str_slice`) declared via the extern path and callable from Resid source (bootstrap lexer groundwork); char literals lower as `i64` codepoints rather than strings. `Str == Str` / `Str != Str` lower to `resid_str_eq` (strcmp-based) yielding a Bool; `filesystem.read_all(path)` reads a whole file into a `Str` (bootstrap lexer input). |
-| 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. Runtime helpers landed: conversion helpers, checked/wrapping/saturating arithmetic, ranges/slicing, raw strings, byte strings, `#location`, f-string interpolation, runtime `Str + Str` concat, Dec(N) exact decimal arithmetic/display/conversions. Still missing: handles, spawn, `resid-build` crate, full `resid-builtin` stdlib. |
+| 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. Runtime helpers landed: conversion helpers, checked/wrapping/saturating arithmetic, ranges/slicing, raw strings, byte strings, `#location`, f-string interpolation, runtime `Str + Str` concat, Dec(N) exact decimal arithmetic/display/conversions, `filesystem.write_all` (M6 P1). Still missing: handles, spawn, `resid-build` crate, full `resid-builtin` stdlib. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
 
 Build/test notes:
@@ -1943,8 +1944,35 @@ Updated from §10. **Checked = done, unchecked = missing.**
    Bool params as i8 (C ABI, matching extern decls) and narrow to i1 on entry,
    so calls passing Bool literals/vars verify.
 
-6. **M6 — Full compiler in Resid**: Type checking, codegen, LLVM backend.
-   Self-hosting achieved.
+6. **M6 — Full compiler in Resid**: type checking + codegen + LLVM backend
+   rewritten in Resid; the resulting compiler turns Resid source into a native
+   binary (self-hosting). ❌ Not started. Prereqs below block it.
+
+   **Prereqs (do first — a Resid compiler must write artifacts and run `clang`):**
+   - **P1 — `filesystem.write_all(path, contents)` provider verb** — compiler
+     must emit `.ll`/`.c` files to disk. ✅ Done — runtime `resid_fs_write_all`
+     in `resid_rt.c`, verb in `provider_verbs()` (resid-type) and
+     `lower_provider_call`/`declare_runtime` (resid-codegen). Proven by e2e
+     test `run_fs_write_all_roundtrip` (write → read_all round-trip).
+   - **P2 — `Result(T, RegionError)` + structured spawn (§19, task 5.8)** — the
+     compiler invokes `clang` and reports failure. Needs (a) `Result(T, E)`
+     tagged type (Ok/Err construction + `match`), (b) `spawn (caps) { body }`
+     typed `Result(T, RegionError)`, (c) codegen via pthread + captured-var
+     trampoline (free vars boxed/captured), (d) child failure → `Err(RegionError)`,
+     structured join. Parser + `ExprKind::Spawn` + `Type::RegionError` exist;
+     typing, codegen, runtime do not.
+
+   **M6 work items (after P1/P2, in order):**
+   1. Port type checker to Resid: literal inference, widening, casts, `if`,
+      bind env + shadowing rejection, conversion helpers, built-in sigs,
+      pattern typing, f-string validation, provider call typing.
+   2. Port codegen to Resid: emit LLVM IR text (types, functions, arithmetic,
+      casts, calls, if/while/for, boxed composites, `match`, strings, f-strings,
+      providers, main wrapper).
+   3. Driver in Resid: lex → parse → typecheck → codegen → `write_all` `.ll` →
+      spawn `clang` → binary.
+   4. Bootstrap proof: the Resid compiler compiles its own source; the stage-1
+      binary reproduces a working compiler (stage-2 check).
 
 ---
 
@@ -1968,4 +1996,4 @@ All resolved in Resid 3.0. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-18 — Float(256/512) cleanup (spec v3.1 caps at F128); current-snapshot header added; §12 self-hosting intro updated for M1–M5 done.*
+*Last updated: 2026-08-18 — M6 drafted in §12.7; M6 P1 `filesystem.write_all` done (480 tests); Float(256/512) cleanup; current-snapshot header added.*

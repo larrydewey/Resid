@@ -926,6 +926,17 @@ char* resid_fs_read_all(const char* path) {
     return p;
 }
 
+/* Write `contents` to `path`, truncating if it exists. Returns 1 on success,
+ * 0 on failure (M6 P1 — the self-hosted compiler emits `.ll` files). */
+int8_t resid_fs_write_all(const char* path, const char* contents) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    size_t n = fwrite(contents, 1, strlen(contents), f);
+    int ok = (n == strlen(contents)) && (fclose(f) == 0);
+    if (!ok) fclose(f);
+    return ok ? 1 : 0;
+}
+
 void* resid_fs_list_dir(const char* path) {
     /* Shell out to `ls` since POSIX globbing/readdir adds surface; the
      * runtime is allowed to use libc, so this is a pragmatic bootstrap. */
