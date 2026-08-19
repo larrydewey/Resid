@@ -2083,7 +2083,7 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
         return Some(candidate.clone());
     }
 
-    // For conversion helpers (i8..i512, u8..u512, f16..f512, isize, usize),
+    // For conversion helpers (i8..i512, u8..u512, f16..f128, isize, usize),
     // find the narrowest parameter type that the argument can be widened to.
     let first_char = func.chars().next();
     if let Some(fc) = first_char {
