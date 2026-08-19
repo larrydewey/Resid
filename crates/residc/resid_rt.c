@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <limits.h>
+#include <pthread.h>
 
 bool print(const char* s) {
     if (fputs(s, stdout) == EOF) return false;
@@ -191,6 +192,19 @@ void** resid_box_slots(void* b) { return ((ResidVal*)b)->slots; }
 
 /* The i-th slot of a boxed object. */
 void* resid_box_slot(void* b, int64_t i) { return ((ResidVal*)b)->slots[i]; }
+
+/* Structured spawn (spec §19): run `worker(captures)` on a fresh thread and
+ * join before returning the worker's result (a boxed `Ok(T)` for now; child
+ * failure -> `Err(RegionError)` is the future abort-catchable path). */
+void* resid_spawn(void* (*worker)(void*), void* captures) {
+    pthread_t t;
+    void* ret = NULL;
+    if (pthread_create(&t, NULL, worker, captures) != 0) return NULL;
+    pthread_join(t, &ret);
+    return ret;
+}
+
+void* resid_malloc(size_t size) { return malloc(size); }
 
 /* Length of a list = its slot count. */
 int64_t resid_list_len(void* b) { return ((ResidVal*)b)->count; }

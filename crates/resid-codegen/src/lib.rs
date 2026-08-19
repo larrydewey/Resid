@@ -21,7 +21,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use resid_ir::{BinOp, NumericType, numeric_result_type};
 use resid_lexer::token::Literal;
 use resid_lexer::token::Op as OpKind;
-use resid_parser::{Block, Declaration, Expr, ExprKind, Id, RangeExpr, StmtKind, TranslationUnit};
+use resid_parser::{Block, Declaration, Expr, ExprKind, Id, RangeExpr, Stmt, StmtKind, TranslationUnit};
 use resid_type::{FunctionSig, SemType, Types};
 
 /// A lowered value plus the semantic type the checker attributed to it.
@@ -72,6 +72,194 @@ impl<'ctx> Scope<'ctx> {
     }
 }
 
+/// Collect every identifier referenced in `expr` (used for spawn capture).
+fn collect_ids_expr(e: &Expr, out: &mut Vec<String>) {
+    use resid_parser::FStringPart;
+    match &e.kind {
+        ExprKind::Id(id) => out.push(id.0.clone()),
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            collect_ids_expr(lhs, out);
+            collect_ids_expr(rhs, out);
+        }
+        ExprKind::UnaryOp { operand, .. } => collect_ids_expr(operand, out),
+        ExprKind::Cast { operand, .. } => collect_ids_expr(operand, out),
+        ExprKind::Call { func, args } => {
+            collect_ids_expr(func, out);
+            for (_, a) in args {
+                collect_ids_expr(a, out);
+            }
+        }
+        ExprKind::Rt(inner)
+        | ExprKind::Known(inner)
+        | ExprKind::RtKnown(inner)
+        | ExprKind::ComptimePrint(inner)
+        | ExprKind::Discard(inner) => collect_ids_expr(inner, out),
+        ExprKind::AtResidual { inner, .. } => collect_ids_expr(inner, out),
+        ExprKind::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
+            collect_ids_expr(cond, out);
+            collect_ids_block(then_block, out);
+            if let Some(b) = else_block {
+                collect_ids_block(b, out);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            collect_ids_expr(cond, out);
+            collect_ids_block(body, out);
+        }
+        ExprKind::ForIn {
+            collection, body, ..
+        } => {
+            collect_ids_expr(collection, out);
+            collect_ids_block(body, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_ids_expr(scrutinee, out);
+            for (_, b) in arms {
+                collect_ids_expr(b, out);
+            }
+        }
+        ExprKind::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            if let Some(s) = init {
+                collect_ids_stmt(s, out);
+            }
+            collect_ids_expr(cond, out);
+            if let Some(s) = step {
+                collect_ids_stmt(s, out);
+            }
+            collect_ids_block(body, out);
+        }
+        ExprKind::Spawn { body, .. } => collect_ids_block(body, out),
+        ExprKind::Assert { cond, message } | ExprKind::RtAssert { cond, message } => {
+            collect_ids_expr(cond, out);
+            collect_ids_expr(message, out);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, f) in fields {
+                collect_ids_expr(f, out);
+            }
+        }
+        ExprKind::ListLit(elems) => {
+            for e in elems {
+                collect_ids_expr(e, out);
+            }
+        }
+        ExprKind::MapLit(pairs) => {
+            for (k, v) in pairs {
+                collect_ids_expr(k, out);
+                collect_ids_expr(v, out);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            collect_ids_expr(start, out);
+            collect_ids_expr(end, out);
+        }
+        ExprKind::FString(parts) => {
+            for p in parts {
+                if let FStringPart::Expr(e) = p {
+                    collect_ids_expr(e, out);
+                }
+            }
+        }
+        ExprKind::FieldAccess { target, .. } => collect_ids_expr(target, out),
+        ExprKind::Index { target, index } => {
+            collect_ids_expr(target, out);
+            collect_ids_expr(index, out);
+        }
+        ExprKind::Slice { target, range } => {
+            collect_ids_expr(target, out);
+            if let Some(s) = &range.start {
+                collect_ids_expr(s, out);
+            }
+            if let Some(e) = &range.end {
+                collect_ids_expr(e, out);
+            }
+        }
+        ExprKind::MethodCall {
+            target, args, ..
+        } => {
+            collect_ids_expr(target, out);
+            for a in args {
+                collect_ids_expr(a, out);
+            }
+        }
+        ExprKind::EarlyReturn(inner) => collect_ids_expr(inner, out),
+        ExprKind::ElseFallback { value, fallback } => {
+            collect_ids_expr(value, out);
+            collect_ids_block(fallback, out);
+        }
+        ExprKind::Destructure { source, .. } => collect_ids_expr(source, out),
+        ExprKind::IfLet {
+            source,
+            then_block,
+            else_block,
+            ..
+        } => {
+            collect_ids_expr(source, out);
+            collect_ids_block(then_block, out);
+            if let Some(b) = else_block {
+                collect_ids_block(b, out);
+            }
+        }
+        ExprKind::WhileLet { source, body, .. } => {
+            collect_ids_expr(source, out);
+            collect_ids_block(body, out);
+        }
+        ExprKind::With { bindings, body } => {
+            for b in bindings {
+                collect_ids_expr(&b.init, out);
+            }
+            collect_ids_block(body, out);
+        }
+        ExprKind::Using { value, .. } => collect_ids_expr(value, out),
+        ExprKind::ProviderCall { args, .. } => {
+            for a in args {
+                collect_ids_expr(a, out);
+            }
+        }
+        ExprKind::Literal(_)
+        | ExprKind::Location
+        | ExprKind::RawString(_)
+        | ExprKind::ByteString(_)
+        | ExprKind::Todo(_)
+        | ExprKind::Unimplemented(_) => {}
+    }
+}
+
+/// Collect identifiers referenced across a block's statements and tail expr.
+fn collect_ids_block(b: &Block, out: &mut Vec<String>) {
+    for s in &b.statements {
+        collect_ids_stmt(s, out);
+    }
+    if let Some(r) = &b.ret {
+        collect_ids_expr(r, out);
+    }
+}
+
+/// Collect identifiers referenced by a statement.
+fn collect_ids_stmt(s: &Stmt, out: &mut Vec<String>) {
+    match &s.kind {
+        StmtKind::Bind { value, .. } => collect_ids_expr(&**value, out),
+        StmtKind::Discard(e) => collect_ids_expr(&**e, out),
+        StmtKind::Destructure { source, .. } => collect_ids_expr(&**source, out),
+        StmtKind::Expr(e) => collect_ids_expr(&**e, out),
+        StmtKind::Return(e) => {
+            if let Some(e) = e {
+                collect_ids_expr(&**e, out);
+            }
+        }
+        StmtKind::Break | StmtKind::Continue => {}
+    }
+}
+
 /// The LLVM code generator.
 pub struct CodeGen<'ctx> {
     pub cx: &'ctx Context,
@@ -92,6 +280,11 @@ pub struct CodeGen<'ctx> {
     /// provide when it calls `int main(int, char**)` — so the user function is
     /// emitted as `resid_main` and a real `main` wrapper is synthesized.
     wrap_main: bool,
+    /// Monotonic counter for synthesized spawn worker functions.
+    spawn_ctr: u32,
+    /// True while lowering a spawn worker body: `return` boxes its value and
+    /// returns a pointer instead of returning from the enclosing user fn.
+    in_spawn_worker: bool,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -108,6 +301,8 @@ impl<'ctx> CodeGen<'ctx> {
             cur_ret: None,
             loops: Vec::new(),
             wrap_main: false,
+            spawn_ctr: 0,
+            in_spawn_worker: false,
         }
     }
 
@@ -525,9 +720,12 @@ impl<'ctx> CodeGen<'ctx> {
         sc: &mut Scope<'ctx>,
         block: &Block,
         capture_tail: bool,
-    ) -> Result<(bool, Option<Val<'ctx>>), String> {
+    ) -> Result<(bool, Option<Val<'ctx>>, Option<Val<'ctx>>), String> {
         let mut terminated = false;
         let mut tail: Option<Val<'ctx>> = None;
+        // When in a spawn worker, capture the explicit return value so the
+        // caller can wrap it in an Ok(sum) result.
+        let mut spawn_ret: Option<Val<'ctx>> = None;
         let last_is_tail =
             capture_tail && block.ret.is_none() && matches!(block.statements.last(), Some(s) if matches!(s.kind, StmtKind::Expr(_)));
         for (idx, stmt) in block.statements.iter().enumerate() {
@@ -587,15 +785,29 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                 }
                 StmtKind::Return(v) => {
-                    match v {
-                        Some(e) => {
-                            let raw = self.lower_expr(sc, e, None)?;
-                            let val = self
-                                .cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
-                            self.builder.build_return(Some(&val.v)).map_err(to_err)?;
+                    if self.in_spawn_worker {
+                        // Capture the return value so lower_spawn can wrap it in Ok.
+                        match v {
+                            Some(e) => {
+                                let raw = self.lower_expr(sc, e, None)?;
+                                spawn_ret = Some(raw);
+                            }
+                            None => {
+                                let null_ptr = self.cx.ptr_type(AddressSpace::default()).const_null();
+                                spawn_ret = Some(Val { v: null_ptr.into(), ty: SemType::Ptr });
+                            }
                         }
-                        None => {
-                            self.builder.build_return(None).map_err(to_err)?;
+                    } else {
+                        match v {
+                            Some(e) => {
+                                let raw = self.lower_expr(sc, e, None)?;
+                                let val = self
+                                    .cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
+                                self.builder.build_return(Some(&val.v)).map_err(to_err)?;
+                            }
+                            None => {
+                                self.builder.build_return(None).map_err(to_err)?;
+                            }
                         }
                     }
                     terminated = true;
@@ -627,12 +839,18 @@ impl<'ctx> CodeGen<'ctx> {
             // real early return: emit it and terminate the block. (The
             // function-body `ret` is additionally handled by `lower_function`,
             // which only runs when the block was not terminated.)
-            let raw = self.lower_expr(sc, ret, None)?;
-            let val = self.cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
-            self.builder.build_return(Some(&val.v)).map_err(to_err)?;
+            if self.in_spawn_worker {
+                // Capture the return value so lower_spawn can wrap it in Ok.
+                let raw = self.lower_expr(sc, ret, None)?;
+                spawn_ret = Some(raw);
+            } else {
+                let raw = self.lower_expr(sc, ret, None)?;
+                let val = self.cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
+                self.builder.build_return(Some(&val.v)).map_err(to_err)?;
+            }
             terminated = true;
         }
-        Ok((terminated, tail))
+        Ok((terminated, tail, spawn_ret))
     }
 
     /// Lower a top-level `if` expression: condition → then/else blocks joined
@@ -661,7 +879,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Then arm.
         self.builder.position_at_end(then_bb);
-        let (t_term, t_tail) = self.lower_block_with_tail(sc, then_block, true)?;
+        let (t_term, t_tail, _) = self.lower_block_with_tail(sc, then_block, true)?;
         let then_reaches = if t_term {
             None
         } else {
@@ -674,9 +892,9 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Else arm (or default-zero for the missing branch).
         self.builder.position_at_end(else_bb);
-        let (e_term, e_tail) = match else_block {
+        let (e_term, e_tail, _) = match else_block {
             Some(b) => self.lower_block_with_tail(sc, b, true)?,
-            None => (false, None),
+            None => (false, None, None),
         };
         let else_reaches = if e_term {
             None
@@ -760,7 +978,7 @@ impl<'ctx> CodeGen<'ctx> {
         // Body.
         self.builder.position_at_end(body_bb);
         self.loops.push((cond_bb, exit_bb));
-        let (terminated, _) = self.lower_block_with_tail(sc, body, false)?;
+        let (terminated, _, _) = self.lower_block_with_tail(sc, body, false)?;
         self.loops.pop();
         if !terminated {
             self.builder
@@ -830,7 +1048,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder.position_at_end(then_bb);
         self.bind_pattern_vars(sc, pattern, sv.v, &sv.ty)?;
-        let (t_term, _) = self.lower_block_with_tail(sc, then_block, false)?;
+        let (t_term, _, _) = self.lower_block_with_tail(sc, then_block, false)?;
         if !t_term {
             self.builder
                 .build_unconditional_branch(merge_bb)
@@ -840,7 +1058,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(else_bb);
         match else_block {
             Some(b) => {
-                let (e_term, _) = self.lower_block_with_tail(sc, b, false)?;
+                let (e_term, _, _) = self.lower_block_with_tail(sc, b, false)?;
                 if !e_term {
                     self.builder
                         .build_unconditional_branch(merge_bb)
@@ -889,7 +1107,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(body_bb);
         self.bind_pattern_vars(sc, pattern, sv.v, &sv.ty)?;
         self.loops.push((cond_bb, exit_bb));
-        let (terminated, _) = self.lower_block_with_tail(sc, body, false)?;
+        let (terminated, _, _) = self.lower_block_with_tail(sc, body, false)?;
         self.loops.pop();
         if !terminated {
             self.builder
@@ -1022,7 +1240,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Fallback branch: lower the block and capture its tail.
         self.builder.position_at_end(fallback_bb);
-        let (f_terms, f_tail) = self.lower_block_with_tail(sc, fallback, true)?;
+        let (f_terms, f_tail, _) = self.lower_block_with_tail(sc, fallback, true)?;
 
         // If the fallback did not terminate, route it to the merge block.
         if !f_terms {
@@ -1175,7 +1393,7 @@ impl<'ctx> CodeGen<'ctx> {
         // ── Body ───────────────────────────────────────────────────
         self.builder.position_at_end(body_bb);
         self.loops.push((inc_bb, exit_bb));
-        let (terminated, _) = self.lower_block_with_tail(sc, body, false)?;
+        let (terminated, _, _) = self.lower_block_with_tail(sc, body, false)?;
         if !terminated {
             self.builder
                 .build_unconditional_branch(inc_bb)
@@ -1307,7 +1525,7 @@ impl<'ctx> CodeGen<'ctx> {
         sc.vars.insert(name.0.clone(), (ptr, elem_ty.clone()));
 
         self.loops.push((inc_bb, exit_bb));
-        let (terminated, _) = self.lower_block_with_tail(sc, body, false)?;
+        let (terminated, _, _) = self.lower_block_with_tail(sc, body, false)?;
         if !terminated {
             self.builder
                 .build_unconditional_branch(inc_bb)
@@ -1451,6 +1669,8 @@ impl<'ctx> CodeGen<'ctx> {
                 verb,
                 args,
             } => self.lower_provider_call(sc, provider, verb, args),
+
+            ExprKind::Spawn { body, .. } => self.lower_spawn(sc, e, body),
 
             ExprKind::RawString(s) => {
                 let ptr = self.lower_str(s);
@@ -2180,6 +2400,53 @@ impl<'ctx> CodeGen<'ctx> {
                 };
                 v.map_err(to_err)?.into()
             }
+            // Sum types with same name but different inner widths (e.g. Result(Int(128),E) → Result(Int(64),E)).
+            // Read tag + payload, cast the payload, rebuild the target sum.
+            (BasicValueEnum::PointerValue(ptr), BasicTypeEnum::PointerType(_))
+                if matches!(&raw.ty, SemType::Sum { .. }) && matches!(to, SemType::Sum { .. }) =>
+            {
+                let SemType::Sum { variants: from_variants, .. } = &raw.ty else {
+                    unreachable!()
+                };
+                let SemType::Sum { variants: to_variants, .. } = to else {
+                    unreachable!()
+                };
+                if from_variants.len() != to_variants.len() {
+                    return Err(format!("codegen: cannot cast {} to {to} (variant count mismatch)", raw.ty));
+                }
+                // Same variant order — cast the payload of the matching variant.
+                for (fi, (fname, fty)) in from_variants.iter().enumerate() {
+                    if fi < to_variants.len() {
+                        let (tname, tty) = &to_variants[fi];
+                        if fname == tname {
+                            // Same variant name — check if inner types differ.
+                            match (fty, tty) {
+                                (Some(f), Some(t)) if f != t => {
+                                    // Payload differs — extract, cast, box, rebuild.
+                                    let slot = self.rt_call("resid_box_slot", vec![ptr.into(), self.cx.i64_type().const_int(0, false).into()])?;
+                                    let payload = self.extract_payload(slot, f)?;
+                                    let casted = self.cast_val(payload, t)?;
+                                    let boxed = self.box_scalar(casted)?;
+                                    let ok = self.build_constructor(fi as i64, to, vec![boxed])?;
+                                    return Ok(ok);
+                                }
+                                (Some(_), Some(_)) => {
+                                    // Inner types same — just rebuild with target sum type.
+                                    let ok = self.build_constructor(fi as i64, to, vec![ptr.into()])?;
+                                    return Ok(ok);
+                                }
+                                (None, None) => {
+                                    // Unit variant — rebuild.
+                                    let ok = self.build_constructor(fi as i64, to, Vec::new())?;
+                                    return Ok(ok);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                return Err(format!("codegen: cannot cast {} to {to}", raw.ty));
+            }
             _ => return Err(format!("codegen: cannot cast {} to {to}", raw.ty)),
         };
         Ok(Val { v, ty: to.clone() })
@@ -2535,6 +2802,156 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    /// Lower `spawn (caps) { body }` (spec §19): compile the body as a worker
+    /// function that receives the captured outer-scope values boxed in a
+    /// `ResidVal` (tag 0), run it on a fresh pthread via `resid_spawn`, and
+    /// join before yielding `Result(T, RegionError)` — always `Ok(T)` for now
+    /// (child failure → `Err(RegionError)` is the future abort-catchable path).
+    fn lower_spawn(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        e: &Expr,
+        body: &Block,
+    ) -> Result<Val<'ctx>, String> {
+        let result_ty = resid_type::infer_expr_ctx(e, &self.env(sc), &self.sigs, &self.types)
+            .map_err(|er| format!("codegen: spawn: {er}"))?;
+        // Extract the body return type T from Result(T, RegionError).
+        let body_ty = match &result_ty {
+            SemType::Sum { variants, .. } => variants[0].1.clone().ok_or("spawn Ok variant has no type")?,
+            other => return Err(format!("codegen: spawn body type is not a Sum, found {other}")),
+        };
+        // Capture every outer-scope binding the body references, by value.
+        // Resid forbids shadowing, so a body-local binding can never collide
+        // with an outer name: filtering by `sc.vars` is exact.
+        let mut ids = Vec::new();
+        collect_ids_block(body, &mut ids);
+        let mut captures: Vec<(String, SemType)> = Vec::new();
+        for id in ids {
+            if captures.iter().any(|(n, _)| *n == id) {
+                continue;
+            }
+            if let Some((_, ty)) = sc.vars.get(&id) {
+                captures.push((id, ty.clone()));
+            }
+        }
+
+        self.spawn_ctr += 1;
+        let fname = format!("spawn_worker_{}", self.spawn_ctr);
+        let ptrt = self.cx.ptr_type(AddressSpace::default());
+        let fty = ptrt.fn_type(&[ptrt.into()], false);
+        let worker = self.module.add_function(&fname, fty, None);
+        let save_fn = self.cur_fn;
+        let save_bb = self.builder.get_insert_block();
+        let save_ret = self.cur_ret.take();
+        let save_spawn = self.in_spawn_worker;
+
+        self.cur_fn = Some(worker);
+        self.in_spawn_worker = true;
+        let entry = self.cx.append_basic_block(worker, "entry");
+        self.builder.position_at_end(entry);
+        let captures_arg = worker.get_first_param().unwrap().into_pointer_value();
+        let mut wsc = Scope::new();
+        for (i, (name, ty)) in captures.iter().enumerate() {
+            let idx = self.cx.i64_type().const_int(i as u64, false);
+            let v = self.load_capture(captures_arg.into(), idx, ty)?;
+            let ll = self.llvm_type(ty)?;
+            let ptr = self.builder.build_alloca(ll, name).map_err(to_err)?;
+            self.builder.build_store(ptr, v.v).map_err(to_err)?;
+            wsc.vars.insert(name.clone(), (ptr, ty.clone()));
+        }
+        let (_, tail, spawn_ret) = self.lower_block_with_tail(&mut wsc, body, true)?;
+        // Determine the value to return: explicit `return` wins over tail expr.
+        let ret_val = spawn_ret.or(tail);
+        if let Some(v) = ret_val {
+            // If the body's inferred type differs from the expected type
+            // (e.g. Int(128) inferred from literal 7 but the caller expects
+            // Int(64)), cast before boxing and wrapping in Ok.
+            let v = if v.ty != body_ty {
+                self.cast_val(v, &body_ty)?
+            } else {
+                v
+            };
+            // Worker returns the Result's Ok variant (tag 0) containing the
+            // body's value. The payload must be a boxed value (pointer), so
+            // box the scalar first.
+            let boxed_payload = self.box_scalar(v)?;
+            let region_error = SemType::Struct {
+                name: "RegionError".into(),
+                fields: vec![("message".into(), SemType::Str)],
+            };
+            let result_sum = SemType::Sum {
+                name: "Result".into(),
+                variants: vec![("Ok".into(), Some(body_ty.clone())), ("Err".into(), Some(region_error))],
+            };
+            let ok = self.build_constructor(0, &result_sum, vec![boxed_payload])?;
+            self.builder.build_return(Some(&ok.v)).map_err(to_err)?;
+        } else if self
+            .builder
+            .get_insert_block()
+            .map_or(true, |bb| bb.get_terminator().is_none())
+        {
+            // Empty body -> Ok unit? For now null (parent will get null = Err path?).
+            // But Result(T, E) requires a value. This shouldn't happen for valid code.
+            self.builder
+                .build_return(Some(&ptrt.const_null()))
+                .map_err(to_err)?;
+        }
+
+        self.cur_fn = save_fn;
+        self.in_spawn_worker = save_spawn;
+        self.cur_ret = save_ret;
+        if let Some(bb) = save_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        // Build the capture box (tag 0) in the parent.
+        let cap_box = if captures.is_empty() {
+            ptrt.const_null().as_basic_value_enum()
+        } else {
+            let arr_ty = ptrt.array_type(captures.len() as u32);
+            // sizeof(ptr) * captures.len() — each slot is a ptr (8 bytes on 64-bit).
+            let ptr_bytes: u64 = 8;
+            let malloc_size = self
+                .cx
+                .i64_type()
+                .const_int((captures.len() as u64) * ptr_bytes, false);
+            let heap_caps = self
+                .rt_call("resid_malloc", vec![malloc_size.into()])?
+                .into_pointer_value();
+            for (i, (_, ty)) in captures.iter().enumerate() {
+                let g = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(
+                            arr_ty,
+                            heap_caps,
+                            &[
+                                self.cx.i32_type().const_int(0, false),
+                                self.cx.i32_type().const_int(i as u64, false),
+                            ],
+                            "cap",
+                        )
+                        .map_err(to_err)?
+                };
+                let (ptr, _) = sc.vars.get(&captures[i].0).unwrap();
+                let raw = self
+                    .builder
+                    .build_load(self.llvm_type(ty)?, *ptr, &captures[i].0)
+                    .map_err(to_err)?;
+                let boxed = self.box_scalar(Val {
+                    v: raw,
+                    ty: ty.clone(),
+                })?;
+                self.builder.build_store(g, boxed).map_err(to_err)?;
+            }
+            heap_caps.as_basic_value_enum()
+        };
+        let v = self.rt_call(
+            "resid_spawn",
+            vec![worker.as_global_value().as_pointer_value().into(), cap_box],
+        )?;
+        Ok(Val { v, ty: result_ty })
+    }
+
     /// Prepare a lowered value as a C-ABI runtime argument: Str/Bytes/list/
     /// struct pointers pass through; Bool widens to i8.
     fn as_rt_arg(&mut self, v: Val<'ctx>) -> Result<BasicMetadataValueEnum<'ctx>, String> {
@@ -2575,6 +2992,9 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_box_new", vec![i64t.into(), i64t.into(), ptr.into(), ptr.into()], ptr.into());
         self.decl_rt("resid_box_tag", vec![ptr.into()], i64t.into());
         self.decl_rt("resid_box_slot", vec![ptr.into(), i64t.into()], ptr.into());
+        // Structured spawn (spec §19): pthread create + join of a worker.
+        self.decl_rt("resid_spawn", vec![ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_malloc", vec![i64t.into()], ptr.into());
         self.decl_rt("resid_box_i64", vec![i64t.into()], ptr.into());
         self.decl_rt("resid_box_f64", vec![f64t.into()], ptr.into());
         self.decl_rt("resid_box_bool", vec![i8t.into()], ptr.into());
@@ -3080,6 +3500,100 @@ impl<'ctx> CodeGen<'ctx> {
             }
             // Str and nested composites are already pointers.
             _ => Ok(v.v),
+        }
+    }
+
+    /// Load a captured value from a raw pointer array (spawn worker captures).
+    /// The array contains boxed values; each element is a ResidVal*.
+    fn load_capture(
+        &mut self,
+        arr: BasicValueEnum<'ctx>,
+        idx: IntValue<'ctx>,
+        fty: &SemType,
+    ) -> Result<Val<'ctx>, String> {
+        let ptr = arr.into_pointer_value();
+        // The captures array is a raw void** allocated by resid_malloc.
+        // Each slot holds a ResidVal* (pointer to boxed value).
+        // Use byte-offset GEP on the raw ptr.
+        let ptrsize = self.cx.i64_type().const_int(8, false);
+        let byte_off = self
+            .builder
+            .build_int_mul(idx, ptrsize, "byte_off")
+            .map_err(to_err)?;
+        let g = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    self.cx.i8_type(),
+                    ptr,
+                    &[byte_off],
+                    "cap",
+                )
+                .map_err(to_err)?
+        };
+        let loaded = self.builder.build_load(self.cx.ptr_type(AddressSpace::default()), g, "cap_val").map_err(to_err)?;
+        match fty {
+            SemType::Numeric(n) if !n.is_float() => {
+                let raw = self.rt_call("resid_unbox_i64", vec![loaded])?;
+                Ok(Val {
+                    v: raw,
+                    ty: SemType::Numeric(NumericType::Int(
+                        resid_ir::IntWidth::from_bits(64).unwrap(),
+                    )),
+                })
+            }
+            SemType::Numeric(_) => {
+                let raw = self.rt_call("resid_unbox_f64", vec![loaded])?;
+                Ok(Val {
+                    v: raw,
+                    ty: SemType::Numeric(NumericType::Float(resid_ir::FloatWidth::F64)),
+                })
+            }
+            SemType::Bool => {
+                let raw = self.rt_call("resid_unbox_bool", vec![loaded])?;
+                Ok(Val {
+                    v: raw.into_int_value().into(),
+                    ty: SemType::Bool,
+                })
+            }
+            _ => Ok(Val {
+                v: loaded,
+                ty: fty.clone(),
+            }),
+        }
+    }
+
+    /// Extract a payload value from a box slot pointer (result of `resid_box_slot`).
+    /// Used by sum-type casting to read the variant payload before casting.
+    fn extract_payload(&mut self, slot: BasicValueEnum<'ctx>, fty: &SemType) -> Result<Val<'ctx>, String> {
+        match fty {
+            SemType::Numeric(n) if !n.is_float() => {
+                let raw = self.rt_call("resid_unbox_i64", vec![slot])?;
+                Ok(Val {
+                    v: raw,
+                    ty: SemType::Numeric(NumericType::Int(
+                        resid_ir::IntWidth::from_bits(64).unwrap(),
+                    )),
+                })
+            }
+            SemType::Numeric(_) => {
+                let raw = self.rt_call("resid_unbox_f64", vec![slot])?;
+                Ok(Val {
+                    v: raw,
+                    ty: SemType::Numeric(NumericType::Float(resid_ir::FloatWidth::F64)),
+                })
+            }
+            SemType::Bool => {
+                let raw = self.rt_call("resid_unbox_bool", vec![slot])?;
+                Ok(Val {
+                    v: raw.into_int_value().into(),
+                    ty: SemType::Bool,
+                })
+            }
+            // Pointer types (Str, List, Struct, Sum) — slot is already the pointer.
+            _ => Ok(Val {
+                v: slot,
+                ty: fty.clone(),
+            }),
         }
     }
 
