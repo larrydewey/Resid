@@ -986,3 +986,611 @@ char* resid_git_branch(void) {
     if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
     return resid_box_str(line);
 }
+
+/*
+ * ─────────────────────────────────────────────────────────────
+ * Dec(N) exact-decimal runtime (spec §6.6a).
+ *
+ * A resid_dec holds
+ *
+ *     value = sign * int(digits) * 10^exp
+ *
+ * where digits is an array of EXACTLY nd significant decimal digits
+ * (big-endian: digits[0] = most significant, digits[0] != '0' unless
+ * the value is zero). nd is the precision N of the value; every
+ * Dec(N) value has nd == N, so narrowing happens on store (round half
+ * away from zero, spec §6.6a). Zero is sign = 0, digits all '0',
+ * exp = 0. There is no NaN and no Inf; division by zero and exponent
+ * overflow are errors (resid_abort).
+ *
+ * Display is fixed notation with all N significant digits; trailing
+ * zeros are preserved. NOTE: the v3.1 spec's example `Dec(4) 1.5 ->
+ * "1.5000"` shows five digits; under the "exactly N significant
+ * digits" definition (which the rounding semantics force) this prints
+ * as "1.500". The example appears to have an extra zero.
+ */
+#define RESID_DEC_MAX_DIGITS 512
+#define RESID_DEC_WORK_DIGITS 2048
+#define RESID_DEC_MAX_EXP 1000000
+
+typedef struct {
+    int8_t sign;                                  /* -1, 0, +1 */
+    uint16_t nd;                                  /* precision N */
+    uint8_t digits[RESID_DEC_MAX_DIGITS];         /* '0'..'9', big-endian */
+    int32_t exp;                                  /* -MAX_EXP..MAX_EXP */
+} resid_dec;
+
+/* Little-endian scratch buffer: value = sum d[i] * 10^(exp+i). */
+typedef struct {
+    int32_t d[RESID_DEC_WORK_DIGITS];
+    int32_t n;
+    int32_t exp;
+    int8_t sign;
+} dec_work;
+
+static void dec_zero(int32_t prec, resid_dec* out) {
+    out->sign = 0;
+    out->nd = (uint16_t)prec;
+    memset(out->digits, '0', (size_t)prec);
+    out->exp = 0;
+}
+
+static void dec_load(const resid_dec* v, dec_work* w) {
+    memset(w, 0, sizeof(*w));
+    w->sign = v->sign;
+    w->n = v->nd;
+    w->exp = v->exp;
+    for (int32_t i = 0; i < v->nd; i++) w->d[v->nd - 1 - i] = v->digits[i] - '0';
+}
+
+/* Drop most-significant (leading, in little-endian terms) zeros. */
+static void work_strip_msd(dec_work* w) {
+    while (w->n > 1 && w->d[w->n - 1] == 0) w->n--;
+}
+
+/* Distribute decimal carries after digit-wise summation. */
+static void work_carry(dec_work* w) {
+    int32_t c = 0;
+    for (int32_t i = 0; i < w->n; i++) {
+        int32_t v = w->d[i] + c;
+        w->d[i] = v % 10;
+        c = v / 10;
+    }
+    while (c > 0) {
+        if (w->n >= RESID_DEC_WORK_DIGITS) resid_abort("dec: overflow");
+        w->d[w->n++] = c % 10;
+        c /= 10;
+    }
+}
+
+/* Round the little-endian value to `prec` significant digits (half away
+ * from zero, spec §6.6a) and store big-endian into out with nd == prec. */
+static void work_store(dec_work* w, int32_t prec, resid_dec* out) {
+    work_strip_msd(w);
+    if (w->sign == 0 || (w->n == 1 && w->d[0] == 0)) {
+        dec_zero(prec, out);
+        return;
+    }
+    int32_t exp = w->exp;
+    int32_t n = w->n;
+    if (n <= prec) {
+        /* Exact: shift digits up to the top and drop exp so the stored
+         * precision is exactly `prec` significant digits. Little-endian:
+         * the MSD lives at index n-1 and must land at index prec-1. */
+        int32_t gap = prec - n;
+        for (int32_t i = n - 1; i >= 0; i--) w->d[i + gap] = w->d[i];
+        for (int32_t i = 0; i < gap; i++) w->d[i] = 0;
+        exp -= gap;
+        n = prec;
+    } else {
+        int32_t base = exp + (n - prec); /* exponent of the kept integer */
+        int32_t carry = 0;
+        if (w->d[n - prec - 1] >= 5) {
+            carry = 1;
+            for (int32_t k = n - prec; k < n && carry; k++) {
+                w->d[k] += 1;
+                if (w->d[k] == 10) w->d[k] = 0;
+                else carry = 0;
+            }
+            if (carry) {
+                /* 99..9 -> 100..0: becomes 10^prec, so "1" + zeros, exp+1. */
+                w->d[n - 1] = 1;
+                for (int32_t k = n - prec; k < n - 1; k++) w->d[k] = 0;
+                base += 1;
+            }
+        }
+        for (int32_t k = 0; k < prec; k++) w->d[k] = w->d[n - prec + k];
+        exp = base;
+        n = prec;
+    }
+    if (exp > RESID_DEC_MAX_EXP || exp < -RESID_DEC_MAX_EXP)
+        resid_abort("dec: exponent out of range");
+    out->sign = w->sign;
+    out->nd = (uint16_t)prec;
+    out->exp = exp;
+    for (int32_t k = 0; k < prec; k++) out->digits[k] = (uint8_t)('0' + w->d[prec - 1 - k]);
+}
+
+static int work_abs_cmp(const dec_work* x, const dec_work* y) {
+    int64_t hx = (int64_t)x->exp + x->n;
+    int64_t hy = (int64_t)y->exp + y->n;
+    if (hx != hy) return hx > hy ? 1 : -1;
+    for (int64_t p = hx - 1; p >= (int64_t)(x->exp < y->exp ? x->exp : y->exp); p--) {
+        int32_t a = (p >= x->exp && p < x->exp + x->n) ? x->d[p - x->exp] : 0;
+        int32_t b = (p >= y->exp && p < y->exp + y->n) ? y->d[p - y->exp] : 0;
+        if (a != b) return a > b ? 1 : -1;
+    }
+    return 0;
+}
+
+/* |x| + |y|, rounded to `prec` significant digits. An operand is
+ * negligible (skipped) when all its digits end strictly below the guard
+ * digit of the prec-digit result, so huge exponent gaps can't overflow
+ * the work buffer. */
+static void work_add_mag(const dec_work* x, const dec_work* y, int32_t prec, resid_dec* out) {
+    dec_work w;
+    memset(&w, 0, sizeof(w));
+    w.sign = x->sign;
+    int32_t mx = x->exp + x->n;
+    int32_t my = y->exp + y->n;
+    int32_t maxmsd = (mx > my ? mx : my) - 1;
+    int use_x = mx > maxmsd - prec;
+    int use_y = my > maxmsd - prec;
+    int32_t rexp = x->exp;
+    if (use_y && y->exp < rexp) rexp = y->exp;
+    w.exp = rexp;
+    int32_t hi = 0;
+    if (use_x) {
+        for (int32_t i = 0; i < x->n; i++) {
+            int32_t idx = x->exp + i - rexp;
+            if (idx < 0 || idx >= RESID_DEC_WORK_DIGITS) resid_abort("dec: exponent overflow");
+            w.d[idx] += x->d[i];
+            if (x->exp + i + 1 - rexp > hi) hi = x->exp + i + 1 - rexp;
+        }
+    }
+    if (use_y) {
+        for (int32_t i = 0; i < y->n; i++) {
+            int32_t idx = y->exp + i - rexp;
+            if (idx < 0 || idx >= RESID_DEC_WORK_DIGITS) resid_abort("dec: exponent overflow");
+            w.d[idx] += y->d[i];
+            if (y->exp + i + 1 - rexp > hi) hi = y->exp + i + 1 - rexp;
+        }
+    }
+    w.n = hi;
+    work_carry(&w);
+    work_store(&w, prec, out);
+}
+
+/* |x| - |y| (requires |x| >= |y|), rounded to `prec` digits. */
+static void work_sub_mag(const dec_work* x, const dec_work* y, int32_t prec, resid_dec* out) {
+    dec_work w;
+    memset(&w, 0, sizeof(w));
+    w.sign = x->sign;
+    int32_t rexp = x->exp < y->exp ? x->exp : y->exp;
+    w.exp = rexp;
+    int32_t hi = 0;
+    for (int32_t i = 0; i < x->n; i++) {
+        int32_t idx = x->exp + i - rexp;
+        if (idx < 0 || idx >= RESID_DEC_WORK_DIGITS) resid_abort("dec: exponent overflow");
+        w.d[idx] += x->d[i];
+        if (x->exp + i + 1 - rexp > hi) hi = x->exp + i + 1 - rexp;
+    }
+    for (int32_t i = 0; i < y->n; i++) {
+        int32_t idx = y->exp + i - rexp;
+        if (idx < 0 || idx >= RESID_DEC_WORK_DIGITS) resid_abort("dec: exponent overflow");
+        w.d[idx] -= y->d[i];
+    }
+    w.n = hi;
+    for (int32_t i = 0; i < w.n - 1; i++) {
+        while (w.d[i] < 0) {
+            w.d[i] += 10;
+            w.d[i + 1]--;
+        }
+    }
+    work_store(&w, prec, out);
+}
+
+/* |x| * |y|, rounded to `prec` digits. */
+static void work_mul_mag(const dec_work* x, const dec_work* y, int32_t prec, resid_dec* out) {
+    dec_work w;
+    memset(&w, 0, sizeof(w));
+    w.sign = x->sign;
+    w.exp = x->exp + y->exp;
+    for (int32_t i = 0; i < x->n; i++) {
+        if (x->d[i] == 0) continue;
+        for (int32_t j = 0; j < y->n; j++) {
+            int32_t idx = i + j;
+            if (idx >= RESID_DEC_WORK_DIGITS) resid_abort("dec: overflow");
+            w.d[idx] += x->d[i] * y->d[j];
+        }
+    }
+    w.n = x->n + y->n;
+    work_carry(&w);
+    work_store(&w, prec, out);
+}
+
+/* ── Big-endian big-int helpers for division ───────────────────── */
+static int big_cmp(const uint8_t* a, int32_t an, const uint8_t* b, int32_t bn) {
+    if (an != bn) return an > bn ? 1 : -1;
+    for (int32_t i = 0; i < an; i++) {
+        if (a[i] != b[i]) return a[i] > b[i] ? 1 : -1;
+    }
+    return 0;
+}
+
+/* In-place a -= b (big-endian, 0-9 digits); requires a >= b. Returns the
+ * compacted digit count (leading zeros shifted away, so the returned digits
+ * are exactly the significant ones starting at a[0]). */
+static int32_t big_sub(uint8_t* a, int32_t an, const uint8_t* b, int32_t bn) {
+    int32_t borrow = 0;
+    for (int32_t i = 0; i < bn; i++) {
+        int32_t v = a[an - 1 - i] - borrow - b[bn - 1 - i];
+        if (v < 0) { v += 10; borrow = 1; } else { borrow = 0; }
+        a[an - 1 - i] = (uint8_t)v;
+    }
+    for (int32_t i = bn; i < an && borrow; i++) {
+        int32_t v = a[an - 1 - i] - 1;
+        if (v < 0) { v += 10; borrow = 1; } else { borrow = 0; }
+        a[an - 1 - i] = (uint8_t)v;
+    }
+    int32_t s = 0;
+    while (s < an - 1 && a[s] == 0) s++;
+    if (s > 0) {
+        for (int32_t i = 0; i < an - s; i++) a[i] = a[i + s];
+    }
+    return an - s;
+}
+
+/* Integer quotient q = A / D (big-endian, D != 0, MSD of D nonzero).
+ * q holds `an` digits; the significant quotient digits are q[0..qn).
+ * Schoolbook long division: the remainder r stays < D after each step, so
+ * each quotient digit is at most 9. */
+static void big_div(const uint8_t* A, int32_t an, const uint8_t* D, int32_t dn, uint8_t* q) {
+    uint8_t r[RESID_DEC_WORK_DIGITS];
+    memset(r, 0, sizeof(r));
+    int32_t rn = 0;
+    for (int32_t i = 0; i < an; i++) {
+        /* r = r*10 + A[i] (append the digit at the low end). */
+        r[rn] = A[i];
+        rn++;
+        int32_t s = 0;
+        while (s < rn - 1 && r[s] == 0) s++;
+        if (s > 0) {
+            for (int32_t j = 0; j < rn - s; j++) r[j] = r[j + s];
+            rn -= s;
+        }
+        int32_t d = 0;
+        while (d < 9 && big_cmp(r, rn, D, dn) >= 0) {
+            rn = big_sub(r, rn, D, dn);
+            d++;
+        }
+        q[i] = (uint8_t)d;
+    }
+}
+
+/* value = int(a->digits) / int(b->digits) with the i32 exponents folded in,
+ * computed to prec+2 guard digits then rounded once (spec §6.6a).
+ *
+ * All Dec values cross the LLVM boundary as pointers (an out-ptr for the
+ * result, const ptrs for operands) so the aggregate ABI stays exactly in
+ * sync between clang and the LLVM IR backend — clang and LLVM disagree on
+ * by-value passing for this 520-byte struct. */
+void resid_dec_div(resid_dec* out, const resid_dec* a, const resid_dec* b) {
+    int32_t prec = a->nd > b->nd ? a->nd : b->nd;
+    if (b->sign == 0) resid_abort("dec: division by zero");
+    if (a->sign == 0) { dec_zero(prec, out); return; }
+    int32_t nn = a->nd, dn = b->nd;
+    uint8_t num[RESID_DEC_WORK_DIGITS], den[RESID_DEC_WORK_DIGITS];
+    for (int32_t i = 0; i < nn; i++) num[i] = a->digits[i] - '0';
+    for (int32_t i = 0; i < dn; i++) den[i] = b->digits[i] - '0';
+    int32_t e = a->exp - b->exp;
+    /* strip leading zeros (digit count must match int(num)) */
+    while (nn > 1 && num[0] == 0) {
+        for (int32_t i = 0; i < nn - 1; i++) num[i] = num[i + 1];
+        nn--;
+    }
+    while (dn > 1 && den[0] == 0) {
+        for (int32_t i = 0; i < dn - 1; i++) den[i] = den[i + 1];
+        dn--;
+    }
+    /* strip trailing (least-significant) zeros so digit counts are exact */
+    while (nn > 1 && num[nn - 1] == 0) { nn--; e++; }
+    while (dn > 1 && den[dn - 1] == 0) { dn--; e--; }
+    /* P = floor(log10(value)); compare num vs den padded to nn digits. */
+    int32_t cmp = 0;
+    if (nn < dn) {
+        cmp = -1;
+    } else {
+        int32_t pad = nn - dn;
+        for (int32_t i = 0; i < nn && cmp == 0; i++) {
+            uint8_t na = num[i];
+            uint8_t nb = (i < pad) ? 0 : den[i - pad];
+            cmp = na > nb ? 1 : (na < nb ? -1 : 0);
+        }
+    }
+    int32_t P = (cmp >= 0) ? (e + nn - dn) : (e + nn - dn - 1);
+    int32_t K = prec + 2;
+    int32_t exp_div = P - K + 1;
+    int32_t shift = e + K - 1 - P;
+    int32_t an;
+    uint8_t anum[RESID_DEC_WORK_DIGITS];
+    if (shift >= 0) {
+        an = nn + shift;
+        if (an > RESID_DEC_WORK_DIGITS) resid_abort("dec: exponent overflow");
+        for (int32_t i = 0; i < nn; i++) anum[i] = num[i];
+        for (int32_t i = nn; i < an; i++) anum[i] = 0;
+    } else {
+        an = nn + shift;
+        if (an < 1) resid_abort("dec: internal");
+        for (int32_t i = 0; i < an; i++) anum[i] = num[i];
+    }
+    uint8_t q[RESID_DEC_WORK_DIGITS];
+    big_div(anum, an, den, dn, q);
+    int32_t qn = an;
+    int32_t s = 0;
+    while (s < qn - 1 && q[s] == 0) s++;
+    qn -= s;
+    if (qn < K) resid_abort("dec: internal");
+    if (qn > K) exp_div += qn - K; /* drop low (qn-K) digits: exp rises */
+    dec_work w;
+    memset(&w, 0, sizeof(w));
+    w.sign = (a->sign == b->sign) ? 1 : -1;
+    w.n = K;
+    w.exp = exp_div;
+    for (int32_t i = 0; i < K; i++) w.d[K - 1 - i] = q[s + i];
+    work_store(&w, prec, out);
+}
+
+/* sign * int(digits) * 10^exp (digits verbatim, as from an `m` literal),
+ * rounded to `prec` significant digits. */
+void resid_dec_from_digits(resid_dec* out, const char* digits, int32_t exp, uint16_t prec) {
+    while (*digits == '0') digits++;
+    if (*digits == '\0') { dec_zero(prec, out); return; }
+    int32_t len = (int32_t)strlen(digits);
+    if (len > RESID_DEC_MAX_DIGITS) resid_abort("dec: literal too long");
+    dec_work w;
+    memset(&w, 0, sizeof(w));
+    w.sign = 1;
+    w.exp = exp;
+    w.n = len;
+    for (int32_t i = 0; i < len; i++) w.d[len - 1 - i] = digits[i] - '0';
+    work_store(&w, prec, out);
+}
+
+void resid_dec_from_int(resid_dec* out, int64_t v, uint16_t prec) {
+    if (v == 0) { dec_zero(prec, out); return; }
+    int8_t sign = v < 0 ? -1 : 1;
+    uint64_t u = v < 0 ? (uint64_t)(-(v + 1)) + 1 : (uint64_t)v;
+    dec_work w;
+    memset(&w, 0, sizeof(w));
+    w.sign = sign;
+    w.exp = 0;
+    w.n = 0;
+    while (u > 0) { w.d[w.n++] = (int32_t)(u % 10); u /= 10; }
+    work_store(&w, prec, out);
+}
+
+void resid_dec_from_i128(resid_dec* out, __int128 v, uint16_t prec) {
+    if (v == 0) { dec_zero(prec, out); return; }
+    int8_t sign = v < 0 ? -1 : 1;
+    unsigned __int128 u = v < 0 ? (unsigned __int128)(-(v + 1)) + 1 : (unsigned __int128)v;
+    dec_work w;
+    memset(&w, 0, sizeof(w));
+    w.sign = sign;
+    w.exp = 0;
+    w.n = 0;
+    while (u > 0) { w.d[w.n++] = (int32_t)(u % 10); u /= 10; }
+    work_store(&w, prec, out);
+}
+
+/* Exact decimal parse of a plain or `e`-notation string (the latter from
+ * binary-float %.17g casts). */
+void resid_dec_from_str(resid_dec* out, const char* s, uint16_t prec) {
+    const char* p = s;
+    int8_t sign = 1;
+    if (*p == '-') { sign = -1; p++; }
+    else if (*p == '+') p++;
+    uint8_t digs[RESID_DEC_MAX_DIGITS];
+    int32_t dn = 0;
+    while (*p >= '0' && *p <= '9') {
+        if (dn >= RESID_DEC_MAX_DIGITS) resid_abort("dec: string too long");
+        digs[dn++] = (uint8_t)(*p - '0');
+        p++;
+    }
+    int32_t exp = 0;
+    if (*p == '.') {
+        p++;
+        int32_t frac = 0;
+        while (*p >= '0' && *p <= '9') {
+            if (dn >= RESID_DEC_MAX_DIGITS) resid_abort("dec: string too long");
+            digs[dn++] = (uint8_t)(*p - '0');
+            p++;
+            frac++;
+        }
+        exp = -frac;
+    }
+    if (*p == 'e' || *p == 'E') {
+        p++;
+        int32_t esign = 1;
+        if (*p == '-') { esign = -1; p++; }
+        else if (*p == '+') p++;
+        int32_t ev = 0;
+        while (*p >= '0' && *p <= '9') {
+            if (ev > RESID_DEC_MAX_EXP / 10) resid_abort("dec: exponent out of range");
+            ev = ev * 10 + (*p - '0');
+            p++;
+        }
+        exp += esign * ev;
+    }
+    if (dn == 0 || *p != '\0') resid_abort("dec: bad decimal string");
+    int32_t s2 = 0;
+    int32_t nonzero = 0;
+    for (int32_t i = 0; i < dn; i++) if (digs[i] != 0) nonzero = 1;
+    if (!nonzero) { dec_zero(prec, out); return; }
+    while (s2 < dn - 1 && digs[s2] == 0) s2++;
+    dec_work w;
+    memset(&w, 0, sizeof(w));
+    w.sign = sign;
+    w.exp = exp;
+    w.n = dn - s2;
+    for (int32_t i = 0; i < w.n; i++) w.d[w.n - 1 - i] = digs[s2 + i];
+    work_store(&w, prec, out);
+}
+
+/* Fixed notation, all nd significant digits, trailing zeros preserved. */
+char* resid_dec_to_string(const resid_dec* v) {
+    int32_t N = v->nd;
+    int32_t ipos = N + v->exp; /* integer digit count */
+    int32_t len;
+    if (v->sign == 0) {
+        len = 2 + N; /* "0." + N zeros */
+    } else {
+        len = (v->sign < 0 ? 1 : 0);
+        if (ipos > 0) {
+            len += ipos;
+            if (ipos < N) len += 1 + (N - ipos);
+        } else {
+            len += 2 + (-ipos) + N;
+        }
+    }
+    char* tmp = (char*)malloc((size_t)len + 1);
+    if (!tmp) resid_abort("dec: out of memory");
+    int32_t k = 0;
+    if (v->sign == 0) {
+        tmp[k++] = '0';
+        tmp[k++] = '.';
+        for (int32_t i = 0; i < N; i++) tmp[k++] = '0';
+    } else {
+        if (v->sign < 0) tmp[k++] = '-';
+        if (ipos > 0) {
+            int32_t iint = ipos < N ? ipos : N;
+            for (int32_t i = 0; i < iint; i++) tmp[k++] = (char)v->digits[i];
+            for (int32_t i = iint; i < ipos; i++) tmp[k++] = '0';
+            if (ipos < N) {
+                tmp[k++] = '.';
+                for (int32_t i = ipos; i < N; i++) tmp[k++] = (char)v->digits[i];
+            }
+        } else {
+            tmp[k++] = '0';
+            tmp[k++] = '.';
+            for (int32_t i = 0; i < -ipos; i++) tmp[k++] = '0';
+            for (int32_t i = 0; i < N; i++) tmp[k++] = (char)v->digits[i];
+        }
+    }
+    tmp[k] = '\0';
+    char* boxed = resid_box_str(tmp);
+    free(tmp);
+    return boxed;
+}
+
+void resid_dec_round(resid_dec* out, const resid_dec* v, uint16_t prec) {
+    if (v->sign == 0) { dec_zero(prec, out); return; }
+    dec_work w;
+    dec_load(v, &w);
+    work_store(&w, prec, out);
+}
+
+void resid_dec_neg(resid_dec* out, const resid_dec* v) {
+    *out = *v;
+    out->sign = (int8_t)-v->sign;
+}
+
+void resid_dec_add(resid_dec* out, const resid_dec* a, const resid_dec* b) {
+    int32_t prec = a->nd > b->nd ? a->nd : b->nd;
+    if (a->sign == 0) { resid_dec_round(out, b, (uint16_t)prec); return; }
+    if (b->sign == 0) { resid_dec_round(out, a, (uint16_t)prec); return; }
+    dec_work wa, wb;
+    dec_load(a, &wa);
+    dec_load(b, &wb);
+    if (wa.sign == wb.sign) {
+        work_add_mag(&wa, &wb, prec, out);
+    } else {
+        int c = work_abs_cmp(&wa, &wb);
+        if (c == 0) { dec_zero(prec, out); }
+        else if (c > 0) { work_sub_mag(&wa, &wb, prec, out); }
+        else { work_sub_mag(&wb, &wa, prec, out); }
+    }
+}
+
+void resid_dec_sub(resid_dec* out, const resid_dec* a, const resid_dec* b) {
+    resid_dec nb = *b;
+    nb.sign = (int8_t)-nb.sign;
+    resid_dec_add(out, a, &nb);
+}
+
+void resid_dec_mul(resid_dec* out, const resid_dec* a, const resid_dec* b) {
+    int32_t prec = a->nd > b->nd ? a->nd : b->nd;
+    if (a->sign == 0 || b->sign == 0) { dec_zero(prec, out); return; }
+    dec_work wa, wb;
+    dec_load(a, &wa);
+    dec_load(b, &wb);
+    wa.sign = (wa.sign == wb.sign) ? 1 : -1;
+    work_mul_mag(&wa, &wb, prec, out);
+}
+
+int32_t resid_dec_cmp(const resid_dec* a, const resid_dec* b) {
+    if (a->sign == 0 && b->sign == 0) return 0;
+    if (a->sign == 0) return b->sign > 0 ? -1 : 1;
+    if (b->sign == 0) return a->sign > 0 ? 1 : -1;
+    if (a->sign != b->sign) return a->sign > b->sign ? 1 : -1;
+    dec_work wa, wb;
+    dec_load(a, &wa);
+    dec_load(b, &wb);
+    int c = work_abs_cmp(&wa, &wb);
+    if (a->sign < 0) c = -c;
+    return c;
+}
+
+int64_t resid_dec_to_int(const resid_dec* v, int64_t lo, int64_t hi) {
+    if (v->sign == 0) return 0;
+    int32_t frac = -v->exp;
+    if (frac > 0) {
+        if (frac > v->nd) resid_abort("dec: non-integer to Int");
+        for (int32_t i = v->nd - frac; i < v->nd; i++)
+            if (v->digits[i] != '0') resid_abort("dec: non-integer to Int");
+    }
+    /* Integer digit count: nd significant digits at exponent exp; a negative
+     * exp shifts that many digits into the fraction (already verified zero),
+     * a positive exp appends that many trailing zeros. */
+    int32_t int_digits = v->nd + v->exp;
+    if (int_digits < 0) int_digits = 0;
+    int64_t r = 0;
+    for (int32_t i = 0; i < int_digits; i++) {
+        int32_t d = (i < v->nd) ? (v->digits[i] - '0') : 0;
+        if (r > (INT64_MAX - d) / 10) resid_abort("dec: value out of range for Int");
+        r = r * 10 + d;
+    }
+    if (v->sign < 0) r = -r;
+    if (r < lo || r > hi) resid_abort("dec: value out of range for Int");
+    return r;
+}
+
+/* Lossy for wide Dec values (documented bootstrap limitation). */
+double resid_dec_to_f64(const resid_dec* v) {
+    /* Accumulate only significant digits; precision-padding trailing zeros
+     * fold into the power-of-ten exponent so e.g. Dec(34) 12.5m → 12.5
+     * exactly, not 1.25e31 / 1e32 (double rounding noise). */
+    int32_t sig = v->nd;
+    while (sig > 0 && v->digits[sig - 1] == '0') sig--;
+    int32_t exp = v->exp + (v->nd - sig);
+    double r = 0.0;
+    for (int32_t i = 0; i < sig; i++) r = r * 10.0 + (double)(v->digits[i] - '0');
+    if (exp != 0) {
+        int32_t e = exp > 0 ? exp : -exp;
+        double p = 1.0;
+        for (int32_t i = 0; i < e && p < 1e308 && p > 1e-308; i++) p *= 10.0;
+        if (exp > 0) r *= p;
+        else r /= p;
+    }
+    if (v->sign < 0) r = -r;
+    return r;
+}
+
+/* Binary float -> Dec via %.17g (exact decimal of the double). */
+void resid_dec_from_f64(resid_dec* out, double v, uint16_t prec) {
+    if (v == 0.0) { dec_zero(prec, out); return; }
+    if (!(v > -1e308 && v < 1e308)) resid_abort("dec: value out of range");
+    char buf[40];
+    snprintf(buf, sizeof(buf), "%.17g", v);
+    resid_dec_from_str(out, buf, prec);
+}

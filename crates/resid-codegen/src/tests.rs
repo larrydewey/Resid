@@ -2619,3 +2619,180 @@ Int main() {
     cg.generate(&unit).expect("codegen failed");
     cg.module.verify().expect("module failed verification");
 }
+
+// ─── Dec(N) exact decimals (spec §6.6a) ─────────────────────────
+
+fn dec_ir(src: &str) -> String {
+    let (unit, errors) = Parser::parse("dec.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "dec");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    cg.module.print_to_string().to_string()
+}
+
+#[test]
+fn test_dec_literal_pointer_abi() {
+    // Dec literal → `resid_dec_from_digits(ptr out, ptr str, i32, i16)`.
+    let ir = dec_ir(
+        r#"
+Dec main() {
+    Dec(4) c = 1.5m;
+    return 0m;
+}
+"#,
+    );
+    assert!(
+        ir.contains("call void @resid_dec_from_digits(ptr %decout, ptr @str"),
+        "literal must go through pointer-ABI from_digits: {ir}"
+    );
+    assert!(
+        ir.contains("i16 4"),
+        "target precision must be passed: {ir}"
+    );
+}
+
+#[test]
+fn test_dec_main_wrapper() {
+    // A `Dec main()` returns a 520-byte struct via sret, which libc cannot
+    // provide — the user function must be emitted as `resid_main` and a
+    // C-ABI `i32 @main` wrapper synthesized.
+    let ir = dec_ir(
+        r#"
+Dec main() {
+    return 0m;
+}
+"#,
+    );
+    assert!(
+        ir.contains("define { i8, i16, [512 x i8], i32 } @resid_main()"),
+        "user main must be renamed to resid_main: {ir}"
+    );
+    assert!(
+        ir.contains("define i32 @main()"),
+        "a C-ABI main wrapper must exist: {ir}"
+    );
+    assert!(
+        ir.contains("call { i8, i16, [512 x i8], i32 } @resid_main()"),
+        "wrapper must call resid_main: {ir}"
+    );
+}
+
+#[test]
+fn test_dec_arithmetic_pointer_abi() {
+    let ir = dec_ir(
+        r#"
+Dec main() {
+    Dec(4) a = 1.5m;
+    Dec(4) b = 2.25m;
+    Dec(4) s = a + b;
+    Dec(4) d = a - b;
+    Dec(4) m = a * b;
+    Dec(4) q = a / b;
+    return s;
+}
+"#,
+    );
+    for name in [
+        "resid_dec_add",
+        "resid_dec_sub",
+        "resid_dec_mul",
+        "resid_dec_div",
+    ] {
+        assert!(
+            ir.contains(&format!("call void @{name}(ptr %decout")),
+            "expected pointer-ABI {name}: {ir}"
+        );
+    }
+}
+
+#[test]
+fn test_dec_comparison() {
+    let ir = dec_ir(
+        r#"
+Dec main() {
+    Dec(4) a = 1.5m;
+    Dec(4) b = 2.25m;
+    Bool c = a < b;
+    Bool d = a == 1.5m;
+    return 0m;
+}
+"#,
+    );
+    assert!(
+        ir.contains("call i32 @resid_dec_cmp(ptr %decs, ptr %decs"),
+        "comparison must call resid_dec_cmp with pointer operands: {ir}"
+    );
+}
+
+#[test]
+fn test_dec_cast() {
+    let ir = dec_ir(
+        r#"
+Dec main() {
+    Dec(6) d = (Dec(6)) 123.456m;
+    Dec(6) r = (Dec(6)) 1.23456789m;
+    return r;
+}
+"#,
+    );
+    assert!(
+        ir.contains("call void @resid_dec_round(ptr %decout"),
+        "Dec→Dec cast must round through resid_dec_round: {ir}"
+    );
+}
+
+#[test]
+fn test_dec_conversion_helpers() {
+    let ir = dec_ir(
+        r#"
+Dec main() {
+    Dec(6) x = 123.0m;
+    Int i = i32(x);
+    Float fl = f64(x);
+    Dec(8) y = d8(x);
+    Dec(8) z = d8("9.87");
+    Dec(6) w = d6(42);
+    return w;
+}
+"#,
+    );
+    assert!(
+        ir.contains("call i64 @resid_dec_to_int(ptr %decs, i64 -2147483648, i64 2147483647)"),
+        "i32(dec) must use resid_dec_to_int with i32 bounds: {ir}"
+    );
+    assert!(
+        ir.contains("call double @resid_dec_to_f64(ptr %decs"),
+        "f64(dec) must use resid_dec_to_f64: {ir}"
+    );
+    assert!(
+        ir.contains("call void @resid_dec_round(ptr %decout"),
+        "d8(dec) must round: {ir}"
+    );
+    assert!(
+        ir.contains("call void @resid_dec_from_str(ptr %decout"),
+        "d8(str) must parse: {ir}"
+    );
+    assert!(
+        ir.contains("call void @resid_dec_from_int(ptr %decout"),
+        "d6(int) must convert: {ir}"
+    );
+}
+
+#[test]
+fn test_dec_display() {
+    let ir = dec_ir(
+        r#"
+Dec main() {
+    Dec(4) a = 1.5m;
+    println(f"{a}");
+    return 0m;
+}
+"#,
+    );
+    assert!(
+        ir.contains("call ptr @resid_dec_to_string(ptr %decs)"),
+        "f-string interpolation of Dec must use resid_dec_to_string: {ir}"
+    );
+}
