@@ -2796,3 +2796,24 @@ Dec main() {
         "f-string interpolation of Dec must use resid_dec_to_string: {ir}"
     );
 }
+
+#[test]
+fn test_match_arms_semicolons() {
+    let src = r#"
+Int main() {
+    Option(Int) x = Some(42);
+    return match x {
+        Some(v) => v;
+        None => 0;
+    };
+}
+"#;
+    let (unit, errors) = Parser::parse("ms.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "ms");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("@resid_box_tag"), "expected tag reads: {ir}");
+}
