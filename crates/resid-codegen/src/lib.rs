@@ -2492,6 +2492,7 @@ impl<'ctx> CodeGen<'ctx> {
             ("filesystem", "exists") => "resid_fs_exists",
             ("filesystem", "list_dir") => "resid_fs_list_dir",
             ("filesystem", "read_all") => "resid_fs_read_all",
+            ("filesystem", "write_all") => "resid_fs_write_all",
             ("environment", "get") => "resid_env_get",
             ("environment", "has") => "resid_env_has",
             ("git", "rev") => "resid_git_rev",
@@ -2592,6 +2593,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_fs_exists", vec![ptr.into()], i8t.into());
         self.decl_rt("resid_fs_list_dir", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_fs_read_all", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_fs_write_all", vec![ptr.into(), ptr.into()], i8t.into());
         self.decl_rt("resid_env_get", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_env_has", vec![ptr.into()], i8t.into());
         self.decl_rt("resid_git_rev", vec![ptr.into()], ptr.into());

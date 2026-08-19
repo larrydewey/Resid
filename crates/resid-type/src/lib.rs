@@ -355,6 +355,12 @@ pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemTyp
             vec![SemType::Str],
             SemType::Str,
         ),
+        (
+            "filesystem",
+            "write_all",
+            vec![SemType::Str, SemType::Str],
+            SemType::Bool,
+        ),
         // environment
         ("environment", "get", vec![SemType::Str], SemType::Str),
         (
@@ -4566,6 +4572,35 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no errors for filesystem.list_dir, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_filesystem_write_all() {
+        let src = r#"
+Int main() {
+    Bool ok = filesystem.write_all("out.txt", "data");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for filesystem.write_all, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_filesystem_write_all_bad_args() {
+        let src = r#"
+Int main() {
+    Bool ok = filesystem.write_all(42, "data");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected filesystem.write_all(Int, Str) to be rejected"
+        );
     }
 
     #[test]

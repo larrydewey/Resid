@@ -1488,3 +1488,45 @@ fn run_dec_exact_arithmetic() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// M6 P1: `filesystem.write_all` writes a file; `read_all` round-trips it.
+#[test]
+fn run_fs_write_all_roundtrip() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-fs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out_path = dir.join("written.txt");
+    let file = dir.join("fs.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"Int main() {{
+    Bool ok = filesystem.write_all("{out}", "hello from write_all\n");
+    println(BoolToString(ok));
+    Str back = filesystem.read_all("{out}");
+    print(back);
+    return 0;
+}}
+"#,
+            out = out_path.display()
+        ),
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout, "true\nhello from write_all\n");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
