@@ -323,6 +323,12 @@ pub fn type_from_name(name: &str) -> Option<SemType> {
         "Str" => Some(SemType::Str),
         "Bytes" => Some(SemType::Bytes),
         "SourceLoc" => Some(SemType::SourceLoc),
+        // Core error type for structured concurrency (spec §19): child
+        // failure surfaces as `Err(RegionError)` carrying a message.
+        "RegionError" => Some(SemType::Struct {
+            name: "RegionError".into(),
+            fields: vec![("message".into(), SemType::Str)],
+        }),
         _ => resid_ir::NumericType::from_name(name).map(SemType::Numeric),
     }
 }
@@ -428,6 +434,25 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                 return Some(SemType::Sum {
                     name: "Option".into(),
                     variants: vec![("None".into(), None), ("Some".into(), Some(inner))],
+                });
+            }
+            // Built-in `Result(T, E)` sum — Ok(T) / Err(E) (spec §19 spawn).
+            if name.0 == "Result" {
+                let Some(ps) = params else {
+                    return None;
+                };
+                if ps.len() != 2 {
+                    return None;
+                }
+                let Some(ok) = resolve_type_ctx(&ps[0], types) else {
+                    return None;
+                };
+                let Some(er) = resolve_type_ctx(&ps[1], types) else {
+                    return None;
+                };
+                return Some(SemType::Sum {
+                    name: "Result".into(),
+                    variants: vec![("Ok".into(), Some(ok)), ("Err".into(), Some(er))],
                 });
             }
             // Built-in `Slice(T)` — slice of a List's elements.
@@ -1405,8 +1430,10 @@ fn infer_struct_lit(
 ) -> Result<SemType, TypeError> {
     let ty = types
         .get(&name.0)
+        .map(Clone::clone)
+        .or_else(|| type_from_name(&name.0))
         .ok_or_else(|| err(span, format!("unknown type `{}`", name.0)))?;
-    let SemType::Struct { fields: defs, .. } = ty else {
+    let SemType::Struct { fields: defs, .. } = &ty else {
         return Err(err(span, format!("`{}` is not a struct type", name.0)));
     };
     for (fname, fval) in fields {
@@ -4544,6 +4571,70 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no errors for usize(200), got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_result_type_ok() {
+        let src = r#"
+Int main() {
+    Result(Int, RegionError) r = Ok(7);
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    return out;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for Result typing, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_result_type_err() {
+        let src = r#"
+Int main() {
+    Result(Int, RegionError) r = Err(RegionError { message: "boom" });
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    return out;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for Result Err, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_result_wrong_variant_rejected() {
+        let src = r#"
+Int main() {
+    Result(Int, RegionError) r = Ok("not an int");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected Result(Int,..) = Ok(Str) to be rejected"
+        );
+    }
+
+    #[test]
+    fn check_program_region_error_message_field() {
+        let src = r#"
+Int main() {
+    RegionError e = RegionError { message: "boom" };
+    Str m = e.message;
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected RegionError field access to type-check, got: {:?}", errs);
     }
 
     // ─── Provider type checking ──────────────────────────────────

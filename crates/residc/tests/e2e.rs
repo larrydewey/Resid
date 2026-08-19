@@ -1530,3 +1530,49 @@ fn run_fs_write_all_roundtrip() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// M6 P2 (type half): `Result(T, RegionError)` construction, match, message.
+#[test]
+fn run_result_type_ok_err() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-res-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("result.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Result(Int, RegionError) r = Ok(7);
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    println(IntToString(out));
+    Result(Int, RegionError) bad = Err(RegionError { message: "boom" });
+    Str msg = match bad {
+        Ok(n) => "none",
+        Err(e) => e.message,
+    };
+    println(msg);
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout, "7\nboom\n");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
