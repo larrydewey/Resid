@@ -1324,6 +1324,25 @@ ExprKind::While { cond, body } => {
             infer_provider_call(provider, verb, args, env, sigs, types, &expr.span)
         }
 
+        ExprKind::Spawn { body, .. } => {
+            // spec §19: `spawn (caps) { body } : Result(T, RegionError)` where
+            // T is the block's tail value type.
+            let mut errs = Vec::new();
+            type_check_block(body, env, sigs, types, &mut errs);
+            if let Some(e) = errs.into_iter().next() {
+                return Err(e);
+            }
+            let bt = block_ret(body, env, sigs, types)?;
+            let region_error = SemType::Struct {
+                name: "RegionError".into(),
+                fields: vec![("message".into(), SemType::Str)],
+            };
+            Ok(SemType::Sum {
+                name: "Result".into(),
+                variants: vec![("Ok".into(), Some(bt)), ("Err".into(), Some(region_error))],
+            })
+        }
+
         other => Err(err(
             &expr.span,
             format!("type checking not yet supported for `{}`", kind_tag(other)),
@@ -1465,6 +1484,12 @@ fn infer_match(
     span: &Span,
 ) -> Result<SemType, TypeError> {
     let st = infer_expr_ctx(scrutinee, env, sigs, types)?;
+    let SemType::Sum { .. } = &st else {
+        return Err(err(
+            &scrutinee.span,
+            format!("match scrutinee must be a sum type, not {st}"),
+        ));
+    };
     let mut result: Option<SemType> = None;
     for (pat, body) in arms {
         let mut arm_env = env.clone();
@@ -4637,6 +4662,43 @@ Int main() {
         assert!(errs.is_empty(), "expected RegionError field access to type-check, got: {:?}", errs);
     }
 
+    #[test]
+    fn check_program_spawn_types() {
+        let src = r#"
+Int main() {
+    Result(Int, RegionError) r = spawn (filesystem) {
+        7;
+    };
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    return out;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for spawn typing, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_spawn_body_error_surfaces() {
+        let src = r#"
+Int main() {
+    Result(Int, RegionError) r = spawn (filesystem) {
+        UndefinedThing;
+    };
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected undefined var inside spawn body to be rejected"
+        );
+    }
+
     // ─── Provider type checking ──────────────────────────────────
 
     #[test]
@@ -5101,5 +5163,40 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no errors for else fallback, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_match_on_non_sum_rejected() {
+        let src = r#"
+Int main() {
+    Int y = match 1 { 0 => 10, 1 => 20, _ => 0 };
+    return y;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected error for match on non-sum type");
+        assert!(
+            errs[0].message.contains("must be a sum type"),
+            "expected sum-type error, got: {}",
+            errs[0].message
+        );
+    }
+
+    #[test]
+    fn check_program_match_on_option_ok() {
+        let src = r#"
+Int main() {
+    Option(Int) x = Some(42);
+    Int y = match x {
+        Some(v) => v,
+        None => 0,
+    };
+    return y;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for match on Option, got: {:?}", errs);
     }
 }

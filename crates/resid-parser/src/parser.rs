@@ -590,7 +590,7 @@ impl Parser {
                     self.expect_op(Op::FatArrow, "match arm: expected =>");
                     let expr = self.parse_expression();
                     arms.push((pat, expr));
-                    if self.peek_is_op(Op::Comma) {
+                    if self.peek_is_op(Op::Comma) || self.peek_is_op(Op::Semi) {
                         self.bump();
                     }
                 }
@@ -1294,6 +1294,7 @@ impl Parser {
                     span: self.current_span(),
                     message: "pattern: expected identifier, literal, or variant".into(),
                 });
+                self.bump();
                 Pattern {
                     kind: PatternKind::Wildcard,
                     span,
@@ -2421,6 +2422,34 @@ Int main() {
     match Some(42) {
         Some(x) => x,
         None    => 0
+    }
+}
+"#;
+        let (_, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+    }
+
+    #[test]
+    fn test_match_arms_semicolons() {
+        let src = r#"
+Int main() {
+    match Some(42) {
+        Some(x) => x;
+        None    => 0;
+    }
+}
+"#;
+        let (_, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+    }
+
+    #[test]
+    fn test_match_mixed_separators() {
+        let src = r#"
+Int main() {
+    match Some(42) {
+        Some(x) => x,
+        None    => 0;
     }
 }
 "#;
