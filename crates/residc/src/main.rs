@@ -165,6 +165,7 @@ fn build_native(file: &str, unit: &TranslationUnit, out: Option<&str>) -> Result
         .arg(&ir_path)
         .arg(&rt_path)
         .arg("-Wno-override-module")
+        .arg("-pthread")
         .arg("-o")
         .arg(out)
         .status();

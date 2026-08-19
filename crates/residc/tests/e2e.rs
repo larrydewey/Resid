@@ -1576,3 +1576,154 @@ fn run_result_type_ok_err() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Spawn expression: `spawn (caps) { body }` compiles to a pthread worker,
+/// joins the thread, and yields `Result(T, RegionError)`.
+#[test]
+fn run_spawn_simple() {
+    let dir = std::env::temp_dir()
+        .join(format!("residc-e2e-spawn-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("spawn.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Result(Int, RegionError) r = spawn () {
+        return 42;
+    };
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    println(IntToString(out));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "42",
+        "expected spawn to return 42, got: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Spawn with captures: outer-scope bindings are passed into the worker.
+#[test]
+fn run_spawn_with_captures() {
+    let dir = std::env::temp_dir()
+        .join(format!("residc-e2e-spawn-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("spawn_cap.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Int x = 10;
+    Int y = 20;
+    Result(Int, RegionError) r = spawn () {
+        return x + y;
+    };
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    println(IntToString(out));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "expected spawn with captures to return 30, got: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Nested spawn: spawn inside a spawn body.
+#[test]
+fn run_spawn_nested() {
+    let dir = std::env::temp_dir()
+        .join(format!("residc-e2e-spawn-nest-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("spawn_nested.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Result(Int, RegionError) r1 = spawn () {
+        Result(Int, RegionError) r2 = spawn () {
+            return 7;
+        };
+        Int inner = match r2 {
+            Ok(n) => n,
+            Err(e) => 0,
+        };
+        return inner * 6;
+    };
+    Int out = match r1 {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    println(IntToString(out));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "42",
+        "expected nested spawn to return 42, got: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
