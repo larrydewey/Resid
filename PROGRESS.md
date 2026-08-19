@@ -11,8 +11,8 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 480 pass (lexer 17, parser 88, resid-ir 46, resid-type 173,
-  resid-codegen 129, residc 27 e2e).
+- **Tests**: 485 pass (lexer 17, parser 88, resid-ir 46, resid-type 177,
+  resid-codegen 129, residc 28 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -1959,8 +1959,11 @@ Updated from §10. **Checked = done, unchecked = missing.**
      tagged type (Ok/Err construction + `match`), (b) `spawn (caps) { body }`
      typed `Result(T, RegionError)`, (c) codegen via pthread + captured-var
      trampoline (free vars boxed/captured), (d) child failure → `Err(RegionError)`,
-     structured join. Parser + `ExprKind::Spawn` + `Type::RegionError` exist;
-     typing, codegen, runtime do not.
+     structured join. Parser + `ExprKind::Spawn` + `Type::RegionError` exist.
+     **(a) done**: `Result(T, E)` resolves to a `Sum` (Ok/Err), `RegionError` is
+     a built-in struct `{ message: Str }`; construction, `match`, and
+     `e.message` work end-to-end (e2e `run_result_type_ok_err`, 4 new resid-type
+     tests). (b)(c)(d) not started.
 
    **M6 work items (after P1/P2, in order):**
    1. Port type checker to Resid: literal inference, widening, casts, `if`,
@@ -1996,4 +1999,4 @@ All resolved in Resid 3.0. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-18 — M6 drafted in §12.7; M6 P1 `filesystem.write_all` done (480 tests); Float(256/512) cleanup; current-snapshot header added.*
+*Last updated: 2026-08-18 — M6 P2 (a) `Result(T, RegionError)` type side done (485 tests); M6 P1 `filesystem.write_all` done; M6 drafted in §12.7.*

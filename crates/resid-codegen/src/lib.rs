@@ -3165,6 +3165,7 @@ impl<'ctx> CodeGen<'ctx> {
             .types
             .get(&name.0)
             .cloned()
+            .or_else(|| resid_type::type_from_name(&name.0))
             .ok_or_else(|| format!("codegen: unknown type `{}`", name.0))?;
         let SemType::Struct { fields: defs, .. } = &st else {
             return Err(format!("codegen: `{}` is not a struct", name.0));
