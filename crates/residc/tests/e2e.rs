@@ -1674,6 +1674,106 @@ fn run_spawn_with_captures() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Handle types (spec §16): `with (File h = filesystem.open(path)) { body }`
+/// acquires the handle, binds it in the body, reads through the handle, and
+/// releases it automatically (RAII) when the block ends. `filesystem.close`
+/// releases a handle explicitly.
+#[test]
+fn run_with_handle_raii() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-handle-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("with.txt");
+    let file = dir.join("with.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"Int main() {{
+    Str p = "{path}";
+    Bool wok = filesystem.write_all(p, "hello with\n");
+    with (File h = filesystem.open(p)) {{
+        Str data = filesystem.read_handle(h);
+        print(data);
+        return 0;
+    }}
+    return 1;
+}}
+"#,
+            path = path.display()
+        ),
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout,
+        "hello with\n",
+        "expected data read through the File handle, got: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Handle types (spec §16): a handle acquired outside a `with` block is
+/// released explicitly via `filesystem.close`.
+#[test]
+fn run_handle_explicit_close() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-handle-c-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("close.txt");
+    let file = dir.join("close.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"Int main() {{
+    Str p = "{path}";
+    Bool wok = filesystem.write_all(p, "data");
+    File h = filesystem.open(p);
+    Bool closed = filesystem.close(h);
+    println(BoolToString(closed));
+    return 0;
+}}
+"#,
+            path = path.display()
+        ),
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "true",
+        "expected explicit close to succeed, got: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Nested spawn: spawn inside a spawn body.
 #[test]
 fn run_spawn_nested() {

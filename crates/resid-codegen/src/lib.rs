@@ -21,7 +21,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use resid_ir::{BinOp, NumericType, numeric_result_type};
 use resid_lexer::token::Literal;
 use resid_lexer::token::Op as OpKind;
-use resid_parser::{Block, Declaration, Expr, ExprKind, Id, RangeExpr, Stmt, StmtKind, TranslationUnit};
+use resid_parser::{Block, Declaration, Expr, ExprKind, Id, RangeExpr, Stmt, StmtKind, TranslationUnit, WithBinding};
 use resid_type::{FunctionSig, SemType, Types};
 
 /// A lowered value plus the semantic type the checker attributed to it.
@@ -49,6 +49,8 @@ fn block_terminates(block: &Block) -> bool {
                 {
                     block_terminates(then_block)
                         && else_block.as_ref().is_some_and(|b| block_terminates(b))
+                } else if let ExprKind::With { body, .. } = &e.kind {
+                    block_terminates(body)
                 } else {
                     false
                 }
@@ -446,7 +448,7 @@ impl<'ctx> CodeGen<'ctx> {
             },
             SemType::Range(_) => self.int_type(64)?.into(),
             // Composites are untyped heap pointers.
-            SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc => {
+            SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc | SemType::File => {
                 self.cx.ptr_type(AddressSpace::default()).into()
             }
         };
@@ -691,7 +693,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 .build_return(Some(&self.cx.i64_type().const_zero()))
                                 .map_err(to_err)?;
                         }
-                        SemType::Str | SemType::Bytes | SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc => {
+                        SemType::Str | SemType::Bytes | SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc | SemType::File => {
                             self.builder
                                 .build_return(Some(
                                     &self.cx.ptr_type(AddressSpace::default()).const_null(),
@@ -783,6 +785,12 @@ impl<'ctx> CodeGen<'ctx> {
                             terminated = true;
                         }
                     }
+                    // A `with` whose body returns also terminates the block.
+                    if let ExprKind::With { body, .. } = &e.kind {
+                        if block_terminates(body) {
+                            terminated = true;
+                        }
+                    }
                 }
                 StmtKind::Return(v) => {
                     if self.in_spawn_worker {
@@ -834,21 +842,24 @@ impl<'ctx> CodeGen<'ctx> {
                 }
             }
         }
-        if let Some(ret) = &block.ret {
-            // A `return` inside a nested block (if-branch, while body, …) is a
-            // real early return: emit it and terminate the block. (The
-            // function-body `ret` is additionally handled by `lower_function`,
-            // which only runs when the block was not terminated.)
-            if self.in_spawn_worker {
-                // Capture the return value so lower_spawn can wrap it in Ok.
-                let raw = self.lower_expr(sc, ret, None)?;
-                spawn_ret = Some(raw);
-            } else {
-                let raw = self.lower_expr(sc, ret, None)?;
-                let val = self.cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
-                self.builder.build_return(Some(&val.v)).map_err(to_err)?;
+        if !terminated {
+            if let Some(ret) = &block.ret {
+                // A `return` inside a nested block (if-branch, while body, …) is a
+                // real early return: emit it and terminate the block. (The
+                // function-body `ret` is additionally handled by `lower_function`,
+                // which only runs when the block was not terminated.)
+                if self.in_spawn_worker {
+                    // Capture the return value so lower_spawn can wrap it in Ok.
+                    let raw = self.lower_expr(sc, ret, None)?;
+                    spawn_ret = Some(raw);
+                } else {
+                    let raw = self.lower_expr(sc, ret, None)?;
+                    let val = self
+                        .cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
+                    self.builder.build_return(Some(&val.v)).map_err(to_err)?;
+                }
+                terminated = true;
             }
-            terminated = true;
         }
         Ok((terminated, tail, spawn_ret))
     }
@@ -1671,6 +1682,8 @@ impl<'ctx> CodeGen<'ctx> {
             } => self.lower_provider_call(sc, provider, verb, args),
 
             ExprKind::Spawn { body, .. } => self.lower_spawn(sc, e, body),
+
+            ExprKind::With { bindings, body } => self.lower_with(sc, bindings, body),
 
             ExprKind::RawString(s) => {
                 let ptr = self.lower_str(s);
@@ -2760,6 +2773,9 @@ impl<'ctx> CodeGen<'ctx> {
             ("filesystem", "list_dir") => "resid_fs_list_dir",
             ("filesystem", "read_all") => "resid_fs_read_all",
             ("filesystem", "write_all") => "resid_fs_write_all",
+            ("filesystem", "open") => "resid_fs_open",
+            ("filesystem", "read_handle") => "resid_fs_read_handle",
+            ("filesystem", "close") => "resid_fs_close",
             ("environment", "get") => "resid_env_get",
             ("environment", "has") => "resid_env_has",
             ("git", "rev") => "resid_git_rev",
@@ -2795,6 +2811,10 @@ impl<'ctx> CodeGen<'ctx> {
             SemType::List(_) => Ok(Val {
                 v: v.into_pointer_value().into(),
                 ty: ret.clone(),
+            }),
+            SemType::File => Ok(Val {
+                v: v.into_pointer_value().into(),
+                ty: SemType::File,
             }),
             other => Err(format!(
                 "codegen: provider call returns unsupported type {other}"
@@ -2952,6 +2972,92 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(Val { v, ty: result_ty })
     }
 
+    /// Lower `with (Type h = expr) { body }` (spec §16): acquire each handle
+    /// by evaluating its init, run `body` with the handle bound, then release
+    /// every handle in reverse binding order (`resid_handle_release`). Returns
+    /// the body's tail value (phi-joined) or Bool zero for an empty body.
+    fn lower_with(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        bindings: &[WithBinding],
+        body: &Block,
+    ) -> Result<Val<'ctx>, String> {
+        let fv = self
+            .cur_fn
+            .ok_or_else(|| "codegen: with outside a function".to_string())?;
+
+        // Acquire each handle: alloca a pointer slot, store the boxed handle
+        // value from the init, and bind the name in the body scope.
+        let ptr_ll = self.cx.ptr_type(AddressSpace::default());
+        let mut acquired: Vec<(String, PointerValue<'ctx>)> = Vec::new();
+        for b in bindings {
+            let ty = resid_type::resolve_type_ctx(&b.type_, &self.types)
+                .ok_or_else(|| "codegen: unknown with-binding type".to_string())?;
+            let v = self.lower_expr(sc, &b.init, None)?;
+            let v = self.cast_val(v, &ty)?;
+            let slot = self
+                .builder
+                .build_alloca(ptr_ll, &b.name.0)
+                .map_err(to_err)?;
+            self.builder.build_store(slot, v.v).map_err(to_err)?;
+            sc.vars.insert(b.name.0.clone(), (slot, ty));
+            acquired.push((b.name.0.clone(), slot));
+        }
+
+        let body_bb = self.cx.append_basic_block(fv, "with_body");
+        let merge_bb = self.cx.append_basic_block(fv, "with_merge");
+        self.builder
+            .build_unconditional_branch(body_bb)
+            .map_err(to_err)?;
+
+        self.builder.position_at_end(body_bb);
+        let (terminated, tail, _) = self.lower_block_with_tail(sc, body, true)?;
+        let reaches = if terminated {
+            None
+        } else {
+            let from = self.builder.get_insert_block().unwrap();
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(to_err)?;
+            Some(from)
+        };
+
+        // Cleanup runs in the merge block after the body has completed —
+        // reverse binding order (spec §16 RAII).
+        self.builder.position_at_end(merge_bb);
+        let release = self
+            .module
+            .get_function("resid_handle_release")
+            .ok_or("codegen: missing resid_handle_release decl")?;
+        for (name, slot) in acquired.iter().rev() {
+            let v = self
+                .builder
+                .build_load(ptr_ll, *slot, name)
+                .map_err(to_err)?;
+            self.builder
+                .build_call(release, &[v.into()], "release")
+                .map_err(to_err)?;
+        }
+
+        let join_ty = tail.as_ref().map(|v| v.ty.clone()).unwrap_or(SemType::Bool);
+        let ll = self.llvm_type(&join_ty)?;
+        let tv = self.cast_val(tail.unwrap_or_else(|| self.zero_val()), &join_ty)?;
+        let theta = match reaches {
+            Some(fb) => {
+                let phi = self.builder.build_phi(ll, "with").map_err(to_err)?;
+                phi.add_incoming(&[(&tv.v, fb)]);
+                phi.as_basic_value()
+            }
+            None => {
+                // Body terminated (early return) — the merge block is dead but
+                // still needs a terminator for module verification.
+                self.builder.build_unreachable().map_err(to_err)?;
+                tv.v
+            }
+        };
+        Ok(Val { v: theta, ty: join_ty })
+    }
+
     /// Prepare a lowered value as a C-ABI runtime argument: Str/Bytes/list/
     /// struct pointers pass through; Bool widens to i8.
     fn as_rt_arg(&mut self, v: Val<'ctx>) -> Result<BasicMetadataValueEnum<'ctx>, String> {
@@ -2971,7 +3077,8 @@ impl<'ctx> CodeGen<'ctx> {
             | SemType::Struct { .. }
             | SemType::Sum { .. }
             | SemType::Ptr
-            | SemType::SourceLoc => Ok(v.v.into_pointer_value().into()),
+            | SemType::SourceLoc
+            | SemType::File => Ok(v.v.into_pointer_value().into()),
             SemType::Numeric(n) => {
                 let n = *n;
                 let w = self.widen(v, n)?;
@@ -3014,6 +3121,12 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_fs_list_dir", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_fs_read_all", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_fs_write_all", vec![ptr.into(), ptr.into()], i8t.into());
+        self.decl_rt("resid_fs_open", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_fs_read_handle", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_fs_close", vec![ptr.into()], i8t.into());
+        // Handle release (spec §16): frees an acquired handle's box (closing
+        // any wrapped FILE*); called by `with` blocks in reverse binding order.
+        self.decl_rt_void("resid_handle_release", vec![ptr.into()]);
         self.decl_rt("resid_env_get", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_env_has", vec![ptr.into()], i8t.into());
         self.decl_rt("resid_git_rev", vec![ptr.into()], ptr.into());
