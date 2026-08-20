@@ -46,6 +46,10 @@ pub enum SemType {
     /// A source location (`#location`), spec §25. Boxed struct with
     /// `file: Str`, `line: Int`, `col: Int` slots.
     SourceLoc,
+    /// An identity-bearing resource handle (`File`), spec §16. Boxed as a
+    /// pointer; acquired by `filesystem.open`, released by `resid_handle_release`
+    /// at the end of a `with` block (or by `filesystem.close`).
+    File,
 }
 
 impl core::fmt::Display for SemType {
@@ -62,6 +66,7 @@ impl core::fmt::Display for SemType {
             SemType::Range(e) => write!(f, "Range({e})"),
             SemType::Slice(e) => write!(f, "Slice({e})"),
             SemType::SourceLoc => write!(f, "SourceLoc"),
+            SemType::File => write!(f, "File"),
         }
     }
 }
@@ -311,6 +316,7 @@ pub fn kind_tag(kind: &ExprKind) -> &'static str {
         ExprKind::Slice { .. } => "slice",
         ExprKind::Spawn { .. } => "spawn",
         ExprKind::ProviderCall { .. } => "provider call",
+        ExprKind::With { .. } => "with",
         ExprKind::ComptimePrint(_) => "comptime_print",
         _ => "expression",
     }
@@ -323,6 +329,9 @@ pub fn type_from_name(name: &str) -> Option<SemType> {
         "Str" => Some(SemType::Str),
         "Bytes" => Some(SemType::Bytes),
         "SourceLoc" => Some(SemType::SourceLoc),
+        // Identity-bearing resource handle (spec §16). Acquired via
+        // `filesystem.open`, released by `with` (RAII) or `filesystem.close`.
+        "File" => Some(SemType::File),
         // Core error type for structured concurrency (spec §19): child
         // failure surfaces as `Err(RegionError)` carrying a message.
         "RegionError" => Some(SemType::Struct {
@@ -365,6 +374,27 @@ pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemTyp
             "filesystem",
             "write_all",
             vec![SemType::Str, SemType::Str],
+            SemType::Bool,
+        ),
+        // File handles (spec §16): `filesystem.open` acquires an
+        // identity-bearing resource; `filesystem.close` releases it explicitly
+        // (a `with` block releases automatically, in reverse order).
+        (
+            "filesystem",
+            "open",
+            vec![SemType::Str],
+            SemType::File,
+        ),
+        (
+            "filesystem",
+            "read_handle",
+            vec![SemType::File],
+            SemType::Str,
+        ),
+        (
+            "filesystem",
+            "close",
+            vec![SemType::File],
             SemType::Bool,
         ),
         // environment
@@ -1322,6 +1352,42 @@ ExprKind::While { cond, body } => {
 
         ExprKind::ProviderCall { provider, verb, args } => {
             infer_provider_call(provider, verb, args, env, sigs, types, &expr.span)
+        }
+
+        ExprKind::With { bindings, body } => {
+            // spec §16: `with (Type h = expr) { body }` acquires `h` for the
+            // duration of `body`, then releases it (RAII, reverse order).
+            let mut with_env = env.clone();
+            for b in bindings {
+                let declared = resolve_type_ctx(&b.type_, types).ok_or_else(|| {
+                    err(&expr.span, format!("unknown with-binding type"))
+                })?;
+                let has = infer_expr_expected(&b.init, &with_env, sigs, types, Some(&declared))?;
+                if &has != &declared {
+                    return Err(err(
+                        &b.init.span,
+                        format!(
+                            "with binding `{}`: expected {}, found {}",
+                            b.name.0, declared, has
+                        ),
+                    ));
+                }
+                with_env.try_insert(&b.name.0, declared).map_err(|_| {
+                    err(
+                        &expr.span,
+                        format!(
+                            "identifier `{}` is already bound; shadowing is forbidden",
+                            b.name.0
+                        ),
+                    )
+                })?;
+            }
+            let mut errs = Vec::new();
+            type_check_block(body, &with_env, sigs, types, &mut errs);
+            if let Some(e) = errs.into_iter().next() {
+                return Err(e);
+            }
+            block_ret(body, &with_env, sigs, types)
         }
 
         ExprKind::Spawn { body, .. } => {
@@ -4696,6 +4762,104 @@ Int main() {
         assert!(
             !errs.is_empty(),
             "expected undefined var inside spawn body to be rejected"
+        );
+    }
+
+    // ─── Handle types + `with` blocks (spec §16) ─────────────────
+
+    #[test]
+    fn check_program_with_handle_types() {
+        let src = r#"
+Int main() {
+    with (File h = filesystem.open("data.txt")) {
+        Int n = 7;
+        return n;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected `with` + File handle to type-check, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_with_multiple_bindings() {
+        let src = r#"
+Int main() {
+    with (File a = filesystem.open("a.txt"), File b = filesystem.open("b.txt")) {
+        Str unused = "x";
+        return 0;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected multi-binding `with` to type-check, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_with_explicit_close() {
+        let src = r#"
+Int main() {
+    File h = filesystem.open("data.txt");
+    Bool ok = filesystem.close(h);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected filesystem.close to type-check, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_with_type_mismatch_rejected() {
+        let src = r#"
+Int main() {
+    with (File h = 42) {
+        return 0;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.iter().any(|e| e.message.contains("expected File, found Int")),
+            "expected with-binding type mismatch, got: {:?}", errs
+        );
+    }
+
+    #[test]
+    fn check_program_with_shadowing_rejected() {
+        let src = r#"
+Int main() {
+    Int h = 1;
+    with (File h = filesystem.open("data.txt")) {
+        return 0;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.iter().any(|e| e.message.contains("shadowing is forbidden")),
+            "expected with-binding shadowing rejection, got: {:?}", errs
+        );
+    }
+
+    #[test]
+    fn check_program_with_undefined_var_in_body_surfaces() {
+        let src = r#"
+Int main() {
+    with (File h = filesystem.open("data.txt")) {
+        return Missing;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected undefined var inside `with` body to be rejected"
         );
     }
 

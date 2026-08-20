@@ -973,6 +973,69 @@ void* resid_fs_list_dir(const char* path) {
     return resid_box_new(0, (int64_t)n, slots, "List(Str)");
 }
 
+/* ─────────────────────────────────────────────────────────────
+ * Handles (spec §16).
+ *
+ * A handle is an identity-bearing resource box. A File handle (tag 12) wraps
+ * a `FILE*` in slot 0. `with` blocks release their handles automatically via
+ * `resid_handle_release` (reverse binding order); `filesystem.close` releases
+ * one explicitly.
+ * ───────────────────────────────────────────────────────────── */
+#define FILE_HANDLE_TAG 12
+
+void* resid_fs_open(const char* path) {
+    FILE* f = fopen(path, "rb");
+    void* slots[1] = { f };
+    return resid_box_new(FILE_HANDLE_TAG, 1, slots, "File");
+}
+
+/* Read the whole file from a File handle (rewinding first). Returns a
+ * NUL-terminated Str; empty on failure. Exercises the handle's identity: the
+ * data is read through the handle, not by re-opening the path. */
+char* resid_fs_read_handle(void* b) {
+    if (!b) return resid_box_str("");
+    ResidVal* v = (ResidVal*)b;
+    if (v->tag != FILE_HANDLE_TAG || v->count < 1) return resid_box_str("");
+    FILE* f = (FILE*)v->slots[0];
+    if (!f) return resid_box_str("");
+    if (fseek(f, 0, SEEK_END) != 0) return resid_box_str("");
+    long sz = ftell(f);
+    if (sz < 0 || fseek(f, 0, SEEK_SET) != 0) return resid_box_str("");
+    char* p = (char*)malloc((size_t)sz + 1);
+    if (!p) return resid_box_str("");
+    size_t n = fread(p, 1, (size_t)sz, f);
+    p[n] = '\0';
+    return p;
+}
+
+/* Explicit close of one File handle. Returns 1 on success, 0 if the handle is
+ * null or was already released. Frees the handle box. */
+int8_t resid_fs_close(void* b) {
+    if (!b) return 0;
+    ResidVal* v = (ResidVal*)b;
+    if (v->tag == FILE_HANDLE_TAG && v->count >= 1) {
+        FILE* f = (FILE*)v->slots[0];
+        if (f) fclose(f);
+    }
+    if (v->slots) free(v->slots);
+    free(v);
+    return 1;
+}
+
+/* RAII release: closes any wrapped FILE* (tag 12) and frees the handle box.
+ * Called by `with` cleanup. Safe on null; does not recurse into slot payloads
+ * (handles are identity-bearing, single-owner values). */
+void resid_handle_release(void* b) {
+    if (!b) return;
+    ResidVal* v = (ResidVal*)b;
+    if (v->tag == FILE_HANDLE_TAG && v->count >= 1) {
+        FILE* f = (FILE*)v->slots[0];
+        if (f) fclose(f);
+    }
+    if (v->slots) free(v->slots);
+    free(v);
+}
+
 char* resid_env_get(const char* name) {
     const char* v = getenv(name);
     return v ? resid_box_str(v) : resid_box_str("");

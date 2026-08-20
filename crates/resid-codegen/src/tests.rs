@@ -2817,3 +2817,61 @@ Int main() {
     let ir = cg.module.print_to_string().to_string();
     assert!(ir.contains("@resid_box_tag"), "expected tag reads: {ir}");
 }
+
+#[test]
+fn test_with_handle_raii() {
+    let src = r#"
+Int main() {
+    Str p = "/tmp/data.txt";
+    with (File a = filesystem.open(p)) {
+        Str data = filesystem.read_handle(a);
+        print(data);
+        return 0;
+    }
+    return 1;
+}
+"#;
+    let (unit, errors) = Parser::parse("with.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "with");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(
+        ir.contains("call ptr @resid_fs_open(ptr"),
+        "expected filesystem.open acquisition: {ir}"
+    );
+    assert!(
+        ir.contains("call ptr @resid_fs_read_handle(ptr"),
+        "expected read through the handle: {ir}"
+    );
+    assert!(
+        ir.contains("call void @resid_handle_release(ptr"),
+        "expected with-block handle release: {ir}"
+    );
+}
+
+#[test]
+fn test_with_handle_multi_reverse_release() {
+    let src = r#"
+Int main() {
+    Str p = "/tmp/data.txt";
+    with (File a = filesystem.open(p), File b = filesystem.open(p)) {
+        Str x = filesystem.read_handle(a);
+        return 0;
+    }
+}
+"#;
+    let (unit, errors) = Parser::parse("with2.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "with2");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    // Two handles → two releases, emitted in reverse binding order (b, then a).
+    let first = ir.find("resid_handle_release").unwrap();
+    let second = ir[first + 1..].find("resid_handle_release").unwrap();
+    assert!(second > 0, "expected two handle releases: {ir}");
+}
