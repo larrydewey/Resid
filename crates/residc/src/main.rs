@@ -6,7 +6,8 @@
 //!   residc <file.resid>          — lex + parse, report diagnostics
 //!   residc <file.resid> emit-ir  — full pipeline → print LLVM IR
 //!   residc <file.resid> build [-o <out>] — emit + clang → native binary
-//!   residc <file.resid> run      — build to a temp binary and run it
+//!   residc <file.resid> run [args...] — build to a temp binary and run it,
+//!       forwarding everything after `run` as the program's arguments
 
 use std::env;
 use std::fs;
@@ -39,6 +40,13 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         None => Cmd::Check,
+    };
+
+    // `residc <file> run [args...]` — everything after `run` is forwarded to
+    // the program as its command-line arguments (argv[1..]).
+    let prog_args: Vec<String> = match cmd {
+        Cmd::Run => args.by_ref().collect(),
+        _ => Vec::new(),
     };
 
     // `residc <file> build [-o] <out>` — optional explicit output path.
@@ -86,7 +94,7 @@ fn main() -> ExitCode {
                 Err(code) => code,
             }
         }
-        Cmd::Run => run_native(&file, &unit),
+        Cmd::Run => run_native(&file, &unit, &prog_args),
     }
 }
 
@@ -184,13 +192,16 @@ fn build_native(file: &str, unit: &TranslationUnit, out: Option<&str>) -> Result
 
 /// Build + run; propagates the child's exit code. If the program is killed by
 /// a signal, exit with 1 (128+signal for POSIX shells).
-fn run_native(file: &str, unit: &TranslationUnit) -> ExitCode {
+fn run_native(file: &str, unit: &TranslationUnit, prog_args: &[String]) -> ExitCode {
     let tmp = temp_dir();
     let bin = tmp.join(format!("{}_bin", stem(file)));
     if let Err(code) = build_native(file, unit, Some(&bin.to_string_lossy())) {
         return code;
     }
-    let mut child = match std::process::Command::new(&bin).spawn() {
+    let mut child = match std::process::Command::new(&bin)
+        .args(prog_args)
+        .spawn()
+    {
         Ok(c) => c,
         Err(e) => {
             let _ = fs::remove_file(&bin);

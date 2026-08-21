@@ -846,7 +846,7 @@ Int main() {
     let out = Command::new(residc_bin())
         .arg(&lexer)
         .arg("run")
-        .env("RESID_LEX_SRC", &src)
+        .arg(&src)
         .output()
         .expect("failed to run residc run");
 
@@ -914,7 +914,7 @@ Int main() {
     let out = Command::new(residc_bin())
         .arg(&parser)
         .arg("run")
-        .env("RESID_PARSER_SRC", &src)
+        .arg(&src)
         .output()
         .expect("failed to run residc run");
 
@@ -970,7 +970,7 @@ fn bootstrap_typechecker_accepts_bootstrap_sources() {
         let out = Command::new(residc_bin())
             .arg(workspace.join("examples/typecheck.res"))
             .arg("run")
-            .env("RESID_TYPECHECK_SRC", workspace.join("examples").join(name))
+            .arg(workspace.join("examples").join(name))
             .output()
             .expect("failed to run residc run");
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -1013,7 +1013,7 @@ Int main() {
     let out = Command::new(residc_bin())
         .arg(workspace.join("examples/typecheck.res"))
         .arg("run")
-        .env("RESID_TYPECHECK_SRC", &bad)
+        .arg(&bad)
         .output()
         .expect("failed to run residc run");
 
@@ -1893,6 +1893,96 @@ fn run_spawn_nested() {
         stdout.trim(),
         "42",
         "expected nested spawn to return 42, got: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// M6b: the self-hosted fused codegen emits LLVM IR for a sample program;
+/// the IR assembles with clang + the C runtime and runs correctly.
+#[test]
+fn bootstrap_codegen_emits_runnable_ir() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-cg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let sample = dir.join("sample.res");
+    std::fs::write(
+        &sample,
+        r#"
+Int sq(Int x) {
+    return x * x;
+}
+
+Int main() {
+    println("hi");
+    Int a = sq(7);
+    if (a > 40) {
+        println("big");
+    } else {
+        println("small");
+    }
+    Int base = 100;
+    for (Int i in 0..3) {
+        Int s = sq(base);
+        if (s == 10000) {
+            println("tick");
+        } else {
+            println("other");
+        }
+    }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out_ll = dir.join("out.ll");
+
+    // Stage 1: run the bootstrap codegen (compiled Resid) on the sample.
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/codegen.res"))
+        .arg("run")
+        .arg(&sample)
+        .arg("-o")
+        .arg(&out_ll)
+        .output()
+        .expect("failed to run residc run");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "bootstrap codegen failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out_ll.exists(), "bootstrap codegen wrote no IR");
+
+    // Stage 2: assemble the emitted IR with clang + the C runtime.
+    let bin = dir.join("sample_bin");
+    let cc = Command::new("clang")
+        .arg(&out_ll)
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg("-Wno-override-module")
+        .arg("-pthread")
+        .arg("-o")
+        .arg(&bin)
+        .output()
+        .expect("failed to run clang");
+    assert!(
+        cc.status.success(),
+        "clang failed: {}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+
+    // Stage 3: run the native binary and check its output.
+    let run = Command::new(&bin).output().expect("failed to run binary");
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(run.status.code(), Some(0), "binary failed: {stdout:?}");
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec!["hi", "big", "tick", "tick", "tick"],
+        "unexpected output: {stdout:?}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

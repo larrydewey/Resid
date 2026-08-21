@@ -471,11 +471,11 @@ Int lex_token(Str s, Int pos) {
 }
 
 Int main() {
-    Str path = environment.get("RESID_LEX_SRC");
-    if (path == "") {
-        println("no source");
+    if (args.count() < 2) {
+        println("usage: lex <source.res>");
         return 1;
     }
+    Str path = args.get(1);
     Str src = filesystem.read_all(path);
     return lex_token(src, 0);
 }

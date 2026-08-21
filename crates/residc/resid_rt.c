@@ -1045,6 +1045,24 @@ int8_t resid_env_has(const char* name) {
     return getenv(name) != NULL ? 1 : 0;
 }
 
+/* Command-line arguments (`args` provider, spec §32). glibc passes
+ * (argc, argv, envp) to ELF .init_array constructors, so a constructor
+ * captures them without any change to the generated entry point. */
+static int g_resid_argc = 0;
+static char** g_resid_argv = 0;
+
+__attribute__((constructor)) static void resid_capture_args(int argc, char** argv) {
+    g_resid_argc = argc;
+    g_resid_argv = argv;
+}
+
+int64_t resid_args_count(void) { return g_resid_argc; }
+
+char* resid_args_get(int64_t i) {
+    if (i < 0 || i >= g_resid_argc) return resid_box_str("");
+    return resid_box_str(g_resid_argv[i]);
+}
+
 char* resid_git_rev(const char* ref) {
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), "git rev-parse %s 2>/dev/null", ref);

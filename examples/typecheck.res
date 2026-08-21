@@ -992,11 +992,24 @@ ERes check_primary(Str s, Int pos, List(Str) env, Funcs fs) {
             return check_struct_lit(s, t2.pos, t.text, env, fs);
         }
         if (t2.text == ".") {
-            Bool is_prov = t.text == "environment" || t.text == "filesystem";
+            Bool is_prov0 = t.text == "environment" || t.text == "filesystem" || t.text == "args";
+            Str shadow = env_lookup(env, t.text);
+            Bool is_prov = if (shadow == "") { is_prov0 } else { false };
             if (is_prov) {
                 Tok m = lex_tok(s, t2.pos);
                 Tok p = lex_tok(s, m.pos);
                 if (p.text == "(") {
+                    Tok p0 = lex_tok(s, p.pos);
+                    if (p0.text == ")") {
+                        if (t.text == "args") {
+                            if (m.text == "count") { return ERes { pos: p0.pos, ty: "Int", err: "" }; }
+                        }
+                        if (t.text == "git") {
+                            if (m.text == "branch") { return ERes { pos: p0.pos, ty: "Str", err: "" }; }
+                        }
+                        Str msg0 = "unknown provider method " + t.text + "." + m.text;
+                        return ERes { pos: p0.pos, ty: "", err: msg0 };
+                    }
                     ARes a = collect_args(s, p.pos, "", 0, env, fs);
                     if (a.err != "") {
                         return ERes { pos: a.pos, ty: "", err: a.err };
@@ -1006,6 +1019,11 @@ ERes check_primary(Str s, Int pos, List(Str) env, Funcs fs) {
                     }
                     if (t.text == "filesystem") {
                         if (m.text == "read_all") { return ERes { pos: a.pos, ty: "Str", err: "" }; }
+                        if (m.text == "write_all") { return ERes { pos: a.pos, ty: "Bool", err: "" }; }
+                    }
+                    if (t.text == "args") {
+                        if (m.text == "count") { return ERes { pos: a.pos, ty: "Int", err: "" }; }
+                        if (m.text == "get") { return ERes { pos: a.pos, ty: "Str", err: "" }; }
                     }
                     Str msg = "unknown provider method " + t.text + "." + m.text;
                     return ERes { pos: a.pos, ty: "", err: msg };
@@ -1488,11 +1506,11 @@ Int check_program(Str s, Int pos, Funcs fs) {
 }
 
 Int main() {
-    Str path = environment.get("RESID_TYPECHECK_SRC");
-    if (path == "") {
-        println("no source");
+    if (args.count() < 2) {
+        println("usage: typecheck <source.res>");
         return 1;
     }
+    Str path = args.get(1);
     Str src = filesystem.read_all(path);
     Funcs fs = collect_sigs(src);
     return check_program(src, 0, fs);

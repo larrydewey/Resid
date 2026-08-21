@@ -2778,6 +2778,8 @@ impl<'ctx> CodeGen<'ctx> {
             ("filesystem", "close") => "resid_fs_close",
             ("environment", "get") => "resid_env_get",
             ("environment", "has") => "resid_env_has",
+            ("args", "count") => "resid_args_count",
+            ("args", "get") => "resid_args_get",
             ("git", "rev") => "resid_git_rev",
             ("git", "branch") => "resid_git_branch",
             (p, v) => return Err(format!("codegen: unknown provider call `{p}.{v}`")),
@@ -2803,6 +2805,10 @@ impl<'ctx> CodeGen<'ctx> {
             SemType::Bool => Ok(Val {
                 v: v.into_int_value().into(),
                 ty: SemType::Bool,
+            }),
+            SemType::Numeric(NumericType::Int(IntWidth::B64)) => Ok(Val {
+                v: v.into_int_value().into(),
+                ty: SemType::Numeric(NumericType::Int(IntWidth::B64)),
             }),
             SemType::Str => Ok(Val {
                 v: v.into_pointer_value().into(),
@@ -3129,6 +3135,8 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt_void("resid_handle_release", vec![ptr.into()]);
         self.decl_rt("resid_env_get", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_env_has", vec![ptr.into()], i8t.into());
+        self.decl_rt("resid_args_count", vec![], i64t.into());
+        self.decl_rt("resid_args_get", vec![i64t.into()], ptr.into());
         self.decl_rt("resid_git_rev", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_git_branch", vec![], ptr.into());
         // Checked arithmetic (called after overflow check passes).

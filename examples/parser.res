@@ -998,11 +998,11 @@ Int parse_program(Str s, Int pos) {
 }
 
 Int main() {
-    Str path = environment.get("RESID_PARSER_SRC");
-    if (path == "") {
-        println("no source");
+    if (args.count() < 2) {
+        println("usage: parser <source.res>");
         return 1;
     }
+    Str path = args.get(1);
     Str src = filesystem.read_all(path);
     return parse_program(src, 0);
 }
