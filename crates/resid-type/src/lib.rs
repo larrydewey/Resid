@@ -408,6 +408,19 @@ pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemTyp
         // git
         ("git", "rev", vec![SemType::Str], SemType::Str),
         ("git", "branch", vec![], SemType::Str),
+        // args: command-line arguments (spec §32)
+        (
+            "args",
+            "count",
+            vec![],
+            SemType::Numeric(NumericType::Int(IntWidth::B64)),
+        ),
+        (
+            "args",
+            "get",
+            vec![SemType::Numeric(NumericType::Int(IntWidth::B64))],
+            SemType::Str,
+        ),
     ]
 }
 

@@ -11,13 +11,14 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 508 pass (lexer 17, parser 91, resid-ir 46, resid-type 187,
-  resid-codegen 132, residc 35 e2e).
+- **Tests**: 509 pass (lexer 17, parser 91, resid-ir 46, resid-type 187,
+  resid-codegen 132, residc 36 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
   with `match`/destructuring/if-let/while-let; ranges + slicing; raw/byte strings;
-  f-strings; providers (filesystem read/write, environment, git); `@residual`/`rt`/assertions;
+  f-strings; providers (filesystem read/write, environment, git, args —
+  `args.count()`/`args.get(i)` command-line arguments); `@residual`/`rt`/assertions;
   string introspection (`str_len`/`str_char_at`/`str_from_code`/`str_slice`);
   `Str + Str`; `#location`; `value?`; **handle types** (`with (Type h = expr) { body }`
   RAII, reverse-order release; `filesystem.open`/`read_handle`/`close` File handles).
@@ -30,8 +31,20 @@
   `RESID_TYPECHECK_SRC=examples/typecheck.res residc examples/typecheck.res run`
   prints `typecheck OK`, and it also accepts `lexer.res` and `parser.res`
   (e2e: `bootstrap_typechecker_accepts_bootstrap_sources`,
-  `bootstrap_typechecker_rejects_type_errors`). M6b/c (codegen + driver in Resid)
-  remain.
+  `bootstrap_typechecker_rejects_type_errors`). **M6b done**: `examples/codegen.res`
+  (~1250 lines) — a fused parse→LLVM-IR emitter in Resid: copies the bootstrap
+  lexer, collects function signatures, then recursively descends emitting IR text
+  (Int/Bool/Str; arithmetic/comparisons/logic; user calls via collected sigs;
+  `println`→puts / `print`→printf; if/else with label joins + `unreachable` when
+  both arms return; for-in lowered to in-function alloca/load/store loops with
+  per-loop unique labels; early returns as real `ret`; globals appended at module
+  end). CLI-driven: `residc examples/codegen.res run <src> [-o out.ll]`. Proven by
+  e2e `bootstrap_codegen_emits_runnable_ir`: it compiles a sample (fn call,
+  if/else, for-in with captured outer vars) to `.ll`, clang+resid_rt.c assemble
+  it, and the binary prints `hi/big/tick/tick/tick` with exit 0. All four
+  bootstrap tools now take argv (no env vars) and typecheck.res self-checks
+  codegen.res clean. Not yet in bootstrap codegen: f-strings, while, casts,
+  composites. M6c (driver in Resid) remains.
 - **Next**: `resid-build` crate (§12.1 task 5.10), M6 work items (type checker /
   codegen ported to Resid), or tooling (§12.5).
 - Full status table in §11; self-hosting roadmap in §12.
@@ -1999,6 +2012,15 @@ Updated from §10. **Checked = done, unchecked = missing.**
    2. Port codegen to Resid: emit LLVM IR text (types, functions, arithmetic,
       casts, calls, if/while/for, boxed composites, `match`, strings, f-strings,
       providers, main wrapper).
+      ✅ **Done (M6b, v1 subset)** — `examples/codegen.res` (~1250 lines): fused
+      parse→emit. Covers Int(i64)/Bool(i1)/Str(ptr), arithmetic/comparisons/
+      logic, user calls from collected sigs, println/print, if/else (label
+      joins, `unreachable` on both-return), for-in (alloca/load/store loop,
+      unique labels per loop), early `return`, string globals appended at end.
+      CLI: `residc examples/codegen.res run <src> [-o out.ll]`. E2E
+      `bootstrap_codegen_emits_runnable_ir` proves emitted IR assembles and runs.
+      Remaining for full parity: f-strings, while, casts, boxed composites,
+      match, Dec/wide numerics.
    3. Driver in Resid: lex → parse → typecheck → codegen → `write_all` `.ll` →
       spawn `clang` → binary.
    4. Bootstrap proof: the Resid compiler compiles its own source; the stage-1
@@ -2026,4 +2048,4 @@ All resolved in Resid 3.0. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-20 — M6a done: `examples/typecheck.res` (type checker in Resid) proves itself on its own source + lexer.res + parser.res (`typecheck OK`); parser runaway-loop fix via `parse_expression_forced`; 508 tests.*
+*Last updated: 2026-08-20 — M6b done: `examples/codegen.res` (fused parse→LLVM-IR codegen in Resid) emits runnable IR proven by e2e (clang-assembled binary prints hi/big/tick×3); new `args` provider (spec §32) replaces env-var I/O — all four bootstrap tools are argv-driven (`residc <tool> run <src> [-o out]`); typecheck.res self-checks codegen.res; 509 tests.*
