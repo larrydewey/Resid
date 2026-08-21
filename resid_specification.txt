@@ -851,7 +851,7 @@ Numeric operators obey the interoperability rules of §6.
 32. STANDARD LIBRARY (v1)
 ==================================================
 
-Trusted providers: filesystem, environment, git, args
+Trusted providers: filesystem, environment, git, args, process
 (all volatile by default).
 
 Core types: Bool, full Int/UInt/Float/Dec family,

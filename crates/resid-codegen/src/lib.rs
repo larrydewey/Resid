@@ -2780,6 +2780,7 @@ impl<'ctx> CodeGen<'ctx> {
             ("environment", "has") => "resid_env_has",
             ("args", "count") => "resid_args_count",
             ("args", "get") => "resid_args_get",
+            ("process", "run") => "resid_process_run",
             ("git", "rev") => "resid_git_rev",
             ("git", "branch") => "resid_git_branch",
             (p, v) => return Err(format!("codegen: unknown provider call `{p}.{v}`")),
@@ -3137,6 +3138,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_env_has", vec![ptr.into()], i8t.into());
         self.decl_rt("resid_args_count", vec![], i64t.into());
         self.decl_rt("resid_args_get", vec![i64t.into()], ptr.into());
+        self.decl_rt("resid_process_run", vec![ptr.into()], i64t.into());
         self.decl_rt("resid_git_rev", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_git_branch", vec![], ptr.into());
         // Checked arithmetic (called after overflow check passes).

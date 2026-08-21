@@ -421,6 +421,13 @@ pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemTyp
             vec![SemType::Numeric(NumericType::Int(IntWidth::B64))],
             SemType::Str,
         ),
+        // process: run an external command, returns its exit code (spec §32)
+        (
+            "process",
+            "run",
+            vec![SemType::Str],
+            SemType::Numeric(NumericType::Int(IntWidth::B64)),
+        ),
     ]
 }
 

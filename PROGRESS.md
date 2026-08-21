@@ -11,14 +11,14 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 509 pass (lexer 17, parser 91, resid-ir 46, resid-type 187,
-  resid-codegen 132, residc 36 e2e).
+- **Tests**: 510 pass (lexer 17, parser 91, resid-ir 46, resid-type 187,
+  resid-codegen 132, residc 37 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
   with `match`/destructuring/if-let/while-let; ranges + slicing; raw/byte strings;
   f-strings; providers (filesystem read/write, environment, git, args —
-  `args.count()`/`args.get(i)` command-line arguments); `@residual`/`rt`/assertions;
+  `args.count()`/`args.get(i)` — and process — `process.run(cmd)` exit code); `@residual`/`rt`/assertions;
   string introspection (`str_len`/`str_char_at`/`str_from_code`/`str_slice`);
   `Str + Str`; `#location`; `value?`; **handle types** (`with (Type h = expr) { body }`
   RAII, reverse-order release; `filesystem.open`/`read_handle`/`close` File handles).
@@ -44,7 +44,14 @@
   it, and the binary prints `hi/big/tick/tick/tick` with exit 0. All four
   bootstrap tools now take argv (no env vars) and typecheck.res self-checks
   codegen.res clean. Not yet in bootstrap codegen: f-strings, while, casts,
-  composites. M6c (driver in Resid) remains.
+  composites. **M6c done**: `examples/driver.res` (~2300 lines) fuses the shared
+  lexer + the M6a checker (`ck_*`-prefixed, quiet) + the M6b emitter into one
+  argv-driven pipeline: read → typecheck → emit IR → `filesystem.write_all(.ll)`
+  → `process.run(clang …)` → native binary. Proven by e2e
+  `bootstrap_driver_compiles_and_rejects` (compiles the sample to a working
+  binary; rejects ill-typed input with a `type error` and nonzero exit), and
+  typecheck.res self-checks driver.res. M6 item 4 (stage-2: driver compiles the
+  bootstrap sources) remains.
 - **Next**: `resid-build` crate (§12.1 task 5.10), M6 work items (type checker /
   codegen ported to Resid), or tooling (§12.5).
 - Full status table in §11; self-hosting roadmap in §12.
@@ -2023,6 +2030,12 @@ Updated from §10. **Checked = done, unchecked = missing.**
       match, Dec/wide numerics.
    3. Driver in Resid: lex → parse → typecheck → codegen → `write_all` `.ll` →
       spawn `clang` → binary.
+      ✅ **Done (M6c)** — `examples/driver.res`: one Resid program running the
+      full pipeline via `residc examples/driver.res run <src> [-o out]
+      [-rt resid_rt.c]`. Enabled by the new `process.run(Str) -> Int` provider
+      (spec §32; `system()` in resid_rt.c). E2E
+      `bootstrap_driver_compiles_and_rejects` proves both accept and reject
+      paths. Stage-2 self-compilation is item 4.
    4. Bootstrap proof: the Resid compiler compiles its own source; the stage-1
       binary reproduces a working compiler (stage-2 check).
 
@@ -2048,4 +2061,4 @@ All resolved in Resid 3.0. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-20 — M6b done: `examples/codegen.res` (fused parse→LLVM-IR codegen in Resid) emits runnable IR proven by e2e (clang-assembled binary prints hi/big/tick×3); new `args` provider (spec §32) replaces env-var I/O — all four bootstrap tools are argv-driven (`residc <tool> run <src> [-o out]`); typecheck.res self-checks codegen.res; 509 tests.*
+*Last updated: 2026-08-20 — M6c done: `examples/driver.res` runs the full pipeline (typecheck → IR → clang → binary) from Resid via the new `process.run` provider; e2e-proven on accept+reject paths; 510 tests. Previous: M6b done — `examples/codegen.res` (fused parse→LLVM-IR codegen in Resid) emits runnable IR proven by e2e (clang-assembled binary prints hi/big/tick×3); new `args` provider (spec §32) replaces env-var I/O — all four bootstrap tools are argv-driven (`residc <tool> run <src> [-o out]`); typecheck.res self-checks codegen.res; 509 tests.*
