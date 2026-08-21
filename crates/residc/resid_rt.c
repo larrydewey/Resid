@@ -1056,6 +1056,10 @@ __attribute__((constructor)) static void resid_capture_args(int argc, char** arg
     g_resid_argv = argv;
 }
 
+int64_t resid_process_run(const char* cmd) {
+    return (int64_t)system(cmd);
+}
+
 int64_t resid_args_count(void) { return g_resid_argc; }
 
 char* resid_args_get(int64_t i) {

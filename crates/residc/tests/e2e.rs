@@ -1987,3 +1987,108 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// M6c: the self-hosted driver (typecheck → codegen → clang, all in Resid)
+/// compiles a sample program to a working native binary, and rejects
+/// ill-typed sources with a nonzero exit.
+#[test]
+fn bootstrap_driver_compiles_and_rejects() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-drv-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let sample = dir.join("sample.res");
+    std::fs::write(
+        &sample,
+        r#"
+Int sq(Int x) {
+    return x * x;
+}
+
+Int main() {
+    println("hi");
+    Int a = sq(7);
+    if (a > 40) {
+        println("big");
+    } else {
+        println("small");
+    }
+    for (Int i in 0..3) {
+        Int s = sq(100);
+        if (s == 10000) {
+            println("tick");
+        } else {
+            println("other");
+        }
+    }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let bin = dir.join("sample_drv");
+
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.res"))
+        .arg("run")
+        .arg(&sample)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("failed to run residc run");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "driver failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(bin.exists(), "driver produced no binary");
+
+    let run = Command::new(&bin).output().expect("failed to run binary");
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(run.status.code(), Some(0), "binary failed: {stdout:?}");
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec!["hi", "big", "tick", "tick", "tick"],
+        "unexpected output: {stdout:?}"
+    );
+
+    // Ill-typed input must be rejected by the driver's own checker.
+    let bad = dir.join("bad.res");
+    std::fs::write(
+        &bad,
+        r#"
+Int main() {
+    Str x = 42;
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let bad_out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.res"))
+        .arg("run")
+        .arg(&bad)
+        .arg("-o")
+        .arg(dir.join("bad_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("failed to run residc run");
+    assert_ne!(
+        bad_out.status.code(),
+        Some(0),
+        "driver accepted an ill-typed program"
+    );
+    assert!(
+        String::from_utf8_lossy(&bad_out.stdout).contains("type error"),
+        "missing type error report"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

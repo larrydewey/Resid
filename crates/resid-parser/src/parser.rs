@@ -10,7 +10,7 @@ use resid_lexer::{DocComment, *};
 /// Trusted external-knowledge providers (spec §32). A `provider.verb(args)`
 /// call where the base identifier is one of these parses as a provider call.
 pub fn is_provider_name(name: &str) -> bool {
-    matches!(name, "filesystem" | "environment" | "git" | "args")
+    matches!(name, "filesystem" | "environment" | "git" | "args" | "process")
 }
 
 /// Parse error with span.
