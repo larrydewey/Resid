@@ -426,6 +426,22 @@ impl Parser {
         self.parse_expression_with_precedence(1)
     }
 
+    /// Parse an expression, guaranteeing forward progress even on syntax
+    /// errors. Used inside element/argument list loops so a failed parse
+    /// cannot leave the parser spinning on the same token.
+    fn parse_expression_forced(&mut self) -> Expr {
+        let start = self.pos;
+        let expr = self.parse_expression();
+        if self.pos == start {
+            self.errors.push(ParseError {
+                span: self.current_span(),
+                message: "expected expression".into(),
+            });
+            self.bump();
+        }
+        expr
+    }
+
     fn parse_expression_with_precedence(&mut self, min_precedence: u8) -> Expr {
         let mut left = self.parse_primary();
 
@@ -588,7 +604,7 @@ impl Parser {
                 while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
                     let pat = self.parse_pattern();
                     self.expect_op(Op::FatArrow, "match arm: expected =>");
-                    let expr = self.parse_expression();
+                    let expr = self.parse_expression_forced();
                     arms.push((pat, expr));
                     if self.peek_is_op(Op::Comma) || self.peek_is_op(Op::Semi) {
                         self.bump();
@@ -854,7 +870,7 @@ impl Parser {
                         .expect_ident("with: expected identifier")
                         .unwrap_or_else(|| Id("__error__".to_string()));
                     self.expect_op(Op::Equals, "with: expected =");
-                    let init = self.parse_expression();
+                    let init = self.parse_expression_forced();
                     bindings.push(WithBinding {
                         type_,
                         name,
@@ -925,11 +941,11 @@ impl Parser {
                         };
                         match named {
                             Some(id) => {
-                                let arg = self.parse_expression();
+                                let arg = self.parse_expression_forced();
                                 args.push((Some(id), arg));
                             }
                             None => {
-                                let arg = self.parse_expression();
+                                let arg = self.parse_expression_forced();
                                 args.push((None, arg));
                             }
                         }
@@ -958,7 +974,7 @@ impl Parser {
                         self.bump();
                         let mut args = Vec::new();
                         while !self.peek_is_op(Op::RParen) && !self.at_eof() {
-                            args.push(Box::new(self.parse_expression()));
+                            args.push(Box::new(self.parse_expression_forced()));
                             if self.peek_is_op(Op::Comma) {
                                 self.bump();
                             }
@@ -1093,7 +1109,7 @@ impl Parser {
                             .expect_ident("struct literal: expected field name")
                             .unwrap_or_else(|| Id("__error__".to_string()));
                         self.expect_op(Op::Colon, "struct literal: expected :");
-                        let field_value = self.parse_expression();
+                        let field_value = self.parse_expression_forced();
                         fields.push((field_name, field_value));
                         if self.peek_is_op(Op::Comma) {
                             self.bump();
@@ -1114,7 +1130,7 @@ impl Parser {
                 self.bump();
                 let mut elements = Vec::new();
                 while !self.peek_is_op(Op::RBracket) && !self.at_eof() {
-                    elements.push(self.parse_expression());
+                    elements.push(self.parse_expression_forced());
                     if self.peek_is_op(Op::Comma) {
                         self.bump();
                     }
@@ -1985,7 +2001,7 @@ impl Parser {
         if self.peek_is_op(Op::LParen) {
             self.bump();
             while !self.peek_is_op(Op::RParen) && !self.at_eof() {
-                params.push(self.parse_expression());
+                params.push(self.parse_expression_forced());
                 if self.peek_is_op(Op::Comma) {
                     self.bump();
                 }
@@ -3543,5 +3559,24 @@ type Opt(T) = Some(T) | None;
             }
             other => panic!("expected Range, got {other:?}"),
         }
+    }
+}
+
+#[test]
+fn bootstrap_sources_parse_clean() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    for name in ["typecheck.res", "lexer.res", "parser.res"] {
+        let src = std::fs::read_to_string(root.join("examples").join(name)).unwrap();
+        let (unit, errors) = Parser::parse(name, &src);
+        assert!(
+            errors.is_empty(),
+            "{name}: parse errors: {:?}",
+            errors.iter().take(5).collect::<Vec<_>>()
+        );
+        assert!(!unit.declarations.is_empty(), "{name}: no declarations");
     }
 }
