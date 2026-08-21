@@ -957,6 +957,76 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// M6a: the self-hosted type checker (examples/typecheck.res) accepts all
+/// three bootstrap programs — including its own source.
+#[test]
+fn bootstrap_typechecker_accepts_bootstrap_sources() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    for name in ["typecheck.res", "lexer.res", "parser.res"] {
+        let out = Command::new(residc_bin())
+            .arg(workspace.join("examples/typecheck.res"))
+            .arg("run")
+            .env("RESID_TYPECHECK_SRC", workspace.join("examples").join(name))
+            .output()
+            .expect("failed to run residc run");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{name}: residc failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            stdout.trim().lines().last(),
+            Some("typecheck OK"),
+            "{name}: unexpected output: {stdout:?}"
+        );
+    }
+}
+
+/// M6a: the self-hosted type checker rejects ill-typed programs.
+#[test]
+fn bootstrap_typechecker_rejects_type_errors() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-tc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let bad = dir.join("bad.res");
+    std::fs::write(
+        &bad,
+        r#"
+Int main() {
+    Str x = 42;
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/typecheck.res"))
+        .arg("run")
+        .env("RESID_TYPECHECK_SRC", &bad)
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_ne!(out.status.code(), Some(0), "ill-typed source passed: {stdout:?}");
+    assert!(
+        stdout.contains("type error"),
+        "missing type error report: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `List.concat(b)` joins two lists of the same element type.
 #[test]
 fn run_list_concat() {

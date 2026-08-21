@@ -11,8 +11,8 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 505 pass (lexer 17, parser 90, resid-ir 46, resid-type 187,
-  resid-codegen 132, residc 33 e2e).
+- **Tests**: 508 pass (lexer 17, parser 91, resid-ir 46, resid-type 187,
+  resid-codegen 132, residc 35 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -22,8 +22,16 @@
   `Str + Str`; `#location`; `value?`; **handle types** (`with (Type h = expr) { body }`
   RAII, reverse-order release; `filesystem.open`/`read_handle`/`close` File handles).
 - **Bootstrap**: M1–M5 done (`examples/lexer.res` and `examples/parser.res` each
-  parse their own source). M6 — the full compiler written in Resid — not started;
-  prereqs P1 (`filesystem.write_all`) and P2 (`Result` + spawn) done.
+  parse their own source). **M6a done**: `examples/typecheck.res` — a type checker
+  written in Resid (~1500 lines) — collects function/struct signatures, then walks
+  declarations checking binds, calls (incl. built-ins + providers), struct/list
+  literals, field access, if/while/for/match, precedence-climbing binary exprs,
+  and rejects undefined vars / arity mismatches / ill-typed ops. It proves itself:
+  `RESID_TYPECHECK_SRC=examples/typecheck.res residc examples/typecheck.res run`
+  prints `typecheck OK`, and it also accepts `lexer.res` and `parser.res`
+  (e2e: `bootstrap_typechecker_accepts_bootstrap_sources`,
+  `bootstrap_typechecker_rejects_type_errors`). M6b/c (codegen + driver in Resid)
+  remain.
 - **Next**: `resid-build` crate (§12.1 task 5.10), M6 work items (type checker /
   codegen ported to Resid), or tooling (§12.5).
 - Full status table in §11; self-hosting roadmap in §12.
@@ -1947,7 +1955,7 @@ Updated from §10. **Checked = done, unchecked = missing.**
 
 6. **M6 — Full compiler in Resid**: type checking + codegen + LLVM backend
    rewritten in Resid; the resulting compiler turns Resid source into a native
-   binary (self-hosting). ❌ Not started. Prereqs below block it.
+   binary (self-hosting). 🔶 In progress.
 
    **Prereqs (do first — a Resid compiler must write artifacts and run `clang`):**
    - **P1 — `filesystem.write_all(path, contents)` provider verb** — compiler
@@ -1976,6 +1984,18 @@ Updated from §10. **Checked = done, unchecked = missing.**
    1. Port type checker to Resid: literal inference, widening, casts, `if`,
       bind env + shadowing rejection, conversion helpers, built-in sigs,
       pattern typing, f-string validation, provider call typing.
+      ✅ **Done (M6a)** — `examples/typecheck.res` (~1500 lines): its own
+      hand-rolled lexer (chars → Tok via codepoint positions), signature
+      collection (functions + structs as field strings), then a
+      declaration walk: binds with shadowing rejection, calls (user fns by
+      collected sig, built-ins incl. `str_*`/`IntToString`/providers), struct
+      and list literals, field access, if/while/for/match statements and
+      if-expressions, precedence-climbing binary exprs (spec §30), unary `-`,
+      `_ =` discard. Proves itself on its own source plus `lexer.res` and
+      `parser.res` (`typecheck OK`; e2e
+      `bootstrap_typechecker_accepts_bootstrap_sources`,
+      `bootstrap_typechecker_rejects_type_errors`). Not yet covered: casts,
+      options/pattern typing depth, numeric widening at call sites.
    2. Port codegen to Resid: emit LLVM IR text (types, functions, arithmetic,
       casts, calls, if/while/for, boxed composites, `match`, strings, f-strings,
       providers, main wrapper).
@@ -2006,4 +2026,4 @@ All resolved in Resid 3.0. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-19 — handles done (spec §16, task 5.7): `with (Type h = expr) { body }` type-checks and lowers with RAII reverse-order release (`resid_handle_release`); `SemType::File` + `filesystem.open`/`read_handle`/`close` verbs; a `with` whose body returns terminates the enclosing block (505 tests).*
+*Last updated: 2026-08-20 — M6a done: `examples/typecheck.res` (type checker in Resid) proves itself on its own source + lexer.res + parser.res (`typecheck OK`); parser runaway-loop fix via `parse_expression_forced`; 508 tests.*
