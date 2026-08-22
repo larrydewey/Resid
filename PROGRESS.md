@@ -11,8 +11,8 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 548 pass (lexer 17, parser 101, resid-ir 46, resid-type 194,
-  resid-codegen 136, resid-build 12, residc 42 e2e).
+- **Tests**: 551 pass (lexer 17, parser 101, resid-ir 46, resid-type 195,
+  resid-codegen 137, resid-build 12, residc 43 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -1759,7 +1759,9 @@ pipeline into `<pkg>/target/resid/<name>`; CLI `resid-build [dir] [-p prof] [-o 
   (ascending/lexicographic), `list_reverse_ints/list_reverse_strs`,
   `list_contains_int/list_contains_str`, `list_sum(List(Int)) -> Int` — operating on
   the ResidVal box layout, returning fresh boxes; str_split/str_join were migrated
-  to that layout too. Bootstrap compilers do not carry these yet (bootstrap subset). Still missing: import-as namespacing, registry/signed archives, capability enforcement at runtime, Unicode casing. |
+  to that layout too. **Stdlib v1.4 done — List(Float) verbs**:
+  `list_sort_floats/list_reverse_floats/list_contains_float/list_sumf` (slots hold
+  `resid_box_f64` boxes). Bootstrap compilers do not carry these yet (bootstrap subset). Still missing: import-as namespacing, registry/signed archives, capability enforcement at runtime, Unicode casing. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
 
 Build/test notes:

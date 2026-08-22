@@ -2007,3 +2007,33 @@ char* str_reverse(const char* s) {
     free(off);
     return out;
 }
+
+/* ─── Stdlib v1.4: List(Float) verbs (slots hold resid_box_f64 boxes) ─── */
+
+void* list_reverse_floats(void* box) {
+    return list_reverse_ints(box);
+}
+
+int8_t list_contains_float(void* box, double v) {
+    ResidVal* b = (ResidVal*)box;
+    for (int64_t i = 0; i < b->count; i++)
+        if (resid_unbox_f64(b->slots[i]) == v) return 1;
+    return 0;
+}
+
+static int rt_cmp_boxed_f64(const void* a, const void* b) {
+    double x = resid_unbox_f64(*(void* const*)a);
+    double y = resid_unbox_f64(*(void* const*)b);
+    return x < y ? -1 : x > y;
+}
+
+void* list_sort_floats(void* box) {
+    return rt_list_sorted_copy(box, rt_cmp_boxed_f64);
+}
+
+double list_sumf(void* box) {
+    ResidVal* b = (ResidVal*)box;
+    double s = 0.0;
+    for (int64_t i = 0; i < b->count; i++) s += resid_unbox_f64(b->slots[i]);
+    return s;
+}

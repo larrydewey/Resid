@@ -2975,3 +2975,24 @@ Int main() {
     assert!(ir.contains("call i64 @list_sum"), "expected list_sum: {ir}");
     assert!(ir.contains("declare i1 @list_contains_int"), "expected list_contains_int decl: {ir}");
 }
+
+#[test]
+fn test_stdlib_float_list_calls() {
+    let src = r#"
+Int main() {
+    List(Float) fs = [3.5, -1.0];
+    Float s = list_sumf(fs);
+    Bool c = list_contains_float(fs, 3.5);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("stdflist.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "stdflist");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("declare double @list_sumf"), "expected list_sumf decl: {ir}");
+    assert!(ir.contains("declare i1 @list_contains_float"), "expected contains decl: {ir}");
+}

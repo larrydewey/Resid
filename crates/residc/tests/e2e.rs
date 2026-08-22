@@ -2353,3 +2353,40 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Stdlib v1.4: List(Float) verbs end-to-end.
+#[test]
+fn run_stdlib_float_list() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-stdfl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("stdfl.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    List(Float) fs = [3.5, -1.0, 2.25];
+    List(Float) sorted = list_sort_floats(fs);
+    println(f"sum={list_sumf(sorted)}");
+    if (list_contains_float(fs, 2.25)) {
+        println("has 2.25");
+    }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout.trim(), "sum=4.75\nhas 2.25", "unexpected output: {stdout:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
