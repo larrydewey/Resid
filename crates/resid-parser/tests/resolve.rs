@@ -140,7 +140,11 @@ fn missing_import_file_errors() {
         "import \"nope.resid\";\nInt main() { return 0; }\n",
     );
     let e = resolve_unit(&root).err().expect("missing import must error");
-    assert!(e.message.contains("cannot read") || e.message.contains("cannot resolve"), "{}", e.message);
+    assert!(
+        e.message.contains("cannot read") || e.message.contains("no such file"),
+        "{}",
+        e.message
+    );
 }
 
 #[test]
@@ -180,4 +184,39 @@ fn types_are_always_exported() {
             .any(|d| matches!(d, resid_parser::Declaration::Type(_))),
         "type def carried across"
     );
+}
+
+#[test]
+fn dependency_import_by_package_name() {
+    let dir = temp_dir("dep");
+    // Dependency package: lib/math.resid with its own manifest.
+    write(
+        &dir,
+        "vendor/math/src/main.resid",
+        "pub Int dbl(Int x) {\n    return x * 2;\n}\n",
+    );
+    fs::write(dir.join("vendor/math/resid.toml"), "[package]\nname = \"math\"\nversion = \"0.1.0\"\n").unwrap();
+    let root = write(
+        &dir,
+        "main.resid",
+        "import \"math\";\nInt main() { return dbl(21); }\n",
+    );
+    let deps = resid_parser::DependencyMap::from([(
+        "math".to_string(),
+        dir.join("vendor/math/src/main.resid"),
+    )]);
+    let unit = resid_parser::resolve_unit_with(&root, &deps).expect("resolve ok");
+    assert_eq!(unit.declarations.len(), 2);
+}
+
+#[test]
+fn unknown_dependency_import_errors() {
+    let dir = temp_dir("nodep");
+    let root = write(
+        &dir,
+        "main.resid",
+        "import \"ghost\";\nInt main() { return 0; }\n",
+    );
+    let e = resolve_unit(&root).err().expect("must fail");
+    assert!(e.message.contains("no dependency"), "{}", e.message);
 }

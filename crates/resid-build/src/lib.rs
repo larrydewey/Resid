@@ -61,6 +61,15 @@ struct ManifestToml {
     package: PackageToml,
     #[serde(default)]
     target: Option<TargetToml>,
+    #[serde(default)]
+    dependencies: std::collections::HashMap<String, DepToml>,
+}
+
+#[derive(Deserialize)]
+struct DepToml {
+    path: String,
+    #[serde(default)]
+    capabilities: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +86,16 @@ struct TargetToml {
     triple: Option<String>,
 }
 
+/// A path dependency declared in `[dependencies.<name>]` (spec §35).
+#[derive(Debug, Clone)]
+pub struct Dependency {
+    pub name: String,
+    /// Path relative to the depending package's directory.
+    pub path: PathBuf,
+    /// Declared capability requirements (parsed, not yet enforced).
+    pub capabilities: Vec<String>,
+}
+
 /// A parsed `resid.toml`.
 #[derive(Debug, Clone)]
 pub struct Manifest {
@@ -85,6 +104,8 @@ pub struct Manifest {
     /// Crate root source file, resolved relative to the package directory.
     pub root: PathBuf,
     pub target_triple: Option<String>,
+    /// Path dependencies in manifest order.
+    pub dependencies: Vec<Dependency>,
     /// Directory containing resid.toml.
     pub dir: PathBuf,
 }
@@ -146,13 +167,55 @@ impl Manifest {
                 root.display()
             )));
         }
+        let mut dependencies = Vec::new();
+        for (name, dep) in &raw.dependencies {
+            let dep_dir = pkg_dir.join(&dep.path);
+            // A dependency is a Resid package: its manifest tells us its root.
+            let dep_manifest_path = dep_dir.join("resid.toml");
+            let dep_text = std::fs::read_to_string(&dep_manifest_path).map_err(|e| {
+                LoadError::Invalid(format!(
+                    "dependency '{name}': cannot read '{}': {e}",
+                    dep_manifest_path.display()
+                ))
+            })?;
+            let dep_raw: ManifestToml = toml::from_str(&dep_text).map_err(|e| {
+                LoadError::Invalid(format!(
+                    "dependency '{name}': invalid resid.toml: {e}"
+                ))
+            })?;
+            let dep_root_rel = dep_raw
+                .package
+                .root
+                .unwrap_or_else(|| "src/main.resid".to_string());
+            let dep_root = dep_dir.join(dep_root_rel);
+            if !dep_root.is_file() {
+                return Err(LoadError::Invalid(format!(
+                    "dependency '{name}': root source '{}' not found",
+                    dep_root.display()
+                )));
+            }
+            dependencies.push(Dependency {
+                name: name.clone(),
+                path: dep_root.canonicalize().unwrap_or(dep_root),
+                capabilities: dep.capabilities.clone().unwrap_or_default(),
+            });
+        }
         Ok(Manifest {
             name: raw.package.name,
             version: raw.package.version,
             root,
             target_triple: raw.target.and_then(|t| t.triple),
+            dependencies,
             dir: pkg_dir,
         })
+    }
+
+    /// Dependency roots keyed by package name, for import resolution.
+    pub fn dependency_map(&self) -> resid_parser::DependencyMap {
+        self.dependencies
+            .iter()
+            .map(|d| (d.name.clone(), d.path.clone()))
+            .collect()
     }
 
     /// Default output directory for build artifacts: `<dir>/target/resid`.
@@ -191,7 +254,7 @@ pub enum Artifact {
 /// Pipeline per file: lex → parse → type check → LLVM IR → clang.
 pub fn build(manifest: &Manifest, profile: Profile, out_dir: &Path) -> Result<Artifact, BuildError> {
     // Resolve imports + lex + parse.
-    let unit = match resid_parser::resolve_unit(&manifest.root) {
+    let unit = match resid_parser::resolve_unit_with(&manifest.root, &manifest.dependency_map()) {
         Ok(u) => u,
         Err(e) => return err(format!("{}", e)),
     };

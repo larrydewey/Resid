@@ -11,8 +11,8 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 528 pass (lexer 17, parser 99, resid-ir 46, resid-type 188,
-  resid-codegen 132, resid-build 8, residc 38 e2e).
+- **Tests**: 532 pass (lexer 17, parser 101, resid-ir 46, resid-type 188,
+  resid-codegen 132, resid-build 10, residc 38 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -64,8 +64,8 @@
   survive nesting, and decoded-byte string-literal sizing. Proven by e2e
   `stage2_emitter_compiles_bootstrap_lexer`; full matrix in /tmp scratch
   (lexer/parser/typecheck outputs diff clean; driver IR identical).
-- **Next**: dependency resolution + `import as M` namespacing in `resid-build`,
-  full `resid-builtin` stdlib, or tooling (§12.5).
+- **Next**: `import as M` namespacing + capability enforcement, full
+  `resid-builtin` stdlib, or tooling (§12.5).
 - Full status table in §11; self-hosting roadmap in §12.
 
 ---
@@ -1751,7 +1751,7 @@ Before calling compiler done:
 | 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. Runtime helpers landed: conversion helpers, checked/wrapping/saturating arithmetic, ranges/slicing, raw strings, byte strings, `#location`, f-string interpolation, runtime `Str + Str` concat, Dec(N) exact decimal arithmetic/display/conversions, `filesystem.write_all` (M6 P1), spawn with capture loading and sum-type casting (M6 P2), and **handle types** (spec §16): `with (File h = open(path)) { body }` type-checks and lowers to acquire → body → `resid_handle_release` (RAII, reverse binding order), plus `filesystem.open`/`read_handle`/`close` File-handle verbs. `resid-build` crate landed: parses `resid.toml` ([package] name/version/root,
 [target] triple), profiles debug/release/check (spec §35), builds via the full
 pipeline into `<pkg>/target/resid/<name>`; CLI `resid-build [dir] [-p prof] [-o dir]`.
-**Multi-file packages done**: `resid_parser::resolve_unit` resolves `import "f.resid"` trees (relative paths, cycle/diamond dedupe by canonical path), merging only exports (`pub` functions; types/behaviors always visible) into one flat unit — deps before dependents; `(a, b)` name selection supported, `as M` rejected for now. residc and resid-build both compile through it (proven: multi-file package with imported fn+type builds and runs). Still missing: dependency resolution, import-as namespacing, signing/capabilities, full `resid-builtin` stdlib. |
+**Multi-file packages done**: `resid_parser::resolve_unit` resolves `import "f.resid"` trees (relative paths, cycle/diamond dedupe by canonical path), merging only exports (`pub` functions; types/behaviors always visible) into one flat unit — deps before dependents; `(a, b)` name selection supported, `as M` rejected for now. residc and resid-build both compile through it (proven: multi-file package with imported fn+type builds and runs). **Path dependencies done (spec §35)**: `[dependencies.<name>] path = ...` — the dep is a Resid package whose root file imports by bare package name (`import "math"`); resid-build validates each dep's manifest/root at load, passes a name→root map to `resolve_unit_with`, capabilities parsed but unenforced. Still missing: import-as namespacing, registry/signed archives, capability enforcement, full `resid-builtin` stdlib. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
 
 Build/test notes:
@@ -2078,7 +2078,10 @@ All resolved in Resid 3.0. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-22 — multi-file packages: resolve_unit merges import
+*Last updated: 2026-08-22 — path dependencies: `[dependencies.<name>]`
+packages resolve via bare-name imports (`import "math"`), dep manifests
+validated at load; proven end-to-end through resid-build. Also today:
+multi-file packages: resolve_unit merges import
 trees into a flat unit (pub-gated exports, deduped cycles/diamonds); residc and
 resid-build build through it. Also today: `resid-build` crate done (resid.toml manifest parse,
 profiles debug/release/check, build orchestration to native binary; 8 tests) and
