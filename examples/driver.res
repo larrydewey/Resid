@@ -3029,6 +3029,26 @@ Sigs ck_collect_sigs(Str s) {
     return ck_collect_sigs_at(s, 0, sigs_empty());
 }
 
+Str dup_from(List(Str) names, Int i, Int j) {
+    Int n = names.len();
+    if (i >= n) {
+        return "";
+    }
+    if (j >= i) {
+        Int i2 = i + 1;
+        return dup_from(names, i2, 0);
+    }
+    if (names[i] == names[j]) {
+        return names[i];
+    }
+    Int j2 = j + 1;
+    return dup_from(names, i, j2);
+}
+
+Str first_dup_name(List(Str) names) {
+    return dup_from(names, 0, 0);
+}
+
 Int ck_check_program(Str s, Int pos, Sigs fs) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") {
@@ -3088,6 +3108,11 @@ Int main() {
     Str rtc = pick_opt(argc, "-rt", "crates/residc/resid_rt.c");
     Str src = filesystem.read_all(path);
     Sigs sg = ck_collect_sigs(src);
+    Str dupn = first_dup_name(sg.names);
+    if (dupn != "") {
+        println("type error: function `" + dupn + "` is already defined; duplicate definitions are forbidden");
+        return 1;
+    }
     Int tc = ck_check_program(src, 0, sg);
     if (tc != 0) { return tc; }
     Funcs fs = collect_sigs(src);
@@ -3113,4 +3138,6 @@ Int main() {
     println("wrote " + out);
     return 0;
 }
+
+
 

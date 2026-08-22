@@ -11,7 +11,7 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 511 pass (lexer 17, parser 91, resid-ir 46, resid-type 187,
+- **Tests**: 512 pass (lexer 17, parser 91, resid-ir 46, resid-type 188,
   resid-codegen 132, residc 38 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
@@ -2075,7 +2075,11 @@ All resolved in Resid 3.0. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-21 — M6 item 4 (stage-2) done: the Resid-written
+*Last updated: 2026-08-22 — hardening: duplicate function definitions are
+  now rejected (`check_program` in resid-type; bootstrap typecheck.res via
+  `first_dup_name`; fused driver carries the check) — found during the M6
+  merge where two `op_prec` tables silently resolved to the first. 512
+  tests.* Previous milestone — M6 item 4 (stage-2) done: the Resid-written
   emitter compiles lexer/parser/typecheck/codegen/driver.res into binaries
   matching stage-1 output byte-for-byte; `tools/merge_driver.py` now
   regenerates driver.res from its two inputs; e2e

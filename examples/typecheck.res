@@ -1473,6 +1473,26 @@ Funcs collect_sigs(Str s) {
     return collect_sigs_at(s, 0, funcs_empty());
 }
 
+Str dup_from(List(Str) names, Int i, Int j) {
+    Int n = names.len();
+    if (i >= n) {
+        return "";
+    }
+    if (j >= i) {
+        Int i2 = i + 1;
+        return dup_from(names, i2, 0);
+    }
+    if (names[i] == names[j]) {
+        return names[i];
+    }
+    Int j2 = j + 1;
+    return dup_from(names, i, j2);
+}
+
+Str first_dup_name(List(Str) names) {
+    return dup_from(names, 0, 0);
+}
+
 Int check_program(Str s, Int pos, Funcs fs) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") {
@@ -1516,5 +1536,10 @@ Int main() {
     Str path = args.get(1);
     Str src = filesystem.read_all(path);
     Funcs fs = collect_sigs(src);
+    Str dup = first_dup_name(fs.names);
+    if (dup != "") {
+        println("type error: function `" + dup + "` is already defined; duplicate definitions are forbidden");
+        return 1;
+    }
     return check_program(src, 0, fs);
 }
