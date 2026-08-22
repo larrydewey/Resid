@@ -9,6 +9,9 @@ use crate::{Declaration, ExprKind, TranslationUnit};
 pub struct ProviderUse {
     pub provider: String,
     pub verb: String,
+    /// Decoded string value of the first argument when it is a string
+    /// literal (path-like verbs); `None` for dynamic or absent arguments.
+    pub first_str_arg: Option<String>,
     pub span: resid_lexer::token::Span,
 }
 
@@ -45,10 +48,15 @@ fn collect_stmt(s: &crate::Stmt, out: &mut Vec<ProviderUse>) {
 }
 
 fn walk(expr: &crate::Expr, out: &mut Vec<ProviderUse>) {
-    if let ExprKind::ProviderCall { provider, verb, .. } = &expr.kind {
+    if let ExprKind::ProviderCall { provider, verb, args } = &expr.kind {
+        let first_str_arg = args.first().and_then(|a| match &a.kind {
+            ExprKind::Literal(resid_lexer::token::Literal::Str(s)) => Some(s.value.clone()),
+            _ => None,
+        });
         out.push(ProviderUse {
             provider: provider.0.clone(),
             verb: verb.0.clone(),
+            first_str_arg,
             span: expr.span.clone(),
         });
     }
