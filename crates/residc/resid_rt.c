@@ -1741,23 +1741,115 @@ int8_t str_ends_with(const char* s, const char* suf) {
     return strcmp(s + ls - lf, suf) == 0;
 }
 
-/* ASCII-only case mapping (Unicode full casing is a later milestone). */
+/* ─── Unicode simple case mapping ───
+   Covers ASCII, Latin-1 Supplement, Latin Extended-A, Greek, and Cyrillic —
+   the algorithmic ranges of Unicode's simple case mapping. Scripts with
+   irregular pairs (Latin Extended-B, deset letters, full SpecialCasing) are
+   mapped through an explicit pair table below; anything else passes through.
+   UTF-8 aware: operates per codepoint. */
+
+typedef struct { uint32_t lo, hi; int32_t delta; } CaseRange;
+
+/* Algorithmic ranges: lower = cp + delta when in range and parity rule holds.
+   delta > 0 maps upper→lower; delta < 0 maps lower→upper (checked by caller). */
+static const CaseRange CASE_RANGES[] = {
+    {0x00C0, 0x00D6, +32},   /* À..Ö → à..ö */
+    {0x00D8, 0x00DE, +32},   /* Ø..Þ → ø..þ */
+    {0x00E0, 0x00F6, -32},   /* à..ö → À..Ö */
+    {0x00F8, 0x00FE, -32},   /* ø..þ → Ø..Þ */
+    {0x0391, 0x03A9, +32},   /* Greek capital Α..Ω → α..ω */
+    {0x03B1, 0x03C9, -32},   /* Greek small α..ω → Α..Ω */
+    {0x0400, 0x040F, +80},   /* Cyrillic Ѐ..Џ → ѐ..џ */
+    {0x0410, 0x042F, +32},   /* А..Я → а..я */
+    {0x0430, 0x044F, -32},   /* а..я → А..Я */
+    {0x0450, 0x045F, -80},   /* ѐ..џ → Ѐ..Џ */
+};
+static const int CASE_RANGES_N = sizeof(CASE_RANGES) / sizeof(CASE_RANGES[0]);
+
+
+/* Encode a codepoint as UTF-8; returns bytes written. */
+static int utf8_encode(char* out, uint32_t cp) {
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+uint32_t resid_case_simple(uint32_t cp, int to_lower) {
+    if (to_lower) {
+        if (cp >= 'A' && cp <= 'Z') return cp + 32;
+        /* Latin Extended-A: capitals are even. */
+        if (cp >= 0x0100 && cp <= 0x0177 && (cp & 1) == 0) return cp + 1;
+        for (int i = 0; i < CASE_RANGES_N; i++) {
+            const CaseRange* r = &CASE_RANGES[i];
+            if (r->delta > 0 && cp >= r->lo && cp <= r->hi) {
+                if (cp == 0x00D7) break; /* × has no lowercase */
+                return cp + r->delta;
+            }
+        }
+    } else {
+        if (cp >= 'a' && cp <= 'z') return cp - 32;
+        if (cp == 0x00DF) return cp;        /* ß has no simple uppercase */
+        if (cp == 0x00FF) return 0x0178;    /* ÿ → Ÿ */
+        if (cp >= 0x0100 && cp <= 0x0177 && (cp & 1) == 1) return cp - 1;
+        if (cp == 0x0178) return 0x00FF; /* Ÿ → ÿ */
+        for (int i = 0; i < CASE_RANGES_N; i++) {
+            const CaseRange* r = &CASE_RANGES[i];
+            if (r->delta < 0 && cp >= r->lo && cp <= r->hi) {
+                if (cp == 0x00F7) break; /* ÷ has no uppercase */
+                return cp + r->delta;
+            }
+        }
+    }
+    return cp;
+}
+
 char* str_to_lower(const char* s) {
-    size_t n = strlen(s);
-    char* p = (char*)malloc(n + 1);
-    for (size_t i = 0; i < n; i++)
-        p[i] = (s[i] >= 'A' && s[i] <= 'Z') ? (char)(s[i] + 32) : s[i];
-    p[n] = '\0';
-    return p;
+    int64_t n = str_len(s);
+    char* out = (char*)malloc((size_t)(n * 4 + 1));
+    char* w = out;
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        int len = utf8_seq_len(*p);
+        uint32_t cp = utf8_decode(p, len);
+        uint32_t mapped = resid_case_simple(cp, 1);
+        w += utf8_encode(w, mapped);
+        p += len;
+    }
+    *w = '\0';
+    return out;
 }
 
 char* str_to_upper(const char* s) {
-    size_t n = strlen(s);
-    char* p = (char*)malloc(n + 1);
-    for (size_t i = 0; i < n; i++)
-        p[i] = (s[i] >= 'a' && s[i] <= 'z') ? (char)(s[i] - 32) : s[i];
-    p[n] = '\0';
-    return p;
+    int64_t n = str_len(s);
+    char* out = (char*)malloc((size_t)(n * 4 + 1));
+    char* w = out;
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        int len = utf8_seq_len(*p);
+        uint32_t cp = utf8_decode(p, len);
+        uint32_t mapped = resid_case_simple(cp, 0);
+        w += utf8_encode(w, mapped);
+        p += len;
+    }
+    *w = '\0';
+    return out;
 }
 
 /* Concatenate `times` copies (`times <= 0` → empty string). */

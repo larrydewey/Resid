@@ -2390,3 +2390,42 @@ Int main() {
     assert_eq!(stdout.trim(), "sum=4.75\nhas 2.25", "unexpected output: {stdout:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Unicode case mapping covers ASCII, Latin-1, Latin Extended-A, Greek and
+/// Cyrillic; ß has no simple uppercase and passes through.
+#[test]
+fn run_unicode_case_mapping() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-case-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("case.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    println(str_to_upper("héllo wörld привет αβγ"));
+    println(str_to_lower("HÉLLO WÖRLD ПРИВЕТ ΑΒΓ"));
+    println(str_to_upper("ßÿ"));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "HÉLLO WÖRLD ПРИВЕТ ΑΒΓ\nhéllo wörld привет αβγ\nßŸ",
+        "unexpected output: {stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
