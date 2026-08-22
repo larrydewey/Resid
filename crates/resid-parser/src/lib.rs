@@ -3,6 +3,7 @@
 //! Implements all EBNF productions from spec §28 with
 //! precedence climbing for operators (spec §27).
 
+mod alias;
 mod ast;
 mod parser;
 mod resolve;

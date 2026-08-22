@@ -119,16 +119,24 @@ fn import_cycle_terminates() {
 }
 
 #[test]
-fn import_as_is_rejected() {
-    let dir = temp_dir("alias");
+fn alias_import_merges_renamed_decls() {
+    let dir = temp_dir("aliasmerge");
     write(&dir, "u.resid", "pub Int a() { return 1; }\n");
     let root = write(
         &dir,
         "main.resid",
-        "import \"u.resid\" as U;\nInt main() { return 0; }\n",
+        "import \"u.resid\" as U;\nInt main() { return U.a(); }\n",
     );
-    let e = resolve_unit(&root).err().expect("alias must error");
-    assert!(e.message.contains("not supported"), "{}", e.message);
+    let unit = resolve_unit(&root).expect("alias resolves");
+    let names: Vec<String> = unit
+        .declarations
+        .iter()
+        .filter_map(|d| match d {
+            resid_parser::Declaration::Function(f) => Some(f.name.0.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(names.contains(&"U.a".to_string()), "{names:?}");
 }
 
 #[test]
@@ -219,4 +227,48 @@ fn unknown_dependency_import_errors() {
     );
     let e = resolve_unit(&root).err().expect("must fail");
     assert!(e.message.contains("no dependency"), "{}", e.message);
+}
+
+#[test]
+fn alias_import_rewrites_calls_and_values() {
+    let dir = temp_dir("alias");
+    write(
+        &dir,
+        "u.resid",
+        "pub Int dbl(Int x) {\n    return x * 2;\n}\npub Int base() { return 5; }\nInt priv_fn() { return 0; }\n",
+    );
+    let root = write(
+        &dir,
+        "main.resid",
+        "import \"u.resid\" as U;\nInt main() {\n    Int n = U.dbl(U.base());\n    return n;\n}\n",
+    );
+    let unit = resolve_unit(&root).expect("resolve ok");
+    let names: Vec<String> = unit
+        .declarations
+        .iter()
+        .filter_map(|d| match d {
+            resid_parser::Declaration::Function(f) => Some(f.name.0.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(names.contains(&"U.dbl".to_string()), "{names:?}");
+    assert!(!names.contains(&"priv_fn".to_string()), "private fn leaked: {names:?}");
+    // The call and value references collapsed to `U.dbl` / `U.base`.
+    let src_text = format!("{:?}", unit.declarations);
+    assert!(src_text.contains("Id(Id(\"U.dbl\"))"), "call not rewritten: {src_text}");
+    assert!(src_text.contains("Id(Id(\"U.base\"))"), "value not rewritten: {src_text}");
+}
+
+#[test]
+fn alias_import_end_to_end_types_clean() {
+    let dir = temp_dir("aliastype");
+    write(&dir, "m.resid", "pub Int triple(Int x) {\n    return x * 3;\n}\n");
+    let root = write(
+        &dir,
+        "main.resid",
+        "import \"m.resid\" as M;\nInt main() {\n    return M.triple(14);\n}\n",
+    );
+    let unit = resolve_unit(&root).expect("resolve ok");
+    let errs = resid_type::check_program(&unit);
+    assert!(errs.is_empty(), "aliased call should type-check: {:?}", errs);
 }

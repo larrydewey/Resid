@@ -56,20 +56,53 @@ pub fn resolve_unit_with(
     })?;
     let mut visited = HashSet::new();
     let mut decls: Vec<Declaration> = Vec::new();
-    let mut imports: Vec<ImportDecl> = Vec::new();
-    let root_imports = load_into(&path, &mut visited, &mut decls, None, true, deps)?;
-    imports.extend(root_imports);
+    let mut aliases = crate::alias::AliasMap::new();
+    let imports: Vec<ImportDecl> = Vec::new();
+    merge_file(&path, &mut visited, &mut decls, None, true, None, &mut aliases, deps)?;
+    // Rewrite qualified references in the root's own declarations. Root decls
+    // sit at the tail of `decls`; rewrite them in place.
+    if !aliases.is_empty() {
+        let split_at = decls.len() - root_own_count(&path, &mut HashSet::new(), deps)?;
+        // Simpler and safe: recompute the root's own decl names to rewrite
+        // only root-owned declarations below.
+        for d in decls.iter_mut().skip(split_at) {
+            rewrite_decl(d, &aliases);
+        }
+    }
     Ok(TranslationUnit { imports, declarations: decls })
 }
 
-/// Load `path` (if not seen), appending its visible declarations to `decls`.
-/// Returns the unit's import list (for the root's metadata).
+/// Number of declarations owned by the root file itself.
+fn root_own_count(
+    path: &Path,
+    _visited: &mut HashSet<PathBuf>,
+    deps: &DependencyMap,
+) -> Result<usize, ImportError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| ImportError { message: format!("cannot read '{}': {e}", path.display()) })?;
+    let (unit, errors) = crate::Parser::parse(&path.display().to_string(), &text);
+    let _ = deps;
+    if !errors.is_empty() {
+        return Ok(0);
+    }
+    Ok(unit.declarations.len())
+}
+
+/// Load `path` (if not seen), appending its visible declarations — its
+/// imports' first (post-order), then its own — to `decls`. Returns the
+/// unit's import list (used only for the root's metadata).
+///
+/// `alias` namespaces this file's OWN exports under `Alias.` when present:
+/// their declaration names become `Alias.orig`, and the alias map records
+/// the mapping so the importing file's `A.orig` references collapse.
 fn load_into(
     path: &Path,
     visited: &mut HashSet<PathBuf>,
     decls: &mut Vec<Declaration>,
     select: Option<&[Id]>,
     is_root: bool,
+    alias: Option<&str>,
+    aliases: &mut crate::alias::AliasMap,
     deps: &DependencyMap,
 ) -> Result<Vec<ImportDecl>, ImportError> {
     if !visited.insert(path.to_path_buf()) {
@@ -94,19 +127,21 @@ fn load_into(
     // Recurse into imports first (post-order): dependencies before dependents.
     let base = path.parent().unwrap_or(Path::new("."));
     for imp in &unit.imports {
-        if imp.alias.is_some() {
-            return Err(ImportError {
-                message: format!(
-                    "{}:{}:{}: import-as namespacing is not supported yet",
-                    imp.span.file, imp.span.line, imp.span.col_start
-                ),
-            });
-        }
         let target = resolve_import(base, &imp.path, deps)?;
-        load_into(&target, visited, decls, imp.names.as_deref(), false, deps)?;
+        load_into(
+            &target,
+            visited,
+            decls,
+            imp.names.as_deref(),
+            false,
+            imp.alias.as_ref().map(|a| a.0.as_str()),
+            aliases,
+            deps,
+        )?;
     }
 
-    // Append this unit's visible declarations.
+    // Collect this unit's visible declarations.
+    let mut own: Vec<Declaration> = Vec::new();
     for d in unit.declarations {
         // Non-root files only contribute exports (`pub` functions; types and
         // behaviors are always visible).
@@ -125,9 +160,50 @@ fn load_into(
                 continue;
             }
         }
-        decls.push(d);
+        own.push(d);
     }
+
+    // Alias namespacing: prefix this file's own exports and record mappings.
+    if let Some(a) = alias {
+        for d in &mut own {
+            let orig = decl_name(d).to_string();
+            let qualified = format!("{a}.{orig}");
+            set_decl_name(d, &qualified);
+            aliases.add(a, &orig);
+        }
+    }
+    decls.extend(own);
     Ok(unit.imports)
+}
+
+/// Merge a whole file tree into `decls` (convenience wrapper used by the
+/// resolver entry point so the root's own decls can be identified).
+fn merge_file(
+    path: &Path,
+    visited: &mut HashSet<PathBuf>,
+    decls: &mut Vec<Declaration>,
+    select: Option<&[Id]>,
+    is_root: bool,
+    alias: Option<&str>,
+    aliases: &mut crate::alias::AliasMap,
+    deps: &DependencyMap,
+) -> Result<(), ImportError> {
+    load_into(path, visited, decls, select, is_root, alias, aliases, deps)?;
+    Ok(())
+}
+
+fn rewrite_decl(d: &mut Declaration, am: &crate::alias::AliasMap) {
+    if let Declaration::Function(f) = d {
+        crate::alias::qualify_block(&mut f.body, am);
+    }
+}
+
+fn set_decl_name(d: &mut Declaration, name: &str) {
+    match d {
+        Declaration::Function(f) => f.name = Id(name.to_string()),
+        Declaration::Type(t) => t.name = Id(name.to_string()),
+        Declaration::Behavior(b) => b.name = Id(name.to_string()),
+    }
 }
 
 /// Where does an import point? A path relative to the importing file wins;

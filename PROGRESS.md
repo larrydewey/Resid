@@ -11,7 +11,7 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 551 pass (lexer 17, parser 101, resid-ir 46, resid-type 195,
+- **Tests**: 553 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
   resid-codegen 137, resid-build 12, residc 43 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
@@ -1761,7 +1761,12 @@ pipeline into `<pkg>/target/resid/<name>`; CLI `resid-build [dir] [-p prof] [-o 
   the ResidVal box layout, returning fresh boxes; str_split/str_join were migrated
   to that layout too. **Stdlib v1.4 done — List(Float) verbs**:
   `list_sort_floats/list_reverse_floats/list_contains_float/list_sumf` (slots hold
-  `resid_box_f64` boxes). Bootstrap compilers do not carry these yet (bootstrap subset). Still missing: import-as namespacing, registry/signed archives, capability enforcement at runtime, Unicode casing. |
+  `resid_box_f64` boxes). Bootstrap compilers do not carry these yet (bootstrap subset). **Import-as namespacing done (§29)**: `import "f.resid" as M` renames the module's
+own exports to `M.name` in the merged unit and rewrites qualified references
+(`M.f(x)` → call of `M.f`, `M.v` → ident `M.v`) via a full AST walk of the
+importing file's functions. v1 limits: aliased units' transitive imports stay
+unnamespaced; struct-literal names/type spellings/patterns are not rewritten.
+Still missing: registry/signed archives, runtime capability enforcement, Unicode casing. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
 
 Build/test notes:
