@@ -3,6 +3,13 @@ name = "resid-fmt"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "resid_fmt"
+
+[[bin]]
+name = "resid-fmt"
+path = "src/main.rs"
+
 [dependencies]
 resid-lexer = { path = "../../crates/resid-lexer" }
 resid-parser = { path = "../../crates/resid-parser" }

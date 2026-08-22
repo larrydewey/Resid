@@ -11,8 +11,8 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 553 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
-  resid-codegen 137, resid-build 12, residc 43 e2e).
+- **Tests**: 558 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
+  resid-codegen 137, resid-build 12, resid-fmt 5, residc 43 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -1766,7 +1766,14 @@ own exports to `M.name` in the merged unit and rewrites qualified references
 (`M.f(x)` → call of `M.f`, `M.v` → ident `M.v`) via a full AST walk of the
 importing file's functions. v1 limits: aliased units' transitive imports stay
 unnamespaced; struct-literal names/type spellings/patterns are not rewritten.
-Still missing: registry/signed archives, runtime capability enforcement, Unicode casing. |
+**`resid fmt` done (§37)**: AST-based canonical formatter — 4-space indent,
+same-line braces, precedence-aware parens per spec §30, escape-safe string
+printing, block tails printed as explicit `return e;` (the only spelling that
+round-trips the parser's ret-folding). CLI `resid fmt <f> [-w | --check]`.
+Idempotent on all four bootstrap sources; formatted lexer.res compiles and
+tokenizes identically. v1 limits: doc comments on functions not yet carried;
+behaviors print as placeholder. Still missing: registry/signed archives, runtime
+capability enforcement, Unicode casing. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
 
 Build/test notes:
