@@ -2175,3 +2175,50 @@ fn stage2_emitter_compiles_bootstrap_lexer() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Stdlib v1: string verbs run end-to-end through the full pipeline.
+#[test]
+fn run_stdlib_string_verbs() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-stdlib-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("stdlib.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    Str s = str_trim("  hi  ");
+    println(s);
+    List(Str) parts = str_split("a,b,c", ",");
+    println(str_join(parts, "-"));
+    println(str_to_upper("abc"));
+    println(str_replace("aaa", "a", "ba"));
+    if (str_starts_with("hello", "he") && str_ends_with("hello", "lo")) {
+        println(str_repeat("ab", 3));
+    }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "hi\na-b-c\nABC\nbababa\nababab",
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
