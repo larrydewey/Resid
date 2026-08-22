@@ -1779,7 +1779,16 @@ fn block_ret(
             } => {
                 let ty = if let Some(t) = opt_type {
                     let declared = resolve_type_ctx(t, types).unwrap_or(SemType::Bool);
-                    let _ = infer_expr_expected(value, &env, sigs, types, Some(&declared))?;
+                    let inferred = infer_expr_expected(value, &env, sigs, types, Some(&declared))?;
+                    if !bind_assignable(value, &inferred, &declared) {
+                        return Err(err(
+                            &stmt.span,
+                            format!(
+                                "binding `{}`: expected {declared}, found {inferred}",
+                                name.0
+                            ),
+                        ));
+                    }
                     declared
                 } else {
                     infer_expr_ctx(value, &env, sigs, types)?
@@ -1987,10 +1996,52 @@ fn infer_call(
     Ok(sig.ret.clone())
 }
 
+/// May an inferred value type be bound to a declared type? Covers the
+/// established coercions: numeric literal adoption, lossless widening,
+/// same-family arithmetic-margin narrowing (`Int(64) x = a + b` infers
+/// `Int(128)` by the overflow margin but binds at the declared width), and
+/// range construction against a numeric target.
+fn bind_assignable(value: &Expr, inferred: &SemType, declared: &SemType) -> bool {
+    if inferred == declared {
+        return true;
+    }
+    if numeric_can_widen(inferred, declared) {
+        return true;
+    }
+    // A numeric literal adopts its (wide-enough, same-sign) target type.
+    if literal_compatible(value, declared) {
+        return true;
+    }
+    // Decimal values round once to the declared precision (spec §6.6a), so
+    // any Dec → Dec binding is accepted regardless of operand precision.
+    if matches!(declared, SemType::Numeric(n) if n.is_dec())
+        && matches!(inferred, SemType::Numeric(n) if n.is_dec())
+    {
+        return true;
+    }
+    if let (SemType::Numeric(a), SemType::Numeric(b)) = (inferred, declared) {
+        // Integer-only margin narrowing at equal signedness; floats and Dec
+        // must match exactly (or widen) — their ops carry no margin.
+        if !a.is_float() && !b.is_float() && !a.is_dec() && !b.is_dec() {
+            return a.is_signed() == b.is_signed();
+        }
+        return false;
+    }
+    // Sums are nominal: same name binds, even if payloads resolve
+    // differently at the two inference sites.
+    if let (SemType::Sum { name: a, .. }, SemType::Sum { name: b, .. }) = (inferred, declared) {
+        return a == b;
+    }
+    // `0..10` / `0..=5` may bind to the endpoint's numeric type.
+    if let SemType::Range(_) = inferred {
+        return matches!(declared, SemType::Numeric(_));
+    }
+    false
+}
+
 /// A numeric literal may adopt a (same-sign, wide-enough) numeric target type,
 /// so `Int(8) x = 5;` and calling an `i8`-typed function with `5` are allowed.
-fn literal_compatible(a: &Expr, target: &SemType) -> bool {
-    let SemType::Numeric(t) = target else {
+fn literal_compatible(a: &Expr, target: &SemType) -> bool {    let SemType::Numeric(t) = target else {
         return false;
     };
     // A decimal literal fits any Dec(N) target: narrowing rounds once to N
@@ -2318,8 +2369,19 @@ fn type_check_block(
                 // validated, so e.g. `filesystem.exists()` still errors despite
                 // `Bool ex = ...` giving a concrete binding type.
                 let declared = resolve_type_ctx(t, types).unwrap_or(SemType::Bool);
-                if let Err(e) = infer_expr_expected(value, &env, sigs, types, Some(&declared)) {
-                    errs.push(e);
+                match infer_expr_expected(value, &env, sigs, types, Some(&declared)) {
+                    Ok(inferred) => {
+                        if !bind_assignable(value, &inferred, &declared) {
+                            errs.push(err(
+                                &stmt.span,
+                                format!(
+                                    "binding `{}`: expected {declared}, found {inferred}",
+                                    name.0
+                                ),
+                            ));
+                        }
+                    }
+                    Err(e) => errs.push(e),
                 }
                 declared
             } else {
