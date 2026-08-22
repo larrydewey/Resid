@@ -926,6 +926,10 @@ ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
         if (argtys == "List(Float)") { return ERes { pos: pos, ty: "Float", err: "" }; }
         return ERes { pos: pos, ty: "", err: "list_sumf expects (List(Float)), got (" + argtys + ")" };
     }
+    if (name == "sha256") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "sha256 expects Str, got " + argtys };
+    }
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
 

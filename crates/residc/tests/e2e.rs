@@ -2429,3 +2429,35 @@ Int main() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Stdlib v1.5: SHA-256 digests (pure C implementation) end-to-end.
+#[test]
+fn run_sha256() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sha-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("sha.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    println(sha256(""));
+    println(sha256("abc"));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        stdout.trim(),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "{stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

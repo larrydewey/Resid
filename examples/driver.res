@@ -1074,6 +1074,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 List(Str) x2 = x1.concat([reg + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v.val + ")"]);
                 return GT { pos: cpit.pos, val: reg, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x2, tmp: ti2, lbl: v.lbl };
             }
+            if (t.text == "sha256") {
+                return cg_extern1(s, t2.pos, "sha256", "Str", "Str", env, fs, c);
+            }
             if (t.text == "str_trim") {
                 return cg_extern1(s, t2.pos, "str_trim", "Str", "Str", env, fs, c);
             }
@@ -2635,6 +2638,10 @@ ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
         if (argtys == "List(Float)") { return ERes { pos: pos, ty: "Float", err: "" }; }
         return ERes { pos: pos, ty: "", err: "list_sumf expects (List(Float)), got (" + argtys + ")" };
     }
+    if (name == "sha256") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "sha256 expects Str, got " + argtys };
+    }
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
 
@@ -3372,7 +3379,7 @@ Int main() {
     Int tc = ck_check_program(src, 0, sg);
     if (tc != 0) { return tc; }
     Funcs fs = collect_sigs(src);
-    List(Str) header = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @bl_sort_i64(ptr)", "declare ptr @bl_sort_str(ptr)", "declare ptr @bl_sort_f64(ptr)", "declare ptr @bl_reverse_i64(ptr)", "declare ptr @bl_reverse_str(ptr)", "declare ptr @bl_reverse_f64(ptr)", "declare i8 @bl_contains_i64(ptr, i64)", "declare i8 @bl_contains_str(ptr, ptr)", "declare i8 @bl_contains_f64(ptr, double)", "declare i64 @bl_sum(ptr)", "declare double @bl_sumf(ptr)", rt_itoa_def(), rt_lconcat_def()];
+    List(Str) header = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @sha256(ptr)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @bl_sort_i64(ptr)", "declare ptr @bl_sort_str(ptr)", "declare ptr @bl_sort_f64(ptr)", "declare ptr @bl_reverse_i64(ptr)", "declare ptr @bl_reverse_str(ptr)", "declare ptr @bl_reverse_f64(ptr)", "declare i8 @bl_contains_i64(ptr, i64)", "declare i8 @bl_contains_str(ptr, ptr)", "declare i8 @bl_contains_f64(ptr, double)", "declare i64 @bl_sum(ptr)", "declare double @bl_sumf(ptr)", rt_itoa_def(), rt_lconcat_def()];
     PG g0 = PG { pos: 0, err: "", glines: [], hlines: [], lines: header, tmp: 0, lbl: 0 };
     PG res = pg_next(src, 0, fs, g0);
     if (res.err != "") {
@@ -3394,6 +3401,7 @@ Int main() {
     println("wrote " + out);
     return 0;
 }
+
 
 
 
