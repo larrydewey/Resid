@@ -11,7 +11,7 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 558 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
+- **Tests**: 561 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
   resid-codegen 137, resid-build 12, resid-fmt 5, residc 43 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
@@ -1772,9 +1772,14 @@ printing, block tails printed as explicit `return e;` (the only spelling that
 round-trips the parser's ret-folding). CLI `resid fmt <f> [-w | --check]`.
 Idempotent on all four bootstrap sources; formatted lexer.res compiles and
 tokenizes identically. v1 limits: doc comments on functions not yet carried;
-behaviors print as placeholder. Still missing: registry/signed archives, runtime
-capability enforcement, Unicode casing. |
-| 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
+behaviors print as placeholder. **Runtime capability enforcement done
+(§28.2 step 4)**: `collect_provider_calls` scans the merged unit for
+`provider.verb(...)` uses; `resid-build` rejects the build if any touched
+provider family is missing from `[capabilities] grant` (`args` exempt — own
+argv). Also fixed: Bool-returning provider calls were i8 at branch sites
+(verification failure) — now truncated to i1 in codegen. Still missing:
+registry/signed archives, per-scope capability narrowing, Unicode casing. |
+| 6. Tooling, Bootstrap | Partial | `resid fmt` done (canonical AST formatter, idempotent on all bootstrap sources); `resid-notes`/`resid-cache`/`resid-graph`/`resid-why` still stubs. |
 
 Build/test notes:
 - Full `cargo build` and `cargo test --workspace` succeed against system LLVM 22
