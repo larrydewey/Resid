@@ -2272,8 +2272,16 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
     let types = collect_types(unit);
     let sigs = collect_signatures(unit);
     let mut errs = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for decl in &unit.declarations {
         if let Declaration::Function(f) = decl {
+            if !seen.insert(f.name.0.clone()) {
+                errs.push(err(
+                    &f.span,
+                    format!("function `{}` is already defined; duplicate definitions are forbidden", f.name.0),
+                ));
+                continue;
+            }
             let mut env = Env::new();
             let sig = sigs.get(&f.name.0).unwrap();
             for (param, pt) in f.params.iter().zip(sig.params.iter()) {
@@ -5363,6 +5371,29 @@ Int main() {
         assert!(
             errs[0].message.contains("must be a sum type"),
             "expected sum-type error, got: {}",
+            errs[0].message
+        );
+    }
+
+    #[test]
+    fn check_program_rejects_duplicate_function_definitions() {
+        let src = r#"
+Int f(Int x) {
+    return x;
+}
+Int f(Int x) {
+    return x + 1;
+}
+Int main() {
+    return f(1);
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("dup.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected error for duplicate function");
+        assert!(
+            errs[0].message.contains("already defined"),
+            "expected duplicate-definition error, got: {}",
             errs[0].message
         );
     }
