@@ -62,7 +62,15 @@ struct ManifestToml {
     #[serde(default)]
     target: Option<TargetToml>,
     #[serde(default)]
+    capabilities: Option<CapabilitiesToml>,
+    #[serde(default)]
     dependencies: std::collections::HashMap<String, DepToml>,
+}
+
+#[derive(Deserialize)]
+struct CapabilitiesToml {
+    #[serde(default)]
+    grant: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +114,9 @@ pub struct Manifest {
     pub target_triple: Option<String>,
     /// Path dependencies in manifest order.
     pub dependencies: Vec<Dependency>,
+    /// Granted capability families (text before any `(...)` arguments),
+    /// from `[capabilities] grant`.
+    pub granted_capabilities: Vec<String>,
     /// Directory containing resid.toml.
     pub dir: PathBuf,
 }
@@ -200,12 +211,37 @@ impl Manifest {
                 capabilities: dep.capabilities.clone().unwrap_or_default(),
             });
         }
+        let granted_capabilities: Vec<String> = raw
+            .capabilities
+            .map(|c| c.grant)
+            .unwrap_or_default()
+            .iter()
+            .map(|g| cap_family(g))
+            .collect();
+        for dep in &dependencies {
+            for cap in &dep.capabilities {
+                let family = cap_family(cap);
+                if !granted_capabilities.contains(&family) {
+                    return Err(LoadError::Invalid(format!(
+                        "dependency '{}` requires capability `{}`, which is not granted under [capabilities] grant (granted: {})",
+                        dep.name,
+                        cap,
+                        if granted_capabilities.is_empty() {
+                            "none".to_string()
+                        } else {
+                            granted_capabilities.join(", ")
+                        }
+                    )));
+                }
+            }
+        }
         Ok(Manifest {
             name: raw.package.name,
             version: raw.package.version,
             root,
             target_triple: raw.target.and_then(|t| t.triple),
             dependencies,
+            granted_capabilities,
             dir: pkg_dir,
         })
     }
@@ -221,6 +257,15 @@ impl Manifest {
     /// Default output directory for build artifacts: `<dir>/target/resid`.
     pub fn out_dir(&self) -> PathBuf {
         self.dir.join("target").join("resid")
+    }
+}
+
+/// The capability family of a capability expression: the text before any
+/// `(...)` arguments — `filesystem(scope=["x"])` → `filesystem`.
+fn cap_family(cap: &str) -> String {
+    match cap.find('(') {
+        Some(i) => cap[..i].trim().to_string(),
+        None => cap.trim().to_string(),
     }
 }
 
