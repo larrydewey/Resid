@@ -401,3 +401,95 @@ grant = ["filesystem(scope=[\"config/**\"])", "filesystem(readonly)"]
     let m = Manifest::load(&dir).unwrap();
     build(&m, Profile::Check, &dir.join("out")).expect("unscoped grant wins");
 }
+
+#[test]
+fn archive_round_trip_and_signature_verification() {
+    let dir = temp_dir("archive");
+    write_pkg(&dir, GOOD_MANIFEST, GOOD_MAIN);
+    let m = Manifest::load(&dir).unwrap();
+
+    // Deterministic archives: same tree → same bytes → same hash.
+    let a1 = resid_build::archive::build_archive(&dir).expect("archive 1");
+    let a2 = resid_build::archive::build_archive(&dir).expect("archive 2");
+    assert_eq!(a1, a2, "archives must be deterministic");
+    assert_eq!(a1.starts_with(b"RESIDPKG1"), true);
+
+    // Sign + verify.
+    let (secret, public) = resid_build::archive::keygen().unwrap();
+    let hash = resid_build::archive::content_hash(&a1);
+    let sig = resid_build::archive::sign_hash(&hash, &secret).unwrap();
+    assert!(
+        resid_build::archive::verify_sig(&hash, &sig, &public).unwrap(),
+        "valid signature must verify"
+    );
+
+    // Tampering invalidates.
+    let mut tampered = a1.clone();
+    tampered[20] ^= 0xff;
+    let bad_hash = resid_build::archive::content_hash(&tampered);
+    assert!(
+        !resid_build::archive::verify_sig(&bad_hash, &sig, &public).unwrap(),
+        "tampered content must fail verification"
+    );
+}
+
+#[test]
+fn require_signatures_accepts_valid_keyring() {
+    let dir = temp_dir("sigreq");
+    // Dependency package with its signed archive + keyring.
+    fs::create_dir_all(dir.join("vendor/math/src")).unwrap();
+    fs::create_dir_all(dir.join("keys")).unwrap();
+    fs::write(dir.join("vendor/math/resid.toml"), "[package]\nname = \"math\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(dir.join("vendor/math/src/main.resid"), "pub Int f() { return 7; }\n").unwrap();
+    fs::write(dir.join("app_main.resid.tmp"), "").unwrap();
+
+    let (secret, public) = resid_build::archive::keygen().unwrap();
+    fs::write(dir.join("keys/pub.hex"), &public).unwrap();
+    let dep_dir = dir.join("vendor/math");
+    let archive = resid_build::archive::build_archive(&dep_dir).unwrap();
+    let hash = resid_build::archive::content_hash(&archive);
+    let sig = resid_build::archive::sign_hash(&hash, &secret).unwrap();
+    fs::write(dep_dir.join("math.resid-pkg"), &archive).unwrap();
+    fs::write(dep_dir.join("math.resid-sig"), &sig).unwrap();
+
+    fs::write(
+        dir.join("resid.toml"),
+        r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[signing]
+require_signatures = true
+keyring = "keys"
+
+[dependencies.math]
+path         = "vendor/math"
+capabilities = []
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("src/main.resid"), "import \"math\";\nInt main() { return f(); }\n").unwrap();
+    let m = Manifest::load(&dir).expect("signed dependency accepted");
+    assert_eq!(m.dependencies.len(), 1);
+}
+
+#[test]
+fn require_signatures_rejects_missing_or_bad_signature() {
+    let dir = temp_dir("sigbad");
+    fs::create_dir_all(dir.join("vendor/math/src")).unwrap();
+    fs::create_dir_all(dir.join("keys")).unwrap();
+    fs::write(dir.join("vendor/math/resid.toml"), "[package]\nname = \"math\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(dir.join("vendor/math/src/main.resid"), "pub Int f() { return 7; }\n").unwrap();
+    // No archive/sig at all.
+    fs::write(
+        dir.join("resid.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[signing]\nrequire_signatures = true\n\n[dependencies.math]\npath = \"vendor/math\"\ncapabilities = []\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("src/main.resid"), "Int main() { return 0; }\n").unwrap();
+    let e = Manifest::load(&dir).err().expect("missing sig must fail");
+    assert!(e.to_string().contains("missing or unreadable"), "{e}");
+}

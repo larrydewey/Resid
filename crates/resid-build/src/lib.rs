@@ -19,6 +19,8 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod archive;
+
 use serde::Deserialize;
 
 /// Build profile (spec §35).
@@ -65,6 +67,17 @@ struct ManifestToml {
     capabilities: Option<CapabilitiesToml>,
     #[serde(default)]
     dependencies: std::collections::HashMap<String, DepToml>,
+    #[serde(default)]
+    signing: Option<SigningToml>,
+}
+
+#[derive(Deserialize)]
+struct SigningToml {
+    #[serde(default)]
+    require_signatures: bool,
+    /// Directory of trusted publisher public keys (hex files).
+    #[serde(default)]
+    keyring: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +112,8 @@ struct TargetToml {
 pub struct Dependency {
     pub name: String,
     /// Path relative to the depending package's directory.
+    pub manifest_path: String,
+    /// Resolved root source of the dependency.
     pub path: PathBuf,
     /// Declared capability requirements (parsed, not yet enforced).
     pub capabilities: Vec<String>,
@@ -209,6 +224,7 @@ impl Manifest {
             }
             dependencies.push(Dependency {
                 name: name.clone(),
+                manifest_path: dep.path.clone(),
                 path: dep_root.canonicalize().unwrap_or(dep_root),
                 capabilities: dep.capabilities.clone().unwrap_or_default(),
             });
@@ -236,6 +252,23 @@ impl Manifest {
                             granted_capabilities.join(", ")
                         }
                     )));
+                }
+            }
+        }
+        // Signature policy: when required, every path dependency must ship a
+        // signed archive verifying against a keyring key (spec §28.2).
+        if let Some(signing) = &raw.signing {
+            if signing.require_signatures {
+                let keyring_dir = signing
+                    .keyring
+                    .as_ref()
+                    .map(|k| pkg_dir.join(k))
+                    .unwrap_or_else(|| pkg_dir.join("keys"));
+                for dep in &dependencies {
+                    let dep_src = pkg_dir.join(&dep.manifest_path);
+                    let pkg_file = dep_src.join(format!("{}.resid-pkg", dep.name));
+                    let sig_file = dep_src.join(format!("{}.resid-sig", dep.name));
+                    verify_dep_signature(dep, &pkg_file, &sig_file, &keyring_dir)?;
                 }
             }
         }
@@ -280,6 +313,54 @@ pub struct Grant {
     pub family: String,
     /// Scope patterns from `scope=["a/**", "b"]` when present.
     pub scopes: Vec<String>,
+}
+
+fn verify_dep_signature(
+    dep: &Dependency,
+    pkg_file: &Path,
+    sig_file: &Path,
+    keyring_dir: &Path,
+) -> Result<(), LoadError> {
+    let archive = std::fs::read(pkg_file).map_err(|e| {
+        LoadError::Invalid(format!(
+            "dependency '{}': signed archive '{}' missing or unreadable: {e}",
+            dep.name,
+            pkg_file.display()
+        ))
+    })?;
+    let hash = archive::content_hash(&archive);
+    let sig_hex = std::fs::read_to_string(sig_file)
+        .map_err(|e| {
+            LoadError::Invalid(format!(
+                "dependency '{}': signature file '{}' missing: {e}",
+                dep.name,
+                sig_file.display()
+            ))
+        })?
+        .trim()
+        .to_string();
+    let entries = std::fs::read_dir(keyring_dir).map_err(|e| {
+        LoadError::Invalid(format!(
+            "dependency '{}': cannot read keyring '{}': {e}",
+            dep.name,
+            keyring_dir.display()
+        ))
+    })?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.extension().map(|e| e == "hex").unwrap_or(false) {
+            if let Ok(pub_hex) = std::fs::read_to_string(&p) {
+                if archive::verify_sig(&hash, &sig_hex, pub_hex.trim()).unwrap_or(false) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err(LoadError::Invalid(format!(
+        "dependency '{}': signature does not verify against any key in '{}'",
+        dep.name,
+        keyring_dir.display()
+    )))
 }
 
 /// Parse a grant expression like `filesystem(scope=["config/**"])` or a bare
