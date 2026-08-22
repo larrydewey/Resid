@@ -820,11 +820,22 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("str_from_code", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
     // Half-open substring `s[start..end]` by codepoint index.
     ("str_slice", &[SemType::Str, SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
+    // ─── Stdlib v1: string verbs ───
+    // Trim leading/trailing ASCII whitespace.
+    ("str_trim", &[SemType::Str], SemType::Str),
+    ("str_contains", &[SemType::Str, SemType::Str], SemType::Bool),
+    ("str_starts_with", &[SemType::Str, SemType::Str], SemType::Bool),
+    ("str_ends_with", &[SemType::Str, SemType::Str], SemType::Bool),
+    // ASCII-only case mapping (full Unicode casing is a later milestone).
+    ("str_to_lower", &[SemType::Str], SemType::Str),
+    ("str_to_upper", &[SemType::Str], SemType::Str),
+    ("str_repeat", &[SemType::Str, SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
+    ("str_replace", &[SemType::Str, SemType::Str, SemType::Str], SemType::Str),
 ];
 
 /// Return the set of built-in (extern) function signatures.
 pub fn builtin_signatures() -> Signatures {
-    BUILTIN_SIGS
+    let mut sigs: Signatures = BUILTIN_SIGS
         .iter()
         .map(|(name, params, ret)| {
             (
@@ -838,7 +849,33 @@ pub fn builtin_signatures() -> Signatures {
                 },
             )
         })
-        .collect()
+        .collect();
+    // List-typed entries (Box is not const-constructible): stdlib string
+    // split/join over boxed List(Str).
+    for (name, params, ret) in [
+        (
+            "str_split",
+            vec![SemType::Str, SemType::Str],
+            SemType::List(Box::new(SemType::Str)),
+        ),
+        (
+            "str_join",
+            vec![SemType::List(Box::new(SemType::Str)), SemType::Str],
+            SemType::Str,
+        ),
+    ] {
+        sigs.insert(
+            name.to_string(),
+            FunctionSig {
+                name: name.to_string(),
+                params,
+                param_names: Vec::new(),
+                param_defaults: Vec::new(),
+                ret,
+            },
+        );
+    }
+    sigs
 }
 
 /// Collect all function signatures declared in a translation unit, merged with
@@ -4525,6 +4562,58 @@ Int main() {
         assert!(
             !errs.is_empty(),
             "expected error for str_len(42), got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_stdlib_string_verbs() {
+        let src = r#"
+Int main() {
+    Str s = str_trim("  hi  ");
+    Bool c = str_contains("hello", "ell");
+    Bool p = str_starts_with("hello", "he");
+    Bool q = str_ends_with("hello", "lo");
+    Str l = str_to_lower("ABC");
+    Str u = str_to_upper("abc");
+    Str r = str_repeat("ab", 3);
+    Str w = str_replace("aaa", "a", "ba");
+    List(Str) parts = str_split("a,b,c", ",");
+    Str j = str_join(parts, "-");
+    if (c && p && q) {
+        println(s);
+        println(l);
+        println(u);
+        println(r);
+        println(w);
+        println(j);
+    }
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "stdlib string verbs should type-check, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn check_program_str_join_wrong_elem_type_rejected() {
+        let src = r#"
+Int main() {
+    List(Int) xs = [1, 2];
+    Str j = str_join(xs, "-");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected error for joining a List(Int), got: {:?}",
             errs
         );
     }

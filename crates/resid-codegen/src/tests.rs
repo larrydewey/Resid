@@ -596,6 +596,36 @@ Int main() {
 }
 
 #[test]
+fn test_stdlib_string_verbs_calls() {
+    let src = r#"
+Int main() {
+    Str s = str_trim("  hi  ");
+    Bool c = str_contains(s, "hi");
+    Str l = str_to_lower("ABC");
+    Str r = str_repeat("ab", 2);
+    List(Str) parts = str_split("a,b,c", ",");
+    Str j = str_join(parts, "-");
+    return 0;
+}
+"#;
+    let (unit, errors) = Parser::parse("stdlib.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "stdlib");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("declare ptr @str_trim"), "expected str_trim decl: {ir}");
+    assert!(ir.contains("declare i1 @str_contains"), "expected str_contains decl: {ir}");
+    assert!(ir.contains("call ptr @str_to_lower"), "expected str_to_lower: {ir}");
+    assert!(ir.contains("call ptr @str_repeat"), "expected str_repeat: {ir}");
+    assert!(ir.contains("call ptr @str_split"), "expected str_split: {ir}");
+    assert!(ir.contains("call ptr @str_join"), "expected str_join: {ir}");
+}
+
+#[test]
 fn test_char_literal_is_i64() {
     let src = r#"
 Int main() {

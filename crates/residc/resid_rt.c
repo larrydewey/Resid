@@ -1702,3 +1702,150 @@ void resid_dec_from_f64(resid_dec* out, double v, uint16_t prec) {
     snprintf(buf, sizeof(buf), "%.17g", v);
     resid_dec_from_str(out, buf, prec);
 }
+
+/* ════════════════════════════════════════════════════════════════
+   Stdlib v1: string verbs (spec §14 semantics, codepoint-based).
+   Boxed List layout (matches resid_str_concat):
+     { int64_t n; slots[n] }  — 8 bytes per slot.
+   ════════════════════════════════════════════════════════════════ */
+
+static int str_is_space(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+}
+
+/* Trim leading/trailing ASCII whitespace. */
+char* str_trim(const char* s) {
+    const char* b = s;
+    const char* e = s + strlen(s);
+    while (b < e && str_is_space((unsigned char)*b)) b++;
+    while (e > b && str_is_space((unsigned char)e[-1])) e--;
+    int64_t n = e - b;
+    char* p = (char*)malloc(n + 1);
+    memcpy(p, b, n);
+    p[n] = '\0';
+    return p;
+}
+
+/* Does `s` contain `needle`? Empty needle is always true. */
+int8_t str_contains(const char* s, const char* needle) {
+    return strstr(s, needle) != NULL;
+}
+
+int8_t str_starts_with(const char* s, const char* pre) {
+    size_t lp = strlen(pre);
+    return strncmp(s, pre, lp) == 0;
+}
+
+int8_t str_ends_with(const char* s, const char* suf) {
+    size_t ls = strlen(s), lf = strlen(suf);
+    if (lf > ls) return 0;
+    return strcmp(s + ls - lf, suf) == 0;
+}
+
+/* ASCII-only case mapping (Unicode full casing is a later milestone). */
+char* str_to_lower(const char* s) {
+    size_t n = strlen(s);
+    char* p = (char*)malloc(n + 1);
+    for (size_t i = 0; i < n; i++)
+        p[i] = (s[i] >= 'A' && s[i] <= 'Z') ? (char)(s[i] + 32) : s[i];
+    p[n] = '\0';
+    return p;
+}
+
+char* str_to_upper(const char* s) {
+    size_t n = strlen(s);
+    char* p = (char*)malloc(n + 1);
+    for (size_t i = 0; i < n; i++)
+        p[i] = (s[i] >= 'a' && s[i] <= 'z') ? (char)(s[i] - 32) : s[i];
+    p[n] = '\0';
+    return p;
+}
+
+/* Concatenate `times` copies (`times <= 0` → empty string). */
+char* str_repeat(const char* s, int64_t times) {
+    if (times < 0) times = 0;
+    size_t ls = strlen(s);
+    char* p = (char*)malloc(ls * (size_t)times + 1);
+    char* w = p;
+    for (int64_t i = 0; i < times; i++) {
+        memcpy(w, s, ls);
+        w += ls;
+    }
+    *w = '\0';
+    return p;
+}
+
+/* Replace all occurrences of `from` with `to` (empty `from` → unchanged). */
+char* str_replace(const char* s, const char* from, const char* to) {
+    size_t lf = strlen(from), lt = strlen(to);
+    if (lf == 0) { size_t n = strlen(s); char* c = (char*)malloc(n + 1); memcpy(c, s, n + 1); return c; }
+    /* count */
+    int64_t hits = 0;
+    const char* q = s;
+    while ((q = strstr(q, from)) != NULL) { hits++; q += lf; }
+    size_t ls = strlen(s);
+    char* p = (char*)malloc(ls + (size_t)hits * (lt - lf) + 1);
+    char* w = p;
+    q = s;
+    const char* hit;
+    while ((hit = strstr(q, from)) != NULL) {
+        memcpy(w, q, hit - q); w += hit - q;
+        memcpy(w, to, lt); w += lt;
+        q = hit + lf;
+    }
+    strcpy(w, q);
+    return p;
+}
+
+/* Allocate an empty boxed list of `n` slots. */
+static void* rt_list_alloc(int64_t n) {
+    int64_t* box = (int64_t*)malloc(8 + n * 8);
+    box[0] = n;
+    return box;
+}
+
+/* Split `s` on `sep` into a boxed List(Str). Empty sep → [s]. */
+void* str_split(const char* s, const char* sep) {
+    size_t lsep = strlen(sep);
+    if (lsep == 0) {
+        void* box = rt_list_alloc(1);
+        ((const char**)box)[1] = s;
+        return box;
+    }
+    int64_t parts = 1;
+    const char* q = s;
+    while ((q = strstr(q, sep)) != NULL) { parts++; q += lsep; }
+    char** box = (char**)rt_list_alloc(parts);
+    int64_t i = 0;
+    q = s;
+    const char* hit;
+    while ((hit = strstr(q, sep)) != NULL) {
+        int64_t len = hit - q;
+        char* part = (char*)malloc(len + 1);
+        memcpy(part, q, len);
+        part[len] = '\0';
+        box[1 + i++] = (char*)(uintptr_t)part;
+        q = hit + lsep;
+    }
+    box[1 + i] = (char*)(uintptr_t)strdup(q);
+    return box;
+}
+
+/* Join a boxed List(Str) with separator `sep`. */
+char* str_join(void* list_box, const char* sep) {
+    int64_t* hdr = (int64_t*)list_box;
+    int64_t n = hdr[0];
+    const char** items = (const char**)(hdr + 1);
+    size_t lsep = strlen(sep), total = 0;
+    for (int64_t i = 0; i < n; i++) total += strlen(items[i]);
+    if (n > 0) total += lsep * (size_t)(n - 1);
+    char* p = (char*)malloc(total + 1);
+    char* w = p;
+    for (int64_t i = 0; i < n; i++) {
+        if (i > 0) { memcpy(w, sep, lsep); w += lsep; }
+        size_t li = strlen(items[i]);
+        memcpy(w, items[i], li); w += li;
+    }
+    *w = '\0';
+    return p;
+}
