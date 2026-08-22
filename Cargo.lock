@@ -197,7 +197,8 @@ dependencies = [
 name = "resid-graph"
 version = "0.1.0"
 dependencies = [
- "resid-ir",
+ "resid-parser",
+ "resid-type",
 ]
 
 [[package]]

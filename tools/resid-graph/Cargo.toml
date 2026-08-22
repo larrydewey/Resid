@@ -3,5 +3,13 @@ name = "resid-graph"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "resid_graph"
+
+[[bin]]
+name = "resid-graph"
+path = "src/main.rs"
+
 [dependencies]
-resid-ir = { path = "../../crates/resid-ir" }
+resid-parser = { path = "../../crates/resid-parser" }
+resid-type = { path = "../../crates/resid-type" }
