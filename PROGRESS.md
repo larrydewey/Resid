@@ -11,8 +11,8 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 541 pass (lexer 17, parser 101, resid-ir 46, resid-type 191,
-  resid-codegen 134, resid-build 12, residc 40 e2e).
+- **Tests**: 544 pass (lexer 17, parser 101, resid-ir 46, resid-type 192,
+  resid-codegen 135, resid-build 12, residc 41 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -1753,7 +1753,9 @@ Before calling compiler done:
 pipeline into `<pkg>/target/resid/<name>`; CLI `resid-build [dir] [-p prof] [-o dir]`.
 **Multi-file packages done**: `resid_parser::resolve_unit` resolves `import "f.resid"` trees (relative paths, cycle/diamond dedupe by canonical path), merging only exports (`pub` functions; types/behaviors always visible) into one flat unit — deps before dependents; `(a, b)` name selection supported, `as M` rejected for now. residc and resid-build both compile through it (proven: multi-file package with imported fn+type builds and runs). **Path dependencies done (spec §35)**: `[dependencies.<name>] path = ...` — the dep is a Resid package whose root file imports by bare package name (`import "math"`); resid-build validates each dep's manifest/root at load, passes a name→root map to `resolve_unit_with`, capabilities now policy-checked at load: each dep's required capability family must appear under `[capabilities] grant` (family = text before `(...)`, so a scoped grant covers the bare family) or the manifest is rejected — spec §28.2 step 4. **Stdlib v1 done**: string verbs `str_trim/str_contains/str_starts_with/str_ends_with/str_to_lower/str_to_upper/str_repeat/str_replace` plus list-valued `str_split(Str, Str) -> List(Str)` and `str_join(List(Str), Str) -> Str` — typed in BUILTIN_SIGS, C-implemented in resid_rt.c (codepoint semantics; ASCII case mapping), auto-declared externs in codegen. **Stdlib v1.1 done**: parsing + integer math — `str_is_int(Str) -> Bool`,
   `str_parse_int(Str) -> Int` (0 on malformed input), `abs_i64/min_i64/max_i64/clamp_i64`
-  (`_i64` suffix avoids libc's `abs` clash). Bootstrap compilers do not carry these yet (bootstrap subset). Still missing: import-as namespacing, registry/signed archives, capability enforcement at runtime, Unicode casing. |
+  (`_i64` suffix avoids libc's `abs` clash). **Stdlib v1.2 done**:
+  `str_is_float/str_parse_float` (strtod semantics), `str_count`, and UTF-8-aware
+  `str_reverse`. Bootstrap compilers do not carry these yet (bootstrap subset). Still missing: import-as namespacing, registry/signed archives, capability enforcement at runtime, Unicode casing. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
 
 Build/test notes:

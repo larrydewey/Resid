@@ -2928,3 +2928,26 @@ Int main() {
     assert!(ir.contains("call i64 @str_parse_int"), "expected str_parse_int: {ir}");
     assert!(ir.contains("call i64 @clamp_i64"), "expected clamp_i64: {ir}");
 }
+
+#[test]
+fn test_stdlib_float_misc_calls() {
+    let src = r#"
+Int main() {
+    Bool ok = str_is_float("3.5");
+    Float f = str_parse_float("3.5");
+    Int c = str_count("banana", "an");
+    Str r = str_reverse("abc");
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("stdmisc.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "stdmisc");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("declare i1 @str_is_float"), "expected str_is_float decl: {ir}");
+    assert!(ir.contains("call double @str_parse_float"), "expected str_parse_float: {ir}");
+    assert!(ir.contains("call ptr @str_reverse"), "expected str_reverse: {ir}");
+}
