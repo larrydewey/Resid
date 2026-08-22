@@ -802,6 +802,130 @@ ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
         if (argtys == "Str,Int,Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_slice expects (Str, Int, Int), got (" + argtys + ")" };
     }
+    if (name == "str_trim") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_trim expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_to_lower") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_to_lower expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_to_upper") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_to_upper expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_reverse") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_reverse expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_contains") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_contains expects (Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "str_starts_with") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_starts_with expects (Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "str_ends_with") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_ends_with expects (Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "str_repeat") {
+        if (argtys == "Str,Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_repeat expects (Str,Int), got (" + argtys + ")" };
+    }
+    if (name == "str_replace") {
+        if (argtys == "Str,Str,Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_replace expects (Str,Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "str_split") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_split expects (Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "str_join") {
+        if (argtys == "List(Str),Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_join expects (List(Str),Str), got (" + argtys + ")" };
+    }
+    if (name == "str_is_int") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_is_int expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_parse_int") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_parse_int expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_is_float") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_is_float expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_parse_float") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Float", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_parse_float expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_count") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_count expects (Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "abs_i64") {
+        if (argtys == "Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "abs_i64 expects (Int), got (" + argtys + ")" };
+    }
+    if (name == "min_i64") {
+        if (argtys == "Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "min_i64 expects (Int,Int), got (" + argtys + ")" };
+    }
+    if (name == "max_i64") {
+        if (argtys == "Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "max_i64 expects (Int,Int), got (" + argtys + ")" };
+    }
+    if (name == "clamp_i64") {
+        if (argtys == "Int,Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "clamp_i64 expects (Int,Int,Int), got (" + argtys + ")" };
+    }
+    if (name == "list_sort_ints") {
+        if (argtys == "List(Int)") { return ERes { pos: pos, ty: "List(Int)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_sort_ints expects (List(Int)), got (" + argtys + ")" };
+    }
+    if (name == "list_sort_strs") {
+        if (argtys == "List(Str)") { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_sort_strs expects (List(Str)), got (" + argtys + ")" };
+    }
+    if (name == "list_sort_floats") {
+        if (argtys == "List(Float)") { return ERes { pos: pos, ty: "List(Float)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_sort_floats expects (List(Float)), got (" + argtys + ")" };
+    }
+    if (name == "list_reverse_ints") {
+        if (argtys == "List(Int)") { return ERes { pos: pos, ty: "List(Int)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_reverse_ints expects (List(Int)), got (" + argtys + ")" };
+    }
+    if (name == "list_reverse_strs") {
+        if (argtys == "List(Str)") { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_reverse_strs expects (List(Str)), got (" + argtys + ")" };
+    }
+    if (name == "list_reverse_floats") {
+        if (argtys == "List(Float)") { return ERes { pos: pos, ty: "List(Float)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_reverse_floats expects (List(Float)), got (" + argtys + ")" };
+    }
+    if (name == "list_contains_int") {
+        if (argtys == "List(Int),Int") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_contains_int expects (List(Int),Int), got (" + argtys + ")" };
+    }
+    if (name == "list_contains_str") {
+        if (argtys == "List(Str),Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_contains_str expects (List(Str),Str), got (" + argtys + ")" };
+    }
+    if (name == "list_contains_float") {
+        if (argtys == "List(Float),Float") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_contains_float expects (List(Float),Float), got (" + argtys + ")" };
+    }
+    if (name == "list_sum") {
+        if (argtys == "List(Int)") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_sum expects (List(Int)), got (" + argtys + ")" };
+    }
+    if (name == "list_sumf") {
+        if (argtys == "List(Float)") { return ERes { pos: pos, ty: "Float", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_sumf expects (List(Float)), got (" + argtys + ")" };
+    }
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
 

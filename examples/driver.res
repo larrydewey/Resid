@@ -504,6 +504,7 @@ PRes parse_type(Str s, Int pos) {
 Str ll_ty(Str ty) {
     if (ty == "Int") { return "i64"; }
     if (ty == "Bool") { return "i1"; }
+    if (ty == "Float") { return "double"; }
     if (ty == "Str") { return "ptr"; }
     return "ptr";
 }
@@ -941,6 +942,27 @@ GT cg_args(Str s, Int pos, Str acc, Int count, List(Str) env, Funcs fs, GT c) {
     return cs;
 }
 
+GT cg_externb2(Str s, Int pos, Str sym, Str aty1, Str aty2, List(Str) env, Funcs fs, GT c) {
+    GT a = cg_expr(s, pos, env, fs, c);
+    if (a.err != "") { return a; }
+    Tok cm = lex_tok(s, a.pos);
+    if (cm.text != ",") { return gt_err("expected , in call to " + sym, a); }
+    GT b = cg_expr(s, cm.pos, env, fs, a);
+    if (b.err != "") { return b; }
+    Tok cp = lex_tok(s, b.pos);
+    if (cp.text != ")") { return gt_err("expected ) in call to " + sym, b); }
+    Int t1 = b.tmp + 1;
+    Int t2 = b.tmp + 2;
+    Str cr = "%t" + IntToString(t1);
+    Str reg = "%t" + IntToString(t2);
+    Str cl = cr + " = call i8 @" + sym + "(" + ll_ty(aty1) + " " + a.val + ", " + ll_ty(aty2) + " " + b.val + ")";
+    Str nl = reg + " = icmp ne i8 " + cr + ", 0";
+    List(Str) w0 = b.lines;
+    List(Str) w1 = w0.concat([cl]);
+    List(Str) w2 = w1.concat([nl]);
+    return GT { pos: cp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: b.glines, lines: w2, tmp: t2, lbl: b.lbl };
+}
+
 GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
     Tok t = lex_tok(s, pos);
     if (t.text == ")") {
@@ -1051,6 +1073,99 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 List(Str) x1 = x0.concat([buf + " = alloca [24 x i8]"]);
                 List(Str) x2 = x1.concat([reg + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v.val + ")"]);
                 return GT { pos: cpit.pos, val: reg, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x2, tmp: ti2, lbl: v.lbl };
+            }
+            if (t.text == "str_trim") {
+                return cg_extern1(s, t2.pos, "str_trim", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "str_to_lower") {
+                return cg_extern1(s, t2.pos, "str_to_lower", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "str_to_upper") {
+                return cg_extern1(s, t2.pos, "str_to_upper", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "str_reverse") {
+                return cg_extern1(s, t2.pos, "str_reverse", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "str_contains") {
+                return cg_externb2(s, t2.pos, "str_contains", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "str_starts_with") {
+                return cg_externb2(s, t2.pos, "str_starts_with", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "str_ends_with") {
+                return cg_externb2(s, t2.pos, "str_ends_with", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "str_repeat") {
+                return cg_extern2(s, t2.pos, "str_repeat", "Str", "Int", "Str", env, fs, c);
+            }
+            if (t.text == "str_replace") {
+                return cg_extern3(s, t2.pos, "str_replace", "Str", "Str", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "str_split") {
+                return cg_extern2(s, t2.pos, "bl_str_split", "Str", "Str", "List(Str)", env, fs, c);
+            }
+            if (t.text == "str_join") {
+                return cg_extern2(s, t2.pos, "bl_str_join", "List(Str)", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "str_is_int") {
+                return cg_externb1(s, t2.pos, "str_is_int", "Str", env, fs, c);
+            }
+            if (t.text == "str_parse_int") {
+                return cg_extern1(s, t2.pos, "str_parse_int", "Str", "Int", env, fs, c);
+            }
+            if (t.text == "str_is_float") {
+                return cg_externb1(s, t2.pos, "str_is_float", "Str", env, fs, c);
+            }
+            if (t.text == "str_parse_float") {
+                return cg_extern1(s, t2.pos, "str_parse_float", "Str", "Float", env, fs, c);
+            }
+            if (t.text == "str_count") {
+                return cg_extern2(s, t2.pos, "str_count", "Str", "Str", "Int", env, fs, c);
+            }
+            if (t.text == "abs_i64") {
+                return cg_extern1(s, t2.pos, "abs_i64", "Int", "Int", env, fs, c);
+            }
+            if (t.text == "min_i64") {
+                return cg_extern2(s, t2.pos, "min_i64", "Int", "Int", "Int", env, fs, c);
+            }
+            if (t.text == "max_i64") {
+                return cg_extern2(s, t2.pos, "max_i64", "Int", "Int", "Int", env, fs, c);
+            }
+            if (t.text == "clamp_i64") {
+                return cg_extern3(s, t2.pos, "clamp_i64", "Int", "Int", "Int", "Int", env, fs, c);
+            }
+            if (t.text == "list_sort_ints") {
+                return cg_extern1(s, t2.pos, "bl_sort_i64", "List(Int)", "List(Int)", env, fs, c);
+            }
+            if (t.text == "list_sort_strs") {
+                return cg_extern1(s, t2.pos, "bl_sort_str", "List(Str)", "List(Str)", env, fs, c);
+            }
+            if (t.text == "list_sort_floats") {
+                return cg_extern1(s, t2.pos, "bl_sort_f64", "List(Float)", "List(Float)", env, fs, c);
+            }
+            if (t.text == "list_reverse_ints") {
+                return cg_extern1(s, t2.pos, "bl_reverse_i64", "List(Int)", "List(Int)", env, fs, c);
+            }
+            if (t.text == "list_reverse_strs") {
+                return cg_extern1(s, t2.pos, "bl_reverse_str", "List(Str)", "List(Str)", env, fs, c);
+            }
+            if (t.text == "list_reverse_floats") {
+                return cg_extern1(s, t2.pos, "bl_reverse_f64", "List(Float)", "List(Float)", env, fs, c);
+            }
+            if (t.text == "list_contains_int") {
+                return cg_externb2(s, t2.pos, "bl_contains_i64", "List(Int)", "Int", env, fs, c);
+            }
+            if (t.text == "list_contains_str") {
+                return cg_externb2(s, t2.pos, "bl_contains_str", "List(Str)", "Str", env, fs, c);
+            }
+            if (t.text == "list_contains_float") {
+                return cg_externb2(s, t2.pos, "bl_contains_f64", "List(Float)", "Float", env, fs, c);
+            }
+            if (t.text == "list_sum") {
+                return cg_extern1(s, t2.pos, "bl_sum", "List(Int)", "Int", env, fs, c);
+            }
+            if (t.text == "list_sumf") {
+                return cg_extern1(s, t2.pos, "bl_sumf", "List(Float)", "Float", env, fs, c);
             }
             return cg_call(s, t2.pos, t.text, env, fs, c);
         }
@@ -1318,6 +1433,23 @@ GT cg_extern1(Str s, Int pos, Str sym, Str aty, Str rty, List(Str) env, Funcs fs
     List(Str) l20 = a.lines;
     List(Str) l2 = l20.concat([line]);
     return GT { pos: cp.pos, val: reg, ty: rty, cnt: 0, err: "", glines: a.glines, lines: l2, tmp: t1, lbl: a.lbl };
+}
+
+GT cg_externb1(Str s, Int pos, Str sym, Str aty, List(Str) env, Funcs fs, GT c) {
+    GT a = cg_expr(s, pos, env, fs, c);
+    if (a.err != "") { return a; }
+    Tok cp = lex_tok(s, a.pos);
+    if (cp.text != ")") { return gt_err("expected ) in call to " + sym, a); }
+    Int t1 = a.tmp + 1;
+    Int t2 = a.tmp + 2;
+    Str cr = "%t" + IntToString(t1);
+    Str reg = "%t" + IntToString(t2);
+    Str cl = cr + " = call i8 @" + sym + "(" + ll_ty(aty) + " " + a.val + ")";
+    Str nl = reg + " = icmp ne i8 " + cr + ", 0";
+    List(Str) l20 = a.lines;
+    List(Str) l2 = l20.concat([cl]);
+    List(Str) l3 = l2.concat([nl]);
+    return GT { pos: cp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: a.glines, lines: l3, tmp: t2, lbl: a.lbl };
 }
 
 GT cg_extern2(Str s, Int pos, Str sym, Str aty1, Str aty2, Str rty, List(Str) env, Funcs fs, GT c) {
@@ -2379,6 +2511,130 @@ ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
         if (argtys == "Str,Int,Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_slice expects (Str, Int, Int), got (" + argtys + ")" };
     }
+    if (name == "str_trim") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_trim expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_to_lower") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_to_lower expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_to_upper") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_to_upper expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_reverse") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_reverse expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_contains") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_contains expects (Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "str_starts_with") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_starts_with expects (Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "str_ends_with") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_ends_with expects (Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "str_repeat") {
+        if (argtys == "Str,Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_repeat expects (Str,Int), got (" + argtys + ")" };
+    }
+    if (name == "str_replace") {
+        if (argtys == "Str,Str,Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_replace expects (Str,Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "str_split") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_split expects (Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "str_join") {
+        if (argtys == "List(Str),Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_join expects (List(Str),Str), got (" + argtys + ")" };
+    }
+    if (name == "str_is_int") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_is_int expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_parse_int") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_parse_int expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_is_float") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_is_float expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_parse_float") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Float", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_parse_float expects (Str), got (" + argtys + ")" };
+    }
+    if (name == "str_count") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_count expects (Str,Str), got (" + argtys + ")" };
+    }
+    if (name == "abs_i64") {
+        if (argtys == "Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "abs_i64 expects (Int), got (" + argtys + ")" };
+    }
+    if (name == "min_i64") {
+        if (argtys == "Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "min_i64 expects (Int,Int), got (" + argtys + ")" };
+    }
+    if (name == "max_i64") {
+        if (argtys == "Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "max_i64 expects (Int,Int), got (" + argtys + ")" };
+    }
+    if (name == "clamp_i64") {
+        if (argtys == "Int,Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "clamp_i64 expects (Int,Int,Int), got (" + argtys + ")" };
+    }
+    if (name == "list_sort_ints") {
+        if (argtys == "List(Int)") { return ERes { pos: pos, ty: "List(Int)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_sort_ints expects (List(Int)), got (" + argtys + ")" };
+    }
+    if (name == "list_sort_strs") {
+        if (argtys == "List(Str)") { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_sort_strs expects (List(Str)), got (" + argtys + ")" };
+    }
+    if (name == "list_sort_floats") {
+        if (argtys == "List(Float)") { return ERes { pos: pos, ty: "List(Float)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_sort_floats expects (List(Float)), got (" + argtys + ")" };
+    }
+    if (name == "list_reverse_ints") {
+        if (argtys == "List(Int)") { return ERes { pos: pos, ty: "List(Int)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_reverse_ints expects (List(Int)), got (" + argtys + ")" };
+    }
+    if (name == "list_reverse_strs") {
+        if (argtys == "List(Str)") { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_reverse_strs expects (List(Str)), got (" + argtys + ")" };
+    }
+    if (name == "list_reverse_floats") {
+        if (argtys == "List(Float)") { return ERes { pos: pos, ty: "List(Float)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_reverse_floats expects (List(Float)), got (" + argtys + ")" };
+    }
+    if (name == "list_contains_int") {
+        if (argtys == "List(Int),Int") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_contains_int expects (List(Int),Int), got (" + argtys + ")" };
+    }
+    if (name == "list_contains_str") {
+        if (argtys == "List(Str),Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_contains_str expects (List(Str),Str), got (" + argtys + ")" };
+    }
+    if (name == "list_contains_float") {
+        if (argtys == "List(Float),Float") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_contains_float expects (List(Float),Float), got (" + argtys + ")" };
+    }
+    if (name == "list_sum") {
+        if (argtys == "List(Int)") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_sum expects (List(Int)), got (" + argtys + ")" };
+    }
+    if (name == "list_sumf") {
+        if (argtys == "List(Float)") { return ERes { pos: pos, ty: "Float", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "list_sumf expects (List(Float)), got (" + argtys + ")" };
+    }
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
 
@@ -3116,7 +3372,7 @@ Int main() {
     Int tc = ck_check_program(src, 0, sg);
     if (tc != 0) { return tc; }
     Funcs fs = collect_sigs(src);
-    List(Str) header = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", rt_itoa_def(), rt_lconcat_def()];
+    List(Str) header = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @bl_sort_i64(ptr)", "declare ptr @bl_sort_str(ptr)", "declare ptr @bl_sort_f64(ptr)", "declare ptr @bl_reverse_i64(ptr)", "declare ptr @bl_reverse_str(ptr)", "declare ptr @bl_reverse_f64(ptr)", "declare i8 @bl_contains_i64(ptr, i64)", "declare i8 @bl_contains_str(ptr, ptr)", "declare i8 @bl_contains_f64(ptr, double)", "declare i64 @bl_sum(ptr)", "declare double @bl_sumf(ptr)", rt_itoa_def(), rt_lconcat_def()];
     PG g0 = PG { pos: 0, err: "", glines: [], hlines: [], lines: header, tmp: 0, lbl: 0 };
     PG res = pg_next(src, 0, fs, g0);
     if (res.err != "") {
@@ -3138,6 +3394,8 @@ Int main() {
     println("wrote " + out);
     return 0;
 }
+
+
 
 
 

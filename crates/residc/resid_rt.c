@@ -2129,3 +2129,150 @@ double list_sumf(void* box) {
     for (int64_t i = 0; i < b->count; i++) s += resid_unbox_f64(b->slots[i]);
     return s;
 }
+
+/* ─── Bootstrap-layout list verbs ───
+   The bootstrap compilers build lists as { int64_t n; raw slots[n] } with
+   unboxed elements (i64 / double / char*). These twins serve that layout;
+   the Rust pipeline uses the ResidVal variants above. Names are prefixed
+   bl_ so both conventions coexist. */
+
+static void* bl_alloc(int64_t n) {
+    int64_t* m = (int64_t*)malloc(8 + (size_t)n * 8);
+    m[0] = n;
+    return m;
+}
+
+void* bl_reverse_i64(void* box) {
+    int64_t n = ((int64_t*)box)[0];
+    int64_t* out = (int64_t*)bl_alloc(n);
+    const int64_t* in = (const int64_t*)box + 1;
+    for (int64_t i = 0; i < n; i++) out[1 + i] = in[n - 1 - i];
+    return out;
+}
+
+void* bl_reverse_str(void* box) {
+    int64_t n = ((int64_t*)box)[0];
+    char** out = (char**)bl_alloc(n);
+    const char** in = (const char**)((int64_t*)box + 1);
+    for (int64_t i = 0; i < n; i++) out[1 + i] = (char*)in[n - 1 - i];
+    return out;
+}
+
+void* bl_reverse_f64(void* box) {
+    int64_t n = ((int64_t*)box)[0];
+    double* out = (double*)bl_alloc(n);
+    const double* in = (const double*)((int64_t*)box + 1);
+    for (int64_t i = 0; i < n; i++) out[1 + i] = in[n - 1 - i];
+    return out;
+}
+
+int8_t bl_contains_i64(void* box, int64_t v) {
+    int64_t n = ((int64_t*)box)[0];
+    const int64_t* a = (const int64_t*)box + 1;
+    for (int64_t i = 0; i < n; i++)
+        if (a[i] == v) return 1;
+    return 0;
+}
+
+int8_t bl_contains_str(void* box, const char* v) {
+    int64_t n = ((int64_t*)box)[0];
+    const char** a = (const char**)((int64_t*)box + 1);
+    for (int64_t i = 0; i < n; i++)
+        if (strcmp(a[i], v) == 0) return 1;
+    return 0;
+}
+
+int8_t bl_contains_f64(void* box, double v) {
+    int64_t n = ((int64_t*)box)[0];
+    const double* a = (const double*)((int64_t*)box + 1);
+    for (int64_t i = 0; i < n; i++)
+        if (a[i] == v) return 1;
+    return 0;
+}
+
+static int bl_cmp_i64(const void* a, const void* b) {
+    int64_t x = *(const int64_t*)a, y = *(const int64_t*)b;
+    return x < y ? -1 : x > y;
+}
+
+static int bl_cmp_str(const void* a, const void* b) {
+    return strcmp(*(const char* const*)a, *(const char* const*)b);
+}
+
+static int bl_cmp_f64(const void* a, const void* b) {
+    double x = *(const double*)a, y = *(const double*)b;
+    return x < y ? -1 : x > y;
+}
+
+static void* bl_sorted_copy(void* box, size_t nbytes, int (*cmp)(const void*, const void*)) {
+    int64_t n = ((int64_t*)box)[0];
+    int64_t* out = (int64_t*)malloc(8 + (size_t)n * 8);
+    memcpy(out, box, 8 + (size_t)n * 8);
+    qsort((void*)(out + 1), (size_t)n, nbytes, cmp);
+    return out;
+}
+
+void* bl_sort_i64(void* box) { return bl_sorted_copy(box, 8, bl_cmp_i64); }
+void* bl_sort_str(void* box) { return bl_sorted_copy(box, 8, bl_cmp_str); }
+void* bl_sort_f64(void* box) { return bl_sorted_copy(box, 8, bl_cmp_f64); }
+
+int64_t bl_sum(void* box) {
+    int64_t n = ((int64_t*)box)[0];
+    const int64_t* a = (const int64_t*)box + 1;
+    int64_t s = 0;
+    for (int64_t i = 0; i < n; i++) s += a[i];
+    return s;
+}
+
+double bl_sumf(void* box) {
+    int64_t n = ((int64_t*)box)[0];
+    const double* a = (const double*)((int64_t*)box + 1);
+    double s = 0.0;
+    for (int64_t i = 0; i < n; i++) s += a[i];
+    return s;
+}
+
+/* Split into a bootstrap-layout List(Str). */
+void* bl_str_split(const char* s, const char* sep) {
+    size_t lsep = strlen(sep);
+    if (lsep == 0) {
+        char** box = (char**)bl_alloc(1);
+        box[1] = (char*)s;
+        return box;
+    }
+    int64_t parts = 1;
+    const char* q = s;
+    while ((q = strstr(q, sep)) != NULL) { parts++; q += lsep; }
+    char** box = (char**)bl_alloc(parts);
+    int64_t i = 0;
+    q = s;
+    const char* hit;
+    while ((hit = strstr(q, sep)) != NULL) {
+        int64_t len = hit - q;
+        char* part = (char*)malloc(len + 1);
+        memcpy(part, q, len);
+        part[len] = '\0';
+        box[1 + i++] = part;
+        q = hit + lsep;
+    }
+    box[1 + i] = strdup(q);
+    return box;
+}
+
+/* Join a bootstrap-layout List(Str) with separator `sep`. */
+char* bl_str_join(void* box, const char* sep) {
+    int64_t n = ((int64_t*)box)[0];
+    const char** items = (const char**)((int64_t*)box + 1);
+    size_t lsep = strlen(sep), total = 0;
+    for (int64_t i = 0; i < n; i++) total += strlen(items[i]);
+    if (n > 0) total += lsep * (size_t)(n - 1);
+    char* p = (char*)malloc(total + 1);
+    char* w = p;
+    for (int64_t i = 0; i < n; i++) {
+        if (i > 0) { memcpy(w, sep, lsep); w += lsep; }
+        size_t li = strlen(items[i]);
+        memcpy(w, items[i], li); w += li;
+    }
+    *w = '\0';
+    return p;
+}
