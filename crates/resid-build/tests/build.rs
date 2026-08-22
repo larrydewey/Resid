@@ -158,6 +158,9 @@ fn path_dependency_resolves_and_builds() {
 name = "app"
 version = "0.1.0"
 
+[capabilities]
+grant = ["git(readonly)", "filesystem(readonly)"]
+
 [dependencies.math]
 path = "vendor/math"
 capabilities = ["git(readonly)"]
@@ -194,4 +197,68 @@ path = "vendor/ghost"
     );
     let e = Manifest::load(&dir).err().expect("missing dep must fail");
     assert!(e.to_string().contains("dependency 'ghost'"), "{e}");
+}
+
+#[test]
+fn ungranted_dependency_capability_rejected() {
+    let dir = temp_dir("caps");
+    fs::create_dir_all(dir.join("vendor/math/src")).unwrap();
+    fs::write(
+        dir.join("vendor/math/resid.toml"),
+        "[package]\nname = \"math\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(dir.join("vendor/math/src/main.resid"), "pub Int f() { return 0; }\n").unwrap();
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[capabilities]
+grant = ["git(readonly)"]
+
+[dependencies.math]
+path         = "vendor/math"
+capabilities = ["filesystem(readonly)"]
+"#,
+        "import \"math\";\nInt main() { return f(); }\n",
+    );
+    let e = Manifest::load(&dir).err().expect("ungranted cap must fail");
+    let msg = e.to_string();
+    assert!(msg.contains("not granted"), "{msg}");
+    assert!(msg.contains("filesystem"), "{msg}");
+}
+
+#[test]
+fn granted_capability_family_accepted() {
+    let dir = temp_dir("capok");
+    fs::create_dir_all(dir.join("vendor/math/src")).unwrap();
+    fs::write(
+        dir.join("vendor/math/resid.toml"),
+        "[package]\nname = \"math\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(dir.join("vendor/math/src/main.resid"), "pub Int f() { return 0; }\n").unwrap();
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[capabilities]
+grant = ["filesystem(scope=[\"config/**\"])", "git(readonly)"]
+
+[dependencies.math]
+path         = "vendor/math"
+capabilities = ["filesystem(readonly)"]
+"#,
+        "import \"math\";\nInt main() { return f(); }\n",
+    );
+    // Family match: dep wants `filesystem`, grant includes a scoped
+    // `filesystem(...)` — same family, so grantable.
+    let m = Manifest::load(&dir).expect("scoped grant covers family");
+    assert_eq!(m.granted_capabilities.len(), 2);
 }
