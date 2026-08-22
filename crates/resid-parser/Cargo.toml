@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 resid-lexer = { path = "../resid-lexer" }
+
+[dev-dependencies]
+resid-type = { path = "../resid-type" }
