@@ -134,3 +134,64 @@ fn parse_errors_fail_the_build_with_diagnostics() {
     let e = build(&m, Profile::Check, &dir.join("out")).err().expect("must fail");
     assert!(e.message.contains("expected"), "expected parse diagnostic, got: {}", e.message);
 }
+
+#[test]
+fn path_dependency_resolves_and_builds() {
+    let dir = temp_dir("dep");
+    // Dependency package.
+    fs::create_dir_all(dir.join("vendor/math/src")).unwrap();
+    fs::write(
+        dir.join("vendor/math/resid.toml"),
+        "[package]\nname = \"math\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/math/src/main.resid"),
+        "pub Int dbl(Int x) {\n    return x * 2;\n}\n",
+    )
+    .unwrap();
+    // Depending package.
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies.math]
+path = "vendor/math"
+capabilities = ["git(readonly)"]
+"#,
+        "import \"math\";\nInt main() {\n    println(IntToString(dbl(10)));\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).expect("manifest loads");
+    assert_eq!(m.dependencies.len(), 1);
+    assert_eq!(m.dependencies[0].name, "math");
+    assert_eq!(m.dependencies[0].capabilities, vec!["git(readonly)".to_string()]);
+    let out = dir.join("out");
+    let bin = match build(&m, Profile::Debug, &out).expect("build with dep") {
+        Artifact::Binary(p) => p,
+        other => panic!("expected Binary, got {other:?}"),
+    };
+    let res = Command::new(&bin).output().expect("run binary");
+    assert_eq!(String::from_utf8_lossy(&res.stdout).trim(), "20");
+}
+
+#[test]
+fn missing_dependency_package_rejected_at_load() {
+    let dir = temp_dir("baddep");
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies.ghost]
+path = "vendor/ghost"
+"#,
+        "Int main() { return 0; }\n",
+    );
+    let e = Manifest::load(&dir).err().expect("missing dep must fail");
+    assert!(e.to_string().contains("dependency 'ghost'"), "{e}");
+}

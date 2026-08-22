@@ -14,10 +14,17 @@
 //! - Name conflicts between merged files surface as duplicate-definition
 //!   errors from the type checker.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::{Declaration, Id, ImportDecl, TranslationUnit};
+
+/// Dependency roots available to a unit: package name → resolved root file.
+/// An import whose path does not exist relative to the importer falls back
+/// to this map (spec §35: `import "http"` picks up the `[dependencies.http]`
+/// package).
+pub type DependencyMap = HashMap<String, PathBuf>;
 
 /// Error raised while resolving a unit's import tree.
 #[derive(Debug)]
@@ -35,13 +42,22 @@ impl std::fmt::Display for ImportError {
 /// Imported declarations come first (dependencies before dependents),
 /// then the root file's declarations in source order.
 pub fn resolve_unit(path: &Path) -> Result<TranslationUnit, ImportError> {
+    resolve_unit_with(path, &DependencyMap::new())
+}
+
+/// Like `resolve_unit`, with a package-name → root-file map for dependency
+/// imports (spec §35).
+pub fn resolve_unit_with(
+    path: &Path,
+    deps: &DependencyMap,
+) -> Result<TranslationUnit, ImportError> {
     let path = path.canonicalize().map_err(|e| {
         ImportError { message: format!("cannot resolve '{}': {e}", path.display()) }
     })?;
     let mut visited = HashSet::new();
     let mut decls: Vec<Declaration> = Vec::new();
     let mut imports: Vec<ImportDecl> = Vec::new();
-    let root_imports = load_into(&path, &mut visited, &mut decls, None, true)?;
+    let root_imports = load_into(&path, &mut visited, &mut decls, None, true, deps)?;
     imports.extend(root_imports);
     Ok(TranslationUnit { imports, declarations: decls })
 }
@@ -54,6 +70,7 @@ fn load_into(
     decls: &mut Vec<Declaration>,
     select: Option<&[Id]>,
     is_root: bool,
+    deps: &DependencyMap,
 ) -> Result<Vec<ImportDecl>, ImportError> {
     if !visited.insert(path.to_path_buf()) {
         return Ok(Vec::new());
@@ -85,8 +102,8 @@ fn load_into(
                 ),
             });
         }
-        let target = base.join(&imp.path);
-        load_into(&target, visited, decls, imp.names.as_deref(), false)?;
+        let target = resolve_import(base, &imp.path, deps)?;
+        load_into(&target, visited, decls, imp.names.as_deref(), false, deps)?;
     }
 
     // Append this unit's visible declarations.
@@ -111,6 +128,32 @@ fn load_into(
         decls.push(d);
     }
     Ok(unit.imports)
+}
+
+/// Where does an import point? A path relative to the importing file wins;
+/// otherwise the import text may name a dependency package (spec §35), in
+/// which case that package's root file is used.
+fn resolve_import(
+    base: &Path,
+    import_path: &str,
+    deps: &DependencyMap,
+) -> Result<PathBuf, ImportError> {
+    let relative = base.join(import_path);
+    if relative.is_file() {
+        return relative
+            .canonicalize()
+            .map_err(|e| ImportError { message: format!("cannot resolve '{}': {e}", relative.display()) });
+    }
+    if let Some(root) = deps.get(import_path) {
+        return Ok(root.clone());
+    }
+    Err(ImportError {
+        message: format!(
+            "import '{}': no such file ('{}') and no dependency with that name",
+            import_path,
+            relative.display()
+        ),
+    })
 }
 
 fn decl_name(d: &Declaration) -> &str {
