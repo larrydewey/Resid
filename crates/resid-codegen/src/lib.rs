@@ -2803,10 +2803,19 @@ impl<'ctx> CodeGen<'ctx> {
             .map(|(_, _, _, r)| r.clone())
             .unwrap_or(SemType::Str);
         match &ret {
-            SemType::Bool => Ok(Val {
-                v: v.into_int_value().into(),
-                ty: SemType::Bool,
-            }),
+            SemType::Bool => {
+                // The C runtime returns Bool as i8; narrow to i1 so branch
+                // conditions and logic ops see the type LLVM expects.
+                let i8v = v.into_int_value();
+                let b = self
+                    .builder
+                    .build_int_truncate(i8v, self.cx.bool_type(), "boolnarrow")
+                    .map_err(to_err)?;
+                Ok(Val {
+                    v: b.into(),
+                    ty: SemType::Bool,
+                })
+            }
             SemType::Numeric(NumericType::Int(IntWidth::B64)) => Ok(Val {
                 v: v.into_int_value().into(),
                 ty: SemType::Numeric(NumericType::Int(IntWidth::B64)),

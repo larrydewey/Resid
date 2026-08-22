@@ -304,6 +304,31 @@ pub fn build(manifest: &Manifest, profile: Profile, out_dir: &Path) -> Result<Ar
         Err(e) => return err(format!("{}", e)),
     };
 
+    // Capability policy: every provider family a program touches must be
+    // granted under [capabilities] grant (spec §28.2 step 4). `args` is
+    // exempt — reading the program's own argv is not a resource capability.
+    const EXEMPT_PROVIDERS: &[&str] = &["args"];
+    let uses = resid_parser::collect_provider_calls(&unit);
+    let mut violations: Vec<String> = Vec::new();
+    for u in &uses {
+        if EXEMPT_PROVIDERS.contains(&u.provider.as_str()) {
+            continue;
+        }
+        if !manifest.granted_capabilities.contains(&u.provider) {
+            violations.push(format!(
+                "  {}:{}:{}: {}.{}() requires capability `{}`",
+                u.span.file, u.span.line, u.span.col_start, u.provider, u.verb, u.provider
+            ));
+        }
+    }
+    if !violations.is_empty() {
+        return err(format!(
+            "capability policy violations ({} call(s) not granted under [capabilities] grant):\n{}\n",
+            violations.len(),
+            violations.join("\n")
+        ));
+    }
+
     // Type check.
     let type_errors = resid_type::check_program(&unit);
     if !type_errors.is_empty() {
