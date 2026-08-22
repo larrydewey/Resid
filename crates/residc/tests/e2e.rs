@@ -2430,18 +2430,26 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Stdlib v1.5: SHA-256 digests (pure C implementation) end-to-end.
+/// SHA-256 written in pure Resid (lib/crypto.res) — self-hosted crypto.
 #[test]
-fn run_sha256() {
+fn run_sha256_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-sha-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("sha.resid");
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    let file = dir.join("main.resid");
     std::fs::write(
         &file,
         r#"
+import "crypto.res";
 Int main() {
     println(sha256(""));
     println(sha256("abc"));
+    println(sha256("The quick brown fox jumps over the lazy dog"));
     return 0;
 }
 "#,
@@ -2456,7 +2464,7 @@ Int main() {
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(
         stdout.trim(),
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\nd7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
         "{stdout:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);

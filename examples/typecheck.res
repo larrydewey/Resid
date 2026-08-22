@@ -648,6 +648,11 @@ Bool is_bin_op(Str op) {
     if (op == "!=") { return true; }
     if (op == "&&") { return true; }
     if (op == "||") { return true; }
+    if (op == "&") { return true; }
+    if (op == "|") { return true; }
+    if (op == "^") { return true; }
+    if (op == "<<") { return true; }
+    if (op == ">>") { return true; }
     return false;
 }
 
@@ -658,6 +663,24 @@ Bool is_num(Str t) {
 }
 
 Str bin_type(Str op, Str a, Str b) {
+    if (op == "&" || op == "|" || op == "^") {
+        if (a == "Int") {
+            if (b == "Int") { return "Int"; }
+        }
+        return "ERR";
+    }
+    if (op == "<<") {
+        if (a == "Int") {
+            if (b == "Int") { return "Int"; }
+        }
+        return "ERR";
+    }
+    if (op == ">>") {
+        if (a == "Int") {
+            if (b == "Int") { return "Int"; }
+        }
+        return "ERR";
+    }
     if (op == "..") { return "Range"; }
     if (op == "..=") { return "Range"; }
     if (op == "==") {
@@ -925,10 +948,6 @@ ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
     if (name == "list_sumf") {
         if (argtys == "List(Float)") { return ERes { pos: pos, ty: "Float", err: "" }; }
         return ERes { pos: pos, ty: "", err: "list_sumf expects (List(Float)), got (" + argtys + ")" };
-    }
-    if (name == "sha256") {
-        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "sha256 expects Str, got " + argtys };
     }
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
@@ -1220,19 +1239,24 @@ ERes check_unary(Str s, Int pos, List(Str) env, Funcs fs) {
 Int op_prec(Str op) {
     if (op == "..") { return 1; }
     if (op == "..=") { return 1; }
-    if (op == "||") { return 2; }
-    if (op == "&&") { return 3; }
-    if (op == "==") { return 4; }
-    if (op == "!=") { return 4; }
-    if (op == "<") { return 5; }
-    if (op == "<=") { return 5; }
-    if (op == ">") { return 5; }
-    if (op == ">=") { return 5; }
-    if (op == "+") { return 6; }
-    if (op == "-") { return 6; }
-    if (op == "*") { return 7; }
-    if (op == "/") { return 7; }
-    if (op == "%") { return 7; }
+    if (op == "||") { return 3; }
+    if (op == "&&") { return 4; }
+    if (op == "|") { return 5; }
+    if (op == "^") { return 6; }
+    if (op == "&") { return 7; }
+    if (op == "==") { return 8; }
+    if (op == "!=") { return 8; }
+    if (op == "<") { return 9; }
+    if (op == "<=") { return 9; }
+    if (op == ">") { return 9; }
+    if (op == ">=") { return 9; }
+    if (op == "<<") { return 10; }
+    if (op == ">>") { return 10; }
+    if (op == "+") { return 11; }
+    if (op == "-") { return 11; }
+    if (op == "*") { return 12; }
+    if (op == "/") { return 12; }
+    if (op == "%") { return 12; }
     return 0;
 }
 
@@ -1570,10 +1594,15 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
     }
     if (t.text == "pub") {
         Tok t2 = lex_tok(s, t.pos);
-        return collect_sigs_at(s, t2.pos, fs);
+        if (t2.kind != "ident") {
+            Int endb = skip_decl(s, t.pos, 0);
+            return collect_sigs_at(s, endb, fs);
+        }
+        // Fall through: the declaration starts at t.pos (right after pub).
     }
-    if (t.kind == "ident") {
-        PRes rty = parse_type(s, pos);
+    if (t.text == "pub" || t.kind == "ident") {
+        Int pos_in = if (t.text == "pub") { t.pos } else { pos };
+        PRes rty = parse_type(s, pos_in);
         if (rty.err != "") {
             return collect_sigs_at(s, rty.pos, fs);
         }
@@ -1639,7 +1668,16 @@ Int check_program(Str s, Int pos, Funcs fs) {
     }
     if (t.text == "pub") {
         Tok t2 = lex_tok(s, t.pos);
-        return check_program(s, t2.pos, fs);
+        if (t2.kind == "ident") {
+            DRes d = check_func(s, t.pos, fs);
+            if (d.err != "") {
+                println("type error: " + d.err);
+                return 1;
+            }
+            return check_program(s, d.pos, fs);
+        }
+        Int end = skip_decl(s, t.pos, 0);
+        return check_program(s, end, fs);
     }
     if (t.text == ";") {
         return check_program(s, t.pos, fs);

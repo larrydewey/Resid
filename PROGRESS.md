@@ -1796,8 +1796,14 @@ family overrides scopes. **Unicode casing done**: `str_to_lower`/`str_to_upper`
   content hash; Ed25519 `keygen/pack/verify` CLI (hex keys); `[signing]
   require_signatures = true` + keyring makes dependency resolution verify each
   dep's archive signature against a trusted key. **Crypto boundary ironed out**:
-  build-tool crypto is pure-Rust crates (sha2, ed25519-dalek — no FFI); Resid
-  programs gained `sha256(Str) -> Str` as a pure-C stdlib builtin (FIPS 180-4,
+  build-tool crypto is pure-Rust crates (sha2, ed25519-dalek — no FFI); **SHA-256
+  rewritten in pure Resid** (`lib/crypto.res`, self-hosting principle — the C
+  builtin was removed): digests verified against reference implementations
+  through both pipelines incl. stage-2. Bootstrap fixes it forced: `pub`
+  declarations were misparsed by checker/sig-collector/emitter (off-by-one
+  token skips), and the bootstrap checker lacked bitwise/shift operators
+  entirely (added with spec §30 precedences). Previously Resid programs had a
+  pure-C stdlib builtin sha256 (FIPS 180-4,
   digests verified against reference implementations); asymmetric crypto
   deliberately stays at tool level rather than hand-rolling curve math in C.
   Still missing: registry distribution, transitive dep resolution. |
