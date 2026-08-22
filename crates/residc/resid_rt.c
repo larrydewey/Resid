@@ -1890,3 +1890,54 @@ int64_t clamp_i64(int64_t x, int64_t lo, int64_t hi) {
     if (x > hi) return hi;
     return x;
 }
+
+/* ─── Stdlib v1.2: float parsing + misc string helpers ─── */
+
+/* Does `s` parse as a decimal float? (strtod semantics, whole string). */
+int8_t str_is_float(const char* s) {
+    if (*s == '\0') return 0;
+    char* end = NULL;
+    strtod(s, &end);
+    while (*end == ' ' || *end == '\t') end++;
+    return *end == '\0' && end != s;
+}
+
+/* Parse a decimal float; 0.0 when malformed (pair with str_is_float). */
+double str_parse_float(const char* s) {
+    if (!str_is_float(s)) return 0.0;
+    return strtod(s, NULL);
+}
+
+/* Count non-overlapping occurrences of `needle` in `s`. */
+int64_t str_count(const char* s, const char* needle) {
+    size_t ln = strlen(needle);
+    if (ln == 0) return 0;
+    int64_t hits = 0;
+    const char* q = s;
+    while ((q = strstr(q, needle)) != NULL) { hits++; q += ln; }
+    return hits;
+}
+
+/* Reverse the codepoint order of `s` (UTF-8 aware). */
+char* str_reverse(const char* s) {
+    int64_t n = str_len(s);
+    /* collect byte offsets of each codepoint start */
+    const unsigned char* p = (const unsigned char*)s;
+    int64_t* off = (int64_t*)malloc((n + 1) * sizeof(int64_t));
+    int64_t i = 0;
+    while (*p) {
+        off[i++] = (int64_t)((const char*)p - s);
+        p += utf8_seq_len(*p);
+    }
+    off[i] = (int64_t)strlen(s);
+    char* out = (char*)malloc(off[n] + 1);
+    int64_t w = 0;
+    for (int64_t k = n - 1; k >= 0; k--) {
+        int64_t len = off[k + 1] - off[k];
+        memcpy(out + w, s + off[k], len);
+        w += len;
+    }
+    out[w] = '\0';
+    free(off);
+    return out;
+}

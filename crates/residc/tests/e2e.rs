@@ -2262,3 +2262,42 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Stdlib v1.2: float parsing + misc string helpers end-to-end.
+#[test]
+fn run_stdlib_float_misc() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-stdmisc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("stdmisc.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    if (str_is_float("3.5")) {
+        Float f = str_parse_float("3.5") + str_parse_float("-1.25");
+        println(f"sum={f}");
+    }
+    println(IntToString(str_count("banana", "an")));
+    println(str_reverse("héllo"));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout.trim(), "sum=2.25\n2\nolléh", "unexpected output: {stdout:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

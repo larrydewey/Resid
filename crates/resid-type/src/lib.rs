@@ -840,6 +840,11 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("min_i64", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
     ("max_i64", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
     ("clamp_i64", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    // ─── Stdlib v1.2: float parsing + misc string helpers ───
+    ("str_is_float", &[SemType::Str], SemType::Bool),
+    ("str_parse_float", &[SemType::Str], SemType::Numeric(NumericType::Float(FloatWidth::F64))),
+    ("str_count", &[SemType::Str, SemType::Str], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("str_reverse", &[SemType::Str], SemType::Str),
 ];
 
 /// Return the set of built-in (extern) function signatures.
@@ -4630,6 +4635,26 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "stdlib parse/math should type-check, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_stdlib_float_parse_and_misc() {
+        let src = r#"
+Int main() {
+    if (str_is_float("3.5")) {
+        Float f = str_parse_float("-1.25");
+        println(f"f={f}");
+    }
+    Int c = str_count("banana", "an");
+    Str r = str_reverse("héllo");
+    println(IntToString(c));
+    println(r);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "stdlib float/misc should type-check, got: {:?}", errs);
     }
 
     #[test]
