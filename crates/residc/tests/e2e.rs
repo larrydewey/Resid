@@ -2222,3 +2222,43 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Stdlib v1.1: integer parsing + math verbs end-to-end.
+#[test]
+fn run_stdlib_parse_math() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-stdmath-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("stdmath.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    if (str_is_int("-17")) {
+        println(IntToString(str_parse_int("-17")));
+    }
+    println(IntToString(abs_i64(-8)));
+    println(IntToString(min_i64(3, 9)));
+    println(IntToString(max_i64(3, 9)));
+    println(IntToString(clamp_i64(15, 0, 10)));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout.trim(), "-17\n8\n3\n9\n10", "unexpected output: {stdout:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
