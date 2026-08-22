@@ -2951,3 +2951,27 @@ Int main() {
     assert!(ir.contains("call double @str_parse_float"), "expected str_parse_float: {ir}");
     assert!(ir.contains("call ptr @str_reverse"), "expected str_reverse: {ir}");
 }
+
+#[test]
+fn test_stdlib_list_verbs_calls() {
+    let src = r#"
+Int main() {
+    List(Int) xs = [3, 1, 2];
+    List(Int) s = list_sort_ints(xs);
+    List(Int) r = list_reverse_ints(s);
+    Int sum = list_sum(r);
+    Bool c = list_contains_int(xs, 2);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("stdlist.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "stdlist");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("declare ptr @list_sort_ints"), "expected list_sort_ints decl: {ir}");
+    assert!(ir.contains("call i64 @list_sum"), "expected list_sum: {ir}");
+    assert!(ir.contains("declare i1 @list_contains_int"), "expected list_contains_int decl: {ir}");
+}

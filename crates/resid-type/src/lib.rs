@@ -864,8 +864,10 @@ pub fn builtin_signatures() -> Signatures {
             )
         })
         .collect();
-    // List-typed entries (Box is not const-constructible): stdlib string
-    // split/join over boxed List(Str).
+    // List-typed entries (Box is not const-constructible): stdlib split/join
+    // and the v1.3 list verbs over boxed lists.
+    let int_list = || SemType::List(Box::new(SemType::Numeric(NumericType::Int(IntWidth::B64))));
+    let str_list = || SemType::List(Box::new(SemType::Str));
     for (name, params, ret) in [
         (
             "str_split",
@@ -877,6 +879,13 @@ pub fn builtin_signatures() -> Signatures {
             vec![SemType::List(Box::new(SemType::Str)), SemType::Str],
             SemType::Str,
         ),
+        ("list_reverse_ints", vec![int_list()], int_list()),
+        ("list_reverse_strs", vec![str_list()], str_list()),
+        ("list_contains_int", vec![int_list(), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Bool),
+        ("list_contains_str", vec![str_list(), SemType::Str], SemType::Bool),
+        ("list_sort_ints", vec![int_list()], int_list()),
+        ("list_sort_strs", vec![str_list()], str_list()),
+        ("list_sum", vec![int_list()], SemType::Numeric(NumericType::Int(IntWidth::B64))),
     ] {
         sigs.insert(
             name.to_string(),
@@ -4655,6 +4664,44 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "stdlib float/misc should type-check, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_stdlib_list_verbs() {
+        let src = r#"
+Int main() {
+    List(Int) xs = [3, 1, 2];
+    List(Int) sorted = list_sort_ints(xs);
+    List(Int) rev = list_reverse_ints(sorted);
+    Int s = list_sum(sorted);
+    Bool has2 = list_contains_int(xs, 2);
+    List(Str) ss = list_sort_strs(["pear", "apple"]);
+    List(Str) rs = list_reverse_strs(ss);
+    Bool hasFig = list_contains_str(rs, "fig");
+    if (has2 && hasFig) {
+        println(IntToString(s));
+        println(IntToString(list_sum(rev)));
+    }
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "list verbs should type-check, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_list_verb_wrong_elem_rejected() {
+        let src = r#"
+Int main() {
+    List(Str) ss = ["a"];
+    List(Str) r = list_reverse_ints(ss);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "expected elem-type error, got: {:?}", errs);
     }
 
     #[test]
