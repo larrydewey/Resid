@@ -11,7 +11,7 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 570 pass (bootstrap sync re-proven: stage-2 driver rebuilt from the 3401-line driver.res; stdlib program outputs match stage-1 byte-for-byte) (lexer 17, parser 104, resid-ir 46, resid-type 195,
+- **Tests**: 573 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
   resid-codegen 137, resid-build 12, resid-fmt 5, residc 43 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
@@ -1791,7 +1791,12 @@ family overrides scopes. **Unicode casing done**: `str_to_lower`/`str_to_upper`
   runtime twins that read the bootstrap `{n, raw slots}` box layout (the Rust
   pipeline uses ResidVal boxes) — both conventions coexist in resid_rt.c.
   Stage-2 re-proven: the Resid emitter compiles the regenerated driver.res and
-  its binaries match stage-1 output. Still missing: registry/signed archives. |
+  its binaries match stage-1 output. **Package archives + signing done
+  (§28.1–28.3 v1)**: deterministic `.resid-pkg` archives whose SHA-256 is the
+  content hash; Ed25519 `keygen/pack/verify` CLI (hex keys); `[signing]
+  require_signatures = true` + keyring makes dependency resolution verify each
+  dep's archive signature against a trusted key. Still missing: registry
+  distribution, transitive dep resolution. |
 | 6. Tooling, Bootstrap | Partial | `resid fmt` done (canonical AST formatter, idempotent on all bootstrap sources); **`resid-graph` done** — call-graph extraction from the resolved AST (imports + alias rewriting included), text tree and DOT output, extern built-ins excluded from nodes; recursion shows as self-edges. `resid-notes`/`resid-cache`/`resid-why` still stubs (they need the reduction/cache subsystem). |
 
 Build/test notes:
