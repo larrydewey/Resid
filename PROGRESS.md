@@ -11,7 +11,7 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 520 pass (lexer 17, parser 91, resid-ir 46, resid-type 188,
+- **Tests**: 528 pass (lexer 17, parser 99, resid-ir 46, resid-type 188,
   resid-codegen 132, resid-build 8, residc 38 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
@@ -64,8 +64,8 @@
   survive nesting, and decoded-byte string-literal sizing. Proven by e2e
   `stage2_emitter_compiles_bootstrap_lexer`; full matrix in /tmp scratch
   (lexer/parser/typecheck outputs diff clean; driver IR identical).
-- **Next**: multi-file packages + dependency resolution in `resid-build`, full
-  `resid-builtin` stdlib, or tooling (§12.5).
+- **Next**: dependency resolution + `import as M` namespacing in `resid-build`,
+  full `resid-builtin` stdlib, or tooling (§12.5).
 - Full status table in §11; self-hosting roadmap in §12.
 
 ---
@@ -1751,7 +1751,7 @@ Before calling compiler done:
 | 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. Runtime helpers landed: conversion helpers, checked/wrapping/saturating arithmetic, ranges/slicing, raw strings, byte strings, `#location`, f-string interpolation, runtime `Str + Str` concat, Dec(N) exact decimal arithmetic/display/conversions, `filesystem.write_all` (M6 P1), spawn with capture loading and sum-type casting (M6 P2), and **handle types** (spec §16): `with (File h = open(path)) { body }` type-checks and lowers to acquire → body → `resid_handle_release` (RAII, reverse binding order), plus `filesystem.open`/`read_handle`/`close` File-handle verbs. `resid-build` crate landed: parses `resid.toml` ([package] name/version/root,
 [target] triple), profiles debug/release/check (spec §35), builds via the full
 pipeline into `<pkg>/target/resid/<name>`; CLI `resid-build [dir] [-p prof] [-o dir]`.
-Still missing: multi-file packages, dependency resolution, full `resid-builtin` stdlib. |
+**Multi-file packages done**: `resid_parser::resolve_unit` resolves `import "f.resid"` trees (relative paths, cycle/diamond dedupe by canonical path), merging only exports (`pub` functions; types/behaviors always visible) into one flat unit — deps before dependents; `(a, b)` name selection supported, `as M` rejected for now. residc and resid-build both compile through it (proven: multi-file package with imported fn+type builds and runs). Still missing: dependency resolution, import-as namespacing, signing/capabilities, full `resid-builtin` stdlib. |
 | 6. Tooling, Bootstrap | Stub | `tools/*` single-line stubs; they build. No formatter, no CBOR, no LSP. |
 
 Build/test notes:
@@ -2078,7 +2078,9 @@ All resolved in Resid 3.0. See `resid_specification.txt`.
 
 ---
 
-*Last updated: 2026-08-22 — `resid-build` crate done (resid.toml manifest parse,
+*Last updated: 2026-08-22 — multi-file packages: resolve_unit merges import
+trees into a flat unit (pub-gated exports, deduped cycles/diamonds); residc and
+resid-build build through it. Also today: `resid-build` crate done (resid.toml manifest parse,
 profiles debug/release/check, build orchestration to native binary; 8 tests) and
 a soundness fix: typed binds now verify the value against the declared type
 (`Str x = 42` was silently passing typecheck and dying in codegen) via

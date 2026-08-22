@@ -132,5 +132,5 @@ fn parse_errors_fail_the_build_with_diagnostics() {
     );
     let m = Manifest::load(&dir).unwrap();
     let e = build(&m, Profile::Check, &dir.join("out")).err().expect("must fail");
-    assert!(e.message.contains("parse error"), "{}", e.message);
+    assert!(e.message.contains("expected"), "expected parse diagnostic, got: {}", e.message);
 }

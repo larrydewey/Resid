@@ -190,26 +190,11 @@ pub enum Artifact {
 ///
 /// Pipeline per file: lex → parse → type check → LLVM IR → clang.
 pub fn build(manifest: &Manifest, profile: Profile, out_dir: &Path) -> Result<Artifact, BuildError> {
-    let source = match std::fs::read_to_string(&manifest.root) {
-        Ok(s) => s,
-        Err(e) => return err(format!("cannot read '{}': {e}", manifest.root.display())),
+    // Resolve imports + lex + parse.
+    let unit = match resid_parser::resolve_unit(&manifest.root) {
+        Ok(u) => u,
+        Err(e) => return err(format!("{}", e)),
     };
-
-    // Lex + parse.
-    let (unit, errors) = resid_parser::Parser::parse(
-        &manifest.root.display().to_string(),
-        &source,
-    );
-    if !errors.is_empty() {
-        let mut msg = format!("{} parse error(s):\n", errors.len());
-        for e in &errors {
-            msg.push_str(&format!(
-                "  {}:{}:{}: {}\n",
-                e.span.file, e.span.line, e.span.col_start, e.message
-            ));
-        }
-        return err(msg);
-    }
 
     // Type check.
     let type_errors = resid_type::check_program(&unit);

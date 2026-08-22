@@ -16,7 +16,7 @@ use std::process::ExitCode;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
-use resid_parser::{Parser, TranslationUnit};
+use resid_parser::TranslationUnit;
 
 enum Cmd {
     Check,
@@ -58,15 +58,7 @@ fn main() -> ExitCode {
         _ => None,
     };
 
-    let source = match fs::read_to_string(&file) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: cannot read '{file}': {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let unit = match pipeline(&file, &source) {
+    let unit = match pipeline(&file) {
         Ok(u) => u,
         Err(code) => return code,
     };
@@ -98,22 +90,16 @@ fn main() -> ExitCode {
     }
 }
 
-/// Lex + parse + type check. Prints diagnostics and returns `Err` on failure.
-fn pipeline(file: &str, source: &str) -> Result<TranslationUnit, ExitCode> {
-    let (unit, errors) = Parser::parse(file, source);
-    for e in &errors {
-        eprintln!(
-            "{}:{}:{}: error: {}",
-            e.span.file, e.span.line, e.span.col_start, e.message
-        );
-    }
-    if !errors.is_empty() {
-        eprintln!(
-            "error: compilation failed with {} diagnostic(s)",
-            errors.len()
-        );
-        return Err(ExitCode::FAILURE);
-    }
+/// Resolve imports + lex + parse + type check. Prints diagnostics and
+/// returns `Err` on failure.
+fn pipeline(file: &str) -> Result<TranslationUnit, ExitCode> {
+    let unit = match resid_parser::resolve_unit(std::path::Path::new(file)) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return Err(ExitCode::FAILURE);
+        }
+    };
 
     let type_errors = resid_type::check_program(&unit);
     for e in &type_errors {
