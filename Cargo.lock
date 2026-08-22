@@ -225,6 +225,7 @@ name = "resid-parser"
 version = "0.1.0"
 dependencies = [
  "resid-lexer",
+ "resid-type",
 ]
 
 [[package]]
