@@ -866,6 +866,11 @@ pub fn builtin_signatures() -> Signatures {
         .collect();
     // List-typed entries (Box is not const-constructible): stdlib split/join
     // and the v1.3 list verbs over boxed lists.
+    fn float_list() -> SemType {
+        SemType::List(Box::new(SemType::Numeric(NumericType::Float(
+            resid_ir::FloatWidth::F64,
+        ))))
+    }
     let int_list = || SemType::List(Box::new(SemType::Numeric(NumericType::Int(IntWidth::B64))));
     let str_list = || SemType::List(Box::new(SemType::Str));
     for (name, params, ret) in [
@@ -886,6 +891,22 @@ pub fn builtin_signatures() -> Signatures {
         ("list_sort_ints", vec![int_list()], int_list()),
         ("list_sort_strs", vec![str_list()], str_list()),
         ("list_sum", vec![int_list()], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+        (
+            "list_reverse_floats",
+            vec![float_list()],
+            float_list(),
+        ),
+        (
+            "list_contains_float",
+            vec![float_list(), SemType::Numeric(NumericType::Float(resid_ir::FloatWidth::F64))],
+            SemType::Bool,
+        ),
+        ("list_sort_floats", vec![float_list()], float_list()),
+        (
+            "list_sumf",
+            vec![float_list()],
+            SemType::Numeric(NumericType::Float(resid_ir::FloatWidth::F64)),
+        ),
     ] {
         sigs.insert(
             name.to_string(),
@@ -4688,6 +4709,26 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "list verbs should type-check, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_stdlib_float_list_verbs() {
+        let src = r#"
+Int main() {
+    List(Float) fs = [3.5, -1.0, 2.25];
+    List(Float) sorted = list_sort_floats(fs);
+    Float s = list_sumf(sorted);
+    Bool has = list_contains_float(fs, 2.25);
+    List(Float) rev = list_reverse_floats(sorted);
+    if (has) {
+        println(f"sum={s}");
+    }
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "float list verbs should type-check, got: {:?}", errs);
     }
 
     #[test]
