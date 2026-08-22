@@ -5,6 +5,8 @@
 
 mod ast;
 mod parser;
+mod resolve;
 
 pub use ast::*;
 pub use parser::*;
+pub use resolve::{resolve_unit, ImportError};
