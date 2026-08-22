@@ -11,7 +11,7 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 569 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
+- **Tests**: 570 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
   resid-codegen 137, resid-build 12, resid-fmt 5, residc 43 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
@@ -1782,8 +1782,11 @@ done**: grants parse into family + scope globs; a scoped `filesystem(scope=
 ["config/**"])` grant only covers uses whose first argument is a string
 literal matching the glob (`**` crosses `/`, `*` stays in-segment); dynamic
 paths under a scoped grant are rejected; an unscoped grant for the same
-family overrides scopes. Still missing: registry/signed archives, Unicode
-casing. |
+family overrides scopes. **Unicode casing done**: `str_to_lower`/`str_to_upper`
+  map ASCII, Latin-1 Supplement, Latin Extended-A (even/odd parity), Greek and
+  Cyrillic via algorithmic range tables; ÿ↔Ÿ special pair; ß passes through.
+  UTF-8 per-codepoint in the C runtime. Still missing: registry/signed
+  archives. |
 | 6. Tooling, Bootstrap | Partial | `resid fmt` done (canonical AST formatter, idempotent on all bootstrap sources); **`resid-graph` done** — call-graph extraction from the resolved AST (imports + alias rewriting included), text tree and DOT output, extern built-ins excluded from nodes; recursion shows as self-edges. `resid-notes`/`resid-cache`/`resid-why` still stubs (they need the reduction/cache subsystem). |
 
 Build/test notes:
