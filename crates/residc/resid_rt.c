@@ -1849,3 +1849,44 @@ char* str_join(void* list_box, const char* sep) {
     *w = '\0';
     return p;
 }
+
+/* ─── Stdlib v1.1: parsing + integer math ─── */
+
+/* Does `s` parse as a (optionally signed) decimal integer? */
+int8_t str_is_int(const char* s) {
+    if (*s == '\0') return 0;
+    const char* p = s;
+    if (*p == '-' || *p == '+') p++;
+    if (*p == '\0') return 0;
+    while (*p) {
+        if (*p < '0' || *p > '9') return 0;
+        p++;
+    }
+    return 1;
+}
+
+/* Parse a decimal integer; 0 when malformed (pair with str_is_int).
+ * Overflow saturates through long long parsing. */
+int64_t str_parse_int(const char* s) {
+    if (!str_is_int(s)) return 0;
+    return (int64_t)strtoll(s, NULL, 10);
+}
+
+int64_t abs_i64(int64_t x) {
+    return x < 0 ? -x : x;
+}
+
+int64_t min_i64(int64_t a, int64_t b) {
+    return a < b ? a : b;
+}
+
+int64_t max_i64(int64_t a, int64_t b) {
+    return a > b ? a : b;
+}
+
+/* Clamp `x` into [lo, hi] (hi < lo → lo). */
+int64_t clamp_i64(int64_t x, int64_t lo, int64_t hi) {
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+}

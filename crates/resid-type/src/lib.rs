@@ -831,6 +831,15 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("str_to_upper", &[SemType::Str], SemType::Str),
     ("str_repeat", &[SemType::Str, SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
     ("str_replace", &[SemType::Str, SemType::Str, SemType::Str], SemType::Str),
+    // ─── Stdlib v1.1: parsing + integer math ───
+    // Decimal integer recognition / parsing; parse yields 0 on malformed
+    // input (pair with str_is_int).
+    ("str_is_int", &[SemType::Str], SemType::Bool),
+    ("str_parse_int", &[SemType::Str], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("abs_i64", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("min_i64", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("max_i64", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("clamp_i64", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
 ];
 
 /// Return the set of built-in (extern) function signatures.
@@ -4598,6 +4607,29 @@ Int main() {
             "stdlib string verbs should type-check, got: {:?}",
             errs
         );
+    }
+
+    #[test]
+    fn check_program_stdlib_parse_and_math() {
+        let src = r#"
+Int main() {
+    if (str_is_int("-17")) {
+        Int n = str_parse_int("-17");
+        println(IntToString(n));
+    }
+    Int a = abs_i64(-8);
+    Int lo = min_i64(a, 3);
+    Int hi = max_i64(a, 3);
+    Int c = clamp_i64(15, 0, 10);
+    Int t = lo + hi;
+    Int u = t + c;
+    println(IntToString(u));
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "stdlib parse/math should type-check, got: {:?}", errs);
     }
 
     #[test]

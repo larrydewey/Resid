@@ -2905,3 +2905,26 @@ Int main() {
     let second = ir[first + 1..].find("resid_handle_release").unwrap();
     assert!(second > 0, "expected two handle releases: {ir}");
 }
+
+#[test]
+fn test_stdlib_parse_math_calls() {
+    let src = r#"
+Int main() {
+    Bool ok = str_is_int("42");
+    Int n = str_parse_int("42");
+    Int a = abs_i64(n);
+    Int c = clamp_i64(a, 0, 10);
+    return c;
+}
+"#;
+    let (unit, errors) = Parser::parse("stdmath.resid", src);
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    let cx = Context::create();
+    let mut cg = CodeGen::new(&cx, "stdmath");
+    cg.generate(&unit).expect("codegen failed");
+    cg.module.verify().expect("module failed verification");
+    let ir = cg.module.print_to_string().to_string();
+    assert!(ir.contains("declare i1 @str_is_int"), "expected str_is_int decl: {ir}");
+    assert!(ir.contains("call i64 @str_parse_int"), "expected str_parse_int: {ir}");
+    assert!(ir.contains("call i64 @clamp_i64"), "expected clamp_i64: {ir}");
+}
