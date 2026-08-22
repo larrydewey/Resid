@@ -320,3 +320,84 @@ version = "0.1.0"
     let r = build(&m, Profile::Check, &dir.join("out")).expect("args needs no grant");
     assert!(matches!(r, Artifact::Checked));
 }
+
+#[test]
+fn scoped_grant_rejects_path_outside_scope() {
+    let dir = temp_dir("scoped");
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "scoped"
+version = "0.1.0"
+
+[capabilities]
+grant = ["filesystem(scope=[\"config/**\"])"]
+"#,
+        "Int main() {\n    Str s = filesystem.read_all(\"/etc/passwd\");\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).expect("manifest ok");
+    assert_eq!(m.grants.len(), 1);
+    assert_eq!(m.grants[0].scopes, vec!["config/**".to_string()]);
+    let e = build(&m, Profile::Check, &dir.join("out")).err().expect("outside scope must fail");
+    let msg = e.message;
+    assert!(msg.contains("outside the granted scopes"), "{msg}");
+}
+
+#[test]
+fn scoped_grant_accepts_matching_literal_path() {
+    let dir = temp_dir("scopedok");
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "scoped"
+version = "0.1.0"
+
+[capabilities]
+grant = ["filesystem(scope=[\"config/**\", \"config.ini\"])"]
+"#,
+        "Int main() {\n    if (filesystem.exists(\"config/app.conf\")) {\n        println(\"found\");\n    }\n    if (filesystem.exists(\"config.ini\")) {\n        println(\"ini\");\n    }\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).unwrap();
+    build(&m, Profile::Check, &dir.join("out")).expect("in-scope paths pass");
+}
+
+#[test]
+fn dynamic_path_needs_unscoped_grant() {
+    let dir = temp_dir("dynpath");
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "dyn"
+version = "0.1.0"
+
+[capabilities]
+grant = ["filesystem(scope=[\"config/**\"])"]
+"#,
+        "Int main() {\n    Str p = \"config/a.txt\";\n    if (filesystem.exists(p)) {\n        return 1;\n    }\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).unwrap();
+    let e = build(&m, Profile::Check, &dir.join("out")).err().expect("dynamic path must fail under scope");
+    assert!(e.message.contains("dynamic path"), "{}", e.message);
+}
+
+#[test]
+fn unscoped_family_grant_overrides_scopes() {
+    let dir = temp_dir("unscoped");
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "wide"
+version = "0.1.0"
+
+[capabilities]
+grant = ["filesystem(scope=[\"config/**\"])", "filesystem(readonly)"]
+"#,
+        "Int main() {\n    Str s = filesystem.read_all(\"/etc/hostname\");\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).unwrap();
+    build(&m, Profile::Check, &dir.join("out")).expect("unscoped grant wins");
+}

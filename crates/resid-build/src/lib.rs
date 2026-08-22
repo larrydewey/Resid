@@ -117,6 +117,8 @@ pub struct Manifest {
     /// Granted capability families (text before any `(...)` arguments),
     /// from `[capabilities] grant`.
     pub granted_capabilities: Vec<String>,
+    /// Parsed grant expressions (family + optional scope globs).
+    pub grants: Vec<Grant>,
     /// Directory containing resid.toml.
     pub dir: PathBuf,
 }
@@ -211,13 +213,15 @@ impl Manifest {
                 capabilities: dep.capabilities.clone().unwrap_or_default(),
             });
         }
-        let granted_capabilities: Vec<String> = raw
+        let grants: Vec<Grant> = raw
             .capabilities
             .map(|c| c.grant)
             .unwrap_or_default()
             .iter()
-            .map(|g| cap_family(g))
+            .map(|g| parse_grant(g))
             .collect();
+        let granted_capabilities: Vec<String> =
+            grants.iter().map(|g| g.family.clone()).collect();
         for dep in &dependencies {
             for cap in &dep.capabilities {
                 let family = cap_family(cap);
@@ -242,6 +246,7 @@ impl Manifest {
             target_triple: raw.target.and_then(|t| t.triple),
             dependencies,
             granted_capabilities,
+            grants,
             dir: pkg_dir,
         })
     }
@@ -266,6 +271,104 @@ fn cap_family(cap: &str) -> String {
     match cap.find('(') {
         Some(i) => cap[..i].trim().to_string(),
         None => cap.trim().to_string(),
+    }
+}
+
+/// A parsed capability grant: family plus optional scope globs.
+#[derive(Debug, Clone)]
+pub struct Grant {
+    pub family: String,
+    /// Scope patterns from `scope=["a/**", "b"]` when present.
+    pub scopes: Vec<String>,
+}
+
+/// Parse a grant expression like `filesystem(scope=["config/**"])` or a bare
+/// `git(readonly)`. Bare (unscoped) grants return empty scopes, meaning
+/// "all uses of this family".
+fn parse_grant(cap: &str) -> Grant {
+    let family = cap_family(cap);
+    let open = cap.find('(');
+    let close = cap.rfind(')');
+    let scopes = match (open, close) {
+        (Some(o), Some(c)) if c > o => {
+            let inner = &cap[o + 1..c];
+            // Extract every quoted string inside the parens; only `scope=…`
+            // grants carry paths. A grant with non-scope args (readonly) is
+            // treated as unscoped for that family.
+            let strings: Vec<String> = split_quoted(inner);
+            if inner.trim_start().starts_with("scope") && !strings.is_empty() {
+                strings
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    };
+    Grant { family, scopes }
+}
+
+/// Split out the double-quoted string literals of an argument list.
+fn split_quoted(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_str = false;
+    let mut esc = false;
+    for c in s.chars() {
+        if in_str {
+            if esc {
+                cur.push(c);
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+                out.push(std::mem::take(&mut cur));
+            } else {
+                cur.push(c);
+            }
+        } else if c == '"' {
+            in_str = true;
+        }
+    }
+    out
+}
+
+/// Glob match supporting `**` (any path segment run), `*` (within one
+/// segment) and `?` (single char). `/` never matches `*`.
+fn glob_match(pattern: &str, path: &str) -> bool {
+    glob_inner(pattern.as_bytes(), path.as_bytes())
+}
+
+fn glob_inner(p: &[u8], s: &[u8]) -> bool {
+    if p.is_empty() {
+        return s.is_empty();
+    }
+    match p[0] {
+        b'*' if p.len() > 1 && p[1] == b'*' => {
+            // `**` matches everything including `/`; also swallow a
+            // following '/' so `a/**` matches `a/b` but not `ab`.
+            let rest = if p.len() > 2 && p[2] == b'/' { &p[3..] } else { &p[2..] };
+            for i in 0..=s.len() {
+                if glob_inner(rest, &s[i..]) {
+                    return true;
+                }
+            }
+            false
+        }
+        b'*' => {
+            for i in 0..=s.len() {
+                // `*` must not cross a path separator.
+                if s[..i].contains(&b'/') {
+                    break;
+                }
+                if glob_inner(&p[1..], &s[i..]) {
+                    return true;
+                }
+            }
+            false
+        }
+        b'?' => !s.is_empty() && s[0] != b'/' && glob_inner(&p[1..], &s[1..]),
+        c => !s.is_empty() && s[0] == c && glob_inner(&p[1..], &s[1..]),
     }
 }
 
@@ -314,11 +417,54 @@ pub fn build(manifest: &Manifest, profile: Profile, out_dir: &Path) -> Result<Ar
         if EXEMPT_PROVIDERS.contains(&u.provider.as_str()) {
             continue;
         }
-        if !manifest.granted_capabilities.contains(&u.provider) {
+        // Grants for this family; a family absent entirely is a hard denial.
+        let family_grants: Vec<&Grant> = manifest
+            .grants
+            .iter()
+            .filter(|g| g.family == u.provider)
+            .collect();
+        if family_grants.is_empty() {
             violations.push(format!(
-                "  {}:{}:{}: {}.{}() requires capability `{}`",
+                "  {}:{}:{}: {}.{}() requires capability `{}`, which is not granted",
                 u.span.file, u.span.line, u.span.col_start, u.provider, u.verb, u.provider
             ));
+            continue;
+        }
+        // Scope narrowing applies to path-like first arguments (filesystem).
+        let scoped: Vec<&&Grant> = family_grants.iter().filter(|g| !g.scopes.is_empty()).collect();
+        if u.provider == "filesystem" && !scoped.is_empty() {
+            // An unscoped grant for the same family overrides scope checks.
+            let has_unscoped = family_grants.iter().any(|g| g.scopes.is_empty());
+            if !has_unscoped {
+                if let Some(path) = &u.first_str_arg {
+                    let ok = scoped.iter().any(|g| {
+                        g.scopes.iter().any(|pat| glob_match(pat, path))
+                    });
+                    if !ok {
+                        let pats: Vec<String> = scoped
+                            .iter()
+                            .flat_map(|g| g.scopes.iter().cloned())
+                            .collect();
+                        violations.push(format!(
+                            "  {}:{}:{}: {}.{}(\"{}\") is outside the granted scopes ({})",
+                            u.span.file,
+                            u.span.line,
+                            u.span.col_start,
+                            u.provider,
+                            u.verb,
+                            path,
+                            pats.join(", ")
+                        ));
+                        continue;
+                    }
+                } else {
+                    violations.push(format!(
+                        "  {}:{}:{}: {}.{}() uses a dynamic path; a scoped filesystem grant only covers string-literal paths",
+                        u.span.file, u.span.line, u.span.col_start, u.provider, u.verb
+                    ));
+                    continue;
+                }
+            }
         }
     }
     if !violations.is_empty() {
