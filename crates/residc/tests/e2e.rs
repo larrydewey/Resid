@@ -2092,3 +2092,86 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Stage-2 self-hosting (M6 item 4): the Resid-written emitter
+/// (examples/codegen.res) compiles the bootstrap lexer into a working
+/// binary — the emitter's output is linked and run like any other.
+#[test]
+fn stage2_emitter_compiles_bootstrap_lexer() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-stage2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+
+    // 1. Build the Resid-written emitter with the Rust residc.
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/codegen.res"))
+        .arg("build")
+        .arg("-o")
+        .arg(dir.join("emitter"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("failed to build stage-2 emitter");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "emitter build failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // 2. The emitter compiles the bootstrap lexer to LLVM IR.
+    let ll = dir.join("lexer2.ll");
+    let out = Command::new(dir.join("emitter"))
+        .arg(workspace.join("examples/lexer.res"))
+        .arg("-o")
+        .arg(&ll)
+        .output()
+        .expect("failed to run stage-2 emitter");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stage-2 compile of lexer.res failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(ll.exists(), "emitter wrote no IR");
+
+    // 3. Link the emitted IR and run it on a sample source.
+    let clang = Command::new("clang")
+        .arg(&ll)
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg("-Wno-override-module")
+        .arg("-pthread")
+        .arg("-o")
+        .arg(dir.join("lexer2"))
+        .output()
+        .expect("failed to run clang");
+    assert_eq!(
+        clang.status.code(),
+        Some(0),
+        "clang failed: {}",
+        String::from_utf8_lossy(&clang.stderr)
+    );
+
+    let src = dir.join("sample.resid");
+    std::fs::write(
+        &src,
+        "Int main() {\n    println(\"hi\");\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let run = Command::new(dir.join("lexer2"))
+        .arg(&src)
+        .output()
+        .expect("failed to run stage-2-built lexer");
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(
+        stdout.trim(),
+        "ident(Int)\nident(main)\nop(()\nop())\nop({)\nident(println)\nop(()\nliteral(Str hi)\nop())\nop(;)\nkeyword(return)\nliteral(Int 0)\nop(;)\nop(})\nEOF",
+        "unexpected stage-2 lexer output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
