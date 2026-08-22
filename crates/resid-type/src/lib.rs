@@ -845,8 +845,6 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("str_parse_float", &[SemType::Str], SemType::Numeric(NumericType::Float(FloatWidth::F64))),
     ("str_count", &[SemType::Str, SemType::Str], SemType::Numeric(NumericType::Int(IntWidth::B64))),
     ("str_reverse", &[SemType::Str], SemType::Str),
-    // ─── Stdlib v1.5: SHA-256 (pure C, FIPS 180-4) ───
-    ("sha256", &[SemType::Str], SemType::Str),
 ];
 
 /// Return the set of built-in (extern) function signatures.
