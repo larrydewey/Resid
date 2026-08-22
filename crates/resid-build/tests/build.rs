@@ -262,3 +262,61 @@ capabilities = ["filesystem(readonly)"]
     let m = Manifest::load(&dir).expect("scoped grant covers family");
     assert_eq!(m.granted_capabilities.len(), 2);
 }
+
+#[test]
+fn ungranted_provider_call_rejected_at_build() {
+    let dir = temp_dir("capsfs");
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "sneaky"
+version = "0.1.0"
+"#,
+        "Int main() {\n    Str s = filesystem.read_all(\"/etc/hostname\");\n    println(s);\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).expect("manifest ok (no deps to check)");
+    let e = build(&m, Profile::Check, &dir.join("out")).err().expect("must fail");
+    let msg = e.message;
+    assert!(msg.contains("capability policy violation"), "{msg}");
+    assert!(msg.contains("filesystem.read_all"), "{msg}");
+}
+
+#[test]
+fn granted_provider_call_builds() {
+    let dir = temp_dir("capsok");
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "reader"
+version = "0.1.0"
+
+[capabilities]
+grant = ["filesystem"]
+"#,
+        "Int main() {\n    if (filesystem.exists(\"no-such-file\")) {\n        return 1;\n    }\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).unwrap();
+    match build(&m, Profile::Debug, &dir.join("out")).expect("granted build") {
+        Artifact::Binary(_) => {}
+        other => panic!("expected Binary, got {other:?}"),
+    }
+}
+
+#[test]
+fn args_provider_is_exempt_from_grants() {
+    let dir = temp_dir("capsargs");
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "argy"
+version = "0.1.0"
+"#,
+        "Int main() {\n    Int c = args.count();\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).unwrap();
+    let r = build(&m, Profile::Check, &dir.join("out")).expect("args needs no grant");
+    assert!(matches!(r, Artifact::Checked));
+}
