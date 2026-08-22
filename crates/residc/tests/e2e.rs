@@ -2301,3 +2301,55 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Stdlib v1.3: list verbs end-to-end.
+#[test]
+fn run_stdlib_list_verbs() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-stdlist-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("stdlist.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    List(Int) xs = [3, 1, 2];
+    List(Int) sorted = list_sort_ints(xs);
+    List(Int) rev = list_reverse_ints(sorted);
+    println(IntToString(list_sum(rev)));
+    println(IntToString(list_sum(xs)));
+    if (list_contains_int(xs, 2)) {
+        println("has 2");
+    }
+    List(Str) ss = list_sort_strs(["pear", "apple", "fig"]);
+    println(str_join(ss, ","));
+    List(Str) rs = list_reverse_strs(ss);
+    println(str_join(rs, ","));
+    if (list_contains_str(ss, "fig")) {
+        println("has fig");
+    }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "6\n6\nhas 2\napple,fig,pear\npear,fig,apple\nhas fig",
+        "unexpected output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

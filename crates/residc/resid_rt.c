@@ -1705,8 +1705,7 @@ void resid_dec_from_f64(resid_dec* out, double v, uint16_t prec) {
 
 /* ════════════════════════════════════════════════════════════════
    Stdlib v1: string verbs (spec §14 semantics, codepoint-based).
-   Boxed List layout (matches resid_str_concat):
-     { int64_t n; slots[n] }  — 8 bytes per slot.
+   Lists use the ResidVal box layout (see stdlib v1.3 below).
    ════════════════════════════════════════════════════════════════ */
 
 static int str_is_space(unsigned char c) {
@@ -1797,25 +1796,24 @@ char* str_replace(const char* s, const char* from, const char* to) {
     return p;
 }
 
-/* Allocate an empty boxed list of `n` slots. */
-static void* rt_list_alloc(int64_t n) {
-    int64_t* box = (int64_t*)malloc(8 + n * 8);
-    box[0] = n;
-    return box;
+static void* rt_list_from(const void** items, int64_t n, const char* type_str);
+
+/* Build a boxed List(Str) from a C string array. */
+static void* rt_str_list(const char** items, int64_t n) {
+    return rt_list_from((const void**)items, n, "List(Str)");
 }
 
 /* Split `s` on `sep` into a boxed List(Str). Empty sep → [s]. */
 void* str_split(const char* s, const char* sep) {
     size_t lsep = strlen(sep);
     if (lsep == 0) {
-        void* box = rt_list_alloc(1);
-        ((const char**)box)[1] = s;
-        return box;
+        const char* one[1] = { s };
+        return rt_str_list(one, 1);
     }
     int64_t parts = 1;
     const char* q = s;
     while ((q = strstr(q, sep)) != NULL) { parts++; q += lsep; }
-    char** box = (char**)rt_list_alloc(parts);
+    char** parts_arr = (char**)malloc((size_t)parts * sizeof(char*));
     int64_t i = 0;
     q = s;
     const char* hit;
@@ -1824,18 +1822,20 @@ void* str_split(const char* s, const char* sep) {
         char* part = (char*)malloc(len + 1);
         memcpy(part, q, len);
         part[len] = '\0';
-        box[1 + i++] = (char*)(uintptr_t)part;
+        parts_arr[i++] = part;
         q = hit + lsep;
     }
-    box[1 + i] = (char*)(uintptr_t)strdup(q);
-    return box;
+    parts_arr[i] = strdup(q);
+    void* out = rt_str_list((const char**)parts_arr, parts);
+    free(parts_arr);
+    return out;
 }
 
 /* Join a boxed List(Str) with separator `sep`. */
 char* str_join(void* list_box, const char* sep) {
-    int64_t* hdr = (int64_t*)list_box;
-    int64_t n = hdr[0];
-    const char** items = (const char**)(hdr + 1);
+    ResidVal* b = (ResidVal*)list_box;
+    const char** items = (const char**)(b->slots ? b->slots : NULL);
+    int64_t n = b->count;
     size_t lsep = strlen(sep), total = 0;
     for (int64_t i = 0; i < n; i++) total += strlen(items[i]);
     if (n > 0) total += lsep * (size_t)(n - 1);
@@ -1850,9 +1850,91 @@ char* str_join(void* list_box, const char* sep) {
     return p;
 }
 
+/* ─── Stdlib v1.3: list verbs ───
+   Lists are ResidVal boxes: slots hold boxed scalars (resid_box_i64) for
+   List(Int) and raw char* for List(Str). Verbs allocate fresh boxes. */
+
+static void* rt_list_from(const void** items, int64_t n, const char* type_str) {
+    ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
+    out->tag = 0;
+    out->count = n;
+    out->type = type_str;
+    out->slots = n > 0 ? (void**)malloc((size_t)n * sizeof(void*)) : NULL;
+    for (int64_t i = 0; i < n; i++) out->slots[i] = (void*)items[i];
+    return out;
+}
+
+void* list_reverse_ints(void* box) {
+    ResidVal* b = (ResidVal*)box;
+    const void** items = (const void**)malloc((size_t)(b->count > 0 ? b->count : 1) * sizeof(void*));
+    for (int64_t i = 0; i < b->count; i++) items[i] = b->slots[b->count - 1 - i];
+    void* out = rt_list_from(items, b->count, b->type);
+    free(items);
+    return out;
+}
+
+void* list_reverse_strs(void* box) {
+    return list_reverse_ints(box);
+}
+
+int8_t list_contains_int(void* box, int64_t v) {
+    ResidVal* b = (ResidVal*)box;
+    for (int64_t i = 0; i < b->count; i++)
+        if (resid_unbox_i64(b->slots[i]) == v) return 1;
+    return 0;
+}
+
+int8_t list_contains_str(void* box, const char* v) {
+    ResidVal* b = (ResidVal*)box;
+    for (int64_t i = 0; i < b->count; i++)
+        if (strcmp((const char*)b->slots[i], v) == 0) return 1;
+    return 0;
+}
+
+static int rt_cmp_i64(const void* a, const void* b) {
+    int64_t x = *(const int64_t*)a, y = *(const int64_t*)b;
+    return x < y ? -1 : x > y;
+}
+
+static int rt_cmp_boxed_i64(const void* a, const void* b) {
+    int64_t x = resid_unbox_i64(*(void* const*)a);
+    int64_t y = resid_unbox_i64(*(void* const*)b);
+    return x < y ? -1 : x > y;
+}
+
+static int rt_cmp_str_slot(const void* a, const void* b) {
+    return strcmp((const char*)*(void* const*)a, (const char*)*(void* const*)b);
+}
+
+static void* rt_list_sorted_copy(void* box, int (*cmp)(const void*, const void*)) {
+    ResidVal* b = (ResidVal*)box;
+    ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
+    out->tag = b->tag;
+    out->count = b->count;
+    out->type = b->type;
+    out->slots = b->count > 0 ? (void**)malloc((size_t)b->count * sizeof(void*)) : NULL;
+    for (int64_t i = 0; i < b->count; i++) out->slots[i] = b->slots[i];
+    qsort(out->slots, (size_t)b->count, sizeof(void*), cmp);
+    return out;
+}
+
+void* list_sort_ints(void* box) {
+    return rt_list_sorted_copy(box, rt_cmp_boxed_i64);
+}
+
+void* list_sort_strs(void* box) {
+    return rt_list_sorted_copy(box, rt_cmp_str_slot);
+}
+
+int64_t list_sum(void* box) {
+    ResidVal* b = (ResidVal*)box;
+    int64_t s = 0;
+    for (int64_t i = 0; i < b->count; i++) s += resid_unbox_i64(b->slots[i]);
+    return s;
+}
+
 /* ─── Stdlib v1.1: parsing + integer math ─── */
 
-/* Does `s` parse as a (optionally signed) decimal integer? */
 int8_t str_is_int(const char* s) {
     if (*s == '\0') return 0;
     const char* p = s;
@@ -1865,26 +1947,15 @@ int8_t str_is_int(const char* s) {
     return 1;
 }
 
-/* Parse a decimal integer; 0 when malformed (pair with str_is_int).
- * Overflow saturates through long long parsing. */
 int64_t str_parse_int(const char* s) {
     if (!str_is_int(s)) return 0;
     return (int64_t)strtoll(s, NULL, 10);
 }
 
-int64_t abs_i64(int64_t x) {
-    return x < 0 ? -x : x;
-}
+int64_t abs_i64(int64_t x) { return x < 0 ? -x : x; }
+int64_t min_i64(int64_t a, int64_t b) { return a < b ? a : b; }
+int64_t max_i64(int64_t a, int64_t b) { return a > b ? a : b; }
 
-int64_t min_i64(int64_t a, int64_t b) {
-    return a < b ? a : b;
-}
-
-int64_t max_i64(int64_t a, int64_t b) {
-    return a > b ? a : b;
-}
-
-/* Clamp `x` into [lo, hi] (hi < lo → lo). */
 int64_t clamp_i64(int64_t x, int64_t lo, int64_t hi) {
     if (x < lo) return lo;
     if (x > hi) return hi;
@@ -1893,7 +1964,6 @@ int64_t clamp_i64(int64_t x, int64_t lo, int64_t hi) {
 
 /* ─── Stdlib v1.2: float parsing + misc string helpers ─── */
 
-/* Does `s` parse as a decimal float? (strtod semantics, whole string). */
 int8_t str_is_float(const char* s) {
     if (*s == '\0') return 0;
     char* end = NULL;
@@ -1902,13 +1972,11 @@ int8_t str_is_float(const char* s) {
     return *end == '\0' && end != s;
 }
 
-/* Parse a decimal float; 0.0 when malformed (pair with str_is_float). */
 double str_parse_float(const char* s) {
     if (!str_is_float(s)) return 0.0;
     return strtod(s, NULL);
 }
 
-/* Count non-overlapping occurrences of `needle` in `s`. */
 int64_t str_count(const char* s, const char* needle) {
     size_t ln = strlen(needle);
     if (ln == 0) return 0;
@@ -1918,10 +1986,8 @@ int64_t str_count(const char* s, const char* needle) {
     return hits;
 }
 
-/* Reverse the codepoint order of `s` (UTF-8 aware). */
 char* str_reverse(const char* s) {
     int64_t n = str_len(s);
-    /* collect byte offsets of each codepoint start */
     const unsigned char* p = (const unsigned char*)s;
     int64_t* off = (int64_t*)malloc((n + 1) * sizeof(int64_t));
     int64_t i = 0;
