@@ -11,8 +11,8 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 584 pass (lexer 17, parser 91, resid-ir 46, resid-type 195,
-  resid-codegen 137, resid-build 12, resid-fmt 5, residc 51 incl. e2e).
+- **Tests**: 585 pass (lexer 17, parser 91, resid-ir 46, resid-type 195,
+  resid-codegen 137, resid-build 12, resid-fmt 5, residc 52 incl. e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -2177,32 +2177,28 @@ narrowing, Dec precision rounding, nominal sums, and range binds. Previous — h
 
 ## 14. FUTURE WORK / ROADMAP
 
-### 14.1a Ed25519 WIP snapshot (tools/wip-ed25519/)
+### 14.1a Ed25519 verification in pure Resid — DONE
 
-Field arithmetic mod p = 2^255-19 on Int(256)/Int(512) scalars is DONE and
-verified (fe_mul via 2^256 ~= 38 reduction, fe_inv via pow(p-2), overflow-safe
-fe_add/fe_sub). Extended-coord point add/dbl formulas verified individually
-against a Python reference. SHA-512 hashing + mod-L reduction wired.
+`lib/ed25519.res`: full Ed25519 VERIFY (RFC 8032) on Int(256)/Int(512)
+scalars — field arithmetic mod 2^255-19 (overflow-safe add/sub, fe_mul via
+2^256 ~= 38 fold with pre-cast reduction, fe_inv = pow(p-2)), point
+decode/encode (x recovery via w^((p+3)/8) + sqrt(-1) adjust + parity),
+extended-coordinate dbl/add, MSB-first double-and-add scalar mult returning
+narrow byte lists (avoids wide-value return marshalling), SHA-512 -> mod-L
+via bitwise folding. Verified against a Python reference including the RFC
+8032 test-1 keypair: e2e `run_ed25519_verify_in_resid` (VALID +
+TAMPER-REJECTED). 585 tests pass.
 
-OPEN BUG — MINIMIZED TO A COMPILER MISCOMPILATION (tools/wip-ed25519/
-min.repro.resid): a recursive function threading an Int(256) accumulator
-through `if ((k>>i)&1 == 1)` branches returns garbage (expected 3000000,
-got 10). The Ed25519 code itself is CORRECT — field math, point formulas,
-and per-level states all verified against Python; the recursion result is
-corrupted in flight. Fixing this codegen bug unblocks verify_sig end-to-end.
-NOT a tail-call issue; not arg-count related; reproduces at depth 3.
-CHARACTERIZED: the identical recursion with plain Int accumulators is
-CORRECT (min2.resid → 3000000/2000001); only Int(256) accumulator versions
-fail — root cause is wide-integer argument marshalling on (recursive) calls
-in resid-codegen, not the Ed25519 code.
-
-GOTCHAS learned (apply to future wide-int work):
-- Giant decimal literals (>u128) in function RETURN position can be built at
-  the wrong width (mask512 returned -1); construct by shifting instead:
-  `(o << 256) - o`.
-- Byte lists are SEEDED ([0] + data): slicing/b2i/ccat must offset by 1.
-- Call args need temps for arithmetic expressions (margin-width mismatch).
-- `rt` and possibly other short identifiers are keywords.
+Debugging war stories (all my bugs, no compiler bugs):
+- The "minimal compiler miscompilation" was MY swapped arguments
+  (mrec(7,0,2) with acc-first signature really does return 10). The type
+  checker had even flagged it; the IR proved the compiler innocent.
+- The actual scalar-mult bug: the loop body did EITHER dbl OR add; the
+  MSB ladder needs dbl-always + conditional-add.
+- wmul base cases mixed up A-coords with R-coords after signature changes.
+- Giant decimal literals (>u128) can misbuild in some positions
+  (mask512 returned -1); construct via shifts instead: `(o << 256) - o`.
+- Byte lists are SEEDED ([0] + data): every slice/concat/b2i must offset.
 
 ### 14.1 Ed25519 in pure Resid (next crypto milestone)
 

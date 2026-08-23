@@ -2472,6 +2472,51 @@ Int main() {
 
 
 
+
+/// Ed25519 verification in pure Resid (Int(256) field math) — valid sig
+/// accepted, tampered sig rejected.
+#[test]
+fn run_ed25519_verify_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-ed25519-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    std::fs::copy(workspace.join("lib/ed25519.res"), dir.join("ed25519.res")).unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "ed25519.res";
+Int main() {
+    List(Int) sg = [0, 44, 84, 130, 57, 42, 25, 126, 192, 159, 163, 55, 119, 149, 141, 58, 11, 228, 244, 150, 10, 248, 94, 151, 150, 164, 216, 34, 201, 94, 207, 112, 74, 52, 254, 211, 42, 219, 105, 154, 136, 192, 234, 135, 107, 159, 187, 23, 209, 219, 211, 54, 247, 84, 253, 146, 7, 191, 193, 18, 200, 154, 165, 79, 2];
+    List(Int) pk = [0, 215, 90, 152, 1, 130, 177, 10, 183, 213, 75, 254, 211, 201, 100, 7, 58, 14, 225, 114, 243, 218, 166, 35, 37, 175, 2, 26, 104, 247, 7, 81, 26];
+    Bool ok = verify_sig("hello world", sg, pk);
+    if (ok) { println("VALID"); }
+    if (!ok) { println("INVALID"); }
+    List(Int) bad = [0, 44, 84, 130, 57, 42, 25, 126, 192, 159, 163, 55, 119, 149, 141, 58, 11, 228, 244, 150, 10, 248, 94, 151, 150, 164, 216, 34, 201, 94, 207, 112, 74, 52, 254, 211, 42, 219, 105, 154, 136, 193, 234, 135, 107, 159, 187, 23, 209, 219, 211, 54, 247, 84, 253, 146, 7, 191, 193, 18, 200, 154, 165, 79, 2];
+    Bool ok2 = verify_sig("hello world", bad, pk);
+    if (ok2) { println("TAMPER-ACCEPTED"); }
+    if (!ok2) { println("TAMPER-REJECTED"); }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(stdout.trim(), "VALID\nTAMPER-REJECTED", "{stdout:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Shift counts >= bit width yield 0 (machine shifts wrap the count mod width).
 #[test]
 fn run_shift_overflow_yields_zero() {
