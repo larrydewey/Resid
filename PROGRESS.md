@@ -2328,6 +2328,11 @@ deliberately delegated to a reverse proxy.
 
 `str_to_lower`/`str_to_upper` cover ASCII, Latin-1, Latin Extended-A,
 Greek and Cyrillic via algorithmic ranges. Full coverage needs the
+- **HTTP stack in pure Resid (`lib/http.res`)**: raw TCP externs in the
+  runtime (`resid_tcp_connect/send/recv_all/close`); all protocol logic —
+  URL parsing, request building, response parsing — is Resid. HTTP/1.1
+  `Connection: close`; chunked + TLS out of scope for v1. e2e
+  `run_http_get_in_resid` against a live server.
 - [x] Unicode simple case mapping: full generated pair tables
   (`tools/gen_case_tables.py` → `resid_rt.c`, binary-searched) covering
   every single-codepoint mapping, exhaustively verified against
