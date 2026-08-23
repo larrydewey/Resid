@@ -2177,6 +2177,29 @@ narrowing, Dec precision rounding, nominal sums, and range binds. Previous — h
 
 ## 14. FUTURE WORK / ROADMAP
 
+### 14.1a Ed25519 WIP snapshot (tools/wip-ed25519/)
+
+Field arithmetic mod p = 2^255-19 on Int(256)/Int(512) scalars is DONE and
+verified (fe_mul via 2^256 ~= 38 reduction, fe_inv via pow(p-2), overflow-safe
+fe_add/fe_sub). Extended-coord point add/dbl formulas verified individually
+against a Python reference. SHA-512 hashing + mod-L reduction wired.
+
+OPEN BUG: scalar multiplication `smul_x_acc` returns correct results for
+k = 1, 2, 3 and single-bit scalars (incl. bit 200/255) but WRONG results for
+k = 5, 7, 2^64-1, dense S — pattern suggests per-iteration state corruption,
+not formula error (all formulas pass in isolation, incl. add(dbl(P),B)).
+Tail-call vs non-tail recursion makes no difference; arg-count reduction no
+difference. Debug artifacts: /tmp/cryptotest/pr*.resid probes compare every
+stage against Python.
+
+GOTCHAS learned (apply to future wide-int work):
+- Giant decimal literals (>u128) in function RETURN position can be built at
+  the wrong width (mask512 returned -1); construct by shifting instead:
+  `(o << 256) - o`.
+- Byte lists are SEEDED ([0] + data): slicing/b2i/ccat must offset by 1.
+- Call args need temps for arithmetic expressions (margin-width mismatch).
+- `rt` and possibly other short identifiers are keywords.
+
 ### 14.1 Ed25519 in pure Resid (next crypto milestone)
 
 DONE: SHA-512 is implemented in pure Resid (32-bit limb pairs, `[0, hi, lo]`
