@@ -32,6 +32,21 @@
    before signing (experimental stream cipher; AEAD pending); verify
    reports concealed-payload provenance distinctly. Provenance mode is part
    of the cache key so encrypted/plain builds of one source stay distinct.
+- **x509 TBS structure walker (roadmap item 1–2 done)**: `lib/x509.res` —
+  pure-Resid walker over `lib/der.res`: tbsCertificate field positions
+  ([0] version skip, serial, sig-alg OID, issuer/subject Name RDN
+  rendering with OID→short-name mapping, validity UTCTime pair, SPKI
+  alg OID) plus string content decoding (`der_str_value`). `der_oid_str`
+  now decodes first arcs properly for all arc1 values (2.5.4.x OIDs
+  rendered correctly, not just <80). e2e `run_x509_in_resid`: an
+  openssl self-signed cert (serial 7331, C=US/O=Resid/CN=Resid Test CA)
+  embedded as a byte list is decoded identically through both pipelines
+  (fixture `crates/residc/tests/fixtures/x509_cert_list.txt`).
+  Gotchas hit and confirmed: no variable reassignment in Resid
+  (restructured arc decode with if-expressions), and Int(128)/Int(256)
+  widening disagreement when mixing arithmetic of different depths in
+  if arms (bind temps first). Next: RSA PKCS#1v1.5 verify (bignum
+  modexp), ECDSA-P256, chain validation.
 - **Reduction pass v1(b) (spec §34)**: every build reads the artifact's
    prior `.resid-notes.cbor`, compares against the current residual set,
    and reports discharged knowledge on stderr (`reduction: discharged ...`);
@@ -50,10 +65,11 @@
 - **Bootstrap sync (post-crypto)**: stage-2 compilers now accept the full
   checked_/wrapping_/saturating_ arithmetic families (22 extern builtins);
   stage-1 vs stage-2 outputs verified identical on wrap/saturate/uadd cases.
-- **Tests**: 600 pass (incl. CBOR store, COSE Sign1/Encrypt0, and
-  provenance seal/tamper tests; e2e covers else-if chains on both
-  pipelines and stage-2 provenance sidecars). (lexer 17, parser 91, resid-ir 46, resid-type 195,
-  resid-codegen 137, resid-build 12, resid-fmt 5, residc 53 incl. e2e).
+- **Tests**: 601 pass (incl. CBOR store, COSE Sign1/Encrypt0,
+  provenance seal/tamper tests, DER decoder, and the x509 TBS walker
+  e2e; e2e covers else-if chains on both pipelines and stage-2
+  provenance sidecars). (lexer 17, parser 91, resid-ir 46, resid-type 195,
+  resid-codegen 137, resid-build 12, resid-fmt 5, residc 63 incl. e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
