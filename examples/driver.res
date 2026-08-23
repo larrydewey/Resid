@@ -3468,6 +3468,71 @@ Int ck_check_program(Str s, Int pos, Sigs fs) {
 
 // ─── Driver: typecheck → codegen → clang ──────────────────────
 
+import "../lib/crypto.res";
+import "../lib/ed25519.res";
+
+Int hex_val(Str s, Int i) {
+    Int ip1 = i + 1;
+    Str c = str_slice(s, i, ip1);
+    if (c == "0") { return 0; }
+    if (c == "1") { return 1; }
+    if (c == "2") { return 2; }
+    if (c == "3") { return 3; }
+    if (c == "4") { return 4; }
+    if (c == "5") { return 5; }
+    if (c == "6") { return 6; }
+    if (c == "7") { return 7; }
+    if (c == "8") { return 8; }
+    if (c == "9") { return 9; }
+    if (c == "a" || c == "A") { return 10; }
+    if (c == "b" || c == "B") { return 11; }
+    if (c == "c" || c == "C") { return 12; }
+    if (c == "d" || c == "D") { return 13; }
+    if (c == "e" || c == "E") { return 14; }
+    if (c == "f" || c == "F") { return 15; }
+    return 0;
+}
+
+pub List(Int) prov_hex_seed(Str s) {
+    Int n = str_len(s);
+    List(Int) acc = [0];
+    return prov_hex_acc(s, 0, n, acc);
+}
+
+pub List(Int) prov_hex_acc(Str s, Int i, Int n, List(Int) acc) {
+    if (i + 1 >= n) { return acc; }
+    Int ip1 = i + 1;
+    Int hi = hex_val(s, i);
+    Int lo = hex_val(s, ip1);
+    Int b = hi * 16 + lo;
+    List(Int) acc2 = acc.concat([b]);
+    Int ni = i + 2;
+    return prov_hex_acc(s, ni, n, acc2);
+}
+
+// Emit `<out>.resid-prov`: cleartext provenance payload + Ed25519 signature
+// over it, produced by the self-hosted signer in lib/ed25519.res.
+Int write_provenance(Str out, Str src) {
+    Str kpath = "keys/resid-ed25519.key";
+    if (!filesystem.exists(kpath)) {
+        println("provenance: unsigned (no signing key)");
+        return 0;
+    }
+    Str keyhex = filesystem.read_all(kpath);
+    Int klen = str_len(keyhex);
+    Int km1 = klen - 1;
+    Str ktrim = str_slice(keyhex, 0, km1);
+    List(Int) seed = prov_hex_seed(ktrim);
+    Int notect = 0;
+    Str payload = f"toolchain=resid-stage2;source_sha256={sha256(src)};notes={notect}";
+    List(Int) sig = sign_msg(seed, payload);
+    Str sighex = hex_encode(sig);
+    Str doc = payload + "\n" + sighex + "\n";
+    filesystem.write_all(out + ".resid-prov", doc);
+    println("provenance: signed (stage-2)");
+    return 0;
+}
+
 Str pick_opt(Int i, Str flag, Str acc) {
     if (i <= 1) { return acc; }
     Str a = args.get(i);
@@ -3517,8 +3582,14 @@ Int main() {
         return 1;
     }
     println("wrote " + out);
-    return 0;
+    Int prc = write_provenance(out, src);
+    return prc;
 }
+
+
+
+
+
 
 
 
