@@ -188,7 +188,13 @@ pub Int(256) dbl_z(Int(256) x, Int(256) y, Int(256) z) {
     Int(256) f = fe_sub(g, c);
     return fe_mul(f, g);
 }
-pub Int(256) add_x(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) t1, Int(256) x2, Int(256) y2, Int(256) z2, Int(256) t2) {
+pub Int(256) add_t1(Int(256) x1, Int(256) y1, Int(256) z1) {
+    Int(256) zi = fe_inv(z1);
+    return fe_mul(x1, fe_mul(y1, zi));
+}
+pub Int(256) add_x(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) x2, Int(256) y2, Int(256) z2) {
+    Int(256) t1 = add_t1(x1, y1, z1);
+    Int(256) t2 = add_t1(x2, y2, z2);
     Int(256) a0 = fe_sub(y1, x1);
     Int(256) b0 = fe_add(y1, x1);
     Int(256) a2 = fe_sub(y2, x2);
@@ -204,7 +210,9 @@ pub Int(256) add_x(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) t1, Int(256) 
     Int(256) f = fe_sub(dd, c);
     return fe_mul(e, f);
 }
-pub Int(256) add_y(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) t1, Int(256) x2, Int(256) y2, Int(256) z2, Int(256) t2) {
+pub Int(256) add_y(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) x2, Int(256) y2, Int(256) z2) {
+    Int(256) t1 = add_t1(x1, y1, z1);
+    Int(256) t2 = add_t1(x2, y2, z2);
     Int(256) a0 = fe_sub(y1, x1);
     Int(256) b0 = fe_add(y1, x1);
     Int(256) a2 = fe_sub(y2, x2);
@@ -220,7 +228,9 @@ pub Int(256) add_y(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) t1, Int(256) 
     Int(256) h = fe_add(b, a);
     return fe_mul(g, h);
 }
-pub Int(256) add_z(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) t1, Int(256) x2, Int(256) y2, Int(256) z2, Int(256) t2) {
+pub Int(256) add_z(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) x2, Int(256) y2, Int(256) z2) {
+    Int(256) t1 = add_t1(x1, y1, z1);
+    Int(256) t2 = add_t1(x2, y2, z2);
     Int(256) a0 = fe_sub(y1, x1);
     Int(256) b0 = fe_add(y1, x1);
     Int(256) a2 = fe_sub(y2, x2);
@@ -236,63 +246,47 @@ pub Int(256) add_z(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) t1, Int(256) 
     Int(256) g = fe_add(dd, c);
     return fe_mul(f, g);
 }
-
 // ── scalar mult returning affine X or Y (recomputes internally) ──
-pub Int(256) smul_x_acc(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(256) qt, Int(256) rx, Int(256) ry, Int(256) rz, Int(256) rw, Int i) {
+pub List(Int) smul_x_acc(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(256) rx, Int(256) ry, Int(256) rz, Int i) {
     if (i < 0) {
         Int(256) zi = fe_inv(rz);
-        return fe_mul(rx, zi);
+        return int_to_bytes(fe_mul(rx, zi));
     }
     Int ni = i - 1;
     Int(256) sh = i;
     Int(256) mw = ((k >> sh) & 1);
     Int bit = mw;
     if (bit == 1) {
-        Int(256) nx = add_x(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) ny = add_y(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) nz = add_z(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) nzi = fe_inv(nz);
-        Int(256) nt = fe_mul(nx, fe_mul(ny, nzi));
-        List(Int) keep = int_to_bytes(nx);
-        return smul_x_acc(k, qx, qy, qz, qt, nx, ny, nz, nt, ni);
+        Int(256) nx = add_x(rx, ry, rz, qx, qy, qz);
+        Int(256) ny = add_y(rx, ry, rz, qx, qy, qz);
+        Int(256) nz = add_z(rx, ry, rz, qx, qy, qz);
+        return smul_x_acc(k, qx, qy, qz, nx, ny, nz, ni);
     }
     Int(256) dxv = dbl_x(rx, ry, rz);
     Int(256) dyv = dbl_y(rx, ry, rz);
     Int(256) dzv = dbl_z(rx, ry, rz);
-    Int(256) dtv = fe_mul(dxv, dyv);
-    return smul_x_acc(k, qx, qy, qz, qt, dxv, dyv, dzv, dtv, ni);
+    return smul_x_acc(k, qx, qy, qz, dxv, dyv, dzv, ni);
 }
-pub Int(256) add_t(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) t1, Int(256) x2, Int(256) y2, Int(256) z2, Int(256) t2) {
-    Int(256) t12 = fe_add(t1, t1);
-    Int(256) c0 = fe_mul(t12, fe_d());
-    Int(256) c = fe_mul(c0, t2);
-    return c;
-}
-pub Int(256) smul_y_acc(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(256) qt, Int(256) rx, Int(256) ry, Int(256) rz, Int(256) rw, Int i) {
+pub List(Int) smul_y_acc(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(256) rx, Int(256) ry, Int(256) rz, Int i) {
     if (i < 0) {
         Int(256) zi = fe_inv(rz);
-        return fe_mul(ry, zi);
+        return int_to_bytes(fe_mul(ry, zi));
     }
     Int ni = i - 1;
     Int(256) sh = i;
     Int(256) mw = ((k >> sh) & 1);
     Int bit = mw;
     if (bit == 1) {
-        Int(256) nx = add_x(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) ny = add_y(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) nz = add_z(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) nzi = fe_inv(nz);
-        Int(256) nt = fe_mul(nx, fe_mul(ny, nzi));
-        Int(256) ntc = add_t(rx, ry, rz, rw, qx, qy, qz, qt);
-        return smul_y_acc(k, qx, qy, qz, qt, nx, ny, nz, ntc, ni);
+        Int(256) nx = add_x(rx, ry, rz, qx, qy, qz);
+        Int(256) ny = add_y(rx, ry, rz, qx, qy, qz);
+        Int(256) nz = add_z(rx, ry, rz, qx, qy, qz);
+        return smul_y_acc(k, qx, qy, qz, nx, ny, nz, ni);
     }
-    Int(256) dx = dbl_x(rx, ry, rz);
+    Int(256) dxv = dbl_x(rx, ry, rz);
     Int(256) dyv = dbl_y(rx, ry, rz);
-    Int(256) dz = dbl_z(rx, ry, rz);
-    Int(256) dt = fe_mul(dx, dyv);
-    return smul_y_acc(k, qx, qy, qz, qt, dx, dyv, dz, dt, ni);
+    Int(256) dzv = dbl_z(rx, ry, rz);
+    return smul_y_acc(k, qx, qy, qz, dxv, dyv, dzv, ni);
 }
-
 // base point
 pub Int(256) fe_bx() {
     return 15112221349535400772501151409588531511454012693041857206046113283949847762202;
@@ -348,7 +342,7 @@ pub Int(256) dec_x(List(Int) bs) {
 }
 
 // ── W = [h]A + R, returned as affine ratios E/G (=X/Z), H/F (=Y/Z) ──
-pub Int(256) wmul_wx(Int(256) h, Int(256) ax, Int(256) ay, Int(256) az, Int(256) at, Int(256) rx, Int(256) ry, Int(256) rz, Int(256) rw, Int i) {
+pub List(Int) wmul_wx(Int(256) h, Int(256) ax, Int(256) ay, Int(256) az, Int(256) rx, Int(256) ry, Int(256) rz, Int i) {
     if (i < 0) {
         Int(256) a0 = fe_sub(ry, rx);
         Int(256) b0 = fe_add(ry, rx);
@@ -359,66 +353,58 @@ pub Int(256) wmul_wx(Int(256) h, Int(256) ax, Int(256) ay, Int(256) az, Int(256)
         Int(256) e = fe_sub(b, a);
         Int(256) g = fe_add(b, a);
         Int(256) gi = fe_inv(g);
-        return fe_mul(e, gi);
+        return int_to_bytes(fe_mul(e, gi));
     }
     Int ni = i - 1;
     Int(256) sh = i;
     Int(256) mw = ((h >> sh) & 1);
     Int bit = mw;
     if (bit == 1) {
-        Int(256) nx = add_x(rx, ry, rz, rw, ax, ay, az, at);
-        Int(256) ny = add_y(rx, ry, rz, rw, ax, ay, az, at);
-        Int(256) nz = add_z(rx, ry, rz, rw, ax, ay, az, at);
-        Int(256) nzi = fe_inv(nz);
-        Int(256) nt = fe_mul(nx, fe_mul(ny, nzi));
-        return wmul_wx(h, ax, ay, az, at, nx, ny, nz, nt, ni);
+        Int(256) nx = add_x(rx, ry, rz, ax, ay, az);
+        Int(256) ny = add_y(rx, ry, rz, ax, ay, az);
+        Int(256) nz = add_z(rx, ry, rz, ax, ay, az);
+        return wmul_wx(h, ax, ay, az, nx, ny, nz, ni);
     }
-    Int(256) nx = dbl_x(rx, ry, rz);
-    Int(256) ny = dbl_y(rx, ry, rz);
-    Int(256) nz = dbl_z(rx, ry, rz);
-    Int(256) nzi = fe_inv(nz);
-    Int(256) nt = fe_mul(nx, fe_mul(ny, nzi));
-    return wmul_wx(h, ax, ay, az, at, nx, ny, nz, nt, ni);
+    Int(256) dxv = dbl_x(rx, ry, rz);
+    Int(256) dyv = dbl_y(rx, ry, rz);
+    Int(256) dzv = dbl_z(rx, ry, rz);
+    return wmul_wx(h, ax, ay, az, dxv, dyv, dzv, ni);
 }
-pub Int(256) wmul_wy(Int(256) h, Int(256) ax, Int(256) ay, Int(256) az, Int(256) at, Int(256) rx, Int(256) ry, Int(256) rz, Int(256) rw, Int i) {
+pub List(Int) wmul_wy(Int(256) h, Int(256) ax, Int(256) ay, Int(256) az, Int(256) rx, Int(256) ry, Int(256) rz, Int i) {
     if (i < 0) {
+        Int(256) t1 = add_t1(rx, ry, rz);
+        Int(256) t2 = add_t1(ax, ay, az);
         Int(256) a0 = fe_sub(ry, rx);
         Int(256) b0 = fe_add(ry, rx);
         Int(256) a2 = fe_sub(ay, ax);
         Int(256) b2 = fe_add(ay, ax);
         Int(256) a = fe_mul(a0, a2);
         Int(256) b = fe_mul(b0, b2);
-        Int(256) t12 = fe_add(at, at);
+        Int(256) t12 = fe_add(t1, t1);
         Int(256) c0 = fe_mul(t12, fe_d());
-        Int(256) c = fe_mul(c0, ay);
+        Int(256) c = fe_mul(c0, t2);
         Int(256) z12 = fe_add(rz, rz);
         Int(256) dd = fe_mul(z12, az);
         Int(256) f = fe_sub(dd, c);
-        Int(256) g2 = fe_add(dd, c);
         Int(256) hh = fe_add(b, a);
         Int(256) fi = fe_inv(f);
-        return fe_mul(hh, fi);
+        return int_to_bytes(fe_mul(hh, fi));
     }
     Int ni = i - 1;
     Int(256) sh = i;
     Int(256) mw = ((h >> sh) & 1);
     Int bit = mw;
     if (bit == 1) {
-        Int(256) nx = add_x(rx, ry, rz, rw, ax, ay, az, at);
-        Int(256) ny = add_y(rx, ry, rz, rw, ax, ay, az, at);
-        Int(256) nz = add_z(rx, ry, rz, rw, ax, ay, az, at);
-        Int(256) nzi = fe_inv(nz);
-        Int(256) nt = fe_mul(nx, fe_mul(ny, nzi));
-        return wmul_wy(h, ax, ay, az, at, nx, ny, nz, nt, ni);
+        Int(256) nx = add_x(rx, ry, rz, ax, ay, az);
+        Int(256) ny = add_y(rx, ry, rz, ax, ay, az);
+        Int(256) nz = add_z(rx, ry, rz, ax, ay, az);
+        return wmul_wy(h, ax, ay, az, nx, ny, nz, ni);
     }
-    Int(256) nx = dbl_x(rx, ry, rz);
-    Int(256) ny = dbl_y(rx, ry, rz);
-    Int(256) nz = dbl_z(rx, ry, rz);
-    Int(256) nzi = fe_inv(nz);
-    Int(256) nt = fe_mul(nx, fe_mul(ny, nzi));
-    return wmul_wy(h, ax, ay, az, at, nx, ny, nz, nt, ni);
+    Int(256) dxv = dbl_x(rx, ry, rz);
+    Int(256) dyv = dbl_y(rx, ry, rz);
+    Int(256) dzv = dbl_z(rx, ry, rz);
+    return wmul_wy(h, ax, ay, az, dxv, dyv, dzv, ni);
 }
-
 // ── h = SHA-512(R||A||M) mod L ──
 pub Int(256) modl_acc(List(Int) dig, Int(256) v, Int j) {
     if (j < 0) { return v; }
@@ -466,10 +452,10 @@ pub Bool verify_sig(Str msg, List(Int) sig, List(Int) pubk) {
     Int(256) iz = 1;
     Int(256) ix = 0;
     Int(256) oy = 1;
-    Int(256) sx = smul_x_acc(sv, bxv, byv, bz, btv, ix, oy, iz, ix, 255);
-    Int(256) sy = smul_y_acc(sv, bxv, byv, bz, btv, ix, oy, iz, ix, 255);
-    Int(256) wx = wmul_wx(hv, ax, ay, az, at, rx, ry, rz, rw, 255);
-    Int(256) wy = wmul_wy(hv, ax, ay, az, at, rx, ry, rz, rw, 255);
+    Int(256) sx = bytes_to_int(smul_x_acc(sv, bxv, byv, bz, ix, oy, iz, 255));
+    Int(256) sy = bytes_to_int(smul_y_acc(sv, bxv, byv, bz, ix, oy, iz, 255));
+    Int(256) wx = bytes_to_int(wmul_wx(hv, ax, ay, az, rx, ry, rz, 255));
+    Int(256) wy = bytes_to_int(wmul_wy(hv, ax, ay, az, rx, ry, rz, 255));
     if (sx != wx) {
         return false;
     }
@@ -477,59 +463,4 @@ pub Bool verify_sig(Str msg, List(Int) sig, List(Int) pubk) {
         return false;
     }
     return true;
-}
-
-pub Str hexs2(List(Int) bs) {
-    return hex_range_b(bs, 1, 8, "");
-}
-pub Int(256) smul_dbg(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(256) qt, Int(256) rx, Int(256) ry, Int(256) rz, Int(256) rw, Int i) {
-    List(Int) pr = int_to_bytes(rx);
-    println(hex_range_b(pr, 1, 8, ""));
-    if (i < 0) { return rx; }
-    Int ni = i - 1;
-    Int(256) sh = i;
-    Int(256) mw = ((k >> sh) & 1);
-    Int bit = mw;
-    if (bit == 1) {
-        Int(256) nx = add_x(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) ny = add_y(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) nz = add_z(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) nzi = fe_inv(nz);
-        Int(256) nt = fe_mul(nx, fe_mul(ny, nzi));
-        return smul_dbg(k, qx, qy, qz, qt, nx, ny, nz, nt, ni);
-    }
-    Int(256) dxv = dbl_x(rx, ry, rz);
-    Int(256) dyv = dbl_y(rx, ry, rz);
-    Int(256) dzv = dbl_z(rx, ry, rz);
-    Int(256) dzi = fe_inv(dzv);
-    Int(256) dtv = fe_mul(dxv, fe_mul(dyv, dzi));
-    return smul_dbg(k, qx, qy, qz, qt, dxv, dyv, dzv, dtv, ni);
-}
-pub Int(256) smul_bx(Int(256) k, Int(256) rx, Int(256) ry, Int(256) rz, Int(256) rw, Int i) {
-    if (i < 0) {
-        Int(256) zi = fe_inv(rz);
-        return fe_mul(rx, zi);
-    }
-    Int ni = i - 1;
-    Int(256) sh = i;
-    Int(256) mw = ((k >> sh) & 1);
-    Int bit = mw;
-    Int(256) qx = fe_bx();
-    Int(256) qy = fe_by();
-    Int(256) qz = 1;
-    Int(256) qt = fe_bt();
-    if (bit == 1) {
-        Int(256) nx = add_x(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) ny = add_y(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) nz = add_z(rx, ry, rz, rw, qx, qy, qz, qt);
-        Int(256) nzi = fe_inv(nz);
-        Int(256) nt = fe_mul(nx, fe_mul(ny, nzi));
-        return smul_bx(k, nx, ny, nz, nt, ni);
-    }
-    Int(256) dxv = dbl_x(rx, ry, rz);
-    Int(256) dyv = dbl_y(rx, ry, rz);
-    Int(256) dzv = dbl_z(rx, ry, rz);
-    Int(256) dzi = fe_inv(dzv);
-    Int(256) dtv = fe_mul(dxv, fe_mul(dyv, dzi));
-    return smul_bx(k, dxv, dyv, dzv, dtv, ni);
 }

@@ -2184,13 +2184,13 @@ verified (fe_mul via 2^256 ~= 38 reduction, fe_inv via pow(p-2), overflow-safe
 fe_add/fe_sub). Extended-coord point add/dbl formulas verified individually
 against a Python reference. SHA-512 hashing + mod-L reduction wired.
 
-OPEN BUG: scalar multiplication `smul_x_acc` returns correct results for
-k = 1, 2, 3 and single-bit scalars (incl. bit 200/255) but WRONG results for
-k = 5, 7, 2^64-1, dense S — pattern suggests per-iteration state corruption,
-not formula error (all formulas pass in isolation, incl. add(dbl(P),B)).
-Tail-call vs non-tail recursion makes no difference; arg-count reduction no
-difference. Debug artifacts: /tmp/cryptotest/pr*.resid probes compare every
-stage against Python.
+OPEN BUG — MINIMIZED TO A COMPILER MISCOMPILATION (tools/wip-ed25519/
+min.repro.resid): a recursive function threading an Int(256) accumulator
+through `if ((k>>i)&1 == 1)` branches returns garbage (expected 3000000,
+got 10). The Ed25519 code itself is CORRECT — field math, point formulas,
+and per-level states all verified against Python; the recursion result is
+corrupted in flight. Fixing this codegen bug unblocks verify_sig end-to-end.
+NOT a tail-call issue; not arg-count related; reproduces at depth 3.
 
 GOTCHAS learned (apply to future wide-int work):
 - Giant decimal literals (>u128) in function RETURN position can be built at
