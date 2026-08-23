@@ -1,0 +1,11 @@
+import "ed25519.res";
+Str hexs(List(Int) bs) {
+    return hex_range_b(bs, 1, 32, "");
+}
+Int main() {
+    Int(256) a = smul_x_acc(5, fe_bx(), fe_by(), 1, fe_bt(), 0, 1, 1, 0, 2);
+    println(hexs(int_to_bytes(a)));
+    Int(256) b = smul_x_acc(7, fe_bx(), fe_by(), 1, fe_bt(), 0, 1, 1, 0, 255);
+    println(hexs(int_to_bytes(b)));
+    return 0;
+}
