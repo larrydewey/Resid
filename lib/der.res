@@ -170,15 +170,23 @@ pub Str oid_rest(List(Int) c, Int i, Int n, Str acc, Int accv, Bool inarc) {
     return oid_rest(c, ni, n, joined, 0, false);
 }
 
-// Render an OBJECT IDENTIFIER content as dotted decimal "1.2.840....".
-// First byte encodes arcs 1 and 2 (assumed < 80, covering all common OIDs).
+// Render an OBJECT IDENTIFIER content as dotted decimal "2.5.4.3".
+// First byte packs arcs 1 and 2: value < 40 → 1.x; 40..79 → 1.(v-40)
+// is impossible for arc1=1 only up to 39; standard rule:
+// v<40 → "1.v"; v<80 → "2.(v-40)"... arc1=1 covers v<40; v>=80 →
+// arc1=2, arc2=v-80; otherwise arc1=v/40.
 pub Str der_oid_str(List(Int) data, Int pos) {
     List(Int) c = der_content(data, pos);
     Int n = c.len() - 1;
     if (n == 0) { return ""; }
     Int b0 = c[1];
-    Int second = b0 - 40;
-    Int second2 = if (second < 0) { 0 } else { second };
-    Str head = "1." + IntToString(second2);
+    Int raw1 = b0 / 40;
+    Int prod = raw1 * 40;
+    Int sub40 = b0 - 40;
+    Int rem0 = b0 - prod;
+    Bool big = raw1 > 2;
+    Int arc1 = if (big) { 2 } else { raw1 };
+    Int rem = if (big) { sub40 } else { rem0 };
+    Str head = IntToString(arc1) + "." + IntToString(rem);
     return oid_rest(c, 2, n, head, 0, false);
 }

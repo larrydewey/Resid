@@ -3435,3 +3435,78 @@ Int main() {
     assert_eq!(rust_out.trim_end(), String::from_utf8_lossy(&out.stdout).trim_end());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Pure-Resid x509 TBS walker (lib/x509.res over lib/der.res) — decodes an
+/// openssl-generated self-signed certificate (fixed serial 7331, subject
+/// C=US/O=Resid/CN=Resid Test CA, sha256WithRSAEncryption) embedded as a
+/// seeded byte list. Checks serial, sig-alg OID, SPKI alg OID, issuer and
+/// subject RDN strings, and validity times through BOTH pipelines.
+#[test]
+fn run_x509_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-x509-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/der.res"), dir.join("der.res")).unwrap();
+    std::fs::copy(workspace.join("lib/x509.res"), dir.join("x509.res")).unwrap();
+    let list = include_str!("fixtures/x509_cert_list.txt");
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"
+import "x509.res";
+Int main() {{
+    List(Int) cert = {list};
+    println("serial=" + IntToString(x509_serial(cert)));
+    println("sigalg=" + x509_sigalg_oid(cert));
+    println("spki=" + x509_spki_alg_oid(cert));
+    println("issuer=" + x509_issuer_str(cert));
+    println("subject=" + x509_subject_str(cert));
+    println("nb=" + x509_not_before(cert));
+    println("na=" + x509_not_after(cert));
+    return 0;
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let expected = "serial=7331\n\
+                    sigalg=1.2.840.113549.1.1.11\n\
+                    spki=1.2.840.113549.1.1.1\n\
+                    issuer=C=US,O=Resid,CN=Resid Test CA\n\
+                    subject=C=US,O=Resid,CN=Resid Test CA\n\
+                    nb=260823162426Z\n\
+                    na=260922162426Z";
+    // Stage-1 (Rust pipeline).
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("rust pipeline");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let rust_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(rust_out.trim(), expected, "{rust_out:?}");
+    // Stage-2 (bootstrap driver pipeline).
+    let bin = dir.join("x509_bin");
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.res"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(workspace)
+        .output()
+        .expect("driver run");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = Command::new(&bin).output().expect("stage-2 binary");
+    let stage2_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stage2_out.trim(), expected, "{stage2_out:?}");
+    assert_eq!(rust_out.trim_end(), stage2_out.trim_end());
+    let _ = std::fs::remove_dir_all(&dir);
+}
