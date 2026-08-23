@@ -2925,3 +2925,217 @@ Int main() {
     assert!(err.contains("list index out of bounds"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// COSE provenance: build signs a COSE_Sign1 trailer; verify accepts it;
+/// tampering with the code region is detected as CODE HASH MISMATCH;
+/// tampering with the trailer breaks the signature.
+#[test]
+fn run_cose_provenance_verify_and_tamper() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-cose-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let keys = workspace.join("keys");
+    let have_key = keys.join("resid-ed25519.key").exists();
+    if !have_key {
+        let out = Command::new(residc_bin())
+            .arg("keygen")
+            .current_dir(workspace)
+            .output()
+            .expect("keygen");
+        assert_eq!(out.status.code(), Some(0));
+    }
+    let file = dir.join("main.resid");
+    std::fs::write(&file, "Int main() {\n    println(\"ok\");\n    return 0;\n}\n").unwrap();
+    let bin = dir.join("cosebin");
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("build")
+        .arg("-o")
+        .arg(&bin)
+        .current_dir(workspace)
+        .output()
+        .expect("build");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    // Clean verify.
+    let out = Command::new(residc_bin())
+        .arg("verify")
+        .arg(&bin)
+        .current_dir(workspace)
+        .output()
+        .expect("verify");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(stdout.contains("SIGNATURE OK"), "verify: {stdout}");
+    assert_eq!(out.status.code(), Some(0));
+    // Tamper with the CODE region (first byte).
+    let mut bytes = std::fs::read(&bin).unwrap();
+    bytes[0] ^= 0xFF;
+    let tampered = dir.join("tampered-code");
+    std::fs::write(&tampered, &bytes).unwrap();
+    let out = Command::new(residc_bin())
+        .arg("verify")
+        .arg(&tampered)
+        .current_dir(workspace)
+        .output()
+        .expect("verify tampered");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        stdout.contains("CODE HASH MISMATCH"),
+        "expected hash mismatch, got: {stdout}"
+    );
+    assert_ne!(out.status.code(), Some(0));
+    // Tamper with the TRAILER (flip last byte) -> invalid signature.
+    let mut bytes = std::fs::read(&bin).unwrap();
+    let n = bytes.len();
+    bytes[n - 1] ^= 0x01;
+    let tampered = dir.join("tampered-trailer");
+    std::fs::write(&tampered, &bytes).unwrap();
+    let out = Command::new(residc_bin())
+        .arg("verify")
+        .arg(&tampered)
+        .current_dir(workspace)
+        .output()
+        .expect("verify tampered trailer");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!all.contains("SIGNATURE OK"), "trailer tamper undetected: {all}");
+    let _ = std::fs::remove_dir_all(&dir);
+    if !have_key {
+        let _ = std::fs::remove_file(keys.join("resid-ed25519.key"));
+        let _ = std::fs::remove_file(keys.join("resid-ed25519.pub"));
+    }
+}
+
+/// Confidential provenance reservation: RESID_PROV_ENCRYPT=1 wraps the
+/// payload in COSE_Encrypt0 before signing; verify still authenticates
+/// (code hash concealed inside the sealed payload).
+#[test]
+fn run_encrypt0_provenance_roundtrip() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-enc0-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let keys = workspace.join("keys");
+    let have_key = keys.join("resid-ed25519.key").exists();
+    if !have_key {
+        Command::new(residc_bin())
+            .arg("keygen")
+            .current_dir(workspace)
+            .output()
+            .expect("keygen");
+    }
+    let file = dir.join("main.resid");
+    std::fs::write(&file, "Int main() {\n    println(\"ok\");\n    return 0;\n}\n").unwrap();
+    let bin = dir.join("encbin");
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("build")
+        .arg("-o")
+        .arg(&bin)
+        .env("RESID_PROV_ENCRYPT", "1")
+        .env("RESID_PROV_KEY", "ab".repeat(32))
+        .current_dir(workspace)
+        .output()
+        .expect("build");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(stderr.contains("encrypt0+sign1"), "build stderr: {stderr}");
+    // Missing key is refused cleanly.
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("build")
+        .arg("-o")
+        .arg(&dir.join("nokey"))
+        .env("RESID_PROV_ENCRYPT", "1")
+        .env_remove("RESID_PROV_KEY")
+        .current_dir(workspace)
+        .output()
+        .expect("build nokey");
+    assert_ne!(out.status.code(), Some(0), "missing RESID_PROV_KEY must fail");
+    // Verify reports the concealed-payload form and succeeds.
+    let out = Command::new(residc_bin())
+        .arg("verify")
+        .arg(&bin)
+        .current_dir(workspace)
+        .output()
+        .expect("verify");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        stdout.contains("SIGNATURE OK"),
+        "encrypted verify failed: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    if !have_key {
+        let _ = std::fs::remove_file(keys.join("resid-ed25519.key"));
+        let _ = std::fs::remove_file(keys.join("resid-ed25519.pub"));
+    }
+}
+
+/// Reduction pass: rebuilding an artifact whose source lost a residual
+/// (`rt` binding removed) reports the discharged note on stderr.
+#[test]
+fn run_reduction_reports_discharged_notes() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-red-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let keys = workspace.join("keys");
+    let have_key = keys.join("resid-ed25519.key").exists();
+    if !have_key {
+        Command::new(residc_bin())
+            .arg("keygen")
+            .current_dir(workspace)
+            .output()
+            .expect("keygen");
+    }
+    let f1 = dir.join("v1.resid");
+    std::fs::write(
+        &f1,
+        "Int main() {\n    rt println(\"hello residual\");\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let bin = dir.join("redbin");
+    let out = Command::new(residc_bin())
+        .arg(&f1)
+        .arg("build")
+        .arg("-o")
+        .arg(&bin)
+        .current_dir(workspace)
+        .output()
+        .expect("build v1");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    // Same artifact name, residual removed.
+    let f2 = dir.join("v2.resid");
+    std::fs::write(&f2, "Int main() {\n    println(\"hello\");\n    return 0;\n}\n").unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&f2)
+        .arg("build")
+        .arg("-o")
+        .arg(&bin)
+        .current_dir(workspace)
+        .output()
+        .expect("build v2");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.contains("reduction: discharged rt-binding"),
+        "expected discharge report, got: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    if !have_key {
+        let _ = std::fs::remove_file(keys.join("resid-ed25519.key"));
+        let _ = std::fs::remove_file(keys.join("resid-ed25519.pub"));
+    }
+}
