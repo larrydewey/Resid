@@ -1818,8 +1818,12 @@ family overrides scopes. **Unicode casing done**: `str_to_lower`/`str_to_upper`
   manifest recursively (cycle-safe by package name, depth cap 32); the
   package's self-declared name is its identity — two paths claiming one name
   are rejected as conflicting versions; transitive roots join the import map
-  so a dep's sources can `import "base"` by name. Still missing: registry
-  distribution. |
+  so a dep's sources can `import "base"` by name. **Local registry done**:
+  `[registry] path` + `[dependencies.<name>] version = "x.y.z"` pulls
+  `<name>-<version>.resid-pkg` from a directory registry, verifies the SHA-256
+  against a sibling `.resid-sha256`, extracts into
+  `target/resid/deps/<name>-<ver>/`, and builds like a path dependency.
+  Archive extraction includes path-traversal guards. |
 | 6. Tooling, Bootstrap | Partial | `resid fmt` done (canonical AST formatter, idempotent on all bootstrap sources); **`resid-graph` done** — call-graph extraction from the resolved AST (imports + alias rewriting included), text tree and DOT output, extern built-ins excluded from nodes; recursion shows as self-edges. `resid-notes`/`resid-cache`/`resid-why` still stubs (they need the reduction/cache subsystem). |
 
 Build/test notes:
