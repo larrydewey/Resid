@@ -105,8 +105,20 @@ fn main() -> ExitCode {
                 _ => String::new(),
             };
             cache_out = out_guess;
+            // Provenance mode is part of the build identity: an encrypted
+            // trailer is a different artifact than a plain one.
+            let prov_encrypt = env::var("RESID_PROV_ENCRYPT").map(|v| v == "1").unwrap_or(false);
+            let enc_key = env::var("RESID_PROV_KEY").ok();
+            if prov_encrypt && enc_key.is_none() {
+                eprintln!("error: RESID_PROV_ENCRYPT=1 requires RESID_PROV_KEY=<64 hex chars>");
+                return ExitCode::FAILURE;
+            }
             let src_bytes = fs::read(&file).unwrap_or_default();
-            cache_key = resid_cache::hash_inputs(&[b"residc-v1", &src_bytes]);
+            cache_key = resid_cache::hash_inputs(&[
+                b"residc-v1",
+                &src_bytes,
+                if prov_encrypt { b"enc0" } else { b"plain" },
+            ]);
             let mut store = resid_cache::Store::open(Path::new(".resid-cache.cbor"));
             if let Some(cached) = store.get(&cache_key) {
                 if Path::new(cached).exists() {
@@ -167,12 +179,12 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Cmd::Build => {
-            match build_native(&file, &unit, out.as_deref()) {
+            match build_native(&file, &unit, out.as_deref(), &cache_key) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(code) => code,
             }
         }
-        Cmd::Run => run_native(&file, &unit, &prog_args),
+        Cmd::Run => run_native(&file, &unit, &prog_args, &cache_key),
         Cmd::Keygen | Cmd::Verify => unreachable!("handled earlier"),
     }
 }
@@ -228,7 +240,12 @@ const RUNTIME_C: &str = include_str!("../resid_rt.c");
 
 /// Emit IR, link with the bootstrap runtime via clang, and write a native
 /// binary to `out` (defaults to `a.out` in the current directory).
-fn build_native(file: &str, unit: &TranslationUnit, out: Option<&str>) -> Result<(), ExitCode> {
+fn build_native(
+    file: &str,
+    unit: &TranslationUnit,
+    out: Option<&str>,
+    cache_key: &str,
+) -> Result<(), ExitCode> {
     let ir = emit_ir_string(unit)?;
     let tmp = temp_dir();
     let ir_path = tmp.join(format!("{}.ir.ll", stem(file)));
@@ -251,24 +268,23 @@ fn build_native(file: &str, unit: &TranslationUnit, out: Option<&str>) -> Result
         .arg(out)
         .status();
     note_residual(file, Path::new(out));
+    let prov_encrypt = env::var("RESID_PROV_ENCRYPT").map(|v| v == "1").unwrap_or(false);
+    let enc_key = env::var("RESID_PROV_KEY").ok();
+    if prov_encrypt && enc_key.is_none() {
+        eprintln!("error: RESID_PROV_ENCRYPT=1 requires RESID_PROV_KEY=<64 hex chars>");
+        return Err(ExitCode::FAILURE);
+    }
     match status {
         Ok(s) if s.success() => {
             let mut store = resid_cache::Store::open(Path::new(".resid-cache.cbor"));
-            let key =
-                resid_cache::hash_inputs(&[b"residc-v1", &fs::read(file).unwrap_or_default()]);
-            store.put(key, out.clone());
+            store.put(cache_key.clone(), out.clone());
+            store.put(cache_key.to_string(), out.clone());
             if let Err(e) = store.flush() {
                 eprintln!("cache flush error: {e}");
             }
             // Signed provenance trailer (spec §27/§34). Confidential
             // reservation (§35): RESID_PROV_ENCRYPT=1 + RESID_PROV_KEY wraps
             // the payload in COSE_Encrypt0 (experimental cipher, cose.rs).
-            let prov_encrypt = env::var("RESID_PROV_ENCRYPT").map(|v| v == "1").unwrap_or(false);
-            let enc_key = env::var("RESID_PROV_KEY").ok();
-            if prov_encrypt && enc_key.is_none() {
-                eprintln!("error: RESID_PROV_ENCRYPT=1 requires RESID_PROV_KEY=<64 hex chars>");
-                return Err(ExitCode::FAILURE);
-            }
             if let Some(sec) = ensure_signing_key_interactive() {
                 let mut bytes = match fs::read(out) {
                     Ok(b) => b,
@@ -355,10 +371,15 @@ fn verify_if_configured(bin: &str) {
     }
 }
 
-fn run_native(file: &str, unit: &TranslationUnit, prog_args: &[String]) -> ExitCode {
+fn run_native(
+    file: &str,
+    unit: &TranslationUnit,
+    prog_args: &[String],
+    cache_key: &str,
+) -> ExitCode {
     let tmp = temp_dir();
     let bin = tmp.join(format!("{}_bin", stem(file)));
-    if let Err(code) = build_native(file, unit, Some(&bin.to_string_lossy())) {
+    if let Err(code) = build_native(file, unit, Some(&bin.to_string_lossy()), &cache_key) {
         return code;
     }
     verify_if_configured(&bin.to_string_lossy());
@@ -414,6 +435,18 @@ fn stem(file: &str) -> String {
 /// compilations can see what remains residual.
 fn note_residual(file: &str, artifact: &Path) {
     let notes = collect_residual_notes(file);
+    // Reduction pass (spec §34): notes from a previous build of this
+    // artifact that no longer appear are discharged knowledge.
+    if let Some(prior) = resid_notes::read_notes_file(artifact) {
+        for p in &prior {
+            if !notes.contains(p) {
+                eprintln!(
+                    "reduction: discharged {} at line {} ({})",
+                    p.kind, p.line, p.symbol
+                );
+            }
+        }
+    }
     let _ = resid_notes::write_notes_file(artifact, &notes);
 }
 
