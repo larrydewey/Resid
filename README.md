@@ -30,7 +30,7 @@ Values, types, constraints, behaviors, and provenance are all first-class entiti
 ### First-Class Numeric Types
 Every numeric width is a distinct nominal type with no subtyping:
 - **Integer family**: `Int(8)` to `Int(512)`, `UInt(8)` to `UInt(512)`
-- **Floating-point family**: `Float(16)` to `Float(512)`
+- **Floating-point family**: `Float(16)` to `Float(128)` (widest; `Float(256)`/`Float(512)` are not part of the language)
 - **Pointer-sized**: `ISize`, `USize`
 - **Safe interoperability**: Automatic width widening based on range rules for mixed-width arithmetic (same-sign only).
 
@@ -71,17 +71,8 @@ Tooling shipped today:
 
 ```
 // hello.res
-import "crypto.res";
-
 Int main() {
-    UInt(32) x = u32(42);
-    UInt(16) y = u16(10);
-
-    // Automatic widening: result is UInt(32)
-    UInt(32) result = x + y;
-
-    println(f"Result: {result}");
-    println(hex_encode(sha256("hello")));
+    println("hello from resid");
     return 0;
 }
 ```
@@ -89,6 +80,8 @@ Int main() {
 Run it:
 
     residc hello.res run
+
+A richer example lives at `examples/hello.res`.
 
 ### Sandboxed Example
 
@@ -136,8 +129,10 @@ Run it:
 
 ### Running the Compiler
 
-    residc hello.resid
-    ./a.out
+    residc hello.res build [-o out]   # build native binary (clang + tiny C runtime)
+    residc hello.res run              # build and run it
+    residc hello.res emit-ir          # print LLVM IR
+    residc hello.res                  # type-check only
 
 ---
 
@@ -150,7 +145,9 @@ Run it:
     │   ├── resid-build      └── residc           # driver CLI
     ├── lib/                 # Standard library written in Resid
     │   ├── crypto.res       # SHA-256/512, HMAC, PBKDF2, Base64, random
-    │   └── ed25519.res      # Ed25519 sign/verify
+    │   ├── ed25519.res      # Ed25519 sign/verify
+    │   ├── der.res          # DER parsing
+    │   └── http.res         # HTTP
     ├── examples/            # Self-hosted stage-2 compilers (.res sources)
     ├── tools/               # fmt, graph, notes, cache, why
     └── PROGRESS.md          # Full build log, status, roadmap
@@ -165,7 +162,7 @@ Resid is a production-ready specification (v3.1). We welcome contributions in:
 - Tooling (LSP, formatter, debugger)
 - Documentation
 
-Please read `CONTRIBUTING.md` before submitting a PR.
+Please read `PROGRESS.md` for current status and roadmap before submitting a PR.
 
 ---
 
