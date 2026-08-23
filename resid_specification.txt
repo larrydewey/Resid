@@ -465,6 +465,15 @@ handles must be moved.
 
   p.x   xs[i]   m[k]
 
+Indexing is bounds-checked: an out-of-range index aborts the
+program with the offending index and length (resid_index_abort);
+it never reads out of bounds silently.
+
+Shift counts equal to or greater than the operand's bit width
+yield 0 (machine shift counts wrap modulo the width, which would
+otherwise be silent UB). Implemented for every integer width,
+including wide Int(N)/UInt(N).
+
 
 ==================================================
 18. CONTROL FLOW
