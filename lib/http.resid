@@ -1,4 +1,4 @@
-import "crypto.res";
+import "crypto.resid";
 
 // ─── lib/http.res — HTTP/1.1 client in pure Resid (spec §32) ──────────
 // All protocol logic is Resid; the runtime only provides raw TCP

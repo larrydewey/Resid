@@ -1,4 +1,4 @@
-import "crypto.res";
+import "crypto.resid";
 Int main() {
     List(Int) p = pad512(bytes_of("abc"));
     List(Int) we = ext512_flat(msg_words512(p, 0), 16, 80);

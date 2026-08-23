@@ -376,7 +376,7 @@ fn run_value_formatting() {
 fn run_range_for_in() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-range-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("range.res");
+    let file = dir.join("range.resid");
     std::fs::write(
         &file,
         r#"Int main() {
@@ -425,7 +425,7 @@ fn run_range_for_in() {
 fn run_if_let_and_while_let() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-iflet-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("iflet.res");
+    let file = dir.join("iflet.resid");
     std::fs::write(
         &file,
         r#"Int main() {
@@ -562,7 +562,7 @@ fn run_conversion_helpers() {
 fn run_range_and_slice_construction() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-rngslc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("rngslc.res");
+    let file = dir.join("rngslc.resid");
     std::fs::write(
         &file,
         r#"Int main() {
@@ -823,13 +823,13 @@ Int main() {
 fn bootstrap_lexer_tokenizes_source() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-lex-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let lexer = dir.join("lexer.res");
+    let lexer = dir.join("lexer.resid");
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("examples/lexer.res"), &lexer).unwrap();
+    std::fs::copy(workspace.join("examples/lexer.resid"), &lexer).unwrap();
     let src = dir.join("sample.resid");
     std::fs::write(
         &src,
@@ -873,13 +873,13 @@ Int main() {
 fn bootstrap_parser_builds_ast() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-parse-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let parser = dir.join("parser.res");
+    let parser = dir.join("parser.resid");
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("examples/parser.res"), &parser).unwrap();
+    std::fs::copy(workspace.join("examples/parser.resid"), &parser).unwrap();
     let src = dir.join("ast_sample.resid");
     std::fs::write(
         &src,
@@ -957,7 +957,7 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// M6a: the self-hosted type checker (examples/typecheck.res) accepts all
+/// M6a: the self-hosted type checker (examples/typecheck.resid) accepts all
 /// three bootstrap programs — including its own source.
 #[test]
 fn bootstrap_typechecker_accepts_bootstrap_sources() {
@@ -966,9 +966,9 @@ fn bootstrap_typechecker_accepts_bootstrap_sources() {
         .unwrap()
         .parent()
         .unwrap();
-    for name in ["typecheck.res", "lexer.res", "parser.res"] {
+    for name in ["typecheck.resid", "lexer.resid", "parser.resid"] {
         let out = Command::new(residc_bin())
-            .arg(workspace.join("examples/typecheck.res"))
+            .arg(workspace.join("examples/typecheck.resid"))
             .arg("run")
             .arg(workspace.join("examples").join(name))
             .output()
@@ -998,7 +998,7 @@ fn bootstrap_typechecker_rejects_type_errors() {
         .unwrap()
         .parent()
         .unwrap();
-    let bad = dir.join("bad.res");
+    let bad = dir.join("bad.resid");
     std::fs::write(
         &bad,
         r#"
@@ -1011,7 +1011,7 @@ Int main() {
     .unwrap();
 
     let out = Command::new(residc_bin())
-        .arg(workspace.join("examples/typecheck.res"))
+        .arg(workspace.join("examples/typecheck.resid"))
         .arg("run")
         .arg(&bad)
         .output()
@@ -1909,7 +1909,7 @@ fn bootstrap_codegen_emits_runnable_ir() {
         .unwrap()
         .parent()
         .unwrap();
-    let sample = dir.join("sample.res");
+    let sample = dir.join("sample.resid");
     std::fs::write(
         &sample,
         r#"
@@ -1943,7 +1943,7 @@ Int main() {
 
     // Stage 1: run the bootstrap codegen (compiled Resid) on the sample.
     let out = Command::new(residc_bin())
-        .arg(workspace.join("examples/codegen.res"))
+        .arg(workspace.join("examples/codegen.resid"))
         .arg("run")
         .arg(&sample)
         .arg("-o")
@@ -2000,7 +2000,7 @@ fn bootstrap_driver_compiles_and_rejects() {
         .unwrap()
         .parent()
         .unwrap();
-    let sample = dir.join("sample.res");
+    let sample = dir.join("sample.resid");
     std::fs::write(
         &sample,
         r#"
@@ -2032,7 +2032,7 @@ Int main() {
     let bin = dir.join("sample_drv");
 
     let out = Command::new(residc_bin())
-        .arg(workspace.join("examples/driver.res"))
+        .arg(workspace.join("examples/driver.resid"))
         .arg("run")
         .arg(&sample)
         .arg("-o")
@@ -2059,7 +2059,7 @@ Int main() {
     );
 
     // Ill-typed input must be rejected by the driver's own checker.
-    let bad = dir.join("bad.res");
+    let bad = dir.join("bad.resid");
     std::fs::write(
         &bad,
         r#"
@@ -2071,7 +2071,7 @@ Int main() {
     )
     .unwrap();
     let bad_out = Command::new(residc_bin())
-        .arg(workspace.join("examples/driver.res"))
+        .arg(workspace.join("examples/driver.resid"))
         .arg("run")
         .arg(&bad)
         .arg("-o")
@@ -2094,7 +2094,7 @@ Int main() {
 }
 
 /// Stage-2 self-hosting (M6 item 4): the Resid-written emitter
-/// (examples/codegen.res) compiles the bootstrap lexer into a working
+/// (examples/codegen.resid) compiles the bootstrap lexer into a working
 /// binary — the emitter's output is linked and run like any other.
 #[test]
 fn stage2_emitter_compiles_bootstrap_lexer() {
@@ -2108,7 +2108,7 @@ fn stage2_emitter_compiles_bootstrap_lexer() {
 
     // 1. Build the Resid-written emitter with the Rust residc.
     let out = Command::new(residc_bin())
-        .arg(workspace.join("examples/codegen.res"))
+        .arg(workspace.join("examples/codegen.resid"))
         .arg("build")
         .arg("-o")
         .arg(dir.join("emitter"))
@@ -2126,7 +2126,7 @@ fn stage2_emitter_compiles_bootstrap_lexer() {
     // 2. The emitter compiles the bootstrap lexer to LLVM IR.
     let ll = dir.join("lexer2.ll");
     let out = Command::new(dir.join("emitter"))
-        .arg(workspace.join("examples/lexer.res"))
+        .arg(workspace.join("examples/lexer.resid"))
         .arg("-o")
         .arg(&ll)
         .output()
@@ -2134,7 +2134,7 @@ fn stage2_emitter_compiles_bootstrap_lexer() {
     assert_eq!(
         out.status.code(),
         Some(0),
-        "stage-2 compile of lexer.res failed: {}",
+        "stage-2 compile of lexer.resid failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(ll.exists(), "emitter wrote no IR");
@@ -2435,7 +2435,7 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// SHA-256 written in pure Resid (lib/crypto.res) — self-hosted crypto.
+/// SHA-256 written in pure Resid (lib/crypto.resid) — self-hosted crypto.
 #[test]
 fn run_sha256_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-sha-{}", std::process::id()));
@@ -2445,12 +2445,12 @@ fn run_sha256_in_resid() {
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
         r#"
-import "crypto.res";
+import "crypto.resid";
 Int main() {
     println(sha256(""));
     println(sha256("abc"));
@@ -2511,7 +2511,7 @@ fn run_stage2_provenance_sidecar() {
     .unwrap();
     let bin = dir.join("st2bin");
     let out = Command::new(residc_bin())
-        .arg(workspace.join("examples/driver.res"))
+        .arg(workspace.join("examples/driver.resid"))
         .arg("run")
         .arg(&file)
         .arg("-o")
@@ -2594,7 +2594,7 @@ Int main() {{
         // Stage-2 bootstrap pipeline
         let bin = dir.join(format!("drv_{x}"));
         let out2 = Command::new(residc_bin())
-            .arg(workspace.join("examples/driver.res"))
+            .arg(workspace.join("examples/driver.resid"))
             .arg("run")
             .arg(&file)
             .arg("-o")
@@ -2621,13 +2621,13 @@ fn run_ed25519_sign_in_resid() {
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
-    std::fs::copy(workspace.join("lib/ed25519.res"), dir.join("ed25519.res")).unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
+    std::fs::copy(workspace.join("lib/ed25519.resid"), dir.join("ed25519.resid")).unwrap();
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
         r#"
-import "ed25519.res";
+import "ed25519.resid";
 Str hexs(List(Int) bs) {
     return hex_range_b(bs, 1, 32, "");
 }
@@ -2672,13 +2672,13 @@ fn run_ed25519_verify_in_resid() {
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
-    std::fs::copy(workspace.join("lib/ed25519.res"), dir.join("ed25519.res")).unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
+    std::fs::copy(workspace.join("lib/ed25519.resid"), dir.join("ed25519.resid")).unwrap();
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
         r#"
-import "ed25519.res";
+import "ed25519.resid";
 Int main() {
     List(Int) sg = [0, 44, 84, 130, 57, 42, 25, 126, 192, 159, 163, 55, 119, 149, 141, 58, 11, 228, 244, 150, 10, 248, 94, 151, 150, 164, 216, 34, 201, 94, 207, 112, 74, 52, 254, 211, 42, 219, 105, 154, 136, 192, 234, 135, 107, 159, 187, 23, 209, 219, 211, 54, 247, 84, 253, 146, 7, 191, 193, 18, 200, 154, 165, 79, 2];
     List(Int) pk = [0, 215, 90, 152, 1, 130, 177, 10, 183, 213, 75, 254, 211, 201, 100, 7, 58, 14, 225, 114, 243, 218, 166, 35, 37, 175, 2, 26, 104, 247, 7, 81, 26];
@@ -2745,12 +2745,12 @@ fn run_sha512_in_resid() {
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
         r#"
-import "crypto.res";
+import "crypto.resid";
 List(Int) n_as(Int k, List(Int) acc) {
     if (k == 0) { return acc; }
     List(Int) acc2 = acc.concat([97]);
@@ -2781,7 +2781,7 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// HMAC-SHA256 in pure Resid — RFC 4231-style vectors via lib/crypto.res.
+/// HMAC-SHA256 in pure Resid — RFC 4231-style vectors via lib/crypto.resid.
 #[test]
 fn run_hmac_sha256_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-hmac-{}", std::process::id()));
@@ -2791,12 +2791,12 @@ fn run_hmac_sha256_in_resid() {
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
         r#"
-import "crypto.res";
+import "crypto.resid";
 Int main() {
     List(Int) k1 = bytes_of("key");
     List(Int) m1 = bytes_of("The quick brown fox jumps over the lazy dog");
@@ -2834,12 +2834,12 @@ fn run_crypto_kit() {
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
         r#"
-import "crypto.res";
+import "crypto.resid";
 Int main() {
     List(Int) a = bytes_of("attack at dawn");
     List(Int) b = bytes_of("attack at dawn");
@@ -2882,12 +2882,12 @@ fn run_crypto_randomness() {
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
         r#"
-import "crypto.res";
+import "crypto.resid";
 Int main() {
     Str h1 = random_hex(32);
     Str h2 = random_hex(32);
@@ -3160,7 +3160,7 @@ fn run_reduction_reports_discharged_notes() {
     }
 }
 
-/// Pure-Resid HTTP client stack (lib/http.res) over raw TCP externs:
+/// Pure-Resid HTTP client stack (lib/http.resid) over raw TCP externs:
 /// GET request built and response parsed entirely in Resid against a
 /// live in-process HTTP/1.1 server.
 #[test]
@@ -3184,7 +3184,7 @@ fn run_http_get_in_resid() {
             let req = String::from_utf8_lossy(&buf);
             let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
             let (code, body): (&str, &str) = if path == "/hello.txt" {
-                ("200 OK", "hello from http.res\n")
+                ("200 OK", "hello from http.resid\n")
             } else {
                 ("404 Not Found", "gone\n")
             };
@@ -3197,14 +3197,14 @@ fn run_http_get_in_resid() {
         }
     });
     // Client program imports the library.
-    std::fs::copy(workspace.join("lib/http.res"), dir.join("http.res")).unwrap();
-    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).ok();
+    std::fs::copy(workspace.join("lib/http.resid"), dir.join("http.resid")).unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).ok();
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
         format!(
             r#"
-import "http.res";
+import "http.resid";
 Int main() {{
     println(http_get_body("http://127.0.0.1:{port}/hello.txt"));
     println(IntToString(http_get_status("http://127.0.0.1:{port}/missing")));
@@ -3223,7 +3223,7 @@ Int main() {{
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(
         stdout.trim(),
-        "hello from http.res\n\n404",
+        "hello from http.resid\n\n404",
         "{stdout:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -3290,7 +3290,7 @@ Int main() {{
     // Stage-2 driver.
     let bin = dir.join("tcp_drv");
     let out = Command::new(residc_bin())
-        .arg(workspace.join("examples/driver.res"))
+        .arg(workspace.join("examples/driver.resid"))
         .arg("run")
         .arg(&file)
         .arg("-o")
@@ -3323,14 +3323,14 @@ fn run_stage2_import_resolution() {
         .unwrap();
     // Library with a trailing-comma multi-line list literal.
     std::fs::write(
-        dir.join("libtest.res"),
+        dir.join("libtest.resid"),
         "pub List(Int) ktab() {\n    List(Int) k = [\n        1116352408, -2057255420,\n    ];\n    return k;\n}\n",
     )
     .unwrap();
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
-        "import \"libtest.res\";\nInt main() {\n    List(Int) k = ktab();\n    Int sum = k[0] + k[1];
+        "import \"libtest.resid\";\nInt main() {\n    List(Int) k = ktab();\n    Int sum = k[0] + k[1];
     println(IntToString(sum));\n    return 0;\n}\n",
     )
     .unwrap();
@@ -3346,7 +3346,7 @@ fn run_stage2_import_resolution() {
     // Stage-2 driver.
     let bin = dir.join("imp_bin");
     let out = Command::new(residc_bin())
-        .arg(workspace.join("examples/driver.res"))
+        .arg(workspace.join("examples/driver.resid"))
         .arg("run")
         .arg(&file)
         .arg("-o")
@@ -3364,7 +3364,7 @@ fn run_stage2_import_resolution() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Pure-Resid DER/ASN.1 decoder (lib/der.res) — x509 foundation.
+/// Pure-Resid DER/ASN.1 decoder (lib/der.resid) — x509 foundation.
 /// Decodes SEQUENCE { INTEGER 42, OCTET STRING "hi" } and a long-form
 /// length element, through BOTH pipelines.
 #[test]
@@ -3376,7 +3376,7 @@ fn run_der_parser_in_resid() {
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("lib/der.res"), dir.join("der.res")).unwrap();
+    std::fs::copy(workspace.join("lib/der.resid"), dir.join("der.resid")).unwrap();
     // SEQUENCE(30 05) { INTEGER(02 01) 42, OCTET STRING(04 02) "hi" } then
     // INTEGER with long-form length (02 81 FF ...) truncated marker check:
     // we decode 0x2015 as long-form length carrying value bytes 0x20 0x15
@@ -3385,7 +3385,7 @@ fn run_der_parser_in_resid() {
     std::fs::write(
         &file,
         r#"
-import "der.res";
+import "der.resid";
 Int main() {
     List(Int) blob = [0, 48, 5, 2, 1, 42, 4, 2, 104, 105];
     DerTlv seq = der_next(blob, 1);
@@ -3419,7 +3419,7 @@ Int main() {
     // Stage-2 driver.
     let bin = dir.join("der_bin");
     let out = Command::new(residc_bin())
-        .arg(workspace.join("examples/driver.res"))
+        .arg(workspace.join("examples/driver.resid"))
         .arg("run")
         .arg(&file)
         .arg("-o")
@@ -3436,7 +3436,7 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Pure-Resid x509 TBS walker (lib/x509.res over lib/der.res) — decodes an
+/// Pure-Resid x509 TBS walker (lib/x509.resid over lib/der.resid) — decodes an
 /// openssl-generated self-signed certificate (fixed serial 7331, subject
 /// C=US/O=Resid/CN=Resid Test CA, sha256WithRSAEncryption) embedded as a
 /// seeded byte list. Checks serial, sig-alg OID, SPKI alg OID, issuer and
@@ -3450,15 +3450,15 @@ fn run_x509_in_resid() {
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::copy(workspace.join("lib/der.res"), dir.join("der.res")).unwrap();
-    std::fs::copy(workspace.join("lib/x509.res"), dir.join("x509.res")).unwrap();
+    std::fs::copy(workspace.join("lib/der.resid"), dir.join("der.resid")).unwrap();
+    std::fs::copy(workspace.join("lib/x509.resid"), dir.join("x509.resid")).unwrap();
     let list = include_str!("fixtures/x509_cert_list.txt");
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
         format!(
             r#"
-import "x509.res";
+import "x509.resid";
 Int main() {{
     List(Int) cert = {list};
     println("serial=" + IntToString(x509_serial(cert)));
@@ -3493,7 +3493,7 @@ Int main() {{
     // Stage-2 (bootstrap driver pipeline).
     let bin = dir.join("x509_bin");
     let out = Command::new(residc_bin())
-        .arg(workspace.join("examples/driver.res"))
+        .arg(workspace.join("examples/driver.resid"))
         .arg("run")
         .arg(&file)
         .arg("-o")
@@ -3508,5 +3508,119 @@ Int main() {{
     let stage2_out = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(stage2_out.trim(), expected, "{stage2_out:?}");
     assert_eq!(rust_out.trim_end(), stage2_out.trim_end());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Pure-Resid RSA PKCS#1v1.5 SHA-256 signature verification (lib/rsa.resid
+/// bignum + Montgomery reduction over lib/x509.resid + lib/crypto.resid).
+/// The self-signed certificate from the x509 fixture verifies its own
+/// tbsCertificate signature with its embedded RSA-2048 key, through BOTH
+/// pipelines. Ground truth computed independently in Python:
+///   sha256(tbs) starts 234 95 53 43; sig^65537 mod n == expected EM.
+#[test]
+fn run_rsa_pkcs1_verify_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-rsa-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    for f in ["der.resid", "x509.resid", "crypto.resid", "rsa.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    let cert = include_str!("fixtures/x509_cert_list.txt");
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"
+import "crypto.resid";
+import "x509.resid";
+import "rsa.resid";
+
+Int main() {{
+    List(Int) cert = {cert};
+    Int tbs = x509_tbs_pos(cert);
+    DerTlv tv = der_next(cert, tbs);
+    Int tbody = tbs + tv.hdr_len;
+    Int tend = tbody + tv.val_len;
+    Int tstop = tend - 1;
+    List(Int) tb = der_slice_seeded(cert, tbs, tstop);
+    List(Int) digest = sha256_bytes(tb);
+    Int d1 = digest[1];
+    Int d2 = digest[2];
+    Int d3 = digest[3];
+    Int d4 = digest[4];
+    println("digest=" + IntToString(d1) + " " + IntToString(d2) + " " + IntToString(d3) + " " + IntToString(d4));
+    Int p1 = x509_skip_tlv(cert, tbs);
+    Int p2 = x509_skip_tlv(cert, p1);
+    Int bsc = der_content_pos(cert, p2);
+    Int sb = bsc + 1;
+    Int se = sb + 255;
+    List(Int) sigb = der_slice_seeded(cert, sb, se);
+    Int sp = x509_spki_pos(cert);
+    Int algp = der_content_pos(cert, sp);
+    Int bitp = x509_skip_tlv(cert, algp);
+    Int kseq = der_content_pos(cert, bitp) + 1;
+    Int npos = der_content_pos(cert, kseq);
+    Int epos = x509_skip_tlv(cert, npos);
+    List(Int) nc = der_content(cert, npos);
+    Int ncl = nc.len() - 1;
+    List(Int) nb = der_slice_seeded(nc, 2, ncl);
+    Int ev = der_int_value(cert, epos);
+    Int w = 128;
+    List(Int) nl = bn_from_be(nb, w);
+    List(Int) sl = bn_from_be(sigb, w);
+    List(Int) rec = bn_montexp(sl, ev, nl, w);
+    List(Int) em = pkcs1_em_sha256(digest, 256);
+    List(Int) eml = bn_from_be(em, w);
+    Int c = bn_cmp(rec, eml, w);
+    if (c == 0) {{
+        println("signature VALID");
+    }} else {{
+        println("signature INVALID");
+    }}
+    return 0;
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let expected = "digest=234 95 53 43\nsignature VALID";
+    // Deep tail recursions (4096-frame modexp loops) need a roomy stack.
+    let unlimit = |prog: &str, args: &[String]| {
+        let mut cmdline = format!("ulimit -s unlimited; exec {}", prog);
+        for a in args {
+            cmdline.push_str(&format!(" '{}'", a));
+        }
+        let mut sh = Command::new("sh");
+        sh.arg("-c").arg(cmdline);
+        sh
+    };
+    // Stage-1 (Rust pipeline).
+    let out = unlimit(residc_bin(), &[file.to_string_lossy().into_owned(), "run".into()])
+        .output()
+        .expect("rust pipeline");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let rust_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(rust_out.trim(), expected, "{rust_out:?}");
+    // Stage-2 (bootstrap driver pipeline).
+    let bin = dir.join("rsa_bin");
+    let drv_args = vec![
+        workspace.join("examples/driver.resid").to_string_lossy().into_owned(),
+        "run".into(),
+        file.to_string_lossy().into_owned(),
+        "-o".into(),
+        bin.to_string_lossy().into_owned(),
+        "-rt".into(),
+        workspace.join("crates/residc/resid_rt.c").to_string_lossy().into_owned(),
+    ];
+    let mut drv = unlimit(residc_bin(), &drv_args);
+    let out = drv.current_dir(workspace).output().expect("driver run");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = unlimit(&bin.to_string_lossy(), &[]).output().expect("stage-2 binary");
+    let stage2_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stage2_out.trim(), expected, "{stage2_out:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

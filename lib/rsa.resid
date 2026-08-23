@@ -1,0 +1,512 @@
+// ─── lib/rsa.res — bignum + RSA PKCS#1v1.5 verify (pure Resid) ───────
+// Bignums are seeded List(Int) of 16-bit limbs, little-endian, fixed
+// width W (limb k at index k+1). Base 2^16 keeps every intermediate
+// product below 2^32 — safe in the 64-bit Int. Verify-only: modexp
+// with a small public exponent (fits in one Int).
+//
+// Gotcha compliance: every function pub, definitions precede uses, no
+// variable reassignment, temps bound before calls.
+
+import "der.resid";
+
+// ─── Limb primitives ─────────────────────────────────────────────────
+
+pub Int bn_mask() { return 65535; }
+
+pub Int bn_get(List(Int) l, Int k) {
+    Int idx = k + 1;
+    return l[idx];
+}
+
+pub List(Int) bn_set_acc(List(Int) l, Int k, Int v, Int i, List(Int) acc) {
+    Int n = l.len() - 1;
+    if (i >= n) { return acc; }
+    Int old = bn_get(l, i);
+    Int nv = if (i == k) { v } else { old };
+    List(Int) acc2 = acc.concat([nv]);
+    Int ni = i + 1;
+    return bn_set_acc(l, k, v, ni, acc2);
+}
+
+// New list with limb k replaced by v.
+pub List(Int) bn_set(List(Int) l, Int k, Int v) {
+    return bn_set_acc(l, k, v, 0, [0]);
+}
+
+pub List(Int) bn_zeros(Int count, List(Int) acc) {
+    if (count <= 0) { return acc; }
+    List(Int) acc2 = acc.concat([0]);
+    Int c2 = count - 1;
+    return bn_zeros(c2, acc2);
+}
+
+pub List(Int) bn_zero(Int w) {
+    return bn_zeros(w, [0]);
+}
+
+pub List(Int) bn_one(Int w) {
+    List(Int) z = bn_zero(w);
+    return bn_set(z, 0, 1);
+}
+
+// ─── Compare / subtract ──────────────────────────────────────────────
+
+// Sign of a-b scanning from top limb i downwards. Returns -1/0/1.
+pub Int bn_cmp_at(List(Int) a, List(Int) b, Int i) {
+    if (i < 0) { return 0; }
+    Int x = bn_get(a, i);
+    Int y = bn_get(b, i);
+    if (x < y) { return -1; }
+    if (x > y) { return 1; }
+    Int ni = i - 1;
+    return bn_cmp_at(a, b, ni);
+}
+
+pub Int bn_cmp(List(Int) a, List(Int) b, Int w) {
+    Int top = w - 1;
+    return bn_cmp_at(a, b, top);
+}
+
+pub List(Int) bn_sub_acc(List(Int) a, List(Int) b, Int i, Int borrow, Int w, List(Int) acc) {
+    if (i >= w) { return acc; }
+    Int x = bn_get(a, i);
+    Int y = bn_get(b, i);
+    Int d0 = x - y - borrow;
+    Int nb = if (d0 < 0) { 1 } else { 0 };
+    Int dp = d0 + 65536;
+    Int d = if (d0 < 0) { dp } else { d0 };
+    List(Int) acc2 = acc.concat([d]);
+    Int ni = i + 1;
+    return bn_sub_acc(a, b, ni, nb, w, acc2);
+}
+
+// a - b assuming a >= b. Same width w.
+pub List(Int) bn_sub(List(Int) a, List(Int) b, Int w) {
+    return bn_sub_acc(a, b, 0, 0, w, [0]);
+}
+
+// ─── Shift / bits ────────────────────────────────────────────────────
+
+// One left shift, OR-ing incoming bit into limb 0. Carry propagates
+// upward from each limb's top bit.
+pub List(Int) bn_shl1(List(Int) l, Int w, Int i, Int carry_in, List(Int) acc) {
+    if (i >= w) { return acc; }
+    Int cur = bn_get(l, i);
+    Int nv = ((cur << 1) | carry_in) & bn_mask();
+    Int carry_out = (cur >> 15) & 1;
+    List(Int) acc2 = acc.concat([nv]);
+    Int ni = i + 1;
+    return bn_shl1(l, w, ni, carry_out, acc2);
+}
+
+pub List(Int) bn_shift_in(List(Int) l, Int bit, Int w) {
+    List(Int) shifted = bn_shl1(l, w, 0, bit, [0]);
+    return shifted;
+}
+
+// Bit k (0 = least significant) of the limb list.
+pub Int bn_bit(List(Int) l, Int k) {
+    Int limb = k / 16;
+    Int off = k - limb * 16;
+    Int v = bn_get(l, limb);
+    return (v >> off) & 1;
+}
+
+// ── Mod ─────────────────────────────────────────────────────────────
+
+pub List(Int) bn_mod_step(List(Int) a, List(Int) n, Int k, List(Int) rem, Int w) {
+    if (k < 0) { return rem; }
+    Int b = bn_bit(a, k);
+    List(Int) sh = bn_shift_in(rem, b, w);
+    Int c = bn_cmp(sh, n, w);
+    Int nk = k - 1;
+    if (c >= 0) {
+        List(Int) d = bn_sub(sh, n, w);
+        return bn_mod_step(a, n, nk, d, w);
+    }
+    return bn_mod_step(a, n, nk, sh, w);
+}
+
+// a mod n. a has `alen` limbs (may exceed w); n has w limbs.
+pub List(Int) bn_mod(List(Int) a, Int alen, List(Int) n, Int w) {
+    Int top = alen * 16 - 1;
+    List(Int) z = bn_zero(w);
+    return bn_mod_step(a, n, top, z, w);
+}
+
+// ─── Multiply ────────────────────────────────────────────────────────
+
+// b * d (single limb digit), width w+1 (extra limb holds final carry).
+pub List(Int) bn_mul_digit_acc(List(Int) b, Int d, Int i, Int carry, Int w, List(Int) acc) {
+    if (i >= w) {
+        List(Int) acc2 = acc.concat([carry]);
+        return acc2;
+    }
+    Int bv = bn_get(b, i);
+    Int cur = bv * d + carry;
+    Int lo = cur & bn_mask();
+    Int cy = cur >> 16;
+    List(Int) acc2 = acc.concat([lo]);
+    Int ni = i + 1;
+    return bn_mul_digit_acc(b, d, ni, cy, w, acc2);
+}
+
+pub List(Int) bn_mul_digit(List(Int) b, Int d, Int w) {
+    return bn_mul_digit_acc(b, d, 0, 0, w, [0]);
+}
+
+// a + b, width wout (both inputs narrower or equal).
+pub List(Int) bn_add_acc(List(Int) a, List(Int) b, Int wout, Int i, Int carry, Int alen, Int blen, List(Int) acc) {
+    if (i >= wout) { return acc; }
+    Bool ha = i < alen;
+    Bool hb = i < blen;
+    Int av = if (ha) { bn_get(a, i) } else { 0 };
+    Int bv = if (hb) { bn_get(b, i) } else { 0 };
+    Int cur = av + bv + carry;
+    Int lo = cur & bn_mask();
+    Int cy = cur >> 16;
+    List(Int) acc2 = acc.concat([lo]);
+    Int ni = i + 1;
+    return bn_add_acc(a, b, wout, ni, cy, alen, blen, acc2);
+}
+
+// Concatenate two SEEDED lists, skipping the second one's seed
+// (plain concat copies the argument's index-0 element verbatim).
+pub List(Int) bn_cat_acc(List(Int) b, Int j, Int blen, List(Int) acc) {
+    if (j > blen) { return acc; }
+    Int v = b[j];
+    List(Int) acc2 = acc.concat([v]);
+    Int nj = j + 1;
+    return bn_cat_acc(b, nj, blen, acc2);
+}
+
+pub List(Int) bn_cat(List(Int) a, List(Int) b) {
+    Int bl = b.len() - 1;
+    return bn_cat_acc(b, 1, bl, a);
+}
+
+// Prepend i zero limbs (multiply a little-endian limb list by b^i).
+pub List(Int) bn_shift_limbs(List(Int) row, Int i) {
+    List(Int) zi = bn_zeros(i, [0]);
+    return bn_cat(zi, row);
+}
+
+pub List(Int) bn_mul_row(List(Int) a, List(Int) b, Int w, Int i, List(Int) acc) {
+    if (i >= w) { return acc; }
+    Int d = bn_get(a, i);
+    List(Int) row = bn_mul_digit(b, d, w);
+    List(Int) shifted = bn_shift_limbs(row, i);
+    Int sl = shifted.len() - 1;
+    Int w2 = w + w;
+    List(Int) acc2 = bn_add_acc(acc, shifted, w2, 0, 0, w2, sl, [0]);
+    Int ni = i + 1;
+    return bn_mul_row(a, b, w, ni, acc2);
+}
+
+// Full product of two w-limb values, width 2w. Row-based: each limb of
+// a multiplies b into a fresh row, shifted and added — O(w) copies per
+// row instead of per-limb list mutation.
+pub List(Int) bn_mul(List(Int) a, List(Int) b, Int w) {
+    Int w2 = w + w;
+    List(Int) res = bn_zero(w2);
+    return bn_mul_row(a, b, w, 0, res);
+}
+
+pub List(Int) bn_mulmod(List(Int) a, List(Int) b, List(Int) n, Int w) {
+    List(Int) p = bn_mul(a, b, w);
+    Int pl = w + w;
+    return bn_mod(p, pl, n, w);
+}
+
+// ─── Montgomery reduction ────────────────────────────────────────────
+// Everything below is append-only (no positional mutation): the low
+// half digits come out of a column recurrence, the product m*n reuses
+// the row-based mul, and the shift is one slice.
+
+// 2^bits mod n by repeated doubling from 1. Cheap because the dividend
+// is implicit — no per-bit list rebuild of a wide dividend. The running
+// value gets one extra limb: 2*r can exceed n's width when n's top bit
+// sits at the very top of the limb array.
+pub List(Int) bn_pow2_mod_acc(List(Int) npad, Int count, Int wp, List(Int) r) {
+    if (count <= 0) { return r; }
+    List(Int) sh = bn_shift_in(r, 0, wp);
+    Int c = bn_cmp(sh, npad, wp);
+    Int c2 = count - 1;
+    if (c >= 0) {
+        List(Int) d = bn_sub(sh, npad, wp);
+        return bn_pow2_mod_acc(npad, c2, wp, d);
+    }
+    return bn_pow2_mod_acc(npad, c2, wp, sh);
+}
+
+pub List(Int) bn_pow2_mod(Int bits, List(Int) n, Int w) {
+    Int wp = w + 1;
+    List(Int) npad = n.concat([0]);
+    List(Int) one = bn_one(wp);
+    List(Int) r = bn_pow2_mod_acc(npad, bits, wp, one);
+    return bn_trunc(r, w);
+}
+
+// Inverse of odd n0 modulo 2^16 via four Newton rounds.
+pub Int bn_inv16(Int n0) {
+    Int x = 1;
+    Int x1 = x * (2 - n0 * x);
+    Int x2 = x1 * (2 - n0 * x1);
+    Int x3 = x2 * (2 - n0 * x2);
+    Int x4 = x3 * (2 - n0 * x3);
+    return x4 & bn_mask();
+}
+
+// -n^{-1} mod 2^16 for the low limb of n.
+pub Int bn_neg_inv(Int n0) {
+    Int inv = bn_inv16(n0);
+    Int neg = 65536 - inv;
+    return neg & bn_mask();
+}
+
+// Sum term walk: t_j + Σ_{i<j} m_i * n_{j-i}.
+pub Int bn_m_sum(List(Int) t, List(Int) n, List(Int) m, Int i, Int j, Int s) {
+    if (i >= j) { return s; }
+    Int mi = bn_get(m, i);
+    Int k = j - i;
+    Int nk = bn_get(n, k);
+    Int s2 = s + mi * nk;
+    Int ni = i + 1;
+    return bn_m_sum(t, n, m, ni, j, s2);
+}
+
+// ─── Montgomery reduction ────────────────────────────────────────────
+// ninv = -n^{-1} mod b^w is computed once by Newton lifting with the
+// bignum ops themselves; REDC is then t + ninv*t_low*n shifted right
+// by w limbs — all row-based, append-only.
+
+pub Bool bn_is_zero_acc(List(Int) l, Int i, Int w) {
+    if (i >= w) { return true; }
+    Int v = bn_get(l, i);
+    if (v != 0) { return false; }
+    Int ni = i + 1;
+    return bn_is_zero_acc(l, ni, w);
+}
+
+pub Bool bn_is_zero(List(Int) l, Int w) {
+    return bn_is_zero_acc(l, 0, w);
+}
+
+pub List(Int) bn_trunc(List(Int) l, Int k) {
+    return der_slice_seeded(l, 1, k);
+}
+
+// Two's-complement negate modulo b^k: complement each limb, add 1.
+pub List(Int) bn_neg_list_comp(List(Int) p, Int k, Int i, List(Int) acc) {
+    if (i >= k) { return acc; }
+    Int pi = bn_get(p, i);
+    Int comp = 65535 - pi;
+    List(Int) acc2 = acc.concat([comp]);
+    Int ni = i + 1;
+    return bn_neg_list_comp(p, k, ni, acc2);
+}
+
+pub List(Int) bn_neg_list(List(Int) p, Int k) {
+    List(Int) comp = bn_neg_list_comp(p, k, 0, [0]);
+    List(Int) one = bn_one(k);
+    return bn_add_acc(comp, one, k, 0, 0, k, k, [0]);
+}
+
+// (2 - n*x) mod b^k, where inputs are already truncated to k limbs.
+pub List(Int) bn_two_minus(List(Int) nk, List(Int) x, Int k) {
+    List(Int) p = bn_mul(nk, x, k);
+    List(Int) pt = bn_trunc(p, k);
+    Bool z = bn_is_zero(pt, k);
+    if (z) {
+        return bn_one_at2(k);
+    }
+    List(Int) neg = bn_neg_list(pt, k);
+    List(Int) two = bn_one_at2(k);
+    List(Int) r = bn_add_acc(neg, two, k, 0, 0, k, k, [0]);
+    return r;
+}
+
+// [2, 0, 0, ...] with k limbs.
+pub List(Int) bn_one_at2(Int k) {
+    List(Int) z = bn_zero(k);
+    return bn_set(z, 0, 2);
+}
+
+// Zero-extend a k-limb value to kto limbs.
+pub List(Int) bn_pad_to(List(Int) l, Int k, Int kto) {
+    List(Int) base = der_slice_seeded(l, 1, k);
+    Int zc = kto - k;
+    List(Int) z = bn_zeros(zc, [0]);
+    return bn_cat(base, z);
+}
+
+pub List(Int) bn_inv_pow2_step(List(Int) n, List(Int) x, Int k, Int w) {
+    if (k >= w) { return x; }
+    Int k2t = k + k;
+    Int k2 = if (k2t > w) { w } else { k2t };
+    List(Int) nk = bn_trunc(n, k2);
+    List(Int) xt = bn_trunc(x, k);
+    List(Int) xk = bn_pad_to(xt, k, k2);
+    List(Int) f = bn_two_minus(nk, xk, k2);
+    List(Int) xf = bn_mul(xk, f, k2);
+    List(Int) x2 = bn_trunc(xf, k2);
+    return bn_inv_pow2_step(n, x2, k2, w);
+}
+
+// -n^{-1} mod b^w. Lifts the POSITIVE inverse by Newton doubling from
+// the single-digit seed, negates once at the end.
+pub List(Int) bn_neg_inv_wide(List(Int) n, Int n0, Int w) {
+    List(Int) seed = bn_one_at2(w);
+    List(Int) seed1 = bn_set(seed, 0, n0);
+    List(Int) inv = bn_inv_pow2_step(n, seed1, 1, w);
+    return bn_neg_list(inv, w);
+}
+
+pub List(Int) bn_redc_sub(List(Int) r, List(Int) npad, Int tries) {
+    if (tries <= 0) { return r; }
+    Int w = npad.len() - 1;
+    Int c = bn_cmp(r, npad, w);
+    if (c < 0) { return r; }
+    List(Int) d = bn_sub(r, npad, w);
+    Int t2 = tries - 1;
+    return bn_redc_sub(d, npad, t2);
+}
+
+// REDC: returns t * R^{-1} mod n for R = b^w. t must be < n*R
+// (2w limbs). ninv = -n^{-1} mod b^w.
+pub List(Int) bn_redc(List(Int) t, List(Int) n, List(Int) ninv, Int w) {
+    List(Int) tlow = bn_trunc(t, w);
+    List(Int) m = bn_trunc(bn_mul(tlow, ninv, w), w);
+    List(Int) mn = bn_mul(m, n, w);
+    Int w2 = w + w;
+    Int out = w2 + 1;
+    Int tl = t.len() - 1;
+    List(Int) s = bn_add_acc(t, mn, out, 0, 0, tl, w2, [0]);
+    // take limbs w..2w (the >> R part), width w+1
+    Int lo = w + 1;
+    Int hi = w2 + 1;
+    List(Int) h = der_slice_seeded(s, lo, hi);
+    List(Int) npad = n.concat([0]);
+    List(Int) r = bn_redc_sub(h, npad, 3);
+    // drop the (zero) top limb back to width w
+    return der_slice_seeded(r, 1, w);
+}
+
+// Montgomery multiply of values already in Montgomery form.
+pub List(Int) bn_mulmon(List(Int) a, List(Int) b, List(Int) n, List(Int) ninv, Int w) {
+    List(Int) p = bn_mul(a, b, w);
+    return bn_redc(p, n, ninv, w);
+}
+
+// Highest set bit of a small Int (-1 if zero).
+pub Int bn_hibit(Int e, Int k) {
+    if (k < 0) { return 0; }
+    Int eb = (e >> k) & 1;
+    if (eb > 0) { return k; }
+    Int nk = k - 1;
+    return bn_hibit(e, nk);
+}
+
+pub List(Int) bn_montexp_bits(List(Int) aM, Int e, List(Int) n, List(Int) ninv, Int w, Int bit, List(Int) acc) {
+    if (bit < 0) { return acc; }
+    Int nb = bit - 1;
+    List(Int) sq = bn_mulmon(acc, acc, n, ninv, w);
+    Int eb = (e >> bit) & 1;
+    if (eb > 0) {
+        List(Int) m = bn_mulmon(sq, aM, n, ninv, w);
+        return bn_montexp_bits(aM, e, n, ninv, w, nb, m);
+    }
+    return bn_montexp_bits(aM, e, n, ninv, w, nb, sq);
+}
+
+// base^e mod n via Montgomery. base must be < n; n odd.
+pub List(Int) bn_montexp(List(Int) base, Int e, List(Int) n, Int w) {
+    Int n0 = bn_get(n, 0);
+    Int inv1 = bn_inv16(n0);
+    List(Int) ninv = bn_neg_inv_wide(n, inv1, w);
+    Int r2bits = w + w;
+    Int r2b = r2bits * 16;
+    List(Int) r2m = bn_pow2_mod(r2b, n, w);
+    List(Int) aM = bn_mulmon(base, r2m, n, ninv, w);
+    Int top = bn_hibit(e, 31);
+    Int first = top - 1;
+    List(Int) acc = bn_montexp_bits(aM, e, n, ninv, w, first, aM);
+    return bn_redc(acc, n, ninv, w);
+}
+
+
+
+
+// ─── Modexp ──────────────────────────────────────────────────────────
+
+// Bit k of a plain Int exponent.
+pub Int bn_bit_of_int(Int exp, Int k) {
+    return (exp >> k) & 1;
+}
+
+// Square-and-multiply scanning exponent bits from `bit` downwards.
+pub List(Int) bn_modexp_bits(List(Int) val, Int exp, List(Int) n, Int w, Int bit, List(Int) r) {
+    if (bit < 0) { return r; }
+    Int nb = bit - 1;
+    List(Int) sq = bn_mulmod(r, r, n, w);
+    Int eb = bn_bit_of_int(exp, bit);
+    if (eb > 0) {
+        List(Int) m = bn_mulmod(sq, val, n, w);
+        return bn_modexp_bits(val, exp, n, w, nb, m);
+    }
+    return bn_modexp_bits(val, exp, n, w, nb, sq);
+}
+
+// base^e mod n; e is a small public exponent (< 2^32).
+pub List(Int) bn_modexp(List(Int) base, Int e, List(Int) n, Int w) {
+    List(Int) v0 = bn_mod(base, w, n, w);
+    Int top = 31;
+    List(Int) r = bn_one(w);
+    return bn_modexp_bits(v0, e, n, w, top, r);
+}
+
+// ─── Byte conversion ─────────────────────────────────────────────────
+
+// Big-endian byte list (seeded) of exactly 2w bytes → w limbs LE.
+pub List(Int) bn_from_be_acc(List(Int) bytes, Int w, Int k, Int total, List(Int) acc) {
+    if (k >= w) { return acc; }
+    Int hi_pos = total - k * 2 - 1;
+    Int lo_pos = hi_pos + 1;
+    Int hb = bytes[hi_pos];
+    Int lb = bytes[lo_pos];
+    Int limb = hb * 256 + lb;
+    List(Int) acc2 = acc.concat([limb]);
+    Int nk = k + 1;
+    return bn_from_be_acc(bytes, w, nk, total, acc2);
+}
+
+pub List(Int) bn_from_be(List(Int) bytes, Int w) {
+    Int total = w + w;
+    return bn_from_be_acc(bytes, w, 0, total, [0]);
+}
+
+// ─── PKCS#1 v1.5 (SHA-256) verification ──────────────────────────────
+
+// EM = 00 01 FF..FF 00 || DigestInfo(SHA-256) || digest, k bytes long.
+// DigestInfo prefix: 30 31 30 0d 06 09 60 86 48 01 65 03 04 02 01 05 00 04 20
+pub List(Int) pkcs1_digestinfo_prefix() {
+    return [0, 48, 49, 48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 1, 5, 0, 4, 32];
+}
+
+pub List(Int) pkcs1_ff(Int count, List(Int) acc) {
+    if (count <= 0) { return acc; }
+    List(Int) acc2 = acc.concat([255]);
+    Int c2 = count - 1;
+    return pkcs1_ff(c2, acc2);
+}
+
+// Build the expected EM as a seeded byte list of exactly k bytes.
+pub List(Int) pkcs1_em_sha256(List(Int) digest, Int k) {
+    List(Int) head = [0, 0, 1];
+    Int pslen = k - 3 - 51;
+    List(Int) ps = pkcs1_ff(pslen, head);
+    List(Int) sep = ps.concat([0]);
+    List(Int) pre = pkcs1_digestinfo_prefix();
+    List(Int) di = bn_cat(sep, pre);
+    return bn_cat(di, digest);
+}

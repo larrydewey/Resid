@@ -1,4 +1,4 @@
-import "ed25519.res";
+import "ed25519.resid";
 Str hexs(List(Int) bs) {
     return hex_range_b(bs, 1, 32, "");
 }

@@ -3570,7 +3570,7 @@ fn bootstrap_sources_parse_clean() {
         .unwrap()
         .parent()
         .unwrap();
-    for name in ["typecheck.res", "lexer.res", "parser.res"] {
+    for name in ["typecheck.resid", "lexer.resid", "parser.resid"] {
         let src = std::fs::read_to_string(root.join("examples").join(name)).unwrap();
         let (unit, errors) = Parser::parse(name, &src);
         assert!(

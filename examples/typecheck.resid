@@ -458,7 +458,7 @@ Tok lex_tok(Str s, Int pos) {
 // ─── Environment: List(Str) of "name:type" entries ─────────────
 
 // ─── Import resolution (self-hosting milestone) ─────────────────────
-// `import "x.res";` lines pull the named file (relative to the importing
+// `import "x.resid";` lines pull the named file (relative to the importing
 // file's directory) into the compilation: its declarations are typechecked
 // and codegen'd alongside the importer. Diamond imports are deduplicated
 // by resolved path; depth is capped to cut cycles.

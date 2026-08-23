@@ -1,4 +1,4 @@
-import "ed25519.res";
+import "ed25519.resid";
 pub Int(256) mrec(Int(256) acc, Int k, Int i) {
     if (i < 0) { return acc; }
     Int ni = i - 1;
