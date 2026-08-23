@@ -260,8 +260,15 @@ fn build_native(file: &str, unit: &TranslationUnit, out: Option<&str>) -> Result
             if let Err(e) = store.flush() {
                 eprintln!("cache flush error: {e}");
             }
-            // Signed provenance trailer (spec §27/§34): embed build facts
-            // and sign them with the local Ed25519 key, when one exists.
+            // Signed provenance trailer (spec §27/§34). Confidential
+            // reservation (§35): RESID_PROV_ENCRYPT=1 + RESID_PROV_KEY wraps
+            // the payload in COSE_Encrypt0 (experimental cipher, cose.rs).
+            let prov_encrypt = env::var("RESID_PROV_ENCRYPT").map(|v| v == "1").unwrap_or(false);
+            let enc_key = env::var("RESID_PROV_KEY").ok();
+            if prov_encrypt && enc_key.is_none() {
+                eprintln!("error: RESID_PROV_ENCRYPT=1 requires RESID_PROV_KEY=<64 hex chars>");
+                return Err(ExitCode::FAILURE);
+            }
             if let Some(sec) = ensure_signing_key_interactive() {
                 let mut bytes = match fs::read(out) {
                     Ok(b) => b,
@@ -286,7 +293,23 @@ fn build_native(file: &str, unit: &TranslationUnit, out: Option<&str>) -> Result
                 resid_cache::cbor::write_text(&mut payload, out);
                 resid_cache::cbor::write_text(&mut payload, "notes");
                 resid_cache::cbor::write_bytes(&mut payload, &resid_notes::to_cbor(&notes));
-                if let Err(e) = resid_build::provenance::seal(&mut bytes, &payload, &sec) {
+                let signed_payload = if prov_encrypt {
+                    match resid_build::cose::encrypt0_seal(
+                        &payload,
+                        enc_key.as_deref().unwrap(),
+                        "resid-prov",
+                    ) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            eprintln!("error: {e}");
+                            return Err(ExitCode::FAILURE);
+                        }
+                    }
+                } else {
+                    payload
+                };
+                let tag = if prov_encrypt { "encrypt0+sign1" } else { "sign1" };
+                if let Err(e) = resid_build::provenance::seal(&mut bytes, &signed_payload, &sec) {
                     eprintln!("error: {e}");
                     return Err(ExitCode::FAILURE);
                 }
@@ -294,7 +317,10 @@ fn build_native(file: &str, unit: &TranslationUnit, out: Option<&str>) -> Result
                     eprintln!("error: cannot write sealed binary '{out}': {e}");
                     return Err(ExitCode::FAILURE);
                 }
-                eprintln!("provenance: signed ({} notes)", notes.len());
+                eprintln!(
+                    "provenance: signed [{}] ({} notes)",
+                    tag, notes.len()
+                );
             }
             Ok(())
         }
@@ -512,9 +538,14 @@ fn cmd_verify(bin_path: &str) -> ExitCode {
         eprintln!("error: no public key at {KEY_DIR}/resid-ed25519.pub");
         return ExitCode::FAILURE;
     };
+    let concealed = matches!(resid_build::provenance::payload_kind(&bytes), Some("encrypt0"));
     match resid_build::provenance::verify_full(&bytes, &pub_hex) {
         Ok((true, true)) => {
-            println!("provenance: SIGNATURE OK — code and build facts are authentic");
+            if concealed {
+                println!("provenance: SIGNATURE OK (encrypted payload; code hash sealed inside)");
+            } else {
+                println!("provenance: SIGNATURE OK — code and build facts are authentic");
+            }
             println!(
                 "payload: {} bytes, sha256 {}",
                 payload.len(),
@@ -579,7 +610,7 @@ fn cmd_verify_sidecar(name: &str, bytes: &[u8]) -> ExitCode {
             }
         }
     }
-    match resid_build::provenance::verify(payload.as_bytes(), &sig_bytes, &pub_hex) {
+    match resid_build::provenance::verify_raw(payload.as_bytes(), &sig_bytes, &pub_hex) {
         Ok(true) => {
             println!("provenance: SIGNATURE OK (sidecar)");
             println!("payload: {payload}");
