@@ -759,6 +759,12 @@ Bool is_list_type(Str t) {
     return str_has_prefix(t, "List(");
 }
 
+Bool arith_family(Str name) {
+    if (str_starts_with(name, "checked_")) { return true; }
+    if (str_starts_with(name, "wrapping_")) { return true; }
+    if (str_starts_with(name, "saturating_")) { return true; }
+    return false;
+}
 ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
     if (name == "println") {
         if (argc == 1) {
@@ -952,6 +958,10 @@ ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
     if (name == "resid_crypto_random_byte") {
         if (argtys == "") { return ERes { pos: pos, ty: "Int", err: "" }; }
         return ERes { pos: pos, ty: "", err: "resid_crypto_random_byte expects no arguments" };
+    }
+    if (arith_family(name)) {
+        if (argtys == "Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: name + " expects (Int, Int), got (" + argtys + ")" };
     }
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
