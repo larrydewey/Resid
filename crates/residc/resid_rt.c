@@ -16,6 +16,7 @@
 #include <string.h>
 #include <limits.h>
 #include <pthread.h>
+#include <sys/random.h>
 
 bool print(const char* s) {
     if (fputs(s, stdout) == EOF) return false;
@@ -2277,3 +2278,18 @@ char* bl_str_join(void* box, const char* sep) {
     return p;
 }
 
+
+/* ─── Stdlib v1.6: OS entropy hook ───
+   The only crypto piece allowed in C: entropy must come from the operating
+   system. One byte per call; everything else is assembled in Resid. */
+int64_t resid_crypto_random_byte(void) {
+    unsigned char b = 0;
+    if (getrandom(&b, 1, 0) != 1) {
+        /* fallback: /dev/urandom */
+        FILE* f = fopen("/dev/urandom", "rb");
+        if (!f) resid_abort("crypto_random_byte: no entropy source");
+        if (fread(&b, 1, 1, f) != 1) resid_abort("crypto_random_byte: read failed");
+        fclose(f);
+    }
+    return (int64_t)b;
+}

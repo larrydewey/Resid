@@ -587,3 +587,25 @@ pub List(Int) pbkdf2_hmac_sha256(List(Int) pass, List(Int) salt, Int iters, Int 
     Int rem = iters - 1;
     return pbkdf2_f(u1, pass, rem, u1);
 }
+
+// ─── Secure randomness (OS entropy via runtime hook) ────────────
+// The single C boundary in the library: entropy must come from the OS.
+// Everything above this line is pure Resid.
+
+pub List(Int) rand_acc(List(Int) acc, Int n, Int i) {
+    if (i > n) { return acc; }
+    Int b = resid_crypto_random_byte();
+    List(Int) acc2 = acc.concat([b]);
+    Int ni = i + 1;
+    return rand_acc(acc2, n, ni);
+}
+
+// n cryptographically random bytes, seeded list.
+pub List(Int) random_bytes(Int n) {
+    List(Int) seeded0 = [0];
+    return rand_acc(seeded0, n, 1);
+}
+
+pub Str random_hex(Int nbytes) {
+    return hex_encode(random_bytes(nbytes));
+}

@@ -2560,3 +2560,48 @@ Int main() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Crypto v4: OS-entropy randomness assembled in Resid.
+#[test]
+fn run_crypto_randomness() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-rnd-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "crypto.res";
+Int main() {
+    Str h1 = random_hex(32);
+    Str h2 = random_hex(32);
+    println(IntToString(str_len(h1)));
+    println(IntToString(str_len(h2)));
+    if (h1 == h2) {
+        println("SAME");
+    } else {
+        println("DIFFERENT");
+    }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines[0], "64", "{stdout:?}");
+    assert_eq!(lines[1], "64", "{stdout:?}");
+    assert_eq!(lines[2], "DIFFERENT", "{stdout:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
