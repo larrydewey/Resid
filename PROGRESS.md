@@ -11,8 +11,8 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 583 pass (lexer 17, parser 91, resid-ir 46, resid-type 195,
-  resid-codegen 137, resid-build 12, resid-fmt 5, residc 50 incl. e2e).
+- **Tests**: 584 pass (lexer 17, parser 91, resid-ir 46, resid-type 195,
+  resid-codegen 137, resid-build 12, resid-fmt 5, residc 51 incl. e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -2188,9 +2188,10 @@ development, both worth remembering:
    mirror of the Resid code.
 2. Shift counts >= 64 wrap mod 64 on x86 (LLVM lowers to machine shifts), so
    `bits >> 64` silently returns `bits`. SHA-512's 16-byte length field needs
-   shifts up to 120; fixed with an `shr_big` step-down helper. OPEN LANGUAGE
-   QUESTION: consider making codegen reject shift counts >= bit width or emit
-   safe multi-step shifts.
+   shifts up to 120; worked around in the library with an `shr_big` step-down
+   helper. LANGUAGE-LEVEL FIX (done): codegen now guards every integer shift —
+   counts >= bit width select a zero result instead of wrapping mod width
+   (`x >> 64 == 0`, e2e `run_shift_overflow_yields_zero`).
 
 Recommended approach for resuming:
 1. Write a Python simulator that mirrors lib/crypto.res function-by-function
