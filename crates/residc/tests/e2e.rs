@@ -2474,6 +2474,67 @@ Int main() {
 
 
 
+
+/// `else if` chains parse and execute correctly in both the Rust pipeline
+/// and the stage-2 bootstrap compiler (regression: parser never consumed
+/// the `if` after `else`; stage-2 codegen had no chain support).
+#[test]
+fn run_else_if_chain() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-elseif-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    for (x, want) in [("5", "big"), ("2", "mid"), ("0", "small")] {
+        let file = dir.join("main.resid");
+        std::fs::write(
+            &file,
+            format!(
+                r#"
+Int main() {{
+    Int x = {x};
+    if (x > 3) {{
+        println("big");
+    }} else if (x > 1) {{
+        println("mid");
+    }} else {{
+        println("small");
+    }}
+    return 0;
+}}
+"#
+            ),
+        )
+        .unwrap();
+        // Rust pipeline
+        let out = Command::new(residc_bin())
+            .arg(&file)
+            .arg("run")
+            .output()
+            .expect("failed to run residc");
+        assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), want, "rust pipe x={x}");
+        // Stage-2 bootstrap pipeline
+        let bin = dir.join(format!("drv_{x}"));
+        let out2 = Command::new(residc_bin())
+            .arg(workspace.join("examples/driver.res"))
+            .arg("run")
+            .arg(&file)
+            .arg("-o")
+            .arg(&bin)
+            .arg("-rt")
+            .arg(workspace.join("crates/residc/resid_rt.c"))
+            .output()
+            .expect("failed to run driver");
+        assert_eq!(out2.status.code(), Some(0), "{}", String::from_utf8_lossy(&out2.stderr));
+        let out3 = Command::new(&bin).output().expect("failed to exec");
+        assert_eq!(String::from_utf8_lossy(&out3.stdout).trim(), want, "stage-2 x={x}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Ed25519 deterministic signing in pure Resid: derived pubkey matches the
 /// RFC 8032 test-1 vector, signed message verifies, tampered fails.
 #[test]
