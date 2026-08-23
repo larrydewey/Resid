@@ -11,8 +11,8 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 577 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
-  resid-codegen 137, resid-build 12, resid-fmt 5, residc 43 e2e).
+- **Tests**: 583 pass (lexer 17, parser 91, resid-ir 46, resid-type 195,
+  resid-codegen 137, resid-build 12, resid-fmt 5, residc 50 incl. e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -2179,15 +2179,18 @@ narrowing, Dec precision rounding, nominal sums, and range binds. Previous — h
 
 ### 14.1 Ed25519 in pure Resid (next crypto milestone)
 
-STATUS UPDATE: SHA-512-in-Resid is ~80% implemented on a 32-bit limb-pair
-representation (`[0, hi, lo]` triples; schedule, rounds, padding all in
-place). Two bugs were found and fixed along the way (missing recursion
-guard in ext512_flat; k512_limb_at seed-offset error). Remaining: digests
-still diverge from reference — first mismatch appears in the message
-schedule extension (word ≥ 18). Debugging artifacts are preserved at
-/tmp/sha512wip/ (not committed; regenerate from this description).
-Debugging is slow because each fix requires a full recompile+run cycle
-through the compiler under test.
+DONE: SHA-512 is implemented in pure Resid (32-bit limb pairs, `[0, hi, lo]`
+triples) and verified against FIPS 180-4 vectors including a multi-block
+(200-byte) message — e2e `run_sha512_in_resid`. Two bugs were found during
+development, both worth remembering:
+1. `w64_shr_small` dropped the shifted high limb (`w64(0, ...)` instead of
+   `w64(hi >> n, ...)`) — found by diffing against a Python function-by-function
+   mirror of the Resid code.
+2. Shift counts >= 64 wrap mod 64 on x86 (LLVM lowers to machine shifts), so
+   `bits >> 64` silently returns `bits`. SHA-512's 16-byte length field needs
+   shifts up to 120; fixed with an `shr_big` step-down helper. OPEN LANGUAGE
+   QUESTION: consider making codegen reject shift counts >= bit width or emit
+   safe multi-step shifts.
 
 Recommended approach for resuming:
 1. Write a Python simulator that mirrors lib/crypto.res function-by-function

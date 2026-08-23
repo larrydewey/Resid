@@ -2470,6 +2470,53 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+
+/// SHA-512 in pure Resid (32-bit limb pairs) — FIPS 180-4 vectors incl. multi-block.
+#[test]
+fn run_sha512_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sha512-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "crypto.res";
+List(Int) n_as(Int k, List(Int) acc) {
+    if (k == 0) { return acc; }
+    List(Int) acc2 = acc.concat([97]);
+    Int k2 = k - 1;
+    return n_as(k2, acc2);
+}
+Int main() {
+    println(hex_encode(sha512_bytes(bytes_of(""))));
+    println(hex_encode(sha512_bytes(bytes_of("abc"))));
+    println(hex_encode(sha512_bytes(n_as(200, [0]))));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        stdout.trim(),
+        "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e\nddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f\n4b11459c33f52a22ee8236782714c150a3b2c60994e9acee17fe68947a3e6789f31e7668394592da7bef827cddca88c4e6f86e4df7ed1ae6cba71f3e98faee9f",
+        "{stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// HMAC-SHA256 in pure Resid — RFC 4231-style vectors via lib/crypto.res.
 #[test]
 fn run_hmac_sha256_in_resid() {
