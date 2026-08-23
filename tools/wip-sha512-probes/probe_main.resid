@@ -1,0 +1,17 @@
+import "crypto.res";
+Str rep(Str acc, Int n) {
+    if (n <= 0) { return acc; }
+    Int n1 = n - 1;
+    return rep(acc + "a", n1);
+}
+Int main() {
+    List(Int) m = bytes_of(rep("", 100));
+    println(IntToString(m.len()));
+    List(Int) p = pad512(m);
+    println(IntToString(p.len()));
+    List(Int) st = digest_block512f(p, 0, h512_state());
+    println("b0");
+    List(Int) st2 = digest_block512f(p, 128, st);
+    println("b1");
+    return 0;
+}

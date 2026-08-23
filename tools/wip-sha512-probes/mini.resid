@@ -1,0 +1,34 @@
+Int m64(Int x) {
+    return x & 18446744073709551615;
+}
+List(Int) build() {
+    List(Int) raw = [
+        1779033703, 3144134277, 1013904242, 2773480762,
+        1359893119, 2600822924, 528734635, 1541459225,
+        4089235720, 2227873595, 4271175723, 1595750129,
+        2917565137, 725511199, 4215389547, 327033209,
+    ];
+    Int r0 = m64(raw[0]);
+    Int r1 = m64(raw[1]);
+    Int r2 = m64(raw[2]);
+    Int r3 = m64(raw[3]);
+    Int r4 = m64(raw[4]);
+    Int r5 = m64(raw[5]);
+    Int r6 = m64(raw[6]);
+    Int r7 = m64(raw[7]);
+    Int r8 = m64(raw[8]);
+    Int r9 = m64(raw[9]);
+    Int r10 = m64(raw[10]);
+    Int r11 = m64(raw[11]);
+    Int r12 = m64(raw[12]);
+    Int r13 = m64(raw[13]);
+    Int r14 = m64(raw[14]);
+    Int r15 = m64(raw[15]);
+    return [0, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15];
+}
+Int main() {
+    List(Int) s = build();
+    println(IntToString(s.len()));
+    println(IntToString(s[1]));
+    return 0;
+}
