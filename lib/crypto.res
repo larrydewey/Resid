@@ -461,3 +461,129 @@ pub List(Int) hmac_sha256_bytes(List(Int) key, List(Int) msg) {
     List(Int) outer_input = sconcat(opad_b, inner);
     return sha256_bytes(outer_input);
 }
+
+
+// ─── Constant-time equality ─────────────────────────────────────
+// Accumulates the OR of every byte XOR so all byte positions influence
+// the final comparison identically. Length mismatch returns false
+// immediately (length is not treated as secret).
+
+pub Bool ct_equal(List(Int) a, List(Int) b) {
+    if (a.len() != b.len()) { return false; }
+    Int d = ct_acc(a, b, 1, 0);
+    return d == 0;
+}
+
+pub Int ct_acc(List(Int) a, List(Int) b, Int i, Int acc) {
+    if (i > a.len() - 1) { return acc; }
+    Int x = a[i] ^ b[i];
+    Int acc2 = acc | x;
+    Int ni = i + 1;
+    return ct_acc(a, b, ni, acc2);
+}
+
+// ─── Base64 (RFC 4648 standard alphabet, padded) ────────────────
+
+pub Str b64_char(Int v) {
+    if (v < 26) {
+        Int c = v + 65;
+        return str_from_code(c);
+    }
+    if (v < 52) {
+        Int c26 = v + 71;
+        return str_from_code(c26);
+    }
+    if (v < 62) {
+        Int c52 = v - 4;
+        return str_from_code(c52);
+    }
+    if (v == 62) { return "+"; }
+    return "/";
+}
+
+// Hex-encode helper for byte lists is hex_encode; base64 here:
+pub Str base64_encode(List(Int) bytes) {
+    Int end = bytes.len() - 1;
+    return b64_enc(bytes, 1, end, "");
+}
+
+pub Str b64_enc(List(Int) bytes, Int i, Int end, Str acc) {
+    if (i > end) { return acc; }
+    Int rem = (end - i) + 1;
+    if (rem >= 3) {
+        Int b0 = bytes[i];
+        Int o1 = i + 1;
+        Int b1 = bytes[o1];
+        Int o2 = i + 2;
+        Int b2 = bytes[o2];
+        Int s16 = b1 << 8;
+        Int nraw = (b0 << 16) | s16;
+        Int n = nraw | b2;
+        Int q6 = (n >> 18) & 63;
+        Str c0 = b64_char(q6);
+        Int m12 = (n >> 12) & 63;
+        Str c1 = b64_char(m12);
+        Int m6 = (n >> 6) & 63;
+        Str c2 = b64_char(m6);
+        Str c3 = b64_char(n & 63);
+        Str acc2 = ((acc + c0) + c1) + c2;
+        Str acc3 = acc2 + c3;
+        Int ni = i + 3;
+        return b64_enc(bytes, ni, end, acc3);
+    }
+    if (rem == 2) {
+        Int b0 = bytes[i];
+        Int o1 = i + 1;
+        Int b1 = bytes[o1];
+        Int s8 = b1 << 8;
+        Int n = (b0 << 16) | s8;
+        Int q6 = (n >> 18) & 63;
+        Str c0 = b64_char(q6);
+        Int m12 = (n >> 12) & 63;
+        Str c1 = b64_char(m12);
+        Int m6 = (n >> 6) & 63;
+        Str c2 = b64_char(m6);
+        Str acc2 = ((acc + c0) + c1) + c2;
+        return acc2 + "==";
+    }
+    Int b0 = bytes[i];
+    Int n = b0 << 16;
+    Int q6 = (n >> 18) & 63;
+    Str c0 = b64_char(q6);
+    Int m12 = (n >> 12) & 63;
+    Str c1 = b64_char(m12);
+    Str acc2 = (acc + c0) + c1;
+    return acc2 + "=";
+}
+
+// ─── PBKDF2-HMAC-SHA256 (RFC 2898 §5.2) ────────────────────────
+// Single output block per call: dklen implicitly 32 bytes.
+
+pub List(Int) pbkdf2_f(List(Int) u_prev, List(Int) pass, Int remaining, List(Int) acc) {
+    if (remaining <= 0) { return acc; }
+    List(Int) u = hmac_sha256_bytes(pass, u_prev);
+    List(Int) acc2 = pbkdf2_xor_acc(acc, u, 1);
+    Int rem2 = remaining - 1;
+    return pbkdf2_f(u, pass, rem2, acc2);
+}
+
+pub List(Int) pbkdf2_xor_acc(List(Int) acc, List(Int) u, Int i) {
+    if (i > u.len() - 1) { return acc; }
+    Int nv = (acc[i] ^ u[i]) & 255;
+    List(Int) acc2 = ls_set(acc, i, nv);
+    Int ni = i + 1;
+    return pbkdf2_xor_acc(acc2, u, ni);
+}
+
+pub List(Int) pbkdf2_hmac_sha256(List(Int) pass, List(Int) salt, Int iters, Int block_index) {
+    Int b3 = block_index & 255;
+    Int b2 = (block_index >> 8) & 255;
+    Int b1 = (block_index >> 16) & 255;
+    Int b0 = (block_index >> 24) & 255;
+    List(Int) idx_raw = [b0, b1, b2, b3];
+    List(Int) idx = seeded(idx_raw);
+    List(Int) salt_idx = sconcat(salt, idx);
+    List(Int) u1 = hmac_sha256_bytes(pass, salt_idx);
+    Int rem = iters - 1;
+    return pbkdf2_f(u1, pass, rem, u1);
+}
