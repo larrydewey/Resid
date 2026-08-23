@@ -11,7 +11,7 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 574 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
+- **Tests**: 575 pass (lexer 17, parser 104, resid-ir 46, resid-type 195,
   resid-codegen 137, resid-build 12, resid-fmt 5, residc 43 e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
@@ -1802,8 +1802,11 @@ family overrides scopes. **Unicode casing done**: `str_to_lower`/`str_to_upper`
   through both pipelines incl. stage-2. Bootstrap fixes it forced: `pub`
   declarations were misparsed by checker/sig-collector/emitter (off-by-one
   token skips), and the bootstrap checker lacked bitwise/shift operators
-  entirely (added with spec §30 precedences). Previously Resid programs had a
-  pure-C stdlib builtin sha256 (FIPS 180-4,
+  entirely (added with spec §30 precedences). **Crypto library v2**: byte-level
+  core (`sha256_bytes`, `words_to_bytes`, `hex_encode`, seeded-list convention)
+  plus HMAC-SHA256 (RFC 2104) verified against RFC 4231 vectors incl. long-key
+  hashing and empty key/message; `sconcat` fixes seeded-list concatenation.
+  Previously Resid programs had a pure-C stdlib builtin sha256 (FIPS 180-4,
   digests verified against reference implementations); asymmetric crypto
   deliberately stays at tool level rather than hand-rolling curve math in C.
   Still missing: registry distribution, transitive dep resolution. |

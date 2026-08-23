@@ -319,3 +319,145 @@ pub Str sha256(Str msg) {
     List(Int) hd = digest_blocks(padded, 0, total, h0);
     return hex_state(hd, 0, "");
 }
+
+// ─── Byte-level digest core (v2) ────────────────────────────────
+// All lists use the seeded convention: index 0 is a dummy, real data
+// starts at index 1. Lists can hold zero bytes, unlike Str.
+
+pub List(Int) seeded(List(Int) xs) {
+    List(Int) s = [0];
+    return s.concat(xs);
+}
+
+pub Int word_byte(List(Int) words, Int wi, Int bi) {
+    Int sh = (3 - bi) * 8;
+    Int b = (words[wi] >> sh) & 255;
+    return b;
+}
+
+pub List(Int) wtb_inner(List(Int) words, Int wi, Int bi, List(Int) acc) {
+    if (bi > 3) { return acc; }
+    Int b = word_byte(words, wi, bi);
+    List(Int) acc2 = acc.concat([b]);
+    Int nbi = bi + 1;
+    return wtb_inner(words, wi, nbi, acc2);
+}
+
+pub List(Int) wtb_outer(List(Int) words, Int wi, List(Int) acc) {
+    if (wi > 7) { return acc; }
+    List(Int) acc2 = wtb_inner(words, wi, 0, acc);
+    Int nwi = wi + 1;
+    return wtb_outer(words, nwi, acc2);
+}
+
+// Eight 32-bit words → 32 big-endian bytes, seeded.
+pub List(Int) words_to_bytes(List(Int) words) {
+    List(Int) all = wtb_outer(words, 0, [0]);
+    return all;
+}
+
+// SHA-256 over a seeded byte list; returns the 32-byte digest seeded.
+pub List(Int) sha256_bytes(List(Int) msg) {
+    List(Int) h0 = [
+        1779033703, -1150833019, 1013904242, -1521486534,
+        1359893119, -1694144372, 528734635, 1541459225,
+    ];
+    List(Int) padded = pad_bytes(msg);
+    Int total = padded.len() - 1;
+    List(Int) hd = digest_blocks(padded, 0, total, h0);
+    return words_to_bytes(hd);
+}
+
+pub Str hex_range(List(Int) bytes, Int i, Int end, Str acc) {
+    if (i > end) { return acc; }
+    Str part = acc + hex_byte(bytes[i]);
+    Int ni = i + 1;
+    return hex_range(bytes, ni, end, part);
+}
+
+// Hex-encode a seeded byte list (indices 1..len).
+pub Str hex_encode(List(Int) bytes) {
+    Int end = bytes.len() - 1;
+    return hex_range(bytes, 1, end, "");
+}
+
+// ─── HMAC-SHA256 (RFC 2104) ─────────────────────────────────────
+
+pub // Concatenate two seeded lists, dropping the second's dummy so exactly one
+// seed remains.
+List(Int) sc_acc(List(Int) a, List(Int) b, Int i, List(Int) acc) {
+    if (i > b.len() - 1) { return acc; }
+    List(Int) acc2 = acc.concat([b[i]]);
+    Int ni = i + 1;
+    return sc_acc(a, b, ni, acc2);
+}
+
+pub List(Int) sconcat(List(Int) a, List(Int) b) {
+    return sc_acc(a, b, 1, a);
+}
+
+pub Int byte_at_or0(List(Int) a, Int i) {
+    if (i <= a.len() - 1) { return a[i]; }
+    return 0;
+}
+
+pub List(Int) xor_lists(List(Int) a, List(Int) b, Int i, List(Int) acc) {
+    if (i > b.len() - 1) { return acc; }
+    Int av = byte_at_or0(a, i);
+    Int x = (av ^ b[i]) & 255;
+    List(Int) acc2 = acc.concat([x]);
+    Int ni = i + 1;
+    return xor_lists(a, b, ni, acc2);
+}
+
+pub List(Int) key_block(List(Int) key) {
+    Int klen = key.len() - 1;
+    if (klen > 64) {
+        List(Int) hk = sha256_bytes(key);
+        Int padn = 64 - (hk.len() - 1);
+        List(Int) zeros = zeros_l([0], padn);
+        return sconcat(hk, zeros);
+    }
+    Int padn = 64 - klen;
+    List(Int) zeros = zeros_l([0], padn);
+    return sconcat(key, zeros);
+}
+
+List(Int) map_xor(List(Int) block, Int f, Int i, List(Int) acc) {
+    if (i > block.len() - 1) { return acc; }
+    Int v = block[i];
+    Int x = f(v);
+    List(Int) acc2 = acc.concat([x]);
+    Int ni = i + 1;
+    return map_xor(block, f, ni, acc2);
+}
+
+// Higher-order: Resid has no function values, so dispatch on a tag.
+pub List(Int) map_ipad(List(Int) block, Int i, List(Int) acc) {
+    if (i > block.len() - 1) { return acc; }
+    Int v = block[i];
+    Int x = (v ^ 54) & 255;
+    List(Int) acc2 = acc.concat([x]);
+    Int ni = i + 1;
+    return map_ipad(block, ni, acc2);
+}
+
+pub List(Int) map_opad(List(Int) block, Int i, List(Int) acc) {
+    if (i > block.len() - 1) { return acc; }
+    Int v = block[i];
+    Int x = (v ^ 92) & 255;
+    List(Int) acc2 = acc.concat([x]);
+    Int ni = i + 1;
+    return map_opad(block, ni, acc2);
+}
+
+// HMAC-SHA256 over seeded byte lists; returns the 32-byte MAC seeded.
+pub List(Int) hmac_sha256_bytes(List(Int) key, List(Int) msg) {
+    List(Int) kb = key_block(key);
+    List(Int) ipad_b = map_ipad(kb, 1, [0]);
+    List(Int) opad_b = map_opad(kb, 1, [0]);
+    List(Int) inner_input = sconcat(ipad_b, msg);
+    List(Int) inner = sha256_bytes(inner_input);
+    List(Int) outer_input = sconcat(opad_b, inner);
+    return sha256_bytes(outer_input);
+}
