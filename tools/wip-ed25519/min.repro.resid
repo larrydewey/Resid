@@ -1,0 +1,20 @@
+import "ed25519.res";
+pub Int(256) mrec(Int(256) acc, Int k, Int i) {
+    if (i < 0) { return acc; }
+    Int ni = i - 1;
+    Int(256) sh = i;
+    Int(256) mw = ((k >> sh) & 1);
+    Int bit = mw;
+    if (bit == 1) {
+        Int(256) nx = fe_add(acc, 1000000);
+        return mrec(nx, k, ni);
+    }
+    Int(256) dx = fe_add(acc, 1);
+    return mrec(dx, k, ni);
+}
+Int main() {
+    println(Int256ToString(mrec(7, 0, 2)));
+    println(Int256ToString(mrec(5, 0, 2)));
+    println(Int256ToString(mrec(3, 0, 2)));
+    return 0;
+}
