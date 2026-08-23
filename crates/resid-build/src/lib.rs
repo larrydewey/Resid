@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 pub mod archive;
 pub mod lock;
 pub mod provenance;
+pub mod registry;
 pub mod cose;
 
 use serde::Deserialize;
@@ -106,7 +107,12 @@ struct DepToml {
 #[derive(Deserialize)]
 struct RegistryToml {
     /// Directory containing <name>-<version>.resid-pkg archives.
-    path: String,
+    #[serde(default)]
+    path: Option<String>,
+    /// Remote registry base URL, e.g. "http://localhost:8137".
+    /// `path` takes precedence when both are set (offline wins).
+    #[serde(default)]
+    url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -216,17 +222,21 @@ impl Manifest {
         // paths is an error. Direct deps come first, then their deps, etc.
         let mut dependencies: Vec<Dependency> = Vec::new();
         let mut seen: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
-        let registry_dir = raw
-            .registry
-            .as_ref()
-            .map(|r| pkg_dir.join(&r.path));
+        let registry = raw.registry.as_ref().map(|r| match &r.path {
+            Some(path) => registry::Registry::Local(pkg_dir.join(path)),
+            None => registry::Registry::Remote(
+                r.url.clone().unwrap_or_else(|| {
+                    panic!("[registry] needs either `path` or `url`")
+                }),
+            ),
+        });
         // Lockfile: pin registry dependency content hashes (spec §28).
         let lock_path = pkg_dir.join("resid.lock");
         let mut lockfile = lock::read(&lock_path).unwrap_or_default();
         for (name, dep) in &raw.dependencies {
             let pinned = lockfile.get(name).cloned();
             let (dep_dir, entry) =
-                resolve_dep_dir(name, dep, registry_dir.as_deref(), &pkg_dir, pinned.as_ref())?;
+                resolve_dep_dir(name, dep, registry.as_ref(), &pkg_dir, pinned.as_ref())?;
             if let Some(e) = entry {
                 lockfile.set(e);
                 // Merge with any transitive pins written during recursion.
@@ -244,7 +254,7 @@ impl Manifest {
                 &mut dependencies,
                 &mut seen,
                 0,
-                registry_dir.as_deref(),
+                registry.as_ref(),
                 &pkg_dir,
             )?;
         }
@@ -344,23 +354,17 @@ pub struct Grant {
 fn resolve_dep_dir(
     name: &str,
     dep: &DepToml,
-    registry_dir: Option<&Path>,
+    reg: Option<&registry::Registry>,
     root_pkg_dir: &Path,
     pinned: Option<&lock::LockEntry>,
 ) -> Result<(PathBuf, Option<lock::LockEntry>), LoadError> {
     if let Some(ver) = &dep.version {
-        let reg = registry_dir.ok_or_else(|| {
+        let reg = reg.ok_or_else(|| {
             LoadError::Invalid(format!(
-                "dependency '{name}': version '{ver}' requested but no [registry] path is configured"
+                "dependency '{name}': version '{ver}' requested but no [registry] path or url is configured"
             ))
         })?;
-        let pkg_file = reg.join(format!("{name}-{ver}.resid-pkg"));
-        let archive_bytes = std::fs::read(&pkg_file).map_err(|e| {
-            LoadError::Invalid(format!(
-                "dependency '{name}': cannot read registry archive '{}': {e}",
-                pkg_file.display()
-            ))
-        })?;
+        let archive_bytes = reg.fetch_pkg(name, ver).map_err(LoadError::Invalid)?;
         let got = archive::hex_encode(&archive::content_hash(&archive_bytes));
         // Lockfile pin wins over the registry's sidecar .sha256 file.
         if let Some(pin) = pinned {
@@ -374,8 +378,7 @@ fn resolve_dep_dir(
                 )));
             }
         }
-        let sha_file = reg.join(format!("{name}-{ver}.resid-sha256"));
-        if let Ok(expect_hex) = std::fs::read_to_string(&sha_file) {
+        if let Some(expect_hex) = reg.fetch_sha(name, ver) {
             if got != expect_hex.trim() {
                 return Err(LoadError::Invalid(format!(
                     "dependency '{name}': archive hash mismatch (expected {}, got {got})",
@@ -422,7 +425,7 @@ fn collect_dep(
     out: &mut Vec<Dependency>,
     seen: &mut std::collections::HashMap<String, PathBuf>,
     depth: usize,
-    registry_dir: Option<&Path>,
+    reg: Option<&registry::Registry>,
     root_pkg_dir: &Path,
 ) -> Result<(), LoadError> {
     if depth > 32 {
@@ -481,7 +484,7 @@ fn collect_dep(
         let pinned = lock::read(&root_pkg_dir.join("resid.lock"))
             .and_then(|l| l.get(sub_name).cloned());
         let (sub_dir, entry) =
-            resolve_dep_dir(sub_name, sub, registry_dir, dep_dir, pinned.as_ref())?;
+            resolve_dep_dir(sub_name, sub, reg, dep_dir, pinned.as_ref())?;
         if let Some(e) = entry {
             // Re-read: collect_dep recursion may have added siblings.
             let mut lf = lock::read(&root_pkg_dir.join("resid.lock")).unwrap_or_default();
@@ -495,7 +498,7 @@ fn collect_dep(
             out,
             seen,
             depth + 1,
-            registry_dir,
+            reg,
             root_pkg_dir,
         )?;
     }

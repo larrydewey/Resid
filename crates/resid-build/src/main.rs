@@ -17,6 +17,7 @@ fn main() -> ExitCode {
         Some("pack") => return cmd_pack(&args[1..]),
         Some("verify") => return cmd_verify(&args[1..]),
         Some("publish") => return cmd_publish(&args[1..]),
+        Some("serve") => return cmd_serve(&args[1..]),
         _ => {}
     }
     cmd_build(args)
@@ -169,6 +170,39 @@ fn cmd_verify(args: &[String]) -> ExitCode {
 }
 
 
+
+/// `serve <registry-dir> --port N`: expose the registry over HTTP
+/// (`GET /pkg/<name>-<version>.resid-*`). Ctrl-C to stop.
+fn cmd_serve(args: &[String]) -> ExitCode {
+    let mut dir: Option<String> = None;
+    let mut port: u16 = 8137;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--port" => {
+                port = match it.next().and_then(|p| p.parse().ok()) {
+                    Some(p) => p,
+                    None => {
+                        eprintln!("error: --port needs a number");
+                        return ExitCode::FAILURE;
+                    }
+                };
+            }
+            other => dir = Some(other.to_string()),
+        }
+    }
+    let Some(dir) = dir else {
+        eprintln!("usage: resid-build serve <registry-dir> [--port N]");
+        return ExitCode::FAILURE;
+    };
+    match resid_build::registry::serve_dir(std::path::Path::new(&dir), port) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
 /// `publish <dir> --registry <path> [--key secret.hex]`: pack the package
 /// and drop `<name>-<version>.resid-pkg` + `.sha256` + `.sig` into the
 /// local registry directory (transport to a remote server is future work).
@@ -209,8 +243,15 @@ fn cmd_publish(args: &[String]) -> ExitCode {
                 .ok()
         });
     let base = format!("{}-{}.resid", manifest.name, manifest.version);
-    let pkg_path = std::path::Path::new(&reg).join(format!("{base}-pkg"));
-    let sha_path = std::path::Path::new(&reg).join(format!("{base}-sha256"));
+    // Canonical layout: <registry>/pkg/<file> — what `serve` exposes over
+    // HTTP; local builds also find it there.
+    let pkg_dir = std::path::Path::new(&reg).join("pkg");
+    if let Err(e) = std::fs::create_dir_all(&pkg_dir) {
+        eprintln!("error: cannot create '{}': {e}", pkg_dir.display());
+        return ExitCode::FAILURE;
+    }
+    let pkg_path = pkg_dir.join(format!("{base}-pkg"));
+    let sha_path = pkg_dir.join(format!("{base}-sha256"));
     if let Err(e) = std::fs::write(&pkg_path, &archive) {
         eprintln!("error: cannot write '{}': {e}", pkg_path.display());
         return ExitCode::FAILURE;
@@ -225,7 +266,7 @@ fn cmd_publish(args: &[String]) -> ExitCode {
         pkg_path.display()
     );
     if let Some(sig) = sig {
-        let sig_path = std::path::Path::new(&reg).join(format!("{base}-sig"));
+        let sig_path = pkg_dir.join(format!("{base}-sig"));
         let _ = std::fs::write(&sig_path, sig);
         println!(" (+ signature)");
     } else {

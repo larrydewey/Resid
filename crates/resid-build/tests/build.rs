@@ -714,3 +714,73 @@ fn archive_bytes(pkg: &PathBuf) -> Vec<u8> {
 fn hex(bytes: &[u8]) -> String {
     resid_build::archive::hex_encode(bytes.try_into().expect("32-byte sha256"))
 }
+
+/// Remote registry transport: serve a local registry over HTTP, build
+/// against it via `[registry] url`, and confirm the lockfile pins the
+/// same content hash as the direct local build.
+#[test]
+fn remote_registry_http_pull() {
+    use resid_build::lock;
+    let dir = temp_dir("remote");
+    let reg = dir.join("registry");
+    // Package published into the canonical <reg>/pkg/ layout.
+    fs::create_dir_all(reg.join("pkg")).unwrap();
+    fs::create_dir_all(dir.join("math/src")).unwrap();
+    fs::write(
+        dir.join("math/resid.toml"),
+        "[package]\nname = \"math\"\nversion = \"2.0.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("math/src/main.resid"),
+        "pub Int tpl(Int x) {\n    return x * 3;\n}\n",
+    )
+    .unwrap();
+    let archive = resid_build::archive::build_archive(&dir.join("math")).unwrap();
+    let sha = resid_build::archive::hex_encode(&resid_build::archive::content_hash(&archive));
+    fs::write(reg.join("pkg/math-2.0.0.resid-pkg"), &archive).unwrap();
+    fs::write(reg.join("pkg/math-2.0.0.resid-sha256"), format!("{sha}\n")).unwrap();
+    // Start the HTTP server on an ephemeral port.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let server_dir = reg.clone();
+    std::thread::spawn(move || {
+        let _ = resid_build::registry::serve_dir(&server_dir, port);
+    });
+    // Give the listener a moment.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    // Client package pulls over HTTP.
+    write_pkg(
+        &dir,
+        &format!(
+            r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[registry]
+url = "http://127.0.0.1:{port}"
+
+[dependencies.math]
+version = "2.0.0"
+"#
+        ),
+        "import \"math\";\nInt main() {\n    println(IntToString(tpl(14)));\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).expect("manifest loads with url registry");
+    assert_eq!(m.dependencies.len(), 1);
+    let out = dir.join("out");
+    match build(&m, Profile::Debug, &out).expect("build via http") {
+        Artifact::Binary(bin) => {
+            let res = Command::new(&bin).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&res.stdout).trim(), "42");
+        }
+        other => panic!("expected Binary, got {other:?}"),
+    }
+    // Lockfile pin matches the archive hash served over HTTP.
+    let lockfile = lock::read(&dir.join("resid.lock")).expect("resid.lock written");
+    let entry = lockfile.get("math").expect("math locked");
+    assert_eq!(entry.version, "2.0.0");
+    assert_eq!(entry.sha256, sha);
+}
