@@ -2305,13 +2305,18 @@ Estimated size: 600–900 lines of Resid. Performance will be modest
 (list-rebuilt state per operation) but signatures are one-shot
 operations, so correctness matters more than speed.
 
-### 14.2 Registry distribution (remote)
+### 14.2 Registry distribution
 
-The local registry serves archives from a directory. Remaining:
-an HTTP registry (`resid-build publish/pull` against a server),
-dependency LOCK files pinning content hashes, and signed registry
-indexes (keyring already exists). The archive format and verification
-machinery are complete; only transport and index metadata are missing.
+DONE: dependency lockfiles + local publish. `resid.lock` pins every
+registry dependency to its archive content hash — resolution verifies
+the pin (lock wins over the `.sha256` sidecar) and fails loudly on
+tampering or manifest/lock version skew; successful loads rewrite the
+lock to current truth. `resid-build publish <dir> --registry <path>
+[--key secret.hex]` drops `<name>-<version>.resid-pkg/-sha256/-sig`
+into a local registry directory (e2e `registry_lockfile_pins_content_hashes`).
+
+Remaining: an HTTP registry (remote transport), and signed registry
+indexes (keyring already exists).
 
 ### 14.3 Unicode full casing
 
