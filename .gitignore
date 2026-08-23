@@ -1,1 +1,9 @@
 target/
+
+# Local build/test artifacts — never commit signing keys
+keys/
+*.resid-ed25519.key
+*.resid-ed25519.pub
+.resid-cache.cbor
+*.resid-notes.cbor
+*.resid-prov
