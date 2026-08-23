@@ -558,3 +558,75 @@ fn conflicting_transitive_names_rejected() {
     let e = Manifest::load(&dir).err().expect("name conflict must fail");
     assert!(e.to_string().contains("conflicting dependency versions"), "{e}");
 }
+
+#[test]
+fn registry_dependency_pulls_verifies_and_builds() {
+    let dir = temp_dir("registry");
+    // Build the mathlib package and pack it into a local registry.
+    fs::create_dir_all(dir.join("registry")).unwrap();
+    fs::create_dir_all(dir.join("app/src")).unwrap();
+    let math_dir = dir.join("math");
+    fs::create_dir_all(math_dir.join("src")).unwrap();
+    fs::write(math_dir.join("resid.toml"), "[package]\nname = \"math\"\nversion = \"0.3.0\"\n").unwrap();
+    fs::write(math_dir.join("src/main.resid"), "pub Int dbl(Int x) {\n    return x * 2;\n}\n").unwrap();
+
+    let archive = resid_build::archive::build_archive(&math_dir).unwrap();
+    let hash = resid_build::archive::content_hash(&archive);
+    fs::write(dir.join("registry/math-0.3.0.resid-pkg"), &archive).unwrap();
+    fs::write(
+        dir.join("registry/math-0.3.0.resid-sha256"),
+        resid_build::archive::hex_encode(&hash),
+    )
+    .unwrap();
+
+    fs::write(
+        dir.join("app/resid.toml"),
+        r#"
+[package]
+name = "app"
+version = "1.0.0"
+
+[registry]
+path = "../registry"
+
+[dependencies.math]
+version = "0.3.0"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("app/src/main.resid"),
+        "import \"math\";\nInt main() {\n    println(IntToString(dbl(21)));\n    return 0;\n}\n",
+    )
+    .unwrap();
+
+    let m = Manifest::load(&dir.join("app")).expect("registry manifest loads");
+    assert_eq!(m.dependencies.len(), 1);
+    let out = dir.join("out");
+    let bin = match build(&m, Profile::Debug, &out).expect("registry build") {
+        Artifact::Binary(p) => p,
+        other => panic!("expected Binary, got {other:?}"),
+    };
+    let res = Command::new(&bin).output().expect("run binary");
+    assert_eq!(String::from_utf8_lossy(&res.stdout).trim(), "42");
+
+    // Extracted into the cache.
+    assert!(dir.join("app/target/resid/deps/math-0.3.0/resid.toml").exists());
+}
+
+#[test]
+fn registry_dependency_hash_mismatch_rejected() {
+    let dir = temp_dir("reghash");
+    fs::create_dir_all(dir.join("registry")).unwrap();
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("registry/math-0.3.0.resid-pkg"), b"corrupt").unwrap();
+    fs::write(dir.join("registry/math-0.3.0.resid-sha256"), "deadbeef").unwrap();
+    fs::write(
+        dir.join("resid.toml"),
+        "[package]\nname = \"app\"\nversion = \"1.0.0\"\n\n[registry]\npath = \"registry\"\n\n[dependencies.math]\nversion = \"0.3.0\"\n",
+    )
+    .unwrap();
+    fs::write(dir.join("src/main.resid"), "Int main() { return 0; }\n").unwrap();
+    let e = Manifest::load(&dir).err().expect("hash mismatch must fail");
+    assert!(e.to_string().contains("hash mismatch"), "{e}");
+}

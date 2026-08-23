@@ -69,6 +69,8 @@ struct ManifestToml {
     dependencies: std::collections::HashMap<String, DepToml>,
     #[serde(default)]
     signing: Option<SigningToml>,
+    #[serde(default)]
+    registry: Option<RegistryToml>,
 }
 
 #[derive(Deserialize)]
@@ -88,9 +90,20 @@ struct CapabilitiesToml {
 
 #[derive(Deserialize)]
 struct DepToml {
-    path: String,
+    /// Path mode: directory of the dependency package.
+    #[serde(default)]
+    path: Option<String>,
+    /// Registry mode: package version pulled from [registry] path.
+    #[serde(default)]
+    version: Option<String>,
     #[serde(default)]
     capabilities: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct RegistryToml {
+    /// Directory containing <name>-<version>.resid-pkg archives.
+    path: String,
 }
 
 #[derive(Deserialize)]
@@ -200,14 +213,21 @@ impl Manifest {
         // paths is an error. Direct deps come first, then their deps, etc.
         let mut dependencies: Vec<Dependency> = Vec::new();
         let mut seen: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
+        let registry_dir = raw
+            .registry
+            .as_ref()
+            .map(|r| pkg_dir.join(&r.path));
         for (name, dep) in &raw.dependencies {
+            let dep_dir = resolve_dep_dir(name, dep, registry_dir.as_deref(), &pkg_dir)?;
             collect_dep(
                 name,
-                &pkg_dir.join(&dep.path),
+                &dep_dir,
                 dep.capabilities.clone().unwrap_or_default(),
                 &mut dependencies,
                 &mut seen,
                 0,
+                registry_dir.as_deref(),
+                &pkg_dir,
             )?;
         }
         let grants: Vec<Grant> = raw
@@ -301,6 +321,59 @@ pub struct Grant {
 /// `dep_dir` is the absolute path. Appends one Dependency per unique
 /// package name, dependencies-before-dependents not guaranteed across
 /// branches (import order handles that at the resolver level).
+/// Where does a dependency live? Path mode wins; otherwise pull
+/// `<name>-<version>.resid-pkg` from the registry into the build cache.
+fn resolve_dep_dir(
+    name: &str,
+    dep: &DepToml,
+    registry_dir: Option<&Path>,
+    root_pkg_dir: &Path,
+) -> Result<PathBuf, LoadError> {
+    if let Some(ver) = &dep.version {
+        let reg = registry_dir.ok_or_else(|| {
+            LoadError::Invalid(format!(
+                "dependency '{name}': version '{ver}' requested but no [registry] path is configured"
+            ))
+        })?;
+        let pkg_file = reg.join(format!("{name}-{ver}.resid-pkg"));
+        let archive_bytes = std::fs::read(&pkg_file).map_err(|e| {
+            LoadError::Invalid(format!(
+                "dependency '{name}': cannot read registry archive '{}': {e}",
+                pkg_file.display()
+            ))
+        })?;
+        let sha_file = reg.join(format!("{name}-{ver}.resid-sha256"));
+        if let Ok(expect_hex) = std::fs::read_to_string(&sha_file) {
+            let got =
+                archive::hex_encode(&archive::content_hash(&archive_bytes));
+            if got != expect_hex.trim() {
+                return Err(LoadError::Invalid(format!(
+                    "dependency '{name}': archive hash mismatch (expected {}, got {got})",
+                    expect_hex.trim()
+                )));
+            }
+        }
+        let cache_dir = root_pkg_dir
+            .join("target")
+            .join("resid")
+            .join("deps")
+            .join(format!("{name}-{ver}"));
+        if !cache_dir.exists() {
+            archive::extract(&archive_bytes, &cache_dir).map_err(|e| {
+                LoadError::Invalid(format!("dependency '{name}': extraction failed: {e}"))
+            })?;
+        }
+        Ok(cache_dir)
+    } else if let Some(p) = &dep.path {
+        Ok(root_pkg_dir.join(p))
+    } else {
+        Err(LoadError::Invalid(format!(
+            "dependency '{name}': needs either `path` or `version`"
+        )))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn collect_dep(
     name: &str,
     dep_dir: &Path,
@@ -308,6 +381,8 @@ fn collect_dep(
     out: &mut Vec<Dependency>,
     seen: &mut std::collections::HashMap<String, PathBuf>,
     depth: usize,
+    registry_dir: Option<&Path>,
+    root_pkg_dir: &Path,
 ) -> Result<(), LoadError> {
     if depth > 32 {
         return Err(LoadError::Invalid(format!(
@@ -362,8 +437,17 @@ fn collect_dep(
     // Recurse into the dependency's own dependencies first: their roots are
     // needed when this dependency's sources import them by name.
     for (sub_name, sub) in &raw.dependencies {
-        let sub_dir = dep_dir.join(&sub.path);
-        collect_dep(sub_name, &sub_dir, sub.capabilities.clone().unwrap_or_default(), out, seen, depth + 1)?;
+        let sub_dir = resolve_dep_dir(sub_name, sub, registry_dir, dep_dir)?;
+        collect_dep(
+            sub_name,
+            &sub_dir,
+            sub.capabilities.clone().unwrap_or_default(),
+            out,
+            seen,
+            depth + 1,
+            registry_dir,
+            root_pkg_dir,
+        )?;
     }
 
     out.push(Dependency {

@@ -147,3 +147,67 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
         })
         .collect()
 }
+
+/// Parse an archive's file table without writing anything.
+pub fn list_files(archive: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut files = Vec::new();
+    if archive.len() < 13 || &archive[..9] != MAGIC {
+        return Err("not a resid package archive".to_string());
+    }
+    let count = u32::from_le_bytes([archive[9], archive[10], archive[11], archive[12]]) as usize;
+    let mut off = 13usize;
+    for _ in 0..count {
+        if off + 2 > archive.len() {
+            return Err("truncated archive (path length)".to_string());
+        }
+        let plen = u16::from_le_bytes([archive[off], archive[off + 1]]) as usize;
+        off += 2;
+        if off + plen > archive.len() {
+            return Err("truncated archive (path)".to_string());
+        }
+        let rel = String::from_utf8_lossy(&archive[off..off + plen]).into_owned();
+        off += plen;
+        if off + 8 > archive.len() {
+            return Err("truncated archive (content length)".to_string());
+        }
+        let clen = u64::from_le_bytes([
+            archive[off],
+            archive[off + 1],
+            archive[off + 2],
+            archive[off + 3],
+            archive[off + 4],
+            archive[off + 5],
+            archive[off + 6],
+            archive[off + 7],
+        ]) as usize;
+        off += 8;
+        if off + clen > archive.len() {
+            return Err("truncated archive (content)".to_string());
+        }
+        files.push((rel, archive[off..off + clen].to_vec()));
+        off += clen;
+    }
+    Ok(files)
+}
+
+/// Extract an archive into `out_dir`, creating parent directories.
+pub fn extract(archive: &[u8], out_dir: &Path) -> Result<usize, String> {
+    let files = list_files(archive)?;
+    for (rel, content) in &files {
+        // Path traversal guard: reject absolute paths and "..".
+        let rel_path = Path::new(rel);
+        if rel_path.is_absolute()
+            || rel.split('/').any(|seg| seg == ".." || seg.is_empty())
+        {
+            return Err(format!("unsafe path in archive: '{rel}'"));
+        }
+        let target = out_dir.join(rel);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create '{}': {e}", parent.display()))?;
+        }
+        std::fs::write(&target, content)
+            .map_err(|e| format!("cannot write '{}': {e}", target.display()))?;
+    }
+    Ok(files.len())
+}
