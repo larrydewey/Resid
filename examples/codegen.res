@@ -1122,6 +1122,16 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 return GT { pos: cpit.pos, val: reg, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x2, tmp: ti2, lbl: v.lbl };
             }
             if (t.text == "resid_crypto_random_byte") {
+                // Zero-arg extern: t2 is "(", consume through the close paren.
+                Tok cpr = lex_tok(s, t2.pos);
+                if (cpr.text != ")") { return gt_err("expected ) in resid_crypto_random_byte", c); }
+                Int ri1 = c.tmp + 1;
+                Str rreg = "%t" + IntToString(ri1);
+                List(Str) rl0 = c.lines;
+                List(Str) rl1 = rl0.concat([rreg + " = call i64 @resid_crypto_random_byte()"]);
+                return GT { pos: cpr.pos, val: rreg, ty: "Int", cnt: 0, err: "", glines: c.glines, lines: rl1, tmp: ri1, lbl: c.lbl };
+            }
+            if (false) {
                 GT a0 = cg_expr(s, t2.pos, env, fs, c);
                 if (a0.err != "") { return a0; }
                 Tok cpr = lex_tok(s, a0.pos);
@@ -1639,6 +1649,19 @@ GT lst_more(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Funcs
 
 GT lst_elems(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Funcs fs, GT c) {
     Tok t = lex_tok(s, pos);
+    // A closing bracket here after elements means a trailing comma —
+    // allowed as long as at least one element was seen.
+    if (t.text == "]") {
+        if (n > 0) { return lst_emit(ety, n, vals, t.pos, c); }
+        return gt_err("cannot lower an empty list literal", c);
+    }
+    if (t.text == ",") {
+        Tok nx = lex_tok(s, t.pos);
+        if (nx.text == "]") {
+            if (n > 0) { return lst_emit(ety, n, vals, nx.pos, c); }
+            return gt_err("cannot lower an empty list literal", c);
+        }
+    }
     if (t.text == "]") { return gt_err("unexpected ] in list literal", c); }
     GT v = cg_expr(s, pos, env, fs, c);
     if (v.err != "") { return v; }
