@@ -7,7 +7,7 @@
 // Gotcha compliance: every function pub, definitions precede uses, no
 // inline arithmetic as call arguments (bind temps first).
 
-import "der.res";
+import "der.resid";
 
 // ─── Position helpers ────────────────────────────────────────────────
 

@@ -54,8 +54,8 @@ The compiler's primary performance goal is to:
 
 ### Self-Hosted Crypto & Tooling
 The standard crypto library is written **in Resid itself** and compiled to native code by the Resid compiler:
-- `lib/crypto.res`: SHA-256, SHA-512, HMAC, PBKDF2, Base64, constant-time compare, OS randomness
-- `lib/ed25519.res`: full RFC 8032 Ed25519 signing and verification on `Int(256)`/`Int(512)` arithmetic
+- `lib/crypto.resid`: SHA-256, SHA-512, HMAC, PBKDF2, Base64, constant-time compare, OS randomness
+- `lib/ed25519.resid`: full RFC 8032 Ed25519 signing and verification on `Int(256)`/`Int(512)` arithmetic
 
 Tooling shipped today:
 - `residc <file> [emit-ir|build|run]`: compiler driver (default checks only)
@@ -70,7 +70,7 @@ Tooling shipped today:
 ### Hello, Resid!
 
 ```
-// hello.res
+// hello.resid
 Int main() {
     println("hello from resid");
     return 0;
@@ -79,9 +79,9 @@ Int main() {
 
 Run it:
 
-    residc hello.res run
+    residc hello.resid run
 
-A richer example lives at `examples/hello.res`.
+A richer example lives at `examples/hello.resid`.
 
 ### Sandboxed Example
 
@@ -129,10 +129,10 @@ A richer example lives at `examples/hello.res`.
 
 ### Running the Compiler
 
-    residc hello.res build [-o out]   # build native binary (clang + tiny C runtime)
-    residc hello.res run              # build and run it
-    residc hello.res emit-ir          # print LLVM IR
-    residc hello.res                  # type-check only
+    residc hello.resid build [-o out]   # build native binary (clang + tiny C runtime)
+    residc hello.resid run              # build and run it
+    residc hello.resid emit-ir          # print LLVM IR
+    residc hello.resid                  # type-check only
 
 ---
 
@@ -144,11 +144,11 @@ A richer example lives at `examples/hello.res`.
     │   ├── resid-type       ├── resid-codegen    ├── resid-builtin
     │   ├── resid-build      └── residc           # driver CLI
     ├── lib/                 # Standard library written in Resid
-    │   ├── crypto.res       # SHA-256/512, HMAC, PBKDF2, Base64, random
-    │   ├── ed25519.res      # Ed25519 sign/verify
-    │   ├── der.res          # DER parsing
-    │   └── http.res         # HTTP
-    ├── examples/            # Self-hosted stage-2 compilers (.res sources)
+    │   ├── crypto.resid       # SHA-256/512, HMAC, PBKDF2, Base64, random
+    │   ├── ed25519.resid      # Ed25519 sign/verify
+    │   ├── der.resid          # DER parsing
+    │   └── http.resid         # HTTP
+    ├── examples/            # Self-hosted stage-2 compilers (.resid sources)
     ├── tools/               # fmt, graph, notes, cache, why
     └── PROGRESS.md          # Full build log, status, roadmap
 

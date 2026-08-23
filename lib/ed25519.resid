@@ -1,4 +1,4 @@
-import "crypto.res";
+import "crypto.resid";
 
 // Field elements are Int(256) scalars reduced mod p = 2^255 - 19.
 pub Int(256) fe_p() {

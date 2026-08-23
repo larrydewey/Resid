@@ -1,4 +1,4 @@
-import "crypto.res";
+import "crypto.resid";
 Str rep(Str acc, Int n) {
     if (n <= 0) { return acc; }
     Int n1 = n - 1;

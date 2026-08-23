@@ -1,4 +1,4 @@
-import "crypto.res";
+import "crypto.resid";
 Int main() {
     List(Int) s = h512_state();
     println(IntToString(s.len()));

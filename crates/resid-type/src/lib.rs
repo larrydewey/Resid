@@ -847,7 +847,7 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("str_reverse", &[SemType::Str], SemType::Str),
     // ─── Stdlib v1.6: OS entropy hook (one byte per call) ───
     ("resid_crypto_random_byte", &[], SemType::Numeric(NumericType::Int(IntWidth::B64))),
-    // ─── Stdlib v2: TCP transport (protocol logic lives in lib/http.res) ───
+    // ─── Stdlib v2: TCP transport (protocol logic lives in lib/http.resid) ───
     // fd < 0 on failure. recv reads until the peer closes or 4 MB.
     ("resid_tcp_connect", &[SemType::Str, SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
     ("resid_tcp_send", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Str], SemType::Bool),

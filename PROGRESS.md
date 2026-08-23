@@ -17,7 +17,7 @@
   `crates/resid-parser/tests/else_if.rs`), and stage-2 codegen handles
   chains via recursive sg_if with shared join (e2e run_else_if_chain
   covers all three branch outcomes through both pipelines).
-- **Stage-2 provenance emission (WIP)**: driver.res emits
+- **Stage-2 provenance emission (WIP)**: driver.resid emits
   `<out>.resid-prov` sidecars (cleartext payload + Ed25519 signature via the
   self-hosted signer). Signature cross-verified:
   matches an independent Python Ed25519 signer byte-for-byte, and
@@ -32,8 +32,8 @@
    before signing (experimental stream cipher; AEAD pending); verify
    reports concealed-payload provenance distinctly. Provenance mode is part
    of the cache key so encrypted/plain builds of one source stay distinct.
-- **x509 TBS structure walker (roadmap item 1–2 done)**: `lib/x509.res` —
-  pure-Resid walker over `lib/der.res`: tbsCertificate field positions
+- **x509 TBS structure walker (roadmap item 1–2 done)**: `lib/x509.resid` —
+  pure-Resid walker over `lib/der.resid`: tbsCertificate field positions
   ([0] version skip, serial, sig-alg OID, issuer/subject Name RDN
   rendering with OID→short-name mapping, validity UTCTime pair, SPKI
   alg OID) plus string content decoding (`der_str_value`). `der_oid_str`
@@ -65,11 +65,31 @@
 - **Bootstrap sync (post-crypto)**: stage-2 compilers now accept the full
   checked_/wrapping_/saturating_ arithmetic families (22 extern builtins);
   stage-1 vs stage-2 outputs verified identical on wrap/saturate/uadd cases.
-- **Tests**: 601 pass (incl. CBOR store, COSE Sign1/Encrypt0,
-  provenance seal/tamper tests, DER decoder, and the x509 TBS walker
-  e2e; e2e covers else-if chains on both pipelines and stage-2
-  provenance sidecars). (lexer 17, parser 91, resid-ir 46, resid-type 195,
-  resid-codegen 137, resid-build 12, resid-fmt 5, residc 63 incl. e2e).
+- **File extension unified**: all Resid sources are `.resid` (lib/,
+  examples/, tools probes, imports, tests, docs) — no more `.res`.
+- **RSA PKCS#1v1.5 SHA-256 verify (roadmap item 3 done)**:
+  `lib/rsa.resid` — pure-Resid bignum on base-2^16 little-endian limb
+  lists (products stay < 2^32, safe in Int(64)) with row-based schoolbook
+  multiply and append-only adds; Montgomery REDC for modular
+  multiplication (`ninv = -n^-1 mod b^w` via Newton lifting from the
+  single-digit inverse; `R^2 mod n` by repeated doubling with a one-limb-
+  wider accumulator so `2*r` never overflows the modulus width); small-
+  exponent square-and-multiply entirely in Montgomery form. e2e
+  `run_rsa_pkcs1_verify_in_resid`: the fixture certificate verifies its
+  own tbsCertificate signature (RSA-2048, e=65537) through BOTH
+  pipelines — digest bytes and VALID verdict match an independent Python
+  implementation byte-for-byte (~2s stage-1). Ground truth pinned in
+  `tools`-style reference: sha256(tbs) starts 234 95 53 43.
+  Gotchas hit this round: `List.concat(other)` copies the other list's
+  index-0 seed element (use the bn_cat helper); little-endian left shift
+  must PREPEND zero limbs; no variable reassignment anywhere; bind
+  arithmetic temps before calls or widths disagree (Int(128)/Int(256));
+  deep tail recursions need `ulimit -s unlimited` in e2e harnesses.
+- **Tests**: 617 pass (incl. DER decoder, x509 TBS walker, and the RSA
+  PKCS#1v1.5 verify e2e on both pipelines; lexer 17, parser 91,
+  resid-ir 46, resid-type 195, resid-codegen 137, resid-build 12,
+  resid-fmt 5, residc 65 incl. e2e).
+
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -79,37 +99,37 @@
   string introspection (`str_len`/`str_char_at`/`str_from_code`/`str_slice`);
   `Str + Str`; `#location`; `value?`; **handle types** (`with (Type h = expr) { body }`
   RAII, reverse-order release; `filesystem.open`/`read_handle`/`close` File handles).
-- **Bootstrap**: M1–M5 done (`examples/lexer.res` and `examples/parser.res` each
-  parse their own source). **M6a done**: `examples/typecheck.res` — a type checker
+- **Bootstrap**: M1–M5 done (`examples/lexer.resid` and `examples/parser.resid` each
+  parse their own source). **M6a done**: `examples/typecheck.resid` — a type checker
   written in Resid (~1500 lines) — collects function/struct signatures, then walks
   declarations checking binds, calls (incl. built-ins + providers), struct/list
   literals, field access, if/while/for/match, precedence-climbing binary exprs,
   and rejects undefined vars / arity mismatches / ill-typed ops. It proves itself:
-  `RESID_TYPECHECK_SRC=examples/typecheck.res residc examples/typecheck.res run`
-  prints `typecheck OK`, and it also accepts `lexer.res` and `parser.res`
+  `RESID_TYPECHECK_SRC=examples/typecheck.resid residc examples/typecheck.resid run`
+  prints `typecheck OK`, and it also accepts `lexer.resid` and `parser.resid`
   (e2e: `bootstrap_typechecker_accepts_bootstrap_sources`,
-  `bootstrap_typechecker_rejects_type_errors`). **M6b done**: `examples/codegen.res`
+  `bootstrap_typechecker_rejects_type_errors`). **M6b done**: `examples/codegen.resid`
   (~1250 lines) — a fused parse→LLVM-IR emitter in Resid: copies the bootstrap
   lexer, collects function signatures, then recursively descends emitting IR text
   (Int/Bool/Str; arithmetic/comparisons/logic; user calls via collected sigs;
   `println`→puts / `print`→printf; if/else with label joins + `unreachable` when
   both arms return; for-in lowered to in-function alloca/load/store loops with
   per-loop unique labels; early returns as real `ret`; globals appended at module
-  end). CLI-driven: `residc examples/codegen.res run <src> [-o out.ll]`. Proven by
+  end). CLI-driven: `residc examples/codegen.resid run <src> [-o out.ll]`. Proven by
   e2e `bootstrap_codegen_emits_runnable_ir`: it compiles a sample (fn call,
   if/else, for-in with captured outer vars) to `.ll`, clang+resid_rt.c assemble
   it, and the binary prints `hi/big/tick/tick/tick` with exit 0. All four
-  bootstrap tools now take argv (no env vars) and typecheck.res self-checks
-  codegen.res clean. Not yet in bootstrap codegen: f-strings, while, casts,
-  composites. **M6c done**: `examples/driver.res` (~2300 lines) fuses the shared
+  bootstrap tools now take argv (no env vars) and typecheck.resid self-checks
+  codegen.resid clean. Not yet in bootstrap codegen: f-strings, while, casts,
+  composites. **M6c done**: `examples/driver.resid` (~2300 lines) fuses the shared
   lexer + the M6a checker (`ck_*`-prefixed, quiet) + the M6b emitter into one
   argv-driven pipeline: read → typecheck → emit IR → `filesystem.write_all(.ll)`
   → `process.run(clang …)` → native binary. Proven by e2e
   `bootstrap_driver_compiles_and_rejects` (compiles the sample to a working
   binary; rejects ill-typed input with a `type error` and nonzero exit), and
-  typecheck.res self-checks driver.res. Regenerated by `tools/merge_driver.py`
-  from codegen.res + typecheck.res (single source of truth). **M6 item 4 done
-  (stage-2)**: the Resid-written emitter (`examples/codegen.res`) now compiles
+  typecheck.resid self-checks driver.resid. Regenerated by `tools/merge_driver.py`
+  from codegen.resid + typecheck.resid (single source of truth). **M6 item 4 done
+  (stage-2)**: the Resid-written emitter (`examples/codegen.resid`) now compiles
   every bootstrap source — lexer, parser, typecheck, codegen, and the fused
   driver — into working binaries whose outputs match the stage-1 builds
   byte-for-byte (driver's emitted IR is identical). Stage-2 upgrades landed in
@@ -1827,7 +1847,7 @@ unnamespaced; struct-literal names/type spellings/patterns are not rewritten.
 same-line braces, precedence-aware parens per spec §30, escape-safe string
 printing, block tails printed as explicit `return e;` (the only spelling that
 round-trips the parser's ret-folding). CLI `resid fmt <f> [-w | --check]`.
-Idempotent on all four bootstrap sources; formatted lexer.res compiles and
+Idempotent on all four bootstrap sources; formatted lexer.resid compiles and
 tokenizes identically. v1 limits: doc comments on functions not yet carried;
 behaviors print as placeholder. **Runtime capability enforcement done
 (§28.2 step 4)**: `collect_provider_calls` scans the merged unit for
@@ -1843,18 +1863,18 @@ family overrides scopes. **Unicode casing done**: `str_to_lower`/`str_to_upper`
   map ASCII, Latin-1 Supplement, Latin Extended-A (even/odd parity), Greek and
   Cyrillic via algorithmic range tables; ÿ↔Ÿ special pair; ß passes through.
   UTF-8 per-codepoint in the C runtime. **Bootstrap compilers synced with the
-  stdlib**: typecheck.res's check_builtin and codegen.res's extern dispatch now
+  stdlib**: typecheck.resid's check_builtin and codegen.resid's extern dispatch now
   cover all 31 string/list/math verbs; list verbs + split/join call `bl_*`
   runtime twins that read the bootstrap `{n, raw slots}` box layout (the Rust
   pipeline uses ResidVal boxes) — both conventions coexist in resid_rt.c.
-  Stage-2 re-proven: the Resid emitter compiles the regenerated driver.res and
+  Stage-2 re-proven: the Resid emitter compiles the regenerated driver.resid and
   its binaries match stage-1 output. **Package archives + signing done
   (§28.1–28.3 v1)**: deterministic `.resid-pkg` archives whose SHA-256 is the
   content hash; Ed25519 `keygen/pack/verify` CLI (hex keys); `[signing]
   require_signatures = true` + keyring makes dependency resolution verify each
   dep's archive signature against a trusted key. **Crypto boundary ironed out**:
   build-tool crypto is pure-Rust crates (sha2, ed25519-dalek — no FFI); **SHA-256
-  rewritten in pure Resid** (`lib/crypto.res`, self-hosting principle — the C
+  rewritten in pure Resid** (`lib/crypto.resid`, self-hosting principle — the C
   builtin was removed): digests verified against reference implementations
   through both pipelines incl. stage-2. Bootstrap fixes it forced: `pub`
   declarations were misparsed by checker/sig-collector/emitter (off-by-one
@@ -1938,7 +1958,7 @@ Build/test notes:
   `Dec main()` is emitted as `resid_main` with a synthesized C-ABI `i32 @main`
   wrapper (LLVM's sret return for the struct doesn't match libc's `main`).
   Next: the `resid-build` crate (§12.1, task 5.10), M6 work items, or tooling.
-- **M4 — Resid lexer done** (`examples/lexer.res`): a Resid program reads a
+- **M4 — Resid lexer done** (`examples/lexer.resid`): a Resid program reads a
   `.resid` source file via `filesystem.read_all(RESID_LEX_SRC)` and prints the
   token stream (`ident(x)`, `literal(Int 42)`, `literal(Str hi)`, `op(+)`,
   `keyword(return)`, `raw(...)`, `bytes(...)`, `f-string(...)`, `char(...)`,
@@ -1946,7 +1966,7 @@ Build/test notes:
   string/raw/byte/f-string/char literals with escapes, integers in
   dec/hex/bin/oct, floats, identifiers (keyword vs ident), and operators
   (including multi-char `==`/`!=`/`<=`/`>=`/`&&`/`||`). Verified end-to-end by
-  e2e test `bootstrap_lexer_tokenizes_source` (runs `lexer.res` via `residc run`
+  e2e test `bootstrap_lexer_tokenizes_source` (runs `lexer.resid` via `residc run`
   with `RESID_LEX_SRC` pointing at a sample).
   Type-checker fix enabling this: `block_ret` now walks a block's statements,
   registering bindings into a cloned env and recursing into nested control flow
@@ -1954,14 +1974,14 @@ Build/test notes:
   block type-checks (previously "undefined variable"). Codegen fix: functions
   are all declared before any are lowered, so forward references and mutual
   recursion work.
-- **M5 — Resid parser done** (`examples/parser.res`): reads `.resid` source via
+- **M5 — Resid parser done** (`examples/parser.resid`): reads `.resid` source via
   `filesystem.read_all(RESID_PARSER_SRC)`, recursively descends with position
   threaded through a `{ pos, ast }` struct, and prints one S-expression AST line
   per declaration (type-def product/sum, func with params + defaults, bind/
   discard/return/if-else/while/for-in/expr/block statements, precedence-climbing
   binary expr per spec §30, unary, calls, field/index/slice, list/struct
   literals, match, ranges, f-strings/raw/bytes/chars, provider calls). Proves the
-  milestone by parsing `examples/lexer.res` itself cleanly to EOF. Verified by
+  milestone by parsing `examples/lexer.resid` itself cleanly to EOF. Verified by
   e2e test `bootstrap_parser_builds_ast`. Codegen fix enabling this: user
   functions now declare Bool params as i8 (C ABI, matching extern decls) and
   narrow to i1 on entry, so calls passing Bool literals/vars verify.
@@ -2101,13 +2121,13 @@ Updated from §10. **Checked = done, unchecked = missing.**
    both cover lists, structs, options, destructuring, if-let/while-let. Enables Resid
    data structures for parser.
 
-4. **M4 — Resid lexer**: ✅ Done — `examples/lexer.res` (see status §11). Reads a
+4. **M4 — Resid lexer**: ✅ Done — `examples/lexer.resid` (see status §11). Reads a
    `.resid` source file via `filesystem.read_all`, prints the token stream, handles
    C-style comments, string/raw/byte/f-string/char literals, dec/hex/bin/oct
    integers, floats, identifiers/keywords, and operators. Proven by e2e test
    `bootstrap_lexer_tokenizes_source`.
 
-5. **M5 — Resid parser**: ✅ Done — `examples/parser.res` (see status §11). Reads a
+5. **M5 — Resid parser**: ✅ Done — `examples/parser.resid` (see status §11). Reads a
    `.resid` source file via `filesystem.read_all`, recursively descends with
    position threaded through a `{ pos, ast }` struct (immutable bindings), and
    prints one S-expression AST line per declaration. Handles type defs
@@ -2115,7 +2135,7 @@ Updated from §10. **Checked = done, unchecked = missing.**
    while/for-in/expression/block statements, full precedence-climbing binary
    expressions (§30), unary, calls, field/index/slice access, list/struct
    literals, match, ranges, f-strings/raw/bytes/chars, and provider calls.
-   Proof: parses `examples/lexer.res` (its own sibling milestone) cleanly to
+   Proof: parses `examples/lexer.resid` (its own sibling milestone) cleanly to
    EOF. Proven by e2e test `bootstrap_parser_builds_ast`.
    Codegen fix enabling Bool-param user functions: user functions now declare
    Bool params as i8 (C ABI, matching extern decls) and narrow to i1 on entry,
@@ -2152,34 +2172,34 @@ Updated from §10. **Checked = done, unchecked = missing.**
    1. Port type checker to Resid: literal inference, widening, casts, `if`,
       bind env + shadowing rejection, conversion helpers, built-in sigs,
       pattern typing, f-string validation, provider call typing.
-      ✅ **Done (M6a)** — `examples/typecheck.res` (~1500 lines): its own
+      ✅ **Done (M6a)** — `examples/typecheck.resid` (~1500 lines): its own
       hand-rolled lexer (chars → Tok via codepoint positions), signature
       collection (functions + structs as field strings), then a
       declaration walk: binds with shadowing rejection, calls (user fns by
       collected sig, built-ins incl. `str_*`/`IntToString`/providers), struct
       and list literals, field access, if/while/for/match statements and
       if-expressions, precedence-climbing binary exprs (spec §30), unary `-`,
-      `_ =` discard. Proves itself on its own source plus `lexer.res` and
-      `parser.res` (`typecheck OK`; e2e
+      `_ =` discard. Proves itself on its own source plus `lexer.resid` and
+      `parser.resid` (`typecheck OK`; e2e
       `bootstrap_typechecker_accepts_bootstrap_sources`,
       `bootstrap_typechecker_rejects_type_errors`). Not yet covered: casts,
       options/pattern typing depth, numeric widening at call sites.
    2. Port codegen to Resid: emit LLVM IR text (types, functions, arithmetic,
       casts, calls, if/while/for, boxed composites, `match`, strings, f-strings,
       providers, main wrapper).
-      ✅ **Done (M6b, v1 subset)** — `examples/codegen.res` (~1250 lines): fused
+      ✅ **Done (M6b, v1 subset)** — `examples/codegen.resid` (~1250 lines): fused
       parse→emit. Covers Int(i64)/Bool(i1)/Str(ptr), arithmetic/comparisons/
       logic, user calls from collected sigs, println/print, if/else (label
       joins, `unreachable` on both-return), for-in (alloca/load/store loop,
       unique labels per loop), early `return`, string globals appended at end.
-      CLI: `residc examples/codegen.res run <src> [-o out.ll]`. E2E
+      CLI: `residc examples/codegen.resid run <src> [-o out.ll]`. E2E
       `bootstrap_codegen_emits_runnable_ir` proves emitted IR assembles and runs.
       Remaining for full parity: f-strings, while, casts, boxed composites,
       match, Dec/wide numerics.
    3. Driver in Resid: lex → parse → typecheck → codegen → `write_all` `.ll` →
       spawn `clang` → binary.
-      ✅ **Done (M6c)** — `examples/driver.res`: one Resid program running the
-      full pipeline via `residc examples/driver.res run <src> [-o out]
+      ✅ **Done (M6c)** — `examples/driver.resid`: one Resid program running the
+      full pipeline via `residc examples/driver.resid run <src> [-o out]
       [-rt resid_rt.c]`. Enabled by the new `process.run(Str) -> Int` provider
       (spec §32; `system()` in resid_rt.c). E2E
       `bootstrap_driver_compiles_and_rejects` proves both accept and reject
@@ -2222,21 +2242,21 @@ a soundness fix: typed binds now verify the value against the declared type
 (`Str x = 42` was silently passing typecheck and dying in codegen) via
 `bind_assignable` covering literal adoption, widening, integer arithmetic-margin
 narrowing, Dec precision rounding, nominal sums, and range binds. Previous — hardening: duplicate function definitions are
-  now rejected (`check_program` in resid-type; bootstrap typecheck.res via
+  now rejected (`check_program` in resid-type; bootstrap typecheck.resid via
   `first_dup_name`; fused driver carries the check) — found during the M6
   merge where two `op_prec` tables silently resolved to the first. 512
   tests.* Previous milestone — M6 item 4 (stage-2) done: the Resid-written
-  emitter compiles lexer/parser/typecheck/codegen/driver.res into binaries
+  emitter compiles lexer/parser/typecheck/codegen/driver.resid into binaries
   matching stage-1 output byte-for-byte; `tools/merge_driver.py` now
-  regenerates driver.res from its two inputs; e2e
-  `stage2_emitter_compiles_bootstrap_lexer` added; 511 tests.* Previous milestone — M6c done: `examples/driver.res` runs the full pipeline (typecheck → IR → clang → binary) from Resid via the new `process.run` provider; e2e-proven on accept+reject paths; 510 tests. Previous: M6b done — `examples/codegen.res` (fused parse→LLVM-IR codegen in Resid) emits runnable IR proven by e2e (clang-assembled binary prints hi/big/tick×3); new `args` provider (spec §32) replaces env-var I/O — all four bootstrap tools are argv-driven (`residc <tool> run <src> [-o out]`); typecheck.res self-checks codegen.res; 509 tests.*
+  regenerates driver.resid from its two inputs; e2e
+  `stage2_emitter_compiles_bootstrap_lexer` added; 511 tests.* Previous milestone — M6c done: `examples/driver.resid` runs the full pipeline (typecheck → IR → clang → binary) from Resid via the new `process.run` provider; e2e-proven on accept+reject paths; 510 tests. Previous: M6b done — `examples/codegen.resid` (fused parse→LLVM-IR codegen in Resid) emits runnable IR proven by e2e (clang-assembled binary prints hi/big/tick×3); new `args` provider (spec §32) replaces env-var I/O — all four bootstrap tools are argv-driven (`residc <tool> run <src> [-o out]`); typecheck.resid self-checks codegen.resid; 509 tests.*
 ---
 
 ## 14. FUTURE WORK / ROADMAP
 
 ### 14.1a Ed25519 in pure Resid — DONE (verify + deterministic sign)
 
-`lib/ed25519.res` implements full RFC 8032 Ed25519 on Int(256)/Int(512)
+`lib/ed25519.resid` implements full RFC 8032 Ed25519 on Int(256)/Int(512)
 scalars: verification AND deterministic signing. `pub_key(seed)` derives the
 public key exactly (matches the RFC 8032 test-1 vector byte-for-byte);
 `sign_msg(seed, msg)` follows §5.1.6 — clamped scalar, r = SHA-512(prefix||M)
@@ -2247,7 +2267,7 @@ rejection confirmed. Self-verification
 and wrong-message rejection proven by e2e `run_ed25519_sign_in_resid`;
 verification e2e is `run_ed25519_verify_in_resid`. 586 tests pass.
 
-`lib/ed25519.res`: full Ed25519 VERIFY (RFC 8032) on Int(256)/Int(512)
+`lib/ed25519.resid`: full Ed25519 VERIFY (RFC 8032) on Int(256)/Int(512)
 scalars — field arithmetic mod 2^255-19 (overflow-safe add/sub, fe_mul via
 2^256 ~= 38 fold with pre-cast reduction, fe_inv = pow(p-2)), point
 decode/encode (x recovery via w^((p+3)/8) + sqrt(-1) adjust + parity),
@@ -2285,7 +2305,7 @@ development, both worth remembering:
    (`x >> 64 == 0`, e2e `run_shift_overflow_yields_zero`).
 
 Recommended approach for resuming:
-1. Write a Python simulator that mirrors lib/crypto.res function-by-function
+1. Write a Python simulator that mirrors lib/crypto.resid function-by-function
    and diff per-word intermediates offline until the Resid code and the
    simulator agree (the mirror already exists in fragment form and itself
    produces correct digests when the extraction bug is fixed).
@@ -2348,7 +2368,7 @@ deliberately delegated to a reverse proxy.
 
 `str_to_lower`/`str_to_upper` cover ASCII, Latin-1, Latin Extended-A,
 Greek and Cyrillic via algorithmic ranges. Full coverage needs the
-- **x509 foundation (in progress)**: `lib/der.res` — pure-Resid ASN.1
+- **x509 foundation (in progress)**: `lib/der.resid` — pure-Resid ASN.1
   DER TLV decoder (tag class, short/long lengths, INTEGER value decode,
   OID → dotted string via base-128 varint arcs) verified through both
   pipelines (e2e `run_der_parser_in_resid`).
@@ -2356,7 +2376,7 @@ Greek and Cyrillic via algorithmic ranges. Full coverage needs the
   REMAINING x509/HTTP2 ROADMAP (task breakdown, in order):
   1. x509 TBS structure walker: Certificate → tbsCertificate → serial,
      issuer/subject RDN sequences (OID 2.5.4.x → name strings), validity,
-     SPKI algorithm OIDs. Straightforward given der.res.
+     SPKI algorithm OIDs. Straightforward given der.resid.
   2. e2e with an openssl-generated self-signed cert embedded as byte list,
      decoded through both pipelines.
   3. RSA PKCS#1v1.5 verify: needs bignum modexp on u16/u32 limb lists
@@ -2372,7 +2392,7 @@ Greek and Cyrillic via algorithmic ranges. Full coverage needs the
      User call required before building.
   7. HTTP/2 framing + HPACK + streams (only useful after 6).
 
-  GOTCHAS learned building der.res (apply to all lib/*.res):
+  GOTCHAS learned building der.resid (apply to all lib/*.resid):
   - Every function in an IMPORTED file must be `pub`, including
     same-file callees (cross-module visibility rule).
   - Definitions must precede uses within an imported file (no forward
@@ -2384,12 +2404,12 @@ Greek and Cyrillic via algorithmic ranges. Full coverage needs the
   - Trailing commas in multi-line list literals are now supported by
     both pipelines (was a stage-2 bug, fixed).
 - **Import resolution in stage-2 (self-hosting milestone)**: the bootstrap
-  driver merges `import "x.res";` files into the compilation (dedup +
-  depth cap). `import "http.res"` → crypto+http+main compiles through
+  driver merges `import "x.resid";` files into the compilation (dedup +
+  depth cap). `import "http.resid"` → crypto+http+main compiles through
   BOTH pipelines byte-identically (e2e `run_stage2_import_resolution`).
   Fixed en route: trailing commas in list literals and the zero-arg
   `resid_crypto_random_byte()` emitter in the bootstrap compiler.
-- **HTTP stack in pure Resid (`lib/http.res`)**: raw TCP externs in the
+- **HTTP stack in pure Resid (`lib/http.resid`)**: raw TCP externs in the
   runtime (`resid_tcp_connect/send/recv_all/close`); all protocol logic —
   URL parsing, request building, response parsing — is Resid. HTTP/1.1
   `Connection: close`; chunked + TLS out of scope for v1. e2e
