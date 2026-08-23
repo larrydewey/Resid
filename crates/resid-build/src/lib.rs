@@ -20,6 +20,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub mod archive;
+pub mod provenance;
 
 use serde::Deserialize;
 
