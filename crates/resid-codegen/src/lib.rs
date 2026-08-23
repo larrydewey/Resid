@@ -3127,6 +3127,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
         self.decl_rt("resid_list_concat", vec![ptr.into(), ptr.into()], ptr.into());
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
+        self.decl_rt_void("resid_index_abort", vec![i64t.into(), i64t.into()]);
         // String concatenation (f-string interpolation, Str + Str).
         self.decl_rt("resid_str_concat", vec![ptr.into(), ptr.into()], ptr.into());
         // String equality (Str == Str / Str != Str) for the bootstrap lexer.
@@ -3881,6 +3882,33 @@ impl<'ctx> CodeGen<'ctx> {
             &SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
         )?;
         let idx = iw.v.into_int_value();
+        // Bounds check: unsigned idx < element count, else runtime abort.
+        // List indexing is unchecked in the runtime, so an out-of-range
+        // index here would otherwise be silent memory corruption.
+        let len_v = self.rt_call("resid_list_len", vec![list_val])?;
+        let len_i = len_v.into_int_value();
+        let cur_fn = self
+            .cur_fn
+            .ok_or_else(|| "codegen: index outside a function".to_string())?;
+        let ok_bb = self.cx.append_basic_block(cur_fn, "index_ok");
+        let oob_bb = self.cx.append_basic_block(cur_fn, "index_oob");
+        let cmp = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, idx, len_i, "index_in_bounds")
+            .map_err(to_err)?;
+        self.builder
+            .build_conditional_branch(cmp, ok_bb, oob_bb)
+            .map_err(to_err)?;
+        self.builder.position_at_end(oob_bb);
+        let abort = self
+            .module
+            .get_function("resid_index_abort")
+            .ok_or("codegen: missing resid_index_abort decl")?;
+        self.builder
+            .build_call(abort, &[idx.into(), len_i.into()], "index_oob_abort")
+            .map_err(to_err)?;
+        self.builder.build_unreachable().map_err(to_err)?;
+        self.builder.position_at_end(ok_bb);
         self.load_slot(list_val, idx, elem)
     }
 

@@ -2605,3 +2605,32 @@ Int main() {
     assert_eq!(lines[2], "DIFFERENT", "{stdout:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// List indexing is bounds-checked: out-of-range aborts cleanly instead of
+/// reading wild memory (found while debugging SHA-512-in-Resid).
+#[test]
+fn run_index_oob_aborts_cleanly() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-oob-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("oob.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    List(Int) xs = [1, 2, 3];
+    println(IntToString(xs[5]));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_ne!(out.status.code(), Some(0), "OOB must fail");
+    assert!(err.contains("list index out of bounds"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
