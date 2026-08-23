@@ -2475,6 +2475,61 @@ Int main() {
 
 
 
+
+/// Stage-2 provenance sidecars: the bootstrap driver signs its artifacts
+/// with the self-hosted Ed25519 signer; `residc verify` accepts them.
+#[test]
+fn run_stage2_provenance_sidecar() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-prov2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    // Reuse the repo keypair if present; otherwise generate one.
+    let keys = workspace.join("keys");
+    let have_key = keys.join("resid-ed25519.key").exists();
+    if !have_key {
+        let out = Command::new(residc_bin())
+            .arg("keygen")
+            .current_dir(workspace)
+            .output()
+            .expect("keygen");
+        assert_eq!(out.status.code(), Some(0));
+    }
+    let file = dir.join("main.resid");
+    std::fs::write(&file, "Int main() {\n    println(\"ok\");\n    return 0;\n}\n").unwrap();
+    let bin = dir.join("st2bin");
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.res"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(workspace) // driver looks for keys/ relative to cwd
+        .output()
+        .expect("failed to run driver");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let sidecar_path = dir.join("st2bin.resid-prov");
+    assert!(sidecar_path.exists(), "sidecar missing: {}", String::from_utf8_lossy(&out.stdout));
+    let out2 = Command::new(residc_bin())
+        .arg("verify")
+        .arg(&sidecar_path)
+        .current_dir(workspace)
+        .output()
+        .expect("verify");
+    let stdout = String::from_utf8_lossy(&out2.stdout).into_owned();
+    assert!(stdout.contains("SIGNATURE OK"), "verify output: {stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+    if !have_key {
+        let _ = std::fs::remove_file(keys.join("resid-ed25519.key"));
+        let _ = std::fs::remove_file(keys.join("resid-ed25519.pub"));
+    }
+}
+
 /// `else if` chains parse and execute correctly in both the Rust pipeline
 /// and the stage-2 bootstrap compiler (regression: parser never consumed
 /// the `if` after `else`; stage-2 codegen had no chain support).
