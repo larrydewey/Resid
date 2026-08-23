@@ -2512,3 +2512,51 @@ Int main() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Crypto v3: constant-time equality, Base64, PBKDF2-HMAC-SHA256.
+#[test]
+fn run_crypto_kit() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-kit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "crypto.res";
+Int main() {
+    List(Int) a = bytes_of("attack at dawn");
+    List(Int) b = bytes_of("attack at dawn");
+    List(Int) c = bytes_of("attack at dusk");
+    if (ct_equal(a, b)) {
+        println("equal");
+    }
+    if (!ct_equal(a, c)) {
+        println("different");
+    }
+    println(base64_encode(bytes_of("hello")));
+    println(hex_encode(pbkdf2_hmac_sha256(bytes_of("password"), bytes_of("salt"), 4096, 1)));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        stdout.trim(),
+        "equal\ndifferent\naGVsbG8==\nc5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a",
+        "{stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
