@@ -5,6 +5,7 @@
 //!   resid-build keygen <secret.hex> <pub.hex>   — Ed25519 signing keys
 //!   resid-build pack <dir> --key secret.hex     — archive + sign a package
 //!   resid-build verify <pkg> --sig sig --key pub.hex  — verify an archive
+//!   resid-build publish <dir> --registry <dir> --key secret.hex — pack into registry
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -15,6 +16,7 @@ fn main() -> ExitCode {
         Some("keygen") => return cmd_keygen(&args[1..]),
         Some("pack") => return cmd_pack(&args[1..]),
         Some("verify") => return cmd_verify(&args[1..]),
+        Some("publish") => return cmd_publish(&args[1..]),
         _ => {}
     }
     cmd_build(args)
@@ -164,6 +166,72 @@ fn cmd_verify(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+
+/// `publish <dir> --registry <path> [--key secret.hex]`: pack the package
+/// and drop `<name>-<version>.resid-pkg` + `.sha256` + `.sig` into the
+/// local registry directory (transport to a remote server is future work).
+fn cmd_publish(args: &[String]) -> ExitCode {
+    let mut dir: Option<String> = None;
+    let mut reg: Option<String> = None;
+    let mut key: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--registry" => reg = it.next().cloned(),
+            "--key" => key = it.next().cloned(),
+            other => dir = Some(other.to_string()),
+        }
+    }
+    let (Some(dir), Some(reg)) = (dir, reg) else {
+        eprintln!("usage: resid-build publish <dir> --registry <path> [--key secret.hex]");
+        return ExitCode::FAILURE;
+    };
+    let manifest = match resid_build::Manifest::load(std::path::Path::new(&dir)) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let archive = match resid_build::archive::build_archive(std::path::Path::new(&dir)) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: cannot pack '{dir}': {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let hash_hex = resid_build::archive::hex_encode(&resid_build::archive::content_hash(&archive));
+    let sig = key.and_then(|k| std::fs::read_to_string(&k).ok().map(|s| s.trim().to_string()))
+        .and_then(|secret| {
+            resid_build::archive::sign_hash(&resid_build::archive::content_hash(&archive), &secret)
+                .ok()
+        });
+    let base = format!("{}-{}.resid", manifest.name, manifest.version);
+    let pkg_path = std::path::Path::new(&reg).join(format!("{base}-pkg"));
+    let sha_path = std::path::Path::new(&reg).join(format!("{base}-sha256"));
+    if let Err(e) = std::fs::write(&pkg_path, &archive) {
+        eprintln!("error: cannot write '{}': {e}", pkg_path.display());
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = std::fs::write(&sha_path, format!("{hash_hex}\n")) {
+        eprintln!("error: cannot write '{}': {e}", sha_path.display());
+        return ExitCode::FAILURE;
+    }
+    print!(
+        "published {} {} (sha256 {}) → {}",
+        manifest.name, manifest.version, hash_hex,
+        pkg_path.display()
+    );
+    if let Some(sig) = sig {
+        let sig_path = std::path::Path::new(&reg).join(format!("{base}-sig"));
+        let _ = std::fs::write(&sig_path, sig);
+        println!(" (+ signature)");
+    } else {
+        println!(" (unsigned)");
+    }
+    ExitCode::SUCCESS
 }
 
 fn count_files(archive: &[u8]) -> usize {

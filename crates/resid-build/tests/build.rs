@@ -630,3 +630,87 @@ fn registry_dependency_hash_mismatch_rejected() {
     let e = Manifest::load(&dir).err().expect("hash mismatch must fail");
     assert!(e.to_string().contains("hash mismatch"), "{e}");
 }
+
+/// Registry + lockfile: publish a package into a local registry, build
+/// against it by version (lockfile is written), then verify that tampering
+/// with the registry archive is rejected because of the pinned hash.
+#[test]
+fn registry_lockfile_pins_content_hashes() {
+    use resid_build::lock;
+    let dir = temp_dir("reglock");
+    let reg = dir.join("registry");
+    fs::create_dir_all(&reg).unwrap();
+    // Dependency package source, published as math 1.0.0.
+    fs::create_dir_all(dir.join("math/src")).unwrap();
+    fs::write(
+        dir.join("math/resid.toml"),
+        "[package]\nname = \"math\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("math/src/main.resid"),
+        "pub Int dbl(Int x) {\n    return x * 2;\n}\n",
+    )
+    .unwrap();
+    let archive = archive_bytes(&dir.join("math"));
+    fs::write(reg.join("math-1.0.0.resid-pkg"), &archive).unwrap();
+    fs::write(
+        reg.join("math-1.0.0.resid-sha256"),
+        format!(
+            "{}\n",
+            hex(&resid_build::archive::content_hash(&archive))
+        ),
+    )
+    .unwrap();
+    // Depending package pulls math by version.
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[registry]
+path = "registry"
+
+[dependencies.math]
+version = "1.0.0"
+"#,
+        "import \"math\";\nInt main() {\n    println(IntToString(dbl(21)));\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).expect("manifest loads");
+    assert_eq!(m.dependencies.len(), 1);
+    let out = dir.join("out");
+    match build(&m, Profile::Debug, &out).expect("build with registry dep") {
+        Artifact::Binary(bin) => {
+            let res = Command::new(&bin).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&res.stdout).trim(), "42");
+        }
+        other => panic!("expected Binary, got {other:?}"),
+    }
+    // Lockfile written with the pinned hash.
+    let lockfile = lock::read(&dir.join("resid.lock")).expect("resid.lock written");
+    let entry = lockfile.get("math").expect("math locked");
+    assert_eq!(entry.version, "1.0.0");
+    let want = hex(&resid_build::archive::content_hash(&archive));
+    assert_eq!(entry.sha256, want);
+    // Tamper with the archive → next load must fail on the locked hash.
+    let mut bad = archive.clone();
+    bad[10] ^= 0xFF;
+    fs::write(reg.join("math-1.0.0.resid-pkg"), &bad).unwrap();
+    // Remove the stale extraction cache so resolution re-reads the archive.
+    fs::remove_dir_all(dir.join("target/resid/deps")).ok();
+    let e = Manifest::load(&dir).err().expect("tampered archive must fail");
+    assert!(
+        e.to_string().contains("LOCKED content hash mismatch"),
+        "{e}"
+    );
+}
+
+fn archive_bytes(pkg: &PathBuf) -> Vec<u8> {
+    resid_build::archive::build_archive(pkg).expect("archive builds")
+}
+
+fn hex(bytes: &[u8]) -> String {
+    resid_build::archive::hex_encode(bytes.try_into().expect("32-byte sha256"))
+}

@@ -20,6 +20,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub mod archive;
+pub mod lock;
 pub mod provenance;
 pub mod cose;
 
@@ -219,8 +220,23 @@ impl Manifest {
             .registry
             .as_ref()
             .map(|r| pkg_dir.join(&r.path));
+        // Lockfile: pin registry dependency content hashes (spec §28).
+        let lock_path = pkg_dir.join("resid.lock");
+        let mut lockfile = lock::read(&lock_path).unwrap_or_default();
         for (name, dep) in &raw.dependencies {
-            let dep_dir = resolve_dep_dir(name, dep, registry_dir.as_deref(), &pkg_dir)?;
+            let pinned = lockfile.get(name).cloned();
+            let (dep_dir, entry) =
+                resolve_dep_dir(name, dep, registry_dir.as_deref(), &pkg_dir, pinned.as_ref())?;
+            if let Some(e) = entry {
+                lockfile.set(e);
+                // Merge with any transitive pins written during recursion.
+                if let Some(disk) = lock::read(&lock_path) {
+                    for de in disk.entries {
+                        lockfile.set(de);
+                    }
+                }
+                let _ = lock::write(&lock_path, &lockfile);
+            }
             collect_dep(
                 name,
                 &dep_dir,
@@ -330,7 +346,8 @@ fn resolve_dep_dir(
     dep: &DepToml,
     registry_dir: Option<&Path>,
     root_pkg_dir: &Path,
-) -> Result<PathBuf, LoadError> {
+    pinned: Option<&lock::LockEntry>,
+) -> Result<(PathBuf, Option<lock::LockEntry>), LoadError> {
     if let Some(ver) = &dep.version {
         let reg = registry_dir.ok_or_else(|| {
             LoadError::Invalid(format!(
@@ -344,10 +361,21 @@ fn resolve_dep_dir(
                 pkg_file.display()
             ))
         })?;
+        let got = archive::hex_encode(&archive::content_hash(&archive_bytes));
+        // Lockfile pin wins over the registry's sidecar .sha256 file.
+        if let Some(pin) = pinned {
+            if pin.version != *ver {
+                return Err(lock_mismatch(name, ver, &pin.version));
+            }
+            if pin.sha256 != got {
+                return Err(LoadError::Invalid(format!(
+                    "dependency '{name}-{ver}': LOCKED content hash mismatch (locked {}, got {got}) — registry archive was modified; update resid.lock deliberately or restore the archive",
+                    pin.sha256
+                )));
+            }
+        }
         let sha_file = reg.join(format!("{name}-{ver}.resid-sha256"));
         if let Ok(expect_hex) = std::fs::read_to_string(&sha_file) {
-            let got =
-                archive::hex_encode(&archive::content_hash(&archive_bytes));
             if got != expect_hex.trim() {
                 return Err(LoadError::Invalid(format!(
                     "dependency '{name}': archive hash mismatch (expected {}, got {got})",
@@ -355,6 +383,11 @@ fn resolve_dep_dir(
                 )));
             }
         }
+        let entry = lock::LockEntry {
+            name: name.to_string(),
+            version: ver.clone(),
+            sha256: got,
+        };
         let cache_dir = root_pkg_dir
             .join("target")
             .join("resid")
@@ -365,14 +398,20 @@ fn resolve_dep_dir(
                 LoadError::Invalid(format!("dependency '{name}': extraction failed: {e}"))
             })?;
         }
-        Ok(cache_dir)
+        Ok((cache_dir, Some(entry)))
     } else if let Some(p) = &dep.path {
-        Ok(root_pkg_dir.join(p))
+        Ok((root_pkg_dir.join(p), None))
     } else {
         Err(LoadError::Invalid(format!(
             "dependency '{name}': needs either `path` or `version`"
         )))
     }
+}
+
+fn lock_mismatch(name: &str, want: &str, locked: &str) -> LoadError {
+    LoadError::Invalid(format!(
+        "dependency '{name}': manifest requires '{want}' but resid.lock pins '{locked}' — run with an updated manifest to re-lock"
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -439,7 +478,16 @@ fn collect_dep(
     // Recurse into the dependency's own dependencies first: their roots are
     // needed when this dependency's sources import them by name.
     for (sub_name, sub) in &raw.dependencies {
-        let sub_dir = resolve_dep_dir(sub_name, sub, registry_dir, dep_dir)?;
+        let pinned = lock::read(&root_pkg_dir.join("resid.lock"))
+            .and_then(|l| l.get(sub_name).cloned());
+        let (sub_dir, entry) =
+            resolve_dep_dir(sub_name, sub, registry_dir, dep_dir, pinned.as_ref())?;
+        if let Some(e) = entry {
+            // Re-read: collect_dep recursion may have added siblings.
+            let mut lf = lock::read(&root_pkg_dir.join("resid.lock")).unwrap_or_default();
+            lf.set(e);
+            let _ = lock::write(&root_pkg_dir.join("resid.lock"), &lf);
+        }
         collect_dep(
             sub_name,
             &sub_dir,
