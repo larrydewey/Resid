@@ -1344,6 +1344,7 @@ impl Parser {
             self.bump();
             if self.peek_is_keyword(Keyword::If) {
                 // else if → chain
+                self.bump();
                 let else_expr = self.parse_if_expr(span.clone());
                 Some(Box::new(Block {
                     statements: vec![Stmt {
