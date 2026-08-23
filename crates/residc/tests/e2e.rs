@@ -2499,7 +2499,11 @@ fn run_stage2_provenance_sidecar() {
         assert_eq!(out.status.code(), Some(0));
     }
     let file = dir.join("main.resid");
-    std::fs::write(&file, "Int main() {\n    println(\"ok\");\n    return 0;\n}\n").unwrap();
+    std::fs::write(
+        &file,
+        "Int main() {\n    filesystem.write_all(\"side.txt\", \"d\");\n    return 0;\n}\n",
+    )
+    .unwrap();
     let bin = dir.join("st2bin");
     let out = Command::new(residc_bin())
         .arg(workspace.join("examples/driver.res"))
@@ -2523,6 +2527,17 @@ fn run_stage2_provenance_sidecar() {
         .expect("verify");
     let stdout = String::from_utf8_lossy(&out2.stdout).into_owned();
     assert!(stdout.contains("SIGNATURE OK"), "verify output: {stdout}");
+    // Sidecar payload embeds the driver's own residual notes.
+    let sidecar = std::fs::read_to_string(&sidecar_path).unwrap();
+    assert!(
+        sidecar.contains("toolchain=resid-stage2;source_sha256="),
+        "sidecar payload malformed: {sidecar}"
+    );
+    // The driver embeds its own residual scan: the provider call above.
+    assert!(
+        sidecar.contains("records=provider-call@"),
+        "sidecar missing residual records: {sidecar}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
     if !have_key {
         let _ = std::fs::remove_file(keys.join("resid-ed25519.key"));

@@ -3511,7 +3511,37 @@ pub List(Int) prov_hex_acc(Str s, Int i, Int n, List(Int) acc) {
 }
 
 // Emit `<out>.resid-prov`: cleartext provenance payload + Ed25519 signature
-// over it, produced by the self-hosted signer in lib/ed25519.res.
+// over it, produced by the self-hosted signer in lib/ed25519.res. The
+// payload embeds the full residual notes the driver itself discovered.
+Str prov_esc(Str s) {
+    Str a = str_replace(s, ";", "_");
+    Str b = str_replace(a, "=", "_");
+    Str c = str_replace(b, "\n", " ");
+    return c;
+}
+
+Str prov_line_tag(Str line) {
+    if (str_contains(line, "rt ")) { return "rt-binding"; }
+    if (str_contains(line, "filesystem.")) { return "provider-call"; }
+    if (str_contains(line, "env.")) { return "provider-call"; }
+    if (str_contains(line, "args.")) { return "provider-call"; }
+    if (str_contains(line, "process.")) { return "provider-call"; }
+    return "";
+}
+
+Str prov_notes_rec(List(Str) lines, Int i, Int n, Str acc) {
+    if (i > n) { return acc; }
+    Str line = lines[i];
+    Str tag = prov_line_tag(line);
+    Int ln = i + 1;
+    Str esc = prov_esc(line);
+    Str rec = f"{tag}@{ln}:{esc}";
+    Str sep = if (acc == "") { "" } else { ";" };
+    Str acc2 = if (tag == "") { acc } else { acc + sep + rec };
+    Int ni = i + 1;
+    return prov_notes_rec(lines, ni, n, acc2);
+}
+
 Int write_provenance(Str out, Str src) {
     Str kpath = "keys/resid-ed25519.key";
     if (!filesystem.exists(kpath)) {
@@ -3523,8 +3553,11 @@ Int write_provenance(Str out, Str src) {
     Int km1 = klen - 1;
     Str ktrim = str_slice(keyhex, 0, km1);
     List(Int) seed = prov_hex_seed(ktrim);
-    Int notect = 0;
-    Str payload = f"toolchain=resid-stage2;source_sha256={sha256(src)};notes={notect}";
+    List(Str) lines = str_split(src, "\n");
+    Int nlines = lines.len() - 1;
+    Str notes_acc = "";
+    Str notes = prov_notes_rec(lines, 0, nlines, notes_acc);
+    Str payload = f"toolchain=resid-stage2;source_sha256={sha256(src)};records={notes}";
     List(Int) sig = sign_msg(seed, payload);
     Str sighex = hex_encode(sig);
     Str doc = payload + "\n" + sighex + "\n";
@@ -3585,6 +3618,9 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
+
+
 
 
 
