@@ -11,6 +11,7 @@
 // hdr_len: start-to-content bytes; val_len: content length (-1 malformed).
 type DerTlv = { tag: Int, cls: Int, hdr_len: Int, val_len: Int };
 
+
 pub Int der_cls_of(Int tag) {
     Int sh = tag >> 6;
     return sh & 3;
@@ -31,6 +32,7 @@ pub Int der_read_len(List(Int) data, Int pos) {
     Int start = pos + 1;
     return der_read_len_acc(data, start, end, 0);
 }
+
 
 pub Int der_read_len_acc(List(Int) data, Int i, Int end, Int acc) {
     if (i > end) { return acc; }
@@ -106,10 +108,12 @@ pub List(Int) der_content(List(Int) data, Int pos) {
     return der_slice_seeded(data, start, stop);
 }
 
+
 pub List(Int) der_slice_seeded(List(Int) data, Int start, Int stop) {
     List(Int) out = [0];
     return der_slice_acc(data, start, stop, start, out);
 }
+
 
 pub List(Int) der_slice_acc(List(Int) data, Int start, Int stop, Int i, List(Int) acc) {
     if (i > stop) { return acc; }
@@ -117,4 +121,64 @@ pub List(Int) der_slice_acc(List(Int) data, Int start, Int stop, Int i, List(Int
     List(Int) acc2 = acc.concat([b]);
     Int ni = i + 1;
     return der_slice_acc(data, start, stop, ni, acc2);
+}
+
+// ─── Value decoders ──────────────────────────────────────────────────
+
+// Decode a DER INTEGER's content (big-endian, two's complement) assuming
+// it is non-negative and fits in 62 bits (serials we care about are small
+// enough after trimming; big serials return -1).
+pub Int der_int_value(List(Int) data, Int pos) {
+    List(Int) c = der_content(data, pos);
+    Int n = c.len() - 1;
+    if (n == 0 || n > 8) { return -1; }
+    Int b1 = c[1];
+    if (b1 >= 128) { return -1; }
+    return der_int_acc(c, 2, n, b1);
+}
+
+
+pub Int der_int_acc(List(Int) c, Int i, Int n, Int acc) {
+    if (i > n) { return acc; }
+    Int byte = c[i];
+    Int step = acc * 256 + byte;
+    Int ni = i + 1;
+    return der_int_acc(c, ni, n, step);
+}
+
+// ─── OID rendering ───────────────────────────────────────────────────
+// Base-128 varint arcs; high bit = continuation. acc carries the dotted
+// string so far, accv the in-progress varint value.
+pub Str oid_rest(List(Int) c, Int i, Int n, Str acc, Int accv, Bool inarc) {
+    if (i > n) {
+        if (inarc) {
+            Str s = IntToString(accv);
+            return acc + "." + s;
+        }
+        return acc;
+    }
+    Int byte = c[i];
+    Int cont = byte & 128;
+    Int low = byte - cont;
+    Int v = accv * 128 + low;
+    Int ni = i + 1;
+    if (cont > 0) {
+        return oid_rest(c, ni, n, acc, v, true);
+    }
+    Str arc = IntToString(v);
+    Str joined = acc + "." + arc;
+    return oid_rest(c, ni, n, joined, 0, false);
+}
+
+// Render an OBJECT IDENTIFIER content as dotted decimal "1.2.840....".
+// First byte encodes arcs 1 and 2 (assumed < 80, covering all common OIDs).
+pub Str der_oid_str(List(Int) data, Int pos) {
+    List(Int) c = der_content(data, pos);
+    Int n = c.len() - 1;
+    if (n == 0) { return ""; }
+    Int b0 = c[1];
+    Int second = b0 - 40;
+    Int second2 = if (second < 0) { 0 } else { second };
+    Str head = "1." + IntToString(second2);
+    return oid_rest(c, 2, n, head, 0, false);
 }
