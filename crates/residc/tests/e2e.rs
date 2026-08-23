@@ -2391,8 +2391,11 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Unicode case mapping covers ASCII, Latin-1, Latin Extended-A, Greek and
-/// Cyrillic; ß has no simple uppercase and passes through.
+/// Unicode simple case mapping covers the full generated pair tables
+/// (tools/gen_case_tables.py, exhaustive vs unicodedata): ASCII, Latin-1,
+/// Latin Extended-A/B incl. irregular pairs, Greek incl. accented variants
+/// and final sigma, Cyrillic; ß has no simple uppercase (SpecialCasing
+/// expansions are out of scope) and passes through.
 #[test]
 fn run_unicode_case_mapping() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-case-{}", std::process::id()));
@@ -2405,6 +2408,8 @@ Int main() {
     println(str_to_upper("héllo wörld привет αβγ"));
     println(str_to_lower("HÉLLO WÖRLD ПРИВЕТ ΑΒΓ"));
     println(str_to_upper("ßÿ"));
+    println(str_to_upper("ǆ ς ж ά"));
+    println(str_to_lower("Ǆ Σ Ж Ά ẛ"));
     return 0;
 }
 "#,
@@ -2424,7 +2429,7 @@ Int main() {
     );
     assert_eq!(
         stdout.trim(),
-        "HÉLLO WÖRLD ПРИВЕТ ΑΒΓ\nhéllo wörld привет αβγ\nßŸ",
+        "HÉLLO WÖRLD ПРИВЕТ ΑΒΓ\nhéllo wörld привет αβγ\nßŸ\nǄ Σ Ж Ά\nǆ σ ж ά ẛ",
         "unexpected output: {stdout:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
