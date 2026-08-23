@@ -2293,3 +2293,11 @@ int64_t resid_crypto_random_byte(void) {
     }
     return (int64_t)b;
 }
+
+/* Bounds-check failure helper with diagnostics. */
+_Noreturn void resid_index_abort(int64_t idx, int64_t len) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "list index out of bounds: index %lld, length %lld",
+             (long long)idx, (long long)len);
+    resid_abort(buf);
+}

@@ -1823,7 +1823,11 @@ family overrides scopes. **Unicode casing done**: `str_to_lower`/`str_to_upper`
   `<name>-<version>.resid-pkg` from a directory registry, verifies the SHA-256
   against a sibling `.resid-sha256`, extracts into
   `target/resid/deps/<name>-<ver>/`, and builds like a path dependency.
-  Archive extraction includes path-traversal guards. |
+  Archive extraction includes path-traversal guards. **Bounds-checked list
+  indexing done (soundness)**: `xs[i]` now emits an unsigned `idx < len`
+  check that aborts with the index and length instead of silently reading
+  out of bounds — found while debugging SHA-512-in-Resid, where unchecked
+  indexing turned an off-by-one into nondeterministic segfaults. |
 | 6. Tooling, Bootstrap | Partial | `resid fmt` done (canonical AST formatter, idempotent on all bootstrap sources); **`resid-graph` done** — call-graph extraction from the resolved AST (imports + alias rewriting included), text tree and DOT output, extern built-ins excluded from nodes; recursion shows as self-edges. `resid-notes`/`resid-cache`/`resid-why` still stubs (they need the reduction/cache subsystem). |
 
 Build/test notes:
