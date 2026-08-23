@@ -2317,9 +2317,12 @@ machinery are complete; only transport and index metadata are missing.
 
 `str_to_lower`/`str_to_upper` cover ASCII, Latin-1, Latin Extended-A,
 Greek and Cyrillic via algorithmic ranges. Full coverage needs the
-Unicode SpecialCasing/CaseFolding tables generated into the C runtime
-(or a Resid data table); Turkish/Azeri locale rules are out of scope
-by design (simple mapping only).
+- [x] Unicode simple case mapping: full generated pair tables
+  (`tools/gen_case_tables.py` → `resid_rt.c`, binary-searched) covering
+  every single-codepoint mapping, exhaustively verified against
+  unicodedata — 0 mismatches across all codepoints. Multi-character
+  SpecialCasing expansions (e.g. ß → SS) remain out of scope by design
+  (simple mapping only); Turkish/Azeri locale rules likewise.
 
 ### 14.4 resid-notes / resid-cache / resid-why
 
