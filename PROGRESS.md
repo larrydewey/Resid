@@ -2315,8 +2315,14 @@ lock to current truth. `resid-build publish <dir> --registry <path>
 [--key secret.hex]` drops `<name>-<version>.resid-pkg/-sha256/-sig`
 into a local registry directory (e2e `registry_lockfile_pins_content_hashes`).
 
-Remaining: an HTTP registry (remote transport), and signed registry
-indexes (keyring already exists).
+DONE: HTTP transport. `resid-build::registry` has a dependency-free
+HTTP/1.1 client (`[registry] url = "http://host:port"`) and a static
+server (`resid-build serve <dir> --port N`, `GET /pkg/<file>`);
+`publish` writes the canonical `<registry>/pkg/` layout. e2e
+`remote_registry_http_pull` builds through a live in-process server.
+
+Remaining: signed registry indexes (keyring already exists), TLS is
+deliberately delegated to a reverse proxy.
 
 ### 14.3 Unicode full casing
 
