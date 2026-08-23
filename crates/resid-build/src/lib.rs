@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 pub mod archive;
 pub mod provenance;
+pub mod cose;
 
 use serde::Deserialize;
 

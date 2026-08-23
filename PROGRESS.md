@@ -24,6 +24,11 @@
   `residc verify <bin>.resid-prov` accepts it (e2e
   run_stage2_provenance_sidecar). The earlier "failure" was a bug in the
   verification script, not the emitter.
+- **COSE provenance (RFC 9052)**: trailers now carry a real `COSE_Sign1`
+  (tag 18, EdDSA -8) over the payload — verifiable by any COSE library.
+  Confidential reservation wired: `RESID_PROV_ENCRYPT=1` +
+  `RESID_PROV_KEY=<64 hex>` wraps the payload in `COSE_Encrypt0` (tag 16)
+  before signing (experimental stream cipher; AEAD pending).
 - **Knowledge cache + residual notes + signed provenance (spec §21.4, §27,
   §34, §35 — reduction subsystem v1)**: `resid-cache` (content-hash keyed
   CBOR store; `build` skips recompilation when source is unchanged),
