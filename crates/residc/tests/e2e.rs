@@ -3228,3 +3228,82 @@ Int main() {{
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// TCP externs work through BOTH pipelines identically: the Rust pipeline
+/// and the stage-2 bootstrap driver produce the same output for a program
+/// doing raw-socket HTTP against an in-process server.
+#[test]
+fn run_tcp_externs_both_pipelines() {
+    use std::io::{Read, Write};
+    let dir = std::env::temp_dir().join(format!("residc-e2e-tcp2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut stream) = conn else { break };
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let body = "dual pipeline\n";
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        }
+    });
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"
+Int main() {{
+    Int fd = resid_tcp_connect("127.0.0.1", {port});
+    Str h1 = "GET /x.txt HTTP/1.1\r\n";
+    Str h2 = "Host: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    Str req = h1 + h2;
+    if (!resid_tcp_send(fd, req)) {{ println("send fail"); }}
+    Str resp = resid_tcp_recv_all(fd);
+    resid_tcp_close(fd);
+    println(resp);
+    return 0;
+}}
+"#
+        ),
+    )
+    .unwrap();
+    // Rust pipeline.
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("rust pipeline run");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let rust_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(rust_out.contains("dual pipeline"), "{rust_out:?}");
+    // Stage-2 driver.
+    let bin = dir.join("tcp_drv");
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.res"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(workspace) // driver looks for keys/ relative to cwd
+        .output()
+        .expect("driver run");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = Command::new(&bin).output().expect("stage-2 binary runs");
+    let stage2_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    // Byte-for-byte agreement between pipelines.
+    assert_eq!(rust_out, stage2_out, "{rust_out:?} vs {stage2_out:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
