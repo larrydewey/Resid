@@ -11,6 +11,10 @@
 
 ## 0. CURRENT SNAPSHOT
 
+- **`else if` fixed**: the bootstrap and Rust parsers never consumed the
+  `if` after `else`, so every `else if` chain failed to compile; both now
+  parse chains correctly (regression tests in
+  `crates/resid-parser/tests/else_if.rs`). Stage-2 codegen support pending.
 - **Knowledge cache + residual notes + signed provenance (spec §21.4, §27,
   §34, §35 — reduction subsystem v1)**: `resid-cache` (content-hash keyed
   CBOR store; `build` skips recompilation when source is unchanged),
