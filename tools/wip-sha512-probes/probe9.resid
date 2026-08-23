@@ -1,0 +1,10 @@
+import "crypto.res";
+Int main() {
+    List(Int) p = pad512(bytes_of("abc"));
+    List(Int) w = msg_words512(p, 0);
+    println(IntToString(w.len()));
+    Int im15 = 16 - 15;
+    List(Int) wm15 = fw_pair(w, im15);
+    println(IntToString(wm15.len()));
+    return 0;
+}

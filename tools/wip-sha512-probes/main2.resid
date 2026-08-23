@@ -1,0 +1,6 @@
+import "crypto.res";
+Int main() {
+    List(Int) s = h512_state();
+    println(IntToString(s.len()));
+    return 0;
+}
