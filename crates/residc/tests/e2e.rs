@@ -3363,3 +3363,75 @@ fn run_stage2_import_resolution() {
     assert_eq!(rust_out, stage2_out, "{rust_out:?} vs {stage2_out:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Pure-Resid DER/ASN.1 decoder (lib/der.res) — x509 foundation.
+/// Decodes SEQUENCE { INTEGER 42, OCTET STRING "hi" } and a long-form
+/// length element, through BOTH pipelines.
+#[test]
+fn run_der_parser_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-der-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/der.res"), dir.join("der.res")).unwrap();
+    // SEQUENCE(30 05) { INTEGER(02 01) 42, OCTET STRING(04 02) "hi" } then
+    // INTEGER with long-form length (02 81 FF ...) truncated marker check:
+    // we decode 0x2015 as long-form length carrying value bytes 0x20 0x15
+    // -> val_len 0x2015 = 8213.
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "der.res";
+Int main() {
+    List(Int) blob = [0, 48, 5, 2, 1, 42, 4, 2, 104, 105];
+    DerTlv seq = der_next(blob, 1);
+    println(IntToString(seq.tag));
+    println(IntToString(seq.val_len));
+    Int ipos = der_content_pos(blob, 1);
+    DerTlv intv = der_next(blob, ipos);
+    println(IntToString(intv.val_len));
+    List(Int) v = der_content(blob, ipos);
+    println(IntToString(v[1]));
+    List(Int) big = [0, 2, 130, 32, 21, 9, 9];
+    DerTlv lf = der_next(big, 1);
+    println(IntToString(lf.val_len));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("rust pipeline");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let rust_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        rust_out.trim(),
+        "48\n5\n1\n42\n8213",
+        "{rust_out:?}"
+    );
+    // Stage-2 driver.
+    let bin = dir.join("der_bin");
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.res"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(workspace)
+        .output()
+        .expect("driver run");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = Command::new(&bin).output().expect("stage-2 binary");
+    // Agreement between pipelines (resolver may add one trailing newline).
+    assert_eq!(rust_out.trim_end(), String::from_utf8_lossy(&out.stdout).trim_end());
+    let _ = std::fs::remove_dir_all(&dir);
+}
