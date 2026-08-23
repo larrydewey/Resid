@@ -959,6 +959,22 @@ ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
         if (argtys == "") { return ERes { pos: pos, ty: "Int", err: "" }; }
         return ERes { pos: pos, ty: "", err: "resid_crypto_random_byte expects no arguments" };
     }
+    if (name == "resid_tcp_connect") {
+        if (argtys == "Str,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "resid_tcp_connect expects (Str, Int), got (" + argtys + ")" };
+    }
+    if (name == "resid_tcp_send") {
+        if (argtys == "Int,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "resid_tcp_send expects (Int, Str), got (" + argtys + ")" };
+    }
+    if (name == "resid_tcp_recv_all") {
+        if (argtys == "Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "resid_tcp_recv_all expects (Int), got (" + argtys + ")" };
+    }
+    if (name == "resid_tcp_close") {
+        if (argtys == "Int") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "resid_tcp_close expects (Int), got (" + argtys + ")" };
+    }
     if (arith_family(name)) {
         if (argtys == "Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
         return ERes { pos: pos, ty: "", err: name + " expects (Int, Int), got (" + argtys + ")" };
