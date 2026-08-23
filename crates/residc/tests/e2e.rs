@@ -2471,6 +2471,37 @@ Int main() {
 }
 
 
+
+/// Shift counts >= bit width yield 0 (machine shifts wrap the count mod width).
+#[test]
+fn run_shift_overflow_yields_zero() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-shovf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int main() {
+    Int x = 8;
+    println(IntToString(x >> 64));
+    println(IntToString(x << 100));
+    println(IntToString(x >> 1));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(stdout.trim(), "0\n0\n4", "{stdout:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// SHA-512 in pure Resid (32-bit limb pairs) — FIPS 180-4 vectors incl. multi-block.
 #[test]
 fn run_sha512_in_resid() {

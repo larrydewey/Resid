@@ -2221,8 +2221,30 @@ impl<'ctx> CodeGen<'ctx> {
                     self.builder.build_int_unsigned_rem(li, ri, "urem")
                 }
             }
-            BinOp::ShiftLeft => self.builder.build_left_shift(li, ri, "shl"),
-            BinOp::ShiftRight => self.builder.build_right_shift(li, ri, signed, "shr"),
+            BinOp::ShiftLeft => {
+                let sh = self.builder.build_left_shift(li, ri, "shl").map_err(to_err)?;
+                let width = li.get_type().get_bit_width();
+                let wv = li.get_type().const_int(width as u64, false);
+                let ovf = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGE, ri, wv, "shovf").map_err(to_err)?;
+                let zero = li.get_type().const_int(0, false);
+                self.builder
+                    .build_select(ovf, zero, sh, "shsafe")
+                    .map(|bv| bv.into_int_value())
+            }
+            BinOp::ShiftRight => {
+                let sh = self.builder.build_right_shift(li, ri, signed, "shr").map_err(to_err)?;
+                let width = li.get_type().get_bit_width();
+                let wv = li.get_type().const_int(width as u64, false);
+                let ovf = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGE, ri, wv, "shovf").map_err(to_err)?;
+                let zero = li.get_type().const_int(0, false);
+                self.builder
+                    .build_select(ovf, zero, sh, "shsafe")
+                    .map(|bv| bv.into_int_value())
+            }
             BinOp::And => self.builder.build_and(li, ri, "and"),
             BinOp::Or => self.builder.build_or(li, ri, "or"),
             BinOp::Xor => self.builder.build_xor(li, ri, "xor"),
