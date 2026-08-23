@@ -3515,7 +3515,7 @@ pub List(Int) prov_hex_acc(Str s, Int i, Int n, List(Int) acc) {
 Int write_provenance(Str out, Str src) {
     Str kpath = "keys/resid-ed25519.key";
     if (!filesystem.exists(kpath)) {
-        println("provenance: unsigned (no signing key)");
+        println("note: provenance: unsigned (no signing key)");
         return 0;
     }
     Str keyhex = filesystem.read_all(kpath);
@@ -3529,7 +3529,7 @@ Int write_provenance(Str out, Str src) {
     Str sighex = hex_encode(sig);
     Str doc = payload + "\n" + sighex + "\n";
     filesystem.write_all(out + ".resid-prov", doc);
-    println("provenance: signed (stage-2)");
+    println("note: provenance: signed (stage-2)");
     return 0;
 }
 
@@ -3585,6 +3585,7 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
 
 
 
