@@ -30,15 +30,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cbor4ii"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "472931dd4dfcc785075b09be910147f9c6258883fc4591d0dac6116392b2daa6"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "cc"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -338,8 +329,7 @@ version = "0.1.0"
 name = "resid-cache"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -384,9 +374,7 @@ version = "0.1.0"
 name = "resid-notes"
 version = "0.1.0"
 dependencies = [
- "cbor4ii",
- "serde",
- "serde_json",
+ "resid-cache",
 ]
 
 [[package]]
@@ -421,9 +409,11 @@ dependencies = [
  "inkwell",
  "resid-build",
  "resid-builtin",
+ "resid-cache",
  "resid-codegen",
  "resid-ir",
  "resid-lexer",
+ "resid-notes",
  "resid-parser",
  "resid-type",
 ]

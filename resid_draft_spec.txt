@@ -1,0 +1,1250 @@
+==================================================
+RESID LANGUAGE DESIGN DOCUMENT
+Version 4.0-DRAFT — Inference-First Edition
+==================================================
+
+STATUS: DRAFT SPECIFICATION
+This document is a working draft. No commitment to this direction has been made.
+All semantics, surface syntax, and obligations described herein are provisional.
+
+
+LANGUAGE DESIGN CONTEXT
+==================================================
+
+Resid is an eager compile-time programming language.
+The compiler’s primary obligation is maximal authorized
+reduction of first-class knowledge.
+
+Runtime behavior consists solely of the residual computation
+that remains after all provable reductions have been performed.
+
+The name Resid denotes this residual core.
+
+The pronunciation /ˈrɛz.ɪd/ (REZ-id) or /ˈriː.zɪd/ (REE-zid) is the correct and standard pronunciation for the name.
+
+Core statement:
+
+    Compilation is maximal authorized reduction
+    of first-class knowledge.
+
+This edition adopts full Hindley-Milner style type inference
+with local bidirectional checking. Types exist in the knowledge
+graph and drive reduction, residual status, capabilities, and
+provenance. Users are not required to write type annotations;
+annotations remain optional for documentation, disambiguation,
+or documentation of intent.
+
+
+==================================================
+FUNDAMENTAL LAWS
+==================================================
+
+  1. Everything begins as compile-time reducible.
+  2. The compiler must reduce all provable computation.
+  3. Unknown information must be explicitly introduced.
+  4. Residual computation enters through rt.
+  5. Compile-time computation cannot depend on unresolved
+     residual information.
+  6. The compiler preserves knowledge whenever possible.
+  7. Residual dependencies should be minimized.
+  8. Authorized external knowledge enters through providers.
+  9. Knowledge acquisition is an effect.
+ 10. Effects determine reducibility.
+ 11. External information has provenance.
+ 12. Runtime uncertainty is explicit.
+ 13. Knowledge is first-class.
+ 14. Authority is never ambient and may only be attenuated,
+      never amplified, across trust boundaries.
+ 15. Types are inferred; annotations are optional.
+
+
+==================================================
+1. KNOWLEDGE IS FIRST-CLASS
+==================================================
+
+Knowledge may be represented, transformed, reduced,
+composed, serialized, transmitted, and inspected.
+
+Knowledge includes values, types, constraints, proofs,
+behaviors, capabilities, provider results, residual
+values, and effects.
+
+
+==================================================
+2. EXECUTION MODEL
+==================================================
+
+A program is progressively reduced until only irreducible
+computations remain. Compilation is knowledge reduction.
+
+Type inference is performed as part of the reduction process.
+The knowledge graph records precise types even when the
+surface program contains no annotations.
+
+
+==================================================
+3. INTERNAL REPRESENTATION — KNOWLEDGE GRAPH
+==================================================
+
+Programs are represented as a knowledge graph (enriched
+expression DAG). Each node tracks expression, type,
+knowledge state, dependencies, effects, capabilities,
+and provenance.
+
+Knowledge states: KNOWN, EFFECT, RESIDUAL, INVALID.
+
+
+==================================================
+4. VALUE MODEL
+==================================================
+
+Values are immutable, have no observable identity, and
+may be freely copied. Handles are identity-bearing
+runtime resources under capability control. Only handles
+may represent mutable state.
+
+
+==================================================
+5. MEMORY MODEL
+==================================================
+
+Resid does not expose stack, heap, or register allocation.
+The compiler decides storage. The implementation may use
+any target ISA extensions (AVX-512, NEON, SVE, ...) for
+optimization; raw intrinsics are not exposed.
+
+
+==================================================
+6. PRIMITIVE NUMERIC TYPES (FIRST-CLASS)
+==================================================
+
+Numeric types are first-class nominal types. Inference
+selects the narrowest type that can represent a literal
+or intermediate result, then applies the interoperability
+rules below when operators are used.
+
+Integer family (distinct types for every width):
+
+  Int(8)   Int(16)   Int(32)   Int(64)
+  Int(128) Int(256)  Int(512)
+
+  UInt(8)  UInt(16)  UInt(32)  UInt(64)
+  UInt(128) UInt(256) UInt(512)
+
+Aliases (fixed, reproducible):
+
+  Int  = Int(64)
+  UInt = UInt(64)
+
+Pointer-sized (target-dependent):
+
+  ISize    // signed, width of a pointer
+  USize    // unsigned, width of a pointer
+
+Floating-point family:
+
+  Float(16)  Float(32)  Float(64)  Float(128)
+
+  Float(128) is the widest floating-point type.
+  Wider binary floats are not part of the language;
+  arbitrary precision is carried by the decimal
+  family below.
+
+Alias:
+
+  Float = Float(64)
+
+Arbitrary-precision decimal family:
+
+  Dec(N)    // N significant decimal digits, any N >= 1
+
+Alias:
+
+  Dec = Dec(34)
+
+Each width is a distinct type. There is no subtyping
+between any numeric types.
+
+
+--------------------------------------------------
+6.1  Interoperability — Integer Arithmetic
+--------------------------------------------------
+
+Mixed-width integer operations are permitted when both
+operands are signed or both are unsigned.
+
+The result type is the smallest width W ∈ {8,16,32,64,128,256,512}
+such that every mathematically possible result of the
+operation on values of the two operand types fits in
+that width.
+
+Formal range rule (unsigned addition):
+
+  Let a ∈ UInt(m), b ∈ UInt(n).
+  Let M = max possible value of a + b = (2^m - 1) + (2^n - 1).
+  Then result type = UInt(w) where w is the least element of
+  {8,16,32,64,128,256,512} such that 2^w - 1 ≥ M.
+
+Examples (unsigned addition):
+
+  UInt(8)  + UInt(8)  → UInt(16)   // 255+255 = 510
+  UInt(16) + UInt(8)  → UInt(32)   // 65535+255 = 65790
+  UInt(32) + UInt(32) → UInt(64)   // needs 33 bits
+
+The same range rule applies to subtraction, multiplication,
+division, remainder, and shifts (shift amount is treated
+as a pure integer; the left operand determines the base
+width before the range rule is applied).
+
+ISize / USize participate with their actual target width.
+
+Signed and unsigned operands may never be mixed in a
+single arithmetic operation; an explicit cast is required.
+
+Proof obligation for checked arithmetic:
+  After widening to common type T, the mathematical result r
+  of the operation must satisfy min(T) ≤ r ≤ max(T).
+  If this is provable at compile time the operation reduces
+  to the constant; otherwise it remains residual and fails
+  at force time on overflow.
+
+
+--------------------------------------------------
+6.2  Interoperability — Floating-Point
+--------------------------------------------------
+
+Integer + floating-point:
+
+  The integer operand is converted to the floating-point
+  type of the other operand; the result is that floating-
+  point type.
+
+  Int(32) + Float(64)  →  Float(64)
+
+Floating-point + floating-point:
+
+  The result is the wider of the two floating-point types
+  (using the order 16 < 32 < 64 < 128).
+
+
+--------------------------------------------------
+6.3  Comparisons
+--------------------------------------------------
+
+Relational and equality operators follow the same
+widening rules as arithmetic, except that a signed/
+unsigned mix is always a hard error.
+
+The result of a comparison is Bool.
+
+
+--------------------------------------------------
+6.4  Assignment and Narrowing
+--------------------------------------------------
+
+Narrowing conversions are never implicit.
+
+  know x = some_u32;              // inferred as UInt(32)
+  know y: UInt(16) = some_u32;    // hard error
+  know y = u16(some_u32);         // ok (explicit)
+
+Widening assignments likewise require an explicit cast
+or conversion helper when the programmer demands a
+specific wider type; interoperability applies only to
+operators, not to binding.
+
+
+--------------------------------------------------
+6.5  Checked Arithmetic
+--------------------------------------------------
+
+After operands have been brought to the common result
+type, the operation itself is still checked by default.
+Overflow of the result type is an error (compile-time
+when provable, residual error when forced at runtime).
+
+Wrapping and saturating variants are supplied by the
+standard library for every width.
+
+
+--------------------------------------------------
+6.6a Decimals — Dec(N) Semantics
+--------------------------------------------------
+
+Dec(N) holds an exact decimal value with N
+significant decimal digits:
+
+  sign        + or -
+  digits      exactly N significant decimal digits
+  exponent    i32, range [-1_000_000, +1_000_000]
+
+Dec(N) values have no NaN and no Inf. Division by
+zero, exponent-range overflow, and non-integer
+Dec-to-Int conversion are errors: compile-time when
+provable, residual errors when forced at runtime.
+
+Rounding:
+
+  When a result must be narrowed to N significant
+  digits it is rounded half away from zero:
+
+    0.255    ->  0.26     // to 2 digits
+    -0.255   ->  -0.26    // to 2 digits
+
+  Additive and multiplicative arithmetic computes
+  the exact decimal result, then rounds once. Division
+  computes to N + 2 guard digits, then rounds once.
+
+Interoperability:
+
+  Dec(N) op Dec(M)  ->  Dec(max(N, M))
+
+  Mixing Dec with Int, UInt, or Float in either
+  direction is a hard error. Conversion is always
+  explicit via dN / iN / fN helpers.
+
+  Dec-to-Int conversion requires the value to be
+  integral; a fractional part is an error.
+
+Literals:
+
+  1.5m   123.456m   5m
+
+  Decimal literals carry their digits verbatim; they
+  never round-trip through binary. Inference selects
+  the smallest N that preserves the written digits.
+  The default upper bound for unannotated literals
+  remains Dec(34). Scientific notation is not part of
+  v1 decimal literals.
+
+Display:
+
+  Dec values print in fixed notation with all N
+  significant digits; trailing zeros are preserved.
+
+    Dec(4) 1.5   ->   "1.500"
+
+  The f-string specifier ":." trims trailing zeros:
+
+    f"{x:.}"
+
+
+--------------------------------------------------
+6.6  Behaviors
+--------------------------------------------------
+
+Eq, Ord and Hash are supplied for the entire numeric
+family by generic behavior definitions. The compiler
+instantiates them for every concrete width. Users never
+need to declare per-width instances.
+
+Users may define additional behaviors (see §11).
+
+
+--------------------------------------------------
+6.7  Conversion Helpers
+--------------------------------------------------
+
+  i8 i16 i32 i64 i128 i256 i512
+  u8 u16 u32 u64 u128 u256 u512
+  f16 f32 f64 f128
+  dN            // any N >= 1: exact conversion to Dec(N),
+                // from Int (exact) or Str (exact decimal parse)
+  isize usize
+
+Plus the ordinary C-style cast (Type)expr.
+
+
+==================================================
+7. BINDINGS AND IDENTITY
+==================================================
+
+  know x = expression;
+
+Bindings are immutable. Shadowing is forbidden everywhere.
+There are no assignment operators.
+
+Optional annotation:
+
+  know x: SomeType = expression;
+
+Discard:
+
+  _ = expression;
+
+
+==================================================
+8. FUNCTIONS
+==================================================
+
+  def name(p1, p2 = default) {
+      body
+  }
+
+Defaults must be pure compile-time expressions.
+Named arguments are permitted:
+
+  draw(x = 10, y = 20, color = red);
+
+Optional explicit parameters and return types:
+
+  def name(p1: Type1, p2: Type2 = default) -> Ret {
+      body
+  }
+
+Optional explicit type parameters:
+
+  def identity[T](x: T) -> T {
+      x
+  }
+
+Entry point: def main() { ... }
+
+
+==================================================
+9. RESIDUAL COMPUTATION
+==================================================
+
+  know x = rt expression;
+  @residual know y = expression;
+
+Residual values are first-class knowledge.
+Top-level residual force or unwrap failure aborts the
+process. Inside a concurrent region, failure is delivered
+as Result.
+
+  known(x);        // compile-time hard error if residual
+  rt_known(x);     // residual check
+
+The compiler may continue to reduce residual graphs when
+additional knowledge becomes available (knowledge cache,
+providers, later residual notes). Residual notes record
+what remains.
+
+
+==================================================
+10. EFFECTS
+==================================================
+
+Effects are first-class. They do not appear in signatures;
+capabilities (@requires) are the sole authorization surface.
+
+
+==================================================
+11. BEHAVIORS
+==================================================
+
+Behaviors are ordinary compile-time knowledge.
+
+Users may define behaviors beyond those supplied by the
+standard library:
+
+  Ord(Point) = {
+      // comparison knowledge
+  };
+
+  Hash(MyType) = {
+      // hashing knowledge
+  };
+
+  Pretty(Config) = {
+      // rendering knowledge
+  };
+
+Unique behaviors are inserted automatically; ambiguity
+requires explicit selection:
+
+  sort(values, using = Reverse(Ord));
+  hash(item, using = MyCustomHash);
+
+Numeric Eq / Ord / Hash are supplied generically for
+the whole family (see §6.6).
+
+
+==================================================
+12. TYPES
+==================================================
+
+Product:  type Point = { x: Int, y: Int };
+Sum:      type Option(T) = Some(T) | None;
+Constraint: type Positive = Int[value > 0];
+            type Positive = Int where value > 0;
+
+Residual types are permitted. Edge-case rules R1–R5 remain
+in force.
+
+Numeric types are first-class (see §6).
+
+Type annotations are optional everywhere; inference
+reconstructs them.
+
+
+==================================================
+13. PATTERN MATCHING AND DESTRUCTURING
+==================================================
+
+  match expression {
+      Some(x) => expression,
+      None    => expression
+  }
+
+Irrefutable destructuring:
+
+  Point { x, y } = p;
+  Some(v) = opt;          // hard error if refutable
+
+if-let / while-let:
+
+  if (Some(x) = opt) { ... }
+  while (Some(x) = it.next()) { ... }
+
+
+==================================================
+14. LITERALS AND COMPOSITES
+==================================================
+
+  42  0x2A  3.14  1.5m  'a'  "hello"  true  false  null
+  [1, 2, 3]   {"a": 1}   Point { x = 1, y = 2 }
+
+  f"hello {name}"
+  f"price: {price:.}"
+  r"C:\path\file"
+  b"bytes"
+
+Literals are given the narrowest type that preserves their
+value. Width is changed only by explicit cast, conversion
+helper, or operator interoperability rules.
+
+
+==================================================
+15. RANGES AND SLICING
+==================================================
+
+  start..end        // half-open
+  start..=end       // closed
+  xs[start..end]
+
+
+==================================================
+16. HANDLES AND LIFETIME
+==================================================
+
+  with (h = expression) { body }
+  with (a = e1, b = e2) { body }
+
+Method sugar (handles only): h.m(args) ≡ m(h, args).
+Immutable views may be shared across regions; mutable
+handles must be moved.
+
+
+==================================================
+17. FIELD AND INDEX ACCESS
+==================================================
+
+  p.x   xs[i]   m[k]
+
+
+==================================================
+18. CONTROL FLOW
+==================================================
+
+Classic C plus:
+
+  for (x in xs) { ... }
+
+  if (Some(x) = opt) { ... }
+  while (Some(x) = it.next()) { ... }
+
+
+==================================================
+19. CONCURRENCY
+==================================================
+
+Structured concurrency:
+
+  know r = spawn (cap1, cap2) {
+      return value;
+  };
+
+Rules:
+
+  - Capabilities listed explicitly; child ≤ parent.
+  - Child receives a fresh CapEnv.
+  - Residual forcing uses only the child’s CapEnv.
+  - Returns pure values or residuals.
+  - Mutable handles moved; immutable views shareable.
+  - Child failure → Err(RegionError) to parent.
+  - Nested spawn permitted.
+  - Scheduler implementation-defined.
+  - Work may run in parallel; completion is structured.
+
+
+==================================================
+20. CAPABILITIES AND SECURITY
+==================================================
+
+No ambient authority. Capabilities form a lattice and
+travel with effects, handles, and residuals. Revocation
+is monotonic within an execution / region.
+
+Authority may only be attenuated across trust boundaries;
+it may never be amplified.
+
+
+==================================================
+21. SANDBOXING AND LIBRARY ATTENUATION
+==================================================
+
+A program may restrict the capabilities available to a
+third-party library or any untrusted region of code.
+
+--------------------------------------------------
+21.1  Policy Ceiling (Manifest)
+--------------------------------------------------
+
+The project manifest supplies the maximum set of
+capabilities any dependency may receive:
+
+  [dependencies.http]
+  path = "vendor/http"
+  capabilities = ["filesystem(readonly)", "network"]
+
+This is a ceiling. Source code may only further restrict;
+it may never enlarge the set.
+
+--------------------------------------------------
+21.2  Source-Level Attenuation
+--------------------------------------------------
+
+Capabilities may be narrowed at the import site or with
+an explicit sandbox:
+
+  import "http.resid" (get, post)
+      @requires(filesystem(readonly));
+
+  sandbox (filesystem(readonly)) {
+      // all code and transitive imports herein
+      // see only the listed capabilities
+  }
+
+--------------------------------------------------
+21.3  Enforcement
+--------------------------------------------------
+
+  - When a required capability is statically apparent
+    and exceeds the sandbox, compilation fails with a
+    hard error.
+  - When the requirement is dynamic or residual, the
+    call remains residual and fails at force time with
+    a capability error.
+  - Transitive dependencies are closed under the same
+    sandbox; attenuation applies to the entire closure.
+  - A handle may enter a sandbox only when every
+    capability it requires is ≤ the sandbox’s set.
+    Otherwise the program is rejected at compile time
+    or the handle use becomes a residual capability
+    error.
+
+--------------------------------------------------
+21.4  Knowledge Cache Interaction
+--------------------------------------------------
+
+Sandboxed compilation may read the global knowledge
+cache. It may write cache entries only when the
+capabilities associated with those entries are ≤ the
+sandbox’s granted set.
+
+
+==================================================
+22. MODULES AND VISIBILITY
+==================================================
+
+  import "math.resid";
+  import "math.resid" (sin, cos);
+  import "math.resid" as M;
+
+Default private; `pub` exports.
+
+
+==================================================
+23. RESULT / OPTION SUGAR
+==================================================
+
+  know x = value?;
+  know y = value else { ... };
+
+
+==================================================
+24. ASSERTIONS AND DEBUGGING
+==================================================
+
+  assert(cond, "message");
+  rt_assert(cond, "message");
+  known(x);
+  rt_known(x);
+  comptime_print(f"...");
+  todo("message");
+  unimplemented("message");
+
+
+==================================================
+25. SOURCE LOCATION
+==================================================
+
+  know loc = #location;
+
+
+==================================================
+26. DOCUMENTATION COMMENTS
+==================================================
+
+  /// Line documentation
+  /** Block documentation */
+
+
+==================================================
+27. RUNTIME OPTIMIZATION AND MINIMIZATION
+==================================================
+
+The implementation shall reduce every provable
+computation. It shall not retain residual work that can
+be discharged under the granted capabilities and the
+available knowledge cache.
+
+Residual notes should make remaining residual work
+visible so that later compilations, with additional
+knowledge, can eliminate it.
+
+The compiler’s primary performance obligation is
+therefore:
+
+  1. Maximize compile-time reduction.
+  2. Minimize the residual surface that reaches runtime.
+  3. Lower only what remains to efficient native code
+     (LLVM).
+
+Release builds may omit diagnostic metadata from residual
+thunks. Capability checks may be elided when the required
+set is statically known to be present for the relevant
+lifetime. Pure prefixes of residual graphs should be
+evaluated at compile time whenever possible.
+
+
+==================================================
+28. PACKAGES, SIGNATURES, AND INTEGRITY
+==================================================
+
+A package is a directory containing resid.toml, source
+files (*.resid), and optional knowledge-cache /
+residual-notes artifacts.
+
+Distribution units are content-addressed archives.
+
+--------------------------------------------------
+28.1  Package Signature
+--------------------------------------------------
+
+Every published package carries a cryptographic
+signature over:
+
+  - package name and version
+  - content hash of the entire source tree
+  - dependency hashes
+  - declared capability requirements
+  - provenance of any included knowledge-cache entries
+  - the public key identity of the publisher
+
+The signature is stored alongside the package
+(e.g. <package>.resid-sig or inside the archive
+manifest).
+
+--------------------------------------------------
+28.2  Verification
+--------------------------------------------------
+
+Before a package is accepted into a build:
+
+  1. The content hash is recomputed and must match.
+  2. The signature must verify against a trusted key
+     (project keyring or explicitly pinned keys).
+  3. All dependency hashes must match the resolved
+     artifacts.
+  4. Required capabilities must be grantable under the
+     current manifest policy.
+
+Failure of any check rejects the package.
+
+--------------------------------------------------
+28.3  Key Management
+--------------------------------------------------
+
+Projects maintain a keyring of trusted publisher keys.
+Keys may be pinned per dependency. Unsigned packages
+are rejected unless the project explicitly allows them
+under a development profile.
+
+
+==================================================
+29. SURFACE SYNTAX SUMMARY
+==================================================
+
+  // bindings (inferred)
+  know a = 1;
+  know b = u16(2);
+  know c = a + b;                 // range rule applied by inference
+
+  // optional annotation
+  know width: UInt(16) = 42;
+
+  // residual
+  know data = rt filesystem.read("cfg");
+
+  // functions
+  def add(a, b) { a + b }
+  def draw(x = 10, y = 20, color = red) { ... }
+  def identity[T](x: T) -> T { x }
+
+  // behaviors (user-definable)
+  Ord(Point) = { ... };
+  sort(values, using = Reverse(Ord));
+
+  // sandboxing
+  import "http.resid" @requires(filesystem(readonly));
+  sandbox (filesystem(readonly)) { ... }
+
+  // concurrency
+  know r = spawn (cap1, cap2) { return value; };
+
+  // types (still declarable when useful)
+  type Point = { x: Int, y: Int };
+  type Option(T) = Some(T) | None;
+
+  // strings
+  f"hello {name}"
+  r"raw"   b"bytes"
+
+  // ranges & slices
+  0..n   0..=n   xs[1..3]
+
+  // control
+  if / while / for / for-in / match / return / break / continue
+  if (Some(x) = opt) { ... }
+
+  // resources
+  with (a = e1, b = e2) { ... }
+
+  // modules
+  import "file.resid";
+  import "file.resid" (a, b);
+  import "file.resid" as M;
+  pub declaration
+
+  // sugar & helpers
+  value?    value else { ... }
+  assert / rt_assert / known / rt_known
+  comptime_print / todo / unimplemented
+  i32(42)  u64(n)  f32(x)  usize(len)
+  #location
+
+
+==================================================
+30. OPERATORS AND PRECEDENCE
+==================================================
+
+  1. Primary        id literal (e) rt e call index field method
+                    range slice
+  2. Unary          + - ! \~ (Type)e
+  3. Multiplicative * / %
+  4. Additive       + -
+  5. Shift          << >>
+  6. Relational     < <= > >=
+  7. Equality       == !=
+  8. Bitwise AND    &
+  9. Bitwise XOR    ^
+ 10. Bitwise OR     |
+ 11. Logical AND    &&
+ 12. Logical OR     ||
+ 13. Conditional    e ? e : e
+ 14. using          e, using = behavior
+
+No assignment operators.
+No pure-value method chaining or pipeline operator.
+
+Numeric operators obey the interoperability rules of §6.
+
+
+==================================================
+31. CORE EBNF (ESSENTIAL)
+==================================================
+
+  translation-unit ::= { import-decl | declaration | sandbox-decl }
+
+  import-decl ::= "import" string-literal
+                  [ "(" id-list ")" | "as" identifier ]
+                  [ capability-annotation ] ";"
+
+  sandbox-decl ::= "sandbox" "(" capability-list ")"
+                   compound-statement
+
+  declaration ::= [ "pub" ] (function-def | type-def
+                  | behavior-def | capability-annotation declaration)
+
+  function-def ::= "def" identifier [ type-params ]
+                   "(" [ parameter-list ] ")"
+                   [ "->" type ] compound-statement
+
+  parameter    ::= [ type ] identifier [ "=" expression ]
+                 | identifier [ "=" expression ]
+
+  type-params  ::= "[" identifier { "," identifier } "]"
+
+  type-def     ::= "type" identifier "=" type-body ";"
+
+  behavior-def ::= identifier "(" type ")" "=" compound-statement
+
+  spawn-expression ::= "spawn" "(" capability-list ")"
+                       compound-statement
+
+  match-expression ::= "match" expression
+                       "{" match-arm { "," match-arm } "}"
+
+  for-in-statement ::= "for" "(" [ type ] identifier "in" expression ")"
+                       statement
+
+  binding ::= "know" [ type ] identifier "=" expression ";"
+            | "_" "=" expression ";"
+
+  primary ::= identifier | literal | "(" expression ")"
+            | "rt" expression | f-string | raw-string | byte-string
+            | list-literal | map-literal | struct-literal
+            | provider-call | spawn-expression | "#location"
+
+  range-expression ::= expression ".." expression
+                     | expression "..=" expression
+
+  slice-expression ::= primary "[" range-expression "]"
+
+  type ::= identifier [ "(" type-list ")" ]
+         | "rt" type
+         | "Int" "(" int ")" | "UInt" "(" int ")"
+         | "Float" "(" int ")" | "Dec" "(" int ")"
+         | "ISize" | "USize"
+
+
+==================================================
+32. STANDARD LIBRARY (v1)
+==================================================
+
+Trusted providers: filesystem, environment, git
+(all volatile by default).
+
+Core types: Bool, full Int/UInt/Float/Dec family,
+ISize, USize, Str, Bytes, Option, Result, List, Map,
+Set, RegionError, SourceLoc.
+
+Conversion helpers: i8...i512, u8...u512, f16...f128,
+dN (any N >= 1), isize, usize.
+
+Checked arithmetic (default) + wrapping_* + saturating_*
+for every width.
+
+Core behaviors: Eq, Ord, Hash (generic over the numeric
+family), Serialize, Allocator, Reverse.
+
+Users may define additional behaviors.
+
+
+==================================================
+33. ARTIFACTS AND CODE GENERATION
+==================================================
+
+Native binary / object files via LLVM plus optional
+CBOR residual-notes sidecar. Residuals become LLVM
+thunks carrying computation, provenance, and
+capabilities.
+
+The implementation may employ any target ISA extensions
+(AVX-512, NEON, SVE, etc.) for code generation and for
+the realization of wide numeric types.
+
+
+==================================================
+34. CBOR SCHEMAS
+==================================================
+
+Provenance, Capability, ResidualNotes, ResidualNote,
+KnowledgeCache, CacheEntry — as previously defined
+(RFC 8949 preferred serialization).
+
+Files:
+
+  <artifact>.resid-notes.cbor
+  <project>.resid-cache.cbor
+
+
+==================================================
+35. BUILD SYSTEM
+==================================================
+
+resid.toml:
+
+  [package]
+  name    = "example"
+  version = "0.1.0"
+
+  [capabilities]
+  grant = ["filesystem(scope=[\"config/**\"])", "git(readonly)"]
+
+  [dependencies.http]
+  path = "vendor/http"
+  capabilities = ["filesystem(readonly)"]
+
+  [reduction]
+  residual_notes        = true
+  residual_notes_format = "cbor"
+  knowledge_cache       = true
+
+  [target]
+  triple = "x86_64-unknown-linux-gnu"
+
+  [signing]
+  keyring = "keys/"
+  require_signatures = true
+
+Profiles: debug, release, check.
+
+
+==================================================
+36. PURE REDUCTION RELATION
+==================================================
+
+The pure reduction relation is written
+
+    Κ ⊢ e → e′
+
+where Κ is the current knowledge context (types, proven
+equalities, available behaviors, capabilities, and cache
+entries).
+
+The relation covers:
+
+  - β-reduction of pure applications
+  - constant folding of arithmetic and comparisons
+    under the numeric interoperability rules of §6
+  - constraint discharge (including Positive and other
+    refinement types)
+  - provider substitution when the provider result is
+    known and the required capabilities are present
+  - automatic unique behavior insertion
+  - method desugaring for handles
+  - pattern matching and irrefutable destructuring
+  - checked arithmetic (overflow proof or residual)
+  - numeric range-based widening
+  - string interpolation
+  - range and slice construction
+  - structural identity of immutable values
+  - Hindley-Milner style type inference steps
+    (unification, instantiation, generalization)
+
+Formal properties that must hold:
+
+  1. Subject reduction
+     If Κ ⊢ e : τ and Κ ⊢ e → e′ then Κ ⊢ e′ : τ.
+
+  2. Progress for pure terms
+     If Κ ⊢ e : τ and e is pure (no residual, no effect)
+     then either e is a value or there exists e′ such
+     that Κ ⊢ e → e′.
+
+  3. Maximal reduction obligation
+     The implementation shall apply → until no further
+     pure reduction is possible under the current Κ.
+     Residual notes record any remaining residual
+     sub-terms so that a later Κ′ ⊇ Κ may resume
+     reduction.
+
+  4. Residual preservation
+     If a sub-term is marked residual, reduction may
+     not force it unless the required knowledge and
+     capabilities are present in Κ. Forcing under
+     insufficient knowledge yields a residual error.
+
+The implementation shall eliminate every residual that
+is dischargeable under current knowledge and capabilities.
+
+
+==================================================
+37. DEBUGGING AND TOOLING
+==================================================
+
+Canonical debug artifact: CBOR residual notes.
+
+“Why is this residual?” is a tooling query (IDE / resid
+why), not a language construct.
+
+Normative tooling expectations:
+
+  residc          – compiler driver
+  resid fmt       – canonical formatter
+  resid-notes     – residual-notes viewer
+  resid-cache     – knowledge-cache inspector
+  resid-graph     – dependency graph emitter
+  resid why       – residual provenance query
+  resid verify    – package signature verification
+  LSP surface     – residual status, capabilities,
+                    knowledge state, inferred types,
+                    doc comments, exhaustiveness
+                    diagnostics, sandbox attenuation view
+
+
+==================================================
+38. NON-GOALS
+==================================================
+
+  - mutable values or bindings
+  - variable shadowing
+  - assignment operators
+  - null references
+  - ambient authority
+  - hidden identity
+  - trait / interface systems (behaviors are the sole
+    ad-hoc polymorphism mechanism)
+  - programmer-controlled allocation
+  - exceptions outside concurrent Result
+  - implicit numeric conversions (except the explicit
+    interoperability rules of §6)
+  - operator overloading beyond Behaviors
+  - unstructured concurrency
+  - raw target intrinsics
+  - pure-value method chaining / pipeline operator
+  - amplification of authority across sandboxes
+  - mandatory type annotations
+
+
+==================================================
+39. BOOTSTRAP AND CONFORMANCE
+==================================================
+
+Phase 1 – Hosted interpreter
+Phase 2 – LLVM lowering
+Phase 3 – Self-hosting
+
+Conformance includes all prior rules plus:
+
+  - numeric interoperability (§6)
+  - sandbox attenuation and transitive closure (§21)
+  - package signature verification (§28)
+  - normative reduction/minimization obligation (§27)
+  - for-in, destructuring, if-let/while-let, ranges,
+    slicing, known/rt_known, comptime_print, raw/byte
+    strings, #location, discard binding
+  - full Hindley-Milner style inference with local
+    bidirectional checking
+  - optional type annotations and type parameters
+  - user-defined behaviors
+  - the normative tooling surface
+  - the pure reduction relation and its formal
+    properties (subject reduction, progress for pure
+    terms, maximal reduction obligation, residual
+    preservation)
+
+
+==================================================
+40. PRODUCTION-READY STATUS
+==================================================
+
+Resid 4.0-DRAFT is a complete draft specification of an
+inference-first edition of the language.
+
+All core semantics, syntax, numeric types (first-class
+with interoperability), concurrency, sandboxing,
+package integrity, DX conveniences, minimization
+obligations, and tooling expectations are expressed.
+Implementation may proceed against this document once
+the draft is accepted.
+
+
+==================================================
+41. RESOLVED DECISIONS (CARRIED FORWARD)
+==================================================
+
+Float representations, provider volatility, spawn
+scheduler, doc-comment storage, and incremental-cache
+granularity remain as decided in earlier versions.
+
+v3.1: wide binary floating point is capped at
+Float(128). Float(256)/Float(512) are removed from
+the type system; arbitrary precision is carried by
+the Dec(N) decimal family (§6.6a).
+
+v4.0-DRAFT: type annotations are optional; full
+Hindley-Milner style inference with local bidirectional
+checking is required; binding keyword is know;
+function keyword is def; numeric literals prefer the
+narrowest fitting type; residual graphs may continue
+to be reduced when additional knowledge arrives;
+users may define behaviors beyond the standard library.
+
+
+==================================================
+42. NUMERIC INTEROPERABILITY SUMMARY
+==================================================
+
+  - Every width is a distinct first-class type.
+  - No subtyping, no implicit narrowing or widening
+    on assignment.
+  - Arithmetic and comparison on same-sign integers
+    use a range-based result width (smallest fitting
+    available width).
+  - Signed/unsigned mix is a hard error.
+  - Integer + float yields the float type.
+  - Float + float yields the wider float.
+  - Dec(N) op Dec(M) yields Dec(max(N, M)).
+  - Mixing Dec with Int/UInt/Float is a hard error.
+  - Dec has no NaN/Inf; invalid operations are errors.
+  - Checked arithmetic remains the default after
+    widening.
+  - Behaviors Eq/Ord/Hash are generic over the family.
+  - Literals are given the narrowest type that preserves
+    their value; operators then apply the range rules.
+
+
+==================================================
+43. SANDBOXING SUMMARY
+==================================================
+
+  - Manifest supplies the capability ceiling per
+    dependency.
+  - Source may only further restrict (import annotation
+    or sandbox block).
+  - Enforcement is static when possible, residual
+    otherwise.
+  - Transitive closure is fully attenuated.
+  - Handles enter a sandbox only if their capabilities
+    are ≤ the sandbox.
+  - Knowledge-cache writes from a sandbox are limited
+    to entries whose capabilities fit the sandbox.
+
+
+==================================================
+44. INFERENCE SUMMARY
+==================================================
+
+  - Full Hindley-Milner style inference with local
+    bidirectional checking.
+  - Types exist in the knowledge graph and participate
+    in reduction.
+  - Annotations are optional everywhere.
+  - Explicit type parameters on functions are optional
+    sugar.
+  - Behaviors remain the sole mechanism for ad-hoc
+    polymorphism; unique instances are inserted
+    automatically; users may override with using =.
+  - Residual status is independent of inference; rt
+    introduces residual knowledge that may still be
+    reduced later when additional information arrives.
+
+
+==================================================
+END OF DRAFT DOCUMENT
+==================================================

@@ -1947,6 +1947,21 @@ ST sg_if(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
         return ST { pos: gt.pos, dead: false, err: "", env: env, glines: gt.glines, hlines: g.hlines, lines: j1, tmp: gt.tmp, lbl: lb1 };
     }
     List(Str) lns2 = lns.concat([le + ":"]);
+    Tok epeek = lex_tok(s, kw.pos);
+    if (epeek.text == "if") {
+        // else if → recurse: nested chain runs in the else context; its
+        // join flows into ours.
+        ST ge2 = sg_if(s, epeek.pos, env, fs, in_main, ST { pos: epeek.pos, dead: false, err: "", env: env, glines: gt.glines, hlines: gt.hlines, lines: lns2, tmp: gt.tmp, lbl: l3 });
+        if (ge2.err != "") { return ge2; }
+        List(Str) lns3a = ge2.lines;
+        List(Str) lns3 = if (!ge2.dead) { lns3a.concat(["br label %" + ld]) } else { lns3a };
+        Bool both = gt.dead && ge2.dead;
+        List(Str) lns4a = lns3.concat([ld + ":"]);
+        List(Str) lns4 = if (both) { lns4a.concat(["unreachable"]) } else { lns4a };
+        Int lb2 = if (gt.lbl > ge2.lbl) { gt.lbl } else { ge2.lbl };
+        Int lb3 = if (lb2 > l3) { lb2 } else { l3 };
+        return ST { pos: ge2.pos, dead: both, err: "", env: env, glines: ge2.glines, hlines: gt.hlines, lines: lns4, tmp: ge2.tmp, lbl: lb3 };
+    }
     Tok ebrace = lex_tok(s, kw.pos);
     ST ge = sg_block(s, kw.pos, env, fs, in_main, ST { pos: ebrace.pos, dead: false, err: "", env: env, glines: gt.glines, hlines: gt.hlines, lines: lns2, tmp: gt.tmp, lbl: l3 });
     if (ge.err != "") { return ge; }
@@ -3504,6 +3519,7 @@ Int main() {
     println("wrote " + out);
     return 0;
 }
+
 
 
 
