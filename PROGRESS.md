@@ -2179,6 +2179,26 @@ narrowing, Dec precision rounding, nominal sums, and range binds. Previous — h
 
 ### 14.1 Ed25519 in pure Resid (next crypto milestone)
 
+STATUS UPDATE: SHA-512-in-Resid is ~80% implemented on a 32-bit limb-pair
+representation (`[0, hi, lo]` triples; schedule, rounds, padding all in
+place). Two bugs were found and fixed along the way (missing recursion
+guard in ext512_flat; k512_limb_at seed-offset error). Remaining: digests
+still diverge from reference — first mismatch appears in the message
+schedule extension (word ≥ 18). Debugging artifacts are preserved at
+/tmp/sha512wip/ (not committed; regenerate from this description).
+Debugging is slow because each fix requires a full recompile+run cycle
+through the compiler under test.
+
+Recommended approach for resuming:
+1. Write a Python simulator that mirrors lib/crypto.res function-by-function
+   and diff per-word intermediates offline until the Resid code and the
+   simulator agree (the mirror already exists in fragment form and itself
+   produces correct digests when the extraction bug is fixed).
+2. Only then re-verify through residc. Consider adding a `--trace` flag or
+   comptime_print-based tracing to make future debugging tractable.
+3. Suspected contributing factor: list indexing had no bounds checks until
+   the current milestone; always build with the bounds-check codegen enabled.
+
 Asymmetric signing currently lives at the Rust tool level
 (ed25519-dalek inside `resid-build pack/verify`). Bringing it into the
 language requires, in dependency order:
