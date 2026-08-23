@@ -2321,7 +2321,11 @@ server (`resid-build serve <dir> --port N`, `GET /pkg/<file>`);
 `publish` writes the canonical `<registry>/pkg/` layout. e2e
 `remote_registry_http_pull` builds through a live in-process server.
 
-Remaining: signed registry indexes (keyring already exists), TLS is
+DONE: signed registry indexes. `publish --key` maintains
+`pkg/index.resid-idx` (name version sha256 lines) + Ed25519 signature;
+configuring `[registry] pubkey` makes load verify the index and reject
+unlisted dependencies or tampered indexes (e2e
+`signed_registry_index_verifies_and_rejects_tampering`). TLS remains
 deliberately delegated to a reverse proxy.
 
 ### 14.3 Unicode full casing
