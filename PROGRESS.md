@@ -11,6 +11,9 @@
 
 ## 0. CURRENT SNAPSHOT
 
+- **Bootstrap sync (post-crypto)**: stage-2 compilers now accept the full
+  checked_/wrapping_/saturating_ arithmetic families (22 extern builtins);
+  stage-1 vs stage-2 outputs verified identical on wrap/saturate/uadd cases.
 - **Tests**: 586 pass (lexer 17, parser 91, resid-ir 46, resid-type 195,
   resid-codegen 137, resid-build 12, resid-fmt 5, residc 53 incl. e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
