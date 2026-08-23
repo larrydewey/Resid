@@ -458,3 +458,88 @@ pub Bool verify_sig(Str msg, List(Int) sig, List(Int) pubk) {
     }
     return true;
 }
+
+// ── deterministic signing (RFC 8032 §5.1.6) ──
+pub Int(512) cond_sub_l512(Int(512) v) {
+    Int(512) ll = (Int(512)) fe_l();
+    if (v >= ll) {
+        Int(512) r = v - ll;
+        return r;
+    }
+    return v;
+}
+// fold a 512-bit value down mod L, one bit at a time (MSB first)
+pub Int(256) mlw_acc(Int(256) v, Int(512) w, Int j) {
+    if (j < 0) { return v; }
+    Int(512) sh = j;
+    Int(512) mw = ((w >> sh) & 1);
+    Int(512) v2 = v * 2;
+    Int(512) v3 = v2 + mw;
+    Int(512) v4 = cond_sub_l512(v3);
+    Int(256) v5 = (Int(256)) v4;
+    Int ni = j - 1;
+    return mlw_acc(v5, w, ni);
+}
+pub Int(256) mod_l_w(Int(512) w) {
+    return mlw_acc(0, w, 511);
+}
+// clamp: clear low 3 bits and bit 255, set bit 254
+pub Int(256) clamp_scalar(Int(256) s) {
+    Int(256) o = 1;
+    Int(256) e8 = 8;
+    Int(256) shp = 254;
+    Int(256) maskv = ((o << shp) - e8);
+    Int(256) a1 = s & maskv;
+    Int(256) setb = (o << shp);
+    return a1 | setb;
+}
+pub List(Int) encode_pt_bytes(Int(256) axi, List(Int) ayb) {
+    Int sign = axi & 1;
+    Int last = ayb[32];
+    Int lb = last + sign * 128;
+    List(Int) apre = slice_bytes(ayb, 0, 30);
+    return apre.concat([lb]);
+}
+pub Int(256) clamp_of_seed(List(Int) seed) {
+    List(Int) h = sha512_bytes(seed);
+    List(Int) hlo = slice_bytes(h, 0, 31);
+    return clamp_scalar(bytes_to_int(hlo));
+}
+pub List(Int) pub_key(List(Int) seed) {
+    Int(256) av2 = clamp_of_seed(seed);
+    List(Int) axb = smul_x_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
+    List(Int) ayb = smul_y_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
+    Int(256) axi = bytes_to_int(axb);
+    return encode_pt_bytes(axi, ayb);
+}
+pub List(Int) sign_msg(List(Int) seed, Str msg) {
+    List(Int) h = sha512_bytes(seed);
+    List(Int) hhi = slice_bytes(h, 32, 63);
+    Int(256) av2 = clamp_of_seed(seed);
+    // A = [a]B
+    List(Int) axb = smul_x_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
+    List(Int) ayb = smul_y_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
+    Int(256) axi = bytes_to_int(axb);
+    List(Int) Aenc = encode_pt_bytes(axi, ayb);
+    // r = SHA-512(prefix || M) mod L
+    List(Int) mb = bytes_of(msg);
+    List(Int) rmac = concat_bytes(hhi, mb);
+    Int(256) rv = mod_l(sha512_bytes(rmac));
+    // R = [r]B
+    List(Int) rxb = smul_x_acc(rv, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
+    List(Int) ryb = smul_y_acc(rv, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
+    Int(256) rxi = bytes_to_int(rxb);
+    List(Int) Renc = encode_pt_bytes(rxi, ryb);
+    // k = SHA-512(R || A || M) mod L
+    List(Int) ra = concat_bytes(Renc, Aenc);
+    List(Int) ram = concat_bytes(ra, mb);
+    Int(256) kv = mod_l(sha512_bytes(ram));
+    // S = (r + k*a) mod L
+    Int(512) kvx = (Int(512)) kv;
+    Int(512) avx = (Int(512)) av2;
+    Int(512) pr = kvx * avx;
+    Int(512) rvx = (Int(512)) rv;
+    Int(512) sum = pr + rvx;
+    Int(256) sv = mod_l_w(sum);
+    return concat_bytes(Renc, int_to_bytes(sv));
+}

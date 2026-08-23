@@ -2473,6 +2473,58 @@ Int main() {
 
 
 
+
+/// Ed25519 deterministic signing in pure Resid: derived pubkey matches the
+/// RFC 8032 test-1 vector, signed message verifies, tampered fails.
+#[test]
+fn run_ed25519_sign_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-edsign-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    std::fs::copy(workspace.join("lib/ed25519.res"), dir.join("ed25519.res")).unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "ed25519.res";
+Str hexs(List(Int) bs) {
+    return hex_range_b(bs, 1, 32, "");
+}
+Int main() {
+    List(Int) sd = [0, 157, 97, 177, 157, 239, 253, 90, 96, 186, 132, 74, 244, 146, 236, 44, 196, 68, 73, 197, 105, 123, 50, 105, 25, 112, 59, 172, 3, 28, 174, 127, 96];
+    println(hexs(pub_key(sd)));
+    List(Int) sg = sign_msg(sd, "hello world");
+    Bool ok = verify_sig("hello world", sg, pub_key(sd));
+    if (ok) { println("SELF-VERIFY-OK"); }
+    if (!ok) { println("SELF-VERIFY-BAD"); }
+    Bool bad = verify_sig("other msg", sg, pub_key(sd));
+    if (bad) { println("WRONG-MSG-ACCEPTED"); }
+    if (!bad) { println("WRONG-MSG-REJECTED"); }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        stdout.trim(),
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a\nSELF-VERIFY-OK\nWRONG-MSG-REJECTED",
+        "{stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Ed25519 verification in pure Resid (Int(256) field math) — valid sig
 /// accepted, tampered sig rejected.
 #[test]
