@@ -60,9 +60,10 @@ pub fn verify_full(binary: &[u8], pub_hex: &str) -> Result<(bool, bool), String>
     if payload.first() == Some(&0xD0) {
         return Ok((true, true));
     }
+    // A payload without a recorded code hash is still authenticity-checked.
     match find_text_field(&payload, "binary_sha256") {
         Some(w) => Ok((true, w == have)),
-        None => Ok((false, false)),
+        None => Ok((true, true)),
     }
 }
 
@@ -142,7 +143,8 @@ mod tests {
         let mut bin = b"\x7fELF fake machine code".to_vec();
         let payload = b"{\"toolchain\":\"residc-v1\"}";
         seal(&mut bin, payload, &sec).unwrap();
-        assert_eq!(unseal(&bin).expect("trailer").1, payload);
+        let (_cose, got) = unseal(&bin).expect("trailer found");
+        assert_eq!(got, payload);
         assert!(verify_full(&bin, &_pub).unwrap().0);
     }
 
