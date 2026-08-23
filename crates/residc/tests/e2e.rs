@@ -3624,3 +3624,113 @@ Int main() {{
     assert_eq!(stage2_out.trim(), expected, "{stage2_out:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Pure-Resid NIST P-256 ECDSA verification (lib/ec256.resid: Int(256)
+/// field elements, Int(512) products reduced by binary long division).
+/// The ECDSA self-signed certificate fixture verifies its own
+/// tbsCertificate signature through the Rust pipeline. Ground truth
+/// computed independently in Python (pure-Python EC point arithmetic):
+/// sha256(tbs) starts 152 153 152 159; x(u1*G + u2*Q) mod N == r.
+///
+/// Known issue: the bootstrap driver (stage-2) currently rejects the
+/// merged source with "function `=` is already defined" — the legacy
+/// signature collector mis-scans Int(256)/Int(512)-typed libraries.
+#[test]
+fn run_ecdsa_p256_verify_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-ec-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    for f in ["der.resid", "x509.resid", "crypto.resid", "rsa.resid", "ec256.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    let cert = include_str!("fixtures/ecdsa_cert_list.txt");
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"
+import "crypto.resid";
+import "x509.resid";
+import "ec256.resid";
+
+pub Int low16256(Int(256) v) {{
+    Int(256) m = 65535;
+    return (Int) (v & m);
+}}
+
+pub Int(256) be_acc(List(Int) bytes, Int i, Int(256) acc) {{
+    if (i > 32) {{ return acc; }}
+    Int byte = bytes[i];
+    Int(256) bv = (Int(256)) byte;
+    Int(256) acc8 = acc * 256;
+    Int(256) acc2 = acc8 + bv;
+    Int ni = i + 1;
+    return be_acc(bytes, ni, acc2);
+}}
+
+Int main() {{
+    List(Int) cert = {cert};
+    Int tbs = x509_tbs_pos(cert);
+    DerTlv tv = der_next(cert, tbs);
+    Int tbody = tbs + tv.hdr_len;
+    Int tend = tbody + tv.val_len;
+    Int tstop = tend - 1;
+    List(Int) tb = der_slice_seeded(cert, tbs, tstop);
+    List(Int) digest = sha256_bytes(tb);
+    println("d1=" + IntToString(digest[1]));
+    Int p1 = x509_skip_tlv(cert, tbs);
+    Int p2 = x509_skip_tlv(cert, p1);
+    DerTlv btv = der_next(cert, p2);
+    Int bsc = der_content_pos(cert, p2);
+    Int sb0 = bsc + 1;
+    Int sstop = sb0 + btv.val_len - 2;
+    List(Int) sigb = der_slice_seeded(cert, sb0, sstop);
+    Int seqc = der_content_pos(sigb, 1);
+    List(Int) rb = der_content(sigb, seqc);
+    Int spos = x509_skip_tlv(sigb, seqc);
+    List(Int) sb2v = der_content(sigb, spos);
+    Int sp = x509_spki_pos(cert);
+    Int algp = der_content_pos(cert, sp);
+    Int bitp = x509_skip_tlv(cert, algp);
+    Int ksc = der_content_pos(cert, bitp);
+    Int ks2 = ksc + 1;
+    Int kx1 = ks2 + 1;
+    Int ky0 = kx1 + 31;
+    Int ky1 = kx1 + 32;
+    Int ky2 = ky1 + 31;
+    List(Int) xb = der_slice_seeded(cert, kx1, ky0);
+    List(Int) yb = der_slice_seeded(cert, ky1, ky2);
+    Int(256) eint = be_acc(digest, 1, 0);
+    Int(256) rvv = ec_from_be(rb);
+    Int(256) svv = ec_from_be(sb2v);
+    Int(256) qx = be_acc(xb, 1, 0);
+    Int(256) qy = be_acc(yb, 1, 0);
+    println("in=" + IntToString(low16256(rvv)) + " " + IntToString(low16256(qx)));
+    Int(256) vx = ecdsa_vx(eint, rvv, svv, qx, qy);
+    Bool ok = vx == rvv;
+    if (ok) {{
+        println("signature VALID");
+    }} else {{
+        println("signature INVALID");
+    }}
+    return 0;
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let expected = "d1=152\nin=65294 7421\nsignature VALID";
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("rust pipeline");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let rust_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(rust_out.trim(), expected, "{rust_out:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

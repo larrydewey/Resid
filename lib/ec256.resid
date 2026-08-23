@@ -1,0 +1,352 @@
+// ─── lib/ec256.resid — NIST P-256 ECDSA verify (pure Resid) ─────────
+// Field elements are Int(256) scalars; products widen to Int(512) and
+// reduce with native % (LLVM urem). Points pass through recursion as
+// separate X/Y/Z arguments; scalar-mult returns affine (x<<256)|y.
+
+import "rsa.resid";
+import "crypto.resid";
+
+pub Int(256) EC_P() {
+    return 115792089210356248762697446949407573530086143415290314195533631308867097853951;
+}
+
+pub Int(256) EC_N() {
+    return 115792089210356248762697446949407573529996955224135760342422259061068512044369;
+}
+
+pub Int(256) EC_GX() {
+    return 48439561293906451759052585252797914202762949526041747995844080717082404635286;
+}
+
+pub Int(256) EC_GY() {
+    return 36134250956749795798585127919587881956611106672985015071877198253568414405109;
+}
+
+pub Int(256) EC_B() {
+    return 41058363725152142129326129780047268409114441015993725554835256314039467401291;
+}
+pub Int(256) ec_a() {
+    Int(256) three = 3;
+    Int(256) r = EC_P() - three;
+    return r;
+}
+pub Int(256) ec_pm2() {
+    Int(256) two = 2;
+    Int(256) r = EC_P() - two;
+    return r;
+}
+pub Int(256) ec_nm2() {
+    Int(256) two = 2;
+    Int(256) r = EC_N() - two;
+    return r;
+}
+
+// ─── Field arithmetic mod P ──────────────────────────────────────────
+
+// All arithmetic runs on zero-extended positive Int(512) values so
+// signed-comparison pitfalls never appear.
+pub Int(256) ec_add(Int(256) a, Int(256) b) {
+    Int(512) pp = ec_p_wide();
+    Int(512) aa = ec_zext(a);
+    Int(512) bb = ec_zext(b);
+    Int(512) s = aa + bb;
+    List(Int) drop1 = [0];
+    Int(512) r = if (s >= pp) { s - pp } else { s };
+    Int(256) rr = (Int(256)) r;
+    return rr;
+}
+
+pub Int(256) ec_sub(Int(256) a, Int(256) b) {
+    Int(512) pp = ec_p_wide();
+    Int(512) aa = ec_zext(a);
+    Int(512) bb = ec_zext(b);
+    Bool ge = aa >= bb;
+    Int(512) dp = if (ge) { aa - bb } else { (pp - bb) + aa };
+    Int(256) r = (Int(256)) dp;
+    return r;
+}
+
+pub Int(512) ec_mod_bits(Int(512) t, Int(512) m, Int i, Int(512) r) {
+    if (i < 0) { return r; }
+    Int ni = i - 1;
+    Int(512) b = (t >> i) & 1;
+    Int(512) r2 = (r << 1) | b;
+    Int(512) r3 = if (r2 >= m) { r2 - m } else { r2 };
+    return ec_mod_bits(t, m, ni, r3);
+}
+
+pub Int(256) ec_mul(Int(256) a, Int(256) b) {
+    Int(512) aa = ec_zext(a);
+    Int(512) bb = ec_zext(b);
+    Int(512) pp = ec_p_wide();
+    Int(512) t = aa * bb;
+    return ec_reduce(t);
+}
+
+pub Int(512) ec_p_wide() {
+    return ec_zext(EC_P());
+}
+
+pub Int(256) ec_reduce(Int(512) t) {
+    Int(512) pp = ec_p_wide();
+    Int(512) rv = ec_mod_bits(t, pp, 511, 0);
+    Int(256) r = (Int(256)) rv;
+    return r;
+}
+
+pub Int(256) ec_dblf(Int(256) a) {
+    return ec_add(a, a);
+}
+
+// base^e mod P via MSB square-and-multiply over exponent bits.
+pub Int(256) ec_pow_bits(Int(256) base, Int(256) e, Int i, Int(256) acc) {
+    if (i < 0) { return acc; }
+    Int ni = i - 1;
+    Int(256) sq = ec_mul(acc, acc);
+    Int(256) eb = (e >> i) & 1;
+    if (eb > 0) {
+        Int(256) mm = ec_mul(sq, base);
+        return ec_pow_bits(base, e, ni, mm);
+    }
+    return ec_pow_bits(base, e, ni, sq);
+}
+
+pub Int(256) ec_inv(Int(256) a) {
+    return ec_pow_bits(a, ec_pm2(), 255, 1);
+}
+
+// ─── Jacobian doubling (a = -3), inline ──────────────────────────────
+// Returns new Z; caller recomputes X3/Y3 with the same recipe, so this
+// helper computes the shared M and S values is avoided: each coordinate
+// function below is self-contained.
+
+pub Int(256) ec_dbl_z(Int(256) y, Int(256) z) {
+    Int(256) yz = ec_mul(y, z);
+    return ec_dblf(yz);
+}
+
+// ─── Scalar multiplication ───────────────────────────────────────────
+// Processes bits of k from position i down; acc is the Jacobian point
+// (ax,ay,az); (bx,by) is the affine base. Returns affine (x<<256)|y.
+// Infinity is az==0 (packed as 0).
+
+pub Int(256) ec_unpack_x(Int(512) v) {
+    Int(512) sh = v >> 256;
+    Int(256) r = (Int(256)) sh;
+    return r;
+}
+
+pub Int(512) ec_zext(Int(256) v) {
+    Int(512) sv = (Int(512)) v;
+    Int(512) m = ec_mask_low();
+    Int(512) r = sv & m;
+    return r;
+}
+
+pub Int(512) ec_mask_low() {
+    Int(512) o = 1;
+    Int(512) hs = 256;
+    return (o << hs) - o;
+}
+
+pub Int(256) ec_unpack_y(Int(512) v) {
+    Int(512) m = ec_mask_low();
+    Int(512) yv = v & m;
+    Int(256) r = (Int(256)) yv;
+    return r;
+}
+
+pub Int(512) ec_mul_rec(Int(256) k, Int i, Int(256) ax, Int(256) ay, Int(256) az, Int(256) bx, Int(256) by) {
+    if (i < 0) {
+        if (az == 0) {
+                    Int(512) zero = 0;
+            return zero;
+        }
+    
+        Int(256) zinv = ec_inv(az);
+        Int(256) zzv = ec_mul(zinv, zinv);
+        Int(256) xa = ec_mul(ax, zzv);
+        Int(256) zzz = ec_mul(zzv, zinv);
+        Int(256) ya = ec_mul(ay, zzz);
+        Int(512) xw = ec_zext(xa);
+        Int(512) yw = ec_zext(ya);
+
+
+        Int(512) packed = (xw << 256) | yw;
+
+        return packed;
+    }
+    // double the accumulator (a = -3)
+    Int(256) zzv = ec_mul(az, az);
+    Int(256) t1 = ec_sub(ax, zzv);
+    Int(256) t2 = ec_add(ax, zzv);
+    Int(256) mmv = ec_mul(t1, t2);
+    Int(256) m3v = ec_dblf(mmv);
+    Int(256) mv = ec_add(mmv, m3v);
+    Int(256) yy = ec_mul(ay, ay);
+    Int(256) s4 = ec_mul(ax, yy);
+    Int(256) s2v = ec_dblf(s4);
+    Int(256) sv = ec_dblf(s2v);
+    Int(256) s8 = ec_dblf(sv);
+    Int(256) mmsq = ec_mul(mv, mv);
+    Int(256) dxv = ec_sub(mmsq, s8);
+    Int(256) y4v = ec_mul(yy, yy);
+    Int(256) y8a = ec_dblf(y4v);
+    Int(256) y16 = ec_dblf(y8a);
+    Int(256) y24 = ec_dblf(y16);
+    Int(256) sxv = ec_sub(sv, dxv);
+    Int(256) msx = ec_mul(mv, sxv);
+    Int(256) dyv = ec_sub(msx, y24);
+    Int(256) yz = ec_mul(ay, az);
+    Int(256) dzv = ec_dblf(yz);
+    // mixed add of affine base onto doubled acc
+    Int(256) dzz = ec_mul(dzv, dzv);
+    Int(256) u2v = ec_mul(bx, dzz);
+    Int(256) dz3 = ec_mul(dzz, dzv);
+    Int(256) s2v2 = ec_mul(by, dz3);
+    Int(256) hv = ec_sub(u2v, dxv);
+    Int(256) rv = ec_sub(s2v2, dyv);
+    Int(256) h2 = ec_mul(hv, hv);
+    Int(256) h3 = ec_mul(h2, hv);
+    Int(256) vv = ec_mul(dxv, h2);
+    Int(256) r2v = ec_mul(rv, rv);
+    Int(256) vv2 = ec_dblf(vv);
+    Int(256) x3b0 = ec_sub(r2v, h3);
+    Int(256) x3b = ec_sub(x3b0, vv2);
+    Int(256) yhb = ec_mul(dyv, h3);
+    Int(256) rvx = ec_mul(rv, ec_sub(vv, x3b));
+    Int(256) y3b = ec_sub(rvx, yhb);
+    Int(256) z3b = ec_mul(hv, dzv);
+    // select doubled or added (bit set), keeping infinity marker
+    Int(256) kbb = (k >> i) & 1;
+    Int(256) nx = if (kbb > 0) { if (az == 0) { bx } else { x3b } } else { if (az == 0) { ax } else { dxv } };
+    Int(256) ny = if (kbb > 0) { if (az == 0) { by } else { y3b } } else { if (az == 0) { ay } else { dyv } };
+    Int(256) onev = 1;
+    Int(256) nzz = if (kbb > 0) { if (az == 0) { onev } else { z3b } } else { if (az == 0) { az } else { dzv } };
+    Int ni = i - 1;
+    return ec_mul_rec(k, ni, nx, ny, nzz, bx, by);
+}
+
+pub Int(512) ec_mul_packed(Int(256) k, Int(256) bx, Int(256) by) {
+    return ec_mul_rec(k, 255, 0, 0, 0, bx, by);
+}
+
+// ─── Byte-list conversion ────────────────────────────────────────────
+// Big-endian seeded byte list (32 or 33 bytes; DER may carry a leading
+// zero) -> Int(256).
+
+pub Int(256) ec_be_val(List(Int) bytes, Int i, Int last, Int(256) acc) {
+    if (i > last) { return acc; }
+    Int byte = bytes[i];
+    Int(256) bv = (Int(256)) byte;
+    Int(256) acc8 = acc * 256;
+    Int(256) acc2 = acc8 + bv;
+    Int ni = i + 1;
+    return ec_be_val(bytes, ni, last, acc2);
+}
+
+// Takes exactly the low 32 bytes (skips a DER leading-zero octet).
+pub Int(256) ec_from_be(List(Int) bytes) {
+    Int blen = bytes.len() - 1;
+    Int start = blen - 31;
+    return ec_be_val(bytes, start, blen, 0);
+}
+
+// ─── Affine addition, x-coordinate only ─────────────────────────────
+// Returns affine x of (x1,y1)+(x2,y2); 0 marker if the sum is the
+// point at infinity. Assumes inputs are valid non-infinity points.
+
+pub Int(256) ec_addx_gen(Int(256) x1, Int(256) y1, Int(256) x2, Int(256) y2) {
+    Int(256) aconst = ec_a();
+    Bool xs = x1 == x2;
+    Int(256) num = if (xs) { ec_add(ec_dblf(ec_mul(x1, x1)), aconst) } else { ec_sub(y2, y1) };
+    Int(256) den = if (xs) { ec_dblf(y1) } else { ec_sub(x2, x1) };
+    Int(256) lam = ec_mul(num, ec_inv(den));
+    Int(256) l2v = ec_mul(lam, lam);
+    Int(256) sumx = ec_add(x1, x2);
+    Int(256) x3 = ec_sub(l2v, sumx);
+    return x3;
+}
+
+
+
+// ─── ECDSA verify ────────────────────────────────────────────────────
+// Returns affine x (reduced mod N) of u1*G + u2*Q for the given
+// digest/r/s scalars and public key Q. 0 marker on degenerate input.
+
+pub Int(512) ec_n_wide() {
+    return ec_zext(EC_N());
+}
+
+pub Int(256) ec_muln(Int(256) a, Int(256) b) {
+    Int(512) aa = ec_zext(a);
+    Int(512) bb = ec_zext(b);
+    Int(512) pp = ec_n_wide();
+    Int(512) tv = aa * bb;
+    Int(512) rv = ec_mod_bits(tv, pp, 511, 0);
+    Int(256) r = (Int(256)) rv;
+    return r;
+}
+
+pub Int(256) ec_subn(Int(256) a, Int(256) b) {
+    if (a >= b) {
+        return a - b;
+    }
+    Int(256) nb = EC_N() - b;
+    Int(256) r = a + nb;
+    return r;
+}
+
+pub Int(256) ec_pown_rec(Int(256) base, Int(256) e, Int i, Int(256) acc) {
+    if (i < 0) { return acc; }
+    Int ni = i - 1;
+    Int(256) sq = ec_muln(acc, acc);
+    Int(256) eb = (e >> i) & 1;
+    if (eb > 0) {
+        Int(256) mm = ec_muln(sq, base);
+        return ec_pown_rec(base, e, ni, mm);
+    }
+    return ec_pown_rec(base, e, ni, sq);
+}
+
+pub Int(256) ec_inv_n(Int(256) a) {
+    Int(256) two = 2;
+    Int(256) e = EC_N() - two;
+    return ec_pown_rec(a, e, 255, 1);
+}
+
+pub Int(256) ec_dbl_x(Int(256) x, Int(256) y) {
+    Int(256) lam_num = ec_add(ec_dblf(ec_mul(x, x)), ec_a());
+    Int(256) lam = ec_mul(lam_num, ec_inv(ec_dblf(y)));
+    Int(256) l2 = ec_mul(lam, lam);
+    Int(256) x3 = ec_sub(l2, ec_dblf(x));
+    return x3;
+}
+
+// u1*G + u2*Q; returns affine x reduced mod N (0 marker if infinity).
+pub Int(256) ecdsa_vx(Int(256) digest, Int(256) r, Int(256) s, Int(256) qx, Int(256) qy) {
+    Int(256) n = EC_N();
+    Int(256) sinv = ec_inv_n(s);
+    Int(256) u1 = ec_muln(digest, sinv);
+    Int(256) u2 = ec_muln(r, sinv);
+    Int(512) p1 = ec_mul_packed(u1, EC_GX(), EC_GY());
+    Int(512) p2 = ec_mul_packed(u2, qx, qy);
+    if (p1 == 0) {
+        return qx;
+    }
+    if (p2 == 0) {
+        return 0;
+    }
+    Int(256) x1 = ec_unpack_x(p1);
+    Int(256) y1 = ec_unpack_y(p1);
+    Int(256) x2v = ec_unpack_x(p2);
+    Int(256) y2v = ec_unpack_y(p2);
+    Bool xs = x1 == x2v;
+    Bool ys = y1 == y2v;
+    Int(256) num = if (xs) { ec_add(ec_dblf(ec_mul(x1, x1)), ec_a()) } else { ec_sub(y2v, y1) };
+    Int(256) den = if (xs) { ec_dblf(y1) } else { ec_sub(x2v, x1) };
+    Int(256) lam = ec_mul(num, ec_inv(den));
+    Int(256) l2 = ec_mul(lam, lam);
+    Int(256) x3v = ec_sub(l2, ec_add(x1, x2v));
+    return ec_subn(x3v, n);
+}

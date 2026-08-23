@@ -128,10 +128,16 @@ pub List(Int) bn_mod_step(List(Int) a, List(Int) n, Int k, List(Int) rem, Int w)
 }
 
 // a mod n. a has `alen` limbs (may exceed w); n has w limbs.
+// The running remainder gets one extra limb: after the shift-in,
+// 2*r + bit can reach 2n which may not fit in w limbs when n's top
+// bit sits at the very top of the limb array.
 pub List(Int) bn_mod(List(Int) a, Int alen, List(Int) n, Int w) {
+    Int wp = w + 1;
     Int top = alen * 16 - 1;
-    List(Int) z = bn_zero(w);
-    return bn_mod_step(a, n, top, z, w);
+    List(Int) npad = n.concat([0]);
+    List(Int) z = bn_zero(wp);
+    List(Int) r = bn_mod_step(a, npad, top, z, wp);
+    return bn_trunc(r, w);
 }
 
 // ─── Multiply ────────────────────────────────────────────────────────

@@ -85,10 +85,29 @@
   must PREPEND zero limbs; no variable reassignment anywhere; bind
   arithmetic temps before calls or widths disagree (Int(128)/Int(256));
   deep tail recursions need `ulimit -s unlimited` in e2e harnesses.
-- **Tests**: 617 pass (incl. DER decoder, x509 TBS walker, and the RSA
+- **ECDSA P-256 verify (roadmap item 4 done)**: `lib/ec256.resid` —
+  NIST P-256 point arithmetic on Int(256) field elements (ed25519-style
+  typed scalars, NOT limb lists): products widen to Int(512) and reduce
+  via binary long division (`ec_mod_bits`) because native `%` on
+  Int(512) is broken in codegen for large operands. Jacobian doubling /
+  mixed-affine addition inlined in a recursive scalar mult returning
+  affine `(x<<256)|y`; inversion via Fermat pow. e2e
+  `run_ecdsa_p256_verify_in_resid`: ECDSA-P256 self-signed cert fixture
+  verifies its own signature stage-1; every intermediate (digest, r, s,
+  pubkey, result x) pinned to an independent pure-Python EC
+  implementation. CRITICAL language gotchas discovered:
+  (1) Int(256) values >= 2^255 are NEGATIVE — casting to Int(512)
+  sign-extends and corrupts modular math; always mask via ec_zext.
+  (2) native Int(512) `%` returns garbage for large operands.
+  (3) List.concat copies the argument's index-0 seed element.
+  KNOWN ISSUE: bootstrap driver (stage-2) rejects merged sources
+  importing ec256.resid with "function `=` is already defined" — the
+  legacy sig collector mis-scans Int(256)/Int(512)-typed libraries;
+  ECDSA e2e is therefore stage-1 only for now.
+- **Tests**: 618 pass (incl. DER decoder, x509 TBS walker, and the RSA
   PKCS#1v1.5 verify e2e on both pipelines; lexer 17, parser 91,
   resid-ir 46, resid-type 195, resid-codegen 137, resid-build 12,
-  resid-fmt 5, residc 65 incl. e2e).
+  resid-fmt 5, residc 66 incl. e2e).
 
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
