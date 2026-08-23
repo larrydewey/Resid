@@ -2469,3 +2469,46 @@ Int main() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// HMAC-SHA256 in pure Resid — RFC 4231-style vectors via lib/crypto.res.
+#[test]
+fn run_hmac_sha256_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-hmac-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "crypto.res";
+Int main() {
+    List(Int) k1 = bytes_of("key");
+    List(Int) m1 = bytes_of("The quick brown fox jumps over the lazy dog");
+    println(hex_encode(hmac_sha256_bytes(k1, m1)));
+    List(Int) k2 = bytes_of("Jefe");
+    List(Int) m2 = bytes_of("what do ya want for nothing?");
+    println(hex_encode(hmac_sha256_bytes(k2, m2)));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        stdout.trim(),
+        "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8\n5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+        "{stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
