@@ -2191,6 +2191,10 @@ got 10). The Ed25519 code itself is CORRECT — field math, point formulas,
 and per-level states all verified against Python; the recursion result is
 corrupted in flight. Fixing this codegen bug unblocks verify_sig end-to-end.
 NOT a tail-call issue; not arg-count related; reproduces at depth 3.
+CHARACTERIZED: the identical recursion with plain Int accumulators is
+CORRECT (min2.resid → 3000000/2000001); only Int(256) accumulator versions
+fail — root cause is wide-integer argument marshalling on (recursive) calls
+in resid-codegen, not the Ed25519 code.
 
 GOTCHAS learned (apply to future wide-int work):
 - Giant decimal literals (>u128) in function RETURN position can be built at

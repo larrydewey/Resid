@@ -1,0 +1,19 @@
+import "ed25519.res";
+pub Int mrec64(Int acc, Int k, Int i) {
+    if (i < 0) { return acc; }
+    Int ni = i - 1;
+    Int sh = i;
+    Int mw = ((k >> sh) & 1);
+    Int bit = mw;
+    if (bit == 1) {
+        Int nx = acc + 1000000;
+        return mrec64(nx, k, ni);
+    }
+    Int dx = acc + 1;
+    return mrec64(dx, k, ni);
+}
+Int main() {
+    println(IntToString(mrec64(0, 7, 2)));
+    println(IntToString(mrec64(0, 5, 2)));
+    return 0;
+}
