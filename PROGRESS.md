@@ -2183,7 +2183,10 @@ narrowing, Dec precision rounding, nominal sums, and range binds. Previous — h
 scalars: verification AND deterministic signing. `pub_key(seed)` derives the
 public key exactly (matches the RFC 8032 test-1 vector byte-for-byte);
 `sign_msg(seed, msg)` follows §5.1.6 — clamped scalar, r = SHA-512(prefix||M)
-mod L, S = (r + k·a) mod L via a 512-bit bit-fold reduction. Self-verification
+mod L, S = (r + k·a) mod L via a 512-bit bit-fold reduction. Differential-tested against two independent RFC 8032 keypairs
+(test-1 d75a98..., test-3 fc51cd8e... both reproduced byte-for-byte),
+cross-verified against Python-produced signatures, and wrong-key
+rejection confirmed. Self-verification
 and wrong-message rejection proven by e2e `run_ed25519_sign_in_resid`;
 verification e2e is `run_ed25519_verify_in_resid`. 586 tests pass.
 
