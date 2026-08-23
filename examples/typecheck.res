@@ -949,6 +949,10 @@ ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
         if (argtys == "List(Float)") { return ERes { pos: pos, ty: "Float", err: "" }; }
         return ERes { pos: pos, ty: "", err: "list_sumf expects (List(Float)), got (" + argtys + ")" };
     }
+    if (name == "resid_crypto_random_byte") {
+        if (argtys == "") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "resid_crypto_random_byte expects no arguments" };
+    }
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
 
