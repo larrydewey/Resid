@@ -11,8 +11,8 @@
 
 ## 0. CURRENT SNAPSHOT
 
-- **Tests**: 585 pass (lexer 17, parser 91, resid-ir 46, resid-type 195,
-  resid-codegen 137, resid-build 12, resid-fmt 5, residc 52 incl. e2e).
+- **Tests**: 586 pass (lexer 17, parser 91, resid-ir 46, resid-type 195,
+  resid-codegen 137, resid-build 12, resid-fmt 5, residc 53 incl. e2e).
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
   Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
@@ -2177,7 +2177,15 @@ narrowing, Dec precision rounding, nominal sums, and range binds. Previous — h
 
 ## 14. FUTURE WORK / ROADMAP
 
-### 14.1a Ed25519 verification in pure Resid — DONE
+### 14.1a Ed25519 in pure Resid — DONE (verify + deterministic sign)
+
+`lib/ed25519.res` implements full RFC 8032 Ed25519 on Int(256)/Int(512)
+scalars: verification AND deterministic signing. `pub_key(seed)` derives the
+public key exactly (matches the RFC 8032 test-1 vector byte-for-byte);
+`sign_msg(seed, msg)` follows §5.1.6 — clamped scalar, r = SHA-512(prefix||M)
+mod L, S = (r + k·a) mod L via a 512-bit bit-fold reduction. Self-verification
+and wrong-message rejection proven by e2e `run_ed25519_sign_in_resid`;
+verification e2e is `run_ed25519_verify_in_resid`. 586 tests pass.
 
 `lib/ed25519.res`: full Ed25519 VERIFY (RFC 8032) on Int(256)/Int(512)
 scalars — field arithmetic mod 2^255-19 (overflow-safe add/sub, fe_mul via
