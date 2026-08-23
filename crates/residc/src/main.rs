@@ -111,7 +111,7 @@ fn main() -> ExitCode {
             if let Some(cached) = store.get(&cache_key) {
                 if Path::new(cached).exists() {
                     if matches!(cmd, Cmd::Build) {
-                        println!("cache: hit ({cached})");
+                        eprintln!("cache: hit ({cached})");
                         return ExitCode::SUCCESS;
                     }
                     // Run: execute the cached binary directly.
@@ -294,7 +294,7 @@ fn build_native(file: &str, unit: &TranslationUnit, out: Option<&str>) -> Result
                     eprintln!("error: cannot write sealed binary '{out}': {e}");
                     return Err(ExitCode::FAILURE);
                 }
-                println!("provenance: signed ({} notes)", notes.len());
+                eprintln!("provenance: signed ({} notes)", notes.len());
             }
             Ok(())
         }
