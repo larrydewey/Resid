@@ -3307,3 +3307,59 @@ Int main() {{
     assert_eq!(rust_out, stage2_out, "{rust_out:?} vs {stage2_out:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Import resolution in the stage-2 bootstrap compiler: a program that
+/// imports a library file compiles and runs identically to the Rust
+/// pipeline. Also covers trailing commas in multi-line list literals,
+/// which the bootstrap parser previously rejected.
+#[test]
+fn run_stage2_import_resolution() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-imp2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    // Library with a trailing-comma multi-line list literal.
+    std::fs::write(
+        dir.join("libtest.res"),
+        "pub List(Int) ktab() {\n    List(Int) k = [\n        1116352408, -2057255420,\n    ];\n    return k;\n}\n",
+    )
+    .unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        "import \"libtest.res\";\nInt main() {\n    List(Int) k = ktab();\n    Int sum = k[0] + k[1];
+    println(IntToString(sum));\n    return 0;\n}\n",
+    )
+    .unwrap();
+    // Rust pipeline.
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("rust pipeline");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let rust_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(rust_out.trim(), "-940903012", "{rust_out:?}");
+    // Stage-2 driver.
+    let bin = dir.join("imp_bin");
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.res"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(workspace)
+        .output()
+        .expect("driver run");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = Command::new(&bin).output().expect("stage-2 binary");
+    let stage2_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    // Byte-for-byte agreement between pipelines.
+    assert_eq!(rust_out, stage2_out, "{rust_out:?} vs {stage2_out:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

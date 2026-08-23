@@ -1122,6 +1122,16 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 return GT { pos: cpit.pos, val: reg, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x2, tmp: ti2, lbl: v.lbl };
             }
             if (t.text == "resid_crypto_random_byte") {
+                // Zero-arg extern: t2 is "(", consume through the close paren.
+                Tok cpr = lex_tok(s, t2.pos);
+                if (cpr.text != ")") { return gt_err("expected ) in resid_crypto_random_byte", c); }
+                Int ri1 = c.tmp + 1;
+                Str rreg = "%t" + IntToString(ri1);
+                List(Str) rl0 = c.lines;
+                List(Str) rl1 = rl0.concat([rreg + " = call i64 @resid_crypto_random_byte()"]);
+                return GT { pos: cpr.pos, val: rreg, ty: "Int", cnt: 0, err: "", glines: c.glines, lines: rl1, tmp: ri1, lbl: c.lbl };
+            }
+            if (false) {
                 GT a0 = cg_expr(s, t2.pos, env, fs, c);
                 if (a0.err != "") { return a0; }
                 Tok cpr = lex_tok(s, a0.pos);
@@ -1639,6 +1649,19 @@ GT lst_more(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Funcs
 
 GT lst_elems(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Funcs fs, GT c) {
     Tok t = lex_tok(s, pos);
+    // A closing bracket here after elements means a trailing comma —
+    // allowed as long as at least one element was seen.
+    if (t.text == "]") {
+        if (n > 0) { return lst_emit(ety, n, vals, t.pos, c); }
+        return gt_err("cannot lower an empty list literal", c);
+    }
+    if (t.text == ",") {
+        Tok nx = lex_tok(s, t.pos);
+        if (nx.text == "]") {
+            if (n > 0) { return lst_emit(ety, n, vals, nx.pos, c); }
+            return gt_err("cannot lower an empty list literal", c);
+        }
+    }
     if (t.text == "]") { return gt_err("unexpected ] in list literal", c); }
     GT v = cg_expr(s, pos, env, fs, c);
     if (v.err != "") { return v; }
@@ -2280,6 +2303,72 @@ Str rt_lconcat_def() {
 
 // ─── Environment: List(Str) of "name:type" entries ─────────────
 
+// ─── Import resolution (self-hosting milestone) ─────────────────────
+// `import "x.res";` lines pull the named file (relative to the importing
+// file's directory) into the compilation: its declarations are typechecked
+// and codegen'd alongside the importer. Diamond imports are deduplicated
+// by resolved path; depth is capped to cut cycles.
+
+type RRes = { text: Str, done: Str };
+
+// Directory part of a path ("." when there is no slash).
+Str imp_dir_of(Str path, Int i) {
+    if (i <= 0) { return "."; }
+    Int ip = i - 1;
+    Str c = str_slice(path, ip, i);
+    if (c == "/") {
+        return str_slice(path, 0, ip);
+    }
+    return imp_dir_of(path, ip);
+}
+
+// The quoted path of an `import "..."` line; "" when the line is malformed.
+Str imp_target(Str line) {
+    Int q1 = str_find_char(line, 34, 0);
+    if (q1 < 0) { return ""; }
+    Int q1p1 = q1 + 1;
+    Int q2 = str_find_char(line, 34, q1p1);
+    if (q2 < 0) { return ""; }
+    Int p1 = q1 + 1;
+    return str_slice(line, p1, q2);
+}
+
+// `done` is a ";path;path;..." sentinel-delimited string of resolved files.
+RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done, Int depth) {
+    if (i > n) { return RRes { text: acc, done: done }; }
+    Str line = lines[i];
+    if (str_starts_with(line, "import ")) {
+        Str name = imp_target(line);
+        if (name == "") {
+            Int ni = i + 1;
+            return imp_resolve_lines(lines, ni, n, dir, acc, done, depth);
+        }
+        Str full = if (str_starts_with(name, "/")) { name } else { dir + "/" + name };
+        Str key = ";" + full + ";";
+        RRes sub = if (str_contains(done, key)) {
+            RRes { text: "", done: done }
+        } else {
+            imp_resolve_file(full, done, depth)
+        };
+        Int ni2 = i + 1;
+        return imp_resolve_lines(lines, ni2, n, dir, acc + sub.text, sub.done, depth);
+    }
+    Int ni3 = i + 1;
+    return imp_resolve_lines(lines, ni3, n, dir, acc + line + "\n", done, depth);
+}
+
+RRes imp_resolve_file(Str path, Str done, Int depth) {
+    if (depth > 8) { return RRes { text: "", done: done }; }
+    Str src = filesystem.read_all(path);
+    List(Str) lines = str_split(src, "\n");
+    Int n = lines.len() - 1;
+    Int plen = str_len(path);
+    Int plast = plen - 1;
+    Str dir = imp_dir_of(path, plast);
+    Str done2 = done + path + ";";
+    return imp_resolve_lines(lines, 0, n, dir, "", done2, depth);
+}
+
 
 Bool str_has_prefix(Str s, Str p) {
     Int ns = str_len(s);
@@ -2830,6 +2919,12 @@ ERes check_list_lit_rest(Str s, Int pos, Str elem, List(Str) env, Sigs fs) {
     }
     Tok t = lex_tok(s, e.pos);
     if (t.text == ",") {
+        // Trailing comma before the closing bracket is allowed.
+        Tok nx = lex_tok(s, t.pos);
+        if (nx.text == "]") {
+            Str ty3 = "List(" + elem2 + ")";
+            return ERes { pos: nx.pos, ty: ty3, err: "" };
+        }
         return check_list_lit_rest(s, t.pos, elem2, env, fs);
     }
     Str ty = "List(" + elem2 + ")";
@@ -3618,7 +3713,12 @@ Int main() {
     Str path = args.get(1);
     Str out = pick_opt(argc, "-o", "a.out");
     Str rtc = pick_opt(argc, "-rt", "crates/residc/resid_rt.c");
-    Str src = filesystem.read_all(path);
+    // Import resolution: the merged compilation text is the importing
+    // file (its own import lines replaced) followed by each import's body.
+    RRes rr = imp_resolve_file(path, ";", 0);
+    println(IntToString(str_len(rr.text)));
+    println(str_slice(rr.text, 0, 40));
+    Str src = rr.text;
     Sigs sg = ck_collect_sigs(src);
     Str dupn = first_dup_name(sg.names);
     if (dupn != "") {
@@ -3651,6 +3751,26 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

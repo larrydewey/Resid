@@ -423,15 +423,6 @@ pub List(Int) key_block(List(Int) key) {
     return sconcat(key, zeros);
 }
 
-List(Int) map_xor(List(Int) block, Int f, Int i, List(Int) acc) {
-    if (i > block.len() - 1) { return acc; }
-    Int v = block[i];
-    Int x = f(v);
-    List(Int) acc2 = acc.concat([x]);
-    Int ni = i + 1;
-    return map_xor(block, f, ni, acc2);
-}
-
 // Higher-order: Resid has no function values, so dispatch on a tag.
 pub List(Int) map_ipad(List(Int) block, Int i, List(Int) acc) {
     if (i > block.len() - 1) { return acc; }
