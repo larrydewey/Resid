@@ -784,3 +784,100 @@ version = "2.0.0"
     assert_eq!(entry.version, "2.0.0");
     assert_eq!(entry.sha256, sha);
 }
+
+/// Signed registry index: publish with a signing key produces
+/// pkg/index.resid-idx + -sig; a build with [registry] pubkey verifies the
+/// index and accepts listed deps; a tampered index is rejected.
+#[test]
+fn signed_registry_index_verifies_and_rejects_tampering() {
+    use resid_build::archive;
+    let dir = temp_dir("signedidx");
+    let reg = dir.join("registry");
+    fs::create_dir_all(reg.join("pkg")).unwrap();
+    // Keypair.
+    let (sec, pubk) = archive::keygen().unwrap();
+    let sec_path = dir.join("secret.hex");
+    let pub_path = dir.join("pub.hex");
+    fs::write(&sec_path, &sec).unwrap();
+    fs::write(&pub_path, &pubk).unwrap();
+    // Package + publish via CLI (exercises index maintenance).
+    fs::create_dir_all(dir.join("math/src")).unwrap();
+    fs::write(
+        dir.join("math/resid.toml"),
+        "[package]\nname = \"math\"\nversion = \"3.0.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("math/src/main.resid"),
+        "pub Int quad(Int x) {\n    return x * 4;\n}\n",
+    )
+    .unwrap();
+    let cli = env!("CARGO_BIN_EXE_resid-build");
+    let out = Command::new(cli)
+        .args([
+            "publish",
+            dir.join("math").to_str().unwrap(),
+            "--registry",
+            reg.to_str().unwrap(),
+            "--key",
+            sec_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("publish runs");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Index exists, lists math 3.0.0 with the right hash, signature valid.
+    let idx_text = fs::read_to_string(reg.join("pkg/index.resid-idx")).unwrap();
+    let sig = fs::read_to_string(reg.join("pkg/index.resid-sig")).unwrap();
+    let entries = resid_build::registry::parse_index_entries(&idx_text);
+    let entry = entries.iter().find(|(n, v, _)| n == "math" && v == "3.0.0").expect("listed");
+    let want = archive::hex_encode(&archive::content_hash(
+        &fs::read(reg.join("pkg/math-3.0.0.resid-pkg")).unwrap(),
+    ));
+    assert_eq!(entry.2, want);
+    assert!(archive::verify_sig(&sha_of(&idx_text), sig.trim(), &pubk).unwrap());
+    // Client build with pubkey trusts the verified registry.
+    write_pkg(
+        &dir,
+        &format!(
+            r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[registry]
+path = "registry"
+pubkey = "{pubk}"
+
+[dependencies.math]
+version = "3.0.0"
+"#
+        ),
+        "import \"math\";\nInt main() {\n    println(IntToString(quad(11)));\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).expect("verified index accepted");
+    match build(&m, Profile::Debug, &dir.join("out")).expect("build") {
+        Artifact::Binary(bin) => {
+            let res = Command::new(&bin).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&res.stdout).trim(), "44");
+        }
+        other => panic!("expected Binary, got {other:?}"),
+    }
+    // Tamper with the index → next load refuses.
+    let mut bad = idx_text.clone();
+    bad.push_str("evil 1.0.0 deadbeef\n");
+    fs::write(reg.join("pkg/index.resid-idx"), bad).unwrap();
+    let e = Manifest::load(&dir).err().expect("tampered index must fail");
+    assert!(e.to_string().contains("INVALID"), "{e}");
+}
+
+fn sha_of(text: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(text.as_bytes());
+    h.finalize().into()
+}

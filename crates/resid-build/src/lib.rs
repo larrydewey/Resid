@@ -113,6 +113,11 @@ struct RegistryToml {
     /// `path` takes precedence when both are set (offline wins).
     #[serde(default)]
     url: Option<String>,
+    /// Ed25519 public key (hex). When set, the registry's signed index
+    /// (`pkg/index.resid-idx`) must exist and verify; every version
+    /// dependency must be listed in it.
+    #[serde(default)]
+    pubkey: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -230,10 +235,44 @@ impl Manifest {
                 }),
             ),
         });
+        // Signed registry index (spec §28): when a trust anchor is
+        // configured, the index must verify and cover every version dep.
+        let index = match raw.registry.as_ref().and_then(|r| r.pubkey.as_ref()) {
+            Some(pubkey_hex) => {
+                let reg_for_index = registry.as_ref().expect("pubkey implies registry");
+                match registry::load_signed_index(reg_for_index) {
+                    Ok((text, sig_hex)) => {
+                        if !archive::verify_sig(
+                            &sha256_of_text(&text),
+                            &sig_hex,
+                            pubkey_hex,
+                        ).unwrap_or(false) {
+                            return Err(LoadError::Invalid(
+                                "registry index signature INVALID — refusing to trust this registry".into(),
+                            ));
+                        }
+                        Some(registry::parse_index_entries(&text))
+                    }
+                    Err(e) => {
+                        return Err(LoadError::Invalid(format!(
+                            "registry index required (pubkey configured) but unavailable: {e}"
+                        )));
+                    }
+                }
+            }
+            None => None,
+        };
         // Lockfile: pin registry dependency content hashes (spec §28).
         let lock_path = pkg_dir.join("resid.lock");
         let mut lockfile = lock::read(&lock_path).unwrap_or_default();
         for (name, dep) in &raw.dependencies {
+            if let (Some(idx), Some(ver)) = (&index, &dep.version) {
+                if !idx.iter().any(|e| e.0 == *name && e.1 == *ver) {
+                    return Err(LoadError::Invalid(format!(
+                        "dependency '{name}-{ver}' is not listed in the signed registry index"
+                    )));
+                }
+            }
             let pinned = lockfile.get(name).cloned();
             let (dep_dir, entry) =
                 resolve_dep_dir(name, dep, registry.as_ref(), &pkg_dir, pinned.as_ref())?;
@@ -409,6 +448,13 @@ fn resolve_dep_dir(
             "dependency '{name}': needs either `path` or `version`"
         )))
     }
+}
+
+fn sha256_of_text(text: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(text.as_bytes());
+    h.finalize().into()
 }
 
 fn lock_mismatch(name: &str, want: &str, locked: &str) -> LoadError {

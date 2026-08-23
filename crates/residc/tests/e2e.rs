@@ -3159,3 +3159,72 @@ fn run_reduction_reports_discharged_notes() {
         let _ = std::fs::remove_file(keys.join("resid-ed25519.pub"));
     }
 }
+
+/// Pure-Resid HTTP client stack (lib/http.res) over raw TCP externs:
+/// GET request built and response parsed entirely in Resid against a
+/// live in-process HTTP/1.1 server.
+#[test]
+fn run_http_get_in_resid() {
+    use std::io::{Read, Write};
+    let dir = std::env::temp_dir().join(format!("residc-e2e-http-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    // In-process HTTP/1.1 server.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut stream) = conn else { break };
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let req = String::from_utf8_lossy(&buf);
+            let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let (code, body): (&str, &str) = if path == "/hello.txt" {
+                ("200 OK", "hello from http.res\n")
+            } else {
+                ("404 Not Found", "gone\n")
+            };
+            let resp = format!(
+                "HTTP/1.1 {code}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        }
+    });
+    // Client program imports the library.
+    std::fs::copy(workspace.join("lib/http.res"), dir.join("http.res")).unwrap();
+    std::fs::copy(workspace.join("lib/crypto.res"), dir.join("crypto.res")).ok();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"
+import "http.res";
+Int main() {{
+    println(http_get_body("http://127.0.0.1:{port}/hello.txt"));
+    println(IntToString(http_get_status("http://127.0.0.1:{port}/missing")));
+    return 0;
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        stdout.trim(),
+        "hello from http.res\n\n404",
+        "{stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

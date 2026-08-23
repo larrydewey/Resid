@@ -237,7 +237,7 @@ fn cmd_publish(args: &[String]) -> ExitCode {
         }
     };
     let hash_hex = resid_build::archive::hex_encode(&resid_build::archive::content_hash(&archive));
-    let sig = key.and_then(|k| std::fs::read_to_string(&k).ok().map(|s| s.trim().to_string()))
+    let sig = key.clone().and_then(|k| std::fs::read_to_string(&k).ok().map(|s| s.trim().to_string()))
         .and_then(|secret| {
             resid_build::archive::sign_hash(&resid_build::archive::content_hash(&archive), &secret)
                 .ok()
@@ -270,7 +270,40 @@ fn cmd_publish(args: &[String]) -> ExitCode {
         let _ = std::fs::write(&sig_path, sig);
         println!(" (+ signature)");
     } else {
-        println!(" (unsigned)");
+        println!();
+    }
+    // Maintain the signed index whenever a signing key is available.
+    let secret_hex = key.clone().and_then(|k| std::fs::read_to_string(&k).ok().map(|s| s.trim().to_string()));
+    if let Some(secret_hex) = secret_hex {
+        let reg_path = std::path::Path::new(&reg).join("pkg");
+        let mut entries: Vec<(String, String, String)> =
+            resid_build::registry::load_signed_index(&resid_build::registry::Registry::Local(std::path::PathBuf::from(&reg)))
+                .map(|(t, _)| resid_build::registry::parse_index_entries(&t))
+                .unwrap_or_default();
+        entries.retain(|(n, v, _)| !(*n == manifest.name && *v == manifest.version));
+        entries.push((
+            manifest.name.clone(),
+            manifest.version.clone(),
+            hash_hex.clone(),
+        ));
+        let text = resid_build::registry::index_text(entries);
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(text.as_bytes());
+        let hash: [u8; 32] = hasher.finalize().into();
+        match resid_build::archive::sign_hash(&hash, &secret_hex) {
+            Ok(s) => {
+                let idx = reg_path.join("index.resid-idx");
+                let sigf = reg_path.join("index.resid-sig");
+                if let Err(e) = std::fs::write(&idx, &text) {
+                    eprintln!("warning: cannot write index '{}': {e}", idx.display());
+                    return ExitCode::SUCCESS;
+                }
+                let _ = std::fs::write(&sigf, s);
+                println!("index updated + signed");
+            }
+            Err(e) => eprintln!("warning: index signing failed: {e}"),
+        }
     }
     ExitCode::SUCCESS
 }

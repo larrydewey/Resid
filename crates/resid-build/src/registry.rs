@@ -215,3 +215,59 @@ pub fn serve_dir(dir: &Path, port: u16) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// One signed-index line: `<name> <version> <sha256-hex>`.
+pub type IndexEntry = (String, String, String);
+
+/// Parse index text (blank/`#` lines skipped).
+pub fn parse_index_entries(text: &str) -> Vec<IndexEntry> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            Some((
+                it.next()?.to_string(),
+                it.next()?.to_string(),
+                it.next()?.to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// Load `(index_text, signature_hex)` from a registry.
+/// Local reads `pkg/index.resid-idx` + `pkg/index.resid-sig`;
+/// remote GETs `/pkg/index.resid-idx` + `-sig`.
+pub fn load_signed_index(reg: &Registry) -> Result<(String, String), String> {
+    fn split(body: Vec<u8>) -> String {
+        String::from_utf8_lossy(&body).into_owned()
+    }
+    match reg {
+        Registry::Local(dir) => {
+            let idx = std::fs::read_to_string(dir.join("pkg").join("index.resid-idx"))
+                .map_err(|e| format!("cannot read pkg/index.resid-idx: {e}"))?;
+            let sig = std::fs::read_to_string(dir.join("pkg").join("index.resid-sig"))
+                .map_err(|e| format!("cannot read pkg/index.resid-sig: {e}"))?;
+            Ok((idx, sig.trim().to_string()))
+        }
+        Registry::Remote(base) => {
+            let base = base.trim_end_matches('/');
+            let idx = http_get(&format!("{base}/pkg/index.resid-idx")).map(|r| split(r.body))?;
+            if !idx.contains("name ") && !idx.contains('\n') {
+                return Err("registry index missing".into());
+            }
+            let sig = http_get(&format!("{base}/pkg/index.resid-sig")).map(|r| split(r.body))?;
+            Ok((idx, sig.trim().to_string()))
+        }
+    }
+}
+
+/// Canonical index text from entries (sorted by name/version).
+pub fn index_text(mut entries: Vec<IndexEntry>) -> String {
+    entries.sort();
+    let mut out = String::from("# resid registry index\n");
+    for (n, v, h) in entries {
+        out.push_str(&format!("{n} {v} {h}\n"));
+    }
+    out
+}

@@ -17,6 +17,10 @@
 #include <limits.h>
 #include <pthread.h>
 #include <sys/random.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <netinet/in.h>
 
 bool print(const char* s) {
     if (fputs(s, stdout) == EOF) return false;
@@ -3018,4 +3022,64 @@ _Noreturn void resid_index_abort(int64_t idx, int64_t len) {
     snprintf(buf, sizeof(buf), "list index out of bounds: index %lld, length %lld",
              (long long)idx, (long long)len);
     resid_abort(buf);
+}
+
+/* ─── TCP transport (spec §32 provider-adjacent externs) ─────────
+   Minimal blocking sockets so the Resid-level HTTP stack (lib/http.res)
+   can do all protocol work: URL parsing, request building, response
+   parsing stay in pure Resid. recv reads until the peer closes (our
+   client always sends `Connection: close`) or a 4 MB cap. */
+
+int64_t resid_tcp_connect(const char* host, int64_t port) {
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%lld", (long long)port);
+    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) return -1;
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); return -1; }
+    if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
+        freeaddrinfo(res);
+        close(fd);
+        return -1;
+    }
+    freeaddrinfo(res);
+    return (int64_t)fd;
+}
+
+int8_t resid_tcp_send(int64_t fd, const char* data) {
+    size_t len = strlen(data);
+    const char* p = data;
+    while (len > 0) {
+        ssize_t n = send((int)fd, p, len, MSG_NOSIGNAL);
+        if (n <= 0) return 0;
+        p += n;
+        len -= (size_t)n;
+    }
+    return 1;
+}
+
+char* resid_tcp_recv_all(int64_t fd) {
+    size_t cap = 65536, len = 0;
+    char* out = (char*)malloc(cap);
+    for (;;) {
+        if (len + 4096 > cap) {
+            if (cap >= 4u * 1024 * 1024) break; /* 4 MB cap */
+            cap *= 2;
+            char* nb = (char*)realloc(out, cap);
+            if (!nb) break;
+            out = nb;
+        }
+        ssize_t n = recv((int)fd, out + len, cap - len - 1, 0);
+        if (n <= 0) break;
+        len += (size_t)n;
+    }
+    out[len] = '\0';
+    return out;
+}
+
+int8_t resid_tcp_close(int64_t fd) {
+    return close((int)fd) == 0 ? 1 : 0;
 }
