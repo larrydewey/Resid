@@ -2169,3 +2169,71 @@ narrowing, Dec precision rounding, nominal sums, and range binds. Previous — h
   matching stage-1 output byte-for-byte; `tools/merge_driver.py` now
   regenerates driver.res from its two inputs; e2e
   `stage2_emitter_compiles_bootstrap_lexer` added; 511 tests.* Previous milestone — M6c done: `examples/driver.res` runs the full pipeline (typecheck → IR → clang → binary) from Resid via the new `process.run` provider; e2e-proven on accept+reject paths; 510 tests. Previous: M6b done — `examples/codegen.res` (fused parse→LLVM-IR codegen in Resid) emits runnable IR proven by e2e (clang-assembled binary prints hi/big/tick×3); new `args` provider (spec §32) replaces env-var I/O — all four bootstrap tools are argv-driven (`residc <tool> run <src> [-o out]`); typecheck.res self-checks codegen.res; 509 tests.*
+---
+
+## 14. FUTURE WORK / ROADMAP
+
+### 14.1 Ed25519 in pure Resid (next crypto milestone)
+
+Asymmetric signing currently lives at the Rust tool level
+(ed25519-dalek inside `resid-build pack/verify`). Bringing it into the
+language requires, in dependency order:
+
+1. **SHA-512 in Resid** (RFC 8032 hashes with SHA-512, not SHA-256).
+   Straightforward extension of the SHA-256 pattern: 80 rounds over
+   64-bit words using `Int(64)` with explicit `& 0xFFFFFFFFFFFFFFFF`
+   masking after every add/shift (same technique as the 32-bit core).
+2. **Field arithmetic mod p = 2^255 - 19** on top of `Int(256)` /
+   `Int(512)`: LLVM arbitrary-width integers make `fe_mul` exact — a
+   256×256 multiply widens to `Int(512)` per the checker's needed-bits
+   rule, then reduce mod p via the fast reduction 2^255 ≡ 19.
+   Inversion via Fermat: a^(p-2), ~255 squarings + multiplications.
+3. **Group operations**: twisted Edwards curve in extended coordinates
+   (x, y, z, t) — point add/double formulas from RFC 8032 §5.1.4,
+   scalar multiplication by double-and-add over the 256-bit scalar.
+4. **Scalar arithmetic mod L = 2^252 + 27742317777372353535851937790883648493**
+   for signature components (barrett-style reduction or simple
+   repeated-subtract is too slow; use schoolbook mod-L via multiply by
+   precomputed reciprocal).
+5. **sign/verify per RFC 8032 §5.1.6–7**, verified against openssl CLI
+   (`openssl pkeyutl -verify -rawin`) and Python cryptography as oracles.
+
+Estimated size: 600–900 lines of Resid. Performance will be modest
+(list-rebuilt state per operation) but signatures are one-shot
+operations, so correctness matters more than speed.
+
+### 14.2 Registry distribution (remote)
+
+The local registry serves archives from a directory. Remaining:
+an HTTP registry (`resid-build publish/pull` against a server),
+dependency LOCK files pinning content hashes, and signed registry
+indexes (keyring already exists). The archive format and verification
+machinery are complete; only transport and index metadata are missing.
+
+### 14.3 Unicode full casing
+
+`str_to_lower`/`str_to_upper` cover ASCII, Latin-1, Latin Extended-A,
+Greek and Cyrillic via algorithmic ranges. Full coverage needs the
+Unicode SpecialCasing/CaseFolding tables generated into the C runtime
+(or a Resid data table); Turkish/Azeri locale rules are out of scope
+by design (simple mapping only).
+
+### 14.4 resid-notes / resid-cache / resid-why
+
+These tools inspect the knowledge-cache and residual-notes artifacts
+(spec §37), which presuppose the compile-time reduction subsystem
+(spec §36 pure reduction relation): comptime evaluation beyond the
+current constant folding, residual tracking with provenance, CBOR
+artifact serialization. Build those first; the tools are thin viewers.
+
+### 14.5 Smaller items
+
+- `resid fmt`: carry doc comments on functions (type defs already do);
+  render behavior definitions properly instead of a placeholder.
+- Bootstrap compilers remain a frozen subset: stdlib builtins are
+  synced, but imports resolution, alias namespacing, and capability
+  policy exist only in the Rust pipeline. Syncing them is the next big
+  self-hosting milestone after Ed25519.
+- Per-scope capability narrowing covers filesystem paths at build time;
+  runtime enforcement for dynamic paths would need runtime policy
+  objects threaded through provider calls.
