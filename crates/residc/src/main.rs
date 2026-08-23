@@ -491,6 +491,14 @@ fn cmd_verify(bin_path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Stage-2 sidecar form: <bin>.resid-prov = payload line + sig-hex line.
+    if bytes.starts_with(b"toolchain=") {
+        return cmd_verify_sidecar(bin_path, &bytes);
+    }
+    let sidecar = format!("{bin_path}.resid-prov");
+    if let Ok(sc) = fs::read_to_string(&sidecar) {
+        return cmd_verify_sidecar(&sidecar, sc.as_bytes());
+    }
     let Some((payload, sig)) = resid_build::provenance::unseal(&bytes) else {
         println!("no provenance trailer found in {bin_path}");
         return ExitCode::FAILURE;
@@ -520,6 +528,65 @@ fn cmd_verify(bin_path: &str) -> ExitCode {
         }
         Ok((false, _)) => {
             println!("provenance: SIGNATURE INVALID — provenance is not authentic");
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Verify a `.resid-prov` sidecar: line 1 = cleartext payload,
+/// line 2 = Ed25519 signature hex. Checked against
+/// keys/resid-ed25519.pub.
+fn cmd_verify_sidecar(name: &str, bytes: &[u8]) -> ExitCode {
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines = text.lines();
+    let Some(payload) = lines.next() else {
+        eprintln!("error: empty sidecar");
+        return ExitCode::FAILURE;
+    };
+    let Some(sig_hex) = lines.next() else {
+        eprintln!("error: sidecar missing signature line");
+        return ExitCode::FAILURE;
+    };
+    let Ok(pub_hex) = fs::read_to_string(format!("{KEY_DIR}/resid-ed25519.pub"))
+        .map(|s| s.trim().to_string())
+    else {
+        eprintln!("error: no public key at {KEY_DIR}/resid-ed25519.pub");
+        return ExitCode::FAILURE;
+    };
+    let mut sig_bytes = Vec::new();
+    let nib = sig_hex.as_bytes();
+    if nib.len() != 128 {
+        eprintln!("error: bad signature length");
+        return ExitCode::FAILURE;
+    }
+    let hv = |c: u8| -> Option<u8> {
+        match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            _ => None,
+        }
+    };
+    for i in (0..nib.len()).step_by(2) {
+        match (hv(nib[i]), hv(nib[i + 1])) {
+            (Some(h), Some(l)) => sig_bytes.push(h * 16 + l),
+            _ => {
+                eprintln!("error: bad signature hex");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    match resid_build::provenance::verify(payload.as_bytes(), &sig_bytes, &pub_hex) {
+        Ok(true) => {
+            println!("provenance: SIGNATURE OK (sidecar)");
+            println!("payload: {payload}");
+            ExitCode::SUCCESS
+        }
+        Ok(false) => {
+            println!("provenance: SIGNATURE INVALID");
             ExitCode::FAILURE
         }
         Err(e) => {
