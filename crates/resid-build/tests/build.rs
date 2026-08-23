@@ -493,3 +493,68 @@ fn require_signatures_rejects_missing_or_bad_signature() {
     let e = Manifest::load(&dir).err().expect("missing sig must fail");
     assert!(e.to_string().contains("missing or unreadable"), "{e}");
 }
+
+#[test]
+fn transitive_dependencies_resolve() {
+    let dir = temp_dir("transitive");
+    // base has no deps; mid depends on base; app depends on mid.
+    fs::create_dir_all(dir.join("vendor/base/src")).unwrap();
+    fs::create_dir_all(dir.join("vendor/mid/src")).unwrap();
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("vendor/base/resid.toml"), "[package]\nname = \"base\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(dir.join("vendor/base/src/main.resid"), "pub Int one() { return 1; }\n").unwrap();
+    fs::write(
+        dir.join("vendor/mid/resid.toml"),
+        "[package]\nname = \"mid\"\nversion = \"0.1.0\"\n\n[dependencies.base]\npath = \"../base\"\ncapabilities = []\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/mid/src/main.resid"),
+        "import \"base\";\npub Int two() { return one() + 1; }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("resid.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.mid]\npath = \"vendor/mid\"\ncapabilities = []\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src/main.resid"),
+        "import \"mid\";\nInt main() {\n    println(IntToString(two()));\n    return 0;\n}\n",
+    )
+    .unwrap();
+
+    let m = Manifest::load(&dir).expect("transitive manifest loads");
+    let names: Vec<&str> = m.dependencies.iter().map(|d| d.name.as_str()).collect();
+    assert!(names.contains(&"base"), "{names:?}");
+    assert!(names.contains(&"mid"), "{names:?}");
+
+    let out = dir.join("out");
+    let bin = match build(&m, Profile::Debug, &out).expect("transitive build") {
+        Artifact::Binary(p) => p,
+        other => panic!("expected Binary, got {other:?}"),
+    };
+    let res = Command::new(&bin).output().expect("run binary");
+    assert_eq!(String::from_utf8_lossy(&res.stdout).trim(), "2");
+}
+
+#[test]
+fn conflicting_transitive_names_rejected() {
+    let dir = temp_dir("conflict");
+    // Two packages both named "shared" at different paths.
+    fs::create_dir_all(dir.join("vendor/a/src")).unwrap();
+    fs::create_dir_all(dir.join("vendor/b/src")).unwrap();
+    fs::create_dir_all(dir.join("src")).unwrap();
+    for v in ["a", "b"] {
+        fs::write(dir.join(format!("vendor/{v}/resid.toml")), "[package]\nname = \"shared\"\nversion = \"0.1.0\"\n").unwrap();
+        fs::write(dir.join(format!("vendor/{v}/src/main.resid")), "pub Int f() { return 0; }\n").unwrap();
+    }
+    fs::write(
+        dir.join("resid.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.pa]\npath = \"vendor/a\"\ncapabilities = []\n\n[dependencies.pb]\npath = \"vendor/b\"\ncapabilities = []\n",
+    )
+    .unwrap();
+    fs::write(dir.join("src/main.resid"), "Int main() { return 0; }\n").unwrap();
+    let e = Manifest::load(&dir).err().expect("name conflict must fail");
+    assert!(e.to_string().contains("conflicting dependency versions"), "{e}");
+}

@@ -1814,7 +1814,12 @@ family overrides scopes. **Unicode casing done**: `str_to_lower`/`str_to_upper`
   Resid programs had a pure-C stdlib builtin sha256 (FIPS 180-4,
   digests verified against reference implementations); asymmetric crypto
   deliberately stays at tool level rather than hand-rolling curve math in C.
-  Still missing: registry distribution, transitive dep resolution. |
+  **Transitive dependency resolution done**: collect_dep walks each dep's
+  manifest recursively (cycle-safe by package name, depth cap 32); the
+  package's self-declared name is its identity — two paths claiming one name
+  are rejected as conflicting versions; transitive roots join the import map
+  so a dep's sources can `import "base"` by name. Still missing: registry
+  distribution. |
 | 6. Tooling, Bootstrap | Partial | `resid fmt` done (canonical AST formatter, idempotent on all bootstrap sources); **`resid-graph` done** — call-graph extraction from the resolved AST (imports + alias rewriting included), text tree and DOT output, extern built-ins excluded from nodes; recursion shows as self-edges. `resid-notes`/`resid-cache`/`resid-why` still stubs (they need the reduction/cache subsystem). |
 
 Build/test notes:

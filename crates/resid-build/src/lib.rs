@@ -195,39 +195,20 @@ impl Manifest {
                 root.display()
             )));
         }
-        let mut dependencies = Vec::new();
+        // Transitive resolution: walk each dependency's manifest recursively.
+        // Cycles are cut by package name; a name claimed by two different
+        // paths is an error. Direct deps come first, then their deps, etc.
+        let mut dependencies: Vec<Dependency> = Vec::new();
+        let mut seen: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
         for (name, dep) in &raw.dependencies {
-            let dep_dir = pkg_dir.join(&dep.path);
-            // A dependency is a Resid package: its manifest tells us its root.
-            let dep_manifest_path = dep_dir.join("resid.toml");
-            let dep_text = std::fs::read_to_string(&dep_manifest_path).map_err(|e| {
-                LoadError::Invalid(format!(
-                    "dependency '{name}': cannot read '{}': {e}",
-                    dep_manifest_path.display()
-                ))
-            })?;
-            let dep_raw: ManifestToml = toml::from_str(&dep_text).map_err(|e| {
-                LoadError::Invalid(format!(
-                    "dependency '{name}': invalid resid.toml: {e}"
-                ))
-            })?;
-            let dep_root_rel = dep_raw
-                .package
-                .root
-                .unwrap_or_else(|| "src/main.resid".to_string());
-            let dep_root = dep_dir.join(dep_root_rel);
-            if !dep_root.is_file() {
-                return Err(LoadError::Invalid(format!(
-                    "dependency '{name}': root source '{}' not found",
-                    dep_root.display()
-                )));
-            }
-            dependencies.push(Dependency {
-                name: name.clone(),
-                manifest_path: dep.path.clone(),
-                path: dep_root.canonicalize().unwrap_or(dep_root),
-                capabilities: dep.capabilities.clone().unwrap_or_default(),
-            });
+            collect_dep(
+                name,
+                &pkg_dir.join(&dep.path),
+                dep.capabilities.clone().unwrap_or_default(),
+                &mut dependencies,
+                &mut seen,
+                0,
+            )?;
         }
         let grants: Vec<Grant> = raw
             .capabilities
@@ -265,7 +246,7 @@ impl Manifest {
                     .map(|k| pkg_dir.join(k))
                     .unwrap_or_else(|| pkg_dir.join("keys"));
                 for dep in &dependencies {
-                    let dep_src = pkg_dir.join(&dep.manifest_path);
+                    let dep_src = PathBuf::from(&dep.manifest_path);
                     let pkg_file = dep_src.join(format!("{}.resid-pkg", dep.name));
                     let sig_file = dep_src.join(format!("{}.resid-sig", dep.name));
                     verify_dep_signature(dep, &pkg_file, &sig_file, &keyring_dir)?;
@@ -313,6 +294,87 @@ pub struct Grant {
     pub family: String,
     /// Scope patterns from `scope=["a/**", "b"]` when present.
     pub scopes: Vec<String>,
+}
+
+/// Recursively validate a dependency and its transitive dependencies.
+/// `rel` is the depending package's view of the dependency directory;
+/// `dep_dir` is the absolute path. Appends one Dependency per unique
+/// package name, dependencies-before-dependents not guaranteed across
+/// branches (import order handles that at the resolver level).
+fn collect_dep(
+    name: &str,
+    dep_dir: &Path,
+    caps: Vec<String>,
+    out: &mut Vec<Dependency>,
+    seen: &mut std::collections::HashMap<String, PathBuf>,
+    depth: usize,
+) -> Result<(), LoadError> {
+    if depth > 32 {
+        return Err(LoadError::Invalid(format!(
+            "dependency '{name}': dependency chain deeper than 32 (cycle?)"
+        )));
+    }
+    if let Some(prev) = seen.get(name) {
+        let same = prev.canonicalize().ok() == dep_dir.canonicalize().ok();
+        if !same {
+            return Err(LoadError::Invalid(format!(
+                "dependency name '{name}' claimed by both '{}' and '{}'",
+                prev.display(),
+                dep_dir.display()
+            )));
+        }
+        return Ok(());
+    }
+    let manifest_path = dep_dir.join("resid.toml");
+    let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        LoadError::Invalid(format!(
+            "dependency '{name}': cannot read '{}': {e}",
+            manifest_path.display()
+        ))
+    })?;
+    let raw: ManifestToml = toml::from_str(&text).map_err(|e| {
+        LoadError::Invalid(format!("dependency '{name}': invalid resid.toml: {e}"))
+    })?;
+    let root_rel = raw
+        .package
+        .root
+        .unwrap_or_else(|| "src/main.resid".to_string());
+    let root = dep_dir.join(root_rel);
+    if !root.is_file() {
+        return Err(LoadError::Invalid(format!(
+            "dependency '{name}': root source '{}' not found",
+            root.display()
+        )));
+    }
+    // The package's self-declared name is its identity; the manifest key is
+    // only an import alias.
+    let pkg_name = raw.package.name.clone();
+    let canonical_dir = dep_dir.canonicalize().unwrap_or_else(|_| dep_dir.to_path_buf());
+    if let Some(prev) = seen.get(&pkg_name) {
+        return Err(LoadError::Invalid(format!(
+            "package '{pkg_name}' provided by both '{}' and '{}' — conflicting dependency versions are not supported",
+            prev.display(),
+            canonical_dir.display()
+        )));
+    }
+    seen.insert(pkg_name.clone(), canonical_dir.clone());
+
+    // Recurse into the dependency's own dependencies first: their roots are
+    // needed when this dependency's sources import them by name.
+    for (sub_name, sub) in &raw.dependencies {
+        let sub_dir = dep_dir.join(&sub.path);
+        collect_dep(sub_name, &sub_dir, sub.capabilities.clone().unwrap_or_default(), out, seen, depth + 1)?;
+    }
+
+    out.push(Dependency {
+        name: pkg_name,
+        // Absolute directory of this dependency package (used by signature
+        // verification to locate <name>.resid-pkg).
+        manifest_path: dep_dir.display().to_string(),
+        path: root.canonicalize().unwrap_or_else(|_| root.clone()),
+        capabilities: caps,
+    });
+    Ok(())
 }
 
 fn verify_dep_signature(
