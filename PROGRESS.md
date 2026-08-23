@@ -2333,10 +2333,40 @@ deliberately delegated to a reverse proxy.
 `str_to_lower`/`str_to_upper` cover ASCII, Latin-1, Latin Extended-A,
 Greek and Cyrillic via algorithmic ranges. Full coverage needs the
 - **x509 foundation (in progress)**: `lib/der.res` — pure-Resid ASN.1
-  DER TLV decoder (tag class, short/long lengths, INTEGER, OID → dotted
-  string) verified through both pipelines (e2e `run_der_parser_in_resid`).
-  Next: x509 TBS structure walker, RSA PKCS#1v1.5 verify, ECDSA-P256,
-  chain validation; TLS boundary decision; then HTTP/2 framing.
+  DER TLV decoder (tag class, short/long lengths, INTEGER value decode,
+  OID → dotted string via base-128 varint arcs) verified through both
+  pipelines (e2e `run_der_parser_in_resid`).
+
+  REMAINING x509/HTTP2 ROADMAP (task breakdown, in order):
+  1. x509 TBS structure walker: Certificate → tbsCertificate → serial,
+     issuer/subject RDN sequences (OID 2.5.4.x → name strings), validity,
+     SPKI algorithm OIDs. Straightforward given der.res.
+  2. e2e with an openssl-generated self-signed cert embedded as byte list,
+     decoded through both pipelines.
+  3. RSA PKCS#1v1.5 verify: needs bignum modexp on u16/u32 limb lists
+     (2048-bit keys exceed our Int(512) scalars; schoolbook
+     square-and-multiply). Session-sized.
+  4. ECDSA-P256 verify: curve math analogous to Ed25519 work but with
+     NIST P-256 prime/order; general point decompression not needed for
+     verification of r,s over precomputed public keys. Session-sized.
+  5. Chain validation + SAN hostname matching (builds on 2–4).
+  6. TLS transport boundary DECISION NEEDED: pure-Resid TLS = X25519 +
+     AES-GCM + HKDF key schedule (very large); pragmatic alternative =
+     `resid_tls_connect` runtime capability with protocol logic in Resid.
+     User call required before building.
+  7. HTTP/2 framing + HPACK + streams (only useful after 6).
+
+  GOTCHAS learned building der.res (apply to all lib/*.res):
+  - Every function in an IMPORTED file must be `pub`, including
+    same-file callees (cross-module visibility rule).
+  - Definitions must precede uses within an imported file (no forward
+    refs across the import boundary).
+  - Never pass inline arithmetic as a call argument (`pos + 1` widens
+    to Int(128)); bind a temp first.
+  - Multi-line type declarations with comments inside braces break the
+    bootstrap sig collector; keep them single-line.
+  - Trailing commas in multi-line list literals are now supported by
+    both pipelines (was a stage-2 bug, fixed).
 - **Import resolution in stage-2 (self-hosting milestone)**: the bootstrap
   driver merges `import "x.res";` files into the compilation (dedup +
   depth cap). `import "http.res"` → crypto+http+main compiles through
