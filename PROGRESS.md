@@ -17,6 +17,11 @@
   `crates/resid-parser/tests/else_if.rs`), and stage-2 codegen handles
   chains via recursive sg_if with shared join (e2e run_else_if_chain
   covers all three branch outcomes through both pipelines).
+- **Stage-2 provenance emission (WIP)**: driver.res emits
+  `<out>.resid-prov` sidecars (cleartext payload + Ed25519 signature via the
+  self-hosted signer). Signature currently FAILS cross-verification —
+  suspected payload/seed divergence between driver context and standalone
+  signing; isolated and pending (hex decoding verified correct separately).
 - **Knowledge cache + residual notes + signed provenance (spec §21.4, §27,
   §34, §35 — reduction subsystem v1)**: `resid-cache` (content-hash keyed
   CBOR store; `build` skips recompilation when source is unchanged),
