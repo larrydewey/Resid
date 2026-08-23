@@ -52,12 +52,16 @@ The compiler's primary performance goal is to:
 2. Minimize the residual surface reaching runtime.
 3. Lower only what remains to efficient native code (LLVM).
 
-### Tooling
-- `residc`: Compiler driver
-- `resid fmt`: Canonical formatter
-- `resid why`: Residual provenance query
-- `resid verify`: Package signature verification
-- LSP support: Residual status, capabilities, knowledge state
+### Self-Hosted Crypto & Tooling
+The standard crypto library is written **in Resid itself** and compiled to native code by the Resid compiler:
+- `lib/crypto.res`: SHA-256, SHA-512, HMAC, PBKDF2, Base64, constant-time compare, OS randomness
+- `lib/ed25519.res`: full RFC 8032 Ed25519 signing and verification on `Int(256)`/`Int(512)` arithmetic
+
+Tooling shipped today:
+- `residc <file> [emit-ir|build|run]`: compiler driver (default checks only)
+- `tools/resid-fmt`: canonical formatter
+- `tools/resid-graph`: import/dependency graph visualization
+- Stage-2 bootstrap compilers in `examples/` (lexer, parser, typechecker, codegen, driver — all written in Resid)
 
 ---
 
@@ -66,20 +70,25 @@ The compiler's primary performance goal is to:
 ### Hello, Resid!
 
 ```
-import "std/resid";
+// hello.res
+import "crypto.res";
 
 Int main() {
-    // Compile-time reduction
     UInt(32) x = u32(42);
     UInt(16) y = u16(10);
 
     // Automatic widening: result is UInt(32)
     UInt(32) result = x + y;
 
-    comptime_print(f"Result: {result}");
+    println(f"Result: {result}");
+    println(hex_encode(sha256("hello")));
     return 0;
 }
 ```
+
+Run it:
+
+    residc hello.res run
 
 ### Sandboxed Example
 
@@ -135,11 +144,16 @@ Int main() {
 ## Project Structure
 
     resid/
-    ├── src/                 # Compiler source (LLVM backend)
-    ├── std/                 # Standard library
-    ├── tests/               # Conformance tests
-    ├── docs/                # Documentation
-    └── resid.toml           # Package manifest
+    ├── crates/              # Compiler pipeline (Rust + LLVM)
+    │   ├── resid-lexer      ├── resid-parser     ├── resid-ir
+    │   ├── resid-type       ├── resid-codegen    ├── resid-builtin
+    │   ├── resid-build      └── residc           # driver CLI
+    ├── lib/                 # Standard library written in Resid
+    │   ├── crypto.res       # SHA-256/512, HMAC, PBKDF2, Base64, random
+    │   └── ed25519.res      # Ed25519 sign/verify
+    ├── examples/            # Self-hosted stage-2 compilers (.res sources)
+    ├── tools/               # fmt, graph, notes, cache, why
+    └── PROGRESS.md          # Full build log, status, roadmap
 
 ---
 
