@@ -2332,6 +2332,11 @@ deliberately delegated to a reverse proxy.
 
 `str_to_lower`/`str_to_upper` cover ASCII, Latin-1, Latin Extended-A,
 Greek and Cyrillic via algorithmic ranges. Full coverage needs the
+- **x509 foundation (in progress)**: `lib/der.res` — pure-Resid ASN.1
+  DER TLV decoder (tag class, short/long lengths, INTEGER, OID → dotted
+  string) verified through both pipelines (e2e `run_der_parser_in_resid`).
+  Next: x509 TBS structure walker, RSA PKCS#1v1.5 verify, ECDSA-P256,
+  chain validation; TLS boundary decision; then HTTP/2 framing.
 - **Import resolution in stage-2 (self-hosting milestone)**: the bootstrap
   driver merges `import "x.res";` files into the compilation (dedup +
   depth cap). `import "http.res"` → crypto+http+main compiles through
