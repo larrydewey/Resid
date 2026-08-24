@@ -181,9 +181,24 @@
   two BE64 bit-lengths, `sconcat` drops the second list's index-0 so
   unseeded literals lose their first byte, and arithmetic passed
   directly in argument position widens widths (bind temps first).
-  TLS milestone 4 of 4: all primitives for a pure-Resid TLS 1.3
-  record layer now exist (X25519 + HKDF-SHA256 + both AEADs);
-  next: TLS handshake plumbing.
+- **TLS 1.3 handshake core (RFC 8446) done**: `lib/tls.resid` —
+  HKDF-Expand-Label (info = uint16 len || len("tls13 "+label) ||
+  label || len(ctx) || ctx), Derive-Secret, full key schedule
+  (early/handshake/master secrets, c/s hs + ap traffic secrets,
+  key/iv derivation), Finished (RFC 8446 §4.4.4), and AES-128-GCM
+  record protection (nonce = static IV xor BE64 seq, J0 =
+  nonce||0^31||1, header as AAD). e2e `run_tls13_handshake_in_resid`
+  pins the whole chain to the RFC 8448 simplified trace: transcript
+  hashes, all secrets/keys, server Finished verify_data byte-exact,
+  and record-layer interop with a Python `cryptography`-sealed record
+  (open OK + re-seal byte-exact). Gotchas: HkdfExpandLabel context is
+  LENGTH-PREFIXED (missing that byte silently yields wrong secrets);
+  "derived" steps hash the EMPTY transcript, not zeros; GCM needs
+  J0 = nonce||0001, not the raw 12-byte nonce. All pure-Resid TLS 1.3
+  crypto now exists: X25519 + HKDF + both AEADs + key schedule +
+  records. Next: message framing (ClientHello build/parse,
+  Certificate/CertificateVerify handling) or live-handshake attempt
+  against openssl s_server via the tcp capability.
 - **Tests**: 623 pass (incl. DER/x509 walker, RSA/ECDSA verify,
   X25519, HKDF, ChaCha20-Poly1305 and AES-128-GCM RFC/NIST-vector
   e2es; lexer 17, parser 91, resid-ir 46, resid-type 195,

@@ -3033,6 +3033,140 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// TLS 1.3 handshake core (RFC 8446) in pure Resid, pinned to the
+/// RFC 8448 simplified trace: transcript hashes, key schedule from the
+/// X25519 shared secret, traffic secrets and keys, server Finished,
+/// application secrets — plus AES-128-GCM record protection interop
+/// with a Python-sealed record (open + re-seal byte-exact).
+#[test]
+fn run_tls13_handshake_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-tls13-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().parent().unwrap();
+    for f in ["crypto.resid", "aesgcm.resid", "ed25519.resid", "x25519.resid", "tls.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "tls.resid";
+import "crypto.resid";
+import "aesgcm.resid";
+import "x25519.resid";
+
+List(Int) hb_acc(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Int dhi = c - 87;
+    Int dlo = c - 48;
+    Int hi = if (c > 96) { dhi } else { dlo };
+    Int j = i + 1;
+    Int c2 = str_char_at(s, j);
+    Int ehi = c2 - 87;
+    Int elo = c2 - 48;
+    Int lo = if (c2 > 96) { ehi } else { elo };
+    Int h16 = hi * 16;
+    Int byt = h16 + lo;
+    List(Int) acc2 = acc.concat([byt]);
+    Int ni = i + 2;
+    return hb_acc(s, ni, acc2);
+}
+
+List(Int) hb(Str s) {
+    return hb_acc(s, 0, [0]);
+}
+
+Str ck(Str name, List(Int) got, Str want) {
+    Str g = hex_encode(got);
+    if (g == want) {
+        println(name + " OK");
+    } else {
+        println(name + " BAD");
+        println(g);
+    }
+    return g;
+}
+
+Int main() {
+    List(Int) ch = hb("010000c00303cb34ecb1e78163ba1c38c6dacb196a6dffa21a8d9912ec18a2ef6283024dece7000006130113031302010000910000000b0009000006736572766572ff01000100000a00140012001d0017001800190100010101020103010400230000003300260024001d002099381de560e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c002b0003020304000d0020001e040305030603020308040805080604010501060102010402050206020202002d00020101001c00024001");
+    List(Int) sh = hb("020000560303a6af06a4121860dc5e6e60249cd34c95930c8ac5cb1434dac155772ed3e2692800130100002e00330024001d0020c9828876112095fe66762bdbf7c672e156d6cc253b833df1dd69b1b04e751f0f002b00020304");
+    List(Int) ee = hb("080000240022000a00140012001d00170018001901000101010201030104001c0002400100000000");
+    List(Int) ctmsg = hb("0b0001b9000001b50001b0308201ac30820115a003020102020102300d06092a864886f70d01010b0500300e310c300a06035504031303727361301e170d3136303733303031323335395a170d3236303733303031323335395a300e310c300a0603550403130372736130819f300d06092a864886f70d010101050003818d0030818902818100b4bb498f8279303d980836399b36c6988c0c68de55e1bdb826d3901a2461eafd2de49a91d015abbc9a95137ace6c1af19eaa6af98c7ced43120998e187a80ee0ccb0524b1b018c3e0b63264d449a6d38e22a5fda430846748030530ef0461c8ca9d9efbfae8ea6d1d03e2bd193eff0ab9a8002c47428a6d35a8d88d79f7f1e3f0203010001a31a301830090603551d1304023000300b0603551d0f0404030205a0300d06092a864886f70d01010b05000381810085aad2a0e5b9276b908c65f73a7267170618a54c5f8a7b337d2df7a594365417f2eae8f8a58c8f8172f9319cf36b7fd6c55b80f21a03015156726096fd335e5e67f2dbf102702e608ccae6bec1fc63a42a99be5c3eb7107c3c54e9b9eb2bd5203b1c3b84e0a8b2f759409ba3eac9d91d402dcc0cc8f8961229ac9187b42b4de10000");
+    List(Int) cv = hb("0f000084080400805a747c5d88fa9bd2e55ab085a61015b7211f824cd484145ab3ff52f1fda8477b0b7abc90db78e2d33a5c141a078653fa6bef780c5ea248eeaaa785c4f394cab6d30bbe8d4859ee511f602957b15411ac027671459e46445c9ea58c181e818e95b8c3fb0bf3278409d3be152a3da5043e063dda65cdf5aea20d53dfacd42f74f3");
+    List(Int) finmsg = hb("140000209b9b141d906337fbd2cbdce71df4deda4ab42c309572cb7fffee5454b78f0718");
+    List(Int) cpriv = hb("49af42ba7f7994852d713ef2784bcbcaa7911de26adc5642cb634540e7ea5005");
+    List(Int) spub = hb("c9828876112095fe66762bdbf7c672e156d6cc253b833df1dd69b1b04e751f0f");
+    // transcript CH||SH
+    List(Int) tr1 = sconcat(ch, sh);
+    List(Int) th1 = slice_seed(sha256_bytes(tr1), 1, 32, [0]);
+    ck("th1", th1, "860c06edc07858ee8e78f0e7428c58edd6b43f2ca3e6e95f02ed063cf0e1cad8");
+    // key schedule from X25519 shared secret
+    List(Int) shared = x25519(cpriv, spub);
+    ck("shared", shared, "8bd4054fb55b9d63fdfbacf9f04b9f0d35e6d63f537563efd46272900f89492d");
+    List(Int) hs = tls_handshake_secret(shared);
+    ck("handshake-secret", hs, "1dc826e93606aa6fdc0aadc12f741b01046aa6b99f691ed221a9f0ca043fbeac");
+    List(Int) c_hs = tls_c_hs_traffic(hs, th1);
+    ck("c-hs-traffic", c_hs, "b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21");
+    List(Int) s_hs = tls_s_hs_traffic(hs, th1);
+    ck("s-hs-traffic", s_hs, "b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38");
+    List(Int) master = tls_master_secret(hs);
+    ck("master", master, "18df06843d13a08bf2a449844c5f8a478001bc4d4c627984d5a41da8d0402919");
+    // server handshake traffic keys
+    List(Int) skey = tls_traffic_key(s_hs);
+    ck("s-hs-key", skey, "3fce516009c21727d0f2e4e86ee403bc");
+    List(Int) siv = tls_traffic_iv(s_hs);
+    ck("s-hs-iv", siv, "5d313eb2671276ee13000b30");
+    // server Finished over transcript CH..CV
+    List(Int) tr2 = sconcat(tr1, ee);
+    List(Int) tr3 = sconcat(tr2, ctmsg);
+    List(Int) tr4 = sconcat(tr3, cv);
+    List(Int) th_sv = slice_seed(sha256_bytes(tr4), 1, 32, [0]);
+    List(Int) svfin = tls_finished(s_hs, th_sv);
+    ck("server-finished", svfin, "9b9b141d906337fbd2cbdce71df4deda4ab42c309572cb7fffee5454b78f0718");
+    // transcript through server Finished -> application secrets
+    List(Int) tr5 = sconcat(tr4, finmsg);
+    List(Int) th_ap = slice_seed(sha256_bytes(tr5), 1, 32, [0]);
+    ck("th-ap", th_ap, "9608102a0f1ccc6db6250b7b7e417b1a000eaada3daae4777a7686c9ff83df13");
+    List(Int) c_ap = tls_c_ap_traffic(master, th_ap);
+    ck("c-ap-traffic", c_ap, "9e40646ce79a7f9dc05af8889bce6552875afa0b06df0087f792ebb7c17504a5");
+    List(Int) s_ap = tls_s_ap_traffic(master, th_ap);
+    ck("s-ap-traffic", s_ap, "a11af9f05531f856ad47116b45a950328204b4f44bfb6b3a4b4f1f3fcb631643");
+    // record layer: open a Python-sealed server-handshake record
+    List(Int) nonce = tls_record_nonce(siv, 0);
+    List(Int) hdr = tls_record_header(36);
+    List(Int) rec = hb("cdff334e47c6aeed484f16cf96b991252e591e4df498f7e32ae04ecd687cedf91bb75bb25334c4ebbfda5c46c16eb7c38322ae39");
+    Bool opened = tls_record_open(skey, nonce, hdr, rec);
+    if (opened) { println("RECORD-OPEN OK"); } else { println("RECORD-OPEN BAD"); }
+    // seal it back and compare
+    List(Int) innerpt = hb("14000020" + "1111111111111111111111111111111111111111111111111111111111111111");
+    List(Int) sealed = tls_record_seal(skey, nonce, hdr, innerpt);
+    ck("record-seal", sealed, "cdff334e47c6aeed484f16cf96b991252e591e4df498f7e32ae04ecd687cedf91bb75bb25334c4ebbfda5c46c16eb7c38322ae39");
+    return 0;
+}
+
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    for line in [
+        "th1 OK", "shared OK", "handshake-secret OK", "c-hs-traffic OK",
+        "s-hs-traffic OK", "master OK", "s-hs-key OK", "s-hs-iv OK",
+        "server-finished OK", "th-ap OK", "c-ap-traffic OK", "s-ap-traffic OK",
+        "RECORD-OPEN OK", "record-seal OK",
+    ] {
+        assert!(stdout.contains(line), "missing {line} in {stdout:?}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Shift counts >= bit width yield 0 (machine shifts wrap the count mod width).
 #[test]
 fn run_shift_overflow_yields_zero() {
