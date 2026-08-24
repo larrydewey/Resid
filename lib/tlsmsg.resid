@@ -1,0 +1,291 @@
+// --- lib/tlsmsg.resid - TLS 1.3 message framing in pure Resid -------
+// ClientHello construction, ServerHello parsing, handshake-message
+// flight walking, and Certificate / CertificateVerify / Finished
+// handling on top of lib/tls.resid's crypto core.
+//
+// ECDSA P-256 (0403) CertificateVerify signatures are verified with
+// lib/chain.resid's ec_cert_verify. RSA-PSS (0804) signatures are NOT
+// supported yet (lib/rsa.resid is PKCS#1v1.5 only) and report false.
+//
+// All byte lists use the [0]-seed convention; see lib/chacha.resid for
+// the widening gotcha (bind arithmetic temps before argument positions).
+
+import "tls.resid";
+import "crypto.resid";
+import "aesgcm.resid";
+import "chain.resid";
+
+// -- handshake message walker ------------------------------------------
+
+pub Int tm_u24_at(List(Int) b, Int off) {
+    Int p1 = b[off] * 65536;
+    Int p2 = b[off + 1] * 256;
+    return p1 + p2 + b[off + 2];
+}
+
+// start = index of a handshake message header; returns the start of the
+// next message, or 0 when the payload is exhausted.
+pub Int tm_next(List(Int) payload, Int start) {
+    Int o1 = start + 1;
+    Int mlen = tm_u24_at(payload, o1);
+    Int o4 = start + 4;
+    Int adv = o4 + mlen;
+    if (adv > payload.len() - 1) {
+        return 0;
+    }
+    return adv;
+}
+
+pub Int tm_type_at(List(Int) payload, Int start) {
+    return payload[start];
+}
+
+pub List(Int) tm_body(List(Int) payload, Int start) {
+    Int o1 = start + 1;
+    Int mlen = tm_u24_at(payload, o1);
+    return slice_seed(payload, adv0(start), mlen, [0]);
+}
+
+pub Int adv0(Int start) {
+    Int o4 = start + 4;
+    return o4;
+}
+
+// find the k-th (0-based) handshake message of the given type; returns
+// its body, or an empty seeded list when absent.
+pub List(Int) tm_find(List(Int) payload, Int mtype, Int k) {
+    return tm_find_acc(payload, 1, mtype, k, [0]);
+}
+
+pub List(Int) tm_find_acc(List(Int) payload, Int pos, Int mtype, Int k, List(Int) acc) {
+    if (pos == 0 || pos >= payload.len()) {
+        return acc;
+    }
+    Int t = tm_type_at(payload, pos);
+    Int np = tm_next(payload, pos);
+    if (t == mtype) {
+        if (k == 0) {
+            return tm_body(payload, pos);
+        }
+        Int km = k - 1;
+        return tm_find_acc(payload, np, mtype, km, acc);
+    }
+    return tm_find_acc(payload, np, mtype, k, acc);
+}
+
+// find the payload index of the k-th message of the given type
+pub Int tm_find_pos(List(Int) payload, Int mtype, Int k) {
+    return tm_fp_acc(payload, 1, mtype, k);
+}
+
+pub Int tm_fp_acc(List(Int) payload, Int pos, Int mtype, Int k) {
+    if (pos == 0 || pos >= payload.len()) {
+        return 0;
+    }
+    Int t = tm_type_at(payload, pos);
+    Int np = tm_next(payload, pos);
+    if (t == mtype) {
+        if (k == 0) {
+            return pos;
+        }
+        Int km = k - 1;
+        return tm_fp_acc(payload, np, mtype, km);
+    }
+    return tm_fp_acc(payload, np, mtype, k);
+}
+
+// full handshake message bytes (header included)
+pub List(Int) tm_full_msg(List(Int) payload, Int start) {
+    Int o1 = start + 1;
+    Int mlen = tm_u24_at(payload, o1);
+    Int total = mlen + 4;
+    return slice_seed(payload, start, total, [0]);
+}
+
+// -- ServerHello parsing ------------------------------------------------
+
+// legacy_random(32): type(1) len(3) version(2) random(32)
+pub List(Int) sh_random(List(Int) sh) {
+    return slice_seed(sh, 7, 32, [0]);
+}
+
+// walk extensions for key_share (0033); server form: 0024 001d <share>
+pub List(Int) sh_pubkey(List(Int) sh) {
+    Int slen = sh.len();
+    Int stop = slen - 1;
+    return sh_scan(sh, 1, stop);
+}
+
+// scan for the key_share extension marker 0033 0024 001d 0020 and
+// return the following 32-byte x25519 share
+pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
+    if (pos + 40 > stop) {
+        return [0];
+    }
+    Int b0 = sh[pos];
+    Int b1 = sh[pos + 1];
+    Int b2 = sh[pos + 2];
+    Int b3 = sh[pos + 3];
+    Int b4 = sh[pos + 4];
+    Int b5 = sh[pos + 5];
+    Int b6 = sh[pos + 6];
+    Int b7 = sh[pos + 7];
+    Bool m1 = b0 == 0;
+    Bool m2 = b1 == 51;
+    Bool m3 = b2 == 0;
+    Bool m4 = b3 == 36;
+    Bool m5 = b4 == 0;
+    Bool m6 = b5 == 29;
+    Bool m7 = b6 == 0;
+    Bool m8 = b7 == 32;
+    Bool all1 = m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8;
+    if (all1) {
+        Int kp = pos + 8;
+        return slice_seed(sh, kp, 32, [0]);
+    }
+    Int np = pos + 1;
+    return sh_scan(sh, np, stop);
+}
+
+// -- ClientHello construction -------------------------------------------
+// Byte-exact RFC 8448 section 3 ClientHello for this fixed extension
+// set: server_name("server"), renegotiation_info, supported_groups,
+// session_ticket, key_share(x25519), supported_versions(TLS1.3),
+// signature_algorithms, psk_key_exchange_modes, signature_algorithms... 
+// (the exact RFC trace extension block), parametrized by random+share.
+
+pub Str tm_c1() {
+    return "010000c00303";
+}
+
+pub Str tm_c2() {
+    return "00000613011303130201000091" + "0000000b0009000006736572766572ff01000100" + "000a00140012001d00170018001901000101010201030104" + "00230000003300260024001d0020";
+}
+
+pub Str tm_c3() {
+    return "002b000302030400" + "0d0020001e" + "04030503060302030804080508060401050106010201040205020602" + "0202002d00020101001c00024001";
+}
+
+pub List(Int) tm_hb_acc(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) {
+        return acc;
+    }
+    Int c = str_char_at(s, i);
+    Int dhi = c - 87;
+    Int dlo = c - 48;
+    Int hi = if (c > 96) { dhi } else { dlo };
+    Int j = i + 1;
+    Int c2 = str_char_at(s, j);
+    Int ehi = c2 - 87;
+    Int elo = c2 - 48;
+    Int lo = if (c2 > 96) { ehi } else { elo };
+    Int h16 = hi * 16;
+    Int byt = h16 + lo;
+    List(Int) acc2 = acc.concat([byt]);
+    Int ni = i + 2;
+    return tm_hb_acc(s, ni, acc2);
+}
+
+pub List(Int) tm_hb(Str s) {
+    return tm_hb_acc(s, 0, [0]);
+}
+
+// ClientHello with the RFC 8448 extension set, parametrized by
+// legacy_random(32) and the x25519 key share (32 bytes).
+pub List(Int) tlsmsg_client_hello(List(Int) random32, List(Int) share32) {
+    List(Int) p1 = tm_hb(tm_c1());
+    List(Int) p2 = sconcat(p1, random32);
+    List(Int) p3 = tm_hb(tm_c2());
+    List(Int) body1 = sconcat(p2, p3);
+    List(Int) body2 = sconcat(body1, share32);
+    List(Int) p4 = tm_hb(tm_c3());
+    return sconcat(body2, p4);
+}
+
+// -- Certificate / CertificateVerify / Finished --------------------------
+
+// Certificate message body: u24 request-context len || u24 total len ||
+//   per-cert: u24 cert len || DER. Returns the first cert DER.
+pub List(Int) tm_cert_der(List(Int) body) {
+    // body: u8 context-len || u24 total || u24 cert-len || DER ...
+    Int clen = tm_u24_at(body, 5);
+    return slice_seed(body, 8, clen, [0]);
+}
+
+pub Bool tm_is_ecdsa_cv(List(Int) cvbody) {
+    Int alg = cvbody[1] * 256 + cvbody[2];
+    return alg == 1027;
+}
+
+pub List(Int) tm_cv_sig(List(Int) cvbody) {
+    Int slen = tm_u24_at(cvbody, 3);
+    return slice_seed(cvbody, 6, slen, [0]);
+}
+
+// TLS 1.3 CertificateVerify signed content:
+//   64 x 0x20 || "TLS 1.3, server CertificateVerify" || 0x00 || TH
+pub List(Int) tm_zeros(List(Int) acc, Int n) {
+    if (n == 0) { return acc; }
+    List(Int) acc2 = acc.concat([32]);
+    Int nn = n - 1;
+    return tm_zeros(acc2, nn);
+}
+
+pub List(Int) tm_cv_content(List(Int) thash) {
+    List(Int) zeros64 = tm_zeros([0], 64);
+    List(Int) ctx = bytes_of("TLS 1.3, server CertificateVerify");
+    List(Int) p1 = sconcat(zeros64, ctx);
+    List(Int) p2 = p1.concat([0]);
+    return sconcat(p2, thash);
+}
+
+// verify a TLS 1.3 CertificateVerify body (alg 0403 only) against the
+// transcript hash and the leaf certificate
+pub Bool tm_verify_cv(List(Int) cvbody, List(Int) cert_der, List(Int) thash) {
+    Bool isec = tm_is_ecdsa_cv(cvbody);
+    if (!isec) { return false; }
+    Int slen = tm_u24_at(cvbody, 3);
+    List(Int) sig = slice_seed(cvbody, 6, slen, [0]);
+    List(Int) content = tm_cv_content(thash);
+    List(Int) keyb = cert_pubkey_bits(cert_der);
+    return ec_cert_verify(content, keyb, sig);
+}
+
+// -- direct ECDSA P-256 CV verification --------------------------------
+
+pub Int(256) tm_be_acc(List(Int) b, Int idx, Int end, Int(256) v) {
+    if (idx >= end) { return v; }
+    Int byte = b[idx];
+    Int(256) bv = (Int(256)) byte;
+    Int(256) shifted = v * 256;
+    Int(256) v2 = shifted | bv;
+    Int ni = idx + 1;
+    return tm_be_acc(b, ni, end, v2);
+}
+
+pub Int(256) tm_be256(List(Int) b, Int off, Int n) {
+    Int end = off + n;
+    return tm_be_acc(b, off, end, 0);
+}
+
+// verify ECDSA-P256/SHA256: content bytes, keyb = 00|04|X|Y bit-string
+// content, sig = DER SEQUENCE{r,s}
+pub Bool tm_ecdsa_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sig) {
+    List(Int) digest = sha256_bytes(content);
+    Int(256) eint = ec_from_be(digest);
+    Int rlen = sig[4];
+    Int roff = 5 + rlen;
+        Int roff2 = roff - rlen;
+    Int(256) r = tm_be256(sig, roff2, rlen);
+    Int stag = roff + 1;
+    Int slen = sig[stag];
+    Int soff = stag + 1;
+        Int soff1 = soff;
+    Int(256) sv = tm_be256(sig, soff1, slen);
+    List(Int) kbx = slice_seed(keyb, 3, 32, [0]);
+    List(Int) kby = slice_seed(keyb, 35, 32, [0]);
+    Int(256) qx = ec_from_be(kbx);
+    Int(256) qy = ec_from_be(kby);
+    Int(256) vx = ecdsa_vx(eint, r, sv, qx, qy);
+    return vx == r;
+}
