@@ -281,6 +281,24 @@
   output when the full suite runs in parallel (the long-documented
   context-dependent codegen ghost) — passes reliably standalone and
   on e2e-binary reruns.
+- **HTTP/1.1 client v2 — Content-Length, chunked transfer decoding,
+  keep-alive**: `lib/http.resid` grows a real framed-response engine
+  alongside the old read-to-close helper: `http_call(fd, method, path,
+  hostport, extra)` sends a keep-alive request then consumes the
+  response per its framing — Transfer-Encoding: chunked decoded
+  chunk-by-chunk straight off the socket (`http_read_chunked_acc`,
+  with hex size lines via `http_hex_val_acc` since str_parse_int is
+  decimal-only, chunk extensions split off, trailers drained),
+  Content-Length bodies read exactly, head parsed line-by-line until
+  the blank CRLF. Header lookup is case-insensitive
+  (`http_header_value`). A parsed response NEVER falls back to
+  read-to-close (that deadlocked on keep-alive peers); recv-to-close
+  only remains for unparseable responses. e2e
+  `run_http11_client_in_resid`: against a real python http.server
+  (HTTP/1.1), two requests over ONE connection return correct bodies
+  for both framings plus a 404; skipped when python3 is absent.
+  Gotchas: seeded-list literals swallow their first element (again);
+  reassignment ban forces body1/body2/body3 chains.
 - **Alert/EOF record-layer hardening (live client)**:
   `examples/tls_client.resid` no longer aborts or processes garbage on
   abnormal connections. recv_exact now returns a seed-only sentinel on

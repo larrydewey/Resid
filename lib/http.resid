@@ -114,3 +114,199 @@ pub Int http_get_status(Str url) {
     HttpResponse r = http_parse_response(http_get_raw(url));
     return r.status;
 }
+
+// ─── HTTP/1.1 v2: keep-alive requests, Content-Length + chunked ──────
+
+// Receive exactly n bytes from fd as a Str (empty on EOF).
+pub Int http_recv_byte(Int fd) {
+    List(Int) one = resid_tcp_recv_bin(fd, 1);
+    Int n = one.len() - 1;
+    if (n < 1) { return 0 - 1; }
+    return one[1];
+}
+
+// Accumulate bytes until `term` (a \r\n-terminated line end) seen.
+pub Str http_recv_line_acc(Int fd, Str acc, Int depth) {
+    if (depth <= 0) { return acc; }
+    Int b = http_recv_byte(fd);
+    if (b < 0) { return acc; }
+    Str ch = str_from_code(b);
+    Str acc2 = acc + ch;
+    Int l = str_len(acc2);
+    Bool endl = l >= 2;
+    Int lsub = l - 2;
+    if (endl) {
+        Str tail = str_slice(acc2, lsub, l);
+        if (tail == "\r\n") { return acc2; }
+    }
+    Int d2 = depth - 1;
+    return http_recv_line_acc(fd, acc2, d2);
+}
+
+pub Str http_recv_line(Int fd) {
+    return http_recv_line_acc(fd, "", 8192);
+}
+
+// Read exactly n body bytes.
+pub Str http_recv_count_acc(Int fd, Int n, Int got, Str acc) {
+    if (got >= n) { return acc; }
+    Int b = http_recv_byte(fd);
+    if (b < 0) { return acc; }
+    Str ch = str_from_code(b);
+    Str acc2 = acc + ch;
+    Int g2 = got + 1;
+    return http_recv_count_acc(fd, n, g2, acc2);
+}
+
+pub Str http_recv_count(Int fd, Int n) {
+    return http_recv_count_acc(fd, n, 0, "");
+}
+
+// Build a request head with arbitrary headers appended.
+pub Str http_build_request(Str method, Str path, Str hostport, Str extra, Str conn) {
+    Str r1 = method + " " + path + " HTTP/1.1\r\n";
+    Str r2 = "Host: " + hostport + "\r\n";
+    Str r3 = "User-Agent: resid-http/2\r\nAccept: */*\r\nConnection: " + conn + "\r\n";
+    return r1 + r2 + r3 + extra + "\r\n";
+}
+
+// Case-insensitive header lookup: returns the value after ':' trimmed,
+// or "" when absent. `head` is the full header block (no body).
+pub Str http_header_value_acc(List(Str) lines, Int i, Str name) {
+    Int n = lines.len();
+    if (i >= n) { return ""; }
+    Str line = lines[i];
+    Str lowline = str_to_lower(line);
+    Str lowname = str_to_lower(name);
+    Str pat = lowname + ":";
+    Bool has = str_contains(lowline, pat);
+    if (has) {
+        Int p = http_find(lowline, pat);
+        Int vs = p + str_len(pat);
+        Str v = str_slice(line, vs, str_len(line));
+        return str_trim(v);
+    }
+    Int ni = i + 1;
+    return http_header_value_acc(lines, ni, name);
+}
+
+pub Str http_header_value(Str head, Str name) {
+    List(Str) lines = str_split(head, "\r\n");
+    return http_header_value_acc(lines, 0, name);
+}
+
+// Chunked decoding: reads size-line/chunks straight off the socket.
+// `first` is the first chunk-size line already consumed by the caller
+// ("" when the chunked stream starts fresh).
+pub Str http_read_chunked_acc(Int fd, Str pending_line, Str acc) {
+    Str line = if (pending_line == "") { http_recv_line(fd) } else { pending_line };
+    // strip trailing CRLF and any ";ext"
+    Int l = str_len(line);
+    Int lend = l - 2;
+    Str hexs = if (l >= 2) { str_slice(line, 0, lend) } else { "" };
+    Bool hasext = str_contains(hexs, ";");
+    Str hexpure = if (hasext) {
+        List(Str) parts = str_split(hexs, ";");
+        parts[0]
+    } else {
+        hexs
+    };
+    Int size = http_hex_val_acc(hexpure, 0, 0);
+    if (size <= 0) {
+        // consume trailers until the blank line, keeping the body
+        Str t = http_recv_line(fd);
+        return http_drain_trailers(fd, t, acc);
+    }
+    Str data = http_recv_count(fd, size);
+    Str crlf = http_recv_line(fd);
+    Str acc2 = acc + data;
+    return http_read_chunked_acc(fd, "", acc2);
+}
+
+pub Str http_drain_trailers(Int fd, Str line, Str acc) {
+    Int l = str_len(line);
+    Bool blank = l < 3;
+    if (blank) { return acc; }
+    Str nxt = http_recv_line(fd);
+    return http_drain_trailers(fd, nxt, acc);
+}
+
+// Read header lines until the blank CRLF line; returns the whole head
+// block including the terminating CRLF.
+pub Str http_recv_head_acc(Int fd, Str acc, Int depth) {
+    if (depth <= 0) { return acc; }
+    Str line = http_recv_line(fd);
+    Int l = str_len(line);
+    Bool blank = l < 3;
+    if (blank) { return acc; }
+    Str acc2 = acc + line;
+    Int d2 = depth - 1;
+    return http_recv_head_acc(fd, acc2, d2);
+}
+
+pub Str http_recv_head(Int fd) {
+    return http_recv_head_acc(fd, "", 256);
+}
+
+// Perform one HTTP/1.1 request on an open connection and consume the
+// response according to Content-Length / chunked / read-to-close.
+pub HttpResponse http_call(Int fd, Str method, Str path, Str hostport, Str extra) {
+    Str req = http_build_request(method, path, hostport, extra, "keep-alive");
+    Bool sent = resid_tcp_send(fd, req);
+    if (!sent) { return HttpResponse { status: 0, headers: "", body: "" }; }
+    Str head = http_recv_head(fd);
+    List(Str) hl = str_split(head, "\r\n");
+    Str statusline = hl[0];
+    Int sp1 = http_find(statusline, " ");
+    Int sps = sp1 + 1;
+    Str after = str_slice(statusline, sps, str_len(statusline));
+    Int sp2rel = http_find(after, " ");
+    Int sp2 = sp2rel + sps;
+    Str code = str_slice(statusline, sps, sp2);
+    Int status = str_parse_int(code);
+    // body may start right after head's final CRLF — nothing buffered,
+    // so read per framing straight from the socket
+    Str tev = str_to_lower(http_header_value(head, "transfer-encoding"));
+    Bool chunked = str_contains(tev, "chunked");
+    Str cls = http_header_value(head, "content-length");
+    Int clen = str_parse_int(cls);
+    Str body1 = if (chunked) { http_read_chunked_acc(fd, "", "") } else { "" };
+    Str body2 = if (body1 != "") { body1 } else {
+        if (clen > 0) { http_recv_count(fd, clen) } else { "" }
+    };
+    // head parsed -> framing fully consumed; only fall back to
+    // read-to-close when no head could be parsed at all
+    Str body3 = if (status > 0) { body2 } else {
+        if (body2 != "") { body2 } else { resid_tcp_recv_all(fd) }
+    };
+    return HttpResponse { status: status, headers: head, body: body3 };
+}
+
+// One-shot GET (opens its own connection, Connection: close semantics
+// via read-to-close when no framing present).
+pub HttpResponse http_get(Str hostport_url_parts_host, Int port, Str path) {
+    Int fd = resid_tcp_connect(hostport_url_parts_host, port);
+    if (fd < 0) { return HttpResponse { status: 0, headers: "", body: "" }; }
+    HttpResponse r = http_call(fd, "GET", path, hostport_url_parts_host, "");
+    resid_tcp_close(fd);
+    return r;
+}
+
+// Hex string -> Int (chunk-size lines are hexadecimal).
+pub Int http_hex_digit(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return 0;
+}
+
+pub Int http_hex_val_acc(Str s, Int i, Int acc) {
+    Int n = str_len(s);
+    if (i >= n) { return acc; }
+    Int c = str_char_at(s, i);
+    Int d = http_hex_digit(c);
+    Int acc16 = acc * 16;
+    Int acc2 = acc16 + d;
+    Int ni = i + 1;
+    return http_hex_val_acc(s, ni, acc2);
+}

@@ -5120,3 +5120,81 @@ fn which_openssl() -> Option<std::path::PathBuf> {
     }
     None
 }
+
+/// HTTP/1.1 client: Content-Length bodies, chunked transfer decoding and
+/// keep-alive (two requests over one connection) against a real
+/// python http.server peer. Skipped when python3 is unavailable.
+#[test]
+fn run_http11_client_in_resid() {
+    let python = match which_python() {
+        Some(p) => p,
+        None => { eprintln!("skipping: python3 not found"); return; }
+    };
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().parent().unwrap();
+    let dir = std::env::temp_dir().join(format!("residc-e2e-http11-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in ["http.resid", "crypto.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    let port = 19200u16 + (std::process::id() % 500) as u16;
+    std::fs::write(dir.join("srv.py"), format!(r#"
+import http.server, socketserver
+class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def log_message(self,*a): pass
+    def do_GET(self):
+        if self.path == "/cl":
+            body=b"hello-content-length-world"
+            self.send_response(200); self.send_header("Content-Length",str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+        elif self.path == "/chunked":
+            self.send_response(200); self.send_header("Transfer-Encoding","chunked")
+            self.end_headers()
+            for part in [b"chunk-one-", b"chunk-two!", b"done"]:
+                self.wfile.write(hex(len(part))[2:].encode()+b"\r\n"+part+b"\r\n")
+            self.wfile.write(b"0\r\n\r\n")
+        else:
+            self.send_response(404); self.send_header("Content-Length","0"); self.end_headers()
+socketserver.TCPServer.allow_reuse_address=True
+s=socketserver.ThreadingTCPServer(("127.0.0.1",{port}),H)
+s.serve_forever()
+"#)).unwrap();
+    let mut server = Command::new(&python).arg(dir.join("srv.py"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn test server");
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    let file = dir.join("main.resid");
+    std::fs::write(&file, format!(r#"
+import "http.resid";
+Int main() {{
+    Int fd = resid_tcp_connect("127.0.0.1", {port});
+    if (fd < 0) {{ println("CONNECT-FAIL"); return 1; }}
+    HttpResponse r1 = http_call(fd, "GET", "/cl", "127.0.0.1:{port}", "");
+    println("R1=" + IntToString(r1.status) + "|" + r1.body);
+    HttpResponse r2 = http_call(fd, "GET", "/chunked", "127.0.0.1:{port}", "");
+    println("R2=" + IntToString(r2.status) + "|" + r2.body);
+    HttpResponse r3 = http_get("127.0.0.1", {port}, "/nope");
+    println("R3=" + IntToString(r3.status));
+    resid_tcp_close(fd);
+    return 0;
+}}
+"#)).unwrap();
+    let out = Command::new(residc_bin()).arg(&file).arg("run").output()
+        .expect("client run failed");
+    let _ = server.kill();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(stdout.contains("R1=200|hello-content-length-world"), "{stdout}");
+    assert!(stdout.contains("R2=200|chunk-one-chunk-two!done"), "{stdout}");
+    assert!(stdout.contains("R3=404"), "{stdout}");
+}
+
+fn which_python() -> Option<std::path::PathBuf> {
+    for p in ["/usr/bin/python3", "/bin/python3", "/usr/local/bin/python3"] {
+        if std::path::Path::new(p).exists() { return Some(std::path::PathBuf::from(p)); }
+    }
+    None
+}
