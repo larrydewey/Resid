@@ -1,0 +1,253 @@
+import "tlsmsg.resid";
+import "tls.resid";
+import "crypto.resid";
+import "aesgcm.resid";
+import "x25519.resid";
+import "chain.resid";
+
+// TLS 1.3 client: args.get(1)=host, args.get(2)=port, args.get(3)=
+// server cert DER hex (ECDSA P-256). Verifies CertificateVerify and
+// server Finished, sends its own Finished + "GET / HTTP/1.0", prints
+// the decrypted reply head.
+
+List(Int) hb_acc(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Int dhi = c - 87;
+    Int dlo = c - 48;
+    Int hi = if (c > 96) { dhi } else { dlo };
+    Int j = i + 1;
+    Int c2 = str_char_at(s, j);
+    Int ehi = c2 - 87;
+    Int elo = c2 - 48;
+    Int lo = if (c2 > 96) { ehi } else { elo };
+    Int h16 = hi * 16;
+    Int byt = h16 + lo;
+    List(Int) acc2 = acc.concat([byt]);
+    Int ni = i + 2;
+    return hb_acc(s, ni, acc2);
+}
+
+List(Int) hb(Str s) {
+    return hb_acc(s, 0, [0]);
+}
+
+List(Int) repz(List(Int) acc, Int n) {
+    if (n == 0) { return acc; }
+    List(Int) acc2 = acc.concat([0]);
+    Int nn = n - 1;
+    return repz(acc2, nn);
+}
+
+List(Int) recv_exact(Int fd, Int n) {
+    List(Int) out = repz([0], n);
+    return recv_loop(fd, out, n, 0);
+}
+
+List(Int) recv_loop(Int fd, List(Int) out, Int n, Int got) {
+    if (got >= n) {
+        println("RECV-SHORT");
+        return out;
+    }
+    Int want = n - got;
+    List(Int) chunk = resid_tcp_recv_bin(fd, want);
+    Int gotn = chunk.len() - 1;
+    if (gotn <= 0) {
+        println("RECV-SHORT");
+        return out;
+    }
+    Bool has = got > 0;
+    List(Int) head = if (has) { slice_seed(out, 1, got, [0]) } else { [0] };
+    List(Int) mid = slice_seed(chunk, 1, gotn, [0]);
+    List(Int) both = sconcat(head, mid);
+    Int rem1 = n - got;
+    Int rem = rem1 - gotn;
+    List(Int) rest = repz([0], rem);
+    List(Int) joined = sconcat(both, rest);
+    Int ngot = got + gotn;
+    return recv_loop(fd, joined, n, ngot);
+}
+
+List(Int) mk_record(Int rtype, List(Int) body) {
+    Int blen = body.len() - 1;
+    Int hi = blen / 256;
+    Int lo = blen % 256;
+    List(Int) acc0 = [0];
+    List(Int) hdr = acc0.concat([rtype, 3, 3, hi, lo]);
+    return sconcat(hdr, body);
+}
+
+List(Int) seal_record(Int seq, List(Int) key, List(Int) iv, List(Int) payload, Int ctype) {
+    List(Int) pt = payload.concat([ctype]);
+    Int plen = pt.len();
+    Int clen = plen + 16;
+    List(Int) aad = tls_record_header(clen);
+    List(Int) nonce = tls_record_nonce(iv, seq);
+    List(Int) j0 = tls_j0(nonce);
+    List(Int) rk = aes128_key_expand(key);
+    List(Int) ek = aes128_encrypt_block(rk, j0);
+    List(Int) cb = inc32(j0);
+    List(Int) ct = ctr_xor(rk, cb, pt, 0, [0]);
+    List(Int) mi = gcm_mac_data(aad, ct);
+    List(Int) hblk = aes128_encrypt_block(rk, repz([0], 16));
+    Int milen = mi.len();
+    Int micount = milen - 1;
+    List(Int) y0 = zeros_seed([0], 16);
+    List(Int) sv = ghash_blocks(hblk, y0, mi, 1, micount);
+    List(Int) tagraw = xor16(sv, ek);
+    List(Int) tag = slice_seed(tagraw, 1, 16, [0]);
+    return sconcat(ct, tag);
+}
+
+// open a record; returns inner plaintext without the content-type byte
+List(Int) open_record(List(Int) key, List(Int) iv, Int seq, List(Int) header, List(Int) body) {
+    Int blen = body.len() - 1;
+    Int clen = blen - 16;
+    List(Int) rk = aes128_key_expand(key);
+    List(Int) nonce = tls_record_nonce(iv, seq);
+    List(Int) j0 = tls_j0(nonce);
+    List(Int) ek = aes128_encrypt_block(rk, j0);
+    List(Int) ct = slice_seed(body, 1, clen, [0]);
+    List(Int) cb = inc32(j0);
+    List(Int) ptfull = ctr_xor(rk, cb, ct, 0, [0]);
+    List(Int) mi = gcm_mac_data(header, ct);
+    List(Int) hblk = aes128_encrypt_block(rk, repz([0], 16));
+    Int milen = mi.len();
+    Int micount = milen - 1;
+    List(Int) y0 = zeros_seed([0], 16);
+    List(Int) sv = ghash_blocks(hblk, y0, mi, 1, micount);
+    List(Int) tagraw = xor16(sv, ek);
+    List(Int) expect = slice_seed(tagraw, 1, 16, [0]);
+    Int toff = blen - 15;
+    List(Int) tag = slice_seed(body, toff, 16, [0]);
+    Bool ok = ct_equal(expect, tag);
+    if (!ok) {
+        println("RECORD-TAG-BAD");
+        return repz([0], 1);
+    }
+    Int plen = clen - 1;
+    return slice_seed(ptfull, 1, plen, [0]);
+}
+Int print_line(List(Int) plain, Int idx, Int n, Str out) {
+    if (idx > n) {
+        println("REPLY: " + out);
+        return 0;
+    }
+    Int chv = plain[idx];
+    if (chv == 13 || chv == 10) {
+        println("REPLY: " + out);
+        return 0;
+    }
+    Str cstr = str_from_code(chv);
+    Str out2 = out + cstr;
+    Int ni = idx + 1;
+    return print_line(plain, ni, n, out2);
+}
+
+Int main() {
+    Str host = args.get(1);
+    Int port = str_parse_int(args.get(2));
+    Int fd = resid_tcp_connect(host, port);
+    if (fd < 0) {
+        println("CONNECT-FAIL");
+        return 1;
+    }
+    List(Int) seed = random_bytes(32);
+    List(Int) cpriv = hb(hex_encode(seed));
+    List(Int) basel = hb("0900000000000000000000000000000000000000000000000000000000000000");
+    List(Int) cpub = x25519(cpriv, basel);
+    List(Int) cpb = slice_seed(cpub, 1, 32, [0]);
+    List(Int) rnd = random_bytes(32);
+    List(Int) chbody = tlsmsg_client_hello(rnd, cpb);
+    List(Int) chmsg = mk_record(22, chbody);
+    Bool s1 = resid_tcp_send_bin(fd, chmsg);
+    if (!s1) { println("SEND-FAIL"); return 1; }
+    List(Int) shhdr = recv_exact(fd, 5);
+    Int shlen = shhdr[4] * 256 + shhdr[5];
+    List(Int) shbody = recv_exact(fd, shlen);
+    List(Int) shr = sh_random(shbody);
+    List(Int) spub = sh_pubkey(shbody);
+    println("SH-OK");
+    List(Int) shared = x25519(cpriv, spub);
+    List(Int) hs = tls_handshake_secret(shared);
+    List(Int) tr1 = sconcat(chbody, shbody);
+    List(Int) th1raw = sha256_bytes(tr1);
+    List(Int) th1 = slice_seed(th1raw, 1, 32, [0]);
+    List(Int) c_hs = tls_c_hs_traffic(hs, th1);
+    List(Int) s_hs = tls_s_hs_traffic(hs, th1);
+    List(Int) skey = tls_traffic_key(s_hs);
+    List(Int) siv = tls_traffic_iv(s_hs);
+    List(Int) hdr2 = recv_exact(fd, 5);
+    Int flen = hdr2[4] * 256 + hdr2[5];
+    List(Int) fbody = recv_exact(fd, flen);
+    List(Int) fhdr = slice_seed(hdr2, 1, 5, [0]);
+    List(Int) inner = open_record(skey, siv, 0, fhdr, fbody);
+    println(IntToString(inner.len()));
+    Int pe = tm_find_pos(inner, 8, 0);
+    Int pc = tm_find_pos(inner, 11, 0);
+    Int pv = tm_find_pos(inner, 15, 0);
+    Int pf = tm_find_pos(inner, 20, 0);
+    List(Int) ee = tm_full_msg(inner, pe);
+    List(Int) ctmsg = tm_full_msg(inner, pc);
+    List(Int) cvmsg = tm_full_msg(inner, pv);
+    List(Int) finmsg = tm_full_msg(inner, pf);
+    List(Int) ctbody = tm_find(inner, 11, 0);
+    List(Int) certder = tm_cert_der(ctbody);
+    List(Int) tr2a = sconcat(tr1, ee);
+    List(Int) tr2b = sconcat(tr2a, ctmsg);
+    List(Int) trcv = sconcat(tr2b, cvmsg);
+    List(Int) thcvraw = sha256_bytes(trcv);
+    List(Int) thcv = slice_seed(thcvraw, 1, 32, [0]);
+    List(Int) scert = hb(args.get(3));
+    List(Int) keyb = cert_pubkey_bits(scert);
+    List(Int) keyb2 = slice_seed(keyb, 1, 66, [0]);
+    List(Int) cvbody = tm_find(inner, 15, 0);
+    List(Int) content = tm_cv_content(thcv);
+    Bool okcv = tm_ecdsa_verify_sha256(content, keyb2, tm_cv_sig(cvbody));
+    if (!okcv) {
+        println("CV-VERIFY-FAIL");
+        return 1;
+    }
+    println("CV-VERIFY-OK");
+    List(Int) finbody = tm_find(inner, 20, 0);
+    List(Int) svfin = tls_finished(s_hs, thcv);
+    Bool okfin = ct_equal(finbody, svfin);
+    if (!okfin) {
+        println("FINISHED-FAIL");
+        return 1;
+    }
+    println("FINISHED-OK");
+    List(Int) tr3 = sconcat(trcv, finmsg);
+    List(Int) thapraw = sha256_bytes(tr3);
+    List(Int) thap = slice_seed(thapraw, 1, 32, [0]);
+    List(Int) master = tls_master_secret(hs);
+    List(Int) c_ap = tls_c_ap_traffic(master, thap);
+    List(Int) s_ap = tls_s_ap_traffic(master, thap);
+    List(Int) cfbody = tls_finished(c_hs, thcv);
+    List(Int) c_hs_key = tls_traffic_key(c_hs);
+    List(Int) c_hs_iv = tls_traffic_iv(c_hs);
+    List(Int) cfhdr = tls_record_header(49);
+    List(Int) cfrec = seal_record(0, c_hs_key, c_hs_iv, cfbody, 22);
+    Bool s2 = resid_tcp_send_bin(fd, cfrec);
+    if (!s2) { println("SEND2-FAIL"); return 1; }
+    List(Int) c_ap_key = tls_traffic_key(c_ap);
+    List(Int) c_ap_iv = tls_traffic_iv(c_ap);
+    List(Int) req = bytes_of("GET / HTTP/1.0\r\n\r\n");
+    Int rlen = req.len() - 1;
+    Int rleni = rlen + 17;
+    List(Int) rhdr = tls_record_header(rleni);
+    List(Int) rrec = seal_record(0, c_ap_key, c_ap_iv, req, 23);
+    Bool s3 = resid_tcp_send_bin(fd, rrec);
+    if (!s3) { println("SEND3-FAIL"); return 1; }
+    List(Int) s_ap_key = tls_traffic_key(s_ap);
+    List(Int) s_ap_iv = tls_traffic_iv(s_ap);
+    List(Int) resp_hdr = recv_exact(fd, 5);
+    Int resp_len = resp_hdr[4] * 256 + resp_hdr[5];
+    List(Int) resp_body = recv_exact(fd, resp_len);
+    List(Int) resp_hdr5 = slice_seed(resp_hdr, 1, 5, [0]);
+    List(Int) plain = open_record(s_ap_key, s_ap_iv, 0, resp_hdr5, resp_body);
+    Int n = plain.len() - 1;
+    print_line(plain, 1, n, "");
+    resid_tcp_close(fd);
+    return 0;
+}

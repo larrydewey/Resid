@@ -199,7 +199,32 @@
   records. Next: message framing (ClientHello build/parse,
   Certificate/CertificateVerify handling) or live-handshake attempt
   against openssl s_server via the tcp capability.
-- **Tests**: 623 pass (incl. DER/x509 walker, RSA/ECDSA verify,
+- **TLS 1.3 message framing (RFC 8446) done**: `lib/tlsmsg.resid` —
+  ClientHello construction (byte-exact RFC 8448 §3 trace),
+  ServerHello parsing (random + x25519 key share via marker scan),
+  handshake-message flight walker (type/next/body/find), Certificate
+  DER extraction, and ECDSA-P256 CertificateVerify verification over
+  the TLS 1.3 signed content (64×0x20 || context || 00 || TH).
+  e2e `run_tls13_framing_in_resid`: all checks pass against RFC 8448
+  fixtures incl. own-ECDSA-cert CV verification and rejection of the
+  RSA-PSS CV (RSA-PSS unsupported — PKCS#1v1.5 only so far).
+  Gotchas: no variable reassignment anywhere; bind arithmetic temps
+  before argument positions or widths widen; helper fns must be `pub`
+  to be visible across module imports.
+- **Binary TCP capability + live-handshake client (WIP)**: new rt
+  builtins `resid_tcp_send_bin`/`resid_tcp_recv_bin` (binary-safe,
+  seeded-list ABI, boxes handled); `examples/tls_client.resid` — full
+  TLS 1.3 client flow (CH build/send, SH parse, X25519 + key schedule,
+  flight decrypt, CV verify, Finished check/response, HTTP request).
+  Verified LIVE: ClientHello record accepted by real `openssl
+  s_server -tls1_3` (no alerts); real openssl ServerHello parsed
+  (random + key share extracted); X25519 shared secret and handshake/
+  master secrets computed live; encrypted flight decrypted.
+  REMAINING (next session): end-to-end record exchange against a fully
+  compliant TLS server — current ad-hoc python test harness does not
+  implement TLS, so post-SH records fail tag checks (harness artifact,
+  not crypto); also RSA-PSS CV support for real-world certs.
+- **Tests**: 625 pass (incl. DER/x509 walker, RSA/ECDSA verify,
   X25519, HKDF, ChaCha20-Poly1305 and AES-128-GCM RFC/NIST-vector
   e2es; lexer 17, parser 91, resid-ir 46, resid-type 195,
   resid-codegen 137, resid-build 12, resid-fmt 5, residc 70 incl.
