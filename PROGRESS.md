@@ -216,18 +216,26 @@
   program (verifies fine standalone on identical bytes — suspected
   codegen/Int(256) context issue) and reading the app response after GET;
   RSA-PSS CV unsupported.
-- **NEXT-STEP (top priority) — ECDSA-P256 verify is unreliable**: an
-  exhaustive property test (`run_ecdsa_prop_in_resid`, ignored, with
-  deterministic random fixtures + minimal repro
-  `run_ec_ge_zero_max_in_resid`) shows ~7/12 random valid signatures
-  FAIL verification while python cryptography validates the identical
-  bytes. Failures are value-dependent (correlate with r/s/digest >=
-  2^255 — i.e., signed-compare / sign-extension pitfalls in Int(256)/
-  Int(512) codegen) AND context-dependent (identical bytes pass in
-  small standalone programs). Attempted fixes: unsigned compare via
-  xor/top-bit scan and via 512-halves decomposition — each passes some
-  subsets but not all. Root cause is in wide-int codegen/stack handling;
-  fixing it will unblock the live-handshake milestone end-to-end.
+- **RESOLVED — ECDSA-P256 verify is now reliable (wide-int unsigned
+  compare fixed in lib)**: root cause was NOT a codegen miscompilation:
+  Int(N) relational operators compile as SIGNED compares, so EC scalars
+  with the top bit set compared wrong, and the first attempted fix
+  (`ec_ge512` halves decomposition) itself had a logic bug — it treated
+  `ec_ge(ah, bh)` (a `>=`, true on equal high halves) as strict
+  greater-than, short-circuiting to "true" whenever high halves matched.
+  Fixed formulation: if !ec_ge(ah,bh) return false; if ec_ge(bh,ah)
+  (highs equal) fall through to the low-half compare; else true.
+  `lib/ec256.resid` now provides `ec_ge` (O(1): signs differ ? a's top
+  bit : (a-b) not negative) and `ec_ge512`, and uses them for ALL field/
+  scalar order comparisons (`ec_add` reduction guard, `ec_sub`,
+  `ec_mod_bits`, `ec_subn`). The exhaustive suite
+  (`run_ecdsa_prop_in_resid`: 49 compare vectors + 14 ECDSA verifies,
+  plus `run_ecge512_wide_prop_in_resid` and minimal repro
+  `run_ec_ge_zero_max_in_resid`) is UN-IGNORED and fully green — all 12
+  previously-failing random valid signatures now verify. Test fixture
+  fixes along the way: `be512_acc` had a wrong declared return type
+  (`List(Int)` instead of `Int(512)`) and was nested inside `main`;
+  wide-test assertions flipped from expecting-FAIL to expecting-PASS.
 - **TLS 1.3 message framing (RFC 8446) done**: `lib/tlsmsg.resid` —
   ClientHello construction (byte-exact RFC 8448 §3 trace),
   ServerHello parsing (random + x25519 key share via marker scan),
@@ -2434,7 +2442,8 @@ mod L, S = (r + k·a) mod L via a 512-bit bit-fold reduction. Differential-teste
 cross-verified against Python-produced signatures, and wrong-key
 rejection confirmed. Self-verification
 and wrong-message rejection proven by e2e `run_ed25519_sign_in_resid`;
-verification e2e is `run_ed25519_verify_in_resid`. 586 tests pass.
+verification e2e is `run_ed25519_verify_in_resid`. 624 tests pass
+(e2e 75, all previously-ignored wide-int property tests un-ignored).
 
 `lib/ed25519.resid`: full Ed25519 VERIFY (RFC 8032) on Int(256)/Int(512)
 scalars — field arithmetic mod 2^255-19 (overflow-safe add/sub, fe_mul via

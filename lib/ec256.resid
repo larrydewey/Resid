@@ -45,13 +45,44 @@ pub Int(256) ec_nm2() {
 
 // All arithmetic runs on zero-extended positive Int(512) values so
 // signed-comparison pitfalls never appear.
+// ─── Unsigned wide comparisons ───────────────────────────────────────
+// Int(N) relational ops compile as signed; EC scalars are unsigned, so
+// values with the top bit set would compare wrong. O(1) formulation:
+// a >= b iff (signs differ ? a has its top bit set : (a-b) is positive).
+
+pub Bool ec_ge(Int(256) a, Int(256) b) {
+    Int(256) d = a - b;
+    Int(256) sx = a ^ b;
+    Int(256) a_top = (a >> 255) & 1;
+    Int(256) s_top = (sx >> 255) & 1;
+    Int(256) d_top = (d >> 255) & 1;
+    Bool differ = s_top == 1;
+    Bool apos = a_top == 1;
+    Bool dneg = d_top == 1;
+    if (differ) { return apos; }
+    return !dneg;
+}
+
+pub Bool ec_ge512(Int(512) a, Int(512) b) {
+    // split into 256-bit halves; compare high half, then low half
+    Int(256) ah = (Int(256)) (a >> 256);
+    Int(256) al = (Int(256)) a;
+    Int(256) bh = (Int(256)) (b >> 256);
+    Int(256) bl = (Int(256)) b;
+    Bool hgt = ec_ge(ah, bh);
+    if (!hgt) { return false; }
+    Bool hlt = ec_ge(bh, ah);
+    if (hlt) { return ec_ge(al, bl); }
+    return true;
+}
+
 pub Int(256) ec_add(Int(256) a, Int(256) b) {
     Int(512) pp = ec_p_wide();
     Int(512) aa = ec_zext(a);
     Int(512) bb = ec_zext(b);
     Int(512) s = aa + bb;
     List(Int) drop1 = [0];
-    Int(512) r = if (s >= pp) { s - pp } else { s };
+    Int(512) r = if (ec_ge512(s, pp)) { s - pp } else { s };
     Int(256) rr = (Int(256)) r;
     return rr;
 }
@@ -60,7 +91,7 @@ pub Int(256) ec_sub(Int(256) a, Int(256) b) {
     Int(512) pp = ec_p_wide();
     Int(512) aa = ec_zext(a);
     Int(512) bb = ec_zext(b);
-    Bool ge = aa >= bb;
+    Bool ge = ec_ge512(aa, bb);
     Int(512) dp = if (ge) { aa - bb } else { (pp - bb) + aa };
     Int(256) r = (Int(256)) dp;
     return r;
@@ -71,7 +102,7 @@ pub Int(512) ec_mod_bits(Int(512) t, Int(512) m, Int i, Int(512) r) {
     Int ni = i - 1;
     Int(512) b = (t >> i) & 1;
     Int(512) r2 = (r << 1) | b;
-    Int(512) r3 = if (r2 >= m) { r2 - m } else { r2 };
+    Int(512) r3 = if (ec_ge512(r2, m)) { r2 - m } else { r2 };
     return ec_mod_bits(t, m, ni, r3);
 }
 
@@ -104,7 +135,8 @@ pub Int(256) ec_pow_bits(Int(256) base, Int(256) e, Int i, Int(256) acc) {
     Int ni = i - 1;
     Int(256) sq = ec_mul(acc, acc);
     Int(256) eb = (e >> i) & 1;
-    if (eb > 0) {
+    Bool ebit = eb == 1;
+    if (ebit) {
         Int(256) mm = ec_mul(sq, base);
         return ec_pow_bits(base, e, ni, mm);
     }
@@ -219,10 +251,11 @@ pub Int(512) ec_mul_rec(Int(256) k, Int i, Int(256) ax, Int(256) ay, Int(256) az
     Int(256) z3b = ec_mul(hv, dzv);
     // select doubled or added (bit set), keeping infinity marker
     Int(256) kbb = (k >> i) & 1;
-    Int(256) nx = if (kbb > 0) { if (az == 0) { bx } else { x3b } } else { if (az == 0) { ax } else { dxv } };
-    Int(256) ny = if (kbb > 0) { if (az == 0) { by } else { y3b } } else { if (az == 0) { ay } else { dyv } };
+    Bool kbit = kbb == 1;
+    Int(256) nx = if (kbit) { if (az == 0) { bx } else { x3b } } else { if (az == 0) { ax } else { dxv } };
+    Int(256) ny = if (kbit) { if (az == 0) { by } else { y3b } } else { if (az == 0) { ay } else { dyv } };
     Int(256) onev = 1;
-    Int(256) nzz = if (kbb > 0) { if (az == 0) { onev } else { z3b } } else { if (az == 0) { az } else { dzv } };
+    Int(256) nzz = if (kbit) { if (az == 0) { onev } else { z3b } } else { if (az == 0) { az } else { dzv } };
     Int ni = i - 1;
     return ec_mul_rec(k, ni, nx, ny, nzz, bx, by);
 }
@@ -289,7 +322,7 @@ pub Int(256) ec_muln(Int(256) a, Int(256) b) {
 }
 
 pub Int(256) ec_subn(Int(256) a, Int(256) b) {
-    if (a >= b) {
+    if (ec_ge(a, b)) {
         return a - b;
     }
     Int(256) nb = EC_N() - b;
@@ -302,7 +335,8 @@ pub Int(256) ec_pown_rec(Int(256) base, Int(256) e, Int i, Int(256) acc) {
     Int ni = i - 1;
     Int(256) sq = ec_muln(acc, acc);
     Int(256) eb = (e >> i) & 1;
-    if (eb > 0) {
+    Bool ebit = eb == 1;
+    if (ebit) {
         Int(256) mm = ec_muln(sq, base);
         return ec_pown_rec(base, e, ni, mm);
     }
