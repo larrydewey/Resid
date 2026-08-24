@@ -133,6 +133,22 @@
   roadmap behind the existing `@capability` story so pure-Resid TLS can
   replace it later without changing user code. Requires Larry's call
   before implementation begins.
+- **DECISION: Larry chose (A) pure-Resid TLS.** First milestone:
+  X25519 (RFC 7748). STATUS: IN PROGRESS, not yet working.
+  lib/x25519.resid was drafted (Montgomery ladder over ed25519.resid
+  field ops, byte-level clamping, LE decode) but removed from the tree
+  mid-implementation - the ladder recursion needs to be rewritten in
+  one clean pass. Design notes: clamp on BYTES before decode (byte
+  arithmetic stays positive); decode u little-endian, mask bit 255;
+  ladder per RFC 7748 (A=x2+z2, B=x2-z2, AA, BB, E=AA-BB, DA=D*A,
+  CB=C*B, x3=(DA+CB)^2, z3=x1*(DA-CB)^2, x2=AA*BB,
+  z2=E*(AA+a24*E), a24=121665); cswap via if-expressions on
+  swap^kt; recursion carries x2/z2/x3/z3/swap; finish with
+  x2*fe_inv(z2). Test against RFC 7748 section 5.2 vectors via
+  Python ground truth. Signed Int(256) caveat: clamped scalars have
+  bit254 set -> negative as signed; shifts/ands/mults are
+  representation-safe, comparisons are NOT (avoid them on raw
+  scalars).
 - **Tests**: 618 pass (incl. DER decoder, x509 TBS walker, and the RSA
   PKCS#1v1.5 verify e2e on both pipelines; lexer 17, parser 91,
   resid-ir 46, resid-type 195, resid-codegen 137, resid-build 12,
