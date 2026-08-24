@@ -2857,6 +2857,182 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// ChaCha20-Poly1305 AEAD (RFC 8439) in pure Resid — §2.5.2 Poly1305
+/// vector and §2.8.2 AEAD vector (ct + tag byte-exact), plus roundtrip
+/// open and tamper rejection.
+#[test]
+fn run_chacha20poly1305_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-chacha-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    for f in ["crypto.resid", "chacha.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"
+import "chacha.resid";
+import "crypto.resid";
+
+List(Int) hb_acc(Str s, Int i, List(Int) acc) {{
+    if (i >= str_len(s)) {{ return acc; }}
+    Int c = str_char_at(s, i);
+    Int dhi = c - 87;
+    Int dlo = c - 48;
+    Int hi = if (c > 96) {{ dhi }} else {{ dlo }};
+    Int j = i + 1;
+    Int c2 = str_char_at(s, j);
+    Int ehi = c2 - 87;
+    Int elo = c2 - 48;
+    Int lo = if (c2 > 96) {{ ehi }} else {{ elo }};
+    Int h16 = hi * 16;
+    Int byt = h16 + lo;
+    List(Int) acc2 = acc.concat([byt]);
+    Int ni = i + 2;
+    return hb_acc(s, ni, acc2);
+}}
+
+List(Int) hb(Str s) {{
+    return hb_acc(s, 0, [0]);
+}}
+
+Int main() {{
+    // RFC 8439 section 2.5.2 Poly1305
+    List(Int) mk = hb("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b");
+    println(hex_encode(poly1305(mk, bytes_of("Cryptographic Forum Research Group"))));
+    // RFC 8439 section 2.8.2 AEAD seal
+    List(Int) key = hb("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f");
+    List(Int) nonce = hb("070000004041424344454647");
+    List(Int) pt = bytes_of("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.");
+    List(Int) aad = hb("50515253c0c1c2c3c4c5c6c7");
+    List(Int) sealed = chacha20poly1305_seal(key, nonce, pt, aad);
+    println(hex_encode(sealed));
+    Bool ok = chacha20poly1305_open(key, nonce, sealed, aad);
+    if (ok) {{ println("OPEN-OK"); }}
+    List(Int) bad = ls_set(sealed, 3, sealed[3] ^ 1);
+    Bool ok2 = chacha20poly1305_open(key, nonce, bad, aad);
+    if (!ok2) {{ println("TAMPER-REJECTED"); }}
+    return 0;
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        stdout.trim(),
+        "a8061dc1305136c6c22b8baf0c0127a9\n\
+         d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b61161ae10b594f09e26a7e902ecbd0600691\n\
+         OPEN-OK\n\
+         TAMPER-REJECTED",
+        "{stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// AES-128-GCM (NIST SP 800-38D) in pure Resid — test cases 1-4
+/// (incl. multi-block and AAD) plus roundtrip open.
+#[test]
+fn run_aes128gcm_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-aesgcm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    for f in ["crypto.resid", "aesgcm.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "aesgcm.resid";
+import "crypto.resid";
+
+List(Int) hb_acc(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Int dhi = c - 87;
+    Int dlo = c - 48;
+    Int hi = if (c > 96) { dhi } else { dlo };
+    Int j = i + 1;
+    Int c2 = str_char_at(s, j);
+    Int ehi = c2 - 87;
+    Int elo = c2 - 48;
+    Int lo = if (c2 > 96) { ehi } else { elo };
+    Int h16 = hi * 16;
+    Int byt = h16 + lo;
+    List(Int) acc2 = acc.concat([byt]);
+    Int ni = i + 2;
+    return hb_acc(s, ni, acc2);
+}
+
+List(Int) hb(Str s) {
+    return hb_acc(s, 0, [0]);
+}
+
+List(Int) rep(Int n, Int b, List(Int) acc) {
+    if (n == 0) { return acc; }
+    List(Int) acc2 = acc.concat([b]);
+    Int nn = n - 1;
+    return rep(nn, b, acc2);
+}
+
+Int main() {
+    List(Int) key0 = rep(16, 0, [0]);
+    List(Int) iv0 = rep(12, 0, [0]);
+    List(Int) aad0 = [0];
+    println(hex_encode(aes128_gcm_seal(key0, iv0, [0], aad0)));
+    List(Int) r2 = aes128_gcm_seal(key0, iv0, rep(16, 0, [0]), aad0);
+    println(hex_encode(r2));
+    List(Int) r3 = aes128_gcm_seal(key0, iv0, rep(16, 0, [0]), rep(16, 0, [0]));
+    println(hex_encode(r3));
+    List(Int) key4 = hb("feffe9928665731c6d6a8f9467308308");
+    List(Int) iv4 = hb("cafebabefacedbaddecaf888");
+    List(Int) pt4 = hb("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b3914a2adf83ea685c2acaeaa70a5b99c");
+    List(Int) aad4 = hb("feedfacedeadbeeffeedfacedeadbeefabaddad2");
+    List(Int) r4 = aes128_gcm_seal(key4, iv4, pt4, aad4);
+    println(hex_encode(r4));
+    Bool o4 = aes128_gcm_open(key4, iv4, r4, aad4);
+    if (o4) { println("OPEN-OK"); }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        stdout.trim(),
+        "58e2fccefa7e3061367f1d57a4e7455a\n\
+         0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf\n\
+         0388dace60b6a392f328c2b971b2fe78d24e503a1bb037071c71b35d987b8657\n\
+         42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e09149322628e30ee206625c1b811d10632b1dcaa49d714c5faf22659c4337fe5d\n\
+         OPEN-OK",
+        "{stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Shift counts >= bit width yield 0 (machine shifts wrap the count mod width).
 #[test]
 fn run_shift_overflow_yields_zero() {

@@ -1,0 +1,370 @@
+// ─── lib/chacha.resid — ChaCha20-Poly1305 AEAD (RFC 8439) ───────────
+// Pure Resid. ChaCha state words are Int(64) masked to 32 bits (the
+// wrapping_* builtins are Int(64)-only; a+b of two <2^32 values never
+// overflows Int(64) checked arithmetic). Poly1305 runs on Int(256)
+// values with clamped r < 2^126 so products stay < 2^257 inside
+// Int(512); reduction folds hi*5 over 2^130 twice, leaving h < p+11,
+// so a single conditional subtract canonicalizes.
+// All byte lists use the [0]-seed convention (real bytes at index >=1).
+
+import "crypto.resid";
+
+// ── little-endian helpers ────────────────────────────────────────────
+
+pub Int le32_at(List(Int) b, Int off) {
+    Int b0 = b[off];
+    Int b1 = b[off + 1] * 256;
+    Int b2 = b[off + 2] * 65536;
+    Int b3 = b[off + 3] * 16777216;
+    return b0 + b1 + b2 + b3;
+}
+
+pub Int m32() {
+    return 4294967295;
+}
+
+pub Int rotl32(Int x, Int n) {
+    Int xl = (x << n) & m32();
+    Int xr = (x >> (32 - n)) & m32();
+    return xl | xr;
+}
+
+pub List(Int) push(List(Int) l, Int v) {
+    return l.concat([v]);
+}
+
+// ── ChaCha20 block function ──────────────────────────────────────────
+
+pub Int cc_state_word(List(Int) key, Int counter, List(Int) nonce, Int i) {
+    if (i <= 4) {
+        Int consts = if (i == 1) { 1634760805 } else { 0 };
+        Int c2 = if (i == 2) { 857760878 } else { consts };
+        Int c3 = if (i == 3) { 2036477234 } else { c2 };
+        Int c4 = if (i == 4) { 1797285236 } else { c3 };
+        return c4;
+    }
+    if (i <= 12) {
+        Int base = i - 5;
+        Int quad = base * 4;
+        Int koff = quad + 1;
+        return le32_at(key, koff);
+    }
+    if (i == 13) { return counter; }
+    Int nbase = i - 14;
+    Int nquad = nbase * 4;
+    Int noff = nquad + 1;
+    return le32_at(nonce, noff);
+}
+
+pub List(Int) cc_state_build(List(Int) key, Int counter, List(Int) nonce, Int i, List(Int) acc) {
+    if (i > 16) { return acc; }
+    Int w = cc_state_word(key, counter, nonce, i);
+    List(Int) acc2 = acc.concat([w]);
+    Int ni = i + 1;
+    return cc_state_build(key, counter, nonce, ni, acc2);
+}
+
+pub List(Int) cc_state(List(Int) key, Int counter, List(Int) nonce) {
+    return cc_state_build(key, counter, nonce, 1, [0]);
+}
+
+pub Int qr_t(Int a, Int b) {
+    Int s = a + b;
+    return s & m32();
+}
+
+pub List(Int) quarter(List(Int) x, Int a, Int b, Int c, Int d) {
+    Int xa = qr_t(x[a], x[b]);
+    Int xd = rotl32(x[d] ^ xa, 16);
+    Int xc = qr_t(x[c], xd);
+    Int xb = rotl32(x[b] ^ xc, 12);
+    Int xa2 = qr_t(xa, xb);
+    Int xd2 = rotl32(xd ^ xa2, 8);
+    Int xc2 = qr_t(xc, xd2);
+    Int xb2 = rotl32(xb ^ xc2, 7);
+    return sel4(x, 16, a, xa2, b, xb2, c, xc2, d, xd2);
+}
+
+// rebuilt copy of x[1..16] with positions a/b/c/d replaced
+pub List(Int) sel4(List(Int) x, Int i, Int a, Int va, Int b, Int vb, Int c, Int vc, Int d, Int vd) {
+    if (i == 0) { return [0]; }
+    Int v = x[i];
+    Int n1 = if (i == a) { va } else { v };
+    Int n2 = if (i == b) { vb } else { n1 };
+    Int n3 = if (i == c) { vc } else { n2 };
+    Int n4 = if (i == d) { vd } else { n3 };
+    Int prev = i - 1;
+    List(Int) rest = sel4(x, prev, a, va, b, vb, c, vc, d, vd);
+    return rest.concat([n4]);
+}
+
+// one double round = column QRs (steps 0-3) then diagonal QRs (steps 4-7)
+pub List(Int) cc_dround(List(Int) x, Int s) {
+    if (s == 0) { return quarter(x, 1, 5, 9, 13); }
+    if (s == 1) { return quarter(x, 2, 6, 10, 14); }
+    if (s == 2) { return quarter(x, 3, 7, 11, 15); }
+    if (s == 3) { return quarter(x, 4, 8, 12, 16); }
+    if (s == 4) { return quarter(x, 1, 6, 11, 16); }
+    if (s == 5) { return quarter(x, 2, 7, 12, 13); }
+    if (s == 6) { return quarter(x, 3, 8, 9, 14); }
+    return quarter(x, 4, 5, 10, 15);
+}
+
+pub List(Int) cc_dr_all(List(Int) x, Int s) {
+    if (s == 8) { return x; }
+    List(Int) y = cc_dround(x, s);
+    Int ns = s + 1;
+    return cc_dr_all(y, ns);
+}
+
+pub List(Int) cc_rounds(List(Int) x, Int i) {
+    if (i == 0) { return x; }
+    List(Int) y = cc_dr_all(x, 0);
+    Int ni = i - 1;
+    return cc_rounds(y, ni);
+}
+
+// serialize word list (from index i, n words) to LE bytes
+pub List(Int) ser_acc(List(Int) w, Int i, Int n, List(Int) acc) {
+    if (n == 0) { return acc; }
+    Int v = w[i];
+    Int b0 = v & 255;
+    Int b1 = (v >> 8) & 255;
+    Int b2 = (v >> 16) & 255;
+    Int b3 = (v >> 24) & 255;
+    List(Int) a2 = acc.concat([b0, b1, b2, b3]);
+    Int ni = i + 1;
+    Int nn = n - 1;
+    return ser_acc(w, ni, nn, a2);
+}
+
+pub List(Int) cc_add_states(List(Int) a, List(Int) b, Int i) {
+    if (i > 16) { return b; }
+    Int s = a[i] + b[i];
+    Int v = s & m32();
+    List(Int) nb = ls_set(b, i, v);
+    Int ni = i + 1;
+    return cc_add_states(a, nb, ni);
+}
+
+// 64-byte keystream block for (key, counter, nonce)
+pub List(Int) chacha_block(List(Int) key, Int counter, List(Int) nonce) {
+    List(Int) st = cc_state(key, counter, nonce);
+    List(Int) w = cc_rounds(st, 10);
+    List(Int) mixed = cc_add_states(st, w, 1);
+    return ser_acc(mixed, 1, 16, [0]);
+}
+
+// ChaCha20 XOR (encrypt = decrypt); data is a seeded byte list
+pub List(Int) cc_xor_acc(List(Int) key, Int counter, List(Int) nonce, List(Int) data, Int pos, Int ksleft, List(Int) blk, List(Int) acc) {
+    if (pos > data.len() - 1) { return acc; }
+    Int fresh = if (ksleft == 0) { 1 } else { 0 };
+    Int ksv = if (fresh == 1) { 64 } else { ksleft };
+    List(Int) cur = if (fresh == 1) { chacha_block(key, counter, nonce) } else { blk };
+    Int off = 65 - ksv;
+    Int c = data[pos] ^ cur[off];
+    List(Int) acc2 = acc.concat([c]);
+    Int nk = ksv - 1;
+    Int c1 = counter + 1;
+    Int nc = if (nk == 0) { c1 } else { counter };
+    Int np = pos + 1;
+    return cc_xor_acc(key, nc, nonce, data, np, nk, cur, acc2);
+}
+
+pub List(Int) chacha20_xor(List(Int) key, Int counter, List(Int) nonce, List(Int) data) {
+    return cc_xor_acc(key, counter, nonce, data, 1, 0, [0], [0]);
+}
+
+// ── wide-int byte helpers (Int(256) domain) ─────────────────────────
+
+pub Int(256) dec_le_wide(List(Int) b, Int off, Int n) {
+    Int top = n - 1;
+    Int(256) v = dec_le_acc_w(b, off, top, 0);
+    return v;
+}
+
+pub Int(256) dec_le_acc_w(List(Int) b, Int off, Int idx, Int(256) v) {
+    if (idx < 0) { return v; }
+    Int raw = b[off + idx];
+    Int(256) rv = (Int(256)) raw;
+    Int(256) sh = idx * 8;
+    Int(256) part = rv << sh;
+    Int(256) v2 = v | part;
+    Int ni = idx - 1;
+    return dec_le_acc_w(b, off, ni, v2);
+}
+
+pub List(Int) enc_le_wide(Int(256) v, Int n, List(Int) acc) {
+    if (n == 0) { return acc; }
+    Int(256) bw = v & 255;
+    Int b = (Int) bw;
+    List(Int) acc2 = acc.concat([b]);
+    Int(256) rest = v >> 8;
+    Int nn = n - 1;
+    return enc_le_wide(rest, nn, acc2);
+}
+
+// ── Poly1305 ─────────────────────────────────────────────────────────
+
+// clamp the 128-bit r during decode (RFC 8439 clamping pattern,
+// little-endian: byte % 4 == 0 keeps low 6 bits, % 4 == 3 keeps low 4)
+pub Int(256) poly_r_acc(List(Int) b, Int idx, Int(256) v) {
+    if (idx < 0) { return v; }
+    Int raw = b[1 + idx];
+    Int m4 = idx % 4;
+    Int masked = if (m4 == 3) { raw & 15 } else { raw };
+    Bool is4 = idx == 4;
+    Bool is8 = idx == 8;
+    Bool is12 = idx == 12;
+    Int sel = if (is4) { 1 } else { 0 };
+    Int sel2 = if (is8) { 1 } else { sel };
+    Int sel3 = if (is12) { 1 } else { sel2 };
+    Int masked2 = if (sel3 == 1) { masked & 252 } else { masked };
+    Int(256) rv = (Int(256)) masked2;
+    Int(256) sh = idx * 8;
+    Int(256) part = rv << sh;
+    Int(256) v2 = v | part;
+    Int ni = idx - 1;
+    return poly_r_acc(b, ni, v2);
+}
+
+pub Int(512) p130_m_wide() {
+    Int(512) o = 1;
+    Int(512) hs = 130;
+    return (o << hs) - o;
+}
+
+pub Int(512) poly_p_wide() {
+    Int(512) mm = p130_m_wide();
+    Int(512) five = 5;
+    return mm - five + 1;
+}
+
+// reduce t mod 2^130-5 where t < 2^257; result < p+11, canonicalized
+// by one conditional subtract of p
+pub Int(256) poly_reduce(Int(512) t) {
+    Int(512) mm = p130_m_wide();
+    Int(512) lo = t & mm;
+    Int(512) hi = t >> 130;
+    Int(512) five = 5;
+    Int(512) h = lo + hi * five;
+    Int(512) lo2 = h & mm;
+    Int(512) hi2 = h >> 130;
+    Int(512) h2 = lo2 + hi2 * five;
+    Int(512) pv = poly_p_wide();
+    Int(512) sub = h2 - pv;
+    Int(512) hr = if (h2 >= pv) { sub } else { h2 };
+    return (Int(256)) hr;
+}
+
+// process one <=16-byte block: h = (h + n_with_2^128) * r mod p
+pub Int(256) poly_block(Int(256) h, List(Int) msg, Int off, Int remaining, Int(256) r) {
+    Int take = if (remaining < 16) { remaining } else { 16 };
+    Int(256) n = dec_le_wide(msg, off, take);
+    Int(256) one = 1;
+    Int(256) shb = take * 8;
+    Int(256) term = one << shb;
+    Int(256) nb = n + term;
+    Int(256) sum = h + nb;
+    Int(512) tv = (Int(512)) sum;
+    Int(512) rv = (Int(512)) r;
+    Int(512) prod = tv * rv;
+    return poly_reduce(prod);
+}
+
+pub Int(256) poly_blocks(Int(256) h, List(Int) msg, Int off, Int remaining, Int(256) r) {
+    if (remaining <= 0) { return h; }
+    Int(256) h2 = poly_block(h, msg, off, remaining, r);
+    Int used = if (remaining < 16) { remaining } else { 16 };
+    Int u4 = used * 1;
+    Int noff = off + u4;
+    Int nrem = remaining - u4;
+    return poly_blocks(h2, msg, noff, nrem, r);
+}
+
+pub Int(256) p128_mask_wide() {
+    Int(256) o = 1;
+    Int(256) hs = 128;
+    return (o << hs) - o;
+}
+
+// Poly1305 MAC over msg with 32-byte one-time key (r || s), seeded lists
+pub List(Int) poly1305(List(Int) key, List(Int) msg) {
+    Int(256) r = poly_r_acc(key, 15, 0);
+    Int(256) s = dec_le_wide(key, 17, 16);
+    Int mlen = msg.len();
+    Int mcount = mlen - 1;
+    Int(256) h = poly_blocks(0, msg, 1, mcount, r);
+    Int(256) tag_v = h + s;
+    Int(256) tag_m = tag_v & p128_mask_wide();
+    return enc_le_wide(tag_m, 16, [0]);
+}
+
+// pad length to a multiple of 16 (AEAD MAC input framing)
+pub Int pad16(Int n) {
+    Int rr = n % 16;
+    if (rr == 0) { return 0; }
+    return 16 - rr;
+}
+
+// append list b (dropping its seed) onto a
+pub List(Int) ccat(List(Int) a, List(Int) b, Int i) {
+    if (i > b.len() - 1) { return a; }
+    List(Int) a2 = a.concat([b[i]]);
+    Int ni = i + 1;
+    return ccat(a2, b, ni);
+}
+
+pub List(Int) zeros_seed(List(Int) acc, Int n) {
+    if (n == 0) { return acc; }
+    List(Int) acc2 = acc.concat([0]);
+    Int nn = n - 1;
+    return zeros_seed(acc2, nn);
+}
+
+// MAC input: AAD || pad || CT || pad || len64(AAD bits) || len64(CT bits)
+pub List(Int) aead_mac_input(List(Int) aad, List(Int) ct) {
+    Int alen = aad.len() - 1;
+    Int clen = ct.len() - 1;
+    List(Int) za = zeros_seed([0], pad16(alen));
+    List(Int) zc = zeros_seed([0], pad16(clen));
+    List(Int) la = enc_le_wide((Int(256)) alen, 8, [0]);
+    List(Int) lb = enc_le_wide((Int(256)) clen, 8, [0]);
+    List(Int) p1 = sconcat(aad, za);
+    List(Int) p2 = sconcat(p1, ct);
+    List(Int) p3 = sconcat(p2, zc);
+    return sconcat(p3, ccat(la, lb, 1));
+}
+
+pub List(Int) slice_seed(List(Int) b, Int start, Int count, List(Int) acc) {
+    if (count == 0) { return acc; }
+    Int v = b[start];
+    List(Int) acc2 = acc.concat([v]);
+    Int ns = start + 1;
+    Int nc = count - 1;
+    return slice_seed(b, ns, nc, acc2);
+}
+
+// AEAD seal: ciphertext || tag (16 bytes); all lists seeded
+pub List(Int) chacha20poly1305_seal(List(Int) key, List(Int) nonce, List(Int) plaintext, List(Int) aad) {
+    List(Int) ks = chacha_block(key, 0, nonce);
+    List(Int) mackey = slice_seed(ks, 1, 32, [0]);
+    List(Int) ct = chacha20_xor(key, 1, nonce, plaintext);
+    List(Int) mi = aead_mac_input(aad, ct);
+    List(Int) tag = poly1305(mackey, mi);
+    return ccat(ct, tag, 1);
+}
+
+pub Bool chacha20poly1305_open(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
+    Int total = ct_and_tag.len() - 1;
+    Int clen = total - 16;
+    Int clen2 = (Int) clen;
+    List(Int) ct = slice_seed(ct_and_tag, 1, clen2, [0]);
+    Int tstart = clen + 1;
+    List(Int) tag = slice_seed(ct_and_tag, tstart, 16, [0]);
+    List(Int) ks = chacha_block(key, 0, nonce);
+    List(Int) mackey = slice_seed(ks, 1, 32, [0]);
+    List(Int) mi = aead_mac_input(aad, ct);
+    List(Int) expect = poly1305(mackey, mi);
+    return ct_equal(expect, tag);
+}
