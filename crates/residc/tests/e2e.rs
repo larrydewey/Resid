@@ -5016,3 +5016,65 @@ Int main() {{
     assert_eq!(rust_out.trim(), expected, "{rust_out:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// LIVE end-to-end TLS 1.3: examples/tls_client.resid performs a full
+/// handshake (ClientHello, X25519, key schedule, server Finished verify,
+/// ECDSA-P256 CertificateVerify, client Finished) plus an HTTP GET against
+/// a real `openssl s_server`. Skipped when openssl is unavailable.
+#[test]
+fn run_tls13_live_openssl_in_resid() {
+    let openssl = match which_openssl() {
+        Some(p) => p,
+        None => { eprintln!("skipping: openssl not found"); return; }
+    };
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().parent().unwrap();
+    let dir = std::env::temp_dir().join(format!("residc-e2e-tlslive-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in ["tls_client.resid"] {
+        std::fs::copy(workspace.join("examples").join(f), dir.join(f)).unwrap();
+    }
+    for f in ["crypto.resid","aesgcm.resid","ed25519.resid","x25519.resid","tls.resid","tlsmsg.resid","chain.resid","rsa.resid","ec256.resid","der.resid","x509.resid","chacha.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    // cert/key
+    let gen_out = Command::new(&openssl).args(["req","-x509","-newkey","ec",
+        "-pkeyopt","ec_paramgen_curve:prime256v1","-keyout", dir.join("k.pem").to_str().unwrap(),
+        "-out", dir.join("c.pem").to_str().unwrap(),
+        "-subj","/CN=localhost","-days","30","-nodes"])
+        .output().expect("failed to run openssl req");
+    assert!(gen_out.status.success(), "{}", String::from_utf8_lossy(&gen_out.stderr));
+    let der = Command::new(&openssl).args(["x509","-in", dir.join("c.pem").to_str().unwrap(),"-outform","der"])
+        .output().unwrap();
+    let certhex: String = der.stdout.iter().map(|b| format!("{:02x}", b)).collect();
+
+    // pick a port
+    let port = 18443u16 + (std::process::id() % 500) as u16;
+    let mut server = Command::new(&openssl)
+        .args(["s_server","-tls1_3","-accept",&format!("127.0.0.1:{}",port),
+               "-cert",dir.join("c.pem").to_str().unwrap(),
+               "-key",dir.join("k.pem").to_str().unwrap(),"-www"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn s_server");
+    std::thread::sleep(std::time::Duration::from_millis(700));
+
+    let client = dir.join("tls_client.resid");
+    let out = Command::new(residc_bin())
+        .arg(&client).arg("run")
+        .arg("127.0.0.1").arg(port.to_string()).arg(&certhex).arg("")
+        .output();
+    let _ = server.kill();
+    let out = out.expect("client run failed");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(stdout.contains("REPLY:"), "no HTTP reply: {stdout}");
+}
+
+fn which_openssl() -> Option<std::path::PathBuf> {
+    for p in ["/usr/bin/openssl", "/bin/openssl", "/usr/local/bin/openssl"] {
+        if std::path::Path::new(p).exists() { return Some(std::path::PathBuf::from(p)); }
+    }
+    None
+}

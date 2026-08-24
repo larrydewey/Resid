@@ -216,8 +216,33 @@
   program (verifies fine standalone on identical bytes — suspected
   codegen/Int(256) context issue) and reading the app response after GET;
   RSA-PSS CV unsupported.
-- **RESOLVED — ECDSA-P256 verify is now reliable (wide-int unsigned
-  compare fixed in lib)**: root cause was NOT a codegen miscompilation:
+- **LIVE TLS 1.3 MILESTONE COMPLETE — full handshake + HTTP GET/response
+  against real `openssl s_server`, all pure Resid**: `examples/tls_client.resid`
+  now completes the entire flow end-to-end (exit 0, prints
+  `REPLY: HTTP/1.0 200 ok`). Fixes this round:
+  (1) ECDSA-P256 CertificateVerify now reliable inside the large client —
+  unblocked by the unsigned-compare fix (see resolved item above).
+  (2) Client Finished must be sealed with OUTER content type 23 (TLS 1.3
+  protects everything as app_data); the inner type byte (22) rides in the
+  plaintext, and the GCM AAD must be the actual wire header.
+  (3) The Finished handshake message header (`14 00 00 20`) was missing —
+  `tls_finished` returns only the 32-byte verify_data.
+  (4) THE BIG ONE: `seal_record` computed the record length from
+  `pt.len()` WITHOUT subtracting the seeded-list index-0 phantom — every
+  client record declared one byte MORE than its true body, so OpenSSL's
+  record framing desynced and every server-side MAC check failed. Server→
+  client records opened fine because they use the peer's correct lengths.
+  Debugging lessons recorded: single-run self-consistency only (random
+  handshakes make cross-run hex comparisons meaningless); verify each GHASH
+  call's H against its OWN key; `.len()` includes the seed.
+  e2e `run_tls13_live_openssl_in_resid` pins the milestone: spawns real
+  `openssl s_server -tls1_3`, runs the Resid client through build+run,
+  asserts an HTTP reply (skips if openssl absent). 629 tests pass.
+  Remaining TLS roadmap: RSA-PSS CertificateVerify, chain validation
+  wiring into the live client, app-response hardening (EOF/alert records).
+- **RESOLVED (prior session) — ECDSA-P256 verify reliability (wide-int
+  unsigned compare fixed in lib)**: root cause was NOT a codegen
+  miscompilation:
   Int(N) relational operators compile as SIGNED compares, so EC scalars
   with the top bit set compared wrong, and the first attempted fix
   (`ec_ge512` halves decomposition) itself had a logic bug — it treated
@@ -2442,8 +2467,9 @@ mod L, S = (r + k·a) mod L via a 512-bit bit-fold reduction. Differential-teste
 cross-verified against Python-produced signatures, and wrong-key
 rejection confirmed. Self-verification
 and wrong-message rejection proven by e2e `run_ed25519_sign_in_resid`;
-verification e2e is `run_ed25519_verify_in_resid`. 624 tests pass
-(e2e 75, all previously-ignored wide-int property tests un-ignored).
+verification e2e is `run_ed25519_verify_in_resid`. 629 tests pass
+(e2e 76 incl. the live openssl TLS 1.3 milestone test; all
+previously-ignored wide-int property tests un-ignored).
 
 `lib/ed25519.resid`: full Ed25519 VERIFY (RFC 8032) on Int(256)/Int(512)
 scalars — field arithmetic mod 2^255-19 (overflow-safe add/sub, fe_mul via
