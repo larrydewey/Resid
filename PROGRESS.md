@@ -199,6 +199,23 @@
   records. Next: message framing (ClientHello build/parse,
   Certificate/CertificateVerify handling) or live-handshake attempt
   against openssl s_server via the tcp capability.
+- **Live TLS 1.3 handshake milestone — major progress**: `examples/tls_client.resid`
+  now completes a REAL TLS 1.3 handshake with a python-ssl (OpenSSL) server:
+  CH accepted (1301-only offer), SH parsed, X25519 shared secret computed,
+  full key schedule, encrypted flight (EE||CT||CV||Fin) decrypted, server
+  Finished verified, client Finished ACCEPTED by the server, HTTP request
+  sent. Fixes that got it there: recv_bin boxes unsigned chars (negative
+  bytes corrupted all crypto); CH offers only TLS_AES_128_GCM_SHA256
+  (servers picked AES-256 otherwise); CCS records skipped without touching
+  sequence numbers; record headers actually concatenated onto sealed
+  records; seal AAD uses the record's own content type; CV signs the
+  transcript up to (not including) the CV message; tm_cv_sig length field
+  is u16 not u24; tm_find_fin reverse-scans (type 20, mlen==32);
+  tm_next/tm_u24_at bounds-guarded.
+  REMAINING: flaky ECDSA-P256 CertificateVerify inside the large client
+  program (verifies fine standalone on identical bytes — suspected
+  codegen/Int(256) context issue) and reading the app response after GET;
+  RSA-PSS CV unsupported.
 - **TLS 1.3 message framing (RFC 8446) done**: `lib/tlsmsg.resid` —
   ClientHello construction (byte-exact RFC 8448 §3 trace),
   ServerHello parsing (random + x25519 key share via marker scan),

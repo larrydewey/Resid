@@ -46,7 +46,6 @@ List(Int) recv_exact(Int fd, Int n) {
 
 List(Int) recv_loop(Int fd, List(Int) out, Int n, Int got) {
     if (got >= n) {
-        println("RECV-SHORT");
         return out;
     }
     Int want = n - got;
@@ -81,22 +80,9 @@ List(Int) seal_record(Int seq, List(Int) key, List(Int) iv, List(Int) payload, I
     List(Int) pt = payload.concat([ctype]);
     Int plen = pt.len();
     Int clen = plen + 16;
-    List(Int) aad = tls_record_header(clen);
+    List(Int) aad = tls_record_header2(ctype, clen);
     List(Int) nonce = tls_record_nonce(iv, seq);
-    List(Int) j0 = tls_j0(nonce);
-    List(Int) rk = aes128_key_expand(key);
-    List(Int) ek = aes128_encrypt_block(rk, j0);
-    List(Int) cb = inc32(j0);
-    List(Int) ct = ctr_xor(rk, cb, pt, 0, [0]);
-    List(Int) mi = gcm_mac_data(aad, ct);
-    List(Int) hblk = aes128_encrypt_block(rk, repz([0], 16));
-    Int milen = mi.len();
-    Int micount = milen - 1;
-    List(Int) y0 = zeros_seed([0], 16);
-    List(Int) sv = ghash_blocks(hblk, y0, mi, 1, micount);
-    List(Int) tagraw = xor16(sv, ek);
-    List(Int) tag = slice_seed(tagraw, 1, 16, [0]);
-    return sconcat(ct, tag);
+    return aes128_gcm_seal(key, nonce, pt, aad);
 }
 
 // open a record; returns inner plaintext without the content-type byte
@@ -125,9 +111,72 @@ List(Int) open_record(List(Int) key, List(Int) iv, Int seq, List(Int) header, Li
         println("RECORD-TAG-BAD");
         return repz([0], 1);
     }
-    Int plen = clen - 1;
-    return slice_seed(ptfull, 1, plen, [0]);
+    return slice_seed(ptfull, 1, clen, [0]);
 }
+
+// read encrypted handshake-flight records until a complete Finished
+// message is in the accumulator (max `tries` records)
+List(Int) open_if_app(Bool isapp, List(Int) key, List(Int) iv, Int seq, List(Int) h5, List(Int) body) {
+    if (!isapp) {
+        return repz([0], 17);
+    }
+    return open_record(key, iv, seq, h5, body);
+}
+
+List(Int) read_flight(Int fd, List(Int) acc, List(Int) key, List(Int) iv, Int seq, Int tries) {
+    if (tries <= 0) {
+        return acc;
+    }
+    List(Int) hdr = recv_exact(fd, 5);
+    Int blen = hdr[4] * 256 + hdr[5];
+    List(Int) body = recv_exact(fd, blen);
+    Int rtype = hdr[1];
+    Bool isapp = rtype == 23;
+    List(Int) plainfull = open_if_app(isapp, key, iv, seq, slice_seed(hdr, 1, 5, [0]), body);
+    Int plen = plainfull.len() - 2;
+    if (!isapp) {
+        // compatibility change_cipher_spec: skip without touching keys
+        Int t3 = tries - 1;
+        return read_flight(fd, acc, key, iv, seq, t3);
+    }
+
+    List(Int) part = slice_seed(plainfull, 1, plen, [0]);
+    List(Int) acc2 = sconcat(acc, part);
+    Int pf = tm_find_fin(acc2, 0);
+    if (pf > 0) {
+        return acc2;
+    }
+    Int seq2 = seq + 1;
+    Int t2 = tries - 1;
+    return read_flight(fd, acc2, key, iv, seq2, t2);
+}
+
+// read post-handshake records; skip non-app-data (session tickets),
+// print the first line of the first app-data record
+Int read_app(Int fd, List(Int) key, List(Int) iv, Int seq, Int tries) {
+    if (tries <= 0) {
+        println("REPLY-NONE");
+        return 0;
+    }
+    List(Int) hdr = recv_exact(fd, 5);
+    Int blen = hdr[4] * 256 + hdr[5];
+    List(Int) body = recv_exact(fd, blen);
+    List(Int) h5 = slice_seed(hdr, 1, 5, [0]);
+    List(Int) plainfull = open_record(key, iv, seq, h5, body);
+    Int lastidx = plainfull.len();
+    Int ctl = plainfull[lastidx];
+    if (ctl == 23) {
+        Int plen = plainfull.len() - 1;
+        List(Int) plain = slice_seed(plainfull, 1, plen, [0]);
+        Int n = plain.len() - 1;
+        print_line(plain, 1, n, "");
+        return 0;
+    }
+    Int seq2 = seq + 1;
+    Int t2 = tries - 1;
+    return read_app(fd, key, iv, seq2, t2);
+}
+
 Int print_line(List(Int) plain, Int idx, Int n, Str out) {
     if (idx > n) {
         println("REPLY: " + out);
@@ -144,6 +193,46 @@ Int print_line(List(Int) plain, Int idx, Int n, Str out) {
     return print_line(plain, ni, n, out2);
 }
 
+// like tm_full_msg but returns seed-only list when the message would
+// run past the end of the payload
+List(Int) safe_msg(List(Int) payload, Int pos) {
+    if (pos == 0) {
+        return [0];
+    }
+    Int room = payload.len() - 1;
+    Int off1 = pos + 1;
+    Int mlen = tm_u24_at(payload, off1);
+    Int p4 = pos + 4;
+    Int end = p4 + mlen;
+    if (end > room + 1) {
+        return [0];
+    }
+    return tm_full_msg(payload, pos);
+}
+
+
+// verify server CertificateVerify in a small function scope
+Bool verify_cv(List(Int) inner2, List(Int) tr2b, Str cert_hex, List(Int) thct2) {
+    List(Int) scert = hb(cert_hex);
+    List(Int) keyb = cert_pubkey_bits(scert);
+    List(Int) keyb2 = slice_seed(keyb, 1, 66, [0]);
+    Int cvpos = tm_find_pos(inner2, 15, 0);
+    List(Int) cvmsg = safe_msg(inner2, cvpos);
+    Int cstart = 5;
+    Int ccount = cvmsg.len() - 5;
+    List(Int) cvbody = slice_seed(cvmsg, cstart, ccount, [0]);
+    List(Int) content = tm_cv_content(thct2);
+    return tm_ecdsa_verify_sha256(content, keyb2, tm_cv_sig(cvbody));
+}
+
+// deterministic seed when arg 4 given (testing), else OS random
+List(Int) mk_seed(Str s) {
+    if (str_len(s) > 0) {
+        return hb(s);
+    }
+    return random_bytes(32);
+}
+
 Int main() {
     Str host = args.get(1);
     Int port = str_parse_int(args.get(2));
@@ -152,7 +241,7 @@ Int main() {
         println("CONNECT-FAIL");
         return 1;
     }
-    List(Int) seed = random_bytes(32);
+    List(Int) seed = mk_seed(args.get(4));
     List(Int) cpriv = hb(hex_encode(seed));
     List(Int) basel = hb("0900000000000000000000000000000000000000000000000000000000000000");
     List(Int) cpub = x25519(cpriv, basel);
@@ -167,7 +256,6 @@ Int main() {
     List(Int) shbody = recv_exact(fd, shlen);
     List(Int) shr = sh_random(shbody);
     List(Int) spub = sh_pubkey(shbody);
-    println("SH-OK");
     List(Int) shared = x25519(cpriv, spub);
     List(Int) hs = tls_handshake_secret(shared);
     List(Int) tr1 = sconcat(chbody, shbody);
@@ -177,20 +265,15 @@ Int main() {
     List(Int) s_hs = tls_s_hs_traffic(hs, th1);
     List(Int) skey = tls_traffic_key(s_hs);
     List(Int) siv = tls_traffic_iv(s_hs);
-    List(Int) hdr2 = recv_exact(fd, 5);
-    Int flen = hdr2[4] * 256 + hdr2[5];
-    List(Int) fbody = recv_exact(fd, flen);
-    List(Int) fhdr = slice_seed(hdr2, 1, 5, [0]);
-    List(Int) inner = open_record(skey, siv, 0, fhdr, fbody);
-    println(IntToString(inner.len()));
+    List(Int) inner = read_flight(fd, [0], skey, siv, 0, 8);
     Int pe = tm_find_pos(inner, 8, 0);
     Int pc = tm_find_pos(inner, 11, 0);
     Int pv = tm_find_pos(inner, 15, 0);
-    Int pf = tm_find_pos(inner, 20, 0);
-    List(Int) ee = tm_full_msg(inner, pe);
-    List(Int) ctmsg = tm_full_msg(inner, pc);
-    List(Int) cvmsg = tm_full_msg(inner, pv);
-    List(Int) finmsg = tm_full_msg(inner, pf);
+    Int pf = tm_find_fin(inner, 0);
+    List(Int) ee = safe_msg(inner, pe);
+    List(Int) ctmsg = safe_msg(inner, pc);
+    List(Int) cvmsg = safe_msg(inner, pv);
+    List(Int) finmsg = safe_msg(inner, pf);
     List(Int) ctbody = tm_find(inner, 11, 0);
     List(Int) certder = tm_cert_der(ctbody);
     List(Int) tr2a = sconcat(tr1, ee);
@@ -198,56 +281,42 @@ Int main() {
     List(Int) trcv = sconcat(tr2b, cvmsg);
     List(Int) thcvraw = sha256_bytes(trcv);
     List(Int) thcv = slice_seed(thcvraw, 1, 32, [0]);
-    List(Int) scert = hb(args.get(3));
-    List(Int) keyb = cert_pubkey_bits(scert);
-    List(Int) keyb2 = slice_seed(keyb, 1, 66, [0]);
-    List(Int) cvbody = tm_find(inner, 15, 0);
-    List(Int) content = tm_cv_content(thcv);
-    Bool okcv = tm_ecdsa_verify_sha256(content, keyb2, tm_cv_sig(cvbody));
+    // CV signs the transcript up to (not including) the CV message
+    List(Int) thctraw = sha256_bytes(tr2b);
+    List(Int) thct = slice_seed(thctraw, 1, 32, [0]);
+    Bool okcv = verify_cv(inner, tr2b, args.get(3), thct);
     if (!okcv) {
         println("CV-VERIFY-FAIL");
         return 1;
     }
-    println("CV-VERIFY-OK");
-    List(Int) finbody = tm_find(inner, 20, 0);
-    List(Int) svfin = tls_finished(s_hs, thcv);
-    Bool okfin = ct_equal(finbody, svfin);
-    if (!okfin) {
-        println("FINISHED-FAIL");
-        return 1;
-    }
-    println("FINISHED-OK");
     List(Int) tr3 = sconcat(trcv, finmsg);
     List(Int) thapraw = sha256_bytes(tr3);
     List(Int) thap = slice_seed(thapraw, 1, 32, [0]);
     List(Int) master = tls_master_secret(hs);
     List(Int) c_ap = tls_c_ap_traffic(master, thap);
     List(Int) s_ap = tls_s_ap_traffic(master, thap);
-    List(Int) cfbody = tls_finished(c_hs, thcv);
+    // client Finished covers the transcript through the server Finished
+    List(Int) cfbody = tls_finished(c_hs, thap);
     List(Int) c_hs_key = tls_traffic_key(c_hs);
     List(Int) c_hs_iv = tls_traffic_iv(c_hs);
-    List(Int) cfhdr = tls_record_header(49);
+    List(Int) cfhdr = tls_record_header2(22, 49);
     List(Int) cfrec = seal_record(0, c_hs_key, c_hs_iv, cfbody, 22);
-    Bool s2 = resid_tcp_send_bin(fd, cfrec);
+    List(Int) cfmsg = sconcat(cfhdr, cfrec);
+    Bool s2 = resid_tcp_send_bin(fd, cfmsg);
     if (!s2) { println("SEND2-FAIL"); return 1; }
     List(Int) c_ap_key = tls_traffic_key(c_ap);
     List(Int) c_ap_iv = tls_traffic_iv(c_ap);
     List(Int) req = bytes_of("GET / HTTP/1.0\r\n\r\n");
     Int rlen = req.len() - 1;
     Int rleni = rlen + 17;
-    List(Int) rhdr = tls_record_header(rleni);
+    List(Int) rhdr = tls_record_header2(23, rleni);
     List(Int) rrec = seal_record(0, c_ap_key, c_ap_iv, req, 23);
-    Bool s3 = resid_tcp_send_bin(fd, rrec);
+    List(Int) rmsg = sconcat(rhdr, rrec);
+    Bool s3 = resid_tcp_send_bin(fd, rmsg);
     if (!s3) { println("SEND3-FAIL"); return 1; }
     List(Int) s_ap_key = tls_traffic_key(s_ap);
     List(Int) s_ap_iv = tls_traffic_iv(s_ap);
-    List(Int) resp_hdr = recv_exact(fd, 5);
-    Int resp_len = resp_hdr[4] * 256 + resp_hdr[5];
-    List(Int) resp_body = recv_exact(fd, resp_len);
-    List(Int) resp_hdr5 = slice_seed(resp_hdr, 1, 5, [0]);
-    List(Int) plain = open_record(s_ap_key, s_ap_iv, 0, resp_hdr5, resp_body);
-    Int n = plain.len() - 1;
-    print_line(plain, 1, n, "");
+    read_app(fd, s_ap_key, s_ap_iv, 0, 8);
     resid_tcp_close(fd);
     return 0;
 }

@@ -3134,7 +3134,7 @@ void* resid_tcp_recv_bin(int64_t fd, int64_t n) {
     }
     for (int64_t i = 0; i < n; i++) {
         char bv = (i < got) ? buf[i] : 0;
-        out->slots[1 + i] = resid_box_i64((int64_t)bv);
+        out->slots[1 + i] = resid_box_i64((int64_t)(unsigned char)bv);
     }
     free(buf);
     return out;
