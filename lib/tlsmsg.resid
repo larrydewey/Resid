@@ -18,14 +18,51 @@ import "chain.resid";
 // -- handshake message walker ------------------------------------------
 
 pub Int tm_u24_at(List(Int) b, Int off) {
+    if (off + 2 > b.len() - 1) {
+        return 0;
+    }
     Int p1 = b[off] * 65536;
     Int p2 = b[off + 1] * 256;
     return p1 + p2 + b[off + 2];
 }
 
+// locate a Finished message (type 20, exactly 32-byte body); skips
+// false matches inside certificate payloads
+pub Int tm_find_fin(List(Int) payload, Int k) {
+    if (k > 0) {
+        return tm_ff_acc(payload, 1, k);
+    }
+    Int start = payload.len() - 36;
+    return tm_ff_back(payload, start);
+}
+
+pub Int tm_ff_acc(List(Int) payload, Int pos, Int k) {
+    if (pos + 36 > payload.len() - 1) {
+        return 0;
+    }
+    Int off3 = pos + 1;
+    Int mlen = tm_u24_at(payload, off3);
+    Int t = tm_type_at(payload, pos);
+    Bool isfin = t == 20;
+    Bool rightlen = mlen == 32;
+    if (isfin && rightlen) {
+        if (k == 0) {
+            return pos;
+        }
+        Int km = k - 1;
+        Int np = pos + 36;
+        return tm_ff_acc(payload, np, km);
+    }
+    Int np2 = pos + 1;
+    return tm_ff_acc(payload, np2, k);
+}
+
 // start = index of a handshake message header; returns the start of the
 // next message, or 0 when the payload is exhausted.
 pub Int tm_next(List(Int) payload, Int start) {
+    if (start + 4 > payload.len() - 1) {
+        return 0;
+    }
     Int o1 = start + 1;
     Int mlen = tm_u24_at(payload, o1);
     Int o4 = start + 4;
@@ -119,7 +156,7 @@ pub List(Int) sh_pubkey(List(Int) sh) {
 // scan for the key_share extension marker 0033 0024 001d 0020 and
 // return the following 32-byte x25519 share
 pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
-    if (pos + 36 > stop) {
+    if (pos + 35 > stop) {
         return [0];
     }
     // x25519 key-share entry marker: 001d 0020 <32 bytes>
@@ -148,11 +185,20 @@ pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
 // (the exact RFC trace extension block), parametrized by random+share.
 
 pub Str tm_c1() {
+    return "010000bc0303";
+}
+
+// RFC 8448 trace variant: three cipher suites, msg len 0xc0
+pub Str tm_c1_rfc() {
     return "010000c00303";
 }
 
-pub Str tm_c2() {
+pub Str tm_c2_rfc() {
     return "00000613011303130201000091" + "0000000b0009000006736572766572ff01000100" + "000a00140012001d00170018001901000101010201030104" + "00230000003300260024001d0020";
+}
+
+pub Str tm_c2() {
+    return "000002130101000091" + "0000000b0009000006736572766572ff01000100" + "000a00140012001d00170018001901000101010201030104" + "00230000003300260024001d0020";
 }
 
 pub Str tm_c3() {
@@ -185,6 +231,17 @@ pub List(Int) tm_hb(Str s) {
 
 // ClientHello with the RFC 8448 extension set, parametrized by
 // legacy_random(32) and the x25519 key share (32 bytes).
+// RFC 8448 section 3 byte-exact ClientHello (three suites); for fixtures
+pub List(Int) tlsmsg_client_hello_rfc(List(Int) random32, List(Int) share32) {
+    List(Int) p1 = tm_hb(tm_c1_rfc());
+    List(Int) p2 = sconcat(p1, random32);
+    List(Int) p3 = tm_hb(tm_c2_rfc());
+    List(Int) body1 = sconcat(p2, p3);
+    List(Int) body2 = sconcat(body1, share32);
+    List(Int) p4 = tm_hb(tm_c3());
+    return sconcat(body2, p4);
+}
+
 pub List(Int) tlsmsg_client_hello(List(Int) random32, List(Int) share32) {
     List(Int) p1 = tm_hb(tm_c1());
     List(Int) p2 = sconcat(p1, random32);
@@ -211,8 +268,12 @@ pub Bool tm_is_ecdsa_cv(List(Int) cvbody) {
 }
 
 pub List(Int) tm_cv_sig(List(Int) cvbody) {
-    Int slen = tm_u24_at(cvbody, 3);
-    return slice_seed(cvbody, 6, slen, [0]);
+    // alg(u16) || sig-len(u16) || signature
+    Int hi = cvbody[3] * 256;
+    Int lo = cvbody[4];
+    Int slen = hi + lo;
+    Int off6 = 5;
+    return slice_seed(cvbody, off6, slen, [0]);
 }
 
 // TLS 1.3 CertificateVerify signed content:
@@ -281,4 +342,26 @@ pub Bool tm_ecdsa_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sig
     Int(256) qy = ec_from_be(kby);
     Int(256) vx = ecdsa_vx(eint, r, sv, qx, qy);
     return vx == r;
+}
+// reverse linear scan: Finished is the final handshake message of the
+// flight, so search from the end
+pub Int tm_find_fin_last(List(Int) payload) {
+    Int start = payload.len() - 36;
+    return tm_ff_back(payload, start);
+}
+
+pub Int tm_ff_back(List(Int) payload, Int pos) {
+    if (pos < 1) {
+        return 0;
+    }
+    Int off5 = pos + 1;
+    Int mlen = tm_u24_at(payload, off5);
+    Int t = tm_type_at(payload, pos);
+    Bool isfin = t == 20;
+    Bool rightlen = mlen == 32;
+    if (isfin && rightlen) {
+        return pos;
+    }
+    Int np = pos - 1;
+    return tm_ff_back(payload, np);
 }

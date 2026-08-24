@@ -144,11 +144,15 @@ pub List(Int) tls_xor12(List(Int) a, List(Int) b) {
     return acc.concat([b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12]);
 }
 
-pub List(Int) tls_record_header(Int clen) {
+pub List(Int) tls_record_header2(Int ctype, Int clen) {
     Int hi = clen / 256;
     Int lo = clen % 256;
     List(Int) acc = [0];
-    return acc.concat([23, 3, 3, hi, lo]);
+    return acc.concat([ctype, 3, 3, hi, lo]);
+}
+
+pub List(Int) tls_record_header(Int clen) {
+    return tls_record_header2(23, clen);
 }
 
 // GCM J0 for a 96-bit nonce: nonce || 0^31 || 1
