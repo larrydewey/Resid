@@ -158,10 +158,37 @@
   2 (80-byte inputs, multi-block OKM) and 3 (empty salt + empty info)
   all byte-exact vs Python reference. TLS milestone 2 of 4 done;
   next: AEAD (AES-128-GCM or ChaCha20-Poly1305).
-- **Tests**: 621 pass (incl. DER decoder, x509 TBS walker, RSA/ECDSA
-  verify, X25519 RFC-vector and HKDF e2es; lexer 17, parser 91,
-  resid-ir 46, resid-type 195, resid-codegen 137, resid-build 12,
-  resid-fmt 5, residc 68 incl. e2e).
+- **AEAD complete — both ChaCha20-Poly1305 AND AES-128-GCM.**
+- **ChaCha20-Poly1305 (RFC 8439) done**: `lib/chacha.resid` — ChaCha20
+  block function with state words in Int(64) masked to 32 bits
+  (wrapping_* builtins are Int(64)-only; two <2^32 values never
+  overflow checked Int(64) adds), no-reassignment-safe QR via a sel4
+  state rebuilder, Poly1305 on Int(256) with clamped r < 2^126 so
+  products stay < 2^257 inside Int(512); reduction folds hi*5 over
+  2^130 twice then one conditional subtract. e2e
+  `run_chacha20poly1305_in_resid`: §2.5.2 MAC vector and the §2.8.2
+  AEAD vector (ct + tag) byte-exact; roundtrip open + tamper reject.
+  Gotchas: every Poly1305 block gets the 0x01 terminator (full blocks
+  too, bit 128 — not just partial); r clamp masks are bytes 3/7/11/15
+  &=15 and 4/8/12 &=252 (byte 0 untouched); AEAD length fields are
+  OCTETS for Poly1305 but BITS for GCM.
+- **AES-128-GCM (SP 800-38D) done**: `lib/aesgcm.resid` — SBOX table,
+  flat 176-byte key schedule, column-major flat-state rounds,
+  MSB-first bitwise GHASH over GF(2^128), inc32 CTR. e2e
+  `run_aes128gcm_in_resid`: NIST test cases 1-4 (incl. AAD and
+  multi-block pt) byte-exact; roundtrip open. Gotchas: round keys
+  offset by one (whitening uses round-0 key), GCM len block is exactly
+  two BE64 bit-lengths, `sconcat` drops the second list's index-0 so
+  unseeded literals lose their first byte, and arithmetic passed
+  directly in argument position widens widths (bind temps first).
+  TLS milestone 4 of 4: all primitives for a pure-Resid TLS 1.3
+  record layer now exist (X25519 + HKDF-SHA256 + both AEADs);
+  next: TLS handshake plumbing.
+- **Tests**: 623 pass (incl. DER/x509 walker, RSA/ECDSA verify,
+  X25519, HKDF, ChaCha20-Poly1305 and AES-128-GCM RFC/NIST-vector
+  e2es; lexer 17, parser 91, resid-ir 46, resid-type 195,
+  resid-codegen 137, resid-build 12, resid-fmt 5, residc 70 incl.
+  e2e).
 
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
