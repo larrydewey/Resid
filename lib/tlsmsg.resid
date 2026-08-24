@@ -293,16 +293,29 @@ pub List(Int) tm_cv_content(List(Int) thash) {
     return sconcat(p2, thash);
 }
 
-// verify a TLS 1.3 CertificateVerify body (alg 0403 only) against the
-// transcript hash and the leaf certificate
+// verify a TLS 1.3 CertificateVerify body against the transcript hash
+// and the leaf certificate; dispatches on the signature algorithm:
+//   0x0403 (1027) ecdsa_secp256r1_sha256
+//   0x0804 (2052) rsa_pss_rsae_sha256
 pub Bool tm_verify_cv(List(Int) cvbody, List(Int) cert_der, List(Int) thash) {
-    Bool isec = tm_is_ecdsa_cv(cvbody);
-    if (!isec) { return false; }
-    Int slen = tm_u24_at(cvbody, 3);
-    List(Int) sig = slice_seed(cvbody, 6, slen, [0]);
-    List(Int) content = tm_cv_content(thash);
-    List(Int) keyb = cert_pubkey_bits(cert_der);
-    return ec_cert_verify(content, keyb, sig);
+    Int alg = cvbody[1] * 256 + cvbody[2];
+    Bool isec = alg == 1027;
+    if (isec) {
+        List(Int) sig = tm_cv_sig(cvbody);
+        List(Int) content = tm_cv_content(thash);
+        List(Int) keyb = cert_pubkey_bits(cert_der);
+        // strip the BIT STRING unused-bits octet: 04 || X || Y
+        List(Int) keyb2 = slice_seed(keyb, 1, 66, [0]);
+        return tm_ecdsa_verify_sha256(content, keyb2, sig);
+    }
+    Bool ispss = alg == 2052;
+    if (ispss) {
+        List(Int) sig = tm_cv_sig(cvbody);
+        List(Int) content = tm_cv_content(thash);
+        List(Int) keyb = cert_pubkey_bits(cert_der);
+        return rsa_pss_verify_sha256(content, keyb, sig);
+    }
+    return false;
 }
 
 // -- direct ECDSA P-256 CV verification --------------------------------

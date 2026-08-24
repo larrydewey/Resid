@@ -240,6 +240,29 @@
   asserts an HTTP reply (skips if openssl absent). 629 tests pass.
   Remaining TLS roadmap: RSA-PSS CertificateVerify, chain validation
   wiring into the live client, app-response hardening (EOF/alert records).
+- **RSA-PSS CertificateVerify done — live client now accepts BOTH CV
+  algorithms**: `lib/chain.resid` gains full RSASSA-PSS SHA-256
+  verification (RFC 8017; MGF1-SHA256, sLen=32) on top of the existing
+  Montgomery bignum stack: `bn_to_be` (limbs -> big-endian bytes; the
+  high/low byte-per-limb mapping is the exact inverse of `bn_from_be`),
+  `pss_mgf1` (MGF1), and `rsa_pss_verify_sha256` (trailer 0xBC check,
+  DB unmask via MGF1(H), PS zero-run + 0x01 separator scan, salt
+  recovery, M' = 00^8 || Hash(content) || salt re-hash compare).
+  Modulus/exponent parsed from the cert SPKI (BIT STRING content =
+  00 || DER SEQ{INTEGER n, INTEGER e}; SEQ tag sits at seeded index 2).
+  `tm_verify_cv` now dispatches on the CV algorithm field:
+  0x0403 -> ECDSA-P256 (via tm_ecdsa_verify_sha256), 0x0804 ->
+  rsa_pss_rsae_sha256. `examples/tls_client.resid` switched to
+  tm_verify_cv (was hardcoded ECDSA). Live-verified against
+  `openssl s_server` with an rsa:2048 server cert: handshake completes,
+  PSS CertificateVerify verifies, HTTP 200 received. Gotchas hit this
+  round: seeded-list literals (`[0,0,...]`) carry a phantom first
+  element — the eight-zero M' prefix must be built with concat;
+  pss_take-style helpers take an INCLUSIVE end index, not a count.
+  e2e run_tls13_live_openssl_in_resid extended to iterate over ECDSA
+  AND RSA server certs. Also fixed en route: tm_verify_cv's ECDSA
+  branch used a u24 length read for the u16 signature length (crash);
+  629 tests pass.
 - **RESOLVED (prior session) — ECDSA-P256 verify reliability (wide-int
   unsigned compare fixed in lib)**: root cause was NOT a codegen
   miscompilation:

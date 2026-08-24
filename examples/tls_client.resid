@@ -221,15 +221,13 @@ List(Int) safe_msg(List(Int) payload, Int pos) {
 // verify server CertificateVerify in a small function scope
 Bool verify_cv(List(Int) inner2, List(Int) tr2b, Str cert_hex, List(Int) thct2) {
     List(Int) scert = hb(cert_hex);
-    List(Int) keyb = cert_pubkey_bits(scert);
-    List(Int) keyb2 = slice_seed(keyb, 1, 66, [0]);
     Int cvpos = tm_find_pos(inner2, 15, 0);
     List(Int) cvmsg = safe_msg(inner2, cvpos);
     Int cstart = 5;
     Int ccount = cvmsg.len() - 5;
     List(Int) cvbody = slice_seed(cvmsg, cstart, ccount, [0]);
-    List(Int) content = tm_cv_content(thct2);
-    return tm_ecdsa_verify_sha256(content, keyb2, tm_cv_sig(cvbody));
+    // dispatches on the signature algorithm: ECDSA-P256 and RSA-PSS
+    return tm_verify_cv(cvbody, scert, thct2);
 }
 
 // deterministic seed when arg 4 given (testing), else OS random

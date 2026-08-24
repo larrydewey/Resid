@@ -5037,11 +5037,19 @@ fn run_tls13_live_openssl_in_resid() {
     for f in ["crypto.resid","aesgcm.resid","ed25519.resid","x25519.resid","tls.resid","tlsmsg.resid","chain.resid","rsa.resid","ec256.resid","der.resid","x509.resid","chacha.resid"] {
         std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
     }
-    // cert/key
-    let gen_out = Command::new(&openssl).args(["req","-x509","-newkey","ec",
-        "-pkeyopt","ec_paramgen_curve:prime256v1","-keyout", dir.join("k.pem").to_str().unwrap(),
-        "-out", dir.join("c.pem").to_str().unwrap(),
-        "-subj","/CN=localhost","-days","30","-nodes"])
+    // cert/key — exercise BOTH CertificateVerify algorithms
+    for keyalg in ["ec", "rsa"] {
+    let mut gen_args = vec!["req".to_string(),"-x509".to_string(),"-newkey".to_string()];
+    let popt = if keyalg == "rsa" { "rsa_keygen_bits:2048" } else { "ec_paramgen_curve:prime256v1" };
+    gen_args.push(keyalg.to_string());
+    gen_args.push("-pkeyopt".to_string());
+    gen_args.push(popt.to_string());
+    gen_args.push("-keyout".to_string()); gen_args.push(dir.join("k.pem").to_str().unwrap().to_string());
+    gen_args.push("-out".to_string()); gen_args.push(dir.join("c.pem").to_str().unwrap().to_string());
+    gen_args.push("-subj".to_string()); gen_args.push("/CN=localhost".to_string());
+    gen_args.push("-days".to_string()); gen_args.push("30".to_string());
+    gen_args.push("-nodes".to_string());
+    let gen_out = Command::new(&openssl).args(&gen_args)
         .output().expect("failed to run openssl req");
     assert!(gen_out.status.success(), "{}", String::from_utf8_lossy(&gen_out.stderr));
     let der = Command::new(&openssl).args(["x509","-in", dir.join("c.pem").to_str().unwrap(),"-outform","der"])
@@ -5068,8 +5076,9 @@ fn run_tls13_live_openssl_in_resid() {
     let _ = server.kill();
     let out = out.expect("client run failed");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(stdout.contains("REPLY:"), "no HTTP reply ({keyalg}): stdout={stdout:?} stderr={}", String::from_utf8_lossy(&out.stderr));
+    }
     let _ = std::fs::remove_dir_all(&dir);
-    assert!(stdout.contains("REPLY:"), "no HTTP reply: {stdout}");
 }
 
 fn which_openssl() -> Option<std::path::PathBuf> {
