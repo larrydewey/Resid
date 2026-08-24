@@ -3278,11 +3278,9 @@ Int main() {
 
 
 /// Exhaustive wide-int unsigned-compare + ECDSA-P256 property tests.
-/// IGNORED: exposes a wide-int codegen bug — when preceded by many other
-/// wide-int operations, ec_ge / tm_ecdsa_verify_sha256 return wrong results
-/// for identical inputs (standalone runs pass). Kept as the regression
-/// harness; remove the ignore once the codegen bug is fixed.
-#[ignore = "wide-int context-dependent miscompilation"]
+/// Regression harness for the signed-compare pitfall: Int(N) relational ops
+/// compile as signed, so lib/ec256.resid provides ec_ge/ec_ge512 (unsigned
+/// compare via top-bit/disjoint-sign decomposition) and uses them everywhere.
 /// Fixtures: random vectors; expectations computed independently (big-endian
 /// lexicographic compare / python cryptography signing).
 #[test]
@@ -3457,9 +3455,7 @@ Int main() {
     assert!(stdout.contains("ge0 PASS"), "missing marker: ge0 PASS");
     assert!(stdout.contains("ge1 PASS"), "missing marker: ge1 PASS");
     assert!(stdout.contains("ge2 PASS"), "missing marker: ge2 PASS");
-    // NOTE: ge3 (a=0 vs b=2^256-1) is excluded here: inside a large program
-    // ec_ge(0, MAX) currently miscompiles (returns true). Minimal repro lives
-    // in run_ec_ge_zero_max_in_resid (ignored). See PROGRESS.md.
+    assert!(stdout.contains("ge3 PASS"), "missing marker: ge3 PASS");
     assert!(stdout.contains("ge4 PASS"), "missing marker: ge4 PASS");
     assert!(stdout.contains("ge5 PASS"), "missing marker: ge5 PASS");
     assert!(stdout.contains("ge6 PASS"), "missing marker: ge6 PASS");
@@ -3522,10 +3518,8 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// KNOWN-ISSUE reproduction: wide-int ops are correct in small programs but
-/// results flip inside a translation unit containing many prior wide-int
-/// operations (see PROGRESS.md wide-int context bug). Ignored until fixed.
-#[ignore = "wide-int context-dependent miscompilation"]
+/// Wide-int 512-bit unsigned-compare property test (ec_ge512 halves logic,
+/// incl. equal-high-halves case that originally short-circuited wrongly).
 #[test]
 fn run_ecge512_wide_prop_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-ecprop-{}", std::process::id()));
@@ -3556,6 +3550,19 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
     return hb_acc(s, ni, acc2);
 }
 List(Int) hb(Str s) { return hb_acc(s, 0, [0]); }
+Int(512) be512_acc(List(Int) b, Int i, Int last, Int(512) acc) {
+    if (i > last) { return acc; }
+    Int byte = b[i];
+    Int(512) bv = (Int(512)) byte;
+    Int(512) a8 = acc * 256;
+    Int(512) a2v = a8 + bv;
+    Int ni = i + 1;
+    return be512_acc(b, ni, last, a2v);
+}
+Int(512) ec_from_be512(List(Int) bytes) {
+    Int blen = bytes.len() - 1;
+    return be512_acc(bytes, 1, blen, 0);
+}
 Int main() {
     Bool ge0 = ec_ge(ec_from_be(hb("0000000000000000000000000000000000000000000000000000000000000000")), ec_from_be(hb("0000000000000000000000000000000000000000000000000000000000000000")));
     if (ge0) { println("ge0 PASS"); } else { println("ge0 FAIL"); }
@@ -3655,82 +3662,69 @@ Int main() {
     if (!ge47) { println("ge47 PASS"); } else { println("ge47 FAIL"); }
     Bool ge48 = ec_ge(ec_from_be(hb("77c771883d01f9c1afa72da0bb5cf68d7bf79772ed4c2d48107a184721f157db")), ec_from_be(hb("77c771883d01f9c1afa72da0bb5cf68d7bf79772ed4c2d48107a180721f157db")));
     if (ge48) { println("ge48 PASS"); } else { println("ge48 FAIL"); }
-List(Int) be512_acc(List(Int) b, Int i, Int last, Int(512) acc) {
-    if (i > last) { return acc; }
-    Int byte = b[i];
-    Int(512) bv = (Int(512)) byte;
-    Int(512) a8 = acc * 256;
-    Int(512) a2v = a8 + bv;
-    Int ni = i + 1;
-    return be512_acc(b, ni, last, a2v);
-}
-Int(512) ec_from_be512(List(Int) bytes) {
-    Int blen = bytes.len() - 1;
-    return be512_acc(bytes, 1, blen, 0);
-}
-    Bool ge512_0 = ec_ge(ec_from_be512(hb("ca69115024460203e9afa5133d95b214c96bd97a32e14565209693714ae25a09cd1764e89388133906b879e61e1da507a1e14dc677fc5f9fe62db782ea364126")), ec_from_be512(hb("8918350b81dfbd38c7bcd1d121ace2bb1f4f65c223d4e35c211713a6669d7fec4016aa4874e0a29a729f8c3311ecd5021f23a2bbcb03dea69355cee1e8da1851")));
+    Bool ge512_0 = ec_ge512(ec_from_be512(hb("ca69115024460203e9afa5133d95b214c96bd97a32e14565209693714ae25a09cd1764e89388133906b879e61e1da507a1e14dc677fc5f9fe62db782ea364126")), ec_from_be512(hb("8918350b81dfbd38c7bcd1d121ace2bb1f4f65c223d4e35c211713a6669d7fec4016aa4874e0a29a729f8c3311ecd5021f23a2bbcb03dea69355cee1e8da1851")));
     if (ge512_0) { println("ge512_0 PASS"); } else { println("ge512_0 FAIL"); }
-    Bool ge512_1 = ec_ge(ec_from_be512(hb("422214bfb1b14c4cf537cb982a190d3b01ae873ebe7382804b23e091a8ce849602f267b705da214b4ef093c9c50cc9e6d0225e23bb45129f1258ed3888e1c7c7")), ec_from_be512(hb("2b843bffc03626f8f18013364ad7c31a2af2b6b5c2405d6f165ee38eea24632087cbb3d9874050dff9093220289b7372a2aa591d64bdee173176bd43f5f6f4ec")));
+    Bool ge512_1 = ec_ge512(ec_from_be512(hb("422214bfb1b14c4cf537cb982a190d3b01ae873ebe7382804b23e091a8ce849602f267b705da214b4ef093c9c50cc9e6d0225e23bb45129f1258ed3888e1c7c7")), ec_from_be512(hb("2b843bffc03626f8f18013364ad7c31a2af2b6b5c2405d6f165ee38eea24632087cbb3d9874050dff9093220289b7372a2aa591d64bdee173176bd43f5f6f4ec")));
     if (ge512_1) { println("ge512_1 PASS"); } else { println("ge512_1 FAIL"); }
-    Bool ge512_2 = ec_ge(ec_from_be512(hb("4c334e5372577b4ab594b39e6adeb609187df7e211dc4090285e1592616fd0f567c896640a0d8954d43e91c29ac81a8aa072c906e51e7f6b3243fc29bb9052c2")), ec_from_be512(hb("7ef5c773283df797661cf28da95e58df805cd1e7c1670ebc83a7d9e85d325654c94655c95a0f74b60c53bdf495f1023db6d80370fcb68a187e8899a4ccc0af8a")));
+    Bool ge512_2 = ec_ge512(ec_from_be512(hb("4c334e5372577b4ab594b39e6adeb609187df7e211dc4090285e1592616fd0f567c896640a0d8954d43e91c29ac81a8aa072c906e51e7f6b3243fc29bb9052c2")), ec_from_be512(hb("7ef5c773283df797661cf28da95e58df805cd1e7c1670ebc83a7d9e85d325654c94655c95a0f74b60c53bdf495f1023db6d80370fcb68a187e8899a4ccc0af8a")));
     if (!ge512_2) { println("ge512_2 PASS"); } else { println("ge512_2 FAIL"); }
-    Bool ge512_3 = ec_ge(ec_from_be512(hb("410cf455b8295a56f3c321ec7cd1eb8fb9597178af7a4855bcc2c791ed63128822e8b6ab028ce660187e1f7cf9a41accf441a5b54e4d35f5bb6eba910966aa83")), ec_from_be512(hb("8f644b807186b5454fc33fab18c781ee8b44eb5b6661ce20c17ad50e203c5d9aaf277e8dbaa0efa5cfff668d1b4aebda4598dc7a5ad8f24b3214c5a88eaa5bf6")));
+    Bool ge512_3 = ec_ge512(ec_from_be512(hb("410cf455b8295a56f3c321ec7cd1eb8fb9597178af7a4855bcc2c791ed63128822e8b6ab028ce660187e1f7cf9a41accf441a5b54e4d35f5bb6eba910966aa83")), ec_from_be512(hb("8f644b807186b5454fc33fab18c781ee8b44eb5b6661ce20c17ad50e203c5d9aaf277e8dbaa0efa5cfff668d1b4aebda4598dc7a5ad8f24b3214c5a88eaa5bf6")));
     if (!ge512_3) { println("ge512_3 PASS"); } else { println("ge512_3 FAIL"); }
-    Bool ge512_4 = ec_ge(ec_from_be512(hb("5a8153c2490ef1cd72d8eac35043fa4beb99f6e47b83d8d65ef22f44da04550a54d9f8a6070e99b8a24e19109676bff044fed035b01ae8e640425657999c9e26")), ec_from_be512(hb("78f43e3634e3eb4317c277735bdbe19dee764e14056ac453046356e80f4bfd5ac0c72209e0c0a96527b2fc38f25bf05c7b6d28e7d43a1aeff304ff5957bc7093")));
+    Bool ge512_4 = ec_ge512(ec_from_be512(hb("5a8153c2490ef1cd72d8eac35043fa4beb99f6e47b83d8d65ef22f44da04550a54d9f8a6070e99b8a24e19109676bff044fed035b01ae8e640425657999c9e26")), ec_from_be512(hb("78f43e3634e3eb4317c277735bdbe19dee764e14056ac453046356e80f4bfd5ac0c72209e0c0a96527b2fc38f25bf05c7b6d28e7d43a1aeff304ff5957bc7093")));
     if (!ge512_4) { println("ge512_4 PASS"); } else { println("ge512_4 FAIL"); }
-    Bool ge512_5 = ec_ge(ec_from_be512(hb("10df3acfea4cb4b384ed8655ee6339dcc18e441abff644e29f58dc3243ff6fa295287e63ee033d1111262f15d0da2a66e6852d80542afc271e1e6aa5cb9a36b9")), ec_from_be512(hb("e270f69c790fffc888eced542d78caca3871a3bb8892cd09ac38ea165ead4a427594a714354e6231bc504f3dfd80bea52b774bf29eae580bf897906d185b5fbb")));
+    Bool ge512_5 = ec_ge512(ec_from_be512(hb("10df3acfea4cb4b384ed8655ee6339dcc18e441abff644e29f58dc3243ff6fa295287e63ee033d1111262f15d0da2a66e6852d80542afc271e1e6aa5cb9a36b9")), ec_from_be512(hb("e270f69c790fffc888eced542d78caca3871a3bb8892cd09ac38ea165ead4a427594a714354e6231bc504f3dfd80bea52b774bf29eae580bf897906d185b5fbb")));
     if (!ge512_5) { println("ge512_5 PASS"); } else { println("ge512_5 FAIL"); }
-    Bool ge512_6 = ec_ge(ec_from_be512(hb("7ba7651df5703bc6155a2315506f9af548b00c5a77582d152434f662d0449b783147367a57539688d450b74de479fd3fcd0044ca9e4c6329f2f804aae69035c7")), ec_from_be512(hb("431971cc644f65db54e3e52cb42fe261fd5e4796c6db781cb3da929e819d55000e04a90bbcfee5f8011def3db5dae28b10c066c64ae0e1e064f7f5f3a6bbfb1c")));
+    Bool ge512_6 = ec_ge512(ec_from_be512(hb("7ba7651df5703bc6155a2315506f9af548b00c5a77582d152434f662d0449b783147367a57539688d450b74de479fd3fcd0044ca9e4c6329f2f804aae69035c7")), ec_from_be512(hb("431971cc644f65db54e3e52cb42fe261fd5e4796c6db781cb3da929e819d55000e04a90bbcfee5f8011def3db5dae28b10c066c64ae0e1e064f7f5f3a6bbfb1c")));
     if (ge512_6) { println("ge512_6 PASS"); } else { println("ge512_6 FAIL"); }
-    Bool ge512_7 = ec_ge(ec_from_be512(hb("9f5d422b9fcf97af304f8c4a7cadfc777dd794b027f096fe9ecb1bbb88441ce333ccd4f5532f3ed62bf9ce70ca2eebb27e064a18c77f72ddb9e5f84460362d62")), ec_from_be512(hb("fdfb7531835397c281c2f135e36c2cb794baf849cb7ccde841993482c8332faa081363e0f6b367a007942c7f96827280e8c42a5ff3ad61a36e8c3e7374be09d3")));
+    Bool ge512_7 = ec_ge512(ec_from_be512(hb("9f5d422b9fcf97af304f8c4a7cadfc777dd794b027f096fe9ecb1bbb88441ce333ccd4f5532f3ed62bf9ce70ca2eebb27e064a18c77f72ddb9e5f84460362d62")), ec_from_be512(hb("fdfb7531835397c281c2f135e36c2cb794baf849cb7ccde841993482c8332faa081363e0f6b367a007942c7f96827280e8c42a5ff3ad61a36e8c3e7374be09d3")));
     if (!ge512_7) { println("ge512_7 PASS"); } else { println("ge512_7 FAIL"); }
-    Bool ge512_8 = ec_ge(ec_from_be512(hb("d7d1ad12928eb990735185a0ed873e88655b4e5c439a5ed542590cd1874ee0a8e3eefb9473881976ac75b4100d26af0f59057c078a8b34620931030fa7ed7106")), ec_from_be512(hb("abb360b7aa26f727e1d28a3db43b6778a26272e0b7f4b471c3dfd5b91257637328ff25bce1f65be6dcc080859c30783bf37b5ccd70b126408be10cef6f88e7a4")));
+    Bool ge512_8 = ec_ge512(ec_from_be512(hb("d7d1ad12928eb990735185a0ed873e88655b4e5c439a5ed542590cd1874ee0a8e3eefb9473881976ac75b4100d26af0f59057c078a8b34620931030fa7ed7106")), ec_from_be512(hb("abb360b7aa26f727e1d28a3db43b6778a26272e0b7f4b471c3dfd5b91257637328ff25bce1f65be6dcc080859c30783bf37b5ccd70b126408be10cef6f88e7a4")));
     if (ge512_8) { println("ge512_8 PASS"); } else { println("ge512_8 FAIL"); }
-    Bool ge512_9 = ec_ge(ec_from_be512(hb("1b76d2f09ff95d9ccd4aeae36854f6f772ad9afaf78e66e42fe4a1c7ff560b87e71929f84db126dc2046a19d37a7a13a8c7807f555ca977d7845a88037afafd4")), ec_from_be512(hb("7b20f02cae12443c422327cff88cc1c5bb80d8bdf00689c7cac42dcc9531017cc4a795f31bff0966d018b3e9262605409eb3dcae17255568b0dd321bf2b78269")));
+    Bool ge512_9 = ec_ge512(ec_from_be512(hb("1b76d2f09ff95d9ccd4aeae36854f6f772ad9afaf78e66e42fe4a1c7ff560b87e71929f84db126dc2046a19d37a7a13a8c7807f555ca977d7845a88037afafd4")), ec_from_be512(hb("7b20f02cae12443c422327cff88cc1c5bb80d8bdf00689c7cac42dcc9531017cc4a795f31bff0966d018b3e9262605409eb3dcae17255568b0dd321bf2b78269")));
     if (!ge512_9) { println("ge512_9 PASS"); } else { println("ge512_9 FAIL"); }
-    Bool ge512_10 = ec_ge(ec_from_be512(hb("0014a62b6dfcff4899f5c68c8a584fa73a2fdb4a3aa803753152da7f7e2c379bbd46f197e0994ddf4ec6c3b8a2217cbf37a1fa17b8faf9fa61bc09e2b3a9ab7e")), ec_from_be512(hb("aa3dfdc795694c5f94657a67f28f03855194208455abb5044f6bbdf693dbc34e5a6a0e0a9f6f5d4b5413a1666e62e380f9957fb19b458560084cbd67aef0db00")));
+    Bool ge512_10 = ec_ge512(ec_from_be512(hb("0014a62b6dfcff4899f5c68c8a584fa73a2fdb4a3aa803753152da7f7e2c379bbd46f197e0994ddf4ec6c3b8a2217cbf37a1fa17b8faf9fa61bc09e2b3a9ab7e")), ec_from_be512(hb("aa3dfdc795694c5f94657a67f28f03855194208455abb5044f6bbdf693dbc34e5a6a0e0a9f6f5d4b5413a1666e62e380f9957fb19b458560084cbd67aef0db00")));
     if (!ge512_10) { println("ge512_10 PASS"); } else { println("ge512_10 FAIL"); }
-    Bool ge512_11 = ec_ge(ec_from_be512(hb("c2408656a9940d93743cdbb3b3019de8cbaf86e605c41080aedfb72c1f0a156ce0eba081c0010888507fd16e9a16f3f80889d0280dbbaabc4491782fb0b61821")), ec_from_be512(hb("f393ce3623a14167a262e761a52b065b234413d826486595dd800e485b904621158a9b5eed2b4703a6c0ca60331bb16c306a3a6b3954a50526604d7e56b5e145")));
+    Bool ge512_11 = ec_ge512(ec_from_be512(hb("c2408656a9940d93743cdbb3b3019de8cbaf86e605c41080aedfb72c1f0a156ce0eba081c0010888507fd16e9a16f3f80889d0280dbbaabc4491782fb0b61821")), ec_from_be512(hb("f393ce3623a14167a262e761a52b065b234413d826486595dd800e485b904621158a9b5eed2b4703a6c0ca60331bb16c306a3a6b3954a50526604d7e56b5e145")));
     if (!ge512_11) { println("ge512_11 PASS"); } else { println("ge512_11 FAIL"); }
-    Bool ge512_12 = ec_ge(ec_from_be512(hb("4c012c7ee2283068b35c41e69a4ced923388647ef9a0e2bccc04d2dbbbffa24d75fafc0b802d126c700942d9cdd877eb12b3d67800a790df4c5afe8a5137c270")), ec_from_be512(hb("fe08dd2ace2932ff73e37e8435db5aa776b5a408c1ea845a78867ecce891da20bd37597bda356e9c926110fde649b09654dfe67cbdbd29b86c1e14bc2d71b224")));
+    Bool ge512_12 = ec_ge512(ec_from_be512(hb("4c012c7ee2283068b35c41e69a4ced923388647ef9a0e2bccc04d2dbbbffa24d75fafc0b802d126c700942d9cdd877eb12b3d67800a790df4c5afe8a5137c270")), ec_from_be512(hb("fe08dd2ace2932ff73e37e8435db5aa776b5a408c1ea845a78867ecce891da20bd37597bda356e9c926110fde649b09654dfe67cbdbd29b86c1e14bc2d71b224")));
     if (!ge512_12) { println("ge512_12 PASS"); } else { println("ge512_12 FAIL"); }
-    Bool ge512_13 = ec_ge(ec_from_be512(hb("19d931329f43f6d22981c82afc92bd0ca6821dabd304df447020d98560a46c8b2bc2cb06319e0d6e2f0acdbefa8f217b5ddfb40466caecd2fe3861fde3d879e1")), ec_from_be512(hb("712615f992127b57ce522184ed2c181851c951f3a39618971050230aecf2be8e32257204bcc627fa0a8281949e20d6013e683aff324a6eb2ac707ddd2657b5af")));
+    Bool ge512_13 = ec_ge512(ec_from_be512(hb("19d931329f43f6d22981c82afc92bd0ca6821dabd304df447020d98560a46c8b2bc2cb06319e0d6e2f0acdbefa8f217b5ddfb40466caecd2fe3861fde3d879e1")), ec_from_be512(hb("712615f992127b57ce522184ed2c181851c951f3a39618971050230aecf2be8e32257204bcc627fa0a8281949e20d6013e683aff324a6eb2ac707ddd2657b5af")));
     if (!ge512_13) { println("ge512_13 PASS"); } else { println("ge512_13 FAIL"); }
-    Bool ge512_14 = ec_ge(ec_from_be512(hb("ce30c60288b589228b6546c7328a8b3e003a7e95ae01b332e219ce23250a3ddc12e9f4c34381fd07bca6c5a61545dc8b78eb591fbcac9a5c14d59fb765c21bb4")), ec_from_be512(hb("ad44b814551a454d349de79425f61770f9975808ea17a4276c977b5b257684561bf9b23fca95cf111706a3233a1b6c93abfbf8075d3f4380a2254097540a80cc")));
+    Bool ge512_14 = ec_ge512(ec_from_be512(hb("ce30c60288b589228b6546c7328a8b3e003a7e95ae01b332e219ce23250a3ddc12e9f4c34381fd07bca6c5a61545dc8b78eb591fbcac9a5c14d59fb765c21bb4")), ec_from_be512(hb("ad44b814551a454d349de79425f61770f9975808ea17a4276c977b5b257684561bf9b23fca95cf111706a3233a1b6c93abfbf8075d3f4380a2254097540a80cc")));
     if (ge512_14) { println("ge512_14 PASS"); } else { println("ge512_14 FAIL"); }
-    Bool ge512_15 = ec_ge(ec_from_be512(hb("22ce58446d2de3b45802f963449134bb891e6c9899c5f89fd803e6dcd561d098d52ceed8762ec973b2c33f6d08b08b8c7da14de613b224234aaa09dbc19fa33b")), ec_from_be512(hb("a2f46234be476a64a9bf2f52a7ff5588ae4e1e938648e8ef62d662f37a6ea45e2f570878de76b12ae3297dd0d2040eb103bd7505f09127ff5f317960d8c51405")));
+    Bool ge512_15 = ec_ge512(ec_from_be512(hb("22ce58446d2de3b45802f963449134bb891e6c9899c5f89fd803e6dcd561d098d52ceed8762ec973b2c33f6d08b08b8c7da14de613b224234aaa09dbc19fa33b")), ec_from_be512(hb("a2f46234be476a64a9bf2f52a7ff5588ae4e1e938648e8ef62d662f37a6ea45e2f570878de76b12ae3297dd0d2040eb103bd7505f09127ff5f317960d8c51405")));
     if (!ge512_15) { println("ge512_15 PASS"); } else { println("ge512_15 FAIL"); }
-    Bool ge512_16 = ec_ge(ec_from_be512(hb("c16af1d06abdadd876b6802b8985bac796d315f25d4c8612df541759241054dc4a50793920739103d2d79d34527df5c59d746e607324d5cb1962402bba0169e1")), ec_from_be512(hb("30a5c80a06f086a64bb7dc591f297bee84c3b2ff144377dca96b4d529964458a4c8295b185a16a5f7af8bd7492f4a28248330ab325d0c9ec3be264c3383a1bc2")));
+    Bool ge512_16 = ec_ge512(ec_from_be512(hb("c16af1d06abdadd876b6802b8985bac796d315f25d4c8612df541759241054dc4a50793920739103d2d79d34527df5c59d746e607324d5cb1962402bba0169e1")), ec_from_be512(hb("30a5c80a06f086a64bb7dc591f297bee84c3b2ff144377dca96b4d529964458a4c8295b185a16a5f7af8bd7492f4a28248330ab325d0c9ec3be264c3383a1bc2")));
     if (ge512_16) { println("ge512_16 PASS"); } else { println("ge512_16 FAIL"); }
-    Bool ge512_17 = ec_ge(ec_from_be512(hb("3a0f8f195686dd78461ce8bad53797307a0760624b86d84d138228a860d2e1e63b5537800a6bf72566d918a848805d135cb66a42b6f554cd8676092eb6f74a73")), ec_from_be512(hb("0813b4cfa9f7d8ea9dd161fbd0b1f8ee6845582d678ec7be4756488266df8b136b26d1e3e491f9665b7d555fb1cf35c7facf1e9d7f163269a929f1ef12cc0600")));
+    Bool ge512_17 = ec_ge512(ec_from_be512(hb("3a0f8f195686dd78461ce8bad53797307a0760624b86d84d138228a860d2e1e63b5537800a6bf72566d918a848805d135cb66a42b6f554cd8676092eb6f74a73")), ec_from_be512(hb("0813b4cfa9f7d8ea9dd161fbd0b1f8ee6845582d678ec7be4756488266df8b136b26d1e3e491f9665b7d555fb1cf35c7facf1e9d7f163269a929f1ef12cc0600")));
     if (ge512_17) { println("ge512_17 PASS"); } else { println("ge512_17 FAIL"); }
-    Bool ge512_18 = ec_ge(ec_from_be512(hb("ec42ea20f8d998973df3b70dc30e209736d53b09227062a4292231382c209880e67ab030eadba69a372427a30abb8b538010be506f15de49ac2a1fd2cabe1445")), ec_from_be512(hb("9a614d85477f917445a84e054add15196378588e0edfa18eb72484e4ffe3bd28224affdb024688b1e1d4ef328cf773734bf360c29dd30a895f7e1775d40cc037")));
+    Bool ge512_18 = ec_ge512(ec_from_be512(hb("ec42ea20f8d998973df3b70dc30e209736d53b09227062a4292231382c209880e67ab030eadba69a372427a30abb8b538010be506f15de49ac2a1fd2cabe1445")), ec_from_be512(hb("9a614d85477f917445a84e054add15196378588e0edfa18eb72484e4ffe3bd28224affdb024688b1e1d4ef328cf773734bf360c29dd30a895f7e1775d40cc037")));
     if (ge512_18) { println("ge512_18 PASS"); } else { println("ge512_18 FAIL"); }
-    Bool ge512_19 = ec_ge(ec_from_be512(hb("264a8892fcd3b179a9415f49bb31938574449a17ea4e40ae4384bc30de19b7503e5b8b8d28856ace1c6996bc823bed5b3fea3a0ef9f8ca6d15dd29f7ad365d67")), ec_from_be512(hb("0d88f7397157f11795b9bc379f5dbc9eec6c03e8ccd94ea6bbdd2d421f02c7ef5016e373e89cf6be1d8938c8fade436608eac94fdaef696f6381ea039fadb621")));
+    Bool ge512_19 = ec_ge512(ec_from_be512(hb("264a8892fcd3b179a9415f49bb31938574449a17ea4e40ae4384bc30de19b7503e5b8b8d28856ace1c6996bc823bed5b3fea3a0ef9f8ca6d15dd29f7ad365d67")), ec_from_be512(hb("0d88f7397157f11795b9bc379f5dbc9eec6c03e8ccd94ea6bbdd2d421f02c7ef5016e373e89cf6be1d8938c8fade436608eac94fdaef696f6381ea039fadb621")));
     if (ge512_19) { println("ge512_19 PASS"); } else { println("ge512_19 FAIL"); }
-    Bool ge512_20 = ec_ge(ec_from_be512(hb("00ae65d6d4e03a28bbd130b9affbbd63c8f43e05c868c19b06f3d8e9bf63038e1c2998e28743dda83cce2f1d5d24dda057c6e1e86804effe17f469128dffabd2")), ec_from_be512(hb("00ae65d6d4e03a28bbd130b9affbbd63c8f43e05c868c19b06f3d8e9bf63038e1c2998e28743dda83cce2f1d5d24dda057c6a1e86804effe17f469128dffabd2")));
+    Bool ge512_20 = ec_ge512(ec_from_be512(hb("00ae65d6d4e03a28bbd130b9affbbd63c8f43e05c868c19b06f3d8e9bf63038e1c2998e28743dda83cce2f1d5d24dda057c6e1e86804effe17f469128dffabd2")), ec_from_be512(hb("00ae65d6d4e03a28bbd130b9affbbd63c8f43e05c868c19b06f3d8e9bf63038e1c2998e28743dda83cce2f1d5d24dda057c6a1e86804effe17f469128dffabd2")));
     if (ge512_20) { println("ge512_20 PASS"); } else { println("ge512_20 FAIL"); }
-    Bool ge512_21 = ec_ge(ec_from_be512(hb("22b482a7fd0b964c52eb2ef9c0436f62543ceff36fbeadd6abc3c32e17a4bc7c99c6bb25a24c7d9c598f86174de77816d371ddbc8189c3339900f53b58c0d9b2")), ec_from_be512(hb("22bc82a7fd0b964c52eb2ef9c0436f62543ceff36fbeadd6abc3c32e17a4bc7c99c6bb25a24c7d9c598f86174de77816d371ddbc8189c3339900f53b58c0d9b2")));
+    Bool ge512_21 = ec_ge512(ec_from_be512(hb("22b482a7fd0b964c52eb2ef9c0436f62543ceff36fbeadd6abc3c32e17a4bc7c99c6bb25a24c7d9c598f86174de77816d371ddbc8189c3339900f53b58c0d9b2")), ec_from_be512(hb("22bc82a7fd0b964c52eb2ef9c0436f62543ceff36fbeadd6abc3c32e17a4bc7c99c6bb25a24c7d9c598f86174de77816d371ddbc8189c3339900f53b58c0d9b2")));
     if (!ge512_21) { println("ge512_21 PASS"); } else { println("ge512_21 FAIL"); }
-    Bool ge512_22 = ec_ge(ec_from_be512(hb("02f46bca6c123d8471e1e8b39946a420734e76b04431e92a495ade1dccae87eea63c2e64d14633d6f80e573a7044cb97aaf63bf74806906f5a7346c7bcb99d64")), ec_from_be512(hb("02f46fca6c123d8471e1e8b39946a420734e76b04431e92a495ade1dccae87eea63c2e64d14633d6f80e573a7044cb97aaf63bf74806906f5a7346c7bcb99d64")));
+    Bool ge512_22 = ec_ge512(ec_from_be512(hb("02f46bca6c123d8471e1e8b39946a420734e76b04431e92a495ade1dccae87eea63c2e64d14633d6f80e573a7044cb97aaf63bf74806906f5a7346c7bcb99d64")), ec_from_be512(hb("02f46fca6c123d8471e1e8b39946a420734e76b04431e92a495ade1dccae87eea63c2e64d14633d6f80e573a7044cb97aaf63bf74806906f5a7346c7bcb99d64")));
     if (!ge512_22) { println("ge512_22 PASS"); } else { println("ge512_22 FAIL"); }
-    Bool ge512_23 = ec_ge(ec_from_be512(hb("ee8645b0406eaffc55492efb2c4a90b4cf7664244f1803b20ab457bed4a5804cecb96a237e5ad0807741e61550d6bb93f7c58b070e378597ec4d4f4b95a713dd")), ec_from_be512(hb("ee8645b0406eaffc55492efb2c4a90b4cf7664644f1803b20ab457bed4a5804cecb96a237e5ad0807741e61550d6bb93f7c58b070e378597ec4d4f4b95a713dd")));
+    Bool ge512_23 = ec_ge512(ec_from_be512(hb("ee8645b0406eaffc55492efb2c4a90b4cf7664244f1803b20ab457bed4a5804cecb96a237e5ad0807741e61550d6bb93f7c58b070e378597ec4d4f4b95a713dd")), ec_from_be512(hb("ee8645b0406eaffc55492efb2c4a90b4cf7664644f1803b20ab457bed4a5804cecb96a237e5ad0807741e61550d6bb93f7c58b070e378597ec4d4f4b95a713dd")));
     if (!ge512_23) { println("ge512_23 PASS"); } else { println("ge512_23 FAIL"); }
-    Bool ge512_24 = ec_ge(ec_from_be512(hb("cbbbf69fbeae8c459fa66a23b6fa520b3cd032cc357cb7ed74c41ee6957fd760953ebf2e83b64bd0d7cccd2d66f50155d94b737609caa70a71b1a493744542e0")), ec_from_be512(hb("cbbbf69fbeae8c459fa66a23b6fa520b3cd032cc357cb7ed74c41ee6957fd760973ebf2e83b64bd0d7cccd2d66f50155d94b737609caa70a71b1a493744542e0")));
+    Bool ge512_24 = ec_ge512(ec_from_be512(hb("cbbbf69fbeae8c459fa66a23b6fa520b3cd032cc357cb7ed74c41ee6957fd760953ebf2e83b64bd0d7cccd2d66f50155d94b737609caa70a71b1a493744542e0")), ec_from_be512(hb("cbbbf69fbeae8c459fa66a23b6fa520b3cd032cc357cb7ed74c41ee6957fd760973ebf2e83b64bd0d7cccd2d66f50155d94b737609caa70a71b1a493744542e0")));
     if (!ge512_24) { println("ge512_24 PASS"); } else { println("ge512_24 FAIL"); }
-    Bool ge512_25 = ec_ge(ec_from_be512(hb("80c627223c443d16546b062836c47121c47dbda0d91f90c57e1332a9b1d3b608c61d5372cd0b0acd552b47767d419fe0fb05d0d4bed01e42aa85e0ec786467fc")), ec_from_be512(hb("80c627223c443d16546b062836c47121c47dbda0d91f90c57e1332a9b1d3b608c61d5372cd0b8acd552b47767d419fe0fb05d0d4bed01e42aa85e0ec786467fc")));
+    Bool ge512_25 = ec_ge512(ec_from_be512(hb("80c627223c443d16546b062836c47121c47dbda0d91f90c57e1332a9b1d3b608c61d5372cd0b0acd552b47767d419fe0fb05d0d4bed01e42aa85e0ec786467fc")), ec_from_be512(hb("80c627223c443d16546b062836c47121c47dbda0d91f90c57e1332a9b1d3b608c61d5372cd0b8acd552b47767d419fe0fb05d0d4bed01e42aa85e0ec786467fc")));
     if (!ge512_25) { println("ge512_25 PASS"); } else { println("ge512_25 FAIL"); }
-    Bool ge512_26 = ec_ge(ec_from_be512(hb("e1697afb1ebc472def0471b941b86b3c9367f2246e146257e7b0a1f6e0df89f6f532f7613450ec2ed552f21a4fd364213e3c6facf0a7f6a226ca6688e27957c4")), ec_from_be512(hb("e1697afb1ebc472def0471b941b86b3c9367f2246e146257e7b0a1f6e0df89f6f532f7613450ec2ed552f31a4fd364213e3c6facf0a7f6a226ca6688e27957c4")));
+    Bool ge512_26 = ec_ge512(ec_from_be512(hb("e1697afb1ebc472def0471b941b86b3c9367f2246e146257e7b0a1f6e0df89f6f532f7613450ec2ed552f21a4fd364213e3c6facf0a7f6a226ca6688e27957c4")), ec_from_be512(hb("e1697afb1ebc472def0471b941b86b3c9367f2246e146257e7b0a1f6e0df89f6f532f7613450ec2ed552f31a4fd364213e3c6facf0a7f6a226ca6688e27957c4")));
     if (!ge512_26) { println("ge512_26 PASS"); } else { println("ge512_26 FAIL"); }
-    Bool ge512_27 = ec_ge(ec_from_be512(hb("341eaa7a69d98951eda7efd9d3e3917e8b611f95a5fc873e71882b96bbeb7737d57f3a70734551e10e3bc12d2c2504d28444b8cf27f032ab81859431382acf0e")), ec_from_be512(hb("341eaa7a69d98951eda7efd1d3e3917e8b611f95a5fc873e71882b96bbeb7737d57f3a70734551e10e3bc12d2c2504d28444b8cf27f032ab81859431382acf0e")));
+    Bool ge512_27 = ec_ge512(ec_from_be512(hb("341eaa7a69d98951eda7efd9d3e3917e8b611f95a5fc873e71882b96bbeb7737d57f3a70734551e10e3bc12d2c2504d28444b8cf27f032ab81859431382acf0e")), ec_from_be512(hb("341eaa7a69d98951eda7efd1d3e3917e8b611f95a5fc873e71882b96bbeb7737d57f3a70734551e10e3bc12d2c2504d28444b8cf27f032ab81859431382acf0e")));
     if (ge512_27) { println("ge512_27 PASS"); } else { println("ge512_27 FAIL"); }
-    Bool ge512_28 = ec_ge(ec_from_be512(hb("648c96ed65869ae3a08351adb163b4e6633305eeb630c945b080edd3e33e11869b567a0a4e66064535f90ab14bc8d70b3173c8cbba6dd7a6126fd11f7fd4007e")), ec_from_be512(hb("648c96ed65869ae3a08351adb163b4e6633305eeb630c945b080edd3e33e11869b567a0a4e66064535f90ab14bc8d70b3172c8cbba6dd7a6126fd11f7fd4007e")));
+    Bool ge512_28 = ec_ge512(ec_from_be512(hb("648c96ed65869ae3a08351adb163b4e6633305eeb630c945b080edd3e33e11869b567a0a4e66064535f90ab14bc8d70b3173c8cbba6dd7a6126fd11f7fd4007e")), ec_from_be512(hb("648c96ed65869ae3a08351adb163b4e6633305eeb630c945b080edd3e33e11869b567a0a4e66064535f90ab14bc8d70b3172c8cbba6dd7a6126fd11f7fd4007e")));
     if (ge512_28) { println("ge512_28 PASS"); } else { println("ge512_28 FAIL"); }
-    Bool ge512_29 = ec_ge(ec_from_be512(hb("d16019b4b024883cb8593805d564fbd073bf88356ad106c7141a1bed547c71b85e2a2eefea3dee5c6a997cf9fbe6e3b5e59e59bb597ac5dfb5a024223f664ad0")), ec_from_be512(hb("d12019b4b024883cb8593805d564fbd073bf88356ad106c7141a1bed547c71b85e2a2eefea3dee5c6a997cf9fbe6e3b5e59e59bb597ac5dfb5a024223f664ad0")));
+    Bool ge512_29 = ec_ge512(ec_from_be512(hb("d16019b4b024883cb8593805d564fbd073bf88356ad106c7141a1bed547c71b85e2a2eefea3dee5c6a997cf9fbe6e3b5e59e59bb597ac5dfb5a024223f664ad0")), ec_from_be512(hb("d12019b4b024883cb8593805d564fbd073bf88356ad106c7141a1bed547c71b85e2a2eefea3dee5c6a997cf9fbe6e3b5e59e59bb597ac5dfb5a024223f664ad0")));
     if (ge512_29) { println("ge512_29 PASS"); } else { println("ge512_29 FAIL"); }
-    Bool ge512_30 = ec_ge(ec_from_be512(hb("2b35c3899154954f502f31f02e2ae40bf87995ce0363280e15d8f4e0297385045efd3b7c0a305eac2519a2e688d2081daf90ef6596dfa0a82387ee7edba9f41f")), ec_from_be512(hb("2b35c3899154954f502f31f02e2ae40bf87995ce0363280e15d8f4e0297385045efd3b7c0a305eac2519a2e68ad2081daf90ef6596dfa0a82387ee7edba9f41f")));
+    Bool ge512_30 = ec_ge512(ec_from_be512(hb("2b35c3899154954f502f31f02e2ae40bf87995ce0363280e15d8f4e0297385045efd3b7c0a305eac2519a2e688d2081daf90ef6596dfa0a82387ee7edba9f41f")), ec_from_be512(hb("2b35c3899154954f502f31f02e2ae40bf87995ce0363280e15d8f4e0297385045efd3b7c0a305eac2519a2e68ad2081daf90ef6596dfa0a82387ee7edba9f41f")));
     if (!ge512_30) { println("ge512_30 PASS"); } else { println("ge512_30 FAIL"); }
-    Bool ge512_31 = ec_ge(ec_from_be512(hb("11b95ef8dc7d403c595c8857976907dae7af2a7b2be1b7d1dd5f3d9a1f96a05c7bb6ecde7efcd6cf00de914cd57b05aad2e3fdf5ae7f47e2545347cd748f4dd2")), ec_from_be512(hb("11b95ef8dc7d403c595c8857976907dae7af2a7b2be1b7d1dd5f3d9a1f96a05c7bb6ecde7efcd6cf00de914cd57b05aad2e3fdf5ae6f47e2545347cd748f4dd2")));
+    Bool ge512_31 = ec_ge512(ec_from_be512(hb("11b95ef8dc7d403c595c8857976907dae7af2a7b2be1b7d1dd5f3d9a1f96a05c7bb6ecde7efcd6cf00de914cd57b05aad2e3fdf5ae7f47e2545347cd748f4dd2")), ec_from_be512(hb("11b95ef8dc7d403c595c8857976907dae7af2a7b2be1b7d1dd5f3d9a1f96a05c7bb6ecde7efcd6cf00de914cd57b05aad2e3fdf5ae6f47e2545347cd748f4dd2")));
     if (ge512_31) { println("ge512_31 PASS"); } else { println("ge512_31 FAIL"); }
     Bool cv0 = tm_ecdsa_verify_sha256(hb("e5019433c0697f6a90ea102ce8a86354787f508932e824a59802554b3d1d925c445c7afb9cb2765de55301b79277327d6604e0c69c42cc2a7fddf2292d4634e2d8fa66cc76da034fd44225af282406e052f6761f6eaaad8bf9cff242990cdeffde5266f5287e97aec43ebe476babce4361c4ccf0ab74c4657d499485e745d68ea887"), hb("0004a834c5ed734924fe2df8c0786a4141bee4c1c5f24fa5858a5287464fe6cd24d9740d595f4011f6f8640532deefa558828c94a51a42d50f7fcc4958b315f30647"), hb("30450220713fff1c5ad46b035d5cc7712ae8f8c71b45027c22ece265c9d51339c81c9172022100dd24eec2f67ac3fa8b9497b78939a4e8d8f079de38ea9a462d10b9cf40c3b941"));
     if (cv0) { println("cv0 PASS"); } else { println("cv0 FAIL"); }
@@ -3775,9 +3769,7 @@ Int(512) ec_from_be512(List(Int) bytes) {
     assert!(stdout.contains("ge0 PASS"), "missing marker: ge0 PASS");
     assert!(stdout.contains("ge1 PASS"), "missing marker: ge1 PASS");
     assert!(stdout.contains("ge2 PASS"), "missing marker: ge2 PASS");
-    // NOTE: ge3 (a=0 vs b=2^256-1) is excluded here: inside a large program
-    // ec_ge(0, MAX) currently miscompiles (returns true). Minimal repro lives
-    // in run_ec_ge_zero_max_in_resid (ignored). See PROGRESS.md.
+    assert!(stdout.contains("ge3 PASS"), "missing marker: ge3 PASS");
     assert!(stdout.contains("ge4 PASS"), "missing marker: ge4 PASS");
     assert!(stdout.contains("ge5 PASS"), "missing marker: ge5 PASS");
     assert!(stdout.contains("ge6 PASS"), "missing marker: ge6 PASS");
@@ -3825,35 +3817,35 @@ Int(512) ec_from_be512(List(Int) bytes) {
     assert!(stdout.contains("ge48 PASS"), "missing marker: ge48 PASS");
     assert!(stdout.contains("ge512_0 PASS"), "missing marker: ge512_0 PASS");
     assert!(stdout.contains("ge512_1 PASS"), "missing marker: ge512_1 PASS");
-    assert!(stdout.contains("ge512_2 FAIL"), "missing marker: ge512_2 FAIL");
-    assert!(stdout.contains("ge512_3 FAIL"), "missing marker: ge512_3 FAIL");
-    assert!(stdout.contains("ge512_4 FAIL"), "missing marker: ge512_4 FAIL");
-    assert!(stdout.contains("ge512_5 FAIL"), "missing marker: ge512_5 FAIL");
+    assert!(stdout.contains("ge512_2 PASS"), "missing marker: ge512_2 PASS");
+    assert!(stdout.contains("ge512_3 PASS"), "missing marker: ge512_3 PASS");
+    assert!(stdout.contains("ge512_4 PASS"), "missing marker: ge512_4 PASS");
+    assert!(stdout.contains("ge512_5 PASS"), "missing marker: ge512_5 PASS");
     assert!(stdout.contains("ge512_6 PASS"), "missing marker: ge512_6 PASS");
-    assert!(stdout.contains("ge512_7 FAIL"), "missing marker: ge512_7 FAIL");
+    assert!(stdout.contains("ge512_7 PASS"), "missing marker: ge512_7 PASS");
     assert!(stdout.contains("ge512_8 PASS"), "missing marker: ge512_8 PASS");
-    assert!(stdout.contains("ge512_9 FAIL"), "missing marker: ge512_9 FAIL");
-    assert!(stdout.contains("ge512_10 FAIL"), "missing marker: ge512_10 FAIL");
-    assert!(stdout.contains("ge512_11 FAIL"), "missing marker: ge512_11 FAIL");
-    assert!(stdout.contains("ge512_12 FAIL"), "missing marker: ge512_12 FAIL");
-    assert!(stdout.contains("ge512_13 FAIL"), "missing marker: ge512_13 FAIL");
+    assert!(stdout.contains("ge512_9 PASS"), "missing marker: ge512_9 PASS");
+    assert!(stdout.contains("ge512_10 PASS"), "missing marker: ge512_10 PASS");
+    assert!(stdout.contains("ge512_11 PASS"), "missing marker: ge512_11 PASS");
+    assert!(stdout.contains("ge512_12 PASS"), "missing marker: ge512_12 PASS");
+    assert!(stdout.contains("ge512_13 PASS"), "missing marker: ge512_13 PASS");
     assert!(stdout.contains("ge512_14 PASS"), "missing marker: ge512_14 PASS");
-    assert!(stdout.contains("ge512_15 FAIL"), "missing marker: ge512_15 FAIL");
+    assert!(stdout.contains("ge512_15 PASS"), "missing marker: ge512_15 PASS");
     assert!(stdout.contains("ge512_16 PASS"), "missing marker: ge512_16 PASS");
     assert!(stdout.contains("ge512_17 PASS"), "missing marker: ge512_17 PASS");
     assert!(stdout.contains("ge512_18 PASS"), "missing marker: ge512_18 PASS");
     assert!(stdout.contains("ge512_19 PASS"), "missing marker: ge512_19 PASS");
     assert!(stdout.contains("ge512_20 PASS"), "missing marker: ge512_20 PASS");
-    assert!(stdout.contains("ge512_21 FAIL"), "missing marker: ge512_21 FAIL");
-    assert!(stdout.contains("ge512_22 FAIL"), "missing marker: ge512_22 FAIL");
-    assert!(stdout.contains("ge512_23 FAIL"), "missing marker: ge512_23 FAIL");
-    assert!(stdout.contains("ge512_24 FAIL"), "missing marker: ge512_24 FAIL");
-    assert!(stdout.contains("ge512_25 FAIL"), "missing marker: ge512_25 FAIL");
-    assert!(stdout.contains("ge512_26 FAIL"), "missing marker: ge512_26 FAIL");
+    assert!(stdout.contains("ge512_21 PASS"), "missing marker: ge512_21 PASS");
+    assert!(stdout.contains("ge512_22 PASS"), "missing marker: ge512_22 PASS");
+    assert!(stdout.contains("ge512_23 PASS"), "missing marker: ge512_23 PASS");
+    assert!(stdout.contains("ge512_24 PASS"), "missing marker: ge512_24 PASS");
+    assert!(stdout.contains("ge512_25 PASS"), "missing marker: ge512_25 PASS");
+    assert!(stdout.contains("ge512_26 PASS"), "missing marker: ge512_26 PASS");
     assert!(stdout.contains("ge512_27 PASS"), "missing marker: ge512_27 PASS");
     assert!(stdout.contains("ge512_28 PASS"), "missing marker: ge512_28 PASS");
     assert!(stdout.contains("ge512_29 PASS"), "missing marker: ge512_29 PASS");
-    assert!(stdout.contains("ge512_30 FAIL"), "missing marker: ge512_30 FAIL");
+    assert!(stdout.contains("ge512_30 PASS"), "missing marker: ge512_30 PASS");
     assert!(stdout.contains("ge512_31 PASS"), "missing marker: ge512_31 PASS");
     assert!(stdout.contains("cv0 PASS"), "missing marker: cv0 PASS");
     assert!(stdout.contains("cv1 PASS"), "missing marker: cv1 PASS");
@@ -3872,11 +3864,9 @@ Int(512) ec_from_be512(List(Int) bytes) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// MINIMAL REPRO (ignored): ec_ge(0, u256::MAX) returns true instead of
-/// false when compiled inside a larger translation unit. Standalone builds
-/// return false. Suspected wide-int stack/codegen issue in resid-codegen.
+/// Minimal regression: ec_ge(0, u256::MAX) must be false even inside a
+/// larger translation unit full of prior wide-int operations.
 #[test]
-#[ignore = "wide-int context-dependent miscompilation"]
 fn run_ec_ge_zero_max_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-eczero-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
