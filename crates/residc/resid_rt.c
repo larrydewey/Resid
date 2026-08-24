@@ -3083,3 +3083,59 @@ char* resid_tcp_recv_all(int64_t fd) {
 int8_t resid_tcp_close(int64_t fd) {
     return close((int)fd) == 0 ? 1 : 0;
 }
+
+/* ─── Binary-safe TCP (TLS transport) ─────────────────────────────
+ * List(Int) ABI: i64 count at offset 0, i64 elements after. send_bin
+ * writes count bytes (values truncated to u8); recv_bin reads exactly
+ * `n` bytes into a fresh list and stores the byte count as its length
+ * (0 on error/EOF). */
+
+int8_t resid_tcp_send_bin(int64_t fd, void* lst) {
+    /* seeded-list convention: slot 0 is the dummy seed, real bytes are
+     * slots 1..count-1 (raw i64 values truncated to u8) */
+    ResidVal* rv = (ResidVal*)lst;
+    int64_t n = rv->count - 1;
+    if (n <= 0) return 1;
+    char* buf = (char*)malloc((size_t)n);
+    if (!buf) return 0;
+    for (int64_t i = 0; i < n; i++) {
+        /* scalar slots are boxed: slot -> ResidVal -> slots[0] -> i64 */
+        ResidVal* bx = (ResidVal*)rv->slots[1 + i];
+        buf[i] = (char)(*(int64_t*)bx->slots[0] & 0xFF);
+    }
+    const char* p2 = buf;
+    size_t left = (size_t)n;
+    while (left > 0) {
+        ssize_t w = send((int)fd, p2, left, MSG_NOSIGNAL);
+        if (w <= 0) { free(buf); return 0; }
+        p2 += w; left -= (size_t)w;
+    }
+    free(buf);
+    return 1;
+}
+
+/* receive exactly n bytes into a fresh seeded List(Int): slot 0 = seed,
+ * slots 1..n = bytes; count = n+1. On EOF/error fewer slots may be
+ * filled (remaining stay 0) and count still reports n+1. */
+void* resid_tcp_recv_bin(int64_t fd, int64_t n) {
+    if (n < 0) n = 0;
+    char* buf = (char*)malloc((size_t)(n > 0 ? n : 1));
+    ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
+    out->tag = 0;
+    out->count = n + 1;
+    out->slots = (void**)malloc(sizeof(void*) * (size_t)(n + 1));
+    out->type = "List";
+    out->slots[0] = resid_box_i64(0);
+    int64_t got = 0;
+    while (got < n) {
+        ssize_t r = recv((int)fd, buf + got, (size_t)(n - got), 0);
+        if (r <= 0) break;
+        got += r;
+    }
+    for (int64_t i = 0; i < n; i++) {
+        char bv = (i < got) ? buf[i] : 0;
+        out->slots[1 + i] = resid_box_i64((int64_t)bv);
+    }
+    free(buf);
+    return out;
+}

@@ -853,6 +853,7 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("resid_tcp_send", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Str], SemType::Bool),
     ("resid_tcp_recv_all", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
     ("resid_tcp_close", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Bool),
+    ("resid_tcp_close", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Bool),
 ];
 
 /// Return the set of built-in (extern) function signatures.
@@ -908,6 +909,19 @@ pub fn builtin_signatures() -> Signatures {
             "list_contains_float",
             vec![float_list(), SemType::Numeric(NumericType::Float(resid_ir::FloatWidth::F64))],
             SemType::Bool,
+        ),
+        (
+            "resid_tcp_send_bin",
+            vec![SemType::Numeric(NumericType::Int(IntWidth::B64)), int_list()],
+            SemType::Bool,
+        ),
+        (
+            "resid_tcp_recv_bin",
+            vec![
+                SemType::Numeric(NumericType::Int(IntWidth::B64)),
+                SemType::Numeric(NumericType::Int(IntWidth::B64)),
+            ],
+            int_list(),
         ),
         ("list_sort_floats", vec![float_list()], float_list()),
         (

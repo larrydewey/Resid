@@ -119,28 +119,21 @@ pub List(Int) sh_pubkey(List(Int) sh) {
 // scan for the key_share extension marker 0033 0024 001d 0020 and
 // return the following 32-byte x25519 share
 pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
-    if (pos + 40 > stop) {
+    if (pos + 36 > stop) {
         return [0];
     }
+    // x25519 key-share entry marker: 001d 0020 <32 bytes>
     Int b0 = sh[pos];
     Int b1 = sh[pos + 1];
     Int b2 = sh[pos + 2];
     Int b3 = sh[pos + 3];
-    Int b4 = sh[pos + 4];
-    Int b5 = sh[pos + 5];
-    Int b6 = sh[pos + 6];
-    Int b7 = sh[pos + 7];
     Bool m1 = b0 == 0;
-    Bool m2 = b1 == 51;
+    Bool m2 = b1 == 29;
     Bool m3 = b2 == 0;
-    Bool m4 = b3 == 36;
-    Bool m5 = b4 == 0;
-    Bool m6 = b5 == 29;
-    Bool m7 = b6 == 0;
-    Bool m8 = b7 == 32;
-    Bool all1 = m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8;
-    if (all1) {
-        Int kp = pos + 8;
+    Bool m4 = b3 == 32;
+    Bool allm = m1 && m2 && m3 && m4;
+    if (allm) {
+        Int kp = pos + 4;
         return slice_seed(sh, kp, 32, [0]);
     }
     Int np = pos + 1;
