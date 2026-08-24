@@ -150,10 +150,18 @@
   last-byte typo (…4e6b); true key ends …4e6a (per erratum / system
   libraries). Next TLS milestones: HKDF-SHA256, then AES-GCM or
   ChaCha20-Poly1305 AEAD.
-- **Tests**: 620 pass (incl. DER decoder, x509 TBS walker, RSA/ECDSA
-  verify e2es, and the X25519 RFC-vector e2e; lexer 17, parser 91,
+- **HKDF-SHA256 (RFC 5869) done**: `hkdf_extract`/`hkdf_expand`/
+  `hkdf_sha256` in `lib/crypto.resid`, built on the existing
+  HMAC-SHA256; expand is a tail recursion over T(i) =
+  HMAC(PRK, T(i-1) | info | i) with seeded-list `sconcat` joining and
+  a final trim to L bytes. e2e `run_hkdf_in_resid`: RFC test cases 1,
+  2 (80-byte inputs, multi-block OKM) and 3 (empty salt + empty info)
+  all byte-exact vs Python reference. TLS milestone 2 of 4 done;
+  next: AEAD (AES-128-GCM or ChaCha20-Poly1305).
+- **Tests**: 621 pass (incl. DER decoder, x509 TBS walker, RSA/ECDSA
+  verify, X25519 RFC-vector and HKDF e2es; lexer 17, parser 91,
   resid-ir 46, resid-type 195, resid-codegen 137, resid-build 12,
-  resid-fmt 5, residc 67 incl. e2e).
+  resid-fmt 5, residc 68 incl. e2e).
 
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,

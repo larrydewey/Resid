@@ -579,6 +579,53 @@ pub List(Int) pbkdf2_hmac_sha256(List(Int) pass, List(Int) salt, Int iters, Int 
     return pbkdf2_f(u1, pass, rem, u1);
 }
 
+// ─── HKDF (RFC 5869), HMAC-SHA256 ────────────────────────────────
+// Extract: PRK = HMAC-Hash(salt, IKM). Expand: T(i) =
+// HMAC(PRK, T(i-1) | info | i), OKM = first L bytes of T(1)|..|T(n).
+// All lists use the [0]-seed convention.
+
+pub List(Int) hkdf_extract(List(Int) salt, List(Int) ikm) {
+    return hmac_sha256_bytes(salt, ikm);
+}
+
+pub Int hkdf_rounds(Int len) {
+    Int q = len / 32;
+    if (len % 32 != 0) {
+        Int q1 = q + 1;
+        return q1;
+    }
+    return q;
+}
+
+pub List(Int) hkdf_exp_acc(List(Int) prk, List(Int) info, Int c, Int n, List(Int) t, List(Int) okm) {
+    if (c > n) { return okm; }
+    List(Int) inp = sconcat(t, info);
+    List(Int) inp2 = inp.concat([c]);
+    List(Int) ti = hmac_sha256_bytes(prk, inp2);
+    List(Int) okm2 = sconcat(okm, ti);
+    Int nc = c + 1;
+    return hkdf_exp_acc(prk, info, nc, n, ti, okm2);
+}
+
+pub List(Int) hkdf_expand(List(Int) prk, List(Int) info, Int len) {
+    Int n = hkdf_rounds(len);
+    return hkdf_take(hkdf_exp_acc(prk, info, 1, n, [0], [0]), 1, len, [0]);
+}
+
+pub List(Int) hkdf_take(List(Int) okm, Int i, Int len, List(Int) acc) {
+    if (i > len) { return acc; }
+    Int b = okm[i];
+    List(Int) acc2 = acc.concat([b]);
+    Int ni = i + 1;
+    return hkdf_take(okm, ni, len, acc2);
+}
+
+// One-shot HKDF: extract then expand.
+pub List(Int) hkdf_sha256(List(Int) salt, List(Int) ikm, List(Int) info, Int len) {
+    List(Int) prk = hkdf_extract(salt, ikm);
+    return hkdf_expand(prk, info, len);
+}
+
 // ─── Secure randomness (OS entropy via runtime hook) ────────────
 // The single C boundary in the library: entropy must come from the OS.
 // Everything above this line is pure Resid.
