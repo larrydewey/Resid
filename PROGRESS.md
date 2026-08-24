@@ -216,6 +216,18 @@
   program (verifies fine standalone on identical bytes — suspected
   codegen/Int(256) context issue) and reading the app response after GET;
   RSA-PSS CV unsupported.
+- **NEXT-STEP (top priority) — ECDSA-P256 verify is unreliable**: an
+  exhaustive property test (`run_ecdsa_prop_in_resid`, ignored, with
+  deterministic random fixtures + minimal repro
+  `run_ec_ge_zero_max_in_resid`) shows ~7/12 random valid signatures
+  FAIL verification while python cryptography validates the identical
+  bytes. Failures are value-dependent (correlate with r/s/digest >=
+  2^255 — i.e., signed-compare / sign-extension pitfalls in Int(256)/
+  Int(512) codegen) AND context-dependent (identical bytes pass in
+  small standalone programs). Attempted fixes: unsigned compare via
+  xor/top-bit scan and via 512-halves decomposition — each passes some
+  subsets but not all. Root cause is in wide-int codegen/stack handling;
+  fixing it will unblock the live-handshake milestone end-to-end.
 - **TLS 1.3 message framing (RFC 8446) done**: `lib/tlsmsg.resid` —
   ClientHello construction (byte-exact RFC 8448 §3 trace),
   ServerHello parsing (random + x25519 key share via marker scan),
