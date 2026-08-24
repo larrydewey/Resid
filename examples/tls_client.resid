@@ -39,6 +39,8 @@ List(Int) repz(List(Int) acc, Int n) {
     return repz(acc2, nn);
 }
 
+// Reads exactly n bytes; on EOF/short read returns the [0] seed-only
+// sentinel so callers can bail out instead of processing padding.
 List(Int) recv_exact(Int fd, Int n) {
     List(Int) out = repz([0], n);
     return recv_loop(fd, out, n, 0);
@@ -52,8 +54,9 @@ List(Int) recv_loop(Int fd, List(Int) out, Int n, Int got) {
     List(Int) chunk = resid_tcp_recv_bin(fd, want);
     Int gotn = chunk.len() - 1;
     if (gotn <= 0) {
-        println("RECV-SHORT");
-        return out;
+        println("RECV-EOF");
+        List(Int) eof = [0];
+        return eof;
     }
     Bool has = got > 0;
     List(Int) head = if (has) { slice_seed(out, 1, got, [0]) } else { [0] };
@@ -87,10 +90,20 @@ List(Int) seal_record(Int seq, List(Int) key, List(Int) iv, List(Int) payload, I
     return aes128_gcm_seal(key, nonce, pt, aad);
 }
 
-// open a record; returns inner plaintext without the content-type byte
+// TLS record length bound: 2^14 + 256 (RFC 8446 §5.1 cap plus margin).
+pub Int tls_max_record_len() {
+    return 16640;
+}
+
+// open a record; returns inner plaintext without the content-type byte.
+// On tag failure returns a 1-byte marker; caller must check plausibility.
 List(Int) open_record(List(Int) key, List(Int) iv, Int seq, List(Int) header, List(Int) body) {
     Int blen = body.len() - 1;
     Int clen = blen - 16;
+    if (clen < 1) {
+        println("RECORD-SHORT");
+        return repz([0], 1);
+    }
     List(Int) rk = aes128_key_expand(key);
     List(Int) nonce = tls_record_nonce(iv, seq);
     List(Int) j0 = tls_j0(nonce);
@@ -161,24 +174,49 @@ Int read_app(Int fd, List(Int) key, List(Int) iv, Int seq, Int tries) {
         return 0;
     }
     List(Int) hdr = recv_exact(fd, 5);
+    Int hlen = hdr.len() - 1;
+    if (hlen < 5) {
+        // EOF before a full header: server closed
+        println("REPLY-NONE");
+        return 0;
+    }
     Int blen = hdr[4] * 256 + hdr[5];
-    if (blen < 17) {
+    if (blen < 17 || blen > tls_max_record_len()) {
         // connection closed / not a real record
         println("REPLY-NONE");
         return 0;
     }
     List(Int) body = recv_exact(fd, blen);
+    if (body.len() - 1 < blen) {
+        println("REPLY-NONE");
+        return 0;
+    }
     List(Int) h5 = slice_seed(hdr, 1, 5, [0]);
     List(Int) plainfull = open_record(key, iv, seq, h5, body);
+    Int plen2 = plainfull.len() - 1;
+    if (plen2 < 1) {
+        println("REPLY-NONE");
+        return 0;
+    }
     Int lastidx = plainfull.len() - 1;
     Int ctl = plainfull[lastidx];
+    if (ctl == 21) {
+        // encrypted alert: 22 = close_notify (clean end), else failure
+        Int alv = plainfull[lastidx - 1] & 255;
+        if (alv == 0 || alv == 80) {
+            println("ALERT-CLOSE-NOTIFY");
+        } else {
+            println("ALERT-DESC=" + IntToString(alv));
+        }
+        return 0;
+    }
     if (ctl == 23) {
-        Int plen = plainfull.len() - 1;
-        List(Int) plain = slice_seed(plainfull, 1, plen, [0]);
+        List(Int) plain = slice_seed(plainfull, 1, lastidx, [0]);
         Int n = plain.len() - 1;
         print_line(plain, 1, n, "");
         return 0;
     }
+    // handshake post-flight records (session tickets etc.): skip
     Int seq2 = seq + 1;
     Int t2 = tries - 1;
     return read_app(fd, key, iv, seq2, t2);
@@ -261,8 +299,21 @@ Int main() {
     Bool s1 = resid_tcp_send_bin(fd, chmsg);
     if (!s1) { println("SEND-FAIL"); return 1; }
     List(Int) shhdr = recv_exact(fd, 5);
+    if (shhdr.len() - 1 < 5) {
+        println("SH-EOF");
+        return 1;
+    }
     Int shlen = shhdr[4] * 256 + shhdr[5];
+    if (shlen <= 0 || shlen > tls_max_record_len()) {
+        println("SH-LEN-BAD");
+        return 1;
+    }
     List(Int) shbody = recv_exact(fd, shlen);
+    if (shbody.len() - 1 < shlen || shbody.len() - 1 < 39 + 32) {
+        // SH body must carry at least random(32) + session/legacy + keyshare
+        println("SH-SHORT");
+        return 1;
+    }
     List(Int) shr = sh_random(shbody);
     List(Int) spub = sh_pubkey(shbody);
     List(Int) shared = x25519(cpriv, spub);

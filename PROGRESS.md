@@ -281,6 +281,20 @@
   output when the full suite runs in parallel (the long-documented
   context-dependent codegen ghost) — passes reliably standalone and
   on e2e-binary reruns.
+- **Alert/EOF record-layer hardening (live client)**:
+  `examples/tls_client.resid` no longer aborts or processes garbage on
+  abnormal connections. recv_exact now returns a seed-only sentinel on
+  EOF instead of zero-padded data; every read site (ServerHello,
+  read_flight, read_app) checks the sentinel plus a TLS max record
+  length bound (`tls_max_record_len` = 2^14+256) before parsing.
+  open_record guards clen < 1 (RECORD-SHORT). read_app now recognises
+  the encrypted inner alert content type: close_notify/user_canceled
+  print ALERT-CLOSE-NOTIFY, other alerts print ALERT-DESC=<n>; session
+  tickets and other post-handshake records are skipped by sequence
+  number as before. Verified live: an accept-then-instantly-close TCP
+  server now ends gracefully (SH-LEN-BAD/REPLY-NONE) where the client
+  previously crashed with a list-index abort, and the happy path still
+  completes with HTTP 200. 629 tests pass.
 - **RESOLVED (prior session) — ECDSA-P256 verify reliability (wide-int
   unsigned compare fixed in lib)**: root cause was NOT a codegen
   miscompilation:
