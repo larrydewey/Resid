@@ -104,6 +104,16 @@
   importing ec256.resid with "function `=` is already defined" — the
   legacy sig collector mis-scans Int(256)/Int(512)-typed libraries;
   ECDSA e2e is therefore stage-1 only for now.
+- **Chain validation + SAN (roadmap item 5, partial)**: `lib/chain.resid`
+  — SAN dNSName parsing from [3] extensions (OID 2.5.29.17) with
+  case-insensitive matching incl. leftmost wildcards; validity-window
+  checks (UTCTime/GeneralizedTime -> numeric compare); issuer-name
+  linking by raw DER equality; signature dispatch on alg OID
+  (RSA PKCS#1v1.5 / ECDSA P-256). e2e `run_chain_san_validity_in_resid`
+  asserts exact/wildcard/negative SAN matches and validity windows
+  against openssl ground truth. OPEN: full `chain_verify` EC link
+  returns false despite verified-correct inputs — suspected stage-1
+  codegen issue with deep recursion + wide-int arithmetic; next session.
 - **Tests**: 618 pass (incl. DER decoder, x509 TBS walker, and the RSA
   PKCS#1v1.5 verify e2e on both pipelines; lexer 17, parser 91,
   resid-ir 46, resid-type 195, resid-codegen 137, resid-build 12,

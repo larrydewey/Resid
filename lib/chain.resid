@@ -1,0 +1,328 @@
+// ─── lib/chain.resid — x509 chain validation + SAN matching ─────────
+// Builds on lib/x509.resid (structure walking), lib/crypto.resid
+// (SHA-256), lib/rsa.resid (RSA PKCS#1v1.5 verify) and lib/ec256.resid
+// (ECDSA P-256 verify).
+//
+// One-link chain_verify:
+//   1. child.issuer Name == issuer.subject Name (raw DER equality)
+//   2. both certificates valid at the provided "now" instant
+//   3. child signature verifies under issuer SPKI key, dispatched on
+//      signature-algorithm OID:
+//        1.2.840.113549.1.1.11 -> RSA PKCS#1v1.5 SHA-256 (2048-bit)
+//        1.2.840.10045.4.3.2   -> ECDSA P-256
+//
+// SAN: walks [3] extensions, finds OID 2.5.29.17, matches dNSName
+// entries case-insensitively incl. leftmost-only wildcards.
+
+import "crypto.resid";
+import "x509.resid";
+import "rsa.resid";
+import "ec256.resid";
+
+// ─── Byte helpers ────────────────────────────────────────────────────
+
+pub Bool eq_bytes_at(List(Int) a, List(Int) b, Int i, Int last) {
+    if (i > last) { return true; }
+    Int xa = a[i];
+    Int xb = b[i];
+    if (xa != xb) { return false; }
+    Int ni = i + 1;
+    return eq_bytes_at(a, b, ni, last);
+}
+
+pub Bool eq_bytes(List(Int) a, List(Int) b) {
+    Int alen = a.len() - 1;
+    Int blen = b.len() - 1;
+    if (alen != blen) { return false; }
+    return eq_bytes_at(a, b, 1, alen);
+}
+
+// Raw DER of a top-level certificate element by index
+// (0 = tbs, 1 = sigAlg, 2 = signature BIT STRING).
+pub List(Int) cert_elem_at(List(Int) cert, Int cur, Int j, Int idx) {
+    if (j == idx) {
+        DerTlv tv = der_next(cert, cur);
+        Int end = cur + tv.hdr_len;
+        Int stop = end + tv.val_len - 1;
+        return der_slice_seeded(cert, cur, stop);
+    }
+    Int nxt = x509_skip_tlv(cert, cur);
+    Int nj = j + 1;
+    return cert_elem_at(cert, nxt, nj, idx);
+}
+
+pub List(Int) cert_elem(List(Int) cert, Int idx) {
+    Int pos = der_content_pos(cert, 1);
+    return cert_elem_at(cert, pos, 0, idx);
+}
+
+// Raw DER of the tbsCertificate element (header included).
+pub List(Int) cert_tbs(List(Int) cert) {
+    return cert_elem(cert, 0);
+}
+
+// ─── Validity window ─────────────────────────────────────────────────
+
+pub Int time_digits(Str s, Int i, Int last, Int acc) {
+    if (i > last) { return acc; }
+    Int c = str_char_at(s, i);
+    Int d = c - 48;
+    Int acc10 = acc * 10;
+    Int acc2 = acc10 + d;
+    Int ni = i + 1;
+    return time_digits(s, ni, last, acc2);
+}
+
+// "YYMMDDHHMMSSZ" -> YYYYMMDDHHMMSS number; GeneralizedTime passes
+// through without the century offset.
+pub Int utctime_to_num(Str s) {
+    Int slen = str_len(s);
+    Int lastd = slen - 2;
+    Int n = time_digits(s, 0, lastd, 0);
+    if (slen == 13) {
+        Int r = n + 20000000000000;
+        return r;
+    }
+    return n;
+}
+
+pub Bool x509_valid_now(List(Int) cert, Int now) {
+    Str nb = x509_not_before(cert);
+    Str na = x509_not_after(cert);
+    Int nv = utctime_to_num(nb);
+    Int nav = utctime_to_num(na);
+    if (now < nv) { return false; }
+    if (now > nav) { return false; }
+    return true;
+}
+
+pub Int ci_ch(Int c) {
+    if (c >= 65 && c <= 90) {
+        Int r = c + 32;
+        return r;
+    }
+    return c;
+}
+
+pub Bool ci_eq_at(List(Int) a, List(Int) b, Int i, Int last) {
+    if (i > last) { return true; }
+    Int xa = ci_ch(a[i]);
+    Int xb = ci_ch(b[i]);
+    if (xa != xb) { return false; }
+    Int ni = i + 1;
+    return ci_eq_at(a, b, ni, last);
+}
+
+pub Bool ci_eq_bytes(List(Int) a, List(Int) b) {
+    Int alen = a.len() - 1;
+    Int blen = b.len() - 1;
+    if (alen != blen) { return false; }
+    return ci_eq_at(a, b, 1, alen);
+}
+
+pub Int dns_find_dot(List(Int) host, Int i, Int last) {
+    if (i > last) { return last + 1; }
+    Int c = host[i];
+    if (c == 46) { return i; }
+    Int ni = i + 1;
+    return dns_find_dot(host, ni, last);
+}
+
+pub Bool ci_eq_range(List(Int) a, Int ai, List(Int) b, Int bi, Int count) {
+    if (count == 0) { return true; }
+    Int xa = ci_ch(a[ai]);
+    Int xb = ci_ch(b[bi]);
+    if (xa != xb) { return false; }
+    Int na = ai + 1;
+    Int nb2 = bi + 1;
+    Int nc = count - 1;
+    return ci_eq_range(a, na, b, nb2, nc);
+}
+
+pub Bool dns_match(List(Int) host, List(Int) pat) {
+    Int plen = pat.len() - 1;
+    Int p1 = 1;
+    Int star = pat[p1];
+    if (star == 42 && plen > 2) {
+        Int hlen = host.len() - 1;
+        Int suflen = plen - 2;
+        if (hlen < suflen + 2) { return false; }
+        Int dot = dns_find_dot(host, 1, hlen);
+        if (dot < 2) { return false; }
+        Int rem = hlen - dot;
+        if (rem != suflen) { return false; }
+        Int dnext = dot + 1;
+        return ci_eq_range(host, dnext, pat, 3, suflen);
+    }
+    return ci_eq_bytes(host, pat);
+}
+
+// Locate the [3] EXPLICIT extensions element after the SPKI; -1 if absent.
+pub Int cert_ext3_pos(List(Int) cert) {
+    Int sp = x509_spki_pos(cert);
+    Int e1 = x509_skip_tlv(cert, sp);
+    DerTlv t1 = der_next(cert, e1);
+    if (t1.cls == 2 && (t1.tag & 31) == 3) {
+        return e1;
+    }
+    Int e2 = x509_skip_tlv(cert, e1);
+    DerTlv t2 = der_next(cert, e2);
+    if (t2.cls == 2 && (t2.tag & 31) == 3) {
+        return e2;
+    }
+    Int e3 = x509_skip_tlv(cert, e2);
+    DerTlv t3 = der_next(cert, e3);
+    if (t3.cls == 2 && (t3.tag & 31) == 3) {
+        return e3;
+    }
+    return 0 - 1;
+}
+
+// Walk Extension entries; returns the position of the GeneralNames
+// SEQUENCE inside subjectAltName's OCTET STRING, or -1.
+pub Int san_gns_pos(List(Int) cert, Int pos, Int end) {
+    if (pos > end) { return 0 - 1; }
+    Int oidp = der_content_pos(cert, pos);
+    Str oidv = der_oid_str(cert, oidp);
+    if (oidv == "2.5.29.17") {
+        Int rest = x509_skip_tlv(cert, oidp);
+        DerTlv cand = der_next(cert, rest);
+        Bool isbool = cand.cls == 0 && (cand.tag & 31) == 1;
+        Int octp = if (isbool) { x509_skip_tlv(cert, rest) } else { rest };
+        return der_content_pos(cert, octp);
+    }
+    Int nxt = x509_skip_tlv(cert, pos);
+    return san_gns_pos(cert, nxt, end);
+}
+
+pub Bool san_scan(List(Int) cert, Int gns, List(Int) host, Int end) {
+    if (gns > end) { return false; }
+    DerTlv g = der_next(cert, gns);
+    if (g.cls == 2 && (g.tag & 31) == 2) {
+        Int nstart = gns + g.hdr_len;
+        Int nend = nstart + g.val_len - 1;
+        List(Int) nameb = der_slice_seeded(cert, nstart, nend);
+        Bool hit = dns_match(host, nameb);
+        if (hit) { return true; }
+    }
+    Int nxt = gns + g.hdr_len + g.val_len;
+    return san_scan(cert, nxt, host, end);
+}
+
+// True when the certificate carries a dNSName SAN matching `host`.
+pub Bool san_has_match(List(Int) cert, List(Int) host) {
+    Int e3 = cert_ext3_pos(cert);
+    if (e3 < 0) { return false; }
+    Int extseq = der_content_pos(cert, e3);
+    DerTlv sv = der_next(cert, extseq);
+    Int start = extseq + sv.hdr_len;
+    Int end = start + sv.val_len - 1;
+    Int gseq = san_gns_pos(cert, start, end);
+    if (gseq < 0) { return false; }
+    Int gns = der_content_pos(cert, gseq);
+    Int gend = san_gns_end(cert, gseq);
+    return san_scan(cert, gns, host, gend);
+}
+
+// ─── Signature verification glue ─────────────────────────────────────
+
+// RSA PKCS#1v1.5 SHA-256: tbs = raw signed bytes; keyb = issuer SPKI
+// BIT STRING content minus unused-bits byte; sigb = DER signature.
+pub Bool rsa_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
+    Int w = 128;
+    Int np = der_content_pos(keyb, 1);
+    Int ep = x509_skip_tlv(keyb, np);
+    List(Int) nc = der_content(keyb, np);
+    Int ncl = nc.len() - 1;
+    List(Int) nb2 = der_slice_seeded(nc, 2, ncl);
+    Int ev = der_int_value(keyb, ep);
+    List(Int) nl = bn_from_be(nb2, w);
+    List(Int) sl = bn_from_be(sigb, w);
+    List(Int) rec = bn_montexp(sl, ev, nl, w);
+    List(Int) digest = sha256_bytes(tbs);
+    List(Int) em = pkcs1_em_sha256(digest, 256);
+    List(Int) eml = bn_from_be(em, w);
+    Int c = bn_cmp(rec, eml, w);
+    if (c == 0) { return true; }
+    return false;
+}
+
+// ECDSA P-256: keyb = 04 || X(32) || Y(32); sigb = DER SEQ{r,s}.
+pub Bool ec_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
+    List(Int) digest = sha256_bytes(tbs);
+    Int(256) eint = ec_from_be(digest);
+    Int usbits = der_content_pos(sigb, 1);
+    Int seqc = usbits + 1;
+    Int rc = der_content_pos(sigb, seqc);
+    List(Int) rb = der_content(sigb, rc);
+    Int spos = x509_skip_tlv(sigb, rc);
+    List(Int) sbv = der_content(sigb, spos);
+    Int(256) rvv = ec_from_be(rb);
+    Int(256) svv = ec_from_be(sbv);
+    List(Int) xbv = der_slice_seeded(keyb, 3, 34);
+    List(Int) ybv = der_slice_seeded(keyb, 35, 66);
+    Int(256) qx = ec_from_be(xbv);
+    Int(256) qy = ec_from_be(ybv);
+    Int(256) vx = ecdsa_vx(eint, rvv, svv, qx, qy);
+    println("dbg vx=" + IntToString((Int) (vx & 65535)) + " rv=" + IntToString((Int) (rvv & 65535)));
+    if (vx == rvv) { return true; }
+    return false;
+}
+
+// ─── One-link chain verification ─────────────────────────────────────
+
+// SPKI BIT STRING content minus the unused-bits octet.
+pub List(Int) cert_pubkey_bits(List(Int) cert) {
+    Int sp = x509_spki_pos(cert);
+    Int algp = der_content_pos(cert, sp);
+    Int bitp = x509_skip_tlv(cert, algp);
+    Int ksc = der_content_pos(cert, bitp);
+    DerTlv kv = der_next(cert, bitp);
+    Int kend = ksc + kv.val_len - 1;
+    return der_slice_seeded(cert, ksc, kend);
+}
+pub Bool chain_verify(List(Int) child, List(Int) issuer, Int now) {
+    Int cip = x509_issuer_pos(child);
+    Int cis = der_content_pos(child, cip);
+    Int cie = x509_skip_tlv(child, cip);
+    Int cie1 = cie - 1;
+    List(Int) cname = der_slice_seeded(child, cis, cie1);
+    Int isp = x509_subject_pos(issuer);
+    Int iss = der_content_pos(issuer, isp);
+    Int ise = x509_skip_tlv(issuer, isp);
+    Int ise1 = ise - 1;
+    List(Int) sname = der_slice_seeded(issuer, iss, ise1);
+    if (!eq_bytes(cname, sname)) { return false; }
+    Bool cv = x509_valid_now(child, now);
+    Bool iv = x509_valid_now(issuer, now);
+    if (!cv) { return false; }
+    if (!iv) { return false; }
+    Str alg = x509_sigalg_oid(child);
+    List(Int) tbsv = cert_tbs(child);
+    List(Int) sigb = cert_elem(child, 2);
+    List(Int) keyb = cert_pubkey_bits(issuer);
+    Str rsaalg = "1.2.840.113549.1.1.11";
+    Str ecalg2 = "1.2.840.10045.4.3.2";
+    Bool okr = alg == rsaalg;
+    Bool oke = alg == ecalg2;
+    if (okr) {
+        return rsa_cert_verify(tbsv, keyb, sigb);
+    }
+    if (oke) {
+        return ec_cert_verify(tbsv, keyb, sigb);
+    }
+    return false;
+}
+
+pub Int san_gns_end(List(Int) cert, Int gseq) {
+    DerTlv gv = der_next(cert, gseq);
+    Int e = gseq + gv.hdr_len + gv.val_len - 1;
+    return e;
+}
+
+// ─── Known open item ─────────────────────────────────────────────────
+// ec_cert_verify currently returns false for valid inputs even though
+// every input (digest, r, s, qx, qy) matches an independent Python
+// implementation exactly. Suspected stage-1 codegen issue with deep
+// recursion + Int(256)/Int(512) arithmetic patterns; investigation is
+// the first task of the next session.

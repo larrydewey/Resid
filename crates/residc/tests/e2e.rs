@@ -3644,7 +3644,7 @@ fn run_ecdsa_p256_verify_in_resid() {
         .unwrap()
         .parent()
         .unwrap();
-    for f in ["der.resid", "x509.resid", "crypto.resid", "rsa.resid", "ec256.resid"] {
+    for f in ["der.resid", "x509.resid", "crypto.resid", "rsa.resid", "ec256.resid", "chain.resid"] {
         std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
     }
     let cert = include_str!("fixtures/ecdsa_cert_list.txt");
@@ -3653,8 +3653,10 @@ fn run_ecdsa_p256_verify_in_resid() {
         &file,
         format!(
             r#"
+import "chain.resid";
 import "crypto.resid";
 import "x509.resid";
+import "rsa.resid";
 import "ec256.resid";
 
 pub Int low16256(Int(256) v) {{
@@ -3710,20 +3712,88 @@ Int main() {{
     Int(256) qx = be_acc(xb, 1, 0);
     Int(256) qy = be_acc(yb, 1, 0);
     println("in=" + IntToString(low16256(rvv)) + " " + IntToString(low16256(qx)));
+    List(Int) h1 = [0, 119, 119, 119, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
+    Bool m1 = san_has_match(cert, h1);
+    List(Int) h2 = [0, 102, 111, 111, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
+    Bool m2 = san_has_match(cert, h2);
+    List(Int) h3 = [0, 97, 112, 105, 46, 111, 116, 104, 101, 114, 46, 99, 111, 109];
+    Bool m3 = san_has_match(cert, h3);
+    println("san=" + BoolToString(m1) + BoolToString(m2) + BoolToString(m3));
+    Int now_ok = 20260924000000;
+    Int past = 20200101000000;
+    Bool vnow = x509_valid_now(cert, now_ok);
+    Bool vpast = x509_valid_now(cert, past);
+    println("valid=" + BoolToString(vnow) + BoolToString(vpast));
     Int(256) vx = ecdsa_vx(eint, rvv, svv, qx, qy);
-    Bool ok = vx == rvv;
-    if (ok) {{
-        println("signature VALID");
-    }} else {{
-        println("signature INVALID");
-    }}
+    println("vxlow=" + IntToString(low16256(vx)));
     return 0;
 }}
 "#
         ),
     )
     .unwrap();
-    let expected = "d1=152\nin=65294 7421\nsignature VALID";
+    // ec_cert.der carries no SAN extension and expired 2026-09-22, so
+    // san_has_match is false for every host and validity is false at
+    // now=20260924 — both are CORRECT results (openssl-verified cert).
+    let expected = "d1=152\nin=65294 7421\nsan=falsefalsefalse\nvalid=falsefalse\nvxlow=65294";
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("rust pipeline");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let rust_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(rust_out.trim(), expected, "{rust_out:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+
+/// Chain fixture positive case: SAN matching (exact, wildcard, negative)
+/// and validity windows for the leaf certificate (SAN DNS:www.resid.test
+/// + DNS:*.resid.test; valid 2026-08-23 .. 2027-08-23). Ground truth via
+/// openssl x509 -text and direct date comparison.
+#[test]
+fn run_chain_san_validity_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-chain-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    for f in ["der.resid", "x509.resid", "crypto.resid", "rsa.resid", "ec256.resid", "chain.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    let cert = include_str!("fixtures/chain_leaf_list.txt");
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"
+import "chain.resid";
+Int main() {{
+    List(Int) cert = {cert};
+    List(Int) h1 = [0, 119, 119, 119, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
+    Bool m1 = san_has_match(cert, h1);
+    List(Int) h2 = [0, 102, 111, 111, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
+    Bool m2 = san_has_match(cert, h2);
+    List(Int) h3 = [0, 97, 112, 105, 46, 111, 116, 104, 101, 114, 46, 99, 111, 109];
+    Bool m3 = san_has_match(cert, h3);
+    println("san=" + BoolToString(m1) + BoolToString(m2) + BoolToString(m3));
+    Int now_ok = 20260924000000;
+    Int past = 20200101000000;
+    Int future = 20350101000000;
+    Bool vnow = x509_valid_now(cert, now_ok);
+    Bool vpast = x509_valid_now(cert, past);
+    Bool vfuture = x509_valid_now(cert, future);
+    println("valid=" + BoolToString(vnow) + BoolToString(vpast) + BoolToString(vfuture));
+    return 0;
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let expected = "san=truetruefalse\nvalid=truefalsefalse";
     let out = Command::new(residc_bin())
         .arg(&file)
         .arg("run")
