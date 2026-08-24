@@ -114,6 +114,25 @@
   against openssl ground truth. OPEN: full `chain_verify` EC link
   returns false despite verified-correct inputs — suspected stage-1
   codegen issue with deep recursion + wide-int arithmetic; next session.
+- **TLS transport boundary — DECISION RECORD (roadmap item 6)**: two
+  viable paths for HTTPS support:
+  (A) **Pure-Resid TLS 1.3**: requires X25519 key exchange, AES-128-GCM
+      or ChaCha20-Poly1305 AEAD, HKDF-SHA256, and certificate chain
+      verification — all in Resid. X25519 needs Curve25519 field
+      arithmetic (we have Ed25519 scalar math already; X25519 is the
+      Montgomery ladder variant). AES-GCM is substantial new work
+      (~300 lines + GHASH). Estimated: 2-3 sessions. Benefit: fully
+      self-hosted TLS; fits the project ethos.
+  (B) **Runtime capability `resid_tls_connect(host, port) -> handle`**:
+      TLS implemented in C in resid_rt.c (link against system OpenSSL
+      or bundled MbedTLS); protocol logic stays in Resid via a thin
+      capability-gated API (`tls.get/post`). Estimated: 1 session.
+      Benefit: immediate HTTP/2+TLS enablement; matches how providers
+      (filesystem, process) already delegate to the OS.
+  RECOMMENDATION: (B) first as a bridge capability, keep (A) on the
+  roadmap behind the existing `@capability` story so pure-Resid TLS can
+  replace it later without changing user code. Requires Larry's call
+  before implementation begins.
 - **Tests**: 618 pass (incl. DER decoder, x509 TBS walker, and the RSA
   PKCS#1v1.5 verify e2e on both pipelines; lexer 17, parser 91,
   resid-ir 46, resid-type 195, resid-codegen 137, resid-build 12,
