@@ -1,0 +1,125 @@
+// ─── lib/x25519.resid — X25519 (RFC 7748) in pure Resid ─────────────
+// Reuses ed25519.resid field arithmetic mod p = 2^255 - 19.
+// Scalar clamping happens on BYTES before decode (byte math stays
+// positive); u is decoded little-endian with bit 255 masked. The
+// Montgomery ladder is a single tail recursion carrying
+// x2/z2/x3/z3/swap; it returns ((x2 << 256) | z2) packed into
+// Int(512), masked on the low half to dodge sign extension.
+// Signed Int(256) caveat: clamped scalars are negative as signed —
+// never compare raw scalars, only shift/and them.
+
+import "ed25519.resid";
+
+pub Int(256) xa24() {
+    return 121665;
+}
+
+// select b when cond != 0, else a (cswap primitive)
+pub Int(256) xs_sel(Int(256) cond, Int(256) a, Int(256) b) {
+    Int(256) r = if (cond != 0) { b } else { a };
+    return r;
+}
+
+// ── little-endian byte decoders ──────────────────────────────────────
+
+// scalar: clamp byte0 &= 248, byte31 = (byte31 & 127) | 64
+pub Int(256) xk_acc(List(Int) b, Int(256) v, Int i) {
+    if (i < 1) { return v; }
+    Int raw = b[i];
+    Int c0 = if (i == 1) { raw & 248 } else { raw };
+    Int c = if (i == 32) { (c0 & 127) | 64 } else { c0 };
+    Int(256) cv = (Int(256)) c;
+    Int(256) v2 = v * 256 + cv;
+    Int ni = i - 1;
+    return xk_acc(b, v2, ni);
+}
+
+// u-coordinate: mask bit 255 (byte31 &= 127)
+pub Int(256) xu_acc(List(Int) b, Int(256) v, Int i) {
+    if (i < 1) { return v; }
+    Int raw = b[i];
+    Int c = if (i == 32) { raw & 127 } else { raw };
+    Int(256) cv = (Int(256)) c;
+    Int(256) v2 = v * 256 + cv;
+    Int ni = i - 1;
+    return xu_acc(b, v2, ni);
+}
+
+pub Int(256) x_decode_k(List(Int) b) {
+    return xk_acc(b, 0, 32);
+}
+
+pub Int(256) x_decode_u(List(Int) b) {
+    return xu_acc(b, 0, 32);
+}
+
+// ── Montgomery ladder ────────────────────────────────────────────────
+// One step of RFC 7748 §5, processing bit t of k downward.
+
+pub Int(512) x_mask_low() {
+    Int(512) o = 1;
+    Int(512) hs = 256;
+    return (o << hs) - o;
+}
+
+// Final cswap + pack: ((x << 256) | z) as unsigned halves in Int(512).
+pub Int(512) x_pack(Int(256) swap, Int(256) x2, Int(256) z2, Int(256) x3, Int(256) z3) {
+    Int(256) fx = xs_sel(swap, x2, x3);
+    Int(256) fz = xs_sel(swap, z2, z3);
+    Int(512) m = x_mask_low();
+    Int(512) xw = ((Int(512)) fx) & m;
+    Int(512) zw = ((Int(512)) fz) & m;
+    Int(512) sh = xw << 256;
+    return sh | zw;
+}
+
+pub Int(512) x_ladder(Int(256) x1, Int(256) k, Int t, Int(256) x2, Int(256) z2, Int(256) x3, Int(256) z3, Int(256) swap) {
+    if (t < 0) {
+        return x_pack(swap, x2, z2, x3, z3);
+    }
+    Int(256) sh = t;
+    Int(256) kt = (k >> sh) & 1;
+    Int(256) sw = swap ^ kt;
+
+    Int(256) nx2 = xs_sel(sw, x2, x3);
+    Int(256) nz2 = xs_sel(sw, z2, z3);
+    Int(256) nx3 = xs_sel(sw, x3, x2);
+    Int(256) nz3 = xs_sel(sw, z3, z2);
+
+    Int(256) a = fe_add(nx2, nz2);
+    Int(256) aa = fe_sq(a);
+    Int(256) b = fe_sub(nx2, nz2);
+    Int(256) bb = fe_sq(b);
+    Int(256) e = fe_sub(aa, bb);
+    Int(256) c = fe_add(nx3, nz3);
+    Int(256) d = fe_sub(nx3, nz3);
+    Int(256) da = fe_mul(d, a);
+    Int(256) cb = fe_mul(c, b);
+    Int(256) t2 = fe_add(da, cb);
+    Int(256) x3n = fe_sq(t2);
+    Int(256) t3 = fe_sub(da, cb);
+    Int(256) z3n = fe_mul(x1, fe_sq(t3));
+    Int(256) x2n = fe_mul(aa, bb);
+    Int(256) ae = fe_mul(xa24(), e);
+    Int(256) z2n = fe_mul(e, fe_add(aa, ae));
+
+    Int ni = t - 1;
+    return x_ladder(x1, k, ni, x2n, z2n, x3n, z3n, kt);
+}
+
+// ── public API: raw X25519 over 32-byte little-endian lists ─────────
+// Lists carry the [0]-seed convention (index 0 unused) like ed25519.
+
+pub List(Int) x25519(List(Int) k_bytes, List(Int) u_bytes) {
+    Int(256) k = x_decode_k(k_bytes);
+    Int(256) u = x_decode_u(u_bytes);
+    Int(512) pz = x_ladder(u, k, 254, 1, 0, u, 1, 0);
+    Int(512) m = x_mask_low();
+    Int(512) xw = pz >> 256;
+    Int(512) zw = pz & m;
+    Int(256) xx = (Int(256)) xw;
+    Int(256) zz = (Int(256)) zw;
+    Int(256) inv = fe_inv(zz);
+    Int(256) res = fe_mul(xx, inv);
+    return int_to_bytes(res);
+}

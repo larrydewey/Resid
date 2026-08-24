@@ -134,25 +134,26 @@
   replace it later without changing user code. Requires Larry's call
   before implementation begins.
 - **DECISION: Larry chose (A) pure-Resid TLS.** First milestone:
-  X25519 (RFC 7748). STATUS: IN PROGRESS, not yet working.
-  lib/x25519.resid was drafted (Montgomery ladder over ed25519.resid
-  field ops, byte-level clamping, LE decode) but removed from the tree
-  mid-implementation - the ladder recursion needs to be rewritten in
-  one clean pass. Design notes: clamp on BYTES before decode (byte
-  arithmetic stays positive); decode u little-endian, mask bit 255;
-  ladder per RFC 7748 (A=x2+z2, B=x2-z2, AA, BB, E=AA-BB, DA=D*A,
-  CB=C*B, x3=(DA+CB)^2, z3=x1*(DA-CB)^2, x2=AA*BB,
-  z2=E*(AA+a24*E), a24=121665); cswap via if-expressions on
-  swap^kt; recursion carries x2/z2/x3/z3/swap; finish with
-  x2*fe_inv(z2). Test against RFC 7748 section 5.2 vectors via
-  Python ground truth. Signed Int(256) caveat: clamped scalars have
-  bit254 set -> negative as signed; shifts/ands/mults are
-  representation-safe, comparisons are NOT (avoid them on raw
-  scalars).
-- **Tests**: 618 pass (incl. DER decoder, x509 TBS walker, and the RSA
-  PKCS#1v1.5 verify e2e on both pipelines; lexer 17, parser 91,
+  X25519 (RFC 7748) — **DONE**. `lib/x25519.resid` reuses
+  ed25519.resid field ops (`fe_add/sub/mul/sq/inv`, `int_to_bytes`);
+  scalar clamping on BYTES before LE decode (byte math stays
+  positive), u decoded with bit 255 masked; single tail-recursive
+  Montgomery ladder carrying x2/z2/x3/z3/swap, cswap via if-expression
+  selects, returning ((x<<256)|z) packed into Int(512) with low-half
+  masking to dodge sign extension. e2e `run_x25519_in_resid`: RFC
+  7748 §5.2 vectors 1+2 and §6.1 keygen + both-direction shared
+  secret all byte-exact (cross-checked against Python `cryptography`).
+  Gotchas: the `[0]`-seed list convention means real byte j lives at
+  index j+1 — clamp/mask conditions must target i==1/i==32, and test
+  hex helpers must seed exactly once (double seeding shifts every
+  byte). Note RFC 7748 §6.1's printed Alice public key has a known
+  last-byte typo (…4e6b); true key ends …4e6a (per erratum / system
+  libraries). Next TLS milestones: HKDF-SHA256, then AES-GCM or
+  ChaCha20-Poly1305 AEAD.
+- **Tests**: 620 pass (incl. DER decoder, x509 TBS walker, RSA/ECDSA
+  verify e2es, and the X25519 RFC-vector e2e; lexer 17, parser 91,
   resid-ir 46, resid-type 195, resid-codegen 137, resid-build 12,
-  resid-fmt 5, residc 66 incl. e2e).
+  resid-fmt 5, residc 67 incl. e2e).
 
 - **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
   clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
