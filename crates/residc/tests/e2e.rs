@@ -2705,6 +2705,90 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// X25519 (RFC 7748) in pure Resid — §5.2 vectors plus §6.1 DH keygen and
+/// shared-secret agreement through both directions.
+#[test]
+fn run_x25519_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-x25519-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
+    std::fs::copy(workspace.join("lib/ed25519.resid"), dir.join("ed25519.resid")).unwrap();
+    std::fs::copy(workspace.join("lib/x25519.resid"), dir.join("x25519.resid")).unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "x25519.resid";
+import "crypto.resid";
+Int hv(Str s, Int i) {
+    Int c = str_char_at(s, i);
+    if (c > 96) { return c - 87; }
+    return c - 48;
+}
+List(Int) hb_acc(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int ii = i + 1;
+    Int hi = hv(s, i);
+    Int lo = hv(s, ii);
+    Int h16 = hi * 16;
+    Int byt = h16 + lo;
+    List(Int) acc2 = acc.concat([byt]);
+    Int ni = i + 2;
+    return hb_acc(s, ni, acc2);
+}
+List(Int) hb(Str s) {
+    return hb_acc(s, 0, [0]);
+}
+Int main() {
+    // RFC 7748 section 5.2 vector 1
+    List(Int) k1 = hb("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4");
+    List(Int) u1 = hb("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c");
+    println(hex_encode(x25519(k1, u1)));
+    // RFC 7748 section 5.2 vector 2
+    List(Int) k2 = hb("4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d");
+    List(Int) u2 = hb("e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493");
+    println(hex_encode(x25519(k2, u2)));
+    // RFC 7748 section 6.1: public keys from private scalars
+    List(Int) ask = hb("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+    List(Int) bsk = hb("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb");
+    List(Int) base = hb("0900000000000000000000000000000000000000000000000000000000000000");
+    println(hex_encode(x25519(ask, base)));
+    println(hex_encode(x25519(bsk, base)));
+    // shared secret, both directions
+    List(Int) apub = hb("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a");
+    List(Int) bpub = hb("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f");
+    println(hex_encode(x25519(ask, bpub)));
+    println(hex_encode(x25519(bsk, apub)));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        stdout.trim(),
+        "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552\n\
+         95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957\n\
+         8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a\n\
+         de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f\n\
+         4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742\n\
+         4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+        "{stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Shift counts >= bit width yield 0 (machine shifts wrap the count mod width).
 #[test]
 fn run_shift_overflow_yields_zero() {
