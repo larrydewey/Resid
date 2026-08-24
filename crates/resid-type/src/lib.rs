@@ -853,7 +853,8 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("resid_tcp_send", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Str], SemType::Bool),
     ("resid_tcp_recv_all", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
     ("resid_tcp_close", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Bool),
-    ("resid_tcp_close", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Bool),
+    // UTC civil timestamp YYYYMMDDHHMMSS for x509 validity checks.
+    ("resid_utc_now_civil", &[], SemType::Numeric(NumericType::Int(IntWidth::B64))),
 ];
 
 /// Return the set of built-in (extern) function signatures.

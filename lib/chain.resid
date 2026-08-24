@@ -447,3 +447,27 @@ pub Bool rsa_pss_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sigb
     List(Int) hdig = sha256_bytes(mprime);
     return ct_equal(hdig, hval);
 }
+
+// ─── TLS client-side server-certificate check ────────────────────────
+// One-sided (self-signed / single-link) validation suitable for the
+// bootstrap TLS client: validity window at `now` plus a dNSName SAN
+// match against the hostname actually connected to.
+pub Bool tls_server_cert_ok(List(Int) cert, List(Int) host, Int now) {
+    Bool valid = x509_valid_now(cert, now);
+    if (!valid) { return false; }
+    return san_has_match(cert, host);
+}
+
+// String -> seeded byte list (ASCII codepoints).
+pub List(Int) str_bytes_acc(Str s, Int i, List(Int) acc) {
+    Int n = str_len(s);
+    if (i >= n) { return acc; }
+    Int c = str_char_at(s, i);
+    List(Int) acc2 = acc.concat([c]);
+    Int ni = i + 1;
+    return str_bytes_acc(s, ni, acc2);
+}
+
+pub List(Int) str_to_bytes(Str s) {
+    return str_bytes_acc(s, 0, [0]);
+}

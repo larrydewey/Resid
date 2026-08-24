@@ -3169,6 +3169,8 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_env_get", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_env_has", vec![ptr.into()], i8t.into());
         self.decl_rt("resid_args_count", vec![], i64t.into());
+        // UTC civil timestamp YYYYMMDDHHMMSS for x509 validity checks.
+        self.decl_rt("resid_utc_now_civil", vec![], i64t.into());
         self.decl_rt("resid_args_get", vec![i64t.into()], ptr.into());
         self.decl_rt("resid_process_run", vec![ptr.into()], i64t.into());
         self.decl_rt("resid_git_rev", vec![ptr.into()], ptr.into());

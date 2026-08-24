@@ -5037,6 +5037,9 @@ fn run_tls13_live_openssl_in_resid() {
     for f in ["crypto.resid","aesgcm.resid","ed25519.resid","x25519.resid","tls.resid","tlsmsg.resid","chain.resid","rsa.resid","ec256.resid","der.resid","x509.resid","chacha.resid"] {
         std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
     }
+    // pick a port
+    let base_port = 18443u16 + (std::process::id() % 500) as u16;
+    let mut port = base_port;
     // cert/key — exercise BOTH CertificateVerify algorithms
     for keyalg in ["ec", "rsa"] {
     let mut gen_args = vec!["req".to_string(),"-x509".to_string(),"-newkey".to_string()];
@@ -5047,6 +5050,7 @@ fn run_tls13_live_openssl_in_resid() {
     gen_args.push("-keyout".to_string()); gen_args.push(dir.join("k.pem").to_str().unwrap().to_string());
     gen_args.push("-out".to_string()); gen_args.push(dir.join("c.pem").to_str().unwrap().to_string());
     gen_args.push("-subj".to_string()); gen_args.push("/CN=localhost".to_string());
+    gen_args.push("-addext".to_string()); gen_args.push("subjectAltName=DNS:localhost".to_string());
     gen_args.push("-days".to_string()); gen_args.push("30".to_string());
     gen_args.push("-nodes".to_string());
     let gen_out = Command::new(&openssl).args(&gen_args)
@@ -5057,27 +5061,56 @@ fn run_tls13_live_openssl_in_resid() {
     let certhex: String = der.stdout.iter().map(|b| format!("{:02x}", b)).collect();
 
     // pick a port
-    let port = 18443u16 + (std::process::id() % 500) as u16;
     let mut server = Command::new(&openssl)
-        .args(["s_server","-tls1_3","-accept",&format!("127.0.0.1:{}",port),
+        .args(["s_server","-tls1_3","-accept",&format!("{}",port),
                "-cert",dir.join("c.pem").to_str().unwrap(),
                "-key",dir.join("k.pem").to_str().unwrap(),"-www"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("failed to spawn s_server");
-    std::thread::sleep(std::time::Duration::from_millis(700));
+    std::thread::sleep(std::time::Duration::from_millis(1200));
 
     let client = dir.join("tls_client.resid");
     let out = Command::new(residc_bin())
         .arg(&client).arg("run")
-        .arg("127.0.0.1").arg(port.to_string()).arg(&certhex).arg("")
+        .arg("localhost").arg(port.to_string()).arg(&certhex).arg("")
         .output();
     let _ = server.kill();
     let out = out.expect("client run failed");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(stdout.contains("REPLY:"), "no HTTP reply ({keyalg}): stdout={stdout:?} stderr={}", String::from_utf8_lossy(&out.stderr));
     }
+
+    // Negative: a cert with NO SAN must fail validation (CERT-FAIL).
+    std::fs::remove_file(dir.join("c.pem")).unwrap();
+    let gen_out = Command::new(&openssl).args(["req","-x509","-newkey","ec",
+        "-pkeyopt","ec_paramgen_curve:prime256v1","-keyout", dir.join("k.pem").to_str().unwrap(),
+        "-out", dir.join("c.pem").to_str().unwrap(),
+        "-subj","/CN=otherhost","-days","30","-nodes"])
+        .output().expect("failed to run openssl req");
+    assert!(gen_out.status.success(), "{}", String::from_utf8_lossy(&gen_out.stderr));
+    let der = Command::new(&openssl).args(["x509","-in", dir.join("c.pem").to_str().unwrap(),"-outform","der"])
+        .output().unwrap();
+    let certhex: String = der.stdout.iter().map(|b| format!("{:02x}", b)).collect();
+    let port = base_port + 1;
+    let mut server = Command::new(&openssl)
+        .args(["s_server","-tls1_3","-accept",&format!("{}",port),
+               "-cert",dir.join("c.pem").to_str().unwrap(),
+               "-key",dir.join("k.pem").to_str().unwrap(),"-www"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn s_server");
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let out = Command::new(residc_bin())
+        .arg(dir.join("tls_client.resid")).arg("run")
+        .arg("localhost").arg(port.to_string()).arg(&certhex).arg("")
+        .output()
+        .expect("client run failed");
+    let _ = server.kill();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(stdout.contains("CERT-FAIL"), "expected CERT-FAIL: {stdout:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <time.h>
 #include <string.h>
 #include <limits.h>
 #include <pthread.h>
@@ -3138,4 +3139,18 @@ void* resid_tcp_recv_bin(int64_t fd, int64_t n) {
     }
     free(buf);
     return out;
+}
+
+/* UTC wall clock as a civil timestamp YYYYMMDDHHMMSS (i64), for x509
+   validity checks. Uses gmtime_r so it is locale/timezone independent. */
+int64_t resid_utc_now_civil(void) {
+    time_t t = time(NULL);
+    struct tm tmv;
+    gmtime_r(&t, &tmv);
+    return (int64_t)(tmv.tm_year + 1900) * 10000000000LL
+         + (int64_t)(tmv.tm_mon + 1) * 100000000LL
+         + (int64_t)tmv.tm_mday * 1000000LL
+         + (int64_t)tmv.tm_hour * 10000LL
+         + (int64_t)tmv.tm_min * 100LL
+         + (int64_t)tmv.tm_sec;
 }
