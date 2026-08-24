@@ -285,6 +285,14 @@ Int main() {
     List(Int) finmsg = safe_msg(inner, pf);
     List(Int) ctbody = tm_find(inner, 11, 0);
     List(Int) certder = tm_cert_der(ctbody);
+    // certificate validation: validity window + SAN match on the host
+    Int now = resid_utc_now_civil();
+    List(Int) hostb = str_to_bytes(host);
+    Bool certok = tls_server_cert_ok(certder, hostb, now);
+    if (!certok) {
+        println("CERT-FAIL");
+        return 1;
+    }
     List(Int) tr2a = sconcat(tr1, ee);
     List(Int) tr2b = sconcat(tr2a, ctmsg);
     List(Int) trcv = sconcat(tr2b, cvmsg);

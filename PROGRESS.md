@@ -263,6 +263,24 @@
   AND RSA server certs. Also fixed en route: tm_verify_cv's ECDSA
   branch used a u24 length read for the u16 signature length (crash);
   629 tests pass.
+- **Chain validation wired into the live client**: new rt builtin
+  `resid_utc_now_civil` (C gmtime_r -> YYYYMMDDHHMMSS i64; declared in
+  resid-type BUILTIN_SIGS + codegen decl_rt) gives the wall clock for
+  x509 validity checks. `lib/chain.resid` adds `tls_server_cert_ok
+  (cert, host_bytes, now)` = x509_valid_now AND san_has_match, plus
+  str_to_bytes. `examples/tls_client.resid` now validates the server
+  cert after extracting it from the Certificate message (validity
+  window + dNSName SAN match against the connect hostname) and aborts
+  with CERT-FAIL on mismatch — verified live: SAN=localhost cert gets
+  HTTP 200 via `localhost`; a no-SAN CN=otherhost cert yields
+  CERT-FAIL. The live e2e now generates certs WITH subjectAltName
+  DNS:localhost, connects by hostname (s_server must bind dual-stack:
+  pass only the port to -accept, since getaddrinfo(localhost) tries
+  ::1 first), and adds a negative no-SAN case asserting CERT-FAIL.
+  Known residual: run_x509_in_resid intermittently corrupts println
+  output when the full suite runs in parallel (the long-documented
+  context-dependent codegen ghost) — passes reliably standalone and
+  on e2e-binary reruns.
 - **RESOLVED (prior session) — ECDSA-P256 verify reliability (wide-int
   unsigned compare fixed in lib)**: root cause was NOT a codegen
   miscompilation:
