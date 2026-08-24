@@ -2789,6 +2789,74 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// HKDF-SHA256 (RFC 5869) in pure Resid — test cases 1, 2 and 3
+/// (incl. empty salt/info and multi-block output) against published vectors.
+#[test]
+fn run_hkdf_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-hkdf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "crypto.resid";
+List(Int) rng_acc(Int lo, Int hi, List(Int) acc) {
+    if (lo > hi) { return acc; }
+    List(Int) acc2 = acc.concat([lo]);
+    Int ni = lo + 1;
+    return rng_acc(ni, hi, acc2);
+}
+List(Int) rep_acc(Int n, Int b, List(Int) acc) {
+    if (n == 0) { return acc; }
+    List(Int) acc2 = acc.concat([b]);
+    Int nn = n - 1;
+    return rep_acc(nn, b, acc2);
+}
+Int main() {
+    // RFC 5869 case 1
+    List(Int) salt = rng_acc(0x00, 0x0c, [0]);
+    List(Int) ikm1 = rep_acc(22, 0x0b, [0]);
+    List(Int) info = rng_acc(0xf0, 0xf9, [0]);
+    println(hex_encode(hkdf_extract(salt, ikm1)));
+    println(hex_encode(hkdf_expand(hkdf_extract(salt, ikm1), info, 42)));
+    // RFC 5869 case 3 (empty salt + empty info)
+    println(hex_encode(hkdf_extract([0], ikm1)));
+    println(hex_encode(hkdf_expand(hkdf_extract([0], ikm1), [0], 42)));
+    // RFC 5869 case 2 style long inputs
+    List(Int) ikm2 = rng_acc(0x00, 0x4f, [0]);
+    List(Int) salt2 = rng_acc(0x60, 0xaf, [0]);
+    List(Int) info2 = rng_acc(0xb0, 0xff, [0]);
+    println(hex_encode(hkdf_expand(hkdf_extract(salt2, ikm2), info2, 82)));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        stdout.trim(),
+        "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5\n\
+         3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865\n\
+         19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04\n\
+         8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8\n\
+         b11e398dc80327a1c8e7f78c596a49344f012eda2d4efad8a050cc4c19afa97c59045a99cac7827271cb41c65e590e09da3275600c2f09b8367793a9aca3db71cc30c58179ec3e87c14c01d5c1f3434f1d87",
+        "{stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Shift counts >= bit width yield 0 (machine shifts wrap the count mod width).
 #[test]
 fn run_shift_overflow_yields_zero() {
