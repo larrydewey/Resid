@@ -3167,6 +3167,115 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// TLS 1.3 message framing in pure Resid: ClientHello construction is
+/// byte-exact against the RFC 8448 trace, ServerHello parsing recovers
+/// random + x25519 key share, the handshake flight walks EE/CT/CV/Fin,
+/// Certificate DER extraction matches, and an ECDSA-P256
+/// CertificateVerify over the trace transcript verifies.
+#[test]
+fn run_tls13_framing_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-tlsmsg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().parent().unwrap();
+    for f in ["crypto.resid","aesgcm.resid","ed25519.resid","x25519.resid","tls.resid","tlsmsg.resid","chain.resid","rsa.resid","ec256.resid","der.resid","x509.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    let file = dir.join("main.resid");
+    std::fs::write(&file, r#"
+import "tlsmsg.resid";
+import "tls.resid";
+import "crypto.resid";
+import "aesgcm.resid";
+import "x25519.resid";
+import "chain.resid";
+
+List(Int) hb_acc(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Int dhi = c - 87;
+    Int dlo = c - 48;
+    Int hi = if (c > 96) { dhi } else { dlo };
+    Int j = i + 1;
+    Int c2 = str_char_at(s, j);
+    Int ehi = c2 - 87;
+    Int elo = c2 - 48;
+    Int lo = if (c2 > 96) { ehi } else { elo };
+    Int h16 = hi * 16;
+    Int byt = h16 + lo;
+    List(Int) acc2 = acc.concat([byt]);
+    Int ni = i + 2;
+    return hb_acc(s, ni, acc2);
+}
+
+List(Int) hb(Str s) {
+    return hb_acc(s, 0, [0]);
+}
+
+Str ck(Str name, Str got, Str want) {
+    if (got == want) { println(name + " OK"); } else { println(name + " BAD"); println(got); }
+    return got;
+}
+
+Int main() {
+    List(Int) rnd = hb("cb34ecb1e78163ba1c38c6dacb196a6dffa21a8d9912ec18a2ef6283024dece7");
+    List(Int) cshare = hb("99381de560e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c");
+    List(Int) mych = tlsmsg_client_hello(rnd, cshare);
+    ck("client-hello", hex_encode(mych), "010000c00303cb34ecb1e78163ba1c38c6dacb196a6dffa21a8d9912ec18a2ef6283024dece7000006130113031302010000910000000b0009000006736572766572ff01000100000a00140012001d0017001800190100010101020103010400230000003300260024001d002099381de560e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c002b0003020304000d0020001e040305030603020308040805080604010501060102010402050206020202002d00020101001c00024001");
+    List(Int) shmsg = hb("020000560303a6af06a4121860dc5e6e60249cd34c95930c8ac5cb1434dac155772ed3e2692800130100002e00330024001d0020c9828876112095fe66762bdbf7c672e156d6cc253b833df1dd69b1b04e751f0f002b00020304");
+    List(Int) shr = sh_random(shmsg);
+    ck("sh-random", hex_encode(shr), "a6af06a4121860dc5e6e60249cd34c95930c8ac5cb1434dac155772ed3e26928");
+    List(Int) shp = sh_pubkey(shmsg);
+    ck("sh-pubkey", hex_encode(shp), "c9828876112095fe66762bdbf7c672e156d6cc253b833df1dd69b1b04e751f0f");
+    List(Int) flight = hb("080000240022000a00140012001d00170018001901000101010201030104001c00024001000000000b0001b9000001b50001b0308201ac30820115a003020102020102300d06092a864886f70d01010b0500300e310c300a06035504031303727361301e170d3136303733303031323335395a170d3236303733303031323335395a300e310c300a0603550403130372736130819f300d06092a864886f70d010101050003818d0030818902818100b4bb498f8279303d980836399b36c6988c0c68de55e1bdb826d3901a2461eafd2de49a91d015abbc9a95137ace6c1af19eaa6af98c7ced43120998e187a80ee0ccb0524b1b018c3e0b63264d449a6d38e22a5fda430846748030530ef0461c8ca9d9efbfae8ea6d1d03e2bd193eff0ab9a8002c47428a6d35a8d88d79f7f1e3f0203010001a31a301830090603551d1304023000300b0603551d0f0404030205a0300d06092a864886f70d01010b05000381810085aad2a0e5b9276b908c65f73a7267170618a54c5f8a7b337d2df7a594365417f2eae8f8a58c8f8172f9319cf36b7fd6c55b80f21a03015156726096fd335e5e67f2dbf102702e608ccae6bec1fc63a42a99be5c3eb7107c3c54e9b9eb2bd5203b1c3b84e0a8b2f759409ba3eac9d91d402dcc0cc8f8961229ac9187b42b4de100000f000084080400805a747c5d88fa9bd2e55ab085a61015b7211f824cd484145ab3ff52f1fda8477b0b7abc90db78e2d33a5c141a078653fa6bef780c5ea248eeaaa785c4f394cab6d30bbe8d4859ee511f602957b15411ac027671459e46445c9ea58c181e818e95b8c3fb0bf3278409d3be152a3da5043e063dda65cdf5aea20d53dfacd42f74f3140000209b9b141d906337fbd2cbdce71df4deda4ab42c309572cb7fffee5454b78f0718");
+    println(IntToString(tm_type_at(flight, 1)));
+    Int pe = tm_find_pos(flight, 8, 0);
+    Int pc = tm_find_pos(flight, 11, 0);
+    Int pv = tm_find_pos(flight, 15, 0);
+    Int pf = tm_find_pos(flight, 20, 0);
+    println(IntToString(pe));
+    println(IntToString(pc));
+    println(IntToString(pv));
+    println(IntToString(pf));
+    // full messages for the transcript
+    List(Int) ee = tm_full_msg(flight, pe);
+    List(Int) ctmsg = tm_full_msg(flight, pc);
+    List(Int) cvmsg = tm_full_msg(flight, pv);
+    List(Int) finmsg = tm_full_msg(flight, pf);
+    List(Int) certder = tm_cert_der(tm_body(flight, pc));
+    ck("cert-der", hex_encode(certder), "308201ac30820115a003020102020102300d06092a864886f70d01010b0500300e310c300a06035504031303727361301e170d3136303733303031323335395a170d3236303733303031323335395a300e310c300a0603550403130372736130819f300d06092a864886f70d010101050003818d0030818902818100b4bb498f8279303d980836399b36c6988c0c68de55e1bdb826d3901a2461eafd2de49a91d015abbc9a95137ace6c1af19eaa6af98c7ced43120998e187a80ee0ccb0524b1b018c3e0b63264d449a6d38e22a5fda430846748030530ef0461c8ca9d9efbfae8ea6d1d03e2bd193eff0ab9a8002c47428a6d35a8d88d79f7f1e3f0203010001a31a301830090603551d1304023000300b0603551d0f0404030205a0300d06092a864886f70d01010b05000381810085aad2a0e5b9276b908c65f73a7267170618a54c5f8a7b337d2df7a594365417f2eae8f8a58c8f8172f9319cf36b7fd6c55b80f21a03015156726096fd335e5e67f2dbf102702e608ccae6bec1fc63a42a99be5c3eb7107c3c54e9b9eb2bd5203b1c3b84e0a8b2f759409ba3eac9d91d402dcc0cc8f8961229ac9187b42b4de1");
+    // transcript CH||SH||EE||CT||CV
+    List(Int) tr1 = sconcat(mych, shmsg);
+    List(Int) tr2 = sconcat(tr1, ee);
+    List(Int) tr3 = sconcat(tr2, ctmsg);
+    List(Int) trcv = sconcat(tr3, cvmsg);
+    List(Int) thcvraw = sha256_bytes(trcv);
+    List(Int) thcv = slice_seed(thcvraw, 1, 32, [0]);
+    ck("th-cv", hex_encode(thcv), "edb7725fa7a3473b031ec8ef65a2485493900138a2b91291407d7951a06110ed");
+    // ECDSA CertificateVerify with own EC cert over the same transcript
+    List(Int) ecdsa_cert = hb("3082017e30820125a0030201020214557826b8d723dbfb5853602a3bf8f1bbfecf9abc300a06082a8648ce3d04030230153113301106035504030c0a746c7331332d74657374301e170d3236303832343032343935335a170d3336303832313032343935335a30153113301106035504030c0a746c7331332d746573743059301306072a8648ce3d020106082a8648ce3d03010703420004f1fe77a29adb468d27b972e1dbb3af5cc8b6312abe7531aee14a19e85abcb8fb2eab53db22bb3aaae7f015b48ae561480ede9697fd43d904cfad6c91e6152f06a3533051301d0603551d0e04160414fb0e957b9228a734cf0a08f30925f2fddff915c5301f0603551d23041830168014fb0e957b9228a734cf0a08f30925f2fddff915c5300f0603551d130101ff040530030101ff300a06082a8648ce3d04030203470030440220571ae7eb3474a071b1dbd75d7854b4d07214123a8db8e3130cda8e073c1bea42022074cffaf39c2e701c5d80c8b166ba5cfc1f0955b068993aca450ddf94872d1bd6");
+    List(Int) ec_sig = hb("3045022100a864ad5a8c3a0883344cf8f8e3be548849c4f2d78491afed9b3db37d95247cb9022066973cb4e661586931202f5f19d71d97371a1610b824bb85ea66bbb946f7d210");
+    List(Int) content = tm_cv_content(thcv);
+    List(Int) keyb = cert_pubkey_bits(ecdsa_cert);
+    List(Int) keyb2 = slice_seed(keyb, 1, 66, [0]);
+    Bool okcv = tm_ecdsa_verify_sha256(content, keyb2, ec_sig);
+    if (okcv) { println("CV-ECDSA OK"); } else { println("CV-ECDSA BAD"); }
+    return 0;
+}
+"#).unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    for line in ["client-hello OK","sh-random OK","sh-pubkey OK","cert-der OK","th-cv OK","CV-ECDSA OK"] {
+        assert!(stdout.contains(line), "missing {line} in {stdout:?}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Shift counts >= bit width yield 0 (machine shifts wrap the count mod width).
 #[test]
 fn run_shift_overflow_yields_zero() {
