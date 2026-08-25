@@ -509,12 +509,74 @@ PRes parse_type(Str s, Int pos) {
     return PRes { pos: t.pos, ty: t.text, err: "" };
 }
 
+Bool str_has_prefix_cg(Str s, Str p) {
+    Int ns = str_len(s);
+    Int np = str_len(p);
+    if (np > ns) { return false; }
+    Str head = str_slice(s, 0, np);
+    if (head == p) { return true; }
+    return false;
+}
+
+pub Str num_norm_cg(Str ty) {
+    if (ty == "Int") { return "Int(64)"; }
+    if (ty == "UInt") { return "UInt(64)"; }
+    if (ty == "Float") { return "Float(64)"; }
+    return ty;
+}
+
 Str ll_ty(Str ty) {
     if (ty == "Int") { return "i64"; }
     if (ty == "Bool") { return "i1"; }
     if (ty == "Float") { return "double"; }
     if (ty == "Str") { return "ptr"; }
+    // width-parameterized numerics: Int(256) -> i256 etc.
+    Bool si = str_has_prefix_cg(ty, "Int(");
+    Bool ui = str_has_prefix_cg(ty, "UInt(");
+    Bool fi = str_has_prefix_cg(ty, "Float(");
+    if (si || ui || fi) {
+        Int skip = if (ui) { 5 } else { 4 };
+        Str pre = if (fi) { "f" } else { "i" };
+        Str digits = str_slice(ty, skip, str_len(ty) - 1);
+        return pre + digits;
+    }
     return "ptr";
+}
+
+// Signedness of an integer type string; true for signed families.
+pub Bool ll_is_signed(Str ty) {
+    return str_has_prefix_cg(ty, "Int(") || ty == "Int";
+}
+
+// Emit a conversion from value `v` (LLVM type `from`) to `to`.
+// sgn = signedness of the SOURCE integer family.
+GT cg_convert(GT v, Str from, Str to, Bool sgn, GT c) {
+    if (from == to) { return v; }
+    Bool fint = str_has_prefix_cg(from, "i");
+    Bool tint = str_has_prefix_cg(to, "i");
+    if (!fint || !tint) { return v; }
+    Int fw = str_parse_int(str_slice(from, 1, str_len(from)));
+    Int tw = str_parse_int(str_slice(to, 1, str_len(to)));
+    Int t1 = c.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    Str op = if (fw < tw) { if (sgn) { "sext" } else { "zext" } } else { "trunc" };
+    Str line = reg + " = " + op + " " + to + " " + v.val;
+    List(Str) l0 = c.lines;
+    List(Str) l2 = l0.concat([line]);
+    return GT { pos: v.pos, val: reg, ty: v.ty, cnt: v.cnt, err: "", glines: c.glines, lines: l2, tmp: t1, lbl: c.lbl };
+}
+
+// Known base type names usable in a cast `(Type) expr`.
+pub Bool is_known_type_cg(Str ty) {
+    if (ty == "Int") { return true; }
+    if (ty == "UInt") { return true; }
+    if (ty == "Float") { return true; }
+    if (ty == "Dec") { return true; }
+    if (ty == "Bool") { return true; }
+    if (ty == "Str") { return true; }
+    Bool w = str_has_prefix_cg(ty, "Int(") || str_has_prefix_cg(ty, "UInt(");
+    Bool wf = str_has_prefix_cg(ty, "Float(") || str_has_prefix_cg(ty, "Dec(");
+    return w || wf;
 }
 
 Int skip_decl(Str s, Int pos, Int depth) {
@@ -1301,6 +1363,25 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
 }
 
 GT cg_unary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
+    Tok t0 = lex_tok(s, pos);
+    if (t0.text == "(") {
+        // cast: "(" KnownType ")" unary — emit width conversion
+        Tok open1 = lex_tok(s, pos);
+        PRes pt = parse_type(s, open1.pos);
+        if (pt.err == "") {
+            Tok close = lex_tok(s, pt.pos);
+            if (close.text == ")") {
+                if (is_known_type_cg(pt.ty)) {
+                    GT inner = cg_unary(s, close.pos, env, fs, c);
+                    if (inner.err != "") { return inner; }
+                    Str fromty = ll_ty(inner.ty);
+                    GT conv = cg_convert(inner, fromty, ll_ty(pt.ty), ll_is_signed(inner.ty), c);
+                    GT out = GT { pos: conv.pos, val: conv.val, ty: pt.ty, cnt: 0, err: "", glines: conv.glines, lines: conv.lines, tmp: conv.tmp, lbl: conv.lbl };
+                    return out;
+                }
+            }
+        }
+    }
     GT b = cg_primary(s, pos, env, fs, c);
     if (b.err != "") { return b; }
     return cg_postfix(s, b, env, fs);
@@ -1712,10 +1793,12 @@ GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     if (ev.err != "") { return ev; }
     Tok cb2 = lex_tok(s, ev.pos);
     if (cb2.text != "}") { return gt_err("expected } in else arm", ev); }
-    if (ev.ty != tv.ty) { return gt_err("if arms disagree", ev); }
+    // Spec v3.2 §6.4: arms agree when their NORMALIZED types match
+    // (bare Int is an alias of Int(64)).
+    if (num_norm_cg(ev.ty) != num_norm_cg(tv.ty)) { return gt_err("if arms disagree", ev); }
     Int tp = ev.tmp + 1;
     Str pr = "%t" + IntToString(tp);
-    Str phi = pr + " = phi " + ll_ty(tv.ty) + " [ " + tv.val + ", %" + lt + " ], [ " + ev.val + ", %" + le + " ]";
+    Str phi = pr + " = phi " + ll_ty(num_norm_cg(tv.ty)) + " [ " + tv.val + ", %" + lt + " ], [ " + ev.val + ", %" + le + " ]";
     List(Str) d0 = ev.lines;
     List(Str) d05 = d0.concat(["br label %" + ld]);
     List(Str) d1 = d05.concat([ld + ":"]);

@@ -2062,9 +2062,17 @@ fn infer_call(
             }
             _ => false,
         };
+        // Spec v3.2 §6.4: same-sign integer arguments adopt the
+        // parameter width in either direction — narrowing is a CHECKED
+        // conversion (compile error for provable constants, runtime
+        // trap otherwise), never a silent truncation.
+        let int_checked_narrow = matches!((&at, want), (SemType::Numeric(a), SemType::Numeric(t)) if
+            !a.is_float() && !t.is_float() && !a.is_dec() && !t.is_dec()
+            && a.is_signed() == t.is_signed());
         if !param_matches(&at, want)
             && !literal_compatible(a, want)
             && !numeric_can_widen(&at, want)
+            && !int_checked_narrow
             && !conversion_ok
         {
             return Err(err(
