@@ -1,6 +1,6 @@
-# Resid Compiler v3.1 — Implementation Plan
+# Resid Compiler v3.2 — Implementation Plan
 
-**Specification**: `resid_specification.txt` v3.1 (Production Ready)
+**Specification**: `resid_specification.txt` v3.2 (Production Ready)
 **Target**: Rust stable + LLVM (inkwell)
 **Workspace**: Monorepo, Cargo workspace
 **Stdlib**: Rust first, later move to Resid

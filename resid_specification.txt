@@ -154,26 +154,66 @@ between any numeric types.
 Mixed-width integer operations are permitted when both
 operands are signed or both are unsigned.
 
-The result type is the smallest width W ∈ {8,16,32,64,128,256,512}
-such that every mathematically possible result of the
-operation on values of the two operand types fits in
-that width.
+Result widths follow an operator-specific rule:
 
-Examples (unsigned addition):
+  Addition and subtraction:
+    The result width is the widest operand width.
+    Overflow is NOT handled by static promotion. It is
+    governed by the checked-arithmetic rule of 6.5:
+    a compile-time error when operand values are
+    provable in-range violations, otherwise a residual
+    runtime trap. Implementations must not emit
+    widen-then-narrow sequences for these operators;
+    silently discarding a carry is forbidden.
 
-  UInt(8)  + UInt(8)  → UInt(16)   // 255+255 = 510
-  UInt(16) + UInt(8)  → UInt(32)   // 65535+255 = 65790
-  UInt(32) + UInt(32) → UInt(64)   // needs 33 bits
+  Multiplication:
+    The result width is the smallest width W from
+    {8,16,32,64,128,256,512} such that the largest
+    possible product of the two operand types fits.
 
-The same range rule applies to subtraction, multiplication,
-division, remainder, and shifts (shift amount is treated
-as a pure integer; the left operand determines the base
-width before the range rule is applied).
+  Division and remainder:
+    The result width is the widest operand width.
+
+  Shifts:
+    The result width is the left operand's width. The
+    shift amount is treated as a pure integer; counts
+    >= the bit width yield zero (never wrap mod width).
+
+  Bitwise and/or/xor:
+    The result width is the widest operand width.
+
+Examples:
+
+  Int(8)   + Int(8)   -> Int(8)    // checked; traps on overflow
+  UInt(16) + UInt(8)  -> UInt(16)  // widest operand
+  Int(256) * Int(256) -> Int(512)  // mul keeps headroom
+  Int(32)  << 4       -> Int(32)
+
+Headroom for a wide answer must be requested explicitly,
+by casting one operand up before the operation:
+
+  Int(16)(a) + b      // explicit: result Int(16)
 
 ISize / USize participate with their actual target width.
 
 Signed and unsigned operands may never be mixed in a
 single arithmetic operation; an explicit cast is required.
+
+
+6.1a  Integer Literal Typing
+--------------------------------------------------
+
+An integer literal adopts the expected numeric type from
+its context when one exists: the declared type of a
+binding, a parameter or return position, an explicit cast,
+or comparison against a concretely typed operand. A
+literal that does not fit the expected width is a
+compile-time error.
+
+Without an expected type, an integer literal has the
+smallest signed width from {64,128,256,512} that its
+magnitude fits; magnitudes within 64 bits yield plain
+Int(64).
 
 
 --------------------------------------------------
@@ -216,7 +256,19 @@ Narrowing conversions are never implicit.
 
 Widening assignments likewise require an explicit cast
 or conversion helper; interoperability applies only to
-operators, not to binding.
+operators, not to binding. The sole exception is integer
+literal adoption (6.1a).
+
+Argument expressions must match the parameter's declared
+type exactly, after literal adoption. Computed argument
+expressions are never implicitly widened or narrowed to
+fit a parameter.
+
+Implementations must never emit widen-then-narrow code
+around an assignment: if a computed value does not fit
+its target type, the program fails (compile-time when
+provable, checked trap otherwise), never truncates
+silently.
 
 
 --------------------------------------------------
@@ -1044,6 +1096,23 @@ Float(128). Float(256)/Float(512) are removed from
 the type system; arbitrary precision is carried by
 the Dec(N) decimal family (§6.6a).
 
+v3.2: integer operator result widths amended
+(§6.1). Addition/subtraction/division/remainder/
+shifts/bitwise yield the widest operand width;
+overflow is a checked error, never a static type
+promotion. Only multiplication keeps the range
+rule. Integer literal typing is specified in new
+§6.1a. Widen-then-narrow emission and silent
+truncation at bindings are forbidden (§6.4).
+Rationale: the previous range rule inflated types
+without preserving values — implementations widened
+arithmetic then truncated the carry at the binding,
+losing exactly the bit the promotion existed to
+protect. Under checked-by-default arithmetic,
+reducing the check away when operand values are
+provable (and trapping otherwise) preserves the
+safety guarantee while keeping types predictable.
+
 
 ==================================================
 42. NUMERIC INTEROPERABILITY SUMMARY
@@ -1052,17 +1121,25 @@ the Dec(N) decimal family (§6.6a).
   - Every width is a distinct first-class type.
   - No subtyping, no implicit narrowing or widening
     on assignment.
-  - Arithmetic and comparison on same-sign integers
-    use a range-based result width (smallest fitting
-    available width).
+  - Integer literal typing follows 6.1a: literals
+    adopt the expected type from context, else the
+    smallest fitting signed width >= 64.
+  - Addition/subtraction/division/remainder/shifts/
+    bitwise yield the widest operand width; overflow
+    is a checked error (compile-time when provable,
+    runtime trap otherwise). Multiplication keeps the
+    range rule (smallest fitting width).
+  - Argument expressions match parameter types
+    exactly after literal adoption.
+  - Widen-then-narrow code is forbidden; carries are
+    never silently discarded.
   - Signed/unsigned mix is a hard error.
   - Integer + float yields the float type.
   - Float + float yields the wider float.
   - Dec(N) op Dec(M) yields Dec(max(N, M)).
   - Mixing Dec with Int/UInt/Float is a hard error.
   - Dec has no NaN/Inf; invalid operations are errors.
-  - Checked arithmetic remains the default after
-    widening.
+  - Checked arithmetic remains the default.
   - Behaviors Eq/Ord/Hash are generic over the family.
 
 
