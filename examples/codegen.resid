@@ -544,8 +544,51 @@ Str ll_ty(Str ty) {
 }
 
 // Signedness of an integer type string; true for signed families.
-pub Bool ll_is_signed(Str ty) {
+Bool ll_is_signed(Str ty) {
     return str_has_prefix_cg(ty, "Int(") || ty == "Int";
+}
+
+// Bit width of an integer-family type string (spec v3.2 S6.1).
+Int ll_width_of(Str ty) {
+    Str l = ll_ty(num_norm_cg(ty));
+    if (str_has_prefix_cg(l, "i")) {
+        return str_parse_int(str_slice(l, 1, str_len(l)));
+    }
+    return 64;
+}
+
+// True for any signed/unsigned integer family type.
+Bool int_fam(Str ty) {
+    if (ty == "Int") { return true; }
+    if (ty == "UInt") { return true; }
+    Bool si = str_has_prefix_cg(ty, "Int(");
+    Bool ui = str_has_prefix_cg(ty, "UInt(");
+    return si || ui;
+}
+
+// Family head: "Int" or "UInt".
+Str fam_head(Str ty) {
+    if (ty == "UInt" || str_has_prefix_cg(ty, "UInt(")) { return "UInt"; }
+    return "Int";
+}
+
+// Smallest supported width >= needed (spec v3.2 S6.1 ladder).
+Int next_pow_width(Int needed) {
+    if (needed <= 8) { return 8; }
+    if (needed <= 16) { return 16; }
+    if (needed <= 32) { return 32; }
+    if (needed <= 64) { return 64; }
+    if (needed <= 128) { return 128; }
+    if (needed <= 256) { return 256; }
+    return 512;
+}
+
+// Convert an integer value to a target Resid type (no-op when equal).
+GT widen_val(GT v, Str target_ty) {
+    Str vt = num_norm_cg(v.ty);
+    Str tt = num_norm_cg(target_ty);
+    if (vt == tt) { return v; }
+    return cg_convert(v, ll_ty(vt), ll_ty(tt), ll_is_signed(vt), v);
 }
 
 // Emit a conversion from value `v` (LLVM type `from`) to `to`.
@@ -557,11 +600,16 @@ GT cg_convert(GT v, Str from, Str to, Bool sgn, GT c) {
     if (!fint || !tint) { return v; }
     Int fw = str_parse_int(str_slice(from, 1, str_len(from)));
     Int tw = str_parse_int(str_slice(to, 1, str_len(to)));
-    Int t1 = c.tmp + 1;
+    // Thread past BOTH counters: the value may carry temporaries the
+    // carrier does not know about.
+    Int tbase = if (v.tmp > c.tmp) { v.tmp } else { c.tmp };
+    Int t1 = tbase + 1;
     Str reg = "%t" + IntToString(t1);
     Str op = if (fw < tw) { if (sgn) { "sext" } else { "zext" } } else { "trunc" };
-    Str line = reg + " = " + op + " " + to + " " + v.val;
-    List(Str) l0 = c.lines;
+    Str line = reg + " = " + op + " " + from + " " + v.val + " to " + to;
+    // Base on the VALUE's stream: it holds every instruction the operand
+    // depends on (the carrier may have stale or empty lists).
+    List(Str) l0 = v.lines;
     List(Str) l2 = l0.concat([line]);
     return GT { pos: v.pos, val: reg, ty: v.ty, cnt: v.cnt, err: "", glines: c.glines, lines: l2, tmp: t1, lbl: c.lbl };
 }
@@ -879,13 +927,101 @@ Int op_prec(Str op) {
     return 0;
 }
 
-GT bin_icmp(Str cc, GT l, GT r) {
-    Int t1 = r.tmp + 1;
+// Two operands widened to their common integer width, per spec v3.2 S6.1.
+// ls/rs are the (possibly converted) operand registers; lines holds every
+// instruction in emission order; tmp is the threaded temp counter.
+// Widen both operands of an integer binop to their common width and emit
+// the op line `reg = <ins> <ity> <l>, <r>` (or icmp when is_cmp). Returns
+// the result threaded through r0's GT shape. Spec v3.2 S6.1.
+// Comparison helpers usable inside if-expression branches (the bootstrap
+// parser cannot handle a bare relational operator in that position).
+Bool blt(Int a, Int b) { return a < b; }
+
+Int imax(Int a, Int b) {
+    if (a > b) { return a; }
+    return b;
+}
+
+// Result width of an integer binop per spec v3.2 S6.1: widest operand,
+// range rule (a+b rounded up the ladder) for multiplication.
+Int ipick(Bool c, Int a, Int b) {
+    if (c) { return a; }
+    return b;
+}
+
+// Comparison ops emit as LLVM "icmp <cc>"; arith keeps its mnemonic.
+Str cmp_op(Str ins, Str cc, Bool is_cmp) {
+    if (is_cmp) { return "icmp " + cc; }
+    return ins;
+}
+
+Int mul_width(Str ins, Int a, Int b, Int wmax) {
+    if (ins == "mul") { return next_pow_width(a + b); }
+    return wmax;
+}
+
+// Struct-valued picks: the bootstrap parser rejects struct-typed
+// if-expressions, so route them through plain functions.
+GT pick_widen(Bool cond, GT v, Str target) {
+    if (cond) { return widen_val(v, target); }
+    return v;
+}
+
+GT pick_gt(Bool cond, GT a, GT b) {
+    if (cond) { return a; }
+    return b;
+}
+
+Str pick_str(Bool cond, Str a, Str b) {
+    if (cond) { return a; }
+    return b;
+}
+
+// Widen-to-common decision: family matches and the own width is narrower.
+Bool need_widen(Bool fams, Int a, Int b) {
+    if (fams) {
+        if (a < b) { return true; }
+    }
+    return false;
+}
+
+GT bin_wide_op(Str ins, Bool is_cmp, Str cc, GT l0, GT r0) {
+    Str lt = num_norm_cg(l0.ty);
+    Str rtn = num_norm_cg(r0.ty);
+    Int lw = ll_width_of(lt);
+    Int rw = ll_width_of(rtn);
+    Bool f1 = int_fam(lt);
+    Bool f2 = int_fam(rtn);
+    Bool fams = f1 && f2;
+    // Compute width: imax for most ops, a+b rounded up the ladder for mul
+    // (spec v3.2 S6.1 range rule). Both operands are widened to this width.
+    Int wmax = imax(lw, rw);
+    Int w = mul_width(ins, lw, rw, wmax);
+    Str head = fam_head(lt);
+    Int tw = ipick(ins == "mul", w, wmax);
+    Str tws = head + "(" + IntToString(tw) + ")";
+    // Widen the right operand first (its own counter), then the left with
+    // a carrier threaded past everything emitted so far so no temp
+    // register collides.
+    Bool wr = need_widen(fams, rw, tw);
+    GT r1 = pick_widen(wr, r0, tws);
+    Int tmax = imax(r1.tmp, l0.tmp);
+    GT lcarr = GT { pos: l0.pos, val: l0.val, ty: l0.ty, cnt: l0.cnt, err: "", glines: r1.glines, lines: r1.lines, tmp: tmax, lbl: l0.lbl };
+    Bool wwx = need_widen(fams, lw, tw);
+    GT lwiden = pick_widen(wwx, lcarr, tws);
+    Str arty2 = pick_str(is_cmp, "Bool", tws);
+    Str opty = pick_str(is_cmp, ll_ty(tws), ll_ty(arty2));
+    Int t1 = lwiden.tmp + 1;
     Str reg = "%t" + IntToString(t1);
-    Str line = reg + " = icmp " + cc + " i64 " + l.val + ", " + r.val;
-    List(Str) l20 = r.lines;
-    List(Str) l2 = l20.concat([line]);
-    return GT { pos: r.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: r.glines, lines: l2, tmp: t1, lbl: r.lbl };
+    Str core = cmp_op(ins, cc, is_cmp);
+    Str line = reg + " = " + core + " " + opty + " " + lwiden.val + ", " + r1.val;
+    List(Str) plns = lwiden.lines;
+    List(Str) l2 = plns.concat([line]);
+    return GT { pos: r0.pos, val: reg, ty: arty2, cnt: 0, err: "", glines: r0.glines, lines: l2, tmp: t1, lbl: r0.lbl };
+}
+
+GT bin_icmp(Str cc, GT l0, GT r0) {
+    return bin_wide_op("", true, cc, l0, r0);
 }
 
 GT bin_eq(Str op, GT l, GT r) {
@@ -904,13 +1040,8 @@ GT bin_eq(Str op, GT l, GT r) {
     return bin_icmp(cc2, l, r);
 }
 
-GT bin_arith(Str ins, GT l, GT r) {
-    Int t1 = r.tmp + 1;
-    Str reg = "%t" + IntToString(t1);
-    Str line = reg + " = " + ins + " i64 " + l.val + ", " + r.val;
-    List(Str) l20 = r.lines;
-    List(Str) l2 = l20.concat([line]);
-    return GT { pos: r.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: r.glines, lines: l2, tmp: t1, lbl: r.lbl };
+GT bin_arith(Str ins, GT l0, GT r0) {
+    return bin_wide_op(ins, false, "", l0, r0);
 }
 
 GT bin_logic(Str ins, GT l, GT r) {
@@ -1125,7 +1256,13 @@ GT cg_print(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
 GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "int") {
-        return GT { pos: t.pos, val: t.text, ty: "Int", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+        // Magnitude-derived holding width for literals beyond i64
+        // (mirrors the checker's lit_type inference, spec S6.1a).
+        Int dl = str_len_1(t.text);
+        Str w1 = if (dl > 18) { "Int(128)" } else { "Int" };
+        Str w2 = if (dl > 38) { "Int(256)" } else { w1 };
+        Str ity = if (dl > 77) { "Int(512)" } else { w2 };
+        return GT { pos: t.pos, val: t.text, ty: ity, cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
     }
     if (t.kind == "str") {
         Int t1 = c.tmp + 1;
@@ -1178,8 +1315,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 return cg_extern3(s, t2.pos, "str_slice", "Str", "Int", "Int", "Str", env, fs, c);
             }
             if (t.text == "IntToString") {
-                GT v = cg_expr(s, t2.pos, env, fs, c);
-                if (v.err != "") { return v; }
+                GT v0 = cg_expr(s, t2.pos, env, fs, c);
+                if (v0.err != "") { return v0; }
+                GT v = widen_val(v0, "Int(64)");
                 Tok cpit = lex_tok(s, v.pos);
                 if (cpit.text != ")") { return gt_err("expected ) in IntToString", v); }
                 Int ti1 = v.tmp + 1;
@@ -1352,12 +1490,13 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     if (t.text == "-") {
         GT e = cg_unary(s, t.pos, env, fs, c);
         if (e.err != "") { return e; }
+        Str ety = num_norm_cg(e.ty);
         Int t1 = e.tmp + 1;
         Str reg = "%t" + IntToString(t1);
-        Str line = reg + " = sub i64 0, " + e.val;
+        Str line = reg + " = sub " + ll_ty(ety) + " 0, " + e.val;
         List(Str) le0 = e.lines;
         List(Str) nl2 = le0.concat([line]);
-        return GT { pos: e.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: e.glines, lines: nl2, tmp: t1, lbl: e.lbl };
+        return GT { pos: e.pos, val: reg, ty: ety, cnt: 0, err: "", glines: e.glines, lines: nl2, tmp: t1, lbl: e.lbl };
     }
     return gt_err("unexpected token " + t.text, c);
 }
@@ -1444,16 +1583,18 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
         GT ix = cg_expr(s, t.pos, env, fs, base);
         if (ix.err != "") { return ix; }
         Tok close = lex_tok(s, ix.pos);
-        Int t1 = ix.tmp + 1;
-        Int t2 = ix.tmp + 2;
-        Int t3 = ix.tmp + 3;
+        // Indices feed byte-offset GEPs at i64; truncate wide values.
+        GT ixx = pick_widen(num_norm_cg(ix.ty) != "Int(64)", ix, "Int(64)");
+        Int t1 = ixx.tmp + 1;
+        Int t2 = ixx.tmp + 2;
+        Int t3 = ixx.tmp + 3;
         Str om = "%t" + IntToString(t1);
         Str oa = "%t" + IntToString(t2);
         Str gp = "%t" + IntToString(t3);
-        Int t4 = ix.tmp + 4;
+        Int t4 = ixx.tmp + 4;
         Str ld = "%t" + IntToString(t4);
-        List(Str) l0 = ix.lines;
-        List(Str) l1 = l0.concat([om + " = mul i64 8, " + ix.val]);
+        List(Str) l0 = ixx.lines;
+        List(Str) l1 = l0.concat([om + " = mul i64 8, " + ixx.val]);
         List(Str) l2 = l1.concat([oa + " = add i64 " + om + ", 8"]);
         List(Str) l3 = l2.concat([gp + " = getelementptr i8, ptr " + base.val + ", i64 " + oa]);
         List(Str) l4 = l3.concat([ld + " = load " + ll_ty(ety) + ", ptr " + gp]);
@@ -1754,7 +1895,7 @@ GT lst_elems(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Func
     if (t.text == "]") { return gt_err("unexpected ] in list literal", c); }
     GT v = cg_expr(s, pos, env, fs, c);
     if (v.err != "") { return v; }
-    if (v.ty != ety) { return gt_err("mixed list element types", v); }
+    if (num_norm_cg(v.ty) != num_norm_cg(ety)) { return gt_err("mixed list element types", v); }
     List(Str) vals2 = vals.concat([v.val]);
     Int n2 = n + 1;
     return lst_more(s, v.pos, ety, n2, vals2, env, fs, v);
@@ -1793,7 +1934,7 @@ GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     if (ev.err != "") { return ev; }
     Tok cb2 = lex_tok(s, ev.pos);
     if (cb2.text != "}") { return gt_err("expected } in else arm", ev); }
-    // Spec v3.2 §6.4: arms agree when their NORMALIZED types match
+    // Spec v3.2 S6.4: arms agree when their NORMALIZED types match
     // (bare Int is an alias of Int(64)).
     if (num_norm_cg(ev.ty) != num_norm_cg(tv.ty)) { return gt_err("if arms disagree", ev); }
     Int tp = ev.tmp + 1;
@@ -1847,14 +1988,15 @@ GT fst_tostr(GT v) {
     if (v.ty == "Str") {
         return GT { pos: v.pos, val: v.val, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: v.lines, tmp: v.tmp, lbl: v.lbl };
     }
-    if (v.ty == "Int") {
-        Int t1 = v.tmp + 1;
-        Int t2 = v.tmp + 2;
+    if (int_fam(v.ty)) {
+        GT v64 = widen_val(v, "Int(64)");
+        Int t1 = v64.tmp + 1;
+        Int t2 = v64.tmp + 2;
         Str buf = "%t" + IntToString(t1);
         Str rr = "%t" + IntToString(t2);
-        List(Str) x0 = v.lines;
+        List(Str) x0 = v64.lines;
         List(Str) x1 = x0.concat([buf + " = alloca [24 x i8]"]);
-        List(Str) x2 = x1.concat([rr + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v.val + ")"]);
+        List(Str) x2 = x1.concat([rr + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v64.val + ")"]);
         return GT { pos: v.pos, val: rr, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x2, tmp: t2, lbl: v.lbl };
     }
     return gt_err("unsupported interpolation type " + v.ty, v);
@@ -1908,16 +2050,16 @@ GT cg_fstring(Str s, Tok t, List(Str) env, Funcs fs, GT c) {
 
 // ─── Statement codegen ─────────────────────────────────────────
 
-type ST = { pos: Int, dead: Bool, err: Str, env: List(Str), glines: List(Str), hlines: List(Str), lines: List(Str), tmp: Int, lbl: Int };
+type ST = { pos: Int, dead: Bool, err: Str, env: List(Str), glines: List(Str), hlines: List(Str), lines: List(Str), tmp: Int, lbl: Int, rety: Str };
 
 ST st_err(Str msg, ST g) {
-    return ST { pos: g.pos, dead: g.dead, err: msg, env: g.env, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl };
+    return ST { pos: g.pos, dead: g.dead, err: msg, env: g.env, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl, rety: g.rety };
 }
 
 ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     Tok t = lex_tok(s, pos);
     if (t.text == "}") {
-        return ST { pos: t.pos, dead: g.dead, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl };
+        return ST { pos: t.pos, dead: g.dead, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl, rety: g.rety };
     }
     if (t.kind == "eof") {
         return st_err("unexpected eof", g);
@@ -1928,31 +2070,38 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
             if (in_main) {
                 List(Str) lr0 = g.lines;
                 List(Str) rl0 = lr0.concat(["ret i32 0"]);
-                return ST { pos: e.pos, dead: true, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: rl0, tmp: g.tmp, lbl: g.lbl };
+                return ST { pos: e.pos, dead: true, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: rl0, tmp: g.tmp, lbl: g.lbl, rety: g.rety };
             }
             return st_err("return without a value", g);
         }
         GT v = cg_expr(s, t.pos, env, fs, gt_of_st(g));
         if (v.err != "") { return st_err(v.err, g); }
+        // Adopt the declared return type for integer functions (spec v3.2).
+        Str rwant = num_norm_cg(g.rety);
+        Bool rw_int = int_fam(g.rety) && int_fam(v.ty);
+        Bool rw_diff = rwant != num_norm_cg(v.ty);
+        Bool need_conv = rw_int && rw_diff;
+        GT v1 = pick_widen(need_conv, v, rwant);
+        Str vty = pick_str(need_conv, rwant, v.ty);
         Tok semi = lex_tok(s, v.pos);
-        Int t1 = v.tmp + 1;
+        Int t1 = v1.tmp + 1;
         Str reg = "%t" + IntToString(t1);
-        Str tr = reg + " = trunc i64 " + v.val + " to i32";
+        Str tr = reg + " = trunc i64 " + v1.val + " to i32";
         Str rl = "ret i32 " + reg;
-        Str rn = "ret " + ll_ty(v.ty) + " " + v.val;
-        Bool im = in_main && v.ty == "Int";
-        List(Str) lv0 = v.lines;
+        Str rn = "ret " + ll_ty(vty) + " " + v1.val;
+        Bool im = in_main && num_norm_cg(vty) == "Int(64)" && fam_head(vty) == "Int";
+        List(Str) lv0 = v1.lines;
         List(Str) base = if (im) { lv0.concat([tr]) } else { lv0 };
         List(Str) lns = if (im) { base.concat([rl]) } else { base.concat([rn]) };
-        Int ut = if (im) { t1 } else { v.tmp };
-        return ST { pos: semi.pos, dead: true, err: "", env: env, glines: v.glines, hlines: g.hlines, lines: lns, tmp: ut, lbl: v.lbl };
+        Int ut = if (im) { t1 } else { v1.tmp };
+        return ST { pos: semi.pos, dead: true, err: "", env: env, glines: v.glines, hlines: g.hlines, lines: lns, tmp: ut, lbl: v.lbl, rety: g.rety };
     }
     if (t.text == "_") {
         Tok eq = lex_tok(s, t.pos);
         GT v = cg_expr(s, eq.pos, env, fs, gt_of_st(g));
         if (v.err != "") { return st_err(v.err, g); }
         Tok semi = lex_tok(s, v.pos);
-        return ST { pos: semi.pos, dead: g.dead, err: "", env: env, glines: v.glines, hlines: g.hlines, lines: v.lines, tmp: v.tmp, lbl: v.lbl };
+        return ST { pos: semi.pos, dead: g.dead, err: "", env: env, glines: v.glines, hlines: g.hlines, lines: v.lines, tmp: v.tmp, lbl: v.lbl, rety: g.rety };
     }
     if (t.text == "if") {
         return sg_if(s, t.pos, env, fs, in_main, g);
@@ -1987,7 +2136,7 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     GT v = cg_expr(s, pos, env, fs, gt_of_st(g));
     if (v.err != "") { return st_err(v.err, g); }
     Tok semi = lex_tok(s, v.pos);
-    return ST { pos: semi.pos, dead: g.dead, err: "", env: env, glines: v.glines, hlines: g.hlines, lines: v.lines, tmp: v.tmp, lbl: v.lbl };
+    return ST { pos: semi.pos, dead: g.dead, err: "", env: env, glines: v.glines, hlines: g.hlines, lines: v.lines, tmp: v.tmp, lbl: v.lbl, rety: g.rety };
 }
 
 ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
@@ -2003,14 +2152,25 @@ ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
         List(Str) env2 = env_add(env, ent);
         Tok bsemi = lex_tok(s, b2.pos);
         Int bpos = if (bsemi.text == ";") { bsemi.pos } else { b2.pos };
-        return ST { pos: bpos, dead: g.dead, err: "", env: env2, glines: g.glines, hlines: g.hlines, lines: z2, tmp: t1, lbl: g.lbl };
+        return ST { pos: bpos, dead: g.dead, err: "", env: env2, glines: g.glines, hlines: g.hlines, lines: z2, tmp: t1, lbl: g.lbl, rety: g.rety };
     }
     GT v = cg_expr(s, pos, env, fs, gt_of_st(g));
     if (v.err != "") { return st_err(v.err, g); }
     Tok semi = lex_tok(s, v.pos);
-    Str ent2 = name + ":" + v.val + ":" + v.ty;
+    // Adopt the declared width for integer bindings (spec v3.2 S6.1a).
+    Str dn = num_norm_cg(dty);
+    Bool a1 = int_fam(dty);
+    Bool a2 = int_fam(v.ty);
+    Bool adoptable = a1 && a2;
+    GT cv = pick_widen(adoptable, v, dn);
+    Str cverr = cv.err;
+    Bool ok = cverr == "";
+    Bool adopt = adoptable && ok;
+    GT v2 = cv;
+    Str recty = pick_str(adopt, dn, v.ty);
+    Str ent2 = name + ":" + v2.val + ":" + recty;
     List(Str) env3 = env_add(env, ent2);
-    return ST { pos: semi.pos, dead: g.dead, err: "", env: env3, glines: v.glines, hlines: g.hlines, lines: v.lines, tmp: v.tmp, lbl: v.lbl };
+    return ST { pos: semi.pos, dead: g.dead, err: "", env: env3, glines: v2.glines, hlines: g.hlines, lines: v2.lines, tmp: v2.tmp, lbl: v2.lbl, rety: g.rety };
 }
 
 ST sg_block(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
@@ -2018,7 +2178,7 @@ ST sg_block(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     if (open.text != "{") {
         return st_err("expected {", g);
     }
-    ST g1 = ST { pos: open.pos, dead: false, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl };
+    ST g1 = ST { pos: open.pos, dead: false, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl, rety: g.rety };
     ST r = sg_stmts(s, open.pos, env, fs, in_main, g1);
     if (r.err != "") { return r; }
     Tok close0 = lex_tok(s, r.pos);
@@ -2026,13 +2186,13 @@ ST sg_block(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     if (close.text != "}") {
         return st_err("expected }", g);
     }
-    return ST { pos: close.pos, dead: r.dead, err: "", env: env, glines: r.glines, hlines: r.hlines, lines: r.lines, tmp: r.tmp, lbl: r.lbl };
+    return ST { pos: close.pos, dead: r.dead, err: "", env: env, glines: r.glines, hlines: r.hlines, lines: r.lines, tmp: r.tmp, lbl: r.lbl, rety: r.rety };
 }
 
 ST sg_stmts(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     Tok t = lex_tok(s, pos);
     if (t.text == "}" || t.kind == "eof") {
-        return ST { pos: pos, dead: g.dead, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl };
+        return ST { pos: pos, dead: g.dead, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl, rety: g.rety };
     }
     ST r = sg_stmt(s, pos, env, fs, in_main, g);
     if (r.err != "") { return r; }
@@ -2065,7 +2225,7 @@ ST sg_if(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     List(Str) bc0 = cond.lines;
     List(Str) brl = bc0.concat([br1]);
     List(Str) brl2 = brl.concat([lt + ":"]);
-    ST gb = ST { pos: brace.pos, dead: false, err: "", env: env, glines: cond.glines, hlines: g.hlines, lines: brl2, tmp: cond.tmp, lbl: l3 };
+    ST gb = ST { pos: brace.pos, dead: false, err: "", env: env, glines: cond.glines, hlines: g.hlines, lines: brl2, tmp: cond.tmp, lbl: l3, rety: g.rety };
     ST gt = sg_block(s, close.pos, env, fs, in_main, gb);
     if (gt.err != "") { return gt; }
     List(Str) lns0 = gt.lines;
@@ -2075,14 +2235,14 @@ ST sg_if(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
         List(Str) j0 = lns;
         List(Str) j1 = j0.concat([ld + ":"]);
         Int lb1 = if (gt.lbl > l3) { gt.lbl } else { l3 };
-        return ST { pos: gt.pos, dead: false, err: "", env: env, glines: gt.glines, hlines: g.hlines, lines: j1, tmp: gt.tmp, lbl: lb1 };
+        return ST { pos: gt.pos, dead: false, err: "", env: env, glines: gt.glines, hlines: g.hlines, lines: j1, tmp: gt.tmp, lbl: lb1, rety: g.rety };
     }
     List(Str) lns2 = lns.concat([le + ":"]);
     Tok epeek = lex_tok(s, kw.pos);
     if (epeek.text == "if") {
         // else if → recurse: nested chain runs in the else context; its
         // join flows into ours.
-        ST ge2 = sg_if(s, epeek.pos, env, fs, in_main, ST { pos: epeek.pos, dead: false, err: "", env: env, glines: gt.glines, hlines: gt.hlines, lines: lns2, tmp: gt.tmp, lbl: l3 });
+        ST ge2 = sg_if(s, epeek.pos, env, fs, in_main, ST { pos: epeek.pos, dead: false, err: "", env: env, glines: gt.glines, hlines: gt.hlines, lines: lns2, tmp: gt.tmp, lbl: l3, rety: g.rety });
         if (ge2.err != "") { return ge2; }
         List(Str) lns3a = ge2.lines;
         List(Str) lns3 = if (!ge2.dead) { lns3a.concat(["br label %" + ld]) } else { lns3a };
@@ -2091,10 +2251,10 @@ ST sg_if(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
         List(Str) lns4 = if (both) { lns4a.concat(["unreachable"]) } else { lns4a };
         Int lb2 = if (gt.lbl > ge2.lbl) { gt.lbl } else { ge2.lbl };
         Int lb3 = if (lb2 > l3) { lb2 } else { l3 };
-        return ST { pos: ge2.pos, dead: both, err: "", env: env, glines: ge2.glines, hlines: gt.hlines, lines: lns4, tmp: ge2.tmp, lbl: lb3 };
+        return ST { pos: ge2.pos, dead: both, err: "", env: env, glines: ge2.glines, hlines: gt.hlines, lines: lns4, tmp: ge2.tmp, lbl: lb3, rety: g.rety };
     }
     Tok ebrace = lex_tok(s, kw.pos);
-    ST ge = sg_block(s, kw.pos, env, fs, in_main, ST { pos: ebrace.pos, dead: false, err: "", env: env, glines: gt.glines, hlines: gt.hlines, lines: lns2, tmp: gt.tmp, lbl: l3 });
+    ST ge = sg_block(s, kw.pos, env, fs, in_main, ST { pos: ebrace.pos, dead: false, err: "", env: env, glines: gt.glines, hlines: gt.hlines, lines: lns2, tmp: gt.tmp, lbl: l3, rety: g.rety });
     if (ge.err != "") { return ge; }
     List(Str) lns3a = ge.lines;
     List(Str) lns3 = if (!ge.dead) { lns3a.concat(["br label %" + ld]) } else { lns3a };
@@ -2103,7 +2263,7 @@ ST sg_if(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     List(Str) lns4 = if (both) { lns4a.concat(["unreachable"]) } else { lns4a };
     Int lb2 = if (gt.lbl > ge.lbl) { gt.lbl } else { ge.lbl };
     Int lb3 = if (lb2 > l3) { lb2 } else { l3 };
-    return ST { pos: ge.pos, dead: both, err: "", env: env, glines: ge.glines, hlines: ge.hlines, lines: lns4, tmp: ge.tmp, lbl: lb3 };
+    return ST { pos: ge.pos, dead: both, err: "", env: env, glines: ge.glines, hlines: ge.hlines, lines: lns4, tmp: ge.tmp, lbl: lb3, rety: "" };
 }
 
 Str capt_params(List(Str) env, Int i, Str acc) {
@@ -2197,7 +2357,7 @@ ST sg_for(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
         List(Str) f12 = f11.concat([gp2 + " = getelementptr i8, ptr " + a.val + ", i64 " + oa2]);
         List(Str) f13 = f12.concat([ev + " = load " + ll_ty(pty.ty) + ", ptr " + gp2]);
         Tok brace2 = lex_tok(s, lc.pos);
-        ST gb2 = ST { pos: brace2.pos, dead: false, err: "", env: envl, glines: a.glines, hlines: g.hlines, lines: f13, tmp: a.tmp, lbl: nlbl2 };
+        ST gb2 = ST { pos: brace2.pos, dead: false, err: "", env: envl, glines: a.glines, hlines: g.hlines, lines: f13, tmp: a.tmp, lbl: nlbl2, rety: g.rety };
         ST body2 = sg_block(s, lc.pos, envl, fs, in_main, gb2);
         if (body2.err != "") { return body2; }
         List(Str) b20 = body2.lines;
@@ -2205,7 +2365,7 @@ ST sg_for(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
         List(Str) b22 = if (!body2.dead) { b21.concat(["store i64 " + iv2 + ", ptr " + ixa]) } else { b21 };
         List(Str) b23 = if (!body2.dead) { b22.concat(["br label %" + LB2]) } else { b22 };
         List(Str) b24 = b23.concat([LD2 + ":"]);
-        return ST { pos: body2.pos, dead: g.dead, err: "", env: env, glines: body2.glines, hlines: body2.hlines, lines: b24, tmp: body2.tmp, lbl: nlbl2 };
+        return ST { pos: body2.pos, dead: g.dead, err: "", env: env, glines: body2.glines, hlines: body2.hlines, lines: b24, tmp: body2.tmp, lbl: nlbl2, rety: g.rety };
     }
     if (pty.ty != "Int") { return st_err("for-in var must be Int", g); }
     GT b = cg_expr(s, op.pos, env, fs, a);
@@ -2235,7 +2395,7 @@ ST sg_for(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     List(Str) p7 = p6.concat(["br i1 %c" + lbs + ", label %" + LBODY + ", label %" + LD]);
     List(Str) p8 = p7.concat([LBODY + ":"]);
     Tok brace1 = lex_tok(s, close.pos);
-    ST gb = ST { pos: brace1.pos, dead: false, err: "", env: env2, glines: b.glines, hlines: g.hlines, lines: p8, tmp: b.tmp, lbl: newlbl };
+    ST gb = ST { pos: brace1.pos, dead: false, err: "", env: env2, glines: b.glines, hlines: g.hlines, lines: p8, tmp: b.tmp, lbl: newlbl, rety: g.rety };
     ST body = sg_block(s, close.pos, env2, fs, in_main, gb);
     if (body.err != "") { return body; }
     List(Str) bo0 = body.lines;
@@ -2243,7 +2403,7 @@ ST sg_for(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     List(Str) t2 = if (!body.dead) { t1.concat(["store i64 " + k2 + ", ptr " + kaddr]) } else { t1 };
     List(Str) t3 = if (!body.dead) { t2.concat(["br label %" + LB]) } else { t2 };
     List(Str) t4 = t3.concat([LD + ":"]);
-    return ST { pos: body.pos, dead: g.dead, err: "", env: env, glines: body.glines, hlines: body.hlines, lines: t4, tmp: body.tmp, lbl: newlbl };
+    return ST { pos: body.pos, dead: g.dead, err: "", env: env, glines: body.glines, hlines: body.hlines, lines: t4, tmp: body.tmp, lbl: newlbl, rety: g.rety };
 }
 
 // ─── Program walk ──────────────────────────────────────────────
@@ -2323,7 +2483,7 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     List(Str) dl2 = dl.concat(["entry:"]);
     Int cp = close_paren(s, open.pos);
     Tok fbrace = lex_tok(s, cp);
-    ST gb = ST { pos: fbrace.pos, dead: false, err: "", env: env0, glines: g.glines, hlines: g.hlines, lines: dl2, tmp: g.tmp, lbl: g.lbl };
+    ST gb = ST { pos: fbrace.pos, dead: false, err: "", env: env0, glines: g.glines, hlines: g.hlines, lines: dl2, tmp: g.tmp, lbl: g.lbl, rety: rty.ty };
     ST body = sg_block(s, cp, env0, fs, is_main, gb);
     if (body.err != "") {
         return PG { pos: body.pos, err: body.err, glines: body.glines, hlines: body.hlines, lines: body.lines, tmp: body.tmp, lbl: body.lbl };

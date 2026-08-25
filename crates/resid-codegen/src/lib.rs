@@ -1834,12 +1834,14 @@ impl<'ctx> CodeGen<'ctx> {
                         // integer literals; only widen when needed so wide
                         // values aren't truncated to i64).
                         let bits = kind.required_bits();
-                        if bits <= 64 {
+                        // Mirror lit_type: signed headroom so wide
+                        // literals never wrap in the inferred width.
+                        if bits <= 63 {
                             64
                         } else {
                             [128u16, 256, 512]
                                 .into_iter()
-                                .find(|&w| w >= bits)
+                                .find(|&w| w >= bits + 1)
                                 .unwrap_or(512)
                         }
                     });

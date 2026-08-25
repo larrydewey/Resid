@@ -627,12 +627,15 @@ fn lit_type(lit: &Literal) -> SemType {
             // more than 64 bits infer Int(128)/Int(256)/Int(512) so untyped
             // binds of wide literals don't truncate.
             let bits = kind.required_bits();
-            let width = if bits <= 64 {
+            // Signed literals need one extra headroom bit so the inferred
+            // width actually holds the value (e.g. a 128-bit magnitude
+            // above i128::MAX must infer Int(256), not wrap in Int(128)).
+            let width = if bits <= 63 {
                 64
             } else {
                 [128u16, 256, 512]
                     .into_iter()
-                    .find(|&w| w >= bits)
+                    .find(|&w| w >= bits + 1)
                     .unwrap_or(512)
             };
             SemType::Numeric(NumericType::Int(IntWidth::from_bits(width).unwrap()))
