@@ -2394,8 +2394,9 @@ Int main() {
 /// Unicode simple case mapping covers the full generated pair tables
 /// (tools/gen_case_tables.py, exhaustive vs unicodedata): ASCII, Latin-1,
 /// Latin Extended-A/B incl. irregular pairs, Greek incl. accented variants
-/// and final sigma, Cyrillic; ß has no simple uppercase (SpecialCasing
-/// expansions are out of scope) and passes through.
+/// and final sigma, Cyrillic; SpecialCasing uppercase expansions
+/// (ß→SS, ligatures, ŉ→ʼN, Greek ypogegrammeni) and the conditional
+/// Final_Sigma rule (Σ→ς word-finally) are implemented.
 #[test]
 fn run_unicode_case_mapping() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-case-{}", std::process::id()));
@@ -2410,6 +2411,9 @@ Int main() {
     println(str_to_upper("ßÿ"));
     println(str_to_upper("ǆ ς ж ά"));
     println(str_to_lower("Ǆ Σ Ж Ά ẛ"));
+    println(str_to_upper("ﬁle ﬂag ﬃ ŉ ǰ"));
+    println(str_to_upper("ᾈ ᾨ"));
+    println(str_to_lower("ΑΣ ΟΔΟΣ ΣΑ"));
     return 0;
 }
 "#,
@@ -2427,11 +2431,25 @@ Int main() {
         "residc failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(
-        stdout.trim(),
-        "HÉLLO WÖRLD ПРИВЕТ ΑΒΓ\nhéllo wörld привет αβγ\nßŸ\nǄ Σ Ж Ά\nǆ σ ж ά ẛ",
-        "unexpected output: {stdout:?}"
-    );
+    let want: Vec<&str> = vec![
+        "H\u{c9}LLO W\u{d6}RLD \u{41f}\u{420}\u{418}\u{412}\u{415}\u{422} \u{391}\u{392}\u{393}",
+        "h\u{e9}llo w\u{f6}rld \u{43f}\u{440}\u{438}\u{432}\u{435}\u{442} \u{3b1}\u{3b2}\u{3b3}",
+        "SS\u{178}",
+        "\u{1c4} \u{3a3} \u{416} \u{386}",
+        "\u{1c6} \u{3c3} \u{436} \u{3ac} \u{1e9b}",
+        "FILE FLAG FFI \u{2bc}N J\u{30c}",
+        "\u{1f08}\u{399} \u{1fa8}\u{399}",
+        "\u{3b1}\u{3c3} \u{3bf}\u{3b4}\u{3bf}\u{3c3} \u{3c3}\u{3b1}",
+    ];
+    let got: Vec<&str> = stdout.trim().split('\n').collect();
+    for (i, (a, b)) in got.iter().zip(want.iter()).enumerate() {
+        if a != b {
+            let ha: Vec<String> = a.chars().map(|c| format!("{:x}", c as u32)).collect();
+            let hb: Vec<String> = b.chars().map(|c| format!("{:x}", c as u32)).collect();
+            panic!("line {i} differs\n got-hex {}\nwant-hex {}", ha.join(" "), hb.join(" "));
+        }
+    }
+    if got.len() != want.len() { panic!("len {} != {}", got.len(), want.len()); }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

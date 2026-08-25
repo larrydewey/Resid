@@ -6,3 +6,8 @@ edition = "2024"
 [dependencies]
 resid-ir = { path = "../../crates/resid-ir" }
 resid-type = { path = "../../crates/resid-type" }
+resid-notes = { path = "../resid-notes" }
+
+[[bin]]
+name = "resid-why"
+path = "src/main.rs"
