@@ -1,6 +1,6 @@
 ==================================================
 RESID LANGUAGE DESIGN DOCUMENT
-Version 3.1 — Production Ready
+Version 3.2 — Production Ready
 ==================================================
 
 
