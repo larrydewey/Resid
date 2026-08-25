@@ -399,6 +399,7 @@ name = "resid-why"
 version = "0.1.0"
 dependencies = [
  "resid-ir",
+ "resid-notes",
  "resid-type",
 ]
 

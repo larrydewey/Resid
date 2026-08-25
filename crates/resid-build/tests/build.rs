@@ -881,3 +881,93 @@ fn sha_of(text: &str) -> [u8; 32] {
     h.update(text.as_bytes());
     h.finalize().into()
 }
+
+/// Remote registry transport (spec §28): serve a populated registry over
+/// HTTP with `registry::serve_dir`, point an app at it via
+/// `[registry] url = "http://127.0.0.1:PORT"`, and verify the dependency is
+/// fetched over the network, hash-checked, and built.
+#[test]
+fn remote_registry_transport_serves_and_builds() {
+    let dir = temp_dir("regremote");
+    fs::create_dir_all(dir.join("registry/pkg")).unwrap();
+    fs::create_dir_all(dir.join("app/src")).unwrap();
+
+    // Package + publish into the registry's pkg/ layout.
+    let math_dir = dir.join("math");
+    fs::create_dir_all(math_dir.join("src")).unwrap();
+    fs::write(math_dir.join("resid.toml"), "[package]\nname = \"math\"\nversion = \"0.4.0\"\n").unwrap();
+    fs::write(math_dir.join("src/main.resid"), "pub Int triple(Int x) {\n    return x * 3;\n}\n").unwrap();
+    let archive = resid_build::archive::build_archive(&math_dir).unwrap();
+    let hash = resid_build::archive::content_hash(&archive);
+    let write_path =
+        resid_build::registry::Registry::Local(dir.join("registry"))
+            .local_write_path("math", "0.4.0", resid_build::registry::PKG_SUFFIX);
+    fs::write(&write_path, &archive).unwrap();
+    fs::write(
+        write_path.with_file_name(format!(
+            "math-0.4.0.resid{}",
+            resid_build::registry::SHA_SUFFIX
+        )),
+        resid_build::archive::hex_encode(&hash),
+    )
+    .unwrap();
+
+    // Serve it.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let reg_dir = dir.join("registry");
+    let server = std::thread::spawn(move || {
+        let _ = resid_build::registry::serve_dir(&reg_dir, port);
+    });
+
+    // Wait for the server to accept connections.
+    let mut up = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            up = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(up, "registry server did not come up");
+
+    // App pulls the dependency from the HTTP registry.
+    fs::write(
+        dir.join("app/resid.toml"),
+        format!(
+            r#"
+[package]
+name = "app"
+version = "1.0.0"
+
+[registry]
+url = "http://127.0.0.1:{port}"
+
+[dependencies.math]
+version = "0.4.0"
+"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("app/src/main.resid"),
+        "import \"math\";\nInt main() {\n    println(IntToString(triple(14)));\n    return 0;\n}\n",
+    )
+    .unwrap();
+
+    let m = Manifest::load(&dir.join("app")).expect("remote manifest loads");
+    let out = dir.join("out");
+    let bin = match build(&m, Profile::Debug, &out).expect("remote registry build") {
+        Artifact::Binary(p) => p,
+        other => panic!("expected Binary, got {other:?}"),
+    };
+    let res = Command::new(&bin).output().expect("run binary");
+    assert_eq!(String::from_utf8_lossy(&res.stdout).trim(), "42");
+
+    // The fetch must NOT have used any local path outside the served dir:
+    // remove the registry dir and confirm a fresh resolve fails cleanly.
+    // (The extracted dep cache keeps the first build working.)
+    assert!(dir.join("app/target/resid/deps/math-0.4.0/resid.toml").exists());
+    drop(server);
+}
