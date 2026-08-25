@@ -5327,3 +5327,74 @@ Int main() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// LIVE HTTP/2 over TLS 1.3: examples/h2_client.resid negotiates ALPN h2,
+/// completes the handshake, sends the connection preface + SETTINGS, then
+/// issues a GET on stream 1 and decodes the response HEADERS (HPACK incl.
+/// Huffman) and DATA. Server = tools/h2_server.py (python hyper-h2).
+/// Skipped when python3 or the h2 package is unavailable.
+#[test]
+fn run_h2_live_request_in_resid() {
+    let py = match which_python() {
+        Some(p) => p,
+        None => { eprintln!("skipping: python3 not found"); return; }
+    };
+    // h2 module check
+    let chk = Command::new(&py).args(["-c", "import h2"]).output().expect("python check");
+    if !chk.status.success() {
+        eprintln!("skipping: python h2 module unavailable");
+        return;
+    }
+    let openssl = match which_openssl() {
+        Some(p) => p,
+        None => { eprintln!("skipping: openssl not found"); return; }
+    };
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().parent().unwrap();
+    let dir = std::env::temp_dir().join(format!("residc-e2e-h2live-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in ["h2_client.resid"] {
+        std::fs::copy(workspace.join("examples").join(f), dir.join(f)).unwrap();
+    }
+    for f in ["tlsmsg.resid","tls.resid","crypto.resid","aesgcm.resid","x25519.resid",
+              "chain.resid","h2.resid","rsa.resid","der.resid","x509.resid",
+              "ec256.resid","ed25519.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    let gen_out = Command::new(&openssl).args(["req","-x509","-newkey","ec",
+        "-pkeyopt","ec_paramgen_curve:prime256v1","-keyout", dir.join("k.pem").to_str().unwrap(),
+        "-out", dir.join("c.pem").to_str().unwrap(),
+        "-subj","/CN=localhost","-days","30","-nodes",
+        "-addext","subjectAltName=DNS:localhost"])
+        .output().expect("openssl req");
+    assert!(gen_out.status.success(), "{}", String::from_utf8_lossy(&gen_out.stderr));
+    let der = Command::new(&openssl).args(["x509","-in", dir.join("c.pem").to_str().unwrap(),
+        "-outform","der"]).output().unwrap();
+    let certhex: String = der.stdout.iter().map(|b| format!("{:02x}", b)).collect();
+
+    let base = 19900u16 + (std::process::id() % 400) as u16;
+    let port = base;
+    let mut server = Command::new(&py)
+        .arg(workspace.join("tools/h2_server.py"))
+        .arg(port.to_string())
+        .arg(dir.join("c.pem").to_str().unwrap())
+        .arg(dir.join("k.pem").to_str().unwrap())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn h2 server");
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+
+    let client = dir.join("h2_client.resid");
+    let out = Command::new(residc_bin())
+        .arg(&client).arg("run")
+        .arg("localhost").arg(port.to_string()).arg(&certhex).arg("")
+        .output();
+    let _ = server.kill();
+    let out = out.expect("client run failed");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(stdout.contains("STATUS=200"), "no 200 ({stdout:?}) stderr={}",
+            String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("BODY=hello from resid h2"), "no body ({stdout:?})");
+    let _ = std::fs::remove_dir_all(&dir);
+}
