@@ -1,0 +1,467 @@
+import "tlsmsg.resid";
+import "tls.resid";
+import "crypto.resid";
+import "aesgcm.resid";
+import "x25519.resid";
+import "chain.resid";
+import "h2.resid";
+
+// HTTP/2-over-TLS 1.3 client: negotiates ALPN h2, completes the
+// handshake, sends the h2 connection preface + SETTINGS, then issues a
+// GET and prints ":status" plus the response body. args: host port
+// cert-hex [seedhex]
+
+List(Int) hb_acc(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Int dhi = c - 87;
+    Int dlo = c - 48;
+    Int hi = if (c > 96) { dhi } else { dlo };
+    Int j = i + 1;
+    Int c2 = str_char_at(s, j);
+    Int ehi = c2 - 87;
+    Int elo = c2 - 48;
+    Int lo = if (c2 > 96) { ehi } else { elo };
+    Int h16 = hi * 16;
+    Int byt = h16 + lo;
+    List(Int) acc2 = acc.concat([byt]);
+    Int ni = i + 2;
+    return hb_acc(s, ni, acc2);
+}
+
+List(Int) hb(Str s) {
+    return hb_acc(s, 0, [0]);
+}
+
+List(Int) repz(List(Int) acc, Int n) {
+    if (n == 0) { return acc; }
+    List(Int) acc2 = acc.concat([0]);
+    Int nn = n - 1;
+    return repz(acc2, nn);
+}
+
+List(Int) recv_exact(Int fd, Int n) {
+    List(Int) out = repz([0], n);
+    return recv_loop(fd, out, n, 0);
+}
+
+List(Int) recv_loop(Int fd, List(Int) out, Int n, Int got) {
+    if (got >= n) {
+        return out;
+    }
+    Int want = n - got;
+    List(Int) chunk = resid_tcp_recv_bin(fd, want);
+    Int gotn = chunk.len() - 1;
+    if (gotn <= 0) {
+        println("RECV-EOF");
+        List(Int) eof = [0];
+        return eof;
+    }
+    Bool has = got > 0;
+    List(Int) head = if (has) { slice_seed(out, 1, got, [0]) } else { [0] };
+    List(Int) mid = slice_seed(chunk, 1, gotn, [0]);
+    List(Int) both = sconcat(head, mid);
+    Int rem1 = n - got;
+    Int rem = rem1 - gotn;
+    List(Int) rest = repz([0], rem);
+    List(Int) joined = sconcat(both, rest);
+    Int ngot = got + gotn;
+    return recv_loop(fd, joined, n, ngot);
+}
+
+// append src[from..] (seedless tail) onto dst
+List(Int) app_list(List(Int) dst, List(Int) src, Int from) {
+    Int rem = src.len() - from;
+    if (rem < 1) { return dst; }
+    List(Int) dst2 = dst.concat([src[from]]);
+    Int nf = from + 1;
+    return app_list(dst2, src, nf);
+}
+
+List(Int) mk_record(Int rtype, List(Int) body) {
+    Int blen = body.len() - 1;
+    Int b1 = blen / 65536;
+    Int br = blen - b1 * 65536;
+    Int b2 = br / 256;
+    Int b3 = br - b2 * 256;
+    // legacy_record_version 0x0301 required by strict peers
+    List(Int) hdr = [0];
+    List(Int) hdr2 = hdr.concat([rtype]);
+    List(Int) hdr3 = hdr2.concat([3]);
+    List(Int) hdr4 = hdr3.concat([1]);
+    List(Int) hdr5 = hdr4.concat([b2]);
+    List(Int) hdr6 = hdr5.concat([b3]);
+    return app_list(hdr6, body, 1);
+}
+
+List(Int) seal_record(Int seq, List(Int) key, List(Int) iv, List(Int) payload, Int ctype, Int outer) {
+    List(Int) pt = payload.concat([ctype]);
+    Int plen = pt.len() - 1;
+    Int clen = plen + 16;
+    List(Int) aad = tls_record_header2(outer, clen);
+    List(Int) nonce = tls_record_nonce(iv, seq);
+    return aes128_gcm_seal(key, nonce, pt, aad);
+}
+
+pub Int tls_max_record_len() {
+    return 16640;
+}
+
+List(Int) open_record(List(Int) key, List(Int) iv, Int seq, List(Int) header, List(Int) body) {
+    Int blen = body.len() - 1;
+    Int clen = blen - 16;
+    if (clen < 1) {
+        println("RECORD-SHORT");
+        return repz([0], 1);
+    }
+    List(Int) rk = aes128_key_expand(key);
+    List(Int) nonce = tls_record_nonce(iv, seq);
+    List(Int) j0 = tls_j0(nonce);
+    List(Int) ek = aes128_encrypt_block(rk, j0);
+    List(Int) ct = slice_seed(body, 1, clen, [0]);
+    List(Int) cb = inc32(j0);
+    List(Int) ptfull = ctr_xor(rk, cb, ct, 0, [0]);
+    List(Int) mi = gcm_mac_data(header, ct);
+    List(Int) hblk = aes128_encrypt_block(rk, repz([0], 16));
+    Int milen = mi.len();
+    Int micount = milen - 1;
+    List(Int) y0 = zeros_seed([0], 16);
+    List(Int) sv = ghash_blocks(hblk, y0, mi, 1, micount);
+    List(Int) tagraw = xor16(sv, ek);
+    List(Int) expect = slice_seed(tagraw, 1, 16, [0]);
+    Int toff = blen - 15;
+    List(Int) tag = slice_seed(body, toff, 16, [0]);
+    Bool ok = ct_equal(expect, tag);
+    if (!ok) {
+        println("RECORD-TAG-BAD");
+        return repz([0], 1);
+    }
+    return slice_seed(ptfull, 1, clen, [0]);
+}
+
+List(Int) h5_of(List(Int) hdr, Bool ok) {
+    if (!ok) { return [0]; }
+    return slice_seed(hdr, 1, 5, [0]);
+}
+
+// App-data outer content type; sentinel-safe under eager evaluation.
+Bool hdr_is_app(List(Int) hdr, Bool framed) {
+    if (!framed) { return false; }
+    Int t = hdr[1];
+    return t == 23;
+}
+
+// Read server handshake-flight records. Small records (TLS1.3 compat
+// CCS — some servers send TWO) are consumed and skipped; decryption is
+// attempted only for app-data outer records. Stops when the server
+// Finished message is in `acc`.
+List(Int) read_flight(Int fd, List(Int) acc, List(Int) key, List(Int) iv, Int seq, Int tries) {
+    if (tries <= 0) {
+        return acc;
+    }
+    List(Int) hdr0 = recv_exact(fd, 5);
+    Int hlen = hdr0.len() - 1;
+    Bool hok = hlen >= 5;
+    // Pad short reads so eager indexing below stays in bounds.
+    List(Int) hdr = pick_list(hok, hdr0, repz([0], 5));
+    Int blen = hdr[4] * 256 + hdr[5];
+    Bool framed = hok && blen >= 17 && blen <= tls_max_record_len();
+    List(Int) body = recv_exact(fd, blen);
+    Bool shortread = body.len() - 1 < blen;
+    // Guards keep eager evaluation safe on the EOF sentinel list.
+    Bool dec = hdr_is_app(hdr, framed && !shortread);
+    List(Int) h5 = h5_of(hdr, dec);
+    List(Int) acc3 = flight_append(dec, key, iv, seq, h5, body, acc);
+    Int alen = acc3.len();
+    Bool have = alen > 16;
+    Int pf0 = tm_find_fin(acc3, 0);
+    Int pf = if (have) { pf0 } else { 0 };
+    if (pf > 0) {
+        return acc3;
+    }
+    Int seq2 = pick_int(hdr[1] == 23, seq + 1, seq);
+    Int t2 = tries - 1;
+    return read_flight(fd, acc3, key, iv, seq2, t2);
+}
+
+List(Int) pick_list(Bool c, List(Int) a, List(Int) b) {
+    if (c) { return a; }
+    return b;
+}
+
+// Decrypt+append when the record is app-data; otherwise pass through.
+List(Int) flight_append(Bool isapp, List(Int) key, List(Int) iv, Int seq, List(Int) h5, List(Int) body, List(Int) acc) {
+    if (!isapp) { return acc; }
+    List(Int) plainfull = open_record(key, iv, seq, h5, body);
+    Int plen = plainfull.len() - 1;
+    if (plen < 2) { return acc; }
+    // plen counts data; the final byte is the inner content type.
+    Int lastidx = plen - 1;
+    List(Int) plain = slice_seed(plainfull, 1, lastidx, [0]);
+    return sconcat(acc, plain);
+}
+
+// read one TLS record; returns decrypted inner plaintext (content-type
+// stripped) appended after `acc`'s seed; marks done via H2Rec marker.
+type H2Rec = { data: List(Int), seq: Int(64), alert: Bool, eof: Bool, ctype: Int(64) };
+
+H2Rec read_one_record(Int fd, List(Int) key, List(Int) iv, Int seq) {
+    List(Int) hdr = recv_exact(fd, 5);
+    Int hlen = hdr.len() - 1;
+    if (hlen < 5) {
+        return H2Rec { data: [0], seq: seq, alert: false, eof: true, ctype: 0 };
+    }
+    Int blen = hdr[4] * 256 + hdr[5];
+    if (blen < 17 || blen > tls_max_record_len()) {
+        return H2Rec { data: [0], seq: seq, alert: false, eof: true, ctype: 0 };
+    }
+    List(Int) body = recv_exact(fd, blen);
+    if (body.len() - 1 < blen) {
+        return H2Rec { data: [0], seq: seq, alert: false, eof: true, ctype: 0 };
+    }
+    List(Int) h5 = slice_seed(hdr, 1, 5, [0]);
+    List(Int) plainfull = open_record(key, iv, seq, h5, body);
+    Int plen = plainfull.len() - 1;
+    if (plen < 1) {
+        return H2Rec { data: [0], seq: seq, alert: false, eof: true, ctype: 0 };
+    }
+    Int lastidx = plainfull.len() - 1;
+    Int ctl = plainfull[lastidx];
+    if (ctl == 21) {
+        return H2Rec { data: [0], seq: seq, alert: true, eof: false, ctype: 21 };
+    }
+    Int lastp = lastidx - 1;
+    List(Int) plain = slice_seed(plainfull, 1, lastp, [0]);
+    List(Int) out = app_list([0], plain, 1);
+    Int seq2 = seq + 1;
+    return H2Rec { data: out, seq: seq2, alert: false, eof: false, ctype: ctl };
+}
+
+Bool verify_cv(List(Int) inner2, List(Int) tr2b, Str cert_hex, List(Int) thct2) {
+    List(Int) scert = hb(cert_hex);
+    Int cvpos = tm_find_pos(inner2, 15, 0);
+    List(Int) cvmsg = safe_msg(inner2, cvpos);
+    Int cstart = 5;
+    Int ccount = cvmsg.len() - 5;
+    List(Int) cvbody = slice_seed(cvmsg, cstart, ccount, [0]);
+    return tm_verify_cv(cvbody, scert, thct2);
+}
+
+List(Int) safe_msg(List(Int) payload, Int pos) {
+    if (pos == 0) {
+        return [0];
+    }
+    Int room = payload.len() - 1;
+    Int off1 = pos + 1;
+    Int mlen = tm_u24_at(payload, off1);
+    Int p4 = pos + 4;
+    Int end = p4 + mlen;
+    if (end > room + 1) {
+        return [0];
+    }
+    return tm_full_msg(payload, pos);
+}
+
+List(Int) mk_seed(Str s) {
+    if (str_len(s) > 0) {
+        return hb(s);
+    }
+    return random_bytes(32);
+}
+
+Int pick_int(Bool c, Int a, Int b) {
+    if (c) { return a; }
+    return b;
+}
+
+
+// Scan result over received app-data records.
+type H2Scan = { found: Bool, scount: Int(64), eof: Bool };
+
+// Walk the frames in `buf` looking for a non-ack SETTINGS payload.
+// Scan for an initial SETTINGS frame: len24=0..4080, type 4, flags 0,
+// stream 0. Returns its frame start or -1.
+Int h2_walk_frames(List(Int) buf, Int p2, Int end) {
+    if (p2 + 9 > end) { return 0 - 1; }
+    Int lhi = buf[p2];
+    Int lmid = buf[p2 + 1];
+    Int t = buf[p2 + 3];
+    Int f = buf[p2 + 4];
+    Bool cand = lhi == 0 && t == 4 && f == 0 && lmid < 16;
+    if (cand) {
+        return p2;
+    }
+    return h2_walk_frames(buf, p2 + 1, end);
+}
+
+Int h2_count_at(List(Int) buf, Int p2) {
+    Int lmid = buf[p2 + 1];
+    Int llo = buf[p2 + 2];
+    Int plen = lmid * 256 + llo;
+    Int npairs = plen / 6;
+    return npairs;
+}
+
+// Recursive record reader: accumulate plaintext until a SETTINGS
+// frame appears or tries run out.
+H2Scan h2_scan(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) buf, Int tries) {
+    if (tries <= 0) {
+        return H2Scan { found: false, scount: 0, eof: true };
+    }
+    H2Rec rec1 = read_one_record(fd, key, iv, seq);
+    if (rec1.alert) {
+        return H2Scan { found: false, scount: 0, eof: true };
+    }
+    if (rec1.eof) {
+        return H2Scan { found: false, scount: 0, eof: true };
+    }
+    // Coalesced records can mix NewSessionTicket bytes with h2
+    // frames; the SETTINGS pattern search below tolerates that.
+    List(Int) buf2 = h2_cat(buf, rec1.data);
+    Int blen2 = buf2.len() - 1;
+    Int at = h2_walk_frames(buf2, 1, blen2);
+    if (at > 0) {
+        Int cnt = h2_count_at(buf2, at);
+        return H2Scan { found: true, scount: cnt, eof: false };
+    }
+    return h2_scan(fd, key, iv, rec1.seq, buf2, tries - 1);
+}
+
+Int main() {
+    Str host = args.get(1);
+    Int port = str_parse_int(args.get(2));
+    Int fd = resid_tcp_connect(host, port);
+    if (fd < 0) {
+        println("CONNECT-FAIL");
+        return 1;
+    }
+    Int nargs = args.count();
+    Str seedhex = "";
+    Str seedhex2 = if (nargs > 3) { args.get(3) } else { seedhex };
+    List(Int) seed = mk_seed(seedhex2);
+
+    List(Int) cpriv = hb(hex_encode(seed));
+    List(Int) basel = hb("0900000000000000000000000000000000000000000000000000000000000000");
+    List(Int) cpub = x25519(cpriv, basel);
+    List(Int) cpb = slice_seed(cpub, 1, 32, [0]);
+    List(Int) rnd = random_bytes(32);
+    List(Int) chbody = tlsmsg_client_hello_alpn(rnd, cpb);
+    List(Int) chmsg = mk_record(22, chbody);
+    Bool s1 = resid_tcp_send_bin(fd, chmsg);
+    if (!s1) { println("SEND-FAIL"); return 1; }
+    List(Int) shhdr = recv_exact(fd, 5);
+    if (shhdr.len() - 1 < 5) {
+        println("SH-EOF");
+        return 1;
+    }
+    Int shlen = shhdr[4] * 256 + shhdr[5];
+    if (shlen <= 0 || shlen > tls_max_record_len()) {
+        println("SH-LEN-BAD");
+        return 1;
+    }
+    List(Int) shbody = recv_exact(fd, shlen);
+    if (shbody.len() - 1 < shlen || shbody.len() - 1 < 39 + 32) {
+        println("SH-SHORT");
+        return 1;
+    }
+    List(Int) shr = sh_random(shbody);
+    List(Int) spub = sh_pubkey(shbody);
+    List(Int) shared = x25519(cpriv, spub);
+    List(Int) hs = tls_handshake_secret(shared);
+    List(Int) tr1 = sconcat(chbody, shbody);
+    List(Int) th1raw = sha256_bytes(tr1);
+    List(Int) th1 = slice_seed(th1raw, 1, 32, [0]);
+    List(Int) c_hs = tls_c_hs_traffic(hs, th1);
+    List(Int) s_hs = tls_s_hs_traffic(hs, th1);
+    List(Int) skey = tls_traffic_key(s_hs);
+    List(Int) siv = tls_traffic_iv(s_hs);
+    List(Int) inner = read_flight(fd, [0], skey, siv, 0, 8);
+    Int flen = inner.len();
+    if (flen < 100) { return 40 + flen; }
+    return 69;
+    Int pe_ = tm_find_pos(inner, 8, 0);
+    if (pe_ < 1) { return 65; }
+    return 68;
+    List(Int) ee = safe_msg(inner, pe_);
+    return 64;
+    Int pc_ = tm_find_pos(inner, 11, 0);
+    if (pc_ < 1) { return 63; }
+    List(Int) ctmsg = safe_msg(inner, pc_);
+    return 62;
+    Int pv_ = tm_find_pos(inner, 15, 0);
+    if (pv_ < 1) { return 61; }
+    List(Int) cvmsg = safe_msg(inner, pv_);
+    return 60;
+    Int pfin = tm_find_fin(inner, 0);
+    List(Int) finmsg = safe_msg(inner, pfin);
+    return 59;
+    List(Int) ctbody = tm_find(inner, 11, 0);
+    List(Int) certder = tm_cert_der(ctbody);
+    Int now = resid_utc_now_civil();
+    List(Int) hostb = str_to_bytes(host);
+    Bool certok = tls_server_cert_ok(certder, hostb, now);
+    if (!certok) {
+        println("CERT-FAIL");
+        return 1;
+    }
+    List(Int) tr2a = sconcat(tr1, ee);
+    List(Int) tr2b = sconcat(tr2a, ctmsg);
+    List(Int) trcv = sconcat(tr2b, cvmsg);
+    List(Int) thctraw = sha256_bytes(tr2b);
+    List(Int) thct = slice_seed(thctraw, 1, 32, [0]);
+    Bool okcv = verify_cv(inner, tr2b, args.get(3), thct);
+    if (!okcv) {
+        println("CV-VERIFY-FAIL");
+        return 1;
+    }
+    List(Int) finmsg2 = finmsg;
+    List(Int) tr3 = sconcat(trcv, finmsg2);
+    List(Int) thapraw = sha256_bytes(tr3);
+    List(Int) thap = slice_seed(thapraw, 1, 32, [0]);
+    List(Int) master = tls_master_secret(hs);
+    List(Int) c_ap = tls_c_ap_traffic(master, thap);
+    List(Int) s_ap = tls_s_ap_traffic(master, thap);
+    List(Int) cvd = tls_finished(c_hs, thap);
+    List(Int) fseed = [0];
+    List(Int) fhdr = fseed.concat([20, 0, 0, 32]);
+    List(Int) cfbody = sconcat(fhdr, cvd);
+    List(Int) c_hs_key = tls_traffic_key(c_hs);
+    List(Int) c_hs_iv = tls_traffic_iv(c_hs);
+    List(Int) cfrec = seal_record(0, c_hs_key, c_hs_iv, cfbody, 22, 23);
+    List(Int) cfhdr = tls_record_header2(23, cfrec.len() - 1);
+    List(Int) cfmsg = sconcat(cfhdr, cfrec);
+    Bool s2 = resid_tcp_send_bin(fd, cfmsg);
+    if (!s2) { println("SEND2-FAIL"); return 1; }
+
+    // ─── h2 connection preface + SETTINGS ───
+    List(Int) preface = bytes_of("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+    List(Int) settings = h2_frame(h2_t_settings(), 0, 0, [0]);
+    List(Int) flight = h2_cat(preface, settings);
+    List(Int) c_ap_key = tls_traffic_key(c_ap);
+    List(Int) c_ap_iv = tls_traffic_iv(c_ap);
+    List(Int) frec = seal_record(0, c_ap_key, c_ap_iv, flight, 23, 23);
+    List(Int) frhdr = tls_record_header2(23, frec.len() - 1);
+    List(Int) fmsg = sconcat(frhdr, frec);
+    Bool s3 = resid_tcp_send_bin(fd, fmsg);
+    if (!s3) { println("SEND3-FAIL"); return 1; }
+
+    // Read server records; skip post-handshake handshake messages
+    // (NewSessionTicket etc.) until an h2 SETTINGS frame shows up.
+    List(Int) s_ap_key = tls_traffic_key(s_ap);
+    List(Int) s_ap_iv = tls_traffic_iv(s_ap);
+    H2Scan scan = h2_scan(fd, s_ap_key, s_ap_iv, 0, [0], 8);
+    if (scan.eof) { println("H2-EOF"); return 1; }
+    if (!scan.found) { println("NO-SERVER-SETTINGS"); return 1; }
+    println("SERVER-SETTINGS n=" + IntToString(scan.scount));
+
+    // ACK the server settings: empty SETTINGS with ACK flag 0x01.
+    List(Int) ack = h2_frame(h2_t_settings(), 1, 0, [0]);
+    List(Int) arec = seal_record(0, c_ap_key, c_ap_iv, ack, 23, 23);
+    List(Int) arhdr = tls_record_header2(23, arec.len() - 1);
+    List(Int) amsg = sconcat(arhdr, arec);
+    resid_tcp_send_bin(fd, amsg);
+    println("H2-PREFACE-OK");
+    resid_tcp_close(fd);
+    return 0;
+}
+// v8
