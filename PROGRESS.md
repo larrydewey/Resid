@@ -9,9 +9,10 @@
 
 ## 0. Current Snapshot
 
-**633 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
+**634 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
 resid-codegen 137, resid-build 12, resid-fmt 5, residc unit + e2e incl.
-`len_arg_and_cross_module_recursive_list_builder`).
+`len_arg_and_cross_module_recursive_list_builder`,
+`run_h2_post_and_continuation_in_resid`).
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
 proven**. The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
@@ -121,6 +122,20 @@ done end-to-end** — see §2's completed milestone: ALPN negotiation,
 connection preface + SETTINGS exchange with ACK, GET on stream 1, and
 response HEADERS/DATA decoding (HPACK incl. Huffman), verified live
 against a real hyper-h2 server (`tools/h2_server.py`).
+
+**HTTP/2 hardening complete** (live-verified against hyper-h2):
+
+- Flow control: the client restores connection + stream window credit
+  with WINDOW_UPDATE frames for every consumed app-data octet
+  (`h2_window_update_frame` in lib/h2.resid).
+- POST bodies: requests split into HEADERS (END_HEADERS only) + DATA
+  frame chains (`h2_data_frames`, ≤16384-octet frames, END_STREAM on
+  the last); server echoes the body back byte-for-byte.
+- CONTINUATION: response HEADERS blocks split across HEADERS +
+  CONTINUATION frames are accumulated and HPACK-decoded once
+  END_HEADERS arrives; request header blocks >16384 octets emit
+  CONTINUATIONs via `h2_headers_cont_frames`. Verified live with a
+  ~42KB response header block. e2e `run_h2_post_and_continuation_in_resid`.
 
 ---
 
@@ -253,7 +268,5 @@ residual computation emitted, notes + provenance sidecar produced).
 
 ## 6. Next Steps
 
-1. HTTP/2 hardening: flow-control WINDOW_UPDATE handling, request
-   bodies (POST), response chunking via CONTINUATION frames.
-2. Registry transport; SpecialCasing; further `why` tooling.
-3. Point the build cache at a hash that includes import contents.
+1. Registry transport; SpecialCasing; further `why` tooling.
+2. Point the build cache at a hash that includes import contents.

@@ -1,4 +1,5 @@
 import "crypto.resid";
+import "aesgcm.resid";
 
 // ─── lib/h2.resid — HTTP/2 framing + HPACK in pure Resid ──────────────
 // RFC 7540 frame layer and RFC 7541 HPACK decoding. Byte lists follow
@@ -634,4 +635,78 @@ pub HuffDec hp_huff_str(List(Int) b, Int p0, Int nbytes) {
     Int gs = p0 * 8;
     Int ge = (p0 + nbytes) * 8;
     return hp_huff_loop(b, gs, ge, "");
+}
+
+// ─── Flow control + large-header framing (RFC 7540 §6.9, §6.10) ──────
+
+pub Int h2_pick(Bool c, Int a, Int b) {
+    if (c) { return a; }
+    return b;
+}
+
+// WINDOW_UPDATE frame for `sid` (0 = connection) carrying increment.
+pub List(Int) h2_window_update_frame(Int sid, Int inc) {
+    List(Int) pay = h2_u32_bytes(inc);
+    return h2_frame(h2_t_window_update(), 0, sid, pay);
+}
+
+// HEADERS frame chain for header block `blk` on stream `sid`: the
+// block is split into ≤16384-octet pieces; the first piece rides in
+// the HEADERS frame (OR-ing extra_flags, e.g. 1 = END_STREAM), the
+// rest in CONTINUATION frames. END_HEADERS is set on the final frame
+// here — do NOT pass it via extra_flags.
+pub List(Int) h2_headers_cont_frames(Int sid, Int extra_flags, List(Int) blk) {
+    return h2_hc_chunk(sid, extra_flags, blk, 1, true);
+}
+
+pub List(Int) h2_hc_chunk(Int sid, Int extra_flags, List(Int) blk, Int i, Bool first) {
+    Int n = blk.len() - 1;
+    Int rem = 1 + n - i;
+    Bool fits = rem <= 16384;
+    Int take = h2_pick(fits, rem, 16384);
+    Int lasti = i + take - 1;
+    Bool fin = lasti >= n;
+    List(Int) piece = slice_seed(blk, i, take, [0]);
+    Int basef = h2_pick(first, extra_flags, 0);
+    Int endh = h2_pick(fin, 4, 0);
+    Int flg = basef + endh;
+    Int ty = h2_pick(first, h2_t_headers(), h2_t_continuation());
+    List(Int) f = h2_frame(ty, flg, sid, piece);
+    if (fin) { return f; }
+    Int ni = lasti + 1;
+    return h2_cat(f, h2_hc_chunk(sid, extra_flags, blk, ni, false));
+}
+
+// DATA frame chain for `payload` on stream `sid`; END_STREAM set on
+// the final frame when `end`. Frames stay under the 16384 default
+// max frame size.
+pub List(Int) h2_data_frames(Int sid, List(Int) payload, Bool end) {
+    return h2_data_acc(sid, payload, end, 1);
+}
+
+pub List(Int) h2_data_acc(Int sid, List(Int) payload, Bool end, Int i) {
+    Int n = payload.len() - 1;
+    Int rem = 1 + n - i;
+    Bool fits = rem <= 16384;
+    Int take = h2_pick(fits, rem, 16384);
+    Int lasti = i + take - 1;
+    Bool fin = lasti >= n;
+    List(Int) piece = slice_seed(payload, i, take, [0]);
+    Int flg = h2_pick(fin && end, 1, 0);
+    List(Int) f = h2_frame(h2_t_data(), flg, sid, piece);
+    if (fin) { return f; }
+    Int ni = lasti + 1;
+    return h2_cat(f, h2_data_acc(sid, payload, end, ni));
+}
+
+// Total DATA payload octets across frames in `buf` (walks frame
+// headers; used to size flow-control credit).
+pub Int h2_count_data(List(Int) buf, Int p, Int end) {
+    if (p + 9 > end) { return 0; }
+    H2FrameHdr h = h2_frame_hdr(buf, p);
+    Int rend = p + 8 + h.length;
+    if (rend > end) { return 0; }
+    Bool isdata = h.stype == h2_t_data();
+    Int here = h2_pick(isdata, h.length, 0);
+    return here + h2_count_data(buf, rend + 1, end);
 }

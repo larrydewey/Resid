@@ -5224,6 +5224,7 @@ fn run_h2_hpack_in_resid() {
         .unwrap();
     std::fs::copy(workspace.join("lib/h2.resid"), dir.join("h2.resid")).unwrap();
     std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
+    std::fs::copy(workspace.join("lib/aesgcm.resid"), dir.join("aesgcm.resid")).unwrap();
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
@@ -5525,5 +5526,90 @@ Int main() {
         "{:?}",
         String::from_utf8_lossy(&out.stdout)
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// HTTP/2 hardening over live TLS 1.3: POST with a request body
+/// (HEADERS without END_STREAM + DATA frames) echoed by the server,
+/// WINDOW_UPDATE flow-control credit sent for consumed DATA, and a
+/// ~42KB response header block split by hyper-h2 across HEADERS +
+/// CONTINUATION frames, reassembled and HPACK-decoded by the client.
+#[test]
+fn run_h2_post_and_continuation_in_resid() {
+    let py = match which_python() {
+        Some(p) => p,
+        None => { eprintln!("skipping: python3 not found"); return; }
+    };
+    let chk = Command::new(&py).args(["-c", "import h2"]).output().expect("python check");
+    if !chk.status.success() {
+        eprintln!("skipping: python h2 module unavailable");
+        return;
+    }
+    let openssl = match which_openssl() {
+        Some(p) => p,
+        None => { eprintln!("skipping: openssl not found"); return; }
+    };
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().parent().unwrap();
+    let dir = std::env::temp_dir().join(format!("residc-e2e-h2post-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(workspace.join("examples/h2_client.resid"), dir.join("h2_client.resid")).unwrap();
+    for f in ["tlsmsg.resid","tls.resid","crypto.resid","aesgcm.resid","chacha.resid","x25519.resid",
+              "chain.resid","h2.resid","rsa.resid","der.resid","x509.resid",
+              "ec256.resid","ed25519.resid"] {
+        std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
+    }
+    let gen_out = Command::new(&openssl).args(["req","-x509","-newkey","ec",
+        "-pkeyopt","ec_paramgen_curve:prime256v1","-keyout", dir.join("k.pem").to_str().unwrap(),
+        "-out", dir.join("c.pem").to_str().unwrap(),
+        "-subj","/CN=localhost","-days","30","-nodes",
+        "-addext","subjectAltName=DNS:localhost"])
+        .output().expect("openssl req");
+    assert!(gen_out.status.success(), "{}", String::from_utf8_lossy(&gen_out.stderr));
+    let der = Command::new(&openssl).args(["x509","-in", dir.join("c.pem").to_str().unwrap(),
+        "-outform","der"]).output().unwrap();
+    let certhex: String = der.stdout.iter().map(|b| format!("{:02x}", b)).collect();
+
+    let port = 19900u16 + 400 + (std::process::id() % 400) as u16;
+    let mut server = Command::new(&py)
+        .arg(workspace.join("tools/h2_server.py"))
+        .arg(port.to_string())
+        .arg(dir.join("c.pem").to_str().unwrap())
+        .arg(dir.join("k.pem").to_str().unwrap())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn h2 server");
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+
+    let client = dir.join("h2_client.resid");
+
+    // POST /echo — the server echoes the request body back.
+    let out = Command::new(residc_bin())
+        .arg(&client).arg("run")
+        .arg("localhost").arg(port.to_string()).arg(&certhex).arg("")
+        .arg("POST").arg("/echo").arg("post-body-123")
+        .output();
+    let post_out = out.expect("post run failed");
+    let stdout = String::from_utf8_lossy(&post_out.stdout).into_owned();
+
+    // GET /bigheaders — response headers exceed the max frame size,
+    // forcing hyper-h2 to emit CONTINUATION frames.
+    let out = Command::new(residc_bin())
+        .arg(&client).arg("run")
+        .arg("localhost").arg(port.to_string()).arg(&certhex).arg("")
+        .arg("GET").arg("/bigheaders").arg("")
+        .output();
+    let _ = server.kill();
+    let cont_out = out.expect("continuation run failed");
+    let stdout2 = String::from_utf8_lossy(&cont_out.stdout).into_owned();
+
+    assert!(stdout.contains("STATUS=200"), "no POST 200 ({stdout:?}) stderr={}",
+            String::from_utf8_lossy(&post_out.stderr));
+    assert!(stdout.contains("BODY=post-body-123"), "body not echoed ({stdout:?})");
+    assert!(stdout2.contains("STATUS=200"), "no continuation 200 ({stdout:?}) stderr={}",
+            String::from_utf8_lossy(&cont_out.stderr));
+    assert!(stdout2.contains("BODY=continuation-ok"),
+            "continuation body missing ({stdout:?})");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -8,8 +8,10 @@ import "h2.resid";
 
 // HTTP/2-over-TLS 1.3 client: negotiates ALPN h2, completes the
 // handshake, sends the h2 connection preface + SETTINGS, then issues a
-// GET and prints ":status" plus the response body. args: host port
-// cert-hex [seedhex]
+// request and prints ":status" plus the response body. Handles
+// response HEADERS split across CONTINUATION frames and restores
+// connection/stream flow-control credit with WINDOW_UPDATE frames.
+// args: host port cert-hex [seedhex] [method] [path] [body]
 
 List(Int) hb_acc(Str s, Int i, List(Int) acc) {
     if (i >= str_len(s)) { return acc; }
@@ -370,7 +372,8 @@ Int app_list_len(List(Int) xs) {
     return xs.len() - 1;
 }
 
-H2Result h2_collect(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) acc, Int tries) {
+H2Result h2_collect(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) acc,
+                    Int tries, List(Int) ckey, List(Int) civ, Int cseq) {
     if (tries <= 0) {
         return H2Result { status: "", body: "" };
     }
@@ -383,10 +386,26 @@ H2Result h2_collect(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) acc,
         return H2Result { status: "", body: "" };
     }
     List(Int) acc2 = h2_cat(acc, rr.data);
-    H2Result partial = h2_walk_response(acc2, 1, acc2.len() - 1, "", "");
+    // Flow control: every consumed connection window octet must be
+    // restored — send WINDOW_UPDATE for stream 1 AND the connection
+    // when this record carried DATA payload bytes.
+    Int dbytes = rl - 1;
+    Bool isrec23 = rc == 23;
+    Bool hasdata = isrec23 && dbytes > 0;
+    Int cseq2 = h2_pick(hasdata, cseq, cseq + 1);
+    if (hasdata) {
+        List(Int) wu1 = h2_window_update_frame(0, dbytes);
+        List(Int) wu2 = h2_window_update_frame(1, dbytes);
+        List(Int) wus = h2_cat(wu1, wu2);
+        List(Int) wurec = seal_record(cseq, ckey, civ, wus, 23, 23);
+        List(Int) wuhdr = tls_record_header2(23, wurec.len() - 1);
+        List(Int) wumsg = sconcat(wuhdr, wurec);
+        resid_tcp_send_bin(fd, wumsg);
+    }
+    H2Result partial = h2_walk_response(acc2, 1, acc2.len() - 1, "", "", [0]);
     Bool got = partial.body != "";
     if (got) { return partial; }
-    return h2_collect(fd, key, iv, rr.seq, acc2, tries - 1);
+    return h2_collect(fd, key, iv, rr.seq, acc2, tries - 1, ckey, civ, cseq2);
 }
 
 // Find :status in decoded fields; "" when absent.
@@ -400,7 +419,10 @@ Str h2_find_status(List(HpField) fs, Int i) {
     return h2_find_status(fs, i + 1);
 }
 
-H2Result h2_walk_response(List(Int) resp, Int p3, Int total, Str st, Str bd) {
+// Walk response frames. HEADERS blocks that arrive split across
+// CONTINUATION frames are accumulated in `pend` (a seeded list) and
+// HPACK-decoded only once END_HEADERS arrives.
+H2Result h2_walk_response(List(Int) resp, Int p3, Int total, Str st, Str bd, List(Int) pend) {
     if (p3 + 9 > total) {
         return H2Result { status: st, body: bd };
     }
@@ -410,14 +432,24 @@ H2Result h2_walk_response(List(Int) resp, Int p3, Int total, Str st, Str bd) {
     if (rend > total) {
         return H2Result { status: st, body: bd };
     }
-    if (rh.stype == 1) {
+    Bool ishdr = rh.stype == 1;
+    Bool iscont = rh.stype == 9;
+    if (ishdr || iscont) {
         List(Int) pay = slice_seed(resp, rstart, rh.length, [0]);
+        List(Int) blk = h2_cat(pend, pay);
+        Int ehflag = rh.flags & 4;
+        Bool eh = ehflag == 4;
+        if (!eh) {
+            // More CONTINUATION frames expected; keep accumulating.
+            return h2_walk_response(resp, rend + 1, total, st, bd, blk);
+        }
+        Int blen = blk.len() - 1;
         List(HpField) seedf = [HpField { name: "", value: "" }];
-        HpBlock dec = hp_decode_block(pay, 1, rh.length, [""], seedf);
+        HpBlock dec = hp_decode_block(blk, 1, blen, [""], seedf);
         Str found = h2_find_status(dec.fields, 1);
         Bool have = found != "";
-        Str st2 = if (have) { found } else { st };
-        return h2_walk_response(resp, rend + 1, total, st2, bd);
+        Str st2 = pick_str(have, found, st);
+        return h2_walk_response(resp, rend + 1, total, st2, bd, [0]);
     }
     if (rh.stype == 0) {
         List(Int) dpay = slice_seed(resp, rstart, rh.length, [0]);
@@ -430,9 +462,14 @@ H2Result h2_walk_response(List(Int) resp, Int p3, Int total, Str st, Str bd) {
         if (es) {
             return H2Result { status: st, body: bd2 };
         }
-        return h2_walk_response(resp, rend + 1, total, st, bd2);
+        return h2_walk_response(resp, rend + 1, total, st, bd2, [0]);
     }
-    return h2_walk_response(resp, rend + 1, total, st, bd);
+    return h2_walk_response(resp, rend + 1, total, st, bd, [0]);
+}
+
+Str pick_str(Bool c, Str a, Str b) {
+    if (c) { return a; }
+    return b;
 }
 
 Int main() {
@@ -571,16 +608,50 @@ Int main() {
     resid_tcp_send_bin(fd, amsg);
 
     println("H2-PREFACE-OK");
-    // ─── issue GET / on stream 1 ───
-    // HPACK: indexed :method GET(2), :scheme https(7), :path /(4),
-    // literal-without-indexing :authority(1) = "localhost".
+    // ─── issue request on stream 1 ───
+    // args: host port cert-hex [seedhex] [method] [path] [body]
+    Int argc = args.count();
+    Str defm = "GET";
+    Str method = pick_str(argc > 5, args.get(5), defm);
+    Str defp = "/";
+    Str path = pick_str(argc > 6, args.get(6), defp);
+    Str nobody = "";
+    Str body = pick_str(argc > 7, args.get(7), nobody);
+    // HPACK block: :method (indexed GET=2 / POST=3), :scheme https(7),
+    // :path ("/" indexed=4; otherwise literal-without-indexing new
+    // name), literal-without-indexing :authority(1) = host.
     List(Int) authv = str_to_bytes(host);
     Int avl = authv.len() - 1;
-    List(Int) blk0 = [0, 130, 135, 132, 1, avl];
-    List(Int) blk = h2_cat(blk0, authv);
-    List(Int) hdrs = mk_frame(h2_t_headers(), 5, 1, blk);
+    Bool isget = method == "GET";
+    Int mbyte = h2_pick(isget, 130, 131);
+    List(Int) blk0 = [0, mbyte, 135];
+    Int pslash = h2_find_char(path, 47, 0);
+    Int plen = str_len(path);
+    Bool root = pslash == 0 && plen == 1;
+    List(Int) rp = [0, 132];
+    List(Int) pb = str_to_bytes(path);
+    List(Int) litname = blk0.concat([4]);
+    List(Int) litlen = litname.concat([plen]);
+    List(Int) litpath = h2_cat(litlen, pb);
+    List(Int) blkp = pick_list(root, h2_cat(blk0, rp), litpath);
+    List(Int) abl0 = blkp.concat([1]);
+    List(Int) abl1 = abl0.concat([avl]);
+    List(Int) blk = h2_cat(abl1, authv);
+    // Request framing: a body splits the flight into HEADERS
+    // (END_HEADERS only) + DATA frame(s) with END_STREAM; bodiless
+    // requests set END_STREAM on the HEADERS frame itself. The frame
+    // builder adds END_HEADERS; extra_flags is END_STREAM only.
+    Bool hasbody = str_len(body) > 0;
+    Int hflags = h2_pick(hasbody, 0, 1);
+    Int blkl = blk.len() - 1;
+    println("REQ method=" + method + " path=" + path + " blklen=" + IntToString(blkl) + " bodylen=" + IntToString(str_len(body)));
+    List(Int) hdrs = h2_headers_cont_frames(1, hflags, blk);
+    List(Int) payb = str_to_bytes(body);
+    List(Int) dframes = h2_data_frames(1, payb, true);
+    List(Int) flightb = h2_cat(hdrs, dframes);
+    List(Int) flight2 = pick_list(hasbody, flightb, hdrs);
     Int capseq2 = capseq + 1;
-    List(Int) hrec = seal_record(capseq2, c_ap_key, c_ap_iv, hdrs, 23, 23);
+    List(Int) hrec = seal_record(capseq2, c_ap_key, c_ap_iv, flight2, 23, 23);
     List(Int) hrec_hdr = tls_record_header2(23, hrec.len() - 1);
     List(Int) hmsg = sconcat(hrec_hdr, hrec);
     Int hml = hmsg.len() - 1;
@@ -590,7 +661,7 @@ Int main() {
     Int rseq = 0;
     Bool sf = scan.found;
     Int sseq = pick_int(sf, scan.seq, 0);
-    H2Result res = h2_collect(fd, s_ap_key, s_ap_iv, sseq, [0], 8);
+    H2Result res = h2_collect(fd, s_ap_key, s_ap_iv, sseq, [0], 8, c_ap_key, c_ap_iv, capseq2 + 1);
     println("STATUS=" + res.status);
     println("BODY=" + res.body);
     resid_tcp_close(fd);
