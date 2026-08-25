@@ -4983,6 +4983,7 @@ fn run_chain_san_validity_in_resid() {
         std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
     }
     let cert = include_str!("fixtures/chain_leaf_list.txt");
+    let root = include_str!("fixtures/chain_root_list.txt");
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
@@ -4991,6 +4992,7 @@ fn run_chain_san_validity_in_resid() {
 import "chain.resid";
 Int main() {{
     List(Int) cert = {cert};
+    List(Int) rootc = {root};
     List(Int) h1 = [0, 119, 119, 119, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
     Bool m1 = san_has_match(cert, h1);
     List(Int) h2 = [0, 102, 111, 111, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
@@ -5005,13 +5007,15 @@ Int main() {{
     Bool vpast = x509_valid_now(cert, past);
     Bool vfuture = x509_valid_now(cert, future);
     println("valid=" + BoolToString(vnow) + BoolToString(vpast) + BoolToString(vfuture));
+    Bool cv = chain_verify(cert, rootc, now_ok);
+    println("chain=" + BoolToString(cv));
     return 0;
 }}
 "#
         ),
     )
     .unwrap();
-    let expected = "san=truetruefalse\nvalid=truefalsefalse";
+    let expected = "san=truetruefalse\nvalid=truefalsefalse\nchain=true";
     let out = Command::new(residc_bin())
         .arg(&file)
         .arg("run")

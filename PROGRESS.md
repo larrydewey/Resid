@@ -111,9 +111,13 @@
   linking by raw DER equality; signature dispatch on alg OID
   (RSA PKCS#1v1.5 / ECDSA P-256). e2e `run_chain_san_validity_in_resid`
   asserts exact/wildcard/negative SAN matches and validity windows
-  against openssl ground truth. OPEN: full `chain_verify` EC link
-  returns false despite verified-correct inputs — suspected stage-1
-  codegen issue with deep recursion + wide-int arithmetic; next session.
+  against openssl ground truth. ~~OPEN: full `chain_verify` EC link
+  returns false despite verified-correct inputs~~ RESOLVED: the EC link
+  verifies correctly through both pipelines (fresh openssl-generated
+  self-signed EC cert AND a real CA→leaf chain both return true; the
+  earlier false was the since-fixed "context-dependence ghost", not
+  codegen). Regression-pinned in `run_chain_san_validity_in_resid`
+  (now asserts `chain_verify(leaf, root) == true`). 630 tests pass.
 - **TLS transport boundary — DECISION RECORD (roadmap item 6)**: two
   viable paths for HTTPS support:
   (A) **Pure-Resid TLS 1.3**: requires X25519 key exchange, AES-128-GCM
