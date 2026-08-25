@@ -66,17 +66,45 @@ pub List(Int) h2_frame_hdr_enc(Int length, Int stype, Int flags, Int sid) {
 
 // Concatenate two seeded lists (seed dropped from the right operand).
 pub List(Int) h2_cat(List(Int) a, List(Int) b) {
-    Int n = b.len();
-    return h2_cat_acc(a, b, 2, n);
+    return h2_cat_acc(b, 2, b.len() - 1, 2, a);
 }
 
-// Copies b[2..n-1]: skips BOTH seeds (a keeps its own seed).
-pub List(Int) h2_cat_acc(List(Int) a, List(Int) b, Int i, Int n) {
-    if (i >= n) { return a; }
-    List(Int) a2 = a.concat([b[i]]);
+// Byte-for-byte der_slice_acc shape (proven against the codegen).
+pub List(Int) h2_cat_acc(List(Int) data, Int start, Int stop, Int i, List(Int) acc) {
+    if (i > stop) { return acc; }
+    Int bv = data[i];
+    List(Int) acc2 = acc.concat([bv]);
     Int ni = i + 1;
-    return h2_cat_acc(a, b, ni, n);
+    return h2_cat_acc(data, start, stop, ni, acc2);
 }
+
+pub List(Int) bv_join(Int bv, List(Int) rest) {
+    List(Int) out = [0];
+    List(Int) out2 = out.concat([bv]);
+    return lst_join_acc(out2, rest);
+}
+
+pub List(Int) lst_join_acc(List(Int) acc, List(Int) rest) {
+    return lst_join_loop(acc, rest, 1);
+}
+
+pub List(Int) lst_join_loop(List(Int) acc, List(Int) rest, Int j) {
+    Int remaining = rest.len() - j;
+    if (remaining < 1) { return acc; }
+    Int vj = rest[j];
+    List(Int) acc2 = acc.concat([vj]);
+    Int nj = j + 1;
+    return lst_join_loop(acc, rest, nj);
+}
+
+// Freshly named joiner for codegen-bug isolation.
+pub List(Int) h2_join(List(Int) b, Int i, Int last) {
+    if (i > last) { return [0]; }
+    Int bv = b[i];
+    List(Int) rest = h2_join(b, i + 1, last);
+    return bv_join(bv, rest);
+}
+
 
 // Wrap `payload` in a frame of the given type/flags/stream.
 pub List(Int) h2_frame(Int stype, Int flags, Int sid, List(Int) payload) {
@@ -327,16 +355,15 @@ pub List(Str) hp_insert(List(Str) dyn, Str ent) {
 
 // Concatenate two Str lists (right operand's seed skipped).
 pub List(Str) h2_scat(List(Str) a, List(Str) b) {
-    Int n = b.len();
-    return h2_scat_acc(a, b, 1, n);
+    return h2_scat_acc(a, b, 1, b.len() - 1);
 }
 
-// Copies b[1..n-1]: skips b's seed (a carries its own first element).
-pub List(Str) h2_scat_acc(List(Str) a, List(Str) b, Int i, Int n) {
-    if (i >= n) { return a; }
+// Copies b[1..last]: skips b's seed (a carries its own first element).
+pub List(Str) h2_scat_acc(List(Str) a, List(Str) b, Int i, Int last) {
+    if (i > last) { return a; }
     List(Str) a2 = a.concat([b[i]]);
     Int ni = i + 1;
-    return h2_scat_acc(a, b, ni, n);
+    return h2_scat_acc(a, b, ni, last);
 }
 
 // ─── Header block decoding ────────────────────────────────────────────

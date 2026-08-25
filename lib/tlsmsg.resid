@@ -242,6 +242,34 @@ pub List(Int) tlsmsg_client_hello_rfc(List(Int) random32, List(Int) share32) {
     return sconcat(body2, p4);
 }
 
+// ALPN extension offering exactly "h2" (0x0010 0005 0003 02 68 32).
+// Extensions length 0x91 -> 0x9a; handshake length 0xbc -> 0xc5.
+// ALPN variant: identical to tlsmsg_client_hello but with an extra
+// "h2"-offering ALPN extension (9 bytes) appended AFTER the last
+// extension block, and lengths bumped by 9 (ext 0x91->0x9a,
+// handshake 0xbc->0xc5).
+pub Str tm_c1_alpn() {
+    return "010000c50303";
+}
+
+pub Str tm_c2_alpn() {
+    return "00000213010100009a" + "0000000b0009000006736572766572ff01000100" + "000a00140012001d00170018001901000101010201030104" + "00230000003300260024001d0020";
+}
+
+pub Str tm_c3_alpn() {
+    return tm_c3() + "001000050003026832";
+}
+
+pub List(Int) tlsmsg_client_hello_alpn(List(Int) random32, List(Int) share32) {
+    List(Int) p1 = tm_hb(tm_c1_alpn());
+    List(Int) p2 = sconcat(p1, random32);
+    List(Int) p3 = tm_hb(tm_c2_alpn());
+    List(Int) body1 = sconcat(p2, p3);
+    List(Int) body2 = sconcat(body1, share32);
+    List(Int) p4 = tm_hb(tm_c3_alpn());
+    return sconcat(body2, p4);
+}
+
 pub List(Int) tlsmsg_client_hello(List(Int) random32, List(Int) share32) {
     List(Int) p1 = tm_hb(tm_c1());
     List(Int) p2 = sconcat(p1, random32);
