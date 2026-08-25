@@ -2166,6 +2166,121 @@ impl<'ctx> CodeGen<'ctx> {
             .into())
     }
 
+    /// Spec v3.2 §6.1: checked integer add/sub at operand width.
+    /// - Both operands constant: fold with exact i64 math; a provable
+    ///   overflow is a compile-time error (reduction: no residual check).
+    /// - Otherwise emit the raw op plus an overflow predicate that traps.
+    fn checked_int_arith(
+        &mut self,
+        binop: BinOp,
+        li: inkwell::values::IntValue<'ctx>,
+        ri: inkwell::values::IntValue<'ctx>,
+        signed: bool,
+        _res: Numeric,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let width = li.get_type().get_bit_width();
+        let is_sub = matches!(binop, BinOp::Sub);
+        // Constant folding (widths <= 64, exact i64 math): a provable
+        // overflow is a compile error — the residual check reduces away
+        // entirely, per the reduction ethos (spec §34).
+        if width <= 64 && li.is_constant_int() && ri.is_constant_int() {
+            let av = li.get_sign_extended_constant().unwrap_or(0) as i128;
+            let bv = ri.get_sign_extended_constant().unwrap_or(0) as i128;
+            let rv = if is_sub { av.wrapping_sub(bv) } else { av.wrapping_add(bv) };
+            let (lo, hi) = if signed {
+                (-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1)
+            } else {
+                (0i128, ((1u128 << width.min(127)) - 1) as i128)
+            };
+            if rv < lo || rv > hi {
+                return Err(format!(
+                    "compile-time arithmetic overflow: {} {} {} does not fit {}({})",
+                    av,
+                    if is_sub { "-" } else { "+" },
+                    bv,
+                    if signed { "Int" } else { "UInt" },
+                    width
+                ));
+            }
+            let it = self.int_type(width as u16)?;
+            let enc = if rv < 0 { (1i128 << width) + rv } else { rv };
+            let lit = it.const_int(enc as u64, false);
+            return Ok(lit.into());
+        }
+        let raw = if is_sub {
+            self.builder.build_int_sub(li, ri, "subchk")
+        } else {
+            self.builder.build_int_add(li, ri, "addchk")
+        }
+        .map_err(to_err)?;
+        let it = li.get_type();
+        let zero = it.const_int(0, false);
+        // Overflow predicate.
+        let ovf = if !signed {
+            if is_sub {
+                self.builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, li, ri, "usubovf")
+                    .map_err(to_err)?
+            } else {
+                self.builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, raw, li, "uaddovf")
+                    .map_err(to_err)?
+            }
+        } else {
+            let pos_l = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SGT, li, zero, "posl")
+                .map_err(to_err)?;
+            let neg_l = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, li, zero, "negl")
+                .map_err(to_err)?;
+            let pos_r = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SGT, ri, zero, "posr")
+                .map_err(to_err)?;
+            let neg_r = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, ri, zero, "negr")
+                .map_err(to_err)?;
+            let res_neg = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, raw, zero, "resneg")
+                .map_err(to_err)?;
+            let res_pos = self.builder.build_not(res_neg, "respos").map_err(to_err)?;
+            let p1 = if is_sub {
+                let a = self.builder.build_and(pos_l, neg_r, "a").map_err(to_err)?;
+                self.builder.build_and(a, res_neg, "b").map_err(to_err)?
+            } else {
+                let a = self.builder.build_and(pos_l, pos_r, "a").map_err(to_err)?;
+                self.builder.build_and(a, res_neg, "b").map_err(to_err)?
+            };
+            let p2 = if is_sub {
+                let a = self.builder.build_and(neg_l, pos_r, "c").map_err(to_err)?;
+                self.builder.build_and(a, res_pos, "d").map_err(to_err)?
+            } else {
+                let a = self.builder.build_and(neg_l, neg_r, "c").map_err(to_err)?;
+                self.builder.build_and(a, res_pos, "d").map_err(to_err)?
+            };
+            self.builder.build_or(p1, p2, "ovf").map_err(to_err)?
+        };
+        let cur_fn = self.cur_fn.ok_or("codegen: no current function")?;
+        let trap_bb = self.cx.append_basic_block(cur_fn, "arith_trap");
+        let ok_bb = self.cx.append_basic_block(cur_fn, "arith_ok");
+        self.builder
+            .build_conditional_branch(ovf, trap_bb, ok_bb)
+            .map_err(to_err)?;
+        self.builder.position_at_end(trap_bb);
+        let abortf = self
+            .module
+            .get_function("resid_arith_overflow")
+            .ok_or("codegen: missing resid_arith_overflow decl")?;
+        self.builder.build_call(abortf, &[], "ovfcall").map_err(to_err)?;
+        self.builder.build_unreachable().map_err(to_err)?;
+        self.builder.position_at_end(ok_bb);
+        Ok(raw.into())
+    }
+
     fn apply_binop(
         &mut self,
         binop: BinOp,
@@ -2203,6 +2318,13 @@ impl<'ctx> CodeGen<'ctx> {
         let li = l.into_int_value();
         let ri = r.into_int_value();
         let signed = res.is_signed();
+        // Spec v3.2 §6.1/§6.4: add/sub keep the operand width and must
+        // trap on overflow (never widen-then-narrow). Constant operands
+        // are folded at compile time — a provable overflow is a compile
+        // error; otherwise a residual range check guards the op.
+        if matches!(binop, BinOp::Add | BinOp::Sub) {
+            return self.checked_int_arith(binop, li, ri, signed, res);
+        }
         let v = match binop {
             BinOp::Add => self.builder.build_int_add(li, ri, "add"),
             BinOp::Sub => self.builder.build_int_sub(li, ri, "sub"),
@@ -3149,6 +3271,8 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
         self.decl_rt("resid_list_concat", vec![ptr.into(), ptr.into()], ptr.into());
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
+        // Checked add/sub overflow trap (spec v3.2 §6.1).
+        self.decl_rt_void("resid_arith_overflow", vec![]);
         self.decl_rt_void("resid_index_abort", vec![i64t.into(), i64t.into()]);
         // String concatenation (f-string interpolation, Str + Str).
         self.decl_rt("resid_str_concat", vec![ptr.into(), ptr.into()], ptr.into());

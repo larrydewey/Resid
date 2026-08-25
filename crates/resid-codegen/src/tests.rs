@@ -46,9 +46,10 @@ Int main() {
     cg.module.verify().expect("module failed verification");
 
     let ir = cg.module.print_to_string().to_string();
-    // Verify the add was promoted to i128
-    assert!(ir.contains("sext i64"), "expected sext to 128-bit");
-    assert!(ir.contains("add i128"), "expected i128 add");
+    // Spec v3.2 §6.1: same-width add keeps operand width, with a
+    // checked-overflow trap instead of static promotion.
+    assert!(ir.contains("add i64"), "expected i64 add");
+    assert!(ir.contains("@resid_arith_overflow"), "expected overflow trap");
 }
 
 #[test]
@@ -149,9 +150,9 @@ Int main() {
     cg.module.verify().expect("module failed verification");
 
     let ir = cg.module.print_to_string().to_string();
-    // Int(128) + Int(128) widens to Int(256) per spec (carry bit).
-    assert!(ir.contains("sext i128"), "expected sext i128: {ir}");
-    assert!(ir.contains("add i256"), "expected i256 add: {ir}");
+    // Spec v3.2 §6.1: Int(128) + Int(128) stays Int(128), checked.
+    assert!(ir.contains("add i128"), "expected i128 add: {ir}");
+    assert!(ir.contains("@resid_arith_overflow"), "expected overflow trap: {ir}");
     assert!(
         ir.contains("@Int128ToString"),
         "expected Int128ToString call: {ir}"

@@ -7,3 +7,4 @@ keys/
 .resid-cache.cbor
 *.resid-notes.cbor
 *.resid-prov
+a.out*

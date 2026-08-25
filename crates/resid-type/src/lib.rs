@@ -2648,11 +2648,12 @@ mod tests {
 
     #[test]
     fn infer_binary_add_widening() {
-        // a + b where both are i64 → i128 (spec §6.1 widening)
+        // a + b where both are i64 → i64 (spec v3.2 §6.1: widest operand;
+        // overflow handled by checked semantics)
         let e = expr_binop(OpKind::Plus, "a", "b");
         let env = make_env();
         let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
-        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B128)));
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64)));
     }
 
     #[test]
