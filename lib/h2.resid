@@ -1,0 +1,404 @@
+import "crypto.resid";
+
+// ─── lib/h2.resid — HTTP/2 framing + HPACK in pure Resid ──────────────
+// RFC 7540 frame layer and RFC 7541 HPACK decoding. Byte lists follow
+// the lib convention: index 0 is a dummy seed; payload data starts at
+// index 1. All positions are 1-based data indices.
+//
+// Scope v1: frame header encode/decode, SETTINGS/DATA/HEADERS framing,
+// HPACK integer coding, static table, dynamic table, indexed and all
+// three literal representations. Huffman-coded string literals are out
+// of scope for v1 (flagged by hp_str_huffman).
+
+pub Int h2_t_data() { return 0; }
+pub Int h2_t_headers() { return 1; }
+pub Int h2_t_priority() { return 2; }
+pub Int h2_t_rst_stream() { return 3; }
+pub Int h2_t_settings() { return 4; }
+pub Int h2_t_push_promise() { return 5; }
+pub Int h2_t_ping() { return 6; }
+pub Int h2_t_goaway() { return 7; }
+pub Int h2_t_window_update() { return 8; }
+pub Int h2_t_continuation() { return 9; }
+
+// One decoded HTTP/2 frame header.
+// length: payload length (0..16777215); stype: frame type; flags:
+// per-type flags byte; sid: stream id with the reserved bit masked off;
+// bad: true when the buffer is too short.
+type H2FrameHdr = { length: Int(64), stype: Int(64), flags: Int(64), sid: Int(64), bad: Bool };
+
+// u24 big-endian at pos.
+pub Int h2_u24(List(Int) b, Int pos) {
+    Int hi = b[pos] * 65536;
+    Int mid = b[pos + 1] * 256;
+    Int lo = b[pos + 2];
+    return hi + mid + lo;
+}
+
+// Decode the 9-octet frame header starting at pos.
+pub H2FrameHdr h2_frame_hdr(List(Int) b, Int pos) {
+    Int n = b.len() - 1;
+    if (pos + 8 > n) {
+        return H2FrameHdr { length: 0, stype: 0, flags: 0, sid: 0, bad: true };
+    }
+    Int len = h2_u24(b, pos);
+    Int ty = b[pos + 3];
+    Int fl = b[pos + 4];
+    // 32-bit stream id, reserved bit (msb of first octet) ignored.
+    Int sid = (b[pos + 5] - (b[pos + 5] / 128) * 128) * 16777216 + b[pos + 6] * 65536 + b[pos + 7] * 256 + b[pos + 8];
+    return H2FrameHdr { length: len, stype: ty, flags: fl, sid: sid, bad: false };
+}
+
+// Encode a frame header into a fresh seeded list (9 data bytes).
+pub List(Int) h2_frame_hdr_enc(Int length, Int stype, Int flags, Int sid) {
+    Int b2 = length / 65536;
+    Int r1 = length - b2 * 65536;
+    Int b1 = r1 / 256;
+    Int b0 = r1 - b1 * 256;
+    Int s3 = sid / 16777216;
+    Int sr = sid - s3 * 16777216;
+    Int s2 = sr / 65536;
+    Int sr2 = sr - s2 * 65536;
+    Int s1 = sr2 / 256;
+    Int s0 = sr2 - s1 * 256;
+    return [0, b2, b1, b0, stype, flags, s3, s2, s1, s0];
+}
+
+// Concatenate two seeded lists (seed dropped from the right operand).
+pub List(Int) h2_cat(List(Int) a, List(Int) b) {
+    Int n = b.len();
+    return h2_cat_acc(a, b, 2, n);
+}
+
+// Copies b[2..n-1]: skips BOTH seeds (a keeps its own seed).
+pub List(Int) h2_cat_acc(List(Int) a, List(Int) b, Int i, Int n) {
+    if (i >= n) { return a; }
+    List(Int) a2 = a.concat([b[i]]);
+    Int ni = i + 1;
+    return h2_cat_acc(a, b, ni, n);
+}
+
+// Wrap `payload` in a frame of the given type/flags/stream.
+pub List(Int) h2_frame(Int stype, Int flags, Int sid, List(Int) payload) {
+    Int len = payload.len() - 1;
+    List(Int) hdr = h2_frame_hdr_enc(len, stype, flags, sid);
+    return h2_cat(hdr, payload);
+}
+
+// ─── SETTINGS payload helpers ─────────────────────────────────────────
+
+// u16/u32 big-endian byte helpers (seeded single-element lists).
+pub List(Int) h2_u16_bytes(Int x) {
+    Int hi = x / 256;
+    Int lo = x - hi * 256;
+    Int z = 0;
+    return [z, hi, lo];
+}
+
+pub List(Int) h2_u32_bytes(Int x) {
+    Int b3 = x / 16777216;
+    Int r = x - b3 * 16777216;
+    Int b2 = r / 65536;
+    Int r2 = r - b2 * 65536;
+    Int b1 = r2 / 256;
+    Int b0 = r2 - b1 * 256;
+    Int z = 0;
+    return [z, b3, b2, b1, b0];
+}
+
+// Number of settings pairs in a payload.
+pub Int h2_settings_count(List(Int) payload) {
+    Int n = payload.len() - 1;
+    return n / 6;
+}
+
+// Setting id (u16) of pair k (0-based).
+pub Int h2_setting_id(List(Int) payload, Int k) {
+    Int off = k * 6;
+    return payload[off + 1] * 256 + payload[off + 2];
+}
+
+// Setting value (u32) of pair k (0-based).
+pub Int h2_setting_value(List(Int) payload, Int k) {
+    Int off = k * 6;
+    return payload[off + 3] * 16777216 + payload[off + 4] * 65536 + payload[off + 5] * 256 + payload[off + 6];
+}
+
+// Build an empty (ACK-able) or populated SETTINGS payload.
+pub List(Int) h2_settings_payload(List(Int) ids, List(Int) vals, Int k) {
+    if (k >= ids.len() - 1) { return [0]; }
+    Int id = ids[k + 1];
+    Int v = vals[k + 1];
+    List(Int) idb = h2_u16_bytes(id);
+    List(Int) vb = h2_u32_bytes(v);
+    Int pz = idb[1] - idb[1];
+    List(Int) pair = [pz, idb[1], idb[2], vb[1], vb[2], vb[3], vb[4]];
+    return h2_cat(pair, h2_settings_payload(ids, vals, k + 1));
+}
+
+// ─── HPACK ────────────────────────────────────────────────────────────
+
+// Static table entry i (1..61): "name" or "name=value".
+// Returns the raw table string; callers split on the first '=' when a
+// value may be present. Use hp_static_has to test value presence.
+pub Str hp_static(Int i) {
+    if (i == 1) { return ":authority"; }
+    if (i == 2) { return ":method=GET"; }
+    if (i == 3) { return ":method=POST"; }
+    if (i == 4) { return ":path=/"; }
+    if (i == 5) { return ":path=/index.html"; }
+    if (i == 6) { return ":scheme=http"; }
+    if (i == 7) { return ":scheme=https"; }
+    if (i == 8) { return ":status=200"; }
+    if (i == 9) { return ":status=204"; }
+    if (i == 10) { return ":status=206"; }
+    if (i == 11) { return ":status=304"; }
+    if (i == 12) { return ":status=400"; }
+    if (i == 13) { return ":status=404"; }
+    if (i == 14) { return ":status=500"; }
+    if (i == 15) { return "accept-charset"; }
+    if (i == 16) { return "accept-encoding=gzip, deflate"; }
+    if (i == 17) { return "accept-language"; }
+    if (i == 18) { return "accept-ranges"; }
+    if (i == 19) { return "accept"; }
+    if (i == 20) { return "access-control-allow-origin"; }
+    if (i == 21) { return "age"; }
+    if (i == 22) { return "allow"; }
+    if (i == 23) { return "authorization"; }
+    if (i == 24) { return "cache-control"; }
+    if (i == 25) { return "content-disposition"; }
+    if (i == 26) { return "content-encoding"; }
+    if (i == 27) { return "content-language"; }
+    if (i == 28) { return "content-length"; }
+    if (i == 29) { return "content-location"; }
+    if (i == 30) { return "content-range"; }
+    if (i == 31) { return "content-type"; }
+    if (i == 32) { return "cookie"; }
+    if (i == 33) { return "date"; }
+    if (i == 34) { return "etag"; }
+    if (i == 35) { return "expect"; }
+    if (i == 36) { return "expires"; }
+    if (i == 37) { return "from"; }
+    if (i == 38) { return "host"; }
+    if (i == 39) { return "if-match"; }
+    if (i == 40) { return "if-modified-since"; }
+    if (i == 41) { return "if-none-match"; }
+    if (i == 42) { return "if-range"; }
+    if (i == 43) { return "if-unmodified-since"; }
+    if (i == 44) { return "last-modified"; }
+    if (i == 45) { return "link"; }
+    if (i == 46) { return "location"; }
+    if (i == 47) { return "max-forwards"; }
+    if (i == 48) { return "proxy-authenticate"; }
+    if (i == 49) { return "proxy-authorization"; }
+    if (i == 50) { return "range"; }
+    if (i == 51) { return "referer"; }
+    if (i == 52) { return "refresh"; }
+    if (i == 53) { return "retry-after"; }
+    if (i == 54) { return "server"; }
+    if (i == 55) { return "set-cookie"; }
+    if (i == 56) { return "strict-transport-security"; }
+    if (i == 57) { return "transfer-encoding"; }
+    if (i == 58) { return "user-agent"; }
+    if (i == 59) { return "vary"; }
+    if (i == 60) { return "via"; }
+    if (i == 61) { return "www-authenticate"; }
+    return "";
+}
+
+// True when static entry i carries a value (contains '=').
+pub Bool hp_static_has_val(Int i) {
+    if (i <= 14) { return true; }
+    if (i == 16) { return true; }
+    return false;
+}
+
+// First index of codepoint c at or after i; -1 when absent.
+pub Int h2_find_char(Str s, Int c, Int i) {
+    Int n = str_len(s);
+    if (i >= n) { return 0 - 1; }
+    if (str_char_at(s, i) == c) { return i; }
+    return h2_find_char(s, c, i + 1);
+}
+
+// Name part of a static-table string.
+pub Str hp_static_name(Str ent) {
+    Int eq = h2_find_char(ent, 61, 0);
+    if (eq < 0) { return ent; }
+    return str_slice(ent, 0, eq);
+}
+
+// Value part of a static-table string ("=" present only).
+pub Str hp_static_val(Str ent) {
+    Int eq = h2_find_char(ent, 61, 0);
+    Int n = str_len(ent);
+    return str_slice(ent, eq + 1, n);
+}
+
+pub Int pow2(Int k) {
+    if (k == 0) { return 1; }
+    return 2 * pow2(k - 1);
+}
+
+// HPACK integer decoding per RFC 7541 C.1: prefix bits given by
+// pfxmask (e.g. 127 for 7-bit prefixes). Returns the decoded integer;
+// val_out via hp_int_val. bad=true on truncated input.
+type HpInt = { val: Int(64), next: Int(64), bad: Bool };
+
+pub HpInt hp_read_int(List(Int) b, Int pos, Int first, Int pfxmask) {
+    Int v = first & pfxmask;
+    if (v < pfxmask) {
+        return HpInt { val: v, next: pos, bad: false };
+    }
+    Int m = 0;
+    return hp_int_cont(b, pos + 1, pfxmask, v, m);
+}
+
+pub HpInt hp_int_cont(List(Int) b, Int pos, Int pfxmask, Int acc, Int m) {
+    Int n = b.len() - 1;
+    if (pos > n) { return HpInt { val: 0, next: pos, bad: true }; }
+    Int byte = b[pos];
+    Int cont = byte & 128;
+    Int low = byte - cont;
+    Int step = acc + low * pow2(m);
+    if (cont == 0) {
+        // next = last consumed byte, matching the single-byte path.
+        return HpInt { val: step, next: pos, bad: false };
+    }
+    Int nm = m + 7;
+    return hp_int_cont(b, pos + 1, pfxmask, step, nm);
+}
+
+// Raw octets [start..stop] (inclusive, seeded layout) as a Str.
+pub Str h2_bytes_str(List(Int) b, Int start, Int stop) {
+    return h2_bs_acc(b, start, stop, start, "");
+}
+
+pub Str h2_bs_acc(List(Int) b, Int start, Int stop, Int i, Str acc) {
+    if (i > stop) { return acc; }
+    Str acc2 = acc + str_from_code(b[i]);
+    Int ni = i + 1;
+    return h2_bs_acc(b, start, stop, ni, acc2);
+}
+
+// HPACK string literal: H bit + length-int + raw octets. Non-Huffman
+// only in v1. Returns the decoded string.
+type HpStr = { s: Str, next: Int(64), huffman: Bool, bad: Bool };
+
+pub HpStr hp_read_str(List(Int) b, Int pos) {
+    Int n = b.len() - 1;
+    if (pos > n) { return HpStr { s: "", next: pos, huffman: false, bad: true }; }
+    Int first = b[pos];
+    Bool huf = first >= 128;
+    HpInt li = hp_read_int(b, pos, first, 127);
+    if (li.bad) { return HpStr { s: "", next: li.next, huffman: huf, bad: true }; }
+    if (huf) { return HpStr { s: "", next: li.next, huffman: true, bad: true }; }
+    Int start = li.next + 1;
+    Int stop = li.next + li.val;
+    if (stop > n) { return HpStr { s: "", next: start, huffman: false, bad: true }; }
+    return HpStr { s: h2_bytes_str(b, start, stop), next: stop + 1, huffman: false, bad: false };
+}
+
+// ─── Dynamic table ────────────────────────────────────────────────────
+// Entries stored as "name=value" strings, newest first (index 62 maps
+// to element 0).
+
+// Lookup name+value through the combined space: static 1..61, dynamic
+// from 62 up. Returns the table string or "" when absent.
+pub Str hp_lookup(Int idx, List(Str) dyn) {
+    if (idx >= 1 && idx <= 61) { return hp_static(idx); }
+    Int di = idx - 62;
+    Int n = dyn.len();
+    if (di < 0 || di >= n) { return ""; }
+    return dyn[di];
+}
+
+// Prepend a new entry to the dynamic table.
+pub List(Str) hp_insert(List(Str) dyn, Str ent) {
+    List(Str) out = [ent];
+    return h2_scat(out, dyn);
+}
+
+// Concatenate two Str lists (right operand's seed skipped).
+pub List(Str) h2_scat(List(Str) a, List(Str) b) {
+    Int n = b.len();
+    return h2_scat_acc(a, b, 1, n);
+}
+
+// Copies b[1..n-1]: skips b's seed (a carries its own first element).
+pub List(Str) h2_scat_acc(List(Str) a, List(Str) b, Int i, Int n) {
+    if (i >= n) { return a; }
+    List(Str) a2 = a.concat([b[i]]);
+    Int ni = i + 1;
+    return h2_scat_acc(a, b, ni, n);
+}
+
+// ─── Header block decoding ────────────────────────────────────────────
+
+// One decoded header field.
+type HpField = { name: Str, value: Str };
+
+// Decoded header-list accumulator result.
+type HpBlock = { fields: List(HpField), next: Int, dyn: List(Str), bad: Bool };
+
+// Decode a complete header block starting at pos. `dyn` is the current
+// dynamic table (mutated by incremental-indexing literals).
+pub HpBlock hp_decode_block(List(Int) b, Int pos, Int end, List(Str) dyn, List(HpField) accf) {
+    if (pos > end) {
+        return HpBlock { fields: accf, next: pos, dyn: dyn, bad: false };
+    }
+    if (pos > b.len() - 1) {
+        return HpBlock { fields: accf, next: pos, dyn: dyn, bad: true };
+    }
+    Int first = b[pos];
+    if (first >= 128) {
+        // Indexed Header Field: 1xxxxxxx.
+        HpInt ii = hp_read_int(b, pos, first, 127);
+        if (ii.bad || ii.val == 0) { return HpBlock { fields: accf, next: ii.next, dyn: dyn, bad: true }; }
+        Str ent = hp_lookup(ii.val, dyn);
+        if (ent == "") { return HpBlock { fields: accf, next: ii.next, dyn: dyn, bad: true }; }
+        HpField f = HpField { name: hp_static_name(ent), value: hp_static_val(ent) };
+        List(HpField) fs = accf.concat([f]);
+        return hp_decode_block(b, ii.next + 1, end, dyn, fs);
+    }
+    if (first >= 64) {
+        // Literal with incremental indexing: 01xxxxxx (x=0 means new).
+        return hp_literal(b, pos, end, dyn, accf, 63, first, true);
+    }
+    if (first >= 32) {
+        // Dynamic Table Size Update: 001xxxxx — accepted, not enforced.
+        HpInt si = hp_read_int(b, pos, first, 31);
+        if (si.bad) { return HpBlock { fields: accf, next: si.next, dyn: dyn, bad: true }; }
+        return hp_decode_block(b, si.next + 1, end, dyn, accf);
+    }
+    // Literal without indexing (0000xxxx) or never indexed (0001xxxx):
+    // identical for decode purposes here.
+    Bool never = first >= 16;
+    return hp_literal(b, pos, end, dyn, accf, 15, first, false);
+}
+
+// Shared literal decoding (indexed-name or new-name variants).
+pub HpBlock hp_literal(List(Int) b, Int pos, Int end, List(Str) dyn, List(HpField) accf, Int pfxmask, Int first, Bool incidx) {
+    HpInt ni = hp_read_int(b, pos, first, pfxmask);
+    if (ni.bad) { return HpBlock { fields: accf, next: ni.next, dyn: dyn, bad: true }; }
+    // Both variants are evaluated eagerly; only one result is used.
+    HpStr ns = hp_read_str(b, ni.next + 1);
+    Str ent = hp_lookup(ni.val, dyn);
+    Bool newname = ni.val == 0;
+    Str name = if (newname) { ns.s } else { hp_static_name(ent) };
+    Int aftername = if (newname) { ns.next } else { ni.next + 1 };
+    Bool namebad = if (newname) { ns.bad } else { ent == "" };
+    if (namebad) { return HpBlock { fields: accf, next: aftername, dyn: dyn, bad: true }; }
+    HpStr vs = hp_read_str(b, aftername);
+    if (vs.bad) { return HpBlock { fields: accf, next: vs.next, dyn: dyn, bad: true }; }
+    HpField f = HpField { name: name, value: vs.s };
+    List(HpField) fs = accf.concat([f]);
+    List(Str) dyn2 = hp_maybe_insert(incidx, dyn, name + "=" + vs.s);
+    return hp_decode_block(b, vs.next, end, dyn2, fs);
+}
+
+// Insert into the dynamic table when incidx is set.
+pub List(Str) hp_maybe_insert(Bool incidx, List(Str) dyn, Str ent) {
+    if (incidx) { return hp_insert(dyn, ent); }
+    return dyn;
+}

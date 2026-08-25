@@ -117,7 +117,7 @@
   self-signed EC cert AND a real CA→leaf chain both return true; the
   earlier false was the since-fixed "context-dependence ghost", not
   codegen). Regression-pinned in `run_chain_san_validity_in_resid`
-  (now asserts `chain_verify(leaf, root) == true`). 630 tests pass.
+  (now asserts `chain_verify(leaf, root) == true`). 631 tests pass.
 - **TLS transport boundary — DECISION RECORD (roadmap item 6)**: two
   viable paths for HTTPS support:
   (A) **Pure-Resid TLS 1.3**: requires X25519 key exchange, AES-128-GCM
@@ -241,7 +241,7 @@
   call's H against its OWN key; `.len()` includes the seed.
   e2e `run_tls13_live_openssl_in_resid` pins the milestone: spawns real
   `openssl s_server -tls1_3`, runs the Resid client through build+run,
-  asserts an HTTP reply (skips if openssl absent). 630 tests pass.
+  asserts an HTTP reply (skips if openssl absent). 631 tests pass.
   Remaining TLS roadmap: RSA-PSS CertificateVerify, chain validation
   wiring into the live client, app-response hardening (EOF/alert records).
 - **RSA-PSS CertificateVerify done — live client now accepts BOTH CV
@@ -266,7 +266,7 @@
   e2e run_tls13_live_openssl_in_resid extended to iterate over ECDSA
   AND RSA server certs. Also fixed en route: tm_verify_cv's ECDSA
   branch used a u24 length read for the u16 signature length (crash);
-  630 tests pass.
+  631 tests pass.
 - **Chain validation wired into the live client**: new rt builtin
   `resid_utc_now_civil` (C gmtime_r -> YYYYMMDDHHMMSS i64; declared in
   resid-type BUILTIN_SIGS + codegen decl_rt) gives the wall clock for
@@ -399,7 +399,7 @@
   number as before. Verified live: an accept-then-instantly-close TCP
   server now ends gracefully (SH-LEN-BAD/REPLY-NONE) where the client
   previously crashed with a list-index abort, and the happy path still
-  completes with HTTP 200. 630 tests pass.
+  completes with HTTP 200. 631 tests pass.
 - **RESOLVED (prior session) — ECDSA-P256 verify reliability (wide-int
   unsigned compare fixed in lib)**: root cause was NOT a codegen
   miscompilation:
@@ -2792,6 +2792,24 @@ These tools inspect the knowledge-cache and residual-notes artifacts
 (spec §36 pure reduction relation): comptime evaluation beyond the
 current constant folding, residual tracking with provenance, CBOR
 artifact serialization. Build those first; the tools are thin viewers.
+
+- **HTTP/2 framing + HPACK in pure Resid (`lib/h2.resid`) — roadmap
+  item 7 started (unblocked once pure-Resid TLS landed)**: frame header
+  decode/encode (u24 length, type/flags, 32-bit stream id with reserved
+  bit masked), SETTINGS payload build/parse, and an HPACK decoder per
+  RFC 7541: prefix integer coding (multi-byte continuation), full 61-entry
+  static table, dynamic table with incremental-indexing insertion,
+  indexed fields, all literal representations (with/without indexing,
+  never-indexed, new-name + indexed-name). Huffman string literals are
+  out of scope for v1 (flagged via hp_str huffman bit). Validated against
+  RFC 7541 C.1/C.3-style vectors cross-checked with the python `hpack`
+  library; e2e `run_h2_hpack_in_resid` runs them through BOTH pipelines.
+  Bugs found building it: concat helpers must terminate at `i >= n` on
+  seeded lists (off-by-one aborts); `hp_int_cont` returned "next" past
+  the last consumed byte while all callers assume last-consumed-byte —
+  multi-byte integers silently mis-framed. Stage-2 checker gap fixed en
+  route: struct-literal int-family fields now adopt wider/narrower
+  numeric field types via int_adopt_ok (was exact-match only).
 
 ### 14.5 Smaller items
 

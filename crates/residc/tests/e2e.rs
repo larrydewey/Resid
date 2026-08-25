@@ -5208,3 +5208,105 @@ fn which_python() -> Option<std::path::PathBuf> {
     }
     None
 }
+
+/// HTTP/2 framing + HPACK (lib/h2.resid) — frame header decode/encode,
+/// HPACK integer coding, static/dynamic tables, indexed + literal
+/// representations, validated against RFC 7541 C.3-style vectors
+/// cross-checked with the python `hpack` library. Both pipelines.
+#[test]
+fn run_h2_hpack_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-h2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::copy(workspace.join("lib/h2.resid"), dir.join("h2.resid")).unwrap();
+    std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "h2.resid";
+
+Int main() {
+    // Frame header: SETTINGS len=12 stream 263.
+    List(Int) f = [0, 0, 0, 12, 4, 0, 0, 0, 1, 7];
+    H2FrameHdr h = h2_frame_hdr(f, 1);
+    println("hdr=" + IntToString(h.length) + "," + IntToString(h.stype) + "," + IntToString(h.sid));
+    // HPACK integers (RFC 7541 C.1): 10 with 5-bit prefix; 1337 multi-byte.
+    List(Int) i1 = [0, 10];
+    HpInt r1 = hp_read_int(i1, 1, 10, 31);
+    List(Int) i2 = [0, 31, 154, 10];
+    HpInt r2 = hp_read_int(i2, 1, 31, 31);
+    println("int=" + IntToString(r1.val) + " " + IntToString(r2.val));
+    // C.3.1 block.
+    List(Int) b1 = [0, 130, 134, 132, 65, 15, 119, 119, 119, 46, 101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109];
+    Int e1 = b1.len() - 1;
+    HpBlock r3 = hp_decode_block(b1, 1, e1, [""], [HpField { name: "", value: "" }]);
+    List(HpField) fs1 = r3.fields;
+    HpField a1 = fs1[1];
+    HpField a4 = fs1[4];
+    println("b1=" + a1.name + "|" + a1.value + " " + a4.name + "|" + a4.value);
+    // C.3.2 block: dynamic index 62 must resolve through r3's table.
+    List(Int) b2 = [0, 130, 134, 190, 88, 8, 110, 111, 45, 99, 97, 99, 104, 101];
+    Int e2 = b2.len() - 1;
+    List(Str) dyn1 = r3.dyn;
+    HpBlock r4 = hp_decode_block(b2, 1, e2, dyn1, [HpField { name: "", value: "" }]);
+    List(HpField) fs2 = r4.fields;
+    HpField a5 = fs2[3];
+    HpField a6 = fs2[4];
+    println("b2=" + a5.name + "|" + a5.value + " " + a6.name + "|" + a6.value);
+    // Literal without indexing, new name.
+    List(Int) b3 = [0, 0, 3, 102, 111, 111, 3, 98, 97, 114];
+    Int e3 = b3.len() - 1;
+    HpBlock r5 = hp_decode_block(b3, 1, e3, [""], [HpField { name: "", value: "" }]);
+    List(HpField) fs3 = r5.fields;
+    HpField a7 = fs3[1];
+    println("b3=" + a7.name + "|" + a7.value);
+    // Never-indexed literal, indexed name via multi-byte integer (28).
+    List(Int) b4 = [0, 31, 13, 2, 55, 55];
+    Int e4 = b4.len() - 1;
+    HpBlock r6 = hp_decode_block(b4, 1, e4, [""], [HpField { name: "", value: "" }]);
+    List(HpField) fs4 = r6.fields;
+    HpField a8 = fs4[1];
+    println("b4=" + a8.name + "|" + a8.value);
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let expected = "hdr=12,4,263\nint=10 1337\nb1=:method|GET :authority|www.example.com\nb2=:authority|www.example.com cache-control|no-cache\nb3=foo|bar\nb4=content-length|77";
+    // Stage-1 (Rust pipeline).
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("rust pipeline");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let rust_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(rust_out.trim(), expected, "{rust_out:?}");
+    // Stage-2 (bootstrap driver pipeline).
+    let bin = dir.join("h2_bin");
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(workspace)
+        .output()
+        .expect("driver run");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = Command::new(&bin).output().expect("stage-2 binary");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim_end(),
+        expected,
+        "{:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
