@@ -354,6 +354,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .get_function(&sym)
                 .ok_or_else(|| format!("codegen: missing declaration for `{name}`"))?;
             self.cur_fn = Some(fv);
+            eprintln!("CGFN {name}");
             self.lower_function(name, unit, fv)?;
         }
         self.cur_fn = None;
@@ -2084,13 +2085,48 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
 
+        // Bool == Bool / Bool != Bool: compare the i8 payloads directly.
+        if matches!(op, OpKind::EqEq | OpKind::Ne) {
+            {
+                let l = self.lower_expr(sc, lhs, None)?;
+                let r = self.lower_expr(sc, rhs, None)?;
+                if l.ty != SemType::Bool || r.ty != SemType::Bool {
+                    // fall through to the numeric comparison path below
+                    let binop = resid_type::to_bin_op(op)
+                        .ok_or_else(|| format!("codegen: unsupported operator {op:?}"))?;
+                    let lt = as_numeric(&l.ty, &l).map_err(|e| format!("{op:?}: {e}"))?;
+                    let rt = as_numeric(&r.ty, &r).map_err(|e| format!("{op:?}: {e}"))?;
+                    return self.write_cmp(binop, l, r, lt, rt);
+                }
+                let li = l.v.into_int_value();
+                let ri = r.v.into_int_value();
+                let cmp = self
+                    .builder
+                    .build_int_compare(
+                        if matches!(op, OpKind::EqEq) {
+                            inkwell::IntPredicate::EQ
+                        } else {
+                            inkwell::IntPredicate::NE
+                        },
+                        li,
+                        ri,
+                        "booleq",
+                    )
+                    .map_err(to_err)?;
+                return Ok(Val { v: cmp.into(), ty: SemType::Bool });
+            }
+        }
+
         let binop = resid_type::to_bin_op(op)
             .ok_or_else(|| format!("codegen: unsupported operator {op:?}"))?;
 
         let l = self.lower_expr(sc, lhs, None)?;
         let r = self.lower_expr(sc, rhs, None)?;
-        let lt = as_numeric(&l.ty, &l)?;
-        let rt = as_numeric(&r.ty, &r)?;
+        let lt = as_numeric(&l.ty, &l).map_err(|e| format!("{op:?} lhs={} {e}", l.ty))?;
+        let rt = as_numeric(&r.ty, &r).map_err(|e| format!("{op:?} rhs={:?} {e}", r.ty))?;
+        if l.ty == SemType::Bool || r.ty == SemType::Bool {
+            eprintln!("DBG bool-arith op={op:?} lhs={lt:?} rhs={rt:?}");
+        }
 
         // Comparisons produce a Bool and use their own lowering.
         if matches!(
@@ -2159,11 +2195,44 @@ impl<'ctx> CodeGen<'ctx> {
             };
             return Ok(ext.map_err(to_err)?.into());
         }
-        Ok(self
+        // Spec v3.2 §6.4: narrowing conversions are CHECKED, never
+        // silent — truncate, verify by extending back, trap on loss.
+        // Constants that lose value are compile-time errors.
+        let t = self
             .builder
-            .build_int_truncate(i, it, "trunc")
-            .map_err(to_err)?
-            .into())
+            .build_int_truncate(i, it, "narrow")
+            .map_err(to_err)?;
+        let back = if signed {
+            self.builder.build_int_s_extend(t, i.get_type(), "nback").map_err(to_err)?
+        } else {
+            self.builder.build_int_z_extend(t, i.get_type(), "nback").map_err(to_err)?
+        };
+        let changed = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, back, i, "narchk")
+            .map_err(to_err)?;
+        // A constant that loses value is detected at compile time:
+        // both back-extend and compare fold to a constant predicate.
+        if let Some(c) = changed.get_zero_extended_constant() {
+            if c == 1 {
+                return Err("constant does not fit target width (explicit cast required)".into());
+            }
+        }
+        let cur_fn = self.cur_fn.ok_or("codegen: no current function")?;
+        let trap_bb = self.cx.append_basic_block(cur_fn, "narrow_trap");
+        let ok_bb = self.cx.append_basic_block(cur_fn, "narrow_ok");
+        self.builder
+            .build_conditional_branch(changed, trap_bb, ok_bb)
+            .map_err(to_err)?;
+        self.builder.position_at_end(trap_bb);
+        let abortf = self
+            .module
+            .get_function("resid_arith_overflow")
+            .ok_or("codegen: missing resid_arith_overflow decl")?;
+        self.builder.build_call(abortf, &[], "ovfcall").map_err(to_err)?;
+        self.builder.build_unreachable().map_err(to_err)?;
+        self.builder.position_at_end(ok_bb);
+        Ok(t.into())
     }
 
     /// Spec v3.2 §6.1: checked integer add/sub at operand width.
@@ -4389,7 +4458,10 @@ fn make_fn_type<'ctx>(
 fn as_numeric<'ctx>(t: &SemType, _v: &Val<'ctx>) -> Result<Numeric, String> {
     match t {
         SemType::Numeric(n) => Ok(*n),
-        other => Err(format!("codegen: numeric op needs numbers, got {other}")),
+        other => {
+            eprintln!("DBG as_numeric fail: {other:?} ");
+            Err(format!("codegen: numeric op needs numbers, got {other}"))
+        }
     }
 }
 

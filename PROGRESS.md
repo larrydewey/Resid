@@ -321,15 +321,26 @@
   examples/typecheck.resid + codegen.resid, driver regenerated via
   merge_driver.py. Gotcha honored: no reassignment — the num-vs-nested
   branch binds everything as if-expressions.
-  REMAINING stage-2 wide-type gap (next session, milestone-sized): the
-  self-hosted CHECKER lacks the Rust side's expected-type inference —
-  integer literals always infer bare `Int`, so `Int(256) EC_GY() {
-  return <79-digit literal>; }` fails ("return type Int does not match
-  Int(256)") and `Int(256) two = 2;` would need binding-site widening;
-  the stage-2 CODEGEN also needs i64→iN conversion emission for mixed
-  widths. Until then the crypto/TLS stack remains stage-1-only; the
-  TLS client through the driver gets past collection and dies on this
-  check. Forensics that cracked it: preserving the
+  Stage-2 wide-type support, phase 1 (checker) DONE: integer literals
+  infer magnitude-based widths beyond 64 bits (lit_int_ty; small
+  literals keep bare `Int` for signature compatibility); expected-type
+  adoption at bindings and returns (check_expr_e threads the declared
+  type into literal positions); width-aware bin_type (v3.2 result
+  rules: widest operand for add/sub/div/rem/shifts/bitwise, range rule
+  for mul); int-family adoption at call sites (params_accept_at);
+  mixed-width comparisons allowed within a signedness family; cast
+  expressions `(Int(256)) x` checked and lowered (cg_convert emits
+  sext/zext/trunc); if-arm agreement compares NORMALIZED types.
+  Gotchas honored repeatedly: no reassignment anywhere (every helper
+  written as pure if-expressions), definitions precede uses in the
+  merged driver, codegen.resid needs its own copies of shared helpers
+  (str_has_prefix_cg) because standalone compilation sees no imports.
+  REMAINING stage-2 wide-type gap (codegen emitter, next session):
+  width-aware allocas/loads/stores/call args/binops across
+  codegen.resid (ll_ty maps Int(N)->iN already; the emitter body is
+  still hardwired i64 in places), plus checked add/sub emission and
+  >64-bit constant materialization. Until then the crypto/TLS stack
+  passes stage-2 TYPE CHECKING but fails in its emitter. Forensics that cracked it: preserving the
   failing binary showed the SAME binary flip-flopping across runs
   (runtime, not build), identical IR between good/bad builds, and junk
   bytes decoding as argv[0] tails + stack pointers.

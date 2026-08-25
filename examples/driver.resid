@@ -509,12 +509,74 @@ PRes parse_type(Str s, Int pos) {
     return PRes { pos: t.pos, ty: t.text, err: "" };
 }
 
+Bool str_has_prefix_cg(Str s, Str p) {
+    Int ns = str_len(s);
+    Int np = str_len(p);
+    if (np > ns) { return false; }
+    Str head = str_slice(s, 0, np);
+    if (head == p) { return true; }
+    return false;
+}
+
+pub Str num_norm_cg(Str ty) {
+    if (ty == "Int") { return "Int(64)"; }
+    if (ty == "UInt") { return "UInt(64)"; }
+    if (ty == "Float") { return "Float(64)"; }
+    return ty;
+}
+
 Str ll_ty(Str ty) {
     if (ty == "Int") { return "i64"; }
     if (ty == "Bool") { return "i1"; }
     if (ty == "Float") { return "double"; }
     if (ty == "Str") { return "ptr"; }
+    // width-parameterized numerics: Int(256) -> i256 etc.
+    Bool si = str_has_prefix_cg(ty, "Int(");
+    Bool ui = str_has_prefix_cg(ty, "UInt(");
+    Bool fi = str_has_prefix_cg(ty, "Float(");
+    if (si || ui || fi) {
+        Int skip = if (ui) { 5 } else { 4 };
+        Str pre = if (fi) { "f" } else { "i" };
+        Str digits = str_slice(ty, skip, str_len(ty) - 1);
+        return pre + digits;
+    }
     return "ptr";
+}
+
+// Signedness of an integer type string; true for signed families.
+pub Bool ll_is_signed(Str ty) {
+    return str_has_prefix_cg(ty, "Int(") || ty == "Int";
+}
+
+// Emit a conversion from value `v` (LLVM type `from`) to `to`.
+// sgn = signedness of the SOURCE integer family.
+GT cg_convert(GT v, Str from, Str to, Bool sgn, GT c) {
+    if (from == to) { return v; }
+    Bool fint = str_has_prefix_cg(from, "i");
+    Bool tint = str_has_prefix_cg(to, "i");
+    if (!fint || !tint) { return v; }
+    Int fw = str_parse_int(str_slice(from, 1, str_len(from)));
+    Int tw = str_parse_int(str_slice(to, 1, str_len(to)));
+    Int t1 = c.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    Str op = if (fw < tw) { if (sgn) { "sext" } else { "zext" } } else { "trunc" };
+    Str line = reg + " = " + op + " " + to + " " + v.val;
+    List(Str) l0 = c.lines;
+    List(Str) l2 = l0.concat([line]);
+    return GT { pos: v.pos, val: reg, ty: v.ty, cnt: v.cnt, err: "", glines: c.glines, lines: l2, tmp: t1, lbl: c.lbl };
+}
+
+// Known base type names usable in a cast `(Type) expr`.
+pub Bool is_known_type_cg(Str ty) {
+    if (ty == "Int") { return true; }
+    if (ty == "UInt") { return true; }
+    if (ty == "Float") { return true; }
+    if (ty == "Dec") { return true; }
+    if (ty == "Bool") { return true; }
+    if (ty == "Str") { return true; }
+    Bool w = str_has_prefix_cg(ty, "Int(") || str_has_prefix_cg(ty, "UInt(");
+    Bool wf = str_has_prefix_cg(ty, "Float(") || str_has_prefix_cg(ty, "Dec(");
+    return w || wf;
 }
 
 Int skip_decl(Str s, Int pos, Int depth) {
@@ -1301,6 +1363,25 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
 }
 
 GT cg_unary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
+    Tok t0 = lex_tok(s, pos);
+    if (t0.text == "(") {
+        // cast: "(" KnownType ")" unary — emit width conversion
+        Tok open1 = lex_tok(s, pos);
+        PRes pt = parse_type(s, open1.pos);
+        if (pt.err == "") {
+            Tok close = lex_tok(s, pt.pos);
+            if (close.text == ")") {
+                if (is_known_type_cg(pt.ty)) {
+                    GT inner = cg_unary(s, close.pos, env, fs, c);
+                    if (inner.err != "") { return inner; }
+                    Str fromty = ll_ty(inner.ty);
+                    GT conv = cg_convert(inner, fromty, ll_ty(pt.ty), ll_is_signed(inner.ty), c);
+                    GT out = GT { pos: conv.pos, val: conv.val, ty: pt.ty, cnt: 0, err: "", glines: conv.glines, lines: conv.lines, tmp: conv.tmp, lbl: conv.lbl };
+                    return out;
+                }
+            }
+        }
+    }
     GT b = cg_primary(s, pos, env, fs, c);
     if (b.err != "") { return b; }
     return cg_postfix(s, b, env, fs);
@@ -1712,10 +1793,12 @@ GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     if (ev.err != "") { return ev; }
     Tok cb2 = lex_tok(s, ev.pos);
     if (cb2.text != "}") { return gt_err("expected } in else arm", ev); }
-    if (ev.ty != tv.ty) { return gt_err("if arms disagree", ev); }
+    // Spec v3.2 §6.4: arms agree when their NORMALIZED types match
+    // (bare Int is an alias of Int(64)).
+    if (num_norm_cg(ev.ty) != num_norm_cg(tv.ty)) { return gt_err("if arms disagree", ev); }
     Int tp = ev.tmp + 1;
     Str pr = "%t" + IntToString(tp);
-    Str phi = pr + " = phi " + ll_ty(tv.ty) + " [ " + tv.val + ", %" + lt + " ], [ " + ev.val + ", %" + le + " ]";
+    Str phi = pr + " = phi " + ll_ty(num_norm_cg(tv.ty)) + " [ " + tv.val + ", %" + lt + " ], [ " + ev.val + ", %" + le + " ]";
     List(Str) d0 = ev.lines;
     List(Str) d05 = d0.concat(["br label %" + ld]);
     List(Str) d1 = d05.concat([ld + ":"]);
@@ -2551,36 +2634,121 @@ Bool is_bin_op(Str op) {
 Bool is_num(Str t) {
     if (t == "Int") { return true; }
     if (t == "Float") { return true; }
+    if (str_has_prefix(t, "Int(")) { return true; }
+    if (str_has_prefix(t, "UInt(")) { return true; }
+    if (str_has_prefix(t, "Float(")) { return true; }
+    if (str_has_prefix(t, "Dec")) { return true; }
     return false;
+}
+
+// ─── Numeric width helpers (spec v3.2 §6.1/§6.1a) ───────────────
+
+// Normalize bare family aliases to explicit widths.
+pub Str num_norm(Str ty) {
+    if (ty == "Int") { return "Int(64)"; }
+    if (ty == "UInt") { return "UInt(64)"; }
+    if (ty == "Float") { return "Float(64)"; }
+    return ty;
+}
+
+pub Bool is_int_ty(Str ty) {
+    Str n = num_norm(ty);
+    return str_has_prefix(n, "Int(") || str_has_prefix(n, "UInt(");
+}
+
+pub Int ty_bits(Str ty) {
+    if (!is_int_ty(ty)) { return 0; }
+    Str n = num_norm(ty);
+    // strip "Int(" / "UInt(" prefix and trailing ")"
+    Int skip = if (str_has_prefix(n, "UInt(")) { 5 } else { 4 };
+    Str digits = str_slice(n, skip, str_len(n) - 1);
+    return str_parse_int(digits);
+}
+
+pub Bool signed_ty(Str ty) {
+    return str_has_prefix(num_norm(ty), "Int(");
+}
+
+// Next width in the ladder at or above `bits`.
+pub Int width_at_least(Int bits) {
+    if (bits <= 8) { return 8; }
+    if (bits <= 16) { return 16; }
+    if (bits <= 32) { return 32; }
+    if (bits <= 64) { return 64; }
+    if (bits <= 128) { return 128; }
+    if (bits <= 256) { return 256; }
+    return 512;
+}
+
+// Result of an integer binop per spec v3.2 §6.1. Assumes same family
+// (signedness mix was rejected earlier).
+pub Str int_bin_result(Str op, Str a, Str b) {
+    Int aw = ty_bits(a);
+    Int bw = ty_bits(b);
+    Int mx = if (aw > bw) { aw } else { bw };
+    Str fam = if (signed_ty(a)) { "Int(" } else { "UInt(" };
+    if (op == "*") {
+        Int need = aw + bw;
+        Int w = width_at_least(need);
+        return fam + IntToString(w) + ")";
+    }
+    // add/sub/div/rem/shifts/bitwise: widest operand
+    return fam + IntToString(mx) + ")";
+}
+
+// Can a value of int type `got` initialize a binding/param/return of
+// int type `want`? Widening is implicit; narrowing requires a literal
+// whose magnitude fits the target (checked against digit count).
+pub Bool int_adopt_ok(Str got, Str want, Str lit_text) {
+    Int gw = ty_bits(got);
+    Int ww = ty_bits(want);
+    if (gw <= ww) { return true; }
+    // narrowing: only a literal can be adopted; magnitude heuristic on
+    // decimal digit count (hex digits carry 4 bits each)
+    Bool neg = str_has_prefix(lit_text, "-");
+    Str t = if (neg) { str_slice(lit_text, 1, str_len(lit_text)) } else { lit_text };
+    Bool ishex = str_has_prefix(t, "0x");
+    Int hexdigits = (str_len(t) - 2) * 4;
+    Int decdigits = str_len(t);
+    Int digits = if (ishex) { hexdigits } else { decdigits };
+    Int need = ww - 1;
+    return digits <= need;
 }
 
 Str bin_type(Str op, Str a, Str b) {
     if (op == "&" || op == "|" || op == "^") {
-        if (a == "Int") {
-            if (b == "Int") { return "Int"; }
+        if (is_int_ty(a)) {
+            if (is_int_ty(b)) { return int_bin_result(op, a, b); }
         }
         return "ERR";
     }
     if (op == "<<") {
-        if (a == "Int") {
-            if (b == "Int") { return "Int"; }
+        // shift result = left operand width; amount is any integer
+        if (is_int_ty(a)) {
+            if (is_num(b)) { return num_norm(a); }
         }
         return "ERR";
     }
     if (op == ">>") {
-        if (a == "Int") {
-            if (b == "Int") { return "Int"; }
+        if (is_int_ty(a)) {
+            if (is_num(b)) { return num_norm(a); }
         }
         return "ERR";
     }
     if (op == "..") { return "Range"; }
     if (op == "..=") { return "Range"; }
     if (op == "==") {
-        if (a == b) { return "Bool"; }
+        Bool sam = a == b;
+        Bool intpair = is_int_ty(a) && is_int_ty(b);
+        Bool samesign = signed_ty(a) == signed_ty(b);
+        if (sam || (intpair && samesign)) { return "Bool"; }
         return "ERR";
     }
     if (op == "!=") {
-        if (a == b) { return "Bool"; }
+        Bool sam = a == b;
+        Bool intpair = is_int_ty(a) && is_int_ty(b);
+        Bool samesign = signed_ty(a) == signed_ty(b);
+        if (sam || (intpair && samesign)) { return "Bool"; }
         return "ERR";
     }
     if (op == "<") {
@@ -2621,7 +2789,11 @@ Str bin_type(Str op, Str a, Str b) {
     }
     if (op == "+") {
         if (is_num(a)) {
-            if (is_num(b)) { return a; }
+            if (is_num(b)) {
+                Bool bothint = is_int_ty(a) && is_int_ty(b);
+                Str r = if (bothint) { int_bin_result(op, a, b) } else { num_norm(a) };
+                return r;
+            }
         }
         if (a == "Str") {
             if (b == "Str") { return "Str"; }
@@ -2629,7 +2801,15 @@ Str bin_type(Str op, Str a, Str b) {
         return "ERR";
     }
     if (is_num(a)) {
-        if (is_num(b)) { return a; }
+        if (is_num(b)) {
+            Bool bothint = is_int_ty(a) && is_int_ty(b);
+            Bool af = str_has_prefix(num_norm(a), "Float(");
+            Str r = if (bothint) { int_bin_result(op, a, b) } else { "" };
+            Str r2 = if (r != "") { r } else {
+                if (af) { num_norm(a) } else { num_norm(b) }
+            };
+            return r2;
+        }
     }
     return "ERR";
 }
@@ -2657,7 +2837,44 @@ Bool arith_family(Str name) {
     if (str_starts_with(name, "saturating_")) { return true; }
     return false;
 }
-ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
+// Collapse narrow integer widths to the bare family so builtins
+// declared over Int/UInt accept Int(8)..Int(64) arguments.
+pub Str canon64_at(Str tys, Int i) {
+    List(Str) parts = str_split(tys, ",");
+    Int n = parts.len();
+    if (i >= n) { return ""; }
+    Str p = str_trim(parts[i]);
+    Bool isintfam = is_int_ty(p);
+    Int bits = ty_bits(p);
+    Bool smallint = if (isintfam) { bits <= 64 } else { false };
+    Str out = if (smallint) { num_norm2(p) } else { p };
+    return out;
+}
+
+pub Str num_norm2(Str ty) {
+    if (str_has_prefix(ty, "UInt")) { return "UInt"; }
+    return "Int";
+}
+
+pub Str canon64_acc(Str tys, Int i, Str acc) {
+    Int n = str_len(tys);
+    Bool any = n > 0;
+    if (!any) { return acc; }
+    Int total = str_count(tys, ",");
+    if (i > total) { return acc; }
+    Str elem = canon64_at(tys, i);
+    Str sep = if (acc == "") { "" } else { "," };
+    Str acc2 = acc + sep + elem;
+    Int ni = i + 1;
+    return canon64_acc(tys, ni, acc2);
+}
+
+pub Str canon64(Str tys) {
+    return canon64_acc(tys, 0, "");
+}
+
+ERes check_builtin(Str name, Str rawtys, Int argc, Int pos) {
+    Str argtys = canon64(rawtys);
     if (name == "println") {
         if (argc == 1) {
             if (argtys == "Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
@@ -2874,11 +3091,45 @@ ERes check_builtin(Str name, Str argtys, Int argc, Int pos) {
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
 
+// Split a comma-joined type list into position i's element.
+pub Str ty_list_at(Str tys, Int i) {
+    List(Str) parts = str_split(tys, ",");
+    Int n = parts.len();
+    if (i >= n) { return ""; }
+    return str_trim(parts[i]);
+}
+
+// Do declared parameter types accept these argument types?
+// Exact match, or value-preserving integer widening (spec v3.2 §6.4).
+pub Bool params_accept_at(Str pts, Str argtys, Int i, Int n) {
+    if (i >= n) { return true; }
+    Str p = num_norm(ty_list_at(pts, i));
+    Str g = num_norm(ty_list_at(argtys, i));
+    Bool same = p == g;
+    Bool widen_possible = is_int_ty(p) && is_int_ty(g);
+    Int gw = ty_bits(g);
+    Int pw = ty_bits(p);
+    Bool widen_fits = gw <= pw;
+    Bool ok = if (same) { true } else {
+        if (widen_possible) { widen_fits } else { false }
+    };
+    if (!ok) { return false; }
+    return params_accept_at(pts, argtys, i + 1, n);
+}
+
+pub Bool params_accept(Str pts, Str argtys, Int n) {
+    return params_accept_at(pts, argtys, 0, n);
+}
+
 ERes finish_call(Str s, Int pos, Str name, Str argtys, Int argc, List(Str) env, Sigs fs) {
     Int idx = ck_fn_index(fs, name);
     if (idx >= 0) {
         Str pts = fs.pts[idx];
         if (pts == argtys) {
+            return ERes { pos: pos, ty: fs.rets[idx], err: "" };
+        }
+        Bool adopted = params_accept(pts, argtys, argc);
+        if (adopted) {
             return ERes { pos: pos, ty: fs.rets[idx], err: "" };
         }
         Str msg = "call " + name + " expects (" + pts + "), got (" + argtys + ")";
@@ -3002,10 +3253,40 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Sigs fs) {
     return base;
 }
 
-ERes check_primary(Str s, Int pos, List(Str) env, Sigs fs) {
+// Smallest signed integer type (ladder >= 64) whose magnitude fits
+// the literal text. Hex digits carry 4 bits each.
+pub Str lit_int_ty(Str text) {
+    Bool neg = str_has_prefix(text, "-");
+    Str t = if (neg) { str_slice(text, 1, str_len(text)) } else { text };
+    Bool hex = str_has_prefix(t, "0x");
+    Bool bin = str_has_prefix(t, "0b");
+    Bool oct = str_has_prefix(t, "0o");
+    Int hexpieces = (str_len(t) - 2) * 4;
+    Int binpieces = str_len(t) - 2;
+    Int octpieces = (str_len(t) - 2) * 3;
+    Int decpieces = str_len(t) * 10 / 3;
+    Int bits = if (hex) { hexpieces } else {
+        if (bin) { binpieces } else {
+            if (oct) { octpieces } else { decpieces }
+        }
+    };
+    Int w = width_at_least(bits + 1);
+    Int w2 = if (w < 64) { 64 } else { w };
+    return "Int(" + IntToString(w2) + ")";
+}
+
+ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "int") {
-        return ERes { pos: t.pos, ty: "Int", err: "" };
+        // Spec v3.2 §6.1a: literals adopt the contextual expected type
+        // when it is an integer family type; otherwise magnitude rules.
+        Bool adopt = is_int_ty(exp);
+        Str lty = lit_int_ty(t.text);
+        Bool small = true;
+        Str ty = if (adopt) { num_norm(exp) } else {
+            if (small) { "Int" } else { lty }
+        };
+        return ERes { pos: t.pos, ty: ty, err: "" };
     }
     if (t.kind == "float") {
         return ERes { pos: t.pos, ty: "Float", err: "" };
@@ -3130,8 +3411,50 @@ ERes check_primary(Str s, Int pos, List(Str) env, Sigs fs) {
     return ERes { pos: t.pos, ty: "", err: msg };
 }
 
+// Known base type names usable in a cast `(Type) expr`.
+pub Bool is_known_type(Str ty) {
+    if (ty == "Int") { return true; }
+    if (ty == "UInt") { return true; }
+    if (ty == "Float") { return true; }
+    if (ty == "Dec") { return true; }
+    if (ty == "Bool") { return true; }
+    if (ty == "Str") { return true; }
+    Bool w = str_has_prefix(ty, "Int(") || str_has_prefix(ty, "UInt(");
+    Bool wf = str_has_prefix(ty, "Float(") || str_has_prefix(ty, "Dec(");
+    Bool wl = str_has_prefix(ty, "List(");
+    return w || wf || wl;
+}
+
 ERes check_unary(Str s, Int pos, List(Str) env, Sigs fs) {
+    return check_unary_e(s, pos, env, fs, "");
+}
+
+ERes check_unary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
     Tok t = lex_tok(s, pos);
+    if (t.text == "(") {
+        // Disambiguate a cast: "(" TypeName ")" unary. Only known type
+        // names count, so parenthesized expressions fall through.
+        Tok open1 = lex_tok(s, pos);
+        PRes pt = parse_type(s, open1.pos);
+        if (pt.err == "") {
+            Tok close = lex_tok(s, pt.pos);
+            if (close.text == ")") {
+                if (is_known_type(pt.ty)) {
+                    ERes inner = check_unary(s, close.pos, env, fs);
+                    if (inner.err != "") { return inner; }
+                    Bool bothint = is_int_ty(pt.ty) && is_int_ty(inner.ty);
+                    if (bothint || pt.ty == inner.ty) {
+                        return ERes { pos: inner.pos, ty: pt.ty, err: "" };
+                    }
+                    if (pt.ty == inner.ty) {
+                        return ERes { pos: inner.pos, ty: pt.ty, err: "" };
+                    }
+                    Str msg = "cast from " + inner.ty + " to " + pt.ty + " not supported";
+                    return ERes { pos: inner.pos, ty: "", err: msg };
+                }
+            }
+        }
+    }
     if (t.text == "-") {
         ERes inner = check_unary(s, t.pos, env, fs);
         if (inner.err != "") { return inner; }
@@ -3159,7 +3482,7 @@ ERes check_unary(Str s, Int pos, List(Str) env, Sigs fs) {
         Str msg = "! requires Bool, got " + inner.ty;
         return ERes { pos: inner.pos, ty: "", err: msg };
     }
-    ERes p = check_primary(s, pos, env, fs);
+    ERes p = check_primary_e(s, pos, env, fs, exp);
     if (p.err != "") { return p; }
     return check_postfix(s, p, env, fs);
 }
@@ -3305,8 +3628,15 @@ SRes check_for(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
     return SRes { pos: body.pos, err: "", env: env };
 }
 
+// Full expression check with an expected type for literal adoption.
+ERes check_expr_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
+    ERes u = check_unary_e(s, pos, env, fs, exp);
+    if (u.err != "") { return u; }
+    return check_bin_rest(s, u, 1, env, fs);
+}
+
 SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Sigs fs, Str ret) {
-    ERes v = check_expr(s, pos, env, fs);
+    ERes v = check_expr_e(s, pos, env, fs, "");
     if (v.err != "") {
         return SRes { pos: v.pos, err: v.err, env: env };
     }
@@ -3314,7 +3644,13 @@ SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Sigs fs, Str re
         Bool vempty = v.ty == "List(Unknown)";
         Bool listty = str_has_prefix(ty, "List(");
         Bool coerce = vempty && listty;
-        if (!coerce) {
+        // Spec v3.2 §6.1a/§6.4: integer literal adoption + implicit
+        // value-preserving widening at bindings.
+        Bool intpair = is_int_ty(ty) && is_int_ty(v.ty);
+        Tok first_tok = lex_tok(s, pos);
+        Bool iok = int_adopt_ok(v.ty, ty, first_tok.text);
+        Bool bind_ok = if (intpair) { iok } else { false };
+        if (!coerce && !bind_ok) {
             Str msg = "binding " + name + ": expected " + ty + ", got " + v.ty;
             return SRes { pos: v.pos, err: msg, env: env };
         }
@@ -3335,13 +3671,26 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
             Str msg = "return without a value in a " + ret + " function";
             return SRes { pos: e.pos, err: msg, env: env };
         }
-        ERes v = check_expr(s, t.pos, env, fs);
+        ERes v = check_expr_e(s, t.pos, env, fs, "");
         if (v.err != "") {
             return SRes { pos: v.pos, err: v.err, env: env };
         }
         if (v.ty != ret) {
-            Str msg = "return type " + v.ty + " does not match " + ret;
-            return SRes { pos: v.pos, err: msg, env: env };
+            // Spec v3.2 §6.4: value-preserving widening is implicit;
+            // narrowing requires literal adoption.
+            Bool inrange = is_int_ty(ret) && is_int_ty(v.ty);
+            Bool widen = ty_bits(v.ty) <= ty_bits(ret);
+            Tok first = lex_tok(s, t.pos);
+            Bool adopt = int_adopt_ok(v.ty, ret, first.text);
+            Bool riok = if (!inrange) {
+                false
+            } else {
+                if (widen) { true } else { adopt }
+            };
+            if (!riok) {
+                Str msg = "return type " + v.ty + " does not match " + ret;
+                return SRes { pos: v.pos, err: msg, env: env };
+            }
         }
         Tok semi = lex_tok(s, v.pos);
         return SRes { pos: semi.pos, err: "", env: env };
@@ -3759,6 +4108,36 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
