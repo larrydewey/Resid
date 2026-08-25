@@ -690,7 +690,9 @@ ERes check_struct_lit_rest(Str s, Int pos, Str ty, List(Str) env, Funcs fs) {
         return ERes { pos: f.pos, ty: "", err: msg };
     }
     Bool vempty = v.ty == "List(Unknown)";
-    if (!vempty && v.ty != ft) {
+    Bool fint = is_num(ft) && is_num(v.ty);
+    Bool fok = fint && int_adopt_ok(v.ty, ft, "");
+    if (!vempty && !fok && v.ty != ft) {
         Str msg = "field " + f.text + ": expected " + ft + ", got " + v.ty;
         return ERes { pos: v.pos, ty: "", err: msg };
     }
