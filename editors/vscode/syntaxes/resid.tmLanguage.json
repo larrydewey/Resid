@@ -1,0 +1,450 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Resid",
+  "scopeName": "source.resid",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#module-decl" },
+    { "include": "#annotations" },
+    { "include": "#type-def" },
+    { "include": "#behavior-def" },
+    { "include": "#function-def" },
+    { "include": "#control-keywords" },
+    { "include": "#declaration-keywords" },
+    { "include": "#constants" },
+    { "include": "#numeric-type" },
+    { "include": "#conversion-helpers" },
+    { "include": "#builtin-functions" },
+    { "include": "#core-types" },
+    { "include": "#capability-name" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#location" },
+    { "include": "#ranges" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.triple-slash.resid",
+          "match": "^///.*$",
+          "captures": {
+            "0": { "patterns": [{ "include": "#doc-comment-content" }] }
+          }
+        },
+        {
+          "name": "comment.block.documentation.resid",
+          "begin": "/\\*\\*",
+          "end": "\\*/",
+          "name": "comment.block.documentation.resid"
+        },
+        {
+          "name": "comment.block.resid",
+          "begin": "/\\*",
+          "end": "\\*/"
+        },
+        {
+          "name": "comment.line.double-slash.resid",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "doc-comment-content": {
+      "patterns": [
+        {
+          "name": "markup.heading.resid",
+          "match": "(?<=///)\\s*(\\S.*):\\s*$",
+          "captures": { "1": {} }
+        },
+        {
+          "name": "markup.inline.raw.string.resid",
+          "match": "`[^`]+`"
+        },
+        {
+          "name": "entity.name.type.resid",
+          "match": "\\b(Int|UInt|Float|Dec|ISize|USize|Str|Bytes|Bool|Option|Result|List|Map|Set|RegionError|SourceLoc)\\b(\\([^)]*\\))?"
+        }
+      ]
+    },
+    "module-decl": {
+      "patterns": [
+        {
+          "name": "meta.import.resid",
+          "begin": "\\b(import)\\b",
+          "beginCaptures": { "1": { "name": "keyword.control.import.resid" } },
+          "end": ";",
+          "endCaptures": { "0": { "name": "punctuation.terminator.statement.resid" } },
+          "patterns": [
+            { "include": "#strings" },
+            {
+              "name": "keyword.control.import.as.resid",
+              "match": "\\b(as)\\b"
+            },
+            {
+              "name": "variable.other.module.resid",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            },
+            { "include": "#annotations" },
+            { "include": "#punctuation" },
+            { "include": "#capability-name" }
+          ]
+        },
+        {
+          "name": "meta.sandbox.resid",
+          "begin": "\\b(sandbox)\\s*(?=\\()",
+          "beginCaptures": { "1": { "name": "keyword.control.sandbox.resid" } },
+          "end": "\\)",
+          "patterns": [
+            { "include": "#capability-name" },
+            { "include": "#punctuation" }
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "meta.annotation.requires.resid",
+          "begin": "(@residual|@requires)\\s*(?=\\()",
+          "beginCaptures": { "1": { "name": "storage.modifier.annotation.resid" } },
+          "end": "\\)",
+          "patterns": [
+            { "include": "#capability-name" },
+            { "include": "#strings" },
+            { "include": "#punctuation" }
+          ]
+        },
+        {
+          "name": "storage.modifier.annotation.resid",
+          "match": "@[a-zA-Z_][a-zA-Z0-9_]*"
+        }
+      ]
+    },
+    "type-def": {
+      "patterns": [
+        {
+          "name": "meta.type.definition.resid",
+          "match": "\\b(type)\\s+([A-Z][a-zA-Z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.type.resid" },
+            "2": { "name": "entity.name.type.resid" }
+          }
+        }
+      ]
+    },
+    "behavior-def": {
+      "patterns": [
+        {
+          "name": "meta.behavior.definition.resid",
+          "match": "\\b(Eq|Ord|Hash|Serialize|Allocator|Reverse)\\s*\\(",
+          "captures": {
+            "1": { "name": "support.class.behavior.resid" }
+          }
+        },
+        {
+          "name": "keyword.other.behavior.resid",
+          "match": "\\b(using)\\b(?=\\s*=)"
+        }
+      ]
+    },
+    "function-def": {
+      "patterns": [
+        {
+          "name": "meta.function.definition.resid",
+          "begin": "(?<!\\w)(?:\\b(pub)\\s+)?([A-Z][A-Za-z0-9_]*(?:\\([^)]*\\))?)(?:\\s*\\[[^\\]]*\\])?\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.resid" },
+            "2": { "patterns": [{ "include": "#types-inner" }] },
+            "3": { "name": "entity.name.function.definition.resid" }
+          },
+          "end": "(?<=\\))\\s*(?=[{;=])",
+          "patterns": [
+            { "include": "#types-inner" },
+            { "include": "#parameter-names" },
+            { "include": "#strings" },
+            { "include": "#numbers" },
+            { "include": "#operators" },
+            { "include": "#punctuation" }
+          ]
+        }
+      ]
+    },
+    "parameter-names": {
+      "patterns": [
+        {
+          "name": "variable.parameter.resid",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b(?=\\s*(?:,|\\)|=))"
+        }
+      ]
+    },
+    "types-inner": {
+      "patterns": [
+        { "include": "#numeric-type" },
+        { "include": "#core-types" },
+        {
+          "name": "support.type.resid",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "numeric-type": {
+      "patterns": [
+        {
+          "name": "support.type.numeric.resid",
+          "match": "\\b(?:Int|UInt|Float|Dec)(?=\\s*\\()",
+          "captures": { "0": { "name": "support.type.numeric.generic.resid" } }
+        },
+        {
+          "name": "support.type.numeric.width.resid",
+          "match": "(?<=(?:Int|UInt|Float|Dec)\\s*)\\d+"
+        },
+        {
+          "name": "support.type.numeric.alias.resid",
+          "match": "\\b(?:ISize|USize)\\b"
+        }
+      ]
+    },
+    "core-types": {
+      "name": "support.type.core.resid",
+      "match": "\\b(?:Str|Bytes|Bool|Option|Result|List|Map|Set|RegionError|SourceLoc)\\b"
+    },
+    "control-keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.flow.resid",
+          "match": "\\b(?:if|else|while|for|in|return|break|continue|match|with|spawn)\\b"
+        }
+      ]
+    },
+    "declaration-keywords": {
+      "patterns": [
+        {
+          "name": "keyword.declaration.resid",
+          "match": "\\b(?:type|pub|import|as|rt)\\b"
+        },
+        {
+          "name": "keyword.operator.elvis.resid",
+          "match": "\\?"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.resid",
+          "match": "\\b(?:true|false|null)\\b"
+        },
+        {
+          "name": "variable.language.discard.resid",
+          "match": "(?<=^\\s*|[({,\\[])_(?=\\s*=)"
+        }
+      ]
+    },
+    "conversion-helpers": {
+      "name": "support.function.conversion.resid",
+      "match": "\\b(?:i8|i16|i32|i64|i128|i256|i512|u8|u16|u32|u64|u128|u256|u512|f16|f32|f64|f128|isize|usize|d[1-9][0-9]*)\\b(?=\\s*\\()"
+    },
+    "builtin-functions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.assertion.resid",
+          "match": "\\b(?:assert|rt_assert|known|rt_known|comptime_print|todo|unimplemented)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.builtin.checked.resid",
+          "match": "\\b(?:wrapping_[a-z0-9_]+|saturating_[a-z0-9_]+)\\b"
+        },
+        {
+          "name": "support.function.builtin.str.resid",
+          "match": "\\bstr_[a-zA-Z0-9_]+\\b(?=\\s*\\()"
+        }
+      ]
+    },
+    "capability-name": {
+      "patterns": [
+        {
+          "name": "entity.other.capability.resid",
+          "match": "\\b(filesystem|environment|git|args|process|network)(?=\\s*[(,)])",
+          "captures": { "1": { "name": "entity.other.capability.name.resid" } }
+        },
+        {
+          "name": "string.unquoted.capability.mode.resid",
+          "match": "(?<=\\()(?:readonly|writeonly|readwrite|admin)(?=\\))"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.interpolated.fstring.resid",
+          "begin": "f\"",
+          "beginCaptures": { "0": { "name": "string.interpolated.prefix.resid" } },
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "meta.template.expression.resid",
+              "begin": "\\{",
+              "end": "\\}",
+              "patterns": [
+                {
+                  "name": "constant.other.format-spec.resid",
+                  "match": ":\\."
+                },
+                { "include": "#numbers" },
+                { "include": "#operators" },
+                { "include": "#punctuation" },
+                {
+                  "name": "variable.other.readwrite.resid",
+                  "match": "[a-zA-Z_][a-zA-Z0-9_.]*"
+                }
+              ]
+            },
+            {
+              "name": "constant.character.escape.resid",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.raw.resid",
+          "begin": "r\"",
+          "end": "\""
+        },
+        {
+          "name": "string.quoted.double.byte.resid",
+          "begin": "b\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.resid", "match": "\\\\." }
+          ]
+        },
+        {
+          "name": "string.quoted.double.resid",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.resid", "match": "\\\\." }
+          ]
+        },
+        {
+          "name": "string.quoted.single.char.resid",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            { "name": "constant.character.escape.resid", "match": "\\\\." }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.decimal.msuffix.resid",
+          "match": "\\b[0-9]+(?:\\.[0-9]+)?m\\b"
+        },
+        {
+          "name": "constant.numeric.hexadecimal.resid",
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.resid",
+          "match": "\\b0[oO][0-7_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.resid",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.resid",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b"
+        },
+        {
+          "name": "constant.numeric.integer.resid",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "location": {
+      "name": "constant.language.source-location.resid",
+      "match": "#location\\b"
+    },
+    "ranges": {
+      "patterns": [
+        {
+          "name": "keyword.operator.range.inclusive.resid",
+          "match": "\\.\\.="
+        },
+        {
+          "name": "keyword.operator.range.resid",
+          "match": "\\.\\.(?!\\.)"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.logical.resid",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.comparison.resid",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.bitwise.resid",
+          "match": "<<|>>|&|\\||\\^|~"
+        },
+        {
+          "name": "keyword.operator.arithmetic.resid",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "name": "keyword.operator.ternary.resid",
+          "match": "\\?"
+        },
+        {
+          "name": "keyword.operator.assignment.resid",
+          "match": "="
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.terminator.statement.resid",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.comma.resid",
+          "match": ","
+        },
+        {
+          "name": "punctuation.accessor.dot.resid",
+          "match": "\\.(?!\\.\\.?)"
+        },
+        {
+          "name": "punctuation.bracket.curly.resid",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.bracket.square.resid",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.bracket.round.resid",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.separator.arrow.resid",
+          "match": "=>"
+        },
+        {
+          "name": "punctuation.separator.colon.resid",
+          "match": ":"
+        }
+      ]
+    }
+  }
+}

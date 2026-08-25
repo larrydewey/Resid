@@ -1,0 +1,64 @@
+{
+  "name": "resid-lang",
+  "displayName": "Resid Language Support",
+  "description": "Syntax highlighting, snippets, bracket matching and language configuration for the Resid language (eager compile-time reduction of first-class knowledge).",
+  "version": "0.1.0",
+  "publisher": "resid",
+  "license": "MIT",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "resid",
+    "language",
+    "compiler"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/larry/resid"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "resid",
+        "aliases": [
+          "Resid",
+          "resid"
+        ],
+        "extensions": [
+          ".resid"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/file-icon.svg",
+          "dark": "./icons/file-icon.svg"
+        }
+      },
+      {
+        "id": "resid-manifest",
+        "aliases": ["Resid Manifest"],
+        "extensions": ["resid.toml"],
+        "filenamePatterns": ["**/resid.toml"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "resid",
+        "scopeName": "source.resid",
+        "path": "./syntaxes/resid.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "resid",
+        "path": "./snippets/resid.json"
+      }
+    ]
+  }
+}

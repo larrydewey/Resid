@@ -241,6 +241,8 @@ crates/   resid-lexer, resid-parser, resid-ir, resid-type, resid-codegen,
 tools/    resid-fmt, resid-notes, resid-cache, resid-graph, resid-why
 lib/      pure-Resid crypto/TLS/networking stack (see §1)
 examples/ bootstrap compilers + tls_client + h2_client
+editors/vscode/ VS Code extension: TextMate grammar (source.resid),
+          snippets, language configuration for *.resid
 ```
 
 Pipeline phases per spec: lexer → parser → knowledge graph IR → reduction

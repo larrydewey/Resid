@@ -1,0 +1,135 @@
+{
+  "Function": {
+    "prefix": "fn",
+    "body": ["${1:Ret} ${2:name}(${3:Type arg}) {", "\t$0", "}"],
+    "description": "Function definition"
+  },
+  "Main entry point": {
+    "prefix": "main",
+    "body": ["Int main() {", "\t$0", "\treturn 0;", "}"],
+    "description": "Int main() entry point"
+  },
+  "Binding": {
+    "prefix": "let",
+    "body": ["${1:Type} ${2:x} = $0;"],
+    "description": "Immutable binding"
+  },
+  "Residual binding": {
+    "prefix": "rlet",
+    "body": ["${1:Type} ${2:x} = rt $0;"],
+    "description": "Residual binding (rt expression)"
+  },
+  "Annotated residual": {
+    "prefix": "residual",
+    "body": ["@residual ${1:Type} ${2:y} = $0;"],
+    "description": "@residual binding"
+  },
+  "Product type": {
+    "prefix": "tstruct",
+    "body": ["type ${1:Point} = { ${2:x}: Int, ${3:y}: Int };"],
+    "description": "Product type"
+  },
+  "Sum type": {
+    "prefix": "tenum",
+    "body": ["type ${1:Option}(${2:T}) = ${3:Some}(${2:T}) | ${4:None};"],
+    "description": "Sum type"
+  },
+  "Constrained type": {
+    "prefix": "twhere",
+    "body": ["type ${1:Positive} = ${2:Int}[value > 0];"],
+    "description": "Constraint type with predicate"
+  },
+  "Match expression": {
+    "prefix": "match",
+    "body": [
+      "match ${1:expr} {",
+      "\t${2:Some(x)} => $3,",
+      "\t${4,None} => $5$0",
+      "}"
+    ],
+    "description": "Pattern match"
+  },
+  "If statement": {
+    "prefix": "if",
+    "body": ["if (${1:cond}) {", "\t$0", "}"]
+  },
+  "If-let": {
+    "prefix": "iflet",
+    "body": ["if (${1:Some(x)} = ${2:opt}) {", "\t$0", "}"],
+    "description": "if (pattern = expr)"
+  },
+  "While loop": {
+    "prefix": "while",
+    "body": ["while (${1:cond}) {", "\t$0", "}"]
+  },
+  "For-in loop": {
+    "prefix": "forin",
+    "body": ["for (${1:Type} ${2:x} in ${3:xs}) {", "\t$0", "}"],
+    "description": "for-in loop"
+  },
+  "With handle": {
+    "prefix": "with",
+    "body": ["with (${1:Type} ${2:h} = ${3:expr}) {", "\t$0", "}"],
+    "description": "Scoped handle binding"
+  },
+  "Spawn region": {
+    "prefix": "spawn",
+    "body": [
+      "${1:Result(T, RegionError)} r = spawn (${2:cap}) {",
+      "\t$0",
+      "\treturn value;",
+      "};"
+    ],
+    "description": "Structured concurrency region"
+  },
+  "Sandbox block": {
+    "prefix": "sandbox",
+    "body": ["sandbox (${1:filesystem(readonly)}) {", "\t$0", "}"],
+    "description": "Capability sandbox"
+  },
+  "Import": {
+    "prefix": "import",
+    "body": ["import \"${1:file}.resid\";$0"],
+    "description": "Module import"
+  },
+  "Named import": {
+    "prefix": "importn",
+    "body": ["import \"${1:file}.resid\" (${2:a, b});$0"],
+    "description": "Import selected names"
+  },
+  "Aliased import": {
+    "prefix": "importas",
+    "body": ["import \"${1:file}.resid\" as ${2:M};$0"],
+    "description": "Import with alias"
+  },
+  "Attenuated import": {
+    "prefix": "importreq",
+    "body": [
+      "import \"${1:file}.resid\" @requires(${2:filesystem(readonly)});$0"
+    ],
+    "description": "Import with capability annotation"
+  },
+  "Requires capability": {
+    "prefix": "requires",
+    "body": ["@requires($0)"],
+    "description": "Capability requirement annotation"
+  },
+  "Assert": {
+    "prefix": "assert",
+    "body": ["assert($1, \"$2\");$0"]
+  },
+  "Runtime assert": {
+    "prefix": "rt_assert",
+    "body": ["rt_assert($1, \"$2\");$0"]
+  },
+  "Doc comment": {
+    "prefix": "doc",
+    "body": ["/// $0"],
+    "description": "Documentation comment line"
+  },
+  "F-string": {
+    "prefix": "fstr",
+    "body": ["f\"$1\""],
+    "description": "Interpolated string"
+  }
+}
