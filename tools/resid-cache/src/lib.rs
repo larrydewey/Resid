@@ -65,6 +65,8 @@ pub struct Entry {
     pub value: String,
 }
 
+static SELF_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// A content-addressed cache backed by a single CBOR file.
 pub struct Store {
     path: PathBuf,
@@ -90,7 +92,10 @@ impl Store {
         self.entries.insert(key.into(), value.into());
     }
 
-    /// Persist to disk (atomically-ish: write temp then rename).
+    /// Persist to disk (atomically: unique temp file per writer, then
+    /// rename). The temp name must be process-unique — a shared `.tmp`
+    /// let two concurrent writers rename each other's half-written file,
+    /// publishing torn caches that other processes then executed.
     pub fn flush(&self) -> std::io::Result<()> {
         let mut out = Vec::new();
         cbor::write_map_header(&mut out, self.entries.len());
@@ -100,8 +105,19 @@ impl Store {
             cbor::write_text(&mut out, k);
             cbor::write_text(&mut out, &self.entries[k]);
         }
-        let tmp = self.path.with_extension("tmp");
-        std::fs::write(&tmp, &out)?;
+        let tmp = self.path.with_extension(format!(
+            "tmp.{}.{}",
+            std::process::id(),
+            SELF_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let res = std::fs::write(&tmp, &out).and_then(|_| {
+            // fsync the temp so the rename never publishes unwritten pages
+            std::fs::File::open(&tmp).and_then(|f| f.sync_all())
+        });
+        if let Err(e) = res {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
         std::fs::rename(&tmp, &self.path)
     }
 

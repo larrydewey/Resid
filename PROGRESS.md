@@ -277,10 +277,42 @@
   DNS:localhost, connects by hostname (s_server must bind dual-stack:
   pass only the port to -accept, since getaddrinfo(localhost) tries
   ::1 first), and adds a negative no-SAN case asserting CERT-FAIL.
-  Known residual: run_x509_in_resid intermittently corrupts println
-  output when the full suite runs in parallel (the long-documented
-  context-dependent codegen ghost) — passes reliably standalone and
-  on e2e-binary reruns.
+  Known residual RESOLVED (see below).
+- **THE "CONTEXT-DEPENDENT CODEGEN GHOST" IS DEAD — three root causes,
+  none of them codegen**: the intermittent corruption that haunted many
+  sessions (garbage strings, path fragments + raw pointer bytes printed
+  mid-output, debug-print-removal changing behavior) decomposed into:
+  (1) **e.itoa missing NUL termination** (the real compiler bug): the
+  stage-2 header's `e.itoa` returned a pointer INTO its caller's
+  `[24 x i8]` alloca without ever storing a terminator, so every
+  `IntToString()` feeding a `Str +` chain strlen'd past the digits
+  into uninitialized stack — printing argv[0] tails ("bin", "in",
+  "sidc-e2e-"), saved pointers (`...\x7f`), or nothing depending on
+  stack layout/ASLR. Explains all historical "wide-int context"
+  symptoms in self-hosted binaries and why removing a println changed
+  behavior (different frames). Fixed in rt_itoa_def() in BOTH
+  examples/codegen.resid and examples/driver.resid: store 0 at
+  buf+23 on all three return paths. Stage-1 was never affected (Rust
+  codegen calls the C IntToString, which terminates).
+  (2) **Shared cache temp file**: resid-cache flush() wrote a fixed
+  `.resid-cache.cbor.tmp` — concurrent residc processes could rename
+  each other's half-written file, publishing torn caches whose bogus
+  entries pointed at other tests' artifacts. flush() now uses a
+  per-pid+seq temp name and fsyncs before rename.
+  (3) **Run-artifact path collision**: Cmd::Run built every program to
+  /tmp/residc-<pid>/<stem>_bin — unique per process, but the cache-hit
+  path plus parallel tests sharing stems still raced; Run artifacts now
+  embed the source hash (<stem>_<hash16>), and two e2e tests that
+  shared one temp DIRECTORY name (ecdsa_prop / ecge512_wide both
+  "residc-e2e-ecprop-{pid}", same process!) clobbering each other's
+  main.resid mid-compile were split apart.
+  Verification: 20 consecutive full-workspace runs at -j16 = 12,600
+  test results, ZERO failures (previously ~1 failure per 3-8 runs);
+  plus 100 targeted rebuild-and-run cycles of the x509 stage-2 flow
+  (previously ~20% corrupt). Forensics that cracked it: preserving the
+  failing binary showed the SAME binary flip-flopping across runs
+  (runtime, not build), identical IR between good/bad builds, and junk
+  bytes decoding as argv[0] tails + stack pointers.
 - **HTTP/1.1 client v2 — Content-Length, chunked transfer decoding,
   keep-alive**: `lib/http.resid` grows a real framed-response engine
   alongside the old read-to-close helper: `http_call(fd, method, path,
