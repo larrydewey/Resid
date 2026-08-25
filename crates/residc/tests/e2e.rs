@@ -5265,6 +5265,16 @@ Int main() {
     List(HpField) fs3 = r5.fields;
     HpField a7 = fs3[1];
     println("b3=" + a7.name + "|" + a7.value);
+    // Huffman string literals (RFC 7541 Appendix B codes).
+    List(Int) h1 = [0, 64, 136, 37, 168, 73, 233, 91, 169, 125, 127, 137, 37, 168, 73, 233, 90, 114, 142, 66, 217];
+    Int eh1 = h1.len() - 1;
+    HpBlock rh = hp_decode_block(h1, 1, eh1, [""], [HpField { name: "", value: "" }]);
+    List(HpField) fsh = rh.fields;
+    HpField ah = fsh[1];
+    println("huf=" + ah.name + "|" + ah.value);
+    List(Int) h2b = [0, 129, 31];
+    HpStr sh2 = hp_read_str(h2b, 1);
+    println("huf1=" + sh2.s);
     // Never-indexed literal, indexed name via multi-byte integer (28).
     List(Int) b4 = [0, 31, 13, 2, 55, 55];
     Int e4 = b4.len() - 1;
@@ -5277,11 +5287,19 @@ Int main() {
 "#,
     )
     .unwrap();
-    let expected = "hdr=12,4,263\nint=10 1337\nb1=:method|GET :authority|www.example.com\nb2=:authority|www.example.com cache-control|no-cache\nb3=foo|bar\nb4=content-length|77";
+    let expected = "hdr=12,4,263\nint=10 1337\nb1=:method|GET :authority|www.example.com\nb2=:authority|www.example.com cache-control|no-cache\nb3=foo|bar\nhuf=custom-key|custom-header\nhuf1=a\nb4=content-length|77";
+    // Huffman decoding recurses deeply; give both pipelines room.
+    let unlimit = |prog: &str, args: &[String]| {
+        let mut cmdline = format!("ulimit -s unlimited; exec {}", prog);
+        for a in args {
+            cmdline.push_str(&format!(" '{}'", a));
+        }
+        let mut sh = Command::new("sh");
+        sh.arg("-c").arg(cmdline);
+        sh
+    };
     // Stage-1 (Rust pipeline).
-    let out = Command::new(residc_bin())
-        .arg(&file)
-        .arg("run")
+    let out = unlimit(residc_bin(), &[file.to_string_lossy().into_owned(), "run".into()])
         .output()
         .expect("rust pipeline");
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
@@ -5289,19 +5307,18 @@ Int main() {
     assert_eq!(rust_out.trim(), expected, "{rust_out:?}");
     // Stage-2 (bootstrap driver pipeline).
     let bin = dir.join("h2_bin");
-    let out = Command::new(residc_bin())
-        .arg(workspace.join("examples/driver.resid"))
-        .arg("run")
-        .arg(&file)
-        .arg("-o")
-        .arg(&bin)
-        .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
-        .current_dir(workspace)
-        .output()
-        .expect("driver run");
+    let drv_args = vec![
+        workspace.join("examples/driver.resid").to_string_lossy().into_owned(),
+        "run".into(),
+        file.to_string_lossy().into_owned(),
+        "-o".into(),
+        bin.to_string_lossy().into_owned(),
+        "-rt".into(),
+        workspace.join("crates/residc/resid_rt.c").to_string_lossy().into_owned(),
+    ];
+    let out = unlimit(residc_bin(), &drv_args).current_dir(workspace).output().expect("driver run");
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
-    let out = Command::new(&bin).output().expect("stage-2 binary");
+    let out = unlimit(&bin.to_string_lossy(), &[]).output().expect("stage-2 binary");
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).trim_end(),
         expected,

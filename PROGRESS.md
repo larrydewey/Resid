@@ -2801,7 +2801,10 @@ artifact serialization. Build those first; the tools are thin viewers.
   static table, dynamic table with incremental-indexing insertion,
   indexed fields, all literal representations (with/without indexing,
   never-indexed, new-name + indexed-name). Huffman string literals are
-  out of scope for v1 (flagged via hp_str huffman bit). Validated against
+  now DECODED (RFC 7541 Appendix B generated code/length tables +
+  bit-by-bit canonical decoder; EOS-padding rules honored, final short
+  symbols vs padding disambiguated) — round-trip verified against the
+  python `hpack` encoder on random strings. Validated against
   RFC 7541 C.1/C.3-style vectors cross-checked with the python `hpack`
   library; e2e `run_h2_hpack_in_resid` runs them through BOTH pipelines.
   Bugs found building it: concat helpers must terminate at `i >= n` on
