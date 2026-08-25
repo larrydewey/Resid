@@ -237,7 +237,7 @@
   call's H against its OWN key; `.len()` includes the seed.
   e2e `run_tls13_live_openssl_in_resid` pins the milestone: spawns real
   `openssl s_server -tls1_3`, runs the Resid client through build+run,
-  asserts an HTTP reply (skips if openssl absent). 629 tests pass.
+  asserts an HTTP reply (skips if openssl absent). 630 tests pass.
   Remaining TLS roadmap: RSA-PSS CertificateVerify, chain validation
   wiring into the live client, app-response hardening (EOF/alert records).
 - **RSA-PSS CertificateVerify done — live client now accepts BOTH CV
@@ -262,7 +262,7 @@
   e2e run_tls13_live_openssl_in_resid extended to iterate over ECDSA
   AND RSA server certs. Also fixed en route: tm_verify_cv's ECDSA
   branch used a u24 length read for the u16 signature length (crash);
-  629 tests pass.
+  630 tests pass.
 - **Chain validation wired into the live client**: new rt builtin
   `resid_utc_now_civil` (C gmtime_r -> YYYYMMDDHHMMSS i64; declared in
   resid-type BUILTIN_SIGS + codegen decl_rt) gives the wall clock for
@@ -335,11 +335,31 @@
   written as pure if-expressions), definitions precede uses in the
   merged driver, codegen.resid needs its own copies of shared helpers
   (str_has_prefix_cg) because standalone compilation sees no imports.
-  REMAINING stage-2 wide-type gap (codegen emitter, next session):
-  width-aware allocas/loads/stores/call args/binops across
-  codegen.resid (ll_ty maps Int(N)->iN already; the emitter body is
-  still hardwired i64 in places), plus checked add/sub emission and
-  >64-bit constant materialization. Until then the crypto/TLS stack
+  REMAINING stage-2 wide-type gap (codegen emitter, ~~next session~~ DONE this
+  session): width-aware allocas/loads/stores/call args/binops across
+  codegen.resid. **Stage-2 wide-type emission DONE (phase 2)**:
+  bin_wide_op lowers every integer binop/comparison at the operand's true
+  LLVM width — operands widened to the common width, mul via the v3.2 range
+  rule (a+b rounded up the 8..512 ladder), results typed Int(N)/UInt(N);
+  unary minus at the operand width; sg_bind adopts the declared width;
+  return statements adopt the function's declared return type (ST gained a
+  threaded `rety` field seeded from pg_func); list-index offsets truncate to
+  i64 before the GEP; literals >18/38/77 digits infer Int(128)/(256)/(512).
+  Fixed en route (both pipelines): untyped literals now reserve one signed
+  headroom bit (a 128-bit magnitude above i128::MAX infers Int(256), not a
+  wrapping Int(128)) in resid-type lit_type + resid-codegen lower_literal;
+  stage-2 cg_convert emitted malformed `sext i256 %x` (missing source type
+  and `to`) and built its line list from the CARRIER instead of the VALUE,
+  silently dropping the operand's computation; stage-2 cg_convert numbered
+  its temp from the carrier's stale counter (forward references). Bootstrap-
+  parser/lexer gotchas catalogued: locals named `rt` are reserved (silent
+  parse desync); struct-typed if-expressions, comparisons inside if-expression
+  branches, call&&call chains, and chained `field.method()` calls all break
+  parsing — route them through tiny helper functions (blt/imax/ipick/
+  pick_str/pick_widen/mul_width/need_widen/cmp_op). e2e-proven: wide-typed
+  programs (Int(128)/Int(256) params, casts, mixed-width arith/comparisons,
+  mul promotion to Int(512)) compile and run IDENTICALLY through both
+  pipelines. Until then the crypto/TLS stack
   passes stage-2 TYPE CHECKING but fails in its emitter. Forensics that cracked it: preserving the
   failing binary showed the SAME binary flip-flopping across runs
   (runtime, not build), identical IR between good/bad builds, and junk
@@ -375,7 +395,7 @@
   number as before. Verified live: an accept-then-instantly-close TCP
   server now ends gracefully (SH-LEN-BAD/REPLY-NONE) where the client
   previously crashed with a list-index abort, and the happy path still
-  completes with HTTP 200. 629 tests pass.
+  completes with HTTP 200. 630 tests pass.
 - **RESOLVED (prior session) — ECDSA-P256 verify reliability (wide-int
   unsigned compare fixed in lib)**: root cause was NOT a codegen
   miscompilation:
