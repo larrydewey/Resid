@@ -309,7 +309,27 @@
   Verification: 20 consecutive full-workspace runs at -j16 = 12,600
   test results, ZERO failures (previously ~1 failure per 3-8 runs);
   plus 100 targeted rebuild-and-run cycles of the x509 stage-2 flow
-  (previously ~20% corrupt). Forensics that cracked it: preserving the
+  (previously ~20% corrupt).
+- **Stage-2 parity: signature collector now accepts width-parameterized
+  numerics**: the self-hosted checker's parse_type rejected
+  `Int(64)`/`Int(256)`/`UInt(8)`/`Float(128)`/`Dec(34)` outright
+  ("expected a type name") because it recursed parse_type into the
+  parentheses where a NUMBER sits — the collector then mis-registered
+  garbage signatures ("function `=` is already defined" on any lib
+  importing wide-typed code). parse_type now accepts an integer-literal
+  width parameter (nested type constructors still recurse), in
+  examples/typecheck.resid + codegen.resid, driver regenerated via
+  merge_driver.py. Gotcha honored: no reassignment — the num-vs-nested
+  branch binds everything as if-expressions.
+  REMAINING stage-2 wide-type gap (next session, milestone-sized): the
+  self-hosted CHECKER lacks the Rust side's expected-type inference —
+  integer literals always infer bare `Int`, so `Int(256) EC_GY() {
+  return <79-digit literal>; }` fails ("return type Int does not match
+  Int(256)") and `Int(256) two = 2;` would need binding-site widening;
+  the stage-2 CODEGEN also needs i64→iN conversion emission for mixed
+  widths. Until then the crypto/TLS stack remains stage-1-only; the
+  TLS client through the driver gets past collection and dies on this
+  check. Forensics that cracked it: preserving the
   failing binary showed the SAME binary flip-flopping across runs
   (runtime, not build), identical IR between good/bad builds, and junk
   bytes decoding as argv[0] tails + stack pointers.

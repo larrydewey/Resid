@@ -487,15 +487,23 @@ PRes parse_type(Str s, Int pos) {
     }
     Tok t2 = lex_tok(s, t.pos);
     if (t2.text == "(") {
+        // Width-parameterized numerics: Int(64), UInt(8), Float(128),
+        // Dec(34) — the parenthesized part is an integer literal, not
+        // a nested type. Nested type constructors recurse as before.
+        Tok in1 = lex_tok(s, t2.pos);
+        Bool isnum = in1.kind == "int";
         PRes inner = parse_type(s, t2.pos);
-        if (inner.err != "") {
-            return PRes { pos: inner.pos, ty: "", err: inner.err };
+        Int after_in = if (isnum) { in1.pos } else { inner.pos };
+        Str inner_ty = if (isnum) { in1.text } else { inner.ty };
+        Bool ok = if (isnum) { true } else { inner.err == "" };
+        if (!ok) {
+            return PRes { pos: after_in, ty: "", err: "bad type parameter" };
         }
-        Tok close = lex_tok(s, inner.pos);
+        Tok close = lex_tok(s, after_in);
         if (close.text != ")") {
             return PRes { pos: close.pos, ty: "", err: "expected ) in type" };
         }
-        Str ty = t.text + "(" + inner.ty + ")";
+        Str ty = t.text + "(" + inner_ty + ")";
         return PRes { pos: close.pos, ty: ty, err: "" };
     }
     return PRes { pos: t.pos, ty: t.text, err: "" };
