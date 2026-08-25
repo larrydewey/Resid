@@ -5398,3 +5398,132 @@ fn run_h2_live_request_in_resid() {
     assert!(stdout.contains("BODY=hello from resid h2"), "no body ({stdout:?})");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Regression pin for two previously-documented "compiler bugs" that turned
+/// out not to be codegen defects:
+///   1. a bare `.len()` value passed as an `Int` argument (direct, nested,
+///      as a recursion bound, and on a callee's return value);
+///   2. a cross-module recursive list builder using the concat-accumulator
+///      shape (`lib/h2.resid`'s h2_cat / der_slice_acc pattern).
+/// Both shapes must compile AND produce correct values through the Rust
+/// pipeline and the stage-2 bootstrap driver pipeline.
+#[test]
+fn len_arg_and_cross_module_recursive_list_builder() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let dir = std::env::temp_dir().join(format!("residc-e2e-lenarg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("listlib.resid"),
+        r#"
+pub List(Int) cat_acc(List(Int) b, Int start, Int last, Int i, List(Int) acc) {
+    if (i > last) { return acc; }
+    Int bv = b[i];
+    List(Int) acc2 = acc.concat([bv]);
+    Int ni = i + 1;
+    return cat_acc(b, start, last, ni, acc2);
+}
+
+pub List(Int) cat(List(Int) a, List(Int) b) {
+    Int last = b.len() - 1;
+    return cat_acc(b, 1, last, 1, a);
+}
+
+pub Int probe(Int n, Int tag) {
+    if (n > 100) { return 1; }
+    return 2;
+}
+"#,
+    )
+    .unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+import "listlib.resid";
+
+List(Int) mk() {
+    return [1, 2, 3, 4];
+}
+
+Int use_id(Int n) {
+    return n;
+}
+
+Int use_pair(Int a, Int b) {
+    return a * 10 + b;
+}
+
+List(Int) grow(List(Int) acc, Int k) {
+    if (k == 0) { return acc; }
+    List(Int) acc2 = acc.concat([48 + k]);
+    Int nk = k - 1;
+    return grow(acc2, nk);
+}
+
+Int main() {
+    List(Int) xs = [5, 6, 7];
+    // Bare .len() as an Int argument, several positions.
+    println("p1=" + IntToString(probe(xs.len(), 0)));
+    println("p2=" + IntToString(use_id(mk().len())));
+    println("p3=" + IntToString(use_pair(mk().len(), xs.len())));
+    println("p4=" + IntToString(probe(str_len("hello"), 1)));
+    Str s = "abcd";
+    println("p5=" + IntToString(use_id(str_len(s))));
+    // Bare .len() as a recursion bound.
+    println("r=" + IntToString(grow([0], xs.len()).len()));
+    // Cross-module recursive list builder.
+    List(Int) a = [0, 1, 2];
+    List(Int) b = [0, 3, 4];
+    List(Int) c = cat(a, b);
+    println("c=" + IntToString(c.len()) + IntToString(c[1]) + IntToString(c[2]) + IntToString(c[3]) + IntToString(c[4]));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let expected = "p1=2\np2=4\np3=43\np4=2\np5=4\nr=4\nc=51234";
+
+    let unlimit = |prog: &str, args: &[String]| {
+        let mut cmdline = format!("ulimit -s unlimited; exec {}", prog);
+        for arg in args {
+            cmdline.push_str(&format!(" '{}'", arg));
+        }
+        let mut sh = Command::new("sh");
+        sh.arg("-c").arg(cmdline);
+        sh
+    };
+
+    // Stage-1 (Rust pipeline).
+    let out = unlimit(residc_bin(), &[file.to_string_lossy().into_owned(), "run".into()])
+        .output()
+        .expect("rust pipeline");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let rust_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(rust_out.trim(), expected, "{rust_out:?}");
+
+    // Stage-2 (bootstrap driver pipeline).
+    let bin = dir.join("lenarg_bin");
+    let drv_args = vec![
+        workspace.join("examples/driver.resid").to_string_lossy().into_owned(),
+        "run".into(),
+        file.to_string_lossy().into_owned(),
+        "-o".into(),
+        bin.to_string_lossy().into_owned(),
+        "-rt".into(),
+        workspace.join("crates/residc/resid_rt.c").to_string_lossy().into_owned(),
+    ];
+    let out = unlimit(residc_bin(), &drv_args).current_dir(workspace).output().expect("driver run");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = unlimit(&bin.to_string_lossy(), &[]).output().expect("stage-2 binary");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim_end(),
+        expected,
+        "{:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

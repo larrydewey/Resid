@@ -9,8 +9,9 @@
 
 ## 0. Current Snapshot
 
-**632 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
-resid-codegen 137, resid-build 12, resid-fmt 5, residc unit + e2e).
+**633 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
+resid-codegen 137, resid-build 12, resid-fmt 5, residc unit + e2e incl.
+`len_arg_and_cross_module_recursive_list_builder`).
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
 proven**. The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
@@ -159,6 +160,16 @@ Compiler bugs discovered & documented:
   `.len() - k` forms); cross-module recursive list builders can corrupt
   data while identical main-file shapes work — lib/h2.resid concat was
   converted to the proven der_slice_acc 5-parameter shape.
+  **RESOLVED as misdiagnosis**: systematic minimization could not
+  reproduce either defect — bare `.len()` as an Int argument is correct
+  in direct/nested/callee-result/recursion-bound positions, and the
+  exact cross-module concat-accumulator shape works in-file and across
+  imports through BOTH pipelines (e2e
+  `len_arg_and_cross_module_recursive_list_builder`). The original
+  failures traced to the seeded-list phantom-byte semantics (gotcha #2)
+  plus the real h2_cat off-by-one (copy from index 2 instead of 1), a
+  Resid-source bug fixed in the same commit. No codegen change needed;
+  regression suite now pins both shapes.
 - The residc build cache does not hash import contents: changing a
   library does NOT invalidate cached binaries (touch the main source to
   force rebuilds). This silently cost several debugging rounds.
@@ -243,7 +254,4 @@ residual computation emitted, notes + provenance sidecar produced).
 1. HTTP/2 hardening: flow-control WINDOW_UPDATE handling, request
    bodies (POST), response chunking via CONTINUATION frames.
 2. Registry transport; SpecialCasing; further `why` tooling.
-3. Investigate the two compiler bugs from §2 properly (ISize->Int arg
-   passing; cross-module recursive builder corruption) in
-   crates/resid-codegen.
-4. Point the build cache at a hash that includes import contents.
+3. Point the build cache at a hash that includes import contents.
