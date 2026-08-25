@@ -292,7 +292,13 @@ pub HpStr hp_read_str(List(Int) b, Int pos) {
     Bool huf = first >= 128;
     HpInt li = hp_read_int(b, pos, first, 127);
     if (li.bad) { return HpStr { s: "", next: li.next, huffman: huf, bad: true }; }
-    if (huf) { return HpStr { s: "", next: li.next, huffman: true, bad: true }; }
+    if (huf) {
+        HuffDec hd = hp_huff_str(b, li.next + 1, li.val);
+        Str hs = hd.s;
+        Int hn = li.next + 1 + li.val;
+        Bool hb = hd.bad;
+        return HpStr { s: hs, next: hn, huffman: true, bad: hb };
+    }
     Int start = li.next + 1;
     Int stop = li.next + li.val;
     if (stop > n) { return HpStr { s: "", next: start, huffman: false, bad: true }; }
@@ -401,4 +407,193 @@ pub HpBlock hp_literal(List(Int) b, Int pos, Int end, List(Str) dyn, List(HpFiel
 pub List(Str) hp_maybe_insert(Bool incidx, List(Str) dyn, Str ent) {
     if (incidx) { return hp_insert(dyn, ent); }
     return dyn;
+}
+
+// ─── HPACK Huffman (RFC 7541 Appendix B) ──────────────────────────────
+// Generated canonical code + bit-length tables and a bit-by-bit
+// canonical decoder. EOS (symbol 256) inside a string is an error;
+// up-to-7 bits of 1-padding at the end is accepted.
+
+pub Int hp_huff_code(Int s) {
+    if (s == 0) { return 8184; } if (s == 1) { return 8388568; } if (s == 2) { return 268435426; } if (s == 3) { return 268435427; } if (s == 4) { return 268435428; } if (s == 5) { return 268435429; }
+    if (s == 6) { return 268435430; } if (s == 7) { return 268435431; } if (s == 8) { return 268435432; } if (s == 9) { return 16777194; } if (s == 10) { return 1073741820; } if (s == 11) { return 268435433; }
+    if (s == 12) { return 268435434; } if (s == 13) { return 1073741821; } if (s == 14) { return 268435435; } if (s == 15) { return 268435436; } if (s == 16) { return 268435437; } if (s == 17) { return 268435438; }
+    if (s == 18) { return 268435439; } if (s == 19) { return 268435440; } if (s == 20) { return 268435441; } if (s == 21) { return 268435442; } if (s == 22) { return 1073741822; } if (s == 23) { return 268435443; }
+    if (s == 24) { return 268435444; } if (s == 25) { return 268435445; } if (s == 26) { return 268435446; } if (s == 27) { return 268435447; } if (s == 28) { return 268435448; } if (s == 29) { return 268435449; }
+    if (s == 30) { return 268435450; } if (s == 31) { return 268435451; } if (s == 32) { return 20; } if (s == 33) { return 1016; } if (s == 34) { return 1017; } if (s == 35) { return 4090; }
+    if (s == 36) { return 8185; } if (s == 37) { return 21; } if (s == 38) { return 248; } if (s == 39) { return 2042; } if (s == 40) { return 1018; } if (s == 41) { return 1019; }
+    if (s == 42) { return 249; } if (s == 43) { return 2043; } if (s == 44) { return 250; } if (s == 45) { return 22; } if (s == 46) { return 23; } if (s == 47) { return 24; }
+    if (s == 48) { return 0; } if (s == 49) { return 1; } if (s == 50) { return 2; } if (s == 51) { return 25; } if (s == 52) { return 26; } if (s == 53) { return 27; }
+    if (s == 54) { return 28; } if (s == 55) { return 29; } if (s == 56) { return 30; } if (s == 57) { return 31; } if (s == 58) { return 92; } if (s == 59) { return 251; }
+    if (s == 60) { return 32764; } if (s == 61) { return 32; } if (s == 62) { return 4091; } if (s == 63) { return 1020; } if (s == 64) { return 8186; } if (s == 65) { return 33; }
+    if (s == 66) { return 93; } if (s == 67) { return 94; } if (s == 68) { return 95; } if (s == 69) { return 96; } if (s == 70) { return 97; } if (s == 71) { return 98; }
+    if (s == 72) { return 99; } if (s == 73) { return 100; } if (s == 74) { return 101; } if (s == 75) { return 102; } if (s == 76) { return 103; } if (s == 77) { return 104; }
+    if (s == 78) { return 105; } if (s == 79) { return 106; } if (s == 80) { return 107; } if (s == 81) { return 108; } if (s == 82) { return 109; } if (s == 83) { return 110; }
+    if (s == 84) { return 111; } if (s == 85) { return 112; } if (s == 86) { return 113; } if (s == 87) { return 114; } if (s == 88) { return 252; } if (s == 89) { return 115; }
+    if (s == 90) { return 253; } if (s == 91) { return 8187; } if (s == 92) { return 524272; } if (s == 93) { return 8188; } if (s == 94) { return 16380; } if (s == 95) { return 34; }
+    if (s == 96) { return 32765; } if (s == 97) { return 3; } if (s == 98) { return 35; } if (s == 99) { return 4; } if (s == 100) { return 36; } if (s == 101) { return 5; }
+    if (s == 102) { return 37; } if (s == 103) { return 38; } if (s == 104) { return 39; } if (s == 105) { return 6; } if (s == 106) { return 116; } if (s == 107) { return 117; }
+    if (s == 108) { return 40; } if (s == 109) { return 41; } if (s == 110) { return 42; } if (s == 111) { return 7; } if (s == 112) { return 43; } if (s == 113) { return 118; }
+    if (s == 114) { return 44; } if (s == 115) { return 8; } if (s == 116) { return 9; } if (s == 117) { return 45; } if (s == 118) { return 119; } if (s == 119) { return 120; }
+    if (s == 120) { return 121; } if (s == 121) { return 122; } if (s == 122) { return 123; } if (s == 123) { return 32766; } if (s == 124) { return 2044; } if (s == 125) { return 16381; }
+    if (s == 126) { return 8189; } if (s == 127) { return 268435452; } if (s == 128) { return 1048550; } if (s == 129) { return 4194258; } if (s == 130) { return 1048551; } if (s == 131) { return 1048552; }
+    if (s == 132) { return 4194259; } if (s == 133) { return 4194260; } if (s == 134) { return 4194261; } if (s == 135) { return 8388569; } if (s == 136) { return 4194262; } if (s == 137) { return 8388570; }
+    if (s == 138) { return 8388571; } if (s == 139) { return 8388572; } if (s == 140) { return 8388573; } if (s == 141) { return 8388574; } if (s == 142) { return 16777195; } if (s == 143) { return 8388575; }
+    if (s == 144) { return 16777196; } if (s == 145) { return 16777197; } if (s == 146) { return 4194263; } if (s == 147) { return 8388576; } if (s == 148) { return 16777198; } if (s == 149) { return 8388577; }
+    if (s == 150) { return 8388578; } if (s == 151) { return 8388579; } if (s == 152) { return 8388580; } if (s == 153) { return 2097116; } if (s == 154) { return 4194264; } if (s == 155) { return 8388581; }
+    if (s == 156) { return 4194265; } if (s == 157) { return 8388582; } if (s == 158) { return 8388583; } if (s == 159) { return 16777199; } if (s == 160) { return 4194266; } if (s == 161) { return 2097117; }
+    if (s == 162) { return 1048553; } if (s == 163) { return 4194267; } if (s == 164) { return 4194268; } if (s == 165) { return 8388584; } if (s == 166) { return 8388585; } if (s == 167) { return 2097118; }
+    if (s == 168) { return 8388586; } if (s == 169) { return 4194269; } if (s == 170) { return 4194270; } if (s == 171) { return 16777200; } if (s == 172) { return 2097119; } if (s == 173) { return 4194271; }
+    if (s == 174) { return 8388587; } if (s == 175) { return 8388588; } if (s == 176) { return 2097120; } if (s == 177) { return 2097121; } if (s == 178) { return 4194272; } if (s == 179) { return 2097122; }
+    if (s == 180) { return 8388589; } if (s == 181) { return 4194273; } if (s == 182) { return 8388590; } if (s == 183) { return 8388591; } if (s == 184) { return 1048554; } if (s == 185) { return 4194274; }
+    if (s == 186) { return 4194275; } if (s == 187) { return 4194276; } if (s == 188) { return 8388592; } if (s == 189) { return 4194277; } if (s == 190) { return 4194278; } if (s == 191) { return 8388593; }
+    if (s == 192) { return 67108832; } if (s == 193) { return 67108833; } if (s == 194) { return 1048555; } if (s == 195) { return 524273; } if (s == 196) { return 4194279; } if (s == 197) { return 8388594; }
+    if (s == 198) { return 4194280; } if (s == 199) { return 33554412; } if (s == 200) { return 67108834; } if (s == 201) { return 67108835; } if (s == 202) { return 67108836; } if (s == 203) { return 134217694; }
+    if (s == 204) { return 134217695; } if (s == 205) { return 67108837; } if (s == 206) { return 16777201; } if (s == 207) { return 33554413; } if (s == 208) { return 524274; } if (s == 209) { return 2097123; }
+    if (s == 210) { return 67108838; } if (s == 211) { return 134217696; } if (s == 212) { return 134217697; } if (s == 213) { return 67108839; } if (s == 214) { return 134217698; } if (s == 215) { return 16777202; }
+    if (s == 216) { return 2097124; } if (s == 217) { return 2097125; } if (s == 218) { return 67108840; } if (s == 219) { return 67108841; } if (s == 220) { return 268435453; } if (s == 221) { return 134217699; }
+    if (s == 222) { return 134217700; } if (s == 223) { return 134217701; } if (s == 224) { return 1048556; } if (s == 225) { return 16777203; } if (s == 226) { return 1048557; } if (s == 227) { return 2097126; }
+    if (s == 228) { return 4194281; } if (s == 229) { return 2097127; } if (s == 230) { return 2097128; } if (s == 231) { return 8388595; } if (s == 232) { return 4194282; } if (s == 233) { return 4194283; }
+    if (s == 234) { return 33554414; } if (s == 235) { return 33554415; } if (s == 236) { return 16777204; } if (s == 237) { return 16777205; } if (s == 238) { return 67108842; } if (s == 239) { return 8388596; }
+    if (s == 240) { return 67108843; } if (s == 241) { return 134217702; } if (s == 242) { return 67108844; } if (s == 243) { return 67108845; } if (s == 244) { return 134217703; } if (s == 245) { return 134217704; }
+    if (s == 246) { return 134217705; } if (s == 247) { return 134217706; } if (s == 248) { return 134217707; } if (s == 249) { return 268435454; } if (s == 250) { return 134217708; } if (s == 251) { return 134217709; }
+    if (s == 252) { return 134217710; } if (s == 253) { return 134217711; } if (s == 254) { return 134217712; } if (s == 255) { return 67108846; } if (s == 256) { return 1073741823; }
+    return 0 - 1;
+}
+
+pub Int hp_huff_bits(Int s) {
+    if (s == 0) { return 13; } if (s == 1) { return 23; } if (s == 2) { return 28; } if (s == 3) { return 28; } if (s == 4) { return 28; } if (s == 5) { return 28; }
+    if (s == 6) { return 28; } if (s == 7) { return 28; } if (s == 8) { return 28; } if (s == 9) { return 24; } if (s == 10) { return 30; } if (s == 11) { return 28; }
+    if (s == 12) { return 28; } if (s == 13) { return 30; } if (s == 14) { return 28; } if (s == 15) { return 28; } if (s == 16) { return 28; } if (s == 17) { return 28; }
+    if (s == 18) { return 28; } if (s == 19) { return 28; } if (s == 20) { return 28; } if (s == 21) { return 28; } if (s == 22) { return 30; } if (s == 23) { return 28; }
+    if (s == 24) { return 28; } if (s == 25) { return 28; } if (s == 26) { return 28; } if (s == 27) { return 28; } if (s == 28) { return 28; } if (s == 29) { return 28; }
+    if (s == 30) { return 28; } if (s == 31) { return 28; } if (s == 32) { return 6; } if (s == 33) { return 10; } if (s == 34) { return 10; } if (s == 35) { return 12; }
+    if (s == 36) { return 13; } if (s == 37) { return 6; } if (s == 38) { return 8; } if (s == 39) { return 11; } if (s == 40) { return 10; } if (s == 41) { return 10; }
+    if (s == 42) { return 8; } if (s == 43) { return 11; } if (s == 44) { return 8; } if (s == 45) { return 6; } if (s == 46) { return 6; } if (s == 47) { return 6; }
+    if (s == 48) { return 5; } if (s == 49) { return 5; } if (s == 50) { return 5; } if (s == 51) { return 6; } if (s == 52) { return 6; } if (s == 53) { return 6; }
+    if (s == 54) { return 6; } if (s == 55) { return 6; } if (s == 56) { return 6; } if (s == 57) { return 6; } if (s == 58) { return 7; } if (s == 59) { return 8; }
+    if (s == 60) { return 15; } if (s == 61) { return 6; } if (s == 62) { return 12; } if (s == 63) { return 10; } if (s == 64) { return 13; } if (s == 65) { return 6; }
+    if (s == 66) { return 7; } if (s == 67) { return 7; } if (s == 68) { return 7; } if (s == 69) { return 7; } if (s == 70) { return 7; } if (s == 71) { return 7; }
+    if (s == 72) { return 7; } if (s == 73) { return 7; } if (s == 74) { return 7; } if (s == 75) { return 7; } if (s == 76) { return 7; } if (s == 77) { return 7; }
+    if (s == 78) { return 7; } if (s == 79) { return 7; } if (s == 80) { return 7; } if (s == 81) { return 7; } if (s == 82) { return 7; } if (s == 83) { return 7; }
+    if (s == 84) { return 7; } if (s == 85) { return 7; } if (s == 86) { return 7; } if (s == 87) { return 7; } if (s == 88) { return 8; } if (s == 89) { return 7; }
+    if (s == 90) { return 8; } if (s == 91) { return 13; } if (s == 92) { return 19; } if (s == 93) { return 13; } if (s == 94) { return 14; } if (s == 95) { return 6; }
+    if (s == 96) { return 15; } if (s == 97) { return 5; } if (s == 98) { return 6; } if (s == 99) { return 5; } if (s == 100) { return 6; } if (s == 101) { return 5; }
+    if (s == 102) { return 6; } if (s == 103) { return 6; } if (s == 104) { return 6; } if (s == 105) { return 5; } if (s == 106) { return 7; } if (s == 107) { return 7; }
+    if (s == 108) { return 6; } if (s == 109) { return 6; } if (s == 110) { return 6; } if (s == 111) { return 5; } if (s == 112) { return 6; } if (s == 113) { return 7; }
+    if (s == 114) { return 6; } if (s == 115) { return 5; } if (s == 116) { return 5; } if (s == 117) { return 6; } if (s == 118) { return 7; } if (s == 119) { return 7; }
+    if (s == 120) { return 7; } if (s == 121) { return 7; } if (s == 122) { return 7; } if (s == 123) { return 15; } if (s == 124) { return 11; } if (s == 125) { return 14; }
+    if (s == 126) { return 13; } if (s == 127) { return 28; } if (s == 128) { return 20; } if (s == 129) { return 22; } if (s == 130) { return 20; } if (s == 131) { return 20; }
+    if (s == 132) { return 22; } if (s == 133) { return 22; } if (s == 134) { return 22; } if (s == 135) { return 23; } if (s == 136) { return 22; } if (s == 137) { return 23; }
+    if (s == 138) { return 23; } if (s == 139) { return 23; } if (s == 140) { return 23; } if (s == 141) { return 23; } if (s == 142) { return 24; } if (s == 143) { return 23; }
+    if (s == 144) { return 24; } if (s == 145) { return 24; } if (s == 146) { return 22; } if (s == 147) { return 23; } if (s == 148) { return 24; } if (s == 149) { return 23; }
+    if (s == 150) { return 23; } if (s == 151) { return 23; } if (s == 152) { return 23; } if (s == 153) { return 21; } if (s == 154) { return 22; } if (s == 155) { return 23; }
+    if (s == 156) { return 22; } if (s == 157) { return 23; } if (s == 158) { return 23; } if (s == 159) { return 24; } if (s == 160) { return 22; } if (s == 161) { return 21; }
+    if (s == 162) { return 20; } if (s == 163) { return 22; } if (s == 164) { return 22; } if (s == 165) { return 23; } if (s == 166) { return 23; } if (s == 167) { return 21; }
+    if (s == 168) { return 23; } if (s == 169) { return 22; } if (s == 170) { return 22; } if (s == 171) { return 24; } if (s == 172) { return 21; } if (s == 173) { return 22; }
+    if (s == 174) { return 23; } if (s == 175) { return 23; } if (s == 176) { return 21; } if (s == 177) { return 21; } if (s == 178) { return 22; } if (s == 179) { return 21; }
+    if (s == 180) { return 23; } if (s == 181) { return 22; } if (s == 182) { return 23; } if (s == 183) { return 23; } if (s == 184) { return 20; } if (s == 185) { return 22; }
+    if (s == 186) { return 22; } if (s == 187) { return 22; } if (s == 188) { return 23; } if (s == 189) { return 22; } if (s == 190) { return 22; } if (s == 191) { return 23; }
+    if (s == 192) { return 26; } if (s == 193) { return 26; } if (s == 194) { return 20; } if (s == 195) { return 19; } if (s == 196) { return 22; } if (s == 197) { return 23; }
+    if (s == 198) { return 22; } if (s == 199) { return 25; } if (s == 200) { return 26; } if (s == 201) { return 26; } if (s == 202) { return 26; } if (s == 203) { return 27; }
+    if (s == 204) { return 27; } if (s == 205) { return 26; } if (s == 206) { return 24; } if (s == 207) { return 25; } if (s == 208) { return 19; } if (s == 209) { return 21; }
+    if (s == 210) { return 26; } if (s == 211) { return 27; } if (s == 212) { return 27; } if (s == 213) { return 26; } if (s == 214) { return 27; } if (s == 215) { return 24; }
+    if (s == 216) { return 21; } if (s == 217) { return 21; } if (s == 218) { return 26; } if (s == 219) { return 26; } if (s == 220) { return 28; } if (s == 221) { return 27; }
+    if (s == 222) { return 27; } if (s == 223) { return 27; } if (s == 224) { return 20; } if (s == 225) { return 24; } if (s == 226) { return 20; } if (s == 227) { return 21; }
+    if (s == 228) { return 22; } if (s == 229) { return 21; } if (s == 230) { return 21; } if (s == 231) { return 23; } if (s == 232) { return 22; } if (s == 233) { return 22; }
+    if (s == 234) { return 25; } if (s == 235) { return 25; } if (s == 236) { return 24; } if (s == 237) { return 24; } if (s == 238) { return 26; } if (s == 239) { return 23; }
+    if (s == 240) { return 26; } if (s == 241) { return 27; } if (s == 242) { return 26; } if (s == 243) { return 26; } if (s == 244) { return 27; } if (s == 245) { return 27; }
+    if (s == 246) { return 27; } if (s == 247) { return 27; } if (s == 248) { return 27; } if (s == 249) { return 28; } if (s == 250) { return 27; } if (s == 251) { return 27; }
+    if (s == 252) { return 27; } if (s == 253) { return 27; } if (s == 254) { return 27; } if (s == 255) { return 26; } if (s == 256) { return 30; }
+    return 0 - 1;
+}
+
+
+type HuffState = { sym: Int(64), nextg: Int(64), bad: Bool };
+
+type HuffDec = { s: Str, nextg: Int(64), bad: Bool };
+
+// Bit value at global bit position g; -1 past the end.
+pub Int hp_bit_at(List(Int) b, Int g, Int gend) {
+    if (g >= gend) { return 0 - 1; }
+    Int bytei = g / 8;
+    Int off = g - bytei * 8;
+    Int sh = 7 - off;
+    Int byte = b[bytei];
+    Int masked = byte >> sh;
+    return masked & 1;
+}
+
+// Find the symbol whose code has exactly L bits and value `code`.
+pub Int hp_huff_find(Int l, Int code) {
+    return hp_huff_find_at(l, code, 0);
+}
+
+pub Int hp_huff_find_at(Int l, Int code, Int s) {
+    if (s > 257) { return 0 - 1; }
+    Bool lm = hp_huff_bits(s) == l;
+    Bool cm = hp_huff_code(s) == code;
+    if (lm && cm) { return s; }
+    return hp_huff_find_at(l, code, s + 1);
+}
+
+// Decode one symbol starting at global bit g.
+pub HuffState hp_huff_one(List(Int) b, Int g, Int gend, Int len, Int acc) {
+    if (len >= 30) {
+        return HuffState { sym: 0, nextg: g, bad: true };
+    }
+    Int bitv = hp_bit_at(b, g, gend);
+    if (bitv < 0) {
+        return HuffState { sym: 0, nextg: g, bad: true };
+    }
+    Int acc2 = acc * 2 + bitv;
+    Int l2 = len + 1;
+    Int sym = hp_huff_find(l2, acc2);
+    if (sym == 256) {
+        return HuffState { sym: 0, nextg: g, bad: true };
+    }
+    if (sym >= 0) {
+        return HuffState { sym: sym, nextg: g + 1, bad: false };
+    }
+    return hp_huff_one(b, g + 1, gend, l2, acc2);
+}
+
+// True when every bit in [g, gend) is set (EOS padding).
+pub Bool hp_pad_ones(List(Int) b, Int g, Int gend) {
+    if (g >= gend) { return true; }
+    Int v = hp_bit_at(b, g, gend);
+    if (v != 1) { return false; }
+    return hp_pad_ones(b, g + 1, gend);
+}
+
+// Decode a whole Huffman string spanning [startbyte*8+startbit, gend).
+pub HuffDec hp_huff_loop(List(Int) b, Int g, Int gend, Str acc) {
+    Int rem = gend - g;
+    if (rem == 0) {
+        return HuffDec { s: acc, nextg: gend, bad: false };
+    }
+    if (rem < 5) {
+        // Shorter than the minimum code: must be EOS padding.
+        Bool pad0 = hp_pad_ones(b, g, gend);
+        return HuffDec { s: acc, nextg: gend, bad: !pad0 };
+    }
+    HuffState st = hp_huff_one(b, g, gend, 0, 0);
+    if (st.bad) {
+        // A failed decode is acceptable as padding only in the final
+        // partial byte.
+        if (rem < 8) {
+            Bool pad1 = hp_pad_ones(b, g, gend);
+            return HuffDec { s: acc, nextg: gend, bad: !pad1 };
+        }
+        return HuffDec { s: acc, nextg: st.nextg, bad: true };
+    }
+    Str acc2 = acc + str_from_code(st.sym);
+    return hp_huff_loop(b, st.nextg, gend, acc2);
+}
+
+// Entry point: Huffman-decode li.val bytes beginning at byte `p0`.
+pub HuffDec hp_huff_str(List(Int) b, Int p0, Int nbytes) {
+    Int gs = p0 * 8;
+    Int ge = (p0 + nbytes) * 8;
+    return hp_huff_loop(b, gs, ge, "");
 }
