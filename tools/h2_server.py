@@ -69,6 +69,28 @@ def handle(raw):
     h2c.initiate_connection()
     send_app(h2c.data_to_send())
 
+    streams = {}  # sid -> {"headers": [...], "body": bytearray}
+
+    def respond(sid):
+        headers, body = streams.get(sid, ([], b""))
+        raw_hdrs = dict(headers)
+        path = b"/bigheaders"
+        for k, v in raw_hdrs.items():
+            if k == b":path":
+                path = v
+        if path == b"/bigheaders":
+            # ~40KB of response headers forces hyper-h2 to split the
+            # HEADERS block across CONTINUATION frames.
+            big = [(":status", "200"), ("content-type", "text/plain")]
+            for i in range(300):
+                big.append((f"x-pad-{i}", "v" * 140))
+            h2c.send_headers(sid, big)
+            h2c.send_data(sid, b"continuation-ok", end_stream=True)
+        else:
+            h2c.send_headers(sid, [(":status", "200"), ("content-type", "text/plain")])
+            payload = bytes(body) if body else b"hello from resid h2"
+            h2c.send_data(sid, payload, end_stream=True)
+
     while True:
         try:
             data = tls.read(65536)
@@ -91,8 +113,15 @@ def handle(raw):
         for ev in events:
             if isinstance(ev, h2.events.RequestReceived):
                 sid = ev.stream_id
-                h2c.send_headers(sid, [(":status", "200"), ("content-type", "text/plain")])
-                h2c.send_data(sid, b"hello from resid h2", end_stream=True)
+                streams[sid] = (list(ev.headers), bytearray())
+                if ev.stream_ended:
+                    respond(sid)
+            elif isinstance(ev, h2.events.DataReceived):
+                sid = ev.stream_id
+                if sid in streams:
+                    streams[sid][1].extend(ev.data)
+                if ev.stream_ended:
+                    respond(sid)
             elif isinstance(ev, h2.events.ConnectionTerminated):
                 return
         outb = h2c.data_to_send()
