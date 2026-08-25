@@ -830,7 +830,12 @@ fn concrete_width(ty: &NumericType) -> u16 {
 }
 fn needed_bits(op: BinOp, a: u16, b: u16) -> u16 {
     match op {
-        BinOp::Add | BinOp::Sub => a.max(b) + 1,
+        // Spec v3.2 §6.1: add/sub yield the widest operand width.
+        // Overflow is handled by checked semantics (trap), never by
+        // static promotion — promote-then-narrow loses the carry.
+        BinOp::Add | BinOp::Sub => a.max(b),
+        // Multiplication keeps the range rule: headroom is real and
+        // crypto code relies on products fitting the promoted width.
         BinOp::Mul => a + b,
         BinOp::Div
         | BinOp::Rem
@@ -973,12 +978,20 @@ mod tests {
 
     #[test]
     fn test_numeric_result_type_add_widening() {
+        // Spec v3.2 §6.1: add/sub yield the widest operand width;
+        // overflow is handled by checked semantics, not promotion.
         let i8_t = NumericType::Int(IntWidth::B8);
         let i8_t2 = NumericType::Int(IntWidth::B8);
         let result = numeric_result_type(&i8_t, BinOp::Add, &i8_t2);
         match result {
+            ResultType::Numeric(NumericType::Int(w)) => assert_eq!(w, IntWidth::B8),
+            _ => panic!("expected Int(8)"),
+        }
+        // Multiplication keeps the range rule.
+        let mul = numeric_result_type(&i8_t, BinOp::Mul, &i8_t2);
+        match mul {
             ResultType::Numeric(NumericType::Int(w)) => assert_eq!(w, IntWidth::B16),
-            _ => panic!("expected Int(16)"),
+            _ => panic!("expected Int(16) for mul"),
         }
     }
 

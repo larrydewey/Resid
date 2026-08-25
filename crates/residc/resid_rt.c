@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <time.h>
+#include <execinfo.h>
 #include <string.h>
 #include <limits.h>
 #include <pthread.h>
@@ -3153,4 +3154,13 @@ int64_t resid_utc_now_civil(void) {
          + (int64_t)tmv.tm_hour * 10000LL
          + (int64_t)tmv.tm_min * 100LL
          + (int64_t)tmv.tm_sec;
+}
+
+/* Checked integer add/sub overflow trap (spec v3.2 §6.1). */
+_Noreturn void resid_arith_overflow(void) {
+    fprintf(stderr, "resid: arithmetic overflow\n");
+    void* bt[32];
+    int n = backtrace(bt, 32);
+    backtrace_symbols_fd(bt, n, 2);
+    abort();
 }

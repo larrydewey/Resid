@@ -254,10 +254,10 @@ Narrowing conversions are never implicit.
   UInt(16) x = some_u32;     // hard error
   UInt(16) x = u16(some_u32); // ok (explicit)
 
-Widening assignments likewise require an explicit cast
-or conversion helper; interoperability applies only to
-operators, not to binding. The sole exception is integer
-literal adoption (6.1a).
+Narrowing assignments always require an explicit cast.
+Value-preserving widening assignments are permitted
+implicitly. Integer literal adoption (6.1a) applies as
+specified there.
 
 Argument expressions must match the parameter's declared
 type exactly, after literal adoption. Computed argument

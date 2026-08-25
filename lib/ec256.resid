@@ -48,19 +48,28 @@ pub Int(256) ec_nm2() {
 // ─── Unsigned wide comparisons ───────────────────────────────────────
 // Int(N) relational ops compile as signed; EC scalars are unsigned, so
 // values with the top bit set would compare wrong. O(1) formulation:
-// a >= b iff (signs differ ? a has its top bit set : (a-b) is positive).
+// a >= b unsigned: MSB-first bit scan. The old formulation computed
+// d = a - b expecting two's-complement wraparound, which now traps
+// under checked arithmetic (spec v3.2 §6.1).
 
 pub Bool ec_ge(Int(256) a, Int(256) b) {
-    Int(256) d = a - b;
-    Int(256) sx = a ^ b;
-    Int(256) a_top = (a >> 255) & 1;
-    Int(256) s_top = (sx >> 255) & 1;
-    Int(256) d_top = (d >> 255) & 1;
-    Bool differ = s_top == 1;
-    Bool apos = a_top == 1;
-    Bool dneg = d_top == 1;
-    if (differ) { return apos; }
-    return !dneg;
+    return ec_ge_scan(a, b, 255);
+}
+
+pub Bool ec_ge_scan(Int(256) a, Int(256) b, Int i) {
+    if (i < 0) { return true; }
+    Int(256) sh = i;
+    Int(256) ab = (a >> sh) & 1;
+    Int(256) bb = (b >> sh) & 1;
+    Bool abit = ab == 1;
+    Bool bbit = bb == 1;
+    if (abit) {
+        if (!bbit) { return true; }
+    } else {
+        if (bbit) { return false; }
+    }
+    Int ni = i - 1;
+    return ec_ge_scan(a, b, ni);
 }
 
 pub Bool ec_ge512(Int(512) a, Int(512) b) {
