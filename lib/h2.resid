@@ -66,7 +66,8 @@ pub List(Int) h2_frame_hdr_enc(Int length, Int stype, Int flags, Int sid) {
 
 // Concatenate two seeded lists (seed dropped from the right operand).
 pub List(Int) h2_cat(List(Int) a, List(Int) b) {
-    return h2_cat_acc(b, 2, b.len() - 1, 2, a);
+    // Append ALL of b's data bytes (b's seed sits at index 0).
+    return h2_cat_acc(b, 1, b.len() - 1, 1, a);
 }
 
 // Byte-for-byte der_slice_acc shape (proven against the codegen).
@@ -110,7 +111,17 @@ pub List(Int) h2_join(List(Int) b, Int i, Int last) {
 pub List(Int) h2_frame(Int stype, Int flags, Int sid, List(Int) payload) {
     Int len = payload.len() - 1;
     List(Int) hdr = h2_frame_hdr_enc(len, stype, flags, sid);
-    return h2_cat(hdr, payload);
+    // Payload keeps its seed; copy every data byte (start at 1).
+    return h2_cat_all(payload, 1, len, 1, hdr);
+}
+
+// Appends b[start..last] onto acc (same proven recursion shape).
+pub List(Int) h2_cat_all(List(Int) b, Int start, Int last, Int i, List(Int) acc) {
+    if (i > last) { return acc; }
+    Int bv = b[i];
+    List(Int) acc2 = acc.concat([bv]);
+    Int ni = i + 1;
+    return h2_cat_all(b, start, last, ni, acc2);
 }
 
 // ─── SETTINGS payload helpers ─────────────────────────────────────────

@@ -33,6 +33,41 @@ List(Int) hb(Str s) {
     return hb_acc(s, 0, [0]);
 }
 
+// Local frame builder + concat (cross-module recursive list builders
+// hit a codegen bug; identical shapes in the main file work).
+List(Int) cat5(List(Int) src, Int start, Int stop, Int i, List(Int) acc) {
+    if (i > stop) { return acc; }
+    Int bv = src[i];
+    List(Int) acc2 = acc.concat([bv]);
+    Int ni = i + 1;
+    return cat5(src, start, stop, ni, acc2);
+}
+
+List(Int) mk_frame(Int stype, Int flags, Int sid, List(Int) payload) {
+    Int plen = payload.len() - 1;
+    Int hi = plen / 65536;
+    Int r1 = plen - hi * 65536;
+    Int mid = r1 / 256;
+    Int lo = r1 - mid * 256;
+    List(Int) hdr = [0, hi, mid, lo, stype, flags];
+    Int s3 = sid / 16777216;
+    Int sr = sid - s3 * 16777216;
+    Int s2 = sr / 65536;
+    Int sr2 = sr - s2 * 65536;
+    Int s1 = sr2 / 256;
+    Int s0 = sr2 - s1 * 256;
+    List(Int) hdr2b = hdr.concat([s3]);
+    List(Int) hdr3 = hdr2b.concat([s2]);
+    List(Int) hdr4 = hdr3.concat([s1]);
+    List(Int) hdr5 = hdr4.concat([s0]);
+    return cat5(payload, 1, plen, 1, hdr5);
+}
+
+List(Int) cat_buf(List(Int) buf, List(Int) rec) {
+    Int bl = buf.len();
+    return cat5(buf, 1, bl - 1, 1, rec);
+}
+
 List(Int) repz(List(Int) acc, Int n) {
     if (n == 0) { return acc; }
     List(Int) acc2 = acc.concat([0]);
@@ -276,7 +311,7 @@ Int pick_int(Bool c, Int a, Int b) {
 
 
 // Scan result over received app-data records.
-type H2Scan = { found: Bool, scount: Int(64), eof: Bool };
+type H2Scan = { found: Bool, scount: Int(64), eof: Bool, seq: Int(64) };
 
 // Walk the frames in `buf` looking for a non-ack SETTINGS payload.
 // Scan for an initial SETTINGS frame: len24=0..4080, type 4, flags 0,
@@ -306,25 +341,98 @@ Int h2_count_at(List(Int) buf, Int p2) {
 // frame appears or tries run out.
 H2Scan h2_scan(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) buf, Int tries) {
     if (tries <= 0) {
-        return H2Scan { found: false, scount: 0, eof: true };
+        return H2Scan { found: false, scount: 0, eof: false, seq: seq };
     }
     H2Rec rec1 = read_one_record(fd, key, iv, seq);
     if (rec1.alert) {
-        return H2Scan { found: false, scount: 0, eof: true };
+        return H2Scan { found: false, scount: 0, eof: false, seq: rec1.seq };
     }
     if (rec1.eof) {
-        return H2Scan { found: false, scount: 0, eof: true };
+        return H2Scan { found: false, scount: 0, eof: true, seq: rec1.seq };
     }
     // Coalesced records can mix NewSessionTicket bytes with h2
     // frames; the SETTINGS pattern search below tolerates that.
-    List(Int) buf2 = h2_cat(buf, rec1.data);
+    List(Int) buf2 = cat_buf(buf, rec1.data);
     Int blen2 = buf2.len() - 1;
     Int at = h2_walk_frames(buf2, 1, blen2);
     if (at > 0) {
         Int cnt = h2_count_at(buf2, at);
-        return H2Scan { found: true, scount: cnt, eof: false };
+        return H2Scan { found: true, scount: cnt, eof: false, seq: rec1.seq };
     }
     return h2_scan(fd, key, iv, rec1.seq, buf2, tries - 1);
+}
+
+
+// Response walk result.
+type H2Result = { status: Str, body: Str };
+
+Int app_list_len(List(Int) xs) {
+    return xs.len() - 1;
+}
+
+H2Result h2_collect(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) acc, Int tries) {
+    if (tries <= 0) {
+        return H2Result { status: "", body: "" };
+    }
+    H2Rec rr = read_one_record(fd, key, iv, seq);
+    List(Int) rd = rr.data;
+    Int rl = rd.len();
+    Int rc = rr.ctype;
+    println("COLLECT seq=" + IntToString(seq) + " len=" + IntToString(rl) + " ct=" + IntToString(rc));
+    if (rr.eof || rr.alert) {
+        return H2Result { status: "", body: "" };
+    }
+    List(Int) acc2 = h2_cat(acc, rr.data);
+    H2Result partial = h2_walk_response(acc2, 1, acc2.len() - 1, "", "");
+    Bool got = partial.body != "";
+    if (got) { return partial; }
+    return h2_collect(fd, key, iv, rr.seq, acc2, tries - 1);
+}
+
+// Find :status in decoded fields; "" when absent.
+Str h2_find_status(List(HpField) fs, Int i) {
+    Int n = fs.len();
+    Int rem = n - i;
+    if (rem < 1) { return ""; }
+    HpField f = fs[i];
+    Bool m = f.name == ":status";
+    if (m) { return f.value; }
+    return h2_find_status(fs, i + 1);
+}
+
+H2Result h2_walk_response(List(Int) resp, Int p3, Int total, Str st, Str bd) {
+    if (p3 + 9 > total) {
+        return H2Result { status: st, body: bd };
+    }
+    H2FrameHdr rh = h2_frame_hdr(resp, p3);
+    Int rstart = p3 + 9;
+    Int rend = p3 + 8 + rh.length;
+    if (rend > total) {
+        return H2Result { status: st, body: bd };
+    }
+    if (rh.stype == 1) {
+        List(Int) pay = slice_seed(resp, rstart, rh.length, [0]);
+        List(HpField) seedf = [HpField { name: "", value: "" }];
+        HpBlock dec = hp_decode_block(pay, 1, rh.length, [""], seedf);
+        Str found = h2_find_status(dec.fields, 1);
+        Bool have = found != "";
+        Str st2 = if (have) { found } else { st };
+        return h2_walk_response(resp, rend + 1, total, st2, bd);
+    }
+    if (rh.stype == 0) {
+        List(Int) dpay = slice_seed(resp, rstart, rh.length, [0]);
+        Int dlast = dpay.len() - 1;
+        List(Int) dcore = slice_seed(dpay, 1, dlast, [0]);
+        Str piece = h2_bytes_str(dcore, 1, dcore.len() - 1);
+        Str bd2 = bd + piece;
+        Int low = rh.flags & 1;
+        Bool es = low == 1;
+        if (es) {
+            return H2Result { status: st, body: bd2 };
+        }
+        return h2_walk_response(resp, rend + 1, total, st, bd2);
+    }
+    return h2_walk_response(resp, rend + 1, total, st, bd);
 }
 
 Int main() {
@@ -435,7 +543,7 @@ Int main() {
 
     // ─── h2 connection preface + SETTINGS ───
     List(Int) preface = bytes_of("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
-    List(Int) settings = h2_frame(h2_t_settings(), 0, 0, [0]);
+    List(Int) settings = mk_frame(h2_t_settings(), 0, 0, [0]);
     List(Int) flight = h2_cat(preface, settings);
     List(Int) c_ap_key = tls_traffic_key(c_ap);
     List(Int) c_ap_iv = tls_traffic_iv(c_ap);
@@ -456,11 +564,35 @@ Int main() {
 
     // ACK the server settings: empty SETTINGS with ACK flag 0x01.
     List(Int) ack = h2_frame(h2_t_settings(), 1, 0, [0]);
-    List(Int) arec = seal_record(0, c_ap_key, c_ap_iv, ack, 23, 23);
+    Int capseq = 1;
+    List(Int) arec = seal_record(capseq, c_ap_key, c_ap_iv, ack, 23, 23);
     List(Int) arhdr = tls_record_header2(23, arec.len() - 1);
     List(Int) amsg = sconcat(arhdr, arec);
     resid_tcp_send_bin(fd, amsg);
+
     println("H2-PREFACE-OK");
+    // ─── issue GET / on stream 1 ───
+    // HPACK: indexed :method GET(2), :scheme https(7), :path /(4),
+    // literal-without-indexing :authority(1) = "localhost".
+    List(Int) authv = str_to_bytes(host);
+    Int avl = authv.len() - 1;
+    List(Int) blk0 = [0, 130, 135, 132, 1, avl];
+    List(Int) blk = h2_cat(blk0, authv);
+    List(Int) hdrs = mk_frame(h2_t_headers(), 5, 1, blk);
+    Int capseq2 = capseq + 1;
+    List(Int) hrec = seal_record(capseq2, c_ap_key, c_ap_iv, hdrs, 23, 23);
+    List(Int) hrec_hdr = tls_record_header2(23, hrec.len() - 1);
+    List(Int) hmsg = sconcat(hrec_hdr, hrec);
+    Int hml = hmsg.len() - 1;
+    Bool s4 = resid_tcp_send_bin(fd, hmsg);
+    if (!s4) { println("SEND4-FAIL"); return 1; }
+
+    Int rseq = 0;
+    Bool sf = scan.found;
+    Int sseq = pick_int(sf, scan.seq, 0);
+    H2Result res = h2_collect(fd, s_ap_key, s_ap_iv, sseq, [0], 8);
+    println("STATUS=" + res.status);
+    println("BODY=" + res.body);
     resid_tcp_close(fd);
     return 0;
 }

@@ -8,6 +8,7 @@ import socket, ssl, sys, threading
 
 import h2.connection
 import h2.events
+from h2.config import H2Configuration
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 9443
 CERT = sys.argv[2] if len(sys.argv) > 2 else "c.pem"
@@ -50,7 +51,9 @@ def handle(raw):
         raw.close()
         return
 
+    print("HS-DONE", flush=True)
     def send_app(b):
+        print("SENDAPP", len(b), b[:9].hex(), flush=True)
         # Encrypt application bytes through the TLS session.
         try:
             tls.write(b)
@@ -61,7 +64,8 @@ def handle(raw):
             raw.sendall(o)
             o = out.read()
 
-    h2c = h2.connection.H2Connection()
+    cfg = H2Configuration(client_side=False)
+    h2c = h2.connection.H2Connection(config=cfg)
     h2c.initiate_connection()
     send_app(h2c.data_to_send())
 
@@ -83,6 +87,7 @@ def handle(raw):
         if not data:
             return
         events = h2c.receive_data(data)
+        print("EVENTS", len(data), [type(e).__name__ for e in events], flush=True)
         for ev in events:
             if isinstance(ev, h2.events.RequestReceived):
                 sid = ev.stream_id
@@ -93,6 +98,8 @@ def handle(raw):
         outb = h2c.data_to_send()
         if outb:
             send_app(outb)
+        else:
+            print("loop-noout", flush=True)
 
 
 

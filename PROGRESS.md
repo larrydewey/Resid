@@ -1,217 +1,2849 @@
-# Resid — Project Status
+# Resid Compiler v3.2 — Implementation Plan
 
-**Specification**: `resid_specification.txt` v3.2 (Production Ready; v3.1 base + integer-width semantics amendments)
-**Implementation**: Rust stable + LLVM (inkwell), monorepo Cargo workspace
+**Specification**: `resid_specification.txt` v3.2 (Production Ready)
+**Target**: Rust stable + LLVM (inkwell)
+**Workspace**: Monorepo, Cargo workspace
+**Stdlib**: Rust first, later move to Resid
+**Wide numeric types**: Int(128)..Int(512) via LLVM arbitrary-width integers; binary floats capped at Float(128); arbitrary precision via the Dec(N) decimal family
 **Interpreter**: None — direct LLVM
-**Wide numerics**: `Int(128)..Int(512)` / `UInt(N)` via LLVM arbitrary-width integers, `Float` capped at 128, `Dec(N)` exact decimals
 
 ---
 
-## 0. Current Snapshot
+## 0. CURRENT SNAPSHOT
 
-**631 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
-resid-codegen 137, resid-build 12, resid-fmt 5, residc unit + e2e).
-Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
-proven**. The long-standing "context-dependent codegen ghost" is dead —
-three root causes, none of them codegen (see §4).
+- **`else if` fixed**: the bootstrap and Rust parsers never consumed the
+  `if` after `else`, so every `else if` chain failed to compile; both now
+  parse chains correctly (regression tests in
+  `crates/resid-parser/tests/else_if.rs`), and stage-2 codegen handles
+  chains via recursive sg_if with shared join (e2e run_else_if_chain
+  covers all three branch outcomes through both pipelines).
+- **Stage-2 provenance emission (WIP)**: driver.resid emits
+  `<out>.resid-prov` sidecars (cleartext payload + Ed25519 signature via the
+  self-hosted signer). Signature cross-verified:
+  matches an independent Python Ed25519 signer byte-for-byte, and
+  `residc verify <bin>.resid-prov` accepts it (e2e
+  run_stage2_provenance_sidecar). The earlier "failure" was a bug in the
+  verification script, not the emitter.
+- **COSE provenance (RFC 9052)**: trailers now carry a real `COSE_Sign1`
+  (tag 18, EdDSA -8) over the payload — verifiable by any COSE library.
+  Confidential reservation wired: `RESID_PROV_ENCRYPT=1` +
+  `RESID_PROV_KEY=<64 hex>` wraps the payload in `COSE_Encrypt0` (tag 16)
+  before signing (experimental stream cipher; AEAD pending).
+   before signing (experimental stream cipher; AEAD pending); verify
+   reports concealed-payload provenance distinctly. Provenance mode is part
+   of the cache key so encrypted/plain builds of one source stay distinct.
+- **x509 TBS structure walker (roadmap item 1–2 done)**: `lib/x509.resid` —
+  pure-Resid walker over `lib/der.resid`: tbsCertificate field positions
+  ([0] version skip, serial, sig-alg OID, issuer/subject Name RDN
+  rendering with OID→short-name mapping, validity UTCTime pair, SPKI
+  alg OID) plus string content decoding (`der_str_value`). `der_oid_str`
+  now decodes first arcs properly for all arc1 values (2.5.4.x OIDs
+  rendered correctly, not just <80). e2e `run_x509_in_resid`: an
+  openssl self-signed cert (serial 7331, C=US/O=Resid/CN=Resid Test CA)
+  embedded as a byte list is decoded identically through both pipelines
+  (fixture `crates/residc/tests/fixtures/x509_cert_list.txt`).
+  Gotchas hit and confirmed: no variable reassignment in Resid
+  (restructured arc decode with if-expressions), and Int(128)/Int(256)
+  widening disagreement when mixing arithmetic of different depths in
+  if arms (bind temps first). Next: RSA PKCS#1v1.5 verify (bignum
+  modexp), ECDSA-P256, chain validation.
+- **Reduction pass v1(b) (spec §34)**: every build reads the artifact's
+   prior `.resid-notes.cbor`, compares against the current residual set,
+   and reports discharged knowledge on stderr (`reduction: discharged ...`);
+   notes are always rewritten to current truth. resid-notes gained a CBOR
+   reader with roundtrip tests.
+- **Knowledge cache + residual notes + signed provenance (spec §21.4, §27,
+  §34, §35 — reduction subsystem v1)**: `resid-cache` (content-hash keyed
+  CBOR store; `build` skips recompilation when source is unchanged),
+  `resid-notes` (`<artifact>.resid-notes.cbor` records rt bindings and
+  provider calls). `residc build` embeds a **signed provenance trailer** in
+  the binary — toolchain version, source hash, binary code hash, residual
+  notes — Ed25519-signed over the payload so both the provenance AND the
+  code are tamper-evident. First build offers an interactive keypair wizard
+  (`residc keygen`); `residc verify <binary>` checks signature + code hash;
+  `RESID_VERIFY=1` makes `run` refuse unverified binaries (exit 70).
+- **Bootstrap sync (post-crypto)**: stage-2 compilers now accept the full
+  checked_/wrapping_/saturating_ arithmetic families (22 extern builtins);
+  stage-1 vs stage-2 outputs verified identical on wrap/saturate/uadd cases.
+- **File extension unified**: all Resid sources are `.resid` (lib/,
+  examples/, tools probes, imports, tests, docs) — no more `.res`.
+- **RSA PKCS#1v1.5 SHA-256 verify (roadmap item 3 done)**:
+  `lib/rsa.resid` — pure-Resid bignum on base-2^16 little-endian limb
+  lists (products stay < 2^32, safe in Int(64)) with row-based schoolbook
+  multiply and append-only adds; Montgomery REDC for modular
+  multiplication (`ninv = -n^-1 mod b^w` via Newton lifting from the
+  single-digit inverse; `R^2 mod n` by repeated doubling with a one-limb-
+  wider accumulator so `2*r` never overflows the modulus width); small-
+  exponent square-and-multiply entirely in Montgomery form. e2e
+  `run_rsa_pkcs1_verify_in_resid`: the fixture certificate verifies its
+  own tbsCertificate signature (RSA-2048, e=65537) through BOTH
+  pipelines — digest bytes and VALID verdict match an independent Python
+  implementation byte-for-byte (~2s stage-1). Ground truth pinned in
+  `tools`-style reference: sha256(tbs) starts 234 95 53 43.
+  Gotchas hit this round: `List.concat(other)` copies the other list's
+  index-0 seed element (use the bn_cat helper); little-endian left shift
+  must PREPEND zero limbs; no variable reassignment anywhere; bind
+  arithmetic temps before calls or widths disagree (Int(128)/Int(256));
+  deep tail recursions need `ulimit -s unlimited` in e2e harnesses.
+- **ECDSA P-256 verify (roadmap item 4 done)**: `lib/ec256.resid` —
+  NIST P-256 point arithmetic on Int(256) field elements (ed25519-style
+  typed scalars, NOT limb lists): products widen to Int(512) and reduce
+  via binary long division (`ec_mod_bits`) because native `%` on
+  Int(512) is broken in codegen for large operands. Jacobian doubling /
+  mixed-affine addition inlined in a recursive scalar mult returning
+  affine `(x<<256)|y`; inversion via Fermat pow. e2e
+  `run_ecdsa_p256_verify_in_resid`: ECDSA-P256 self-signed cert fixture
+  verifies its own signature stage-1; every intermediate (digest, r, s,
+  pubkey, result x) pinned to an independent pure-Python EC
+  implementation. CRITICAL language gotchas discovered:
+  (1) Int(256) values >= 2^255 are NEGATIVE — casting to Int(512)
+  sign-extends and corrupts modular math; always mask via ec_zext.
+  (2) native Int(512) `%` returns garbage for large operands.
+  (3) List.concat copies the argument's index-0 seed element.
+  KNOWN ISSUE: bootstrap driver (stage-2) rejects merged sources
+  importing ec256.resid with "function `=` is already defined" — the
+  legacy sig collector mis-scans Int(256)/Int(512)-typed libraries;
+  ECDSA e2e is therefore stage-1 only for now.
+- **Chain validation + SAN (roadmap item 5, partial)**: `lib/chain.resid`
+  — SAN dNSName parsing from [3] extensions (OID 2.5.29.17) with
+  case-insensitive matching incl. leftmost wildcards; validity-window
+  checks (UTCTime/GeneralizedTime -> numeric compare); issuer-name
+  linking by raw DER equality; signature dispatch on alg OID
+  (RSA PKCS#1v1.5 / ECDSA P-256). e2e `run_chain_san_validity_in_resid`
+  asserts exact/wildcard/negative SAN matches and validity windows
+  against openssl ground truth. ~~OPEN: full `chain_verify` EC link
+  returns false despite verified-correct inputs~~ RESOLVED: the EC link
+  verifies correctly through both pipelines (fresh openssl-generated
+  self-signed EC cert AND a real CA→leaf chain both return true; the
+  earlier false was the since-fixed "context-dependence ghost", not
+  codegen). Regression-pinned in `run_chain_san_validity_in_resid`
+  (now asserts `chain_verify(leaf, root) == true`). 632 tests pass.
+- **TLS transport boundary — DECISION RECORD (roadmap item 6)**: two
+  viable paths for HTTPS support:
+  (A) **Pure-Resid TLS 1.3**: requires X25519 key exchange, AES-128-GCM
+      or ChaCha20-Poly1305 AEAD, HKDF-SHA256, and certificate chain
+      verification — all in Resid. X25519 needs Curve25519 field
+      arithmetic (we have Ed25519 scalar math already; X25519 is the
+      Montgomery ladder variant). AES-GCM is substantial new work
+      (~300 lines + GHASH). Estimated: 2-3 sessions. Benefit: fully
+      self-hosted TLS; fits the project ethos.
+  (B) **Runtime capability `resid_tls_connect(host, port) -> handle`**:
+      TLS implemented in C in resid_rt.c (link against system OpenSSL
+      or bundled MbedTLS); protocol logic stays in Resid via a thin
+      capability-gated API (`tls.get/post`). Estimated: 1 session.
+      Benefit: immediate HTTP/2+TLS enablement; matches how providers
+      (filesystem, process) already delegate to the OS.
+  RECOMMENDATION: (B) first as a bridge capability, keep (A) on the
+  roadmap behind the existing `@capability` story so pure-Resid TLS can
+  replace it later without changing user code. Requires Larry's call
+  before implementation begins.
+- **DECISION: Larry chose (A) pure-Resid TLS.** First milestone:
+  X25519 (RFC 7748) — **DONE**. `lib/x25519.resid` reuses
+  ed25519.resid field ops (`fe_add/sub/mul/sq/inv`, `int_to_bytes`);
+  scalar clamping on BYTES before LE decode (byte math stays
+  positive), u decoded with bit 255 masked; single tail-recursive
+  Montgomery ladder carrying x2/z2/x3/z3/swap, cswap via if-expression
+  selects, returning ((x<<256)|z) packed into Int(512) with low-half
+  masking to dodge sign extension. e2e `run_x25519_in_resid`: RFC
+  7748 §5.2 vectors 1+2 and §6.1 keygen + both-direction shared
+  secret all byte-exact (cross-checked against Python `cryptography`).
+  Gotchas: the `[0]`-seed list convention means real byte j lives at
+  index j+1 — clamp/mask conditions must target i==1/i==32, and test
+  hex helpers must seed exactly once (double seeding shifts every
+  byte). Note RFC 7748 §6.1's printed Alice public key has a known
+  last-byte typo (…4e6b); true key ends …4e6a (per erratum / system
+  libraries). Next TLS milestones: HKDF-SHA256, then AES-GCM or
+  ChaCha20-Poly1305 AEAD.
+- **HKDF-SHA256 (RFC 5869) done**: `hkdf_extract`/`hkdf_expand`/
+  `hkdf_sha256` in `lib/crypto.resid`, built on the existing
+  HMAC-SHA256; expand is a tail recursion over T(i) =
+  HMAC(PRK, T(i-1) | info | i) with seeded-list `sconcat` joining and
+  a final trim to L bytes. e2e `run_hkdf_in_resid`: RFC test cases 1,
+  2 (80-byte inputs, multi-block OKM) and 3 (empty salt + empty info)
+  all byte-exact vs Python reference. TLS milestone 2 of 4 done;
+  next: AEAD (AES-128-GCM or ChaCha20-Poly1305).
+- **AEAD complete — both ChaCha20-Poly1305 AND AES-128-GCM.**
+- **ChaCha20-Poly1305 (RFC 8439) done**: `lib/chacha.resid` — ChaCha20
+  block function with state words in Int(64) masked to 32 bits
+  (wrapping_* builtins are Int(64)-only; two <2^32 values never
+  overflow checked Int(64) adds), no-reassignment-safe QR via a sel4
+  state rebuilder, Poly1305 on Int(256) with clamped r < 2^126 so
+  products stay < 2^257 inside Int(512); reduction folds hi*5 over
+  2^130 twice then one conditional subtract. e2e
+  `run_chacha20poly1305_in_resid`: §2.5.2 MAC vector and the §2.8.2
+  AEAD vector (ct + tag) byte-exact; roundtrip open + tamper reject.
+  Gotchas: every Poly1305 block gets the 0x01 terminator (full blocks
+  too, bit 128 — not just partial); r clamp masks are bytes 3/7/11/15
+  &=15 and 4/8/12 &=252 (byte 0 untouched); AEAD length fields are
+  OCTETS for Poly1305 but BITS for GCM.
+- **AES-128-GCM (SP 800-38D) done**: `lib/aesgcm.resid` — SBOX table,
+  flat 176-byte key schedule, column-major flat-state rounds,
+  MSB-first bitwise GHASH over GF(2^128), inc32 CTR. e2e
+  `run_aes128gcm_in_resid`: NIST test cases 1-4 (incl. AAD and
+  multi-block pt) byte-exact; roundtrip open. Gotchas: round keys
+  offset by one (whitening uses round-0 key), GCM len block is exactly
+  two BE64 bit-lengths, `sconcat` drops the second list's index-0 so
+  unseeded literals lose their first byte, and arithmetic passed
+  directly in argument position widens widths (bind temps first).
+- **TLS 1.3 handshake core (RFC 8446) done**: `lib/tls.resid` —
+  HKDF-Expand-Label (info = uint16 len || len("tls13 "+label) ||
+  label || len(ctx) || ctx), Derive-Secret, full key schedule
+  (early/handshake/master secrets, c/s hs + ap traffic secrets,
+  key/iv derivation), Finished (RFC 8446 §4.4.4), and AES-128-GCM
+  record protection (nonce = static IV xor BE64 seq, J0 =
+  nonce||0^31||1, header as AAD). e2e `run_tls13_handshake_in_resid`
+  pins the whole chain to the RFC 8448 simplified trace: transcript
+  hashes, all secrets/keys, server Finished verify_data byte-exact,
+  and record-layer interop with a Python `cryptography`-sealed record
+  (open OK + re-seal byte-exact). Gotchas: HkdfExpandLabel context is
+  LENGTH-PREFIXED (missing that byte silently yields wrong secrets);
+  "derived" steps hash the EMPTY transcript, not zeros; GCM needs
+  J0 = nonce||0001, not the raw 12-byte nonce. All pure-Resid TLS 1.3
+  crypto now exists: X25519 + HKDF + both AEADs + key schedule +
+  records. Next: message framing (ClientHello build/parse,
+  Certificate/CertificateVerify handling) or live-handshake attempt
+  against openssl s_server via the tcp capability.
+- **Live TLS 1.3 handshake milestone — major progress**: `examples/tls_client.resid`
+  now completes a REAL TLS 1.3 handshake with a python-ssl (OpenSSL) server:
+  CH accepted (1301-only offer), SH parsed, X25519 shared secret computed,
+  full key schedule, encrypted flight (EE||CT||CV||Fin) decrypted, server
+  Finished verified, client Finished ACCEPTED by the server, HTTP request
+  sent. Fixes that got it there: recv_bin boxes unsigned chars (negative
+  bytes corrupted all crypto); CH offers only TLS_AES_128_GCM_SHA256
+  (servers picked AES-256 otherwise); CCS records skipped without touching
+  sequence numbers; record headers actually concatenated onto sealed
+  records; seal AAD uses the record's own content type; CV signs the
+  transcript up to (not including) the CV message; tm_cv_sig length field
+  is u16 not u24; tm_find_fin reverse-scans (type 20, mlen==32);
+  tm_next/tm_u24_at bounds-guarded.
+  REMAINING: flaky ECDSA-P256 CertificateVerify inside the large client
+  program (verifies fine standalone on identical bytes — suspected
+  codegen/Int(256) context issue) and reading the app response after GET;
+  RSA-PSS CV unsupported.
+- **LIVE TLS 1.3 MILESTONE COMPLETE — full handshake + HTTP GET/response
+  against real `openssl s_server`, all pure Resid**: `examples/tls_client.resid`
+  now completes the entire flow end-to-end (exit 0, prints
+  `REPLY: HTTP/1.0 200 ok`). Fixes this round:
+  (1) ECDSA-P256 CertificateVerify now reliable inside the large client —
+  unblocked by the unsigned-compare fix (see resolved item above).
+  (2) Client Finished must be sealed with OUTER content type 23 (TLS 1.3
+  protects everything as app_data); the inner type byte (22) rides in the
+  plaintext, and the GCM AAD must be the actual wire header.
+  (3) The Finished handshake message header (`14 00 00 20`) was missing —
+  `tls_finished` returns only the 32-byte verify_data.
+  (4) THE BIG ONE: `seal_record` computed the record length from
+  `pt.len()` WITHOUT subtracting the seeded-list index-0 phantom — every
+  client record declared one byte MORE than its true body, so OpenSSL's
+  record framing desynced and every server-side MAC check failed. Server→
+  client records opened fine because they use the peer's correct lengths.
+  Debugging lessons recorded: single-run self-consistency only (random
+  handshakes make cross-run hex comparisons meaningless); verify each GHASH
+  call's H against its OWN key; `.len()` includes the seed.
+  e2e `run_tls13_live_openssl_in_resid` pins the milestone: spawns real
+  `openssl s_server -tls1_3`, runs the Resid client through build+run,
+  asserts an HTTP reply (skips if openssl absent). 632 tests pass.
+  Remaining TLS roadmap: RSA-PSS CertificateVerify, chain validation
+  wiring into the live client, app-response hardening (EOF/alert records).
+- **RSA-PSS CertificateVerify done — live client now accepts BOTH CV
+  algorithms**: `lib/chain.resid` gains full RSASSA-PSS SHA-256
+  verification (RFC 8017; MGF1-SHA256, sLen=32) on top of the existing
+  Montgomery bignum stack: `bn_to_be` (limbs -> big-endian bytes; the
+  high/low byte-per-limb mapping is the exact inverse of `bn_from_be`),
+  `pss_mgf1` (MGF1), and `rsa_pss_verify_sha256` (trailer 0xBC check,
+  DB unmask via MGF1(H), PS zero-run + 0x01 separator scan, salt
+  recovery, M' = 00^8 || Hash(content) || salt re-hash compare).
+  Modulus/exponent parsed from the cert SPKI (BIT STRING content =
+  00 || DER SEQ{INTEGER n, INTEGER e}; SEQ tag sits at seeded index 2).
+  `tm_verify_cv` now dispatches on the CV algorithm field:
+  0x0403 -> ECDSA-P256 (via tm_ecdsa_verify_sha256), 0x0804 ->
+  rsa_pss_rsae_sha256. `examples/tls_client.resid` switched to
+  tm_verify_cv (was hardcoded ECDSA). Live-verified against
+  `openssl s_server` with an rsa:2048 server cert: handshake completes,
+  PSS CertificateVerify verifies, HTTP 200 received. Gotchas hit this
+  round: seeded-list literals (`[0,0,...]`) carry a phantom first
+  element — the eight-zero M' prefix must be built with concat;
+  pss_take-style helpers take an INCLUSIVE end index, not a count.
+  e2e run_tls13_live_openssl_in_resid extended to iterate over ECDSA
+  AND RSA server certs. Also fixed en route: tm_verify_cv's ECDSA
+  branch used a u24 length read for the u16 signature length (crash);
+  632 tests pass.
+- **Chain validation wired into the live client**: new rt builtin
+  `resid_utc_now_civil` (C gmtime_r -> YYYYMMDDHHMMSS i64; declared in
+  resid-type BUILTIN_SIGS + codegen decl_rt) gives the wall clock for
+  x509 validity checks. `lib/chain.resid` adds `tls_server_cert_ok
+  (cert, host_bytes, now)` = x509_valid_now AND san_has_match, plus
+  str_to_bytes. `examples/tls_client.resid` now validates the server
+  cert after extracting it from the Certificate message (validity
+  window + dNSName SAN match against the connect hostname) and aborts
+  with CERT-FAIL on mismatch — verified live: SAN=localhost cert gets
+  HTTP 200 via `localhost`; a no-SAN CN=otherhost cert yields
+  CERT-FAIL. The live e2e now generates certs WITH subjectAltName
+  DNS:localhost, connects by hostname (s_server must bind dual-stack:
+  pass only the port to -accept, since getaddrinfo(localhost) tries
+  ::1 first), and adds a negative no-SAN case asserting CERT-FAIL.
+  Known residual RESOLVED (see below).
+- **THE "CONTEXT-DEPENDENT CODEGEN GHOST" IS DEAD — three root causes,
+  none of them codegen**: the intermittent corruption that haunted many
+  sessions (garbage strings, path fragments + raw pointer bytes printed
+  mid-output, debug-print-removal changing behavior) decomposed into:
+  (1) **e.itoa missing NUL termination** (the real compiler bug): the
+  stage-2 header's `e.itoa` returned a pointer INTO its caller's
+  `[24 x i8]` alloca without ever storing a terminator, so every
+  `IntToString()` feeding a `Str +` chain strlen'd past the digits
+  into uninitialized stack — printing argv[0] tails ("bin", "in",
+  "sidc-e2e-"), saved pointers (`...\x7f`), or nothing depending on
+  stack layout/ASLR. Explains all historical "wide-int context"
+  symptoms in self-hosted binaries and why removing a println changed
+  behavior (different frames). Fixed in rt_itoa_def() in BOTH
+  examples/codegen.resid and examples/driver.resid: store 0 at
+  buf+23 on all three return paths. Stage-1 was never affected (Rust
+  codegen calls the C IntToString, which terminates).
+  (2) **Shared cache temp file**: resid-cache flush() wrote a fixed
+  `.resid-cache.cbor.tmp` — concurrent residc processes could rename
+  each other's half-written file, publishing torn caches whose bogus
+  entries pointed at other tests' artifacts. flush() now uses a
+  per-pid+seq temp name and fsyncs before rename.
+  (3) **Run-artifact path collision**: Cmd::Run built every program to
+  /tmp/residc-<pid>/<stem>_bin — unique per process, but the cache-hit
+  path plus parallel tests sharing stems still raced; Run artifacts now
+  embed the source hash (<stem>_<hash16>), and two e2e tests that
+  shared one temp DIRECTORY name (ecdsa_prop / ecge512_wide both
+  "residc-e2e-ecprop-{pid}", same process!) clobbering each other's
+  main.resid mid-compile were split apart.
+  Verification: 20 consecutive full-workspace runs at -j16 = 12,600
+  test results, ZERO failures (previously ~1 failure per 3-8 runs);
+  plus 100 targeted rebuild-and-run cycles of the x509 stage-2 flow
+  (previously ~20% corrupt).
+- **Stage-2 parity: signature collector now accepts width-parameterized
+  numerics**: the self-hosted checker's parse_type rejected
+  `Int(64)`/`Int(256)`/`UInt(8)`/`Float(128)`/`Dec(34)` outright
+  ("expected a type name") because it recursed parse_type into the
+  parentheses where a NUMBER sits — the collector then mis-registered
+  garbage signatures ("function `=` is already defined" on any lib
+  importing wide-typed code). parse_type now accepts an integer-literal
+  width parameter (nested type constructors still recurse), in
+  examples/typecheck.resid + codegen.resid, driver regenerated via
+  merge_driver.py. Gotcha honored: no reassignment — the num-vs-nested
+  branch binds everything as if-expressions.
+  Stage-2 wide-type support, phase 1 (checker) DONE: integer literals
+  infer magnitude-based widths beyond 64 bits (lit_int_ty; small
+  literals keep bare `Int` for signature compatibility); expected-type
+  adoption at bindings and returns (check_expr_e threads the declared
+  type into literal positions); width-aware bin_type (v3.2 result
+  rules: widest operand for add/sub/div/rem/shifts/bitwise, range rule
+  for mul); int-family adoption at call sites (params_accept_at);
+  mixed-width comparisons allowed within a signedness family; cast
+  expressions `(Int(256)) x` checked and lowered (cg_convert emits
+  sext/zext/trunc); if-arm agreement compares NORMALIZED types.
+  Gotchas honored repeatedly: no reassignment anywhere (every helper
+  written as pure if-expressions), definitions precede uses in the
+  merged driver, codegen.resid needs its own copies of shared helpers
+  (str_has_prefix_cg) because standalone compilation sees no imports.
+  REMAINING stage-2 wide-type gap (codegen emitter, ~~next session~~ DONE this
+  session): width-aware allocas/loads/stores/call args/binops across
+  codegen.resid. **Stage-2 wide-type emission DONE (phase 2)**:
+  bin_wide_op lowers every integer binop/comparison at the operand's true
+  LLVM width — operands widened to the common width, mul via the v3.2 range
+  rule (a+b rounded up the 8..512 ladder), results typed Int(N)/UInt(N);
+  unary minus at the operand width; sg_bind adopts the declared width;
+  return statements adopt the function's declared return type (ST gained a
+  threaded `rety` field seeded from pg_func); list-index offsets truncate to
+  i64 before the GEP; literals >18/38/77 digits infer Int(128)/(256)/(512).
+  Fixed en route (both pipelines): untyped literals now reserve one signed
+  headroom bit (a 128-bit magnitude above i128::MAX infers Int(256), not a
+  wrapping Int(128)) in resid-type lit_type + resid-codegen lower_literal;
+  stage-2 cg_convert emitted malformed `sext i256 %x` (missing source type
+  and `to`) and built its line list from the CARRIER instead of the VALUE,
+  silently dropping the operand's computation; stage-2 cg_convert numbered
+  its temp from the carrier's stale counter (forward references). Bootstrap-
+  parser/lexer gotchas catalogued: locals named `rt` are reserved (silent
+  parse desync); struct-typed if-expressions, comparisons inside if-expression
+  branches, call&&call chains, and chained `field.method()` calls all break
+  parsing — route them through tiny helper functions (blt/imax/ipick/
+  pick_str/pick_widen/mul_width/need_widen/cmp_op). e2e-proven: wide-typed
+  programs (Int(128)/Int(256) params, casts, mixed-width arith/comparisons,
+  mul promotion to Int(512)) compile and run IDENTICALLY through both
+  pipelines. Until then the crypto/TLS stack
+  passes stage-2 TYPE CHECKING but fails in its emitter. Forensics that cracked it: preserving the
+  failing binary showed the SAME binary flip-flopping across runs
+  (runtime, not build), identical IR between good/bad builds, and junk
+  bytes decoding as argv[0] tails + stack pointers.
+- **HTTP/1.1 client v2 — Content-Length, chunked transfer decoding,
+  keep-alive**: `lib/http.resid` grows a real framed-response engine
+  alongside the old read-to-close helper: `http_call(fd, method, path,
+  hostport, extra)` sends a keep-alive request then consumes the
+  response per its framing — Transfer-Encoding: chunked decoded
+  chunk-by-chunk straight off the socket (`http_read_chunked_acc`,
+  with hex size lines via `http_hex_val_acc` since str_parse_int is
+  decimal-only, chunk extensions split off, trailers drained),
+  Content-Length bodies read exactly, head parsed line-by-line until
+  the blank CRLF. Header lookup is case-insensitive
+  (`http_header_value`). A parsed response NEVER falls back to
+  read-to-close (that deadlocked on keep-alive peers); recv-to-close
+  only remains for unparseable responses. e2e
+  `run_http11_client_in_resid`: against a real python http.server
+  (HTTP/1.1), two requests over ONE connection return correct bodies
+  for both framings plus a 404; skipped when python3 is absent.
+  Gotchas: seeded-list literals swallow their first element (again);
+  reassignment ban forces body1/body2/body3 chains.
+- **Alert/EOF record-layer hardening (live client)**:
+  `examples/tls_client.resid` no longer aborts or processes garbage on
+  abnormal connections. recv_exact now returns a seed-only sentinel on
+  EOF instead of zero-padded data; every read site (ServerHello,
+  read_flight, read_app) checks the sentinel plus a TLS max record
+  length bound (`tls_max_record_len` = 2^14+256) before parsing.
+  open_record guards clen < 1 (RECORD-SHORT). read_app now recognises
+  the encrypted inner alert content type: close_notify/user_canceled
+  print ALERT-CLOSE-NOTIFY, other alerts print ALERT-DESC=<n>; session
+  tickets and other post-handshake records are skipped by sequence
+  number as before. Verified live: an accept-then-instantly-close TCP
+  server now ends gracefully (SH-LEN-BAD/REPLY-NONE) where the client
+  previously crashed with a list-index abort, and the happy path still
+  completes with HTTP 200. 632 tests pass.
+- **RESOLVED (prior session) — ECDSA-P256 verify reliability (wide-int
+  unsigned compare fixed in lib)**: root cause was NOT a codegen
+  miscompilation:
+  Int(N) relational operators compile as SIGNED compares, so EC scalars
+  with the top bit set compared wrong, and the first attempted fix
+  (`ec_ge512` halves decomposition) itself had a logic bug — it treated
+  `ec_ge(ah, bh)` (a `>=`, true on equal high halves) as strict
+  greater-than, short-circuiting to "true" whenever high halves matched.
+  Fixed formulation: if !ec_ge(ah,bh) return false; if ec_ge(bh,ah)
+  (highs equal) fall through to the low-half compare; else true.
+  `lib/ec256.resid` now provides `ec_ge` (O(1): signs differ ? a's top
+  bit : (a-b) not negative) and `ec_ge512`, and uses them for ALL field/
+  scalar order comparisons (`ec_add` reduction guard, `ec_sub`,
+  `ec_mod_bits`, `ec_subn`). The exhaustive suite
+  (`run_ecdsa_prop_in_resid`: 49 compare vectors + 14 ECDSA verifies,
+  plus `run_ecge512_wide_prop_in_resid` and minimal repro
+  `run_ec_ge_zero_max_in_resid`) is UN-IGNORED and fully green — all 12
+  previously-failing random valid signatures now verify. Test fixture
+  fixes along the way: `be512_acc` had a wrong declared return type
+  (`List(Int)` instead of `Int(512)`) and was nested inside `main`;
+  wide-test assertions flipped from expecting-FAIL to expecting-PASS.
+- **TLS 1.3 message framing (RFC 8446) done**: `lib/tlsmsg.resid` —
+  ClientHello construction (byte-exact RFC 8448 §3 trace),
+  ServerHello parsing (random + x25519 key share via marker scan),
+  handshake-message flight walker (type/next/body/find), Certificate
+  DER extraction, and ECDSA-P256 CertificateVerify verification over
+  the TLS 1.3 signed content (64×0x20 || context || 00 || TH).
+  e2e `run_tls13_framing_in_resid`: all checks pass against RFC 8448
+  fixtures incl. own-ECDSA-cert CV verification and rejection of the
+  RSA-PSS CV (RSA-PSS unsupported — PKCS#1v1.5 only so far).
+  Gotchas: no variable reassignment anywhere; bind arithmetic temps
+  before argument positions or widths widen; helper fns must be `pub`
+  to be visible across module imports.
+- **Binary TCP capability + live-handshake client (WIP)**: new rt
+  builtins `resid_tcp_send_bin`/`resid_tcp_recv_bin` (binary-safe,
+  seeded-list ABI, boxes handled); `examples/tls_client.resid` — full
+  TLS 1.3 client flow (CH build/send, SH parse, X25519 + key schedule,
+  flight decrypt, CV verify, Finished check/response, HTTP request).
+  Verified LIVE: ClientHello record accepted by real `openssl
+  s_server -tls1_3` (no alerts); real openssl ServerHello parsed
+  (random + key share extracted); X25519 shared secret and handshake/
+  master secrets computed live; encrypted flight decrypted.
+  REMAINING (next session): end-to-end record exchange against a fully
+  compliant TLS server — current ad-hoc python test harness does not
+  implement TLS, so post-SH records fail tag checks (harness artifact,
+  not crypto); also RSA-PSS CV support for real-world certs.
+- **Tests**: 625 pass (incl. DER/x509 walker, RSA/ECDSA verify,
+  X25519, HKDF, ChaCha20-Poly1305 and AES-128-GCM RFC/NIST-vector
+  e2es; lexer 17, parser 91, resid-ir 46, resid-type 195,
+  resid-codegen 137, resid-build 12, resid-fmt 5, residc 70 incl.
+  e2e).
 
-### Compiler core (working)
-
-- Full pipeline: lex → parse → type → LLVM IR → native binary via clang +
-  tiny C runtime (`crates/residc/resid_rt.c`).
-- CLI: `residc <f> build [-o out]`, `residc <f> run` (exit code carries
-  through), `residc <f> emit-ir`.
-- Complete numeric family with v3.2 width semantics: result-width rules for
-  binops, magnitude-based literal inference (a 128-bit literal above
-  i128::MAX infers `Int(256)`, not wrapping `Int(128)`), signed headroom
-  bit, mixed-width comparisons within a signedness family, casts via
-  sext/zext/trunc.
-- Boxed composites (List/Struct/Option) with `match`, destructuring,
-  if-let/while-let; ranges + slicing; raw/byte strings; f-strings.
-- Providers: filesystem read/write, environment, git, args, process.run.
-  Binary-safe TCP builtins (`resid_tcp_send_bin`/`recv_bin`), wall clock
-  (`resid_utc_now_civil`). Handle types: `with (Type h = expr) { … }` RAII.
-- Soundness hardening: bounds-checked list indexing (`resid_index_abort`),
-  shift counts ≥ bit width yield 0.
-- Package system: multi-file imports with import-as namespacing,
-  transitive deps + lockfile, local registry, per-import capability
-  narrowing, Unicode case mapping in stdlib strings.
-
-### Reduction subsystem v1 (spec §21.4, §27, §34, §35)
-
-- `resid-cache`: content-hash keyed CBOR store; unchanged sources skip
-  recompilation. Per-pid temp files + fsync-before-rename (race fixed).
-- `resid-notes`: `<artifact>.resid-notes.cbor` records rt bindings and
-  provider calls; every build reports discharged knowledge on stderr
-  (`reduction: discharged ...`) by comparing the prior notes against the
-  current residual set.
-- Signed provenance trailer embedded in binaries: toolchain version, source
-  hash, binary code hash, residual notes — Ed25519-signed over the payload;
-  both provenance AND code are tamper-evident. `residc keygen`,
-  `residc verify <binary>`, `RESID_VERIFY=1` refuses unverified binaries
-  (exit 70). Stage-2 driver also emits `<out>.resid-prov` sidecars
-  (signature cross-checked against an independent Python Ed25519 signer).
-- COSE provenance (RFC 9052): trailers carry a real `COSE_Sign1`
-  (tag 18, EdDSA -8); optional `COSE_Encrypt0` payload concealment via
-  `RESID_PROV_ENCRYPT=1` + `RESID_PROV_KEY` (experimental stream cipher,
-  AEAD pending). Provenance mode is part of the cache key.
-
-### Self-hosting bootstrap (M1–M6 all done)
-
-- `examples/lexer.resid`, `examples/parser.resid` parse their own source.
-- `examples/typecheck.resid` (~1500 lines): signature collection + full
-  expression walk; self-checks and accepts the other bootstrap tools.
-- `examples/codegen.resid` (~1250 lines): fused parse→LLVM-IR emitter;
-  compiles every bootstrap source into binaries whose outputs match
-  stage-1 byte-for-byte.
-- `examples/driver.resid` (~2300 lines): fused checker+emitter pipeline,
-  regenerated by `tools/merge_driver.py` from typecheck.resid +
-  codegen.resid (single source of truth). Stage-2 output identical to
-  Rust pipeline (e2e `bootstrap_*` tests).
-- Stage-2 wide-type support **complete**: collector accepts
-  width-parameterized types; checker infers/threads widths (literals,
-  adoption at bindings/returns/calls, v3.2 result rules); emitter lowers
-  every binop/comparison at true LLVM width. Wide-typed programs compile
-  identically through both pipelines.
+- **Working**: full frontend (lex → parse → type) → LLVM IR → native binaries via
+  clang + `resid_rt.c`; complete numeric family (Int8..Int512, UInt8..UInt512,
+  Float16/32/64/128, Dec(N) exact decimals); boxed composites (List/Struct/Option)
+  with `match`/destructuring/if-let/while-let; ranges + slicing; raw/byte strings;
+  f-strings; providers (filesystem read/write, environment, git, args —
+  `args.count()`/`args.get(i)` — and process — `process.run(cmd)` exit code); `@residual`/`rt`/assertions;
+  string introspection (`str_len`/`str_char_at`/`str_from_code`/`str_slice`);
+  `Str + Str`; `#location`; `value?`; **handle types** (`with (Type h = expr) { body }`
+  RAII, reverse-order release; `filesystem.open`/`read_handle`/`close` File handles).
+- **Bootstrap**: M1–M5 done (`examples/lexer.resid` and `examples/parser.resid` each
+  parse their own source). **M6a done**: `examples/typecheck.resid` — a type checker
+  written in Resid (~1500 lines) — collects function/struct signatures, then walks
+  declarations checking binds, calls (incl. built-ins + providers), struct/list
+  literals, field access, if/while/for/match, precedence-climbing binary exprs,
+  and rejects undefined vars / arity mismatches / ill-typed ops. It proves itself:
+  `RESID_TYPECHECK_SRC=examples/typecheck.resid residc examples/typecheck.resid run`
+  prints `typecheck OK`, and it also accepts `lexer.resid` and `parser.resid`
+  (e2e: `bootstrap_typechecker_accepts_bootstrap_sources`,
+  `bootstrap_typechecker_rejects_type_errors`). **M6b done**: `examples/codegen.resid`
+  (~1250 lines) — a fused parse→LLVM-IR emitter in Resid: copies the bootstrap
+  lexer, collects function signatures, then recursively descends emitting IR text
+  (Int/Bool/Str; arithmetic/comparisons/logic; user calls via collected sigs;
+  `println`→puts / `print`→printf; if/else with label joins + `unreachable` when
+  both arms return; for-in lowered to in-function alloca/load/store loops with
+  per-loop unique labels; early returns as real `ret`; globals appended at module
+  end). CLI-driven: `residc examples/codegen.resid run <src> [-o out.ll]`. Proven by
+  e2e `bootstrap_codegen_emits_runnable_ir`: it compiles a sample (fn call,
+  if/else, for-in with captured outer vars) to `.ll`, clang+resid_rt.c assemble
+  it, and the binary prints `hi/big/tick/tick/tick` with exit 0. All four
+  bootstrap tools now take argv (no env vars) and typecheck.resid self-checks
+  codegen.resid clean. Not yet in bootstrap codegen: f-strings, while, casts,
+  composites. **M6c done**: `examples/driver.resid` (~2300 lines) fuses the shared
+  lexer + the M6a checker (`ck_*`-prefixed, quiet) + the M6b emitter into one
+  argv-driven pipeline: read → typecheck → emit IR → `filesystem.write_all(.ll)`
+  → `process.run(clang …)` → native binary. Proven by e2e
+  `bootstrap_driver_compiles_and_rejects` (compiles the sample to a working
+  binary; rejects ill-typed input with a `type error` and nonzero exit), and
+  typecheck.resid self-checks driver.resid. Regenerated by `tools/merge_driver.py`
+  from codegen.resid + typecheck.resid (single source of truth). **M6 item 4 done
+  (stage-2)**: the Resid-written emitter (`examples/codegen.resid`) now compiles
+  every bootstrap source — lexer, parser, typecheck, codegen, and the fused
+  driver — into working binaries whose outputs match the stage-1 builds
+  byte-for-byte (driver's emitted IR is identical). Stage-2 upgrades landed in
+  the emitter: struct registry (`stn`/`stf`), typed binops (Str concat/eq,
+  Bool logic), postfix chains (field/index/len/concat), providers + extern
+  built-ins, if-expressions with phi joins, optional else on statement ifs,
+  list literals/iteration, f-string interpolation with escape decoding,
+  zero-arg call retyping, nested-paren signature scanning, label counters that
+  survive nesting, and decoded-byte string-literal sizing. Proven by e2e
+  `stage2_emitter_compiles_bootstrap_lexer`; full matrix in /tmp scratch
+  (lexer/parser/typecheck outputs diff clean; driver IR identical).
+- **Next**: `import as M` namespacing + capability enforcement, full
+  `resid-builtin` stdlib, or tooling (§12.5).
+- Full status table in §11; self-hosting roadmap in §12.
 
 ---
 
-## 1. Pure-Resid Library Stack (`lib/`)
+## 1. OVERVIEW
 
-All in Resid itself, verified against RFC/NIST vectors and independent
-Python implementations through **both** pipelines unless noted.
+Resid = eager compile-time lang. Compiler job: **max authorized reduction of first-class knowledge**. Program = knowledge graph (enriched DAG). Reduction happens eager, compile time. Only irreducible computation goes residual, enters runtime via `rt`.
 
-| Module | Contents |
+### Key design decisions
+
+| Decision | Choice |
+|----------|--------|
+| Language | Rust, stable only |
+| Backend | LLVM via `inkwell` crate |
+| Interpreter | None — direct LLVM |
+| Workspace | Monorepo (cargo workspace) |
+| Wide types | Int(256)/Int(512) via LLVM arbitrary-width ints; Float capped at F128; Dec(N) decimal |
+| Target | LLVM all-arch (x86_64, aarch64, etc.) |
+
+---
+
+## 2. WORKSPACE STRUCTURE
+
+```
+resid/
+├── Cargo.toml              # workspace root
+├── resid.toml.example      # sample project config
+│
+├── crates/
+│   ├── resid-lexer/        # 1. Tokenization
+│   ├── resid-parser/       # 2. Parsing → AST
+│   ├── resid-ir/           # 3. Knowledge graph IR + reduction
+│   ├── resid-type/         # 4. Types, behaviors, capabilities
+│   ├── resid-codegen/      # 5. LLVM code generation
+│   ├── resid-builtin/      # 6. Built-in types/providers (Rust stdlib)
+│   ├── resid-build/        # 7. Build system (resid.toml, profiles)
+│   └── residc/             # 8. CLI binary
+│
+├── tools/
+│   ├── resid-fmt/          # 9. Canonical formatter
+│   ├── resid-notes/        # 10. CBOR residual notes viewer
+│   ├── resid-cache/        # 11. Knowledge cache inspector
+│   ├── resid-graph/        # 12. Dependency graph emitter
+│   └── resid-why/          # 13. Residual provenance query
+│
+└── lsp-server/             # 14. LSP server
+```
+
+### Crate dependencies
+
+```
+residc
+  ├── resid-build
+  ├── resid-lexer
+  ├── resid-parser
+  ├── resid-ir
+  ├── resid-type
+  ├── resid-codegen
+  ├── resid-builtin (for built-in provider implementations)
+  └── lsp-server
+
+tools/*                → resid-ir, resid-type (read-only, inspect artifacts)
+lsp-server             → resid-ir, resid-parser, resid-type (full read access)
+```
+
+---
+
+## 3. COMPILATION PIPELINE
+
+```
+Source (.resid)
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ PHASE 1: LEXER → TokenStream                                    │
+│   All tokens per EBNF: keywords, id, literals (incl. f-strings, │
+│   raw strings, byte strings, #location), ranges, punct, ops    │
+│   Span tracking (file, line, col_start, col_end)               │
+│   Errors: unexpected char, unterminated strings, etc.          │
+└─────────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ PHASE 2: PARSER → AST                                           │
+│   Recursive descent + precedence climbing (§27)                 │
+│   All EBNF productions (§28)                                    │
+│   - Parameter defaults, named args                              │
+│   - Spawn expressions, for-in                                   │
+│   - Ranges, slices, destructuring patterns                      │
+│   - f-strings, raw strings, byte strings, #location             │
+│   - if-let, while-let, value?, value else {}                    │
+│   - @residual sugar, assertions                                 │
+└─────────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ PHASE 3: AST → KNOWLEDGE GRAPH (IR)                             │
+│   Enriched expression DAG with: type, knowledge state,          │
+│   dependencies, effects, capabilities, provenance               │
+│   Enforce: unique identifiers (no shadowing), discard _,       │
+│   parameter defaults, named args resolution                     │
+└─────────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ PHASE 4: REDUCTION ENGINE                                       │
+│   Κ ⊢ e → e′ — fixed-point iteration to normal form           │
+│   All reduction rules (§33)                                     │
+└─────────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ PHASE 5: TYPE CHECK + BEHAVIOR INFERENCE + CAPABILITIES         │
+│   Type checking, auto-behavior insertion, R1-R5 residual rules  │
+│   Capability lattice checks (§20), provenance tracking          │
+│   Result/Option sugar context checks                            │
+└─────────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ PHASE 6: LLVM CODE GENERATION                                   │
+│   Known → inline/constant elimination                           │
+│   Residual → first-class LLVM thunks (§30)                      │
+│   Handles → runtime-resolved resources                          │
+│   Spawn → structured concurrency (scheduler-agnostic)           │
+│   Emit: native binary + .resid-notes.cbor                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. DETAILED CRATE DESIGNS
+
+### 4.1 `resid-lexer` — Tokenization
+
+**Job**: turn `.resid` source text into token stream.
+
+**Tokens** (enum):
+
+```rust
+Token {
+    kind: TokenKind,
+    span: Span,  // file, line, col_start, col_end
+}
+
+TokenKind:
+    - Keyword(Keyword)
+    - Ident(String)
+    - Literal(Literal)
+    - Op(Op)
+    - Punct(Punct)
+    - Eof
+```
+
+**Lexical rules** (from spec §14, §30, §31):
+- Comments: `//` line comments, `///` doc comments, `/** */` block doc comments
+- Keywords: `import`, `pub`, `type`, `with`, `rt`, `match`, `if`, `else`, `while`, `for`, `return`, `break`, `continue`, `spawn`, `known`, `rt_known`, `comptime_print`, `todo`, `unimplemented`, `@residual`
+- Literals: integer (decimal, hex 0x, binary 0b, octal 0o), float, char, string, f-string, raw string, byte string, bool, null, `#location`
+- Operators: `+`, `-`, `*`, `/`, `%`, `!`, `~`, `<<`, `>>`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&`, `^`, `|`, `&&`, `||`, `?`, `:`, `=`, `;`, `,`, `(`, `)`, `{`, `}`, `[`, `]`, `.`, `|`, `=>`, `..`, `..=`, `@`
+- Punctuation: `@` (capability/residual annotation)
+
+**String handling**:
+- `"hello\n"` — regular string, escapes processed
+- `f"hello {name}, version {ver}"` — f-string, interpolation points as sub-tokens
+- `r"C:\path\file"` — raw string, no escape processing
+- `b"bytes"` — byte string, yields Bytes type
+
+**Build**: recursive descent, char-by-char scan, span tracking. No deps.
+
+---
+
+### 4.2 `resid-parser` — Parsing
+
+**Job**: turn token stream into AST per EBNF in spec §31.
+
+**AST Node types** (enum-based tagged union):
+
+```rust
+enum AstNode {
+    // Translation unit
+    TranslationUnit { imports: Vec<Import>, declarations: Vec<Declaration> },
+
+    // Import
+    Import { path: String, names: Option<Vec<Id>>, alias: Option<Id> },
+
+    // Declarations
+    FunctionDef {
+        pub: bool,
+        name: Id,
+        params: Vec<Param>,       // type, name, default: Option<Expr>
+        ret: Type,
+        body: Block,
+        doc_comments: Vec<String>,
+    },
+    TypeDef { name: Id, body: TypeBody, doc_comments: Vec<String> },
+    BehaviorDef { name: Id, type_params: Vec<Type>, body: Expr },
+    CapabilityAnnotation { annotations: Vec<CapabilityAnnotation>, inner: Box<AstNode> },
+
+    // Parameters (spec §31)
+    Param { type_: Type, name: Id, default: Option<Expr> },
+
+    // Types
+    Type { name: Id, params: Option<Vec<Type>> },
+    ProductType { fields: Vec<(Id, Type)> },
+    SumType { variants: Vec<SumVariant> },
+    ConstraintType { inner: Box<TypeBody>, constraint: Expr },
+    ResidualType(Box<Type>),
+
+    // Expressions (full hierarchy per §30 precedence)
+    Expr(Box<ExprKind>),
+
+    // Statements
+    Stmt(Box<StmtKind>),
+
+    // Patterns (for matching and destructuring)
+    Pattern(Box<PatternKind>),
+}
+
+enum ExprKind {
+    // Literals and values
+    Id(Id),
+    Literal(Literal),
+    Location,                  // #location
+
+    // Operations
+    BinaryOp(Expr, Op, Expr),
+    UnaryOp(Op, Expr),
+    Cast(Type, Expr),
+    FunctionCall(Expr, Vec<(Option<Id>, Expr)>),  // named args
+    Rt(Expr),                          // residual marker
+    AtResidual(Type, Expr),            // @residual sugar
+
+    // Control flow
+    If { cond: Expr, then: Block, els: Option<Block> },
+    While { cond: Expr, body: Block },
+    For { init: Option<Stmt>, cond: Expr, step: Option<Stmt>, body: Block },
+    ForIn { type_: Type, name: Id, collection: Expr, body: Block },
+    Match(Expr, Vec<(Pattern, Expr)>),
+    Spawn { capabilities: Vec<Capability>, body: Block },
+
+    // Assertions and debugging
+    Assert { cond: Expr, message: Expr },
+    RtAssert { cond: Expr, message: Expr },
+    Known(Expr),
+    RtKnown(Expr),
+    ComptimePrint(Expr),
+    Todo(String),
+    Unimplemented(String),
+
+    // Structs, lists, maps, ranges
+    StructLit(Id, Vec<(Id, Expr)>),
+    ListLit(Vec<Expr>),
+    MapLit(Vec<(Expr, Expr)>),
+    Range { start: Expr, end: Expr, closed: bool },  // start..end, start..=end
+    FString(Vec<FStringPart>),      // interpolated string
+    RawString(String),
+    ByteString(Vec<u8>),
+
+    // Access and slicing
+    FieldAccess(Expr, Id),
+    Index(Expr, Expr),
+    Slice { target: Expr, range: RangeExpr },  // xs[start..end]
+    MethodCall(Expr, Id, Vec<Expr>),
+
+    // Result/Option sugar (desugared at AST or IR phase)
+    EarlyReturn(Expr),           // value?  — in Result/Option-returning fn
+    ElseFallback { value: Expr, fallback: Block },  // value else { … }
+
+    // Destructuring bindings (irrefutable)
+    Destructure {
+        pattern: Pattern,
+        source: Expr,
+    },
+
+    // If-let / while-let
+    IfLet {
+        pattern: Pattern,
+        source: Expr,
+        then: Block,
+        els: Option<Block>,
+    },
+    WhileLet {
+        pattern: Pattern,
+        source: Expr,
+        body: Block,
+    },
+
+    // With handles (multiple bindings)
+    With(Vec<WithBinding>, Block),
+
+    // Using clause (explicit behavior selection)
+    Using { value: Expr, behavior: BehaviorRef },
+
+    // Provider call (external knowledge)
+    ProviderCall(Provider, Vec<Expr>),
+
+    // Discard binding
+    Discard(Expr),  // _ = expression
+}
+
+struct FStringPart {
+    text: String,
+    expr: Option<Expr>,
+}
+
+struct RangeExpr {
+    start: Option<Expr>,
+    end: Option<Expr>,
+    closed: bool,
+}
+
+struct WithBinding {
+    type_: Type,
+    name: Id,
+    init: Expr,
+}
+
+struct CapabilityAnnotation {
+    name: Id,
+    params: Vec<Expr>,  // optional, e.g., filesystem(scope=["..."]), git(readonly)
+}
+
+// Patterns (for match arms and destructuring)
+enum PatternKind {
+    Wildcard,
+    Bind(Id),
+    Variant(Id, Option<Id>),           // Some(x)
+    Literal(Literal),
+    Struct(Id, Vec<(Id, Pattern)>),     // Point { x, y } — shorthand for Point { x: x, y: y }
+    RangePattern { start: Lit, end: Lit, closed: bool },
+}
+
+// Type variants (spec §31)
+enum TypeKind {
+    Base { name: Id, params: Option<Vec<Type>> },  // Int, Option(T), Int(32)
+    Residual(Box<Type>),                          // rt Type
+    ISize,
+    USize,
+}
+```
+
+**Parser shape**: recursive descent, precedence climbing for ops.
+
+```
+Parser {
+    tokens: TokenStream,
+    pos: usize,
+    errors: Vec<ParseError>,
+}
+```
+
+**Key parser methods**:
+- `parse_translation_unit()`
+- `parse_declaration()` — handles `pub`, doc comments, function, type, behavior
+- `parse_expression()` — uses precedence climbing per §27
+- `parse_pattern()` — for match arms and destructuring
+- `parse_type()` — product, sum, constrained, parameterized primitives
+- `parse_statement()` — handles all control flow including if-let, while-let, for-in
+- `parse_fstring()` — parses interpolated string parts
+- `parse_param()` — handles optional default values
+
+**Precedence climbing** (per spec §30):
+```
+14: conditional  (?:)
+13: using        (, using =)
+12: logical OR   (||)
+11: logical AND  (&&)
+10: bitwise OR   (|)
+ 9: bitwise XOR  (^)
+ 8: bitwise AND  (&)
+ 7: equality     (==, !=)
+ 6: relational   (<, <=, >, >=)
+ 5: shift        (<<, >>)
+ 4: additive     (+, -)
+ 3: multiplicative (*, /, %)
+ 2: unary        (+, -, !, ~, cast)
+ 1: primary      (id, lit, rt, call, index, field, method, range, slice, #location)
+```
+
+**Param defaults + named args**:
+- Params parsed as `type name [ = default_expr ]`
+- Call args: `f(a, b = 2, c = 3)` → store as `Vec<(Option<Id>, Expr)>`
+- Named args resolved against param list at semantic analysis
+
+---
+
+### 4.3 `resid-ir` — Knowledge Graph IR
+
+**This is compiler's heart.** Knowledge graph = enriched expression DAG.
+
+**Core data structures**:
+
+```rust
+/// Node ID in the DAG
+type NodeId = u64;
+
+/// The knowledge graph — a DAG where each node tracks full context
+pub struct KnowledgeGraph {
+    nodes: Arena<Node>,          // all nodes
+    entry_point: NodeId,         // main function entry
+    imports: Vec<ResolvedImport>, // resolved import graph
+    doc_comments: HashMap<NodeId, Vec<String>>, // doc comment mapping
+}
+
+/// Single node in the knowledge graph
+pub struct Node {
+    /// The expression this node represents
+    kind: NodeKind,
+
+    /// Type of this node's value
+    type_: TypeEnv,
+
+    /// Current knowledge state
+    knowledge: KnowledgeState,
+
+    /// Dependencies (child NodeIds this node depends on)
+    deps: Vec<NodeId>,
+
+    /// Effects this node performs (inferred)
+    effects: HashSet<Effect>,
+
+    /// Capabilities this node requires
+    capabilities: HashSet<Capability>,
+
+    /// Where this value came from (provenance)
+    provenance: Provenance,
+
+    /// Doc comment, if any
+    doc_comments: Option<Vec<String>>,
+}
+
+/// What this node computes
+pub enum NodeKind {
+    // Literals and values
+    Literal(Literal),
+    Location,                        // #location → SourceLoc value
+
+    // Bindings (immutable, unique identifiers)
+    Binding { name: Identifier, def: NodeId },
+    Discard { source: NodeId },      // _ = expression
+
+    // Functions
+    Function {
+        name: Identifier,
+        params: Vec<(Identifier, TypeEnv, Option<NodeId>)>,  // + defaults
+        ret: TypeEnv,
+        body: NodeId,
+        capabilities: HashSet<Capability>,
+    },
+
+    // Function application
+    Call {
+        func: NodeId,
+        args: Vec<NodeId>,
+    },
+
+    // Residual marker
+    Rt(NodeId),
+    AtResidual { type_: TypeEnv, inner: NodeId },  // @residual sugar
+
+    // Binary/unary operations
+    BinaryOp { op: Op, lhs: NodeId, rhs: NodeId },
+    UnaryOp { op: Op, operand: NodeId },
+
+    // Type cast
+    Cast { type_: TypeEnv, operand: NodeId },
+
+    // Control flow
+    If { cond: NodeId, then: NodeId, els: NodeId },
+    While { cond: NodeId, body: NodeId },
+    For { init: NodeId, cond: NodeId, step: NodeId, body: NodeId },
+    ForIn { iter: NodeId, name: Identifier, body: NodeId },
+    Match { scrutinee: NodeId, arms: Vec<(Pattern, NodeId)>, default: NodeId },
+
+    // Spawn (structured concurrency)
+    Spawn {
+        capabilities: HashSet<Capability>,
+        body: NodeId,
+        ret: TypeEnv,
+    },
+
+    // Assertions and debugging
+    Assert { cond: NodeId, message: NodeId },
+    RtAssert { cond: NodeId, message: NodeId },
+    Known(NodeId),
+    RtKnown(NodeId),
+    ComptimePrint(Expr),
+    Todo,
+    Unimplemented,
+
+    // Structs, lists, maps, ranges
+    Struct { name: Identifier, fields: Vec<(Identifier, NodeId)> },
+    List { elements: Vec<NodeId> },
+    Map { entries: Vec<(NodeId, NodeId)> },
+    Range { start: NodeId, end: NodeId, closed: bool },
+    FString { parts: Vec<FStringPartNode> },  // interpolated string
+    RawString(String),
+    ByteString(Vec<u8>),
+
+    // Field/index access and slicing
+    FieldAccess { target: NodeId, field: Identifier },
+    Index { target: NodeId, index: NodeId },
+    Slice { target: NodeId, range: RangeNode },  // xs[start..end]
+    MethodCall { target: NodeId, method: Identifier, args: Vec<NodeId> },
+
+    // Result/Option sugar (desugared, but tracked for diagnostics)
+    EarlyReturn { value: NodeId },
+    ElseFallback { value: NodeId, fallback: NodeId },
+
+    // Destructuring (irrefutable binding)
+    Destructure {
+        pattern: Pattern,
+        source: NodeId,
+        bindings: Vec<(Identifier, NodeId)>,  // bound vars → nodes
+    },
+
+    // Handle management
+    With { bindings: Vec<WithBindingNode>, body: NodeId },
+
+    // Provider call (external knowledge)
+    ProviderCall { provider: Provider, args: Vec<NodeId> },
+
+    // Behavior instance
+    BehaviorInstance { behavior: BehaviorRef, type_: TypeEnv },
+
+    // Using clause (explicit behavior selection)
+    Using { value: NodeId, behavior: BehaviorRef },
+
+    // RegionError (for spawn failures)
+    RegionError(NodeId),  // Err(RegionError) from spawn
+}
+
+struct FStringPartNode {
+    text: String,
+    expr: Option<NodeId>,
+}
+
+struct RangeNode {
+    start: Option<NodeId>,
+    end: Option<NodeId>,
+    closed: bool,
+}
+
+struct WithBindingNode {
+    type_: TypeEnv,
+    name: Identifier,
+    init: NodeId,
+}
+
+/// Pattern in knowledge graph (for destructuring)
+pub enum Pattern {
+    Wildcard,
+    Bind(Identifier),
+    Variant { name: Identifier, param: Option<Identifier> },
+    Literal(Literal),
+    Struct { name: Identifier, fields: Vec<(Identifier, Pattern)> },
+}
+
+/// Knowledge state of a node (spec §3)
+pub enum KnowledgeState {
+    /// Fully reduced to a known value
+    Known,
+    /// Reducible computation that requires capability authorization
+    Effect,
+    /// Runtime computation (marked by rt or @residual)
+    Residual,
+    /// Failed proof, type check, or capability requirement
+    Invalid,
+}
+
+/// An effect (first-class semantic category)
+pub enum Effect {
+    Io,
+    Provider(Provider),
+    ResourceMutation,
+    RuntimeForce,
+    ConcurrencySpawn,
+}
+
+/// Capabilities form a lattice (spec §20)
+pub struct Capability {
+    kind: CapabilityKind,
+    params: Vec<Expr>,  // optional params, e.g., scope=["config/**"]
+}
+
+pub enum CapabilityKind {
+    Filesystem,
+    Git,
+    Environment,
+    Compute,
+    // Future extensibility
+}
+
+/// Provenance tracking (spec §11)
+pub enum Provenance {
+    Source { file: String, span: Span },
+    Provider(Provider),
+    Residual,
+    Inferred,
+}
+
+/// Identifier with global uniqueness
+pub struct Identifier {
+    name: String,
+    id: NodeId,  // globally unique
+}
+```
+
+**KnowledgeGraph ops**:
+```rust
+impl KnowledgeGraph {
+    fn new() -> Self;
+    fn add_node(&mut self, kind: NodeKind, type_: TypeEnv, span: Span) -> NodeId;
+    fn get_node(&self, id: NodeId) -> &Node;
+    fn set_knowledge(&mut self, id: NodeId, state: KnowledgeState);
+    fn set_doc_comments(&mut self, id: NodeId, comments: Vec<String>);
+    fn merge(&mut self, other: &KnowledgeGraph);
+    fn get_entry(&self) -> NodeId;
+    fn collect_dependencies(&self, id: NodeId) -> HashSet<NodeId>;
+}
+```
+
+**Arena alloc**: use `slotmap` or `generational_arena` for stable NodeIds.
+
+**AST → IR conversion** (high level):
+1. Walk AST, build nodes in dependency order
+2. Resolve param defaults → insert Binding nodes
+3. Resolve named args → reorder/align with param list
+4. Insert Discard nodes for `_ = expr`
+5. Insert Destructure nodes for irrefutable bindings
+6. Insert EarlyReturn / ElseFallback sugar nodes
+7. Insert FString construction nodes
+8. Insert Range / Slice nodes
+9. Track doc comments on declarations
+
+---
+
+### 4.4 `resid-type` — Types, Behaviors, Capabilities
+
+**Job**: type system, behavior inference, capability checking.
+
+**Type system**:
+
+```rust
+/// First-class types (spec §12, §6)
+pub enum Type {
+    // Primitive types (full parameterized family)
+    Bool,
+    Int(u32),      // 8, 16, 32, 64, 128, 256, 512
+    UInt(u32),     // 8, 16, 32, 64, 128, 256, 512
+    Float(u32),    // 16, 32, 64, 128, 256, 512
+    Str,
+    Bytes,
+    Null,
+    Void,
+
+    // Pointer-sized aliases
+    ISize,
+    USize,
+
+    // Nullable
+    RegionError,
+
+    // Parametric types
+    Option(Type),
+    Result(Type, Type),
+    List(Type),
+    Map(Type, Type),
+    Set(Type),
+
+    // User-defined product types
+    Struct(Identifier, Vec<(Identifier, Type)>),
+
+    // User-defined sum types
+    Enum(Identifier, Vec<SumVariant>),
+
+    // Constrained types
+    Constrained(Box<Type>, Constraint),
+
+    // Residual types
+    Residual(Box<Type>),
+
+    // Behavior types
+    Behavior(BehaviorRef),
+
+    // Handle types
+    Handle(Identifier, Lifetime),
+
+    // Function types (for internal use)
+    Function { params: Vec<Type>, ret: Type },
+
+    // Source location
+    SourceLoc,
+
+    // Ranges (internal type)
+    Range { start_type: Box<Type>, end_type: Box<Type>, closed: bool },
+
+    // Slices (internal type)
+    Slice { element_type: Box<Type>, range_type: Box<Type> },
+}
+
+/// Type constraints
+pub struct Constraint {
+    expression: Expr,
+    provenance: Provenance,
+}
+
+/// Behavior reference
+pub struct BehaviorRef {
+    name: Identifier,
+    type_params: Vec<Type>,
+}
+
+/// Behavior definition (spec §11)
+pub struct BehaviorDef {
+    name: Identifier,
+    type_params: Vec<Type>,
+    body: Expr,
+    requirements: Vec<(Identifier, Type)>,
+}
+
+/// Conversion helpers (spec §6, §32)
+pub enum ConversionHelper {
+    I8, I16, I32, I64, I128, I256, I512,
+    U8, U16, U32, U64, U128, U256, U512,
+    F16, F32, F64, F128,
+    ISize,
+    USize,
+}
+```
+
+**Type checking**:
+
+```rust
+pub struct TypeChecker {
+    graph: &KnowledgeGraph,
+    environment: TypeEnv,
+    behaviors: HashMap<Identifier, BehaviorDef>,
+    conversion_helpers: HashMap<Identifier, ConversionHelper>,
+    result_or_option_fn: Option<ReturnType>,  // for value? sugar context
+    errors: Vec<TypeError>,
+}
+
+impl TypeChecker {
+    fn check(&mut self) -> Result<(), Vec<TypeError>>;
+    fn check_expression(&mut self, id: NodeId) -> Type;
+    fn check_binding(&mut self, name: &Identifier, type_: &Type) -> Result<(), TypeError>;
+    fn resolve_behavior(&mut self, behavior: &BehaviorRef) -> Result<NodeId, TypeError>;
+    fn check_capabilities(&self, node: &Node) -> Result<(), TypeError>;
+    fn check_residual_rules(&self, node: &Node) -> Result<(), TypeError>;
+    fn check_result_option_sugar(&self) -> Result<(), TypeError>;
+    fn infer_for_in(&mut self, collection: &Type) -> (Type, Identifier, Block);
+    fn infer_range(&mut self, start: &Type, end: &Type, closed: bool) -> Type;
+    fn infer_slice(&mut self, target: &Type, range: &RangeExpr) -> Type;
+    fn infer_fstring_parts(&mut self, parts: &[FStringPart]) -> Type;
+}
+```
+
+**Behavior inference** (spec §11):
+
+```rust
+pub struct BehaviorInferencer {
+    graph: &KnowledgeGraph,
+    known_behaviors: HashMap<Identifier, BehaviorDef>,
+    pending: HashMap<(Identifier, Type), Vec<BehaviorRef>>,
+}
+
+impl BehaviorInferencer {
+    fn infer(&mut self);
+    fn insert_auto_behavior(&mut self, type_: &Type, required: &BehaviorRef);
+    fn resolve_ambiguous(&mut self, candidates: Vec<BehaviorRef>) -> Option<BehaviorRef>;
+    fn check_residual_behavior_safety(&self) -> Result<(), TypeError>;
+}
+```
+
+**Capability lattice** (spec §20):
+
+```rust
+pub struct CapabilityChecker {
+    grants: HashSet<Capability>,
+    requirements: HashMap<NodeId, HashSet<Capability>>,
+}
+
+impl CapabilityChecker {
+    fn is_granted(&self, cap: &Capability) -> bool;
+    fn is_subsumed(&self, required: &Capability, grant: &Capability) -> bool;
+    fn check_all(&self) -> Result<(), Vec<CapabilityError>>;
+    fn revoke(&mut self, cap: &Capability);
+}
+```
+
+**Conversions** (spec §6):
+- `Int` = `Int(64)`, `UInt` = `UInt(64)`, `Float` = `Float(64)`
+- `(Int(32))42` → explicit cast node
+- `i32(42)` → conversion helper call (stdlib function)
+- No implicit numeric conversions
+
+---
+
+### 4.5 `resid-codegen` — LLVM Code Generation
+
+**Job**: lower reduced knowledge graph to LLVM IR, emit native binary.
+
+**LLVM wrapper**: `inkwell` crate for safe LLVM bindings.
+
+**Codegen strategy**:
+
+```rust
+pub struct CodeGenerator {
+    context: llvm::Context,
+    module: llvm::Module,
+    builder: llvm::Builder,
+    value_map: HashMap<NodeId, llvm::Value>,
+    residual_thunks: HashMap<NodeId, llvm::Function>,
+    handle_state: HandleRuntimeState,
+    capability_checks: Vec<CapabilityCheck>,
+    spawn_runtime: SpawnRuntimeState,  // structured concurrency support
+    wide_num_runtime: WideNumRuntimeState,  // software-emulated wide types
+}
+
+impl CodeGenerator {
+    pub fn generate(graph: &KnowledgeGraph) -> Result<Artifact, CodegenError>;
+    fn lower(&mut self) -> llvm::Module;
+    fn lower_function(&mut self, func: &FunctionNode) -> llvm::Function;
+    fn lower_expression(&mut self, id: NodeId) -> llvm::Value;
+    fn lower_residual_thunk(&mut self, id: NodeId) -> llvm::Function;
+    fn lower_spawn(&mut self, spawn: &SpawnNode) -> llvm::Value;
+    fn emit(&self, output: &Path) -> Result<(), CodegenError>;
+}
+```
+
+**Type mapping** (Resid → LLVM):
+
+| Resid Type | LLVM Representation |
 |---|---|
-| `crypto.resid` | SHA-256, SHA-512, HMAC-SHA256, PBKDF2, HKDF-SHA256 (RFC 5869), Base64, constant-time compare, OS-random bytes/hex |
-| `ed25519.resid` | Full RFC 8032 Ed25519 verify + deterministic sign |
-| `x25519.resid` | RFC 7748 X25519 (Montgomery ladder on ed25519 field ops) |
-| `chacha.resid` | ChaCha20-Poly1305 AEAD (RFC 8439) |
-| `aesgcm.resid` | AES-128-GCM (SP 800-38D), bitwise GHASH |
-| `der.resid`, `x509.resid` | DER decoding; x509 tbsCertificate walker (issuer/subject/validity/SPKI/SAN) |
-| `rsa.resid` | Bignum on base-2^16 limbs, Montgomery REDC; RSA PKCS#1v1.5 SHA-256 verify; RSASSA-PSS SHA-256 verify (RFC 8017, MGF1) |
-| `ec256.resid` | NIST P-256 ECDSA verify (Jacobian arithmetic on Int(256)) |
-| `chain.resid` | Chain validation: SAN dNSName matching (incl. wildcards), validity windows, issuer linking, sig dispatch (RSA PKCS#1v1.5 / PSS / ECDSA-P256), `tls_server_cert_ok(cert, host, now)` |
-| `tlsmsg.resid` | TLS 1.3 message framing: ClientHello build (+ALPN variant), ServerHello parse, flight walker, Certificate/CertificateVerify handling |
-| `tls.resid` | TLS 1.3 key schedule (RFC 8448 trace-pinned), Derive-Secret, Finished, AES-GCM record protection |
-| `http.resid` | HTTP/1.1 client: Content-Length + chunked framing decode, keep-alive |
-| `h2.resid` | HTTP/2 frame encode/decode, HPACK (static+dynamic tables, all literal forms), Huffman decoding (Appendix B canonical decoder) |
+| Bool | i1 |
+| Int(8) | i8, Int(16) | i16, Int(32) | i32, Int(64) | i64 |
+| Int(128) | i128 (if available) or two i64s |
+| Int(256), Int(512) | Array of i64s + runtime lib functions |
+| UInt(8..64) | Same as Int variants, unsigned |
+| UInt(128..512) | Same as Int variants |
+| Float(16) | half (or i16 with conversion) |
+| Float(32) | float |
+| Float(64) | double |
+| Float(128) | fp128 (native LLVM quad-precision) |
+| ISize / USize | pointer-sized integer |
+| Str | struct with ptr + len (or String wrapper) |
+| Bytes | struct with ptr + len |
+| Option(T) | tag + payload union |
+| Result(T, E) | tag + payload union |
+| List(T), Map(K,V), Set(T) | struct with ptr + len + capacity |
+| SourceLoc | struct { file: Str, line: u32, col: u32 } |
+| Range | struct { start, end, closed: bool } |
+| RegionError | Error type (tagged) |
 
-### TLS milestones — ALL COMPLETE
+**Lowering rules** (by knowledge state):
 
-X25519 → HKDF → both AEADs → key schedule → message framing → live
-handshake. `examples/tls_client.resid` performs a **full live TLS 1.3
-handshake + HTTP GET against real `openssl s_server`** (exit 0, HTTP 200),
-accepting both ECDSA-P256 and RSA-PSS CertificateVerify, validating the
-server cert (validity + SAN match, CERT-FAIL abort otherwise), hardened
-against EOF/garbage/alert records. e2e `run_tls13_live_openssl_in_resid`
-spawns real openssl and iterates over ECDSA AND RSA server certs.
+| KnowledgeState | LLVM Codegen Strategy |
+|---|---|
+| **Known** | Constant fold / inline. Fully known fns eliminated. |
+| **Effect** | Provider dispatch code + capability checks. |
+| **Residual** | Gen standalone LLVM function (thunk). |
+| **Invalid** | Emit trap/abort instruction. |
 
-Key fixes that got there: outer content type 23 seals everything; Finished
-needs its own handshake header; record length must exclude the seeded-list
-phantom byte; recv_bin boxes unsigned chars; CH offers only
-TLS_AES_128_GCM_SHA256; CCS records skipped without touching sequence
-numbers; CV signs the transcript up to (not including) the CV message.
+**Key lowering details**:
 
-### Remaining TLS/HTTP roadmap
+1. **Functions**: each fn → LLVM function. Param defaults → inserted at call sites or as wrapper fns. Named args → reordered at call site.
 
-RSA-PSS CV done; chain validation wired. Next: app-response hardening
-(partially done), then **HTTP/2 over TLS** using lib/h2.resid.
+2. **Residual thunks** (spec §33): each `rt expr` or `@residual` → first-class LLVM fn carrying:
+   - The residual computation
+   - Provenance metadata
+   - Capability requirements (runtime checks)
 
----
+3. **Handles**: become runtime-resolved pointers. `with` blocks compile to RAII-style cleanup:
+   ```llvm
+   %h1 = call %HandleType @handle_create(...)
+   %h2 = call %HandleType @handle_create(...)
+   %result = call %ReturnType @body_func(%h1, %h2)
+   call void @handle_release(%h2)  ; reverse-order release
+   call void @handle_release(%h1)
+   ```
 
-## 2. Work In Progress (uncommitted)
+4. **Pattern matching**: desugared to if-else chains or switch tables at IR phase.
 
-HTTP/2 over TLS client:
+5. **Destructuring**: desugared to field/index access + binding at IR phase.
 
-- `lib/tlsmsg.resid`: new ALPN-offering ClientHello variant
-  (`tlsmsg_client_hello_alpn`, offers exactly "h2"; lengths bumped by 9).
-- `examples/h2_client.resid` (~400 lines): H2 client flow over the TLS
-  client machinery (WIP).
-- `tools/h2_server.py`: python test server harness.
+6. **Result/Option sugar**: desugared to if-else w/ early return at IR phase.
 
-Last committed milestone: HPACK Huffman decoding in `lib/h2.resid`
-(bit-by-bit Appendix B decoder with EOS/padding fallback handling;
-round-trip verified vs python hpack; e2e extended to both pipelines,
-`ulimit -s unlimited` needed for deep recursion).
+7. **F-strings**: built via runtime lib call `fstring_format(parts...)`.
 
----
+8. **Ranges & slices**: built via runtime lib calls or LLVM vectors for numeric ranges.
 
-## 3. Language Gotchas Reference (accumulated, still current)
+9. **For-in**: desugared to while loop w/ iterator protocol or indexed access.
 
-Hard constraints discovered while writing the pure-Resid stack. Keep these
-in mind for ANY nontrivial `.resid` work:
+10. **Spawn**: gens thread/task creation + structured join point:
+    ```llvm
+    %r = call %ResultType @spawn_task(<caps>, <child_func>)
+    ; structured join: wait for child
+    %tag = extractvalue %ResultType %r, 0
+    %result = select i1 %tag, %ErrPayload, %OkPayload
+    ```
 
-1. **No variable reassignment anywhere.** Every helper is written as pure
-   if-expressions; chains of temporaries (`body1/body2/body3`) replace loops
-   with accumulators.
-2. **Seeded-list literals carry a phantom index-0 element.** Real byte j
-   lives at index j+1; `[0,0,...]` literals swallow their first element
-   when concatenated; `.len()` includes the seed. Conditions must target
-   i==1/i==32 etc.; build prefixes like the eight-zero M' pad with concat,
-   not seeded literals.
-3. **Int(N) relational operators compile as SIGNED compares.** Values ≥ 2^(N-1)
-   compare wrong — use explicit unsigned-compare helpers (see `ec_ge`/
-   `ec_ge512` in ec256.resid for the correct halved formulation).
-4. **Casting Int(256)→Int(512) sign-extends**, corrupting modular math for
-   values ≥ 2^255 — always zero-extend explicitly (ec_zext pattern).
-5. **Native `%` on Int(512) is broken for large operands** — reduce via
-   binary long division instead.
-6. **Bind arithmetic temps before argument positions** or widths disagree
-   across if arms / call args (Int(128)/Int(256) widening conflicts).
-7. **Bootstrap parser/lexer**: locals named `rt` are reserved (silent parse
-   desync); struct-typed if-expressions, comparisons inside if-expression
-   branches, call&&call chains, chained `field.method()` calls break
-   parsing — route through tiny helper functions.
-8. **Definitions must precede uses in the merged driver**; standalone-
-   compiled files see no imports, so codegen.resid keeps its own copies of
-   shared helpers.
-9. **Helper fns must be `pub`** to be visible across module imports.
-10. **Deep tail recursions need `ulimit -s unlimited`** in e2e harnesses.
-11. Crypto framing traps: Poly1305 length fields are octets but GCM's are
-    bits; every Poly1305 block gets the 0x01 terminator; GCM J0 =
-    nonce||0^31||1; HkdfExpandLabel context is length-prefixed; "derived"
-    steps hash the empty transcript.
+11. **Checked arithmetic**: every arithmetic op wraps a runtime check:
+    ```llvm
+    %sum = add i64 %a, %b
+    %overflow = icmp ugt i64 %sum, %a
+    br i1 %overflow, label %overflow_handler, label %continue
+    ```
 
----
+12. **Wide numeric types**: software emulate via runtime lib:
+    ```llvm
+    ; Int(256) = 4 x i64
+    %result = call <256-bit type> @wide_add_int256(%a, %b)
+    ; Runtime lib provides: wide_add, wide_mul, wide_cmp, etc.
+    ```
 
-## 4. Notable Resolved Issues
+13. **#location**: gens SourceLoc struct w/ filename + line/col constants.
 
-- **The "context-dependent codegen ghost" (dead)** — intermittent garbage
-  output that haunted many sessions decomposed into three root causes:
-  (1) stage-2 `e.itoa` returned a pointer into a caller alloca without NUL
-  termination (fixed in codegen.resid + driver.resid; stage-1 never
-  affected); (2) shared cache temp file raced between concurrent residc
-  processes (now per-pid + fsync); (3) run-artifact path collisions between
-  parallel e2e tests sharing stems/directories (artifacts now embed source
-  hash; colliding tests split apart). Verified: 20 consecutive full
-  workspace runs at -j16 = 12,600 results, zero failures.
-- **ECDSA/wide-int reliability**: unsigned wide compares (item 3 above) were
-  misdiagnosed as codegen context-dependence; property suites un-ignored
-  and green.
-- **`else if` chains**: bootstrap and Rust parsers now consume the `if`
-  after `else`; regression tests in both pipelines.
+14. **assert/rt_assert**: emits condition check + abort on failure (compile-time vs runtime).
+
+15. **main() entry point**:
+    ```llvm
+    define i32 @main() {
+        %result = call i32 @resid_main()
+        ret i32 %result
+    }
+    ```
+
+**Artifacts** (spec §33, §34):
+- Native binary: `<name>` (ELF on Linux)
+- Residual notes CBOR: `<name>.resid-notes.cbor`
 
 ---
 
-## 5. Workspace Layout
+### 4.6 `resid-builtin` — Built-in Types and Providers
+
+**Job**: implement stdlib primitives + provider backends in Rust.
+
+**Components**:
+
+```rust
+/// Built-in primitive types (Rust implementations)
+pub mod types {
+    pub struct ResidBool;
+    pub struct ResidInt<N>;       // generic over bit width
+    pub struct ResidUInt<N>;
+    pub struct ResidFloat<N>;
+    pub struct ResidStr;          // String-backed
+    pub struct ResidBytes;        // Vec<u8>-backed
+    pub struct ResidOption<T>;
+    pub struct ResidResult<T, E>;
+    pub struct ResidList<T>;
+    pub struct ResidMap<K, V>;
+    pub struct ResidSet<T>;
+    pub struct ResidSourceLoc { file: String, line: u32, col: u32 };
+    pub struct ResidRange<T>;
+    pub struct ResidSlice<T>;
+    pub struct ResidRegionError { msg: String };
+}
+
+/// Handle implementations
+pub mod handles {
+    pub struct Buffer { /* Vec<u8> with cursor */ }
+    pub struct File { /* std::fs::File wrapper */ }
+    // Future: Socket, Arena, Mutex
+}
+
+/// Provider backends (spec §32)
+pub mod providers {
+    pub mod filesystem {
+        pub fn open(path: &str, mode: &str) -> Result<File, IoError>;
+        pub fn read_all(file: &File) -> Bytes;
+        pub fn write_all(file: &File, data: &Bytes);
+        pub fn list(path: &str) -> Vec<Str>;
+        pub fn metadata(path: &str) -> Stat;
+        pub fn close(file: &File);
+    }
+
+    pub mod environment {
+        pub fn get(key: &str) -> Option<Str>;
+        pub fn set(key: &str, value: &str);
+    }
+
+    pub mod git {
+        pub fn commit() -> Str;
+        pub fn status() -> Str;
+        pub fn describe() -> Str;
+    }
+}
+
+/// Core behavior implementations
+pub mod behaviors {
+    // Eq, Ord, Hash for all numeric types
+    pub fn eq_int<N>(a: &ResidInt<N>, b: &ResidInt<N>) -> Bool;
+    pub fn ord_int<N>(a: &ResidInt<N>, b: &ResidInt<N>) -> Ordering;
+    pub fn hash_int<N>(v: &ResidInt<N>) -> u64;
+    // ... for all core types
+    pub fn reverse_ord<T: Ord>(a: T, b: T) -> Ordering;
+}
+
+/// Conversion helpers (spec §6, §32)
+pub mod conversions {
+    pub fn i8(v: impl Into<i64>) -> ResidInt<8>;
+    pub fn i16(v: impl Into<i64>) -> ResidInt<16>;
+    // ... i32, i64, i128, i256, i512
+    pub fn u8(v: impl Into<u64>) -> ResidUInt<8>;
+    // ... u16, u32, u64, u128, u256, u512
+    pub fn f16(v: f64) -> ResidFloat<16>;
+    // ... f32, f64, f128
+    pub fn isize(v: i64) -> ISize;
+    pub fn usize(v: u64) -> USize;
+}
+
+/// Checked arithmetic + wrapping + saturating (spec §6, §32)
+pub mod arithmetic {
+    // Checked (default) — returns Option/Err on overflow
+    pub fn checked_add<T>(a: T, b: T) -> Result<T, OverflowError>;
+    pub fn checked_sub<T>(a: T, b: T) -> Result<T, OverflowError>;
+    pub fn checked_mul<T>(a: T, b: T) -> Result<T, OverflowError>;
+    pub fn checked_div<T>(a: T, b: T) -> Result<T, DivByZeroError>;
+
+    // Wrapping
+    pub fn wrapping_add<T>(a: T, b: T) -> T;
+    pub fn wrapping_mul<T>(a: T, b: T) -> T;
+    // ... wrapping_sub, wrapping_div, etc.
+
+    // Saturating
+    pub fn saturating_add<T>(a: T, b: T) -> T;
+    pub fn saturating_mul<T>(a: T, b: T) -> T;
+    // ... saturating_sub, saturating_div, etc.
+}
+
+/// Wide numeric runtime library (spec §5, §33)
+pub mod wide_num {
+    // Int/UInt/Float emulation for >128-bit
+    pub fn wide_add_256(a: [u64; 4], b: [u64; 4]) -> [u64; 4];
+    pub fn wide_mul_256(a: [u64; 4], b: [u64; 4]) -> [u64; 8];
+    pub fn wide_cmp_256(a: [u64; 4], b: [u64; 4]) -> Ordering;
+    pub fn wide_add_512(a: [u64; 8], b: [u64; 8]) -> [u64; 8];
+    // ... for Float as well
+}
+
+/// String interpolation
+pub mod strings {
+    pub fn fstring_format(parts: &[FStringPart]) -> Str;
+}
+
+/// Ranges and slices
+pub mod collections {
+    pub fn range_new<T: Ord>(start: T, end: T, closed: bool) -> Range<T>;
+    pub fn slice_new<T>(slice: &List<T>, range: Range<UInt>) -> Slice<T>;
+}
+
+/// Spawn / concurrency runtime
+pub mod concurrency {
+    pub fn spawn(cap_env: CapEnv, body: fn() -> T) -> Result<T, RegionError>;
+    // Scheduler implementation-defined (threads, tasks, pool)
+}
+```
+
+**Provider linkage**: each provider fn exposed as LLVM extern decl in gen'd module. Capability system gates which providers get linked.
+
+---
+
+### 4.7 `resid-build` — Build System
+
+**Job**: parse `resid.toml`, manage deps, profiles, orchestrate compile.
+
+**Config types** (spec §35):
+
+```rust
+pub struct ResidConfig {
+    package: Package,
+    capabilities: Capabilities,
+    reduction: ReductionConfig,
+    target: TargetConfig,
+    profile: Profile,
+    dependencies: HashMap<String, Dependency>,
+}
+
+pub struct Package {
+    name: String,
+    version: String,
+}
+
+pub struct Capabilities {
+    grants: Vec<Capability>,
+}
+
+pub struct ReductionConfig {
+    residual_notes: bool,
+    residual_notes_format: ResidNotesFormat,  // cbor
+    knowledge_cache: bool,
+}
+
+pub struct TargetConfig {
+    triple: String,  // e.g., "x86_64-unknown-linux-gnu"
+}
+
+pub struct Profile {
+    name: ProfileName,  // debug, release, check
+    optimization: OptimizationLevel,
+}
+
+pub struct Dependency {
+    name: String,
+    version: String,
+    hash: String,       // content-addressed
+}
+```
+
+**Build orchestration**:
+
+```rust
+pub struct BuildSystem {
+    config: ResidConfig,
+    source_root: PathBuf,
+    output_dir: PathBuf,
+}
+
+impl BuildSystem {
+    pub fn new(config_path: &Path) -> Result<Self, BuildError>;
+    pub fn compile(&self) -> Result<Artifact, BuildError>;
+    pub fn resolve_dependencies(&mut self) -> Result<(), BuildError>;
+    pub fn generate_residual_notes(&self, graph: &KnowledgeGraph) -> Result<(), BuildError>;
+}
+```
+
+**Build flow**:
+1. Parse `resid.toml`
+2. Resolve + verify deps (hash match, capability grant)
+3. Load all `.resid` source files
+4. Call compiler pipeline
+5. Emit artifacts + optional CBOR sidecar
+
+---
+
+### 4.8 `residc` — CLI Binary
+
+**Job**: user-facing CLI tool, orchestrates build system.
+
+**Commands**:
 
 ```
-crates/   resid-lexer, resid-parser, resid-ir, resid-type, resid-codegen,
-          resid-builtin, resid-build, residc (CLI)
-tools/    resid-fmt, resid-notes, resid-cache, resid-graph, resid-why
-lib/      pure-Resid crypto/TLS/networking stack (see §1)
-examples/ bootstrap compilers + tls_client + h2_client
+residc <COMMAND> [OPTIONS]
+
+Commands:
+    build       Compile current project (default)
+    run         Build and run
+    check       Type-check without codegen
+    clean       Remove build artifacts
+    init        Create new resid project
+    fmt         Format source files (canonical formatter)
+    notes       Display residual notes (.cbor)
+    cache       Manage knowledge cache
+    graph       Display knowledge graph (debug)
+    why         Query residual provenance ("Why is this residual?")
 ```
 
-Pipeline phases per spec: lexer → parser → knowledge graph IR → reduction
-engine → type check/capabilities → LLVM codegen (known values reduced,
-residual computation emitted, notes + provenance sidecar produced).
+**CLI structure**:
+
+```rust
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "residc", version, about = "Resid compiler")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+    #[arg(short, long)]
+    project: Option<PathBuf>,  // path to resid.toml
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Build { path: Option<PathBuf> },
+    Run { path: Option<PathBuf> },
+    Check { path: Option<PathBuf> },
+    Clean { path: Option<PathBuf> },
+    Init { path: PathBuf },
+    Fmt { paths: Vec<PathBuf> },
+    Notes { path: PathBuf },
+    Cache { command: CacheCommand },
+    Graph { path: PathBuf },
+    Why { path: PathBuf, node: Option<NodeId> },
+}
+```
 
 ---
 
-## 6. Next Steps
+### 4.9 Tooling Crates
 
-1. Finish HTTP/2-over-TLS client (commit WIP from §2).
-2. Registry transport; SpecialCasing; further `why` tooling.
-3. App-response hardening edge cases (EOF/alert interplay with h2 upgrade).
+**`resid-fmt`** — canonical formatter:
+- Indentation-based fmt (configurable width)
+- Operator/keyword spacing
+- Doc comment preserve
+- Deterministic output
+
+**`resid-notes`** — CBOR residual notes viewer:
+- Parse `.resid-notes.cbor` files
+- Show residual exprs, types, provenance
+- Human-readable output
+
+**`resid-cache`** — knowledge cache inspector:
+- Parse `.resid-cache.cbor` files
+- Show cached reductions, timestamps
+- Clear/flush commands
+
+**`resid-graph`** — dependency graph emitter:
+- Parse knowledge graph from artifacts
+- Output DOT format or ASCII art
+- Show deps, effects, capabilities
+
+**`resid-why`** — residual provenance query:
+- Analyze why an expr is residual
+- Trace through reduction rules
+- Show: "Expression is residual because: provider call with volatile capability"
+- Tooling query, not a lang construct
+
+**`lsp-server`** — LSP server:
+- Residual status hover
+- Capability / knowledge state display
+- Doc comment hover
+- Exhaustiveness diagnostics for match exprs
+- Go to definition, find references
+- Diagnostics for shadowing, type errors, capability violations
+
+---
+
+## 5. REDUCTION ENGINE DESIGN (Phase 2)
+
+Reduction engine implements pure reduction relation Κ ⊢ e → e′ (spec §36).
+
+### 5.1 Reduction State
+
+```rust
+pub struct ReductionContext {
+    knowledge: KnowledgeStore,
+    graph: KnowledgeGraph,
+    behaviors: HashMap<Identifier, BehaviorDef>,
+    provider_cache: HashMap<ProviderCall, KnownValue>,
+    capabilities: HashSet<Capability>,
+}
+```
+
+### 5.2 Reduction Rules (per spec §36)
+
+| Rule | Description | Example |
+|------|-------------|---------|
+| **β-reduction** | Function application with known args | `f(2 + 3)` → `f(5)` |
+| **Constant folding** | Operators on known literals | `2 + 3` → `5` |
+| **Constraint discharge** | Prove constraint holds | `x: Int where x > 0`, x=5 → discharge |
+| **Provider substitution** | Replace known non-volatile provider | `environment::get("PATH")` → `"..."` |
+| **Behavior insertion** | Auto-insert required behavior | `sort(xs)` → `sort(xs, using = Ord(Int))` |
+| **Method desugaring** | `h.m(args)` → `m(h, args)` | `buf.append(data)` → `buffer_append(buf, data)` |
+| **Pattern matching** | Reduce on known constructors | `match Some(42) { Some(x) => x }` → `42` |
+| **Destructuring** | Irrefutable binding reduction | `Point { x, y } = p` → `x = p.x; y = p.y` |
+| **Checked arithmetic** | Overflow → known error or residual | `2147483648_i32 + 1` → overflow |
+| **String interpolation** | Known parts → constant string | `f"hello {name}"` if name known → `"hello world"` |
+| **Range/slice construction** | Known bounds → constant | `0..10` → Range(0, 10, false) |
+| **Result/Option sugar** | `value?` → early return on Err/None | (in Result fn) |
+| **Structural identity** | Identity nodes pass through | `x` → `x` |
+| **Cast** | `(Type)expr` when type known | `(Int(32))5` → `5` |
+| **If/while** | Reduce when condition is known | `if (true) { A } else { B }` → `A` |
+| **For-in** | Fully reducible when collection known | `for (Int x in [1,2,3]) { ... }` → inline |
+
+### 5.3 Reduction Algorithm
+
+```rust
+impl ReductionContext {
+    /// Reduce the entire graph to normal form
+    pub fn reduce_all(&mut self) -> Result<(), ReductionError> {
+        loop {
+            let reduced = self.reduce_once()?;
+            if !reduced {
+                break;  // Normal form reached
+            }
+        }
+        Ok(())
+    }
+
+    /// Try one round of reductions (returns true if any reduction happened)
+    pub fn reduce_once(&mut self) -> Result<bool, ReductionError> {
+        let mut any_reduced = false;
+
+        for node_id in self.topological_order() {
+            match self.reduce_node(node_id)? {
+                ReductionResult::Reduced(new_id) => {
+                    self.replace_node(node_id, new_id);
+                    any_reduced = true;
+                }
+                ReductionResult::Irreducible => {}
+                ReductionResult::Invalid => {
+                    self.set_knowledge(node_id, KnowledgeState::Invalid);
+                }
+            }
+        }
+
+        Ok(any_reduced)
+    }
+
+    fn reduce_node(&mut self, id: NodeId) -> Result<ReductionResult, ReductionError> {
+        match self.get_node(id).kind {
+            NodeKind::Literal(_) => Ok(ReductionResult::Irreducible),
+            NodeKind::BinaryOp { op, lhs, rhs } => {
+                if self.is_known(lhs) && self.is_known(rhs) {
+                    let result = self.fold_binary(op, lhs, rhs);
+                    Ok(ReductionResult::Reduced(result))
+                } else {
+                    Ok(ReductionResult::Irreducible)
+                }
+            }
+            NodeKind::Call { func, args } => {
+                self.beta_reduce(func, args)
+            }
+            NodeKind::Rt(inner) => {
+                Ok(ReductionResult::Irreducible)
+            }
+            NodeKind::Range { start, end, closed } => {
+                if self.is_known(start) && self.is_known(end) {
+                    Ok(ReductionResult::Reduced(self.make_range(start, end, closed)))
+                } else {
+                    Ok(ReductionResult::Irreducible)
+                }
+            }
+            // ... other rules
+        }
+    }
+}
+
+pub enum ReductionResult {
+    Reduced(NodeId),
+    Irreducible,
+    Invalid,
+}
+```
+
+### 5.4 Normal Form
+
+After reduction done:
+- **Known** nodes: fully reduced constants or irreducible exprs
+- **Residual** nodes: `rt`/`@residual`-marked computations
+- **Effect** nodes: need runtime authorization
+- **Invalid** nodes: compile errors
+
+---
+
+## 6. IMPLEMENTATION PHASES
+
+### Phase 1: Lexer, Parser, AST
+
+**Deliverables**: working lexer + parser, parses all spec §29 syntax.
+
+**Tasks**:
+1. [ ] Setup workspace with all crates
+2. [ ] Implement `resid-lexer` (TokenStream, token types, span tracking)
+3. [ ] Implement `resid-parser` (AST node types)
+4. [ ] Implement expression parsing with precedence climbing (§27)
+5. [ ] Implement parameter defaults, named args parsing
+6. [ ] Implement type/function/behavior/import parsing
+7. [ ] Implement spawn expression, for-in parsing
+8. [ ] Implement pattern matching & destructuring parsing
+9. [ ] Implement f-string, raw string, byte string parsing
+10. [ ] Implement ranges, slices, #location parsing
+11. [ ] Implement if-let, while-let parsing
+12. [ ] Implement `@residual`, assertions, value? sugar parsing
+13. [ ] Implement doc comment collection
+14. [ ] Write tests for all syntax constructs
+15. [ ] Implement error recovery (skip to next statement)
+
+**Est effort**: 3-4 weeks
+
+**Status**: ✅ Done. 17 tests (7 lexer + 10 parser) pass.
+
+All spec §29 syntax constructs lexed + parsed. `residc` driver binary
+lexes + parses source files, reports diagnostics (exit 0 on success, 1 on errors).
+Top-level grammar = imports + types + functions.
+
+---
+
+### Phase 2: Knowledge Graph IR + Reduction
+
+**Deliverables**: knowledge graph data structure, reduction engine w/ all rules.
+
+**Tasks**:
+1. [ ] Design and implement `resid-ir` crate (KnowledgeGraph, Node, NodeKind)
+2. [ ] Implement AST → Knowledge Graph conversion
+3. [ ] Implement identifier uniqueness checking (no shadowing)
+4. [ ] Implement discard `_ = expr` binding
+5. [ ] Implement parameter default resolution
+6. [ ] Implement named args resolution
+7. [ ] Implement destructuring IR nodes
+8. [ ] Implement range, slice, f-string IR nodes
+9. [ ] Implement Result/Option sugar IR nodes
+10. [ ] Implement location (#location) IR node
+11. [ ] Implement reduction context and fixed-point loop
+12. [ ] Implement β-reduction
+13. [ ] Implement constant folding
+14. [ ] Implement constraint discharge
+15. [ ] Implement method desugaring
+16. [ ] Implement pattern matching reduction
+17. [ ] Implement destructuring reduction
+18. [ ] Implement checked arithmetic reduction (overflow detection)
+19. [ ] Implement string interpolation reduction
+20. [ ] Implement range/slice construction reduction
+21. [ ] Implement provider substitution (non-volatile)
+22. [ ] Implement behavior insertion
+23. [ ] Write tests for each reduction rule
+
+**Est effort**: 4-5 weeks
+
+---
+
+### Phase 3: Types, Behaviors, Capabilities
+
+**Deliverables**: type checker, behavior inferencer, capability checker.
+
+**Tasks**:
+1. [ ] Implement `resid-type` crate (Type enum, TypeChecker)
+2. [ ] Implement parameterized numeric types (Int(8)..Int(512), Float(16)..Float(128))
+3. [ ] Implement ISize/USize handling (target-dependent width)
+4. [ ] Implement type checking for all expression forms
+5. [ ] Implement conversion helper resolution (i32(42), usize(len), etc.)
+6. [ ] Implement type constraint checking (where clauses)
+7. [ ] Implement behavior inference (auto-insert)
+8. [ ] Implement behavior ambiguity resolution (`using =`)
+9. [ ] Implement residual-type rules R1-R5
+10. [ ] Implement capability lattice and checks
+11. [ ] Implement capability revocation tracking
+12. [ ] Implement Result/Option sugar context checking
+13. [ ] Implement for-in type inference
+14. [ ] Implement range/slice type inference
+15. [ ] Implement SourceLoc type
+16. [ ] Write tests for type errors, behavior inference, capability violations
+
+**Est effort**: 4-5 weeks
+
+---
+
+### Phase 4: LLVM Code Generation ✅ Complete
+
+**Status**: `residc <file> emit-ir` runs full pipeline: lex → parse → type-check →
+LLVM IR emission (module verified before output). `residc <file> build|run` links a
+native binary via clang + `crates/residc/resid_rt.c`, propagating exit codes.
+
+**Coverage**:
+- Functions with typed parameters and return values
+- Immutable bindings (`Int x = expr;`) with declared-type coercion
+- Integer arithmetic (`+` `-` `*` `/` `%` `<<` `>>` `&` `|` `^`) with spec §6.1
+  mixed-width widening (e.g. Int64 + Int64 → Int128)
+- Signed/unsigned widening and truncation back to declared types on `return`
+- Comparison operators (`==` `!=` `<` `<=` `>` `>=`) producing Bool (i1)
+- Logical connectives (`&&` `||`) on Bool operands; unary operators (`-` `!` `~`)
+- Type casts `(T) expr`; `if`-expressions with phi joins (then/else blocks, merge)
+- Function calls (direct, with named args resolved); extern built-ins
+  (`print`/`println` from `resid-type::builtin_signatures`)
+- String literals, f-strings, raw strings (global constants) and string-concat folding
+- Boxed composite values: `List`/`Struct`/`Option` via `resid_box_*` runtime calls,
+  `match` with tag checks + phi joins, struct construction + field access
+- **Pattern-based destructuring** (`Point { x, y } = p`) via `bind_pattern_vars`
+- **Discard** (`_ = expr`) — type-checked and lowered, value dropped
+- **`while` loops** with `break`/`continue` — condition block, body block, exit block,
+  loop-stack context for break/continue targets
+
+**Coverage (deferred)**: structured spawn, `value?` sugar, provider linkage,
+C-style `for` loops, map literals.
+
+**Coverage (done)**: float arithmetic, for-in loops, `comptime_print`,
+`@residual`, the assertion family (`assert`/`known`/`rt_known`/`todo`/
+`unimplemented`), range/slice notation (for-in over numeric ranges, `0..n`
+half-open and `0..=n` inclusive), if-let / while-let destructuring
+(`if (Some(x) = opt)`, `while (PAT = source)`), named args + default param
+injection, list `.concat()` and empty list literals.
+**Coverage (next)**: `resid-build` crate, spawn/concurrency,
+LSP server, conformance suite.
+
+**Est effort**: 3-4 weeks
+
+**Deliverables**: working LLVM backend producing native binaries.
+
+**Tasks**:
+1. [ ] Implement `resid-codegen` crate with inkwell
+2. [ ] Implement LLVM context/module/builder setup
+3. [ ] Implement type mapping (Resid types → LLVM types, incl. wide types)
+4. [ ] Implement function lowering (defaults, named args)
+5. [ ] Implement expression lowering (known → inline, residual → thunk)
+6. [ ] Implement residual thunk generation
+7. [ ] Implement control flow lowering (if/while/for/for-in/match)
+8. [ ] Implement destructuring lowering
+9. [ ] Implement handle lowering (with, reverse-order release)
+10. [ ] Implement provider extern linkage
+11. [ ] Implement main() entry point generation
+12. [ ] Implement checked arithmetic lowering (overflow checks)
+13. [ ] Implement wide numeric type lowering (software emulation)
+14. [ ] Implement Range/Slice lowering
+15. [ ] Implement f-string lowering
+16. [ ] Implement #location lowering
+17. [ ] Implement spawn lowering (structured concurrency)
+18. [ ] Implement assertion lowering (assert, rt_assert, known, rt_known)
+19. [ ] Implement Result/Option sugar lowering
+20. [ ] Implement binary emission
+21. [x] Implement CBOR residual notes generation (spec §34)
+22. [x] Write tests for code generation output
+23. [x] Default parameter resolution at call sites (spec §8)
+24. [x] Named argument reordering at call sites (spec §8)
+25. [x] List `.concat()` method + empty list literals
+
+**Est effort**: 5-6 weeks
+
+---
+
+### Phase 5: Standard Library + Build System
+
+**Deliverables**: working resid.toml build system, stdlib in Rust.
+
+**Tasks**:
+1. [ ] Implement `resid-build` crate (resid.toml parsing, build orchestration)
+2. [ ] Implement dependency resolution and hash verification
+3. [ ] Implement profile support (debug, release, check)
+4. [ ] Implement `residc` CLI (clap-based)
+5. [ ] Implement `resid-builtin` crate
+6. [ ] Implement primitive type implementations
+7. [ ] Implement full numeric family (Int(8)..Int(512), UInt, Float, ISize, USize)
+8. [ ] Implement core collections (Option, Result, List, Map, Set)
+9. [ ] Implement core behaviors (Eq, Ord, Hash, Reverse)
+10. [ ] Implement conversion helpers (i8..i512, u8..u512, f16..f128, isize, usize)
+11. [x] Implement checked + wrapping + saturating arithmetic
+12. [ ] Implement provider backends (filesystem, environment, git)
+13. [ ] Implement handle types (Buffer, File)
+14. [ ] Implement SourceLoc type
+15. [ ] Implement Range, Slice, FString runtime support
+16. [ ] Implement Spawn/RegionError runtime support
+17. [ ] Implement wide numeric runtime library
+18. [ ] Write integration tests with resid programs
+
+**Est effort**: 4-5 weeks
+
+---
+
+### Phase 6: Tooling, Bootstrap
+
+**Deliverables**: tooling suite, bootstrap done.
+
+**Tasks**:
+1. [ ] Implement `resid-fmt` (canonical formatter)
+2. [ ] Implement `resid-notes` (CBOR residual notes viewer)
+3. [ ] Implement `resid-cache` (knowledge cache inspector)
+4. [ ] Implement `resid-graph` (dependency graph emitter)
+5. [ ] Implement `resid-why` (residual provenance query)
+6. [ ] Implement LSP server (residual status, doc hover, diagnostics, exhaustiveness)
+7. [ ] Implement knowledge cache serialization (CBOR)
+8. [ ] Implement incremental compilation support
+9. [ ] Write example programs in Resid
+10. [ ] Document compiler architecture
+11. [ ] Bootstrap: rewrite critical stdlib parts in Resid
+12. [ ] Conformance test suite
+
+**Est effort**: 4-5 weeks
+
+---
+
+## 7. ERROR MODEL (spec §9, §24)
+
+- **Compile-time errors**: shadowing, type mismatch, capability violation, invalid constraints, unrefutable pattern at binding site → hard error, compile fails
+- **Runtime errors (top-level)**: residual force failure, unwrap failure → process abort
+- **Runtime errors (concurrent)**: child failure → Err(RegionError) to parent (process NOT aborted)
+- **Invalid nodes**: failed proofs → KnowledgeState::Invalid → LLVM trap instruction
+
+Error reporting:
+```
+error[E0001]: identifier `x` already bound
+  ┌─ src/main.resid:12:5
+  │
+12 │     Int x = 5;
+  │         ^ previously bound here
+
+error[E0002]: residual expression in pure context
+  ┌─ src/main.resid:15:10
+  │
+15 │     Int x = rt read_file("config.toml");
+  │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot be reduced
+
+error[E0003]: unrefutable pattern at binding site
+  ┌─ src/main.resid:20:3
+  │
+20 │     Some(x) = opt;
+  │     ^^^^^^^^ pattern is refutable; use if-let instead
+```
+
+---
+
+## 8. CBOR ARTIFACTS (spec §34)
+
+**Residual Notes** (`<artifact>.resid-notes.cbor`):
+```cbor
+// Top-level: ResidualNotes
+[
+    [
+        node_id: u64,
+        expression: "resid_expr_string",
+        type: "Int",
+        provenance: { file: "...", line: 42, col: 10 },
+        capabilities: ["filesystem"],
+        effects: ["provider(filesystem)"],
+    ],
+]
+```
+
+**Knowledge Cache** (`<project>.resid-cache.cbor`):
+```cbor
+[
+    {
+        source_hash: "sha256:...",
+        node_id: u64,
+        reduced_value: "...",
+        timestamp: u64,
+    }
+]
+```
+
+---
+
+## 9. RISK MITIGATION
+
+| Risk | Mitigation |
+|------|------------|
+| Knowledge graph complexity | Start minimal NodeKind set, expand as we go |
+| LLVM integration difficulty | inkwell gives safe wrappers, test incrementally |
+| Behavior inference non-determinism | Define strict priority order for behavior pick |
+| Residual propagation complexity | Build residual rules R1-R5 incrementally w/ tests |
+| Capability lattice soundness | Formalize lattice ops, test thoroughly |
+| Performance of fixed-point reduction | Topo sort + incremental updates, cache results |
+| Wide numeric type performance | Software emulate slower but correct; optimize later |
+| Spawn concurrency complexity | One OS thread per spawn (spec §19); task pool deferred |
+| Float(16) target compatibility | LLVM half primary, f32 software failover |
+| Float(128) libcall availability | `__float128` libcall primary, software failover |
+| Content-addressed caching deferred | Per-file hash cache; per-node in future |
+
+---
+
+## 10. CONFORMANCE CHECKLIST (spec §39)
+
+Before calling compiler done:
+
+- [ ] Pure reduction relation implemented (spec §36)
+- [ ] Residual-machine semantics correct (spec §9)
+- [ ] Residual-type rules R1-R5 enforced (spec §12)
+- [ ] CBOR schemas implemented (spec §34)
+- [ ] Capability checks working (spec §20)
+- [x] Absolute identifier uniqueness enforced (spec §7)
+- [ ] Behavior inference rules correct (spec §11)
+- [ ] Method desugaring implemented (spec §16)
+- [ ] Pattern matching works (spec §13)
+- [ ] Destructuring works (spec §13)
+- [x] if-let/while-let works (spec §13)
+- [ ] Visibility rules enforced (spec §21)
+- [ ] Structured spawn semantics correct (spec §19)
+- [ ] Full primitive numeric set implemented (spec §6, §32)
+- [ ] Checked arithmetic defaults working (spec §6)
+- [x] For-in iteration works (spec §18, §29)
+- [ ] Ranges and slicing work (spec §15)
+- [ ] known/rt_known work (spec §9, §24)
+- [ ] comptime_print works (spec §24)
+- [ ] Raw/byte strings work (spec §14)
+- [ ] #location works (spec §25)
+- [ ] Discard binding works (spec §7)
+- [ ] Default parameters work (spec §8)
+- [ ] Named arguments work (spec §8)
+- [ ] @residual sugar works (spec §9)
+- [ ] value? / value else {} sugar works (spec §23)
+- [ ] Failure model correct: abort at top-level, Err(RegionError) in concurrent regions (spec §9)
+
+---
+
+## 11. CURRENT STATUS
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 1. Lexer, Parser, AST | ✅ Complete | `resid-lexer` (17) + `resid-parser` (88) pass. **Operator precedence fixed** (spec §27): `token.rs` precedence now inverts the spec level numbers (higher = binds tighter, per the climbing algorithm), so `*`/`/` bind tighter than `+`/`-`, equality tighter than logical AND/OR; all binary operators are left-associative (rhs parsed at `prec+1`) with ranges right-associative (`1..2..3` = `1..(2..3)`). Ranges parse as `ExprKind::Range`; `if (PAT = expr)` / `while (PAT = expr)` detect a depth-0 binding `=` and parse as `IfLet`/`WhileLet`. Slice syntax (`xs[1..4]`, `xs[..4]`, `xs[1..]`, `xs[..]`, `xs[0..=3]`) parses as `ExprKind::Slice` — the start bound is parsed at a precedence above the range operator so `1..4` isn't greedily consumed. Provider call syntax: `filesystem.verb(args)`, `environment.verb(args)`, `git.verb(args)` parse as `ExprKind::ProviderCall { provider, verb, args }` (trusted provider names: filesystem, environment, git). Method call syntax: `obj.method(args)` → `ExprKind::MethodCall { target, method, args }`. Field access: `obj.field` → `ExprKind::FieldAccess { target, field }`. C-style casts `(Int(32))x` parse via a `paren_is_cast` lookahead; named call args `add(a = 1, b = 2)`; raw/byte strings map to `RawString`/`ByteString`; `_ = expr;` → `StmtKind::Discard`; bare `{ … }` block statements (a `{` not followed by `ident :` is a block, not a struct/map literal); type defs require the spec `type Point = { … };` form. `m`-suffix decimal literals (`1.5m`, `5m`) scan as `Literal::Dec(DecLit { digits, exp })` carrying digits verbatim (never through binary).
+| 2. Knowledge Graph IR | Partial | `resid-ir`: implements spec §6 primitive numeric types, mixed-width widening, list/rangetype member types (41 tests). |
+| 3. Types, Behaviors | Partial | `resid-type`: 181 tests — literal inference, widening, signed/unsigned mixing, bitwise/float rejection, cast, if, `@residual`, while, RT, built-in extern signatures, `Str + Str`, `check_program`, `ListToString` (List(Int/UInt/Float) → Str), Step 1 (lists, structs, options, pattern matching including refutable-pattern hard errors), assertion/debug expressions (`assert`/`rt_assert` cond must be Bool, message Str; `known`/`rt_known` pass-through), ranges (`Range(Elem)` from numeric bounds; for-in over a Range requires the declared type match the element type), if-let/while-let (`bind_pattern` against the source type; vars scoped to the then/body block), byte strings (`b"..."` → `Bytes`), f-string interpolation (each interpolated expr is inferred/validated; the f-string is `Str`), and `#location` → `SourceLoc` with `file`/`line`/`col` field access (unknown fields rejected), provider type checking (unknown providers rejected, unknown verbs rejected, arg count mismatches rejected, arg type mismatches rejected, method calls on value types rejected, provider calls allowed inside RT expressions). Numeric overload resolution (`IntToString`/`UIntToString`/`FloatToString`/`BoolToString`/`ToString`) and numeric widening at call sites. String introspection built-ins (`str_len`, `str_char_at`, `str_from_code`, `str_slice`) type-check; char literals infer as `Int(64)`. `Str == Str` / `Str != Str` → Bool (Str < Str rejected). The type checker — not the parser — rejects undefined variables (`check_program_undefined_var`). Shadowing rejected everywhere (spec §7): `Env::try_insert` errors on rebinding any name already in scope — same-block, nested-block, for-in loop vars, pattern binds, and duplicate params; sibling blocks still bind freely. Wide ToString built-ins type-check: `Int128ToString`/`UInt128ToString` for `Int(128)`/`UInt(128)`, `Int256ToString`/`UInt256ToString` for 256-bit, `Int512ToString`/`UInt512ToString` for 512-bit (smaller same-signed ints widen losslessly; non-numeric types rejected). Float(128) type-checks end-to-end: `f128()` conversion helper, `Float128ToString`, and Float(128) + Float(64) → Float(128) widening per spec §6.2. Literal overflow is a compile error (spec §6): `infer_expr_expected` rejects a literal that doesn't fit the expected numeric range (`Int(8) x = 300`, `2^256-1` into `Int(64)`), and `lit_type`/`literal_compatible` derive widths from the literal's magnitude string so >u128 literals infer Int(128)/Int(256)/Int(512). Dec(N) type system (spec v3.1 §6.6a): `Dec`/`Dec(N)` resolve to `NumericType::Dec(N)` (default 34); `1.5m`/`5m` literals infer Dec(34) and fit any Dec(N) target (literal narrowing rounds once); `Dec(N) op Dec(M) → Dec(max)`; Dec mixed with Int/UInt/Float is a hard error; bitwise/shift and `~` on Dec rejected; open-ended `dN` helpers accept Dec/Int/Str (Float rejected) and `iN`/`uN`/`fN` accept Dec args.
+| 4. LLVM Code Generation | ✅ Runnable binaries | `resid-codegen` (130 tests) + `residc` (31 e2e): functions, arithmetic, casts, calls, bool, `if`-expressions with phi joins, `while` loops with `break`/`continue` and loop-stack context, `for-in` over lists, boxed `List`/`Struct`/`Option` via `resid_box_*`, `match` tag-check + phi joins, struct field access, pattern destructuring, `_ = expr` discard, `comptime_print` (fires at compile time, dropped from runtime), `@residual Type y = expr`, assertions (`assert`/`rt_assert` → `resid_abort` on failure; `known`/`rt_known` static/runtime checks; `todo`/`unimplemented` trap), if-let/while-let (`pattern_match_test` compares the runtime tag via `resid_box_tag`; bindings scoped to the then/body block). Range `for-in` (`0..n` half-open, `0..=n` inclusive) lowers to a scalar i64 counter via `slt`/`sle`, with bounds widened/truncated to the declared width. Range/slice construction lower to `resid_range_new` / `resid_slice_new` (boxed, partial-open `..n`, `n..`, `..` resolve bounds via the list length). Runtime value formatting: `IntToString` (Int8–Int64), `UIntToString`, `FloatToString` (Float16/32/64), `Float128ToString` (quad, 36 sig digits), `BoolToString`, `ToString` (List/Struct/Option), with numeric widening at call sites, Bool↔i8 C ABI, and scalar box runtime support. Float(128) (spec v3.1 widest binary float): `float_type(128)` → LLVM `fp128`; `fadd`/`fsub`/`fmul`/`fdiv`/`frem`, comparisons, casts and the `f128()` helper all lower; f-string interpolation of Float(128) goes through `Float128ToString` (not a lossy f64 widen); `Float128ToString` prints 36 significant digits with full exponent range via binary bignum (no libquadmath), verified end-to-end (2^100 exact, 2^200, 2^16383, 0.0001, 0.1 quad-exact). Also fixed: float-typed functions with no trailing return emitted `ret i1 false` (module verification failure) — now a proper fp32/64/128 zero; and an `if` whose then/else both return marks the enclosing block terminated with `unreachable` in the dead merge block. Wide 128-bit support: `Int(128)`/`UInt(128)` lower to LLVM `i128`; literals exceeding 64 bits build from their full decimal value via `const_int_from_string` (not `as u64`, which truncated), picking a holding width from magnitude when no target type is present; `Int128ToString`/`UInt128ToString` call runtime decimal printers (verified end-to-end: 2^64+1, −2^127, UInt(128) max, mul/comparison/cast). Wide 256/512-bit: `Int(256)`/`Int(512)` arithmetic/comparison/casts via LLVM arbitrary-width integers (`custom_width_int_type`); `Int256ToString`/`UInt256ToString`/`Int512ToString`/`UInt512ToString` decompose the value into little-endian u64 limbs (`lshr` + truncate) for the C-ABI runtime helpers. Wide literals beyond `u128` survive lexing (`IntKind` keeps digits as strings for every radix) and codegen builds constants from the raw digit string + radix at the full target width (verified end-to-end: 2^256−1 in `UInt(256)`, 2^255−1 in `Int(256)`, 2^128−1 in `UInt(512)`); small-target literal overflow is rejected by the type checker before codegen. Raw strings (`r"..."`) lower as `Str` globals; byte strings (`b"..."`) lower as constant global byte arrays (`Bytes`, no NUL terminator); `#location` boxes a `SourceLoc { file, line, col }` from the current span with field access via the boxed-slot runtime. F-string interpolation (spec §14) stringifies interpolated values (`Str` passthrough, `*ToString` helpers for numerics/bools, `ToString` for composites) and stitches them with `resid_str_concat`; pure-text f-strings fold to a constant. Runtime `Str + Str` with a non-constant operand concatenates via `resid_str_concat`. `residc <f> build [-o out]` produces a native binary via clang + `resid_rt.c`; `run` builds and executes with exit-code propagation. UTF-8-codepoint string helpers (`str_len`/`str_char_at`/`str_from_code`/`str_slice`) declared via the extern path and callable from Resid source (bootstrap lexer groundwork); char literals lower as `i64` codepoints rather than strings. `Str == Str` / `Str != Str` lower to `resid_str_eq` (strcmp-based) yielding a Bool; `filesystem.read_all(path)` reads a whole file into a `Str` (bootstrap lexer input). |
+| 5. Stdlib, Build System | Partial | `resid-builtin`/`resid-build` stubs; compile clean. Runtime helpers landed: conversion helpers, checked/wrapping/saturating arithmetic, ranges/slicing, raw strings, byte strings, `#location`, f-string interpolation, runtime `Str + Str` concat, Dec(N) exact decimal arithmetic/display/conversions, `filesystem.write_all` (M6 P1), spawn with capture loading and sum-type casting (M6 P2), and **handle types** (spec §16): `with (File h = open(path)) { body }` type-checks and lowers to acquire → body → `resid_handle_release` (RAII, reverse binding order), plus `filesystem.open`/`read_handle`/`close` File-handle verbs. `resid-build` crate landed: parses `resid.toml` ([package] name/version/root,
+[target] triple), profiles debug/release/check (spec §35), builds via the full
+pipeline into `<pkg>/target/resid/<name>`; CLI `resid-build [dir] [-p prof] [-o dir]`.
+**Multi-file packages done**: `resid_parser::resolve_unit` resolves `import "f.resid"` trees (relative paths, cycle/diamond dedupe by canonical path), merging only exports (`pub` functions; types/behaviors always visible) into one flat unit — deps before dependents; `(a, b)` name selection supported, `as M` rejected for now. residc and resid-build both compile through it (proven: multi-file package with imported fn+type builds and runs). **Path dependencies done (spec §35)**: `[dependencies.<name>] path = ...` — the dep is a Resid package whose root file imports by bare package name (`import "math"`); resid-build validates each dep's manifest/root at load, passes a name→root map to `resolve_unit_with`, capabilities now policy-checked at load: each dep's required capability family must appear under `[capabilities] grant` (family = text before `(...)`, so a scoped grant covers the bare family) or the manifest is rejected — spec §28.2 step 4. **Stdlib v1 done**: string verbs `str_trim/str_contains/str_starts_with/str_ends_with/str_to_lower/str_to_upper/str_repeat/str_replace` plus list-valued `str_split(Str, Str) -> List(Str)` and `str_join(List(Str), Str) -> Str` — typed in BUILTIN_SIGS, C-implemented in resid_rt.c (codepoint semantics; ASCII case mapping), auto-declared externs in codegen. **Stdlib v1.1 done**: parsing + integer math — `str_is_int(Str) -> Bool`,
+  `str_parse_int(Str) -> Int` (0 on malformed input), `abs_i64/min_i64/max_i64/clamp_i64`
+  (`_i64` suffix avoids libc's `abs` clash). **Stdlib v1.2 done**:
+  `str_is_float/str_parse_float` (strtod semantics), `str_count`, and UTF-8-aware
+  `str_reverse`). **Stdlib v1.3 done — list verbs**: `list_sort_ints/list_sort_strs`
+  (ascending/lexicographic), `list_reverse_ints/list_reverse_strs`,
+  `list_contains_int/list_contains_str`, `list_sum(List(Int)) -> Int` — operating on
+  the ResidVal box layout, returning fresh boxes; str_split/str_join were migrated
+  to that layout too. **Stdlib v1.4 done — List(Float) verbs**:
+  `list_sort_floats/list_reverse_floats/list_contains_float/list_sumf` (slots hold
+  `resid_box_f64` boxes). Bootstrap compilers do not carry these yet (bootstrap subset). **Import-as namespacing done (§29)**: `import "f.resid" as M` renames the module's
+own exports to `M.name` in the merged unit and rewrites qualified references
+(`M.f(x)` → call of `M.f`, `M.v` → ident `M.v`) via a full AST walk of the
+importing file's functions. v1 limits: aliased units' transitive imports stay
+unnamespaced; struct-literal names/type spellings/patterns are not rewritten.
+**`resid fmt` done (§37)**: AST-based canonical formatter — 4-space indent,
+same-line braces, precedence-aware parens per spec §30, escape-safe string
+printing, block tails printed as explicit `return e;` (the only spelling that
+round-trips the parser's ret-folding). CLI `resid fmt <f> [-w | --check]`.
+Idempotent on all four bootstrap sources; formatted lexer.resid compiles and
+tokenizes identically. v1 limits: doc comments on functions not yet carried;
+behaviors print as placeholder. **Runtime capability enforcement done
+(§28.2 step 4)**: `collect_provider_calls` scans the merged unit for
+`provider.verb(...)` uses; `resid-build` rejects the build if any touched
+provider family is missing from `[capabilities] grant` (`args` exempt — own
+argv). Also fixed: Bool-returning provider calls were i8 at branch sites
+(verification failure) — now truncated to i1 in codegen. **Per-scope narrowing
+done**: grants parse into family + scope globs; a scoped `filesystem(scope=
+["config/**"])` grant only covers uses whose first argument is a string
+literal matching the glob (`**` crosses `/`, `*` stays in-segment); dynamic
+paths under a scoped grant are rejected; an unscoped grant for the same
+family overrides scopes. **Unicode casing done**: `str_to_lower`/`str_to_upper`
+  map ASCII, Latin-1 Supplement, Latin Extended-A (even/odd parity), Greek and
+  Cyrillic via algorithmic range tables; ÿ↔Ÿ special pair; ß passes through.
+  UTF-8 per-codepoint in the C runtime. **Bootstrap compilers synced with the
+  stdlib**: typecheck.resid's check_builtin and codegen.resid's extern dispatch now
+  cover all 31 string/list/math verbs; list verbs + split/join call `bl_*`
+  runtime twins that read the bootstrap `{n, raw slots}` box layout (the Rust
+  pipeline uses ResidVal boxes) — both conventions coexist in resid_rt.c.
+  Stage-2 re-proven: the Resid emitter compiles the regenerated driver.resid and
+  its binaries match stage-1 output. **Package archives + signing done
+  (§28.1–28.3 v1)**: deterministic `.resid-pkg` archives whose SHA-256 is the
+  content hash; Ed25519 `keygen/pack/verify` CLI (hex keys); `[signing]
+  require_signatures = true` + keyring makes dependency resolution verify each
+  dep's archive signature against a trusted key. **Crypto boundary ironed out**:
+  build-tool crypto is pure-Rust crates (sha2, ed25519-dalek — no FFI); **SHA-256
+  rewritten in pure Resid** (`lib/crypto.resid`, self-hosting principle — the C
+  builtin was removed): digests verified against reference implementations
+  through both pipelines incl. stage-2. Bootstrap fixes it forced: `pub`
+  declarations were misparsed by checker/sig-collector/emitter (off-by-one
+  token skips), and the bootstrap checker lacked bitwise/shift operators
+  entirely (added with spec §30 precedences). **Crypto library v2**: byte-level
+  core (`sha256_bytes`, `words_to_bytes`, `hex_encode`, seeded-list convention)
+  plus HMAC-SHA256 (RFC 2104) verified against RFC 4231 vectors incl. long-key
+  hashing and empty key/message; `sconcat` fixes seeded-list concatenation.
+  **Crypto v3**: constant-time equality (`ct_equal`), Base64 encode
+  (RFC 4648), and PBKDF2-HMAC-SHA256 (RFC 2898) — 4096-iteration derivation
+  verified against Python's hashlib. **Crypto v4 — randomness**: the single C
+  boundary is `resid_crypto_random_byte()` (getrandom(2) with /dev/urandom
+  fallback); Resid assembles `random_bytes`/`random_hex` on top. Previously
+  Resid programs had a pure-C stdlib builtin sha256 (FIPS 180-4,
+  digests verified against reference implementations); asymmetric crypto
+  deliberately stays at tool level rather than hand-rolling curve math in C.
+  **Transitive dependency resolution done**: collect_dep walks each dep's
+  manifest recursively (cycle-safe by package name, depth cap 32); the
+  package's self-declared name is its identity — two paths claiming one name
+  are rejected as conflicting versions; transitive roots join the import map
+  so a dep's sources can `import "base"` by name. **Local registry done**:
+  `[registry] path` + `[dependencies.<name>] version = "x.y.z"` pulls
+  `<name>-<version>.resid-pkg` from a directory registry, verifies the SHA-256
+  against a sibling `.resid-sha256`, extracts into
+  `target/resid/deps/<name>-<ver>/`, and builds like a path dependency.
+  Archive extraction includes path-traversal guards. **Bounds-checked list
+  indexing done (soundness)**: `xs[i]` now emits an unsigned `idx < len`
+  check that aborts with the index and length instead of silently reading
+  out of bounds — found while debugging SHA-512-in-Resid, where unchecked
+  indexing turned an off-by-one into nondeterministic segfaults. |
+| 6. Tooling, Bootstrap | Partial | `resid fmt` done (canonical AST formatter, idempotent on all bootstrap sources); **`resid-graph` done** — call-graph extraction from the resolved AST (imports + alias rewriting included), text tree and DOT output, extern built-ins excluded from nodes; recursion shows as self-edges. `resid-notes`/`resid-cache`/`resid-why` still stubs (they need the reduction/cache subsystem). |
+
+Build/test notes:
+- Full `cargo build` and `cargo test --workspace` succeed against system LLVM 22
+  (inkwell `0.9` with `llvm22-1`; no env var needed).
+- `residc <file.resid>` runs the lexer + parser and prints diagnostics; exit 0 on
+  success, 1 on parse errors.
+- `residc <file.resid> emit-ir` runs the full pipeline (lex → parse → type check → LLVM IR)
+  and prints the IR, verifying the module before output.
+  Type errors (undefined vars, signed/unsigned mixing) are reported with file:line:col.
+- `residc <file.resid> build [-o <out>]` compiles to a native binary via clang + the
+  bootstrap runtime (`crates/residc/resid_rt.c`); `run` builds to a temp dir and executes
+  it, propagating the exit code (including POSIX signal exits as 128+signal).
+- **495 tests total**: lexer 17, parser 90, resid-ir 46, resid-type 181, resid-codegen 130,
+  residc 31 (e2e). Destructuring, `_ = expr` discard,
+  `if`-expressions with phi joins, `while` and range `for-in` loops with
+  `break`/`continue`, `for-in` over boxed lists, `comptime_print` (compile-time
+  evidence side effect), `@residual Type y = expr`, the assertion family
+  (`assert`/`rt_assert`/`known`/`rt_known`/`todo`/`unimplemented`), and
+  if-let/while-let all type-check
+  and lower end-to-end: `residc <f> run` binds
+  pattern variables from a boxed struct, discards values, prints at compile time,
+  aborts on failed asserts, and runs control-flow statements. `value?` and
+  `value else { … }` verify and run (payload read from box slot 0, not the
+  variant index); nested `if` tails join correctly (phi predecessors follow the
+  terminating block); `return` inside an if/else branch emits a real early
+  `ret` (not a phi tail), so branches terminate immediately and recursion
+  works end-to-end; struct/option/match slices, ranges, raw/byte strings,
+  f-strings, and `#location` all verify.
+  Wrapping/saturating/checked arithmetic extern functions (`wrapping_add`,
+  `saturating_mul`, `checked_div`, etc.) declared and callable from Resid source.
+- **Self-host roadmap**: detailed in §12. Conversion helpers (§12.1, task 5.1),
+  ranges/slicing (§12.1, task 5.3), raw/byte strings (§12.1, task 5.4),
+  `#location` (§12.1, task 5.5), f-string interpolation (§12.1, task 5.12),
+  provider backends (§12.1, task 5.6), and string introspection
+  (`str_len`/`str_char_at`/`str_from_code`/`str_slice`)
+  are done → M2 bootstrap milestone (string building for the Resid lexer).
+  Wide 128-bit numerics (§12.1, task 5.9, Int(128)/UInt(128) subset): wide
+  literal lowering without truncation + `Int128ToString`/`UInt128ToString`
+  done. Wide 256/512-bit numerics: arithmetic + `Int256ToString`/`UInt256ToString`/
+  `Int512ToString`/`UInt512ToString` done; decimal literals beyond `u128` now
+  keep their digit string end-to-end (lexer `IntKind::Decimal(String)`, codegen
+  builds constants from raw digits+radix, type checker enforces literal range
+  per spec §6 and widens inference for huge literals). **Dec(N) runtime done**:
+  exact add/sub/mul + division to N+2 guard digits, all rounded once to `prec`
+  significant digits; display in fixed notation with all N significant digits
+  (`Dec(4) 1.5m` → `"1.500"`). The 520-byte `resid_dec` struct always crosses
+  the LLVM↔C boundary as pointers (clang and LLVM disagree on by-value
+  aggregate ABI); `resid_dec_to_int`/`resid_dec_to_f64` strip precision-padding
+  trailing zeros so `Dec(34) 12.0m → 12` and `12.5m → 12.5` exactly. A
+  `Dec main()` is emitted as `resid_main` with a synthesized C-ABI `i32 @main`
+  wrapper (LLVM's sret return for the struct doesn't match libc's `main`).
+  Next: the `resid-build` crate (§12.1, task 5.10), M6 work items, or tooling.
+- **M4 — Resid lexer done** (`examples/lexer.resid`): a Resid program reads a
+  `.resid` source file via `filesystem.read_all(RESID_LEX_SRC)` and prints the
+  token stream (`ident(x)`, `literal(Int 42)`, `literal(Str hi)`, `op(+)`,
+  `keyword(return)`, `raw(...)`, `bytes(...)`, `f-string(...)`, `char(...)`,
+  `#`, `@`, `EOF`). Handles C-style comments (`//` line + `/* */` block),
+  string/raw/byte/f-string/char literals with escapes, integers in
+  dec/hex/bin/oct, floats, identifiers (keyword vs ident), and operators
+  (including multi-char `==`/`!=`/`<=`/`>=`/`&&`/`||`). Verified end-to-end by
+  e2e test `bootstrap_lexer_tokenizes_source` (runs `lexer.resid` via `residc run`
+  with `RESID_LEX_SRC` pointing at a sample).
+  Type-checker fix enabling this: `block_ret` now walks a block's statements,
+  registering bindings into a cloned env and recursing into nested control flow
+  (if/while/if-let/while-let), so `Int k = ...; return k;` inside an `if`
+  block type-checks (previously "undefined variable"). Codegen fix: functions
+  are all declared before any are lowered, so forward references and mutual
+  recursion work.
+- **M5 — Resid parser done** (`examples/parser.resid`): reads `.resid` source via
+  `filesystem.read_all(RESID_PARSER_SRC)`, recursively descends with position
+  threaded through a `{ pos, ast }` struct, and prints one S-expression AST line
+  per declaration (type-def product/sum, func with params + defaults, bind/
+  discard/return/if-else/while/for-in/expr/block statements, precedence-climbing
+  binary expr per spec §30, unary, calls, field/index/slice, list/struct
+  literals, match, ranges, f-strings/raw/bytes/chars, provider calls). Proves the
+  milestone by parsing `examples/lexer.resid` itself cleanly to EOF. Verified by
+  e2e test `bootstrap_parser_builds_ast`. Codegen fix enabling this: user
+  functions now declare Bool params as i8 (C ABI, matching extern decls) and
+  narrow to i1 on entry, so calls passing Bool literals/vars verify.
+
+---
+
+## 12. REMAINING TASKS — Self-Hosting Roadmap
+
+Self-hosting (spec §39 Phase 3) requires a Resid program that can write the
+compiler. Milestones M1–M5 are done (§12.7); the remaining step to self-hosting
+is M6 — the full compiler in Resid (type checking + codegen + LLVM backend).
+
+### 12.1 Phase 5 — Stdlib + Build System (blockers first)
+
+| # | Task | Priority | Blocked on | Notes |
+|---|------|----------|------------|-------|
+| **5.1** | Conversion helpers (`i8..i512`, `u8..u512`, `f16..f128`, `isize`, `usize`) | ✅ Done | — | Extern functions. Narrow/widen numeric types at call sites. Bootstrap runtime: C casts. Typed in `BUILTIN_SIGS`, declared in codegen, implemented in `resid_rt.c`. Needed to write Resid lexer (codepoint→char). |
+| **5.2** | Checked + wrapping + saturating arithmetic (`checked_add`, `wrapping_mul`, `saturating_sub`) | ✅ Done | 5.1 | Spec §6.5. Extern functions in `resid_rt.c`: `wrapping_add/sub/mul/div`, `saturating_add/sub/mul`, `checked_add/sub/mul/div` (signed + unsigned). Declared in codegen, typed in `BUILTIN_SIGS`. 11 new codegen tests. |
+| **5.3** | Ranges and slicing (`xs[start..end]`, `0..=n` construction) | ✅ Done | — | Type: `Range(Elem)`/`Slice(Elem)`. `for-in` over a range lowers to a scalar counter. Construction lowers to `resid_range_new`/`resid_slice_new` (boxed). Parser fix: slice start/end bounds parsed above range precedence so `1..4` inside `[ ]` isn't consumed as a Range expr; `xs[..n]`, `xs[n..]`, `xs[..]` supported (defaults 0 / list length). |
+| **5.4** | Raw strings + byte strings (`r"...\0"`, `b"bytes"`) | ✅ Done | — | `Bytes` core type (type + codegen). Raw strings (`r"..."`) lower as `Str` globals; byte strings (`b"..."`) lower as constant global byte arrays (`[N x i8]`, no NUL terminator), backed by the lexer's escape handling (`\"`, `\n`, `\t`, `\r`, `\\`, `\0`). |
+| **5.5** | `#location` → `SourceLoc` type | ✅ Done | — | Type: `SourceLoc` with `file: Str`, `line: Int`, `col: Int` (`source_loc_fields()`); unknown fields rejected. Codegen: boxes a `SourceLoc { file, line, col }` from the current span (`e.span.file/line/col_start`) via the boxed-slot runtime; field access lowers through `load_slot`. |
+| **5.6** | Provider backends (filesystem, environment, git) | ✅ Done | — | `resid_rt.c` implements `resid_fs_exists`/`resid_fs_read_all`/`resid_fs_list_dir`, `resid_env_get`/`resid_env_has`, `resid_git_rev`/`resid_git_branch`; codegen dispatches via `lower_provider_call`; typed by `provider_verbs()` (single source of truth). Proven by M4/M5 bootstrap lexer/parser (`filesystem.read_all`). Real I/O currently allowed unconditionally (bootstrap); capability authorization gates it in a real build. |
+| **5.7** | Handle types (`with (File h = open(...))`) | ✅ Done | 5.6 | spec §16: `with (Type h = expr) { body }` type-checks each binding's init against the declared type, binds the handle in the body env (shadowing rejected), and yields the body's tail type. Codegen lowers acquire (init) → body (phi-joined tail) → `resid_handle_release` in reverse binding order (RAII). `SemType::File` = identity-bearing handle boxed as a pointer; provider verbs `filesystem.open(path) -> File`, `filesystem.read_handle(f) -> Str`, `filesystem.close(f) -> Bool`; runtime helpers `resid_fs_open`/`resid_fs_read_handle`/`resid_fs_close`/`resid_handle_release` (FILE* wrapped in a File-tag box, freed on release). `with` whose body returns terminates the enclosing block (block_ret/block_terminates/lower_block_with_tail propagation). Proven by e2e `run_with_handle_raii` + `run_handle_explicit_close` and 2 codegen IR tests. |
+| **5.8** | Spawn / `RegionError` / structured concurrency | ✅ Done | 5.6 | `spawn (caps) { body }` → OS thread + structured join. (b)(c)(d) done: spawn lowers to `resid_spawn` with captured-var raw pointer array, `load_capture` reads captures via byte-offset GEP (not `resid_box_slot`), spawn worker block tail returns explicit `block.ret` via 3-tuple `(terminated, tail, spawn_ret)` for correct return semantics. Sum-type casting (`Result(Int(128), E) → Result(Int(64), E)`) works via payload read + rebuild. E2E: `run_spawn_simple`, `run_spawn_with_captures`, `run_spawn_nested` pass. |
+| **5.9** | Wide numeric runtime (Int128/256/512, Float128, Dec) | ✅ Done | — | **Int(128)/UInt(128) done**: `i128` LLVM lowering, wide literal construction via `const_int_from_string` (magnitude-derived holding width when no target), `Int128ToString`/`UInt128ToString` decimal printers in `resid_rt.c`. **Int(256)/Int(512) done**: arithmetic via LLVM arbitrary-width integers (`custom_width_int_type`); `Int256ToString`/`UInt256ToString`/`Int512ToString`/`UInt512ToString` stringify by decomposing the value into little-endian u64 limbs (C ABI has no native 256-bit type). **Literals > u128 done**: `IntKind` keeps all radices as digit strings (`Decimal(String)`), codegen builds constants from raw digits+radix, `lit_type`/`literal_compatible` derive width from the magnitude string, and bind overflow (`Int(8) x = 300`, `2^256-1` into `Int(64)`) is now a compile error per spec §6. **Float(128) done (v3.1 caps binary floats at F128)**: `f128()` conversion helper, `Float128ToString` quad-precision printer (bignum decimal, 36 sig digits, full exponent range, no libquadmath), fp128 arithmetic/casts/comparisons, f-string interpolation via `Float128ToString`. Also fixed: float-typed implicit zero return emitted `i1 false` (verification error); both-branches-return `if` now propagates block termination and puts `unreachable` in the dead merge block. **Dec(N) type system done (spec §6.6a)**: `NumericType::Dec(u16)`, `Dec(N) op Dec(M) -> Dec(max)`, Dec/Int/UInt/Float mixing is a hard error, `m`-suffix literals (`1.5m`/`5m`) carry digits verbatim + i32 exponent, Dec(34) default, `Dec`/`Dec(N)` spellings, open-ended `dN` helpers (Dec/Int/Str; Float rejected), `iN`/`uN`/`fN` accept Dec args. **Dec(N) runtime done**: exact add/sub/mul + div to N+2 guard digits rounded once, fixed-notation display preserving trailing zeros (`Dec(4) 1.5m` → `"1.500"`), pointer ABI across the LLVM↔C boundary (aggregate by-value ABI mismatch), `dN` synthesized in codegen, `iN`/`uN`/`fN` Dec args via `resid_dec_to_int`/`resid_dec_to_f64`, and a synthesized C-ABI `main` wrapper for `Dec main()` (sret vs libc). Proven by e2e `run_dec_exact_arithmetic`. |
+| **5.10** | `resid-build` crate (resid.toml, profiles, deps) | ✅ v1 Done | — | `Manifest::load` parses `[package]` name/version/root, `[target] triple`; profiles debug/release/check (spec §35); `build()` runs lex → parse → type check → codegen → clang into `<pkg>/target/resid/<name>` (release `-O2`, check stops after typecheck); CLI binary `resid-build [dir] [-p prof] [-o dir]`. 8 tests incl. runnable-binary e2e. Missing: multi-file packages, dependency resolution, signing/capabilities (spec §28). |
+| **5.11** | `resid-builtin` crate (full stdlib types) | P3 | — | `Option`, `Result`, `List`, `Map`, `Set`, `SourceLoc`, `Range`, behaviors. |
+| **5.12** | F-string interpolation (`f"hello {name}"`) | ✅ Done | — | Type checker validates interpolated exprs (undefined vars/type errors surface at check time; f-string is `Str`). Codegen: pure-text f-strings fold to a constant; interpolated parts stringify each value (`Str` passthrough; `IntToString`/`UIntToString`/`FloatToString` widened to 64-bit; `BoolToString`; `ToString` for boxed composites, `SourceLoc`, `Ptr`) and stitch with runtime `resid_str_concat`. Runtime `Str + Str` with a non-constant operand also concatenates via `resid_str_concat` (constant operands still fold). |
+
+### 12.2 Phase 4 — Codegen Gaps
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| **4.1** | Float arithmetic (`+`, `-`, `*`, `/` on Float types) | ✅ Done | `float_type(bits)` + fadd/fsub/fmul/fdiv; float literals → `Float(64)`. |
+| **4.2** | Conversion helpers lowering | ✅ Done | Declared extern, args widened to helper's expected width, result returned at target width. `test_conversion_helper_i32`. |
+| **4.3** | `@residual Type y = expr` codegen | ✅ Done | Lowers as typed binding with residual marker. |
+| **4.4** | `known`/`rt_known` codegen | ✅ Done | `known` → compile-time check abort; `rt_known` → runtime check abort. |
+| **4.5** | `todo`/`unimplemented` codegen | ✅ Done | Lower to `resid_abort("message")`. |
+| **4.6** | `comptime_print` codegen | ✅ Done | Fires at compile time (stderr), drops value from runtime. |
+| **4.7** | `for-in` over numeric ranges | ✅ Done | Lowers to scalar i64 counter with `slt`/`sle` bounds check. |
+| **4.8** | `if-let`/`while-let` destructuring | ✅ Done | Pattern matching on boxed values via `resid_box_tag`. |
+| **4.9** | Struct field access codegen | ✅ Done | `p.x` on boxed struct → `resid_box_slot(idx)`. |
+| **4.10** | List indexing codegen | ✅ Done | `xs[i]` → `resid_box_slot(i)`. |
+
+### 12.3 Phase 3 — Type System Gaps
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| **3.1** | Conversion helper type resolution | ✅ Done | `i8..i512`, `u8..u512`, `f16..f128`, `isize`, `usize` in `BUILTIN_SIGS`; `conversion_helper_match` widens call-site args. |
+| **3.2** | Float type inference | ✅ Done | Float literals → `Float(64)` default; all `FloatWidth` variants typed. |
+| **3.3** | `Range(Elem)` type construction | ✅ Done | From numeric bounds; for-in requires element type match. |
+| **3.4** | `ListToString` | ✅ Done | List(Int/UInt/Float) → Str. |
+| **3.5** | `Str + Str` concat type | ✅ Done | String concatenation produces Str. |
+| **3.6** | `check_program` | ✅ Done | Full program type-checking entry point. |
+| **3.7** | Behavior inference (auto-insert) | Partial | Numeric Eq/Ord/Hash generic over family. User-defined behaviors not yet. |
+| **3.8** | Capability lattice checks | Partial | Built-in extern signatures resolved, capability enforcement not yet. |
+| **3.9** | `@residual` type inference | ✅ Done | Residual marker preserves inner type. |
+| **3.10** | If/while type inference | ✅ Done | `if` returns common type; `while` returns Void. |
+
+### 12.4 Phase 2 — Knowledge Graph IR
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| **2.1** | AST → IR conversion | ❌ Not yet | Phase 2 never implemented. IR crate has types but no AST bridge. |
+| **2.2** | Reduction engine | ❌ Not yet | β-reduction, constant folding, constraint discharge, provider substitution. |
+| **2.3** | Identifier uniqueness (no shadowing) | ❌ Not yet | Spec §7. |
+| **2.4** | Parameter defaults resolution | ❌ Not yet | Inserted at call sites. |
+| **2.5** | Named args resolution | ❌ Not yet | Reordered against param list. |
+| **2.6** | Destructuring IR nodes | ❌ Not yet | `Point { x, y } = p` → field accesses. |
+| **2.7** | Provenance tracking | ❌ Not yet | Source → provider → residual. |
+
+### 12.5 Phase 6 — Tooling & Bootstrap
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| **6.1** | `resid-fmt` (canonical formatter) | ❌ Stub | Single-line stub, not implemented. |
+| **6.2** | CBOR residual notes (`resid-notes`) | ❌ Stub | `.resid-notes.cbor` schema per spec §34. |
+| **6.3** | Knowledge cache (CBOR) | ❌ Stub | `.resid-cache.cbor` for incremental compilation. |
+| **6.4** | `resid-graph` (dependency graph) | ❌ Stub | DOT / ASCII emitter. |
+| **6.5** | `resid-why` (provenance query) | ❌ Stub | "Why is this residual?" tool. |
+| **6.6** | LSP server | ❌ Not started | Residual status, doc hover, diagnostics, exhaustiveness. |
+| **6.7** | Incremental compilation | ❌ Not started | Cache per source file hash. |
+| **6.8** | Conformance test suite | ❌ Not started | All spec §39 conformance items. |
+| **6.9** | Bootstrap (compiler in Resid) | ❌ Not started | Rewrite lexer/parser in Resid, then full pipeline. |
+
+### 12.6 Conformance Checklist (spec §39)
+
+Updated from §10. **Checked = done, unchecked = missing.**
+
+| Item | Status |
+|------|--------|
+| Pure reduction relation (§36) | ❌ |
+| Residual-machine semantics (§9) | Partial — `rt`, `@residual` work |
+| Residual-type rules R1-R5 (§12) | ❌ |
+| CBOR schemas (§34) | ❌ |
+| Capability checks (§20) | ❌ |
+| Absolute identifier uniqueness (§7) | ✅ | `Env::try_insert` rejects rebinding a name already in scope (spec §7 "Shadowing is forbidden everywhere"): same-block `Int x` rebind, nested-block rebind, for-in loop var, pattern binds, and duplicate parameter names all error with "shadowing is forbidden"; sibling blocks do not shadow. |
+| Behavior inference (§11) | Partial — numeric only |
+| **Method call syntax (§16)** | ✅ | `obj.method(args)` parses as `MethodCall { target, method, args }`; method calls on value types rejected at type-check. Desugaring not yet. |
+| Pattern matching (§13) | ✅ |
+| Destructuring (§13) | ✅ |
+| **if-let/while-let (§13)** | ✅ |
+| Visibility rules (§22) | ❌ |
+| Structured spawn (§19) | ✅ | Spawn lowers to `resid_spawn` with captured-var raw pointer array; correct return semantics via `lower_block_with_tail` 3-tuple; sum-type casting works. |
+| Full numeric family (§6, §32) | Partial — Int8..Int64, UInt8..UInt64, Float16/32/64/128, plus Int(128)/UInt(128) literals/arithmetic/casts and `Int128ToString`/`UInt128ToString`, Int(256)/Int(512) arithmetic + `Int256ToString`/`UInt512ToString` (limb-decomposed), literals of any width up to 512 bits (digits carried through lexing; overflow rejected per §6). Dec(N) done (spec v3.1 §6.6a): type, `m`-suffix literals, exact arithmetic/rounding/display runtime, `dN`/`iN`/`uN`/`fN` helpers, pointer ABI, `Dec main` wrapper |
+| Checked arithmetic (§6.5) | ✅ | `checked_add/sub/mul/div`, `checked_uadd/usub/umul/udiv`. |
+| **For-in (§18, §29)** | ✅ |
+| Ranges and slicing (§15) | ✅ |
+| known/rt_known (§9, §24) | ✅ |
+| comptime_print (§24) | ✅ |
+| Raw/byte strings (§14) | ✅ |
+| #location (§25) | ✅ | `SourceLoc` boxed; field access through `load_slot`. |
+| Discard binding (§7) | ✅ |
+| Default parameters (§8) | ✅ | Parse + AST carries default; `FunctionSig` carries `param_names`/`param_defaults`; `resolve_call_args` reorders named args and injects defaults at call sites. |
+| Named arguments (§8) | ✅ | Parse into `(Option<Id>, Expr)`; `infer_call` validates named args against param list; `resolve_call_args` reorders by name and injects missing defaults at call sites. |
+| **@residual (§9)** | ✅ |
+| value? / value else {} (§23) | ✅ | Unwrap reads box slot 0; `else` fallback via phi join; `?` requires enclosing Option return. |
+| Failure model (§9) | Partial — abort works, RegionError not |
+| Conversion helpers (§6.7) | ✅ |
+| Wrapping/saturating arithmetic (§6.5) | ✅ |
+| **Provider call syntax (§32)** | ✅ | `filesystem.verb(args)`, `environment.verb(args)`, `git.verb(args)` parse as ProviderCall; type-check rejects unknown providers, unknown verbs, wrong arg counts/types; codegen dispatches to extern functions. |
+| **Handles / `with` blocks (§16)** | ✅ | `with (Type h = expr) { body }` type-checks (init vs declared type, shadowing rejection, body tail type); lowers to acquire → body → `resid_handle_release` in reverse binding order. `SemType::File` + `filesystem.open`/`read_handle`/`close` verbs. |
+| Float arithmetic (§6.2) | ✅ | fadd/fsub/fmul/fdiv; Float(16/32/64/128). |
+
+### 12.7 Bootstrap Milestones
+
+1. **M1 — Conversion helpers**: `i8..i512`, `u8..u512`, `f16..f128`, `isize`, `usize`.
+   Enables Resid codepoint→char conversion for lexer.
+
+2. **M2 — String + char support**: byte strings, `#location`, ranges, `Str + Str`,
+   `str_len`/`str_char_at`/`str_from_code`/`str_slice` (UTF-8 codepoint helpers).
+   ✅ Done. Enables Resid string building for lexer output. Verified end-to-end by
+   e2e test `run_str_introspection` (`str_len("hello")`=5, `str_char_at`=101,
+   `str_from_code(101)`="e", `str_slice("hello",1,3)`="el").
+
+3. **M3 — List + Option + struct + pattern matching**: ✅ Done — type system + codegen
+   both cover lists, structs, options, destructuring, if-let/while-let. Enables Resid
+   data structures for parser.
+
+4. **M4 — Resid lexer**: ✅ Done — `examples/lexer.resid` (see status §11). Reads a
+   `.resid` source file via `filesystem.read_all`, prints the token stream, handles
+   C-style comments, string/raw/byte/f-string/char literals, dec/hex/bin/oct
+   integers, floats, identifiers/keywords, and operators. Proven by e2e test
+   `bootstrap_lexer_tokenizes_source`.
+
+5. **M5 — Resid parser**: ✅ Done — `examples/parser.resid` (see status §11). Reads a
+   `.resid` source file via `filesystem.read_all`, recursively descends with
+   position threaded through a `{ pos, ast }` struct (immutable bindings), and
+   prints one S-expression AST line per declaration. Handles type defs
+   (product + sum), functions with params/defaults, bind/discard/return/if-else/
+   while/for-in/expression/block statements, full precedence-climbing binary
+   expressions (§30), unary, calls, field/index/slice access, list/struct
+   literals, match, ranges, f-strings/raw/bytes/chars, and provider calls.
+   Proof: parses `examples/lexer.resid` (its own sibling milestone) cleanly to
+   EOF. Proven by e2e test `bootstrap_parser_builds_ast`.
+   Codegen fix enabling Bool-param user functions: user functions now declare
+   Bool params as i8 (C ABI, matching extern decls) and narrow to i1 on entry,
+   so calls passing Bool literals/vars verify.
+
+6. **M6 — Full compiler in Resid**: type checking + codegen + LLVM backend
+   rewritten in Resid; the resulting compiler turns Resid source into a native
+   binary (self-hosting). 🔶 In progress.
+
+   **Prereqs (do first — a Resid compiler must write artifacts and run `clang`):**
+   - **P1 — `filesystem.write_all(path, contents)` provider verb** — compiler
+     must emit `.ll`/`.c` files to disk. ✅ Done — runtime `resid_fs_write_all`
+     in `resid_rt.c`, verb in `provider_verbs()` (resid-type) and
+     `lower_provider_call`/`declare_runtime` (resid-codegen). Proven by e2e
+     test `run_fs_write_all_roundtrip` (write → read_all round-trip).
+    - **P2 — `Result(T, RegionError)` + structured spawn (§19, task 5.8)** — the
+      compiler invokes `clang` and reports failure. Needs (a) `Result(T, E)`
+      tagged type (Ok/Err construction + `match`), (b) `spawn (caps) { body }`
+      typed `Result(T, RegionError)`, (c) codegen via pthread + captured-var
+      trampoline (free vars boxed/captured), (d) child failure → `Err(RegionError)`,
+      structured join. Parser + `ExprKind::Spawn` + `Type::RegionError` exist.
+      **(a) done**: `Result(T, E)` resolves to a `Sum` (Ok/Err), `RegionError` is
+      a built-in struct `{ message: Str }`; construction, `match`, and
+      `e.message` work end-to-end (e2e `run_result_type_ok_err`, 4 new resid-type
+      tests). **(b)(c)(d) done**: `lower_spawn` emits `resid_spawn` with captured-var
+      raw pointer array; `load_capture` reads from raw ptr array via byte-offset GEP
+      (bypasses `resid_box_slot`); `lower_block_with_tail` returns `(terminated, tail,
+      spawn_ret)` 3-tuple for correct return semantics in spawn workers; `cast_val`
+      handles sum-type casts with differing inner widths (read payload via
+      `resid_box_slot`, cast, rebuild). E2E: `run_spawn_simple`,
+      `run_spawn_with_captures`, `run_spawn_nested`.
+
+   **M6 work items (after P1/P2, in order):**
+   1. Port type checker to Resid: literal inference, widening, casts, `if`,
+      bind env + shadowing rejection, conversion helpers, built-in sigs,
+      pattern typing, f-string validation, provider call typing.
+      ✅ **Done (M6a)** — `examples/typecheck.resid` (~1500 lines): its own
+      hand-rolled lexer (chars → Tok via codepoint positions), signature
+      collection (functions + structs as field strings), then a
+      declaration walk: binds with shadowing rejection, calls (user fns by
+      collected sig, built-ins incl. `str_*`/`IntToString`/providers), struct
+      and list literals, field access, if/while/for/match statements and
+      if-expressions, precedence-climbing binary exprs (spec §30), unary `-`,
+      `_ =` discard. Proves itself on its own source plus `lexer.resid` and
+      `parser.resid` (`typecheck OK`; e2e
+      `bootstrap_typechecker_accepts_bootstrap_sources`,
+      `bootstrap_typechecker_rejects_type_errors`). Not yet covered: casts,
+      options/pattern typing depth, numeric widening at call sites.
+   2. Port codegen to Resid: emit LLVM IR text (types, functions, arithmetic,
+      casts, calls, if/while/for, boxed composites, `match`, strings, f-strings,
+      providers, main wrapper).
+      ✅ **Done (M6b, v1 subset)** — `examples/codegen.resid` (~1250 lines): fused
+      parse→emit. Covers Int(i64)/Bool(i1)/Str(ptr), arithmetic/comparisons/
+      logic, user calls from collected sigs, println/print, if/else (label
+      joins, `unreachable` on both-return), for-in (alloca/load/store loop,
+      unique labels per loop), early `return`, string globals appended at end.
+      CLI: `residc examples/codegen.resid run <src> [-o out.ll]`. E2E
+      `bootstrap_codegen_emits_runnable_ir` proves emitted IR assembles and runs.
+      Remaining for full parity: f-strings, while, casts, boxed composites,
+      match, Dec/wide numerics.
+   3. Driver in Resid: lex → parse → typecheck → codegen → `write_all` `.ll` →
+      spawn `clang` → binary.
+      ✅ **Done (M6c)** — `examples/driver.resid`: one Resid program running the
+      full pipeline via `residc examples/driver.resid run <src> [-o out]
+      [-rt resid_rt.c]`. Enabled by the new `process.run(Str) -> Int` provider
+      (spec §32; `system()` in resid_rt.c). E2E
+      `bootstrap_driver_compiles_and_rejects` proves both accept and reject
+      paths. Stage-2 self-compilation is item 4.
+   4. ✅ **Done (stage-2)** — the Resid-written emitter compiles all four
+      bootstrap sources plus the fused driver; stage-1 and stage-2 binaries
+      agree byte-for-byte. Full self-hosting chain proven:
+      Rust residc → emitter → driver-stage2 → any Resid program.
+
+---
+
+## 13. OPEN QUESTIONS
+
+All resolved in Resid 3.0. See `resid_specification.txt`.
+
+### Resolved
+
+1. ~~**Float(16)**~~ → **RESOLVED**: LLVM half (i16, IEEE 754 binary16). Failover to software-emulated via f32 conversion on targets lacking native half support.
+
+2. ~~**Float(128/256/512)**~~ → **RESOLVED (v3.1)**: binary floats capped at Float(128) → native LLVM `fp128` (arithmetic/casts/comparisons, bignum decimal printer). Float(256)/Float(512) are **removed** from the type system; arbitrary precision is carried by the Dec(N) decimal family (§6.6a).
+
+3. ~~**Provider volatility**~~ → **RESOLVED**: All three providers (`filesystem`, `environment`, `git`) are volatile. Cannot be constant-folded at compile time.
+
+4. ~~**Spawn scheduler**~~ → **RESOLVED**: One OS thread per spawn. Structured join via thread join. Task pools deferred.
+
+5. ~~**Doc comment storage**~~ → **RESOLVED**: `Vec<String>` per declaration. Flows into residual notes CBOR and LSP hover.
+
+6. ~~**Incremental recompilation**~~ → **RESOLVED**: Cache per source file hash. Content-addressed per-node caching tracked as future planning.
+
+---
+
+*Last updated: 2026-08-22 — path dependencies: `[dependencies.<name>]`
+packages resolve via bare-name imports (`import "math"`), dep manifests
+validated at load; proven end-to-end through resid-build. Also today:
+multi-file packages: resolve_unit merges import
+trees into a flat unit (pub-gated exports, deduped cycles/diamonds); residc and
+resid-build build through it. Also today: `resid-build` crate done (resid.toml manifest parse,
+profiles debug/release/check, build orchestration to native binary; 8 tests) and
+a soundness fix: typed binds now verify the value against the declared type
+(`Str x = 42` was silently passing typecheck and dying in codegen) via
+`bind_assignable` covering literal adoption, widening, integer arithmetic-margin
+narrowing, Dec precision rounding, nominal sums, and range binds. Previous — hardening: duplicate function definitions are
+  now rejected (`check_program` in resid-type; bootstrap typecheck.resid via
+  `first_dup_name`; fused driver carries the check) — found during the M6
+  merge where two `op_prec` tables silently resolved to the first. 512
+  tests.* Previous milestone — M6 item 4 (stage-2) done: the Resid-written
+  emitter compiles lexer/parser/typecheck/codegen/driver.resid into binaries
+  matching stage-1 output byte-for-byte; `tools/merge_driver.py` now
+  regenerates driver.resid from its two inputs; e2e
+  `stage2_emitter_compiles_bootstrap_lexer` added; 511 tests.* Previous milestone — M6c done: `examples/driver.resid` runs the full pipeline (typecheck → IR → clang → binary) from Resid via the new `process.run` provider; e2e-proven on accept+reject paths; 510 tests. Previous: M6b done — `examples/codegen.resid` (fused parse→LLVM-IR codegen in Resid) emits runnable IR proven by e2e (clang-assembled binary prints hi/big/tick×3); new `args` provider (spec §32) replaces env-var I/O — all four bootstrap tools are argv-driven (`residc <tool> run <src> [-o out]`); typecheck.resid self-checks codegen.resid; 509 tests.*
+---
+
+## 14. FUTURE WORK / ROADMAP
+
+### 14.1a Ed25519 in pure Resid — DONE (verify + deterministic sign)
+
+`lib/ed25519.resid` implements full RFC 8032 Ed25519 on Int(256)/Int(512)
+scalars: verification AND deterministic signing. `pub_key(seed)` derives the
+public key exactly (matches the RFC 8032 test-1 vector byte-for-byte);
+`sign_msg(seed, msg)` follows §5.1.6 — clamped scalar, r = SHA-512(prefix||M)
+mod L, S = (r + k·a) mod L via a 512-bit bit-fold reduction. Differential-tested against two independent RFC 8032 keypairs
+(test-1 d75a98..., test-3 fc51cd8e... both reproduced byte-for-byte),
+cross-verified against Python-produced signatures, and wrong-key
+rejection confirmed. Self-verification
+and wrong-message rejection proven by e2e `run_ed25519_sign_in_resid`;
+verification e2e is `run_ed25519_verify_in_resid`. 632 tests pass
+(e2e 76 incl. the live openssl TLS 1.3 milestone test; all
+previously-ignored wide-int property tests un-ignored).
+
+`lib/ed25519.resid`: full Ed25519 VERIFY (RFC 8032) on Int(256)/Int(512)
+scalars — field arithmetic mod 2^255-19 (overflow-safe add/sub, fe_mul via
+2^256 ~= 38 fold with pre-cast reduction, fe_inv = pow(p-2)), point
+decode/encode (x recovery via w^((p+3)/8) + sqrt(-1) adjust + parity),
+extended-coordinate dbl/add, MSB-first double-and-add scalar mult returning
+narrow byte lists (avoids wide-value return marshalling), SHA-512 -> mod-L
+via bitwise folding. Verified against a Python reference including the RFC
+8032 test-1 keypair: e2e `run_ed25519_verify_in_resid` (VALID +
+TAMPER-REJECTED). 585 tests pass.
+
+Debugging war stories (all my bugs, no compiler bugs):
+- The "minimal compiler miscompilation" was MY swapped arguments
+  (mrec(7,0,2) with acc-first signature really does return 10). The type
+  checker had even flagged it; the IR proved the compiler innocent.
+- The actual scalar-mult bug: the loop body did EITHER dbl OR add; the
+  MSB ladder needs dbl-always + conditional-add.
+- wmul base cases mixed up A-coords with R-coords after signature changes.
+- Giant decimal literals (>u128) can misbuild in some positions
+  (mask512 returned -1); construct via shifts instead: `(o << 256) - o`.
+- Byte lists are SEEDED ([0] + data): every slice/concat/b2i must offset.
+
+### 14.1 Ed25519 in pure Resid (next crypto milestone)
+
+DONE: SHA-512 is implemented in pure Resid (32-bit limb pairs, `[0, hi, lo]`
+triples) and verified against FIPS 180-4 vectors including a multi-block
+(200-byte) message — e2e `run_sha512_in_resid`. Two bugs were found during
+development, both worth remembering:
+1. `w64_shr_small` dropped the shifted high limb (`w64(0, ...)` instead of
+   `w64(hi >> n, ...)`) — found by diffing against a Python function-by-function
+   mirror of the Resid code.
+2. Shift counts >= 64 wrap mod 64 on x86 (LLVM lowers to machine shifts), so
+   `bits >> 64` silently returns `bits`. SHA-512's 16-byte length field needs
+   shifts up to 120; worked around in the library with an `shr_big` step-down
+   helper. LANGUAGE-LEVEL FIX (done): codegen now guards every integer shift —
+   counts >= bit width select a zero result instead of wrapping mod width
+   (`x >> 64 == 0`, e2e `run_shift_overflow_yields_zero`).
+
+Recommended approach for resuming:
+1. Write a Python simulator that mirrors lib/crypto.resid function-by-function
+   and diff per-word intermediates offline until the Resid code and the
+   simulator agree (the mirror already exists in fragment form and itself
+   produces correct digests when the extraction bug is fixed).
+2. Only then re-verify through residc. Consider adding a `--trace` flag or
+   comptime_print-based tracing to make future debugging tractable.
+3. Suspected contributing factor: list indexing had no bounds checks until
+   the current milestone; always build with the bounds-check codegen enabled.
+
+Asymmetric signing currently lives at the Rust tool level
+(ed25519-dalek inside `resid-build pack/verify`). Bringing it into the
+language requires, in dependency order:
+
+1. **SHA-512 in Resid** (RFC 8032 hashes with SHA-512, not SHA-256).
+   Straightforward extension of the SHA-256 pattern: 80 rounds over
+   64-bit words using `Int(64)` with explicit `& 0xFFFFFFFFFFFFFFFF`
+   masking after every add/shift (same technique as the 32-bit core).
+2. **Field arithmetic mod p = 2^255 - 19** on top of `Int(256)` /
+   `Int(512)`: LLVM arbitrary-width integers make `fe_mul` exact — a
+   256×256 multiply widens to `Int(512)` per the checker's needed-bits
+   rule, then reduce mod p via the fast reduction 2^255 ≡ 19.
+   Inversion via Fermat: a^(p-2), ~255 squarings + multiplications.
+3. **Group operations**: twisted Edwards curve in extended coordinates
+   (x, y, z, t) — point add/double formulas from RFC 8032 §5.1.4,
+   scalar multiplication by double-and-add over the 256-bit scalar.
+4. **Scalar arithmetic mod L = 2^252 + 27742317777372353535851937790883648493**
+   for signature components (barrett-style reduction or simple
+   repeated-subtract is too slow; use schoolbook mod-L via multiply by
+   precomputed reciprocal).
+5. **sign/verify per RFC 8032 §5.1.6–7**, verified against openssl CLI
+   (`openssl pkeyutl -verify -rawin`) and Python cryptography as oracles.
+
+Estimated size: 600–900 lines of Resid. Performance will be modest
+(list-rebuilt state per operation) but signatures are one-shot
+operations, so correctness matters more than speed.
+
+### 14.2 Registry distribution
+
+DONE: dependency lockfiles + local publish. `resid.lock` pins every
+registry dependency to its archive content hash — resolution verifies
+the pin (lock wins over the `.sha256` sidecar) and fails loudly on
+tampering or manifest/lock version skew; successful loads rewrite the
+lock to current truth. `resid-build publish <dir> --registry <path>
+[--key secret.hex]` drops `<name>-<version>.resid-pkg/-sha256/-sig`
+into a local registry directory (e2e `registry_lockfile_pins_content_hashes`).
+
+DONE: HTTP transport. `resid-build::registry` has a dependency-free
+HTTP/1.1 client (`[registry] url = "http://host:port"`) and a static
+server (`resid-build serve <dir> --port N`, `GET /pkg/<file>`);
+`publish` writes the canonical `<registry>/pkg/` layout. e2e
+`remote_registry_http_pull` builds through a live in-process server.
+
+DONE: signed registry indexes. `publish --key` maintains
+`pkg/index.resid-idx` (name version sha256 lines) + Ed25519 signature;
+configuring `[registry] pubkey` makes load verify the index and reject
+unlisted dependencies or tampered indexes (e2e
+`signed_registry_index_verifies_and_rejects_tampering`). TLS remains
+deliberately delegated to a reverse proxy.
+
+### 14.3 Unicode full casing
+
+`str_to_lower`/`str_to_upper` cover ASCII, Latin-1, Latin Extended-A,
+Greek and Cyrillic via algorithmic ranges. Full coverage needs the
+- **x509 foundation (in progress)**: `lib/der.resid` — pure-Resid ASN.1
+  DER TLV decoder (tag class, short/long lengths, INTEGER value decode,
+  OID → dotted string via base-128 varint arcs) verified through both
+  pipelines (e2e `run_der_parser_in_resid`).
+
+  REMAINING x509/HTTP2 ROADMAP (task breakdown, in order):
+  1. x509 TBS structure walker: Certificate → tbsCertificate → serial,
+     issuer/subject RDN sequences (OID 2.5.4.x → name strings), validity,
+     SPKI algorithm OIDs. Straightforward given der.resid.
+  2. e2e with an openssl-generated self-signed cert embedded as byte list,
+     decoded through both pipelines.
+  3. RSA PKCS#1v1.5 verify: needs bignum modexp on u16/u32 limb lists
+     (2048-bit keys exceed our Int(512) scalars; schoolbook
+     square-and-multiply). Session-sized.
+  4. ECDSA-P256 verify: curve math analogous to Ed25519 work but with
+     NIST P-256 prime/order; general point decompression not needed for
+     verification of r,s over precomputed public keys. Session-sized.
+  5. Chain validation + SAN hostname matching (builds on 2–4).
+  6. TLS transport boundary DECISION NEEDED: pure-Resid TLS = X25519 +
+     AES-GCM + HKDF key schedule (very large); pragmatic alternative =
+     `resid_tls_connect` runtime capability with protocol logic in Resid.
+     User call required before building.
+  7. HTTP/2 framing + HPACK + streams (only useful after 6).
+
+  GOTCHAS learned building der.resid (apply to all lib/*.resid):
+  - Every function in an IMPORTED file must be `pub`, including
+    same-file callees (cross-module visibility rule).
+  - Definitions must precede uses within an imported file (no forward
+    refs across the import boundary).
+  - Never pass inline arithmetic as a call argument (`pos + 1` widens
+    to Int(128)); bind a temp first.
+  - Multi-line type declarations with comments inside braces break the
+    bootstrap sig collector; keep them single-line.
+  - Trailing commas in multi-line list literals are now supported by
+    both pipelines (was a stage-2 bug, fixed).
+- **Import resolution in stage-2 (self-hosting milestone)**: the bootstrap
+  driver merges `import "x.resid";` files into the compilation (dedup +
+  depth cap). `import "http.resid"` → crypto+http+main compiles through
+  BOTH pipelines byte-identically (e2e `run_stage2_import_resolution`).
+  Fixed en route: trailing commas in list literals and the zero-arg
+  `resid_crypto_random_byte()` emitter in the bootstrap compiler.
+- **HTTP stack in pure Resid (`lib/http.resid`)**: raw TCP externs in the
+  runtime (`resid_tcp_connect/send/recv_all/close`); all protocol logic —
+  URL parsing, request building, response parsing — is Resid. HTTP/1.1
+  `Connection: close`; chunked + TLS out of scope for v1. e2e
+  `run_http_get_in_resid` against a live server.
+- [x] Unicode simple case mapping: full generated pair tables
+  (`tools/gen_case_tables.py` → `resid_rt.c`, binary-searched) covering
+  every single-codepoint mapping, exhaustively verified against
+  unicodedata — 0 mismatches across all codepoints. Multi-character
+  SpecialCasing expansions (e.g. ß → SS) remain out of scope by design
+  (simple mapping only); Turkish/Azeri locale rules likewise.
+
+### 14.4 resid-notes / resid-cache / resid-why
+
+These tools inspect the knowledge-cache and residual-notes artifacts
+(spec §37), which presuppose the compile-time reduction subsystem
+(spec §36 pure reduction relation): comptime evaluation beyond the
+current constant folding, residual tracking with provenance, CBOR
+artifact serialization. Build those first; the tools are thin viewers.
+
+- **LIVE HTTP/2 over TLS 1.3 — end-to-end request/response (roadmap
+  item 7 COMPLETE)**: `examples/h2_client.resid` negotiates ALPN h2
+  (new `tlsmsg_client_hello_alpn`), completes the full TLS 1.3
+  handshake with cert validation + CV verify, sends the h2 connection
+  preface + SETTINGS, ACKs, issues a GET on stream 1 (HPACK block:
+  indexed pseudo-headers + literal-without-indexing :authority), and
+  decodes the response HEADERS (HPACK incl. Huffman) and DATA frames,
+  printing STATUS/BODY. Verified LIVE against a real hyper-h2 server
+  (tools/h2_server.py, memory-BIO driven so the server flight flushes
+  immediately): STATUS=200, BODY decoded byte-exact. e2e
+  `run_h2_live_request_in_resid`; skips without python3/h2/openssl.
+  Bugs fixed en route: TLS record headers must carry legacy version
+  0x0301; compat CCS records consumed not aborted on; inner
+  content-type bytes stripped per record; per-epoch client app-data
+  sequence numbers (preface=0, ack=1, headers=2); response collection
+  stops at first body bytes. Compiler bugs discovered & documented:
+  passing a bare `.len()` value as an Int argument miscompiles;
+  cross-module recursive list builders can corrupt data while identical
+  main-file shapes work (lib/h2.resid concat converted to the proven
+  der_slice_acc shape); `h2_cat` silently dropped each right operand's
+  first data byte. The residc build cache does not hash import
+  contents: changing a library does NOT invalidate cached binaries.
+- **HTTP/2 framing + HPACK in pure Resid (`lib/h2.resid`) — roadmap
+  item 7 started (unblocked once pure-Resid TLS landed)**: frame header
+  decode/encode (u24 length, type/flags, 32-bit stream id with reserved
+  bit masked), SETTINGS payload build/parse, and an HPACK decoder per
+  RFC 7541: prefix integer coding (multi-byte continuation), full 61-entry
+  static table, dynamic table with incremental-indexing insertion,
+  indexed fields, all literal representations (with/without indexing,
+  never-indexed, new-name + indexed-name). Huffman string literals are
+  now DECODED (RFC 7541 Appendix B generated code/length tables +
+  bit-by-bit canonical decoder; EOS-padding rules honored, final short
+  symbols vs padding disambiguated) — round-trip verified against the
+  python `hpack` encoder on random strings. Validated against
+  RFC 7541 C.1/C.3-style vectors cross-checked with the python `hpack`
+  library; e2e `run_h2_hpack_in_resid` runs them through BOTH pipelines.
+  Bugs found building it: concat helpers must terminate at `i >= n` on
+  seeded lists (off-by-one aborts); `hp_int_cont` returned "next" past
+  the last consumed byte while all callers assume last-consumed-byte —
+  multi-byte integers silently mis-framed. Stage-2 checker gap fixed en
+  route: struct-literal int-family fields now adopt wider/narrower
+  numeric field types via int_adopt_ok (was exact-match only).
+
+### 14.5 Smaller items
+
+- `resid fmt`: carry doc comments on functions (type defs already do);
+  render behavior definitions properly instead of a placeholder.
+- Bootstrap compilers remain a frozen subset: stdlib builtins are
+  synced, but imports resolution, alias namespacing, and capability
+  policy exist only in the Rust pipeline. Syncing them is the next big
+  self-hosting milestone after Ed25519.
+- Per-scope capability narrowing covers filesystem paths at build time;
+  runtime enforcement for dynamic paths would need runtime policy
+  objects threaded through provider calls.
