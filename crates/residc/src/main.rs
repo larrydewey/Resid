@@ -99,12 +99,6 @@ fn main() -> ExitCode {
     let cache_out;
     match cmd {
         Cmd::Build | Cmd::Run => {
-            let out_guess = match cmd {
-                Cmd::Build => out.clone().unwrap_or_else(|| "a.out".to_string()),
-                Cmd::Run => temp_dir().join(format!("{}_bin", stem(&file))).to_string_lossy().into_owned(),
-                _ => String::new(),
-            };
-            cache_out = out_guess;
             // Provenance mode is part of the build identity: an encrypted
             // trailer is a different artifact than a plain one.
             let prov_encrypt = env::var("RESID_PROV_ENCRYPT").map(|v| v == "1").unwrap_or(false);
@@ -119,6 +113,16 @@ fn main() -> ExitCode {
                 &src_bytes,
                 if prov_encrypt { b"enc0" } else { b"plain" },
             ]);
+            // Run artifacts must be UNIQUE per source: parallel invocations
+            // that share a stem (every test's main.resid) would otherwise
+            // overwrite each other's binaries mid-execution.
+            let key_short: String = cache_key.chars().take(16).collect();
+            let out_guess = match cmd {
+                Cmd::Build => out.clone().unwrap_or_else(|| "a.out".to_string()),
+                Cmd::Run => temp_dir().join(format!("{}_{}", stem(&file), key_short)).to_string_lossy().into_owned(),
+                _ => String::new(),
+            };
+            cache_out = out_guess;
             let mut store = resid_cache::Store::open(Path::new(".resid-cache.cbor"));
             if let Some(cached) = store.get(&cache_key) {
                 if Path::new(cached).exists() {

@@ -3522,7 +3522,7 @@ Int main() {
 /// incl. equal-high-halves case that originally short-circuited wrongly).
 #[test]
 fn run_ecge512_wide_prop_in_resid() {
-    let dir = std::env::temp_dir().join(format!("residc-e2e-ecprop-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("residc-e2e-ecwide-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap().parent().unwrap();
@@ -4718,6 +4718,12 @@ Int main() {{
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
     let out = Command::new(&bin).output().expect("stage-2 binary");
     let stage2_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    if stage2_out.trim() != expected {
+        // preserve forensics: the suspicious binary + raw output bytes
+        let _ = std::fs::copy(&bin, "/tmp/opencode/ghost/fail_bin");
+        std::fs::write("/tmp/opencode/ghost/fail_out.raw", &out.stdout).unwrap();
+        println!("FORENSICS saved; stdout len={} expected len={}", out.stdout.len(), expected.len());
+    }
     assert_eq!(stage2_out.trim(), expected, "{stage2_out:?}");
     assert_eq!(rust_out.trim_end(), stage2_out.trim_end());
     let _ = std::fs::remove_dir_all(&dir);
