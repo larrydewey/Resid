@@ -379,8 +379,15 @@ item is DONE only when it ships in **both** pipelines (see policy).
 
 ### Suggested attack order
 
-⑥ behaviors → serialization lib (`lib/json.resid`, first third-party
-package) → ⑨ `value?` → ⑧ `pub` enforcement → ⑤ wrapping/saturating
-per width → ④ Map/Set → ③ Serialize/Hash behaviors → ① sandbox →
-② constraint types → ⑪⑫ reduction-engine depth → ⑦ runtime caps →
-⑩ caps-as-effects → ⑬ profiles → ⑭ key pinning.
+1. Behaviors (item 6), then serialization lib (`lib/json.resid`, first
+   third-party package).
+2. `value?` sugar (item 9).
+3. `pub` enforcement (item 8).
+4. Per-width wrapping/saturating (item 5).
+5. Map/Set types (item 4).
+6. Serialize/Hash behaviors (item 3).
+7. Sandbox & attenuation (item 1).
+8. Constraint types (item 2).
+9. Knowledge-graph IR + reduction depth (items 11, 12).
+10. Runtime spawn caps (item 7), caps-as-effects (item 10).
+11. Build profiles (item 13), key pinning (item 14).
