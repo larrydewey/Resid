@@ -5996,3 +5996,41 @@ Int main() {
     assert_eq!(stdout.trim(), "42\n-1\n2\n-1", "{stdout:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Visibility (spec §22): `pub` items are importable; private helpers stay
+/// module-local — callable inside their own file, rejected cross-module.
+#[test]
+fn run_pub_visibility_enforced() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-vis-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("privlib.resid"),
+        "Int secret() {\n    return 99;\n}\n\npub Int open_fn() {\n    return secret();\n}\n",
+    )
+    .unwrap();
+
+    // Legal: calling the pub export.
+    let ok = dir.join("ok.resid");
+    std::fs::write(
+        &ok,
+        "import \"privlib.resid\";\n\nInt main() {\n    println(IntToString(open_fn()));\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&ok).arg("run").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "99");
+
+    // Illegal: calling the private helper cross-module.
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        "import \"privlib.resid\";\n\nInt main() {\n    println(IntToString(secret()));\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&bad).arg("emit-ir").output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "private call must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("is not pub"), "{err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

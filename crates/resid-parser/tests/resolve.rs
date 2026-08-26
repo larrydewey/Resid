@@ -51,8 +51,9 @@ Int main() {
             _ => "?",
         })
         .collect();
-    // Imported first (post-order), root last; only pub functions cross files.
-    assert_eq!(names, vec!["add", "main"], "{names:?}");
+    // Imported first (post-order), root last. All declarations are merged
+    // (visibility is enforced at call sites, not by dropping decls).
+    assert_eq!(names, vec!["add", "hidden", "main"], "{names:?}");
 }
 
 #[test]
@@ -169,11 +170,16 @@ fn non_pub_function_not_visible() {
         "import \"u.resid\";\nInt main() { return open(); }\n",
     );
     let unit = resolve_unit(&root).expect("resolve ok");
-    let has_secret = unit
+    // Private functions stay in the merged unit (imported `pub` bodies may
+    // call them); calling them cross-module is a codegen visibility error.
+    let secret = unit
         .declarations
         .iter()
-        .any(|d| matches!(d, resid_parser::Declaration::Function(f) if f.name.0 == "secret"));
-    assert!(!has_secret, "private function leaked into merged unit");
+        .find(|d| matches!(d, resid_parser::Declaration::Function(f) if f.name.0 == "secret"));
+    assert!(secret.is_some(), "private fn missing from merged unit");
+    if let Some(resid_parser::Declaration::Function(f)) = secret {
+        assert!(!f.pub_, "secret must be non-pub");
+    }
 }
 
 #[test]
