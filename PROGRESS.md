@@ -9,9 +9,10 @@
 
 ## 0. Current Snapshot
 
-**646 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
+**651 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
 resid-codegen 137, resid-build 25, resid-fmt 5,
 resid-cache 7, resid-notes 2, resid-why 4 unit + 1 e2e,
+resid-lsp 4 unit + 1 e2e,
 resid-graph 4, residc 30 unit + 82 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
@@ -60,6 +61,12 @@ three root causes, none of them codegen (see §4).
   `Diagnostic[]` array (0-based ranges, severity Hint) so editors can
   surface residuals directly from the sidecar. e2e
   `why_reads_sidecar_and_renders_views` covers all views + error paths.
+- **`resid-lsp` shipped**: a minimal language server (JSON-RPC over
+  stdio) that surfaces `.resid-notes.cbor` sidecars to editors —
+  opening/saving a `.resid` document publishes one Hint diagnostic per
+  in-range residual found in the document's directory sidecars, and
+  hover on a residual line explains what knowledge is missing and what
+  discharges it. e2e drives the real binary over framed stdio.
 
 ### Reduction subsystem v1 (spec §21.4, §27, §34, §35)
 
@@ -303,7 +310,6 @@ residual computation emitted, notes + provenance sidecar produced).
 
 ## 6. Next Steps
 
-1. ~~Reduction/cache subsystem polish; further `why` tooling surface
-   (LSP view)~~ — done: cache stats/eviction/GC, `resid-why --json`
-   (LSP Diagnostics) + `--summary`.
-2. Wire the `why` LSP JSON into a real language server (hover/diagnostics).
+1. ~~`why` LSP view~~ — done: `resid-lsp` publishes sidecar residuals as
+   diagnostics + hover explanations over stdio JSON-RPC.
+2. Point the VS Code extension at `resid-lsp` (client wiring, packaging).
