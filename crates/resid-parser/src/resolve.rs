@@ -58,7 +58,7 @@ pub fn resolve_unit_with(
     let mut decls: Vec<Declaration> = Vec::new();
     let mut aliases = crate::alias::AliasMap::new();
     let imports: Vec<ImportDecl> = Vec::new();
-    merge_file(&path, &mut visited, &mut decls, None, true, None, &mut aliases, deps)?;
+    merge_file(&path, &mut visited, &mut decls, None, None, &mut aliases, deps)?;
     // Rewrite qualified references in the root's own declarations. Root decls
     // sit at the tail of `decls`; rewrite them in place.
     if !aliases.is_empty() {
@@ -100,7 +100,6 @@ fn load_into(
     visited: &mut HashSet<PathBuf>,
     decls: &mut Vec<Declaration>,
     select: Option<&[Id]>,
-    is_root: bool,
     alias: Option<&str>,
     aliases: &mut crate::alias::AliasMap,
     deps: &DependencyMap,
@@ -133,7 +132,6 @@ fn load_into(
             visited,
             decls,
             imp.names.as_deref(),
-            false,
             imp.alias.as_ref().map(|a| a.0.as_str()),
             aliases,
             deps,
@@ -143,17 +141,9 @@ fn load_into(
     // Collect this unit's visible declarations.
     let mut own: Vec<Declaration> = Vec::new();
     for d in unit.declarations {
-        // Non-root files only contribute exports (`pub` functions; types and
-        // behaviors are always visible).
-        if !is_root {
-            let exported = match &d {
-                Declaration::Function(f) => f.pub_,
-                Declaration::Type(_) | Declaration::Behavior(_) => true,
-            };
-            if !exported {
-                continue;
-            }
-        }
+        // Import-name selection still applies; visibility (spec §22) is
+        // enforced at call sites via FunctionSig::is_pub/file so imported
+        // `pub` bodies keep access to their own private helpers.
         if let Some(names) = select {
             let n = decl_name(&d);
             if !names.iter().any(|id| id.0 == n) {
@@ -183,12 +173,11 @@ fn merge_file(
     visited: &mut HashSet<PathBuf>,
     decls: &mut Vec<Declaration>,
     select: Option<&[Id]>,
-    is_root: bool,
     alias: Option<&str>,
     aliases: &mut crate::alias::AliasMap,
     deps: &DependencyMap,
 ) -> Result<(), ImportError> {
-    load_into(path, visited, decls, select, is_root, alias, aliases, deps)?;
+    load_into(path, visited, decls, select, alias, aliases, deps)?;
     Ok(())
 }
 

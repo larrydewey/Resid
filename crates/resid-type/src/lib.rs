@@ -375,6 +375,11 @@ pub struct FunctionSig {
     pub param_names: Vec<String>,
     pub param_defaults: Vec<Option<ExprKind>>,
     pub ret: SemType,
+    /// Visibility (spec §22): `pub` items are importable; private items
+    /// are module-local. Builtins are always public.
+    pub is_pub: bool,
+    /// Defining file (span origin); empty for builtins.
+    pub file: String,
 }
 
 /// A variable-name → type environment.
@@ -991,6 +996,8 @@ pub fn builtin_signatures() -> Signatures {
                     param_names: Vec::new(),
                     param_defaults: Vec::new(),
                     ret: ret.clone(),
+                    is_pub: true,
+                    file: String::new(),
                 },
             )
         })
@@ -1060,6 +1067,8 @@ pub fn builtin_signatures() -> Signatures {
                 param_names: Vec::new(),
                 param_defaults: Vec::new(),
                 ret,
+                is_pub: true,
+                file: String::new(),
             },
         );
     }
@@ -1099,6 +1108,8 @@ fn signature_of(f: &FuncDef, types: &Types) -> FunctionSig {
         param_names,
         param_defaults,
         ret,
+        is_pub: f.pub_,
+        file: f.span.file.clone(),
     }
 }
 
@@ -2474,6 +2485,8 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
                             param_names: vec!["value".to_string()],
                             param_defaults: vec![None],
                             ret: tgt,
+                            is_pub: true,
+                            file: String::new(),
                         });
                     }
                     return None;
@@ -2484,6 +2497,8 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
                     param_names: vec!["value".to_string()],
                     param_defaults: vec![None],
                     ret: tgt,
+                    is_pub: true,
+                    file: String::new(),
                 });
             }
         }
@@ -2651,6 +2666,8 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
                 param_names: vec!["a".into(), "b".into()],
                 param_defaults: vec![None, None],
                 ret: SemType::Numeric(NumericType::Int(IntWidth::B64)),
+                is_pub: true,
+                file: String::new(),
             },
         );
     }

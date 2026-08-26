@@ -410,6 +410,16 @@ type — Option lands first.
 10. Runtime spawn caps (item 7), caps-as-effects (item 10).
 11. Build profiles (item 13), key pinning (item 14).
 
+### Progress on item 3 — `pub` visibility: DONE (stage-1)
+
+- `FunctionSig` carries `is_pub` + defining file; resolve keeps ALL
+  declarations in the merged unit (imported `pub` bodies can still see
+  their own private helpers — the old drop-filter broke exactly that),
+  and codegen rejects cross-module calls to non-`pub` functions with a
+  precise diagnostic. e2e `run_pub_visibility_enforced`.
+- Stage-2 note: the driver has no import machinery for this yet; its
+  single-file subset is unaffected.
+
 ### Progress on item 1 — behaviors: DONE (both pipelines)
 
 **Stage-1 (Rust)**:

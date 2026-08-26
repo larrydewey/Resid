@@ -291,6 +291,8 @@ pub struct CodeGen<'ctx> {
     behaviors: resid_type::Behaviors,
     /// Trampolines already emitted (qsort comparators), by impl function.
     cmp_trampolines: std::collections::HashSet<String>,
+    /// Source file of the function currently being lowered (visibility §22).
+    cur_file: String,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -311,6 +313,7 @@ impl<'ctx> CodeGen<'ctx> {
             in_spawn_worker: false,
             behaviors: HashMap::new(),
             cmp_trampolines: std::collections::HashSet::new(),
+            cur_file: String::new(),
         }
     }
 
@@ -628,6 +631,7 @@ impl<'ctx> CodeGen<'ctx> {
         fv: FunctionValue<'ctx>,
     ) -> Result<(), String> {
         let f = self.find_func(unit, name).ok_or("?")?;
+        self.cur_file = f.span.file.clone();
         let enter_ret = resid_type::resolve_type_ctx(&f.ret, &self.types).unwrap_or(SemType::Bool);
         self.cur_ret = Some(enter_ret.clone());
         let entry = self.cx.append_basic_block(fv, "entry");
@@ -3643,6 +3647,17 @@ impl<'ctx> CodeGen<'ctx> {
         // Resolve named arguments: map each arg's name (if provided) to the
         // corresponding position in the function's param list.
         let (resolved_args, sig) = self.resolve_call_args(name, args)?;
+        // Visibility (spec §22): private functions are module-local.
+        if !sig.is_pub
+            && !sig.file.is_empty()
+            && sig.file != self.cur_file
+        {
+            return Err(format!(
+                "codegen: `{name}` is not pub and was defined in `{}`; \
+                 only `pub` items are importable",
+                sig.file
+            ));
+        }
 
         let fnv = self
             .module
@@ -3901,6 +3916,8 @@ impl<'ctx> CodeGen<'ctx> {
             param_names: Vec::new(),
             param_defaults: Vec::new(),
             ret: SemType::Bool,
+            is_pub: true,
+            file: String::new(),
         });
 
         let total_params = sig.params.len();
