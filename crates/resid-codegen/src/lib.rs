@@ -3681,13 +3681,24 @@ impl<'ctx> CodeGen<'ctx> {
         let SemType::List(elem) = list_sem.clone() else {
             return Err(format!("codegen: sort expects a List, found {list_sem}"));
         };
+        // Each Reverse(...) wrapper flips the comparator direction (spec §11).
+        let mut reverse_layers = 0usize;
+        let mut inner = behavior;
+        while let Some(rest) = inner
+            .strip_prefix("Reverse(")
+            .and_then(|r| r.strip_suffix(')'))
+        {
+            reverse_layers += 1;
+            inner = rest;
+        }
         let impl_fn = self
             .behaviors
-            .get(behavior)
+            .get(inner)
             .cloned()
-            .ok_or_else(|| format!("codegen: unknown behavior instance `{behavior}`"))?;
+            .ok_or_else(|| format!("codegen: unknown behavior instance `{inner}`"))?;
+        let negate = reverse_layers % 2 == 1;
         let boxed = self.lower_expr(sc, list_expr, None)?;
-        let tramp = self.emit_cmp_trampoline(&impl_fn, &elem)?;
+        let tramp = self.emit_cmp_trampoline(&impl_fn, &elem, negate)?;
         let ptr = self.cx.ptr_type(AddressSpace::default());
         self.decl_rt("list_sort_by", vec![ptr.into(), ptr.into()], ptr.into());
         let sorted = self.rt_call(
@@ -3700,15 +3711,21 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(Val { v: sorted, ty: list_sem.clone() })
     }
 
-    /// Emit (once per implementation function) a qsort-compatible comparator:
-    /// `i32 (i8** a, i8** b)` that unboxes two list slots and calls the
-    /// user's `(T, T) -> Int` function.
+    /// Emit (once per implementation function + direction) a qsort-compatible
+    /// comparator: `i32 (i8** a, i8** b)` that unboxes two list slots and
+    /// calls the user's `(T, T) -> Int` function. The result is normalized to
+    /// -1/0/1 before any `Reverse` negation so negation is total.
     fn emit_cmp_trampoline(
         &mut self,
         impl_fn: &str,
         elem: &SemType,
+        negate: bool,
     ) -> Result<FunctionValue<'ctx>, String> {
-        let tramp_name = format!("__cmp_{impl_fn}");
+        let tramp_name = if negate {
+            format!("__cmp_{impl_fn}_rev")
+        } else {
+            format!("__cmp_{impl_fn}")
+        };
         if let Some(f) = self.module.get_function(&tramp_name) {
             return Ok(f);
         }
@@ -3767,9 +3784,39 @@ impl<'ctx> CodeGen<'ctx> {
         };
         let r32 = self
             .builder
-            .build_int_truncate(r64i, i32t, "cmp32")
+            .build_int_truncate(r64i, i32t, "cmp64")
             .map_err(to_err)?;
-        self.builder.build_return(Some(&r32)).map_err(to_err)?;
+        // Normalize to -1/0/1 so the Reverse negation is total (no
+        // -INT_MIN wraparound), then flip if an odd Reverse layer count.
+        let zero = i32t.const_int(0, false);
+        let one = i32t.const_int(1, false);
+        let minus1 = i32t.const_int((-1i64) as u64, false);
+        let is_neg = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, r32, zero, "is_neg")
+            .map_err(to_err)?;
+        let is_pos = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, r32, zero, "is_pos")
+            .map_err(to_err)?;
+        let norm_pos = self
+            .builder
+            .build_select(is_pos, one, zero, "norm_pos")
+            .map_err(to_err)?
+            .into_int_value();
+        let norm = self
+            .builder
+            .build_select(is_neg, minus1, norm_pos, "norm")
+            .map_err(to_err)?
+            .into_int_value();
+        let out = if negate {
+            self.builder
+                .build_int_sub(zero, norm, "neg")
+                .map_err(to_err)?
+        } else {
+            norm
+        };
+        self.builder.build_return(Some(&out)).map_err(to_err)?;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }

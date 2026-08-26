@@ -2892,24 +2892,21 @@ static int rt_cmp_str_slot(const void* a, const void* b) {
     return strcmp((const char*)*(void* const*)a, (const char*)*(void* const*)b);
 }
 
-static void* rt_list_sorted_copy(void* box, int (*cmp)(const void*, const void*)) {
-    ResidVal* b = (ResidVal*)box;
+void rt_stable_sort(void** items, int64_t n, int (*cmp)(const void*, const void*));
+
+static void* rt_list_sorted_copy(void* box, int (*cmp)(const void*, const void*)) {    ResidVal* b = (ResidVal*)box;
     ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
     out->tag = b->tag;
     out->count = b->count;
     out->type = b->type;
     out->slots = b->count > 0 ? (void**)malloc((size_t)b->count * sizeof(void*)) : NULL;
     for (int64_t i = 0; i < b->count; i++) out->slots[i] = b->slots[i];
-    qsort(out->slots, (size_t)b->count, sizeof(void*), cmp);
+    rt_stable_sort(out->slots, b->count, cmp);
     return out;
 }
 
 void* list_sort_ints(void* box) {
     return rt_list_sorted_copy(box, rt_cmp_boxed_i64);
-}
-
-void* list_sort_by(void* box, int (*cmp)(const void*, const void*)) {
-    return rt_list_sorted_copy(box, cmp);
 }
 
 void* list_sort_strs(void* box) {
@@ -3106,13 +3103,55 @@ static void* bl_sorted_copy(void* box, size_t nbytes, int (*cmp)(const void*, co
     int64_t n = ((int64_t*)box)[0];
     int64_t* out = (int64_t*)malloc(8 + (size_t)n * 8);
     memcpy(out, box, 8 + (size_t)n * 8);
-    qsort((void*)(out + 1), (size_t)n, nbytes, cmp);
+    rt_stable_sort((void**)(out + 1), n, cmp);
+    return out;
+}
+
+/* Stable bottom-up mergesort over an array of n pointers. O(n log n),
+ * stable: equal keys keep their original relative order. One scratch
+ * buffer, no recursion. This is the single sort primitive for both
+ * pipelines (boxed slots and flat buffers alike). */
+void rt_stable_sort(void** items, int64_t n, int (*cmp)(const void*, const void*)) {
+    if (n < 2) return;
+    void** scratch = (void**)malloc((size_t)n * sizeof(void*));
+    void** src = items;
+    void** tmp = scratch;
+    for (int64_t width = 1; width < n; width *= 2) {
+        for (int64_t lo = 0; lo < n; lo += 2 * width) {
+            int64_t mid = lo + width < n ? lo + width : n;
+            int64_t hi = lo + 2 * width < n ? lo + 2 * width : n;
+            int64_t i = lo, j = mid, k = lo;
+            while (i < mid && j < hi) {
+                /* <= keeps the left run first: stability. */
+                if (cmp(&src[i], &src[j]) <= 0) tmp[k++] = src[i++];
+                else tmp[k++] = src[j++];
+            }
+            while (i < mid) tmp[k++] = src[i++];
+            while (j < hi) tmp[k++] = src[j++];
+        }
+        void** swap = src; src = tmp; tmp = swap;
+    }
+    if (src != items) memcpy(items, src, (size_t)n * sizeof(void*));
+    free(scratch);
+}
+
+void* list_sort_by(void* box, int (*cmp)(const void*, const void*)) {
+    ResidVal* b = (ResidVal*)box;
+    ResidVal* out = rt_list_sorted_copy(box, cmp);
+    (void)b;
     return out;
 }
 
 void* bl_sort_i64(void* box) { return bl_sorted_copy(box, 8, bl_cmp_i64); }
 void* bl_sort_str(void* box) { return bl_sorted_copy(box, 8, bl_cmp_str); }
 void* bl_sort_f64(void* box) { return bl_sorted_copy(box, 8, bl_cmp_f64); }
+
+/* Behavior-dispatched stable sort over a flat [len:i64][elem×8] buffer
+ * (stage-2 ABI). Elements are compared via cmp(&a, &b); a fresh sorted
+ * copy is returned. */
+void* bl_sort_by(void* box, int (*cmp)(const void*, const void*)) {
+    return bl_sorted_copy(box, 8, cmp);
+}
 
 int64_t bl_sum(void* box) {
     int64_t n = ((int64_t*)box)[0];

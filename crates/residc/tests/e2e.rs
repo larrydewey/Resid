@@ -5773,3 +5773,55 @@ Int main() { return 0; }
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Behaviors are compile-time knowledge visible across imports (spec §11):
+/// a library defines the comparator + instance; an importer sorts through it.
+#[test]
+fn run_behavior_import_visibility_and_reverse() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-behimp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("ordering.resid"),
+        r#"pub Int desc(Int a, Int b) {
+    return b - a;
+}
+
+Ord(Int) = desc;
+"#,
+    )
+    .unwrap();
+    let file = dir.join("usebeh.resid");
+    std::fs::write(
+        &file,
+        r#"import "ordering.resid";
+
+Int main() {
+    List(Int) xs = [4, 1, 3];
+    List(Int) up = sort(xs, using = Ord(Int));
+    println(IntToString(up[0]));
+    List(Int) down = sort(xs, using = Reverse(Ord(Int)));
+    println(IntToString(down[0]));
+    println(IntToString(down[2]));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Ord(Int) = desc sorts descending; Reverse flips it to ascending.
+    assert_eq!(stdout.trim(), "4\n1\n4", "unexpected output: {stdout:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
