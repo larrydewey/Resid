@@ -99,16 +99,25 @@ impl SemType {
 
 /// For an Option/Residual sum (`Some(T) | None`), return the payload type `T`
 /// that a `value?` / `value else` unwrap produces.
+///
+/// Two shapes qualify (spec §23):
+/// - Option-style: any sum with a unit variant — payload is the other
+///   variant's payload (`Some(T) | None`).
+/// - Result-style: exactly two variants, both with payloads — the first is
+///   success (`Ok(T)`), the second failure (`Err(E)`); `T` is returned.
 pub fn residual_payload(ty: &SemType) -> Option<SemType> {
     match ty {
         SemType::Sum { variants, .. } => {
             let has_unit = variants.iter().any(|(_, p)| p.is_none());
-            if !has_unit {
-                return None;
+            if has_unit {
+                return variants.iter().find_map(|(_, p)| p.clone());
             }
-            variants
-                .iter()
-                .find_map(|(_, p)| p.clone())
+            if variants.len() == 2 {
+                if let Some((_, Some(pt))) = variants.first() {
+                    return Some(pt.clone());
+                }
+            }
+            None
         }
         _ => None,
     }

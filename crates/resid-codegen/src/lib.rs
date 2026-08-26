@@ -1141,21 +1141,32 @@ impl<'ctx> CodeGen<'ctx> {
     /// Locate the `Some`-style payload variant (has a payload) and the unit
     /// `None`-like variant of an Option sum. Returns (payload_idx, unit_idx,
     /// payload_type).
+    /// Classify a sum for `?`/`else` unwrapping: returns
+    /// `(success_idx, failure_idx, payload_ty)`. Option-style sums (a unit
+    /// variant) and Result-style sums (`Ok(T) | Err(E)`) both qualify.
     fn option_variant_ix(ty: &SemType) -> Option<(usize, usize, SemType)> {
         let SemType::Sum { variants, .. } = ty else {
             return None;
         };
-        let payload = variants
-            .iter()
-            .enumerate()
-            .find(|(_, (_, p))| p.is_some())
-            .and_then(|(i, (_, p))| p.clone().map(|pt| (i, pt)))?;
-        let unit = variants
-            .iter()
-            .enumerate()
-            .find(|(_, (_, p))| p.is_none())
-            .map(|(i, _)| i)?;
-        Some((payload.0, unit, payload.1))
+        let unit = variants.iter().position(|(_, p)| p.is_none());
+        match unit {
+            Some(u) => {
+                let payload = variants
+                    .iter()
+                    .enumerate()
+                    .find(|(i, (_, p))| p.is_some() && *i != u)
+                    .and_then(|(i, (_, p))| p.clone().map(|pt| (i, pt)))?;
+                Some((payload.0, u, payload.1))
+            }
+            None => {
+                // Result-style: Ok(T) | Err(E).
+                if variants.len() != 2 {
+                    return None;
+                }
+                let pt = variants.first().and_then(|(_, p)| p.clone())?;
+                Some((0, 1, pt))
+            }
+        }
     }
 
     /// Lower `value?`: unwrap an Option in a value position. On the unit
@@ -1195,20 +1206,18 @@ impl<'ctx> CodeGen<'ctx> {
             .build_conditional_branch(is_unit, ret_bb, payload_bb)
             .map_err(to_err)?;
 
-        // Early return: box a None of the enclosing function's return value.
+        // Early return: hand back the failure value itself — a received
+        // `None` or `Err` box propagates unchanged to the caller.
         self.builder.position_at_end(ret_bb);
         let ret_ty = self.cur_ret.clone().unwrap_or_else(|| sv.ty.clone());
-        if let SemType::Sum { variants, .. } = &ret_ty {
-            if let Some(ni) = variants.iter().position(|(_, p)| p.is_none()) {
-                let none_val = self.build_constructor(ni as i64, &ret_ty, Vec::new())?;
-                self.builder.build_return(Some(&none_val.v)).map_err(to_err)?;
-                self.builder.position_at_end(payload_bb);
-                let slot = self.cx.i64_type().const_int(0, false);
-                return self.load_slot(sv.v, slot, &payload_ty);
-            }
+        if matches!(ret_ty, SemType::Sum { .. }) {
+            self.builder.build_return(Some(&sv.v)).map_err(to_err)?;
+            self.builder.position_at_end(payload_bb);
+            let slot = self.cx.i64_type().const_int(0, false);
+            return self.load_slot(sv.v, slot, &payload_ty);
         }
         Err(format!(
-            "codegen: `?` needs the enclosing function to return an Option"
+            "codegen: `?` needs the enclosing function to return an Option/Result"
         ))
     }
 
