@@ -158,6 +158,11 @@ fn main() -> ExitCode {
                             ExitCode::FAILURE
                         }
                     };
+                } else {
+                    // Stale hit: the artifact was deleted. Evict the entry so
+                    // the cache does not accumulate dead paths.
+                    store.remove(&cache_key);
+                    let _ = store.flush();
                 }
             }
         }
@@ -288,7 +293,8 @@ fn build_native(
     match status {
         Ok(s) if s.success() => {
             let mut store = resid_cache::Store::open(Path::new(".resid-cache.cbor"));
-            store.put(cache_key.clone(), out.clone());
+            // GC: drop entries whose artifact no longer exists.
+            store.retain(|_, v| Path::new(v).exists());
             store.put(cache_key.to_string(), out.clone());
             if let Err(e) = store.flush() {
                 eprintln!("cache flush error: {e}");
