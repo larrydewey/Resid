@@ -210,9 +210,80 @@ impl Parser {
                 })
             }
             _ => {
+                // Behavior definition: `Ord(Point) = point_cmp;`
+                // Distinguished from a function def by `Ident ( … ) =` shape.
+                if self.tokens.get(self.pos).map(|t| matches!(t.kind, TokenKind::Ident(_)))
+                    == Some(true)
+                    && self.behavior_shape_ahead()
+                {
+                    return Declaration::Behavior(self.parse_behavior(doc_comments, span));
+                }
                 // Function definition
                 Declaration::Function(self.parse_function(doc_comments, capabilities, span))
             }
+        }
+    }
+
+    /// Lookahead: does an `Ident ( ... ) =` shape start here?
+    fn behavior_shape_ahead(&self) -> bool {
+        let mut i = self.pos + 1;
+        if !self.tokens.get(i).map(|t| matches!(t.kind, TokenKind::Op(Op::LParen))).unwrap_or(false) {
+            return false;
+        }
+        let mut depth = 0usize;
+        while i < self.tokens.len() {
+            match &self.tokens[i].kind {
+                TokenKind::Op(Op::LParen) => depth += 1,
+                TokenKind::Op(Op::RParen) => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return self
+                            .tokens
+                            .get(i + 1)
+                            .map(|t| matches!(t.kind, TokenKind::Op(Op::Equals)))
+                            .unwrap_or(false);
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
+    fn parse_behavior(
+        &mut self,
+        _doc_comments: &[String],
+        span: Span,
+    ) -> BehaviorDef {
+        let name = self
+            .expect_ident("behavior: expected identifier")
+            .unwrap_or_else(|| Id("__error__".to_string()));
+        self.expect_op(Op::LParen, "behavior: expected (");
+        let mut type_params = Vec::new();
+        while !self.peek_is_op(Op::RParen) && !self.at_eof() {
+            if let Some(id) = self.expect_ident("behavior: expected type name") {
+                type_params.push(id);
+            }
+            if self.peek_is_op(Op::Comma) {
+                self.bump();
+            }
+        }
+        self.expect_op(Op::RParen, "behavior: expected )");
+        self.expect_op(Op::Equals, "behavior: expected =");
+        // The body names the implementation function (a plain identifier).
+        let body_name = self
+            .expect_ident("behavior: expected implementation function name")
+            .unwrap_or_else(|| Id("__error__".to_string()));
+        self.expect_op(Op::Semi, "behavior: expected ;");
+        BehaviorDef {
+            name,
+            type_params,
+            body: Expr {
+                kind: ExprKind::Id(body_name),
+                span: span.clone(),
+            },
+            span,
         }
     }
 
@@ -1073,9 +1144,18 @@ impl Parser {
                     if self.peek_is_ident("using") {
                         self.bump();
                         self.expect_op(Op::Equals, "using: expected =");
-                        let behavior = self
+                        let mut behavior = self
                             .expect_ident("using: expected behavior name")
                             .unwrap_or_else(|| Id("__error__".to_string()));
+                        // Optional instance parameter: `using = Ord(Point)`.
+                        if self.peek_is_op(Op::LParen) {
+                            self.bump();
+                            let arg = self
+                                .expect_ident("using: expected type argument")
+                                .unwrap_or_else(|| Id("__error__".to_string()));
+                            self.expect_op(Op::RParen, "using: expected )");
+                            behavior = Id(format!("{}({})", behavior.0, arg.0));
+                        }
                         expr = Expr {
                             kind: ExprKind::Using {
                                 value: Box::new(expr),
@@ -3476,6 +3556,60 @@ type Opt(T) = Some(T) | None;
             .collect();
         assert_eq!(exprs.len(), 1, "expected one expr statement");
         exprs[0].clone()
+    }
+
+    #[test]
+    fn parse_behavior_def_and_using_instance() {
+        let src = concat!(
+            "type Point = { x: Int, y: Int };\n",
+            "Int by_y(Point a, Point b) { return 0; }\n",
+            "Ord(Point) = by_y;\n",
+            "Int main() {\n",
+            "    List(Point) ps = [];\n",
+            "    List(Point) s = sort(ps, using = Ord(Point));\n",
+            "    return 0;\n",
+            "}\n"
+        );
+        let (unit, errs) = Parser::parse("t.resid", src);
+        assert!(errs.is_empty(), "{errs:?}");
+        let beh = unit
+            .declarations
+            .iter()
+            .find_map(|d| match d {
+                Declaration::Behavior(b) => Some(b),
+                _ => None,
+            })
+            .expect("behavior declaration parsed");
+        assert_eq!(beh.name.0, "Ord");
+        assert_eq!(beh.type_params.len(), 1);
+        assert_eq!(beh.type_params[0].0, "Point");
+        match &beh.body.kind {
+            ExprKind::Id(id) => assert_eq!(id.0, "by_y"),
+            other => panic!("body must name the impl fn, got {other:?}"),
+        }
+        // The sort call's argument is wrapped in Using with instance text.
+        let mut found_using = false;
+        for decl in &unit.declarations {
+            if let Declaration::Function(f) = decl {
+                for stmt in &f.body.statements {
+                    if let StmtKind::Bind { value, .. } = &stmt.kind {
+                        if let ExprKind::Call { func, args } = &value.kind {
+                            if matches!(&func.kind, ExprKind::Id(id) if id.0 == "sort") {
+                                assert_eq!(args.len(), 1);
+                                match &args[0].1.kind {
+                                    ExprKind::Using { behavior, .. } => {
+                                        assert_eq!(behavior.0, "Ord(Point)");
+                                        found_using = true;
+                                    }
+                                    other => panic!("arg must be Using, got {other:?}"),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(found_using, "using clause must wrap the sort argument");
     }
 
     #[test]

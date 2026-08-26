@@ -5692,3 +5692,84 @@ fn build_cache_invalidates_on_import_change() {
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::env::set_current_dir(cwd);
 }
+
+/// User-defined behavior `Ord(T) = cmp_fn;` drives `sort(xs, using = Ord(T))`
+/// through a generated qsort comparator trampoline (spec §11).
+#[test]
+fn run_behavior_ord_sort() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-beh-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("beh.resid");
+    std::fs::write(
+        &file,
+        r#"type Point = { x: Int, y: Int };
+
+Int by_y(Point a, Point b) {
+    return a.y - b.y;
+}
+
+Ord(Point) = by_y;
+
+Int cmp_int(Int a, Int b) {
+    return a - b;
+}
+
+Ord(Int) = cmp_int;
+
+Int y_of(Point p) {
+    return p.y;
+}
+
+Int main() {
+    List(Point) ps = [Point { x: 1, y: 3 }, Point { x: 2, y: 1 }, Point { x: 3, y: 2 }];
+    List(Point) sorted = sort(ps, using = Ord(Point));
+    println(IntToString(y_of(sorted[0])));
+    println(IntToString(y_of(sorted[1])));
+    println(IntToString(y_of(sorted[2])));
+
+    List(Int) xs = [5, 2, 9, 2];
+    List(Int) s = sort(xs, using = Ord(Int));
+    println(IntToString(s[0]));
+    println(IntToString(s[3]));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout.trim(), "1\n2\n3\n2\n9", "unexpected output: {stdout:?}");
+
+    // A comparator with the wrong signature must fail type checking.
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"
+Int f(Int a) { return a; }
+Ord(Int) = f;
+Int main() { return 0; }
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&bad)
+        .arg("emit-ir")
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("must have signature"), "{err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -9,14 +9,15 @@
 
 ## 0. Current Snapshot
 
-**651 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
-resid-codegen 137, resid-build 25, resid-fmt 5,
+**655 tests pass** (lexer 17, parser 92, resid-ir 46, resid-type 197,
+resid-codegen 137, resid-build 39, resid-fmt 5,
 resid-cache 7, resid-notes 2, resid-why 4 unit + 1 e2e,
 resid-lsp 4 unit + 1 e2e,
-resid-graph 4, residc 30 unit + 82 e2e incl.
+resid-graph 4, residc 30 unit + 84 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
-`build_cache_invalidates_on_import_change`).
+`build_cache_invalidates_on_import_change`,
+`run_behavior_ord_sort`).
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
 proven**. The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
@@ -391,3 +392,30 @@ item is DONE only when it ships in **both** pipelines (see policy).
 9. Knowledge-graph IR + reduction depth (items 11, 12).
 10. Runtime spawn caps (item 7), caps-as-effects (item 10).
 11. Build profiles (item 13), key pinning (item 14).
+
+### Progress on item 1 — behaviors
+
+**Stage-1 (Rust) DONE**: user-defined behavior instantiation works
+end-to-end through the Rust pipeline:
+
+- Parser: `Ord(Point) = by_y;` behavior declarations (`Ident(Param) =
+  fn;` shape) parse into `BehaviorDef`; `using = Ord(Point)` accepts a
+  parameterized instance and delivers it as a `Using` wrapper around the
+  qualified call argument.
+- Type checker: instances are collected and validated (exactly one type
+  param; impl fn must have signature `(T, T) -> Int`); `sort` requires a
+  behavior clause; element-type mismatch between instance and list is a
+  precise diagnostic.
+- Codegen: `sort(xs, using = Ord(T))` lowers to rt `list_sort_by` with a
+  synthesized qsort comparator trampoline (`__cmp_<fn>`) that unboxes
+  slots (numerics via `resid_unbox_i64/f64`, composites passed as boxed
+  pointers) and calls the user's function.
+- e2e `run_behavior_ord_sort`: struct + Int sorts produce correct order;
+  wrong-signature comparators are rejected.
+
+**Stage-2 port PENDING** (per policy above, not yet "done"): the
+bootstrap checker/emitter in `examples/typecheck.resid` +
+`examples/codegen.resid` need their own behavior branches
+(signature collection, validation, trampoline emission), regenerated
+into `driver.resid` by `tools/merge_driver.py`, plus a `bootstrap_*`
+parity test.

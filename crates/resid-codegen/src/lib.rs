@@ -287,6 +287,10 @@ pub struct CodeGen<'ctx> {
     /// True while lowering a spawn worker body: `return` boxes its value and
     /// returns a pointer instead of returning from the enclosing user fn.
     in_spawn_worker: bool,
+    /// Behavior instances: `"Ord(Point)"` -> implementation function name.
+    behaviors: resid_type::Behaviors,
+    /// Trampolines already emitted (qsort comparators), by impl function.
+    cmp_trampolines: std::collections::HashSet<String>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -305,6 +309,8 @@ impl<'ctx> CodeGen<'ctx> {
             wrap_main: false,
             spawn_ctr: 0,
             in_spawn_worker: false,
+            behaviors: HashMap::new(),
+            cmp_trampolines: std::collections::HashSet::new(),
         }
     }
 
@@ -312,6 +318,7 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn generate(&mut self, unit: &TranslationUnit) -> Result<(), String> {
         self.sigs = resid_type::collect_signatures(unit);
         self.types = resid_type::collect_types(unit);
+        self.behaviors = resid_type::collect_behaviors(unit).0;
         // A `Dec main()` returns a struct by value; wrap it so the real entry
         // point stays C-ABI compatible (see `wrap_main`).
         self.wrap_main = unit.declarations.iter().any(|d| {
@@ -1660,6 +1667,10 @@ impl<'ctx> CodeGen<'ctx> {
             }
 
             ExprKind::Call { func, args } => self.lower_call(sc, func, args),
+
+            ExprKind::Using { .. } => {
+                Err("codegen: `using` is only supported as sort's behavior argument".into())
+            }
 
             ExprKind::ListLit(elems) => self.lower_list_lit(sc, elems),
             ExprKind::StructLit { name, fields } => self.lower_struct_lit(sc, name, fields),
@@ -3607,6 +3618,19 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
 
+        // `sort(xs, using = Ord(T))` — behavior-dispatched sort (spec §11).
+        if name == "sort" {
+            if args.len() != 1 {
+                return Err("codegen: sort expects exactly one list argument".into());
+            }
+            let ExprKind::Using { value, behavior } = &args[0].1.kind else {
+                return Err(
+                    "codegen: sort requires a behavior: sort(xs, using = Ord(T))".into(),
+                );
+            };
+            return self.lower_using(sc, value, &behavior.0);
+        }
+
         // Resolve named arguments: map each arg's name (if provided) to the
         // corresponding position in the function's param list.
         let (resolved_args, sig) = self.resolve_call_args(name, args)?;
@@ -3640,6 +3664,117 @@ impl<'ctx> CodeGen<'ctx> {
             v,
             ty: sig.ret.clone(),
         })
+    }
+
+    /// Lower `sort(xs, using = Ord(T))`. The parser delivers the using
+    /// clause as a `Using` wrapper around the argument, so this receives
+    /// the unwrapped list expression plus the behavior instance text.
+    fn lower_using(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        list_expr: &Expr,
+        behavior: &str,
+    ) -> Result<Val<'ctx>, String> {
+        let list_sem =
+            resid_type::infer_expr_ctx(list_expr, &self.env(sc), &self.sigs, &self.types)
+                .map_err(|e| format!("codegen: sort argument: {}", e.message))?;
+        let SemType::List(elem) = list_sem.clone() else {
+            return Err(format!("codegen: sort expects a List, found {list_sem}"));
+        };
+        let impl_fn = self
+            .behaviors
+            .get(behavior)
+            .cloned()
+            .ok_or_else(|| format!("codegen: unknown behavior instance `{behavior}`"))?;
+        let boxed = self.lower_expr(sc, list_expr, None)?;
+        let tramp = self.emit_cmp_trampoline(&impl_fn, &elem)?;
+        let ptr = self.cx.ptr_type(AddressSpace::default());
+        self.decl_rt("list_sort_by", vec![ptr.into(), ptr.into()], ptr.into());
+        let sorted = self.rt_call(
+            "list_sort_by",
+            vec![
+                boxed.v,
+                tramp.as_global_value().as_basic_value_enum(),
+            ],
+        )?;
+        Ok(Val { v: sorted, ty: list_sem.clone() })
+    }
+
+    /// Emit (once per implementation function) a qsort-compatible comparator:
+    /// `i32 (i8** a, i8** b)` that unboxes two list slots and calls the
+    /// user's `(T, T) -> Int` function.
+    fn emit_cmp_trampoline(
+        &mut self,
+        impl_fn: &str,
+        elem: &SemType,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let tramp_name = format!("__cmp_{impl_fn}");
+        if let Some(f) = self.module.get_function(&tramp_name) {
+            return Ok(f);
+        }
+        let param_ty = self
+            .sigs
+            .get(impl_fn)
+            .and_then(|s| s.params.first())
+            .cloned()
+            .unwrap_or_else(|| elem.clone());
+        // How to obtain the parameter value from a boxed slot.
+        let unbox = match &param_ty {
+            SemType::Numeric(n) if n.is_float() => Some("resid_unbox_f64"),
+            SemType::Numeric(_) | SemType::Bool => Some("resid_unbox_i64"),
+            _ => None, // Str/composites are pointers already.
+        };
+        let ptrt = self.cx.ptr_type(AddressSpace::default());
+        let i32t = self.cx.i32_type();
+        let fty = i32t.fn_type(&[ptrt.into(), ptrt.into()], false);
+        let f = self.module.add_function(&tramp_name, fty, None);
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.cx.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        let a_slot = f.get_nth_param(0).unwrap().into_pointer_value();
+        let b_slot = f.get_nth_param(1).unwrap().into_pointer_value();
+        let elem_ll = self.llvm_type(&param_ty)?;
+        let mut llargs: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+        for slot in [a_slot, b_slot] {
+            let boxp = self
+                .builder
+                .build_load(ptrt, slot, "slot")
+                .map_err(to_err)?
+                .into_pointer_value();
+            let v = match unbox {
+                Some(rt) => self.rt_call(rt, vec![boxp.into()])?,
+                None => {
+                    // Str/composite params are already pointers.
+                    self.builder
+                        .build_bit_cast(boxp, elem_ll, "as_ptr")
+                        .map_err(to_err)?
+                }
+            };
+            llargs.push(v.into());
+        }
+        let callee = self
+            .module
+            .get_function(&self.decl_name(impl_fn))
+            .ok_or_else(|| format!("codegen: behavior function `{impl_fn}` not emitted"))?;
+        let cs = self
+            .builder
+            .build_call(callee, &llargs, "cmp")
+            .map_err(to_err)?;
+        let r64 = cs.try_as_basic_value().expect_basic("comparator result");
+        let r64i = match r64 {
+            BasicValueEnum::IntValue(i) => i,
+            other => return Err(format!("codegen: comparator returned {other}")),
+        };
+        let r32 = self
+            .builder
+            .build_int_truncate(r64i, i32t, "cmp32")
+            .map_err(to_err)?;
+        self.builder.build_return(Some(&r32)).map_err(to_err)?;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.cmp_trampolines.insert(tramp_name);
+        Ok(f)
     }
 
     /// Match a conversion-helper name (`d34`, `i32`, `u64`, `f128`) to its
