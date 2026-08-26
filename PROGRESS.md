@@ -312,4 +312,75 @@ residual computation emitted, notes + provenance sidecar produced).
 
 1. ~~`why` LSP view~~ — done: `resid-lsp` publishes sidecar residuals as
    diagnostics + hover explanations over stdio JSON-RPC.
-2. Point the VS Code extension at `resid-lsp` (client wiring, packaging).
+2. Spec-conformance roadmap (§7 below) — behaviors first.
+
+---
+
+## 7. Spec-conformance roadmap (v3.2)
+
+Audit result: the language is self-hosted and broadly functional, but
+NOT yet 100% spec-complete. This section is the curated work list; an
+item is DONE only when it ships in **both** pipelines (see policy).
+
+### Self-hosting policy (normative)
+
+- The Rust pipeline is implemented first (single implementation cost);
+  the feature is then ported into `examples/typecheck.resid` +
+  `examples/codegen.resid`, and `tools/merge_driver.py` regenerates
+  `examples/driver.resid`.
+- **Every conformance item must land with dual-pipeline e2e parity
+  tests (`bootstrap_*`) proving byte-identical output through Rust
+  residc AND the stage-2 driver before it counts as done.**
+- Stage-2 is the acceptance gate, not a side demo. Constraint: bootstrap
+  sources are compiled by the Rust pipeline, so they may only use
+  features the Rust compiler already supports — satisfied automatically
+  by Rust-first ordering.
+- Hard constraint from the audit: a feature used by the driver's own
+  sources can never precede Rust support for it.
+
+### MISSING — wholly absent
+
+1. §21/§43 Sandbox & attenuation — no `sandbox (caps) { }` blocks, no
+   transitive attenuation closure, no dynamic capability errors, no
+   handle-entry rules, no §21.4 knowledge-cache capability gating.
+2. §12 Constraint types — `type Positive = Int[value > 0]` parses but
+   constraints are never tracked or discharged.
+3. Core behaviors `Serialize`, `Allocator`, `Reverse`, generic `Hash`
+   (§12 list) — zero implementation.
+4. Map / Set types — `MapLit` parses; nothing resolves in type check or
+   codegen.
+5. Per-width `wrapping_*` / `saturating_*` — only Int64/UInt64 exist;
+   spec mandates every width.
+
+### PARTIAL — parsed or stubbed, not real
+
+6. §11 Behavior system — `BehaviorDef` + `using =` parse; type checker
+   has zero behavior logic; codegen ignores it. No user-defined
+   `Ord(Int) = ...` instantiation (`sort` is a hardcoded rt builtin).
+   **Serialization depends on this — attack order starts here.**
+7. §19 Concurrency — spawn works (pthreads), but capability lists are
+   silently discarded (no child≤parent check) and child failure is
+   stubbed "always Ok".
+8. §22 Visibility — `pub` parsed but never enforced; default-private
+   rule unimplemented.
+9. §23 `value?` sugar — parse-only; no checker/codegen handling
+   (the `else {…}` half is done).
+10. §20 Capabilities at runtime — manifest ceilings enforced at build
+    time only; capabilities don't travel with effects/handles/residuals.
+11. §3 Knowledge graph as driving IR — exists in parallel
+    (`resid-ir/graph.rs`) but production pipeline is AST→type→LLVM
+    directly; reduction is ad-hoc in codegen.
+12. §36 Reduction relation — constant folding + overflow discharge only;
+    no comptime β-reduction of pure functions, no provider substitution
+    at compile time.
+13. §35 Build profiles — debug/release/check not implemented.
+14. §28 Package key pinning — keyring directory-scanned; no
+    per-dependency pin syntax.
+
+### Suggested attack order
+
+⑥ behaviors → serialization lib (`lib/json.resid`, first third-party
+package) → ⑨ `value?` → ⑧ `pub` enforcement → ⑤ wrapping/saturating
+per width → ④ Map/Set → ③ Serialize/Hash behaviors → ① sandbox →
+② constraint types → ⑪⑫ reduction-engine depth → ⑦ runtime caps →
+⑩ caps-as-effects → ⑬ profiles → ⑭ key pinning.
