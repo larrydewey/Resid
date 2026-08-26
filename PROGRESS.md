@@ -9,11 +9,11 @@
 
 ## 0. Current Snapshot
 
-**658 tests pass** (lexer 17, parser 93, resid-ir 46, resid-type 197,
+**660 tests pass** (lexer 17, parser 93, resid-ir 46, resid-type 197,
 resid-codegen 137, resid-build 39, resid-fmt 5,
 resid-cache 7, resid-notes 2, resid-why 4 unit + 1 e2e,
 resid-lsp 4 unit + 1 e2e,
-resid-graph 4, residc 30 unit + 86 e2e incl.
+resid-graph 4, residc 30 unit + 87 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
