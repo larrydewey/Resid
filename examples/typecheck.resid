@@ -568,10 +568,80 @@ List(Str) env_add(List(Str) env, Str name, Str ty) {
 
 // ─── Function signature table ──────────────────────────────────
 
-type Funcs = { names: List(Str), pts: List(Str), rets: List(Str), stn: List(Str), stf: List(Str) };
+type Funcs = { names: List(Str), pts: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str) };
 
 Funcs funcs_empty() {
-    return Funcs { names: [], pts: [], rets: [], stn: [], stf: [] };
+    return Funcs { names: [], pts: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [] };
+}
+
+// Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
+// token. Shared with the codegen half (deduped by tools/merge_driver.py).
+type BRes = { pos: Int, name: Str, param: Str, impl: Str, err: Str };
+
+BRes behavior_decl_at(Str s, Int pos) {
+    Tok head = lex_tok(s, pos);
+    if (head.kind != "ident") {
+        return BRes { pos: pos, name: "", param: "", impl: "", err: "not ident" };
+    }
+    Tok open = lex_tok(s, head.pos);
+    if (open.text != "(") {
+        return BRes { pos: head.pos, name: "", param: "", impl: "", err: "no paren" };
+    }
+    Tok p1 = lex_tok(s, open.pos);
+    if (p1.kind != "ident") {
+        return BRes { pos: p1.pos, name: "", param: "", impl: "", err: "no param" };
+    }
+    Tok close = lex_tok(s, p1.pos);
+    if (close.text != ")") {
+        return BRes { pos: close.pos, name: "", param: "", impl: "", err: "no close" };
+    }
+    Tok eq = lex_tok(s, close.pos);
+    if (eq.text != "=") {
+        return BRes { pos: eq.pos, name: "", param: "", impl: "", err: "no equals" };
+    }
+    Tok fnt = lex_tok(s, eq.pos);
+    if (fnt.kind != "ident") {
+        return BRes { pos: fnt.pos, name: "", param: "", impl: "", err: "no impl" };
+    }
+    Tok semi = lex_tok(s, fnt.pos);
+    if (semi.text != ";") {
+        return BRes { pos: semi.pos, name: "", param: "", impl: "", err: "no semi" };
+    }
+    return BRes { pos: semi.pos, name: head.text, param: p1.text, impl: fnt.text, err: "" };
+}
+
+// Read a behavior instance reference: `Ord(Int)` or nested
+// `Reverse(Ord(Int))`. Returns the verbatim canonical text in ty.
+PRes read_instance(Str s, Int pos) {
+    Tok head = lex_tok(s, pos);
+    if (head.kind != "ident") {
+        return PRes { pos: pos, ty: "", err: "expected behavior name" };
+    }
+    Tok open = lex_tok(s, head.pos);
+    if (open.text != "(") {
+        return PRes { pos: head.pos, ty: head.text, err: "" };
+    }
+    PRes inner = read_instance(s, open.pos);
+    if (inner.err != "") { return inner; }
+    Tok close = lex_tok(s, inner.pos);
+    if (close.text != ")") {
+        return PRes { pos: close.pos, ty: "", err: "expected )" };
+    }
+    return PRes { pos: close.pos, ty: head.text + "(" + inner.ty + ")", err: "" };
+}
+
+// Index of behavior instance (head, param) in the tables; -1 when absent.
+Int b_index_at(Funcs fs, Str head, Str param, Int i) {
+    List(Str) bn = fs.bnames;
+    Int n = bn.len();
+    if (i >= n) { return -1; }
+    if (bn[i] == head && fs.bparams[i] == param) { return i; }
+    Int k = i + 1;
+    return b_index_at(fs, head, param, k);
+}
+
+Int b_index(Funcs fs, Str head, Str param) {
+    return b_index_at(fs, head, param, 0);
 }
 
 Int fn_index_at(Funcs f, Str name, Int i) {
@@ -1257,8 +1327,77 @@ ARes collect_args(Str s, Int pos, Str acc, Int count, List(Str) env, Funcs fs) {
     return ARes { pos: t.pos, tys: acc3, count: c2, err: "" };
 }
 
+// Strip leading Reverse(...) wrappers: ty=inner text, pos=layer count.
+PRes strip_reverse(Str s, Int depth) {
+    if (!str_has_prefix(s, "Reverse(")) {
+        return PRes { pos: depth, ty: s, err: "" };
+    }
+    Str inner = str_slice(s, 8, str_len(s) - 1);
+    Int d2 = depth + 1;
+    return strip_reverse(inner, d2);
+}
+
+// `sort(xs, using = Ord(T))` — validate the behavior instance against the
+// list element type and the comparator signature (spec §11).
+ERes check_sort_call(Str s, Int pos, List(Str) env, Funcs fs) {
+    ERes v = check_expr(s, pos, env, fs);
+    if (v.err != "") { return v; }
+    if (!str_has_prefix(v.ty, "List(")) {
+        return ERes { pos: v.pos, ty: "", err: "sort expects a List, found " + v.ty };
+    }
+    Str elem = str_slice(v.ty, 5, str_len(v.ty) - 1);
+    Tok comma = lex_tok(s, v.pos);
+    if (comma.text != ",") {
+        return ERes { pos: comma.pos, ty: "", err: "sort requires a behavior: sort(xs, using = Ord(T))" };
+    }
+    Tok uw = lex_tok(s, comma.pos);
+    if (uw.text != "using") {
+        return ERes { pos: uw.pos, ty: "", err: "sort requires a behavior: sort(xs, using = Ord(T))" };
+    }
+    Tok eq = lex_tok(s, uw.pos);
+    if (eq.text != "=") {
+        return ERes { pos: eq.pos, ty: "", err: "using: expected =" };
+    }
+    PRes inst = read_instance(s, eq.pos);
+    if (inst.err != "") {
+        return ERes { pos: inst.pos, ty: "", err: "using: " + inst.err };
+    }
+    Tok close = lex_tok(s, inst.pos);
+    if (close.text != ")") {
+        return ERes { pos: close.pos, ty: "", err: "expected ) after behavior instance" };
+    }
+    // Strip Reverse layers.
+    PRes stripped = strip_reverse(inst.ty, 0);
+    Str inner = stripped.ty;
+    Int op = str_find_char(inner, 40, 0);
+    if (op < 0) {
+        return ERes { pos: close.pos, ty: "", err: "behavior instance must name a type: Ord(Int)" };
+    }
+    Str head = str_slice(inner, 0, op);
+    Str param = str_slice(inner, op + 1, str_len(inner) - 1);
+    Int bi = b_index(fs, head, param);
+    if (bi < 0) {
+        return ERes { pos: close.pos, ty: "", err: "no behavior instance " + head + "(" + param + ") is defined" };
+    }
+    if (param != elem) {
+        return ERes { pos: close.pos, ty: "", err: "behavior " + head + "(" + param + ") orders " + param + ", but the list holds " + elem };
+    }
+    Int fidx = fn_index(fs, fs.bfns[bi]);
+    List(Str) ptsl = fs.pts;
+    List(Str) rtl = fs.rets;
+    Str want = param + "," + param;
+    if (fidx < 0 || ptsl[fidx] != want || rtl[fidx] != "Int") {
+        return ERes { pos: close.pos, ty: "", err: "behavior " + head + "(" + param + "): impl must have signature (" + param + ", " + param + ") -> Int" };
+    }
+    return ERes { pos: close.pos, ty: v.ty, err: "" };
+}
+
 ERes check_call(Str s, Int pos, Str name, List(Str) env, Funcs fs) {
     Tok t = lex_tok(s, pos);
+    if (name == "sort") {
+        // pos is the first argument token (callers consume the paren).
+        return check_sort_call(s, pos, env, fs);
+    }
     if (t.text == ")") {
         return finish_call(s, t.pos, name, "", 0, env, fs);
     }
@@ -1880,6 +2019,19 @@ SRes check_params(Str s, Int pos, Str fname, Str rty, List(Str) env, Funcs fs) {
     return SRes { pos: body.pos, err: "", env: env2 };
 }
 
+// A behavior's impl fn must exist with comparator signature (T, T) -> Int.
+Int validate_behavior(Funcs fs, BRes bh) {
+    Int fi = fn_index(fs, bh.impl);
+    List(Str) ptsl = fs.pts;
+    List(Str) rtl = fs.rets;
+    Str want = bh.param + "," + bh.param;
+    if (fi < 0 || ptsl[fi] != want || rtl[fi] != "Int") {
+        println("type error: behavior " + bh.name + "(" + bh.param + "): impl must have signature (" + bh.param + ", " + bh.param + ") -> Int");
+        return 1;
+    }
+    return 0;
+}
+
 DRes check_func(Str s, Int pos, Funcs fs) {
     PRes rty = parse_type(s, pos);
     if (rty.err != "") {
@@ -1961,7 +2113,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
             List(Str) sf1 = fs.stf;
             List(Str) sn2 = sn1.concat([tname.text]);
             List(Str) sf2 = sf1.concat([fstr]);
-            Funcs fsx = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: sn2, stf: sf2 };
+            Funcs fsx = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns };
             return collect_sigs_at(s, end, fsx);
         }
         return collect_sigs_at(s, end, fs);
@@ -1980,6 +2132,17 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
     }
     if (t.text == "pub" || t.kind == "ident") {
         Int pos_in = if (t.text == "pub") { t.pos } else { pos };
+        BRes bh = behavior_decl_at(s, pos_in);
+        if (bh.err == "") {
+            List(Str) bn0 = fs.bnames;
+            List(Str) bp0 = fs.bparams;
+            List(Str) bf0 = fs.bfns;
+            List(Str) bnn = bn0.concat([bh.name]);
+            List(Str) bpp = bp0.concat([bh.param]);
+            List(Str) bff = bf0.concat([bh.impl]);
+            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff };
+            return collect_sigs_at(s, bh.pos, fsb);
+        }
         PRes rty = parse_type(s, pos_in);
         if (rty.err != "") {
             return collect_sigs_at(s, rty.pos, fs);
@@ -1994,7 +2157,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
         List(Str) names2 = n1.concat([name.text]);
         List(Str) pts2 = p1.concat([pts]);
         List(Str) rets2 = r1.concat([rty.ty]);
-        Funcs fs2 = Funcs { names: names2, pts: pts2, rets: rets2, stn: fs.stn, stf: fs.stf };
+        Funcs fs2 = Funcs { names: names2, pts: pts2, rets: rets2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns };
         return collect_sigs_at(s, end, fs2);
     }
     return collect_sigs_at(s, t.pos, fs);
@@ -2045,6 +2208,13 @@ Int check_program(Str s, Int pos, Funcs fs) {
         return check_program(s, end, fs);
     }
     if (t.text == "pub") {
+        BRes bh = behavior_decl_at(s, t.pos);
+        if (bh.err == "") {
+            Int v = validate_behavior(fs, bh);
+            if (v != 0) { return 1; }
+            println("OK behavior " + bh.name);
+            return check_program(s, bh.pos, fs);
+        }
         Tok t2 = lex_tok(s, t.pos);
         if (t2.kind == "ident") {
             DRes d = check_func(s, t.pos, fs);
@@ -2061,6 +2231,13 @@ Int check_program(Str s, Int pos, Funcs fs) {
         return check_program(s, t.pos, fs);
     }
     if (t.kind == "ident") {
+        BRes bh2 = behavior_decl_at(s, pos);
+        if (bh2.err == "") {
+            Int v2 = validate_behavior(fs, bh2);
+            if (v2 != 0) { return 1; }
+            println("OK behavior " + bh2.name);
+            return check_program(s, bh2.pos, fs);
+        }
         DRes d = check_func(s, pos, fs);
         if (d.err != "") {
             println("type error: " + d.err);
