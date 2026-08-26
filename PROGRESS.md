@@ -378,6 +378,23 @@ item is DONE only when it ships in **both** pipelines (see policy).
 14. §28 Package key pinning — keyring directory-scanned; no
     per-dependency pin syntax.
 
+### Progress on item 2 — `value?` sugar
+
+**Stage-1 DONE** (commit 7fb585b): the audit's "parse-only" finding was
+wrong — checker + codegen existed for Option. Generalized to
+Result-style sums (`Ok(T) | Err(E)`): `?` propagates the received
+failure box unchanged to the caller; `else {…}` yields the success type
+(spec §23). e2e `run_question_sugar_option_and_result`.
+
+**Stage-2 BLOCKED on sum types**: the self-hosted driver has NO Option/
+Result support at all — no variant constructors, no match. Implementing
+`?` there requires first building minimal sum support in the bootstrap
+checker/emitter (hardwired Some/None/Ok/Err constructors over tagged
+boxes via resid_box_new, else-fallback and ? lowering; full `match` is
+a separate follow-up). Result constructors additionally need expected-
+type threading in the token-level checker to disambiguate the error
+type — Option lands first.
+
 ### Suggested attack order
 
 1. Behaviors (item 6), then serialization lib (`lib/json.resid`, first
