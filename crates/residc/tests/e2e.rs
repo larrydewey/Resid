@@ -5934,3 +5934,65 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `value?` and `value else {…}` sugar over Option AND Result sums
+/// (spec §23): `?` propagates the failure value out of the enclosing
+/// function; `else` supplies the success-typed fallback.
+#[test]
+fn run_question_sugar_option_and_result() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-q-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("q.resid");
+    std::fs::write(
+        &file,
+        r#"Option(Int) maybe(Int v) {
+    if (v > 0) { return Some(v); }
+    return None;
+}
+
+Option(Int) twice(Option(Int) m) {
+    Int x = m?;
+    Int d = x * 2;
+    if (d > 100) { return None; }
+    return Some(d);
+}
+
+Result(Int, Str) divide(Int a, Int b) {
+    if (b == 0) { return Err("div0"); }
+    return Ok(a / b);
+}
+
+Result(Int, Str) half(Result(Int, Str) r) {
+    Int v = r?;
+    Int d = v / 2;
+    return Ok(d);
+}
+
+Int main() {
+    Option(Int) a = twice(Some(21));
+    Int av = a else { -1 };
+    println(IntToString(av));
+    Option(Int) b = twice(None);
+    Int bv = b else { -1 };
+    println(IntToString(bv));
+    Result(Int, Str) c = half(divide(10, 2));
+    Int cv = c else { -1 };
+    println(IntToString(cv));
+    Result(Int, Str) e = half(divide(3, 0));
+    Int ev = e else { -1 };
+    println(IntToString(ev));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("residc run failed");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(stdout.trim(), "42\n-1\n2\n-1", "{stdout:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
