@@ -458,10 +458,80 @@ Tok lex_tok(Str s, Int pos) {
 
 type PRes = { pos: Int, ty: Str, err: Str };
 
-type Funcs = { names: List(Str), pts: List(Str), pns: List(Str), rets: List(Str), stn: List(Str), stf: List(Str) };
+type Funcs = { names: List(Str), pts: List(Str), pns: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str) };
 
 Funcs funcs_empty() {
-    return Funcs { names: [], pts: [], pns: [], rets: [], stn: [], stf: [] };
+    return Funcs { names: [], pts: [], pns: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [] };
+}
+
+// Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
+// token. Shared with the checker half (deduped by tools/merge_driver.py).
+type BRes = { pos: Int, name: Str, param: Str, impl: Str, err: Str };
+
+BRes behavior_decl_at(Str s, Int pos) {
+    Tok head = lex_tok(s, pos);
+    if (head.kind != "ident") {
+        return BRes { pos: pos, name: "", param: "", impl: "", err: "not ident" };
+    }
+    Tok open = lex_tok(s, head.pos);
+    if (open.text != "(") {
+        return BRes { pos: head.pos, name: "", param: "", impl: "", err: "no paren" };
+    }
+    Tok p1 = lex_tok(s, open.pos);
+    if (p1.kind != "ident") {
+        return BRes { pos: p1.pos, name: "", param: "", impl: "", err: "no param" };
+    }
+    Tok close = lex_tok(s, p1.pos);
+    if (close.text != ")") {
+        return BRes { pos: close.pos, name: "", param: "", impl: "", err: "no close" };
+    }
+    Tok eq = lex_tok(s, close.pos);
+    if (eq.text != "=") {
+        return BRes { pos: eq.pos, name: "", param: "", impl: "", err: "no equals" };
+    }
+    Tok fnt = lex_tok(s, eq.pos);
+    if (fnt.kind != "ident") {
+        return BRes { pos: fnt.pos, name: "", param: "", impl: "", err: "no impl" };
+    }
+    Tok semi = lex_tok(s, fnt.pos);
+    if (semi.text != ";") {
+        return BRes { pos: semi.pos, name: "", param: "", impl: "", err: "no semi" };
+    }
+    return BRes { pos: semi.pos, name: head.text, param: p1.text, impl: fnt.text, err: "" };
+}
+
+// Read a behavior instance reference: `Ord(Int)` or nested
+// `Reverse(Ord(Int))`. Returns the verbatim canonical text in ty.
+PRes read_instance(Str s, Int pos) {
+    Tok head = lex_tok(s, pos);
+    if (head.kind != "ident") {
+        return PRes { pos: pos, ty: "", err: "expected behavior name" };
+    }
+    Tok open = lex_tok(s, head.pos);
+    if (open.text != "(") {
+        return PRes { pos: head.pos, ty: head.text, err: "" };
+    }
+    PRes inner = read_instance(s, open.pos);
+    if (inner.err != "") { return inner; }
+    Tok close = lex_tok(s, inner.pos);
+    if (close.text != ")") {
+        return PRes { pos: close.pos, ty: "", err: "expected )" };
+    }
+    return PRes { pos: close.pos, ty: head.text + "(" + inner.ty + ")", err: "" };
+}
+
+// Index of behavior instance (head, param) in the tables; -1 when absent.
+Int b_index_at(Funcs fs, Str head, Str param, Int i) {
+    List(Str) bn = fs.bnames;
+    Int n = bn.len();
+    if (i >= n) { return -1; }
+    if (bn[i] == head && fs.bparams[i] == param) { return i; }
+    Int k = i + 1;
+    return b_index_at(fs, head, param, k);
+}
+
+Int b_index(Funcs fs, Str head, Str param) {
+    return b_index_at(fs, head, param, 0);
 }
 
 List(Str) nil_list() {
@@ -722,7 +792,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
         }
         List(Str) sn0 = fs.stn;
         List(Str) sf0 = fs.stf;
-        Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: sn0.concat([tnm.text]), stf: sf0.concat([fl.ty]) };
+        Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: sn0.concat([tnm.text]), stf: sf0.concat([fl.ty]), bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns };
         return collect_sigs_at(s, fl.pos, fs2);
     }
     if (t.text == "import") {
@@ -733,6 +803,10 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
         // The declaration starts right after `pub`; re-dispatch there.
         Tok nx = lex_tok(s, t.pos);
         if (nx.kind == "ident") {
+            BRes bh = behavior_decl_at(s, t.pos);
+            if (bh.err == "") {
+                return collect_sigs_at(s, t.pos, fs);
+            }
             PRes prty = parse_type(s, t.pos);
             if (prty.err == "") {
                 Tok nname = lex_tok(s, prty.pos);
@@ -745,8 +819,17 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
         Int endp = skip_decl(s, t.pos, 0);
         return collect_sigs_at(s, endp, fs);
     }
-    if (t.kind == "ident") {
-        PRes rty = parse_type(s, pos);
+    if (t.kind == "ident" || t.text == "pub") {
+        Int pos_in = if (t.text == "pub") { t.pos } else { pos };
+        BRes bh = behavior_decl_at(s, pos_in);
+        if (bh.err == "") {
+            List(Str) bn0 = fs.bnames;
+            List(Str) bp0 = fs.bparams;
+            List(Str) bf0 = fs.bfns;
+            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bn0.concat([bh.name]), bparams: bp0.concat([bh.param]), bfns: bf0.concat([bh.impl]) };
+            return collect_sigs_at(s, bh.pos, fsb);
+        }
+        PRes rty = parse_type(s, pos_in);
         if (rty.err == "") {
             Tok name = lex_tok(s, rty.pos);
             Tok open = lex_tok(s, name.pos);
@@ -764,7 +847,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
                 List(Str) r2 = rt1.concat([rty.ty]);
                 List(Str) sn1 = fs.stn;
                 List(Str) sf1 = fs.stf;
-                Funcs fs2 = Funcs { names: n2, pts: p2, pns: q2, rets: r2, stn: sn1, stf: sf1 };
+                Funcs fs2 = Funcs { names: n2, pts: p2, pns: q2, rets: r2, stn: sn1, stf: sf1, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns };
                 Int end = skip_body(s, open.pos);
                 return collect_sigs_at(s, end, fs2);
             }
@@ -1413,6 +1496,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             if (t.text == "list_sort_ints") {
                 return cg_extern1(s, t2.pos, "bl_sort_i64", "List(Int)", "List(Int)", env, fs, c);
             }
+            if (t.text == "sort") {
+                return cg_sort(s, t2.pos, env, fs, c);
+            }
             if (t.text == "list_sort_strs") {
                 return cg_extern1(s, t2.pos, "bl_sort_str", "List(Str)", "List(Str)", env, fs, c);
             }
@@ -1720,8 +1806,57 @@ GT cg_provider(Str s, Int pos, Str pname, List(Str) env, Funcs fs, GT c) {
     return GT { pos: cp2.pos, val: regc, ty: rty, cnt: 0, err: "", glines: a2.glines, lines: lc1, tmp: tc, lbl: a2.lbl };
 }
 
-GT cg_extern1(Str s, Int pos, Str sym, Str aty, Str rty, List(Str) env, Funcs fs, GT c) {
-    GT a = cg_expr(s, pos, env, fs, c);
+// Strip leading Reverse(...) wrappers: ty=inner text, pos=layer count.
+PRes strip_reverse(Str s, Int depth) {
+    if (!str_starts_with(s, "Reverse(")) {
+        return PRes { pos: depth, ty: s, err: "" };
+    }
+    Str inner = str_slice(s, 8, str_len(s) - 1);
+    Int d2 = depth + 1;
+    return strip_reverse(inner, d2);
+}
+
+// `sort(xs, using = Ord(T))` — behavior-dispatched stable sort (spec §11).
+GT cg_sort(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
+    GT v = cg_expr(s, pos, env, fs, c);
+    if (v.err != "") { return v; }
+    Tok comma = lex_tok(s, v.pos);
+    if (comma.text != ",") { return gt_err("sort requires a behavior: sort(xs, using = Ord(T))", c); }
+    Tok uw = lex_tok(s, comma.pos);
+    if (uw.text != "using") { return gt_err("sort requires a behavior: sort(xs, using = Ord(T))", c); }
+    Tok eq = lex_tok(s, uw.pos);
+    if (eq.text != "=") { return gt_err("using: expected =", c); }
+    PRes inst = read_instance(s, eq.pos);
+    if (inst.err != "") { return gt_err("using: " + inst.err, c); }
+    Tok close = lex_tok(s, inst.pos);
+    if (close.text != ")") { return gt_err("expected ) after behavior instance", c); }
+    // Strip Reverse layers; each odd layer flips direction.
+    // Returns ty=inner text, pos=layer depth.
+    PRes stripped = strip_reverse(inst.ty, 0);
+    Str inner = stripped.ty;
+    Int depth = stripped.pos;
+    // Split inner into head and param at the first "(".
+    Int op = str_find_char(inner, 40, 0);
+    if (op < 0) { return gt_err("behavior instance must name a type: Ord(Int)", c); }
+    Str head = str_slice(inner, 0, op);
+    Str param = str_slice(inner, op + 1, str_len(inner) - 1);
+    Int bi = b_index(fs, head, param);
+    if (bi < 0) {
+        return gt_err("no behavior instance " + head + "(" + param + ") is defined", c);
+    }
+    List(Str) bfl = fs.bfns;
+    Str f = bfl[bi];
+    Bool rev = if (depth % 2 == 1) { true } else { false };
+    Str tname = if (rev) { "__cmp_" + f + "_rev" } else { "__cmp_" + f };
+    Int t1 = v.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    Str line = reg + " = call ptr @bl_sort_by(ptr " + v.val + ", ptr @" + tname + ")";
+    List(Str) l20 = v.lines;
+    List(Str) l2 = l20.concat([line]);
+    return GT { pos: close.pos, val: reg, ty: v.ty, cnt: 0, err: "", glines: v.glines, lines: l2, tmp: t1, lbl: v.lbl };
+}
+
+GT cg_extern1(Str s, Int pos, Str sym, Str aty, Str rty, List(Str) env, Funcs fs, GT c) {    GT a = cg_expr(s, pos, env, fs, c);
     if (a.err != "") { return a; }
     Tok cp = lex_tok(s, a.pos);
     if (cp.text != ")") { return gt_err("expected ) in call to " + sym, a); }
@@ -2500,6 +2635,10 @@ PG pg_next(Str s, Int pos, Funcs fs, PG g) {
     if (t.kind == "eof") { return g; }
     if (t.text == "pub") {
         // `pub` prefixes a declaration; the decl itself starts at t.pos.
+        BRes bh = behavior_decl_at(s, t.pos);
+        if (bh.err == "") {
+            return pg_next(s, bh.pos, fs, g);
+        }
         PRes rty = parse_type(s, t.pos);
         if (rty.err == "") {
             Tok name = lex_tok(s, rty.pos);
@@ -2518,6 +2657,10 @@ PG pg_next(Str s, Int pos, Funcs fs, PG g) {
         return pg_next(s, e2, fs, g);
     }
     if (t.kind == "ident") {
+        BRes bh2 = behavior_decl_at(s, pos);
+        if (bh2.err == "") {
+            return pg_next(s, bh2.pos, fs, g);
+        }
         PRes rty = parse_type(s, pos);
         if (rty.err == "") {
             Tok name = lex_tok(s, rty.pos);
@@ -2544,6 +2687,47 @@ Str rt_itoa_def() {
 
 Str rt_lconcat_def() {
     return "define ptr @e.lconcat(ptr %a, ptr %b) {\nentry:\n  %ca = load i64, ptr %a\n  %cb = load i64, ptr %b\n  %n = add i64 %ca, %cb\n  %nb8 = mul i64 %n, 8\n  %bytes = add i64 %nb8, 8\n  %nb = call ptr @malloc(i64 %bytes)\n  store i64 %n, ptr %nb\n  br label %la\nla:\n  %i1 = phi i64 [ 0, %entry ], [ %i1n, %dopa ]\n  %c1 = icmp slt i64 %i1, %ca\n  br i1 %c1, label %dopa, label %lb\ndopa:\n  %o1m = mul i64 %i1, 8\n  %o1 = add i64 %o1m, 8\n  %pa = getelementptr i8, ptr %a, i64 %o1\n  %va = load i64, ptr %pa\n  %pbd = getelementptr i8, ptr %nb, i64 %o1\n  store i64 %va, ptr %pbd\n  %i1n = add i64 %i1, 1\n  br label %la\nlb:\n  %i2 = phi i64 [ 0, %la ], [ %i2n, %dopb ]\n  %c2 = icmp slt i64 %i2, %cb\n  br i1 %c2, label %dopb, label %done\ndopb:\n  %o2m = mul i64 %i2, 8\n  %o2a = add i64 %o2m, 8\n  %cai8 = mul i64 %ca, 8\n  %od = add i64 %o2a, %cai8\n  %pbs = getelementptr i8, ptr %b, i64 %o2a\n  %vb = load i64, ptr %pbs\n  %pdd = getelementptr i8, ptr %nb, i64 %od\n  store i64 %vb, ptr %pdd\n  %i2n = add i64 %i2, 1\n  br label %lb\ndone:\n  ret ptr %nb\n}";
+}
+
+
+// One qsort-compatible comparator trampoline per behavior impl (both
+// directions): loads two flat-buffer elements and calls the user's
+// `(T, T) -> Int` function. Output normalized to -1/0/1 before an
+// optional Reverse negation so the negation is total.
+Str cmp_def(Str f, Str ety, Bool rev) {
+    Str nm = if (rev) { "__cmp_" + f + "_rev" } else { "__cmp_" + f };
+    Str s1 = "define i32 @" + nm + "(ptr %a, ptr %b) {\nentry:\n";
+    Str s2 = s1 + "  %x = load " + ety + ", ptr %a\n  %y = load " + ety + ", ptr %b\n";
+    Str s3 = s2 + "  %r = call i64 @" + f + "(" + ety + " %x, " + ety + " %y)\n";
+    Str s4 = s3 + "  %r32 = trunc i64 %r to i32\n";
+    Str s5 = s4 + "  %isn = icmp slt i32 %r32, 0\n  %isp = icmp sgt i32 %r32, 0\n";
+    Str s6 = s5 + "  %np = select i1 %isp, i32 1, i32 0\n  %nz = select i1 %isn, i32 -1, i32 %np\n";
+    if (rev) {
+        Str s7 = s6 + "  %ng = sub i32 0, %nz\n  ret i32 %ng\n}";
+        return s7;
+    }
+    return s6 + "  ret i32 %nz\n}";
+}
+
+// Emit both comparator variants for every collected behavior instance.
+List(Str) cmp_defs_all_at(Funcs fs, List(Str) out, Int i) {
+    List(Str) bn = fs.bnames;
+    Int n = bn.len();
+    if (i >= n) { return out; }
+    Str ety = ll_ty(fs.bparams[i]);
+    List(Str) bfl = fs.bfns;
+    Str f = bfl[i];
+    List(Str) out2 = out.concat([cmp_def(f, ety, false), cmp_def(f, ety, true)]);
+    Int k = i + 1;
+    return cmp_defs_all_at(fs, out2, k);
+}
+
+List(Str) cmp_defs_all(Funcs fs) {
+    return cmp_defs_all_at(fs, nil_list(), 0);
+}
+
+List(Str) header_with_cmps(List(Str) core, Funcs fs) {
+    return core.concat(cmp_defs_all(fs));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2657,10 +2841,32 @@ List(Str) ck_env_add(List(Str) env, Str name, Str ty) {
 
 // ─── Function signature table ──────────────────────────────────
 
-type Sigs = { names: List(Str), pts: List(Str), rets: List(Str), stn: List(Str), stf: List(Str) };
+type Sigs = { names: List(Str), pts: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str) };
 
 Sigs sigs_empty() {
-    return Sigs { names: [], pts: [], rets: [], stn: [], stf: [] };
+    return Sigs { names: [], pts: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [] };
+}
+
+// Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
+// token. Shared with the codegen half (deduped by tools/merge_driver.py).
+type BRes = { pos: Int, name: Str, param: Str, impl: Str, err: Str };
+
+
+// Read a behavior instance reference: `Ord(Int)` or nested
+// `Reverse(Ord(Int))`. Returns the verbatim canonical text in ty.
+
+// Index of behavior instance (head, param) in the tables; -1 when absent.
+Int ck_b_index_at(Sigs fs, Str head, Str param, Int i) {
+    List(Str) bn = fs.bnames;
+    Int n = bn.len();
+    if (i >= n) { return -1; }
+    if (bn[i] == head && fs.bparams[i] == param) { return i; }
+    Int k = i + 1;
+    return ck_b_index_at(fs, head, param, k);
+}
+
+Int ck_b_index(Sigs fs, Str head, Str param) {
+    return ck_b_index_at(fs, head, param, 0);
 }
 
 Int ck_fn_index_at(Sigs f, Str name, Int i) {
@@ -3318,8 +3524,69 @@ ARes collect_args(Str s, Int pos, Str acc, Int count, List(Str) env, Sigs fs) {
     return ARes { pos: t.pos, tys: acc3, count: c2, err: "" };
 }
 
+// Strip leading Reverse(...) wrappers: ty=inner text, pos=layer count.
+
+// `sort(xs, using = Ord(T))` — validate the behavior instance against the
+// list element type and the comparator signature (spec §11).
+ERes check_sort_call(Str s, Int pos, List(Str) env, Sigs fs) {
+    ERes v = check_expr(s, pos, env, fs);
+    if (v.err != "") { return v; }
+    if (!str_has_prefix(v.ty, "List(")) {
+        return ERes { pos: v.pos, ty: "", err: "sort expects a List, found " + v.ty };
+    }
+    Str elem = str_slice(v.ty, 5, str_len(v.ty) - 1);
+    Tok comma = lex_tok(s, v.pos);
+    if (comma.text != ",") {
+        return ERes { pos: comma.pos, ty: "", err: "sort requires a behavior: sort(xs, using = Ord(T))" };
+    }
+    Tok uw = lex_tok(s, comma.pos);
+    if (uw.text != "using") {
+        return ERes { pos: uw.pos, ty: "", err: "sort requires a behavior: sort(xs, using = Ord(T))" };
+    }
+    Tok eq = lex_tok(s, uw.pos);
+    if (eq.text != "=") {
+        return ERes { pos: eq.pos, ty: "", err: "using: expected =" };
+    }
+    PRes inst = read_instance(s, eq.pos);
+    if (inst.err != "") {
+        return ERes { pos: inst.pos, ty: "", err: "using: " + inst.err };
+    }
+    Tok close = lex_tok(s, inst.pos);
+    if (close.text != ")") {
+        return ERes { pos: close.pos, ty: "", err: "expected ) after behavior instance" };
+    }
+    // Strip Reverse layers.
+    PRes stripped = strip_reverse(inst.ty, 0);
+    Str inner = stripped.ty;
+    Int op = str_find_char(inner, 40, 0);
+    if (op < 0) {
+        return ERes { pos: close.pos, ty: "", err: "behavior instance must name a type: Ord(Int)" };
+    }
+    Str head = str_slice(inner, 0, op);
+    Str param = str_slice(inner, op + 1, str_len(inner) - 1);
+    Int bi = ck_b_index(fs, head, param);
+    if (bi < 0) {
+        return ERes { pos: close.pos, ty: "", err: "no behavior instance " + head + "(" + param + ") is defined" };
+    }
+    if (param != elem) {
+        return ERes { pos: close.pos, ty: "", err: "behavior " + head + "(" + param + ") orders " + param + ", but the list holds " + elem };
+    }
+    Int fidx = ck_fn_index(fs, fs.bfns[bi]);
+    List(Str) ptsl = fs.pts;
+    List(Str) rtl = fs.rets;
+    Str want = param + "," + param;
+    if (fidx < 0 || ptsl[fidx] != want || rtl[fidx] != "Int") {
+        return ERes { pos: close.pos, ty: "", err: "behavior " + head + "(" + param + "): impl must have signature (" + param + ", " + param + ") -> Int" };
+    }
+    return ERes { pos: close.pos, ty: v.ty, err: "" };
+}
+
 ERes check_call(Str s, Int pos, Str name, List(Str) env, Sigs fs) {
     Tok t = lex_tok(s, pos);
+    if (name == "sort") {
+        // pos is the first argument token (callers consume the paren).
+        return check_sort_call(s, pos, env, fs);
+    }
     if (t.text == ")") {
         return finish_call(s, t.pos, name, "", 0, env, fs);
     }
@@ -3941,6 +4208,19 @@ SRes check_params(Str s, Int pos, Str fname, Str rty, List(Str) env, Sigs fs) {
     return SRes { pos: body.pos, err: "", env: env2 };
 }
 
+// A behavior's impl fn must exist with comparator signature (T, T) -> Int.
+Int validate_behavior(Sigs fs, BRes bh) {
+    Int fi = ck_fn_index(fs, bh.impl);
+    List(Str) ptsl = fs.pts;
+    List(Str) rtl = fs.rets;
+    Str want = bh.param + "," + bh.param;
+    if (fi < 0 || ptsl[fi] != want || rtl[fi] != "Int") {
+        println("type error: behavior " + bh.name + "(" + bh.param + "): impl must have signature (" + bh.param + ", " + bh.param + ") -> Int");
+        return 1;
+    }
+    return 0;
+}
+
 DRes check_func(Str s, Int pos, Sigs fs) {
     PRes rty = parse_type(s, pos);
     if (rty.err != "") {
@@ -4001,7 +4281,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs) {
             List(Str) sf1 = fs.stf;
             List(Str) sn2 = sn1.concat([tname.text]);
             List(Str) sf2 = sf1.concat([fstr]);
-            Sigs fsx = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: sn2, stf: sf2 };
+            Sigs fsx = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns };
             return ck_collect_sigs_at(s, end, fsx);
         }
         return ck_collect_sigs_at(s, end, fs);
@@ -4020,6 +4300,17 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs) {
     }
     if (t.text == "pub" || t.kind == "ident") {
         Int pos_in = if (t.text == "pub") { t.pos } else { pos };
+        BRes bh = behavior_decl_at(s, pos_in);
+        if (bh.err == "") {
+            List(Str) bn0 = fs.bnames;
+            List(Str) bp0 = fs.bparams;
+            List(Str) bf0 = fs.bfns;
+            List(Str) bnn = bn0.concat([bh.name]);
+            List(Str) bpp = bp0.concat([bh.param]);
+            List(Str) bff = bf0.concat([bh.impl]);
+            Sigs fsb = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff };
+            return ck_collect_sigs_at(s, bh.pos, fsb);
+        }
         PRes rty = parse_type(s, pos_in);
         if (rty.err != "") {
             return ck_collect_sigs_at(s, rty.pos, fs);
@@ -4034,7 +4325,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs) {
         List(Str) names2 = n1.concat([name.text]);
         List(Str) pts2 = p1.concat([pts]);
         List(Str) rets2 = r1.concat([rty.ty]);
-        Sigs fs2 = Sigs { names: names2, pts: pts2, rets: rets2, stn: fs.stn, stf: fs.stf };
+        Sigs fs2 = Sigs { names: names2, pts: pts2, rets: rets2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns };
         return ck_collect_sigs_at(s, end, fs2);
     }
     return ck_collect_sigs_at(s, t.pos, fs);
@@ -4085,6 +4376,13 @@ Int ck_check_program(Str s, Int pos, Sigs fs) {
         return ck_check_program(s, end, fs);
     }
     if (t.text == "pub") {
+        BRes bh = behavior_decl_at(s, t.pos);
+        if (bh.err == "") {
+            Int v = validate_behavior(fs, bh);
+            if (v != 0) { return 1; }
+            println("OK behavior " + bh.name);
+            return ck_check_program(s, bh.pos, fs);
+        }
         Tok t2 = lex_tok(s, t.pos);
         if (t2.kind == "ident") {
             DRes d = check_func(s, t.pos, fs);
@@ -4101,6 +4399,13 @@ Int ck_check_program(Str s, Int pos, Sigs fs) {
         return ck_check_program(s, t.pos, fs);
     }
     if (t.kind == "ident") {
+        BRes bh2 = behavior_decl_at(s, pos);
+        if (bh2.err == "") {
+            Int v2 = validate_behavior(fs, bh2);
+            if (v2 != 0) { return 1; }
+            println("OK behavior " + bh2.name);
+            return ck_check_program(s, bh2.pos, fs);
+        }
         DRes d = check_func(s, pos, fs);
         if (d.err != "") {
             println("type error: " + d.err);
@@ -4247,7 +4552,8 @@ Int main() {
     Int tc = ck_check_program(src, 0, sg);
     if (tc != 0) { return tc; }
     Funcs fs = collect_sigs(src);
-    List(Str) header = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare i64 @resid_crypto_random_byte()", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @bl_sort_i64(ptr)", "declare ptr @bl_sort_str(ptr)", "declare ptr @bl_sort_f64(ptr)", "declare ptr @bl_reverse_i64(ptr)", "declare ptr @bl_reverse_str(ptr)", "declare ptr @bl_reverse_f64(ptr)", "declare i8 @bl_contains_i64(ptr, i64)", "declare i8 @bl_contains_str(ptr, ptr)", "declare i8 @bl_contains_f64(ptr, double)", "declare i64 @bl_sum(ptr)", "declare double @bl_sumf(ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", rt_itoa_def(), rt_lconcat_def()];
+        List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare i64 @resid_crypto_random_byte()", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @bl_sort_i64(ptr)", "declare ptr @bl_sort_str(ptr)", "declare ptr @bl_sort_f64(ptr)", "declare ptr @bl_reverse_i64(ptr)", "declare ptr @bl_reverse_str(ptr)", "declare ptr @bl_reverse_f64(ptr)", "declare i8 @bl_contains_i64(ptr, i64)", "declare i8 @bl_contains_str(ptr, ptr)", "declare i8 @bl_contains_f64(ptr, double)", "declare i64 @bl_sum(ptr)", "declare double @bl_sumf(ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @bl_sort_by(ptr, ptr)", rt_itoa_def(), rt_lconcat_def()];
+    List(Str) header = header_with_cmps(hdr_core, fs);
     PG g0 = PG { pos: 0, err: "", glines: [], hlines: [], lines: header, tmp: 0, lbl: 0 };
     PG res = pg_next(src, 0, fs, g0);
     if (res.err != "") {
@@ -4270,6 +4576,20 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

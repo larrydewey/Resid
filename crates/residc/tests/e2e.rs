@@ -5825,3 +5825,112 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Dual-pipeline behavior parity (spec §11): the stage-2 driver compiles
+/// behavior-driven sorts identically to the Rust pipeline — struct sort,
+/// Int sort, and Reverse composition produce byte-equal stdout.
+#[test]
+fn bootstrap_behavior_ord_parity() {
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let dir = std::env::temp_dir().join(format!("residc-beh-parity-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("parity.resid");
+    std::fs::write(
+        &file,
+        r#"type Point = { x: Int, y: Int };
+
+Int by_y(Point a, Point b) {
+    return a.y - b.y;
+}
+
+Ord(Point) = by_y;
+
+Int cmp_int(Int a, Int b) {
+    return a - b;
+}
+
+Ord(Int) = cmp_int;
+
+Int y_of(Point p) {
+    return p.y;
+}
+
+Int main() {
+    List(Point) ps = [Point { x: 1, y: 3 }, Point { x: 2, y: 1 }, Point { x: 3, y: 2 }];
+    List(Point) sorted = sort(ps, using = Ord(Point));
+    println(IntToString(y_of(sorted[0])));
+    println(IntToString(y_of(sorted[2])));
+
+    List(Int) xs = [5, 2, 9, 2];
+    List(Int) up = sort(xs, using = Ord(Int));
+    println(IntToString(up[0]));
+    List(Int) down = sort(xs, using = Reverse(Ord(Int)));
+    println(IntToString(down[0]));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    // Stage-1: Rust pipeline.
+    let s1 = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("stage-1 residc run failed");
+    assert_eq!(s1.status.code(), Some(0), "{}", String::from_utf8_lossy(&s1.stderr));
+    let out1 = String::from_utf8_lossy(&s1.stdout).into_owned();
+
+    // Stage-2: self-hosted driver.
+    let bin = dir.join("parity_drv");
+    let s2 = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("stage-2 driver run failed");
+    assert_eq!(
+        s2.status.code(),
+        Some(0),
+        "driver failed: {}",
+        String::from_utf8_lossy(&s2.stderr)
+    );
+    let run = Command::new(&bin).output().expect("binary failed");
+    assert_eq!(run.status.code(), Some(0));
+    let out2 = String::from_utf8_lossy(&run.stdout).into_owned();
+
+    // Byte-identical program output across both compilers.
+    assert_eq!(out1.trim(), "1\n3\n2\n9");
+    assert_eq!(out1, out2, "pipeline divergence:\nstage1={out1:?}\nstage2={out2:?}");
+
+    // Rejections through the driver: wrong comparator arity/element mismatch.
+    for (name, src) in [
+        ("badsig.resid", "Int f(Int a) { return a; }\nOrd(Int) = f;\nInt main() { return 0; }\n"),
+        ("noinst.resid", "Int main() {\n    List(Int) xs = [2];\n    List(Int) s = sort(xs, using = Ord(Str));\n    return 0;\n}\n"),
+    ] {
+        let bad = dir.join(name);
+        std::fs::write(&bad, src).unwrap();
+        let out = Command::new(residc_bin())
+            .arg(workspace.join("examples/driver.resid"))
+            .arg("run")
+            .arg(&bad)
+            .arg("-rt")
+            .arg(workspace.join("crates/residc/resid_rt.c"))
+            .output()
+            .unwrap();
+        assert_ne!(out.status.code(), Some(0), "{name} should fail");
+        let out_text = String::from_utf8_lossy(&out.stdout);
+        assert!(out_text.contains("type error"), "{name}: {out_text}");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

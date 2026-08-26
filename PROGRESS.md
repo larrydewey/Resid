@@ -9,15 +9,15 @@
 
 ## 0. Current Snapshot
 
-**655 tests pass** (lexer 17, parser 92, resid-ir 46, resid-type 197,
+**658 tests pass** (lexer 17, parser 93, resid-ir 46, resid-type 197,
 resid-codegen 137, resid-build 39, resid-fmt 5,
 resid-cache 7, resid-notes 2, resid-why 4 unit + 1 e2e,
 resid-lsp 4 unit + 1 e2e,
-resid-graph 4, residc 30 unit + 84 e2e incl.
+resid-graph 4, residc 30 unit + 86 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
-`run_behavior_ord_sort`).
+`run_behavior_ord_sort`, `bootstrap_behavior_ord_parity`).
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
 proven**. The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
@@ -393,29 +393,34 @@ item is DONE only when it ships in **both** pipelines (see policy).
 10. Runtime spawn caps (item 7), caps-as-effects (item 10).
 11. Build profiles (item 13), key pinning (item 14).
 
-### Progress on item 1 — behaviors
+### Progress on item 1 — behaviors: DONE (both pipelines)
 
-**Stage-1 (Rust) DONE**: user-defined behavior instantiation works
-end-to-end through the Rust pipeline:
+**Stage-1 (Rust)**:
 
-- Parser: `Ord(Point) = by_y;` behavior declarations (`Ident(Param) =
-  fn;` shape) parse into `BehaviorDef`; `using = Ord(Point)` accepts a
-  parameterized instance and delivers it as a `Using` wrapper around the
-  qualified call argument.
-- Type checker: instances are collected and validated (exactly one type
-  param; impl fn must have signature `(T, T) -> Int`); `sort` requires a
-  behavior clause; element-type mismatch between instance and list is a
-  precise diagnostic.
-- Codegen: `sort(xs, using = Ord(T))` lowers to rt `list_sort_by` with a
-  synthesized qsort comparator trampoline (`__cmp_<fn>`) that unboxes
-  slots (numerics via `resid_unbox_i64/f64`, composites passed as boxed
-  pointers) and calls the user's function.
-- e2e `run_behavior_ord_sort`: struct + Int sorts produce correct order;
-  wrong-signature comparators are rejected.
+- Parser: `Ord(Point) = by_y;` declarations; `using = Ord(T)` and
+  arbitrarily nested `using = Reverse(Reverse(Ord(T)))` instances.
+- Type checker: instance collection + validation (impl must be
+  `(T, T) -> Int`, element-type match at sort sites); `pub behavior`
+  rejected with a clear diagnostic; instances visible across imports.
+- Codegen: `sort` lowers to rt `list_sort_by` with synthesized qsort
+  trampolines (`__cmp_<fn>[_rev]`); comparator output normalized to
+  -1/0/1 before Reverse negation (total — no -INT_MIN wraparound).
+- Runtime: single stable bottom-up mergesort primitive `rt_stable_sort`
+  backs ALL sort paths in `resid_rt.c` (behavior sorts and the
+  list_sort_* builtins alike) — O(n log n), stable, one scratch buffer.
 
-**Stage-2 port PENDING** (per policy above, not yet "done"): the
-bootstrap checker/emitter in `examples/typecheck.resid` +
-`examples/codegen.resid` need their own behavior branches
-(signature collection, validation, trampoline emission), regenerated
-into `driver.resid` by `tools/merge_driver.py`, plus a `bootstrap_*`
-parity test.
+**Stage-2 (self-hosted driver)** — parity proven by e2e
+`bootstrap_behavior_ord_parity` (byte-equal stdout through both
+pipelines for struct sort, Int sort, and Reverse):
+
+- `Funcs`/`Sigs` carry `bnames/bparams/bfns`; both collectors recognize
+  `Ord(Point) = fn;` (also under `pub`) instead of silently skipping —
+  which also fixes a latent brace-scan hazard in the emitter's decl walk.
+- Checker validates comparator signatures at declaration time and
+  instances/elem-types at sort sites; emitter emits both comparator
+  variants per impl into the header (unused defines are harmless) and
+  lowers `sort` to rt `bl_sort_by` over the flat-buffer ABI.
+- `tools/merge_driver.py`: shared helpers (`BRes`,
+  `behavior_decl_at`, `read_instance`, `strip_reverse`) deduped across
+  halves; header-construction lines (`hdr_core` + `header`) now
+  transplanted wholesale from codegen main into the driver tail.
