@@ -67,10 +67,19 @@ pub struct Entry {
 
 static SELF_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// Hit/miss counters accumulated by [`Store::get`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stats {
+    pub hits: u64,
+    pub misses: u64,
+}
+
 /// A content-addressed cache backed by a single CBOR file.
 pub struct Store {
     path: PathBuf,
     entries: HashMap<String, String>,
+    hits: std::sync::atomic::AtomicU64,
+    misses: std::sync::atomic::AtomicU64,
 }
 
 impl Store {
@@ -81,11 +90,41 @@ impl Store {
             .ok()
             .and_then(|bytes| decode_map(&bytes))
             .unwrap_or_default();
-        Store { path: path.to_path_buf(), entries }
+        Store {
+            path: path.to_path_buf(),
+            entries,
+            hits: std::sync::atomic::AtomicU64::new(0),
+            misses: std::sync::atomic::AtomicU64::new(0),
+        }
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
-        self.entries.get(key).map(String::as_str)
+        let hit = self.entries.get(key);
+        if hit.is_some() {
+            self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        hit.map(String::as_str)
+    }
+
+    /// Drop a key; returns the previously cached value if present.
+    pub fn remove(&mut self, key: &str) -> Option<String> {
+        self.entries.remove(key)
+    }
+
+    /// Keep only the entries for which `pred` returns true (e.g. prune
+    /// entries whose artifact no longer exists).
+    pub fn retain<F: FnMut(&str, &str) -> bool>(&mut self, mut pred: F) {
+        self.entries.retain(|k, v| pred(k, v));
+    }
+
+    /// Hit/miss counts observed since this Store was opened.
+    pub fn stats(&self) -> Stats {
+        Stats {
+            hits: self.hits.load(std::sync::atomic::Ordering::Relaxed),
+            misses: self.misses.load(std::sync::atomic::Ordering::Relaxed),
+        }
     }
 
     pub fn put(&mut self, key: impl Into<String>, value: impl Into<String>) {
@@ -248,6 +287,53 @@ mod tests {
         let c = hash_inputs(&[b"hell", b"o"]);
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn remove_drops_key() {
+        let dir = std::env::temp_dir().join(format!("resid-cache-rm-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(".resid-cache.cbor");
+        let mut st = Store::open(&path);
+        st.put("gone", "v");
+        assert_eq!(st.remove("gone").as_deref(), Some("v"));
+        assert_eq!(st.remove("gone"), None);
+        st.flush().unwrap();
+        assert!(Store::open(&path).get("gone").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn retain_prunes_stale_artifacts() {
+        let dir = std::env::temp_dir().join(format!("resid-cache-gc-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let live = dir.join("live_bin");
+        std::fs::write(&live, b"elf").unwrap();
+        let path = dir.join(".resid-cache.cbor");
+        let mut st = Store::open(&path);
+        st.put("k-live", live.to_str().unwrap());
+        st.put("k-stale", dir.join("missing_bin").to_str().unwrap());
+        st.retain(|_, v| Path::new(v).exists());
+        assert_eq!(st.len(), 1);
+        assert!(st.get("k-live").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stats_count_hits_and_misses() {
+        let dir = std::env::temp_dir().join(format!("resid-cache-st-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(".resid-cache.cbor");
+        let mut st = Store::open(&path);
+        st.put("k", "v");
+        let _ = st.get("k");
+        let _ = st.get("k");
+        let _ = st.get("nope");
+        let s = st.stats();
+        assert_eq!((s.hits, s.misses), (2, 1));
+        // Stats reset on reopen (they describe this process's session).
+        assert_eq!((Store::open(&path).stats().hits, Store::open(&path).stats().misses), (0, 0));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

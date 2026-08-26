@@ -9,9 +9,10 @@
 
 ## 0. Current Snapshot
 
-**638 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
-resid-codegen 137, resid-build 16, resid-fmt 5, resid-why 2,
-residc 30 unit + 82 e2e incl.
+**646 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
+resid-codegen 137, resid-build 25, resid-fmt 5,
+resid-cache 7, resid-notes 2, resid-why 4 unit + 1 e2e,
+resid-graph 4, residc 30 unit + 82 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`).
@@ -54,12 +55,20 @@ three root causes, none of them codegen (see §4).
 - **`resid why` shipped**: `tools/resid-why` reads a binary's
   `.resid-notes.cbor` sidecar and explains every residual — what kind
   of knowledge is missing, where, and what discharges it — with
-  symbol/kind filters (`resid-why <artifact> [symbol] [--kind K]`).
+  symbol/kind filters (`resid-why <artifact> [symbol] [--kind K]`),
+  a `--summary` per-kind count view, and `--json` emitting an LSP
+  `Diagnostic[]` array (0-based ranges, severity Hint) so editors can
+  surface residuals directly from the sidecar. e2e
+  `why_reads_sidecar_and_renders_views` covers all views + error paths.
 
 ### Reduction subsystem v1 (spec §21.4, §27, §34, §35)
 
 - `resid-cache`: content-hash keyed CBOR store; unchanged sources skip
   recompilation. Per-pid temp files + fsync-before-rename (race fixed).
+  Polish: hit/miss stats (`Store::stats`), stale-entry eviction (a cache
+  hit pointing at a deleted artifact is removed and flushed), GC on
+  build (`retain` prunes entries whose artifact vanished),
+  `Store::remove`. residc no longer double-inserts the cache key.
 - `resid-notes`: `<artifact>.resid-notes.cbor` records rt bindings and
   provider calls; every build reports discharged knowledge on stderr
   (`reduction: discharged ...`) by comparing the prior notes against the
@@ -294,5 +303,7 @@ residual computation emitted, notes + provenance sidecar produced).
 
 ## 6. Next Steps
 
-1. Reduction/cache subsystem polish; further `why` tooling surface
-   (LSP view).
+1. ~~Reduction/cache subsystem polish; further `why` tooling surface
+   (LSP view)~~ — done: cache stats/eviction/GC, `resid-why --json`
+   (LSP Diagnostics) + `--summary`.
+2. Wire the `why` LSP JSON into a real language server (hover/diagnostics).
