@@ -5631,3 +5631,64 @@ fn run_h2_post_and_continuation_in_resid() {
             "continuation body missing ({stdout:?})");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The build cache key must include the contents of every transitively
+/// imported local file: editing a library invalidates cached binaries.
+/// This was a real footgun — library edits silently produced stale runs.
+#[test]
+fn build_cache_invalidates_on_import_change() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-cacheimp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // Isolate from the workspace cache file.
+    let cwd = std::env::current_dir().unwrap();
+    std::fs::write(dir.join("libx.resid"), "pub Int val() {\n    return 1;\n}\n").unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        "import \"libx.resid\";\n\nInt main() {\n    println(\"v=\" + IntToString(val()));\n    return 0;\n}\n",
+    )
+    .unwrap();
+
+    let run = |assert_stderr_no_hit: bool| {
+        let out = Command::new(residc_bin())
+            .arg(&file).arg("run")
+            .current_dir(&dir)
+            .output()
+            .expect("run failed");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(out.status.code(), Some(0), "{stdout} {stderr}");
+        if assert_stderr_no_hit {
+            assert!(!stderr.contains("cache: hit"), "stale cache hit! {stderr}");
+        }
+        stdout.trim().to_string()
+    };
+
+    let first = run(false);
+    assert_eq!(first, "v=1");
+
+    // Second unchanged run may hit the cache — fine either way.
+    let _ = run(false);
+
+    // Edit the LIBRARY: the next run must NOT serve the stale binary.
+    std::fs::write(dir.join("libx.resid"), "pub Int val() {\n    return 7;\n}\n").unwrap();
+    let third = run(true);
+    assert_eq!(third, "v=7");
+
+    // Transitive imports are covered too: main -> mid -> leaf.
+    std::fs::write(dir.join("leaf.resid"), "pub Int leaf() {\n    return 10;\n}\n").unwrap();
+    std::fs::write(dir.join("mid.resid"), "import \"leaf.resid\";\n\npub Int mid() {\n    return leaf();\n}\n").unwrap();
+    std::fs::write(
+        &file,
+        "import \"mid.resid\";\n\nInt main() {\n    println(\"v=\" + IntToString(mid()));\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let t1 = run(false);
+    assert_eq!(t1, "v=10");
+    std::fs::write(dir.join("leaf.resid"), "pub Int leaf() {\n    return 20;\n}\n").unwrap();
+    let t2 = run(true);
+    assert_eq!(t2, "v=20");
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::env::set_current_dir(cwd);
+}

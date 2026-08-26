@@ -9,11 +9,12 @@
 
 ## 0. Current Snapshot
 
-**637 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
+**638 tests pass** (lexer 17, parser 91, resid-ir 46, resid-type 195,
 resid-codegen 137, resid-build 16, resid-fmt 5, resid-why 2,
-residc 30 unit + 81 e2e incl.
+residc 30 unit + 82 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
-`run_h2_post_and_continuation_in_resid`).
+`run_h2_post_and_continuation_in_resid`,
+`build_cache_invalidates_on_import_change`).
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
 proven**. The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
@@ -201,6 +202,15 @@ Compiler bugs discovered & documented:
   plus the real h2_cat off-by-one (copy from index 2 instead of 1), a
   Resid-source bug fixed in the same commit. No codegen change needed;
   regression suite now pins both shapes.
+- **Build cache now hashes import contents**: the residc cache key
+  covers every transitively imported local `.resid` file (key bumped
+  to `residc-v2`), so editing a library invalidates cached binaries —
+  previously library edits silently produced stale runs. e2e
+  `build_cache_invalidates_on_import_change` pins direct and
+  transitive invalidation. Registry dependencies remain pinned via
+  their lockfile content hashes.
+
+---
 - The residc build cache does not hash import contents: changing a
   library does NOT invalidate cached binaries (touch the main source to
   force rebuilds). This silently cost several debugging rounds.

@@ -11,7 +11,7 @@
 
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[cfg(unix)]
@@ -108,11 +108,18 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             let src_bytes = fs::read(&file).unwrap_or_default();
-            cache_key = resid_cache::hash_inputs(&[
-                b"residc-v1",
-                &src_bytes,
-                if prov_encrypt { b"enc0" } else { b"plain" },
-            ]);
+            // The cache key must cover every transitively imported local
+            // file: changing a library has to invalidate cached binaries.
+            let mut import_parts: Vec<Vec<u8>> = Vec::new();
+            collect_import_contents(Path::new(&file), &mut import_parts, &mut Vec::new());
+            let mut parts: Vec<Vec<u8>> = vec![
+                b"residc-v2".to_vec(),
+                src_bytes,
+                if prov_encrypt { b"enc0".to_vec() } else { b"plain".to_vec() },
+            ];
+            parts.extend(import_parts);
+            let part_refs: Vec<&[u8]> = parts.iter().map(|v| v.as_slice()).collect();
+            cache_key = resid_cache::hash_inputs(&part_refs);
             // Run artifacts must be UNIQUE per source: parallel invocations
             // that share a stem (every test's main.resid) would otherwise
             // overwrite each other's binaries mid-execution.
@@ -432,6 +439,51 @@ fn stem(file: &str) -> String {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "resid".to_string())
+}
+
+/// Collect the contents of every transitively imported local file, in
+/// deterministic (sorted-path) order, for the cache key. Imports are
+/// top-level `import "<path>";` statements resolved relative to the
+/// importing file — the same rule as the parser. Registry dependencies
+/// (`import "pkgname";`) are covered by their own lockfile pinning.
+fn collect_import_contents(file: &Path, out: &mut Vec<Vec<u8>>, visited: &mut Vec<std::path::PathBuf>) {
+    let canonical = match file.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    if visited.contains(&canonical) {
+        return;
+    }
+    visited.push(canonical);
+    let bytes = match fs::read(file) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    out.push(bytes.clone());
+    let base = match file.parent() {
+        Some(p) => p.to_path_buf(),
+        None => return,
+    };
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let mut imports: Vec<std::path::PathBuf> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim_start();
+        let Some(rest) = t.strip_prefix("import ") else { continue };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('"') else { continue };
+        let Some(end) = rest.find('"') else { continue };
+        let path_str = &rest[..end];
+        // Only local relative paths; bare names are registry packages.
+        if !path_str.ends_with(".resid") {
+            continue;
+        }
+        imports.push(base.join(path_str));
+    }
+    imports.sort();
+    imports.dedup();
+    for imp in imports {
+        collect_import_contents(&imp, out, visited);
+    }
 }
 
 /// Record residual facts (spec §27/§34) for `file` next to its artifact:
