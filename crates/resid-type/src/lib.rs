@@ -118,6 +118,115 @@ pub fn residual_payload(ty: &SemType) -> Option<SemType> {
 /// `Type::Base` references and variant constructors.
 pub type Types = HashMap<String, SemType>;
 
+/// Behavior instances declared in a unit, keyed by instance text
+/// (`"Ord(Point)"`) with the implementation function name as value.
+pub type Behaviors = HashMap<String, String>;
+
+/// Collect behavior definitions (`Ord(Point) = point_cmp;`). Returns
+/// `(instances, errors)`: instances maps the instance key to the
+/// implementation function; errors describe malformed definitions.
+pub fn collect_behaviors(unit: &TranslationUnit) -> (Behaviors, Vec<TypeError>) {
+    let mut out = Behaviors::new();
+    let mut errs = Vec::new();
+    for decl in &unit.declarations {
+        let Declaration::Behavior(b) = decl else { continue };
+        let key = if b.type_params.len() == 1 {
+            format!("{}({})", b.name.0, b.type_params[0].0)
+        } else {
+            errs.push(err(
+                &b.span,
+                format!(
+                    "behavior `{}`: exactly one type parameter is required",
+                    b.name.0
+                ),
+            ));
+            continue;
+        };
+        let func = match &b.body.kind {
+            ExprKind::Id(id) => id.0.clone(),
+            _ => {
+                errs.push(err(
+                    &b.span,
+                    "behavior body must name an implementation function",
+                ));
+                continue;
+            }
+        };
+        if out.insert(key.clone(), func).is_some() {
+            errs.push(err(
+                &b.span,
+                format!("behavior instance `{key}` is already defined"),
+            ));
+        }
+    }
+    (out, errs)
+}
+
+/// Validate that each behavior instance's implementation function exists and
+/// has comparator shape `(T, T) -> Int`.
+pub fn check_behaviors(
+    unit: &TranslationUnit,
+    sigs: &Signatures,
+    types: &Types,
+    behaviors: &Behaviors,
+) -> Vec<TypeError> {
+    let mut errs = Vec::new();
+    for decl in &unit.declarations {
+        let Declaration::Behavior(b) = decl else { continue };
+        if b.type_params.len() != 1 || !matches!(b.body.kind, ExprKind::Id(_)) {
+            continue; // already reported by collect_behaviors
+        }
+        let key = format!("{}({})", b.name.0, b.type_params[0].0);
+        let Some(func) = behaviors.get(&key) else { continue };
+        let Some(sig) = sigs.get(func) else {
+            errs.push(err(
+                &b.span,
+                format!("behavior `{key}`: undefined function `{func}`"),
+            ));
+            continue;
+        };
+        let param_ty = resolve_type_ctx(
+            &Type::Base {
+                name: b.type_params[0].clone(),
+                params: None,
+            },
+            types,
+        )
+        .unwrap_or_else(|| SemType::Numeric(NumericType::Int(IntWidth::B64)));
+        let want = vec![param_ty.clone(), param_ty];
+        if sig.params != want {
+            errs.push(err(
+                &b.span,
+                format!(
+                    "behavior `{key}`: `{func}` must have signature ({T}, {T}) -> Int, found {}",
+                    FormatSig(&sig),
+                    T = b.type_params[0].0,
+                ),
+            ));
+        } else if sig.ret != SemType::Numeric(NumericType::Int(IntWidth::B64)) {
+            errs.push(err(
+                &b.span,
+                format!("behavior `{key}`: `{func}` must return Int"),
+            ));
+        }
+    }
+    errs
+}
+
+struct FormatSig<'a>(&'a FunctionSig);
+impl std::fmt::Display for FormatSig<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(")?;
+        for (i, p) in self.0.params.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{p}")?;
+        }
+        write!(f, ") -> {}", self.0.ret)
+    }
+}
+
 /// Collect the named product/sum types declared in a translation unit.
 pub fn collect_types(unit: &TranslationUnit) -> Types {
     let mut types = Types::new();
@@ -1137,6 +1246,10 @@ pub fn infer_expr_ctx(
 
         ExprKind::Call { func, args } => infer_call(func, args, env, sigs, types, &expr.span),
 
+        ExprKind::Using { value, behavior } => {
+            infer_using(value, behavior, env, sigs, types, &expr.span)
+        }
+
         ExprKind::Match {
             scrutinee,
             arms,
@@ -1967,6 +2080,48 @@ fn block_ret(
     Ok(SemType::Bool)
 }
 
+/// A `using = Ord(T)` clause parses as `Using { value, behavior }` wrapping
+/// the qualified argument. Validate the behavior instance against the
+/// element type and return the wrapped value's own type.
+fn infer_using(
+    value: &Expr,
+    behavior: &Id,
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+    span: &Span,
+) -> Result<SemType, TypeError> {
+    let ty = infer_expr_ctx(value, env, sigs, types)?;
+    let elem = match &ty {
+        SemType::List(e) => *e.clone(),
+        other => {
+            return Err(err(
+                span,
+                format!("`using` qualifies a List argument, found {other}"),
+            ))
+        }
+    };
+    let key = format!("behavior::{}", behavior.0);
+    let Some(sig) = sigs.get(&key) else {
+        return Err(err(
+            span,
+            format!("no behavior instance `{}` is defined", behavior.0),
+        ));
+    };
+    if sig.params.first() != Some(&elem) {
+        return Err(err(
+            span,
+            format!(
+                "behavior `{}` orders {}, but the list holds {}",
+                behavior.0,
+                sig.params.first().map(|t| t.to_string()).unwrap_or_default(),
+                elem
+            ),
+        ));
+    }
+    Ok(ty)
+}
+
 fn infer_call(
     callee: &Expr,
     args: &[(Option<Id>, Expr)],
@@ -2014,6 +2169,20 @@ fn infer_call(
                 }
             }
         }
+    }
+    // `sort(xs, using = Ord(T))` — no fixed signature; the element type and
+    // behavior instance are validated by the Using arm on the argument.
+    if name == "sort" {
+        if args.len() != 1 {
+            return Err(err(span, "sort expects exactly one list argument"));
+        }
+        if !matches!(args[0].1.kind, ExprKind::Using { .. }) {
+            return Err(err(
+                span,
+                "sort requires a behavior: sort(xs, using = Ord(T))",
+            ));
+        }
+        return infer_expr_ctx(&args[0].1, env, sigs, types);
     }
     let sig = best_overload(
         &args
@@ -2436,8 +2605,34 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
 /// Returns a list of errors (empty = all passed).
 pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
     let types = collect_types(unit);
-    let sigs = collect_signatures(unit);
+    let mut sigs = collect_signatures(unit);
+    // Behavior instances become pseudo-signatures keyed `behavior::<Inst>`
+    // so expression inference can resolve `using = Ord(Point)` without
+    // threading a behaviors map through every infer_* function.
+    let (behaviors, mut behavior_errs) = collect_behaviors(unit);
+    for (key, func) in &behaviors {
+        let param_name = key
+            .split_once('(')
+            .and_then(|(_, rest)| rest.strip_suffix(')'))
+            .unwrap_or("");
+        let param_ty = types
+            .get(param_name)
+            .cloned()
+            .unwrap_or(SemType::Numeric(NumericType::Int(IntWidth::B64)));
+        sigs.insert(
+            format!("behavior::{key}"),
+            FunctionSig {
+                name: func.clone(),
+                params: vec![param_ty.clone(), param_ty],
+                param_names: vec!["a".into(), "b".into()],
+                param_defaults: vec![None, None],
+                ret: SemType::Numeric(NumericType::Int(IntWidth::B64)),
+            },
+        );
+    }
     let mut errs = Vec::new();
+    errs.append(&mut behavior_errs);
+    errs.extend(check_behaviors(unit, &sigs, &types, &behaviors));
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for decl in &unit.declarations {
         if let Declaration::Function(f) = decl {
@@ -3310,6 +3505,91 @@ Int add(Int a, Int b) {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    fn parse_unit(src: &str) -> resid_parser::TranslationUnit {
+        let (unit, errs) = resid_parser::Parser::parse("beh.resid", src);
+        assert!(errs.is_empty(), "parse errors: {errs:?}");
+        unit
+    }
+
+    #[test]
+    fn behavior_ord_sort_accepts_and_rejects() {
+        let ok = parse_unit(
+            r#"
+Int cmp(Int a, Int b) { return a - b; }
+Ord(Int) = cmp;
+Int main() {
+    List(Int) xs = [2, 1];
+    List(Int) s = sort(xs, using = Ord(Int));
+    return 0;
+}
+"#,
+        );
+        assert!(check_program(&ok).is_empty());
+
+        // Wrong comparator signature.
+        let bad_sig = parse_unit(
+            r#"
+Int f(Int a) { return a; }
+Ord(Int) = f;
+Int main() { return 0; }
+"#,
+        );
+        let errs = check_program(&bad_sig);
+        assert!(
+            errs.iter().any(|e| e.message.contains("must have signature")),
+            "{errs:?}"
+        );
+
+        // Undefined implementation function.
+        let missing = parse_unit(
+            r#"
+Ord(Int) = nope;
+Int main() { return 0; }
+"#,
+        );
+        let errs = check_program(&missing);
+        assert!(
+            errs.iter().any(|e| e.message.contains("undefined function")),
+            "{errs:?}"
+        );
+
+        // Element type mismatch between instance and list.
+        let mismatch = parse_unit(
+            r#"
+Int cmp(Int a, Int b) { return a - b; }
+Ord(Int) = cmp;
+Int main() {
+    List(Str) xs = ["b"];
+    List(Str) s = sort(xs, using = Ord(Int));
+    return 0;
+}
+"#,
+        );
+        let errs = check_program(&mismatch);
+        assert!(
+            errs.iter().any(|e| e.message.contains("orders") && e.message.contains("holds")),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn sort_without_using_is_rejected() {
+        let src = parse_unit(
+            r#"
+Int main() {
+    List(Int) xs = [2, 1];
+    List(Int) s = sort(xs);
+    return 0;
+}
+"#,
+        );
+        let errs = check_program(&src);
+        assert!(
+            errs.iter().any(|e| e.message.contains("requires a behavior")),
+            "{errs:?}"
+        );
     }
 
     #[test]

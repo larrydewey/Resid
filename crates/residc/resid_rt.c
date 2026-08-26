@@ -2908,6 +2908,10 @@ void* list_sort_ints(void* box) {
     return rt_list_sorted_copy(box, rt_cmp_boxed_i64);
 }
 
+void* list_sort_by(void* box, int (*cmp)(const void*, const void*)) {
+    return rt_list_sorted_copy(box, cmp);
+}
+
 void* list_sort_strs(void* box) {
     return rt_list_sorted_copy(box, rt_cmp_str_slot);
 }
