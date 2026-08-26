@@ -115,6 +115,9 @@ fn main() -> ExitCode {
             let mut parts: Vec<Vec<u8>> = vec![
                 b"residc-v2".to_vec(),
                 src_bytes,
+                // The embedded C runtime is part of the toolchain: a runtime
+                // change must invalidate cached binaries.
+                RUNTIME_C.as_bytes().to_vec(),
                 if prov_encrypt { b"enc0".to_vec() } else { b"plain".to_vec() },
             ];
             parts.extend(import_parts);

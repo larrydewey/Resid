@@ -210,11 +210,26 @@ impl Parser {
                 })
             }
             _ => {
+                // `pub` on a behavior declaration: behaviors are
+                // module-visible compile-time knowledge (spec §11); reject
+                // with a clear diagnostic instead of misparsing as a fn.
+                if self.tokens.get(self.pos).map(|t| matches!(t.kind, TokenKind::Keyword(Keyword::Pub)))
+                    == Some(true)
+                    && self.behavior_shape_ahead_at(self.pos + 1)
+                {
+                    self.errors.push(ParseError {
+                        span: span.clone(),
+                        message: "`pub` is not applicable to behavior declarations; \
+                                  behaviors are always visible across imports"
+                            .into(),
+                    });
+                    return Declaration::Behavior(self.parse_behavior(doc_comments, span));
+                }
                 // Behavior definition: `Ord(Point) = point_cmp;`
                 // Distinguished from a function def by `Ident ( … ) =` shape.
                 if self.tokens.get(self.pos).map(|t| matches!(t.kind, TokenKind::Ident(_)))
                     == Some(true)
-                    && self.behavior_shape_ahead()
+                    && self.behavior_shape_ahead_at(self.pos)
                 {
                     return Declaration::Behavior(self.parse_behavior(doc_comments, span));
                 }
@@ -224,9 +239,12 @@ impl Parser {
         }
     }
 
-    /// Lookahead: does an `Ident ( ... ) =` shape start here?
-    fn behavior_shape_ahead(&self) -> bool {
-        let mut i = self.pos + 1;
+    /// Lookahead: does an `Ident ( ... ) =` shape start at `start`?
+    fn behavior_shape_ahead_at(&self, start: usize) -> bool {
+        if !self.tokens.get(start).map(|t| matches!(t.kind, TokenKind::Ident(_))).unwrap_or(false) {
+            return false;
+        }
+        let mut i = start + 1;
         if !self.tokens.get(i).map(|t| matches!(t.kind, TokenKind::Op(Op::LParen))).unwrap_or(false) {
             return false;
         }
@@ -249,6 +267,23 @@ impl Parser {
             i += 1;
         }
         false
+    }
+
+    /// Parse a behavior instance reference: `Ord(T)` or right-nested
+    /// `Reverse(Ord(T))` (spec §11). Returns the verbatim source text.
+    fn parse_using_instance(&mut self) -> String {
+        let head = self
+            .expect_ident("using: expected behavior name")
+            .map(|id| id.0)
+            .unwrap_or_else(|| "__error__".to_string());
+        if self.peek_is_op(Op::LParen) {
+            self.bump();
+            let inner = self.parse_using_instance();
+            self.expect_op(Op::RParen, "using: expected )");
+            format!("{head}({inner})")
+        } else {
+            head
+        }
     }
 
     fn parse_behavior(
@@ -1144,18 +1179,8 @@ impl Parser {
                     if self.peek_is_ident("using") {
                         self.bump();
                         self.expect_op(Op::Equals, "using: expected =");
-                        let mut behavior = self
-                            .expect_ident("using: expected behavior name")
-                            .unwrap_or_else(|| Id("__error__".to_string()));
-                        // Optional instance parameter: `using = Ord(Point)`.
-                        if self.peek_is_op(Op::LParen) {
-                            self.bump();
-                            let arg = self
-                                .expect_ident("using: expected type argument")
-                                .unwrap_or_else(|| Id("__error__".to_string()));
-                            self.expect_op(Op::RParen, "using: expected )");
-                            behavior = Id(format!("{}({})", behavior.0, arg.0));
-                        }
+                        let behavior_text = self.parse_using_instance();
+                        let behavior = Id(behavior_text);
                         expr = Expr {
                             kind: ExprKind::Using {
                                 value: Box::new(expr),
@@ -3556,6 +3581,26 @@ type Opt(T) = Some(T) | None;
             .collect();
         assert_eq!(exprs.len(), 1, "expected one expr statement");
         exprs[0].clone()
+    }
+
+    #[test]
+    fn parse_pub_behavior_is_rejected_with_diagnostic() {
+        let src = concat!(
+            "Int by_y(Int a, Int b) { return 0; }\n",
+            "pub Ord(Int) = by_y;\n",
+            "Int main() { return 0; }\n"
+        );
+        let (unit, errs) = Parser::parse("t.resid", src);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("`pub` is not applicable to behavior")),
+            "expected pub-behavior diagnostic, got {errs:?}"
+        );
+        // The declaration still parses (recovery) as a behavior.
+        assert!(unit
+            .declarations
+            .iter()
+            .any(|d| matches!(d, Declaration::Behavior(_))));
     }
 
     #[test]

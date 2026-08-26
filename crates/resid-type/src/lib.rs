@@ -2101,19 +2101,34 @@ fn infer_using(
             ))
         }
     };
-    let key = format!("behavior::{}", behavior.0);
+    // Resolve through any number of Reverse(...) wrappers (spec §11).
+    let mut layers = 0usize;
+    let mut inner = behavior.0.as_str();
+    while let Some(rest) = inner
+        .strip_prefix("Reverse(")
+        .and_then(|r| r.strip_suffix(')'))
+    {
+        layers += 1;
+        inner = rest;
+    }
+    if !inner.contains('(') {
+        return Err(err(
+            span,
+            format!("behavior instance `{inner}` must name a type, e.g. Ord(Int)"),
+        ));
+    }
+    let key = format!("behavior::{inner}");
     let Some(sig) = sigs.get(&key) else {
         return Err(err(
             span,
-            format!("no behavior instance `{}` is defined", behavior.0),
+            format!("no behavior instance `{inner}` is defined"),
         ));
     };
     if sig.params.first() != Some(&elem) {
         return Err(err(
             span,
             format!(
-                "behavior `{}` orders {}, but the list holds {}",
-                behavior.0,
+                "behavior `{inner}` orders {}, but the list holds {}",
                 sig.params.first().map(|t| t.to_string()).unwrap_or_default(),
                 elem
             ),
