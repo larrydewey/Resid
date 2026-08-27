@@ -153,6 +153,24 @@ fn load_into(
         own.push(d);
     }
 
+    // Flatten sandbox bodies: their child declarations join the same scope
+    // with the sandbox's capability ceiling recorded on each function.
+    let mut flattened = Vec::new();
+    for d in own.drain(..) {
+        if let Declaration::Sandbox(mut s) = d {
+            for mut child in s.body.drain(..) {
+                if let Declaration::Function(f) = &mut child {
+                    // Record the sandbox ceiling on each child function (spec §21).
+                    f.sandbox_ceiling = s.capabilities.clone();
+                }
+                flattened.push(child);
+            }
+        } else {
+            flattened.push(d);
+        }
+    }
+    let mut own = flattened;
+
     // Alias namespacing: prefix this file's own exports and record mappings.
     if let Some(a) = alias {
         for d in &mut own {
@@ -192,6 +210,11 @@ fn set_decl_name(d: &mut Declaration, name: &str) {
         Declaration::Function(f) => f.name = Id(name.to_string()),
         Declaration::Type(t) => t.name = Id(name.to_string()),
         Declaration::Behavior(b) => b.name = Id(name.to_string()),
+        Declaration::Sandbox(s) => {
+            for child in &mut s.body {
+                set_decl_name(child, name);
+            }
+        }
     }
 }
 
@@ -226,5 +249,6 @@ fn decl_name(d: &Declaration) -> &str {
         Declaration::Function(f) => &f.name.0,
         Declaration::Type(t) => &t.name.0,
         Declaration::Behavior(b) => &b.name.0,
+        Declaration::Sandbox(_) => "<sandbox>",
     }
 }

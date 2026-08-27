@@ -41,6 +41,16 @@ pub enum Declaration {
     Function(FuncDef),
     Type(TypeDef),
     Behavior(BehaviorDef),
+    Sandbox(SandboxDecl),
+}
+
+/// sandbox (filesystem(readonly)) { … }
+/// Restricts the capabilities available to all code inside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxDecl {
+    pub capabilities: Vec<CapabilityAnnotation>,
+    pub body: Vec<Declaration>,
+    pub span: Span,
 }
 
 /// Function definition.
@@ -53,6 +63,9 @@ pub struct FuncDef {
     pub body: Block,
     pub doc_comments: Vec<String>,
     pub capabilities: Vec<CapabilityAnnotation>,
+    /// Capability ceiling imposed by an enclosing `sandbox (…)` block (spec §21).
+    /// Empty when the function is not inside a sandbox.
+    pub sandbox_ceiling: Vec<CapabilityAnnotation>,
     pub span: Span,
 }
 

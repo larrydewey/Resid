@@ -380,6 +380,12 @@ pub struct FunctionSig {
     pub is_pub: bool,
     /// Defining file (span origin); empty for builtins.
     pub file: String,
+    /// Capability requirements declared with `@requires(…)` (spec §21).
+    /// Each string is the capability name (e.g. "filesystem", "network").
+    pub requires: Vec<String>,
+    /// Capability ceiling from an enclosing `sandbox (…)` block (spec §21).
+    /// Empty when the function is not inside a sandbox.
+    pub sandbox_ceiling: Vec<String>,
 }
 
 /// A variable-name → type environment.
@@ -998,6 +1004,8 @@ pub fn builtin_signatures() -> Signatures {
                     ret: ret.clone(),
                     is_pub: true,
                     file: String::new(),
+                    requires: Vec::new(),
+                    sandbox_ceiling: Vec::new(),
                 },
             )
         })
@@ -1069,6 +1077,8 @@ pub fn builtin_signatures() -> Signatures {
                 ret,
                 is_pub: true,
                 file: String::new(),
+                requires: Vec::new(),
+                sandbox_ceiling: Vec::new(),
             },
         );
     }
@@ -1080,7 +1090,8 @@ pub fn builtin_signatures() -> Signatures {
 pub fn collect_signatures(unit: &TranslationUnit) -> Signatures {
     let types = collect_types(unit);
     let mut sigs = builtin_signatures();
-    for decl in &unit.declarations {
+    let flat = flatten_unit(unit);
+    for decl in &flat {
         if let Declaration::Function(f) = decl {
             let sig = signature_of(f, &types);
             sigs.insert(sig.name.clone(), sig);
@@ -1110,6 +1121,14 @@ fn signature_of(f: &FuncDef, types: &Types) -> FunctionSig {
         ret,
         is_pub: f.pub_,
         file: f.span.file.clone(),
+        requires: f.capabilities.iter()
+            .filter(|c| c.name.0 == "requires")
+            .flat_map(|c| c.params.iter().filter_map(|p| match &p.kind {
+                ExprKind::Id(id) => Some(id.0.clone()),
+                _ => None,
+            }))
+            .collect(),
+        sandbox_ceiling: f.sandbox_ceiling.iter().map(|c| c.name.0.clone()).collect(),
     }
 }
 
@@ -2469,7 +2488,65 @@ fn conversion_helper_match(arg: &SemType, param: &SemType, first_char: char) -> 
 /// overloads this picks the most specific (narrowest) type that the argument
 /// can safely be widened to. For conversion helpers (i8/i16/.../u8/.../f16/...)
 /// this picks the narrowest parameter type that the argument can be widened to.
+/// Synthesize a signature for the open-ended wrapping_/saturating_
+/// arithmetic family: `(wrapping|saturating)_u?(add|sub|mul)` over any
+/// numeric width; both operands must share one width.
+fn arith_family_sig(args_ty: &[SemType], func: &str) -> Option<FunctionSig> {
+    let (kind, rest) = if let Some(r) = func.strip_prefix("wrapping_") {
+        ("wrapping", r)
+    } else if let Some(r) = func.strip_prefix("saturating_") {
+        ("saturating", r)
+    } else {
+        return None;
+    };
+    let _ = kind;
+    let (unsigned, op) = match rest.strip_prefix('u') {
+        Some(r) => (true, r),
+        None => (false, rest),
+    };
+    if !matches!(op, "add" | "sub" | "mul") {
+        return None;
+    }
+    let w0 = match args_ty.first() {
+        Some(SemType::Numeric(n)) => *n,
+        _ => return None,
+    };
+    let w1 = match args_ty.get(1) {
+        Some(SemType::Numeric(n)) => *n,
+        _ => return None,
+    };
+    // Widths must agree; unsigned family requires UInt operands.
+    let matches_family = |n: &NumericType| {
+        if unsigned {
+            matches!(n, NumericType::UInt(_))
+        } else {
+            matches!(n, NumericType::Int(_))
+        }
+    };
+    if w0 != w1 || !matches_family(&w0) {
+        return None;
+    }
+    Some(FunctionSig {
+        name: func.to_string(),
+        params: vec![SemType::Numeric(w0), SemType::Numeric(w1)],
+        param_names: vec!["a".into(), "b".into()],
+        param_defaults: vec![None, None],
+        ret: SemType::Numeric(w0),
+        is_pub: true,
+        file: String::new(),
+        requires: Vec::new(),
+        sandbox_ceiling: Vec::new(),
+    })
+}
+
 pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Option<FunctionSig> {
+    // wrapping_*/saturating_ arithmetic is open-ended over the whole numeric
+    // family (spec §6/§32): (wrapping|saturating)_u?(add|sub|mul) at any
+    // width, requiring both operands at the same width. add/sub/mul only —
+    // div keeps its enumerated i64 form.
+    if let Some(sig) = arith_family_sig(args_ty, func) {
+        return Some(sig);
+    }
     // dN conversion helpers (spec §6.7) are open-ended (any N >= 1) and so are
     // not enumerated in BUILTIN_SIGS — synthesize the signature here. Accepted
     // from: Dec (exact, narrowing rounds once), Int (exact), Str (exact parse).
@@ -2487,6 +2564,8 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
                             ret: tgt,
                             is_pub: true,
                             file: String::new(),
+                            requires: Vec::new(),
+                            sandbox_ceiling: Vec::new(),
                         });
                     }
                     return None;
@@ -2499,6 +2578,8 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
                     ret: tgt,
                     is_pub: true,
                     file: String::new(),
+                    requires: Vec::new(),
+                    sandbox_ceiling: Vec::new(),
                 });
             }
         }
@@ -2640,6 +2721,29 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
 
 // ─── Upfront program type checking ─────────────────────────────
 
+/// Flatten sandbox declarations: extract child declarations and set their
+/// `sandbox_ceiling` from the enclosing sandbox's capability list (spec §21).
+fn flatten_unit(unit: &TranslationUnit) -> Vec<Declaration> {
+    unit.declarations
+        .iter()
+        .flat_map(|d| match d {
+            Declaration::Sandbox(s) => {
+                let ceiling = &s.capabilities;
+                s.body.iter().map(|child| {
+                    let mut c = child.clone();
+                    if let Declaration::Function(f) = &mut c {
+                        if f.sandbox_ceiling.is_empty() && !ceiling.is_empty() {
+                            f.sandbox_ceiling = ceiling.clone();
+                        }
+                    }
+                    c
+                }).collect::<Vec<_>>()
+            }
+            other => vec![other.clone()],
+        })
+        .collect()
+}
+
 /// Type-check every function body in a translation unit.
 /// Returns a list of errors (empty = all passed).
 pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
@@ -2668,6 +2772,8 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
                 ret: SemType::Numeric(NumericType::Int(IntWidth::B64)),
                 is_pub: true,
                 file: String::new(),
+                requires: Vec::new(),
+                sandbox_ceiling: Vec::new(),
             },
         );
     }
@@ -2675,7 +2781,8 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
     errs.append(&mut behavior_errs);
     errs.extend(check_behaviors(unit, &sigs, &types, &behaviors));
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for decl in &unit.declarations {
+    let flat = flatten_unit(unit);
+    for decl in &flat {
         if let Declaration::Function(f) = decl {
             if !seen.insert(f.name.0.clone()) {
                 errs.push(err(
@@ -2695,6 +2802,24 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
                 }
             }
             type_check_block(&f.body, &env, &sigs, &types, &mut errs);
+            // ── §21.3 sandbox enforcement ──────────────────────────
+            // If the function is inside a sandbox, every @requires cap
+            // must be present in the sandbox ceiling.
+            if !sig.sandbox_ceiling.is_empty() {
+                for req in &sig.requires {
+                    if !sig.sandbox_ceiling.iter().any(|c| c == req) {
+                        errs.push(err(
+                            &f.span,
+                            format!(
+                                "function `{}` requires capability `{}` which exceeds the enclosing sandbox ceiling [{}]",
+                                f.name.0,
+                                req,
+                                sig.sandbox_ceiling.join(", "),
+                            ),
+                        ));
+                    }
+                }
+            }
         }
     }
     errs
@@ -6065,5 +6190,32 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no errors for match on Option, got: {:?}", errs);
+    }
+
+    #[test]
+    fn sandbox_allows_matching_requires() {
+        let src = r#"
+sandbox (filesystem) {
+    Int read() { return 42; }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "sandbox with matching require should pass, got: {:?}", errs);
+    }
+
+    #[test]
+    fn sandbox_rejects_exceeding_requires() {
+        let src = r#"
+sandbox (filesystem) {
+    @requires(network)
+    Int fetch() { return 1; }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "sandbox should reject requires exceeding ceiling");
+        assert!(errs.iter().any(|e| e.message.contains("network")),
+            "error should mention the exceeding capability, got: {:?}", errs);
     }
 }

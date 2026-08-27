@@ -446,6 +446,7 @@ impl Lexer {
         if self.peek() == Some('r') {
             let keyword = "residual";
             let mut keyword_match = true;
+            let saved_pos = self.pos;
             for c in keyword.chars() {
                 if self.peek() != Some(c) {
                     keyword_match = false;
@@ -467,6 +468,9 @@ impl Lexer {
                 });
                 return;
             }
+            // Rewind: the characters consumed while trying to match "residual"
+            // belong to the next token, not the @ annotation.
+            self.pos = saved_pos;
         }
         self.tokens.push(Token {
             kind: TokenKind::At,

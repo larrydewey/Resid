@@ -47,6 +47,7 @@ pub enum Keyword {
     Assert,
     RtAssert,
     In,
+    Sandbox,
 }
 
 impl Keyword {
@@ -79,6 +80,7 @@ impl Keyword {
             Self::Assert => "assert",
             Self::RtAssert => "rt_assert",
             Self::In => "in",
+            Self::Sandbox => "sandbox",
         }
     }
 
@@ -111,6 +113,7 @@ impl Keyword {
             "assert" => Some(Self::Assert),
             "rt_assert" => Some(Self::RtAssert),
             "in" => Some(Self::In),
+            "sandbox" => Some(Self::Sandbox),
             _ => None,
         }
     }

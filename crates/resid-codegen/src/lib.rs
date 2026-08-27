@@ -3644,6 +3644,14 @@ impl<'ctx> CodeGen<'ctx> {
             return self.lower_using(sc, value, &behavior.0);
         }
 
+        // Per-width wrapping/saturating arithmetic (spec §32, item 4).
+        // Wrapping: plain LLVM add/sub/mul at any width (LLVM wraps naturally).
+        // Saturating: overflow-checked + clamp to type bounds.
+        // Division falls through to the i64 runtime helper.
+        if let Some(rv) = self.lower_arith_family(sc, name, args)? {
+            return Ok(rv);
+        }
+
         // Resolve named arguments: map each arg's name (if provided) to the
         // corresponding position in the function's param list.
         let (resolved_args, sig) = self.resolve_call_args(name, args)?;
@@ -3867,6 +3875,195 @@ impl<'ctx> CodeGen<'ctx> {
         Some((k, n))
     }
 
+    /// Lower per-width wrapping/saturating arithmetic calls natively at any
+    /// integer width. Wrapping operations use plain LLVM arithmetic (which
+    /// wraps by default). Saturating operations check overflow and clamp to
+    /// the type's min/max. Division falls through to the i64 runtime helper.
+    fn lower_arith_family(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        name: &str,
+        args: &[(Option<Id>, Expr)],
+    ) -> Result<Option<Val<'ctx>>, String> {
+        let (kind, rest) = if let Some(r) = name.strip_prefix("wrapping_") {
+            ("wrapping", r)
+        } else if let Some(r) = name.strip_prefix("saturating_") {
+            ("saturating", r)
+        } else {
+            return Ok(None);
+        };
+        let (unsigned, op) = match rest.strip_prefix('u') {
+            Some(r) => (true, r),
+            None => (false, rest),
+        };
+        // Division falls through to the runtime helper for i64.
+        if op == "div" {
+            return Ok(None);
+        }
+        if !matches!(op, "add" | "sub" | "mul") || args.len() != 2 {
+            return Ok(None);
+        }
+        // Determine width from the type checker; fall back to i64.
+        let env = self.env(sc);
+        let num = resid_type::infer_expr_ctx(&args[0].1, &env, &self.sigs, &self.types)
+            .ok()
+            .and_then(|t| match t {
+                SemType::Numeric(n) => Some(n),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                if unsigned {
+                    NumericType::UInt(IntWidth::B64)
+                } else {
+                    NumericType::Int(IntWidth::B64)
+                }
+            });
+        let bits = num.target_width().unwrap_or(64);
+        let av = self.lower_expr(sc, &args[0].1, Some(num))?;
+        let bv = self.lower_expr(sc, &args[1].1, Some(num))?;
+        let iv = av.v.into_int_value();
+        let jv = bv.v.into_int_value();
+        let it = self.int_type(bits)?;
+        let result = match kind {
+            "wrapping" => {
+                // Plain LLVM integer ops wrap modulo 2^N by default.
+                match op {
+                    "add" => self.builder.build_int_add(iv, jv, "wrap_add").map_err(to_err)?,
+                    "sub" => self.builder.build_int_sub(iv, jv, "wrap_sub").map_err(to_err)?,
+                    _ => self.builder.build_int_mul(iv, jv, "wrap_mul").map_err(to_err)?,
+                }
+            }
+            "saturating" => {
+                if unsigned {
+                    self.emit_sat_unsigned(iv, jv, it, op, bits)?
+                } else {
+                    self.emit_sat_signed(iv, jv, it, op, bits)?
+                }
+            }
+            _ => unreachable!(),
+        };
+        Ok(Some(Val {
+            v: result.into(),
+            ty: SemType::Numeric(num),
+        }))
+    }
+
+    /// Emit saturating unsigned arithmetic: add/sub/mul with overflow
+    /// clamping to type MAX.
+    fn emit_sat_unsigned(
+        &mut self,
+        a: IntValue<'ctx>,
+        b: IntValue<'ctx>,
+        it: IntType<'ctx>,
+        op: &str,
+        _bits: u16,
+    ) -> Result<IntValue<'ctx>, String> {
+        let to_err = |e: inkwell::builder::BuilderError| format!("{e}");
+        let max = it.const_all_ones();
+        match op {
+            "add" => {
+                let sum = self.builder.build_int_add(a, b, "sat_add").map_err(to_err)?;
+                let ovf = self.builder.build_int_compare(IntPredicate::ULT, sum, a, "sat_add_ovf").map_err(to_err)?;
+                Ok(self.builder.build_select(ovf, max, sum, "sat_add_res").map_err(to_err)?.into_int_value())
+            }
+            "sub" => {
+                let dif = self.builder.build_int_sub(a, b, "sat_sub").map_err(to_err)?;
+                let ovf = self.builder.build_int_compare(IntPredicate::ULT, a, b, "sat_sub_ovf").map_err(to_err)?;
+                Ok(self.builder.build_select(ovf, it.const_int(0, false), dif, "sat_sub_res").map_err(to_err)?.into_int_value())
+            }
+            _ => {
+                // Saturating unsigned mul: widen to 2N, check high half.
+                let wide_bits = self.wide_bits(it.get_bit_width() as u16);
+                let wide_it = self.int_type(wide_bits)?;
+                let aw = self.builder.build_int_z_extend(a, wide_it, "sat_mul_aw").map_err(to_err)?;
+                let bw = self.builder.build_int_z_extend(b, wide_it, "sat_mul_bw").map_err(to_err)?;
+                let prod = self.builder.build_int_mul(aw, bw, "sat_mul_w").map_err(to_err)?;
+                let hi = self.builder.build_right_shift(prod, wide_it.const_int(it.get_bit_width() as u64, false), false, "sat_mul_hi").map_err(to_err)?;
+                let ovf = self.builder.build_int_compare(IntPredicate::UGT, hi, wide_it.const_int(0, false), "sat_mul_ovf").map_err(to_err)?;
+                let narrow = self.builder.build_int_truncate_or_bit_cast(prod, it, "sat_mul_narrow").map_err(to_err)?;
+                Ok(self.builder.build_select(ovf, max, narrow, "sat_mul_res").map_err(to_err)?.into_int_value())
+            }
+        }
+    }
+
+    /// Emit saturating signed arithmetic: add/sub/mul with overflow
+    /// clamping to type MIN/MAX.
+    fn emit_sat_signed(
+        &mut self,
+        a: IntValue<'ctx>,
+        b: IntValue<'ctx>,
+        it: IntType<'ctx>,
+        op: &str,
+        bits: u16,
+    ) -> Result<IntValue<'ctx>, String> {
+        let to_err = |e: inkwell::builder::BuilderError| format!("{e}");
+        let max_val = it.const_int(((1u64 << (bits - 1)) - 1) as u64, true);
+        let min_val = it.const_int((1u64 << (bits - 1)) as u64, true);
+        let zero = it.const_int(0, false);
+        match op {
+            "add" => {
+                let sum = self.builder.build_int_add(a, b, "sat_add").map_err(to_err)?;
+                // Overflow iff both operands have same sign but result differs.
+                let sign_a = self.builder.build_int_compare(IntPredicate::SLT, a, zero, "sa").map_err(to_err)?;
+                let sign_b = self.builder.build_int_compare(IntPredicate::SLT, b, zero, "sb").map_err(to_err)?;
+                let sign_s = self.builder.build_int_compare(IntPredicate::SLT, sum, zero, "ss").map_err(to_err)?;
+                let same_ab = self.builder.build_int_compare(IntPredicate::EQ, sign_a, sign_b, "same_ab").map_err(to_err)?;
+                let diff_as = self.builder.build_int_compare(IntPredicate::NE, sign_a, sign_s, "diff_as").map_err(to_err)?;
+                let ovf = self.builder.build_and(same_ab, diff_as, "sat_ovf").map_err(to_err)?;
+                let clamped = self.builder.build_select(sign_a, min_val, max_val, "sat_clamp").map_err(to_err)?;
+                Ok(self.builder.build_select(ovf, clamped.into_int_value(), sum, "sat_res").map_err(to_err)?.into_int_value())
+            }
+            "sub" => {
+                let dif = self.builder.build_int_sub(a, b, "sat_sub").map_err(to_err)?;
+                let sign_a = self.builder.build_int_compare(IntPredicate::SLT, a, zero, "sa").map_err(to_err)?;
+                let sign_b = self.builder.build_int_compare(IntPredicate::SLT, b, zero, "sb").map_err(to_err)?;
+                let sign_d = self.builder.build_int_compare(IntPredicate::SLT, dif, zero, "sd").map_err(to_err)?;
+                // Overflow when subtracting (+a - -b) → positive overflow
+                // or (-a - +b) → negative overflow.
+                let pos_ovf = self.builder.build_and(
+                    self.builder.build_not(sign_a, "na",).map_err(to_err)?,
+                    self.builder.build_and(sign_b, self.builder.build_int_compare(IntPredicate::SLT, dif, a, "d_a").map_err(to_err)?, "sb_da").map_err(to_err)?,
+                    "pos_ovf",
+                ).map_err(to_err)?;
+                let neg_ovf = self.builder.build_and(
+                    sign_a,
+                    self.builder.build_and(self.builder.build_not(sign_b, "nb").map_err(to_err)?, self.builder.build_int_compare(IntPredicate::SGT, dif, a, "d_a2").map_err(to_err)?, "sa_da").map_err(to_err)?,
+                    "neg_ovf",
+                ).map_err(to_err)?;
+                let ovf = self.builder.build_or(pos_ovf, neg_ovf, "sat_ovf").map_err(to_err)?;
+                let clamped = self.builder.build_select(sign_a, min_val, max_val, "sat_clamp").map_err(to_err)?;
+                Ok(self.builder.build_select(ovf, clamped.into_int_value(), dif, "sat_res").map_err(to_err)?.into_int_value())
+            }
+            _ => {
+                // Saturating signed mul: widen to 2N, check high half against 0/-1.
+                let wide_bits = self.wide_bits(bits);
+                let wide_it = self.int_type(wide_bits)?;
+                let aw = self.builder.build_int_s_extend(a, wide_it, "sat_mul_aw").map_err(to_err)?;
+                let bw = self.builder.build_int_s_extend(b, wide_it, "sat_mul_bw").map_err(to_err)?;
+                let prod = self.builder.build_int_mul(aw, bw, "sat_mul_w").map_err(to_err)?;
+                let arith_shr = self.builder.build_right_shift(prod, wide_it.const_int(bits as u64, false), true, "sat_mul_hi").map_err(to_err)?;
+                let neg_1 = wide_it.const_all_ones();
+                let pos_0 = wide_it.const_int(0, false);
+                let ovf = self.builder.build_int_compare(IntPredicate::NE, arith_shr, pos_0, "sat_mul_ovf_pos").map_err(to_err)?;
+                let ovf2 = self.builder.build_int_compare(IntPredicate::NE, arith_shr, neg_1, "sat_mul_ovf_neg").map_err(to_err)?;
+                let ovf = self.builder.build_or(ovf, ovf2, "sat_mul_ovf").map_err(to_err)?;
+                let narrow = self.builder.build_int_truncate_or_bit_cast(prod, it, "sat_mul_narrow").map_err(to_err)?;
+                let sel = self.builder.build_select(ovf, max_val, narrow, "sat_mul_res").map_err(to_err)?;
+                Ok(sel.into_int_value())
+            }
+        }
+    }
+
+    /// Round up to the next power of two ≥ 2×bits (for wide-mul overflow check).
+    fn wide_bits(&self, bits: u16) -> u16 {
+        let w = bits * 2;
+        let mut p = 1u16;
+        while p < w {
+            p *= 2;
+        }
+        p
+    }
+
     /// Lower a conversion-helper call whose argument is (or becomes) a Dec
     /// value: `dN` from Dec/Int/Str, `iN`/`uN`/`fN` from Dec (spec §6.6a).
     fn lower_dec_conversion(
@@ -3918,6 +4115,8 @@ impl<'ctx> CodeGen<'ctx> {
             ret: SemType::Bool,
             is_pub: true,
             file: String::new(),
+            requires: Vec::new(),
+            sandbox_ceiling: Vec::new(),
         });
 
         let total_params = sig.params.len();
