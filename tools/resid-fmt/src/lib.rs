@@ -69,6 +69,22 @@ pub fn format_unit(unit: &TranslationUnit) -> String {
                 p.line(&format!("behavior {} = …;", b.name.0));
                 p.blank();
             }
+            Declaration::Sandbox(s) => {
+                let caps: Vec<String> = s.capabilities.iter()
+                    .map(|c| if c.params.is_empty() { c.name.0.clone() } else {
+                        format!("{}(…)", c.name.0)
+                    })
+                    .collect();
+                p.open(&format!("sandbox ({})", caps.join(", ")));
+                for child in &s.body {
+                    match child {
+                        Declaration::Function(f) => p.func(f),
+                        _ => {}
+                    }
+                }
+                p.close();
+                p.blank();
+            }
         }
     }
     p.out.trim_end().to_string() + "\n"

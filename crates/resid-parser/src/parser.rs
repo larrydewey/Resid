@@ -86,6 +86,9 @@ impl Parser {
 
             if self.peek_is_keyword(Keyword::Import) {
                 imports.push(self.parse_import());
+            } else if self.peek_is_keyword(Keyword::Sandbox) {
+                let decl = self.parse_sandbox(&capabilities);
+                declarations.push(decl);
             } else {
                 let decl = self.parse_declaration(&doc_comments, &capabilities);
                 declarations.push(decl);
@@ -172,6 +175,56 @@ impl Parser {
             alias,
             span,
         }
+    }
+
+    /// Parse: sandbox (cap1, cap2) { decls... }
+    fn parse_sandbox(&mut self, outer_caps: &[CapabilityAnnotation]) -> Declaration {
+        let span = self.current_span();
+        self.bump(); // skip 'sandbox'
+        self.expect_op(Op::LParen, "sandbox: expected (");
+        let mut caps: Vec<CapabilityAnnotation> = outer_caps.to_vec();
+        if !self.peek_is_op(Op::RParen) {
+            loop {
+                caps.push(self.parse_capability_annotation());
+                if self.peek_is_op(Op::Comma) {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect_op(Op::RParen, "sandbox: expected )");
+        self.expect_op(Op::LBrace, "sandbox: expected {");
+        let mut body = Vec::new();
+        while !self.peek_is_op(Op::RBrace) && self.peek().is_some() {
+            let dc = self.collect_doc_comments();
+            let mut local_caps = Vec::new();
+            while self.peek_is_at() {
+                self.bump();
+                if self.peek_is_keyword(Keyword::Rt) {
+                    break;
+                }
+                local_caps.push(self.parse_capability_annotation());
+                if self.peek_is_op(Op::Comma) {
+                    self.bump();
+                }
+            }
+            if self.peek_is_keyword(Keyword::Import) {
+                // sandbox imports are not yet meaningful; skip
+                self.parse_import();
+            } else {
+                body.push(self.parse_declaration(&dc, &local_caps));
+            }
+            if self.peek_is_op(Op::Semi) {
+                self.bump();
+            }
+        }
+        self.expect_op(Op::RBrace, "sandbox: expected }");
+        Declaration::Sandbox(SandboxDecl {
+            capabilities: caps,
+            body,
+            span,
+        })
     }
 
     // ─── Declarations ───────────────────────────────────────────
@@ -361,6 +414,7 @@ impl Parser {
             body,
             doc_comments: doc_comments.to_vec(),
             capabilities: capabilities.to_vec(),
+            sandbox_ceiling: Vec::new(),
             span,
         }
     }
@@ -3738,6 +3792,64 @@ type Opt(T) = Some(T) | None;
                 }
             }
             other => panic!("expected Range, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_sandbox_basic() {
+        let src = r#"
+sandbox (filesystem(readonly)) {
+    Int read_file() { return 42; }
+}
+"#;
+        let (unit, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "parse errors: {:?}", errors);
+        assert_eq!(unit.declarations.len(), 1);
+        match &unit.declarations[0] {
+            Declaration::Sandbox(s) => {
+                assert_eq!(s.capabilities.len(), 1);
+                assert_eq!(s.capabilities[0].name.0, "filesystem");
+                assert_eq!(s.body.len(), 1);
+                match &s.body[0] {
+                    Declaration::Function(f) => {
+                        assert_eq!(f.name.0, "read_file");
+                        assert!(f.capabilities.is_empty(),
+                            "fn inside sandbox should not have sandbox caps in its capabilities");
+                    }
+                    other => panic!("expected Function inside sandbox, got {:?}", other),
+                }
+            }
+            other => panic!("expected Sandbox, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_sandbox_with_fn_requires() {
+        let src = r#"
+sandbox (filesystem) {
+    @requires(network)
+    Int fetch() { return 1; }
+}
+"#;
+        let (unit, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "parse errors: {:?}", errors);
+        match &unit.declarations[0] {
+            Declaration::Sandbox(s) => {
+                match &s.body[0] {
+                    Declaration::Function(f) => {
+                        assert_eq!(f.capabilities.len(), 1);
+                        // @requires(network) → name="requires", params=[Id("network")]
+                        assert_eq!(f.capabilities[0].name.0, "requires");
+                        assert_eq!(f.capabilities[0].params.len(), 1);
+                        match &f.capabilities[0].params[0].kind {
+                            ExprKind::Id(id) => assert_eq!(id.0, "network"),
+                            other => panic!("expected Id param, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected Function, got {:?}", other),
+                }
+            }
+            other => panic!("expected Sandbox, got {:?}", other),
         }
     }
 }

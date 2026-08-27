@@ -9,15 +9,16 @@
 
 ## 0. Current Snapshot
 
-**660 tests pass** (lexer 17, parser 93, resid-ir 46, resid-type 197,
-resid-codegen 137, resid-build 39, resid-fmt 5,
+**666 tests pass** (lexer 17, parser 95, resid-ir 46, resid-type 199,
+resid-codegen 137, resid-build 30, resid-fmt 5,
 resid-cache 7, resid-notes 2, resid-why 4 unit + 1 e2e,
 resid-lsp 4 unit + 1 e2e,
-resid-graph 4, residc 30 unit + 87 e2e incl.
+resid-graph 4, residc 0 unit + 89 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
-`run_behavior_ord_sort`, `bootstrap_behavior_ord_parity`).
+`run_behavior_ord_sort`, `bootstrap_behavior_ord_parity`,
+`run_sandbox_enforcement`).
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
 proven**. The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
@@ -341,17 +342,19 @@ item is DONE only when it ships in **both** pipelines (see policy).
 
 ### MISSING — wholly absent
 
-1. §21/§43 Sandbox & attenuation — no `sandbox (caps) { }` blocks, no
-   transitive attenuation closure, no dynamic capability errors, no
-   handle-entry rules, no §21.4 knowledge-cache capability gating.
+1. §21/§43 Sandbox & attenuation — `sandbox (caps) { }` blocks parse and
+   flatten; type checker enforces static ceiling on `@requires` (hard
+   error when exceeded). Still missing: transitive attenuation closure,
+   dynamic capability errors, handle-entry rules, §21.4 knowledge-cache
+   capability gating.
 2. §12 Constraint types — `type Positive = Int[value > 0]` parses but
    constraints are never tracked or discharged.
 3. Core behaviors `Serialize`, `Allocator`, `Reverse`, generic `Hash`
    (§12 list) — zero implementation.
 4. Map / Set types — `MapLit` parses; nothing resolves in type check or
    codegen.
-5. Per-width `wrapping_*` / `saturating_*` — only Int64/UInt64 exist;
-   spec mandates every width.
+5. Per-width `wrapping_*` / `saturating_*` — ✅ done (LLVM native
+   lowering for add/sub/mul at any width; div falls back to i64 C runtime).
 
 ### PARTIAL — parsed or stubbed, not real
 
@@ -401,10 +404,10 @@ type — Option lands first.
    third-party package).
 2. `value?` sugar (item 9).
 3. `pub` enforcement (item 8).
-4. Per-width wrapping/saturating (item 5).
+4. Per-width wrapping/saturating (item 5) — ✅ done.
 5. Map/Set types (item 4).
 6. Serialize/Hash behaviors (item 3).
-7. Sandbox & attenuation (item 1).
+7. Sandbox transitive attenuation + dynamic errors (item 1 remaining).
 8. Constraint types (item 2).
 9. Knowledge-graph IR + reduction depth (items 11, 12).
 10. Runtime spawn caps (item 7), caps-as-effects (item 10).
@@ -451,3 +454,26 @@ pipelines for struct sort, Int sort, and Reverse):
   `behavior_decl_at`, `read_instance`, `strip_reverse`) deduped across
   halves; header-construction lines (`hdr_core` + `header`) now
   transplanted wholesale from codegen main into the driver tail.
+
+### Progress on item 1 — sandboxing: STATIC CEILING ENFORCED
+
+**Lexer fix**: `scan_at` in `resid-lexer` rewound consumed characters when
+`@requires` (or any `@ident` not matching `@residual`) was encountered,
+preventing the `@requires` annotation from being parsed correctly.
+
+**Parser**: `sandbox (cap1, cap2) { decls }` parses to `Declaration::Sandbox(SandboxDecl)`.
+Child function `@requires` are stored as the function's own `capabilities`;
+sandbox caps are stored separately on `SandboxDecl.capabilities`.
+
+**Resolver**: Sandbox bodies are flattened — child declarations join the
+same scope with `sandbox_ceiling` set on each child function from the
+sandbox's capability list. The sandbox wrapper itself is discarded.
+
+**Type checker**: `FunctionSig` now carries `requires: Vec<String>` (from
+`@requires(X)` params) and `sandbox_ceiling: Vec<String>` (from enclosing
+sandbox). `check_program` flattens sandboxes inline and enforces that every
+required capability is present in the ceiling; violation → hard compile error.
+
+**Remaining gaps**: transitive attenuation closure (call-site enforcement
+for callees' requirements), dynamic/residual capability errors, handle-entry
+rules, manifest ceiling, §21.4 knowledge-cache gating.

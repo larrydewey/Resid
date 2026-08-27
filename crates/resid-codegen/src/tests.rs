@@ -475,7 +475,7 @@ Int main() {
     cg.module.verify().expect("module failed verification");
 
     let ir = cg.module.print_to_string().to_string();
-    assert!(ir.contains("call i64 @wrapping_add"), "expected wrapping_add call: {ir}");
+    assert!(ir.contains("%wrap_add = add i64"), "expected native wrapping_add: {ir}");
 }
 
 #[test]
@@ -497,7 +497,7 @@ Int main() {
     cg.module.verify().expect("module failed verification");
 
     let ir = cg.module.print_to_string().to_string();
-    assert!(ir.contains("call i64 @wrapping_mul"), "expected wrapping_mul call: {ir}");
+    assert!(ir.contains("%wrap_mul = mul i64"), "expected native wrapping_mul: {ir}");
 }
 
 #[test]
@@ -519,7 +519,7 @@ Int main() {
     cg.module.verify().expect("module failed verification");
 
     let ir = cg.module.print_to_string().to_string();
-    assert!(ir.contains("call i64 @saturating_add"), "expected saturating_add call: {ir}");
+    assert!(ir.contains("sat_add") || ir.contains("sat_ovf"), "expected saturating_add native IR: {ir}");
 }
 
 #[test]
@@ -542,8 +542,8 @@ Int main() {
 
     let ir = cg.module.print_to_string().to_string();
     assert!(
-        ir.contains("call i64 @saturating_sub"),
-        "expected saturating_sub call: {ir}"
+        ir.contains("sat_sub") || ir.contains("sat_ovf"),
+        "expected saturating_sub native IR: {ir}"
     );
 }
 
@@ -765,8 +765,8 @@ Int main() {
 
     let ir = cg.module.print_to_string().to_string();
     assert!(
-        ir.contains("call i64 @saturating_mul"),
-        "expected saturating_mul call: {ir}"
+        ir.contains("sat_mul") || ir.contains("sat_mul_hi"),
+        "expected saturating_mul native IR: {ir}"
     );
 }
 
@@ -843,8 +843,8 @@ Int main() {
     cg.module.verify().expect("module failed verification");
 
     let ir = cg.module.print_to_string().to_string();
-    assert!(ir.contains("call i64 @wrapping_mul"), "expected wrapping_mul: {ir}");
-    assert!(ir.contains("call i64 @saturating_add"), "expected saturating_add: {ir}");
+    assert!(ir.contains("mul i64"), "expected native wrapping_mul: {ir}");
+    assert!(ir.contains("sat_add") || ir.contains("sat_ovf"), "expected native saturating_add: {ir}");
 }
 
 #[test]

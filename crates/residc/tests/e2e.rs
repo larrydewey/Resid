@@ -6034,3 +6034,107 @@ fn run_pub_visibility_enforced() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Per-width wrapping/saturating arithmetic (spec §32): native LLVM lowering
+/// for any integer width. The runtime i64 helpers are only used for div.
+#[test]
+fn run_per_width_wrapping_saturating() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-wsat-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("wsat.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    UInt(8) a = 250;
+    UInt(8) b = 20;
+    UInt(8) w = wrapping_uadd(a, b);
+    println("wuadd: " + UIntToString(w));
+    Int(8) sa = 100;
+    Int(8) sb = 100;
+    Int(8) c = saturating_add(sa, sb);
+    println("sat_add: " + IntToString(c));
+    UInt(8) ua = 250;
+    UInt(8) ub = 20;
+    UInt(8) d = saturating_uadd(ua, ub);
+    println("suadd: " + UIntToString(d));
+    UInt(8) e = 0;
+    UInt(8) f = 1;
+    UInt(8) g = saturating_usub(e, f);
+    println("susub: " + UIntToString(g));
+    Int(8) ma = 127;
+    Int(8) mb = 2;
+    Int(8) h = saturating_mul(ma, mb);
+    println("smul: " + IntToString(h));
+    UInt(8) mu1 = 128;
+    UInt(8) mu2 = 128;
+    UInt(8) i = saturating_umul(mu1, mu2);
+    println("umul: " + UIntToString(i));
+    Int(256) xa = 1;
+    Int(256) xb = 2;
+    Int(256) x = wrapping_add(xa, xb);
+    println("256wrap: " + Int256ToString(x));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&file).arg("run").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("wuadd: 14"), "{stdout}");
+    assert!(stdout.contains("sat_add: 127"), "{stdout}");
+    assert!(stdout.contains("suadd: 255"), "{stdout}");
+    assert!(stdout.contains("susub: 0"), "{stdout}");
+    assert!(stdout.contains("smul: 127"), "{stdout}");
+    assert!(stdout.contains("umul: 255"), "{stdout}");
+    assert!(stdout.contains("256wrap: 3"), "{stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Sandboxing (spec §21): sandbox constrains what capabilities code inside can
+/// use. A function inside a sandbox whose @requires exceeds the sandbox ceiling
+/// is rejected at compile time.
+#[test]
+fn run_sandbox_enforcement() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sandbox-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Legal: function inside sandbox with no @requires.
+    let ok = dir.join("ok.resid");
+    std::fs::write(
+        &ok,
+        r#"sandbox (filesystem) {
+    Int read_data() { return 42; }
+}
+
+Int main() {
+    println(IntToString(read_data()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&ok).arg("run").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "42");
+
+    // Illegal: function inside sandbox @requires(network) exceeds sandbox (filesystem).
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"sandbox (filesystem) {
+    @requires(network)
+    Int fetch_data() { return 1; }
+}
+
+Int main() {
+    println(IntToString(fetch_data()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&bad).arg("emit-ir").output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "sandbox ceiling violation must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("network"), "error should mention exceeding capability: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
