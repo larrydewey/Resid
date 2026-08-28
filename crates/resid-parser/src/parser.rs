@@ -322,6 +322,29 @@ impl Parser {
         false
     }
 
+    /// After a numeric type head, consume a parenthesized width such as
+    /// `(8)` and return the combined type text `Int(8)`. Used because behavior
+    /// instances carry type names that may themselves be type applications.
+    fn capture_numeric_type_param(&mut self, head: &str) -> Option<String> {
+        if !matches!(head, "Int" | "UInt" | "Float" | "Dec") {
+            return None;
+        }
+        if !self.peek_is_op(Op::LParen) {
+            return None;
+        }
+        self.bump();
+        let width = match self.peek() {
+            Some(TokenKind::Literal(Literal::Int { value, .. })) => value,
+            _ => return None,
+        };
+        self.bump();
+        if !self.peek_is_op(Op::RParen) {
+            return None;
+        }
+        self.bump();
+        Some(format!("{head}({width})"))
+    }
+
     /// Parse a behavior instance reference: `Ord(T)` or right-nested
     /// `Reverse(Ord(T))` (spec §11). Returns the verbatim source text.
     fn parse_using_instance(&mut self) -> String {
@@ -329,6 +352,9 @@ impl Parser {
             .expect_ident("using: expected behavior name")
             .map(|id| id.0)
             .unwrap_or_else(|| "__error__".to_string());
+        if let Some(ty) = self.capture_numeric_type_param(&head) {
+            return ty;
+        }
         if self.peek_is_op(Op::LParen) {
             self.bump();
             let inner = self.parse_using_instance();
@@ -351,7 +377,11 @@ impl Parser {
         let mut type_params = Vec::new();
         while !self.peek_is_op(Op::RParen) && !self.at_eof() {
             if let Some(id) = self.expect_ident("behavior: expected type name") {
-                type_params.push(id);
+                if let Some(ty) = self.capture_numeric_type_param(&id.0) {
+                    type_params.push(Id(ty));
+                } else {
+                    type_params.push(id);
+                }
             }
             if self.peek_is_op(Op::Comma) {
                 self.bump();
@@ -3990,5 +4020,43 @@ fn bootstrap_sources_parse_clean() {
             errors.iter().take(5).collect::<Vec<_>>()
         );
         assert!(!unit.declarations.is_empty(), "{name}: no declarations");
+    }
+}
+
+#[test]
+fn using_numeric_type_instance_parses() {
+    // `Ord(Int(8))` — behavior instance whose type param is itself a
+    // type application. Previously the nested parens broke parsing.
+    let src = r#"
+Int main() {
+    List(Int(8)) xs = [1, 2];
+    List(Int(8)) s = sort(xs, using = Ord(Int(8)));
+    List(Int(8)) d = sort(xs, using = Reverse(Ord(Int(8))));
+    List(UInt(16)) ys = [u16(1), u16(2)];
+    List(UInt(16)) t = sort(ys, using = Ord(UInt(16)));
+    return 0;
+}
+"#;
+    let (_, errors) = Parser::parse("num.resid", src);
+    assert!(errors.is_empty(), "Errors: {:?}", errors);
+}
+
+#[test]
+fn behavior_def_with_numeric_type_param_parses() {
+    let src = r#"
+Int cmp(Int a, Int b) { return a - b; }
+Ord(Int(8)) = cmp;
+Int main() { return 0; }
+"#;
+    let (unit, errors) = Parser::parse("beh.resid", src);
+    assert!(errors.is_empty(), "Errors: {:?}", errors);
+    let decl = &unit.declarations[1];
+    match decl {
+        Declaration::Behavior(b) => {
+            assert_eq!(b.name.0, "Ord");
+            assert_eq!(b.type_params.len(), 1);
+            assert_eq!(b.type_params[0].0, "Int(8)");
+        }
+        _ => panic!("expected behavior declaration, got {decl:?}"),
     }
 }

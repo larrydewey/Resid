@@ -12,7 +12,7 @@ pub use resid_ir::{
 };
 use resid_lexer::token::{Literal, Op as OpKind, Span};
 use resid_parser::{
-    Block, Declaration, Expr, ExprKind, FuncDef, Id, Pattern, PatternKind, StmtKind,
+    Block, Declaration, Expr, ExprKind, FStringPart, FuncDef, Id, Pattern, PatternKind, Stmt, StmtKind,
     SumVariant, TranslationUnit, Type, TypeBody, TypeDef,
 };
 
@@ -208,20 +208,43 @@ pub fn check_behaviors(
             types,
         )
         .unwrap_or_else(|| SemType::Numeric(NumericType::Int(IntWidth::B64)));
-        let want = vec![param_ty.clone(), param_ty];
-        if sig.params != want {
+        // §6.6/§12 core behaviors have name-specific implementation shapes.
+        let T = &b.type_params[0].0;
+        let (want_params, want_ret) = match b.name.0.as_str() {
+            "Eq" => (vec![param_ty.clone(), param_ty], SemType::Bool),
+            "Hash" => (
+                vec![param_ty],
+                SemType::Numeric(NumericType::Int(IntWidth::B64)),
+            ),
+            "Serialize" => (vec![param_ty], SemType::Str),
+            "Allocator" => (vec![], param_ty),
+            _ => (
+                vec![param_ty.clone(), param_ty],
+                SemType::Numeric(NumericType::Int(IntWidth::B64)),
+            ),
+        };
+        let want_str = format!(
+            "({}) -> {want_ret}",
+            if want_params.is_empty() {
+                String::new()
+            } else if want_params.len() == 1 {
+                T.to_string()
+            } else {
+                format!("{T}, {T}")
+            }
+        );
+        if sig.params != want_params {
             errs.push(err(
                 &b.span,
                 format!(
-                    "behavior `{key}`: `{func}` must have signature ({T}, {T}) -> Int, found {}",
+                    "behavior `{key}`: `{func}` must have signature {want_str}, found {}",
                     FormatSig(&sig),
-                    T = b.type_params[0].0,
                 ),
             ));
-        } else if sig.ret != SemType::Numeric(NumericType::Int(IntWidth::B64)) {
+        } else if sig.ret != want_ret {
             errs.push(err(
                 &b.span,
-                format!("behavior `{key}`: `{func}` must return Int"),
+                format!("behavior `{key}`: `{func}` must return {want_ret}"),
             ));
         }
     }
@@ -475,6 +498,34 @@ pub fn type_from_name(name: &str) -> Option<SemType> {
             fields: vec![("message".into(), SemType::Str)],
         }),
         _ => resid_ir::NumericType::from_name(name).map(SemType::Numeric),
+    }
+}
+
+/// The type text inside a behavior instance (`Ord(Int(8))` → `Int(8)`).
+pub fn inner_ty_name(inst: &str) -> &str {
+    match inst.find('(') {
+        Some(i) => inst[i + 1..].strip_suffix(')').unwrap_or(&inst[i + 1..]),
+        None => inst,
+    }
+}
+
+/// Resolve a surface type spelling to a numeric semantic type, if it is one.
+/// Understands `Int(8)`/`UInt(64)`/`Float(32)`/`Dec(12)` plus the bare names
+/// `Int`/`UInt`/`Float`/`Dec`/`ISize`/`USize` (and the short `iN`/`uN`/`fN`/`dN`
+/// forms). Returns `None` for non-numeric or unknown spellings.
+pub fn numeric_type_from_surface(s: &str) -> Option<SemType> {
+    let mut norm = s.to_string();
+    for (pfx, conv) in [("Int(", 'i'), ("UInt(", 'u'), ("Float(", 'f'), ("Dec(", 'd')] {
+        if let Some(rest) = s.strip_prefix(pfx) {
+            if let Some(w) = rest.strip_suffix(')') {
+                norm = format!("{conv}{w}");
+                break;
+            }
+        }
+    }
+    match resid_ir::NumericType::from_name(&norm) {
+        Some(n) => Some(SemType::Numeric(n)),
+        None => type_from_name(s).filter(|t| matches!(t, SemType::Numeric(_))),
     }
 }
 
@@ -2428,6 +2479,26 @@ fn infer_using(
     }
     let key = format!("behavior::{inner}");
     let Some(sig) = sigs.get(&key) else {
+        // §6.6: Eq/Ord/Hash are supplied for the whole numeric family by
+        // generic behavior definitions — the compiler instantiates them for
+        // every concrete width, users never declare per-width instances.
+        if let Some(nt) = numeric_type_from_surface(inner_ty_name(inner)) {
+            let bname = inner
+                .split('(')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if matches!(bname.as_str(), "Ord" | "Eq" | "Hash") {
+                if nt != elem {
+                    return Err(err(
+                        span,
+                        format!("behavior `{inner}` applies to {nt}, but the list holds {elem}"),
+                    ));
+                }
+                return Ok(ty);
+            }
+        }
         return Err(err(
             span,
             format!("no behavior instance `{inner}` is defined"),
@@ -3032,14 +3103,31 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
             .get(param_name)
             .cloned()
             .unwrap_or(SemType::Numeric(NumericType::Int(IntWidth::B64)));
+        let bname = key.split('(').next().unwrap_or("");
+        let (params, ret) = match bname {
+            "Eq" => (vec![param_ty.clone(), param_ty], SemType::Bool),
+            "Hash" | "Serialize" => (
+                vec![param_ty],
+                if bname == "Serialize" {
+                    SemType::Str
+                } else {
+                    SemType::Numeric(NumericType::Int(IntWidth::B64))
+                },
+            ),
+            "Allocator" => (vec![], param_ty),
+            _ => (
+                vec![param_ty.clone(), param_ty],
+                SemType::Numeric(NumericType::Int(IntWidth::B64)),
+            ),
+        };
         sigs.insert(
             format!("behavior::{key}"),
             FunctionSig {
                 name: func.clone(),
-                params: vec![param_ty.clone(), param_ty],
+                params,
                 param_names: vec!["a".into(), "b".into()],
                 param_defaults: vec![None, None],
-                ret: SemType::Numeric(NumericType::Int(IntWidth::B64)),
+                ret,
                 is_pub: true,
                 file: String::new(),
                 requires: Vec::new(),
@@ -3092,7 +3180,327 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
             }
         }
     }
+    enforce_transitive_attenuation(&flat, &sigs, &mut errs);
     errs
+}
+
+// ─── §21.3 transitive attenuation closure ───────────────────────
+//
+// The sandbox ceiling applies to the entire call closure of a
+// sandboxed function, not just its own body: every function reachable
+// from inside the sandbox runs with at most the sandbox's capabilities
+// ("attenuation applies to the entire closure"). A call whose callee
+// declares a `@requires` capability that is absent from the *caller's*
+// effective ceiling is rejected at compile time. Effective ceilings are
+// computed as a meet (set intersection) along the call graph, so a
+// capability required anywhere in the closure surfaces at the sandbox
+// boundary. (Capabilities are monotone: they may only be narrowed.)
+
+fn collect_expr_calls(expr: &Expr, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
+    fn walk_expr(e: &Expr, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
+        match &e.kind {
+            ExprKind::Call { func, args } => {
+                if let ExprKind::Id(name) = &func.kind {
+                    if sigs.contains_key(&name.0) {
+                        out.push((name.0.clone(), e.span.clone()));
+                    }
+                }
+                walk_expr(func, sigs, out);
+                for (_, a) in args {
+                    walk_expr(a, sigs, out);
+                }
+            }
+            ExprKind::BinaryOp { lhs, rhs, .. } => {
+                walk_expr(lhs, sigs, out);
+                walk_expr(rhs, sigs, out);
+            }
+            ExprKind::UnaryOp { operand, .. }
+            | ExprKind::Rt(operand)
+            | ExprKind::AtResidual { inner: operand, .. }
+            | ExprKind::EarlyReturn(operand)
+            | ExprKind::Known(operand)
+            | ExprKind::RtKnown(operand)
+            | ExprKind::ComptimePrint(operand)
+            | ExprKind::Cast { operand, .. }
+            | ExprKind::Discard(operand) => walk_expr(operand, sigs, out),
+            ExprKind::If {
+                cond,
+                then_block,
+                else_block,
+                ..
+            } => {
+                walk_expr(cond, sigs, out);
+                walk_block(then_block, sigs, out);
+                if let Some(b) = else_block {
+                    walk_block(b, sigs, out);
+                }
+            }
+            ExprKind::While { cond, body, .. } => {
+                walk_expr(cond, sigs, out);
+                walk_block(body, sigs, out);
+            }
+            ExprKind::ForIn {
+                collection,
+                body,
+                ..
+            } => {
+                walk_expr(collection, sigs, out);
+                walk_block(body, sigs, out);
+            }
+            ExprKind::Spawn { body, .. } => {
+                walk_block(body, sigs, out);
+            }
+            ExprKind::For {
+                init,
+                cond,
+                step,
+                body,
+                ..
+            } => {
+                if let Some(i) = init {
+                    walk_stmt(i, sigs, out);
+                }
+                walk_expr(cond, sigs, out);
+                if let Some(s) = step {
+                    walk_stmt(s, sigs, out);
+                }
+                walk_block(body, sigs, out);
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                walk_expr(scrutinee, sigs, out);
+                for (_, arm) in arms {
+                    walk_expr(arm, sigs, out);
+                }
+            }
+            ExprKind::Assert { cond, message, .. }
+            | ExprKind::RtAssert { cond, message, .. } => {
+                walk_expr(cond, sigs, out);
+                walk_expr(message, sigs, out);
+            }
+            ExprKind::StructLit { fields, .. } => {
+                for (_, v) in fields {
+                    walk_expr(v, sigs, out);
+                }
+            }
+            ExprKind::ListLit(elems) | ExprKind::SetLit(elems) => {
+                for el in elems {
+                    walk_expr(el, sigs, out);
+                }
+            }
+            ExprKind::MapLit(entries) => {
+                for (k, v) in entries {
+                    walk_expr(k, sigs, out);
+                    walk_expr(v, sigs, out);
+                }
+            }
+            ExprKind::Range { start, end, .. } => {
+                walk_expr(start, sigs, out);
+                walk_expr(end, sigs, out);
+            }
+            ExprKind::FString(parts) => {
+                for part in parts {
+                    if let FStringPart::Expr(inner) = part {
+                        walk_expr(inner, sigs, out);
+                    }
+                }
+            }
+            ExprKind::FieldAccess { target, .. }
+            | ExprKind::Index { target, .. }
+            | ExprKind::MethodCall { target, .. }
+            | ExprKind::Using { value: target, .. }
+            | ExprKind::Destructure { source: target, .. }
+            | ExprKind::IfLet {
+                source: target, ..
+            }
+            | ExprKind::WhileLet {
+                source: target, ..
+            } => {
+                walk_expr(target, sigs, out);
+                if let ExprKind::MethodCall { args, .. } = &e.kind {
+                    for a in args {
+                        walk_expr(a, sigs, out);
+                    }
+                }
+                if let ExprKind::IfLet {
+                    then_block,
+                    else_block,
+                    ..
+                } = &e.kind
+                {
+                    walk_block(then_block, sigs, out);
+                    if let Some(b) = else_block {
+                        walk_block(b, sigs, out);
+                    }
+                }
+                if let ExprKind::WhileLet { body, .. } = &e.kind {
+                    walk_block(body, sigs, out);
+                }
+            }
+            ExprKind::Slice { target, .. } => {
+                walk_expr(target, sigs, out);
+            }
+            ExprKind::ElseFallback { value, fallback } => {
+                walk_expr(value, sigs, out);
+                walk_block(fallback, sigs, out);
+            }
+            ExprKind::With { bindings, body } => {
+                for b in bindings {
+                    walk_expr(&b.init, sigs, out);
+                }
+                walk_block(body, sigs, out);
+            }
+            ExprKind::ProviderCall { args, .. } => {
+                for a in args {
+                    walk_expr(a, sigs, out);
+                }
+            }
+            ExprKind::Id(_)
+            | ExprKind::Literal(_)
+            | ExprKind::Location
+            | ExprKind::FString(_)
+            | ExprKind::RawString(_)
+            | ExprKind::ByteString(_)
+            | ExprKind::Todo(_)
+            | ExprKind::Unimplemented(_) => {}
+        }
+    }
+    fn walk_stmt(s: &Stmt, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
+        match &s.kind {
+            StmtKind::Bind { value, .. }
+            | StmtKind::Discard(value)
+            | StmtKind::Expr(value)
+            | StmtKind::Return(Some(value)) => walk_expr(value, sigs, out),
+            StmtKind::Destructure { source, .. } => walk_expr(source, sigs, out),
+            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
+        }
+    }
+    fn walk_block(b: &Block, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
+        for st in &b.statements {
+            walk_stmt(st, sigs, out);
+        }
+        if let Some(r) = &b.ret {
+            walk_expr(r, sigs, out);
+        }
+    }
+    walk_expr(expr, sigs, out);
+}
+
+fn collect_block_calls(block: &Block, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
+    fn walk_expr(e: &Expr, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
+        let mut inner = Vec::new();
+        collect_expr_calls(e, sigs, &mut inner);
+        out.extend(inner);
+    }
+    fn walk_stmt(s: &Stmt, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
+        match &s.kind {
+            StmtKind::Bind { value, .. }
+            | StmtKind::Discard(value)
+            | StmtKind::Expr(value)
+            | StmtKind::Return(Some(value)) => walk_expr(value, sigs, out),
+            StmtKind::Destructure { source, .. } => walk_expr(source, sigs, out),
+            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
+        }
+    }
+    fn walk_block(b: &Block, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
+        for st in &b.statements {
+            walk_stmt(st, sigs, out);
+        }
+        if let Some(r) = &b.ret {
+            walk_expr(r, sigs, out);
+        }
+    }
+    for st in &block.statements {
+        walk_stmt(st, sigs, out);
+    }
+    if let Some(r) = &block.ret {
+        walk_expr(r, sigs, out);
+    }
+}
+
+/// §21.3 closure check: reject every call from a function whose effective
+/// ceiling is restricted when the callee declares a `@requires` capability
+/// that is not in the caller's ceiling (or its transitive meet).
+fn enforce_transitive_attenuation(
+    flat: &[Declaration],
+    sigs: &Signatures,
+    errs: &mut Vec<TypeError>,
+) {
+    // effective ceiling per function: None = tom (unrestricted, no sandbox),
+    // Some(caps) = restricted to the meet along reachable call paths.
+    let mut eff: std::collections::HashMap<String, Option<Vec<String>>> =
+        std::collections::HashMap::new();
+    // call edges: caller -> (callee, call span)
+    let mut edges: std::collections::HashMap<String, Vec<(String, Span)>> =
+        std::collections::HashMap::new();
+    for decl in flat {
+        if let Declaration::Function(f) = decl {
+            let name = f.name.0.clone();
+            if let Some(sig) = sigs.get(&name) {
+                let lex = sig.sandbox_ceiling.clone();
+                eff.insert(name.clone(), if lex.is_empty() { None } else { Some(lex) });
+            }
+            let mut calls = Vec::new();
+            collect_block_calls(&f.body, sigs, &mut calls);
+            edges.insert(name, calls);
+        }
+    }
+    // Fixpoint: propagate ceilings along edges (only shrink).
+    for _ in 0..eff.len().max(1) {
+        let mut changed = false;
+        let snapshot = eff.clone();
+        for (caller, calls) in &edges {
+            let caller_eff = match snapshot.get(caller) {
+                Some(Some(c)) => c.clone(),
+                _ => continue,
+            };
+            for (callee, _) in calls {
+                if let Some(ce) = eff.get_mut(callee) {
+                    let merged = match ce {
+                        None => Some(caller_eff.clone()),
+                        Some(cur) => {
+                            let m: Vec<String> = cur
+                                .iter()
+                                .filter(|c| caller_eff.contains(c))
+                                .cloned()
+                                .collect();
+                            Some(m)
+                        }
+                    };
+                    if *ce != merged {
+                        *ce = merged;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // Enforce: every call from a restricted caller must fit the caller ceiling.
+    for (caller, calls) in &edges {
+        let caller_eff = match eff.get(caller) {
+            Some(Some(c)) => c,
+            _ => continue,
+        };
+        for (callee, span) in calls {
+            if let Some(sig) = sigs.get(callee) {
+                for req in &sig.requires {
+                    if !caller_eff.contains(req) {
+                        errs.push(err(
+                            span,
+                            format!(
+                                "call to `{}` requires capability `{req}` which exceeds the caller's effective sandbox ceiling [{}] (attenuation is transitive across the call closure)",
+                                callee,
+                                caller_eff.join(", "),
+                            ),
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn type_check_block(
@@ -4024,6 +4432,98 @@ Int main() {
         let errs = check_program(&src);
         assert!(
             errs.iter().any(|e| e.message.contains("requires a behavior")),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn generic_numeric_behaviors_synthesize_instances() {
+        // §6.6: Ord/Eq/Hash for the numeric family need no explicit
+        // instances, at any width and through Reverse.
+        let ok = parse_unit(
+            r#"
+Int main() {
+    List(Int(8)) xs = [i8(2), i8(1)];
+    List(Int(8)) s = sort(xs, using = Ord(Int(8)));
+    List(Int(8)) d = sort(xs, using = Reverse(Ord(Int(8))));
+    List(UInt(16)) ys = [u16(2), u16(1)];
+    List(UInt(16)) t = sort(ys, using = Ord(UInt(16)));
+    List(Int) zs = [2, 1];
+    List(Int) u = sort(zs, using = Ord(Int));
+    Bool b = (u == [1, 2]);
+    return 0;
+}
+"#,
+        );
+        let errs = check_program(&ok);
+        assert!(
+            errs.iter().all(|e| !e.message.contains("no behavior instance")),
+            "{errs:?}"
+        );
+
+        // Num-width mismatch between named instance and list element.
+        let mismatch = parse_unit(
+            r#"
+Int main() {
+    List(Int) xs = [2, 1];
+    List(Int) s = sort(xs, using = Ord(Int(8)));
+    return 0;
+}
+"#,
+        );
+        let errs = check_program(&mismatch);
+        assert!(
+            errs.iter().any(|e| e.message.contains("applies to")),
+            "{errs:?}"
+        );
+
+        // Non-numeric element cannot use the generic instances.
+        let nonnum = parse_unit(
+            r#"
+Int main() {
+    List(Str) xs = ["b", "a"];
+    List(Str) s = sort(xs, using = Ord(Int));
+    return 0;
+}
+"#,
+        );
+        let errs = check_program(&nonnum);
+        assert!(
+            errs.iter().any(|e| e.message.contains("applies to")),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn serialize_and_allocator_shape_checking() {
+        // Serialize must be (T) -> Str, Allocator () -> T.
+        let ok = parse_unit(
+            r#"
+type Point = { x: Int, y: Int };
+Str enc(Point p) { return "pt"; }
+Point mk() { return Point { x: 0, y: 0 }; }
+Serialize(Point) = enc;
+Allocator(Point) = mk;
+Int main() {
+    return 0;
+}
+"#,
+        );
+        let errs = check_program(&ok);
+        assert!(errs.is_empty(), "{errs:?}");
+
+        // Wrong shape Serialize (Int args instead of a Point arg).
+        let bad_serialize = parse_unit(
+            r#"
+type Point = { x: Int, y: Int };
+Int enc(Int a, Int b) { return a; }
+Serialize(Float) = enc;
+Int main() { return 0; }
+"#,
+        );
+        let errs = check_program(&bad_serialize);
+        assert!(
+            errs.iter().any(|e| e.message.contains("must have signature")),
             "{errs:?}"
         );
     }
@@ -6635,5 +7135,58 @@ sandbox (filesystem) {
         };
         let ty = infer_expr(&len, &env, &Signatures::new()).unwrap();
         assert_eq!(ty, SemType::Numeric(NumericType::ISize));
+    }
+
+    // ─── §21.3 transitive attenuation closure (call-site enforcement) ──
+
+    #[test]
+    fn sandbox_transitive_attenuation_closure() {
+        // A callee declared outside any sandbox with `@requires(network)`,
+        // called from inside `sandbox (filesystem)`: rejected at the call site.
+        let bad = r#"
+@requires(network)
+Int leaf() { return 1; }
+sandbox (filesystem) {
+    Int outer() { Int x = leaf(); return x; }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", bad);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "transitive call must be rejected");
+        assert!(
+            errs.iter().any(|e| e.message.contains("network") && e.message.contains("leaf")),
+            "error should mention callee and capability, got: {:?}", errs
+        );
+
+        // Closure through an unrestricted middle-man: effective ceiling of
+        // `mid` narrows to the sandbox's ceiling by the meet, so the leaf
+        // call inside `mid` is rejected too.
+        let chain = r#"
+@requires(network)
+Int leaf() { return 1; }
+Int mid() { Int x = leaf(); return x; }
+sandbox (filesystem) {
+    Int outer() { Int x = mid(); return x; }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", chain);
+        let errs = check_program(&unit);
+        assert!(!errs.is_empty(), "transitive closure through mid must be rejected");
+        assert!(
+            errs.iter().any(|e| e.message.contains("leaf")),
+            "error should point at the leaf call, got: {:?}", errs
+        );
+
+        // Legal when the ceiling actually grants the capability.
+        let ok = r#"
+@requires(network)
+Int leaf() { return 1; }
+sandbox (network) {
+    Int outer() { Int x = leaf(); return x; }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", ok);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "granted call must pass, got: {:?}", errs);
     }
 }
