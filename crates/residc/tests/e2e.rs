@@ -6139,8 +6139,145 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Maps and sets (spec §32 core types): literal syntax, methods, and
-/// Map indexing all lower to the persistent-hash-table runtime and run.
+/// Sandboxing (spec §21.3): attenuation is transitive across the call
+/// closure. A sandboxed function may not transitively reach code that
+/// requires a capability beyond the ceiling, even through a helper that
+/// declares no requirements of its own.
+#[test]
+fn run_sandbox_transitive_attenuation() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sandbox-trans-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Legal: callee declares network, sandbox grants network.
+    let ok = dir.join("ok.resid");
+    std::fs::write(
+        &ok,
+        r#"@requires(network)
+Int fetch() { return 42; }
+
+sandbox (network) {
+    Int read() { Int x = fetch(); return x; }
+}
+
+Int main() {
+    println(IntToString(read()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&ok).arg("run").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "42");
+
+    // Illegal: sandbox grants filesystem, callee needs network -> the call
+    // inside the sandbox is rejected at compile time.
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"@requires(network)
+Int fetch() { return 42; }
+
+sandbox (filesystem) {
+    Int read() { Int x = fetch(); return x; }
+}
+
+Int main() {
+    println(IntToString(read()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&bad).arg("emit-ir").output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "transitive capability violation must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("network"), "error should mention capability: {err}");
+    assert!(err.contains("fetch"), "error should mention callee: {err}");
+
+    // Illegal through an undecorated middle-man: `fetch` is only reachable
+    // from the sandbox via `helper`, whose effective ceiling narrows to the
+    // sandbox's by the closure rule.
+    let chain = dir.join("chain.resid");
+    std::fs::write(
+        &chain,
+        r#"@requires(network)
+Int fetch() { return 42; }
+
+Int helper() { Int x = fetch(); return x; }
+
+sandbox (filesystem) {
+    Int read() { Int x = helper(); return x; }
+}
+
+Int main() {
+    println(IntToString(read()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&chain).arg("emit-ir").output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "closure violation through helper must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("fetch"), "error should mention the closure callee: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+#[test]
+fn run_generic_numeric_behaviors() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-genbeh-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("genbeh.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    List(Int) a = [3, 1, 2];
+    List(Int) sa = sort(a, using = Ord(Int));
+    println(IntToString(sa[0]));
+    println(IntToString(sa[2]));
+    List(Int) da = sort(a, using = Reverse(Ord(Int)));
+    println(IntToString(da[0]));
+    List(UInt(16)) b = [u16(300), u16(100), u16(200)];
+    List(UInt(16)) sb = sort(b, using = Ord(UInt(16)));
+    println(UIntToString(sb[0]));
+    List(Int(8)) c = [i8(3), i8(1), i8(2)];
+    List(Int(8)) sc = sort(c, using = Ord(Int(8)));
+    List(Float) f = [3.5, 1.25, 2.0];
+    List(Float) sf = sort(f, using = Ord(Float));
+    println(FloatToString(sf[0]));
+    List(Float) df = sort(f, using = Reverse(Ord(Float)));
+    println(FloatToString(df[0]));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&file).arg("run").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.trim().split('\n').collect();
+    assert_eq!(lines[0], "1", "ascending Int: {}", lines[0]);
+    assert_eq!(lines[1], "3", "ascending Int tail: {}", lines[1]);
+    assert_eq!(lines[2], "3", "descending Int head: {}", lines[2]);
+    assert_eq!(lines[3], "100", "ascending UInt(16): {}", lines[3]);
+    assert_eq!(lines[4], "1.25", "ascending Float: {}", lines[4]);
+    assert_eq!(lines[5], "3.5", "descending Float: {}", lines[5]);
+
+    // Wrong-width instance is rejected at type-check time, before codegen.
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"Int main() {
+    List(Int) xs = [2, 1];
+    List(Int) s = sort(xs, using = Ord(Int(8)));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&bad).arg("emit-ir").output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "width mismatch must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("applies to"), "error should explain the width mismatch: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
 #[test]
 fn run_map_set_types() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-mapset-{}", std::process::id()));

@@ -3749,14 +3749,39 @@ impl<'ctx> CodeGen<'ctx> {
             reverse_layers += 1;
             inner = rest;
         }
-        let impl_fn = self
+        let impl_fn = match self
             .behaviors
             .get(inner)
             .cloned()
-            .ok_or_else(|| format!("codegen: unknown behavior instance `{inner}`"))?;
+        {
+            Some(f) => Some(f),
+            None => {
+                // §6.6: Ord is supplied generically for the whole numeric
+                // family — the compiler instantiates every width inline.
+                if inner.split('(').next().unwrap_or("") == "Ord" {
+                    if let Some(nt) =
+                        resid_type::numeric_type_from_surface(resid_type::inner_ty_name(inner))
+                    {
+                        if nt != *elem {
+                            return Err(format!(
+                                "codegen: behavior `{inner}` sorts {nt}, but the list holds {elem}"
+                            ));
+                        }
+                        None
+                    } else {
+                        return Err(format!("codegen: unknown behavior instance `{inner}`"));
+                    }
+                } else {
+                    return Err(format!("codegen: unknown behavior instance `{inner}`"));
+                }
+            }
+        };
         let negate = reverse_layers % 2 == 1;
         let boxed = self.lower_expr(sc, list_expr, None)?;
-        let tramp = self.emit_cmp_trampoline(&impl_fn, &elem, negate)?;
+        let tramp = match &impl_fn {
+            Some(f) => self.emit_cmp_trampoline(f, &elem, negate)?,
+            None => self.emit_numeric_cmp_trampoline(&elem, negate)?,
+        };
         let ptr = self.cx.ptr_type(AddressSpace::default());
         self.decl_rt("list_sort_by", vec![ptr.into(), ptr.into()], ptr.into());
         let sorted = self.rt_call(
@@ -3882,8 +3907,115 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(f)
     }
 
-    /// Match a conversion-helper name (`d34`, `i32`, `u64`, `f128`) to its
-    /// kind letter and numeric parameter.
+    /// Emit (once per numeric element type + direction) an inline comparator
+    /// for the generic numeric `Ord` behaviors (§6.6): `i32 (i8** a, i8** b)`
+    /// returning the sign of `a - b`. Int/UInt/ISize/USize unbox to i64,
+    /// Float unboxes to f64, Dec boxes are RsDec pointers handed to
+    /// `resid_dec_cmp`.
+    fn emit_numeric_cmp_trampoline(
+        &mut self,
+        elem: &resid_type::SemType,
+        negate: bool,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        use inkwell::FloatPredicate;
+        use inkwell::IntPredicate;
+        let SemType::Numeric(n) = elem else {
+            return Err(format!(
+                "codegen: generic numeric Ord only applies to numerics, found {elem}"
+            ));
+        };
+        if let NumericType::Dec(_) = n {
+            // fall through: supported via resid_dec_cmp below.
+        } else if let Some(w) = n.target_width() {
+            if w > 64 {
+                return Err(format!(
+                    "codegen: generic numeric sort for {elem} not yet supported at width {w} (define an explicit Ord instance)"
+                ));
+            }
+        }
+        let tag = format!("{}", resid_type::SemType::Numeric(n.clone()));
+        let rev = if negate { "_rev" } else { "" };
+        let tramp_name = format!("__cmp_num_{tag}{rev}");
+        if let Some(f) = self.module.get_function(&tramp_name) {
+            return Ok(f);
+        }
+        let ptrt = self.cx.ptr_type(AddressSpace::default());
+        let i32t = self.cx.i32_type();
+        let i64t = self.cx.i64_type();
+        let fty = i32t.fn_type(&[ptrt.into(), ptrt.into()], false);
+        let f = self.module.add_function(&tramp_name, fty, None);
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.cx.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        let a_slot = f.get_nth_param(0).unwrap().into_pointer_value();
+        let b_slot = f.get_nth_param(1).unwrap().into_pointer_value();
+        let load_box = |b:&mut Self, slot: inkwell::values::PointerValue<'ctx>| -> Result<inkwell::values::PointerValue<'ctx>, String> {
+            b.builder
+                .build_load(ptrt, slot, "slot")
+                .map_err(to_err)
+                .map(|v| v.into_pointer_value())
+        };
+        let boxp_a = load_box(self, a_slot)?;
+        let boxp_b = load_box(self, b_slot)?;
+        let zero_i64 = i64t.const_int(0, false);
+        let one_i64 = i64t.const_int(1, false);
+        let minus1_i64 = i64t.const_int((-1i64) as u64, false);
+        let sign_i64 = match n {
+            NumericType::Dec(_) => {
+                // RsDec boxes are already pointers; compare directly.
+                let r = self.rt_call("resid_dec_cmp", vec![boxp_a.into(), boxp_b.into()])?;
+                let r32 = r.into_int_value();
+                let r64 = self
+                    .builder
+                    .build_int_s_extend(r32, i64t, "dec_sign")
+                    .map_err(to_err)?;
+                r64
+            }
+            NumericType::Float(_) => {
+                let a = self.rt_call("resid_unbox_f64", vec![boxp_a.into()])?;
+                let b = self.rt_call("resid_unbox_f64", vec![boxp_b.into()])?;
+                let ft = self.cx.f64_type();
+                let a = a.into_float_value();
+                let b = b.into_float_value();
+                let is_lt = self.builder.build_float_compare(FloatPredicate::OLT, a, b, "is_lt").map_err(to_err)?;
+                let is_gt = self.builder.build_float_compare(FloatPredicate::OGT, a, b, "is_gt").map_err(to_err)?;
+                let pos = self.builder.build_select(is_gt, one_i64, zero_i64, "pos").map_err(to_err)?.into_int_value();
+                let sign = self.builder.build_select(is_lt, minus1_i64, pos, "flt_sign").map_err(to_err)?.into_int_value();
+                let _ = ft;
+                sign
+            }
+            _ => {
+                let signed = n.is_signed();
+                let a = self.rt_call("resid_unbox_i64", vec![boxp_a.into()])?;
+                let b = self.rt_call("resid_unbox_i64", vec![boxp_b.into()])?;
+                let a = a.into_int_value();
+                let b = b.into_int_value();
+                let (lt_p, gt_p) = if signed {
+                    (IntPredicate::SLT, IntPredicate::SGT)
+                } else {
+                    (IntPredicate::ULT, IntPredicate::UGT)
+                };
+                let is_lt = self.builder.build_int_compare(lt_p, a, b, "is_lt").map_err(to_err)?;
+                let is_gt = self.builder.build_int_compare(gt_p, a, b, "is_gt").map_err(to_err)?;
+                let pos = self.builder.build_select(is_gt, one_i64, zero_i64, "pos").map_err(to_err)?.into_int_value();
+                self.builder.build_select(is_lt, minus1_i64, pos, "int_sign").map_err(to_err)?.into_int_value()
+            }
+        };
+        let sign32 = self.builder.build_int_truncate(sign_i64, i32t, "sign32").map_err(to_err)?;
+        let out = if negate {
+            self.builder
+                .build_int_sub(i32t.const_int(0, false), sign32, "neg")
+                .map_err(to_err)?
+        } else {
+            sign32
+        };
+        self.builder.build_return(Some(&out)).map_err(to_err)?;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.cmp_trampolines.insert(tramp_name);
+        Ok(f)
+    }
     fn parse_conv_helper(name: &str) -> Option<(char, u32)> {
         let mut cs = name.chars();
         let k = cs.next()?;

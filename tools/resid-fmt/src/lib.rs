@@ -358,6 +358,10 @@ fn expr_str(e: &Expr, _ctx: usize) -> String {
                 .collect();
             format!("{{{}}}", ps.join(", "))
         }
+        ExprKind::SetLit(elems) => {
+            let es: Vec<String> = elems.iter().map(|e| expr_str(e, 1)).collect();
+            format!("{{{}}}", es.join(", "))
+        }
         ExprKind::Range { start, end, closed } => {
             let dots = if *closed { "..=" } else { ".." };
             format!("{}{dots}{}", child_str(start, 2), child_str(end, 2))

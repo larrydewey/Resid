@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**672 tests pass** (lexer 17, parser 110, resid-ir 46, resid-type 203,
+**679 tests pass** (lexer 17, parser 112, resid-ir 46, resid-type 206,
  resid-codegen 137, resid-build 39, resid-fmt 5,
  resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
- resid-graph 4, resid-builtin 0, residc 0 unit + 90 e2e incl.
+ resid-graph 4, resid-builtin 0, residc 0 unit + 92 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
@@ -407,14 +407,13 @@ type — Option lands first.
 
 ### Suggested attack order
 
-1. Behaviors (item 6), then serialization lib (`lib/json.resid`, first
-   third-party package).
+1. Behaviors (item 6) — ✅ done (stage-1: generic numeric Ord/Eq/Hash synthesis, Serialize/Allocator shape checking, e2e `run_generic_numeric_behaviors`).
 2. `value?` sugar (item 9) — ✅ done (stage-1, both Option and Result).
 3. `pub` enforcement (item 8) — ✅ done (stage-1).
 4. Per-width wrapping/saturating (item 5) — ✅ done.
 5. Map/Set types (item 4) — ✅ done (stage-1).
-6. Serialize/Hash behaviors (item 3).
-7. Sandbox transitive attenuation + dynamic errors (item 1 remaining).
+6. Serialize/Hash behaviors (item 3) — ✅ done (stage-1).
+7. Sandbox transitive attenuation (item 1 remaining) — ✅ done (stage-1, e2e `run_sandbox_transitive_attenuation`).
 8. Constraint types (item 2).
 9. Knowledge-graph IR + reduction depth (items 11, 12).
 10. Runtime spawn caps (item 7), caps-as-effects (item 10).
@@ -480,7 +479,29 @@ pipelines for struct sort, Int sort, and Reverse):
   only), and hash-table port needs spellout via recursion-first
   algorithms — planned after `?`-sugar sum-type groundwork (item 9).
 
-### Progress on item 1 — sandboxing: STATIC CEILING ENFORCED
+### Progress on item 1 — generic numeric behaviors & Serialize/Allocator (stage-1 DONE)
+
+- **Parser**: `Ord(Int(8))`, `Reverse(Ord(UInt(16)))`, etc. parse via
+  `capture_numeric_type_param` (nested type applications in behavior
+  instances). `using = Ord(Int(8))` and `Ord(Int(8)) = cmp;` declarations
+  accepted.
+- **Type checker**: §6.6 generic numeric fallback in `infer_using` —
+  `Ord`/`Eq`/`Hash` synthesized for any `Int(w)`/`UInt(w)`/`Float(w)`/`Dec(p)`
+  width without explicit instance declarations. Per-behavior shape validation:
+  `Ord` → `(T,T)->Int`, `Eq` → `(T,T)->Bool`, `Hash` → `(T)->Int`,
+  `Serialize` → `(T)->Str`, `Allocator` → `()->T`. Width mismatch between
+  instance and list element rejected (`applies to Int(8), but the list holds Int`).
+- **Codegen**: inline comparator trampolines (`emit_numeric_cmp_trampoline`)
+  for `Ord` at any numeric width — Int/UInt/ISize/USize unbox via
+  `resid_unbox_i64` (i64 compares → trunc to i32); Float unbox via
+  `resid_unbox_f64` (f64 compares); Dec calls `resid_dec_cmp` directly on
+  boxed RsDec pointers. Width >64 rejected (explicit instance required).
+- **e2e**: `run_generic_numeric_behaviors` exercises Int, UInt(16), Int(8),
+  Float, Reverse — all codegen paths produce correct sorted output.
+- Unit tests: `generic_numeric_behaviors_synthesize_instances`,
+  `serialize_and_allocator_shape_checking`.
+
+### Progress on item 1 — sandboxing: TRANSITIVE ATTENUATION ENFORCED (stage-1 DONE)
 
 **Lexer fix**: `scan_at` in `resid-lexer` rewound consumed characters when
 `@requires` (or any `@ident` not matching `@residual`) was encountered,
@@ -499,6 +520,16 @@ sandbox's capability list. The sandbox wrapper itself is discarded.
 sandbox). `check_program` flattens sandboxes inline and enforces that every
 required capability is present in the ceiling; violation → hard compile error.
 
-**Remaining gaps**: transitive attenuation closure (call-site enforcement
-for callees' requirements), dynamic/residual capability errors, handle-entry
-rules, manifest ceiling, §21.4 knowledge-cache gating.
+**Transitive attenuation**: `enforce_transitive_attenuation` (meet-based
+fixpoint over the call graph) computes an effective ceiling per function as
+`Option<Vec<String>>` (None = unrestricted, Some(caps) = restricted).
+- Ceilings propagate along call edges via set intersection (meet).
+- At each call from a restricted caller, every callee `@requires` cap must
+  be a subset of the caller's effective ceiling.
+- Conservative: any function reachable from a restricted caller inherits
+  the restricted ceiling, ensuring sound static attenuation.
+- e2e `run_sandbox_transitive_attenuation` exercises: direct violation,
+  undecorated middle-man chain, and legal grant — all green.
+
+**Remaining gaps**: dynamic/residual capability errors, handle-entry rules,
+manifest ceiling, §21.4 knowledge-cache gating.
