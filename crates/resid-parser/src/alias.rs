@@ -130,6 +130,11 @@ pub fn qualify_expr(expr: &mut Expr, am: &AliasMap) {
                 qualify_expr(v, am);
             }
         }
+        ExprKind::SetLit(elems) => {
+            for e in elems.iter_mut() {
+                qualify_expr(e, am);
+            }
+        }
         ExprKind::Range { start, end, .. } => {
             qualify_expr(start, am);
             qualify_expr(end, am);

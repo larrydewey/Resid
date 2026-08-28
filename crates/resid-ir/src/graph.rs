@@ -141,6 +141,9 @@ pub enum NodeKind {
     Map {
         entries: Vec<(GraphKey, GraphKey)>,
     },
+    Set {
+        elements: Vec<GraphKey>,
+    },
     Range {
         start: GraphKey,
         end: GraphKey,
@@ -229,6 +232,7 @@ impl fmt::Debug for NodeKind {
             NodeKind::Struct { name, .. } => write!(f, "struct({})", name),
             NodeKind::List { .. } => write!(f, "list"),
             NodeKind::Map { .. } => write!(f, "map"),
+            NodeKind::Set { .. } => write!(f, "set"),
             NodeKind::Range { .. } => write!(f, "range"),
             NodeKind::FString { .. } => write!(f, "fstring"),
             NodeKind::RawString(_) => write!(f, "raw_string"),

@@ -154,6 +154,7 @@ impl<'a> ReductionContext<'a> {
             NodeKind::FString { parts } => self.reduce_fstring(key, parts),
             NodeKind::Slice { target, range } => self.reduce_slice(key, *target, *range),
             NodeKind::Map { entries } => self.reduce_map(key, entries.clone()),
+            NodeKind::Set { elements } => self.reduce_set(key, elements.clone()),
             NodeKind::MethodCall {
                 target,
                 method,
@@ -665,6 +666,14 @@ impl<'a> ReductionContext<'a> {
         &mut self,
         key: GraphKey,
         _entries: Vec<(GraphKey, GraphKey)>,
+    ) -> Result<ReductionResult, Vec<ReductionError>> {
+        self.graph.set_knowledge(key, KnowledgeState::Known);
+        Ok(ReductionResult::Irreducible)
+    }
+    fn reduce_set(
+        &mut self,
+        key: GraphKey,
+        _elements: Vec<GraphKey>,
     ) -> Result<ReductionResult, Vec<ReductionError>> {
         self.graph.set_knowledge(key, KnowledgeState::Known);
         Ok(ReductionResult::Irreducible)

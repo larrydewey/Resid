@@ -26,6 +26,10 @@ pub enum SemType {
     Bytes,
     /// An immutable list of homogeneous elements.
     List(Box<SemType>),
+    /// An immutable map (key → value). Spec §32 core types.
+    Map(Box<SemType>, Box<SemType>),
+    /// An immutable set of homogeneous elements. Spec §32 core types.
+    Set(Box<SemType>),
     /// A user-declared product type.
     Struct {
         name: String,
@@ -60,6 +64,8 @@ impl core::fmt::Display for SemType {
             SemType::Str => write!(f, "Str"),
             SemType::Bytes => write!(f, "Bytes"),
             SemType::List(e) => write!(f, "List({e})"),
+            SemType::Map(k, v) => write!(f, "Map({k}, {v})"),
+            SemType::Set(e) => write!(f, "Set({e})"),
             SemType::Struct { name, .. } => write!(f, "{name}"),
             SemType::Sum { name, .. } => write!(f, "{name}"),
             SemType::Ptr => write!(f, "ptr"),
@@ -439,6 +445,7 @@ pub fn kind_tag(kind: &ExprKind) -> &'static str {
         ExprKind::StructLit { .. } => "struct literal",
         ExprKind::ListLit(_) => "list literal",
         ExprKind::MapLit(_) => "map literal",
+        ExprKind::SetLit(_) => "set literal",
         ExprKind::Index { .. } => "index",
         ExprKind::FieldAccess { .. } => "field access",
         ExprKind::MethodCall { .. } => "method call",
@@ -598,6 +605,35 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                     }
                 }
                 return None; // a bare `List` needs an element type
+            }
+            // Built-in `Map(K, V)`.
+            if name.0 == "Map" {
+                let Some(ps) = params else {
+                    return None;
+                };
+                if ps.len() != 2 {
+                    return None;
+                }
+                let Some(key) = resolve_type_ctx(&ps[0], types) else {
+                    return None;
+                };
+                let Some(val) = resolve_type_ctx(&ps[1], types) else {
+                    return None;
+                };
+                return Some(SemType::Map(Box::new(key), Box::new(val)));
+            }
+            // Built-in `Set(T)`.
+            if name.0 == "Set" {
+                let Some(ps) = params else {
+                    return None;
+                };
+                if ps.len() != 1 {
+                    return None;
+                }
+                let Some(inner) = resolve_type_ctx(&ps[0], types) else {
+                    return None;
+                };
+                return Some(SemType::Set(Box::new(inner)));
             }
             // Built-in `Option(T)` sum.
             if name.0 == "Option" {
@@ -1296,6 +1332,8 @@ pub fn infer_expr_ctx(
 
         // Composite literals and their accessors.
         ExprKind::ListLit(elems) => infer_list(elems, env, sigs, types, &expr.span),
+        ExprKind::MapLit(entries) => infer_map(entries, env, sigs, types, &expr.span),
+        ExprKind::SetLit(elems) => infer_set(elems, env, sigs, types, &expr.span),
         ExprKind::Range { start, end, .. } => {
             let st = infer_expr_ctx(start, env, sigs, types)?;
             let et = infer_expr_ctx(end, env, sigs, types)?;
@@ -1361,6 +1399,22 @@ pub fn infer_expr_ctx(
                     }
                     Ok((**elem).clone())
                 }
+                SemType::Map(k, v) => {
+                    let it = infer_expr_ctx(index, env, sigs, types)?;
+                    if &it != k.as_ref() {
+                        return Err(err(
+                            &index.span,
+                            format!("map index key mismatch: map has key {k}, found {it}"),
+                        ));
+                    }
+                    Ok(SemType::Sum {
+                        name: "Option".into(),
+                        variants: vec![
+                            ("None".into(), None),
+                            ("Some".into(), Some(v.as_ref().clone())),
+                        ],
+                    })
+                }
                 other => Err(err(
                     &expr.span,
                     format!("cannot index value of type {other}"),
@@ -1407,6 +1461,146 @@ pub fn infer_expr_ctx(
                             ),
                         ));
                     }
+                }
+            }
+            // ─── Map methods ────────────────────────────────────
+            if let SemType::Map(k, v) = &tt {
+                match method_name.as_str() {
+                    "len" if args.is_empty() => {
+                        return Ok(SemType::Numeric(NumericType::ISize));
+                    }
+                    "get" if args.len() == 1 => {
+                        let at = infer_expr_ctx(&args[0], env, sigs, types)?;
+                        if &at != k.as_ref() {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.get` key type mismatch: map has key {k}, found {at}"),
+                            ));
+                        }
+                        return Ok(SemType::Sum {
+                            name: "Option".into(),
+                            variants: vec![
+                                ("None".into(), None),
+                                ("Some".into(), Some(v.as_ref().clone())),
+                            ],
+                        });
+                    }
+                    "insert" if args.len() == 2 => {
+                        let kt = infer_expr_ctx(&args[0], env, sigs, types)?;
+                        let vt = infer_expr_ctx(&args[1], env, sigs, types)?;
+                        if &kt != k.as_ref() {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.insert` key type mismatch: map has key {k}, found {kt}"),
+                            ));
+                        }
+                        if &vt != v.as_ref() {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.insert` value type mismatch: map has value {v}, found {vt}"),
+                            ));
+                        }
+                        return Ok(tt.clone());
+                    }
+                    "contains" if args.len() == 1 => {
+                        let at = infer_expr_ctx(&args[0], env, sigs, types)?;
+                        if &at != k.as_ref() {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.contains` key type mismatch: map has key {k}, found {at}"),
+                            ));
+                        }
+                        return Ok(SemType::Bool);
+                    }
+                    "remove" if args.len() == 1 => {
+                        let at = infer_expr_ctx(&args[0], env, sigs, types)?;
+                        if &at != k.as_ref() {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.remove` key type mismatch: map has key {k}, found {at}"),
+                            ));
+                        }
+                        return Ok(tt.clone());
+                    }
+                    "keys" if args.is_empty() => {
+                        return Ok(SemType::List(k.clone()));
+                    }
+                    "values" if args.is_empty() => {
+                        return Ok(SemType::List(v.clone()));
+                    }
+                    _ => {}
+                }
+            }
+            // ─── Set methods ────────────────────────────────────
+            if let SemType::Set(elem) = &tt {
+                match method_name.as_str() {
+                    "len" if args.is_empty() => {
+                        return Ok(SemType::Numeric(NumericType::ISize));
+                    }
+                    "contains" if args.len() == 1 => {
+                        let at = infer_expr_ctx(&args[0], env, sigs, types)?;
+                        if &at != elem.as_ref() {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.contains` type mismatch: set has element {elem}, found {at}"),
+                            ));
+                        }
+                        return Ok(SemType::Bool);
+                    }
+                    "insert" if args.len() == 1 => {
+                        let at = infer_expr_ctx(&args[0], env, sigs, types)?;
+                        if &at != elem.as_ref() {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.insert` type mismatch: set has element {elem}, found {at}"),
+                            ));
+                        }
+                        return Ok(tt.clone());
+                    }
+                    "remove" if args.len() == 1 => {
+                        let at = infer_expr_ctx(&args[0], env, sigs, types)?;
+                        if &at != elem.as_ref() {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.remove` type mismatch: set has element {elem}, found {at}"),
+                            ));
+                        }
+                        return Ok(tt.clone());
+                    }
+                    "union" if args.len() == 1 => {
+                        let at = infer_expr_ctx(&args[0], env, sigs, types)?;
+                        if at != tt {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.union` type mismatch: expected {tt}, found {at}"),
+                            ));
+                        }
+                        return Ok(tt.clone());
+                    }
+                    "difference" if args.len() == 1 => {
+                        let at = infer_expr_ctx(&args[0], env, sigs, types)?;
+                        if at != tt {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.difference` type mismatch: expected {tt}, found {at}"),
+                            ));
+                        }
+                        return Ok(tt.clone());
+                    }
+                    "intersection" if args.len() == 1 => {
+                        let at = infer_expr_ctx(&args[0], env, sigs, types)?;
+                        if at != tt {
+                            return Err(err(
+                                &expr.span,
+                                format!("`.intersection` type mismatch: expected {tt}, found {at}"),
+                            ));
+                        }
+                        return Ok(tt.clone());
+                    }
+                    "to_list" if args.is_empty() => {
+                        return Ok(SemType::List(elem.clone()));
+                    }
+                    _ => {}
                 }
             }
             Err(err(
@@ -1780,6 +1974,82 @@ fn infer_list(
         None => Err(err(
             span,
             "cannot infer element type of an empty list literal (add an explicit type)",
+        )),
+    }
+}
+
+fn infer_map(
+    entries: &[(Expr, Expr)],
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+    span: &Span,
+) -> Result<SemType, TypeError> {
+    let mut key_ty: Option<SemType> = None;
+    let mut val_ty: Option<SemType> = None;
+    for (k, v) in entries {
+        let kt = infer_expr_ctx(k, env, sigs, types)?;
+        let vt = infer_expr_ctx(v, env, sigs, types)?;
+        match &key_ty {
+            None => {
+                key_ty = Some(kt);
+                val_ty = Some(vt);
+            }
+            Some(known_k) => {
+                if &kt != known_k {
+                    return Err(err(
+                        span,
+                        format!("map keys differ: {known_k} vs {kt}"),
+                    ));
+                }
+                if &vt != val_ty.as_ref().unwrap() {
+                    return Err(err(
+                        span,
+                        format!(
+                            "map values differ: {} vs {vt}",
+                            val_ty.as_ref().unwrap()
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    match (key_ty, val_ty) {
+        (Some(k), Some(v)) => Ok(SemType::Map(Box::new(k), Box::new(v))),
+        _ => Err(err(
+            span,
+            "cannot infer types of an empty map literal (add an explicit type)",
+        )),
+    }
+}
+
+fn infer_set(
+    elems: &[Expr],
+    env: &Env,
+    sigs: &Signatures,
+    types: &Types,
+    span: &Span,
+) -> Result<SemType, TypeError> {
+    let mut elem_ty: Option<SemType> = None;
+    for e in elems {
+        let t = infer_expr_ctx(e, env, sigs, types)?;
+        match &elem_ty {
+            None => elem_ty = Some(t),
+            Some(known) => {
+                if &t != known {
+                    return Err(err(
+                        span,
+                        format!("set elements differ: {known} vs {t}"),
+                    ));
+                }
+            }
+        }
+    }
+    match elem_ty {
+        Some(e) => Ok(SemType::Set(Box::new(e))),
+        None => Err(err(
+            span,
+            "cannot infer element type of an empty set literal (add an explicit type)",
         )),
     }
 }
@@ -2917,7 +3187,7 @@ fn is_refutable_pattern(pat: &Pattern) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use resid_lexer::token::{FloatLit, IntKind, Literal, Op as OpKind, Span};
+    use resid_lexer::token::{FloatLit, IntKind, Literal, Op as OpKind, Span, StrLit};
     use resid_parser::{
         Block, Expr, ExprKind, Id, Pattern, PatternKind, RangeExpr, Stmt, StmtKind, Type,
     };
@@ -6217,5 +6487,153 @@ sandbox (filesystem) {
         assert!(!errs.is_empty(), "sandbox should reject requires exceeding ceiling");
         assert!(errs.iter().any(|e| e.message.contains("network")),
             "error should mention the exceeding capability, got: {:?}", errs);
+    }
+
+
+    // ─── Map / Set literal + method inference ──────────────────
+
+    fn expr_str(s: &str) -> Expr {
+        Expr {
+            kind: ExprKind::Literal(Literal::Str(StrLit {
+                value: s.to_string(),
+            })),
+            span: span(),
+        }
+    }
+
+    #[test]
+    fn infer_map_literal() {
+        let m = Expr {
+            kind: ExprKind::MapLit(vec![
+                (expr_str("a"), expr_int(1)),
+                (expr_str("b"), expr_int(2)),
+            ]),
+            span: span(),
+        };
+        let ty = infer_expr(&m, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(
+            ty,
+            SemType::Map(
+                Box::new(SemType::Str),
+                Box::new(SemType::Numeric(NumericType::Int(IntWidth::B64.into())))
+            )
+        );
+    }
+
+    #[test]
+    fn infer_set_literal() {
+        let s = Expr {
+            kind: ExprKind::SetLit(vec![expr_int(1), expr_int(2), expr_int(3)]),
+            span: span(),
+        };
+        let ty = infer_expr(&s, &Env::new(), &Signatures::new()).unwrap();
+        assert_eq!(
+            ty,
+            SemType::Set(Box::new(SemType::Numeric(NumericType::Int(
+                IntWidth::B64.into()
+            ))))
+        );
+    }
+
+    #[test]
+    fn infer_map_index_and_methods() {
+        let int_ty = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        let map_ty = SemType::Map(Box::new(SemType::Str), Box::new(int_ty.clone()));
+        let mut env = Env::new();
+        env.insert("m", map_ty.clone());
+
+        // m["k"] → Option(Int)
+        let ix = Expr {
+            kind: ExprKind::Index {
+                target: Box::new(expr_id("m")),
+                index: Box::new(expr_str("k")),
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&ix, &env, &Signatures::new()).unwrap();
+        assert_eq!(
+            ty,
+            SemType::Sum {
+                name: "Option".into(),
+                variants: vec![
+                    ("None".into(), None),
+                    ("Some".into(), Some(int_ty.clone())),
+                ],
+            }
+        );
+
+        // m.get("k") → Option(Int)
+        let get = Expr {
+            kind: ExprKind::MethodCall {
+                target: Box::new(expr_id("m")),
+                method: Id("get".into()),
+                args: vec![Box::new(expr_str("k"))],
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&get, &env, &Signatures::new()).unwrap();
+        assert_eq!(
+            ty,
+            SemType::Sum {
+                name: "Option".into(),
+                variants: vec![
+                    ("None".into(), None),
+                    ("Some".into(), Some(int_ty)),
+                ],
+            }
+        );
+
+        // m.len() → ISize
+        let len = Expr {
+            kind: ExprKind::MethodCall {
+                target: Box::new(expr_id("m")),
+                method: Id("len".into()),
+                args: vec![],
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&len, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::ISize));
+
+        // m.get(3) → key type mismatch error
+        let bad = Expr {
+            kind: ExprKind::MethodCall {
+                target: Box::new(expr_id("m")),
+                method: Id("get".into()),
+                args: vec![Box::new(expr_int(3))],
+            },
+            span: span(),
+        };
+        assert!(infer_expr(&bad, &env, &Signatures::new()).is_err());
+    }
+
+    #[test]
+    fn infer_set_methods() {
+        let int_ty = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        let set_ty = SemType::Set(Box::new(int_ty.clone()));
+        let mut env = Env::new();
+        env.insert("s", set_ty);
+
+        let contains = Expr {
+            kind: ExprKind::MethodCall {
+                target: Box::new(expr_id("s")),
+                method: Id("contains".into()),
+                args: vec![Box::new(expr_int(1))],
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&contains, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Bool);
+
+        let len = Expr {
+            kind: ExprKind::MethodCall {
+                target: Box::new(expr_id("s")),
+                method: Id("len".into()),
+                args: vec![],
+            },
+            span: span(),
+        };
+        let ty = infer_expr(&len, &env, &Signatures::new()).unwrap();
+        assert_eq!(ty, SemType::Numeric(NumericType::ISize));
     }
 }

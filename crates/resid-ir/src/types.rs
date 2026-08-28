@@ -573,6 +573,7 @@ pub enum AstExpr {
     },
     ListLit(Vec<AstExpr>, Span),
     MapLit(Vec<(AstExpr, AstExpr)>, Span),
+    SetLit(Vec<AstExpr>, Span),
     Range {
         start: Box<AstExpr>,
         end: Box<AstExpr>,

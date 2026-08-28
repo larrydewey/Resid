@@ -160,6 +160,11 @@ fn collect_ids_expr(e: &Expr, out: &mut Vec<String>) {
                 collect_ids_expr(v, out);
             }
         }
+        ExprKind::SetLit(elems) => {
+            for e in elems {
+                collect_ids_expr(e, out);
+            }
+        }
         ExprKind::Range { start, end, .. } => {
             collect_ids_expr(start, out);
             collect_ids_expr(end, out);
@@ -459,7 +464,7 @@ impl<'ctx> CodeGen<'ctx> {
             },
             SemType::Range(_) => self.int_type(64)?.into(),
             // Composites are untyped heap pointers.
-            SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc | SemType::File => {
+            SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc | SemType::File | SemType::Map(..) | SemType::Set(_) => {
                 self.cx.ptr_type(AddressSpace::default()).into()
             }
         };
@@ -705,7 +710,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 .build_return(Some(&self.cx.i64_type().const_zero()))
                                 .map_err(to_err)?;
                         }
-                        SemType::Str | SemType::Bytes | SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc | SemType::File => {
+                        SemType::Str | SemType::Bytes | SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc | SemType::File | SemType::Map(..) | SemType::Set(_) => {
                             self.builder
                                 .build_return(Some(
                                     &self.cx.ptr_type(AddressSpace::default()).const_null(),
@@ -1686,6 +1691,8 @@ impl<'ctx> CodeGen<'ctx> {
             }
 
             ExprKind::ListLit(elems) => self.lower_list_lit(sc, elems),
+            ExprKind::MapLit(entries) => self.lower_map_lit(sc, entries),
+            ExprKind::SetLit(elems) => self.lower_set_lit(sc, elems),
             ExprKind::StructLit { name, fields } => self.lower_struct_lit(sc, name, fields),
             ExprKind::FieldAccess { target, field } => {
                 self.lower_field_access(sc, target, field)
@@ -3470,6 +3477,25 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_dec_to_string", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_dec_to_int", vec![ptr.into(), i64t.into(), i64t.into()], i64t.into());
         self.decl_rt("resid_dec_to_f64", vec![ptr.into()], f64t.into());
+        // Map/Set operations (spec §32 core types).
+        self.decl_rt("resid_set_new", vec![], ptr.into());
+        self.decl_rt("resid_map_get", vec![ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_map_insert", vec![ptr.into(), ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_map_remove", vec![ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_map_contains", vec![ptr.into(), ptr.into()], i8t.into());
+        self.decl_rt("resid_map_len", vec![ptr.into()], i64t.into());
+        self.decl_rt("resid_map_keys", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_map_values", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_map_format", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_set_insert", vec![ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_set_remove", vec![ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_set_contains", vec![ptr.into(), ptr.into()], i8t.into());
+        self.decl_rt("resid_set_len", vec![ptr.into()], i64t.into());
+        self.decl_rt("resid_set_union", vec![ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_set_difference", vec![ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_set_intersection", vec![ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_set_to_list", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_set_format", vec![ptr.into()], ptr.into());
     }
 
     fn decl_rt(
@@ -4215,6 +4241,29 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(Val { v, ty: sum.clone() })
     }
 
+    /// Wrap a nullable runtime result pointer into an Option sum box
+    /// (Some(value) when non-null, None otherwise). Used by map indexing
+    /// and `Map.get`.
+    fn wrap_option(
+        &mut self,
+        raw: BasicValueEnum<'ctx>,
+        option_ty: &SemType,
+    ) -> Result<Val<'ctx>, String> {
+        let (payload_idx, unit_idx, _) = Self::option_variant_ix(option_ty)
+            .ok_or_else(|| "codegen: malformed Option".to_string())?;
+        let null = self
+            .builder
+            .build_is_null(raw.into_pointer_value(), "isnull")
+            .map_err(to_err)?;
+        let none = self.build_constructor(unit_idx as i64, option_ty, Vec::new())?;
+        let some = self.build_constructor(payload_idx as i64, option_ty, vec![raw])?;
+        let v = self
+            .builder
+            .build_select(null, none.v, some.v, "opt")
+            .map_err(to_err)?;
+        Ok(Val { v, ty: option_ty.clone() })
+    }
+
     /// A bare unit-variant constructor (`None`).
     fn lower_unit_variant(&mut self, _sc: &mut Scope<'ctx>, name: &str) -> Result<Val<'ctx>, String> {
         let sum = resid_type::find_constructor(&self.types, name)
@@ -4428,6 +4477,51 @@ impl<'ctx> CodeGen<'ctx> {
         self.build_constructor(0, &ty, slots)
     }
 
+    /// Lower a map literal `{ key: val, ... }` by building a ResidMap via C runtime.
+    fn lower_map_lit(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        entries: &[(Expr, Expr)],
+    ) -> Result<Val<'ctx>, String> {
+        let mut map_v = self.rt_call("resid_set_new", vec![])?;
+        let mut key_ty: Option<SemType> = None;
+        let mut val_ty: Option<SemType> = None;
+        for (k, e) in entries {
+            let kv = self.lower_expr(sc, k, None)?;
+            let vv = self.lower_expr(sc, e, None)?;
+            if key_ty.is_none() {
+                key_ty = Some(kv.ty.clone());
+                val_ty = Some(vv.ty.clone());
+            }
+            let kp = self.box_scalar(kv)?;
+            let vp = self.box_scalar(vv)?;
+            map_v = self.rt_call("resid_map_insert", vec![map_v, kp, vp])?;
+        }
+        let kt = key_ty.unwrap_or(SemType::Str);
+        let vt = val_ty.unwrap_or(SemType::Str);
+        Ok(Val { v: map_v, ty: SemType::Map(Box::new(kt), Box::new(vt)) })
+    }
+
+    /// Lower a set literal `{ a, b, ... }` by building a ResidMap (set) via C runtime.
+    fn lower_set_lit(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        elems: &[Expr],
+    ) -> Result<Val<'ctx>, String> {
+        let mut set_v = self.rt_call("resid_set_new", vec![])?;
+        let mut elem_ty: Option<SemType> = None;
+        for e in elems {
+            let v = self.lower_expr(sc, e, None)?;
+            if elem_ty.is_none() {
+                elem_ty = Some(v.ty.clone());
+            }
+            let ep = self.box_scalar(v)?;
+            set_v = self.rt_call("resid_set_insert", vec![set_v, ep])?;
+        }
+        let et = elem_ty.unwrap_or(SemType::Str);
+        Ok(Val { v: set_v, ty: SemType::Set(Box::new(et)) })
+    }
+
     fn lower_struct_lit(
         &mut self,
         sc: &mut Scope<'ctx>,
@@ -4493,6 +4587,17 @@ impl<'ctx> CodeGen<'ctx> {
         index: &Expr,
     ) -> Result<Val<'ctx>, String> {
         let tv = self.lower_expr(sc, target, None)?;
+        // Map indexing: `m["key"]` → Option(V).
+        if let SemType::Map(k, v) = &tv.ty {
+            let iv = self.lower_expr(sc, index, None)?;
+            let kp = self.box_scalar(iv)?;
+            let vp = self.rt_call("resid_map_get", vec![tv.v, kp])?;
+            let option_ty = SemType::Sum {
+                name: "Option".into(),
+                variants: vec![("None".into(), None), ("Some".into(), Some((**v).clone()))],
+            };
+            return self.wrap_option(vp, &option_ty);
+        }
         let (list_val, elem) = match &tv.ty {
             SemType::List(elem) => (tv.v, elem),
             SemType::Slice(inner_list) => {
@@ -4657,6 +4762,91 @@ impl<'ctx> CodeGen<'ctx> {
                     v,
                     ty: SemType::List(elem.clone()),
                 })
+            }
+            // ─── Map methods ────────────────────────────────────
+            ("len", SemType::Map(_, _)) if args.is_empty() => {
+                let v = self.rt_call("resid_map_len", vec![tv.v])?;
+                Ok(Val { v, ty: SemType::Numeric(NumericType::ISize) })
+            }
+            ("get", SemType::Map(_, v)) if args.len() == 1 => {
+                let kv = self.lower_expr(sc, &args[0], None)?;
+                let kp = self.box_scalar(kv)?;
+                let vp = self.rt_call("resid_map_get", vec![tv.v, kp])?;
+                let option_ty = SemType::Sum {
+                    name: "Option".into(),
+                    variants: vec![("None".into(), None), ("Some".into(), Some((**v).clone()))],
+                };
+                self.wrap_option(vp, &option_ty)
+            }
+            ("insert", SemType::Map(k, v)) if args.len() == 2 => {
+                let kv = self.lower_expr(sc, &args[0], None)?;
+                let vv = self.lower_expr(sc, &args[1], None)?;
+                let kp = self.box_scalar(kv)?;
+                let vp = self.box_scalar(vv)?;
+                let nv = self.rt_call("resid_map_insert", vec![tv.v, kp, vp])?;
+                Ok(Val { v: nv, ty: tv.ty.clone() })
+            }
+            ("contains", SemType::Map(k, _)) if args.len() == 1 => {
+                let kv = self.lower_expr(sc, &args[0], None)?;
+                let kp = self.box_scalar(kv)?;
+                let v = self.rt_call("resid_map_contains", vec![tv.v, kp])?;
+                Ok(Val { v, ty: SemType::Bool })
+            }
+            ("remove", SemType::Map(_, _)) if args.len() == 1 => {
+                let kv = self.lower_expr(sc, &args[0], None)?;
+                let kp = self.box_scalar(kv)?;
+                let v = self.rt_call("resid_map_remove", vec![tv.v, kp])?;
+                Ok(Val { v, ty: tv.ty.clone() })
+            }
+            ("keys", SemType::Map(k, _)) if args.is_empty() => {
+                let v = self.rt_call("resid_map_keys", vec![tv.v])?;
+                Ok(Val { v, ty: SemType::List(k.clone()) })
+            }
+            ("values", SemType::Map(_, v)) if args.is_empty() => {
+                let vals = self.rt_call("resid_map_values", vec![tv.v])?;
+                Ok(Val { v: vals, ty: SemType::List(v.clone()) })
+            }
+            // ─── Set methods ────────────────────────────────────
+            ("len", SemType::Set(_)) if args.is_empty() => {
+                let v = self.rt_call("resid_set_len", vec![tv.v])?;
+                Ok(Val { v, ty: SemType::Numeric(NumericType::ISize) })
+            }
+            ("contains", SemType::Set(_)) if args.len() == 1 => {
+                let ev = self.lower_expr(sc, &args[0], None)?;
+                let ep = self.box_scalar(ev)?;
+                let v = self.rt_call("resid_set_contains", vec![tv.v, ep])?;
+                Ok(Val { v, ty: SemType::Bool })
+            }
+            ("insert", SemType::Set(_)) if args.len() == 1 => {
+                let ev = self.lower_expr(sc, &args[0], None)?;
+                let ep = self.box_scalar(ev)?;
+                let v = self.rt_call("resid_set_insert", vec![tv.v, ep])?;
+                Ok(Val { v, ty: tv.ty.clone() })
+            }
+            ("remove", SemType::Set(_)) if args.len() == 1 => {
+                let ev = self.lower_expr(sc, &args[0], None)?;
+                let ep = self.box_scalar(ev)?;
+                let v = self.rt_call("resid_set_remove", vec![tv.v, ep])?;
+                Ok(Val { v, ty: tv.ty.clone() })
+            }
+            ("union", SemType::Set(_)) if args.len() == 1 => {
+                let av = self.lower_expr(sc, &args[0], None)?;
+                let v = self.rt_call("resid_set_union", vec![tv.v, av.v])?;
+                Ok(Val { v, ty: tv.ty.clone() })
+            }
+            ("difference", SemType::Set(_)) if args.len() == 1 => {
+                let av = self.lower_expr(sc, &args[0], None)?;
+                let v = self.rt_call("resid_set_difference", vec![tv.v, av.v])?;
+                Ok(Val { v, ty: tv.ty.clone() })
+            }
+            ("intersection", SemType::Set(_)) if args.len() == 1 => {
+                let av = self.lower_expr(sc, &args[0], None)?;
+                let v = self.rt_call("resid_set_intersection", vec![tv.v, av.v])?;
+                Ok(Val { v, ty: tv.ty.clone() })
+            }
+            ("to_list", SemType::Set(elem)) if args.is_empty() => {
+                let v = self.rt_call("resid_set_to_list", vec![tv.v])?;
+                Ok(Val { v, ty: SemType::List(elem.clone()) })
             }
             _ => Err(format!(
                 "codegen: unsupported method `{}` on {}",

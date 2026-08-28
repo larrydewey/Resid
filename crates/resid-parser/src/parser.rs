@@ -1070,7 +1070,7 @@ impl Parser {
                 }
             }
 
-            // Identifier — could be a value, function call, or keyword for value?
+// Identifier — could be a value, function call, or keyword for value?
             Some(TokenKind::Ident(id)) => {
                 self.bump();
                 let mut expr = Expr {
@@ -1078,207 +1078,225 @@ impl Parser {
                     span: span.clone(),
                 };
 
-                // Check for function call
-                if self.peek_is_op(Op::LParen) {
-                    self.bump();
-                    let mut args = Vec::new();
-                    while !self.peek_is_op(Op::RParen) && !self.at_eof() {
-                        // Named argument: `name = expr`. Detect an identifier
-                        // that is followed by `=` and consume it as the name;
-                        // otherwise fall through to a full positional argument.
-                        let named = match self.peek() {
-                            Some(TokenKind::Ident(s))
-                                if matches!(
-                                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                                    Some(TokenKind::Op(Op::Equals))
-                                ) =>
-                            {
-                                self.bump();
-                                self.bump();
-                                Some(Id(s.clone()))
-                            }
-                            _ => None,
-                        };
-                        match named {
-                            Some(id) => {
-                                let arg = self.parse_expression_forced();
-                                args.push((Some(id), arg));
-                            }
-                            None => {
-                                let arg = self.parse_expression_forced();
-                                args.push((None, arg));
-                            }
-                        }
-                        if self.peek_is_op(Op::Comma) {
-                            self.bump();
-                        }
-                    }
-                    self.expect_op(Op::RParen, "call: expected )");
-                    expr = Expr {
-                        kind: ExprKind::Call {
-                            func: Box::new(expr),
-                            args,
-                        },
-                        span: span.clone(),
-                    };
-                }
-
-                // Check for field access / method call / provider call:
-                // expr.field, expr.m(args), provider.verb(args)
-                if self.peek_is_op(Op::Dot) {
-                    self.bump();
-                    let field = self
-                        .expect_ident("field access: expected identifier")
-                        .unwrap_or_else(|| Id("__error__".to_string()));
+                // Postfix operators: (), ., [], ?, else, using, { (struct literal)
+                // Loop to handle chains like m.len().to_str()[0]?.foo
+                loop {
+                    // Check for function call
                     if self.peek_is_op(Op::LParen) {
                         self.bump();
                         let mut args = Vec::new();
                         while !self.peek_is_op(Op::RParen) && !self.at_eof() {
-                            args.push(Box::new(self.parse_expression_forced()));
+                            // Named argument: `name = expr`. Detect an identifier
+                            // that is followed by `=` and consume it as the name;
+                            // otherwise fall through to a full positional argument.
+                            let named = match self.peek() {
+                                Some(TokenKind::Ident(s))
+                                    if matches!(
+                                        self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                                        Some(TokenKind::Op(Op::Equals))
+                                    ) =>
+                                {
+                                    self.bump();
+                                    self.bump();
+                                    Some(Id(s.clone()))
+                                }
+                                _ => None,
+                            };
+                            match named {
+                                Some(id) => {
+                                    let arg = self.parse_expression_forced();
+                                    args.push((Some(id), arg));
+                                }
+                                None => {
+                                    let arg = self.parse_expression_forced();
+                                    args.push((None, arg));
+                                }
+                            }
                             if self.peek_is_op(Op::Comma) {
                                 self.bump();
                             }
                         }
-                        self.expect_op(Op::RParen, "method call: expected )");
-                        // Provider call: `provider.verb(args)` where the base
-                        // identifier is a trusted external-knowledge provider
-                        // (filesystem, environment, git — spec §32).
-                        let provider_name = match &expr.kind {
-                            ExprKind::Id(id) => id.0.clone(),
-                            _ => String::new(),
+                        self.expect_op(Op::RParen, "call: expected )");
+                        expr = Expr {
+                            kind: ExprKind::Call {
+                                func: Box::new(expr),
+                                args,
+                            },
+                            span: span.clone(),
                         };
-                        if is_provider_name(&provider_name) {
+                        continue;
+                    }
+
+                    // Check for field access / method call / provider call:
+                    // expr.field, expr.m(args), provider.verb(args)
+                    if self.peek_is_op(Op::Dot) {
+                        self.bump();
+                        let field = self
+                            .expect_ident("field access: expected identifier")
+                            .unwrap_or_else(|| Id("__error__".to_string()));
+                        if self.peek_is_op(Op::LParen) {
+                            self.bump();
+                            let mut args = Vec::new();
+                            while !self.peek_is_op(Op::RParen) && !self.at_eof() {
+                                args.push(Box::new(self.parse_expression_forced()));
+                                if self.peek_is_op(Op::Comma) {
+                                    self.bump();
+                                }
+                            }
+                            self.expect_op(Op::RParen, "method call: expected )");
+                            // Provider call: `provider.verb(args)` where the base
+                            // identifier is a trusted external-knowledge provider
+                            // (filesystem, environment, git — spec §32).
+                            let provider_name = match &expr.kind {
+                                ExprKind::Id(id) => id.0.clone(),
+                                _ => String::new(),
+                            };
+                            if is_provider_name(&provider_name) {
+                                expr = Expr {
+                                    kind: ExprKind::ProviderCall {
+                                        provider: Id(provider_name),
+                                        verb: field.to_owned(),
+                                        args,
+                                    },
+                                    span: span.clone(),
+                                };
+                            } else {
+                                expr = Expr {
+                                    kind: ExprKind::MethodCall {
+                                        target: Box::new(expr),
+                                        method: field.to_owned(),
+                                        args,
+                                    },
+                                    span: span.clone(),
+                                };
+                            }
+                        } else {
                             expr = Expr {
-                                kind: ExprKind::ProviderCall {
-                                    provider: Id(provider_name),
-                                    verb: field.to_owned(),
-                                    args,
+                                kind: ExprKind::FieldAccess {
+                                    target: Box::new(expr),
+                                    field,
+                                },
+                                span: span.clone(),
+                            };
+                        }
+                        continue;
+                    }
+
+                    // Check for index/slice: expr[index] or expr[start..end]
+                    if self.peek_is_op(Op::LBracket) {
+                        self.bump();
+                        if self.is_range_syntax_in_bracket() {
+                            // Slice: expr[start..end]
+                            let range = self.parse_range_expr();
+                            self.expect_op(Op::RBracket, "slice: expected ]");
+                            expr = Expr {
+                                kind: ExprKind::Slice {
+                                    target: Box::new(expr),
+                                    range: Box::new(range),
                                 },
                                 span: span.clone(),
                             };
                         } else {
+                            // Index: expr[index]
+                            let index = self.parse_expression();
+                            self.expect_op(Op::RBracket, "index: expected ]");
                             expr = Expr {
-                                kind: ExprKind::MethodCall {
+                                kind: ExprKind::Index {
                                     target: Box::new(expr),
-                                    method: field.to_owned(),
-                                    args,
+                                    index: Box::new(index),
                                 },
                                 span: span.clone(),
                             };
                         }
-                    } else {
-                        expr = Expr {
-                            kind: ExprKind::FieldAccess {
-                                target: Box::new(expr),
-                                field,
-                            },
-                            span: span.clone(),
-                        };
+                        continue;
                     }
-                }
 
-                // Check for index/slice: expr[index] or expr[start..end]
-                if self.peek_is_op(Op::LBracket) {
-                    self.bump();
-                    if self.is_range_syntax_in_bracket() {
-                        // Slice: expr[start..end]
-                        let range = self.parse_range_expr();
-                        self.expect_op(Op::RBracket, "slice: expected ]");
-                        expr = Expr {
-                            kind: ExprKind::Slice {
-                                target: Box::new(expr),
-                                range: Box::new(range),
-                            },
-                            span: span.clone(),
-                        };
-                    } else {
-                        // Index: expr[index]
-                        let index = self.parse_expression();
-                        self.expect_op(Op::RBracket, "index: expected ]");
-                        expr = Expr {
-                            kind: ExprKind::Index {
-                                target: Box::new(expr),
-                                index: Box::new(index),
-                            },
-                            span: span.clone(),
-                        };
-                    }
-                }
-
-                // Check for ? (early return sugar)
-                if self.peek_is_op(Op::Question) {
-                    self.bump();
-                    expr = Expr {
-                        kind: ExprKind::EarlyReturn(Box::new(expr)),
-                        span: span.clone(),
-                    };
-                }
-
-                // Check for else { … } (fallback sugar)
-                if self.peek_is_keyword(Keyword::Else) {
-                    self.bump();
-                    let fallback = self.parse_block();
-                    expr = Expr {
-                        kind: ExprKind::ElseFallback {
-                            value: Box::new(expr),
-                            fallback,
-                        },
-                        span: span.clone(),
-                    };
-                }
-
-                // Check for using = behavior
-                if self.peek_is_op(Op::Comma) {
-                    self.bump();
-                    if self.peek_is_ident("using") {
+                    // Check for ? (early return sugar)
+                    if self.peek_is_op(Op::Question) {
                         self.bump();
-                        self.expect_op(Op::Equals, "using: expected =");
-                        let behavior_text = self.parse_using_instance();
-                        let behavior = Id(behavior_text);
                         expr = Expr {
-                            kind: ExprKind::Using {
+                            kind: ExprKind::EarlyReturn(Box::new(expr)),
+                            span: span.clone(),
+                        };
+                        continue;
+                    }
+
+                    // Check for else { … } (fallback sugar)
+                    if self.peek_is_keyword(Keyword::Else) {
+                        self.bump();
+                        let fallback = self.parse_block();
+                        expr = Expr {
+                            kind: ExprKind::ElseFallback {
                                 value: Box::new(expr),
-                                behavior,
+                                fallback,
                             },
                             span: span.clone(),
                         };
+                        continue;
                     }
-                }
 
-// Check for struct literal: Name { field: value, ... }
-                // Only a `{` followed by a `field :` pair is a struct literal;
-                // otherwise the `{` opens a block/match-arms.
-                let lbrace_then_field = {
-                    let in_bounds = self.pos + 1 < self.tokens.len();
-                    in_bounds
-                        && matches!(
-                            self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                            Some(TokenKind::Ident(_))
-                        )
-                        && matches!(
-                            self.tokens.get(self.pos + 2).map(|t| &t.kind),
-                            Some(TokenKind::Op(Op::Colon))
-                        )
-                };
-                if self.peek_is_op(Op::LBrace) && lbrace_then_field {
-                    self.bump();
-                    let mut fields = Vec::new();
-                    while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
-                        let field_name = self
-                            .expect_ident("struct literal: expected field name")
-                            .unwrap_or_else(|| Id("__error__".to_string()));
-                        self.expect_op(Op::Colon, "struct literal: expected :");
-                        let field_value = self.parse_expression_forced();
-                        fields.push((field_name, field_value));
-                        if self.peek_is_op(Op::Comma) {
+                    // Check for using = behavior
+                    if self.peek_is_op(Op::Comma) {
+                        let saved = self.pos;
+                        self.bump();
+                        if self.peek_is_ident("using") {
                             self.bump();
+                            self.expect_op(Op::Equals, "using: expected =");
+                            let behavior_text = self.parse_using_instance();
+                            let behavior = Id(behavior_text);
+                            expr = Expr {
+                                kind: ExprKind::Using {
+                                    value: Box::new(expr),
+                                    behavior,
+                                },
+                                span: span.clone(),
+                            };
+                            continue;
+                        } else {
+                            // Not a using clause, restore and break
+                            self.pos = saved;
                         }
                     }
-                    self.expect_op(Op::RBrace, "struct literal: expected }");
-                    expr = Expr {
-                        kind: ExprKind::StructLit { name: Id(id), fields },
-                        span: span.clone(),
+
+                    // Check for struct literal: Name { field: value, ... }
+                    // Only a `{` followed by a `field :` pair is a struct literal;
+                    // otherwise the `{` opens a block/match-arms.
+                    let lbrace_then_field = {
+                        let in_bounds = self.pos + 1 < self.tokens.len();
+                        in_bounds
+                            && matches!(
+                                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                                Some(TokenKind::Ident(_))
+                            )
+                            && matches!(
+                                self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                                Some(TokenKind::Op(Op::Colon))
+                            )
                     };
+                    if self.peek_is_op(Op::LBrace) && lbrace_then_field {
+                        self.bump();
+                        let mut fields = Vec::new();
+                        while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
+                            let field_name = self
+                                .expect_ident("struct literal: expected field name")
+                                .unwrap_or_else(|| Id("__error__".to_string()));
+                            self.expect_op(Op::Colon, "struct literal: expected :");
+                            let field_value = self.parse_expression_forced();
+                            fields.push((field_name, field_value));
+                            if self.peek_is_op(Op::Comma) {
+                                self.bump();
+                            }
+                        }
+                        self.expect_op(Op::RBrace, "struct literal: expected }");
+                        expr = Expr {
+                            kind: ExprKind::StructLit { name: Id(id.clone()), fields },
+                            span: span.clone(),
+                        };
+                        continue;
+                    }
+
+                    // No postfix operator found - break
+                    break;
                 }
 
                 expr
@@ -1301,15 +1319,28 @@ impl Parser {
                 }
             }
 
-            // Map literal
+            // Map or set literal: { key: value, ... } or { a, b, c }
             Some(TokenKind::Op(Op::LBrace)) => {
-                // Map: `{ key: value, ... }`. A `{` NOT followed by an
-                // identifier + `:` opens a bare block, not a struct literal —
-                // struct literals are `Name { … }` with the name outside.
-                let is_map = matches!(self.peek(), Some(TokenKind::Ident(_)))
+                // A `{` immediately followed by another `{` is a nested block
+                // (`{{ … }}`); parse it as a block expression (do NOT bump
+                // first — parse_block_expr handles the whole inner `{ … }`).
+                if matches!(self.peek_after(), Some(TokenKind::Op(Op::LBrace))) {
+                    return self.parse_block_expr();
+                }
+                // Save BEFORE consuming `{`: the block fallback re-parses from
+                // the `{` (verify block-expression), so rewind must land there.
+                let saved = self.save();
+                self.bump(); // consume {
+                // Fast path: `{ ident :` is unambiguously a map literal.
+                let is_fast_map = matches!(self.peek(), Some(TokenKind::Ident(_)))
                     && self.peek_after_is_op(Op::Colon);
-                if is_map {
-                    self.bump(); // {
+                // Also detect `{"str": ...}` and `{123: ...}` via
+                // Literal/Op(Minus) + Colon pattern.
+                let is_literal_key_map = !is_fast_map && (
+                    matches!(self.peek(), Some(TokenKind::Literal(_)))
+                        || matches!(self.peek(), Some(TokenKind::Op(Op::Minus)))
+                ) && self.peek_after_is_op(Op::Colon);
+                if is_fast_map || is_literal_key_map {
                     // Map: { key: value, ... }
                     let mut entries = Vec::new();
                     loop {
@@ -1328,9 +1359,40 @@ impl Parser {
                         kind: ExprKind::MapLit(entries),
                         span,
                     }
+                } else if matches!(self.peek(), Some(TokenKind::Op(Op::RBrace))) {
+                    // { } — empty set (or empty map typed later).
+                    self.bump();
+                    Expr {
+                        kind: ExprKind::SetLit(Vec::new()),
+                        span,
+                    }
                 } else {
-                    // Just a block — handled in parse_block
-                    self.parse_block_expr()
+                    // Could be a set literal `{ a, b, c }` or a bare block.
+                    // Speculative: save position, try parsing as set (comma-
+                    // separated expressions). If we see `expr ,` it's a set;
+                    // otherwise rewind and parse as block.
+                    let first = self.parse_expression();
+                    if self.peek_is_op(Op::Comma) {
+                        // Set literal: { expr, expr, ... }
+                        let mut elems = vec![first];
+                        while self.peek_is_op(Op::Comma) {
+                            self.bump();
+                            if self.peek_is_op(Op::RBrace) {
+                                break; // trailing comma
+                            }
+                            elems.push(self.parse_expression());
+                        }
+                        self.expect_op(Op::RBrace, "set: expected }");
+                        Expr {
+                            kind: ExprKind::SetLit(elems),
+                            span,
+                        }
+                    } else {
+                        // Not a set — rewind past the consumed `{` and parse as
+                        // a block expression.
+                        self.restore(saved);
+                        self.parse_block_expr()
+                    }
                 }
             }
 
@@ -2186,6 +2248,14 @@ impl Parser {
 
     // ─── Helpers ────────────────────────────────────────────────
 
+    fn save(&self) -> usize {
+        self.pos
+    }
+
+    fn restore(&mut self, pos: usize) {
+        self.pos = pos;
+    }
+
     fn peek(&self) -> Option<TokenKind> {
         self.tokens.get(self.pos).map(|t| t.kind.clone())
     }
@@ -2905,13 +2975,25 @@ type Opt(T) = Some(T) | None;
     #[test]
     fn parse_nested_provider_call() {
         let (result, errors) = Parser::parse("test.resid", "Int f() { filesystem.read(1, 2).method(); }");
-        assert!(errors.len() >= 1, "expected parse error for chained postfix");
+        assert_eq!(errors.len(), 0, "chained postfix should parse now: {:?}", errors);
+        let stmt = &result.declarations[0];
+        if let Declaration::Function(f) = stmt {
+            if let StmtKind::Expr(e) = &f.body.statements[0].kind {
+                assert!(matches!(e.kind, ExprKind::MethodCall { .. }), "expected MethodCall chain");
+            }
+        }
     }
 
     #[test]
     fn parse_field_access_then_method() {
         let (result, errors) = Parser::parse("test.resid", "Int f() { obj.field.method(); }");
-        assert!(errors.len() >= 1, "expected parse error for chained postfix");
+        assert_eq!(errors.len(), 0, "chained postfix should parse now: {:?}", errors);
+        let stmt = &result.declarations[0];
+        if let Declaration::Function(f) = stmt {
+            if let StmtKind::Expr(e) = &f.body.statements[0].kind {
+                assert!(matches!(e.kind, ExprKind::MethodCall { .. }), "expected MethodCall chain");
+            }
+        }
     }
 
     #[test]
@@ -3512,6 +3594,44 @@ type Opt(T) = Some(T) | None;
         let (result, errors) =
             Parser::parse("test.resid", "Int f() { { Int x = 1; { Int y = 2; return x + y; } } }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_map_and_set_literals() {
+        let (result, errors) = Parser::parse(
+            "test.resid",
+            r#"Int f() {
+    Map(Str, Int) m = {"a": 1, "b": 2};
+    Set(Int) s = {1, 2, 3};
+    Set(Str) e = {};
+    return 0;
+}"#,
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+        let decl = &result.declarations[0];
+        if let Declaration::Function(f) = decl {
+            assert_eq!(f.body.statements.len(), 3, "expected 3 bindings");
+            // Map literal shape: MapLit with 2 entries.
+            if let StmtKind::Bind { value, .. } = &f.body.statements[0].kind {
+                assert!(matches!(value.kind, ExprKind::MapLit(ref e) if e.len() == 2));
+            } else {
+                panic!("expected bind for map");
+            }
+            // Set literal shape: SetLit with 3 elements.
+            if let StmtKind::Bind { value, .. } = &f.body.statements[1].kind {
+                assert!(matches!(value.kind, ExprKind::SetLit(ref e) if e.len() == 3));
+            } else {
+                panic!("expected bind for set");
+            }
+            // Empty set: SetLit with 0 elements.
+            if let StmtKind::Bind { value, .. } = &f.body.statements[2].kind {
+                assert!(matches!(value.kind, ExprKind::SetLit(ref e) if e.is_empty()));
+            } else {
+                panic!("expected bind for empty set");
+            }
+        } else {
+            panic!("expected function declaration");
+        }
     }
 
     #[test]

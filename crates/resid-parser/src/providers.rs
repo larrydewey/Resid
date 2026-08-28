@@ -136,6 +136,11 @@ fn walk_children(expr: &crate::Expr, out: &mut Vec<ProviderUse>) {
                 walk(v, out);
             }
         }
+        SetLit(elems) => {
+            for e in elems {
+                walk(e, out);
+            }
+        }
         Range { start, end, .. } => {
             walk(start, out);
             walk(end, out);

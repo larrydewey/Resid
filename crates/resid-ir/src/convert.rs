@@ -628,6 +628,35 @@ impl AstConverter {
                     span.clone(),
                 ))
             }
+            AstExpr::SetLit(elts, span) => {
+                let mut ek = Vec::new();
+                let mut errs = Vec::new();
+                for e in elts {
+                    match self.convert_expr(e) {
+                        Ok(k) => ek.push(k),
+                        Err(e2) => errs.extend(e2),
+                    }
+                }
+                if !errs.is_empty() {
+                    return Err(errs);
+                }
+                let et = ek.first().map(|k| self.get_type(k)).unwrap_or(Type::Void);
+                let deps: Vec<GraphKey> = ek.clone();
+                Ok(self.graph.add_node(
+                    NodeKind::Set { elements: ek },
+                    Type::Set(Box::new(et)),
+                    KnowledgeState::Known,
+                    deps,
+                    HashSet::new(),
+                    HashSet::new(),
+                    Provenance::Source {
+                        file: span.file.clone(),
+                        line: span.line,
+                        col_start: span.col_start,
+                    },
+                    span.clone(),
+                ))
+            }
             AstExpr::Range {
                 start,
                 end,
