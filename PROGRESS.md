@@ -9,16 +9,17 @@
 
 ## 0. Current Snapshot
 
-**666 tests pass** (lexer 17, parser 95, resid-ir 46, resid-type 199,
-resid-codegen 137, resid-build 30, resid-fmt 5,
-resid-cache 7, resid-notes 2, resid-why 4 unit + 1 e2e,
-resid-lsp 4 unit + 1 e2e,
-resid-graph 4, residc 0 unit + 89 e2e incl.
+**672 tests pass** (lexer 17, parser 110, resid-ir 46, resid-type 203,
+ resid-codegen 137, resid-build 39, resid-fmt 5,
+ resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
+ resid-graph 4, resid-builtin 0, residc 0 unit + 90 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
 `run_behavior_ord_sort`, `bootstrap_behavior_ord_parity`,
-`run_sandbox_enforcement`).
+`run_sandbox_enforcement`, `run_map_set_types`).
+Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
+driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
 proven**. The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
@@ -36,6 +37,12 @@ three root causes, none of them codegen (see §4).
   sext/zext/trunc.
 - Boxed composites (List/Struct/Option) with `match`, destructuring,
   if-let/while-let; ranges + slicing; raw/byte strings; f-strings.
+- Map/Set types (immutable, persistent): `Map(K, V)`/`Set(T)` literals
+  (`{"a": 1}`, `{1, 2}`, empty `{}`), indexing `m[k]` → `Option(V)` (==
+  `.get`), methods `.get/.insert/.remove/.contains/.keys/.values/.len`,
+  Set `.union/.difference/.intersection/.to_list`; FNV-1a hash over 4-slot
+  buckets, `wrapping*` replaced by bounds-checked ops. Chained postfix
+  calls (`m.len().to_str()`) supported.
 - Providers: filesystem read/write, environment, git, args, process.run.
   Binary-safe TCP builtins (`resid_tcp_send_bin`/`recv_bin`), wall clock
   (`resid_utc_now_civil`). Handle types: `with (Type h = expr) { … }` RAII.
@@ -352,7 +359,7 @@ item is DONE only when it ships in **both** pipelines (see policy).
 3. Core behaviors `Serialize`, `Allocator`, `Reverse`, generic `Hash`
    (§12 list) — zero implementation.
 4. Map / Set types — `MapLit` parses; nothing resolves in type check or
-   codegen.
+   codegen. → **✅ DONE (stage-1), see progress below.**
 5. Per-width `wrapping_*` / `saturating_*` — ✅ done (LLVM native
    lowering for add/sub/mul at any width; div falls back to i64 C runtime).
 
@@ -402,10 +409,10 @@ type — Option lands first.
 
 1. Behaviors (item 6), then serialization lib (`lib/json.resid`, first
    third-party package).
-2. `value?` sugar (item 9).
-3. `pub` enforcement (item 8).
+2. `value?` sugar (item 9) — ✅ done (stage-1, both Option and Result).
+3. `pub` enforcement (item 8) — ✅ done (stage-1).
 4. Per-width wrapping/saturating (item 5) — ✅ done.
-5. Map/Set types (item 4).
+5. Map/Set types (item 4) — ✅ done (stage-1).
 6. Serialize/Hash behaviors (item 3).
 7. Sandbox transitive attenuation + dynamic errors (item 1 remaining).
 8. Constraint types (item 2).
@@ -454,6 +461,24 @@ pipelines for struct sort, Int sort, and Reverse):
   `behavior_decl_at`, `read_instance`, `strip_reverse`) deduped across
   halves; header-construction lines (`hdr_core` + `header`) now
   transplanted wholesale from codegen main into the driver tail.
+
+### Progress on item 4 — Map/Set types: DONE (stage-1)
+
+- Persistent immutable hash tables, `cap*4`-slot buckets (base = `idx*4`),
+  FNV-1a (strings hash by content, boxed scalar keys by address). Mutation
+  allocates a fresh table; originals untouched (verified e2e). Sets are
+  maps over a dummy value; `{}` is an empty SetLit.
+- Parser: MapLit/SetLit arms + chained-postfix loop (`m.len().to_str()`);
+  nested-block disambiguation fixed (`peek_after()`, save/rewind on
+  empty/comma-complete literals).
+- Runtime (`resid_rt.c`): get/insert/remove/contains/rehash/keys/values/
+  union/difference/intersection/format + literal construction.
+- Codegen: `wrap_option()` helper boxes raw rt map-get results as
+  Some/None for `.get` and `m[k]`; `Map`/`Set` types pass through IR.
+- e2e `run_map_set_types` + parser/type unit tests green.
+- **Stage-2 BLOCKED**: driver has no `while`/reassignment (recursion
+  only), and hash-table port needs spellout via recursion-first
+  algorithms — planned after `?`-sugar sum-type groundwork (item 9).
 
 ### Progress on item 1 — sandboxing: STATIC CEILING ENFORCED
 

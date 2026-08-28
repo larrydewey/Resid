@@ -3376,3 +3376,441 @@ _Noreturn void resid_arith_overflow(void) {
     backtrace_symbols_fd(bt, n, 2);
     abort();
 }
+
+/* ─── Immutable Map / Set (spec §32 core types) ────────────────────
+ *
+ * Maps and sets are immutable values backed by a persistent hash table
+ * (separate chaining). Every mutation (insert/remove) allocates a new
+ * table — no COW, no refcounting. Simple and correct.
+ *
+ * Keys are opaque pointers (compared by address for integers and
+ * compared as NUL-terminated C strings for Str). All Resid values
+ * passed as keys are string-ified via resid_val_str for hashing and
+ * comparison — this works because integers are boxed and pointer-
+ * comparable strings are interned.
+ */
+
+#define MAP_INIT_CAP 16
+
+typedef struct {
+    void* key;
+    void* val;   /* NULL for set entries */
+    int used;
+} MapEntry;
+
+typedef struct {
+    MapEntry* buckets;
+    int64_t cap;
+    int64_t size;
+} ResidMap;
+
+/* FNV-1a hash for a string. */
+static uint64_t fnv1a(const char* s) {
+    uint64_t h = 14695981039346656037ULL;
+    for (const unsigned char* p = (const unsigned char*)s; *p; p++) {
+        h ^= *p;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+/* Hash a Resid value for use as a map/set key. Strings hash by content;
+ * other values (integers, booleans) are formatted to a string first. */
+static uint64_t resid_hash(void* v) {
+    /* Tagged ResidVal: extract the value. */
+    int64_t tag = resid_box_tag(v);
+    if (tag == -1) {
+        /* Scalar box — the first slot holds the raw value. */
+        void* raw = resid_box_slot(v, 0);
+        /* Try to interpret as string pointer first. */
+        if ((uintptr_t)raw > 4096) {
+            /* Looks like a pointer — treat as string. */
+            return fnv1a((const char*)raw);
+        }
+        /* Integer scalar: hash the integer value. */
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%ld", (long)(intptr_t)raw);
+        return fnv1a(buf);
+    }
+    /* Untagged pointer: treat as C string. */
+    if ((uintptr_t)v > 4096) {
+        return fnv1a((const char*)v);
+    }
+    return fnv1a("?");
+}
+
+/* Compare two Resid values for key equality. Returns 1 if equal. */
+static int resid_key_eq(void* a, void* b) {
+    if (a == b) return 1;
+    int64_t ta = resid_box_tag(a);
+    int64_t tb = resid_box_tag(b);
+    if (ta == -1 && tb == -1) {
+        void* ra = resid_box_slot(a, 0);
+        void* rb = resid_box_slot(b, 0);
+        if (ra == rb) return 1;
+        /* Both could be strings. */
+        if ((uintptr_t)ra > 4096 && (uintptr_t)rb > 4096) {
+            return strcmp((const char*)ra, (const char*)rb) == 0;
+        }
+        return 0;
+    }
+    /* Untagged pointers: compare as strings. */
+    if ((uintptr_t)a > 4096 && (uintptr_t)b > 4096) {
+        return strcmp((const char*)a, (const char*)b) == 0;
+    }
+    return 0;
+}
+
+static ResidMap* map_new(int64_t cap) {
+    ResidMap* m = (ResidMap*)malloc(sizeof(ResidMap));
+    m->cap = cap > 0 ? cap : MAP_INIT_CAP;
+    m->size = 0;
+    /* Each bucket holds 4 slots (open addressing within a bucket). */
+    m->buckets = (MapEntry*)calloc((size_t)m->cap * 4, sizeof(MapEntry));
+    return m;
+}
+
+/* Find entry in bucket; returns index or -1. */
+static int map_bucket_find(MapEntry* b, int64_t bcap, void* key) {
+    for (int64_t i = 0; i < bcap; i++) {
+        if (b[i].used && resid_key_eq(b[i].key, key)) return (int)i;
+    }
+    return -1;
+}
+
+/* Lookup a key in the map. Returns the value or NULL. */
+void* resid_map_get(void* map, void* key) {
+    ResidMap* m = (ResidMap*)map;
+    uint64_t h = resid_hash(key);
+    int64_t idx = (int64_t)(h % (uint64_t)m->cap);
+    MapEntry* b = &m->buckets[idx * 4];
+    /* Each bucket has 4 slots (open addressing within bucket). */
+    int64_t bcap = 4;
+    int pos = map_bucket_find(b, bcap, key);
+    if (pos < 0) return NULL;
+    return b[pos].val;
+}
+
+/* Insert a key-value pair, returning a NEW map (immutable). */
+void* resid_map_insert(void* map, void* key, void* val) {
+    ResidMap* old = (ResidMap*)map;
+    /* Check if key exists. */
+    uint64_t h = resid_hash(key);
+    int64_t idx = (int64_t)(h % (uint64_t)old->cap);
+    MapEntry* ob = &old->buckets[idx * 4];
+    int64_t bcap = 4;
+    int exist = map_bucket_find(ob, bcap, key);
+
+    int64_t new_cap = old->cap;
+    int64_t new_size = old->size;
+    if (exist < 0) new_size++;  /* new key */
+
+    /* Grow if >75% full. */
+    if (new_size * 4 > new_cap * 3) new_cap = old->cap * 2;
+
+    ResidMap* nm = map_new(new_cap);
+    nm->size = new_size;
+
+    /* Rehash all old entries. */
+    for (int64_t i = 0; i < old->cap; i++) {
+        MapEntry* b = &old->buckets[i * 4];
+        for (int j = 0; j < bcap; j++) {
+            if (!b[j].used) continue;
+            /* Skip the key we're replacing. */
+            if (exist >= 0 && i == idx && j == exist) continue;
+            uint64_t nh = resid_hash(b[j].key);
+            int64_t nidx = (int64_t)(nh % (uint64_t)nm->cap);
+            MapEntry* nb = &nm->buckets[nidx * 4];
+            for (int k = 0; k < bcap; k++) {
+                if (!nb[k].used) {
+                    nb[k].key = b[j].key;
+                    nb[k].val = b[j].val;
+                    nb[k].used = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    /* Insert new entry. */
+    {
+        uint64_t nh2 = resid_hash(key);
+        int64_t nidx2 = (int64_t)(nh2 % (uint64_t)nm->cap);
+        MapEntry* nb2 = &nm->buckets[nidx2 * 4];
+        if (exist >= 0) {
+            /* Replace existing. */
+            for (int k = 0; k < bcap; k++) {
+                if (nb2[k].used && resid_key_eq(nb2[k].key, key)) {
+                    nb2[k].val = val;
+                    break;
+                }
+            }
+        } else {
+            /* New entry. */
+            for (int k = 0; k < bcap; k++) {
+                if (!nb2[k].used) {
+                    nb2[k].key = key;
+                    nb2[k].val = val;
+                    nb2[k].used = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    return nm;
+}
+
+/* Remove a key, returning a NEW map. */
+void* resid_map_remove(void* map, void* key) {
+    ResidMap* old = (ResidMap*)map;
+    uint64_t h = resid_hash(key);
+    int64_t idx = (int64_t)(h % (uint64_t)old->cap);
+    MapEntry* ob = &old->buckets[idx * 4];
+    int64_t bcap = 4;
+    int exist = map_bucket_find(ob, bcap, key);
+    if (exist < 0) return map;  /* key not found, return same map */
+
+    ResidMap* nm = map_new(old->cap);
+    nm->size = old->size - 1;
+
+    /* Rehash all old entries except the removed one. */
+    for (int64_t i = 0; i < old->cap; i++) {
+        MapEntry* b = &old->buckets[i * 4];
+        for (int j = 0; j < bcap; j++) {
+            if (!b[j].used) continue;
+            if (i == idx && j == exist) continue;  /* skip removed */
+            uint64_t nh = resid_hash(b[j].key);
+            int64_t nidx = (int64_t)(nh % (uint64_t)nm->cap);
+            MapEntry* nb = &nm->buckets[nidx * 4];
+            for (int k = 0; k < bcap; k++) {
+                if (!nb[k].used) {
+                    nb[k].key = b[j].key;
+                    nb[k].val = b[j].val;
+                    nb[k].used = 1;
+                    break;
+                }
+            }
+        }
+    }
+    return nm;
+}
+
+/* Check if a key exists. Returns 1/0. */
+int8_t resid_map_contains(void* map, void* key) {
+    ResidMap* m = (ResidMap*)map;
+    uint64_t h = resid_hash(key);
+    int64_t idx = (int64_t)(h % (uint64_t)m->cap);
+    MapEntry* b = &m->buckets[idx * 4];
+    int64_t bcap = 4;
+    return map_bucket_find(b, bcap, key) >= 0 ? 1 : 0;
+}
+
+/* Number of entries. */
+int64_t resid_map_len(void* map) {
+    return ((ResidMap*)map)->size;
+}
+
+/* Build a List of keys. Returns a ResidVal* list. */
+void* resid_map_keys(void* map) {
+    ResidMap* m = (ResidMap*)map;
+    int64_t n = m->size;
+    void** ks = NULL;
+    if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
+    int64_t j = 0;
+    int64_t bcap = 4;
+    for (int64_t i = 0; i < m->cap && j < n; i++) {
+        MapEntry* b = &m->buckets[i * 4];
+        for (int k = 0; k < bcap && j < n; k++) {
+            if (b[k].used) ks[j++] = b[k].key;
+        }
+    }
+    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
+    r->tag = 0;
+    r->count = n;
+    r->type = "list";
+    r->slots = ks;
+    return r;
+}
+
+/* Build a List of values. */
+void* resid_map_values(void* map) {
+    ResidMap* m = (ResidMap*)map;
+    int64_t n = m->size;
+    void** vs = NULL;
+    if (n > 0) vs = (void**)malloc((size_t)n * sizeof(void*));
+    int64_t j = 0;
+    int64_t bcap = 4;
+    for (int64_t i = 0; i < m->cap && j < n; i++) {
+        MapEntry* b = &m->buckets[i * 4];
+        for (int k = 0; k < bcap && j < n; k++) {
+            if (b[k].used) vs[j++] = b[k].val;
+        }
+    }
+    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
+    r->tag = 0;
+    r->count = n;
+    r->type = "list";
+    r->slots = vs;
+    return r;
+}
+
+/* Format a map as a string: {key1: val1, key2: val2}. Uses resid_format_val
+ * on each entry. Caller must free the returned string. */
+char* resid_map_format(void* map) {
+    ResidMap* m = (ResidMap*)map;
+    if (m->size == 0) {
+        char* r = (char*)malloc(3);
+        r[0] = '{'; r[1] = '}'; r[2] = '\0';
+        return r;
+    }
+    /* Estimate: ~20 chars per entry. */
+    size_t cap = 2 + (size_t)m->size * 40 + 1;
+    char* buf = (char*)malloc(cap);
+    size_t pos = 0;
+    buf[pos++] = '{';
+    int64_t j = 0;
+    int64_t bcap = 4;
+    for (int64_t i = 0; i < m->cap && j < m->size; i++) {
+        MapEntry* b = &m->buckets[i * 4];
+        for (int k = 0; k < bcap && j < m->size; k++) {
+            if (!b[k].used) continue;
+            if (j > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+            /* Key: assume string. */
+            const char* ks = (const char*)b[k].key;
+            if (resid_box_tag(b[k].key) == -1) {
+                ks = (const char*)resid_box_slot(b[k].key, 0);
+            }
+            size_t kl = strlen(ks);
+            if (pos + kl + 4 >= cap) { cap = cap * 2 + kl; buf = realloc(buf, cap); }
+            memcpy(buf + pos, ks, kl); pos += kl;
+            buf[pos++] = ':';
+            buf[pos++] = ' ';
+            /* Value: assume string. */
+            const char* vs = (const char*)b[k].val;
+            if (resid_box_tag(b[k].val) == -1) {
+                vs = (const char*)resid_box_slot(b[k].val, 0);
+            }
+            size_t vl = strlen(vs);
+            if (pos + vl + 2 >= cap) { cap = cap * 2 + vl; buf = realloc(buf, cap); }
+            memcpy(buf + pos, vs, vl); pos += vl;
+            j++;
+        }
+    }
+    buf[pos++] = '}';
+    buf[pos] = '\0';
+    return buf;
+}
+
+/* ─── Set operations (sets are maps with NULL values) ─────────────── */
+
+void* resid_set_new(void) {
+    return map_new(MAP_INIT_CAP);
+}
+
+/* Insert an element into a set. Returns a NEW set. */
+void* resid_set_insert(void* set, void* elem) {
+    return resid_map_insert(set, elem, (void*)(intptr_t)1);
+}
+
+void* resid_set_remove(void* set, void* elem) {
+    return resid_map_remove(set, elem);
+}
+
+int8_t resid_set_contains(void* set, void* elem) {
+    return resid_map_contains(set, elem);
+}
+
+int64_t resid_set_len(void* set) {
+    return resid_map_len(set);
+}
+
+/* Set union: elements from both sets. */
+void* resid_set_union(void* a, void* b) {
+    ResidMap* mb = (ResidMap*)b;
+    void* result = a;
+    int64_t bcap = 4;
+    for (int64_t i = 0; i < mb->cap; i++) {
+        MapEntry* be = &mb->buckets[i * 4];
+        for (int j = 0; j < bcap; j++) {
+            if (!be[j].used) continue;
+            result = resid_map_insert(result, be[j].key, (void*)(intptr_t)1);
+        }
+    }
+    return result;
+}
+
+/* Set difference: elements in a but not in b. */
+void* resid_set_difference(void* a, void* b) {
+    ResidMap* mb = (ResidMap*)b;
+    void* result = a;
+    int64_t bcap = 4;
+    for (int64_t i = 0; i < mb->cap; i++) {
+        MapEntry* be = &mb->buckets[i * 4];
+        for (int j = 0; j < bcap; j++) {
+            if (!be[j].used) continue;
+            result = resid_map_remove(result, be[j].key);
+        }
+    }
+    return result;
+}
+
+/* Set intersection: elements in both sets. */
+void* resid_set_intersection(void* a, void* b) {
+    ResidMap* ma = (ResidMap*)a;
+    ResidMap* mb = (ResidMap*)b;
+    /* Iterate over the smaller set. */
+    ResidMap* smaller = ma->size <= mb->size ? ma : mb;
+    ResidMap* larger = ma->size <= mb->size ? mb : ma;
+    void* result = map_new(MAP_INIT_CAP);
+    int64_t bcap = 4;
+    for (int64_t i = 0; i < smaller->cap; i++) {
+        MapEntry* be = &smaller->buckets[i * 4];
+        for (int j = 0; j < bcap; j++) {
+            if (!be[j].used) continue;
+            if (resid_map_contains(larger, be[j].key)) {
+                result = resid_map_insert(result, be[j].key, (void*)(intptr_t)1);
+            }
+        }
+    }
+    return result;
+}
+
+/* Convert a set to a list. */
+void* resid_set_to_list(void* set) {
+    return resid_map_keys(set);
+}
+
+/* Format a set as a string: {elem1, elem2, ...}. */
+char* resid_set_format(void* set) {
+    ResidMap* m = (ResidMap*)set;
+    if (m->size == 0) {
+        char* r = (char*)malloc(3);
+        r[0] = '{'; r[1] = '}'; r[2] = '\0';
+        return r;
+    }
+    size_t cap = 2 + (size_t)m->size * 20 + 1;
+    char* buf = (char*)malloc(cap);
+    size_t pos = 0;
+    buf[pos++] = '{';
+    int64_t j = 0;
+    int64_t bcap = 4;
+    for (int64_t i = 0; i < m->cap && j < m->size; i++) {
+        MapEntry* b = &m->buckets[i * 4];
+        for (int k = 0; k < bcap && j < m->size; k++) {
+            if (!b[k].used) continue;
+            if (j > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+            const char* es = (const char*)b[k].key;
+            if (resid_box_tag(b[k].key) == -1) {
+                es = (const char*)resid_box_slot(b[k].key, 0);
+            }
+            size_t el = strlen(es);
+            if (pos + el + 2 >= cap) { cap = cap * 2 + el; buf = realloc(buf, cap); }
+            memcpy(buf + pos, es, el); pos += el;
+            j++;
+        }
+    }
+    buf[pos++] = '}';
+    buf[pos] = '\0';
+    return buf;
+}

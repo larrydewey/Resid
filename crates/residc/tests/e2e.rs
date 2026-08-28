@@ -6138,3 +6138,91 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Maps and sets (spec §32 core types): literal syntax, methods, and
+/// Map indexing all lower to the persistent-hash-table runtime and run.
+#[test]
+fn run_map_set_types() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-mapset-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("mapset.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Map(Str, Int) m = {"a": 1, "b": 2, "c": 3};
+    println(IntToString(m.len()));
+    Option(Int) got = m.get("b");
+    Int v = match got {
+        Some(x) => x,
+        None => -1,
+    };
+    println(IntToString(v));
+    Option(Int) miss = m.get("z");
+    Int mv = match miss {
+        Some(x) => x,
+        None => -1,
+    };
+    println(IntToString(mv));
+    println(IntToString(m.insert("d", 4).len()));
+    Map(Str, Int) r = m.remove("a");
+    println(IntToString(r.len()));
+    List(Str) ks = m.keys();
+    println(IntToString(ks.len()));
+    List(Int) vs = m.values();
+    println(IntToString(vs.len()));
+    Option(Int) ix = m["c"];
+    Int iv = match ix {
+        Some(x) => x,
+        None => -1,
+    };
+    println(IntToString(iv));
+    Bool has = m.contains("a");
+    if (has) {
+        println("has-a");
+    } else {
+        println("no-a");
+    }
+    Set(Int) s = {1, 2, 3};
+    println(IntToString(s.len()));
+    Bool has2 = s.contains(2);
+    if (has2) {
+        println("has-2");
+    } else {
+        println("no-2");
+    }
+    Set(Int) s2 = s.insert(4);
+    println(IntToString(s2.len()));
+    Set(Int) s3 = {1, 2};
+    println(IntToString(s2.union(s3).len()));
+    println(IntToString(s2.difference(s3).len()));
+    println(IntToString(s2.intersection(s3).len()));
+    List(Int) sl = s2.intersection(s3).to_list();
+    println(IntToString(sl.len()));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "3\n2\n-1\n4\n2\n3\n3\n3\nhas-a\n3\nhas-2\n4\n4\n2\n2\n2",
+        "unexpected program output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

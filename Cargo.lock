@@ -371,6 +371,14 @@ name = "resid-lexer"
 version = "0.1.0"
 
 [[package]]
+name = "resid-lsp"
+version = "0.1.0"
+dependencies = [
+ "resid-notes",
+ "serde_json",
+]
+
+[[package]]
 name = "resid-notes"
 version = "0.1.0"
 dependencies = [

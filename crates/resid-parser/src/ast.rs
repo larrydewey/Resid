@@ -232,6 +232,7 @@ pub enum ExprKind {
     },
     ListLit(Vec<Expr>),
     MapLit(Vec<(Expr, Expr)>),
+    SetLit(Vec<Expr>),
     Range {
         start: Box<Expr>,
         end: Box<Expr>,
