@@ -21,7 +21,9 @@
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
-proven**. The long-standing "context-dependent codegen ghost" is dead —
+proven**. Map/Set types now fully supported in stage-2 driver (recursive
+FNV-1a lookup/insert/remove, persistent functional style, no mutation).
+The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
 
 ### Compiler core (working)

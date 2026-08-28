@@ -1002,6 +1002,62 @@ Bool is_list_type(Str t) {
     return str_has_prefix(t, "List(");
 }
 
+// Map/Set type predicates and accessor helpers.
+Bool is_map_type(Str t) {
+    return str_has_prefix(t, "Map(");
+}
+
+// Recursive helper to find comma at given depth
+Int _find_comma_at_depth(Str t, Int i, Int target_depth, Int current_depth) {
+    Int n = str_len(t);
+    if (i >= n) { return -1; }
+    Int c = str_char_at(t, i);
+    if (c == 40) { return _find_comma_at_depth(t, i + 1, target_depth, current_depth + 1); }
+    if (c == 41) { return _find_comma_at_depth(t, i + 1, target_depth, current_depth - 1); }
+    if (c == 44 && current_depth == target_depth) { return i; }
+    return _find_comma_at_depth(t, i + 1, target_depth, current_depth);
+}
+
+// Recursive helper to skip whitespace
+Int _skip_ws(Str t, Int i) {
+    Int n = str_len(t);
+    if (i >= n) { return i; }
+    if (str_char_at(t, i) == 32) { return _skip_ws(t, i + 1); }
+    return i;
+}
+
+Str map_key_type(Str t) {
+    Str head = "Map(";
+    Int h = str_len(head);
+    if (!str_has_prefix(t, head)) { return ""; }
+    Int comma = _find_comma_at_depth(t, h, 1, 1);
+    if (comma < 0) { return ""; }
+    return str_trim(str_slice(t, h, comma));
+}
+
+Str map_val_type(Str t) {
+    Str head = "Map(";
+    Int h = str_len(head);
+    if (!str_has_prefix(t, head)) { return ""; }
+    Int n = str_len(t);
+    Int comma = _find_comma_at_depth(t, h, 1, 1);
+    if (comma < 0) { return ""; }
+    Int after_comma = _skip_ws(t, comma + 1);
+    return str_trim(str_slice(t, after_comma, n - 1));
+}
+
+Bool is_set_type(Str t) {
+    return str_has_prefix(t, "Set(");
+}
+
+Str set_elem_type(Str t) {
+    Str head = "Set(";
+    Int h = str_len(head);
+    if (!str_has_prefix(t, head)) { return ""; }
+    Int n = str_len(t);
+    return str_trim(str_slice(t, h, n - 1));
+}
+
 Bool arith_family(Str name) {
     if (str_starts_with(name, "checked_")) { return true; }
     if (str_starts_with(name, "wrapping_")) { return true; }
@@ -1438,6 +1494,89 @@ ERes check_list_lit(Str s, Int pos, List(Str) env, Funcs fs) {
     return check_list_lit_rest(s, pos, "", env, fs);
 }
 
+// Check if a comma-separated expression list is a map (contains ':') or set.
+// Returns "Map" or "Set" as the result type prefix.
+ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs) {
+    // Peek ahead: consume first expression, check for ':'
+    ERes first = check_expr(s, pos, env, fs);
+    if (first.err != "") { return first; }
+    // Check if the first expression is followed by ':'
+    Tok after_first = lex_tok(s, first.pos);
+    if (after_first.text == ":") {
+        // It's a map literal: {k: v, ...}
+        Tok val = lex_tok(s, after_first.pos);
+        ERes v = check_expr(s, val.pos, env, fs);
+        if (v.err != "") { return v; }
+        Str kt = first.ty;
+        Str vt = v.ty;
+        Tok t2 = lex_tok(s, v.pos);
+        if (t2.text == ",") {
+            return check_map_lit_rest(s, t2.pos, kt, vt, env, fs);
+        }
+        // single entry map
+        Str ty = "Map(" + kt + ", " + vt + ")";
+        return ERes { pos: t2.pos, ty: ty, err: "" };
+    }
+    if (after_first.text == ",") {
+        // It's a set literal: {e, ...}
+        ERes e = check_expr(s, after_first.pos, env, fs);
+        if (e.err != "") { return e; }
+        return check_set_lit_rest(s, e.pos, e.ty, env, fs);
+    }
+    if (after_first.text == "}") {
+        // Empty or single-element: check if it's map or set by token
+        // A single element with no ':' and no ',' is ambiguous; treat as Set
+        // But if we got here with just one expression and '}', it's actually
+        // a set with one element
+        Str ty = "Set(" + first.ty + ")";
+        return ERes { pos: after_first.pos, ty: ty, err: "" };
+    }
+    // Fall through: this should have been caught by the caller
+    return ERes { pos: first.pos, ty: "", err: "malformed literal" };
+}
+
+ERes check_map_lit_rest(Str s, Int pos, Str key, Str val, List(Str) env, Funcs fs) {
+    ERes k = check_expr(s, pos, env, fs);
+    if (k.err != "") { return k; }
+    Tok colon = lex_tok(s, k.pos);
+    if (colon.text != ":") {
+        return ERes { pos: colon.pos, ty: "", err: "map entries must use : separator" };
+    }
+    Tok vtok = lex_tok(s, colon.pos);
+    ERes v = check_expr(s, vtok.pos, env, fs);
+    if (v.err != "") { return v; }
+    if (k.ty != key) {
+        Str msg = "map keys differ: " + key + " vs " + k.ty;
+        return ERes { pos: v.pos, ty: "", err: msg };
+    }
+    if (v.ty != val) {
+        Str msg = "map values differ: " + val + " vs " + v.ty;
+        return ERes { pos: v.pos, ty: "", err: msg };
+    }
+    Tok t2 = lex_tok(s, v.pos);
+    if (t2.text == ",") {
+        return check_map_lit_rest(s, t2.pos, key, val, env, fs);
+    }
+    Str ty = "Map(" + key + ", " + val + ")";
+    return ERes { pos: t2.pos, ty: ty, err: "" };
+}
+
+ERes check_set_lit_rest(Str s, Int pos, Str elem, List(Str) env, Funcs fs) {
+    ERes e = check_expr(s, pos, env, fs);
+    if (e.err != "") { return e; }
+    Str elem2 = if (elem == "") { e.ty } else { elem };
+    if (elem != "" && elem != e.ty) {
+        Str msg = "set element type mismatch: " + elem + " vs " + e.ty;
+        return ERes { pos: e.pos, ty: "", err: msg };
+    }
+    Tok t = lex_tok(s, e.pos);
+    if (t.text == ",") {
+        return check_set_lit_rest(s, t.pos, elem2, env, fs);
+    }
+    Str ty = "Set(" + elem2 + ")";
+    return ERes { pos: t.pos, ty: ty, err: "" };
+}
+
 ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
     Tok t = lex_tok(s, base.pos);
     if (t.text == "[") {
@@ -1455,6 +1594,18 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
         if (is_list_type(base.ty)) {
             Str elem = inner_of(base.ty);
             ERes out = ERes { pos: close.pos, ty: elem, err: "" };
+            return check_postfix(s, out, env, fs);
+        }
+        if (is_map_type(base.ty)) {
+            Str kt = map_key_type(base.ty);
+            Str vt = map_val_type(base.ty);
+            if (idx.ty != kt) {
+                Str msg = "map index key mismatch: map has key " + kt + ", found " + idx.ty;
+                return ERes { pos: close.pos, ty: "", err: msg };
+            }
+            // Map index returns Option(value)
+            Str opt = "Option(" + vt + ")";
+            ERes out = ERes { pos: close.pos, ty: opt, err: "" };
             return check_postfix(s, out, env, fs);
         }
         Str msg = "cannot index " + base.ty;
@@ -1478,6 +1629,167 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                 Tok close = lex_tok(s, arg.pos);
                 ERes out = ERes { pos: close.pos, ty: base.ty, err: "" };
                 return check_postfix(s, out, env, fs);
+            }
+            // ─── Map methods ────────────────────────────────────
+            if (is_map_type(base.ty)) {
+                Str kt = map_key_type(base.ty);
+                Str vt = map_val_type(base.ty);
+                if (f.text == "get") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (arg.ty != kt) {
+                        Str msg = ".get key type mismatch: map has key " + kt + ", found " + arg.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    Str opt = "Option(" + vt + ")";
+                    ERes out = ERes { pos: close.pos, ty: opt, err: "" };
+                    return check_postfix(s, out, env, fs);
+                }
+                if (f.text == "insert") {
+                    ERes ka = check_expr(s, p.pos, env, fs);
+                    if (ka.err != "") { return ka; }
+                    Tok cm = lex_tok(s, ka.pos);
+                    if (cm.text != ",") {
+                        return ERes { pos: cm.pos, ty: "", err: ".insert expects 2 args" };
+                    }
+                    ERes va = check_expr(s, cm.pos, env, fs);
+                    if (va.err != "") { return va; }
+                    Tok close = lex_tok(s, va.pos);
+                    if (ka.ty != kt) {
+                        Str msg = ".insert key mismatch: map has key " + kt + ", found " + ka.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    if (va.ty != vt) {
+                        Str msg = ".insert value mismatch: map has value " + vt + ", found " + va.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    ERes out = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    return check_postfix(s, out, env, fs);
+                }
+                if (f.text == "remove") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (arg.ty != kt) {
+                        Str msg = ".remove key mismatch: map has key " + kt + ", found " + arg.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    ERes out = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    return check_postfix(s, out, env, fs);
+                }
+                if (f.text == "contains") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (arg.ty != kt) {
+                        Str msg = ".contains key mismatch: map has key " + kt + ", found " + arg.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    ERes out = ERes { pos: close.pos, ty: "Bool", err: "" };
+                    return check_postfix(s, out, env, fs);
+                }
+                if (f.text == "keys") {
+                    Tok close = lex_tok(s, p.pos);
+                    if (close.text != ")") {
+                        return ERes { pos: close.pos, ty: "", err: ".keys() takes no arguments" };
+                    }
+                    Str out = "List(" + kt + ")";
+                    ERes o = ERes { pos: close.pos, ty: out, err: "" };
+                    return check_postfix(s, o, env, fs);
+                }
+                if (f.text == "values") {
+                    Tok close = lex_tok(s, p.pos);
+                    if (close.text != ")") {
+                        return ERes { pos: close.pos, ty: "", err: ".values() takes no arguments" };
+                    }
+                    Str out = "List(" + vt + ")";
+                    ERes o = ERes { pos: close.pos, ty: out, err: "" };
+                    return check_postfix(s, o, env, fs);
+                }
+                Str msg = "unsupported method " + f.text + " on Map(" + kt + ", " + vt + ")";
+                return ERes { pos: p.pos, ty: "", err: msg };
+            }
+            // ─── Set methods ────────────────────────────────────
+            if (is_set_type(base.ty)) {
+                Str et = set_elem_type(base.ty);
+                if (f.text == "contains") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (arg.ty != et) {
+                        Str msg = ".contains type mismatch: set has element " + et + ", found " + arg.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    ERes out = ERes { pos: close.pos, ty: "Bool", err: "" };
+                    return check_postfix(s, out, env, fs);
+                }
+                if (f.text == "insert") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (arg.ty != et) {
+                        Str msg = ".insert type mismatch: set has element " + et + ", found " + arg.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    ERes o = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    return check_postfix(s, o, env, fs);
+                }
+                if (f.text == "remove") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (arg.ty != et) {
+                        Str msg = ".remove type mismatch: set has element " + et + ", found " + arg.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    ERes o = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    return check_postfix(s, o, env, fs);
+                }
+                if (f.text == "union") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (arg.ty != base.ty) {
+                        Str msg = ".union type mismatch: expected " + base.ty + ", found " + arg.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    ERes o = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    return check_postfix(s, o, env, fs);
+                }
+                if (f.text == "difference") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (arg.ty != base.ty) {
+                        Str msg = ".difference type mismatch: expected " + base.ty + ", found " + arg.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    ERes o = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    return check_postfix(s, o, env, fs);
+                }
+                if (f.text == "intersection") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (arg.ty != base.ty) {
+                        Str msg = ".intersection type mismatch: expected " + base.ty + ", found " + arg.ty;
+                        return ERes { pos: close.pos, ty: "", err: msg };
+                    }
+                    ERes o = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    return check_postfix(s, o, env, fs);
+                }
+                if (f.text == "to_list") {
+                    Tok close = lex_tok(s, p.pos);
+                    if (close.text != ")") {
+                        return ERes { pos: close.pos, ty: "", err: ".to_list() takes no arguments" };
+                    }
+                    Str out = "List(" + et + ")";
+                    ERes o = ERes { pos: close.pos, ty: out, err: "" };
+                    return check_postfix(s, o, env, fs);
+                }
+                Str msg = "unsupported method " + f.text + " on Set(" + et + ")";
+                return ERes { pos: p.pos, ty: "", err: msg };
             }
             Str msg = "unsupported method " + f.text;
             return ERes { pos: p.pos, ty: "", err: msg };
@@ -1646,6 +1958,9 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
     }
     if (t.text == "[") {
         return check_list_lit(s, t.pos, env, fs);
+    }
+    if (t.text == "{") {
+        return check_map_or_set_lit(s, t.pos, env, fs);
     }
     Str msg = "unexpected token " + t.text;
     return ERes { pos: t.pos, ty: "", err: msg };
