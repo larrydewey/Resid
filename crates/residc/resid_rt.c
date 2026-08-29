@@ -216,6 +216,20 @@ void* resid_malloc(size_t size) { return malloc(size); }
 /* Length of a list = its slot count. */
 int64_t resid_list_len(void* b) { return ((ResidVal*)b)->count; }
 
+/* Convert a boxed ResidVal list into the length-first flat list layout used
+ * by the stage-2 driver ({ i64 count, [count x ptr] elements }): slot array
+ * at offset 8, count at offset 0. Used at the C-runtime boundary so lists
+ * returned by resid_map_keys/values and resid_set_to_list match what the
+ * driver's list ops (and e.lconcat) expect. */
+void* resid_rt_list_to_flat(void* b) {
+    ResidVal* v = (ResidVal*)b;
+    int64_t n = v->count;
+    void* out = malloc((size_t)n * 8 + 8);
+    ((int64_t*)out)[0] = n;
+    for (int64_t i = 0; i < n; i++) ((void**)out)[i + 1] = v->slots[i];
+    return out;
+}
+
 /* Concatenate two lists: a new boxed list with a's slots then b's. */
 void* resid_list_concat(void* a, void* b) {
     ResidVal* x = (ResidVal*)a;

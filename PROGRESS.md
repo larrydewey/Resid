@@ -9,15 +9,16 @@
 
 ## 0. Current Snapshot
 
-**679 tests pass** (lexer 17, parser 112, resid-ir 46, resid-type 206,
+**680 tests pass** (lexer 17, parser 112, resid-ir 46, resid-type 206,
  resid-codegen 137, resid-build 39, resid-fmt 5,
  resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
- resid-graph 4, resid-builtin 0, residc 0 unit + 92 e2e incl.
+ resid-graph 4, resid-builtin 0, residc 0 unit + 93 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
 `run_behavior_ord_sort`, `bootstrap_behavior_ord_parity`,
-`run_sandbox_enforcement`, `run_map_set_types`).
+`run_sandbox_enforcement`, `run_map_set_types`,
+`bootstrap_map_set_parity`).
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
@@ -477,9 +478,19 @@ pipelines for struct sort, Int sort, and Reverse):
 - Codegen: `wrap_option()` helper boxes raw rt map-get results as
   Some/None for `.get` and `m[k]`; `Map`/`Set` types pass through IR.
 - e2e `run_map_set_types` + parser/type unit tests green.
-- **Stage-2 BLOCKED**: driver has no `while`/reassignment (recursion
-  only), and hash-table port needs spellout via recursion-first
-  algorithms — planned after `?`-sugar sum-type groundwork (item 9).
+- **Stage-2 (DONE)**: driver now compiles Map/Set programs end-to-end with
+  byte-identical output to the Rust pipeline (e2e `bootstrap_map_set_parity`).
+  Recursion-first port of literal/method typecheck+codingen (no `while`/
+  reassignment): map/set literals, `.len/.insert/.remove/.contains/.keys/
+  .values`, Set `.union/.difference/.intersection/.to_list`, chained
+  postfix. Long-standing driver bug fixed along the way: List `.len()` read
+  the C-runtime `ResidVal` tag word (offset 0) treating it as the driver's
+  length-first layout — added `resid_rt_list_to_flat`, which reboxes lists
+  returned by `resid_map_keys/values` and `resid_set_to_list` at the boundary.
+  Empty `{}` literals are rejected by both pipelines (element type
+  un-inferable). `m.get`/`m[k]` (Option results) still need `match`/`unwrap`
+  support in the driver (item 9, `?`-sugar groundwork) — plan is to
+  backport driver Option support after sum types land.
 
 ### Progress on item 1 — generic numeric behaviors & Serialize/Allocator (stage-1 DONE)
 
