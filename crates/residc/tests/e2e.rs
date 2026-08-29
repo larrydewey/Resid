@@ -6391,6 +6391,79 @@ fn run_generic_numeric_behaviors() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
+fn run_constraint_types() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-contype-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("contype.resid");
+    std::fs::write(
+        &file,
+        r#"type Positive = Int[value > 0];
+type Even = Int[value % 2 == 0];
+type Natural = Int where value >= 0;
+
+Int main() {
+    Positive p = 5;
+    println(IntToString(p));
+    Even e = 10;
+    println(IntToString(e));
+    Natural n = 0;
+    println(IntToString(n));
+    Int y = p * e;
+    println(IntToString(y));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout.trim(), "5\n10\n0\n50", "unexpected output: {stdout:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn constraint_type_violation_rejected() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-contype-bad-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"type Positive = Int[value > 0];
+Int main() {
+    Positive p = -1;
+    return p;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&bad).arg("emit-ir").output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "constraint violation must fail");
+    let err = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(err.contains("constraint"), "error should mention constraint: {err}");
+    assert!(err.contains("not satisfied by value -1"), "wrong message: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn run_map_set_types() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-mapset-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

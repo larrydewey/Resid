@@ -61,7 +61,18 @@ pub fn format_unit(unit: &TranslationUnit) -> String {
                             .collect();
                         p.line(&format!("type {} = {};", t.name.0, vs.join(" | ")));
                     }
-                    TypeBody::Constraint { .. } | TypeBody::Residual(_) => {}
+                    TypeBody::Constraint { inner, constraint } => {
+                        p.line(&format!(
+                            "type {} = {} where {};",
+                            t.name.0,
+                            ty_str(inner),
+                            expr_str(constraint, 0)
+                        ));
+                    }
+                    TypeBody::Base(inner) => {
+                        p.line(&format!("type {} = {};", t.name.0, ty_str(inner)));
+                    }
+                    TypeBody::Residual(_) => {}
                 }
                 p.blank();
             }
@@ -552,6 +563,9 @@ fn ty_str(t: &Type) -> String {
             }
             None => name.0.clone(),
         },
+        Type::Refined { base, constraint } => {
+            format!("{}[{}]", ty_str(base), expr_str(constraint, 0))
+        }
         Type::Residual(inner) => format!("residual {}", ty_str(inner)),
         Type::ISize => "isize".to_string(),
         Type::USize => "usize".to_string(),

@@ -543,21 +543,17 @@ impl Parser {
                 if self.eat_keyword(Keyword::Where) {
                     constraint = Some(self.parse_expression());
                 }
-                match type_ {
-                    Type::Base { name, params: None } if name.0 == "type" => {
-                        self.expect_op(Op::Equals, "constraint: expected =");
-                        let inner_body = self.parse_type_body();
-                        let constraint = constraint.unwrap_or_else(|| Expr {
-                            kind: ExprKind::Id(Id("true".to_string())),
-                            span: self.current_span(),
-                        });
-                        TypeBody::Constraint {
-                            inner: Box::new(inner_body),
-                            constraint,
-                        }
-                    }
-                    Type::Residual(inner) => TypeBody::Residual(inner),
-                    _ => TypeBody::Product(Vec::new()),
+                match (type_, constraint) {
+                    (Type::Refined { base, constraint }, None) => TypeBody::Constraint {
+                        inner: base,
+                        constraint,
+                    },
+                    (t, Some(constraint)) => TypeBody::Constraint {
+                        inner: Box::new(t),
+                        constraint: Box::new(constraint),
+                    },
+                    (Type::Residual(inner), None) => TypeBody::Residual(inner),
+                    (t, None) => TypeBody::Base(Box::new(t)),
                 }
             }
         }
@@ -607,7 +603,20 @@ impl Parser {
             params = Some(ps);
         }
 
-        Type::Base { name, params }
+        let mut base = Type::Base { name, params };
+
+        // Refinement type: `Int[value > 0]` (spec §12).
+        if self.peek_is_op(Op::LBracket) {
+            self.bump();
+            let constraint = self.parse_expression();
+            self.expect_op(Op::RBracket, "constraint: expected ]");
+            base = Type::Refined {
+                base: Box::new(base),
+                constraint: Box::new(constraint),
+            };
+        }
+
+        base
     }
 
     // ─── Expression Parsing (Precedence Climbing) ───────────────
@@ -2622,6 +2631,83 @@ impl Type {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_constraint_type_bracket_form() {
+        let src = r#"
+type Positive = Int[value > 0];
+
+Int main() {
+    return 0;
+}
+"#;
+        let (unit, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        match &unit.declarations[0] {
+            Declaration::Type(t) => match &t.body {
+                TypeBody::Constraint { inner, constraint } => {
+                    assert!(matches!(&**inner, Type::Base { name, .. } if name.0 == "Int"));
+                    assert!(matches!(
+                        &constraint.kind,
+                        ExprKind::BinaryOp { op: Op::Greater, .. }
+                    ));
+                }
+                other => panic!("expected Constraint, got {other:?}"),
+            },
+            other => panic!("expected type decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_constraint_type_where_form() {
+        let src = r#"
+type Positive = Int where value > 0;
+
+Int main() {
+    return 0;
+}
+"#;
+        let (unit, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        match &unit.declarations[0] {
+            Declaration::Type(t) => match &t.body {
+                TypeBody::Constraint { inner, constraint } => {
+                    assert!(matches!(&**inner, Type::Base { name, .. } if name.0 == "Int"));
+                    assert!(matches!(
+                        &constraint.kind,
+                        ExprKind::BinaryOp { op: Op::Greater, .. }
+                    ));
+                }
+                other => panic!("expected Constraint, got {other:?}"),
+            },
+            other => panic!("expected type decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_constraint_type_inline_field() {
+        let src = r#"
+type Meter = { v: Int[value >= 0] };
+
+Int main() {
+    return 0;
+}
+"#;
+        let (unit, errors) = Parser::parse("test.resid", src);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        match &unit.declarations[0] {
+            Declaration::Type(t) => match &t.body {
+                TypeBody::Product(fields) => {
+                    assert!(matches!(
+                        &fields[0].1,
+                        Type::Refined { base, constraint } if matches!(constraint.kind, ExprKind::BinaryOp { op: Op::GreaterEq, .. })
+                    ));
+                }
+                other => panic!("expected Product, got {other:?}"),
+            },
+            other => panic!("expected type decl, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_simple_function() {

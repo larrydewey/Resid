@@ -9,21 +9,23 @@
 
 ## 0. Current Snapshot
 
-**680 tests pass** (lexer 17, parser 112, resid-ir 46, resid-type 206,
+**690 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 211,
  resid-codegen 137, resid-build 39, resid-fmt 5,
  resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
- resid-graph 4, resid-builtin 0, residc 0 unit + 93 e2e incl.
+ resid-graph 4, resid-builtin 0, residc 0 unit + 95 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
 `run_behavior_ord_sort`, `bootstrap_behavior_ord_parity`,
 `run_sandbox_enforcement`, `run_map_set_types`,
-`bootstrap_map_set_parity`).
+`bootstrap_map_set_parity`, `run_constraint_types`).
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
 proven**. Map/Set types now fully supported in stage-2 driver (recursive
 FNV-1a lookup/insert/remove, persistent functional style, no mutation).
+Constraint types (§12) are stage-1 implemented: both `Int[value > 0]` and
+`Int where value > 0` parse and discharge on annotated bindings.
 The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
 
@@ -357,8 +359,10 @@ item is DONE only when it ships in **both** pipelines (see policy).
    error when exceeded). Still missing: transitive attenuation closure,
    dynamic capability errors, handle-entry rules, §21.4 knowledge-cache
    capability gating.
-2. §12 Constraint types — `type Positive = Int[value > 0]` parses but
-   constraints are never tracked or discharged.
+2. §12 Constraint types — ✅ DONE (stage-1): both syntaxes (`Int[value > 0]`
+    and `Int where value > 0`) parse, resolve to a `Refined` semantic type,
+    and are discharged on annotated bindings (statically-known integer
+    literals only; see progress below).
 3. Core behaviors `Serialize`, `Allocator`, `Reverse`, generic `Hash`
    (§12 list) — zero implementation.
 4. Map / Set types — `MapLit` parses; nothing resolves in type check or
@@ -417,10 +421,37 @@ type — Option lands first.
 5. Map/Set types (item 4) — ✅ done (stage-1).
 6. Serialize/Hash behaviors (item 3) — ✅ done (stage-1).
 7. Sandbox transitive attenuation (item 1 remaining) — ✅ done (stage-1, e2e `run_sandbox_transitive_attenuation`).
-8. Constraint types (item 2).
+8. Constraint types (item 2) — ✅ done (stage-1, both syntaxes, discharge on binds).
 9. Knowledge-graph IR + reduction depth (items 11, 12).
 10. Runtime spawn caps (item 7), caps-as-effects (item 10).
 11. Build profiles (item 13), key pinning (item 14).
+
+### Progress on item 2 — constraint types: DONE (stage-1)
+
+- Parser: `Int[value > 0]` postfix in any type position (`Type::Refined`)
+  AND the `where` alternative (`type X = Int where value > 0`), both
+  landing in `TypeBody::Constraint { inner: Type, constraint: Expr }`.
+  A bare `type X = Int;` RHS now also parses as a real alias
+  (`TypeBody::Base`) instead of a silently-empty product.
+- Type resolution: `SemType::Refined { name, base, constraint }`. The
+  public `resolve_type_ctx` erases refinements (deeply — fields, list
+  elements, param/ret types) so operators, unification, and codegen never
+  see them; `resolve_type_declared` retains them for discharge. Guard arms
+  added in codegen's `llvm_type`.
+- Discharge (§12): at an annotated binding (`Positive p = 5;`) the
+  constraint is evaluated against the statically-known literal
+  (`const_int_value` handles a leading unary minus; comparisons,
+  `==`/`!=`, `&&`/`||`/`!`, `+ - * / %` over `value`). Violation →
+  `binding \`p\`: constraint \`value > 0\` not satisfied by value -1`;
+  non-constant RHS → `cannot verify … for non-constant value`. Values
+  already of a refined type pass through; refined values erase to their
+  base for all downstream use (`Positive p = 5; Int y = p + 1;` works).
+- Tests: parser +3 (`*_constraint_type_*`), resid-type +5 (discharge ok /
+  violation / where-form / non-constant / erase-to-base), e2e +2
+  (`run_constraint_types`, `constraint_type_violation_rejected`).
+- Edge so far: call-arg and return discharge is lenient (params erase to
+  base, no proof demanded) — a documented follow-up when value-carrying
+  refinements reach signature checking.
 
 ### Progress on item 3 — `pub` visibility: DONE (stage-1)
 

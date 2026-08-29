@@ -117,9 +117,11 @@ pub enum TypeBody {
     Product(Vec<(Id, Type)>),
     Sum(Vec<SumVariant>),
     Constraint {
-        inner: Box<TypeBody>,
-        constraint: Expr,
+        inner: Box<Type>,
+        constraint: Box<Expr>,
     },
+    /// A plain type on the RHS of a `type` declaration (alias or base).
+    Base(Box<Type>),
     Residual(Box<Type>),
 }
 
@@ -134,6 +136,11 @@ pub struct SumVariant {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Base { name: Id, params: Option<Vec<Type>> },
+    /// Refinement type: `Int[value > 0]` (spec §12).
+    Refined {
+        base: Box<Type>,
+        constraint: Box<Expr>,
+    },
     Residual(Box<Type>),
     ISize,
     USize,
