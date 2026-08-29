@@ -562,19 +562,38 @@ PRes parse_type(Str s, Int pos) {
         // a nested type. Nested type constructors recurse as before.
         Tok in1 = lex_tok(s, t2.pos);
         Bool isnum = in1.kind == "int";
-        PRes inner = parse_type(s, t2.pos);
-        Int after_in = if (isnum) { in1.pos } else { inner.pos };
-        Str inner_ty = if (isnum) { in1.text } else { inner.ty };
-        Bool ok = if (isnum) { true } else { inner.err == "" };
-        if (!ok) {
-            return PRes { pos: after_in, ty: "", err: "bad type parameter" };
+        if (isnum) {
+            Tok close = lex_tok(s, in1.pos);
+            if (close.text != ")") {
+                return PRes { pos: close.pos, ty: "", err: "expected ) in type" };
+            }
+            Str nty = t.text + "(" + in1.text + ")";
+            return PRes { pos: close.pos, ty: nty, err: "" };
         }
-        Tok close = lex_tok(s, after_in);
-        if (close.text != ")") {
-            return PRes { pos: close.pos, ty: "", err: "expected ) in type" };
+        // Type constructor: single arg List(T)/Option(T)/Set(T) as before,
+        // two args Map(K, V) via a top-level comma at depth one.
+        PRes first = parse_type(s, t2.pos);
+        if (first.err != "") {
+            return PRes { pos: first.pos, ty: "", err: "bad type parameter" };
         }
-        Str ty = t.text + "(" + inner_ty + ")";
-        return PRes { pos: close.pos, ty: ty, err: "" };
+        Tok sep = lex_tok(s, first.pos);
+        if (sep.text == ",") {
+            PRes second = parse_type(s, sep.pos);
+            if (second.err != "") {
+                return PRes { pos: second.pos, ty: "", err: "bad type parameter" };
+            }
+            Tok close = lex_tok(s, second.pos);
+            if (close.text != ")") {
+                return PRes { pos: close.pos, ty: "", err: "expected ) in type" };
+            }
+            Str mty = t.text + "(" + first.ty + ", " + second.ty + ")";
+            return PRes { pos: close.pos, ty: mty, err: "" };
+        }
+        if (sep.text == ")") {
+            Str oty = t.text + "(" + first.ty + ")";
+            return PRes { pos: sep.pos, ty: oty, err: "" };
+        }
+        return PRes { pos: sep.pos, ty: "", err: "expected , or ) in type" };
     }
     return PRes { pos: t.pos, ty: t.text, err: "" };
 }
@@ -1763,31 +1782,43 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Tok rp = lex_tok(s, arg.pos);
                     GT kboxed = box_scalar(s, arg, env, fs);
                     Int t1 = kboxed.tmp + 1;
-                    Str reg = "%t" + IntToString(t1);
-                    Str line = reg + " = call i8 @resid_map_contains(ptr " + base.val + ", ptr " + kboxed.val + ")";
+                    Int t2 = kboxed.tmp + 2;
+                    Str cr = "%t" + IntToString(t1);
+                    Str reg = "%t" + IntToString(t2);
+                    Str cl = cr + " = call i8 @resid_map_contains(ptr " + base.val + ", ptr " + kboxed.val + ")";
+                    Str nl = reg + " = icmp ne i8 " + cr + ", 0";
                     List(Str) l20 = kboxed.lines;
-                    List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl };
+                    List(Str) l2 = l20.concat([cl]);
+                    List(Str) l3 = l2.concat([nl]);
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: arg.glines, lines: l3, tmp: t2, lbl: arg.lbl };
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "keys") {
                     Tok rp = lex_tok(s, lp.pos);
                     Int t1 = base.tmp + 1;
-                    Str reg = "%t" + IntToString(t1);
-                    Str line = reg + " = call ptr @resid_map_keys(ptr " + base.val + ")";
+                    Int t2 = base.tmp + 2;
+                    Str r0 = "%t" + IntToString(t1);
+                    Str reg = "%t" + IntToString(t2);
+                    Str l1 = r0 + " = call ptr @resid_map_keys(ptr " + base.val + ")";
+                    Str l2 = reg + " = call ptr @resid_rt_list_to_flat(ptr " + r0 + ")";
                     List(Str) l20 = base.lines;
-                    List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + kt + ")", cnt: 0, err: "", glines: base.glines, lines: l2, tmp: t1, lbl: base.lbl };
+                    List(Str) l3 = l20.concat([l1]);
+                    List(Str) l4 = l3.concat([l2]);
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + kt + ")", cnt: 0, err: "", glines: base.glines, lines: l4, tmp: t2, lbl: base.lbl };
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "values") {
                     Tok rp = lex_tok(s, lp.pos);
                     Int t1 = base.tmp + 1;
-                    Str reg = "%t" + IntToString(t1);
-                    Str line = reg + " = call ptr @resid_map_values(ptr " + base.val + ")";
+                    Int t2 = base.tmp + 2;
+                    Str r0 = "%t" + IntToString(t1);
+                    Str reg = "%t" + IntToString(t2);
+                    Str l1 = r0 + " = call ptr @resid_map_values(ptr " + base.val + ")";
+                    Str l2 = reg + " = call ptr @resid_rt_list_to_flat(ptr " + r0 + ")";
                     List(Str) l20 = base.lines;
-                    List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + vt + ")", cnt: 0, err: "", glines: base.glines, lines: l2, tmp: t1, lbl: base.lbl };
+                    List(Str) l3 = l20.concat([l1]);
+                    List(Str) l4 = l3.concat([l2]);
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + vt + ")", cnt: 0, err: "", glines: base.glines, lines: l4, tmp: t2, lbl: base.lbl };
                     return cg_postfix(s, b3, env, fs);
                 }
                 return gt_err("unsupported method " + fld.text + " on Map", base);
@@ -1811,11 +1842,15 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Tok rp = lex_tok(s, arg.pos);
                     GT eboxed = box_scalar(s, arg, env, fs);
                     Int t1 = eboxed.tmp + 1;
-                    Str reg = "%t" + IntToString(t1);
-                    Str line = reg + " = call i8 @resid_set_contains(ptr " + base.val + ", ptr " + eboxed.val + ")";
+                    Int t2 = eboxed.tmp + 2;
+                    Str cr = "%t" + IntToString(t1);
+                    Str reg = "%t" + IntToString(t2);
+                    Str cl = cr + " = call i8 @resid_set_contains(ptr " + base.val + ", ptr " + eboxed.val + ")";
+                    Str nl = reg + " = icmp ne i8 " + cr + ", 0";
                     List(Str) l20 = eboxed.lines;
-                    List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl };
+                    List(Str) l2 = l20.concat([cl]);
+                    List(Str) l3 = l2.concat([nl]);
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: arg.glines, lines: l3, tmp: t2, lbl: arg.lbl };
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "insert") {
@@ -1883,11 +1918,15 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                 if (fld.text == "to_list") {
                     Tok rp = lex_tok(s, lp.pos);
                     Int t1 = base.tmp + 1;
-                    Str reg = "%t" + IntToString(t1);
-                    Str line = reg + " = call ptr @resid_set_to_list(ptr " + base.val + ")";
+                    Int t2 = base.tmp + 2;
+                    Str r0 = "%t" + IntToString(t1);
+                    Str reg = "%t" + IntToString(t2);
+                    Str l1 = r0 + " = call ptr @resid_set_to_list(ptr " + base.val + ")";
+                    Str l2 = reg + " = call ptr @resid_rt_list_to_flat(ptr " + r0 + ")";
                     List(Str) l20 = base.lines;
-                    List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + et + ")", cnt: 0, err: "", glines: base.glines, lines: l2, tmp: t1, lbl: base.lbl };
+                    List(Str) l3 = l20.concat([l1]);
+                    List(Str) l4 = l3.concat([l2]);
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + et + ")", cnt: 0, err: "", glines: base.glines, lines: l4, tmp: t2, lbl: base.lbl };
                     return cg_postfix(s, b3, env, fs);
                 }
                 return gt_err("unsupported method " + fld.text + " on Set", base);
@@ -2336,19 +2375,20 @@ GT cg_map_lit_rest(Str s, Int pos, Str kt, Str vt, GT map_v, List(Str) env, Func
     if (k.err != "") { return k; }
     Tok colon = lex_tok(s, k.pos);
     if (colon.text != ":") { return gt_err("map entries must use : separator", k); }
-    GT v = cg_expr(s, colon.pos, env, fs, k);
+    GT kbox = box_scalar(s, k, env, fs);
+    GT v = cg_expr(s, colon.pos, env, fs, kbox);
     if (v.err != "") { return v; }
-    GT kboxed = box_scalar(s, k, env, fs);
-    GT vboxed = box_scalar(s, v, env, fs);
-    Int t1 = vboxed.tmp + 1;
+    GT vbox = box_scalar(s, v, env, fs);
+    Int t1 = vbox.tmp + 1;
     Str reg = "%t" + IntToString(t1);
-    Str line = reg + " = call ptr @resid_map_insert(ptr " + map_v.val + ", ptr " + kboxed.val + ", ptr " + vboxed.val + ")";
-    List(Str) nl = vboxed.lines.concat([line]);
+    Str line = reg + " = call ptr @resid_map_insert(ptr " + map_v.val + ", ptr " + kbox.val + ", ptr " + vbox.val + ")";
+    List(Str) nl = vbox.lines.concat([line]);
+    GT m = GT { pos: colon.pos, val: reg, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: vbox.glines, lines: nl, tmp: t1, lbl: vbox.lbl };
     Tok t2 = lex_tok(s, v.pos);
     if (t2.text == ",") {
-        return cg_map_lit_rest(s, t2.pos, kt, vt, GT { pos: t2.pos, val: reg, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: k.glines, lines: nl, tmp: t1, lbl: k.lbl }, env, fs, v);
+        return cg_map_lit_rest(s, t2.pos, kt, vt, m, env, fs, vbox);
     }
-    return cg_map_lit_emit(reg, kt, vt, t2.pos, GT { pos: t2.pos, val: reg, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: k.glines, lines: nl, tmp: t1, lbl: k.lbl });
+    return cg_map_lit_emit(reg, kt, vt, t2.pos, m);
 }
 
 // Set literal: {e, ...} — build persistent hash table via resid_set_insert.
@@ -2360,56 +2400,72 @@ GT cg_set_lit_rest(Str s, Int pos, Str et, GT set_v, List(Str) env, Funcs fs, GT
     GT e = cg_expr(s, pos, env, fs, set_v);
     if (e.err != "") { return e; }
     if (e.ty != et) { return gt_err("set element type mismatch: " + et + " vs " + e.ty, e); }
-    GT eboxed = box_scalar(s, e, env, fs);
-    Int t1 = eboxed.tmp + 1;
+    GT ebox = box_scalar(s, e, env, fs);
+    Int t1 = ebox.tmp + 1;
     Str reg = "%t" + IntToString(t1);
-    Str line = reg + " = call ptr @resid_set_insert(ptr " + set_v.val + ", ptr " + eboxed.val + ")";
-    List(Str) nl = eboxed.lines.concat([line]);
+    Str line = reg + " = call ptr @resid_set_insert(ptr " + set_v.val + ", ptr " + ebox.val + ")";
+    List(Str) nl = ebox.lines.concat([line]);
+    GT m = GT { pos: e.pos, val: reg, ty: "Set(" + et + ")", cnt: 0, err: "", glines: ebox.glines, lines: nl, tmp: t1, lbl: ebox.lbl };
     Tok t2 = lex_tok(s, e.pos);
     if (t2.text == ",") {
-        return cg_set_lit_rest(s, t2.pos, et, GT { pos: t2.pos, val: reg, ty: "Set(" + et + ")", cnt: 0, err: "", glines: e.glines, lines: nl, tmp: t1, lbl: e.lbl }, env, fs, e);
+        return cg_set_lit_rest(s, t2.pos, et, m, env, fs, ebox);
     }
-    return cg_set_lit_emit(reg, et, t2.pos, GT { pos: t2.pos, val: reg, ty: "Set(" + et + ")", cnt: 0, err: "", glines: e.glines, lines: nl, tmp: t1, lbl: e.lbl });
+    return cg_set_lit_emit(reg, et, t2.pos, m);
 }
 
 GT cg_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
-    // Peek: first expression, check if followed by ':'
+    // Peek: first expression, then decide map (:) vs set (,) vs single set (})
     GT first = cg_expr(s, pos, env, fs, c);
     if (first.err != "") { return first; }
     Tok after = lex_tok(s, first.pos);
     if (after.text == ":") {
-        // Map literal: {k: v, ...}
-        GT val = cg_expr(s, after.pos, env, fs, first);
+        // Map literal: {k: v, ...} — create empty table, insert first pair,
+        // then continue with remaining pairs.
+        GT kbox = box_scalar(s, first, env, fs);
+        GT val = cg_expr(s, after.pos, env, fs, kbox);
         if (val.err != "") { return val; }
+        GT vbox = box_scalar(s, val, env, fs);
         Str kt = first.ty;
         Str vt = val.ty;
-        GT empty = GT { pos: val.pos, val: "%t" + IntToString(val.tmp + 1), ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: val.glines, lines: val.lines.concat(["%t" + IntToString(val.tmp + 1) + " = call ptr @resid_set_new()"]), tmp: val.tmp + 1, lbl: val.lbl };
+        Int t1 = vbox.tmp + 1;
+        Str m0 = "%t" + IntToString(t1);
+        Str newl = m0 + " = call ptr @resid_set_new()";
+        Int t2i = t1 + 1;
+        Str m1 = "%t" + IntToString(t2i);
+        Str insl = m1 + " = call ptr @resid_map_insert(ptr " + m0 + ", ptr " + kbox.val + ", ptr " + vbox.val + ")";
+        List(Str) nl = vbox.lines.concat([newl, insl]);
+        GT mt = GT { pos: val.pos, val: m1, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: vbox.glines, lines: nl, tmp: t2i, lbl: vbox.lbl };
         Tok t2 = lex_tok(s, val.pos);
         if (t2.text == ",") {
-            return cg_map_lit_rest(s, t2.pos, kt, vt, empty, env, fs, val);
+            return cg_map_lit_rest(s, t2.pos, kt, vt, mt, env, fs, vbox);
         }
-        // Single entry: need to insert it
-        GT kboxed = box_scalar(s, first, env, fs);
-        GT vboxed = box_scalar(s, val, env, fs);
-        Int t3 = vboxed.tmp + 1;
-        Str reg = "%t" + IntToString(t3);
-        Str line = reg + " = call ptr @resid_map_insert(ptr " + empty.val + ", ptr " + kboxed.val + ", ptr " + vboxed.val + ")";
-        List(Str) nl = empty.lines.concat([line]);
-        return cg_map_lit_emit(reg, kt, vt, t2.pos, GT { pos: t2.pos, val: reg, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: first.glines, lines: nl, tmp: t3, lbl: first.lbl });
+        return cg_map_lit_emit(m1, kt, vt, t2.pos, mt);
     }
     if (after.text == ",") {
         // Set literal: {e, ...}
-        GT empty = GT { pos: after.pos, val: "%t" + IntToString(after.pos % 10000), ty: "Set(" + first.ty + ")", cnt: 0, err: "", glines: first.glines, lines: first.lines.concat(["%t" + IntToString(after.pos % 10000) + " = call ptr @resid_set_new()"]), tmp: after.pos % 10000, lbl: first.lbl };
-        // Fix: use tmp properly
-        Int base_tmp = first.tmp;
-        GT empty2 = GT { pos: after.pos, val: "%t" + IntToString(base_tmp + 1), ty: "Set(" + first.ty + ")", cnt: 0, err: "", glines: first.glines, lines: first.lines.concat(["%t" + IntToString(base_tmp + 1) + " = call ptr @resid_set_new()"]), tmp: base_tmp + 1, lbl: first.lbl };
-        return cg_set_lit_rest(s, after.pos, first.ty, empty2, env, fs, first);
+        GT fbox = box_scalar(s, first, env, fs);
+        Int t1 = fbox.tmp + 1;
+        Str s0 = "%t" + IntToString(t1);
+        Str newl = s0 + " = call ptr @resid_set_new()";
+        Int t2i = t1 + 1;
+        Str s1 = "%t" + IntToString(t2i);
+        Str insl = s1 + " = call ptr @resid_set_insert(ptr " + s0 + ", ptr " + fbox.val + ")";
+        List(Str) nl = fbox.lines.concat([newl, insl]);
+        GT st = GT { pos: first.pos, val: s1, ty: "Set(" + first.ty + ")", cnt: 0, err: "", glines: fbox.glines, lines: nl, tmp: t2i, lbl: fbox.lbl };
+        return cg_set_lit_rest(s, after.pos, first.ty, st, env, fs, fbox);
     }
     if (after.text == "}") {
-        // Empty or single-element set: {e} or {}
-        // Can't distinguish empty set vs empty map without type annotation; 
-        // treat single element as Set
-        return GT { pos: after.pos, val: first.val, ty: "Set(" + first.ty + ")", cnt: 0, err: "", glines: first.glines, lines: first.lines, tmp: first.tmp, lbl: first.lbl };
+        // Single-element set: {e}
+        GT fbox = box_scalar(s, first, env, fs);
+        Int t1 = fbox.tmp + 1;
+        Str s0 = "%t" + IntToString(t1);
+        Str newl = s0 + " = call ptr @resid_set_new()";
+        Int t2i = t1 + 1;
+        Str s1 = "%t" + IntToString(t2i);
+        Str insl = s1 + " = call ptr @resid_set_insert(ptr " + s0 + ", ptr " + fbox.val + ")";
+        List(Str) nl = fbox.lines.concat([newl, insl]);
+        GT st = GT { pos: after.pos, val: s1, ty: "Set(" + first.ty + ")", cnt: 0, err: "", glines: fbox.glines, lines: nl, tmp: t2i, lbl: fbox.lbl };
+        return cg_set_lit_emit(s1, first.ty, after.pos, st);
     }
     return gt_err("expected , or } in map/set literal", first);
 }
@@ -4064,6 +4120,12 @@ ERes check_list_lit(Str s, Int pos, List(Str) env, Sigs fs) {
 // Check if a comma-separated expression list is a map (contains ':') or set.
 // Returns "Map" or "Set" as the result type prefix.
 ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Sigs fs) {
+    // Peek ahead: an empty literal `{}` cannot infer element type (spec
+    // parity with stage-1: an explicit type annotation would be required).
+    Tok probe = lex_tok(s, pos);
+    if (probe.text == "}") {
+        return ERes { pos: probe.pos, ty: "", err: "cannot infer element type of an empty set literal (add an explicit type)" };
+    }
     // Peek ahead: consume first expression, check for ':'
     ERes first = check_expr(s, pos, env, fs);
     if (first.err != "") { return first; }
@@ -4071,8 +4133,7 @@ ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Sigs fs) {
     Tok after_first = lex_tok(s, first.pos);
     if (after_first.text == ":") {
         // It's a map literal: {k: v, ...}
-        Tok val = lex_tok(s, after_first.pos);
-        ERes v = check_expr(s, val.pos, env, fs);
+        ERes v = check_expr(s, after_first.pos, env, fs);
         if (v.err != "") { return v; }
         Str kt = first.ty;
         Str vt = v.ty;
@@ -4086,15 +4147,10 @@ ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Sigs fs) {
     }
     if (after_first.text == ",") {
         // It's a set literal: {e, ...}
-        ERes e = check_expr(s, after_first.pos, env, fs);
-        if (e.err != "") { return e; }
-        return check_set_lit_rest(s, e.pos, e.ty, env, fs);
+        return check_set_lit_rest(s, after_first.pos, first.ty, env, fs);
     }
     if (after_first.text == "}") {
-        // Empty or single-element: check if it's map or set by token
-        // A single element with no ':' and no ',' is ambiguous; treat as Set
-        // But if we got here with just one expression and '}', it's actually
-        // a set with one element
+        // A single element with no ':' and no ',' is a one-element set.
         Str ty = "Set(" + first.ty + ")";
         return ERes { pos: after_first.pos, ty: ty, err: "" };
     }
@@ -4109,8 +4165,7 @@ ERes check_map_lit_rest(Str s, Int pos, Str key, Str val, List(Str) env, Sigs fs
     if (colon.text != ":") {
         return ERes { pos: colon.pos, ty: "", err: "map entries must use : separator" };
     }
-    Tok vtok = lex_tok(s, colon.pos);
-    ERes v = check_expr(s, vtok.pos, env, fs);
+    ERes v = check_expr(s, colon.pos, env, fs);
     if (v.err != "") { return v; }
     if (k.ty != key) {
         Str msg = "map keys differ: " + key + " vs " + k.ty;
@@ -5245,7 +5300,7 @@ Int main() {
     Int tc = ck_check_program(src, 0, sg);
     if (tc != 0) { return tc; }
     Funcs fs = collect_sigs(src);
-        List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare i64 @resid_crypto_random_byte()", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @bl_sort_i64(ptr)", "declare ptr @bl_sort_str(ptr)", "declare ptr @bl_sort_f64(ptr)", "declare ptr @bl_reverse_i64(ptr)", "declare ptr @bl_reverse_str(ptr)", "declare ptr @bl_reverse_f64(ptr)", "declare i8 @bl_contains_i64(ptr, i64)", "declare i8 @bl_contains_str(ptr, ptr)", "declare i8 @bl_contains_f64(ptr, double)", "declare i64 @bl_sum(ptr)", "declare double @bl_sumf(ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @bl_sort_by(ptr, ptr)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", rt_itoa_def(), rt_lconcat_def()];
+        List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare i64 @resid_crypto_random_byte()", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @bl_sort_i64(ptr)", "declare ptr @bl_sort_str(ptr)", "declare ptr @bl_sort_f64(ptr)", "declare ptr @bl_reverse_i64(ptr)", "declare ptr @bl_reverse_str(ptr)", "declare ptr @bl_reverse_f64(ptr)", "declare i8 @bl_contains_i64(ptr, i64)", "declare i8 @bl_contains_str(ptr, ptr)", "declare i8 @bl_contains_f64(ptr, double)", "declare i64 @bl_sum(ptr)", "declare double @bl_sumf(ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @bl_sort_by(ptr, ptr)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @resid_rt_list_to_flat(ptr)", rt_itoa_def(), rt_lconcat_def()];
     List(Str) header = header_with_cmps(hdr_core, fs);
     PG g0 = PG { pos: 0, err: "", glines: [], hlines: [], lines: header, tmp: 0, lbl: 0 };
     PG res = pg_next(src, 0, fs, g0);
@@ -5269,6 +5324,15 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
+
+
+
+
+
+
+
+
 
 
 

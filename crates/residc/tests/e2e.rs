@@ -5935,6 +5935,118 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Map/Set literals and methods through the stage-2 self-hosted driver must
+/// behave identically to the stage-1 Rust pipeline (bootstrap parity). Uses
+/// only operations the driver currently supports (no `match`/`unwrap`).
+#[test]
+fn bootstrap_map_set_parity() {
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let dir = std::env::temp_dir().join(format!("residc-mset-parity-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("parity.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Map(Str, Int) m = {"a": 1, "b": 2, "c": 3};
+    println(IntToString(m.len()));
+    println(IntToString(m.insert("d", 4).len()));
+    Map(Str, Int) r = m.remove("a");
+    println(IntToString(r.len()));
+    List(Str) ks = m.keys();
+    println(IntToString(ks.len()));
+    List(Int) vs = m.values();
+    println(IntToString(vs.len()));
+    Bool has = m.contains("a");
+    if (has) {
+        println("has-a");
+    } else {
+        println("no-a");
+    }
+    Set(Int) s = {1, 2, 3};
+    println(IntToString(s.len()));
+    Bool has2 = s.contains(2);
+    if (has2) {
+        println("has-2");
+    } else {
+        println("no-2");
+    }
+    Set(Int) s2 = s.insert(4);
+    println(IntToString(s2.len()));
+    Set(Int) s3 = {1, 2};
+    println(IntToString(s2.union(s3).len()));
+    println(IntToString(s2.difference(s3).len()));
+    println(IntToString(s2.intersection(s3).len()));
+    List(Int) sl = s2.intersection(s3).to_list();
+    println(IntToString(sl.len()));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    // Stage-1: Rust pipeline.
+    let s1 = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("stage-1 residc run failed");
+    assert_eq!(s1.status.code(), Some(0), "{}", String::from_utf8_lossy(&s1.stderr));
+    let out1 = String::from_utf8_lossy(&s1.stdout).into_owned();
+
+    // Stage-2: self-hosted driver.
+    let bin = dir.join("parity_drv");
+    let s2 = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("stage-2 driver run failed");
+    assert_eq!(
+        s2.status.code(),
+        Some(0),
+        "driver failed: {}",
+        String::from_utf8_lossy(&s2.stderr)
+    );
+    let run = Command::new(&bin).output().expect("binary failed");
+    assert_eq!(run.status.code(), Some(0));
+    let out2 = String::from_utf8_lossy(&run.stdout).into_owned();
+
+    // Byte-identical program output across both compilers.
+    assert_eq!(out1, "3\n4\n2\n3\n3\nhas-a\n3\nhas-2\n4\n4\n2\n2\n2\n");
+    assert_eq!(out1, out2, "pipeline divergence:\nstage1={out1:?}\nstage2={out2:?}");
+
+    // Empty `{}` literals are rejected by both pipelines (spec parity).
+    for (name, src) in [
+        ("emptymap.resid", "Int main() {\n    Map(Str, Int) m = {};\n    return 0;\n}\n"),
+        ("emptyset.resid", "Int main() {\n    Set(Int) s = {};\n    return 0;\n}\n"),
+    ] {
+        let bad = dir.join(name);
+        std::fs::write(&bad, src).unwrap();
+        let s1b = Command::new(residc_bin()).arg(&bad).arg("run").output().unwrap();
+        assert_ne!(s1b.status.code(), Some(0), "{name} should fail in stage-1");
+        let s2b = Command::new(residc_bin())
+            .arg(workspace.join("examples/driver.resid"))
+            .arg("run")
+            .arg(&bad)
+            .arg("-rt")
+            .arg(workspace.join("crates/residc/resid_rt.c"))
+            .output()
+            .unwrap();
+        assert_ne!(s2b.status.code(), Some(0), "{name} should fail in stage-2");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `value?` and `value else {…}` sugar over Option AND Result sums
 /// (spec §23): `?` propagates the failure value out of the enclosing
 /// function; `else` supplies the success-typed fallback.

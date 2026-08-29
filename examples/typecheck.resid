@@ -1497,6 +1497,12 @@ ERes check_list_lit(Str s, Int pos, List(Str) env, Funcs fs) {
 // Check if a comma-separated expression list is a map (contains ':') or set.
 // Returns "Map" or "Set" as the result type prefix.
 ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs) {
+    // Peek ahead: an empty literal `{}` cannot infer element type (spec
+    // parity with stage-1: an explicit type annotation would be required).
+    Tok probe = lex_tok(s, pos);
+    if (probe.text == "}") {
+        return ERes { pos: probe.pos, ty: "", err: "cannot infer element type of an empty set literal (add an explicit type)" };
+    }
     // Peek ahead: consume first expression, check for ':'
     ERes first = check_expr(s, pos, env, fs);
     if (first.err != "") { return first; }
@@ -1504,8 +1510,7 @@ ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs) {
     Tok after_first = lex_tok(s, first.pos);
     if (after_first.text == ":") {
         // It's a map literal: {k: v, ...}
-        Tok val = lex_tok(s, after_first.pos);
-        ERes v = check_expr(s, val.pos, env, fs);
+        ERes v = check_expr(s, after_first.pos, env, fs);
         if (v.err != "") { return v; }
         Str kt = first.ty;
         Str vt = v.ty;
@@ -1519,15 +1524,10 @@ ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs) {
     }
     if (after_first.text == ",") {
         // It's a set literal: {e, ...}
-        ERes e = check_expr(s, after_first.pos, env, fs);
-        if (e.err != "") { return e; }
-        return check_set_lit_rest(s, e.pos, e.ty, env, fs);
+        return check_set_lit_rest(s, after_first.pos, first.ty, env, fs);
     }
     if (after_first.text == "}") {
-        // Empty or single-element: check if it's map or set by token
-        // A single element with no ':' and no ',' is ambiguous; treat as Set
-        // But if we got here with just one expression and '}', it's actually
-        // a set with one element
+        // A single element with no ':' and no ',' is a one-element set.
         Str ty = "Set(" + first.ty + ")";
         return ERes { pos: after_first.pos, ty: ty, err: "" };
     }
@@ -1542,8 +1542,7 @@ ERes check_map_lit_rest(Str s, Int pos, Str key, Str val, List(Str) env, Funcs f
     if (colon.text != ":") {
         return ERes { pos: colon.pos, ty: "", err: "map entries must use : separator" };
     }
-    Tok vtok = lex_tok(s, colon.pos);
-    ERes v = check_expr(s, vtok.pos, env, fs);
+    ERes v = check_expr(s, colon.pos, env, fs);
     if (v.err != "") { return v; }
     if (k.ty != key) {
         Str msg = "map keys differ: " + key + " vs " + k.ty;
