@@ -463,6 +463,9 @@ impl<'ctx> CodeGen<'ctx> {
                 NumericType::Dec(_) => self.dec_type().into(),
             },
             SemType::Range(_) => self.int_type(64)?.into(),
+            // Refinement types lower to their base (already erased by the
+            // checker; kept here for defensive completeness).
+            SemType::Refined { base, .. } => self.llvm_type(&*base)?,
             // Composites are untyped heap pointers.
             SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc | SemType::File | SemType::Map(..) | SemType::Set(_) => {
                 self.cx.ptr_type(AddressSpace::default()).into()
@@ -716,6 +719,15 @@ impl<'ctx> CodeGen<'ctx> {
                                     &self.cx.ptr_type(AddressSpace::default()).const_null(),
                                 ))
                                 .map_err(to_err)?;
+                        }
+                        SemType::Refined { base, .. } => {
+                            let it = self.llvm_type(&*base)?;
+                            let zero: inkwell::values::BasicValueEnum<'ctx> = match it {
+                                inkwell::types::BasicTypeEnum::IntType(i) => i.const_zero().into(),
+                                inkwell::types::BasicTypeEnum::FloatType(ft) => ft.const_zero().into(),
+                                _ => self.cx.bool_type().const_zero().into(),
+                            };
+                            self.builder.build_return(Some(&zero)).map_err(to_err)?;
                         }
                     }
                 }

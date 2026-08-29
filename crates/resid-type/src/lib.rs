@@ -35,6 +35,14 @@ pub enum SemType {
         name: String,
         fields: Vec<(String, SemType)>,
     },
+    /// A refinement type `Positive = Int[value > 0]` (spec §12). Values
+    /// `erase_refined()` to their base for all downstream uses; the subset
+    /// is discharged at annotated bindings.
+    Refined {
+        name: String,
+        base: Box<SemType>,
+        constraint: Expr,
+    },
     /// A user-declared (or built-in `Option`) sum type.
     Sum {
         name: String,
@@ -67,6 +75,13 @@ impl core::fmt::Display for SemType {
             SemType::Map(k, v) => write!(f, "Map({k}, {v})"),
             SemType::Set(e) => write!(f, "Set({e})"),
             SemType::Struct { name, .. } => write!(f, "{name}"),
+            SemType::Refined { name, base, .. } => {
+                if name.is_empty() {
+                    write!(f, "{base}")
+                } else {
+                    write!(f, "{name}")
+                }
+            }
             SemType::Sum { name, .. } => write!(f, "{name}"),
             SemType::Ptr => write!(f, "ptr"),
             SemType::Range(e) => write!(f, "Range({e})"),
@@ -99,6 +114,48 @@ impl SemType {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// True if this is a refinement type awaiting discharge.
+    pub fn is_refined(&self) -> bool {
+        matches!(self, SemType::Refined { .. })
+    }
+
+    /// The refinement constraint (`value > 0`) and base type, if refined.
+    pub fn refined_parts(&self) -> Option<(&Expr, &SemType)> {
+        match self {
+            SemType::Refined { base, constraint, .. } => Some((constraint, base)),
+            _ => None,
+        }
+    }
+
+    /// Remove all refinement wrappers, recursively, yielding the underlying
+    /// usable type. Refined numeric types become plain numerics; refined
+    /// fields/params behave as their base in every downstream pass.
+    pub fn erase_refined(&self) -> SemType {
+        match self {
+            SemType::Refined { base, .. } => base.erase_refined(),
+            SemType::List(e) => SemType::List(Box::new(e.erase_refined())),
+            SemType::Map(k, v) => SemType::Map(Box::new(k.erase_refined()), Box::new(v.erase_refined())),
+            SemType::Set(e) => SemType::Set(Box::new(e.erase_refined())),
+            SemType::Slice(e) => SemType::Slice(Box::new(e.erase_refined())),
+            SemType::Range(e) => SemType::Range(Box::new(e.erase_refined())),
+            SemType::Struct { name, fields } => SemType::Struct {
+                name: name.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), t.erase_refined()))
+                    .collect(),
+            },
+            SemType::Sum { name, variants } => SemType::Sum {
+                name: name.clone(),
+                variants: variants
+                    .iter()
+                    .map(|(n, p)| (n.clone(), p.as_ref().map(|t| t.erase_refined())))
+                    .collect(),
+            },
+            other => other.clone(),
         }
     }
 }
@@ -360,6 +417,15 @@ fn resolve_type_def(td: &TypeDef, types: &Types) -> Option<SemType> {
                 variants: out,
             })
         }
+        TypeBody::Constraint { inner, constraint } => {
+            let base = resolve_type_ctx_inner(inner, types)?;
+            Some(SemType::Refined {
+                name: td.name.0.clone(),
+                base: Box::new(base),
+                constraint: constraint.as_ref().clone(),
+            })
+        }
+        TypeBody::Base(inner) => resolve_type_ctx_inner(inner, types),
         _ => None,
     }
 }
@@ -642,14 +708,38 @@ pub fn resolve_type(td: &Type) -> Option<SemType> {
 
 /// Resolve a parsed type descriptor to a semantic type, in the context of the
 /// unit's declared named types.
+/// Resolve a type annotation, erasing refinement wrappers so downstream
+/// passes (operators, unification, codegen) only ever see usable base types.
+/// Use [`resolve_type_declared`] where the refinement subset itself matters.
 pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
+    resolve_type_ctx_inner(td, types).map(|st| st.erase_refined())
+}
+
+/// As [`resolve_type_ctx`], but retains the `Refined` wrapper (with its
+/// constraint) so a declared binding/param may be discharged.
+pub fn resolve_type_declared(td: &Type, types: &Types) -> Option<SemType> {
+    resolve_type_ctx_inner(td, types)
+}
+
+fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
     match td {
+        Type::Refined { base, constraint } => {
+            let base = resolve_type_ctx_inner(base, types)?;
+            Some(SemType::Refined {
+                name: match &base {
+                    SemType::Numeric(n) => n.to_string(),
+                    _ => String::new(),
+                },
+                base: Box::new(base),
+                constraint: constraint.as_ref().clone(),
+            })
+        }
         Type::Base { name, params } => {
             // Built-in `List(T)`.
             if name.0 == "List" {
                 if let Some(ps) = params {
                     if ps.len() == 1 {
-                        let Some(inner) = resolve_type_ctx(&ps[0], types) else {
+                        let Some(inner) = resolve_type_ctx_inner(&ps[0], types) else {
                             return None;
                         };
                         return Some(SemType::List(Box::new(inner)));
@@ -665,10 +755,10 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 2 {
                     return None;
                 }
-                let Some(key) = resolve_type_ctx(&ps[0], types) else {
+                let Some(key) = resolve_type_ctx_inner(&ps[0], types) else {
                     return None;
                 };
-                let Some(val) = resolve_type_ctx(&ps[1], types) else {
+                let Some(val) = resolve_type_ctx_inner(&ps[1], types) else {
                     return None;
                 };
                 return Some(SemType::Map(Box::new(key), Box::new(val)));
@@ -681,7 +771,7 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 1 {
                     return None;
                 }
-                let Some(inner) = resolve_type_ctx(&ps[0], types) else {
+                let Some(inner) = resolve_type_ctx_inner(&ps[0], types) else {
                     return None;
                 };
                 return Some(SemType::Set(Box::new(inner)));
@@ -694,7 +784,7 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 1 {
                     return None;
                 }
-                let Some(inner) = resolve_type_ctx(&ps[0], types) else {
+                let Some(inner) = resolve_type_ctx_inner(&ps[0], types) else {
                     return None;
                 };
                 return Some(SemType::Sum {
@@ -710,10 +800,10 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 2 {
                     return None;
                 }
-                let Some(ok) = resolve_type_ctx(&ps[0], types) else {
+                let Some(ok) = resolve_type_ctx_inner(&ps[0], types) else {
                     return None;
                 };
-                let Some(er) = resolve_type_ctx(&ps[1], types) else {
+                let Some(er) = resolve_type_ctx_inner(&ps[1], types) else {
                     return None;
                 };
                 return Some(SemType::Sum {
@@ -729,7 +819,7 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 1 {
                     return None;
                 }
-                let Some(inner) = resolve_type_ctx(&ps[0], types) else {
+                let Some(inner) = resolve_type_ctx_inner(&ps[0], types) else {
                     return None;
                 };
                 return Some(SemType::Slice(Box::new(inner)));
@@ -742,7 +832,7 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 1 {
                     return None;
                 }
-                let Some(inner) = resolve_type_ctx(&ps[0], types) else {
+                let Some(inner) = resolve_type_ctx_inner(&ps[0], types) else {
                     return None;
                 };
                 return Some(SemType::Range(Box::new(inner)));
@@ -807,7 +897,7 @@ pub fn resolve_type_ctx(td: &Type, types: &Types) -> Option<SemType> {
         }
         Type::ISize => Some(SemType::Numeric(NumericType::ISize)),
         Type::USize => Some(SemType::Numeric(NumericType::USize)),
-        Type::Residual(inner) => resolve_type_ctx(inner, types),
+        Type::Residual(inner) => resolve_type_ctx_inner(inner, types),
         // Literal used standalone (shouldn't happen; only valid as Base param).
         Type::Literal(_) => None,
     }
@@ -3085,6 +3175,172 @@ fn flatten_unit(unit: &TranslationUnit) -> Vec<Declaration> {
         .collect()
 }
 
+/// Constraint discharge (spec §12): a binding whose declared type is a
+/// refinement (`Positive = Int[value > 0]`) must be provable at compile time.
+/// Statically-known integer values are checked directly; a value that is
+/// already of the refined type passes without re-discipline.
+fn discharge_constraint(
+    constraint: &Expr,
+    value: &Expr,
+    inferred: &SemType,
+    name: &Id,
+    span: &Span,
+    errs: &mut Vec<TypeError>,
+) {
+    if inferred.is_refined() {
+        return;
+    }
+    match const_int_value(value) {
+        Some(v) => match eval_bool(constraint, v) {
+            Some(true) => {}
+            Some(false) => errs.push(err(
+                span,
+                format!(
+                    "binding `{}`: constraint `{}` not satisfied by value {}",
+                    name.0,
+                    constraint_str(constraint),
+                    v
+                ),
+            )),
+            None => errs.push(err(
+                span,
+                format!(
+                    "binding `{}`: cannot verify constraint `{}` for value {}",
+                    name.0,
+                    constraint_str(constraint),
+                    v
+                ),
+            )),
+        },
+        None => errs.push(err(
+            span,
+            format!(
+                "binding `{}`: cannot verify constraint `{}` for non-constant value",
+                name.0,
+                constraint_str(constraint)
+            ),
+        )),
+    }
+}
+
+/// The statically-known signed value of an integer literal expression
+/// (handles a leading unary minus). `None` when not a compile-time integer.
+fn const_int_value(expr: &Expr) -> Option<i128> {
+    match &expr.kind {
+        ExprKind::Literal(Literal::Int { value, .. }) => i128::try_from(*value).ok(),
+        ExprKind::UnaryOp { op: OpKind::Minus, operand } => {
+            const_int_value(operand).map(|v| v.wrapping_neg())
+        }
+        _ => None,
+    }
+}
+
+fn eval_int(expr: &Expr, value: i128, depth: usize) -> Option<i128> {
+    if depth > 200 {
+        return None;
+    }
+    match &expr.kind {
+        ExprKind::Literal(Literal::Int { value: v, .. }) => i128::try_from(*v).ok(),
+        ExprKind::Id(Id(n)) if n == "value" => Some(value),
+        ExprKind::UnaryOp { op: OpKind::Minus, operand } => {
+            eval_int(operand, value, depth + 1).map(|v| v.wrapping_neg())
+        }
+        ExprKind::BinaryOp { op, lhs, rhs } => {
+            let a = eval_int(lhs, value, depth + 1)?;
+            let b = eval_int(rhs, value, depth + 1)?;
+            Some(match op {
+                OpKind::Plus => a.wrapping_add(b),
+                OpKind::Minus => a.wrapping_sub(b),
+                OpKind::Star => a.wrapping_mul(b),
+                OpKind::Slash => {
+                    if b == 0 {
+                        return None;
+                    }
+                    a.checked_div(b)?
+                }
+                OpKind::Percent => {
+                    if b == 0 {
+                        return None;
+                    }
+                    a.checked_rem(b)?
+                }
+                _ => return None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn eval_bool(expr: &Expr, value: i128) -> Option<bool> {
+    eval_bool_depth(expr, value, 0)
+}
+
+fn eval_bool_depth(expr: &Expr, value: i128, depth: usize) -> Option<bool> {
+    if depth > 200 {
+        return None;
+    }
+    match &expr.kind {
+        ExprKind::Literal(Literal::Bool(b)) => Some(*b),
+        ExprKind::UnaryOp { op: OpKind::Not, operand } => {
+            eval_bool_depth(operand, value, depth + 1).map(|b| !b)
+        }
+        ExprKind::BinaryOp { op, lhs, rhs } => match op {
+            OpKind::AndAnd => {
+                let a = eval_bool_depth(lhs, value, depth + 1)?;
+                let b = eval_bool_depth(rhs, value, depth + 1)?;
+                Some(a && b)
+            }
+            OpKind::OrOr => {
+                let a = eval_bool_depth(lhs, value, depth + 1)?;
+                let b = eval_bool_depth(rhs, value, depth + 1)?;
+                Some(a || b)
+            }
+            OpKind::Less => Some(eval_int(lhs, value, depth)? < eval_int(rhs, value, depth)?),
+            OpKind::LessEq => Some(eval_int(lhs, value, depth)? <= eval_int(rhs, value, depth)?),
+            OpKind::Greater => Some(eval_int(lhs, value, depth)? > eval_int(rhs, value, depth)?),
+            OpKind::GreaterEq => Some(eval_int(lhs, value, depth)? >= eval_int(rhs, value, depth)?),
+            OpKind::EqEq => Some(eval_int(lhs, value, depth)? == eval_int(rhs, value, depth)?),
+            OpKind::Ne => Some(eval_int(lhs, value, depth)? != eval_int(rhs, value, depth)?),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Compact render of a constraint expression for error messages.
+fn constraint_str(expr: &Expr) -> String {
+    match &expr.kind {
+        ExprKind::Literal(Literal::Int { kind, .. }) => kind.source_str().to_string(),
+        ExprKind::Literal(Literal::Bool(b)) => b.to_string(),
+        ExprKind::Id(Id(n)) => n.clone(),
+        ExprKind::UnaryOp { op, operand } => match op {
+            OpKind::Minus => format!("-{}", constraint_str(operand)),
+            OpKind::Not => format!("!{}", constraint_str(operand)),
+            _ => format!("{op:?} {}", constraint_str(operand)),
+        },
+        ExprKind::BinaryOp { op, lhs, rhs } => {
+            let s = match op {
+                OpKind::Plus => "+",
+                OpKind::Minus => "-",
+                OpKind::Star => "*",
+                OpKind::Slash => "/",
+                OpKind::Percent => "%",
+                OpKind::Less => "<",
+                OpKind::LessEq => "<=",
+                OpKind::Greater => ">",
+                OpKind::GreaterEq => ">=",
+                OpKind::EqEq => "==",
+                OpKind::Ne => "!=",
+                OpKind::AndAnd => "&&",
+                OpKind::OrOr => "||",
+                _ => "?"
+            };
+            format!("{} {} {}", constraint_str(lhs), s, constraint_str(rhs))
+        }
+        _ => "?".to_string(),
+    }
+}
+
 /// Type-check every function body in a translation unit.
 /// Returns a list of errors (empty = all passed).
 pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
@@ -3522,10 +3778,11 @@ fn type_check_block(
                 // Even with an explicit declared type the value expression is
                 // validated, so e.g. `filesystem.exists()` still errors despite
                 // `Bool ex = ...` giving a concrete binding type.
-                let declared = resolve_type_ctx(t, types).unwrap_or(SemType::Bool);
-                match infer_expr_expected(value, &env, sigs, types, Some(&declared)) {
+                let declared = resolve_type_declared(t, types).unwrap_or(SemType::Bool);
+                let base = declared.erase_refined();
+                match infer_expr_expected(value, &env, sigs, types, Some(&base)) {
                     Ok(inferred) => {
-                        if !bind_assignable(value, &inferred, &declared) {
+                        if !bind_assignable(value, &inferred, &base) {
                             errs.push(err(
                                 &stmt.span,
                                 format!(
@@ -3534,10 +3791,20 @@ fn type_check_block(
                                 ),
                             ));
                         }
+                        if let Some((constraint, _)) = declared.refined_parts() {
+                            discharge_constraint(
+                                constraint,
+                                value,
+                                &inferred,
+                                name,
+                                &stmt.span,
+                                errs,
+                            );
+                        }
                     }
                     Err(e) => errs.push(e),
                 }
-                declared
+                base
             } else {
                 infer_expr_ctx(value, &env, sigs, types).unwrap_or(SemType::Bool)
             };
@@ -4349,6 +4616,126 @@ Int add(Int a, Int b) {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn constraint_type_bracket_form_discharges() {
+        let ok = parse_unit(
+            r#"
+type Positive = Int[value > 0];
+Int main() {
+    Positive p = 5;
+    Int y = p + 1;
+    return y;
+}
+"#,
+        );
+        let errs = check_program(&ok);
+        assert!(errs.is_empty(), "expected ok, got: {errs:?}");
+
+        let bad = parse_unit(
+            r#"
+type Positive = Int[value > 0];
+Int main() {
+    Positive p = -1;
+    return 0;
+}
+"#,
+        );
+        let errs = check_program(&bad);
+        assert_eq!(errs.len(), 1, "expected one violation: {errs:?}");
+        let msg = format!("{}", errs[0]);
+        assert!(msg.contains("constraint"), "unexpected msg: {msg}");
+        assert!(msg.contains("not satisfied by value -1"), "unexpected msg: {msg}");
+    }
+
+    #[test]
+    fn constraint_type_where_form_discharges() {
+        let ok = parse_unit(
+            r#"
+type Positive = Int where value >= 0;
+Int main() {
+    Positive z = 0;
+    return z;
+}
+"#,
+        );
+        let errs = check_program(&ok);
+        assert!(errs.is_empty(), "expected ok, got: {errs:?}");
+
+        let bad = parse_unit(
+            r#"
+type Positive = Int where value >= 0;
+Int main() {
+    Positive z = -3;
+    return 0;
+}
+"#,
+        );
+        let errs = check_program(&bad);
+        assert_eq!(errs.len(), 1, "expected one violation: {errs:?}");
+    }
+
+    #[test]
+    fn constraint_type_non_constant_value_rejected() {
+        let src = parse_unit(
+            r#"
+type Positive = Int[value > 0];
+Int main() {
+    Int x = 4;
+    Positive p = x;
+    return 0;
+}
+"#,
+        );
+        let errs = check_program(&src);
+        assert_eq!(errs.len(), 1, "expected cannot-verify: {errs:?}");
+        assert!(format!("{}", errs[0]).contains("non-constant"), "{errs:?}");
+    }
+
+    #[test]
+    fn constraint_type_equality_and_comparison_forms() {
+        let ok = parse_unit(
+            r#"
+type Even = Int[value % 2 == 0];
+Int main() {
+    Even e = 10;
+    return e;
+}
+"#,
+        );
+        let errs = check_program(&ok);
+        assert!(errs.is_empty(), "expected ok, got: {errs:?}");
+
+        let bad = parse_unit(
+            r#"
+type Even = Int[value % 2 == 0];
+Int main() {
+    Even e = 7;
+    return 0;
+}
+"#,
+        );
+        let errs = check_program(&bad);
+        assert_eq!(errs.len(), 1, "expected violation: {errs:?}");
+    }
+
+    #[test]
+    fn constraint_type_resolves_to_base_elsewhere() {
+        let (unit, perr) =
+            resid_parser::Parser::parse("con.resid", "type Positive = Int[value > 0];\n");
+        assert!(perr.is_empty(), "{perr:?}");
+        let types = collect_types(&unit);
+        let st = resolve_type_ctx(
+            &Type::Base {
+                name: Id("Positive".into()),
+                params: None,
+            },
+            &types,
+        )
+        .expect("Positive resolves");
+        assert!(!st.is_refined(), "public resolve must erase refinement");
+        assert!(matches!(st, SemType::Numeric(NumericType::Int(_))));
     }
 
     fn parse_unit(src: &str) -> resid_parser::TranslationUnit {
