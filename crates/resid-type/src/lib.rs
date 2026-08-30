@@ -10,6 +10,9 @@ use std::collections::HashMap;
 pub use resid_ir::{
     BinOp, FloatWidth, IntWidth, NumericError, NumericType, ResultType, numeric_result_type,
 };
+
+mod reduce;
+pub use reduce::{CValue, reduce_call, reduce_expr};
 use resid_lexer::token::{Literal, Op as OpKind, Span};
 use resid_parser::{
     Block, Declaration, Expr, ExprKind, FStringPart, FuncDef, Id, Pattern, PatternKind, Stmt, StmtKind,

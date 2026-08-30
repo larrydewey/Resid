@@ -19,10 +19,10 @@ use inkwell::values::{
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 use resid_ir::{BinOp, NumericType, numeric_result_type};
-use resid_lexer::token::Literal;
+use resid_lexer::token::{IntKind, Literal, Span, StrLit};
 use resid_lexer::token::Op as OpKind;
 use resid_parser::{Block, Declaration, Expr, ExprKind, Id, RangeExpr, Stmt, StmtKind, TranslationUnit, WithBinding};
-use resid_type::{FunctionSig, SemType, Types};
+use resid_type::{CValue, FunctionSig, SemType, Types};
 
 /// A lowered value plus the semantic type the checker attributed to it.
 pub struct Val<'ctx> {
@@ -298,6 +298,8 @@ pub struct CodeGen<'ctx> {
     cmp_trampolines: std::collections::HashSet<String>,
     /// Source file of the function currently being lowered (visibility §22).
     cur_file: String,
+    /// Clone of the translation unit, kept for comptime β-reduction (§36).
+    unit: TranslationUnit,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -319,11 +321,16 @@ impl<'ctx> CodeGen<'ctx> {
             behaviors: HashMap::new(),
             cmp_trampolines: std::collections::HashSet::new(),
             cur_file: String::new(),
+            unit: TranslationUnit {
+                imports: Vec::new(),
+                declarations: Vec::new(),
+            },
         }
     }
 
     /// Generate a module for the whole translation unit.
     pub fn generate(&mut self, unit: &TranslationUnit) -> Result<(), String> {
+        self.unit = unit.clone();
         self.sigs = resid_type::collect_signatures(unit);
         self.types = resid_type::collect_types(unit);
         self.behaviors = resid_type::collect_behaviors(unit).0;
@@ -1605,6 +1612,54 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    /// Lower a comptime-reduced value by re-entering `lower_expr` on a
+    /// synthetic literal, so width-adjustment and target-casting logic apply
+    /// identically to a runtime-produced value.
+    fn lower_cvalue(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        v: CValue,
+        target: Option<Numeric>,
+    ) -> Result<Val<'ctx>, String> {
+        let sp = Span {
+            file: String::new(),
+            line: 0,
+            col_start: 0,
+            col_end: 0,
+        };
+        let lit = match v {
+            CValue::Int(i) if i >= 0 => Expr {
+                kind: ExprKind::Literal(Literal::Int {
+                    value: i as u128,
+                    kind: IntKind::Decimal(i.to_string()),
+                }),
+                span: sp.clone(),
+            },
+            CValue::Int(i) => Expr {
+                kind: ExprKind::UnaryOp {
+                    op: OpKind::Minus,
+                    operand: Box::new(Expr {
+                        kind: ExprKind::Literal(Literal::Int {
+                            value: i.unsigned_abs() as u128,
+                            kind: IntKind::Decimal(i.unsigned_abs().to_string()),
+                        }),
+                        span: sp.clone(),
+                    }),
+                },
+                span: sp.clone(),
+            },
+            CValue::Bool(b) => Expr {
+                kind: ExprKind::Literal(Literal::Bool(b)),
+                span: sp.clone(),
+            },
+            CValue::Str(s) => Expr {
+                kind: ExprKind::Literal(Literal::Str(StrLit { value: s })),
+                span: sp.clone(),
+            },
+        };
+        self.lower_expr(sc, &lit, target)
+    }
+
     /// A zero constant of the LLVM type for a semantic type (used for phi
     /// placeholders on branches that produce no value).
     fn zero_of_ty(&self, ty: &SemType) -> Result<BasicValueEnum<'ctx>, String> {
@@ -1696,7 +1751,28 @@ impl<'ctx> CodeGen<'ctx> {
                 self.lower_for_in(sc, collection, name, body, type_)
             }
 
-            ExprKind::Call { func, args } => self.lower_call(sc, func, args),
+            ExprKind::Call { func, args } => {
+                // Visibility check (spec §22): must happen before any reduction.
+                // Private functions are module-local and cannot be called from
+                // other files, even for comptime evaluation.
+                if let ExprKind::Id(id) = &func.kind {
+                    if let Some(sig) = self.sigs.get(&id.0) {
+                        if !sig.is_pub && !sig.file.is_empty() && sig.file != self.cur_file {
+                            return Err(format!(
+                                "codegen: `{}` is not pub and was defined in `{}`; only `pub` items are importable",
+                                id.0, sig.file
+                            ));
+                        }
+                    }
+                }
+                // Comptime β-reduction of pure functions (§36): when every
+                // argument is a compile-time constant, evaluate the pure callee
+                // now and lower the resulting constant instead of a call.
+                if let Some(v) = resid_type::reduce_call(&self.unit, func, args) {
+                    return self.lower_cvalue(sc, v, target);
+                }
+                self.lower_call(sc, func, args)
+            }
 
             ExprKind::Using { .. } => {
                 Err("codegen: `using` is only supported as sort's behavior argument".into())
@@ -1819,13 +1895,17 @@ impl<'ctx> CodeGen<'ctx> {
             ExprKind::Unimplemented(msg) => self.lower_abort(&format!("unimplemented: {msg}")),
 
             ExprKind::ComptimePrint(inner) => {
-                let v = self.lower_expr(sc, inner, target)?;
-                let msg = match &inner.kind {
-                    ExprKind::Literal(lit) => format!("{lit}"),
-                    other => resid_type::kind_tag(other).to_string(),
+                // Prefer the reduced (comptime-known) value so `comptime_print`
+                // reports what a β-reduction actually produced.
+                let msg = match resid_type::reduce_expr(&self.unit, inner) {
+                    Some(v) => v.display(),
+                    None => match &inner.kind {
+                        ExprKind::Literal(lit) => format!("{lit}"),
+                        other => resid_type::kind_tag(other).to_string(),
+                    },
                 };
                 eprintln!("[comptime_print] {msg}");
-                let _ = v.v; // value dropped; only the compile-time side effect matters
+                let _ = self.lower_expr(sc, inner, target)?;
                 Ok(self.zero_val())
             }
 

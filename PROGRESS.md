@@ -9,16 +9,17 @@
 
 ## 0. Current Snapshot
 
-**690 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 211,
+**699 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 218,
  resid-codegen 137, resid-build 39, resid-fmt 5,
  resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
- resid-graph 4, resid-builtin 0, residc 0 unit + 95 e2e incl.
+ resid-graph 4, resid-builtin 0, residc 0 unit + 97 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
 `run_behavior_ord_sort`, `bootstrap_behavior_ord_parity`,
 `run_sandbox_enforcement`, `run_map_set_types`,
-`bootstrap_map_set_parity`, `run_constraint_types`).
+`bootstrap_map_set_parity`, `run_constraint_types`,
+`reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`).
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
@@ -422,9 +423,22 @@ type — Option lands first.
 6. Serialize/Hash behaviors (item 3) — ✅ done (stage-1).
 7. Sandbox transitive attenuation (item 1 remaining) — ✅ done (stage-1, e2e `run_sandbox_transitive_attenuation`).
 8. Constraint types (item 2) — ✅ done (stage-1, both syntaxes, discharge on binds).
-9. Knowledge-graph IR + reduction depth (items 11, 12).
+9. Knowledge-graph IR + reduction depth (items 11, 12) — ✅ done (stage-1: comptime β-reduction of pure functions with step/depth budget, block-tail support).
 10. Runtime spawn caps (item 7), caps-as-effects (item 10).
 11. Build profiles (item 13), key pinning (item 14).
+
+### Progress on item 9 — comptime reduction: DONE (stage-1)
+
+- Evaluator (`crates/resid-type/src/reduce.rs`): pure comptime evaluator implementing the pure reduction relation (§36).
+  - Handles literal integers, booleans, and strings, raw strings, identifier lookup in the local environment, unary operations (`-`, `!`), binary operations (wrapped arithmetic `+`, `-`, `*`, checked division `/` and remainder `%`, comparisons `<`, `<=`, `>`, `>=`, `==`, `!=`, string concatenation), and conditional expressions (`if`).
+  - Supports user-defined pure function calls (`reduce_call` / `reduce_expr`) by looking up function declarations in the current translation unit, mapping arguments (positional, named, and defaults), and evaluating function bodies.
+  - Implements a resource step budget (`MAX_STEPS = 400_000`) and recursion depth budget (`MAX_DEPTH = 256`). Reaching any budget, encountering an effectful builtin (like `println`), or hitting unsupported constructs cleanly yields `None` to fallback gracefully to standard runtime lowering (fully sound).
+  - Handles block evaluation with `capture_tail: bool` (supporting block-level tail expression folding where a block's final expression is evaluated as its value).
+  - Implements a thread-local return-propagation channel (`pending`, `pending_value`) so that nested `if` statements containing returns cleanly exit the enclosing pure context.
+- Codegen:
+  - Hooks function calls during lowering; if the target is a pure function call with fully compile-time reducible arguments, performs compile-time β-reduction, and lowers the evaluated `CValue` as a synthesized constant instead of emitting a runtime call.
+  - Comptime-print (`comptime_print`) now prefers displaying the compile-time β-reduced result when available.
+- Tests: `resid-type` +7 unit tests (covering recursive fibonacci, factorial, bool and string operations, nested block-tail returns, resource budget fallbacks, and negative constants), `residc` e2e +2 tests (`reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`).
 
 ### Progress on item 2 — constraint types: DONE (stage-1)
 
