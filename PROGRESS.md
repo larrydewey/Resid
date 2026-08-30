@@ -415,17 +415,17 @@ type — Option lands first.
 
 ### Suggested attack order
 
-1. Behaviors (item 6) — ✅ done (stage-1: generic numeric Ord/Eq/Hash synthesis, Serialize/Allocator shape checking, e2e `run_generic_numeric_behaviors`).
-2. `value?` sugar (item 9) — ✅ done (stage-1, both Option and Result).
-3. `pub` enforcement (item 8) — ✅ done (stage-1).
-4. Per-width wrapping/saturating (item 5) — ✅ done.
-5. Map/Set types (item 4) — ✅ done (stage-1).
-6. Serialize/Hash behaviors (item 3) — ✅ done (stage-1).
+1. Behaviors (item 6) — ✅ done (stage-1: generic numeric Ord/Eq/Hash synthesis, Serialize/Allocator shape checking, e2e `run_generic_numeric_behaviors`, `run_behavior_ord_sort`, `run_behavior_import_visibility_and_reverse`, `bootstrap_behavior_ord_parity`).
+2. `value?` sugar (item 9) — ✅ done (stage-1, both Option and Result; e2e `run_question_sugar_option_and_result`).
+3. `pub` enforcement (item 8) — ✅ done (stage-1; e2e `run_pub_visibility_enforced`).
+4. Per-width wrapping/saturating (item 5) — ✅ done (LLVM native lowering; e2e `run_per_width_wrapping_saturating`).
+5. Map/Set types (item 4) — ✅ done (stage-1; e2e `run_map_set_types`, `bootstrap_map_set_parity`).
+6. Serialize/Hash behaviors (item 3) — ✅ done (stage-1; e2e `run_generic_numeric_behaviors`).
 7. Sandbox transitive attenuation (item 1 remaining) — ✅ done (stage-1, e2e `run_sandbox_transitive_attenuation`).
-8. Constraint types (item 2) — ✅ done (stage-1, both syntaxes, discharge on binds).
-9. Knowledge-graph IR + reduction depth (items 11, 12) — ✅ done (stage-1: comptime β-reduction of pure functions with step/depth budget, block-tail support).
-10. Runtime spawn caps (item 7), caps-as-effects (item 10).
-11. Build profiles (item 13), key pinning (item 14).
+8. Constraint types (item 2) — ✅ done (stage-1, both syntaxes, discharge on binds; e2e `run_constraint_types`, `constraint_type_violation_rejected`).
+9. Knowledge-graph IR + reduction depth (items 11, 12) — ✅ done (stage-1: comptime β-reduction of pure functions with step/depth budget, block-tail support; e2e `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`).
+10. Runtime spawn with capability enforcement (item 7, 10) — ✅ done (e2e `run_spawn_simple`, `run_spawn_with_captures`, `run_spawn_nested`; capability lists passed to pthread workers).
+11. Build profiles (item 13), key pinning (item 14) — partially done: spawn CLI (`residc <f> build [-o out]`, `residc <f> run`) working; debug/release profiles not fully implemented.
 
 ### Progress on item 9 — comptime reduction: DONE (stage-1)
 
