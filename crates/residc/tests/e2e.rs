@@ -6548,3 +6548,81 @@ fn run_map_set_types() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn reduction_known_fib_comptime_print() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-redfib-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("redfib.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int fib(Int n) {
+    return if (n < 2) { n } else { fib(n - 1) + fib(n - 2) };
+}
+
+Int main() {
+    comptime_print(fib(10));
+    return fib(10);
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        55,
+        "residc failed: {stderr}"
+    );
+    // comptime_print goes to stderr with the reduced value
+    assert!(stderr.contains("55"), "comptime_print not reduced: {stderr:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn reduction_falls_back_to_runtime() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-redfallback-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("redfallback.resid");
+    std::fs::write(
+        &file,
+        r#"
+Int count(Int n) {
+    return if (n == 0) { 0 } else { count(n - 1) };
+}
+
+Int main() {
+    // Deep recursion exceeds step budget → runtime fallback
+    return count(100000);
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {stderr}"
+    );
+    // No comptime_print here, so stderr should be empty or minimal
+    assert!(!stderr.contains("computed"), "unexpected comptime output: {stderr:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
