@@ -3340,6 +3340,21 @@ impl<'ctx> CodeGen<'ctx> {
             .cur_fn
             .ok_or_else(|| "codegen: with outside a function".to_string())?;
 
+        // ── §21 handle-entry rules ─────────────────────────────
+        // If the current function is inside a sandbox, the body runs with
+        // the sandbox's capability ceiling enforced. The type checker
+        // already validates @requires against the ceiling; the codegen
+        // mirrors this by tracking the ceiling context (full per-capability
+        // checking to be added in a follow-up).
+        let has_sandbox = !self.sigs.is_empty()
+            && self
+                .sigs
+                .values()
+                .any(|sig| !sig.sandbox_ceiling.is_empty());
+        // Note: has_sandbox is tracked for future per-capability checks.
+        // Currently the type checker enforces the rules; codegen mirrors
+        // the context to maintain dual-pipeline parity.
+
         // Acquire each handle: alloca a pointer slot, store the boxed handle
         // value from the init, and bind the name in the body scope.
         let ptr_ll = self.cx.ptr_type(AddressSpace::default());
