@@ -364,8 +364,11 @@ item is DONE only when it ships in **both** pipelines (see policy).
    error when exceeded). ✅ DONE: transitive attenuation closure
    (call-graph meet fixpoint), manifest (per-dependency) capability
    ceilings (§21.1, enforced at type check — see §7). Still missing:
-   dynamic/residual capability errors, handle-entry rules, §21.4
-   knowledge-cache capability gating.
+   dynamic/residual capability errors (runtime force-time checking not
+   implemented); handle-entry rules (acquisition enforced via
+   provider-family checks; value provenance tracking TODO); §21.4
+   knowledge-cache capability gating (deferred: no CBOR store in build
+   path).
 2. §12 Constraint types — ✅ DONE (stage-1): both syntaxes (`Int[value > 0]`
     and `Int where value > 0`) parse, resolve to a `Refined` semantic type,
     and are discharged on annotated bindings (statically-known integer
@@ -665,5 +668,6 @@ fixpoint over the call graph) computes an effective ceiling per function as
 capabilities = […]` now enforced at type check as the dependency's
 effective ceiling (see §7 "Progress on item 1" above).
 
-**Remaining gaps**: dynamic/residual capability errors, handle-entry
-rules, §21.4 knowledge-cache gating.
+**Remaining gaps**: dynamic/residual capability errors (runtime not
+implemented); handle-entry (acquisition enforced, value provenance open);
+§21.4 knowledge-cache gating (deferred).
