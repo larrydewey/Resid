@@ -17,6 +17,7 @@ use std::process::ExitCode;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
+use resid_build::Profile;
 use resid_parser::TranslationUnit;
 
 enum Cmd {
@@ -47,12 +48,12 @@ fn main() -> ExitCode {
         };
         return cmd_verify(&target);
     }
-    let mut args = all_iter;
-    let Some(file) = args.next() else {
+    let mut args_vec: Vec<String> = all_iter.collect();
+    let Some(file) = args_vec.first().cloned() else {
         eprintln!("usage: residc <file.resid> [emit-ir|build|run]");
         return ExitCode::FAILURE;
     };
-    let cmd = match args.next().as_deref() {
+    let cmd = match args_vec.get(1).map(|s| s.as_str()) {
         Some("emit-ir") => Cmd::EmitIr,
         Some("build") => Cmd::Build,
         Some("run") => Cmd::Run,
@@ -65,30 +66,68 @@ fn main() -> ExitCode {
         None => Cmd::Check,
     };
 
+    // Profile flag: --profile debug|release|check (default: debug)
+    let mut profile = Profile::Debug;
+    let mut i = 2; // skip file and subcommand
+    while i < args_vec.len() {
+        if args_vec[i] == "--profile" {
+            i += 1;
+            if i >= args_vec.len() {
+                eprintln!("error: --profile requires a value (debug|release|check)");
+                return ExitCode::FAILURE;
+            }
+            profile = match args_vec[i].as_str() {
+                "debug" => Profile::Debug,
+                "release" => Profile::Release,
+                "check" => Profile::Check,
+                v => {
+                    eprintln!("error: unknown profile `{v}` (expected debug|release|check)");
+                    return ExitCode::FAILURE;
+                }
+            };
+            args_vec.remove(i);
+            args_vec.remove(i - 1);
+            if i > 0 { i -= 1; }
+            continue;
+        }
+        i += 1;
+    }
+
     if matches!(cmd, Cmd::Keygen) {
         return cmd_keygen();
     }
     if matches!(cmd, Cmd::Verify) {
-        let Some(bin) = args.next() else {
+        let Some(bin) = args_vec.get(2) else {
             eprintln!("usage: residc verify <binary>");
             return ExitCode::FAILURE;
         };
-        return cmd_verify(&bin);
+        return cmd_verify(bin);
     }
 
     // `residc <file> run [args...]` — everything after `run` is forwarded to
     // the program as its command-line arguments (argv[1..]).
     let prog_args: Vec<String> = match cmd {
-        Cmd::Run => args.by_ref().collect(),
+        Cmd::Run => args_vec[2..].to_vec(),
         _ => Vec::new(),
     };
 
     // `residc <file> build [-o] <out>` — optional explicit output path.
     let out: Option<String> = match cmd {
-        Cmd::Build => match args.next().as_deref() {
-            Some("-o") => args.next(),
-            other => other.map(|s| s.to_string()),
-        },
+        Cmd::Build => {
+            // Find -o flag and its argument, or treat first non-flag as output
+            let mut out = None;
+            for i in 2..args_vec.len() {
+                if args_vec[i] == "-o" {
+                    if i + 1 < args_vec.len() {
+                        out = Some(args_vec[i + 1].clone());
+                    }
+                    break;
+                } else if !args_vec[i].starts_with('-') && out.is_none() {
+                    out = Some(args_vec[i].clone());
+                }
+            }
+            out
+        }
         _ => None,
     };
 
@@ -112,6 +151,11 @@ fn main() -> ExitCode {
             // file: changing a library has to invalidate cached binaries.
             let mut import_parts: Vec<Vec<u8>> = Vec::new();
             collect_import_contents(Path::new(&file), &mut import_parts, &mut Vec::new());
+            let profile_bytes = match profile {
+                Profile::Debug => b"debug".to_vec(),
+                Profile::Release => b"release".to_vec(),
+                Profile::Check => b"check".to_vec(),
+            };
             let mut parts: Vec<Vec<u8>> = vec![
                 b"residc-v2".to_vec(),
                 src_bytes,
@@ -119,6 +163,7 @@ fn main() -> ExitCode {
                 // change must invalidate cached binaries.
                 RUNTIME_C.as_bytes().to_vec(),
                 if prov_encrypt { b"enc0".to_vec() } else { b"plain".to_vec() },
+                profile_bytes,
             ];
             parts.extend(import_parts);
             let part_refs: Vec<&[u8]> = parts.iter().map(|v| v.as_slice()).collect();
@@ -198,12 +243,12 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Cmd::Build => {
-            match build_native(&file, &unit, out.as_deref(), &cache_key) {
+            match build_native(&file, &unit, out.as_deref(), &cache_key, profile) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(code) => code,
             }
         }
-        Cmd::Run => run_native(&file, &unit, &prog_args, &cache_key),
+        Cmd::Run => run_native(&file, &unit, &prog_args, &cache_key, profile),
         Cmd::Keygen | Cmd::Verify => unreachable!("handled earlier"),
     }
 }
@@ -264,6 +309,7 @@ fn build_native(
     unit: &TranslationUnit,
     out: Option<&str>,
     cache_key: &str,
+    profile: Profile,
 ) -> Result<(), ExitCode> {
     let ir = emit_ir_string(unit)?;
     let tmp = temp_dir();
@@ -278,14 +324,16 @@ fn build_native(
         return Err(ExitCode::FAILURE);
     }
     let out = out.unwrap_or("a.out");
-    let status = std::process::Command::new("clang")
-        .arg(&ir_path)
+    let mut cmd = std::process::Command::new("clang");
+    cmd.arg(&ir_path)
         .arg(&rt_path)
         .arg("-Wno-override-module")
-        .arg("-pthread")
-        .arg("-o")
-        .arg(out)
-        .status();
+        .arg("-pthread");
+    if profile == Profile::Release {
+        cmd.arg("-O2");
+    }
+    cmd.arg("-o").arg(out);
+    let status = cmd.status();
     note_residual(file, Path::new(out));
     let prov_encrypt = env::var("RESID_PROV_ENCRYPT").map(|v| v == "1").unwrap_or(false);
     let enc_key = env::var("RESID_PROV_KEY").ok();
@@ -396,10 +444,11 @@ fn run_native(
     unit: &TranslationUnit,
     prog_args: &[String],
     cache_key: &str,
+    profile: Profile,
 ) -> ExitCode {
     let tmp = temp_dir();
     let bin = tmp.join(format!("{}_bin", stem(file)));
-    if let Err(code) = build_native(file, unit, Some(&bin.to_string_lossy()), &cache_key) {
+    if let Err(code) = build_native(file, unit, Some(&bin.to_string_lossy()), &cache_key, profile) {
         return code;
     }
     verify_if_configured(&bin.to_string_lossy());
