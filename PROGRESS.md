@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**713 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 224,
- resid-codegen 137, resid-build 47, resid-fmt 5,
- resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
- resid-graph 4, resid-builtin 0, residc 0 unit + 97 e2e incl.
+**718 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 229,
+  resid-codegen 137, resid-build 47, resid-fmt 5,
+  resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
+  resid-graph 4, resid-builtin 0, residc 0 unit + 97 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
@@ -30,7 +30,9 @@ Constraint types (§12) are stage-1 implemented: both `Int[value > 0]` and
 The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
 Dependency capability ceilings (§21.1) and per-dependency key pinning
-(§28.3) are now enforced at manifest load / type check (see §7).
+(§28.3) are now enforced at manifest load / type check (see §7). Spawn
+capability substitution (§19: child ≤ parent + the child's fresh CapEnv
+bounds its whole body) is enforced statically in the type checker.
 
 ### Compiler core (working)
 
@@ -381,9 +383,11 @@ item is DONE only when it ships in **both** pipelines (see policy).
    has zero behavior logic; codegen ignores it. No user-defined
    `Ord(Int) = ...` instantiation (`sort` is a hardcoded rt builtin).
    **Serialization depends on this — attack order starts here.**
-7. §19 Concurrency — spawn works (pthreads), but capability lists are
-   silently discarded (no child≤parent check) and child failure is
-   stubbed "always Ok".
+7. §19 Concurrency — spawn works (pthreads); child≤parent and the child's
+   fresh CapEnv are enforced statically in the type checker (§19, e2e
+   `run_spawn_simple`/`run_spawn_with_captures`/`run_spawn_nested`), but
+   child failure is still stubbed "always Ok" (the `Err(RegionError)` arm
+   of the spawn result is the future abort-catchable path).
 8. §22 Visibility — `pub` parsed but never enforced; default-private
    rule unimplemented.
 9. §23 `value?` sugar — parse-only; no checker/codegen handling
@@ -428,7 +432,8 @@ type — Option lands first.
 7. Sandbox transitive attenuation (item 1 remaining) — ✅ done (stage-1, e2e `run_sandbox_transitive_attenuation`); manifest (per-dependency) capability ceilings **✅ done** (spec §21.1: `[dependencies.<name>] capabilities = […]` enforced at type check as a hard ceiling on the dependency's `@requires`, met with any in-source sandbox ceilings; residency in `resid-build`, e2e `dependency_*_ceiling_*` + `path_dependency_resolves_and_builds`).
 8. Constraint types (item 2) — ✅ done (stage-1, both syntaxes, discharge on binds; e2e `run_constraint_types`, `constraint_type_violation_rejected`).
 9. Knowledge-graph IR + reduction depth (items 11, 12) — ✅ done (stage-1: comptime β-reduction of pure functions with step/depth budget, block-tail support; e2e `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`).
-10. Runtime spawn with capability enforcement (item 7, 10) — ✅ done (e2e `run_spawn_simple`, `run_spawn_with_captures`, `run_spawn_nested`; capability lists passed to pthread workers).
+10. Spawn capability substitution (item 7, 10) — ✅ done (stage-1:
+    spawn works over pthreads, e2e `run_spawn_simple`, `run_spawn_with_captures`, `run_spawn_nested`; type checker enforces §19 child ≤ parent against the enclosing effective ceiling and bounds the child's whole body by its fresh CapEnv — callee `@requires` and nested spawns must fit the spawn's own caps).
 11. Build profiles (item 13), key pinning (item 14) — partially done: spawn CLI (`residc <f> build [-o out]`, `residc <f> run`) working; debug/release profiles not fully implemented. **Per-dependency key pinning ✅ done** (spec §28.3: `[dependencies.<name>] pubkey = "<hex>"` pins the dependency's archive signature to exactly that key, enforced at manifest load regardless of the global `[signing]` policy, transitive pins carried through recursion; e2e `dependency_pinned_key_*`, `transitive_dependency_pinned_key_enforced`).
 
 ### Progress on item 1 — manifest ceilings & item 14 — key pinning: DONE (stage-1)
@@ -472,6 +477,27 @@ type — Option lands first.
 - Unit coverage via integration tests (`resid-build` +4): correct pin
   accepted, wrong key rejected, missing archive rejected, transitive pin
   enforced at the vendor level.
+
+### Progress on item 14 — spawn capability substitution: DONE (static half, §19)
+
+- `spawn (caps) { body }` hands the child a FRESH CapEnv of exactly `caps`
+  (spec §19). The type checker now enforces both static halves at the
+  effective-ceiling fixpoint (`enforce_transitive_attenuation` + new
+  `walk_spawn_cap_env`):
+  - **child ≤ parent** — the spawn's declared caps must be ⊆ the enclosing
+    function's effective ceiling (in-source `sandbox` ∧ manifest ceiling),
+    so a spawn can never amplify the parent's powers.
+  - **fresh CapEnv bounds the body** — every callee `@requires` and every
+    nested `spawn` inside the child must fit the child's own caps, walked
+    across the full statement/expression tree (calls, control flow, match
+    arms, with/using, providers, f-strings, destructuring, map/set/struct
+    literals, etc.).
+- The runtime half remains: child failure is stubbed "always `Ok(T)`" —
+  `Err(RegionError)` from a failed child is the future abort-catchable
+  path (`resid_spawn` in `resid_rt.c`).
+- Unit tests (`resid-type` +5): child≤parent allows matching / rejects
+  amplification / fresh CapEnv rejects an out-of-caps callee / allows a
+  fitting callee / nested spawn may not exceed the child's CapEnv.
 
 ### Progress on item 9 — comptime reduction: DONE (stage-1)
 

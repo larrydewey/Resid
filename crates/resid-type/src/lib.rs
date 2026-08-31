@@ -15,8 +15,8 @@ mod reduce;
 pub use reduce::{CValue, reduce_call, reduce_expr};
 use resid_lexer::token::{Literal, Op as OpKind, Span};
 use resid_parser::{
-    Block, Declaration, Expr, ExprKind, FStringPart, FuncDef, Id, Pattern, PatternKind, Stmt, StmtKind,
-    SumVariant, TranslationUnit, Type, TypeBody, TypeDef,
+    Block, CapabilityAnnotation, Declaration, Expr, ExprKind, FStringPart, FuncDef, Id, Pattern,
+    PatternKind, Stmt, StmtKind, SumVariant, TranslationUnit, Type, TypeBody, TypeDef,
 };
 
 /// A semantic type for the supported core.
@@ -3838,6 +3838,249 @@ fn enforce_transitive_attenuation(
             }
         }
     }
+    // ── §19 spawn capability substitution ────────────────────────
+    // `spawn (caps) { body }` hands the child a FRESH CapEnv of exactly
+    // `caps` (spec §19). Two static rules:
+    //   1. child ≤ parent — the spawn's caps must be ⊆ the enclosing
+    //      function's effective ceiling (never amplify across a spawn);
+    //   2. the fresh CapEnv bounds the whole body — callee `@requires`
+    //      and nested spawns inside must fit the spawn's caps.
+    for decl in flat {
+        if let Declaration::Function(f) = decl {
+            let parent_caps = eff.get(&f.name.0).and_then(|c| c.clone());
+            walk_spawn_cap_env(&f.body, parent_caps.as_deref(), sigs, errs);
+        }
+    }
+}
+
+/// Capability names declared on `spawn (…)`.
+fn spawn_caps(capabilities: &[CapabilityAnnotation]) -> Vec<String> {
+    capabilities.iter().map(|c| c.name.0.clone()).collect()
+}
+
+/// Walk `block` enforcing spawn/CapEnv capability bounds (spec §19).
+/// `parent` is the capability ceiling active at this point: `None`
+/// (unrestricted) at the top of a function, `Some(caps)` once inside any
+/// spawn — a child's capabilities — or inside any sandbox.
+fn walk_spawn_cap_env(
+    block: &Block,
+    parent: Option<&[String]>,
+    sigs: &Signatures,
+    errs: &mut Vec<TypeError>,
+) {
+    fn walk_expr(
+        e: &Expr,
+        parent: Option<&[String]>,
+        sigs: &Signatures,
+        errs: &mut Vec<TypeError>,
+    ) {
+        match &e.kind {
+            ExprKind::Spawn { capabilities, body } => {
+                let caps = spawn_caps(capabilities);
+                if let Some(p) = parent {
+                    for c in &caps {
+                        if !p.contains(c) {
+                            errs.push(err(
+                                &e.span,
+                                format!(
+                                    "spawn declares capability `{c}` which exceeds the parent's capability ceiling [{}] (child ≤ parent)",
+                                    p.join(", "),
+                                ),
+                            ));
+                        }
+                    }
+                }
+                walk_block(body, Some(&caps), sigs, errs);
+            }
+            ExprKind::Call { func, args } => {
+                if let Some(p) = parent {
+                    if let ExprKind::Id(callee) = &func.kind {
+                        if let Some(sig) = sigs.get(&callee.0) {
+                            for req in &sig.requires {
+                                if !p.contains(req) {
+                                    errs.push(err(
+                                        &e.span,
+                                        format!(
+                                            "call to `{}` requires capability `{req}` which is not granted to this region's capability set [{}]",
+                                            callee.0, p.join(", "),
+                                        ),
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                walk_expr(func, parent, sigs, errs);
+                for (_, a) in args {
+                    walk_expr(a, parent, sigs, errs);
+                }
+            }
+            ExprKind::BinaryOp { lhs, rhs, .. } => {
+                walk_expr(lhs, parent, sigs, errs);
+                walk_expr(rhs, parent, sigs, errs);
+            }
+            ExprKind::UnaryOp { operand, .. }
+            | ExprKind::Rt(operand)
+            | ExprKind::AtResidual { inner: operand, .. }
+            | ExprKind::EarlyReturn(operand)
+            | ExprKind::Known(operand)
+            | ExprKind::RtKnown(operand)
+            | ExprKind::ComptimePrint(operand)
+            | ExprKind::Cast { operand, .. }
+            | ExprKind::Discard(operand) => walk_expr(operand, parent, sigs, errs),
+            ExprKind::If {
+                cond,
+                then_block,
+                else_block,
+                ..
+            } => {
+                walk_expr(cond, parent, sigs, errs);
+                walk_block(then_block, parent, sigs, errs);
+                if let Some(b) = else_block {
+                    walk_block(b, parent, sigs, errs);
+                }
+            }
+            ExprKind::While { cond, body, .. } => {
+                walk_expr(cond, parent, sigs, errs);
+                walk_block(body, parent, sigs, errs);
+            }
+            ExprKind::ForIn { collection, body, .. } => {
+                walk_expr(collection, parent, sigs, errs);
+                walk_block(body, parent, sigs, errs);
+            }
+            ExprKind::For {
+                init,
+                cond,
+                step,
+                body,
+                ..
+            } => {
+                if let Some(i) = init {
+                    walk_stmt(i, parent, sigs, errs);
+                }
+                walk_expr(cond, parent, sigs, errs);
+                if let Some(s) = step {
+                    walk_stmt(s, parent, sigs, errs);
+                }
+                walk_block(body, parent, sigs, errs);
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                walk_expr(scrutinee, parent, sigs, errs);
+                for (_, arm) in arms {
+                    walk_expr(arm, parent, sigs, errs);
+                }
+            }
+            ExprKind::Assert { cond, message, .. }
+            | ExprKind::RtAssert { cond, message, .. } => {
+                walk_expr(cond, parent, sigs, errs);
+                walk_expr(message, parent, sigs, errs);
+            }
+            ExprKind::StructLit { fields, .. } => {
+                for (_, v) in fields {
+                    walk_expr(v, parent, sigs, errs);
+                }
+            }
+            ExprKind::ListLit(elems) | ExprKind::SetLit(elems) => {
+                for el in elems {
+                    walk_expr(el, parent, sigs, errs);
+                }
+            }
+            ExprKind::MapLit(entries) => {
+                for (k, v) in entries {
+                    walk_expr(k, parent, sigs, errs);
+                    walk_expr(v, parent, sigs, errs);
+                }
+            }
+            ExprKind::Range { start, end, .. } => {
+                walk_expr(start, parent, sigs, errs);
+                walk_expr(end, parent, sigs, errs);
+            }
+            ExprKind::FString(parts) => {
+                for part in parts {
+                    if let FStringPart::Expr(inner) = part {
+                        walk_expr(inner, parent, sigs, errs);
+                    }
+                }
+            }
+            ExprKind::FieldAccess { target, .. }
+            | ExprKind::Index { target, .. }
+            | ExprKind::MethodCall { target, .. }
+            | ExprKind::Using { value: target, .. }
+            | ExprKind::Destructure { source: target, .. }
+            | ExprKind::IfLet {
+                source: target, ..
+            }
+            | ExprKind::WhileLet {
+                source: target, ..
+            } => {
+                walk_expr(target, parent, sigs, errs);
+                if let ExprKind::MethodCall { args, .. } = &e.kind {
+                    for a in args {
+                        walk_expr(a, parent, sigs, errs);
+                    }
+                }
+                if let ExprKind::IfLet {
+                    then_block,
+                    else_block,
+                    ..
+                } = &e.kind
+                {
+                    walk_block(then_block, parent, sigs, errs);
+                    if let Some(b) = else_block {
+                        walk_block(b, parent, sigs, errs);
+                    }
+                }
+                if let ExprKind::WhileLet { body, .. } = &e.kind {
+                    walk_block(body, parent, sigs, errs);
+                }
+            }
+            ExprKind::Slice { target, .. } => {
+                walk_expr(target, parent, sigs, errs);
+            }
+            ExprKind::ElseFallback { value, fallback } => {
+                walk_expr(value, parent, sigs, errs);
+                walk_block(fallback, parent, sigs, errs);
+            }
+            ExprKind::With { bindings, body } => {
+                for b in bindings {
+                    walk_expr(&b.init, parent, sigs, errs);
+                }
+                walk_block(body, parent, sigs, errs);
+            }
+            ExprKind::ProviderCall { args, .. } => {
+                for a in args {
+                    walk_expr(a, parent, sigs, errs);
+                }
+            }
+            ExprKind::Id(_)
+            | ExprKind::Literal(_)
+            | ExprKind::Location
+            | ExprKind::RawString(_)
+            | ExprKind::ByteString(_)
+            | ExprKind::Todo(_)
+            | ExprKind::Unimplemented(_) => {}
+        }
+    }
+    fn walk_stmt(s: &Stmt, parent: Option<&[String]>, sigs: &Signatures, errs: &mut Vec<TypeError>) {
+        match &s.kind {
+            StmtKind::Bind { value, .. }
+            | StmtKind::Discard(value)
+            | StmtKind::Expr(value)
+            | StmtKind::Return(Some(value)) => walk_expr(value, parent, sigs, errs),
+            StmtKind::Destructure { source, .. } => walk_expr(source, parent, sigs, errs),
+            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
+        }
+    }
+    fn walk_block(b: &Block, parent: Option<&[String]>, sigs: &Signatures, errs: &mut Vec<TypeError>) {
+        for st in &b.statements {
+            walk_stmt(st, parent, sigs, errs);
+        }
+        if let Some(r) = &b.ret {
+            walk_expr(r, parent, sigs, errs);
+        }
+    }
+    walk_block(block, parent, sigs, errs);
 }
 
 fn type_check_block(
@@ -7455,6 +7698,151 @@ sandbox (filesystem) {
         assert!(!errs.is_empty(), "sandbox should reject requires exceeding ceiling");
         assert!(errs.iter().any(|e| e.message.contains("network")),
             "error should mention the exceeding capability, got: {:?}", errs);
+    }
+
+    // ─── Spawn: child ≤ parent + fresh CapEnv bounds the body (§19) ──
+
+    #[test]
+    fn spawn_child_le_parent_allows_matching_caps() {
+        let src = r#"
+sandbox (filesystem) {
+    Int work() { return 1; }
+    Int run() {
+        Result(Int, RegionError) r = spawn (filesystem) {
+            return work();
+        };
+        Int out = match r {
+            Ok(n) => n,
+            Err(e) => 0,
+        };
+        return out;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "spawn with child caps ⊆ parent ceiling should pass, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn spawn_child_le_parent_rejects_amplification() {
+        let src = r#"
+sandbox (filesystem) {
+    Int run() {
+        Result(Int, RegionError) r = spawn (network) {
+            return 1;
+        };
+        Int out = match r {
+            Ok(n) => n,
+            Err(e) => 0,
+        };
+        return out;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "spawn may not exceed the parent's ceiling (child ≤ parent)"
+        );
+        assert!(
+            errs.iter().any(|e| e.message.contains("child ≤ parent") && e.message.contains("network")),
+            "error should cite the child ≤ parent rule and the capability, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn spawn_fresh_capenvy_bounds_body_calls() {
+        let src = r#"
+@requires(network)
+Int fetch() { return 1; }
+Int run() {
+    Result(Int, RegionError) r = spawn (filesystem) {
+        return fetch();
+    };
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    return out;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "a callee inside a spawn must fit the child's fresh CapEnv"
+        );
+        assert!(
+            errs.iter().any(|e| e.message.contains("not granted to this region") && e.message.contains("network")),
+            "error should cite the missing capability, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn spawn_fresh_capenvy_allows_fitting_calls() {
+        let src = r#"
+@requires(filesystem)
+Int read_file() { return 1; }
+Int run() {
+    Result(Int, RegionError) r = spawn (filesystem) {
+        return read_file();
+    };
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    return out;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "a callee whose requires fit the child's CapEnv should pass, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn spawn_nested_caps_must_fit_the_child() {
+        let src = r#"
+Int outer() {
+    Result(Int, RegionError) r = spawn (filesystem) {
+        Result(Int, RegionError) s = spawn (network) {
+            return 1;
+        };
+        Int out = match s {
+            Ok(n) => n,
+            Err(e) => 0,
+        };
+        return out;
+    };
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    return out;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "a nested spawn may not exceed the child's CapEnv"
+        );
+        assert!(
+            errs.iter().any(|e| e.message.contains("network")),
+            "error should cite the nested capability, got: {:?}",
+            errs
+        );
     }
 
 
