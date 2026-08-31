@@ -3835,6 +3835,15 @@ fn enforce_transitive_attenuation(
                         break;
                     }
                 }
+            } else {
+                // §21.3: call target not found in sigs; residual at force time
+                errs.push(err(
+                    span,
+                    format!(
+                        "call to `{}` requires capability which is not statically granted; residual at force time",
+                        callee,
+                    ),
+                ));
             }
         }
     }
@@ -4048,7 +4057,15 @@ fn walk_spawn_cap_env(
                 }
                 walk_block(body, parent, sigs, errs);
             }
-            ExprKind::ProviderCall { args, .. } => {
+            ExprKind::ProviderCall { provider, args, .. } => {
+                if let Some(p) = parent {
+                    if !p.iter().any(|c| c == &provider.0) {
+                        errs.push(err(&e.span, format!(
+                            "provider call `{provider}` requires capability `{provider}` which is not granted to this region's capability set [{}]",
+                            p.join(", ")
+                        )));
+                    }
+                }
                 for a in args {
                     walk_expr(a, parent, sigs, errs);
                 }
