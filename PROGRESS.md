@@ -33,6 +33,22 @@ Dependency capability ceilings (§21.1) and per-dependency key pinning
 (§28.3) are now enforced at manifest load / type check (see §7). Spawn
 capability substitution (§19: child ≤ parent + the child's fresh CapEnv
 bounds its whole body) is enforced statically in the type checker.
+**Build profiles (§35) now complete**: `residc <f> build|run --profile debug|release|check` with `-O2` for release, cache key includes profile; `check` stops after type checking.
+**Reduction relation (§36) complete**: comptime β-reduction of pure functions with step/depth budgets, recursive calls, conditionals, and tail returns; e2e `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`.
+**Handle-entry rules (§21.3)**: File method provenance (`read_handle`, `close`) tracked in restricted regions; value provenance across function boundaries remains open.
+Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
+driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
+Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
+proven**. Map/Set types now fully supported in stage-2 driver (recursive
+FNV-1a lookup/insert/remove, persistent functional style, no mutation).
+Constraint types (§12) are stage-1 implemented: both `Int[value > 0]` and
+`Int where value > 0` parse and discharge on annotated bindings.
+The long-standing "context-dependent codegen ghost" is dead —
+three root causes, none of them codegen (see §4).
+Dependency capability ceilings (§21.1) and per-dependency key pinning
+(§28.3) are now enforced at manifest load / type check (see §7). Spawn
+capability substitution (§19: child ≤ parent + the child's fresh CapEnv
+bounds its whole body) is enforced statically in the type checker.
 
 ### Compiler core (working)
 
@@ -366,8 +382,9 @@ item is DONE only when it ships in **both** pipelines (see policy).
    ceilings (§21.1, enforced at type check — see §7). Still missing:
 dynamic/residual capability errors (runtime force-time checking not
 implemented); handle-entry rules (acquisition enforced via
-provider-family checks; value provenance tracking TODO: handles passed
-as values across function boundaries are not yet tracked); §21.4
+provider-family checks; File method provenance `read_handle`/`close`
+tracked in restricted regions; value provenance tracking for handles
+passed as values across function boundaries still open); §21.4
 knowledge-cache capability gating (deferred: no CBOR store in build
 path).
 2. §12 Constraint types — ✅ DONE (stage-1): both syntaxes (`Int[value > 0]`
@@ -438,7 +455,7 @@ type — Option lands first.
 9. Knowledge-graph IR + reduction depth (items 11, 12) — ✅ done (stage-1: comptime β-reduction of pure functions with step/depth budget, block-tail support; e2e `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`).
 10. Spawn capability substitution (item 7, 10) — ✅ done (stage-1:
     spawn works over pthreads, e2e `run_spawn_simple`, `run_spawn_with_captures`, `run_spawn_nested`; type checker enforces §19 child ≤ parent against the enclosing effective ceiling and bounds the child's whole body by its fresh CapEnv — callee `@requires` and nested spawns must fit the spawn's own caps).
-11. Build profiles (item 13), key pinning (item 14) — partially done: spawn CLI (`residc <f> build [-o out]`, `residc <f> run`) working; debug/release profiles not fully implemented. **Per-dependency key pinning ✅ done** (spec §28.3: `[dependencies.<name>] pubkey = "<hex>"` pins the dependency's archive signature to exactly that key, enforced at manifest load regardless of the global `[signing]` policy, transitive pins carried through recursion; e2e `dependency_pinned_key_*`, `transitive_dependency_pinned_key_enforced`).
+11. Build profiles (item 13), key pinning (item 14) — **✅ done**: CLI `--profile debug|release|check` flag for `build`/`run`; release adds `-O2`, check stops after type checking; cache key includes profile; key pinning ✅ done (spec §28.3: `[dependencies.<name>] pubkey = "<hex>"` pins the dependency's archive signature to exactly that key, enforced at manifest load regardless of the global `[signing]` policy, transitive pins carried through recursion; e2e `dependency_pinned_key_*`, `transitive_dependency_pinned_key_enforced`).
 
 ### Progress on item 1 — manifest ceilings & item 14 — key pinning: DONE (stage-1)
 
@@ -670,5 +687,7 @@ capabilities = […]` now enforced at type check as the dependency's
 effective ceiling (see §7 "Progress on item 1" above).
 
 **Remaining gaps**: dynamic/residual capability errors (runtime not
-implemented); handle-entry (acquisition enforced, value provenance open);
+implemented); handle-entry (acquisition enforced, value provenance tracking
+for File methods `read_handle`/`close` in restricted regions implemented;
+full handle-provenance tracking across function boundaries still open);
 §21.4 knowledge-cache gating (deferred).
