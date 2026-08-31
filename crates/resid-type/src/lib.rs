@@ -4024,7 +4024,18 @@ fn walk_spawn_cap_env(
                 source: target, ..
             } => {
                 walk_expr(target, parent, sigs, errs);
-                if let ExprKind::MethodCall { args, .. } = &e.kind {
+                if let ExprKind::MethodCall { method, args, .. } = &e.kind {
+                    // Handle provenance: known File methods require `filesystem` capability
+                    if matches!(method.0.as_str(), "read_handle" | "close") {
+                        if let Some(p) = parent {
+                            if !p.iter().any(|c| c == "filesystem") {
+                                errs.push(err(&e.span, format!(
+                                    "File method `{}` requires capability `filesystem` which is not granted to this region's capability set [{}]",
+                                    method.0, p.join(", ")
+                                )));
+                            }
+                        }
+                    }
                     for a in args {
                         walk_expr(a, parent, sigs, errs);
                     }
