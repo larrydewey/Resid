@@ -486,6 +486,60 @@ pub struct FunctionSig {
     pub sandbox_ceiling: Vec<String>,
 }
 
+/// A capability ceiling associated with a set of source files (spec §21.1).
+///
+/// The project manifest supplies the maximum capability set a dependency may
+/// receive (`[dependencies.<name>] capabilities = […]`). Every function
+/// defined under the ceiling's directory runs with at most those
+/// capabilities; in-source `sandbox (…)` blocks may only narrow further
+/// (attenuation is monotone, never amplifying).
+#[derive(Debug, Clone)]
+pub struct FileCeiling {
+    /// Canonical absolute directory prefix. Functions whose defining file
+    /// (`FunctionSig::file`) lies under this directory fall under the ceiling.
+    pub prefix: String,
+    /// Ceiling capability families ("filesystem", "network", …). A function
+    /// may declare `@requires` only capabilities present here.
+    pub caps: Vec<String>,
+}
+
+impl FileCeiling {
+    /// Does `file` fall under this ceiling? Matching is directory-boundary
+    /// aware: contents directly under the prefix dir (never a sibling dir
+    /// that merely shares the prefix).
+    pub fn covers(&self, file: &str) -> bool {
+        if self.prefix.is_empty() {
+            return false;
+        }
+        let prefix = self.prefix.trim_end_matches('/');
+        file == prefix || file.starts_with(&format!("{prefix}/"))
+    }
+}
+
+/// The manifest (or sandbox) ceiling applying to a function, as the meet of
+/// every applicable ceiling (spec §21: capability sets may only shrink).
+fn effective_declared_ceiling(
+    file: &str,
+    sandbox_ceiling: &[String],
+    ceilings: &[FileCeiling],
+) -> Option<Vec<String>> {
+    let manifest = ceilings
+        .iter()
+        .find(|c| c.covers(file))
+        .map(|c| c.caps.clone());
+    match (sandbox_ceiling.is_empty(), manifest) {
+        (true, None) => None,
+        (true, Some(m)) => Some(m),
+        (false, None) => Some(sandbox_ceiling.to_vec()),
+        (false, Some(m)) => Some(meet_caps(sandbox_ceiling, &m)),
+    }
+}
+
+/// Set intersection preserving order of the first operand.
+fn meet_caps(a: &[String], b: &[String]) -> Vec<String> {
+    a.iter().filter(|c| b.contains(c)).cloned().collect()
+}
+
 /// A variable-name → type environment.
 #[derive(Debug, Clone, Default)]
 pub struct Env {
@@ -3347,6 +3401,14 @@ fn constraint_str(expr: &Expr) -> String {
 /// Type-check every function body in a translation unit.
 /// Returns a list of errors (empty = all passed).
 pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
+    check_program_with(unit, &[])
+}
+
+/// Type-check every function body in a translation unit, enforcing the
+/// per-directory capability ceilings of the project manifest (spec §21.1)
+/// in addition to any in-source `sandbox (…)` ceilings. Callers with no
+/// package context pass `&[]` (equivalent to `check_program`).
+pub fn check_program_with(unit: &TranslationUnit, ceilings: &[FileCeiling]) -> Vec<TypeError> {
     let types = collect_types(unit);
     let mut sigs = collect_signatures(unit);
     // Behavior instances become pseudo-signatures keyed `behavior::<Inst>`
@@ -3420,18 +3482,19 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
             }
             type_check_block(&f.body, &env, &sigs, &types, &mut errs);
             // ── §21.3 sandbox enforcement ──────────────────────────
-            // If the function is inside a sandbox, every @requires cap
-            // must be present in the sandbox ceiling.
-            if !sig.sandbox_ceiling.is_empty() {
+            // A function's effective declared ceiling is the meet of every
+            // enclosing `sandbox (…)` ceiling and the dependency ceiling from
+            // the manifest (§21.1). Every @requires cap must be present in it.
+            if let Some(ceiling) = effective_declared_ceiling(&sig.file, &sig.sandbox_ceiling, ceilings) {
                 for req in &sig.requires {
-                    if !sig.sandbox_ceiling.iter().any(|c| c == req) {
+                    if !ceiling.iter().any(|c| c == req) {
                         errs.push(err(
                             &f.span,
                             format!(
-                                "function `{}` requires capability `{}` which exceeds the enclosing sandbox ceiling [{}]",
+                                "function `{}` requires capability `{}` which exceeds the effective capability ceiling [{}]",
                                 f.name.0,
                                 req,
-                                sig.sandbox_ceiling.join(", "),
+                                ceiling.join(", "),
                             ),
                         ));
                     }
@@ -3439,7 +3502,7 @@ pub fn check_program(unit: &TranslationUnit) -> Vec<TypeError> {
             }
         }
     }
-    enforce_transitive_attenuation(&flat, &sigs, &mut errs);
+    enforce_transitive_attenuation(&flat, &sigs, ceilings, &mut errs);
     errs
 }
 
@@ -3679,9 +3742,16 @@ fn collect_block_calls(block: &Block, sigs: &Signatures, out: &mut Vec<(String, 
 /// §21.3 closure check: reject every call from a function whose effective
 /// ceiling is restricted when the callee declares a `@requires` capability
 /// that is not in the caller's ceiling (or its transitive meet).
+///
+/// Seed ceilings come from two sources, met per function (spec §21.1 + §21.3):
+///   - an in-source `sandbox (…)` block (`FunctionSig::sandbox_ceiling`), and
+///   - a dependency ceiling from the project manifest (`ceilings`, keyed by
+///     the defining file's directory).
+/// Authority is monotone: ceilings only shrink along the call graph.
 fn enforce_transitive_attenuation(
     flat: &[Declaration],
     sigs: &Signatures,
+    ceilings: &[FileCeiling],
     errs: &mut Vec<TypeError>,
 ) {
     // effective ceiling per function: None = tom (unrestricted, no sandbox),
@@ -3695,8 +3765,16 @@ fn enforce_transitive_attenuation(
         if let Declaration::Function(f) = decl {
             let name = f.name.0.clone();
             if let Some(sig) = sigs.get(&name) {
-                let lex = sig.sandbox_ceiling.clone();
-                eff.insert(name.clone(), if lex.is_empty() { None } else { Some(lex) });
+                let declared =
+                    effective_declared_ceiling(&sig.file, &sig.sandbox_ceiling, ceilings);
+                eff.insert(
+                    name.clone(),
+                    match declared {
+                        Some(c) if c.is_empty() => Some(Vec::new()),
+                        Some(c) => Some(c),
+                        None => None,
+                    },
+                );
             }
             let mut calls = Vec::new();
             collect_block_calls(&f.body, sigs, &mut calls);
@@ -7578,5 +7656,133 @@ sandbox (network) {
         let (unit, _errors) = resid_parser::Parser::parse("test.resid", ok);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "granted call must pass, got: {:?}", errs);
+    }
+
+    // ─── §21.1 manifest (per-dependency) capability ceilings ──
+
+    fn dep_ceiling(prefix: &str, caps: &[&str]) -> FileCeiling {
+        FileCeiling {
+            prefix: prefix.to_string(),
+            caps: caps.iter().map(|c| c.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn manifest_ceiling_rejects_uncovered_requires() {
+        // Function defined under the dependency dir `vendor/http` declares
+        // `@requires(network)`; the manifest ceiling only grants filesystem.
+        let src = r#"
+@requires(network)
+pub Int fetch(Str url) {
+    return 1;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("/app/vendor/http/src/lib.resid", src);
+        let errs = check_program_with(&unit, &[dep_ceiling("/app/vendor/http", &["filesystem"])]);
+        assert!(
+            !errs.is_empty(),
+            "manifest ceiling violation must be rejected"
+        );
+        assert!(
+            errs.iter().any(|e| e.message.contains("network")),
+            "error should name the capability, got: {:?}", errs
+        );
+    }
+
+    #[test]
+    fn manifest_ceiling_allows_covered_requires() {
+        let src = r#"
+@requires(network)
+pub Int fetch(Str url) {
+    return 1;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("/app/vendor/http/src/lib.resid", src);
+        let errs =
+            check_program_with(&unit, &[dep_ceiling("/app/vendor/http", &["network"])]);
+        assert!(errs.is_empty(), "granted requires must pass, got: {:?}", errs);
+    }
+
+    #[test]
+    fn manifest_ceiling_only_applies_inside_the_dependency_dir() {
+        // Same @requires outside any ceiling directory is unrestricted.
+        let src = r#"
+@requires(network)
+Int fetch(Str url) {
+    return 1;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("/app/src/main.resid", src);
+        let errs = check_program_with(&unit, &[dep_ceiling("/app/vendor/http", &["filesystem"])]);
+        assert!(errs.is_empty(), "root package must be unrestricted, got: {:?}", errs);
+    }
+
+    #[test]
+    fn manifest_ceiling_prefix_is_directory_boundary_aware() {
+        // A ceiling at `/app/vendor/http` must NOT cover `/app/vendor/httpd`.
+        let src = r#"
+@requires(network)
+pub Int fetch() {
+    return 1;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("/app/vendor/httpd/src/lib.resid", src);
+        let errs = check_program_with(&unit, &[dep_ceiling("/app/vendor/http", &["filesystem"])]);
+        assert!(errs.is_empty(), "sibling dir must not match, got: {:?}", errs);
+    }
+
+    #[test]
+    fn manifest_ceiling_blocks_transitive_call_closure() {
+        // The dependency's `use_network` calls a neighbor helper that declares
+        // `@requires(network)`; the closure rule rejects it under a
+        // filesystem-only manifest ceiling even though the caller has no
+        // @requires of its own — the whole dependency runs inside the ceiling.
+        let src = r#"
+@requires(network)
+pub Int need() {
+    return 1;
+}
+pub Int use_network() {
+    Int x = need();
+    return x;
+}
+"#;
+        let (unit, _errors) =
+            resid_parser::Parser::parse("/app/vendor/http/src/lib.resid", src);
+        let errs = check_program_with(&unit, &[dep_ceiling("/app/vendor/http", &["filesystem"])]);
+        assert!(
+            !errs.is_empty(),
+            "transitive call under a manifest ceiling must be rejected"
+        );
+        assert!(
+            errs.iter().any(|e| e.message.contains("need")),
+            "error should point at the leaf call, got: {:?}", errs
+        );
+    }
+
+    #[test]
+    fn manifest_ceiling_is_never_amplified_by_source() {
+        // A sandbox inside the dependency declaring MORE than the manifest
+        // ceiling must not enlarge what the dependency may do: a function
+        // requiring network is rejected even though `sandbox (network)` names it.
+        let src = r#"
+@requires(network)
+pub Int need() {
+    return 1;
+}
+sandbox (network) {
+    pub Int outer() {
+        Int x = need();
+        return x;
+    }
+}
+"#;
+        let (unit, _errors) =
+            resid_parser::Parser::parse("/app/vendor/http/src/lib.resid", src);
+        let errs = check_program_with(&unit, &[dep_ceiling("/app/vendor/http", &["filesystem"])]);
+        assert!(
+            !errs.is_empty(),
+            "source sandbox must not enlarge the manifest ceiling"
+        );
     }
 }

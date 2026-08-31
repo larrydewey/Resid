@@ -971,3 +971,266 @@ version = "0.4.0"
     assert!(dir.join("app/target/resid/deps/math-0.4.0/resid.toml").exists());
     drop(server);
 }
+
+// ─── §21.1 manifest capability ceilings (per-dependency) ──
+
+/// Build a two-package app; the dependency source declares the given
+/// `@requires` capability, the app manifest grants that dep the given
+/// `capabilities`, and `expect_match` filters the build failure message.
+fn dep_ceiling_case(tag: &str, requires: &str, dep_caps: Option<&str>, expect: Result<(), &str>) {
+    let dir = temp_dir(tag);
+    fs::create_dir_all(dir.join("vendor/net/src")).unwrap();
+    fs::write(
+        dir.join("vendor/net/resid.toml"),
+        "[package]\nname = \"net\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/net/src/main.resid"),
+        format!(
+            "@requires({requires})\npub Int fetch() {{\n    return 42;\n}}\n",
+        ),
+    )
+    .unwrap();
+    let caps_line = match dep_caps {
+        Some(c) => format!("\ncapabilities = [\"{c}\"]"),
+        None => String::new(),
+    };
+    write_pkg(
+        &dir,
+        &format!(
+            r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[capabilities]
+grant = ["network", "filesystem(readonly)"]
+
+[dependencies.net]
+path = "vendor/net"{caps_line}
+"#
+        ),
+        "import \"net\";\nInt main() {\n    println(IntToString(fetch()));\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).expect("manifest loads");
+    match expect {
+        Ok(()) => {
+            let bin = match build(&m, Profile::Debug, &dir.join("out")).expect("ceiling-allowed build") {
+                Artifact::Binary(p) => p,
+                other => panic!("expected Binary, got {other:?}"),
+            };
+            let res = Command::new(&bin).output().expect("run binary");
+            assert_eq!(String::from_utf8_lossy(&res.stdout).trim(), "42");
+        }
+        Err(needle) => {
+            let e = build(&m, Profile::Debug, &dir.join("out")).err().expect("ceiling violation must fail");
+            let msg = e.to_string();
+            assert!(
+                msg.contains(needle),
+                "expected failure mentioning `{needle}`, got:\n{msg}"
+            );
+        }
+    }
+}
+
+#[test]
+fn dependency_capability_ceiling_blocks_requires() {
+    // Dependency source demands network; manifest ceiling grants only
+    // filesystem → hard rejection at type check (spec §21.1 ceiling).
+    dep_ceiling_case("blocked", "network", Some("filesystem(readonly)"), Err("network"));
+}
+
+#[test]
+fn dependency_capability_ceiling_allows_requires() {
+    // Dependency source demands network and the manifest ceiling grants it.
+    dep_ceiling_case("allowed", "network", Some("network"), Ok(()));
+}
+
+#[test]
+fn dependency_without_ceiling_is_unrestricted() {
+    // No `capabilities` line in the manifest → no ceiling applied.
+    dep_ceiling_case("unrestricted", "network", None, Ok(()));
+}
+
+#[test]
+fn dependency_ceiling_violation_reports_the_call_site() {
+    // Transitive: the dependency's own helper carries the requirement, and a
+    // plain function calls it. The manifest ceiling must trip at the call.
+    let dir = temp_dir("transitive");
+    fs::create_dir_all(dir.join("vendor/net/src")).unwrap();
+    fs::write(
+        dir.join("vendor/net/resid.toml"),
+        "[package]\nname = \"net\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/net/src/main.resid"),
+        "@requires(network)\npub Int leaf() {\n    return 42;\n}\npub Int use_it() {\n    Int x = leaf();\n    return x;\n}\n",
+    )
+    .unwrap();
+    write_pkg(
+        &dir,
+        r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[capabilities]
+grant = ["filesystem(readonly)"]
+
+[dependencies.net]
+path = "vendor/net"
+capabilities = ["filesystem(readonly)"]
+"#,
+        "import \"net\";\nInt main() {\n    println(IntToString(use_it()));\n    return 0;\n}\n",
+    );
+    let m = Manifest::load(&dir).expect("manifest loads");
+    let e = build(&m, Profile::Debug, &dir.join("out"))
+        .err()
+        .expect("transitive ceiling violation must fail");
+    let msg = e.to_string();
+    assert!(
+        msg.contains("leaf") && msg.contains("capability ceiling"),
+        "expected the call-site ceiling diagnostic, got:\n{msg}"
+    );
+}
+
+// ─── §28.3 per-dependency key pinning ──
+
+#[derive(Clone, Copy)]
+enum PinChoice {
+    /// No `pubkey` line in the manifest.
+    None,
+    /// Pin the exact public key used to sign the archive.
+    Correct,
+    /// Pin a freshly generated (unrelated) public key.
+    Wrong,
+}
+
+/// Build a `vendor/math` dependency with a signed archive under the given
+/// key; write the app manifest pinning `pin` (or none) and return the result
+/// of loading it.
+fn pin_case(tag: &str, pin: PinChoice, expect_ok: bool, needle: &str) -> String {
+    let dir = temp_dir(tag);
+    let (secret, public) = resid_build::archive::keygen().unwrap();
+    let pin_hex = match pin {
+        PinChoice::None => None,
+        PinChoice::Correct => Some(public.clone()),
+        PinChoice::Wrong => {
+            let (_, other) = resid_build::archive::keygen().unwrap();
+            Some(other)
+        }
+    };
+    fs::create_dir_all(dir.join("vendor/math/src")).unwrap();
+    fs::write(dir.join("vendor/math/resid.toml"), "[package]\nname = \"math\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(dir.join("vendor/math/src/main.resid"), "pub Int f() { return 7; }\n").unwrap();
+    let dep_dir = dir.join("vendor/math");
+    let archive = resid_build::archive::build_archive(&dep_dir).unwrap();
+    let hash = resid_build::archive::content_hash(&archive);
+    let sig = resid_build::archive::sign_hash(&hash, &secret).unwrap();
+    fs::write(dep_dir.join("math.resid-pkg"), &archive).unwrap();
+    fs::write(dep_dir.join("math.resid-sig"), &sig).unwrap();
+
+    let pin_line = match pin_hex {
+        Some(p) => format!("pubkey = \"{p}\"\n"),
+        None => String::new(),
+    };
+    fs::write(
+        dir.join("resid.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.math]\npath = \"vendor/math\"\ncapabilities = []\n{pin_line}"
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("src/main.resid"), "import \"math\";\nInt main() { return f(); }\n").unwrap();
+
+    match Manifest::load(&dir) {
+        Ok(m) => {
+            assert!(expect_ok, "pin must be rejected; got Ok");
+            assert_eq!(m.dependencies.len(), 1);
+            String::new()
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            assert!(!expect_ok, "pin must be accepted; got Err: {msg}");
+            assert!(msg.contains(needle), "expected `{needle}` in: {msg}");
+            msg
+        }
+    }
+}
+
+#[test]
+fn dependency_pinned_key_verifies() {
+    // Pin the exact key used to sign → accepted.
+    let _ = pin_case("pinok", PinChoice::Correct, true, "");
+}
+
+#[test]
+fn dependency_pinned_key_rejects_foreign_key() {
+    // Pin a DIFFERENT key than the one that signed the archive → rejected.
+    pin_case("pinbad", PinChoice::Wrong, false, "does NOT verify against its pinned key");
+}
+
+#[test]
+fn dependency_pinned_key_requires_archive() {
+    // Pin without shiping the archive/signature at all → rejected.
+    let dir = temp_dir("pinmissing");
+    let (_, public) = resid_build::archive::keygen().unwrap();
+    fs::create_dir_all(dir.join("vendor/math/src")).unwrap();
+    fs::write(dir.join("vendor/math/resid.toml"), "[package]\nname = \"math\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(dir.join("vendor/math/src/main.resid"), "pub Int f() { return 7; }\n").unwrap();
+    fs::write(
+        dir.join("resid.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.math]\npath = \"vendor/math\"\ncapabilities = []\npubkey = \"{public}\"\n"
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("src/main.resid"), "Int main() { return 0; }\n").unwrap();
+    let e = Manifest::load(&dir).err().expect("missing archive must fail");
+    assert!(e.to_string().contains("requires a signed archive"), "{e}");
+}
+
+#[test]
+fn transitive_dependency_pinned_key_enforced() {
+    // A pin on a TRANSITIVE dependency (declared in the mid package's own
+    // manifest) is carried through recursion and enforced the same way.
+    let dir = temp_dir("pin-trans");
+    let (sec, pubk) = resid_build::archive::keygen().unwrap();
+    let (_, other) = resid_build::archive::keygen().unwrap();
+    // base (signed with sec, pinned to sec in mid's manifest).
+    fs::create_dir_all(dir.join("vendor/base/src")).unwrap();
+    fs::write(dir.join("vendor/base/resid.toml"), "[package]\nname = \"base\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(dir.join("vendor/base/src/main.resid"), "pub Int one() { return 1; }\n").unwrap();
+    let base_dir = dir.join("vendor/base");
+    let archive = resid_build::archive::build_archive(&base_dir).unwrap();
+    let hash = resid_build::archive::content_hash(&archive);
+    let sig = resid_build::archive::sign_hash(&hash, &sec).unwrap();
+    fs::write(base_dir.join("base.resid-pkg"), &archive).unwrap();
+    fs::write(base_dir.join("base.resid-sig"), &sig).unwrap();
+    // mid: imports base, pins it to a wrong key → must reject transitively.
+    fs::create_dir_all(dir.join("vendor/mid/src")).unwrap();
+    fs::write(
+        dir.join("vendor/mid/resid.toml"),
+        format!(
+            "[package]\nname = \"mid\"\nversion = \"0.1.0\"\n\n[dependencies.base]\npath = \"../base\"\ncapabilities = []\npubkey = \"{other}\"\n"
+        ),
+    )
+    .unwrap();
+    fs::write(dir.join("vendor/mid/src/main.resid"), "import \"base\";\npub Int two() { return one() + 1; }\n").unwrap();
+    fs::write(
+        dir.join("resid.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.mid]\npath = \"vendor/mid\"\ncapabilities = []\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("src/main.resid"), "import \"mid\";\nInt main() { return two(); }\n").unwrap();
+    let e = Manifest::load(&dir).err().expect("transitive pin must fail");
+    assert!(
+        e.to_string().contains("base") && e.to_string().contains("pinned key"),
+        "{e}"
+    );
+}
