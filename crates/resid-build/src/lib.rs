@@ -102,6 +102,11 @@ struct DepToml {
     version: Option<String>,
     #[serde(default)]
     capabilities: Option<Vec<String>>,
+    /// Pinned publisher Ed25519 public key (hex) for this dependency
+    /// (spec §28.3: "Keys may be pinned per dependency"). When set, the
+    /// dependency's signature must verify against exactly this key.
+    #[serde(default)]
+    pubkey: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +149,9 @@ pub struct Dependency {
     pub path: PathBuf,
     /// Declared capability requirements (parsed, not yet enforced).
     pub capabilities: Vec<String>,
+    /// Pinned publisher Ed25519 public key (hex) from `pubkey = "…"`
+    /// (spec §28.3); `None` when the dependency is not pinned.
+    pub pinned_key: Option<String>,
 }
 
 /// A parsed `resid.toml`.
@@ -290,6 +298,7 @@ impl Manifest {
                 name,
                 &dep_dir,
                 dep.capabilities.clone().unwrap_or_default(),
+                dep.pubkey.clone(),
                 &mut dependencies,
                 &mut seen,
                 0,
@@ -321,6 +330,15 @@ impl Manifest {
                         }
                     )));
                 }
+            }
+        }
+        // Per-dependency key pinning (spec §28.3): a dependency with
+        // `pubkey = "<hex>"` must ship a signed archive whose signature
+        // verifies against exactly that key — regardless of the global
+        // [signing] policy. Scaling down trust to a single key, not a keyring.
+        for dep in &dependencies {
+            if let Some(pin) = &dep.pinned_key {
+                verify_pinned_key(dep, pin)?;
             }
         }
         // Signature policy: when required, every path dependency must ship a
@@ -468,6 +486,7 @@ fn collect_dep(
     name: &str,
     dep_dir: &Path,
     caps: Vec<String>,
+    pinned: Option<String>,
     out: &mut Vec<Dependency>,
     seen: &mut std::collections::HashMap<String, PathBuf>,
     depth: usize,
@@ -541,6 +560,7 @@ fn collect_dep(
             sub_name,
             &sub_dir,
             sub.capabilities.clone().unwrap_or_default(),
+            sub.pubkey.clone(),
             out,
             seen,
             depth + 1,
@@ -556,10 +576,51 @@ fn collect_dep(
         manifest_path: dep_dir.display().to_string(),
         path: root.canonicalize().unwrap_or_else(|_| root.clone()),
         capabilities: caps,
+        pinned_key: pinned,
     });
     Ok(())
 }
 
+/// Verify a per-dependency pinned key (spec §28.3): the dependency's own
+/// `<name>.resid-pkg` archive signature must verify against the pinned
+/// public key. A pin is a hard commitment — absent artifacts or a failing
+/// signature reject the dependency outright.
+fn verify_pinned_key(dep: &Dependency, pin_hex: &str) -> Result<(), LoadError> {
+    let dep_src = PathBuf::from(&dep.manifest_path);
+    let pkg_file = dep_src.join(format!("{}.resid-pkg", dep.name));
+    let sig_file = dep_src.join(format!("{}.resid-sig", dep.name));
+    let archive_bytes = std::fs::read(&pkg_file).map_err(|e| {
+        LoadError::Invalid(format!(
+            "dependency '{}': pinned key requires a signed archive, but '{}' is missing: {e}",
+            dep.name,
+            pkg_file.display()
+        ))
+    })?;
+    let sig_hex = std::fs::read_to_string(&sig_file)
+        .map_err(|e| {
+            LoadError::Invalid(format!(
+                "dependency '{}': pinned key requires a signature, but '{}' is missing: {e}",
+                dep.name,
+                sig_file.display()
+            ))
+        })?
+        .trim()
+        .to_string();
+    let hash = archive::content_hash(&archive_bytes);
+    match archive::verify_sig(&hash, &sig_hex, pin_hex) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(LoadError::Invalid(format!(
+            "dependency '{}': signature does NOT verify against its pinned key — package content or key changed (this dependency is pinned; a deliberate update must change the manifest key)",
+            dep.name
+        ))),
+        Err(e) => Err(LoadError::Invalid(format!(
+            "dependency '{}': cannot verify pinned-key signature: {e}",
+            dep.name
+        ))),
+    }
+}
+
+/// Verify a dependency's signature against any key in the project keyring.
 fn verify_dep_signature(
     dep: &Dependency,
     pkg_file: &Path,
@@ -801,8 +862,31 @@ pub fn build(manifest: &Manifest, profile: Profile, out_dir: &Path) -> Result<Ar
         ));
     }
 
-    // Type check.
-    let type_errors = resid_type::check_program(&unit);
+    // Type check. Dependency capability ceilings (§21.1): every function
+    // defined under a dependency's directory is seeded with that dependency's
+    // declared capability set; the type checker enforces `@requires` against
+    // the meet and attenuates transitively across the call closure.
+    let ceilings: Vec<resid_type::FileCeiling> = manifest
+        .dependencies
+        .iter()
+        .filter(|d| !d.capabilities.is_empty())
+        .map(|d| {
+            let mut caps: Vec<String> = Vec::new();
+            for c in &d.capabilities {
+                let fam = cap_family(c);
+                if !caps.contains(&fam) {
+                    caps.push(fam);
+                }
+            }
+            let prefix = std::fs::canonicalize(&d.manifest_path)
+                .unwrap_or_else(|_| std::path::PathBuf::from(&d.manifest_path));
+            resid_type::FileCeiling {
+                prefix: prefix.display().to_string(),
+                caps,
+            }
+        })
+        .collect();
+    let type_errors = resid_type::check_program_with(&unit, &ceilings);
     if !type_errors.is_empty() {
         let mut msg = format!("{} type error(s):\n", type_errors.len());
         for e in &type_errors {

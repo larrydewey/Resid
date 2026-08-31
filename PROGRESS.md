@@ -9,8 +9,8 @@
 
 ## 0. Current Snapshot
 
-**699 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 218,
- resid-codegen 137, resid-build 39, resid-fmt 5,
+**713 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 224,
+ resid-codegen 137, resid-build 47, resid-fmt 5,
  resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
  resid-graph 4, resid-builtin 0, residc 0 unit + 97 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
@@ -29,6 +29,8 @@ Constraint types (§12) are stage-1 implemented: both `Int[value > 0]` and
 `Int where value > 0` parse and discharge on annotated bindings.
 The long-standing "context-dependent codegen ghost" is dead —
 three root causes, none of them codegen (see §4).
+Dependency capability ceilings (§21.1) and per-dependency key pinning
+(§28.3) are now enforced at manifest load / type check (see §7).
 
 ### Compiler core (working)
 
@@ -357,9 +359,11 @@ item is DONE only when it ships in **both** pipelines (see policy).
 
 1. §21/§43 Sandbox & attenuation — `sandbox (caps) { }` blocks parse and
    flatten; type checker enforces static ceiling on `@requires` (hard
-   error when exceeded). Still missing: transitive attenuation closure,
-   dynamic capability errors, handle-entry rules, §21.4 knowledge-cache
-   capability gating.
+   error when exceeded). ✅ DONE: transitive attenuation closure
+   (call-graph meet fixpoint), manifest (per-dependency) capability
+   ceilings (§21.1, enforced at type check — see §7). Still missing:
+   dynamic/residual capability errors, handle-entry rules, §21.4
+   knowledge-cache capability gating.
 2. §12 Constraint types — ✅ DONE (stage-1): both syntaxes (`Int[value > 0]`
     and `Int where value > 0`) parse, resolve to a `Refined` semantic type,
     and are discharged on annotated bindings (statically-known integer
@@ -421,11 +425,53 @@ type — Option lands first.
 4. Per-width wrapping/saturating (item 5) — ✅ done (LLVM native lowering; e2e `run_per_width_wrapping_saturating`).
 5. Map/Set types (item 4) — ✅ done (stage-1; e2e `run_map_set_types`, `bootstrap_map_set_parity`).
 6. Serialize/Hash behaviors (item 3) — ✅ done (stage-1; e2e `run_generic_numeric_behaviors`).
-7. Sandbox transitive attenuation (item 1 remaining) — ✅ done (stage-1, e2e `run_sandbox_transitive_attenuation`).
+7. Sandbox transitive attenuation (item 1 remaining) — ✅ done (stage-1, e2e `run_sandbox_transitive_attenuation`); manifest (per-dependency) capability ceilings **✅ done** (spec §21.1: `[dependencies.<name>] capabilities = […]` enforced at type check as a hard ceiling on the dependency's `@requires`, met with any in-source sandbox ceilings; residency in `resid-build`, e2e `dependency_*_ceiling_*` + `path_dependency_resolves_and_builds`).
 8. Constraint types (item 2) — ✅ done (stage-1, both syntaxes, discharge on binds; e2e `run_constraint_types`, `constraint_type_violation_rejected`).
 9. Knowledge-graph IR + reduction depth (items 11, 12) — ✅ done (stage-1: comptime β-reduction of pure functions with step/depth budget, block-tail support; e2e `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`).
 10. Runtime spawn with capability enforcement (item 7, 10) — ✅ done (e2e `run_spawn_simple`, `run_spawn_with_captures`, `run_spawn_nested`; capability lists passed to pthread workers).
-11. Build profiles (item 13), key pinning (item 14) — partially done: spawn CLI (`residc <f> build [-o out]`, `residc <f> run`) working; debug/release profiles not fully implemented.
+11. Build profiles (item 13), key pinning (item 14) — partially done: spawn CLI (`residc <f> build [-o out]`, `residc <f> run`) working; debug/release profiles not fully implemented. **Per-dependency key pinning ✅ done** (spec §28.3: `[dependencies.<name>] pubkey = "<hex>"` pins the dependency's archive signature to exactly that key, enforced at manifest load regardless of the global `[signing]` policy, transitive pins carried through recursion; e2e `dependency_pinned_key_*`, `transitive_dependency_pinned_key_enforced`).
+
+### Progress on item 1 — manifest ceilings & item 14 — key pinning: DONE (stage-1)
+
+**§21.1 manifest (per-dependency) capability ceilings**
+
+- `resid_type::FileCeiling` (public): a `(prefix, caps)` pair keyed by the
+  canonical dependency directory; `covers` is directory-boundary aware
+  (`/a/b` never matches `/a/bc`).
+- `check_program_with(unit, ceilings)` — `check_program` is now a thin
+  wrapper over it. Effective ceiling per function = meet of the enclosing
+  `sandbox (…)` ceiling and any manifest ceiling covering its defining
+  file (§21.1: "Source code may only further restrict; it may never
+  enlarge"). Violations are reported at the declaring span and at every
+  call site inside the transitive closure.
+- `resid-build::build` derives ceilings from every dependency with a
+  non-empty `capabilities` list (family names via `cap_family`, canonical
+  prefix, dedup) and passes them to the type checker — so a dependency
+  declaring `@requires(network)` under a `["filesystem(readonly)"]`
+  ceiling is rejected with a hard compile error, exactly like the
+  in-source sandbox path.
+- Unit tests (`resid-type` +6): uncovered-requires rejected / covered
+  allowed / root package unrestricted / directory-boundary awareness /
+  transitive closure under a manifest ceiling / source sandbox cannot
+  amplify the manifest ceiling.
+- Integration tests (`resid-build` +4): blocked vs allowed dependency,
+  unrestricted (no `capabilities` line), and a call-site diagnostic for
+  the transitive case — the latter two plus the pre-existing
+  `path_dependency_resolves_and_builds` prove the old behavior is intact.
+
+**§28.3 per-dependency key pinning**
+
+- `[dependencies.<name>] pubkey = "<hex>"` parses into
+  `Dependency::pinned_key` and is carried through `collect_dep` (so
+  transitive pins inside vendor manifests are enforced too).
+- `verify_pinned_key` at manifest load: the dependency must ship
+  `<name>.resid-pkg` + `<name>.resid-sig`, and the Ed25519 signature over
+  the archive's content hash must verify against the pinned key — a hard
+  commitment independent of the global `[signing] / require_signatures`
+  policy. Missing artifacts or a foreign key reject the dependency.
+- Unit coverage via integration tests (`resid-build` +4): correct pin
+  accepted, wrong key rejected, missing archive rejected, transitive pin
+  enforced at the vendor level.
 
 ### Progress on item 9 — comptime reduction: DONE (stage-1)
 
@@ -589,5 +635,9 @@ fixpoint over the call graph) computes an effective ceiling per function as
 - e2e `run_sandbox_transitive_attenuation` exercises: direct violation,
   undecorated middle-man chain, and legal grant — all green.
 
-**Remaining gaps**: dynamic/residual capability errors, handle-entry rules,
-manifest ceiling, §21.4 knowledge-cache gating.
+**Manifest ceilings (spec §21.1)**: ✅ DONE — `[dependencies.<name>]
+capabilities = […]` now enforced at type check as the dependency's
+effective ceiling (see §7 "Progress on item 1" above).
+
+**Remaining gaps**: dynamic/residual capability errors, handle-entry
+rules, §21.4 knowledge-cache gating.
