@@ -9,17 +9,18 @@
 
 ## 0. Current Snapshot
 
-**718 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 229,
+**722 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 233,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 97 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + 98 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
 `run_behavior_ord_sort`, `bootstrap_behavior_ord_parity`,
 `run_sandbox_enforcement`, `run_map_set_types`,
 `bootstrap_map_set_parity`, `run_constraint_types`,
-`reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`).
+`reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`,
+`run_sandbox_handle_entry_file_param`).
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
@@ -35,7 +36,7 @@ capability substitution (§19: child ≤ parent + the child's fresh CapEnv
 bounds its whole body) is enforced statically in the type checker.
 **Build profiles (§35) now complete**: `residc <f> build|run --profile debug|release|check` with `-O2` for release, cache key includes profile; `check` stops after type checking.
 **Reduction relation (§36) complete**: comptime β-reduction of pure functions with step/depth budgets, recursive calls, conditionals, and tail returns; e2e `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`.
-**Handle-entry rules (§21.3)**: File method provenance (`read_handle`, `close`) tracked in restricted regions; value provenance across function boundaries remains open.
+**Handle-entry rules (§21.3)**: File method provenance (`read_handle`, `close`) tracked in restricted regions; value provenance across function boundaries tracked for **File parameters** — a File handle may only enter a function whose effective ceiling grants `filesystem` (e2e `run_sandbox_handle_entry_file_param`).
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
@@ -383,10 +384,12 @@ item is DONE only when it ships in **both** pipelines (see policy).
 dynamic/residual capability errors (runtime force-time checking not
 implemented); handle-entry rules (acquisition enforced via
 provider-family checks; File method provenance `read_handle`/`close`
-tracked in restricted regions; value provenance tracking for handles
-passed as values across function boundaries still open); §21.4
-knowledge-cache capability gating (deferred: no CBOR store in build
-path).
+ tracked in restricted regions; value provenance for handles passed as
+ values across function boundaries — File **parameters** enforced via the
+ §21.3 entry rule (a handle may only enter a restricted function whose
+ ceiling grants `filesystem`, e2e `run_sandbox_handle_entry_file_param`);
+ §21.4 knowledge-cache capability gating (deferred: no CBOR store in build
+ path).
 2. §12 Constraint types — ✅ DONE (stage-1): both syntaxes (`Int[value > 0]`
     and `Int where value > 0`) parse, resolve to a `Refined` semantic type,
     and are discharged on annotated bindings (statically-known integer
@@ -689,5 +692,7 @@ effective ceiling (see §7 "Progress on item 1" above).
 **Remaining gaps**: dynamic/residual capability errors (runtime not
 implemented); handle-entry (acquisition enforced, value provenance tracking
 for File methods `read_handle`/`close` in restricted regions implemented;
-full handle-provenance tracking across function boundaries still open);
+File **parameters** crossing the boundary enforced via the §21.3 entry rule
+— e2e `run_sandbox_handle_entry_file_param` — but File values passed as
+inline call arguments into restricted callees not yet tracked);
 §21.4 knowledge-cache gating (deferred).
