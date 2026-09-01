@@ -1002,6 +1002,19 @@ Bool is_list_type(Str t) {
     return str_has_prefix(t, "List(");
 }
 
+// "Option(X)" -> "X" (element type of a concrete Option).
+Str opt_elem(Str t) {
+    Str head = "Option(";
+    Int h = str_len(head);
+    if (str_has_prefix(t, head)) {
+        Int n = str_len(t);
+        Int inner_len = n - h - 1;
+        Int hn = h + inner_len;
+        return str_slice(t, h, hn);
+    }
+    return t;
+}
+
 // Map/Set type predicates and accessor helpers.
 Bool is_map_type(Str t) {
     return str_has_prefix(t, "Map(");
@@ -1905,6 +1918,9 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         Tok close2 = lex_tok(s, else_e.pos);
         return ERes { pos: close2.pos, ty: then_e.ty, err: "" };
     }
+    if (t.text == "match") {
+        return check_match(s, t.pos, env, fs);
+    }
     if (t.kind == "ident") {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "(") {
@@ -2200,6 +2216,103 @@ SRes check_for(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
     SRes body = check_stmt(s, close.pos, env2, fs, ret);
     if (body.err != "") { return body; }
     return SRes { pos: body.pos, err: "", env: env };
+}
+
+// match expression over Option values (spec §13): `match v {
+//   Some(x) => e1, None => e2 }` — arms all share one result type.
+ERes check_match(Str s, Int pos, List(Str) env, Funcs fs) {
+    ERes sc = check_match_sc(s, pos, env, fs);
+    if (sc.err != "") { return sc; }
+    Bool optsc = sc.ty == "Option(_)" || str_has_prefix(sc.ty, "Option(");
+    if (!optsc) {
+        Str msg = "match scrutinee must be an Option, got " + sc.ty;
+        return ERes { pos: sc.pos, ty: "", err: msg };
+    }
+    Tok brace = lex_tok(s, sc.pos);
+    if (brace.text != "{") {
+        return ERes { pos: brace.pos, ty: "", err: "expected { in match expression" };
+    }
+    return ck_match_arms(s, brace.pos, env, fs, sc.ty, opt_elem(sc.ty), "");
+}
+
+// Primary-only scrutinee: `ident {` is a struct literal in the ordinary
+// expression grammar, so a full check_expr would swallow the match brace.
+// Mirror the parser's scrutinee handling: parse one primary and stop.
+ERes check_match_sc(Str s, Int pos, List(Str) env, Funcs fs) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "(") {
+        ERes e = check_expr(s, t.pos, env, fs);
+        if (e.err != "") { return e; }
+        Tok close = lex_tok(s, e.pos);
+        if (close.text != ")") { return ERes { pos: close.pos, ty: "", err: "expected ) in match scrutinee" }; }
+        return ERes { pos: close.pos, ty: e.ty, err: "" };
+    }
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.text == "(") {
+            return check_call(s, t2.pos, t.text, env, fs);
+        }
+        if (t.text == "None") {
+            return ERes { pos: t.pos, ty: "Option(_)", err: "" };
+        }
+        Str ty = env_lookup(env, t.text);
+        if (ty == "") { return ERes { pos: t.pos, ty: "", err: "undefined variable " + t.text }; }
+        return ERes { pos: t.pos, ty: ty, err: "" };
+    }
+    if (t.text == "true" || t.text == "false") { return ERes { pos: t.pos, ty: "Bool", err: "" }; }
+    if (t.kind == "int") { return ERes { pos: t.pos, ty: "Int", err: "" }; }
+    if (t.kind == "float") { return ERes { pos: t.pos, ty: "Float", err: "" }; }
+    if (t.kind == "str" || t.kind == "raw" || t.kind == "fstring" || t.kind == "char") { return ERes { pos: t.pos, ty: "Str", err: "" }; }
+    Str msg = "match scrutinee must be a primary expression";
+    return ERes { pos: t.pos, ty: "", err: msg };
+}
+
+// Recursive match-arm walker; acc holds the merge type of bodies seen so far
+// ("" until the first arm resolves it).
+ERes ck_match_arms(Str s, Int pos, List(Str) env, Funcs fs, Str aty, Str ety, Str acc) {
+    Tok a = lex_tok(s, pos);
+    if (a.text == "}") {
+        if (acc == "") {
+            return ERes { pos: a.pos, ty: "", err: "match requires at least one arm" };
+        }
+        return ERes { pos: a.pos, ty: acc, err: "" };
+    }
+    if (a.text == "Some") {
+        Tok o1 = lex_tok(s, a.pos);
+        if (o1.text != "(") { return ERes { pos: o1.pos, ty: "", err: "expected ( in Some arm pattern" }; }
+        Tok nm = lex_tok(s, o1.pos);
+        Tok o2 = lex_tok(s, nm.pos);
+        if (o2.text != ")") { return ERes { pos: o2.pos, ty: "", err: "expected ) after Some binding in match arm" }; }
+        Tok ar = lex_tok(s, o2.pos);
+        if (ar.text != "=>") { return ERes { pos: ar.pos, ty: "", err: "expected => after Some arm pattern" }; }
+        List(Str) env2 = env_add(env, nm.text, ety);
+        ERes body = check_expr(s, ar.pos, env2, fs);
+        if (body.err != "") { return body; }
+        Tok sep = lex_tok(s, body.pos);
+        if (sep.text != "," && sep.text != "}") { return ERes { pos: sep.pos, ty: "", err: "expected , or } after match arm" }; }
+        if (acc != "" && num_norm(acc) != num_norm(body.ty)) {
+            Str msg = "match arms disagree: " + acc + " vs " + body.ty;
+            return ERes { pos: body.pos, ty: "", err: msg };
+        }
+        if (sep.text == "}") { return ERes { pos: sep.pos, ty: body.ty, err: "" }; }
+        return ck_match_arms(s, sep.pos, env, fs, aty, ety, body.ty);
+    }
+    if (a.text == "None") {
+        Tok ar = lex_tok(s, a.pos);
+        if (ar.text != "=>") { return ERes { pos: ar.pos, ty: "", err: "expected => after None arm pattern" }; }
+        ERes body = check_expr(s, ar.pos, env, fs);
+        if (body.err != "") { return body; }
+        Tok sep = lex_tok(s, body.pos);
+        if (sep.text != "," && sep.text != "}") { return ERes { pos: sep.pos, ty: "", err: "expected , or } after match arm" }; }
+        if (acc != "" && num_norm(acc) != num_norm(body.ty)) {
+            Str msg = "match arms disagree: " + acc + " vs " + body.ty;
+            return ERes { pos: body.pos, ty: "", err: msg };
+        }
+        if (sep.text == "}") { return ERes { pos: sep.pos, ty: body.ty, err: "" }; }
+        return ck_match_arms(s, sep.pos, env, fs, aty, ety, body.ty);
+    }
+    Str msg = "match arm pattern must be Some(x) or None";
+    return ERes { pos: a.pos, ty: "", err: msg };
 }
 
 // Full expression check with an expected type for literal adoption.

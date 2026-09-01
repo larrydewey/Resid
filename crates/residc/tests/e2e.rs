@@ -6115,7 +6115,77 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
-/// function; `else` supplies the success-typed fallback.
+/// Consuming Option values via `match` (spec §13) — Some/None arms, payload
+/// binding, arm order independent of variant. Self-hosting parity check.
+#[test]
+fn bootstrap_match_parity() {
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let dir = std::env::temp_dir().join(format!("residc-match-parity-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("match.resid");
+    std::fs::write(
+        &file,
+        r#"Option(Int) maybe() { return Some(3); }
+Option(Int) none() { return None; }
+Int main() {
+    Int a = match maybe() { Some(x) => x, None => 0 };
+    println(IntToString(a));
+    Int b = match none() { None => 7, Some(y) => y };
+    println(IntToString(b));
+    Option(Int) m = maybe();
+    Int c = match m { Some(z) => z + 1, None => -1 };
+    println(IntToString(c));
+    Option(Int) n = None;
+    Int d = match n { Some(w) => w, None => 42 };
+    println(IntToString(d));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    // Stage-1: Rust pipeline.
+    let s1 = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("stage-1 residc run failed");
+    assert_eq!(s1.status.code(), Some(0), "{}", String::from_utf8_lossy(&s1.stderr));
+    let out1 = String::from_utf8_lossy(&s1.stdout).into_owned();
+
+    // Stage-2: self-hosted driver.
+    let bin = dir.join("match_drv");
+    let s2 = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("stage-2 driver run failed");
+    assert_eq!(
+        s2.status.code(),
+        Some(0),
+        "driver failed: {}",
+        String::from_utf8_lossy(&s2.stderr)
+    );
+    let run = Command::new(&bin).output().expect("binary failed");
+    assert_eq!(run.status.code(), Some(0));
+    let out2 = String::from_utf8_lossy(&run.stdout).into_owned();
+
+    // Byte-identical program output across both compilers.
+    assert_eq!(out1, "3\n7\n4\n42\n");
+    assert_eq!(out1, out2, "pipeline divergence:\nstage1={out1:?}\nstage2={out2:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
 #[test]
 fn run_question_sugar_option_and_result() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-q-{}", std::process::id()));
