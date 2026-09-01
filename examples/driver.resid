@@ -1530,6 +1530,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     if (t.text == "if") {
         return cg_ifexpr(s, t.pos, env, fs, c);
     }
+    if (t.text == "match") {
+        return cg_match(s, t.pos, env, fs, c);
+    }
     if (t.kind == "ident") {
         if (t.text == "None") {
             Tok tn = lex_tok(s, t.pos);
@@ -2610,6 +2613,157 @@ GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     return GT { pos: cb2.pos, val: pr, ty: tv.ty, cnt: 0, err: "", glines: ev.glines, lines: d2, tmp: tp, lbl: lb4 };
 }
 
+// "Option(X)" -> "X" (element type of a concrete Option).
+Str opt_elem_cg(Str t) {
+    Str head = "Option(";
+    Int h = str_len(head);
+    if (str_has_prefix_cg(t, head)) {
+        Int n = str_len(t);
+        Int inner_len = n - h - 1;
+        Int hn = h + inner_len;
+        return str_slice(t, h, hn);
+    }
+    return t;
+}
+
+// Unbox a tag-1 Option's single payload slot into a usable SSA register.
+// Scalars call resid_unbox_*; Str/composite payloads pass through as-is.
+GT cg_match_payload(GT sc, Str ety, GT c) {
+    Int t1 = c.tmp + 1;
+    Int t2 = c.tmp + 2;
+    Int t3 = c.tmp + 3;
+    Int t4 = c.tmp + 4;
+    Str p1 = "%t" + IntToString(t1);
+    Str p2 = "%t" + IntToString(t2);
+    Str p3 = "%t" + IntToString(t3);
+    Str p4 = "%t" + IntToString(t4);
+    List(Str) z0 = c.lines;
+    List(Str) z1 = z0.concat([p1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + sc.val + ", i32 0, i32 2"]);
+    List(Str) z2 = z1.concat([p2 + " = load ptr, ptr " + p1]);
+    List(Str) z3 = z2.concat([p3 + " = getelementptr ptr, ptr " + p2 + ", i32 0"]);
+    List(Str) z4 = z3.concat([p4 + " = load ptr, ptr " + p3]);
+    Str typ = num_norm_cg(ety);
+    if (typ == "Int" || typ == "Int(64)") {
+        Int t5 = c.tmp + 5;
+        Str p5 = "%t" + IntToString(t5);
+        List(Str) z5 = z4.concat([p5 + " = call i64 @resid_unbox_i64(ptr " + p4 + ")"]);
+        return GT { pos: sc.pos, val: p5, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z5, tmp: t5, lbl: c.lbl };
+    }
+    if (typ == "Float" || typ == "Float(64)") {
+        Int t5 = c.tmp + 5;
+        Str p5 = "%t" + IntToString(t5);
+        List(Str) z5 = z4.concat([p5 + " = call double @resid_unbox_f64(ptr " + p4 + ")"]);
+        return GT { pos: sc.pos, val: p5, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z5, tmp: t5, lbl: c.lbl };
+    }
+    if (ety == "Bool") {
+        Int t5 = c.tmp + 5;
+        Int t6 = c.tmp + 6;
+        Str p5 = "%t" + IntToString(t5);
+        Str p6 = "%t" + IntToString(t6);
+        List(Str) z5 = z4.concat([p5 + " = call i8 @resid_unbox_bool(ptr " + p4 + ")"]);
+        List(Str) z6 = z5.concat([p6 + " = icmp ne i8 " + p5 + ", 0"]);
+        return GT { pos: sc.pos, val: p6, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z6, tmp: t6, lbl: c.lbl };
+    }
+    return GT { pos: sc.pos, val: p4, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z4, tmp: t4, lbl: c.lbl };
+}
+
+// Emit one match arm body into its label. Some binds the payload by name.
+GT cg_match_arm(Str s, Int pos, List(Str) env, Funcs fs, GT sc, Str ety, GT c, Str lab, Str labm) {
+    Tok a = lex_tok(s, pos);
+    if (a.text == "Some") {
+        Tok o1 = lex_tok(s, a.pos);
+        if (o1.text != "(") { return gt_err("expected ( in Some arm pattern", c); }
+        Tok nm = lex_tok(s, o1.pos);
+        Tok o2 = lex_tok(s, nm.pos);
+        if (o2.text != ")") { return gt_err("expected ) after Some binding in match arm", c); }
+        Tok ar = lex_tok(s, o2.pos);
+        if (ar.text != "=>") { return gt_err("expected => after Some arm pattern", c); }
+        List(Str) l0 = c.lines;
+        List(Str) l1 = l0.concat([lab + ":"]);
+        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl };
+        GT pv = cg_match_payload(sc, ety, c1);
+        if (pv.err != "") { return pv; }
+        List(Str) env2 = env_add(env, nm.text + ":" + pv.val + ":" + ety);
+        GT body = cg_expr(s, ar.pos, env2, fs, pv);
+        if (body.err != "") { return body; }
+        List(Str) x0 = body.lines;
+        List(Str) x1 = x0.concat(["br label %" + labm]);
+        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl };
+    }
+    if (a.text == "None") {
+        Tok ar = lex_tok(s, a.pos);
+        if (ar.text != "=>") { return gt_err("expected => after None arm pattern", c); }
+        List(Str) l0 = c.lines;
+        List(Str) l1 = l0.concat([lab + ":"]);
+        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl };
+        GT body = cg_expr(s, ar.pos, env, fs, c1);
+        if (body.err != "") { return body; }
+        List(Str) x0 = body.lines;
+        List(Str) x1 = x0.concat(["br label %" + labm]);
+        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl };
+    }
+    Str msg = "match arm pattern must be Some(x) or None";
+    return gt_err(msg, c);
+}
+
+// match expression over Option values (spec §13). Dispatch on the variant
+// tag; the first arm's pattern decides which physical branch carries it.
+GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
+    GT sc = cg_expr(s, pos, env, fs, c);
+    if (sc.err != "") { return sc; }
+    if (!(str_has_prefix_cg(sc.ty, "Option(") || sc.ty == "Option(_)")) {
+        return gt_err("match scrutinee must be an Option, got " + sc.ty, sc);
+    }
+    Tok brace = lex_tok(s, sc.pos);
+    if (brace.text != "{") { return gt_err("expected { in match expression", sc); }
+    Str ety = opt_elem_cg(sc.ty);
+    Int l1 = sc.lbl + 1;
+    Int l2 = sc.lbl + 2;
+    Int lm = sc.lbl + 3;
+    Str laba = "L" + IntToString(l1);
+    Str labb = "L" + IntToString(l2);
+    Str labm = "L" + IntToString(lm);
+    Int t1 = sc.tmp + 1;
+    Int t2 = sc.tmp + 2;
+    Int t3 = sc.tmp + 3;
+    Str g1 = "%t" + IntToString(t1);
+    Str g2 = "%t" + IntToString(t2);
+    Str g3 = "%t" + IntToString(t3);
+    List(Str) q0 = sc.lines;
+    List(Str) q1 = q0.concat([g1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + sc.val + ", i32 0, i32 0"]);
+    List(Str) q2 = q1.concat([g2 + " = load i64, ptr " + g1]);
+    List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", 1"]);
+    Tok a1 = lex_tok(s, brace.pos);
+    Bool first_some = a1.text == "Some";
+    Str brl = if (first_some) {
+        "br i1 " + g3 + ", label %" + laba + ", label %" + labb
+    } else {
+        "br i1 " + g3 + ", label %" + labb + ", label %" + laba
+    };
+    List(Str) q4 = q3.concat([brl]);
+    GT qc = GT { pos: brace.pos, val: "", ty: "", cnt: 0, err: "", glines: sc.glines, lines: q4, tmp: t3, lbl: lm };
+    GT arm1 = cg_match_arm(s, brace.pos, env, fs, sc, ety, qc, laba, labm);
+    if (arm1.err != "") { return arm1; }
+    Tok sep1 = lex_tok(s, arm1.pos);
+    if (sep1.text != ",") {
+        if (sep1.text == "}") { return gt_err("match needs both Some and None arms", arm1); }
+        return gt_err("expected , between match arms", arm1);
+    }
+    GT arm2c = GT { pos: sep1.pos, val: "", ty: "", cnt: 0, err: "", glines: arm1.glines, lines: arm1.lines, tmp: arm1.tmp, lbl: arm1.lbl };
+    GT arm2 = cg_match_arm(s, sep1.pos, env, fs, sc, ety, arm2c, labb, labm);
+    if (arm2.err != "") { return arm2; }
+    Tok sep2 = lex_tok(s, arm2.pos);
+    if (sep2.text != "}") { return gt_err("expected } at end of match", arm2); }
+    if (num_norm_cg(arm1.ty) != num_norm_cg(arm2.ty)) { return gt_err("match arms disagree", arm2); }
+    Int tp = arm2.tmp + 1;
+    Str pr = "%t" + IntToString(tp);
+    Str phi = pr + " = phi " + ll_ty(num_norm_cg(arm1.ty)) + " [ " + arm1.val + ", %" + laba + " ], [ " + arm2.val + ", %" + labb + " ]";
+    List(Str) d0 = arm2.lines;
+    List(Str) d1 = d0.concat([labm + ":"]);
+    List(Str) d2 = d1.concat([phi]);
+    return GT { pos: sep2.pos, val: pr, ty: arm1.ty, cnt: 0, err: "", glines: arm2.glines, lines: d2, tmp: tp, lbl: arm2.lbl };
+}
+
 GT fst_emit_global(Str body, Int pos, GT c) {
     Int t1 = c.tmp + 1;
     Str nm = "@.s" + IntToString(t1);
@@ -2831,7 +2985,12 @@ ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
     GT v2 = cv;
     Str recty = pick_str(adopt, dn, v.ty);
     Str ent2 = name + ":" + v2.val + ":" + recty;
-    List(Str) env3 = env_add(env, ent2);
+    // A bare None's element-type hole adopts the declared Option(T) type
+    // from the binding (mirrors check_bind).
+    Bool opt_hole = v.ty == "Option(_)";
+    Bool opt_expected = str_has_prefix_cg(dty, "Option(");
+    Str ent2f = pick_str(opt_hole && opt_expected, name + ":" + v2.val + ":" + dty, ent2);
+    List(Str) env3 = env_add(env, ent2f);
     return ST { pos: semi.pos, dead: g.dead, err: "", env: env3, glines: v2.glines, hlines: g.hlines, lines: v2.lines, tmp: v2.tmp, lbl: v2.lbl, rety: g.rety };
 }
 
@@ -3724,6 +3883,19 @@ Str inner_of(Str t) {
 
 Bool is_list_type(Str t) {
     return str_has_prefix(t, "List(");
+}
+
+// "Option(X)" -> "X" (element type of a concrete Option).
+Str opt_elem(Str t) {
+    Str head = "Option(";
+    Int h = str_len(head);
+    if (str_has_prefix(t, head)) {
+        Int n = str_len(t);
+        Int inner_len = n - h - 1;
+        Int hn = h + inner_len;
+        return str_slice(t, h, hn);
+    }
+    return t;
 }
 
 // Map/Set type predicates and accessor helpers.
@@ -4621,6 +4793,9 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
         Tok close2 = lex_tok(s, else_e.pos);
         return ERes { pos: close2.pos, ty: then_e.ty, err: "" };
     }
+    if (t.text == "match") {
+        return check_match(s, t.pos, env, fs);
+    }
     if (t.kind == "ident") {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "(") {
@@ -4916,6 +5091,103 @@ SRes check_for(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
     SRes body = check_stmt(s, close.pos, env2, fs, ret);
     if (body.err != "") { return body; }
     return SRes { pos: body.pos, err: "", env: env };
+}
+
+// match expression over Option values (spec §13): `match v {
+//   Some(x) => e1, None => e2 }` — arms all share one result type.
+ERes check_match(Str s, Int pos, List(Str) env, Sigs fs) {
+    ERes sc = check_match_sc(s, pos, env, fs);
+    if (sc.err != "") { return sc; }
+    Bool optsc = sc.ty == "Option(_)" || str_has_prefix(sc.ty, "Option(");
+    if (!optsc) {
+        Str msg = "match scrutinee must be an Option, got " + sc.ty;
+        return ERes { pos: sc.pos, ty: "", err: msg };
+    }
+    Tok brace = lex_tok(s, sc.pos);
+    if (brace.text != "{") {
+        return ERes { pos: brace.pos, ty: "", err: "expected { in match expression" };
+    }
+    return ck_match_arms(s, brace.pos, env, fs, sc.ty, opt_elem(sc.ty), "");
+}
+
+// Primary-only scrutinee: `ident {` is a struct literal in the ordinary
+// expression grammar, so a full check_expr would swallow the match brace.
+// Mirror the parser's scrutinee handling: parse one primary and stop.
+ERes check_match_sc(Str s, Int pos, List(Str) env, Sigs fs) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "(") {
+        ERes e = check_expr(s, t.pos, env, fs);
+        if (e.err != "") { return e; }
+        Tok close = lex_tok(s, e.pos);
+        if (close.text != ")") { return ERes { pos: close.pos, ty: "", err: "expected ) in match scrutinee" }; }
+        return ERes { pos: close.pos, ty: e.ty, err: "" };
+    }
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.text == "(") {
+            return check_call(s, t2.pos, t.text, env, fs);
+        }
+        if (t.text == "None") {
+            return ERes { pos: t.pos, ty: "Option(_)", err: "" };
+        }
+        Str ty = ck_env_lookup(env, t.text);
+        if (ty == "") { return ERes { pos: t.pos, ty: "", err: "undefined variable " + t.text }; }
+        return ERes { pos: t.pos, ty: ty, err: "" };
+    }
+    if (t.text == "true" || t.text == "false") { return ERes { pos: t.pos, ty: "Bool", err: "" }; }
+    if (t.kind == "int") { return ERes { pos: t.pos, ty: "Int", err: "" }; }
+    if (t.kind == "float") { return ERes { pos: t.pos, ty: "Float", err: "" }; }
+    if (t.kind == "str" || t.kind == "raw" || t.kind == "fstring" || t.kind == "char") { return ERes { pos: t.pos, ty: "Str", err: "" }; }
+    Str msg = "match scrutinee must be a primary expression";
+    return ERes { pos: t.pos, ty: "", err: msg };
+}
+
+// Recursive match-arm walker; acc holds the merge type of bodies seen so far
+// ("" until the first arm resolves it).
+ERes ck_match_arms(Str s, Int pos, List(Str) env, Sigs fs, Str aty, Str ety, Str acc) {
+    Tok a = lex_tok(s, pos);
+    if (a.text == "}") {
+        if (acc == "") {
+            return ERes { pos: a.pos, ty: "", err: "match requires at least one arm" };
+        }
+        return ERes { pos: a.pos, ty: acc, err: "" };
+    }
+    if (a.text == "Some") {
+        Tok o1 = lex_tok(s, a.pos);
+        if (o1.text != "(") { return ERes { pos: o1.pos, ty: "", err: "expected ( in Some arm pattern" }; }
+        Tok nm = lex_tok(s, o1.pos);
+        Tok o2 = lex_tok(s, nm.pos);
+        if (o2.text != ")") { return ERes { pos: o2.pos, ty: "", err: "expected ) after Some binding in match arm" }; }
+        Tok ar = lex_tok(s, o2.pos);
+        if (ar.text != "=>") { return ERes { pos: ar.pos, ty: "", err: "expected => after Some arm pattern" }; }
+        List(Str) env2 = ck_env_add(env, nm.text, ety);
+        ERes body = check_expr(s, ar.pos, env2, fs);
+        if (body.err != "") { return body; }
+        Tok sep = lex_tok(s, body.pos);
+        if (sep.text != "," && sep.text != "}") { return ERes { pos: sep.pos, ty: "", err: "expected , or } after match arm" }; }
+        if (acc != "" && num_norm(acc) != num_norm(body.ty)) {
+            Str msg = "match arms disagree: " + acc + " vs " + body.ty;
+            return ERes { pos: body.pos, ty: "", err: msg };
+        }
+        if (sep.text == "}") { return ERes { pos: sep.pos, ty: body.ty, err: "" }; }
+        return ck_match_arms(s, sep.pos, env, fs, aty, ety, body.ty);
+    }
+    if (a.text == "None") {
+        Tok ar = lex_tok(s, a.pos);
+        if (ar.text != "=>") { return ERes { pos: ar.pos, ty: "", err: "expected => after None arm pattern" }; }
+        ERes body = check_expr(s, ar.pos, env, fs);
+        if (body.err != "") { return body; }
+        Tok sep = lex_tok(s, body.pos);
+        if (sep.text != "," && sep.text != "}") { return ERes { pos: sep.pos, ty: "", err: "expected , or } after match arm" }; }
+        if (acc != "" && num_norm(acc) != num_norm(body.ty)) {
+            Str msg = "match arms disagree: " + acc + " vs " + body.ty;
+            return ERes { pos: body.pos, ty: "", err: msg };
+        }
+        if (sep.text == "}") { return ERes { pos: sep.pos, ty: body.ty, err: "" }; }
+        return ck_match_arms(s, sep.pos, env, fs, aty, ety, body.ty);
+    }
+    Str msg = "match arm pattern must be Some(x) or None";
+    return ERes { pos: a.pos, ty: "", err: msg };
 }
 
 // Full expression check with an expected type for literal adoption.
@@ -5423,7 +5695,7 @@ Int main() {
     Int tc = ck_check_program(src, 0, sg);
     if (tc != 0) { return tc; }
     Funcs fs = collect_sigs(src);
-        List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare i64 @resid_crypto_random_byte()", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @bl_sort_i64(ptr)", "declare ptr @bl_sort_str(ptr)", "declare ptr @bl_sort_f64(ptr)", "declare ptr @bl_reverse_i64(ptr)", "declare ptr @bl_reverse_str(ptr)", "declare ptr @bl_reverse_f64(ptr)", "declare i8 @bl_contains_i64(ptr, i64)", "declare i8 @bl_contains_str(ptr, ptr)", "declare i8 @bl_contains_f64(ptr, double)", "declare i64 @bl_sum(ptr)", "declare double @bl_sumf(ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @bl_sort_by(ptr, ptr)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @resid_rt_list_to_flat(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)", "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", rt_itoa_def(), rt_lconcat_def()];
+        List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare i64 @resid_crypto_random_byte()", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @bl_sort_i64(ptr)", "declare ptr @bl_sort_str(ptr)", "declare ptr @bl_sort_f64(ptr)", "declare ptr @bl_reverse_i64(ptr)", "declare ptr @bl_reverse_str(ptr)", "declare ptr @bl_reverse_f64(ptr)", "declare i8 @bl_contains_i64(ptr, i64)", "declare i8 @bl_contains_str(ptr, ptr)", "declare i8 @bl_contains_f64(ptr, double)", "declare i64 @bl_sum(ptr)", "declare double @bl_sumf(ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @bl_sort_by(ptr, ptr)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @resid_rt_list_to_flat(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)", "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", rt_itoa_def(), rt_lconcat_def()];
     List(Str) header = header_with_cmps(hdr_core, fs);
     PG g0 = PG { pos: 0, err: "", glines: [], hlines: [], lines: header, tmp: 0, lbl: 0 };
     PG res = pg_next(src, 0, fs, g0);
@@ -5447,6 +5719,13 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
+
+
+
+
+
+
 
 
 

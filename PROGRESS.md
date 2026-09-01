@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**727 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
+**728 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 100 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + 101 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
@@ -21,7 +21,7 @@
 `bootstrap_map_set_parity`, `run_constraint_types`,
 `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`,
 `run_sandbox_handle_entry_file_param`, `run_sandbox_capability_mode_readonly`,
-`bootstrap_option_sum_parity`).
+`bootstrap_option_sum_parity`, `bootstrap_match_parity`).
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
@@ -32,6 +32,16 @@ Option sum-type constructors now work in stage-2 driver: `Some(v)`/`None`
 lower to the same `resid_box_new` tag-1/tag-2 boxes as stage-1, with
 `None`/`Option(_)` bottom typing adopted at return/bind sites and
 `ToString` support for Option values (e2e `bootstrap_option_sum_parity`).
+
+`match` on Option values works in the stage-2 driver: typechecker
+(`check_match`/`check_match_sc`/`ck_match_arms`) and codegen
+(`cg_match` with tag-dispatch branches, payload GEP/unbox + phi) — arm
+order independent of variant, payload binding is scoped, all arms share
+one result type (numeric-normalized), and a bare `None` binding adopts
+its declared `Option(T)` element width. The scrutinee is parsed as a
+primary so `expr { ... }` isn't misread as a struct/map literal, and the
+codegen bind keeps the declared type for `Option(x)` hollow values
+(e2e `bootstrap_match_parity`).
 
 Constraint types (§12) are stage-1 implemented: both `Int[value > 0]` and
 `Int where value > 0` parse and discharge on annotated bindings.
@@ -639,9 +649,9 @@ pipelines for struct sort, Int sort, and Reverse):
   length-first layout — added `resid_rt_list_to_flat`, which reboxes lists
   returned by `resid_map_keys/values` and `resid_set_to_list` at the boundary.
   Empty `{}` literals are rejected by both pipelines (element type
-  un-inferable). `m.get`/`m[k]` (Option results) still need `match`/`unwrap`
-  support in the driver (item 9, `?`-sugar groundwork) — plan is to
-  backport driver Option support after sum types land.
+  un-inferable). `m.get`/`m[k]` (Option results) can now be consumed in the
+  driver via `match` once Option support landed (item 9, `?`-sugar
+  groundwork); next candidates are `?`-sugar and `if let` in the driver.
 
 ### Progress on item 1 — generic numeric behaviors & Serialize/Allocator (stage-1 DONE)
 
