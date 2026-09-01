@@ -6394,6 +6394,53 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
+fn run_sandbox_capability_mode_readonly() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sandbox-mode-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let data = dir.join("data.txt");
+    std::fs::write(&data, "hello").unwrap();
+
+    // Legal: a read-only filesystem grant permits reads (read_all) and
+    // compiles + runs end to end.
+    let ok = dir.join("ok.resid");
+    std::fs::write(
+        &ok,
+        r#"sandbox (filesystem(readonly)) {
+    Int read_demo() {
+        Str d = filesystem.read_all("data.txt");
+        return str_len(d);
+    }
+}
+Int main() { println(IntToString(read_demo())); return 0; }"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&ok).arg("run").current_dir(&dir).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "5");
+
+    // Illegal: a read-only filesystem grant may NOT permit a write verb
+    // (filesystem.write_all) — rejected at compile time (spec §21/§20).
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"sandbox (filesystem(readonly)) {
+    Int write_demo() {
+        Bool ok = filesystem.write_all("data.txt", "hello");
+        return 0;
+    }
+}
+Int main() { write_demo(); return 0; }"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&bad).arg("emit-ir").current_dir(&dir).output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "write under readonly grant must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("write operation"), "error should mention write operation: {err}");
+    assert!(err.contains("read-only"), "error should mention read-only grant: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+#[test]
 fn run_generic_numeric_behaviors() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-genbeh-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

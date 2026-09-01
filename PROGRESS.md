@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**722 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 233,
+**726 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 98 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + 99 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
@@ -20,7 +20,7 @@
 `run_sandbox_enforcement`, `run_map_set_types`,
 `bootstrap_map_set_parity`, `run_constraint_types`,
 `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`,
-`run_sandbox_handle_entry_file_param`).
+`run_sandbox_handle_entry_file_param`, `run_sandbox_capability_mode_readonly`).
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
@@ -384,12 +384,15 @@ item is DONE only when it ships in **both** pipelines (see policy).
 dynamic/residual capability errors (runtime force-time checking not
 implemented); handle-entry rules (acquisition enforced via
 provider-family checks; File method provenance `read_handle`/`close`
- tracked in restricted regions; value provenance for handles passed as
- values across function boundaries — File **parameters** enforced via the
- §21.3 entry rule (a handle may only enter a restricted function whose
- ceiling grants `filesystem`, e2e `run_sandbox_handle_entry_file_param`);
- §21.4 knowledge-cache capability gating (deferred: no CBOR store in build
- path).
+tracked in restricted regions; value provenance for handles passed as
+values across function boundaries — File **parameters** enforced via the
+§21.3 entry rule (a handle may only enter a restricted function whose
+ceiling grants `filesystem`, e2e `run_sandbox_handle_entry_file_param`));
+**capability modes (spec §21)** — `filesystem(readonly)` now enforced:
+a read-only grant rejects write verbs (`filesystem.write_all`) at the call
+site, surviving the transitive-attenuation closure (e2e
+`run_sandbox_capability_mode_readonly`); §21.4 knowledge-cache capability
+gating (deferred: no CBOR store in build path).
 2. §12 Constraint types — ✅ DONE (stage-1): both syntaxes (`Int[value > 0]`
     and `Int where value > 0`) parse, resolve to a `Refined` semantic type,
     and are discharged on annotated bindings (statically-known integer
@@ -695,4 +698,30 @@ for File methods `read_handle`/`close` in restricted regions implemented;
 File **parameters** crossing the boundary enforced via the §21.3 entry rule
 — e2e `run_sandbox_handle_entry_file_param` — but File values passed as
 inline call arguments into restricted callees not yet tracked);
-§21.4 knowledge-cache gating (deferred).
+§21.4 knowledge-cache gating (deferred); capability modes narrowed to the
+`readonly` marker with `filesystem.write_all` as the sole classified write
+verb — a fuller mode lattice (readwrite, per-verb modes, `git(readonly)`
+scope) is future work.
+
+### Progress on capability modes (spec §21) — readonly mode enforced
+
+- Capability strings now carry an optional `:ro` mode marker
+  (`encode_capability`); `sandbox (filesystem(readonly))` and
+  `@requires`-style ceilings preserve the marker through
+  `effective_declared_ceiling`, the transitive-attenuation meet
+  (`meet_caps` is mode-aware: RO meets RW = RO), and every family
+  membership comparison (spawn ≤ parent, call `@requires`, provider calls,
+  File method / handle-entry `filesystem` checks).
+- **Write-verb enforcement**: at a provider call, `is_write_verb` (currently
+  `filesystem.write_all`) requires a read-write grant; a region holding only
+  `filesystem:ro` is rejected with a mode-specific diagnostic. Read verbs
+  (`read_all`, `read_handle`, `list_dir`, `exists`) remain allowed under the
+  read-only grant.
+- The readonly grant **cannot be amplified**: a helper reached only from a
+  read-only sandbox is narrowed to `filesystem:ro` by the closure rule, so a
+  `write_all` in the (unrestricted) helper is rejected too.
+- Tests: resid-type +4 (readonly rejects write / readwrite allows write /
+  readonly allows read / snapshot of the closure narrowing), residc e2e +1
+  (`run_sandbox_capability_mode_readonly`: legal read-only `run` + illegal
+  write `emit-ir` rejection).
+
