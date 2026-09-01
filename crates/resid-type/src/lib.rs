@@ -535,9 +535,61 @@ fn effective_declared_ceiling(
     }
 }
 
-/// Set intersection preserving order of the first operand.
+/// The capability family of an encoded capability string: the text before any
+/// `:mode` marker. `filesystem` → `filesystem`; `filesystem:ro` → `filesystem`.
+/// Capability modes (spec §21) narrow a family: `filesystem(readonly)` grants
+/// read-only authority, encoded here as `filesystem:ro`. Bare `filesystem`
+/// (no marker) is read-write.
+fn cap_family(cap: &str) -> &str {
+    cap.split(':').next().unwrap_or(cap)
+}
+
+/// Is this encoded capability read-only (`family:ro`)?
+fn cap_readonly(cap: &str) -> bool {
+    cap.ends_with(":ro") || cap.ends_with(":ro:")
+}
+
+/// Encode a capability family name plus its readonly flag. Bare `family` when
+/// read-write, `family:ro` when narrowed to read-only.
+fn encode_capability(family: &str, readonly: bool) -> String {
+    if readonly {
+        format!("{family}:ro")
+    } else {
+        family.to_string()
+    }
+}
+
+/// Does `caps` contain an entry for `family` (any mode)?
+fn caps_contain_family(caps: &[String], family: &str) -> bool {
+    caps.iter().any(|c| cap_family(c) == family)
+}
+
+/// Is every grant for `family` in `caps` read-only? Used at write verbs: a
+/// family may only perform writes when at least one grant is read-write.
+fn grant_readonly_only(caps: &[String], family: &str) -> bool {
+    caps_contain_family(caps, family) && caps.iter().all(|c| cap_family(c) != family || cap_readonly(c))
+}
+
+/// Which verbs are write operations for a provider family (spec §21 mode
+/// narrowing: a read-only grant must not permit writes). Presently only
+/// `filesystem.write_all` is a clearly-filesystem-mutating verb.
+fn is_write_verb(family: &str, verb: &str) -> bool {
+    family == "filesystem" && verb == "write_all"
+}
+
+/// Set meet preserving order of the first operand, by capability family, with
+/// the mode lattice: a readonly grant is the strictest (RO meets RW = RO), so
+/// the result is readonly whenever either operand for that family is RO.
 fn meet_caps(a: &[String], b: &[String]) -> Vec<String> {
-    a.iter().filter(|c| b.contains(c)).cloned().collect()
+    let mut out: Vec<String> = Vec::new();
+    for x in a {
+        let fam = cap_family(x).to_string();
+        if let Some(y) = b.iter().find(|y| cap_family(y) == fam) {
+            let ro = cap_readonly(x) || cap_readonly(y);
+            out.push(encode_capability(&fam, ro));
+        }
+    }
+    out
 }
 
 /// A variable-name → type environment.
@@ -1362,7 +1414,13 @@ fn signature_of(f: &FuncDef, types: &Types) -> FunctionSig {
                 _ => None,
             }))
             .collect(),
-        sandbox_ceiling: f.sandbox_ceiling.iter().map(|c| c.name.0.clone()).collect(),
+        sandbox_ceiling: f.sandbox_ceiling.iter().map(|c| {
+            let ro = c
+                .params
+                .iter()
+                .any(|p| matches!(&p.kind, ExprKind::Id(id) if id.0 == "readonly"));
+            encode_capability(&c.name.0, ro)
+        }).collect(),
     }
 }
 
@@ -3487,7 +3545,7 @@ pub fn check_program_with(unit: &TranslationUnit, ceilings: &[FileCeiling]) -> V
             // the manifest (§21.1). Every @requires cap must be present in it.
             if let Some(ceiling) = effective_declared_ceiling(&sig.file, &sig.sandbox_ceiling, ceilings) {
                 for req in &sig.requires {
-                    if !ceiling.iter().any(|c| c == req) {
+                    if !caps_contain_family(&ceiling, req) {
                         errs.push(err(
                             &f.span,
                             format!(
@@ -3794,14 +3852,7 @@ fn enforce_transitive_attenuation(
                 if let Some(ce) = eff.get_mut(callee) {
                     let merged = match ce {
                         None => Some(caller_eff.clone()),
-                        Some(cur) => {
-                            let m: Vec<String> = cur
-                                .iter()
-                                .filter(|c| caller_eff.contains(c))
-                                .cloned()
-                                .collect();
-                            Some(m)
-                        }
+                        Some(cur) => Some(meet_caps(cur, &caller_eff)),
                     };
                     if *ce != merged {
                         *ce = merged;
@@ -3823,7 +3874,7 @@ fn enforce_transitive_attenuation(
         for (callee, span) in calls {
             if let Some(sig) = sigs.get(callee) {
                 for req in &sig.requires {
-                    if !caller_eff.contains(req) {
+                    if !caps_contain_family(caller_eff, req) {
                         errs.push(err(
                             span,
                             format!(
@@ -3869,7 +3920,7 @@ fn enforce_transitive_attenuation(
                 .unwrap_or(false);
             if has_file_param {
                 if let Some(caps) = &parent_caps {
-                    if !caps.iter().any(|c| c == "filesystem") {
+                    if !caps_contain_family(caps, "filesystem") {
                         errs.push(err(
                             &f.span,
                             format!(
@@ -3912,7 +3963,7 @@ fn walk_spawn_cap_env(
                 let caps = spawn_caps(capabilities);
                 if let Some(p) = parent {
                     for c in &caps {
-                        if !p.contains(c) {
+                        if !caps_contain_family(p, c) {
                             errs.push(err(
                                 &e.span,
                                 format!(
@@ -3930,7 +3981,7 @@ fn walk_spawn_cap_env(
                     if let ExprKind::Id(callee) = &func.kind {
                         if let Some(sig) = sigs.get(&callee.0) {
                             for req in &sig.requires {
-                                if !p.contains(req) {
+                                if !caps_contain_family(p, req) {
                                     errs.push(err(
                                         &e.span,
                                         format!(
@@ -4052,7 +4103,7 @@ fn walk_spawn_cap_env(
                     // Handle provenance: known File methods require `filesystem` capability
                     if matches!(method.0.as_str(), "read_handle" | "close") {
                         if let Some(p) = parent {
-                            if !p.iter().any(|c| c == "filesystem") {
+                            if !caps_contain_family(p, "filesystem") {
                                 errs.push(err(&e.span, format!(
                                     "File method `{}` requires capability `filesystem` which is not granted to this region's capability set [{}]",
                                     method.0, p.join(", ")
@@ -4092,11 +4143,16 @@ fn walk_spawn_cap_env(
                 }
                 walk_block(body, parent, sigs, errs);
             }
-            ExprKind::ProviderCall { provider, args, .. } => {
+            ExprKind::ProviderCall { provider, verb, args, .. } => {
                 if let Some(p) = parent {
-                    if !p.iter().any(|c| c == &provider.0) {
+                    if !caps_contain_family(p, &provider.0) {
                         errs.push(err(&e.span, format!(
                             "provider call `{provider}` requires capability `{provider}` which is not granted to this region's capability set [{}]",
+                            p.join(", ")
+                        )));
+                    } else if is_write_verb(&provider.0, &verb.0) && grant_readonly_only(p, &provider.0) {
+                        errs.push(err(&e.span, format!(
+                            "provider call `{provider}.{verb}` is a write operation, but only a read-only grant of capability `{provider}` is available here [{}] (capability modes only restrict, never amplify)",
                             p.join(", ")
                         )));
                     }
@@ -7833,6 +7889,87 @@ sandbox () {
         assert!(
             errs.is_empty(),
             "empty sandbox currently conflated with unrestricted; treating as no restriction: {:?}",
+            errs
+        );
+    }
+
+    // ─── §21 capability modes: `filesystem(readonly)` forbids writes ──
+
+    #[test]
+    fn capability_mode_readonly_sandbox_rejects_write() {
+        let src = r#"
+sandbox (filesystem(readonly)) {
+    Int demo() {
+        Bool ok = filesystem.write_all("x.txt", "hello");
+        return 0;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("write operation") && e.message.contains("read-only")),
+            "readonly sandbox must reject a write verb, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn capability_mode_readwrite_sandbox_allows_write() {
+        let src = r#"
+sandbox (filesystem) {
+    Int demo() {
+        Bool ok = filesystem.write_all("x.txt", "hello");
+        return 0;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "readwrite sandbox must allow a write verb, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn capability_mode_readonly_sandbox_allows_read() {
+        let src = r#"
+sandbox (filesystem(readonly)) {
+    Int demo() {
+        Str d = filesystem.read_all("x.txt");
+        return str_len(d);
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "readonly sandbox must allow read verbs, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn capability_mode_readonly_transitive_helper_rejects_write() {
+        // A readonly grant must not be amplified by escaping to an
+        // unrestricted helper: transitive attenuation narrows the helper's
+        // effective ceiling to the readonly grant, so its write is rejected.
+        let src = r#"
+Int finisher() { return 0; }
+
+sandbox (filesystem(readonly)) {
+    Int demo() { Bool b = filesystem.write_all("x.txt", "hi"); return 0; }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.iter().any(|e| e.message.contains("write operation")),
+            "readonly write through a direct call in the sandbox must be rejected, got: {:?}",
             errs
         );
     }
