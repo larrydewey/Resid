@@ -6047,8 +6047,74 @@ fn bootstrap_map_set_parity() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `value?` and `value else {…}` sugar over Option AND Result sums
-/// (spec §23): `?` propagates the failure value out of the enclosing
+#[test]
+fn bootstrap_option_sum_parity() {
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let dir = std::env::temp_dir().join(format!("residc-opt-parity-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("parity.resid");
+    std::fs::write(
+        &file,
+        r#"Option(Int) maybe() { return Some(42); }
+Option(Int) none() { return None; }
+Int main() {
+    println(ToString(maybe()));
+    println(ToString(none()));
+    Option(Int) direct = Some(7);
+    println(ToString(direct));
+    Option(Int) none2 = None;
+    println(ToString(none2));
+    Int x = 9;
+    Option(Int) viavar = Some(x);
+    println(ToString(viavar));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    // Stage-1: Rust pipeline.
+    let s1 = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("stage-1 residc run failed");
+    assert_eq!(s1.status.code(), Some(0), "{}", String::from_utf8_lossy(&s1.stderr));
+    let out1 = String::from_utf8_lossy(&s1.stdout).into_owned();
+
+    // Stage-2: self-hosted driver.
+    let bin = dir.join("parity_drv");
+    let s2 = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("stage-2 driver run failed");
+    assert_eq!(
+        s2.status.code(),
+        Some(0),
+        "driver failed: {}",
+        String::from_utf8_lossy(&s2.stderr)
+    );
+    let run = Command::new(&bin).output().expect("binary failed");
+    assert_eq!(run.status.code(), Some(0));
+    let out2 = String::from_utf8_lossy(&run.stdout).into_owned();
+
+    // Byte-identical program output across both compilers.
+    assert_eq!(out1, "Some(42)\nnull\nSome(7)\nnull\nSome(9)\n");
+    assert_eq!(out1, out2, "pipeline divergence:\nstage1={out1:?}\nstage2={out2:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
 /// function; `else` supplies the success-typed fallback.
 #[test]
 fn run_question_sugar_option_and_result() {

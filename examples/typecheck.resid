@@ -1315,6 +1315,21 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos) {
         if (argtys == "Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
         return ERes { pos: pos, ty: "", err: name + " expects (Int, Int), got (" + argtys + ")" };
     }
+    // ── Option constructors (spec §10) ─────────────────────────────
+    // `Some(v)` carries its payload type: `Some(42)` -> Option(Int).
+    if (name == "Some") {
+        if (argc == 1) { return ERes { pos: pos, ty: "Option(" + argtys + ")", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "Some expects 1 argument" };
+    }
+    if (name == "None") {
+        if (argc == 0) {
+            // A bare None has no payload to pin the element type; the
+            // expected Option(T) type is threaded by the caller (binding,
+            // return, or match scrutinee). Without it, this is ambiguous.
+            return ERes { pos: pos, ty: "Option(_)", err: "" };
+        }
+        return ERes { pos: pos, ty: "", err: "None expects no arguments" };
+    }
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
 
@@ -1898,6 +1913,11 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         if (t2.text == "{") {
             return check_struct_lit(s, t2.pos, t.text, env, fs);
         }
+        // Bare `None` (no parens): a unit Option variant with no payload.
+        // The element type is a hole adopted at binding/return/match sites.
+        if (t.text == "None" && t2.text != ".") {
+            return ERes { pos: t.pos, ty: "Option(_)", err: "" };
+        }
         if (t2.text == ".") {
             Bool is_prov0 = t.text == "environment" || t.text == "filesystem" || t.text == "args" || t.text == "process";
             Str shadow = env_lookup(env, t.text);
@@ -2198,13 +2218,18 @@ SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Funcs fs, Str r
         Bool vempty = v.ty == "List(Unknown)";
         Bool listty = str_has_prefix(ty, "List(");
         Bool coerce = vempty && listty;
+        // Option(Int) nx = None; — a bare None's element-type hole adopts
+        // the declared Option(T) type from the binding.
+        Bool opt_hole = v.ty == "Option(_)";
+        Bool opt_expected = str_has_prefix(ty, "Option(");
+        Bool opt_ok = opt_hole && opt_expected;
         // Spec v3.2 §6.1a/§6.4: integer literal adoption + implicit
         // value-preserving widening at bindings.
         Bool intpair = is_int_ty(ty) && is_int_ty(v.ty);
         Tok first_tok = lex_tok(s, pos);
         Bool iok = int_adopt_ok(v.ty, ty, first_tok.text);
         Bool bind_ok = if (intpair) { iok } else { false };
-        if (!coerce && !bind_ok) {
+        if (!coerce && !bind_ok && !opt_ok) {
             Str msg = "binding " + name + ": expected " + ty + ", got " + v.ty;
             return SRes { pos: v.pos, err: msg, env: env };
         }
@@ -2241,7 +2266,12 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
             } else {
                 if (widen) { true } else { adopt }
             };
-            if (!riok) {
+            // return None; in an Option(Int) function — the hole adopts
+            // the declared return type.
+            Bool opt_hole = v.ty == "Option(_)";
+            Bool opt_expected = str_has_prefix(ret, "Option(");
+            Bool opt_ret_ok = opt_hole && opt_expected;
+            if (!riok && !opt_ret_ok) {
                 Str msg = "return type " + v.ty + " does not match " + ret;
                 return SRes { pos: v.pos, err: msg, env: env };
             }

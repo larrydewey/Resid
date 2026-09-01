@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**726 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
+**727 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 99 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + 100 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
@@ -20,12 +20,19 @@
 `run_sandbox_enforcement`, `run_map_set_types`,
 `bootstrap_map_set_parity`, `run_constraint_types`,
 `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`,
-`run_sandbox_handle_entry_file_param`, `run_sandbox_capability_mode_readonly`).
+`run_sandbox_handle_entry_file_param`, `run_sandbox_capability_mode_readonly`,
+`bootstrap_option_sum_parity`).
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
 proven**. Map/Set types now fully supported in stage-2 driver (recursive
 FNV-1a lookup/insert/remove, persistent functional style, no mutation).
+
+Option sum-type constructors now work in stage-2 driver: `Some(v)`/`None`
+lower to the same `resid_box_new` tag-1/tag-2 boxes as stage-1, with
+`None`/`Option(_)` bottom typing adopted at return/bind sites and
+`ToString` support for Option values (e2e `bootstrap_option_sum_parity`).
+
 Constraint types (§12) are stage-1 implemented: both `Int[value > 0]` and
 `Int where value > 0` parse and discharge on annotated bindings.
 The long-standing "context-dependent codegen ghost" is dead —
