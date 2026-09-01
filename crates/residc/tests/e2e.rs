@@ -6334,6 +6334,66 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
+fn run_sandbox_handle_entry_file_param() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sandbox-handle-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Legal: a File handle parameter may enter a sandbox whose ceiling grants
+    // `filesystem`; `read_handle` in the restricted region uses the handle.
+    let ok = dir.join("ok.resid");
+    let data = dir.join("data.txt");
+    std::fs::write(&data, "hello").unwrap();
+    std::fs::write(
+        &ok,
+        r#"sandbox (filesystem) {
+    Int read(File h) {
+        Str d = filesystem.read_handle(h);
+        return str_len(d);
+    }
+}
+
+Int main() {
+    File h = filesystem.open("data.txt");
+    Int n = read(h);
+    println(IntToString(n));
+    Bool ok = filesystem.close(h);
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&ok).arg("run").current_dir(&dir).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "5");
+
+    // Illegal: a File handle parameter may NOT enter a sandbox that does not
+    // grant `filesystem` — rejected at compile time (spec §21.3).
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"sandbox (network) {
+    Int read(File h) {
+        Str d = filesystem.read_handle(h);
+        return str_len(d);
+    }
+}
+
+Int main() {
+    File h = filesystem.open("data.txt");
+    Int n = read(h);
+    println(IntToString(n));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&bad).arg("emit-ir").current_dir(&dir).output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "File param into non-filesystem sandbox must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("handle parameter"), "error should mention handle parameter: {err}");
+    assert!(err.contains("filesystem"), "error should mention filesystem: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+#[test]
 fn run_generic_numeric_behaviors() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-genbeh-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

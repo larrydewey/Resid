@@ -3857,6 +3857,30 @@ fn enforce_transitive_attenuation(
     for decl in flat {
         if let Declaration::Function(f) = decl {
             let parent_caps = eff.get(&f.name.0).and_then(|c| c.clone());
+            // ── §21.3 handle-entry rule ────────────────────────────
+            // A `File` sample applied across the function boundary (a
+            // handle passed as a value) carries the `filesystem`
+            // capability. It may enter a restricted region only when the
+            // region's effective ceiling grants `filesystem`; otherwise the
+            // program is rejected at compile time (spec §21.3).
+            let has_file_param = sigs
+                .get(&f.name.0)
+                .map(|s| s.params.iter().any(|p| matches!(p, SemType::File)))
+                .unwrap_or(false);
+            if has_file_param {
+                if let Some(caps) = &parent_caps {
+                    if !caps.iter().any(|c| c == "filesystem") {
+                        errs.push(err(
+                            &f.span,
+                            format!(
+                                "File handle parameter on `{}` requires capability `filesystem`; the enclosing sandbox ceiling [{}] does not grant it (spec §21.3: a handle may enter a sandbox only when every capability it requires is ≤ the sandbox's set)",
+                                f.name.0,
+                                caps.join(", "),
+                            ),
+                        ));
+                    }
+                }
+            }
             walk_spawn_cap_env(&f.body, parent_caps.as_deref(), sigs, errs);
         }
     }
@@ -7726,6 +7750,91 @@ sandbox (filesystem) {
         assert!(!errs.is_empty(), "sandbox should reject requires exceeding ceiling");
         assert!(errs.iter().any(|e| e.message.contains("network")),
             "error should mention the exceeding capability, got: {:?}", errs);
+    }
+
+    // ─── §21.3 handle-entry rule: File param crossing the boundary ──
+
+    #[test]
+    fn handle_entry_file_param_unrestricted_allowed() {
+        // A File handle may enter an unrestricted function freely (no sandbox
+        // ceiling imposes a restriction on the `filesystem` capability).
+        let src = r#"
+Int copy(File handle) {
+    Str d = filesystem.read_handle(handle);
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "File params in an unrestricted function should pass, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn handle_entry_file_param_matching_sandbox_allowed() {
+        // A File handle may enter a sandbox whose ceiling grants `filesystem`.
+        let src = r#"
+sandbox (filesystem) {
+    Int read_and_close(File h) {
+        Str d = filesystem.read_handle(h);
+        Bool ok = filesystem.close(h);
+        return 0;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "File param under a filesystem-granting sandbox should pass, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn handle_entry_file_param_into_restricted_region_rejected() {
+        // §21.3: a File handle may enter a sandbox only when every capability
+        // it requires is ≤ the sandbox's set. `filesystem` is NOT granted,
+        // so the File param crossing into the restricted region is rejected.
+        let src = r#"
+sandbox (network) {
+    Int read(File h) {
+        Str d = filesystem.read_handle(h);
+        return 0;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.iter().any(|e| e.message.contains("handle parameter") && e.message.contains("filesystem")),
+            "expected a handle-entry violation, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn handle_entry_file_param_into_empty_sandbox_rejected() {
+        // An empty sandbox grants nothing; a File param cannot enter. (The
+        // empty sandbox is currently conflated with unrestricted, so this
+        // documents the gap rather than asserting the ideal behavior.)
+        let src = r#"
+sandbox () {
+    Int read(File h) {
+        return 0;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "empty sandbox currently conflated with unrestricted; treating as no restriction: {:?}",
+            errs
+        );
     }
 
     // ─── Spawn: child ≤ parent + fresh CapEnv bounds the body (§19) ──
