@@ -9,7 +9,7 @@
 
 ## 0. Current Snapshot
 
-**728 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
+**729 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
   resid-graph 4, resid-builtin 0, residc 0 unit + 101 e2e incl.
@@ -21,7 +21,7 @@
 `bootstrap_map_set_parity`, `run_constraint_types`,
 `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`,
 `run_sandbox_handle_entry_file_param`, `run_sandbox_capability_mode_readonly`,
-`bootstrap_option_sum_parity`, `bootstrap_match_parity`).
+`bootstrap_option_sum_parity`, `bootstrap_match_parity`, `bootstrap_question_else_parity`).
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
@@ -42,6 +42,15 @@ its declared `Option(T)` element width. The scrutinee is parsed as a
 primary so `expr { ... }` isn't misread as a struct/map literal, and the
 codegen bind keeps the declared type for `Option(x)` hollow values
 (e2e `bootstrap_match_parity`).
+
+`?`‑sugar (`m?`) and `else`‑unwrap (`v else { fallback }`) for Option
+work in the stage-2 driver: typechecker (`check_bin_rest` hooks with
+`is_opt_ty`, payload extraction via `opt_elem`, error messages mirroring
+stage-1) and codegen (`cg_bin_rest` emits tag-dispatch for `?` with
+early-return on None, and payload/fallback/merge phi for `else`).
+Both use the existing `cg_match_payload` for payload unboxing, and
+parity with stage-1 is verified byte-identically (e2e
+`bootstrap_question_else_parity`).
 
 Constraint types (§12) are stage-1 implemented: both `Int[value > 0]` and
 `Int where value > 0` parse and discharge on annotated bindings.

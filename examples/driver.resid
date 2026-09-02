@@ -2116,6 +2116,90 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
 
 GT cg_bin_rest(Str s, GT lhs, Int min_prec, List(Str) env, Funcs fs) {
     Tok t = lex_tok(s, lhs.pos);
+    if (t.text == "?") {
+        // value? — unwrap sugar: None runs the enclosing function's early
+        // return (ret the received unit box unchanged); Some loads the slot.
+        if (!is_opt_ty_cg(lhs.ty)) { return gt_err("`?` requires an Option, found " + lhs.ty, lhs); }
+        Str ety = opt_elem_cg(lhs.ty);
+        if (ety == "_") { return gt_err("cannot unwrap Option(_) with `?`", lhs); }
+        Int l1 = lhs.lbl + 1;
+        Int l2 = lhs.lbl + 2;
+        Str labn = "L" + IntToString(l1);
+        Str labp = "L" + IntToString(l2);
+        Int t1 = lhs.tmp + 1;
+        Int t2 = lhs.tmp + 2;
+        Int t3 = lhs.tmp + 3;
+        Str g1 = "%t" + IntToString(t1);
+        Str g2 = "%t" + IntToString(t2);
+        Str g3 = "%t" + IntToString(t3);
+        List(Str) q0 = lhs.lines;
+        List(Str) q1 = q0.concat([g1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + lhs.val + ", i32 0, i32 0"]);
+        List(Str) q2 = q1.concat([g2 + " = load i64, ptr " + g1]);
+        List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", 2"]);
+        List(Str) q4 = q3.concat(["br i1 " + g3 + ", label %" + labn + ", label %" + labp]);
+        List(Str) q5 = q4.concat([labn + ":"]);
+        List(Str) q6 = q5.concat(["ret ptr " + lhs.val]);
+        List(Str) q7 = q6.concat([labp + ":"]);
+        GT c1 = GT { pos: lhs.pos, val: "", ty: "", cnt: 0, err: "", glines: lhs.glines, lines: q7, tmp: t3, lbl: l2 };
+        GT pv = cg_match_payload(lhs, ety, c1);
+        if (pv.err != "") { return pv; }
+        GT q = GT { pos: t.pos, val: pv.val, ty: pv.ty, cnt: 0, err: "", glines: pv.glines, lines: pv.lines, tmp: pv.tmp, lbl: pv.lbl };
+        return cg_bin_rest(s, q, min_prec, env, fs);
+    }
+if (t.text == "else") {
+        // value else { fallback } — unwrap sugar: Some uses the payload,
+        // None evaluates the single-expression block; phi joins both.
+        if (!is_opt_ty_cg(lhs.ty)) { return gt_err("`value else` requires an Option, found " + lhs.ty, lhs); }
+        Str ety = opt_elem_cg(lhs.ty);
+        if (ety == "_") { return gt_err("cannot unwrap Option(_) with else", lhs); }
+        Int l1 = lhs.lbl + 1;
+        Int l2 = lhs.lbl + 2;
+        Int l3 = lhs.lbl + 3;
+        Str labp = "L" + IntToString(l1);   // payload (Some)
+        Str labf = "L" + IntToString(l2);   // fallback (None)
+        Str labm = "L" + IntToString(l3);   // merge
+        Int t1 = lhs.tmp + 1;
+        Int t2 = lhs.tmp + 2;
+        Int t3 = lhs.tmp + 3;
+        Str g1 = "%t" + IntToString(t1);
+        Str g2 = "%t" + IntToString(t2);
+        Str g3 = "%t" + IntToString(t3);
+        List(Str) q0 = lhs.lines;
+        List(Str) q1 = q0.concat([g1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + lhs.val + ", i32 0, i32 0"]);
+        List(Str) q2 = q1.concat([g2 + " = load i64, ptr " + g1]);
+        List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", 1"]);
+        List(Str) q4 = q3.concat(["br i1 " + g3 + ", label %" + labp + ", label %" + labf]);
+        // Emit FALLBACK block FIRST so its br to labm appears first in IR,
+        // making it the first predecessor → phi operand order: [fallback, payload].
+        List(Str) q5 = q4.concat([labf + ":"]);
+        // t is the 'else' token; advance to the '{'
+        Tok elseTok = t;
+        Tok open = lex_tok(s, elseTok.pos);
+        if (open.text != "{") { return gt_err("expected { after else", lhs); }
+        GT fv0 = GT { pos: open.pos, val: "", ty: "", cnt: 0, err: "", glines: lhs.glines, lines: q5, tmp: t3, lbl: l3 };
+        // Pass open.pos (end of '{') so cg_expr -> cg_unary -> lex_tok skips whitespace and finds the first token
+        GT fv = cg_expr(s, open.pos, env, fs, fv0);
+        if (fv.err != "") { return fv; }
+        Tok close = lex_tok(s, fv.pos);
+        if (close.text != "}") { return gt_err("expected } at end of else block", fv); }
+        List(Str) x0 = fv.lines;
+        List(Str) x1 = x0.concat(["br label %" + labm]);
+        // Now PAYLOAD block
+        List(Str) x2 = x1.concat([labp + ":"]);
+        GT c1 = GT { pos: lhs.pos, val: "", ty: "", cnt: 0, err: "", glines: lhs.glines, lines: x2, tmp: fv.tmp, lbl: l3 };
+        GT pv = cg_match_payload(lhs, ety, c1);
+        if (pv.err != "") { return pv; }
+        List(Str) y0 = pv.lines;
+        List(Str) y1 = y0.concat(["br label %" + labm]);
+        List(Str) y2 = y1.concat([labm + ":"]);
+        Int tp = pv.tmp + 1;
+        Str pr = "%t" + IntToString(tp);
+        // phi operands: [fallback_val, %labf], [payload_val, %labp]
+        Str phi = pr + " = phi " + ll_ty(num_norm_cg(ety)) + " [ " + fv.val + ", %" + labf + " ], [ " + pv.val + ", %" + labp + " ]";
+        List(Str) y3 = y2.concat([phi]);
+        GT q = GT { pos: close.pos, val: pr, ty: ety, cnt: 0, err: "", glines: pv.glines, lines: y3, tmp: tp, lbl: l3 };
+        return cg_bin_rest(s, q, min_prec, env, fs);
+    }
     Int p = op_prec(t.text);
     if (p < min_prec || p == 0) { return lhs; }
     GT rhs = cg_unary(s, t.pos, env, fs, lhs);
@@ -2624,6 +2708,10 @@ Str opt_elem_cg(Str t) {
         return str_slice(t, h, hn);
     }
     return t;
+}
+
+Bool is_opt_ty_cg(Str t) {
+    return t == "Option(_)" || str_has_prefix_cg(t, "Option(");
 }
 
 // Unbox a tag-1 Option's single payload slot into a usable SSA register.
@@ -3887,16 +3975,20 @@ Bool is_list_type(Str t) {
 
 // "Option(X)" -> "X" (element type of a concrete Option).
 Str opt_elem(Str t) {
-    Str head = "Option(";
-    Int h = str_len(head);
-    if (str_has_prefix(t, head)) {
-        Int n = str_len(t);
-        Int inner_len = n - h - 1;
-        Int hn = h + inner_len;
-        return str_slice(t, h, hn);
-    }
-    return t;
-}
+     Str head = "Option(";
+     Int h = str_len(head);
+     if (str_has_prefix(t, head)) {
+         Int n = str_len(t);
+         Int inner_len = n - h - 1;
+         Int hn = h + inner_len;
+         return str_slice(t, h, hn);
+     }
+     return t;
+ }
+
+ Bool is_opt_ty(Str t) {
+     return t == "Option(_)" || str_has_prefix(t, "Option(");
+ }
 
 // Map/Set type predicates and accessor helpers.
 Bool is_map_type(Str t) {
@@ -4979,6 +5071,30 @@ Int ck_op_prec(Str op) {
 ERes check_bin_rest(Str s, ERes lhs, Int min_prec, List(Str) env, Sigs fs) {
     Tok t = lex_tok(s, lhs.pos);
     Str op = t.text;
+    if (op == "?") {
+        // value? — unwrap sugar (spec §13): payload type; a None runs the
+        // enclosing function's early return at codegen time.
+        if (!is_opt_ty(lhs.ty)) {
+            return ERes { pos: t.pos, ty: "", err: "`?` requires an Option, found " + lhs.ty };
+        }
+        Str pt = opt_elem(lhs.ty);
+        if (pt == "_") { return ERes { pos: t.pos, ty: "", err: "cannot unwrap Option(_) with `?`" }; }
+        ERes u = ERes { pos: t.pos, ty: pt, err: "" };
+        return check_bin_rest(s, u, min_prec, env, fs);
+    }
+    if (op == "else") {
+        // value else { fallback } — unwrap sugar: the block runs on None and
+        // must yield the payload type (single expression; no tail exprs in
+        // the driver grammar).
+        if (!is_opt_ty(lhs.ty)) {
+            return ERes { pos: t.pos, ty: "", err: "`value else` requires an Option, found " + lhs.ty };
+        }
+        Str pt = opt_elem(lhs.ty);
+        if (pt == "_") { return ERes { pos: t.pos, ty: "", err: "cannot unwrap Option(_) with else" }; }
+        ERes f = ck_else_fallback(s, t.pos, pt, env, fs);
+        if (f.err != "") { return f; }
+        return check_bin_rest(s, f, min_prec, env, fs);
+    }
     Int prec = ck_op_prec(op);
     if (prec == 0 || prec < min_prec) {
         return lhs;
@@ -4996,6 +5112,24 @@ ERes check_bin_rest(Str s, ERes lhs, Int min_prec, List(Str) env, Sigs fs) {
     }
     ERes r = ERes { pos: rhs2.pos, ty: bt, err: "" };
     return check_bin_rest(s, r, min_prec, env, fs);
+}
+
+// Fallback block of `value else { expr }`: `{`, one expression, `}`; the
+// expression must yield the Option's payload type.
+ERes ck_else_fallback(Str s, Int pos, Str pt, List(Str) env, Sigs fs) {
+    // pos is the END position of the 'else' token; lex the next token (the '{')
+    Tok open = lex_tok(s, pos);
+    if (open.text != "{") { 
+        return ERes { pos: open.pos, ty: "", err: "expected { after else" }; }
+    ERes fv = check_expr(s, lex_tok(s, open.pos).pos, env, fs);
+    if (fv.err != "") { return fv; }
+    Tok close = lex_tok(s, fv.pos);
+    if (close.text != "}") { return ERes { pos: close.pos, ty: "", err: "expected } at end of else block" }; }
+    if (num_norm(fv.ty) != num_norm(pt)) {
+        Str msg = "`else` block yields " + fv.ty + ", need payload " + pt;
+        return ERes { pos: fv.pos, ty: "", err: msg };
+    }
+    return ERes { pos: close.pos, ty: pt, err: "" };
 }
 
 ERes check_expr(Str s, Int pos, List(Str) env, Sigs fs) {
@@ -5719,6 +5853,15 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
+
+
+
+
+
+
+
+
 
 
 

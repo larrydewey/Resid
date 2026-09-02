@@ -1004,16 +1004,20 @@ Bool is_list_type(Str t) {
 
 // "Option(X)" -> "X" (element type of a concrete Option).
 Str opt_elem(Str t) {
-    Str head = "Option(";
-    Int h = str_len(head);
-    if (str_has_prefix(t, head)) {
-        Int n = str_len(t);
-        Int inner_len = n - h - 1;
-        Int hn = h + inner_len;
-        return str_slice(t, h, hn);
-    }
-    return t;
-}
+     Str head = "Option(";
+     Int h = str_len(head);
+     if (str_has_prefix(t, head)) {
+         Int n = str_len(t);
+         Int inner_len = n - h - 1;
+         Int hn = h + inner_len;
+         return str_slice(t, h, hn);
+     }
+     return t;
+ }
+
+ Bool is_opt_ty(Str t) {
+     return t == "Option(_)" || str_has_prefix(t, "Option(");
+ }
 
 // Map/Set type predicates and accessor helpers.
 Bool is_map_type(Str t) {
@@ -2104,6 +2108,30 @@ Int op_prec(Str op) {
 ERes check_bin_rest(Str s, ERes lhs, Int min_prec, List(Str) env, Funcs fs) {
     Tok t = lex_tok(s, lhs.pos);
     Str op = t.text;
+    if (op == "?") {
+        // value? — unwrap sugar (spec §13): payload type; a None runs the
+        // enclosing function's early return at codegen time.
+        if (!is_opt_ty(lhs.ty)) {
+            return ERes { pos: t.pos, ty: "", err: "`?` requires an Option, found " + lhs.ty };
+        }
+        Str pt = opt_elem(lhs.ty);
+        if (pt == "_") { return ERes { pos: t.pos, ty: "", err: "cannot unwrap Option(_) with `?`" }; }
+        ERes u = ERes { pos: t.pos, ty: pt, err: "" };
+        return check_bin_rest(s, u, min_prec, env, fs);
+    }
+    if (op == "else") {
+        // value else { fallback } — unwrap sugar: the block runs on None and
+        // must yield the payload type (single expression; no tail exprs in
+        // the driver grammar).
+        if (!is_opt_ty(lhs.ty)) {
+            return ERes { pos: t.pos, ty: "", err: "`value else` requires an Option, found " + lhs.ty };
+        }
+        Str pt = opt_elem(lhs.ty);
+        if (pt == "_") { return ERes { pos: t.pos, ty: "", err: "cannot unwrap Option(_) with else" }; }
+        ERes f = ck_else_fallback(s, t.pos, pt, env, fs);
+        if (f.err != "") { return f; }
+        return check_bin_rest(s, f, min_prec, env, fs);
+    }
     Int prec = op_prec(op);
     if (prec == 0 || prec < min_prec) {
         return lhs;
@@ -2121,6 +2149,24 @@ ERes check_bin_rest(Str s, ERes lhs, Int min_prec, List(Str) env, Funcs fs) {
     }
     ERes r = ERes { pos: rhs2.pos, ty: bt, err: "" };
     return check_bin_rest(s, r, min_prec, env, fs);
+}
+
+// Fallback block of `value else { expr }`: `{`, one expression, `}`; the
+// expression must yield the Option's payload type.
+ERes ck_else_fallback(Str s, Int pos, Str pt, List(Str) env, Funcs fs) {
+    // pos is the END position of the 'else' token; lex the next token (the '{')
+    Tok open = lex_tok(s, pos);
+    if (open.text != "{") { 
+        return ERes { pos: open.pos, ty: "", err: "expected { after else" }; }
+    ERes fv = check_expr(s, lex_tok(s, open.pos).pos, env, fs);
+    if (fv.err != "") { return fv; }
+    Tok close = lex_tok(s, fv.pos);
+    if (close.text != "}") { return ERes { pos: close.pos, ty: "", err: "expected } at end of else block" }; }
+    if (num_norm(fv.ty) != num_norm(pt)) {
+        Str msg = "`else` block yields " + fv.ty + ", need payload " + pt;
+        return ERes { pos: fv.pos, ty: "", err: msg };
+    }
+    return ERes { pos: close.pos, ty: pt, err: "" };
 }
 
 ERes check_expr(Str s, Int pos, List(Str) env, Funcs fs) {
