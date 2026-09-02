@@ -12,7 +12,7 @@
 **729 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 101 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + 102 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
@@ -21,7 +21,8 @@
 `bootstrap_map_set_parity`, `run_constraint_types`,
 `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`,
 `run_sandbox_handle_entry_file_param`, `run_sandbox_capability_mode_readonly`,
-`bootstrap_option_sum_parity`, `bootstrap_match_parity`, `bootstrap_question_else_parity`).
+`bootstrap_option_sum_parity`, `bootstrap_match_parity`, `bootstrap_question_else_parity`,
+`run_wide_int_boxing`).
 
 ### Progress on item 9 — `value?` sugar
 
@@ -57,6 +58,15 @@ early-return on None, and payload/fallback/merge phi for `else`).
 Both use the existing `cg_match_payload` for payload unboxing, and
 parity with stage-1 is verified byte-identically (e2e
 `bootstrap_question_else_parity`).
+
+**Wide-int boxing (Int(128)/UInt(128))**: values wider than 64 bits (e.g.
+`Int(64) * Int(64)` → `Int(128)` widening, or `Int(256)`) can now be boxed
+into sum variants / unboxed out of them and formatted, in both stage-1 and
+stage-2. Runtime gains `resid_box_i128`/`resid_unbox_i128` and
+`resid_box_u128`/`resid_unbox_u128` (same one-slot heap box pattern as the
+64-bit boxes); codegen dispatches on exactly `bits == 128` to these, with
+`Int128ToString`/`UInt128ToString` for formatting. Parity across both
+stages verified byte-identically (e2e `run_wide_int_boxing`).
 
 Constraint types (§12) are stage-1 implemented: both `Int[value > 0]` and
 `Int where value > 0` parse and discharge on annotated bindings.
@@ -355,6 +365,13 @@ in mind for ANY nontrivial `.resid` work:
   and green.
 - **`else if` chains**: bootstrap and Rust parsers now consume the `if`
   after `else`; regression tests in both pipelines.
+- **`Int(128)`/`UInt(128)` boxing gap (resolved)**: values wider than 64 bits
+  produced by width-widening binops (e.g. `Int(64) * Int(64)` → `Int(128)`)
+  previously failed to box into sum variants (`%t22 = call ptr
+  @resid_box_i64(i64 %t21)` with `%t21` an `i128`). Fixed by adding
+  `resid_box_i128/u128` + `resid_unbox_i128/u128` to the runtime and
+  dispatching exactly-on-`bits == 128` in both codegens; formatting via
+  `Int128ToString`/`UInt128ToString`. Parity e2e `run_wide_int_boxing`.
 
 ---
 

@@ -3028,10 +3028,25 @@ impl<'ctx> CodeGen<'ctx> {
             SemType::Str => Ok(raw.v.into_pointer_value()),
             SemType::Numeric(n) => {
                 let (name, want): (&str, Numeric) = match n {
+                    NumericType::Int(w) if w.bits() > 64 => {
+                        if w.bits() == 128 {
+                            ("Int128ToString", Numeric::Int(*w))
+                        } else {
+                            // For 256/512, fall back to truncating to 64-bit for now.
+                            ("IntToString", Numeric::Int(resid_ir::IntWidth::B64))
+                        }
+                    }
                     NumericType::Int(_) | NumericType::ISize => (
                         "IntToString",
                         Numeric::Int(resid_ir::IntWidth::B64),
                     ),
+                    NumericType::UInt(w) if w.bits() > 64 => {
+                        if w.bits() == 128 {
+                            ("UInt128ToString", Numeric::UInt(*w))
+                        } else {
+                            ("UIntToString", Numeric::UInt(resid_ir::IntWidth::B64))
+                        }
+                    }
                     NumericType::UInt(_) | NumericType::USize => (
                         "UIntToString",
                         Numeric::UInt(resid_ir::IntWidth::B64),
@@ -3477,6 +3492,11 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_unbox_i64", vec![ptr.into()], i64t.into());
         self.decl_rt("resid_unbox_f64", vec![ptr.into()], f64t.into());
         self.decl_rt("resid_unbox_bool", vec![ptr.into()], i8t.into());
+        let i128t = self.int_type(128).unwrap();
+        self.decl_rt("resid_box_i128", vec![i128t.into()], ptr.into());
+        self.decl_rt("resid_box_u128", vec![i128t.into()], ptr.into());
+        self.decl_rt("resid_unbox_i128", vec![ptr.into()], i128t.into());
+        self.decl_rt("resid_unbox_u128", vec![ptr.into()], i128t.into());
         self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
         self.decl_rt("resid_list_concat", vec![ptr.into(), ptr.into()], ptr.into());
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
@@ -3536,6 +3556,9 @@ impl<'ctx> CodeGen<'ctx> {
         // Range and Slice construction (spec §15).
         self.decl_rt("resid_range_new", vec![i64t.into(), i64t.into(), i8t.into()], ptr.into());
         self.decl_rt("resid_slice_new", vec![ptr.into(), i64t.into(), i64t.into()], ptr.into());
+        // Wide (128-bit) integer stringification.
+        self.decl_rt("Int128ToString", vec![i128t.into()], ptr.into());
+        self.decl_rt("UInt128ToString", vec![i128t.into()], ptr.into());
         // Wide (256/512-bit) integer stringification — C ABI takes u64 limbs.
         self.decl_rt(
             "Int256ToString",
@@ -4522,15 +4545,29 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// Box a scalar (numeric/bool) or pass a pointer-typed value through.
     fn box_scalar(&mut self, v: Val<'ctx>) -> Result<BasicValueEnum<'ctx>, String> {
+        let (bits, unsigned): (u16, bool) = match &v.ty {
+            SemType::Numeric(n) if !n.is_float() => (
+                match n { NumericType::Int(w) | NumericType::UInt(w) => w.bits(), _ => 64 },
+                n.is_unsigned(),
+            ),
+            _ => (0, false),
+        };
         match &v.ty {
             SemType::Numeric(n) if !n.is_float() => {
-                let i64v = self.cast_val(
-                    v,
-                    &SemType::Numeric(NumericType::Int(
-                        resid_ir::IntWidth::from_bits(64).unwrap(),
-                    )),
-                )?;
-                self.rt_call("resid_box_i64", vec![i64v.v])
+                if bits == 128 {
+                    let target = SemType::Numeric(n.clone());
+                    let widened = self.cast_val(v, &target)?;
+                    let rt_fn = if unsigned { "resid_box_u128" } else { "resid_box_i128" };
+                    self.rt_call(rt_fn, vec![widened.v])
+                } else {
+                    let i64v = self.cast_val(
+                        v,
+                        &SemType::Numeric(NumericType::Int(
+                            resid_ir::IntWidth::from_bits(64).unwrap(),
+                        )),
+                    )?;
+                    self.rt_call("resid_box_i64", vec![i64v.v])
+                }
             }
             SemType::Numeric(_) => {
                 let f = self.cast_val(
@@ -4580,13 +4617,23 @@ impl<'ctx> CodeGen<'ctx> {
         let loaded = self.builder.build_load(self.cx.ptr_type(AddressSpace::default()), g, "cap_val").map_err(to_err)?;
         match fty {
             SemType::Numeric(n) if !n.is_float() => {
-                let raw = self.rt_call("resid_unbox_i64", vec![loaded])?;
-                Ok(Val {
-                    v: raw,
-                    ty: SemType::Numeric(NumericType::Int(
-                        resid_ir::IntWidth::from_bits(64).unwrap(),
-                    )),
-                })
+                let bits = match n { NumericType::Int(w) | NumericType::UInt(w) => w.bits(), _ => 64 };
+                if bits == 128 {
+                    let rt_fn = if n.is_unsigned() { "resid_unbox_u128" } else { "resid_unbox_i128" };
+                    let raw = self.rt_call(rt_fn, vec![loaded])?;
+                    Ok(Val {
+                        v: raw,
+                        ty: fty.clone(),
+                    })
+                } else {
+                    let raw = self.rt_call("resid_unbox_i64", vec![loaded])?;
+                    Ok(Val {
+                        v: raw,
+                        ty: SemType::Numeric(NumericType::Int(
+                            resid_ir::IntWidth::from_bits(64).unwrap(),
+                        )),
+                    })
+                }
             }
             SemType::Numeric(_) => {
                 let raw = self.rt_call("resid_unbox_f64", vec![loaded])?;
@@ -4614,13 +4661,23 @@ impl<'ctx> CodeGen<'ctx> {
     fn extract_payload(&mut self, slot: BasicValueEnum<'ctx>, fty: &SemType) -> Result<Val<'ctx>, String> {
         match fty {
             SemType::Numeric(n) if !n.is_float() => {
-                let raw = self.rt_call("resid_unbox_i64", vec![slot])?;
-                Ok(Val {
-                    v: raw,
-                    ty: SemType::Numeric(NumericType::Int(
-                        resid_ir::IntWidth::from_bits(64).unwrap(),
-                    )),
-                })
+                let bits = match n { NumericType::Int(w) | NumericType::UInt(w) => w.bits(), _ => 64 };
+                if bits == 128 {
+                    let rt_fn = if n.is_unsigned() { "resid_unbox_u128" } else { "resid_unbox_i128" };
+                    let raw = self.rt_call(rt_fn, vec![slot])?;
+                    Ok(Val {
+                        v: raw,
+                        ty: fty.clone(),
+                    })
+                } else {
+                    let raw = self.rt_call("resid_unbox_i64", vec![slot])?;
+                    Ok(Val {
+                        v: raw,
+                        ty: SemType::Numeric(NumericType::Int(
+                            resid_ir::IntWidth::from_bits(64).unwrap(),
+                        )),
+                    })
+                }
             }
             SemType::Numeric(_) => {
                 let raw = self.rt_call("resid_unbox_f64", vec![slot])?;
@@ -4654,14 +4711,25 @@ impl<'ctx> CodeGen<'ctx> {
         let slot = self.rt_call("resid_box_slot", vec![obj, idx.into()])?;
         match fty {
             SemType::Numeric(n) if !n.is_float() => {
-                let raw = self.rt_call("resid_unbox_i64", vec![slot])?;
-                let v = Val {
-                    v: raw,
-                    ty: SemType::Numeric(NumericType::Int(
-                        resid_ir::IntWidth::from_bits(64).unwrap(),
-                    )),
-                };
-                self.cast_val(v, fty)
+                let bits = match n { NumericType::Int(w) | NumericType::UInt(w) => w.bits(), _ => 64 };
+                if bits == 128 {
+                    let rt_fn = if n.is_unsigned() { "resid_unbox_u128" } else { "resid_unbox_i128" };
+                    let raw = self.rt_call(rt_fn, vec![slot])?;
+                    let v = Val {
+                        v: raw,
+                        ty: fty.clone(),
+                    };
+                    Ok(v)
+                } else {
+                    let raw = self.rt_call("resid_unbox_i64", vec![slot])?;
+                    let v = Val {
+                        v: raw,
+                        ty: SemType::Numeric(NumericType::Int(
+                            resid_ir::IntWidth::from_bits(64).unwrap(),
+                        )),
+                    };
+                    self.cast_val(v, fty)
+                }
             }
             SemType::Numeric(_) => {
                 let raw = self.rt_call("resid_unbox_f64", vec![slot])?;
