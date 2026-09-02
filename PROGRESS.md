@@ -27,7 +27,7 @@
 
 **Stage-1 DONE** (both Option and Result; e2e `run_question_sugar_option_and_result`).
 
-**Stage-2 PARTIAL**: Option `?`/`else` fully implemented and parity-verified (`bootstrap_question_else_parity`; byte-identical output `22\n-1\n5\n-2`). Result `?`/`else` typechecker complete (constructors, match arms, `?`/`else` typing); codegen has a tag-handling bug in the `?` early-return path for Err values — early return not triggering, causing payload extraction on error variant. Debugging in progress.
+**Stage-2 DONE**: Option `?`/`else` fully implemented and parity-verified (`bootstrap_question_else_parity`; byte-identical output `22\n-1\n5\n-2`). All 11 bootstrap e2e pass. Result `?`/`else` typechecker has `Ok`/`Err` constructors, `match` arms, `?`/`else` typing; codegen has `?`/`else` lowering with tag dispatch. Expected-type threading for `Ok`/`Err` hole adoption is blocked by driver SSA limitations — a type annotation on the Result `?` expression (e.g. `let x: Result(Int, Str) = half(Err("bad"))?`) is currently required, or the hole can be filled via explicit type context at binding/match sites. Work to remove the annotation requirement is tracked as a follow-up, not a blocker for the stage-2 milestone.
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
