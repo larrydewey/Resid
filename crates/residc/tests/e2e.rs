@@ -6187,6 +6187,67 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
+fn run_wide_int_boxing() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-wb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("widebox.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Int(128) big = 1000000 * 1000000;
+    Option(Int(128)) o = Some(big);
+    Int(128) got = match o { Some(v) => v, None => 0 * 0 };
+    if (got == big) { println("I128:PASS"); } else { println("I128:FAIL"); }
+    Str is = f"{got}";
+    println(is);
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    // Stage-1: Rust pipeline.
+    let s1 = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("stage-1 residc run failed");
+    assert_eq!(s1.status.code(), Some(0), "{}", String::from_utf8_lossy(&s1.stderr));
+    let out1 = String::from_utf8_lossy(&s1.stdout).into_owned();
+    assert_eq!(out1, "I128:PASS\n1000000000000\n");
+
+    // Stage-2: self-hosted driver.
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let bin = dir.join("widebox_drv");
+    let s2 = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("stage-2 driver run failed");
+    assert_eq!(
+        s2.status.code(),
+        Some(0),
+        "driver failed: {}",
+        String::from_utf8_lossy(&s2.stderr)
+    );
+    let run = Command::new(&bin).output().expect("binary failed");
+    assert_eq!(run.status.code(), Some(0));
+    let out2 = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(out1, out2, "pipeline divergence:\nstage1={out1:?}\nstage2={out2:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+#[test]
 fn run_question_sugar_option_and_result() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-q-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

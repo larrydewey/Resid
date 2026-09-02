@@ -297,6 +297,38 @@ int8_t resid_unbox_bool(void* p) {
     return *(int8_t*)r->slots[0];
 }
 
+void* resid_box_i128(__int128 v) {
+    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
+    r->tag = -1;
+    r->count = 1;
+    r->type = "i128";
+    __int128* slot = (__int128*)malloc(sizeof(__int128));
+    *slot = v;
+    r->slots = (void**)malloc(1 * sizeof(void*));
+    r->slots[0] = slot;
+    return r;
+}
+__int128 resid_unbox_i128(void* p) {
+    ResidVal* r = (ResidVal*)p;
+    return *(__int128*)r->slots[0];
+}
+
+void* resid_box_u128(unsigned __int128 v) {
+    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
+    r->tag = -1;
+    r->count = 1;
+    r->type = "u128";
+    unsigned __int128* slot = (unsigned __int128*)malloc(sizeof(unsigned __int128));
+    *slot = v;
+    r->slots = (void**)malloc(1 * sizeof(void*));
+    r->slots[0] = slot;
+    return r;
+}
+unsigned __int128 resid_unbox_u128(void* p) {
+    ResidVal* r = (ResidVal*)p;
+    return *(unsigned __int128*)r->slots[0];
+}
+
 /*
  * Debug/diagnostics helpers so a program can talk about its own values before
  * the standard library's `Show` exists.
