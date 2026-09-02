@@ -2770,14 +2770,14 @@ GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
 }
 
 // "Option(X)" -> "X" (element type of a concrete Option).
-Str opt_elem_cg(Str t) {
+ Str opt_elem_cg(Str t) {
     Str head = "Option(";
     Int h = str_len(head);
     if (str_has_prefix_cg(t, head)) {
         Int n = str_len(t);
         Int inner_len = n - h - 1;
         Int hn = h + inner_len;
-        return str_slice(t, h, hn);
+        return str_trim(str_slice(t, h, hn));
     }
     return t;
 }
@@ -2792,16 +2792,19 @@ Str res_elem_ok_cg(Str t) {
     Int h = str_len(head);
     if (str_has_prefix_cg(t, head)) {
         Int comma = _find_comma_at_depth_cg(t, h, 0, 0);
-        if (comma >= 0) { return str_slice(t, h, comma); }
+        if (comma >= 0) { return str_trim(str_slice(t, h, comma)); }
     }
     return t;
 }
-Str res_elem_err_cg(Str t) {
+ Str res_elem_err_cg(Str t) {
     Str head = "Result(";
     Int h = str_len(head);
     if (str_has_prefix_cg(t, head)) {
         Int comma = _find_comma_at_depth_cg(t, h, 0, 0);
-        if (comma >= 0) { return str_slice(t, comma + 1, str_len(t) - 1); }
+        if (comma >= 0) {
+            Int sp = _skip_ws_cg(t, comma + 1);
+            return str_slice(t, sp, str_len(t) - 1);
+        }
     }
     return t;
 }
@@ -3217,7 +3220,11 @@ ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
     Bool opt_hole = v.ty == "Option(_)";
     Bool opt_expected = str_has_prefix_cg(dty, "Option(");
     Str ent2f = pick_str(opt_hole && opt_expected, name + ":" + v2.val + ":" + dty, ent2);
-    List(Str) env3 = env_add(env, ent2f);
+    // A Result(_, E) from Err(v) adopts the declared Ok half from the binding.
+    Bool res_ok_hole = str_has_prefix_cg(v2.ty, "Result(") && res_elem_ok_cg(v2.ty) == "_";
+    Bool res_expected = str_has_prefix_cg(dty, "Result(");
+    Str ent2g = pick_str(res_ok_hole && res_expected, name + ":" + v2.val + ":" + dty, ent2f);
+    List(Str) env3 = env_add(env, ent2g);
     return ST { pos: semi.pos, dead: g.dead, err: "", env: env3, glines: v2.glines, hlines: g.hlines, lines: v2.lines, tmp: v2.tmp, lbl: v2.lbl, rety: g.rety };
 }
 
@@ -3479,6 +3486,31 @@ List(Str) split_rest(Str s, Str sep) {
     return one.concat(split_rest(rest, sep));
 }
 
+// Find the first top-level (paren-depth 0) occurrence of sep, or -1.
+Int find_sep_depth(Str s, Int i, Int depth, Str sep) {
+    if (i >= str_len_1(s)) { return -1; }
+    Int sl = str_len_1(sep);
+    Int isp = i + sl;
+    Int c = str_char_at(s, i);
+    if (c == 40) { return find_sep_depth(s, i + 1, depth + 1, sep); }
+    if (c == 41) { return find_sep_depth(s, i + 1, depth - 1, sep); }
+    if (depth == 0 && str_slice(s, i, isp) == sep) { return i; }
+    Int k = i + 1;
+    return find_sep_depth(s, k, depth, sep);
+}
+
+List(Str) split_rest_depth(Str s, Str sep) {
+    Int p = find_sep_depth(s, 0, 0, sep);
+    if (p < 0) { return [s]; }
+    Str first = str_slice(s, 0, p);
+    Int sl = str_len_1(sep);
+    Int fp = p + sl;
+    Int tot = str_len_1(s);
+    Str rest = str_slice(s, fp, tot);
+    List(Str) one = [first];
+    return one.concat(split_rest_depth(rest, sep));
+}
+
 Int count_seps(Str s, Int i, Str sep) {
     if (i >= str_len_1(s)) { return 0; }
     Int sl = str_len_1(sep);
@@ -3519,7 +3551,7 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     Str pts = collect_ptypes(s, open.pos, "");
     Str pns = collect_pnames(s, open.pos, "");
     Bool is_main = name.text == "main";
-    List(Str) tyl = split_rest(pts, ", ");
+    List(Str) tyl = if (pts == "") { nil_list() } else { split_rest_depth(pts, ", ") };
     Str pd = param_decl_at(tyl, 0, "");
     Str defline = if (is_main) { "define i32 @main() {" } else { "define " + ll_ty(rty.ty) + " @" + name.text + "(" + pd + ") {" };
     List(Str) nl0 = nil_list();
@@ -3754,10 +3786,10 @@ List(Str) ck_env_add(List(Str) env, Str name, Str ty) {
 
 // ─── Function signature table ──────────────────────────────────
 
-type Sigs = { names: List(Str), pts: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str) };
+type Sigs = { names: List(Str), pts: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), exp_tys: List(Str) };
 
 Sigs sigs_empty() {
-    return Sigs { names: [], pts: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [] };
+    return Sigs { names: [], pts: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], exp_tys: [] };
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -4113,17 +4145,17 @@ Bool is_list_type(Str t) {
 }
 
 // "Option(X)" -> "X" (element type of a concrete Option).
-Str opt_elem(Str t) {
-     Str head = "Option(";
-     Int h = str_len(head);
-     if (str_has_prefix(t, head)) {
-         Int n = str_len(t);
-         Int inner_len = n - h - 1;
-         Int hn = h + inner_len;
-         return str_slice(t, h, hn);
-     }
-     return t;
- }
+ Str opt_elem(Str t) {
+    Str head = "Option(";
+    Int h = str_len(head);
+    if (str_has_prefix(t, head)) {
+        Int n = str_len(t);
+        Int inner_len = n - h - 1;
+        Int hn = h + inner_len;
+        return str_trim(str_slice(t, h, hn));
+    }
+    return t;
+}
 
 Bool is_opt_ty(Str t) {
     return t == "Option(_)" || str_has_prefix(t, "Option(");
@@ -4135,7 +4167,7 @@ Str res_elem_ok(Str t) {
     Int h = str_len(head);
     if (str_has_prefix(t, head)) {
         Int comma = _find_comma_at_depth(t, h, 0, 0);
-        if (comma >= 0) { return str_slice(t, h, comma); }
+        if (comma >= 0) { return str_trim(str_slice(t, h, comma)); }
     }
     return t;
 }
@@ -4144,7 +4176,10 @@ Str res_elem_err(Str t) {
     Int h = str_len(head);
     if (str_has_prefix(t, head)) {
         Int comma = _find_comma_at_depth(t, h, 0, 0);
-        if (comma >= 0) { return str_slice(t, comma + 1, str_len(t) - 1); }
+        if (comma >= 0) {
+            Int sp = _skip_ws(t, comma + 1);
+            return str_slice(t, sp, str_len(t) - 1);
+        }
     }
     return t;
 }
@@ -4217,14 +4252,13 @@ Bool arith_family(Str name) {
 // Collapse narrow integer widths to the bare family so builtins
 // declared over Int/UInt accept Int(8)..Int(64) arguments.
 pub Str canon64_at(Str tys, Int i) {
-    List(Str) parts = str_split(tys, ",");
-    Int n = parts.len();
-    if (i >= n) { return ""; }
-    Str p = str_trim(parts[i]);
-    Bool isintfam = is_int_ty(p);
-    Int bits = ty_bits(p);
+    Str p = split_type_at(tys, i, 0, 0, 0, "");
+    if (p == "") { return ""; }
+    Str pt = str_trim(p);
+    Bool isintfam = is_int_ty(pt);
+    Int bits = ty_bits(pt);
     Bool smallint = if (isintfam) { bits <= 64 } else { false };
-    Str out = if (smallint) { num_norm2(p) } else { p };
+    Str out = if (smallint) { num_norm2(pt) } else { pt };
     return out;
 }
 
@@ -4250,7 +4284,7 @@ pub Str canon64(Str tys) {
     return canon64_acc(tys, 0, "");
 }
 
-ERes check_builtin(Str name, Str rawtys, Int argc, Int pos) {
+ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) pt_list) {
     Str argtys = canon64(rawtys);
     if (name == "println") {
         if (argc == 1) {
@@ -4481,22 +4515,61 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos) {
         return ERes { pos: pos, ty: "", err: "None expects no arguments" };
     }
     if (name == "Ok") {
-        if (argc == 1) { return ERes { pos: pos, ty: "Result(" + argtys + ", _)", err: "" }; }
+        if (argc == 1) {
+            Str eerr = res_elem_err(exp);
+            Bool hasres = str_has_prefix(exp, "Result(") && eerr != "";
+            if (hasres) { return ERes { pos: pos, ty: "Result(" + argtys + ", " + eerr + ")", err: "" }; }
+            return ERes { pos: pos, ty: "Result(" + argtys + ", _)", err: "" };
+        }
         return ERes { pos: pos, ty: "", err: "Ok expects 1 argument" };
     }
     if (name == "Err") {
-        if (argc == 1) { return ERes { pos: pos, ty: "Result(_, " + argtys + ")", err: "" }; }
+        if (argc == 1) {
+            Str eok = res_elem_ok(exp);
+            Bool hasres = str_has_prefix(exp, "Result(") && eok != "";
+            if (hasres) { return ERes { pos: pos, ty: "Result(" + eok + ", " + argtys + ")", err: "" }; }
+            return ERes { pos: pos, ty: "Result(_, " + argtys + ")", err: "" };
+        }
         return ERes { pos: pos, ty: "", err: "Err expects 1 argument" };
     }
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
 
-// Split a comma-joined type list into position i's element.
+// Split a comma-joined type list into position i's element (depth-aware:
+// commas nested inside Option/Result/Map/Set/List(...) are not separators).
 pub Str ty_list_at(Str tys, Int i) {
-    List(Str) parts = str_split(tys, ",");
-    Int n = parts.len();
-    if (i >= n) { return ""; }
-    return str_trim(parts[i]);
+    return split_type_at(tys, i, 0, 0, 0, "");
+}
+
+pub Str split_type_at(Str tys, Int i, Int pos, Int elem_i, Int depth, Str acc) {
+    Int n = str_len(tys);
+    if (pos >= n) {
+        if (elem_i == i) { return str_trim(acc); }
+        return "";
+    }
+    Int c = str_char_at(tys, pos);
+    if (c == 40) { return split_type_at(tys, i, pos + 1, elem_i, depth + 1, acc + str_from_code(c)); }
+    if (c == 41) { return split_type_at(tys, i, pos + 1, elem_i, depth - 1, acc + str_from_code(c)); }
+    if (c == 44 && depth == 0) {
+        if (elem_i == i) { return str_trim(acc); }
+        return split_type_at(tys, i, pos + 1, elem_i + 1, depth, "");
+    }
+    return split_type_at(tys, i, pos + 1, elem_i, depth, acc + str_from_code(c));
+}
+
+// Split a comma-joined type list into its top-level elements.
+pub List(Str) split_type_list(Str tys, Int pos, Int elem_i, Int depth, Str acc, List(Str) out) {
+    Int n = str_len(tys);
+    if (pos >= n) {
+        return out.concat([str_trim(acc)]);
+    }
+    Int c = str_char_at(tys, pos);
+    if (c == 40) { return split_type_list(tys, pos + 1, elem_i, depth + 1, acc + str_from_code(c), out); }
+    if (c == 41) { return split_type_list(tys, pos + 1, elem_i, depth - 1, acc + str_from_code(c), out); }
+    if (c == 44 && depth == 0) {
+        return split_type_list(tys, pos + 1, elem_i + 1, depth, "", out.concat([str_trim(acc)]));
+    }
+    return split_type_list(tys, pos + 1, elem_i, depth, acc + str_from_code(c), out);
 }
 
 // Do declared parameter types accept these argument types?
@@ -4535,13 +4608,14 @@ ERes finish_call(Str s, Int pos, Str name, Str argtys, Int argc, List(Str) env, 
         Str msg = "call " + name + " expects (" + pts + "), got (" + argtys + ")";
         return ERes { pos: pos, ty: "", err: msg };
     }
-    return check_builtin(name, argtys, argc, pos);
+    return check_builtin(name, argtys, argc, pos, "", sigs_empty().names);
 }
 
 type ARes = { pos: Int, tys: Str, count: Int, err: Str };
 
 ARes collect_args(Str s, Int pos, Str acc, Int count, List(Str) env, Sigs fs) {
-    ERes a = check_expr(s, pos, env, fs);
+    Str exp = if (count < fs.exp_tys.len()) { fs.exp_tys[count] } else { "" };
+    ERes a = check_expr_e(s, pos, env, fs, exp);
     if (a.err != "") {
         return ARes { pos: a.pos, tys: acc, count: count, err: a.err };
     }
@@ -4619,10 +4693,26 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Sigs fs) {
         // pos is the first argument token (callers consume the paren).
         return check_sort_call(s, pos, env, fs);
     }
+    Bool is_ctor = name == "Ok" || name == "Err" || name == "Some" || name == "None";
+    if (is_ctor) {
+        Str ctor_exp = if (fs.exp_tys.len() > 0) { fs.exp_tys[0] } else { "" };
+        Sigs fs3 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: sigs_empty().names };
+        if (t.text == ")") {
+            return check_builtin(name, "", 0, pos, ctor_exp, sigs_empty().names);
+        }
+        ARes a = collect_args(s, pos, "", 0, env, fs3);
+        if (a.err != "") {
+            return ERes { pos: a.pos, ty: "", err: a.err };
+        }
+        return check_builtin(name, a.tys, a.count, a.pos, ctor_exp, sigs_empty().names);
+    }
     if (t.text == ")") {
         return finish_call(s, t.pos, name, "", 0, env, fs);
     }
-    ARes a = collect_args(s, pos, "", 0, env, fs);
+    Int idx = ck_fn_index(fs, name);
+    List(Str) pt_list = if (idx >= 0) { split_type_list(fs.pts[idx], 0, 0, 0, "", sigs_empty().names) } else { sigs_empty().names };
+    Sigs fs2 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: pt_list };
+    ARes a = collect_args(s, pos, "", 0, env, fs2);
     if (a.err != "") {
         return ERes { pos: a.pos, ty: "", err: a.err };
     }
@@ -5061,7 +5151,9 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
     if (t.kind == "ident") {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "(") {
-            return check_call(s, t2.pos, t.text, env, fs);
+            Bool is_ctor = t.text == "Ok" || t.text == "Err" || t.text == "Some" || t.text == "None";
+            Sigs fs2 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: if (is_ctor && exp != "") { [exp] } else { fs.exp_tys } };
+            return check_call(s, t2.pos, t.text, env, fs2);
         }
         if (t2.text == "{") {
             return check_struct_lit(s, t2.pos, t.text, env, fs);
@@ -5510,7 +5602,7 @@ ERes check_expr_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
 }
 
 SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Sigs fs, Str ret) {
-    ERes v = check_expr_e(s, pos, env, fs, "");
+    ERes v = check_expr_e(s, pos, env, fs, ty);
     if (v.err != "") {
         return SRes { pos: v.pos, err: v.err, env: env };
     }
@@ -5523,13 +5615,25 @@ SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Sigs fs, Str re
         Bool opt_hole = v.ty == "Option(_)";
         Bool opt_expected = str_has_prefix(ty, "Option(");
         Bool opt_ok = opt_hole && opt_expected;
+        // Result(Int, Str) x = Err("boom"); — the Ok hole adopts from binding.
+        Bool res_ok_hole = str_has_prefix(v.ty, "Result(") && res_elem_ok(v.ty) == "_";
+        Bool res_expected = str_has_prefix(ty, "Result(");
+        Bool res_bind_ok = res_ok_hole && res_expected && res_elem_err(v.ty) == res_elem_err(ty);
+        // Result(A, B) bound as Result(C, D) — compare each element with the
+        // same int-width acceptance as plain integer bindings.
+        Bool both_res = str_has_prefix(v.ty, "Result(") && res_expected;
+        Bool ok_accept = res_elem_ok(ty) == "_" || res_elem_ok(v.ty) == res_elem_ok(ty)
+            || (is_int_ty(res_elem_ok(v.ty)) && is_int_ty(res_elem_ok(ty)) && int_adopt_ok(res_elem_ok(v.ty), res_elem_ok(ty), "0"));
+        Bool er_accept = res_elem_err(ty) == "_" || res_elem_err(v.ty) == res_elem_err(ty)
+            || (is_int_ty(res_elem_err(v.ty)) && is_int_ty(res_elem_err(ty)) && int_adopt_ok(res_elem_err(v.ty), res_elem_err(ty), "0"));
+        Bool res_bind_accept = both_res && ok_accept && er_accept;
         // Spec v3.2 §6.1a/§6.4: integer literal adoption + implicit
         // value-preserving widening at bindings.
         Bool intpair = is_int_ty(ty) && is_int_ty(v.ty);
         Tok first_tok = lex_tok(s, pos);
         Bool iok = int_adopt_ok(v.ty, ty, first_tok.text);
         Bool bind_ok = if (intpair) { iok } else { false };
-        if (!coerce && !bind_ok && !opt_ok) {
+        if (!coerce && !bind_ok && !opt_ok && !res_bind_ok && !res_bind_accept) {
             Str msg = "binding " + name + ": expected " + ty + ", got " + v.ty;
             return SRes { pos: v.pos, err: msg, env: env };
         }
@@ -5550,7 +5654,7 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
             Str msg = "return without a value in a " + ret + " function";
             return SRes { pos: e.pos, err: msg, env: env };
         }
-        ERes v = check_expr_e(s, t.pos, env, fs, "");
+        ERes v = check_expr_e(s, t.pos, env, fs, ret);
         if (v.err != "") {
             return SRes { pos: v.pos, err: v.err, env: env };
         }
@@ -5578,7 +5682,21 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
             Bool res_expected = str_has_prefix(ret, "Result(");
             Bool res_ok_ret_ok = res_ok_hole && res_expected && res_elem_ok(v.ty) == res_elem_ok(ret);
             Bool res_err_ret_ok = res_err_hole && res_expected && res_elem_err(v.ty) == res_elem_err(ret);
-            if (!riok && !opt_ret_ok && !res_ok_ret_ok && !res_err_ret_ok) {
+            // Result(A, B) returned where Result(C, D) declared — compare
+            // each element with the same int-width acceptance as plain ints.
+            Bool both_res = str_has_prefix(v.ty, "Result(") && res_expected;
+            Str vok = res_elem_ok(v.ty);
+            Bool want_ok_hole = res_elem_ok(ret) == "_";
+            Bool ok_same = vok == res_elem_ok(ret);
+            Bool ok_int = is_int_ty(vok) && is_int_ty(res_elem_ok(ret));
+            Bool ok_accept = want_ok_hole || ok_same || (ok_int && int_adopt_ok(vok, res_elem_ok(ret), "0"));
+            Str ver = res_elem_err(v.ty);
+            Bool want_err_hole = res_elem_err(ret) == "_";
+            Bool er_same = ver == res_elem_err(ret);
+            Bool er_int = is_int_ty(ver) && is_int_ty(res_elem_err(ret));
+            Bool er_accept = want_err_hole || er_same || (er_int && int_adopt_ok(ver, res_elem_err(ret), "0"));
+            Bool res_ret_ok = both_res && ok_accept && er_accept;
+            if (!riok && !opt_ret_ok && !res_ok_ret_ok && !res_err_ret_ok && !res_ret_ok) {
                 Str msg = "return type " + v.ty + " does not match " + ret;
                 return SRes { pos: v.pos, err: msg, env: env };
             }
@@ -5743,7 +5861,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs) {
             List(Str) sf1 = fs.stf;
             List(Str) sn2 = sn1.concat([tname.text]);
             List(Str) sf2 = sf1.concat([fstr]);
-            Sigs fsx = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns };
+            Sigs fsx = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys };
             return ck_collect_sigs_at(s, end, fsx);
         }
         return ck_collect_sigs_at(s, end, fs);
@@ -5770,7 +5888,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs) {
             List(Str) bnn = bn0.concat([bh.name]);
             List(Str) bpp = bp0.concat([bh.param]);
             List(Str) bff = bf0.concat([bh.impl]);
-            Sigs fsb = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff };
+            Sigs fsb = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff, exp_tys: fs.exp_tys };
             return ck_collect_sigs_at(s, bh.pos, fsb);
         }
         PRes rty = parse_type(s, pos_in);
@@ -5787,7 +5905,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs) {
         List(Str) names2 = n1.concat([name.text]);
         List(Str) pts2 = p1.concat([pts]);
         List(Str) rets2 = r1.concat([rty.ty]);
-        Sigs fs2 = Sigs { names: names2, pts: pts2, rets: rets2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns };
+        Sigs fs2 = Sigs { names: names2, pts: pts2, rets: rets2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys };
         return ck_collect_sigs_at(s, end, fs2);
     }
     return ck_collect_sigs_at(s, t.pos, fs);
@@ -6038,6 +6156,19 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
