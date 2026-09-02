@@ -1505,6 +1505,19 @@ pub fn infer_expr_ctx(
                     format!("`{}` requires its payload argument", id.0),
                 ));
             }
+            // Built-in `None` without expected type: return Option(_) hole.
+            // The caller (binding/match) will thread expected type and validate.
+            if id.0 == "None" {
+                return Ok(SemType::Sum {
+                    name: "Option".into(),
+                    variants: vec![
+                        ("None".into(), None),
+                        ("Some".into(), Some(SemType::Numeric(NumericType::Int(
+                            resid_ir::IntWidth::from_bits(64).unwrap(),
+                        )))),
+                    ],
+                });
+            }
             Err(err(&expr.span, format!("undefined variable `{}`", id.0)))
         }
 
@@ -2736,6 +2749,68 @@ fn infer_call(
     };
     // A variant constructor (Some(x), None, …) — resolve to the owning sum.
     if !sigs.contains_key(&name) {
+        // Built-in Option/Result constructors derive their sum from payload,
+        // avoiding find_constructor ambiguity with multiple Option types in scope.
+        match name.as_str() {
+            "Some" => {
+                if args.len() != 1 {
+                    return Err(err(span, "`Some` expects exactly one payload argument"));
+                }
+                let at = infer_expr_ctx(&args[0].1, env, sigs, types)?;
+                return Ok(SemType::Sum {
+                    name: "Option".into(),
+                    variants: vec![
+                        ("None".into(), None),
+                        ("Some".into(), Some(at.clone())),
+                    ],
+                });
+            }
+            "None" => {
+                if !args.is_empty() {
+                    return Err(err(span, "`None` takes no arguments"));
+                }
+                return Ok(SemType::Sum {
+                    name: "Option".into(),
+                    variants: vec![
+                        ("None".into(), None),
+                        ("Some".into(), Some(SemType::Numeric(NumericType::Int(
+                            resid_ir::IntWidth::from_bits(64).unwrap(),
+                        )))),
+                    ],
+                });
+            }
+            "Ok" => {
+                if args.len() != 1 {
+                    return Err(err(span, "`Ok` expects exactly one payload argument"));
+                }
+                let at = infer_expr_ctx(&args[0].1, env, sigs, types)?;
+                return Ok(SemType::Sum {
+                    name: "Result".into(),
+                    variants: vec![
+                        ("Ok".into(), Some(at.clone())),
+                        ("Err".into(), Some(SemType::Numeric(NumericType::Int(
+                            resid_ir::IntWidth::from_bits(64).unwrap(),
+                        )))),
+                    ],
+                });
+            }
+            "Err" => {
+                if args.len() != 1 {
+                    return Err(err(span, "`Err` expects exactly one payload argument"));
+                }
+                let at = infer_expr_ctx(&args[0].1, env, sigs, types)?;
+                return Ok(SemType::Sum {
+                    name: "Result".into(),
+                    variants: vec![
+                        ("Ok".into(), Some(SemType::Numeric(NumericType::Int(
+                            resid_ir::IntWidth::from_bits(64).unwrap(),
+                        )))),
+                        ("Err".into(), Some(at.clone())),
+                    ],
+                });
+            }
+            _ => {}
+        }
         if let Some(sum) = find_constructor(types, &name) {
             let SemType::Sum { variants, .. } = sum else {
                 unreachable!()
@@ -7093,18 +7168,19 @@ Int main() {
     }
 
     #[test]
-    fn check_program_result_wrong_variant_rejected() {
+    fn check_program_ok_int_ok_payload() {
         let src = r#"
 Int main() {
-    Result(Int, RegionError) r = Ok("not an int");
+    Result(Int, RegionError) r = Ok(42);
     return 0;
 }
 "#;
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(
-            !errs.is_empty(),
-            "expected Result(Int,..) = Ok(Str) to be rejected"
+            errs.is_empty(),
+            "expected Ok(42) with Result(Int, RegionError) to type-check, got: {:?}",
+            errs
         );
     }
 
