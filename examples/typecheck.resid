@@ -1015,9 +1015,32 @@ Str opt_elem(Str t) {
      return t;
  }
 
- Bool is_opt_ty(Str t) {
-     return t == "Option(_)" || str_has_prefix(t, "Option(");
- }
+Bool is_opt_ty(Str t) {
+    return t == "Option(_)" || str_has_prefix(t, "Option(");
+}
+
+// Result type helpers.
+Str res_elem_ok(Str t) {
+    Str head = "Result(";
+    Int h = str_len(head);
+    if (str_has_prefix(t, head)) {
+        Int comma = _find_comma_at_depth(t, h, 0, 0);
+        if (comma >= 0) { return str_slice(t, h, comma); }
+    }
+    return t;
+}
+Str res_elem_err(Str t) {
+    Str head = "Result(";
+    Int h = str_len(head);
+    if (str_has_prefix(t, head)) {
+        Int comma = _find_comma_at_depth(t, h, 0, 0);
+        if (comma >= 0) { return str_slice(t, comma + 1, str_len(t) - 1); }
+    }
+    return t;
+}
+Bool is_res_ty(Str t) {
+    return str_has_prefix(t, "Result(");
+}
 
 // Map/Set type predicates and accessor helpers.
 Bool is_map_type(Str t) {
@@ -1346,6 +1369,14 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos) {
             return ERes { pos: pos, ty: "Option(_)", err: "" };
         }
         return ERes { pos: pos, ty: "", err: "None expects no arguments" };
+    }
+    if (name == "Ok") {
+        if (argc == 1) { return ERes { pos: pos, ty: "Result(" + argtys + ", _)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "Ok expects 1 argument" };
+    }
+    if (name == "Err") {
+        if (argc == 1) { return ERes { pos: pos, ty: "Result(_, " + argtys + ")", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "Err expects 1 argument" };
     }
     return ERes { pos: pos, ty: "", err: "unknown function " + name };
 }
@@ -2109,25 +2140,33 @@ ERes check_bin_rest(Str s, ERes lhs, Int min_prec, List(Str) env, Funcs fs) {
     Tok t = lex_tok(s, lhs.pos);
     Str op = t.text;
     if (op == "?") {
-        // value? — unwrap sugar (spec §13): payload type; a None runs the
+        // value? — unwrap sugar (spec §13): payload type; a None/Err runs the
         // enclosing function's early return at codegen time.
-        if (!is_opt_ty(lhs.ty)) {
-            return ERes { pos: t.pos, ty: "", err: "`?` requires an Option, found " + lhs.ty };
+        Bool is_opt = is_opt_ty(lhs.ty);
+        Bool is_res = is_res_ty(lhs.ty);
+        if (!is_opt && !is_res) {
+            return ERes { pos: t.pos, ty: "", err: "`?` requires an Option or Result, found " + lhs.ty };
         }
-        Str pt = opt_elem(lhs.ty);
-        if (pt == "_") { return ERes { pos: t.pos, ty: "", err: "cannot unwrap Option(_) with `?`" }; }
+        Str pt = if (is_opt) { opt_elem(lhs.ty) } else { res_elem_ok(lhs.ty) };
+        if (pt == "_") {
+            return ERes { pos: t.pos, ty: "", err: if (is_opt_ty(lhs.ty)) { "cannot unwrap Option(_) with `?`" } else { "cannot unwrap Result(_, E) with `?`" } };
+        }
         ERes u = ERes { pos: t.pos, ty: pt, err: "" };
         return check_bin_rest(s, u, min_prec, env, fs);
     }
     if (op == "else") {
-        // value else { fallback } — unwrap sugar: the block runs on None and
+        // value else { fallback } — unwrap sugar: the block runs on None/Err and
         // must yield the payload type (single expression; no tail exprs in
         // the driver grammar).
-        if (!is_opt_ty(lhs.ty)) {
-            return ERes { pos: t.pos, ty: "", err: "`value else` requires an Option, found " + lhs.ty };
+        Bool is_opt = is_opt_ty(lhs.ty);
+        Bool is_res = is_res_ty(lhs.ty);
+        if (!is_opt && !is_res) {
+            return ERes { pos: t.pos, ty: "", err: "`value else` requires an Option or Result, found " + lhs.ty };
         }
-        Str pt = opt_elem(lhs.ty);
-        if (pt == "_") { return ERes { pos: t.pos, ty: "", err: "cannot unwrap Option(_) with else" }; }
+        Str pt = if (is_opt) { opt_elem(lhs.ty) } else { res_elem_ok(lhs.ty) };
+        if (pt == "_") {
+            return ERes { pos: t.pos, ty: "", err: if (is_opt_ty(lhs.ty)) { "cannot unwrap Option(_) with else" } else { "cannot unwrap Result(_, E) with else" } };
+        }
         ERes f = ck_else_fallback(s, t.pos, pt, env, fs);
         if (f.err != "") { return f; }
         return check_bin_rest(s, f, min_prec, env, fs);
@@ -2430,7 +2469,14 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
             Bool opt_hole = v.ty == "Option(_)";
             Bool opt_expected = str_has_prefix(ret, "Option(");
             Bool opt_ret_ok = opt_hole && opt_expected;
-            if (!riok && !opt_ret_ok) {
+            // return Ok(v) / Err(v) in a Result(Int, Str) function — the hole
+            // adopts the declared return type's missing half.
+            Bool res_ok_hole = str_has_prefix(v.ty, "Result(") && (res_elem_err(v.ty) == "_" || res_elem_err(v.ty) == " _");
+            Bool res_err_hole = str_has_prefix(v.ty, "Result(") && (res_elem_ok(v.ty) == "_" || res_elem_ok(v.ty) == " _");
+            Bool res_expected = str_has_prefix(ret, "Result(");
+            Bool res_ok_ret_ok = res_ok_hole && res_expected && res_elem_ok(v.ty) == res_elem_ok(ret);
+            Bool res_err_ret_ok = res_err_hole && res_expected && res_elem_err(v.ty) == res_elem_err(ret);
+            if (!riok && !opt_ret_ok && !res_ok_ret_ok && !res_err_ret_ok) {
                 Str msg = "return type " + v.ty + " does not match " + ret;
                 return SRes { pos: v.pos, err: msg, env: env };
             }

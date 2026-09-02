@@ -1431,9 +1431,75 @@ GT cg_none_con(Str ty, Int pos, Int n, GT c) {
     return GT { pos: pos, val: reg, ty: ty, cnt: 0, err: "", glines: gl2, lines: l1, tmp: t1, lbl: c.lbl };
 }
 
+// Lower `Ok(payload)`: build a tag-1 Result box whose slot 0 holds the
+// heap-boxed payload. Result type is Result(payloadTy, ErrTy).
+GT cg_ok_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
+    GT p = cg_expr(s, pos, env, fs, c);
+    if (p.err != "") { return p; }
+    Tok close = lex_tok(s, p.pos);
+    if (close.text != ")") { return gt_err("expected ) in Ok(...)", p); }
+    GT hb = box_heap_(s, p, env, fs);
+    Int t1 = hb.tmp + 1;
+    Int t2 = hb.tmp + 2;
+    Int t3 = hb.tmp + 3;
+    Str sa = "%t" + IntToString(t1);
+    Str gi = "%t" + IntToString(t2);
+    Str reg = "%t" + IntToString(t3);
+    Str resty = "Result(" + p.ty + ", _)";
+    Str body = esc_ll(resty, 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int n1 = bl + 1;
+    Str tsym = "@.oty" + IntToString(t1);
+    Str g = tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\"";
+    List(Str) gg0 = hb.glines;
+    List(Str) gl2 = gg0.concat([g]);
+    List(Str) l0 = hb.lines;
+    List(Str) l1 = l0.concat([sa + " = alloca [1 x ptr]"]);
+    List(Str) l2 = l1.concat([gi + " = getelementptr [1 x ptr], ptr " + sa + ", i32 0, i32 0"]);
+    List(Str) l3 = l2.concat(["store ptr " + hb.val + ", ptr " + gi]);
+    List(Str) l4 = l3.concat([reg + " = call ptr @resid_box_new(i64 1, i64 1, ptr " + sa + ", ptr " + tsym + ")"]);
+    return GT { pos: close.pos, val: reg, ty: resty, cnt: 0, err: "", glines: gl2, lines: l4, tmp: t3, lbl: p.lbl };
+}
+
+// Lower `Err(payload)`: build a tag-2 Result box whose slot 0 holds the
+// heap-boxed error payload. Result type is Result(OkTy, ErrTy).
+GT cg_err_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
+    GT p = cg_expr(s, pos, env, fs, c);
+    if (p.err != "") { return p; }
+    Tok close = lex_tok(s, p.pos);
+    if (close.text != ")") { return gt_err("expected ) in Err(...)", p); }
+    GT hb = box_heap_(s, p, env, fs);
+    Int t1 = hb.tmp + 1;
+    Int t2 = hb.tmp + 2;
+    Int t3 = hb.tmp + 3;
+    Str sa = "%t" + IntToString(t1);
+    Str gi = "%t" + IntToString(t2);
+    Str reg = "%t" + IntToString(t3);
+    Str resty = "Result(_, " + p.ty + ")";
+    Str body = esc_ll(resty, 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int n1 = bl + 1;
+    Str tsym = "@.oty" + IntToString(t1);
+    Str g = tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\"";
+    List(Str) gg0 = hb.glines;
+    List(Str) gl2 = gg0.concat([g]);
+    List(Str) l0 = hb.lines;
+    List(Str) l1 = l0.concat([sa + " = alloca [1 x ptr]"]);
+    List(Str) l2 = l1.concat([gi + " = getelementptr [1 x ptr], ptr " + sa + ", i32 0, i32 0"]);
+    List(Str) l3 = l2.concat(["store ptr " + hb.val + ", ptr " + gi ]);
+    List(Str) l4 = l3.concat([reg + " = call ptr @resid_box_new(i64 2, i64 1, ptr " + sa + ", ptr " + tsym + ")"]);
+    return GT { pos: close.pos, val: reg, ty: resty, cnt: 0, err: "", glines: gl2, lines: l4, tmp: t3, lbl: p.lbl };
+}
+
 GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
     if (name == "Some") {
         return cg_some_con(s, pos, env, fs, c);
+    }
+    if (name == "Ok") {
+        return cg_ok_con(s, pos, env, fs, c);
+    }
+    if (name == "Err") {
+        return cg_err_con(s, pos, env, fs, c);
     }
     Tok t = lex_tok(s, pos);
     if (t.text == ")") {
@@ -2117,11 +2183,14 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
 GT cg_bin_rest(Str s, GT lhs, Int min_prec, List(Str) env, Funcs fs) {
     Tok t = lex_tok(s, lhs.pos);
     if (t.text == "?") {
-        // value? — unwrap sugar: None runs the enclosing function's early
-        // return (ret the received unit box unchanged); Some loads the slot.
-        if (!is_opt_ty_cg(lhs.ty)) { return gt_err("`?` requires an Option, found " + lhs.ty, lhs); }
-        Str ety = opt_elem_cg(lhs.ty);
-        if (ety == "_") { return gt_err("cannot unwrap Option(_) with `?`", lhs); }
+        // value? — unwrap sugar: None/Err runs the enclosing function's early
+        // return (ret the received unit box unchanged); Some/Ok loads the slot.
+        Bool is_opt = is_opt_ty_cg(lhs.ty);
+        Bool is_res = is_res_ty_cg(lhs.ty);
+        if (!is_opt && !is_res) { return gt_err("`?` requires an Option or Result, found " + lhs.ty, lhs); }
+        Str ety = if (is_opt) { opt_elem_cg(lhs.ty) } else { res_elem_ok_cg(lhs.ty) };
+        if (ety == "_") { return gt_err("cannot unwrap Option(_)/Result(_, E) with `?`", lhs); }
+        Int unit_tag = if (is_opt) { 2 } else { 2 };
         Int l1 = lhs.lbl + 1;
         Int l2 = lhs.lbl + 2;
         Str labn = "L" + IntToString(l1);
@@ -2135,7 +2204,7 @@ GT cg_bin_rest(Str s, GT lhs, Int min_prec, List(Str) env, Funcs fs) {
         List(Str) q0 = lhs.lines;
         List(Str) q1 = q0.concat([g1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + lhs.val + ", i32 0, i32 0"]);
         List(Str) q2 = q1.concat([g2 + " = load i64, ptr " + g1]);
-        List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", 2"]);
+        List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", " + IntToString(unit_tag)]);
         List(Str) q4 = q3.concat(["br i1 " + g3 + ", label %" + labn + ", label %" + labp]);
         List(Str) q5 = q4.concat([labn + ":"]);
         List(Str) q6 = q5.concat(["ret ptr " + lhs.val]);
@@ -2147,16 +2216,19 @@ GT cg_bin_rest(Str s, GT lhs, Int min_prec, List(Str) env, Funcs fs) {
         return cg_bin_rest(s, q, min_prec, env, fs);
     }
 if (t.text == "else") {
-        // value else { fallback } — unwrap sugar: Some uses the payload,
-        // None evaluates the single-expression block; phi joins both.
-        if (!is_opt_ty_cg(lhs.ty)) { return gt_err("`value else` requires an Option, found " + lhs.ty, lhs); }
-        Str ety = opt_elem_cg(lhs.ty);
-        if (ety == "_") { return gt_err("cannot unwrap Option(_) with else", lhs); }
+        // value else { fallback } — unwrap sugar: Some/Ok uses the payload,
+        // None/Err evaluates the single-expression block; phi joins both.
+        Bool is_opt = is_opt_ty_cg(lhs.ty);
+        Bool is_res = is_res_ty_cg(lhs.ty);
+        if (!is_opt && !is_res) { return gt_err("`value else` requires an Option or Result, found " + lhs.ty, lhs); }
+        Str ety = if (is_opt) { opt_elem_cg(lhs.ty) } else { res_elem_ok_cg(lhs.ty) };
+        if (ety == "_") { return gt_err("cannot unwrap Option(_)/Result(_, E) with else", lhs); }
+Int payload_tag = if (is_opt) { 1 } else { 1 };
         Int l1 = lhs.lbl + 1;
         Int l2 = lhs.lbl + 2;
         Int l3 = lhs.lbl + 3;
-        Str labp = "L" + IntToString(l1);   // payload (Some)
-        Str labf = "L" + IntToString(l2);   // fallback (None)
+        Str labp = "L" + IntToString(l1);   // payload (Some/Ok)
+        Str labf = "L" + IntToString(l2);   // fallback (None/Err)
         Str labm = "L" + IntToString(l3);   // merge
         Int t1 = lhs.tmp + 1;
         Int t2 = lhs.tmp + 2;
@@ -2167,7 +2239,7 @@ if (t.text == "else") {
         List(Str) q0 = lhs.lines;
         List(Str) q1 = q0.concat([g1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + lhs.val + ", i32 0, i32 0"]);
         List(Str) q2 = q1.concat([g2 + " = load i64, ptr " + g1]);
-        List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", 1"]);
+        List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", " + IntToString(payload_tag)]);
         List(Str) q4 = q3.concat(["br i1 " + g3 + ", label %" + labp + ", label %" + labf]);
         // Emit FALLBACK block FIRST so its br to labm appears first in IR,
         // making it the first predecessor → phi operand order: [fallback, payload].
@@ -2714,6 +2786,29 @@ Bool is_opt_ty_cg(Str t) {
     return t == "Option(_)" || str_has_prefix_cg(t, "Option(");
 }
 
+// Result type helpers (codegen half).
+Str res_elem_ok_cg(Str t) {
+    Str head = "Result(";
+    Int h = str_len(head);
+    if (str_has_prefix_cg(t, head)) {
+        Int comma = _find_comma_at_depth_cg(t, h, 0, 0);
+        if (comma >= 0) { return str_slice(t, h, comma); }
+    }
+    return t;
+}
+Str res_elem_err_cg(Str t) {
+    Str head = "Result(";
+    Int h = str_len(head);
+    if (str_has_prefix_cg(t, head)) {
+        Int comma = _find_comma_at_depth_cg(t, h, 0, 0);
+        if (comma >= 0) { return str_slice(t, comma + 1, str_len(t) - 1); }
+    }
+    return t;
+}
+Bool is_res_ty_cg(Str t) {
+    return str_has_prefix_cg(t, "Result(");
+}
+
 // Unbox a tag-1 Option's single payload slot into a usable SSA register.
 // Scalars call resid_unbox_*; Str/composite payloads pass through as-is.
 GT cg_match_payload(GT sc, Str ety, GT c) {
@@ -2790,7 +2885,48 @@ GT cg_match_arm(Str s, Int pos, List(Str) env, Funcs fs, GT sc, Str ety, GT c, S
         List(Str) x1 = x0.concat(["br label %" + labm]);
         return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl };
     }
-    Str msg = "match arm pattern must be Some(x) or None";
+    if (a.text == "Ok") {
+        Tok o1 = lex_tok(s, a.pos);
+        if (o1.text != "(") { return gt_err("expected ( in Ok arm pattern", c); }
+        Tok nm = lex_tok(s, o1.pos);
+        Tok o2 = lex_tok(s, nm.pos);
+        if (o2.text != ")") { return gt_err("expected ) after Ok binding in match arm", c); }
+        Tok ar = lex_tok(s, o2.pos);
+        if (ar.text != "=>") { return gt_err("expected => after Ok arm pattern", c); }
+        List(Str) l0 = c.lines;
+        List(Str) l1 = l0.concat([lab + ":"]);
+        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl };
+        GT pv = cg_match_payload(sc, ety, c1);
+        if (pv.err != "") { return pv; }
+        List(Str) env2 = env_add(env, nm.text + ":" + pv.val + ":" + ety);
+        GT body = cg_expr(s, ar.pos, env2, fs, pv);
+        if (body.err != "") { return body; }
+        List(Str) x0 = body.lines;
+        List(Str) x1 = x0.concat(["br label %" + labm]);
+        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl };
+    }
+    if (a.text == "Err") {
+        Tok o1 = lex_tok(s, a.pos);
+        if (o1.text != "(") { return gt_err("expected ( in Err arm pattern", c); }
+        Tok nm = lex_tok(s, o1.pos);
+        Tok o2 = lex_tok(s, nm.pos);
+        if (o2.text != ")") { return gt_err("expected ) after Err binding in match arm", c); }
+        Tok ar = lex_tok(s, o2.pos);
+        if (ar.text != "=>") { return gt_err("expected => after Err arm pattern", c); }
+        List(Str) l0 = c.lines;
+        List(Str) l1 = l0.concat([lab + ":"]);
+        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl };
+        Str errty = res_elem_err_cg(sc.ty);
+        GT pv = cg_match_payload(sc, errty, c1);
+        if (pv.err != "") { return pv; }
+        List(Str) env2 = env_add(env, nm.text + ":" + pv.val + ":" + errty);
+        GT body = cg_expr(s, ar.pos, env2, fs, pv);
+        if (body.err != "") { return body; }
+        List(Str) x0 = body.lines;
+        List(Str) x1 = x0.concat(["br label %" + labm]);
+        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl };
+    }
+    Str msg = "match arm pattern must be Some(x), None, Ok(x), or Err(x)";
     return gt_err(msg, c);
 }
 
@@ -2799,12 +2935,15 @@ GT cg_match_arm(Str s, Int pos, List(Str) env, Funcs fs, GT sc, Str ety, GT c, S
 GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     GT sc = cg_expr(s, pos, env, fs, c);
     if (sc.err != "") { return sc; }
-    if (!(str_has_prefix_cg(sc.ty, "Option(") || sc.ty == "Option(_)")) {
-        return gt_err("match scrutinee must be an Option, got " + sc.ty, sc);
+    Bool is_opt = str_has_prefix_cg(sc.ty, "Option(") || sc.ty == "Option(_)";
+    Bool is_res = str_has_prefix_cg(sc.ty, "Result(");
+    if (!is_opt && !is_res) {
+        return gt_err("match scrutinee must be an Option or Result, got " + sc.ty, sc);
     }
     Tok brace = lex_tok(s, sc.pos);
     if (brace.text != "{") { return gt_err("expected { in match expression", sc); }
-    Str ety = opt_elem_cg(sc.ty);
+    Str ety = if (is_opt) { opt_elem_cg(sc.ty) } else { res_elem_ok_cg(sc.ty) };
+    Int payload_tag = if (is_opt) { 1 } else { 1 };
     Int l1 = sc.lbl + 1;
     Int l2 = sc.lbl + 2;
     Int lm = sc.lbl + 3;
@@ -2820,10 +2959,10 @@ GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     List(Str) q0 = sc.lines;
     List(Str) q1 = q0.concat([g1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + sc.val + ", i32 0, i32 0"]);
     List(Str) q2 = q1.concat([g2 + " = load i64, ptr " + g1]);
-    List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", 1"]);
+    List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", " + IntToString(payload_tag)]);
     Tok a1 = lex_tok(s, brace.pos);
-    Bool first_some = a1.text == "Some";
-    Str brl = if (first_some) {
+    Bool first_payload = a1.text == "Some" || a1.text == "Ok";
+    Str brl = if (first_payload) {
         "br i1 " + g3 + ", label %" + laba + ", label %" + labb
     } else {
         "br i1 " + g3 + ", label %" + labb + ", label %" + laba
@@ -2834,7 +2973,7 @@ GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     if (arm1.err != "") { return arm1; }
     Tok sep1 = lex_tok(s, arm1.pos);
     if (sep1.text != ",") {
-        if (sep1.text == "}") { return gt_err("match needs both Some and None arms", arm1); }
+        if (sep1.text == "}") { return gt_err("match needs both payload and error arms", arm1); }
         return gt_err("expected , between match arms", arm1);
     }
     GT arm2c = GT { pos: sep1.pos, val: "", ty: "", cnt: 0, err: "", glines: arm1.glines, lines: arm1.lines, tmp: arm1.tmp, lbl: arm1.lbl };

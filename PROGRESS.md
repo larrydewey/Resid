@@ -23,11 +23,11 @@
 `run_sandbox_handle_entry_file_param`, `run_sandbox_capability_mode_readonly`,
 `bootstrap_option_sum_parity`, `bootstrap_match_parity`, `bootstrap_question_else_parity`).
 
-### Progress on item 9 — `value?` sugar (Option)
+### Progress on item 9 — `value?` sugar
 
 **Stage-1 DONE** (both Option and Result; e2e `run_question_sugar_option_and_result`).
 
-**Stage-2 PARTIAL**: Option `?`/`else` implemented and parity-verified (`bootstrap_question_else_parity`). Result `?`/`else` implemented in typechecker/codegen but **blocked in driver** by the driver's restricted language subset (no variable reassignment, no uninitialized declarations, limited control flow — driver can only express straight-line SSA-style code).
+**Stage-2 PARTIAL**: Option `?`/`else` fully implemented and parity-verified (`bootstrap_question_else_parity`; byte-identical output `22\n-1\n5\n-2`). Result `?`/`else` typechecker complete (constructors, match arms, `?`/`else` typing); codegen has a tag-handling bug in the `?` early-return path for Err values — early return not triggering, causing payload extraction on error variant. Debugging in progress.
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting
