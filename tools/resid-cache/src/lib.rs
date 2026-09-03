@@ -58,11 +58,22 @@ pub mod cbor {
 }
 
 /// One cached fact: `key` identifies the inputs, `value` names the artifact
-/// produced from them.
+/// produced from them, and `caps` is the set of capability families (spec
+/// §21.4) associated with producing/consuming that entry. A full read is
+/// always allowed; a *write* is permitted only when `caps` ≤ the sandbox's
+/// granted set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub key: String,
     pub value: String,
+    pub caps: Vec<String>,
+}
+
+/// Is every capability family in `required` also present in `grant`? Spec
+/// §21.4: a sandbox may write a cache entry only when the capabilities
+/// associated with it are ≤ the sandbox's granted set.
+pub fn caps_are_at_most(grant: &[String], required: &[String]) -> bool {
+    required.iter().all(|r| grant.iter().any(|g| g == r))
 }
 
 static SELF_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -75,16 +86,23 @@ pub struct Stats {
 }
 
 /// A content-addressed cache backed by a single CBOR file.
+///
+/// Serialization format (matches the subset the hand-rolled [`cbor`] encoder
+/// covers): a top-level CBOR map `key → {"v": value, "c": [cap, …]}`. Each
+/// entry's capabilities travel with it so §21.4 write gating survives
+/// persistence.
 pub struct Store {
     path: PathBuf,
-    entries: HashMap<String, String>,
+    entries: HashMap<String, Entry>,
     hits: std::sync::atomic::AtomicU64,
     misses: std::sync::atomic::AtomicU64,
 }
 
 impl Store {
     /// Open (or create) the cache at `path`. A missing or corrupt file is an
-    /// empty cache — the cache is an accelerator, never authoritative.
+    /// empty cache — the cache is an accelerator, never authoritative. A file
+    /// in the older flat `key → value` format is also accepted (capabilities
+    /// default to empty), so existing caches remain readable.
     pub fn open(path: &Path) -> Store {
         let entries = std::fs::read(path)
             .ok()
@@ -98,6 +116,7 @@ impl Store {
         }
     }
 
+    /// The cached artifact path for `key`, if present.
     pub fn get(&self, key: &str) -> Option<&str> {
         let hit = self.entries.get(key);
         if hit.is_some() {
@@ -105,18 +124,23 @@ impl Store {
         } else {
             self.misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        hit.map(String::as_str)
+        hit.map(|e| e.value.as_str())
     }
 
-    /// Drop a key; returns the previously cached value if present.
+    /// The full entry (value + associated capabilities) for `key`, if present.
+    pub fn get_entry(&self, key: &str) -> Option<&Entry> {
+        self.entries.get(key)
+    }
+
+    /// Drop a key; returns the previously cached artifact path if present.
     pub fn remove(&mut self, key: &str) -> Option<String> {
-        self.entries.remove(key)
+        self.entries.remove(key).map(|e| e.value)
     }
 
     /// Keep only the entries for which `pred` returns true (e.g. prune
     /// entries whose artifact no longer exists).
-    pub fn retain<F: FnMut(&str, &str) -> bool>(&mut self, mut pred: F) {
-        self.entries.retain(|k, v| pred(k, v));
+    pub fn retain<F: FnMut(&str, &Entry) -> bool>(&mut self, mut pred: F) {
+        self.entries.retain(|k, e| pred(k, e));
     }
 
     /// Hit/miss counts observed since this Store was opened.
@@ -127,8 +151,28 @@ impl Store {
         }
     }
 
+    /// Insert an entry with no associated capabilities.
     pub fn put(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.entries.insert(key.into(), value.into());
+        self.put_with_caps(key, value, Vec::new());
+    }
+
+    /// Insert an entry carrying the capability families associated with it
+    /// (spec §21.4). Callers gate the write with
+    /// [`caps_are_at_most`] against their sandbox grant.
+    pub fn put_with_caps(
+        &mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+        caps: Vec<String>,
+    ) {
+        self.entries.insert(
+            key.into(),
+            Entry {
+                key: String::new(),
+                value: value.into(),
+                caps,
+            },
+        );
     }
 
     /// Persist to disk (atomically: unique temp file per writer, then
@@ -141,8 +185,19 @@ impl Store {
         let mut keys: Vec<_> = self.entries.keys().collect();
         keys.sort();
         for k in keys {
+            let e = &self.entries[k];
             cbor::write_text(&mut out, k);
-            cbor::write_text(&mut out, &self.entries[k]);
+            // Inner map: {"v": value, "c": [caps...]}
+            let mut inner = Vec::new();
+            cbor::write_map_header(&mut inner, 2);
+            cbor::write_text(&mut inner, "v");
+            cbor::write_text(&mut inner, &e.value);
+            cbor::write_text(&mut inner, "c");
+            cbor::write_header(&mut inner, 4, e.caps.len());
+            for cap in &e.caps {
+                cbor::write_text(&mut inner, cap);
+            }
+            out.extend_from_slice(&inner);
         }
         let tmp = self.path.with_extension(format!(
             "tmp.{}.{}",
@@ -169,7 +224,7 @@ impl Store {
     }
 }
 
-fn decode_map(bytes: &[u8]) -> Option<HashMap<String, String>> {
+fn decode_map(bytes: &[u8]) -> Option<HashMap<String, Entry>> {
     let mut pos = 0usize;
     let first = *bytes.first()?;
     if first & 0xE0 != 0xA0 {
@@ -179,10 +234,51 @@ fn decode_map(bytes: &[u8]) -> Option<HashMap<String, String>> {
     let mut map = HashMap::new();
     for _ in 0..n {
         let k = read_text(bytes, &mut pos)?;
-        let v = read_text(bytes, &mut pos)?;
-        map.insert(k, v);
+        let entry = decode_entry(&bytes, &mut pos)?;
+        map.insert(k, entry);
     }
     Some(map)
+}
+
+/// Decode one entry value. Supports both the new map form `{"v", "c"}` and
+/// the legacy flat-text form (value only, empty capabilities).
+fn decode_entry(bytes: &[u8], pos: &mut usize) -> Option<Entry> {
+    let b = *bytes.get(*pos)?;
+    if b & 0xE0 == 0xA0 {
+        // Inner map: a single header byte (small maps only, len < 24).
+        *pos += 1;
+        let len = (b & 0x1F) as usize;
+        let mut value = None;
+        let mut caps = Vec::new();
+        for _ in 0..len {
+            let key_t = read_text(bytes, pos)?;
+            match key_t.as_str() {
+                "v" => value = Some(read_text(bytes, pos)?),
+                "c" => {
+                    let n = read_len(bytes, pos)? as usize;
+                    for _ in 0..n {
+                        caps.push(read_text(bytes, pos)?);
+                    }
+                }
+                _ => {
+                    // Skip an unknown value of text type.
+                    let _ = read_text(bytes, pos)?;
+                }
+            }
+        }
+        Some(Entry {
+            key: String::new(),
+            value: value?,
+            caps,
+        })
+    } else {
+        // Legacy flat text value (empty capabilities).
+        Some(Entry {
+            key: String::new(),
+            value: read_text(bytes, pos)?,
+            caps: Vec::new(),
+        })
+    }
 }
 
 fn read_uint(bytes: &[u8], pos: &mut usize) -> Option<u64> {
@@ -313,12 +409,11 @@ mod tests {
         let mut st = Store::open(&path);
         st.put("k-live", live.to_str().unwrap());
         st.put("k-stale", dir.join("missing_bin").to_str().unwrap());
-        st.retain(|_, v| Path::new(v).exists());
+        st.retain(|_, e| Path::new(&e.value).exists());
         assert_eq!(st.len(), 1);
         assert!(st.get("k-live").is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
-
     #[test]
     fn stats_count_hits_and_misses() {
         let dir = std::env::temp_dir().join(format!("resid-cache-st-{}", std::process::id()));
@@ -349,6 +444,35 @@ mod tests2 {
         cbor::write_text(&mut out, &k);
         cbor::write_text(&mut out, v);
         let m = decode_map(&out).expect("decode ok");
-        assert_eq!(m.get(&k).map(|s| s.as_str()), Some(v));
+        assert_eq!(m.get(&k).map(|e| e.value.as_str()), Some(v));
+    }
+
+    #[test]
+    fn caps_roundtrip_through_persistence() {
+        let dir = std::env::temp_dir().join(format!("resid-cache-caps-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(".resid-cache.cbor");
+        let mut st = Store::open(&path);
+        st.put_with_caps("k1", "/tmp/x", vec!["filesystem".to_string(), "network".to_string()]);
+        st.put("k2", "/tmp/y");
+        st.flush().unwrap();
+
+        let st2 = Store::open(&path);
+        let e1 = st2.get_entry("k1").expect("k1 present");
+        assert_eq!(e1.value, "/tmp/x");
+        assert_eq!(e1.caps, vec!["filesystem".to_string(), "network".to_string()]);
+        assert_eq!(st2.get_entry("k2").unwrap().caps.len(), 0);
+        assert_eq!(st2.get("k1"), Some("/tmp/x"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn caps_at_most_gates_the_write() {
+        // §21.4: a sandbox may write only when entry caps ≤ granted set.
+        assert!(caps_are_at_most(&["filesystem".into(), "network".into()], &["filesystem".into()]));
+        assert!(caps_are_at_most(&["filesystem".into()], &[]));
+        assert!(caps_are_at_most(&[], &[]));
+        assert!(!caps_are_at_most(&["network".into()], &["filesystem".into()]));
+        assert!(!caps_are_at_most(&["filesystem".into()], &["filesystem".into(), "network".into()]));
     }
 }
