@@ -1,6 +1,6 @@
 # Resid — Project Status
 
-**Specification**: `resid_specification.txt` v3.2 (Production Ready; v3.1 base + integer-width semantics amendments)
+**Specification**: `resid_specification.txt` v3.2 (Production Ready; v3.1 base + integer-width semantics amendments; some items still in flux — see audit below)
 **Implementation**: Rust stable + LLVM (inkwell), monorepo Cargo workspace
 **Interpreter**: None — direct LLVM
 **Wide numerics**: `Int(128)..Int(512)` / `UInt(N)` via LLVM arbitrary-width integers, `Float` capped at 128, `Dec(N)` exact decimals
@@ -9,11 +9,13 @@
 
 ## 0. Current Snapshot
 
-**745 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 245,
+**~725 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 245,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 108 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + ~88 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
+  `run_ed25519_verify_in_resid` has vector mismatch;
+  `run_stage2_provenance_sidecar` signature verification invalid);
 `run_h2_post_and_continuation_in_resid`,
 `run_sandbox_handle_entry_file_argument`,
 `run_sandbox_force_time_guard_present`, `run_sandbox_force_time_guard_fires`,
