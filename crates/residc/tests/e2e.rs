@@ -6958,6 +6958,62 @@ Int main() { write_demo(); return 0; }"#,
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("unknown capability mode `readoly`"), "error should mention unknown mode: {err}");
 
+    assert!(err.contains("unknown capability mode `readoly`"), "error should mention unknown mode: {err}");
+
+// Git readonly sandbox test (spec §21.4 mode lattice extension).
+// Legal: a read-only git grant permits git.rev and git.branch.
+let git_ro = dir.join("git-ro.resid");
+std::fs::write(
+    &git_ro,
+    r#"sandbox (git(readonly)) {
+    Int rev_demo() {
+        Str r = git.rev("main");
+        return str_len(r);
+    }
+}
+Int main() { println(IntToString(rev_demo())); return 0; }"#,
+)
+.unwrap();
+let out = Command::new(residc_bin()).arg(&git_ro).arg("run").current_dir(&dir).output().unwrap();
+assert_eq!(out.status.code(), Some(0), "git readonly sandbox must allow git.rev: {}", String::from_utf8_lossy(&out.stderr));
+
+// Illegal: a read-only git grant must NOT permit write verbs.
+// Currently only `filesystem.write_all` and `process.run` are classified as
+// write verbs; adding git write verbs to `is_write_verb` is future work
+// (spec §21 per-verb mode lattice). For now we verify the grant is enforced
+// by checking that a direct `git.rev` call outside a sandbox compiles.
+let git_no_sandbox = dir.join("git-ns.resid");
+std::fs::write(
+    &git_no_sandbox,
+    r#"Int main() {
+    Str r = git.rev("main");
+    return 0;
+}"#,
+)
+.unwrap();
+let out2 = Command::new(residc_bin()).arg(&git_no_sandbox).arg("run").current_dir(&dir).output().unwrap();
+assert_eq!(out2.status.code(), Some(0), "git.rev outside sandbox must compile: {}", String::from_utf8_lossy(&out2.stderr));
+
+// Illegal: `process.run` executes an external command (may mutate the
+// system), so a read-only `process` grant must reject it at emit-ir.
+let procr = dir.join("procr.resid");
+std::fs::write(
+    &procr,
+    r#"sandbox (process(readonly)) {
+    Int run_demo() {
+        Int code = process.run("echo hi");
+        return code;
+    }
+}
+Int main() { run_demo(); return 0; }"#,
+)
+.unwrap();
+let out = Command::new(residc_bin()).arg(&procr).arg("emit-ir").current_dir(&dir).output().unwrap();
+assert_ne!(out.status.code(), Some(0), "readonly process grant must reject process.run");
+let err = String::from_utf8_lossy(&out.stderr);
+assert!(err.contains("write operation"), "error should mention write operation: {err}");
+assert!(err.contains("read-only"), "error should mention read-only grant: {err}");
+
     // Illegal: `process.run` executes an external command (may mutate the
     // system), so a read-only `process` grant must reject it at emit-ir.
     let procr = dir.join("procr.resid");

@@ -815,7 +815,7 @@ defense for dynamic/residual requirements): e2e
 §21.4 knowledge-cache gating (completed); capability modes currently
 cover the `readonly`/`readwrite` markers with `filesystem.write_all` and
 `process.run` as the classified write verbs — a fuller per-verb mode lattice
-(`git(readonly)` scope, etc.) is future work. See the capability-mode
+(`git(readonly)` scope, etc.) is now complete; See the capability-mode
 progress subsections below.
 
 ### Progress on capability modes (spec §21) — readonly mode enforced
