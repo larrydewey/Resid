@@ -9,12 +9,13 @@
 
 ## 0. Current Snapshot
 
-**735 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 241,
+**742 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 245,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 104 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + 105 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
+`run_sandbox_handle_entry_file_argument`,
 `build_cache_invalidates_on_import_change`,
 `run_behavior_ord_sort`, `bootstrap_behavior_ord_parity`,
 `run_sandbox_enforcement`, `run_map_set_types`,
@@ -405,10 +406,10 @@ residual computation emitted, notes + provenance sidecar produced).
 The §7 spec-conformance roadmap is now effectively complete — every
 curated item has landed in at least stage-1 (many in both pipelines).
 Remaining work is the trailing gaps enumerated in §7's item 1 (§21
-sandboxing): runtime/force-time dynamic capability errors, inline
-File-argument value provenance, the §21.4 knowledge-cache gating, and
-the fuller capability-mode lattice — plus driving the remaining
-features into stage-2 parity.
+sandboxing): runtime/force-time dynamic capability errors and the §21.4
+knowledge-cache gating, plus a fuller per-verb capability-mode lattice —
+and driving the remaining features into stage-2 parity. Inline
+File-argument value provenance (§21.3) is now tracked.
 
 ---
 
@@ -450,12 +451,13 @@ parity remains for the stage-1-only features.
    (call-graph meet fixpoint), manifest (per-dependency) capability
    ceilings (§21.1, enforced at type check — see §7). Still missing:
 dynamic/residual capability errors (runtime force-time checking not
-implemented); handle-entry rules (acquisition enforced via
-provider-family checks; File method provenance `read_handle`/`close`
-tracked in restricted regions; value provenance for handles passed as
-values across function boundaries — File **parameters** enforced via the
-§21.3 entry rule (a handle may only enter a restricted function whose
-ceiling grants `filesystem`, e2e `run_sandbox_handle_entry_file_param`));
+implemented); handle-entry rules ✅ (compile-time front complete —
+acquisition enforced via provider-family checks; File method provenance
+`read_handle`/`close` tracked in restricted regions; value provenance for
+handles passed as values across function boundaries — File **parameters**
+enforced via the §21.3 entry rule, e2e
+`run_sandbox_handle_entry_file_param`, and **File values passed as inline
+call arguments** now tracked too, e2e `run_sandbox_handle_entry_file_argument`));
 **capability modes (spec §21)** — `filesystem(readonly)` now enforced:
 a read-only grant rejects write verbs (`filesystem.write_all`) at the call
 site, surviving the transitive-attenuation closure (e2e
@@ -790,12 +792,14 @@ capabilities = […]` now enforced at type check as the dependency's
 effective ceiling (see §7 "Progress on item 1" above).
 
 **Remaining gaps**: dynamic/residual capability errors (runtime force-time
-checking not implemented); handle-entry (acquisition enforced, value
-provenance tracking for File methods `read_handle`/`close` in restricted
-regions implemented; File **parameters** crossing the boundary enforced via
-the §21.3 entry rule — e2e `run_sandbox_handle_entry_file_param` — but File
-values passed as inline call arguments into restricted callees not yet
-tracked); §21.4 knowledge-cache gating (deferred); capability modes currently
+checking not implemented); handle-entry enforcement now complete on the
+compile-time front — acquisition enforced, File method provenance for
+`read_handle`/`close` tracked in restricted regions, File **parameters**
+crossing the boundary enforced via the §21.3 entry rule (e2e
+`run_sandbox_handle_entry_file_param`), and **File values passed as inline
+call arguments** into restricted callees now tracked too (spec §21.3 value
+provenance; e2e `run_sandbox_handle_entry_file_argument`); §21.4
+knowledge-cache gating (deferred); capability modes currently
 cover the `readonly`/`readwrite` markers with `filesystem.write_all` and
 `process.run` as the classified write verbs — a fuller per-verb mode lattice
 (`git(readonly)` scope, etc.) is future work. See the capability-mode

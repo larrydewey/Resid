@@ -6760,6 +6760,75 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
+fn run_sandbox_handle_entry_file_argument() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sandbox-handle-arg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Legal: a File handle *value* passed as an inline call argument into a
+    // sandbox whose ceiling grants `filesystem` compiles and runs.
+    let ok = dir.join("ok.resid");
+    let data = dir.join("data.txt");
+    std::fs::write(&data, "hello").unwrap();
+    std::fs::write(
+        &ok,
+        r#"Int sink(File h) {
+    return 1;
+}
+
+sandbox (filesystem) {
+    Int forward(File f) {
+        Int r = sink(f);
+        return r;
+    }
+}
+
+Int main() {
+    File h = filesystem.open("data.txt");
+    Int n = forward(h);
+    println(IntToString(n));
+    Bool ok = filesystem.close(h);
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&ok).arg("run").current_dir(&dir).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "1");
+
+    // Illegal: a File handle *value* passed as an inline call argument into a
+    // sandbox that does NOT grant `filesystem` is rejected at compile time
+    // (spec §21.3 value provenance).
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"Int sink(File h) {
+    return 1;
+}
+
+sandbox (network) {
+    Int forward(File f) {
+        Int r = sink(f);
+        return r;
+    }
+}
+
+Int main() {
+    File h = filesystem.open("data.txt");
+    Int n = forward(h);
+    println(IntToString(n));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&bad).arg("emit-ir").current_dir(&dir).output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "File value as inline arg into non-filesystem sandbox must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("File handle value"), "error should mention File handle value: {err}");
+    assert!(err.contains("filesystem"), "error should mention filesystem: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+#[test]
 fn run_sandbox_capability_mode_readonly() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-sandbox-mode-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
