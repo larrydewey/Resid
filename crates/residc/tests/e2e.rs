@@ -6756,6 +6756,25 @@ Int main() { write_demo(); return 0; }"#,
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("unknown capability mode `readoly`"), "error should mention unknown mode: {err}");
 
+    // Illegal: `process.run` executes an external command (may mutate the
+    // system), so a read-only `process` grant must reject it at emit-ir.
+    let procr = dir.join("procr.resid");
+    std::fs::write(
+        &procr,
+        r#"sandbox (process(readonly)) {
+    Int run_demo() {
+        Int code = process.run("echo hi");
+        return code;
+    }
+}
+Int main() { run_demo(); return 0; }"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&procr).arg("emit-ir").current_dir(&dir).output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "readonly process grant must reject process.run");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("write operation") && err.contains("read-only"), "error should mention write under read-only: {err}");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]

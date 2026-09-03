@@ -571,10 +571,15 @@ fn grant_readonly_only(caps: &[String], family: &str) -> bool {
 }
 
 /// Which verbs are write operations for a provider family (spec §21 mode
-/// narrowing: a read-only grant must not permit writes). Presently only
-/// `filesystem.write_all` is a clearly-filesystem-mutating verb.
+/// narrowing: a read-only grant must not permit writes). So far these are the
+/// clearly system-mutating verbs: `filesystem.write_all` truncates/rewrites a
+/// file; `process.run` executes an external command that may mutate the system.
 fn is_write_verb(family: &str, verb: &str) -> bool {
-    family == "filesystem" && verb == "write_all"
+    match (family, verb) {
+        ("filesystem", "write_all") => true,
+        ("process", "run") => true,
+        _ => false,
+    }
 }
 
 /// Set meet preserving order of the first operand, by capability family, with
@@ -8068,6 +8073,47 @@ sandbox (filesystem(readoly)) {
             errs.iter()
                 .any(|e| e.message.contains("unknown capability mode `readoly`")),
             "unknown mode must be rejected, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn capability_mode_process_readonly_rejects_run() {
+        // `process.run` executes an external command, which may mutate the
+        // system; a read-only `process` grant must reject it.
+        let src = r#"
+sandbox (process(readonly)) {
+    Int demo() {
+        Int code = process.run("echo hi");
+        return code;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("`process.run` is a write operation") && e.message.contains("read-only")),
+            "readonly process sandbox must reject process.run, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn capability_mode_process_readwrite_allows_run() {
+        let src = r#"
+sandbox (process(readwrite)) {
+    Int demo() {
+        Int code = process.run("echo hi");
+        return code;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "readwrite process sandbox must allow process.run, got: {:?}",
             errs
         );
     }
