@@ -677,7 +677,13 @@ GT widen_val(GT v, Str target_ty) {
     Str vt = num_norm_cg(v.ty);
     Str tt = num_norm_cg(target_ty);
     if (vt == tt) { return v; }
-    return cg_convert(v, ll_ty(vt), ll_ty(tt), ll_is_signed(vt), v);
+    GT conv = cg_convert(v, ll_ty(vt), ll_ty(tt), ll_is_signed(vt), v);
+    // cg_convert reports the register's ORIGINAL type in .ty, not what it
+    // was just converted to (the explicit-cast call site below already
+    // works around this by overriding .ty itself — this call site didn't,
+    // which is exactly the bug that made cg_args's ll_ty(v.ty) format a
+    // freshly-sext'd i128 register back out as "i64").
+    return GT { pos: conv.pos, val: conv.val, ty: target_ty, cnt: conv.cnt, err: "", glines: conv.glines, lines: conv.lines, tmp: conv.tmp, lbl: conv.lbl };
 }
 
 // Emit a conversion from value `v` (LLVM type `from`) to `to`.
@@ -1300,20 +1306,35 @@ GT gt_err(Str msg, GT c) {
     return GT { pos: c.pos, val: "", ty: "", cnt: 0, err: msg, glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
 }
 
-GT cg_args(Str s, Int pos, Str acc, Int count, List(Str) env, Funcs fs, GT c) {
+// `ptys` is the callee's declared parameter types, positional (built by
+// splitting Funcs.pts[idx] on ", "), or the empty list when the callee
+// isn't a known user function (externs/arith-family keep today's
+// behavior: each argument keeps its own inferred type). Each argument is
+// widened to match its position's declared type before being formatted
+// into the call text — without this, a literal narrower than the
+// parameter (e.g. a bare `0` passed to a UInt(128) parameter) bakes a
+// mismatched LLVM type into the call site: the callee's calling
+// convention no longer lines up with what the caller actually passed,
+// and register/stack reads go to garbage. Confirmed by hand: this is
+// exactly what made `count_up(0, 5)`-shaped calls corrupt their own loop
+// counter and recurse into a multi-GB runaway instead of returning after
+// 5 steps.
+GT cg_args(Str s, Int pos, Str acc, Int count, List(Str) env, Funcs fs, GT c, List(Str) ptys) {
     Tok t = lex_tok(s, pos);
     if (t.text == ")") {
         return GT { pos: t.pos, val: acc, ty: "", cnt: count, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
     }
-    GT v = cg_expr(s, pos, env, fs, c);
-    if (v.err != "") { return v; }
+    GT v0 = cg_expr(s, pos, env, fs, c);
+    if (v0.err != "") { return v0; }
+    Str want = if (count < ptys.len()) { ptys[count] } else { "" };
+    GT v = if (want == "" || want == v0.ty) { v0 } else { widen_val(v0, want) };
     Str sep = if (acc != "") { ", " } else { "" };
     Str acc2 = acc + sep + ll_ty(v.ty) + " " + v.val;
     Int c2 = count + 1;
     Tok comma = lex_tok(s, v.pos);
     GT cs = GT { pos: comma.pos, val: acc2, ty: "", cnt: c2, err: "", glines: v.glines, lines: v.lines, tmp: v.tmp, lbl: v.lbl };
     if (comma.text == ",") {
-        return cg_args(s, comma.pos, acc2, c2, env, fs, cs);
+        return cg_args(s, comma.pos, acc2, c2, env, fs, cs, ptys);
     }
     return cs;
 }
@@ -1522,9 +1543,15 @@ GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
         List(Str) cl = lc0.concat([line]);
         return GT { pos: t.pos, val: reg, ty: rraw0, cnt: 0, err: "", glines: c.glines, lines: cl, tmp: t1, lbl: c.lbl };
     }
-    GT a = cg_args(s, pos, "", 0, env, fs, c);
-    if (a.err != "") { return a; }
+    // Look up the callee's declared parameter types BEFORE lowering
+    // arguments, so cg_args can widen each one to match (see cg_args).
     Int idx = fn_index(fs, name);
+    List(Str) ptys = if (idx < 0) { nil_list() } else {
+        Str ptstr = fs.pts[idx];
+        if (ptstr == "") { nil_list() } else { split_rest_depth(ptstr, ", ") }
+    };
+    GT a = cg_args(s, pos, "", 0, env, fs, c, ptys);
+    if (a.err != "") { return a; }
     if (idx < 0) {
         Str eret = cg_extern_ret(name);
         if (eret != "") {
@@ -6179,6 +6206,7 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
 
 
 
