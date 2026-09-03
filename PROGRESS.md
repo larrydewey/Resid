@@ -9,7 +9,7 @@
 
 ## 0. Current Snapshot
 
-**730 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
+**732 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 239,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
   resid-graph 4, resid-builtin 0, residc 0 unit + 103 e2e incl.
@@ -784,4 +784,19 @@ scope) is future work.
   readonly allows read / snapshot of the closure narrowing), residc e2e +1
   (`run_sandbox_capability_mode_readonly`: legal read-only `run` + illegal
   write `emit-ir` rejection).
+
+### Progress on capability modes — unknown-mode rejection (soundness)
+
+- Only `readonly` and `readwrite` are valid per-family mode keywords; a
+  misspelled mode (e.g. `filesystem(readoly)`) previously fell through to the
+  read-write branch, silently escalating a would-be read-only grant to full
+  read-write authority. `check_program_with` now rejects any unknown
+  identifier mode on a function's `sandbox_ceiling` with a precise diagnostic
+  (`unknown capability mode \`readoly\` on \`filesystem\`; supported modes are
+  \`readonly\` and \`readwrite\``). Explicit `readwrite` is accepted and
+  behaves like the bare family (read-write).
+- Tests: resid-type +2 (`capability_mode_unknown_keyword_rejected`,
+  `capability_mode_explicit_readwrite_allows_write`), residc e2e +1 assertion
+  (typo-mode `emit-ir` rejection in `run_sandbox_capability_mode_readonly`).
+
 
