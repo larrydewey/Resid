@@ -78,10 +78,10 @@ impl<'a> Ctx<'a> {
                 if self.eval(cond, env)?.into_bool()? {
                     let v = self.eval_block(then_block, env, true);
                     if self.pending {
-                        // Branch had an early return - propagate it as this if's value
-                        let pv = self.pending_value.take();
-                        self.pending = false;
-                        return pv;
+                        // Branch had an early return; leave pending set so the
+                        // caller's statement loop can propagate it out of the
+                        // enclosing block.
+                        return v;
                     }
                     v
                 } else {
@@ -89,9 +89,7 @@ impl<'a> Ctx<'a> {
                         Some(b) => {
                             let v = self.eval_block(b, env, true);
                             if self.pending {
-                                let pv = self.pending_value.take();
-                                self.pending = false;
-                                return pv;
+                                return v;
                             }
                             v
                         }
@@ -206,17 +204,14 @@ impl<'a> Ctx<'a> {
             }
         }
         if let Some(ret) = &block.ret {
-            if capture_tail {
-                // Function body (or expression block): ret is the normal return value.
-                self.eval(ret, &local)
-            } else {
-                // Nested block (e.g., if-branch): ret represents an early return.
-                // Signal via pending so caller's statement loop propagates it.
-                let v = self.eval(ret, &local);
-                self.pending = true;
-                self.pending_value = v.clone();
-                v
-            }
+            // block.ret always represents an explicit `return` statement extracted
+            // by parse_block (expression blocks have block.ret = None).  Propagate
+            // it via pending so the caller can distinguish a real early return from
+            // an expression-block tail value.
+            let v = self.eval(ret, &local);
+            self.pending = true;
+            self.pending_value = v.clone();
+            v
         } else if capture_tail {
             // Mimic codegen's tail capture: if the last statement is an expression
             // statement, treat it as the block's value.
@@ -430,9 +425,9 @@ Int one() {
 }
 "#,
         );
-        // `{ return 5; }` parses as a tail value, not an abort.
-        // Statement-level if discards the branch value.
-        assert_eq!(call(&u, "main()"), Some(CValue::Int(9)));
+        // An early `return` inside an if-branch terminates the enclosing
+        // function: `main()` returns 5, not the trailing 9.
+        assert_eq!(call(&u, "main()"), Some(CValue::Int(5)));
         assert_eq!(call(&u, "one()"), Some(CValue::Int(1)));
     }
 

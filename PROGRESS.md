@@ -22,7 +22,18 @@
 `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`,
 `run_sandbox_handle_entry_file_param`, `run_sandbox_capability_mode_readonly`,
 `bootstrap_option_sum_parity`, `bootstrap_match_parity`, `bootstrap_question_else_parity`,
-`run_wide_int_boxing`).
+`run_wide_int_boxing`, `run_early_return_in_branch_and_recursion`).
+
+**Early-return bug fixed**: comptime reduction (`resid-type/src/reduce.rs`)
+was dropping explicit `return` statements inside `if`-branches during
+constant folding — `if (n <= 0) { return 42; }` folded `f(-5)` to the
+trailing `7` instead of `42`. `eval_block` now always propagates
+`block.ret` (parse_block extracts every explicit `return` into it) through
+the `pending` flag, and the `ExprKind::If` evaluator leaves `pending` set
+so the enclosing statement loop aborts. Codegen already emitted correct
+LLVM; only the comptime path was wrong. e2e
+`run_early_return_in_branch_and_recursion` (`42\n7\n15\n55`) now green;
+`resid-type` `probe_primitive` updated to assert early-abort semantics.
 
 ### Progress on item 9 — `value?` sugar
 
