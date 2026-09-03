@@ -18,6 +18,7 @@
 #include <string.h>
 #include <limits.h>
 #include <pthread.h>
+#include <setjmp.h>
 #include <sys/random.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -37,8 +38,22 @@ bool println(const char* s) {
     return true;
 }
 
-/* Abort with a message: `todo(...)`/`unimplemented(...)` trap here. */
+/* Abort with a message: `todo(...)`/`unimplemented(...)` trap here.
+ *
+ * Inside a spawned region (spec §19) the abort is *catchable*: rather than
+ * terminating the process, it unwinds back to the spawn worker's setjmp point
+ * and is delivered to the parent as `Err(RegionError)`. At top level — where
+ * no catch is installed — it aborts the process (spec §24: "Top-level
+ * residual force or unwrap failure aborts the process; inside a concurrent
+ * region, failure is delivered as Result"). */
+static _Thread_local sigjmp_buf* resid_spawn_catch = NULL;
+static _Thread_local const char* resid_spawn_catch_msg = NULL;
+
 _Noreturn void resid_abort(const char* msg) {
+    if (resid_spawn_catch) {
+        resid_spawn_catch_msg = msg ? msg : "region abort";
+        longjmp(*resid_spawn_catch, 1);
+    }
     if (msg && msg[0]) {
         fprintf(stderr, "resid: abort: %s\n", msg);
     } else {
@@ -200,13 +215,44 @@ void** resid_box_slots(void* b) { return ((ResidVal*)b)->slots; }
 /* The i-th slot of a boxed object. */
 void* resid_box_slot(void* b, int64_t i) { return ((ResidVal*)b)->slots[i]; }
 
+/* A spawn worker ({ fn, captures }), run on a fresh thread. */
+typedef struct {
+    void* (*worker)(void*);
+    void* captures;
+} resid_spawn_arg_t;
+
+/* Thread entry for spawn. Installs a catchable-abort target (spec §19) on the
+ * region's own thread and runs the worker:
+ *   - normal return -> the worker's boxed `Ok(T)` result;
+ *   - `resid_abort` inside the worker (e.g. division by zero, bounds abort,
+ *     an outstanding `todo`) -> longjmps here, which builds a boxed
+ *     `Err(RegionError)` carrying the failure message (child failure is
+ *     delivered to the parent as Result, spec §19/§24). */
+static void* resid_spawn_entry(void* a) {
+    resid_spawn_arg_t* arg = (resid_spawn_arg_t*)a;
+    sigjmp_buf jb;
+    resid_spawn_catch = &jb;
+    if (sigsetjmp(jb, 1) == 0) {
+        void* result = arg->worker(arg->captures);
+        resid_spawn_catch = NULL;
+        return result;
+    }
+    /* Unwound out of the worker body: build Err(RegionError{message}). */
+    const char* msg = resid_spawn_catch_msg ? resid_spawn_catch_msg : "child region aborted";
+    resid_spawn_catch = NULL;
+    char* m = resid_box_str(msg);
+    void* region = resid_box_new(0, 1, (void*[]){ m }, "RegionError");
+    return resid_box_new(1, 1, (void*[]){ region }, "Result");
+}
+
 /* Structured spawn (spec §19): run `worker(captures)` on a fresh thread and
- * join before returning the worker's result (a boxed `Ok(T)` for now; child
- * failure -> `Err(RegionError)` is the future abort-catchable path). */
+ * join before returning the result — a boxed `Result(T, RegionError)` that is
+ * `Ok(T)` on success or `Err(RegionError)` when the child region aborts. */
 void* resid_spawn(void* (*worker)(void*), void* captures) {
     pthread_t t;
     void* ret = NULL;
-    if (pthread_create(&t, NULL, worker, captures) != 0) return NULL;
+    resid_spawn_arg_t arg = { worker, captures };
+    if (pthread_create(&t, NULL, resid_spawn_entry, &arg) != 0) return NULL;
     pthread_join(t, &ret);
     return ret;
 }

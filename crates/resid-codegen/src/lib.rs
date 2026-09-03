@@ -3194,8 +3194,9 @@ impl<'ctx> CodeGen<'ctx> {
     /// Lower `spawn (caps) { body }` (spec §19): compile the body as a worker
     /// function that receives the captured outer-scope values boxed in a
     /// `ResidVal` (tag 0), run it on a fresh pthread via `resid_spawn`, and
-    /// join before yielding `Result(T, RegionError)` — always `Ok(T)` for now
-    /// (child failure → `Err(RegionError)` is the future abort-catchable path).
+    /// join before yielding `Result(T, RegionError)` — `Ok(T)` on success, or
+    /// `Err(RegionError)` when the child aborts (delivered via setjmp/longjmp
+    /// unwind in the runtime rather than terminating the process).
     fn lower_spawn(
         &mut self,
         sc: &mut Scope<'ctx>,

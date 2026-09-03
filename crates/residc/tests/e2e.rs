@@ -1898,6 +1898,73 @@ fn run_spawn_nested() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Spec §19 "Child failure -> Err(RegionError) to parent": a runtime abort
+/// inside a spawned worker (here a list-index bounds abort routed through
+/// `resid_abort`) is delivered to the parent as `Err(RegionError)`, which the
+/// parent's `match` catches — it does NOT terminate the process. A healthy
+/// worker still yields `Ok(T)`.
+#[test]
+fn run_spawn_child_failure_err() {
+    let dir = std::env::temp_dir()
+        .join(format!("residc-e2e-spawn-err-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Legal / healthy: worker returns a value; parent sees Ok and prints 42.
+    let okpath = dir.join("ok.resid");
+    std::fs::write(
+        &okpath,
+        r#"Int main() {
+    Result(Int, RegionError) r = spawn () {
+        return 42;
+    };
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    println(IntToString(out));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&okpath).arg("run").current_dir(&dir).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "42");
+
+    // Child failure: a list-index bounds abort inside the worker (routed via
+    // resid_abort) is DELIVERED as Err(RegionError), not a process abort. The
+    // parent's match takes the Err arm -> prints 7, process exits 0.
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"Int tricky(Int i) {
+    List(Int) xs = [10, 20, 30];
+    return xs[i];
+}
+
+Int main() {
+    Result(Int, RegionError) r = spawn () {
+        Int idx = 7;
+        Int y = tricky(idx);
+        return y;
+    };
+    Int out = match r {
+        Ok(n) => 1,
+        Err(e) => 7,
+    };
+    println(IntToString(out));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&bad).arg("run").current_dir(&dir).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "child failure must not abort the process:\n{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "7");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// M6b: the self-hosted fused codegen emits LLVM IR for a sample program;
 /// the IR assembles with clang + the C runtime and runs correctly.
 #[test]

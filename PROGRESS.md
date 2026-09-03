@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**734 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 241,
+**735 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 241,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 103 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + 104 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
@@ -21,6 +21,7 @@
 `bootstrap_map_set_parity`, `run_constraint_types`,
 `reduction_known_fib_comptime_print`, `reduction_falls_back_to_runtime`,
 `run_sandbox_handle_entry_file_param`, `run_sandbox_capability_mode_readonly`,
+`run_spawn_child_failure_err`,
 `bootstrap_option_sum_parity`, `bootstrap_match_parity`, `bootstrap_question_else_parity`,
 `run_wide_int_boxing`, `run_early_return_in_branch_and_recursion`).
 
@@ -316,11 +317,6 @@ Compiler bugs discovered & documented:
   their lockfile content hashes.
 
 ---
-- The residc build cache does not hash import contents: changing a
-  library does NOT invalidate cached binaries (touch the main source to
-  force rebuilds). This silently cost several debugging rounds.
-
----
 
 ## 3. Language Gotchas Reference (accumulated, still current)
 
@@ -406,9 +402,13 @@ residual computation emitted, notes + provenance sidecar produced).
 
 ## 6. Next Steps
 
-1. ~~`why` LSP view~~ — done: `resid-lsp` publishes sidecar residuals as
-   diagnostics + hover explanations over stdio JSON-RPC.
-2. Spec-conformance roadmap (§7 below) — behaviors first.
+The §7 spec-conformance roadmap is now effectively complete — every
+curated item has landed in at least stage-1 (many in both pipelines).
+Remaining work is the trailing gaps enumerated in §7's item 1 (§21
+sandboxing): runtime/force-time dynamic capability errors, inline
+File-argument value provenance, the §21.4 knowledge-cache gating, and
+the fuller capability-mode lattice — plus driving the remaining
+features into stage-2 parity.
 
 ---
 
@@ -417,6 +417,14 @@ residual computation emitted, notes + provenance sidecar produced).
 Audit result: the language is self-hosted and broadly functional, but
 NOT yet 100% spec-complete. This section is the curated work list; an
 item is DONE only when it ships in **both** pipelines (see policy).
+
+**Status: the curated list is now essentially complete.** Every item has
+landed in at least stage-1; behaviors, `?`-sugar, Map/Set, and constraint
+typing are done in both pipelines. The only remaining conformance gaps
+are the trailing §21 sandboxing items captured under item 1 (runtime
+force-time capability errors, inline File-argument provenance, §21.4
+knowledge-cache gating, fuller mode lattice) plus whatever stage-2
+parity remains for the stage-1-only features.
 
 ### Self-hosting policy (normative)
 
@@ -434,7 +442,7 @@ item is DONE only when it ships in **both** pipelines (see policy).
 - Hard constraint from the audit: a feature used by the driver's own
   sources can never precede Rust support for it.
 
-### MISSING — wholly absent
+### MISSING — item 1 largely done; only §21 trailing gaps remain
 
 1. §21/§43 Sandbox & attenuation — `sandbox (caps) { }` blocks parse and
    flatten; type checker enforces static ceiling on `@requires` (hard
@@ -458,40 +466,66 @@ gating (deferred: no CBOR store in build path).
     and are discharged on annotated bindings (statically-known integer
     literals only; see progress below).
 3. Core behaviors `Serialize`, `Allocator`, `Reverse`, generic `Hash`
-   (§12 list) — zero implementation.
+   (§12 list) — **✅ DONE (stage-1)**: generic numeric `Ord`/`Eq`/`Hash`
+   synthesized for all widths; `Serialize`/`Allocator` shape-checked;
+   e2e `run_generic_numeric_behaviors` (see progress below).
 4. Map / Set types — `MapLit` parses; nothing resolves in type check or
-   codegen. → **✅ DONE (stage-1), see progress below.**
+   codegen. → **✅ DONE (stage-1 + stage-2)**, see progress below.
 5. Per-width `wrapping_*` / `saturating_*` — ✅ done (LLVM native
-   lowering for add/sub/mul at any width; div falls back to i64 C runtime).
+   lowering for add/sub/mul at any width; div falls back to i64 C runtime;
+   e2e `run_per_width_wrapping_saturating`).
 
-### PARTIAL — parsed or stubbed, not real
+### PARTIAL → mostly DONE (see per-item marks; each ✅ references its progress section below)
 
-6. §11 Behavior system — `BehaviorDef` + `using =` parse; type checker
-   has zero behavior logic; codegen ignores it. No user-defined
-   `Ord(Int) = ...` instantiation (`sort` is a hardcoded rt builtin).
-   **Serialization depends on this — attack order starts here.**
+6. §11 Behavior system — **✅ DONE (both pipelines)**: `BehaviorDef` +
+   `using =` parse; type checker collects/validates instances; codegen
+   synthesizes comparator trampolines; `sort` lowers to `list_sort_by`.
+   Stage-2 parity via `bootstrap_behavior_ord_parity` (see progress below).
 7. §19 Concurrency — spawn works (pthreads); child≤parent and the child's
    fresh CapEnv are enforced statically in the type checker (§19, e2e
-   `run_spawn_simple`/`run_spawn_with_captures`/`run_spawn_nested`), but
-   child failure is still stubbed "always Ok" (the `Err(RegionError)` arm
-   of the spawn result is the future abort-catchable path).
+   `run_spawn_simple`/`run_spawn_with_captures`/`run_spawn_nested`). Child
+   failure is now delivered to the parent as `Err(RegionError)` instead of
+   aborting the process: a runtime abort inside the worker unwinds via
+   setjmp/longjmp to the spawn entry, which boxes it as `Err` that the
+   parent's `match` catches (e2e `run_spawn_child_failure_err`).
 8. §22 Visibility — `pub` parsed but never enforced; default-private
-   rule unimplemented.
+   rule unimplemented. → **✅ DONE (stage-1)**: `FunctionSig` carries
+   `is_pub`; codegen rejects cross-module calls to non-`pub` functions;
+   e2e `run_pub_visibility_enforced`. Stage-2 note: driver has no import
+   machinery yet; single-file subset unaffected.
 9. §23 `value?` sugar — parse-only; no checker/codegen handling
-   (the `else {…}` half is done).
+   (the `else {…}` half is done). → **✅ DONE (both pipelines)**: Option
+   and Result `?`/`else` fully implemented, stage-2 parity verified
+   (`bootstrap_question_else_parity`; see progress below).
 10. §20 Capabilities at runtime — manifest ceilings enforced at build
     time only; capabilities don't travel with effects/handles/residuals.
+    → **Static half done**: spawn capability substitution (§19: child ≤
+    parent + fresh CapEnv bounds the child's whole body) enforced in the
+    type checker; dynamic/residual (force-time) capability errors remain
+    unimplemented (see item 1 trailing gaps).
 11. §3 Knowledge graph as driving IR — exists in parallel
     (`resid-ir/graph.rs`) but production pipeline is AST→type→LLVM
-    directly; reduction is ad-hoc in codegen.
+    directly; reduction is ad-hoc in codegen. → **✅ DONE (stage-1)**:
+    comptime β-reduction of pure functions with step/depth budgets
+    (reduction relation §36) wired into codegen with comptime-print
+    (see §9 progress).
 12. §36 Reduction relation — constant folding + overflow discharge only;
     no comptime β-reduction of pure functions, no provider substitution
-    at compile time.
+    at compile time. → **✅ DONE (stage-1)**: comptime β-reduction of pure
+    functions with step/depth budgets, recursive calls, conditionals, tail
+    returns; e2e `reduction_known_fib_comptime_print`,
+    `reduction_falls_back_to_runtime` (see progress below).
 13. §35 Build profiles — debug/release/check not implemented.
+    → **✅ DONE**: `residc <f> build|run --profile debug|release|check`;
+    `-O2` for release, `check` stops after type checking, cache key includes
+    profile (see progress below).
 14. §28 Package key pinning — keyring directory-scanned; no
-    per-dependency pin syntax.
+    per-dependency pin syntax. → **✅ DONE (spec §28.3)**: per-dependency
+    `pubkey` pin enforced at manifest load, transitive pins carried;
+    e2e `dependency_pinned_key_*`, `transitive_dependency_pinned_key_enforced`
+    (see progress below).
 
-### Progress on item 2 — `value?` sugar
+### Progress on item 9 — `value?` sugar
 
 **Stage-1 DONE** (commit 7fb585b): the audit's "parse-only" finding was
 wrong — checker + codegen existed for Option. Generalized to
@@ -499,22 +533,22 @@ Result-style sums (`Ok(T) | Err(E)`): `?` propagates the received
 failure box unchanged to the caller; `else {…}` yields the success type
 (spec §23). e2e `run_question_sugar_option_and_result`.
 
-**Stage-2 BLOCKED on sum types**: the self-hosted driver has NO Option/
-Result support at all — no variant constructors, no match. Implementing
-`?` there requires first building minimal sum support in the bootstrap
-checker/emitter (hardwired Some/None/Ok/Err constructors over tagged
-boxes via resid_box_new, else-fallback and ? lowering; full `match` is
-a separate follow-up). Result constructors additionally need expected-
-type threading in the token-level checker to disambiguate the error
-type — Option lands first.
+**Stage-2 DONE**: minimal sum support built in the self-hosted driver —
+`Some`/`None`/`Ok`/`Err` constructors over tagged boxes via
+`resid_box_new`, `match` with tag-dispatch branches and payload
+unboxing (`bootstrap_option_sum_parity`, `bootstrap_match_parity`), then
+`?`/`else` for Option and Result with expected-type threading for
+`Ok`/`Err` hole adoption and depth-aware type-list splitting. Parity
+verified byte-identically through Rust residc AND the driver
+(`bootstrap_question_else_parity`). All 11 bootstrap e2e pass.
 
 ### Suggested attack order
 
 1. Behaviors (item 6) — ✅ done (stage-1: generic numeric Ord/Eq/Hash synthesis, Serialize/Allocator shape checking, e2e `run_generic_numeric_behaviors`, `run_behavior_ord_sort`, `run_behavior_import_visibility_and_reverse`, `bootstrap_behavior_ord_parity`).
-2. `value?` sugar (item 9) — ✅ done (stage-1, both Option and Result; e2e `run_question_sugar_option_and_result`).
+2. `value?` sugar (item 9) — ✅ done (both pipelines, Option + Result; e2e `run_question_sugar_option_and_result`, `bootstrap_question_else_parity`).
 3. `pub` enforcement (item 8) — ✅ done (stage-1; e2e `run_pub_visibility_enforced`).
 4. Per-width wrapping/saturating (item 5) — ✅ done (LLVM native lowering; e2e `run_per_width_wrapping_saturating`).
-5. Map/Set types (item 4) — ✅ done (stage-1; e2e `run_map_set_types`, `bootstrap_map_set_parity`).
+5. Map/Set types (item 4) — ✅ done (both pipelines; e2e `run_map_set_types`, `bootstrap_map_set_parity`).
 6. Serialize/Hash behaviors (item 3) — ✅ done (stage-1; e2e `run_generic_numeric_behaviors`).
 7. Sandbox transitive attenuation (item 1 remaining) — ✅ done (stage-1, e2e `run_sandbox_transitive_attenuation`); manifest (per-dependency) capability ceilings **✅ done** (spec §21.1: `[dependencies.<name>] capabilities = […]` enforced at type check as a hard ceiling on the dependency's `@requires`, met with any in-source sandbox ceilings; residency in `resid-build`, e2e `dependency_*_ceiling_*` + `path_dependency_resolves_and_builds`).
 8. Constraint types (item 2) — ✅ done (stage-1, both syntaxes, discharge on binds; e2e `run_constraint_types`, `constraint_type_violation_rejected`).
@@ -565,7 +599,7 @@ type — Option lands first.
   accepted, wrong key rejected, missing archive rejected, transitive pin
   enforced at the vendor level.
 
-### Progress on item 14 — spawn capability substitution: DONE (static half, §19)
+### Progress on item 14 — spawn capability substitution & child failure: DONE (static + runtime, §19)
 
 - `spawn (caps) { body }` hands the child a FRESH CapEnv of exactly `caps`
   (spec §19). The type checker now enforces both static halves at the
@@ -579,9 +613,12 @@ type — Option lands first.
     across the full statement/expression tree (calls, control flow, match
     arms, with/using, providers, f-strings, destructuring, map/set/struct
     literals, etc.).
-- The runtime half remains: child failure is stubbed "always `Ok(T)`" —
-  `Err(RegionError)` from a failed child is the future abort-catchable
-  path (`resid_spawn` in `resid_rt.c`).
+- **Runtime half now DONE**: child failure is no longer stubbed — a runtime
+  abort inside the spawned worker (division by zero, bounds abort, an
+  outstanding `todo`) unwinds via setjmp/longjmp to the spawn worker's catch
+  point and is delivered to the parent as `Err(RegionError)`, which the
+  parent's `match`/`?` catches; the process does NOT terminate. A healthy
+  worker still yields `Ok(T)`. e2e `run_spawn_child_failure_err`.
 - Unit tests (`resid-type` +5): child≤parent allows matching / rejects
   amplification / fresh CapEnv rejects an out-of-caps callee / allows a
   fitting callee / nested spawn may not exceed the child's CapEnv.
@@ -752,16 +789,17 @@ fixpoint over the call graph) computes an effective ceiling per function as
 capabilities = […]` now enforced at type check as the dependency's
 effective ceiling (see §7 "Progress on item 1" above).
 
-**Remaining gaps**: dynamic/residual capability errors (runtime not
-implemented); handle-entry (acquisition enforced, value provenance tracking
-for File methods `read_handle`/`close` in restricted regions implemented;
-File **parameters** crossing the boundary enforced via the §21.3 entry rule
-— e2e `run_sandbox_handle_entry_file_param` — but File values passed as
-inline call arguments into restricted callees not yet tracked);
-§21.4 knowledge-cache gating (deferred); capability modes narrowed to the
-`readonly` marker with `filesystem.write_all` as the sole classified write
-verb — a fuller mode lattice (readwrite, per-verb modes, `git(readonly)`
-scope) is future work.
+**Remaining gaps**: dynamic/residual capability errors (runtime force-time
+checking not implemented); handle-entry (acquisition enforced, value
+provenance tracking for File methods `read_handle`/`close` in restricted
+regions implemented; File **parameters** crossing the boundary enforced via
+the §21.3 entry rule — e2e `run_sandbox_handle_entry_file_param` — but File
+values passed as inline call arguments into restricted callees not yet
+tracked); §21.4 knowledge-cache gating (deferred); capability modes currently
+cover the `readonly`/`readwrite` markers with `filesystem.write_all` and
+`process.run` as the classified write verbs — a fuller per-verb mode lattice
+(`git(readonly)` scope, etc.) is future work. See the capability-mode
+progress subsections below.
 
 ### Progress on capability modes (spec §21) — readonly mode enforced
 
