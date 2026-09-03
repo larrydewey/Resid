@@ -3,7 +3,7 @@
 //! provenance. Only the deterministic subset needed for provenance trailers
 //! is implemented; interop is pinned by test against RFC-derived vectors.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 pub const ALG_EDDSA: i64 = -8;
 /// Reserved for confidential provenance (spec §34); see `encrypt0_seal`.
@@ -70,7 +70,7 @@ pub fn cb_read_text<'a>(bytes: &'a [u8], pos: &mut usize) -> Option<&'a str> {
         }
         _ => return None,
     };
-    if b & 0xE0 != 0x60 && !(b >= 0x60 && b < 0x80) {
+    if b & 0xE0 != 0x60 && !(0x60..0x80).contains(&b) {
         return None;
     }
     let v = bytes.get(*pos..*pos + len)?;
@@ -316,7 +316,7 @@ fn sha_prefix(bytes: &[u8], n: usize) -> Vec<u8> {
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len() / 2)

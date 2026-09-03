@@ -301,6 +301,12 @@ pub struct KnowledgeGraph {
     functions: HashMap<String, GraphKey>,
 }
 
+impl Default for KnowledgeGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KnowledgeGraph {
     pub fn new() -> Self {
         KnowledgeGraph {
@@ -312,6 +318,7 @@ impl KnowledgeGraph {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_node(
         &mut self,
         kind: NodeKind,
@@ -430,14 +437,13 @@ impl KnowledgeGraph {
             result.push(key);
             if let Some(node) = self.nodes.get(key) {
                 for &dep in &node.deps {
-                    if reachable.contains(&dep) {
-                        if let Some(deg) = in_degree.get_mut(&dep) {
+                    if reachable.contains(&dep)
+                        && let Some(deg) = in_degree.get_mut(&dep) {
                             *deg -= 1;
                             if *deg == 0 {
                                 queue.push_back(dep);
                             }
                         }
-                    }
                 }
             }
         }

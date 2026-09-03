@@ -1547,7 +1547,7 @@ impl Parser {
             Some(TokenKind::Literal(Literal::Int { value, kind })) => {
                 self.bump();
                 Pattern {
-                    kind: PatternKind::Literal(Literal::Int { value, kind: kind }),
+                    kind: PatternKind::Literal(Literal::Int { value, kind }),
                     span,
                 }
             }
@@ -2454,7 +2454,7 @@ impl Parser {
                         | "Void"
                         | "Handle"
                         | "rt"
-                ) || Keyword::from_str(s.as_str()).is_none() // not a keyword
+                ) || Keyword::str_origin(s.as_str()).is_none() // not a keyword
             }
             Some(TokenKind::Keyword(kw)) => {
                 !matches!(kw, Keyword::Import | Keyword::Pub | Keyword::Type)
@@ -3093,11 +3093,10 @@ type Opt(T) = Some(T) | None;
         let (result, errors) = Parser::parse("test.resid", "Int f() { filesystem.read(1, 2).method(); }");
         assert_eq!(errors.len(), 0, "chained postfix should parse now: {:?}", errors);
         let stmt = &result.declarations[0];
-        if let Declaration::Function(f) = stmt {
-            if let StmtKind::Expr(e) = &f.body.statements[0].kind {
+        if let Declaration::Function(f) = stmt
+            && let StmtKind::Expr(e) = &f.body.statements[0].kind {
                 assert!(matches!(e.kind, ExprKind::MethodCall { .. }), "expected MethodCall chain");
             }
-        }
     }
 
     #[test]
@@ -3105,11 +3104,10 @@ type Opt(T) = Some(T) | None;
         let (result, errors) = Parser::parse("test.resid", "Int f() { obj.field.method(); }");
         assert_eq!(errors.len(), 0, "chained postfix should parse now: {:?}", errors);
         let stmt = &result.declarations[0];
-        if let Declaration::Function(f) = stmt {
-            if let StmtKind::Expr(e) = &f.body.statements[0].kind {
+        if let Declaration::Function(f) = stmt
+            && let StmtKind::Expr(e) = &f.body.statements[0].kind {
                 assert!(matches!(e.kind, ExprKind::MethodCall { .. }), "expected MethodCall chain");
             }
-        }
     }
 
     #[test]
@@ -3336,7 +3334,7 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_fstring_with_interpolation() {
-        let (result, errors) = Parser::parse(
+        let (_result, errors) = Parser::parse(
             "test.resid",
             r#"Int f() { Str name = "world"; println(f"hello {name}"); }"#,
         );
@@ -3399,32 +3397,32 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_slice_from_list() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { List(Int) xs = [1,2,3]; List(Int) s = xs[1..3]; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_slice_partial_open_end() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[3..]; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[3..]; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_slice_partial_open_start() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[..3]; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[..3]; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_slice_open_both() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[..]; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[..]; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_slice_inclusive() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[0..=3]; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { Int x = xs[0..=3]; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
@@ -3453,7 +3451,7 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_struct_lit() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { Point p = Point { x: 1, y: 2 }; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
@@ -3488,7 +3486,7 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_while_let() {
-        let (result, errors) = Parser::parse(
+        let (_result, errors) = Parser::parse(
             "test.resid",
             "Int f() { while (Some(n) = source) { n; } }",
         );
@@ -3526,14 +3524,14 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_for_in_list() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { for (Int x in [1,2,3]) { x; } }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_match() {
-        let (result, errors) = Parser::parse(
+        let (_result, errors) = Parser::parse(
             "test.resid",
             "Int f() { return match x { Some(n) => n, None => 0 }; }",
         );
@@ -3542,7 +3540,7 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_destructure() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { Int { x, y } = p; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
@@ -3570,144 +3568,144 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_assert() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", r#"Int f() { assert(1 == 1, "ok"); }"#);
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_rt_assert() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", r#"Int f() { rt_assert(1 == 1, "ok"); }"#);
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_known() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { known(1 == 1); }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { known(1 == 1); }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_rt_known() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { rt_known(1 == 1); }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { rt_known(1 == 1); }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_todo() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { todo(\"not done\"); }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { todo(\"not done\"); }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_unimplemented() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { unimplemented(\"not done\"); }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { unimplemented(\"not done\"); }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_comptime_print() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { comptime_print(42); }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { comptime_print(42); }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_at_residual() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { @residual Int x = 42; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_at_residual_float() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { @residual Float x = 3.14; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_rt_expression() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { Int x = rt 42; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { Int x = rt 42; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_early_return() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Option(Int) f() { return x?; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_else_fallback() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { Int y = x else { 0 }; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_with_binding() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { with (File h = open(\"path\")) { h; } }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_cast() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { Int(32) x = (Int(32))y; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { Int(32) x = (Int(32))y; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_index() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { return xs[0]; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { return xs[0]; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_function_with_defaults() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f(Int x = 1, Int y = 2) { return x + y; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_named_args() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { return add(a = 1, b = 2); }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_bool_literal_true() {
-        let (result, errors) = Parser::parse("test.resid", "Bool f() { return true; }");
+        let (_result, errors) = Parser::parse("test.resid", "Bool f() { return true; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_bool_literal_false() {
-        let (result, errors) = Parser::parse("test.resid", "Bool f() { return false; }");
+        let (_result, errors) = Parser::parse("test.resid", "Bool f() { return false; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_type_def() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "type Point = { x: Int, y: Int };");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_pub_function() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "pub Int f() { return 42; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_nested_block() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { { Int x = 1; { Int y = 2; return x + y; } } }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
@@ -3752,7 +3750,7 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_empty_function() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { return 0; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { return 0; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
@@ -3768,19 +3766,19 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_char_literal() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { Char c = 'a'; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { Char c = 'a'; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_null_literal() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { Null n = null; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { Null n = null; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_ternary_like_if() {
-        let (result, errors) = Parser::parse(
+        let (_result, errors) = Parser::parse(
             "test.resid",
             "Int f() { Bool c = true; return if (c) { 1 } else { 0 }; }",
         );
@@ -3789,7 +3787,7 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_while_with_break() {
-        let (result, errors) = Parser::parse(
+        let (_result, errors) = Parser::parse(
             "test.resid",
             "Int f() { while (true) { break; } return 0; }",
         );
@@ -3798,7 +3796,7 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_while_with_continue() {
-        let (result, errors) = Parser::parse(
+        let (_result, errors) = Parser::parse(
             "test.resid",
             "Int f() { while (true) { continue; } return 0; }",
         );
@@ -3807,32 +3805,32 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_if_without_else() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", "Int f() { if (true) { return 1; } return 0; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_type_param_int32() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { Int(32) x = 42; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { Int(32) x = 42; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_type_param_float32() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { Float(32) x = 3.14; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { Float(32) x = 3.14; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_type_param_uint8() {
-        let (result, errors) = Parser::parse("test.resid", "Int f() { UInt(8) x = 255; }");
+        let (_result, errors) = Parser::parse("test.resid", "Int f() { UInt(8) x = 255; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
     #[test]
     fn parse_complex_fstring() {
-        let (result, errors) = Parser::parse(
+        let (_result, errors) = Parser::parse(
             "test.resid",
             r#"Int f() { Str s = f"count = {n}, name = {name}, pi = {pi}"; }"#,
         );
@@ -3841,7 +3839,7 @@ type Opt(T) = Some(T) | None;
 
     #[test]
     fn parse_string_with_escapes() {
-        let (result, errors) =
+        let (_result, errors) =
             Parser::parse("test.resid", r#"Int f() { Str s = "hello\nworld\t!"; }"#);
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
@@ -3851,7 +3849,7 @@ type Opt(T) = Some(T) | None;
         let (_result, errors) = Parser::parse("test.resid", "Int f() { return 1; }");
         assert_eq!(errors.len(), 0, "should parse fine");
         let (_result2, errors2) = Parser::parse("test.resid", "Int f() { return 1;");
-        assert!(errors2.len() >= 1, "expected error for mismatched braces");
+        assert!(!errors2.is_empty(), "expected error for mismatched braces");
     }
 
     /// Extract the single expression statement from `Int main() { EXPR }`.
@@ -3927,9 +3925,9 @@ type Opt(T) = Some(T) | None;
         for decl in &unit.declarations {
             if let Declaration::Function(f) = decl {
                 for stmt in &f.body.statements {
-                    if let StmtKind::Bind { value, .. } = &stmt.kind {
-                        if let ExprKind::Call { func, args } = &value.kind {
-                            if matches!(&func.kind, ExprKind::Id(id) if id.0 == "sort") {
+                    if let StmtKind::Bind { value, .. } = &stmt.kind
+                        && let ExprKind::Call { func, args } = &value.kind
+                            && matches!(&func.kind, ExprKind::Id(id) if id.0 == "sort") {
                                 assert_eq!(args.len(), 1);
                                 match &args[0].1.kind {
                                     ExprKind::Using { behavior, .. } => {
@@ -3939,8 +3937,6 @@ type Opt(T) = Some(T) | None;
                                     other => panic!("arg must be Using, got {other:?}"),
                                 }
                             }
-                        }
-                    }
                 }
             }
         }

@@ -274,13 +274,12 @@ impl Manifest {
         let lock_path = pkg_dir.join("resid.lock");
         let mut lockfile = lock::read(&lock_path).unwrap_or_default();
         for (name, dep) in &raw.dependencies {
-            if let (Some(idx), Some(ver)) = (&index, &dep.version) {
-                if !idx.iter().any(|e| e.0 == *name && e.1 == *ver) {
+            if let (Some(idx), Some(ver)) = (&index, &dep.version)
+                && !idx.iter().any(|e| e.0 == *name && e.1 == *ver) {
                     return Err(LoadError::Invalid(format!(
                         "dependency '{name}-{ver}' is not listed in the signed registry index"
                     )));
                 }
-            }
             let pinned = lockfile.get(name).cloned();
             let (dep_dir, entry) =
                 resolve_dep_dir(name, dep, registry.as_ref(), &pkg_dir, pinned.as_ref())?;
@@ -343,8 +342,8 @@ impl Manifest {
         }
         // Signature policy: when required, every path dependency must ship a
         // signed archive verifying against a keyring key (spec §28.2).
-        if let Some(signing) = &raw.signing {
-            if signing.require_signatures {
+        if let Some(signing) = &raw.signing
+            && signing.require_signatures {
                 let keyring_dir = signing
                     .keyring
                     .as_ref()
@@ -357,7 +356,6 @@ impl Manifest {
                     verify_dep_signature(dep, &pkg_file, &sig_file, &keyring_dir)?;
                 }
             }
-        }
         Ok(Manifest {
             name: raw.package.name,
             version: raw.package.version,
@@ -435,14 +433,13 @@ fn resolve_dep_dir(
                 )));
             }
         }
-        if let Some(expect_hex) = reg.fetch_sha(name, ver) {
-            if got != expect_hex.trim() {
+        if let Some(expect_hex) = reg.fetch_sha(name, ver)
+            && got != expect_hex.trim() {
                 return Err(LoadError::Invalid(format!(
                     "dependency '{name}': archive hash mismatch (expected {}, got {got})",
                     expect_hex.trim()
                 )));
             }
-        }
         let entry = lock::LockEntry {
             name: name.to_string(),
             version: ver.clone(),
@@ -654,13 +651,11 @@ fn verify_dep_signature(
     })?;
     for entry in entries.flatten() {
         let p = entry.path();
-        if p.extension().map(|e| e == "hex").unwrap_or(false) {
-            if let Ok(pub_hex) = std::fs::read_to_string(&p) {
-                if archive::verify_sig(&hash, &sig_hex, pub_hex.trim()).unwrap_or(false) {
+        if p.extension().map(|e| e == "hex").unwrap_or(false)
+            && let Ok(pub_hex) = std::fs::read_to_string(&p)
+                && archive::verify_sig(&hash, &sig_hex, pub_hex.trim()).unwrap_or(false) {
                     return Ok(());
                 }
-            }
-        }
     }
     Err(LoadError::Invalid(format!(
         "dependency '{}': signature does not verify against any key in '{}'",

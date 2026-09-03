@@ -84,7 +84,7 @@ impl Keyword {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn str_origin(s: &str) -> Option<Self> {
         match s {
             "import" => Some(Self::Import),
             "pub" => Some(Self::Pub),
@@ -208,7 +208,7 @@ pub enum Op {
 
 impl Op {
     /// Parse operator from a string slice.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn str_origin(s: &str) -> Option<Self> {
         match s {
             "+" => Some(Self::Plus),
             "-" => Some(Self::Minus),

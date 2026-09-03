@@ -107,6 +107,7 @@ impl NumericType {
             NumericType::Dec(_) => None,
         }
     }
+    #[allow(clippy::manual_strip)]
     pub fn from_name(name: &str) -> Option<NumericType> {
         const D: u16 = 64;
         const DEC: u16 = 34;
@@ -474,6 +475,7 @@ impl fmt::Display for Identifier {
 pub struct ExprNode(pub GraphKey);
 use crate::GraphKey;
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AstExpr {
     Id(String),

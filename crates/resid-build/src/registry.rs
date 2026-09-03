@@ -141,11 +141,10 @@ pub fn http_get(url: &str) -> Result<HttpResponse, String> {
         .ok_or_else(|| format!("malformed HTTP status line: '{status_line}'"))?;
     let mut content_length: Option<usize> = None;
     for line in lines {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.eq_ignore_ascii_case("content-length") {
+        if let Some((k, v)) = line.split_once(':')
+            && k.eq_ignore_ascii_case("content-length") {
                 content_length = v.trim().parse().ok();
             }
-        }
     }
     let body_start = header_end + 4;
     let body = match content_length {

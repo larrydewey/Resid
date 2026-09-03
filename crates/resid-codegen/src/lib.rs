@@ -254,13 +254,13 @@ fn collect_ids_block(b: &Block, out: &mut Vec<String>) {
 /// Collect identifiers referenced by a statement.
 fn collect_ids_stmt(s: &Stmt, out: &mut Vec<String>) {
     match &s.kind {
-        StmtKind::Bind { value, .. } => collect_ids_expr(&**value, out),
-        StmtKind::Discard(e) => collect_ids_expr(&**e, out),
-        StmtKind::Destructure { source, .. } => collect_ids_expr(&**source, out),
-        StmtKind::Expr(e) => collect_ids_expr(&**e, out),
+        StmtKind::Bind { value, .. } => collect_ids_expr(value, out),
+        StmtKind::Discard(e) => collect_ids_expr(e, out),
+        StmtKind::Destructure { source, .. } => collect_ids_expr(source, out),
+        StmtKind::Expr(e) => collect_ids_expr(e, out),
         StmtKind::Return(e) => {
             if let Some(e) = e {
-                collect_ids_expr(&**e, out);
+                collect_ids_expr(e, out);
             }
         }
         StmtKind::Break | StmtKind::Continue => {}
@@ -476,7 +476,7 @@ impl<'ctx> CodeGen<'ctx> {
             SemType::Range(_) => self.int_type(64)?.into(),
             // Refinement types lower to their base (already erased by the
             // checker; kept here for defensive completeness).
-            SemType::Refined { base, .. } => self.llvm_type(&*base)?,
+            SemType::Refined { base, .. } => self.llvm_type(base)?,
             // Composites are untyped heap pointers.
             SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc | SemType::File | SemType::Map(..) | SemType::Set(_) => {
                 self.cx.ptr_type(AddressSpace::default()).into()
@@ -523,7 +523,7 @@ impl<'ctx> CodeGen<'ctx> {
             .builder
             .build_load(self.dec_type(), out, "decout")
             .map_err(to_err)?;
-        Ok(v.into())
+        Ok(v)
     }
 
     // ─── Functions ───────────────────────────────────────────────
@@ -740,7 +740,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 .map_err(to_err)?;
                         }
                         SemType::Refined { base, .. } => {
-                            let it = self.llvm_type(&*base)?;
+                            let it = self.llvm_type(&base)?;
                             let zero: inkwell::values::BasicValueEnum<'ctx> = match it {
                                 inkwell::types::BasicTypeEnum::IntType(i) => i.const_zero().into(),
                                 inkwell::types::BasicTypeEnum::FloatType(ft) => ft.const_zero().into(),
@@ -826,19 +826,16 @@ impl<'ctx> CodeGen<'ctx> {
                         else_block,
                         ..
                     } = &e.kind
-                    {
-                        if block_terminates(then_block)
+                        && block_terminates(then_block)
                             && else_block.as_ref().is_some_and(|b| block_terminates(b))
                         {
                             terminated = true;
                         }
-                    }
                     // A `with` whose body returns also terminates the block.
-                    if let ExprKind::With { body, .. } = &e.kind {
-                        if block_terminates(body) {
+                    if let ExprKind::With { body, .. } = &e.kind
+                        && block_terminates(body) {
                             terminated = true;
                         }
-                    }
                 }
                 StmtKind::Return(v) => {
                     if self.in_spawn_worker {
@@ -892,8 +889,8 @@ impl<'ctx> CodeGen<'ctx> {
                 }
             }
         }
-        if !terminated {
-            if let Some(ret) = &block.ret {
+        if !terminated
+            && let Some(ret) = &block.ret {
                 // A `return` inside a nested block (if-branch, while body, …) is a
                 // real early return: emit it and terminate the block. (The
                 // function-body `ret` is additionally handled by `lower_function`,
@@ -911,7 +908,6 @@ impl<'ctx> CodeGen<'ctx> {
                 }
                 terminated = true;
             }
-        }
         Ok((terminated, tail, spawn_ret))
     }
 
@@ -1260,9 +1256,7 @@ impl<'ctx> CodeGen<'ctx> {
             let slot = self.cx.i64_type().const_int(0, false);
             return self.load_slot(sv.v, slot, &payload_ty);
         }
-        Err(format!(
-            "codegen: `?` needs the enclosing function to return an Option/Result"
-        ))
+        Err("codegen: `?` needs the enclosing function to return an Option/Result".to_string())
     }
 
     /// Lower `value else { … }`: unwrap the Option; the unit variant runs the
@@ -1552,7 +1546,7 @@ impl<'ctx> CodeGen<'ctx> {
         let start_i = self
             .cast_val(
                 start_val,
-                &SemType::Numeric(NumericType::Int(IntWidth::B64.into())),
+                &SemType::Numeric(NumericType::Int(IntWidth::B64)),
             )?
             .v
             .into_int_value();
@@ -1565,7 +1559,7 @@ impl<'ctx> CodeGen<'ctx> {
         let end_i = self
             .cast_val(
                 end_val,
-                &SemType::Numeric(NumericType::Int(IntWidth::B64.into())),
+                &SemType::Numeric(NumericType::Int(IntWidth::B64)),
             )?
             .v
             .into_int_value();
@@ -1589,7 +1583,7 @@ impl<'ctx> CodeGen<'ctx> {
         let loop_val = self.cast_val(
             Val {
                 v: i_val.into(),
-                ty: SemType::Numeric(NumericType::Int(IntWidth::B64.into())),
+                ty: SemType::Numeric(NumericType::Int(IntWidth::B64)),
             },
             &elem_ty,
         )?;
@@ -1656,7 +1650,7 @@ impl<'ctx> CodeGen<'ctx> {
                     op: OpKind::Minus,
                     operand: Box::new(Expr {
                         kind: ExprKind::Literal(Literal::Int {
-                            value: i.unsigned_abs() as u128,
+                            value: i.unsigned_abs(),
                             kind: IntKind::Decimal(i.unsigned_abs().to_string()),
                         }),
                         span: sp.clone(),
@@ -1771,16 +1765,14 @@ impl<'ctx> CodeGen<'ctx> {
                 // Visibility check (spec §22): must happen before any reduction.
                 // Private functions are module-local and cannot be called from
                 // other files, even for comptime evaluation.
-                if let ExprKind::Id(id) = &func.kind {
-                    if let Some(sig) = self.sigs.get(&id.0) {
-                        if !sig.is_pub && !sig.file.is_empty() && sig.file != self.cur_file {
+                if let ExprKind::Id(id) = &func.kind
+                    && let Some(sig) = self.sigs.get(&id.0)
+                        && !sig.is_pub && !sig.file.is_empty() && sig.file != self.cur_file {
                             return Err(format!(
                                 "codegen: `{}` is not pub and was defined in `{}`; only `pub` items are importable",
                                 id.0, sig.file
                             ));
                         }
-                    }
-                }
                 // Comptime β-reduction of pure functions (§36): when every
                 // argument is a compile-time constant, evaluate the pure callee
                 // now and lower the resulting constant instead of a call.
@@ -1948,7 +1940,7 @@ impl<'ctx> CodeGen<'ctx> {
         match lit {
             Literal::Int { kind, .. } => {
                 if let Some(Numeric::Float(fw)) = target {
-                    let ft = self.float_type(fw.bits() as u16)?; // cfg
+                    let ft = self.float_type(fw.bits())?; // cfg
                     let c = self.cx.f64_type().const_float(
                         kind.as_u128().unwrap_or(u128::MAX) as f64,
                     );
@@ -1980,7 +1972,7 @@ impl<'ctx> CodeGen<'ctx> {
                         } else {
                             [128u16, 256, 512]
                                 .into_iter()
-                                .find(|&w| w >= bits + 1)
+                                .find(|&w| w > bits)
                                 .unwrap_or(512)
                         }
                     });
@@ -2354,11 +2346,10 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(to_err)?;
         // A constant that loses value is detected at compile time:
         // both back-extend and compare fold to a constant predicate.
-        if let Some(c) = changed.get_zero_extended_constant() {
-            if c == 1 {
+        if let Some(c) = changed.get_zero_extended_constant()
+            && c == 1 {
                 return Err("constant does not fit target width (explicit cast required)".into());
             }
-        }
         let cur_fn = self.cur_fn.ok_or("codegen: no current function")?;
         let trap_bb = self.cx.append_basic_block(cur_fn, "narrow_trap");
         let ok_bb = self.cx.append_basic_block(cur_fn, "narrow_ok");
@@ -2659,8 +2650,8 @@ impl<'ctx> CodeGen<'ctx> {
             .unwrap_or(64)
             .max(rt.target_width().unwrap_or(64));
         let signed = lt.is_signed() && rt.is_signed();
-        let li = self.to_int(l, w)?;
-        let ri = self.to_int(r, w)?;
+        let li = self.as_int(l, w)?;
+        let ri = self.as_int(r, w)?;
         let pred = int_pred(binop, signed);
         let i = self
             .builder
@@ -2672,7 +2663,7 @@ impl<'ctx> CodeGen<'ctx> {
         })
     }
 
-    fn to_int(&mut self, v: Val<'ctx>, w: u16) -> Result<IntValue<'ctx>, String> {
+    fn as_int(&mut self, v: Val<'ctx>, w: u16) -> Result<IntValue<'ctx>, String> {
         let src = match &v.ty {
             SemType::Numeric(n) => *n,
             _ => return Err("codegen: int compare".into()),
@@ -3310,7 +3301,7 @@ impl<'ctx> CodeGen<'ctx> {
         } else if self
             .builder
             .get_insert_block()
-            .map_or(true, |bb| bb.get_terminator().is_none())
+            .is_none_or(|bb| bb.get_terminator().is_none())
         {
             // Empty body -> Ok unit? For now null (parent will get null = Err path?).
             // But Result(T, E) requires a value. This shouldn't happen for valid code.
@@ -3394,7 +3385,7 @@ impl<'ctx> CodeGen<'ctx> {
         // already validates @requires against the ceiling; the codegen
         // mirrors this by tracking the ceiling context (full per-capability
         // checking to be added in a follow-up).
-        let has_sandbox = !self.sigs.is_empty()
+        let _has_sandbox = !self.sigs.is_empty()
             && self
                 .sigs
                 .values()
@@ -3708,7 +3699,7 @@ impl<'ctx> CodeGen<'ctx> {
             return Ok(());
         }
         let caps: Vec<String> = self.cap_ceiling.clone();
-        let pty = self.cx.i8_type().ptr_type(AddressSpace::default());
+        let pty = self.cx.ptr_type(AddressSpace::default());
         let arr_ty = pty.array_type(caps.len() as u32);
         let arr = self
             .builder
@@ -3807,11 +3798,11 @@ impl<'ctx> CodeGen<'ctx> {
         if let Some(bits) = ["Int256ToString", "UInt256ToString", "Int512ToString", "UInt512ToString"]
             .iter()
             .find(|n| *n == name)
-            .and_then(|n| {
+            .map(|n| {
                 if n.ends_with("256ToString") {
-                    Some(256)
+                    256
                 } else {
-                    Some(512)
+                    512
                 }
             })
         {
@@ -4151,14 +4142,13 @@ impl<'ctx> CodeGen<'ctx> {
         };
         if let NumericType::Dec(_) = n {
             // fall through: supported via resid_dec_cmp below.
-        } else if let Some(w) = n.target_width() {
-            if w > 64 {
+        } else if let Some(w) = n.target_width()
+            && w > 64 {
                 return Err(format!(
                     "codegen: generic numeric sort for {elem} not yet supported at width {w} (define an explicit Ord instance)"
                 ));
             }
-        }
-        let tag = format!("{}", resid_type::SemType::Numeric(n.clone()));
+        let tag = format!("{}", resid_type::SemType::Numeric(*n));
         let rev = if negate { "_rev" } else { "" };
         let tramp_name = format!("__cmp_num_{tag}{rev}");
         if let Some(f) = self.module.get_function(&tramp_name) {
@@ -4190,11 +4180,11 @@ impl<'ctx> CodeGen<'ctx> {
                 // RsDec boxes are already pointers; compare directly.
                 let r = self.rt_call("resid_dec_cmp", vec![boxp_a.into(), boxp_b.into()])?;
                 let r32 = r.into_int_value();
-                let r64 = self
+                
+                self
                     .builder
                     .build_int_s_extend(r32, i64t, "dec_sign")
-                    .map_err(to_err)?;
-                r64
+                    .map_err(to_err)?
             }
             NumericType::Float(_) => {
                 let a = self.rt_call("resid_unbox_f64", vec![boxp_a.into()])?;
@@ -4294,7 +4284,7 @@ impl<'ctx> CodeGen<'ctx> {
                 SemType::Numeric(n) => Some(n),
                 _ => None,
             })
-            .unwrap_or_else(|| {
+            .unwrap_or({
                 if unsigned {
                     NumericType::UInt(IntWidth::B64)
                 } else {
@@ -4380,8 +4370,8 @@ impl<'ctx> CodeGen<'ctx> {
         bits: u16,
     ) -> Result<IntValue<'ctx>, String> {
         let to_err = |e: inkwell::builder::BuilderError| format!("{e}");
-        let max_val = it.const_int(((1u64 << (bits - 1)) - 1) as u64, true);
-        let min_val = it.const_int((1u64 << (bits - 1)) as u64, true);
+        let max_val = it.const_int((1u64 << (bits - 1)) - 1, true);
+        let min_val = it.const_int(1u64 << (bits - 1), true);
         let zero = it.const_int(0, false);
         match op {
             "add" => {
@@ -4400,7 +4390,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let dif = self.builder.build_int_sub(a, b, "sat_sub").map_err(to_err)?;
                 let sign_a = self.builder.build_int_compare(IntPredicate::SLT, a, zero, "sa").map_err(to_err)?;
                 let sign_b = self.builder.build_int_compare(IntPredicate::SLT, b, zero, "sb").map_err(to_err)?;
-                let sign_d = self.builder.build_int_compare(IntPredicate::SLT, dif, zero, "sd").map_err(to_err)?;
+                let _sign_d = self.builder.build_int_compare(IntPredicate::SLT, dif, zero, "sd").map_err(to_err)?;
                 // Overflow when subtracting (+a - -b) → positive overflow
                 // or (-a - +b) → negative overflow.
                 let pos_ovf = self.builder.build_and(
@@ -4483,6 +4473,7 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// Resolve named arguments and fill in default parameters, returning the
     /// args reordered into positional form plus the selected FunctionSig.
+    #[allow(clippy::type_complexity)]
     fn resolve_call_args(
         &self,
         name: &str,
@@ -4650,7 +4641,7 @@ impl<'ctx> CodeGen<'ctx> {
         match &v.ty {
             SemType::Numeric(n) if !n.is_float() => {
                 if bits == 128 {
-                    let target = SemType::Numeric(n.clone());
+                    let target = SemType::Numeric(*n);
                     let widened = self.cast_val(v, &target)?;
                     let rt_fn = if unsigned { "resid_box_u128" } else { "resid_box_i128" };
                     self.rt_call(rt_fn, vec![widened.v])
@@ -4990,7 +4981,7 @@ impl<'ctx> CodeGen<'ctx> {
     ) -> Result<Val<'ctx>, String> {
         let tv = self.lower_expr(sc, target, None)?;
         // Map indexing: `m["key"]` → Option(V).
-        if let SemType::Map(k, v) = &tv.ty {
+        if let SemType::Map(_k, v) = &tv.ty {
             let iv = self.lower_expr(sc, index, None)?;
             let kp = self.box_scalar(iv)?;
             let vp = self.rt_call("resid_map_get", vec![tv.v, kp])?;
@@ -5091,7 +5082,7 @@ impl<'ctx> CodeGen<'ctx> {
         let closed_val = self.cx.i8_type().const_int(if closed { 1 } else { 0 }, false);
         let v = self.rt_call(
             "resid_range_new",
-            vec![start_w.v.into(), end_w.v.into(), closed_val.into()],
+            vec![start_w.v, end_w.v, closed_val.into()],
         )?;
         let range_ty = SemType::Range(Box::new(start_ty));
         Ok(Val { v, ty: range_ty })
@@ -5132,7 +5123,7 @@ impl<'ctx> CodeGen<'ctx> {
         )?;
         let v = self.rt_call(
             "resid_slice_new",
-            vec![target_val.v.into(), start_w.v.into(), end_w.v.into()],
+            vec![target_val.v, start_w.v, end_w.v],
         )?;
         let slice_ty = match &target_val.ty {
             SemType::List(e) => SemType::Slice(e.clone()),
@@ -5159,7 +5150,7 @@ impl<'ctx> CodeGen<'ctx> {
             }
             ("concat", SemType::List(elem)) if args.len() == 1 => {
                 let av = self.lower_expr(sc, &args[0], None)?;
-                let v = self.rt_call("resid_list_concat", vec![tv.v.into(), av.v.into()])?;
+                let v = self.rt_call("resid_list_concat", vec![tv.v, av.v])?;
                 Ok(Val {
                     v,
                     ty: SemType::List(elem.clone()),

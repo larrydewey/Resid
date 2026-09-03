@@ -12,9 +12,6 @@
 //! signature is Ed25519 over exactly the payload bytes, so any tampering
 //! with either the provenance or the recorded facts is detectable.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use sha2::{Digest, Sha256};
-
 /// Trailer magic, scanned for at the end of the file.
 pub const MAGIC: &[u8; 10] = b"RESIDPROV1";
 
@@ -125,7 +122,7 @@ pub fn verify_raw(payload: &[u8], sig: &[u8], pub_hex: &str) -> Result<bool, Str
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len() / 2)

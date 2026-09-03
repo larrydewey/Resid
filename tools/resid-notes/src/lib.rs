@@ -76,7 +76,7 @@ fn read_array_header(b: &[u8], pos: &mut usize) -> Option<usize> {
 fn read_text(b: &[u8], pos: &mut usize) -> Option<String> {
     let byte = *b.get(*pos)?;
     *pos += 1;
-    let len = if byte >= 0x60 && byte <= 0x77 {
+    let len = if (0x60..=0x77).contains(&byte) {
         (byte & 0x1F) as usize
     } else if byte == 0x78 {
         let v = *b.get(*pos)? as usize;

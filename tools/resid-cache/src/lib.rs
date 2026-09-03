@@ -234,7 +234,7 @@ fn decode_map(bytes: &[u8]) -> Option<HashMap<String, Entry>> {
     let mut map = HashMap::new();
     for _ in 0..n {
         let k = read_text(bytes, &mut pos)?;
-        let entry = decode_entry(&bytes, &mut pos)?;
+        let entry = decode_entry(bytes, &mut pos)?;
         map.insert(k, entry);
     }
     Some(map)

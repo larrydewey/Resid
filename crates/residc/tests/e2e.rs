@@ -2960,34 +2960,33 @@ fn run_chacha20poly1305_in_resid() {
     let file = dir.join("main.resid");
     std::fs::write(
         &file,
-        format!(
-            r#"
+        r#"
 import "chacha.resid";
 import "crypto.resid";
 
-List(Int) hb_acc(Str s, Int i, List(Int) acc) {{
-    if (i >= str_len(s)) {{ return acc; }}
+List(Int) hb_acc(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
     Int c = str_char_at(s, i);
     Int dhi = c - 87;
     Int dlo = c - 48;
-    Int hi = if (c > 96) {{ dhi }} else {{ dlo }};
+    Int hi = if (c > 96) { dhi } else { dlo };
     Int j = i + 1;
     Int c2 = str_char_at(s, j);
     Int ehi = c2 - 87;
     Int elo = c2 - 48;
-    Int lo = if (c2 > 96) {{ ehi }} else {{ elo }};
+    Int lo = if (c2 > 96) { ehi } else { elo };
     Int h16 = hi * 16;
     Int byt = h16 + lo;
     List(Int) acc2 = acc.concat([byt]);
     Int ni = i + 2;
     return hb_acc(s, ni, acc2);
-}}
+}
 
-List(Int) hb(Str s) {{
+List(Int) hb(Str s) {
     return hb_acc(s, 0, [0]);
-}}
+}
 
-Int main() {{
+Int main() {
     // RFC 8439 section 2.5.2 Poly1305
     List(Int) mk = hb("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b");
     println(hex_encode(poly1305(mk, bytes_of("Cryptographic Forum Research Group"))));
@@ -2999,14 +2998,13 @@ Int main() {{
     List(Int) sealed = chacha20poly1305_seal(key, nonce, pt, aad);
     println(hex_encode(sealed));
     Bool ok = chacha20poly1305_open(key, nonce, sealed, aad);
-    if (ok) {{ println("OPEN-OK"); }}
+    if (ok) { println("OPEN-OK"); }
     List(Int) bad = ls_set(sealed, 3, sealed[3] ^ 1);
     Bool ok2 = chacha20poly1305_open(key, nonce, bad, aad);
-    if (!ok2) {{ println("TAMPER-REJECTED"); }}
+    if (!ok2) { println("TAMPER-REJECTED"); }
     return 0;
-}}
-"#
-        ),
+}
+"#,
     )
     .unwrap();
     let out = Command::new(residc_bin())
@@ -4371,7 +4369,7 @@ fn run_encrypt0_provenance_roundtrip() {
         .arg(&file)
         .arg("build")
         .arg("-o")
-        .arg(&dir.join("nokey"))
+        .arg(dir.join("nokey"))
         .env("RESID_PROV_ENCRYPT", "1")
         .env_remove("RESID_PROV_KEY")
         .current_dir(workspace)
@@ -5054,7 +5052,7 @@ Int main() {{
 /// Chain fixture positive case: SAN matching (exact, wildcard, negative)
 /// and validity windows for the leaf certificate (SAN DNS:www.resid.test
 /// + DNS:*.resid.test; valid 2026-08-23 .. 2027-08-23). Ground truth via
-/// openssl x509 -text and direct date comparison.
+///   openssl x509 -text and direct date comparison.
 #[test]
 fn run_chain_san_validity_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-chain-{}", std::process::id()));
@@ -5126,7 +5124,8 @@ fn run_tls13_live_openssl_in_resid() {
         .parent().unwrap().parent().unwrap();
     let dir = std::env::temp_dir().join(format!("residc-e2e-tlslive-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    for f in ["tls_client.resid"] {
+    {
+        let f = "tls_client.resid";
         std::fs::copy(workspace.join("examples").join(f), dir.join(f)).unwrap();
     }
     for f in ["crypto.resid","aesgcm.resid","ed25519.resid","x25519.resid","tls.resid","tlsmsg.resid","chain.resid","rsa.resid","ec256.resid","der.resid","x509.resid","chacha.resid"] {
@@ -5134,7 +5133,7 @@ fn run_tls13_live_openssl_in_resid() {
     }
     // pick a port
     let base_port = 18443u16 + (std::process::id() % 500) as u16;
-    let mut port = base_port;
+    let port = base_port;
     // cert/key — exercise BOTH CertificateVerify algorithms
     for keyalg in ["ec", "rsa"] {
     let mut gen_args = vec!["req".to_string(),"-x509".to_string(),"-newkey".to_string()];
@@ -5155,6 +5154,7 @@ fn run_tls13_live_openssl_in_resid() {
         .output().unwrap();
     let certhex: String = der.stdout.iter().map(|b| format!("{:02x}", b)).collect();
 
+    #[allow(clippy::zombie_processes)]
     // pick a port
     let mut server = Command::new(&openssl)
         .args(["s_server","-tls1_3","-accept",&format!("{}",port),
@@ -5189,6 +5189,7 @@ fn run_tls13_live_openssl_in_resid() {
         .output().unwrap();
     let certhex: String = der.stdout.iter().map(|b| format!("{:02x}", b)).collect();
     let port = base_port + 1;
+    #[allow(clippy::zombie_processes)]
     let mut server = Command::new(&openssl)
         .args(["s_server","-tls1_3","-accept",&format!("{}",port),
                "-cert",dir.join("c.pem").to_str().unwrap(),
@@ -5255,6 +5256,7 @@ socketserver.TCPServer.allow_reuse_address=True
 s=socketserver.ThreadingTCPServer(("127.0.0.1",{port}),H)
 s.serve_forever()
 "#)).unwrap();
+    #[allow(clippy::zombie_processes)]
     let mut server = Command::new(&python).arg(dir.join("srv.py"))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -5439,7 +5441,8 @@ fn run_h2_live_request_in_resid() {
         .parent().unwrap().parent().unwrap();
     let dir = std::env::temp_dir().join(format!("residc-e2e-h2live-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    for f in ["h2_client.resid"] {
+    {
+        let f = "h2_client.resid";
         std::fs::copy(workspace.join("examples").join(f), dir.join(f)).unwrap();
     }
     for f in ["tlsmsg.resid","tls.resid","crypto.resid","aesgcm.resid","x25519.resid",
@@ -5460,6 +5463,7 @@ fn run_h2_live_request_in_resid() {
 
     let base = 19900u16 + (std::process::id() % 400) as u16;
     let port = base;
+    #[allow(clippy::zombie_processes)]
     let mut server = Command::new(&py)
         .arg(workspace.join("tools/h2_server.py"))
         .arg(port.to_string())
@@ -5491,8 +5495,8 @@ fn run_h2_live_request_in_resid() {
 ///      as a recursion bound, and on a callee's return value);
 ///   2. a cross-module recursive list builder using the concat-accumulator
 ///      shape (`lib/h2.resid`'s h2_cat / der_slice_acc pattern).
-/// Both shapes must compile AND produce correct values through the Rust
-/// pipeline and the stage-2 bootstrap driver pipeline.
+///      Both shapes must compile AND produce correct values through the Rust
+///      pipeline and the stage-2 bootstrap driver pipeline.
 #[test]
 fn len_arg_and_cross_module_recursive_list_builder() {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -5656,6 +5660,7 @@ fn run_h2_post_and_continuation_in_resid() {
     let certhex: String = der.stdout.iter().map(|b| format!("{:02x}", b)).collect();
 
     let port = 19900u16 + 400 + (std::process::id() % 400) as u16;
+    #[allow(clippy::zombie_processes)]
     let mut server = Command::new(&py)
         .arg(workspace.join("tools/h2_server.py"))
         .arg(port.to_string())
@@ -5789,7 +5794,7 @@ fn run_cache_capability_gating() {
 
     // 1) Ambient (no grant) — should write the cache entry, no "cache: skip"
     clear_cache();
-    let ambient_out = Command::new(&residc_bin)
+    let ambient_out = Command::new(residc_bin)
         .arg(&file).arg("build").arg("-o").arg(dir.join("out1").to_str().unwrap())
         .current_dir(&dir)
         .output()
@@ -5799,7 +5804,7 @@ fn run_cache_capability_gating() {
 
     // 2) Grant covering the required capability — should write, no "cache: skip"
     clear_cache();
-    let with_filesystem = Command::new(&residc_bin)
+    let with_filesystem = Command::new(residc_bin)
         .arg(&file).arg("build").arg("-o").arg(dir.join("out2").to_str().unwrap())
         .current_dir(&dir)
         .env("RESID_CAP_GRANT", "filesystem")
@@ -5810,7 +5815,7 @@ fn run_cache_capability_gating() {
 
     // 3) Grant NOT covering the required capability — should skip write
     clear_cache();
-    let with_network = Command::new(&residc_bin)
+    let with_network = Command::new(residc_bin)
         .arg(&file).arg("build").arg("-o").arg(dir.join("out3").to_str().unwrap())
         .current_dir(&dir)
         .env("RESID_CAP_GRANT", "network")
@@ -5825,7 +5830,6 @@ fn run_cache_capability_gating() {
 
 /// #[test]
 /// fn run_behavior_ord_sort() {
-
 /// User-defined behavior `Ord(T) = cmp_fn;` drives `sort(xs, using = Ord(T))`
 /// through a generated qsort comparator trampoline (spec §11).
 #[test]

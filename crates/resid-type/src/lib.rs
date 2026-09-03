@@ -19,6 +19,7 @@ use resid_parser::{
     PatternKind, Stmt, StmtKind, SumVariant, TranslationUnit, Type, TypeBody, TypeDef,
 };
 
+#[allow(clippy::large_enum_variant)]
 /// A semantic type for the supported core.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SemType {
@@ -178,11 +179,10 @@ pub fn residual_payload(ty: &SemType) -> Option<SemType> {
             if has_unit {
                 return variants.iter().find_map(|(_, p)| p.clone());
             }
-            if variants.len() == 2 {
-                if let Some((_, Some(pt))) = variants.first() {
+            if variants.len() == 2
+                && let Some((_, Some(pt))) = variants.first() {
                     return Some(pt.clone());
                 }
-            }
             None
         }
         _ => None,
@@ -267,9 +267,9 @@ pub fn check_behaviors(
             },
             types,
         )
-        .unwrap_or_else(|| SemType::Numeric(NumericType::Int(IntWidth::B64)));
+        .unwrap_or(SemType::Numeric(NumericType::Int(IntWidth::B64)));
         // §6.6/§12 core behaviors have name-specific implementation shapes.
-        let T = &b.type_params[0].0;
+        let t = &b.type_params[0].0;
         let (want_params, want_ret) = match b.name.0.as_str() {
             "Eq" => (vec![param_ty.clone(), param_ty], SemType::Bool),
             "Hash" => (
@@ -288,9 +288,9 @@ pub fn check_behaviors(
             if want_params.is_empty() {
                 String::new()
             } else if want_params.len() == 1 {
-                T.to_string()
+                t.to_string()
             } else {
-                format!("{T}, {T}")
+                format!("{t}, {t}")
             }
         );
         if sig.params != want_params {
@@ -298,7 +298,7 @@ pub fn check_behaviors(
                 &b.span,
                 format!(
                     "behavior `{key}`: `{func}` must have signature {want_str}, found {}",
-                    FormatSig(&sig),
+                    FormatSig(sig),
                 ),
             ));
         } else if sig.ret != want_ret {
@@ -377,19 +377,16 @@ fn collect_parametric_types(unit: &TranslationUnit, types: &mut Types) {
         }
     }
     for decl in &unit.declarations {
-        match decl {
-            Declaration::Function(f) => {
-                for p in &f.params {
-                    insert_t(&p.type_, types);
-                }
-                insert_t(&f.ret, types);
-                for stmt in &f.body.statements {
-                    if let StmtKind::Bind { type_: Some(t), .. } = &stmt.kind {
-                        insert_t(t, types);
-                    }
+        if let Declaration::Function(f) = decl {
+            for p in &f.params {
+                insert_t(&p.type_, types);
+            }
+            insert_t(&f.ret, types);
+            for stmt in &f.body.statements {
+                if let StmtKind::Bind { type_: Some(t), .. } = &stmt.kind {
+                    insert_t(t, types);
                 }
             }
-            _ => {}
         }
     }
 }
@@ -438,16 +435,14 @@ fn resolve_type_def(td: &TypeDef, types: &Types) -> Option<SemType> {
 pub fn find_constructor<'t>(types: &'t Types, name: &str) -> Option<&'t SemType> {
     let mut first: Option<&'t SemType> = None;
     for ty in types.values() {
-        if let SemType::Sum { variants, .. } = ty {
-            if variants.iter().any(|(n, _)| n == name) {
-                if let SemType::Sum { name: sn, .. } = ty {
-                    if sn == "Option" {
+        if let SemType::Sum { variants, .. } = ty
+            && variants.iter().any(|(n, _)| n == name) {
+                if let SemType::Sum { name: sn, .. } = ty
+                    && sn == "Option" {
                         return Some(ty);
                     }
-                }
                 first.get_or_insert(ty);
             }
-        }
     }
     first
 }
@@ -617,6 +612,7 @@ impl Env {
     }
     /// Insert a binding, rejecting shadowing (spec §7: "Shadowing is forbidden
     /// everywhere"). Returns the existing type if the name is already bound.
+    #[allow(clippy::result_large_err)]
     pub fn try_insert(&mut self, name: &str, ty: SemType) -> Result<(), SemType> {
         if let Some(existing) = self.map.get(name) {
             return Err(existing.clone());
@@ -701,12 +697,11 @@ pub fn inner_ty_name(inst: &str) -> &str {
 pub fn numeric_type_from_surface(s: &str) -> Option<SemType> {
     let mut norm = s.to_string();
     for (pfx, conv) in [("Int(", 'i'), ("UInt(", 'u'), ("Float(", 'f'), ("Dec(", 'd')] {
-        if let Some(rest) = s.strip_prefix(pfx) {
-            if let Some(w) = rest.strip_suffix(')') {
+        if let Some(rest) = s.strip_prefix(pfx)
+            && let Some(w) = rest.strip_suffix(')') {
                 norm = format!("{conv}{w}");
                 break;
             }
-        }
     }
     match resid_ir::NumericType::from_name(&norm) {
         Some(n) => Some(SemType::Numeric(n)),
@@ -883,14 +878,11 @@ fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
         Type::Base { name, params } => {
             // Built-in `List(T)`.
             if name.0 == "List" {
-                if let Some(ps) = params {
-                    if ps.len() == 1 {
-                        let Some(inner) = resolve_type_ctx_inner(&ps[0], types) else {
-                            return None;
-                        };
+                if let Some(ps) = params
+                    && ps.len() == 1 {
+                        let inner = resolve_type_ctx_inner(&ps[0], types)?;
                         return Some(SemType::List(Box::new(inner)));
                     }
-                }
                 return None; // a bare `List` needs an element type
             }
             // Built-in `Map(K, V)`.
@@ -901,12 +893,8 @@ fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 2 {
                     return None;
                 }
-                let Some(key) = resolve_type_ctx_inner(&ps[0], types) else {
-                    return None;
-                };
-                let Some(val) = resolve_type_ctx_inner(&ps[1], types) else {
-                    return None;
-                };
+                let key = resolve_type_ctx_inner(&ps[0], types)?;
+                let val = resolve_type_ctx_inner(&ps[1], types)?;
                 return Some(SemType::Map(Box::new(key), Box::new(val)));
             }
             // Built-in `Set(T)`.
@@ -917,9 +905,7 @@ fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 1 {
                     return None;
                 }
-                let Some(inner) = resolve_type_ctx_inner(&ps[0], types) else {
-                    return None;
-                };
+                let inner = resolve_type_ctx_inner(&ps[0], types)?;
                 return Some(SemType::Set(Box::new(inner)));
             }
             // Built-in `Option(T)` sum.
@@ -930,9 +916,7 @@ fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 1 {
                     return None;
                 }
-                let Some(inner) = resolve_type_ctx_inner(&ps[0], types) else {
-                    return None;
-                };
+                let inner = resolve_type_ctx_inner(&ps[0], types)?;
                 return Some(SemType::Sum {
                     name: "Option".into(),
                     variants: vec![("None".into(), None), ("Some".into(), Some(inner))],
@@ -946,12 +930,8 @@ fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 2 {
                     return None;
                 }
-                let Some(ok) = resolve_type_ctx_inner(&ps[0], types) else {
-                    return None;
-                };
-                let Some(er) = resolve_type_ctx_inner(&ps[1], types) else {
-                    return None;
-                };
+                let ok = resolve_type_ctx_inner(&ps[0], types)?;
+                let er = resolve_type_ctx_inner(&ps[1], types)?;
                 return Some(SemType::Sum {
                     name: "Result".into(),
                     variants: vec![("Ok".into(), Some(ok)), ("Err".into(), Some(er))],
@@ -965,9 +945,7 @@ fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 1 {
                     return None;
                 }
-                let Some(inner) = resolve_type_ctx_inner(&ps[0], types) else {
-                    return None;
-                };
+                let inner = resolve_type_ctx_inner(&ps[0], types)?;
                 return Some(SemType::Slice(Box::new(inner)));
             }
             // Built-in `Range(T)` — range of numeric values.
@@ -978,15 +956,13 @@ fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
                 if ps.len() != 1 {
                     return None;
                 }
-                let Some(inner) = resolve_type_ctx_inner(&ps[0], types) else {
-                    return None;
-                };
+                let inner = resolve_type_ctx_inner(&ps[0], types)?;
                 return Some(SemType::Range(Box::new(inner)));
             }
             // Parameterized spellings Int(16) / UInt(8) / Float(32) carry a
             // single numeric-literal width; blend into the iN/uN/fN name.
-            if let Some(ps) = params {
-                if ps.len() == 1 {
+            if let Some(ps) = params
+                && ps.len() == 1 {
                     let width_str = match &ps[0] {
                         // Parsed as numeric literal: Int(8) → Type::Literal(Int { kind: Decimal("8"), .. })
                         Type::Literal(Literal::Int { kind, .. }) => Ok(kind.digits().to_string()),
@@ -1010,30 +986,25 @@ fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
                         }
                     }
                 }
-            }
             // Fallback: parse width from name string itself (e.g. "Float(32)" or "Int(8)")
             // when params is None but name contains parameterized spelling.
             if params.is_none() {
-                if let Some(rest) = name.0.strip_prefix("Int(") {
-                    if let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
+                if let Some(rest) = name.0.strip_prefix("Int(")
+                    && let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
                         return type_from_name(&format!("i{w}"));
                     }
-                }
-                if let Some(rest) = name.0.strip_prefix("UInt(") {
-                    if let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
+                if let Some(rest) = name.0.strip_prefix("UInt(")
+                    && let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
                         return type_from_name(&format!("u{w}"));
                     }
-                }
-                if let Some(rest) = name.0.strip_prefix("Float(") {
-                    if let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
+                if let Some(rest) = name.0.strip_prefix("Float(")
+                    && let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
                         return type_from_name(&format!("f{w}"));
                     }
-                }
-                if let Some(rest) = name.0.strip_prefix("Dec(") {
-                    if let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
+                if let Some(rest) = name.0.strip_prefix("Dec(")
+                    && let Some(w) = rest.strip_suffix(')').and_then(|s| s.parse::<u16>().ok()) {
                         return type_from_name(&format!("d{w}"));
                     }
-                }
             }
             // A user-declared named type.
             if let Some(st) = types.get(&name.0) {
@@ -1087,7 +1058,7 @@ fn lit_type(lit: &Literal) -> SemType {
             } else {
                 [128u16, 256, 512]
                     .into_iter()
-                    .find(|&w| w >= bits + 1)
+                    .find(|&w| w > bits)
                     .unwrap_or(512)
             };
             SemType::Numeric(NumericType::Int(IntWidth::from_bits(width).unwrap()))
@@ -1478,8 +1449,8 @@ pub fn infer_expr_expected(
     types: &Types,
     expected: Option<&SemType>,
 ) -> Result<SemType, TypeError> {
-    if let ExprKind::ListLit(elems) = &expr.kind {
-        if elems.is_empty() {
+    if let ExprKind::ListLit(elems) = &expr.kind
+        && elems.is_empty() {
             return match expected {
                 Some(SemType::List(elem)) => Ok(SemType::List(elem.clone())),
                 _ => Err(err(
@@ -1488,13 +1459,12 @@ pub fn infer_expr_expected(
                 )),
             };
         }
-    }
     // Spec §6: overflow of the result type is a compile-time error. A literal
     // written against an expected numeric type must fit its range (e.g.
     // `Int(8) x = 300` or `Int(64) y = <2^256-1 literal>`). Wide targets
     // (>= 128 bits) accept any literal by design.
-    if let Some(SemType::Numeric(_)) = expected {
-        if matches!(&expr.kind, ExprKind::Literal(Literal::Int { .. }))
+    if let Some(SemType::Numeric(_)) = expected
+        && matches!(&expr.kind, ExprKind::Literal(Literal::Int { .. }))
             && !literal_compatible(expr, expected.unwrap())
         {
             let ExprKind::Literal(Literal::Int { kind, .. }) = &expr.kind else {
@@ -1510,7 +1480,6 @@ format!(
                 ),
             ));
         }
-    }
     infer_expr_ctx(expr, env, sigs, types)
 }
 
@@ -1732,14 +1701,10 @@ pub fn infer_expr_ctx(
             // `get` and `concat` are recognized for now.
             let tt = infer_expr_ctx(target, env, sigs, types)?;
             let method_name = &method.0;
-            if args.is_empty() {
-                match (method_name.as_str(), &tt) {
-                    ("len", SemType::List(_)) => {
-                        return Ok(SemType::Numeric(NumericType::ISize));
-                    }
-                    _ => {}
+            if args.is_empty()
+                && let ("len", SemType::List(_)) = (method_name.as_str(), &tt) {
+                    return Ok(SemType::Numeric(NumericType::ISize));
                 }
-            }
             // `a.concat(b)` joins two lists of the same element type.
             if method_name == "concat" {
                 let SemType::List(elem) = &tt else {
@@ -2116,7 +2081,7 @@ ExprKind::While { cond, body } => {
             };
             let mut errs = Vec::new();
             let mut for_env = env.clone();
-            if let Err(_) = for_env.try_insert(&name.0, elem_ty) {
+            if for_env.try_insert(&name.0, elem_ty).is_err() {
                 return Err(err(
                     &expr.span,
                     format!("loop variable `{}` is already bound; shadowing is forbidden", name.0),
@@ -2139,10 +2104,10 @@ ExprKind::While { cond, body } => {
             let mut with_env = env.clone();
             for b in bindings {
                 let declared = resolve_type_ctx(&b.type_, types).ok_or_else(|| {
-                    err(&expr.span, format!("unknown with-binding type"))
+                    err(&expr.span, "unknown with-binding type".to_string())
                 })?;
                 let has = infer_expr_expected(&b.init, &with_env, sigs, types, Some(&declared))?;
-                if &has != &declared {
+                if has != declared {
                     return Err(err(
                         &b.init.span,
                         format!(
@@ -2369,8 +2334,7 @@ fn infer_struct_lit(
     span: &Span,
 ) -> Result<SemType, TypeError> {
     let ty = types
-        .get(&name.0)
-        .map(Clone::clone)
+        .get(&name.0).cloned()
         .or_else(|| type_from_name(&name.0))
         .ok_or_else(|| err(span, format!("unknown type `{}`", name.0)))?;
     let SemType::Struct { fields: defs, .. } = &ty else {
@@ -2382,7 +2346,7 @@ fn infer_struct_lit(
             .find(|(n, _)| n == &fname.0)
             .ok_or_else(|| err(span, format!("`{}` has no field `{}`", name.0, fname.0)))?;
         let has = infer_expr_expected(fval, env, sigs, types, Some(&want.1))?;
-        if &has != &want.1 {
+        if has != want.1 {
             return Err(err(
                 span,
                 format!(
@@ -2439,8 +2403,8 @@ fn bind_pattern(
     pat: &Pattern,
     ty: &SemType,
     env: &mut Env,
-    types: &Types,
-    sigs: &Signatures,
+    _types: &Types,
+    _sigs: &Signatures,
 ) -> Result<(), TypeError> {
     match &pat.kind {
         PatternKind::Wildcard | PatternKind::Literal(_) => Ok(()),
@@ -2490,7 +2454,7 @@ fn bind_pattern(
                     .find(|(n, _)| n == &fname.0)
                     .map(|(_, t)| t.clone())
                     .ok_or_else(|| err(&pat.span, format!("no field `{}`", fname.0)))?;
-                bind_pattern(sub, &fty, env, types, sigs)?;
+                bind_pattern(sub, &fty, env, _types, _sigs)?;
             }
             Ok(())
         }
@@ -2687,11 +2651,10 @@ fn block_ret(
     if let Some(ret) = &block.ret {
         return infer_expr_ctx(ret, &env, sigs, types);
     }
-    if let Some(stmt) = block.statements.last() {
-        if let StmtKind::Expr(e) = &stmt.kind {
+    if let Some(stmt) = block.statements.last()
+        && let StmtKind::Expr(e) = &stmt.kind {
             return infer_expr_ctx(e, &env, sigs, types);
         }
-    }
     Ok(SemType::Bool)
 }
 
@@ -2717,13 +2680,13 @@ fn infer_using(
         }
     };
     // Resolve through any number of Reverse(...) wrappers (spec §11).
-    let mut layers = 0usize;
+    let mut _layers = 0usize;
     let mut inner = behavior.0.as_str();
     while let Some(rest) = inner
         .strip_prefix("Reverse(")
         .and_then(|r| r.strip_suffix(')'))
     {
-        layers += 1;
+        _layers += 1;
         inner = rest;
     }
     if !inner.contains('(') {
@@ -2917,9 +2880,9 @@ fn infer_call(
         ));
     }
 
+    #[allow(unused_assignments)]
     // Check: each provided arg maps to a real param or a param with a default.
-    let mut used_positional = 0usize;
-    for (name_opt, a) in args {
+    for (mut used_positional, (name_opt, a)) in args.iter().enumerate() {
         let wanted_param = if let Some(n) = name_opt {
             // Named arg: find the param index by name.
             sig.param_names.iter().position(|p| p == &n.0).ok_or_else(|| {
@@ -3056,7 +3019,7 @@ fn literal_compatible(a: &Expr, target: &SemType) -> bool {    let SemType::Nume
     if t.is_unsigned() {
         required <= bits
     } else {
-        required <= bits - 1
+        required < bits
     }
 }
 
@@ -3152,10 +3115,9 @@ fn conversion_helper_match(arg: &SemType, param: &SemType, first_char: char) -> 
 fn arith_family_sig(args_ty: &[SemType], func: &str) -> Option<FunctionSig> {
     let (kind, rest) = if let Some(r) = func.strip_prefix("wrapping_") {
         ("wrapping", r)
-    } else if let Some(r) = func.strip_prefix("saturating_") {
-        ("saturating", r)
     } else {
-        return None;
+        let r = func.strip_prefix("saturating_")?;
+        ("saturating", r)
     };
     let _ = kind;
     let (unsigned, op) = match rest.strip_prefix('u') {
@@ -3208,9 +3170,9 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
     // dN conversion helpers (spec §6.7) are open-ended (any N >= 1) and so are
     // not enumerated in BUILTIN_SIGS — synthesize the signature here. Accepted
     // from: Dec (exact, narrowing rounds once), Int (exact), Str (exact parse).
-    if let Some(rest) = func.strip_prefix('d') {
-        if let Ok(n) = rest.parse::<u16>() {
-            if n >= 1 {
+    if let Some(rest) = func.strip_prefix('d')
+        && let Ok(n) = rest.parse::<u16>()
+            && n >= 1 {
                 let tgt = SemType::Numeric(NumericType::Dec(n));
                 if let Some(arg) = args_ty.first() {
                     if conversion_helper_match(arg, &tgt, 'd') {
@@ -3240,8 +3202,6 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
                     sandbox_ceiling: Vec::new(),
                 });
             }
-        }
-    }
     let candidate = sigs.get(func)?;
     if candidate.params.len() != 1 {
         return Some(candidate.clone());
@@ -3258,11 +3218,10 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
             .iter()
             .filter(|(n, _)| *n == func)
             .filter_map(|(_, sig)| {
-                if sig.params.len() == 1 {
-                    if let SemType::Numeric(_p) = &sig.params[0] {
+                if sig.params.len() == 1
+                    && let SemType::Numeric(_p) = &sig.params[0] {
                         return Some((&sig.params[0], sig.clone()));
                     }
-                }
                 None
             })
             .collect();
@@ -3343,17 +3302,16 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
     // For conversion helpers (i8..i512, u8..u512, f16..f128, isize, usize),
     // find the narrowest parameter type that the argument can be widened to.
     let first_char = func.chars().next();
-    if let Some(fc) = first_char {
-        if matches!(fc, 'i' | 'u' | 'f') {
+    if let Some(fc) = first_char
+        && matches!(fc, 'i' | 'u' | 'f') {
             let matching: Vec<(&SemType, FunctionSig)> = sigs
                 .iter()
                 .filter(|(n, _)| *n == func)
                 .filter_map(|(_, sig)| {
-                    if sig.params.len() == 1 {
-                        if let SemType::Numeric(_) = &sig.params[0] {
+                    if sig.params.len() == 1
+                        && let SemType::Numeric(_) = &sig.params[0] {
                             return Some((&sig.params[0], sig.clone()));
                         }
-                    }
                     None
                 })
                 .collect();
@@ -3372,7 +3330,6 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
             }
             return Some(candidate.clone());
         }
-    }
 
     Some(candidate.clone())
 }
@@ -3389,11 +3346,10 @@ fn flatten_unit(unit: &TranslationUnit) -> Vec<Declaration> {
                 let ceiling = &s.capabilities;
                 s.body.iter().map(|child| {
                     let mut c = child.clone();
-                    if let Declaration::Function(f) = &mut c {
-                        if f.sandbox_ceiling.is_empty() && !ceiling.is_empty() {
+                    if let Declaration::Function(f) = &mut c
+                        && f.sandbox_ceiling.is_empty() && !ceiling.is_empty() {
                             f.sandbox_ceiling = ceiling.clone();
                         }
-                    }
                     c
                 }).collect::<Vec<_>>()
             }
@@ -3643,7 +3599,7 @@ pub fn check_program_with(unit: &TranslationUnit, ceilings: &[FileCeiling]) -> V
             let mut env = Env::new();
             let sig = sigs.get(&f.name.0).unwrap();
             for (param, pt) in f.params.iter().zip(sig.params.iter()) {
-                if let Err(_) = env.try_insert(&param.name.0, pt.clone()) {
+                if env.try_insert(&param.name.0, pt.clone()).is_err() {
                     errs.push(err(
                         &f.span,
                         format!("parameter `{}` is already bound; shadowing is forbidden", param.name.0),
@@ -3712,11 +3668,10 @@ fn collect_expr_calls(expr: &Expr, sigs: &Signatures, out: &mut Vec<(String, Spa
     fn walk_expr(e: &Expr, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
         match &e.kind {
             ExprKind::Call { func, args } => {
-                if let ExprKind::Id(name) = &func.kind {
-                    if sigs.contains_key(&name.0) {
+                if let ExprKind::Id(name) = &func.kind
+                    && sigs.contains_key(&name.0) {
                         out.push((name.0.clone(), e.span.clone()));
                     }
-                }
                 walk_expr(func, sigs, out);
                 for (_, a) in args {
                     walk_expr(a, sigs, out);
@@ -3869,7 +3824,6 @@ fn collect_expr_calls(expr: &Expr, sigs: &Signatures, out: &mut Vec<(String, Spa
             ExprKind::Id(_)
             | ExprKind::Literal(_)
             | ExprKind::Location
-            | ExprKind::FString(_)
             | ExprKind::RawString(_)
             | ExprKind::ByteString(_)
             | ExprKind::Todo(_)
@@ -3913,7 +3867,7 @@ fn collect_block_calls(block: &Block, sigs: &Signatures, out: &mut Vec<(String, 
             StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
         }
     }
-    fn walk_block(b: &Block, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
+    fn _walk_block(b: &Block, sigs: &Signatures, out: &mut Vec<(String, Span)>) {
         for st in &b.statements {
             walk_stmt(st, sigs, out);
         }
@@ -3937,7 +3891,7 @@ fn collect_block_calls(block: &Block, sigs: &Signatures, out: &mut Vec<(String, 
 ///   - an in-source `sandbox (…)` block (`FunctionSig::sandbox_ceiling`), and
 ///   - a dependency ceiling from the project manifest (`ceilings`, keyed by
 ///     the defining file's directory).
-/// Authority is monotone: ceilings only shrink along the call graph.
+///     Authority is monotone: ceilings only shrink along the call graph.
 fn enforce_transitive_attenuation(
     flat: &[Declaration],
     sigs: &Signatures,
@@ -4050,9 +4004,9 @@ fn enforce_transitive_attenuation(
                 .get(&f.name.0)
                 .map(|s| s.params.iter().any(|p| matches!(p, SemType::File)))
                 .unwrap_or(false);
-            if has_file_param {
-                if let Some(caps) = &parent_caps {
-                    if !caps_contain_family(caps, "filesystem") {
+            if has_file_param
+                && let Some(caps) = &parent_caps
+                    && !caps_contain_family(caps, "filesystem") {
                         errs.push(err(
                             &f.span,
                             format!(
@@ -4062,8 +4016,6 @@ fn enforce_transitive_attenuation(
                             ),
                         ));
                     }
-                }
-            }
             // Seed the walk with any File-typed parameter names so that a File
             // handle value passed through the body as an *inline call argument*
             // is tracked for §21.3 value provenance (not just at declaration).
@@ -4159,8 +4111,8 @@ fn walk_spawn_cap_env(
             }
             ExprKind::Call { func, args } => {
                 if let Some(p) = parent {
-                    if let ExprKind::Id(callee) = &func.kind {
-                        if let Some(sig) = sigs.get(&callee.0) {
+                    if let ExprKind::Id(callee) = &func.kind
+                        && let Some(sig) = sigs.get(&callee.0) {
                             for req in &sig.requires {
                                 if !caps_contain_family(p, req) {
                                     errs.push(err(
@@ -4174,7 +4126,6 @@ fn walk_spawn_cap_env(
                                 }
                             }
                         }
-                    }
                     // §21.3 handle-entry (value provenance): passing a File
                     // handle value as an inline argument requires `filesystem`.
                     if !caps_contain_family(p, "filesystem")
@@ -4295,16 +4246,14 @@ fn walk_spawn_cap_env(
                 walk_expr(target, parent, sigs, errs, file_bindings);
                 if let ExprKind::MethodCall { method, args, .. } = &e.kind {
                     // Handle provenance: known File methods require `filesystem` capability
-                    if matches!(method.0.as_str(), "read_handle" | "close") {
-                        if let Some(p) = parent {
-                            if !caps_contain_family(p, "filesystem") {
+                    if matches!(method.0.as_str(), "read_handle" | "close")
+                        && let Some(p) = parent
+                            && !caps_contain_family(p, "filesystem") {
                                 errs.push(err(&e.span, format!(
                                     "File method `{}` requires capability `filesystem` which is not granted to this region's capability set [{}]",
                                     method.0, p.join(", ")
                                 )));
                             }
-                        }
-                    }
                     for a in args {
                         walk_expr(a, parent, sigs, errs, file_bindings);
                     }
@@ -4382,11 +4331,10 @@ fn walk_spawn_cap_env(
                 value,
                 ..
             } => {
-                if let Some(t) = type_ {
-                    if is_file_type(t) {
+                if let Some(t) = type_
+                    && is_file_type(t) {
                         file_bindings.insert(name.0.clone());
                     }
-                }
                 walk_expr(value, parent, sigs, errs, file_bindings);
             }
             StmtKind::Discard(value)
@@ -4467,7 +4415,7 @@ fn type_check_block(
             } else {
                 infer_expr_ctx(value, &env, sigs, types).unwrap_or(SemType::Bool)
             };
-            if let Err(_) = env.try_insert(&name.0, ty) {
+            if env.try_insert(&name.0, ty).is_err() {
                 errs.push(err(
                     &stmt.span,
                     format!("identifier `{}` is already bound; shadowing is forbidden", name.0),
@@ -4489,31 +4437,25 @@ fn type_check_block(
                 Err(e) => errs.push(e),
             }
         }
-        if let StmtKind::Expr(e) = &stmt.kind {
-            if let Err(err) = infer_expr_ctx(e, &env, sigs, types) {
+        if let StmtKind::Expr(e) = &stmt.kind
+            && let Err(err) = infer_expr_ctx(e, &env, sigs, types) {
                 errs.push(err);
             }
-        }
-        if let StmtKind::Discard(e) = &stmt.kind {
-            if let Err(err) = infer_expr_ctx(e, &env, sigs, types) {
+        if let StmtKind::Discard(e) = &stmt.kind
+            && let Err(err) = infer_expr_ctx(e, &env, sigs, types) {
                 errs.push(err);
             }
-        }
     }
-    if let Some(ret) = &block.ret {
-        if let Err(err) = infer_expr_ctx(ret, &env, sigs, types) {
+    if let Some(ret) = &block.ret
+        && let Err(err) = infer_expr_ctx(ret, &env, sigs, types) {
             errs.push(err);
         }
-    }
 }
 
 /// `_`-style irrefutable patterns are required for declarations; any tagged
 /// (variant) pattern is refutable.
 fn is_refutable_pattern(pat: &Pattern) -> bool {
-    match &pat.kind {
-        PatternKind::Variant { .. } => true,
-        _ => false,
-    }
+    matches!(&pat.kind, PatternKind::Variant { .. })
 }
 
 // ─── Tests ─────────────────────────────────────────────────────
@@ -4566,7 +4508,7 @@ mod tests {
     fn make_env() -> Env {
         let mut env = Env::new();
         let int_ty = SemType::Numeric(NumericType::Int(IntWidth::from_bits(64).unwrap()));
-        let u8_ty = SemType::Numeric(NumericType::UInt(IntWidth::B8.into()));
+        let u8_ty = SemType::Numeric(NumericType::UInt(IntWidth::B8));
         let f64_ty = SemType::Numeric(NumericType::Float(FloatWidth::F64));
         env.insert("a", int_ty.clone());
         env.insert("b", int_ty);
@@ -4581,7 +4523,7 @@ mod tests {
         let env = Env::new();
         let sigs = Signatures::new();
         let ty = infer_expr(&e, &env, &sigs).unwrap();
-        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64)));
     }
 
     #[test]
@@ -4611,7 +4553,7 @@ mod tests {
         let e = expr_id("a");
         let env = make_env();
         let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
-        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64)));
     }
 
     #[test]
@@ -4789,7 +4731,7 @@ mod tests {
         };
         let env = make_env();
         let ty = infer_expr(&e, &env, &Signatures::new()).unwrap();
-        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B32.into())));
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B32)));
     }
 
     #[test]
@@ -4797,11 +4739,11 @@ mod tests {
         let mut env = Env::new();
         env.insert(
             "a",
-            SemType::Numeric(NumericType::Int(IntWidth::B64.into())),
+            SemType::Numeric(NumericType::Int(IntWidth::B64)),
         );
         env.insert(
             "b",
-            SemType::Numeric(NumericType::Int(IntWidth::B64.into())),
+            SemType::Numeric(NumericType::Int(IntWidth::B64)),
         );
         env.insert("cond", SemType::Bool);
         let if_expr = Expr {
@@ -4851,7 +4793,7 @@ mod tests {
             span: span(),
         };
         let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
-        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64)));
     }
 
     #[test]
@@ -4861,7 +4803,7 @@ mod tests {
             span: span(),
         };
         let ty = infer_expr(&e, &Env::new(), &Signatures::new()).unwrap();
-        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64)));
     }
 
     #[test]
@@ -4923,7 +4865,7 @@ mod tests {
         assert_eq!(
             ty,
             SemType::Range(Box::new(SemType::Numeric(NumericType::Int(
-                IntWidth::B64.into()
+                IntWidth::B64
             ))))
         );
     }
@@ -5210,21 +5152,21 @@ mod tests {
     #[test]
     fn literal_compatible_fits() {
         let lit = expr_int(5);
-        let target = SemType::Numeric(NumericType::Int(IntWidth::B16.into()));
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B16));
         assert!(literal_compatible(&lit, &target));
     }
 
     #[test]
     fn literal_compatible_overflow_i8() {
         let lit = expr_int(300); // 300 > 127 (i8 max)
-        let target = SemType::Numeric(NumericType::Int(IntWidth::B8.into()));
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B8));
         assert!(!literal_compatible(&lit, &target));
     }
 
     #[test]
     fn literal_compatible_unsigned() {
         let lit = expr_int(255);
-        let target = SemType::Numeric(NumericType::UInt(IntWidth::B8.into()));
+        let target = SemType::Numeric(NumericType::UInt(IntWidth::B8));
         assert!(literal_compatible(&lit, &target)); // 255 = max u8
     }
 
@@ -5242,7 +5184,7 @@ mod tests {
             params: None,
         };
         let ty = resolve_type(&td).unwrap();
-        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64)));
     }
 
     #[test]
@@ -5252,7 +5194,7 @@ mod tests {
             params: None,
         };
         let ty = resolve_type(&td).unwrap();
-        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B32.into())));
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B32)));
     }
 
     #[test]
@@ -6258,7 +6200,7 @@ Int main() {
         assert_eq!(
             ty,
             SemType::Slice(Box::new(SemType::Numeric(
-                NumericType::Int(IntWidth::B64.into())
+                NumericType::Int(IntWidth::B64)
             )))
         );
     }
@@ -6513,7 +6455,7 @@ Float main() {
     fn infer_int_widening_add() {
         // Int64 + Int64 → Int128
         let mut env = Env::new();
-        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64));
         env.insert("a", int64.clone());
         env.insert("b", int64);
         let e = Expr {
@@ -6532,7 +6474,7 @@ Float main() {
     fn infer_int_widening_mul() {
         // Int64 * Int64 → Int128
         let mut env = Env::new();
-        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64));
         env.insert("a", int64.clone());
         env.insert("b", int64);
         let e = Expr {
@@ -6551,7 +6493,7 @@ Float main() {
     fn infer_int_sub_no_widening() {
         // Int64 - Int64 does not widen (result fits in same width)
         let mut env = Env::new();
-        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64));
         env.insert("a", int64.clone());
         env.insert("b", int64);
         let e = Expr {
@@ -6570,7 +6512,7 @@ Float main() {
     fn infer_uint_add_same_sign_ok() {
         // UInt64 + UInt64 → UInt128 (same sign, widening)
         let mut env = Env::new();
-        let uint64 = SemType::Numeric(NumericType::UInt(IntWidth::B64.into()));
+        let uint64 = SemType::Numeric(NumericType::UInt(IntWidth::B64));
         env.insert("a", uint64.clone());
         env.insert("b", uint64);
         let e = Expr {
@@ -6589,8 +6531,8 @@ Float main() {
     fn infer_int_mix_with_uint_error() {
         // Int64 + UInt64 → error
         let mut env = Env::new();
-        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
-        let uint64 = SemType::Numeric(NumericType::UInt(IntWidth::B64.into()));
+        let int64 = SemType::Numeric(NumericType::Int(IntWidth::B64));
+        let uint64 = SemType::Numeric(NumericType::UInt(IntWidth::B64));
         env.insert("a", int64);
         env.insert("b", uint64);
         let e = Expr {
@@ -7092,7 +7034,7 @@ Int main() {
     #[test]
     fn infer_unary_neg_int() {
         let mut env = Env::new();
-        env.insert("a", SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        env.insert("a", SemType::Numeric(NumericType::Int(IntWidth::B64)));
         let e = Expr {
             kind: ExprKind::UnaryOp {
                 op: OpKind::Minus,
@@ -7148,7 +7090,7 @@ Int main() {
         let env = Env::new();
         let sigs = Signatures::new();
         let ty = block_ret(&block, &env, &sigs, &Types::new()).unwrap();
-        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64)));
     }
 
     #[test]
@@ -7162,7 +7104,7 @@ Int main() {
         let env = Env::new();
         let sigs = Signatures::new();
         let ty = block_ret(&block, &env, &sigs, &Types::new()).unwrap();
-        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64.into())));
+        assert_eq!(ty, SemType::Numeric(NumericType::Int(IntWidth::B64)));
     }
 
     // ─── Numeric literal bounds ──────────────────────────────────
@@ -7170,7 +7112,7 @@ Int main() {
     #[test]
     fn literal_compatible_i8_positive() {
         let lit = expr_int(127);
-        let target = SemType::Numeric(NumericType::Int(IntWidth::B8.into()));
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B8));
         assert!(literal_compatible(&lit, &target));
     }
 
@@ -7178,35 +7120,35 @@ Int main() {
     fn literal_compatible_i8_negative_max() {
         // -128 can hold 127 as positive, but 128 overflows
         let lit = expr_int(128);
-        let target = SemType::Numeric(NumericType::Int(IntWidth::B8.into()));
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B8));
         assert!(!literal_compatible(&lit, &target));
     }
 
     #[test]
     fn literal_compatible_u8_max() {
         let lit = expr_int(255);
-        let target = SemType::Numeric(NumericType::UInt(IntWidth::B8.into()));
+        let target = SemType::Numeric(NumericType::UInt(IntWidth::B8));
         assert!(literal_compatible(&lit, &target));
     }
 
     #[test]
     fn literal_compatible_u8_overflow() {
         let lit = expr_int(256);
-        let target = SemType::Numeric(NumericType::UInt(IntWidth::B8.into()));
+        let target = SemType::Numeric(NumericType::UInt(IntWidth::B8));
         assert!(!literal_compatible(&lit, &target));
     }
 
     #[test]
     fn literal_compatible_i16() {
         let lit = expr_int(32767);
-        let target = SemType::Numeric(NumericType::Int(IntWidth::B16.into()));
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B16));
         assert!(literal_compatible(&lit, &target));
     }
 
     #[test]
     fn literal_compatible_i32() {
         let lit = expr_int(2147483647);
-        let target = SemType::Numeric(NumericType::Int(IntWidth::B32.into()));
+        let target = SemType::Numeric(NumericType::Int(IntWidth::B32));
         assert!(literal_compatible(&lit, &target));
     }
 
@@ -8555,7 +8497,7 @@ Int outer() {
             ty,
             SemType::Map(
                 Box::new(SemType::Str),
-                Box::new(SemType::Numeric(NumericType::Int(IntWidth::B64.into())))
+                Box::new(SemType::Numeric(NumericType::Int(IntWidth::B64)))
             )
         );
     }
@@ -8570,14 +8512,14 @@ Int outer() {
         assert_eq!(
             ty,
             SemType::Set(Box::new(SemType::Numeric(NumericType::Int(
-                IntWidth::B64.into()
+                IntWidth::B64
             ))))
         );
     }
 
     #[test]
     fn infer_map_index_and_methods() {
-        let int_ty = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        let int_ty = SemType::Numeric(NumericType::Int(IntWidth::B64));
         let map_ty = SemType::Map(Box::new(SemType::Str), Box::new(int_ty.clone()));
         let mut env = Env::new();
         env.insert("m", map_ty.clone());
@@ -8649,7 +8591,7 @@ Int outer() {
 
     #[test]
     fn infer_set_methods() {
-        let int_ty = SemType::Numeric(NumericType::Int(IntWidth::B64.into()));
+        let int_ty = SemType::Numeric(NumericType::Int(IntWidth::B64));
         let set_ty = SemType::Set(Box::new(int_ty.clone()));
         let mut env = Env::new();
         env.insert("s", set_ty);

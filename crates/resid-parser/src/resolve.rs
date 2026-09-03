@@ -80,7 +80,7 @@ fn root_own_count(
 ) -> Result<usize, ImportError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| ImportError { message: format!("cannot read '{}': {e}", path.display()) })?;
-    let (unit, errors) = crate::Parser::parse(&path.display().to_string(), &text);
+    let (unit, errors) = crate::Parser::parse(path.display().to_string(), &text);
     let _ = deps;
     if !errors.is_empty() {
         return Ok(0);

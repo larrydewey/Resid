@@ -152,11 +152,10 @@ impl Lexer {
                                 self.bump();
                             }
                         }
-                        if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                            if let Some(c) = char::from_u32(code) {
+                        if let Ok(code) = u32::from_str_radix(&hex, 16)
+                            && let Some(c) = char::from_u32(code) {
                                 value.push(c);
                             }
-                        }
                     }
                     Some(c) => {
                         value.push('\\');
@@ -417,13 +416,11 @@ impl Lexer {
             self.bump();
         }
         // Check that the next char is not alphanumeric (full match)
-        if keyword_match {
-            if let Some(c) = self.peek() {
-                if c.is_alphanumeric() || c == '_' {
+        if keyword_match
+            && let Some(c) = self.peek()
+                && (c.is_alphanumeric() || c == '_') {
                     keyword_match = false;
                 }
-            }
-        }
         if keyword_match {
             self.tokens.push(Token {
                 kind: TokenKind::Op(Op::Location),
@@ -454,13 +451,11 @@ impl Lexer {
                 }
                 self.bump();
             }
-            if keyword_match {
-                if let Some(c) = self.peek() {
-                    if c.is_alphanumeric() || c == '_' {
+            if keyword_match
+                && let Some(c) = self.peek()
+                    && (c.is_alphanumeric() || c == '_') {
                         keyword_match = false;
                     }
-                }
-            }
             if keyword_match {
                 self.tokens.push(Token {
                     kind: TokenKind::AtResidual,
@@ -519,7 +514,7 @@ impl Lexer {
             }
             _ => {
                 // Check if it's a keyword
-                if let Some(kw) = Keyword::from_str(&ident) {
+                if let Some(kw) = Keyword::str_origin(&ident) {
                     self.tokens.push(Token {
                         kind: TokenKind::Keyword(kw),
                         span: start,
@@ -876,7 +871,6 @@ impl Lexer {
                     span: start,
                     message: "unterminated character literal".into(),
                 });
-                return;
             }
             Some('\\') => {
                 self.bump(); // skip \
