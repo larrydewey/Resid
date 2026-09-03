@@ -282,11 +282,10 @@ fn uri_to_path(uri: &str) -> std::path::PathBuf {
 fn load_notes_for(doc_path: &std::path::Path, _text: &str) -> Vec<ResidualNote> {
     let mut notes = Vec::new();
     for sc in sidecars_for(doc_path) {
-        if let Some(bytes) = std::fs::read(&sc).ok() {
-            if let Some(mut ns) = resid_notes::from_cbor(&bytes) {
+        if let Ok(bytes) = std::fs::read(&sc)
+            && let Some(mut ns) = resid_notes::from_cbor(&bytes) {
                 notes.append(&mut ns);
             }
-        }
     }
     notes
 }

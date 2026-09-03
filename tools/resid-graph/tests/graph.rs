@@ -50,7 +50,6 @@ fn dot_output_is_wellformed() {
 #[test]
 fn aliased_imports_appear_as_nodes() {
     use std::fs;
-    use std::path::PathBuf;
     let dir = std::env::temp_dir().join(format!("resid-graph-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();

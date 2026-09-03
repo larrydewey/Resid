@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, path::Path};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -11,7 +11,7 @@ fn temp_dir(tag: &str) -> PathBuf {
     dir
 }
 
-fn write_pkg(dir: &PathBuf, manifest: &str, main: &str) {
+fn write_pkg(dir: &Path, manifest: &str, main: &str) {
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(dir.join("resid.toml"), manifest).unwrap();
     fs::write(dir.join("src/main.resid"), main).unwrap();
@@ -46,7 +46,7 @@ fn manifest_rejects_missing_name() {
     let dir = temp_dir("noname");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("resid.toml"), "[package]\nversion = \"0.1.0\"\n").unwrap();
-    let e = Manifest::load(&dir).err().expect("missing name must fail");
+    let e = Manifest::load(&dir).expect_err("missing name must fail");
     assert!(e.to_string().contains("invalid resid.toml"), "{e}");
 }
 
@@ -55,7 +55,7 @@ fn manifest_rejects_missing_root_source() {
     let dir = temp_dir("noroot");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("resid.toml"), GOOD_MANIFEST).unwrap();
-    let e = Manifest::load(&dir).err().expect("missing root must fail");
+    let e = Manifest::load(&dir).expect_err("missing root must fail");
     assert!(e.to_string().contains("not found"), "{e}");
 }
 
@@ -118,7 +118,7 @@ Int main() {
 "#,
     );
     let m = Manifest::load(&dir).unwrap();
-    let e = build(&m, Profile::Check, &dir.join("out")).err().expect("must fail");
+    let e = build(&m, Profile::Check, &dir.join("out")).expect_err("must fail");
     assert!(e.message.contains("type error"), "{}", e.message);
 }
 
@@ -131,7 +131,7 @@ fn parse_errors_fail_the_build_with_diagnostics() {
         "Int main( {\n    return 0;\n}\n",
     );
     let m = Manifest::load(&dir).unwrap();
-    let e = build(&m, Profile::Check, &dir.join("out")).err().expect("must fail");
+    let e = build(&m, Profile::Check, &dir.join("out")).expect_err("must fail");
     assert!(e.message.contains("expected"), "expected parse diagnostic, got: {}", e.message);
 }
 
@@ -195,7 +195,7 @@ path = "vendor/ghost"
 "#,
         "Int main() { return 0; }\n",
     );
-    let e = Manifest::load(&dir).err().expect("missing dep must fail");
+    let e = Manifest::load(&dir).expect_err("missing dep must fail");
     assert!(e.to_string().contains("dependency 'ghost'"), "{e}");
 }
 
@@ -225,7 +225,7 @@ capabilities = ["filesystem(readonly)"]
 "#,
         "import \"math\";\nInt main() { return f(); }\n",
     );
-    let e = Manifest::load(&dir).err().expect("ungranted cap must fail");
+    let e = Manifest::load(&dir).expect_err("ungranted cap must fail");
     let msg = e.to_string();
     assert!(msg.contains("not granted"), "{msg}");
     assert!(msg.contains("filesystem"), "{msg}");
@@ -276,7 +276,7 @@ version = "0.1.0"
         "Int main() {\n    Str s = filesystem.read_all(\"/etc/hostname\");\n    println(s);\n    return 0;\n}\n",
     );
     let m = Manifest::load(&dir).expect("manifest ok (no deps to check)");
-    let e = build(&m, Profile::Check, &dir.join("out")).err().expect("must fail");
+    let e = build(&m, Profile::Check, &dir.join("out")).expect_err("must fail");
     let msg = e.message;
     assert!(msg.contains("capability policy violation"), "{msg}");
     assert!(msg.contains("filesystem.read_all"), "{msg}");
@@ -339,7 +339,7 @@ grant = ["filesystem(scope=[\"config/**\"])"]
     let m = Manifest::load(&dir).expect("manifest ok");
     assert_eq!(m.grants.len(), 1);
     assert_eq!(m.grants[0].scopes, vec!["config/**".to_string()]);
-    let e = build(&m, Profile::Check, &dir.join("out")).err().expect("outside scope must fail");
+    let e = build(&m, Profile::Check, &dir.join("out")).expect_err("outside scope must fail");
     let msg = e.message;
     assert!(msg.contains("outside the granted scopes"), "{msg}");
 }
@@ -379,7 +379,7 @@ grant = ["filesystem(scope=[\"config/**\"])"]
         "Int main() {\n    Str p = \"config/a.txt\";\n    if (filesystem.exists(p)) {\n        return 1;\n    }\n    return 0;\n}\n",
     );
     let m = Manifest::load(&dir).unwrap();
-    let e = build(&m, Profile::Check, &dir.join("out")).err().expect("dynamic path must fail under scope");
+    let e = build(&m, Profile::Check, &dir.join("out")).expect_err("dynamic path must fail under scope");
     assert!(e.message.contains("dynamic path"), "{}", e.message);
 }
 
@@ -406,13 +406,13 @@ grant = ["filesystem(scope=[\"config/**\"])", "filesystem(readonly)"]
 fn archive_round_trip_and_signature_verification() {
     let dir = temp_dir("archive");
     write_pkg(&dir, GOOD_MANIFEST, GOOD_MAIN);
-    let m = Manifest::load(&dir).unwrap();
+    let _m = Manifest::load(&dir).unwrap();
 
     // Deterministic archives: same tree → same bytes → same hash.
     let a1 = resid_build::archive::build_archive(&dir).expect("archive 1");
     let a2 = resid_build::archive::build_archive(&dir).expect("archive 2");
     assert_eq!(a1, a2, "archives must be deterministic");
-    assert_eq!(a1.starts_with(b"RESIDPKG1"), true);
+    assert!(a1.starts_with(b"RESIDPKG1"));
 
     // Sign + verify.
     let (secret, public) = resid_build::archive::keygen().unwrap();
@@ -490,7 +490,7 @@ fn require_signatures_rejects_missing_or_bad_signature() {
     .unwrap();
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(dir.join("src/main.resid"), "Int main() { return 0; }\n").unwrap();
-    let e = Manifest::load(&dir).err().expect("missing sig must fail");
+    let e = Manifest::load(&dir).expect_err("missing sig must fail");
     assert!(e.to_string().contains("missing or unreadable"), "{e}");
 }
 
@@ -555,7 +555,7 @@ fn conflicting_transitive_names_rejected() {
     )
     .unwrap();
     fs::write(dir.join("src/main.resid"), "Int main() { return 0; }\n").unwrap();
-    let e = Manifest::load(&dir).err().expect("name conflict must fail");
+    let e = Manifest::load(&dir).expect_err("name conflict must fail");
     assert!(e.to_string().contains("conflicting dependency versions"), "{e}");
 }
 
@@ -627,7 +627,7 @@ fn registry_dependency_hash_mismatch_rejected() {
     )
     .unwrap();
     fs::write(dir.join("src/main.resid"), "Int main() { return 0; }\n").unwrap();
-    let e = Manifest::load(&dir).err().expect("hash mismatch must fail");
+    let e = Manifest::load(&dir).expect_err("hash mismatch must fail");
     assert!(e.to_string().contains("hash mismatch"), "{e}");
 }
 
@@ -700,19 +700,19 @@ version = "1.0.0"
     fs::write(reg.join("math-1.0.0.resid-pkg"), &bad).unwrap();
     // Remove the stale extraction cache so resolution re-reads the archive.
     fs::remove_dir_all(dir.join("target/resid/deps")).ok();
-    let e = Manifest::load(&dir).err().expect("tampered archive must fail");
+    let e = Manifest::load(&dir).expect_err("tampered archive must fail");
     assert!(
         e.to_string().contains("LOCKED content hash mismatch"),
         "{e}"
     );
 }
 
-fn archive_bytes(pkg: &PathBuf) -> Vec<u8> {
+fn archive_bytes(pkg: &Path) -> Vec<u8> {
     resid_build::archive::build_archive(pkg).expect("archive builds")
 }
 
 fn hex(bytes: &[u8]) -> String {
-    resid_build::archive::hex_encode(bytes.try_into().expect("32-byte sha256"))
+    resid_build::archive::hex_encode(bytes)
 }
 
 /// Remote registry transport: serve a local registry over HTTP, build
@@ -871,7 +871,7 @@ version = "3.0.0"
     let mut bad = idx_text.clone();
     bad.push_str("evil 1.0.0 deadbeef\n");
     fs::write(reg.join("pkg/index.resid-idx"), bad).unwrap();
-    let e = Manifest::load(&dir).err().expect("tampered index must fail");
+    let e = Manifest::load(&dir).expect_err("tampered index must fail");
     assert!(e.to_string().contains("INVALID"), "{e}");
 }
 
@@ -1024,7 +1024,7 @@ path = "vendor/net"{caps_line}
             assert_eq!(String::from_utf8_lossy(&res.stdout).trim(), "42");
         }
         Err(needle) => {
-            let e = build(&m, Profile::Debug, &dir.join("out")).err().expect("ceiling violation must fail");
+            let e = build(&m, Profile::Debug, &dir.join("out")).expect_err("ceiling violation must fail");
             let msg = e.to_string();
             assert!(
                 msg.contains(needle),
@@ -1087,8 +1087,7 @@ capabilities = ["filesystem(readonly)"]
     );
     let m = Manifest::load(&dir).expect("manifest loads");
     let e = build(&m, Profile::Debug, &dir.join("out"))
-        .err()
-        .expect("transitive ceiling violation must fail");
+        .expect_err("transitive ceiling violation must fail");
     let msg = e.to_string();
     assert!(
         msg.contains("leaf") && msg.contains("capability ceiling"),
@@ -1098,6 +1097,7 @@ capabilities = ["filesystem(readonly)"]
 
 // ─── §28.3 per-dependency key pinning ──
 
+#[allow(unused)]
 #[derive(Clone, Copy)]
 enum PinChoice {
     /// No `pubkey` line in the manifest.
@@ -1190,7 +1190,7 @@ fn dependency_pinned_key_requires_archive() {
     .unwrap();
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(dir.join("src/main.resid"), "Int main() { return 0; }\n").unwrap();
-    let e = Manifest::load(&dir).err().expect("missing archive must fail");
+    let e = Manifest::load(&dir).expect_err("missing archive must fail");
     assert!(e.to_string().contains("requires a signed archive"), "{e}");
 }
 
@@ -1199,7 +1199,7 @@ fn transitive_dependency_pinned_key_enforced() {
     // A pin on a TRANSITIVE dependency (declared in the mid package's own
     // manifest) is carried through recursion and enforced the same way.
     let dir = temp_dir("pin-trans");
-    let (sec, pubk) = resid_build::archive::keygen().unwrap();
+    let (sec, _pubk) = resid_build::archive::keygen().unwrap();
     let (_, other) = resid_build::archive::keygen().unwrap();
     // base (signed with sec, pinned to sec in mid's manifest).
     fs::create_dir_all(dir.join("vendor/base/src")).unwrap();
@@ -1228,7 +1228,7 @@ fn transitive_dependency_pinned_key_enforced() {
     .unwrap();
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(dir.join("src/main.resid"), "import \"mid\";\nInt main() { return two(); }\n").unwrap();
-    let e = Manifest::load(&dir).err().expect("transitive pin must fail");
+    let e = Manifest::load(&dir).expect_err("transitive pin must fail");
     assert!(
         e.to_string().contains("base") && e.to_string().contains("pinned key"),
         "{e}"

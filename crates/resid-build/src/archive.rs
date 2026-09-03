@@ -137,7 +137,7 @@ fn decode_hex64(s: &str) -> Result<[u8; 64], String> {
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("odd-length hex string".to_string());
     }
     (0..s.len() / 2)

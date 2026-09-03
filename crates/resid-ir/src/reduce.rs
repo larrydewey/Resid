@@ -200,8 +200,8 @@ impl<'a> ReductionContext<'a> {
                     Ok(ReductionResult::Reduced(rk))
                 }
                 ReductionResult::Irreducible => {
-                    if let Some(bn) = self.graph.get_node_checked(body_key) {
-                        if bn.knowledge == KnowledgeState::Known {
+                    if let Some(bn) = self.graph.get_node_checked(body_key)
+                        && bn.knowledge == KnowledgeState::Known {
                             let kind = bn.kind.clone();
                             let type_ = bn.type_.clone();
                             let lit_value = if let NodeKind::Literal(lit) = &bn.kind {
@@ -216,7 +216,6 @@ impl<'a> ReductionContext<'a> {
                             }
                             return Ok(ReductionResult::Reduced(body_key));
                         }
-                    }
                     Ok(ReductionResult::Irreducible)
                 }
                 ReductionResult::Invalid => Ok(ReductionResult::Invalid),
@@ -258,8 +257,8 @@ impl<'a> ReductionContext<'a> {
                 }
             }
             // Bool folding
-            if let (LiteralValue::Bool(b), LiteralValue::Bool(c)) = (ll, rl) {
-                if let Some(result) = fold_bin_bool(op, *b, *c) {
+            if let (LiteralValue::Bool(b), LiteralValue::Bool(c)) = (ll, rl)
+                && let Some(result) = fold_bin_bool(op, *b, *c) {
                     self.graph.replace_node(
                         key,
                         NodeKind::Literal(LiteralValue::Bool(result)),
@@ -268,7 +267,6 @@ impl<'a> ReductionContext<'a> {
                     );
                     return Ok(ReductionResult::Reduced(lhs));
                 }
-            }
         }
         Ok(ReductionResult::Irreducible)
     }
@@ -494,8 +492,8 @@ impl<'a> ReductionContext<'a> {
         operand: GraphKey,
     ) -> Result<ReductionResult, Vec<ReductionError>> {
         let node = self.graph.get_node(operand);
-        if let NodeKind::Literal(ref lit) = node.kind {
-            if let Some(cl) = cast_int(lit, &cast_type) {
+        if let NodeKind::Literal(ref lit) = node.kind
+            && let Some(cl) = cast_int(lit, &cast_type) {
                 self.graph.replace_node(
                     key,
                     NodeKind::Literal(cl),
@@ -504,7 +502,6 @@ impl<'a> ReductionContext<'a> {
                 );
                 return Ok(ReductionResult::Reduced(operand));
             }
-        }
         Ok(ReductionResult::Irreducible)
     }
 
@@ -553,10 +550,9 @@ impl<'a> ReductionContext<'a> {
         let in2 = self.graph.get_node(index);
         if let (NodeKind::List { elements }, NodeKind::Literal(LiteralValue::Int { value, .. })) =
             (&tn.kind, &in2.kind)
-        {
-            if let Some(idx) = value_to_usize(value) {
-                if idx < elements.len() {
-                    let element_key = elements[idx as usize];
+            && let Some(idx) = value_to_usize(value)
+                && idx < elements.len() {
+                    let element_key = elements[idx];
                     let en = self.graph.get_node(element_key);
                     let kind = en.kind.clone();
                     let type_ = en.type_.clone();
@@ -564,8 +560,6 @@ impl<'a> ReductionContext<'a> {
                     self.graph.replace_node(key, kind, type_, knowledge);
                     return Ok(ReductionResult::Reduced(element_key));
                 }
-            }
-        }
         Ok(ReductionResult::Irreducible)
     }
 
@@ -709,7 +703,7 @@ fn int_from_lit(lit: &LiteralValue) -> Option<i128> {
 }
 
 fn value_to_usize(v: &u128) -> Option<usize> {
-    (*v as usize).try_into().ok()
+    Some(*v as usize)
 }
 
 fn fold_bin_int(op: BinOp, lhs: i128, rhs: i128, _type_: Type) -> Option<LiteralValue> {
@@ -742,13 +736,13 @@ fn fold_bin_int(op: BinOp, lhs: i128, rhs: i128, _type_: Type) -> Option<Literal
         BinOp::Ge => return Some(LiteralValue::Bool(lhs >= rhs)),
     };
     result.map(|v| {
-        let w = if v.abs() as u128 > u64::MAX as u128 {
+        let w = if v.unsigned_abs() > u64::MAX as u128 {
             IntWidth::B128
-        } else if v.abs() as u64 > u32::MAX as u64 {
+        } else if v.unsigned_abs() as u64 > u32::MAX as u64 {
             IntWidth::B64
-        } else if v.abs() as u32 > u16::MAX as u32 {
+        } else if v.unsigned_abs() as u32 > u16::MAX as u32 {
             IntWidth::B32
-        } else if v.abs() as u16 > u8::MAX as u16 {
+        } else if v.unsigned_abs() as u16 > u8::MAX as u16 {
             IntWidth::B16
         } else {
             IntWidth::B8
@@ -1044,7 +1038,7 @@ mod tests {
         let node = g.get_node(neg);
         match &node.kind {
             NodeKind::Literal(LiteralValue::Int { value, signed, .. }) => {
-                assert_eq!(*signed, true);
+                assert!(*signed);
                 // neg_int casts to i128 before negating, so -42_i128 = 2^128 - 42
                 assert_eq!(*value, 340282366920938463463374607431768211414u128);
             }

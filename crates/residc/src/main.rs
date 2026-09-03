@@ -11,7 +11,7 @@
 
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
 #[cfg(unix)]
@@ -33,7 +33,7 @@ enum Cmd {
 }
 
 fn main() -> ExitCode {
-    let mut all: Vec<String> = env::args().skip(1).collect();
+    let all: Vec<String> = env::args().skip(1).collect();
     // Tool-style subcommands that take a path in the file slot.
     let tool_cmd = all
         .iter()
@@ -90,7 +90,7 @@ fn main() -> ExitCode {
             };
             args_vec.remove(i);
             args_vec.remove(i - 1);
-            if i > 0 { i -= 1; }
+            i = i.saturating_sub(1);
             continue;
         }
         i += 1;
@@ -138,7 +138,6 @@ fn main() -> ExitCode {
     // source (and driver version) are unchanged and the artifact still
     // exists. The cache is an accelerator, never authoritative.
     let cache_key;
-    let cache_out;
     match cmd {
         Cmd::Build | Cmd::Run => {
             // Provenance mode is part of the build identity: an encrypted
@@ -174,13 +173,6 @@ fn main() -> ExitCode {
             // Run artifacts must be UNIQUE per source: parallel invocations
             // that share a stem (every test's main.resid) would otherwise
             // overwrite each other's binaries mid-execution.
-            let key_short: String = cache_key.chars().take(16).collect();
-            let out_guess = match cmd {
-                Cmd::Build => out.clone().unwrap_or_else(|| "a.out".to_string()),
-                Cmd::Run => temp_dir().join(format!("{}_{}", stem(&file), key_short)).to_string_lossy().into_owned(),
-                _ => String::new(),
-            };
-            cache_out = out_guess;
             let mut store = resid_cache::Store::open(Path::new(".resid-cache.cbor"));
             if let Some(cached) = store.get(&cache_key) {
                 if Path::new(cached).exists() {
@@ -219,7 +211,6 @@ fn main() -> ExitCode {
         }
         _ => {
             cache_key = String::new();
-            cache_out = String::new();
         }
     }
 
@@ -430,12 +421,8 @@ fn collect_expr_caps(
                 }
             }
             collect_expr_caps(&cond.span, cond, set);
-            if let Some(s) = step {
-                match &s.kind {
-                    StmtKind::Expr(e) => collect_expr_caps(&e.span, e, set),
-                    _ => {}
-                }
-            }
+            if let Some(s) = step
+                && let StmtKind::Expr(e) = &s.kind { collect_expr_caps(&e.span, e, set) }
             collect_block_caps(body, set);
         }
         ExprKind::Spawn { body, .. } => collect_block_caps(body, set),
@@ -589,7 +576,7 @@ fn build_native(
                 None => true,
             };
             if write_allowed {
-                store.put_with_caps(cache_key.to_string(), out.clone(), required);
+                store.put_with_caps(cache_key.to_string(), out, required);
             } else {
                 eprintln!(
                     "cache: skip (required {} > grant {})",
@@ -698,7 +685,7 @@ fn run_native(
 ) -> ExitCode {
     let tmp = temp_dir();
     let bin = tmp.join(format!("{}_bin", stem(file)));
-    if let Err(code) = build_native(file, unit, Some(&bin.to_string_lossy()), &cache_key, profile) {
+    if let Err(code) = build_native(file, unit, Some(&bin.to_string_lossy()), cache_key, profile) {
         return code;
     }
     verify_if_configured(&bin.to_string_lossy());
@@ -922,7 +909,7 @@ fn cmd_verify(bin_path: &str) -> ExitCode {
     if let Ok(sc) = fs::read_to_string(&sidecar) {
         return cmd_verify_sidecar(&sidecar, sc.as_bytes());
     }
-    let Some((payload, sig)) = resid_build::provenance::unseal(&bytes) else {
+    let Some((payload, _sig)) = resid_build::provenance::unseal(&bytes) else {
         println!("no provenance trailer found in {bin_path}");
         return ExitCode::FAILURE;
     };
@@ -968,7 +955,7 @@ fn cmd_verify(bin_path: &str) -> ExitCode {
 /// Verify a `.resid-prov` sidecar: line 1 = cleartext payload,
 /// line 2 = Ed25519 signature hex. Checked against
 /// keys/resid-ed25519.pub.
-fn cmd_verify_sidecar(name: &str, bytes: &[u8]) -> ExitCode {
+fn cmd_verify_sidecar(_name: &str, bytes: &[u8]) -> ExitCode {
     let text = String::from_utf8_lossy(bytes);
     let mut lines = text.lines();
     let Some(payload) = lines.next() else {

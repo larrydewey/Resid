@@ -5,9 +5,9 @@
 //! `Alias.x` and rewrites the importing file's expressions:
 //!   - `MethodCall { target: Id(A), method: m, .. }` → `Id("A.m")`
 //!   - `FieldAccess { target: Id(A), field: x }`     → `Id("A.x")`
-//! when `A` is an alias and the member exists. Struct-literal names,
-//! type spellings, and match patterns are NOT rewritten in v1 (documented
-//! limitation); a bare alias reference errors later as an unknown variable.
+//!     when `A` is an alias and the member exists. Struct-literal names,
+//!     type spellings, and match patterns are NOT rewritten in v1 (documented
+//!     limitation); a bare alias reference errors later as an unknown variable.
 
 use std::collections::HashMap;
 
@@ -62,11 +62,10 @@ pub fn qualify_expr(expr: &mut Expr, am: &AliasMap) {
         }
         ExprKind::Call { func, args } => {
             // A call whose callee is exactly `A.m` becomes the renamed ident.
-            if let ExprKind::MethodCall { target, method, .. } = &mut func.kind {
-                if let Some(q) = method_target_rewrite(target, &method.0, am) {
+            if let ExprKind::MethodCall { target, method, .. } = &mut func.kind
+                && let Some(q) = method_target_rewrite(target, &method.0, am) {
                     func.kind = q;
                 }
-            }
             qualify_expr(func, am);
             for (_, a) in args.iter_mut() {
                 qualify_expr(a, am);
@@ -202,8 +201,8 @@ pub fn qualify_expr(expr: &mut Expr, am: &AliasMap) {
     }
     // Qualified-reference collapse for bare `A.m` field/method shapes.
     // A qualified call stays a call: `A.m(x)` → `Call { func: A.m }`.
-    if let ExprKind::MethodCall { target, method, args } = &expr.kind {
-        if let Some(q) = method_target_rewrite(target, &method.0, am) {
+    if let ExprKind::MethodCall { target, method, args } = &expr.kind
+        && let Some(q) = method_target_rewrite(target, &method.0, am) {
             expr.kind = ExprKind::Call {
                 func: Box::new(Expr { kind: q, span: expr.span.clone() }),
                 args: args
@@ -213,36 +212,28 @@ pub fn qualify_expr(expr: &mut Expr, am: &AliasMap) {
             };
             return;
         }
-    }
-    if let ExprKind::FieldAccess { target, field } = &expr.kind {
-        if let ExprKind::Id(alias) = &target.kind {
-            if let Some(q) = am.lookup(&alias.0, &field.0) {
+    if let ExprKind::FieldAccess { target, field } = &expr.kind
+        && let ExprKind::Id(alias) = &target.kind
+            && let Some(q) = am.lookup(&alias.0, &field.0) {
                 expr.kind = ExprKind::Id(crate::Id(q.to_string()));
-                return;
             }
-        }
-    }
 }
 
 /// If `target` is a bare alias id whose member `member` exists, produce the
 /// rewritten ident expression.
 fn method_target_rewrite(target: &Expr, member: &str, am: &AliasMap) -> Option<ExprKind> {
-    if let ExprKind::Id(alias) = &target.kind {
-        if let Some(q) = am.lookup(&alias.0, member) {
+    if let ExprKind::Id(alias) = &target.kind
+        && let Some(q) = am.lookup(&alias.0, member) {
             return Some(ExprKind::Id(crate::Id(q.to_string())));
         }
-    }
     None
 }
 
-fn qualify_pattern(pat: &mut Pattern, am: &AliasMap) {
-    match &mut pat.kind {
-        PatternKind::Struct { fields, .. } => {
-            for (_, p) in fields.iter_mut() {
-                qualify_pattern(p, am);
-            }
+fn qualify_pattern(pat: &mut Pattern, _am: &AliasMap) {
+    if let PatternKind::Struct { fields, .. } = &mut pat.kind {
+        for (_, p) in fields.iter_mut() {
+            qualify_pattern(p, _am);
         }
-        _ => {}
     }
 }
 

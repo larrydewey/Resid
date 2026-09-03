@@ -10,8 +10,8 @@
 
 use std::collections::HashMap;
 
-use resid_lexer::token::{Literal, Op as OpKind, IntKind, StrLit, Span};
-use resid_parser::{Declaration, Expr, ExprKind, Id, Param, Stmt, StmtKind, TranslationUnit, Parser};
+use resid_lexer::token::{Literal, Op as OpKind};
+use resid_parser::{Declaration, Expr, ExprKind, Id, Param, Stmt, StmtKind, TranslationUnit};
 
 /// Budgets: beyond these, reduction gives up and runtime takes over.
 const MAX_STEPS: u32 = 400_000;
@@ -65,8 +65,8 @@ impl<'a> Ctx<'a> {
             ExprKind::RawString(s) => Some(CValue::Str(s.clone())),
             ExprKind::Id(Id(n)) => env.get(n).cloned(),
             ExprKind::UnaryOp { op, operand } => match op {
-                OpKind::Minus => Some(CValue::Int(self.eval(operand, env)?.into_int()?.wrapping_neg())),
-                OpKind::Not => Some(CValue::Bool(!self.eval(operand, env)?.into_bool()?)),
+                OpKind::Minus => Some(CValue::Int(self.eval(operand, env)?.as_int()?.wrapping_neg())),
+                OpKind::Not => Some(CValue::Bool(!self.eval(operand, env)?.as_bool()?)),
                 _ => None,
             },
             ExprKind::BinaryOp { op, lhs, rhs } => self.eval_binary(*op, lhs, rhs, env),
@@ -75,7 +75,7 @@ impl<'a> Ctx<'a> {
                 then_block,
                 else_block,
             } => {
-                if self.eval(cond, env)?.into_bool()? {
+                if self.eval(cond, env)?.as_bool()? {
                     let v = self.eval_block(then_block, env, true);
                     if self.pending {
                         // Branch had an early return; leave pending set so the
@@ -112,12 +112,12 @@ impl<'a> Ctx<'a> {
     ) -> Option<CValue> {
         match op {
             OpKind::AndAnd => {
-                let a = self.eval(lhs, env)?.into_bool()?;
-                Some(CValue::Bool(a && self.eval(rhs, env)?.into_bool()?))
+                let a = self.eval(lhs, env)?.as_bool()?;
+                Some(CValue::Bool(a && self.eval(rhs, env)?.as_bool()?))
             }
             OpKind::OrOr => {
-                let a = self.eval(lhs, env)?.into_bool()?;
-                Some(CValue::Bool(a || self.eval(rhs, env)?.into_bool()?))
+                let a = self.eval(lhs, env)?.as_bool()?;
+                Some(CValue::Bool(a || self.eval(rhs, env)?.as_bool()?))
             }
             OpKind::Plus => {
                 let a = self.eval(lhs, env)?;
@@ -130,8 +130,8 @@ impl<'a> Ctx<'a> {
             }
             OpKind::Minus | OpKind::Star | OpKind::Slash | OpKind::Percent | OpKind::Less
             | OpKind::LessEq | OpKind::Greater | OpKind::GreaterEq | OpKind::EqEq | OpKind::Ne => {
-                let a = self.eval(lhs, env)?.into_int()?;
-                let b = self.eval(rhs, env)?.into_int()?;
+                let a = self.eval(lhs, env)?.as_int()?;
+                let b = self.eval(rhs, env)?.as_int()?;
                 Some(match op {
                     OpKind::Minus => CValue::Int(a.wrapping_sub(b)),
                     OpKind::Star => CValue::Int(a.wrapping_mul(b)),
@@ -240,11 +240,11 @@ impl<'a> Ctx<'a> {
             let name = match name_opt {
                 Some(id) => id.0.clone(),
                 None => {
-                    let n = params
+                    
+                    params
                         .iter()
                         .position(|p| !bound.contains_key(&p.name.0))
-                        .map(|i| params[i].name.0.clone())?;
-                    n
+                        .map(|i| params[i].name.0.clone())?
                 }
             };
             if !params.iter().any(|p| p.name.0 == name) {
@@ -299,13 +299,13 @@ impl<'a> Ctx<'a> {
 }
 
 impl CValue {
-    fn into_int(&self) -> Option<i128> {
+    fn as_int(&self) -> Option<i128> {
         match self {
             CValue::Int(i) => Some(*i),
             _ => None,
         }
     }
-    fn into_bool(&self) -> Option<bool> {
+    fn as_bool(&self) -> Option<bool> {
         match self {
             CValue::Bool(b) => Some(*b),
             _ => None,
@@ -375,11 +375,10 @@ fn flatten_unit(unit: &TranslationUnit) -> Vec<Declaration> {
                 let ceiling = &s.capabilities;
                 s.body.iter().map(|child| {
                     let mut c = child.clone();
-                    if let Declaration::Function(f) = &mut c {
-                        if f.sandbox_ceiling.is_empty() && !ceiling.is_empty() {
+                    if let Declaration::Function(f) = &mut c
+                        && f.sandbox_ceiling.is_empty() && !ceiling.is_empty() {
                             f.sandbox_ceiling = ceiling.clone();
                         }
-                    }
                     c
                 }).collect::<Vec<_>>()
             }
@@ -391,7 +390,7 @@ fn flatten_unit(unit: &TranslationUnit) -> Vec<Declaration> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use resid_parser::{ExprKind, Parser};
+    use resid_parser::{Parser};
 
     fn unit(src: &str) -> TranslationUnit {
         let (unit, errs) = Parser::parse("reduce.resid", src);

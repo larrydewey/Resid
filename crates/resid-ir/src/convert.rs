@@ -30,6 +30,12 @@ pub struct AstConverter {
     anon_counter: u64,
 }
 
+impl Default for AstConverter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AstConverter {
     pub fn new() -> Self {
         AstConverter {
@@ -120,11 +126,10 @@ impl AstConverter {
 
     fn bind_id(&mut self, name: &str) -> Result<Identifier, ConversionError> {
         let id = self.graph.next_id;
-        if let Some(s) = self.scope_stack.last() {
-            if s.contains(name) {
+        if let Some(s) = self.scope_stack.last()
+            && s.contains(name) {
                 return Err(ConversionError::Shadowing(name.to_string(), id, id));
             }
-        }
         if let Some(s) = self.scope_stack.last_mut() {
             s.insert(name.to_string());
         }
@@ -165,8 +170,8 @@ impl AstConverter {
                 Span::unknown(),
             )
         };
-        let s_key = start_k.unwrap_or_else(|| default_key());
-        let e_key = end_k.unwrap_or_else(|| default_key());
+        let s_key = start_k.unwrap_or_else(&mut default_key);
+        let e_key = end_k.unwrap_or_else(default_key);
         let s_type = self.get_type(&s_key);
         let e_type = self.get_type(&e_key);
         let type_ = match (s_type, e_type) {
@@ -601,8 +606,8 @@ impl AstConverter {
                 let mut eps = Vec::new();
                 let mut errs = Vec::new();
                 for (k, v) in entries {
-                    match self.convert_expr(&k) {
-                        Ok(kk) => match self.convert_expr(&v) {
+                    match self.convert_expr(k) {
+                        Ok(kk) => match self.convert_expr(v) {
                             Ok(vk) => eps.push((kk, vk)),
                             Err(e) => errs.extend(e),
                         },
@@ -808,7 +813,7 @@ impl AstConverter {
                 span,
             } => {
                 let tk = self.convert_expr(target)?;
-                let rk = self.convert_range(&range)?;
+                let rk = self.convert_range(range)?;
                 Ok(self.graph.add_node(
                     NodeKind::Slice {
                         target: tk,
@@ -913,7 +918,7 @@ impl AstConverter {
                 span,
             } => {
                 let sk = self.convert_expr(source)?;
-                let bindings = self.resolve_pattern(&pattern)?;
+                let bindings = self.resolve_pattern(pattern)?;
                 Ok(self.graph.add_node(
                     NodeKind::Destructure {
                         pattern: convert_ast_pattern(pattern.clone()),
@@ -1493,11 +1498,10 @@ impl AstConverter {
     }
 
     fn call_ret_type(&self, fk: &GraphKey, _func_ast: &AstExpr) -> Type {
-        if let Some(fn_node) = self.graph.get_node_checked(*fk) {
-            if let NodeKind::Function { ret, .. } = &fn_node.kind {
+        if let Some(fn_node) = self.graph.get_node_checked(*fk)
+            && let NodeKind::Function { ret, .. } = &fn_node.kind {
                 return ret.clone();
             }
-        }
         Type::Void
     }
 

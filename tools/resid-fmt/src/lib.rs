@@ -88,10 +88,7 @@ pub fn format_unit(unit: &TranslationUnit) -> String {
                     .collect();
                 p.open(&format!("sandbox ({})", caps.join(", ")));
                 for child in &s.body {
-                    match child {
-                        Declaration::Function(f) => p.func(f),
-                        _ => {}
-                    }
+                    if let Declaration::Function(f) = child { p.func(f) }
                 }
                 p.close();
                 p.blank();
@@ -436,9 +433,9 @@ fn expr_str(e: &Expr, _ctx: usize) -> String {
         ExprKind::For { init, cond, step, body } => {
             let i = init
                 .as_ref()
-                .map(|s| stmt_head(s))
+                .map(stmt_head)
                 .unwrap_or_default();
-            let st = step.as_ref().map(|s| stmt_head(s)).unwrap_or_default();
+            let st = step.as_ref().map(stmt_head).unwrap_or_default();
             format!(
                 "for ({}; {}; {}) {}",
                 i,

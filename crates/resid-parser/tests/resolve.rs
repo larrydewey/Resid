@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use resid_parser::resolve_unit;
 
@@ -10,7 +10,7 @@ fn temp_dir(tag: &str) -> PathBuf {
     dir
 }
 
-fn write(dir: &PathBuf, rel: &str, content: &str) -> PathBuf {
+fn write(dir: &Path, rel: &str, content: &str) -> PathBuf {
     let p = dir.join(rel);
     fs::create_dir_all(p.parent().unwrap()).unwrap();
     fs::write(&p, content).unwrap();
@@ -148,7 +148,7 @@ fn missing_import_file_errors() {
         "main.resid",
         "import \"nope.resid\";\nInt main() { return 0; }\n",
     );
-    let e = resolve_unit(&root).err().expect("missing import must error");
+    let e = resolve_unit(&root).expect_err("missing import must error");
     assert!(
         e.message.contains("cannot read") || e.message.contains("no such file"),
         "{}",
@@ -231,7 +231,7 @@ fn unknown_dependency_import_errors() {
         "main.resid",
         "import \"ghost\";\nInt main() { return 0; }\n",
     );
-    let e = resolve_unit(&root).err().expect("must fail");
+    let e = resolve_unit(&root).expect_err("must fail");
     assert!(e.message.contains("no dependency"), "{}", e.message);
 }
 
