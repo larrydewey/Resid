@@ -303,6 +303,16 @@ pub struct CodeGen<'ctx> {
     cap_ceiling: Vec<String>,
     /// Clone of the translation unit, kept for comptime β-reduction (§36).
     unit: TranslationUnit,
+    /// Set immediately before lowering an expression that sits in tail
+    /// position (a function's final `return <expr>;`, or an early
+    /// `return <expr>;`/nested-block tail `ret`) and consumed the instant
+    /// `ExprKind::Call` is reached, before any argument is lowered — so it
+    /// never leaks onto a call nested inside a non-tail argument or
+    /// operand. Deep self-recursive helpers (accumulator-style list
+    /// builders throughout `lib/crypto.resid` etc.) rely on this to avoid
+    /// blowing the native stack: without a `tail` marker on the emitted
+    /// LLVM call, every recursive step grows the call stack for real.
+    tail_pos: bool,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -329,6 +339,7 @@ impl<'ctx> CodeGen<'ctx> {
                 imports: Vec::new(),
                 declarations: Vec::new(),
             },
+            tail_pos: false,
         }
     }
 
@@ -686,7 +697,9 @@ impl<'ctx> CodeGen<'ctx> {
         if !terminated {
             match &f.body.ret {
                 Some(ret_expr) => {
+                    self.tail_pos = matches!(ret_expr.kind, ExprKind::Call { .. });
                     let v = self.lower_expr(&mut sc, ret_expr, None)?;
+                    self.tail_pos = false;
                     let v = self.cast_val(v, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
                     self.emit_cap_leave()?;
                     self.builder.build_return(Some(&v.v)).map_err(to_err)?;
@@ -853,7 +866,9 @@ impl<'ctx> CodeGen<'ctx> {
                     } else {
                         match v {
                             Some(e) => {
+                                self.tail_pos = matches!(e.kind, ExprKind::Call { .. });
                                 let raw = self.lower_expr(sc, e, None)?;
+                                self.tail_pos = false;
                                 let val = self
                                     .cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
                                 self.emit_cap_leave()?;
@@ -900,7 +915,9 @@ impl<'ctx> CodeGen<'ctx> {
                     let raw = self.lower_expr(sc, ret, None)?;
                     spawn_ret = Some(raw);
                 } else {
+                    self.tail_pos = matches!(ret.kind, ExprKind::Call { .. });
                     let raw = self.lower_expr(sc, ret, None)?;
+                    self.tail_pos = false;
                     let val = self
                         .cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
                     self.emit_cap_leave()?;
@@ -1762,6 +1779,11 @@ impl<'ctx> CodeGen<'ctx> {
             }
 
             ExprKind::Call { func, args } => {
+                // Consume the tail-position hint the instant a call is
+                // reached: it must never survive into argument lowering
+                // below (those calls are never in tail position) or leak
+                // forward to some unrelated later call.
+                let is_tail = std::mem::take(&mut self.tail_pos);
                 // Visibility check (spec §22): must happen before any reduction.
                 // Private functions are module-local and cannot be called from
                 // other files, even for comptime evaluation.
@@ -1779,7 +1801,7 @@ impl<'ctx> CodeGen<'ctx> {
                 if let Some(v) = resid_type::reduce_call(&self.unit, func, args) {
                     return self.lower_cvalue(sc, v, target);
                 }
-                self.lower_call(sc, func, args)
+                self.lower_call(sc, func, args, is_tail)
             }
 
             ExprKind::Using { .. } => {
@@ -3755,6 +3777,7 @@ impl<'ctx> CodeGen<'ctx> {
         sc: &mut Scope<'ctx>,
         func: &Expr,
         args: &[(Option<Id>, Expr)],
+        is_tail: bool,
     ) -> Result<Val<'ctx>, String> {
         let name = match &func.kind {
             ExprKind::Id(id) => &id.0,
@@ -3894,6 +3917,15 @@ impl<'ctx> CodeGen<'ctx> {
             return Ok(rv);
         }
 
+        // Hardware AES-NI round functions: emitted directly as LLVM x86
+        // intrinsic calls (never as C). Callers MUST gate these behind
+        // `resid_cpu_has_aesni()` — the intrinsic is emitted unconditionally
+        // at every call site, so running the resulting binary on a CPU
+        // without AES-NI would fault on the instruction itself.
+        if let Some(rv) = self.lower_hw_aes(sc, name, args)? {
+            return Ok(rv);
+        }
+
         // Resolve named arguments: map each arg's name (if provided) to the
         // corresponding position in the function's param list.
         let (resolved_args, sig) = self.resolve_call_args(name, args)?;
@@ -3931,6 +3963,16 @@ impl<'ctx> CodeGen<'ctx> {
             .builder
             .build_call(fnv, &llargs, "call")
             .map_err(to_err)?;
+        if is_tail {
+            // Best-effort hint: LLVM only honors this when the call is
+            // genuinely in tail position (nothing meaningful between the
+            // call and the enclosing `ret`); it's silently ignored
+            // otherwise, so this is safe to set unconditionally. Without
+            // it, self-recursive accumulator-style helpers (throughout
+            // lib/crypto.resid and friends) grow the native call stack one
+            // frame per recursive step and overflow on realistic inputs.
+            cs.set_tail_call_kind(inkwell::values::LLVMTailCallKind::LLVMTailCallKindTail);
+        }
         let v = cs
             .try_as_basic_value()
             .expect_basic("call of void function");
@@ -4318,6 +4360,79 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(Some(Val {
             v: result.into(),
             ty: SemType::Numeric(num),
+        }))
+    }
+
+    /// Hardware AES-NI single-round encrypt functions, emitted as direct
+    /// LLVM `llvm.x86.aesni.*` intrinsic calls — never as C. Resid-facing
+    /// signature is `(UInt(128), UInt(128)) -> UInt(128)` (state, round
+    /// key); internally each i128 is bitcast to/from the `<2 x i64>` vector
+    /// the intrinsic actually takes, matching the natural little-endian
+    /// byte packing every other wide-int helper in this codebase already
+    /// uses (see `int_to_bytes`/`bytes_to_int` in lib/ed25519.resid).
+    /// `aesni_enc_round` = AESENC (SubBytes, ShiftRows, MixColumns, XOR
+    /// round key); `aesni_enc_last_round` = AESENCLAST (same, no
+    /// MixColumns) for the final round. Callers must gate on
+    /// `resid_cpu_has_aesni()`; nothing here checks it.
+    fn lower_hw_aes(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        name: &str,
+        args: &[(Option<Id>, Expr)],
+    ) -> Result<Option<Val<'ctx>>, String> {
+        let intrinsic_name = match name {
+            "aesni_enc_round" => "llvm.x86.aesni.aesenc",
+            "aesni_enc_last_round" => "llvm.x86.aesni.aesenclast",
+            _ => return Ok(None),
+        };
+        if args.len() != 2 {
+            return Err(format!("codegen: `{name}` expects exactly 2 arguments (state, round_key)"));
+        }
+        // Target features are opt-in per LLVM function, not implied by the
+        // instruction being emitted: without this, `clang` (compiling for a
+        // generic/baseline x86-64 target) can't select AESENC and aborts.
+        // Scoped to only the enclosing function so the rest of the binary
+        // stays baseline-portable; the *runtime* CPUID gate belongs in the
+        // caller (`resid_cpu_has_aesni()`), not here.
+        if let Some(fnv) = self.cur_fn {
+            let attr = self.cx.create_string_attribute("target-features", "+aes,+sse2,+ssse3,+sse4.1");
+            fnv.add_attribute(inkwell::attributes::AttributeLoc::Function, attr);
+        }
+        let u128_num = NumericType::UInt(IntWidth::from_bits(128).unwrap());
+        let u128_sem = SemType::Numeric(u128_num);
+        let av = self.lower_expr(sc, &args[0].1, Some(u128_num))?;
+        let bv = self.lower_expr(sc, &args[1].1, Some(u128_num))?;
+        let av = self.widen_call_arg(av, &u128_sem)?;
+        let bv = self.widen_call_arg(bv, &u128_sem)?;
+        let to_err = |e: inkwell::builder::BuilderError| format!("{e}");
+        let i128t = self.int_type(128)?;
+        let vec_ty = self.cx.i64_type().vec_type(2);
+        let a_vec = self
+            .builder
+            .build_bit_cast(av.v.into_int_value(), vec_ty, "aesni_a_vec")
+            .map_err(to_err)?;
+        let b_vec = self
+            .builder
+            .build_bit_cast(bv.v.into_int_value(), vec_ty, "aesni_b_vec")
+            .map_err(to_err)?;
+        let intrinsic = inkwell::intrinsics::Intrinsic::find(intrinsic_name).ok_or_else(|| {
+            format!("codegen: LLVM intrinsic `{intrinsic_name}` unavailable in this LLVM build")
+        })?;
+        let decl = intrinsic
+            .get_declaration(&self.module, &[])
+            .ok_or_else(|| format!("codegen: could not declare `{intrinsic_name}`"))?;
+        let cs = self
+            .builder
+            .build_call(decl, &[a_vec.into(), b_vec.into()], "aesni_call")
+            .map_err(to_err)?;
+        let result_vec = cs.try_as_basic_value().expect_basic("aesni intrinsic call");
+        let result_i128 = self
+            .builder
+            .build_bit_cast(result_vec, i128t, "aesni_result")
+            .map_err(to_err)?;
+        Ok(Some(Val {
+            v: result_i128,
+            ty: u128_sem,
         }))
     }
 

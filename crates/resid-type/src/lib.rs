@@ -1273,6 +1273,21 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("str_reverse", &[SemType::Str], SemType::Str),
     // ─── Stdlib v1.6: OS entropy hook (one byte per call) ───
     ("resid_crypto_random_byte", &[], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    // ─── Hardware crypto dispatch: CPU feature query only. The AES round
+    // computation itself is never done in C — resid-codegen emits it
+    // directly as `llvm.x86.aesni.*` intrinsic calls (see aesni_enc_round /
+    // aesni_enc_last_round below), keeping the "no crypto logic in C"
+    // invariant. ───
+    ("resid_cpu_has_aesni", &[], SemType::Bool),
+    // Not real externs: resid-codegen special-cases these two names before
+    // ever consulting this table's declared type as an extern-declaration
+    // source (see `lower_hw_aes`), lowering each straight to an
+    // `llvm.x86.aesni.aesenc`/`aesenclast` call. The entries exist purely so
+    // the type checker accepts the call shape; the auto-declared (unused,
+    // bodiless) extern `declare` they'd otherwise leave in the IR is
+    // harmless — nothing ever references it.
+    ("aesni_enc_round", &[SemType::Numeric(NumericType::UInt(IntWidth::B128)), SemType::Numeric(NumericType::UInt(IntWidth::B128))], SemType::Numeric(NumericType::UInt(IntWidth::B128))),
+    ("aesni_enc_last_round", &[SemType::Numeric(NumericType::UInt(IntWidth::B128)), SemType::Numeric(NumericType::UInt(IntWidth::B128))], SemType::Numeric(NumericType::UInt(IntWidth::B128))),
     // ─── Stdlib v2: TCP transport (protocol logic lives in lib/http.resid) ───
     // fd < 0 on failure. recv reads until the peer closes or 4 MB.
     ("resid_tcp_connect", &[SemType::Str, SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Numeric(NumericType::Int(IntWidth::B64))),
