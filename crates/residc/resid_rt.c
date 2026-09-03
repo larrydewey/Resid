@@ -3400,6 +3400,20 @@ int64_t resid_crypto_random_byte(void) {
     return (int64_t)b;
 }
 
+/* CPU feature query for hardware crypto dispatch (spec/PROGRESS §"hardware
+   crypto"): reports whether AES-NI is present so Resid library code can
+   choose between the LLVM-intrinsic-backed block cipher and the pure-Resid
+   fallback. This is a capability query only, same category as the entropy
+   hook above — the AES computation itself is never done in C; it's emitted
+   directly as `llvm.x86.aesni.*` intrinsic calls by resid-codegen. */
+int8_t resid_cpu_has_aesni(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    return __builtin_cpu_supports("aes") ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
 /* Bounds-check failure helper with diagnostics. */
 _Noreturn void resid_index_abort(int64_t idx, int64_t len) {
     char buf[128];

@@ -1337,6 +1337,14 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "") { return ERes { pos: pos, ty: "Int", err: "" }; }
         return ERes { pos: pos, ty: "", err: "resid_crypto_random_byte expects no arguments" };
     }
+    if (name == "resid_cpu_has_aesni") {
+        if (argtys == "") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "resid_cpu_has_aesni expects no arguments" };
+    }
+    if (name == "aesni_enc_round" || name == "aesni_enc_last_round") {
+        if (argtys == "UInt(128),UInt(128)") { return ERes { pos: pos, ty: "UInt(128)", err: "" }; }
+        return ERes { pos: pos, ty: "", err: name + " expects (UInt(128), UInt(128)), got (" + argtys + ")" };
+    }
     if (name == "resid_tcp_connect") {
         if (argtys == "Str,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
         return ERes { pos: pos, ty: "", err: "resid_tcp_connect expects (Str, Int), got (" + argtys + ")" };
