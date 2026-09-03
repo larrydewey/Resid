@@ -62,6 +62,84 @@ _Noreturn void resid_abort(const char* msg) {
     abort();
 }
 
+/* ── Force-time capability enforcement (spec §21.3) ──────────────────────
+ * The compile-time checker rejects every statically-apparent capability
+ * violation, but a requirement that is dynamic or residual must also fail
+ * at FORCE TIME with a capability error. Each sandboxed region pushes its
+ * granted capability set onto a thread-local stack; a residual provider call
+ * verifies its required capability against every frame (attenuation only
+ * shrinks, so a capability must be present in ALL frames — the transitive
+ * closure). An empty stack means the ambient grant is unrestricted.
+ *
+ * Bypassing resid_cap_check fires resid_abort: at top level that aborts the
+ * process (spec §24); inside a spawned region it unwinds and is delivered to
+ * the parent as Err(RegionError). */
+#define RESID_CAP_MAX_DEPTH 32
+#define RESID_CAP_MAX_SET 64
+
+static _Thread_local const char* resid_cap_stack[RESID_CAP_MAX_DEPTH][RESID_CAP_MAX_SET];
+static _Thread_local int64_t resid_cap_ns[RESID_CAP_MAX_DEPTH];
+static _Thread_local int resid_cap_depth = 0;
+static _Thread_local int resid_cap_active = 0;
+
+/* Push a granted set `caps` of length `n` for the current region. n < 0
+ * (or n == 0 with a NULL caps array) pushes a marker frame that grants
+ * nothing. */
+void resid_cap_enter(const char* const* caps, int64_t n) {
+    if (resid_cap_depth >= RESID_CAP_MAX_DEPTH) {
+        resid_abort("capability: sandbox nesting exceeds RESID_CAP_MAX_DEPTH");
+        return;
+    }
+    int64_t m = (caps && n > 0) ? n : 0;
+    for (int64_t i = 0; i < m && i < RESID_CAP_MAX_SET; i++) {
+        resid_cap_stack[resid_cap_depth][i] = caps[i];
+    }
+    resid_cap_ns[resid_cap_depth] = m;
+    resid_cap_depth++;
+    resid_cap_active = 1;
+}
+
+void resid_cap_leave(void) {
+    if (resid_cap_depth > 0) resid_cap_depth--;
+    if (resid_cap_depth == 0) resid_cap_active = 0;
+}
+
+static int resid_cap_term(char c) {
+    return c == '\0' || c == '(' || c == ':';
+}
+
+static int resid_cap_same_family(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    while (*a && *b && !resid_cap_term(*a) && !resid_cap_term(*b) && *a == *b) {
+        a++;
+        b++;
+    }
+    return resid_cap_term(*a) && resid_cap_term(*b);
+}
+
+static int resid_cap_granted(const char* cap) {
+    if (resid_cap_depth == 0) return 1; /* ambient: unrestricted */
+    for (int d = 0; d < resid_cap_depth; d++) {
+        int found = 0;
+        for (int64_t i = 0; i < resid_cap_ns[d]; i++) {
+            if (resid_cap_same_family(resid_cap_stack[d][i], cap)) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) return 0; /* attenuation only shrinks: must be in every frame */
+    }
+    return 1;
+}
+
+void resid_cap_check(const char* cap) {
+    if (!resid_cap_granted(cap)) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "capability not granted: %s", cap ? cap : "?");
+        resid_abort(buf);
+    }
+}
+
 static char* resid_box_str(const char* s) {
     size_t n = strlen(s);
     char* p = (char*)malloc(n + 1);

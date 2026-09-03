@@ -298,6 +298,9 @@ pub struct CodeGen<'ctx> {
     cmp_trampolines: std::collections::HashSet<String>,
     /// Source file of the function currently being lowered (visibility §22).
     cur_file: String,
+    /// Capability ceiling (spec §21.3) of the function currently being
+    /// lowered; empty when the function runs under the ambient grant.
+    cap_ceiling: Vec<String>,
     /// Clone of the translation unit, kept for comptime β-reduction (§36).
     unit: TranslationUnit,
 }
@@ -321,6 +324,7 @@ impl<'ctx> CodeGen<'ctx> {
             behaviors: HashMap::new(),
             cmp_trampolines: std::collections::HashSet::new(),
             cur_file: String::new(),
+            cap_ceiling: Vec::new(),
             unit: TranslationUnit {
                 imports: Vec::new(),
                 declarations: Vec::new(),
@@ -649,8 +653,14 @@ impl<'ctx> CodeGen<'ctx> {
         self.cur_file = f.span.file.clone();
         let enter_ret = resid_type::resolve_type_ctx(&f.ret, &self.types).unwrap_or(SemType::Bool);
         self.cur_ret = Some(enter_ret.clone());
+        self.cap_ceiling = self
+            .sigs
+            .get(name)
+            .map(|s| s.sandbox_ceiling.clone())
+            .unwrap_or_default();
         let entry = self.cx.append_basic_block(fv, "entry");
         self.builder.position_at_end(entry);
+        self.emit_cap_enter()?;
 
         let mut sc = Scope::new();
         for (i, p) in f.params.iter().enumerate() {
@@ -678,10 +688,12 @@ impl<'ctx> CodeGen<'ctx> {
                 Some(ret_expr) => {
                     let v = self.lower_expr(&mut sc, ret_expr, None)?;
                     let v = self.cast_val(v, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
+                    self.emit_cap_leave()?;
                     self.builder.build_return(Some(&v.v)).map_err(to_err)?;
                 }
                 None => {
                     let ret_ty = enter_ret;
+                    self.emit_cap_leave()?;
                     match ret_ty {
                         SemType::Numeric(NumericType::Dec(_)) => {
                             let st = self.dec_type();
@@ -847,9 +859,11 @@ impl<'ctx> CodeGen<'ctx> {
                                 let raw = self.lower_expr(sc, e, None)?;
                                 let val = self
                                     .cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
+                                self.emit_cap_leave()?;
                                 self.builder.build_return(Some(&val.v)).map_err(to_err)?;
                             }
                             None => {
+                                self.emit_cap_leave()?;
                                 self.builder.build_return(None).map_err(to_err)?;
                             }
                         }
@@ -892,6 +906,7 @@ impl<'ctx> CodeGen<'ctx> {
                     let raw = self.lower_expr(sc, ret, None)?;
                     let val = self
                         .cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
+                    self.emit_cap_leave()?;
                     self.builder.build_return(Some(&val.v)).map_err(to_err)?;
                 }
                 terminated = true;
@@ -1239,6 +1254,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(ret_bb);
         let ret_ty = self.cur_ret.clone().unwrap_or_else(|| sv.ty.clone());
         if matches!(ret_ty, SemType::Sum { .. }) {
+            self.emit_cap_leave()?;
             self.builder.build_return(Some(&sv.v)).map_err(to_err)?;
             self.builder.position_at_end(payload_bb);
             let slot = self.cx.i64_type().const_int(0, false);
@@ -3149,12 +3165,28 @@ impl<'ctx> CodeGen<'ctx> {
         }
         let cs = self.builder.build_call(f, &llargs, rt_name).map_err(to_err)?;
         let v = cs.try_as_basic_value().expect_basic("provider call");
-        // Recover the checker's return type to coerce appropriately.
-        let ret = resid_type::provider_verbs()
-            .iter()
-            .find(|(p, vv, _, _)| p == &provider.0 && vv == &verb.0)
-            .map(|(_, _, _, r)| r.clone())
-            .unwrap_or(SemType::Str);
+        // Recover the checker's return type to coerce appropriately, and the
+        // required capability family to emit a force-time guard (spec §21.3:
+        // a dynamic/residual requirement fails at force time with a capability
+        // error). `resid_cap_check` aborts at top level / delivers
+        // Err(RegionError) inside a spawn.
+        let (ret, cap_fam) = {
+            let found = resid_type::provider_verbs()
+                .iter()
+                .find(|(p, vv, _, _, _)| p == &provider.0 && vv == &verb.0)
+                .map(|(_, _, _, r, c)| (r.clone(), *c));
+            found.unwrap_or((SemType::Str, ""))
+        };
+        if !cap_fam.is_empty() {
+            let cap_s = self.lower_str(cap_fam);
+            let f = self
+                .module
+                .get_function("resid_cap_check")
+                .ok_or("codegen: missing resid_cap_check decl")?;
+            self.builder
+                .build_call(f, &[cap_s.into()], "capchk")
+                .map_err(to_err)?;
+        }
         match &ret {
             SemType::Bool => {
                 // The C runtime returns Bool as i8; narrow to i1 so branch
@@ -3501,6 +3533,10 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
         self.decl_rt("resid_list_concat", vec![ptr.into(), ptr.into()], ptr.into());
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
+        // Force-time capability enforcement (spec §21.3).
+        self.decl_rt_void("resid_cap_check", vec![ptr.into()]);
+        self.decl_rt_void("resid_cap_enter", vec![ptr.into(), i64t.into()]);
+        self.decl_rt_void("resid_cap_leave", vec![]);
         // Checked add/sub overflow trap (spec v3.2 §6.1).
         self.decl_rt_void("resid_arith_overflow", vec![]);
         self.decl_rt_void("resid_index_abort", vec![i64t.into(), i64t.into()]);
@@ -3663,6 +3699,64 @@ impl<'ctx> CodeGen<'ctx> {
         let meta = vec![ptr.into()];
         self.builder.build_call(f, &meta, "abort").map_err(to_err)?;
         Ok(self.zero_val())
+    }
+
+    /// Emit `resid_cap_enter(caps, n)` for the current function's ceiling
+    /// (spec §21.3). A no-op when the function has no ceiling (ambient grant).
+    fn emit_cap_enter(&mut self) -> Result<(), String> {
+        if self.cap_ceiling.is_empty() {
+            return Ok(());
+        }
+        let caps: Vec<String> = self.cap_ceiling.clone();
+        let pty = self.cx.i8_type().ptr_type(AddressSpace::default());
+        let arr_ty = pty.array_type(caps.len() as u32);
+        let arr = self
+            .builder
+            .build_alloca(arr_ty, "cap_set")
+            .map_err(to_err)?;
+        for (i, c) in caps.iter().enumerate() {
+            let index = self.cx.i32_type().const_int(i as u64, false);
+            let sl =
+                unsafe { self.builder.build_in_bounds_gep(arr_ty, arr, &[index], "cap_slot") }
+                    .map_err(to_err)?;
+            let strp = self.lower_str(c);
+            self.builder.build_store(sl, strp).map_err(to_err)?;
+        }
+        let arr_i8p = self
+            .builder
+            .build_pointer_cast(arr, self.cx.ptr_type(AddressSpace::default()), "cap_setp")
+            .map_err(to_err)?;
+        let f = self
+            .module
+            .get_function("resid_cap_enter")
+            .ok_or("codegen: missing resid_cap_enter decl")?;
+        self.builder
+            .build_call(
+                f,
+                &[
+                    arr_i8p.into(),
+                    self.cx.i64_type().const_int(caps.len() as u64, false).into(),
+                ],
+                "capenter",
+            )
+            .map_err(to_err)?;
+        Ok(())
+    }
+
+    /// Emit `resid_cap_leave()` to balance a prior `resid_cap_enter` on this
+    /// function's exit path. A no-op when the function has no ceiling.
+    fn emit_cap_leave(&mut self) -> Result<(), String> {
+        if self.cap_ceiling.is_empty() {
+            return Ok(());
+        }
+        let f = self
+            .module
+            .get_function("resid_cap_leave")
+            .ok_or("codegen: missing resid_cap_leave decl")?;
+        self.builder
+            .build_call(f, &[], "capleave")
+            .map_err(to_err)?;
+        Ok(())
     }
 
     fn lower_call(
