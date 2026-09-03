@@ -5760,6 +5760,72 @@ fn build_cache_invalidates_on_import_change() {
     let _ = std::env::set_current_dir(cwd);
 }
 
+#[test]
+fn run_cache_capability_gating() {
+    use std::process::Command;
+
+    let dir = std::env::temp_dir().join(format!("residc-e2e-cachegating-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cwd = std::env::current_dir().unwrap();
+
+    // A program that uses filesystem provider → captures capability family "filesystem"
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Bool ok = filesystem.exists("/tmp/x");
+    println(BoolToString(ok));
+    return 0;
+}"#,
+    )
+    .unwrap();
+
+    let residc_bin = residc_bin();
+
+    // Helper: clear the cache so each build starts fresh.
+    let clear_cache = || {
+        let _ = std::fs::remove_file(dir.join(".resid-cache.cbor"));
+    };
+
+    // 1) Ambient (no grant) — should write the cache entry, no "cache: skip"
+    clear_cache();
+    let ambient_out = Command::new(&residc_bin)
+        .arg(&file).arg("build").arg("-o").arg(dir.join("out1").to_str().unwrap())
+        .current_dir(&dir)
+        .output()
+        .expect("run failed");
+    let ambient_stderr = String::from_utf8_lossy(&ambient_out.stderr).into_owned();
+    assert!(!ambient_stderr.contains("cache: skip"), "ambient should not skip write: {ambient_stderr}");
+
+    // 2) Grant covering the required capability — should write, no "cache: skip"
+    clear_cache();
+    let with_filesystem = Command::new(&residc_bin)
+        .arg(&file).arg("build").arg("-o").arg(dir.join("out2").to_str().unwrap())
+        .current_dir(&dir)
+        .env("RESID_CAP_GRANT", "filesystem")
+        .output()
+        .expect("run failed");
+    let fs_stderr = String::from_utf8_lossy(&with_filesystem.stderr).into_owned();
+    assert!(!fs_stderr.contains("cache: skip"), "grant=filesystem should not skip write: {fs_stderr}");
+
+    // 3) Grant NOT covering the required capability — should skip write
+    clear_cache();
+    let with_network = Command::new(&residc_bin)
+        .arg(&file).arg("build").arg("-o").arg(dir.join("out3").to_str().unwrap())
+        .current_dir(&dir)
+        .env("RESID_CAP_GRANT", "network")
+        .output()
+        .expect("run failed");
+    let network_stderr = String::from_utf8_lossy(&with_network.stderr).into_owned();
+    assert!(network_stderr.contains("cache: skip"), "grant=network should skip write: {network_stderr}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::env::set_current_dir(cwd);
+}
+
+/// #[test]
+/// fn run_behavior_ord_sort() {
+
 /// User-defined behavior `Ord(T) = cmp_fn;` drives `sort(xs, using = Ord(T))`
 /// through a generated qsort comparator trampoline (spec §11).
 #[test]

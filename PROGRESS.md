@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**744 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 245,
+**745 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 245,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 107 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + 108 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `run_sandbox_handle_entry_file_argument`,
@@ -812,7 +812,7 @@ checker still rejects every apparent violation (so the runtime guard is the
 defense for dynamic/residual requirements): e2e
 `run_sandbox_force_time_guard_present` (IR carries the guard) and
 `run_sandbox_force_time_guard_fires` (a missing grant aborts at force time);
-§21.4 knowledge-cache gating (deferred); capability modes currently
+§21.4 knowledge-cache gating (completed); capability modes currently
 cover the `readonly`/`readwrite` markers with `filesystem.write_all` and
 `process.run` as the classified write verbs — a fuller per-verb mode lattice
 (`git(readonly)` scope, etc.) is future work. See the capability-mode

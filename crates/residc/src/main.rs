@@ -18,7 +18,10 @@ use std::process::ExitCode;
 use std::os::unix::process::ExitStatusExt;
 
 use resid_build::Profile;
-use resid_parser::TranslationUnit;
+use resid_lexer::token::Span;
+use resid_parser::{
+    Block, Declaration, ExprKind, StmtKind, TranslationUnit,
+};
 
 enum Cmd {
     Check,
@@ -299,9 +302,234 @@ fn emit_ir_string(unit: &TranslationUnit) -> Result<String, ExitCode> {
     }
 }
 
+/// Collect the distinct capability families (provider names, spec §21.4)
+/// referenced anywhere in the (import-resolved) translation unit. This is the
+/// set of capabilities associated with the cache entry produced for the unit.
+pub fn required_cap_families(unit: &TranslationUnit) -> Vec<String> {
+    let mut set = std::collections::BTreeSet::new();
+    for d in &unit.declarations {
+        collect_decl_caps(d, &mut set);
+    }
+    set.into_iter().collect()
+}
+
+fn collect_decl_caps(d: &Declaration, set: &mut std::collections::BTreeSet<String>) {
+    match d {
+        Declaration::Function(f) => collect_block_caps(&f.body, set),
+        Declaration::Sandbox(s) => {
+            for inner in &s.body {
+                collect_decl_caps(inner, set);
+            }
+        }
+        Declaration::Behavior(b) => collect_expr_caps(&b.body.span, &b.body, set),
+        Declaration::Type(t) => match &t.body {
+            resid_parser::TypeBody::Constraint { constraint, .. } => {
+                collect_expr_caps(&constraint.span, constraint, set)
+            }
+            resid_parser::TypeBody::Base(b) => collect_type_caps(b, set),
+            resid_parser::TypeBody::Residual(r) => collect_type_caps(r, set),
+            resid_parser::TypeBody::Product(_) | resid_parser::TypeBody::Sum(_) => {}
+        },
+    }
+}
+
+fn collect_block_caps(b: &Block, set: &mut std::collections::BTreeSet<String>) {
+    for s in &b.statements {
+        match &s.kind {
+            StmtKind::Bind { value, .. } => collect_expr_caps(&value.span, value, set),
+            StmtKind::Discard(e) => collect_expr_caps(&e.span, e, set),
+            StmtKind::Destructure { source, .. } => collect_expr_caps(&source.span, source, set),
+            StmtKind::Expr(e) => collect_expr_caps(&e.span, e, set),
+            StmtKind::Return(Some(e)) => collect_expr_caps(&e.span, e, set),
+            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
+        }
+    }
+    if let Some(r) = &b.ret {
+        collect_expr_caps(&r.span, r, set);
+    }
+}
+
+fn collect_type_caps(t: &resid_parser::Type, set: &mut std::collections::BTreeSet<String>) {
+    match t {
+        resid_parser::Type::Refined { constraint, .. } => {
+            collect_expr_caps(&constraint.span, constraint, set)
+        }
+        resid_parser::Type::Residual(inner) => collect_type_caps(inner, set),
+        _ => {}
+    }
+}
+
+fn collect_expr_caps(
+    _span: &Span,
+    e: &resid_parser::Expr,
+    set: &mut std::collections::BTreeSet<String>,
+) {
+    let sp = &e.span;
+    match &e.kind {
+        ExprKind::ProviderCall { provider, args, .. } => {
+            set.insert(provider.0.clone());
+            for a in args {
+                collect_expr_caps(sp, a, set);
+            }
+        }
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            collect_expr_caps(&lhs.span, lhs, set);
+            collect_expr_caps(&rhs.span, rhs, set);
+        }
+        ExprKind::UnaryOp { operand, .. } => collect_expr_caps(&operand.span, operand, set),
+        ExprKind::Cast { operand, .. } => collect_expr_caps(&operand.span, operand, set),
+        ExprKind::Call { func, args } => {
+            collect_expr_caps(&func.span, func, set);
+            for (_, a) in args {
+                collect_expr_caps(&a.span, a, set);
+            }
+        }
+        ExprKind::Rt(inner) => collect_expr_caps(&inner.span, inner, set),
+        ExprKind::AtResidual { inner, .. } => collect_expr_caps(&inner.span, inner, set),
+        ExprKind::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
+            collect_expr_caps(&cond.span, cond, set);
+            collect_block_caps(then_block, set);
+            if let Some(eb) = else_block {
+                collect_block_caps(eb, set);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            collect_expr_caps(&cond.span, cond, set);
+            collect_block_caps(body, set);
+        }
+        ExprKind::ForIn {
+            collection,
+            body,
+            ..
+        } => {
+            collect_expr_caps(&collection.span, collection, set);
+            collect_block_caps(body, set);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_expr_caps(&scrutinee.span, scrutinee, set);
+            for (_, a) in arms {
+                collect_expr_caps(&a.span, a, set);
+            }
+        }
+        ExprKind::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            if let Some(i) = init {
+                match &i.kind {
+                    StmtKind::Bind { value, .. } => collect_expr_caps(&value.span, value, set),
+                    StmtKind::Discard(e) => collect_expr_caps(&e.span, e, set),
+                    StmtKind::Expr(e) => collect_expr_caps(&e.span, e, set),
+                    _ => {}
+                }
+            }
+            collect_expr_caps(&cond.span, cond, set);
+            if let Some(s) = step {
+                match &s.kind {
+                    StmtKind::Expr(e) => collect_expr_caps(&e.span, e, set),
+                    _ => {}
+                }
+            }
+            collect_block_caps(body, set);
+        }
+        ExprKind::Spawn { body, .. } => collect_block_caps(body, set),
+        ExprKind::Assert { cond, .. }
+        | ExprKind::RtAssert { cond, .. }
+        | ExprKind::Known(cond)
+        | ExprKind::RtKnown(cond)
+        | ExprKind::ComptimePrint(cond)
+        | ExprKind::EarlyReturn(cond) => collect_expr_caps(&cond.span, cond, set),
+        ExprKind::StructLit { fields, .. } => {
+            for (_, f) in fields {
+                collect_expr_caps(&f.span, f, set);
+            }
+        }
+        ExprKind::ListLit(v) => {
+            for a in v {
+                collect_expr_caps(&a.span, a, set);
+            }
+        }
+        ExprKind::MapLit(v) => {
+            for (k, v) in v {
+                collect_expr_caps(&k.span, k, set);
+                collect_expr_caps(&v.span, v, set);
+            }
+        }
+        ExprKind::SetLit(v) => {
+            for a in v {
+                collect_expr_caps(&a.span, a, set);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            collect_expr_caps(&start.span, start, set);
+            collect_expr_caps(&end.span, end, set);
+        }
+        ExprKind::FString(parts) => {
+            for p in parts {
+                if let resid_parser::FStringPart::Expr(e) = p {
+                    collect_expr_caps(&e.span, e, set);
+                }
+            }
+        }
+        ExprKind::FieldAccess { target, .. } => collect_expr_caps(&target.span, target, set),
+        ExprKind::Index { target, index } => {
+            collect_expr_caps(&target.span, target, set);
+            collect_expr_caps(&index.span, index, set);
+        }
+        ExprKind::Slice { target, .. } => collect_expr_caps(&target.span, target, set),
+        ExprKind::MethodCall { target, args, .. } => {
+            collect_expr_caps(&target.span, target, set);
+            for a in args {
+                collect_expr_caps(&a.span, a, set);
+            }
+        }
+        ExprKind::ElseFallback { value, fallback } => {
+            collect_expr_caps(&value.span, value, set);
+            collect_block_caps(fallback, set);
+        }
+        ExprKind::Destructure { source, .. } => collect_expr_caps(&source.span, source, set),
+        ExprKind::IfLet {
+            source,
+            then_block,
+            else_block,
+            ..
+        } => {
+            collect_expr_caps(&source.span, source, set);
+            collect_block_caps(then_block, set);
+            if let Some(eb) = else_block {
+                collect_block_caps(eb, set);
+            }
+        }
+        ExprKind::WhileLet { source, body, .. } => {
+            collect_expr_caps(&source.span, source, set);
+            collect_block_caps(body, set);
+        }
+        ExprKind::With { bindings, body } => {
+            for b in bindings {
+                collect_expr_caps(&b.init.span, &b.init, set);
+            }
+            collect_block_caps(body, set);
+        }
+        ExprKind::Using { value, .. } => collect_expr_caps(&value.span, value, set),
+        ExprKind::Todo(_)
+        | ExprKind::Unimplemented(_)
+        | ExprKind::Id(_)
+        | ExprKind::Literal(_)
+        | ExprKind::Location
+        | ExprKind::RawString(_)
+        | ExprKind::ByteString(_)
+        | ExprKind::Discard(_) => {}
+    }
+}
+
 /// The tiny bootstrap runtime linked into every native Resid binary.
 const RUNTIME_C: &str = include_str!("../resid_rt.c");
-
 /// Emit IR, link with the bootstrap runtime via clang, and write a native
 /// binary to `out` (defaults to `a.out` in the current directory).
 fn build_native(
@@ -345,8 +573,30 @@ fn build_native(
         Ok(s) if s.success() => {
             let mut store = resid_cache::Store::open(Path::new(".resid-cache.cbor"));
             // GC: drop entries whose artifact no longer exists.
-            store.retain(|_, v| Path::new(v).exists());
-            store.put(cache_key.to_string(), out.clone());
+            store.retain(|_, v| Path::new(&v.value).exists());
+            // §21.4 knowledge-cache capability gating: a cache entry records
+            // the capability families the program needed to build it. A write
+            // is allowed only when those families are ≤ the sandbox's granted
+            // set. RESID_CAP_GRANT (comma-separated families) names that grant
+            // for a sandboxed compilation; when unset the build is ambient and
+            // may always write.
+            let required = required_cap_families(unit);
+            let grant = env::var("RESID_CAP_GRANT")
+                .ok()
+                .map(|g| g.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>());
+            let write_allowed = match &grant {
+                Some(g) => resid_cache::caps_are_at_most(g, &required),
+                None => true,
+            };
+            if write_allowed {
+                store.put_with_caps(cache_key.to_string(), out.clone(), required);
+            } else {
+                eprintln!(
+                    "cache: skip (required {} > grant {})",
+                    required.join(","),
+                    grant.unwrap_or_default().join(",")
+                );
+            }
             if let Err(e) = store.flush() {
                 eprintln!("cache flush error: {e}");
             }
