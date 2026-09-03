@@ -9,7 +9,7 @@
 
 ## 0. Current Snapshot
 
-**732 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 239,
+**734 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 241,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
   resid-graph 4, resid-builtin 0, residc 0 unit + 103 e2e incl.
@@ -798,5 +798,20 @@ scope) is future work.
 - Tests: resid-type +2 (`capability_mode_unknown_keyword_rejected`,
   `capability_mode_explicit_readwrite_allows_write`), residc e2e +1 assertion
   (typo-mode `emit-ir` rejection in `run_sandbox_capability_mode_readonly`).
+
+### Progress on capability modes — `process.run` classified as write verb
+
+- `process.run` executes an arbitrary external command, which may mutate the
+  system, so it is now classified as a write verb by `is_write_verb`. A
+  read-only `process(readonly)` grant therefore rejects `process.run` (e.g. a
+  misspelled intent of a read-only process grant no longer permits arbitrary
+  command execution). `process(readwrite)` — bare or explicit — still allows
+  it. The `git` provider exposes only read verbs (`rev`, `branch`), so no
+  write classification is needed there yet.
+- Tests: resid-type +2 (`capability_mode_process_readonly_rejects_run`,
+  `capability_mode_process_readwrite_allows_run`); residc e2e +1 assertion
+  (`process(readonly)` `process.run` rejection in
+  `run_sandbox_capability_mode_readonly`).
+
 
 
