@@ -6737,6 +6737,25 @@ Int main() { write_demo(); return 0; }"#,
     assert!(err.contains("write operation"), "error should mention write operation: {err}");
     assert!(err.contains("read-only"), "error should mention read-only grant: {err}");
 
+    // Illegal: a misspelled mode keyword must NOT silently escalate to
+    // read-write (soundness). `readoly` is rejected as unknown.
+    let typo = dir.join("typo.resid");
+    std::fs::write(
+        &typo,
+        r#"sandbox (filesystem(readoly)) {
+    Int write_demo() {
+        Bool ok = filesystem.write_all("data.txt", "hello");
+        return 0;
+    }
+}
+Int main() { write_demo(); return 0; }"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&typo).arg("emit-ir").current_dir(&dir).output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "unknown mode must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unknown capability mode `readoly`"), "error should mention unknown mode: {err}");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]

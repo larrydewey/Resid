@@ -3613,6 +3613,26 @@ pub fn check_program_with(unit: &TranslationUnit, ceilings: &[FileCeiling]) -> V
                     ));
                 }
             }
+            // ── §21 capability modes: reject unknown mode keywords ──
+            // Only `readonly` and `readwrite` are valid per-family modes. A
+            // misspelled mode (e.g. `readoly`) must NOT silently escalate to
+            // read-write — that would be a soundness hole.
+            for cap in &f.sandbox_ceiling {
+                for p in &cap.params {
+                    if let ExprKind::Id(id) = &p.kind
+                        && id.0 != "readonly"
+                        && id.0 != "readwrite"
+                    {
+                        errs.push(err(
+                            &f.span,
+                            format!(
+                                "unknown capability mode `{}` on `{}`; supported modes are `readonly` and `readwrite`",
+                                id.0, cap.name.0
+                            ),
+                        ));
+                    }
+                }
+            }
             type_check_block(&f.body, &env, &sigs, &types, &mut errs);
             // ── §21.3 sandbox enforcement ──────────────────────────
             // A function's effective declared ceiling is the meet of every
@@ -8006,6 +8026,48 @@ sandbox (filesystem) {
         assert!(
             errs.is_empty(),
             "readwrite sandbox must allow a write verb, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn capability_mode_explicit_readwrite_allows_write() {
+        // Explicit `readwrite` mode == bare family (readwrite); a write verb
+        // is permitted.
+        let src = r#"
+sandbox (filesystem(readwrite)) {
+    Int demo() {
+        Bool ok = filesystem.write_all("x.txt", "hello");
+        return 0;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "explicit readwrite sandbox must allow a write verb, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn capability_mode_unknown_keyword_rejected() {
+        // A misspelled mode must NOT silently escalate to read-write.
+        let src = r#"
+sandbox (filesystem(readoly)) {
+    Int demo() {
+        Bool ok = filesystem.write_all("x.txt", "hello");
+        return 0;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("unknown capability mode `readoly`")),
+            "unknown mode must be rejected, got: {:?}",
             errs
         );
     }
