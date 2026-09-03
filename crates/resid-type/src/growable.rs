@@ -23,13 +23,12 @@
 //!
 //! `acc` may appear ONLY as the target of exactly one `.concat` per
 //! recursive step, or bare in a base-case return — never bound to another
-//! name, passed to any other function, indexed, compared, or captured by
-//! `spawn`. The concat's *result* (`acc2`) may appear ONLY as the
-//! corresponding argument of a recursive self-call to `f` — nothing else.
-//! And EVERY call to `f` anywhere else in the (fully-imported,
-//! whole-program) translation unit must pass a bare list literal in that
-//! parameter position — never a named variable, a field, or the result of
-//! any other call.
+//! name, indexed, compared, or captured by `spawn`. The concat's *result*
+//! (`acc2`) may appear ONLY as the corresponding argument of a recursive
+//! self-call to `f` — nothing else. And EVERY call to `f` anywhere else in
+//! the (fully-imported, whole-program) translation unit must pass a bare
+//! list literal in that parameter position — never a named variable, a
+//! field, or the result of any other call.
 //!
 //! That last requirement is what makes this sound without tracking aliases
 //! at all: a literal evaluated inline at a call site creates a brand-new
@@ -38,6 +37,30 @@
 //! recognized `.concat` step and immediately consumed by nothing but the
 //! next recursive call. Nothing in the program can ever observe the
 //! intermediate buffer except through that one private chain.
+//!
+//! **Delegation.** `acc` may also appear as the accumulator argument of a
+//! call to a *different* function `h` (not `f` itself), whose own
+//! accumulator parameter is independently proven growable at that
+//! position — e.g. `lib/aesgcm.resid`'s `ctr_xor` threading its `acc`
+//! through `ctr_take`, which does the actual `.concat`. The call's result
+//! must then flow into `f`'s own recursive self-call exactly like a
+//! `.concat` result would. This makes a delegate target's own validity
+//! depend on its delegator's, and vice versa (a call site passing the
+//! delegator's own tracked parameter counts as "fresh" precisely because
+//! the delegator proved nothing else can reference it either) — resolved
+//! by a small least-fixpoint over the delegation graph below, not by
+//! re-deriving freshness some other way.
+//!
+//! A pure delegate target (something only ever reached via delegation,
+//! `ctr_take` here) must never convert its buffer back into a normal
+//! boxed List at its own base case — that would run once per *inner*
+//! call, defeating the whole point, and worse, hand the delegator a
+//! normal ResidVal where it expects to keep pushing onto a GrowBuf (the
+//! two have different memory layouts; treating one as the other is
+//! memory corruption, not a slowdown). Converting to a real List is
+//! correct exactly once, at the root of a delegation chain (the function
+//! nothing else delegates into) — `should_finish` tells codegen which is
+//! which.
 //!
 //! This never rejects a program: a function that doesn't match the shape,
 //! or has even one disqualifying call site, is simply not in the returned
@@ -48,9 +71,34 @@ use std::collections::{HashMap, HashSet};
 
 use resid_parser::{Block, Declaration, Expr, ExprKind, FuncDef, Stmt, StmtKind, TranslationUnit, Type};
 
-/// `(function name, 0-based parameter index)` pairs proven safe to grow
-/// in place.
-pub type GrowableAccumulators = HashSet<(String, usize)>;
+type Key = (String, usize);
+
+/// Result of the analysis: which `(function, parameter index)` pairs are
+/// safe to represent as a GrowBuf, and which of those must NOT convert
+/// back to a normal List at their own base case (because some other
+/// validated function delegates into them — see the module doc).
+#[derive(Default)]
+pub struct GrowableAccumulators {
+    growable: HashSet<Key>,
+    delegate_targets: HashSet<Key>,
+}
+
+impl GrowableAccumulators {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_growable(&self, name: &str, idx: usize) -> bool {
+        self.growable.contains(&(name.to_string(), idx))
+    }
+
+    /// False only for a pure delegate target: its base-case `return acc;`
+    /// must pass the raw GrowBuf pointer straight through instead of
+    /// calling resid_growbuf_finish.
+    pub fn should_finish(&self, name: &str, idx: usize) -> bool {
+        !self.delegate_targets.contains(&(name.to_string(), idx))
+    }
+}
 
 /// Whether a candidate parameter's usage was entirely safe (accumulator
 /// shape respected everywhere it's read), or found using it somewhere
@@ -71,32 +119,97 @@ pub fn find_growable_accumulators(unit: &TranslationUnit) -> GrowableAccumulator
         })
         .collect();
 
-    let mut candidates: GrowableAccumulators = HashSet::new();
+    // Phase 1: per-function shape check, ignoring (for now) whether any
+    // delegate target this function relies on is itself valid — that's
+    // resolved by the fixpoint below. `shapes[key]` = the delegate edges
+    // `key` requires to hold (empty for a plain `.concat`-only leaf).
+    let mut shapes: HashMap<Key, Vec<Key>> = HashMap::new();
     for f in funcs.values() {
         for (i, p) in f.params.iter().enumerate() {
             if !is_list_type(&p.type_) {
                 continue;
             }
-            if check_function_shape(f, &p.name.0, i) {
-                candidates.insert((f.name.0.clone(), i));
+            if let Some(edges) = check_function_shape(f, &p.name.0, i) {
+                shapes.insert((f.name.0.clone(), i), edges);
             }
         }
     }
-    if candidates.is_empty() {
-        return candidates;
+    if shapes.is_empty() {
+        return GrowableAccumulators::new();
     }
 
-    // Whole-program call-site check: every call to a candidate function,
-    // from anywhere except its own verified recursive self-call, must pass
-    // a bare list literal in the accumulator's position.
-    let mut disqualified: HashSet<(String, usize)> = HashSet::new();
-    for f in funcs.values() {
-        walk_calls_for_freshness(&f.body, f, &candidates, &mut disqualified);
+    // Phase 2: least fixpoint over the delegation graph — a candidate
+    // survives only if every delegate edge it requires also survives.
+    // Monotonically shrinking (only ever removes), so this terminates.
+    let mut valid: HashSet<Key> = shapes.keys().cloned().collect();
+    loop {
+        let to_remove: Vec<Key> = shapes
+            .iter()
+            .filter(|(key, _)| valid.contains(*key))
+            .filter(|(_, edges)| edges.iter().any(|t| !valid.contains(t)))
+            .map(|(key, _)| key.clone())
+            .collect();
+        if to_remove.is_empty() {
+            break;
+        }
+        for k in to_remove {
+            valid.remove(&k);
+        }
     }
-    for key in disqualified {
-        candidates.remove(&key);
+    if valid.is_empty() {
+        return GrowableAccumulators::new();
     }
-    candidates
+
+    // Phase 3: whole-program call-site freshness. Every call to a
+    // surviving candidate, other than its own verified recursive
+    // self-call, must pass either a bare list literal, or the calling
+    // function's own tracked accumulator parameter at a position that
+    // phase 1 recorded as a delegate edge to exactly this candidate
+    // (i.e. a sanctioned delegation — the delegator already proved
+    // nothing else can reference that value either).
+    let mut disqualified: HashSet<Key> = HashSet::new();
+    for caller in funcs.values() {
+        let caller_growable_param: Option<(usize, &str)> = caller
+            .params
+            .iter()
+            .enumerate()
+            .find(|(i, _)| valid.contains(&(caller.name.0.clone(), *i)))
+            .map(|(i, p)| (i, p.name.0.as_str()));
+        walk_calls_for_freshness(&caller.body, caller, &shapes, &valid, caller_growable_param, &mut disqualified);
+    }
+    for key in &disqualified {
+        valid.remove(key);
+    }
+    // Removing call-site-disqualified entries can break edges that other
+    // still-"valid" candidates depended on — re-run the fixpoint once
+    // more against the shrunk set (phase 3 never adds candidates back,
+    // and each pass only removes, so this still terminates).
+    loop {
+        let to_remove: Vec<Key> = shapes
+            .iter()
+            .filter(|(key, _)| valid.contains(*key))
+            .filter(|(_, edges)| edges.iter().any(|t| !valid.contains(t)))
+            .map(|(key, _)| key.clone())
+            .collect();
+        if to_remove.is_empty() {
+            break;
+        }
+        for k in to_remove {
+            valid.remove(&k);
+        }
+    }
+
+    let delegate_targets: HashSet<Key> = valid
+        .iter()
+        .filter_map(|k| shapes.get(k))
+        .flat_map(|edges| edges.iter().cloned())
+        .filter(|t| valid.contains(t))
+        .collect();
+
+    GrowableAccumulators {
+        growable: valid,
+        delegate_targets,
+    }
 }
 
 fn is_list_type(t: &Type) -> bool {
@@ -104,10 +217,10 @@ fn is_list_type(t: &Type) -> bool {
 }
 
 /// Check that `f`'s body respects the accumulator shape for parameter
-/// `param_name` at position `param_idx`: read only as a base-case return
-/// or as the target of a `.concat` whose result flows only into the
-/// matching argument of a recursive self-call.
-fn check_function_shape(f: &FuncDef, param_name: &str, param_idx: usize) -> bool {
+/// `param_name` at position `param_idx`. Returns the delegate edges this
+/// function's validity depends on (empty for a plain `.concat`-only
+/// leaf), or `None` if the shape isn't respected at all.
+fn check_function_shape(f: &FuncDef, param_name: &str, param_idx: usize) -> Option<Vec<Key>> {
     // A parameter never referenced at all would vacuously pass every check
     // below (nothing to disqualify it) and get seeded with a GrowBuf at
     // every call site that's then never finished or freed — require at
@@ -119,29 +232,35 @@ fn check_function_shape(f: &FuncDef, param_name: &str, param_idx: usize) -> bool
         }
     });
     if !saw_param {
-        return false;
+        return None;
     }
     let mut grow_temps: HashSet<String> = HashSet::new();
-    if check_block(&f.body, f, param_name, param_idx, &mut grow_temps) != Use::Safe {
-        return false;
+    let mut edges: Vec<Key> = Vec::new();
+    if check_block(&f.body, f, param_name, param_idx, &mut grow_temps, &mut edges) != Use::Safe {
+        return None;
     }
     // Every grow-temp introduced must actually be consumed by the matching
     // recursive-call argument somewhere; one left over means some control
     // path computed a grown value and never fed it onward — not the
     // recognized shape, don't guess, just decline the optimization.
-    grow_temps.is_empty()
+    if !grow_temps.is_empty() {
+        return None;
+    }
+    Some(edges)
 }
 
 /// Walk a block once, verifying every appearance of `param_name` and of
 /// any grow-temp derived from it. `grow_temps` accumulates temp names
-/// bound to `param_name.concat(...)` still awaiting their one legal use
-/// (the recursive-call argument); a name is removed once consumed.
+/// bound to a growth op (`.concat` or a delegate call) still awaiting
+/// their one legal use (the recursive-call argument); a name is removed
+/// once consumed. `edges` collects every delegate target discovered.
 fn check_block(
     block: &Block,
     f: &FuncDef,
     param_name: &str,
     param_idx: usize,
     grow_temps: &mut HashSet<String>,
+    edges: &mut Vec<Key>,
 ) -> Use {
     for stmt in &block.statements {
         match &stmt.kind {
@@ -155,13 +274,29 @@ fn check_block(
                     grow_temps.insert(name.0.clone());
                     continue;
                 }
+                if let Some((idx, callee)) = is_delegate_call_of(value, param_name, &f.name.0) {
+                    let ExprKind::Call { args, .. } = &value.kind else {
+                        unreachable!("is_delegate_call_of only matches ExprKind::Call")
+                    };
+                    let other_args_ok = args
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != idx)
+                        .all(|(_, (_, arg))| !expr_references_any(arg, param_name, grow_temps));
+                    if !other_args_ok {
+                        return Use::Disqualified;
+                    }
+                    edges.push((callee, idx));
+                    grow_temps.insert(name.0.clone());
+                    continue;
+                }
                 if expr_references_any(value, param_name, grow_temps) {
                     return Use::Disqualified;
                 }
             }
             StmtKind::Return(Some(e)) => {
                 if let Use::Disqualified =
-                    check_return_expr(e, f, param_name, param_idx, grow_temps)
+                    check_return_expr(e, f, param_name, param_idx, grow_temps, edges)
                 {
                     return Use::Disqualified;
                 }
@@ -172,11 +307,11 @@ fn check_block(
                     if expr_references_any(cond, param_name, grow_temps) {
                         return Use::Disqualified;
                     }
-                    if check_block(then_block, f, param_name, param_idx, grow_temps) == Use::Disqualified {
+                    if check_block(then_block, f, param_name, param_idx, grow_temps, edges) == Use::Disqualified {
                         return Use::Disqualified;
                     }
                     if let Some(eb) = else_block {
-                        if check_block(eb, f, param_name, param_idx, grow_temps) == Use::Disqualified {
+                        if check_block(eb, f, param_name, param_idx, grow_temps, edges) == Use::Disqualified {
                             return Use::Disqualified;
                         }
                     }
@@ -195,7 +330,7 @@ fn check_block(
         }
     }
     if let Some(ret) = &block.ret {
-        return check_return_expr(ret, f, param_name, param_idx, grow_temps);
+        return check_return_expr(ret, f, param_name, param_idx, grow_temps, edges);
     }
     Use::Safe
 }
@@ -214,6 +349,7 @@ fn check_return_expr(
     param_name: &str,
     param_idx: usize,
     grow_temps: &mut HashSet<String>,
+    edges: &mut Vec<Key>,
 ) -> Use {
     if let ExprKind::Id(id) = &e.kind {
         if id.0 == param_name {
@@ -230,11 +366,11 @@ fn check_return_expr(
         if expr_references_any(cond, param_name, grow_temps) {
             return Use::Disqualified;
         }
-        if check_block(then_block, f, param_name, param_idx, grow_temps) == Use::Disqualified {
+        if check_block(then_block, f, param_name, param_idx, grow_temps, edges) == Use::Disqualified {
             return Use::Disqualified;
         }
         if let Some(eb) = else_block {
-            return check_block(eb, f, param_name, param_idx, grow_temps);
+            return check_block(eb, f, param_name, param_idx, grow_temps, edges);
         }
         return Use::Safe;
     }
@@ -293,6 +429,34 @@ fn value_concat_arg(value: &Expr) -> &Expr {
         ExprKind::MethodCall { args, .. } => &args[0],
         _ => value,
     }
+}
+
+/// `Some((idx, callee))` when `value` is a call to a function OTHER than
+/// `self_name` with `param_name` appearing exactly once among its
+/// arguments, at position `idx`. `None` for the self-recursive call
+/// (handled separately in check_return_expr), for calls not referencing
+/// param_name at all, or for param_name appearing more than once (too
+/// unusual a shape to trust).
+fn is_delegate_call_of(value: &Expr, param_name: &str, self_name: &str) -> Option<(usize, String)> {
+    let ExprKind::Call { func, args } = &value.kind else {
+        return None;
+    };
+    let ExprKind::Id(fname) = &func.kind else {
+        return None;
+    };
+    if fname.0 == self_name {
+        return None;
+    }
+    let mut found: Option<usize> = None;
+    for (i, (_, arg)) in args.iter().enumerate() {
+        if matches!(&arg.kind, ExprKind::Id(id) if id.0 == param_name) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(i);
+        }
+    }
+    found.map(|i| (i, fname.0.clone()))
 }
 
 /// True if `e` references `param_name` anywhere, or references any name
@@ -482,14 +646,18 @@ fn walk_stmt<'a>(stmt: &'a Stmt, f: &mut impl FnMut(&'a Expr)) {
 }
 
 /// Whole-program call-site freshness check: every call anywhere to a
-/// candidate `(fn, idx)`, except the already-verified recursive self-call
-/// inside that same function's own body, must pass a bare list literal at
-/// that position.
+/// still-`valid` candidate, except a function's own verified recursive
+/// self-call, must pass either a bare list literal, or (a sanctioned
+/// delegation) the calling function's own tracked accumulator parameter
+/// at exactly the position phase 1 recorded as delegating to this
+/// candidate.
 fn walk_calls_for_freshness(
     block: &Block,
     caller: &FuncDef,
-    candidates: &GrowableAccumulators,
-    disqualified: &mut HashSet<(String, usize)>,
+    shapes: &HashMap<Key, Vec<Key>>,
+    valid: &HashSet<Key>,
+    caller_growable_param: Option<(usize, &str)>,
+    disqualified: &mut HashSet<Key>,
 ) {
     walk_block(block, &mut |e| {
         if let ExprKind::Call { func, args } = &e.kind {
@@ -497,7 +665,7 @@ fn walk_calls_for_freshness(
                 let is_self_recursive_call = fname.0 == caller.name.0;
                 for (i, (_, arg)) in args.iter().enumerate() {
                     let key = (fname.0.clone(), i);
-                    if !candidates.contains(&key) {
+                    if !valid.contains(&key) {
                         continue;
                     }
                     if is_self_recursive_call {
@@ -505,7 +673,16 @@ fn walk_calls_for_freshness(
                         // it's either param_name or a consumed grow-temp.
                         continue;
                     }
-                    if !matches!(arg.kind, ExprKind::ListLit(_)) {
+                    if matches!(arg.kind, ExprKind::ListLit(_)) {
+                        continue;
+                    }
+                    let is_sanctioned_delegation = match (&arg.kind, caller_growable_param) {
+                        (ExprKind::Id(id), Some((cidx, cname))) if id.0 == cname => shapes
+                            .get(&(caller.name.0.clone(), cidx))
+                            .is_some_and(|edges| edges.contains(&key)),
+                        _ => false,
+                    };
+                    if !is_sanctioned_delegation {
                         disqualified.insert(key);
                     }
                 }
