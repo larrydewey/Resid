@@ -234,13 +234,22 @@ impl<'a> Ctx<'a> {
         args: &[(Option<Id>, Expr)],
         env: &mut HashMap<String, CValue>,
     ) -> Option<bool> {
+        // Every argument/default expression must be evaluated against the
+        // caller's scope as it stood *before* this call's own parameters
+        // started binding — not against `env` as it's progressively
+        // overwritten below. Otherwise an argument expression referencing
+        // an identifier that happens to share a name with an earlier
+        // parameter of the callee reads that just-bound parameter value
+        // instead of the caller's variable (or correctly failing to
+        // reduce), silently folding a runtime call to the wrong constant.
+        let caller_env = env.clone();
         let mut bound: HashMap<String, bool> = HashMap::new();
         for (name_opt, arg) in args {
-            let v = self.eval(arg, env)?;
+            let v = self.eval(arg, &caller_env)?;
             let name = match name_opt {
                 Some(id) => id.0.clone(),
                 None => {
-                    
+
                     params
                         .iter()
                         .position(|p| !bound.contains_key(&p.name.0))
@@ -255,7 +264,7 @@ impl<'a> Ctx<'a> {
         }
         for p in params {
             if !bound.contains_key(&p.name.0) {
-                let dv = p.default.as_ref().and_then(|d| self.eval(d, env))?;
+                let dv = p.default.as_ref().and_then(|d| self.eval(d, &caller_env))?;
                 env.insert(p.name.0.clone(), dv);
             }
         }
