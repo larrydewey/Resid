@@ -6914,6 +6914,73 @@ Int main() { run_demo(); return 0; }"#,
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
+fn run_sandbox_force_time_guard_present() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sandbox-guard-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("guard.resid");
+    std::fs::write(
+        &file,
+        r#"sandbox (filesystem) {
+    Int read_demo() {
+        Str d = filesystem.read_all("data.txt");
+        return str_len(d);
+    }
+}
+Int main() { println(IntToString(read_demo())); return 0; }"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&file).arg("emit-ir").current_dir(&dir).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "emit-ir should succeed: {}", String::from_utf8_lossy(&out.stderr));
+    let ir = String::from_utf8_lossy(&out.stdout);
+    // The force-time capability guard (spec §21.3: dynamic/residual
+    // requirements fail at force time) must be wired into provider calls in
+    // sandboxed regions.
+    assert!(ir.contains("resid_cap_check"), "IR must contain the force-time resid_cap_check guard: {ir}");
+    assert!(ir.contains("resid_cap_enter"), "IR must contain resid_cap_enter: {ir}");
+    assert!(ir.contains("resid_cap_leave"), "IR must contain resid_cap_leave: {ir}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+#[test]
+fn run_sandbox_force_time_guard_fires() {
+    // Drive the runtime guard directly: compile `resid_rt.c` together with a
+    // tiny C harness that enters a granted set lacking `filesystem` and then
+    // forces a capability check. The check must fail at force time (spec
+    // §21.3) — the process aborts (no spawn catch) with the capability error.
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sandbox-guard-fire-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let rt = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resid_rt.c");
+    let c = dir.join("harness.c");
+    std::fs::write(
+        &c,
+        r#"#include <stdio.h>
+extern void resid_cap_enter(const char* const* caps, long n);
+extern void resid_cap_check(const char* cap);
+int main(void) {
+    const char* caps[] = { "network" };
+    resid_cap_enter(caps, 1);
+    resid_cap_check("filesystem");
+    printf("unreachable\n");
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let bin = dir.join("harness");
+    let out = Command::new("clang")
+        .arg(&c)
+        .arg(&rt)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-pthread")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "clang link failed: {}", String::from_utf8_lossy(&out.stderr));
+    let run = Command::new(&bin).output().unwrap();
+    assert_ne!(run.status.code(), Some(0), "resid_cap_check must abort when the capability is not granted");
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(err.contains("capability not granted: filesystem"), "stderr should carry the capability error: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+#[test]
 fn run_generic_numeric_behaviors() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-genbeh-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

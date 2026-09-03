@@ -9,13 +9,14 @@
 
 ## 0. Current Snapshot
 
-**742 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 245,
+**744 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 245,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 105 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + 107 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `run_sandbox_handle_entry_file_argument`,
+`run_sandbox_force_time_guard_present`, `run_sandbox_force_time_guard_fires`,
 `build_cache_invalidates_on_import_change`,
 `run_behavior_ord_sort`, `bootstrap_behavior_ord_parity`,
 `run_sandbox_enforcement`, `run_map_set_types`,
@@ -406,10 +407,10 @@ residual computation emitted, notes + provenance sidecar produced).
 The §7 spec-conformance roadmap is now effectively complete — every
 curated item has landed in at least stage-1 (many in both pipelines).
 Remaining work is the trailing gaps enumerated in §7's item 1 (§21
-sandboxing): runtime/force-time dynamic capability errors and the §21.4
-knowledge-cache gating, plus a fuller per-verb capability-mode lattice —
-and driving the remaining features into stage-2 parity. Inline
-File-argument value provenance (§21.3) is now tracked.
+sandboxing): the §21.4 knowledge-cache gating and a fuller per-verb
+capability-mode lattice — and driving the remaining features into stage-2
+parity. Inline File-argument value provenance (§21.3) and runtime
+force-time capability errors (§21.3) are now implemented.
 
 ---
 
@@ -449,20 +450,24 @@ parity remains for the stage-1-only features.
    flatten; type checker enforces static ceiling on `@requires` (hard
    error when exceeded). ✅ DONE: transitive attenuation closure
    (call-graph meet fixpoint), manifest (per-dependency) capability
-   ceilings (§21.1, enforced at type check — see §7). Still missing:
-dynamic/residual capability errors (runtime force-time checking not
-implemented); handle-entry rules ✅ (compile-time front complete —
-acquisition enforced via provider-family checks; File method provenance
-`read_handle`/`close` tracked in restricted regions; value provenance for
-handles passed as values across function boundaries — File **parameters**
-enforced via the §21.3 entry rule, e2e
-`run_sandbox_handle_entry_file_param`, and **File values passed as inline
-call arguments** now tracked too, e2e `run_sandbox_handle_entry_file_argument`));
-**capability modes (spec §21)** — `filesystem(readonly)` now enforced:
-a read-only grant rejects write verbs (`filesystem.write_all`) at the call
-site, surviving the transitive-attenuation closure (e2e
-`run_sandbox_capability_mode_readonly`); §21.4 knowledge-cache capability
-gating (deferred: no CBOR store in build path).
+   ceilings (§21.1, enforced at type check — see §7). ✅ DONE: force-time
+   capability errors (spec §21.3 "dynamic or residual… fails at force
+   time") — every provider call emits a `resid_cap_check(family)` and each
+   sandboxed function wraps its body in `resid_cap_enter/leave` over a
+   thread-local granted set in `resid_rt.c`; e2e
+   `run_sandbox_force_time_guard_present`/`run_sandbox_force_time_guard_fires`.
+   handle-entry rules ✅ (compile-time front complete —
+   acquisition enforced via provider-family checks; File method provenance
+   `read_handle`/`close` tracked in restricted regions; value provenance for
+   handles passed as values across function boundaries — File **parameters**
+   enforced via the §21.3 entry rule, e2e
+   `run_sandbox_handle_entry_file_param`, and **File values passed as inline
+   call arguments** now tracked too, e2e `run_sandbox_handle_entry_file_argument`));
+   **capability modes (spec §21)** — `filesystem(readonly)` now enforced:
+   a read-only grant rejects write verbs (`filesystem.write_all`) at the call
+   site, surviving the transitive-attenuation closure (e2e
+   `run_sandbox_capability_mode_readonly`); §21.4 knowledge-cache capability
+   gating (deferred: no CBOR store in build path).
 2. §12 Constraint types — ✅ DONE (stage-1): both syntaxes (`Int[value > 0]`
     and `Int where value > 0`) parse, resolve to a `Refined` semantic type,
     and are discharged on annotated bindings (statically-known integer
@@ -791,15 +796,23 @@ fixpoint over the call graph) computes an effective ceiling per function as
 capabilities = […]` now enforced at type check as the dependency's
 effective ceiling (see §7 "Progress on item 1" above).
 
-**Remaining gaps**: dynamic/residual capability errors (runtime force-time
-checking not implemented); handle-entry enforcement now complete on the
+**Remaining gaps**: handle-entry enforcement now complete on the
 compile-time front — acquisition enforced, File method provenance for
 `read_handle`/`close` tracked in restricted regions, File **parameters**
 crossing the boundary enforced via the §21.3 entry rule (e2e
 `run_sandbox_handle_entry_file_param`), and **File values passed as inline
 call arguments** into restricted callees now tracked too (spec §21.3 value
-provenance; e2e `run_sandbox_handle_entry_file_argument`); §21.4
-knowledge-cache gating (deferred); capability modes currently
+provenance; e2e `run_sandbox_handle_entry_file_argument`); **force-time
+capability errors (spec §21.3 "residual… fails at force time") now
+implemented** — each provider call emits a `resid_cap_check(family)` guard
+and each sandboxed function wraps its body in `resid_cap_enter/leave`,
+backed by a thread-local granted-set stack in `resid_rt.c` (family match on
+the `:ro`/`(` mode suffix). In fully-static legal programs the compile-time
+checker still rejects every apparent violation (so the runtime guard is the
+defense for dynamic/residual requirements): e2e
+`run_sandbox_force_time_guard_present` (IR carries the guard) and
+`run_sandbox_force_time_guard_fires` (a missing grant aborts at force time);
+§21.4 knowledge-cache gating (deferred); capability modes currently
 cover the `readonly`/`readwrite` markers with `filesystem.write_all` and
 `process.run` as the classified write verbs — a fuller per-verb mode lattice
 (`git(readonly)` scope, etc.) is future work. See the capability-mode

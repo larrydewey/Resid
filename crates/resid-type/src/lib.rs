@@ -716,7 +716,11 @@ pub fn numeric_type_from_surface(s: &str) -> Option<SemType> {
 /// `crates/residc/resid_rt.c`, and a dispatch arm in `resid-codegen`'s
 /// `lower_provider_call`. Any new provider name must also be added to the
 /// parser's `is_provider_name` and enabled as a callable root there.
-pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemType)> {
+/// Provider verbs. Each entry is `(provider, verb, params, ret, capability)`:
+/// `capability` is the capability family (spec §21) required to invoke the
+/// verb, used both for static ceiling checks and the force-time
+/// `resid_cap_check` guard emitted by codegen (spec §21.3).
+pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemType, &'static str)> {
     vec![
         // filesystem
         (
@@ -724,24 +728,28 @@ pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemTyp
             "exists",
             vec![SemType::Str],
             SemType::Bool,
+            "filesystem",
         ),
         (
             "filesystem",
             "list_dir",
             vec![SemType::Str],
             SemType::List(Box::new(SemType::Str)),
+            "filesystem",
         ),
         (
             "filesystem",
             "read_all",
             vec![SemType::Str],
             SemType::Str,
+            "filesystem",
         ),
         (
             "filesystem",
             "write_all",
             vec![SemType::Str, SemType::Str],
             SemType::Bool,
+            "filesystem",
         ),
         // File handles (spec §16): `filesystem.open` acquires an
         // identity-bearing resource; `filesystem.close` releases it explicitly
@@ -751,42 +759,60 @@ pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemTyp
             "open",
             vec![SemType::Str],
             SemType::File,
+            "filesystem",
         ),
         (
             "filesystem",
             "read_handle",
             vec![SemType::File],
             SemType::Str,
+            "filesystem",
         ),
         (
             "filesystem",
             "close",
             vec![SemType::File],
             SemType::Bool,
+            "filesystem",
         ),
         // environment
-        ("environment", "get", vec![SemType::Str], SemType::Str),
+        (
+            "environment",
+            "get",
+            vec![SemType::Str],
+            SemType::Str,
+            "environment",
+        ),
         (
             "environment",
             "has",
             vec![SemType::Str],
             SemType::Bool,
+            "environment",
         ),
         // git
-        ("git", "rev", vec![SemType::Str], SemType::Str),
-        ("git", "branch", vec![], SemType::Str),
+        (
+            "git",
+            "rev",
+            vec![SemType::Str],
+            SemType::Str,
+            "git",
+        ),
+        ("git", "branch", vec![], SemType::Str, "git"),
         // args: command-line arguments (spec §32)
         (
             "args",
             "count",
             vec![],
             SemType::Numeric(NumericType::Int(IntWidth::B64)),
+            "args",
         ),
         (
             "args",
             "get",
             vec![SemType::Numeric(NumericType::Int(IntWidth::B64))],
             SemType::Str,
+            "args",
         ),
         // process: run an external command, returns its exit code (spec §32)
         (
@@ -794,6 +820,7 @@ pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemTyp
             "run",
             vec![SemType::Str],
             SemType::Numeric(NumericType::Int(IntWidth::B64)),
+            "process",
         ),
     ]
 }
@@ -2185,14 +2212,14 @@ fn infer_provider_call(
     let verbs = provider_verbs();
     let entry = verbs
         .iter()
-        .find(|(p, v, _, _)| p == &provider.0 && v == &verb.0)
+        .find(|(p, v, _, _, _)| p == &provider.0 && v == &verb.0)
         .ok_or_else(|| {
             err(
                 span,
                 format!("provider `{}` has no verb `{}`", provider.0, verb.0),
             )
         })?;
-    let (_, _, param_tys, ret) = entry;
+    let (_, _, param_tys, ret, _) = entry;
     if args.len() != param_tys.len() {
         return Err(err(
             span,
