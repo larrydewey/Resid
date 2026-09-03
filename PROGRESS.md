@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**729 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
+**730 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 237,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 102 e2e incl.
+  resid-graph 4, resid-builtin 0, residc 0 unit + 103 e2e incl.
 `len_arg_and_cross_module_recursive_list_builder`,
 `run_h2_post_and_continuation_in_resid`,
 `build_cache_invalidates_on_import_change`,
@@ -39,7 +39,7 @@ LLVM; only the comptime path was wrong. e2e
 
 **Stage-1 DONE** (both Option and Result; e2e `run_question_sugar_option_and_result`).
 
-**Stage-2 DONE**: Option `?`/`else` fully implemented and parity-verified (`bootstrap_question_else_parity`; byte-identical output `22\n-1\n5\n-2`). All 11 bootstrap e2e pass. Result `?`/`else` typechecker has `Ok`/`Err` constructors, `match` arms, `?`/`else` typing; codegen has `?`/`else` lowering with tag dispatch. Expected-type threading for `Ok`/`Err` hole adoption now complete: `Result(Int, Str) a = Err("boom"); a else {-5}` works without explicit type annotations. Binding declares the full `Result(A, B)` type; bare `Err(v)` adopts the Ok half from the declared type; bare `Ok(v)` adopts the Err half. Depth-aware type-list splitting (`split_type_at`/`split_type_list` in typecheck, `find_sep_depth`/`split_rest_depth` in codegen) fixes naive comma-split on `Result(Int, Str)` params. Whitespace robustness: `res_elem_err`/`res_elem_ok`/`opt_elem` now strip/skip whitespace after commas.
+**Stage-2 DONE**: Option `?`/`else` fully implemented and parity-verified (`bootstrap_question_else_parity`; byte-identical output `2\n-1\n-5\n7\n-1\n42\n-2` through Rust residc AND the driver). All 11 bootstrap e2e pass. Result `?`/`else` typechecker has `Ok`/`Err` constructors, `match` arms, `?`/`else` typing; codegen has `?`/`else` lowering with tag dispatch. Expected-type threading for `Ok`/`Err` hole adoption now complete: `Result(Int, Str) a = Err("boom"); a else {-5}` works without explicit type annotations. Binding declares the full `Result(A, B)` type; bare `Err(v)` adopts the Ok half from the declared type; bare `Ok(v)` adopts the Err half. Depth-aware type-list splitting (`split_type_at`/`split_type_list` in typecheck, `find_sep_depth`/`split_rest_depth` in codegen) fixes naive comma-split on `Result(Int, Str)` params. Whitespace robustness: `res_elem_err`/`res_elem_ok`/`opt_elem` now strip/skip whitespace after commas.
 Full e2e suite runtime ≈ 15 min (slow: live-network h2/TLS + bootstrap
 driver runs) — not a hang; use `cargo test -p residc --test e2e -- <filter>`.
 Frontend → LLVM → native binaries fully working; **stage-2 self-hosting

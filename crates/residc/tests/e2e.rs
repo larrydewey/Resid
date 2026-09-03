@@ -6115,6 +6115,108 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+/// `value?` sugar and `else` fallback (spec §23) for Option AND Result,
+/// with the Result type-hole adoption at bind sites (the newly-completed
+/// driver SSA hole-filling). Self-hosting parity: byte-identical output
+/// across the Rust pipeline and the stage-2 driver.
+#[test]
+fn bootstrap_question_else_parity() {
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let dir = std::env::temp_dir().join(format!("residc-q-else-parity-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("qel.resid");
+    std::fs::write(
+        &file,
+        r#"Result(Int, Str) divide(Int a, Int b) {
+    if (b == 0) { return Err("div0"); }
+    return Ok(a / b);
+}
+
+Result(Int, Str) half(Result(Int, Str) r) {
+    Int v = r?;
+    Int d = v / 2;
+    return Ok(d);
+}
+
+Option(Int) twice(Option(Int) m) {
+    Int x = m?;
+    Int d = x * 2;
+    if (d > 100) { return None; }
+    return Some(d);
+}
+
+Int main() {
+    Result(Int, Str) c = half(divide(10, 2));
+    Int cv = c else { -1 };
+    println(IntToString(cv));
+    Result(Int, Str) e = half(divide(3, 0));
+    Int ev = e else { -1 };
+    println(IntToString(ev));
+    Result(Int, Str) a = Err("boom");
+    Int av = a else { -5 };
+    println(IntToString(av));
+    Result(Int, Str) ok = Ok(7);
+    Int okv = ok else { -1 };
+    println(IntToString(okv));
+    Option(Int) n = None;
+    Int nv = n else { -1 };
+    println(IntToString(nv));
+    Option(Int) s = Some(21);
+    Option(Int) t = twice(s);
+    Int tv = t else { -1 };
+    println(IntToString(tv));
+    Option(Int) n2 = None;
+    Option(Int) t2 = twice(n2);
+    Int t2v = t2 else { -2 };
+    println(IntToString(t2v));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    // Stage-1: Rust pipeline.
+    let s1 = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("stage-1 residc run failed");
+    assert_eq!(s1.status.code(), Some(0), "{}", String::from_utf8_lossy(&s1.stderr));
+    let out1 = String::from_utf8_lossy(&s1.stdout).into_owned();
+
+    // Stage-2: self-hosted driver.
+    let bin = dir.join("qel_drv");
+    let s2 = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("stage-2 driver run failed");
+    assert_eq!(
+        s2.status.code(),
+        Some(0),
+        "driver failed: {}",
+        String::from_utf8_lossy(&s2.stderr)
+    );
+    let run = Command::new(&bin).output().expect("binary failed");
+    assert_eq!(run.status.code(), Some(0));
+    let out2 = String::from_utf8_lossy(&run.stdout).into_owned();
+
+    // Byte-identical program output across both compilers.
+    assert_eq!(out1, "2\n-1\n-5\n7\n-1\n42\n-2\n");
+    assert_eq!(out1, out2, "pipeline divergence:\nstage1={out1:?}\nstage2={out2:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
 /// Consuming Option values via `match` (spec §13) — Some/None arms, payload
 /// binding, arm order independent of variant. Self-hosting parity check.
 #[test]
