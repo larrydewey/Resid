@@ -4032,7 +4032,21 @@ fn enforce_transitive_attenuation(
                     }
                 }
             }
-            walk_spawn_cap_env(&f.body, parent_caps.as_deref(), sigs, errs);
+            // Seed the walk with any File-typed parameter names so that a File
+            // handle value passed through the body as an *inline call argument*
+            // is tracked for §21.3 value provenance (not just at declaration).
+            let file_params: Vec<String> = sigs
+                .get(&f.name.0)
+                .map(|s| {
+                    s.params
+                        .iter()
+                        .zip(f.params.iter())
+                        .filter(|(pt, _)| matches!(pt, SemType::File))
+                        .map(|(_, p)| p.name.0.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            walk_spawn_cap_env(&f.body, parent_caps.as_deref(), sigs, errs, &file_params);
         }
     }
 }
@@ -4051,12 +4065,47 @@ fn walk_spawn_cap_env(
     parent: Option<&[String]>,
     sigs: &Signatures,
     errs: &mut Vec<TypeError>,
+    file_params: &[String],
 ) {
+    // `file_bindings` tracks the set of local names currently bound to a
+    // `File` handle value (declared via a `File`-typed binding/param, a
+    // `with (File h = …)` handle, or a destructure). Spec §21.3: a handle may
+    // enter a restricted region only when every capability it requires is ≤ the
+    // region's granted set. When such a File value is passed as an *inline call
+    // argument* inside a region whose ceiling lacks `filesystem`, that is a
+    // handle-entry (value-provenance) violation, rejected at compile time.
+    let mut file_bindings: std::collections::HashSet<String> =
+        file_params.iter().cloned().collect();
+    // Is the (possibly residual/refined) type annotation a `File` handle type?
+    fn is_file_type(t: &Type) -> bool {
+        match t {
+            Type::Base { name, .. } => name.0 == "File",
+            Type::Residual(inner) => is_file_type(inner),
+            Type::Refined { base, .. } => is_file_type(base),
+            _ => false,
+        }
+    }
+    // Does `arg` reference a File-typed binding at its value-producing head?
+    // (Cheap, sound-in-practice check: a bare file handle `Id`, or a wrapped
+    // cast/Known of one — matches how handles are passed at call sites.)
+    fn arg_is_file(e: &Expr, file_bindings: &std::collections::HashSet<String>) -> bool {
+        if let ExprKind::Id(name) = &e.kind {
+            return file_bindings.contains(&name.0);
+        }
+        if let ExprKind::Cast { operand, .. }
+        | ExprKind::Known(operand)
+        | ExprKind::RtKnown(operand) = &e.kind
+        {
+            return arg_is_file(operand, file_bindings);
+        }
+        false
+    }
     fn walk_expr(
         e: &Expr,
         parent: Option<&[String]>,
         sigs: &Signatures,
         errs: &mut Vec<TypeError>,
+        file_bindings: &mut std::collections::HashSet<String>,
     ) {
         match &e.kind {
             ExprKind::Spawn { capabilities, body } => {
@@ -4074,7 +4123,7 @@ fn walk_spawn_cap_env(
                         }
                     }
                 }
-                walk_block(body, Some(&caps), sigs, errs);
+                walk_block(body, Some(&caps), sigs, errs, file_bindings);
             }
             ExprKind::Call { func, args } => {
                 if let Some(p) = parent {
@@ -4094,15 +4143,28 @@ fn walk_spawn_cap_env(
                             }
                         }
                     }
+                    // §21.3 handle-entry (value provenance): passing a File
+                    // handle value as an inline argument requires `filesystem`.
+                    if !caps_contain_family(p, "filesystem")
+                        && args.iter().any(|(_, a)| arg_is_file(a, file_bindings))
+                    {
+                        errs.push(err(
+                            &e.span,
+                            format!(
+                                "call passes a File handle value as an argument into a region whose capability set [{}] does not grant `filesystem` (spec §21.3: a handle may enter a sandbox only when every capability it requires is ≤ the sandbox's set)",
+                                p.join(", "),
+                            ),
+                        ));
+                    }
                 }
-                walk_expr(func, parent, sigs, errs);
+                walk_expr(func, parent, sigs, errs, file_bindings);
                 for (_, a) in args {
-                    walk_expr(a, parent, sigs, errs);
+                    walk_expr(a, parent, sigs, errs, file_bindings);
                 }
             }
             ExprKind::BinaryOp { lhs, rhs, .. } => {
-                walk_expr(lhs, parent, sigs, errs);
-                walk_expr(rhs, parent, sigs, errs);
+                walk_expr(lhs, parent, sigs, errs, file_bindings);
+                walk_expr(rhs, parent, sigs, errs, file_bindings);
             }
             ExprKind::UnaryOp { operand, .. }
             | ExprKind::Rt(operand)
@@ -4112,26 +4174,26 @@ fn walk_spawn_cap_env(
             | ExprKind::RtKnown(operand)
             | ExprKind::ComptimePrint(operand)
             | ExprKind::Cast { operand, .. }
-            | ExprKind::Discard(operand) => walk_expr(operand, parent, sigs, errs),
+            | ExprKind::Discard(operand) => walk_expr(operand, parent, sigs, errs, file_bindings),
             ExprKind::If {
                 cond,
                 then_block,
                 else_block,
                 ..
             } => {
-                walk_expr(cond, parent, sigs, errs);
-                walk_block(then_block, parent, sigs, errs);
+                walk_expr(cond, parent, sigs, errs, file_bindings);
+                walk_block(then_block, parent, sigs, errs, file_bindings);
                 if let Some(b) = else_block {
-                    walk_block(b, parent, sigs, errs);
+                    walk_block(b, parent, sigs, errs, file_bindings);
                 }
             }
             ExprKind::While { cond, body, .. } => {
-                walk_expr(cond, parent, sigs, errs);
-                walk_block(body, parent, sigs, errs);
+                walk_expr(cond, parent, sigs, errs, file_bindings);
+                walk_block(body, parent, sigs, errs, file_bindings);
             }
             ExprKind::ForIn { collection, body, .. } => {
-                walk_expr(collection, parent, sigs, errs);
-                walk_block(body, parent, sigs, errs);
+                walk_expr(collection, parent, sigs, errs, file_bindings);
+                walk_block(body, parent, sigs, errs, file_bindings);
             }
             ExprKind::For {
                 init,
@@ -4141,49 +4203,49 @@ fn walk_spawn_cap_env(
                 ..
             } => {
                 if let Some(i) = init {
-                    walk_stmt(i, parent, sigs, errs);
+                    walk_stmt(i, parent, sigs, errs, file_bindings);
                 }
-                walk_expr(cond, parent, sigs, errs);
+                walk_expr(cond, parent, sigs, errs, file_bindings);
                 if let Some(s) = step {
-                    walk_stmt(s, parent, sigs, errs);
+                    walk_stmt(s, parent, sigs, errs, file_bindings);
                 }
-                walk_block(body, parent, sigs, errs);
+                walk_block(body, parent, sigs, errs, file_bindings);
             }
             ExprKind::Match { scrutinee, arms } => {
-                walk_expr(scrutinee, parent, sigs, errs);
+                walk_expr(scrutinee, parent, sigs, errs, file_bindings);
                 for (_, arm) in arms {
-                    walk_expr(arm, parent, sigs, errs);
+                    walk_expr(arm, parent, sigs, errs, file_bindings);
                 }
             }
             ExprKind::Assert { cond, message, .. }
             | ExprKind::RtAssert { cond, message, .. } => {
-                walk_expr(cond, parent, sigs, errs);
-                walk_expr(message, parent, sigs, errs);
+                walk_expr(cond, parent, sigs, errs, file_bindings);
+                walk_expr(message, parent, sigs, errs, file_bindings);
             }
             ExprKind::StructLit { fields, .. } => {
                 for (_, v) in fields {
-                    walk_expr(v, parent, sigs, errs);
+                    walk_expr(v, parent, sigs, errs, file_bindings);
                 }
             }
             ExprKind::ListLit(elems) | ExprKind::SetLit(elems) => {
                 for el in elems {
-                    walk_expr(el, parent, sigs, errs);
+                    walk_expr(el, parent, sigs, errs, file_bindings);
                 }
             }
             ExprKind::MapLit(entries) => {
                 for (k, v) in entries {
-                    walk_expr(k, parent, sigs, errs);
-                    walk_expr(v, parent, sigs, errs);
+                    walk_expr(k, parent, sigs, errs, file_bindings);
+                    walk_expr(v, parent, sigs, errs, file_bindings);
                 }
             }
             ExprKind::Range { start, end, .. } => {
-                walk_expr(start, parent, sigs, errs);
-                walk_expr(end, parent, sigs, errs);
+                walk_expr(start, parent, sigs, errs, file_bindings);
+                walk_expr(end, parent, sigs, errs, file_bindings);
             }
             ExprKind::FString(parts) => {
                 for part in parts {
                     if let FStringPart::Expr(inner) = part {
-                        walk_expr(inner, parent, sigs, errs);
+                        walk_expr(inner, parent, sigs, errs, file_bindings);
                     }
                 }
             }
@@ -4198,7 +4260,7 @@ fn walk_spawn_cap_env(
             | ExprKind::WhileLet {
                 source: target, ..
             } => {
-                walk_expr(target, parent, sigs, errs);
+                walk_expr(target, parent, sigs, errs, file_bindings);
                 if let ExprKind::MethodCall { method, args, .. } = &e.kind {
                     // Handle provenance: known File methods require `filesystem` capability
                     if matches!(method.0.as_str(), "read_handle" | "close") {
@@ -4212,7 +4274,7 @@ fn walk_spawn_cap_env(
                         }
                     }
                     for a in args {
-                        walk_expr(a, parent, sigs, errs);
+                        walk_expr(a, parent, sigs, errs, file_bindings);
                     }
                 }
                 if let ExprKind::IfLet {
@@ -4221,27 +4283,31 @@ fn walk_spawn_cap_env(
                     ..
                 } = &e.kind
                 {
-                    walk_block(then_block, parent, sigs, errs);
+                    walk_block(then_block, parent, sigs, errs, file_bindings);
                     if let Some(b) = else_block {
-                        walk_block(b, parent, sigs, errs);
+                        walk_block(b, parent, sigs, errs, file_bindings);
                     }
                 }
                 if let ExprKind::WhileLet { body, .. } = &e.kind {
-                    walk_block(body, parent, sigs, errs);
+                    walk_block(body, parent, sigs, errs, file_bindings);
                 }
             }
             ExprKind::Slice { target, .. } => {
-                walk_expr(target, parent, sigs, errs);
+                walk_expr(target, parent, sigs, errs, file_bindings);
             }
             ExprKind::ElseFallback { value, fallback } => {
-                walk_expr(value, parent, sigs, errs);
-                walk_block(fallback, parent, sigs, errs);
+                walk_expr(value, parent, sigs, errs, file_bindings);
+                walk_block(fallback, parent, sigs, errs, file_bindings);
             }
             ExprKind::With { bindings, body } => {
                 for b in bindings {
-                    walk_expr(&b.init, parent, sigs, errs);
+                    walk_expr(&b.init, parent, sigs, errs, file_bindings);
+                    // A `with (File h = …)` handle is a File-typed value in scope.
+                    if is_file_type(&b.type_) {
+                        file_bindings.insert(b.name.0.clone());
+                    }
                 }
-                walk_block(body, parent, sigs, errs);
+                walk_block(body, parent, sigs, errs, file_bindings);
             }
             ExprKind::ProviderCall { provider, verb, args, .. } => {
                 if let Some(p) = parent {
@@ -4258,7 +4324,7 @@ fn walk_spawn_cap_env(
                     }
                 }
                 for a in args {
-                    walk_expr(a, parent, sigs, errs);
+                    walk_expr(a, parent, sigs, errs, file_bindings);
                 }
             }
             ExprKind::Id(_)
@@ -4270,25 +4336,54 @@ fn walk_spawn_cap_env(
             | ExprKind::Unimplemented(_) => {}
         }
     }
-    fn walk_stmt(s: &Stmt, parent: Option<&[String]>, sigs: &Signatures, errs: &mut Vec<TypeError>) {
+    fn walk_stmt(
+        s: &Stmt,
+        parent: Option<&[String]>,
+        sigs: &Signatures,
+        errs: &mut Vec<TypeError>,
+        file_bindings: &mut std::collections::HashSet<String>,
+    ) {
         match &s.kind {
-            StmtKind::Bind { value, .. }
-            | StmtKind::Discard(value)
+            StmtKind::Bind {
+                type_,
+                name,
+                value,
+                ..
+            } => {
+                if let Some(t) = type_ {
+                    if is_file_type(t) {
+                        file_bindings.insert(name.0.clone());
+                    }
+                }
+                walk_expr(value, parent, sigs, errs, file_bindings);
+            }
+            StmtKind::Discard(value)
             | StmtKind::Expr(value)
-            | StmtKind::Return(Some(value)) => walk_expr(value, parent, sigs, errs),
-            StmtKind::Destructure { source, .. } => walk_expr(source, parent, sigs, errs),
+            | StmtKind::Return(Some(value)) => walk_expr(value, parent, sigs, errs, file_bindings),
+            StmtKind::Destructure { source, .. } => walk_expr(source, parent, sigs, errs, file_bindings),
             StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
         }
     }
-    fn walk_block(b: &Block, parent: Option<&[String]>, sigs: &Signatures, errs: &mut Vec<TypeError>) {
+    fn walk_block(
+        b: &Block,
+        parent: Option<&[String]>,
+        sigs: &Signatures,
+        errs: &mut Vec<TypeError>,
+        file_bindings: &mut std::collections::HashSet<String>,
+    ) {
+        let before: Vec<String> = file_bindings.iter().cloned().collect();
         for st in &b.statements {
-            walk_stmt(st, parent, sigs, errs);
+            walk_stmt(st, parent, sigs, errs, file_bindings);
         }
         if let Some(r) = &b.ret {
-            walk_expr(r, parent, sigs, errs);
+            walk_expr(r, parent, sigs, errs, file_bindings);
+        }
+        // Scope exit: drop any File bindings introduced by this block.
+        for n in before {
+            file_bindings.remove(&n);
         }
     }
-    walk_block(block, parent, sigs, errs);
+    walk_block(block, parent, sigs, errs, &mut file_bindings);
 }
 
 fn type_check_block(
@@ -7990,6 +8085,105 @@ sandbox () {
         assert!(
             errs.is_empty(),
             "empty sandbox currently conflated with unrestricted; treating as no restriction: {:?}",
+            errs
+        );
+    }
+
+    // ─── §21.3 handle-entry rule: File VALUE as inline call argument ──
+
+    #[test]
+    fn handle_entry_file_argument_unrestricted_allowed() {
+        // An unrestricted function may pass a File handle value as a call
+        // argument (no ceiling imposes a `filesystem` requirement).
+        let src = r#"
+Int sink(File h) {
+    return 0;
+}
+Int open_and_forward(File f) {
+    Int r = sink(f);
+    return r;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "File values passed as call args in unrestricted code should pass, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn handle_entry_file_argument_matching_sandbox_allowed() {
+        // A restricted region whose ceiling grants `filesystem` may pass a File
+        // handle value as an inline call argument.
+        let src = r#"
+Int sink(File h) {
+    return 0;
+}
+sandbox (filesystem) {
+    Int forward(File f) {
+        Int r = sink(f);
+        return r;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "File values passed as call args under a filesystem-granting sandbox should pass, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn handle_entry_file_argument_into_restricted_region_rejected() {
+        // §21.3 value provenance: passing a File handle value as an inline call
+        // argument into a restricted region whose ceiling does NOT grant
+        // `filesystem` is rejected at compile time.
+        let src = r#"
+Int sink(File h) {
+    return 0;
+}
+sandbox (network) {
+    Int forward(File f) {
+        Int r = sink(f);
+        return r;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.iter().any(|e| e.message.contains("File handle value") && e.message.contains("filesystem")),
+            "expected an inline File-argument handle-entry violation, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn handle_entry_file_argument_from_outer_binding_rejected() {
+        // A local `File`-typed binding (here, from an outer scope via a File
+        // param) passed as an inline call argument inside a restricted region
+        // lacking `filesystem` is a value-provenance violation.
+        let src = r#"
+Int sink(File h) {
+    return 0;
+}
+sandbox (network) {
+    Int forward(File f) {
+        File local = f;
+        Int r = sink(local);
+        return r;
+    }
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.iter().any(|e| e.message.contains("File handle value") && e.message.contains("filesystem")),
+            "expected an inline File-argument handle-entry violation from a local File binding, got: {:?}",
             errs
         );
     }
