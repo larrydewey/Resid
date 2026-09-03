@@ -376,7 +376,7 @@ pub fn reduce_call(unit: &TranslationUnit, func: &Expr, args: &[(Option<Id>, Exp
     ctx.eval_block(&f.body, &env, true)
 }
 
-fn flatten_unit(unit: &TranslationUnit) -> Vec<Declaration> {
+pub(crate) fn flatten_unit(unit: &TranslationUnit) -> Vec<Declaration> {
     unit.declarations
         .iter()
         .flat_map(|d| match d {

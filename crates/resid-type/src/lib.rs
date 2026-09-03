@@ -13,6 +13,8 @@ pub use resid_ir::{
 
 mod reduce;
 pub use reduce::{CValue, reduce_call, reduce_expr};
+mod growable;
+pub use growable::{GrowableAccumulators, find_growable_accumulators};
 use resid_lexer::token::{Literal, Op as OpKind, Span};
 use resid_parser::{
     Block, CapabilityAnnotation, Declaration, Expr, ExprKind, FStringPart, FuncDef, Id, Pattern,

@@ -313,6 +313,24 @@ pub struct CodeGen<'ctx> {
     /// blowing the native stack: without a `tail` marker on the emitted
     /// LLVM call, every recursive step grows the call stack for real.
     tail_pos: bool,
+    /// `(function name, parameter index)` pairs resid-type's growable-
+    /// accumulator analysis proved safe to grow in place instead of
+    /// copying (see resid_type::find_growable_accumulators — the
+    /// soundness argument lives there, not here). Computed once in
+    /// `generate`.
+    growable: resid_type::GrowableAccumulators,
+    /// Name of the current function's growable accumulator parameter, if
+    /// it has one (set on entry to `lower_function`, cleared on exit).
+    /// While set, `.concat` on this exact identifier and a bare `return`
+    /// of it are lowered through the GrowBuf path instead of
+    /// resid_list_concat.
+    cur_growable_param: Option<String>,
+    /// Name of the function currently being lowered — used only to tell a
+    /// growable accumulator's own verified recursive self-call (pass the
+    /// GrowBuf through unchanged) apart from every other call site that
+    /// happens to target the same function-and-position pair (seed a
+    /// fresh GrowBuf from whatever normal value was just computed).
+    cur_fn_name: String,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -340,12 +358,16 @@ impl<'ctx> CodeGen<'ctx> {
                 declarations: Vec::new(),
             },
             tail_pos: false,
+            growable: resid_type::GrowableAccumulators::new(),
+            cur_growable_param: None,
+            cur_fn_name: String::new(),
         }
     }
 
     /// Generate a module for the whole translation unit.
     pub fn generate(&mut self, unit: &TranslationUnit) -> Result<(), String> {
         self.unit = unit.clone();
+        self.growable = resid_type::find_growable_accumulators(unit);
         self.sigs = resid_type::collect_signatures(unit);
         self.types = resid_type::collect_types(unit);
         self.behaviors = resid_type::collect_behaviors(unit).0;
@@ -662,6 +684,13 @@ impl<'ctx> CodeGen<'ctx> {
     ) -> Result<(), String> {
         let f = self.find_func(unit, name).ok_or("?")?;
         self.cur_file = f.span.file.clone();
+        self.cur_fn_name = name.to_string();
+        self.cur_growable_param = f
+            .params
+            .iter()
+            .enumerate()
+            .find(|(i, _)| self.growable.contains(&(name.to_string(), *i)))
+            .map(|(_, p)| p.name.0.clone());
         let enter_ret = resid_type::resolve_type_ctx(&f.ret, &self.types).unwrap_or(SemType::Bool);
         self.cur_ret = Some(enter_ret.clone());
         self.cap_ceiling = self
@@ -700,6 +729,7 @@ impl<'ctx> CodeGen<'ctx> {
                     self.tail_pos = matches!(ret_expr.kind, ExprKind::Call { .. });
                     let v = self.lower_expr(&mut sc, ret_expr, None)?;
                     self.tail_pos = false;
+                    let v = self.finish_growbuf_if_base_case(v, ret_expr)?;
                     let v = self.cast_val(v, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
                     self.emit_cap_leave()?;
                     self.builder.build_return(Some(&v.v)).map_err(to_err)?;
@@ -765,7 +795,28 @@ impl<'ctx> CodeGen<'ctx> {
                 }
             }
         }
+        self.cur_growable_param = None;
         Ok(())
+    }
+
+    /// If `ret_expr` is a bare reference to the current function's
+    /// growable-accumulator parameter (the base case, `return acc;`),
+    /// convert the GrowBuf `v` currently holds into a normal boxed List
+    /// via resid_growbuf_finish before it becomes this function's return
+    /// value — the one point where the buffer stops being a private
+    /// implementation detail and becomes an ordinary Resid value the rest
+    /// of the program can see. Anything else (in particular the
+    /// recursive tail call, `return f(..., acc2, ...);`) passes `v`
+    /// through unchanged: it's already a plain pointer argument, nothing
+    /// to convert.
+    fn finish_growbuf_if_base_case(&mut self, v: Val<'ctx>, ret_expr: &Expr) -> Result<Val<'ctx>, String> {
+        let is_base_case = matches!(&ret_expr.kind, ExprKind::Id(id) if self.cur_growable_param.as_deref() == Some(id.0.as_str()));
+        if !is_base_case {
+            return Ok(v);
+        }
+        let type_str = self.lower_str(&format!("{}", v.ty));
+        let finished = self.rt_call("resid_growbuf_finish", vec![v.v, type_str.into()])?;
+        Ok(Val { v: finished, ty: v.ty })
     }
 
     // ─── Statements ──────────────────────────────────────────────
@@ -869,6 +920,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 self.tail_pos = matches!(e.kind, ExprKind::Call { .. });
                                 let raw = self.lower_expr(sc, e, None)?;
                                 self.tail_pos = false;
+                                let raw = self.finish_growbuf_if_base_case(raw, e)?;
                                 let val = self
                                     .cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
                                 self.emit_cap_leave()?;
@@ -918,6 +970,7 @@ impl<'ctx> CodeGen<'ctx> {
                     self.tail_pos = matches!(ret.kind, ExprKind::Call { .. });
                     let raw = self.lower_expr(sc, ret, None)?;
                     self.tail_pos = false;
+                    let raw = self.finish_growbuf_if_base_case(raw, ret)?;
                     let val = self
                         .cast_val(raw, &self.cur_ret.clone().unwrap_or(SemType::Bool))?;
                     self.emit_cap_leave()?;
@@ -3545,6 +3598,10 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_unbox_u128", vec![ptr.into()], i128t.into());
         self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
         self.decl_rt("resid_list_concat", vec![ptr.into(), ptr.into()], ptr.into());
+        // Growable-accumulator fast path (perf; see resid_type::find_growable_accumulators).
+        self.decl_rt("resid_growbuf_from_list", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_growbuf_push_list", vec![ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_growbuf_finish", vec![ptr.into(), ptr.into()], ptr.into());
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
         // Force-time capability enforcement (spec §21.3).
         self.decl_rt_void("resid_cap_check", vec![ptr.into()]);
@@ -3957,6 +4014,22 @@ impl<'ctx> CodeGen<'ctx> {
             // handling Bool↔i8 conversion for C ABI compatibility.
             let param_ty = sig.params.get(i).cloned().unwrap_or(SemType::Bool);
             let av = self.widen_call_arg(av, &param_ty)?;
+            // Growable-accumulator seeding: this position is proven safe
+            // to grow in place (resid_type::find_growable_accumulators),
+            // and this ISN'T that function's own verified recursive
+            // self-call (which already carries a GrowBuf pointer, not a
+            // normal boxed value) — so `av` is a fresh, ordinarily-boxed
+            // value (a literal or whatever else the analysis proved
+            // nothing else can reference) that needs converting into the
+            // GrowBuf the callee's body expects to find in this
+            // parameter.
+            let is_self_recursive_call = *name == self.cur_fn_name;
+            let av = if self.growable.contains(&(name.to_string(), i)) && !is_self_recursive_call {
+                let g = self.rt_call("resid_growbuf_from_list", vec![av.v])?;
+                Val { v: g, ty: av.ty }
+            } else {
+                av
+            };
             llargs.push(av.v.into());
         }
         let cs = self
@@ -5265,7 +5338,17 @@ impl<'ctx> CodeGen<'ctx> {
             }
             ("concat", SemType::List(elem)) if args.len() == 1 => {
                 let av = self.lower_expr(sc, &args[0], None)?;
-                let v = self.rt_call("resid_list_concat", vec![tv.v, av.v])?;
+                // Growable-accumulator fast path (resid-type's
+                // find_growable_accumulators already proved this exact
+                // identifier is, at this exact point, the sole live
+                // reference to a GrowBuf, not a normal boxed List):
+                // append in place instead of copy-and-leak.
+                let is_growbuf_target = matches!(&target.kind, ExprKind::Id(id) if self.cur_growable_param.as_deref() == Some(id.0.as_str()));
+                let v = if is_growbuf_target {
+                    self.rt_call("resid_growbuf_push_list", vec![tv.v, av.v])?
+                } else {
+                    self.rt_call("resid_list_concat", vec![tv.v, av.v])?
+                };
                 Ok(Val {
                     v,
                     ty: SemType::List(elem.clone()),

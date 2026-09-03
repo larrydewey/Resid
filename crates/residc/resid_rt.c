@@ -372,6 +372,94 @@ void* resid_list_concat(void* a, void* b) {
     return out;
 }
 
+/* ── Growable accumulator buffer (perf: O(1)-amortized self-recursive
+ * accumulators, replacing per-step copy-and-leak via resid_list_concat) ──
+ *
+ * Private, opaque intermediate representation. Never exposed to, or
+ * producible by, any Resid construct except the compiler's own codegen
+ * for a function proven safe by resid-type's growable-accumulator
+ * analysis: a self-recursive parameter that starts life as a fresh list
+ * literal at *every* call site in the whole program and is never
+ * aliased, stored, returned early, or passed to anything but that same
+ * recursive call and List.concat. Under that proof, no other live
+ * reference to the buffer can exist anywhere, so growing and freeing it
+ * in place is sound — this is not a general list representation change,
+ * every other List(_) value in the program is still the plain,
+ * always-copy ResidVal path in resid_list_concat above.
+ *
+ * A GrowBuf is created once (resid_growbuf_from_list) from the seed
+ * value's elements, mutated in place across every recursive step
+ * (resid_growbuf_push_list, amortized doubling — realloc, never a fresh
+ * malloc-and-copy-and-leak-the-old-one), and converted to a normal boxed
+ * List (resid_growbuf_finish) exactly once, at the base case, by
+ * wrapping the *same* backing array — no final copy either. */
+typedef struct {
+    int64_t count;
+    int64_t capacity;
+    void** slots;
+} GrowBuf;
+
+static void* growbuf_new_raw(void** initial, int64_t n) {
+    GrowBuf* g = (GrowBuf*)malloc(sizeof(GrowBuf));
+    int64_t cap = n < 4 ? 4 : n * 2;
+    g->slots = (void**)malloc((size_t)cap * sizeof(void*));
+    for (int64_t i = 0; i < n; i++) g->slots[i] = initial[i];
+    g->count = n;
+    g->capacity = cap;
+    return g;
+}
+
+static void* growbuf_push_raw(void* buf, void** elems, int64_t n) {
+    GrowBuf* g = (GrowBuf*)buf;
+    int64_t needed = g->count + n;
+    if (needed > g->capacity) {
+        int64_t newcap = g->capacity * 2;
+        if (newcap < needed) newcap = needed;
+        g->slots = (void**)realloc(g->slots, (size_t)newcap * sizeof(void*));
+        g->capacity = newcap;
+    }
+    for (int64_t i = 0; i < n; i++) g->slots[g->count + i] = elems[i];
+    g->count = needed;
+    return g;
+}
+
+/* Codegen never builds a raw slot array itself — it always has a normal,
+ * already-lowered boxed List value on hand (a literal or the result of
+ * some other expression the analysis proved fresh), so the two entry
+ * points below take that directly: seed a new growbuf from one, or push
+ * one's elements onto an existing growbuf. Both free just the source
+ * list's ResidVal shell and its slots array afterward (never the element
+ * pointers themselves, which are shared into the growbuf exactly like
+ * resid_list_concat shares them today) — safe because the analysis that
+ * gates these call sites (resid-type's find_growable_accumulators) only
+ * ever allows a source value nothing else in the program can reference. */
+void* resid_growbuf_from_list(void* src) {
+    ResidVal* s = (ResidVal*)src;
+    void* g = growbuf_new_raw(s->slots, s->count);
+    free(s->slots);
+    free(s);
+    return g;
+}
+
+void* resid_growbuf_push_list(void* buf, void* src) {
+    ResidVal* s = (ResidVal*)src;
+    void* g = growbuf_push_raw(buf, s->slots, s->count);
+    free(s->slots);
+    free(s);
+    return g;
+}
+
+void* resid_growbuf_finish(void* buf, const char* type) {
+    GrowBuf* g = (GrowBuf*)buf;
+    ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
+    out->tag = 0;
+    out->count = g->count;
+    out->slots = g->slots;
+    out->type = type;
+    free(g);
+    return out;
+}
+
 /* Scalar boxes: ResidVal with tag=-1 and one slot holding the value. */
 void* resid_box_i64(int64_t v) {
     ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
