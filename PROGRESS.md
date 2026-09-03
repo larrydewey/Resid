@@ -870,5 +870,91 @@ progress subsections below.
   (`process(readonly)` `process.run` rejection in
   `run_sandbox_capability_mode_readonly`).
 
+---
+
+## 8. Persistent collection internals (List/Map/Set perf) — IN PROGRESS
+
+### Problem
+
+`resid_list_concat` and `resid_map_insert` (`crates/residc/resid_rt.c`)
+copy their entire backing array/table on every call and never free the
+old one: O(n) per operation, O(n²) total for the accumulator-style
+recursive builders used throughout `lib/` (`itob_acc`, `ke_build`,
+`ctr_take`, …), plus an unbounded leak. Confirmed directly: `aes128_gcm_seal`
+on 64KB plaintext didn't finish in 60s before any fix; `resid_map_insert`
+has the identical full-rehash-and-copy shape.
+
+### Rejected approaches (recorded so we don't re-litigate them)
+
+- **A compile-time uniqueness/escape analysis** (`resid-type`'s
+  `find_growable_accumulators`, landed in `3ee2455`/`bec2604`) proves a
+  narrow set of self-recursive (and now delegated) accumulator functions
+  safe to grow in place, with zero alias tracking — sound, tested, real
+  speedup (mk_data-shaped code: unbounded → 0.01s @ 200K elements;
+  `ctr_xor`/`ctr_take`: 27s → 9.7s @ 64KB). **Kept as a live optimization**
+  layered on top of whatever List becomes, but rejected as *the* fix: it's
+  a Rust-only static analysis with no equivalent in the self-hosted
+  stage-2 driver (`examples/typecheck.resid`/`codegen.resid`) — porting it
+  means re-implementing AST walking, sets, and a fixpoint in hand-rolled
+  string-emitting Resid, and the same tax recurs for every future
+  optimization of this kind.
+- **A new mutable, reference-semantic container type** (`MutList`/
+  `MutMap`/`MutSet`, Rust-`Vec`/`HashMap`-shaped) — real O(1) push, no
+  analysis needed, trivial to port (same shape as the existing `Map`/`Set`
+  builtin-type precedent). **Rejected**: Resid has no mutation anywhere in
+  the language today: this would introduce aliasing/reference semantics
+  as a new category alongside List/Str/Map/Set's pure value semantics —
+  a real violation of the language's cardinal immutability tenet, not
+  just an implementation detail.
+
+### Chosen approach: persistent (structurally-shared) data structures
+
+Represent `List` as a shallow 32-way branching trie instead of a flat
+array — the same technique Clojure's `PersistentVector` and Scala's
+`Vector` use. Appending copies only the path from root to the affected
+leaf (a handful of small nodes, O(log₃₂ n)); every other node is shared
+by pointer between the old and new value. **The old value is never
+touched** — this is not "mutation the compiler proves is safe to hide,"
+it's a genuinely different, faster representation of the exact same
+always-was-immutable value. `Map`/`Set` get the matching technique: a
+Hash Array Mapped Trie (HAMT), replacing `resid_map_insert`'s
+full-rehash-per-insert.
+
+Why this beats both rejected approaches:
+- **Zero tenet risk** — `List`/`Map`/`Set` stay exactly as observably
+  immutable as today; nothing for anyone to reason about differently.
+- **Free dual-pipeline parity** — lives entirely in `resid_rt.c`, which
+  both the Rust pipeline and the self-hosted stage-2 driver already link
+  against and call identically. Fix it once in the C runtime; stage-2
+  gets the speedup with *zero* codegen or type-checker changes on either
+  side. This is the thing that made the mutable-type and static-analysis
+  approaches a recurring "port it by hand again" tax — this approach has
+  no such tax.
+- **Generalizes uniformly** — one technique (path-copying trie), two
+  data structures (trie for sequence types, HAMT for associative types),
+  covers every collection.
+
+Honest tradeoff: O(log₃₂ n) per operation, not O(1) — a handful of
+pointer hops (log₃₂ of a billion ≈ 6) instead of a true single mutation.
+Far better than today's O(n) copy; not quite as fast as real mutation for
+the narrow cases the retained compile-time analysis above already
+handles specially.
+
+### Tracking checklist
+
+| Type | Backing today | Target | Status |
+|---|---|---|---|
+| `List(T)` | flat array, full copy per `.concat` (`resid_list_concat`) | 32-way persistent trie | **scoping now** |
+| `Map(K,V)` | flat bucket table, full rehash per `.insert` (`resid_map_insert`) | HAMT | not started |
+| `Set(T)` | same table as `Map` (`resid_set_insert` → `resid_map_insert`) | HAMT (shared with `Map`) | not started |
+| `Str` | same copy-per-concat shape as `List` (`resid_str_concat`) | TBD — rope, or defer | not started / needs a decision |
+
+Order: `List` first (prove the trie design and its test rig hard), then
+apply the same shape to `Map`/`Set` (HAMT). `Str` needs a separate call —
+a rope or similar is the analogous fix, but string workloads in `lib/`
+lean more on small fixed-size buffers (hex/byte formatting) than on the
+large-N accumulator pattern that motivated this; revisit once List/Map/Set
+are done and re-measure before committing to it.
+
 
 
