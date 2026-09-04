@@ -1298,6 +1298,12 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("resid_tcp_close", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Bool),
     // UTC civil timestamp YYYYMMDDHHMMSS for x509 validity checks.
     ("resid_utc_now_civil", &[], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    // Low-level list construction / concatenation / codepoint→string (h2.resid).
+    ("resid_list_new", &[SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Ptr, SemType::Str], SemType::Ptr),
+    ("resid_list_concat", &[SemType::Ptr, SemType::Ptr], SemType::Ptr),
+    ("resid_str_from_codepoints", &[SemType::Ptr], SemType::Str),
+    // `NULL` constant — the null pointer used for empty list markers.
+    ("NULL", &[], SemType::Ptr),
 ];
 
 /// Return the set of built-in (extern) function signatures.
@@ -1540,6 +1546,10 @@ pub fn infer_expr_ctx(
                         )))),
                     ],
                 });
+            }
+            // Built-in `NULL` — raw null pointer for low-level list construction.
+            if id.0 == "NULL" {
+                return Ok(SemType::Ptr);
             }
             Err(err(&expr.span, format!("undefined variable `{}`", id.0)))
         }

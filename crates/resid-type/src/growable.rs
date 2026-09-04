@@ -310,11 +310,10 @@ fn check_block(
                     if check_block(then_block, f, param_name, param_idx, grow_temps, edges) == Use::Disqualified {
                         return Use::Disqualified;
                     }
-                    if let Some(eb) = else_block {
-                        if check_block(eb, f, param_name, param_idx, grow_temps, edges) == Use::Disqualified {
+                    if let Some(eb) = else_block
+                        && check_block(eb, f, param_name, param_idx, grow_temps, edges) == Use::Disqualified {
                             return Use::Disqualified;
                         }
-                    }
                     continue;
                 }
                 if expr_references_any(e, param_name, grow_temps) {
@@ -375,8 +374,8 @@ fn check_return_expr(
         return Use::Safe;
     }
     if let ExprKind::Call { func, args } = &e.kind {
-        if let ExprKind::Id(fname) = &func.kind {
-            if fname.0 == f.name.0 {
+        if let ExprKind::Id(fname) = &func.kind
+            && fname.0 == f.name.0 {
                 // Recursive self-call: the argument at param_idx must be
                 // exactly param_name (trivial pass-through) or a
                 // still-live grow-temp (consuming it); every OTHER
@@ -397,7 +396,6 @@ fn check_return_expr(
                 }
                 return Use::Safe;
             }
-        }
         // A call to any other function: fine as long as it doesn't
         // reference param_name or a live temp anywhere in it.
         return if expr_references_any(e, param_name, grow_temps) {
@@ -414,13 +412,11 @@ fn check_return_expr(
 
 /// True when `value` is exactly `param_name.concat(inner)`.
 fn is_concat_of(value: &Expr, param_name: &str) -> bool {
-    if let ExprKind::MethodCall { target, method, args } = &value.kind {
-        if method.0 == "concat" && args.len() == 1 {
-            if let ExprKind::Id(id) = &target.kind {
+    if let ExprKind::MethodCall { target, method, args } = &value.kind
+        && method.0 == "concat" && args.len() == 1
+            && let ExprKind::Id(id) = &target.kind {
                 return id.0 == param_name;
             }
-        }
-    }
     false
 }
 
@@ -465,11 +461,10 @@ fn is_delegate_call_of(value: &Expr, param_name: &str, self_name: &str) -> Optio
 fn expr_references_any(e: &Expr, param_name: &str, live_temps: &HashSet<String>) -> bool {
     let mut found = false;
     walk_expr(e, &mut |sub| {
-        if let ExprKind::Id(id) = &sub.kind {
-            if id.0 == param_name || live_temps.contains(&id.0) {
+        if let ExprKind::Id(id) = &sub.kind
+            && (id.0 == param_name || live_temps.contains(&id.0)) {
                 found = true;
             }
-        }
         // Spawn bodies capture outer bindings by reference (see
         // resid-codegen's lower_spawn) — any reference to param_name or a
         // live temp inside one is a real escape, already covered by the
@@ -660,8 +655,8 @@ fn walk_calls_for_freshness(
     disqualified: &mut HashSet<Key>,
 ) {
     walk_block(block, &mut |e| {
-        if let ExprKind::Call { func, args } = &e.kind {
-            if let ExprKind::Id(fname) = &func.kind {
+        if let ExprKind::Call { func, args } = &e.kind
+            && let ExprKind::Id(fname) = &func.kind {
                 let is_self_recursive_call = fname.0 == caller.name.0;
                 for (i, (_, arg)) in args.iter().enumerate() {
                     let key = (fname.0.clone(), i);
@@ -687,6 +682,5 @@ fn walk_calls_for_freshness(
                     }
                 }
             }
-        }
     });
 }

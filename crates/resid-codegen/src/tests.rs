@@ -908,7 +908,7 @@ Int main() {
     cg.module.verify().expect("module failed verification");
 
     let ir = cg.module.print_to_string().to_string();
-    assert!(ir.contains("call ptr @resid_box_slot"), "expected box_slot for indexing: {ir}");
+    assert!(ir.contains("call ptr @resid_list_get"), "expected list_get for indexing: {ir}");
 }
 
 #[test]
