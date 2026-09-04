@@ -3633,6 +3633,8 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_str_concat", vec![ptr.into(), ptr.into()], ptr.into());
         // String equality (Str == Str / Str != Str) for the bootstrap lexer.
         self.decl_rt("resid_str_eq", vec![ptr.into(), ptr.into()], i8t.into());
+        // Build a Str from a List(Int) of Unicode codepoints (one-pass join).
+        self.decl_rt("resid_str_from_codepoints", vec![ptr.into()], ptr.into());
         // Trusted providers (spec §32): filesystem, environment, git.
         // Names must match the `resid_<provider>_<verb>` helpers in resid_rt.c.
         self.decl_rt("resid_fs_exists", vec![ptr.into()], i8t.into());
