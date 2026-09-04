@@ -902,8 +902,8 @@ in **both** pipelines. Rust pipeline (`crates/residc/resid_rt.c`,
 C functions (resp. `list_*` verbs / `resid_list_new`/`get`/`len`/`concat`)
 with full bootstrap parity (`bootstrap_behavior_ord_parity` and all 12
 `bootstrap_*`/`stage2_*` e2e green). The `run_value_formatting` `ToString`
-builtin-call bug is fixed. Map/Set (HAMT) and Str are not started (see
-checklist below).
+builtin-call bug is fixed. Map/Set (HAMT) is **implemented** in the Rust
+runtime (see checklist).
 
 ### Problem
 
@@ -1094,14 +1094,16 @@ function calls, the same way Map/Set already are.
 |---|---|---|---|
 | `List(T)`, Rust pipeline | 32-way persistent trie (`ResidList`) | — (done) | **implemented** |
 | `List(T)`, stage-2 (`codegen.resid`) | flat array + hand-rolled IR (`lst_emit`, `e.lconcat`, raw GEP indexing) | calls into the same `resid_list_*` C functions | **done — full bootstrap parity (`bootstrap_behavior_ord_parity` etc.)** |
-| `Map(K,V)` | flat bucket table, full rehash per `.insert` (`resid_map_insert`) | HAMT | not started |
-| `Set(T)` | same table as `Map` (`resid_set_insert` → `resid_map_insert`) | HAMT (shared with `Map`) | not started |
+| `Map(K,V)` | HAMT (32-way persistent hash trie, `resid_map_*`), replacing the flat bucket table | — (done) | **implemented** |
+| `Set(T)` | same HAMT as `Map` (`resid_set_insert` → `resid_map_insert`) | — (done) | **implemented** |
 | `Str` | same copy-per-concat shape as `List` (`resid_str_concat`) | TBD — rope, or defer | not started / needs a decision |
 
 Order, as agreed with the user (phased, commit after each phase):
 1. `List`, Rust pipeline — **done** (details above).
 2. `List`, stage-2 port — **done** (this session; parity verified).
-3. `Map`/`Set` (HAMT) — not started.
+3. `Map`/`Set` (HAMT) — **done** (32-way persistent trie in `resid_rt.c`,
+   shared by stage-1 and stage-2; verified by `run_map_set_types`,
+   `bootstrap_map_set_parity`, and an ASan/UBSan torture harness).
 4. `Str` — needs a separate design call (rope vs. defer); revisit once
    List/Map/Set are done and re-measure — `lib/` string workloads lean
    more on small fixed-size buffers (hex/byte formatting) than the

@@ -3810,19 +3810,138 @@ _Noreturn void resid_arith_overflow(void) {
  * comparable strings are interned.
  */
 
-#define MAP_INIT_CAP 16
+/* ─── Persistent Map / Set (Hash Array Mapped Trie) ──────────────────
+ * Slots hold boxed keys and values (resid_box_*), exactly like the flat
+ * table they replace. Strings hash by content; integers/booleans are
+ * string-ified (see resid_hash) — so hash/key-eq stay consistent for all
+ * key shapes.
+ *
+ * Representation: a shallow 32-way hash trie. Each map/set value is a
+ * persistent HMTrie { count, root }. Insert/remove copy only the nodes on
+ * the root-to-leaf path (O(log32 n)); all other nodes are shared by
+ * pointer, so the old value is never mutated — identical observable
+ * immutability to the prior whole-table copy, but O(log n) instead of
+ * O(n) per operation.
+ *
+ * Nodes: an INDEX node holds up to 32 children reached by 5 bits of the
+ * key hash per trie level. A slot holds either a leaf (HMPair) or a
+ * subnode (HMNode). On a full-hash collision the shared bits run out,
+ * so at HT_MAX_LEVEL the slot becomes a COLLISION node (a small bucket of
+ * pairs sharing a full hash). `kind` distinguishes the two.
+ */
+
+#define HT_DEGREE 32
+#define HT_SHIFT 5
+#define HT_MASK 31
+#define HT_MAX_LEVEL 12 /* 13 levels x 5 bits = 65 >= 64-bit hash */
 
 typedef struct {
-    void* key;
-    void* val;   /* NULL for set entries */
-    int used;
-} MapEntry;
+    void* key; /* boxed key */
+    void* val; /* boxed value (1 for set entries) */
+} HMPair;
 
+typedef struct HMNode {
+    uint32_t kind;   /* 0 = index node, 1 = collision node */
+    uint32_t used;   /* index: bitmap of occupied slots;
+                        collision: number of pairs */
+    void*    slot[32]; /* index: HMPair* (leaf) or HMNode* (sub);
+                          collision: pairs packed key,val,key,val,... */
+    uint32_t sub[32];  /* index: 1 if slot[i] is a subnode pointer */
+} HMNode;
+
+/* The map/set value handed out to Resid: a persistent trie root + size. */
 typedef struct {
-    MapEntry* buckets;
-    int64_t cap;
-    int64_t size;
-} ResidMap;
+    int64_t count;
+    HMNode* root; /* NULL for the empty container */
+} HMTrie;
+
+static uint64_t fnv1a(const char* s);
+
+/* A bare string key is a raw char* whose first byte is a normal character.
+ * A boxed value is a ResidVal whose tag is -1 = 0xFF...FF, so its first byte
+ * is 0xFF (never a valid UTF-8/ASCII lead byte, so never a string's first
+ * byte). Reading a single byte is safe for both, so we can branch without
+ * over-reading a short malloc'd string the way resid_box_tag would. */
+static int is_boxed(const void* v) {
+    return ((const unsigned char*)v)[0] == 0xFF;
+}
+
+/* Hash a Resid value for use as a map/set key. Bare strings hash by content;
+ * scalar boxes (box `type` "i64", "f64", "bool", "i128", "u128") hash by
+ * their numeric value formatted canonically; other boxes hash their type
+ * name. Hashing and equality agree, so this stays in lock-step with
+ * resid_key_eq. */
+static uint64_t resid_hash(void* v) {
+    if (!is_boxed(v)) {
+        /* Bare C string key. */
+        return fnv1a((const char*)v);
+    }
+    ResidVal* b = (ResidVal*)v;
+    int64_t tag = b->tag;
+    if (tag == -1) {
+        /* Scalar box — dispatch on the box type string. */
+        const char* t = b->type;
+        void* raw = resid_box_slot(v, 0);
+        char buf[64];
+        if (t && strcmp(t, "i64") == 0) {
+            snprintf(buf, sizeof(buf), "%lld", (long long)*(int64_t*)raw);
+            return fnv1a(buf);
+        }
+        if (t && strcmp(t, "f64") == 0) {
+            snprintf(buf, sizeof(buf), "%.17g", *(double*)raw);
+            return fnv1a(buf);
+        }
+        if (t && strcmp(t, "bool") == 0) {
+            return fnv1a(*(int8_t*)raw ? "t" : "f");
+        }
+        if (t && strcmp(t, "i128") == 0) {
+            snprintf(buf, sizeof(buf), "%lld", (long long)*(__int128*)raw);
+            return fnv1a(buf);
+        }
+        if (t && strcmp(t, "u128") == 0) {
+            snprintf(buf, sizeof(buf), "%llu", (unsigned long long)*(unsigned __int128*)raw);
+            return fnv1a(buf);
+        }
+        return fnv1a(t ? t : "?");
+    }
+    /* Boxed composite — hash its type name. */
+    return fnv1a(b->type ? b->type : "?");
+}
+
+/* Compare two Resid values for key equality. Returns 1 if equal. */
+static int resid_key_eq(void* a, void* b) {
+    if (a == b) return 1;
+    int ab = is_boxed(a);
+    int bb2 = is_boxed(b);
+    if (ab && bb2) {
+        ResidVal* ba = (ResidVal*)a;
+        ResidVal* bb = (ResidVal*)b;
+        if (ba->tag == -1 && bb->tag == -1) {
+            /* Both scalar boxes — compare by extracted numeric value. */
+            const char* ta = ba->type;
+            const char* tb = bb->type;
+            if (ta && tb && strcmp(ta, tb) == 0) {
+                void* ra = resid_box_slot(a, 0);
+                void* rb = resid_box_slot(b, 0);
+                if (ra == rb) return 1;
+                if (strcmp(ta, "i64") == 0) return *(int64_t*)ra == *(int64_t*)rb;
+                if (strcmp(ta, "f64") == 0) return *(double*)ra == *(double*)rb;
+                if (strcmp(ta, "bool") == 0) return *(int8_t*)ra == *(int8_t*)rb;
+                if (strcmp(ta, "i128") == 0) return *(__int128*)ra == *(__int128*)rb;
+                if (strcmp(ta, "u128") == 0) return *(unsigned __int128*)ra == *(unsigned __int128*)rb;
+                return 0;
+            }
+            return 0;
+        }
+        /* Boxed composites: identical pointer is equal; otherwise not. */
+        return ba == bb;
+    }
+    if (!ab && !bb2) {
+        /* Both bare C strings. */
+        return strcmp((const char*)a, (const char*)b) == 0;
+    }
+    return 0;
+}
 
 /* FNV-1a hash for a string. */
 static uint64_t fnv1a(const char* s) {
@@ -3834,217 +3953,289 @@ static uint64_t fnv1a(const char* s) {
     return h;
 }
 
-/* Hash a Resid value for use as a map/set key. Strings hash by content;
- * other values (integers, booleans) are formatted to a string first. */
-static uint64_t resid_hash(void* v) {
-    /* Tagged ResidVal: extract the value. */
-    int64_t tag = resid_box_tag(v);
-    if (tag == -1) {
-        /* Scalar box — the first slot holds the raw value. */
-        void* raw = resid_box_slot(v, 0);
-        /* Try to interpret as string pointer first. */
-        if ((uintptr_t)raw > 4096) {
-            /* Looks like a pointer — treat as string. */
-            return fnv1a((const char*)raw);
-        }
-        /* Integer scalar: hash the integer value. */
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%ld", (long)(intptr_t)raw);
-        return fnv1a(buf);
-    }
-    /* Untagged pointer: treat as C string. */
-    if ((uintptr_t)v > 4096) {
-        return fnv1a((const char*)v);
-    }
-    return fnv1a("?");
+static HMNode* node_index_new(void) {
+    HMNode* n = (HMNode*)calloc(1, sizeof(HMNode));
+    n->kind = 0;
+    return n;
 }
 
-/* Compare two Resid values for key equality. Returns 1 if equal. */
-static int resid_key_eq(void* a, void* b) {
-    if (a == b) return 1;
-    int64_t ta = resid_box_tag(a);
-    int64_t tb = resid_box_tag(b);
-    if (ta == -1 && tb == -1) {
-        void* ra = resid_box_slot(a, 0);
-        void* rb = resid_box_slot(b, 0);
-        if (ra == rb) return 1;
-        /* Both could be strings. */
-        if ((uintptr_t)ra > 4096 && (uintptr_t)rb > 4096) {
-            return strcmp((const char*)ra, (const char*)rb) == 0;
-        }
-        return 0;
+/* Shallow-copy a node: the slot/sub arrays are copied but child nodes are
+ * shared by pointer — this is exactly the path-copying that makes every
+ * update persistent without mutating the old value. */
+static HMNode* node_clone(const HMNode* src) {
+    HMNode* n = (HMNode*)malloc(sizeof(HMNode));
+    *n = *src;
+    return n;
+}
+
+static HMPair* pair_new(void* key, void* val) {
+    HMPair* p = (HMPair*)malloc(sizeof(HMPair));
+    p->key = key;
+    p->val = val;
+    return p;
+}
+
+static HMTrie* trie_new(int64_t count, HMNode* root) {
+    HMTrie* t = (HMTrie*)malloc(sizeof(HMTrie));
+    t->count = count;
+    t->root = root;
+    return t;
+}
+
+/* Insert key/val into `node` at `level`, returning a new persistent node.
+ * `isnew` (out) is 1 if a brand-new key was inserted (so count grows). */
+static HMNode* trie_insert(HMNode* node, int level, uint64_t h,
+                           void* key, void* val, int* isnew) {
+    if (node == NULL) {
+        HMNode* n = node_index_new();
+        uint32_t idx = (uint32_t)((h >> (level * HT_SHIFT)) & HT_MASK);
+        n->used = (1u << idx);
+        n->slot[idx] = pair_new(key, val);
+        n->sub[idx] = 0;
+        *isnew = 1;
+        return n;
     }
-    /* Untagged pointers: compare as strings. */
-    if ((uintptr_t)a > 4096 && (uintptr_t)b > 4096) {
-        return strcmp((const char*)a, (const char*)b) == 0;
+    if (node->kind == 1) {
+        /* collision node: pairs packed key,val,key,val,... */
+        int cnt = (int)node->used;
+        for (int i = 0; i < cnt; i++) {
+            if (resid_key_eq(node->slot[2 * i], key)) {
+                HMNode* n = node_clone(node);
+                n->slot[2 * i + 1] = val; /* replace value in-place (copy) */
+                *isnew = 0;
+                return n;
+            }
+        }
+        HMNode* n = node_clone(node);
+        n->used = (uint32_t)(cnt + 1);
+        n->slot[2 * cnt] = key;
+        n->slot[2 * cnt + 1] = val;
+        *isnew = 1;
+        return n;
+    }
+    /* index node */
+    uint32_t idx = (uint32_t)((h >> (level * HT_SHIFT)) & HT_MASK);
+    uint32_t bit = (1u << idx);
+    if (!(node->used & bit)) {
+        HMNode* n = node_clone(node);
+        n->used |= bit;
+        n->slot[idx] = pair_new(key, val);
+        n->sub[idx] = 0;
+        *isnew = 1;
+        return n;
+    }
+    if (node->sub[idx]) {
+        HMNode* child = trie_insert((HMNode*)node->slot[idx], level + 1, h, key, val, isnew);
+        HMNode* n = node_clone(node);
+        n->slot[idx] = child;
+        return n;
+    }
+    /* existing leaf in this slot */
+    HMPair* p = (HMPair*)node->slot[idx];
+    if (resid_key_eq(p->key, key)) {
+        HMNode* n = node_clone(node);
+        n->slot[idx] = pair_new(key, val);
+        *isnew = 0;
+        return n;
+    }
+    /* two different keys collide into the same slot */
+    if (level >= HT_MAX_LEVEL) {
+        /* no hash bits left: promote to a collision node holding both keys. */
+        HMNode* n = node_clone(node);
+        HMNode* c = node_index_new();
+        c->kind = 1;
+        c->used = 2;
+        c->slot[0] = p->key;
+        c->slot[1] = p->val;
+        c->slot[2] = key;
+        c->slot[3] = val;
+        n->sub[idx] = 1;
+        n->slot[idx] = c;
+        *isnew = 1;
+        return n;
+    }
+    /* descend: put the old leaf and the new key into a child index node. */
+    uint64_t ho = resid_hash(p->key);
+    HMNode* child = trie_insert(NULL, level + 1, ho, p->key, p->val, isnew);
+    child = trie_insert(child, level + 1, h, key, val, isnew);
+    HMNode* n = node_clone(node);
+    n->sub[idx] = 1;
+    n->slot[idx] = child;
+    return n;
+}
+
+/* Return the value for key, or NULL if absent. */
+static void* trie_get(HMNode* node, int level, uint64_t h, void* key) {
+    while (node != NULL) {
+        if (node->kind == 1) {
+            int cnt = (int)node->used;
+            for (int i = 0; i < cnt; i++) {
+                if (resid_key_eq(node->slot[2 * i], key))
+                    return node->slot[2 * i + 1];
+            }
+            return NULL;
+        }
+        uint32_t idx = (uint32_t)((h >> (level * HT_SHIFT)) & HT_MASK);
+        uint32_t bit = (1u << idx);
+        if (!(node->used & bit)) return NULL;
+        if (node->sub[idx]) {
+            node = (HMNode*)node->slot[idx];
+            level++;
+            continue;
+        }
+        HMPair* p = (HMPair*)node->slot[idx];
+        return resid_key_eq(p->key, key) ? p->val : NULL;
+    }
+    return NULL;
+}
+
+static int trie_contains(HMNode* node, int level, uint64_t h, void* key) {
+    while (node != NULL) {
+        if (node->kind == 1) {
+            int cnt = (int)node->used;
+            for (int i = 0; i < cnt; i++) {
+                if (resid_key_eq(node->slot[2 * i], key)) return 1;
+            }
+            return 0;
+        }
+        uint32_t idx = (uint32_t)((h >> (level * HT_SHIFT)) & HT_MASK);
+        uint32_t bit = (1u << idx);
+        if (!(node->used & bit)) return 0;
+        if (node->sub[idx]) {
+            node = (HMNode*)node->slot[idx];
+            level++;
+            continue;
+        }
+        return resid_key_eq(((HMPair*)node->slot[idx])->key, key);
     }
     return 0;
 }
 
-static ResidMap* map_new(int64_t cap) {
-    ResidMap* m = (ResidMap*)malloc(sizeof(ResidMap));
-    m->cap = cap > 0 ? cap : MAP_INIT_CAP;
-    m->size = 0;
-    /* Each bucket holds 4 slots (open addressing within a bucket). */
-    m->buckets = (MapEntry*)calloc((size_t)m->cap * 4, sizeof(MapEntry));
-    return m;
+/* Remove key from `node` at `level`, returning a new persistent node.
+ * `did` (out) is 1 if the key was actually removed. If absent, returns
+ * the ORIGINAL node unchanged (shared) and *did = 0. */
+static HMNode* trie_remove(HMNode* node, int level, uint64_t h, void* key, int* did) {
+    if (node == NULL) { *did = 0; return NULL; }
+    if (node->kind == 1) {
+        int cnt = (int)node->used;
+        for (int i = 0; i < cnt; i++) {
+            if (resid_key_eq(node->slot[2 * i], key)) {
+                HMNode* n = node_clone(node);
+                for (int j = i; j < cnt - 1; j++) {
+                    n->slot[2 * j] = n->slot[2 * (j + 1)];
+                    n->slot[2 * j + 1] = n->slot[2 * (j + 1) + 1];
+                }
+                n->used = (uint32_t)(cnt - 1);
+                *did = 1;
+                return n;
+            }
+        }
+        *did = 0;
+        return node;
+    }
+    uint32_t idx = (uint32_t)((h >> (level * HT_SHIFT)) & HT_MASK);
+    uint32_t bit = (1u << idx);
+    if (!(node->used & bit)) { *did = 0; return node; }
+    if (node->sub[idx]) {
+        HMNode* child = (HMNode*)node->slot[idx];
+        HMNode* newchild = trie_remove(child, level + 1, h, key, did);
+        if (!*did) return node;
+        HMNode* n = node_clone(node);
+        if (newchild == NULL || newchild->used == 0) {
+            n->used &= ~bit; /* collapsed child: drop the slot */
+            n->sub[idx] = 0;
+            n->slot[idx] = NULL;
+        } else {
+            n->slot[idx] = newchild;
+        }
+        return n;
+    }
+    HMPair* p = (HMPair*)node->slot[idx];
+    if (resid_key_eq(p->key, key)) {
+        HMNode* n = node_clone(node);
+        n->used &= ~bit;
+        n->sub[idx] = 0;
+        n->slot[idx] = NULL;
+        *did = 1;
+        return n;
+    }
+    *did = 0;
+    return node;
 }
 
-/* Find entry in bucket; returns index or -1. */
-static int map_bucket_find(MapEntry* b, int64_t bcap, void* key) {
-    for (int64_t i = 0; i < bcap; i++) {
-        if (b[i].used && resid_key_eq(b[i].key, key)) return (int)i;
+/* Collect all (key, val) into flat arrays starting at *idx. Pass NULL for
+ * either array to skip that field. */
+static void trie_collect(HMNode* node, void** keys, void** vals, int64_t* idx) {
+    if (node == NULL) return;
+    if (node->kind == 1) {
+        int cnt = (int)node->used;
+        for (int i = 0; i < cnt; i++) {
+            if (keys) keys[*idx] = node->slot[2 * i];
+            if (vals) vals[*idx] = node->slot[2 * i + 1];
+            (*idx)++;
+        }
+        return;
     }
-    return -1;
+    for (int i = 0; i < HT_DEGREE; i++) {
+        if (node->used & (1u << i)) {
+            if (node->sub[i]) {
+                trie_collect((HMNode*)node->slot[i], keys, vals, idx);
+            } else {
+                HMPair* p = (HMPair*)node->slot[i];
+                if (keys) keys[*idx] = p->key;
+                if (vals) vals[*idx] = p->val;
+                (*idx)++;
+            }
+        }
+    }
 }
 
 /* Lookup a key in the map. Returns the value or NULL. */
 void* resid_map_get(void* map, void* key) {
-    ResidMap* m = (ResidMap*)map;
+    HMTrie* t = (HMTrie*)map;
     uint64_t h = resid_hash(key);
-    int64_t idx = (int64_t)(h % (uint64_t)m->cap);
-    MapEntry* b = &m->buckets[idx * 4];
-    /* Each bucket has 4 slots (open addressing within bucket). */
-    int64_t bcap = 4;
-    int pos = map_bucket_find(b, bcap, key);
-    if (pos < 0) return NULL;
-    return b[pos].val;
+    return trie_get(t->root, 0, h, key);
 }
 
 /* Insert a key-value pair, returning a NEW map (immutable). */
 void* resid_map_insert(void* map, void* key, void* val) {
-    ResidMap* old = (ResidMap*)map;
-    /* Check if key exists. */
+    HMTrie* t = (HMTrie*)map;
     uint64_t h = resid_hash(key);
-    int64_t idx = (int64_t)(h % (uint64_t)old->cap);
-    MapEntry* ob = &old->buckets[idx * 4];
-    int64_t bcap = 4;
-    int exist = map_bucket_find(ob, bcap, key);
-
-    int64_t new_cap = old->cap;
-    int64_t new_size = old->size;
-    if (exist < 0) new_size++;  /* new key */
-
-    /* Grow if >75% full. */
-    if (new_size * 4 > new_cap * 3) new_cap = old->cap * 2;
-
-    ResidMap* nm = map_new(new_cap);
-    nm->size = new_size;
-
-    /* Rehash all old entries. */
-    for (int64_t i = 0; i < old->cap; i++) {
-        MapEntry* b = &old->buckets[i * 4];
-        for (int j = 0; j < bcap; j++) {
-            if (!b[j].used) continue;
-            /* Skip the key we're replacing. */
-            if (exist >= 0 && i == idx && j == exist) continue;
-            uint64_t nh = resid_hash(b[j].key);
-            int64_t nidx = (int64_t)(nh % (uint64_t)nm->cap);
-            MapEntry* nb = &nm->buckets[nidx * 4];
-            for (int k = 0; k < bcap; k++) {
-                if (!nb[k].used) {
-                    nb[k].key = b[j].key;
-                    nb[k].val = b[j].val;
-                    nb[k].used = 1;
-                    break;
-                }
-            }
-        }
-    }
-
-    /* Insert new entry. */
-    {
-        uint64_t nh2 = resid_hash(key);
-        int64_t nidx2 = (int64_t)(nh2 % (uint64_t)nm->cap);
-        MapEntry* nb2 = &nm->buckets[nidx2 * 4];
-        if (exist >= 0) {
-            /* Replace existing. */
-            for (int k = 0; k < bcap; k++) {
-                if (nb2[k].used && resid_key_eq(nb2[k].key, key)) {
-                    nb2[k].val = val;
-                    break;
-                }
-            }
-        } else {
-            /* New entry. */
-            for (int k = 0; k < bcap; k++) {
-                if (!nb2[k].used) {
-                    nb2[k].key = key;
-                    nb2[k].val = val;
-                    nb2[k].used = 1;
-                    break;
-                }
-            }
-        }
-    }
-
-    return nm;
+    int isnew = 0;
+    HMNode* root = trie_insert(t->root, 0, h, key, val, &isnew);
+    return trie_new(t->count + (isnew ? 1 : 0), root);
 }
 
-/* Remove a key, returning a NEW map. */
+/* Remove a key, returning a NEW map (or the same map if key absent). */
 void* resid_map_remove(void* map, void* key) {
-    ResidMap* old = (ResidMap*)map;
+    HMTrie* t = (HMTrie*)map;
     uint64_t h = resid_hash(key);
-    int64_t idx = (int64_t)(h % (uint64_t)old->cap);
-    MapEntry* ob = &old->buckets[idx * 4];
-    int64_t bcap = 4;
-    int exist = map_bucket_find(ob, bcap, key);
-    if (exist < 0) return map;  /* key not found, return same map */
-
-    ResidMap* nm = map_new(old->cap);
-    nm->size = old->size - 1;
-
-    /* Rehash all old entries except the removed one. */
-    for (int64_t i = 0; i < old->cap; i++) {
-        MapEntry* b = &old->buckets[i * 4];
-        for (int j = 0; j < bcap; j++) {
-            if (!b[j].used) continue;
-            if (i == idx && j == exist) continue;  /* skip removed */
-            uint64_t nh = resid_hash(b[j].key);
-            int64_t nidx = (int64_t)(nh % (uint64_t)nm->cap);
-            MapEntry* nb = &nm->buckets[nidx * 4];
-            for (int k = 0; k < bcap; k++) {
-                if (!nb[k].used) {
-                    nb[k].key = b[j].key;
-                    nb[k].val = b[j].val;
-                    nb[k].used = 1;
-                    break;
-                }
-            }
-        }
-    }
-    return nm;
+    int did = 0;
+    HMNode* root = trie_remove(t->root, 0, h, key, &did);
+    if (!did) return map; /* unchanged: share */
+    return trie_new(t->count - 1, root);
 }
 
 /* Check if a key exists. Returns 1/0. */
 int8_t resid_map_contains(void* map, void* key) {
-    ResidMap* m = (ResidMap*)map;
+    HMTrie* t = (HMTrie*)map;
     uint64_t h = resid_hash(key);
-    int64_t idx = (int64_t)(h % (uint64_t)m->cap);
-    MapEntry* b = &m->buckets[idx * 4];
-    int64_t bcap = 4;
-    return map_bucket_find(b, bcap, key) >= 0 ? 1 : 0;
+    return trie_contains(t->root, 0, h, key) ? 1 : 0;
 }
 
 /* Number of entries. */
 int64_t resid_map_len(void* map) {
-    return ((ResidMap*)map)->size;
+    return ((HMTrie*)map)->count;
 }
 
-/* Build a List of keys. Returns a ResidVal* list. */
+/* Build a List of keys. Returns a trie-backed list. */
 void* resid_map_keys(void* map) {
-    ResidMap* m = (ResidMap*)map;
-    int64_t n = m->size;
+    HMTrie* m = (HMTrie*)map;
+    int64_t n = m->count;
     void** ks = NULL;
     if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    int64_t bcap = 4;
-    for (int64_t i = 0; i < m->cap && j < n; i++) {
-        MapEntry* b = &m->buckets[i * 4];
-        for (int k = 0; k < bcap && j < n; k++) {
-            if (b[k].used) ks[j++] = b[k].key;
-        }
-    }
+    trie_collect(m->root, ks, NULL, &j);
     void* r = resid_list_new(n, ks, "list");
     free(ks);
     return r;
@@ -4052,18 +4243,12 @@ void* resid_map_keys(void* map) {
 
 /* Build a List of values. */
 void* resid_map_values(void* map) {
-    ResidMap* m = (ResidMap*)map;
-    int64_t n = m->size;
+    HMTrie* m = (HMTrie*)map;
+    int64_t n = m->count;
     void** vs = NULL;
     if (n > 0) vs = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    int64_t bcap = 4;
-    for (int64_t i = 0; i < m->cap && j < n; i++) {
-        MapEntry* b = &m->buckets[i * 4];
-        for (int k = 0; k < bcap && j < n; k++) {
-            if (b[k].used) vs[j++] = b[k].val;
-        }
-    }
+    trie_collect(m->root, NULL, vs, &j);
     void* r = resid_list_new(n, vs, "list");
     free(vs);
     return r;
@@ -4072,54 +4257,54 @@ void* resid_map_values(void* map) {
 /* Format a map as a string: {key1: val1, key2: val2}. Uses resid_format_val
  * on each entry. Caller must free the returned string. */
 char* resid_map_format(void* map) {
-    ResidMap* m = (ResidMap*)map;
-    if (m->size == 0) {
+    HMTrie* m = (HMTrie*)map;
+    if (m->count == 0) {
         char* r = (char*)malloc(3);
         r[0] = '{'; r[1] = '}'; r[2] = '\0';
         return r;
     }
     /* Estimate: ~20 chars per entry. */
-    size_t cap = 2 + (size_t)m->size * 40 + 1;
+    size_t cap = 2 + (size_t)m->count * 40 + 1;
     char* buf = (char*)malloc(cap);
     size_t pos = 0;
     buf[pos++] = '{';
+    int64_t n = m->count;
+    void** ks = (void**)malloc((size_t)n * sizeof(void*));
+    void** vs = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    int64_t bcap = 4;
-    for (int64_t i = 0; i < m->cap && j < m->size; i++) {
-        MapEntry* b = &m->buckets[i * 4];
-        for (int k = 0; k < bcap && j < m->size; k++) {
-            if (!b[k].used) continue;
-            if (j > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
-            /* Key: assume string. */
-            const char* ks = (const char*)b[k].key;
-            if (resid_box_tag(b[k].key) == -1) {
-                ks = (const char*)resid_box_slot(b[k].key, 0);
-            }
-            size_t kl = strlen(ks);
-            if (pos + kl + 4 >= cap) { cap = cap * 2 + kl; buf = realloc(buf, cap); }
-            memcpy(buf + pos, ks, kl); pos += kl;
-            buf[pos++] = ':';
-            buf[pos++] = ' ';
-            /* Value: assume string. */
-            const char* vs = (const char*)b[k].val;
-            if (resid_box_tag(b[k].val) == -1) {
-                vs = (const char*)resid_box_slot(b[k].val, 0);
-            }
-            size_t vl = strlen(vs);
-            if (pos + vl + 2 >= cap) { cap = cap * 2 + vl; buf = realloc(buf, cap); }
-            memcpy(buf + pos, vs, vl); pos += vl;
-            j++;
+    trie_collect(m->root, ks, vs, &j);
+    for (int64_t i = 0; i < n; i++) {
+        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        /* Key: assume string. */
+        const char* ks0 = (const char*)ks[i];
+        if (resid_box_tag(ks[i]) == -1) {
+            ks0 = (const char*)resid_box_slot(ks[i], 0);
         }
+        size_t kl = strlen(ks0);
+        if (pos + kl + 4 >= cap) { cap = cap * 2 + kl; buf = realloc(buf, cap); }
+        memcpy(buf + pos, ks0, kl); pos += kl;
+        buf[pos++] = ':';
+        buf[pos++] = ' ';
+        /* Value: assume string. */
+        const char* vs0 = (const char*)vs[i];
+        if (resid_box_tag(vs[i]) == -1) {
+            vs0 = (const char*)resid_box_slot(vs[i], 0);
+        }
+        size_t vl = strlen(vs0);
+        if (pos + vl + 2 >= cap) { cap = cap * 2 + vl; buf = realloc(buf, cap); }
+        memcpy(buf + pos, vs0, vl); pos += vl;
     }
+    free(ks);
+    free(vs);
     buf[pos++] = '}';
     buf[pos] = '\0';
     return buf;
 }
 
-/* ─── Set operations (sets are maps with NULL values) ─────────────── */
+/* ─── Set operations (sets are maps with value 1) ─────────────────── */
 
 void* resid_set_new(void) {
-    return map_new(MAP_INIT_CAP);
+    return trie_new(0, NULL);
 }
 
 /* Insert an element into a set. Returns a NEW set. */
@@ -4141,52 +4326,55 @@ int64_t resid_set_len(void* set) {
 
 /* Set union: elements from both sets. */
 void* resid_set_union(void* a, void* b) {
-    ResidMap* mb = (ResidMap*)b;
+    HMTrie* tb = (HMTrie*)b;
+    int64_t n = tb->count;
+    void** ks = NULL;
+    if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
+    int64_t j = 0;
+    trie_collect(tb->root, ks, NULL, &j);
     void* result = a;
-    int64_t bcap = 4;
-    for (int64_t i = 0; i < mb->cap; i++) {
-        MapEntry* be = &mb->buckets[i * 4];
-        for (int j = 0; j < bcap; j++) {
-            if (!be[j].used) continue;
-            result = resid_map_insert(result, be[j].key, (void*)(intptr_t)1);
-        }
+    for (int64_t i = 0; i < n; i++) {
+        result = resid_set_insert(result, ks[i]);
     }
+    free(ks);
     return result;
 }
 
 /* Set difference: elements in a but not in b. */
 void* resid_set_difference(void* a, void* b) {
-    ResidMap* mb = (ResidMap*)b;
+    HMTrie* tb = (HMTrie*)b;
+    int64_t n = tb->count;
+    void** ks = NULL;
+    if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
+    int64_t j = 0;
+    trie_collect(tb->root, ks, NULL, &j);
     void* result = a;
-    int64_t bcap = 4;
-    for (int64_t i = 0; i < mb->cap; i++) {
-        MapEntry* be = &mb->buckets[i * 4];
-        for (int j = 0; j < bcap; j++) {
-            if (!be[j].used) continue;
-            result = resid_map_remove(result, be[j].key);
-        }
+    for (int64_t i = 0; i < n; i++) {
+        result = resid_set_remove(result, ks[i]);
     }
+    free(ks);
     return result;
 }
 
 /* Set intersection: elements in both sets. */
 void* resid_set_intersection(void* a, void* b) {
-    ResidMap* ma = (ResidMap*)a;
-    ResidMap* mb = (ResidMap*)b;
+    HMTrie* ta = (HMTrie*)a;
+    HMTrie* tb = (HMTrie*)b;
     /* Iterate over the smaller set. */
-    ResidMap* smaller = ma->size <= mb->size ? ma : mb;
-    ResidMap* larger = ma->size <= mb->size ? mb : ma;
-    void* result = map_new(MAP_INIT_CAP);
-    int64_t bcap = 4;
-    for (int64_t i = 0; i < smaller->cap; i++) {
-        MapEntry* be = &smaller->buckets[i * 4];
-        for (int j = 0; j < bcap; j++) {
-            if (!be[j].used) continue;
-            if (resid_map_contains(larger, be[j].key)) {
-                result = resid_map_insert(result, be[j].key, (void*)(intptr_t)1);
-            }
+    HMTrie* smaller = ta->count <= tb->count ? ta : tb;
+    HMTrie* larger = ta->count <= tb->count ? tb : ta;
+    int64_t n = smaller->count;
+    void** ks = NULL;
+    if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
+    int64_t j = 0;
+    trie_collect(smaller->root, ks, NULL, &j);
+    void* result = (void*)smaller;
+    for (int64_t i = 0; i < n; i++) {
+        if (!resid_map_contains(larger, ks[i])) {
+            result = resid_set_remove(result, ks[i]);
         }
     }
+    free(ks);
     return result;
 }
 
@@ -4197,33 +4385,31 @@ void* resid_set_to_list(void* set) {
 
 /* Format a set as a string: {elem1, elem2, ...}. */
 char* resid_set_format(void* set) {
-    ResidMap* m = (ResidMap*)set;
-    if (m->size == 0) {
+    HMTrie* m = (HMTrie*)set;
+    if (m->count == 0) {
         char* r = (char*)malloc(3);
         r[0] = '{'; r[1] = '}'; r[2] = '\0';
         return r;
     }
-    size_t cap = 2 + (size_t)m->size * 20 + 1;
+    size_t cap = 2 + (size_t)m->count * 20 + 1;
     char* buf = (char*)malloc(cap);
     size_t pos = 0;
     buf[pos++] = '{';
+    int64_t n = m->count;
+    void** ks = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    int64_t bcap = 4;
-    for (int64_t i = 0; i < m->cap && j < m->size; i++) {
-        MapEntry* b = &m->buckets[i * 4];
-        for (int k = 0; k < bcap && j < m->size; k++) {
-            if (!b[k].used) continue;
-            if (j > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
-            const char* es = (const char*)b[k].key;
-            if (resid_box_tag(b[k].key) == -1) {
-                es = (const char*)resid_box_slot(b[k].key, 0);
-            }
-            size_t el = strlen(es);
-            if (pos + el + 2 >= cap) { cap = cap * 2 + el; buf = realloc(buf, cap); }
-            memcpy(buf + pos, es, el); pos += el;
-            j++;
+    trie_collect(m->root, ks, NULL, &j);
+    for (int64_t i = 0; i < n; i++) {
+        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        const char* es = (const char*)ks[i];
+        if (resid_box_tag(ks[i]) == -1) {
+            es = (const char*)resid_box_slot(ks[i], 0);
         }
+        size_t el = strlen(es);
+        if (pos + el + 2 >= cap) { cap = cap * 2 + el; buf = realloc(buf, cap); }
+        memcpy(buf + pos, es, el); pos += el;
     }
+    free(ks);
     buf[pos++] = '}';
     buf[pos] = '\0';
     return buf;
