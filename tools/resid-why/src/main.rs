@@ -144,9 +144,9 @@ fn main() {
         Some(n) => n,
         None => {
             eprintln!(
-                "resid-why: no readable notes sidecar for '{}' (expected '{}')",
+                "resid-why: no readable notes sidecar for '{}' (expected '{}.resid-notes.cbor')",
                 artifact.display(),
-                format!("{}.resid-notes.cbor", artifact.display())
+                artifact.display(),
             );
             std::process::exit(1);
         }
