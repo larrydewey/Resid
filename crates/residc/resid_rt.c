@@ -3943,6 +3943,41 @@ static int resid_key_eq(void* a, void* b) {
     return 0;
 }
 
+/* Build a Str from a List(Int) of Unicode codepoints.
+ * Iterates the persistent List trie once, UTF-8-encodes each codepoint,
+ * and returns a freshly malloc'd NUL-terminated string. The List itself
+ * is not mutated — this is a read-only snapshot. */
+char* resid_str_from_codepoints(void* list) {
+    ResidList* l = (ResidList*)list;
+    int64_t n = l->count;
+    if (n <= 0) return resid_box_str("");
+
+    /* Allocate max possible (4 bytes per codepoint) + NUL. */
+    char* buf = (char*)malloc((size_t)(4 * n + 1));
+    int64_t total_bytes = 0;
+    for (int64_t i = 0; i < n; i++) {
+        void* elem = resid_list_get(list, i);
+        int64_t cp = resid_unbox_i64(elem);
+        if (cp < 0x80) {
+            buf[total_bytes++] = (char)cp;
+        } else if (cp < 0x800) {
+            buf[total_bytes++] = (char)(0xC0 | (cp >> 6));
+            buf[total_bytes++] = (char)(0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            buf[total_bytes++] = (char)(0xE0 | (cp >> 12));
+            buf[total_bytes++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            buf[total_bytes++] = (char)(0x80 | (cp & 0x3F));
+        } else {
+            buf[total_bytes++] = (char)(0xF0 | (cp >> 18));
+            buf[total_bytes++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            buf[total_bytes++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            buf[total_bytes++] = (char)(0x80 | (cp & 0x3F));
+        }
+    }
+    buf[total_bytes] = '\0';
+    return buf;
+}
+
 /* FNV-1a hash for a string. */
 static uint64_t fnv1a(const char* s) {
     uint64_t h = 14695981039346656037ULL;

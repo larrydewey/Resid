@@ -1096,7 +1096,7 @@ function calls, the same way Map/Set already are.
 | `List(T)`, stage-2 (`codegen.resid`) | flat array + hand-rolled IR (`lst_emit`, `e.lconcat`, raw GEP indexing) | calls into the same `resid_list_*` C functions | **done — full bootstrap parity (`bootstrap_behavior_ord_parity` etc.)** |
 | `Map(K,V)` | HAMT (32-way persistent hash trie, `resid_map_*`), replacing the flat bucket table | — (done) | **implemented** |
 | `Set(T)` | same HAMT as `Map` (`resid_set_insert` → `resid_map_insert`) | — (done) | **implemented** |
-| `Str` | same copy-per-concat shape as `List` (`resid_str_concat`) | TBD — rope, or defer | not started / needs a decision |
+| `Str` | same copy-per-concat shape as `List` (`resid_str_concat`) |rope-backed builder + `str_from_codepoints`; defer full ABI rope | **deferred — C function + codegen decl in place; lib/h2_bs_acc rewrite pending** |
 
 Order, as agreed with the user (phased, commit after each phase):
 1. `List`, Rust pipeline — **done** (details above).
@@ -1104,11 +1104,8 @@ Order, as agreed with the user (phased, commit after each phase):
 3. `Map`/`Set` (HAMT) — **done** (32-way persistent trie in `resid_rt.c`,
    shared by stage-1 and stage-2; verified by `run_map_set_types`,
    `bootstrap_map_set_parity`, and an ASan/UBSan torture harness).
-4. `Str` — needs a separate design call (rope vs. defer); revisit once
-   List/Map/Set are done and re-measure — `lib/` string workloads lean
-   more on small fixed-size buffers (hex/byte formatting) than the
-   large-N accumulator pattern that motivated this whole effort, so it
-   may not be worth it. Don't assume it is.
+4. `Str` — **deferred** (C `str_from_codepoints` function and codegen decl added;
+   lib/h2_bs_acc rewrite pending; see §8 checklist).
 
 
 
