@@ -259,10 +259,13 @@ char* str_slice(const char* s, int64_t start, int64_t end) {
 /*
  * Boxed value objects.
  *
- * Every composite Resid value (list, product struct, sum variant) is a
- * `ResidVal*` with a tag, a slot count, an array of slots, and a type name.
- * A slot for a scalar operand is a heap box (created by resid_box_*); a slot
- * for a string / nested composite is the raw pointer.
+ * Every product struct and sum variant is a `ResidVal*` with a tag, a slot
+ * count, an array of slots, and a type name. A slot for a scalar operand is
+ * a heap box (created by resid_box_*); a slot for a string / nested
+ * composite is the raw pointer. List values are NOT ResidVal — they use
+ * the separate persistent-trie representation (ResidList, see
+ * resid_list_new/get/concat/... below) for O(log32 n) push/concat instead
+ * of a flat array's O(n) copy-on-every-op.
  */
 typedef struct {
     int64_t tag;
@@ -337,39 +340,152 @@ void* resid_spawn(void* (*worker)(void*), void* captures) {
 
 void* resid_malloc(size_t size) { return malloc(size); }
 
-/* Length of a list = its slot count. */
-int64_t resid_list_len(void* b) { return ((ResidVal*)b)->count; }
+/* ── Persistent list (32-way branching trie, Clojure/Scala Vector style) ──
+ *
+ * Lists were previously ResidVal boxes (a flat void** array): correct, but
+ * O(n) per concat and O(n) per copy, so a loop appending one element at a
+ * time via List.concat is O(n^2) and re-copies the whole list every step.
+ * A persistent trie makes push/concat O(log32 n) amortized while keeping
+ * every existing snapshot of a list valid and untouched: path-copying only
+ * copies the nodes on the root-to-leaf path; every other node is shared, by
+ * pointer, with whatever list it came from. This is a strict, eager
+ * structure — every operation computes its full result immediately,
+ * nothing here is deferred/thunked, and it has no interaction with comptime
+ * reduction (which never evaluates List(_) values — see resid-type's
+ * CValue).
+ *
+ * Separate from ResidVal (which remains the representation for struct and
+ * sum values): ResidVal's flat "slots" array has no equivalent in a trie,
+ * so most list verbs below flatten to a plain array via
+ * resid_list_to_array, operate, and rebuild via resid_list_new. */
+#define PVEC_BITS 5
+#define PVEC_WIDTH 32
+#define PVEC_MASK 31
 
-/* Convert a boxed ResidVal list into the length-first flat list layout used
- * by the stage-2 driver ({ i64 count, [count x ptr] elements }): slot array
- * at offset 8, count at offset 0. Used at the C-runtime boundary so lists
- * returned by resid_map_keys/values and resid_set_to_list match what the
- * driver's list ops (and e.lconcat) expect. */
-void* resid_rt_list_to_flat(void* b) {
-    ResidVal* v = (ResidVal*)b;
-    int64_t n = v->count;
-    void* out = malloc((size_t)n * 8 + 8);
-    ((int64_t*)out)[0] = n;
-    for (int64_t i = 0; i < n; i++) ((void**)out)[i + 1] = v->slots[i];
+typedef struct PVecNode {
+    void* items[PVEC_WIDTH];
+} PVecNode;
+
+typedef struct {
+    int64_t count;
+    int32_t shift;
+    PVecNode* root;
+    const char* type;
+} ResidList;
+
+static PVecNode* pvec_node_new(void) { return (PVecNode*)calloc(1, sizeof(PVecNode)); }
+
+static void* pvec_get_raw(PVecNode* root, int32_t shift, int64_t i) {
+    PVecNode* node = root;
+    for (int32_t level = shift; level > 0; level -= PVEC_BITS) {
+        node = (PVecNode*)node->items[(i >> level) & PVEC_MASK];
+    }
+    return node->items[i & PVEC_MASK];
+}
+
+/* Path-copy `elem` into position `idx`; `node` and everything under it
+ * except the single path to `idx` is left untouched (shared with whoever
+ * still points at `node`). */
+static PVecNode* pvec_insert_path(PVecNode* node, int32_t level, int64_t idx, void* elem) {
+    PVecNode* out = pvec_node_new();
+    if (level == 0) {
+        if (node) memcpy(out->items, node->items, sizeof(out->items));
+        out->items[idx & PVEC_MASK] = elem;
+        return out;
+    }
+    if (node) memcpy(out->items, node->items, sizeof(out->items));
+    int32_t child_idx = (int32_t)((idx >> level) & PVEC_MASK);
+    PVecNode* child = node ? (PVecNode*)node->items[child_idx] : NULL;
+    out->items[child_idx] = pvec_insert_path(child, level - PVEC_BITS, idx, elem);
     return out;
 }
 
-/* Concatenate two lists: a new boxed list with a's slots then b's. */
-void* resid_list_concat(void* a, void* b) {
-    ResidVal* x = (ResidVal*)a;
-    ResidVal* y = (ResidVal*)b;
-    int64_t total = x->count + y->count;
-    ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
-    out->tag = x->tag;
-    out->count = total;
-    out->type = x->type;
-    out->slots = NULL;
-    if (total > 0) {
-        out->slots = (void**)malloc((size_t)total * sizeof(void*));
-        for (int64_t i = 0; i < x->count; i++) out->slots[i] = x->slots[i];
-        for (int64_t i = 0; i < y->count; i++) out->slots[x->count + i] = y->slots[i];
+static ResidList* pvec_push_raw(ResidList* v, void* elem) {
+    ResidList* out = (ResidList*)malloc(sizeof(ResidList));
+    out->type = v->type;
+    int64_t idx = v->count;
+    if (v->root == NULL) {
+        out->root = pvec_insert_path(NULL, 0, 0, elem);
+        out->shift = 0;
+        out->count = 1;
+        return out;
     }
+    int64_t capacity = ((int64_t)1) << (v->shift + PVEC_BITS);
+    if (idx < capacity) {
+        out->root = pvec_insert_path(v->root, v->shift, idx, elem);
+        out->shift = v->shift;
+    } else {
+        int32_t new_shift = v->shift + PVEC_BITS;
+        PVecNode* new_root = pvec_node_new();
+        new_root->items[0] = v->root;
+        int32_t child_idx = (int32_t)((idx >> new_shift) & PVEC_MASK);
+        new_root->items[child_idx] = pvec_insert_path(NULL, new_shift - PVEC_BITS, idx, elem);
+        out->root = new_root;
+        out->shift = new_shift;
+    }
+    out->count = v->count + 1;
     return out;
+}
+
+/* Build a new persistent list from a flat array of `count` element
+ * pointers (scalar slots are boxes, as with the old ResidVal lists). */
+void* resid_list_new(int64_t count, void** src, const char* type) {
+    ResidList* v = (ResidList*)malloc(sizeof(ResidList));
+    v->count = 0;
+    v->shift = 0;
+    v->root = NULL;
+    v->type = type;
+    for (int64_t i = 0; i < count; i++) v = pvec_push_raw(v, src[i]);
+    return v;
+}
+
+/* Length of a list = its element count. */
+int64_t resid_list_len(void* b) { return ((ResidList*)b)->count; }
+
+/* Element `i` of a list (unchecked — callers bounds-check first). */
+void* resid_list_get(void* b, int64_t i) {
+    ResidList* v = (ResidList*)b;
+    return pvec_get_raw(v->root, v->shift, i);
+}
+
+const char* resid_list_type(void* b) { return ((ResidList*)b)->type; }
+
+/* Flatten a list to a fresh void** array (caller frees). Used by list verbs
+ * that need direct random access to every element (sort, reverse, sum, ...)
+ * rather than one resid_list_get call per element. */
+void** resid_list_to_array(void* b) {
+    ResidList* v = (ResidList*)b;
+    void** out = v->count > 0 ? (void**)malloc((size_t)v->count * sizeof(void*)) : NULL;
+    for (int64_t i = 0; i < v->count; i++) out[i] = pvec_get_raw(v->root, v->shift, i);
+    return out;
+}
+
+/* Convert a list into the length-first flat layout used by the stage-2
+ * driver ({ i64 count, [count x ptr] elements }): slot array at offset 8,
+ * count at offset 0. Used at the C-runtime boundary so lists returned by
+ * resid_map_keys/values and resid_set_to_list match what the driver's list
+ * ops (and e.lconcat) expect. */
+void* resid_rt_list_to_flat(void* b) {
+    ResidList* v = (ResidList*)b;
+    int64_t n = v->count;
+    void* out = malloc((size_t)n * 8 + 8);
+    ((int64_t*)out)[0] = n;
+    for (int64_t i = 0; i < n; i++) ((void**)out)[i + 1] = pvec_get_raw(v->root, v->shift, i);
+    return out;
+}
+
+/* Concatenate two lists: push every element of `b` onto `a`. O(m log32 n) —
+ * not optimal for joining two huge lists, but every real call site here
+ * concats a handful of elements onto a large accumulator, and this is still
+ * overwhelmingly better than the previous O(n) full copy per concat. */
+void* resid_list_concat(void* a, void* b) {
+    ResidList* x = (ResidList*)a;
+    ResidList* y = (ResidList*)b;
+    ResidList* cur = x;
+    for (int64_t i = 0; i < y->count; i++) {
+        cur = pvec_push_raw(cur, pvec_get_raw(y->root, y->shift, i));
+    }
+    return cur;
 }
 
 /* ── Growable accumulator buffer (perf: O(1)-amortized self-recursive
@@ -424,38 +540,37 @@ static void* growbuf_push_raw(void* buf, void** elems, int64_t n) {
 }
 
 /* Codegen never builds a raw slot array itself — it always has a normal,
- * already-lowered boxed List value on hand (a literal or the result of
- * some other expression the analysis proved fresh), so the two entry
- * points below take that directly: seed a new growbuf from one, or push
- * one's elements onto an existing growbuf. Both free just the source
- * list's ResidVal shell and its slots array afterward (never the element
- * pointers themselves, which are shared into the growbuf exactly like
- * resid_list_concat shares them today) — safe because the analysis that
- * gates these call sites (resid-type's find_growable_accumulators) only
- * ever allows a source value nothing else in the program can reference. */
+ * already-lowered List value on hand (a literal or the result of some other
+ * expression the analysis proved fresh), so the two entry points below take
+ * that directly: seed a new growbuf from one, or push one's elements onto
+ * an existing growbuf. Both flatten the source trie into a scratch array
+ * (its nodes are intentionally not freed: analysis guarantees a source
+ * value nothing else in the program can ever reference, so the bounded,
+ * one-time leak of that value's small node set is the same trade-off the
+ * previous flat-ResidVal version already made by not freeing its element
+ * pointers) — safe because the analysis that gates these call sites
+ * (resid-type's find_growable_accumulators) only ever allows such a
+ * source. */
 void* resid_growbuf_from_list(void* src) {
-    ResidVal* s = (ResidVal*)src;
-    void* g = growbuf_new_raw(s->slots, s->count);
-    free(s->slots);
-    free(s);
+    int64_t n = resid_list_len(src);
+    void** flat = resid_list_to_array(src);
+    void* g = growbuf_new_raw(flat, n);
+    free(flat);
     return g;
 }
 
 void* resid_growbuf_push_list(void* buf, void* src) {
-    ResidVal* s = (ResidVal*)src;
-    void* g = growbuf_push_raw(buf, s->slots, s->count);
-    free(s->slots);
-    free(s);
+    int64_t n = resid_list_len(src);
+    void** flat = resid_list_to_array(src);
+    void* g = growbuf_push_raw(buf, flat, n);
+    free(flat);
     return g;
 }
 
 void* resid_growbuf_finish(void* buf, const char* type) {
     GrowBuf* g = (GrowBuf*)buf;
-    ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
-    out->tag = 0;
-    out->count = g->count;
-    out->slots = g->slots;
-    out->type = type;
+    void* out = resid_list_new(g->count, g->slots, type);
+    free(g->slots);
     free(g);
     return out;
 }
@@ -1018,6 +1133,51 @@ char* ToString(void* boxed) {
     return buf;
 }
 
+/* Format a List value as "Type(e1, e2, ...)" — same scalar-vs-nested
+ * formatting as ToString's iterate-slots branch above, but over the trie:
+ * lists are ResidList, not ResidVal, so they can't share that function's
+ * direct slot access. (Nested list-in-list elements fall through to "…"
+ * the same imprecise way nested struct/sum elements already do above —
+ * this bootstrap formatter was never a real recursive Show.) */
+char* resid_list_to_string(void* boxed) {
+    if (!boxed) return resid_box_str("null");
+    ResidList* val = (ResidList*)boxed;
+    size_t len = strlen(val->type);
+    size_t buf_size = len + 64 + (size_t)val->count * 48;
+    char* buf = (char*)malloc(buf_size);
+    snprintf(buf, buf_size, "%s(", val->type);
+    for (int64_t i = 0; i < val->count; i++) {
+        if (i > 0) strcat(buf, ", ");
+        void* slot = pvec_get_raw(val->root, val->shift, i);
+        if (!slot) {
+            strcat(buf, "null");
+            continue;
+        }
+        int64_t tag = resid_box_tag(slot);
+        if (tag == -1) {
+            ResidVal* sv = (ResidVal*)slot;
+            if (sv->type[0] == 'f') {
+                double dv = resid_unbox_f64(slot);
+                char s[64];
+                snprintf(s, sizeof(s), "%.17g", dv);
+                strcat(buf, s);
+            } else if (sv->type[0] == 'b') {
+                int8_t bv = resid_unbox_bool(slot);
+                strcat(buf, bv ? "true" : "false");
+            } else {
+                int64_t iv = resid_unbox_i64(slot);
+                char s[32];
+                snprintf(s, sizeof(s), "%lld", (long long)iv);
+                strcat(buf, s);
+            }
+        } else {
+            strcat(buf, "…");
+        }
+    }
+    strcat(buf, ")");
+    return buf;
+}
+
 /*
  * Conversion helpers (spec §6.7): cast to target width, then back to the
  * default scalar width (i64 for integers, double for floats) for the return.
@@ -1223,8 +1383,7 @@ void* resid_fs_list_dir(const char* path) {
     snprintf(cmd, sizeof(cmd), "ls -1 \"%s\" 2>/dev/null", path);
     FILE* p = popen(cmd, "r");
     if (!p) {
-        void* slots[1] = { NULL };
-        return resid_box_new(0, 0, slots, "List(Str)");
+        return resid_list_new(0, NULL, "List(Str)");
     }
     char line[4096];
     void* slots[4096];
@@ -1235,7 +1394,7 @@ void* resid_fs_list_dir(const char* path) {
         slots[n++] = resid_box_str(line);
     }
     pclose(p);
-    return resid_box_new(0, (int64_t)n, slots, "List(Str)");
+    return resid_list_new((int64_t)n, slots, "List(Str)");
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -3077,9 +3236,8 @@ void* str_split(const char* s, const char* sep) {
 
 /* Join a boxed List(Str) with separator `sep`. */
 char* str_join(void* list_box, const char* sep) {
-    ResidVal* b = (ResidVal*)list_box;
-    const char** items = (const char**)(b->slots ? b->slots : NULL);
-    int64_t n = b->count;
+    int64_t n = resid_list_len(list_box);
+    const char** items = (const char**)resid_list_to_array(list_box);
     size_t lsep = strlen(sep), total = 0;
     for (int64_t i = 0; i < n; i++) total += strlen(items[i]);
     if (n > 0) total += lsep * (size_t)(n - 1);
@@ -3091,29 +3249,27 @@ char* str_join(void* list_box, const char* sep) {
         memcpy(w, items[i], li); w += li;
     }
     *w = '\0';
+    free((void*)items);
     return p;
 }
 
 /* ─── Stdlib v1.3: list verbs ───
-   Lists are ResidVal boxes: slots hold boxed scalars (resid_box_i64) for
-   List(Int) and raw char* for List(Str). Verbs allocate fresh boxes. */
+   Lists are persistent tries (see resid_list_new/get/... above): slots
+   hold boxed scalars (resid_box_i64) for List(Int) and raw char* for
+   List(Str). Verbs flatten, operate, and rebuild fresh lists. */
 
 static void* rt_list_from(const void** items, int64_t n, const char* type_str) {
-    ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
-    out->tag = 0;
-    out->count = n;
-    out->type = type_str;
-    out->slots = n > 0 ? (void**)malloc((size_t)n * sizeof(void*)) : NULL;
-    for (int64_t i = 0; i < n; i++) out->slots[i] = (void*)items[i];
-    return out;
+    return resid_list_new(n, (void**)items, type_str);
 }
 
 void* list_reverse_ints(void* box) {
-    ResidVal* b = (ResidVal*)box;
-    const void** items = (const void**)malloc((size_t)(b->count > 0 ? b->count : 1) * sizeof(void*));
-    for (int64_t i = 0; i < b->count; i++) items[i] = b->slots[b->count - 1 - i];
-    void* out = rt_list_from(items, b->count, b->type);
+    int64_t n = resid_list_len(box);
+    void** items = resid_list_to_array(box);
+    void** rev = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
+    for (int64_t i = 0; i < n; i++) rev[i] = items[n - 1 - i];
+    void* out = resid_list_new(n, rev, resid_list_type(box));
     free(items);
+    free(rev);
     return out;
 }
 
@@ -3122,16 +3278,16 @@ void* list_reverse_strs(void* box) {
 }
 
 int8_t list_contains_int(void* box, int64_t v) {
-    ResidVal* b = (ResidVal*)box;
-    for (int64_t i = 0; i < b->count; i++)
-        if (resid_unbox_i64(b->slots[i]) == v) return 1;
+    int64_t n = resid_list_len(box);
+    for (int64_t i = 0; i < n; i++)
+        if (resid_unbox_i64(resid_list_get(box, i)) == v) return 1;
     return 0;
 }
 
 int8_t list_contains_str(void* box, const char* v) {
-    ResidVal* b = (ResidVal*)box;
-    for (int64_t i = 0; i < b->count; i++)
-        if (strcmp((const char*)b->slots[i], v) == 0) return 1;
+    int64_t n = resid_list_len(box);
+    for (int64_t i = 0; i < n; i++)
+        if (strcmp((const char*)resid_list_get(box, i), v) == 0) return 1;
     return 0;
 }
 
@@ -3152,14 +3308,12 @@ static int rt_cmp_str_slot(const void* a, const void* b) {
 
 void rt_stable_sort(void** items, int64_t n, int (*cmp)(const void*, const void*));
 
-static void* rt_list_sorted_copy(void* box, int (*cmp)(const void*, const void*)) {    ResidVal* b = (ResidVal*)box;
-    ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
-    out->tag = b->tag;
-    out->count = b->count;
-    out->type = b->type;
-    out->slots = b->count > 0 ? (void**)malloc((size_t)b->count * sizeof(void*)) : NULL;
-    for (int64_t i = 0; i < b->count; i++) out->slots[i] = b->slots[i];
-    rt_stable_sort(out->slots, b->count, cmp);
+static void* rt_list_sorted_copy(void* box, int (*cmp)(const void*, const void*)) {
+    int64_t n = resid_list_len(box);
+    void** items = resid_list_to_array(box);
+    rt_stable_sort(items, n, cmp);
+    void* out = resid_list_new(n, items, resid_list_type(box));
+    free(items);
     return out;
 }
 
@@ -3172,9 +3326,9 @@ void* list_sort_strs(void* box) {
 }
 
 int64_t list_sum(void* box) {
-    ResidVal* b = (ResidVal*)box;
+    int64_t n = resid_list_len(box);
     int64_t s = 0;
-    for (int64_t i = 0; i < b->count; i++) s += resid_unbox_i64(b->slots[i]);
+    for (int64_t i = 0; i < n; i++) s += resid_unbox_i64(resid_list_get(box, i));
     return s;
 }
 
@@ -3260,9 +3414,9 @@ void* list_reverse_floats(void* box) {
 }
 
 int8_t list_contains_float(void* box, double v) {
-    ResidVal* b = (ResidVal*)box;
-    for (int64_t i = 0; i < b->count; i++)
-        if (resid_unbox_f64(b->slots[i]) == v) return 1;
+    int64_t n = resid_list_len(box);
+    for (int64_t i = 0; i < n; i++)
+        if (resid_unbox_f64(resid_list_get(box, i)) == v) return 1;
     return 0;
 }
 
@@ -3277,17 +3431,17 @@ void* list_sort_floats(void* box) {
 }
 
 double list_sumf(void* box) {
-    ResidVal* b = (ResidVal*)box;
+    int64_t n = resid_list_len(box);
     double s = 0.0;
-    for (int64_t i = 0; i < b->count; i++) s += resid_unbox_f64(b->slots[i]);
+    for (int64_t i = 0; i < n; i++) s += resid_unbox_f64(resid_list_get(box, i));
     return s;
 }
 
 /* ─── Bootstrap-layout list verbs ───
    The bootstrap compilers build lists as { int64_t n; raw slots[n] } with
    unboxed elements (i64 / double / char*). These twins serve that layout;
-   the Rust pipeline uses the ResidVal variants above. Names are prefixed
-   bl_ so both conventions coexist. */
+   the Rust pipeline uses the persistent-list variants above. Names are
+   prefixed bl_ so both conventions coexist. */
 
 static void* bl_alloc(int64_t n) {
     int64_t* m = (int64_t*)malloc(8 + (size_t)n * 8);
@@ -3394,10 +3548,7 @@ void rt_stable_sort(void** items, int64_t n, int (*cmp)(const void*, const void*
 }
 
 void* list_sort_by(void* box, int (*cmp)(const void*, const void*)) {
-    ResidVal* b = (ResidVal*)box;
-    ResidVal* out = rt_list_sorted_copy(box, cmp);
-    (void)b;
-    return out;
+    return rt_list_sorted_copy(box, cmp);
 }
 
 void* bl_sort_i64(void* box) { return bl_sorted_copy(box, 8, bl_cmp_i64); }
@@ -3577,16 +3728,15 @@ int8_t resid_tcp_close(int64_t fd) {
  * (0 on error/EOF). */
 
 int8_t resid_tcp_send_bin(int64_t fd, void* lst) {
-    /* seeded-list convention: slot 0 is the dummy seed, real bytes are
-     * slots 1..count-1 (raw i64 values truncated to u8) */
-    ResidVal* rv = (ResidVal*)lst;
-    int64_t n = rv->count - 1;
+    /* seeded-list convention: element 0 is the dummy seed, real bytes are
+     * elements 1..count-1 (raw i64 values truncated to u8) */
+    int64_t n = resid_list_len(lst) - 1;
     if (n <= 0) return 1;
     char* buf = (char*)malloc((size_t)n);
     if (!buf) return 0;
     for (int64_t i = 0; i < n; i++) {
-        /* scalar slots are boxed: slot -> ResidVal -> slots[0] -> i64 */
-        ResidVal* bx = (ResidVal*)rv->slots[1 + i];
+        /* scalar elements are boxed: element -> ResidVal -> slots[0] -> i64 */
+        ResidVal* bx = (ResidVal*)resid_list_get(lst, 1 + i);
         buf[i] = (char)(*(int64_t*)bx->slots[0] & 0xFF);
     }
     const char* p2 = buf;
@@ -3606,12 +3756,8 @@ int8_t resid_tcp_send_bin(int64_t fd, void* lst) {
 void* resid_tcp_recv_bin(int64_t fd, int64_t n) {
     if (n < 0) n = 0;
     char* buf = (char*)malloc((size_t)(n > 0 ? n : 1));
-    ResidVal* out = (ResidVal*)malloc(sizeof(ResidVal));
-    out->tag = 0;
-    out->count = n + 1;
-    out->slots = (void**)malloc(sizeof(void*) * (size_t)(n + 1));
-    out->type = "List";
-    out->slots[0] = resid_box_i64(0);
+    void** slots = (void**)malloc(sizeof(void*) * (size_t)(n + 1));
+    slots[0] = resid_box_i64(0);
     int64_t got = 0;
     while (got < n) {
         ssize_t r = recv((int)fd, buf + got, (size_t)(n - got), 0);
@@ -3620,9 +3766,11 @@ void* resid_tcp_recv_bin(int64_t fd, int64_t n) {
     }
     for (int64_t i = 0; i < n; i++) {
         char bv = (i < got) ? buf[i] : 0;
-        out->slots[1 + i] = resid_box_i64((int64_t)(unsigned char)bv);
+        slots[1 + i] = resid_box_i64((int64_t)(unsigned char)bv);
     }
     free(buf);
+    void* out = resid_list_new(n + 1, slots, "List");
+    free(slots);
     return out;
 }
 
@@ -3897,11 +4045,8 @@ void* resid_map_keys(void* map) {
             if (b[k].used) ks[j++] = b[k].key;
         }
     }
-    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
-    r->tag = 0;
-    r->count = n;
-    r->type = "list";
-    r->slots = ks;
+    void* r = resid_list_new(n, ks, "list");
+    free(ks);
     return r;
 }
 
@@ -3919,11 +4064,8 @@ void* resid_map_values(void* map) {
             if (b[k].used) vs[j++] = b[k].val;
         }
     }
-    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
-    r->tag = 0;
-    r->count = n;
-    r->type = "list";
-    r->slots = vs;
+    void* r = resid_list_new(n, vs, "list");
+    free(vs);
     return r;
 }
 

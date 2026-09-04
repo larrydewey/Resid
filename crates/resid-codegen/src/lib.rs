@@ -811,7 +811,7 @@ impl<'ctx> CodeGen<'ctx> {
     /// raw GrowBuf pointer straight through: its caller is the one
     /// function still actively growing it, and converting here would run
     /// once per delegated call instead of once for the whole chain (and
-    /// hand that caller a normal ResidVal where it's about to keep
+    /// hand that caller a normal boxed List where it's about to keep
     /// pushing onto what it trusts is still a GrowBuf — a memory-layout
     /// mismatch, not just a slowdown). Anything else (in particular the
     /// recursive tail call, `return f(..., acc2, ...);`) passes `v`
@@ -885,7 +885,7 @@ impl<'ctx> CodeGen<'ctx> {
                     let v = if matches!(&value.kind, ExprKind::ListLit(elems) if elems.is_empty())
                         && matches!(ty, SemType::List(_))
                     {
-                        self.build_constructor(0, &ty, Vec::new())?
+                        self.build_list_constructor(&ty, Vec::new())?
                     } else {
                         self.lower_expr(sc, value, target)?
                     };
@@ -1529,7 +1529,7 @@ impl<'ctx> CodeGen<'ctx> {
         // ── Body entry: load element and store into loop var slot ──
         self.builder.position_at_end(body_entry_bb);
         let idx = i_phi.as_basic_value().into_int_value();
-        let elem = self.load_slot(col.v, idx, &elem_ty)?;
+        let elem = self.load_list_elem(col.v, idx, &elem_ty)?;
 
         // Allocate slot for loop variable
         let ll = self.llvm_type(&elem_ty)?;
@@ -3183,7 +3183,8 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(to_err)?;
                 self.call_to_string("BoolToString", b8.into())
             }
-            SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. }
+            SemType::List(_) => self.call_to_string("resid_list_to_string", raw.v.into()),
+            SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. }
             | SemType::SourceLoc | SemType::Ptr => self.call_to_string("ToString", raw.v.into()),
             other => Err(format!("codegen: cannot interpolate value of type {other}")),
         }
@@ -3612,7 +3613,10 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_unbox_i128", vec![ptr.into()], i128t.into());
         self.decl_rt("resid_unbox_u128", vec![ptr.into()], i128t.into());
         self.decl_rt("resid_list_len", vec![ptr.into()], i64t.into());
+        self.decl_rt("resid_list_get", vec![ptr.into(), i64t.into()], ptr.into());
         self.decl_rt("resid_list_concat", vec![ptr.into(), ptr.into()], ptr.into());
+        self.decl_rt("resid_list_to_string", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_list_new", vec![i64t.into(), ptr.into(), ptr.into()], ptr.into());
         // Growable-accumulator fast path (perf; see resid_type::find_growable_accumulators).
         self.decl_rt("resid_growbuf_from_list", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_growbuf_push_list", vec![ptr.into(), ptr.into()], ptr.into());
@@ -3884,6 +3888,22 @@ impl<'ctx> CodeGen<'ctx> {
                     self.build_constructor(idx as i64, &sum, vec![boxed])
                 }
             };
+        }
+
+        // Generic `ToString(x)` on a composite. The generic builtin sig drives
+        // the extern `ToString(void*)`, which reinterprets its argument as a
+        // flat `ResidVal`; the trie-backed `ResidList` has a different layout,
+        // so a List argument must go through the List-aware runtime helper
+        // instead (matches value_to_str's f-string interpolation path).
+        if name == "ToString" && args.len() == 1 {
+            let arg_ty =
+                resid_type::infer_expr_ctx(&args[0].1, &self.env(sc), &self.sigs, &self.types)
+                    .unwrap_or(SemType::Bool);
+            if matches!(arg_ty, SemType::List(_)) {
+                let av = self.lower_expr(sc, &args[0].1, None)?;
+                let s = self.rt_call("resid_list_to_string", vec![av.v])?;
+                return Ok(Val { v: s, ty: SemType::Str });
+            }
         }
 
         // Wide (256/512-bit) integer stringification. The C ABI has no native
@@ -4801,6 +4821,47 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(Val { v, ty: sum.clone() })
     }
 
+    /// Build a List value from element slots. Lists are a persistent trie
+    /// (resid_rt.c's ResidList), not a ResidVal, so — unlike every other
+    /// composite — they're built via resid_list_new, not resid_box_new.
+    fn build_list_constructor(
+        &mut self,
+        list_ty: &SemType,
+        slots: Vec<BasicValueEnum<'ctx>>,
+    ) -> Result<Val<'ctx>, String> {
+        let cntv = self.cx.i64_type().const_int(slots.len() as u64, false);
+        let slotarray = if slots.is_empty() {
+            self.cx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
+        } else {
+            let elem = self.cx.ptr_type(AddressSpace::default());
+            let arr_ty = elem.array_type(slots.len() as u32);
+            let alloca = self.builder.build_alloca(arr_ty, "list_slots").map_err(to_err)?;
+            for (i, s) in slots.iter().enumerate() {
+                let g = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(
+                            arr_ty,
+                            alloca,
+                            &[
+                                self.cx.i32_type().const_int(0, false),
+                                self.cx.i32_type().const_int(i as u64, false),
+                            ],
+                            "slot",
+                        )
+                        .map_err(to_err)?
+                };
+                self.builder.build_store(g, *s).map_err(to_err)?;
+            }
+            alloca.as_basic_value_enum()
+        };
+        let type_str = self.lower_str(&format!("{list_ty}"));
+        let v = self.rt_call(
+            "resid_list_new",
+            vec![cntv.into(), slotarray, type_str.into()],
+        )?;
+        Ok(Val { v, ty: list_ty.clone() })
+    }
+
     /// Wrap a nullable runtime result pointer into an Option sum box
     /// (Some(value) when non-null, None otherwise). Used by map indexing
     /// and `Map.get`.
@@ -5007,6 +5068,27 @@ impl<'ctx> CodeGen<'ctx> {
         fty: &SemType,
     ) -> Result<Val<'ctx>, String> {
         let slot = self.rt_call("resid_box_slot", vec![obj, idx.into()])?;
+        self.unbox_slot(slot, fty)
+    }
+
+    /// Read element `idx` of a List, unboxing per the element type. Lists
+    /// are a persistent trie (resid_rt.c's ResidList), not a ResidVal, so
+    /// they can't share load_slot's resid_box_slot call — this walks the
+    /// trie via resid_list_get instead, then unboxes exactly like a struct
+    /// field would.
+    fn load_list_elem(
+        &mut self,
+        list: BasicValueEnum<'ctx>,
+        idx: IntValue<'ctx>,
+        ety: &SemType,
+    ) -> Result<Val<'ctx>, String> {
+        let slot = self.rt_call("resid_list_get", vec![list, idx.into()])?;
+        self.unbox_slot(slot, ety)
+    }
+
+    /// Shared per-type unboxing for a raw slot pointer, used by both
+    /// load_slot (struct/sum fields) and load_list_elem (list elements).
+    fn unbox_slot(&mut self, slot: BasicValueEnum<'ctx>, fty: &SemType) -> Result<Val<'ctx>, String> {
         match fty {
             SemType::Numeric(n) if !n.is_float() => {
                 let bits = match n { NumericType::Int(w) | NumericType::UInt(w) => w.bits(), _ => 64 };
@@ -5079,7 +5161,7 @@ impl<'ctx> CodeGen<'ctx> {
         }
         let elem_ty = elem_ty.ok_or_else(|| "codegen: cannot lower an empty list literal".to_string())?;
         let ty = SemType::List(Box::new(elem_ty));
-        self.build_constructor(0, &ty, slots)
+        self.build_list_constructor(&ty, slots)
     }
 
     /// Lower a map literal `{ key: val, ... }` by building a ResidMap via C runtime.
@@ -5151,7 +5233,7 @@ impl<'ctx> CodeGen<'ctx> {
             let v = if matches!(&vexpr.kind, ExprKind::ListLit(elems) if elems.is_empty())
                 && matches!(fty, SemType::List(_))
             {
-                self.build_constructor(0, fty, Vec::new())?
+                self.build_list_constructor(fty, Vec::new())?
             } else {
                 self.lower_expr(sc, vexpr, None)?
             };
@@ -5245,7 +5327,7 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(to_err)?;
         self.builder.build_unreachable().map_err(to_err)?;
         self.builder.position_at_end(ok_bb);
-        self.load_slot(list_val, idx, elem)
+        self.load_list_elem(list_val, idx, elem)
     }
 
     /// Lower `#location` to a boxed SourceLoc carrying the current span's

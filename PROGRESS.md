@@ -84,6 +84,27 @@ stage-2. Runtime gains `resid_box_i128`/`resid_unbox_i128` and
 `Int128ToString`/`UInt128ToString` for formatting. Parity across both
 stages verified byte-identically (e2e `run_wide_int_boxing`).
 
+**Stage-2 List port to C-runtime trie complete** (self-hosted driver parity
+with stage-1). The stage-2 driver (`examples/codegen.resid`) now lowers List
+operations to the same trie-backed C functions as stage-1
+(`resid_list_new`/`len`/`get`/`concat`, and `list_sort_*`/`list_reverse_*`/
+`list_contains_*`/`list_sum`/`list_sumf` verbs) instead of the old flat
+slot-array IR. Elements are boxed on store (`resid_box_*`) and unboxed on
+read (`resid_unbox_*`: `lst_read_*`/`lst_box_*` helpers; Str/composite pass
+raw). Literals, `[]` indexing, for-in, `.len()`, `.concat()`, the
+`list_*` verbs, and — critically — `sort(using = Ord(T))` compare through
+`list_sort_by` with a correct boxed-element comparator trampoline
+(`cmp_def`/`cmp_read`: load boxed slots, unbox per scalar width, bitcast for
+Str/composite, normalize to -1/0/1, negate for `_rev`). Empty lists and
+Map/Set `.keys()`/`.values()`/`.to_list()` pass trie lists through directly.
+Byte-identical output verified through the driver on list literals,
+indexing, for-in, concat, sort (Int + custom composite `Ord(Point)`),
+reverse, contains, sum, and empty lists; dead flat-list IR (`@e.lconcat`,
+`bl_*`, `resid_rt_list_to_flat`) fully removed. All 12 bootstrap/`stage2_`
+e2e green (`bootstrap_behavior_ord_parity`, `bootstrap_map_set_parity`,
+`bootstrap_match_parity`, `bootstrap_option_sum_parity`,
+`bootstrap_question_else_parity`, …).
+
 Constraint types (§12) are stage-1 implemented: both `Int[value > 0]` and
 `Int where value > 0` parse and discharge on annotated bindings.
 The long-standing "context-dependent codegen ghost" is dead —
@@ -874,6 +895,16 @@ progress subsections below.
 
 ## 8. Persistent collection internals (List/Map/Set perf) — IN PROGRESS
 
+**Status at a glance:** `List(T)` is reimplemented as a persistent trie,
+in **both** pipelines. Rust pipeline (`crates/residc/resid_rt.c`,
+`crates/resid-codegen`) and the stage-2 self-hosted driver
+(`examples/codegen.resid`) now both call the same `resid_list_*`
+C functions (resp. `list_*` verbs / `resid_list_new`/`get`/`len`/`concat`)
+with full bootstrap parity (`bootstrap_behavior_ord_parity` and all 12
+`bootstrap_*`/`stage2_*` e2e green). The `run_value_formatting` `ToString`
+builtin-call bug is fixed. Map/Set (HAMT) and Str are not started (see
+checklist below).
+
 ### Problem
 
 `resid_list_concat` and `resid_map_insert` (`crates/residc/resid_rt.c`)
@@ -923,16 +954,15 @@ full-rehash-per-insert.
 Why this beats both rejected approaches:
 - **Zero tenet risk** — `List`/`Map`/`Set` stay exactly as observably
   immutable as today; nothing for anyone to reason about differently.
-- **Free dual-pipeline parity** — lives entirely in `resid_rt.c`, which
-  both the Rust pipeline and the self-hosted stage-2 driver already link
-  against and call identically. Fix it once in the C runtime; stage-2
-  gets the speedup with *zero* codegen or type-checker changes on either
-  side. This is the thing that made the mutable-type and static-analysis
-  approaches a recurring "port it by hand again" tax — this approach has
-  no such tax.
 - **Generalizes uniformly** — one technique (path-copying trie), two
   data structures (trie for sequence types, HAMT for associative types),
   covers every collection.
+- **Strict, not lazy** — every push/concat computes its full result
+  immediately; nothing is thunked or deferred. This has no interaction
+  with comptime β-reduction (`resid-type/src/reduce.rs`'s `CValue`),
+  which never evaluates `List(_)` values at all (only `Int`/`Bool`/`Str`)
+  and operates purely over the AST before codegen ever runs. Confirmed by
+  reading `reduce.rs` directly — there is no shared code path to break.
 
 Honest tradeoff: O(log₃₂ n) per operation, not O(1) — a handful of
 pointer hops (log₃₂ of a billion ≈ 6) instead of a true single mutation.
@@ -940,21 +970,143 @@ Far better than today's O(n) copy; not quite as fast as real mutation for
 the narrow cases the retained compile-time analysis above already
 handles specially.
 
+**Correction to the original pitch:** this was first proposed as "free
+dual-pipeline parity — fix it once in `resid_rt.c`, stage-2 gets it for
+free." That is **wrong**. See "Stage-2 parity" below — stage-2 has its
+own, independent flat-array list representation that never touches
+`resid_rt.c`'s list functions at all. The user caught this being asked
+about directly ("this isn't forcing values into residual thunks,
+correct? ... verifiable at reduction/compile time?") and agreed to a
+phased plan instead: Rust pipeline first (commit), then stage-2 as an
+explicit, separate port (commit), same pattern already used for the
+AES-NI and growable-accumulator stage-2 gaps.
+
+### Implementation status: List, Rust pipeline (this session)
+
+Done and compiling. `crates/residc/resid_rt.c` now has a private
+`ResidList { int64_t count; int32_t shift; PVecNode* root; const char*
+type; }` type (32-way branching trie, `PVecNode { void* items[32]; }`),
+completely separate from `ResidVal` (which remains the representation for
+struct/sum values — untouched). Path-copying push/concat: only the nodes
+on the root-to-leaf path are copied; everything else is shared by
+pointer. The standalone prototype this was ported from (with its own
+ASan/UBSan-clean torture tests: persistence across 300 snapshots,
+branching, 2M-element scale) lived at
+`/tmp/.../scratchpad/pvec/pvec.c` in the session sandbox — **not in the
+repo**; if useful as a reference, it no longer exists on disk and would
+need to be reconstructed from this file's description (it's a direct,
+unmodified transcription of the `pvec_*` functions now in `resid_rt.c`,
+just renamed `ResidList`/`resid_list_*`/`pvec_*` → same names).
+
+New/changed C entry points (`resid_rt.c`):
+- `resid_list_new(count, void** src, type)` — build from a flat array (replaces `resid_box_new(0, ...)` for lists).
+- `resid_list_len`, `resid_list_get(list, i)`, `resid_list_concat`, `resid_list_type`, `resid_list_to_array` (flatten to a fresh `void**`, used by flatten-operate-rebuild verbs).
+- `resid_list_to_string` — new, List-aware `ToString`-equivalent for **string interpolation** (`"${xs}"`) only — see the open bug below.
+- `resid_rt_list_to_flat` (stage-2 bridge), `resid_growbuf_from_list/push_list/finish`, `str_join`, `rt_list_from`, `list_reverse_*`, `list_contains_*`, `rt_list_sorted_copy` (→ `list_sort_*`, `list_sort_by`), `list_sum`, `list_sumf`, `resid_fs_list_dir`, `resid_tcp_send_bin/recv_bin`, `resid_map_keys/values` — all converted from direct `ResidVal.slots`/`.count` access to the new accessors (flatten-operate-rebuild where random access to every element is needed).
+- `bl_*` (stage-2's own flat-layout twins, e.g. `bl_sort_i64`) are **untouched** — different representation, different problem, see below.
+
+New/changed codegen (`crates/resid-codegen/src/lib.rs`):
+- `build_list_constructor` — new, parallel to `build_constructor`, calls `resid_list_new` instead of `resid_box_new`. `lower_list_lit` and both empty-list-literal special cases (`let x: List(T) = []`, and a struct field initialized with `[]`) now call it.
+- `load_list_elem` — new, parallel to `load_slot` (renamed internals to `unbox_slot`, shared by both), calls `resid_list_get` instead of `resid_box_slot`. Redirected for-in element access and `lower_index`'s element read — these were the only 2 places list elements were read via the old shared slot-accessor.
+- `value_to_str`'s `SemType::List(_)` arm now calls `resid_list_to_string` instead of the generic `ToString`, for f-string interpolation.
+- New `decl_rt` entries: `resid_list_get`, `resid_list_to_string`, `resid_list_new` (alongside the already-declared `resid_list_len`/`resid_list_concat`).
+- `resid_growbuf_from_list`/`push_list`/`finish` in `resid_rt.c` now flatten the trie via `resid_list_to_array`/`resid_list_get` instead of stealing a `ResidVal`'s flat `slots` pointer (that zero-copy trick doesn't exist for a trie) — still correct under the same growable-accumulator soundness proof, just a real O(n) flatten instead of a pointer steal at each step (only changes a constant, not the complexity class).
+
+### Known bug — fix this first (RESOLVED)
+
+`run_value_formatting` (`crates/residc/tests/e2e.rs`) failed:
+```
+List(1,2,3): List(Int(64))()
+```
+Expected the printed list to contain `1`; got an empty `()`. Root cause
+(diagnosed, not yet fixed): the test calls `ToString(xs)` as an
+**explicit builtin function call**, not string interpolation. That path
+does not go through `value_to_str` (which I did fix) — it goes through
+the generic builtin-call codegen path driven by `resid-type`'s
+`BUILTIN_SIGS` entry `("ToString", &[SemType::Ptr], SemType::Str)`,
+which still calls the old C `ToString(void*)` and reinterprets the
+`ResidList*` argument as a `ResidVal*`. Byte-for-byte, `ResidList.count`
+(offset 0) lands where `ResidVal.tag` is read (falls through to the
+"list or struct" branch by accident, tag not 0/1/2 — harmless), but
+`ResidVal.count` (offset 8) then reads `ResidList.shift` (an `int32_t`,
+0 for a short list) zero-extended — so the element loop reads count=0
+and prints nothing. **Fix** (done): find where a direct (non-interpolation)
+call to the builtin `ToString` is lowered — special-case it the same way
+`value_to_str` was special-cased: when the statically-known argument type
+is `SemType::List(_)`, emit a call to `resid_list_to_string` instead of
+`ToString`. This landed in `crates/resid-codegen/src/lib.rs` (`lower_call`);
+`run_value_formatting` is green.
+
+### Stage-2 parity — separate, larger task (DONE)
+
+Initially scoped as "not started"; completed in this session (phase 2 of
+the phased plan).
+
+Discovered mid-session (see the file's own comment at
+`resid_rt.c`'s "Bootstrap-layout list verbs" section: "Names are prefixed
+`bl_` so both conventions coexist" — this split was already known, just
+not fully appreciated until traced through): stage-2
+(`examples/codegen.resid`, the self-hosted bootstrap compiler) does
+**not** use `resid_rt.c`'s list representation for lists it builds. It
+has its own, independent, hand-rolled flat-memory-layout list, built
+directly as raw LLVM IR text:
+- List literals: `lst_emit`/`lst_stores` (~codegen.resid, search for
+  those names) — `malloc` + `store i64 <count>, ptr <reg>` (count at
+  offset 0) + per-element `getelementptr`/`store` at `8 + i*8`.
+- Indexing (`base[i]`): raw `getelementptr`/`load` IR inlined at the
+  index-expression call site (search for the `"["` postfix handler
+  around the list-indexing branch), same offset math.
+- `.concat()`: calls `@e.lconcat`, a **hand-written LLVM IR function**
+  (built by `rt_lconcat_def()`) doing raw pointer arithmetic over the
+  same flat layout — not a call into `resid_rt.c` at all.
+- `.sort()`/`.reverse()`/`.contains()`/`.sum()` **do** call into
+  `resid_rt.c`, but via the separate `bl_*` function family
+  (`bl_sort_i64`, `bl_reverse_i64`, ...), which already operates on this
+  same flat layout, not `ResidVal`/`ResidList`.
+
+So the Rust-pipeline trie fix above changes nothing for stage-2 — it
+never touches that code path. Making stage-2 benefit is a **separate,
+real port**, agreed with the user as phase 3 of this work, done and
+committed independently from phases 1–2:
+1. Replace `lst_emit`/indexing/`e.lconcat`'s hand-rolled flat IR in
+   `codegen.resid` with calls to the same new `resid_list_new`/
+   `resid_list_get`/`resid_list_concat`/`resid_list_len` C functions the
+   Rust pipeline now uses (this also *simplifies* `codegen.resid` —
+   stage-2's list handling becomes as simple as its existing Map/Set
+   handling, which already just calls C functions by name).
+2. Update the `bl_*` sort/reverse/contains/sum call sites in
+   `codegen.resid` to match (or leave `bl_*` as bootstrap-only twins if
+   stage-2 keeps needing a flat scratch array internally for those —
+   decide when doing the port, not before).
+3. Regenerate `examples/driver.resid` via
+   `python3 tools/merge_driver.py`, run the `bootstrap_*` e2e tests
+   specifically, then the full suite.
+
+Do **not** attempt to make stage-2 share `resid_rt.c`'s `ResidList`
+struct directly by having it poke the same memory layout from hand-rolled
+IR the way it does today — that reintroduces exactly the layout-coupling
+fragility this whole effort is trying to get away from. Route it through
+function calls, the same way Map/Set already are.
+
 ### Tracking checklist
 
 | Type | Backing today | Target | Status |
 |---|---|---|---|
-| `List(T)` | flat array, full copy per `.concat` (`resid_list_concat`) | 32-way persistent trie | **scoping now** |
+| `List(T)`, Rust pipeline | 32-way persistent trie (`ResidList`) | — (done) | **implemented** |
+| `List(T)`, stage-2 (`codegen.resid`) | flat array + hand-rolled IR (`lst_emit`, `e.lconcat`, raw GEP indexing) | calls into the same `resid_list_*` C functions | **done — full bootstrap parity (`bootstrap_behavior_ord_parity` etc.)** |
 | `Map(K,V)` | flat bucket table, full rehash per `.insert` (`resid_map_insert`) | HAMT | not started |
 | `Set(T)` | same table as `Map` (`resid_set_insert` → `resid_map_insert`) | HAMT (shared with `Map`) | not started |
 | `Str` | same copy-per-concat shape as `List` (`resid_str_concat`) | TBD — rope, or defer | not started / needs a decision |
 
-Order: `List` first (prove the trie design and its test rig hard), then
-apply the same shape to `Map`/`Set` (HAMT). `Str` needs a separate call —
-a rope or similar is the analogous fix, but string workloads in `lib/`
-lean more on small fixed-size buffers (hex/byte formatting) than on the
-large-N accumulator pattern that motivated this; revisit once List/Map/Set
-are done and re-measure before committing to it.
+Order, as agreed with the user (phased, commit after each phase):
+1. `List`, Rust pipeline — **done** (details above).
+2. `List`, stage-2 port — **done** (this session; parity verified).
+3. `Map`/`Set` (HAMT) — not started.
+4. `Str` — needs a separate design call (rope vs. defer); revisit once
+   List/Map/Set are done and re-measure — `lib/` string workloads lean
+   more on small fixed-size buffers (hex/byte formatting) than the
+   large-N accumulator pattern that motivated this whole effort, so it
+   may not be worth it. Don't assume it is.
 
 
 

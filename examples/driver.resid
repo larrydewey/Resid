@@ -1810,40 +1810,40 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 return cg_extern3(s, t2.pos, "clamp_i64", "Int", "Int", "Int", "Int", env, fs, c);
             }
             if (t.text == "list_sort_ints") {
-                return cg_extern1(s, t2.pos, "bl_sort_i64", "List(Int)", "List(Int)", env, fs, c);
+                return cg_extern1(s, t2.pos, "list_sort_ints", "List(Int)", "List(Int)", env, fs, c);
             }
             if (t.text == "sort") {
                 return cg_sort(s, t2.pos, env, fs, c);
             }
             if (t.text == "list_sort_strs") {
-                return cg_extern1(s, t2.pos, "bl_sort_str", "List(Str)", "List(Str)", env, fs, c);
+                return cg_extern1(s, t2.pos, "list_sort_strs", "List(Str)", "List(Str)", env, fs, c);
             }
             if (t.text == "list_sort_floats") {
-                return cg_extern1(s, t2.pos, "bl_sort_f64", "List(Float)", "List(Float)", env, fs, c);
+                return cg_extern1(s, t2.pos, "list_sort_floats", "List(Float)", "List(Float)", env, fs, c);
             }
             if (t.text == "list_reverse_ints") {
-                return cg_extern1(s, t2.pos, "bl_reverse_i64", "List(Int)", "List(Int)", env, fs, c);
+                return cg_extern1(s, t2.pos, "list_reverse_ints", "List(Int)", "List(Int)", env, fs, c);
             }
             if (t.text == "list_reverse_strs") {
-                return cg_extern1(s, t2.pos, "bl_reverse_str", "List(Str)", "List(Str)", env, fs, c);
+                return cg_extern1(s, t2.pos, "list_reverse_strs", "List(Str)", "List(Str)", env, fs, c);
             }
             if (t.text == "list_reverse_floats") {
-                return cg_extern1(s, t2.pos, "bl_reverse_f64", "List(Float)", "List(Float)", env, fs, c);
+                return cg_extern1(s, t2.pos, "list_reverse_floats", "List(Float)", "List(Float)", env, fs, c);
             }
             if (t.text == "list_contains_int") {
-                return cg_externb2(s, t2.pos, "bl_contains_i64", "List(Int)", "Int", env, fs, c);
+                return cg_externb2(s, t2.pos, "list_contains_int", "List(Int)", "Int", env, fs, c);
             }
             if (t.text == "list_contains_str") {
-                return cg_externb2(s, t2.pos, "bl_contains_str", "List(Str)", "Str", env, fs, c);
+                return cg_externb2(s, t2.pos, "list_contains_str", "List(Str)", "Str", env, fs, c);
             }
             if (t.text == "list_contains_float") {
-                return cg_externb2(s, t2.pos, "bl_contains_f64", "List(Float)", "Float", env, fs, c);
+                return cg_externb2(s, t2.pos, "list_contains_float", "List(Float)", "Float", env, fs, c);
             }
             if (t.text == "list_sum") {
-                return cg_extern1(s, t2.pos, "bl_sum", "List(Int)", "Int", env, fs, c);
+                return cg_extern1(s, t2.pos, "list_sum", "List(Int)", "Int", env, fs, c);
             }
             if (t.text == "list_sumf") {
-                return cg_extern1(s, t2.pos, "bl_sumf", "List(Float)", "Float", env, fs, c);
+                return cg_extern1(s, t2.pos, "list_sumf", "List(Float)", "Float", env, fs, c);
             }
             return cg_call(s, t2.pos, t.text, env, fs, c);
         }
@@ -1952,7 +1952,81 @@ GT box_scalar(Str s, GT v, List(Str) env, Funcs fs) {
     return GT { pos: v.pos, val: addr, ty: t, cnt: v.cnt, err: "", glines: v.glines, lines: nl3, tmp: t1 + 1, lbl: v.lbl };
 }
 
-GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
+// ─── trie List boxing / unboxing helpers ──────────────────────────────
+// A trie-backed list stores each element as a heap-boxed pointer slot
+// (resid_box_* for scalars, raw char*/ptr for composite). These helpers
+// produce the IR that boxes a value for store, or unboxes a slot on read,
+// mirroring the Rust pipeline's box_scalar / unbox_slot.
+
+// Register holding the boxed (heap) form of a literal element value. Scalars
+// go through a resid_box_* call into %t{tb}; pointers pass through as-is.
+Str lst_box_reg(Str ety, Str ev, Int tb) {
+    if (int_fam(ety) || ety == "Bool" || ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+        return "%t" + IntToString(tb);
+    }
+    return ev;
+}
+
+// IR lines computing the boxed form of a literal element into %t{tb}.
+List(Str) lst_box_lines(Str ety, Str ev, Int tb) {
+    Str r = "%t" + IntToString(tb);
+    if (ety == "Bool") {
+        Str z = "%t" + IntToString(tb + 1);
+        Str cnv = z + " = zext i1 " + ev + " to i8";
+        Str box = r + " = call ptr @resid_box_bool(i8 " + z + ")";
+        return [cnv, box];
+    }
+    if (ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+        return [r + " = call ptr @resid_box_f64(double " + ev + ")"];
+    }
+    if (int_fam(ety)) {
+        Int w = ll_width_of(ety);
+        if (w == 128) {
+            Bool u = str_has_prefix_cg(ety, "UInt");
+            Str fn = if (u) { "@resid_box_u128" } else { "@resid_box_i128" };
+            return [r + " = call ptr " + fn + "(i128 " + ev + ")"];
+        }
+        if (w == 64) { return [r + " = call ptr @resid_box_i64(i64 " + ev + ")"]; }
+        Str sx = "%t" + IntToString(tb + 1);
+        Str op = if (ll_is_signed(ety)) { "sext" } else { "zext" };
+        return [sx + " = " + op + " " + ll_ty(ety) + " " + ev + " to i64", r + " = call ptr @resid_box_i64(i64 " + sx + ")"];
+    }
+    List(Str) e0 = [];
+    return e0;
+}
+
+// Register holding the unboxed value read from a list slot. Scalars unbox via
+// resid_unbox_* into %t{tr}; pointers (char* / composite) pass through as-is.
+Str lst_read_reg(Str ety, Str slot, Int tr) {
+    if (int_fam(ety) || ety == "Bool" || ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+        return "%t" + IntToString(tr);
+    }
+    return slot;
+}
+
+// IR lines unboxing a list slot into %t{tr} as the element value.
+List(Str) lst_read_lines(Str ety, Str slot, Int tr, List(Str) acc) {
+    Str r = "%t" + IntToString(tr);
+    if (ety == "Bool") {
+        Str z = "%t" + IntToString(tr + 1);
+        return acc.concat([z + " = call i8 @resid_unbox_bool(ptr " + slot + ")", r + " = trunc i8 " + z + " to i1"]);
+    }
+    if (ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+        return acc.concat([r + " = call double @resid_unbox_f64(ptr " + slot + ")"]);
+    }
+    if (int_fam(ety)) {
+        Int w = ll_width_of(ety);
+        if (w == 128) {
+            Bool u = str_has_prefix_cg(ety, "UInt");
+            Str fn = if (u) { "@resid_unbox_u128" } else { "@resid_unbox_i128" };
+            return acc.concat([r + " = call i128 " + fn + "(ptr " + slot + ")"]);
+        }
+        if (w == 64) { return acc.concat([r + " = call i64 @resid_unbox_i64(ptr " + slot + ")"]); }
+        Str raw = "%t" + IntToString(tr + 1);
+        return acc.concat([raw + " = call i64 @resid_unbox_i64(ptr " + slot + ")", r + " = trunc i64 " + raw + " to " + ll_ty(ety)]);
+    }
+    return acc;
+}GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
     Tok t = lex_tok(s, base.pos);
     if (t.text == ".") {
         Tok fld = lex_tok(s, t.pos);
@@ -2036,29 +2110,21 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                 if (fld.text == "keys") {
                     Tok rp = lex_tok(s, lp.pos);
                     Int t1 = base.tmp + 1;
-                    Int t2 = base.tmp + 2;
-                    Str r0 = "%t" + IntToString(t1);
-                    Str reg = "%t" + IntToString(t2);
-                    Str l1 = r0 + " = call ptr @resid_map_keys(ptr " + base.val + ")";
-                    Str l2 = reg + " = call ptr @resid_rt_list_to_flat(ptr " + r0 + ")";
+                    Str reg = "%t" + IntToString(t1);
+                    Str l1 = reg + " = call ptr @resid_map_keys(ptr " + base.val + ")";
                     List(Str) l20 = base.lines;
                     List(Str) l3 = l20.concat([l1]);
-                    List(Str) l4 = l3.concat([l2]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + kt + ")", cnt: 0, err: "", glines: base.glines, lines: l4, tmp: t2, lbl: base.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + kt + ")", cnt: 0, err: "", glines: base.glines, lines: l3, tmp: t1, lbl: base.lbl };
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "values") {
                     Tok rp = lex_tok(s, lp.pos);
                     Int t1 = base.tmp + 1;
-                    Int t2 = base.tmp + 2;
-                    Str r0 = "%t" + IntToString(t1);
-                    Str reg = "%t" + IntToString(t2);
-                    Str l1 = r0 + " = call ptr @resid_map_values(ptr " + base.val + ")";
-                    Str l2 = reg + " = call ptr @resid_rt_list_to_flat(ptr " + r0 + ")";
+                    Str reg = "%t" + IntToString(t1);
+                    Str l1 = reg + " = call ptr @resid_map_values(ptr " + base.val + ")";
                     List(Str) l20 = base.lines;
                     List(Str) l3 = l20.concat([l1]);
-                    List(Str) l4 = l3.concat([l2]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + vt + ")", cnt: 0, err: "", glines: base.glines, lines: l4, tmp: t2, lbl: base.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + vt + ")", cnt: 0, err: "", glines: base.glines, lines: l3, tmp: t1, lbl: base.lbl };
                     return cg_postfix(s, b3, env, fs);
                 }
                 return gt_err("unsupported method " + fld.text + " on Map", base);
@@ -2158,15 +2224,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                 if (fld.text == "to_list") {
                     Tok rp = lex_tok(s, lp.pos);
                     Int t1 = base.tmp + 1;
-                    Int t2 = base.tmp + 2;
-                    Str r0 = "%t" + IntToString(t1);
-                    Str reg = "%t" + IntToString(t2);
-                    Str l1 = r0 + " = call ptr @resid_set_to_list(ptr " + base.val + ")";
-                    Str l2 = reg + " = call ptr @resid_rt_list_to_flat(ptr " + r0 + ")";
+                    Str reg = "%t" + IntToString(t1);
+                    Str l1 = reg + " = call ptr @resid_set_to_list(ptr " + base.val + ")";
                     List(Str) l20 = base.lines;
                     List(Str) l3 = l20.concat([l1]);
-                    List(Str) l4 = l3.concat([l2]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + et + ")", cnt: 0, err: "", glines: base.glines, lines: l4, tmp: t2, lbl: base.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + et + ")", cnt: 0, err: "", glines: base.glines, lines: l3, tmp: t1, lbl: base.lbl };
                     return cg_postfix(s, b3, env, fs);
                 }
                 return gt_err("unsupported method " + fld.text + " on Set", base);
@@ -2175,7 +2237,7 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                 Tok rp = lex_tok(s, lp.pos);
                 Int t1 = base.tmp + 1;
                 Str reg = "%t" + IntToString(t1);
-                Str line = reg + " = load i64, ptr " + base.val;
+                Str line = reg + " = call i64 @resid_list_len(ptr " + base.val + ")";
                 List(Str) l20 = base.lines;
                 List(Str) l2 = l20.concat([line]);
                 GT b2 = GT { pos: rp.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: base.glines, lines: l2, tmp: t1, lbl: base.lbl };
@@ -2187,7 +2249,7 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                 Tok rp2 = lex_tok(s, arg.pos);
                 Int t2 = arg.tmp + 1;
                 Str reg2 = "%t" + IntToString(t2);
-                Str line2 = reg2 + " = call ptr @e.lconcat(ptr " + base.val + ", ptr " + arg.val + ")";
+                Str line2 = reg2 + " = call ptr @resid_list_concat(ptr " + base.val + ", ptr " + arg.val + ")";
                 List(Str) l30 = arg.lines;
                 List(Str) l3 = l30.concat([line2]);
                 GT b3 = GT { pos: rp2.pos, val: reg2, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l3, tmp: t2, lbl: arg.lbl };
@@ -2240,19 +2302,13 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
         // Indices feed byte-offset GEPs at i64; truncate wide values.
         GT ixx = pick_widen(num_norm_cg(ix.ty) != "Int(64)", ix, "Int(64)");
         Int t1 = ixx.tmp + 1;
-        Int t2 = ixx.tmp + 2;
-        Int t3 = ixx.tmp + 3;
-        Str om = "%t" + IntToString(t1);
-        Str oa = "%t" + IntToString(t2);
-        Str gp = "%t" + IntToString(t3);
-        Int t4 = ixx.tmp + 4;
-        Str ld = "%t" + IntToString(t4);
+        Int t2 = t1 + 1;
+        Str slot = "%t" + IntToString(t1);
+        Str ldr = lst_read_reg(ety, slot, t2);
         List(Str) l0 = ixx.lines;
-        List(Str) l1 = l0.concat([om + " = mul i64 8, " + ixx.val]);
-        List(Str) l2 = l1.concat([oa + " = add i64 " + om + ", 8"]);
-        List(Str) l3 = l2.concat([gp + " = getelementptr i8, ptr " + base.val + ", i64 " + oa]);
-        List(Str) l4 = l3.concat([ld + " = load " + ll_ty(ety) + ", ptr " + gp]);
-        GT b5 = GT { pos: close.pos, val: ld, ty: ety, cnt: 0, err: "", glines: ix.glines, lines: l4, tmp: t4, lbl: ix.lbl };
+        List(Str) l1 = l0.concat([slot + " = call ptr @resid_list_get(ptr " + base.val + ", i64 " + ixx.val + ")"]);
+        List(Str) l2 = lst_read_lines(ety, slot, t2, l1);
+        GT b5 = GT { pos: close.pos, val: ldr, ty: ety, cnt: 0, err: "", glines: ix.glines, lines: l2, tmp: t2 + 1, lbl: ix.lbl };
         return cg_postfix(s, b5, env, fs);
     }
     return base;
@@ -2508,7 +2564,7 @@ GT cg_sort(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     Str tname = if (rev) { "__cmp_" + f + "_rev" } else { "__cmp_" + f };
     Int t1 = v.tmp + 1;
     Str reg = "%t" + IntToString(t1);
-    Str line = reg + " = call ptr @bl_sort_by(ptr " + v.val + ", ptr @" + tname + ")";
+    Str line = reg + " = call ptr @list_sort_by(ptr " + v.val + ", ptr @" + tname + ")";
     List(Str) l20 = v.lines;
     List(Str) l2 = l20.concat([line]);
     return GT { pos: close.pos, val: reg, ty: v.ty, cnt: 0, err: "", glines: v.glines, lines: l2, tmp: t1, lbl: v.lbl };
@@ -2587,10 +2643,15 @@ GT csl_value(Str s, Int pos, Str fty, List(Str) env, Funcs fs, GT c) {
     if (v1.text == "[" && v2.text == "]") {
         Int te = c.tmp + 1;
         Str re = "%t" + IntToString(te);
+        Str body = esc_ll(fty, 0, "");
+        Int bl = ll_bytes(body, 0, 0);
+        Int n1 = bl + 1;
+        Str tsym = "@.ltyE" + IntToString(te);
+        List(Str) gg0 = c.glines;
+        List(Str) gg1 = gg0.concat([tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\""]);
         List(Str) q0 = c.lines;
-        List(Str) q1 = q0.concat([re + " = call ptr @malloc(i64 8)"]);
-        List(Str) q2 = q1.concat(["store i64 0, ptr " + re]);
-        return GT { pos: v2.pos, val: re, ty: fty, cnt: 0, err: "", glines: c.glines, lines: q2, tmp: te, lbl: c.lbl };
+        List(Str) q1 = q0.concat([re + " = call ptr @resid_list_new(i64 0, ptr null, ptr " + tsym + ")"]);
+        return GT { pos: v2.pos, val: re, ty: fty, cnt: 0, err: "", glines: gg1, lines: q1, tmp: te, lbl: c.lbl };
     }
     return cg_expr(s, pos, env, fs, c);
 }
@@ -2640,27 +2701,39 @@ GT cg_struct_lit(Str s, Int pos, Str sname, List(Str) env, Funcs fs, GT c) {
     return csl_field(s, pos, fields, sname, reg, env, fs, c1);
 }
 
-List(Str) lst_stores(List(Str) vals, Str reg, Str ety, Int i, List(Str) acc) {
-    if (i >= vals.len()) { return acc; }
-    Int off = i * 8 + 8;
-    Str en = reg + ".e" + IntToString(i);
-    Str gp = en + " = getelementptr i8, ptr " + reg + ", i64 " + IntToString(off);
-    Str st = "store " + ll_ty(ety) + " " + vals[i] + ", ptr " + en;
-    List(Str) a2 = acc.concat([gp]);
-    List(Str) a3 = a2.concat([st]);
+List(Str) lst_stores(List(Str) vals, Str sla, Str ety, Int i, Int n, Int tbase, List(Str) acc) {
+    if (i >= n) { return acc; }
+    Str ev = vals[i];
+    Str bx = lst_box_reg(ety, ev, tbase);
+    List(Str) bl = lst_box_lines(ety, ev, tbase);
+    List(Str) a1 = acc.concat(bl);
+    Str opt = "%t" + IntToString(tbase + 2);
+    Str offl = opt + " = getelementptr i8, ptr " + sla + ", i64 " + IntToString(i * 8);
+    List(Str) a2 = a1.concat([offl]);
+    Str stl = "store ptr " + bx + ", ptr " + opt;
+    List(Str) a3 = a2.concat([stl]);
     Int k = i + 1;
-    return lst_stores(vals, reg, ety, k, a3);
+    return lst_stores(vals, sla, ety, k, n, tbase + 3, a3);
 }
 
 GT lst_emit(Str ety, Int n, List(Str) vals, Int pos, GT c) {
-    Int nb = n * 8 + 8;
     Int t1 = c.tmp + 1;
-    Str reg = "%t" + IntToString(t1);
+    Str sla = "%t" + IntToString(t1);
     List(Str) l0 = c.lines;
-    List(Str) l1 = l0.concat([reg + " = call ptr @malloc(i64 " + IntToString(nb) + ")"]);
-    List(Str) l2 = l1.concat(["store i64 " + IntToString(n) + ", ptr " + reg]);
-    List(Str) l3 = lst_stores(vals, reg, ety, 0, l2);
-    return GT { pos: pos, val: reg, ty: "List(" + ety + ")", cnt: 0, err: "", glines: c.glines, lines: l3, tmp: t1, lbl: c.lbl };
+    List(Str) l1 = l0.concat([sla + " = alloca [" + IntToString(n) + " x ptr]"]);
+    Int t2 = t1 + 1;
+    Str body = esc_ll("List(" + ety + ")", 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int n1 = bl + 1;
+    Str tsym = "@.lty" + IntToString(t1);
+    List(Str) gg0 = c.glines;
+    List(Str) gl2 = gg0.concat([tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\""]);
+    Int tb0 = t2 + 1;
+    List(Str) l2 = lst_stores(vals, sla, ety, 0, n, tb0, l1);
+    Int outt = tb0 + n * 3;
+    Str reg = "%t" + IntToString(outt);
+    List(Str) l3 = l2.concat([reg + " = call ptr @resid_list_new(i64 " + IntToString(n) + ", ptr " + sla + ", ptr " + tsym + ")"]);
+    return GT { pos: pos, val: reg, ty: "List(" + ety + ")", cnt: 0, err: "", glines: gl2, lines: l3, tmp: outt, lbl: c.lbl };
 }
 
 GT lst_more(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Funcs fs, GT c) {
@@ -3287,14 +3360,19 @@ ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
     if (b1.text == "[" && b2.text == "]") {
         Int t1 = g.tmp + 1;
         Str reg = "%t" + IntToString(t1);
+        Str body = esc_ll(dty, 0, "");
+        Int bl = ll_bytes(body, 0, 0);
+        Int n1 = bl + 1;
+        Str tsym = "@.ltyB" + IntToString(t1);
+        List(Str) g0 = g.glines;
+        List(Str) g1 = g0.concat([tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\""]);
         List(Str) z0 = g.lines;
-        List(Str) z1 = z0.concat([reg + " = call ptr @malloc(i64 8)"]);
-        List(Str) z2 = z1.concat(["store i64 0, ptr " + reg]);
+        List(Str) z1 = z0.concat([reg + " = call ptr @resid_list_new(i64 0, ptr null, ptr " + tsym + ")"]);
         Str ent = name + ":" + reg + ":" + dty;
         List(Str) env2 = env_add(env, ent);
         Tok bsemi = lex_tok(s, b2.pos);
         Int bpos = if (bsemi.text == ";") { bsemi.pos } else { b2.pos };
-        return ST { pos: bpos, dead: g.dead, err: "", env: env2, glines: g.glines, hlines: g.hlines, lines: z2, tmp: t1, lbl: g.lbl, rety: g.rety };
+        return ST { pos: bpos, dead: g.dead, err: "", env: env2, glines: g1, hlines: g.hlines, lines: z1, tmp: t1, lbl: g.lbl, rety: g.rety };
     }
     GT v = cg_expr(s, pos, env, fs, gt_of_st(g));
     if (v.err != "") { return st_err(v.err, g); }
@@ -3489,8 +3567,9 @@ ST sg_for(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
         Str cc2 = "%lcc." + n2s;
         Str om2 = "%lom." + n2s;
         Str oa2 = "%loa." + n2s;
-        Str gp2 = "%lgp." + n2s;
-        Str ev = "%lev." + n2s;
+        Int tloop = a.tmp + 1;
+        Str gs2 = "%lgs." + n2s;
+        Str ev = lst_read_reg(pty.ty, gs2, tloop);
         Str ent2 = name.text + ":" + ev + ":" + pty.ty;
         List(Str) envl = env_add(env, ent2);
         List(Str) f0 = g.lines;
@@ -3499,16 +3578,14 @@ ST sg_for(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
         List(Str) f3 = f2.concat(["br label %" + LB2]);
         List(Str) f4 = f3.concat([LB2 + ":"]);
         List(Str) f5 = f4.concat([iv + " = load i64, ptr " + ixa]);
-        List(Str) f6 = f5.concat([cnt + " = load i64, ptr " + a.val]);
+        List(Str) f6 = f5.concat([cnt + " = call i64 @resid_list_len(ptr " + a.val + ")"]);
         List(Str) f7 = f6.concat([cc2 + " = icmp slt i64 " + iv + ", " + cnt]);
         List(Str) f8 = f7.concat(["br i1 " + cc2 + ", label %" + LBODY2 + ", label %" + LD2]);
         List(Str) f9 = f8.concat([LBODY2 + ":"]);
-        List(Str) f10 = f9.concat([om2 + " = mul i64 8, " + iv]);
-        List(Str) f11 = f10.concat([oa2 + " = add i64 " + om2 + ", 8"]);
-        List(Str) f12 = f11.concat([gp2 + " = getelementptr i8, ptr " + a.val + ", i64 " + oa2]);
-        List(Str) f13 = f12.concat([ev + " = load " + ll_ty(pty.ty) + ", ptr " + gp2]);
+        List(Str) f10 = f9.concat([gs2 + " = call ptr @resid_list_get(ptr " + a.val + ", i64 " + iv + ")"]);
+        List(Str) f11 = lst_read_lines(pty.ty, gs2, tloop, f10);
         Tok brace2 = lex_tok(s, lc.pos);
-        ST gb2 = ST { pos: brace2.pos, dead: false, err: "", env: envl, glines: a.glines, hlines: g.hlines, lines: f13, tmp: a.tmp, lbl: nlbl2, rety: g.rety };
+        ST gb2 = ST { pos: brace2.pos, dead: false, err: "", env: envl, glines: a.glines, hlines: g.hlines, lines: f11, tmp: tloop, lbl: nlbl2, rety: g.rety };
         ST body2 = sg_block(s, lc.pos, envl, fs, in_main, gb2);
         if (body2.err != "") { return body2; }
         List(Str) b20 = body2.lines;
@@ -3732,28 +3809,54 @@ Str rt_itoa_def() {
     return "define ptr @e.itoa(ptr %buf, i64 %v) {\nentry:\n  %zn = icmp eq i64 %v, 0\n  br i1 %zn, label %zero, label %prep\nzero:\n  %zp = getelementptr i8, ptr %buf, i64 22\n  store i8 48, ptr %zp\n  %zt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %zt\n  ret ptr %zp\nprep:\n  %neg = icmp slt i64 %v, 0\n  %an = sub i64 0, %v\n  %mag = select i1 %neg, i64 %an, i64 %v\n  br label %loop\nloop:\n  %cur = phi i64 [ %mag, %prep ], [ %q, %body ]\n  %idx = phi i64 [ 22, %prep ], [ %im, %body ]\n  %d = srem i64 %cur, 10\n  %q = sdiv i64 %cur, 10\n  %ai = add i64 %d, 48\n  %ab = trunc i64 %ai to i8\n  %sp = getelementptr i8, ptr %buf, i64 %idx\n  store i8 %ab, ptr %sp\n  %im = sub i64 %idx, 1\n  %more = icmp ne i64 %q, 0\n  br i1 %more, label %body, label %sig\nbody:\n  br label %loop\nsig:\n  br i1 %neg, label %wneg, label %wpos\nwpos:\n  %pp = getelementptr i8, ptr %buf, i64 %idx\n  %pt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %pt\n  ret ptr %pp\nwneg:\n  %mi = sub i64 %idx, 1\n  %mp = getelementptr i8, ptr %buf, i64 %mi\n  store i8 45, ptr %mp\n  %mt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %mt\n  ret ptr %mp\n}";
 }
 
-Str rt_lconcat_def() {
-    return "define ptr @e.lconcat(ptr %a, ptr %b) {\nentry:\n  %ca = load i64, ptr %a\n  %cb = load i64, ptr %b\n  %n = add i64 %ca, %cb\n  %nb8 = mul i64 %n, 8\n  %bytes = add i64 %nb8, 8\n  %nb = call ptr @malloc(i64 %bytes)\n  store i64 %n, ptr %nb\n  br label %la\nla:\n  %i1 = phi i64 [ 0, %entry ], [ %i1n, %dopa ]\n  %c1 = icmp slt i64 %i1, %ca\n  br i1 %c1, label %dopa, label %lb\ndopa:\n  %o1m = mul i64 %i1, 8\n  %o1 = add i64 %o1m, 8\n  %pa = getelementptr i8, ptr %a, i64 %o1\n  %va = load i64, ptr %pa\n  %pbd = getelementptr i8, ptr %nb, i64 %o1\n  store i64 %va, ptr %pbd\n  %i1n = add i64 %i1, 1\n  br label %la\nlb:\n  %i2 = phi i64 [ 0, %la ], [ %i2n, %dopb ]\n  %c2 = icmp slt i64 %i2, %cb\n  br i1 %c2, label %dopb, label %done\ndopb:\n  %o2m = mul i64 %i2, 8\n  %o2a = add i64 %o2m, 8\n  %cai8 = mul i64 %ca, 8\n  %od = add i64 %o2a, %cai8\n  %pbs = getelementptr i8, ptr %b, i64 %o2a\n  %vb = load i64, ptr %pbs\n  %pdd = getelementptr i8, ptr %nb, i64 %od\n  store i64 %vb, ptr %pdd\n  %i2n = add i64 %i2, 1\n  br label %lb\ndone:\n  ret ptr %nb\n}";
+// One qsort-compatible comparator trampoline per behavior impl (both
+// directions). Trie lists store elements in `void*` slots as heap-boxed
+// pointers, so each comparator param (`a`/`b` = ptr-to-slot) is loaded as
+// a boxed pointer then unboxed (scalars) or bitcast (Str/composite) to the
+// element LLVM type before calling the user's `(T, T) -> Int` function.
+// Output normalized to -1/0/1 before an optional Reverse negation so the
+// negation is total.
+Str cmp_read(Str src, Str dst, Str pty) {
+    Str s = "%" + src;
+    Str d = "%" + dst;
+    if (pty == "Str" || str_has_prefix_cg(pty, "List(") || str_has_prefix_cg(pty, "Map(") || str_has_prefix_cg(pty, "Set(") || str_has_prefix_cg(pty, "Option(") || str_has_prefix_cg(pty, "Result(") || str_has_prefix_cg(pty, "Sum(")) {
+        return "  " + d + " = bitcast ptr " + s + " to ptr\n";
+    }
+    if (pty == "Bool") {
+        Str raw = "%" + dst + "b";
+        return "  " + raw + " = call i8 @resid_unbox_bool(ptr " + s + ")\n  " + d + " = trunc i8 " + raw + " to i1\n";
+    }
+    if (pty == "Float" || str_has_prefix_cg(pty, "Float(")) {
+        return "  " + d + " = call double @resid_unbox_f64(ptr " + s + ")\n";
+    }
+    if (int_fam(pty)) {
+        Int w = ll_width_of(pty);
+        if (w == 128) {
+            Bool u = str_has_prefix_cg(pty, "UInt");
+            Str fn = if (u) { "@resid_unbox_u128" } else { "@resid_unbox_i128" };
+            return "  " + d + " = call i128 " + fn + "(ptr " + s + ")\n";
+        }
+        if (w == 64) { return "  " + d + " = call i64 @resid_unbox_i64(ptr " + s + ")\n"; }
+        Str raw = "%" + dst + "w";
+        return "  " + raw + " = call i64 @resid_unbox_i64(ptr " + s + ")\n  " + d + " = trunc i64 " + raw + " to " + ll_ty(pty) + "\n";
+    }
+    return "  " + d + " = bitcast ptr " + s + " to ptr\n";
 }
 
-
-// One qsort-compatible comparator trampoline per behavior impl (both
-// directions): loads two flat-buffer elements and calls the user's
-// `(T, T) -> Int` function. Output normalized to -1/0/1 before an
-// optional Reverse negation so the negation is total.
-Str cmp_def(Str f, Str ety, Bool rev) {
+Str cmp_def(Str f, Str pty, Bool rev) {
     Str nm = if (rev) { "__cmp_" + f + "_rev" } else { "__cmp_" + f };
-    Str s1 = "define i32 @" + nm + "(ptr %a, ptr %b) {\nentry:\n";
-    Str s2 = s1 + "  %x = load " + ety + ", ptr %a\n  %y = load " + ety + ", ptr %b\n";
-    Str s3 = s2 + "  %r = call i64 @" + f + "(" + ety + " %x, " + ety + " %y)\n";
-    Str s4 = s3 + "  %r32 = trunc i64 %r to i32\n";
-    Str s5 = s4 + "  %isn = icmp slt i32 %r32, 0\n  %isp = icmp sgt i32 %r32, 0\n";
-    Str s6 = s5 + "  %np = select i1 %isp, i32 1, i32 0\n  %nz = select i1 %isn, i32 -1, i32 %np\n";
+    Str ety = ll_ty(pty);
+    Str s1 = "define i32 @" + nm + "(ptr %a, ptr %b) {\nentry:\n  %pa = load ptr, ptr %a\n  %pb = load ptr, ptr %b\n";
+    Str s2 = s1 + cmp_read("pa", "x", pty);
+    Str s3 = s2 + cmp_read("pb", "y", pty);
+    Str s4 = s3 + "  %r = call i64 @" + f + "(" + ety + " %x, " + ety + " %y)\n";
+    Str s5 = s4 + "  %r32 = trunc i64 %r to i32\n";
+    Str s6 = s5 + "  %isn = icmp slt i32 %r32, 0\n  %isp = icmp sgt i32 %r32, 0\n";
+    Str s7 = s6 + "  %np = select i1 %isp, i32 1, i32 0\n  %nz = select i1 %isn, i32 -1, i32 %np\n";
     if (rev) {
-        Str s7 = s6 + "  %ng = sub i32 0, %nz\n  ret i32 %ng\n}";
-        return s7;
+        return s7 + "  %ng = sub i32 0, %nz\n  ret i32 %ng\n}";
     }
-    return s6 + "  ret i32 %nz\n}";
+    return s7 + "  ret i32 %nz\n}";
 }
 
 // Emit both comparator variants for every collected behavior instance.
@@ -3761,10 +3864,10 @@ List(Str) cmp_defs_all_at(Funcs fs, List(Str) out, Int i) {
     List(Str) bn = fs.bnames;
     Int n = bn.len();
     if (i >= n) { return out; }
-    Str ety = ll_ty(fs.bparams[i]);
+    Str pty = fs.bparams[i];
     List(Str) bfl = fs.bfns;
     Str f = bfl[i];
-    List(Str) out2 = out.concat([cmp_def(f, ety, false), cmp_def(f, ety, true)]);
+    List(Str) out2 = out.concat([cmp_def(f, pty, false), cmp_def(f, pty, true)]);
     Int k = i + 1;
     return cmp_defs_all_at(fs, out2, k);
 }
@@ -6242,7 +6345,7 @@ Int main() {
     Int tc = ck_check_program(src, 0, sg);
     if (tc != 0) { return tc; }
     Funcs fs = collect_sigs(src);
-        List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @bl_sort_i64(ptr)", "declare ptr @bl_sort_str(ptr)", "declare ptr @bl_sort_f64(ptr)", "declare ptr @bl_reverse_i64(ptr)", "declare ptr @bl_reverse_str(ptr)", "declare ptr @bl_reverse_f64(ptr)", "declare i8 @bl_contains_i64(ptr, i64)", "declare i8 @bl_contains_str(ptr, ptr)", "declare i8 @bl_contains_f64(ptr, double)", "declare i64 @bl_sum(ptr)", "declare double @bl_sumf(ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @bl_sort_by(ptr, ptr)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @resid_rt_list_to_flat(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @UInt128ToString(i128)", rt_itoa_def(), rt_lconcat_def()];
+        List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
     List(Str) header = header_with_cmps(hdr_core, fs);
     PG g0 = PG { pos: 0, err: "", glines: [], hlines: [], lines: header, tmp: 0, lbl: 0 };
     PG res = pg_next(src, 0, fs, g0);
@@ -6266,6 +6369,13 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
+
+
+
+
+
+
 
 
 

@@ -55,7 +55,7 @@
 //! `ctr_take` here) must never convert its buffer back into a normal
 //! boxed List at its own base case — that would run once per *inner*
 //! call, defeating the whole point, and worse, hand the delegator a
-//! normal ResidVal where it expects to keep pushing onto a GrowBuf (the
+//! normal boxed List where it expects to keep pushing onto a GrowBuf (the
 //! two have different memory layouts; treating one as the other is
 //! memory corruption, not a slowdown). Converting to a real List is
 //! correct exactly once, at the root of a delegation chain (the function
