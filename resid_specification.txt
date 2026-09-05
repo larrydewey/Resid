@@ -998,10 +998,22 @@ constraint discharge, provider substitution, behavior
 insertion, method desugaring (handles), pattern matching,
 destructuring, checked arithmetic, numeric interoperability
 widening, string interpolation, range/slice construction,
-and structural identity.
+dead-code elimination (dead-binding elision), and
+structural identity.
 
 The implementation shall eliminate every residual that
 is dischargeable under current knowledge and capabilities.
+
+Dead-code elimination is part of the reduction relation:
+a binding whose reduced value is a fully-known constant
+and whose name is not referenced by the residual
+computation that remains shall be elided from the emitted
+program. Elision is authorized only when the value is
+fully known; a binding whose value remains residual —
+because its evaluation could perform an effect, abort,
+or fail to converge — is preserved even when
+unreferenced. Runtime behavior may not depend on the
+presence or absence of an elided binding.
 
 
 ==================================================

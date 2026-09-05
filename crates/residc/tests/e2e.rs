@@ -7491,3 +7491,72 @@ fn graph_reduce_rejects_type_declarations() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Dead-code elimination (§36): the graph-reduce pipeline must elide every
+/// binding whose folded value is unreferenced, while preserving any binding
+/// whose evaluation has observable effects — with byte-identical output to
+/// the plain pipeline either way.
+#[test]
+fn graph_reduce_eliminates_dead_bindings() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-dce-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("dce.resid");
+    let src = r#"
+Int inc(Int n) {
+    Int m = n + 1;
+    return m;
+}
+Int main() {
+    Int dead_a = 1;
+    Int live = 40 + 2;
+    Int dead_b = live * 2;
+    Bool unused = println("side-effect");
+    println(IntToString(inc(live)));
+    return 0;
+}
+"#;
+    std::fs::write(&file, src).unwrap();
+
+    let plain = Command::new(residc_bin()).arg(&file).arg("run").output().unwrap();
+    let reduced = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .arg("--graph-reduce")
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        plain.status.code(),
+        Some(0),
+        "plain pipeline failed: {}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    assert_eq!(reduced.status.code(), Some(0), "graph-reduce failed");
+    assert_eq!(
+        String::from_utf8_lossy(&plain.stdout),
+        String::from_utf8_lossy(&reduced.stdout),
+        "DCE must not change observable output"
+    );
+    assert!(
+        String::from_utf8_lossy(&reduced.stdout).contains("side-effect"),
+        "the effectful dead binding must still print"
+    );
+
+    let ir_out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("emit-ir")
+        .arg("--graph-reduce")
+        .output()
+        .unwrap();
+    let ir = String::from_utf8_lossy(&ir_out.stdout);
+    assert!(
+        !ir.contains("dead_a") && !ir.contains("dead_b"),
+        "dead constant bindings must not appear in the reduced IR"
+    );
+    assert!(
+        ir.contains("side-effect"),
+        "effectful dead binding must survive in the reduced IR"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
