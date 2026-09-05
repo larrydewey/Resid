@@ -96,6 +96,19 @@ fn main() -> ExitCode {
         i += 1;
     }
 
+    // Graph-reduction mode (spec §33 "maximal authorized reduction"): run the
+    // convert → reduce → retrofit pipeline between parsing and type-checking.
+    let mut graph_reduce = env::var("RESID_GRAPH_REDUCE").map(|v| v == "1").unwrap_or(false);
+    let mut i = 2;
+    while i < args_vec.len() {
+        if args_vec[i] == "--graph-reduce" {
+            args_vec.remove(i);
+            graph_reduce = true;
+            continue;
+        }
+        i += 1;
+    }
+
     if matches!(cmd, Cmd::Keygen) {
         return cmd_keygen();
     }
@@ -166,6 +179,9 @@ fn main() -> ExitCode {
                 RUNTIME_C.as_bytes().to_vec(),
                 if prov_encrypt { b"enc0".to_vec() } else { b"plain".to_vec() },
                 profile_bytes,
+                // Graph reduction is part of the build identity: a reduced
+                // binary is a different artifact than an unreduced one.
+                if graph_reduce { b"graph-reduce".to_vec() } else { b"plain-pipeline".to_vec() },
             ];
             parts.extend(import_parts);
             let part_refs: Vec<&[u8]> = parts.iter().map(|v| v.as_slice()).collect();
@@ -214,7 +230,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let unit = match pipeline(&file) {
+    let unit = match pipeline(&file, graph_reduce) {
         Ok(u) => u,
         Err(code) => return code,
     };
@@ -247,9 +263,11 @@ fn main() -> ExitCode {
     }
 }
 
-/// Resolve imports + lex + parse + type check. Prints diagnostics and
-/// returns `Err` on failure.
-fn pipeline(file: &str) -> Result<TranslationUnit, ExitCode> {
+/// Resolve imports + lex + parse + type check. When `graph_reduce` is set,
+/// the parsed unit is first reduced through the knowledge-graph pipeline,
+/// then the reduced unit is re-type-checked. Prints diagnostics and returns
+/// `Err` on failure.
+fn pipeline(file: &str, graph_reduce: bool) -> Result<TranslationUnit, ExitCode> {
     let unit = match resid_parser::resolve_unit(std::path::Path::new(file)) {
         Ok(u) => u,
         Err(e) => {
@@ -257,6 +275,39 @@ fn pipeline(file: &str) -> Result<TranslationUnit, ExitCode> {
             return Err(ExitCode::FAILURE);
         }
     };
+
+    if graph_reduce {
+        let reduced = match resid_type::graph_reduce(unit, &[]) {
+            Ok(r) => r,
+            Err(errs) => {
+                for e in &errs {
+                    eprintln!("error: {e}");
+                }
+                return Err(ExitCode::FAILURE);
+            }
+        };
+        let n_funcs = reduced
+            .declarations
+            .iter()
+            .filter(|d| matches!(d, Declaration::Function(_)))
+            .count();
+        eprintln!("graph-reduce: reduced program to {n_funcs} function(s)");
+        let type_errors = resid_type::check_program(&reduced);
+        for e in &type_errors {
+            eprintln!(
+                "{}:{}:{}: type error: {}",
+                e.span.file, e.span.line, e.span.col_start, e.message
+            );
+        }
+        if !type_errors.is_empty() {
+            eprintln!(
+                "error: type checking the reduced program failed with {} diagnostic(s)",
+                type_errors.len()
+            );
+            return Err(ExitCode::FAILURE);
+        }
+        return Ok(reduced);
+    }
 
     let type_errors = resid_type::check_program(&unit);
     for e in &type_errors {

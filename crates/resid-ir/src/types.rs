@@ -236,6 +236,53 @@ impl fmt::Display for Type {
     }
 }
 
+/// Render a graph `Type` in source-level parser syntax (`Int(8)`, `UInt(64)`,
+/// `List(Int(8))`, …) so back-translated programs re-parse and re-check.
+pub fn type_to_str(t: &Type) -> String {
+    match t {
+        Type::Bool => "Bool".to_string(),
+        Type::Numeric(nt) => nt.to_string(),
+        Type::Str => "Str".to_string(),
+        Type::Bytes => "Bytes".to_string(),
+        Type::Null => "Null".to_string(),
+        Type::Void => "Void".to_string(),
+        Type::Option(t) => format!("Option({})", type_to_str(t)),
+        Type::Result(ok, err) => {
+            format!("Result({}, {})", type_to_str(ok), type_to_str(err))
+        }
+        Type::List(t) => format!("List({})", type_to_str(t)),
+        Type::Map(k, v) => format!("Map({}, {})", type_to_str(k), type_to_str(v)),
+        Type::Set(t) => format!("Set({})", type_to_str(t)),
+        Type::Struct(name, _) => name.to_string(),
+        Type::Enum(name, _) => name.to_string(),
+        Type::Constrained(t, _) => type_to_str(t),
+        Type::Residual(t) => format!("residual({})", type_to_str(t)),
+        Type::Behavior(b) => b.name.to_string(),
+        Type::Handle(name, _) => format!("Handle({})", name),
+        Type::Function { params, ret } => {
+            let ps: Vec<String> = params.iter().map(type_to_str).collect();
+            format!("fn({}) -> {}", ps.join(", "), type_to_str(ret))
+        }
+        Type::SourceLoc => "SourceLoc".to_string(),
+        Type::Range {
+            start_type,
+            end_type,
+            closed,
+        } => {
+            let op = if *closed { "..=" } else { ".." };
+            format!(
+                "{}{}{}",
+                type_to_str(start_type),
+                op,
+                type_to_str(end_type)
+            )
+        }
+        Type::Slice { element_type } => format!("Slice({})", type_to_str(element_type)),
+        Type::RegionError => "RegionError".to_string(),
+        Type::UserDefined(s) => s.clone(),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SumVariant {
     pub name: Identifier,
@@ -321,6 +368,17 @@ pub enum CapabilityKind {
     Git,
     Environment,
     Compute,
+}
+
+impl CapabilityKind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            CapabilityKind::Filesystem => "filesystem",
+            CapabilityKind::Git => "git",
+            CapabilityKind::Environment => "environment",
+            CapabilityKind::Compute => "compute",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -643,6 +701,7 @@ pub enum AstExpr {
     Discard(Box<AstExpr>, Span),
     ProviderCall {
         provider: String,
+        verb: String,
         args: Vec<AstExpr>,
         span: Span,
     },
@@ -1175,5 +1234,15 @@ mod tests {
     fn test_provenance_display() {
         let p = Provenance::Inferred;
         let _ = format!("{:?}", p);
+    }
+}
+
+impl core::ops::Not for LiteralValue {
+    type Output = LiteralValue;
+    fn not(self) -> LiteralValue {
+        match self {
+            LiteralValue::Bool(b) => LiteralValue::Bool(!b),
+            _ => LiteralValue::Bool(false),
+        }
     }
 }

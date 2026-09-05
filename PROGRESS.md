@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**747 tests pass** (lexer 17, parser 115, resid-ir 46, resid-type 245,
+**652 tests pass** (lexer 17, parser 115, resid-ir 55, resid-type 249,
   resid-codegen 137, resid-build 47, resid-fmt 5,
-  resid-cache 7, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + ~88 e2e).
+  resid-cache 9, resid-notes 2, resid-why 7, resid-lsp 5,
+  resid-graph 4, resid-builtin 0, residc 0 unit + ~94 e2e).
 
 ### Major capabilities
 
@@ -408,7 +408,10 @@ parity remains for the stage-1-only features.
     directly; reduction is ad-hoc in codegen. → **✅ DONE (stage-1)**:
     comptime β-reduction of pure functions with step/depth budgets
     (reduction relation §36) wired into codegen with comptime-print
-    (see §9 progress).
+    (see §9 progress). **Graph drives a full alternative pipeline**:
+    `residc <f> run --graph-reduce` converts AST→graph→reduce→retrofit→
+    checker→codegen with byte-identical output to the plain path and the
+    cache key distinguishes the two modes (see §11 progress).
 12. §36 Reduction relation — constant folding + overflow discharge only;
     no comptime β-reduction of pure functions, no provider substitution
     at compile time. → **✅ DONE (stage-1)**: comptime β-reduction of pure
@@ -732,6 +735,47 @@ progress subsections below.
 - Tests: resid-type +2 (`capability_mode_unknown_keyword_rejected`,
   `capability_mode_explicit_readwrite_allows_write`), residc e2e +1 assertion
   (typo-mode `emit-ir` rejection in `run_sandbox_capability_mode_readonly`).
+
+### Progress on item 11 — knowledge graph as DRIVING IR: graph pipeline wired (stage-1)
+
+**`--graph-reduce` mode**: `residc <f> run|build|emit-ir --graph-reduce` (or
+`RESID_GRAPH_REDUCE=1`) runs the full convert→reduce→retrofit loop between
+parsing and type checking: parser AST → `resid-ir` knowledge graph → §36
+β-reduction → `to_ast` back into a parser `TranslationUnit` → type check →
+codegen. Prior state had the graph in parallel (`resid-ir/graph.rs`) with
+ad-hoc reduction inside codegen; now the graph drives a full alternative
+pipeline and its output is byte-identical to the plain one.
+
+- `resid-ir` additions: `AstTranslationUnit` (functions-only IR carrying
+  args, names, sig types, capabilities, doc), `from_ast` conversion (all
+  expression forms incl. f-strings, structs, maps/sets, un/binary ops,
+  calls incl. named/default args, index/slice, casts, `let`/`if`, match);
+  retro `graph_reduce(unit) -> ReducedUnit` (β-reduce every pure function
+  body, clean re-assembly) + `to_ast` back-conversion, with a
+  `reduce_fstring` fix: folded literals render via the runtime-faithful
+  `rendered_literal` helper (plain decimal, no `_64` width suffix) so
+  folded strings match runtime prints exactly.
+- `resid-type` bridge (`crates/resid-type/src/graph.rs`): `from_ast`,
+  `to_ast`, `graph_reduce(unit, ok) -> Result<TranslationUnit, Vec<String>>`
+  with full type round-trips (width-parameterized Int/UInt/Float/Dec,
+  Char→Int(16), composites, residuals, behavior names) and a loud gate:
+  non-function declarations are rejected ("only functions are representable
+  in the reduction IR") rather than silently dropped.
+- `residc`: `--graph-reduce` flag + `RESID_GRAPH_REDUCE=1`. The cache key
+  distinguishes graph-reduce from plain-pipeline artifacts; reduced programs
+  re-type-check and run with byte-identical stdout to the plain pipeline
+  (e2e `run_graph_reduce_preserves_behavior`; reduction diagnostic
+  `graph-reduce: reduced program to N function(s)` on stderr; non-function
+  declarations rejected e2e `graph_reduce_rejects_type_declarations`).
+- Notes/limitations: only functions round-trip (§22/type decls rejected);
+  IR merges logical/bitwise AND → `&&`/`||` on conversion; checked runtime
+  overflow (pre-existing `254+2` on UInt(8)) may trap on the plain path
+  while the reducer folds it away — a spec edge (reduction funds wrapped
+  values), not a regression.
+- Tests: resid-type +4 integration (`reduced_program_retypechecks`,
+  `reduced_program_registers_equal_functions`, `beta_substitution_collapses_pure_call_body`,
+  `rejects_non_function_declarations`), residc e2e +2 (above). resid-ir +9
+  (graph conversion coverage). Total non-e2e 652.
 
 ### Progress on capability modes — `process.run` classified as write verb
 

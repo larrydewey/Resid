@@ -1,23 +1,30 @@
 //! AST → Knowledge Graph conversion.
+//!
+//! Two-phase construction: pass 1 registers every function with a placeholder
+//! body; pass 2 fills in parameter cells, default expressions, and the real
+//! body. Identifiers resolve through a lexical scope stack plus the function
+//! table, producing `Reference` nodes that point at `Binding`/param-cells/
+//! `Function` definition cells. Block statement layout is recorded in
+//! [`KnowledgeGraph::block_info`] so reduction can reconstruct statements.
 
 use crate::GraphKey;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::graph::{
-    FStringPartNode, KnowledgeGraph, KnowledgeState, NodeKind, WithBindingNode, invalid_key,
+    BlockInfo, FStringPartNode, KnowledgeGraph, KnowledgeState, NodeKind, WithBindingNode,
+    invalid_key,
 };
 use crate::types::*;
 
 /// Errors during AST→IR conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConversionError {
-    Shadowing(String, u64, u64),
     UndefinedIdentifier(String, Span),
 }
 impl std::fmt::Display for ConversionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConversionError::Shadowing(n, a, b) => write!(f, "shadowing '{}': {} vs {}", n, a, b),
             ConversionError::UndefinedIdentifier(n, _) => write!(f, "undefined '{}'", n),
         }
     }
@@ -26,7 +33,7 @@ impl std::fmt::Display for ConversionError {
 /// Context for AST→IR conversion.
 pub struct AstConverter {
     graph: KnowledgeGraph,
-    scope_stack: Vec<HashSet<String>>,
+    scope_stack: Vec<HashMap<String, GraphKey>>,
     anon_counter: u64,
 }
 
@@ -40,7 +47,7 @@ impl AstConverter {
     pub fn new() -> Self {
         AstConverter {
             graph: KnowledgeGraph::new(),
-            scope_stack: vec![HashSet::new()],
+            scope_stack: vec![HashMap::new()],
             anon_counter: 0,
         }
     }
@@ -51,95 +58,318 @@ impl AstConverter {
         &mut self.graph
     }
 
-    /// Convert a full translation unit.
-    pub fn convert(
-        &mut self,
-        unit: AstTranslationUnit,
-    ) -> Result<KnowledgeGraph, Vec<ConversionError>> {
-        for func_def in &unit.functions {
-            self.convert_function(func_def)?;
-        }
-        Ok(self.graph.clone())
-    }
-
-    fn convert_function(&mut self, func_def: &AstFuncDef) -> Result<(), Vec<ConversionError>> {
-        let ret_type = match &func_def.ret {
-            Some(s) => type_from_str(s),
-            None => Type::Void,
-        };
-        self.enter_scope();
-        let mut params: Vec<(Identifier, Type, Option<GraphKey>)> = Vec::new();
-        for param in &func_def.params {
-            let pid = self.unique_id(&param.name);
-            let ptype = match &param.type_ {
-                Some(s) => type_from_str(s),
-                None => Type::Void,
-            };
-            let default = match &param.default {
-                Some(e) => Some(self.convert_expr(e)?),
-                None => None,
-            };
-            params.push((pid, ptype, default));
-        }
-        let body_key = self.convert_block(&func_def.body)?;
-        let fname = Identifier::new(&func_def.name, self.graph.next_id);
-        let knowledge = if func_def.capabilities.is_empty() {
-            KnowledgeState::Known
-        } else {
-            KnowledgeState::Effect
-        };
-        let func_type = Type::Function {
-            params: params.iter().map(|(_, t, _)| t.clone()).collect(),
-            ret: Box::new(ret_type.clone()),
-        };
-        let fkey = self.graph.add_node(
-            NodeKind::Function {
-                name: fname.clone(),
-                params: params.clone(),
-                ret: ret_type.clone(),
-                body: body_key,
-                capabilities: func_def.capabilities.iter().cloned().collect(),
-            },
-            func_type,
-            knowledge,
-            vec![body_key],
-            HashSet::new(),
-            HashSet::new(),
-            Provenance::Source {
-                file: func_def.span.file.clone(),
-                line: func_def.span.line,
-                col_start: func_def.span.col_start,
-            },
-            func_def.span.clone(),
-        );
-        self.graph.register_function(func_def.name.clone(), fkey);
-        self.exit_scope();
-        Ok(())
-    }
-
     fn enter_scope(&mut self) {
-        self.scope_stack.push(HashSet::new());
+        self.scope_stack.push(HashMap::new());
     }
     fn exit_scope(&mut self) {
         self.scope_stack.pop();
     }
 
-    fn bind_id(&mut self, name: &str) -> Result<Identifier, ConversionError> {
-        let id = self.graph.next_id;
-        if let Some(s) = self.scope_stack.last()
-            && s.contains(name) {
-                return Err(ConversionError::Shadowing(name.to_string(), id, id));
+    fn lookup(&self, name: &str) -> Option<GraphKey> {
+        for scope in self.scope_stack.iter().rev() {
+            if let Some(k) = scope.get(name) {
+                return Some(*k);
             }
-        if let Some(s) = self.scope_stack.last_mut() {
-            s.insert(name.to_string());
         }
-        Ok(Identifier::new(name, id))
+        self.graph.lookup_function_key(name)
     }
 
     fn unique_id(&mut self, name: &str) -> Identifier {
         let id = self.graph.next_id;
         self.graph.next_id += 1;
         Identifier::new(name, id)
+    }
+
+    fn mk_node(
+        &mut self,
+        kind: NodeKind,
+        type_: Type,
+        knowledge: KnowledgeState,
+        deps: Vec<GraphKey>,
+        effects: HashSet<Effect>,
+        capabilities: HashSet<Capability>,
+        span: &Span,
+    ) -> GraphKey {
+        self.graph.add_node(
+            kind,
+            type_,
+            knowledge,
+            deps,
+            effects,
+            capabilities,
+            Provenance::Source {
+                file: span.file.clone(),
+                line: span.line,
+                col_start: span.col_start,
+            },
+            span.clone(),
+        )
+    }
+
+    /// Convert a full translation unit.
+    pub fn convert(&mut self, unit: AstTranslationUnit) -> Result<KnowledgeGraph, Vec<ConversionError>> {
+        // Pass 1: register every function with a placeholder body so calls can
+        // resolve to real Function keys and get their return types.
+        for func_def in &unit.functions {
+            let ret_type = match &func_def.ret {
+                Some(s) => type_from_str(s),
+                None => Type::Void,
+            };
+            let capabilities: HashSet<Capability> =
+                func_def.capabilities.iter().cloned().collect();
+            let fake_body = invalid_key(&mut self.graph);
+            let fake_dep = invalid_key(&mut self.graph);
+            let fkey = self.graph.add_node(
+                NodeKind::Function {
+                    name: Identifier::new(&func_def.name, self.graph.next_id),
+                    public: func_def.public,
+                    params: Vec::new(),
+                    ret: ret_type.clone(),
+                    body: fake_body,
+                    capabilities: capabilities.clone(),
+                },
+                Type::Function { params: vec![], ret: Box::new(ret_type) },
+                if capabilities.is_empty() { KnowledgeState::Known } else { KnowledgeState::Effect },
+                vec![fake_dep],
+                HashSet::new(),
+                capabilities,
+                Provenance::Inferred,
+                func_def.span.clone(),
+            );
+            self.graph.register_function(func_def.name.clone(), fkey);
+        }
+
+        for func_def in &unit.functions {
+            let fkey = self
+                .graph
+                .lookup_function_key(&func_def.name)
+                .expect("function registered in pass 1");
+            let (body, params, cells) = self.convert_function_body(func_def)?;
+            self.graph.set_function_parts(fkey, body, params);
+            self.graph.set_param_cells(fkey, cells);
+        }
+
+        // Entry point: main, else the first function.
+        let entry = unit
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .or_else(|| unit.functions.first());
+        if let Some(f) = entry {
+            if let Some(k) = self.graph.lookup_function_key(&f.name) {
+                self.graph.set_entry(k);
+            }
+        }
+
+        Ok(self.graph.clone())
+    }
+
+    fn convert_function_body(
+        &mut self,
+        func_def: &AstFuncDef,
+    ) -> Result<
+        (GraphKey, Vec<(Identifier, Type, Option<GraphKey>)>, Vec<GraphKey>),
+        Vec<ConversionError>,
+    > {
+        self.enter_scope();
+        let mut params: Vec<(Identifier, Type, Option<GraphKey>)> = Vec::new();
+        let mut cells: Vec<GraphKey> = Vec::new();
+        for param in &func_def.params {
+            let pid = self.unique_id(&param.name);
+            let ptype = match &param.type_ {
+                Some(s) => type_from_str(s),
+                None => Type::Void,
+            };
+            // Param cell: a Binding whose def resolves to Null, state Residual,
+            // so References to it never fold and β-substitution can override it.
+            let fake_def = invalid_key(&mut self.graph);
+            let placeholder = self.graph.add_node(
+                NodeKind::Binding {
+                    name: pid.clone(),
+                    def: fake_def,
+                },
+                Type::Residual(Box::new(ptype.clone())),
+                KnowledgeState::Residual,
+                vec![],
+                HashSet::new(),
+                HashSet::new(),
+                Provenance::Inferred,
+                Span::unknown(),
+            );
+            self.scope_stack
+                .last_mut()
+                .unwrap()
+                .insert(param.name.clone(), placeholder);
+            cells.push(placeholder);
+            params.push((pid.clone(), ptype.clone(), None));
+        }
+        let body_key = self.convert_block(&func_def.body)?;
+        self.exit_scope();
+        Ok((body_key, params, cells))
+    }
+
+    fn convert_block(&mut self, block: &AstBlock) -> Result<GraphKey, Vec<ConversionError>> {
+        self.enter_scope();
+        let mut anchors: Vec<GraphKey> = Vec::new();
+        let mut tail: Option<GraphKey> = None;
+        for stmt in &block.statements {
+            let k = self.convert_stmt(stmt)?;
+            anchors.push(k);
+        }
+        if let Some(ret) = &block.ret {
+            let k = self.convert_expr(ret)?;
+            anchors.push(k);
+            tail = Some(k);
+        }
+        let root_key = *anchors.last().unwrap_or(&invalid_key(&mut self.graph));
+        self.graph
+            .set_block_info(root_key, BlockInfo { anchors, tail });
+        self.exit_scope();
+        Ok(root_key)
+    }
+
+    fn convert_stmt(&mut self, stmt: &AstStmt) -> Result<GraphKey, Vec<ConversionError>> {
+        match &stmt.kind {
+            AstStmtKind::Bind {
+                type_: ty,
+                name,
+                value,
+            } => {
+                let vk = self.convert_expr(value)?;
+                let vtype = self.get_type(&vk);
+                let btype = match ty {
+                    Some(s) => type_from_str(s),
+                    None => vtype.clone(),
+                };
+                let bname = self.unique_id(name);
+                let key = self.graph.add_node(
+                    NodeKind::Binding {
+                        name: bname,
+                        def: vk,
+                    },
+                    btype,
+                    KnowledgeState::Known,
+                    vec![vk],
+                    HashSet::new(),
+                    HashSet::new(),
+                    Provenance::Source {
+                        file: stmt.span.file.clone(),
+                        line: stmt.span.line,
+                        col_start: stmt.span.col_start,
+                    },
+                    stmt.span.clone(),
+                );
+                // Bind the name to the new cell in the current scope
+                // (shadowing replaces the earlier binding).
+                self.scope_stack
+                    .last_mut()
+                    .unwrap()
+                    .insert(name.clone(), key);
+                Ok(key)
+            }
+            AstStmtKind::Discard(inner) => {
+                let ik = self.convert_expr(inner)?;
+                Ok(self.graph.add_node(
+                    NodeKind::Discard { source: ik },
+                    self.get_type(&ik),
+                    KnowledgeState::Known,
+                    vec![ik],
+                    HashSet::new(),
+                    HashSet::new(),
+                    Provenance::Source {
+                        file: stmt.span.file.clone(),
+                        line: stmt.span.line,
+                        col_start: stmt.span.col_start,
+                    },
+                    stmt.span.clone(),
+                ))
+            }
+            AstStmtKind::Destructure { pattern, source } => {
+                let sk = self.convert_expr(source)?;
+                let bindings = self.resolve_pattern(pattern)?;
+                Ok(self.graph.add_node(
+                    NodeKind::Destructure {
+                        pattern: convert_ast_pattern(pattern.clone()),
+                        source: sk,
+                        bindings,
+                    },
+                    Type::Void,
+                    KnowledgeState::Known,
+                    vec![sk],
+                    HashSet::new(),
+                    HashSet::new(),
+                    Provenance::Source {
+                        file: stmt.span.file.clone(),
+                        line: stmt.span.line,
+                        col_start: stmt.span.col_start,
+                    },
+                    stmt.span.clone(),
+                ))
+            }
+            AstStmtKind::Expr(e) => self.convert_expr(e),
+            AstStmtKind::Return(v) => match v {
+                Some(inner) => {
+                    let ik = self.convert_expr(inner)?;
+                    Ok(self.graph.add_node(
+                        NodeKind::EarlyReturn { value: ik },
+                        Type::Void,
+                        KnowledgeState::Known,
+                        vec![ik],
+                        HashSet::new(),
+                        HashSet::new(),
+                        Provenance::Source {
+                            file: stmt.span.file.clone(),
+                            line: stmt.span.line,
+                            col_start: stmt.span.col_start,
+                        },
+                        stmt.span.clone(),
+                    ))
+                }
+                None => {
+                    let null = self.lit(LiteralValue::Null, &Type::Null);
+                    Ok(self.mk_node(
+                        NodeKind::EarlyReturn { value: null },
+                        Type::Void,
+                        KnowledgeState::Known,
+                        vec![null],
+                        HashSet::new(),
+                        HashSet::new(),
+                        &stmt.span,
+                    ))
+                }
+            },
+            AstStmtKind::Break => Ok(self.mk_node(
+                NodeKind::Break,
+                Type::Void,
+                KnowledgeState::Known,
+                vec![],
+                HashSet::new(),
+                HashSet::new(),
+                &stmt.span,
+            )),
+            AstStmtKind::Continue => Ok(self.mk_node(
+                NodeKind::Continue,
+                Type::Void,
+                KnowledgeState::Known,
+                vec![],
+                HashSet::new(),
+                HashSet::new(),
+                &stmt.span,
+            )),
+        }
+    }
+
+    fn lit(&mut self, lit: LiteralValue, ty: &Type) -> GraphKey {
+        self.graph.add_node(
+            NodeKind::Literal(lit),
+            ty.clone(),
+            KnowledgeState::Known,
+            vec![],
+            HashSet::new(),
+            HashSet::new(),
+            Provenance::Inferred,
+            Span::unknown(),
+        )
     }
 
     /// Convert an AST expression to an IR node.
@@ -207,38 +437,81 @@ impl AstConverter {
                 value,
                 kind: _,
                 span,
-            } => lit_expr(
+            } => {
+                let ty = Type::Numeric(NumericType::Int(IntWidth::B64));
+                Ok(self.mk_node(
+                    NodeKind::Literal(LiteralValue::Int {
+                        value: *value,
+                        width: IntWidth::B64,
+                        signed: true,
+                    }),
+                    ty,
+                    KnowledgeState::Known,
+                    vec![],
+                    HashSet::new(),
+                    HashSet::new(),
+                    span,
+                ))
+            }
+            AstExpr::FloatLit { value, span } => {
+                let ty = Type::Numeric(NumericType::Float(FloatWidth::F64));
+                Ok(self.mk_node(
+                    NodeKind::Literal(LiteralValue::Float {
+                        value: value.clone(),
+                        width: FloatWidth::F64,
+                    }),
+                    ty,
+                    KnowledgeState::Known,
+                    vec![],
+                    HashSet::new(),
+                    HashSet::new(),
+                    span,
+                ))
+            }
+            AstExpr::StrLit { value, span } => Ok(self.mk_node(
+                NodeKind::Literal(LiteralValue::Str(value.clone())),
+                Type::Str,
+                KnowledgeState::Known,
+                vec![],
+                HashSet::new(),
+                HashSet::new(),
                 span,
-                LiteralValue::Int {
-                    value: *value,
-                    width: IntWidth::B64,
-                    signed: true,
-                },
-            ),
-            AstExpr::FloatLit { value, span } => lit_expr(
+            )),
+            AstExpr::BoolLit(v, span) => Ok(self.mk_node(
+                NodeKind::Literal(LiteralValue::Bool(*v)),
+                Type::Bool,
+                KnowledgeState::Known,
+                vec![],
+                HashSet::new(),
+                HashSet::new(),
                 span,
-                LiteralValue::Float {
-                    value: value.clone(),
-                    width: FloatWidth::F64,
-                },
-            ),
-            AstExpr::StrLit { value, span } => lit_expr(span, LiteralValue::Str(value.clone())),
-            AstExpr::BoolLit(v, span) => lit_expr(span, LiteralValue::Bool(*v)),
-            AstExpr::NullLit(span) => lit_expr(span, LiteralValue::Null),
-            AstExpr::CharLit(c, span) => lit_expr(span, LiteralValue::Char(*c)),
-            AstExpr::Location(span) => Ok(self.graph.add_node(
+            )),
+            AstExpr::NullLit(span) => Ok(self.mk_node(
+                NodeKind::Literal(LiteralValue::Null),
+                Type::Null,
+                KnowledgeState::Known,
+                vec![],
+                HashSet::new(),
+                HashSet::new(),
+                span,
+            )),
+            AstExpr::CharLit(c, span) => Ok(self.mk_node(
+                NodeKind::Literal(LiteralValue::Char(*c)),
+                Type::Numeric(NumericType::Int(IntWidth::B16)),
+                KnowledgeState::Known,
+                vec![],
+                HashSet::new(),
+                HashSet::new(),
+                span,
+            )),
+            AstExpr::Location(span) => Ok(self.mk_node(
                 NodeKind::Location,
                 Type::SourceLoc,
                 KnowledgeState::Known,
                 vec![],
                 HashSet::new(),
                 HashSet::new(),
-                Provenance::Source {
-                    file: span.file.clone(),
-                    line: span.line,
-                    col_start: span.col_start,
-                },
-                span.clone(),
+                span,
             )),
             AstExpr::BinaryOp { op, lhs, rhs, span } => {
                 let lk = self.convert_expr(lhs)?;
@@ -285,7 +558,13 @@ impl AstConverter {
                 ))
             }
             AstExpr::Call { func, args, span } => {
-                let fk = self.convert_expr(func)?;
+                let fk = match func.as_ref() {
+                    AstExpr::Id(name) => match self.lookup(name) {
+                        Some(k) => k,
+                        None => self.ad_hoc_function(name, span),
+                    },
+                    _ => self.convert_expr(func)?,
+                };
                 let mut aks = Vec::new();
                 let mut errs = Vec::new();
                 for (_, arg) in args {
@@ -297,7 +576,7 @@ impl AstConverter {
                 if !errs.is_empty() {
                     return Err(errs);
                 }
-                let rt = self.call_ret_type(&fk, func);
+                let rt = self.call_ret_type(&fk);
                 let deps: Vec<GraphKey> = std::iter::once(fk).chain(aks.iter().cloned()).collect();
                 Ok(self.graph.add_node(
                     NodeKind::Call {
@@ -1090,6 +1369,7 @@ impl AstConverter {
             }
             AstExpr::ProviderCall {
                 provider,
+                verb,
                 args,
                 span,
             } => {
@@ -1116,6 +1396,7 @@ impl AstConverter {
                 Ok(self.graph.add_node(
                     NodeKind::ProviderCall {
                         provider: prov.clone(),
+                        verb: Identifier::new(verb, self.graph.next_id),
                         args: aks.clone(),
                     },
                     Type::Str,
@@ -1298,153 +1579,56 @@ impl AstConverter {
         }
     }
 
-    fn convert_stmt(&mut self, stmt: &AstStmt) -> Result<GraphKey, Vec<ConversionError>> {
-        match &stmt.kind {
-            AstStmtKind::Bind {
-                type_: ty,
-                name,
-                value,
-            } => {
-                let vk = self.convert_expr(value)?;
-                let vtype = self.get_type(&vk);
-                let btype = match ty {
-                    Some(s) => type_from_str(s),
-                    None => vtype.clone(),
-                };
-                match self.bind_id(name) {
-                    Ok(_) => {}
-                    Err(ConversionError::Shadowing(n, a, b)) => {
-                        return Err(vec![ConversionError::Shadowing(n, a, b)]);
-                    }
-                    Err(e) => return Err(vec![e]),
-                }
-                let _id = self.unique_id(name);
-                let bid = self.unique_id(name);
-                Ok(self.graph.add_node(
-                    NodeKind::Binding { name: bid, def: vk },
-                    btype,
-                    KnowledgeState::Known,
-                    vec![vk],
-                    HashSet::new(),
-                    HashSet::new(),
-                    Provenance::Source {
-                        file: stmt.span.file.clone(),
-                        line: stmt.span.line,
-                        col_start: stmt.span.col_start,
-                    },
-                    stmt.span.clone(),
-                ))
-            }
-            AstStmtKind::Discard(inner) => {
-                let ik = self.convert_expr(inner)?;
-                Ok(self.graph.add_node(
-                    NodeKind::Discard { source: ik },
-                    self.get_type(&ik),
-                    KnowledgeState::Known,
-                    vec![ik],
-                    HashSet::new(),
-                    HashSet::new(),
-                    Provenance::Source {
-                        file: stmt.span.file.clone(),
-                        line: stmt.span.line,
-                        col_start: stmt.span.col_start,
-                    },
-                    stmt.span.clone(),
-                ))
-            }
-            AstStmtKind::Destructure { pattern, source } => {
-                let sk = self.convert_expr(source)?;
-                let bindings = self.resolve_pattern(pattern)?;
-                Ok(self.graph.add_node(
-                    NodeKind::Destructure {
-                        pattern: convert_ast_pattern(pattern.clone()),
-                        source: sk,
-                        bindings,
-                    },
-                    Type::Void,
-                    KnowledgeState::Known,
-                    vec![sk],
-                    HashSet::new(),
-                    HashSet::new(),
-                    Provenance::Source {
-                        file: stmt.span.file.clone(),
-                        line: stmt.span.line,
-                        col_start: stmt.span.col_start,
-                    },
-                    stmt.span.clone(),
-                ))
-            }
-            AstStmtKind::Expr(e) => self.convert_expr(e),
-            AstStmtKind::Return(_) | AstStmtKind::Break | AstStmtKind::Continue => {
-                Ok(self.graph.add_node(
-                    NodeKind::Literal(LiteralValue::Null),
-                    Type::Void,
-                    KnowledgeState::Known,
-                    vec![],
-                    HashSet::new(),
-                    HashSet::new(),
-                    Provenance::Source {
-                        file: stmt.span.file.clone(),
-                        line: stmt.span.line,
-                        col_start: stmt.span.col_start,
-                    },
-                    stmt.span.clone(),
-                ))
-            }
-        }
-    }
-
-    fn convert_block(&mut self, block: &AstBlock) -> Result<GraphKey, Vec<ConversionError>> {
-        self.enter_scope();
-        let mut last = self.graph.add_node(
-            NodeKind::Literal(LiteralValue::Null),
-            Type::Void,
+    /// Create an external/builtin callee: a Function node with an invalid body
+    /// that is *not* registered in the function table, so it never inlines and
+    /// retro reconstructs the call from its name.
+    fn ad_hoc_function(&mut self, name: &str, span: &Span) -> GraphKey {
+        let body = invalid_key(&mut self.graph);
+        let dep = invalid_key(&mut self.graph);
+        self.graph.add_node(
+            NodeKind::Function {
+                name: Identifier::new(name, self.graph.next_id),
+                public: false,
+                params: Vec::new(),
+                ret: Type::Void,
+                body,
+                capabilities: HashSet::new(),
+            },
+            Type::Function {
+                params: vec![],
+                ret: Box::new(Type::Void),
+            },
             KnowledgeState::Known,
-            vec![],
+            vec![dep],
             HashSet::new(),
             HashSet::new(),
             Provenance::Inferred,
-            Span::unknown(),
-        );
-        for stmt in &block.statements {
-            match self.convert_stmt(stmt) {
-                Ok(k) => last = k,
-                Err(e) => {
-                    self.exit_scope();
-                    return Err(e);
-                }
-            }
-        }
-        if let Some(ret) = &block.ret {
-            match self.convert_expr(ret) {
-                Ok(k) => last = k,
-                Err(e) => {
-                    self.exit_scope();
-                    return Err(e);
-                }
-            }
-        }
-        self.exit_scope();
-        Ok(last)
+            span.clone(),
+        )
     }
 
     fn convert_id(&mut self, name: &str, span: &Span) -> Result<GraphKey, Vec<ConversionError>> {
-        let bid = self.unique_id(name);
-        let def = invalid_key(&mut self.graph);
-        Ok(self.graph.add_node(
-            NodeKind::Binding { name: bid, def },
-            Type::Void,
-            KnowledgeState::Known,
-            vec![],
-            HashSet::new(),
-            HashSet::new(),
-            Provenance::Source {
-                file: span.file.clone(),
-                line: span.line,
-                col_start: span.col_start,
-            },
-            span.clone(),
-        ))
+        match self.lookup(name) {
+            Some(def) => {
+                let def_type = self.get_type(&def);
+                Ok(self.mk_node(
+                    NodeKind::Reference {
+                        name: Identifier::new(name, self.graph.next_id),
+                        def,
+                    },
+                    def_type,
+                    KnowledgeState::Residual,
+                    vec![def],
+                    HashSet::new(),
+                    HashSet::new(),
+                    span,
+                ))
+            }
+            None => Err(vec![ConversionError::UndefinedIdentifier(
+                name.to_string(),
+                span.clone(),
+            )]),
+        }
     }
 
     fn resolve_pattern(
@@ -1455,14 +1639,14 @@ impl AstConverter {
         match &pattern.kind {
             AstPatternKind::Bind(name) => {
                 let id = self.unique_id(name);
-                let dk = invalid_key(&mut self.graph);
-                bindings.push((id, dk));
+                let def = invalid_key(&mut self.graph);
+                bindings.push((id, def));
             }
             AstPatternKind::Variant { name: _, param } => {
                 if let Some(p) = param {
                     let id = self.unique_id(p);
-                    let dk = invalid_key(&mut self.graph);
-                    bindings.push((id, dk));
+                    let def = self.convert_id(p, &pattern.span)?;
+                    bindings.push((id, def));
                 }
             }
             AstPatternKind::Struct { name: _, fields } => {
@@ -1484,8 +1668,14 @@ impl AstConverter {
     }
 
     fn binop_type(&self, lk: &GraphKey, op: &BinOp, rk: &GraphKey) -> (Type, KnowledgeState) {
-        let lt = self.get_type(lk);
-        let rt = self.get_type(rk);
+        fn strip(t: &Type) -> &Type {
+            match t {
+                Type::Residual(inner) => &**inner,
+                other => other,
+            }
+        }
+        let lt = strip(&self.get_type(lk)).clone();
+        let rt = strip(&self.get_type(rk)).clone();
         match (&lt, &rt) {
             (Type::Numeric(lt2), Type::Numeric(rt2)) => match numeric_result_type(lt2, *op, rt2) {
                 ResultType::Numeric(ty) => (Type::Numeric(ty), KnowledgeState::Known),
@@ -1497,7 +1687,7 @@ impl AstConverter {
         }
     }
 
-    fn call_ret_type(&self, fk: &GraphKey, _func_ast: &AstExpr) -> Type {
+    fn call_ret_type(&self, fk: &GraphKey) -> Type {
         if let Some(fn_node) = self.graph.get_node_checked(*fk)
             && let NodeKind::Function { ret, .. } = &fn_node.kind {
                 return ret.clone();
@@ -1524,63 +1714,91 @@ impl AstConverter {
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
-fn lit_expr(span: &Span, lit: LiteralValue) -> Result<GraphKey, Vec<ConversionError>> {
-    // Create a temporary converter to add the literal node
-    let mut tmp = AstConverter::new();
-    let ty = match &lit {
-        LiteralValue::Int { .. } => Type::Numeric(NumericType::Int(lit.int_width())),
-        LiteralValue::UInt(_, w) => Type::Numeric(NumericType::UInt(*w)),
-        LiteralValue::Float { width, .. } => Type::Numeric(NumericType::Float(*width)),
-        LiteralValue::Str(_) => Type::Str,
-        LiteralValue::Bool(_) => Type::Bool,
-        LiteralValue::Null => Type::Null,
-        LiteralValue::Bytes(_) => Type::Bytes,
-        LiteralValue::Char(_) => Type::Numeric(NumericType::Int(IntWidth::B16)),
-        _ => Type::Void,
-    };
-    let key = tmp.graph.add_node(
-        NodeKind::Literal(lit),
-        ty,
-        KnowledgeState::Known,
-        vec![],
-        HashSet::new(),
-        HashSet::new(),
-        Provenance::Source {
-            file: span.file.clone(),
-            line: span.line,
-            col_start: span.col_start,
-        },
-        span.clone(),
-    );
-    Ok(key)
-}
-
-// Helper to get int width from literal
-trait IntLitExt {
-    fn int_width(&self) -> IntWidth;
-}
-impl IntLitExt for LiteralValue {
-    fn int_width(&self) -> IntWidth {
-        match self {
-            LiteralValue::Int { width, .. } => *width,
-            LiteralValue::UInt(_, w) => *w,
-            _ => IntWidth::B64,
-        }
-    }
-}
-
 fn type_from_str(s: &str) -> Type {
-    if let Some(nt) = NumericType::from_name(s) {
+    if let Some(nt) = numeric_type_from_str(s) {
         return Type::Numeric(nt);
+    }
+    if let Some(inner) = strip_param_type(s, "List") {
+        return Type::List(Box::new(type_from_str(&inner)));
+    }
+    if let Some(inner) = strip_param_type(s, "Map")
+        && let Some((k, v)) = inner.split_once(',')
+    {
+        return Type::Map(
+            Box::new(type_from_str(k.trim())),
+            Box::new(type_from_str(v.trim())),
+        );
+    }
+    if let Some(inner) = strip_param_type(s, "Set") {
+        return Type::Set(Box::new(type_from_str(&inner)));
+    }
+    if let Some(inner) = strip_param_type(s, "Option") {
+        return Type::Option(Box::new(type_from_str(&inner)));
+    }
+    if let Some(inner) = strip_param_type(s, "Result")
+        && let Some((ok, er)) = inner.split_once(',')
+    {
+        return Type::Result(
+            Box::new(type_from_str(ok.trim())),
+            Box::new(type_from_str(er.trim())),
+        );
+    }
+    if let Some(inner) = strip_param_type(s, "Slice") {
+        return Type::Slice {
+            element_type: Box::new(type_from_str(&inner)),
+        };
+    }
+    if let Some(inner) = strip_param_type(s, "Range") {
+        let elem = type_from_str(&inner);
+        return Type::Range {
+            start_type: Box::new(elem.clone()),
+            end_type: Box::new(elem),
+            closed: false,
+        };
     }
     match s {
         "Bool" => Type::Bool,
         "Str" => Type::Str,
+        "Bytes" => Type::Bytes,
         "Null" => Type::Null,
         "Void" => Type::Void,
         "" => Type::Void,
         _ => Type::UserDefined(s.into()),
     }
+}
+
+fn strip_param_type(s: &str, name: &str) -> Option<String> {
+    let rest = s.trim().strip_prefix(name)?;
+    let rest = rest.strip_prefix('(')?;
+    let rest = rest.strip_suffix(')')?;
+    Some(rest.to_string())
+}
+
+fn numeric_type_from_str(s: &str) -> Option<NumericType> {
+    if let Some(nt) = NumericType::from_name(s) {
+        return Some(nt);
+    }
+    if let Some(rest) = s.strip_prefix("Int(").and_then(|r| r.strip_suffix(')'))
+        && let Ok(w) = rest.parse::<u16>()
+    {
+        return IntWidth::from_bits(w).map(NumericType::Int);
+    }
+    if let Some(rest) = s.strip_prefix("UInt(").and_then(|r| r.strip_suffix(')'))
+        && let Ok(w) = rest.parse::<u16>()
+    {
+        return IntWidth::from_bits(w).map(NumericType::UInt);
+    }
+    if let Some(rest) = s.strip_prefix("Float(").and_then(|r| r.strip_suffix(')'))
+        && let Ok(w) = rest.parse::<u16>()
+    {
+        return FloatWidth::from_bits(w).map(NumericType::Float);
+    }
+    if let Some(rest) = s.strip_prefix("Dec(").and_then(|r| r.strip_suffix(')'))
+        && let Ok(w) = rest.parse::<u16>()
+    {
+        return Some(NumericType::Dec(w.max(1)));
+    }
+    None
 }
 
 fn unary_type(op: &UnaryOp, t: &Type) -> Type {

@@ -7399,3 +7399,95 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Graph-reduce mode (spec §33) runs the knowledge-graph convert→reduce→
+/// retrofit pipeline between parsing and codegen. The reduced program must
+/// re-type-check and produce byte-identical output to the plain pipeline.
+#[test]
+fn run_graph_reduce_preserves_behavior() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-gr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("gr.resid");
+    let src = r#"Str age_string(UInt(8) age) {
+    if (age > (UInt(8)) 20) {
+        return "You are old!";
+    } else {
+        return "You are legit!";
+    }
+}
+Int main() {
+    UInt(8) age = 120;
+    UInt(8) two_year = 2;
+    UInt(8) new_age = age + two_year;
+    println(f"Your age {age} means: {age_string(age)}");
+    return 0;
+}
+"#;
+    std::fs::write(&file, src).unwrap();
+
+    let plain = Command::new(residc_bin()).arg(&file).arg("run").output().unwrap();
+    let reduced = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .arg("--graph-reduce")
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        plain.status.code(),
+        Some(0),
+        "plain pipeline failed: {}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    assert_eq!(
+        reduced.status.code(),
+        Some(0),
+        "graph-reduce failed: {}",
+        String::from_utf8_lossy(&reduced.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&reduced.stderr).contains("graph-reduce:"),
+        "expected reduction diagnostic, got: {}",
+        String::from_utf8_lossy(&reduced.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&plain.stdout),
+        String::from_utf8_lossy(&reduced.stdout),
+        "reduced program output must match the plain pipeline"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Non-function declarations are not representable in the reduction IR and
+/// must be rejected loudly rather than silently dropped.
+#[test]
+fn graph_reduce_rejects_type_declarations() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-grtype-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("gr_type.resid");
+    std::fs::write(
+        &file,
+        "type Point = { x: Int };\nInt main() {\n    return 0;\n}\n",
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .arg("--graph-reduce")
+        .output()
+        .unwrap();
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "expected graph-reduce to reject type declarations"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("only functions are representable"),
+        "unexpected error: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

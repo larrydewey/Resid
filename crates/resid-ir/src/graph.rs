@@ -56,11 +56,24 @@ pub enum NodeKind {
         name: Identifier,
         def: GraphKey,
     },
+    /// A compile-time reference to a binding cell (`Identifier` use site).
+    /// `def` is the key of the definition it resolves to (a `Binding` cell, a
+    /// param cell, or a `Function` node). Never folded away unless the def
+    /// resolves to a literal.
+    Reference {
+        name: Identifier,
+        def: GraphKey,
+    },
     Discard {
         source: GraphKey,
     },
+    /// `return;` / `return expr;` (value may be a void Null literal for a bare
+    /// `return`).
+    Break,
+    Continue,
     Function {
         name: Identifier,
+        public: bool,
         params: Vec<(Identifier, Type, Option<GraphKey>)>,
         ret: Type,
         body: GraphKey,
@@ -189,6 +202,7 @@ pub enum NodeKind {
     },
     ProviderCall {
         provider: Provider,
+        verb: Identifier,
         args: Vec<GraphKey>,
     },
     BehaviorInstance {
@@ -208,7 +222,10 @@ impl fmt::Debug for NodeKind {
             NodeKind::Literal(_) => write!(f, "literal"),
             NodeKind::Location => write!(f, "#location"),
             NodeKind::Binding { name, .. } => write!(f, "binding({})", name),
+            NodeKind::Reference { name, .. } => write!(f, "ref({})", name),
             NodeKind::Discard { .. } => write!(f, "discard"),
+            NodeKind::Break => write!(f, "break"),
+            NodeKind::Continue => write!(f, "continue"),
             NodeKind::Function { name, .. } => write!(f, "function({})", name),
             NodeKind::Call { .. } => write!(f, "call"),
             NodeKind::Rt(_) => write!(f, "rt"),
@@ -266,6 +283,17 @@ pub struct WithBindingNode {
     pub init: GraphKey,
 }
 
+/// Per-block statement layout recorded during AST conversion, keyed by the
+/// block's last (root) node. `anchors` are the statement nodes in source
+/// order; `tail` is the block's trailing return *expression* (convert_block's
+/// `ret` expr), if any, and must be the last element of `anchors` when set.
+/// Enables faithful statement reconstruction after reduction.
+#[derive(Clone, Debug, Default)]
+pub struct BlockInfo {
+    pub anchors: Vec<GraphKey>,
+    pub tail: Option<GraphKey>,
+}
+
 /// Single node in the knowledge graph.
 #[derive(Clone)]
 pub struct Node {
@@ -299,6 +327,8 @@ pub struct KnowledgeGraph {
     identifiers: HashMap<String, Vec<u64>>,
     entry_point: Option<GraphKey>,
     functions: HashMap<String, GraphKey>,
+    block_info: HashMap<GraphKey, BlockInfo>,
+    param_cells: HashMap<GraphKey, Vec<GraphKey>>,
 }
 
 impl Default for KnowledgeGraph {
@@ -315,6 +345,8 @@ impl KnowledgeGraph {
             identifiers: HashMap::new(),
             entry_point: None,
             functions: HashMap::new(),
+            block_info: HashMap::new(),
+            param_cells: HashMap::new(),
         }
     }
 
@@ -370,6 +402,32 @@ impl KnowledgeGraph {
         self.nodes[key].doc_comments = Some(comments);
     }
 
+    pub fn set_function_parts(
+        &mut self,
+        key: GraphKey,
+        body: GraphKey,
+        params: Vec<(Identifier, Type, Option<GraphKey>)>,
+    ) {
+        let mut deps: Vec<GraphKey> = vec![body];
+        for (_, _, d) in &params {
+            if let Some(dk) = d {
+                deps.push(*dk);
+            }
+        }
+        let node = self.nodes.get_mut(key).unwrap();
+        if let NodeKind::Function {
+            body: b,
+            params: p,
+            ..
+        } = &mut node.kind
+        {
+            *b = body;
+            *p = params;
+        }
+        node.deps = deps;
+    }
+
+    /// Set the entry point (`main` when present, else the first function).
     pub fn set_entry(&mut self, key: GraphKey) {
         self.entry_point = Some(key);
     }
@@ -383,6 +441,33 @@ impl KnowledgeGraph {
     pub fn lookup_function(&self, name: &str) -> Option<&Node> {
         self.functions.get(name).map(|k| &self.nodes[*k])
     }
+    pub fn lookup_function_key(&self, name: &str) -> Option<GraphKey> {
+        self.functions.get(name).copied()
+    }
+    pub fn function_keys(&self) -> Vec<GraphKey> {
+        self.functions.values().copied().collect()
+    }
+
+    pub fn all_keys(&self) -> Vec<GraphKey> {
+        self.nodes.keys().collect()
+    }
+
+    /// Record the statement layout of a converted block under its root key.
+    pub fn set_block_info(&mut self, root: GraphKey, info: BlockInfo) {
+        self.block_info.insert(root, info);
+    }
+    pub fn block_info(&self, key: GraphKey) -> Option<&BlockInfo> {
+        self.block_info.get(&key)
+    }
+
+    /// Record which param-cell keys belong to a function (for β-substitution
+    /// overrides during inlining).
+    pub fn set_param_cells(&mut self, func: GraphKey, cells: Vec<GraphKey>) {
+        self.param_cells.insert(func, cells);
+    }
+    pub fn param_cells(&self, func: GraphKey) -> Option<&Vec<GraphKey>> {
+        self.param_cells.get(&func)
+    }
 
     pub fn check_uniqueness(&self) -> Vec<(String, Vec<u64>)> {
         self.identifiers
@@ -390,10 +475,6 @@ impl KnowledgeGraph {
             .filter(|(_, ids)| ids.len() > 1)
             .map(|(n, ids)| (n.clone(), ids.clone()))
             .collect()
-    }
-
-    pub fn all_keys(&self) -> Vec<GraphKey> {
-        self.nodes.iter().map(|(k, _)| k).collect()
     }
 
     pub fn reachable(&self, start: GraphKey) -> HashSet<GraphKey> {
@@ -470,6 +551,278 @@ impl KnowledgeGraph {
             doc_comments: node.doc_comments.clone(),
         };
         key
+    }
+
+    /// Clone the subgraph reachable from `root` into this graph, remapping
+    /// every reachable key through `overrides` (param cells → argument nodes
+    /// during β-substitution). Immutable leaf kinds (`Function`, `Literal`,
+    /// `RawString`, `ByteString`, `Location`) are shared rather than cloned.
+    ///
+    /// Returns the new root and the list of newly created keys (deps first).
+    /// Clones are marked `Provenance::Inferred` so the back-translator never
+    /// mistakes them for source statements.
+    pub fn clone_subgraph(
+        &mut self,
+        root: GraphKey,
+        overrides: &HashMap<GraphKey, GraphKey>,
+    ) -> Option<(GraphKey, Vec<GraphKey>)> {
+        let mut remap: HashMap<GraphKey, GraphKey> = overrides.clone();
+        // Walk deps-first (topological_order returns dependents first).
+        let order = self.topological_order(root);
+        let mut cloned: Vec<GraphKey> = Vec::new();
+        for &key in order.iter().rev() {
+            if remap.contains_key(&key) {
+                continue;
+            }
+            let node = self.nodes.get(key)?.clone();
+            let shared_leaf = matches!(
+                node.kind,
+                NodeKind::Function { .. }
+                    | NodeKind::Literal(_)
+                    | NodeKind::RawString(_)
+                    | NodeKind::ByteString(_)
+                    | NodeKind::Location
+                    | NodeKind::Todo
+                    | NodeKind::Unimplemented
+            );
+            if shared_leaf {
+                remap.insert(key, key);
+                continue;
+            }
+            let kind = remap_kind(node.kind, &remap);
+            let deps: Vec<GraphKey> = node.deps.iter().map(|d| *remap.get(d).unwrap_or(d)).collect();
+            let new_key = self.add_node(
+                kind,
+                node.type_,
+                node.knowledge,
+                deps,
+                node.effects,
+                node.capabilities,
+                Provenance::Inferred,
+                node.span,
+            );
+            remap.insert(key, new_key);
+            cloned.push(new_key);
+        }
+        let new_root = *remap.get(&root)?;
+        Some((new_root, cloned))
+    }
+}
+
+/// Rewrite every `GraphKey` inside a node kind through `remap` (unmapped keys
+/// are preserved, i.e. shared leaves).
+fn remap_kind(kind: NodeKind, remap: &HashMap<GraphKey, GraphKey>) -> NodeKind {
+    let r = |k: GraphKey| *remap.get(&k).unwrap_or(&k);
+    match kind {
+        NodeKind::Literal(_) => kind,
+        NodeKind::Location => kind,
+        NodeKind::Binding { name, def } => NodeKind::Binding {
+            name,
+            def: r(def),
+        },
+        NodeKind::Reference { name, def } => NodeKind::Reference {
+            name,
+            def: r(def),
+        },
+        NodeKind::Discard { source } => NodeKind::Discard { source: r(source) },
+        NodeKind::Break => NodeKind::Break,
+        NodeKind::Continue => NodeKind::Continue,
+        NodeKind::Function {
+            name,
+            public,
+            params,
+            ret,
+            body,
+            capabilities,
+        } => NodeKind::Function {
+            name,
+            public,
+            params: params
+                .into_iter()
+                .map(|(i, t, d)| (i, t, d.map(r)))
+                .collect(),
+            ret,
+            body: r(body),
+            capabilities,
+        },
+        NodeKind::Call { func, args } => NodeKind::Call {
+            func: r(func),
+            args: args.into_iter().map(r).collect(),
+        },
+        NodeKind::Rt(k) => NodeKind::Rt(r(k)),
+        NodeKind::AtResidual { type_, inner } => NodeKind::AtResidual {
+            type_,
+            inner: r(inner),
+        },
+        NodeKind::BinaryOp { op, lhs, rhs } => NodeKind::BinaryOp {
+            op,
+            lhs: r(lhs),
+            rhs: r(rhs),
+        },
+        NodeKind::UnaryOp { op, operand } => NodeKind::UnaryOp {
+            op,
+            operand: r(operand),
+        },
+        NodeKind::Cast { type_, operand } => NodeKind::Cast {
+            type_,
+            operand: r(operand),
+        },
+        NodeKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => NodeKind::If {
+            cond: r(cond),
+            then_branch: r(then_branch),
+            else_branch: else_branch.map(r),
+        },
+        NodeKind::While { cond, body } => NodeKind::While {
+            cond: r(cond),
+            body: r(body),
+        },
+        NodeKind::For {
+            init,
+            cond,
+            step,
+            body,
+        } => NodeKind::For {
+            init: r(init),
+            cond: r(cond),
+            step: r(step),
+            body: r(body),
+        },
+        NodeKind::ForIn { iter, name, body } => NodeKind::ForIn {
+            iter: r(iter),
+            name,
+            body: r(body),
+        },
+        NodeKind::Match {
+            scrutinee,
+            arms,
+            default_arm,
+        } => NodeKind::Match {
+            scrutinee: r(scrutinee),
+            arms: arms
+                .into_iter()
+                .map(|(p, k)| (p, r(k)))
+                .collect(),
+            default_arm: default_arm.map(r),
+        },
+        NodeKind::Spawn {
+            capabilities,
+            body,
+            ret,
+        } => NodeKind::Spawn {
+            capabilities,
+            body: r(body),
+            ret,
+        },
+        NodeKind::Assert { cond, message } => NodeKind::Assert {
+            cond: r(cond),
+            message: r(message),
+        },
+        NodeKind::RtAssert { cond, message } => NodeKind::RtAssert {
+            cond: r(cond),
+            message: r(message),
+        },
+        NodeKind::Known(k) => NodeKind::Known(r(k)),
+        NodeKind::RtKnown(k) => NodeKind::RtKnown(r(k)),
+        NodeKind::ComptimePrint(k) => NodeKind::ComptimePrint(r(k)),
+        NodeKind::Todo => NodeKind::Todo,
+        NodeKind::Unimplemented => NodeKind::Unimplemented,
+        NodeKind::Struct { name, fields } => NodeKind::Struct {
+            name,
+            fields: fields.into_iter().map(|(n, k)| (n, r(k))).collect(),
+        },
+        NodeKind::List { elements } => NodeKind::List {
+            elements: elements.into_iter().map(r).collect(),
+        },
+        NodeKind::Map { entries } => NodeKind::Map {
+            entries: entries.into_iter().map(|(k, v)| (r(k), r(v))).collect(),
+        },
+        NodeKind::Set { elements } => NodeKind::Set {
+            elements: elements.into_iter().map(r).collect(),
+        },
+        NodeKind::Range { start, end, closed } => NodeKind::Range {
+            start: r(start),
+            end: r(end),
+            closed,
+        },
+        NodeKind::FString { parts } => NodeKind::FString {
+            parts: parts
+                .into_iter()
+                .map(|p| FStringPartNode {
+                    text: p.text,
+                    expr: p.expr.map(r),
+                })
+                .collect(),
+        },
+        NodeKind::RawString(_) => kind,
+        NodeKind::ByteString(_) => kind,
+        NodeKind::FieldAccess { target, field } => NodeKind::FieldAccess {
+            target: r(target),
+            field,
+        },
+        NodeKind::Index { target, index } => NodeKind::Index {
+            target: r(target),
+            index: r(index),
+        },
+        NodeKind::Slice { target, range } => NodeKind::Slice {
+            target: r(target),
+            range: r(range),
+        },
+        NodeKind::MethodCall {
+            target,
+            method,
+            args,
+        } => NodeKind::MethodCall {
+            target: r(target),
+            method,
+            args: args.into_iter().map(r).collect(),
+        },
+        NodeKind::EarlyReturn { value } => NodeKind::EarlyReturn { value: r(value) },
+        NodeKind::ElseFallback { value, fallback } => NodeKind::ElseFallback {
+            value: r(value),
+            fallback: r(fallback),
+        },
+        NodeKind::Destructure {
+            pattern,
+            source,
+            bindings,
+        } => NodeKind::Destructure {
+            pattern,
+            source: r(source),
+            bindings: bindings.into_iter().map(|(n, k)| (n, r(k))).collect(),
+        },
+        NodeKind::With { bindings, body } => NodeKind::With {
+            bindings: bindings
+                .into_iter()
+                .map(|b| WithBindingNode {
+                    type_: b.type_,
+                    name: b.name,
+                    init: r(b.init),
+                })
+                .collect(),
+            body: r(body),
+        },
+        NodeKind::ProviderCall {
+            provider,
+            verb,
+            args,
+        } => NodeKind::ProviderCall {
+            provider,
+            verb,
+            args: args.into_iter().map(r).collect(),
+        },
+        NodeKind::BehaviorInstance { behavior, type_ } => NodeKind::BehaviorInstance {
+            behavior,
+            type_,
+        },
+        NodeKind::Using { value, behavior } => NodeKind::Using {
+            value: r(value),
+            behavior,
+        },
+        NodeKind::RegionError(k) => NodeKind::RegionError(r(k)),
     }
 }
 
@@ -726,6 +1079,7 @@ mod tests {
         let key = g.add_node(
             NodeKind::Function {
                 name: Identifier::new("main", 0),
+                public: true,
                 params: vec![],
                 ret: Type::Numeric(NumericType::Int(IntWidth::B64)),
                 body,
