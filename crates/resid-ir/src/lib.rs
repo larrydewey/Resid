@@ -8,10 +8,12 @@
 pub mod convert;
 pub mod graph;
 pub mod reduce;
+pub mod retro;
 pub mod types;
 
 pub use convert::*;
 pub use graph::GraphKey;
 pub use graph::*;
 pub use reduce::*;
+pub use retro::*;
 pub use types::*;

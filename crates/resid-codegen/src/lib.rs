@@ -1995,7 +1995,7 @@ impl<'ctx> CodeGen<'ctx> {
             ExprKind::ComptimePrint(inner) => {
                 // Prefer the reduced (comptime-known) value so `comptime_print`
                 // reports what a β-reduction actually produced.
-                let msg = match resid_type::reduce_expr(&self.unit, inner) {
+                let msg = match resid_type::reduce_expr_with_env(&self.unit, inner, &HashMap::new()) {
                     Some(v) => v.display(),
                     None => match &inner.kind {
                         ExprKind::Literal(lit) => format!("{lit}"),

@@ -12,7 +12,9 @@ pub use resid_ir::{
 };
 
 mod reduce;
-pub use reduce::{CValue, reduce_call, reduce_expr};
+pub use reduce::{CValue, reduce_call, reduce_expr, reduce_expr_with_env};
+mod graph;
+pub use graph::{from_ast, graph_reduce, to_ast};
 mod growable;
 pub use growable::{GrowableAccumulators, find_growable_accumulators};
 use resid_lexer::token::{Literal, Op as OpKind, Span};

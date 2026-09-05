@@ -324,6 +324,11 @@ impl CValue {
 
 /// Try to reduce `expr` to a compile-time value.
 pub fn reduce_expr(unit: &TranslationUnit, expr: &Expr) -> Option<CValue> {
+    reduce_expr_with_env(unit, expr, &HashMap::new())
+}
+
+/// Reduce an expression with a provided environment (for top-level bindings).
+pub fn reduce_expr_with_env(unit: &TranslationUnit, expr: &Expr, env: &HashMap<String, CValue>) -> Option<CValue> {
     let mut ctx = Ctx {
         unit,
         steps: 0,
@@ -331,7 +336,7 @@ pub fn reduce_expr(unit: &TranslationUnit, expr: &Expr) -> Option<CValue> {
         pending: false,
         pending_value: None,
     };
-    ctx.eval(expr, &HashMap::new())
+    ctx.eval(expr, env)
 }
 
 /// Try to reduce a call `func(args…)` to a compile-time value.
