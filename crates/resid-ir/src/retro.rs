@@ -171,7 +171,9 @@ impl Retro {
         if info.anchors.is_empty() && info.tail.is_none() {
             ret = self.conv(root).ok().map(Box::new);
         }
-        AstBlock { statements, ret }
+        let mut out = AstBlock { statements, ret };
+        dce_block(&mut out);
+        out
     }
 
     /// A tail is emitted as a bare return expression only when it cannot also
@@ -562,6 +564,345 @@ impl Retro {
     }
 }
 
+// ─── Dead-binding elimination (spec §36 amendment) ──────────────
+//
+// The reduction relation includes dead-code elimination: a binding whose
+// reduced value is a fully-known constant and whose name is not referenced by
+// any residual computation that remains is elided from the emitted program.
+// Elision is authorized ONLY for fully-known values; a binding whose value is
+// still residual (its evaluation could perform an effect, abort, or fail to
+// converge) is preserved even when unreferenced.
+
+/// Drop unreferenced bindings whose values are fully known constants, to a
+/// fixpoint (a kept binding's value keeps every name it references alive).
+/// Non-binding statements and the tail expression are always preserved.
+fn dce_block(block: &mut AstBlock) {
+    let n = block.statements.len();
+    let mut keep = vec![true; n];
+    let mut pending: Vec<usize> = Vec::new();
+    for (i, st) in block.statements.iter().enumerate() {
+        if matches!(st.kind, AstStmtKind::Bind { .. }) {
+            pending.push(i);
+        }
+    }
+    // Names referenced by computation that must survive: every non-bind
+    // statement plus the tail expression.
+    let mut available: HashSet<String> = HashSet::new();
+    for st in &block.statements {
+        if !matches!(st.kind, AstStmtKind::Bind { .. }) {
+            stmt_referenced_names(st, &mut available);
+        }
+    }
+    if let Some(ret) = &block.ret {
+        expr_referenced_names(ret, &mut available);
+    }
+    // Fixpoint: keep binds that are referenced or whose value is not a folded
+    // constant; a kept bind adds its own references to `available`. A bind
+    // still pending when the fixpoint stalls is unreferenced and folded →
+    // dead.
+    loop {
+        let mut changed = false;
+        let mut still_pending: Vec<usize> = Vec::new();
+        for &i in &pending {
+            let AstStmtKind::Bind { name, value, .. } = &block.statements[i].kind else {
+                continue;
+            };
+            if available.contains(name) || !is_folded_constant(value) {
+                keep[i] = true;
+                let before = available.len();
+                stmt_referenced_names(&block.statements[i], &mut available);
+                changed |= available.len() != before;
+            } else {
+                keep[i] = false;
+                still_pending.push(i);
+            }
+        }
+        pending = still_pending;
+        if !changed || pending.is_empty() {
+            break;
+        }
+    }
+    if keep.iter().any(|k| !k) {
+        let mut out = Vec::with_capacity(block.statements.len());
+        for (i, st) in block.statements.drain(..).enumerate() {
+            if keep[i] {
+                out.push(st);
+            }
+        }
+        block.statements = out;
+    }
+}
+
+/// Names referenced by an expression, including any nested blocks. Pattern
+/// binders (destructure/match/if-let/for-in/with names) are never references.
+fn expr_referenced_names(e: &AstExpr, out: &mut HashSet<String>) {
+    match e {
+        AstExpr::Id(name) => {
+            out.insert(name.clone());
+        }
+        AstExpr::BinaryOp { lhs, rhs, .. } => {
+            expr_referenced_names(lhs, out);
+            expr_referenced_names(rhs, out);
+        }
+        AstExpr::UnaryOp { operand, .. } => expr_referenced_names(operand, out),
+        AstExpr::Call { func, args, .. } => {
+            expr_referenced_names(func, out);
+            for (_, a) in args {
+                expr_referenced_names(a, out);
+            }
+        }
+        AstExpr::Rt(inner, _)
+        | AstExpr::Known(inner, _)
+        | AstExpr::RtKnown(inner, _)
+        | AstExpr::ComptimePrint(inner, _)
+        | AstExpr::EarlyReturn(inner, _)
+        | AstExpr::Discard(inner, _) => expr_referenced_names(inner, out),
+        AstExpr::AtResidual { inner, .. } => expr_referenced_names(inner, out),
+        AstExpr::If {
+            cond,
+            then_block,
+            else_block,
+            ..
+        } => {
+            expr_referenced_names(cond, out);
+            block_referenced_names(then_block, out);
+            if let Some(eb) = else_block {
+                block_referenced_names(eb, out);
+            }
+        }
+        AstExpr::While { cond, body, .. } => {
+            expr_referenced_names(cond, out);
+            block_referenced_names(body, out);
+        }
+        AstExpr::ForIn {
+            collection, body, ..
+        } => {
+            expr_referenced_names(collection, out);
+            block_referenced_names(body, out);
+        }
+        AstExpr::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(i) = init {
+                stmt_referenced_names(i, out);
+            }
+            expr_referenced_names(cond, out);
+            if let Some(s) = step {
+                stmt_referenced_names(s, out);
+            }
+            block_referenced_names(body, out);
+        }
+        AstExpr::Match { scrutinee, arms, .. } => {
+            expr_referenced_names(scrutinee, out);
+            for (_, a) in arms {
+                expr_referenced_names(a, out);
+            }
+        }
+        AstExpr::Spawn { body, .. } => block_referenced_names(body, out),
+        AstExpr::Assert { cond, message, .. } => {
+            expr_referenced_names(cond, out);
+            expr_referenced_names(message, out);
+        }
+        AstExpr::RtAssert { cond, message, .. } => {
+            expr_referenced_names(cond, out);
+            expr_referenced_names(message, out);
+        }
+        AstExpr::StructLit { fields, .. } => {
+            for (_, f) in fields {
+                expr_referenced_names(f, out);
+            }
+        }
+        AstExpr::ListLit(elts, _) => {
+            for x in elts {
+                expr_referenced_names(x, out);
+            }
+        }
+        AstExpr::MapLit(entries, _) => {
+            for (k, v) in entries {
+                expr_referenced_names(k, out);
+                expr_referenced_names(v, out);
+            }
+        }
+        AstExpr::SetLit(elts, _) => {
+            for x in elts {
+                expr_referenced_names(x, out);
+            }
+        }
+        AstExpr::Range { start, end, .. } => {
+            expr_referenced_names(start, out);
+            expr_referenced_names(end, out);
+        }
+        AstExpr::FString(parts, _) => {
+            for p in parts {
+                if let AstFStringPart::Expr(pe) = p {
+                    expr_referenced_names(pe, out);
+                }
+            }
+        }
+        AstExpr::FieldAccess { target, .. } => expr_referenced_names(target, out),
+        AstExpr::Index { target, index, .. } => {
+            expr_referenced_names(target, out);
+            expr_referenced_names(index, out);
+        }
+        AstExpr::Slice { target, range, .. } => {
+            expr_referenced_names(target, out);
+            range_referenced_names(range, out);
+        }
+        AstExpr::MethodCall { target, args, .. } => {
+            expr_referenced_names(target, out);
+            for a in args {
+                expr_referenced_names(a, out);
+            }
+        }
+        AstExpr::ElseFallback { value, fallback, .. } => {
+            expr_referenced_names(value, out);
+            block_referenced_names(fallback, out);
+        }
+        AstExpr::Destructure { source, .. } => expr_referenced_names(source, out),
+        AstExpr::IfLet {
+            source,
+            then_block,
+            else_block,
+            ..
+        } => {
+            expr_referenced_names(source, out);
+            block_referenced_names(then_block, out);
+            if let Some(eb) = else_block {
+                block_referenced_names(eb, out);
+            }
+        }
+        AstExpr::WhileLet { source, body, .. } => {
+            expr_referenced_names(source, out);
+            block_referenced_names(body, out);
+        }
+        AstExpr::With { bindings, body, .. } => {
+            for b in bindings {
+                expr_referenced_names(&b.init, out);
+            }
+            block_referenced_names(body, out);
+        }
+        AstExpr::Using { value, .. } => expr_referenced_names(value, out),
+        AstExpr::ProviderCall { args, .. } => {
+            for a in args {
+                expr_referenced_names(a, out);
+            }
+        }
+        AstExpr::Literal { .. }
+        | AstExpr::FloatLit { .. }
+        | AstExpr::StrLit { .. }
+        | AstExpr::BoolLit(..)
+        | AstExpr::NullLit(_)
+        | AstExpr::CharLit(..)
+        | AstExpr::Location(_)
+        | AstExpr::RawString(..)
+        | AstExpr::ByteString(..)
+        | AstExpr::Todo(_)
+        | AstExpr::Unimplemented(_)
+        | AstExpr::Span(_) => {}
+    }
+}
+
+fn block_referenced_names(block: &AstBlock, out: &mut HashSet<String>) {
+    for st in &block.statements {
+        stmt_referenced_names(st, out);
+    }
+    if let Some(ret) = &block.ret {
+        expr_referenced_names(ret, out);
+    }
+}
+
+fn stmt_referenced_names(st: &AstStmt, out: &mut HashSet<String>) {
+    match &st.kind {
+        AstStmtKind::Bind { value, .. } => expr_referenced_names(value, out),
+        AstStmtKind::Discard(v) => expr_referenced_names(v, out),
+        AstStmtKind::Destructure { source, .. } => expr_referenced_names(source, out),
+        AstStmtKind::Expr(v) => expr_referenced_names(v, out),
+        AstStmtKind::Return(Some(v)) => expr_referenced_names(v, out),
+        AstStmtKind::Return(None) | AstStmtKind::Break | AstStmtKind::Continue => {}
+    }
+}
+
+fn range_referenced_names(r: &AstRange, out: &mut HashSet<String>) {
+    if let Some(s) = &r.start {
+        expr_referenced_names(s, out);
+    }
+    if let Some(e) = &r.end {
+        expr_referenced_names(e, out);
+    }
+}
+
+/// A value is a "folded constant" when it is built entirely from known,
+/// effect-free, trap-free leaves: no identifier, call, effect, index/slice
+/// (bounds traps), or checked div/rem (division-by-zero trap). Everything the
+/// reduction engine can evaluate collapses to such leaves, so anything else is
+/// a residual computation that dead-code elimination must preserve.
+fn is_folded_constant(e: &AstExpr) -> bool {
+    match e {
+        AstExpr::Id(_)
+        | AstExpr::Call { .. }
+        | AstExpr::Rt(..)
+        | AstExpr::AtResidual { .. }
+        | AstExpr::If { .. }
+        | AstExpr::While { .. }
+        | AstExpr::ForIn { .. }
+        | AstExpr::Match { .. }
+        | AstExpr::For { .. }
+        | AstExpr::Spawn { .. }
+        | AstExpr::Assert { .. }
+        | AstExpr::RtAssert { .. }
+        | AstExpr::Known(..)
+        | AstExpr::RtKnown(..)
+        | AstExpr::ComptimePrint(..)
+        | AstExpr::Todo(_)
+        | AstExpr::Unimplemented(_)
+        | AstExpr::Location(_)
+        | AstExpr::Index { .. }
+        | AstExpr::Slice { .. }
+        | AstExpr::MethodCall { .. }
+        | AstExpr::EarlyReturn(..)
+        | AstExpr::ElseFallback { .. }
+        | AstExpr::Destructure { .. }
+        | AstExpr::IfLet { .. }
+        | AstExpr::WhileLet { .. }
+        | AstExpr::With { .. }
+        | AstExpr::Using { .. }
+        | AstExpr::Discard(..)
+        | AstExpr::ProviderCall { .. }
+        | AstExpr::Span(_) => false,
+        AstExpr::Literal { .. }
+        | AstExpr::FloatLit { .. }
+        | AstExpr::StrLit { .. }
+        | AstExpr::BoolLit(..)
+        | AstExpr::NullLit(_)
+        | AstExpr::CharLit(..)
+        | AstExpr::RawString(..)
+        | AstExpr::ByteString(..) => true,
+        AstExpr::BinaryOp { op, lhs, rhs, .. } => {
+            if matches!(op, BinOp::Div | BinOp::Rem) {
+                return false;
+            }
+            is_folded_constant(lhs) && is_folded_constant(rhs)
+        }
+        AstExpr::UnaryOp { operand, .. } => is_folded_constant(operand),
+        AstExpr::StructLit { fields, .. } => fields.iter().all(|(_, f)| is_folded_constant(f)),
+        AstExpr::ListLit(elts, _) => elts.iter().all(is_folded_constant),
+        AstExpr::MapLit(entries, _) => entries
+            .iter()
+            .all(|(k, v)| is_folded_constant(k) && is_folded_constant(v)),
+        AstExpr::SetLit(elts, _) => elts.iter().all(is_folded_constant),
+        AstExpr::Range { start, end, .. } => is_folded_constant(start) && is_folded_constant(end),
+        AstExpr::FString(parts, _) => parts.iter().all(|p| match p {
+            AstFStringPart::Text(_) => true,
+            AstFStringPart::Expr(pe) => is_folded_constant(pe),
+        }),
+        AstExpr::FieldAccess { target, .. } => is_folded_constant(target),
+    }
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────
 
 /// Literal → AST expression, wrapping in a parser `Cast` when the literal's
@@ -778,5 +1119,142 @@ mod tests {
     #[test]
     fn empty() {
         let _ = graph_of("");
+    }
+
+    fn int_lit(v: u128) -> AstExpr {
+        AstExpr::Literal {
+            value: v,
+            kind: AstIntKind::Decimal,
+            span: Span::unknown(),
+        }
+    }
+
+    fn bind(name: &str, value: AstExpr) -> AstStmt {
+        AstStmt {
+            kind: AstStmtKind::Bind {
+                type_: None,
+                name: name.to_string(),
+                value: Box::new(value),
+            },
+            span: Span::unknown(),
+        }
+    }
+
+    #[test]
+    fn is_folded_constant_classifies_values() {
+        assert!(is_folded_constant(&int_lit(7)));
+        let add = AstExpr::BinaryOp {
+            op: BinOp::Add,
+            lhs: Box::new(int_lit(2)),
+            rhs: Box::new(int_lit(3)),
+            span: Span::unknown(),
+        };
+        assert!(is_folded_constant(&add), "const arithmetic is folded");
+        let div = AstExpr::BinaryOp {
+            op: BinOp::Div,
+            lhs: Box::new(int_lit(10)),
+            rhs: Box::new(int_lit(2)),
+            span: Span::unknown(),
+        };
+        assert!(
+            !is_folded_constant(&div),
+            "checked division may trap — not droppable"
+        );
+        assert!(!is_folded_constant(&AstExpr::Id("x".into())), "ids are residual");
+        let call = AstExpr::Call {
+            func: Box::new(AstExpr::Id("println".into())),
+            args: vec![],
+            span: Span::unknown(),
+        };
+        assert!(!is_folded_constant(&call), "calls are effectful");
+        let idx = AstExpr::Index {
+            target: Box::new(int_lit(1)),
+            index: Box::new(int_lit(0)),
+            span: Span::unknown(),
+        };
+        assert!(!is_folded_constant(&idx), "indexing may abort");
+    }
+
+    #[test]
+    fn dce_removes_only_unused_folded_bindings() {
+        let mut block = AstBlock {
+            statements: vec![
+                bind("dead_a", int_lit(1)),
+                bind("live", AstExpr::Id("x".into())),
+                bind("dead_b", int_lit(2)),
+                AstStmt {
+                    kind: AstStmtKind::Expr(Box::new(AstExpr::Id("live".into()))),
+                    span: Span::unknown(),
+                },
+            ],
+            ret: None,
+        };
+        dce_block(&mut block);
+        let names: Vec<&str> = block
+            .statements
+            .iter()
+            .filter_map(|s| match &s.kind {
+                AstStmtKind::Bind { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["live"]);
+    }
+
+    #[test]
+    fn dce_preserves_dead_bindings_with_effects() {
+        let call = |name: &str| AstExpr::Call {
+            func: Box::new(AstExpr::Id(name.into())),
+            args: vec![],
+            span: Span::unknown(),
+        };
+        let mut block = AstBlock {
+            statements: vec![
+                bind("side", call("println")),
+                bind("dead", int_lit(9)),
+            ],
+            ret: None,
+        };
+        dce_block(&mut block);
+        let names: Vec<&str> = block
+            .statements
+            .iter()
+            .filter_map(|s| match &s.kind {
+                AstStmtKind::Bind { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["side"], "effectful dead binding must survive");
+    }
+
+    #[test]
+    fn dce_keeps_chained_references() {
+        let id = |n: &str| AstExpr::Id(n.to_string());
+        let mut block = AstBlock {
+            statements: vec![
+                bind("a", int_lit(1)),
+                bind("b", id("a")),
+                bind("c", int_lit(3)),
+                AstStmt {
+                    kind: AstStmtKind::Expr(Box::new(AstExpr::UnaryOp {
+                        op: UnaryOp::Neg,
+                        operand: Box::new(id("b")),
+                        span: Span::unknown(),
+                    })),
+                    span: Span::unknown(),
+                },
+            ],
+            ret: None,
+        };
+        dce_block(&mut block);
+        let names: Vec<&str> = block
+            .statements
+            .iter()
+            .filter_map(|s| match &s.kind {
+                AstStmtKind::Bind { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["a", "b"], "a is kept alive by b, c is dead");
     }
 }

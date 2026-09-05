@@ -1,6 +1,6 @@
 # Resid — Project Status
 
-**Specification**: `resid_specification.txt` v3.2 (Production Ready; v3.1 base + integer-width semantics amendments; some items still in flux — see audit below)
+**Specification**: `resid_specification.txt` v3.2 (Production Ready; v3.1 base + integer-width semantics amendments + §36 dead-code-elimination amendment; some items still in flux — see audit below)
 **Implementation**: Rust stable + LLVM (inkwell), monorepo Cargo workspace
 **Interpreter**: None — direct LLVM
 **Wide numerics**: `Int(128)..Int(512)` / `UInt(N)` via LLVM arbitrary-width integers, `Float` capped at 128, `Dec(N)` exact decimals
@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**652 tests pass** (lexer 17, parser 115, resid-ir 55, resid-type 249,
+**659 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 9, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 110 e2e).
+  resid-graph 4, resid-builtin 0, residc 0 unit + 111 e2e).
 
 ### Major capabilities
 
@@ -410,8 +410,10 @@ parity remains for the stage-1-only features.
     (reduction relation §36) wired into codegen with comptime-print
     (see §9 progress). **Graph drives a full alternative pipeline**:
     `residc <f> run --graph-reduce` converts AST→graph→reduce→retrofit→
-    checker→codegen with byte-identical output to the plain path and the
-    cache key distinguishes the two modes (see §11 progress).
+    checker→codegen with byte-identical output to the plain path, the
+    cache key distinguishes the two modes, and §36 dead-code elimination
+    elides unreferenced folded bindings while preserving effectful
+    residuals (see §11 progress).
 12. §36 Reduction relation — constant folding + overflow discharge only;
     no comptime β-reduction of pure functions, no provider substitution
     at compile time. → **✅ DONE (stage-1)**: comptime β-reduction of pure
@@ -772,10 +774,21 @@ pipeline and its output is byte-identical to the plain one.
   overflow (pre-existing `254+2` on UInt(8)) may trap on the plain path
   while the reducer folds it away — a spec edge (reduction funds wrapped
   values), not a regression.
-- Tests: resid-type +4 integration (`reduced_program_retypechecks`,
+- **Dead-code elimination (§36 amendment)**: a binding whose reduced value is
+  a fully-known constant and whose name is not referenced by the remaining
+  residual computation is elided by the retrofit pass (`dce_block` in
+  `retro.rs`, undo fixpoint over block statements). Elision is authorized
+  only for fully-known values — a binding whose value stays residual (an
+  effectful call such as `Bool unused = println(…)`, an index, a checked
+  div/rem) is preserved even when unreferenced, since its evaluation may
+  print, abort, or fail to converge. Spec §36 updated to make this
+  enforceable ("Runtime behavior may not depend on the presence or absence
+  of an elided binding"). `test2.resid --graph-reduce` now emits `main` as a
+  single `println(@str)` call — every dead `alloca/store` is gone.
+- Tests: prior round resid-type +4 integration (`reduced_program_retypechecks`,
   `reduced_program_registers_equal_functions`, `beta_substitution_collapses_pure_call_body`,
-  `rejects_non_function_declarations`), residc e2e +2 (above). resid-ir +9
-  (graph conversion coverage). Total non-e2e 652.
+  `rejects_non_function_declarations`) + resid-ir +9; DCE round resid-ir +4
+  unit, resid-type +3 integration, residc e2e +1. Total non-e2e 659, e2e 111.
 
 ### Progress on capability modes — `process.run` classified as write verb
 
