@@ -106,8 +106,17 @@ def main():
     # main: every `List(Str) hdr_*` / `List(Str) header =` line is transplanted
     # verbatim so new declares and comparator wiring propagate.
     cg_main_start = next(a for (a, b, n) in decl_ranges(cg) if n == 'main')
-    cg_hdrs = [l for l in cg[cg_main_start:]
-               if l.strip().startswith(('List(Str) header =', 'List(Str) hdr_'))]
+    # Capture full header definitions including continuation lines until ];
+    cg_hdrs = []
+    in_hdr = False
+    for l in cg[cg_main_start:]:
+        stripped = l.strip()
+        if stripped.startswith(('List(Str) header =', 'List(Str) hdr_')):
+            in_hdr = True
+        if in_hdr:
+            cg_hdrs.append(l)
+            if stripped.endswith('];'):
+                in_hdr = False
     # Replace the single legacy header line in the tail with the full set of
     # header-construction lines from codegen main (insertion + refresh).
     replaced = False
