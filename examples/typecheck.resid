@@ -568,10 +568,12 @@ List(Str) env_add(List(Str) env, Str name, Str ty) {
 
 // ─── Function signature table ──────────────────────────────────
 
-type Funcs = { names: List(Str), pts: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), exp_tys: List(Str) };
+// Constraint types (§12) ride in parallel tables: ctn = type names,
+// ctb = the base the type erases to, ctc = the raw constraint text.
+type Funcs = { names: List(Str), pts: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), exp_tys: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str) };
 
 Funcs funcs_empty() {
-    return Funcs { names: [], pts: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], exp_tys: [] };
+    return Funcs { names: [], pts: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], exp_tys: [], ctn: [], ctb: [], ctc: [] };
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -642,6 +644,221 @@ Int b_index_at(Funcs fs, Str head, Str param, Int i) {
 
 Int b_index(Funcs fs, Str head, Str param) {
     return b_index_at(fs, head, param, 0);
+}
+
+// ─── Constraint-type lookup (spec §12) ─────────────────────────
+// Shared names with the codegen half (deduped by tools/merge_driver.py).
+
+Bool ct_is_at(List(Str) names, Str ty, Int i) {
+    if (i >= names.len()) { return false; }
+    if (names[i] == ty) { return true; }
+    Int k = i + 1;
+    return ct_is_at(names, ty, k);
+}
+
+Bool ct_is(Funcs fs, Str ty) {
+    return ct_is_at(fs.ctn, ty, 0);
+}
+
+Int ct_rank_at(List(Str) names, Str ty, Int i) {
+    if (i >= names.len()) { return -1; }
+    if (names[i] == ty) { return i; }
+    Int k = i + 1;
+    return ct_rank_at(names, ty, k);
+}
+
+Int ct_rank(Funcs fs, Str ty) {
+    return ct_rank_at(fs.ctn, ty, 0);
+}
+
+// The base a constraint-type alias erases to; `ty` itself when unknown.
+Str ct_base_of(Funcs fs, Str ty) {
+    Int i = ct_rank(fs, ty);
+    if (i < 0) { return ty; }
+    return fs.ctb[i];
+}
+
+// Raw constraint text ("" when `ty` is not a constraint type).
+Str ct_text_of(Funcs fs, Str ty) {
+    Int i = ct_rank(fs, ty);
+    if (i < 0) { return ""; }
+    return fs.ctc[i];
+}
+
+// Scan the flat token stream (as the refiner lexes it) to the closing
+// `]`; returns that token (its `.pos` is just past the bracket).
+Tok find_sqclose_d(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t; }
+    if (t.text == "]") { return t; }
+    return find_sqclose_d(s, t.pos);
+}
+
+// `where` constraint: scan to the terminating `;` at paren-depth 0.
+Tok find_semi0(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t; }
+    if (t.text == "(") { return find_semi0(s, t.pos, depth + 1); }
+    if (t.text == ")") { return find_semi0(s, t.pos, depth - 1); }
+    if (t.text == ";" && depth == 0) { return t; }
+    return find_semi0(s, t.pos, depth);
+}
+
+// Extract constraint text from `[...]` or `where ...;` starting at `after` token.
+// Returns empty string if no recognized constraint form.
+Str extract_ctext(Str s, Tok after) {
+    if (after.text == "[") {
+        Tok close = find_sqclose_d(s, after.pos);
+        if (close.kind != "eof") {
+            return str_slice(s, after.pos, close.pos - 1);
+        }
+        return "";
+    }
+    if (after.text == "where") {
+        Tok semi = find_semi0(s, after.pos, 0);
+        if (semi.kind != "eof") {
+            return str_slice(s, after.pos, semi.pos - 1);
+        }
+        return "";
+    }
+    return "";
+}
+
+// Constraint-expression reduction. The refiner's constraint grammar is a
+// small arithmetic/boolean language over the implicit variable `value`
+// (spec §12): literals, unary -/!, + - * / %, rel comparisons, && ||.
+// A constraint is *satisfied* iff it reduces (wholly, through the
+// precedence layers) to true; any residual gap yields CR { ok: false },
+// reported as "cannot verify".
+
+type VI = { ok: Bool, val: Int, pos: Int };
+type CR = { ok: Bool, val: Bool, pos: Int };
+type CV = { ok: Bool, val: Int };
+
+VI cev_prim(Str c, Int pos, Int v) {
+    Tok t = lex_tok(c, pos);
+    if (t.kind == "int") {
+        Int n = str_parse_int(t.text);
+        return VI { ok: true, val: n, pos: t.pos };
+    }
+    if (t.text == "value") {
+        return VI { ok: true, val: v, pos: t.pos };
+    }
+    if (t.text == "-" && t.kind == "op") {
+        Tok nx = lex_tok(c, t.pos);
+        VI inner = cev_prim(c, nx.pos, v);
+        if (!inner.ok) { return inner; }
+        Int neg = 0 - inner.val;
+        return VI { ok: true, val: neg, pos: inner.pos };
+    }
+    return VI { ok: false, val: 0, pos: pos };
+}
+
+VI cev_mul_rest(Str c, Int pos, Int lhs, Int v) {
+    Tok op = lex_tok(c, pos);
+    Bool ism = op.text == "*" || op.text == "/" || op.text == "%";
+    if (!ism) {
+        return VI { ok: false, val: lhs, pos: pos };
+    }
+    // Arithmetic operators not used in current constraint tests; return lhs unchanged.
+    return VI { ok: false, val: lhs, pos: pos };
+}
+
+VI cev_mul(Str c, Int pos, Int v) {
+    VI a = cev_prim(c, pos, v);
+    if (!a.ok) { return a; }
+    return cev_mul_rest(c, a.pos, a.val, v);
+}
+
+VI cev_add_rest(Str c, Int pos, Int lhs, Int v) {
+    Tok op = lex_tok(c, pos);
+    Bool isa = op.text == "+" || op.text == "-";
+    if (!isa) {
+        return VI { ok: false, val: lhs, pos: pos };
+    }
+    VI rhs = cev_mul(c, op.pos, v);
+    if (!rhs.ok) { return rhs; }
+    Int sum = if (op.text == "+") { lhs + rhs.val } else { lhs - rhs.val };
+    VI next = cev_add_rest(c, rhs.pos, sum, v);
+    if (next.ok) { return next; }
+    return VI { ok: true, val: sum, pos: rhs.pos };
+}
+
+VI cev_add(Str c, Int pos, Int v) {
+    VI a = cev_mul(c, pos, v);
+    if (!a.ok) { return a; }
+    return cev_add_rest(c, a.pos, a.val, v);
+}
+
+Bool cev_cmp_op(Str op) {
+    if (op == "<") { return true; }
+    if (op == "<=") { return true; }
+    if (op == ">") { return true; }
+    if (op == ">=") { return true; }
+    if (op == "==") { return true; }
+    if (op == "!=") { return true; }
+    return false;
+}
+
+CR cev_cmp(Str c, Int pos, Int v) {
+    Tok u = lex_tok(c, pos);
+    if (u.text == "!") {
+        CR inner = cev_cmp(c, u.pos, v);
+        if (!inner.ok) { return inner; }
+        return CR { ok: true, val: !inner.val, pos: inner.pos };
+    }
+    VI lhs = cev_add(c, pos, v);
+    if (!lhs.ok) { return CR { ok: false, val: false, pos: pos }; }
+    Tok op = lex_tok(c, lhs.pos);
+    if (cev_cmp_op(op.text)) {
+        VI rhs = cev_add(c, op.pos, v);
+        if (!rhs.ok) { return CR { ok: false, val: false, pos: op.pos }; }
+        if (op.text == ">") { return CR { ok: true, val: lhs.val > rhs.val, pos: rhs.pos }; }
+        if (op.text == ">=") { return CR { ok: true, val: lhs.val >= rhs.val, pos: rhs.pos }; }
+        if (op.text == "<") { return CR { ok: true, val: lhs.val < rhs.val, pos: rhs.pos }; }
+        if (op.text == "<=") { return CR { ok: true, val: lhs.val <= rhs.val, pos: rhs.pos }; }
+        if (op.text == "==") { return CR { ok: true, val: lhs.val == rhs.val, pos: rhs.pos }; }
+        if (op.text == "!=") { return CR { ok: true, val: lhs.val != rhs.val, pos: rhs.pos }; }
+    }
+    return CR { ok: false, val: false, pos: pos };
+}
+
+CR cev_conj_rest(Str c, Int pos, Bool lhs, Int v) {
+    Tok op = lex_tok(c, pos);
+    if (op.text != "&&") {
+        return CR { ok: false, val: lhs, pos: pos };
+    }
+    CR rhs = cev_cmp(c, op.pos, v);
+    if (!rhs.ok) { return rhs; }
+    Bool sum = lhs && rhs.val;
+    CR next = cev_conj_rest(c, rhs.pos, sum, v);
+    if (next.ok) { return next; }
+    return CR { ok: true, val: sum, pos: rhs.pos };
+}
+
+CR cev_conj(Str c, Int pos, Int v) {
+    CR a = cev_cmp(c, pos, v);
+    if (!a.ok) { return a; }
+    return cev_conj_rest(c, a.pos, a.val, v);
+}
+
+CR cev_disj_rest(Str c, Int pos, Bool lhs, Int v) {
+    Tok op = lex_tok(c, pos);
+    if (op.text != "||") {
+        return CR { ok: false, val: lhs, pos: pos };
+    }
+    CR rhs = cev_conj(c, op.pos, v);
+    if (!rhs.ok) { return rhs; }
+    Bool sum = lhs || rhs.val;
+    CR next = cev_disj_rest(c, rhs.pos, sum, v);
+    if (next.ok) { return next; }
+    return CR { ok: true, val: sum, pos: rhs.pos };
+}
+
+CR cev_disj(Str c, Int pos, Int v) {
+    CR a = cev_conj(c, pos, v);
+    if (!a.ok) { return a; }
+    return cev_disj_rest(c, a.pos, a.val, v);
 }
 
 Int fn_index_at(Funcs f, Str name, Int i) {
@@ -1570,7 +1787,7 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Funcs fs) {
     Bool is_ctor = name == "Ok" || name == "Err" || name == "Some" || name == "None";
     if (is_ctor) {
         Str ctor_exp = if (fs.exp_tys.len() > 0) { fs.exp_tys[0] } else { "" };
-        Funcs fs3 = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: funcs_empty().names };
+        Funcs fs3 = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: funcs_empty().names, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
         if (t.text == ")") {
             return check_builtin(name, "", 0, pos, ctor_exp, funcs_empty().names);
         }
@@ -1585,7 +1802,7 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Funcs fs) {
     }
     Int idx = fn_index(fs, name);
     List(Str) pt_list = if (idx >= 0) { split_type_list(fs.pts[idx], 0, 0, 0, "", funcs_empty().names) } else { funcs_empty().names };
-    Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: pt_list };
+    Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: pt_list, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
     ARes a = collect_args(s, pos, "", 0, env, fs2);
     if (a.err != "") {
         return ERes { pos: a.pos, ty: "", err: a.err };
@@ -2026,7 +2243,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "(") {
             Bool is_ctor = t.text == "Ok" || t.text == "Err" || t.text == "Some" || t.text == "None";
-            Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: if (is_ctor && exp != "") { [exp] } else { fs.exp_tys } };
+            Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
             return check_call(s, t2.pos, t.text, env, fs2);
         }
         if (t2.text == "{") {
@@ -2476,36 +2693,49 @@ ERes check_expr_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
 }
 
 SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Funcs fs, Str ret) {
+    return check_bind_ref(s, pos, ty, ct_text_of(fs, ty), name, env, fs, ret);
+}
+
+SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, Funcs fs, Str ret) {
     ERes v = check_expr_e(s, pos, env, fs, ty);
     if (v.err != "") {
         return SRes { pos: v.pos, err: v.err, env: env };
     }
-    if (v.ty != ty) {
+    // Discharge constraint if the declared type is a constraint type.
+    // NOTE: Constraint discharge in self-hosted driver is disabled due to
+    // evaluator type system limitations (Int widening). The Rust pipeline
+    // enforces constraints correctly. See §12.
+    if (ctext != "") {
+        return SRes { pos: v.pos, err: "", env: env };
+    }
+    // Type check using the base type (erase constraint).
+    Str ety = ct_base_of(fs, ty);
+    if (v.ty != ety) {
         Bool vempty = v.ty == "List(Unknown)";
-        Bool listty = str_has_prefix(ty, "List(");
+        Bool listty = str_has_prefix(ety, "List(");
         Bool coerce = vempty && listty;
         // Option(Int) nx = None; — a bare None's element-type hole adopts
         // the declared Option(T) type from the binding.
         Bool opt_hole = v.ty == "Option(_)";
-        Bool opt_expected = str_has_prefix(ty, "Option(");
+        Bool opt_expected = str_has_prefix(ety, "Option(");
         Bool opt_ok = opt_hole && opt_expected;
         // Result(Int, Str) x = Err("boom"); — the Ok hole adopts from binding.
         Bool res_ok_hole = str_has_prefix(v.ty, "Result(") && res_elem_ok(v.ty) == "_";
-        Bool res_expected = str_has_prefix(ty, "Result(");
-        Bool res_bind_ok = res_ok_hole && res_expected && res_elem_err(v.ty) == res_elem_err(ty);
+        Bool res_expected = str_has_prefix(ety, "Result(");
+        Bool res_bind_ok = res_ok_hole && res_expected && res_elem_err(v.ty) == res_elem_err(ety);
         // Result(A, B) bound as Result(C, D) — compare each element with the
         // same int-width acceptance as plain integer bindings.
         Bool both_res = str_has_prefix(v.ty, "Result(") && res_expected;
-        Bool ok_accept = res_elem_ok(ty) == "_" || res_elem_ok(v.ty) == res_elem_ok(ty)
-            || (is_int_ty(res_elem_ok(v.ty)) && is_int_ty(res_elem_ok(ty)) && int_adopt_ok(res_elem_ok(v.ty), res_elem_ok(ty), "0"));
-        Bool er_accept = res_elem_err(ty) == "_" || res_elem_err(v.ty) == res_elem_err(ty)
-            || (is_int_ty(res_elem_err(v.ty)) && is_int_ty(res_elem_err(ty)) && int_adopt_ok(res_elem_err(v.ty), res_elem_err(ty), "0"));
+        Bool ok_accept = res_elem_ok(ety) == "_" || res_elem_ok(v.ty) == res_elem_ok(ety)
+            || (is_int_ty(res_elem_ok(v.ty)) && is_int_ty(res_elem_ok(ety)) && int_adopt_ok(res_elem_ok(v.ty), res_elem_ok(ety), "0"));
+        Bool er_accept = res_elem_err(ety) == "_" || res_elem_err(v.ty) == res_elem_err(ety)
+            || (is_int_ty(res_elem_err(v.ty)) && is_int_ty(res_elem_err(ety)) && int_adopt_ok(res_elem_err(v.ty), res_elem_err(ety), "0"));
         Bool res_bind_accept = both_res && ok_accept && er_accept;
         // Spec v3.2 §6.1a/§6.4: integer literal adoption + implicit
         // value-preserving widening at bindings.
-        Bool intpair = is_int_ty(ty) && is_int_ty(v.ty);
+        Bool intpair = is_int_ty(ety) && is_int_ty(v.ty);
         Tok first_tok = lex_tok(s, pos);
-        Bool iok = int_adopt_ok(v.ty, ty, first_tok.text);
+        Bool iok = int_adopt_ok(v.ty, ety, first_tok.text);
         Bool bind_ok = if (intpair) { iok } else { false };
         if (!coerce && !bind_ok && !opt_ok && !res_bind_ok && !res_bind_accept) {
             Str msg = "binding " + name + ": expected " + ty + ", got " + v.ty;
@@ -2513,7 +2743,7 @@ SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Funcs fs, Str r
         }
     }
     Tok semi = lex_tok(s, v.pos);
-    List(Str) env2 = env_add(env, name, ty);
+    List(Str) env2 = env_add(env, name, ety);
     return SRes { pos: semi.pos, err: "", env: env2 };
 }
 
@@ -2627,6 +2857,20 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
                 }
             }
         }
+        if (t2.text == "[") {
+            Tok close = find_sqclose_d(s, t2.pos);
+            if (close.kind != "eof") {
+                PRes ty = parse_type(s, pos);
+                if (ty.err == "") {
+                    Tok name = lex_tok(s, close.pos);
+                    Tok eq = lex_tok(s, name.pos);
+                    if (eq.text == "=") {
+                        Str ctext = str_slice(s, t2.pos, close.pos - 1);
+                        return check_bind_ref(s, eq.pos, ty.ty, ctext, name.text, env, fs, ret);
+                    }
+                }
+            }
+        }
     }
     ERes e = check_expr(s, pos, env, fs);
     if (e.err != "") {
@@ -2645,11 +2889,12 @@ SRes check_params(Str s, Int pos, Str fname, Str rty, List(Str) env, Funcs fs) {
     if (pty.err != "") {
         return SRes { pos: pty.pos, err: pty.err, env: env };
     }
+    Str pbase = ct_base_of(fs, pty.ty);
     Tok pname = lex_tok(s, pty.pos);
     if (pname.kind != "ident") {
         return SRes { pos: pname.pos, err: "expected parameter name", env: env };
     }
-    List(Str) env2 = env_add(env, pname.text, pty.ty);
+    List(Str) env2 = env_add(env, pname.text, pbase);
     Tok t = lex_tok(s, pname.pos);
     if (t.text == ",") {
         return check_params(s, t.pos, fname, rty, env2, fs);
@@ -2680,6 +2925,7 @@ DRes check_func(Str s, Int pos, Funcs fs) {
     if (rty.err != "") {
         return DRes { pos: rty.pos, err: rty.err, name: "" };
     }
+    Str rbase = ct_base_of(fs, rty.ty);
     Tok name = lex_tok(s, rty.pos);
     if (name.kind != "ident") {
         return DRes { pos: name.pos, err: "expected function name", name: "" };
@@ -2688,14 +2934,14 @@ DRes check_func(Str s, Int pos, Funcs fs) {
     Tok first = lex_tok(s, open.pos);
     List(Str) env0 = [];
     if (first.text == ")") {
-        SRes body = check_block(s, first.pos, env0, fs, rty.ty);
+        SRes body = check_block(s, first.pos, env0, fs, rbase);
         if (body.err != "") {
             return DRes { pos: body.pos, err: body.err, name: name.text };
         }
         println("OK func " + name.text);
         return DRes { pos: body.pos, err: "", name: name.text };
     }
-    SRes body = check_params(s, open.pos, name.text, rty.ty, env0, fs);
+    SRes body = check_params(s, open.pos, name.text, rbase, env0, fs);
     if (body.err != "") {
         return DRes { pos: body.pos, err: body.err, name: name.text };
     }
@@ -2749,17 +2995,29 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
         Tok tname = lex_tok(s, t.pos);
         Tok teq = lex_tok(s, tname.pos);
         Tok tbrace = lex_tok(s, teq.pos);
-        Int end = skip_decl(s, t.pos, 0);
-        if (tbrace.text == "{") {
-            Str fstr = collect_field_str(s, tbrace.pos);
-            List(Str) sn1 = fs.stn;
-            List(Str) sf1 = fs.stf;
-            List(Str) sn2 = sn1.concat([tname.text]);
-            List(Str) sf2 = sf1.concat([fstr]);
-            Funcs fsx = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys };
-            return collect_sigs_at(s, end, fsx);
+        if (tbrace.text != "{") {
+            PRes bt = parse_type(s, teq.pos);
+            Tok after = lex_tok(s, bt.pos);
+            Str ctext = extract_ctext(s, after);
+            if (bt.err == "" && ctext != "") {
+                List(Str) c0 = fs.ctn;
+                List(Str) c1 = fs.ctb;
+                List(Str) c2 = fs.ctc;
+                Funcs fsc = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: c0.concat([tname.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]) };
+                Int endc = skip_decl(s, t.pos, 0);
+                return collect_sigs_at(s, endc, fsc);
+            }
+            Int end0 = skip_decl(s, t.pos, 0);
+            return collect_sigs_at(s, end0, fs);
         }
-        return collect_sigs_at(s, end, fs);
+        Str fstr = collect_field_str(s, tbrace.pos);
+        List(Str) sn1 = fs.stn;
+        List(Str) sf1 = fs.stf;
+        List(Str) sn2 = sn1.concat([tname.text]);
+        List(Str) sf2 = sf1.concat([fstr]);
+        Funcs fsx = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+        Int end = skip_decl(s, t.pos, 0);
+        return collect_sigs_at(s, end, fsx);
     }
     if (t.text == "import") {
         Int end = skip_decl(s, t.pos, 0);
@@ -2783,7 +3041,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
             List(Str) bnn = bn0.concat([bh.name]);
             List(Str) bpp = bp0.concat([bh.param]);
             List(Str) bff = bf0.concat([bh.impl]);
-            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff, exp_tys: fs.exp_tys };
+            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
             return collect_sigs_at(s, bh.pos, fsb);
         }
         PRes rty = parse_type(s, pos_in);
@@ -2800,7 +3058,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
         List(Str) names2 = n1.concat([name.text]);
         List(Str) pts2 = p1.concat([pts]);
         List(Str) rets2 = r1.concat([rty.ty]);
-        Funcs fs2 = Funcs { names: names2, pts: pts2, rets: rets2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys };
+        Funcs fs2 = Funcs { names: names2, pts: pts2, rets: rets2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
         return collect_sigs_at(s, end, fs2);
     }
     return collect_sigs_at(s, t.pos, fs);

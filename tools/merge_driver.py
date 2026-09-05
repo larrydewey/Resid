@@ -63,6 +63,16 @@ def rename_chunk(text):
         (r'\bb_index\b', 'ck_b_index'),
         (r'\bfuncs_empty\b', 'sigs_empty'),
         (r'\bFuncs\b', 'Sigs'),
+        # Constraint-type helpers (spec §12): renamed to ck_ prefix in checker half
+        (r'\bct_is_at\b', 'ck_ct_is_at'),
+        (r'\bct_is\b', 'ck_ct_is'),
+        (r'\bct_rank_at\b', 'ck_ct_rank_at'),
+        (r'\bct_rank\b', 'ck_ct_rank'),
+        (r'\bct_base_of\b', 'ck_ct_base_of'),
+        (r'\bct_text_of\b', 'ck_ct_text_of'),
+        (r'\bfind_sqclose_d\b', 'ck_find_sqclose_d'),
+        (r'\bfind_semi0\b', 'ck_find_semi0'),
+        (r'\bextract_ctext\b', 'ck_extract_ctext'),
     ]
     for pat, rep in pairs:
         text = re.sub(pat, rep, text)
@@ -102,30 +112,25 @@ def main():
     # 3. tail: driver section from old driver.resid, header refreshed
     ds = next(i for i, l in enumerate(dv) if '─── Driver:' in l)
     tail = dv[ds:]
-    # refresh header construction inside main using codegen.resid's current
-    # main: every `List(Str) hdr_*` / `List(Str) header =` line is transplanted
-    # verbatim so new declares and comparator wiring propagate.
+    # refresh header construction: only the `List(Str) header =` line is
+    # transplanted from codegen main (the hdr_core in the tail is stable).
     cg_main_start = next(a for (a, b, n) in decl_ranges(cg) if n == 'main')
-    # Capture full header definitions including continuation lines until ];
-    cg_hdrs = []
-    in_hdr = False
+    cg_header = None
     for l in cg[cg_main_start:]:
         stripped = l.strip()
-        if stripped.startswith(('List(Str) header =', 'List(Str) hdr_')):
-            in_hdr = True
-        if in_hdr:
-            cg_hdrs.append(l)
-            if stripped.endswith('];'):
-                in_hdr = False
-    # Replace the single legacy header line in the tail with the full set of
-    # header-construction lines from codegen main (insertion + refresh).
+        if stripped.startswith('List(Str) header ='):
+            cg_header = l
+            break
+    if cg_header is None:
+        raise SystemExit('merge_driver: no header line found in codegen main')
+    # Replace the single legacy header line in the tail
     replaced = False
     new_tail = []
     for l in tail:
         if l.strip().startswith('List(Str) header =') and not replaced:
-            new_tail.extend(cg_hdrs)
+            new_tail.append(cg_header)
             replaced = True
-        elif not l.strip().startswith('List(Str) hdr_'):
+        else:
             new_tail.append(l)
     if not replaced:
         raise SystemExit('merge_driver: no header line found in driver tail')
