@@ -12,7 +12,7 @@
 **652 tests pass** (lexer 17, parser 115, resid-ir 55, resid-type 249,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 9, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + ~94 e2e).
+  resid-graph 4, resid-builtin 0, residc 0 unit + 110 e2e).
 
 ### Major capabilities
 
