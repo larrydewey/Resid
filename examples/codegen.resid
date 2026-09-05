@@ -458,10 +458,12 @@ Tok lex_tok(Str s, Int pos) {
 
 type PRes = { pos: Int, ty: Str, err: Str };
 
-type Funcs = { names: List(Str), pts: List(Str), pns: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str) };
+// Constraint types (§12) ride in parallel tables: ctn = type names,
+// ctb = the base the type erases to, ctc = the raw constraint text.
+type Funcs = { names: List(Str), pts: List(Str), pns: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str) };
 
 Funcs funcs_empty() {
-    return Funcs { names: [], pts: [], pns: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [] };
+    return Funcs { names: [], pts: [], pns: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], ctn: [], ctb: [], ctc: [] };
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -532,6 +534,94 @@ Int b_index_at(Funcs fs, Str head, Str param, Int i) {
 
 Int b_index(Funcs fs, Str head, Str param) {
     return b_index_at(fs, head, param, 0);
+}
+
+// ─── Constraint-type lookup (spec §12) ─────────────────────────
+// Shared with the checker half (deduped by tools/merge_driver.py).
+
+Bool ct_is_at(List(Str) names, Str ty, Int i) {
+    if (i >= names.len()) { return false; }
+    if (names[i] == ty) { return true; }
+    Int k = i + 1;
+    return ct_is_at(names, ty, k);
+}
+
+Bool ct_is(Funcs fs, Str ty) {
+    return ct_is_at(fs.ctn, ty, 0);
+}
+
+Int ct_rank_at(List(Str) names, Str ty, Int i) {
+    if (i >= names.len()) { return -1; }
+    if (names[i] == ty) { return i; }
+    Int k = i + 1;
+    return ct_rank_at(names, ty, k);
+}
+
+Int ct_rank(Funcs fs, Str ty) {
+    return ct_rank_at(fs.ctn, ty, 0);
+}
+
+// The base a constraint-type alias erases to; `ty` itself when unknown.
+Str ct_base_of(Funcs fs, Str ty) {
+    Int i = ct_rank(fs, ty);
+    if (i < 0) { return ty; }
+    return fs.ctb[i];
+}
+
+// Raw constraint text ("" when `ty` is not a constraint type).
+Str ct_text_of(Funcs fs, Str ty) {
+    Int i = ct_rank(fs, ty);
+    if (i < 0) { return ""; }
+    return fs.ctc[i];
+}
+
+// Inline refinement `[ ... ]`: scan the flat token stream to the closing
+// `]`; returns that token (its `.pos` is just past the bracket).
+Tok find_sqclose_d(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t; }
+    if (t.text == "]") { return t; }
+    return find_sqclose_d(s, t.pos);
+}
+
+// `where` constraint: scan to the terminating `;` at paren-depth 0.
+Tok find_semi0(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t; }
+    if (t.text == "(") { return find_semi0(s, t.pos, depth + 1); }
+    if (t.text == ")") { return find_semi0(s, t.pos, depth - 1); }
+    if (t.text == ";" && depth == 0) { return t; }
+    return find_semi0(s, t.pos, depth);
+}
+
+// Extract constraint text from `[...]` or `where ...;` starting at `after` token.
+// Returns empty string if no recognized constraint form.
+Str extract_ctext(Str s, Tok after) {
+    if (after.text == "[") {
+        Tok close = find_sqclose_d(s, after.pos);
+        if (close.kind != "eof") {
+            return str_slice(s, after.pos, close.pos - 1);
+        }
+        return "";
+    }
+    if (after.text == "where") {
+        Tok semi = find_semi0(s, after.pos, 0);
+        if (semi.kind != "eof") {
+            return str_slice(s, after.pos, semi.pos - 1);
+        }
+        return "";
+    }
+    return "";
+}
+
+// Map every element of a comma-joined param/ret type list through its
+// constraint-type base (aliases only; plain types pass through).
+List(Str) ct_erase_list(Funcs fs, List(Str) tys, Int i, List(Str) acc) {
+    if (i >= tys.len()) { return acc; }
+    Str b = ct_base_of(fs, tys[i]);
+    List(Str) acc2 = acc.concat([b]);
+    Int k = i + 1;
+    return ct_erase_list(fs, tys, k, acc2);
 }
 
 List(Str) nil_list() {
@@ -735,6 +825,10 @@ Int skip_decl(Str s, Int pos, Int depth) {
         Int d2 = depth - 1;
         return skip_decl(s, t.pos, d2);
     }
+    if (t.text == ";") {
+        if (depth == 0) { return t.pos; }
+        return skip_decl(s, t.pos, depth);
+    }
     return skip_decl(s, t.pos, depth);
 }
 
@@ -809,6 +903,17 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
         Tok teq = lex_tok(s, tnm.pos);
         Tok tob = lex_tok(s, teq.pos);
         if (tob.text != "{") {
+            PRes bt = parse_type(s, teq.pos);
+            Tok after = lex_tok(s, bt.pos);
+            Str ctext = extract_ctext(s, after);
+            if (bt.err == "" && ctext != "") {
+                List(Str) c0 = fs.ctn;
+                List(Str) c1 = fs.ctb;
+                List(Str) c2 = fs.ctc;
+                Funcs fsc = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, ctn: c0.concat([tnm.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]) };
+                Int endc = skip_decl(s, t.pos, 0);
+                return collect_sigs_at(s, endc, fsc);
+            }
             Int end0 = skip_decl(s, t.pos, 0);
             return collect_sigs_at(s, end0, fs);
         }
@@ -818,7 +923,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
         }
         List(Str) sn0 = fs.stn;
         List(Str) sf0 = fs.stf;
-        Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: sn0.concat([tnm.text]), stf: sf0.concat([fl.ty]), bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns };
+        Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: sn0.concat([tnm.text]), stf: sf0.concat([fl.ty]), bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
         return collect_sigs_at(s, fl.pos, fs2);
     }
     if (t.text == "import") {
@@ -852,7 +957,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
             List(Str) bn0 = fs.bnames;
             List(Str) bp0 = fs.bparams;
             List(Str) bf0 = fs.bfns;
-            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bn0.concat([bh.name]), bparams: bp0.concat([bh.param]), bfns: bf0.concat([bh.impl]) };
+            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bn0.concat([bh.name]), bparams: bp0.concat([bh.param]), bfns: bf0.concat([bh.impl]), ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
             return collect_sigs_at(s, bh.pos, fsb);
         }
         PRes rty = parse_type(s, pos_in);
@@ -873,7 +978,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
                 List(Str) r2 = rt1.concat([rty.ty]);
                 List(Str) sn1 = fs.stn;
                 List(Str) sf1 = fs.stf;
-                Funcs fs2 = Funcs { names: n2, pts: p2, pns: q2, rets: r2, stn: sn1, stf: sf1, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns };
+                Funcs fs2 = Funcs { names: n2, pts: p2, pns: q2, rets: r2, stn: sn1, stf: sf1, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
                 Int end = skip_body(s, open.pos);
                 return collect_sigs_at(s, end, fs2);
             }
@@ -3347,6 +3452,19 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
                 }
             }
         }
+        if (t2.text == "[") {
+            Tok close = find_sqclose_d(s, t2.pos);
+            if (close.kind != "eof") {
+                PRes pty = parse_type(s, pos);
+                if (pty.err == "") {
+                    Tok name = lex_tok(s, close.pos);
+                    Tok eq = lex_tok(s, name.pos);
+                    if (eq.text == "=") {
+                        return sg_bind(s, eq.pos, name.text, pty.ty, env, fs, g);
+                    }
+                }
+            }
+        }
     }
     GT v = cg_expr(s, pos, env, fs, gt_of_st(g));
     if (v.err != "") { return st_err(v.err, g); }
@@ -3355,12 +3473,13 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
 }
 
 ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
+    Str dtyb = ct_base_of(fs, dty);
     Tok b1 = lex_tok(s, pos);
     Tok b2 = lex_tok(s, b1.pos);
     if (b1.text == "[" && b2.text == "]") {
         Int t1 = g.tmp + 1;
         Str reg = "%t" + IntToString(t1);
-        Str body = esc_ll(dty, 0, "");
+        Str body = esc_ll(dtyb, 0, "");
         Int bl = ll_bytes(body, 0, 0);
         Int n1 = bl + 1;
         Str tsym = "@.ltyB" + IntToString(t1);
@@ -3368,7 +3487,7 @@ ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
         List(Str) g1 = g0.concat([tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\""]);
         List(Str) z0 = g.lines;
         List(Str) z1 = z0.concat([reg + " = call ptr @resid_list_new(i64 0, ptr null, ptr " + tsym + ")"]);
-        Str ent = name + ":" + reg + ":" + dty;
+        Str ent = name + ":" + reg + ":" + dtyb;
         List(Str) env2 = env_add(env, ent);
         Tok bsemi = lex_tok(s, b2.pos);
         Int bpos = if (bsemi.text == ";") { bsemi.pos } else { b2.pos };
@@ -3378,8 +3497,8 @@ ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
     if (v.err != "") { return st_err(v.err, g); }
     Tok semi = lex_tok(s, v.pos);
     // Adopt the declared width for integer bindings (spec v3.2 S6.1a).
-    Str dn = num_norm_cg(dty);
-    Bool a1 = int_fam(dty);
+    Str dn = num_norm_cg(dtyb);
+    Bool a1 = int_fam(dtyb);
     Bool a2 = int_fam(v.ty);
     Bool adoptable = a1 && a2;
     GT cv = pick_widen(adoptable, v, dn);
@@ -3392,12 +3511,12 @@ ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
     // A bare None's element-type hole adopts the declared Option(T) type
     // from the binding (mirrors check_bind).
     Bool opt_hole = v.ty == "Option(_)";
-    Bool opt_expected = str_has_prefix_cg(dty, "Option(");
-    Str ent2f = pick_str(opt_hole && opt_expected, name + ":" + v2.val + ":" + dty, ent2);
+    Bool opt_expected = str_has_prefix_cg(dtyb, "Option(");
+    Str ent2f = pick_str(opt_hole && opt_expected, name + ":" + v2.val + ":" + dtyb, ent2);
     // A Result(_, E) from Err(v) adopts the declared Ok half from the binding.
     Bool res_ok_hole = str_has_prefix_cg(v2.ty, "Result(") && res_elem_ok_cg(v2.ty) == "_";
-    Bool res_expected = str_has_prefix_cg(dty, "Result(");
-    Str ent2g = pick_str(res_ok_hole && res_expected, name + ":" + v2.val + ":" + dty, ent2f);
+    Bool res_expected = str_has_prefix_cg(dtyb, "Result(");
+    Str ent2g = pick_str(res_ok_hole && res_expected, name + ":" + v2.val + ":" + dtyb, ent2f);
     List(Str) env3 = env_add(env, ent2g);
     return ST { pos: semi.pos, dead: g.dead, err: "", env: env3, glines: v2.glines, hlines: g.hlines, lines: v2.lines, tmp: v2.tmp, lbl: v2.lbl, rety: g.rety };
 }
@@ -3718,13 +3837,15 @@ List(Str) build_env_at(List(Str) nl, List(Str) tyl, Int i, List(Str) acc) {
 PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     PRes rty = parse_type(s, pos);
     if (rty.err != "") { return PG { pos: g.pos, err: rty.err, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl }; }
+    Str rbase = ct_base_of(fs, rty.ty);
     Tok name = lex_tok(s, rty.pos);
     Tok open = lex_tok(s, name.pos);
     Tok first = lex_tok(s, open.pos);
     Str pts = collect_ptypes(s, open.pos, "");
     Str pns = collect_pnames(s, open.pos, "");
     Bool is_main = name.text == "main";
-    List(Str) tyl = if (pts == "") { nil_list() } else { split_rest_depth(pts, ", ") };
+    List(Str) tyl0 = if (pts == "") { nil_list() } else { split_rest_depth(pts, ", ") };
+    List(Str) tyl = ct_erase_list(fs, tyl0, 0, nil_list());
     Str pd = param_decl_at(tyl, 0, "");
     // "target-features" is attached to every emitted function unconditionally
     // (harmless when unused — it only widens what instructions LLVM is
@@ -3732,7 +3853,7 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     // aesni_enc_round/aesni_enc_last_round can select AESENC/AESENCLAST;
     // the actual hardware/software choice stays a runtime gate
     // (resid_cpu_has_aesni), not a compile-time one.
-    Str defline = if (is_main) { "define i32 @main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + ll_ty(rty.ty) + " @" + name.text + "(" + pd + ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
+    Str defline = if (is_main) { "define i32 @main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + ll_ty(rbase) + " @" + name.text + "(" + pd + ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
     List(Str) nl0 = nil_list();
     List(Str) nl1 = split_rest(pns, ",");
     List(Str) nl = if (pns == "") { nl0 } else { nl1 };
@@ -3742,7 +3863,7 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     List(Str) dl2 = dl.concat(["entry:"]);
     Int cp = close_paren(s, open.pos);
     Tok fbrace = lex_tok(s, cp);
-    ST gb = ST { pos: fbrace.pos, dead: false, err: "", env: env0, glines: g.glines, hlines: g.hlines, lines: dl2, tmp: g.tmp, lbl: g.lbl, rety: rty.ty };
+    ST gb = ST { pos: fbrace.pos, dead: false, err: "", env: env0, glines: g.glines, hlines: g.hlines, lines: dl2, tmp: g.tmp, lbl: g.lbl, rety: rbase };
     ST body = sg_block(s, cp, env0, fs, is_main, gb);
     if (body.err != "") {
         return PG { pos: body.pos, err: body.err, glines: body.glines, hlines: body.hlines, lines: body.lines, tmp: body.tmp, lbl: body.lbl };
