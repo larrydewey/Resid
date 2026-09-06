@@ -667,22 +667,22 @@ Int ct_rank_at(List(Str) names, Str ty, Int i) {
     return ct_rank_at(names, ty, k);
 }
 
-Int ct_rank(Funcs fs, Str ty) {
-    return ct_rank_at(fs.ctn, ty, 0);
+Int ct_rank(List(Str) ctn, Str ty) {
+    return ct_rank_at(ctn, ty, 0);
 }
 
 // The base a constraint-type alias erases to; `ty` itself when unknown.
-Str ct_base_of(Funcs fs, Str ty) {
-    Int i = ct_rank(fs, ty);
+Str ct_base_of(List(Str) ctn, List(Str) ctb, Str ty) {
+    Int i = ct_rank(ctn, ty);
     if (i < 0) { return ty; }
-    return fs.ctb[i];
+    return ctb[i];
 }
 
 // Raw constraint text ("" when `ty` is not a constraint type).
-Str ct_text_of(Funcs fs, Str ty) {
-    Int i = ct_rank(fs, ty);
+Str ct_text_of(List(Str) ctn, List(Str) ctc, Str ty) {
+    Int i = ct_rank(ctn, ty);
     if (i < 0) { return ""; }
-    return fs.ctc[i];
+    return ctc[i];
 }
 
 // Scan the flat token stream (as the refiner lexes it) to the closing
@@ -2693,7 +2693,7 @@ ERes check_expr_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
 }
 
 SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Funcs fs, Str ret) {
-    return check_bind_ref(s, pos, ty, ct_text_of(fs, ty), name, env, fs, ret);
+    return check_bind_ref(s, pos, ty, ct_text_of(fs.ctn, fs.ctc, ty), name, env, fs, ret);
 }
 
 SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, Funcs fs, Str ret) {
@@ -2709,7 +2709,7 @@ SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, 
         return SRes { pos: v.pos, err: "", env: env };
     }
     // Type check using the base type (erase constraint).
-    Str ety = ct_base_of(fs, ty);
+    Str ety = ct_base_of(fs.ctn, fs.ctb, ty);
     if (v.ty != ety) {
         Bool vempty = v.ty == "List(Unknown)";
         Bool listty = str_has_prefix(ety, "List(");
@@ -2889,7 +2889,7 @@ SRes check_params(Str s, Int pos, Str fname, Str rty, List(Str) env, Funcs fs) {
     if (pty.err != "") {
         return SRes { pos: pty.pos, err: pty.err, env: env };
     }
-    Str pbase = ct_base_of(fs, pty.ty);
+    Str pbase = ct_base_of(fs.ctn, fs.ctb, pty.ty);
     Tok pname = lex_tok(s, pty.pos);
     if (pname.kind != "ident") {
         return SRes { pos: pname.pos, err: "expected parameter name", env: env };
@@ -2925,7 +2925,7 @@ DRes check_func(Str s, Int pos, Funcs fs) {
     if (rty.err != "") {
         return DRes { pos: rty.pos, err: rty.err, name: "" };
     }
-    Str rbase = ct_base_of(fs, rty.ty);
+    Str rbase = ct_base_of(fs.ctn, fs.ctb, rty.ty);
     Tok name = lex_tok(s, rty.pos);
     if (name.kind != "ident") {
         return DRes { pos: name.pos, err: "expected function name", name: "" };

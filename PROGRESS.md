@@ -23,9 +23,10 @@
 - **Stage-2 constraint types (§12)**: constraint type aliases
   (`Int[value > 0]`, `Int where value >= 0`) implemented in Rust pipeline
   with discharge on constant bindings (e2e `run_constraint_types`,
-  `constraint_type_violation_rejected`). Stage-2 driver supports `[...]`
-  form; `where` form has parsing limitation in typecheck half (tracks
-  `>=` in constraint). Header merge fixed via `tools/merge_driver.py`.
+  `constraint_type_violation_rejected`). Stage-2 driver supports both
+  `[...]` and `where` forms with proper parsing via shared helpers from
+  `tools/merge_driver.py`. Header merge fixed via
+  `tools/merge_driver.py`.
 - **Stage-2 List/Map/Set parity**: self-hosted driver uses same
   trie-backed C-runtime lists and HAMT maps/sets as stage-1 (all
   `bootstrap_*`/`stage2_*` e2e green).

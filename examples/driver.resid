@@ -557,22 +557,22 @@ Int ct_rank_at(List(Str) names, Str ty, Int i) {
     return ct_rank_at(names, ty, k);
 }
 
-Int ct_rank(Funcs fs, Str ty) {
-    return ct_rank_at(fs.ctn, ty, 0);
+Int ct_rank(List(Str) ctn, Str ty) {
+    return ct_rank_at(ctn, ty, 0);
 }
 
 // The base a constraint-type alias erases to; `ty` itself when unknown.
-Str ct_base_of(Funcs fs, Str ty) {
-    Int i = ct_rank(fs, ty);
+Str ct_base_of(List(Str) ctn, List(Str) ctb, Str ty) {
+    Int i = ct_rank(ctn, ty);
     if (i < 0) { return ty; }
-    return fs.ctb[i];
+    return ctb[i];
 }
 
 // Raw constraint text ("" when `ty` is not a constraint type).
-Str ct_text_of(Funcs fs, Str ty) {
-    Int i = ct_rank(fs, ty);
+Str ct_text_of(List(Str) ctn, List(Str) ctc, Str ty) {
+    Int i = ct_rank(ctn, ty);
     if (i < 0) { return ""; }
-    return fs.ctc[i];
+    return ctc[i];
 }
 
 // Inline refinement `[ ... ]`: scan the flat token stream to the closing
@@ -618,7 +618,7 @@ Str extract_ctext(Str s, Tok after) {
 // constraint-type base (aliases only; plain types pass through).
 List(Str) ct_erase_list(Funcs fs, List(Str) tys, Int i, List(Str) acc) {
     if (i >= tys.len()) { return acc; }
-    Str b = ct_base_of(fs, tys[i]);
+    Str b = ct_base_of(fs.ctn, fs.ctb, tys[i]);
     List(Str) acc2 = acc.concat([b]);
     Int k = i + 1;
     return ct_erase_list(fs, tys, k, acc2);
@@ -3473,7 +3473,7 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
 }
 
 ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
-    Str dtyb = ct_base_of(fs, dty);
+    Str dtyb = ct_base_of(fs.ctn, fs.ctb, dty);
     Tok b1 = lex_tok(s, pos);
     Tok b2 = lex_tok(s, b1.pos);
     if (b1.text == "[" && b2.text == "]") {
@@ -3837,7 +3837,7 @@ List(Str) build_env_at(List(Str) nl, List(Str) tyl, Int i, List(Str) acc) {
 PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     PRes rty = parse_type(s, pos);
     if (rty.err != "") { return PG { pos: g.pos, err: rty.err, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl }; }
-    Str rbase = ct_base_of(fs, rty.ty);
+    Str rbase = ct_base_of(fs.ctn, fs.ctb, rty.ty);
     Tok name = lex_tok(s, rty.pos);
     Tok open = lex_tok(s, name.pos);
     Tok first = lex_tok(s, open.pos);
@@ -4145,80 +4145,21 @@ Int ck_b_index(Sigs fs, Str head, Str param) {
 // ─── Constraint-type lookup (spec §12) ─────────────────────────
 // Shared names with the codegen half (deduped by tools/merge_driver.py).
 
-Bool ck_ct_is_at(List(Str) names, Str ty, Int i) {
-    if (i >= names.len()) { return false; }
-    if (names[i] == ty) { return true; }
-    Int k = i + 1;
-    return ck_ct_is_at(names, ty, k);
-}
 
-Bool ck_ct_is(Sigs fs, Str ty) {
-    return ck_ct_is_at(fs.ctn, ty, 0);
-}
 
-Int ck_ct_rank_at(List(Str) names, Str ty, Int i) {
-    if (i >= names.len()) { return -1; }
-    if (names[i] == ty) { return i; }
-    Int k = i + 1;
-    return ck_ct_rank_at(names, ty, k);
-}
 
-Int ck_ct_rank(Sigs fs, Str ty) {
-    return ck_ct_rank_at(fs.ctn, ty, 0);
-}
 
 // The base a constraint-type alias erases to; `ty` itself when unknown.
-Str ck_ct_base_of(Sigs fs, Str ty) {
-    Int i = ck_ct_rank(fs, ty);
-    if (i < 0) { return ty; }
-    return fs.ctb[i];
-}
 
 // Raw constraint text ("" when `ty` is not a constraint type).
-Str ck_ct_text_of(Sigs fs, Str ty) {
-    Int i = ck_ct_rank(fs, ty);
-    if (i < 0) { return ""; }
-    return fs.ctc[i];
-}
 
 // Scan the flat token stream (as the refiner lexes it) to the closing
 // `]`; returns that token (its `.pos` is just past the bracket).
-Tok ck_find_sqclose_d(Str s, Int pos) {
-    Tok t = lex_tok(s, pos);
-    if (t.kind == "eof") { return t; }
-    if (t.text == "]") { return t; }
-    return ck_find_sqclose_d(s, t.pos);
-}
 
 // `where` constraint: scan to the terminating `;` at paren-depth 0.
-Tok ck_find_semi0(Str s, Int pos, Int depth) {
-    Tok t = lex_tok(s, pos);
-    if (t.kind == "eof") { return t; }
-    if (t.text == "(") { return ck_find_semi0(s, t.pos, depth + 1); }
-    if (t.text == ")") { return ck_find_semi0(s, t.pos, depth - 1); }
-    if (t.text == ";" && depth == 0) { return t; }
-    return ck_find_semi0(s, t.pos, depth);
-}
 
 // Extract constraint text from `[...]` or `where ...;` starting at `after` token.
 // Returns empty string if no recognized constraint form.
-Str ck_extract_ctext(Str s, Tok after) {
-    if (after.text == "[") {
-        Tok close = ck_find_sqclose_d(s, after.pos);
-        if (close.kind != "eof") {
-            return str_slice(s, after.pos, close.pos - 1);
-        }
-        return "";
-    }
-    if (after.text == "where") {
-        Tok semi = ck_find_semi0(s, after.pos, 0);
-        if (semi.kind != "eof") {
-            return str_slice(s, after.pos, semi.pos - 1);
-        }
-        return "";
-    }
-    return "";
-}
 
 // Constraint-expression reduction. The refiner's constraint grammar is a
 // small arithmetic/boolean language over the implicit variable `value`
@@ -6153,7 +6094,7 @@ ERes check_expr_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
 }
 
 SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Sigs fs, Str ret) {
-    return check_bind_ref(s, pos, ty, ck_ct_text_of(fs, ty), name, env, fs, ret);
+    return check_bind_ref(s, pos, ty, ct_text_of(fs.ctn, fs.ctc, ty), name, env, fs, ret);
 }
 
 SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, Sigs fs, Str ret) {
@@ -6169,7 +6110,7 @@ SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, 
         return SRes { pos: v.pos, err: "", env: env };
     }
     // Type check using the base type (erase constraint).
-    Str ety = ck_ct_base_of(fs, ty);
+    Str ety = ct_base_of(fs.ctn, fs.ctb, ty);
     if (v.ty != ety) {
         Bool vempty = v.ty == "List(Unknown)";
         Bool listty = str_has_prefix(ety, "List(");
@@ -6318,7 +6259,7 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
             }
         }
         if (t2.text == "[") {
-            Tok close = ck_find_sqclose_d(s, t2.pos);
+            Tok close = find_sqclose_d(s, t2.pos);
             if (close.kind != "eof") {
                 PRes ty = parse_type(s, pos);
                 if (ty.err == "") {
@@ -6349,7 +6290,7 @@ SRes check_params(Str s, Int pos, Str fname, Str rty, List(Str) env, Sigs fs) {
     if (pty.err != "") {
         return SRes { pos: pty.pos, err: pty.err, env: env };
     }
-    Str pbase = ck_ct_base_of(fs, pty.ty);
+    Str pbase = ct_base_of(fs.ctn, fs.ctb, pty.ty);
     Tok pname = lex_tok(s, pty.pos);
     if (pname.kind != "ident") {
         return SRes { pos: pname.pos, err: "expected parameter name", env: env };
@@ -6385,7 +6326,7 @@ DRes check_func(Str s, Int pos, Sigs fs) {
     if (rty.err != "") {
         return DRes { pos: rty.pos, err: rty.err, name: "" };
     }
-    Str rbase = ck_ct_base_of(fs, rty.ty);
+    Str rbase = ct_base_of(fs.ctn, fs.ctb, rty.ty);
     Tok name = lex_tok(s, rty.pos);
     if (name.kind != "ident") {
         return DRes { pos: name.pos, err: "expected function name", name: "" };
@@ -6437,7 +6378,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs) {
         if (tbrace.text != "{") {
             PRes bt = parse_type(s, teq.pos);
             Tok after = lex_tok(s, bt.pos);
-            Str ctext = ck_extract_ctext(s, after);
+            Str ctext = extract_ctext(s, after);
             if (bt.err == "" && ctext != "") {
                 List(Str) c0 = fs.ctn;
                 List(Str) c1 = fs.ctb;
@@ -6748,6 +6689,9 @@ Int main() {
     Int prc = write_provenance(out, src);
     return prc;
 }
+
+
+
 
 
 

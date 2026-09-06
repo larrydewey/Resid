@@ -63,16 +63,6 @@ def rename_chunk(text):
         (r'\bb_index\b', 'ck_b_index'),
         (r'\bfuncs_empty\b', 'sigs_empty'),
         (r'\bFuncs\b', 'Sigs'),
-        # Constraint-type helpers (spec §12): renamed to ck_ prefix in checker half
-        (r'\bct_is_at\b', 'ck_ct_is_at'),
-        (r'\bct_is\b', 'ck_ct_is'),
-        (r'\bct_rank_at\b', 'ck_ct_rank_at'),
-        (r'\bct_rank\b', 'ck_ct_rank'),
-        (r'\bct_base_of\b', 'ck_ct_base_of'),
-        (r'\bct_text_of\b', 'ck_ct_text_of'),
-        (r'\bfind_sqclose_d\b', 'ck_find_sqclose_d'),
-        (r'\bfind_semi0\b', 'ck_find_semi0'),
-        (r'\bextract_ctext\b', 'ck_extract_ctext'),
     ]
     for pat, rep in pairs:
         text = re.sub(pat, rep, text)
@@ -103,6 +93,11 @@ def main():
     chunk = cut_main(chunk)
     chunk = drop_decls(chunk, {'PRes', 'parse_type', 'skip_body', 'skip_decl',
                                'str_find_char',
+                               # Constraint-type helpers (spec §12): identical copies
+                               # in both halves; keep the codegen (base) versions.
+                               'find_sqclose_d', 'find_semi0', 'extract_ctext',
+                               'ct_is_at', 'ct_is', 'ct_rank_at', 'ct_rank',
+                               'ct_base_of', 'ct_text_of',
                                # Behavior helpers: identical copies in both
                                # halves; keep the codegen (base) versions.
                                'behavior_decl_at', 'read_instance',
