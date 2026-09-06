@@ -756,11 +756,24 @@ VI cev_prim(Str c, Int pos, Int v) {
 
 VI cev_mul_rest(Str c, Int pos, Int lhs, Int v) {
     Tok op = lex_tok(c, pos);
-    Bool ism = op.text == "*" || op.text == "/" || op.text == "%";
-    if (!ism) {
-        return VI { ok: false, val: lhs, pos: pos };
+    if (op.text == "*") {
+        VI rhs = cev_mul(c, op.pos, v);
+        if (!rhs.ok) { return rhs; }
+        Int res = lhs * rhs.val;
+        return VI { ok: true, val: res, pos: rhs.pos };
     }
-    // Arithmetic operators not used in current constraint tests; return lhs unchanged.
+    if (op.text == "/") {
+        VI rhs = cev_mul(c, op.pos, v);
+        if (!rhs.ok) { return rhs; }
+        if (rhs.val == 0) { return VI { ok: false, val: lhs, pos: pos }; }
+        return VI { ok: true, val: lhs / rhs.val, pos: rhs.pos };
+    }
+    if (op.text == "%") {
+        VI rhs = cev_mul(c, op.pos, v);
+        if (!rhs.ok) { return rhs; }
+        if (rhs.val == 0) { return VI { ok: false, val: lhs, pos: pos }; }
+        return VI { ok: true, val: lhs % rhs.val, pos: rhs.pos };
+    }
     return VI { ok: false, val: lhs, pos: pos };
 }
 
