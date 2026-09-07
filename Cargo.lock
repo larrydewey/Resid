@@ -310,6 +310,7 @@ dependencies = [
  "getrandom",
  "inkwell",
  "rand_core",
+ "resid-cache",
  "resid-codegen",
  "resid-ir",
  "resid-lexer",
@@ -337,10 +338,12 @@ name = "resid-codegen"
 version = "0.1.0"
 dependencies = [
  "inkwell",
+ "resid-cache",
  "resid-ir",
  "resid-lexer",
  "resid-parser",
  "resid-type",
+ "sha2",
 ]
 
 [[package]]
