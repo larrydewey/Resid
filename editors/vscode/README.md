@@ -1,6 +1,6 @@
 # Resid Language Support for VS Code
 
-Syntax highlighting, snippets, and language configuration for the
+Syntax highlighting, snippets, language configuration, and **LSP support** (diagnostics + hover for residual notes) for the
 [Resid](../../../resid_specification.txt) language (v3.x).
 
 ## Features
@@ -22,13 +22,58 @@ Syntax highlighting, snippets, and language configuration for the
   match, if-let, for-in, `with` handles, `spawn` regions, sandboxes, imports.
 - **Language configuration**: bracket matching/auto-closing, comment toggling,
   folding markers.
+- **LSP (`resid-lsp`)**: Diagnostics and hover for **residual notes** (spec §37)
+  - Shows hints for runtime bindings whose values are not known at compile time
+  - Shows hints for provider calls that need capability grants at build time
+  - Hover over a line with a residual to see what knowledge is missing
+
+## LSP Setup
+
+The extension includes a built-in LSP client that connects to `resid-lsp` (a binary
+in this repo at `tools/resid-lsp/`).
+
+### Prerequisites
+
+1. Build the LSP server:
+   ```sh
+   cargo build -p resid-lsp --release
+   ```
+   This produces `target/release/resid-lsp`.
+
+2. Ensure `resid-lsp` is in your `PATH`, or configure the path in settings.
+
+### Settings
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `resid.lsp.enable` | Enable the Resid LSP server | `true` |
+| `resid.lsp.serverPath` | Path or command to the `resid-lsp` binary | `"resid-lsp"` |
+
+### How it works
+
+1. Run `residc build` on your Resid project — this produces `.resid-notes.cbor` sidecars.
+2. Open a `.resid` file in VS Code.
+3. The LSP client finds sidecars in the same directory (and `target/` sibling) and publishes diagnostics.
+4. Hover a line with a residual (lightbulb/squiggly) to see what knowledge is missing.
 
 ## Install locally
 
 ```sh
 cd editors/vscode
+npm install
+npm run compile
 npx @vscode/vsce package
-code --install-extension resid-lang-0.1.0.vsix
+code --install-extension resid-lang-0.2.0.vsix
 ```
 
-Or symlink/copy this folder into `~/.vscode/extensions/`.
+Or run the extension in development:
+1. Open this repo in VS Code
+2. Press `F5` → "Launch Extension"
+3. A new VS Code window opens with the extension loaded
+
+## Development
+
+- `npm run compile` — compile TypeScript to `out/`
+- `npm run watch` — watch mode
+- `npm run lint` — ESLint
+- `npm run package` — create `.vsix`
