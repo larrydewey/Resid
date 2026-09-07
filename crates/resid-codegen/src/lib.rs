@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 
+use sha2::{Digest, Sha256};
+
 use inkwell::builder::Builder;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -18,6 +20,7 @@ use inkwell::values::{
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
+use resid_cache::{KnowledgeKind, KnowledgeStore, KnowledgeValue};
 use resid_ir::{BinOp, NumericType, numeric_result_type};
 use resid_lexer::token::{IntKind, Literal, Span, StrLit};
 use resid_lexer::token::Op as OpKind;
@@ -327,10 +330,12 @@ pub struct CodeGen<'ctx> {
     cur_growable_param: Option<(String, usize)>,
     /// Name of the function currently being lowered — used only to tell a
     /// growable accumulator's own verified recursive self-call (pass the
-    /// GrowBuf through unchanged) apart from every other call site that
+    /// GrowBuf through unchanged) apart from every call site that
     /// happens to target the same function-and-position pair (seed a
     /// fresh GrowBuf from whatever normal value was just computed).
     cur_fn_name: String,
+    /// Optional knowledge cache for expression-level reduction results (§34, §36).
+    knowledge_cache: Option<KnowledgeStore>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -349,18 +354,28 @@ impl<'ctx> CodeGen<'ctx> {
             wrap_main: false,
             spawn_ctr: 0,
             in_spawn_worker: false,
-            behaviors: HashMap::new(),
+            behaviors: resid_type::Behaviors::new(),
             cmp_trampolines: std::collections::HashSet::new(),
             cur_file: String::new(),
             cap_ceiling: Vec::new(),
-            unit: TranslationUnit {
-                imports: Vec::new(),
-                declarations: Vec::new(),
-            },
+            unit: TranslationUnit { imports: Vec::new(), declarations: Vec::new() },
             tail_pos: false,
             growable: resid_type::GrowableAccumulators::new(),
             cur_growable_param: None,
             cur_fn_name: String::new(),
+            knowledge_cache: None,
+        }
+    }
+
+    /// Set the knowledge cache for expression-level reduction caching.
+    pub fn set_knowledge_cache(&mut self, cache: KnowledgeStore) {
+        self.knowledge_cache = Some(cache);
+    }
+
+    /// Flush the knowledge cache to disk.
+    pub fn flush_knowledge_cache(&mut self) {
+        if let Some(cache) = &self.knowledge_cache {
+            let _ = cache.flush();
         }
     }
 
@@ -420,7 +435,112 @@ impl<'ctx> CodeGen<'ctx> {
         if self.wrap_main {
             self.emit_main_wrapper()?;
         }
+        // Flush knowledge cache at the end of generation
+        self.flush_knowledge_cache();
         Ok(())
+    }
+
+    /// Hash an expression and its arguments for knowledge cache key.
+    fn hash_expr(func: &Expr, args: &[(Option<Id>, Expr)]) -> String {
+        let mut hasher = Sha256::new();
+        // Hash function name/identifier
+        if let ExprKind::Id(id) = &func.kind {
+            hasher.update(id.0.as_bytes());
+        }
+        hasher.update(b"::");
+        // Hash each argument
+        for (name_opt, arg) in args {
+            if let Some(id) = name_opt {
+                hasher.update(id.0.as_bytes());
+                hasher.update(b"=");
+            }
+            // For simplicity, hash the expression structure
+            Self::hash_expr_recursive(arg, &mut hasher);
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    fn hash_expr_recursive(expr: &Expr, hasher: &mut Sha256) {
+        use resid_parser::ExprKind::*;
+        match &expr.kind {
+            Literal(lit) => {
+                match lit {
+                    resid_lexer::token::Literal::Int { value, .. } => {
+                        hasher.update(b"int");
+                        hasher.update(value.to_string().as_bytes());
+                    }
+                    resid_lexer::token::Literal::Bool(b) => {
+                        hasher.update(b"bool");
+                        if *b {
+                            hasher.update(b"true");
+                        } else {
+                            hasher.update(b"false");
+                        }
+                    }
+                    resid_lexer::token::Literal::Str(s) => {
+                        hasher.update(b"str");
+                        hasher.update(s.value.as_bytes());
+                    }
+                    _ => {
+                        hasher.update(b"lit");
+                    }
+                }
+            }
+            Id(id) => {
+                hasher.update(b"id");
+                hasher.update(id.0.as_bytes());
+            }
+            Call { func, args } => {
+                Self::hash_expr_recursive(func, hasher);
+                for (_, a) in args {
+                    Self::hash_expr_recursive(a, hasher);
+                }
+            }
+            BinaryOp { lhs, rhs, op } => {
+                hasher.update(b"binop");
+                hasher.update(format!("{:?}", op).as_bytes());
+                Self::hash_expr_recursive(lhs, hasher);
+                Self::hash_expr_recursive(rhs, hasher);
+            }
+            UnaryOp { operand, op } => {
+                hasher.update(b"unop");
+                hasher.update(format!("{:?}", op).as_bytes());
+                Self::hash_expr_recursive(operand, hasher);
+            }
+            _ => {
+                hasher.update(b"other");
+            }
+        }
+    }
+
+    /// Hash the current environment (local bindings) for knowledge cache key.
+    fn hash_env(scope: &Scope<'ctx>) -> String {
+        let mut hasher = Sha256::new();
+        let mut keys: Vec<_> = scope.vars.keys().collect();
+        keys.sort();
+        for k in keys {
+            hasher.update(k.as_bytes());
+            hasher.update(b"=");
+            // We can't easily hash the value without evaluating it, so just hash the name
+            // For a more complete solution, we'd need to track compile-time known values
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    fn knowledge_value_to_cvalue(kv: &KnowledgeValue) -> Option<CValue> {
+        match kv {
+            KnowledgeValue::Int(i) => Some(CValue::Int(*i)),
+            KnowledgeValue::Bool(b) => Some(CValue::Bool(*b)),
+            KnowledgeValue::Str(s) => Some(CValue::Str(s.clone())),
+        }
+    }
+
+    fn cvalue_to_knowledge_value(cv: &CValue) -> KnowledgeValue {
+        match cv {
+            CValue::Int(i) => KnowledgeValue::Int(*i),
+            CValue::Bool(b) => KnowledgeValue::Bool(*b),
+            CValue::Str(s) => KnowledgeValue::Str(s.clone()),
+        }
     }
 
     /// LLVM symbol for a user function; a wrapped `Dec main` lives under
@@ -1866,7 +1986,24 @@ impl<'ctx> CodeGen<'ctx> {
                 // Comptime β-reduction of pure functions (§36): when every
                 // argument is a compile-time constant, evaluate the pure callee
                 // now and lower the resulting constant instead of a call.
+                // First check the knowledge cache (§34) for a prior reduction result.
+                if let Some(cache) = &self.knowledge_cache {
+                    let expr_hash = Self::hash_expr(func, args);
+                    let env_hash = Self::hash_env(sc);
+                    if let Some(cached) = cache.get(&expr_hash, &env_hash, KnowledgeKind::ReducedExpr) {
+                        if let Some(v) = Self::knowledge_value_to_cvalue(cached) {
+                            return self.lower_cvalue(sc, v, target);
+                        }
+                    }
+                }
                 if let Some(v) = resid_type::reduce_call(&self.unit, func, args) {
+                    // Store in knowledge cache for future compilations
+                    if let Some(cache) = &mut self.knowledge_cache {
+                        let expr_hash = Self::hash_expr(func, args);
+                        let env_hash = Self::hash_env(sc);
+                        let kv = Self::cvalue_to_knowledge_value(&v);
+                        cache.put(expr_hash, env_hash, KnowledgeKind::ReducedExpr, kv, Vec::new());
+                    }
                     return self.lower_cvalue(sc, v, target);
                 }
                 self.lower_call(sc, func, args, is_tail)

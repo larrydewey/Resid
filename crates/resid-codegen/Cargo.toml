@@ -8,5 +8,7 @@ resid-ir = { path = "../resid-ir" }
 resid-lexer = { path = "../resid-lexer" }
 resid-parser = { path = "../resid-parser" }
 resid-type = { path = "../resid-type" }
+resid-cache = { path = "../../tools/resid-cache" }
 inkwell = { version = "0.9", features = ["llvm22-1"] }
+sha2 = "0.10"
 
