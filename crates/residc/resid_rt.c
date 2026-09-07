@@ -3728,15 +3728,13 @@ int8_t resid_tcp_close(int64_t fd) {
  * (0 on error/EOF). */
 
 int8_t resid_tcp_send_bin(int64_t fd, void* lst) {
-    /* seeded-list convention: element 0 is the dummy seed, real bytes are
-     * elements 1..count-1 (raw i64 values truncated to u8) */
-    int64_t n = resid_list_len(lst) - 1;
+    int64_t n = resid_list_len(lst);
     if (n <= 0) return 1;
     char* buf = (char*)malloc((size_t)n);
     if (!buf) return 0;
     for (int64_t i = 0; i < n; i++) {
         /* scalar elements are boxed: element -> ResidVal -> slots[0] -> i64 */
-        ResidVal* bx = (ResidVal*)resid_list_get(lst, 1 + i);
+        ResidVal* bx = (ResidVal*)resid_list_get(lst, i);
         buf[i] = (char)(*(int64_t*)bx->slots[0] & 0xFF);
     }
     const char* p2 = buf;
@@ -3750,14 +3748,12 @@ int8_t resid_tcp_send_bin(int64_t fd, void* lst) {
     return 1;
 }
 
-/* receive exactly n bytes into a fresh seeded List(Int): slot 0 = seed,
- * slots 1..n = bytes; count = n+1. On EOF/error fewer slots may be
- * filled (remaining stay 0) and count still reports n+1. */
+/* receive exactly n bytes into a fresh List(Int): slots 0..n-1 = bytes.
+ * On EOF/error fewer slots may be filled (remaining stay 0). */
 void* resid_tcp_recv_bin(int64_t fd, int64_t n) {
     if (n < 0) n = 0;
     char* buf = (char*)malloc((size_t)(n > 0 ? n : 1));
-    void** slots = (void**)malloc(sizeof(void*) * (size_t)(n + 1));
-    slots[0] = resid_box_i64(0);
+    void** slots = (void**)malloc(sizeof(void*) * (size_t)n);
     int64_t got = 0;
     while (got < n) {
         ssize_t r = recv((int)fd, buf + got, (size_t)(n - got), 0);
@@ -3766,10 +3762,10 @@ void* resid_tcp_recv_bin(int64_t fd, int64_t n) {
     }
     for (int64_t i = 0; i < n; i++) {
         char bv = (i < got) ? buf[i] : 0;
-        slots[1 + i] = resid_box_i64((int64_t)(unsigned char)bv);
+        slots[i] = resid_box_i64((int64_t)(unsigned char)bv);
     }
     free(buf);
-    void* out = resid_list_new(n + 1, slots, "List");
+    void* out = resid_list_new(n, slots, "List");
     free(slots);
     return out;
 }

@@ -274,7 +274,7 @@ pub Int(512) ec_mul_packed(Int(256) k, Int(256) bx, Int(256) by) {
 }
 
 // ─── Byte-list conversion ────────────────────────────────────────────
-// Big-endian seeded byte list (32 or 33 bytes; DER may carry a leading
+// Big-endian byte list (32 or 33 bytes; DER may carry a leading
 // zero) -> Int(256).
 
 pub Int(256) ec_be_val(List(Int) bytes, Int i, Int last, Int(256) acc) {

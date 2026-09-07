@@ -110,7 +110,7 @@ pub Int(256) fe_inv(Int(256) a) {
     return pow_acc(1, a, fe_pm2(), 255);
 }
 
-// ── seeded little-endian bytes <-> wide ints ──
+// ── little-endian bytes <-> wide ints ──
 pub Int top7(Int i, Int raw) {
     if (i == 32) {
         Int masked = raw & 127;
@@ -119,15 +119,15 @@ pub Int top7(Int i, Int raw) {
     return raw;
 }
 pub Int(256) b2a(List(Int) b, Int(256) v, Int i) {
-    if (i < 1) { return v; }
-    Int(256) raw = (Int(256)) top7(i, b[i]);
+    if (i < 0) { return v; }
+    Int(256) raw = (Int(256)) top7(i + 1, b[i]);
     Int(256) t = v * 256;
     Int(256) v2 = t + raw;
     Int ni = i - 1;
     return b2a(b, v2, ni);
 }
 pub Int(256) bytes_to_int(List(Int) b) {
-    return b2a(b, 0, 32);
+    return b2a(b, 0, 31);
 }
 pub List(Int) itob_acc(Int(256) v, Int i, List(Int) acc) {
     if (i > 31) { return acc; }
@@ -139,17 +139,16 @@ pub List(Int) itob_acc(Int(256) v, Int i, List(Int) acc) {
     return itob_acc(v, ni, acc2);
 }
 pub List(Int) int_to_bytes(Int(256) v) {
-    return itob_acc(v, 0, [0]);
+    return itob_acc(v, 0, []);
 }
 pub List(Int) slice_acc(List(Int) b, Int i, Int end, List(Int) acc) {
     if (i > end) { return acc; }
-    Int j = i + 1;
-    List(Int) acc2 = acc.concat([b[j]]);
+    List(Int) acc2 = acc.concat([b[i]]);
     Int ni = i + 1;
     return slice_acc(b, ni, end, acc2);
 }
 pub List(Int) slice_bytes(List(Int) b, Int start, Int end) {
-    return slice_acc(b, start, end, [0]);
+    return slice_acc(b, start, end, []);
 }
 
 // ── point coordinate formulas (extended coords, a = -1) ──
@@ -322,7 +321,7 @@ pub List(Int) ccat(List(Int) b, Int i, List(Int) acc) {
     return ccat(b, ni, acc2);
 }
 pub List(Int) concat_bytes(List(Int) a, List(Int) b) {
-    return ccat(b, 1, a);
+    return ccat(b, 0, a);
 }
 pub Int(256) dec_x(List(Int) bs) {
     Int(256) y = dec_y(bs);
@@ -403,10 +402,8 @@ pub List(Int) wmul_wy(Int(256) h, Int(256) ax, Int(256) ay, Int(256) az, Int(256
 pub Int(256) modl_acc(List(Int) dig, Int(256) v, Int j) {
     if (j < 0) { return v; }
     Int nb = j >> 3;
-    Int sh8 = nb * 8;
-    Int rem = j - sh8;
-    Int idx = nb + 1;
-    Int byte = dig[idx];
+    Int rem = j - nb * 8;
+    Int byte = dig[nb];
     Int bit = ((byte >> rem) & 1);
     Int(256) v2 = v * 2;
     Int(256) v3 = v2 + bit;
@@ -495,7 +492,7 @@ pub Int(256) clamp_scalar(Int(256) s) {
 }
 pub List(Int) encode_pt_bytes(Int(256) axi, List(Int) ayb) {
     Int sign = axi & 1;
-    Int last = ayb[32];
+    Int last = ayb[31];
     Int lb = last + sign * 128;
     List(Int) apre = slice_bytes(ayb, 0, 30);
     return apre.concat([lb]);

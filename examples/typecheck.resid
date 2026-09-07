@@ -1669,18 +1669,23 @@ pub List(Str) split_type_list(Str tys, Int pos, Int elem_i, Int depth, Str acc, 
 }
 
 // Do declared parameter types accept these argument types?
-// Exact match, or value-preserving integer widening (spec v3.2 §6.4).
+// Exact match, or value-preserving integer widening (spec v3.2 §6.4), or an
+// empty list literal adopting the declared List(...) element type (stage-1
+// parity: an empty `[]` argument takes the parameter's element type).
 pub Bool params_accept_at(Str pts, Str argtys, Int i, Int n) {
     if (i >= n) { return true; }
     Str p = num_norm(ty_list_at(pts, i));
     Str g = num_norm(ty_list_at(argtys, i));
     Bool same = p == g;
+    Bool empty_adopt = g == "List(Unknown)" && str_has_prefix(p, "List(");
     Bool widen_possible = is_int_ty(p) && is_int_ty(g);
     Int gw = ty_bits(g);
     Int pw = ty_bits(p);
     Bool widen_fits = gw <= pw;
     Bool ok = if (same) { true } else {
-        if (widen_possible) { widen_fits } else { false }
+        if (empty_adopt) { true } else {
+            if (widen_possible) { widen_fits } else { false }
+        }
     };
     if (!ok) { return false; }
     return params_accept_at(pts, argtys, i + 1, n);

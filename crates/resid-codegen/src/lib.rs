@@ -5161,7 +5161,10 @@ impl<'ctx> CodeGen<'ctx> {
             }
             slots.push(self.box_scalar(v)?);
         }
-        let elem_ty = elem_ty.ok_or_else(|| "codegen: cannot lower an empty list literal".to_string())?;
+        let elem_ty = elem_ty.unwrap_or_else(|| {
+            use resid_ir::IntWidth;
+            SemType::Numeric(resid_ir::NumericType::Int(IntWidth::B64))
+        });
         let ty = SemType::List(Box::new(elem_ty));
         self.build_list_constructor(&ty, slots)
     }

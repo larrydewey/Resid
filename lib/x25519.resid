@@ -24,10 +24,10 @@ pub Int(256) xs_sel(Int(256) cond, Int(256) a, Int(256) b) {
 
 // scalar: clamp byte0 &= 248, byte31 = (byte31 & 127) | 64
 pub Int(256) xk_acc(List(Int) b, Int(256) v, Int i) {
-    if (i < 1) { return v; }
+    if (i < 0) { return v; }
     Int raw = b[i];
-    Int c0 = if (i == 1) { raw & 248 } else { raw };
-    Int c = if (i == 32) { (c0 & 127) | 64 } else { c0 };
+    Int c0 = if (i == 0) { raw & 248 } else { raw };
+    Int c = if (i == 31) { (c0 & 127) | 64 } else { c0 };
     Int(256) cv = (Int(256)) c;
     Int(256) v2 = v * 256 + cv;
     Int ni = i - 1;
@@ -36,9 +36,9 @@ pub Int(256) xk_acc(List(Int) b, Int(256) v, Int i) {
 
 // u-coordinate: mask bit 255 (byte31 &= 127)
 pub Int(256) xu_acc(List(Int) b, Int(256) v, Int i) {
-    if (i < 1) { return v; }
+    if (i < 0) { return v; }
     Int raw = b[i];
-    Int c = if (i == 32) { raw & 127 } else { raw };
+    Int c = if (i == 31) { raw & 127 } else { raw };
     Int(256) cv = (Int(256)) c;
     Int(256) v2 = v * 256 + cv;
     Int ni = i - 1;
@@ -46,11 +46,11 @@ pub Int(256) xu_acc(List(Int) b, Int(256) v, Int i) {
 }
 
 pub Int(256) x_decode_k(List(Int) b) {
-    return xk_acc(b, 0, 32);
+    return xk_acc(b, 0, 31);
 }
 
 pub Int(256) x_decode_u(List(Int) b) {
-    return xu_acc(b, 0, 32);
+    return xu_acc(b, 0, 31);
 }
 
 // ── Montgomery ladder ────────────────────────────────────────────────
@@ -108,7 +108,7 @@ pub Int(512) x_ladder(Int(256) x1, Int(256) k, Int t, Int(256) x2, Int(256) z2, 
 }
 
 // ── public API: raw X25519 over 32-byte little-endian lists ─────────
-// Lists carry the [0]-seed convention (index 0 unused) like ed25519.
+
 
 pub List(Int) x25519(List(Int) k_bytes, List(Int) u_bytes) {
     Int(256) k = x_decode_k(k_bytes);

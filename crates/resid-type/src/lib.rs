@@ -570,16 +570,12 @@ fn grant_readonly_only(caps: &[String], family: &str) -> bool {
 }
 
 /// Which verbs are write operations for a provider family (spec §21 mode
-/// narrowing: a read-only grant must not permit writes). So far these are the
-/// clearly system-mutating verbs: `filesystem.write_all` truncates/rewrites a
-/// file; `process.run` executes an external command that may mutate the system.
-/// Additional families/verbs may be added as the mode lattice expands.
+/// narrowing: a read-only grant must not permit writes).
 fn is_write_verb(family: &str, verb: &str) -> bool {
     match (family, verb) {
         ("filesystem", "write_all") => true,
         ("process", "run") => true,
-        // Git verbs are read-only in the current implementation; adding write
-        // verb classifications for git is future work (spec §21 per-verb mode lattice).
+        // Git verbs are read-only (git.rev, git.branch); no write verbs yet.
         ("git", "rev") => false,
         ("git", "branch") => false,
         _ => false,

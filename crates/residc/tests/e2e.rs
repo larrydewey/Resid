@@ -2714,10 +2714,10 @@ fn run_ed25519_sign_in_resid() {
         r#"
 import "ed25519.resid";
 Str hexs(List(Int) bs) {
-    return hex_range_b(bs, 1, 32, "");
+    return hex_range_b(bs, 0, 31, "");
 }
 Int main() {
-    List(Int) sd = [0, 157, 97, 177, 157, 239, 253, 90, 96, 186, 132, 74, 244, 146, 236, 44, 196, 68, 73, 197, 105, 123, 50, 105, 25, 112, 59, 172, 3, 28, 174, 127, 96];
+    List(Int) sd = [157, 97, 177, 157, 239, 253, 90, 96, 186, 132, 74, 244, 146, 236, 44, 196, 68, 73, 197, 105, 123, 50, 105, 25, 112, 59, 172, 3, 28, 174, 127, 96];
     println(hexs(pub_key(sd)));
     List(Int) sg = sign_msg(sd, "hello world");
     Bool ok = verify_sig("hello world", sg, pub_key(sd));
@@ -2765,12 +2765,12 @@ fn run_ed25519_verify_in_resid() {
         r#"
 import "ed25519.resid";
 Int main() {
-    List(Int) sg = [0, 44, 84, 130, 57, 42, 25, 126, 192, 159, 163, 55, 119, 149, 141, 58, 11, 228, 244, 150, 10, 248, 94, 151, 150, 164, 216, 34, 201, 94, 207, 112, 74, 52, 254, 211, 42, 219, 105, 154, 136, 192, 234, 135, 107, 159, 187, 23, 209, 219, 211, 54, 247, 84, 253, 146, 7, 191, 193, 18, 200, 154, 165, 79, 2];
-    List(Int) pk = [0, 215, 90, 152, 1, 130, 177, 10, 183, 213, 75, 254, 211, 201, 100, 7, 58, 14, 225, 114, 243, 218, 166, 35, 37, 175, 2, 26, 104, 247, 7, 81, 26];
+    List(Int) sg = [44, 84, 130, 57, 42, 25, 126, 192, 159, 163, 55, 119, 149, 141, 58, 11, 228, 244, 150, 10, 248, 94, 151, 150, 164, 216, 34, 201, 94, 207, 112, 74, 52, 254, 211, 42, 219, 105, 154, 136, 192, 234, 135, 107, 159, 187, 23, 209, 219, 211, 54, 247, 84, 253, 146, 7, 191, 193, 18, 200, 154, 165, 79, 2];
+    List(Int) pk = [215, 90, 152, 1, 130, 177, 10, 183, 213, 75, 254, 211, 201, 100, 7, 58, 14, 225, 114, 243, 218, 166, 35, 37, 175, 2, 26, 104, 247, 7, 81, 26];
     Bool ok = verify_sig("hello world", sg, pk);
     if (ok) { println("VALID"); }
     if (!ok) { println("INVALID"); }
-    List(Int) bad = [0, 44, 84, 130, 57, 42, 25, 126, 192, 159, 163, 55, 119, 149, 141, 58, 11, 228, 244, 150, 10, 248, 94, 151, 150, 164, 216, 34, 201, 94, 207, 112, 74, 52, 254, 211, 42, 219, 105, 154, 136, 193, 234, 135, 107, 159, 187, 23, 209, 219, 211, 54, 247, 84, 253, 146, 7, 191, 193, 18, 200, 154, 165, 79, 2];
+    List(Int) bad = [44, 84, 130, 57, 42, 25, 126, 192, 159, 163, 55, 119, 149, 141, 58, 11, 228, 244, 150, 10, 248, 94, 151, 150, 164, 216, 34, 201, 94, 207, 112, 74, 52, 254, 211, 42, 219, 105, 154, 136, 193, 234, 135, 107, 159, 187, 23, 209, 219, 211, 54, 247, 84, 253, 146, 7, 191, 193, 18, 200, 154, 165, 79, 2];
     Bool ok2 = verify_sig("hello world", bad, pk);
     if (ok2) { println("TAMPER-ACCEPTED"); }
     if (!ok2) { println("TAMPER-REJECTED"); }
@@ -2827,7 +2827,7 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
     return hb_acc(s, ni, acc2);
 }
 List(Int) hb(Str s) {
-    return hb_acc(s, 0, [0]);
+    return hb_acc(s, 0, []);
 }
 Int main() {
     // RFC 7748 section 5.2 vector 1
@@ -2983,7 +2983,7 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
 }
 
 List(Int) hb(Str s) {
-    return hb_acc(s, 0, [0]);
+    return hb_acc(s, 0, []);
 }
 
 Int main() {
@@ -3065,7 +3065,7 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
 }
 
 List(Int) hb(Str s) {
-    return hb_acc(s, 0, [0]);
+    return hb_acc(s, 0, []);
 }
 
 List(Int) rep(Int n, Int b, List(Int) acc) {
@@ -3076,13 +3076,13 @@ List(Int) rep(Int n, Int b, List(Int) acc) {
 }
 
 Int main() {
-    List(Int) key0 = rep(16, 0, [0]);
-    List(Int) iv0 = rep(12, 0, [0]);
-    List(Int) aad0 = [0];
-    println(hex_encode(aes128_gcm_seal(key0, iv0, [0], aad0)));
-    List(Int) r2 = aes128_gcm_seal(key0, iv0, rep(16, 0, [0]), aad0);
+    List(Int) key0 = rep(16, 0, []);
+    List(Int) iv0 = rep(12, 0, []);
+    List(Int) aad0 = [];
+    println(hex_encode(aes128_gcm_seal(key0, iv0, [], aad0)));
+    List(Int) r2 = aes128_gcm_seal(key0, iv0, rep(16, 0, []), aad0);
     println(hex_encode(r2));
-    List(Int) r3 = aes128_gcm_seal(key0, iv0, rep(16, 0, [0]), rep(16, 0, [0]));
+    List(Int) r3 = aes128_gcm_seal(key0, iv0, rep(16, 0, []), rep(16, 0, []));
     println(hex_encode(r3));
     List(Int) key4 = hb("feffe9928665731c6d6a8f9467308308");
     List(Int) iv4 = hb("cafebabefacedbaddecaf888");
@@ -3158,7 +3158,7 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
 }
 
 List(Int) hb(Str s) {
-    return hb_acc(s, 0, [0]);
+    return hb_acc(s, 0, []);
 }
 
 Str ck(Str name, List(Int) got, Str want) {
@@ -3183,7 +3183,7 @@ Int main() {
     List(Int) spub = hb("c9828876112095fe66762bdbf7c672e156d6cc253b833df1dd69b1b04e751f0f");
     // transcript CH||SH
     List(Int) tr1 = sconcat(ch, sh);
-    List(Int) th1 = slice_seed(sha256_bytes(tr1), 1, 32, [0]);
+    List(Int) th1 = slice_seed(sha256_bytes(tr1), 0, 32, []);
     ck("th1", th1, "860c06edc07858ee8e78f0e7428c58edd6b43f2ca3e6e95f02ed063cf0e1cad8");
     // key schedule from X25519 shared secret
     List(Int) shared = x25519(cpriv, spub);
@@ -3205,12 +3205,12 @@ Int main() {
     List(Int) tr2 = sconcat(tr1, ee);
     List(Int) tr3 = sconcat(tr2, ctmsg);
     List(Int) tr4 = sconcat(tr3, cv);
-    List(Int) th_sv = slice_seed(sha256_bytes(tr4), 1, 32, [0]);
+    List(Int) th_sv = slice_seed(sha256_bytes(tr4), 0, 32, []);
     List(Int) svfin = tls_finished(s_hs, th_sv);
     ck("server-finished", svfin, "9b9b141d906337fbd2cbdce71df4deda4ab42c309572cb7fffee5454b78f0718");
     // transcript through server Finished -> application secrets
     List(Int) tr5 = sconcat(tr4, finmsg);
-    List(Int) th_ap = slice_seed(sha256_bytes(tr5), 1, 32, [0]);
+    List(Int) th_ap = slice_seed(sha256_bytes(tr5), 0, 32, []);
     ck("th-ap", th_ap, "9608102a0f1ccc6db6250b7b7e417b1a000eaada3daae4777a7686c9ff83df13");
     List(Int) c_ap = tls_c_ap_traffic(master, th_ap);
     ck("c-ap-traffic", c_ap, "9e40646ce79a7f9dc05af8889bce6552875afa0b06df0087f792ebb7c17504a5");
@@ -3292,7 +3292,7 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
 }
 
 List(Int) hb(Str s) {
-    return hb_acc(s, 0, [0]);
+    return hb_acc(s, 0, []);
 }
 
 Str ck(Str name, Str got, Str want) {
@@ -3311,7 +3311,7 @@ Int main() {
     List(Int) shp = sh_pubkey(shmsg);
     ck("sh-pubkey", hex_encode(shp), "c9828876112095fe66762bdbf7c672e156d6cc253b833df1dd69b1b04e751f0f");
     List(Int) flight = hb("080000240022000a00140012001d00170018001901000101010201030104001c00024001000000000b0001b9000001b50001b0308201ac30820115a003020102020102300d06092a864886f70d01010b0500300e310c300a06035504031303727361301e170d3136303733303031323335395a170d3236303733303031323335395a300e310c300a0603550403130372736130819f300d06092a864886f70d010101050003818d0030818902818100b4bb498f8279303d980836399b36c6988c0c68de55e1bdb826d3901a2461eafd2de49a91d015abbc9a95137ace6c1af19eaa6af98c7ced43120998e187a80ee0ccb0524b1b018c3e0b63264d449a6d38e22a5fda430846748030530ef0461c8ca9d9efbfae8ea6d1d03e2bd193eff0ab9a8002c47428a6d35a8d88d79f7f1e3f0203010001a31a301830090603551d1304023000300b0603551d0f0404030205a0300d06092a864886f70d01010b05000381810085aad2a0e5b9276b908c65f73a7267170618a54c5f8a7b337d2df7a594365417f2eae8f8a58c8f8172f9319cf36b7fd6c55b80f21a03015156726096fd335e5e67f2dbf102702e608ccae6bec1fc63a42a99be5c3eb7107c3c54e9b9eb2bd5203b1c3b84e0a8b2f759409ba3eac9d91d402dcc0cc8f8961229ac9187b42b4de100000f000084080400805a747c5d88fa9bd2e55ab085a61015b7211f824cd484145ab3ff52f1fda8477b0b7abc90db78e2d33a5c141a078653fa6bef780c5ea248eeaaa785c4f394cab6d30bbe8d4859ee511f602957b15411ac027671459e46445c9ea58c181e818e95b8c3fb0bf3278409d3be152a3da5043e063dda65cdf5aea20d53dfacd42f74f3140000209b9b141d906337fbd2cbdce71df4deda4ab42c309572cb7fffee5454b78f0718");
-    println(IntToString(tm_type_at(flight, 1)));
+    println(IntToString(tm_type_at(flight, 0)));
     Int pe = tm_find_pos(flight, 8, 0);
     Int pc = tm_find_pos(flight, 11, 0);
     Int pv = tm_find_pos(flight, 15, 0);
@@ -3333,14 +3333,14 @@ Int main() {
     List(Int) tr3 = sconcat(tr2, ctmsg);
     List(Int) trcv = sconcat(tr3, cvmsg);
     List(Int) thcvraw = sha256_bytes(trcv);
-    List(Int) thcv = slice_seed(thcvraw, 1, 32, [0]);
+    List(Int) thcv = slice_seed(thcvraw, 0, 32, []);
     ck("th-cv", hex_encode(thcv), "edb7725fa7a3473b031ec8ef65a2485493900138a2b91291407d7951a06110ed");
     // ECDSA CertificateVerify with own EC cert over the same transcript
     List(Int) ecdsa_cert = hb("3082017e30820125a0030201020214557826b8d723dbfb5853602a3bf8f1bbfecf9abc300a06082a8648ce3d04030230153113301106035504030c0a746c7331332d74657374301e170d3236303832343032343935335a170d3336303832313032343935335a30153113301106035504030c0a746c7331332d746573743059301306072a8648ce3d020106082a8648ce3d03010703420004f1fe77a29adb468d27b972e1dbb3af5cc8b6312abe7531aee14a19e85abcb8fb2eab53db22bb3aaae7f015b48ae561480ede9697fd43d904cfad6c91e6152f06a3533051301d0603551d0e04160414fb0e957b9228a734cf0a08f30925f2fddff915c5301f0603551d23041830168014fb0e957b9228a734cf0a08f30925f2fddff915c5300f0603551d130101ff040530030101ff300a06082a8648ce3d04030203470030440220571ae7eb3474a071b1dbd75d7854b4d07214123a8db8e3130cda8e073c1bea42022074cffaf39c2e701c5d80c8b166ba5cfc1f0955b068993aca450ddf94872d1bd6");
     List(Int) ec_sig = hb("3045022100a864ad5a8c3a0883344cf8f8e3be548849c4f2d78491afed9b3db37d95247cb9022066973cb4e661586931202f5f19d71d97371a1610b824bb85ea66bbb946f7d210");
     List(Int) content = tm_cv_content(thcv);
     List(Int) keyb = cert_pubkey_bits(ecdsa_cert);
-    List(Int) keyb2 = slice_seed(keyb, 1, 66, [0]);
+    List(Int) keyb2 = slice_seed(keyb, 0, 66, []);
     Bool okcv = tm_ecdsa_verify_sha256(content, keyb2, ec_sig);
     if (okcv) { println("CV-ECDSA OK"); } else { println("CV-ECDSA BAD"); }
     return 0;
@@ -3395,7 +3395,7 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
     Int ni = i + 2;
     return hb_acc(s, ni, acc2);
 }
-List(Int) hb(Str s) { return hb_acc(s, 0, [0]); }
+List(Int) hb(Str s) { return hb_acc(s, 0, []); }
 Int main() {
     Bool ge0 = ec_ge(ec_from_be(hb("0000000000000000000000000000000000000000000000000000000000000000")), ec_from_be(hb("0000000000000000000000000000000000000000000000000000000000000000")));
     if (ge0) { println("ge0 PASS"); } else { println("ge0 FAIL"); }
@@ -3632,7 +3632,7 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
     Int ni = i + 2;
     return hb_acc(s, ni, acc2);
 }
-List(Int) hb(Str s) { return hb_acc(s, 0, [0]); }
+List(Int) hb(Str s) { return hb_acc(s, 0, []); }
 Int(512) be512_acc(List(Int) b, Int i, Int last, Int(512) acc) {
     if (i > last) { return acc; }
     Int byte = b[i];
@@ -3979,7 +3979,7 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
     Int ni = i + 2;
     return hb_acc(s, ni, acc2);
 }
-List(Int) hb(Str s) { return hb_acc(s, 0, [0]); }
+List(Int) hb(Str s) { return hb_acc(s, 0, []); }
 
 Int main() {
     Int(256) a = ec_from_be(hb("0000000000000000000000000000000000000000000000000000000000000000"));
@@ -4055,7 +4055,7 @@ List(Int) n_as(Int k, List(Int) acc) {
 Int main() {
     println(hex_encode(sha512_bytes(bytes_of(""))));
     println(hex_encode(sha512_bytes(bytes_of("abc"))));
-    println(hex_encode(sha512_bytes(n_as(200, [0]))));
+    println(hex_encode(sha512_bytes(n_as(200, []))));
     return 0;
 }
 "#,
@@ -4849,10 +4849,10 @@ Int main() {{
     Int tstop = tend - 1;
     List(Int) tb = der_slice_seeded(cert, tbs, tstop);
     List(Int) digest = sha256_bytes(tb);
-    Int d1 = digest[1];
-    Int d2 = digest[2];
-    Int d3 = digest[3];
-    Int d4 = digest[4];
+    Int d1 = digest[0];
+    Int d2 = digest[1];
+    Int d3 = digest[2];
+    Int d4 = digest[3];
     println("digest=" + IntToString(d1) + " " + IntToString(d2) + " " + IntToString(d3) + " " + IntToString(d4));
     Int p1 = x509_skip_tlv(cert, tbs);
     Int p2 = x509_skip_tlv(cert, p1);
@@ -4868,7 +4868,7 @@ Int main() {{
     Int epos = x509_skip_tlv(cert, npos);
     List(Int) nc = der_content(cert, npos);
     Int ncl = nc.len() - 1;
-    List(Int) nb = der_slice_seeded(nc, 2, ncl);
+    List(Int) nb = der_slice_seeded(nc, 1, ncl);
     Int ev = der_int_value(cert, epos);
     Int w = 128;
     List(Int) nl = bn_from_be(nb, w);
@@ -4966,7 +4966,7 @@ pub Int low16256(Int(256) v) {{
 }}
 
 pub Int(256) be_acc(List(Int) bytes, Int i, Int(256) acc) {{
-    if (i > 32) {{ return acc; }}
+    if (i > 31) {{ return acc; }}
     Int byte = bytes[i];
     Int(256) bv = (Int(256)) byte;
     Int(256) acc8 = acc * 256;
@@ -4984,7 +4984,7 @@ Int main() {{
     Int tstop = tend - 1;
     List(Int) tb = der_slice_seeded(cert, tbs, tstop);
     List(Int) digest = sha256_bytes(tb);
-    println("d1=" + IntToString(digest[1]));
+    println("d1=" + IntToString(digest[0]));
     Int p1 = x509_skip_tlv(cert, tbs);
     Int p2 = x509_skip_tlv(cert, p1);
     DerTlv btv = der_next(cert, p2);
@@ -4992,7 +4992,7 @@ Int main() {{
     Int sb0 = bsc + 1;
     Int sstop = sb0 + btv.val_len - 2;
     List(Int) sigb = der_slice_seeded(cert, sb0, sstop);
-    Int seqc = der_content_pos(sigb, 1);
+    Int seqc = der_content_pos(sigb, 0);
     List(Int) rb = der_content(sigb, seqc);
     Int spos = x509_skip_tlv(sigb, seqc);
     List(Int) sb2v = der_content(sigb, spos);
@@ -5007,17 +5007,17 @@ Int main() {{
     Int ky2 = ky1 + 31;
     List(Int) xb = der_slice_seeded(cert, kx1, ky0);
     List(Int) yb = der_slice_seeded(cert, ky1, ky2);
-    Int(256) eint = be_acc(digest, 1, 0);
+    Int(256) eint = be_acc(digest, 0, 0);
     Int(256) rvv = ec_from_be(rb);
     Int(256) svv = ec_from_be(sb2v);
-    Int(256) qx = be_acc(xb, 1, 0);
-    Int(256) qy = be_acc(yb, 1, 0);
+    Int(256) qx = be_acc(xb, 0, 0);
+    Int(256) qy = be_acc(yb, 0, 0);
     println("in=" + IntToString(low16256(rvv)) + " " + IntToString(low16256(qx)));
-    List(Int) h1 = [0, 119, 119, 119, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
+    List(Int) h1 = [119, 119, 119, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
     Bool m1 = san_has_match(cert, h1);
-    List(Int) h2 = [0, 102, 111, 111, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
+    List(Int) h2 = [102, 111, 111, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
     Bool m2 = san_has_match(cert, h2);
-    List(Int) h3 = [0, 97, 112, 105, 46, 111, 116, 104, 101, 114, 46, 99, 111, 109];
+    List(Int) h3 = [97, 112, 105, 46, 111, 116, 104, 101, 114, 46, 99, 111, 109];
     Bool m3 = san_has_match(cert, h3);
     println("san=" + BoolToString(m1) + BoolToString(m2) + BoolToString(m3));
     Int now_ok = 20260924000000;
@@ -5076,11 +5076,11 @@ import "chain.resid";
 Int main() {{
     List(Int) cert = {cert};
     List(Int) rootc = {root};
-    List(Int) h1 = [0, 119, 119, 119, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
+    List(Int) h1 = [119, 119, 119, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
     Bool m1 = san_has_match(cert, h1);
-    List(Int) h2 = [0, 102, 111, 111, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
+    List(Int) h2 = [102, 111, 111, 46, 114, 101, 115, 105, 100, 46, 116, 101, 115, 116];
     Bool m2 = san_has_match(cert, h2);
-    List(Int) h3 = [0, 97, 112, 105, 46, 111, 116, 104, 101, 114, 46, 99, 111, 109];
+    List(Int) h3 = [97, 112, 105, 46, 111, 116, 104, 101, 114, 46, 99, 111, 109];
     Bool m3 = san_has_match(cert, h3);
     println("san=" + BoolToString(m1) + BoolToString(m2) + BoolToString(m3));
     Int now_ok = 20260924000000;
@@ -6982,9 +6982,8 @@ let out = Command::new(residc_bin()).arg(&git_ro).arg("run").current_dir(&dir).o
 assert_eq!(out.status.code(), Some(0), "git readonly sandbox must allow git.rev: {}", String::from_utf8_lossy(&out.stderr));
 
 // Illegal: a read-only git grant must NOT permit write verbs.
-// Currently only `filesystem.write_all` and `process.run` are classified as
-// write verbs; adding git write verbs to `is_write_verb` is future work
-// (spec §21 per-verb mode lattice). For now we verify the grant is enforced
+// Write-verb lattice: filesystem.write_all, process.run = write;
+// git.rev, git.branch = read-only. Verify the grant is enforced
 // by checking that a direct `git.rev` call outside a sandbox compiles.
 let git_no_sandbox = dir.join("git-ns.resid");
 std::fs::write(

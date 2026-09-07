@@ -1,8 +1,7 @@
 // ─── lib/aesgcm.resid — AES-128-GCM (NIST SP 800-38D) in pure Resid ─
 // Pure Resid. AES-128 with a flat 176-byte expanded-key list; state is
 // a flat 16-byte column-major list. GHASH runs the MSB-first bitwise
-// GF(2^128) multiply over seeded byte lists. All lists use the [0]
-// -seed convention (real bytes at index >= 1).
+// GF(2^128) multiply over byte lists.
 //
 // Widening gotcha (same as lib/chacha.resid): never pass raw arithmetic
 // like `i + 1` straight into an argument position — bind it to a typed
@@ -11,13 +10,12 @@
 import "crypto.resid";
 
 pub List(Int) aes_sbox_list() {
-    return [0, 99, 124, 119, 123, 242, 107, 111, 197, 48, 1, 103, 43, 254, 215, 171, 118, 202, 130, 201, 125, 250, 89, 71, 240, 173, 212, 162, 175, 156, 164, 114, 192, 183, 253, 147, 38, 54, 63, 247, 204, 52, 165, 229, 241, 113, 216, 49, 21, 4, 199, 35, 195, 24, 150, 5, 154, 7, 18, 128, 226, 235, 39, 178, 117, 9, 131, 44, 26, 27, 110, 90, 160, 82, 59, 214, 179, 41, 227, 47, 132, 83, 209, 0, 237, 32, 252, 177, 91, 106, 203, 190, 57, 74, 76, 88, 207, 208, 239, 170, 251, 67, 77, 51, 133, 69, 249, 2, 127, 80, 60, 159, 168, 81, 163, 64, 143, 146, 157, 56, 245, 188, 182, 218, 33, 16, 255, 243, 210, 205, 12, 19, 236, 95, 151, 68, 23, 196, 167, 126, 61, 100, 93, 25, 115, 96, 129, 79, 220, 34, 42, 144, 136, 70, 238, 184, 20, 222, 94, 11, 219, 224, 50, 58, 10, 73, 6, 36, 92, 194, 211, 172, 98, 145, 149, 228, 121, 231, 200, 55, 109, 141, 213, 78, 169, 108, 86, 244, 234, 101, 122, 174, 8, 186, 120, 37, 46, 28, 166, 180, 198, 232, 221, 116, 31, 75, 189, 139, 138, 112, 62, 181, 102, 72, 3, 246, 14, 97, 53, 87, 185, 134, 193, 29, 158, 225, 248, 152, 17, 105, 217, 142, 148, 155, 30, 135, 233, 206, 85, 40, 223, 140, 161, 137, 13, 191, 230, 66, 104, 65, 153, 45, 15, 176, 84, 187, 22];
+    return [99, 124, 119, 123, 242, 107, 111, 197, 48, 1, 103, 43, 254, 215, 171, 118, 202, 130, 201, 125, 250, 89, 71, 240, 173, 212, 162, 175, 156, 164, 114, 192, 183, 253, 147, 38, 54, 63, 247, 204, 52, 165, 229, 241, 113, 216, 49, 21, 4, 199, 35, 195, 24, 150, 5, 154, 7, 18, 128, 226, 235, 39, 178, 117, 9, 131, 44, 26, 27, 110, 90, 160, 82, 59, 214, 179, 41, 227, 47, 132, 83, 209, 0, 237, 32, 252, 177, 91, 106, 203, 190, 57, 74, 76, 88, 207, 208, 239, 170, 251, 67, 77, 51, 133, 69, 249, 2, 127, 80, 60, 159, 168, 81, 163, 64, 143, 146, 157, 56, 245, 188, 182, 218, 33, 16, 255, 243, 210, 205, 12, 19, 236, 95, 151, 68, 23, 196, 167, 126, 61, 100, 93, 25, 115, 96, 129, 79, 220, 34, 42, 144, 136, 70, 238, 184, 20, 222, 94, 11, 219, 224, 50, 58, 10, 73, 6, 36, 92, 194, 211, 172, 98, 145, 149, 228, 121, 231, 200, 55, 109, 141, 213, 78, 169, 108, 86, 244, 234, 101, 122, 174, 8, 186, 120, 37, 46, 28, 166, 180, 198, 232, 221, 116, 31, 75, 189, 139, 138, 112, 62, 181, 102, 72, 3, 246, 14, 97, 53, 87, 185, 134, 193, 29, 158, 225, 248, 152, 17, 105, 217, 142, 148, 155, 30, 135, 233, 206, 85, 40, 223, 140, 161, 137, 13, 191, 230, 66, 104, 65, 153, 45, 15, 176, 84, 187, 22];
 }
 
 pub Int sbox_at(Int v) {
     List(Int) sb = aes_sbox_list();
-    Int idx = v + 1;
-    return sb[idx];
+    return sb[v];
 }
 
 pub Int m8() {
@@ -47,14 +45,13 @@ pub Int rcon_at(Int i) {
 }
 
 pub Int ke_w(List(Int) key, Int j, Int k) {
-    // word j byte k during pure key copy (words 0..3)
     Int idx = j * 4 + k;
-    return key[idx + 1];
+    return key[idx];
 }
 
 pub Int ke_word_byte(List(Int) w, Int j, Int k) {
     Int off = j * 4;
-    Int base = off + k + 1;
+    Int base = off + k;
     return w[base];
 }
 
@@ -92,23 +89,14 @@ pub List(Int) ke_build(List(Int) w, Int j, Int k, List(Int) acc) {
 }
 
 pub List(Int) aes128_key_expand(List(Int) key) {
-    List(Int) head = slice_seed(key, 1, 16, [0]);
+    List(Int) head = slice_seed(key, 0, 16, []);
     return ke_build(head, 4, 0, head);
-}
-
-pub List(Int) slice_seed(List(Int) b, Int start, Int count, List(Int) acc) {
-    if (count == 0) { return acc; }
-    Int v = b[start];
-    List(Int) acc2 = acc.concat([v]);
-    Int ns = start + 1;
-    Int nc = count - 1;
-    return slice_seed(b, ns, nc, acc2);
 }
 
 // ── AES block encryption ─────────────────────────────────────────────
 
 pub List(Int) ark(List(Int) st, List(Int) rk, Int rkoff, Int i, List(Int) acc) {
-    if (i > 16) { return acc; }
+    if (i >= 16) { return acc; }
     Int sv = st[i];
     Int kv = rk[rkoff + i];
     Int xv = sv ^ kv;
@@ -118,11 +106,11 @@ pub List(Int) ark(List(Int) st, List(Int) rk, Int rkoff, Int i, List(Int) acc) {
 }
 
 pub List(Int) add_round_key(List(Int) st, List(Int) rk, Int rkoff) {
-    return ark(st, rk, rkoff, 1, [0]);
+    return ark(st, rk, rkoff, 0, []);
 }
 
 pub List(Int) sub_bytes_acc(List(Int) st, Int i, List(Int) acc) {
-    if (i > 16) { return acc; }
+    if (i >= 16) { return acc; }
     Int v = sbox_at(st[i]);
     List(Int) acc2 = acc.concat([v]);
     Int ni = i + 1;
@@ -130,7 +118,7 @@ pub List(Int) sub_bytes_acc(List(Int) st, Int i, List(Int) acc) {
 }
 
 pub List(Int) sub_bytes(List(Int) st) {
-    return sub_bytes_acc(st, 1, [0]);
+    return sub_bytes_acc(st, 0, []);
 }
 
 // ShiftRows on flat column-major state: new[r + 4c] = old[r + 4*((c+r)%4)]
@@ -138,14 +126,13 @@ pub Int sr_idx(Int r, Int c) {
     Int cr = c + r;
     Int cm = cr % 4;
     Int col = cm * 4;
-    return r + col + 1;
+    return r + col;
 }
 
 pub List(Int) sr_build(List(Int) st, Int i, List(Int) acc) {
-    if (i > 16) { return acc; }
-    Int ii = i - 1;
-    Int r = ii % 4;
-    Int c = ii / 4;
+    if (i >= 16) { return acc; }
+    Int r = i % 4;
+    Int c = i / 4;
     Int src = sr_idx(r, c);
     Int v = st[src];
     List(Int) acc2 = acc.concat([v]);
@@ -154,17 +141,17 @@ pub List(Int) sr_build(List(Int) st, Int i, List(Int) acc) {
 }
 
 pub List(Int) shift_rows(List(Int) st) {
-    return sr_build(st, 1, [0]);
+    return sr_build(st, 0, []);
 }
 
 // MixColumns across all 4 columns; returns new state
 pub List(Int) mc_cols(List(Int) st, Int c, List(Int) acc) {
-    if (c > 3) { return acc; }
+    if (c >= 4) { return acc; }
     Int col = c * 4;
-    Int a0 = st[col + 1];
-    Int a1 = st[col + 2];
-    Int a2 = st[col + 3];
-    Int a3 = st[col + 4];
+    Int a0 = st[col];
+    Int a1 = st[col + 1];
+    Int a2 = st[col + 2];
+    Int a3 = st[col + 3];
     Int a02 = xtime(a0);
     Int a12 = xtime(a1);
     Int a22 = xtime(a2);
@@ -179,7 +166,7 @@ pub List(Int) mc_cols(List(Int) st, Int c, List(Int) acc) {
 }
 
 pub List(Int) mix_columns(List(Int) st) {
-    return mc_cols(st, 0, [0]);
+    return mc_cols(st, 0, []);
 }
 
 pub List(Int) aes_round(List(Int) st, List(Int) rk, Int round, Bool final) {
@@ -203,7 +190,7 @@ pub List(Int) aes_rounds(List(Int) st, List(Int) rk, Int round) {
 }
 
 pub List(Int) aes128_encrypt_block_sw(List(Int) rk, List(Int) blk) {
-    List(Int) s = ark(blk, rk, 0, 1, [0]);
+    List(Int) s = ark(blk, rk, 0, 0, []);
     return aes_rounds(s, rk, 0);
 }
 
@@ -217,7 +204,7 @@ pub List(Int) aes128_encrypt_block_sw(List(Int) rk, List(Int) blk) {
 pub UInt(128) pb_acc(List(Int) b, UInt(128) v, Int i) {
     if (i < 0) { return v; }
     UInt(128) sh = (UInt(128)) (i * 8);
-    UInt(128) byte = (UInt(128)) b[i + 1];
+    UInt(128) byte = (UInt(128)) b[i];
     UInt(128) v2 = v | (byte << sh);
     Int ni = i - 1;
     return pb_acc(b, v2, ni);
@@ -226,7 +213,7 @@ pub UInt(128) pack_block128(List(Int) b) {
     return pb_acc(b, 0, 15);
 }
 pub List(Int) ub_acc(UInt(128) v, Int i, List(Int) acc) {
-    if (i > 15) { return acc; }
+    if (i >= 16) { return acc; }
     UInt(128) sh = (UInt(128)) (i * 8);
     UInt(128) mw = (v >> sh) & ((UInt(128)) 255);
     Int b = (Int) mw;
@@ -235,13 +222,13 @@ pub List(Int) ub_acc(UInt(128) v, Int i, List(Int) acc) {
     return ub_acc(v, ni, acc2);
 }
 pub List(Int) unpack_block128(UInt(128) v) {
-    return ub_acc(v, 0, [0]);
+    return ub_acc(v, 0, []);
 }
 
 // Round key r (0..10) occupies expanded-key bytes [r*16+1 .. r*16+16].
 pub UInt(128) round_key128(List(Int) rk, Int r) {
-    Int start = r * 16 + 1;
-    return pack_block128(slice_seed(rk, start, 16, [0]));
+    Int start = r * 16;
+    return pack_block128(slice_seed(rk, start, 16, []));
 }
 
 pub List(Int) aes128_encrypt_block_hw(List(Int) rk, List(Int) blk) {
@@ -274,11 +261,11 @@ pub List(Int) aes128_encrypt_block(List(Int) rk, List(Int) blk) {
 // ── GF(2^128) GHASH ──────────────────────────────────────────────────
 
 pub List(Int) xor16(List(Int) a, List(Int) b) {
-    return x16(a, b, 1, [0]);
+    return x16(a, b, 0, []);
 }
 
 pub List(Int) x16(List(Int) a, List(Int) b, Int i, List(Int) acc) {
-    if (i > 16) { return acc; }
+    if (i >= 16) { return acc; }
     Int v = a[i] ^ b[i];
     List(Int) acc2 = acc.concat([v]);
     Int ni = i + 1;
@@ -286,12 +273,12 @@ pub List(Int) x16(List(Int) a, List(Int) b, Int i, List(Int) acc) {
 }
 
 pub List(Int) shr16(List(Int) v) {
-    return shr16_acc(v, 1, 0, [0]);
+    return shr16_acc(v, 0, 0, []);
 }
 
 // right-shift the 16-byte block one bit, bringing in zero
 pub List(Int) shr16_acc(List(Int) v, Int i, Int carry, List(Int) acc) {
-    if (i > 16) { return acc; }
+    if (i >= 16) { return acc; }
     Int nv = (v[i] >> 1) | carry;
     List(Int) acc2 = acc.concat([nv]);
     Int nc = (v[i] & 1) * 128;
@@ -301,13 +288,13 @@ pub List(Int) shr16_acc(List(Int) v, Int i, Int carry, List(Int) acc) {
 
 // MSB-first bitwise GF(2^128) multiply: X * Y
 pub List(Int) gf_mul_bit(List(Int) x, List(Int) z, List(Int) v, Int i) {
-    if (i > 127) { return z; }
+    if (i >= 128) { return z; }
     Int bytei = i / 8;
     Int shift = 7 - i % 8;
-    Int xb = x[bytei + 1];
+    Int xb = x[bytei];
     Int bv = (xb >> shift) & 1;
     List(Int) z2 = if (bv == 1) { xor16(z, v) } else { z };
-    Int lsb = v[16] & 1;
+    Int lsb = v[15] & 1;
     List(Int) vs = shr16(v);
     List(Int) v3 = if (lsb == 1) { gf_xor_e1(vs) } else { vs };
     Int ni = i + 1;
@@ -315,27 +302,27 @@ pub List(Int) gf_mul_bit(List(Int) x, List(Int) z, List(Int) v, Int i) {
 }
 
 pub List(Int) gf_xor_e1(List(Int) v) {
-    return e1_acc(v, 1, [0]);
+    return e1_acc(v, 0, []);
 }
 
 pub List(Int) e1_acc(List(Int) v, Int i, List(Int) acc) {
-    if (i > 16) { return acc; }
-    Int xored = v[1] ^ 225;
-    Int val = if (i == 1) { xored } else { v[i] };
+    if (i >= 16) { return acc; }
+    Int xored = v[0] ^ 225;
+    Int val = if (i == 0) { xored } else { v[i] };
     List(Int) acc2 = acc.concat([val]);
     Int ni = i + 1;
     return e1_acc(v, ni, acc2);
 }
 
 pub List(Int) gf_mul(List(Int) x, List(Int) y) {
-    List(Int) z0 = zeros_seed([0], 16);
+    List(Int) z0 = zeros_seed([], 16);
     return gf_mul_bit(x, z0, y, 0);
 }
 
 // GHASH: Y = ((Y ^ block) * H) over data (padded to 16-byte blocks)
 pub List(Int) ghash_blocks(List(Int) h, List(Int) y, List(Int) data, Int off, Int remaining) {
     if (remaining <= 0) { return y; }
-    List(Int) blk = slice_seed(data, off, 16, [0]);
+    List(Int) blk = slice_seed(data, off, 16, []);
     List(Int) xored = xor16(y, blk);
     List(Int) y2 = gf_mul(xored, h);
     Int used = 16;
@@ -369,18 +356,18 @@ pub List(Int) be64_build(Int v, Int shift, List(Int) acc) {
 pub List(Int) gcm_len_block(Int alen, Int clen) {
     Int ab = alen * 8;
     Int cb = clen * 8;
-    List(Int) abe = be64_build(ab, 56, [0]);
-    List(Int) cbe = be64_build(cb, 56, [0]);
-    return sconcat(abe, cbe);
+    List(Int) abe = be64_build(ab, 56, []);
+    List(Int) cbe = be64_build(cb, 56, []);
+    return abe.concat(cbe);
 }
 
 // GCM counter blocks: J0 = IV || 00000001; inc32 increments last 4 bytes
 pub List(Int) inc32(List(Int) ctr) {
-    List(Int) head = slice_seed(ctr, 1, 12, [0]);
-    Int b12 = ctr[13];
-    Int b13 = ctr[14];
-    Int b14 = ctr[15];
-    Int b15 = ctr[16];
+    List(Int) head = slice_seed(ctr, 0, 12, []);
+    Int b12 = ctr[12];
+    Int b13 = ctr[13];
+    Int b14 = ctr[14];
+    Int b15 = ctr[15];
     Int hi = b12 * 256 + b13;
     Int full = hi * 65536 + b14 * 256 + b15;
     Int f1 = full + 1;
@@ -391,22 +378,21 @@ pub List(Int) inc32(List(Int) ctr) {
     return head.concat([n0, n1, n2, n3]);
 }
 
-// CTR mode XOR starting from counter block cb over seeded data
+// CTR mode XOR
 pub List(Int) ctr_xor(List(Int) rk, List(Int) cb, List(Int) data, Int done, List(Int) acc) {
-    Int total = data.len() - 1;
-    if (total < 1) { return acc; }
+    Int total = data.len();
     if (done >= total) { return acc; }
     List(Int) ks = aes128_encrypt_block(rk, cb);
     Int left = total - done;
     Int take = if (left < 16) { left } else { 16 };
-    List(Int) mixed = ctr_take(ks, data, done, 1, take, acc);
+    List(Int) mixed = ctr_take(ks, data, done, 0, take, acc);
     Int ndone = done + take;
     List(Int) ncb = inc32(cb);
     return ctr_xor(rk, ncb, data, ndone, mixed);
 }
 
 pub List(Int) ctr_take(List(Int) ks, List(Int) data, Int done, Int i, Int take, List(Int) acc) {
-    if (i > take) { return acc; }
+    if (i >= take) { return acc; }
     Int pos = done + i;
     Int v = data[pos] ^ ks[i];
     List(Int) acc2 = acc.concat([v]);
@@ -417,15 +403,15 @@ pub List(Int) ctr_take(List(Int) ks, List(Int) data, Int done, Int i, Int take, 
 // ── public API ───────────────────────────────────────────────────────
 
 pub List(Int) gcm_mac_data(List(Int) aad, List(Int) ct) {
-    Int alen = aad.len() - 1;
-    Int clen = ct.len() - 1;
-    List(Int) za = zeros_seed([0], pad16(alen));
-    List(Int) zc = zeros_seed([0], pad16(clen));
+    Int alen = aad.len();
+    Int clen = ct.len();
+    List(Int) za = zeros_seed([], pad16(alen));
+    List(Int) zc = zeros_seed([], pad16(clen));
     List(Int) lb = gcm_len_block(alen, clen);
-    List(Int) p1 = sconcat(aad, za);
-    List(Int) p2 = sconcat(p1, ct);
-    List(Int) p3 = sconcat(p2, zc);
-    return sconcat(p3, lb);
+    List(Int) p1 = aad.concat(za);
+    List(Int) p2 = p1.concat(ct);
+    List(Int) p3 = p2.concat(zc);
+    return p3.concat(lb);
 }
 
 // returns ciphertext || 16-byte tag
@@ -433,37 +419,35 @@ pub List(Int) aes128_gcm_seal(List(Int) key, List(Int) iv, List(Int) plaintext, 
     List(Int) rk = aes128_key_expand(key);
     List(Int) ctrbytes = [0, 0, 0, 1];
     List(Int) j0 = iv.concat(ctrbytes);
-    List(Int) hblk = aes128_encrypt_block(rk, zeros_seed([0], 16));
+    List(Int) hblk = aes128_encrypt_block(rk, zeros_seed([], 16));
     List(Int) ej0 = aes128_encrypt_block(rk, j0);
     List(Int) ctr1 = inc32(j0);
-    List(Int) ct = ctr_xor(rk, ctr1, plaintext, 0, [0]);
+    List(Int) ct = ctr_xor(rk, ctr1, plaintext, 0, []);
     List(Int) mi = gcm_mac_data(aad, ct);
     Int milen = mi.len();
-    Int micount = milen - 1;
-    List(Int) y0 = zeros_seed([0], 16);
-    List(Int) s_ = ghash_blocks(hblk, y0, mi, 1, micount);
+    List(Int) y0 = zeros_seed([], 16);
+    List(Int) s_ = ghash_blocks(hblk, y0, mi, 0, milen);
     List(Int) tagraw = xor16(s_, ej0);
-    List(Int) tag = slice_seed(tagraw, 1, 16, [0]);
-    return sconcat(ct, tag);
+    List(Int) tag = slice_seed(tagraw, 0, 16, []);
+    return ct.concat(tag);
 }
 
 pub Bool aes128_gcm_open(List(Int) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
-    Int total = ct_and_tag.len() - 1;
+    Int total = ct_and_tag.len();
     Int clen = total - 16;
-    List(Int) ct = slice_seed(ct_and_tag, 1, clen, [0]);
-    Int tstart = clen + 1;
-    List(Int) tag = slice_seed(ct_and_tag, tstart, 16, [0]);
+    List(Int) ct = slice_seed(ct_and_tag, 0, clen, []);
+    Int tstart = clen;
+    List(Int) tag = slice_seed(ct_and_tag, tstart, 16, []);
     List(Int) rk = aes128_key_expand(key);
     List(Int) ctrbytes = [0, 0, 0, 1];
     List(Int) j0 = iv.concat(ctrbytes);
-    List(Int) hblk = aes128_encrypt_block(rk, zeros_seed([0], 16));
+    List(Int) hblk = aes128_encrypt_block(rk, zeros_seed([], 16));
     List(Int) ej0 = aes128_encrypt_block(rk, j0);
     List(Int) mi = gcm_mac_data(aad, ct);
     Int milen = mi.len();
-    Int micount = milen - 1;
-    List(Int) y0 = zeros_seed([0], 16);
-    List(Int) s_ = ghash_blocks(hblk, y0, mi, 1, micount);
+    List(Int) y0 = zeros_seed([], 16);
+    List(Int) s_ = ghash_blocks(hblk, y0, mi, 0, milen);
     List(Int) tagraw = xor16(s_, ej0);
-    List(Int) expect = slice_seed(tagraw, 1, 16, [0]);
+    List(Int) expect = slice_seed(tagraw, 0, 16, []);
     return ct_equal(expect, tag);
 }

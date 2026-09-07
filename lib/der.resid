@@ -100,7 +100,7 @@ pub Int der_content_pos(List(Int) data, Int pos) {
     return r;
 }
 
-// Slice out the content bytes of the element at `pos` as a fresh seeded list.
+// Slice out the content bytes of the element at `pos` as a fresh list.
 pub List(Int) der_content(List(Int) data, Int pos) {
     DerTlv t = der_next(data, pos);
     Int start = pos + t.hdr_len;
@@ -110,7 +110,7 @@ pub List(Int) der_content(List(Int) data, Int pos) {
 
 
 pub List(Int) der_slice_seeded(List(Int) data, Int start, Int stop) {
-    List(Int) out = [0];
+    List(Int) out = [];
     return der_slice_acc(data, start, stop, start, out);
 }
 
@@ -131,10 +131,10 @@ pub List(Int) der_slice_acc(List(Int) data, Int start, Int stop, Int i, List(Int
 pub Int der_int_value(List(Int) data, Int pos) {
     List(Int) c = der_content(data, pos);
     Int n = c.len() - 1;
-    if (n == 0 || n > 8) { return -1; }
-    Int b1 = c[1];
-    if (b1 >= 128) { return -1; }
-    return der_int_acc(c, 2, n, b1);
+    if (n < 0 || n > 7) { return -1; }
+    Int b0 = c[0];
+    if (b0 >= 128) { return -1; }
+    return der_int_acc(c, 1, n, b0);
 }
 
 
@@ -178,8 +178,8 @@ pub Str oid_rest(List(Int) c, Int i, Int n, Str acc, Int accv, Bool inarc) {
 pub Str der_oid_str(List(Int) data, Int pos) {
     List(Int) c = der_content(data, pos);
     Int n = c.len() - 1;
-    if (n == 0) { return ""; }
-    Int b0 = c[1];
+    if (n < 0) { return ""; }
+    Int b0 = c[0];
     Int raw1 = b0 / 40;
     Int prod = raw1 * 40;
     Int sub40 = b0 - 40;
@@ -188,5 +188,5 @@ pub Str der_oid_str(List(Int) data, Int pos) {
     Int arc1 = if (big) { 2 } else { raw1 };
     Int rem = if (big) { sub40 } else { rem0 };
     Str head = IntToString(arc1) + "." + IntToString(rem);
-    return oid_rest(c, 2, n, head, 0, false);
+    return oid_rest(c, 1, n, head, 0, false);
 }
