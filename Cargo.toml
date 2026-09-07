@@ -15,4 +15,5 @@ members = [
     "tools/resid-graph",
     "tools/resid-why",
     "tools/resid-lsp",
+    "tools/resid-lsp-full",
 ]

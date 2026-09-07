@@ -1,8 +1,8 @@
 {
   "name": "resid-lang",
   "displayName": "Resid Language Support",
-  "description": "Syntax highlighting, snippets, bracket matching and language configuration for the Resid language (eager compile-time reduction of first-class knowledge).",
-  "version": "0.1.0",
+  "description": "Syntax highlighting, snippets, bracket matching, language configuration, and LSP support (diagnostics + hover for residual notes) for the Resid language.",
+  "version": "0.2.0",
   "publisher": "resid",
   "license": "MIT",
   "engines": {
@@ -10,12 +10,14 @@
   },
   "categories": [
     "Programming Languages",
-    "Snippets"
+    "Snippets",
+    "Linters"
   ],
   "keywords": [
     "resid",
     "language",
-    "compiler"
+    "compiler",
+    "lsp"
   ],
   "repository": {
     "type": "git",
@@ -58,6 +60,40 @@
         "language": "resid",
         "path": "./snippets/resid.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Resid",
+      "properties": {
+        "resid.lsp.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the Resid LSP server (resid-lsp) for diagnostics and hover."
+        },
+        "resid.lsp.serverPath": {
+          "type": "string",
+          "default": "resid-lsp",
+          "description": "Path or command to the resid-lsp binary. Use absolute path if not in PATH."
+        }
+      }
+    }
+  },
+  "activationEvents": [
+    "onLanguage:resid",
+    "onLanguage:resid-manifest"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0",
+    "vscode-languageclient": "^8.0.0",
+    "vsce": "^2.15.0"
   }
 }
