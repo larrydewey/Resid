@@ -312,12 +312,10 @@ Remaining conformance gaps are minimal:
 - **Knowledge cache subsystem (§34, §36)**: Expression-level reduction cache (`resid_cache::KnowledgeStore`) with content-addressed keys (expression hash + environment hash). CBOR schema for `KnowledgeEntry` (kind, expr_hash, env_hash, value, caps). Kinds: ReducedExpr, ProviderResult, TypeInfo, ConstraintProof, BehaviorResolution. Values: Int(i128), Bool, Str. Integrated with codegen's comptime β-reduction: cache checked before `reduce_call`, results stored after successful reduction. Capability-gated writes per §21.4 (`RESID_CAP_GRANT` env). 17 tests in `resid-cache` (8 new knowledge cache tests + 9 existing artifact cache tests). Persisted to `.resid-knowledge.cbor` in build output dir.
 
 Strategic work items:
-- `Str` rope-backed representation (deferred — C function and codegen
-  decl in place, lib/h2_bs_acc rewrite pending).
-- `resid why` and `resid-lsp` hardening: more filter options, editor
-  integration polish.
-- Crypto: additional algorithms as needed (currently complete through
-  TLS 1.3 + HTTP/2).
+- **Graph reduction stage-2 parity (§11, §36)**: port `--graph-reduce` pipeline to self-hosted driver — requires IR data structures, reduction engine, and retrofit pass in `examples/typecheck.resid` + `examples/codegen.resid`
+- `Str` rope-backed representation (deferred — C function and codegen decl in place, lib/h2_bs_acc rewrite pending).
+- `resid why` and `resid-lsp` hardening: more filter options, editor integration polish.
+- Crypto: additional algorithms as needed (currently complete through TLS 1.3 + HTTP/2).
 
 ---
 
@@ -350,6 +348,28 @@ parity remains for the stage-1-only features.
   by Rust-first ordering.
 - Hard constraint from the audit: a feature used by the driver's own
   sources can never precede Rust support for it.
+
+### Stage-2 Parity Blocker: Sandbox (§21)
+
+**Sandbox is fully implemented in the Rust pipeline** (all 7 e2e tests pass:
+`run_sandbox_transitive_attenuation`, `run_sandbox_enforcement`,
+`run_sandbox_force_time_guard_present`, `run_sandbox_force_time_guard_fires`,
+`run_sandbox_handle_entry_file_param`, `run_sandbox_handle_entry_file_argument`,
+`run_sandbox_capability_mode_readonly`).
+
+**Stage-2 parity is BLOCKED** by the bootstrap parser (`examples/parser.resid`):
+- The stage-2 parser only supports a minimal subset: basic functions,
+  if/else, while, simple binary ops, list literals, calls
+- It uses `skip_body` — does NOT parse function bodies
+- Sandbox body parsing in `typecheck.resid`/`codegen.resid` requires:
+  - String slicing/concatenation in loops (`caps_rem != ""`)
+  - Dynamic `if` conditions (`ceiling != ""`)
+  - `str_find_char`, `str_slice` on runtime strings
+- **None of this is parseable by `parser.resid`** — bootstrap tests fail
+
+**Unblocking requires a parser bootstrap milestone:** enhance `parser.resid`
+to parse sandbox bodies (or at least record ceilings per-function) using
+only syntax the current parser supports. This is a significant rewrite.
 
 ### MISSING — item 1 largely done; only §21 trailing gaps remain
 
