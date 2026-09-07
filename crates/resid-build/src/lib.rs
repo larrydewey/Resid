@@ -900,6 +900,12 @@ pub fn build(manifest: &Manifest, profile: Profile, out_dir: &Path) -> Result<Ar
     // Codegen.
     let cx = inkwell::context::Context::create();
     let mut cg = resid_codegen::CodeGen::new(&cx, &manifest.name);
+    
+    // Set up knowledge cache for expression-level reduction caching (§34, §36).
+    let knowledge_cache_path = out_dir.join(".resid-knowledge.cbor");
+    let knowledge_cache = resid_cache::KnowledgeStore::open(&knowledge_cache_path);
+    cg.set_knowledge_cache(knowledge_cache);
+    
     if let Err(e) = cg.generate(&unit) {
         return err(format!("codegen failed: {e}"));
     }

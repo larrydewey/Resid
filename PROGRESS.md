@@ -9,9 +9,9 @@
 
 ## 0. Current Snapshot
 
-**665 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
+**673 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
   resid-codegen 137, resid-build 47, resid-fmt 5,
-  resid-cache 9, resid-notes 2, resid-why 7, resid-lsp 5,
+  resid-cache 17, resid-notes 2, resid-why 7, resid-lsp 5,
   resid-graph 4, resid-builtin 0, residc 0 unit + 111 e2e).
 
 ### Major capabilities
@@ -309,6 +309,7 @@ Remaining conformance gaps are minimal:
 **Completed this session:**
 - **0-based list migration**: All crypto/TLS libs (`lib/crypto.resid`, `der`, `x509`, `rsa`, `chain`, `tls`, `tlsmsg`, `aesgcm`, `chacha`, `ed25519`, `x25519`, `ec256`, `h2`) now use pure 0-based indexing (no phantom seed), with `list.len()` = real count, `slice_seed(b,start,count,[])`, `sconcat(a,b)=a.concat(b)`. All e2e green: `run_x509_in_resid`, `run_rsa_pkcs1_verify_in_resid` (stage-1+stage-2), `run_ecdsa_p256_verify_in_resid`, `run_chain_san_validity_in_resid`, `run_tls13_framing_in_resid`, full crypto suite (SHA/HMAC/Ed25519/ChaCha/AES/X25519).
 - **Stage-2 empty-list parity**: Fixed driver's typechecker (`params_accept_at` empty-adopt for `List(Unknown)`) and codegen (`[]` → `resid_list_new(0,null,…)`) in `examples/typecheck.resid` + `examples/codegen.resid`; regenerated `examples/driver.resid` (6950 lines). Verified by `bootstrap_*` tests (12/12 green) and `run_rsa_pkcs1_verify_in_resid` stage-2 path.
+- **Knowledge cache subsystem (§34, §36)**: Expression-level reduction cache (`resid_cache::KnowledgeStore`) with content-addressed keys (expression hash + environment hash). CBOR schema for `KnowledgeEntry` (kind, expr_hash, env_hash, value, caps). Kinds: ReducedExpr, ProviderResult, TypeInfo, ConstraintProof, BehaviorResolution. Values: Int(i128), Bool, Str. Integrated with codegen's comptime β-reduction: cache checked before `reduce_call`, results stored after successful reduction. Capability-gated writes per §21.4 (`RESID_CAP_GRANT` env). 17 tests in `resid-cache` (8 new knowledge cache tests + 9 existing artifact cache tests). Persisted to `.resid-knowledge.cbor` in build output dir.
 
 Strategic work items:
 - `Str` rope-backed representation (deferred — C function and codegen
