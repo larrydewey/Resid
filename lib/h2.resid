@@ -50,7 +50,7 @@ pub H2FrameHdr h2_frame_hdr(List(Int) b, Int pos) {
     return H2FrameHdr { length: len, stype: ty, flags: fl, sid: sid, bad: false };
 }
 
-// Encode a frame header into a fresh seeded list (9 data bytes).
+// Encode a frame header into a fresh list (9 data bytes).
 pub List(Int) h2_frame_hdr_enc(Int length, Int stype, Int flags, Int sid) {
     Int b2 = length / 65536;
     Int r1 = length - b2 * 65536;
@@ -65,7 +65,7 @@ pub List(Int) h2_frame_hdr_enc(Int length, Int stype, Int flags, Int sid) {
     return [0, b2, b1, b0, stype, flags, s3, s2, s1, s0];
 }
 
-// Concatenate two seeded lists (seed dropped from the right operand).
+// Concatenate two lists (seed dropped from the right operand).
 pub List(Int) h2_cat(List(Int) a, List(Int) b) {
     // Append ALL of b's data bytes (b's seed sits at index 0).
     return h2_cat_acc(b, 1, b.len() - 1, 1, a);
@@ -127,7 +127,7 @@ pub List(Int) h2_cat_all(List(Int) b, Int start, Int last, Int i, List(Int) acc)
 
 // ─── SETTINGS payload helpers ─────────────────────────────────────────
 
-// u16/u32 big-endian byte helpers (seeded single-element lists).
+// u16/u32 big-endian byte helpers ( single-element lists).
 pub List(Int) h2_u16_bytes(Int x) {
     Int hi = x / 256;
     Int lo = x - hi * 256;
@@ -309,7 +309,7 @@ pub HpInt hp_int_cont(List(Int) b, Int pos, Int pfxmask, Int acc, Int m) {
     return hp_int_cont(b, pos + 1, pfxmask, step, nm);
 }
 
-// Raw octets [start..stop] (inclusive, seeded layout) as a Str.
+// Raw octets [start..stop] (inclusive, layout) as a Str.
 pub Str h2_bytes_str(List(Int) b, Int start, Int stop) {
     return h2_bs_acc(b, start, stop, start, "");
 }
@@ -666,7 +666,7 @@ pub List(Int) h2_hc_chunk(Int sid, Int extra_flags, List(Int) blk, Int i, Bool f
     Int take = h2_pick(fits, rem, 16384);
     Int lasti = i + take - 1;
     Bool fin = lasti >= n;
-    List(Int) piece = slice_seed(blk, i, take, [0]);
+    List(Int) piece = slice_seed(blk, i, take, []);
     Int basef = h2_pick(first, extra_flags, 0);
     Int endh = h2_pick(fin, 4, 0);
     Int flg = basef + endh;
@@ -691,7 +691,7 @@ pub List(Int) h2_data_acc(Int sid, List(Int) payload, Bool end, Int i) {
     Int take = h2_pick(fits, rem, 16384);
     Int lasti = i + take - 1;
     Bool fin = lasti >= n;
-    List(Int) piece = slice_seed(payload, i, take, [0]);
+    List(Int) piece = slice_seed(payload, i, take, []);
     Int flg = h2_pick(fin && end, 1, 0);
     List(Int) f = h2_frame(h2_t_data(), flg, sid, piece);
     if (fin) { return f; }

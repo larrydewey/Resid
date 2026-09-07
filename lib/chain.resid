@@ -34,7 +34,7 @@ pub Bool eq_bytes(List(Int) a, List(Int) b) {
     Int alen = a.len() - 1;
     Int blen = b.len() - 1;
     if (alen != blen) { return false; }
-    return eq_bytes_at(a, b, 1, alen);
+    return eq_bytes_at(a, b, 0, alen);
 }
 
 // Raw DER of a top-level certificate element by index
@@ -52,7 +52,7 @@ pub List(Int) cert_elem_at(List(Int) cert, Int cur, Int j, Int idx) {
 }
 
 pub List(Int) cert_elem(List(Int) cert, Int idx) {
-    Int pos = der_content_pos(cert, 1);
+    Int pos = der_content_pos(cert, 0);
     return cert_elem_at(cert, pos, 0, idx);
 }
 
@@ -117,7 +117,7 @@ pub Bool ci_eq_bytes(List(Int) a, List(Int) b) {
     Int alen = a.len() - 1;
     Int blen = b.len() - 1;
     if (alen != blen) { return false; }
-    return ci_eq_at(a, b, 1, alen);
+    return ci_eq_at(a, b, 0, alen);
 }
 
 pub Int dns_find_dot(List(Int) host, Int i, Int last) {
@@ -140,19 +140,18 @@ pub Bool ci_eq_range(List(Int) a, Int ai, List(Int) b, Int bi, Int count) {
 }
 
 pub Bool dns_match(List(Int) host, List(Int) pat) {
-    Int plen = pat.len() - 1;
-    Int p1 = 1;
-    Int star = pat[p1];
+    Int plen = pat.len();
+    Int star = pat[0];
     if (star == 42 && plen > 2) {
-        Int hlen = host.len() - 1;
+        Int hlen = host.len();
         Int suflen = plen - 2;
         if (hlen < suflen + 2) { return false; }
-        Int dot = dns_find_dot(host, 1, hlen);
+        Int dot = dns_find_dot(host, 0, hlen - 1);
         if (dot < 2) { return false; }
-        Int rem = hlen - dot;
+        Int rem = hlen - 1 - dot;
         if (rem != suflen) { return false; }
         Int dnext = dot + 1;
-        return ci_eq_range(host, dnext, pat, 3, suflen);
+        return ci_eq_range(host, dnext, pat, 2, suflen);
     }
     return ci_eq_bytes(host, pat);
 }
@@ -234,10 +233,14 @@ pub Bool rsa_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
     Int ep = x509_skip_tlv(keyb, np);
     List(Int) nc = der_content(keyb, np);
     Int ncl = nc.len() - 1;
-    List(Int) nb2 = der_slice_seeded(nc, 2, ncl);
+    List(Int) nb2 = der_slice_seeded(nc, 1, ncl);
     Int ev = der_int_value(keyb, ep);
     List(Int) nl = bn_from_be(nb2, w);
-    List(Int) sl = bn_from_be(sigb, w);
+    DerTlv st = der_next(sigb, 0);
+    Int sc = st.hdr_len + 2;
+    Int sstop = sc + 255;
+    List(Int) sbytes = der_slice_seeded(sigb, sc, sstop);
+    List(Int) sl = bn_from_be(sbytes, w);
     List(Int) rec = bn_montexp(sl, ev, nl, w);
     List(Int) digest = sha256_bytes(tbs);
     List(Int) em = pkcs1_em_sha256(digest, 256);
@@ -251,7 +254,7 @@ pub Bool rsa_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
 pub Bool ec_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
     List(Int) digest = sha256_bytes(tbs);
     Int(256) eint = ec_from_be(digest);
-    Int usbits = der_content_pos(sigb, 1);
+    Int usbits = der_content_pos(sigb, 0);
     Int seqc = usbits + 1;
     Int rc = der_content_pos(sigb, seqc);
     List(Int) rb = der_content(sigb, rc);
@@ -259,8 +262,8 @@ pub Bool ec_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
     List(Int) sbv = der_content(sigb, spos);
     Int(256) rvv = ec_from_be(rb);
     Int(256) svv = ec_from_be(sbv);
-    List(Int) xbv = der_slice_seeded(keyb, 3, 34);
-    List(Int) ybv = der_slice_seeded(keyb, 35, 66);
+    List(Int) xbv = der_slice_seeded(keyb, 2, 33);
+    List(Int) ybv = der_slice_seeded(keyb, 34, 65);
     Int(256) qx = ec_from_be(xbv);
     Int(256) qy = ec_from_be(ybv);
     Int(256) vx = ecdsa_vx(eint, rvv, svv, qx, qy);
@@ -329,14 +332,13 @@ pub Int san_gns_end(List(Int) cert, Int gseq) {
 // ─── RSA-PSS (RSASSA-PSS, SHA-256, MGF1-SHA256, sLen=32) verify ──────
 // TLS 1.3 rsa_pss_rsae_sha256 (0x0804) CertificateVerify support.
 
-// Big-endian u32 as a seeded 4-byte list.
+// Big-endian u32 as a 4-byte list.
 pub List(Int) pss_be32(Int v) {
     Int b0 = (v / 16777216) & 255;
     Int b1 = (v / 65536) & 255;
     Int b2 = (v / 256) & 255;
     Int b3 = v & 255;
-    List(Int) seed = [0];
-    return seed.concat([b0, b1, b2, b3]);
+    return [b0, b1, b2, b3];
 }
 
 pub List(Int) pss_take(List(Int) okm, Int i, Int len, List(Int) acc) {
@@ -354,7 +356,8 @@ pub List(Int) pss_mgf1_acc(List(Int) seed, Int need, Int c, List(Int) acc) {
     List(Int) inp = bn_cat(seed, ctr);
     List(Int) d = sha256_bytes(inp);
     Int take = if (need < 32) { need } else { 32 };
-    List(Int) part = pss_take(d, 1, take, [0]);
+    Int stop = take - 1;
+    List(Int) part = pss_take(d, 0, stop, []);
     List(Int) acc2 = bn_cat(acc, part);
     Int nneed = need - take;
     Int nc = c + 1;
@@ -362,15 +365,15 @@ pub List(Int) pss_mgf1_acc(List(Int) seed, Int need, Int c, List(Int) acc) {
 }
 
 pub List(Int) pss_mgf1(List(Int) seed, Int need) {
-    return pss_mgf1_acc(seed, need, 0, [0]);
+    return pss_mgf1_acc(seed, need, 0, []);
 }
 
-// w-limb little-endian limbs -> 2w-byte big-endian seeded byte list.
+// w-limb little-endian limbs -> 2w-byte big-endian byte list.
 pub List(Int) bn_to_be_acc(List(Int) l, Int total, Int k, List(Int) acc) {
     if (k >= total) { return acc; }
     Int d = total - 1 - k;
     Int limbn = d / 2;
-    Int v = l[limbn + 1];
+    Int v = l[limbn];
     Int hb = v / 256;
     Int lb = v & 255;
     // d odd -> this BE position holds the limb's HIGH byte
@@ -382,13 +385,13 @@ pub List(Int) bn_to_be_acc(List(Int) l, Int total, Int k, List(Int) acc) {
 
 pub List(Int) bn_to_be(List(Int) l, Int w) {
     Int total = w + w;
-    return bn_to_be_acc(l, total, 0, [0]);
+    return bn_to_be_acc(l, total, 0, []);
 }
 
 // Check DB real bytes 1..190 are zero.
 pub Bool pss_db_zeros(List(Int) db, Int i, Int last) {
     if (i > last) { return true; }
-    Int b = db[i + 1];
+    Int b = db[i];
     if (b != 0) { return false; }
     Int ni = i + 1;
     return pss_db_zeros(db, ni, last);
@@ -401,46 +404,45 @@ pub Bool rsa_pss_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sigb
     Int w = 128;
     Int k = 256;
     // keyb = BIT STRING content: 00 (unused bits) || DER SEQ{INTEGER n,
-    // INTEGER e}. The SEQ tag therefore sits at seeded index 2.
-    List(Int) seqc = der_content(keyb, 2);
-    List(Int) nv = der_content(seqc, 1);
-    Int epn = x509_skip_tlv(seqc, 1);
+    // INTEGER e}. The SEQ tag therefore sits at index 1.
+    List(Int) seqc = der_content(keyb, 1);
+    List(Int) nv = der_content(seqc, 0);
+    Int epn = x509_skip_tlv(seqc, 0);
     Int ev = der_int_value(seqc, epn);
     // modulus value has a leading 00 sign byte: take the final 256 bytes
     // (pss_take's last arg is the inclusive end index)
-    Int nb = w + w + 1;
-    List(Int) nb2 = pss_take(nv, 2, nb, [0]);
+    Int nb = w + w;
+    List(Int) nb2 = pss_take(nv, 1, nb, []);
     List(Int) nl = bn_from_be(nb2, w);
     List(Int) sl = bn_from_be(sigb, w);
     List(Int) rec = bn_montexp(sl, ev, nl, w);
     List(Int) em = bn_to_be(rec, w);
     // trailer byte
-    Int trailer = em[k];
+    Int trailer = em[255];
     Bool trok = trailer == 188;
     if (!trok) { return false; }
-    // split: maskedDB = em[1..223], H = em[224..255]
+    // split: maskedDB = em[0..222], H = em[223..254]
     Int dblen = k - 32 - 1;
-    List(Int) maskeddb = pss_take(em, 1, dblen, [0]);
-    Int hstart = dblen + 1;
+    List(Int) maskeddb = pss_take(em, 0, dblen - 1, []);
+    Int hstart = dblen;
     Int hend = hstart + 31;
-    List(Int) hval = pss_take(em, hstart, hend, [0]);
+    List(Int) hval = pss_take(em, hstart, hend, []);
     // unmask
     List(Int) dbmask = pss_mgf1(hval, dblen);
-    List(Int) db = xor_lists(maskeddb, dbmask, 1, [0]);
+    List(Int) db = xor_lists(maskeddb, dbmask, 0, []);
     // leftmost bit of DB[0] must be zero (DB[0]==0 required anyway)
     // PS zero run: real bytes 1..189 must be zero (byte 0 carries the
     // emBits padding bit, which OpenSSL does not force to zero here)
     Bool zok = pss_db_zeros(db, 1, 189);
     if (!zok) { return false; }
-    Int sep = db[191];
+    Int sep = db[190];
     Bool sepok = sep == 1;
     if (!sepok) { return false; }
-    // salt = DB[192..223] (real bytes 191..222)
-    List(Int) salt = pss_take(db, 192, 223, [0]);
+    // salt = DB real bytes 191..222
+    List(Int) salt = pss_take(db, 191, 222, []);
     // M' = 00^8 || Hash(content) || salt
-    // eight zero bytes; literals are seeded so build via concat
-    List(Int) mz = [0];
-    List(Int) m0 = mz.concat([0, 0, 0, 0, 0, 0, 0, 0]);
+    // eight zero bytes
+    List(Int) m0 = [0, 0, 0, 0, 0, 0, 0, 0];
     List(Int) hp = sha256_bytes(content);
     List(Int) m1 = bn_cat(m0, hp);
     List(Int) mprime = bn_cat(m1, salt);
@@ -458,7 +460,7 @@ pub Bool tls_server_cert_ok(List(Int) cert, List(Int) host, Int now) {
     return san_has_match(cert, host);
 }
 
-// String -> seeded byte list (ASCII codepoints).
+// String -> byte list (ASCII codepoints).
 pub List(Int) str_bytes_acc(Str s, Int i, List(Int) acc) {
     Int n = str_len(s);
     if (i >= n) { return acc; }
@@ -469,5 +471,5 @@ pub List(Int) str_bytes_acc(Str s, Int i, List(Int) acc) {
 }
 
 pub List(Int) str_to_bytes(Str s) {
-    return str_bytes_acc(s, 0, [0]);
+    return str_bytes_acc(s, 0, []);
 }

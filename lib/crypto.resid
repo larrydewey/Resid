@@ -5,8 +5,7 @@
 // integration (later milestone).
 //
 // No mutation: every loop is tail recursion; every update rebuilds the list.
-// 32-bit semantics come from masking with 0xFFFFFFFF after each add. Lists
-// carry a dummy seed at index 0 so no empty-list literal is ever built.
+// 32-bit semantics come from masking with 0xFFFFFFFF after each add.
 
 // ─── Bit helpers ────────────────────────────────────────────────
 
@@ -59,10 +58,18 @@ pub List(Int) msg_bytes(Str msg, Int i, List(Int) acc) {
     return msg_bytes(msg, ni, acc2);
 }
 
-// Seeded with one dummy element (index 0); real bytes start at index 1.
+// Zero-based: real bytes at indices 0..
 pub List(Int) bytes_of(Str msg) {
-    List(Int) seeded = [0];
-    return msg_bytes(msg, 0, seeded);
+    return msg_bytes(msg, 0, []);
+}
+
+pub List(Int) slice_seed(List(Int) b, Int start, Int count, List(Int) acc) {
+    if (count <= 0) { return acc; }
+    Int v = b[start];
+    List(Int) acc2 = acc.concat([v]);
+    Int ns = start + 1;
+    Int nc = count - 1;
+    return slice_seed(b, ns, nc, acc2);
 }
 
 pub List(Int) zeros_l(List(Int) acc, Int count) {
@@ -84,8 +91,7 @@ pub List(Int) length_bytes(Int bits, Int shift, List(Int) acc) {
 }
 
 pub List(Int) pad_bytes(List(Int) msg) {
-    // msg is seeded: real byte count is len-1.
-    Int l = msg.len() - 1;
+    Int l = msg.len();
     List(Int) p = msg.concat([128]);
     Int l9 = l + 9;
     Int blocks = (l9 + 63) / 64;
@@ -101,14 +107,10 @@ pub List(Int) pad_bytes(List(Int) msg) {
 pub List(Int) bw_acc(List(Int) m, Int base, Int j, List(Int) acc) {
     if (j >= 16) { return acc; }
     Int off = base + (j * 4);
-    Int b0i = off + 1;
-    Int o1 = off + 2;
-    Int o2 = off + 3;
-    Int o3 = off + 4;
-    Int b0 = m[b0i];
-    Int b1 = m[o1];
-    Int b2 = m[o2];
-    Int b3 = m[o3];
+    Int b0 = m[off];
+    Int b1 = m[off + 1];
+    Int b2 = m[off + 2];
+    Int b3 = m[off + 3];
     Int sh0 = b0 << 24;
     Int sh1 = b1 << 16;
     Int sh2 = b2 << 8;
@@ -121,30 +123,25 @@ pub List(Int) bw_acc(List(Int) m, Int base, Int j, List(Int) acc) {
 }
 
 pub List(Int) block_words(List(Int) m, Int base) {
-    List(Int) seeded = [0];
-    return bw_acc(m, base, 0, seeded);
+    return bw_acc(m, base, 0, []);
 }
 
 pub List(Int) ext_w(List(Int) w, Int i) {
     if (i >= 64) { return w; }
-    Int a15 = (i - 15) + 1;
-    Int a2v = (i - 2) + 1;
-    Int a7 = (i - 7) + 1;
-    Int a16 = (i - 16) + 1;
-    Int wm15 = w[a15];
+    Int wm15 = w[i - 15];
     Int r7 = rotr(wm15, 7);
     Int r17 = rotr(wm15, 18);
     Int sr3 = wm15 >> 3;
     Int x1 = r7 ^ r17;
     Int s0 = x1 ^ sr3;
-    Int wm2 = w[a2v];
+    Int wm2 = w[i - 2];
     Int ra = rotr(wm2, 17);
     Int rb = rotr(wm2, 19);
     Int sr10 = wm2 >> 10;
     Int x2 = ra ^ rb;
     Int s1v = x2 ^ sr10;
-    Int t1 = w[a16] + s0;
-    Int t2 = w[a7] + s1v;
+    Int t1 = w[i - 16] + s0;
+    Int t2 = w[i - 7] + s1v;
     Int raw = t1 + t2;
     Int nv = raw & 4294967295;
     List(Int) w2 = w.concat([nv]);
@@ -192,7 +189,7 @@ pub List(Int) sha_round(List(Int) hv, List(Int) w, Int i) {
     Int f = hv[5];
     Int g = hv[6];
     Int hh = hv[7];
-    Int wi = w[i + 1];
+    Int wi = w[i];
     Int kk = k_at(i);
     Int re6 = rotr(e, 6);
     Int re11 = rotr(e, 11);
@@ -315,19 +312,13 @@ pub Str sha256(Str msg) {
     ];
     List(Int) bytes = bytes_of(msg);
     List(Int) padded = pad_bytes(bytes);
-    Int total = padded.len() - 1;
+    Int total = padded.len();
     List(Int) hd = digest_blocks(padded, 0, total, h0);
     return hex_state(hd, 0, "");
 }
 
 // ─── Byte-level digest core (v2) ────────────────────────────────
-// All lists use the seeded convention: index 0 is a dummy, real data
-// starts at index 1. Lists can hold zero bytes, unlike Str.
-
-pub List(Int) seeded(List(Int) xs) {
-    List(Int) s = [0];
-    return s.concat(xs);
-}
+// Lists can hold zero bytes, unlike Str.
 
 pub Int word_byte(List(Int) words, Int wi, Int bi) {
     Int sh = (3 - bi) * 8;
@@ -350,59 +341,57 @@ pub List(Int) wtb_outer(List(Int) words, Int wi, List(Int) acc) {
     return wtb_outer(words, nwi, acc2);
 }
 
-// Eight 32-bit words → 32 big-endian bytes, seeded.
+// Eight 32-bit words → 32 big-endian bytes.
 pub List(Int) words_to_bytes(List(Int) words) {
-    List(Int) all = wtb_outer(words, 0, [0]);
-    return all;
+    return wtb_outer(words, 0, []);
 }
 
-// SHA-256 over a seeded byte list; returns the 32-byte digest seeded.
+// SHA-256 over a byte list; returns the 32-byte digest as a List(Int).
 pub List(Int) sha256_bytes(List(Int) msg) {
     List(Int) h0 = [
         1779033703, -1150833019, 1013904242, -1521486534,
         1359893119, -1694144372, 528734635, 1541459225,
     ];
     List(Int) padded = pad_bytes(msg);
-    Int total = padded.len() - 1;
+    Int total = padded.len();
     List(Int) hd = digest_blocks(padded, 0, total, h0);
     return words_to_bytes(hd);
 }
 
 pub Str hex_range(List(Int) bytes, Int i, Int end, Str acc) {
-    if (i > end) { return acc; }
+    if (i >= end) { return acc; }
     Str part = acc + hex_byte(bytes[i]);
     Int ni = i + 1;
     return hex_range(bytes, ni, end, part);
 }
 
-// Hex-encode a seeded byte list (indices 1..len).
+// Hex-encode a byte list.
 pub Str hex_encode(List(Int) bytes) {
-    Int end = bytes.len() - 1;
-    return hex_range(bytes, 1, end, "");
+    Int end = bytes.len();
+    return hex_range(bytes, 0, end, "");
 }
 
 // ─── HMAC-SHA256 (RFC 2104) ─────────────────────────────────────
 
-pub // Concatenate two seeded lists, dropping the second's dummy so exactly one
-// seed remains.
+// Concatenate two lists.
 List(Int) sc_acc(List(Int) a, List(Int) b, Int i, List(Int) acc) {
-    if (i > b.len() - 1) { return acc; }
+    if (i >= b.len()) { return acc; }
     List(Int) acc2 = acc.concat([b[i]]);
     Int ni = i + 1;
     return sc_acc(a, b, ni, acc2);
 }
 
 pub List(Int) sconcat(List(Int) a, List(Int) b) {
-    return sc_acc(a, b, 1, a);
+    return a.concat(b);
 }
 
 pub Int byte_at_or0(List(Int) a, Int i) {
-    if (i <= a.len() - 1) { return a[i]; }
+    if (i < a.len()) { return a[i]; }
     return 0;
 }
 
 pub List(Int) xor_lists(List(Int) a, List(Int) b, Int i, List(Int) acc) {
-    if (i > b.len() - 1) { return acc; }
+    if (i >= b.len()) { return acc; }
     Int av = byte_at_or0(a, i);
     Int x = (av ^ b[i]) & 255;
     List(Int) acc2 = acc.concat([x]);
@@ -411,21 +400,21 @@ pub List(Int) xor_lists(List(Int) a, List(Int) b, Int i, List(Int) acc) {
 }
 
 pub List(Int) key_block(List(Int) key) {
-    Int klen = key.len() - 1;
+    Int klen = key.len();
     if (klen > 64) {
         List(Int) hk = sha256_bytes(key);
-        Int padn = 64 - (hk.len() - 1);
-        List(Int) zeros = zeros_l([0], padn);
+        Int padn = 64 - hk.len();
+        List(Int) zeros = zeros_l([], padn);
         return sconcat(hk, zeros);
     }
     Int padn = 64 - klen;
-    List(Int) zeros = zeros_l([0], padn);
+    List(Int) zeros = zeros_l([], padn);
     return sconcat(key, zeros);
 }
 
 // Higher-order: Resid has no function values, so dispatch on a tag.
 pub List(Int) map_ipad(List(Int) block, Int i, List(Int) acc) {
-    if (i > block.len() - 1) { return acc; }
+    if (i >= block.len()) { return acc; }
     Int v = block[i];
     Int x = (v ^ 54) & 255;
     List(Int) acc2 = acc.concat([x]);
@@ -434,7 +423,7 @@ pub List(Int) map_ipad(List(Int) block, Int i, List(Int) acc) {
 }
 
 pub List(Int) map_opad(List(Int) block, Int i, List(Int) acc) {
-    if (i > block.len() - 1) { return acc; }
+    if (i >= block.len()) { return acc; }
     Int v = block[i];
     Int x = (v ^ 92) & 255;
     List(Int) acc2 = acc.concat([x]);
@@ -442,11 +431,11 @@ pub List(Int) map_opad(List(Int) block, Int i, List(Int) acc) {
     return map_opad(block, ni, acc2);
 }
 
-// HMAC-SHA256 over seeded byte lists; returns the 32-byte MAC seeded.
+// HMAC-SHA256 over byte lists; returns the 32-byte MAC.
 pub List(Int) hmac_sha256_bytes(List(Int) key, List(Int) msg) {
     List(Int) kb = key_block(key);
-    List(Int) ipad_b = map_ipad(kb, 1, [0]);
-    List(Int) opad_b = map_opad(kb, 1, [0]);
+    List(Int) ipad_b = map_ipad(kb, 0, []);
+    List(Int) opad_b = map_opad(kb, 0, []);
     List(Int) inner_input = sconcat(ipad_b, msg);
     List(Int) inner = sha256_bytes(inner_input);
     List(Int) outer_input = sconcat(opad_b, inner);
@@ -461,12 +450,12 @@ pub List(Int) hmac_sha256_bytes(List(Int) key, List(Int) msg) {
 
 pub Bool ct_equal(List(Int) a, List(Int) b) {
     if (a.len() != b.len()) { return false; }
-    Int d = ct_acc(a, b, 1, 0);
+    Int d = ct_acc(a, b, 0, 0);
     return d == 0;
 }
 
 pub Int ct_acc(List(Int) a, List(Int) b, Int i, Int acc) {
-    if (i > a.len() - 1) { return acc; }
+    if (i >= a.len()) { return acc; }
     Int x = a[i] ^ b[i];
     Int acc2 = acc | x;
     Int ni = i + 1;
@@ -494,13 +483,13 @@ pub Str b64_char(Int v) {
 
 // Hex-encode helper for byte lists is hex_encode; base64 here:
 pub Str base64_encode(List(Int) bytes) {
-    Int end = bytes.len() - 1;
-    return b64_enc(bytes, 1, end, "");
+    Int end = bytes.len();
+    return b64_enc(bytes, 0, end, "");
 }
 
 pub Str b64_enc(List(Int) bytes, Int i, Int end, Str acc) {
-    if (i > end) { return acc; }
-    Int rem = (end - i) + 1;
+    if (i >= end) { return acc; }
+    Int rem = end - i;
     if (rem >= 3) {
         Int b0 = bytes[i];
         Int o1 = i + 1;
@@ -553,13 +542,13 @@ pub Str b64_enc(List(Int) bytes, Int i, Int end, Str acc) {
 pub List(Int) pbkdf2_f(List(Int) u_prev, List(Int) pass, Int remaining, List(Int) acc) {
     if (remaining <= 0) { return acc; }
     List(Int) u = hmac_sha256_bytes(pass, u_prev);
-    List(Int) acc2 = pbkdf2_xor_acc(acc, u, 1);
+    List(Int) acc2 = pbkdf2_xor_acc(acc, u, 0);
     Int rem2 = remaining - 1;
     return pbkdf2_f(u, pass, rem2, acc2);
 }
 
 pub List(Int) pbkdf2_xor_acc(List(Int) acc, List(Int) u, Int i) {
-    if (i > u.len() - 1) { return acc; }
+    if (i >= u.len()) { return acc; }
     Int nv = (acc[i] ^ u[i]) & 255;
     List(Int) acc2 = ls_set(acc, i, nv);
     Int ni = i + 1;
@@ -572,7 +561,7 @@ pub List(Int) pbkdf2_hmac_sha256(List(Int) pass, List(Int) salt, Int iters, Int 
     Int b1 = (block_index >> 16) & 255;
     Int b0 = (block_index >> 24) & 255;
     List(Int) idx_raw = [b0, b1, b2, b3];
-    List(Int) idx = seeded(idx_raw);
+    List(Int) idx = idx_raw;
     List(Int) salt_idx = sconcat(salt, idx);
     List(Int) u1 = hmac_sha256_bytes(pass, salt_idx);
     Int rem = iters - 1;
@@ -582,7 +571,7 @@ pub List(Int) pbkdf2_hmac_sha256(List(Int) pass, List(Int) salt, Int iters, Int 
 // ─── HKDF (RFC 5869), HMAC-SHA256 ────────────────────────────────
 // Extract: PRK = HMAC-Hash(salt, IKM). Expand: T(i) =
 // HMAC(PRK, T(i-1) | info | i), OKM = first L bytes of T(1)|..|T(n).
-// All lists use the [0]-seed convention.
+
 
 pub List(Int) hkdf_extract(List(Int) salt, List(Int) ikm) {
     return hmac_sha256_bytes(salt, ikm);
@@ -609,11 +598,11 @@ pub List(Int) hkdf_exp_acc(List(Int) prk, List(Int) info, Int c, Int n, List(Int
 
 pub List(Int) hkdf_expand(List(Int) prk, List(Int) info, Int len) {
     Int n = hkdf_rounds(len);
-    return hkdf_take(hkdf_exp_acc(prk, info, 1, n, [0], [0]), 1, len, [0]);
+    return hkdf_take(hkdf_exp_acc(prk, info, 1, n, [], []), 0, len, []);
 }
 
 pub List(Int) hkdf_take(List(Int) okm, Int i, Int len, List(Int) acc) {
-    if (i > len) { return acc; }
+    if (i >= len) { return acc; }
     Int b = okm[i];
     List(Int) acc2 = acc.concat([b]);
     Int ni = i + 1;
@@ -631,17 +620,16 @@ pub List(Int) hkdf_sha256(List(Int) salt, List(Int) ikm, List(Int) info, Int len
 // Everything above this line is pure Resid.
 
 pub List(Int) rand_acc(List(Int) acc, Int n, Int i) {
-    if (i > n) { return acc; }
+    if (i >= n) { return acc; }
     Int b = resid_crypto_random_byte();
     List(Int) acc2 = acc.concat([b]);
     Int ni = i + 1;
     return rand_acc(acc2, n, ni);
 }
 
-// n cryptographically random bytes, seeded list.
+// n cryptographically random bytes.
 pub List(Int) random_bytes(Int n) {
-    List(Int) seeded0 = [0];
-    return rand_acc(seeded0, n, 1);
+    return rand_acc([], n, 0);
 }
 
 pub Str random_hex(Int nbytes) {
@@ -649,21 +637,20 @@ pub Str random_hex(Int nbytes) {
 }
 
 // ─── SHA-512 (FIPS 180-4 §6.4) — 32-bit limb pairs ─────────────
-// A 64-bit word is a seeded triple [0, hi, lo] of 32-bit limbs, so every
-// value stays within plain Int and both compiler pipelines agree.
+// A 64-bit word is a pair [hi, lo] of 32-bit limbs.
 
 pub List(Int) w64(Int hi, Int lo) {
     Int him = hi & 4294967295;
     Int lom = lo & 4294967295;
-    return [0, him, lom];
+    return [him, lom];
 }
 
 pub Int w64_hi(List(Int) x) {
-    return x[1];
+    return x[0];
 }
 
 pub Int w64_lo(List(Int) x) {
-    return x[2];
+    return x[1];
 }
 
 pub List(Int) w64_add(List(Int) a, List(Int) b) {
@@ -806,13 +793,11 @@ pub List(Int) h512_state() {
         4215389547,
         327033209,
     ];
-    List(Int) base1 = zeros_l([0], 0);
-    List(Int) with_hi = base1.concat(his);
-    return with_hi.concat(los);
+    return his.concat(los);
 }
 
 pub List(Int) h512_seed(List(Int) acc, List(Int) his, List(Int) los, Int i) {
-    if (i > 7) { return acc; }
+    if (i >= 8) { return acc; }
     Int hi = his[i];
     Int lo = los[i];
     List(Int) acc2 = acc.concat([hi]);
@@ -822,7 +807,7 @@ pub List(Int) h512_seed(List(Int) acc, List(Int) his, List(Int) los, Int i) {
 }
 
 pub List(Int) pad512(List(Int) msg) {
-    Int l = msg.len() - 1;
+    Int l = msg.len();
     List(Int) p = msg.concat([128]);
     Int l17 = l + 17;
     Int blocks = (l17 + 127) / 128;
@@ -852,7 +837,7 @@ pub List(Int) len512_bytes(List(Int) acc, Int bits, Int shift) {
 
 // Word i (big-endian, 8 bytes at real offset base+i*8) as a pair.
 pub List(Int) mw512(List(Int) m, Int base, Int i) {
-    Int off = (base + (i * 8)) + 1;
+    Int off = base + (i * 8);
     Int b0 = m[off];
     Int o1 = off + 1;
     Int b1 = m[o1];
@@ -881,7 +866,7 @@ pub List(Int) mw512(List(Int) m, Int base, Int i) {
     return [hi, lo];
 }
 
-// Flat limb list: [seed, w0hi, w0lo, w1hi, w1lo, ...] for words 0..15.
+// Flat limb list: [w0hi, w0lo, w1hi, w1lo, ...] for words 0..15.
 pub List(Int) mw512_acc(List(Int) m, Int base, Int i, List(Int) acc) {
     if (i >= 16) { return acc; }
     List(Int) pair = mw512(m, base, i);
@@ -891,18 +876,17 @@ pub List(Int) mw512_acc(List(Int) m, Int base, Int i, List(Int) acc) {
 }
 
 pub List(Int) msg_words512(List(Int) m, Int base) {
-    List(Int) seeded0 = [0];
-    return mw512_acc(m, base, 0, seeded0);
+    return mw512_acc(m, base, 0, []);
 }
 
-// Word i's limbs live at flat indices 2i+1 and 2i+2.
+// Word i's limbs live at flat indices 2i and 2i+1.
 pub Int fw_hi(List(Int) flat, Int i) {
-    Int idx = (i * 2) + 1;
+    Int idx = i * 2;
     return flat[idx];
 }
 
 pub Int fw_lo(List(Int) flat, Int i) {
-    Int idx = (i * 2) + 2;
+    Int idx = i * 2 + 1;
     return flat[idx];
 }
 
@@ -1009,12 +993,11 @@ pub List(Int) state512_init() {
         1541459225,
         327033209,
     ];
-    List(Int) base1 = zeros_l([0], 0);
-    return base1.concat(iv_limbs);
+    return iv_limbs;
 }
 
 pub List(Int) st_set(List(Int) st, Int word_idx, List(Int) pair) {
-    Int hi_i = (word_idx * 2) + 1;
+    Int hi_i = word_idx * 2;
     Int lo_i = hi_i + 1;
     List(Int) s1 = ls_set(st, hi_i, w64_hi(pair));
     List(Int) s2 = ls_set(s1, lo_i, w64_lo(pair));
@@ -1022,12 +1005,12 @@ pub List(Int) st_set(List(Int) st, Int word_idx, List(Int) pair) {
 }
 
 pub Int st_hi(List(Int) st, Int word_idx) {
-    Int hi_i = (word_idx * 2) + 1;
+    Int hi_i = word_idx * 2;
     return st[hi_i];
 }
 
 pub Int st_lo(List(Int) st, Int word_idx) {
-    Int lo_i = (word_idx * 2) + 2;
+    Int lo_i = word_idx * 2 + 1;
     return st[lo_i];
 }
 
@@ -1077,7 +1060,7 @@ pub List(Int) sha512_rounds_flat(List(Int) st, List(Int) w, Int i) {
 
 pub List(Int) add_st(List(Int) h, List(Int) hv, Int i) {
     if (i >= 8) { return h; }
-    Int hi_i = (i * 2) + 1;
+    Int hi_i = i * 2;
     Int lo_i = hi_i + 1;
     List(Int) hp = w64(h[hi_i], h[lo_i]);
     List(Int) hv_p = w64(hv[hi_i], hv[lo_i]);
@@ -1111,17 +1094,17 @@ pub Str hex_range_b(List(Int) bytes, Int i, Int end, Str acc) {
     return hex_range_b(bytes, ni, end, acc2);
 }
 
-// SHA-512 of a seeded byte list; returns the 64-byte digest seeded.
+// SHA-512 of a byte list; returns the 64-byte digest as a List(Int).
 pub List(Int) sha512_bytes(List(Int) msg) {
     List(Int) padded = pad512(msg);
-    Int total = padded.len() - 1;
+    Int total = padded.len();
     List(Int) st = digest_blocks512f(padded, 0, total, state512_init());
-    return limbs_to_hex_bytes(st, 1);
+    return limbs_to_hex_bytes(st, 0);
 }
 
-// Emit digest as seeded BYTE list for hashing chains.
+
 pub List(Int) limb_bytes_acc(List(Int) st, Int i, List(Int) acc) {
-    if (i > 16) { return acc; }
+    if (i >= 16) { return acc; }
     Int vraw = st[i];
     Int v = vraw & 4294967295;
     Int b0 = (v >> 24) & 255;
@@ -1137,6 +1120,5 @@ pub List(Int) limb_bytes_acc(List(Int) st, Int i, List(Int) acc) {
 }
 
 pub List(Int) limbs_to_hex_bytes(List(Int) st, Int seed_unused) {
-    List(Int) acc0 = [0];
-    return limb_bytes_acc(st, 1, acc0);
+    return limb_bytes_acc(st, 0, []);
 }

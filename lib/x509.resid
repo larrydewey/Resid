@@ -1,8 +1,9 @@
 // ─── lib/x509.res — x509 TBS structure walker (pure Resid) ───────────
-// Builds on lib/der.res. Input: a DER certificate as a seeded byte
-// list (index 0 dummy; data starts at index 1). Extracts tbsCertificate
-// fields: serial, signature-alg OID, issuer/subject RDN strings,
-// validity times, and SPKI algorithm OID. No signature verification.
+// Builds on lib/der.res. Input: a DER certificate as a zero-based byte
+// list (index 0 = first byte; positions are absolute). Extracts
+// tbsCertificate fields: serial, signature-alg OID, issuer/subject RDN
+// strings, validity times, and SPKI algorithm OID. No signature
+// verification.
 //
 // Gotcha compliance: every function pub, definitions precede uses, no
 // inline arithmetic as call arguments (bind temps first).
@@ -23,7 +24,7 @@ pub Int x509_skip_tlv(List(Int) data, Int pos) {
 // Position of the tbsCertificate element inside the outer Certificate
 // SEQUENCE.
 pub Int x509_tbs_pos(List(Int) cert) {
-    return der_content_pos(cert, 1);
+    return der_content_pos(cert, 0);
 }
 
 // Start of the TBS field run: content of tbsCertificate.
@@ -119,7 +120,7 @@ pub Str der_str_acc(List(Int) c, Int i, Int n, Str acc) {
 pub Str der_str_value(List(Int) data, Int pos) {
     List(Int) c = der_content(data, pos);
     Int n = c.len() - 1;
-    return der_str_acc(c, 1, n, "");
+    return der_str_acc(c, 0, n, "");
 }
 
 // ─── Name rendering ──────────────────────────────────────────────────

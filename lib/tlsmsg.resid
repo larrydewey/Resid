@@ -7,8 +7,8 @@
 // lib/chain.resid's ec_cert_verify. RSA-PSS (0804) signatures are NOT
 // supported yet (lib/rsa.resid is PKCS#1v1.5 only) and report false.
 //
-// All byte lists use the [0]-seed convention; see lib/chacha.resid for
-// the widening gotcha (bind arithmetic temps before argument positions).
+// All byte lists are zero-based; see lib/chacha.resid for the widening
+// gotcha (bind arithmetic temps before argument positions).
 
 import "tls.resid";
 import "crypto.resid";
@@ -30,14 +30,14 @@ pub Int tm_u24_at(List(Int) b, Int off) {
 // false matches inside certificate payloads
 pub Int tm_find_fin(List(Int) payload, Int k) {
     if (k > 0) {
-        return tm_ff_acc(payload, 1, k);
+        return tm_ff_acc(payload, 0, k);
     }
     Int start = payload.len() - 36;
     return tm_ff_back(payload, start);
 }
 
 pub Int tm_ff_acc(List(Int) payload, Int pos, Int k) {
-    if (pos + 36 > payload.len() - 1) {
+    if (pos + 36 > payload.len()) {
         return 0;
     }
     Int off3 = pos + 1;
@@ -60,14 +60,14 @@ pub Int tm_ff_acc(List(Int) payload, Int pos, Int k) {
 // start = index of a handshake message header; returns the start of the
 // next message, or 0 when the payload is exhausted.
 pub Int tm_next(List(Int) payload, Int start) {
-    if (start + 4 > payload.len() - 1) {
+    if (start + 4 > payload.len()) {
         return 0;
     }
     Int o1 = start + 1;
     Int mlen = tm_u24_at(payload, o1);
     Int o4 = start + 4;
     Int adv = o4 + mlen;
-    if (adv > payload.len() - 1) {
+    if (adv > payload.len()) {
         return 0;
     }
     return adv;
@@ -80,7 +80,7 @@ pub Int tm_type_at(List(Int) payload, Int start) {
 pub List(Int) tm_body(List(Int) payload, Int start) {
     Int o1 = start + 1;
     Int mlen = tm_u24_at(payload, o1);
-    return slice_seed(payload, adv0(start), mlen, [0]);
+    return slice_seed(payload, adv0(start), mlen, []);
 }
 
 pub Int adv0(Int start) {
@@ -89,13 +89,13 @@ pub Int adv0(Int start) {
 }
 
 // find the k-th (0-based) handshake message of the given type; returns
-// its body, or an empty seeded list when absent.
+// its body, or an empty list when absent.
 pub List(Int) tm_find(List(Int) payload, Int mtype, Int k) {
-    return tm_find_acc(payload, 1, mtype, k, [0]);
+    return tm_find_acc(payload, 0, mtype, k, []);
 }
 
 pub List(Int) tm_find_acc(List(Int) payload, Int pos, Int mtype, Int k, List(Int) acc) {
-    if (pos == 0 || pos >= payload.len()) {
+    if (pos >= payload.len()) {
         return acc;
     }
     Int t = tm_type_at(payload, pos);
@@ -112,11 +112,11 @@ pub List(Int) tm_find_acc(List(Int) payload, Int pos, Int mtype, Int k, List(Int
 
 // find the payload index of the k-th message of the given type
 pub Int tm_find_pos(List(Int) payload, Int mtype, Int k) {
-    return tm_fp_acc(payload, 1, mtype, k);
+    return tm_fp_acc(payload, 0, mtype, k);
 }
 
 pub Int tm_fp_acc(List(Int) payload, Int pos, Int mtype, Int k) {
-    if (pos == 0 || pos >= payload.len()) {
+    if (pos >= payload.len()) {
         return 0;
     }
     Int t = tm_type_at(payload, pos);
@@ -136,28 +136,27 @@ pub List(Int) tm_full_msg(List(Int) payload, Int start) {
     Int o1 = start + 1;
     Int mlen = tm_u24_at(payload, o1);
     Int total = mlen + 4;
-    return slice_seed(payload, start, total, [0]);
+    return slice_seed(payload, start, total, []);
 }
 
 // -- ServerHello parsing ------------------------------------------------
 
 // legacy_random(32): type(1) len(3) version(2) random(32)
 pub List(Int) sh_random(List(Int) sh) {
-    return slice_seed(sh, 7, 32, [0]);
+    return slice_seed(sh, 6, 32, []);
 }
 
 // walk extensions for key_share (0033); server form: 0024 001d <share>
 pub List(Int) sh_pubkey(List(Int) sh) {
     Int slen = sh.len();
-    Int stop = slen - 1;
-    return sh_scan(sh, 1, stop);
+    return sh_scan(sh, 0, slen);
 }
 
 // scan for the key_share extension marker 0033 0024 001d 0020 and
 // return the following 32-byte x25519 share
 pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
-    if (pos + 35 > stop) {
-        return [0];
+    if (pos + 35 >= stop) {
+        return slice_seed(sh, 0, 0, []);
     }
     // x25519 key-share entry marker: 001d 0020 <32 bytes>
     Int b0 = sh[pos];
@@ -171,7 +170,7 @@ pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
     Bool allm = m1 && m2 && m3 && m4;
     if (allm) {
         Int kp = pos + 4;
-        return slice_seed(sh, kp, 32, [0]);
+        return slice_seed(sh, kp, 32, []);
     }
     Int np = pos + 1;
     return sh_scan(sh, np, stop);
@@ -226,7 +225,7 @@ pub List(Int) tm_hb_acc(Str s, Int i, List(Int) acc) {
 }
 
 pub List(Int) tm_hb(Str s) {
-    return tm_hb_acc(s, 0, [0]);
+    return tm_hb_acc(s, 0, []);
 }
 
 // ClientHello with the RFC 8448 extension set, parametrized by
@@ -286,22 +285,22 @@ pub List(Int) tlsmsg_client_hello(List(Int) random32, List(Int) share32) {
 //   per-cert: u24 cert len || DER. Returns the first cert DER.
 pub List(Int) tm_cert_der(List(Int) body) {
     // body: u8 context-len || u24 total || u24 cert-len || DER ...
-    Int clen = tm_u24_at(body, 5);
-    return slice_seed(body, 8, clen, [0]);
+    Int clen = tm_u24_at(body, 4);
+    return slice_seed(body, 7, clen, []);
 }
 
 pub Bool tm_is_ecdsa_cv(List(Int) cvbody) {
-    Int alg = cvbody[1] * 256 + cvbody[2];
+    Int alg = cvbody[0] * 256 + cvbody[1];
     return alg == 1027;
 }
 
 pub List(Int) tm_cv_sig(List(Int) cvbody) {
     // alg(u16) || sig-len(u16) || signature
-    Int hi = cvbody[3] * 256;
-    Int lo = cvbody[4];
+    Int hi = cvbody[2] * 256;
+    Int lo = cvbody[3];
     Int slen = hi + lo;
-    Int off6 = 5;
-    return slice_seed(cvbody, off6, slen, [0]);
+    Int off6 = 4;
+    return slice_seed(cvbody, off6, slen, []);
 }
 
 // TLS 1.3 CertificateVerify signed content:
@@ -314,7 +313,7 @@ pub List(Int) tm_zeros(List(Int) acc, Int n) {
 }
 
 pub List(Int) tm_cv_content(List(Int) thash) {
-    List(Int) zeros64 = tm_zeros([0], 64);
+    List(Int) zeros64 = tm_zeros([], 64);
     List(Int) ctx = bytes_of("TLS 1.3, server CertificateVerify");
     List(Int) p1 = sconcat(zeros64, ctx);
     List(Int) p2 = p1.concat([0]);
@@ -326,14 +325,14 @@ pub List(Int) tm_cv_content(List(Int) thash) {
 //   0x0403 (1027) ecdsa_secp256r1_sha256
 //   0x0804 (2052) rsa_pss_rsae_sha256
 pub Bool tm_verify_cv(List(Int) cvbody, List(Int) cert_der, List(Int) thash) {
-    Int alg = cvbody[1] * 256 + cvbody[2];
+    Int alg = cvbody[0] * 256 + cvbody[1];
     Bool isec = alg == 1027;
     if (isec) {
         List(Int) sig = tm_cv_sig(cvbody);
         List(Int) content = tm_cv_content(thash);
         List(Int) keyb = cert_pubkey_bits(cert_der);
         // strip the BIT STRING unused-bits octet: 04 || X || Y
-        List(Int) keyb2 = slice_seed(keyb, 1, 66, [0]);
+        List(Int) keyb2 = slice_seed(keyb, 0, 66, []);
         return tm_ecdsa_verify_sha256(content, keyb2, sig);
     }
     Bool ispss = alg == 2052;
@@ -368,17 +367,14 @@ pub Int(256) tm_be256(List(Int) b, Int off, Int n) {
 pub Bool tm_ecdsa_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sig) {
     List(Int) digest = sha256_bytes(content);
     Int(256) eint = ec_from_be(digest);
-    Int rlen = sig[4];
-    Int roff = 5 + rlen;
-        Int roff2 = roff - rlen;
-    Int(256) r = tm_be256(sig, roff2, rlen);
-    Int stag = roff + 1;
+    Int rlen = sig[3];
+    Int(256) r = tm_be256(sig, 4, rlen);
+    Int stag = 5 + rlen;
     Int slen = sig[stag];
     Int soff = stag + 1;
-        Int soff1 = soff;
-    Int(256) sv = tm_be256(sig, soff1, slen);
-    List(Int) kbx = slice_seed(keyb, 3, 32, [0]);
-    List(Int) kby = slice_seed(keyb, 35, 32, [0]);
+    Int(256) sv = tm_be256(sig, soff, slen);
+    List(Int) kbx = slice_seed(keyb, 2, 32, []);
+    List(Int) kby = slice_seed(keyb, 34, 32, []);
     Int(256) qx = ec_from_be(kbx);
     Int(256) qy = ec_from_be(kby);
     Int(256) vx = ecdsa_vx(eint, r, sv, qx, qy);
@@ -392,7 +388,7 @@ pub Int tm_find_fin_last(List(Int) payload) {
 }
 
 pub Int tm_ff_back(List(Int) payload, Int pos) {
-    if (pos < 1) {
+    if (pos < 0) {
         return 0;
     }
     Int off5 = pos + 1;

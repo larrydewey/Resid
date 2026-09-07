@@ -1,6 +1,6 @@
 // ─── lib/rsa.res — bignum + RSA PKCS#1v1.5 verify (pure Resid) ───────
 // Bignums are seeded List(Int) of 16-bit limbs, little-endian, fixed
-// width W (limb k at index k+1). Base 2^16 keeps every intermediate
+// width W (limb k at index k). Base 2^16 keeps every intermediate
 // product below 2^32 — safe in the 64-bit Int. Verify-only: modexp
 // with a small public exponent (fits in one Int).
 //
@@ -14,12 +14,11 @@ import "der.resid";
 pub Int bn_mask() { return 65535; }
 
 pub Int bn_get(List(Int) l, Int k) {
-    Int idx = k + 1;
-    return l[idx];
+    return l[k];
 }
 
 pub List(Int) bn_set_acc(List(Int) l, Int k, Int v, Int i, List(Int) acc) {
-    Int n = l.len() - 1;
+    Int n = l.len();
     if (i >= n) { return acc; }
     Int old = bn_get(l, i);
     Int nv = if (i == k) { v } else { old };
@@ -30,7 +29,7 @@ pub List(Int) bn_set_acc(List(Int) l, Int k, Int v, Int i, List(Int) acc) {
 
 // New list with limb k replaced by v.
 pub List(Int) bn_set(List(Int) l, Int k, Int v) {
-    return bn_set_acc(l, k, v, 0, [0]);
+    return bn_set_acc(l, k, v, 0, []);
 }
 
 pub List(Int) bn_zeros(Int count, List(Int) acc) {
@@ -41,7 +40,7 @@ pub List(Int) bn_zeros(Int count, List(Int) acc) {
 }
 
 pub List(Int) bn_zero(Int w) {
-    return bn_zeros(w, [0]);
+    return bn_zeros(w, []);
 }
 
 pub List(Int) bn_one(Int w) {
@@ -82,7 +81,7 @@ pub List(Int) bn_sub_acc(List(Int) a, List(Int) b, Int i, Int borrow, Int w, Lis
 
 // a - b assuming a >= b. Same width w.
 pub List(Int) bn_sub(List(Int) a, List(Int) b, Int w) {
-    return bn_sub_acc(a, b, 0, 0, w, [0]);
+    return bn_sub_acc(a, b, 0, 0, w, []);
 }
 
 // ─── Shift / bits ────────────────────────────────────────────────────
@@ -100,7 +99,7 @@ pub List(Int) bn_shl1(List(Int) l, Int w, Int i, Int carry_in, List(Int) acc) {
 }
 
 pub List(Int) bn_shift_in(List(Int) l, Int bit, Int w) {
-    List(Int) shifted = bn_shl1(l, w, 0, bit, [0]);
+    List(Int) shifted = bn_shl1(l, w, 0, bit, []);
     return shifted;
 }
 
@@ -158,7 +157,7 @@ pub List(Int) bn_mul_digit_acc(List(Int) b, Int d, Int i, Int carry, Int w, List
 }
 
 pub List(Int) bn_mul_digit(List(Int) b, Int d, Int w) {
-    return bn_mul_digit_acc(b, d, 0, 0, w, [0]);
+    return bn_mul_digit_acc(b, d, 0, 0, w, []);
 }
 
 // a + b, width wout (both inputs narrower or equal).
@@ -176,8 +175,8 @@ pub List(Int) bn_add_acc(List(Int) a, List(Int) b, Int wout, Int i, Int carry, I
     return bn_add_acc(a, b, wout, ni, cy, alen, blen, acc2);
 }
 
-// Concatenate two SEEDED lists, skipping the second one's seed
-// (plain concat copies the argument's index-0 element verbatim).
+// Concatenate two lists (plain append, no seed skipping — lists are
+// zero-based).
 pub List(Int) bn_cat_acc(List(Int) b, Int j, Int blen, List(Int) acc) {
     if (j > blen) { return acc; }
     Int v = b[j];
@@ -188,12 +187,12 @@ pub List(Int) bn_cat_acc(List(Int) b, Int j, Int blen, List(Int) acc) {
 
 pub List(Int) bn_cat(List(Int) a, List(Int) b) {
     Int bl = b.len() - 1;
-    return bn_cat_acc(b, 1, bl, a);
+    return bn_cat_acc(b, 0, bl, a);
 }
 
 // Prepend i zero limbs (multiply a little-endian limb list by b^i).
 pub List(Int) bn_shift_limbs(List(Int) row, Int i) {
-    List(Int) zi = bn_zeros(i, [0]);
+    List(Int) zi = bn_zeros(i, []);
     return bn_cat(zi, row);
 }
 
@@ -202,9 +201,9 @@ pub List(Int) bn_mul_row(List(Int) a, List(Int) b, Int w, Int i, List(Int) acc) 
     Int d = bn_get(a, i);
     List(Int) row = bn_mul_digit(b, d, w);
     List(Int) shifted = bn_shift_limbs(row, i);
-    Int sl = shifted.len() - 1;
+    Int sl = shifted.len();
     Int w2 = w + w;
-    List(Int) acc2 = bn_add_acc(acc, shifted, w2, 0, 0, w2, sl, [0]);
+    List(Int) acc2 = bn_add_acc(acc, shifted, w2, 0, 0, w2, sl, []);
     Int ni = i + 1;
     return bn_mul_row(a, b, w, ni, acc2);
 }
@@ -299,7 +298,7 @@ pub Bool bn_is_zero(List(Int) l, Int w) {
 }
 
 pub List(Int) bn_trunc(List(Int) l, Int k) {
-    return der_slice_seeded(l, 1, k);
+    return der_slice_seeded(l, 0, k - 1);
 }
 
 // Two's-complement negate modulo b^k: complement each limb, add 1.
@@ -313,9 +312,9 @@ pub List(Int) bn_neg_list_comp(List(Int) p, Int k, Int i, List(Int) acc) {
 }
 
 pub List(Int) bn_neg_list(List(Int) p, Int k) {
-    List(Int) comp = bn_neg_list_comp(p, k, 0, [0]);
+    List(Int) comp = bn_neg_list_comp(p, k, 0, []);
     List(Int) one = bn_one(k);
-    return bn_add_acc(comp, one, k, 0, 0, k, k, [0]);
+    return bn_add_acc(comp, one, k, 0, 0, k, k, []);
 }
 
 // (2 - n*x) mod b^k, where inputs are already truncated to k limbs.
@@ -328,7 +327,7 @@ pub List(Int) bn_two_minus(List(Int) nk, List(Int) x, Int k) {
     }
     List(Int) neg = bn_neg_list(pt, k);
     List(Int) two = bn_one_at2(k);
-    List(Int) r = bn_add_acc(neg, two, k, 0, 0, k, k, [0]);
+    List(Int) r = bn_add_acc(neg, two, k, 0, 0, k, k, []);
     return r;
 }
 
@@ -340,9 +339,9 @@ pub List(Int) bn_one_at2(Int k) {
 
 // Zero-extend a k-limb value to kto limbs.
 pub List(Int) bn_pad_to(List(Int) l, Int k, Int kto) {
-    List(Int) base = der_slice_seeded(l, 1, k);
+    List(Int) base = der_slice_seeded(l, 0, k - 1);
     Int zc = kto - k;
-    List(Int) z = bn_zeros(zc, [0]);
+    List(Int) z = bn_zeros(zc, []);
     return bn_cat(base, z);
 }
 
@@ -370,7 +369,7 @@ pub List(Int) bn_neg_inv_wide(List(Int) n, Int n0, Int w) {
 
 pub List(Int) bn_redc_sub(List(Int) r, List(Int) npad, Int tries) {
     if (tries <= 0) { return r; }
-    Int w = npad.len() - 1;
+    Int w = npad.len();
     Int c = bn_cmp(r, npad, w);
     if (c < 0) { return r; }
     List(Int) d = bn_sub(r, npad, w);
@@ -386,16 +385,16 @@ pub List(Int) bn_redc(List(Int) t, List(Int) n, List(Int) ninv, Int w) {
     List(Int) mn = bn_mul(m, n, w);
     Int w2 = w + w;
     Int out = w2 + 1;
-    Int tl = t.len() - 1;
-    List(Int) s = bn_add_acc(t, mn, out, 0, 0, tl, w2, [0]);
+    Int tl = t.len();
+    List(Int) s = bn_add_acc(t, mn, out, 0, 0, tl, w2, []);
     // take limbs w..2w (the >> R part), width w+1
-    Int lo = w + 1;
-    Int hi = w2 + 1;
+    Int lo = w;
+    Int hi = w2;
     List(Int) h = der_slice_seeded(s, lo, hi);
     List(Int) npad = n.concat([0]);
     List(Int) r = bn_redc_sub(h, npad, 3);
     // drop the (zero) top limb back to width w
-    return der_slice_seeded(r, 1, w);
+    return der_slice_seeded(r, 0, w - 1);
 }
 
 // Montgomery multiply of values already in Montgomery form.
@@ -473,10 +472,10 @@ pub List(Int) bn_modexp(List(Int) base, Int e, List(Int) n, Int w) {
 
 // ─── Byte conversion ─────────────────────────────────────────────────
 
-// Big-endian byte list (seeded) of exactly 2w bytes → w limbs LE.
+// Big-endian byte list of exactly 2w bytes → w limbs LE.
 pub List(Int) bn_from_be_acc(List(Int) bytes, Int w, Int k, Int total, List(Int) acc) {
     if (k >= w) { return acc; }
-    Int hi_pos = total - k * 2 - 1;
+    Int hi_pos = total - k * 2 - 2;
     Int lo_pos = hi_pos + 1;
     Int hb = bytes[hi_pos];
     Int lb = bytes[lo_pos];
@@ -488,7 +487,7 @@ pub List(Int) bn_from_be_acc(List(Int) bytes, Int w, Int k, Int total, List(Int)
 
 pub List(Int) bn_from_be(List(Int) bytes, Int w) {
     Int total = w + w;
-    return bn_from_be_acc(bytes, w, 0, total, [0]);
+    return bn_from_be_acc(bytes, w, 0, total, []);
 }
 
 // ─── PKCS#1 v1.5 (SHA-256) verification ──────────────────────────────
@@ -496,7 +495,7 @@ pub List(Int) bn_from_be(List(Int) bytes, Int w) {
 // EM = 00 01 FF..FF 00 || DigestInfo(SHA-256) || digest, k bytes long.
 // DigestInfo prefix: 30 31 30 0d 06 09 60 86 48 01 65 03 04 02 01 05 00 04 20
 pub List(Int) pkcs1_digestinfo_prefix() {
-    return [0, 48, 49, 48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 1, 5, 0, 4, 32];
+    return [48, 49, 48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 1, 5, 0, 4, 32];
 }
 
 pub List(Int) pkcs1_ff(Int count, List(Int) acc) {
@@ -506,9 +505,9 @@ pub List(Int) pkcs1_ff(Int count, List(Int) acc) {
     return pkcs1_ff(c2, acc2);
 }
 
-// Build the expected EM as a seeded byte list of exactly k bytes.
+// Build the expected EM as a byte list of exactly k bytes.
 pub List(Int) pkcs1_em_sha256(List(Int) digest, Int k) {
-    List(Int) head = [0, 0, 1];
+    List(Int) head = [0, 1];
     Int pslen = k - 3 - 51;
     List(Int) ps = pkcs1_ff(pslen, head);
     List(Int) sep = ps.concat([0]);

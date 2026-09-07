@@ -5,7 +5,7 @@
 // values with clamped r < 2^126 so products stay < 2^257 inside
 // Int(512); reduction folds hi*5 over 2^130 twice, leaving h < p+11,
 // so a single conditional subtract canonicalizes.
-// All byte lists use the [0]-seed convention (real bytes at index >=1).
+
 
 import "crypto.resid";
 
@@ -36,28 +36,26 @@ pub List(Int) push(List(Int) l, Int v) {
 // ── ChaCha20 block function ──────────────────────────────────────────
 
 pub Int cc_state_word(List(Int) key, Int counter, List(Int) nonce, Int i) {
-    if (i <= 4) {
-        Int consts = if (i == 1) { 1634760805 } else { 0 };
-        Int c2 = if (i == 2) { 857760878 } else { consts };
-        Int c3 = if (i == 3) { 2036477234 } else { c2 };
-        Int c4 = if (i == 4) { 1797285236 } else { c3 };
+    if (i <= 3) {
+        Int consts = if (i == 0) { 1634760805 } else { 0 };
+        Int c2 = if (i == 1) { 857760878 } else { consts };
+        Int c3 = if (i == 2) { 2036477234 } else { c2 };
+        Int c4 = if (i == 3) { 1797285236 } else { c3 };
         return c4;
     }
-    if (i <= 12) {
-        Int base = i - 5;
+    if (i <= 11) {
+        Int base = i - 4;
         Int quad = base * 4;
-        Int koff = quad + 1;
-        return le32_at(key, koff);
+        return le32_at(key, quad);
     }
-    if (i == 13) { return counter; }
-    Int nbase = i - 14;
+    if (i == 12) { return counter; }
+    Int nbase = i - 13;
     Int nquad = nbase * 4;
-    Int noff = nquad + 1;
-    return le32_at(nonce, noff);
+    return le32_at(nonce, nquad);
 }
 
 pub List(Int) cc_state_build(List(Int) key, Int counter, List(Int) nonce, Int i, List(Int) acc) {
-    if (i > 16) { return acc; }
+    if (i >= 16) { return acc; }
     Int w = cc_state_word(key, counter, nonce, i);
     List(Int) acc2 = acc.concat([w]);
     Int ni = i + 1;
@@ -65,7 +63,7 @@ pub List(Int) cc_state_build(List(Int) key, Int counter, List(Int) nonce, Int i,
 }
 
 pub List(Int) cc_state(List(Int) key, Int counter, List(Int) nonce) {
-    return cc_state_build(key, counter, nonce, 1, [0]);
+    return cc_state_build(key, counter, nonce, 0, []);
 }
 
 pub Int qr_t(Int a, Int b) {
@@ -82,32 +80,32 @@ pub List(Int) quarter(List(Int) x, Int a, Int b, Int c, Int d) {
     Int xd2 = rotl32(xd ^ xa2, 8);
     Int xc2 = qr_t(xc, xd2);
     Int xb2 = rotl32(xb ^ xc2, 7);
-    return sel4(x, 16, a, xa2, b, xb2, c, xc2, d, xd2);
+    return sel4(x, 15, a, xa2, b, xb2, c, xc2, d, xd2);
 }
 
-// rebuilt copy of x[1..16] with positions a/b/c/d replaced
+// rebuilt copy of x[0..15] with positions a/b/c/d replaced
 pub List(Int) sel4(List(Int) x, Int i, Int a, Int va, Int b, Int vb, Int c, Int vc, Int d, Int vd) {
-    if (i == 0) { return [0]; }
     Int v = x[i];
     Int n1 = if (i == a) { va } else { v };
     Int n2 = if (i == b) { vb } else { n1 };
     Int n3 = if (i == c) { vc } else { n2 };
     Int n4 = if (i == d) { vd } else { n3 };
     Int prev = i - 1;
+    if (i == 0) { return [n4]; }
     List(Int) rest = sel4(x, prev, a, va, b, vb, c, vc, d, vd);
     return rest.concat([n4]);
 }
 
 // one double round = column QRs (steps 0-3) then diagonal QRs (steps 4-7)
 pub List(Int) cc_dround(List(Int) x, Int s) {
-    if (s == 0) { return quarter(x, 1, 5, 9, 13); }
-    if (s == 1) { return quarter(x, 2, 6, 10, 14); }
-    if (s == 2) { return quarter(x, 3, 7, 11, 15); }
-    if (s == 3) { return quarter(x, 4, 8, 12, 16); }
-    if (s == 4) { return quarter(x, 1, 6, 11, 16); }
-    if (s == 5) { return quarter(x, 2, 7, 12, 13); }
-    if (s == 6) { return quarter(x, 3, 8, 9, 14); }
-    return quarter(x, 4, 5, 10, 15);
+    if (s == 0) { return quarter(x, 0, 4, 8, 12); }
+    if (s == 1) { return quarter(x, 1, 5, 9, 13); }
+    if (s == 2) { return quarter(x, 2, 6, 10, 14); }
+    if (s == 3) { return quarter(x, 3, 7, 11, 15); }
+    if (s == 4) { return quarter(x, 0, 5, 10, 15); }
+    if (s == 5) { return quarter(x, 1, 6, 11, 12); }
+    if (s == 6) { return quarter(x, 2, 7, 8, 13); }
+    return quarter(x, 3, 4, 9, 14);
 }
 
 pub List(Int) cc_dr_all(List(Int) x, Int s) {
@@ -139,7 +137,7 @@ pub List(Int) ser_acc(List(Int) w, Int i, Int n, List(Int) acc) {
 }
 
 pub List(Int) cc_add_states(List(Int) a, List(Int) b, Int i) {
-    if (i > 16) { return b; }
+    if (i >= 16) { return b; }
     Int s = a[i] + b[i];
     Int v = s & m32();
     List(Int) nb = ls_set(b, i, v);
@@ -151,17 +149,17 @@ pub List(Int) cc_add_states(List(Int) a, List(Int) b, Int i) {
 pub List(Int) chacha_block(List(Int) key, Int counter, List(Int) nonce) {
     List(Int) st = cc_state(key, counter, nonce);
     List(Int) w = cc_rounds(st, 10);
-    List(Int) mixed = cc_add_states(st, w, 1);
-    return ser_acc(mixed, 1, 16, [0]);
+    List(Int) mixed = cc_add_states(st, w, 0);
+    return ser_acc(mixed, 0, 16, []);
 }
 
-// ChaCha20 XOR (encrypt = decrypt); data is a seeded byte list
+// ChaCha20 XOR (encrypt = decrypt)
 pub List(Int) cc_xor_acc(List(Int) key, Int counter, List(Int) nonce, List(Int) data, Int pos, Int ksleft, List(Int) blk, List(Int) acc) {
-    if (pos > data.len() - 1) { return acc; }
+    if (pos >= data.len()) { return acc; }
     Int fresh = if (ksleft == 0) { 1 } else { 0 };
     Int ksv = if (fresh == 1) { 64 } else { ksleft };
     List(Int) cur = if (fresh == 1) { chacha_block(key, counter, nonce) } else { blk };
-    Int off = 65 - ksv;
+    Int off = 64 - ksv;
     Int c = data[pos] ^ cur[off];
     List(Int) acc2 = acc.concat([c]);
     Int nk = ksv - 1;
@@ -172,7 +170,7 @@ pub List(Int) cc_xor_acc(List(Int) key, Int counter, List(Int) nonce, List(Int) 
 }
 
 pub List(Int) chacha20_xor(List(Int) key, Int counter, List(Int) nonce, List(Int) data) {
-    return cc_xor_acc(key, counter, nonce, data, 1, 0, [0], [0]);
+    return cc_xor_acc(key, counter, nonce, data, 0, 0, [], []);
 }
 
 // ── wide-int byte helpers (Int(256) domain) ─────────────────────────
@@ -210,7 +208,7 @@ pub List(Int) enc_le_wide(Int(256) v, Int n, List(Int) acc) {
 // little-endian: byte % 4 == 0 keeps low 6 bits, % 4 == 3 keeps low 4)
 pub Int(256) poly_r_acc(List(Int) b, Int idx, Int(256) v) {
     if (idx < 0) { return v; }
-    Int raw = b[1 + idx];
+    Int raw = b[idx];
     Int m4 = idx % 4;
     Int masked = if (m4 == 3) { raw & 15 } else { raw };
     Bool is4 = idx == 4;
@@ -288,16 +286,15 @@ pub Int(256) p128_mask_wide() {
     return (o << hs) - o;
 }
 
-// Poly1305 MAC over msg with 32-byte one-time key (r || s), seeded lists
+// Poly1305 MAC over msg with 32-byte one-time key (r || s)
 pub List(Int) poly1305(List(Int) key, List(Int) msg) {
     Int(256) r = poly_r_acc(key, 15, 0);
-    Int(256) s = dec_le_wide(key, 17, 16);
+    Int(256) s = dec_le_wide(key, 16, 16);
     Int mlen = msg.len();
-    Int mcount = mlen - 1;
-    Int(256) h = poly_blocks(0, msg, 1, mcount, r);
+    Int(256) h = poly_blocks(0, msg, 0, mlen, r);
     Int(256) tag_v = h + s;
     Int(256) tag_m = tag_v & p128_mask_wide();
-    return enc_le_wide(tag_m, 16, [0]);
+    return enc_le_wide(tag_m, 16, []);
 }
 
 // pad length to a multiple of 16 (AEAD MAC input framing)
@@ -307,9 +304,9 @@ pub Int pad16(Int n) {
     return 16 - rr;
 }
 
-// append list b (dropping its seed) onto a
+// append list b onto a
 pub List(Int) ccat(List(Int) a, List(Int) b, Int i) {
-    if (i > b.len() - 1) { return a; }
+    if (i >= b.len()) { return a; }
     List(Int) a2 = a.concat([b[i]]);
     Int ni = i + 1;
     return ccat(a2, b, ni);
@@ -324,46 +321,46 @@ pub List(Int) zeros_seed(List(Int) acc, Int n) {
 
 // MAC input: AAD || pad || CT || pad || len64(AAD bits) || len64(CT bits)
 pub List(Int) aead_mac_input(List(Int) aad, List(Int) ct) {
-    Int alen = aad.len() - 1;
-    Int clen = ct.len() - 1;
-    List(Int) za = zeros_seed([0], pad16(alen));
-    List(Int) zc = zeros_seed([0], pad16(clen));
-    List(Int) la = enc_le_wide((Int(256)) alen, 8, [0]);
-    List(Int) lb = enc_le_wide((Int(256)) clen, 8, [0]);
-    List(Int) p1 = sconcat(aad, za);
-    List(Int) p2 = sconcat(p1, ct);
-    List(Int) p3 = sconcat(p2, zc);
-    return sconcat(p3, ccat(la, lb, 1));
+    Int alen = aad.len();
+    Int clen = ct.len();
+    List(Int) za = zeros_seed([], pad16(alen));
+    List(Int) zc = zeros_seed([], pad16(clen));
+    List(Int) la = enc_le_wide((Int(256)) alen, 8, []);
+    List(Int) lb = enc_le_wide((Int(256)) clen, 8, []);
+    List(Int) p1 = aad.concat(za);
+    List(Int) p2 = p1.concat(ct);
+    List(Int) p3 = p2.concat(zc);
+    return p3.concat(ccat(la, lb, 0));
 }
 
-pub List(Int) slice_seed(List(Int) b, Int start, Int count, List(Int) acc) {
+pub List(Int) slice_list(List(Int) b, Int start, Int count, List(Int) acc) {
     if (count == 0) { return acc; }
     Int v = b[start];
     List(Int) acc2 = acc.concat([v]);
     Int ns = start + 1;
     Int nc = count - 1;
-    return slice_seed(b, ns, nc, acc2);
+    return slice_list(b, ns, nc, acc2);
 }
 
-// AEAD seal: ciphertext || tag (16 bytes); all lists seeded
+// AEAD seal: ciphertext || tag (16 bytes)
 pub List(Int) chacha20poly1305_seal(List(Int) key, List(Int) nonce, List(Int) plaintext, List(Int) aad) {
     List(Int) ks = chacha_block(key, 0, nonce);
-    List(Int) mackey = slice_seed(ks, 1, 32, [0]);
+    List(Int) mackey = slice_list(ks, 0, 32, []);
     List(Int) ct = chacha20_xor(key, 1, nonce, plaintext);
     List(Int) mi = aead_mac_input(aad, ct);
     List(Int) tag = poly1305(mackey, mi);
-    return ccat(ct, tag, 1);
+    return ct.concat(tag);
 }
 
 pub Bool chacha20poly1305_open(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
-    Int total = ct_and_tag.len() - 1;
+    Int total = ct_and_tag.len();
     Int clen = total - 16;
     Int clen2 = (Int) clen;
-    List(Int) ct = slice_seed(ct_and_tag, 1, clen2, [0]);
-    Int tstart = clen + 1;
-    List(Int) tag = slice_seed(ct_and_tag, tstart, 16, [0]);
+    List(Int) ct = slice_list(ct_and_tag, 0, clen2, []);
+    Int tstart = clen;
+    List(Int) tag = slice_list(ct_and_tag, tstart, 16, []);
     List(Int) ks = chacha_block(key, 0, nonce);
-    List(Int) mackey = slice_seed(ks, 1, 32, [0]);
+    List(Int) mackey = slice_list(ks, 0, 32, []);
     List(Int) mi = aead_mac_input(aad, ct);
     List(Int) expect = poly1305(mackey, mi);
     return ct_equal(expect, tag);
