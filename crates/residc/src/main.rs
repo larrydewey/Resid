@@ -194,6 +194,12 @@ fn main() -> ExitCode {
                 if Path::new(cached).exists() {
                     if matches!(cmd, Cmd::Build) {
                         eprintln!("cache: hit ({cached})");
+                        if let Some(ref out_path) = out {
+                            if let Err(e) = fs::copy(cached, out_path) {
+                                eprintln!("error: cannot copy cached binary to '{out_path}': {e}");
+                                return ExitCode::FAILURE;
+                            }
+                        }
                         return ExitCode::SUCCESS;
                     }
                     // Run: execute the cached binary directly.
