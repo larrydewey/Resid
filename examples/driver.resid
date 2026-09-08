@@ -6593,7 +6593,7 @@ Int hex_val(Str s, Int i) {
 
 pub List(Int) prov_hex_seed(Str s) {
     Int n = str_len(s);
-    List(Int) acc = [0];
+    List(Int) acc = [];
     return prov_hex_acc(s, 0, n, acc);
 }
 
