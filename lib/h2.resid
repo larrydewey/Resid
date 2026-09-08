@@ -62,13 +62,13 @@ pub List(Int) h2_frame_hdr_enc(Int length, Int stype, Int flags, Int sid) {
     Int sr2 = sr - s2 * 65536;
     Int s1 = sr2 / 256;
     Int s0 = sr2 - s1 * 256;
-    return [0, b2, b1, b0, stype, flags, s3, s2, s1, s0];
+    return [b2, b1, b0, stype, flags, s3, s2, s1, s0];
 }
 
 // Concatenate two lists (seed dropped from the right operand).
 pub List(Int) h2_cat(List(Int) a, List(Int) b) {
-    // Append ALL of b's data bytes (b's seed sits at index 0).
-    return h2_cat_acc(b, 1, b.len() - 1, 1, a);
+    // Append ALL of b's data bytes (0-based).
+    return h2_cat_acc(b, 0, b.len() - 1, 0, a);
 }
 
 // Byte-for-byte der_slice_acc shape (proven against the codegen).
@@ -81,13 +81,13 @@ pub List(Int) h2_cat_acc(List(Int) data, Int start, Int stop, Int i, List(Int) a
 }
 
 pub List(Int) bv_join(Int bv, List(Int) rest) {
-    List(Int) out = [0];
+    List(Int) out = [];
     List(Int) out2 = out.concat([bv]);
     return lst_join_acc(out2, rest);
 }
 
 pub List(Int) lst_join_acc(List(Int) acc, List(Int) rest) {
-    return lst_join_loop(acc, rest, 1);
+    return lst_join_loop(acc, rest, 0);
 }
 
 pub List(Int) lst_join_loop(List(Int) acc, List(Int) rest, Int j) {
@@ -101,7 +101,7 @@ pub List(Int) lst_join_loop(List(Int) acc, List(Int) rest, Int j) {
 
 // Freshly named joiner for codegen-bug isolation.
 pub List(Int) h2_join(List(Int) b, Int i, Int last) {
-    if (i > last) { return [0]; }
+    if (i > last) { List(Int) empty = []; return empty; }
     Int bv = b[i];
     List(Int) rest = h2_join(b, i + 1, last);
     return bv_join(bv, rest);
@@ -110,10 +110,10 @@ pub List(Int) h2_join(List(Int) b, Int i, Int last) {
 
 // Wrap `payload` in a frame of the given type/flags/stream.
 pub List(Int) h2_frame(Int stype, Int flags, Int sid, List(Int) payload) {
-    Int len = payload.len() - 1;
+    Int len = payload.len();
     List(Int) hdr = h2_frame_hdr_enc(len, stype, flags, sid);
-    // Payload keeps its seed; copy every data byte (start at 1).
-    return h2_cat_all(payload, 1, len, 1, hdr);
+    // Payload is 0-based; copy every data byte (start at 0).
+    return h2_cat_all(payload, 0, len - 1, 0, hdr);
 }
 
 // Appends b[start..last] onto acc (same proven recursion shape).
@@ -127,12 +127,11 @@ pub List(Int) h2_cat_all(List(Int) b, Int start, Int last, Int i, List(Int) acc)
 
 // ─── SETTINGS payload helpers ─────────────────────────────────────────
 
-// u16/u32 big-endian byte helpers ( single-element lists).
+// u16/u32 big-endian byte helpers (single-element lists, 0-based).
 pub List(Int) h2_u16_bytes(Int x) {
     Int hi = x / 256;
     Int lo = x - hi * 256;
-    Int z = 0;
-    return [z, hi, lo];
+    return [hi, lo];
 }
 
 pub List(Int) h2_u32_bytes(Int x) {
@@ -142,37 +141,35 @@ pub List(Int) h2_u32_bytes(Int x) {
     Int r2 = r - b2 * 65536;
     Int b1 = r2 / 256;
     Int b0 = r2 - b1 * 256;
-    Int z = 0;
-    return [z, b3, b2, b1, b0];
+    return [b3, b2, b1, b0];
 }
 
 // Number of settings pairs in a payload.
 pub Int h2_settings_count(List(Int) payload) {
-    Int n = payload.len() - 1;
+    Int n = payload.len();
     return n / 6;
 }
 
 // Setting id (u16) of pair k (0-based).
 pub Int h2_setting_id(List(Int) payload, Int k) {
     Int off = k * 6;
-    return payload[off + 1] * 256 + payload[off + 2];
+    return payload[off] * 256 + payload[off + 1];
 }
 
 // Setting value (u32) of pair k (0-based).
 pub Int h2_setting_value(List(Int) payload, Int k) {
     Int off = k * 6;
-    return payload[off + 3] * 16777216 + payload[off + 4] * 65536 + payload[off + 5] * 256 + payload[off + 6];
+    return payload[off + 2] * 16777216 + payload[off + 3] * 65536 + payload[off + 4] * 256 + payload[off + 5];
 }
 
 // Build an empty (ACK-able) or populated SETTINGS payload.
 pub List(Int) h2_settings_payload(List(Int) ids, List(Int) vals, Int k) {
-    if (k >= ids.len() - 1) { return [0]; }
-    Int id = ids[k + 1];
-    Int v = vals[k + 1];
+    if (k >= ids.len()) { List(Int) empty = []; return empty; }
+    Int id = ids[k];
+    Int v = vals[k];
     List(Int) idb = h2_u16_bytes(id);
     List(Int) vb = h2_u32_bytes(v);
-    Int pz = idb[1] - idb[1];
-    List(Int) pair = [pz, idb[1], idb[2], vb[1], vb[2], vb[3], vb[4]];
+    List(Int) pair = [idb[0], idb[1], vb[0], vb[1], vb[2], vb[3]];
     return h2_cat(pair, h2_settings_payload(ids, vals, k + 1));
 }
 
@@ -365,12 +362,12 @@ pub List(Str) hp_insert(List(Str) dyn, Str ent) {
     return h2_scat(out, dyn);
 }
 
-// Concatenate two Str lists (right operand's seed skipped).
+// Concatenate two Str lists (0-based).
 pub List(Str) h2_scat(List(Str) a, List(Str) b) {
-    return h2_scat_acc(a, b, 1, b.len() - 1);
+    return h2_scat_acc(a, b, 0, b.len() - 1);
 }
 
-// Copies b[1..last]: skips b's seed (a carries its own first element).
+// Copies b[0..last]: both a and b are 0-based.
 pub List(Str) h2_scat_acc(List(Str) a, List(Str) b, Int i, Int last) {
     if (i > last) { return a; }
     List(Str) a2 = a.concat([b[i]]);
@@ -656,16 +653,16 @@ pub List(Int) h2_window_update_frame(Int sid, Int inc) {
 // rest in CONTINUATION frames. END_HEADERS is set on the final frame
 // here — do NOT pass it via extra_flags.
 pub List(Int) h2_headers_cont_frames(Int sid, Int extra_flags, List(Int) blk) {
-    return h2_hc_chunk(sid, extra_flags, blk, 1, true);
+    return h2_hc_chunk(sid, extra_flags, blk, 0, true);
 }
 
 pub List(Int) h2_hc_chunk(Int sid, Int extra_flags, List(Int) blk, Int i, Bool first) {
-    Int n = blk.len() - 1;
-    Int rem = 1 + n - i;
+    Int n = blk.len();
+    Int rem = n - i;
     Bool fits = rem <= 16384;
     Int take = h2_pick(fits, rem, 16384);
     Int lasti = i + take - 1;
-    Bool fin = lasti >= n;
+    Bool fin = lasti >= n - 1;
     List(Int) piece = slice_seed(blk, i, take, []);
     Int basef = h2_pick(first, extra_flags, 0);
     Int endh = h2_pick(fin, 4, 0);
@@ -681,16 +678,16 @@ pub List(Int) h2_hc_chunk(Int sid, Int extra_flags, List(Int) blk, Int i, Bool f
 // the final frame when `end`. Frames stay under the 16384 default
 // max frame size.
 pub List(Int) h2_data_frames(Int sid, List(Int) payload, Bool end) {
-    return h2_data_acc(sid, payload, end, 1);
+    return h2_data_acc(sid, payload, end, 0);
 }
 
 pub List(Int) h2_data_acc(Int sid, List(Int) payload, Bool end, Int i) {
-    Int n = payload.len() - 1;
-    Int rem = 1 + n - i;
+    Int n = payload.len();
+    Int rem = n - i;
     Bool fits = rem <= 16384;
     Int take = h2_pick(fits, rem, 16384);
     Int lasti = i + take - 1;
-    Bool fin = lasti >= n;
+    Bool fin = lasti >= n - 1;
     List(Int) piece = slice_seed(payload, i, take, []);
     Int flg = h2_pick(fin && end, 1, 0);
     List(Int) f = h2_frame(h2_t_data(), flg, sid, piece);
