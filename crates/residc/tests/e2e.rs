@@ -2905,18 +2905,18 @@ List(Int) rep_acc(Int n, Int b, List(Int) acc) {
 }
 Int main() {
     // RFC 5869 case 1
-    List(Int) salt = rng_acc(0x00, 0x0c, [0]);
-    List(Int) ikm1 = rep_acc(22, 0x0b, [0]);
-    List(Int) info = rng_acc(0xf0, 0xf9, [0]);
+    List(Int) salt = rng_acc(0x00, 0x0c, []);
+    List(Int) ikm1 = rep_acc(22, 0x0b, []);
+    List(Int) info = rng_acc(0xf0, 0xf9, []);
     println(hex_encode(hkdf_extract(salt, ikm1)));
     println(hex_encode(hkdf_expand(hkdf_extract(salt, ikm1), info, 42)));
     // RFC 5869 case 3 (empty salt + empty info)
-    println(hex_encode(hkdf_extract([0], ikm1)));
-    println(hex_encode(hkdf_expand(hkdf_extract([0], ikm1), [0], 42)));
+    println(hex_encode(hkdf_extract([], ikm1)));
+    println(hex_encode(hkdf_expand(hkdf_extract([], ikm1), [], 42)));
     // RFC 5869 case 2 style long inputs
-    List(Int) ikm2 = rng_acc(0x00, 0x4f, [0]);
-    List(Int) salt2 = rng_acc(0x60, 0xaf, [0]);
-    List(Int) info2 = rng_acc(0xb0, 0xff, [0]);
+    List(Int) ikm2 = rng_acc(0x00, 0x4f, []);
+    List(Int) salt2 = rng_acc(0x60, 0xaf, []);
+    List(Int) info2 = rng_acc(0xb0, 0xff, []);
     println(hex_encode(hkdf_expand(hkdf_extract(salt2, ikm2), info2, 82)));
     return 0;
 }
@@ -4690,7 +4690,7 @@ Int main() {
     DerTlv intv = der_next(blob, ipos);
     println(IntToString(intv.val_len));
     List(Int) v = der_content(blob, ipos);
-    println(IntToString(v[1]));
+    println(IntToString(v[0]));
     List(Int) big = [0, 2, 130, 32, 21, 9, 9];
     DerTlv lf = der_next(big, 1);
     println(IntToString(lf.val_len));

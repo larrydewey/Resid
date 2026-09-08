@@ -32,7 +32,7 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
 }
 
 List(Int) hb(Str s) {
-    return hb_acc(s, 0, [0]);
+    return hb_acc(s, 0, []);
 }
 
 // Local frame builder + concat (cross-module recursive list builders
@@ -46,12 +46,12 @@ List(Int) cat5(List(Int) src, Int start, Int stop, Int i, List(Int) acc) {
 }
 
 List(Int) mk_frame(Int stype, Int flags, Int sid, List(Int) payload) {
-    Int plen = payload.len() - 1;
+    Int plen = payload.len();
     Int hi = plen / 65536;
     Int r1 = plen - hi * 65536;
     Int mid = r1 / 256;
     Int lo = r1 - mid * 256;
-    List(Int) hdr = [0, hi, mid, lo, stype, flags];
+    List(Int) hdr = [hi, mid, lo, stype, flags];
     Int s3 = sid / 16777216;
     Int sr = sid - s3 * 16777216;
     Int s2 = sr / 65536;
@@ -62,12 +62,12 @@ List(Int) mk_frame(Int stype, Int flags, Int sid, List(Int) payload) {
     List(Int) hdr3 = hdr2b.concat([s2]);
     List(Int) hdr4 = hdr3.concat([s1]);
     List(Int) hdr5 = hdr4.concat([s0]);
-    return cat5(payload, 1, plen, 1, hdr5);
+    return cat5(payload, 0, plen - 1, 0, hdr5);
 }
 
 List(Int) cat_buf(List(Int) buf, List(Int) rec) {
     Int bl = buf.len();
-    return cat5(buf, 1, bl - 1, 1, rec);
+    return cat5(buf, 0, bl - 1, 0, rec);
 }
 
 List(Int) repz(List(Int) acc, Int n) {
@@ -78,7 +78,7 @@ List(Int) repz(List(Int) acc, Int n) {
 }
 
 List(Int) recv_exact(Int fd, Int n) {
-    List(Int) out = repz([0], n);
+    List(Int) out = repz([], n);
     return recv_loop(fd, out, n, 0);
 }
 
@@ -145,46 +145,46 @@ pub Int tls_max_record_len() {
 }
 
 List(Int) open_record(List(Int) key, List(Int) iv, Int seq, List(Int) header, List(Int) body) {
-    Int blen = body.len() - 1;
+    Int blen = body.len();
     Int clen = blen - 16;
     if (clen < 1) {
         println("RECORD-SHORT");
-        return repz([0], 1);
+        return repz([], 1);
     }
     List(Int) rk = aes128_key_expand(key);
     List(Int) nonce = tls_record_nonce(iv, seq);
     List(Int) j0 = tls_j0(nonce);
     List(Int) ek = aes128_encrypt_block(rk, j0);
-    List(Int) ct = slice_seed(body, 1, clen, [0]);
+    List(Int) ct = slice_seed(body, 0, clen, []);
     List(Int) cb = inc32(j0);
-    List(Int) ptfull = ctr_xor(rk, cb, ct, 0, [0]);
+    List(Int) ptfull = ctr_xor(rk, cb, ct, 0, []);
     List(Int) mi = gcm_mac_data(header, ct);
-    List(Int) hblk = aes128_encrypt_block(rk, repz([0], 16));
+    List(Int) hblk = aes128_encrypt_block(rk, repz([], 16));
     Int milen = mi.len();
     Int micount = milen - 1;
-    List(Int) y0 = zeros_seed([0], 16);
-    List(Int) sv = ghash_blocks(hblk, y0, mi, 1, micount);
+    List(Int) y0 = zeros_seed([], 16);
+    List(Int) sv = ghash_blocks(hblk, y0, mi, 0, micount);
     List(Int) tagraw = xor16(sv, ek);
-    List(Int) expect = slice_seed(tagraw, 1, 16, [0]);
-    Int toff = blen - 15;
-    List(Int) tag = slice_seed(body, toff, 16, [0]);
+    List(Int) expect = slice_seed(tagraw, 0, 16, []);
+    Int toff = clen;
+    List(Int) tag = slice_seed(body, toff, 16, []);
     Bool ok = ct_equal(expect, tag);
     if (!ok) {
         println("RECORD-TAG-BAD");
-        return repz([0], 1);
+        return repz([], 1);
     }
-    return slice_seed(ptfull, 1, clen, [0]);
+    return slice_seed(ptfull, 0, clen, []);
 }
 
 List(Int) h5_of(List(Int) hdr, Bool ok) {
-    if (!ok) { return [0]; }
-    return slice_seed(hdr, 1, 5, [0]);
+    if (!ok) { List(Int) empty = []; return empty; }
+    return slice_seed(hdr, 0, 5, []);
 }
 
 // App-data outer content type; sentinel-safe under eager evaluation.
 Bool hdr_is_app(List(Int) hdr, Bool framed) {
     if (!framed) { return false; }
-    Int t = hdr[1];
+    Int t = hdr[0];
     return t == 23;
 }
 
@@ -197,14 +197,14 @@ List(Int) read_flight(Int fd, List(Int) acc, List(Int) key, List(Int) iv, Int se
         return acc;
     }
     List(Int) hdr0 = recv_exact(fd, 5);
-    Int hlen = hdr0.len() - 1;
+    Int hlen = hdr0.len();
     Bool hok = hlen >= 5;
     // Pad short reads so eager indexing below stays in bounds.
-    List(Int) hdr = pick_list(hok, hdr0, repz([0], 5));
-    Int blen = hdr[4] * 256 + hdr[5];
+    List(Int) hdr = pick_list(hok, hdr0, repz([], 5));
+    Int blen = hdr[3] * 256 + hdr[4];
     Bool framed = hok && blen >= 17 && blen <= tls_max_record_len();
     List(Int) body = recv_exact(fd, blen);
-    Bool shortread = body.len() - 1 < blen;
+    Bool shortread = body.len() < blen;
     // Guards keep eager evaluation safe on the EOF sentinel list.
     Bool dec = hdr_is_app(hdr, framed && !shortread);
     List(Int) h5 = h5_of(hdr, dec);
@@ -216,7 +216,7 @@ List(Int) read_flight(Int fd, List(Int) acc, List(Int) key, List(Int) iv, Int se
     if (pf > 0) {
         return acc3;
     }
-    Int seq2 = pick_int(hdr[1] == 23, seq + 1, seq);
+    Int seq2 = pick_int(hdr[0] == 23, seq + 1, seq);
     Int t2 = tries - 1;
     return read_flight(fd, acc3, key, iv, seq2, t2);
 }
@@ -230,11 +230,11 @@ List(Int) pick_list(Bool c, List(Int) a, List(Int) b) {
 List(Int) flight_append(Bool isapp, List(Int) key, List(Int) iv, Int seq, List(Int) h5, List(Int) body, List(Int) acc) {
     if (!isapp) { return acc; }
     List(Int) plainfull = open_record(key, iv, seq, h5, body);
-    Int plen = plainfull.len() - 1;
+    Int plen = plainfull.len();
     if (plen < 2) { return acc; }
     // plen counts data; the final byte is the inner content type.
     Int lastidx = plen - 1;
-    List(Int) plain = slice_seed(plainfull, 1, lastidx, [0]);
+    List(Int) plain = slice_seed(plainfull, 0, lastidx, []);
     return sconcat(acc, plain);
 }
 
@@ -244,13 +244,13 @@ type H2Rec = { data: List(Int), seq: Int(64), alert: Bool, eof: Bool, ctype: Int
 
 H2Rec read_one_record(Int fd, List(Int) key, List(Int) iv, Int seq) {
     List(Int) hdr = recv_exact(fd, 5);
-    Int hlen = hdr.len() - 1;
+    Int hlen = hdr.len();
     if (hlen < 5) {
-        return H2Rec { data: [0], seq: seq, alert: false, eof: true, ctype: 0 };
+        return H2Rec { data: [], seq: seq, alert: false, eof: true, ctype: 0 };
     }
-    Int blen = hdr[4] * 256 + hdr[5];
+    Int blen = hdr[3] * 256 + hdr[4];
     if (blen < 17 || blen > tls_max_record_len()) {
-        return H2Rec { data: [0], seq: seq, alert: false, eof: true, ctype: 0 };
+        return H2Rec { data: [], seq: seq, alert: false, eof: true, ctype: 0 };
     }
     List(Int) body = recv_exact(fd, blen);
     if (body.len() - 1 < blen) {
@@ -505,7 +505,7 @@ Int main() {
         return 1;
     }
     List(Int) shbody = recv_exact(fd, shlen);
-    if (shbody.len() - 1 < shlen || shbody.len() - 1 < 39 + 32) {
+    if (shbody.len() < shlen || shbody.len() < 39 + 32) {
         println("SH-SHORT");
         return 1;
     }
@@ -515,12 +515,12 @@ Int main() {
     List(Int) hs = tls_handshake_secret(shared);
     List(Int) tr1 = sconcat(chbody, shbody);
     List(Int) th1raw = sha256_bytes(tr1);
-    List(Int) th1 = slice_seed(th1raw, 1, 32, [0]);
+    List(Int) th1 = slice_seed(th1raw, 0, 32, []);
     List(Int) c_hs = tls_c_hs_traffic(hs, th1);
     List(Int) s_hs = tls_s_hs_traffic(hs, th1);
     List(Int) skey = tls_traffic_key(s_hs);
     List(Int) siv = tls_traffic_iv(s_hs);
-    List(Int) inner = read_flight(fd, [0], skey, siv, 0, 8);
+    List(Int) inner = read_flight(fd, [], skey, siv, 0, 8);
     Int flen = inner.len();
     if (flen < 100) { return 40 + flen; }
     return 69;
