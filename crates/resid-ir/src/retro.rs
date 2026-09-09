@@ -65,12 +65,11 @@ impl Retro {
     /// name order so output is deterministic.
     fn emit(&self) -> AstTranslationUnit {
         let mut fs = self.graph.function_keys();
-        if let Some(entry) = self.graph.get_entry() {
-            if let Some(pos) = fs.iter().position(|k| *k == entry) {
+        if let Some(entry) = self.graph.get_entry()
+            && let Some(pos) = fs.iter().position(|k| *k == entry) {
                 let e = fs.remove(pos);
                 fs.insert(0, e);
             }
-        }
         let ep = fs.first().copied();
         let mut rest: Vec<GraphKey> = if ep.is_some() { fs[1..].to_vec() } else { fs };
         rest.sort_by_key(|k| match self.node_kind(*k) {
@@ -552,13 +551,10 @@ impl Retro {
             end: None,
             closed: false,
         };
-        match self.node_kind(range) {
-            NodeKind::Range { start, end, closed } => {
-                out.start = self.conv(*start).ok();
-                out.end = self.conv(*end).ok();
-                out.closed = *closed;
-            }
-            _ => {}
+        if let NodeKind::Range { start, end, closed } = self.node_kind(range) {
+            out.start = self.conv(*start).ok();
+            out.end = self.conv(*end).ok();
+            out.closed = *closed;
         }
         out
     }
@@ -909,7 +905,8 @@ fn is_folded_constant(e: &AstExpr) -> bool {
 /// node type is narrower/explicitly typed than what the parser infers.
 fn literal_expr(lit: LiteralValue, ty: &Type, span: &Span) -> AstExpr {
     let sp = span.clone();
-    let raw = match lit {
+    
+    match lit {
         LiteralValue::Int { value, width, signed } => {
             let nt = NumericType::Int(width);
             let default_lit = AstExpr::Literal {
@@ -928,11 +925,11 @@ fn literal_expr(lit: LiteralValue, ty: &Type, span: &Span) -> AstExpr {
                 };
             }
             let _ = nt;
-            return AstExpr::UnaryOp {
+            AstExpr::UnaryOp {
                 op: UnaryOp::Cast(Box::new(Type::Numeric(NumericType::UInt(width)))),
                 operand: Box::new(default_lit),
                 span: sp,
-            };
+            }
         }
         LiteralValue::UInt(value, width) => {
             let default_lit = AstExpr::Literal {
@@ -943,14 +940,14 @@ fn literal_expr(lit: LiteralValue, ty: &Type, span: &Span) -> AstExpr {
             if *ty == Type::Numeric(NumericType::UInt(IntWidth::B64)) {
                 return default_lit;
             }
-            return AstExpr::UnaryOp {
+            AstExpr::UnaryOp {
                 op: UnaryOp::Cast(Box::new(Type::Numeric(NumericType::UInt(width)))),
                 operand: Box::new(default_lit),
                 span: sp,
-            };
+            }
         }
         LiteralValue::Float { value, width } => {
-            return match ty {
+            match ty {
                 Type::Numeric(NumericType::Float(FloatWidth::F64)) => {
                     AstExpr::FloatLit { value, span: sp }
                 }
@@ -959,7 +956,7 @@ fn literal_expr(lit: LiteralValue, ty: &Type, span: &Span) -> AstExpr {
                     operand: Box::new(AstExpr::FloatLit { value, span: sp.clone() }),
                     span: sp,
                 },
-            };
+            }
         }
         LiteralValue::Str(s) => AstExpr::StrLit { value: s, span: sp },
         LiteralValue::Bool(b) => AstExpr::BoolLit(b, sp),
@@ -986,8 +983,7 @@ fn literal_expr(lit: LiteralValue, ty: &Type, span: &Span) -> AstExpr {
                 .collect(),
             sp,
         ),
-    };
-    raw
+    }
 }
 
 fn type_of_lit(lit: &LiteralValue) -> Type {

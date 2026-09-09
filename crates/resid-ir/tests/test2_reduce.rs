@@ -68,7 +68,7 @@ fn folds_binary_literal() {
     };
     let u = graph_reduce(unit_with(vec![func("main", body, None)]), &[]).expect("reduce");
     let main = u.functions.iter().find(|f| f.name == "main").unwrap();
-    match main.body.ret.as_deref().map(|e| as_int(e)) {
+    match main.body.ret.as_deref().map(as_int) {
         Some(Some(5)) => {}
         other => panic!("expected 5, got {:?}", other),
     }
@@ -101,7 +101,7 @@ fn folds_division_to_zero() {
     let u = graph_reduce(unit_with(vec![func("main", body, Some("UInt(8)".into()))]), &[])
         .expect("reduce");
     let main = u.functions.iter().find(|f| f.name == "main").unwrap();
-    match main.body.ret.as_deref().map(|e| as_cast_int(e)) {
+    match main.body.ret.as_deref().map(as_cast_int) {
         Some(Some(0)) => {}
         other => panic!("expected 0, got {:?}", other),
     }
@@ -183,7 +183,7 @@ fn collapses_constant_if() {
     };
     let u = graph_reduce(unit_with(vec![func("main", body, None)]), &[]).expect("reduce");
     let main = u.functions.iter().find(|f| f.name == "main").unwrap();
-    assert_eq!(main.body.ret.as_deref().map(|e| as_int(e)), Some(Some(42)));
+    assert_eq!(main.body.ret.as_deref().map(as_int), Some(Some(42)));
 }
 
 /// A pure call with constant argument inlines to its body's result.
@@ -218,5 +218,5 @@ fn inlines_pure_call() {
     let u = graph_reduce(unit_with(vec![callee, func("main", body, None)]), &[])
         .expect("reduce");
     let main = u.functions.iter().find(|f| f.name == "main").unwrap();
-    assert_eq!(main.body.ret.as_deref().map(|e| as_int(e)), Some(Some(42)));
+    assert_eq!(main.body.ret.as_deref().map(as_int), Some(Some(42)));
 }

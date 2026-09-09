@@ -1993,11 +1993,10 @@ impl<'ctx> CodeGen<'ctx> {
                 if let Some(cache) = &self.knowledge_cache {
                     let expr_hash = Self::hash_expr(func, args);
                     let env_hash = Self::hash_env(sc);
-                    if let Some(cached) = cache.get(&expr_hash, &env_hash, KnowledgeKind::ReducedExpr) {
-                        if let Some(v) = Self::knowledge_value_to_cvalue(cached) {
+                    if let Some(cached) = cache.get(&expr_hash, &env_hash, KnowledgeKind::ReducedExpr)
+                        && let Some(v) = Self::knowledge_value_to_cvalue(cached) {
                             return self.lower_cvalue(sc, v, target);
                         }
-                    }
                 }
                 if let Some(v) = resid_type::reduce_call(&self.unit, func, args) {
                     // Store in knowledge cache for future compilations

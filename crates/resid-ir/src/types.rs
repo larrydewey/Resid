@@ -929,6 +929,17 @@ fn float_result(lhs: &NumericType, op: BinOp, rhs: &NumericType, _tw: u16) -> Re
     }
 }
 
+impl core::ops::Not for LiteralValue {
+    type Output = LiteralValue;
+    fn not(self) -> LiteralValue {
+        match self {
+            LiteralValue::Bool(b) => LiteralValue::Bool(!b),
+            _ => LiteralValue::Bool(false),
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1234,15 +1245,5 @@ mod tests {
     fn test_provenance_display() {
         let p = Provenance::Inferred;
         let _ = format!("{:?}", p);
-    }
-}
-
-impl core::ops::Not for LiteralValue {
-    type Output = LiteralValue;
-    fn not(self) -> LiteralValue {
-        match self {
-            LiteralValue::Bool(b) => LiteralValue::Bool(!b),
-            _ => LiteralValue::Bool(false),
-        }
     }
 }
