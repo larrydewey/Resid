@@ -12,9 +12,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use resid_lexer::Lexer;
-use resid_parser::{Parser, TranslationUnit};
-use resid_type::{check_program, collect_signatures, collect_types, infer_expr, FunctionSig, SemType, TypeError, Types};
+use resid_parser::Parser;
+use resid_type::{check_program, collect_signatures, collect_types};
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -171,7 +170,7 @@ impl LanguageServer for ResidLsp {
     }
 }
 
-fn apply_incremental(old: &str, _new: &str) -> String {
+fn _apply_incremental(old: &str, _new: &str) -> String {
     // For now, just return new text; proper incremental would need diff
     _new.to_string()
 }

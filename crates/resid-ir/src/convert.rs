@@ -80,6 +80,7 @@ impl AstConverter {
         Identifier::new(name, id)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn mk_node(
         &mut self,
         kind: NodeKind,
@@ -155,15 +156,15 @@ impl AstConverter {
             .iter()
             .find(|f| f.name == "main")
             .or_else(|| unit.functions.first());
-        if let Some(f) = entry {
-            if let Some(k) = self.graph.lookup_function_key(&f.name) {
+        if let Some(f) = entry
+            && let Some(k) = self.graph.lookup_function_key(&f.name) {
                 self.graph.set_entry(k);
             }
-        }
 
         Ok(self.graph.clone())
     }
 
+    #[allow(clippy::type_complexity)]
     fn convert_function_body(
         &mut self,
         func_def: &AstFuncDef,
@@ -1670,7 +1671,7 @@ impl AstConverter {
     fn binop_type(&self, lk: &GraphKey, op: &BinOp, rk: &GraphKey) -> (Type, KnowledgeState) {
         fn strip(t: &Type) -> &Type {
             match t {
-                Type::Residual(inner) => &**inner,
+                Type::Residual(inner) => inner,
                 other => other,
             }
         }

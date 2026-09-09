@@ -448,8 +448,8 @@ impl<'a> ReductionContext<'a> {
                 }
             }
             // Bool folding with resolved values
-            if let (LiteralValue::Bool(b), LiteralValue::Bool(c)) = (&lit_l, &lit_r) {
-                if let Some(result) = fold_bin_bool(op, *b, *c) {
+            if let (LiteralValue::Bool(b), LiteralValue::Bool(c)) = (&lit_l, &lit_r)
+                && let Some(result) = fold_bin_bool(op, *b, *c) {
                     self.graph.replace_node(
                         key,
                         NodeKind::Literal(LiteralValue::Bool(result)),
@@ -458,7 +458,6 @@ impl<'a> ReductionContext<'a> {
                     );
                     return Ok(ReductionResult::Reduced(lhs));
                 }
-            }
         }
         Ok(ReductionResult::Irreducible)
     }
@@ -717,8 +716,8 @@ impl<'a> ReductionContext<'a> {
     ) -> Result<ReductionResult, Vec<ReductionError>> {
         // First, try direct Literal matching (original behavior)
         let node = self.graph.get_node(operand);
-        if let NodeKind::Literal(ref lit) = node.kind {
-            if let Some(cl) = cast_int(lit, &cast_type) {
+        if let NodeKind::Literal(ref lit) = node.kind
+            && let Some(cl) = cast_int(lit, &cast_type) {
                 self.graph.replace_node(
                     key,
                     NodeKind::Literal(cl),
@@ -727,10 +726,9 @@ impl<'a> ReductionContext<'a> {
                 );
                 return Ok(ReductionResult::Reduced(operand));
             }
-        }
         // If direct matching failed, try resolving through bindings/references
-        if let Some(lit) = self.known_literal(operand) {
-            if let Some(cl) = cast_int(&lit, &cast_type) {
+        if let Some(lit) = self.known_literal(operand)
+            && let Some(cl) = cast_int(&lit, &cast_type) {
                 self.graph.replace_node(
                     key,
                     NodeKind::Literal(cl),
@@ -739,7 +737,6 @@ impl<'a> ReductionContext<'a> {
                 );
                 return Ok(ReductionResult::Reduced(operand));
             }
-        }
         Ok(ReductionResult::Irreducible)
     }
 
@@ -964,15 +961,14 @@ fn value_to_usize(v: &u128) -> Option<usize> {
 
 fn fold_bin_int(op: BinOp, lhs: i128, rhs: i128, type_: &Type) -> Option<LiteralValue> {
     // Shift counts ≥ bit width yield 0 (soundness hardening; spec §32).
-    if let BinOp::ShiftLeft | BinOp::ShiftRight = op {
-        if rhs < 0 || rhs as u32 >= 128 {
+    if let BinOp::ShiftLeft | BinOp::ShiftRight = op
+        && (rhs < 0 || rhs as u32 >= 128) {
             return Some(LiteralValue::Int {
                 value: 0,
                 width: width_of(type_),
                 signed: signed_of(type_),
             });
         }
-    }
     let result = match op {
         BinOp::Add => lhs.checked_add(rhs),
         BinOp::Sub => lhs.checked_sub(rhs),
