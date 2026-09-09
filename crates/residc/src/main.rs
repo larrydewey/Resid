@@ -11,6 +11,7 @@
 
 use std::env;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -269,6 +270,22 @@ fn main() -> ExitCode {
     }
 }
 
+/// Print a diagnostic to stderr, rustc-style: header with error code,
+/// source snippet with caret, span-pair labels, notes and help (resid-diag).
+/// ANSI color only when stderr is a terminal.
+fn print_diag(d: &resid_diag::Diag) {
+    let color = std::io::stderr().is_terminal();
+    let load = |f: &str| std::fs::read_to_string(f).ok();
+    eprint!("{}", d.render(&load, color));
+}
+
+/// Print a batch of type errors through the shared renderer.
+fn print_type_errors(errs: &[resid_type::TypeError]) {
+    for e in errs {
+        print_diag(&e.to_diag());
+    }
+}
+
 /// Resolve imports + lex + parse + type check. When `graph_reduce` is set,
 /// the parsed unit is first reduced through the knowledge-graph pipeline,
 /// then the reduced unit is re-type-checked. Prints diagnostics and returns
@@ -277,7 +294,13 @@ fn pipeline(file: &str, graph_reduce: bool) -> Result<TranslationUnit, ExitCode>
     let unit = match resid_parser::resolve_unit(std::path::Path::new(file)) {
         Ok(u) => u,
         Err(e) => {
-            eprintln!("error: {e}");
+            if !e.parse_errors.is_empty() {
+                for pe in &e.parse_errors {
+                    print_diag(&resid_diag::Diag::error("E0020", &pe.message, pe.span.clone()));
+                }
+            } else {
+                eprintln!("error: {e}");
+            }
             return Err(ExitCode::FAILURE);
         }
     };
@@ -299,13 +322,8 @@ fn pipeline(file: &str, graph_reduce: bool) -> Result<TranslationUnit, ExitCode>
             .count();
         eprintln!("graph-reduce: reduced program to {n_funcs} function(s)");
         let type_errors = resid_type::check_program(&reduced);
-        for e in &type_errors {
-            eprintln!(
-                "{}:{}:{}: type error: {}",
-                e.span.file, e.span.line, e.span.col_start, e.message
-            );
-        }
         if !type_errors.is_empty() {
+            print_type_errors(&type_errors);
             eprintln!(
                 "error: type checking the reduced program failed with {} diagnostic(s)",
                 type_errors.len()
@@ -316,13 +334,8 @@ fn pipeline(file: &str, graph_reduce: bool) -> Result<TranslationUnit, ExitCode>
     }
 
     let type_errors = resid_type::check_program(&unit);
-    for e in &type_errors {
-        eprintln!(
-            "{}:{}:{}: type error: {}",
-            e.span.file, e.span.line, e.span.col_start, e.message
-        );
-    }
     if !type_errors.is_empty() {
+        print_type_errors(&type_errors);
         eprintln!(
             "error: type checking failed with {} diagnostic(s)",
             type_errors.len()

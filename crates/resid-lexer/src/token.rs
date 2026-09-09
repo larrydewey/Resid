@@ -17,6 +17,18 @@ impl fmt::Display for Span {
     }
 }
 
+impl Span {
+    /// An unknown span (line 0 / empty file) — renders header-only.
+    pub fn unknown() -> Span {
+        Span {
+            file: String::new(),
+            line: 0,
+            col_start: 0,
+            col_end: 0,
+        }
+    }
+}
+
 /// All keyword tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Keyword {

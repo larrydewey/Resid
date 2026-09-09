@@ -740,6 +740,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "resid-diag"
+version = "0.1.0"
+dependencies = [
+ "resid-lexer",
+]
+
+[[package]]
 name = "resid-fmt"
 version = "0.1.0"
 dependencies = [
@@ -812,6 +819,7 @@ dependencies = [
 name = "resid-type"
 version = "0.1.0"
 dependencies = [
+ "resid-diag",
  "resid-ir",
  "resid-lexer",
  "resid-parser",
@@ -835,6 +843,7 @@ dependencies = [
  "resid-builtin",
  "resid-cache",
  "resid-codegen",
+ "resid-diag",
  "resid-ir",
  "resid-lexer",
  "resid-notes",

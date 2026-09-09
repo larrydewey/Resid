@@ -452,10 +452,69 @@ pub fn find_constructor<'t>(types: &'t Types, name: &str) -> Option<&'t SemType>
 }
 
 /// Type-checking failure surfaced to the driver.
+///
+/// Carries a stable error code and optional diagnostic context (secondary
+/// labels, notes, help) for rustc-style rendering via `resid-diag`.
 #[derive(Debug, Clone)]
 pub struct TypeError {
     pub message: String,
     pub span: Span,
+    /// Stable error code (see `resid-diag` catalog). Defaults to `E0001`.
+    pub code: &'static str,
+    /// Text printed beside the primary caret.
+    pub primary_label: Option<String>,
+    /// Secondary spans rendered as their own snippet blocks (span pairs).
+    pub labels: Vec<resid_diag::Label>,
+    pub notes: Vec<String>,
+    pub help: Option<String>,
+}
+
+impl TypeError {
+    /// Fluently set the error code.
+    pub fn code(mut self, c: &'static str) -> TypeError {
+        self.code = c;
+        self
+    }
+    /// Fluently attach a caret label to the primary span.
+    pub fn primary_label(mut self, msg: impl Into<String>) -> TypeError {
+        self.primary_label = Some(msg.into());
+        self
+    }
+    /// Fluently attach a secondary span (span pair).
+    pub fn label(mut self, span: Span, msg: impl Into<String>) -> TypeError {
+        self.labels.push(resid_diag::Label {
+            span,
+            message: msg.into(),
+        });
+        self
+    }
+    /// Fluently attach a `= note:` line.
+    pub fn note(mut self, msg: impl Into<String>) -> TypeError {
+        self.notes.push(msg.into());
+        self
+    }
+    /// Fluently attach a `= help:` line.
+    pub fn help(mut self, msg: impl Into<String>) -> TypeError {
+        self.help = Some(msg.into());
+        self
+    }
+    /// Convert to a `resid-diag` diagnostic for rendering.
+    pub fn to_diag(&self) -> resid_diag::Diag {
+        let mut d = resid_diag::Diag::error(self.code, &self.message, self.span.clone());
+        if let Some(l) = &self.primary_label {
+            d = d.primary_label(l.clone());
+        }
+        for l in &self.labels {
+            d = d.label(l.span.clone(), l.message.clone());
+        }
+        for n in &self.notes {
+            d = d.note(n.clone());
+        }
+        if let Some(h) = &self.help {
+            d = d.help(h.clone());
+        }
+        d
+    }
 }
 
 impl core::fmt::Display for TypeError {
@@ -468,6 +527,9 @@ impl core::fmt::Display for TypeError {
 #[derive(Debug, Clone)]
 pub struct FunctionSig {
     pub name: String,
+    /// The `FuncDef`'s declared span (name position); for zero rendering
+    /// when the signature was synthesized (builtins/behaviors).
+    pub span: Span,
     pub params: Vec<SemType>,
     pub param_names: Vec<String>,
     pub param_defaults: Vec<Option<ExprKind>>,
@@ -632,6 +694,11 @@ fn err(span: &Span, message: impl Into<String>) -> TypeError {
     TypeError {
         message: message.into(),
         span: span.clone(),
+        code: "E0001",
+        primary_label: None,
+        labels: Vec::new(),
+        notes: Vec::new(),
+        help: None,
     }
 }
 
@@ -1313,6 +1380,7 @@ pub fn builtin_signatures() -> Signatures {
                 name.to_string(),
                 FunctionSig {
                     name: name.to_string(),
+                    span: Span::unknown(),
                     params: params.to_vec(),
                     param_names: Vec::new(),
                     param_defaults: Vec::new(),
@@ -1386,6 +1454,7 @@ pub fn builtin_signatures() -> Signatures {
             name.to_string(),
             FunctionSig {
                 name: name.to_string(),
+                span: Span::unknown(),
                 params,
                 param_names: Vec::new(),
                 param_defaults: Vec::new(),
@@ -1430,6 +1499,7 @@ fn signature_of(f: &FuncDef, types: &Types) -> FunctionSig {
     let ret = resolve_type_ctx(&f.ret, types).unwrap_or(SemType::Bool);
     FunctionSig {
         name: f.name.0.clone(),
+        span: f.span.clone(),
         params,
         param_names,
         param_defaults,
@@ -3173,6 +3243,7 @@ fn arith_family_sig(args_ty: &[SemType], func: &str) -> Option<FunctionSig> {
     }
     Some(FunctionSig {
         name: func.to_string(),
+        span: Span::unknown(),
         params: vec![SemType::Numeric(w0), SemType::Numeric(w1)],
         param_names: vec!["a".into(), "b".into()],
         param_defaults: vec![None, None],
@@ -3203,6 +3274,7 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
                     if conversion_helper_match(arg, &tgt, 'd') {
                         return Some(FunctionSig {
                             name: func.to_string(),
+                            span: Span::unknown(),
                             params: vec![tgt.clone()],
                             param_names: vec!["value".to_string()],
                             param_defaults: vec![None],
@@ -3217,6 +3289,7 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
                 }
                 return Some(FunctionSig {
                     name: func.to_string(),
+                    span: Span::unknown(),
                     params: vec![tgt.clone()],
                     param_names: vec!["value".to_string()],
                     param_defaults: vec![None],
@@ -3409,7 +3482,13 @@ fn discharge_constraint(
                     constraint_str(constraint),
                     v
                 ),
-            )),
+            )
+            .code("E0301")
+            .primary_label(format!("value is {v}"))
+            .help(format!(
+                "assign a value that satisfies `{}` at this binding",
+                constraint_str(constraint)
+            ))),
             None => errs.push(err(
                 span,
                 format!(
@@ -3596,6 +3675,7 @@ pub fn check_program_with(unit: &TranslationUnit, ceilings: &[FileCeiling]) -> V
             format!("behavior::{key}"),
             FunctionSig {
                 name: func.clone(),
+                span: Span::unknown(),
                 params,
                 param_names: vec!["a".into(), "b".into()],
                 param_defaults: vec![None, None],
@@ -3641,13 +3721,18 @@ pub fn check_program_with(unit: &TranslationUnit, ceilings: &[FileCeiling]) -> V
                         && id.0 != "readonly"
                         && id.0 != "readwrite"
                     {
-                        errs.push(err(
-                            &f.span,
-                            format!(
-                                "unknown capability mode `{}` on `{}`; supported modes are `readonly` and `readwrite`",
-                                id.0, cap.name.0
-                            ),
-                        ));
+                        errs.push(
+                            err(
+                                &f.span,
+                                format!(
+                                    "unknown capability mode `{}` on `{}`; supported modes are `readonly` and `readwrite`",
+                                    id.0, cap.name.0
+                                ),
+                            )
+                            .code("E0213")
+                            .primary_label(format!("`{}` is not a mode", id.0))
+                            .help("did you mean `readonly`?"),
+                        );
                     }
                 }
             }
@@ -3659,15 +3744,24 @@ pub fn check_program_with(unit: &TranslationUnit, ceilings: &[FileCeiling]) -> V
             if let Some(ceiling) = effective_declared_ceiling(&sig.file, &sig.sandbox_ceiling, ceilings) {
                 for req in &sig.requires {
                     if !caps_contain_family(&ceiling, req) {
-                        errs.push(err(
-                            &f.span,
-                            format!(
-                                "function `{}` requires capability `{}` which exceeds the effective capability ceiling [{}]",
-                                f.name.0,
-                                req,
-                                ceiling.join(", "),
-                            ),
-                        ));
+                        errs.push(
+                            err(
+                                &f.span,
+                                format!(
+                                    "function `{}` requires capability `{}` which exceeds the effective capability ceiling [{}]",
+                                    f.name.0,
+                                    req,
+                                    ceiling.join(", "),
+                                ),
+                            )
+                            .code("E0212")
+                            .primary_label(format!("requires `{req}`"))
+                            .label(
+                                f.span.clone(),
+                                format!("effective ceiling is [{}]", ceiling.join(", ")),
+                            )
+                            .note("the ceiling is the meet of the enclosing sandbox and any manifest capability ceiling"),
+                        );
                     }
                 }
             }
@@ -3986,14 +4080,23 @@ fn enforce_transitive_attenuation(
             if let Some(sig) = sigs.get(callee) {
                 for req in &sig.requires {
                     if !caps_contain_family(caller_eff, req) {
-                        errs.push(err(
-                            span,
-                            format!(
-                                "call to `{}` requires capability `{req}` which exceeds the caller's effective sandbox ceiling [{}] (attenuation is transitive across the call closure)",
-                                callee,
-                                caller_eff.join(", "),
-                            ),
-                        ));
+                        let dspan = sig.span.clone();
+                        errs.push(
+                            err(
+                                span,
+                                format!(
+                                    "call to `{}` requires capability `{req}` which exceeds the caller's effective sandbox ceiling [{}] (attenuation is transitive across the call closure)",
+                                    callee,
+                                    caller_eff.join(", "),
+                                ),
+                            )
+                            .code("E0211")
+                            .primary_label(format!("`{callee}` requires `{req}`"))
+                            .note(format!(
+                                "the effective ceiling is the intersection of every enclosing sandbox and manifest capability list"
+                            ))
+                            .label(dspan, format!("`{callee}` is declared here with `@requires({req})`")),
+                        );
                         break;
                     }
                 }
@@ -4122,13 +4225,18 @@ fn walk_spawn_cap_env(
                 if let Some(p) = parent {
                     for c in &caps {
                         if !caps_contain_family(p, c) {
-                            errs.push(err(
-                                &e.span,
-                                format!(
-                                    "spawn declares capability `{c}` which exceeds the parent's capability ceiling [{}] (child ≤ parent)",
-                                    p.join(", "),
-                                ),
-                            ));
+                            errs.push(
+                                err(
+                                    &e.span,
+                                    format!(
+                                        "spawn declares capability `{c}` which exceeds the parent's capability ceiling [{}] (child ≤ parent)",
+                                        p.join(", "),
+                                    ),
+                                )
+                                .code("E0214")
+                                .primary_label(format!("spawn grants `{c}`"))
+                                .note("a spawn may never amplify the parent's powers"),
+                            );
                         }
                     }
                 }
@@ -4140,13 +4248,21 @@ fn walk_spawn_cap_env(
                         && let Some(sig) = sigs.get(&callee.0) {
                             for req in &sig.requires {
                                 if !caps_contain_family(p, req) {
-                                    errs.push(err(
-                                        &e.span,
-                                        format!(
-                                            "call to `{}` requires capability `{req}` which is not granted to this region's capability set [{}]",
-                                            callee.0, p.join(", "),
+                                    errs.push(
+                                        err(
+                                            &e.span,
+                                            format!(
+                                                "call to `{}` requires capability `{req}` which is not granted to this region's capability set [{}]",
+                                                callee.0, p.join(", "),
+                                            ),
+                                        )
+                                        .code("E0215")
+                                        .primary_label(format!("requires `{req}`"))
+                                        .label(
+                                            sig.span.clone(),
+                                            format!("`{}` requires `{req}`", callee.0),
                                         ),
-                                    ));
+                                    );
                                     break;
                                 }
                             }
@@ -4156,13 +4272,17 @@ fn walk_spawn_cap_env(
                     if !caps_contain_family(p, "filesystem")
                         && args.iter().any(|(_, a)| arg_is_file(a, file_bindings))
                     {
-                        errs.push(err(
-                            &e.span,
-                            format!(
-                                "call passes a File handle value as an argument into a region whose capability set [{}] does not grant `filesystem` (spec §21.3: a handle may enter a sandbox only when every capability it requires is ≤ the sandbox's set)",
-                                p.join(", "),
-                            ),
-                        ));
+                        errs.push(
+                            err(
+                                &e.span,
+                                format!(
+                                    "call passes a File handle value as an argument into a region whose capability set [{}] does not grant `filesystem` (spec §21.3: a handle may enter a sandbox only when every capability it requires is ≤ the sandbox's set)",
+                                    p.join(", "),
+                                ),
+                            )
+                            .code("E0216")
+                            .primary_label("passes a File handle"),
+                        );
                     }
                 }
                 walk_expr(func, parent, sigs, errs, file_bindings);
@@ -4274,10 +4394,14 @@ fn walk_spawn_cap_env(
                     if matches!(method.0.as_str(), "read_handle" | "close")
                         && let Some(p) = parent
                             && !caps_contain_family(p, "filesystem") {
-                                errs.push(err(&e.span, format!(
-                                    "File method `{}` requires capability `filesystem` which is not granted to this region's capability set [{}]",
-                                    method.0, p.join(", ")
-                                )));
+                                errs.push(
+                                    err(&e.span, format!(
+                                        "File method `{}` requires capability `filesystem` which is not granted to this region's capability set [{}]",
+                                        method.0, p.join(", ")
+                                    ))
+                                    .code("E0216")
+                                    .primary_label(format!(".{}() needs `filesystem`", method.0)),
+                                );
                             }
                     for a in args {
                         walk_expr(a, parent, sigs, errs, file_bindings);
@@ -4318,15 +4442,24 @@ fn walk_spawn_cap_env(
             ExprKind::ProviderCall { provider, verb, args, .. } => {
                 if let Some(p) = parent {
                     if !caps_contain_family(p, &provider.0) {
-                        errs.push(err(&e.span, format!(
-                            "provider call `{provider}` requires capability `{provider}` which is not granted to this region's capability set [{}]",
-                            p.join(", ")
-                        )));
+                        errs.push(
+                            err(&e.span, format!(
+                                "provider call `{provider}` requires capability `{provider}` which is not granted to this region's capability set [{}]",
+                                p.join(", ")
+                            ))
+                            .code("E0218")
+                            .primary_label(format!("requires `{provider}`")),
+                        );
                     } else if is_write_verb(&provider.0, &verb.0) && grant_readonly_only(p, &provider.0) {
-                        errs.push(err(&e.span, format!(
-                            "provider call `{provider}.{verb}` is a write operation, but only a read-only grant of capability `{provider}` is available here [{}] (capability modes only restrict, never amplify)",
-                            p.join(", ")
-                        )));
+                        errs.push(
+                            err(&e.span, format!(
+                                "provider call `{provider}.{verb}` is a write operation, but only a read-only grant of capability `{provider}` is available here [{}] (capability modes only restrict, never amplify)",
+                                p.join(", ")
+                            ))
+                            .code("E0217")
+                            .primary_label(format!("`{verb}` is a write operation"))
+                            .help(format!("grant `{provider}(readwrite)` (or drop the `(readonly)` mode) to permit writes")),
+                        );
                     }
                 }
                 for a in args {

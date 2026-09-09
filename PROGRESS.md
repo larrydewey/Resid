@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**673 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
+**677 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 17, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, residc 0 unit + 111 e2e).
+  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 117 e2e).
 
 ### Major capabilities
 
@@ -48,6 +48,12 @@
   `examples/h2_client.resid` perform live handshakes against real servers
   (e2e `run_tls13_live_openssl_in_resid`, `run_h2_live_request_in_resid`,
   `run_h2_post_and_continuation_in_resid`).
+- **rustc-grade diagnostics (spec §34)**: `resid-diag` shared crate with
+  error codes, caret-rendered snippets, span-pair labels, notes/help, TTY
+  color. Every compile-time rule stamped (E0001–E0301). Runtime aborts
+  (`todo`, `assert`, index OOB, capability force-time) carry baked-in
+  `(file:line:col)` context at zero cost. Parse errors rendered inline.
+  LSP-ready surface (residual status, exhaustiveness, attenuation view).
 
 ### Language features
 
@@ -313,6 +319,18 @@ Remaining conformance gaps are minimal:
 - **Knowledge cache subsystem (§34, §36)**: Expression-level reduction cache (`resid_cache::KnowledgeStore`) with content-addressed keys (expression hash + environment hash). CBOR schema for `KnowledgeEntry` (kind, expr_hash, env_hash, value, caps). Kinds: ReducedExpr, ProviderResult, TypeInfo, ConstraintProof, BehaviorResolution. Values: Int(i128), Bool, Str. Integrated with codegen's comptime β-reduction: cache checked before `reduce_call`, results stored after successful reduction. Capability-gated writes per §21.4 (`RESID_CAP_GRANT` env). 17 tests in `resid-cache` (8 new knowledge cache tests + 9 existing artifact cache tests). Persisted to `.resid-knowledge.cbor` in build output dir.
 - **Stage-2 cache hit fix**: `residc build` cache hit now copies cached artifact to `-o` output path (was returning success without copy, breaking `stage2_emitter_compiles_bootstrap_lexer`).
 - **Stage-2 provenance fix**: `prov_hex_seed` in `driver.resid` uses 0-based `[]` not seeded `[0]`; seeded list corrupted SHA-512 input → invalid Ed25519 signatures. Fixes `run_stage2_provenance_sidecar`.
+
+**Completed this session (error system, spec §34):**
+- **`resid-diag` crate**: shared diagnostic infrastructure (rustc-grade). Error codes (E0001, E0010, E0020, E0211–E0218, E0301), primary span with caret underline, secondary labels (span pairs / borrowck-style), `note:` / `help:` lines, ANSI color on TTY. Source snippet renderer reads file by line number (no byte offsets).
+- **Lexer span widening**: token spans widened from points to ranges (`col_start`..`col_end`) so diagnostics underline the whole token. Trailing whitespace trimmed. Multi-line tokens keep point spans.
+- **TypeError upgrade**: carries `code`, `primary_label`, `labels[]`, `notes[]`, `help`. Fluent builders `.code()`, `.primary_label()`, `.label()`, `.note()`, `.help()`, `.to_diag()` for rendering.
+- **All strategic error sites stamped**: constraint discharge (E0301), transitive attenuation (E0211), sandbox ceiling exceed (E0212), unknown mode keyword (E0213), spawn child≤parent (E0214), spawn-body cap (E0215), handle-entry provenance (E0216), write-verb under RO grant (E0217), provider call not granted (E0218). Span pairs on call site ↔ callee declaration.
+- **ImportError carries parse_errors**: structured lexer/parser errors preserved through `resolve_unit` for snippet rendering at the CLI.
+- **residc rendering**: `print_diag()` / `print_type_errors()` use `resid-diag` with TTY color detection; parse errors print full snippets.
+- **resid-build rendering**: type errors rendered via `TypeError::to_diag()` with source snippets.
+- **Runtime aborts carry source spans (zero cost)**: codegen emits every `resid_abort` / `resid_abort_at` / `resid_index_abort` with a baked-in `(file:line:col)` C string literal. `todo`/`unimplemented` → `resid_abort(msg, span)`. Failing `assert` → `resid_abort_at(dyn_msg, static_loc)`. List index OOB → `resid_index_abort(idx, len, span)`. C runtime `resid_fail(msg, at)` prints both.
+- **New e2e tests (5)**: `diag_type_error_renders_snippet`, `diag_constraint_carries_code_and_help`, `diag_capability_pair_renders_both_sites`, `runtime_aborts_carry_source_spans` (todo, index OOB, assert), plus duplicate-check removed.
+- **All tests green**: 6 `resid-diag` unit, 252 `resid-type` unit, 117 `residc` e2e (111 baseline + 4 new + 2 parity from earlier).
 
 Strategic work items:
 - **Graph reduction stage-2 parity (§11, §36)**: port `--graph-reduce` pipeline to self-hosted driver — requires IR data structures, reduction engine, and retrofit pass in `examples/typecheck.resid` + `examples/codegen.resid`

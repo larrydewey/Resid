@@ -8,6 +8,7 @@ resid-build = { path = "../resid-build" }
 resid-cache = { path = "../../tools/resid-cache" }
 resid-notes = { path = "../../tools/resid-notes" }
 resid-lexer = { path = "../resid-lexer" }
+resid-diag = { path = "../resid-diag" }
 resid-parser = { path = "../resid-parser" }
 resid-ir = { path = "../resid-ir" }
 resid-type = { path = "../resid-type" }

@@ -1559,7 +1559,9 @@ impl<'ctx> CodeGen<'ctx> {
             .build_conditional_branch(cb, ok_bb, fail_bb)
             .map_err(to_err)?;
 
-        // Fail: print the message via resid_abort and (unreachably) continue.
+        // Fail: report the message via resid_abort_at (dynamic message +
+        // static source location baked into a C string literal) and
+        // (unreachably) continue.
         self.builder.position_at_end(fail_bb);
         let msg = self.lower_expr(sc, message, None)?;
         let msg_str = match &msg.ty {
@@ -1571,11 +1573,12 @@ impl<'ctx> CodeGen<'ctx> {
                 ))
             }
         };
+        let at_str = self.lower_str(&source_loc(&cond.span));
         let abort = self
             .module
-            .get_function("resid_abort")
-            .ok_or("codegen: missing resid_abort decl")?;
-        let meta = vec![msg_str.into()];
+            .get_function("resid_abort_at")
+            .ok_or("codegen: missing resid_abort_at decl")?;
+        let meta = vec![msg_str.into(), at_str.into()];
         self.builder.build_call(abort, &meta, "assert_fail").map_err(to_err)?;
         self.builder.build_unreachable().map_err(to_err)?;
 
@@ -2126,8 +2129,14 @@ impl<'ctx> CodeGen<'ctx> {
                 self.lower_expr(sc, inner, target)
             }
 
-            ExprKind::Todo(msg) => self.lower_abort(&format!("todo: {msg}")),
-            ExprKind::Unimplemented(msg) => self.lower_abort(&format!("unimplemented: {msg}")),
+            ExprKind::Todo(msg) => {
+                let sp = e.span.clone();
+                self.lower_abort(&format!("todo: {msg}"), &sp)
+            }
+            ExprKind::Unimplemented(msg) => {
+                let sp = e.span.clone();
+                self.lower_abort(&format!("unimplemented: {msg}"), &sp)
+            }
 
             ExprKind::ComptimePrint(inner) => {
                 // Prefer the reduced (comptime-known) value so `comptime_print`
@@ -3759,13 +3768,16 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_growbuf_push_list", vec![ptr.into(), ptr.into()], ptr.into());
         self.decl_rt("resid_growbuf_finish", vec![ptr.into(), ptr.into()], ptr.into());
         self.decl_rt_void("resid_abort", vec![ptr.into()]);
+        // Dynamic-message abort with a static source-location suffix (assert).
+        self.decl_rt_void("resid_abort_at", vec![ptr.into(), ptr.into()]);
         // Force-time capability enforcement (spec §21.3).
         self.decl_rt_void("resid_cap_check", vec![ptr.into()]);
         self.decl_rt_void("resid_cap_enter", vec![ptr.into(), i64t.into()]);
         self.decl_rt_void("resid_cap_leave", vec![]);
         // Checked add/sub overflow trap (spec v3.2 §6.1).
         self.decl_rt_void("resid_arith_overflow", vec![]);
-        self.decl_rt_void("resid_index_abort", vec![i64t.into(), i64t.into()]);
+        // Bounds-check abort: idx, len, and a source-location C string.
+        self.decl_rt_void("resid_index_abort", vec![i64t.into(), i64t.into(), ptr.into()]);
         // String concatenation (f-string interpolation, Str + Str).
         self.decl_rt("resid_str_concat", vec![ptr.into(), ptr.into()], ptr.into());
         // String equality (Str == Str / Str != Str) for the bootstrap lexer.
@@ -3917,9 +3929,12 @@ impl<'ctx> CodeGen<'ctx> {
         self.module.add_function(name, ft, None);
     }
 
-    /// Emit `resid_abort(msg)` for the given string value.
-    fn lower_abort(&mut self, msg: &str) -> Result<Val<'ctx>, String> {
-        let ptr = self.lower_str(msg);
+    /// Emit `resid_abort(msg)` for the given string value. When `span` is a
+    /// real source location it is baked into the message so runtime failures
+    /// carry source context (spec §34 diagnostics) at zero runtime cost.
+    fn lower_abort(&mut self, msg: &str, span: &Span) -> Result<Val<'ctx>, String> {
+        let full = format_abort_msg(msg, span);
+        let ptr = self.lower_str(&full);
         let f = self
             .module
             .get_function("resid_abort")
@@ -4854,6 +4869,7 @@ impl<'ctx> CodeGen<'ctx> {
         // stage, so use the first matching signature by name.
         let sig = self.sigs.get(name).cloned().unwrap_or(FunctionSig {
             name: name.to_string(),
+            span: resid_lexer::token::Span::unknown(),
             params: Vec::new(),
             param_names: Vec::new(),
             param_defaults: Vec::new(),
@@ -5464,8 +5480,9 @@ impl<'ctx> CodeGen<'ctx> {
             .module
             .get_function("resid_index_abort")
             .ok_or("codegen: missing resid_index_abort decl")?;
+        let at_str = self.lower_str(&source_loc(&index.span));
         self.builder
-            .build_call(abort, &[idx.into(), len_i.into()], "index_oob_abort")
+            .build_call(abort, &[idx.into(), len_i.into(), at_str.into()], "index_oob_abort")
             .map_err(to_err)?;
         self.builder.build_unreachable().map_err(to_err)?;
         self.builder.position_at_end(ok_bb);
@@ -5879,6 +5896,28 @@ impl<'ctx> CodeGen<'ctx> {
 
 fn to_err(e: inkwell::builder::BuilderError) -> String {
     format!("llvm: {e:?}")
+}
+
+/// Format `(file:line:col)` for a span (empty when unknown) — used to
+/// bake source context into runtime abort strings.
+fn source_loc(span: &Span) -> String {
+    if span.line > 0 && !span.file.is_empty() && span.file != "<unknown>" {
+        format!("{}:{}:{}", span.file, span.line, span.col_start)
+    } else {
+        String::new()
+    }
+}
+
+/// Bake a source span into a runtime abort message (`msg (file:line:col)`)
+/// so residual failures carry location context (spec §34). Unknown spans
+/// leave the message unchanged.
+fn format_abort_msg(msg: &str, span: &Span) -> String {
+    let loc = source_loc(span);
+    if loc.is_empty() {
+        msg.to_string()
+    } else {
+        format!("{msg} ({loc})")
+    }
 }
 
 /// Build a function type from a return type and parameter types.

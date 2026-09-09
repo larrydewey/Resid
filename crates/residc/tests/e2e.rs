@@ -6426,6 +6426,107 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
+/// ── Error-system diagnostics (resid-diag, spec §34) ───────────────
+/// rustc-style rendering: error code header, source snippet with caret,
+/// span pairs, notes, help. Runtime aborts embed source spans.
+
+#[test]
+fn diag_type_error_renders_snippet() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-diag-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("bad.resid");
+    std::fs::write(
+        &file,
+        "Int main() {\n    Str x = 42;\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&file).arg("emit-ir").output().unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("error[E0001]"), "header with code: {err}");
+    assert!(err.contains("┌─"), "snippet header: {err}");
+    assert!(err.contains("Str x = 42;"), "source line: {err}");
+    assert!(err.contains("^"), "caret: {err}");
+    assert!(err.contains("bad.resid:2:5"), "span location: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn diag_constraint_carries_code_and_help() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-diagc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("const.resid");
+    std::fs::write(
+        &file,
+        "type Positive = Int where value > 0;\nInt main() {\n    Positive p = -1;\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&file).arg("emit-ir").output().unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("error[E0301]"), "E0301 constraint code: {err}");
+    assert!(err.contains("value is -1"), "caret label: {err}");
+    assert!(err.contains("= help:"), "help line: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn diag_capability_pair_renders_both_sites() {
+    // Borrowck-style span pair: the call site and the callee declaration.
+    let dir = std::env::temp_dir().join(format!("residc-e2e-diacep-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("cap.resid");
+    std::fs::write(
+        &file,
+        "@requires(network)\nInt fetch() { return 42; }\n\nsandbox (filesystem) {\n    Int read() { Int x = fetch(); return x; }\n}\n\nInt main() {\n    println(IntToString(read()));\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&file).arg("emit-ir").output().unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("error[E0211]"), "E0211 attenuation code: {err}");
+    assert!(err.contains("fetch"), "callee named: {err}");
+    assert!(err.contains("`fetch` is declared here"), "declaration label: {err}");
+    assert!(err.contains("= note:"), "note line: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn runtime_aborts_carry_source_spans() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-diagrt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // todo()
+    let todo = dir.join("todo.resid");
+    std::fs::write(&todo, "Int main() {\n    todo(\"wire it\");\n    return 0;\n}\n").unwrap();
+    let out = Command::new(residc_bin()).arg(&todo).arg("run").output().unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("todo: wire it"), "todo msg: {err}");
+    assert!(err.contains("todo.resid:2:"), "todo span: {err}");
+    // list index OOB
+    let idx = dir.join("idx.resid");
+    std::fs::write(
+        &idx,
+        "Int main() {\n    List(Int) xs = [1, 2];\n    Int v = xs[9];\n    println(IntToString(v));\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(residc_bin()).arg(&idx).arg("run").output().unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("list index out of bounds: index 9, length 2"), "idx msg: {err}");
+    assert!(err.contains("idx.resid:3:"), "idx span: {err}");
+    // failing assert
+    let asrt = dir.join("as.resid");
+    std::fs::write(&asrt, "Int main() {\n    assert(1 > 2, \"boom\");\n    return 0;\n}\n").unwrap();
+    let out = Command::new(residc_bin()).arg(&asrt).arg("run").output().unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("boom"), "assert msg: {err}");
+    assert!(err.contains("as.resid:2:"), "assert span: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn run_wide_int_boxing() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-wb-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

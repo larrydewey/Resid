@@ -885,10 +885,9 @@ pub fn build(manifest: &Manifest, profile: Profile, out_dir: &Path) -> Result<Ar
     if !type_errors.is_empty() {
         let mut msg = format!("{} type error(s):\n", type_errors.len());
         for e in &type_errors {
-            msg.push_str(&format!(
-                "  {}:{}:{}: {}\n",
-                e.span.file, e.span.line, e.span.col_start, e.message
-            ));
+            let load = |f: &str| std::fs::read_to_string(f).ok();
+            msg.push_str(&e.to_diag().render(&load, false));
+            msg.push('\n');
         }
         return err(msg);
     }
