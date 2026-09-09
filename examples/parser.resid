@@ -350,7 +350,8 @@ Bool is_keyword(Str s) {
         "import", "pub", "type", "as", "with", "rt", "match", "if", "else",
         "while", "for", "return", "break", "continue", "spawn", "known",
         "rt_known", "comptime_print", "todo", "unimplemented", "true",
-        "false", "null", "where", "assert", "rt_assert", "in"
+        "false", "null", "where", "assert", "rt_assert", "in",
+        "sandbox", "requires", "readonly", "readwrite"
     ];
     for (Str k in kws) {
         if (k == s) { return true; }
@@ -955,6 +956,9 @@ PRes parse_decl(Str s, Int pos) {
     if (t.text == "pub") {
         Tok t2 = lex_tok(s, t.pos);
         return parse_func(s, t2.pos);
+    }
+    if (t.text == "sandbox") {
+        return parse_sandbox(s, pos);
     }
     if (t.kind == "ident") {
         return parse_func(s, pos);
