@@ -30,6 +30,27 @@ impl Lexer {
     /// Run the lexer, return tokens and any errors.
     pub fn tokenize(mut self) -> (TokenStream, Vec<LexerError>) {
         self.scan();
+        // Widen token spans from points to ranges so diagnostics can
+        // underline the whole token (rustc-style carets). A token's end is
+        // the column just before the next token on the same line; trailing
+        // whitespace between them is trimmed. Multi-line tokens keep a
+        // point span (their end column is not tracked).
+        let n = self.tokens.len();
+        for i in 0..n.saturating_sub(1) {
+            let (start, end) = (self.tokens[i].span.col_start, self.tokens[i + 1].span.col_start);
+            if self.tokens[i].span.line == self.tokens[i + 1].span.line && end > start {
+                let chars = &self.chars;
+                self.tokens[i].span.col_end = end - 1;
+                // Trim trailing whitespace from the widened range.
+                while self.tokens[i].span.col_end > start
+                    && chars
+                        .get(self.tokens[i].span.col_end - 1)
+                        .is_some_and(|c| matches!(c, ' ' | '\t'))
+                {
+                    self.tokens[i].span.col_end -= 1;
+                }
+            }
+        }
         self.tokens.push(Token {
             kind: TokenKind::Eof,
             span: Span {

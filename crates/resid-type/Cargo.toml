@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+resid-diag = { path = "../resid-diag" }
 resid-ir = { path = "../resid-ir" }
 resid-lexer = { path = "../resid-lexer" }
 resid-parser = { path = "../resid-parser" }

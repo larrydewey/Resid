@@ -49,17 +49,31 @@ bool println(const char* s) {
 static _Thread_local sigjmp_buf* resid_spawn_catch = NULL;
 static _Thread_local const char* resid_spawn_catch_msg = NULL;
 
-_Noreturn void resid_abort(const char* msg) {
+static _Noreturn void resid_fail(const char* msg, const char* at) {
     if (resid_spawn_catch) {
         resid_spawn_catch_msg = msg ? msg : "region abort";
         longjmp(*resid_spawn_catch, 1);
     }
-    if (msg && msg[0]) {
+    if (at && at[0]) {
+        fprintf(stderr, "resid: abort: %s (%s)\n", msg && msg[0] ? msg : "abort", at);
+    } else if (msg && msg[0]) {
         fprintf(stderr, "resid: abort: %s\n", msg);
     } else {
         fprintf(stderr, "resid: abort\n");
     }
     abort();
+}
+
+_Noreturn void resid_abort(const char* msg) {
+    resid_fail(msg, NULL);
+}
+
+/* Dynamic-message abort with a STATIC source-location suffix. The location
+ * string is baked into the C string literal at compile time (codegen), so
+ * residual failures like a failing `assert` carry `(file:line:col)` context
+ * at zero runtime cost (spec §34 diagnostics). */
+_Noreturn void resid_abort_at(const char* msg, const char* at) {
+    resid_fail(msg, at);
 }
 
 /* ── Force-time capability enforcement (spec §21.3) ──────────────────────
@@ -3653,11 +3667,20 @@ int8_t resid_cpu_has_aesni(void) {
 #endif
 }
 
-/* Bounds-check failure helper with diagnostics. */
-_Noreturn void resid_index_abort(int64_t idx, int64_t len) {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "list index out of bounds: index %lld, length %lld",
-             (long long)idx, (long long)len);
+/* Bounds-check failure helper with diagnostics. `at` is a source-location
+ * C string (`file:line:col`) baked in by codegen, so out-of-range list
+ * indexing reports where it happened (spec §34 diagnostics). */
+_Noreturn void resid_index_abort(int64_t idx, int64_t len, const char* at) {
+    char buf[192];
+    if (at && at[0]) {
+        snprintf(buf, sizeof(buf),
+                 "list index out of bounds: index %lld, length %lld (%s)",
+                 (long long)idx, (long long)len, at);
+    } else {
+        snprintf(buf, sizeof(buf),
+                 "list index out of bounds: index %lld, length %lld",
+                 (long long)idx, (long long)len);
+    }
     resid_abort(buf);
 }
 

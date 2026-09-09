@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::{Declaration, Id, ImportDecl, TranslationUnit};
+use crate::{Declaration, Id, ImportDecl, ParseError, TranslationUnit};
 
 /// Dependency roots available to a unit: package name → resolved root file.
 /// An import whose path does not exist relative to the importer falls back
@@ -27,9 +27,12 @@ use crate::{Declaration, Id, ImportDecl, TranslationUnit};
 pub type DependencyMap = HashMap<String, PathBuf>;
 
 /// Error raised while resolving a unit's import tree.
+/// `parse_errors` carries the structured syntax errors (for snippet
+/// rendering) when the failure came from parsing; empty otherwise.
 #[derive(Debug)]
 pub struct ImportError {
     pub message: String,
+    pub parse_errors: Vec<ParseError>,
 }
 
 impl std::fmt::Display for ImportError {
@@ -52,7 +55,7 @@ pub fn resolve_unit_with(
     deps: &DependencyMap,
 ) -> Result<TranslationUnit, ImportError> {
     let path = path.canonicalize().map_err(|e| {
-        ImportError { message: format!("cannot resolve '{}': {e}", path.display()) }
+        ImportError { message: format!("cannot resolve '{}': {e}", path.display()), parse_errors: Vec::new() }
     })?;
     let mut visited = HashSet::new();
     let mut decls: Vec<Declaration> = Vec::new();
@@ -79,7 +82,7 @@ fn root_own_count(
     deps: &DependencyMap,
 ) -> Result<usize, ImportError> {
     let text = std::fs::read_to_string(path)
-        .map_err(|e| ImportError { message: format!("cannot read '{}': {e}", path.display()) })?;
+        .map_err(|e| ImportError { message: format!("cannot read '{}': {e}", path.display()), parse_errors: Vec::new() })?;
     let (unit, errors) = crate::Parser::parse(path.display().to_string(), &text);
     let _ = deps;
     if !errors.is_empty() {
@@ -108,7 +111,7 @@ fn load_into(
         return Ok(Vec::new());
     }
     let source = std::fs::read_to_string(path).map_err(|e| {
-        ImportError { message: format!("cannot read '{}': {e}", path.display()) }
+        ImportError { message: format!("cannot read '{}': {e}", path.display()), parse_errors: Vec::new() }
     })?;
     let display = path.display().to_string();
     let (unit, errors) = crate::Parser::parse(&display, &source);
@@ -120,7 +123,10 @@ fn load_into(
                 e.span.file, e.span.line, e.span.col_start, e.message
             ));
         }
-        return Err(ImportError { message: msg });
+        return Err(ImportError {
+            message: msg,
+            parse_errors: errors,
+        });
     }
 
     // Recurse into imports first (post-order): dependencies before dependents.
@@ -230,7 +236,7 @@ fn resolve_import(
     if relative.is_file() {
         return relative
             .canonicalize()
-            .map_err(|e| ImportError { message: format!("cannot resolve '{}': {e}", relative.display()) });
+            .map_err(|e| ImportError { message: format!("cannot resolve '{}': {e}", relative.display()), parse_errors: Vec::new() });
     }
     if let Some(root) = deps.get(import_path) {
         return Ok(root.clone());
@@ -241,6 +247,7 @@ fn resolve_import(
             import_path,
             relative.display()
         ),
+        parse_errors: Vec::new(),
     })
 }
 
