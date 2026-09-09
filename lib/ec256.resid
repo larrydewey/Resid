@@ -388,6 +388,9 @@ pub Int(256) ecdsa_vx(Int(256) digest, Int(256) r, Int(256) s, Int(256) qx, Int(
     Bool ys = y1 == y2v;
     Int(256) num = if (xs) { ec_add(ec_dblf(ec_mul(x1, x1)), ec_a()) } else { ec_sub(y2v, y1) };
     Int(256) den = if (xs) { ec_dblf(y1) } else { ec_sub(x2v, x1) };
+    if (den == 0) {
+        return 0;
+    }
     Int(256) lam = ec_mul(num, ec_inv(den));
     Int(256) l2 = ec_mul(lam, lam);
     Int(256) x3v = ec_sub(l2, ec_add(x1, x2v));

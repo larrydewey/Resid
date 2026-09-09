@@ -186,8 +186,8 @@ pub List(Int) bn_cat_acc(List(Int) b, Int j, Int blen, List(Int) acc) {
 }
 
 pub List(Int) bn_cat(List(Int) a, List(Int) b) {
-    Int bl = b.len() - 1;
-    return bn_cat_acc(b, 0, bl, a);
+    Int bl = b.len();
+    return bn_cat_acc(b, 0, bl - 1, a);
 }
 
 // Prepend i zero limbs (multiply a little-endian limb list by b^i).

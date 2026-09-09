@@ -38,7 +38,7 @@ pub Int tm_find_fin(List(Int) payload, Int k) {
 
 pub Int tm_ff_acc(List(Int) payload, Int pos, Int k) {
     if (pos + 36 > payload.len()) {
-        return 0;
+        return -1;
     }
     Int off3 = pos + 1;
     Int mlen = tm_u24_at(payload, off3);
@@ -117,7 +117,7 @@ pub Int tm_find_pos(List(Int) payload, Int mtype, Int k) {
 
 pub Int tm_fp_acc(List(Int) payload, Int pos, Int mtype, Int k) {
     if (pos >= payload.len()) {
-        return 0;
+        return -1;
     }
     Int t = tm_type_at(payload, pos);
     Int np = tm_next(payload, pos);
@@ -389,7 +389,7 @@ pub Int tm_find_fin_last(List(Int) payload) {
 
 pub Int tm_ff_back(List(Int) payload, Int pos) {
     if (pos < 0) {
-        return 0;
+        return -1;
     }
     Int off5 = pos + 1;
     Int mlen = tm_u24_at(payload, off5);

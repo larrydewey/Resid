@@ -29,7 +29,7 @@ List(Int) hb_acc(Str s, Int i, List(Int) acc) {
 }
 
 List(Int) hb(Str s) {
-    return hb_acc(s, 0, [0]);
+    return hb_acc(s, 0, []);
 }
 
 List(Int) repz(List(Int) acc, Int n) {
@@ -42,7 +42,7 @@ List(Int) repz(List(Int) acc, Int n) {
 // Reads exactly n bytes; on EOF/short read returns the [0] seed-only
 // sentinel so callers can bail out instead of processing padding.
 List(Int) recv_exact(Int fd, Int n) {
-    List(Int) out = repz([0], n);
+    List(Int) out = repz([], n);
     return recv_loop(fd, out, n, 0);
 }
 
@@ -52,37 +52,37 @@ List(Int) recv_loop(Int fd, List(Int) out, Int n, Int got) {
     }
     Int want = n - got;
     List(Int) chunk = resid_tcp_recv_bin(fd, want);
-    Int gotn = chunk.len() - 1;
+    Int gotn = chunk.len();
     if (gotn <= 0) {
         println("RECV-EOF");
-        List(Int) eof = [0];
+        List(Int) eof = [];
         return eof;
     }
     Bool has = got > 0;
-    List(Int) head = if (has) { slice_seed(out, 1, got, [0]) } else { [0] };
-    List(Int) mid = slice_seed(chunk, 1, gotn, [0]);
+    List(Int) empty_list = [];
+    List(Int) head = if (has) { slice_seed(out, 0, got, []) } else { empty_list };
+    List(Int) mid = slice_seed(chunk, 0, gotn, []);
     List(Int) both = sconcat(head, mid);
     Int rem1 = n - got;
     Int rem = rem1 - gotn;
-    List(Int) rest = repz([0], rem);
+    List(Int) rest = repz([], rem);
     List(Int) joined = sconcat(both, rest);
     Int ngot = got + gotn;
     return recv_loop(fd, joined, n, ngot);
 }
 
 List(Int) mk_record(Int rtype, List(Int) body) {
-    Int blen = body.len() - 1;
+    Int blen = body.len();
     Int hi = blen / 256;
     Int lo = blen % 256;
-    List(Int) acc0 = [0];
-    List(Int) hdr = acc0.concat([rtype, 3, 3, hi, lo]);
+    List(Int) empty = [];
+    List(Int) hdr = empty.concat([rtype, 3, 3, hi, lo]);
     return sconcat(hdr, body);
 }
 
 List(Int) seal_record(Int seq, List(Int) key, List(Int) iv, List(Int) payload, Int ctype, Int outer) {
     List(Int) pt = payload.concat([ctype]);
-    // seeded list: len() counts the index-0 seed — real bytes are len()-1
-    Int plen = pt.len() - 1;
+    Int plen = pt.len();
     Int clen = plen + 16;
     // AAD is the ACTUAL wire header (TLS 1.3 outer content type)
     List(Int) aad = tls_record_header2(outer, clen);
@@ -98,42 +98,41 @@ pub Int tls_max_record_len() {
 // open a record; returns inner plaintext without the content-type byte.
 // On tag failure returns a 1-byte marker; caller must check plausibility.
 List(Int) open_record(List(Int) key, List(Int) iv, Int seq, List(Int) header, List(Int) body) {
-    Int blen = body.len() - 1;
+    Int blen = body.len();
     Int clen = blen - 16;
     if (clen < 1) {
         println("RECORD-SHORT");
-        return repz([0], 1);
+        return repz([], 1);
     }
     List(Int) rk = aes128_key_expand(key);
     List(Int) nonce = tls_record_nonce(iv, seq);
     List(Int) j0 = tls_j0(nonce);
     List(Int) ek = aes128_encrypt_block(rk, j0);
-    List(Int) ct = slice_seed(body, 1, clen, [0]);
+    List(Int) ct = slice_seed(body, 0, clen, []);
     List(Int) cb = inc32(j0);
-    List(Int) ptfull = ctr_xor(rk, cb, ct, 0, [0]);
+    List(Int) ptfull = ctr_xor(rk, cb, ct, 0, []);
     List(Int) mi = gcm_mac_data(header, ct);
-    List(Int) hblk = aes128_encrypt_block(rk, repz([0], 16));
+    List(Int) hblk = aes128_encrypt_block(rk, repz([], 16));
     Int milen = mi.len();
-    Int micount = milen - 1;
-    List(Int) y0 = zeros_seed([0], 16);
-    List(Int) sv = ghash_blocks(hblk, y0, mi, 1, micount);
+    List(Int) y0 = zeros_seed([], 16);
+    List(Int) sv = ghash_blocks(hblk, y0, mi, 0, milen);
     List(Int) tagraw = xor16(sv, ek);
-    List(Int) expect = slice_seed(tagraw, 1, 16, [0]);
-    Int toff = blen - 15;
-    List(Int) tag = slice_seed(body, toff, 16, [0]);
+    List(Int) expect = slice_seed(tagraw, 0, 16, []);
+    Int toff = clen;
+    List(Int) tag = slice_seed(body, toff, 16, []);
     Bool ok = ct_equal(expect, tag);
     if (!ok) {
         println("RECORD-TAG-BAD");
-        return repz([0], 1);
+        return repz([], 1);
     }
-    return slice_seed(ptfull, 1, clen, [0]);
+    return slice_seed(ptfull, 0, clen, []);
 }
 
 // read encrypted handshake-flight records until a complete Finished
 // message is in the accumulator (max `tries` records)
 List(Int) open_if_app(Bool isapp, List(Int) key, List(Int) iv, Int seq, List(Int) h5, List(Int) body) {
     if (!isapp) {
-        return repz([0], 17);
+        return repz([], 16);
     }
     return open_record(key, iv, seq, h5, body);
 }
@@ -143,22 +142,22 @@ List(Int) read_flight(Int fd, List(Int) acc, List(Int) key, List(Int) iv, Int se
         return acc;
     }
     List(Int) hdr = recv_exact(fd, 5);
-    Int blen = hdr[4] * 256 + hdr[5];
+    Int blen = hdr[3] * 256 + hdr[4];
     List(Int) body = recv_exact(fd, blen);
-    Int rtype = hdr[1];
+    Int rtype = hdr[0];
     Bool isapp = rtype == 23;
-    List(Int) plainfull = open_if_app(isapp, key, iv, seq, slice_seed(hdr, 1, 5, [0]), body);
-    Int plen = plainfull.len() - 2;
+    List(Int) h5 = slice_seed(hdr, 0, 5, []);
     if (!isapp) {
         // compatibility change_cipher_spec: skip without touching keys
         Int t3 = tries - 1;
         return read_flight(fd, acc, key, iv, seq, t3);
     }
-
-    List(Int) part = slice_seed(plainfull, 1, plen, [0]);
+    List(Int) plainfull = open_if_app(isapp, key, iv, seq, h5, body);
+    Int plen = plainfull.len() - 1;
+    List(Int) part = slice_seed(plainfull, 0, plen, []);
     List(Int) acc2 = sconcat(acc, part);
     Int pf = tm_find_fin(acc2, 0);
-    if (pf > 0) {
+    if (pf >= 0) {
         return acc2;
     }
     Int seq2 = seq + 1;
@@ -174,26 +173,26 @@ Int read_app(Int fd, List(Int) key, List(Int) iv, Int seq, Int tries) {
         return 0;
     }
     List(Int) hdr = recv_exact(fd, 5);
-    Int hlen = hdr.len() - 1;
+    Int hlen = hdr.len();
     if (hlen < 5) {
         // EOF before a full header: server closed
         println("REPLY-NONE");
         return 0;
     }
-    Int blen = hdr[4] * 256 + hdr[5];
+    Int blen = hdr[3] * 256 + hdr[4];
     if (blen < 17 || blen > tls_max_record_len()) {
         // connection closed / not a real record
         println("REPLY-NONE");
         return 0;
     }
     List(Int) body = recv_exact(fd, blen);
-    if (body.len() - 1 < blen) {
+    if (body.len() < blen) {
         println("REPLY-NONE");
         return 0;
     }
-    List(Int) h5 = slice_seed(hdr, 1, 5, [0]);
+    List(Int) h5 = slice_seed(hdr, 0, 5, []);
     List(Int) plainfull = open_record(key, iv, seq, h5, body);
-    Int plen2 = plainfull.len() - 1;
+    Int plen2 = plainfull.len();
     if (plen2 < 1) {
         println("REPLY-NONE");
         return 0;
@@ -211,9 +210,9 @@ Int read_app(Int fd, List(Int) key, List(Int) iv, Int seq, Int tries) {
         return 0;
     }
     if (ctl == 23) {
-        List(Int) plain = slice_seed(plainfull, 1, lastidx, [0]);
-        Int n = plain.len() - 1;
-        print_line(plain, 1, n, "");
+        List(Int) plain = slice_seed(plainfull, 0, lastidx, []);
+        Int n = plain.len();
+        print_line(plain, 0, n - 1, "");
         return 0;
     }
     // handshake post-flight records (session tickets etc.): skip
@@ -241,16 +240,17 @@ Int print_line(List(Int) plain, Int idx, Int n, Str out) {
 // like tm_full_msg but returns seed-only list when the message would
 // run past the end of the payload
 List(Int) safe_msg(List(Int) payload, Int pos) {
-    if (pos == 0) {
-        return [0];
+    List(Int) empty_list = [];
+    if (pos < 0) {
+        return empty_list;
     }
-    Int room = payload.len() - 1;
+    Int room = payload.len();
     Int off1 = pos + 1;
     Int mlen = tm_u24_at(payload, off1);
     Int p4 = pos + 4;
     Int end = p4 + mlen;
-    if (end > room + 1) {
-        return [0];
+    if (end > room) {
+        return empty_list;
     }
     return tm_full_msg(payload, pos);
 }
@@ -261,9 +261,9 @@ Bool verify_cv(List(Int) inner2, List(Int) tr2b, Str cert_hex, List(Int) thct2) 
     List(Int) scert = hb(cert_hex);
     Int cvpos = tm_find_pos(inner2, 15, 0);
     List(Int) cvmsg = safe_msg(inner2, cvpos);
-    Int cstart = 5;
-    Int ccount = cvmsg.len() - 5;
-    List(Int) cvbody = slice_seed(cvmsg, cstart, ccount, [0]);
+    Int cstart = 4;
+    Int ccount = cvmsg.len() - 4;
+    List(Int) cvbody = slice_seed(cvmsg, cstart, ccount, []);
     // dispatches on the signature algorithm: ECDSA-P256 and RSA-PSS
     return tm_verify_cv(cvbody, scert, thct2);
 }
@@ -292,24 +292,24 @@ Int main() {
     List(Int) cpriv = hb(hex_encode(seed));
     List(Int) basel = hb("0900000000000000000000000000000000000000000000000000000000000000");
     List(Int) cpub = x25519(cpriv, basel);
-    List(Int) cpb = slice_seed(cpub, 1, 32, [0]);
+    List(Int) cpb = slice_seed(cpub, 0, 32, []);
     List(Int) rnd = random_bytes(32);
     List(Int) chbody = tlsmsg_client_hello(rnd, cpb);
     List(Int) chmsg = mk_record(22, chbody);
     Bool s1 = resid_tcp_send_bin(fd, chmsg);
     if (!s1) { println("SEND-FAIL"); return 1; }
     List(Int) shhdr = recv_exact(fd, 5);
-    if (shhdr.len() - 1 < 5) {
+    if (shhdr.len() < 5) {
         println("SH-EOF");
         return 1;
     }
-    Int shlen = shhdr[4] * 256 + shhdr[5];
+    Int shlen = shhdr[3] * 256 + shhdr[4];
     if (shlen <= 0 || shlen > tls_max_record_len()) {
         println("SH-LEN-BAD");
         return 1;
     }
     List(Int) shbody = recv_exact(fd, shlen);
-    if (shbody.len() - 1 < shlen || shbody.len() - 1 < 39 + 32) {
+    if (shbody.len() < shlen || shbody.len() < 39 + 32) {
         // SH body must carry at least random(32) + session/legacy + keyshare
         println("SH-SHORT");
         return 1;
@@ -320,12 +320,12 @@ Int main() {
     List(Int) hs = tls_handshake_secret(shared);
     List(Int) tr1 = sconcat(chbody, shbody);
     List(Int) th1raw = sha256_bytes(tr1);
-    List(Int) th1 = slice_seed(th1raw, 1, 32, [0]);
+    List(Int) th1 = slice_seed(th1raw, 0, 32, []);
     List(Int) c_hs = tls_c_hs_traffic(hs, th1);
     List(Int) s_hs = tls_s_hs_traffic(hs, th1);
     List(Int) skey = tls_traffic_key(s_hs);
     List(Int) siv = tls_traffic_iv(s_hs);
-    List(Int) inner = read_flight(fd, [0], skey, siv, 0, 8);
+    List(Int) inner = read_flight(fd, [], skey, siv, 0, 8);
     Int pe = tm_find_pos(inner, 8, 0);
     Int pc = tm_find_pos(inner, 11, 0);
     Int pv = tm_find_pos(inner, 15, 0);
@@ -348,10 +348,10 @@ Int main() {
     List(Int) tr2b = sconcat(tr2a, ctmsg);
     List(Int) trcv = sconcat(tr2b, cvmsg);
     List(Int) thcvraw = sha256_bytes(trcv);
-    List(Int) thcv = slice_seed(thcvraw, 1, 32, [0]);
+    List(Int) thcv = slice_seed(thcvraw, 0, 32, []);
     // CV signs the transcript up to (not including) the CV message
     List(Int) thctraw = sha256_bytes(tr2b);
-    List(Int) thct = slice_seed(thctraw, 1, 32, [0]);
+    List(Int) thct = slice_seed(thctraw, 0, 32, []);
     Bool okcv = verify_cv(inner, tr2b, args.get(3), thct);
     if (!okcv) {
         println("CV-VERIFY-FAIL");
@@ -359,14 +359,14 @@ Int main() {
     }
     List(Int) tr3 = sconcat(trcv, finmsg);
     List(Int) thapraw = sha256_bytes(tr3);
-    List(Int) thap = slice_seed(thapraw, 1, 32, [0]);
+    List(Int) thap = slice_seed(thapraw, 0, 32, []);
     List(Int) master = tls_master_secret(hs);
     List(Int) c_ap = tls_c_ap_traffic(master, thap);
     List(Int) s_ap = tls_s_ap_traffic(master, thap);
     // client Finished covers the transcript through the server Finished
     List(Int) cvd = tls_finished(c_hs, thap);
     // wrap verify_data in the Finished handshake message header (type 20)
-    List(Int) fseed = [0];
+    List(Int) fseed = [];
     List(Int) fhdr = fseed.concat([20, 0, 0, 32]);
     List(Int) cfbody = sconcat(fhdr, cvd);
     List(Int) c_hs_key = tls_traffic_key(c_hs);
@@ -381,7 +381,7 @@ Int main() {
     List(Int) c_ap_key = tls_traffic_key(c_ap);
     List(Int) c_ap_iv = tls_traffic_iv(c_ap);
     List(Int) req = bytes_of("GET / HTTP/1.0\r\n\r\n");
-    Int rlen = req.len() - 1;
+    Int rlen = req.len();
     Int rleni = rlen + 17;
     List(Int) rhdr = tls_record_header2(23, rleni);
     List(Int) rrec = seal_record(0, c_ap_key, c_ap_iv, req, 23, 23);
