@@ -307,7 +307,7 @@ pub List(Int) gf_xor_e1(List(Int) v) {
 
 pub List(Int) e1_acc(List(Int) v, Int i, List(Int) acc) {
     if (i >= 16) { return acc; }
-    Int xored = v[0] ^ 225;
+    Int xored = v[i] ^ 225;
     Int val = if (i == 0) { xored } else { v[i] };
     List(Int) acc2 = acc.concat([val]);
     Int ni = i + 1;

@@ -31,10 +31,10 @@ pub Bool eq_bytes_at(List(Int) a, List(Int) b, Int i, Int last) {
 }
 
 pub Bool eq_bytes(List(Int) a, List(Int) b) {
-    Int alen = a.len() - 1;
-    Int blen = b.len() - 1;
+    Int alen = a.len();
+    Int blen = b.len();
     if (alen != blen) { return false; }
-    return eq_bytes_at(a, b, 0, alen);
+    return eq_bytes_at(a, b, 0, alen - 1);
 }
 
 // Raw DER of a top-level certificate element by index
@@ -114,10 +114,10 @@ pub Bool ci_eq_at(List(Int) a, List(Int) b, Int i, Int last) {
 }
 
 pub Bool ci_eq_bytes(List(Int) a, List(Int) b) {
-    Int alen = a.len() - 1;
-    Int blen = b.len() - 1;
+    Int alen = a.len();
+    Int blen = b.len();
     if (alen != blen) { return false; }
-    return ci_eq_at(a, b, 0, alen);
+    return ci_eq_at(a, b, 0, alen - 1);
 }
 
 pub Int dns_find_dot(List(Int) host, Int i, Int last) {
@@ -229,11 +229,11 @@ pub Bool san_has_match(List(Int) cert, List(Int) host) {
 // BIT STRING content minus unused-bits byte; sigb = DER signature.
 pub Bool rsa_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
     Int w = 128;
-    Int np = der_content_pos(keyb, 1);
+    Int np = der_content_pos(keyb, 0);
     Int ep = x509_skip_tlv(keyb, np);
     List(Int) nc = der_content(keyb, np);
     Int ncl = nc.len() - 1;
-    List(Int) nb2 = der_slice_seeded(nc, 1, ncl);
+    List(Int) nb2 = der_slice_seeded(nc, 0, ncl);
     Int ev = der_int_value(keyb, ep);
     List(Int) nl = bn_from_be(nb2, w);
     DerTlv st = der_next(sigb, 0);

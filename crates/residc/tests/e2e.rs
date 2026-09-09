@@ -3644,7 +3644,7 @@ Int(512) be512_acc(List(Int) b, Int i, Int last, Int(512) acc) {
 }
 Int(512) ec_from_be512(List(Int) bytes) {
     Int blen = bytes.len() - 1;
-    return be512_acc(bytes, 1, blen, 0);
+    return be512_acc(bytes, 0, blen, 0);
 }
 Int main() {
     Bool ge0 = ec_ge(ec_from_be(hb("0000000000000000000000000000000000000000000000000000000000000000")), ec_from_be(hb("0000000000000000000000000000000000000000000000000000000000000000")));
