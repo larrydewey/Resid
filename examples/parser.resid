@@ -988,6 +988,49 @@ PRes parse_import_rest(Str s, Tok cur, Bool done) {
     return parse_import_rest(s, t, false);
 }
 
+// ─── Sandbox declaration (§21) ───────────────────────────────────
+
+PRes parse_sandbox_caps(Str s, Int pos, Str acc, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") {
+        return PRes { pos: t.pos, ast: f"{acc})" };
+    }
+    if (t.text == ")" && depth == 1) {
+        return PRes { pos: t.pos, ast: f"{acc})" };
+    }
+    if (t.text == ",") {
+        return parse_sandbox_caps(s, t.pos, acc, depth);
+    }
+    if (t.text == "(") {
+        return parse_sandbox_caps(s, t.pos, f"{acc} {t.text}", depth + 1);
+    }
+    if (t.text == ")") {
+        return parse_sandbox_caps(s, t.pos, f"{acc})", depth - 1);
+    }
+    return parse_sandbox_caps(s, t.pos, f"{acc} {t.text}", depth);
+}
+
+PRes parse_sandbox_body(Str s, Int pos, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") {
+        return PRes { pos: t.pos, ast: f"{acc})" };
+    }
+    if (t.text == "}") {
+        return PRes { pos: t.pos, ast: f"{acc})" };
+    }
+    PRes d = parse_decl(s, pos);
+    return parse_sandbox_body(s, d.pos, f"{acc} {d.ast}");
+}
+
+PRes parse_sandbox(Str s, Int pos) {
+    Tok kw = lex_tok(s, pos);    // consume 'sandbox'
+    Tok open = lex_tok(s, kw.pos);
+    PRes caps = parse_sandbox_caps(s, open.pos, "(caps", 1);
+    Tok brace = lex_tok(s, caps.pos);
+    PRes body = parse_sandbox_body(s, brace.pos, f"(sandbox {caps.ast}");
+    return PRes { pos: body.pos, ast: body.ast };
+}
+
 // ─── Program loop ───────────────────────────────────────────────
 
 Int parse_program(Str s, Int pos) {
