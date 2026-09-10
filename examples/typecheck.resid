@@ -1390,21 +1390,21 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     }
     if (name == "IntToString") {
         if (argc == 1) {
-            if (argtys == "Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
+            if (argtys == "Int" || str_has_prefix(argtys, "Int(")) { return ERes { pos: pos, ty: "Str", err: "" }; }
             return ERes { pos: pos, ty: "", err: "IntToString expects Int, got " + argtys };
         }
         return ERes { pos: pos, ty: "", err: "IntToString expects 1 argument" };
     }
     if (name == "UIntToString") {
         if (argc == 1) {
-            if (argtys == "Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
+            if (argtys == "UInt" || str_has_prefix(argtys, "UInt(")) { return ERes { pos: pos, ty: "Str", err: "" }; }
             return ERes { pos: pos, ty: "", err: "UIntToString expects UInt, got " + argtys };
         }
         return ERes { pos: pos, ty: "", err: "UIntToString expects 1 argument" };
     }
     if (name == "FloatToString") {
         if (argc == 1) {
-            if (argtys == "Float") { return ERes { pos: pos, ty: "Str", err: "" }; }
+            if (argtys == "Float" || str_has_prefix(argtys, "Float(")) { return ERes { pos: pos, ty: "Str", err: "" }; }
             return ERes { pos: pos, ty: "", err: "FloatToString expects Float, got " + argtys };
         }
         return ERes { pos: pos, ty: "", err: "FloatToString expects 1 argument" };

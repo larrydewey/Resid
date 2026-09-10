@@ -13,9 +13,7 @@
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 6,
   resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 122 e2e).
-  Note: `bootstrap_parser_builds_ast` and
-  `bootstrap_typechecker_accepts_bootstrap_sources` are pre-existing red on
-  `master` (being addressed next).
+  Note: all bootstrap e2e tests now green (previously 2 pre-existing red fixed).
 
 ### Major capabilities
 
