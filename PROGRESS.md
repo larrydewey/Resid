@@ -9,10 +9,10 @@
 
 ## 0. Current Snapshot
 
-**681 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
+**682 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 17, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 121 e2e).
+  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 122 e2e).
   Note: `bootstrap_parser_builds_ast` and
   `bootstrap_typechecker_accepts_bootstrap_sources` are pre-existing red on
   `master` (unrelated to this session).
@@ -316,6 +316,18 @@ Remaining conformance gaps are minimal:
   the self-hosted driver.
 
 **Completed this session:**
+- **`Str` rope-backed representation (§2 string building, roadmap item 2)**: 
+  concatenation-by-accumulator (the `acc + piece` / `acc + str_from_code(c)` 
+  loop pattern) is now amortized O(1) per append via a chunked concat-rope in 
+  `resid_rt.c` and flattened once at finish. New builtins — `str_sb_new()`,
+  `str_sb_append(sb, s)`, `str_sb_append_cp(sb, cp)`, `str_sb_finish(sb)` — are
+  typed in both pipelines (stage-1 `resid-type` BUILTIN_SIGS + driver
+  `check_builtin`/`cg_extern*`/`hdr_core`). `lib/h2.resid` `h2_bs_acc` and
+  `hp_huff_loop` rewritten onto the builder (byte/symbol-at-a-time decode no
+  longer re-allocates the whole string per step). e2e `run_str_builder_in_resid`
+  (both pipelines) + `run_h2_hpack_in_resid` still byte-identical on both
+  pipelines. Handles are opaque pointers carried as `Str` values — no ABI or
+  `i8*` change to existing Str consumers.
 - **Graph-reduce stage-2 parity (§11, §36)**: the `--graph-reduce` reduction
   pipeline now runs in the self-hosted driver as `--bootstrap-graph-reduce`.
   Source-to-source reducer in `examples/typecheck.resid` (`examples/driver.resid`
@@ -356,7 +368,7 @@ Remaining conformance gaps are minimal:
 
 Strategic work items:
 - **Graph reduction stage-2 parity (§11, §36)**: **✅ DONE** (this session) — see §5 completed list; `--bootstrap-graph-reduce` + 4 new e2e tests.
-- `Str` rope-backed representation (deferred — C function and codegen decl in place, lib/h2_bs_acc rewrite pending).
+- `Str` rope-backed representation: **✅ DONE** (this session) — chunked concat-rope builders in `resid_rt.c` (`str_sb_new`/`str_sb_append`/`str_sb_append_cp`/`str_sb_finish`) + both-pipeline type/codegen support + `lib/h2.resid` rewrite; see §5 completed list.
 - `resid why` and `resid-lsp` hardening: more filter options, editor integration polish.
 - Crypto: additional algorithms as needed (currently complete through TLS 1.3 + HTTP/2).
 

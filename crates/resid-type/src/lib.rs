@@ -1313,6 +1313,15 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("str_from_code", &[SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
     // Half-open substring `s[start..end]` by codepoint index.
     ("str_slice", &[SemType::Str, SemType::Numeric(NumericType::Int(IntWidth::B64)), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
+    // ─── Rope-backed string builders ───
+    // Accumulate string parts in a chunked rope (amortized O(1) appends) and
+    // flatten once at finish — the fix for O(total²) `acc + piece` loops
+    // (lib/h2.resid h2_bs_acc / hp_huff_loop). Handles are carried by Resid
+    // as `Str`-typed values.
+    ("str_sb_new", &[], SemType::Str),
+    ("str_sb_append", &[SemType::Str, SemType::Str], SemType::Str),
+    ("str_sb_append_cp", &[SemType::Str, SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
+    ("str_sb_finish", &[SemType::Str], SemType::Str),
     // ─── Stdlib v1: string verbs ───
     // Trim leading/trailing ASCII whitespace.
     ("str_trim", &[SemType::Str], SemType::Str),

@@ -5416,6 +5416,83 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Rope-backed string builders (str_sb_new/append/append_cp/finish both
+/// pipelines): append pieces + multi-byte codepoints into a chunked rope and
+/// flatten once, including a recursive accumulate loop (the lib/h2.resid
+/// h2_bs_acc / hp_huff_loop pattern).
+#[test]
+fn run_str_builder_in_resid() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let file = dir.join("main.resid");
+    std::fs::write(
+        &file,
+        r#"
+Str rope_repeat(Int i, Int n, Str sb) {
+    if (i >= n) { return str_sb_finish(sb); }
+    Str sb2 = str_sb_append(sb, "ab");
+    Int ni = i + 1;
+    return rope_repeat(ni, n, sb2);
+}
+
+Int main() {
+    Str a = str_sb_new();
+    Str a1 = str_sb_append_cp(a, 72);
+    Str a2 = str_sb_append_cp(a1, 20013);
+    Str a3 = str_sb_append_cp(a2, 33);
+    Str out1 = str_sb_finish(a3);
+    println(out1);
+    println(IntToString(str_len(out1)));
+    Str out2 = rope_repeat(0, 3, str_sb_new());
+    println(out2);
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let expected = "H中!\n3\nababab";
+    // Stage-1 (Rust pipeline).
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("rust pipeline");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let rust_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(rust_out.contains(expected), "{rust_out:?}");
+    // Stage-2 (bootstrap driver pipeline).
+    let bin = dir.join("sb_bin");
+    let drv_args = vec![
+        workspace.join("examples/driver.resid").to_string_lossy().into_owned(),
+        "run".into(),
+        file.to_string_lossy().into_owned(),
+        "-o".into(),
+        bin.to_string_lossy().into_owned(),
+        "-rt".into(),
+        workspace.join("crates/residc/resid_rt.c").to_string_lossy().into_owned(),
+    ];
+    let out = Command::new(residc_bin())
+        .args(&drv_args)
+        .current_dir(workspace)
+        .output()
+        .expect("driver run");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = Command::new(&bin).output().expect("stage-2 binary");
+    let drv_out = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        drv_out.trim_end(),
+        expected,
+        "{:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// LIVE HTTP/2 over TLS 1.3: examples/h2_client.resid negotiates ALPN h2,
 /// completes the handshake, sends the connection preface + SETTINGS, then
 /// issues a GET on stream 1 and decodes the response HEADERS (HPACK incl.
