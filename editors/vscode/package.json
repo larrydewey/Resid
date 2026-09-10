@@ -71,13 +71,14 @@
         },
         "resid.lsp.serverPath": {
           "type": "string",
-          "default": "resid-lsp",
-          "description": "Path or command to the resid-lsp binary. Use absolute path if not in PATH."
+          "default": "",
+          "description": "Path or command to the resid-lsp binary. When empty, use target/release or target/debug in the workspace, then PATH."
         }
       }
     }
   },
   "activationEvents": [
+    "onStartupFinished",
     "onLanguage:resid",
     "onLanguage:resid-manifest"
   ],
@@ -89,11 +90,13 @@
     "lint": "eslint src --ext ts",
     "package": "vsce package"
   },
+  "dependencies": {
+    "vscode-languageclient": "^8.0.0"
+  },
   "devDependencies": {
     "@types/vscode": "^1.75.0",
     "@types/node": "^18.0.0",
     "typescript": "^5.0.0",
-    "vscode-languageclient": "^8.0.0",
     "vsce": "^2.15.0"
   }
 }
