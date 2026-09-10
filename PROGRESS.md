@@ -9,7 +9,7 @@
 
 ## 0. Current Snapshot
 
-**685 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
+**686 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 253,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 0,
   resid-lsp-notes 6,
