@@ -9,10 +9,13 @@
 
 ## 0. Current Snapshot
 
-**677 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
+**681 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 17, resid-notes 2, resid-why 7, resid-lsp 5,
-  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 117 e2e).
+  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 121 e2e).
+  Note: `bootstrap_parser_builds_ast` and
+  `bootstrap_typechecker_accepts_bootstrap_sources` are pre-existing red on
+  `master` (unrelated to this session).
 
 ### Major capabilities
 
@@ -313,6 +316,25 @@ Remaining conformance gaps are minimal:
   the self-hosted driver.
 
 **Completed this session:**
+- **Graph-reduce stage-2 parity (§11, §36)**: the `--graph-reduce` reduction
+  pipeline now runs in the self-hosted driver as `--bootstrap-graph-reduce`.
+  Source-to-source reducer in `examples/typecheck.resid` (`examples/driver.resid`
+  7694 lines): constant-fold bindings into `cenv`, β-reduce pure single-return
+  calls with constant args, elide foldable unreferenced bindings (§36 DCE)
+  while effectful bindings survive, then re-type-check the reduced program
+  via `ck_collect_sigs` before codegen. Reduced output is byte-identical to
+  the plain path (e2e `bootstrap_graph_reduce_parity`,
+  `bootstrap_graph_reduce_eliminates_dead_bindings` — DCE sample: 2 dead
+  bindings dropped, `println` side-effect preserved). Non-function
+  declarations rejected with the Rust pipeline's exact message:
+  `type`/`import`/`sandbox` and behavior instances `Ord(Int) = f;` →
+  "only functions are representable" (e2e `bootstrap_graph_reduce_rejects_declarations`,
+  `bootstrap_graph_reduce_rejects_behavior_instances`). Reducer fixes:
+  `gr_brace_of_pd` now returns the exact `{` position / `-1` when no body brace
+  (behavior-shape lookahead), `gr_brace_close` starts at depth 0,
+  `MB.prefix` single-space rebuild, and the `--bootstrap-graph-reduce` flag
+  avoids residc's global `--graph-reduce` strip. Caveat: `while` is not
+  supported by the driver codegen (parity holds for the supported subset).
 - **0-based list migration**: All crypto/TLS libs (`lib/crypto.resid`, `der`, `x509`, `rsa`, `chain`, `tls`, `tlsmsg`, `aesgcm`, `chacha`, `ed25519`, `x25519`, `ec256`, `h2`) now use pure 0-based indexing (no phantom seed), with `list.len()` = real count, `slice_seed(b,start,count,[])`, `sconcat(a,b)=a.concat(b)`. All e2e green: `run_x509_in_resid`, `run_rsa_pkcs1_verify_in_resid` (stage-1+stage-2), `run_ecdsa_p256_verify_in_resid`, `run_chain_san_validity_in_resid`, `run_tls13_framing_in_resid`, full crypto suite (SHA/HMAC/Ed25519/ChaCha/AES/X25519).
 - **0-based migration completed for TLS/H2 clients + wide-ec e2e**: `examples/h2_client.resid` (framer: `read_one_record` plain-strip off-by-one, DATA-body truncation, `read_flight`/`read_app` 0-based slices, `hb`/`recv_exact`/`recv_loop` empty-seed) and `examples/tls_client.resid` (records, `open_if_app` marker, `read_app`, `verify_cv`, `safe_msg` `-1` sentinel, transcript slices) fully migrated. Live-network e2e green: `run_tls13_live_openssl_in_resid`, `run_h2_live_request_in_resid` (56s), `run_h2_post_and_continuation_in_resid` (129s); `run_ecge512_wide_prop_in_resid` green (623s — includes ECDSA-P256 verify via `tm_ecdsa_verify_sha256`). Supporting lib fixes: `tlsmsg` `tm_find_fin`/`tm_find_pos`/`tm_find_fin_last` not-found sentinel `-1`, `chain.resid` `eq_bytes`/`ci_eq_bytes`/RSA `der_content_pos` 0-based, `aesgcm` `e1_acc` `v[i]`, `ec256` `ecdsa_vx` `den==0` guard, `e2e.rs` `be512_acc` 0-based seed.
 - **Stage-2 empty-list parity**: Fixed driver's typechecker (`params_accept_at` empty-adopt for `List(Unknown)`) and codegen (`[]` → `resid_list_new(0,null,…)`) in `examples/typecheck.resid` + `examples/codegen.resid`; regenerated `examples/driver.resid` (6950 lines). Verified by `bootstrap_*` tests (12/12 green) and `run_rsa_pkcs1_verify_in_resid` stage-2 path.
@@ -333,7 +355,7 @@ Remaining conformance gaps are minimal:
 - **All tests green**: 6 `resid-diag` unit, 252 `resid-type` unit, 117 `residc` e2e (111 baseline + 4 new + 2 parity from earlier).
 
 Strategic work items:
-- **Graph reduction stage-2 parity (§11, §36)**: port `--graph-reduce` pipeline to self-hosted driver — requires IR data structures, reduction engine, and retrofit pass in `examples/typecheck.resid` + `examples/codegen.resid`
+- **Graph reduction stage-2 parity (§11, §36)**: **✅ DONE** (this session) — see §5 completed list; `--bootstrap-graph-reduce` + 4 new e2e tests.
 - `Str` rope-backed representation (deferred — C function and codegen decl in place, lib/h2_bs_acc rewrite pending).
 - `resid why` and `resid-lsp` hardening: more filter options, editor integration polish.
 - Crypto: additional algorithms as needed (currently complete through TLS 1.3 + HTTP/2).

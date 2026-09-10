@@ -3168,6 +3168,721 @@ Int check_program(Str s, Int pos, Funcs fs) {
     return 1;
 }
 
+// ─── Graph-reduction pass (spec §33 / §36) ─────────────────────
+// A source-to-source reduction mirroring the Rust pipeline's
+// graph_reduce contract: constant-folded bindings are dead-code-
+// eliminated (spec §36), effectful residual bindings survive verbatim,
+// and pure calls with constant arguments are β-reduced. Runs only
+// under the driver's --graph-reduce flag, before the checker and
+// emitter walk the source. Non-function declarations are rejected.
+//
+// The merge_driver rename table maps Funcs -> Sigs and fn_index ->
+// ck_fn_index for this whole section, so the names below read as their
+// typecheck.resid spellings.
+
+type EV = { ok: Bool, v: Str, pos: Int };
+type IP = { ok: Bool, v: Int };
+type ARG = { ok: Bool, alits: List(Str), close: Int };
+type MB = { ok: Bool, prefix: Str, name: Str, eq: Int };
+type GR = { text: Str, err: Str, elim: Int };
+
+Int gr_pick_i(Bool c, Int a, Int b) {
+    if (c) { return a; }
+    return b;
+}
+
+Str gr_pick(Bool c, Str a, Str b) {
+    if (c) { return a; }
+    return b;
+}
+
+Int gr_prec(Str op) {
+    if (op == "*") { return 3; }
+    if (op == "/") { return 3; }
+    if (op == "%") { return 3; }
+    if (op == "+") { return 4; }
+    if (op == "-") { return 4; }
+    if (op == "<<") { return 5; }
+    if (op == ">>") { return 5; }
+    if (op == "<") { return 6; }
+    if (op == "<=") { return 6; }
+    if (op == ">") { return 6; }
+    if (op == ">=") { return 6; }
+    if (op == "==") { return 7; }
+    if (op == "!=") { return 7; }
+    if (op == "&") { return 8; }
+    if (op == "^") { return 9; }
+    if (op == "|") { return 10; }
+    if (op == "&&") { return 11; }
+    if (op == "||") { return 12; }
+    return 0;
+}
+
+// Token scans. All return the position AFTER the closing token, except
+// gr_brace_of_pd (start of the brace) and gr_semi_at (start of the ';').
+
+Int gr_paren_scan(Str s, Int pos, Int d) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "(") {
+        Int d2 = d + 1;
+        return gr_paren_scan(s, t.pos, d2);
+    }
+    if (t.text == ")") {
+        if (d <= 1) { return t.pos; }
+        Int d2 = d - 1;
+        return gr_paren_scan(s, t.pos, d2);
+    }
+    if (t.kind == "eof") { return pos; }
+    return gr_paren_scan(s, t.pos, d);
+}
+
+Int gr_paren_close(Str s, Int pos) {
+    return gr_paren_scan(s, pos, 1);
+}
+
+Int gr_brace_scan(Str s, Int pos, Int d) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "{") {
+        Int d2 = d + 1;
+        return gr_brace_scan(s, t.pos, d2);
+    }
+    if (t.text == "}") {
+        if (d <= 1) { return t.pos; }
+        Int d2 = d - 1;
+        return gr_brace_scan(s, t.pos, d2);
+    }
+    if (t.kind == "eof") { return pos; }
+    return gr_brace_scan(s, t.pos, d);
+}
+
+Int gr_brace_close(Str s, Int pos) {
+    return gr_brace_scan(s, pos, 0);
+}
+
+Int gr_brace_of_pd(Str s, Int pos, Int pd) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "(") {
+        Int pd2 = pd + 1;
+        return gr_brace_of_pd(s, t.pos, pd2);
+    }
+    if (t.text == ")") {
+        if (pd == 0) { return gr_brace_of_pd(s, t.pos, pd); }
+        Int pd2 = pd - 1;
+        return gr_brace_of_pd(s, t.pos, pd2);
+    }
+    if (t.text == "{") {
+        if (pd == 0) { return t.pos - 1; }
+        return gr_brace_of_pd(s, t.pos, pd);
+    }
+    if (t.kind == "eof") { return -1; }
+    return gr_brace_of_pd(s, t.pos, pd);
+}
+
+Int gr_semi_at(Str s, Int pos, Int d) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "(" || t.text == "[" || t.text == "{") {
+        Int d2 = d + 1;
+        return gr_semi_at(s, t.pos, d2);
+    }
+    if (t.text == ")" || t.text == "]" || t.text == "}") {
+        if (d <= 0) { return pos; }
+        Int d2 = d - 1;
+        return gr_semi_at(s, t.pos, d2);
+    }
+    if (t.text == ";") {
+        if (d <= 0) { return pos; }
+        return gr_semi_at(s, t.pos, d);
+    }
+    if (t.kind == "eof") { return pos; }
+    return gr_semi_at(s, t.pos, d);
+}
+
+// Position just after the next top-level statement (mirrors check_stmt).
+Int gr_next_pos(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "if") {
+        Tok open = lex_tok(s, t.pos);
+        Int pc = gr_paren_close(s, open.pos);
+        Int then_end = gr_next_pos(s, pc);
+        Tok nx = lex_tok(s, then_end);
+        if (nx.text == "else") {
+            return gr_next_pos(s, nx.pos);
+        }
+        return then_end;
+    }
+    if (t.text == "while") {
+        Tok open = lex_tok(s, t.pos);
+        Int pc = gr_paren_close(s, open.pos);
+        return gr_next_pos(s, pc);
+    }
+    if (t.text == "for") {
+        Tok open = lex_tok(s, t.pos);
+        Int pc = gr_paren_close(s, open.pos);
+        return gr_next_pos(s, pc);
+    }
+    if (t.text == "{") {
+        Int bc = gr_brace_close(s, pos);
+        return bc;
+    }
+    if (t.text == "match") {
+        Int bp = gr_brace_of_pd(s, t.pos, 0);
+        if (bp < 0) {
+            Int se = gr_semi_at(s, pos, 0);
+            Tok mst = lex_tok(s, se);
+            return mst.pos;
+        }
+        Int bc = gr_brace_close(s, bp);
+        return bc;
+    }
+    Int se = gr_semi_at(s, pos, 0);
+    Tok st = lex_tok(s, se);
+    return st.pos;
+}
+
+// Constant evaluation (folded literal text; ok=false when not constant).
+// cenv entries are "name:literal".
+Str gr_cenv_at(List(Str) cenv, Str name, Int i) {
+    Int n = cenv.len();
+    if (i >= n) { return ""; }
+    Str e = cenv[i];
+    Int ci = str_find_char(e, 58, 0);
+    if (ci >= 0) {
+        Str en = str_slice(e, 0, ci);
+        if (en == name) {
+            Int m = str_len(e);
+            Int ci2 = ci + 1;
+            return str_slice(e, ci2, m);
+        }
+    }
+    Int k = i + 1;
+    return gr_cenv_at(cenv, name, k);
+}
+
+Str gr_cenv(List(Str) cenv, Str name) {
+    return gr_cenv_at(cenv, name, 0);
+}
+
+IP gr_ip_n(Str s, Bool neg, Int i, Int acc) {
+    Int n = str_len(s);
+    if (i >= n) { return IP { ok: true, v: gr_pick_i(neg, 0 - acc, acc) }; }
+    Int c = str_char_at(s, i);
+    if (c >= 48) {
+        if (c <= 57) {
+            Int d = c - 48;
+            Int a2 = acc * 10;
+            Int k = i + 1;
+            return gr_ip_n(s, neg, k, a2 + d);
+        }
+    }
+    return IP { ok: false, v: 0 };
+}
+
+IP gr_ip(Str s) {
+    if (s == "") { return IP { ok: false, v: 0 }; }
+    Int c0 = str_char_at(s, 0);
+    if (c0 == 45) { return gr_ip_n(s, true, 1, 0); }
+    return gr_ip_n(s, false, 0, 0);
+}
+
+EV gr_unary(Str op, Str v) {
+    if (op == "-") {
+        IP i = gr_ip(v);
+        if (!i.ok) { return EV { ok: false, v: "", pos: 0 }; }
+        return EV { ok: true, v: IntToString(0 - i.v), pos: 0 };
+    }
+    if (op == "+") {
+        return EV { ok: true, v: v, pos: 0 };
+    }
+    if (op == "!") {
+        if (v == "true") { return EV { ok: true, v: "false", pos: 0 }; }
+        if (v == "false") { return EV { ok: true, v: "true", pos: 0 }; }
+        return EV { ok: false, v: "", pos: 0 };
+    }
+    if (op == "~") {
+        IP i2 = gr_ip(v);
+        if (!i2.ok) { return EV { ok: false, v: "", pos: 0 }; }
+        return EV { ok: true, v: IntToString(0 - i2.v - 1), pos: 0 };
+    }
+    return EV { ok: false, v: "", pos: 0 };
+}
+
+EV gr_plus(Str l, Str r) {
+    IP li = gr_ip(l);
+    if (li.ok) {
+        IP ri = gr_ip(r);
+        if (ri.ok) {
+            return EV { ok: true, v: IntToString(li.v + ri.v), pos: 0 };
+        }
+        return EV { ok: false, v: "", pos: 0 };
+    }
+    Int l0 = str_char_at(l, 0);
+    Int r0 = str_char_at(r, 0);
+    Bool ls = l0 == 34;
+    Bool rs = r0 == 34;
+    if (ls && rs) {
+        Str a = str_slice(l, 1, str_len(l) - 1);
+        Str b = str_slice(r, 1, str_len(r) - 1);
+        return EV { ok: true, v: "\"" + a + b + "\"", pos: 0 };
+    }
+    return EV { ok: false, v: "", pos: 0 };
+}
+
+EV gr_int2(Str op, Str l, Str r) {
+    IP li = gr_ip(l);
+    if (!li.ok) { return EV { ok: false, v: "", pos: 0 }; }
+    IP ri = gr_ip(r);
+    if (!ri.ok) { return EV { ok: false, v: "", pos: 0 }; }
+    if (op == "-") { return EV { ok: true, v: IntToString(li.v - ri.v), pos: 0 }; }
+    if (op == "*") { return EV { ok: true, v: IntToString(li.v * ri.v), pos: 0 }; }
+    if (op == "/") {
+        if (ri.v == 0) { return EV { ok: false, v: "", pos: 0 }; }
+        return EV { ok: true, v: IntToString(li.v / ri.v), pos: 0 };
+    }
+    if (op == "%") {
+        if (ri.v == 0) { return EV { ok: false, v: "", pos: 0 }; }
+        return EV { ok: true, v: IntToString(li.v % ri.v), pos: 0 };
+    }
+    return EV { ok: false, v: "", pos: 0 };
+}
+
+EV gr_bit(Str op, Str l, Str r) {
+    IP li = gr_ip(l);
+    if (!li.ok) { return EV { ok: false, v: "", pos: 0 }; }
+    IP ri = gr_ip(r);
+    if (!ri.ok) { return EV { ok: false, v: "", pos: 0 }; }
+    if (op == "<<") {
+        if (ri.v < 0 || ri.v >= 64) { return EV { ok: false, v: "", pos: 0 }; }
+        return EV { ok: true, v: IntToString(li.v << ri.v), pos: 0 };
+    }
+    if (op == ">>") {
+        if (ri.v < 0 || ri.v >= 64) { return EV { ok: false, v: "", pos: 0 }; }
+        return EV { ok: true, v: IntToString(li.v >> ri.v), pos: 0 };
+    }
+    if (op == "&") { return EV { ok: true, v: IntToString(li.v & ri.v), pos: 0 }; }
+    if (op == "|") { return EV { ok: true, v: IntToString(li.v | ri.v), pos: 0 }; }
+    if (op == "^") { return EV { ok: true, v: IntToString(li.v ^ ri.v), pos: 0 }; }
+    return EV { ok: false, v: "", pos: 0 };
+}
+
+EV gr_cmp(Str op, Str l, Str r) {
+    IP li = gr_ip(l);
+    if (li.ok) {
+        IP ri = gr_ip(r);
+        if (!ri.ok) { return EV { ok: false, v: "", pos: 0 }; }
+        if (op == "<") { return EV { ok: true, v: gr_pick(li.v < ri.v, "true", "false"), pos: 0 }; }
+        if (op == "<=") { return EV { ok: true, v: gr_pick(li.v <= ri.v, "true", "false"), pos: 0 }; }
+        if (op == ">") { return EV { ok: true, v: gr_pick(li.v > ri.v, "true", "false"), pos: 0 }; }
+        if (op == ">=") { return EV { ok: true, v: gr_pick(li.v >= ri.v, "true", "false"), pos: 0 }; }
+        if (op == "==") { return EV { ok: true, v: gr_pick(li.v == ri.v, "true", "false"), pos: 0 }; }
+        if (op == "!=") { return EV { ok: true, v: gr_pick(li.v != ri.v, "true", "false"), pos: 0 }; }
+        return EV { ok: false, v: "", pos: 0 };
+    }
+    if (op == "==") { return EV { ok: true, v: gr_pick(l == r, "true", "false"), pos: 0 }; }
+    if (op == "!=") { return EV { ok: true, v: gr_pick(l != r, "true", "false"), pos: 0 }; }
+    return EV { ok: false, v: "", pos: 0 };
+}
+
+EV gr_fold(Str op, Str l, Str r) {
+    if (op == "+") { return gr_plus(l, r); }
+    if (op == "-") { return gr_int2("-", l, r); }
+    if (op == "*") { return gr_int2("*", l, r); }
+    if (op == "/") { return gr_int2("/", l, r); }
+    if (op == "%") { return gr_int2("%", l, r); }
+    if (op == "<<") { return gr_bit("<<", l, r); }
+    if (op == ">>") { return gr_bit(">>", l, r); }
+    if (op == "&") { return gr_bit("&", l, r); }
+    if (op == "|") { return gr_bit("|", l, r); }
+    if (op == "^") { return gr_bit("^", l, r); }
+    if (op == "&&") { return EV { ok: true, v: gr_pick(l == "true" && r == "true", "true", "false"), pos: 0 }; }
+    if (op == "||") { return EV { ok: true, v: gr_pick(l == "true" || r == "true", "true", "false"), pos: 0 }; }
+    if (op == "==") { return gr_cmp("==", l, r); }
+    if (op == "!=") { return gr_cmp("!=", l, r); }
+    if (op == "<") { return gr_cmp("<", l, r); }
+    if (op == "<=") { return gr_cmp("<=", l, r); }
+    if (op == ">") { return gr_cmp(">", l, r); }
+    if (op == ">=") { return gr_cmp(">=", l, r); }
+    return EV { ok: false, v: "", pos: 0 };
+}
+
+// β-reduce a user function call with constant arguments.
+EV gr_call_fold(Str src, Funcs fs, Str fname, List(Str) pnames, List(Str) alits, Int depth) {
+    Int d2 = depth + 1;
+    if (d2 > 12) { return EV { ok: false, v: "", pos: 0 }; }
+    Str body = gr_fn_body(src, fs, fname);
+    if (body == "") { return EV { ok: false, v: "", pos: 0 }; }
+    List(Str) pc = gr_zip(pnames, alits, 0, []);
+    Int n = str_len(body);
+    Int j = skip_ws(body, 0, n);
+    Tok t = lex_tok(body, j);
+    if (t.text == "return") {
+        return gr_eval(body, t.pos, pc, src, fs, d2);
+    }
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(body, t.pos);
+        if (t2.kind == "ident") {
+            Tok t3 = lex_tok(body, t2.pos);
+            if (t3.text == "=") {
+                Int semi1 = gr_semi_at(body, t3.pos, 0);
+                EV yy = gr_eval(body, t3.pos, pc, src, fs, d2);
+                if (yy.ok) {
+                    List(Str) pc2 = pc.concat([t2.text + ":" + yy.v]);
+                    Tok a1 = lex_tok(body, semi1);
+                    Int k = skip_ws(body, a1.pos, n);
+                    Tok rtok = lex_tok(body, k);
+                    if (rtok.text == "return") {
+                        return gr_eval(body, rtok.pos, pc2, src, fs, d2);
+                    }
+                }
+            }
+        }
+    }
+    return EV { ok: false, v: "", pos: 0 };
+}
+
+ARG gr_args(Str e, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth, List(Str) acc) {
+    Tok t = lex_tok(e, pos);
+    if (t.text == "(") {
+        Tok n = lex_tok(e, t.pos);
+        if (n.text == ")") {
+            return ARG { ok: true, alits: acc, close: n.pos };
+        }
+        EV a = gr_eval(e, t.pos, cenv, src, fs, depth);
+        if (!a.ok) { return ARG { ok: false, alits: acc, close: pos }; }
+        Tok after = lex_tok(e, a.pos);
+        if (after.text == ")") {
+            return ARG { ok: true, alits: acc.concat([a.v]), close: after.pos };
+        }
+        if (after.text == ",") {
+            return gr_args(e, after.pos, cenv, src, fs, depth, acc.concat([a.v]));
+        }
+    }
+    return ARG { ok: false, alits: acc, close: pos };
+}
+
+EV gr_eval_call(Str e, Str fname, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth) {
+    if (depth > 10) { return EV { ok: false, v: "", pos: pos }; }
+    ARG ar = gr_args(e, pos, cenv, src, fs, depth, []);
+    if (!ar.ok) { return EV { ok: false, v: "", pos: pos }; }
+    Int idx = fn_index(fs, fname);
+    if (idx < 0) { return EV { ok: false, v: "", pos: pos }; }
+    Str pns_s = gr_pnames_csv(src, fname);
+    if (pns_s == "") {
+        if (ar.alits.len() != 0) { return EV { ok: false, v: "", pos: pos }; }
+        List(Str) pns0 = gr_zip([], [], 0, []);
+        return gr_call_fold(src, fs, fname, pns0, ar.alits, depth);
+    }
+    List(Str) pns = str_split(pns_s, ",");
+    if (pns.len() != ar.alits.len()) { return EV { ok: false, v: "", pos: pos }; }
+    return gr_call_fold(src, fs, fname, pns, ar.alits, depth);
+}
+
+List(Str) gr_zip(List(Str) a, List(Str) b, Int i, List(Str) acc) {
+    Int n = a.len();
+    if (i >= n) { return acc; }
+    Int k = i + 1;
+    return gr_zip(a, b, k, acc.concat([a[i] + ":" + b[i]]));
+}
+
+EV gr_eval_prim(Str e, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth) {
+    Tok t = lex_tok(e, pos);
+    if (t.kind == "int" || t.kind == "str" || t.kind == "char") {
+        return EV { ok: true, v: t.text, pos: t.pos };
+    }
+    if (t.text == "true") { return EV { ok: true, v: "true", pos: t.pos }; }
+    if (t.text == "false") { return EV { ok: true, v: "false", pos: t.pos }; }
+    if (t.text == "(") {
+        Tok h = lex_tok(e, t.pos);
+        Tok h2 = lex_tok(e, h.pos);
+        if (h.kind == "ident" && h2.text == "(") {
+            Int cclose = gr_paren_close(e, h2.pos);
+            return gr_eval(e, cclose, cenv, src, fs, depth);
+        }
+        return gr_eval(e, t.pos, cenv, src, fs, depth);
+    }
+    if (t.text == "-" || t.text == "+" || t.text == "!" || t.text == "~") {
+        EV o = gr_eval_prim(e, t.pos, cenv, src, fs, depth);
+        if (!o.ok) { return EV { ok: false, v: "", pos: t.pos }; }
+        return gr_unary(t.text, o.v);
+    }
+    if (t.kind == "ident") {
+        Tok nx = lex_tok(e, t.pos);
+        if (nx.text == "(") {
+            return gr_eval_call(e, t.text, nx.pos, cenv, src, fs, depth);
+        }
+        Str cv = gr_cenv(cenv, t.text);
+        if (cv == "") { return EV { ok: false, v: "", pos: t.pos }; }
+        return EV { ok: true, v: cv, pos: t.pos };
+    }
+    return EV { ok: false, v: "", pos: t.pos };
+}
+
+EV gr_eval_bin_rest(Str e, EV acc, Int minp, List(Str) cenv, Str src, Funcs fs, Int depth) {
+    Tok t = lex_tok(e, acc.pos);
+    Int p = gr_prec(t.text);
+    if (p < minp) { return acc; }
+    if (p == 0) { return acc; }
+    Int q = p + 1;
+    EV r = gr_eval(e, t.pos, cenv, src, fs, depth);
+    if (!r.ok) { return r; }
+    EV f = gr_fold(t.text, acc.v, r.v);
+    if (!f.ok) { return EV { ok: false, v: "", pos: acc.pos }; }
+    return gr_eval_bin_rest(e, EV { ok: true, v: f.v, pos: r.pos }, minp, cenv, src, fs, depth);
+}
+
+EV gr_eval(Str e, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth) {
+    EV l = gr_eval_prim(e, pos, cenv, src, fs, depth);
+    if (!l.ok) { return l; }
+    return gr_eval_bin_rest(e, l, 1, cenv, src, fs, depth);
+}
+
+Str gr_fn_body_at(Str s, Int pos, Str name) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return ""; }
+    if (t.text == "pub") {
+        Tok px = lex_tok(s, t.pos);
+        if (px.kind == "ident") {
+            return gr_fn_body_at(s, t.pos, name);
+        }
+        Int end = skip_decl(s, t.pos, 0);
+        return gr_fn_body_at(s, end, name);
+    }
+    if (t.text == "type") {
+        Int end2 = skip_decl(s, t.pos, 0);
+        return gr_fn_body_at(s, end2, name);
+    }
+    if (t.text == "import") {
+        Int end3 = skip_decl(s, t.pos, 0);
+        return gr_fn_body_at(s, end3, name);
+    }
+    if (t.kind != "ident") {
+        Int end4 = skip_decl(s, pos, 0);
+        return gr_fn_body_at(s, end4, name);
+    }
+    PRes rty = parse_type(s, pos);
+    if (rty.err != "") {
+        Int end5 = skip_decl(s, pos, 0);
+        return gr_fn_body_at(s, end5, name);
+    }
+    Tok nm = lex_tok(s, rty.pos);
+    Tok op = lex_tok(s, nm.pos);
+    if (nm.text == name && op.text == "(") {
+        Int bpos = gr_brace_of_pd(s, op.pos, 0);
+        Int bcl = gr_brace_close(s, bpos);
+        Int i1 = bpos + 1;
+        return str_slice(s, i1, bcl);
+    }
+    Int end6 = skip_decl(s, pos, 0);
+    return gr_fn_body_at(s, end6, name);
+}
+
+Str gr_fn_body(Str src, Funcs fs, Str name) {
+    return gr_fn_body_at(src, 0, name);
+}
+
+Str gr_pnames_after(Str s, Int pos, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") { return acc; }
+    if (t.text == ",") { return gr_pnames_after(s, t.pos, acc); }
+    if (t.kind == "ident") {
+        Str acc2 = if (acc == "") { t.text } else { acc + "," + t.text };
+        return gr_pnames_after(s, t.pos, acc2);
+    }
+    return gr_pnames_after(s, t.pos, acc);
+}
+
+Str gr_pnames_csv_at(Str s, Int pos, Str name) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return ""; }
+    if (t.text == "pub") {
+        Tok px = lex_tok(s, t.pos);
+        if (px.kind == "ident") {
+            return gr_pnames_csv_at(s, t.pos, name);
+        }
+        Int end = skip_decl(s, t.pos, 0);
+        return gr_pnames_csv_at(s, end, name);
+    }
+    if (t.text == "type") {
+        Int end2 = skip_decl(s, t.pos, 0);
+        return gr_pnames_csv_at(s, end2, name);
+    }
+    if (t.text == "import") {
+        Int end3 = skip_decl(s, t.pos, 0);
+        return gr_pnames_csv_at(s, end3, name);
+    }
+    if (t.kind != "ident") {
+        Int end4 = skip_decl(s, pos, 0);
+        return gr_pnames_csv_at(s, end4, name);
+    }
+    PRes rty = parse_type(s, pos);
+    if (rty.err != "") {
+        Int end5 = skip_decl(s, pos, 0);
+        return gr_pnames_csv_at(s, end5, name);
+    }
+    Tok nm = lex_tok(s, rty.pos);
+    Tok op = lex_tok(s, nm.pos);
+    if (nm.text == name && op.text == "(") {
+        return gr_pnames_after(s, op.pos, "");
+    }
+    Int end6 = skip_decl(s, pos, 0);
+    return gr_pnames_csv_at(s, end6, name);
+}
+
+Str gr_pnames_csv(Str src, Str name) {
+    return gr_pnames_csv_at(src, 0, name);
+}
+
+Bool gr_used_toks(Str rest, Str name, Int pos) {
+    Int n = str_len(rest);
+    if (pos >= n) { return false; }
+    Tok t = lex_tok(rest, pos);
+    if (t.kind == "ident") {
+        if (t.text == name) { return true; }
+    }
+    if (t.kind == "eof") { return false; }
+    return gr_used_toks(rest, name, t.pos);
+}
+
+Bool gr_used(Str rest, Str name) {
+    if (str_contains(rest, name)) { return true; }
+    return gr_used_toks(rest, name, 0);
+}
+
+MB gr_match_bind(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "return" || t.text == "if" || t.text == "while" || t.text == "for" || t.text == "match" || t.text == "{" || t.text == "break" || t.text == "continue") {
+        return MB { ok: false, prefix: "", name: "", eq: pos };
+    }
+    if (t.kind == "ident") {
+        if (t.text == "_") {
+            return MB { ok: false, prefix: "", name: "", eq: pos };
+        }
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.kind == "ident") {
+            Tok t3 = lex_tok(s, t2.pos);
+            if (t3.text == "=") {
+                Str pfx = str_slice(s, pos, t3.pos) + " ";
+                return MB { ok: true, prefix: pfx, name: t2.text, eq: t3.pos };
+            }
+            return MB { ok: false, prefix: "", name: "", eq: pos };
+        }
+        if (t2.text == "(") {
+            Int cl = gr_paren_close(s, t2.pos);
+            Tok nm = lex_tok(s, cl);
+            if (nm.kind == "ident") {
+                Tok e3 = lex_tok(s, nm.pos);
+                if (e3.text == "=") {
+                    Str pfx2 = str_slice(s, pos, e3.pos) + " ";
+                    return MB { ok: true, prefix: pfx2, name: nm.text, eq: e3.pos };
+                }
+            }
+        }
+    }
+    return MB { ok: false, prefix: "", name: "", eq: pos };
+}
+
+GR gr_body_reduce(Str s, Funcs fs, Int bstart, Int bend, Str acc, List(Str) cenv, Int elim) {
+    Int n = str_len(s);
+    Int j = skip_ws(s, bstart, n);
+    if (j >= bend) { return GR { text: acc, err: "", elim: elim }; }
+    Tok t = lex_tok(s, j);
+    if (t.text == "}" || t.kind == "eof") { return GR { text: acc, err: "", elim: elim }; }
+    if (t.text == "return" || t.text == "if" || t.text == "while" || t.text == "for" || t.text == "{" || t.text == "match") {
+        Int end = gr_next_pos(s, j);
+        Int e = skip_ws(s, end, n);
+        return gr_body_reduce(s, fs, e, bend, acc + str_slice(s, j, end) + "\n    ", cenv, elim);
+    }
+    MB mb = gr_match_bind(s, j);
+    if (mb.ok) {
+        Int sat = gr_semi_at(s, mb.eq, 0);
+        Str expr = str_slice(s, mb.eq, sat);
+        EV ev = gr_eval(expr, 0, cenv, s, fs, 0);
+        Tok ast = lex_tok(s, sat);
+        if (ev.ok) {
+            Str rest = str_slice(s, sat, bend);
+            if (gr_used(rest, mb.name)) {
+                Str line = mb.prefix + ev.v + ";";
+                Int el3 = elim;
+                return gr_body_reduce(s, fs, ast.pos, bend, acc + line + "\n    ", cenv.concat([mb.name + ":" + ev.v]), el3);
+            }
+            Int el2 = elim + 1;
+            return gr_body_reduce(s, fs, ast.pos, bend, acc, cenv, el2);
+        }
+        return gr_body_reduce(s, fs, ast.pos, bend, acc + str_slice(s, j, sat) + ";\n    ", cenv, elim);
+    }
+    Int end2 = gr_next_pos(s, j);
+    Int e2 = skip_ws(s, end2, n);
+    return gr_body_reduce(s, fs, e2, bend, acc + str_slice(s, j, end2) + "\n    ", cenv, elim);
+}
+
+GR gr_prog_at(Str s, Funcs fs, Int pos, Str acc, Int elim) {
+    Int n = str_len(s);
+    Int j = skip_ws(s, pos, n);
+    Tok t = lex_tok(s, j);
+    if (t.kind == "eof") { return GR { text: acc, err: "", elim: elim }; }
+    if (t.text == "type") {
+        Tok tn = lex_tok(s, t.pos);
+        return GR { text: acc, err: "graph-reduce: only functions are representable; declaration " + tn.text + " is not", elim: elim };
+    }
+    if (t.text == "import") {
+        return GR { text: acc, err: "graph-reduce: only functions are representable; import declarations are not", elim: elim };
+    }
+    if (t.text == "sandbox") {
+        return GR { text: acc, err: "graph-reduce: only functions are representable; sandbox blocks are not", elim: elim };
+    }
+    if (t.kind != "ident" && t.text != "pub") {
+        Int endx = skip_decl(s, j, 0);
+        return gr_prog_at(s, fs, endx, acc + str_slice(s, j, endx) + "\n", elim);
+    }
+Int posa = j;
+    Int pos_in = if (t.text == "pub") { t.pos } else { posa };
+    Tok dnm = lex_tok(s, pos_in);
+    if (t.text == "pub") {
+        Tok px = lex_tok(s, t.pos);
+        if (px.kind != "ident") {
+            Int endy = skip_decl(s, j, 0);
+            return gr_prog_at(s, fs, endy, acc + str_slice(s, j, endy) + "\n", elim);
+        }
+    }
+    Tok h1 = lex_tok(s, dnm.pos);
+    if (h1.text == "(") {
+        Int pcx = gr_paren_close(s, h1.pos);
+        Tok eqx = lex_tok(s, pcx);
+        if (eqx.text == "=") {
+            return GR { text: acc, err: "graph-reduce: only functions are representable; declaration " + dnm.text + " is not", elim: elim };
+        }
+    }
+    PRes rty = parse_type(s, pos_in);
+    if (rty.err != "") {
+        Int end2 = skip_decl(s, pos_in, 0);
+        return gr_prog_at(s, fs, end2, acc + str_slice(s, j, end2) + "\n", elim);
+    }
+    Tok nm = lex_tok(s, rty.pos);
+    Tok op = lex_tok(s, nm.pos);
+    if (op.text == "=") {
+        return GR { text: acc, err: "graph-reduce: only functions are representable; behavior instance is not", elim: elim };
+    }
+    if (op.text == "(") {
+        Int bpos = gr_brace_of_pd(s, op.pos, 0);
+        if (bpos < 0) {
+            return GR { text: acc, err: "graph-reduce: only functions are representable; declaration " + nm.text + " is not", elim: elim };
+        }
+        Int bcl = gr_brace_close(s, bpos);
+        Str hdr = str_slice(s, j, bpos);
+        Int i1 = bpos + 1;
+        GR red = gr_body_reduce(s, fs, i1, bcl, "", [], 0);
+        if (red.err != "") { return red; }
+        Str rebuilt = hdr + "{\n    " + red.text + "}";
+        Int elim2 = elim + red.elim;
+        return gr_prog_at(s, fs, bcl, acc + rebuilt + "\n", elim2);
+    }
+    Int end3 = skip_decl(s, pos_in, 0);
+    return gr_prog_at(s, fs, end3, acc + str_slice(s, j, end3) + "\n", elim);
+}
+
+GR gr_reduce_program(Str s, Funcs fs) {
+    return gr_prog_at(s, fs, 0, "", 0);
+}
+
 Int main() {
     if (args.count() < 2) {
         println("usage: typecheck <source.res>");
