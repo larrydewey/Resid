@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 fn lsp_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_resid-lsp")
+    env!("CARGO_BIN_EXE_resid-lsp-notes")
 }
 
 fn framed(body: &str) -> Vec<u8> {

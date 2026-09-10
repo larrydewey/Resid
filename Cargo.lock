@@ -775,14 +775,6 @@ version = "0.1.0"
 
 [[package]]
 name = "resid-lsp"
-version = "0.1.0"
-dependencies = [
- "resid-notes",
- "serde_json",
-]
-
-[[package]]
-name = "resid-lsp2"
 version = "0.2.0"
 dependencies = [
  "anyhow",
@@ -798,6 +790,14 @@ dependencies = [
  "tokio-test",
  "tower",
  "tower-lsp",
+]
+
+[[package]]
+name = "resid-lsp-notes"
+version = "0.1.0"
+dependencies = [
+ "resid-notes",
+ "serde_json",
 ]
 
 [[package]]

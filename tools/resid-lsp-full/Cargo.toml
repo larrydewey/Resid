@@ -1,5 +1,5 @@
 [package]
-name = "resid-lsp2"
+name = "resid-lsp"
 version = "0.2.0"
 edition = "2024"
 

@@ -1,4 +1,4 @@
-//! resid-lsp: language server view of residual notes (spec §37).
+//! resid-lsp-notes: legacy language server view of residual notes (spec §37).
 //!
 //! A minimal LSP (JSON-RPC over stdio) server that surfaces the
 //! `.resid-notes.cbor` sidecars produced by `residc build` as editor

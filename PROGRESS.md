@@ -11,7 +11,8 @@
 
 **685 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
   resid-codegen 137, resid-build 47, resid-fmt 5,
-  resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 6,
+  resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 0,
+  resid-lsp-notes 6,
   resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 122 e2e).
   Note: all bootstrap e2e tests now green (previously 2 pre-existing red fixed).
 
@@ -93,7 +94,8 @@
 - Registry transport over HTTP: `resid-build serve` + app fetches dependencies live.
 - SpecialCasing: Unicode case mapping table with conditional Final_Sigma rule.
 - `resid-why` tool: reads `.resid-notes.cbor` sidecars, explains residuals.
-- `resid-lsp`: language server surfacing residuals as Hint diagnostics.
+- `resid-lsp`: full VS Code language server with parse/type diagnostics,
+  completion, hover, navigation, and residual Hint diagnostics.
 - Residual provenance in sidecars: notes carry `(file, line, column)` so
   `resid-why --json` emits URI-bearing, column-precise LSP diagnostics and
   `resid-lsp` shows each note only on its owning document (legacy
@@ -897,5 +899,4 @@ pipeline and its output is byte-identical to the plain one.
   `capability_mode_process_readwrite_allows_run`); residc e2e +1 assertion
   (`process(readonly)` `process.run` rejection in
   `run_sandbox_capability_mode_readonly`).
-
 

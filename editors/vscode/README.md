@@ -22,15 +22,13 @@ Syntax highlighting, snippets, language configuration, and **LSP support** (diag
   match, if-let, for-in, `with` handles, `spawn` regions, sandboxes, imports.
 - **Language configuration**: bracket matching/auto-closing, comment toggling,
   folding markers.
-- **LSP (`resid-lsp`)**: Diagnostics and hover for **residual notes** (spec §37)
-  - Shows hints for runtime bindings whose values are not known at compile time
-  - Shows hints for provider calls that need capability grants at build time
-  - Hover over a line with a residual to see what knowledge is missing
+- **LSP (`resid-lsp`)**: Parse/type diagnostics, completions, hover, symbols,
+  go-to-definition, and references
 
 ## LSP Setup
 
-The extension includes a built-in LSP client that connects to `resid-lsp` (a binary
-in this repo at `tools/resid-lsp/`).
+The extension includes an LSP client that connects to the full `resid-lsp`
+server (the binary source is in `tools/resid-lsp-full/`).
 
 ### Prerequisites
 
