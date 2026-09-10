@@ -7660,3 +7660,259 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Self-hosted parity of spec §33: the stage-2 driver with
+/// `--bootstrap-graph-reduce` runs the AST→knowledge-graph→β-reduction→
+/// retrofit pipeline and must re-type-check the reduced program, producing
+/// byte-identical output to the driver's plain path.
+#[test]
+fn bootstrap_graph_reduce_parity() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-bgr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let file = dir.join("bgr.resid");
+    std::fs::write(
+        &file,
+        r#"Int sq(Int x) {
+    return x * x;
+}
+Int inc_l(Int x) {
+    return x + 10;
+}
+Int main() {
+    Int a = sq(4);
+    Int b = sq(a);
+    Int c = inc_l(sq(3));
+    println(IntToString(a));
+    println(IntToString(b));
+    println(IntToString(c));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let plain_bin = dir.join("bgr_plain");
+    let reduced_bin = dir.join("bgr_reduced");
+
+    let plain = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&plain_bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        plain.status.code(),
+        Some(0),
+        "driver plain failed: {}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let reduced = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&reduced_bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg("--bootstrap-graph-reduce")
+        .output()
+        .unwrap();
+    assert_eq!(
+        reduced.status.code(),
+        Some(0),
+        "driver graph-reduce failed: {}",
+        String::from_utf8_lossy(&reduced.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&reduced.stdout).contains("graph-reduce:"),
+        "expected a reduction diagnostic, got: {}",
+        String::from_utf8_lossy(&reduced.stdout)
+    );
+
+    let run_plain = Command::new(&plain_bin).output().unwrap();
+    let run_reduced = Command::new(&reduced_bin).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run_plain.stdout),
+        String::from_utf8_lossy(&run_reduced.stdout),
+        "reduced driver output must match the plain driver output"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Self-hosted §36 dead-code elimination: the reduced driver must elide dead
+/// constant bindings (reporting a count) while preserving effectful ones.
+#[test]
+fn bootstrap_graph_reduce_eliminates_dead_bindings() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-bgrdce-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let file = dir.join("bgrdce.resid");
+    std::fs::write(
+        &file,
+        r#"Int inc(Int n) {
+    Int m = n + 1;
+    return m;
+}
+Int main() {
+    Int dead_a = 1;
+    Int live = 40 + 2;
+    Int dead_b = live * 2;
+    Bool unused = println("side-effect");
+    println(IntToString(inc(live)));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let plain_bin = dir.join("bgrdce_plain");
+    let reduced_bin = dir.join("bgrdce_reduced");
+
+    let plain = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&plain_bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        plain.status.code(),
+        Some(0),
+        "driver plain failed: {}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+
+    let reduced = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&reduced_bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg("--bootstrap-graph-reduce")
+        .output()
+        .unwrap();
+    assert_eq!(
+        reduced.status.code(),
+        Some(0),
+        "driver graph-reduce failed: {}",
+        String::from_utf8_lossy(&reduced.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&reduced.stdout).contains("eliminated 2 dead binding(s)"),
+        "expected dead-binding count, got: {}",
+        String::from_utf8_lossy(&reduced.stdout)
+    );
+
+    let run_plain = Command::new(&plain_bin).output().unwrap();
+    let run_reduced = Command::new(&reduced_bin).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run_plain.stdout),
+        String::from_utf8_lossy(&run_reduced.stdout),
+        "DCE must not change observable output"
+    );
+    assert!(
+        String::from_utf8_lossy(&run_reduced.stdout).contains("side-effect"),
+        "the effectful binding must still print"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Self-hosted graph-reduce must reject non-function declarations loudly,
+/// matching §33 on the Rust pipeline.
+#[test]
+fn bootstrap_graph_reduce_rejects_declarations() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-bgrrej-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let file = dir.join("bgrrej.resid");
+    std::fs::write(&file, "type Point = { x: Int };\nInt main() {\n    return 0;\n}\n").unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(dir.join("bgrrej_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg("--bootstrap-graph-reduce")
+        .output()
+        .unwrap();
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "expected graph-reduce to reject type declarations"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("only functions are representable"),
+        "unexpected error: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Self-hosted rejection of behavior instances (`Ord(Int) = cmp_int;`),
+/// matching the Rust pipeline's behavior-declaration rejection.
+#[test]
+fn bootstrap_graph_reduce_rejects_behavior_instances() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-bgrbeh-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let file = dir.join("bgrbeh.resid");
+    std::fs::write(
+        &file,
+        "Ord(Int) = cmp_int;\nInt cmp_int(Int a, Int b) {\n    return 0;\n}\nInt main() {\n    return 0;\n}\n",
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(dir.join("bgrbeh_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg("--bootstrap-graph-reduce")
+        .output()
+        .unwrap();
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "expected graph-reduce to reject behavior instances"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("declaration Ord is not"),
+        "unexpected error: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
