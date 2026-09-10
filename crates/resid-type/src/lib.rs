@@ -3313,6 +3313,9 @@ pub fn best_overload(args_ty: &[SemType], sigs: &Signatures, func: &str) -> Opti
     if candidate.params.len() != 1 {
         return Some(candidate.clone());
     }
+    if args_ty.is_empty() {
+        return Some(candidate.clone());
+    }
     let want = &args_ty[0];
 
     // For ToString functions, find the best numeric match.
@@ -8965,5 +8968,12 @@ sandbox (network) {
             !errs.is_empty(),
             "source sandbox must not enlarge the manifest ceiling"
         );
+    }
+
+    #[test]
+    fn best_overload_handles_missing_argument_types() {
+        let sigs = builtin_signatures();
+        let result = best_overload(&[], &sigs, "IntToString");
+        assert!(result.is_some());
     }
 }
