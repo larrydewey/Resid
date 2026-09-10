@@ -114,8 +114,15 @@ impl LanguageServer for ResidLsp {
         }
     }
 
-    async fn did_save(&self, _: DidSaveTextDocumentParams) {
-        // Trigger reanalysis on save
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let uri = params.text_document.uri;
+        let text = {
+            let docs = self.docs.read().await;
+            docs.get(&uri).map(|document| document.text.clone())
+        };
+        if let Some(text) = text {
+            let _ = self.reanalyze(&uri, &text).await;
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
