@@ -9,13 +9,13 @@
 
 ## 0. Current Snapshot
 
-**682 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
+**685 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 252,
   resid-codegen 137, resid-build 47, resid-fmt 5,
-  resid-cache 17, resid-notes 2, resid-why 7, resid-lsp 5,
+  resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 6,
   resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 122 e2e).
   Note: `bootstrap_parser_builds_ast` and
   `bootstrap_typechecker_accepts_bootstrap_sources` are pre-existing red on
-  `master` (unrelated to this session).
+  `master` (being addressed next).
 
 ### Major capabilities
 
@@ -96,6 +96,10 @@
 - SpecialCasing: Unicode case mapping table with conditional Final_Sigma rule.
 - `resid-why` tool: reads `.resid-notes.cbor` sidecars, explains residuals.
 - `resid-lsp`: language server surfacing residuals as Hint diagnostics.
+- Residual provenance in sidecars: notes carry `(file, line, column)` so
+  `resid-why --json` emits URI-bearing, column-precise LSP diagnostics and
+  `resid-lsp` shows each note only on its owning document (legacy
+  3/4-field sidecars still read).
 - Provenance: Ed25519-signed trailers, COSE_Sign1, optional concealment;
   `residc keygen`, `residc verify`, `RESID_VERIFY=1`.
 
@@ -369,7 +373,9 @@ Remaining conformance gaps are minimal:
 Strategic work items:
 - **Graph reduction stage-2 parity (§11, §36)**: **✅ DONE** (this session) — see §5 completed list; `--bootstrap-graph-reduce` + 4 new e2e tests.
 - `Str` rope-backed representation: **✅ DONE** (this session) — chunked concat-rope builders in `resid_rt.c` (`str_sb_new`/`str_sb_append`/`str_sb_append_cp`/`str_sb_finish`) + both-pipeline type/codegen support + `lib/h2.resid` rewrite; see §5 completed list.
-- `resid why` and `resid-lsp` hardening: more filter options, editor integration polish.
+- `resid why` and `resid-lsp` hardening: **✅ DONE** (this session) — see §5
+  completed list; `--file`/`--max`/`--help` filters, deterministic sort,
+  URI + column-precise JSON diagnostics, per-document LSP filtering.
 - Crypto: additional algorithms as needed (currently complete through TLS 1.3 + HTTP/2).
 
 ---

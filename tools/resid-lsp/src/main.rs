@@ -27,6 +27,8 @@ use resid_notes::ResidualNote;
 pub struct Diagnostic {
     /// 0-based line.
     pub line: u64,
+    /// 0-based character.
+    pub column: u64,
     pub code: String,
     pub message: String,
 }
@@ -56,6 +58,7 @@ pub fn notes_to_diagnostics(notes: &[ResidualNote], line_count: u64) -> Vec<Diag
         // Notes are 1-based; LSP is 0-based.
         out.push(Diagnostic {
             line: n.line - 1,
+            column: n.column,
             code: n.kind.clone(),
             message: format!("residual ({}): {}", n.symbol, explain(&n.kind)),
         });
@@ -105,8 +108,8 @@ pub fn publish_diagnostics_message(uri: &str, diags: &[Diagnostic]) -> String {
         .map(|d| {
             serde_json::json!({
                 "range": {
-                    "start": {"line": d.line, "character": 0},
-                    "end": {"line": d.line, "character": 0}
+                    "start": {"line": d.line, "character": d.column},
+                    "end": {"line": d.line, "character": d.column}
                 },
                 "severity": 4,
                 "code": d.code,
@@ -279,11 +282,24 @@ fn uri_to_path(uri: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(uri.strip_prefix("file://").unwrap_or(uri))
 }
 
+/// Does a note belong to the open document? Notes carrying no file
+/// provenance (legacy sidecars) apply to any document in the directory;
+/// once provenance exists it is authoritative.
+fn note_belongs_to(n: &ResidualNote, doc_path: &std::path::Path) -> bool {
+    if n.file.is_empty() {
+        return true;
+    }
+    let n_path = std::path::Path::new(&n.file);
+    n_path == doc_path
+        || n_path.file_name().is_some_and(|f| f == doc_path.file_name().unwrap_or_default())
+}
+
 fn load_notes_for(doc_path: &std::path::Path, _text: &str) -> Vec<ResidualNote> {
     let mut notes = Vec::new();
     for sc in sidecars_for(doc_path) {
         if let Ok(bytes) = std::fs::read(&sc)
             && let Some(mut ns) = resid_notes::from_cbor(&bytes) {
+                ns.retain(|n| note_belongs_to(n, doc_path));
                 notes.append(&mut ns);
             }
     }
@@ -300,7 +316,7 @@ mod tests {
     use super::*;
 
     fn note(kind: &str, symbol: &str, line: u64) -> ResidualNote {
-        ResidualNote { kind: kind.into(), symbol: symbol.into(), line }
+        ResidualNote::new(kind, symbol, line)
     }
 
     #[test]
@@ -341,6 +357,30 @@ mod tests {
         std::fs::write(dir.join("unrelated.cbor"), b"\x80").unwrap();
         let sc = sidecars_for(&doc);
         assert_eq!(sc.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_notes_filters_by_document_file() {
+        let dir = std::env::temp_dir().join(format!("resid-lsp-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc = dir.join("prog.resid");
+        resid_notes::write_notes_file(
+            &dir.join("prog_bin"),
+            &[
+                ResidualNote::at("rt-binding", "rt local", 3, 1, "prog.resid"),
+                ResidualNote::at("rt-binding", "rt foreign", 3, 1, "other.resid"),
+                ResidualNote::new("provider-call", "env.get(HOME)", 3),
+            ],
+        )
+        .unwrap();
+        // doc exists for discovery (sidecars_for lists dir entries).
+        std::fs::write(&doc, "x\nx\nx\n").unwrap();
+        let notes = load_notes_for(&doc, "");
+        let symbols: Vec<&str> = notes.iter().map(|n| n.symbol.as_str()).collect();
+        // Foreign-file note dropped; legacy (no file) note kept;
+        // file-name match kept even when the sidecar stores a bare name.
+        assert_eq!(symbols, vec!["rt local", "env.get(HOME)"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

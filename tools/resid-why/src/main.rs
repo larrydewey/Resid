@@ -8,6 +8,8 @@
 //!   resid-why <artifact>              — explain every residual note
 //!   resid-why <artifact> <symbol>     — only notes whose symbol contains <symbol>
 //!   resid-why <artifact> --kind K     — only notes of one kind
+//!   resid-why <artifact> --file F     — only notes whose source file contains F
+//!   resid-why <artifact> --max N      — show at most N notes (after sorting)
 //!   resid-why <artifact> --json       — LSP Diagnostic[] view (for editors)
 //!   resid-why <artifact> --summary    — per-kind counts only
 
@@ -29,12 +31,22 @@ fn explain(kind: &str) -> &'static str {
     }
 }
 
+/// Human location string: `path:line:col` when the sidecar carries file
+/// provenance, `line N` otherwise.
+fn location(n: &ResidualNote) -> String {
+    if n.file.is_empty() {
+        format!("line {}", n.line)
+    } else {
+        format!("{}:{}:{}", n.file, n.line, n.column + 1)
+    }
+}
+
 /// One-line human explanation for a note.
 fn render_text(n: &ResidualNote) -> String {
     format!(
-        "{} @ line {}:\n    {}\n    -> {}",
+        "{} @ {}:\n    {}\n    -> {}",
         n.symbol,
-        n.line,
+        location(n),
         n.kind,
         explain(&n.kind)
     )
@@ -58,28 +70,37 @@ fn json_escape(s: &str) -> String {
 
 /// Render notes as an LSP `Diagnostic[]` array (0-based lines), so an
 /// editor language server can surface residuals straight from the
-/// sidecar. Severity 4 = Hint: residual work, not an error.
+/// sidecar. Severity 4 = Hint: residual work, not an error. When the
+/// note carries file provenance the diagnostic gets a `uri` and a
+/// column-precise range.
 fn render_lsp_json(notes: &[ResidualNote]) -> String {
     let items: Vec<String> = notes
         .iter()
         .map(|n| {
             let line = n.line.saturating_sub(1);
-            format!(
+            let col = if n.file.is_empty() { 0 } else { n.column };
+            let mut s = format!(
                 concat!(
-                    "{{\"range\":{{\"start\":{{\"line\":{},\"character\":0}},",
-                    "\"end\":{{\"line\":{},\"character\":0}}}},\"severity\":4,",
+                    "{{\"range\":{{\"start\":{{\"line\":{},\"character\":{}}},",
+                    "\"end\":{{\"line\":{},\"character\":{}}}}},\"severity\":4,",
                     "\"code\":\"{}\",\"source\":\"resid-why\",\"message\":\"{}\"}}"
                 ),
                 line,
+                col,
                 line,
+                col,
                 json_escape(&n.kind),
                 json_escape(&format!(
-                    "{} @ line {}: {}",
+                    "{} @ {}: {}",
                     n.symbol,
-                    n.line,
+                    location(n),
                     explain(&n.kind)
                 )),
-            )
+            );
+            if !n.file.is_empty() {
+                s = format!("{{\"uri\":\"file://{}\",{}", json_escape(&n.file), &s[1..]);
+            }
+            s
         })
         .collect();
     format!("[\n  {}\n]\n", items.join(",\n  "))
@@ -105,37 +126,70 @@ fn render_summary(notes: &[ResidualNote]) -> String {
     out
 }
 
-fn filter<'a>(notes: &'a [ResidualNote], kind: &Option<String>, symbol: &Option<String>) -> Vec<&'a ResidualNote> {
-    notes
+/// Query filters. `None` means "no constraint".
+#[derive(Default)]
+struct Query {
+    symbol: Option<String>,
+    kind: Option<String>,
+    file: Option<String>,
+    max: Option<usize>,
+}
+
+/// Apply filters, sort by source location (file, line, column) for a
+/// deterministic editor view and clamp to `--max`.
+fn query<'a>(notes: &'a [ResidualNote], q: &Query) -> Vec<&'a ResidualNote> {
+    let mut out: Vec<&ResidualNote> = notes
         .iter()
-        .filter(|n| kind.as_ref().is_none_or(|f| *n.kind == *f))
-        .filter(|n| symbol.as_ref().is_none_or(|f| n.symbol.contains(f.as_str())))
-        .collect()
+        .filter(|n| q.kind.as_ref().is_none_or(|f| *n.kind == *f))
+        .filter(|n| q.symbol.as_ref().is_none_or(|f| n.symbol.contains(f.as_str())))
+        .filter(|n| q.file.as_ref().is_none_or(|f| n.file.contains(f.as_str())))
+        .collect();
+    out.sort_by_key(|n| (n.file.clone(), n.line, n.column));
+    if let Some(m) = q.max {
+        out.truncate(m);
+    }
+    out
+}
+
+fn usage() -> &'static str {
+    concat!(
+        "usage: resid-why <artifact> [symbol] [--kind K] [--file F] [--max N] ",
+        "[--json] [--summary] [--help]\n",
+    )
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!(
-            "usage: resid-why <artifact> [symbol-substring] [--kind K] [--json] [--summary]"
-        );
+        eprint!("{}", usage());
         std::process::exit(2);
     }
     let artifact = PathBuf::from(&args[0]);
-    let mut filter_symbol: Option<String> = None;
-    let mut filter_kind: Option<String> = None;
+    let mut q = Query::default();
     let mut as_json = false;
     let mut summary_only = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "--help" => {
+                print!("{}", usage());
+                std::process::exit(0);
+            }
             "--kind" => {
                 i += 1;
-                filter_kind = args.get(i).cloned();
+                q.kind = args.get(i).cloned();
+            }
+            "--file" => {
+                i += 1;
+                q.file = args.get(i).cloned();
+            }
+            "--max" => {
+                i += 1;
+                q.max = args.get(i).and_then(|v| v.parse().ok());
             }
             "--json" => as_json = true,
             "--summary" => summary_only = true,
-            s => filter_symbol = Some(s.to_string()),
+            s => q.symbol = Some(s.to_string()),
         }
         i += 1;
     }
@@ -152,7 +206,7 @@ fn main() {
         }
     };
 
-    let shown = filter(&notes, &filter_kind, &filter_symbol);
+    let shown = query(&notes, &q);
     let shown: Vec<ResidualNote> = shown.into_iter().cloned().collect();
 
     if as_json {
@@ -182,7 +236,7 @@ mod tests {
     use super::*;
 
     fn note(kind: &str, symbol: &str, line: u64) -> ResidualNote {
-        ResidualNote { kind: kind.into(), symbol: symbol.into(), line }
+        ResidualNote::new(kind, symbol, line)
     }
 
     #[test]
@@ -191,6 +245,21 @@ mod tests {
         assert!(t.contains("rt print_str"));
         assert!(t.contains("line 12"));
         assert!(t.contains("runtime binding"));
+    }
+
+    #[test]
+    fn text_and_json_render_file_provenance() {
+        let n = ResidualNote::at("rt-binding", "rt x", 12, 4, "examples/app.resid");
+        let t = render_text(&n);
+        assert!(t.contains("examples/app.resid:12:5"), "{t}");
+        let j = render_lsp_json(&[n]);
+        assert!(j.contains("\"uri\":\"file://examples/app.resid\""), "{j}");
+        assert!(j.contains("\"character\":4"), "{j}");
+        // Notes without provenance keep the legacy 0-based, character-0
+        // diagnostic shape.
+        let legacy = render_lsp_json(&[note("rt-binding", "rt y", 3)]);
+        assert!(!legacy.contains("\"uri\""), "{legacy}");
+        assert!(legacy.contains("\"line\":2"), "{legacy}");
     }
 
     #[test]
@@ -224,15 +293,34 @@ mod tests {
     }
 
     #[test]
-    fn filters_compose() {
+    fn query_filters_compose_file_max_sort() {
         let notes = vec![
-            note("rt-binding", "main.rt x", 1),
+            note("rt-binding", "main.rt x", 40),
             note("rt-binding", "helper y", 2),
             note("provider-call", "main.fs read", 3),
+            ResidualNote::at("rt-binding", "app rt z", 1, 0, "lib/app.resid"),
         ];
-        let got = filter(&notes, &Some("rt-binding".into()), &Some("main".into()));
+        let q = Query {
+            kind: Some("rt-binding".into()),
+            symbol: None,
+            file: None,
+            max: None,
+        };
+        let got = query(&notes, &q);
+        assert_eq!(got.len(), 3);
+        assert_eq!(query(&notes, &Query::default()).len(), 4);
+        // File filter.
+        let qf = Query { file: Some("lib/".into()), ..Query::default() };
+        let got = query(&notes, &qf);
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].symbol, "main.rt x");
-        assert_eq!(filter(&notes, &None, &None).len(), 3);
+        assert_eq!(got[0].symbol, "app rt z");
+        // Max clamps after sorting by (file, line, column).
+        let qm = Query { max: Some(2), ..Query::default() };
+        let got = query(&notes, &qm);
+        assert_eq!(got.len(), 2);
+        // Sort order: empty-file notes first (their file binds lower), by
+        // line within equal files.
+        assert_eq!(got[0].line, 2);
+        assert_eq!(got[1].line, 3);
     }
 }
