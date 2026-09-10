@@ -308,14 +308,17 @@ pub HpInt hp_int_cont(List(Int) b, Int pos, Int pfxmask, Int acc, Int m) {
 
 // Raw octets [start..stop] (inclusive, layout) as a Str.
 pub Str h2_bytes_str(List(Int) b, Int start, Int stop) {
-    return h2_bs_acc(b, start, stop, start, "");
+    return h2_bs_acc(b, start, stop, start, str_sb_new());
 }
 
-pub Str h2_bs_acc(List(Int) b, Int start, Int stop, Int i, Str acc) {
-    if (i > stop) { return acc; }
-    Str acc2 = acc + str_from_code(b[i]);
+// Rope-backed: append each octet as a codepoint to a chunked builder instead
+// of `acc + str_from_code(...)` (which re-allocates the whole string per
+// octet — O(n²) on decode-heavy headers).
+pub Str h2_bs_acc(List(Int) b, Int start, Int stop, Int i, Str sb) {
+    if (i > stop) { return str_sb_finish(sb); }
+    Str sb2 = str_sb_append_cp(sb, b[i]);
     Int ni = i + 1;
-    return h2_bs_acc(b, start, stop, ni, acc2);
+    return h2_bs_acc(b, start, stop, ni, sb2);
 }
 
 // HPACK string literal: H bit + length-int + raw octets. Non-Huffman
@@ -603,15 +606,15 @@ pub Bool hp_pad_ones(List(Int) b, Int g, Int gend) {
 }
 
 // Decode a whole Huffman string spanning [startbyte*8+startbit, gend).
-pub HuffDec hp_huff_loop(List(Int) b, Int g, Int gend, Str acc) {
+pub HuffDec hp_huff_loop(List(Int) b, Int g, Int gend, Str sb) {
     Int rem = gend - g;
     if (rem == 0) {
-        return HuffDec { s: acc, nextg: gend, bad: false };
+        return HuffDec { s: str_sb_finish(sb), nextg: gend, bad: false };
     }
     if (rem < 5) {
         // Shorter than the minimum code: must be EOS padding.
         Bool pad0 = hp_pad_ones(b, g, gend);
-        return HuffDec { s: acc, nextg: gend, bad: !pad0 };
+        return HuffDec { s: str_sb_finish(sb), nextg: gend, bad: !pad0 };
     }
     HuffState st = hp_huff_one(b, g, gend, 0, 0);
     if (st.bad) {
@@ -619,19 +622,19 @@ pub HuffDec hp_huff_loop(List(Int) b, Int g, Int gend, Str acc) {
         // partial byte.
         if (rem < 8) {
             Bool pad1 = hp_pad_ones(b, g, gend);
-            return HuffDec { s: acc, nextg: gend, bad: !pad1 };
+            return HuffDec { s: str_sb_finish(sb), nextg: gend, bad: !pad1 };
         }
-        return HuffDec { s: acc, nextg: st.nextg, bad: true };
+        return HuffDec { s: str_sb_finish(sb), nextg: st.nextg, bad: true };
     }
-    Str acc2 = acc + str_from_code(st.sym);
-    return hp_huff_loop(b, st.nextg, gend, acc2);
+    Str sb2 = str_sb_append_cp(sb, st.sym);
+    return hp_huff_loop(b, st.nextg, gend, sb2);
 }
 
 // Entry point: Huffman-decode li.val bytes beginning at byte `p0`.
 pub HuffDec hp_huff_str(List(Int) b, Int p0, Int nbytes) {
     Int gs = p0 * 8;
     Int ge = (p0 + nbytes) * 8;
-    return hp_huff_loop(b, gs, ge, "");
+    return hp_huff_loop(b, gs, ge, str_sb_new());
 }
 
 // ─── Flow control + large-header framing (RFC 7540 §6.9, §6.10) ──────

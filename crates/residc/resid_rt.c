@@ -222,29 +222,124 @@ int64_t str_char_at(const char* s, int64_t i) {
     return -1;
 }
 
+/* UTF-8 encode one codepoint into `buf` (≥4 bytes); returns bytes written. */
+static int utf8_encode_cp(int64_t cp, char* buf) {
+    if (cp < 0x80) {
+        buf[0] = (char)cp;
+        return 1;
+    } else if (cp < 0x800) {
+        buf[0] = (char)(0xC0 | (cp >> 6));
+        buf[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    } else if (cp < 0x10000) {
+        buf[0] = (char)(0xE0 | (cp >> 12));
+        buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    } else {
+        buf[0] = (char)(0xF0 | (cp >> 18));
+        buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[3] = (char)(0x80 | (cp & 0x3F));
+        return 4;
+    }
+}
+
 /* Build a 1-codepoint string from a Unicode codepoint. */
 char* str_from_code(int64_t cp) {
-    char buf[5];
-    int n = 0;
-    if (cp < 0x80) {
-        buf[n++] = (char)cp;
-    } else if (cp < 0x800) {
-        buf[n++] = (char)(0xC0 | (cp >> 6));
-        buf[n++] = (char)(0x80 | (cp & 0x3F));
-    } else if (cp < 0x10000) {
-        buf[n++] = (char)(0xE0 | (cp >> 12));
-        buf[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        buf[n++] = (char)(0x80 | (cp & 0x3F));
-    } else {
-        buf[n++] = (char)(0xF0 | (cp >> 18));
-        buf[n++] = (char)(0x80 | ((cp >> 12) & 0x3F));
-        buf[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        buf[n++] = (char)(0x80 | (cp & 0x3F));
-    }
-    buf[n] = '\0';
-    char* p = (char*)malloc(n + 1);
-    memcpy(p, buf, n + 1);
+    char buf[4];
+    int n = utf8_encode_cp(cp, buf);
+    char* p = (char*)malloc((size_t)n + 1);
+    memcpy(p, buf, (size_t)n);
+    p[n] = '\0';
     return p;
+}
+
+/*
+ * Rope-backed string builders ("Str rope-backed representation", roadmap).
+ *
+ * `acc + piece` inside a loop materializes a fresh NUL-terminated buffer on
+ * every step — O(total²) bytes copied for a byte-at-a-time accumulator (the
+ * lib/h2.resid h2_bs_acc pattern). These builders accumulate into a chunked
+ * rope (amortized O(1) appends, doubling chunk capacity, never a re-copy of
+ * the whole string) and flatten to a single NUL-terminated allocation exactly
+ * once, at `str_sb_finish`. The handle is an opaque pointer carried by Resid
+ * as a `Str`-typed value; appending to a finished rope is undefined.
+ */
+typedef struct RopeChunk {
+    size_t cap;              /* bytes allocated in data[] */
+    size_t used;             /* bytes filled */
+    struct RopeChunk* next;
+    char data[];             /* flexible array member */
+} RopeChunk;
+
+typedef struct {
+    RopeChunk* head;
+    RopeChunk* tail;
+    size_t len;              /* total bytes appended */
+} StrRope;
+
+static RopeChunk* sb_chunk_new(size_t cap) {
+    RopeChunk* c = (RopeChunk*)malloc(sizeof(RopeChunk) + cap);
+    c->cap = cap;
+    c->used = 0;
+    c->next = NULL;
+    return c;
+}
+
+static void sb_append_bytes(StrRope* r, const char* s, size_t n) {
+    if (n == 0) { return; }
+    if (r->tail == NULL || r->tail->used + n > r->tail->cap) {
+        size_t grow = (r->tail == NULL) ? 64 : r->tail->cap * 2;
+        if (grow < n) { grow = n; }
+        RopeChunk* c = sb_chunk_new(grow);
+        if (r->tail) {
+            r->tail->next = c;
+        } else {
+            r->head = c;
+        }
+        r->tail = c;
+    }
+    memcpy(r->tail->data + r->tail->used, s, n);
+    r->tail->used += n;
+    r->len += n;
+}
+
+void* str_sb_new(void) {
+    StrRope* r = (StrRope*)malloc(sizeof(StrRope));
+    r->head = NULL;
+    r->tail = NULL;
+    r->len = 0;
+    return r;
+}
+
+void* str_sb_append(void* b, const char* s) {
+    sb_append_bytes((StrRope*)b, s, strlen(s));
+    return b;
+}
+
+void* str_sb_append_cp(void* b, int64_t cp) {
+    char buf[4];
+    int n = utf8_encode_cp(cp, buf);
+    sb_append_bytes((StrRope*)b, buf, (size_t)n);
+    return b;
+}
+
+char* str_sb_finish(void* b) {
+    StrRope* r = (StrRope*)b;
+    char* out = (char*)malloc(r->len + 1);
+    size_t o = 0;
+    RopeChunk* c = r->head;
+    while (c) {
+        RopeChunk* nx = c->next;
+        memcpy(out + o, c->data, c->used);
+        o += c->used;
+        free(c);
+        c = nx;
+    }
+    out[o] = '\0';
+    free(r);
+    return out;
 }
 
 /* Half-open substring `s[start..end]` by codepoint index (clamped). */

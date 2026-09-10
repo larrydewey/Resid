@@ -1439,6 +1439,22 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "Str,Int,Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_slice expects (Str, Int, Int), got (" + argtys + ")" };
     }
+    if (name == "str_sb_new") {
+        if (argc == 0) { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_sb_new expects no arguments" };
+    }
+    if (name == "str_sb_append") {
+        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_sb_append expects (Str, Str), got (" + argtys + ")" };
+    }
+    if (name == "str_sb_append_cp") {
+        if (argtys == "Str,Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_sb_append_cp expects (Str, Int), got (" + argtys + ")" };
+    }
+    if (name == "str_sb_finish") {
+        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        return ERes { pos: pos, ty: "", err: "str_sb_finish expects (Str), got (" + argtys + ")" };
+    }
     if (name == "str_trim") {
         if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_trim expects (Str), got (" + argtys + ")" };
