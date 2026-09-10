@@ -12,37 +12,75 @@ pub struct ResidualNote {
     pub kind: String,
     /// The symbol or expression involved.
     pub symbol: String,
-    /// Source line where it appears.
+    /// Source line where it appears (1-based).
     pub line: u64,
+    /// Source column where it appears (0-based); 0 when unknown.
+    pub column: u64,
+    /// Source file that carries the residual; empty when unknown or when
+    /// the sidecar predates provenance fields.
+    pub file: String,
 }
 
-/// Serialize notes as a CBOR array of 3-element text arrays.
+impl ResidualNote {
+    /// Convenience constructor without column/file provenance.
+    pub fn new(kind: impl Into<String>, symbol: impl Into<String>, line: u64) -> Self {
+        Self { kind: kind.into(), symbol: symbol.into(), line, column: 0, file: String::new() }
+    }
+
+    /// Constructor carrying full source provenance.
+    pub fn at(
+        kind: impl Into<String>,
+        symbol: impl Into<String>,
+        line: u64,
+        column: u64,
+        file: impl Into<String>,
+    ) -> Self {
+        Self { kind: kind.into(), symbol: symbol.into(), line, column, file: file.into() }
+    }
+}
+
+/// Serialize notes as a CBOR array of 5-element text arrays:
+/// (kind, symbol, line, column, file).
 pub fn to_cbor(notes: &[ResidualNote]) -> Vec<u8> {
     let mut out = Vec::new();
     cbor::write_header(&mut out, 4, notes.len());
     for n in notes {
-        cbor::write_header(&mut out, 4, 3);
+        cbor::write_header(&mut out, 4, 5);
         cbor::write_text(&mut out, &n.kind);
         cbor::write_text(&mut out, &n.symbol);
         cbor::write_uint(&mut out, n.line);
+        cbor::write_uint(&mut out, n.column);
+        cbor::write_text(&mut out, &n.file);
     }
     out
 }
 
 /// Parse a notes array produced by [`to_cbor`]. Returns None on malformed
 /// input.
+///
+/// Backward compatible: accepts 3-element arrays (kind, symbol, line —
+/// column 0, file empty), 4-element arrays (…, column — file empty) and
+/// 5-element arrays (…, column, file).
 pub fn from_cbor(bytes: &[u8]) -> Option<Vec<ResidualNote>> {
     let mut pos = 0usize;
     let n = read_array_header(bytes, &mut pos)?;
     let mut notes = Vec::with_capacity(n);
     for _ in 0..n {
-        if read_array_header(bytes, &mut pos)? != 3 {
-            return None;
-        }
+        let fields = read_array_header(bytes, &mut pos)?;
         let kind = read_text(bytes, &mut pos)?;
         let symbol = read_text(bytes, &mut pos)?;
         let line = read_uint(bytes, &mut pos)?;
-        notes.push(ResidualNote { kind, symbol, line });
+        let (column, file) = match fields {
+            3 => (0, String::new()),
+            4 => (read_uint(bytes, &mut pos)?, String::new()),
+            5 => {
+                let col = read_uint(bytes, &mut pos)?;
+                let file = read_text(bytes, &mut pos)?;
+                (col, file)
+            }
+            _ => return None,
+        };
+        notes.push(ResidualNote { kind, symbol, line, column, file });
     }
     Some(notes)
 }
@@ -135,16 +173,67 @@ mod tests {
     #[test]
     fn cbor_roundtrip() {
         let notes = vec![
-            ResidualNote { kind: "rt-binding".into(), symbol: "rt print_str".into(), line: 12 },
-            ResidualNote { kind: "provider-call".into(), symbol: "filesystem.read_file(x)".into(), line: 3400 },
+            ResidualNote {
+                kind: "rt-binding".into(),
+                symbol: "rt print_str".into(),
+                line: 12,
+                column: 4,
+                file: "examples/hello.resid".into(),
+            },
+            ResidualNote::new("provider-call", "filesystem.read_file(x)", 3400),
         ];
         let bytes = to_cbor(&notes);
         assert_eq!(from_cbor(&bytes).unwrap(), notes);
     }
 
     #[test]
+    fn old_three_and_four_field_sidecars_read_back() {
+        // 4-element array (kind, symbol, line, column) — pre-file sidecars.
+        let four = legacy_cbor(4, "rt-binding", "rt x", 5, Some(2), "");
+        let notes = from_cbor(&four).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].line, 5);
+        assert_eq!(notes[0].column, 2);
+        assert_eq!(notes[0].file, "");
+        // 3-element array (kind, symbol, line) — original sidecars.
+        let three = legacy_cbor(3, "rt-binding", "rt print", 7, None, "");
+        let notes = from_cbor(&three).unwrap();
+        assert_eq!(notes[0].line, 7);
+        assert_eq!(notes[0].file, "");
+        // 5-element current format survives a roundtrip.
+        let m = ResidualNote::at("provider-call", "env.get(HOME)", 4, 9, "lib/cfg.resid");
+        let bytes = to_cbor(&[m.clone()]);
+        assert_eq!(from_cbor(&bytes).unwrap(), vec![m]);
+    }
+
+    #[test]
     fn malformed_rejected() {
         assert!(from_cbor(&[0x00]).is_none());
         assert!(from_cbor(&[]).is_none());
+    }
+
+    /// Build a legacy-field-count sidecar with the crate's own cbor
+    /// helpers (so hand-rolled bytes cannot drift).
+    fn legacy_cbor(
+        fields: usize,
+        kind: &str,
+        symbol: &str,
+        line: u64,
+        column: Option<u64>,
+        file: &str,
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        cbor::write_header(&mut out, 4, 1);
+        cbor::write_header(&mut out, 4, fields);
+        cbor::write_text(&mut out, kind);
+        cbor::write_text(&mut out, symbol);
+        cbor::write_uint(&mut out, line);
+        if fields >= 4 {
+            cbor::write_uint(&mut out, column.unwrap_or(0));
+        }
+        if fields >= 5 {
+            cbor::write_text(&mut out, file);
+        }
+        out
     }
 }

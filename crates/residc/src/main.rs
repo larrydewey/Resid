@@ -885,11 +885,13 @@ fn collect_residual_notes(file: &str) -> Vec<resid_notes::ResidualNote> {
         ] {
             if let Some(col) = line.find(pat) {
                 let symbol: String = line[col..].trim_start().chars().take(40).collect();
-                notes.push(resid_notes::ResidualNote {
-                    kind: kind.to_string(),
+                notes.push(resid_notes::ResidualNote::at(
+                    kind.to_string(),
                     symbol,
-                    line: (idx + 1) as u64,
-                });
+                    (idx + 1) as u64,
+                    col as u64,
+                    file.to_string(),
+                ));
                 break;
             }
         }

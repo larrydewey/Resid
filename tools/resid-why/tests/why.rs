@@ -13,16 +13,15 @@ fn explains_notes_and_filters() {
     std::fs::create_dir_all(&dir).unwrap();
     let artifact = dir.join("prog");
     let notes = vec![
-        resid_notes::ResidualNote {
-            kind: "rt-binding".into(),
-            symbol: "rt print_str".into(),
-            line: 12,
-        },
-        resid_notes::ResidualNote {
-            kind: "provider-call".into(),
-            symbol: "filesystem.read(x)".into(),
-            line: 3400,
-        },
+        resid_notes::ResidualNote::new("rt-binding", "rt print_str", 12),
+        resid_notes::ResidualNote::new("provider-call", "filesystem.read(x)", 3400),
+        resid_notes::ResidualNote::at(
+            "rt-binding",
+            "rt main_loop",
+            7,
+            5,
+            "lib/crypto.resid",
+        ),
     ];
     resid_notes::write_notes_file(&artifact, &notes).unwrap();
 
@@ -32,21 +31,33 @@ fn explains_notes_and_filters() {
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(text.contains("rt print_str"), "{text}");
     assert!(text.contains("line 3400"), "{text}");
+    assert!(text.contains("lib/crypto.resid:7:6"), "{text}");
     assert!(text.contains("provider"), "{text}");
-    assert!(text.contains("2/2 residual notes shown"), "{text}");
+    assert!(text.contains("3/3 residual notes shown"), "{text}");
 
     // Symbol filter.
     let out = Command::new(bin()).arg(&artifact).arg("filesystem").output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(text.contains("filesystem.read"), "{text}");
     assert!(!text.contains("print_str"), "{text}");
-    assert!(text.contains("1/2 residual notes shown"), "{text}");
+    assert!(text.contains("1/3 residual notes shown"), "{text}");
 
     // Kind filter.
     let out = Command::new(bin()).arg(&artifact).args(["--kind", "rt-binding"]).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(text.contains("runtime binding"), "{text}");
-    assert!(text.contains("1/2"), "{text}");
+    assert!(text.contains("2/3"), "{text}");
+
+    // File filter.
+    let out = Command::new(bin()).arg(&artifact).args(["--file", "crypto"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(text.contains("rt main_loop"), "{text}");
+    assert!(text.contains("1/3"), "{text}");
+
+    // Max clamp.
+    let out = Command::new(bin()).arg(&artifact).args(["--max", "2"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(text.contains("2/3 residual notes shown"), "{text}");
 
     // Missing sidecar is an error.
     let out = Command::new(bin()).arg(dir.join("absent")).output().unwrap();

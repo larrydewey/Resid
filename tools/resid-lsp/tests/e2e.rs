@@ -22,21 +22,36 @@ fn lsp_serves_diagnostics_and_hover_from_sidecar() {
     resid_notes::write_notes_file(
         &dir.join("prog_bin"),
         &[
-            resid_notes::ResidualNote {
-                kind: "rt-binding".into(),
-                symbol: "rt print_str".into(),
-                line: 1,
-            },
-            resid_notes::ResidualNote {
-                kind: "provider-call".into(),
-                symbol: "env.get(HOME)".into(),
-                line: 2,
-            },
-            resid_notes::ResidualNote {
-                kind: "rt-binding".into(),
-                symbol: "past-eof".into(),
-                line: 99,
-            },
+            resid_notes::ResidualNote::at(
+                "rt-binding",
+                "rt print_str",
+                1,
+                0,
+                "prog.resid",
+            ),
+            resid_notes::ResidualNote::at(
+                "provider-call",
+                "env.get(HOME)",
+                2,
+                3,
+                "prog.resid",
+            ),
+            resid_notes::ResidualNote::at(
+                "rt-binding",
+                "past-eof",
+                99,
+                0,
+                "prog.resid",
+            ),
+            // From another compilation unit: must be filtered out of this
+            // document's diagnostics.
+            resid_notes::ResidualNote::at(
+                "provider-call",
+                "git.status()",
+                1,
+                0,
+                "other.resid",
+            ),
         ],
     )
     .unwrap();
@@ -86,6 +101,7 @@ fn lsp_serves_diagnostics_and_hover_from_sidecar() {
     assert_eq!(diags[0]["range"]["start"]["line"], serde_json::json!(0));
     assert_eq!(diags[0]["code"], serde_json::json!("rt-binding"));
     assert_eq!(diags[1]["range"]["start"]["line"], serde_json::json!(1));
+    assert_eq!(diags[1]["range"]["start"]["character"], serde_json::json!(3));
     assert_eq!(diags[1]["code"], serde_json::json!("provider-call"));
     assert!(diags[1]["message"].as_str().unwrap().contains("env.get(HOME)"));
 
