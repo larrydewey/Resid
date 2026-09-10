@@ -95,7 +95,9 @@
 - SpecialCasing: Unicode case mapping table with conditional Final_Sigma rule.
 - `resid-why` tool: reads `.resid-notes.cbor` sidecars, explains residuals.
 - `resid-lsp`: full VS Code language server with parse/type diagnostics,
-  completion, hover, navigation, and residual Hint diagnostics.
+  completion, hover, navigation, and residual Hint diagnostics. The VS Code
+  package ships `vscode-languageclient` as a runtime dependency so activation
+  cannot fail when installed from a `.vsix`.
 - Residual provenance in sidecars: notes carry `(file, line, column)` so
   `resid-why --json` emits URI-bearing, column-precise LSP diagnostics and
   `resid-lsp` shows each note only on its owning document (legacy
@@ -899,4 +901,3 @@ pipeline and its output is byte-identical to the plain one.
   `capability_mode_process_readwrite_allows_run`); residc e2e +1 assertion
   (`process(readonly)` `process.run` rejection in
   `run_sandbox_capability_mode_readonly`).
-

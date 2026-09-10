@@ -45,7 +45,7 @@ server (the binary source is in `tools/resid-lsp-full/`).
 | Setting | Description | Default |
 |---------|-------------|---------|
 | `resid.lsp.enable` | Enable the Resid LSP server | `true` |
-| `resid.lsp.serverPath` | Path or command to the `resid-lsp` binary | `"resid-lsp"` |
+| `resid.lsp.serverPath` | Path or command to the `resid-lsp` binary. Empty auto-detects `target/release` or `target/debug` in the workspace, then PATH. | `""` |
 
 ### How it works
 
