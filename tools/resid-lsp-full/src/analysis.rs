@@ -45,7 +45,10 @@ impl AnalyzedFile {
                 && character + 1 <= expr.span.col_end
             {
                 match &expr.kind {
-                    ExprKind::Call { args, .. } => {
+                    ExprKind::Call { func, args } => {
+                        if let Some(found) = find_in_expr(func, line, character) {
+                            return Some(found);
+                        }
                         for (_, arg) in args {
                             if let Some(found) = find_in_expr(arg, line, character) {
                                 return Some(found);

@@ -19,7 +19,52 @@ pub fn goto_definition(analyzed: &Option<AnalyzedFile>, position: Position) -> O
         return goto_for_decl(analyzed, decl, uri);
     }
 
-    None
+    // Parser spans for call expressions can cover the whole statement, so
+    // recover the identifier directly from the source as a reliable fallback.
+    let name = identifier_at(&analyzed.text, position)?;
+    goto_for_name(analyzed, &name, uri)
+}
+
+fn goto_for_name(
+    analyzed: &AnalyzedFile,
+    name: &str,
+    uri: &Url,
+) -> Option<GotoDefinitionResponse> {
+    if analyzed.get_signature(name).is_some() {
+        return find_func_definition(analyzed, name, uri);
+    }
+    if analyzed.get_type(name).is_some() {
+        return find_type_definition(analyzed, name, uri);
+    }
+    find_local_definition(analyzed, name, uri)
+}
+
+fn identifier_at(text: &str, position: Position) -> Option<String> {
+    let line = text.lines().nth(position.line as usize)?;
+    let bytes = line.as_bytes();
+    let cursor = (position.character as usize).min(bytes.len());
+    let mut start = cursor;
+    let mut end = cursor;
+
+    if start == bytes.len() || !is_identifier_byte(bytes[start]) {
+        if start > 0 && is_identifier_byte(bytes[start - 1]) {
+            start -= 1;
+            end = start + 1;
+        } else {
+            return None;
+        }
+    }
+    while start > 0 && is_identifier_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    while end < bytes.len() && is_identifier_byte(bytes[end]) {
+        end += 1;
+    }
+    Some(line[start..end].to_string())
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 fn goto_for_expr(analyzed: &AnalyzedFile, expr: &Expr, uri: &Url) -> Option<GotoDefinitionResponse> {
@@ -542,5 +587,38 @@ trait PatternSpan {
 impl PatternSpan for Pattern {
     fn span(&self) -> &resid_lexer::token::Span {
         &self.span
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use resid_parser::Parser;
+    use resid_type::{check_program, collect_signatures, collect_types};
+
+    #[test]
+    fn resolves_function_called_from_a_return_expression() {
+        let text = "Int add(Int x) { return x; }\nInt main() { return add(1); }\n";
+        let (unit, parse_errors) = Parser::parse("goto.resid".to_string(), text);
+        assert!(parse_errors.is_empty(), "{parse_errors:?}");
+        let analyzed = AnalyzedFile {
+            uri: Url::parse("file:///goto.resid").expect("valid test URI"),
+            text: text.to_string(),
+            type_errors: check_program(&unit),
+            signatures: collect_signatures(&unit),
+            types: collect_types(&unit),
+            unit,
+            parse_errors,
+        };
+
+        let result = goto_definition(
+            &Some(analyzed),
+            Position { line: 1, character: 21 },
+        )
+        .expect("function call has a definition");
+        let GotoDefinitionResponse::Scalar(location) = result else {
+            panic!("expected one function definition location");
+        };
+        assert_eq!(location.range.start.line, 0);
     }
 }
