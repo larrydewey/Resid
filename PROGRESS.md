@@ -1,6 +1,6 @@
 # Resid — Project Status
 
-**Specification**: `resid_specification.txt` v3.2 (Production Ready; v3.1 base + integer-width semantics amendments + §36 dead-code-elimination amendment; some items still in flux — see audit below)
+**Specification**: `resid_specification.txt` v3.3 (Production Ready; v3.2 base + fixed-capacity value types §44; some items still in flux — see audit below)
 **Implementation**: Rust stable + LLVM (inkwell), monorepo Cargo workspace
 **Interpreter**: None — direct LLVM
 **Wide numerics**: `Int(128)..Int(512)` / `UInt(N)` via LLVM arbitrary-width integers, `Float` capped at 128, `Dec(N)` exact decimals
@@ -412,7 +412,7 @@ Strategic work items:
 
 ---
 
-## 6. Spec-conformance roadmap (v3.2)
+## 6. Spec-conformance roadmap (v3.3)
 
 Audit result: the language is self-hosted and broadly functional, but
 NOT yet 100% spec-complete. This section is the curated work list; an

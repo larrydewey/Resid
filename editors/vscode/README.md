@@ -9,6 +9,7 @@ Syntax highlighting, snippets, language configuration, and **LSP support** (diag
   - `//`, `/* */` comments and `///` / `/** */` doc comments
   - Keywords: `if/else/while/for/in/match/return/break/continue/with/spawn/sandbox/import/pub/type/as/rt`
   - First-class numeric types `Int(8..512)`, `UInt(...)`, `Float(16..128)`, `Dec(N)`, `ISize/USize`
+  - Fixed-capacity stack types `Str(N)`, `Bytes(N)`, `List(T, N)` (spec §44)
   - Core types `Str Bytes Bool Option Result List Map Set RegionError SourceLoc`
   - Conversion helpers `i8…i512`, `u8…u512`, `f16…f128`, `dN`, `isize`, `usize`
   - Built-ins: `assert`, `rt_assert`, `known`, `rt_known`, `comptime_print`, `todo`,
