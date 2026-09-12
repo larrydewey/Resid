@@ -1,6 +1,6 @@
 ==================================================
 RESID LANGUAGE DESIGN DOCUMENT
-Version 3.2 — Production Ready
+Version 3.3 — Production Ready
 ==================================================
 
 
@@ -96,6 +96,12 @@ Resid does not expose stack, heap, or register allocation.
 The compiler decides storage. The implementation may use
 any target ISA extensions (AVX-512, NEON, SVE, …) for
 optimization; raw intrinsics are not exposed.
+
+Fixed-capacity value types (§44) carry a statically known
+extent, so the compiler may place them inline in the
+activation frame; they never require heap allocation.
+Storage placement remains an implementation detail — the
+program never observes it.
 
 
 ==================================================
@@ -450,7 +456,9 @@ Constraint: type Positive = Int[value > 0];
 Residual types are permitted. Edge-case rules R1–R5 remain
 in force.
 
-Numeric types are first-class (see §6).
+Numeric types are first-class (see §6). Fixed-capacity
+value types — Str(N), Bytes(N), List(T, N) — are core
+types whose storage is statically bounded (see §44).
 
 
 ==================================================
@@ -489,6 +497,11 @@ Literals default to Int / Float / Dec (for m-suffix
 decimals). Width is changed only by explicit cast or
 conversion helper.
 
+A literal may adopt a fixed-capacity expected type from an
+annotated binding when its extent fits the declared
+capacity; an oversized literal is a compile-time error and
+is never silently truncated (§44.1).
+
 
 ==================================================
 15. RANGES AND SLICING
@@ -520,6 +533,10 @@ handles must be moved.
 Indexing is bounds-checked: an out-of-range index aborts the
 program with the offending index and length (resid_index_abort);
 it never reads out of bounds silently.
+
+Access to a fixed-capacity value is bounds-checked against its
+declared capacity and aborts identically on an out-of-range
+index (§44.3).
 
 Shift counts equal to or greater than the operand's bit width
 yield 0 (machine shift counts wrap modulo the width, which would
@@ -804,6 +821,9 @@ under a development profile.
   type T = A(Type) | B;
   type T = U[P];
   type T = Int(32);
+  Str(8) s = "abc";                // fixed-capacity (§44)
+  Bytes(4) b = b"1234";
+  List(Int, 8) xs = [1, 2, 3];
 
   // strings
   f"hello {name}"
@@ -905,7 +925,14 @@ Numeric operators obey the interoperability rules of §6.
          | "rt" type
          | "Int" "(" int ")" | "UInt" "(" int ")"
          | "Float" "(" int ")" | "Dec" "(" int ")"
+         | "Str" "(" int ")" | "Bytes" "(" int ")"
+         | "List" "(" type-list ")"
          | "ISize" | "USize"
+
+  // "List" "(" T ")" is the heap List; "List" "(" T "," int ")"
+  // with an integer-literal second parameter is List(T, N) (§44).
+  // A "List" whose second parameter is not an integer literal is
+  // an error.
 
 
 ==================================================
@@ -918,6 +945,9 @@ Trusted providers: filesystem, environment, git, args, process
 Core types: Bool, full Int/UInt/Float/Dec family,
 ISize, USize, Str, Bytes, Option, Result, List, Map,
 Set, RegionError, SourceLoc.
+
+Fixed-capacity forms (see §44): Str(N), Bytes(N),
+List(T, N) — statically bounded, never heap-allocated.
 
 Conversion helpers: i8…i512, u8…u512, f16…f128,
 dN (any N >= 1), isize, usize.
@@ -1051,7 +1081,10 @@ Normative tooling expectations:
   - ambient authority
   - hidden identity
   - trait / interface systems
-  - programmer-controlled allocation
+  - programmer-controlled allocation (fixed-capacity
+    types §44 are still compiler-decided storage whose
+    size is statically known — no manual heap, stack, or
+    pointer control is exposed)
   - exceptions outside concurrent Result
   - implicit numeric conversions (except the explicit
     interoperability rules of §6)
@@ -1125,6 +1158,19 @@ reducing the check away when operand values are
 provable (and trapping otherwise) preserves the
 safety guarantee while keeping types predictable.
 
+v3.3: fixed-capacity value types Str(N), Bytes(N), and
+List(T, N) are added to the core type system (new §44).
+They are nominal types with a statically known extent;
+the compiler may place them inline in the frame and may
+never heap-allocate them. Binding literals adopt the
+annotated capacity when they fit; oversized literals are
+compile-time errors (never silently truncated). Extent is
+changed only by an explicit cast — a bounded copy that
+truncates on the right when narrowing. Fixed strings and
+byte arrays re-type to Str / Bytes over a NUL-terminated
+view, and the runtime built-in functions accept them
+wherever a Str / Bytes is declared.
+
 
 ==================================================
 42. NUMERIC INTEROPERABILITY SUMMARY
@@ -1170,6 +1216,115 @@ safety guarantee while keeping types predictable.
     are ≤ the sandbox.
   - Knowledge-cache writes from a sandbox are limited
     to entries whose capabilities fit the sandbox.
+
+
+==================================================
+44. FIXED-CAPACITY VALUE TYPES
+==================================================
+
+Fixed-capacity value types carry a statically known
+bound on their extent. Storage is fixed and known at
+compile time, so the compiler may place values inline in
+the activation frame; they never require heap allocation.
+
+  Str(N)         a string of at most N characters;
+                 storage N + 1 bytes, NUL-terminated
+  Bytes(N)       a byte array of at most N bytes;
+                 storage exactly N bytes
+  List(T, N)     N elements of type T, stored
+                 contiguously; storage N * sizeof(T)
+
+N is a decimal integer literal with N >= 0. Every N is a
+distinct nominal type; there is no subtyping between
+differing capacities. The non-size List(T) denotes the
+ordinary heap List (§32).
+
+Fixed-capacity values are immutable and bind like any
+other value (§7). There is no in-place mutation.
+
+--------------------------------------------------
+44.1  Binding and Literal Adoption
+--------------------------------------------------
+
+A literal whose extent fits the declared capacity may be
+bound directly to a fixed-capacity type; the annotation
+provides the literal with its expected type:
+
+  Str(8) s = "abc";           // ok — 3 characters
+  Bytes(4) b = b"1234";       // ok
+  List(Int, 8) xs = [10, 20, 30];
+                              // ok — slots 3..7 are
+                              // zero-initialized
+
+A literal whose extent exceeds the declared capacity is a
+compile-time error. It is never silently truncated:
+
+  Str(4) s = "toolong";       // error — 7 > 4
+  List(Int, 2) xs = [1, 2, 3];
+                              // error — 3 > 2
+
+Fixed lists are dense: the declared capacity N is the
+value's extent, and element slots beyond those supplied
+by the binding literal are zero-initialized.
+
+--------------------------------------------------
+44.2  Casts
+--------------------------------------------------
+
+Capacity is changed only by an explicit cast. Casts are
+the only operators that may change a fixed capacity.
+
+  Str(N)   -> Str           identity retype over the
+                            NUL-terminated buffer
+  Bytes(N) -> Bytes         identity retype
+  Str      -> Str(N)        explicit bounded copy;
+                            content truncated to N
+                            characters from the left
+  Bytes    -> Bytes(N)      explicit bounded copy
+  Str(N)   -> Str(M)        explicit bounded copy
+  Bytes(N) -> Bytes(M)      explicit bounded copy
+  List(T, N) -> List(T)     copies all N dense elements
+                            into a heap list; the
+                            resulting list's length is N
+
+Widening a capacity copies and pads; narrowing copies and
+truncates on the right. Truncation never happens apart
+from an explicit cast.
+
+A heap-to-fixed list cast (List → List(T, N)) is not
+provided.
+
+--------------------------------------------------
+44.3  Access
+--------------------------------------------------
+
+Indexing a fixed-capacity value is bounds-checked against
+its declared capacity and aborts on an out-of-range index
+(resid_index_abort), identically to heap lists (§17):
+
+  s[i]    // Str(N): Int — the codepoint at i
+  b[i]    // Bytes(N): Int — the byte at i
+  xs[i]   // List(T, N): T
+
+`.len()` on a List(T, N) is the statically known capacity
+N; a fixed-capacity list carries no dynamic length.
+
+--------------------------------------------------
+44.4  Interoperability
+--------------------------------------------------
+
+Fixed-capacity strings and byte arrays are accepted as
+arguments to the runtime built-in functions wherever a
+Str or Bytes is declared (println, print, str_len, …).
+The passing form is a NUL-terminated view of the inline
+buffer: no copy and no heap allocation.
+
+User-defined functions require an exact type match: a
+Str(N) argument does not match a Str parameter. Convert
+explicitly with the identity cast.
+
+Eq / Ord / Hash behaviors do not extend to fixed-capacity
+types; use the heap forms for behaviors requiring them.
 
 
 ==================================================

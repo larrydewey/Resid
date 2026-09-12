@@ -34,6 +34,27 @@ Every numeric width is a distinct nominal type with no subtyping:
 - **Pointer-sized**: `ISize`, `USize`
 - **Safe interoperability**: Automatic width widening based on range rules for mixed-width arithmetic (same-sign only).
 
+### Fixed-Capacity Stack Types
+`Str(N)`, `Bytes(N)`, and `List(T, N)` carry a statically known extent and are placed inline in the frame — **never heap-allocated**:
+- Sized literals adopt the annotated capacity: `Str(8) s = "abc"`, `List(Int, 8) xs = [1, 2, 3]` (dense, zero-filled tail)
+- Oversized literals are a compile-time error (no silent truncation)
+- Capacity changes only via an explicit cast — bounded copy, truncating on the right
+- Indexing is bounds-checked against the capacity (`resid_index_abort`)
+- `Str(N) ↔ Str` and `Bytes(N) ↔ Bytes` are identity retypes over a NUL-terminated view; builtins like `println`/`str_len` accept them directly
+- `List(T, N).len()` is the compile-time capacity
+
+```resid
+Int main() {
+    Str(8) s = "hello";
+    Bytes(4) b = b"abcd";
+    List(Int, 3) xs = [10, 20, 30];
+    println(s);                  // hello
+    println(IntToString(xs[2])); // 30
+    println(IntToString(xs.len())); // 3
+    return 0;
+}
+```
+
 ### Sandboxing & Security
 - **No ambient authority**: Capabilities form a lattice and travel with effects.
 - **Policy ceiling**: The manifest defines the maximum capabilities for dependencies.
@@ -81,7 +102,8 @@ Run it:
 
     residc hello.resid run
 
-A richer example lives at `examples/hello.resid`.
+A richer example lives at `examples/hello.resid`. Fixed-capacity
+stack types are demonstrated in `examples/stack_types.resid`.
 
 ### Sandboxed Example
 
@@ -148,7 +170,8 @@ A richer example lives at `examples/hello.resid`.
     │   ├── ed25519.resid      # Ed25519 sign/verify
     │   ├── der.resid          # DER parsing
     │   └── http.resid         # HTTP
-    ├── examples/            # Self-hosted stage-2 compilers (.resid sources)
+    ├── examples/            # Self-hosted stage-2 compilers + feature demos
+    │   └── stack_types.resid  # fixed-capacity Str(N)/Bytes(N)/List(T,N)
     ├── tools/               # fmt, graph, notes, cache, why
     └── PROGRESS.md          # Full build log, status, roadmap
 
@@ -156,7 +179,7 @@ A richer example lives at `examples/hello.resid`.
 
 ## Contributing
 
-Resid is a production-ready specification (v3.1). We welcome contributions in:
+Resid is a production-ready specification (v3.3). We welcome contributions in:
 - Compiler implementation (LLVM lowering)
 - Standard library development
 - Tooling (LSP, formatter, debugger)
