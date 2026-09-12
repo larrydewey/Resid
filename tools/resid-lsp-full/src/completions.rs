@@ -171,6 +171,8 @@ pub fn format_parser_type(ty: &resid_parser::Type) -> String {
         resid_parser::Type::Residual(ty) => format!("@residual {}", format_parser_type(ty)),
         resid_parser::Type::ISize => "ISize".to_string(),
         resid_parser::Type::USize => "USize".to_string(),
+        resid_parser::Type::StrFixed(n) => format!("Str({})", n),
+        resid_parser::Type::BytesFixed(n) => format!("Bytes({})", n),
         resid_parser::Type::Literal(l) => format!("{}", l),
     }
 }

@@ -9,11 +9,11 @@
 
 ## 0. Current Snapshot
 
-**686 tests pass** (lexer 17, parser 115, resid-ir 59, resid-type 253,
+**815 tests pass** (lexer 17, parser 122, resid-ir 59, resid-type 260,
   resid-codegen 137, resid-build 47, resid-fmt 5,
-  resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 0,
+  resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 1,
   resid-lsp-notes 6,
-  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 122 e2e).
+  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 123 e2e).
   Note: all bootstrap e2e tests now green (previously 2 pre-existing red fixed).
 
 ### Major capabilities
@@ -69,6 +69,15 @@
   Set operations (`.union/.difference/.intersection/.to_list`).
 - Constraint types (§12): `Int[value > 0]` and `Int where value > 0` with
   discharge on annotated bindings (e2e `run_constraint_types`).
+- Fixed-size stack types (no heap allocation): `Str(N)`/`Bytes(N)`/`List(T, N)`
+  with compile-time capacity, stored inline in the frame. Sized literals
+  adopt the annotated fixed type (`Str(8) s = "abc"`); oversized literals are
+  rejected at type-check, truncation only on explicit runtime cast
+  (`Str(8)f = (Str(8))h`). Indexing is bounds-checked → `resid_index_abort`
+  with source span. Casts to/from heap `Str`/`Bytes`/`List` are explicit
+  (`resid_str_to_fixed`/`resid_bytes_to_fixed` helpers; fixed list is dense —
+  `.len` = N on cast). e2e `run_fixed_size_stack_types`,
+  `run_fixed_size_index_oob_aborts`.
 - Behaviors: generic numeric `Ord`/`Eq`/`Hash` synthesized for all widths;
   `Serialize`/`Allocator` shape-checked; `sort(using = Ord(T))` with
   synthesized trampolines (e2e `run_generic_numeric_behaviors`).
@@ -322,6 +331,27 @@ Remaining conformance gaps are minimal:
   the self-hosted driver.
 
 **Completed this session:**
+- **Fixed-size stack types (§2 — `Str(N)`/`Bytes(N)`/`List(T, N)`)**: 
+  heap-free, compile-time-capacity values stored inline in the frame.
+  Parser: `Str`/`Bytes` fixed forms via `peek_after_is_op(Op::LParen)`;
+  `List(T, N)` parses as `Base{name:"List", params:[T, N]}` and resolves
+  to `SemType::ListFixed` when the second param is an int literal.
+  Type checker: sized literals adopt the annotated fixed type
+  (`string_literal_len`/`bytes_literal_len`/`ListFixed` cap checks);
+  oversized literals are a type error (no silent truncation); indexing
+  `Str(N)`/`Bytes(N)` → `Int(B64)`, `List(T, N)` → `T`, bounds-checked.
+  Codegen: `llvm_type(ListFixed) = [N x ety]` (previously a bare `ptr` —
+  that was a stack-corruption SEGV at exit since GEP wrote 64 bytes into a
+  pointer-sized alloca), fixed-type bind paths + `str_fixed_const_array`/
+  `fixed_array_ptr`, VarRef returns in-frame pointer, `cast_val`
+  identity-retapes (`Str(N)`↔`Str`, `Bytes(N)`↔`Bytes`) plus
+  heap→fixed copies via `resid_str_to_fixed`/`resid_bytes_to_fixed`
+  (truncation allowed only on explicit runtime cast) and fixed→heap boxing.
+  `resid-fmt` and `resid-lsp` type printers cover the new forms.
+  e2e `run_fixed_size_stack_types`, `run_fixed_size_index_oob_aborts`;
+  7 new `resid-type` tests. Stage-1 complete (both intermediate paths);
+  stage-2 driver parity + `.len()`/method calls + non-literal `ListFixed`
+  binding remain.
 - **`Str` rope-backed representation (§2 string building, roadmap item 2)**: 
   concatenation-by-accumulator (the `acc + piece` / `acc + str_from_code(c)` 
   loop pattern) is now amortized O(1) per append via a chunked concat-rope in 

@@ -834,6 +834,8 @@ fn parser_type_to_ir(t: &PType) -> ir::Type {
         PType::USize => ir::Type::Numeric(NumericType::USize),
         PType::Refined { base, .. } => parser_type_to_ir(base),
         PType::Residual(inner) => ir::Type::Residual(Box::new(parser_type_to_ir(inner))),
+        PType::StrFixed(n) => ir::Type::StrFixed(*n),
+        PType::BytesFixed(n) => ir::Type::BytesFixed(*n),
         PType::Literal(l) => match l {
             Literal::Bool(_) => ir::Type::Bool,
             Literal::Char(_) => ir::Type::Numeric(NumericType::Int(ir::IntWidth::B16)),
@@ -848,6 +850,12 @@ fn parser_base_to_ir(name: &str, params: Option<&[PType]>) -> ir::Type {
         "Bool" => ir::Type::Bool,
         "Str" => ir::Type::Str,
         "Bytes" => ir::Type::Bytes,
+        "StrFixed" => ir::Type::StrFixed(
+            params.and_then(|ps| ps.first()).and_then(width_of_type).unwrap_or(0) as u64
+        ),
+        "BytesFixed" => ir::Type::BytesFixed(
+            params.and_then(|ps| ps.first()).and_then(width_of_type).unwrap_or(0) as u64
+        ),
         "Null" => ir::Type::Null,
         "Void" => ir::Type::Void,
         "SourceLoc" => ir::Type::SourceLoc,
@@ -870,9 +878,19 @@ fn parser_base_to_ir(name: &str, params: Option<&[PType]>) -> ir::Type {
                 _ => ir::Type::Numeric(NumericType::Dec(w.unwrap_or(34))),
             }
         }
-        "List" => param1(params).map_or(ir::Type::List(Box::new(ir::Type::Void)), |t| {
-            ir::Type::List(Box::new(parser_type_to_ir(t)))
-        }),
+        "List" => {
+            if let Some(ps) = params {
+                if ps.len() == 2 {
+                    // List(T, N) - fixed size list
+                    if let (Some(t), Some(PType::Literal(Literal::Int { value: n, .. }))) = (ps.first(), ps.get(1)) {
+                        return ir::Type::ListFixed(Box::new(parser_type_to_ir(t)), *n as u64);
+                    }
+                }
+            }
+            param1(params).map_or(ir::Type::List(Box::new(ir::Type::Void)), |t| {
+                ir::Type::List(Box::new(parser_type_to_ir(t)))
+            })
+        }
         "Map" => match params {
             Some([k, v]) => ir::Type::Map(Box::new(parser_type_to_ir(k)), Box::new(parser_type_to_ir(v))),
             _ => ir::Type::Map(Box::new(ir::Type::Void), Box::new(ir::Type::Void)),
@@ -931,6 +949,8 @@ fn ir_ty_to_parser(t: &ir::Type) -> PType {
         },
         ir::Type::Str => base_ty("Str"),
         ir::Type::Bytes => base_ty("Bytes"),
+        ir::Type::StrFixed(n) => PType::StrFixed(*n),
+        ir::Type::BytesFixed(n) => PType::BytesFixed(*n),
         ir::Type::Null => base_ty("Null"),
         ir::Type::Void => base_ty("Void"),
         ir::Type::Option(inner) => param_ty("Option", vec![ir_ty_to_parser(inner)]),
@@ -939,6 +959,13 @@ fn ir_ty_to_parser(t: &ir::Type) -> PType {
             vec![ir_ty_to_parser(ok), ir_ty_to_parser(er)],
         ),
         ir::Type::List(inner) => param_ty("List", vec![ir_ty_to_parser(inner)]),
+        ir::Type::ListFixed(inner, n) => PType::Base {
+            name: Id("List".to_string()),
+            params: Some(vec![
+                ir_ty_to_parser(inner),
+                PType::Literal(Literal::Int { value: *n as u128, kind: IntKind::Decimal("U64".to_string()) }),
+            ]),
+        },
         ir::Type::Map(k, v) => param_ty("Map", vec![ir_ty_to_parser(k), ir_ty_to_parser(v)]),
         ir::Type::Set(inner) => param_ty("Set", vec![ir_ty_to_parser(inner)]),
         ir::Type::Slice { element_type } => param_ty("Slice", vec![ir_ty_to_parser(element_type)]),

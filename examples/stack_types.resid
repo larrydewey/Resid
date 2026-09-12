@@ -1,0 +1,7 @@
+Int main() {
+    Str(8) greeting = "hello";
+    Bytes(4) bytes = b"abcd";
+    List(Int, 3) values = [10, 20, 30];
+    println(greeting);
+    return values.len();
+}
