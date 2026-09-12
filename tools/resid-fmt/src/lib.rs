@@ -567,5 +567,7 @@ fn ty_str(t: &Type) -> String {
         Type::ISize => "isize".to_string(),
         Type::USize => "usize".to_string(),
         Type::Literal(lit) => lit_to_string(lit),
+        Type::StrFixed(n) => format!("Str({n})"),
+        Type::BytesFixed(n) => format!("Bytes({n})"),
     }
 }

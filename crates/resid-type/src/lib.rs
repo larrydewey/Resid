@@ -32,8 +32,14 @@ pub enum SemType {
     Str,
     /// Raw byte string (`b"..."`), spec §14. A pointer to a byte array.
     Bytes,
+    /// Stack-allocated fixed-size string with N chars + NUL terminator.
+    StrFixed(u64),
+    /// Stack-allocated fixed-size byte array with N bytes.
+    BytesFixed(u64),
     /// An immutable list of homogeneous elements.
     List(Box<SemType>),
+    /// Stack-allocated fixed-size list with N elements of type T.
+    ListFixed(Box<SemType>, u64),
     /// An immutable map (key → value). Spec §32 core types.
     Map(Box<SemType>, Box<SemType>),
     /// An immutable set of homogeneous elements. Spec §32 core types.
@@ -79,7 +85,10 @@ impl core::fmt::Display for SemType {
             SemType::Numeric(n) => write!(f, "{n}"),
             SemType::Str => write!(f, "Str"),
             SemType::Bytes => write!(f, "Bytes"),
+            SemType::StrFixed(n) => write!(f, "Str({n})"),
+            SemType::BytesFixed(n) => write!(f, "Bytes({n})"),
             SemType::List(e) => write!(f, "List({e})"),
+            SemType::ListFixed(e, n) => write!(f, "List({e}, {n})"),
             SemType::Map(k, v) => write!(f, "Map({k}, {v})"),
             SemType::Set(e) => write!(f, "Set({e})"),
             SemType::Struct { name, .. } => write!(f, "{name}"),
@@ -945,11 +954,20 @@ fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
         Type::Base { name, params } => {
             // Built-in `List(T)`.
             if name.0 == "List" {
-                if let Some(ps) = params
-                    && ps.len() == 1 {
+                if let Some(ps) = params {
+                    if ps.len() == 1 {
                         let inner = resolve_type_ctx_inner(&ps[0], types)?;
                         return Some(SemType::List(Box::new(inner)));
                     }
+                    // List(T, N) — stack-allocated fixed-size list.
+                    if ps.len() == 2 {
+                        if let Type::Literal(Literal::Int { value: n, .. }) = &ps[1] {
+                            let inner = resolve_type_ctx_inner(&ps[0], types)?;
+                            return Some(SemType::ListFixed(Box::new(inner), *n as u64));
+                        }
+                        return None; // N must be a compile-time integer literal
+                    }
+                }
                 return None; // a bare `List` needs an element type
             }
             // Built-in `Map(K, V)`.
@@ -1082,6 +1100,8 @@ fn resolve_type_ctx_inner(td: &Type, types: &Types) -> Option<SemType> {
         Type::ISize => Some(SemType::Numeric(NumericType::ISize)),
         Type::USize => Some(SemType::Numeric(NumericType::USize)),
         Type::Residual(inner) => resolve_type_ctx_inner(inner, types),
+        Type::StrFixed(n) => Some(SemType::StrFixed(*n)),
+        Type::BytesFixed(n) => Some(SemType::BytesFixed(*n)),
         // Literal used standalone (shouldn't happen; only valid as Base param).
         Type::Literal(_) => None,
     }
@@ -1778,6 +1798,34 @@ pub fn infer_expr_ctx(
                     }
                     Ok((**elem).clone())
                 }
+                SemType::ListFixed(elem, _) => {
+                    let it = infer_expr_ctx(index, env, sigs, types)?;
+                    match it {
+                        SemType::Numeric(_) => {}
+                        other => {
+                            return Err(err(
+                                &index.span,
+                                format!("fixed list index must be numeric, found {other}"),
+                            ));
+                        }
+                    }
+                    Ok((**elem).clone())
+                }
+                SemType::StrFixed(_) | SemType::BytesFixed(_) => {
+                    let it = infer_expr_ctx(index, env, sigs, types)?;
+                    match it {
+                        SemType::Numeric(_) => {}
+                        other => {
+                            return Err(err(
+                                &index.span,
+                                format!("index must be numeric, found {other}"),
+                            ));
+                        }
+                    }
+                    // Character/byte index: yields an Int (the codepoint or
+                    // raw byte value), matching the runtime str_char_at.
+                    Ok(SemType::Numeric(NumericType::Int(IntWidth::B64)))
+                }
                 SemType::Map(k, v) => {
                     let it = infer_expr_ctx(index, env, sigs, types)?;
                     if &it != k.as_ref() {
@@ -1807,6 +1855,11 @@ pub fn infer_expr_ctx(
             let method_name = &method.0;
             if args.is_empty()
                 && let ("len", SemType::List(_)) = (method_name.as_str(), &tt) {
+                    return Ok(SemType::Numeric(NumericType::ISize));
+                }
+            // `List(T, N).len()` — dense stack list: length is the compile-time capacity.
+            if args.is_empty()
+                && let ("len", SemType::ListFixed(_, _)) = (method_name.as_str(), &tt) {
                     return Ok(SemType::Numeric(NumericType::ISize));
                 }
             // `a.concat(b)` joins two lists of the same element type.
@@ -3020,11 +3073,22 @@ fn infer_call(
         let int_checked_narrow = matches!((&at, want), (SemType::Numeric(a), SemType::Numeric(t)) if
             !a.is_float() && !t.is_float() && !a.is_dec() && !t.is_dec()
             && a.is_signed() == t.is_signed());
+        // Built-in output/string intrinsics accept a sized stack string or
+        // byte array where a heap `Str`/`Bytes` is declared — the value is a
+        // NUL-terminated buffer, so the same pointer serves both (an implicit
+        // view widening, no copy and no heap allocation).
+        let fixed_view_ok = BUILTIN_SIGS.iter().any(|(n, _, _)| *n == name)
+            && match want {
+                SemType::Str => matches!(at, SemType::StrFixed(_)),
+                SemType::Bytes => matches!(at, SemType::BytesFixed(_)),
+                _ => false,
+            };
         if !param_matches(&at, want)
             && !literal_compatible(a, want)
             && !numeric_can_widen(&at, want)
             && !int_checked_narrow
             && !conversion_ok
+            && !fixed_view_ok
         {
             return Err(err(
                 &a.span,
@@ -3059,6 +3123,27 @@ fn infer_call(
     Ok(sig.ret.clone())
 }
 
+/// Static character length of a string literal expression, if it is one.
+/// Counts Unicode scalar values (spec: `str_len` is in characters). Returns
+/// `None` for non-literal or f-string (interpolated-length unknown) cases.
+fn string_literal_len(expr: &Expr) -> Option<u64> {
+    match &expr.kind {
+        ExprKind::Literal(Literal::Str(l)) => Some(l.value.chars().count() as u64),
+        ExprKind::Literal(Literal::RawStr(l)) => Some(l.value.chars().count() as u64),
+        ExprKind::RawString(s) => Some(s.chars().count() as u64),
+        _ => None,
+    }
+}
+
+/// Static byte length of a byte-string literal expression, if it is one.
+fn bytes_literal_len(expr: &Expr) -> Option<u64> {
+    match &expr.kind {
+        ExprKind::Literal(Literal::ByteStr(l)) => Some(l.value.len() as u64),
+        ExprKind::ByteString(b) => Some(b.len() as u64),
+        _ => None,
+    }
+}
+
 /// May an inferred value type be bound to a declared type? Covers the
 /// established coercions: numeric literal adoption, lossless widening,
 /// same-family arithmetic-margin narrowing (`Int(64) x = a + b` infers
@@ -3067,6 +3152,26 @@ fn infer_call(
 fn bind_assignable(value: &Expr, inferred: &SemType, declared: &SemType) -> bool {
     if inferred == declared {
         return true;
+    }
+    // A string literal (or raw string) may be bound to a fixed-size
+    // Str(N) when its length (in characters) fits N (spec: N is the
+    // maximum character count; the compiler embeds N + 1 bytes for the
+    // NUL terminator). This mirrors integer literal adoption (§6.1a):
+    // the literal provably fits the declared capacity.
+    if let SemType::StrFixed(n) = declared {
+        if let Some(len) = string_literal_len(value) {
+            return len <= *n;
+        }
+    }
+    if let SemType::BytesFixed(n) = declared {
+        if let Some(len) = bytes_literal_len(value) {
+            return len <= *n;
+        }
+    }
+    if let SemType::ListFixed(_, n) = declared {
+        if let ExprKind::ListLit(elems) = &value.kind {
+            return (elems.len() as u64) <= *n;
+        }
     }
     if numeric_can_widen(inferred, declared) {
         return true;
@@ -5385,6 +5490,104 @@ Int add(Int a, Int b) {
 }
 "#;
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn fixed_str_binding_adopts_literal() {
+        let src = r#"
+Int main() {
+    Str(8) s = "abcdefgh";
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn fixed_str_shorter_literal_adopts() {
+        let src = r#"
+Int main() {
+    Str(8) s = "abc";
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn fixed_str_oversized_literal_rejected() {
+        let src = r#"
+Int main() {
+    Str(8) s = "abcdefghijklmnop";
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected a type error for oversized Str(8) literal"
+        );
+    }
+
+    #[test]
+    fn fixed_bytes_binding_adopts_literal() {
+        let src = r#"
+Int main() {
+    Bytes(4) b = b"1234";
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn fixed_list_binding_adopts_literal() {
+        let src = r#"
+Int main() {
+    List(Int, 8) xs = [1, 2, 3];
+    Int x = xs[2];
+    return x;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn fixed_list_too_many_elements_rejected() {
+        let src = r#"
+Int main() {
+    List(Int, 3) xs = [1, 2, 3, 4];
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            !errs.is_empty(),
+            "expected a type error for a literal larger than the List(T,N) capacity"
+        );
+    }
+
+    #[test]
+    fn fixed_nested_str_list_parses() {
+        let src = r#"
+Int main() {
+    List(Str(3), 8) xs = ["abc", "def"];
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("test.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
     }

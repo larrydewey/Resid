@@ -145,6 +145,8 @@ pub enum Type {
     ISize,
     USize,
     Literal(Literal),
+    StrFixed(u64),
+    BytesFixed(u64),
 }
 
 // ─── Expression Kinds ───────────────────────────────────────────

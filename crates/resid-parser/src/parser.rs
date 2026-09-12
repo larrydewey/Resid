@@ -578,6 +578,38 @@ impl Parser {
             return Type::USize;
         }
 
+        // Check for Str(N), Bytes(N) fixed-size types - peek ahead for '('
+        if (self.peek_is_ident("Str") || self.peek_is_ident("Bytes"))
+            && self.peek_after_is_op(Op::LParen)
+        {
+            let name = self.expect_ident("type: expected string/bytes type").unwrap();
+            self.bump(); // consume '('
+            // Parse the integer literal for the size
+            let n = match self.peek() {
+                Some(TokenKind::Literal(Literal::Int { value: v, .. })) => {
+                    self.bump();
+                    v
+                }
+                _ => {
+                    self.errors
+                        .push(ParseError {
+                            span: self.current_span(),
+                            message: "type: expected size in parentheses".to_string(),
+                        });
+                    return Type::Base { name, params: None };
+                }
+            };
+            // Manually check for closing paren (expect_op returns bool, doesn't halt)
+            if !self.expect_op(Op::RParen, "type: expected closing paren") {
+                return Type::Base { name, params: None };
+            }
+            let n = n as u64;
+            if name.0 == "Str" {
+                return Type::StrFixed(n);
+            }
+            return Type::BytesFixed(n);
+        }
+
         // Base type with optional params
         let name = self
             .expect_ident("type: expected identifier")
@@ -3825,6 +3857,56 @@ type Opt(T) = Some(T) | None;
     #[test]
     fn parse_type_param_uint8() {
         let (_result, errors) = Parser::parse("test.resid", "Int f() { UInt(8) x = 255; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_param_str_fixed() {
+        let (_result, errors) = Parser::parse(
+            "test.resid",
+            r#"Int f() { Str(8) x = "abcdefgh"; }"#,
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_param_bytes_fixed() {
+        let (_result, errors) = Parser::parse("test.resid", r#"Int f() { Bytes(8) x = b"12345678"; }"#);
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_param_list_fixed() {
+        let (_result, errors) =
+            Parser::parse("test.resid", "Int f() { List(Int, 8) x = [1, 2, 3]; }");
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_param_list_fixed_nested_str() {
+        let (_result, errors) = Parser::parse(
+            "test.resid",
+            r#"Int f() { List(Str(3), 8) x = ["abc", "def"]; }"#,
+        );
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_str_not_fixed_still_works() {
+        let (_result, errors) = Parser::parse("test.resid", r#"Int f(Str s) { return 0; }"#);
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_bytes_not_fixed_still_works() {
+        let (_result, errors) = Parser::parse("test.resid", r#"Int f(Bytes b) { return 0; }"#);
+        assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn parse_type_list_not_fixed_still_works() {
+        let (_result, errors) =
+            Parser::parse("test.resid", "Int f(List(Int) xs) { return 0; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 

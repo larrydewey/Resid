@@ -13,7 +13,7 @@ use inkwell::builder::Builder;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FloatType, FunctionType, IntType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, BasicValueEnum, FloatValue, FunctionValue, IntValue,
     PointerValue,
@@ -630,12 +630,174 @@ impl<'ctx> CodeGen<'ctx> {
             // Refinement types lower to their base (already erased by the
             // checker; kept here for defensive completeness).
             SemType::Refined { base, .. } => self.llvm_type(base)?,
+            // Stack-allocated fixed-size types
+            SemType::StrFixed(n) => self.llvm_str_fixed_type(*n)?,
+            SemType::BytesFixed(n) => self.llvm_bytes_fixed_type(*n)?,
+            SemType::ListFixed(ety, n) => self.llvm_type(ety)?.array_type(*n as u32).into(),
             // Composites are untyped heap pointers.
             SemType::List(_) | SemType::Slice(_) | SemType::Struct { .. } | SemType::Sum { .. } | SemType::Ptr | SemType::SourceLoc | SemType::File | SemType::Map(..) | SemType::Set(_) => {
                 self.cx.ptr_type(AddressSpace::default()).into()
             }
         };
         Ok(bt)
+    }
+
+    /// LLVM type for stack-allocated fixed-size string (N chars + NUL = N+1 bytes).
+    fn llvm_str_fixed_type(&self, n: u64) -> Result<BasicTypeEnum<'ctx>, String> {
+        // For now, use array type [n+1 x i8] - this represents the inline char array
+        let array_ty = self.cx.i8_type().array_type((n + 1) as u32);
+        Ok(array_ty.into())
+    }
+
+    /// LLVM type for stack-allocated fixed-size byte array (N bytes).
+    fn llvm_bytes_fixed_type(&self, n: u64) -> Result<BasicTypeEnum<'ctx>, String> {
+        let array_ty = self.cx.i8_type().array_type(n as u32);
+        Ok(array_ty.into())
+    }
+
+    /// Materialize a `[N+1 x i8]` constant from a string value: copy up to N
+    /// characters, NUL-pad the rest so the fixed buffer is always terminated.
+    fn str_fixed_const_array(&self, n: u64, s: &str) -> inkwell::values::ArrayValue<'ctx> {
+        let cap = (n + 1) as usize;
+        let bytes: Vec<u8> = s.as_bytes().iter().take(cap.saturating_sub(1)).copied().collect();
+        let mut elems: Vec<inkwell::values::IntValue<'ctx>> = bytes
+            .iter()
+            .map(|b| self.cx.i8_type().const_int(*b as u64, false))
+            .collect();
+        while elems.len() < cap {
+            elems.push(self.cx.i8_type().const_zero());
+        }
+        self.cx.i8_type().const_array(&elems)
+    }
+
+    /// GEP `[0, 0]` of a `[N x i8]` array pointer → `i8*` to the first byte.
+    fn fixed_array_ptr(&self, arr_ty: BasicTypeEnum<'ctx>, p: PointerValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        let i32t = self.cx.i32_type();
+        let gep = unsafe {
+            self.builder
+                .build_in_bounds_gep(arr_ty, p, &[i32t.const_zero(), i32t.const_zero()], "fixedbase")
+                .map_err(to_err)?
+        };
+        Ok(gep)
+    }
+
+    /// Bind a `Str(N) s = rhs;`: alloca `[N+1 x i8]` and copy the RHS bytes
+    /// in (compile-time literals fill a constant array; runtime values go
+    /// through the bounded NUL-terminating copy helper, never malloc).
+    fn store_fixed_str(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        value: &Expr,
+        ptr: PointerValue<'ctx>,
+        n: u64,
+    ) -> Result<(), String> {
+        let arr_ty = self.llvm_str_fixed_type(n)?;
+        if let Some(s) = const_str(value) {
+            let c = self.str_fixed_const_array(n, &s);
+            self.builder.build_store(ptr, c).map_err(to_err)?;
+            return Ok(());
+        }
+        let v = self.lower_expr(sc, value, None)?;
+        let src = match &v.ty {
+            SemType::StrFixed(_) | SemType::Str | SemType::Bytes | SemType::BytesFixed(_) => {
+                v.v.into_pointer_value()
+            }
+            _ => {
+                return Err(format!(
+                    "codegen: cannot bind string value of type {} to Str({n})",
+                    v.ty
+                ))
+            }
+        };
+        let dst = self.fixed_array_ptr(arr_ty, ptr)?;
+        let f = self
+            .module
+            .get_function("resid_str_to_fixed")
+            .ok_or("codegen: resid_str_to_fixed not declared")?;
+        let cap = self.cx.i64_type().const_int(n + 1, false);
+        self.builder
+            .build_call(f, &[dst.into(), src.into(), cap.into()], "store_fixed_str")
+            .map_err(to_err)?;
+        Ok(())
+    }
+
+    /// Bind a `Bytes(N) b = rhs;`: alloca `[N x i8]` and copy the RHS bytes in.
+    fn store_fixed_bytes(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        value: &Expr,
+        ptr: PointerValue<'ctx>,
+        n: u64,
+    ) -> Result<(), String> {
+        let arr_ty = self.llvm_bytes_fixed_type(n)?;
+        if let ExprKind::ByteString(bytes) = &value.kind {
+            let mut elems: Vec<inkwell::values::IntValue<'ctx>> = bytes
+                .iter()
+                .take(n as usize)
+                .map(|b| self.cx.i8_type().const_int(*b as u64, false))
+                .collect();
+            while (elems.len() as u64) < n {
+                elems.push(self.cx.i8_type().const_zero());
+            }
+            let c = self.cx.i8_type().const_array(&elems);
+            self.builder.build_store(ptr, c).map_err(to_err)?;
+            return Ok(());
+        }
+        let v = self.lower_expr(sc, value, None)?;
+        let src = match &v.ty {
+            SemType::Bytes | SemType::Str | SemType::BytesFixed(_) | SemType::StrFixed(_) => {
+                v.v.into_pointer_value()
+            }
+            _ => {
+                return Err(format!(
+                    "codegen: cannot bind byte value of type {} to Bytes({n})",
+                    v.ty
+                ))
+            }
+        };
+        let dst = self.fixed_array_ptr(arr_ty, ptr)?;
+        let f = self
+            .module
+            .get_function("resid_bytes_to_fixed")
+            .ok_or("codegen: resid_bytes_to_fixed not declared")?;
+        let cap = self.cx.i64_type().const_int(n, false);
+        self.builder
+            .build_call(f, &[dst.into(), src.into(), cap.into()], "store_fixed_bytes")
+            .map_err(to_err)?;
+        Ok(())
+    }
+
+    /// Bind a `List(T, N) xs = rhs;`: alloca `[N x T]` and store each element
+    /// inline (scalars by value, strings/composites as pointers). N is the
+    /// capacity; a literal may hold fewer elements.
+    fn store_fixed_list(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        value: &Expr,
+        ptr: PointerValue<'ctx>,
+        ety: &SemType,
+        n: u64,
+    ) -> Result<(), String> {
+        let ety_ll = self.llvm_type(ety)?;
+        let arr_ty = ety_ll.array_type(n as u32);
+        let ExprKind::ListLit(elems) = &value.kind else {
+            return Err(format!(
+                "codegen: cannot bind a fixed List({},{n}) from a non-literal (yet)",
+                ety.to_string()
+            ));
+        };
+        let i32t = self.cx.i32_type();
+        for (i, e) in elems.iter().take(n as usize).enumerate() {
+            let v = self.lower_expr(sc, e, None)?;
+            let slot = unsafe {
+                self.builder
+                    .build_in_bounds_gep(arr_ty, ptr, &[i32t.const_zero(), i32t.const_int(i as u64, false)], "fxel")
+                    .map_err(to_err)?
+            };
+            let sv = self.cast_val(v, ety)?;
+            self.builder.build_store(slot, sv.v).map_err(to_err)?;
+        }
+        Ok(())
     }
 
     /// Allocate a `resid_dec` slot, store `v` into it, return the pointer.
@@ -890,6 +1052,14 @@ impl<'ctx> CodeGen<'ctx> {
                                 .build_return(Some(&self.cx.bool_type().const_zero()))
                                 .map_err(to_err)?;
                         }
+                        // Stack-allocated fixed-size types
+                        SemType::StrFixed(_) | SemType::BytesFixed(_) | SemType::ListFixed(_, _) => {
+                            self.builder
+                                .build_return(Some(
+                                    &self.cx.ptr_type(AddressSpace::default()).const_null(),
+                                ))
+                                .map_err(to_err)?;
+                        }
                         SemType::Range(_) => {
                             self.builder
                                 .build_return(Some(&self.cx.i64_type().const_zero()))
@@ -998,6 +1168,27 @@ impl<'ctx> CodeGen<'ctx> {
                     };
                     let ll = self.llvm_type(&ty)?;
                     let ptr = self.builder.build_alloca(ll, &name.0).map_err(to_err)?;
+                    // Fixed-size stack types are stored through a dedicated
+                    // path: the variable is an inline stack array, so values
+                    // are copied in (never boxed on the heap).
+                    match &ty {
+                        SemType::StrFixed(mx) => {
+                            self.store_fixed_str(sc, value, ptr, *mx)?;
+                            sc.vars.insert(name.0.clone(), (ptr, ty));
+                            continue;
+                        }
+                        SemType::BytesFixed(mx) => {
+                            self.store_fixed_bytes(sc, value, ptr, *mx)?;
+                            sc.vars.insert(name.0.clone(), (ptr, ty));
+                            continue;
+                        }
+                        SemType::ListFixed(ety, mx) => {
+                            self.store_fixed_list(sc, value, ptr, ety, *mx)?;
+                            sc.vars.insert(name.0.clone(), (ptr, ty));
+                            continue;
+                        }
+                        _ => {}
+                    }
                     let target = match &ty {
                         SemType::Numeric(n) => Some(*n),
                         _ => None,
@@ -1911,6 +2102,23 @@ impl<'ctx> CodeGen<'ctx> {
 
             ExprKind::Id(id) => {
                 if let Some((ptr, ty)) = sc.vars.get(&id.0) {
+                    // Fixed-size stack values: the variable is the inline
+                    // array itself, so reads yield a pointer into it (never
+                    // a load of a passing-by-value aggregate).
+                    if matches!(ty, SemType::StrFixed(_) | SemType::BytesFixed(_)) {
+                        let arr_ty = self.llvm_type(ty)?;
+                        let p = self.fixed_array_ptr(arr_ty, *ptr)?;
+                        return Ok(Val {
+                            v: p.into(),
+                            ty: ty.clone(),
+                        });
+                    }
+                    if matches!(ty, SemType::ListFixed(..)) {
+                        return Ok(Val {
+                            v: (*ptr).into(),
+                            ty: ty.clone(),
+                        });
+                    }
                     let pointee_ty = self.llvm_type(ty)?;
                     let v = self
                         .builder
@@ -2933,6 +3141,133 @@ impl<'ctx> CodeGen<'ctx> {
         if matches!(to, SemType::Ptr) {
             return Ok(raw);
         }
+        // ── Fixed-size stack types ──────────────────────────────────
+        // Str(N) ↔ Str and Bytes(N) ↔ Bytes are identity pointer casts
+        // (the fixed buffer is NUL-terminated, so the same i8* works for
+        // both representations). Str(N) → Str(N) at equal/other capacity
+        // is a copy into a fresh stack alloca.
+        if matches!(to, SemType::Str) && matches!(&raw.ty, SemType::StrFixed(_)) {
+            return Ok(Val {
+                v: raw.v,
+                ty: SemType::Str,
+            });
+        }
+        if matches!(to, SemType::Bytes) && matches!(&raw.ty, SemType::BytesFixed(_)) {
+            return Ok(Val {
+                v: raw.v,
+                ty: SemType::Bytes,
+            });
+        }
+        if let SemType::StrFixed(n) = to {
+            let src = match &raw.ty {
+                SemType::Str | SemType::StrFixed(_) | SemType::Bytes | SemType::BytesFixed(_) => {
+                    raw.v.into_pointer_value()
+                }
+                _ => {
+                    return Err(format!(
+                        "codegen: cannot cast {} to Str({n})",
+                        raw.ty.to_string()
+                    ))
+                }
+            };
+            let arr_ty = self.llvm_str_fixed_type(*n)?;
+            let dst_a = self
+                .builder
+                .build_alloca(arr_ty, "cast_fixed_str")
+                .map_err(to_err)?;
+            let dst = self.fixed_array_ptr(arr_ty, dst_a)?;
+            let f = self
+                .module
+                .get_function("resid_str_to_fixed")
+                .ok_or("codegen: resid_str_to_fixed not declared")?;
+            let cap = self.cx.i64_type().const_int(n + 1, false);
+            self.builder
+                .build_call(f, &[dst.into(), src.into(), cap.into()], "cast_fixed_str_call")
+                .map_err(to_err)?;
+            return Ok(Val {
+                v: dst.into(),
+                ty: SemType::StrFixed(*n),
+            });
+        }
+        if matches!(to, SemType::BytesFixed(_)) {
+            let n = match to {
+                SemType::BytesFixed(n) => *n,
+                _ => unreachable!(),
+            };
+            let src = match &raw.ty {
+                SemType::Bytes | SemType::Str | SemType::BytesFixed(_) | SemType::StrFixed(_) => {
+                    raw.v.into_pointer_value()
+                }
+                _ => {
+                    return Err(format!(
+                        "codegen: cannot cast {} to Bytes({n})",
+                        raw.ty.to_string()
+                    ))
+                }
+            };
+            let arr_ty = self.llvm_bytes_fixed_type(n)?;
+            let dst_a = self
+                .builder
+                .build_alloca(arr_ty, "cast_fixed_bytes")
+                .map_err(to_err)?;
+            let dst = self.fixed_array_ptr(arr_ty, dst_a)?;
+            let f = self
+                .module
+                .get_function("resid_bytes_to_fixed")
+                .ok_or("codegen: resid_bytes_to_fixed not declared")?;
+            let cap = self.cx.i64_type().const_int(n, false);
+            self.builder
+                .build_call(f, &[dst.into(), src.into(), cap.into()], "cast_fixed_bytes_call")
+                .map_err(to_err)?;
+            return Ok(Val {
+                v: dst.into(),
+                ty: SemType::BytesFixed(n),
+            });
+        }
+        // List(T, N) → List(T): wrap the inline stack array into a heap list
+        // for interop. Each element is boxed (scalars) or taken as a slot
+        // (already-boxed composites / strings).
+        if let SemType::ListFixed(ety, n) = &raw.ty {
+            if let SemType::List(eto) = to {
+                if ety != eto {
+                    return Err(format!(
+                        "codegen: cannot cast {} to {}",
+                        raw.ty.to_string(),
+                        to.to_string()
+                    ));
+                }
+                // Fixed lists are dense: element count == capacity N.
+                let mut slots: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(*n as usize);
+                let ety_ll = self.llvm_type(ety)?;
+                let arr_ty = ety_ll.array_type(*n as u32);
+                let src_ptr = raw.v.into_pointer_value();
+                let i32t = self.cx.i32_type();
+                for i in 0..*n {
+                    let slot = unsafe {
+                        self.builder
+                            .build_in_bounds_gep(arr_ty, src_ptr, &[i32t.const_zero(), i32t.const_int(i, false)], "fxcast")
+                            .map_err(to_err)?
+                    };
+                    let loaded = self.builder.build_load(ety_ll, slot, "fxcast_load").map_err(to_err)?;
+                    let ev = Val { v: loaded, ty: (**ety).clone() };
+                    match &**ety {
+                        SemType::Numeric(_) | SemType::Bool => {
+                            slots.push(self.box_scalar(ev)?);
+                        }
+                        _ => {
+                            slots.push(ev.v);
+                        }
+                    }
+                }
+                let list = self.build_list_constructor(to, slots)?;
+                return Ok(list);
+            }
+            return Err(format!(
+                "codegen: cannot cast {} to {}",
+                raw.ty.to_string(),
+                to.to_string()
+            ));
+        }
         // ── Dec(N) conversions (spec §6.6a) ─────────────────────────
         // These bypass the LLVM cast below: Dec is an aggregate struct, and
         // all Dec conversions go through the C runtime (the type checker
@@ -3779,6 +4114,9 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt_void("resid_index_abort", vec![i64t.into(), i64t.into(), ptr.into()]);
         // String concatenation (f-string interpolation, Str + Str).
         self.decl_rt("resid_str_concat", vec![ptr.into(), ptr.into()], ptr.into());
+        // Bounded copies into fixed-size stack buffers (Str(N) / Bytes(N)).
+        self.decl_rt("resid_str_to_fixed", vec![ptr.into(), ptr.into(), i64t.into()], i64t.into());
+        self.decl_rt("resid_bytes_to_fixed", vec![ptr.into(), ptr.into(), i64t.into()], i64t.into());
         // String equality (Str == Str / Str != Str) for the bootstrap lexer.
         self.decl_rt("resid_str_eq", vec![ptr.into(), ptr.into()], i8t.into());
         // Build a Str from a List(Int) of Unicode codepoints (one-pass join).
@@ -5442,6 +5780,21 @@ impl<'ctx> CodeGen<'ctx> {
             };
             return self.wrap_option(vp, &option_ty);
         }
+        // Fixed-size stack indexing: `Str(N)/Bytes(N)/List(T,N)[i]` reads
+        // straight out of the inline array with a compile-time bounds check
+        // against the capacity.
+        match tv.ty.clone() {
+            SemType::StrFixed(n) => {
+                return self.lower_fixed_str_index(sc, tv, index, n);
+            }
+            SemType::BytesFixed(n) => {
+                return self.lower_fixed_bytes_index(sc, tv, index, n);
+            }
+            SemType::ListFixed(ety, n) => {
+                return self.lower_fixed_list_index(sc, tv, index, &ety, n);
+            }
+            _ => {}
+        }
         let (list_val, elem) = match &tv.ty {
             SemType::List(elem) => (tv.v, elem),
             SemType::Slice(inner_list) => {
@@ -5486,6 +5839,143 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_unreachable().map_err(to_err)?;
         self.builder.position_at_end(ok_bb);
         self.load_list_elem(list_val, idx, elem)
+    }
+
+    /// Bounds-check `idx` against fixed capacity `n`: abort with the current
+    /// location when out of range, then branch to the ok block.
+    fn fixed_capacity_guard(
+        &mut self,
+        index: &Expr,
+        idx: IntValue<'ctx>,
+        n: u64,
+    ) -> Result<BasicBlock<'ctx>, String> {
+        let cur_fn = self
+            .cur_fn
+            .ok_or_else(|| "codegen: index outside a function".to_string())?;
+        let cap = self.cx.i64_type().const_int(n, false);
+        let ok_bb = self.cx.append_basic_block(cur_fn, "fixed_ok");
+        let oob_bb = self.cx.append_basic_block(cur_fn, "fixed_oob");
+        let cmp = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, idx, cap, "fixed_in_bounds")
+            .map_err(to_err)?;
+        self.builder
+            .build_conditional_branch(cmp, ok_bb, oob_bb)
+            .map_err(to_err)?;
+        self.builder.position_at_end(oob_bb);
+        let abort = self
+            .module
+            .get_function("resid_index_abort")
+            .ok_or("codegen: missing resid_index_abort decl")?;
+        let at_str = self.lower_str(&source_loc(&index.span));
+        self.builder
+            .build_call(abort, &[idx.into(), cap.into(), at_str.into()], "fixed_oob_abort")
+            .map_err(to_err)?;
+        self.builder.build_unreachable().map_err(to_err)?;
+        self.builder.position_at_end(ok_bb);
+        Ok(ok_bb)
+    }
+
+    /// `Str(N)[i]`: the numeric (codepoint) of char i, bounds-checked against
+    /// the N-char capacity. Uses the same `str_char_at` runtime logic as Str.
+    fn lower_fixed_str_index(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        tv: Val<'ctx>,
+        index: &Expr,
+        n: u64,
+    ) -> Result<Val<'ctx>, String> {
+        let iv = self.lower_expr(sc, index, None)?;
+        let iw = self.cast_val(
+            iv,
+            &SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        )?;
+        let idx = iw.v.into_int_value();
+        self.fixed_capacity_guard(index, idx, n)?;
+        let src = tv.v.into_pointer_value();
+        let f = self
+            .module
+            .get_function("str_char_at")
+            .ok_or("codegen: str_char_at not declared")?;
+        let cs = self
+            .builder
+            .build_call(f, &[src.into(), idx.into()], "fixed_str_char_at")
+            .map_err(to_err)?;
+        let v = cs.try_as_basic_value().expect_basic("fixed_str_char_at");
+        Ok(Val {
+            v,
+            ty: SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        })
+    }
+
+    /// `Bytes(N)[i]`: the raw byte at i, bounds-checked against N.
+    fn lower_fixed_bytes_index(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        tv: Val<'ctx>,
+        index: &Expr,
+        n: u64,
+    ) -> Result<Val<'ctx>, String> {
+        let iv = self.lower_expr(sc, index, None)?;
+        let iw = self.cast_val(
+            iv,
+            &SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        )?;
+        let idx = iw.v.into_int_value();
+        self.fixed_capacity_guard(index, idx, n)?;
+        let src = tv.v.into_pointer_value();
+        let byte = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    self.cx.i8_type(),
+                    src,
+                    &[idx],
+                    "fixed_bytes_byte",
+                )
+                .map_err(to_err)?
+        };
+        let loaded = self.builder.build_load(self.cx.i8_type(), byte, "fixed_byte").map_err(to_err)?;
+        let z = self
+            .builder
+            .build_int_z_extend(loaded.into_int_value(), self.cx.i64_type(), "fixed_byte_i64")
+            .map_err(to_err)?;
+        Ok(Val {
+            v: z.into(),
+            ty: SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        })
+    }
+
+    /// `List(T, N)[i]`: load element i inline from the stack array,
+    /// bounds-checked against the capacity N.
+    fn lower_fixed_list_index(
+        &mut self,
+        sc: &mut Scope<'ctx>,
+        tv: Val<'ctx>,
+        index: &Expr,
+        ety: &SemType,
+        n: u64,
+    ) -> Result<Val<'ctx>, String> {
+        let iv = self.lower_expr(sc, index, None)?;
+        let iw = self.cast_val(
+            iv,
+            &SemType::Numeric(NumericType::Int(resid_ir::IntWidth::from_bits(64).unwrap())),
+        )?;
+        let idx = iw.v.into_int_value();
+        self.fixed_capacity_guard(index, idx, n)?;
+        let ety_ll = self.llvm_type(ety)?;
+        let arr_ty = ety_ll.array_type(n as u32);
+        let i64t = self.cx.i64_type();
+        let base = tv.v.into_pointer_value();
+        let slot = unsafe {
+            self.builder
+                .build_in_bounds_gep(arr_ty, base, &[i64t.const_zero(), idx], "fixed_list_elem")
+                .map_err(to_err)?
+        };
+        let loaded = self.builder.build_load(ety_ll, slot, "fixed_list_load").map_err(to_err)?;
+        Ok(Val {
+            v: loaded,
+            ty: (*ety).clone(),
+        })
     }
 
     /// Lower `#location` to a boxed SourceLoc carrying the current span's
@@ -5597,6 +6087,13 @@ impl<'ctx> CodeGen<'ctx> {
                 let v = self.rt_call("resid_list_len", vec![tv.v])?;
                 Ok(Val {
                     v,
+                    ty: SemType::Numeric(NumericType::ISize),
+                })
+            }
+            ("len", SemType::ListFixed(_, n)) if args.is_empty() => {
+                let len = self.cx.i64_type().const_int(*n, false);
+                Ok(Val {
+                    v: len.into(),
                     ty: SemType::Numeric(NumericType::ISize),
                 })
             }

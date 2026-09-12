@@ -174,6 +174,36 @@ char* resid_str_concat(const char* a, const char* b) {
     return p;
 }
 
+/* Copy a NUL-terminated string into a fixed-capacity stack buffer
+ * (Str(N) = N chars + NUL, cap = N + 1). Copies at most cap - 1 bytes,
+ * truncating on overflow (a NUL terminator is always written). Returns
+ * the number of bytes stored (excluding the terminator). Used to
+ * materialize stack-allocated Str(N) values without any heap use. */
+size_t resid_str_to_fixed(char* dst, const char* src, size_t cap) {
+    if (cap == 0) return 0;
+    size_t n = 0;
+    while (n < cap - 1 && src[n] != 0) {
+        dst[n] = src[n];
+        n++;
+    }
+    dst[n] = 0;
+    return n;
+}
+
+/* Copy a raw byte buffer into a fixed-capacity stack buffer
+ * (Bytes(N) = exactly N bytes, cap = N). Copies at most cap bytes,
+ * truncating on overflow. Returns the number of bytes stored. Used to
+ * materialize stack-allocated Bytes(N) values without any heap use. */
+size_t resid_bytes_to_fixed(unsigned char* dst, const unsigned char* src, size_t cap) {
+    if (cap == 0) return 0;
+    size_t n = 0;
+    while (n < cap && src[n] != 0) {
+        dst[n] = src[n];
+        n++;
+    }
+    return n;
+}
+
 /* Str == Str / Str != Str. Returns 1 when equal (C ABI Bool = i8). */
 int8_t resid_str_eq(const char* a, const char* b) {
     return strcmp(a, b) == 0;

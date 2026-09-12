@@ -100,6 +100,111 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Fixed-size stack types `Str(N)`, `Bytes(N)`, `List(T, N)` lower to inline
+/// stack arrays (never the heap): string/byte copies are bounded, indexing is
+/// bounds-checked against the capacity, and Str(N) ↔ Str casts are identity
+/// pointer retypes over the NUL-terminated buffer.
+#[test]
+fn run_fixed_size_stack_types() {
+    let dir = std::env::temp_dir().join(format!(
+        "residc-e2e-fixed-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("fixed.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    Str(8) s = "abcdefgh";
+    println(IntToString(str_len((Str)s)));
+    println(IntToString(s[1]));
+
+    Str h = "hello world";
+    Str(8) f = (Str(8))h;
+    println((Str)f);
+    println(IntToString(str_len((Str)f)));
+
+    Bytes(8) b = b"12345678";
+    println(IntToString(b[2]));
+
+    List(Int, 8) xs = [10, 20, 30];
+    println(IntToString(xs[0]));
+    println(IntToString(xs[2]));
+    println(IntToString(xs.len()));
+
+    Str(3) a = "abc";
+    Str(3) d = "def";
+    Str(6) c = (Str(6))((Str)a + (Str)d);
+    println((Str)c);
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        "8\n98\nhello wo\n8\n51\n10\n30\n8\nabcdef",
+        "unexpected program output: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Fixed-size indexing aborts on out-of-range access (bounds-checked against
+/// the declared capacity), matching heap list behavior.
+#[test]
+fn run_fixed_size_index_oob_aborts() {
+    let dir = std::env::temp_dir().join(format!(
+        "residc-e2e-fixed-oob-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("fixed_oob.resid");
+    std::fs::write(
+        &file,
+        r#"Int main() {
+    List(Int, 4) xs = [1, 2, 3];
+    println(IntToString(xs[9]));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    // The abort exits with a non-zero signal (SIGABRT), and stderr carries the
+    // bounds diagnostic.
+    let code = out.status.code();
+    assert_ne!(code, Some(0), "out-of-range fixed index must not exit 0");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.contains("index out of bounds"),
+        "unexpected abort message: {stderr:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `if`-expressions with phi joins and `while` loops lower correctly.
 #[test]
 fn run_if_while_control_flow() {
