@@ -91,13 +91,20 @@ def main():
     # include preceding blank separation cleanly
     chunk = tc[cs:]
     chunk = cut_main(chunk)
-    chunk = drop_decls(chunk, {'PRes', 'parse_type', 'skip_body', 'skip_decl',
+    chunk = drop_decls(chunk, {'PRes', 'parse_type', 'parse_type_arg',
+                               'parse_type_args_rest', 'skip_body', 'skip_decl',
                                'str_find_char',
                                # Constraint-type helpers (spec §12): identical copies
                                # in both halves; keep the codegen (base) versions.
                                'find_sqclose_d', 'find_semi0', 'extract_ctext',
                                'ct_is_at', 'ct_is', 'ct_rank_at', 'ct_rank',
                                'ct_base_of', 'ct_text_of',
+                               # Fixed-capacity type predicates (spec §44):
+                               # identical copies in both halves; keep the
+                               # codegen (base) versions.
+                               'is_str_fixed', 'is_bytes_fixed', 'is_list_fixed',
+                               'fixed_elem', 'fixed_cap', 'is_fixed_type',
+                               '_all_digits',
                                # Behavior helpers: identical copies in both
                                # halves; keep the codegen (base) versions.
                                'behavior_decl_at', 'read_instance',
@@ -107,27 +114,56 @@ def main():
     # 3. tail: driver section from old driver.resid, header refreshed
     ds = next(i for i, l in enumerate(dv) if '─── Driver:' in l)
     tail = dv[ds:]
-    # refresh header construction: only the `List(Str) header =` line is
-    # transplanted from codegen main (the hdr_core in the tail is stable).
+    # Refresh both the `List(Str) hdr_core = [...]` runtime-decl list and
+    # the `List(Str) header =` construction line from codegen's main: the
+    # tail's own copies go stale whenever codegen.resid's hdr_core changes
+    # (e.g. new runtime declarations), since the tail is otherwise carried
+    # over verbatim from the previous driver.resid.
     cg_main_start = next(a for (a, b, n) in decl_ranges(cg) if n == 'main')
+    cg_hdr_core = None
     cg_header = None
-    for l in cg[cg_main_start:]:
+    cg_main_lines = cg[cg_main_start:]
+    i = 0
+    while i < len(cg_main_lines):
+        l = cg_main_lines[i]
         stripped = l.strip()
+        if stripped.startswith('List(Str) hdr_core ='):
+            # This assignment may span multiple physical lines (a very
+            # long declare-list literal); collect through the line that
+            # closes it (ends the statement with `];`), then flatten to
+            # one line so the tail keeps its existing single-line style.
+            parts = [l]
+            j = i
+            while not cg_main_lines[j].rstrip().endswith('];'):
+                j += 1
+                parts.append(cg_main_lines[j])
+            cg_hdr_core = ' '.join(p.strip() for p in parts)
+            i = j
         if stripped.startswith('List(Str) header ='):
             cg_header = l
             break
+        i += 1
+    if cg_hdr_core is None:
+        raise SystemExit('merge_driver: no hdr_core line found in codegen main')
     if cg_header is None:
         raise SystemExit('merge_driver: no header line found in codegen main')
-    # Replace the single legacy header line in the tail
-    replaced = False
+    # Replace the single legacy hdr_core/header lines in the tail
+    replaced_core = False
+    replaced_header = False
     new_tail = []
     for l in tail:
-        if l.strip().startswith('List(Str) header =') and not replaced:
+        stripped = l.strip()
+        if stripped.startswith('List(Str) hdr_core =') and not replaced_core:
+            new_tail.append(cg_hdr_core)
+            replaced_core = True
+        elif stripped.startswith('List(Str) header =') and not replaced_header:
             new_tail.append(cg_header)
-            replaced = True
+            replaced_header = True
         else:
             new_tail.append(l)
-    if not replaced:
+    if not replaced_core:
+        raise SystemExit('merge_driver: no hdr_core line found in driver tail')
+    if not replaced_header:
         raise SystemExit('merge_driver: no header line found in driver tail')
     tail = new_tail
 
