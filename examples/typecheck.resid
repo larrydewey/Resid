@@ -1301,8 +1301,12 @@ Bool is_map_type(Str t) {
 // Fixed-capacity type predicates (recursive, no while loops).
 // Fixed-capacity predicates. typecheck.resid's own parse_type formats
 // Str(8) -> "Str(8)", Bytes(4) -> "Bytes(4)", List(Int, 8) -> "List(Int, 8)".
-Bool is_str_fixed(Str t) { return str_has_prefix(t, "Str("); }
-Bool is_bytes_fixed(Str t) { return str_has_prefix(t, "Bytes("); }
+Bool is_str_fixed(Str t) {
+    return str_has_prefix(t, "Str(");
+}
+Bool is_bytes_fixed(Str t) {
+    return str_has_prefix(t, "Bytes(");
+}
 
 // Recursive helper: is substring [i,n) all digits?
 Bool _all_digits(Str t, Int i) {
@@ -2549,10 +2553,26 @@ pub Bool is_known_type(Str ty) {
     if (ty == "Dec") { return true; }
     if (ty == "Bool") { return true; }
     if (ty == "Str") { return true; }
+    if (ty == "Bytes") { return true; }
     Bool w = str_has_prefix(ty, "Int(") || str_has_prefix(ty, "UInt(");
     Bool wf = str_has_prefix(ty, "Float(") || str_has_prefix(ty, "Dec(");
     Bool wl = str_has_prefix(ty, "List(");
-    return w || wf || wl;
+    if (w || wf || wl) { return true; }
+    return is_fixed_type(ty);
+}
+
+// Fixed-capacity casts (spec §44): Str(N)/Bytes(N) <-> Str/Bytes are
+// identity or bounded-copy pointer casts; List(T, N) -> List(T) is dense
+// boxing. Mirrors the Rust pipeline's cast_val fixed-size branch.
+Bool is_fixed_cast_pair(Str fromty, Str toty) {
+    Bool src_str_like = fromty == "Str" || is_str_fixed(fromty) || fromty == "Bytes" || is_bytes_fixed(fromty);
+    if (toty == "Str" && (is_str_fixed(fromty) || is_bytes_fixed(fromty))) { return true; }
+    if (toty == "Bytes" && is_bytes_fixed(fromty)) { return true; }
+    if (is_str_fixed(toty) && src_str_like) { return true; }
+    if (is_bytes_fixed(toty) && src_str_like) { return true; }
+    Bool to_heap_list = str_has_prefix(toty, "List(") && !is_list_fixed(toty);
+    if (to_heap_list && is_list_fixed(fromty) && num_norm(fixed_elem(fromty)) == num_norm(inner_of(toty))) { return true; }
+    return false;
 }
 
 ERes check_unary(Str s, Int pos, List(Str) env, Funcs fs) {
@@ -2576,7 +2596,7 @@ ERes check_unary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
                     if (bothint || pt.ty == inner.ty) {
                         return ERes { pos: inner.pos, ty: pt.ty, err: "" };
                     }
-                    if (pt.ty == inner.ty) {
+                    if (is_fixed_cast_pair(inner.ty, pt.ty)) {
                         return ERes { pos: inner.pos, ty: pt.ty, err: "" };
                     }
                     Str msg = "cast from " + inner.ty + " to " + pt.ty + " not supported";

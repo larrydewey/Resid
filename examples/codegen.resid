@@ -640,6 +640,31 @@ Int str_find_char(Str s, Int c, Int i) {
 
 // ─── Signatures: names, llvm param types, param names, ret types ──
 
+// A single type-parameter: an integer literal (Int(64), Str(8), List(Int, 8)'s
+// capacity) or a nested type (List(Str), Option(Int)).
+PRes parse_type_arg(Str s, Int pos) {
+    Tok in1 = lex_tok(s, pos);
+    if (in1.kind == "int") {
+        return PRes { pos: in1.pos, ty: in1.text, err: "" };
+    }
+    return parse_type(s, pos);
+}
+
+// Comma-separated tail of a type's parameter list, e.g. the ", 8" in
+// List(Int, 8). Recursive — no reassignment.
+PRes parse_type_args_rest(Str s, Int pos, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") {
+        return PRes { pos: t.pos, ty: acc, err: "" };
+    }
+    if (t.text == ",") {
+        PRes arg = parse_type_arg(s, t.pos);
+        if (arg.err != "") { return arg; }
+        return parse_type_args_rest(s, arg.pos, acc + ", " + arg.ty);
+    }
+    return PRes { pos: t.pos, ty: "", err: "expected , or ) in type" };
+}
+
 PRes parse_type(Str s, Int pos) {
     Tok t = lex_tok(s, pos);
     if (t.kind != "ident") {
@@ -648,42 +673,16 @@ PRes parse_type(Str s, Int pos) {
     Tok t2 = lex_tok(s, t.pos);
     if (t2.text == "(") {
         // Width-parameterized numerics: Int(64), UInt(8), Float(128),
-        // Dec(34) — the parenthesized part is an integer literal, not
-        // a nested type. Nested type constructors recurse as before.
-        Tok in1 = lex_tok(s, t2.pos);
-        Bool isnum = in1.kind == "int";
-        if (isnum) {
-            Tok close = lex_tok(s, in1.pos);
-            if (close.text != ")") {
-                return PRes { pos: close.pos, ty: "", err: "expected ) in type" };
-            }
-            Str nty = t.text + "(" + in1.text + ")";
-            return PRes { pos: close.pos, ty: nty, err: "" };
-        }
-        // Type constructor: single arg List(T)/Option(T)/Set(T) as before,
-        // two args Map(K, V) via a top-level comma at depth one.
-        PRes first = parse_type(s, t2.pos);
+        // Dec(34); fixed-capacity Str(8), Bytes(4); nested/multi-arg
+        // constructors: List(Int), List(Int, 8), Option(Int).
+        PRes first = parse_type_arg(s, t2.pos);
         if (first.err != "") {
             return PRes { pos: first.pos, ty: "", err: "bad type parameter" };
         }
-        Tok sep = lex_tok(s, first.pos);
-        if (sep.text == ",") {
-            PRes second = parse_type(s, sep.pos);
-            if (second.err != "") {
-                return PRes { pos: second.pos, ty: "", err: "bad type parameter" };
-            }
-            Tok close = lex_tok(s, second.pos);
-            if (close.text != ")") {
-                return PRes { pos: close.pos, ty: "", err: "expected ) in type" };
-            }
-            Str mty = t.text + "(" + first.ty + ", " + second.ty + ")";
-            return PRes { pos: close.pos, ty: mty, err: "" };
-        }
-        if (sep.text == ")") {
-            Str oty = t.text + "(" + first.ty + ")";
-            return PRes { pos: sep.pos, ty: oty, err: "" };
-        }
-        return PRes { pos: sep.pos, ty: "", err: "expected , or ) in type" };
+        PRes rest = parse_type_args_rest(s, first.pos, first.ty);
+        if (rest.err != "") { return rest; }
+        Str ty = t.text + "(" + rest.ty + ")";
+        return PRes { pos: rest.pos, ty: ty, err: "" };
     }
     return PRes { pos: t.pos, ty: t.text, err: "" };
 }
@@ -718,6 +717,18 @@ Str ll_ty(Str ty) {
         Str pre = if (fi) { "f" } else { "i" };
         Str digits = str_slice(ty, skip, str_len(ty) - 1);
         return pre + digits;
+    }
+    // Fixed-capacity stack types (spec §44): inline arrays, never heap.
+    if (is_str_fixed(ty)) {
+        Int cap1 = fixed_cap(ty) + 1;
+        return "[" + IntToString(cap1) + " x i8]";
+    }
+    if (is_bytes_fixed(ty)) {
+        return "[" + IntToString(fixed_cap(ty)) + " x i8]";
+    }
+    if (is_list_fixed(ty)) {
+        Str inner = ll_ty(fixed_elem(ty));
+        return "[" + IntToString(fixed_cap(ty)) + " x " + inner + "]";
     }
     return "ptr";
 }
@@ -807,10 +818,12 @@ pub Bool is_known_type_cg(Str ty) {
     if (ty == "Dec") { return true; }
     if (ty == "Bool") { return true; }
     if (ty == "Str") { return true; }
+    if (ty == "Bytes") { return true; }
     if (ty == "Option") { return true; }
     Bool w = str_has_prefix_cg(ty, "Int(") || str_has_prefix_cg(ty, "UInt(");
     Bool wf = str_has_prefix_cg(ty, "Float(") || str_has_prefix_cg(ty, "Dec(");
-    return w || wf;
+    if (w || wf) { return true; }
+    return is_fixed_type(ty);
 }
 
 Int skip_decl(Str s, Int pos, Int depth) {
@@ -1173,6 +1186,62 @@ Str set_elem_type_cg(Str t) {
     if (!str_has_prefix_cg(t, head)) { return ""; }
     Int n = str_len(t);
     return str_trim(str_slice(t, h, n - 1));
+}
+
+// Fixed-capacity type predicates (spec §44), identical semantics to
+// typecheck.resid's copies (deduped by tools/merge_driver.py, which keeps
+// this codegen-side copy and drops the checker's when fusing driver.resid).
+// parse_type formats Str(8) -> "Str(8)", Bytes(4) -> "Bytes(4)",
+// List(Int, 8) -> "List(Int, 8)".
+Bool is_str_fixed(Str t) {
+    return str_has_prefix_cg(t, "Str(");
+}
+Bool is_bytes_fixed(Str t) {
+    return str_has_prefix_cg(t, "Bytes(");
+}
+
+// Recursive helper: is substring [i,n) all digits?
+Bool _all_digits(Str t, Int i) {
+    Int n = str_len(t);
+    if (i >= n) { return true; }
+    Int c = str_char_at(t, i);
+    if (c < 48 || c > 57) { return false; }
+    return _all_digits(t, i + 1);
+}
+Bool is_list_fixed(Str t) {
+    if (!str_has_prefix_cg(t, "List(")) { return false; }
+    Int comma = _find_comma_at_depth_cg(t, 5, 0, 0);
+    if (comma < 0) { return false; }
+    Int n = str_len(t);
+    Int rparen = n - 1;
+    if (rparen <= comma) { return false; }
+    Str cap = str_trim(str_slice(t, comma + 1, rparen));
+    return _all_digits(cap, 0);
+}
+Str fixed_elem(Str t) {
+    if (!str_has_prefix_cg(t, "List(")) { return ""; }
+    Int comma = _find_comma_at_depth_cg(t, 5, 0, 0);
+    if (comma < 0) { return ""; }
+    return str_trim(str_slice(t, 5, comma));
+}
+Int fixed_cap(Str t) {
+    Int n = str_len(t);
+    Int rparen = n - 1;
+    if (str_has_prefix_cg(t, "Str(")) {
+        return str_parse_int(str_trim(str_slice(t, 4, rparen)));
+    }
+    if (str_has_prefix_cg(t, "Bytes(")) {
+        return str_parse_int(str_trim(str_slice(t, 6, rparen)));
+    }
+    if (str_has_prefix_cg(t, "List(")) {
+        Int comma = _find_comma_at_depth_cg(t, 5, 0, 0);
+        if (comma < 0) { return 0; }
+        return str_parse_int(str_trim(str_slice(t, comma + 1, rparen)));
+    }
+    return 0;
+}
+Bool is_fixed_type(Str t) {
+    return is_str_fixed(t) || is_bytes_fixed(t) || is_list_fixed(t);
 }
 
 Int op_prec(Str op) {
@@ -2046,6 +2115,96 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     return gt_err("unexpected token " + t.text, c);
 }
 
+// Fixed-capacity casts (spec §44): identity pointer reinterpretation for
+// Str(N)->Str / Bytes(N)->Bytes (the fixed buffer is already a valid
+// NUL-terminated / raw byte pointer for the heap type); a bounded runtime
+// copy into a fresh stack array for anything -> Str(N) / -> Bytes(N).
+// Returns a GT with err == "unsupported fixed cast" (a sentinel, not a
+// real diagnostic) when the pair isn't one of these, so the caller can
+// fall back to the ordinary numeric-conversion cast path.
+GT cg_cast_fixed(GT inner, Str toty, GT c) {
+    Bool src_str_like = inner.ty == "Str" || is_str_fixed(inner.ty) || inner.ty == "Bytes" || is_bytes_fixed(inner.ty);
+    if (toty == "Str" && (is_str_fixed(inner.ty) || is_bytes_fixed(inner.ty))) {
+        return GT { pos: inner.pos, val: inner.val, ty: "Str", cnt: 0, err: "", glines: inner.glines, lines: inner.lines, tmp: inner.tmp, lbl: inner.lbl };
+    }
+    if (toty == "Bytes" && is_bytes_fixed(inner.ty)) {
+        return GT { pos: inner.pos, val: inner.val, ty: "Bytes", cnt: 0, err: "", glines: inner.glines, lines: inner.lines, tmp: inner.tmp, lbl: inner.lbl };
+    }
+    if (is_str_fixed(toty) && src_str_like) {
+        Int cap = fixed_cap(toty) + 1;
+        Int t1 = inner.tmp + 1;
+        Str dst = "%t" + IntToString(t1);
+        List(Str) l0 = inner.lines;
+        List(Str) l1 = l0.concat([dst + " = alloca " + ll_ty(toty)]);
+        Int t2 = t1 + 1;
+        Str rc = "%t" + IntToString(t2);
+        List(Str) l2 = l1.concat([rc + " = call i64 @resid_str_to_fixed(ptr " + dst + ", ptr " + inner.val + ", i64 " + IntToString(cap) + ")"]);
+        return GT { pos: inner.pos, val: dst, ty: toty, cnt: 0, err: "", glines: inner.glines, lines: l2, tmp: t2, lbl: inner.lbl };
+    }
+    if (is_bytes_fixed(toty) && src_str_like) {
+        Int cap = fixed_cap(toty);
+        Int t1 = inner.tmp + 1;
+        Str dst = "%t" + IntToString(t1);
+        List(Str) l0 = inner.lines;
+        List(Str) l1 = l0.concat([dst + " = alloca " + ll_ty(toty)]);
+        Int t2 = t1 + 1;
+        Str rc = "%t" + IntToString(t2);
+        List(Str) l2 = l1.concat([rc + " = call i64 @resid_bytes_to_fixed(ptr " + dst + ", ptr " + inner.val + ", i64 " + IntToString(cap) + ")"]);
+        return GT { pos: inner.pos, val: dst, ty: toty, cnt: 0, err: "", glines: inner.glines, lines: l2, tmp: t2, lbl: inner.lbl };
+    }
+    // List(T, N) -> List(T): dense-box every inline slot into a heap list.
+    Bool to_heap_list = str_has_prefix_cg(toty, "List(") && !is_list_fixed(toty);
+    if (to_heap_list && is_list_fixed(inner.ty)) {
+        Str ety = fixed_elem(inner.ty);
+        Str toety = elem_type(toty);
+        if (ety == toety) {
+            return cg_box_fixed_list(inner, ety, fixed_cap(inner.ty), c);
+        }
+    }
+    return GT { pos: inner.pos, val: inner.val, ty: inner.ty, cnt: inner.cnt, err: "unsupported fixed cast", glines: inner.glines, lines: inner.lines, tmp: inner.tmp, lbl: inner.lbl };
+}
+
+// Load element `i` out of a List(T, N) inline array (`base`, LLVM array
+// type `arrty`) and box it into slot `i` of the `[n x ptr]` staging array
+// `sla`, mirroring lst_stores' literal-element boxing. Recursive over the
+// index — no reassignment.
+List(Str) fxbox_stores(Str arrty, Str base, Str ety, Str sla, Int i, Int n, Int tbase, List(Str) acc) {
+    if (i >= n) { return acc; }
+    Str slot = "%t" + IntToString(tbase);
+    Str elemv = "%t" + IntToString(tbase + 1);
+    List(Str) a0 = acc.concat([slot + " = getelementptr inbounds " + arrty + ", ptr " + base + ", i64 0, i64 " + IntToString(i)]);
+    List(Str) a1 = a0.concat([elemv + " = load " + ll_ty(ety) + ", ptr " + slot]);
+    Str bx = lst_box_reg(ety, elemv, tbase + 2);
+    List(Str) a2 = a1.concat(lst_box_lines(ety, elemv, tbase + 2));
+    Str dstslot = "%t" + IntToString(tbase + 4);
+    List(Str) a3 = a2.concat([dstslot + " = getelementptr i8, ptr " + sla + ", i64 " + IntToString(i * 8)]);
+    List(Str) a4 = a3.concat(["store ptr " + bx + ", ptr " + dstslot]);
+    return fxbox_stores(arrty, base, ety, sla, i + 1, n, tbase + 5, a4);
+}
+
+// List(T, N) -> List(T): dense-box every inline slot into a fresh heap
+// list, using the same [n x ptr] staging + resid_list_new pattern as an
+// ordinary list literal (lst_emit).
+GT cg_box_fixed_list(GT inner, Str ety, Int n, GT c) {
+    Str arrty = ll_ty("List(" + ety + ", " + IntToString(n) + ")");
+    Int t1 = inner.tmp + 1;
+    Str sla = "%t" + IntToString(t1);
+    List(Str) l0 = inner.lines;
+    List(Str) l1 = l0.concat([sla + " = alloca [" + IntToString(n) + " x ptr]"]);
+    Str body = esc_ll("List(" + ety + ")", 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int n1 = bl + 1;
+    Str tsym = "@.ltyBc" + IntToString(t1);
+    List(Str) g0 = inner.glines;
+    List(Str) g1 = g0.concat([tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\""]);
+    Int tb0 = t1 + 1;
+    List(Str) l2 = fxbox_stores(arrty, inner.val, ety, sla, 0, n, tb0, l1);
+    Int outt = tb0 + n * 5;
+    Str reg = "%t" + IntToString(outt);
+    List(Str) l3 = l2.concat([reg + " = call ptr @resid_list_new(i64 " + IntToString(n) + ", ptr " + sla + ", ptr " + tsym + ")"]);
+    return GT { pos: inner.pos, val: reg, ty: "List(" + ety + ")", cnt: 0, err: "", glines: g1, lines: l3, tmp: outt, lbl: inner.lbl };
+}
+
 GT cg_unary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     Tok t0 = lex_tok(s, pos);
     if (t0.text == "(") {
@@ -2058,6 +2217,11 @@ GT cg_unary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 if (is_known_type_cg(pt.ty)) {
                     GT inner = cg_unary(s, close.pos, env, fs, c);
                     if (inner.err != "") { return inner; }
+                    Bool fixed_pair = is_fixed_type(pt.ty) || is_fixed_type(inner.ty);
+                    if (fixed_pair) {
+                        GT fx = cg_cast_fixed(inner, pt.ty, c);
+                        if (fx.err != "unsupported fixed cast") { return fx; }
+                    }
                     Str fromty = ll_ty(inner.ty);
                     GT conv = cg_convert(inner, fromty, ll_ty(pt.ty), ll_is_signed(inner.ty), c);
                     GT out = GT { pos: conv.pos, val: conv.val, ty: pt.ty, cnt: 0, err: "", glines: conv.glines, lines: conv.lines, tmp: conv.tmp, lbl: conv.lbl };
@@ -2166,8 +2330,71 @@ List(Str) lst_read_lines(Str ety, Str slot, Int tr, List(Str) acc) {
         return acc.concat([raw + " = call i64 @resid_unbox_i64(ptr " + slot + ")", r + " = trunc i64 " + raw + " to " + ll_ty(ety)]);
     }
     return acc;
-}GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
+}// `Str(N)/Bytes(N)/List(T,N)[i]` — bounds-checked read straight out of the
+// inline array (spec §44). The index is compared against the compile-time
+// capacity N; out-of-range aborts via resid_index_abort, matching the Rust
+// pipeline's fixed_capacity_guard.
+GT cg_index_fixed(Str s, Int pos, GT base, List(Str) env, Funcs fs) {
+    Int cap = fixed_cap(base.ty);
+    GT ix = cg_expr(s, pos, env, fs, base);
+    if (ix.err != "") { return ix; }
+    Tok close = lex_tok(s, ix.pos);
+    if (close.text != "]") { return gt_err("expected ] in index", ix); }
+    GT ixx = pick_widen(num_norm_cg(ix.ty) != "Int(64)", ix, "Int(64)");
+    Int l1 = ixx.lbl + 1;
+    Int l2 = ixx.lbl + 2;
+    Str okl = "L" + IntToString(l1);
+    Str oobl = "L" + IntToString(l2);
+    Int t1 = ixx.tmp + 1;
+    Str cmp = "%t" + IntToString(t1);
+    List(Str) l0 = ixx.lines;
+    List(Str) la = l0.concat([cmp + " = icmp ult i64 " + ixx.val + ", " + IntToString(cap)]);
+    List(Str) lb = la.concat(["br i1 " + cmp + ", label %" + okl + ", label %" + oobl]);
+    List(Str) lc = lb.concat([oobl + ":"]);
+    List(Str) ld = lc.concat(["call void @resid_index_abort(i64 " + ixx.val + ", i64 " + IntToString(cap) + ", ptr @.fixedidx)"]);
+    List(Str) le = ld.concat(["unreachable"]);
+    List(Str) lf = le.concat([okl + ":"]);
+    Int tn = t1 + 1;
+    if (is_str_fixed(base.ty)) {
+        Str r = "%t" + IntToString(tn);
+        List(Str) lg = lf.concat([r + " = call i64 @str_char_at(ptr " + base.val + ", i64 " + ixx.val + ")"]);
+        return GT { pos: close.pos, val: r, ty: "Int", cnt: 0, err: "", glines: ixx.glines, lines: lg, tmp: tn, lbl: l2 };
+    }
+    if (is_bytes_fixed(base.ty)) {
+        Str gp = "%t" + IntToString(tn);
+        Str lda = "%t" + IntToString(tn + 1);
+        Str z = "%t" + IntToString(tn + 2);
+        List(Str) lg = lf.concat([gp + " = getelementptr inbounds i8, ptr " + base.val + ", i64 " + ixx.val]);
+        List(Str) lh = lg.concat([lda + " = load i8, ptr " + gp]);
+        List(Str) li = lh.concat([z + " = zext i8 " + lda + " to i64"]);
+        return GT { pos: close.pos, val: z, ty: "Int", cnt: 0, err: "", glines: ixx.glines, lines: li, tmp: tn + 2, lbl: l2 };
+    }
+    // List(T, N)
+    Str ety = fixed_elem(base.ty);
+    Str arrty = ll_ty(base.ty);
+    Str gp = "%t" + IntToString(tn);
+    Str lda = "%t" + IntToString(tn + 1);
+    List(Str) lg = lf.concat([gp + " = getelementptr inbounds " + arrty + ", ptr " + base.val + ", i64 0, i64 " + ixx.val]);
+    List(Str) lh = lg.concat([lda + " = load " + ll_ty(ety) + ", ptr " + gp]);
+    return GT { pos: close.pos, val: lda, ty: ety, cnt: 0, err: "", glines: ixx.glines, lines: lh, tmp: tn + 1, lbl: l2 };
+}
+
+GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
     Tok t = lex_tok(s, base.pos);
+    if (is_list_fixed(base.ty) && t.text == ".") {
+        Tok fld = lex_tok(s, t.pos);
+        Tok lp = lex_tok(s, fld.pos);
+        if (fld.text == "len" && lp.text == "(") {
+            Tok rp = lex_tok(s, lp.pos);
+            GT b2 = GT { pos: rp.pos, val: IntToString(fixed_cap(base.ty)), ty: "Int", cnt: 0, err: "", glines: base.glines, lines: base.lines, tmp: base.tmp, lbl: base.lbl };
+            return cg_postfix(s, b2, env, fs);
+        }
+    }
+    if (is_fixed_type(base.ty) && t.text == "[") {
+        GT r = cg_index_fixed(s, t.pos, base, env, fs);
+        if (r.err != "") { return r; }
+        return cg_postfix(s, r, env, fs);
+    }
     if (t.text == ".") {
         Tok fld = lex_tok(s, t.pos);
         Tok lp = lex_tok(s, fld.pos);
@@ -3507,10 +3734,136 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     return ST { pos: semi.pos, dead: g.dead, err: "", env: env, glines: v.glines, hlines: g.hlines, lines: v.lines, tmp: v.tmp, lbl: v.lbl, rety: g.rety };
 }
 
+// Zero-padded, NUL-terminated `[cap x i8]` constant text for a Str(N)
+// literal: `cap` = N + 1, `body` is the already-escaped literal content
+// (esc_ll), `bl` its encoded byte length. The remaining `cap - bl` bytes
+// (always >= 1 — the checker already rejected longer literals) are NUL,
+// providing both the terminator and any extra padding.
+Str fixed_str_const(Str body, Int bl, Int cap) {
+    Int pad = cap - bl;
+    return "[" + IntToString(cap) + " x i8] c\"" + body + zeros_ll(pad) + "\"";
+}
+
+// `count` repetitions of the LLVM "\00" escape.
+Str zeros_ll(Int count) {
+    if (count <= 0) { return ""; }
+    return "\\00" + zeros_ll(count - 1);
+}
+
+// `Str(N) name = "literal"|r"literal";` — alloca `[N+1 x i8]` and store the
+// literal directly as a constant array (mirrors store_fixed_str's
+// compile-time-literal fast path; the checker already verified the
+// literal's length fits the capacity).
+ST sg_bind_fixed_str(Str s, Int pos, Str name, Str dtyb, List(Str) env, ST g) {
+    Tok lit = lex_tok(s, pos);
+    Int qskip = if (lit.kind == "raw") { 2 } else { 1 };
+    Int tl = str_len_1(lit.text);
+    Str inner = str_slice(lit.text, qskip, tl - 1);
+    Str body = esc_ll(inner, 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int cap = fixed_cap(dtyb) + 1;
+    Int t1 = g.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    List(Str) l0 = g.lines;
+    List(Str) l1 = l0.concat([reg + " = alloca " + ll_ty(dtyb)]);
+    List(Str) l2 = l1.concat(["store " + fixed_str_const(body, bl, cap) + ", ptr " + reg]);
+    Str ent = name + ":" + reg + ":" + dtyb;
+    List(Str) env2 = env_add(env, ent);
+    Tok semi = lex_tok(s, lit.pos);
+    Int bpos = if (semi.text == ";") { semi.pos } else { lit.pos };
+    return ST { pos: bpos, dead: g.dead, err: "", env: env2, glines: g.glines, hlines: g.hlines, lines: l2, tmp: t1, lbl: g.lbl, rety: g.rety };
+}
+
+// `Bytes(N) name = b"literal";` — alloca `[N x i8]` and store the literal
+// bytes directly (no implicit terminator: Bytes(N) is exactly N raw
+// bytes). Unfilled trailing bytes (literal shorter than N) are NUL.
+ST sg_bind_fixed_bytes(Str s, Int pos, Str name, Str dtyb, List(Str) env, ST g) {
+    Tok lit = lex_tok(s, pos);
+    Int tl = str_len_1(lit.text);
+    Str inner = str_slice(lit.text, 2, tl - 1);
+    Str body = esc_ll(inner, 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int cap = fixed_cap(dtyb);
+    Int t1 = g.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    List(Str) l0 = g.lines;
+    List(Str) l1 = l0.concat([reg + " = alloca " + ll_ty(dtyb)]);
+    List(Str) l2 = l1.concat(["store [" + IntToString(cap) + " x i8] c\"" + body + zeros_ll(cap - bl) + "\", ptr " + reg]);
+    Str ent = name + ":" + reg + ":" + dtyb;
+    List(Str) env2 = env_add(env, ent);
+    Tok semi = lex_tok(s, lit.pos);
+    Int bpos = if (semi.text == ";") { semi.pos } else { lit.pos };
+    return ST { pos: bpos, dead: g.dead, err: "", env: env2, glines: g.glines, hlines: g.hlines, lines: l2, tmp: t1, lbl: g.lbl, rety: g.rety };
+}
+
+// Store expression `e`'s value into slot `i` of a `List(T, N)` inline
+// array `base` (LLVM array type `arrty`), then continue with the next
+// element. Recursive over the source tokens — no reassignment. Mirrors
+// store_fixed_list: a fixed list literal may hold fewer elements than
+// its capacity N (trailing slots are left as-is, matching the Rust
+// pipeline's own scope for this construct).
+ST sg_bind_fixed_list_elems(Str s, Int pos, Str arrty, Str ety, Str base, Int i, Int cap, List(Str) env, Funcs fs, ST g) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "]") {
+        return ST { pos: t.pos, dead: g.dead, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl, rety: g.rety };
+    }
+    if (i >= cap) { return st_err("list literal exceeds List(" + ety + ", " + IntToString(cap) + ") capacity", g); }
+    GT v = cg_expr(s, pos, env, fs, gt_of_st(g));
+    if (v.err != "") { return st_err(v.err, g); }
+    GT vw = pick_widen(int_fam(ety) && int_fam(v.ty), v, num_norm_cg(ety));
+    Int t1 = vw.tmp + 1;
+    Str slot = "%t" + IntToString(t1);
+    List(Str) l0 = vw.lines;
+    List(Str) l1 = l0.concat([slot + " = getelementptr inbounds " + arrty + ", ptr " + base + ", i64 0, i64 " + IntToString(i)]);
+    List(Str) l2 = l1.concat(["store " + ll_ty(ety) + " " + vw.val + ", ptr " + slot]);
+    ST g2 = ST { pos: v.pos, dead: g.dead, err: "", env: env, glines: vw.glines, hlines: g.hlines, lines: l2, tmp: t1, lbl: vw.lbl, rety: g.rety };
+    Tok sep = lex_tok(s, v.pos);
+    if (sep.text == ",") {
+        Tok nx = lex_tok(s, sep.pos);
+        if (nx.text == "]") {
+            return ST { pos: nx.pos, dead: g.dead, err: "", env: env, glines: g2.glines, hlines: g.hlines, lines: g2.lines, tmp: g2.tmp, lbl: g2.lbl, rety: g.rety };
+        }
+        return sg_bind_fixed_list_elems(s, sep.pos, arrty, ety, base, i + 1, cap, env, fs, g2);
+    }
+    if (sep.text == "]") {
+        return ST { pos: sep.pos, dead: g.dead, err: "", env: env, glines: g2.glines, hlines: g.hlines, lines: g2.lines, tmp: g2.tmp, lbl: g2.lbl, rety: g.rety };
+    }
+    return st_err("expected , or ] in list literal", g);
+}
+
+// `List(T, N) name = [a, b, ...];` — alloca `[N x T]` and store each
+// element inline (scalars by value, strings/composites as pointers).
+ST sg_bind_fixed_list(Str s, Int pos, Str name, Str dtyb, List(Str) env, Funcs fs, ST g) {
+    Str ety = fixed_elem(dtyb);
+    Int cap = fixed_cap(dtyb);
+    Str arrty = ll_ty(dtyb);
+    Int t1 = g.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    List(Str) l0 = g.lines;
+    List(Str) l1 = l0.concat([reg + " = alloca " + arrty]);
+    ST seeded = ST { pos: pos, dead: g.dead, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: l1, tmp: t1, lbl: g.lbl, rety: g.rety };
+    ST filled = sg_bind_fixed_list_elems(s, pos, arrty, ety, reg, 0, cap, env, fs, seeded);
+    if (filled.err != "") { return filled; }
+    Str ent = name + ":" + reg + ":" + dtyb;
+    List(Str) env2 = env_add(env, ent);
+    Tok semi = lex_tok(s, filled.pos);
+    Int bpos = if (semi.text == ";") { semi.pos } else { filled.pos };
+    return ST { pos: bpos, dead: g.dead, err: "", env: env2, glines: filled.glines, hlines: g.hlines, lines: filled.lines, tmp: filled.tmp, lbl: filled.lbl, rety: g.rety };
+}
+
 ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
     Str dtyb = ct_base_of(fs.ctn, fs.ctb, dty);
     Tok b1 = lex_tok(s, pos);
     Tok b2 = lex_tok(s, b1.pos);
+    if (is_str_fixed(dtyb) && (b1.kind == "str" || b1.kind == "raw")) {
+        return sg_bind_fixed_str(s, pos, name, dtyb, env, g);
+    }
+    if (is_bytes_fixed(dtyb) && b1.kind == "bytes") {
+        return sg_bind_fixed_bytes(s, pos, name, dtyb, env, g);
+    }
+    if (is_list_fixed(dtyb) && b1.text == "[") {
+        return sg_bind_fixed_list(s, b1.pos, name, dtyb, env, fs, g);
+    }
     if (b1.text == "[" && b2.text == "]") {
         Int t1 = g.tmp + 1;
         Str reg = "%t" + IntToString(t1);
@@ -4056,7 +4409,7 @@ Int main() {
     Str file = pick_out(last, "out.ll");
     Str src = filesystem.read_all(path);
     Funcs fs = collect_sigs(src);
-        List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)" 
+        List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\""
                 "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
     List(Str) header = header_with_cmps(hdr_core, fs);
     PG g0 = PG { pos: 0, err: "", glines: [], hlines: [], lines: header, tmp: 0, lbl: 0 };
