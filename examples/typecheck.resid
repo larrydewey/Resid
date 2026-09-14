@@ -937,6 +937,31 @@ Str collect_field_str(Str s, Int pos) {
 
 type PRes = { pos: Int, ty: Str, err: Str };
 
+// A single type-parameter: an integer literal (Int(64), Str(8), List(Int, 8)'s
+// capacity) or a nested type (List(Str), Option(Int)).
+PRes parse_type_arg(Str s, Int pos) {
+    Tok in1 = lex_tok(s, pos);
+    if (in1.kind == "int") {
+        return PRes { pos: in1.pos, ty: in1.text, err: "" };
+    }
+    return parse_type(s, pos);
+}
+
+// Comma-separated tail of a type's parameter list, e.g. the ", 8" in
+// List(Int, 8). Recursive — no reassignment.
+PRes parse_type_args_rest(Str s, Int pos, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") {
+        return PRes { pos: t.pos, ty: acc, err: "" };
+    }
+    if (t.text == ",") {
+        PRes arg = parse_type_arg(s, t.pos);
+        if (arg.err != "") { return arg; }
+        return parse_type_args_rest(s, arg.pos, acc + ", " + arg.ty);
+    }
+    return PRes { pos: t.pos, ty: "", err: "expected , or ) in type" };
+}
+
 PRes parse_type(Str s, Int pos) {
     Tok t = lex_tok(s, pos);
     if (t.kind != "ident") {
@@ -945,23 +970,16 @@ PRes parse_type(Str s, Int pos) {
     Tok t2 = lex_tok(s, t.pos);
     if (t2.text == "(") {
         // Width-parameterized numerics: Int(64), UInt(8), Float(128),
-        // Dec(34) — the parenthesized part is an integer literal, not
-        // a nested type. Nested type constructors recurse as before.
-        Tok in1 = lex_tok(s, t2.pos);
-        Bool isnum = in1.kind == "int";
-        PRes inner = parse_type(s, t2.pos);
-        Int after_in = if (isnum) { in1.pos } else { inner.pos };
-        Str inner_ty = if (isnum) { in1.text } else { inner.ty };
-        Bool ok = if (isnum) { true } else { inner.err == "" };
-        if (!ok) {
-            return PRes { pos: after_in, ty: "", err: "bad type parameter" };
+        // Dec(34); fixed-capacity Str(8), Bytes(4); nested/multi-arg
+        // constructors: List(Int), List(Int, 8), Option(Int).
+        PRes first = parse_type_arg(s, t2.pos);
+        if (first.err != "") {
+            return PRes { pos: first.pos, ty: "", err: "bad type parameter" };
         }
-        Tok close = lex_tok(s, after_in);
-        if (close.text != ")") {
-            return PRes { pos: close.pos, ty: "", err: "expected ) in type" };
-        }
-        Str ty = t.text + "(" + inner_ty + ")";
-        return PRes { pos: close.pos, ty: ty, err: "" };
+        PRes rest = parse_type_args_rest(s, first.pos, first.ty);
+        if (rest.err != "") { return rest; }
+        Str ty = t.text + "(" + rest.ty + ")";
+        return PRes { pos: rest.pos, ty: ty, err: "" };
     }
     return PRes { pos: t.pos, ty: t.text, err: "" };
 }
@@ -1280,21 +1298,54 @@ Bool is_map_type(Str t) {
     return str_has_prefix(t, "Map(");
 }
 
-// Fixed-capacity type predicates (minimal, no while loops).
+// Fixed-capacity type predicates (recursive, no while loops).
+// Fixed-capacity predicates. typecheck.resid's own parse_type formats
+// Str(8) -> "Str(8)", Bytes(4) -> "Bytes(4)", List(Int, 8) -> "List(Int, 8)".
 Bool is_str_fixed(Str t) { return str_has_prefix(t, "Str("); }
 Bool is_bytes_fixed(Str t) { return str_has_prefix(t, "Bytes("); }
+
+// Recursive helper: is substring [i,n) all digits?
+Bool _all_digits(Str t, Int i) {
+    Int n = str_len(t);
+    if (i >= n) { return true; }
+    Int c = str_char_at(t, i);
+    if (c < 48 || c > 57) { return false; }
+    return _all_digits(t, i + 1);
+}
 Bool is_list_fixed(Str t) {
     if (!str_has_prefix(t, "List(")) { return false; }
     Int comma = _find_comma_at_depth(t, 5, 0, 0);
     if (comma < 0) { return false; }
-    // Simplified: assume valid integer literal for signature parsing
-    return true;
+    Int sp = _skip_ws(t, comma + 1);
+    Int n = str_len(t);
+    // closing ')' is always the last char
+    Int rparen = n - 1;
+    if (rparen <= sp) { return false; }
+    Str cap = str_trim(str_slice(t, sp, rparen));
+    return _all_digits(cap, 0);
 }
 Str fixed_elem(Str t) {
     if (!str_has_prefix(t, "List(")) { return ""; }
     Int comma = _find_comma_at_depth(t, 5, 0, 0);
     if (comma < 0) { return ""; }
     return str_trim(str_slice(t, 5, comma));
+}
+Int fixed_cap(Str t) {
+    Int n = str_len(t);
+    Int rparen = n - 1;  // trailing ')'
+    if (str_has_prefix(t, "Str(")) {
+        return str_parse_int(str_trim(str_slice(t, 4, rparen)));
+    }
+    if (str_has_prefix(t, "Bytes(")) {
+        return str_parse_int(str_trim(str_slice(t, 6, rparen)));
+    }
+    if (str_has_prefix(t, "List(")) {
+        Int comma = _find_comma_at_depth(t, 5, 0, 0);
+        if (comma < 0) { return 0; }
+        Int sp = _skip_ws(t, comma + 1);
+        return str_parse_int(str_trim(str_slice(t, sp, rparen)));
+    }
+    return 0;
 }
 Bool is_fixed_type(Str t) {
     return is_str_fixed(t) || is_bytes_fixed(t) || is_list_fixed(t);
@@ -1392,18 +1443,28 @@ pub Str canon64(Str tys) {
     return canon64_acc(tys, 0, "");
 }
 
+// A fixed-capacity string/bytes value is accepted wherever the plain heap
+// Str/Bytes is declared: the runtime passes a NUL-terminated view of the
+// inline buffer, no copy or heap allocation (mirrors the Rust pipeline).
+Bool arg_matches(Str got, Str want) {
+    if (got == want) { return true; }
+    if (is_str_fixed(got) && want == "Str") { return true; }
+    if (is_bytes_fixed(got) && want == "Bytes") { return true; }
+    return false;
+}
+
 ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) pt_list) {
     Str argtys = canon64(rawtys);
     if (name == "println") {
         if (argc == 1) {
-            if (argtys == "Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+            if (arg_matches(argtys, "Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
             return ERes { pos: pos, ty: "", err: "println expects Str, got " + argtys };
         }
         return ERes { pos: pos, ty: "", err: "println expects 1 argument" };
     }
     if (name == "print") {
         if (argc == 1) {
-            if (argtys == "Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+            if (arg_matches(argtys, "Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
             return ERes { pos: pos, ty: "", err: "print expects Str, got " + argtys };
         }
         return ERes { pos: pos, ty: "", err: "print expects 1 argument" };
@@ -1442,7 +1503,7 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     }
     if (name == "str_len") {
         if (argc == 1) {
-            if (argtys == "Str") { return ERes { pos: pos, ty: "Int", err: "" }; }
+            if (arg_matches(argtys, "Str")) { return ERes { pos: pos, ty: "Int", err: "" }; }
             return ERes { pos: pos, ty: "", err: "str_len expects Str, got " + argtys };
         }
         return ERes { pos: pos, ty: "", err: "str_len expects 1 argument" };
@@ -1864,34 +1925,55 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Funcs fs) {
     return finish_call(s, a.pos, name, a.tys, a.count, env, fs);
 }
 
-ERes check_list_lit_rest(Str s, Int pos, Str elem, List(Str) env, Funcs fs) {
-    ERes e = check_expr(s, pos, env, fs);
+// elem: element type seen so far ("" until first element). count: elements
+// seen so far. exp: expected type from the binding context — when it is a
+// fixed-capacity List(T, N), a literal with <= N elements adopts it and an
+// oversized literal is a compile-time error.
+ERes check_list_lit_rest(Str s, Int pos, Str elem, Int count, List(Str) env, Funcs fs, Str exp) {
+    // Only a fixed-capacity List(T, N) binding context should adopt its
+    // declared element type into each literal element; a plain heap List
+    // infers its element type from the elements alone (no context), same
+    // as before fixed-capacity support existed.
+    Str want_elem = if (is_list_fixed(exp)) { fixed_elem(exp) } else { "" };
+    ERes e = check_expr_e(s, pos, env, fs, want_elem);
     if (e.err != "") { return e; }
     Str elem2 = if (elem == "") { e.ty } else { elem };
     if (elem != "" && elem != e.ty) {
         Str msg = "list element type mismatch: " + elem + " vs " + e.ty;
         return ERes { pos: e.pos, ty: "", err: msg };
     }
+    Int count2 = count + 1;
     Tok t = lex_tok(s, e.pos);
     if (t.text == ",") {
         // Trailing comma before the closing bracket is allowed.
         Tok nx = lex_tok(s, t.pos);
         if (nx.text == "]") {
-            Str ty3 = "List(" + elem2 + ")";
-            return ERes { pos: nx.pos, ty: ty3, err: "" };
+            return finish_list_lit(nx.pos, elem2, count2, exp);
         }
-        return check_list_lit_rest(s, t.pos, elem2, env, fs);
+        return check_list_lit_rest(s, t.pos, elem2, count2, env, fs, exp);
     }
-    Str ty = "List(" + elem2 + ")";
-    return ERes { pos: t.pos, ty: ty, err: "" };
+    return finish_list_lit(t.pos, elem2, count2, exp);
 }
 
-ERes check_list_lit(Str s, Int pos, List(Str) env, Funcs fs) {
+ERes finish_list_lit(Int pos, Str elem, Int count, Str exp) {
+    if (is_list_fixed(exp) && num_norm(fixed_elem(exp)) == num_norm(elem)) {
+        Int cap = fixed_cap(exp);
+        if (count > cap) {
+            Str msg = "list literal has " + IntToString(count) + " elements, exceeds List(" + elem + ", " + IntToString(cap) + ") capacity";
+            return ERes { pos: pos, ty: "", err: msg };
+        }
+        return ERes { pos: pos, ty: exp, err: "" };
+    }
+    return ERes { pos: pos, ty: "List(" + elem + ")", err: "" };
+}
+
+ERes check_list_lit(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
     Tok t = lex_tok(s, pos);
     if (t.text == "]") {
+        if (is_list_fixed(exp)) { return ERes { pos: t.pos, ty: exp, err: "" }; }
         return ERes { pos: t.pos, ty: "List(Unknown)", err: "" };
     }
-    return check_list_lit_rest(s, pos, "", env, fs);
+    return check_list_lit_rest(s, pos, "", 0, env, fs, exp);
 }
 
 // Check if a comma-separated expression list is a map (contains ':') or set.
@@ -1990,6 +2072,24 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
         ERes idx = check_expr(s, t.pos, env, fs);
         if (idx.err != "") { return idx; }
         Tok close = lex_tok(s, idx.pos);
+        // Fixed-capacity string/bytes: s[i] -> Int (codepoint/byte).
+        if (is_str_fixed(base.ty) || is_bytes_fixed(base.ty)) {
+            if (!is_int_ty(idx.ty)) {
+                Str msg = "fixed string/bytes index must be numeric, found " + idx.ty;
+                return ERes { pos: close.pos, ty: "", err: msg };
+            }
+            ERes out = ERes { pos: close.pos, ty: "Int", err: "" };
+            return check_postfix(s, out, env, fs);
+        }
+        // Fixed-capacity list: xs[i] -> T.
+        if (is_list_fixed(base.ty)) {
+            if (!is_int_ty(idx.ty)) {
+                Str msg = "fixed list index must be numeric, found " + idx.ty;
+                return ERes { pos: close.pos, ty: "", err: msg };
+            }
+            ERes out = ERes { pos: close.pos, ty: fixed_elem(base.ty), err: "" };
+            return check_postfix(s, out, env, fs);
+        }
         if (is_list_type(base.ty)) {
             Str elem = inner_of(base.ty);
             ERes out = ERes { pos: close.pos, ty: elem, err: "" };
@@ -2226,6 +2326,48 @@ pub Str lit_int_ty(Str text) {
     return "Int(" + IntToString(w2) + ")";
 }
 
+// Literal length helpers for fixed-capacity adoption.
+Int str_literal_chars(Str text) {
+    Str inner = str_slice(text, 1, str_len(text) - 1);
+    return _count_chars(inner, 0, 0);
+}
+Int _count_chars(Str inner, Int i, Int count) {
+    Int n = str_len(inner);
+    if (i >= n) { return count; }
+    Int c = str_char_at(inner, i);
+    if (c == 92) { return _count_chars(inner, i + 2, count + 1); }
+    return _count_chars(inner, i + 1, count + 1);
+}
+Int bytes_literal_len(Str text) {
+    Str inner = str_slice(text, 2, str_len(text) - 1);
+    return _count_bytes(inner, 0, 0);
+}
+Int _count_bytes(Str inner, Int i, Int count) {
+    Int n = str_len(inner);
+    if (i >= n) { return count; }
+    Int c = str_char_at(inner, i);
+    if (c == 92) { return _count_bytes(inner, i + 2, count + 1); }
+    return _count_bytes(inner, i + 1, count + 1);
+}
+Int list_literal_elems(Str text) {
+    Str inner = str_slice(text, 1, str_len(text) - 1);
+    if (str_trim(inner) == "") { return 0; }
+    return _count_elems(inner, 0, 0, 1);
+}
+Int _count_elems(Str inner, Int i, Int depth, Int count) {
+    Int n = str_len(inner);
+    if (i >= n) { return count; }
+    Int c = str_char_at(inner, i);
+    Int depth_up = depth + 1;
+    Int depth_down = depth - 1;
+    Int new_depth = if (c == 91 || c == 123) { depth_up } else {
+        if (c == 93 || c == 125) { depth_down } else { depth }
+    };
+    Int count2 = count + 1;
+    Int new_count = if (c == 44 && depth == 0) { count2 } else { count };
+    return _count_elems(inner, i + 1, new_depth, new_count);
+}
+
 ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "int") {
@@ -2243,9 +2385,23 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         return ERes { pos: t.pos, ty: "Float", err: "" };
     }
     if (t.kind == "str") {
+        if (is_str_fixed(exp)) {
+            Int cap = fixed_cap(exp);
+            Int len = str_literal_chars(t.text);
+            if (len <= cap) { return ERes { pos: t.pos, ty: exp, err: "" }; }
+            Str msg = "string literal length " + IntToString(len) + " exceeds Str(" + IntToString(cap) + ") capacity";
+            return ERes { pos: t.pos, ty: "", err: msg };
+        }
         return ERes { pos: t.pos, ty: "Str", err: "" };
     }
     if (t.kind == "raw") {
+        if (is_str_fixed(exp)) {
+            Int cap = fixed_cap(exp);
+            Int len = str_literal_chars(t.text);
+            if (len <= cap) { return ERes { pos: t.pos, ty: exp, err: "" }; }
+            Str msg = "raw string length " + IntToString(len) + " exceeds Str(" + IntToString(cap) + ") capacity";
+            return ERes { pos: t.pos, ty: "", err: msg };
+        }
         return ERes { pos: t.pos, ty: "Str", err: "" };
     }
     if (t.kind == "fstring") {
@@ -2253,6 +2409,16 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
     }
     if (t.kind == "char") {
         return ERes { pos: t.pos, ty: "Str", err: "" };
+    }
+    if (t.kind == "bytes") {
+        if (is_bytes_fixed(exp)) {
+            Int cap = fixed_cap(exp);
+            Int len = bytes_literal_len(t.text);
+            if (len <= cap) { return ERes { pos: t.pos, ty: exp, err: "" }; }
+            Str msg = "byte string length " + IntToString(len) + " exceeds Bytes(" + IntToString(cap) + ") capacity";
+            return ERes { pos: t.pos, ty: "", err: msg };
+        }
+        return ERes { pos: t.pos, ty: "Bytes", err: "" };
     }
     if (t.text == "true") {
         return ERes { pos: t.pos, ty: "Bool", err: "" };
@@ -2366,7 +2532,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         return ERes { pos: close.pos, ty: e.ty, err: "" };
     }
     if (t.text == "[") {
-        return check_list_lit(s, t.pos, env, fs);
+        return check_list_lit(s, t.pos, env, fs, exp);
     }
     if (t.text == "{") {
         return check_map_or_set_lit(s, t.pos, env, fs);
