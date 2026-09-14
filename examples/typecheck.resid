@@ -1280,6 +1280,26 @@ Bool is_map_type(Str t) {
     return str_has_prefix(t, "Map(");
 }
 
+// Fixed-capacity type predicates (minimal, no while loops).
+Bool is_str_fixed(Str t) { return str_has_prefix(t, "Str("); }
+Bool is_bytes_fixed(Str t) { return str_has_prefix(t, "Bytes("); }
+Bool is_list_fixed(Str t) {
+    if (!str_has_prefix(t, "List(")) { return false; }
+    Int comma = _find_comma_at_depth(t, 5, 0, 0);
+    if (comma < 0) { return false; }
+    // Simplified: assume valid integer literal for signature parsing
+    return true;
+}
+Str fixed_elem(Str t) {
+    if (!str_has_prefix(t, "List(")) { return ""; }
+    Int comma = _find_comma_at_depth(t, 5, 0, 0);
+    if (comma < 0) { return ""; }
+    return str_trim(str_slice(t, 5, comma));
+}
+Bool is_fixed_type(Str t) {
+    return is_str_fixed(t) || is_bytes_fixed(t) || is_list_fixed(t);
+}
+
 // Recursive helper to find comma at given depth
 Int _find_comma_at_depth(Str t, Int i, Int target_depth, Int current_depth) {
     Int n = str_len(t);

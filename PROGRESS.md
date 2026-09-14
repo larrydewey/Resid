@@ -350,8 +350,9 @@ Remaining conformance gaps are minimal:
   `resid-fmt` and `resid-lsp` type printers cover the new forms.
   e2e `run_fixed_size_stack_types`, `run_fixed_size_index_oob_aborts`;
   7 new `resid-type` tests. Stage-1 complete (both intermediate paths);
-  stage-2 driver parity + `.len()`/method calls + non-literal `ListFixed`
-  binding remain.
+  stage-2 driver parity blocked on bootstrap parser body parsing (no assignment
+  statements in while loops); minimal type predicates added for signature
+  parsing; full implementation in Rust pipeline only.
 - **`Str` rope-backed representation (§2 string building, roadmap item 2)**: 
   concatenation-by-accumulator (the `acc + piece` / `acc + str_from_code(c)` 
   loop pattern) is now amortized O(1) per append via a chunked concat-rope in 
@@ -463,6 +464,12 @@ parity remains for the stage-1-only features.
 **Unblocking requires a parser bootstrap milestone:** enhance `parser.resid`
 to parse sandbox bodies (or at least record ceilings per-function) using
 only syntax the current parser supports. This is a significant rewrite.
+
+**Fixed-capacity stack types (§2 `Str(N)`/`Bytes(N)`/`List(T,N)`)** also
+require bootstrap parser body parsing for stage-2 parity. The Rust pipeline
+has full support (literal adoption, bounds-checked indexing, casts, builtin
+view widening, `.len()`). The bootstrap driver has minimal type predicates
+for signature parsing only; full implementation awaits parser bootstrap.
 
 ### MISSING — item 1 largely done; only §21 trailing gaps remain
 
