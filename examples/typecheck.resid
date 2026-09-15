@@ -1457,6 +1457,27 @@ Bool arg_matches(Str got, Str want) {
     return false;
 }
 
+// Element-wise widening of a comma-joined argument-type list against the
+// builtin's declared parameter types. A fixed-capacity Str(N)/Bytes(N) is
+// accepted at any position declaring the plain heap Str/Bytes — the same
+// NUL-terminated buffer pointer serves both, so no cast or copy is needed
+// (mirrors the Rust pipeline's fixed_view_ok on every builtin argument).
+Bool builtin_args_at(Str got, Str want, Int i, Int total) {
+    if (i > total) { return true; }
+    Str g = str_trim(split_type_at(got, i, 0, 0, 0, ""));
+    Str w = str_trim(split_type_at(want, i, 0, 0, 0, ""));
+    if (!arg_matches(g, w)) { return false; }
+    Int ni = i + 1;
+    return builtin_args_at(got, want, ni, total);
+}
+
+Bool builtin_args(Str got, Str want) {
+    Int gc = str_count(got, ",");
+    Int wc = str_count(want, ",");
+    if (gc != wc) { return false; }
+    return builtin_args_at(got, want, 0, gc);
+}
+
 ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) pt_list) {
     Str argtys = canon64(rawtys);
     if (name == "println") {
@@ -1513,7 +1534,7 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         return ERes { pos: pos, ty: "", err: "str_len expects 1 argument" };
     }
     if (name == "str_char_at") {
-        if (argtys == "Str,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        if (builtin_args(argtys, "Str,Int")) { return ERes { pos: pos, ty: "Int", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_char_at expects (Str, Int), got (" + argtys + ")" };
     }
     if (name == "str_from_code") {
@@ -1521,7 +1542,7 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         return ERes { pos: pos, ty: "", err: "str_from_code expects Int, got " + argtys };
     }
     if (name == "str_slice") {
-        if (argtys == "Str,Int,Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "Str,Int,Int")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_slice expects (Str, Int, Int), got (" + argtys + ")" };
     }
     if (name == "str_sb_new") {
@@ -1529,79 +1550,79 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         return ERes { pos: pos, ty: "", err: "str_sb_new expects no arguments" };
     }
     if (name == "str_sb_append") {
-        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_sb_append expects (Str, Str), got (" + argtys + ")" };
     }
     if (name == "str_sb_append_cp") {
-        if (argtys == "Str,Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "Str,Int")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_sb_append_cp expects (Str, Int), got (" + argtys + ")" };
     }
     if (name == "str_sb_finish") {
-        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_sb_finish expects (Str), got (" + argtys + ")" };
     }
     if (name == "str_trim") {
-        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_trim expects (Str), got (" + argtys + ")" };
     }
     if (name == "str_to_lower") {
-        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_to_lower expects (Str), got (" + argtys + ")" };
     }
     if (name == "str_to_upper") {
-        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_to_upper expects (Str), got (" + argtys + ")" };
     }
     if (name == "str_reverse") {
-        if (argtys == "Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_reverse expects (Str), got (" + argtys + ")" };
     }
     if (name == "str_contains") {
-        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_contains expects (Str,Str), got (" + argtys + ")" };
     }
     if (name == "str_starts_with") {
-        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_starts_with expects (Str,Str), got (" + argtys + ")" };
     }
     if (name == "str_ends_with") {
-        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_ends_with expects (Str,Str), got (" + argtys + ")" };
     }
     if (name == "str_repeat") {
-        if (argtys == "Str,Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "Str,Int")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_repeat expects (Str,Int), got (" + argtys + ")" };
     }
     if (name == "str_replace") {
-        if (argtys == "Str,Str,Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "Str,Str,Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_replace expects (Str,Str,Str), got (" + argtys + ")" };
     }
     if (name == "str_split") {
-        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
+        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_split expects (Str,Str), got (" + argtys + ")" };
     }
     if (name == "str_join") {
-        if (argtys == "List(Str),Str") { return ERes { pos: pos, ty: "Str", err: "" }; }
+        if (builtin_args(argtys, "List(Str),Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_join expects (List(Str),Str), got (" + argtys + ")" };
     }
     if (name == "str_is_int") {
-        if (argtys == "Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_is_int expects (Str), got (" + argtys + ")" };
     }
     if (name == "str_parse_int") {
-        if (argtys == "Str") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Int", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_parse_int expects (Str), got (" + argtys + ")" };
     }
     if (name == "str_is_float") {
-        if (argtys == "Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_is_float expects (Str), got (" + argtys + ")" };
     }
     if (name == "str_parse_float") {
-        if (argtys == "Str") { return ERes { pos: pos, ty: "Float", err: "" }; }
+        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Float", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_parse_float expects (Str), got (" + argtys + ")" };
     }
     if (name == "str_count") {
-        if (argtys == "Str,Str") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "Int", err: "" }; }
         return ERes { pos: pos, ty: "", err: "str_count expects (Str,Str), got (" + argtys + ")" };
     }
     if (name == "abs_i64") {
@@ -1649,7 +1670,7 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         return ERes { pos: pos, ty: "", err: "list_contains_int expects (List(Int),Int), got (" + argtys + ")" };
     }
     if (name == "list_contains_str") {
-        if (argtys == "List(Str),Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        if (builtin_args(argtys, "List(Str),Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
         return ERes { pos: pos, ty: "", err: "list_contains_str expects (List(Str),Str), got (" + argtys + ")" };
     }
     if (name == "list_contains_float") {
@@ -1677,11 +1698,11 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         return ERes { pos: pos, ty: "", err: name + " expects (UInt(128), UInt(128)), got (" + argtys + ")" };
     }
     if (name == "resid_tcp_connect") {
-        if (argtys == "Str,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
+        if (builtin_args(argtys, "Str,Int")) { return ERes { pos: pos, ty: "Int", err: "" }; }
         return ERes { pos: pos, ty: "", err: "resid_tcp_connect expects (Str, Int), got (" + argtys + ")" };
     }
     if (name == "resid_tcp_send") {
-        if (argtys == "Int,Str") { return ERes { pos: pos, ty: "Bool", err: "" }; }
+        if (builtin_args(argtys, "Int,Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
         return ERes { pos: pos, ty: "", err: "resid_tcp_send expects (Int, Str), got (" + argtys + ")" };
     }
     if (name == "resid_tcp_recv_all") {

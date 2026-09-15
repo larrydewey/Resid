@@ -9,11 +9,11 @@
 
 ## 0. Current Snapshot
 
-**815 tests pass** (lexer 17, parser 122, resid-ir 59, resid-type 260,
+**817 tests pass** (lexer 17, parser 122, resid-ir 59, resid-type 260,
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 1,
   resid-lsp-notes 6,
-  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 123 e2e).
+  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 125 e2e).
   Note: all bootstrap e2e tests now green (previously 2 pre-existing red fixed).
 
 ### Major capabilities
@@ -350,9 +350,14 @@ Remaining conformance gaps are minimal:
   `resid-fmt` and `resid-lsp` type printers cover the new forms.
   e2e `run_fixed_size_stack_types`, `run_fixed_size_index_oob_aborts`;
   7 new `resid-type` tests. Stage-1 complete (both intermediate paths);
-  stage-2 driver parity blocked on bootstrap parser body parsing (no assignment
-  statements in while loops); minimal type predicates added for signature
-  parsing; full implementation in Rust pipeline only.
+  **stage-2 driver parity complete** — `examples/typecheck.resid` +
+  `examples/codegen.resid` implement literal adoption, bounds-checked
+  indexing (`resid_index_abort`), Str/Bytes/List casts (identity views +
+  bounded `resid_str_to_fixed`/`resid_bytes_to_fixed` copies + List(T,N)→List(T)
+  dense boxing), `.len()` = compile-time N, and builtin-argument view widening
+  (`builtin_args`, mirrors Rust's `fixed_view_ok`) — byte-identical output to
+  the Rust pipeline (e2e `bootstrap_driver_fixed_size_stack_types`,
+  `bootstrap_driver_fixed_builtin_widening`).
 - **`Str` rope-backed representation (§2 string building, roadmap item 2)**: 
   concatenation-by-accumulator (the `acc + piece` / `acc + str_from_code(c)` 
   loop pattern) is now amortized O(1) per append via a chunked concat-rope in 
@@ -465,11 +470,12 @@ parity remains for the stage-1-only features.
 to parse sandbox bodies (or at least record ceilings per-function) using
 only syntax the current parser supports. This is a significant rewrite.
 
-**Fixed-capacity stack types (§2 `Str(N)`/`Bytes(N)`/`List(T,N)`)** also
-require bootstrap parser body parsing for stage-2 parity. The Rust pipeline
-has full support (literal adoption, bounds-checked indexing, casts, builtin
-view widening, `.len()`). The bootstrap driver has minimal type predicates
-for signature parsing only; full implementation awaits parser bootstrap.
+**Fixed-capacity stack types (§2 `Str(N)`/`Bytes(N)`/`List(T,N)`)** — **✅ DONE
+(stage-1 + stage-2)**: literal adoption, bounds-checked indexing, casts, builtin
+view widening, `.len()` all implemented in both the Rust pipeline and the
+self-hosted driver (`examples/typecheck.resid` + `examples/codegen.resid`),
+byte-identical output and identical abort behavior (e2e
+`bootstrap_driver_fixed_size_stack_types`, `bootstrap_driver_fixed_builtin_widening`).
 
 ### MISSING — item 1 largely done; only §21 trailing gaps remain
 
