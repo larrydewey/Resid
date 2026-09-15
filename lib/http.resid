@@ -117,12 +117,11 @@ pub Int http_get_status(Str url) {
 
 // ─── HTTP/1.1 v2: keep-alive requests, Content-Length + chunked ──────
 
-// Receive exactly n bytes from fd as a Str (empty on EOF).
+// Read a single byte from fd as an Int code (0 - 1 on EOF).
 pub Int http_recv_byte(Int fd) {
     List(Int) one = resid_tcp_recv_bin(fd, 1);
-    Int n = one.len() - 1;
-    if (n < 1) { return 0 - 1; }
-    return one[1];
+    if (one.len() < 1) { return 0 - 1; }
+    return one[0];
 }
 
 // Accumulate bytes until `term` (a \r\n-terminated line end) seen.
