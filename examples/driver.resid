@@ -460,10 +460,14 @@ type PRes = { pos: Int, ty: Str, err: Str };
 
 // Constraint types (§12) ride in parallel tables: ctn = type names,
 // ctb = the base the type erases to, ctc = the raw constraint text.
-type Funcs = { names: List(Str), pts: List(Str), pns: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str) };
+// reqs/ceils are per-function lanes (§21.3): reqs[i] = comma-joined
+// `@requires` capability families (unused by codegen; kept for parity
+// with the checker's Funcs), ceils[i] = comma-joined encoded enclosing
+// sandbox ceiling for names[i] (drives cap_enter/cap_leave emission).
+type Funcs = { names: List(Str), pts: List(Str), pns: List(Str), rets: List(Str), reqs: List(Str), ceils: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str) };
 
 Funcs funcs_empty() {
-    return Funcs { names: [], pts: [], pns: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], ctn: [], ctb: [], ctc: [] };
+    return Funcs { names: [], pts: [], pns: [], rets: [], reqs: [], ceils: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], ctn: [], ctb: [], ctc: [] };
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -908,9 +912,77 @@ Str collect_pnames(Str s, Int pos, Str acc) {
     return acc2;
 }
 
-Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
+// ─── Capability-list parsing: `(cap1, cap2(mode), ...)` ─────────
+// `modes`=true accepts an optional `(readonly|readwrite)` suffix and
+// encodes it (`family:ro` / `family`); an unrecognized mode is an E0213
+// error (surfaced by the checker half, not here). `modes`=false (an
+// `@requires(...)` list) only accepts bare family idents — a moded
+// entry is silently dropped (spec: `@requires` params are Id-only).
+// Deduped against the checker's identical copy by tools/merge_driver.py.
+PRes cap_list_at(Str s, Int pos, Bool modes, Str acc) {
+    Tok fam = lex_tok(s, pos);
+    if (fam.text == ")") { return PRes { pos: fam.pos, ty: acc, err: "" }; }
+    Tok nx = lex_tok(s, fam.pos);
+    if (nx.text == "(") {
+        Tok mo = lex_tok(s, nx.pos);
+        Tok close = lex_tok(s, mo.pos);
+        Tok after = lex_tok(s, close.pos);
+        if (modes) {
+            Bool ro = mo.text == "readonly";
+            Bool rw = mo.text == "readwrite";
+            if (!ro && !rw) {
+                Str msg = "unknown capability mode `" + mo.text + "` on `" + fam.text + "`; supported modes are `readonly` and `readwrite`";
+                return PRes { pos: mo.pos, ty: "", err: msg };
+            }
+            Str enc = if (ro) { fam.text + ":ro" } else { fam.text };
+            Str sep = if (acc == "") { "" } else { "," };
+            Str acc2 = acc + sep + enc;
+            if (after.text == ")") { return PRes { pos: after.pos, ty: acc2, err: "" }; }
+            return cap_list_at(s, after.pos, modes, acc2);
+        }
+        if (after.text == ")") { return PRes { pos: after.pos, ty: acc, err: "" }; }
+        return cap_list_at(s, after.pos, modes, acc);
+    }
+    Str sep2 = if (acc == "") { "" } else { "," };
+    Str acc3 = acc + sep2 + fam.text;
+    if (nx.text == ")") { return PRes { pos: nx.pos, ty: acc3, err: "" }; }
+    return cap_list_at(s, nx.pos, modes, acc3);
+}
+
+// Concatenate two comma-joined cap lanes (nested sandboxes accumulate
+// their ceilings). Deduped against the checker's identical copy.
+Str ceil_join(Str a, Str b) {
+    if (a == "") { return b; }
+    if (b == "") { return a; }
+    return a + "," + b;
+}
+
+Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_ceil) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return fs; }
+    if (t.text == "@") {
+        Tok an = lex_tok(s, t.pos);
+        if (an.text == "requires") {
+            Tok lp = lex_tok(s, an.pos);
+            PRes reqs = cap_list_at(s, lp.pos, false, "");
+            return collect_sigs_at(s, reqs.pos, fs, reqs.ty, sandbox_ceil);
+        }
+        return collect_sigs_at(s, an.pos, fs, pending_req, sandbox_ceil);
+    }
+    if (t.text == "sandbox") {
+        Tok lp = lex_tok(s, t.pos);
+        PRes caps = cap_list_at(s, lp.pos, true, "");
+        Tok lb = lex_tok(s, caps.pos);
+        if (caps.err != "" || lb.text != "{") {
+            Int end = skip_decl(s, t.pos, 0);
+            return collect_sigs_at(s, end, fs, "", sandbox_ceil);
+        }
+        Int close = skip_body(s, caps.pos);
+        Str inner = str_slice(s, lb.pos, close - 1);
+        Str merged = ceil_join(sandbox_ceil, caps.ty);
+        Funcs fs2 = collect_sigs_at(inner, 0, fs, "", merged);
+        return collect_sigs_at(s, close, fs2, "", sandbox_ceil);
+    }
     if (t.text == "type") {
         Tok tnm = lex_tok(s, t.pos);
         Tok teq = lex_tok(s, tnm.pos);
@@ -923,25 +995,25 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
                 List(Str) c0 = fs.ctn;
                 List(Str) c1 = fs.ctb;
                 List(Str) c2 = fs.ctc;
-                Funcs fsc = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, ctn: c0.concat([tnm.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]) };
+                Funcs fsc = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, ctn: c0.concat([tnm.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]) };
                 Int endc = skip_decl(s, t.pos, 0);
-                return collect_sigs_at(s, endc, fsc);
+                return collect_sigs_at(s, endc, fsc, pending_req, sandbox_ceil);
             }
             Int end0 = skip_decl(s, t.pos, 0);
-            return collect_sigs_at(s, end0, fs);
+            return collect_sigs_at(s, end0, fs, pending_req, sandbox_ceil);
         }
         PRes fl = collect_fields_at(s, tob.pos, "");
         if (fl.err != "") {
-            return collect_sigs_at(s, fl.pos, fs);
+            return collect_sigs_at(s, fl.pos, fs, pending_req, sandbox_ceil);
         }
         List(Str) sn0 = fs.stn;
         List(Str) sf0 = fs.stf;
-        Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: sn0.concat([tnm.text]), stf: sf0.concat([fl.ty]), bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
-        return collect_sigs_at(s, fl.pos, fs2);
+        Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, stn: sn0.concat([tnm.text]), stf: sf0.concat([fl.ty]), bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+        return collect_sigs_at(s, fl.pos, fs2, pending_req, sandbox_ceil);
     }
     if (t.text == "import") {
         Int end = skip_decl(s, t.pos, 0);
-        return collect_sigs_at(s, end, fs);
+        return collect_sigs_at(s, end, fs, pending_req, sandbox_ceil);
     }
     if (t.text == "pub") {
         // The declaration starts right after `pub`; re-dispatch there.
@@ -949,19 +1021,19 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
         if (nx.kind == "ident") {
             BRes bh = behavior_decl_at(s, t.pos);
             if (bh.err == "") {
-                return collect_sigs_at(s, t.pos, fs);
+                return collect_sigs_at(s, t.pos, fs, pending_req, sandbox_ceil);
             }
             PRes prty = parse_type(s, t.pos);
             if (prty.err == "") {
                 Tok nname = lex_tok(s, prty.pos);
                 Tok nopen = lex_tok(s, nname.pos);
                 if (nopen.text == "(") {
-                    return collect_sigs_at(s, t.pos, fs);
+                    return collect_sigs_at(s, t.pos, fs, pending_req, sandbox_ceil);
                 }
             }
         }
         Int endp = skip_decl(s, t.pos, 0);
-        return collect_sigs_at(s, endp, fs);
+        return collect_sigs_at(s, endp, fs, pending_req, sandbox_ceil);
     }
     if (t.kind == "ident" || t.text == "pub") {
         Int pos_in = if (t.text == "pub") { t.pos } else { pos };
@@ -970,8 +1042,8 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
             List(Str) bn0 = fs.bnames;
             List(Str) bp0 = fs.bparams;
             List(Str) bf0 = fs.bfns;
-            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bn0.concat([bh.name]), bparams: bp0.concat([bh.param]), bfns: bf0.concat([bh.impl]), ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
-            return collect_sigs_at(s, bh.pos, fsb);
+            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, stn: fs.stn, stf: fs.stf, bnames: bn0.concat([bh.name]), bparams: bp0.concat([bh.param]), bfns: bf0.concat([bh.impl]), ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+            return collect_sigs_at(s, bh.pos, fsb, pending_req, sandbox_ceil);
         }
         PRes rty = parse_type(s, pos_in);
         if (rty.err == "") {
@@ -985,23 +1057,27 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs) {
                 List(Str) pt1 = fs.pts;
                 List(Str) pn1 = fs.pns;
                 List(Str) rt1 = fs.rets;
+                List(Str) rq1 = fs.reqs;
+                List(Str) ce1 = fs.ceils;
                 List(Str) n2 = nm1.concat([name.text]);
                 List(Str) p2 = pt1.concat([pts]);
                 List(Str) q2 = pn1.concat([pns]);
                 List(Str) r2 = rt1.concat([rty.ty]);
+                List(Str) reqs2 = rq1.concat([pending_req]);
+                List(Str) ceils2 = ce1.concat([sandbox_ceil]);
                 List(Str) sn1 = fs.stn;
                 List(Str) sf1 = fs.stf;
-                Funcs fs2 = Funcs { names: n2, pts: p2, pns: q2, rets: r2, stn: sn1, stf: sf1, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+                Funcs fs2 = Funcs { names: n2, pts: p2, pns: q2, rets: r2, reqs: reqs2, ceils: ceils2, stn: sn1, stf: sf1, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
                 Int end = skip_body(s, open.pos);
-                return collect_sigs_at(s, end, fs2);
+                return collect_sigs_at(s, end, fs2, "", sandbox_ceil);
             }
         }
     }
-    return collect_sigs_at(s, t.pos, fs);
+    return collect_sigs_at(s, t.pos, fs, pending_req, sandbox_ceil);
 }
 
 Funcs collect_sigs(Str s) {
-    return collect_sigs_at(s, 0, funcs_empty());
+    return collect_sigs_at(s, 0, funcs_empty(), "", "");
 }
 
 // ─── Environment: List(Str) of "name:val:ty" entries ───────────
@@ -1762,7 +1838,8 @@ GT cg_print(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
     GT v = cg_expr(s, pos, env, fs, c);
     if (v.err != "") { return v; }
     Tok close = lex_tok(s, v.pos);
-    Str line = if (name == "println") { "call i32 @puts(ptr " + v.val + ")" } else { "call i32 (ptr, ...) @printf(ptr @.fmt.p, ptr " + v.val + ")" };
+    Str l1 = if (name == "eprintln") { "call void @resid_eprintln(ptr " + v.val + ")" } else { "call i32 (ptr, ...) @printf(ptr @.fmt.p, ptr " + v.val + ")" };
+    Str line = if (name == "println") { "call i32 @puts(ptr " + v.val + ")" } else { l1 };
     List(Str) lp0 = v.lines;
     List(Str) pl = lp0.concat([line]);
     return GT { pos: close.pos, val: "", ty: "", cnt: 1, err: "", glines: v.glines, lines: pl, tmp: v.tmp, lbl: v.lbl };
@@ -1812,7 +1889,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 return cg_none_con("Option(_)", t.pos, c.tmp + 1, c);
             }
         }
-        if (t.text == "println" || t.text == "print") {
+        if (t.text == "println" || t.text == "print" || t.text == "eprintln") {
             Tok tp0 = lex_tok(s, t.pos);
             if (tp0.text == "(") {
                 return cg_print(s, tp0.pos, t.text, env, fs, c);
@@ -2798,6 +2875,9 @@ Str p_sym(Str pname, Str meth) {
     if (pname == "filesystem") {
         if (meth == "read_all") { return "resid_fs_read_all"; }
         if (meth == "write_all") { return "resid_fs_write_all"; }
+        if (meth == "open") { return "resid_fs_open"; }
+        if (meth == "read_handle") { return "resid_fs_read_handle"; }
+        if (meth == "close") { return "resid_fs_close"; }
     }
     if (pname == "process") {
         if (meth == "run") { return "resid_process_run"; }
@@ -2816,6 +2896,9 @@ Str p_rty(Str pname, Str meth) {
     if (pname == "filesystem") {
         if (meth == "read_all") { return "Str"; }
         if (meth == "write_all") { return "Bool"; }
+        if (meth == "open") { return "File"; }
+        if (meth == "read_handle") { return "Str"; }
+        if (meth == "close") { return "Bool"; }
     }
     if (pname == "process") {
         if (meth == "run") { return "Int"; }
@@ -2833,6 +2916,9 @@ Int p_nargs(Str pname, Str meth) {
     if (pname == "filesystem") {
         if (meth == "read_all") { return 1; }
         if (meth == "write_all") { return 2; }
+        if (meth == "open") { return 1; }
+        if (meth == "read_handle") { return 1; }
+        if (meth == "close") { return 1; }
     }
     if (pname == "process") {
         if (meth == "run") { return 1; }
@@ -4228,6 +4314,102 @@ List(Str) build_env_at(List(Str) nl, List(Str) tyl, Int i, List(Str) acc) {
     return build_env_at(nl, tyl, k, acc.concat([ent]));
 }
 
+// §21.4 sandbox capability enforcement at codegen time: every sandboxed
+// function gets a `resid_cap_enter`/`resid_cap_leave` bracket around its
+// body and a `resid_cap_check` immediately after every provider call
+// that could perform I/O, so violations that slip past the (crude,
+// textual) typechecker are still caught at runtime.
+type CapPP = { lines: List(Str), glines: List(Str), n: Int };
+
+Str cap_str_name(Int n) {
+    if (n == 0) { return "@str"; }
+    return "@str." + IntToString(n);
+}
+
+Str cap_str_global(Str nm, Str payload) {
+    Str body = esc_ll(payload, 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int n1 = bl + 1;
+    return nm + " = unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\"";
+}
+
+// Which capability family (if any) does this already-emitted LLVM line
+// invoke? Detected by the runtime symbol it calls.
+Str provider_family_of_line(Str line) {
+    if (str_contains(line, "@resid_fs_")) { return "filesystem"; }
+    if (str_contains(line, "@resid_env_")) { return "environment"; }
+    if (str_contains(line, "@resid_args_")) { return "args"; }
+    if (str_contains(line, "@resid_process_run")) { return "process"; }
+    if (str_contains(line, "@resid_git_")) { return "git"; }
+    if (str_contains(line, "@resid_tcp_")) { return "network"; }
+    return "";
+}
+
+CapPP cap_enter_globals_at(List(Str) caps, Int i, CapPP acc) {
+    if (i >= caps.len()) { return acc; }
+    Str nm = cap_str_name(acc.n);
+    Str gl = cap_str_global(nm, caps[i]);
+    CapPP acc2 = CapPP { lines: acc.lines, glines: acc.glines.concat([gl]), n: acc.n + 1 };
+    Int k = i + 1;
+    return cap_enter_globals_at(caps, k, acc2);
+}
+
+List(Str) cap_store_lines(Int base, Int total, Int i) {
+    if (i >= total) { return nil_list(); }
+    Str slot = "%cap_slot" + IntToString(i);
+    Str nm = cap_str_name(base + i);
+    Str gepline = slot + " = getelementptr inbounds [" + IntToString(total) + " x ptr], ptr %cap_set, i32 0, i32 " + IntToString(i);
+    Str storeline = "store ptr " + nm + ", ptr " + slot;
+    List(Str) two = [gepline, storeline];
+    List(Str) rest = cap_store_lines(base, total, i + 1);
+    return two.concat(rest);
+}
+
+// Inserts the cap_enter prologue (alloca + per-cap store + resid_cap_enter
+// call) right after "entry:" — `acc.lines` is expected to already end
+// with the "entry:" label line.
+CapPP cap_enter_prologue(List(Str) caps, CapPP acc) {
+    Int total = caps.len();
+    Int base = acc.n;
+    CapPP withglobals = cap_enter_globals_at(caps, 0, acc);
+    List(Str) allocaline = ["%cap_set = alloca [" + IntToString(total) + " x ptr]"];
+    List(Str) storelines = cap_store_lines(base, total, 0);
+    List(Str) enterline = ["call void @resid_cap_enter(ptr %cap_set, i64 " + IntToString(total) + ")"];
+    List(Str) pre1 = allocaline.concat(storelines);
+    List(Str) pre2 = pre1.concat(enterline);
+    List(Str) newlines = withglobals.lines.concat(pre2);
+    return CapPP { lines: newlines, glines: withglobals.glines, n: withglobals.n };
+}
+
+List(Str) list_from_idx(List(Str) l, Int i) {
+    if (i >= l.len()) { return nil_list(); }
+    List(Str) rest = list_from_idx(l, i + 1);
+    List(Str) head = [l[i]];
+    return head.concat(rest);
+}
+
+// Walks the already-emitted body lines, inserting `resid_cap_leave()`
+// right before every `ret` and a `resid_cap_check` right after every
+// provider call that could touch a guarded capability family.
+CapPP capinject_at(List(Str) lines, Int i, CapPP acc) {
+    if (i >= lines.len()) { return acc; }
+    Str line = lines[i];
+    Bool is_ret = str_starts_with(line, "ret ");
+    List(Str) pre = if (is_ret) { acc.lines.concat(["call void @resid_cap_leave()"]) } else { acc.lines };
+    List(Str) l1 = pre.concat([line]);
+    Str fam = provider_family_of_line(line);
+    CapPP acc2 = if (fam != "") {
+        Str nm = cap_str_name(acc.n);
+        Str gl = cap_str_global(nm, fam);
+        List(Str) l2 = l1.concat(["call void @resid_cap_check(ptr " + nm + ")"]);
+        CapPP { lines: l2, glines: acc.glines.concat([gl]), n: acc.n + 1 }
+    } else {
+        CapPP { lines: l1, glines: acc.glines, n: acc.n }
+    };
+    Int k = i + 1;
+    return capinject_at(lines, k, acc2);
+}
+
 PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     PRes rty = parse_type(s, pos);
     if (rty.err != "") { return PG { pos: g.pos, err: rty.err, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl }; }
@@ -4255,18 +4437,27 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     List(Str) gl0 = g.lines;
     List(Str) dl = gl0.concat([defline]);
     List(Str) dl2 = dl.concat(["entry:"]);
+    Int fi = fn_index(fs, name.text);
+    Str ceiling = if (fi >= 0) { fs.ceils[fi] } else { "" };
+    Bool sandboxed = ceiling != "";
+    List(Str) caps = if (sandboxed) { str_split(ceiling, ",") } else { nil_list() };
+    CapPP pp0 = CapPP { lines: dl2, glines: g.glines, n: 0 };
+    CapPP pp1 = if (sandboxed) { cap_enter_prologue(caps, pp0) } else { pp0 };
+    Int body_start = pp1.lines.len();
     Int cp = close_paren(s, open.pos);
     Tok fbrace = lex_tok(s, cp);
-    ST gb = ST { pos: fbrace.pos, dead: false, err: "", env: env0, glines: g.glines, hlines: g.hlines, lines: dl2, tmp: g.tmp, lbl: g.lbl, rety: rbase };
+    ST gb = ST { pos: fbrace.pos, dead: false, err: "", env: env0, glines: pp1.glines, hlines: g.hlines, lines: pp1.lines, tmp: g.tmp, lbl: g.lbl, rety: rbase };
     ST body = sg_block(s, cp, env0, fs, is_main, gb);
     if (body.err != "") {
         return PG { pos: body.pos, err: body.err, glines: body.glines, hlines: body.hlines, lines: body.lines, tmp: body.tmp, lbl: body.lbl };
     }
     List(Str) lns0 = body.lines;
     List(Str) lns1 = if (!body.dead) { lns0.concat(["ret i32 0"]) } else { lns0 };
-    List(Str) lns = lns1.concat(["}"]);
+    List(Str) new_body_lines = list_from_idx(lns1, body_start);
+    CapPP pp2 = if (sandboxed) { capinject_at(new_body_lines, 0, CapPP { lines: nil_list(), glines: body.glines, n: pp1.n }) } else { CapPP { lines: new_body_lines, glines: body.glines, n: pp1.n } };
+    List(Str) lns = pp1.lines.concat(pp2.lines).concat(["}"]);
     Int end = skip_body(s, open.pos);
-    return pg_next(s, end, fs, PG { pos: end, err: "", glines: body.glines, hlines: body.hlines, lines: lns, tmp: body.tmp, lbl: body.lbl });
+    return pg_next(s, end, fs, PG { pos: end, err: "", glines: pp2.glines, hlines: body.hlines, lines: lns, tmp: body.tmp, lbl: body.lbl });
 }
 
 PG pg_next(Str s, Int pos, Funcs fs, PG g) {
@@ -4294,6 +4485,29 @@ PG pg_next(Str s, Int pos, Funcs fs, PG g) {
         Tok semi = lex_tok(s, end);
         Int e2 = if (semi.text == ";") { semi.pos } else { end };
         return pg_next(s, e2, fs, g);
+    }
+    if (t.text == "@") {
+        Tok an = lex_tok(s, t.pos);
+        Tok lp = lex_tok(s, an.pos);
+        if (lp.text == "(") {
+            Int cp2 = close_paren(s, lp.pos);
+            return pg_next(s, cp2, fs, g);
+        }
+        return pg_next(s, an.pos, fs, g);
+    }
+    if (t.text == "sandbox") {
+        Tok lp = lex_tok(s, t.pos);
+        PRes caps = cap_list_at(s, lp.pos, true, "");
+        Tok lb = lex_tok(s, caps.pos);
+        if (caps.err != "" || lb.text != "{") {
+            Int end = skip_decl(s, t.pos, 0);
+            return pg_next(s, end, fs, g);
+        }
+        Int close = skip_body(s, caps.pos);
+        Str inner = str_slice(s, lb.pos, close - 1);
+        PG g2 = pg_next(inner, 0, fs, g);
+        if (g2.err != "") { return g2; }
+        return pg_next(s, close, fs, g2);
     }
     if (t.kind == "ident") {
         BRes bh2 = behavior_decl_at(s, pos);
@@ -4508,10 +4722,13 @@ List(Str) ck_env_add(List(Str) env, Str name, Str ty) {
 
 // Constraint types (§12) ride in parallel tables: ctn = type names,
 // ctb = the base the type erases to, ctc = the raw constraint text.
-type Sigs = { names: List(Str), pts: List(Str), rets: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), exp_tys: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str) };
+// reqs/ceils are per-function lanes (§21.3): reqs[i] = comma-joined
+// `@requires` capability families, ceils[i] = comma-joined encoded
+// enclosing-sandbox ceiling for names[i].
+type Sigs = { names: List(Str), pts: List(Str), rets: List(Str), reqs: List(Str), ceils: List(Str), bods: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), exp_tys: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str) };
 
 Sigs sigs_empty() {
-    return Sigs { names: [], pts: [], rets: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], exp_tys: [], ctn: [], ctb: [], ctc: [] };
+    return Sigs { names: [], pts: [], rets: [], reqs: [], ceils: [], bods: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], exp_tys: [], ctn: [], ctb: [], ctc: [] };
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -5234,6 +5451,13 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         }
         return ERes { pos: pos, ty: "", err: "print expects 1 argument" };
     }
+    if (name == "eprintln") {
+        if (argc == 1) {
+            if (arg_matches(argtys, "Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
+            return ERes { pos: pos, ty: "", err: "eprintln expects Str, got " + argtys };
+        }
+        return ERes { pos: pos, ty: "", err: "eprintln expects 1 argument" };
+    }
     if (name == "IntToString") {
         if (argc == 1) {
             if (argtys == "Int" || str_has_prefix(argtys, "Int(")) { return ERes { pos: pos, ty: "Str", err: "" }; }
@@ -5659,7 +5883,7 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Sigs fs) {
     Bool is_ctor = name == "Ok" || name == "Err" || name == "Some" || name == "None";
     if (is_ctor) {
         Str ctor_exp = if (fs.exp_tys.len() > 0) { fs.exp_tys[0] } else { "" };
-        Sigs fs3 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: sigs_empty().names, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+        Sigs fs3 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: sigs_empty().names, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
         if (t.text == ")") {
             return check_builtin(name, "", 0, pos, ctor_exp, sigs_empty().names);
         }
@@ -5674,7 +5898,7 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Sigs fs) {
     }
     Int idx = ck_fn_index(fs, name);
     List(Str) pt_list = if (idx >= 0) { split_type_list(fs.pts[idx], 0, 0, 0, "", sigs_empty().names) } else { sigs_empty().names };
-    Sigs fs2 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: pt_list, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+    Sigs fs2 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: pt_list, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
     ARes a = collect_args(s, pos, "", 0, env, fs2);
     if (a.err != "") {
         return ERes { pos: a.pos, ty: "", err: a.err };
@@ -6220,7 +6444,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "(") {
             Bool is_ctor = t.text == "Ok" || t.text == "Err" || t.text == "Some" || t.text == "None";
-            Sigs fs2 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+            Sigs fs2 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
             return check_call(s, t2.pos, t.text, env, fs2);
         }
         if (t2.text == "{") {
@@ -6260,6 +6484,9 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
                     if (t.text == "filesystem") {
                         if (m.text == "read_all") { return ERes { pos: a.pos, ty: "Str", err: "" }; }
                         if (m.text == "write_all") { return ERes { pos: a.pos, ty: "Bool", err: "" }; }
+                        if (m.text == "open") { return ERes { pos: a.pos, ty: "File", err: "" }; }
+                        if (m.text == "read_handle") { return ERes { pos: a.pos, ty: "Str", err: "" }; }
+                        if (m.text == "close") { return ERes { pos: a.pos, ty: "Bool", err: "" }; }
                     }
                     if (t.text == "args") {
                         if (m.text == "count") { return ERes { pos: a.pos, ty: "Int", err: "" }; }
@@ -6960,9 +7187,120 @@ Str ck_collect_ptypes(Str s, Int pos, Str acc) {
     return acc + sep2 + pty.ty;
 }
 
-Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs) {
+// ─── Capability helpers (spec §21.3) ────────────────────────────
+// Encoded capability strings ride as comma-joined `Str` lanes on Sigs
+// (reqs[i] = @requires families, ceils[i] = enclosing sandbox ceiling).
+// A single encoded cap is `family` (read-write) or `family:ro` (readonly).
+
+Str cap_family(Str cap) {
+    Int i = str_find_char(cap, 58, 0);
+    if (i < 0) { return cap; }
+    return str_slice(cap, 0, i);
+}
+
+Bool cap_readonly(Str cap) {
+    return str_ends_with(cap, ":ro");
+}
+
+Bool caps_contain_family_at(List(Str) caps, Str family, Int i) {
+    if (i >= caps.len()) { return false; }
+    if (cap_family(caps[i]) == family) { return true; }
+    Int k = i + 1;
+    return caps_contain_family_at(caps, family, k);
+}
+
+Bool caps_contain_family(Str caps_csv, Str family) {
+    if (caps_csv == "") { return false; }
+    return caps_contain_family_at(str_split(caps_csv, ","), family, 0);
+}
+
+Bool grant_readonly_only_at(List(Str) caps, Str family, Int i, Bool any) {
+    if (i >= caps.len()) { return any; }
+    if (cap_family(caps[i]) == family) {
+        if (!cap_readonly(caps[i])) { return false; }
+        Int k = i + 1;
+        return grant_readonly_only_at(caps, family, k, true);
+    }
+    Int k = i + 1;
+    return grant_readonly_only_at(caps, family, k, any);
+}
+
+Bool grant_readonly_only(Str caps_csv, Str family) {
+    if (caps_csv == "") { return false; }
+    return grant_readonly_only_at(str_split(caps_csv, ","), family, 0, false);
+}
+
+Bool is_write_verb(Str family, Str verb) {
+    if (family == "filesystem" && verb == "write_all") { return true; }
+    if (family == "process" && verb == "run") { return true; }
+    return false;
+}
+
+// Meet (set intersection by family, with readonly-wins mode lattice):
+// caps present in both `a` and `b`; readonly if either operand is.
+Str meet_one(Str cap, List(Str) bcaps, Int i) {
+    if (i >= bcaps.len()) { return ""; }
+    Str fam = cap_family(cap);
+    if (cap_family(bcaps[i]) == fam) {
+        Bool ro = cap_readonly(cap) || cap_readonly(bcaps[i]);
+        return if (ro) { fam + ":ro" } else { fam };
+    }
+    Int k = i + 1;
+    return meet_one(cap, bcaps, k);
+}
+
+Str meet_caps_at(List(Str) acaps, List(Str) bcaps, Int i, Str acc) {
+    if (i >= acaps.len()) { return acc; }
+    Str m = meet_one(acaps[i], bcaps, 0);
+    Str sep = if (acc == "" || m == "") { "" } else { "," };
+    Str acc2 = if (m == "") { acc } else { acc + sep + m };
+    Int k = i + 1;
+    return meet_caps_at(acaps, bcaps, k, acc2);
+}
+
+Str meet_caps(Str a_csv, Str b_csv) {
+    if (a_csv == "") { return ""; }
+    if (b_csv == "") { return ""; }
+    return meet_caps_at(str_split(a_csv, ","), str_split(b_csv, ","), 0, "");
+}
+
+// ─── Capability-list parsing: `(cap1, cap2(mode), ...)` ─────────
+// `modes`=true accepts an optional `(readonly|readwrite)` suffix and
+// encodes it (`family:ro` / `family`); an unrecognized mode is an E0213
+// error. `modes`=false (an `@requires(...)` list) only accepts bare
+// family idents — a moded entry is silently dropped (spec: `@requires`
+// params are Id-only; mirrors the Rust parser's Id filter).
+
+// Concatenate two comma-joined cap lanes (nested sandboxes accumulate
+// their ceilings; duplicates are harmless for containment/readonly
+// checks). Empty operands are neutral.
+
+Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ceil) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return fs; }
+    if (t.text == "@") {
+        Tok an = lex_tok(s, t.pos);
+        if (an.text == "requires") {
+            Tok lp = lex_tok(s, an.pos);
+            PRes reqs = cap_list_at(s, lp.pos, false, "");
+            return ck_collect_sigs_at(s, reqs.pos, fs, reqs.ty, sandbox_ceil);
+        }
+        return ck_collect_sigs_at(s, an.pos, fs, pending_req, sandbox_ceil);
+    }
+    if (t.text == "sandbox") {
+        Tok lp = lex_tok(s, t.pos);
+        PRes caps = cap_list_at(s, lp.pos, true, "");
+        Tok lb = lex_tok(s, caps.pos);
+        if (caps.err != "" || lb.text != "{") {
+            Int end = skip_decl(s, t.pos, 0);
+            return ck_collect_sigs_at(s, end, fs, "", sandbox_ceil);
+        }
+        Int close = skip_body(s, caps.pos);
+        Str inner = str_slice(s, lb.pos, close - 1);
+        Str merged = ceil_join(sandbox_ceil, caps.ty);
+        Sigs fs2 = ck_collect_sigs_at(inner, 0, fs, "", merged);
+        return ck_collect_sigs_at(s, close, fs2, "", sandbox_ceil);
+    }
     if (t.text == "type") {
         Tok tname = lex_tok(s, t.pos);
         Tok teq = lex_tok(s, tname.pos);
@@ -6975,31 +7313,31 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs) {
                 List(Str) c0 = fs.ctn;
                 List(Str) c1 = fs.ctb;
                 List(Str) c2 = fs.ctc;
-                Sigs fsc = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: c0.concat([tname.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]) };
+                Sigs fsc = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: c0.concat([tname.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]) };
                 Int endc = skip_decl(s, t.pos, 0);
-                return ck_collect_sigs_at(s, endc, fsc);
+                return ck_collect_sigs_at(s, endc, fsc, pending_req, sandbox_ceil);
             }
             Int end0 = skip_decl(s, t.pos, 0);
-            return ck_collect_sigs_at(s, end0, fs);
+            return ck_collect_sigs_at(s, end0, fs, pending_req, sandbox_ceil);
         }
         Str fstr = collect_field_str(s, tbrace.pos);
         List(Str) sn1 = fs.stn;
         List(Str) sf1 = fs.stf;
         List(Str) sn2 = sn1.concat([tname.text]);
         List(Str) sf2 = sf1.concat([fstr]);
-        Sigs fsx = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+        Sigs fsx = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
         Int end = skip_decl(s, t.pos, 0);
-        return ck_collect_sigs_at(s, end, fsx);
+        return ck_collect_sigs_at(s, end, fsx, pending_req, sandbox_ceil);
     }
     if (t.text == "import") {
         Int end = skip_decl(s, t.pos, 0);
-        return ck_collect_sigs_at(s, end, fs);
+        return ck_collect_sigs_at(s, end, fs, pending_req, sandbox_ceil);
     }
     if (t.text == "pub") {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.kind != "ident") {
             Int endb = skip_decl(s, t.pos, 0);
-            return ck_collect_sigs_at(s, endb, fs);
+            return ck_collect_sigs_at(s, endb, fs, pending_req, sandbox_ceil);
         }
         // Fall through: the declaration starts at t.pos (right after pub).
     }
@@ -7013,27 +7351,34 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs) {
             List(Str) bnn = bn0.concat([bh.name]);
             List(Str) bpp = bp0.concat([bh.param]);
             List(Str) bff = bf0.concat([bh.impl]);
-            Sigs fsb = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
-            return ck_collect_sigs_at(s, bh.pos, fsb);
+            Sigs fsb = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+            return ck_collect_sigs_at(s, bh.pos, fsb, pending_req, sandbox_ceil);
         }
         PRes rty = parse_type(s, pos_in);
         if (rty.err != "") {
-            return ck_collect_sigs_at(s, rty.pos, fs);
+            return ck_collect_sigs_at(s, rty.pos, fs, pending_req, sandbox_ceil);
         }
         Tok name = lex_tok(s, rty.pos);
         Tok open = lex_tok(s, name.pos);
         Str pts = ck_collect_ptypes(s, open.pos, "");
         Int end = skip_body(s, t2_pos_after_open(s, open));
+        Str body = str_slice(s, open.pos, end);
         List(Str) n1 = fs.names;
         List(Str) p1 = fs.pts;
         List(Str) r1 = fs.rets;
+        List(Str) rq1 = fs.reqs;
+        List(Str) ce1 = fs.ceils;
+        List(Str) bo1 = fs.bods;
         List(Str) names2 = n1.concat([name.text]);
         List(Str) pts2 = p1.concat([pts]);
         List(Str) rets2 = r1.concat([rty.ty]);
-        Sigs fs2 = Sigs { names: names2, pts: pts2, rets: rets2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
-        return ck_collect_sigs_at(s, end, fs2);
+        List(Str) reqs2 = rq1.concat([pending_req]);
+        List(Str) ceils2 = ce1.concat([sandbox_ceil]);
+        List(Str) bods2 = bo1.concat([body]);
+        Sigs fs2 = Sigs { names: names2, pts: pts2, rets: rets2, reqs: reqs2, ceils: ceils2, bods: bods2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+        return ck_collect_sigs_at(s, end, fs2, "", sandbox_ceil);
     }
-    return ck_collect_sigs_at(s, t.pos, fs);
+    return ck_collect_sigs_at(s, t.pos, fs, pending_req, sandbox_ceil);
 }
 
 Int t2_pos_after_open(Str s, Tok open) {
@@ -7041,7 +7386,7 @@ Int t2_pos_after_open(Str s, Tok open) {
 }
 
 Sigs ck_collect_sigs(Str s) {
-    return ck_collect_sigs_at(s, 0, sigs_empty());
+    return ck_collect_sigs_at(s, 0, sigs_empty(), "", "");
 }
 
 Str dup_from(List(Str) names, Int i, Int j) {
@@ -7064,21 +7409,241 @@ Str first_dup_name(List(Str) names) {
     return dup_from(names, 0, 0);
 }
 
-Int ck_check_program(Str s, Int pos, Sigs fs) {
+// ─── Sandbox enforcement (spec §21.3) ───────────────────────────
+// A final whole-program pass run once type checking of every function
+// body succeeds. Mirrors the Rust pipeline's checks (E0212/E0213/E0211/
+// E0216/E0217 + handle-entry); diagnostics go to stderr via `eprintln`
+// so the driver's error channel matches residc's.
+
+Str list_join(List(Str) xs, Int i, Str sep, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    Str piece = if (acc == "") { xs[i] } else { acc + sep + xs[i] };
+    Int k = i + 1;
+    return list_join(xs, k, sep, piece);
+}
+
+Str fmt_caps(Str csv) {
+    if (csv == "") { return ""; }
+    return list_join(str_split(csv, ","), 0, ", ", "");
+}
+
+Str first_missing_req_at(List(Str) reqs, Str ceiling, Int i) {
+    if (i >= reqs.len()) { return ""; }
+    if (!caps_contain_family(ceiling, reqs[i])) { return reqs[i]; }
+    Int k = i + 1;
+    return first_missing_req_at(reqs, ceiling, k);
+}
+
+Str first_missing_req(Str reqcsv, Str ceiling) {
+    if (reqcsv == "") { return ""; }
+    return first_missing_req_at(str_split(reqcsv, ","), ceiling, 0);
+}
+
+// The names of `File`-typed parameters in a function's raw
+// signature+body text (Sigs.bods[i] starts right after the opening
+// `(` of the parameter list). Drives the handle-entry / value-
+// provenance checks (spec §21.3).
+List(Str) file_param_names_at(Str s, Int pos, List(Str) acc) {
     Tok t = lex_tok(s, pos);
-    if (t.kind == "eof") {
-        println("typecheck OK");
-        return 0;
+    if (t.text == ")") { return acc; }
+    PRes pty = parse_type(s, pos);
+    if (pty.err != "") { return acc; }
+    Tok pn = lex_tok(s, pty.pos);
+    List(Str) acc2 = if (pty.ty == "File") { acc.concat([pn.text]) } else { acc };
+    Tok t2 = lex_tok(s, pn.pos);
+    if (t2.text == ",") {
+        return file_param_names_at(s, t2.pos, acc2);
+    }
+    return acc2;
+}
+
+// Does `body` call some OTHER known function (not `fi` itself) passing
+// `fp` as its sole argument? A crude substring match (`name(fp)`) that
+// deliberately excludes provider verb calls (`filesystem.read_handle(fp)`
+// is not a user function call) since `fs.names` only holds user
+// functions.
+Bool fp_in_call(Sigs fs, Str body, Str fp, Int j, Int fi) {
+    if (j >= fs.names.len()) { return false; }
+    if (j == fi) {
+        Int j2 = j + 1;
+        return fp_in_call(fs, body, fp, j2, fi);
+    }
+    if (str_contains(body, fs.names[j] + "(" + fp + ")")) { return true; }
+    Int j2 = j + 1;
+    return fp_in_call(fs, body, fp, j2, fi);
+}
+
+Bool file_arg_passed_at(Sigs fs, Str body, List(Str) fparams, Int k, Int fi) {
+    if (k >= fparams.len()) { return false; }
+    if (fp_in_call(fs, body, fparams[k], 0, fi)) { return true; }
+    Int k2 = k + 1;
+    return file_arg_passed_at(fs, body, fparams, k2, fi);
+}
+
+Str check_readonly_writes(Str body, Str ceiling) {
+    if (ceiling == "") { return ""; }
+    if (str_contains(body, "filesystem.write_all(") && grant_readonly_only(ceiling, "filesystem")) {
+        return "provider call `filesystem.write_all` is a write operation, but only a read-only grant of capability `filesystem` is available here [" + fmt_caps(ceiling) + "] (capability modes only restrict, never amplify)";
+    }
+    if (str_contains(body, "process.run(") && grant_readonly_only(ceiling, "process")) {
+        return "provider call `process.run` is a write operation, but only a read-only grant of capability `process` is available here [" + fmt_caps(ceiling) + "] (capability modes only restrict, never amplify)";
+    }
+    return "";
+}
+
+// §21.3 transitive attenuation: fold the effective ceilings of every
+// function that (textually) calls `callee_name` — a crude but adequate
+// call-graph edge (substring match on `name(`). "__NONE__" means no
+// restricted caller was found.
+Str fold_caller_ceils(Sigs fs, List(Str) eff, Str callee_name, Int j, Str acc) {
+    if (j >= fs.names.len()) { return acc; }
+    Str caller_eff = eff[j];
+    Bool calls_it = str_contains(fs.bods[j], callee_name + "(");
+    Str acc2 = if (calls_it && caller_eff != "") { if (acc == "__NONE__") { caller_eff } else { meet_caps(acc, caller_eff) } } else { acc };
+    Int k = j + 1;
+    return fold_caller_ceils(fs, eff, callee_name, k, acc2);
+}
+
+Str eff_round_at(Sigs fs, List(Str) eff, Int i) {
+    Str folded = fold_caller_ceils(fs, eff, fs.names[i], 0, "__NONE__");
+    Str base = eff[i];
+    if (folded == "__NONE__") { return base; }
+    if (base == "") { return folded; }
+    return meet_caps(base, folded);
+}
+
+List(Str) eff_round(Sigs fs, List(Str) eff, Int i) {
+    if (i >= fs.names.len()) { return sigs_empty().names; }
+    Str updated = eff_round_at(fs, eff, i);
+    List(Str) rest = eff_round(fs, eff, i + 1);
+    List(Str) head = [updated];
+    return head.concat(rest);
+}
+
+List(Str) eff_fixpoint(Sigs fs, List(Str) eff, Int rounds) {
+    if (rounds <= 0) { return eff; }
+    List(Str) next = eff_round(fs, eff, 0);
+    return eff_fixpoint(fs, next, rounds - 1);
+}
+
+Str e0211_check_call(Sigs fs, List(Str) eff, Int i, Int j) {
+    if (j >= fs.names.len()) { return ""; }
+    if (j == i) {
+        Int j2 = j + 1;
+        return e0211_check_call(fs, eff, i, j2);
+    }
+    Bool calls_it = str_contains(fs.bods[i], fs.names[j] + "(");
+    if (calls_it) {
+        Str caller_eff = eff[i];
+        if (caller_eff != "") {
+            Str missing = first_missing_req(fs.reqs[j], caller_eff);
+            if (missing != "") {
+                return "call to `" + fs.names[j] + "` requires capability `" + missing + "` which exceeds the caller's effective sandbox ceiling [" + fmt_caps(caller_eff) + "] (attenuation is transitive across the call closure)";
+            }
+        }
+    }
+    Int j2 = j + 1;
+    return e0211_check_call(fs, eff, i, j2);
+}
+
+// Whole-program passes accumulate (rather than stop at the first hit):
+// a violation in one function must not hide a different, later
+// function's diagnostic that a specific caller is looking for.
+Bool e0211_check_all(Sigs fs, List(Str) eff, Int i) {
+    if (i >= fs.names.len()) { return false; }
+    Str m = e0211_check_call(fs, eff, i, 0);
+    Bool printed = if (m != "") { eprintln("error[E0211]: " + m) } else { false };
+    Int k = i + 1;
+    Bool rest = e0211_check_all(fs, eff, k);
+    if (printed) { return true; }
+    return rest;
+}
+
+// Per-function local checks (E0212, handle-entry, value provenance,
+// read-only write rejection). Returns the first violation found for
+// this function, or "" when it is clean.
+Str enforce_func(Sigs fs, List(Str) eff, Int fi) {
+    Str ceiling = fs.ceils[fi];
+    Str fname = fs.names[fi];
+    Str reqcsv = fs.reqs[fi];
+    if (ceiling != "" && reqcsv != "") {
+        Str missing = first_missing_req(reqcsv, ceiling);
+        if (missing != "") {
+            return "function `" + fname + "` requires capability `" + missing + "` which exceeds the effective capability ceiling [" + fmt_caps(ceiling) + "]";
+        }
+    }
+    Str effc = eff[fi];
+    List(Str) fparams = file_param_names_at(fs.bods[fi], 0, []);
+    if (fparams.len() > 0 && effc != "" && !caps_contain_family(effc, "filesystem")) {
+        if (file_arg_passed_at(fs, fs.bods[fi], fparams, 0, fi)) {
+            return "call passes a File handle value as an argument into a region whose capability set [" + fmt_caps(effc) + "] does not grant `filesystem`";
+        }
+        return "File handle parameter on `" + fname + "` requires capability `filesystem`; the enclosing sandbox ceiling [" + fmt_caps(effc) + "] does not grant it";
+    }
+    Str rw = check_readonly_writes(fs.bods[fi], ceiling);
+    if (rw != "") { return rw; }
+    return "";
+}
+
+Bool enforce_all(Sigs fs, List(Str) eff, Int i) {
+    if (i >= fs.names.len()) { return false; }
+    Str m = enforce_func(fs, eff, i);
+    Bool printed = if (m != "") { eprintln("error[E0212]: " + m) } else { false };
+    Int k = i + 1;
+    Bool rest = enforce_all(fs, eff, k);
+    if (printed) { return true; }
+    return rest;
+}
+
+Int finish_check(Sigs fs) {
+    Int n = fs.names.len();
+    List(Str) eff = eff_fixpoint(fs, fs.ceils, n);
+    Bool err1 = enforce_all(fs, eff, 0);
+    Bool err2 = e0211_check_all(fs, eff, 0);
+    if (err1 || err2) { return 1; }
+    println("typecheck OK");
+    return 0;
+}
+
+Int check_decls(Str s, Int pos, Sigs fs) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return 0; }
+    if (t.text == "@") {
+        Tok an = lex_tok(s, t.pos);
+        if (an.text == "requires") {
+            Tok lp = lex_tok(s, an.pos);
+            PRes reqs = cap_list_at(s, lp.pos, false, "");
+            return check_decls(s, reqs.pos, fs);
+        }
+        return check_decls(s, an.pos, fs);
+    }
+    if (t.text == "sandbox") {
+        Tok lp = lex_tok(s, t.pos);
+        PRes caps = cap_list_at(s, lp.pos, true, "");
+        if (caps.err != "") {
+            eprintln("error[E0213]: " + caps.err);
+            return 1;
+        }
+        Tok lb = lex_tok(s, caps.pos);
+        if (lb.text != "{") {
+            println("type error: expected { after sandbox capabilities");
+            return 1;
+        }
+        Int close = skip_body(s, caps.pos);
+        Str inner = str_slice(s, lb.pos, close - 1);
+        Int r = check_decls(inner, 0, fs);
+        if (r != 0) { return r; }
+        return check_decls(s, close, fs);
     }
     if (t.text == "type") {
         Int end = skip_decl(s, t.pos, 0);
         println("OK type def");
-        return ck_check_program(s, end, fs);
+        return check_decls(s, end, fs);
     }
     if (t.text == "import") {
         Int end = skip_decl(s, t.pos, 0);
         println("OK import");
-        return ck_check_program(s, end, fs);
+        return check_decls(s, end, fs);
     }
     if (t.text == "pub") {
         BRes bh = behavior_decl_at(s, t.pos);
@@ -7086,7 +7651,7 @@ Int ck_check_program(Str s, Int pos, Sigs fs) {
             Int v = validate_behavior(fs, bh);
             if (v != 0) { return 1; }
             println("OK behavior " + bh.name);
-            return ck_check_program(s, bh.pos, fs);
+            return check_decls(s, bh.pos, fs);
         }
         Tok t2 = lex_tok(s, t.pos);
         if (t2.kind == "ident") {
@@ -7095,13 +7660,13 @@ Int ck_check_program(Str s, Int pos, Sigs fs) {
                 println("type error: " + d.err);
                 return 1;
             }
-            return ck_check_program(s, d.pos, fs);
+            return check_decls(s, d.pos, fs);
         }
         Int end = skip_decl(s, t.pos, 0);
-        return ck_check_program(s, end, fs);
+        return check_decls(s, end, fs);
     }
     if (t.text == ";") {
-        return ck_check_program(s, t.pos, fs);
+        return check_decls(s, t.pos, fs);
     }
     if (t.kind == "ident") {
         BRes bh2 = behavior_decl_at(s, pos);
@@ -7109,17 +7674,23 @@ Int ck_check_program(Str s, Int pos, Sigs fs) {
             Int v2 = validate_behavior(fs, bh2);
             if (v2 != 0) { return 1; }
             println("OK behavior " + bh2.name);
-            return ck_check_program(s, bh2.pos, fs);
+            return check_decls(s, bh2.pos, fs);
         }
         DRes d = check_func(s, pos, fs);
         if (d.err != "") {
             println("type error: " + d.err);
             return 1;
         }
-        return ck_check_program(s, d.pos, fs);
+        return check_decls(s, d.pos, fs);
     }
     println("type error: unexpected declaration");
     return 1;
+}
+
+Int ck_check_program(Str s, Int pos, Sigs fs) {
+    Int r = check_decls(s, pos, fs);
+    if (r != 0) { return r; }
+    return finish_check(fs);
 }
 
 // ─── Graph-reduction pass (spec §33 / §36) ─────────────────────
@@ -7993,7 +8564,7 @@ Int main() {
     Int tc = ck_check_program(rsrc, 0, ssg);
     if (tc != 0) { return tc; }
     Funcs fs = collect_sigs(rsrc);
-List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"" "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
+List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "declare void @resid_eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"" "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
     List(Str) header = header_with_cmps(hdr_core, fs);
     PG g0 = PG { pos: 0, err: "", glines: [], hlines: [], lines: header, tmp: 0, lbl: 0 };
     PG res = pg_next(rsrc, 0, fs, g0);
@@ -8017,6 +8588,10 @@ List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)",
     Int prc = write_provenance(out, rsrc);
     return prc;
 }
+
+
+
+
 
 
 

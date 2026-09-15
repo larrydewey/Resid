@@ -8327,3 +8327,533 @@ fn bootstrap_graph_reduce_rejects_behavior_instances() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Sandbox capability enforcement (spec §21) through the fully self-hosted
+/// driver (typecheck.resid + codegen.resid fused into examples/driver.resid)
+/// — mirrors `run_sandbox_enforcement` but exercises the bootstrap pipeline.
+#[test]
+fn bootstrap_driver_sandbox_enforcement() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+
+    let ok = dir.join("ok.resid");
+    std::fs::write(
+        &ok,
+        r#"sandbox (filesystem) {
+    Int read_data() { return 42; }
+}
+
+Int main() {
+    println(IntToString(read_data()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&ok)
+        .arg("-o")
+        .arg(dir.join("ok_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let bin = dir.join("ok_bin");
+    let run = Command::new(&bin).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "42");
+
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"sandbox (filesystem) {
+    @requires(network)
+    Int fetch_data() { return 1; }
+}
+
+Int main() {
+    println(IntToString(fetch_data()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&bad)
+        .arg("-o")
+        .arg(dir.join("bad_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "sandbox ceiling violation must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("E0212"), "error should carry E0212: {err}");
+    assert!(err.contains("network"), "error should mention exceeding capability: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Sandboxing transitive attenuation (spec §21.3) through the bootstrap
+/// driver — mirrors `run_sandbox_transitive_attenuation`.
+#[test]
+fn bootstrap_driver_sandbox_transitive_attenuation() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-trans-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+
+    let ok = dir.join("ok.resid");
+    std::fs::write(
+        &ok,
+        r#"@requires(network)
+Int fetch() { return 42; }
+
+sandbox (network) {
+    Int read() { Int x = fetch(); return x; }
+}
+
+Int main() {
+    println(IntToString(read()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&ok)
+        .arg("-o")
+        .arg(dir.join("ok_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let run = Command::new(dir.join("ok_bin")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "42");
+
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"@requires(network)
+Int fetch() { return 42; }
+
+sandbox (filesystem) {
+    Int read() { Int x = fetch(); return x; }
+}
+
+Int main() {
+    println(IntToString(read()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&bad)
+        .arg("-o")
+        .arg(dir.join("bad_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "transitive capability violation must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("E0211"), "error should carry E0211: {err}");
+    assert!(err.contains("fetch"), "error should mention callee: {err}");
+
+    let chain = dir.join("chain.resid");
+    std::fs::write(
+        &chain,
+        r#"@requires(network)
+Int fetch() { return 42; }
+
+Int helper() { Int x = fetch(); return x; }
+
+sandbox (filesystem) {
+    Int read() { Int x = helper(); return x; }
+}
+
+Int main() {
+    println(IntToString(read()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&chain)
+        .arg("-o")
+        .arg(dir.join("chain_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "closure violation through helper must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("fetch"), "error should mention the closure callee: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Handle-entry and value-provenance checks (spec §21.3) through the
+/// bootstrap driver — mirrors `run_sandbox_handle_entry_file_param` and
+/// `run_sandbox_handle_entry_file_argument`.
+#[test]
+fn bootstrap_driver_sandbox_handle_entry() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-handle-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::write(dir.join("data.txt"), "hello").unwrap();
+
+    // Legal: File handle parameter into a filesystem-granting sandbox.
+    let ok = dir.join("ok.resid");
+    std::fs::write(
+        &ok,
+        r#"sandbox (filesystem) {
+    Int read(File h) {
+        Str d = filesystem.read_handle(h);
+        return str_len(d);
+    }
+}
+
+Int main() {
+    File h = filesystem.open("data.txt");
+    Int n = read(h);
+    println(IntToString(n));
+    Bool ok = filesystem.close(h);
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&ok)
+        .arg("-o")
+        .arg(dir.join("ok_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let run = Command::new(dir.join("ok_bin")).current_dir(&dir).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "5");
+
+    // Illegal: File handle parameter into a non-filesystem sandbox.
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"sandbox (network) {
+    Int read(File h) {
+        Str d = filesystem.read_handle(h);
+        return str_len(d);
+    }
+}
+
+Int main() {
+    File h = filesystem.open("data.txt");
+    Int n = read(h);
+    println(IntToString(n));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&bad)
+        .arg("-o")
+        .arg(dir.join("bad_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "File param into non-filesystem sandbox must fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("handle parameter"), "error should mention handle parameter: {err}");
+    assert!(err.contains("filesystem"), "error should mention filesystem: {err}");
+
+    // Legal: File handle value forwarded as a call argument into a
+    // filesystem-granting sandbox.
+    let ok2 = dir.join("ok2.resid");
+    std::fs::write(
+        &ok2,
+        r#"Int sink(File h) {
+    return 1;
+}
+
+sandbox (filesystem) {
+    Int forward(File f) {
+        Int r = sink(f);
+        return r;
+    }
+}
+
+Int main() {
+    File h = filesystem.open("data.txt");
+    Int n = forward(h);
+    println(IntToString(n));
+    Bool ok = filesystem.close(h);
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&ok2)
+        .arg("-o")
+        .arg(dir.join("ok2_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let run = Command::new(dir.join("ok2_bin")).current_dir(&dir).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "1");
+
+    // Illegal: File handle value forwarded into a sandbox that does not
+    // grant filesystem.
+    let bad2 = dir.join("bad2.resid");
+    std::fs::write(
+        &bad2,
+        r#"Int sink(File h) {
+    return 1;
+}
+
+sandbox (network) {
+    Int forward(File f) {
+        Int r = sink(f);
+        return r;
+    }
+}
+
+Int main() {
+    File h = filesystem.open("data.txt");
+    Int n = forward(h);
+    println(IntToString(n));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&bad2)
+        .arg("-o")
+        .arg(dir.join("bad2_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "File value into non-filesystem sandbox must fail");
+    let err2 = String::from_utf8_lossy(&out.stderr);
+    assert!(err2.contains("File handle"), "error should mention File handle: {err2}");
+    assert!(err2.contains("filesystem"), "error should mention filesystem: {err2}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Read-only capability modes (spec §21) and malformed mode rejection
+/// through the bootstrap driver.
+#[test]
+fn bootstrap_driver_sandbox_readonly_mode() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-ro-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::write(dir.join("data.txt"), "hello").unwrap();
+
+    // Legal: read under a readonly filesystem grant.
+    let ok = dir.join("ok.resid");
+    std::fs::write(
+        &ok,
+        r#"sandbox (filesystem(readonly)) {
+    Int read_demo() {
+        Str d = filesystem.read_all("data.txt");
+        return str_len(d);
+    }
+}
+Int main() { println(IntToString(read_demo())); return 0; }"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&ok)
+        .arg("-o")
+        .arg(dir.join("ok_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let run = Command::new(dir.join("ok_bin")).current_dir(&dir).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "5");
+
+    // Illegal: write under a readonly filesystem grant.
+    let bad = dir.join("bad.resid");
+    std::fs::write(
+        &bad,
+        r#"sandbox (filesystem(readonly)) {
+    Bool write_demo() {
+        return filesystem.write_all("data.txt", "x");
+    }
+}
+Int main() { write_demo(); return 0; }"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&bad)
+        .arg("-o")
+        .arg(dir.join("bad_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "readonly filesystem grant must reject write_all");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("write operation") && err.contains("read-only"), "error should mention write under read-only: {err}");
+
+    // Illegal: unknown capability mode.
+    let typo = dir.join("typo.resid");
+    std::fs::write(
+        &typo,
+        r#"sandbox (filesystem(readoly)) {
+    Bool write_demo() {
+        return filesystem.write_all("data.txt", "x");
+    }
+}
+Int main() { write_demo(); return 0; }"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&typo)
+        .arg("-o")
+        .arg(dir.join("typo_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "unknown capability mode must be rejected");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("E0213"), "error should carry E0213: {err}");
+    assert!(err.contains("unknown capability mode"), "error should mention unknown mode: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The force-time capability guard (spec §21.3) must be wired into the
+/// LLVM IR that the bootstrap driver emits for sandboxed functions, and
+/// must actually fire at runtime when a capability slips past the
+/// (textual, best-effort) self-hosted typechecker.
+#[test]
+fn bootstrap_driver_sandbox_force_time_guard() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-guard-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+
+    let file = dir.join("guard.resid");
+    std::fs::write(
+        &file,
+        r#"sandbox (filesystem) {
+    Int read_demo() {
+        Str d = filesystem.read_all("data.txt");
+        return str_len(d);
+    }
+}
+Int main() { println(IntToString(read_demo())); return 0; }"#,
+    )
+    .unwrap();
+    let out_bin = dir.join("guard_bin");
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&file)
+        .arg("-o")
+        .arg(&out_bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let ir_path = dir.join("guard_bin.ll");
+    let ir = std::fs::read_to_string(&ir_path).expect("driver must leave the .ll IR file behind");
+    assert!(ir.contains("resid_cap_check"), "IR must contain the force-time resid_cap_check guard: {ir}");
+    assert!(ir.contains("resid_cap_enter"), "IR must contain resid_cap_enter: {ir}");
+    assert!(ir.contains("resid_cap_leave"), "IR must contain resid_cap_leave: {ir}");
+
+    // A call that passes the (best-effort, textual) typechecker but
+    // violates the sandbox ceiling at runtime must abort via the
+    // force-time guard rather than silently executing.
+    let violate = dir.join("violate.resid");
+    std::fs::write(
+        &violate,
+        r#"sandbox (filesystem) {
+    Int bad() {
+        return process.run("echo hi");
+    }
+}
+Int main() {
+    bad();
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let vbin = dir.join("violate_bin");
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&violate)
+        .arg("-o")
+        .arg(&vbin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "driver build failed: {}", String::from_utf8_lossy(&out.stderr));
+    let run = Command::new(&vbin).current_dir(&dir).output().unwrap();
+    assert_ne!(run.status.code(), Some(0), "runtime capability guard must abort the unsandboxed call");
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(err.contains("capability not granted: process"), "stderr should carry the runtime capability error: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
