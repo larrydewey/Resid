@@ -1169,6 +1169,7 @@ fn lit_type(lit: &Literal) -> SemType {
 const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("println", &[SemType::Str], SemType::Bool),
     ("print", &[SemType::Str], SemType::Bool),
+    ("eprintln", &[SemType::Str], SemType::Bool),
     // ─── Integer stringification (bootstrap runtime) ───
     (
         "IntToString",

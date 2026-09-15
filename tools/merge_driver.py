@@ -108,7 +108,14 @@ def main():
                                # Behavior helpers: identical copies in both
                                # halves; keep the codegen (base) versions.
                                'behavior_decl_at', 'read_instance',
-                               'strip_reverse'})
+                               'strip_reverse',
+                               # Sandbox capability-list parsing (spec §21):
+                               # identical copies in both halves; keep the
+                               # codegen (base) versions. (The checker's
+                               # richer family/readonly/meet-caps helpers
+                               # used for enforcement are NOT duplicated in
+                               # codegen and so are not in this list.)
+                               'cap_list_at', 'ceil_join'})
     chunk_t = rename_chunk('\n'.join(chunk)).split('\n')
 
     # 3. tail: driver section from old driver.resid, header refreshed

@@ -38,6 +38,13 @@ bool println(const char* s) {
     return true;
 }
 
+bool eprintln(const char* s) {
+    if (fputs(s, stderr) == EOF) return false;
+    if (putc('\n', stderr) == EOF) return false;
+    if (fflush(stderr) == EOF) return false;
+    return true;
+}
+
 /* Abort with a message: `todo(...)`/`unimplemented(...)` trap here.
  *
  * Inside a spawned region (spec §19) the abort is *catchable*: rather than
