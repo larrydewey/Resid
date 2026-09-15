@@ -2265,6 +2265,235 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Fixed-capacity stack types (Str(N)/Bytes(N)/List(T,N), spec §44) through
+/// the fully self-hosted driver (typecheck.resid + codegen.resid fused into
+/// examples/driver.resid) — same program and same expected output as the
+/// Rust-pipeline `run_fixed_size_stack_types` test.
+#[test]
+fn bootstrap_driver_fixed_size_stack_types() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-drv-fixed-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let sample = dir.join("fixed.resid");
+    std::fs::write(
+        &sample,
+        r#"Int main() {
+    Str(8) s = "abcdefgh";
+    println(IntToString(str_len((Str)s)));
+    println(IntToString(s[1]));
+
+    Str h = "hello world";
+    Str(8) f = (Str(8))h;
+    println((Str)f);
+    println(IntToString(str_len((Str)f)));
+
+    Bytes(8) b = b"12345678";
+    println(IntToString(b[2]));
+
+    List(Int, 8) xs = [10, 20, 30];
+    println(IntToString(xs[0]));
+    println(IntToString(xs[2]));
+    println(IntToString(xs.len()));
+
+    Str(3) a = "abc";
+    Str(3) d = "def";
+    Str(6) c = (Str(6))((Str)a + (Str)d);
+    println((Str)c);
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let bin = dir.join("fixed_drv");
+
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&sample)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("failed to run residc run");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "driver failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(bin.exists(), "driver produced no binary");
+
+    let run = Command::new(&bin).output().expect("failed to run binary");
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(run.status.code(), Some(0), "binary failed: {stdout:?}");
+    assert_eq!(
+        stdout.trim(),
+        "8\n98\nhello wo\n8\n51\n10\n30\n8\nabcdef",
+        "unexpected program output: {stdout:?}"
+    );
+
+    // Out-of-range fixed indexing must abort (bounds-checked against the
+    // compile-time capacity), matching the Rust pipeline's
+    // run_fixed_size_index_oob_aborts.
+    let oob = dir.join("fixed_oob.resid");
+    std::fs::write(
+        &oob,
+        r#"Int main() {
+    List(Int, 4) xs = [1, 2, 3];
+    println(IntToString(xs[9]));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let oob_bin = dir.join("fixed_oob_drv");
+    let oob_cg = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&oob)
+        .arg("-o")
+        .arg(&oob_bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("failed to run residc run");
+    assert_eq!(
+        oob_cg.status.code(),
+        Some(0),
+        "driver failed to compile oob sample: {}",
+        String::from_utf8_lossy(&oob_cg.stderr)
+    );
+    let oob_run = Command::new(&oob_bin).output().expect("failed to run oob binary");
+    assert_ne!(
+        oob_run.status.code(),
+        Some(0),
+        "out-of-range fixed index must not exit 0"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Fixed-capacity Str(N)/Bytes(N) widen implicitly to heap Str/Bytes at
+/// every builtin argument position (mirroring the Rust pipeline's
+/// `fixed_view_ok` on builtin sigs) — no explicit `(Str)`/`(Bytes)` cast
+/// required. Verified through the fully self-hosted driver.
+#[test]
+fn bootstrap_driver_fixed_builtin_widening() {
+    let dir = std::env::temp_dir().join(format!(
+        "residc-e2e-drv-widen-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let sample = dir.join("widen.resid");
+    std::fs::write(
+        &sample,
+        r#"Int main() {
+    Str(4) s = "abcd";
+    println(IntToString(str_char_at(s, 1)));
+    println(IntToString(str_len(s)));
+    println(str_slice(s, 1, 3));
+    println(str_to_upper(s));
+    Bytes(4) b = b"wxyz";
+    println(IntToString(b[3]));
+    Str(2) p = "xy";
+    Bool has = str_contains(s, p);
+    if (has) { println("yes"); } else { println("no"); }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    // Through the self-hosted driver.
+    let bin = dir.join("widen_drv");
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&sample)
+        .arg("-o")
+        .arg(&bin)
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("failed to run residc run (driver)");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "driver failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let run = Command::new(&bin).output().expect("failed to run binary (driver)");
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(run.status.code(), Some(0), "binary failed: {stdout:?}");
+    let drv_lines = stdout.lines().map(|l| l.to_owned()).collect::<Vec<_>>();
+
+    // Through the native Rust pipeline — must be identical.
+    let rust_out = Command::new(residc_bin())
+        .arg(&sample)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run (rust)");
+    assert_eq!(
+        rust_out.status.code(),
+        Some(0),
+        "rust pipeline failed: {}",
+        String::from_utf8_lossy(&rust_out.stderr)
+    );
+    let rust_stdout = String::from_utf8_lossy(&rust_out.stdout).into_owned();
+    let rust_lines = rust_stdout.lines().map(|l| l.to_owned()).collect::<Vec<_>>();
+
+    assert_eq!(
+        drv_lines, rust_lines,
+        "stage-2 driver diverges from rust pipeline:\ndrv:  {drv_lines:?}\nrust: {rust_lines:?}"
+    );
+    assert_eq!(drv_lines, vec!["98", "4", "bc", "ABCD", "122", "no"]);
+
+    // A fixed List is NOT widened — str_len must still reject it.
+    let bad = dir.join("widen_bad.resid");
+    std::fs::write(
+        &bad,
+        r#"Int main() {
+    List(Int, 3) xs = [1, 2, 3];
+    println(IntToString(str_len(xs)));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let bad_out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&bad)
+        .arg("-o")
+        .arg(dir.join("widen_bad_drv"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .expect("failed to run residc run (bad)");
+    assert_ne!(
+        bad_out.status.code(),
+        Some(0),
+        "driver accepted fixed List where Str was required"
+    );
+    let bad_msg = String::from_utf8_lossy(&bad_out.stdout);
+    assert!(
+        bad_msg.contains("str_len expects Str"),
+        "unexpected rejection message: {bad_msg:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Stage-2 self-hosting (M6 item 4): the Resid-written emitter
 /// (examples/codegen.resid) compiles the bootstrap lexer into a working
 /// binary — the emitter's output is linked and run like any other.
