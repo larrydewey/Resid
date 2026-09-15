@@ -82,7 +82,7 @@ Tooling shipped today:
 - `residc <file> [emit-ir|build|run]`: compiler driver (default checks only)
 - `tools/resid-fmt`: canonical formatter
 - `tools/resid-graph`: import/dependency graph visualization
-- Stage-2 bootstrap compilers in `examples/` (lexer, parser, typechecker, codegen, driver — all written in Resid)
+- Stage-2 bootstrap compilers in `examples/` (lexer, parser, typechecker, codegen, driver — all written in Resid). The fused `examples/driver.resid` has full parity with the Rust `residc` pipeline, including sandbox/capability enforcement (§21) and its runtime force-time guard.
 
 ---
 

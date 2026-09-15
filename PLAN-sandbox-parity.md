@@ -1,5 +1,19 @@
 # Sandbox Parity Plan — Stage-2 Driver
 
+> **STATUS: ✅ COMPLETE.** All phases below shipped. Full sandbox/capability
+> enforcement (E0211/E0212/E0213, handle-entry, value-provenance, read-only
+> modes) plus force-time `resid_cap_enter`/`resid_cap_check`/`resid_cap_leave`
+> codegen now runs through `examples/driver.resid` with output parity to the
+> Rust `residc` pipeline. Verified by 5 new `bootstrap_driver_sandbox_*` e2e
+> tests plus manual compile→link→run smoke tests (single-cap, multi-cap, and
+> runtime-abort-on-violation cases). See `PROGRESS.md` §6 ("Progress on item 1
+> — sandboxing: STAGE-2 PARITY ACHIEVED") for the full writeup, deviations
+> from this plan (byte-exact caret rendering was **not** implemented — only
+> substring-matched `error[E0xxx]: <msg>` text — and the residual/dynamic-call
+> case was not separately exercised), and known follow-on limitations. This
+> document is kept as a historical record of the design phases; it is not
+> maintained after this point.
+
 **Goal**: Full sandbox/capability support in the self-hosted driver so all 7
 sandbox e2e tests pass through the stage-2 pipeline (driver.resid), achieving
 parity with the Rust stage-1 pipeline (residc).
