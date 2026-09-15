@@ -3831,6 +3831,8 @@ int64_t resid_tcp_connect(const char* host, int64_t port) {
         return -1;
     }
     freeaddrinfo(res);
+    struct timeval tmo = { 30, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof(tmo));
     return (int64_t)fd;
 }
 

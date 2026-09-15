@@ -5585,7 +5585,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(hex(len(part))[2:].encode()+b"\r\n"+part+b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
         else:
-            self.send_response(404); self.send_header("Content-Length","0"); self.end_headers()
+            self.send_response(404); self.send_header("Content-Length","0"); self.close_connection=True; self.end_headers()
 socketserver.TCPServer.allow_reuse_address=True
 s=socketserver.ThreadingTCPServer(("127.0.0.1",{port}),H)
 s.serve_forever()
