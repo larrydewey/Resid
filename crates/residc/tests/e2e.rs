@@ -8857,3 +8857,177 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Stage-3 bootstrap closure proof (PLAN-resid-only.md Phase B).
+///
+/// Every other `bootstrap_*` test only proves the self-hosted driver's
+/// *output* matches the Rust pipeline's output on sample programs. None of
+/// them ever prove the driver can compile *itself* to a fixed point — the
+/// actual definition of self-hosting. This test closes that gap:
+///
+///   1. Rust `residc` compiles `examples/driver.resid` -> native binary `D1`.
+///   2. `D1` compiles `examples/driver.resid` (itself) -> native binary `D2`
+///      (D1 is now acting as a Resid compiler, not the Rust one).
+///   3. `D2` compiles `examples/driver.resid` (itself) -> native binary `D3`.
+///   4. The LLVM IR text `D2` emitted while producing itself must be
+///      byte-identical to the LLVM IR text `D3` emitted while producing
+///      itself — a true fixed point: once the driver is self-hosted, its
+///      output stabilizes and further self-compiles are no-ops modulo the
+///      OS binary's own compile nondeterminism (which is why we diff the
+///      textual `.ll`, not the linked binaries).
+///   5. `D2` and `D3` must also behave identically as compilers: running
+///      each against an ordinary sample program produces the same stdout.
+#[test]
+fn bootstrap_driver_self_compile_fixed_point() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-selfcompile-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let driver_src = workspace.join("examples/driver.resid");
+    let rtc = workspace.join("crates/residc/resid_rt.c");
+
+    // Step 1: Rust pipeline compiles driver.resid -> D1.
+    let d1 = dir.join("d1");
+    let out = Command::new(residc_bin())
+        .arg(&driver_src)
+        .arg("build")
+        .arg("-o")
+        .arg(&d1)
+        .output()
+        .expect("failed to invoke residc build");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "Rust pipeline failed to build D1 from driver.resid: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(d1.exists(), "D1 binary was not produced");
+
+    // Step 2: D1 (a Resid-compiler binary) compiles driver.resid -> D2.
+    let d2 = dir.join("d2");
+    let out = Command::new(&d1)
+        .arg(&driver_src)
+        .arg("-o")
+        .arg(&d2)
+        .arg("-rt")
+        .arg(&rtc)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run D1 on driver.resid");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "D1 failed to self-compile driver.resid into D2: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(d2.exists(), "D2 binary was not produced");
+    let d2_ll = dir.join("d2.ll");
+    assert!(d2_ll.exists(), "D2's emitted IR file is missing");
+
+    // Step 3: D2 (compiled entirely by the self-hosted driver) compiles
+    // driver.resid -> D3. This is the actual bootstrap step: a binary that
+    // has never touched the Rust pipeline is now compiling the compiler.
+    let d3 = dir.join("d3");
+    let out = Command::new(&d2)
+        .arg(&driver_src)
+        .arg("-o")
+        .arg(&d3)
+        .arg("-rt")
+        .arg(&rtc)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run D2 on driver.resid");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "D2 failed to self-compile driver.resid into D3: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(d3.exists(), "D3 binary was not produced");
+    let d3_ll = dir.join("d3.ll");
+    assert!(d3_ll.exists(), "D3's emitted IR file is missing");
+
+    // Step 4: fixed point — D2 and D3 must emit byte-identical LLVM IR when
+    // compiling the same source. If the driver is truly self-hosted, D2
+    // (built by D1) and D3 (built by D2) are both "the same compiler" and
+    // must produce identical output for identical input.
+    let d2_ll_text = std::fs::read_to_string(&d2_ll).unwrap();
+    let d3_ll_text = std::fs::read_to_string(&d3_ll).unwrap();
+    assert_eq!(
+        d2_ll_text, d3_ll_text,
+        "self-compile did not reach a fixed point: D2 and D3 emitted different IR for the same source (driver.resid)"
+    );
+
+    // Step 5: behavioral parity — D2 and D3 must compile an ordinary sample
+    // program identically.
+    let sample = dir.join("sample.resid");
+    std::fs::write(
+        &sample,
+        r#"
+Int sq(Int x) {
+    return x * x;
+}
+
+Int main() {
+    println("hi");
+    Int a = sq(7);
+    if (a > 40) {
+        println("big");
+    } else {
+        println("small");
+    }
+    for (Int i in 0..3) {
+        Int s = sq(100);
+        if (s == 10000) {
+            println("tick");
+        } else {
+            println("other");
+        }
+    }
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let bin2 = dir.join("sample_via_d2");
+    let out = Command::new(&d2)
+        .arg(&sample)
+        .arg("-o")
+        .arg(&bin2)
+        .arg("-rt")
+        .arg(&rtc)
+        .output()
+        .expect("failed to run D2 on sample.resid");
+    assert_eq!(out.status.code(), Some(0), "D2 failed to compile sample.resid");
+    let run2 = Command::new(&bin2).output().expect("failed to run D2's binary");
+    let stdout2 = String::from_utf8_lossy(&run2.stdout).into_owned();
+
+    let bin3 = dir.join("sample_via_d3");
+    let out = Command::new(&d3)
+        .arg(&sample)
+        .arg("-o")
+        .arg(&bin3)
+        .arg("-rt")
+        .arg(&rtc)
+        .output()
+        .expect("failed to run D3 on sample.resid");
+    assert_eq!(out.status.code(), Some(0), "D3 failed to compile sample.resid");
+    let run3 = Command::new(&bin3).output().expect("failed to run D3's binary");
+    let stdout3 = String::from_utf8_lossy(&run3.stdout).into_owned();
+
+    assert_eq!(
+        stdout2, stdout3,
+        "D2-compiled and D3-compiled sample binaries produced different output"
+    );
+    assert_eq!(
+        stdout2.lines().collect::<Vec<_>>(),
+        vec!["hi", "big", "tick", "tick", "tick"],
+        "unexpected output from the self-compiled driver's compiled sample: {stdout2:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
