@@ -1979,6 +1979,9 @@ ERes check_list_lit_rest(Str s, Int pos, Str elem, Int count, List(Str) env, Fun
     }
     Int count2 = count + 1;
     Tok t = lex_tok(s, e.pos);
+    if (t.text == "]") {
+        return finish_list_lit(t.pos, elem2, count2, exp);
+    }
     if (t.text == ",") {
         // Trailing comma before the closing bracket is allowed.
         Tok nx = lex_tok(s, t.pos);
@@ -1987,7 +1990,13 @@ ERes check_list_lit_rest(Str s, Int pos, Str elem, Int count, List(Str) env, Fun
         }
         return check_list_lit_rest(s, t.pos, elem2, count2, env, fs, exp);
     }
-    return finish_list_lit(t.pos, elem2, count2, exp);
+    // No comma between elements: the Rust reference parser's list-literal
+    // loop (`parse_list_lit` in resid-parser) only consumes a comma when
+    // present — it never requires one, so `[a, b c, d]` and `[a, b, c, d]`
+    // parse identically there. Mirror that leniency instead of erroring,
+    // so both pipelines accept exactly the same programs (see e.g.
+    // examples/driver.resid's own `hdr_core` list, which has one such gap).
+    return check_list_lit_rest(s, e.pos, elem2, count2, env, fs, exp);
 }
 
 ERes finish_list_lit(Int pos, Str elem, Int count, Str exp) {
@@ -2471,7 +2480,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         }
         Tok cpar = lex_tok(s, cond.pos);
         Tok brace = lex_tok(s, cpar.pos);
-        ERes then_e = check_expr(s, brace.pos, env, fs);
+        ERes then_e = check_expr_block(s, brace.pos, env, fs);
         if (then_e.err != "") { return then_e; }
         Tok close = lex_tok(s, then_e.pos);
         if (close.text != "}") {
@@ -2481,8 +2490,24 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         if (kw.text != "else") {
             return ERes { pos: kw.pos, ty: "", err: "if expression requires else" };
         }
+        // `else if (...) { ... }` chains: recurse into the primary checker
+        // starting at the `if` keyword instead of assuming a bare `{`
+        // follows `else`. Without this, `else if` is mis-parsed as `else`
+        // directly followed by a parenthesized condition expression, which
+        // silently mistypes the whole chain (e.g. reports "Str vs Bool"
+        // when the real else-branch type matches the then-branch fine).
+        Tok peek_if = lex_tok(s, kw.pos);
+        if (peek_if.text == "if") {
+            ERes else_e2 = check_primary_e(s, kw.pos, env, fs, exp);
+            if (else_e2.err != "") { return else_e2; }
+            if (then_e.ty != else_e2.ty) {
+                Str msg2 = "if branches differ: " + then_e.ty + " vs " + else_e2.ty;
+                return ERes { pos: else_e2.pos, ty: "", err: msg2 };
+            }
+            return ERes { pos: else_e2.pos, ty: then_e.ty, err: "" };
+        }
         Tok brace2 = lex_tok(s, kw.pos);
-        ERes else_e = check_expr(s, brace2.pos, env, fs);
+        ERes else_e = check_expr_block(s, brace2.pos, env, fs);
         if (else_e.err != "") { return else_e; }
         if (then_e.ty != else_e.ty) {
             Str msg = "if branches differ: " + then_e.ty + " vs " + else_e.ty;
@@ -2541,6 +2566,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
                         if (m.text == "open") { return ERes { pos: a.pos, ty: "File", err: "" }; }
                         if (m.text == "read_handle") { return ERes { pos: a.pos, ty: "Str", err: "" }; }
                         if (m.text == "close") { return ERes { pos: a.pos, ty: "Bool", err: "" }; }
+                        if (m.text == "exists") { return ERes { pos: a.pos, ty: "Bool", err: "" }; }
                     }
                     if (t.text == "args") {
                         if (m.text == "count") { return ERes { pos: a.pos, ty: "Int", err: "" }; }
@@ -2756,7 +2782,7 @@ ERes ck_else_fallback(Str s, Int pos, Str pt, List(Str) env, Funcs fs) {
     Tok open = lex_tok(s, pos);
     if (open.text != "{") { 
         return ERes { pos: open.pos, ty: "", err: "expected { after else" }; }
-    ERes fv = check_expr(s, lex_tok(s, open.pos).pos, env, fs);
+    ERes fv = check_expr_block(s, lex_tok(s, open.pos).pos, env, fs);
     if (fv.err != "") { return fv; }
     Tok close = lex_tok(s, fv.pos);
     if (close.text != "}") { return ERes { pos: close.pos, ty: "", err: "expected } at end of else block" }; }
@@ -2771,6 +2797,62 @@ ERes check_expr(Str s, Int pos, List(Str) env, Funcs fs) {
     ERes u = check_unary(s, pos, env, fs);
     if (u.err != "") { return u; }
     return check_bin_rest(s, u, 1, env, fs);
+}
+
+// A "block expression": zero or more local `Type name = expr;` bindings
+// (the same forms `check_stmt` recognizes for function-body bindings, minus
+// `return`/`break`/`continue`/control-flow — a value-arm never has those)
+// followed by a tail expression with no trailing `;`. Function bodies always
+// end in an explicit `return`, so `check_stmt`/`check_block` never needed
+// this; but if/else-if arms, `else { ... }` sugar blocks, and other
+// expression-position braces are pure values and routinely open with local
+// temporaries before their tail (spec gotcha: "chains of temporaries"
+// replace loops with accumulators — see AGENTS.md/PROGRESS.md). Without this,
+// checking such an arm with plain `check_expr` reads the leading type
+// annotation token (e.g. `Str`) as if it were a bare identifier expression
+// and fails with a spurious "undefined variable Str".
+ERes check_expr_block(Str s, Int pos, List(Str) env, Funcs fs) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.kind == "ident") {
+            Tok t3 = lex_tok(s, t2.pos);
+            if (t3.text == "=") {
+                SRes b = check_bind(s, t3.pos, t.text, t2.text, env, fs, "");
+                if (b.err != "") { return ERes { pos: b.pos, ty: "", err: b.err }; }
+                return check_expr_block(s, b.pos, b.env, fs);
+            }
+        }
+        if (t2.text == "(") {
+            PRes ty = parse_type(s, pos);
+            if (ty.err == "") {
+                Tok name = lex_tok(s, ty.pos);
+                Tok eq = lex_tok(s, name.pos);
+                if (eq.text == "=" && name.kind == "ident") {
+                    SRes b = check_bind(s, eq.pos, ty.ty, name.text, env, fs, "");
+                    if (b.err != "") { return ERes { pos: b.pos, ty: "", err: b.err }; }
+                    return check_expr_block(s, b.pos, b.env, fs);
+                }
+            }
+        }
+        if (t2.text == "[") {
+            Tok close = find_sqclose_d(s, t2.pos);
+            if (close.kind != "eof") {
+                PRes ty = parse_type(s, pos);
+                if (ty.err == "") {
+                    Tok name = lex_tok(s, close.pos);
+                    Tok eq = lex_tok(s, name.pos);
+                    if (eq.text == "=" && name.kind == "ident") {
+                        Str ctext = str_slice(s, t2.pos, close.pos - 1);
+                        SRes b = check_bind_ref(s, eq.pos, ty.ty, ctext, name.text, env, fs, "");
+                        if (b.err != "") { return ERes { pos: b.pos, ty: "", err: b.err }; }
+                        return check_expr_block(s, b.pos, b.env, fs);
+                    }
+                }
+            }
+        }
+    }
+    return check_expr(s, pos, env, fs);
 }
 
 // ─── Statement checking ─────────────────────────────────────────

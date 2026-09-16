@@ -1833,16 +1833,28 @@ GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
     return GT { pos: a.pos, val: reg, ty: rraw, cnt: a.cnt, err: "", glines: a.glines, lines: cl2, tmp: t1, lbl: a.lbl };
 }
 
+// `print`/`println`/`eprintln` are Bool-valued builtins (the Rust checker's
+// BUILTIN_SIGS table types all three as `(Str) -> Bool`, and the runtime C
+// functions `bool print/println/eprintln` return success/failure). The IR
+// must therefore bind the call's `i1` result to a fresh register and report
+// `Bool` as the expression type — with `ty: ""`, any value-position use
+// (an if/else-if arm, a `Bool b = ...` binding) mis-types: the checker
+// accepts `Bool printed = if (m != "") { eprintln(...) } else { false };`
+// but codegen's `finish_ifexpr` then panics "if arms disagree:  vs Bool".
+// Emitting the C-named `@print/@println/@eprintln` i1 calls (instead of an
+// i32 `@puts`/`@printf` or a nonexistent void `@resid_eprintln`) matches the
+// Rust pipeline's IR and keeps the runtime symbol resolvable at link time.
 GT cg_print(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
     Tok open = lex_tok(s, pos);
     GT v = cg_expr(s, pos, env, fs, c);
     if (v.err != "") { return v; }
     Tok close = lex_tok(s, v.pos);
-    Str l1 = if (name == "eprintln") { "call void @resid_eprintln(ptr " + v.val + ")" } else { "call i32 (ptr, ...) @printf(ptr @.fmt.p, ptr " + v.val + ")" };
-    Str line = if (name == "println") { "call i32 @puts(ptr " + v.val + ")" } else { l1 };
+    Int t1 = v.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    Str line = reg + " = call i1 @" + name + "(ptr " + v.val + ")";
     List(Str) lp0 = v.lines;
     List(Str) pl = lp0.concat([line]);
-    return GT { pos: close.pos, val: "", ty: "", cnt: 1, err: "", glines: v.glines, lines: pl, tmp: v.tmp, lbl: v.lbl };
+    return GT { pos: close.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: v.glines, lines: pl, tmp: t1, lbl: v.lbl };
 }
 
 GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
@@ -2827,8 +2839,11 @@ Int payload_tag = if (is_opt) { 1 } else { 1 };
         Tok open = lex_tok(s, elseTok.pos);
         if (open.text != "{") { return gt_err("expected { after else", lhs); }
         GT fv0 = GT { pos: open.pos, val: "", ty: "", cnt: 0, err: "", glines: lhs.glines, lines: q5, tmp: t3, lbl: l3 };
-        // Pass open.pos (end of '{') so cg_expr -> cg_unary -> lex_tok skips whitespace and finds the first token
-        GT fv = cg_expr(s, open.pos, env, fs, fv0);
+        // Pass open.pos (end of '{') so cg_expr -> cg_unary -> lex_tok skips whitespace and finds the first token.
+        // Use cg_expr_block, not bare cg_expr: `else { ... }` sugar blocks are
+        // a value position that may open with local temporaries (see
+        // cg_ifexpr's matching fix above / check_expr_block in typecheck.resid).
+        GT fv = cg_expr_block(s, open.pos, env, fs, fv0);
         if (fv.err != "") { return fv; }
         Tok close = lex_tok(s, fv.pos);
         if (close.text != "}") { return gt_err("expected } at end of else block", fv); }
@@ -2878,6 +2893,7 @@ Str p_sym(Str pname, Str meth) {
         if (meth == "open") { return "resid_fs_open"; }
         if (meth == "read_handle") { return "resid_fs_read_handle"; }
         if (meth == "close") { return "resid_fs_close"; }
+        if (meth == "exists") { return "resid_fs_exists"; }
     }
     if (pname == "process") {
         if (meth == "run") { return "resid_process_run"; }
@@ -2899,6 +2915,7 @@ Str p_rty(Str pname, Str meth) {
         if (meth == "open") { return "File"; }
         if (meth == "read_handle") { return "Str"; }
         if (meth == "close") { return "Bool"; }
+        if (meth == "exists") { return "Bool"; }
     }
     if (pname == "process") {
         if (meth == "run") { return "Int"; }
@@ -2919,6 +2936,7 @@ Int p_nargs(Str pname, Str meth) {
         if (meth == "open") { return 1; }
         if (meth == "read_handle") { return 1; }
         if (meth == "close") { return 1; }
+        if (meth == "exists") { return 1; }
     }
     if (pname == "process") {
         if (meth == "run") { return 1; }
@@ -3193,7 +3211,13 @@ GT lst_more(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Funcs
     Tok t = lex_tok(s, pos);
     if (t.text == ",") { return lst_elems(s, t.pos, ety, n, vals, env, fs, c); }
     if (t.text == "]") { return lst_emit(ety, n, vals, t.pos, c); }
-    return gt_err("expected , or ] in list literal", c);
+    // No comma between elements: mirror the Rust reference parser's
+    // list-literal loop (`parse_list_lit` in resid-parser), which only
+    // consumes a comma when present and never requires one (see
+    // check_list_lit_rest's matching fix in typecheck.resid). Re-enter at
+    // `pos` (not `t.pos`) so the token just peeked is parsed as the start
+    // of the next element rather than being skipped.
+    return lst_elems(s, pos, ety, n, vals, env, fs, c);
 }
 
 GT lst_elems(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Funcs fs, GT c) {
@@ -3326,6 +3350,111 @@ GT cg_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     return gt_err("expected , or } in map/set literal", first);
 }
 
+// The predecessor label for a phi edge is normally the arm's own entry
+// block (lt/le) — but when an arm's own code contains further branching
+// (a nested if-expression, including an `else if` chain lowered via
+// recursive `cg_ifexpr`), control actually falls through from that nested
+// construct's own merge block instead. Every `cg_ifexpr` result ends its
+// `.lines` with exactly `["<label>:", "<phi instr>"]`, so the real current
+// block is recoverable by checking whether the second-to-last emitted line
+// is a bare label; otherwise the arm was straight-line and the fallback
+// (lt/le) is correct.
+Str last_label_line_cg(List(Str) lines, Str fallback) {
+    Int n = lines.len();
+    if (n < 2) { return fallback; }
+    Int i = n - 2;
+    Str cand = lines[i];
+    Int cl = str_len(cand);
+    if (cl == 0) { return fallback; }
+    Str lastch = str_slice(cand, cl - 1, cl);
+    if (lastch != ":") { return fallback; }
+    return str_slice(cand, 0, cl - 1);
+}
+
+// Shared tail for `cg_ifexpr`: given the then-arm result `tv` (entry block
+// `lt`), the else-arm result `ev` (entry block `le`, whether it came from a
+// plain `{ ... }` or a recursive `else if` chain), the merge label `ld`,
+// the label counter `l3` used to allocate `lt`/`le`/`ld`, and the position
+// to resume parsing from after the else-arm closed, emit the merge block +
+// phi and return the combined GT.
+GT finish_ifexpr(GT tv, Str lt, Str le, Str ld, Int l3, GT ev, Int retpos) {
+    if (ev.err != "") { return ev; }
+    // Spec v3.2 S6.4: arms agree when their NORMALIZED types match
+    // (bare Int is an alias of Int(64)).
+    if (num_norm_cg(ev.ty) != num_norm_cg(tv.ty)) { return gt_err("if arms disagree: " + tv.ty + " vs " + ev.ty, ev); }
+    Str pt = last_label_line_cg(tv.lines, lt);
+    Str pe = last_label_line_cg(ev.lines, le);
+    Int tp = ev.tmp + 1;
+    Str pr = "%t" + IntToString(tp);
+    Str phi = pr + " = phi " + ll_ty(num_norm_cg(tv.ty)) + " [ " + tv.val + ", %" + pt + " ], [ " + ev.val + ", %" + pe + " ]";
+    List(Str) d0 = ev.lines;
+    List(Str) d05 = d0.concat(["br label %" + ld]);
+    List(Str) d1 = d05.concat([ld + ":"]);
+    List(Str) d2 = d1.concat([phi]);
+    Int lb4 = if (ev.lbl > l3) { ev.lbl } else { l3 };
+    return GT { pos: retpos, val: pr, ty: tv.ty, cnt: 0, err: "", glines: ev.glines, lines: d2, tmp: tp, lbl: lb4 };
+}
+
+// Expression-block arm bodies (see typecheck.resid's `check_expr_block` for
+// the matching type-checker-side fix): an if/else-if arm is a pure value
+// position that may open with local `Type name = expr;` temporaries before
+// its tail expression (spec gotcha: "chains of temporaries" replace loops
+// with accumulators, since Resid has no reassignment). `cg_ifexpr`'s arms
+// previously lowered via bare `cg_expr`, which cannot handle a leading
+// binding statement at all — it would try to lower the binding's type
+// annotation token itself as a value expression.
+GT cg_expr_block(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.kind == "ident") {
+            Tok t3 = lex_tok(s, t2.pos);
+            if (t3.text == "=") {
+                return cg_bind_expr(s, t3.pos, t2.text, t.text, env, fs, c);
+            }
+        }
+        if (t2.text == "(") {
+            PRes ty = parse_type(s, pos);
+            if (ty.err == "") {
+                Tok name = lex_tok(s, ty.pos);
+                Tok eq = lex_tok(s, name.pos);
+                if (eq.text == "=" && name.kind == "ident") {
+                    return cg_bind_expr(s, eq.pos, name.text, ty.ty, env, fs, c);
+                }
+            }
+        }
+    }
+    return cg_expr(s, pos, env, fs, c);
+}
+
+// GT-flavored counterpart to `sg_bind`'s common-case RHS lowering (adopt +
+// widen + env-string bookkeeping), threading `env` explicitly since GT (a
+// pure expression-value carrier) has no env field the way ST does.
+GT cg_bind_expr(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, GT c) {
+    Str dtyb = ct_base_of(fs.ctn, fs.ctb, dty);
+    GT v = cg_expr(s, pos, env, fs, c);
+    if (v.err != "") { return v; }
+    Tok semi = lex_tok(s, v.pos);
+    Str dn = num_norm_cg(dtyb);
+    Bool a1 = int_fam(dtyb);
+    Bool a2 = int_fam(v.ty);
+    Bool adoptable = a1 && a2;
+    GT cv = pick_widen(adoptable, v, dn);
+    Bool ok = cv.err == "";
+    Bool adopt = adoptable && ok;
+    Str recty = pick_str(adopt, dn, v.ty);
+    Str ent2 = name + ":" + cv.val + ":" + recty;
+    Bool opt_hole = v.ty == "Option(_)";
+    Bool opt_expected = str_has_prefix_cg(dtyb, "Option(");
+    Str ent2f = pick_str(opt_hole && opt_expected, name + ":" + cv.val + ":" + dtyb, ent2);
+    Bool res_ok_hole = str_has_prefix_cg(cv.ty, "Result(") && res_elem_ok_cg(cv.ty) == "_";
+    Bool res_expected = str_has_prefix_cg(dtyb, "Result(");
+    Str ent2g = pick_str(res_ok_hole && res_expected, name + ":" + cv.val + ":" + dtyb, ent2f);
+    List(Str) env2 = env_add(env, ent2g);
+    GT c2 = GT { pos: semi.pos, val: cv.val, ty: cv.ty, cnt: cv.cnt, err: "", glines: cv.glines, lines: cv.lines, tmp: cv.tmp, lbl: cv.lbl };
+    return cg_expr_block(s, semi.pos, env2, fs, c2);
+}
+
 GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     Tok open = lex_tok(s, pos);
     GT cond = cg_expr(s, open.pos, env, fs, c);
@@ -3344,7 +3473,7 @@ GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     List(Str) a2 = a1.concat([lt + ":"]);
     GT ct = GT { pos: close.pos, val: "", ty: "", cnt: 0, err: "", glines: cond.glines, lines: a2, tmp: cond.tmp, lbl: l3 };
     Tok ob = lex_tok(s, close.pos);
-    GT tv = cg_expr(s, ob.pos, env, fs, ct);
+    GT tv = cg_expr_block(s, ob.pos, env, fs, ct);
     if (tv.err != "") { return tv; }
     Tok cb = lex_tok(s, tv.pos);
     if (cb.text != "}") { return gt_err("expected } in if arm", tv); }
@@ -3352,25 +3481,25 @@ GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     List(Str) b1 = b0.concat(["br label %" + ld]);
     Tok kw = lex_tok(s, cb.pos);
     if (kw.text != "else") { return gt_err("if expression requires else", tv); }
-    Tok ob2 = lex_tok(s, kw.pos);
     List(Str) b2 = b1.concat([le + ":"]);
+    // `else if (...) { ... }` chains: recurse into `cg_ifexpr` itself
+    // starting right after `else` instead of assuming a bare `{` follows.
+    // Without this, `else if` mis-parses as `else` directly followed by a
+    // parenthesized condition expression, silently mistyping the whole
+    // chain (booleans leaking into what should be the arms' shared type).
+    Tok peek_if = lex_tok(s, kw.pos);
+    if (peek_if.text == "if") {
+        GT ce = GT { pos: peek_if.pos, val: "", ty: "", cnt: 0, err: "", glines: tv.glines, lines: b2, tmp: tv.tmp, lbl: l3 };
+        GT ev = cg_ifexpr(s, peek_if.pos, env, fs, ce);
+        return finish_ifexpr(tv, lt, le, ld, l3, ev, ev.pos);
+    }
+    Tok ob2 = lex_tok(s, kw.pos);
     GT ce = GT { pos: ob2.pos, val: "", ty: "", cnt: 0, err: "", glines: tv.glines, lines: b2, tmp: tv.tmp, lbl: l3 };
-    GT ev = cg_expr(s, ob2.pos, env, fs, ce);
+    GT ev = cg_expr_block(s, ob2.pos, env, fs, ce);
     if (ev.err != "") { return ev; }
     Tok cb2 = lex_tok(s, ev.pos);
     if (cb2.text != "}") { return gt_err("expected } in else arm", ev); }
-    // Spec v3.2 S6.4: arms agree when their NORMALIZED types match
-    // (bare Int is an alias of Int(64)).
-    if (num_norm_cg(ev.ty) != num_norm_cg(tv.ty)) { return gt_err("if arms disagree", ev); }
-    Int tp = ev.tmp + 1;
-    Str pr = "%t" + IntToString(tp);
-    Str phi = pr + " = phi " + ll_ty(num_norm_cg(tv.ty)) + " [ " + tv.val + ", %" + lt + " ], [ " + ev.val + ", %" + le + " ]";
-    List(Str) d0 = ev.lines;
-    List(Str) d05 = d0.concat(["br label %" + ld]);
-    List(Str) d1 = d05.concat([ld + ":"]);
-    List(Str) d2 = d1.concat([phi]);
-    Int lb4 = if (ev.lbl > l3) { ev.lbl } else { l3 };
-    return GT { pos: cb2.pos, val: pr, ty: tv.ty, cnt: 0, err: "", glines: ev.glines, lines: d2, tmp: tp, lbl: lb4 };
+    return finish_ifexpr(tv, lt, le, ld, l3, ev, cb2.pos);
 }
 
 // "Option(X)" -> "X" (element type of a concrete Option).
@@ -4629,7 +4758,7 @@ Int main() {
     Str file = pick_out(last, "out.ll");
     Str src = filesystem.read_all(path);
     Funcs fs = collect_sigs(src);
-        List(Str) hdr_core = ["declare i32 @printf(ptr, ...)", "declare i32 @puts(ptr)", "declare void @resid_eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "@.fmt.p = private unnamed_addr constant [3 x i8] c\"%s\\00\"", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\""
+        List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\""
                 "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
     List(Str) header = header_with_cmps(hdr_core, fs);
     PG g0 = PG { pos: 0, err: "", glines: [], hlines: [], lines: header, tmp: 0, lbl: 0 };
