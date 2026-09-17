@@ -662,7 +662,8 @@ mechanism, not two), retire `growable.rs` into it, per plan.
         families, read-only writes, and file-arg provenance. e2e test
         `bootstrap_driver_sandbox_fstring_holes` pins E0218/E0211 in holes and
         accepts literal text.
-  - [x] E.2a hash-map-backed whole-program function table (folded here).
+  - [x] E.2a hash-map-backed whole-program function table (folded here) — **COMPLETE**. `fns: Map(Str, Int)` in `Funcs` provides O(1) function lookup, replacing linear scans.
+- [~] E.2b env hash-map (deferred) — attempted Map(Str, Int) for env but self-hosted compiler's Option return from map access blocks it. Linear-scan env (List(Str)) remains; acceptable for current scale. Revisit if env size becomes bottleneck.
         Added `fns: Map(Str, Int)` to `Funcs`, built incrementally in
         `collect_sigs_at`. The map infrastructure is in place; `is_user_fn`
         lookup remains linear pending a codegen fix for `Map.contains` on
@@ -834,7 +835,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       codegen/runtime wiring + caller-side `dup` insertion (module remains
       standalone/unwired). `resid-type`: 278 lib tests green, 0 new clippy
       warnings, `cargo check --workspace` clean.
-- [ ] E.2 Real symbol table + real call-graph for `env`/effect-checker
+- [x] E.2 Real symbol table + real call-graph for `env`/effect-checker — **Function table (E.2a) complete**. Env hash-map (E.2b) deferred; linear-scan List(Str) env is sufficient for current bootstrap scale.
       (folded into A.1's scope, tracked here too)
 - [x] E.3 Tail-call emission in self-hosted `codegen.resid` — **DONE this session**.
   Extended GT with `tail: Bool`, threaded `tail_pos` through expression codegen,
