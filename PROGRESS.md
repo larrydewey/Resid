@@ -159,8 +159,13 @@ yield 0. Handle types: `with (Type h = expr) { … }` RAII.
   (signature cross-checked against an independent Python Ed25519 signer).
 - COSE provenance (RFC 9052): trailers carry a real `COSE_Sign1`
   (tag 18, EdDSA -8); optional `COSE_Encrypt0` payload concealment via
-  `RESID_PROV_ENCRYPT=1` + `RESID_PROV_KEY` (experimental stream cipher,
-  AEAD pending). Provenance mode is part of the cache key.
+  `RESID_PROV_ENCRYPT=1` + `RESID_PROV_KEY`, now a real AEAD —
+  ChaCha20-Poly1305 (alg 24, RFC 8439) via the RustCrypto
+  `chacha20poly1305` crate, with the RFC 9052 §5.3 `Enc_structure` as
+  associated data and deterministic synthetic nonces (byte-reproducible
+  builds, no nonce reuse across payloads). Provenance mode is part of the
+  cache key. Unit tests cover roundtrip, determinism, tamper/wrong-key
+  rejection; e2e `run_encrypt0_provenance_roundtrip`.
 
 ### Self-hosting bootstrap (M1–M6 all done)
 
@@ -508,14 +513,18 @@ force-time guard around sandboxed bodies; (5) add the
 `ceil_join` helpers and regenerate `examples/driver.resid`.
 
 **Known limitations of the stage-2 checker** (by design, not bugs):
-- It is textual/pattern-based, not a full effect-checker. A provider call
-  with no `@requires(...)` annotation on its enclosing function and none of
-  the specific handle-entry/value-provenance/readonly-write shapes will
-  pass the self-hosted typechecker even inside a sandbox that doesn't grant
-  it — the runtime `resid_cap_check` force-time guard is the backstop for
-  this class of gap (verified: `process.run(...)` with no `@requires` inside
-  `sandbox (filesystem)` passes stage-2 typecheck but aborts at runtime with
-  `capability not granted: process`).
+- *(A.1b, closed)* Provider calls are now checked for real. The checker
+  builds per-function **call-graph edges** and **provider-effect sets** from a
+  `lex_tok` scan of each body (not substring matching), and rejects a
+  provider call whose family is not in the region's effective capability set
+  with `E0218` — including transitively, through an undecorated helper
+  reached from a narrower sandbox. The runtime `resid_cap_check` force-time
+  guard remains as defense-in-depth for what the static scan cannot see
+  (provider calls inside f-string interpolations, nested
+  `sandbox`/`spawn` blocks inside a body, and residual/`rt` paths). Verified
+  by the 12 `sandbox` e2e tests plus a manual probe
+  (`helper()` using `filesystem.read_all` called from `sandbox (network)` →
+  `error[E0218] … family 'filesystem' … [network]`).
 - Runtime capability checks are family-only; `readonly`/`readwrite` mode
   distinctions are enforced only at compile time (`check_readonly_writes`),
   matching the Rust reference's own runtime design (confirmed by direct
