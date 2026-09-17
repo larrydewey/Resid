@@ -836,7 +836,10 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       warnings, `cargo check --workspace` clean.
 - [ ] E.2 Real symbol table + real call-graph for `env`/effect-checker
       (folded into A.1's scope, tracked here too)
-- [ ] E.3 Tail-call emission in self-hosted `codegen.resid`
+- [x] E.3 Tail-call emission in self-hosted `codegen.resid` — **DONE this session**.
+  Extended GT with `tail: Bool`, threaded `tail_pos` through expression codegen,
+  return statements pass `true`, cg_call/cg_print emit `tail call` LLVM IR.
+  Mirrors Rust pipeline's `lower_call(is_tail)` path. All bootstrap tests pass.
 - [ ] E.4 Dead-local-wrapper static free pass (lexical last-use analysis)
 - [ ] C.1 Port `merge_driver.py` to Resid
 - [ ] C.2 Port `resid-notes` + `resid-cache`
