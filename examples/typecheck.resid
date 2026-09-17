@@ -2449,6 +2449,8 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         return ERes { pos: t.pos, ty: "Str", err: "" };
     }
     if (t.kind == "fstring") {
+        Str herr = fstring_holes_err(s, t, env, fs);
+        if (herr != "") { return ERes { pos: t.pos, ty: "", err: herr }; }
         return ERes { pos: t.pos, ty: "Str", err: "" };
     }
     if (t.kind == "char") {
@@ -3653,9 +3655,20 @@ List(Str) file_param_names_at(Str s, Int pos, List(Str) acc) {
 // substring match, so `arg` occurring inside a longer identifier or a
 // larger argument list does not count. `prev != "."` excludes provider
 // verbs and method calls (`filesystem.read_handle(fp)`).
+Bool call_with_arg_in_texts(List(Str) texts, Int i, Str fname, Str arg) {
+    if (i >= texts.len()) { return false; }
+    if (call_with_arg_tok(texts[i], 0, fname, arg, "")) { return true; }
+    Int k = i + 1;
+    return call_with_arg_in_texts(texts, k, fname, arg);
+}
+
 Bool call_with_arg_tok(Str s, Int pos, Str fname, Str arg, Str prev) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return false; }
+    if (t.kind == "fstring") {
+        if (call_with_arg_in_texts(fstring_holes(t.text), 0, fname, arg)) { return true; }
+        return call_with_arg_tok(s, t.pos, fname, arg, t.text);
+    }
     if (t.kind == "ident" && t.text == fname && prev != ".") {
         Tok o = lex_tok(s, t.pos);
         if (o.text == "(") {
@@ -3693,9 +3706,20 @@ Bool file_arg_passed_at(Funcs fs, Str body, List(Str) fparams, Int k, Int fi) {
 // Is `fam` `.` `verb` `(` present as a real provider call (a token scan,
 // so occurrences inside strings/comments are inert and `fam` being the
 // tail of a `.`-method access is excluded)?
+Bool provider_verb_in_texts(List(Str) texts, Int i, Str fam, Str verb) {
+    if (i >= texts.len()) { return false; }
+    if (provider_verb_tok(texts[i], 0, fam, verb, "")) { return true; }
+    Int k = i + 1;
+    return provider_verb_in_texts(texts, k, fam, verb);
+}
+
 Bool provider_verb_tok(Str s, Int pos, Str fam, Str verb, Str prev) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return false; }
+    if (t.kind == "fstring") {
+        if (provider_verb_in_texts(fstring_holes(t.text), 0, fam, verb)) { return true; }
+        return provider_verb_tok(s, t.pos, fam, verb, t.text);
+    }
     if (t.kind == "ident" && t.text == fam && prev != ".") {
         Tok d = lex_tok(s, t.pos);
         if (d.text == ".") {
@@ -3720,6 +3744,88 @@ Str check_readonly_writes(Str body, Str ceiling) {
     return "";
 }
 
+// ─── f-string interpolation spans ───────────────────────────────
+// The lexer collapses `f"…{expr}…"` into one `fstring` token, so a naive
+// scan treats every interpolation as opaque. The Rust pipeline instead
+// parses each hole as `FStringPart::Expr` and walks it (`walk_expr`), so a
+// provider call or a capability-requiring call inside a hole is checked
+// there. Mirror it: extract the `{…}` holes (brace-depth aware, matching
+// the lexer's scan) and re-run the relevant check on each hole.
+type Hspan = { a: Int, b: Int };
+
+// Index of the `}` matching an already-consumed `{`, or -1.
+Int fstring_hole_end(Str text, Int i, Int n, Int depth) {
+    if (i >= n) { return -1; }
+    Int c = str_char_at(text, i);
+    if (c == 123) { Int k = i + 1; Int d = depth + 1; return fstring_hole_end(text, k, n, d); }
+    if (c == 125) {
+        Int d = depth - 1;
+        if (d == 0) { return i; }
+        Int k = i + 1;
+        return fstring_hole_end(text, k, n, d);
+    }
+    Int k = i + 1;
+    return fstring_hole_end(text, k, n, depth);
+}
+
+// Top-level holes of an f-string token as content spans over `text`.
+List(Hspan) fstring_spans(Str text, Int i, Int n, List(Hspan) acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(text, i);
+    if (c == 123) {
+        Int e = fstring_hole_end(text, i + 1, n, 1);
+        if (e < 0) { return acc; }
+        Hspan sp = Hspan { a: i + 1, b: e };
+        List(Hspan) acc2 = acc.concat([sp]);
+        Int k = e + 1;
+        return fstring_spans(text, k, n, acc2);
+    }
+    Int k = i + 1;
+    return fstring_spans(text, k, n, acc);
+}
+
+List(Str) fstring_contents_at(Str text, List(Hspan) hs, Int i, List(Str) acc) {
+    if (i >= hs.len()) { return acc; }
+    Hspan sp = hs[i];
+    Str content = str_slice(text, sp.a, sp.b);
+    List(Str) acc2 = acc.concat([content]);
+    Int k = i + 1;
+    return fstring_contents_at(text, hs, k, acc2);
+}
+
+// Hole expression sources of an `f"…"` token (relative to its text).
+List(Str) fstring_holes(Str text) {
+    Int n = str_len_1(text);
+    List(Str) none = [];
+    if (n < 2) { return none; }
+    List(Hspan) sps = fstring_spans(text, 2, n - 1, []);
+    return fstring_contents_at(text, sps, 0, []);
+}
+
+// Type-check every hole expression in `s` over [i, end) (absolute), so a
+// type error inside `f"{…}"` is reported instead of silently accepted.
+Str fstring_holes_err_at(Str s, Int i, Int end, List(Str) env, Funcs fs) {
+    if (i >= end) { return ""; }
+    Int c = str_char_at(s, i);
+    if (c == 123) {
+        Int e = fstring_hole_end(s, i + 1, end, 1);
+        if (e < 0) { return ""; }
+        ERes r = check_expr(s, i + 1, env, fs);
+        if (r.err != "") { return r.err; }
+        Int k = e + 1;
+        return fstring_holes_err_at(s, k, end, env, fs);
+    }
+    Int k = i + 1;
+    return fstring_holes_err_at(s, k, end, env, fs);
+}
+
+Str fstring_holes_err(Str s, Tok t, List(Str) env, Funcs fs) {
+    Int tl = str_len_1(t.text);
+    Int base = t.pos - tl;
+    Int end = t.pos - 1;
+    return fstring_holes_err_at(s, base + 2, end, env, fs);
+}
+
 // ─── Real call graph (spec §21.3 / E.2) ─────────────────────────
 // The transitive-attenuation fixpoint needs, for each function, the set of
 // user functions it calls. Deriving that from the raw body *text* by
@@ -3741,23 +3847,21 @@ Bool is_user_fn(Funcs fs, Str n) {
     return is_user_fn_at(fs.names, n, 0);
 }
 
-// Calls embedded in an f-string interpolation lex to a single `fstring`
-// token whose interior we cannot re-lex without re-parsing; fall back to a
-// conservative substring scan over that token's text so a real dependency
-// inside `f"{…}"` is still recorded.
-List(Str) scan_fns_in_fstring(Funcs fs, Str text, Int i, List(Str) acc) {
-    if (i >= fs.names.len()) { return acc; }
-    Str n = fs.names[i];
-    List(Str) acc2 = if (str_contains(text, n + "(") && !list_contains_str(acc, n)) { acc.concat([n]) } else { acc };
+// A user function called inside an interpolation is a real call-graph edge,
+// so scan each hole's source text (the substring fallback this replaces
+// mis-fired on literal text and could not tell a call from prose).
+List(Str) scan_calls_in_texts(Funcs fs, List(Str) texts, Int i, List(Str) acc) {
+    if (i >= texts.len()) { return acc; }
+    List(Str) acc2 = scan_calls_tok(fs, texts[i], 0, "", acc);
     Int k = i + 1;
-    return scan_fns_in_fstring(fs, text, k, acc2);
+    return scan_calls_in_texts(fs, texts, k, acc2);
 }
 
 List(Str) scan_calls_tok(Funcs fs, Str s, Int pos, Str prev, List(Str) acc) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return acc; }
     if (t.kind == "fstring") {
-        List(Str) accf = scan_fns_in_fstring(fs, t.text, 0, acc);
+        List(Str) accf = scan_calls_in_texts(fs, fstring_holes(t.text), 0, acc);
         return scan_calls_tok(fs, s, t.pos, t.text, accf);
     }
     Tok o = lex_tok(s, t.pos);
@@ -3796,9 +3900,10 @@ Bool call_csv_has(Str csv, Str n) {
 // ident is a known provider family and the verb is one of that family's
 // declared verbs (`provider_verbs()`), so a local variable that merely
 // shares a family's name (`List(Str) args` + `args.get(…)`) is not
-// misclassified. (An f-string interpolation lexes as one token and is
-// opaque here; a provider call inside one is left to the force-time
-// guard, matching the pre-existing conservative residual.)
+// misclassified. Interpolations are not opaque: `fstring_holes` extracts
+// each `{…}` and the scan recurses into it, so a provider call inside
+// `f"{process.run(…)}"` contributes its family just as the Rust
+// `walk_expr` on `FStringPart::Expr` does.
 Bool is_prov_family(Str f) {
     if (f == "filesystem") { return true; }
     if (f == "environment") { return true; }
@@ -3842,9 +3947,20 @@ Bool prov_call_at(Str s, Int pos) {
     return o.text == "(";
 }
 
+List(Str) scan_provs_in_texts(List(Str) texts, Int i, List(Str) acc) {
+    if (i >= texts.len()) { return acc; }
+    List(Str) acc2 = scan_provs_tok(texts[i], 0, "", acc);
+    Int k = i + 1;
+    return scan_provs_in_texts(texts, k, acc2);
+}
+
 List(Str) scan_provs_tok(Str s, Int pos, Str prev, List(Str) acc) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return acc; }
+    if (t.kind == "fstring") {
+        List(Str) accf = scan_provs_in_texts(fstring_holes(t.text), 0, acc);
+        return scan_provs_tok(s, t.pos, t.text, accf);
+    }
     Tok nx = lex_tok(s, t.pos);
     Bool hit = t.kind == "ident" && prev != "." && nx.text == "." && prov_call_at(s, pos);
     List(Str) acc2 = if (hit && !list_contains_str(acc, t.text)) { acc.concat([t.text]) } else { acc };

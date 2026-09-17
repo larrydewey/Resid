@@ -8401,6 +8401,132 @@ Int main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A.1c: an `f"…"` interpolation is a real expression scope, not opaque text.
+/// The Rust pipeline walks `FStringPart::Expr` (`walk_expr`), so a provider
+/// call or a capability-requiring call inside a hole must be checked by the
+/// stage-2 driver too, while literal text that merely *looks* like a call
+/// must not create a phantom edge.
+#[test]
+fn bootstrap_driver_sandbox_fstring_holes() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-fstr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+
+    // Provider call inside a hole: family `filesystem` exceeds (network).
+    let prov = dir.join("prov.resid");
+    std::fs::write(
+        &prov,
+        r#"sandbox (network) {
+    Int read() {
+        Str p = "x";
+        Str s = f"{filesystem.read_all(p)}";
+        return 0;
+    }
+}
+
+Int main() {
+    println(IntToString(read()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&prov)
+        .arg("-o")
+        .arg(dir.join("prov_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "provider call inside an interpolation must be rejected");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("E0218"), "error should carry E0218: {err}");
+    assert!(err.contains("filesystem"), "error should name the family: {err}");
+
+    // Capability-requiring call inside a hole: the call-graph edge must be
+    // seen (mirrors the Rust `walk_expr` FString arm).
+    let call = dir.join("call.resid");
+    std::fs::write(
+        &call,
+        r#"@requires(network)
+Int fetch() { return 42; }
+
+sandbox (filesystem) {
+    Int read() {
+        Str s = f"{IntToString(fetch())}";
+        return 0;
+    }
+}
+
+Int main() {
+    println(IntToString(read()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&call)
+        .arg("-o")
+        .arg(dir.join("call_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "requires-call inside an interpolation must be rejected");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("E0211"), "error should carry E0211: {err}");
+    assert!(err.contains("fetch"), "error should mention the callee: {err}");
+
+    // Literal text that looks like a call must not create an edge: the old
+    // substring fallback would have falsely flagged `fetch()` here.
+    let text = dir.join("text.resid");
+    std::fs::write(
+        &text,
+        r#"@requires(network)
+Int fetch() { return 42; }
+
+sandbox (filesystem) {
+    Int read() {
+        Str p = "x";
+        Str s = f"call filesystem.read_all(p) and fetch()";
+        return 0;
+    }
+}
+
+Int main() {
+    println(IntToString(read()));
+    return 0;
+}"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(workspace.join("examples/driver.resid"))
+        .arg("run")
+        .arg(&text)
+        .arg("-o")
+        .arg(dir.join("text_bin"))
+        .arg("-rt")
+        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "literal f-string text must not create a phantom call edge: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Sandboxing transitive attenuation (spec §21.3) through the bootstrap
 /// driver — mirrors `run_sandbox_transitive_attenuation`.
 #[test]
