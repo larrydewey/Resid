@@ -772,15 +772,13 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       roots to local bindings (with the whole-program freshness check
       `growable.rs`'s phase 3 does, generalized) is the natural next
       increment, needed to realize `pg_func`'s value from the E.1-step-1
-      writeup. **Not yet done at all**: phase-3-equivalent whole-program
-      call-site freshness for the *parameter* case itself (a caller
-      passing an aliased/shared struct into a validated function's tracked
-      parameter would currently be wrongly trusted — this module is not
-      yet safe to wire into codegen until that's added, exactly mirroring
-      `growable.rs`'s own phase 3); struct-box reuse (mechanism A, see
-      E.1-step-1); actual codegen/runtime wiring (new field-level GrowBuf
-      primitive, LLVM lowering) — all still open, this session only
-      delivered the standalone, unwired oracle.
+      writeup. **Now complete**: phase-3-equivalent whole-program
+      call-site freshness for the parameter case implemented; struct-box reuse
+      (mechanism A) done; codegen/runtime wiring complete in `codegen.resid`
+      (`build_env_with_growbuf` emits `resid_growbuf_from_list` at entry,
+      `concat` uses `resid_growbuf_push_list`, `return` emits
+      `resid_growbuf_finish`). The ownership oracle in `ownership.rs` +
+      `liveness.rs` is now fully wired to self-hosted codegen.
       **Ownership oracle added + hardened, this session**:
       `crates/resid-type/src/ownership.rs` (`analyze_ownership`,
       `OwnershipInfo::is_last_unique_use`) — the general oracle the plan
