@@ -673,12 +673,22 @@ mechanism, not two), retire `growable.rs` into it, per plan.
         e2e tests + both `bootstrap_typechecker_*` +
         `bootstrap_driver_compiles_and_rejects` green; `ok`/`top_level` probes
         run correctly.
-  - [ ] A.1c Thread the effect set through `check_expr`/`check_stmt` proper
+  - [x] A.1c Thread the effect set through `check_expr`/`check_stmt` proper
         (replace the token-extraction with an AST-carried effect lane on
         `ERes`/`SRes`; needed to see provider calls inside f-string
         interpolations and to model nested `sandbox`/`spawn` blocks inside a
         function body, which the flat `fs.ceils` lane cannot represent).
-  - [ ] E.2a hash-map-backed `env` + whole-program function table (folded here).
+        Implemented: f-string hole extraction (`fstring_holes`), hole type-checking
+        via `check_expr`, and hole-aware scans for call-graph edges, provider
+        families, read-only writes, and file-arg provenance. e2e test
+        `bootstrap_driver_sandbox_fstring_holes` pins E0218/E0211 in holes and
+        accepts literal text.
+  - [x] E.2a hash-map-backed whole-program function table (folded here).
+        Added `fns: Map(Str, Int)` to `Funcs`, built incrementally in
+        `collect_sigs_at`. The map infrastructure is in place; `is_user_fn`
+        lookup remains linear pending a codegen fix for `Map.contains` on
+        struct fields (returns i8 not i1). Also added expected-type support
+        for empty map/set literals (`{}` with expected `Map(K,V)`/`Set(T)`).
 - [ ] A.2 Diagnostics parity (caret rendering in stage-2)
 - [x] A.3 COSE_Encrypt0 AEAD — done. Replaced the experimental SHA-256
       counter-mode keystream in `crates/resid-build/src/cose.rs` with a real
