@@ -702,6 +702,15 @@ Bool str_has_prefix_cg(Str s, Str p) {
     return false;
 }
 
+Bool str_has_suffix(Str s, Str p) {
+    Int ns = str_len_1(s);
+    Int np = str_len_1(p);
+    if (np > ns) { return false; }
+    Str tail = str_slice(s, ns - np, ns);
+    if (tail == p) { return true; }
+    return false;
+}
+
 pub Str num_norm_cg(Str ty) {
     if (ty == "Int") { return "Int(64)"; }
     if (ty == "UInt") { return "UInt(64)"; }
@@ -3166,7 +3175,18 @@ GT csl_value(Str s, Int pos, Str fty, List(Str) env, Funcs fs, GT c) {
 GT csl_field(Str s, Int pos, Str fields, Str sname, Str reg, List(Str) env, Funcs fs, GT c) {
     Tok t = lex_tok(s, pos);
     if (t.text == "}") {
-        return GT { pos: t.pos, val: reg, ty: sname, cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
+        // Check for dead local wrapper pattern: if all fields came from
+        // field accesses on a single :owned struct, free that struct.
+        Str owned_reg = env_find_owned_struct(env);
+        GT result = if (owned_reg != "") {
+            Int tf = c.tmp + 1;
+            Str free_line = "call void @free(ptr " + owned_reg + ")";
+            List(Str) fl = c.lines.concat([free_line]);
+            GT { pos: t.pos, val: reg, ty: sname, cnt: 0, err: "", glines: c.glines, lines: fl, tmp: tf, lbl: c.lbl , tail: false}
+        } else {
+            GT { pos: t.pos, val: reg, ty: sname, cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false}
+        };
+        return result;
     }
     Tok colon = lex_tok(s, t.pos);
     if (colon.text != ":") { return gt_err("expected : in struct literal", c); }
@@ -3191,6 +3211,30 @@ GT csl_field(Str s, Int pos, Str fields, Str sname, Str reg, List(Str) env, Func
         return GT { pos: sep.pos, val: reg, ty: sname, cnt: 0, err: "", glines: stored.glines, lines: stored.lines, tmp: stored.tmp, lbl: stored.lbl , tail: false};
     }
     return gt_err("expected , or } in struct literal", stored);
+}
+
+Str env_find_owned_struct_at(List(Str) env, Int i) {
+    Int n = env.len();
+    if (i >= n) { return ""; }
+    Str ent = env[i];
+    Int c1 = str_find_char(ent, 58, 0);
+    if (c1 >= 0) {
+        Str rest1 = str_slice(ent, c1 + 1, str_len_1(ent));
+        Int c2 = str_find_char(rest1, 58, 0);
+        if (c2 >= 0) {
+            Str reg = str_slice(rest1, 0, c2);
+            Str after_reg = str_slice(rest1, c2 + 1, str_len_1(rest1));
+            if (after_reg == "owned") {
+                return reg;
+            }
+        }
+    }
+    Int k = i + 1;
+    return env_find_owned_struct_at(env, k);
+}
+
+Str env_find_owned_struct(List(Str) env) {
+    return env_find_owned_struct_at(env, 0);
 }
 
 GT cg_struct_lit(Str s, Int pos, Str sname, List(Str) env, Funcs fs, GT c) {
@@ -3486,7 +3530,11 @@ GT cg_bind_expr(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, GT c
     Bool res_ok_hole = str_has_prefix_cg(cv.ty, "Result(") && res_elem_ok_cg(cv.ty) == "_";
     Bool res_expected = str_has_prefix_cg(dtyb, "Result(");
     Str ent2g = pick_str(res_ok_hole && res_expected, name + ":" + cv.val + ":" + dtyb, ent2f);
-    List(Str) env2 = env_add(env, ent2g);
+    // Mark struct literal bindings as :owned (malloc'd, should be freed on last use)
+    Int si = struct_index(fs, cv.ty);
+    Bool is_struct_lit = si >= 0;
+    Str ent2h = if (is_struct_lit) { ent2g + ":owned" } else { ent2g };
+    List(Str) env2 = env_add(env, ent2h);
     GT c2 = GT { pos: semi.pos, val: cv.val, ty: cv.ty, cnt: cv.cnt, err: "", glines: cv.glines, lines: cv.lines, tmp: cv.tmp, lbl: cv.lbl , tail: false};
     return cg_expr_block(s, semi.pos, env2, fs, c2, false);
 }
@@ -9348,7 +9396,7 @@ Int main() {
     Int tc = ck_check_program(rsrc, 0, ssg);
     if (tc != 0) { return tc; }
     Funcs fs = collect_sigs(rsrc);
-List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"" "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
+List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"" "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
     List(Str) header = header_with_cmps(hdr_core, fs);
     PG g0 = PG { pos: 0, err: "", glines: [], hlines: [], lines: header, tmp: 0, lbl: 0 };
     PG res = pg_next(rsrc, 0, fs, g0);
@@ -9372,6 +9420,11 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int prc = write_provenance(out, rsrc);
     return prc;
 }
+
+
+
+
+
 
 
 
