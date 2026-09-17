@@ -707,9 +707,21 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       determinism, tamper + wrong-key + short-key rejection, plus the e2e
       `run_encrypt0_provenance_roundtrip`. Updated `main.rs` comment and
       `PROGRESS.md` (Concealment section).
-- [ ] A.4 Item 10 capability travel — confirm or fix
-- [ ] A.5 Package-level `@requires` enforcement
+- [x] A.4 Item 10 capability travel — confirm or fix
+        Force-time guard design confirmed final in A.1b: compile-time E0218
+        (provider-effect scan) closes the gap; runtime `resid_cap_check`
+        backstop remains for cases the static scan cannot see (f-string holes
+        prior to A.1c, indirect calls, dynamic code).
+- [x] A.5 Package-level `@requires` enforcement
+        Implemented in `crates/resid-build/src/lib.rs`: dependency capability
+        declarations are checked against the consumer's `[capabilities] grant`
+        at manifest load time (lines 319-326); `@requires` on individual
+        functions may only further restrict.
 - [ ] A.6 Import namespacing (`as M`)
+        Parser supports `as Identifier` alias (parser.rs:160-165); self-hosted
+        typechecker skips imports (reports "OK import"). Full resolution
+        needed for multi-file programs; not required for single-file
+        bootstrap driver.
 - [x] A.7 Audit codegen/type "not yet supported" fallbacks — done. Diffed
       the exhaustive `ExprKind` set against the explicitly-handled arms in
       `resid-type`'s `infer_expr_ctx` (catch-all at `lib.rs:2318`) and
