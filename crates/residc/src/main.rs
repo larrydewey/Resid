@@ -658,8 +658,8 @@ fn build_native(
                 eprintln!("cache flush error: {e}");
             }
             // Signed provenance trailer (spec §27/§34). Confidential
-            // reservation (§35): RESID_PROV_ENCRYPT=1 + RESID_PROV_KEY wraps
-            // the payload in COSE_Encrypt0 (experimental cipher, cose.rs).
+            // provenance (§35): RESID_PROV_ENCRYPT=1 + RESID_PROV_KEY wraps
+            // the payload in COSE_Encrypt0/ChaCha20-Poly1305 (cose.rs).
             if let Some(sec) = ensure_signing_key_interactive() {
                 let mut bytes = match fs::read(out) {
                     Ok(b) => b,
