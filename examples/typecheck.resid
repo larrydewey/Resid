@@ -655,11 +655,11 @@ List(Str) env_add(List(Str) env, Str name, Str ty) {
 // reqs/ceils are per-function lanes (§21.3): reqs[i] = comma-joined
 // `@requires` capability families, ceils[i] = comma-joined encoded
 // enclosing-sandbox ceiling for names[i].
-type Funcs = { names: List(Str), pts: List(Str), rets: List(Str), reqs: List(Str), ceils: List(Str), bods: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), exp_tys: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str), fns: Map(Str, Int) };
+type Funcs = { names: List(Str), pts: List(Str), pns: List(Str), rets: List(Str), reqs: List(Str), ceils: List(Str), bods: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), exp_tys: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str), fns: Map(Str, Int), growable: List(Int) };
 
 Funcs funcs_empty() {
     Map(Str, Int) empty = {"__EMPTY__": -1};
-    return Funcs { names: [], pts: [], rets: [], reqs: [], ceils: [], bods: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], exp_tys: [], ctn: [], ctb: [], ctc: [], fns: empty };
+    return Funcs { names: [], pts: [], pns: [], rets: [], reqs: [], ceils: [], bods: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], exp_tys: [], ctn: [], ctb: [], ctc: [], fns: empty, growable: [] };
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -2020,7 +2020,7 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Funcs fs) {
     Bool is_ctor = name == "Ok" || name == "Err" || name == "Some" || name == "None";
     if (is_ctor) {
         Str ctor_exp = if (fs.exp_tys.len() > 0) { fs.exp_tys[0] } else { "" };
-        Funcs fs3 = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: funcs_empty().names, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns };
+        Funcs fs3 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: funcs_empty().names, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: fs.growable };
         if (t.text == ")") {
             return check_builtin(name, "", 0, pos, ctor_exp, funcs_empty().names);
         }
@@ -2035,7 +2035,7 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Funcs fs) {
     }
     Int idx = fn_index(fs, name);
     List(Str) pt_list = if (idx >= 0) { split_type_list(fs.pts[idx], 0, 0, 0, "", funcs_empty().names) } else { funcs_empty().names };
-    Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: pt_list, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns };
+    Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: pt_list, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: fs.growable };
     ARes a = collect_args(s, pos, "", 0, env, fs2);
     if (a.err != "") {
         return ERes { pos: a.pos, ty: "", err: a.err };
@@ -2619,7 +2619,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "(") {
             Bool is_ctor = t.text == "Ok" || t.text == "Err" || t.text == "Some" || t.text == "None";
-            Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns };
+            Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: fs.growable };
             return check_call(s, t2.pos, t.text, env, fs2);
         }
         if (t2.text == "{") {
@@ -3440,6 +3440,21 @@ Str collect_ptypes(Str s, Int pos, Str acc) {
     return acc + sep2 + pty.ty;
 }
 
+Str collect_pnames(Str s, Int pos, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") { return acc; }
+    PRes pty = parse_type(s, pos);
+    Tok pn = lex_tok(s, pty.pos);
+    Tok t2 = lex_tok(s, pn.pos);
+    if (t2.text == ",") {
+        Str sep = if (acc != "") { "," } else { "" };
+        Str acc3 = acc + sep + pn.text;
+        return collect_pnames(s, t2.pos, acc3);
+    }
+    Str sep2 = if (acc != "") { "," } else { "" };
+    return acc + sep2 + pn.text;
+}
+
 // ─── Capability helpers (spec §21.3) ────────────────────────────
 // Encoded capability strings ride as comma-joined `Str` lanes on Funcs
 // (reqs[i] = @requires families, ceils[i] = enclosing sandbox ceiling).
@@ -3600,7 +3615,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
                 List(Str) c0 = fs.ctn;
                 List(Str) c1 = fs.ctb;
                 List(Str) c2 = fs.ctc;
-                Funcs fsc = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: c0.concat([tname.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]), fns: fs.fns };
+                Funcs fsc = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: c0.concat([tname.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]), fns: fs.fns, growable: fs.growable };
                 Int endc = skip_decl(s, t.pos, 0);
                 return collect_sigs_at(s, endc, fsc, pending_req, sandbox_ceil);
             }
@@ -3612,7 +3627,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
         List(Str) sf1 = fs.stf;
         List(Str) sn2 = sn1.concat([tname.text]);
         List(Str) sf2 = sf1.concat([fstr]);
-        Funcs fsx = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns };
+        Funcs fsx = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: fs.growable };
         Int end = skip_decl(s, t.pos, 0);
         return collect_sigs_at(s, end, fsx, pending_req, sandbox_ceil);
     }
@@ -3638,7 +3653,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
             List(Str) bnn = bn0.concat([bh.name]);
             List(Str) bpp = bp0.concat([bh.param]);
             List(Str) bff = bf0.concat([bh.impl]);
-            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns };
+            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: fs.growable };
             return collect_sigs_at(s, bh.pos, fsb, pending_req, sandbox_ceil);
         }
         PRes rty = parse_type(s, pos_in);
@@ -3648,26 +3663,94 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
         Tok name = lex_tok(s, rty.pos);
         Tok open = lex_tok(s, name.pos);
         Str pts = collect_ptypes(s, open.pos, "");
+        Str pns = collect_pnames(s, open.pos, "");
         Int end = skip_body(s, t2_pos_after_open(s, open));
         Str body = str_slice(s, open.pos, end);
         List(Str) n1 = fs.names;
         List(Str) p1 = fs.pts;
+        List(Str) pn1 = fs.pns;
         List(Str) r1 = fs.rets;
         List(Str) rq1 = fs.reqs;
         List(Str) ce1 = fs.ceils;
         List(Str) bo1 = fs.bods;
         List(Str) names2 = n1.concat([name.text]);
         List(Str) pts2 = p1.concat([pts]);
+        List(Str) pns2 = pn1.concat([pns]);
         List(Str) rets2 = r1.concat([rty.ty]);
         List(Str) reqs2 = rq1.concat([pending_req]);
         List(Str) ceils2 = ce1.concat([sandbox_ceil]);
         List(Str) bods2 = bo1.concat([body]);
         Int idx = n1.len();
         Map(Str, Int) fns2 = fs.fns.insert(name.text, idx);
-        Funcs fs2 = Funcs { names: names2, pts: pts2, rets: rets2, reqs: reqs2, ceils: ceils2, bods: bods2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fns2 };
+        Funcs fs2 = Funcs { names: names2, pts: pts2, pns: pns2, rets: rets2, reqs: reqs2, ceils: ceils2, bods: bods2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fns2, growable: [] };
         return collect_sigs_at(s, end, fs2, "", sandbox_ceil);
     }
     return collect_sigs_at(s, t.pos, fs, pending_req, sandbox_ceil);
+}
+
+Funcs collect_sigs(Str s) {
+    Funcs fs = collect_sigs_at(s, 0, funcs_empty(), "", "");
+    return analyze_growable(fs);
+}
+
+// ─── E.1: Growable accumulator analysis ───────────────────────────
+// Identify bare List(T) parameters that follow the accumulator shape:
+// only used as `param.concat(expr)` (expr not referencing param),
+// returned directly (base case), or threaded to recursive self-call
+// in the same parameter slot. See crates/resid-type/src/growable.rs.
+Funcs analyze_growable(Funcs fs) {
+    Int n = fs.names.len();
+    List(Int) growable = analyze_growable_rec(fs, 0, n, []);
+    return Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: growable };
+}
+
+List(Int) analyze_growable_rec(Funcs fs, Int i, Int n, List(Int) acc) {
+    if (i >= n) { return acc; }
+    List(Int) acc2 = if (is_growable_param(fs, i)) { acc.concat([i]) } else { acc };
+    Int k = i + 1;
+    return analyze_growable_rec(fs, k, n, acc2);
+}
+
+// Is the parameter at index `idx` a List(T) type?
+Bool is_list_param(Funcs fs, Int idx) {
+    if (idx >= fs.pts.len()) { return false; }
+    Str pts = fs.pts[idx];
+    return str_has_prefix(pts, "List(") || str_has_prefix(pts, "List(Str") || str_has_prefix(pts, "List(Int") || str_has_prefix(pts, "List(Float");
+}
+
+// Check if parameter at `idx` follows the growable accumulator shape.
+Bool is_growable_param(Funcs fs, Int idx) {
+    if (!is_list_param(fs, idx)) { return false; }
+    Str param_name = fs.pns[idx];
+    Str body = fs.bods[idx];
+    Str fname = fs.names[idx];
+    return check_growable_shape(body, param_name, fname, idx, fs);
+}
+
+// Main shape check: walk the body text and verify accumulator shape.
+// Recognizes:
+//   - `param.concat(expr)` where expr doesn't reference param
+//   - `return param` (base case)
+//   - Recursive self-call with grown temp in same param position
+//   - Delegate calls to other growable functions (not implemented yet)
+Bool check_growable_shape(Str body, Str param, Str fname, Int idx, Funcs fs) {
+    // Simplified check: scan for param occurrences and classify them
+    // For now, use a conservative approximation: if body contains
+    // `param.concat` and `return param`, consider it growable.
+    // Full shape check requires parsing the body which is complex in Resid.
+    // Conservative: if `param.concat` appears and no other param uses,
+    // assume growable.
+    Bool saw_concat = false;
+    Bool saw_return_param = false;
+    Bool other_uses = false;
+    // This is a simplified approximation. Full analysis would require
+    // proper parsing of the body.
+    return false; // Disabled for now - conservative
+}
+
+// Helper to check if a string starts with a pattern
+Bool str_starts_with(Str s, Str p) {
+    return str_has_prefix(s, p);
 }
 
 Int t2_pos_after_open(Str s, Tok open) {

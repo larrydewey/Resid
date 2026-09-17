@@ -91,13 +91,15 @@ def main():
     # include preceding blank separation cleanly
     chunk = tc[cs:]
     chunk = cut_main(chunk)
-    chunk = drop_decls(chunk, {'PRes', 'parse_type', 'parse_type_arg',
-                               'parse_type_args_rest', 'skip_body', 'skip_decl',
-                               'str_find_char',
-                               # Constraint-type helpers (spec §12): identical copies
-                               # in both halves; keep the codegen (base) versions.
-                               'find_sqclose_d', 'find_semi0', 'extract_ctext',
-                               'ct_is_at', 'ct_is', 'ct_rank_at', 'ct_rank',
+chunk = drop_decls(chunk, {'PRes', 'parse_type', 'parse_type_arg',
+                           'parse_type_args_rest', 'skip_body', 'skip_decl',
+                           'str_find_char',
+                           # Constraint-type helpers (spec §12): identical copies
+                           # in both halves; keep the codegen (base) versions.
+                           'find_sqclose_d', 'find_semi0', 'extract_ctext',
+                           'ct_is_at', 'ct_is', 'ct_rank_at', 'ct_rank',
+                           # Parameter name collection: codegen has its own
+                           'collect_pnames',
                                'ct_base_of', 'ct_text_of',
                                # Fixed-capacity type predicates (spec §44):
                                # identical copies in both halves; keep the
