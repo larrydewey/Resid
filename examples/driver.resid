@@ -4854,10 +4854,11 @@ List(Str) ck_env_add(List(Str) env, Str name, Str ty) {
 // reqs/ceils are per-function lanes (§21.3): reqs[i] = comma-joined
 // `@requires` capability families, ceils[i] = comma-joined encoded
 // enclosing-sandbox ceiling for names[i].
-type Sigs = { names: List(Str), pts: List(Str), rets: List(Str), reqs: List(Str), ceils: List(Str), bods: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), exp_tys: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str) };
+type Sigs = { names: List(Str), pts: List(Str), rets: List(Str), reqs: List(Str), ceils: List(Str), bods: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), exp_tys: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str), fns: Map(Str, Int) };
 
 Sigs sigs_empty() {
-    return Sigs { names: [], pts: [], rets: [], reqs: [], ceils: [], bods: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], exp_tys: [], ctn: [], ctb: [], ctc: [] };
+    Map(Str, Int) empty = {"__EMPTY__": -1};
+    return Sigs { names: [], pts: [], rets: [], reqs: [], ceils: [], bods: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], exp_tys: [], ctn: [], ctb: [], ctc: [], fns: empty };
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -6012,7 +6013,7 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Sigs fs) {
     Bool is_ctor = name == "Ok" || name == "Err" || name == "Some" || name == "None";
     if (is_ctor) {
         Str ctor_exp = if (fs.exp_tys.len() > 0) { fs.exp_tys[0] } else { "" };
-        Sigs fs3 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: sigs_empty().names, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+        Sigs fs3 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: sigs_empty().names, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns };
         if (t.text == ")") {
             return check_builtin(name, "", 0, pos, ctor_exp, sigs_empty().names);
         }
@@ -6027,7 +6028,7 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Sigs fs) {
     }
     Int idx = ck_fn_index(fs, name);
     List(Str) pt_list = if (idx >= 0) { split_type_list(fs.pts[idx], 0, 0, 0, "", sigs_empty().names) } else { sigs_empty().names };
-    Sigs fs2 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: pt_list, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+    Sigs fs2 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: pt_list, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns };
     ARes a = collect_args(s, pos, "", 0, env, fs2);
     if (a.err != "") {
         return ERes { pos: a.pos, ty: "", err: a.err };
@@ -6097,11 +6098,22 @@ ERes check_list_lit(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
 
 // Check if a comma-separated expression list is a map (contains ':') or set.
 // Returns "Map" or "Set" as the result type prefix.
-ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Sigs fs) {
-    // Peek ahead: an empty literal `{}` cannot infer element type (spec
-    // parity with stage-1: an explicit type annotation would be required).
+ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
+    // Peek ahead: an empty literal `{}` cannot infer element type without
+    // an expected type (spec parity with stage-1: an explicit type
+    // annotation is required). If the expected type is a Map/Set, use it.
     Tok probe = lex_tok(s, pos);
     if (probe.text == "}") {
+        if (str_has_prefix(exp, "Map(")) {
+            Str inner = str_slice(exp, 4, str_len_1(exp) - 1);
+            Str kt = str_slice(inner, 0, str_find_char(inner, 44, 0));
+            Str vt = str_slice(inner, str_find_char(inner, 44, 0) + 2, str_len_1(inner));
+            return ERes { pos: probe.pos, ty: "Map(" + kt + ", " + vt + ")", err: "" };
+        }
+        if (str_has_prefix(exp, "Set(")) {
+            Str inner = str_slice(exp, 4, str_len_1(exp) - 1);
+            return ERes { pos: probe.pos, ty: "Set(" + inner + ")", err: "" };
+        }
         return ERes { pos: probe.pos, ty: "", err: "cannot infer element type of an empty set literal (add an explicit type)" };
     }
     // Peek ahead: consume first expression, check for ':'
@@ -6600,7 +6612,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "(") {
             Bool is_ctor = t.text == "Ok" || t.text == "Err" || t.text == "Some" || t.text == "None";
-            Sigs fs2 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+            Sigs fs2 = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns };
             return check_call(s, t2.pos, t.text, env, fs2);
         }
         if (t2.text == "{") {
@@ -6676,7 +6688,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
         return check_list_lit(s, t.pos, env, fs, exp);
     }
     if (t.text == "{") {
-        return check_map_or_set_lit(s, t.pos, env, fs);
+        return check_map_or_set_lit(s, t.pos, env, fs, exp);
     }
     Str msg = "unexpected token " + t.text;
     return ERes { pos: t.pos, ty: "", err: msg };
@@ -7526,7 +7538,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ce
                 List(Str) c0 = fs.ctn;
                 List(Str) c1 = fs.ctb;
                 List(Str) c2 = fs.ctc;
-                Sigs fsc = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: c0.concat([tname.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]) };
+                Sigs fsc = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: c0.concat([tname.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]), fns: fs.fns };
                 Int endc = skip_decl(s, t.pos, 0);
                 return ck_collect_sigs_at(s, endc, fsc, pending_req, sandbox_ceil);
             }
@@ -7538,7 +7550,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ce
         List(Str) sf1 = fs.stf;
         List(Str) sn2 = sn1.concat([tname.text]);
         List(Str) sf2 = sf1.concat([fstr]);
-        Sigs fsx = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+        Sigs fsx = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns };
         Int end = skip_decl(s, t.pos, 0);
         return ck_collect_sigs_at(s, end, fsx, pending_req, sandbox_ceil);
     }
@@ -7564,7 +7576,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ce
             List(Str) bnn = bn0.concat([bh.name]);
             List(Str) bpp = bp0.concat([bh.param]);
             List(Str) bff = bf0.concat([bh.impl]);
-            Sigs fsb = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+            Sigs fsb = Sigs { names: fs.names, pts: fs.pts, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns };
             return ck_collect_sigs_at(s, bh.pos, fsb, pending_req, sandbox_ceil);
         }
         PRes rty = parse_type(s, pos_in);
@@ -7588,7 +7600,9 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ce
         List(Str) reqs2 = rq1.concat([pending_req]);
         List(Str) ceils2 = ce1.concat([sandbox_ceil]);
         List(Str) bods2 = bo1.concat([body]);
-        Sigs fs2 = Sigs { names: names2, pts: pts2, rets: rets2, reqs: reqs2, ceils: ceils2, bods: bods2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc };
+        Int idx = n1.len();
+        Map(Str, Int) fns2 = fs.fns.insert(name.text, idx);
+        Sigs fs2 = Sigs { names: names2, pts: pts2, rets: rets2, reqs: reqs2, ceils: ceils2, bods: bods2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fns2 };
         return ck_collect_sigs_at(s, end, fs2, "", sandbox_ceil);
     }
     return ck_collect_sigs_at(s, t.pos, fs, pending_req, sandbox_ceil);
@@ -7855,16 +7869,17 @@ Str fstring_holes_err(Str s, Tok t, List(Str) env, Sigs fs) {
 // from a provider verb or method call. Instead we lex the body and record
 // an `ident (` pair only when the identifier is a known user function and
 // is not the tail of a `.`-method access. Tokens make strings/comments
-// inert; `prev != "."` excludes provider verbs and methods.
+// inert; `prev != "."` excludes provider verbs and methods. A hash map
+// (E.2a) gives O(1) name→index lookups instead of the old O(n) linear scan.
+Bool is_user_fn(Sigs fs, Str n) {
+    return is_user_fn_at(fs.names, n, 0);
+}
+
 Bool is_user_fn_at(List(Str) names, Str n, Int i) {
     if (i >= names.len()) { return false; }
     if (names[i] == n) { return true; }
     Int k = i + 1;
     return is_user_fn_at(names, n, k);
-}
-
-Bool is_user_fn(Sigs fs, Str n) {
-    return is_user_fn_at(fs.names, n, 0);
 }
 
 // A user function called inside an interpolation is a real call-graph edge,
@@ -9133,6 +9148,12 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int prc = write_provenance(out, rsrc);
     return prc;
 }
+
+
+
+
+
+
 
 
 
