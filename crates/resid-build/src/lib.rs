@@ -147,7 +147,11 @@ pub struct Dependency {
     pub manifest_path: String,
     /// Resolved root source of the dependency.
     pub path: PathBuf,
-    /// Declared capability requirements (parsed, not yet enforced).
+    /// Declared capability ceiling for this dependency (spec §21.1). The
+    /// consumer must itself hold every family listed here under
+    /// `[capabilities] grant` (checked while loading the manifest), and
+    /// `build` seeds the dependency's files with the corresponding
+    /// `resid_type::FileCeiling`s so source `@requires` may only restrict.
     pub capabilities: Vec<String>,
     /// Pinned publisher Ed25519 public key (hex) from `pubkey = "…"`
     /// (spec §28.3); `None` when the dependency is not pinned.

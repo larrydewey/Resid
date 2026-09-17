@@ -1,13 +1,16 @@
 //! Minimal COSE (RFC 9052) support: `COSE_Sign1` (tag 18) with EdDSA (-8,
-//! Ed25519) and a reserved `COSE_Encrypt0` (tag 16) path for confidential
-//! provenance. Only the deterministic subset needed for provenance trailers
-//! is implemented; interop is pinned by test against RFC-derived vectors.
+//! Ed25519) and `COSE_Encrypt0` (tag 16) with ChaCha20-Poly1305 (alg 24) for
+//! confidential provenance. Only the deterministic subset needed for
+//! provenance trailers is implemented; interop is pinned by test against
+//! RFC-derived vectors.
 
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 pub const ALG_EDDSA: i64 = -8;
-/// Reserved for confidential provenance (spec §34); see `encrypt0_seal`.
-pub const ALG_RESERVED_ENCRYPT0: i64 = -10;
+/// IANA COSE algorithm 24: ChaCha20-Poly1305 (RFC 8439).
+pub const ALG_CHACHA20_POLY1305: i64 = 24;
 
 // ── CBOR primitives ──
 
@@ -212,38 +215,108 @@ pub fn sign1_extract(cose: &[u8]) -> Option<Vec<u8>> {
     read_b(cose, &mut pos)
 }
 
-// ── COSE_Encrypt0 (reserved; experimental stream construction) ──
+// ── COSE_Encrypt0 (tag 16) · ChaCha20-Poly1305 (alg 24) ──
 //
-// The setting is wired end-to-end per spec §35 but the cipher is an
-// EXPERIMENTAL SHA-256 counter-mode keystream keyed by RESID_PROV_KEY —
-// not an approved AEAD. Do not rely on confidentiality until this is
-// replaced by AES-128-GCM / ChaCha20-Poly1305 (alg labels pending).
+// Confidential provenance (spec §34/§35): the payload is sealed with an AEAD
+// keyed by RESID_PROV_KEY (32 bytes / 64 hex chars) before the outer
+// COSE_Sign1 is applied, so the recorded build facts — including
+// `binary_sha256` — stay hidden from anyone without the key while the
+// trailer remains Ed25519-authentic.
+//
+// Wire shape (RFC 9052 §5.2, self-consistent subset):
+//   tag(16) [ protected: {1: 24}, unprotected: {5: iv}, ciphertext ]
+// The AEAD associated data is the CBOR `Enc_structure`
+// `["Encrypt0", protected, ""]` (RFC 9052 §5.3), binding the algorithm label.
+// Nonces are synthetic and deterministic — SHA-256 over the secret key,
+// `kid`, and the plaintext — so repeated builds reproduce byte-for-byte while
+// distinct payloads never reuse a nonce.
 
-/// Wrap `plaintext` into a COSE_Encrypt0-shaped (tag 16) blob.
+use sha2::{Digest, Sha256};
+type Sha256n = Sha256;
+
+/// Build the RFC 9052 §5.3 `Enc_structure` used as AEAD associated data.
+fn enc_structure(protected: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    cb_array_header(&mut out, 3);
+    cb_text(&mut out, "Encrypt0");
+    cb_bytes(&mut out, protected);
+    cb_bytes(&mut out, &[]); // external_aad
+    out
+}
+
+/// Protected header bucket: `{alg: 24 (ChaCha20-Poly1305)}`.
+fn encrypt0_protected() -> Vec<u8> {
+    let mut out = Vec::new();
+    cb_map_header(&mut out, 1);
+    head(&mut out, 0, 1);
+    cb_nint(&mut out, ALG_CHACHA20_POLY1305);
+    out
+}
+
+/// Deterministic synthetic nonce (12 bytes): derived from the secret key so
+/// it is unpredictable to an attacker yet reproducible for a given build.
+fn encrypt0_nonce(key: &[u8], kid: &str, plaintext: &[u8]) -> [u8; 12] {
+    let mut h = Sha256n::new();
+    h.update(b"resid/cose/encrypt0/nonce");
+    h.update(key);
+    h.update(kid.as_bytes());
+    h.update(plaintext);
+    let d = h.finalize();
+    let mut n = [0u8; 12];
+    n.copy_from_slice(&d[..12]);
+    n
+}
+
+/// Read a CBOR byte string at `pos`; returns the bytes and advances `pos`.
+fn cb_read_bytes(bytes: &[u8], pos: &mut usize) -> Option<Vec<u8>> {
+    let b = *bytes.get(*pos)?;
+    *pos += 1;
+    if b & 0xE0 != 0x40 {
+        return None;
+    }
+    let len = match b & 0x1F {
+        n @ 0..=23 => n as usize,
+        24 => {
+            let l = *bytes.get(*pos)? as usize;
+            *pos += 1;
+            l
+        }
+        25 => {
+            let v = bytes.get(*pos..*pos + 2)?;
+            *pos += 2;
+            u16::from_be_bytes(v.try_into().ok()?) as usize
+        }
+        _ => return None,
+    };
+    let v = bytes.get(*pos..*pos + len)?.to_vec();
+    *pos += len;
+    Some(v)
+}
+
+/// Seal `plaintext` into a COSE_Encrypt0 (tag 16) blob with ChaCha20-Poly1305.
 pub fn encrypt0_seal(plaintext: &[u8], key_hex: &str, kid: &str) -> Result<Vec<u8>, String> {
     let key = decode_hex(key_hex).ok_or("cose: bad key hex")?;
-    let nonce = sha_prefix(kid.as_bytes(), 12);
-    let ct: Vec<u8> = plaintext
-        .iter()
-        .enumerate()
-        .map(|(i, b)| b ^ keystream(&key, &nonce, i))
-        .collect();
-    let mut prot = Vec::new();
-    cb_map_header(&mut prot, 1);
-    head(&mut prot, 0, 1);
-    cb_nint(&mut prot, ALG_RESERVED_ENCRYPT0);
+    let cipher =
+        ChaCha20Poly1305::new_from_slice(&key).map_err(|_| "cose: key must be 32 bytes")?;
+    let nonce_bytes = encrypt0_nonce(&key, kid, plaintext);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let prot = encrypt0_protected();
+    let aad = enc_structure(&prot);
+    let ct = cipher
+        .encrypt(nonce, Payload { msg: plaintext, aad: &aad })
+        .map_err(|_| "cose: encrypt failed")?;
     let mut out = Vec::new();
     cb_tag(&mut out, 16);
     cb_array_header(&mut out, 3);
     cb_bytes(&mut out, &prot);
-    let mut iv = nonce;
-    iv.extend_from_slice(&(plaintext.len() as u64).to_be_bytes());
-    cb_bytes(&mut out, &iv);
+    cb_map_header(&mut out, 1); // unprotected: {5 (iv): nonce}
+    head(&mut out, 0, 5);
+    cb_bytes(&mut out, &nonce_bytes);
     cb_bytes(&mut out, &ct);
     Ok(out)
 }
 
-/// Open an `encrypt0_seal` blob.
+/// Open an `encrypt0_seal` blob, authenticating it against the same key.
 pub fn encrypt0_open(blob: &[u8], key_hex: &str) -> Result<Vec<u8>, String> {
     let mut pos = 0usize;
     if *blob.first().ok_or("cose: empty")? != 0xD0 {
@@ -254,65 +327,29 @@ pub fn encrypt0_open(blob: &[u8], key_hex: &str) -> Result<Vec<u8>, String> {
         return Err("cose: expected array(3)".into());
     }
     pos += 1;
-    let read_b = |bytes: &[u8], pos: &mut usize| -> Option<Vec<u8>> {
-        let b = *bytes.get(*pos)?;
-        *pos += 1;
-        if b & 0xE0 != 0x40 {
-            return None;
-        }
-        let len = match b & 0x1F {
-            n @ 0..=23 => n as usize,
-            24 => {
-                let l = *bytes.get(*pos)? as usize;
-                *pos += 1;
-                l
-            }
-            25 => {
-                let v = bytes.get(*pos..*pos + 2)?;
-                *pos += 2;
-                u16::from_be_bytes(v.try_into().ok()?) as usize
-            }
-            _ => return None,
-        };
-        let v = bytes.get(*pos..*pos + len)?.to_vec();
-        *pos += len;
-        Some(v)
-    };
-    let _prot = read_b(blob, &mut pos).ok_or("cose: bad protected")?;
-    let iv_full = read_b(blob, &mut pos).ok_or("cose: bad iv")?;
-    if iv_full.len() != 20 {
-        return Err("cose: bad iv length".into());
+    let prot = cb_read_bytes(blob, &mut pos).ok_or("cose: bad protected")?;
+    // Unprotected header map must be exactly {5: iv}.
+    let um = *blob.get(pos).ok_or("cose: truncated")?;
+    pos += 1;
+    if um != 0xA1 {
+        return Err("cose: expected unprotected map(1)".into());
     }
-    let (kid_nonce, lens) = iv_full.split_at(12);
-    let want_len = u64::from_be_bytes(lens.try_into().unwrap()) as usize;
-    let cth = *blob.get(pos).ok_or("cose: truncated")?;
-    if cth & 0xE0 != 0x40 || cth & 0x1F != want_len as u8 {
-        return Err("cose: bad ciphertext header".into());
+    if *blob.get(pos).ok_or("cose: truncated")? != 0x05 {
+        return Err("cose: expected iv key 5".into());
     }
-    let ct = blob.get(pos + 1..).ok_or("cose: truncated")?;
-    if ct.len() != want_len {
-        return Err("cose: length mismatch".into());
+    pos += 1;
+    let iv = cb_read_bytes(blob, &mut pos).ok_or("cose: bad iv")?;
+    if iv.len() != 12 {
+        return Err("cose: iv must be 12 bytes".into());
     }
+    let ct = cb_read_bytes(blob, &mut pos).ok_or("cose: bad ciphertext")?;
     let key = decode_hex(key_hex).ok_or("cose: bad key hex")?;
-    Ok(ct.iter().enumerate().map(|(i, b)| b ^ keystream(&key, kid_nonce, i)).collect())
-}
-
-fn keystream(key: &[u8], nonce: &[u8], index: usize) -> u8 {
-    let block = index / 32;
-    let mut h = Sha256n::new();
-    h.update(key);
-    h.update(nonce);
-    h.update((block as u64).to_be_bytes());
-    h.finalize()[index % 32]
-}
-
-use sha2::{Digest, Sha256};
-type Sha256n = Sha256;
-
-fn sha_prefix(bytes: &[u8], n: usize) -> Vec<u8> {
-    let mut h = Sha256n::new();
-    h.update(bytes);
-    h.finalize()[..n].to_vec()
+    let cipher =
+        ChaCha20Poly1305::new_from_slice(&key).map_err(|_| "cose: key must be 32 bytes")?;
+    let aad = enc_structure(&prot);
+    cipher
+        .decrypt(Nonce::from_slice(&iv), Payload { msg: &ct, aad: &aad })
+        .map_err(|_| "cose: authentication failed".into())
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
@@ -354,5 +391,33 @@ mod tests {
         let key = "00".repeat(32);
         let blob = encrypt0_seal(b"secret provenance", &key, "resid").unwrap();
         assert_eq!(encrypt0_open(&blob, &key).unwrap(), b"secret provenance");
+    }
+
+    #[test]
+    fn encrypt0_is_deterministic() {
+        // Synthetic nonces make repeated seals byte-identical (reproducible
+        // provenance) while still varying with the plaintext.
+        let key = "ab".repeat(32);
+        let a = encrypt0_seal(b"payload one", &key, "resid-prov").unwrap();
+        let b = encrypt0_seal(b"payload one", &key, "resid-prov").unwrap();
+        assert_eq!(a, b);
+        let c = encrypt0_seal(b"payload two", &key, "resid-prov").unwrap();
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn encrypt0_tamper_and_wrong_key_rejected() {
+        let key = "ab".repeat(32);
+        let blob = encrypt0_seal(b"secret provenance", &key, "resid").unwrap();
+        // Flip the last ciphertext/tag byte: authentication must fail.
+        let mut tampered = blob.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 1;
+        assert!(encrypt0_open(&tampered, &key).is_err());
+        // A different key must not open the blob.
+        let other = "cd".repeat(32);
+        assert!(encrypt0_open(&blob, &other).is_err());
+        // A short key is refused outright.
+        assert!(encrypt0_seal(b"x", "00", "resid").is_err());
     }
 }
