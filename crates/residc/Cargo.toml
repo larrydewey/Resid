@@ -13,7 +13,6 @@ resid-parser = { path = "../resid-parser" }
 resid-ir = { path = "../resid-ir" }
 resid-type = { path = "../resid-type" }
 resid-codegen = { path = "../resid-codegen" }
-resid-builtin = { path = "../resid-builtin" }
 inkwell = { version = "0.9", features = ["llvm22-1"] }
 
 [[bin]]

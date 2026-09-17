@@ -163,7 +163,7 @@ stack types are demonstrated in `examples/stack_types.resid`.
     resid/
     ├── crates/              # Compiler pipeline (Rust + LLVM)
     │   ├── resid-lexer      ├── resid-parser     ├── resid-ir
-    │   ├── resid-type       ├── resid-codegen    ├── resid-builtin
+    │   ├── resid-type       ├── resid-codegen
     │   ├── resid-build      └── residc           # driver CLI
     ├── lib/                 # Standard library written in Resid
     │   ├── crypto.resid       # SHA-256/512, HMAC, PBKDF2, Base64, random
