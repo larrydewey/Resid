@@ -17,6 +17,12 @@ mod graph;
 pub use graph::{from_ast, graph_reduce, to_ast};
 mod growable;
 pub use growable::{GrowableAccumulators, find_growable_accumulators};
+mod field_growable;
+pub use field_growable::{GrowableFields, find_growable_fields};
+mod ownership;
+pub use ownership::{OwnershipInfo, analyze_ownership};
+mod liveness;
+pub use liveness::{last_uses, SiteKey as LastUseSiteKey};
 use resid_lexer::token::{Literal, Op as OpKind, Span};
 use resid_parser::{
     Block, CapabilityAnnotation, Declaration, Expr, ExprKind, FStringPart, FuncDef, Id, Pattern,
@@ -5493,6 +5499,34 @@ Int add(Int a, Int b) {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no type errors, got: {:?}", errs);
+    }
+
+    /// PLAN-resid-only A.7 audit pin: the C-style `for (init; cond; step)`
+    /// form is parsed by `resid-parser` but never handled by the type
+    /// checker (or codegen), so it reports the generic "not yet supported"
+    /// fallback. It is unreachable in real programs — Resid forbids
+    /// reassignment, so a C-style loop's step cannot change the condition —
+    /// and the self-hosted parser explicitly skips it too. (Note the parser
+    /// also only even reaches its C-style branch when the first token is not
+    /// a type, since `for (Type ...)` is eagerly treated as for-in.) This
+    /// test exists so the gap can't silently change shape; `Destructure` is
+    /// the only other unhandled `ExprKind`, and it is never produced by the
+    /// parser (only by graph-IR round-tripping).
+    #[test]
+    fn c_style_for_reports_not_yet_supported() {
+        let src = r#"
+Int main() {
+    for (; true; ) { Int x = 1; }
+    return 0;
+}
+"#;
+        let (unit, parse_errors) = resid_parser::Parser::parse("for.resid", src);
+        assert!(parse_errors.is_empty(), "C-style for should parse, got: {parse_errors:?}");
+        let errs = check_program(&unit);
+        assert!(
+            errs.iter().any(|e| e.message.contains("not yet supported for `for`")),
+            "expected the generic unsupported-expr error for C-style `for`, got: {errs:?}"
+        );
     }
 
     #[test]
