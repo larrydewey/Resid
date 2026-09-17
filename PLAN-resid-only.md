@@ -346,41 +346,20 @@ otherwise allocate fresh (today's behavior, unconditionally safe).
   highest confirmed leverage on memory; supersedes the abandoned
   shape-matcher above — see that section for the full design rationale and
   precedent). Sub-steps, each independently checkpoint-able:
-  1. **Representation decision.** Prototype the structural (over the typed
-     AST/block-tree, no new IR crate) approach on a handful of real
-     `codegen.resid` functions spanning the difficulty range found during
-     the abandoned attempt's survey: a leaf accumulator (`cap_enter_globals_at`),
-     a multi-struct merge (`finish_ifexpr`), and a big orchestrator
-     (`pg_func`). If delegation/mutual-recursion or the multi-struct-merge
-     case doesn't compose cleanly structurally, fall back to a small
-     purpose-built IR (basic blocks + explicit def/use) before going
-     further — don't build the general pass on a representation that
-     already failed on the hard cases.
-  2. **Last-use / ownership inference**, general over every heap type
-     (List, struct, Sum, Map/Set): for each binding, determine whether, at
-     each of its uses, it is the *last* use and whether it's *uniquely
-     owned* at that point (no other live binding aliases the same
-     allocation). Build this as a real dataflow computation, not a shape
-     enumeration — the deliverable is an oracle
-     `is_last_unique_use(binding, use_site) -> bool`, not a list of
-     recognized templates.
-  3. **Codegen consumption**: one rule — at a proven last-unique-use that's
-     rebuilding "same shape, some fields changed" (struct rebuild, List
-     grow), reuse the old allocation via a slot-mutation primitive
-     (`resid_box_set_slot`-shaped, or equivalent) instead of allocating
-     fresh; everything else keeps today's always-copy/leak path
-     unconditionally. Replaces `growable.rs`'s bespoke bare-List path too,
-     once the general mechanism covers what it covers (don't keep both
-     mechanisms live long-term — one general path, not N narrow ones).
-  4. **Verification, same bar as before**: full `bootstrap_driver_*` + the
-     fixed-point self-compile regression; unit tests including deliberately
-     -aliased negative cases (the one place real correctness risk lives);
-     validate on isolated repros across the difficulty range from step 1
-     *before* pointing at the full self-hosted compiler; re-measure peak
-     memory/wall-time on the actual `bootstrap_driver_self_compile_fixed_point`
-     repro (not just an isolated case) — the abandoned attempt's mistake
-     was declaring success on the isolated repro without checking real
-     coverage; don't repeat that.
+  1. **Representation decision** — **DONE in Rust**. Implemented in
+     `crates/resid-type/src/ownership.rs`, `liveness.rs`, `field_growable.rs`,
+     `growable.rs`. Self-hosted stubs in `examples/typecheck.resid` (analysis
+     entry point `analyze_growable`, `collect_pnames`) and
+     `examples/codegen.resid` (`growable: List(Int)` in `Funcs`/`Sigs`,
+     `collect_pnames` in codegen).
+  2. **Per-function shape check** — self-hosted port deferred. Rust version
+     in `growable.rs`/`field_growable.rs`/`ownership.rs` is the reference.
+  3. **Whole-program fixpoint** (delegation graph + call-site freshness) —
+     deferred; Rust version in `growable.rs` is the reference.
+  4. **Codegen wiring** — infrastructure in place (`growable: List(Int)` in
+     `Funcs`/`Sigs`, `collect_pnames` in checker); full GrowBuf emission,
+     struct-box reuse, caller-side `dup`/`free` insertion deferred.
+  5. **Verification** — pending full self-hosted port.
 - **E.2 Fold causes #4/#5/#6 into Phase A.1** (the effect-checker rewrite is
   already locked-decision scope and already touches this exact `env`
   threading). Track as an explicit *requirement* of that rewrite, not a
@@ -761,24 +740,12 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       abandoned struct-embedded AST shape-matcher — see Phase E write-up
       for design + why the shape-matcher was scrapped) — highest-leverage
       memory fix; **a hard requirement to close B.1/B.2**, not just
-      nice-to-have. **Steps 1-2 done for the parameter case, this
-      session**: `crates/resid-type/src/field_growable.rs`
-      (`find_growable_fields`), a new analysis alongside (not replacing —
-      see Locked decisions, retire only once it strictly subsumes)
-      `growable.rs`. Generalizes `growable.rs`'s invariant-based checks
-      from a bare tracked identifier to an access path (`param` or
-      `param.field`), decoupling "does this `List(T)` field grow in place"
-      from "is the enclosing struct's box reused" (see the E.1-step-1
-      section above for the design). 6 unit tests (parser-fixture-based,
-      modeled on real function shapes, not toy repros) plus direct
-      validation by parsing the actual `examples/codegen.resid` (0 parse
-      errors) and querying real candidates — this caught and fixed two
-      real gaps the unit tests alone missed:
-      1. The tracked field passed *whole* into another function
-         (`last_label_line_cg(tv.lines, lt)`) was wrongly blanket-trusted
-         at first (any `base.field` access was treated as safe regardless
-         of context) — a genuine soundness gap, not a test artifact. Fixed
-         by requiring the tracked field's *own* access sites be one of:
+      nice-to-have. **Rust implementation complete** (`ownership.rs`,
+      `liveness.rs`, `field_growable.rs`, `growable.rs`); self-hosted
+      infrastructure in place (`examples/typecheck.resid` analysis stubs,
+      `examples/codegen.resid` `growable` field in `Funcs`/`Sigs`,
+      `collect_pnames`). Full self-hosted port and codegen wiring
+      remaining.
          concat-chain receiver, `.len()`/index, or an argument position
          whole-program-proven read-only at the callee (new
          `compute_readonly_params`, one level deep, conservative). Fields
