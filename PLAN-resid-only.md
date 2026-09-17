@@ -840,7 +840,12 @@ mechanism, not two), retire `growable.rs` into it, per plan.
   Extended GT with `tail: Bool`, threaded `tail_pos` through expression codegen,
   return statements pass `true`, cg_call/cg_print emit `tail call` LLVM IR.
   Mirrors Rust pipeline's `lower_call(is_tail)` path. All bootstrap tests pass.
-- [ ] E.4 Dead-local-wrapper static free pass (lexical last-use analysis)
+- [~] E.4 Dead-local-wrapper static free pass (lexical last-use analysis) — **PARTIAL this session**.
+  Infrastructure in place: `:owned` env tagging for struct literals,
+  `env_find_owned_struct` lookup, `free` emission in `csl_field` on `}`.
+  Current heuristic frees any owned struct in scope; precise per-field
+  tracking needs E.1 ownership oracle. Remaining: integrate with
+  `ownership.rs`/`liveness.rs` for exact last-use free insertion.
 - [ ] C.1 Port `merge_driver.py` to Resid
 - [ ] C.2 Port `resid-notes` + `resid-cache`
 - [ ] C.3 Port `resid-diag` caret rendering
