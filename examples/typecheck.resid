@@ -3648,18 +3648,37 @@ List(Str) file_param_names_at(Str s, Int pos, List(Str) acc) {
     return acc2;
 }
 
+// Does `body` call `fname` (a user function) passing the token `arg` as
+// its sole argument? A real token scan (`fname ( arg )`) rather than a
+// substring match, so `arg` occurring inside a longer identifier or a
+// larger argument list does not count. `prev != "."` excludes provider
+// verbs and method calls (`filesystem.read_handle(fp)`).
+Bool call_with_arg_tok(Str s, Int pos, Str fname, Str arg, Str prev) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return false; }
+    if (t.kind == "ident" && t.text == fname && prev != ".") {
+        Tok o = lex_tok(s, t.pos);
+        if (o.text == "(") {
+            Tok a = lex_tok(s, o.pos);
+            if (a.kind == "ident" && a.text == arg) {
+                Tok c = lex_tok(s, a.pos);
+                if (c.text == ")") { return true; }
+            }
+        }
+    }
+    return call_with_arg_tok(s, t.pos, fname, arg, t.text);
+}
+
 // Does `body` call some OTHER known function (not `fi` itself) passing
-// `fp` as its sole argument? A crude substring match (`name(fp)`) that
-// deliberately excludes provider verb calls (`filesystem.read_handle(fp)`
-// is not a user function call) since `fs.names` only holds user
-// functions.
+// `fp` as its sole argument? `fs.names` only holds user functions, so
+// provider verb calls are structurally excluded.
 Bool fp_in_call(Funcs fs, Str body, Str fp, Int j, Int fi) {
     if (j >= fs.names.len()) { return false; }
     if (j == fi) {
         Int j2 = j + 1;
         return fp_in_call(fs, body, fp, j2, fi);
     }
-    if (str_contains(body, fs.names[j] + "(" + fp + ")")) { return true; }
+    if (call_with_arg_tok(body, 0, fs.names[j], fp, "")) { return true; }
     Int j2 = j + 1;
     return fp_in_call(fs, body, fp, j2, fi);
 }
@@ -3671,59 +3690,255 @@ Bool file_arg_passed_at(Funcs fs, Str body, List(Str) fparams, Int k, Int fi) {
     return file_arg_passed_at(fs, body, fparams, k2, fi);
 }
 
+// Is `fam` `.` `verb` `(` present as a real provider call (a token scan,
+// so occurrences inside strings/comments are inert and `fam` being the
+// tail of a `.`-method access is excluded)?
+Bool provider_verb_tok(Str s, Int pos, Str fam, Str verb, Str prev) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return false; }
+    if (t.kind == "ident" && t.text == fam && prev != ".") {
+        Tok d = lex_tok(s, t.pos);
+        if (d.text == ".") {
+            Tok v = lex_tok(s, d.pos);
+            if (v.kind == "ident" && v.text == verb) {
+                Tok o = lex_tok(s, v.pos);
+                if (o.text == "(") { return true; }
+            }
+        }
+    }
+    return provider_verb_tok(s, t.pos, fam, verb, t.text);
+}
+
 Str check_readonly_writes(Str body, Str ceiling) {
     if (ceiling == "") { return ""; }
-    if (str_contains(body, "filesystem.write_all(") && grant_readonly_only(ceiling, "filesystem")) {
+    if (provider_verb_tok(body, 0, "filesystem", "write_all", "") && grant_readonly_only(ceiling, "filesystem")) {
         return "provider call `filesystem.write_all` is a write operation, but only a read-only grant of capability `filesystem` is available here [" + fmt_caps(ceiling) + "] (capability modes only restrict, never amplify)";
     }
-    if (str_contains(body, "process.run(") && grant_readonly_only(ceiling, "process")) {
+    if (provider_verb_tok(body, 0, "process", "run", "") && grant_readonly_only(ceiling, "process")) {
         return "provider call `process.run` is a write operation, but only a read-only grant of capability `process` is available here [" + fmt_caps(ceiling) + "] (capability modes only restrict, never amplify)";
     }
     return "";
 }
 
-// §21.3 transitive attenuation: fold the effective ceilings of every
-// function that (textually) calls `callee_name` — a crude but adequate
-// call-graph edge (substring match on `name(`). "__NONE__" means no
-// restricted caller was found.
-Str fold_caller_ceils(Funcs fs, List(Str) eff, Str callee_name, Int j, Str acc) {
-    if (j >= fs.names.len()) { return acc; }
-    Str caller_eff = eff[j];
-    Bool calls_it = str_contains(fs.bods[j], callee_name + "(");
-    Str acc2 = if (calls_it && caller_eff != "") { if (acc == "__NONE__") { caller_eff } else { meet_caps(acc, caller_eff) } } else { acc };
-    Int k = j + 1;
-    return fold_caller_ceils(fs, eff, callee_name, k, acc2);
+// ─── Real call graph (spec §21.3 / E.2) ─────────────────────────
+// The transitive-attenuation fixpoint needs, for each function, the set of
+// user functions it calls. Deriving that from the raw body *text* by
+// substring match (`str_contains(body, name + "(")`) is unsound: it
+// mis-fires on substrings (`myfetch(` matches `fetch(`), on names inside
+// string literals and comments, and it cannot tell a user-function call
+// from a provider verb or method call. Instead we lex the body and record
+// an `ident (` pair only when the identifier is a known user function and
+// is not the tail of a `.`-method access. Tokens make strings/comments
+// inert; `prev != "."` excludes provider verbs and methods.
+Bool is_user_fn_at(List(Str) names, Str n, Int i) {
+    if (i >= names.len()) { return false; }
+    if (names[i] == n) { return true; }
+    Int k = i + 1;
+    return is_user_fn_at(names, n, k);
 }
 
-Str eff_round_at(Funcs fs, List(Str) eff, Int i) {
-    Str folded = fold_caller_ceils(fs, eff, fs.names[i], 0, "__NONE__");
+Bool is_user_fn(Funcs fs, Str n) {
+    return is_user_fn_at(fs.names, n, 0);
+}
+
+// Calls embedded in an f-string interpolation lex to a single `fstring`
+// token whose interior we cannot re-lex without re-parsing; fall back to a
+// conservative substring scan over that token's text so a real dependency
+// inside `f"{…}"` is still recorded.
+List(Str) scan_fns_in_fstring(Funcs fs, Str text, Int i, List(Str) acc) {
+    if (i >= fs.names.len()) { return acc; }
+    Str n = fs.names[i];
+    List(Str) acc2 = if (str_contains(text, n + "(") && !list_contains_str(acc, n)) { acc.concat([n]) } else { acc };
+    Int k = i + 1;
+    return scan_fns_in_fstring(fs, text, k, acc2);
+}
+
+List(Str) scan_calls_tok(Funcs fs, Str s, Int pos, Str prev, List(Str) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return acc; }
+    if (t.kind == "fstring") {
+        List(Str) accf = scan_fns_in_fstring(fs, t.text, 0, acc);
+        return scan_calls_tok(fs, s, t.pos, t.text, accf);
+    }
+    Tok o = lex_tok(s, t.pos);
+    Bool is_call = t.kind == "ident" && prev != "." && is_user_fn(fs, t.text) && o.text == "(";
+    List(Str) acc2 = if (is_call && !list_contains_str(acc, t.text)) { acc.concat([t.text]) } else { acc };
+    return scan_calls_tok(fs, s, t.pos, t.text, acc2);
+}
+
+// Per-function comma-joined callee names, indexed like `fs.names` /
+// `fs.bods` (computed once per program).
+List(Str) call_csv_at(Funcs fs, Int i) {
+    if (i >= fs.names.len()) { return funcs_empty().names; }
+    List(Str) mine = scan_calls_tok(fs, fs.bods[i], 0, "", []);
+    Str csv = list_join(mine, 0, ",", "");
+    List(Str) rest = call_csv_at(fs, i + 1);
+    List(Str) head = [csv];
+    return head.concat(rest);
+}
+
+List(Str) call_csv(Funcs fs) {
+    return call_csv_at(fs, 0);
+}
+
+Bool call_csv_has(Str csv, Str n) {
+    if (csv == "") { return false; }
+    return list_contains_str(str_split(csv, ","), n);
+}
+
+// ─── Provider-effect sets (spec §21.3 / §32) ────────────────────
+// A function's *provider effects* are the capability families it invokes
+// through provider calls (`filesystem.read_all(…)` → `filesystem`). The
+// Rust pipeline walks the parsed AST (`ExprKind::ProviderCall`) and rejects
+// any call whose family is not in the region's capability set (E0218). The
+// self-hosted checker extracts the same information from the body tokens:
+// an `ident . ident (` triple is a provider call only when the leading
+// ident is a known provider family and the verb is one of that family's
+// declared verbs (`provider_verbs()`), so a local variable that merely
+// shares a family's name (`List(Str) args` + `args.get(…)`) is not
+// misclassified. (An f-string interpolation lexes as one token and is
+// opaque here; a provider call inside one is left to the force-time
+// guard, matching the pre-existing conservative residual.)
+Bool is_prov_family(Str f) {
+    if (f == "filesystem") { return true; }
+    if (f == "environment") { return true; }
+    if (f == "git") { return true; }
+    if (f == "args") { return true; }
+    if (f == "process") { return true; }
+    return false;
+}
+
+Bool is_prov_verb_filesystem(Str v) {
+    if (v == "exists") { return true; }
+    if (v == "list_dir") { return true; }
+    if (v == "read_all") { return true; }
+    if (v == "write_all") { return true; }
+    if (v == "open") { return true; }
+    if (v == "read_handle") { return true; }
+    if (v == "close") { return true; }
+    return false;
+}
+
+Bool is_prov_verb(Str fam, Str v) {
+    if (fam == "filesystem") { return is_prov_verb_filesystem(v); }
+    if (fam == "environment") { if (v == "get") { return true; } return v == "has"; }
+    if (fam == "git") { if (v == "rev") { return true; } return v == "branch"; }
+    if (fam == "args") { if (v == "count") { return true; } return v == "get"; }
+    if (fam == "process") { return v == "run"; }
+    return false;
+}
+
+// Does a provider call `fam . verb (` start at `pos`?
+Bool prov_call_at(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind != "ident") { return false; }
+    if (!is_prov_family(t.text)) { return false; }
+    Tok d = lex_tok(s, t.pos);
+    if (d.text != ".") { return false; }
+    Tok v = lex_tok(s, d.pos);
+    if (v.kind != "ident") { return false; }
+    if (!is_prov_verb(t.text, v.text)) { return false; }
+    Tok o = lex_tok(s, v.pos);
+    return o.text == "(";
+}
+
+List(Str) scan_provs_tok(Str s, Int pos, Str prev, List(Str) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return acc; }
+    Tok nx = lex_tok(s, t.pos);
+    Bool hit = t.kind == "ident" && prev != "." && nx.text == "." && prov_call_at(s, pos);
+    List(Str) acc2 = if (hit && !list_contains_str(acc, t.text)) { acc.concat([t.text]) } else { acc };
+    return scan_provs_tok(s, t.pos, t.text, acc2);
+}
+
+List(Str) prov_csv_at(Funcs fs, Int i) {
+    if (i >= fs.names.len()) { return funcs_empty().names; }
+    List(Str) mine = scan_provs_tok(fs.bods[i], 0, "", []);
+    Str csv = list_join(mine, 0, ",", "");
+    List(Str) rest = prov_csv_at(fs, i + 1);
+    List(Str) head = [csv];
+    return head.concat(rest);
+}
+
+List(Str) prov_csv(Funcs fs) {
+    return prov_csv_at(fs, 0);
+}
+
+Str first_missing_family_at(List(Str) fams, Str ceiling, Int i) {
+    if (i >= fams.len()) { return ""; }
+    if (!caps_contain_family(ceiling, fams[i])) { return fams[i]; }
+    Int k = i + 1;
+    return first_missing_family_at(fams, ceiling, k);
+}
+
+Str first_missing_family(Str csv, Str ceiling) {
+    if (csv == "") { return ""; }
+    return first_missing_family_at(str_split(csv, ","), ceiling, 0);
+}
+
+// E0218: a provider call in a restricted region may only use families the
+// region's effective capability set grants (mirrors the Rust pipeline's
+// `ProviderCall` walk). Only fires inside a sandbox/attenuated closure —
+// `eff[i] == ""` means unrestricted.
+Str e0218_check_func(Funcs fs, List(Str) eff, List(Str) pcsv, Int fi) {
+    Str effc = eff[fi];
+    if (effc == "") { return ""; }
+    Str fam = first_missing_family(pcsv[fi], effc);
+    if (fam == "") { return ""; }
+    return "provider call family `" + fam + "` is not granted to this region's capability set [" + fmt_caps(effc) + "] (spec §21.3)";
+}
+
+Bool e0218_check_all(Funcs fs, List(Str) eff, List(Str) pcsv, Int i) {
+    if (i >= fs.names.len()) { return false; }
+    Str m = e0218_check_func(fs, eff, pcsv, i);
+    Bool printed = if (m != "") { eprintln("error[E0218]: " + m) } else { false };
+    Int k = i + 1;
+    Bool rest = e0218_check_all(fs, eff, pcsv, k);
+    if (printed) { return true; }
+    return rest;
+}
+
+// §21.3 transitive attenuation: fold the effective ceilings of every
+// function whose *real* call graph (see `call_csv`) contains an edge to
+// `callee_name`. "__NONE__" means no restricted caller was found.
+Str fold_caller_ceils(Funcs fs, List(Str) eff, List(Str) edges, Str callee_name, Int j, Str acc) {
+    if (j >= fs.names.len()) { return acc; }
+    Str caller_eff = eff[j];
+    Bool calls_it = call_csv_has(edges[j], callee_name);
+    Str acc2 = if (calls_it && caller_eff != "") { if (acc == "__NONE__") { caller_eff } else { meet_caps(acc, caller_eff) } } else { acc };
+    Int k = j + 1;
+    return fold_caller_ceils(fs, eff, edges, callee_name, k, acc2);
+}
+
+Str eff_round_at(Funcs fs, List(Str) eff, List(Str) edges, Int i) {
+    Str folded = fold_caller_ceils(fs, eff, edges, fs.names[i], 0, "__NONE__");
     Str base = eff[i];
     if (folded == "__NONE__") { return base; }
     if (base == "") { return folded; }
     return meet_caps(base, folded);
 }
 
-List(Str) eff_round(Funcs fs, List(Str) eff, Int i) {
+List(Str) eff_round(Funcs fs, List(Str) eff, List(Str) edges, Int i) {
     if (i >= fs.names.len()) { return funcs_empty().names; }
-    Str updated = eff_round_at(fs, eff, i);
-    List(Str) rest = eff_round(fs, eff, i + 1);
+    Str updated = eff_round_at(fs, eff, edges, i);
+    List(Str) rest = eff_round(fs, eff, edges, i + 1);
     List(Str) head = [updated];
     return head.concat(rest);
 }
 
-List(Str) eff_fixpoint(Funcs fs, List(Str) eff, Int rounds) {
+List(Str) eff_fixpoint(Funcs fs, List(Str) eff, List(Str) edges, Int rounds) {
     if (rounds <= 0) { return eff; }
-    List(Str) next = eff_round(fs, eff, 0);
-    return eff_fixpoint(fs, next, rounds - 1);
+    List(Str) next = eff_round(fs, eff, edges, 0);
+    return eff_fixpoint(fs, next, edges, rounds - 1);
 }
 
-Str e0211_check_call(Funcs fs, List(Str) eff, Int i, Int j) {
+Str e0211_check_call(Funcs fs, List(Str) eff, List(Str) edges, Int i, Int j) {
     if (j >= fs.names.len()) { return ""; }
     if (j == i) {
         Int j2 = j + 1;
-        return e0211_check_call(fs, eff, i, j2);
+        return e0211_check_call(fs, eff, edges, i, j2);
     }
-    Bool calls_it = str_contains(fs.bods[i], fs.names[j] + "(");
+    Bool calls_it = call_csv_has(edges[i], fs.names[j]);
     if (calls_it) {
         Str caller_eff = eff[i];
         if (caller_eff != "") {
@@ -3734,18 +3949,18 @@ Str e0211_check_call(Funcs fs, List(Str) eff, Int i, Int j) {
         }
     }
     Int j2 = j + 1;
-    return e0211_check_call(fs, eff, i, j2);
+    return e0211_check_call(fs, eff, edges, i, j2);
 }
 
 // Whole-program passes accumulate (rather than stop at the first hit):
 // a violation in one function must not hide a different, later
 // function's diagnostic that a specific caller is looking for.
-Bool e0211_check_all(Funcs fs, List(Str) eff, Int i) {
+Bool e0211_check_all(Funcs fs, List(Str) eff, List(Str) edges, Int i) {
     if (i >= fs.names.len()) { return false; }
-    Str m = e0211_check_call(fs, eff, i, 0);
+    Str m = e0211_check_call(fs, eff, edges, i, 0);
     Bool printed = if (m != "") { eprintln("error[E0211]: " + m) } else { false };
     Int k = i + 1;
-    Bool rest = e0211_check_all(fs, eff, k);
+    Bool rest = e0211_check_all(fs, eff, edges, k);
     if (printed) { return true; }
     return rest;
 }
@@ -3788,10 +4003,13 @@ Bool enforce_all(Funcs fs, List(Str) eff, Int i) {
 
 Int finish_check(Funcs fs) {
     Int n = fs.names.len();
-    List(Str) eff = eff_fixpoint(fs, fs.ceils, n);
+    List(Str) edges = call_csv(fs);
+    List(Str) eff = eff_fixpoint(fs, fs.ceils, edges, n);
+    List(Str) pcsv = prov_csv(fs);
     Bool err1 = enforce_all(fs, eff, 0);
-    Bool err2 = e0211_check_all(fs, eff, 0);
-    if (err1 || err2) { return 1; }
+    Bool err2 = e0211_check_all(fs, eff, edges, 0);
+    Bool err3 = e0218_check_all(fs, eff, pcsv, 0);
+    if (err1 || err2 || err3) { return 1; }
     println("typecheck OK");
     return 0;
 }

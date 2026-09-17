@@ -8820,9 +8820,11 @@ Int main() { println(IntToString(read_demo())); return 0; }"#,
     assert!(ir.contains("resid_cap_enter"), "IR must contain resid_cap_enter: {ir}");
     assert!(ir.contains("resid_cap_leave"), "IR must contain resid_cap_leave: {ir}");
 
-    // A call that passes the (best-effort, textual) typechecker but
-    // violates the sandbox ceiling at runtime must abort via the
-    // force-time guard rather than silently executing.
+    // A provider call whose family exceeds the region's capability set is
+    // now rejected at *compile* time (E0218), matching the Rust pipeline's
+    // parsed-AST `ProviderCall` check. The force-time guard remains the
+    // runtime backstop for anything the static checker cannot see; its
+    // firing is exercised directly by `run_sandbox_force_time_guard_fires`.
     let violate = dir.join("violate.resid");
     std::fs::write(
         &violate,
@@ -8849,11 +8851,9 @@ Int main() {
         .current_dir(&dir)
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(0), "driver build failed: {}", String::from_utf8_lossy(&out.stderr));
-    let run = Command::new(&vbin).current_dir(&dir).output().unwrap();
-    assert_ne!(run.status.code(), Some(0), "runtime capability guard must abort the unsandboxed call");
-    let err = String::from_utf8_lossy(&run.stderr);
-    assert!(err.contains("capability not granted: process"), "stderr should carry the runtime capability error: {err}");
+    assert_ne!(out.status.code(), Some(0), "ungranted provider family must be rejected at compile time");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("process"), "stderr should name the ungranted provider family: {err}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
