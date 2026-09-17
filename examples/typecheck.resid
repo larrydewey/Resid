@@ -541,6 +541,88 @@ Bool str_has_prefix(Str s, Str p) {
     return false;
 }
 
+// ─── Minimal diagnostic rendering (A.2 caret parity) ───────────────
+// Converts an absolute position in `s` to (line, col) 1-based.
+// Returns (0, 0) if pos out of range.
+type PosInfo = { line: Int, col: Int };
+PosInfo pos_to_line_col(Str s, Int pos) {
+    return pos_to_line_col_rec(s, pos, 0, 1, 1);
+}
+PosInfo pos_to_line_col_rec(Str s, Int pos, Int i, Int line, Int col) {
+    if (i >= pos) { return PosInfo { line: line, col: col }; }
+    Int n = str_len(s);
+    if (i >= n) { return PosInfo { line: line, col: col }; }
+    Int c = str_char_at(s, i);
+    if (c == 10) {
+        return pos_to_line_col_rec(s, pos, i + 1, line + 1, 1);
+    }
+    return pos_to_line_col_rec(s, pos, i + 1, line, col + 1);
+}
+
+// Recursive string repeat for caret building.
+Str diag_str_repeat_rec(Str s, Int n, Int k, Str acc) {
+    if (k >= n) { return acc; }
+    return diag_str_repeat_rec(s, n, k + 1, acc + s);
+}
+Str diag_str_repeat(Str s, Int n) {
+    return diag_str_repeat_rec(s, n, 0, "");
+}
+
+// Render a source snippet with caret for the given span.
+// `label` is optional text printed after the carets.
+Str render_caret(Str s, Int line, Int col_start, Int col_end, Str label) {
+    if (line <= 0) { return ""; }
+    Int n = str_len(s);
+    Str src_line = get_line_at(s, 0, 1, line);
+    if (src_line == "") { return ""; }
+    Str gutter = IntToString(line) + " | ";
+    Int(64) one = 1;
+    Int caret_len = if (col_end > col_start) { col_end - col_start } else { one };
+    Str carets = diag_str_repeat("^", caret_len);
+    Int pad = str_len(gutter) + col_start - 1;
+    Str pad_str = diag_str_repeat(" ", pad);
+    Str out = gutter + src_line + "\n" + pad_str + carets;
+    Str out2 = if (label != "") { out + " " + label } else { out };
+    return out2 + "\n";
+}
+
+// Get the text of the given 1-based line number.
+Str get_line_at(Str s, Int i, Int cur_line, Int target) {
+    return get_line_at_rec(s, i, 1, target, 0);
+}
+Str get_line_at_rec(Str s, Int i, Int cur_line, Int target, Int line_start) {
+    Int n = str_len(s);
+    if (i >= n) { return ""; }
+    if (cur_line == target) {
+        return get_line_end_rec(s, line_start, i, n);
+    }
+    Int c = str_char_at(s, i);
+    if (c == 10) {
+        return get_line_at_rec(s, i + 1, cur_line + 1, target, i + 1);
+    }
+    return get_line_at_rec(s, i + 1, cur_line, target, line_start);
+}
+Str get_line_end_rec(Str s, Int line_start, Int i, Int n) {
+    if (i >= n) { return str_slice(s, line_start, i); }
+    Int c = str_char_at(s, i);
+    if (c == 10) { return str_slice(s, line_start, i); }
+    return get_line_end_rec(s, line_start, i + 1, n);
+}
+
+// Emit a full diagnostic: header + caret snippet.
+// `pos` is the absolute character index in `s` (token end position).
+// `col_len` is the token length for the caret width.
+void diag_error(Str code, Str msg, Int pos, Int col_len, Str s) {
+    PosInfo pi = pos_to_line_col(s, pos - col_len);
+    Int line = pi.line;
+    Int col = pi.col;
+    println("error[" + code + "]: " + msg);
+    if (line > 0) {
+        Str caret = render_caret(s, line, col, col + col_len, "");
+        println(caret);
+    }
+}
+
 Str env_lookup_at(List(Str) env, Str name, Int i) {
     Int n = env.len();
     if (i >= n) { return ""; }
@@ -4166,7 +4248,7 @@ Int check_decls(Str s, Int pos, Funcs fs) {
         }
         Tok lb = lex_tok(s, caps.pos);
         if (lb.text != "{") {
-            println("type error: expected { after sandbox capabilities");
+            diag_error("E0020", "expected { after sandbox capabilities", lb.pos, 3, s);
             return 1;
         }
         Int close = skip_body(s, caps.pos);
@@ -4197,7 +4279,7 @@ Int check_decls(Str s, Int pos, Funcs fs) {
         if (t2.kind == "ident") {
             DRes d = check_func(s, t.pos, fs);
             if (d.err != "") {
-                println("type error: " + d.err);
+                diag_error("E0001", "type error: " + d.err, d.pos, 3, s);
                 return 1;
             }
             return check_decls(s, d.pos, fs);
@@ -4218,12 +4300,12 @@ Int check_decls(Str s, Int pos, Funcs fs) {
         }
         DRes d = check_func(s, pos, fs);
         if (d.err != "") {
-            println("type error: " + d.err);
+            diag_error("E0001", "type error: " + d.err, d.pos, 3, s);
             return 1;
         }
         return check_decls(s, d.pos, fs);
     }
-    println("type error: unexpected declaration");
+    diag_error("E0020", "unexpected declaration", t.pos, 3, s);
     return 1;
 }
 
