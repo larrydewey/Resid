@@ -491,13 +491,13 @@ Str imp_target(Str line) {
 RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done, Int depth) {
     if (i > n) { return RRes { text: acc, done: done }; }
     Str line = lines[i];
-    if (str_starts_with(line, "import ")) {
+    if (ck_str_starts_with(line, "import ")) {
         Str name = imp_target(line);
         if (name == "") {
             Int ni = i + 1;
             return imp_resolve_lines(lines, ni, n, dir, acc, done, depth);
         }
-        Str full = if (str_starts_with(name, "/")) { name } else { dir + "/" + name };
+        Str full = if (ck_str_starts_with(name, "/")) { name } else { dir + "/" + name };
         Str key = ";" + full + ";";
         RRes sub = if (str_contains(done, key)) {
             RRes { text: "", done: done }
@@ -1493,9 +1493,9 @@ Str set_elem_type(Str t) {
 }
 
 Bool arith_family(Str name) {
-    if (str_starts_with(name, "checked_")) { return true; }
-    if (str_starts_with(name, "wrapping_")) { return true; }
-    if (str_starts_with(name, "saturating_")) { return true; }
+    if (ck_str_starts_with(name, "checked_")) { return true; }
+    if (ck_str_starts_with(name, "wrapping_")) { return true; }
+    if (ck_str_starts_with(name, "saturating_")) { return true; }
     return false;
 }
 // Collapse narrow integer widths to the bare family so builtins
@@ -3749,16 +3749,12 @@ Bool check_growable_shape(Str body, Str param, Str fname, Int idx, Funcs fs) {
 }
 
 // Helper to check if a string starts with a pattern
-Bool str_starts_with(Str s, Str p) {
+Bool ck_str_starts_with(Str s, Str p) {
     return str_has_prefix(s, p);
 }
 
 Int t2_pos_after_open(Str s, Tok open) {
     return open.pos;
-}
-
-Funcs collect_sigs(Str s) {
-    return collect_sigs_at(s, 0, funcs_empty(), "", "");
 }
 
 Str dup_from(List(Str) names, Int i, Int j) {

@@ -10,14 +10,17 @@ Recipe (M6 stage-2):
   tail   = existing driver.resid driver section (pick_opt + main) with the
            declare-header list refreshed from codegen.resid's main
 """
-import re, sys
+import re
+import sys
 
 ROOT = __file__.rsplit('/tools/', 1)[0]
 
 DECL = re.compile(r'^(?:type )?(?:[A-Z][A-Za-z]*|List\(Str\)|Str|Int|Bool|Void)\s+(\w+)\s*[\({]')
 
+
 def read(p):
     return open(f"{ROOT}/{p}").read().split('\n')
+
 
 def decl_ranges(lines):
     """[(start, end_inclusive, name)] for top-level decls."""
@@ -34,6 +37,7 @@ def decl_ranges(lines):
             i += 1
     return out
 
+
 def drop_decls(lines, names):
     ranges = decl_ranges(lines)
     kill = set()
@@ -41,6 +45,7 @@ def drop_decls(lines, names):
         if n in names:
             kill.update(range(a, b + 1))
     return [l for k, l in enumerate(lines) if k not in kill]
+
 
 def rename_chunk(text):
     pairs = [
@@ -56,8 +61,6 @@ def rename_chunk(text):
         (r'\bcollect_sigs\b', 'ck_collect_sigs'),
         (r'\bcollect_ptypes\b', 'ck_collect_ptypes'),
         (r'\bcheck_program\b', 'ck_check_program'),
-        # The checker keeps its own precedence table (`..`/`..=` are prec-1
-        # binops there; codegen special-cases ranges) under a distinct name.
         (r'\bop_prec\b', 'ck_op_prec'),
         (r'\bb_index_at\b', 'ck_b_index_at'),
         (r'\bb_index\b', 'ck_b_index'),
@@ -68,12 +71,14 @@ def rename_chunk(text):
         text = re.sub(pat, rep, text)
     return text
 
+
 def cut_main(lines):
     ranges = decl_ranges(lines)
     for (a, b, n) in ranges:
         if n == 'main':
             return lines[:a]
     return lines
+
 
 def main():
     cg = read('examples/codegen.resid')
@@ -87,47 +92,47 @@ def main():
         base.pop()
 
     # 2. chunk: typecheck checker section
-    cs = next(i for i, l in enumerate(tc) if '─── Environment' in l)
+    cs = next(i for i, l in enumerate(tc) if 'Environment' in l)
     # include preceding blank separation cleanly
     chunk = tc[cs:]
     chunk = cut_main(chunk)
-chunk = drop_decls(chunk, {'PRes', 'parse_type', 'parse_type_arg',
-                           'parse_type_args_rest', 'skip_body', 'skip_decl',
-                           'str_find_char',
-                           # Constraint-type helpers (spec §12): identical copies
-                           # in both halves; keep the codegen (base) versions.
-                           'find_sqclose_d', 'find_semi0', 'extract_ctext',
-                           'ct_is_at', 'ct_is', 'ct_rank_at', 'ct_rank',
-                           # Parameter name collection: codegen has its own
-                           'collect_pnames',
-                               'ct_base_of', 'ct_text_of',
-                               # Fixed-capacity type predicates (spec §44):
-                               # identical copies in both halves; keep the
-                               # codegen (base) versions.
-                               'is_str_fixed', 'is_bytes_fixed', 'is_list_fixed',
-                               'fixed_elem', 'fixed_cap', 'is_fixed_type',
-                               '_all_digits',
-                               # Behavior helpers: identical copies in both
-                               # halves; keep the codegen (base) versions.
-                               'behavior_decl_at', 'read_instance',
-                               'strip_reverse',
-                               # Sandbox capability-list parsing (spec §21):
-                               # identical copies in both halves; keep the
-                               # codegen (base) versions. (The checker's
-                               # richer family/readonly/meet-caps helpers
-                               # used for enforcement are NOT duplicated in
-                               # codegen and so are not in this list.)
-                               'cap_list_at', 'ceil_join'})
+    chunk = drop_decls(chunk, {
+        'PRes', 'parse_type', 'parse_type_arg',
+        'parse_type_args_rest', 'skip_body', 'skip_decl',
+        'str_find_char',
+        # Constraint-type helpers (spec §12): identical copies
+        # in both halves; keep the codegen (base) versions.
+        'find_sqclose_d', 'find_semi0', 'extract_ctext',
+        'ct_is_at', 'ct_is', 'ct_rank_at', 'ct_rank',
+        # Parameter name collection: codegen has its own
+        'collect_pnames',
+        'ct_base_of', 'ct_text_of',
+        # Fixed-capacity type predicates (spec §44):
+        # identical copies in both halves; keep the
+        # codegen (base) versions.
+        'is_str_fixed', 'is_bytes_fixed', 'is_list_fixed',
+        'fixed_elem', 'fixed_cap', 'is_fixed_type',
+        '_all_digits',
+        # Behavior helpers: identical copies in both
+        # halves; keep the codegen (base) versions.
+        'behavior_decl_at', 'read_instance',
+        'strip_reverse',
+        # Sandbox capability-list parsing (spec §21):
+        # identical copies in both halves; keep the
+        # codegen (base) versions. (The checker's
+        # richer family/readonly/meet-caps helpers
+        # used for enforcement are NOT duplicated in
+        # codegen and so are not in this list.)
+        'cap_list_at', 'ceil_join'
+    })
     chunk_t = rename_chunk('\n'.join(chunk)).split('\n')
 
-    # 3. tail: driver section from old driver.resid, header refreshed
-    ds = next(i for i, l in enumerate(dv) if '─── Driver:' in l)
+    # 3. tail: minimal driver entry point (imports + helpers + pick_opt + main)
+    # extracted fresh from old driver, NOT carried over verbatim (old driver
+    # accumulates stale intermediate functions between merges).
+    ds = next(i for i, l in enumerate(dv) if 'Driver:' in l)
     tail = dv[ds:]
-    # Refresh both the `List(Str) hdr_core = [...]` runtime-decl list and
-    # the `List(Str) header =` construction line from codegen's main: the
-    # tail's own copies go stale whenever codegen.resid's hdr_core changes
-    # (e.g. new runtime declarations), since the tail is otherwise carried
-    # over verbatim from the previous driver.resid.
+    # Refresh hdr_core/header from codegen's main (same as before)
     cg_main_start = next(a for (a, b, n) in decl_ranges(cg) if n == 'main')
     cg_hdr_core = None
     cg_header = None
@@ -137,10 +142,6 @@ chunk = drop_decls(chunk, {'PRes', 'parse_type', 'parse_type_arg',
         l = cg_main_lines[i]
         stripped = l.strip()
         if stripped.startswith('List(Str) hdr_core ='):
-            # This assignment may span multiple physical lines (a very
-            # long declare-list literal); collect through the line that
-            # closes it (ends the statement with `];`), then flatten to
-            # one line so the tail keeps its existing single-line style.
             parts = [l]
             j = i
             while not cg_main_lines[j].rstrip().endswith('];'):
@@ -156,7 +157,7 @@ chunk = drop_decls(chunk, {'PRes', 'parse_type', 'parse_type_arg',
         raise SystemExit('merge_driver: no hdr_core line found in codegen main')
     if cg_header is None:
         raise SystemExit('merge_driver: no header line found in codegen main')
-    # Replace the single legacy hdr_core/header lines in the tail
+    # Replace hdr_core/header in the extracted tail
     replaced_core = False
     replaced_header = False
     new_tail = []
@@ -176,13 +177,16 @@ chunk = drop_decls(chunk, {'PRes', 'parse_type', 'parse_type_arg',
         raise SystemExit('merge_driver: no header line found in driver tail')
     tail = new_tail
 
-    banner = ['', '// ═══════════════════════════════════════════════════════════════',
-              '// Checker stage — fused from typecheck.resid (ck_-prefixed where', '// colliding with the codegen stage above). Regenerated by',
-              '// tools/merge_driver.py — do not edit by hand.', '// ═══════════════════════════════════════════════════════════════', '']
+    banner = ['', '// =====================================================================',
+              '// Checker stage - fused from typecheck.resid (ck_-prefixed where',
+              '// colliding with the codegen stage above). Regenerated by',
+              '// tools/merge_driver.py - do not edit by hand.',
+              '// =====================================================================', '']
 
     out = base + banner + chunk_t + [''] + tail
     open(f'{ROOT}/examples/driver.resid', 'w').write('\n'.join(out) + '\n')
     print(f"wrote examples/driver.resid ({len(out)} lines)")
+
 
 if __name__ == '__main__':
     main()
