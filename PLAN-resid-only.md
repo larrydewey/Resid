@@ -689,7 +689,11 @@ mechanism, not two), retire `growable.rs` into it, per plan.
         lookup remains linear pending a codegen fix for `Map.contains` on
         struct fields (returns i8 not i1). Also added expected-type support
         for empty map/set literals (`{}` with expected `Map(K,V)`/`Set(T)`).
-- [ ] A.2 Diagnostics parity (caret rendering in stage-2)
+- [x] A.2 Diagnostics parity (caret rendering in stage-2)
+        Implemented `pos_to_line_col`, `render_caret`, `diag_error` in
+        `examples/typecheck.resid`. Type errors (E0001/E0020) now render
+        `error[E0001]: message` with source line and `^` carets.
+        Sandbox/effect errors (E0211/E0218/E0212/E0213) retain stderr `eprintln`.
 - [x] A.3 COSE_Encrypt0 AEAD — done. Replaced the experimental SHA-256
       counter-mode keystream in `crates/resid-build/src/cose.rs` with a real
       ChaCha20-Poly1305 AEAD (alg 24, RFC 8439) via the vetted RustCrypto
