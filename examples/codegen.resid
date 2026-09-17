@@ -1113,6 +1113,35 @@ Str env_lookup(List(Str) env, Str name) {
 List(Str) env_add(List(Str) env, Str entry) {
     return env.concat([entry]);
 }
+
+Bool env_has_growbuf_at(List(Str) env, Str val, Int i) {
+    Int n = env.len();
+    if (i >= n) { return false; }
+    Str ent = env[i];
+    Int c1 = str_find_char(ent, 58, 0);
+    if (c1 >= 0) {
+        Str rest1 = str_slice(ent, c1 + 1, str_len_1(ent));
+        Int c2 = str_find_char(rest1, 58, 0);
+        if (c2 >= 0) {
+            Str reg = str_slice(rest1, 0, c2);
+            if (reg == val) {
+                Str after_ty = str_slice(rest1, c2 + 1, str_len_1(rest1));
+                Int c3 = str_find_char(after_ty, 58, 0);
+                if (c3 >= 0) {
+                    Str after_ty2 = str_slice(after_ty, c3 + 1, str_len_1(after_ty));
+                    if (after_ty2 == "growbuf") { return true; }
+                }
+            }
+        }
+    }
+    Int k = i + 1;
+    return env_has_growbuf_at(env, val, k);
+}
+
+Bool env_has_growbuf(List(Str) env, Str val) {
+    return env_has_growbuf_at(env, val, 0);
+}
+
 // ─── Expression codegen: threaded register/label state ─────────
 
 type GT = { pos: Int, val: Str, ty: Str, cnt: Int, err: Str, glines: List(Str), lines: List(Str), tmp: Int, lbl: Int };
@@ -2707,7 +2736,12 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                 Tok rp2 = lex_tok(s, arg.pos);
                 Int t2 = arg.tmp + 1;
                 Str reg2 = "%t" + IntToString(t2);
-                Str line2 = reg2 + " = call ptr @resid_list_concat(ptr " + base.val + ", ptr " + arg.val + ")";
+                Bool base_is_growbuf = env_has_growbuf(env, base.val);
+                Str line2 = if (base_is_growbuf) {
+                    reg2 + " = call ptr @resid_growbuf_push_list(ptr " + base.val + ", ptr " + arg.val + ")"
+                } else {
+                    reg2 + " = call ptr @resid_list_concat(ptr " + base.val + ", ptr " + arg.val + ")"
+                };
                 List(Str) l30 = arg.lines;
                 List(Str) l3 = l30.concat([line2]);
                 GT b3 = GT { pos: rp2.pos, val: reg2, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l3, tmp: t2, lbl: arg.lbl };
@@ -3882,17 +3916,26 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
         Bool need_conv = rw_int && rw_diff;
         GT v1 = pick_widen(need_conv, v, rwant);
         Str vty = pick_str(need_conv, rwant, v.ty);
+        // If return value is a growbuf, call growbuf_finish
+        Bool ret_is_growbuf = env_has_growbuf(env, v1.val);
+        GT v2 = if (ret_is_growbuf) {
+            Int tg = v1.tmp + 1;
+            Str gb_reg = "%t" + IntToString(tg);
+            Str gb_line = gb_reg + " = call ptr @resid_growbuf_finish(ptr " + v1.val + ")";
+            List(Str) gln = v1.lines.concat([gb_line]);
+            GT { pos: v1.pos, val: gb_reg, ty: v1.ty, cnt: v1.cnt, err: "", glines: v1.glines, lines: gln, tmp: tg, lbl: v1.lbl }
+        } else { v1 };
         Tok semi = lex_tok(s, v.pos);
-        Int t1 = v1.tmp + 1;
+        Int t1 = v2.tmp + 1;
         Str reg = "%t" + IntToString(t1);
-        Str tr = reg + " = trunc i64 " + v1.val + " to i32";
+        Str tr = reg + " = trunc i64 " + v2.val + " to i32";
         Str rl = "ret i32 " + reg;
-        Str rn = "ret " + ll_ty(vty) + " " + v1.val;
+        Str rn = "ret " + ll_ty(vty) + " " + v2.val;
         Bool im = in_main && num_norm_cg(vty) == "Int(64)" && fam_head(vty) == "Int";
-        List(Str) lv0 = v1.lines;
+        List(Str) lv0 = v2.lines;
         List(Str) base = if (im) { lv0.concat([tr]) } else { lv0 };
         List(Str) lns = if (im) { base.concat([rl]) } else { base.concat([rn]) };
-        Int ut = if (im) { t1 } else { v1.tmp };
+        Int ut = if (im) { t1 } else { v2.tmp };
         return ST { pos: semi.pos, dead: true, err: "", env: env, glines: v.glines, hlines: g.hlines, lines: lns, tmp: ut, lbl: v.lbl, rety: g.rety };
     }
     if (t.text == "_") {
@@ -4364,6 +4407,17 @@ ST sg_for(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     return ST { pos: body.pos, dead: g.dead, err: "", env: env, glines: body.glines, hlines: body.hlines, lines: t4, tmp: body.tmp, lbl: newlbl, rety: g.rety };
 }
 
+Bool list_contains_int_cg(List(Int) lst, Int val, Int i) {
+    if (i >= lst.len()) { return false; }
+    if (lst[i] == val) { return true; }
+    Int k = i + 1;
+    return list_contains_int_cg(lst, val, k);
+}
+
+Bool list_contains_int_cg_wrap(List(Int) lst, Int val) {
+    return list_contains_int_cg(lst, val, 0);
+}
+
 // ─── Program walk ──────────────────────────────────────────────
 
 type PG = { pos: Int, err: Str, glines: List(Str), hlines: List(Str), lines: List(Str), tmp: Int, lbl: Int };
@@ -4438,12 +4492,7 @@ Str param_decl_at(List(Str) tys, Int i, Str acc) {
     return param_decl_at(tys, k, acc2);
 }
 
-List(Str) build_env_at(List(Str) nl, List(Str) tyl, Int i, List(Str) acc) {
-    if (i >= nl.len()) { return acc; }
-    Str ent = nl[i] + ":%p" + IntToString(i) + ":" + tyl[i];
-    Int k = i + 1;
-    return build_env_at(nl, tyl, k, acc.concat([ent]));
-}
+
 
 // §21.4 sandbox capability enforcement at codegen time: every sandboxed
 // function gets a `resid_cap_enter`/`resid_cap_leave` bracket around its
@@ -4451,6 +4500,32 @@ List(Str) build_env_at(List(Str) nl, List(Str) tyl, Int i, List(Str) acc) {
 // that could perform I/O, so violations that slip past the (crude,
 // textual) typechecker are still caught at runtime.
 type CapPP = { lines: List(Str), glines: List(Str), n: Int };
+
+type EnvBuild = { lines: List(Str), env: List(Str) };
+
+EnvBuild build_env_with_growbuf(List(Str) nl, List(Str) tyl, List(Int) growable, List(Str) lines, Int i, List(Str) acc) {
+    if (i >= nl.len()) { return EnvBuild { lines: lines, env: acc }; }
+    Str param_reg = "%p" + IntToString(i);
+    Str ty = tyl[i];
+    Bool is_growable = list_contains_int_cg_wrap(growable, i);
+    List(Str) new_lines = if (is_growable) {
+        Int t = lines.len() + 1;
+        Str gb_reg = "%t" + IntToString(t);
+        Str line = gb_reg + " = call ptr @resid_growbuf_from_list(ptr " + param_reg + ")";
+        lines.concat([line])
+    } else {
+        lines
+    };
+    Str use_reg = if (is_growable) {
+        Int t = lines.len() + 1;
+        "%t" + IntToString(t)
+    } else {
+        param_reg
+    };
+    Str ent = nl[i] + ":" + use_reg + ":" + ty + (if (is_growable) { ":growbuf" } else { "" });
+    Int k = i + 1;
+    return build_env_with_growbuf(nl, tyl, growable, new_lines, k, acc.concat([ent]));
+}
 
 Str cap_str_name(Int n) {
     if (n == 0) { return "@str"; }
@@ -4564,7 +4639,6 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     List(Str) nl0 = nil_list();
     List(Str) nl1 = split_rest(pns, ",");
     List(Str) nl = if (pns == "") { nl0 } else { nl1 };
-    List(Str) env0 = build_env_at(nl, tyl, 0, nil_list());
     List(Str) gl0 = g.lines;
     List(Str) dl = gl0.concat([defline]);
     List(Str) dl2 = dl.concat(["entry:"]);
@@ -4574,11 +4648,12 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     List(Str) caps = if (sandboxed) { str_split(ceiling, ",") } else { nil_list() };
     CapPP pp0 = CapPP { lines: dl2, glines: g.glines, n: 0 };
     CapPP pp1 = if (sandboxed) { cap_enter_prologue(caps, pp0) } else { pp0 };
-    Int body_start = pp1.lines.len();
+    EnvBuild eb = build_env_with_growbuf(nl, tyl, fs.growable, pp1.lines, 0, nil_list());
+    Int body_start = eb.lines.len();
     Int cp = close_paren(s, open.pos);
     Tok fbrace = lex_tok(s, cp);
-    ST gb = ST { pos: fbrace.pos, dead: false, err: "", env: env0, glines: pp1.glines, hlines: g.hlines, lines: pp1.lines, tmp: g.tmp, lbl: g.lbl, rety: rbase };
-    ST body = sg_block(s, cp, env0, fs, is_main, gb);
+    ST gb = ST { pos: fbrace.pos, dead: false, err: "", env: eb.env, glines: pp1.glines, hlines: g.hlines, lines: eb.lines, tmp: g.tmp, lbl: g.lbl, rety: rbase };
+    ST body = sg_block(s, cp, eb.env, fs, is_main, gb);
     if (body.err != "") {
         return PG { pos: body.pos, err: body.err, glines: body.glines, hlines: body.hlines, lines: body.lines, tmp: body.tmp, lbl: body.lbl };
     }
