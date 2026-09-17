@@ -790,7 +790,7 @@ GT widen_val(GT v, Str target_ty) {
     // works around this by overriding .ty itself — this call site didn't,
     // which is exactly the bug that made cg_args's ll_ty(v.ty) format a
     // freshly-sext'd i128 register back out as "i64").
-    return GT { pos: conv.pos, val: conv.val, ty: target_ty, cnt: conv.cnt, err: "", glines: conv.glines, lines: conv.lines, tmp: conv.tmp, lbl: conv.lbl };
+    return GT { pos: conv.pos, val: conv.val, ty: target_ty, cnt: conv.cnt, err: "", glines: conv.glines, lines: conv.lines, tmp: conv.tmp, lbl: conv.lbl , tail: false};
 }
 
 // Emit a conversion from value `v` (LLVM type `from`) to `to`.
@@ -813,7 +813,7 @@ GT cg_convert(GT v, Str from, Str to, Bool sgn, GT c) {
     // depends on (the carrier may have stale or empty lists).
     List(Str) l0 = v.lines;
     List(Str) l2 = l0.concat([line]);
-    return GT { pos: v.pos, val: reg, ty: v.ty, cnt: v.cnt, err: "", glines: c.glines, lines: l2, tmp: t1, lbl: c.lbl };
+    return GT { pos: v.pos, val: reg, ty: v.ty, cnt: v.cnt, err: "", glines: c.glines, lines: l2, tmp: t1, lbl: c.lbl , tail: false};
 }
 
 // Known base type names usable in a cast `(Type) expr`.
@@ -1144,7 +1144,7 @@ Bool env_has_growbuf(List(Str) env, Str val) {
 
 // ─── Expression codegen: threaded register/label state ─────────
 
-type GT = { pos: Int, val: Str, ty: Str, cnt: Int, err: Str, glines: List(Str), lines: List(Str), tmp: Int, lbl: Int };
+type GT = { pos: Int, val: Str, ty: Str, cnt: Int, err: Str, glines: List(Str), lines: List(Str), tmp: Int, lbl: Int, tail: Bool };
 
 Int fn_index_at(Funcs f, Str name, Int i) {
     List(Str) ns = f.names;
@@ -1452,7 +1452,7 @@ GT bin_wide_op(Str ins, Bool is_cmp, Str cc, GT l0, GT r0) {
     Bool wr = need_widen(fams, rw, tw);
     GT r1 = pick_widen(wr, r0, tws);
     Int tmax = imax(r1.tmp, l0.tmp);
-    GT lcarr = GT { pos: l0.pos, val: l0.val, ty: l0.ty, cnt: l0.cnt, err: "", glines: r1.glines, lines: r1.lines, tmp: tmax, lbl: l0.lbl };
+    GT lcarr = GT { pos: l0.pos, val: l0.val, ty: l0.ty, cnt: l0.cnt, err: "", glines: r1.glines, lines: r1.lines, tmp: tmax, lbl: l0.lbl , tail: false};
     Bool wwx = need_widen(fams, lw, tw);
     GT lwiden = pick_widen(wwx, lcarr, tws);
     Str arty2 = pick_str(is_cmp, "Bool", tws);
@@ -1463,7 +1463,7 @@ GT bin_wide_op(Str ins, Bool is_cmp, Str cc, GT l0, GT r0) {
     Str line = reg + " = " + core + " " + opty + " " + lwiden.val + ", " + r1.val;
     List(Str) plns = lwiden.lines;
     List(Str) l2 = plns.concat([line]);
-    return GT { pos: r0.pos, val: reg, ty: arty2, cnt: 0, err: "", glines: r0.glines, lines: l2, tmp: t1, lbl: r0.lbl };
+    return GT { pos: r0.pos, val: reg, ty: arty2, cnt: 0, err: "", glines: r0.glines, lines: l2, tmp: t1, lbl: r0.lbl , tail: false};
 }
 
 GT bin_icmp(Str cc, GT l0, GT r0) {
@@ -1480,7 +1480,7 @@ GT bin_eq(Str op, GT l, GT r) {
         List(Str) w0 = r.lines;
         List(Str) w1 = w0.concat([cr + " = call i8 @resid_str_eq(ptr " + l.val + ", ptr " + r.val + ")"]);
         List(Str) w2 = w1.concat([reg + " = icmp " + cc + " i8 " + cr + ", 0"]);
-        return GT { pos: r.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: r.glines, lines: w2, tmp: t2, lbl: r.lbl };
+        return GT { pos: r.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: r.glines, lines: w2, tmp: t2, lbl: r.lbl , tail: false};
     }
     Str cc2 = if (op == "==") { "eq" } else { "ne" };
     return bin_icmp(cc2, l, r);
@@ -1496,7 +1496,7 @@ GT bin_logic(Str ins, GT l, GT r) {
     Str line = reg + " = " + ins + " i1 " + l.val + ", " + r.val;
     List(Str) l20 = r.lines;
     List(Str) l2 = l20.concat([line]);
-    return GT { pos: r.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: r.glines, lines: l2, tmp: t1, lbl: r.lbl };
+    return GT { pos: r.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: r.glines, lines: l2, tmp: t1, lbl: r.lbl , tail: false};
 }
 
 GT bin_apply(Str op, GT l, GT r) {
@@ -1507,7 +1507,7 @@ GT bin_apply(Str op, GT l, GT r) {
             Str line = reg + " = call ptr @resid_str_concat(ptr " + l.val + ", ptr " + r.val + ")";
             List(Str) l20 = r.lines;
             List(Str) l2 = l20.concat([line]);
-            return GT { pos: r.pos, val: reg, ty: "Str", cnt: 0, err: "", glines: r.glines, lines: l2, tmp: t1, lbl: r.lbl };
+            return GT { pos: r.pos, val: reg, ty: "Str", cnt: 0, err: "", glines: r.glines, lines: l2, tmp: t1, lbl: r.lbl , tail: false};
         }
         return bin_arith("add", l, r);
     }
@@ -1584,7 +1584,7 @@ Str esc_ll(Str s, Int i, Str acc) {
 }
 
 GT gt_err(Str msg, GT c) {
-    return GT { pos: c.pos, val: "", ty: "", cnt: 0, err: msg, glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+    return GT { pos: c.pos, val: "", ty: "", cnt: 0, err: msg, glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
 }
 
 // `ptys` is the callee's declared parameter types, positional (built by
@@ -1603,9 +1603,9 @@ GT gt_err(Str msg, GT c) {
 GT cg_args(Str s, Int pos, Str acc, Int count, List(Str) env, Funcs fs, GT c, List(Str) ptys) {
     Tok t = lex_tok(s, pos);
     if (t.text == ")") {
-        return GT { pos: t.pos, val: acc, ty: "", cnt: count, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+        return GT { pos: t.pos, val: acc, ty: "", cnt: count, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
     }
-    GT v0 = cg_expr(s, pos, env, fs, c);
+    GT v0 = cg_expr(s, pos, env, fs, c, false);
     if (v0.err != "") { return v0; }
     Str want = if (count < ptys.len()) { ptys[count] } else { "" };
     GT v = if (want == "" || want == v0.ty) { v0 } else { widen_val(v0, want) };
@@ -1613,7 +1613,7 @@ GT cg_args(Str s, Int pos, Str acc, Int count, List(Str) env, Funcs fs, GT c, Li
     Str acc2 = acc + sep + ll_ty(v.ty) + " " + v.val;
     Int c2 = count + 1;
     Tok comma = lex_tok(s, v.pos);
-    GT cs = GT { pos: comma.pos, val: acc2, ty: "", cnt: c2, err: "", glines: v.glines, lines: v.lines, tmp: v.tmp, lbl: v.lbl };
+    GT cs = GT { pos: comma.pos, val: acc2, ty: "", cnt: c2, err: "", glines: v.glines, lines: v.lines, tmp: v.tmp, lbl: v.lbl , tail: false};
     if (comma.text == ",") {
         return cg_args(s, comma.pos, acc2, c2, env, fs, cs, ptys);
     }
@@ -1621,11 +1621,11 @@ GT cg_args(Str s, Int pos, Str acc, Int count, List(Str) env, Funcs fs, GT c, Li
 }
 
 GT cg_externb2(Str s, Int pos, Str sym, Str aty1, Str aty2, List(Str) env, Funcs fs, GT c) {
-    GT a = cg_expr(s, pos, env, fs, c);
+    GT a = cg_expr(s, pos, env, fs, c, false);
     if (a.err != "") { return a; }
     Tok cm = lex_tok(s, a.pos);
     if (cm.text != ",") { return gt_err("expected , in call to " + sym, a); }
-    GT b = cg_expr(s, cm.pos, env, fs, a);
+    GT b = cg_expr(s, cm.pos, env, fs, a, false);
     if (b.err != "") { return b; }
     Tok cp = lex_tok(s, b.pos);
     if (cp.text != ")") { return gt_err("expected ) in call to " + sym, b); }
@@ -1638,7 +1638,7 @@ GT cg_externb2(Str s, Int pos, Str sym, Str aty1, Str aty2, List(Str) env, Funcs
     List(Str) w0 = b.lines;
     List(Str) w1 = w0.concat([cl]);
     List(Str) w2 = w1.concat([nl]);
-    return GT { pos: cp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: b.glines, lines: w2, tmp: t2, lbl: b.lbl };
+    return GT { pos: cp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: b.glines, lines: w2, tmp: t2, lbl: b.lbl , tail: false};
 }
 
 Str cg_extern_ret(Str name) {
@@ -1671,7 +1671,7 @@ GT box_heap_(Str s, GT v, List(Str) env, Funcs fs) {
         List(Str) zl0 = v.lines;
         List(Str) zl1 = zl0.concat([z + " = zext i1 " + v.val + " to i8"]);
         List(Str) zl2 = zl1.concat([reg + " = call ptr @resid_box_bool(i8 " + z + ")"]);
-        return GT { pos: v.pos, val: reg, ty: v.ty, cnt: v.cnt, err: "", glines: v.glines, lines: zl2, tmp: t2, lbl: v.lbl };
+        return GT { pos: v.pos, val: reg, ty: v.ty, cnt: v.cnt, err: "", glines: v.glines, lines: zl2, tmp: t2, lbl: v.lbl , tail: false};
     }
     Bool flt = str_has_prefix_cg(v.ty, "Float") || v.ty == "Float";
     Bool is128 = str_has_prefix_cg(v.ty, "Int(128)") || str_has_prefix_cg(v.ty, "UInt(128)");
@@ -1688,13 +1688,13 @@ GT box_heap_(Str s, GT v, List(Str) env, Funcs fs) {
     };
     List(Str) nl0 = v.lines;
     List(Str) nl1 = nl0.concat([line]);
-    return GT { pos: v.pos, val: reg, ty: v.ty, cnt: v.cnt, err: "", glines: v.glines, lines: nl1, tmp: t1, lbl: v.lbl };
+    return GT { pos: v.pos, val: reg, ty: v.ty, cnt: v.cnt, err: "", glines: v.glines, lines: nl1, tmp: t1, lbl: v.lbl , tail: false};
 }
 
 // Lower `Some(payload)`: build a tag-1 Option box whose slot 0 holds the
 // heap-boxed payload. Result type is Option(payloadTy).
 GT cg_some_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
-    GT p = cg_expr(s, pos, env, fs, c);
+    GT p = cg_expr(s, pos, env, fs, c, false);
     if (p.err != "") { return p; }
     Tok close = lex_tok(s, p.pos);
     if (close.text != ")") { return gt_err("expected ) in Some(...)", p); }
@@ -1719,7 +1719,7 @@ GT cg_some_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     List(Str) l2 = l1.concat([gi + " = getelementptr [1 x ptr], ptr " + sa + ", i32 0, i32 0"]);
     List(Str) l3 = l2.concat(["store ptr " + hb.val + ", ptr " + gi]);
     List(Str) l4 = l3.concat([reg + " = call ptr @resid_box_new(i64 1, i64 1, ptr " + sa + ", ptr " + tsym + ")"]);
-    return GT { pos: close.pos, val: reg, ty: opty, cnt: 0, err: "", glines: gl2, lines: l4, tmp: t3, lbl: p.lbl };
+    return GT { pos: close.pos, val: reg, ty: opty, cnt: 0, err: "", glines: gl2, lines: l4, tmp: t3, lbl: p.lbl , tail: false};
 }
 
 // Lower bare `None`: a tag-2 unit Option box with no payload.
@@ -1735,13 +1735,13 @@ GT cg_none_con(Str ty, Int pos, Int n, GT c) {
     List(Str) gl2 = gg0.concat([g]);
     List(Str) l0 = c.lines;
     List(Str) l1 = l0.concat([reg + " = call ptr @resid_box_new(i64 2, i64 0, ptr null, ptr " + tsym + ")"]);
-    return GT { pos: pos, val: reg, ty: ty, cnt: 0, err: "", glines: gl2, lines: l1, tmp: t1, lbl: c.lbl };
+    return GT { pos: pos, val: reg, ty: ty, cnt: 0, err: "", glines: gl2, lines: l1, tmp: t1, lbl: c.lbl , tail: false};
 }
 
 // Lower `Ok(payload)`: build a tag-1 Result box whose slot 0 holds the
 // heap-boxed payload. Result type is Result(payloadTy, ErrTy).
 GT cg_ok_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
-    GT p = cg_expr(s, pos, env, fs, c);
+    GT p = cg_expr(s, pos, env, fs, c, false);
     if (p.err != "") { return p; }
     Tok close = lex_tok(s, p.pos);
     if (close.text != ")") { return gt_err("expected ) in Ok(...)", p); }
@@ -1765,13 +1765,13 @@ GT cg_ok_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     List(Str) l2 = l1.concat([gi + " = getelementptr [1 x ptr], ptr " + sa + ", i32 0, i32 0"]);
     List(Str) l3 = l2.concat(["store ptr " + hb.val + ", ptr " + gi]);
     List(Str) l4 = l3.concat([reg + " = call ptr @resid_box_new(i64 1, i64 1, ptr " + sa + ", ptr " + tsym + ")"]);
-    return GT { pos: close.pos, val: reg, ty: resty, cnt: 0, err: "", glines: gl2, lines: l4, tmp: t3, lbl: p.lbl };
+    return GT { pos: close.pos, val: reg, ty: resty, cnt: 0, err: "", glines: gl2, lines: l4, tmp: t3, lbl: p.lbl , tail: false};
 }
 
 // Lower `Err(payload)`: build a tag-2 Result box whose slot 0 holds the
 // heap-boxed error payload. Result type is Result(OkTy, ErrTy).
 GT cg_err_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
-    GT p = cg_expr(s, pos, env, fs, c);
+    GT p = cg_expr(s, pos, env, fs, c, false);
     if (p.err != "") { return p; }
     Tok close = lex_tok(s, p.pos);
     if (close.text != ")") { return gt_err("expected ) in Err(...)", p); }
@@ -1795,10 +1795,10 @@ GT cg_err_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     List(Str) l2 = l1.concat([gi + " = getelementptr [1 x ptr], ptr " + sa + ", i32 0, i32 0"]);
     List(Str) l3 = l2.concat(["store ptr " + hb.val + ", ptr " + gi ]);
     List(Str) l4 = l3.concat([reg + " = call ptr @resid_box_new(i64 2, i64 1, ptr " + sa + ", ptr " + tsym + ")"]);
-    return GT { pos: close.pos, val: reg, ty: resty, cnt: 0, err: "", glines: gl2, lines: l4, tmp: t3, lbl: p.lbl };
+    return GT { pos: close.pos, val: reg, ty: resty, cnt: 0, err: "", glines: gl2, lines: l4, tmp: t3, lbl: p.lbl , tail: false};
 }
 
-GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
+GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c, Bool tail_pos) {
     if (name == "Some") {
         return cg_some_con(s, pos, env, fs, c);
     }
@@ -1819,10 +1819,10 @@ GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
         Str rraw0 = rts0[idx0];
         Int t1 = c.tmp + 1;
         Str reg = "%t" + IntToString(t1);
-        Str line = reg + " = call " + ll_ty(rraw0) + " @" + name + "()";
+        Str line = if (tail_pos) { reg + " = tail call " + ll_ty(rraw0) + " @" + name + "()" } else { reg + " = call " + ll_ty(rraw0) + " @" + name + "()" };
         List(Str) lc0 = c.lines;
         List(Str) cl = lc0.concat([line]);
-        return GT { pos: t.pos, val: reg, ty: rraw0, cnt: 0, err: "", glines: c.glines, lines: cl, tmp: t1, lbl: c.lbl };
+        return GT { pos: t.pos, val: reg, ty: rraw0, cnt: 0, err: "", glines: c.glines, lines: cl, tmp: t1, lbl: c.lbl , tail: false};
     }
     // Look up the callee's declared parameter types BEFORE lowering
     // arguments, so cg_args can widen each one to match (see cg_args).
@@ -1838,18 +1838,18 @@ GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
         if (eret != "") {
             Int t1 = a.tmp + 1;
             Str reg = "%t" + IntToString(t1);
-            Str line = reg + " = call " + ll_ty(eret) + " @" + name + "(" + a.val + ")";
+            Str line = if (tail_pos) { reg + " = tail call " + ll_ty(eret) + " @" + name + "(" + a.val + ")" } else { reg + " = call " + ll_ty(eret) + " @" + name + "(" + a.val + ")" };
             List(Str) l20 = a.lines;
             List(Str) l2 = l20.concat([line]);
-            return GT { pos: a.pos, val: reg, ty: eret, cnt: 0, err: "", glines: a.glines, lines: l2, tmp: t1, lbl: a.lbl };
+            return GT { pos: a.pos, val: reg, ty: eret, cnt: 0, err: "", glines: a.glines, lines: l2, tmp: t1, lbl: a.lbl , tail: false};
         }
         if (cg_arith_family(name)) {
             Int t1 = a.tmp + 1;
             Str reg = "%t" + IntToString(t1);
-            Str line = reg + " = call i64 @" + name + "(" + a.val + ")";
+            Str line = if (tail_pos) { reg + " = tail call i64 @" + name + "(" + a.val + ")" } else { reg + " = call i64 @" + name + "(" + a.val + ")" };
             List(Str) l20 = a.lines;
             List(Str) l2 = l20.concat([line]);
-            return GT { pos: a.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: a.glines, lines: l2, tmp: t1, lbl: a.lbl };
+            return GT { pos: a.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: a.glines, lines: l2, tmp: t1, lbl: a.lbl , tail: false};
         }
         return gt_err("unknown function " + name, a);
     }
@@ -1858,10 +1858,10 @@ GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
     Str rty = ll_ty(rraw);
     Int t1 = a.tmp + 1;
     Str reg = "%t" + IntToString(t1);
-    Str line = reg + " = call " + rty + " @" + name + "(" + a.val + ")";
+    Str line = if (tail_pos) { reg + " = tail call " + rty + " @" + name + "(" + a.val + ")" } else { reg + " = call " + rty + " @" + name + "(" + a.val + ")" };
     List(Str) la0 = a.lines;
     List(Str) cl2 = la0.concat([line]);
-    return GT { pos: a.pos, val: reg, ty: rraw, cnt: a.cnt, err: "", glines: a.glines, lines: cl2, tmp: t1, lbl: a.lbl };
+    return GT { pos: a.pos, val: reg, ty: rraw, cnt: a.cnt, err: "", glines: a.glines, lines: cl2, tmp: t1, lbl: a.lbl , tail: false};
 }
 
 // `print`/`println`/`eprintln` are Bool-valued builtins (the Rust checker's
@@ -1875,17 +1875,17 @@ GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
 // Emitting the C-named `@print/@println/@eprintln` i1 calls (instead of an
 // i32 `@puts`/`@printf` or a nonexistent void `@resid_eprintln`) matches the
 // Rust pipeline's IR and keeps the runtime symbol resolvable at link time.
-GT cg_print(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c) {
+GT cg_print(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c, Bool tail_pos) {
     Tok open = lex_tok(s, pos);
-    GT v = cg_expr(s, pos, env, fs, c);
+    GT v = cg_expr(s, pos, env, fs, c, tail_pos);
     if (v.err != "") { return v; }
     Tok close = lex_tok(s, v.pos);
     Int t1 = v.tmp + 1;
     Str reg = "%t" + IntToString(t1);
-    Str line = reg + " = call i1 @" + name + "(ptr " + v.val + ")";
+    Str line = if (tail_pos) { reg + " = tail call i1 @" + name + "(ptr " + v.val + ")" } else { reg + " = call i1 @" + name + "(ptr " + v.val + ")" };
     List(Str) lp0 = v.lines;
     List(Str) pl = lp0.concat([line]);
-    return GT { pos: close.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: v.glines, lines: pl, tmp: t1, lbl: v.lbl };
+    return GT { pos: close.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: v.glines, lines: pl, tmp: t1, lbl: v.lbl , tail: false};
 }
 
 GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
@@ -1897,7 +1897,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         Str w1 = if (dl > 18) { "Int(128)" } else { "Int" };
         Str w2 = if (dl > 38) { "Int(256)" } else { w1 };
         Str ity = if (dl > 77) { "Int(512)" } else { w2 };
-        return GT { pos: t.pos, val: t.text, ty: ity, cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+        return GT { pos: t.pos, val: t.text, ty: ity, cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
     }
     if (t.kind == "str") {
         Int t1 = c.tmp + 1;
@@ -1911,10 +1911,10 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         Str g = nm + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\"";
         List(Str) gg0 = c.glines;
         List(Str) gl = gg0.concat([g]);
-        return GT { pos: t.pos, val: nm, ty: "Str", cnt: 0, err: "", glines: gl, lines: c.lines, tmp: t1, lbl: c.lbl };
+        return GT { pos: t.pos, val: nm, ty: "Str", cnt: 0, err: "", glines: gl, lines: c.lines, tmp: t1, lbl: c.lbl , tail: false};
     }
     if (t.text == "true" || t.text == "false") {
-        return GT { pos: t.pos, val: t.text, ty: "Bool", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+        return GT { pos: t.pos, val: t.text, ty: "Bool", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
     }
     if (t.kind == "fstring") {
         return cg_fstring(s, t, env, fs, c);
@@ -1935,7 +1935,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         if (t.text == "println" || t.text == "print" || t.text == "eprintln") {
             Tok tp0 = lex_tok(s, t.pos);
             if (tp0.text == "(") {
-                return cg_print(s, tp0.pos, t.text, env, fs, c);
+                return cg_print(s, tp0.pos, t.text, env, fs, c, false);
             }
         }
         Tok t2 = lex_tok(s, t.pos);
@@ -1971,7 +1971,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 return cg_extern2(s, t2.pos, "str_sb_append_cp", "Str", "Int", "Str", env, fs, c);
             }
             if (t.text == "IntToString") {
-                GT v0 = cg_expr(s, t2.pos, env, fs, c);
+                GT v0 = cg_expr(s, t2.pos, env, fs, c, false);
                 if (v0.err != "") { return v0; }
                 GT v = widen_val(v0, "Int(64)");
                 Tok cpit = lex_tok(s, v.pos);
@@ -1983,7 +1983,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 List(Str) x0 = v.lines;
                 List(Str) x1 = x0.concat([buf + " = alloca [24 x i8]"]);
                 List(Str) x2 = x1.concat([reg + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v.val + ")"]);
-                return GT { pos: cpit.pos, val: reg, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x2, tmp: ti2, lbl: v.lbl };
+                return GT { pos: cpit.pos, val: reg, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x2, tmp: ti2, lbl: v.lbl , tail: false};
             }
             if (t.text == "resid_crypto_random_byte") {
                 // Zero-arg extern: t2 is "(", consume through the close paren.
@@ -1993,7 +1993,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 Str rreg = "%t" + IntToString(ri1);
                 List(Str) rl0 = c.lines;
                 List(Str) rl1 = rl0.concat([rreg + " = call i64 @resid_crypto_random_byte()"]);
-                return GT { pos: cpr.pos, val: rreg, ty: "Int", cnt: 0, err: "", glines: c.glines, lines: rl1, tmp: ri1, lbl: c.lbl };
+                return GT { pos: cpr.pos, val: rreg, ty: "Int", cnt: 0, err: "", glines: c.glines, lines: rl1, tmp: ri1, lbl: c.lbl , tail: false};
             }
             if (t.text == "str_sb_new") {
                 // Zero-arg extern returning a new rope handle; the caller
@@ -2004,7 +2004,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 Str nreg = "%t" + IntToString(ni1);
                 List(Str) nl0 = c.lines;
                 List(Str) nl1 = nl0.concat([nreg + " = call ptr @str_sb_new()"]);
-                return GT { pos: cpn.pos, val: nreg, ty: "Str", cnt: 0, err: "", glines: c.glines, lines: nl1, tmp: ni1, lbl: c.lbl };
+                return GT { pos: cpn.pos, val: nreg, ty: "Str", cnt: 0, err: "", glines: c.glines, lines: nl1, tmp: ni1, lbl: c.lbl , tail: false};
             }
             if (t.text == "resid_cpu_has_aesni") {
                 // Zero-arg extern returning i8; icmp-ne-0 into a Bool, same
@@ -2018,7 +2018,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 List(Str) al0 = c.lines;
                 List(Str) al1 = al0.concat([acr + " = call i8 @resid_cpu_has_aesni()"]);
                 List(Str) al2 = al1.concat([areg + " = icmp ne i8 " + acr + ", 0"]);
-                return GT { pos: cpa.pos, val: areg, ty: "Bool", cnt: 0, err: "", glines: c.glines, lines: al2, tmp: ai2, lbl: c.lbl };
+                return GT { pos: cpa.pos, val: areg, ty: "Bool", cnt: 0, err: "", glines: c.glines, lines: al2, tmp: ai2, lbl: c.lbl , tail: false};
             }
             if (t.text == "aesni_enc_round" || t.text == "aesni_enc_last_round") {
                 // Hardware AES-NI single-round encrypt, mirrors resid-codegen's
@@ -2027,12 +2027,12 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 // <2 x i64> result back to i128. Never emitted as C.
                 Bool is_last = t.text == "aesni_enc_last_round";
                 Str intrin = if (is_last) { "@llvm.x86.aesni.aesenclast" } else { "@llvm.x86.aesni.aesenc" };
-                GT a0 = cg_expr(s, t2.pos, env, fs, c);
+                GT a0 = cg_expr(s, t2.pos, env, fs, c, false);
                 if (a0.err != "") { return a0; }
                 GT a = widen_val(a0, "UInt(128)");
                 Tok cm = lex_tok(s, a.pos);
                 if (cm.text != ",") { return gt_err("expected , in call to " + t.text, a); }
-                GT b0 = cg_expr(s, cm.pos, env, fs, a);
+                GT b0 = cg_expr(s, cm.pos, env, fs, a, false);
                 if (b0.err != "") { return b0; }
                 GT b = widen_val(b0, "UInt(128)");
                 Tok cp = lex_tok(s, b.pos);
@@ -2050,10 +2050,10 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 List(Str) vl2 = vl1.concat([bvec + " = bitcast i128 " + b.val + " to <2 x i64>"]);
                 List(Str) vl3 = vl2.concat([rvec + " = call <2 x i64> " + intrin + "(<2 x i64> " + avec + ", <2 x i64> " + bvec + ")"]);
                 List(Str) vl4 = vl3.concat([rreg + " = bitcast <2 x i64> " + rvec + " to i128"]);
-                return GT { pos: cp.pos, val: rreg, ty: "UInt(128)", cnt: 0, err: "", glines: b.glines, lines: vl4, tmp: vt4, lbl: b.lbl };
+                return GT { pos: cp.pos, val: rreg, ty: "UInt(128)", cnt: 0, err: "", glines: b.glines, lines: vl4, tmp: vt4, lbl: b.lbl , tail: false};
             }
             if (false) {
-                GT a0 = cg_expr(s, t2.pos, env, fs, c);
+                GT a0 = cg_expr(s, t2.pos, env, fs, c, false);
                 if (a0.err != "") { return a0; }
                 Tok cpr = lex_tok(s, a0.pos);
                 if (cpr.text != ")") { return gt_err("expected ) in resid_crypto_random_byte", a0); }
@@ -2061,7 +2061,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 Str rreg = "%t" + IntToString(tr1);
                 List(Str) rl0 = a0.lines;
                 List(Str) rl1 = rl0.concat([rreg + " = call i64 @resid_crypto_random_byte()"]);
-                return GT { pos: cpr.pos, val: rreg, ty: "Int", cnt: 0, err: "", glines: a0.glines, lines: rl1, tmp: tr1, lbl: a0.lbl };
+                return GT { pos: cpr.pos, val: rreg, ty: "Int", cnt: 0, err: "", glines: a0.glines, lines: rl1, tmp: tr1, lbl: a0.lbl , tail: false};
             }
             if (t.text == "str_trim") {
                 return cg_extern1(s, t2.pos, "str_trim", "Str", "Str", env, fs, c);
@@ -2159,7 +2159,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             if (t.text == "list_sumf") {
                 return cg_extern1(s, t2.pos, "list_sumf", "List(Float)", "Float", env, fs, c);
             }
-            return cg_call(s, t2.pos, t.text, env, fs, c);
+            return cg_call(s, t2.pos, t.text, env, fs, c, false);
         }
         if (t2.text == ".") {
             if (t.text == "args" || t.text == "filesystem" || t.text == "process" || t.text == "environment" || t.text == "git") {
@@ -2180,13 +2180,13 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         Int el = str_len_1(ent);
         Str val = str_slice(ent, c1p, c2);
         Str ty = str_slice(ent, c2p, el);
-        return GT { pos: t.pos, val: val, ty: ty, cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+        return GT { pos: t.pos, val: val, ty: ty, cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
     }
     if (t.text == "(") {
-        GT e = cg_expr(s, t.pos, env, fs, c);
+        GT e = cg_expr(s, t.pos, env, fs, c, false);
         if (e.err != "") { return e; }
         Tok close = lex_tok(s, e.pos);
-        return GT { pos: close.pos, val: e.val, ty: e.ty, cnt: 0, err: "", glines: e.glines, lines: e.lines, tmp: e.tmp, lbl: e.lbl };
+        return GT { pos: close.pos, val: e.val, ty: e.ty, cnt: 0, err: "", glines: e.glines, lines: e.lines, tmp: e.tmp, lbl: e.lbl , tail: false};
     }
     if (t.text == "[") {
         Tok nxt = lex_tok(s, t.pos);
@@ -2202,9 +2202,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             Str reg = "%t" + IntToString(outt);
             List(Str) l0 = c.lines;
             List(Str) l1 = l0.concat([reg + " = call ptr @resid_list_new(i64 0, ptr null, ptr " + tsym + ")"]);
-            return GT { pos: nxt.pos, val: reg, ty: "List(Unknown)", cnt: 0, err: "", glines: gl2, lines: l1, tmp: outt, lbl: c.lbl };
+            return GT { pos: nxt.pos, val: reg, ty: "List(Unknown)", cnt: 0, err: "", glines: gl2, lines: l1, tmp: outt, lbl: c.lbl , tail: false};
         }
-        GT e0 = cg_expr(s, t.pos, env, fs, c);
+        GT e0 = cg_expr(s, t.pos, env, fs, c, false);
         if (e0.err != "") { return e0; }
         return lst_more(s, e0.pos, e0.ty, 1, [e0.val], env, fs, e0);
     }
@@ -2212,17 +2212,17 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         return cg_map_or_set_lit(s, t.pos, env, fs, c);
     }
     if (t.text == "!") {
-        GT e = cg_unary(s, t.pos, env, fs, c);
+        GT e = cg_unary(s, t.pos, env, fs, c, false);
         if (e.err != "") { return e; }
         Int t1 = e.tmp + 1;
         Str reg = "%t" + IntToString(t1);
         Str line = reg + " = xor i1 " + e.val + ", true";
         List(Str) nl0 = e.lines;
         List(Str) nl2 = nl0.concat([line]);
-        return GT { pos: e.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: e.glines, lines: nl2, tmp: t1, lbl: e.lbl };
+        return GT { pos: e.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: e.glines, lines: nl2, tmp: t1, lbl: e.lbl , tail: false};
     }
     if (t.text == "-") {
-        GT e = cg_unary(s, t.pos, env, fs, c);
+        GT e = cg_unary(s, t.pos, env, fs, c, false);
         if (e.err != "") { return e; }
         Str ety = num_norm_cg(e.ty);
         Int t1 = e.tmp + 1;
@@ -2230,7 +2230,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         Str line = reg + " = sub " + ll_ty(ety) + " 0, " + e.val;
         List(Str) le0 = e.lines;
         List(Str) nl2 = le0.concat([line]);
-        return GT { pos: e.pos, val: reg, ty: ety, cnt: 0, err: "", glines: e.glines, lines: nl2, tmp: t1, lbl: e.lbl };
+        return GT { pos: e.pos, val: reg, ty: ety, cnt: 0, err: "", glines: e.glines, lines: nl2, tmp: t1, lbl: e.lbl , tail: false};
     }
     return gt_err("unexpected token " + t.text, c);
 }
@@ -2245,10 +2245,10 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
 GT cg_cast_fixed(GT inner, Str toty, GT c) {
     Bool src_str_like = inner.ty == "Str" || is_str_fixed(inner.ty) || inner.ty == "Bytes" || is_bytes_fixed(inner.ty);
     if (toty == "Str" && (is_str_fixed(inner.ty) || is_bytes_fixed(inner.ty))) {
-        return GT { pos: inner.pos, val: inner.val, ty: "Str", cnt: 0, err: "", glines: inner.glines, lines: inner.lines, tmp: inner.tmp, lbl: inner.lbl };
+        return GT { pos: inner.pos, val: inner.val, ty: "Str", cnt: 0, err: "", glines: inner.glines, lines: inner.lines, tmp: inner.tmp, lbl: inner.lbl , tail: false};
     }
     if (toty == "Bytes" && is_bytes_fixed(inner.ty)) {
-        return GT { pos: inner.pos, val: inner.val, ty: "Bytes", cnt: 0, err: "", glines: inner.glines, lines: inner.lines, tmp: inner.tmp, lbl: inner.lbl };
+        return GT { pos: inner.pos, val: inner.val, ty: "Bytes", cnt: 0, err: "", glines: inner.glines, lines: inner.lines, tmp: inner.tmp, lbl: inner.lbl , tail: false};
     }
     if (is_str_fixed(toty) && src_str_like) {
         Int cap = fixed_cap(toty) + 1;
@@ -2259,7 +2259,7 @@ GT cg_cast_fixed(GT inner, Str toty, GT c) {
         Int t2 = t1 + 1;
         Str rc = "%t" + IntToString(t2);
         List(Str) l2 = l1.concat([rc + " = call i64 @resid_str_to_fixed(ptr " + dst + ", ptr " + inner.val + ", i64 " + IntToString(cap) + ")"]);
-        return GT { pos: inner.pos, val: dst, ty: toty, cnt: 0, err: "", glines: inner.glines, lines: l2, tmp: t2, lbl: inner.lbl };
+        return GT { pos: inner.pos, val: dst, ty: toty, cnt: 0, err: "", glines: inner.glines, lines: l2, tmp: t2, lbl: inner.lbl , tail: false};
     }
     if (is_bytes_fixed(toty) && src_str_like) {
         Int cap = fixed_cap(toty);
@@ -2270,7 +2270,7 @@ GT cg_cast_fixed(GT inner, Str toty, GT c) {
         Int t2 = t1 + 1;
         Str rc = "%t" + IntToString(t2);
         List(Str) l2 = l1.concat([rc + " = call i64 @resid_bytes_to_fixed(ptr " + dst + ", ptr " + inner.val + ", i64 " + IntToString(cap) + ")"]);
-        return GT { pos: inner.pos, val: dst, ty: toty, cnt: 0, err: "", glines: inner.glines, lines: l2, tmp: t2, lbl: inner.lbl };
+        return GT { pos: inner.pos, val: dst, ty: toty, cnt: 0, err: "", glines: inner.glines, lines: l2, tmp: t2, lbl: inner.lbl , tail: false};
     }
     // List(T, N) -> List(T): dense-box every inline slot into a heap list.
     Bool to_heap_list = str_has_prefix_cg(toty, "List(") && !is_list_fixed(toty);
@@ -2281,7 +2281,7 @@ GT cg_cast_fixed(GT inner, Str toty, GT c) {
             return cg_box_fixed_list(inner, ety, fixed_cap(inner.ty), c);
         }
     }
-    return GT { pos: inner.pos, val: inner.val, ty: inner.ty, cnt: inner.cnt, err: "unsupported fixed cast", glines: inner.glines, lines: inner.lines, tmp: inner.tmp, lbl: inner.lbl };
+    return GT { pos: inner.pos, val: inner.val, ty: inner.ty, cnt: inner.cnt, err: "unsupported fixed cast", glines: inner.glines, lines: inner.lines, tmp: inner.tmp, lbl: inner.lbl , tail: false};
 }
 
 // Load element `i` out of a List(T, N) inline array (`base`, LLVM array
@@ -2322,10 +2322,10 @@ GT cg_box_fixed_list(GT inner, Str ety, Int n, GT c) {
     Int outt = tb0 + n * 5;
     Str reg = "%t" + IntToString(outt);
     List(Str) l3 = l2.concat([reg + " = call ptr @resid_list_new(i64 " + IntToString(n) + ", ptr " + sla + ", ptr " + tsym + ")"]);
-    return GT { pos: inner.pos, val: reg, ty: "List(" + ety + ")", cnt: 0, err: "", glines: g1, lines: l3, tmp: outt, lbl: inner.lbl };
+    return GT { pos: inner.pos, val: reg, ty: "List(" + ety + ")", cnt: 0, err: "", glines: g1, lines: l3, tmp: outt, lbl: inner.lbl , tail: false};
 }
 
-GT cg_unary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
+GT cg_unary(Str s, Int pos, List(Str) env, Funcs fs, GT c, Bool tail_pos) {
     Tok t0 = lex_tok(s, pos);
     if (t0.text == "(") {
         // cast: "(" KnownType ")" unary — emit width conversion
@@ -2335,7 +2335,7 @@ GT cg_unary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             Tok close = lex_tok(s, pt.pos);
             if (close.text == ")") {
                 if (is_known_type_cg(pt.ty)) {
-                    GT inner = cg_unary(s, close.pos, env, fs, c);
+                    GT inner = cg_unary(s, close.pos, env, fs, c, false);
                     if (inner.err != "") { return inner; }
                     Bool fixed_pair = is_fixed_type(pt.ty) || is_fixed_type(inner.ty);
                     if (fixed_pair) {
@@ -2344,7 +2344,7 @@ GT cg_unary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                     }
                     Str fromty = ll_ty(inner.ty);
                     GT conv = cg_convert(inner, fromty, ll_ty(pt.ty), ll_is_signed(inner.ty), c);
-                    GT out = GT { pos: conv.pos, val: conv.val, ty: pt.ty, cnt: 0, err: "", glines: conv.glines, lines: conv.lines, tmp: conv.tmp, lbl: conv.lbl };
+                    GT out = GT { pos: conv.pos, val: conv.val, ty: pt.ty, cnt: 0, err: "", glines: conv.glines, lines: conv.lines, tmp: conv.tmp, lbl: conv.lbl , tail: false};
                     return out;
                 }
             }
@@ -2373,7 +2373,7 @@ GT box_scalar(Str s, GT v, List(Str) env, Funcs fs) {
     // We already have addr2 = addr, simplify:
     List(Str) nl2 = v.lines.concat([addr + " = alloca " + ll_ty(t)]);
     List(Str) nl3 = nl2.concat(["store " + ll_ty(t) + " " + v.val + ", ptr " + addr]);
-    return GT { pos: v.pos, val: addr, ty: t, cnt: v.cnt, err: "", glines: v.glines, lines: nl3, tmp: t1 + 1, lbl: v.lbl };
+    return GT { pos: v.pos, val: addr, ty: t, cnt: v.cnt, err: "", glines: v.glines, lines: nl3, tmp: t1 + 1, lbl: v.lbl , tail: false};
 }
 
 // ─── trie List boxing / unboxing helpers ──────────────────────────────
@@ -2456,7 +2456,7 @@ List(Str) lst_read_lines(Str ety, Str slot, Int tr, List(Str) acc) {
 // pipeline's fixed_capacity_guard.
 GT cg_index_fixed(Str s, Int pos, GT base, List(Str) env, Funcs fs) {
     Int cap = fixed_cap(base.ty);
-    GT ix = cg_expr(s, pos, env, fs, base);
+    GT ix = cg_expr(s, pos, env, fs, base, false);
     if (ix.err != "") { return ix; }
     Tok close = lex_tok(s, ix.pos);
     if (close.text != "]") { return gt_err("expected ] in index", ix); }
@@ -2478,7 +2478,7 @@ GT cg_index_fixed(Str s, Int pos, GT base, List(Str) env, Funcs fs) {
     if (is_str_fixed(base.ty)) {
         Str r = "%t" + IntToString(tn);
         List(Str) lg = lf.concat([r + " = call i64 @str_char_at(ptr " + base.val + ", i64 " + ixx.val + ")"]);
-        return GT { pos: close.pos, val: r, ty: "Int", cnt: 0, err: "", glines: ixx.glines, lines: lg, tmp: tn, lbl: l2 };
+        return GT { pos: close.pos, val: r, ty: "Int", cnt: 0, err: "", glines: ixx.glines, lines: lg, tmp: tn, lbl: l2 , tail: false};
     }
     if (is_bytes_fixed(base.ty)) {
         Str gp = "%t" + IntToString(tn);
@@ -2487,7 +2487,7 @@ GT cg_index_fixed(Str s, Int pos, GT base, List(Str) env, Funcs fs) {
         List(Str) lg = lf.concat([gp + " = getelementptr inbounds i8, ptr " + base.val + ", i64 " + ixx.val]);
         List(Str) lh = lg.concat([lda + " = load i8, ptr " + gp]);
         List(Str) li = lh.concat([z + " = zext i8 " + lda + " to i64"]);
-        return GT { pos: close.pos, val: z, ty: "Int", cnt: 0, err: "", glines: ixx.glines, lines: li, tmp: tn + 2, lbl: l2 };
+        return GT { pos: close.pos, val: z, ty: "Int", cnt: 0, err: "", glines: ixx.glines, lines: li, tmp: tn + 2, lbl: l2 , tail: false};
     }
     // List(T, N)
     Str ety = fixed_elem(base.ty);
@@ -2496,7 +2496,7 @@ GT cg_index_fixed(Str s, Int pos, GT base, List(Str) env, Funcs fs) {
     Str lda = "%t" + IntToString(tn + 1);
     List(Str) lg = lf.concat([gp + " = getelementptr inbounds " + arrty + ", ptr " + base.val + ", i64 0, i64 " + ixx.val]);
     List(Str) lh = lg.concat([lda + " = load " + ll_ty(ety) + ", ptr " + gp]);
-    return GT { pos: close.pos, val: lda, ty: ety, cnt: 0, err: "", glines: ixx.glines, lines: lh, tmp: tn + 1, lbl: l2 };
+    return GT { pos: close.pos, val: lda, ty: ety, cnt: 0, err: "", glines: ixx.glines, lines: lh, tmp: tn + 1, lbl: l2 , tail: false};
 }
 
 GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
@@ -2506,7 +2506,7 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
         Tok lp = lex_tok(s, fld.pos);
         if (fld.text == "len" && lp.text == "(") {
             Tok rp = lex_tok(s, lp.pos);
-            GT b2 = GT { pos: rp.pos, val: IntToString(fixed_cap(base.ty)), ty: "Int", cnt: 0, err: "", glines: base.glines, lines: base.lines, tmp: base.tmp, lbl: base.lbl };
+            GT b2 = GT { pos: rp.pos, val: IntToString(fixed_cap(base.ty)), ty: "Int", cnt: 0, err: "", glines: base.glines, lines: base.lines, tmp: base.tmp, lbl: base.lbl , tail: false};
             return cg_postfix(s, b2, env, fs);
         }
     }
@@ -2530,11 +2530,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call i64 @resid_map_len(ptr " + base.val + ")";
                     List(Str) l20 = base.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT b2 = GT { pos: rp.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: base.glines, lines: l2, tmp: t1, lbl: base.lbl };
+                    GT b2 = GT { pos: rp.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: base.glines, lines: l2, tmp: t1, lbl: base.lbl , tail: false};
                     return cg_postfix(s, b2, env, fs);
                 }
                 if (fld.text == "get") {
-                    GT arg = cg_expr(s, lp.pos, env, fs, base);
+                    GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
                     GT kboxed = box_scalar(s, arg, env, fs);
@@ -2543,15 +2543,15 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call ptr @resid_map_get(ptr " + base.val + ", ptr " + kboxed.val + ")";
                     List(Str) l20 = kboxed.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT opt = GT { pos: rp.pos, val: reg, ty: "Option(" + vt + ")", cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl };
+                    GT opt = GT { pos: rp.pos, val: reg, ty: "Option(" + vt + ")", cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl , tail: false};
                     return cg_postfix(s, opt, env, fs);
                 }
                 if (fld.text == "insert") {
-                    GT ka = cg_expr(s, lp.pos, env, fs, base);
+                    GT ka = cg_expr(s, lp.pos, env, fs, base, false);
                     if (ka.err != "") { return ka; }
                     Tok cm = lex_tok(s, ka.pos);
                     if (cm.text != ",") { return gt_err("expected , in .insert", ka); }
-                    GT va = cg_expr(s, cm.pos, env, fs, ka);
+                    GT va = cg_expr(s, cm.pos, env, fs, ka, false);
                     if (va.err != "") { return va; }
                     Tok rp = lex_tok(s, va.pos);
                     GT kboxed = box_scalar(s, ka, env, fs);
@@ -2561,11 +2561,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call ptr @resid_map_insert(ptr " + base.val + ", ptr " + kboxed.val + ", ptr " + vboxed.val + ")";
                     List(Str) l20 = vboxed.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: va.glines, lines: l2, tmp: t1, lbl: va.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: va.glines, lines: l2, tmp: t1, lbl: va.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "remove") {
-                    GT arg = cg_expr(s, lp.pos, env, fs, base);
+                    GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
                     GT kboxed = box_scalar(s, arg, env, fs);
@@ -2574,11 +2574,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call ptr @resid_map_remove(ptr " + base.val + ", ptr " + kboxed.val + ")";
                     List(Str) l20 = kboxed.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "contains") {
-                    GT arg = cg_expr(s, lp.pos, env, fs, base);
+                    GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
                     GT kboxed = box_scalar(s, arg, env, fs);
@@ -2591,7 +2591,7 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     List(Str) l20 = kboxed.lines;
                     List(Str) l2 = l20.concat([cl]);
                     List(Str) l3 = l2.concat([nl]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: arg.glines, lines: l3, tmp: t2, lbl: arg.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: arg.glines, lines: l3, tmp: t2, lbl: arg.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "keys") {
@@ -2601,7 +2601,7 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str l1 = reg + " = call ptr @resid_map_keys(ptr " + base.val + ")";
                     List(Str) l20 = base.lines;
                     List(Str) l3 = l20.concat([l1]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + kt + ")", cnt: 0, err: "", glines: base.glines, lines: l3, tmp: t1, lbl: base.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + kt + ")", cnt: 0, err: "", glines: base.glines, lines: l3, tmp: t1, lbl: base.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "values") {
@@ -2611,7 +2611,7 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str l1 = reg + " = call ptr @resid_map_values(ptr " + base.val + ")";
                     List(Str) l20 = base.lines;
                     List(Str) l3 = l20.concat([l1]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + vt + ")", cnt: 0, err: "", glines: base.glines, lines: l3, tmp: t1, lbl: base.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + vt + ")", cnt: 0, err: "", glines: base.glines, lines: l3, tmp: t1, lbl: base.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 return gt_err("unsupported method " + fld.text + " on Map", base);
@@ -2626,11 +2626,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call i64 @resid_set_len(ptr " + base.val + ")";
                     List(Str) l20 = base.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT b2 = GT { pos: rp.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: base.glines, lines: l2, tmp: t1, lbl: base.lbl };
+                    GT b2 = GT { pos: rp.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: base.glines, lines: l2, tmp: t1, lbl: base.lbl , tail: false};
                     return cg_postfix(s, b2, env, fs);
                 }
                 if (fld.text == "contains") {
-                    GT arg = cg_expr(s, lp.pos, env, fs, base);
+                    GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
                     GT eboxed = box_scalar(s, arg, env, fs);
@@ -2643,11 +2643,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     List(Str) l20 = eboxed.lines;
                     List(Str) l2 = l20.concat([cl]);
                     List(Str) l3 = l2.concat([nl]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: arg.glines, lines: l3, tmp: t2, lbl: arg.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: arg.glines, lines: l3, tmp: t2, lbl: arg.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "insert") {
-                    GT arg = cg_expr(s, lp.pos, env, fs, base);
+                    GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
                     GT eboxed = box_scalar(s, arg, env, fs);
@@ -2656,11 +2656,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call ptr @resid_set_insert(ptr " + base.val + ", ptr " + eboxed.val + ")";
                     List(Str) l20 = eboxed.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "remove") {
-                    GT arg = cg_expr(s, lp.pos, env, fs, base);
+                    GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
                     GT eboxed = box_scalar(s, arg, env, fs);
@@ -2669,11 +2669,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call ptr @resid_set_remove(ptr " + base.val + ", ptr " + eboxed.val + ")";
                     List(Str) l20 = eboxed.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "union") {
-                    GT arg = cg_expr(s, lp.pos, env, fs, base);
+                    GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
                     Int t1 = arg.tmp + 1;
@@ -2681,11 +2681,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call ptr @resid_set_union(ptr " + base.val + ", ptr " + arg.val + ")";
                     List(Str) l20 = arg.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "difference") {
-                    GT arg = cg_expr(s, lp.pos, env, fs, base);
+                    GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
                     Int t1 = arg.tmp + 1;
@@ -2693,11 +2693,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call ptr @resid_set_difference(ptr " + base.val + ", ptr " + arg.val + ")";
                     List(Str) l20 = arg.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "intersection") {
-                    GT arg = cg_expr(s, lp.pos, env, fs, base);
+                    GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
                     Int t1 = arg.tmp + 1;
@@ -2705,7 +2705,7 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call ptr @resid_set_intersection(ptr " + base.val + ", ptr " + arg.val + ")";
                     List(Str) l20 = arg.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l2, tmp: t1, lbl: arg.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 if (fld.text == "to_list") {
@@ -2715,7 +2715,7 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str l1 = reg + " = call ptr @resid_set_to_list(ptr " + base.val + ")";
                     List(Str) l20 = base.lines;
                     List(Str) l3 = l20.concat([l1]);
-                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + et + ")", cnt: 0, err: "", glines: base.glines, lines: l3, tmp: t1, lbl: base.lbl };
+                    GT b3 = GT { pos: rp.pos, val: reg, ty: "List(" + et + ")", cnt: 0, err: "", glines: base.glines, lines: l3, tmp: t1, lbl: base.lbl , tail: false};
                     return cg_postfix(s, b3, env, fs);
                 }
                 return gt_err("unsupported method " + fld.text + " on Set", base);
@@ -2727,11 +2727,11 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                 Str line = reg + " = call i64 @resid_list_len(ptr " + base.val + ")";
                 List(Str) l20 = base.lines;
                 List(Str) l2 = l20.concat([line]);
-                GT b2 = GT { pos: rp.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: base.glines, lines: l2, tmp: t1, lbl: base.lbl };
+                GT b2 = GT { pos: rp.pos, val: reg, ty: "Int", cnt: 0, err: "", glines: base.glines, lines: l2, tmp: t1, lbl: base.lbl , tail: false};
                 return cg_postfix(s, b2, env, fs);
             }
             if (fld.text == "concat") {
-                GT arg = cg_expr(s, lp.pos, env, fs, base);
+                GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                 if (arg.err != "") { return arg; }
                 Tok rp2 = lex_tok(s, arg.pos);
                 Int t2 = arg.tmp + 1;
@@ -2744,7 +2744,7 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                 };
                 List(Str) l30 = arg.lines;
                 List(Str) l3 = l30.concat([line2]);
-                GT b3 = GT { pos: rp2.pos, val: reg2, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l3, tmp: t2, lbl: arg.lbl };
+                GT b3 = GT { pos: rp2.pos, val: reg2, ty: base.ty, cnt: 0, err: "", glines: arg.glines, lines: l3, tmp: t2, lbl: arg.lbl , tail: false};
                 return cg_postfix(s, b3, env, fs);
             }
             return gt_err("unsupported method " + fld.text, base);
@@ -2766,14 +2766,14 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
         List(Str) l40 = base.lines;
         List(Str) l4 = l40.concat([g1]);
         List(Str) l5 = l4.concat([g2]);
-        GT b4 = GT { pos: fld.pos, val: ld, ty: fty, cnt: 0, err: "", glines: base.glines, lines: l5, tmp: t2, lbl: base.lbl };
+        GT b4 = GT { pos: fld.pos, val: ld, ty: fty, cnt: 0, err: "", glines: base.glines, lines: l5, tmp: t2, lbl: base.lbl , tail: false};
         return cg_postfix(s, b4, env, fs);
     }
     if (t.text == "[") {
         // Map indexing: m[key] -> Option(value)
         if (is_map_type_cg(base.ty)) {
             Str vt = map_val_type_cg(base.ty);
-            GT ix = cg_expr(s, t.pos, env, fs, base);
+            GT ix = cg_expr(s, t.pos, env, fs, base, false);
             if (ix.err != "") { return ix; }
             Tok close = lex_tok(s, ix.pos);
             GT kboxed = box_scalar(s, ix, env, fs);
@@ -2782,13 +2782,13 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
             Str line = reg + " = call ptr @resid_map_get(ptr " + base.val + ", ptr " + kboxed.val + ")";
             List(Str) l0 = kboxed.lines;
             List(Str) l1 = l0.concat([line]);
-            GT b5 = GT { pos: close.pos, val: reg, ty: "Option(" + vt + ")", cnt: 0, err: "", glines: ix.glines, lines: l1, tmp: t1, lbl: ix.lbl };
+            GT b5 = GT { pos: close.pos, val: reg, ty: "Option(" + vt + ")", cnt: 0, err: "", glines: ix.glines, lines: l1, tmp: t1, lbl: ix.lbl , tail: false};
             return cg_postfix(s, b5, env, fs);
         }
         Int pp = str_find_char(base.ty, 40, 0);
         if (pp < 0) { return gt_err("indexing non-list " + base.ty, base); }
         Str ety = elem_type(base.ty);
-        GT ix = cg_expr(s, t.pos, env, fs, base);
+        GT ix = cg_expr(s, t.pos, env, fs, base, false);
         if (ix.err != "") { return ix; }
         Tok close = lex_tok(s, ix.pos);
         // Indices feed byte-offset GEPs at i64; truncate wide values.
@@ -2800,13 +2800,13 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
         List(Str) l0 = ixx.lines;
         List(Str) l1 = l0.concat([slot + " = call ptr @resid_list_get(ptr " + base.val + ", i64 " + ixx.val + ")"]);
         List(Str) l2 = lst_read_lines(ety, slot, t2, l1);
-        GT b5 = GT { pos: close.pos, val: ldr, ty: ety, cnt: 0, err: "", glines: ix.glines, lines: l2, tmp: t2 + 1, lbl: ix.lbl };
+        GT b5 = GT { pos: close.pos, val: ldr, ty: ety, cnt: 0, err: "", glines: ix.glines, lines: l2, tmp: t2 + 1, lbl: ix.lbl , tail: false};
         return cg_postfix(s, b5, env, fs);
     }
     return base;
 }
 
-GT cg_bin_rest(Str s, GT lhs, Int min_prec, List(Str) env, Funcs fs) {
+GT cg_bin_rest(Str s, GT lhs, Int min_prec, List(Str) env, Funcs fs, Bool tail_pos) {
     Tok t = lex_tok(s, lhs.pos);
     if (t.text == "?") {
         // value? — unwrap sugar: None/Err runs the enclosing function's early
@@ -2835,11 +2835,11 @@ GT cg_bin_rest(Str s, GT lhs, Int min_prec, List(Str) env, Funcs fs) {
         List(Str) q5 = q4.concat([labn + ":"]);
         List(Str) q6 = q5.concat(["ret ptr " + lhs.val]);
         List(Str) q7 = q6.concat([labp + ":"]);
-        GT c1 = GT { pos: lhs.pos, val: "", ty: "", cnt: 0, err: "", glines: lhs.glines, lines: q7, tmp: t3, lbl: l2 };
+        GT c1 = GT { pos: lhs.pos, val: "", ty: "", cnt: 0, err: "", glines: lhs.glines, lines: q7, tmp: t3, lbl: l2 , tail: false};
         GT pv = cg_match_payload(lhs, ety, c1);
         if (pv.err != "") { return pv; }
-        GT q = GT { pos: t.pos, val: pv.val, ty: pv.ty, cnt: 0, err: "", glines: pv.glines, lines: pv.lines, tmp: pv.tmp, lbl: pv.lbl };
-        return cg_bin_rest(s, q, min_prec, env, fs);
+        GT q = GT { pos: t.pos, val: pv.val, ty: pv.ty, cnt: 0, err: "", glines: pv.glines, lines: pv.lines, tmp: pv.tmp, lbl: pv.lbl , tail: false};
+        return cg_bin_rest(s, q, min_prec, env, fs, false);
     }
 if (t.text == "else") {
         // value else { fallback } — unwrap sugar: Some/Ok uses the payload,
@@ -2874,12 +2874,12 @@ Int payload_tag = if (is_opt) { 1 } else { 1 };
         Tok elseTok = t;
         Tok open = lex_tok(s, elseTok.pos);
         if (open.text != "{") { return gt_err("expected { after else", lhs); }
-        GT fv0 = GT { pos: open.pos, val: "", ty: "", cnt: 0, err: "", glines: lhs.glines, lines: q5, tmp: t3, lbl: l3 };
+        GT fv0 = GT { pos: open.pos, val: "", ty: "", cnt: 0, err: "", glines: lhs.glines, lines: q5, tmp: t3, lbl: l3 , tail: false};
         // Pass open.pos (end of '{') so cg_expr -> cg_unary -> lex_tok skips whitespace and finds the first token.
         // Use cg_expr_block, not bare cg_expr: `else { ... }` sugar blocks are
         // a value position that may open with local temporaries (see
         // cg_ifexpr's matching fix above / check_expr_block in typecheck.resid).
-        GT fv = cg_expr_block(s, open.pos, env, fs, fv0);
+        GT fv = cg_expr_block(s, open.pos, env, fs, fv0, false);
         if (fv.err != "") { return fv; }
         Tok close = lex_tok(s, fv.pos);
         if (close.text != "}") { return gt_err("expected } at end of else block", fv); }
@@ -2887,7 +2887,7 @@ Int payload_tag = if (is_opt) { 1 } else { 1 };
         List(Str) x1 = x0.concat(["br label %" + labm]);
         // Now PAYLOAD block
         List(Str) x2 = x1.concat([labp + ":"]);
-        GT c1 = GT { pos: lhs.pos, val: "", ty: "", cnt: 0, err: "", glines: lhs.glines, lines: x2, tmp: fv.tmp, lbl: l3 };
+        GT c1 = GT { pos: lhs.pos, val: "", ty: "", cnt: 0, err: "", glines: lhs.glines, lines: x2, tmp: fv.tmp, lbl: l3 , tail: false};
         GT pv = cg_match_payload(lhs, ety, c1);
         if (pv.err != "") { return pv; }
         List(Str) y0 = pv.lines;
@@ -2898,24 +2898,24 @@ Int payload_tag = if (is_opt) { 1 } else { 1 };
         // phi operands: [fallback_val, %labf], [payload_val, %labp]
         Str phi = pr + " = phi " + ll_ty(num_norm_cg(ety)) + " [ " + fv.val + ", %" + labf + " ], [ " + pv.val + ", %" + labp + " ]";
         List(Str) y3 = y2.concat([phi]);
-        GT q = GT { pos: close.pos, val: pr, ty: ety, cnt: 0, err: "", glines: pv.glines, lines: y3, tmp: tp, lbl: l3 };
-        return cg_bin_rest(s, q, min_prec, env, fs);
+        GT q = GT { pos: close.pos, val: pr, ty: ety, cnt: 0, err: "", glines: pv.glines, lines: y3, tmp: tp, lbl: l3 , tail: false};
+        return cg_bin_rest(s, q, min_prec, env, fs, false);
     }
     Int p = op_prec(t.text);
     if (p < min_prec || p == 0) { return lhs; }
-    GT rhs = cg_unary(s, t.pos, env, fs, lhs);
+    GT rhs = cg_unary(s, t.pos, env, fs, lhs, false);
     if (rhs.err != "") { return rhs; }
     Int next = p + 1;
-    GT joined = GT { pos: rhs.pos, val: rhs.val, ty: rhs.ty, cnt: rhs.cnt, err: "", glines: rhs.glines, lines: rhs.lines, tmp: rhs.tmp, lbl: rhs.lbl };
-    GT more = cg_bin_rest(s, joined, next, env, fs);
+    GT joined = GT { pos: rhs.pos, val: rhs.val, ty: rhs.ty, cnt: rhs.cnt, err: "", glines: rhs.glines, lines: rhs.lines, tmp: rhs.tmp, lbl: rhs.lbl , tail: false};
+    GT more = cg_bin_rest(s, joined, next, env, fs, false);
     if (more.err != "") { return more; }
     GT applied = bin_apply(t.text, lhs, more);
-    return cg_bin_rest(s, applied, min_prec, env, fs);
+    return cg_bin_rest(s, applied, min_prec, env, fs, false);
 }
 
-GT cg_expr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
-    GT lhs = cg_unary(s, pos, env, fs, c);
-    return cg_bin_rest(s, lhs, 1, env, fs);
+GT cg_expr(Str s, Int pos, List(Str) env, Funcs fs, GT c, Bool tail_pos) {
+    GT lhs = cg_unary(s, pos, env, fs, c, tail_pos);
+    return cg_bin_rest(s, lhs, 1, env, fs, tail_pos);
 }
 
 Str p_sym(Str pname, Str meth) {
@@ -2999,9 +2999,9 @@ GT cg_provider(Str s, Int pos, Str pname, List(Str) env, Funcs fs, GT c) {
         Str line = reg + " = call " + ll_ty(rty) + " @" + sym + "()";
         List(Str) l20 = c.lines;
         List(Str) l2 = l20.concat([line]);
-        return GT { pos: cp.pos, val: reg, ty: rty, cnt: 0, err: "", glines: c.glines, lines: l2, tmp: t1, lbl: c.lbl };
+        return GT { pos: cp.pos, val: reg, ty: rty, cnt: 0, err: "", glines: c.glines, lines: l2, tmp: t1, lbl: c.lbl , tail: false};
     }
-    GT a1 = cg_expr(s, lp.pos, env, fs, c);
+    GT a1 = cg_expr(s, lp.pos, env, fs, c, false);
     if (a1.err != "") { return a1; }
     if (nargs == 1) {
         Tok cp1 = lex_tok(s, a1.pos);
@@ -3011,11 +3011,11 @@ GT cg_provider(Str s, Int pos, Str pname, List(Str) env, Funcs fs, GT c) {
         Str lineb = regb + " = call " + ll_ty(rty) + " @" + sym + "(" + ll_ty(a1.ty) + " " + a1.val + ")";
         List(Str) lb0 = a1.lines;
         List(Str) lb1 = lb0.concat([lineb]);
-        return GT { pos: cp1.pos, val: regb, ty: rty, cnt: 0, err: "", glines: a1.glines, lines: lb1, tmp: tb, lbl: a1.lbl };
+        return GT { pos: cp1.pos, val: regb, ty: rty, cnt: 0, err: "", glines: a1.glines, lines: lb1, tmp: tb, lbl: a1.lbl , tail: false};
     }
     Tok cm = lex_tok(s, a1.pos);
     if (cm.text != ",") { return gt_err("expected , in provider call", a1); }
-    GT a2 = cg_expr(s, cm.pos, env, fs, a1);
+    GT a2 = cg_expr(s, cm.pos, env, fs, a1, false);
     if (a2.err != "") { return a2; }
     Tok cp2 = lex_tok(s, a2.pos);
     if (cp2.text != ")") { return gt_err("expected ) in provider call", a2); }
@@ -3024,7 +3024,7 @@ GT cg_provider(Str s, Int pos, Str pname, List(Str) env, Funcs fs, GT c) {
     Str linec = regc + " = call " + ll_ty(rty) + " @" + sym + "(" + ll_ty(a1.ty) + " " + a1.val + ", " + ll_ty(a2.ty) + " " + a2.val + ")";
     List(Str) lc0 = a2.lines;
     List(Str) lc1 = lc0.concat([linec]);
-    return GT { pos: cp2.pos, val: regc, ty: rty, cnt: 0, err: "", glines: a2.glines, lines: lc1, tmp: tc, lbl: a2.lbl };
+    return GT { pos: cp2.pos, val: regc, ty: rty, cnt: 0, err: "", glines: a2.glines, lines: lc1, tmp: tc, lbl: a2.lbl , tail: false};
 }
 
 // Strip leading Reverse(...) wrappers: ty=inner text, pos=layer count.
@@ -3039,7 +3039,7 @@ PRes strip_reverse(Str s, Int depth) {
 
 // `sort(xs, using = Ord(T))` — behavior-dispatched stable sort (spec §11).
 GT cg_sort(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
-    GT v = cg_expr(s, pos, env, fs, c);
+    GT v = cg_expr(s, pos, env, fs, c, false);
     if (v.err != "") { return v; }
     Tok comma = lex_tok(s, v.pos);
     if (comma.text != ",") { return gt_err("sort requires a behavior: sort(xs, using = Ord(T))", c); }
@@ -3074,10 +3074,10 @@ GT cg_sort(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     Str line = reg + " = call ptr @list_sort_by(ptr " + v.val + ", ptr @" + tname + ")";
     List(Str) l20 = v.lines;
     List(Str) l2 = l20.concat([line]);
-    return GT { pos: close.pos, val: reg, ty: v.ty, cnt: 0, err: "", glines: v.glines, lines: l2, tmp: t1, lbl: v.lbl };
+    return GT { pos: close.pos, val: reg, ty: v.ty, cnt: 0, err: "", glines: v.glines, lines: l2, tmp: t1, lbl: v.lbl , tail: false};
 }
 
-GT cg_extern1(Str s, Int pos, Str sym, Str aty, Str rty, List(Str) env, Funcs fs, GT c) {    GT a = cg_expr(s, pos, env, fs, c);
+GT cg_extern1(Str s, Int pos, Str sym, Str aty, Str rty, List(Str) env, Funcs fs, GT c) {    GT a = cg_expr(s, pos, env, fs, c, false);
     if (a.err != "") { return a; }
     Tok cp = lex_tok(s, a.pos);
     if (cp.text != ")") { return gt_err("expected ) in call to " + sym, a); }
@@ -3086,11 +3086,11 @@ GT cg_extern1(Str s, Int pos, Str sym, Str aty, Str rty, List(Str) env, Funcs fs
     Str line = reg + " = call " + ll_ty(rty) + " @" + sym + "(" + ll_ty(aty) + " " + a.val + ")";
     List(Str) l20 = a.lines;
     List(Str) l2 = l20.concat([line]);
-    return GT { pos: cp.pos, val: reg, ty: rty, cnt: 0, err: "", glines: a.glines, lines: l2, tmp: t1, lbl: a.lbl };
+    return GT { pos: cp.pos, val: reg, ty: rty, cnt: 0, err: "", glines: a.glines, lines: l2, tmp: t1, lbl: a.lbl , tail: false};
 }
 
 GT cg_externb1(Str s, Int pos, Str sym, Str aty, List(Str) env, Funcs fs, GT c) {
-    GT a = cg_expr(s, pos, env, fs, c);
+    GT a = cg_expr(s, pos, env, fs, c, false);
     if (a.err != "") { return a; }
     Tok cp = lex_tok(s, a.pos);
     if (cp.text != ")") { return gt_err("expected ) in call to " + sym, a); }
@@ -3103,15 +3103,15 @@ GT cg_externb1(Str s, Int pos, Str sym, Str aty, List(Str) env, Funcs fs, GT c) 
     List(Str) l20 = a.lines;
     List(Str) l2 = l20.concat([cl]);
     List(Str) l3 = l2.concat([nl]);
-    return GT { pos: cp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: a.glines, lines: l3, tmp: t2, lbl: a.lbl };
+    return GT { pos: cp.pos, val: reg, ty: "Bool", cnt: 0, err: "", glines: a.glines, lines: l3, tmp: t2, lbl: a.lbl , tail: false};
 }
 
 GT cg_extern2(Str s, Int pos, Str sym, Str aty1, Str aty2, Str rty, List(Str) env, Funcs fs, GT c) {
-    GT a = cg_expr(s, pos, env, fs, c);
+    GT a = cg_expr(s, pos, env, fs, c, false);
     if (a.err != "") { return a; }
     Tok cm = lex_tok(s, a.pos);
     if (cm.text != ",") { return gt_err("expected , in call to " + sym, a); }
-    GT b = cg_expr(s, cm.pos, env, fs, a);
+    GT b = cg_expr(s, cm.pos, env, fs, a, false);
     if (b.err != "") { return b; }
     Tok cp = lex_tok(s, b.pos);
     if (cp.text != ")") { return gt_err("expected ) in call to " + sym, b); }
@@ -3120,19 +3120,19 @@ GT cg_extern2(Str s, Int pos, Str sym, Str aty1, Str aty2, Str rty, List(Str) en
     Str line = reg + " = call " + ll_ty(rty) + " @" + sym + "(" + ll_ty(aty1) + " " + a.val + ", " + ll_ty(aty2) + " " + b.val + ")";
     List(Str) l20 = b.lines;
     List(Str) l2 = l20.concat([line]);
-    return GT { pos: cp.pos, val: reg, ty: rty, cnt: 0, err: "", glines: b.glines, lines: l2, tmp: t1, lbl: b.lbl };
+    return GT { pos: cp.pos, val: reg, ty: rty, cnt: 0, err: "", glines: b.glines, lines: l2, tmp: t1, lbl: b.lbl , tail: false};
 }
 
 GT cg_extern3(Str s, Int pos, Str sym, Str aty1, Str aty2, Str aty3, Str rty, List(Str) env, Funcs fs, GT c) {
-    GT a = cg_expr(s, pos, env, fs, c);
+    GT a = cg_expr(s, pos, env, fs, c, false);
     if (a.err != "") { return a; }
     Tok cm = lex_tok(s, a.pos);
     if (cm.text != ",") { return gt_err("expected , in call to " + sym, a); }
-    GT b = cg_expr(s, cm.pos, env, fs, a);
+    GT b = cg_expr(s, cm.pos, env, fs, a, false);
     if (b.err != "") { return b; }
     Tok cm2 = lex_tok(s, b.pos);
     if (cm2.text != ",") { return gt_err("expected , in call to " + sym, b); }
-    GT d = cg_expr(s, cm2.pos, env, fs, b);
+    GT d = cg_expr(s, cm2.pos, env, fs, b, false);
     if (d.err != "") { return d; }
     Tok cp = lex_tok(s, d.pos);
     if (cp.text != ")") { return gt_err("expected ) in call to " + sym, d); }
@@ -3141,7 +3141,7 @@ GT cg_extern3(Str s, Int pos, Str sym, Str aty1, Str aty2, Str aty3, Str rty, Li
     Str line = reg + " = call " + ll_ty(rty) + " @" + sym + "(" + ll_ty(aty1) + " " + a.val + ", " + ll_ty(aty2) + " " + b.val + ", " + ll_ty(aty3) + " " + d.val + ")";
     List(Str) l20 = d.lines;
     List(Str) l2 = l20.concat([line]);
-    return GT { pos: cp.pos, val: reg, ty: rty, cnt: 0, err: "", glines: d.glines, lines: l2, tmp: t1, lbl: d.lbl };
+    return GT { pos: cp.pos, val: reg, ty: rty, cnt: 0, err: "", glines: d.glines, lines: l2, tmp: t1, lbl: d.lbl , tail: false};
 }
 
 GT csl_value(Str s, Int pos, Str fty, List(Str) env, Funcs fs, GT c) {
@@ -3158,15 +3158,15 @@ GT csl_value(Str s, Int pos, Str fty, List(Str) env, Funcs fs, GT c) {
         List(Str) gg1 = gg0.concat([tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\""]);
         List(Str) q0 = c.lines;
         List(Str) q1 = q0.concat([re + " = call ptr @resid_list_new(i64 0, ptr null, ptr " + tsym + ")"]);
-        return GT { pos: v2.pos, val: re, ty: fty, cnt: 0, err: "", glines: gg1, lines: q1, tmp: te, lbl: c.lbl };
+        return GT { pos: v2.pos, val: re, ty: fty, cnt: 0, err: "", glines: gg1, lines: q1, tmp: te, lbl: c.lbl , tail: false};
     }
-    return cg_expr(s, pos, env, fs, c);
+    return cg_expr(s, pos, env, fs, c, false);
 }
 
 GT csl_field(Str s, Int pos, Str fields, Str sname, Str reg, List(Str) env, Funcs fs, GT c) {
     Tok t = lex_tok(s, pos);
     if (t.text == "}") {
-        return GT { pos: t.pos, val: reg, ty: sname, cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+        return GT { pos: t.pos, val: reg, ty: sname, cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
     }
     Tok colon = lex_tok(s, t.pos);
     if (colon.text != ":") { return gt_err("expected : in struct literal", c); }
@@ -3182,13 +3182,13 @@ GT csl_field(Str s, Int pos, Str fields, Str sname, Str reg, List(Str) env, Func
     List(Str) u0 = v.lines;
     List(Str) u1 = u0.concat([g1]);
     List(Str) u2 = u1.concat([g2]);
-    GT stored = GT { pos: v.pos, val: reg, ty: sname, cnt: 0, err: "", glines: v.glines, lines: u2, tmp: v.tmp, lbl: v.lbl };
+    GT stored = GT { pos: v.pos, val: reg, ty: sname, cnt: 0, err: "", glines: v.glines, lines: u2, tmp: v.tmp, lbl: v.lbl , tail: false};
     Tok sep = lex_tok(s, v.pos);
     if (sep.text == ",") {
         return csl_field(s, sep.pos, fields, sname, reg, env, fs, stored);
     }
     if (sep.text == "}") {
-        return GT { pos: sep.pos, val: reg, ty: sname, cnt: 0, err: "", glines: stored.glines, lines: stored.lines, tmp: stored.tmp, lbl: stored.lbl };
+        return GT { pos: sep.pos, val: reg, ty: sname, cnt: 0, err: "", glines: stored.glines, lines: stored.lines, tmp: stored.tmp, lbl: stored.lbl , tail: false};
     }
     return gt_err("expected , or } in struct literal", stored);
 }
@@ -3204,7 +3204,7 @@ GT cg_struct_lit(Str s, Int pos, Str sname, List(Str) env, Funcs fs, GT c) {
     Str reg = "%t" + IntToString(t1);
     List(Str) l0 = c.lines;
     List(Str) l1 = l0.concat([reg + " = call ptr @malloc(i64 " + IntToString(nb) + ")"]);
-    GT c1 = GT { pos: pos, val: reg, ty: sname, cnt: 0, err: "", glines: c.glines, lines: l1, tmp: t1, lbl: c.lbl };
+    GT c1 = GT { pos: pos, val: reg, ty: sname, cnt: 0, err: "", glines: c.glines, lines: l1, tmp: t1, lbl: c.lbl , tail: false};
     return csl_field(s, pos, fields, sname, reg, env, fs, c1);
 }
 
@@ -3240,7 +3240,7 @@ GT lst_emit(Str ety, Int n, List(Str) vals, Int pos, GT c) {
     Int outt = tb0 + n * 3;
     Str reg = "%t" + IntToString(outt);
     List(Str) l3 = l2.concat([reg + " = call ptr @resid_list_new(i64 " + IntToString(n) + ", ptr " + sla + ", ptr " + tsym + ")"]);
-    return GT { pos: pos, val: reg, ty: "List(" + ety + ")", cnt: 0, err: "", glines: gl2, lines: l3, tmp: outt, lbl: c.lbl };
+    return GT { pos: pos, val: reg, ty: "List(" + ety + ")", cnt: 0, err: "", glines: gl2, lines: l3, tmp: outt, lbl: c.lbl , tail: false};
 }
 
 GT lst_more(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Funcs fs, GT c) {
@@ -3272,7 +3272,7 @@ GT lst_elems(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Func
         }
     }
     if (t.text == "]") { return gt_err("unexpected ] in list literal", c); }
-    GT v = cg_expr(s, pos, env, fs, c);
+    GT v = cg_expr(s, pos, env, fs, c, false);
     if (v.err != "") { return v; }
     if (num_norm_cg(v.ty) != num_norm_cg(ety)) { return gt_err("mixed list element types", v); }
     List(Str) vals2 = vals.concat([v.val]);
@@ -3283,23 +3283,23 @@ GT lst_elems(Str s, Int pos, Str ety, Int n, List(Str) vals, List(Str) env, Func
 // Map literal: {k: v, ...} — build persistent hash table via resid_map_insert.
 GT cg_map_lit_emit(Str map_ptr, Str kt, Str vt, Int pos, GT c) {
     // The map_ptr is already a ptr to ResidMap.
-    return GT { pos: pos, val: map_ptr, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+    return GT { pos: pos, val: map_ptr, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
 }
 
 GT cg_map_lit_rest(Str s, Int pos, Str kt, Str vt, GT map_v, List(Str) env, Funcs fs, GT c) {
-    GT k = cg_expr(s, pos, env, fs, map_v);
+    GT k = cg_expr(s, pos, env, fs, map_v, false);
     if (k.err != "") { return k; }
     Tok colon = lex_tok(s, k.pos);
     if (colon.text != ":") { return gt_err("map entries must use : separator", k); }
     GT kbox = box_scalar(s, k, env, fs);
-    GT v = cg_expr(s, colon.pos, env, fs, kbox);
+    GT v = cg_expr(s, colon.pos, env, fs, kbox, false);
     if (v.err != "") { return v; }
     GT vbox = box_scalar(s, v, env, fs);
     Int t1 = vbox.tmp + 1;
     Str reg = "%t" + IntToString(t1);
     Str line = reg + " = call ptr @resid_map_insert(ptr " + map_v.val + ", ptr " + kbox.val + ", ptr " + vbox.val + ")";
     List(Str) nl = vbox.lines.concat([line]);
-    GT m = GT { pos: colon.pos, val: reg, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: vbox.glines, lines: nl, tmp: t1, lbl: vbox.lbl };
+    GT m = GT { pos: colon.pos, val: reg, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: vbox.glines, lines: nl, tmp: t1, lbl: vbox.lbl , tail: false};
     Tok t2 = lex_tok(s, v.pos);
     if (t2.text == ",") {
         return cg_map_lit_rest(s, t2.pos, kt, vt, m, env, fs, vbox);
@@ -3309,11 +3309,11 @@ GT cg_map_lit_rest(Str s, Int pos, Str kt, Str vt, GT map_v, List(Str) env, Func
 
 // Set literal: {e, ...} — build persistent hash table via resid_set_insert.
 GT cg_set_lit_emit(Str set_ptr, Str et, Int pos, GT c) {
-    return GT { pos: pos, val: set_ptr, ty: "Set(" + et + ")", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+    return GT { pos: pos, val: set_ptr, ty: "Set(" + et + ")", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
 }
 
 GT cg_set_lit_rest(Str s, Int pos, Str et, GT set_v, List(Str) env, Funcs fs, GT c) {
-    GT e = cg_expr(s, pos, env, fs, set_v);
+    GT e = cg_expr(s, pos, env, fs, set_v, false);
     if (e.err != "") { return e; }
     if (e.ty != et) { return gt_err("set element type mismatch: " + et + " vs " + e.ty, e); }
     GT ebox = box_scalar(s, e, env, fs);
@@ -3321,7 +3321,7 @@ GT cg_set_lit_rest(Str s, Int pos, Str et, GT set_v, List(Str) env, Funcs fs, GT
     Str reg = "%t" + IntToString(t1);
     Str line = reg + " = call ptr @resid_set_insert(ptr " + set_v.val + ", ptr " + ebox.val + ")";
     List(Str) nl = ebox.lines.concat([line]);
-    GT m = GT { pos: e.pos, val: reg, ty: "Set(" + et + ")", cnt: 0, err: "", glines: ebox.glines, lines: nl, tmp: t1, lbl: ebox.lbl };
+    GT m = GT { pos: e.pos, val: reg, ty: "Set(" + et + ")", cnt: 0, err: "", glines: ebox.glines, lines: nl, tmp: t1, lbl: ebox.lbl , tail: false};
     Tok t2 = lex_tok(s, e.pos);
     if (t2.text == ",") {
         return cg_set_lit_rest(s, t2.pos, et, m, env, fs, ebox);
@@ -3331,14 +3331,14 @@ GT cg_set_lit_rest(Str s, Int pos, Str et, GT set_v, List(Str) env, Funcs fs, GT
 
 GT cg_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     // Peek: first expression, then decide map (:) vs set (,) vs single set (})
-    GT first = cg_expr(s, pos, env, fs, c);
+    GT first = cg_expr(s, pos, env, fs, c, false);
     if (first.err != "") { return first; }
     Tok after = lex_tok(s, first.pos);
     if (after.text == ":") {
         // Map literal: {k: v, ...} — create empty table, insert first pair,
         // then continue with remaining pairs.
         GT kbox = box_scalar(s, first, env, fs);
-        GT val = cg_expr(s, after.pos, env, fs, kbox);
+        GT val = cg_expr(s, after.pos, env, fs, kbox, false);
         if (val.err != "") { return val; }
         GT vbox = box_scalar(s, val, env, fs);
         Str kt = first.ty;
@@ -3350,7 +3350,7 @@ GT cg_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         Str m1 = "%t" + IntToString(t2i);
         Str insl = m1 + " = call ptr @resid_map_insert(ptr " + m0 + ", ptr " + kbox.val + ", ptr " + vbox.val + ")";
         List(Str) nl = vbox.lines.concat([newl, insl]);
-        GT mt = GT { pos: val.pos, val: m1, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: vbox.glines, lines: nl, tmp: t2i, lbl: vbox.lbl };
+        GT mt = GT { pos: val.pos, val: m1, ty: "Map(" + kt + ", " + vt + ")", cnt: 0, err: "", glines: vbox.glines, lines: nl, tmp: t2i, lbl: vbox.lbl , tail: false};
         Tok t2 = lex_tok(s, val.pos);
         if (t2.text == ",") {
             return cg_map_lit_rest(s, t2.pos, kt, vt, mt, env, fs, vbox);
@@ -3367,7 +3367,7 @@ GT cg_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         Str s1 = "%t" + IntToString(t2i);
         Str insl = s1 + " = call ptr @resid_set_insert(ptr " + s0 + ", ptr " + fbox.val + ")";
         List(Str) nl = fbox.lines.concat([newl, insl]);
-        GT st = GT { pos: first.pos, val: s1, ty: "Set(" + first.ty + ")", cnt: 0, err: "", glines: fbox.glines, lines: nl, tmp: t2i, lbl: fbox.lbl };
+        GT st = GT { pos: first.pos, val: s1, ty: "Set(" + first.ty + ")", cnt: 0, err: "", glines: fbox.glines, lines: nl, tmp: t2i, lbl: fbox.lbl , tail: false};
         return cg_set_lit_rest(s, after.pos, first.ty, st, env, fs, fbox);
     }
     if (after.text == "}") {
@@ -3380,7 +3380,7 @@ GT cg_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         Str s1 = "%t" + IntToString(t2i);
         Str insl = s1 + " = call ptr @resid_set_insert(ptr " + s0 + ", ptr " + fbox.val + ")";
         List(Str) nl = fbox.lines.concat([newl, insl]);
-        GT st = GT { pos: after.pos, val: s1, ty: "Set(" + first.ty + ")", cnt: 0, err: "", glines: fbox.glines, lines: nl, tmp: t2i, lbl: fbox.lbl };
+        GT st = GT { pos: after.pos, val: s1, ty: "Set(" + first.ty + ")", cnt: 0, err: "", glines: fbox.glines, lines: nl, tmp: t2i, lbl: fbox.lbl , tail: false};
         return cg_set_lit_emit(s1, first.ty, after.pos, st);
     }
     return gt_err("expected , or } in map/set literal", first);
@@ -3428,7 +3428,7 @@ GT finish_ifexpr(GT tv, Str lt, Str le, Str ld, Int l3, GT ev, Int retpos) {
     List(Str) d1 = d05.concat([ld + ":"]);
     List(Str) d2 = d1.concat([phi]);
     Int lb4 = if (ev.lbl > l3) { ev.lbl } else { l3 };
-    return GT { pos: retpos, val: pr, ty: tv.ty, cnt: 0, err: "", glines: ev.glines, lines: d2, tmp: tp, lbl: lb4 };
+    return GT { pos: retpos, val: pr, ty: tv.ty, cnt: 0, err: "", glines: ev.glines, lines: d2, tmp: tp, lbl: lb4 , tail: false};
 }
 
 // Expression-block arm bodies (see typecheck.resid's `check_expr_block` for
@@ -3439,7 +3439,7 @@ GT finish_ifexpr(GT tv, Str lt, Str le, Str ld, Int l3, GT ev, Int retpos) {
 // previously lowered via bare `cg_expr`, which cannot handle a leading
 // binding statement at all — it would try to lower the binding's type
 // annotation token itself as a value expression.
-GT cg_expr_block(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
+GT cg_expr_block(Str s, Int pos, List(Str) env, Funcs fs, GT c, Bool tail_pos) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "ident") {
         Tok t2 = lex_tok(s, t.pos);
@@ -3460,7 +3460,7 @@ GT cg_expr_block(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             }
         }
     }
-    return cg_expr(s, pos, env, fs, c);
+    return cg_expr(s, pos, env, fs, c, false);
 }
 
 // GT-flavored counterpart to `sg_bind`'s common-case RHS lowering (adopt +
@@ -3468,7 +3468,7 @@ GT cg_expr_block(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
 // pure expression-value carrier) has no env field the way ST does.
 GT cg_bind_expr(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, GT c) {
     Str dtyb = ct_base_of(fs.ctn, fs.ctb, dty);
-    GT v = cg_expr(s, pos, env, fs, c);
+    GT v = cg_expr(s, pos, env, fs, c, false);
     if (v.err != "") { return v; }
     Tok semi = lex_tok(s, v.pos);
     Str dn = num_norm_cg(dtyb);
@@ -3487,13 +3487,13 @@ GT cg_bind_expr(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, GT c
     Bool res_expected = str_has_prefix_cg(dtyb, "Result(");
     Str ent2g = pick_str(res_ok_hole && res_expected, name + ":" + cv.val + ":" + dtyb, ent2f);
     List(Str) env2 = env_add(env, ent2g);
-    GT c2 = GT { pos: semi.pos, val: cv.val, ty: cv.ty, cnt: cv.cnt, err: "", glines: cv.glines, lines: cv.lines, tmp: cv.tmp, lbl: cv.lbl };
-    return cg_expr_block(s, semi.pos, env2, fs, c2);
+    GT c2 = GT { pos: semi.pos, val: cv.val, ty: cv.ty, cnt: cv.cnt, err: "", glines: cv.glines, lines: cv.lines, tmp: cv.tmp, lbl: cv.lbl , tail: false};
+    return cg_expr_block(s, semi.pos, env2, fs, c2, false);
 }
 
 GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     Tok open = lex_tok(s, pos);
-    GT cond = cg_expr(s, open.pos, env, fs, c);
+    GT cond = cg_expr(s, open.pos, env, fs, c, false);
     if (cond.err != "") { return cond; }
     if (cond.ty != "Bool") { return gt_err("if condition must be Bool", cond); }
     Tok close = lex_tok(s, cond.pos);
@@ -3507,9 +3507,9 @@ GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     List(Str) a0 = cond.lines;
     List(Str) a1 = a0.concat([br1]);
     List(Str) a2 = a1.concat([lt + ":"]);
-    GT ct = GT { pos: close.pos, val: "", ty: "", cnt: 0, err: "", glines: cond.glines, lines: a2, tmp: cond.tmp, lbl: l3 };
+    GT ct = GT { pos: close.pos, val: "", ty: "", cnt: 0, err: "", glines: cond.glines, lines: a2, tmp: cond.tmp, lbl: l3 , tail: false};
     Tok ob = lex_tok(s, close.pos);
-    GT tv = cg_expr_block(s, ob.pos, env, fs, ct);
+    GT tv = cg_expr_block(s, ob.pos, env, fs, ct, false);
     if (tv.err != "") { return tv; }
     Tok cb = lex_tok(s, tv.pos);
     if (cb.text != "}") { return gt_err("expected } in if arm", tv); }
@@ -3525,13 +3525,13 @@ GT cg_ifexpr(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     // chain (booleans leaking into what should be the arms' shared type).
     Tok peek_if = lex_tok(s, kw.pos);
     if (peek_if.text == "if") {
-        GT ce = GT { pos: peek_if.pos, val: "", ty: "", cnt: 0, err: "", glines: tv.glines, lines: b2, tmp: tv.tmp, lbl: l3 };
+        GT ce = GT { pos: peek_if.pos, val: "", ty: "", cnt: 0, err: "", glines: tv.glines, lines: b2, tmp: tv.tmp, lbl: l3 , tail: false};
         GT ev = cg_ifexpr(s, peek_if.pos, env, fs, ce);
         return finish_ifexpr(tv, lt, le, ld, l3, ev, ev.pos);
     }
     Tok ob2 = lex_tok(s, kw.pos);
-    GT ce = GT { pos: ob2.pos, val: "", ty: "", cnt: 0, err: "", glines: tv.glines, lines: b2, tmp: tv.tmp, lbl: l3 };
-    GT ev = cg_expr_block(s, ob2.pos, env, fs, ce);
+    GT ce = GT { pos: ob2.pos, val: "", ty: "", cnt: 0, err: "", glines: tv.glines, lines: b2, tmp: tv.tmp, lbl: l3 , tail: false};
+    GT ev = cg_expr_block(s, ob2.pos, env, fs, ce, false);
     if (ev.err != "") { return ev; }
     Tok cb2 = lex_tok(s, ev.pos);
     if (cb2.text != "}") { return gt_err("expected } in else arm", ev); }
@@ -3602,20 +3602,20 @@ GT cg_match_payload(GT sc, Str ety, GT c) {
         Int t5 = c.tmp + 5;
         Str p5 = "%t" + IntToString(t5);
         List(Str) z5 = z4.concat([p5 + " = call i64 @resid_unbox_i64(ptr " + p4 + ")"]);
-        return GT { pos: sc.pos, val: p5, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z5, tmp: t5, lbl: c.lbl };
+        return GT { pos: sc.pos, val: p5, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z5, tmp: t5, lbl: c.lbl , tail: false};
     }
     if (str_has_prefix_cg(typ, "Int(128)") || str_has_prefix_cg(typ, "UInt(128)")) {
         Int t5 = c.tmp + 5;
         Str p5 = "%t" + IntToString(t5);
         Str fn = if (str_has_prefix_cg(typ, "UInt")) { "@resid_unbox_u128" } else { "@resid_unbox_i128" };
         List(Str) z5 = z4.concat([p5 + " = call " + ll_ty(typ) + " " + fn + "(ptr " + p4 + ")"]);
-        return GT { pos: sc.pos, val: p5, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z5, tmp: t5, lbl: c.lbl };
+        return GT { pos: sc.pos, val: p5, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z5, tmp: t5, lbl: c.lbl , tail: false};
     }
     if (typ == "Float" || typ == "Float(64)") {
         Int t5 = c.tmp + 5;
         Str p5 = "%t" + IntToString(t5);
         List(Str) z5 = z4.concat([p5 + " = call double @resid_unbox_f64(ptr " + p4 + ")"]);
-        return GT { pos: sc.pos, val: p5, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z5, tmp: t5, lbl: c.lbl };
+        return GT { pos: sc.pos, val: p5, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z5, tmp: t5, lbl: c.lbl , tail: false};
     }
     if (ety == "Bool") {
         Int t5 = c.tmp + 5;
@@ -3624,9 +3624,9 @@ GT cg_match_payload(GT sc, Str ety, GT c) {
         Str p6 = "%t" + IntToString(t6);
         List(Str) z5 = z4.concat([p5 + " = call i8 @resid_unbox_bool(ptr " + p4 + ")"]);
         List(Str) z6 = z5.concat([p6 + " = icmp ne i8 " + p5 + ", 0"]);
-        return GT { pos: sc.pos, val: p6, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z6, tmp: t6, lbl: c.lbl };
+        return GT { pos: sc.pos, val: p6, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z6, tmp: t6, lbl: c.lbl , tail: false};
     }
-    return GT { pos: sc.pos, val: p4, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z4, tmp: t4, lbl: c.lbl };
+    return GT { pos: sc.pos, val: p4, ty: ety, cnt: 0, err: "", glines: c.glines, lines: z4, tmp: t4, lbl: c.lbl , tail: false};
 }
 
 // Emit one match arm body into its label. Some binds the payload by name.
@@ -3642,27 +3642,27 @@ GT cg_match_arm(Str s, Int pos, List(Str) env, Funcs fs, GT sc, Str ety, GT c, S
         if (ar.text != "=>") { return gt_err("expected => after Some arm pattern", c); }
         List(Str) l0 = c.lines;
         List(Str) l1 = l0.concat([lab + ":"]);
-        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl };
+        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl , tail: false};
         GT pv = cg_match_payload(sc, ety, c1);
         if (pv.err != "") { return pv; }
         List(Str) env2 = env_add(env, nm.text + ":" + pv.val + ":" + ety);
-        GT body = cg_expr(s, ar.pos, env2, fs, pv);
+        GT body = cg_expr(s, ar.pos, env2, fs, pv, false);
         if (body.err != "") { return body; }
         List(Str) x0 = body.lines;
         List(Str) x1 = x0.concat(["br label %" + labm]);
-        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl };
+        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl , tail: false};
     }
     if (a.text == "None") {
         Tok ar = lex_tok(s, a.pos);
         if (ar.text != "=>") { return gt_err("expected => after None arm pattern", c); }
         List(Str) l0 = c.lines;
         List(Str) l1 = l0.concat([lab + ":"]);
-        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl };
-        GT body = cg_expr(s, ar.pos, env, fs, c1);
+        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl , tail: false};
+        GT body = cg_expr(s, ar.pos, env, fs, c1, false);
         if (body.err != "") { return body; }
         List(Str) x0 = body.lines;
         List(Str) x1 = x0.concat(["br label %" + labm]);
-        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl };
+        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl , tail: false};
     }
     if (a.text == "Ok") {
         Tok o1 = lex_tok(s, a.pos);
@@ -3674,15 +3674,15 @@ GT cg_match_arm(Str s, Int pos, List(Str) env, Funcs fs, GT sc, Str ety, GT c, S
         if (ar.text != "=>") { return gt_err("expected => after Ok arm pattern", c); }
         List(Str) l0 = c.lines;
         List(Str) l1 = l0.concat([lab + ":"]);
-        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl };
+        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl , tail: false};
         GT pv = cg_match_payload(sc, ety, c1);
         if (pv.err != "") { return pv; }
         List(Str) env2 = env_add(env, nm.text + ":" + pv.val + ":" + ety);
-        GT body = cg_expr(s, ar.pos, env2, fs, pv);
+        GT body = cg_expr(s, ar.pos, env2, fs, pv, false);
         if (body.err != "") { return body; }
         List(Str) x0 = body.lines;
         List(Str) x1 = x0.concat(["br label %" + labm]);
-        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl };
+        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl , tail: false};
     }
     if (a.text == "Err") {
         Tok o1 = lex_tok(s, a.pos);
@@ -3694,16 +3694,16 @@ GT cg_match_arm(Str s, Int pos, List(Str) env, Funcs fs, GT sc, Str ety, GT c, S
         if (ar.text != "=>") { return gt_err("expected => after Err arm pattern", c); }
         List(Str) l0 = c.lines;
         List(Str) l1 = l0.concat([lab + ":"]);
-        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl };
+        GT c1 = GT { pos: ar.pos, val: "", ty: "", cnt: 0, err: "", glines: c.glines, lines: l1, tmp: c.tmp, lbl: c.lbl , tail: false};
         Str errty = res_elem_err_cg(sc.ty);
         GT pv = cg_match_payload(sc, errty, c1);
         if (pv.err != "") { return pv; }
         List(Str) env2 = env_add(env, nm.text + ":" + pv.val + ":" + errty);
-        GT body = cg_expr(s, ar.pos, env2, fs, pv);
+        GT body = cg_expr(s, ar.pos, env2, fs, pv, false);
         if (body.err != "") { return body; }
         List(Str) x0 = body.lines;
         List(Str) x1 = x0.concat(["br label %" + labm]);
-        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl };
+        return GT { pos: body.pos, val: body.val, ty: body.ty, cnt: 0, err: "", glines: body.glines, lines: x1, tmp: body.tmp, lbl: body.lbl , tail: false};
     }
     Str msg = "match arm pattern must be Some(x), None, Ok(x), or Err(x)";
     return gt_err(msg, c);
@@ -3712,7 +3712,7 @@ GT cg_match_arm(Str s, Int pos, List(Str) env, Funcs fs, GT sc, Str ety, GT c, S
 // match expression over Option values (spec §13). Dispatch on the variant
 // tag; the first arm's pattern decides which physical branch carries it.
 GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
-    GT sc = cg_expr(s, pos, env, fs, c);
+    GT sc = cg_expr(s, pos, env, fs, c, false);
     if (sc.err != "") { return sc; }
     Bool is_opt = str_has_prefix_cg(sc.ty, "Option(") || sc.ty == "Option(_)";
     Bool is_res = str_has_prefix_cg(sc.ty, "Result(");
@@ -3747,7 +3747,7 @@ GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         "br i1 " + g3 + ", label %" + labb + ", label %" + laba
     };
     List(Str) q4 = q3.concat([brl]);
-    GT qc = GT { pos: brace.pos, val: "", ty: "", cnt: 0, err: "", glines: sc.glines, lines: q4, tmp: t3, lbl: lm };
+    GT qc = GT { pos: brace.pos, val: "", ty: "", cnt: 0, err: "", glines: sc.glines, lines: q4, tmp: t3, lbl: lm , tail: false};
     GT arm1 = cg_match_arm(s, brace.pos, env, fs, sc, ety, qc, laba, labm);
     if (arm1.err != "") { return arm1; }
     Tok sep1 = lex_tok(s, arm1.pos);
@@ -3755,7 +3755,7 @@ GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         if (sep1.text == "}") { return gt_err("match needs both payload and error arms", arm1); }
         return gt_err("expected , between match arms", arm1);
     }
-    GT arm2c = GT { pos: sep1.pos, val: "", ty: "", cnt: 0, err: "", glines: arm1.glines, lines: arm1.lines, tmp: arm1.tmp, lbl: arm1.lbl };
+    GT arm2c = GT { pos: sep1.pos, val: "", ty: "", cnt: 0, err: "", glines: arm1.glines, lines: arm1.lines, tmp: arm1.tmp, lbl: arm1.lbl , tail: false};
     GT arm2 = cg_match_arm(s, sep1.pos, env, fs, sc, ety, arm2c, labb, labm);
     if (arm2.err != "") { return arm2; }
     Tok sep2 = lex_tok(s, arm2.pos);
@@ -3767,7 +3767,7 @@ GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     List(Str) d0 = arm2.lines;
     List(Str) d1 = d0.concat([labm + ":"]);
     List(Str) d2 = d1.concat([phi]);
-    return GT { pos: sep2.pos, val: pr, ty: arm1.ty, cnt: 0, err: "", glines: arm2.glines, lines: d2, tmp: tp, lbl: arm2.lbl };
+    return GT { pos: sep2.pos, val: pr, ty: arm1.ty, cnt: 0, err: "", glines: arm2.glines, lines: d2, tmp: tp, lbl: arm2.lbl , tail: false};
 }
 
 GT fst_emit_global(Str body, Int pos, GT c) {
@@ -3778,19 +3778,19 @@ GT fst_emit_global(Str body, Int pos, GT c) {
     Str g = nm + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + str_from_code(92) + "00\"";
     List(Str) l20 = c.glines;
     List(Str) l2 = l20.concat([g]);
-    return GT { pos: pos, val: nm, ty: "Str", cnt: 0, err: "", glines: l2, lines: c.lines, tmp: t1, lbl: c.lbl };
+    return GT { pos: pos, val: nm, ty: "Str", cnt: 0, err: "", glines: l2, lines: c.lines, tmp: t1, lbl: c.lbl , tail: false};
 }
 
 GT fst_join(GT c, Str pv) {
     if (c.val == "") {
-        return GT { pos: c.pos, val: pv, ty: "Str", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+        return GT { pos: c.pos, val: pv, ty: "Str", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
     }
     Int t1 = c.tmp + 1;
     Str cr = "%t" + IntToString(t1);
     Str cl = cr + " = call ptr @resid_str_concat(ptr " + c.val + ", ptr " + pv + ")";
     List(Str) l20 = c.lines;
     List(Str) l2 = l20.concat([cl]);
-    return GT { pos: c.pos, val: cr, ty: "Str", cnt: 0, err: "", glines: c.glines, lines: l2, tmp: t1, lbl: c.lbl };
+    return GT { pos: c.pos, val: cr, ty: "Str", cnt: 0, err: "", glines: c.glines, lines: l2, tmp: t1, lbl: c.lbl , tail: false};
 }
 
 GT fst_literal(Str s, Int i, Int end, Str bodyacc, GT c) {
@@ -3808,7 +3808,7 @@ GT fst_literal(Str s, Int i, Int end, Str bodyacc, GT c) {
 
 GT fst_tostr(GT v) {
     if (v.ty == "Str") {
-        return GT { pos: v.pos, val: v.val, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: v.lines, tmp: v.tmp, lbl: v.lbl };
+        return GT { pos: v.pos, val: v.val, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: v.lines, tmp: v.tmp, lbl: v.lbl , tail: false};
     }
     if (int_fam(v.ty)) {
         Str nty = num_norm_cg(v.ty);
@@ -3820,7 +3820,7 @@ GT fst_tostr(GT v) {
             Str rr = "%t" + IntToString(t1);
             List(Str) x0 = v.lines;
             List(Str) x1 = x0.concat([rr + " = call ptr " + fn + "(" + ll_ty(v.ty) + " " + v.val + ")"]);
-            return GT { pos: v.pos, val: rr, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x1, tmp: t1, lbl: v.lbl };
+            return GT { pos: v.pos, val: rr, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x1, tmp: t1, lbl: v.lbl , tail: false};
         }
         GT v64 = widen_val(v, "Int(64)");
         Int t1 = v64.tmp + 1;
@@ -3830,13 +3830,13 @@ GT fst_tostr(GT v) {
         List(Str) x0 = v64.lines;
         List(Str) x1 = x0.concat([buf + " = alloca [24 x i8]"]);
         List(Str) x2 = x1.concat([rr + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v64.val + ")"]);
-        return GT { pos: v.pos, val: rr, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x2, tmp: t2, lbl: v.lbl };
+        return GT { pos: v.pos, val: rr, ty: "Str", cnt: 0, err: "", glines: v.glines, lines: x2, tmp: t2, lbl: v.lbl , tail: false};
     }
     return gt_err("unsupported interpolation type " + v.ty, v);
 }
 
 GT fst_carr(Str acc, GT c) {
-    return GT { pos: c.pos, val: acc, ty: "Str", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
+    return GT { pos: c.pos, val: acc, ty: "Str", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
 }
 
 GT fst_scan(Str s, Int i, Int end, Str acc, List(Str) env, Funcs fs, GT c) {
@@ -3853,8 +3853,8 @@ GT fst_scan(Str s, Int i, Int end, Str acc, List(Str) env, Funcs fs, GT c) {
         Int ip = i + 1;
         Int cbp = str_find_char(s, 125, ip);
         if (cbp < 0) { return gt_err("unterminated interpolation", c); }
-        GT cb0 = GT { pos: c.pos, val: "", ty: "Str", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl };
-        GT v = cg_expr(s, ip, env, fs, cb0);
+        GT cb0 = GT { pos: c.pos, val: "", ty: "Str", cnt: 0, err: "", glines: c.glines, lines: c.lines, tmp: c.tmp, lbl: c.lbl , tail: false};
+        GT v = cg_expr(s, ip, env, fs, cb0, false);
         if (v.err != "") { return v; }
         GT sv = fst_tostr(v);
         if (sv.err != "") { return sv; }
@@ -3878,7 +3878,7 @@ GT cg_fstring(Str s, Tok t, List(Str) env, Funcs fs, GT c) {
     Int st2 = start + 2;
     GT r = fst_scan(s, st2, end, "", env, fs, c);
     if (r.err != "") { return r; }
-    return GT { pos: t.pos, val: r.val, ty: r.ty, cnt: r.cnt, err: "", glines: r.glines, lines: r.lines, tmp: r.tmp, lbl: r.lbl };
+    return GT { pos: t.pos, val: r.val, ty: r.ty, cnt: r.cnt, err: "", glines: r.glines, lines: r.lines, tmp: r.tmp, lbl: r.lbl , tail: false};
 }
 
 // ─── Statement codegen ─────────────────────────────────────────
@@ -3907,7 +3907,7 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
             }
             return st_err("return without a value", g);
         }
-        GT v = cg_expr(s, t.pos, env, fs, gt_of_st(g));
+        GT v = cg_expr(s, t.pos, env, fs, gt_of_st(g), false);
         if (v.err != "") { return st_err(v.err, g); }
         // Adopt the declared return type for integer functions (spec v3.2).
         Str rwant = num_norm_cg(g.rety);
@@ -3923,7 +3923,7 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
             Str gb_reg = "%t" + IntToString(tg);
             Str gb_line = gb_reg + " = call ptr @resid_growbuf_finish(ptr " + v1.val + ")";
             List(Str) gln = v1.lines.concat([gb_line]);
-            GT { pos: v1.pos, val: gb_reg, ty: v1.ty, cnt: v1.cnt, err: "", glines: v1.glines, lines: gln, tmp: tg, lbl: v1.lbl }
+            GT { pos: v1.pos, val: gb_reg, ty: v1.ty, cnt: v1.cnt, err: "", glines: v1.glines, lines: gln, tmp: tg, lbl: v1.lbl , tail: false}
         } else { v1 };
         Tok semi = lex_tok(s, v.pos);
         Int t1 = v2.tmp + 1;
@@ -3940,7 +3940,7 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     }
     if (t.text == "_") {
         Tok eq = lex_tok(s, t.pos);
-        GT v = cg_expr(s, eq.pos, env, fs, gt_of_st(g));
+        GT v = cg_expr(s, eq.pos, env, fs, gt_of_st(g), false);
         if (v.err != "") { return st_err(v.err, g); }
         Tok semi = lex_tok(s, v.pos);
         return ST { pos: semi.pos, dead: g.dead, err: "", env: env, glines: v.glines, hlines: g.hlines, lines: v.lines, tmp: v.tmp, lbl: v.lbl, rety: g.rety };
@@ -3988,7 +3988,7 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
             }
         }
     }
-    GT v = cg_expr(s, pos, env, fs, gt_of_st(g));
+    GT v = cg_expr(s, pos, env, fs, gt_of_st(g), false);
     if (v.err != "") { return st_err(v.err, g); }
     Tok semi = lex_tok(s, v.pos);
     return ST { pos: semi.pos, dead: g.dead, err: "", env: env, glines: v.glines, hlines: g.hlines, lines: v.lines, tmp: v.tmp, lbl: v.lbl, rety: g.rety };
@@ -4074,7 +4074,7 @@ ST sg_bind_fixed_list_elems(Str s, Int pos, Str arrty, Str ety, Str base, Int i,
         return ST { pos: t.pos, dead: g.dead, err: "", env: env, glines: g.glines, hlines: g.hlines, lines: g.lines, tmp: g.tmp, lbl: g.lbl, rety: g.rety };
     }
     if (i >= cap) { return st_err("list literal exceeds List(" + ety + ", " + IntToString(cap) + ") capacity", g); }
-    GT v = cg_expr(s, pos, env, fs, gt_of_st(g));
+    GT v = cg_expr(s, pos, env, fs, gt_of_st(g), false);
     if (v.err != "") { return st_err(v.err, g); }
     GT vw = pick_widen(int_fam(ety) && int_fam(v.ty), v, num_norm_cg(ety));
     Int t1 = vw.tmp + 1;
@@ -4147,7 +4147,7 @@ ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
         Int bpos = if (bsemi.text == ";") { bsemi.pos } else { b2.pos };
         return ST { pos: bpos, dead: g.dead, err: "", env: env2, glines: g1, hlines: g.hlines, lines: z1, tmp: t1, lbl: g.lbl, rety: g.rety };
     }
-    GT v = cg_expr(s, pos, env, fs, gt_of_st(g));
+    GT v = cg_expr(s, pos, env, fs, gt_of_st(g), false);
     if (v.err != "") { return st_err(v.err, g); }
     Tok semi = lex_tok(s, v.pos);
     // Adopt the declared width for integer bindings (spec v3.2 S6.1a).
@@ -4203,12 +4203,12 @@ ST sg_stmts(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
 }
 
 GT gt_of_st(ST g) {
-    return GT { pos: g.pos, val: "", ty: "", cnt: 0, err: g.err, glines: g.glines, lines: g.lines, tmp: g.tmp, lbl: g.lbl };
+    return GT { pos: g.pos, val: "", ty: "", cnt: 0, err: g.err, glines: g.glines, lines: g.lines, tmp: g.tmp, lbl: g.lbl , tail: false};
 }
 
 ST sg_if(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     Tok open = lex_tok(s, pos);
-    GT cond = cg_expr(s, open.pos, env, fs, gt_of_st(g));
+    GT cond = cg_expr(s, open.pos, env, fs, gt_of_st(g), false);
     if (cond.err != "") { return st_err(cond.err, g); }
     if (cond.ty != "Bool") { return st_err("if condition must be Bool", g); }
     Tok close = lex_tok(s, cond.pos);
@@ -4317,7 +4317,7 @@ ST sg_for(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
     Tok name = lex_tok(s, pty.pos);
     Tok inkw = lex_tok(s, name.pos);
     if (inkw.text != "in") { return st_err("expected in", g); }
-    GT a = cg_expr(s, inkw.pos, env, fs, gt_of_st(g));
+    GT a = cg_expr(s, inkw.pos, env, fs, gt_of_st(g), false);
     if (a.err != "") { return st_err(a.err, g); }
     Tok op = lex_tok(s, a.pos);
     if (op.text != ".." && op.text != "..=") {
@@ -4369,7 +4369,7 @@ ST sg_for(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
         return ST { pos: body2.pos, dead: g.dead, err: "", env: env, glines: body2.glines, hlines: body2.hlines, lines: b24, tmp: body2.tmp, lbl: nlbl2, rety: g.rety };
     }
     if (pty.ty != "Int") { return st_err("for-in var must be Int", g); }
-    GT b = cg_expr(s, op.pos, env, fs, a);
+    GT b = cg_expr(s, op.pos, env, fs, a, false);
     if (b.err != "") { return st_err(b.err, g); }
     Tok close = lex_tok(s, b.pos);
     Int lb = g.lbl + 1;
