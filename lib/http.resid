@@ -6,8 +6,8 @@ import "crypto.resid";
 // `Connection: close`: the response body ends when the peer closes.
 // Chunked transfer coding and TLS are out of scope for v1.
 
-type Url = { host: Str, port: Int, path: Str };
-type HttpResponse = { status: Int, headers: Str, body: Str };
+type Url = { Str host; Int port; Str path; };
+type HttpResponse = { Int status; Str headers; Str body; };
 
 // Find the first occurrence of `sub` at or after `i`; -1 when absent.
 pub Int http_find_from(Str s, Str sub, Int i) {
@@ -42,7 +42,7 @@ pub Str http_join_path(List(Str) segs, Int i, Int n, Str acc) {
 // Returns port 0 on malformed input.
 pub Url http_parse_url(Str url) {
     List(Str) parts = str_split(url, "//");
-    if (str_len(url) < 8) { return Url { host: "", port: 0, path: "" }; }
+    if (str_len(url) < 8) { return Url { .host = "", .port = 0, .path = "" }; }
     Str after = str_slice(url, 7, str_len(url));
     List(Str) halves = str_split(after, "/");
     // halves[0] = host[:port]; the rest rejoins into the path.
@@ -54,7 +54,7 @@ pub Url http_parse_url(Str url) {
     Int hlen2 = halves.len();
     Int nseg = hlen2 - 1;
     Str path = if (nseg == 0) { "/" } else { "/" + http_join_path(halves, 1, nseg, "") };
-    return Url { host: host, port: port, path: path };
+    return Url { .host = host, .port = port, .path = path };
 }
 
 // Perform a GET; returns the full raw response. Empty string on any
@@ -79,7 +79,7 @@ pub Str http_get_raw(Str url) {
 
 // Split a raw response into status / headers / body.
 pub HttpResponse http_parse_response(Str raw) {
-    if (raw == "") { return HttpResponse { status: 0, headers: "", body: "" }; }
+    if (raw == "") { return HttpResponse { .status = 0, .headers = "", .body = "" }; }
     List(Str) head_body = str_split(raw, "\r\n\r\n");
     Str head = head_body[0];
     Int hlen = str_len(head);
@@ -92,14 +92,14 @@ pub HttpResponse http_parse_response(Str raw) {
     };
     // Status line: "HTTP/1.1 200 OK" — locate the two spaces.
     Int sp1 = http_find(head, " ");
-    if (sp1 < 0) { return HttpResponse { status: 0, headers: head, body: body }; }
+    if (sp1 < 0) { return HttpResponse { .status = 0, .headers = head, .body = body }; }
     Int rest_start = sp1 + 1;
     Str after_status = str_slice(head, rest_start, str_len(head));
     Int sp2rel = http_find(after_status, " ");
     Int sp2 = sp2rel + rest_start;
     Int p1p1 = sp1 + 1;
     Str code = str_slice(head, p1p1, sp2);
-    return HttpResponse { status: str_parse_int(code), headers: head, body: body };
+    return HttpResponse { .status = str_parse_int(code), .headers = head, .body = body };
 }
 
 // Convenience: GET and return just the body ("" on failure).
@@ -252,7 +252,7 @@ pub Str http_recv_head(Int fd) {
 pub HttpResponse http_call(Int fd, Str method, Str path, Str hostport, Str extra) {
     Str req = http_build_request(method, path, hostport, extra, "keep-alive");
     Bool sent = resid_tcp_send(fd, req);
-    if (!sent) { return HttpResponse { status: 0, headers: "", body: "" }; }
+    if (!sent) { return HttpResponse { .status = 0, .headers = "", .body = "" }; }
     Str head = http_recv_head(fd);
     List(Str) hl = str_split(head, "\r\n");
     Str statusline = hl[0];
@@ -278,14 +278,14 @@ pub HttpResponse http_call(Int fd, Str method, Str path, Str hostport, Str extra
     Str body3 = if (status > 0) { body2 } else {
         if (body2 != "") { body2 } else { resid_tcp_recv_all(fd) }
     };
-    return HttpResponse { status: status, headers: head, body: body3 };
+    return HttpResponse { .status = status, .headers = head, .body = body3 };
 }
 
 // One-shot GET (opens its own connection, Connection: close semantics
 // via read-to-close when no framing present).
 pub HttpResponse http_get(Str hostport_url_parts_host, Int port, Str path) {
     Int fd = resid_tcp_connect(hostport_url_parts_host, port);
-    if (fd < 0) { return HttpResponse { status: 0, headers: "", body: "" }; }
+    if (fd < 0) { return HttpResponse { .status = 0, .headers = "", .body = "" }; }
     HttpResponse r = http_call(fd, "GET", path, hostport_url_parts_host, "");
     resid_tcp_close(fd);
     return r;

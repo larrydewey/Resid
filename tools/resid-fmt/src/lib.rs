@@ -48,8 +48,8 @@ pub fn format_unit(unit: &TranslationUnit) -> String {
                 match &t.body {
                     TypeBody::Product(fields) => {
                         let fs: Vec<String> =
-                            fields.iter().map(|(n, ty)| format!("{}: {}", n.0, ty_str(ty))).collect();
-                        p.line(&format!("type {} = {{ {} }};", t.name.0, fs.join(", ")));
+                            fields.iter().map(|(n, ty)| format!("{} {};", ty_str(ty), n.0)).collect();
+                        p.line(&format!("type {} = {{ {} }};", t.name.0, fs.join(" ")));
                     }
                     TypeBody::Sum(variants) => {
                         let vs: Vec<String> = variants

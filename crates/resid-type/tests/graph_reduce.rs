@@ -69,7 +69,7 @@ Int main() {
 fn rejects_non_function_declarations() {
     let (unit, errs) = Parser::parse(
         "graph_reduce_test.resid",
-        "type Point = { x: Int };\nInt main() { return 0; }\n",
+        "type Point = { Int x; };\nInt main() { return 0; }\n",
     );
     assert!(errs.is_empty(), "parse errors: {errs:?}");
     let r = resid_type::graph_reduce(unit, &[]);

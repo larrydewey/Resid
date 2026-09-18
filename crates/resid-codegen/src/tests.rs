@@ -297,10 +297,10 @@ Int main() {
 #[test]
 fn test_boxed_composites() {
 let src = r#"
-type Point = { x: Int, y: Int };
+type Point = { Int x; Int y; };
 Int main() {
     List(Int) xs = [10, 20, 30];
-    Point p = Point { x: 3, y: 4 };
+    Point p = Point { .x = 3, .y = 4 };
     Option(Int) mx = Some(7);
     Int out = match mx {
         Some(n) => n,
@@ -2054,11 +2054,11 @@ Int main() {
 #[test]
 fn test_struct_field_access() {
     let src = r#"
-type Pair = { x: Int, y: Int };
+type Pair = { Int x; Int y; };
 Int main() {
     Int x = 1;
     Int y = 2;
-    Pair s = Pair { x: x, y: y };
+    Pair s = Pair { .x = x, .y = y };
     Int fx = s.x;
     return fx + 1;
 }
@@ -2228,11 +2228,11 @@ Int main() {
 #[test]
 fn test_destructure() {
     let src = r#"
-type Pair = { a: Int, b: Int };
+type Pair = { Int a; Int b; };
 Int main() {
     Int x = 1;
     Int y = 2;
-    Pair p = Pair { a: x, b: y };
+    Pair p = Pair { .a = x, .b = y };
     Pair { a, b } = p;
     return a + b;
 }

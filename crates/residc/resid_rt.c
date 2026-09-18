@@ -721,6 +721,69 @@ void* resid_growbuf_finish(void* buf, const char* type) {
     return out;
 }
 
+/* Precise free for heap-allocated composites (List/Map/Set/Struct/Box).
+ * Called by codegen at the exact last unique use of a tracked root
+ * (ownership oracle, resid-type::analyze_ownership). */
+static void free_pvec_node(void* node, int shift) {
+    if (!node) return;
+    PVecNode* n = (PVecNode*)node;
+    if (shift == 0) {
+        for (int i = 0; i < 32; i++) {
+            void* slot = n->items[i];
+            if (slot) {
+                ResidVal* val = (ResidVal*)slot;
+                if (val->slots) free(val->slots);
+                free(val);
+            }
+        }
+    } else {
+        for (int i = 0; i < 32; i++) {
+            free_pvec_node(n->items[i], shift - 5);
+        }
+    }
+    free(n);
+}
+
+void resid_list_free(void* b) {
+    if (!b) return;
+    ResidList* v = (ResidList*)b;
+    if (v->root) free_pvec_node(v->root, v->shift);
+    free(v);
+}
+
+/* resid_map_free / resid_set_free live further down (after HMTrie/HMNode
+ * are declared — see the Persistent Map/Set section). */
+
+void resid_struct_free(void* b) {
+    if (!b) return;
+    ResidVal* v = (ResidVal*)b;
+    if (v->slots) {
+        for (int64_t i = 0; i < v->count; i++) {
+            void* slot = v->slots[i];
+            if (slot) {
+                ResidVal* val = (ResidVal*)slot;
+                if (val->slots) free(val->slots);
+                free(val);
+            }
+        }
+        free(v->slots);
+    }
+    free(v);
+}
+
+void resid_box_free(void* b) {
+    if (!b) return;
+    ResidVal* v = (ResidVal*)b;
+    if (v->slots) {
+        for (int64_t i = 0; i < v->count; i++) {
+            void* slot = v->slots[i];
+            if (slot) free(slot);
+        }
+        free(v->slots);
+    }
+    free(v);
+}
+
 /* Scalar boxes: ResidVal with tag=-1 and one slot holding the value. */
 void* resid_box_i64(int64_t v) {
     ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
@@ -4014,6 +4077,57 @@ static uint64_t fnv1a(const char* s);
  * over-reading a short malloc'd string the way resid_box_tag would. */
 static int is_boxed(const void* v) {
     return ((const unsigned char*)v)[0] == 0xFF;
+}
+
+/* Precise free for Map/Set (E.4: ownership oracle integration). Frees a
+ * boxed key/val slot (bare C string keys are not owned by the trie — only
+ * boxed values are ours to free; see is_boxed). */
+static void free_boxed_slot(void* v) {
+    if (!v) return;
+    if (!is_boxed(v)) return; /* bare C string key: not our allocation to walk */
+    ResidVal* val = (ResidVal*)v;
+    if (val->slots) free(val->slots);
+    free(val);
+}
+
+static void free_hmnode(HMNode* n) {
+    if (!n) return;
+    if (n->kind == 1) {
+        /* Collision node: `used` pairs packed key,val,key,val,... in slot[]. */
+        for (uint32_t i = 0; i < n->used; i++) {
+            HMPair* p = (HMPair*)n->slot[i];
+            free_boxed_slot(p->key);
+            free_boxed_slot(p->val);
+            free(p);
+        }
+    } else {
+        for (int i = 0; i < 32; i++) {
+            if (!n->slot[i]) continue;
+            if (n->sub[i]) {
+                free_hmnode((HMNode*)n->slot[i]);
+            } else {
+                HMPair* p = (HMPair*)n->slot[i];
+                free_boxed_slot(p->key);
+                free_boxed_slot(p->val);
+                free(p);
+            }
+        }
+    }
+    free(n);
+}
+
+void resid_map_free(void* b) {
+    if (!b) return;
+    HMTrie* m = (HMTrie*)b;
+    free_hmnode(m->root);
+    free(m);
+}
+
+void resid_set_free(void* b) {
+    if (!b) return;
+    HMTrie* m = (HMTrie*)b;
+    free_hmnode(m->root);
+    free(m);
 }
 
 /* Hash a Resid value for use as a map/set key. Bare strings hash by content;

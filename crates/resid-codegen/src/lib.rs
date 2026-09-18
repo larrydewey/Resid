@@ -25,7 +25,7 @@ use resid_ir::{BinOp, NumericType, numeric_result_type};
 use resid_lexer::token::{IntKind, Literal, Span, StrLit};
 use resid_lexer::token::Op as OpKind;
 use resid_parser::{Block, Declaration, Expr, ExprKind, Id, RangeExpr, Stmt, StmtKind, TranslationUnit, WithBinding};
-use resid_type::{CValue, FunctionSig, SemType, Types};
+use resid_type::{CValue, FunctionSig, OwnershipInfo, SemType, Types, analyze_ownership};
 
 /// A lowered value plus the semantic type the checker attributed to it.
 pub struct Val<'ctx> {
@@ -336,6 +336,10 @@ pub struct CodeGen<'ctx> {
     cur_fn_name: String,
     /// Optional knowledge cache for expression-level reduction results (§34, §36).
     knowledge_cache: Option<KnowledgeStore>,
+    /// Precise ownership/last-use oracle (E.4: E.1 ownership integration).
+    /// Computed once in `generate`, queried in `lower_expr` for `ExprKind::Id`
+    /// to emit exact free calls at the last unique use of tracked roots.
+    ownership: OwnershipInfo,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -364,6 +368,7 @@ impl<'ctx> CodeGen<'ctx> {
             cur_growable_param: None,
             cur_fn_name: String::new(),
             knowledge_cache: None,
+            ownership: OwnershipInfo::new(),
         }
     }
 
@@ -383,6 +388,7 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn generate(&mut self, unit: &TranslationUnit) -> Result<(), String> {
         self.unit = unit.clone();
         self.growable = resid_type::find_growable_accumulators(unit);
+        self.ownership = analyze_ownership(unit);
         self.sigs = resid_type::collect_signatures(unit);
         self.types = resid_type::collect_types(unit);
         self.behaviors = resid_type::collect_behaviors(unit).0;
@@ -2124,6 +2130,65 @@ impl<'ctx> CodeGen<'ctx> {
                         .builder
                         .build_load(pointee_ty, *ptr, &id.0)
                         .map_err(to_err)?;
+                    // E.4 (DISABLED — see below): would-be precise free at
+                    // last unique use via the E.1 ownership oracle.
+                    //
+                    // `ownership::is_last_unique_use` is unsound to use as a
+                    // "free here" signal as currently specified. Its own
+                    // module docs describe a "terminal use" as "the one
+                    // syntactic point where codegen could safely reuse the
+                    // value's allocation in place instead of copying" — a
+                    // REUSE/mutate-in-place opportunity, not a death. Every
+                    // terminal kind it recognizes actually TRANSFERS the
+                    // value to a new owner that keeps using the same
+                    // allocation:
+                    //   - `return acc;`            -> flows to the caller
+                    //   - self-recursive same-slot  -> flows to the next
+                    //     call argument               activation frame
+                    //   - hand-off into a fresh     -> embedded in the new
+                    //     container                    container
+                    // Concretely: `imp_resolve_lines(lines, i, n, ...)` in
+                    // `examples/driver.resid` recurses on `lines` unchanged
+                    // (read via `lines[i]` each frame); the oracle marks
+                    // the recursive-call argument occurrence as a terminal
+                    // (Perceus move), but the callee's very next frame
+                    // dereferences that identical pointer again via
+                    // `lines[i]`. Freeing here — before the call even
+                    // executes — corrupts the value the callee still
+                    // needs (`free(): invalid pointer`, confirmed via gdb:
+                    // resid_list_free <- imp_resolve_lines <-
+                    // imp_resolve_file <- main).
+                    //
+                    // A separately-discovered issue (now moot while this
+                    // is disabled, but worth keeping in mind for any
+                    // future attempt): even restricting to genuinely dead
+                    // occurrences doesn't account for growable.rs's GrowBuf
+                    // representation switch — a List-typed SSA value
+                    // inside a growable-accumulator function's body/chain
+                    // is frequently a raw GrowBuf (`{count, capacity,
+                    // slots}`), not a real ResidList (`{count, shift,
+                    // root, type}`), which resid_list_free would
+                    // misinterpret.
+                    //
+                    // Making this sound requires either (a) rewiring the
+                    // oracle's terminal sites into actual in-place
+                    // reuse/mutation (matching its documented intent,
+                    // generalizing growable.rs/field_growable.rs), or (b)
+                    // a genuinely new "final drop" analysis: a value used
+                    // for a plain, non-transferring read with provably no
+                    // further reference anywhere, including in any callee
+                    // frame it might be forwarded into. Neither exists yet.
+                    // DESIGN SETTLED 2026-09: PLAN-resid-only.md's E.4
+                    // section defines both mechanisms (terminal rewiring
+                    // to reuse; forward-reachability final-drop pass) and
+                    // the error made here (free-on-terminal corrupts a
+                    // transfer) is documented with the gdb backtrace. Both
+                    // mechanisms remain unwired by design — do not re-enable
+                    // free-insertion off the oracle until the final-drop
+                    // pass lands. Left disabled rather than landing
+                    // something that corrupts self-hosted bootstrap
+                    // compilation.
+                    let _ = &self.ownership; // keep the oracle wired for future work
                     return Ok(Val {
                         v,
                         ty: ty.clone(),
@@ -4097,6 +4162,12 @@ impl<'ctx> CodeGen<'ctx> {
         self.decl_rt("resid_list_concat", vec![ptr.into(), ptr.into()], ptr.into());
         self.decl_rt("resid_list_to_string", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_list_new", vec![i64t.into(), ptr.into(), ptr.into()], ptr.into());
+        // Precise free for heap composites (E.4: ownership oracle integration).
+        self.decl_rt_void("resid_list_free", vec![ptr.into()]);
+        self.decl_rt_void("resid_map_free", vec![ptr.into()]);
+        self.decl_rt_void("resid_set_free", vec![ptr.into()]);
+        self.decl_rt_void("resid_struct_free", vec![ptr.into()]);
+        self.decl_rt_void("resid_box_free", vec![ptr.into()]);
         // Growable-accumulator fast path (perf; see resid_type::find_growable_accumulators).
         self.decl_rt("resid_growbuf_from_list", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_growbuf_push_list", vec![ptr.into(), ptr.into()], ptr.into());
@@ -4335,6 +4406,49 @@ impl<'ctx> CodeGen<'ctx> {
             .ok_or("codegen: missing resid_cap_leave decl")?;
         self.builder
             .build_call(f, &[], "capleave")
+            .map_err(to_err)?;
+        Ok(())
+    }
+
+    /// E.4: Emit precise free call for a heap-allocated value at its last
+    /// unique use (ownership oracle integration).
+    ///
+    /// Currently unused — see the long comment at the `ExprKind::Id` call
+    /// site that would invoke this (disabled: unsound as a "free here"
+    /// signal given what `ownership::is_last_unique_use` actually proves).
+    /// Kept for whichever follow-up mechanism (in-place reuse, or a real
+    /// final-drop analysis) ends up needing a free-by-`SemType` helper.
+    #[allow(dead_code)]
+    fn emit_free_for_type(&mut self, v: &BasicValueEnum<'ctx>, ty: &SemType) -> Result<(), String> {
+        let ptr = v.into_pointer_value();
+        let fname = match ty {
+            SemType::List(_) => "resid_list_free",
+            SemType::Map(_, _) => "resid_map_free",
+            SemType::Set(_) => "resid_set_free",
+            SemType::Struct { .. } => "resid_struct_free",
+            // Scalar boxes (tag=-1 ResidVal): Int, Float, Bool, etc. boxed on heap
+            SemType::Bool
+            | SemType::Numeric(_)
+            | SemType::Str
+            | SemType::Bytes
+            | SemType::Range(_)
+            | SemType::Slice(_)
+            | SemType::Ptr
+            | SemType::SourceLoc
+            | SemType::File => "resid_box_free",
+            // Sum types (Option, Result, etc.) are boxed like structs
+            SemType::Sum { .. } => "resid_struct_free",
+            // Fixed-size stack types don't need free
+            SemType::StrFixed(_) | SemType::BytesFixed(_) | SemType::ListFixed(_, _) => return Ok(()),
+            // Refinements erase to base
+            SemType::Refined { base, .. } => return self.emit_free_for_type(v, base),
+        };
+        let f = self
+            .module
+            .get_function(fname)
+            .ok_or_else(|| format!("codegen: missing {fname} decl"))?;
+        self.builder
+            .build_call(f, &[ptr.into()], "free")
             .map_err(to_err)?;
         Ok(())
     }

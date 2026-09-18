@@ -5895,9 +5895,9 @@ Int main() {
         // Serialize must be (T) -> Str, Allocator () -> T.
         let ok = parse_unit(
             r#"
-type Point = { x: Int, y: Int };
+type Point = { Int x; Int y; };
 Str enc(Point p) { return "pt"; }
-Point mk() { return Point { x: 0, y: 0 }; }
+Point mk() { return Point { .x = 0, .y = 0 }; }
 Serialize(Point) = enc;
 Allocator(Point) = mk;
 Int main() {
@@ -5911,7 +5911,7 @@ Int main() {
         // Wrong shape Serialize (Int args instead of a Point arg).
         let bad_serialize = parse_unit(
             r#"
-type Point = { x: Int, y: Int };
+type Point = { Int x; Int y; };
 Int enc(Int a, Int b) { return a; }
 Serialize(Float) = enc;
 Int main() { return 0; }
@@ -6559,9 +6559,9 @@ Int main() {
     #[test]
     fn check_empty_list_struct_field_ok() {
         let src = r#"
-type T = { names: List(Str) };
+type T = { List(Str) names; };
 Int main() {
-    T t = T { names: [] };
+    T t = T { .names = [] };
     return 0;
 }
 "#;
@@ -7656,7 +7656,7 @@ Int main() {
     fn check_program_result_type_err() {
         let src = r#"
 Int main() {
-    Result(Int, RegionError) r = Err(RegionError { message: "boom" });
+    Result(Int, RegionError) r = Err(RegionError { .message = "boom" });
     Int out = match r {
         Ok(n) => n,
         Err(e) => 0,
@@ -7690,7 +7690,7 @@ Int main() {
     fn check_program_region_error_message_field() {
         let src = r#"
 Int main() {
-    RegionError e = RegionError { message: "boom" };
+    RegionError e = RegionError { .message = "boom" };
     Str m = e.message;
     return 0;
 }

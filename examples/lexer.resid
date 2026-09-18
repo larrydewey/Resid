@@ -241,7 +241,7 @@ Int lex_num_hex(Str s, Int pos, Int n) {
     Int k = pos + 2;
     Int end = scan_digits(s, k, n, 16);
     Str text = str_slice(s, pos, end);
-    println(f"literal(Int {text})");
+    println(f"literal(Int { text })");
     return lex_token(s, end);
 }
 
@@ -249,7 +249,7 @@ Int lex_num_bin(Str s, Int pos, Int n) {
     Int k = pos + 2;
     Int end = scan_digits(s, k, n, 2);
     Str text = str_slice(s, pos, end);
-    println(f"literal(Int {text})");
+    println(f"literal(Int { text })");
     return lex_token(s, end);
 }
 
@@ -257,7 +257,7 @@ Int lex_num_oct(Str s, Int pos, Int n) {
     Int k = pos + 2;
     Int end = scan_digits(s, k, n, 8);
     Str text = str_slice(s, pos, end);
-    println(f"literal(Int {text})");
+    println(f"literal(Int { text })");
     return lex_token(s, end);
 }
 
@@ -270,12 +270,12 @@ Int lex_num_dec(Str s, Int pos, Int n) {
             Int k = end + 1;
             Int endf = scan_digits(s, k, n, 10);
             Str text = str_slice(s, pos, endf);
-            println(f"literal(Float {text})");
+            println(f"literal(Float { text })");
             return lex_token(s, endf);
         }
     }
     Str text = str_slice(s, pos, end);
-    println(f"literal(Int {text})");
+    println(f"literal(Int { text })");
     return lex_token(s, end);
 }
 
@@ -296,7 +296,7 @@ Int lex_string(Str s, Int pos, Int n) {
     Int a = pos + 1;
     Int b = end - 1;
     Str val = str_slice(s, a, b);
-    println(f"literal(Str {val})");
+    println(f"literal(Str { val })");
     return lex_token(s, end);
 }
 

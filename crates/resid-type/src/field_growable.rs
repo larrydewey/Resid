@@ -1137,12 +1137,12 @@ mod tests {
     #[test]
     fn recursive_struct_field_growth_recognized() {
         let src = r#"
-            type CapPP = { lines: List(Str), glines: List(Str), n: Int };
+            type CapPP = { List(Str) lines; List(Str) glines; Int n; };
 
             CapPP cap_enter_globals_at(List(Str) caps, Int i, CapPP acc) {
                 if (i >= caps.len()) { return acc; }
                 Str gl = caps[i];
-                CapPP acc2 = CapPP { lines: acc.lines, glines: acc.glines.concat([gl]), n: acc.n + 1 };
+                CapPP acc2 = CapPP { .lines = acc.lines, .glines = acc.glines.concat([gl]), .n = acc.n + 1 };
                 Int k = i + 1;
                 return cap_enter_globals_at(caps, k, acc2);
             }
@@ -1162,14 +1162,14 @@ mod tests {
     #[test]
     fn straight_line_field_growth_recognized() {
         let src = r#"
-            type GT = { val: Str, ty: Str, glines: List(Str), lines: List(Str), tmp: Int };
+            type GT = { Str val; Str ty; List(Str) glines; List(Str) lines; Int tmp; };
 
             GT finish_ifexpr(GT tv, GT ev) {
                 if (ev.ty != tv.ty) { return ev; }
                 List(Str) d0 = ev.lines;
                 List(Str) d1 = d0.concat(["br"]);
                 List(Str) d2 = d1.concat(["label:"]);
-                return GT { val: tv.val, ty: tv.ty, glines: ev.glines, lines: d2, tmp: ev.tmp };
+                return GT { .val = tv.val, .ty = tv.ty, .glines = ev.glines, .lines = d2, .tmp = ev.tmp };
             }
         "#;
         let g = analyze(src);
@@ -1185,12 +1185,12 @@ mod tests {
     #[test]
     fn growth_handed_off_to_different_struct_type_recognized() {
         let src = r#"
-            type CapPP = { lines: List(Str), glines: List(Str), n: Int };
-            type PG = { lines: List(Str), glines: List(Str), tmp: Int };
+            type CapPP = { List(Str) lines; List(Str) glines; Int n; };
+            type PG = { List(Str) lines; List(Str) glines; Int tmp; };
 
             PG merge_into_pg(CapPP pp1, CapPP pp2, Int t) {
                 List(Str) lns = pp1.lines.concat(pp2.lines).concat(["}"]);
-                return PG { lines: lns, glines: pp2.glines, tmp: t };
+                return PG { .lines = lns, .glines = pp2.glines, .tmp = t };
             }
         "#;
         let g = analyze(src);
@@ -1202,12 +1202,12 @@ mod tests {
     #[test]
     fn escaping_base_disqualified() {
         let src = r#"
-            type CapPP = { lines: List(Str), n: Int };
+            type CapPP = { List(Str) lines; Int n; };
 
             CapPP leaks(CapPP acc) {
                 CapPP other = stash(acc);
                 List(Str) d = acc.lines.concat(["x"]);
-                return CapPP { lines: d, n: acc.n };
+                return CapPP { .lines = d, .n = acc.n };
             }
         "#;
         let g = analyze(src);
@@ -1222,7 +1222,7 @@ mod tests {
     #[test]
     fn readonly_accessor_call_does_not_disqualify() {
         let src = r#"
-            type GT = { lines: List(Str), val: Str };
+            type GT = { List(Str) lines; Str val; };
 
             Str last_label_line_cg(List(Str) lines, Str fallback) {
                 Int n = lines.len();
@@ -1233,7 +1233,7 @@ mod tests {
             GT finish_ifexpr(GT ev, Str ld) {
                 Str pt = last_label_line_cg(ev.lines, ld);
                 List(Str) d = ev.lines.concat([pt]);
-                return GT { lines: d, val: pt };
+                return GT { .lines = d, .val = pt };
             }
         "#;
         let g = analyze(src);
@@ -1245,17 +1245,17 @@ mod tests {
     #[test]
     fn non_readonly_accessor_call_disqualifies() {
         let src = r#"
-            type GT = { lines: List(Str), val: Str };
-            type Box = { l: List(Str) };
+            type GT = { List(Str) lines; Str val; };
+            type Box = { List(Str) l; };
 
             Box wrap(List(Str) lines) {
-                return Box { l: lines };
+                return Box { .l = lines };
             }
 
             GT finish_ifexpr(GT ev, Str ld) {
                 Box b = wrap(ev.lines);
                 List(Str) d = ev.lines.concat([ld]);
-                return GT { lines: d, val: ld };
+                return GT { .lines = d, .val = ld };
             }
         "#;
         let g = analyze(src);

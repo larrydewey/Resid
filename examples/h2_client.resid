@@ -240,38 +240,38 @@ List(Int) flight_append(Bool isapp, List(Int) key, List(Int) iv, Int seq, List(I
 
 // read one TLS record; returns decrypted inner plaintext (content-type
 // stripped) appended after `acc`'s seed; marks done via H2Rec marker.
-type H2Rec = { data: List(Int), seq: Int(64), alert: Bool, eof: Bool, ctype: Int(64) };
+type H2Rec = { List(Int) data; Int(64) seq; Bool alert; Bool eof; Int(64) ctype; };
 
 H2Rec read_one_record(Int fd, List(Int) key, List(Int) iv, Int seq) {
     List(Int) hdr = recv_exact(fd, 5);
     Int hlen = hdr.len();
     if (hlen < 5) {
-        return H2Rec { data: [], seq: seq, alert: false, eof: true, ctype: 0 };
+        return H2Rec {.data = [], .seq = seq, .alert = false, .eof = true, .ctype = 0};
     }
     Int blen = hdr[3] * 256 + hdr[4];
     if (blen < 17 || blen > tls_max_record_len()) {
-        return H2Rec { data: [], seq: seq, alert: false, eof: true, ctype: 0 };
+        return H2Rec {.data = [], .seq = seq, .alert = false, .eof = true, .ctype = 0};
     }
     List(Int) body = recv_exact(fd, blen);
     if (body.len() < blen) {
-        return H2Rec { data: [], seq: seq, alert: false, eof: true, ctype: 0 };
+        return H2Rec {.data = [], .seq = seq, .alert = false, .eof = true, .ctype = 0};
     }
     List(Int) h5 = slice_seed(hdr, 0, 5, []);
     List(Int) plainfull = open_record(key, iv, seq, h5, body);
     Int plen = plainfull.len();
     if (plen < 1) {
-        return H2Rec { data: [], seq: seq, alert: false, eof: true, ctype: 0 };
+        return H2Rec {.data = [], .seq = seq, .alert = false, .eof = true, .ctype = 0};
     }
     Int lastidx = plainfull.len() - 1;
     Int ctl = plainfull[lastidx];
     if (ctl == 21) {
-        return H2Rec { data: [], seq: seq, alert: true, eof: false, ctype: 21 };
+        return H2Rec {.data = [], .seq = seq, .alert = true, .eof = false, .ctype = 21};
     }
     Int lastp = lastidx;
     List(Int) plain = slice_seed(plainfull, 0, lastp, []);
     List(Int) out = app_list([], plain, 0);
     Int seq2 = seq + 1;
-    return H2Rec { data: out, seq: seq2, alert: false, eof: false, ctype: ctl };
+    return H2Rec {.data = out, .seq = seq2, .alert = false, .eof = false, .ctype = ctl};
 }
 
 Bool verify_cv(List(Int) inner2, List(Int) tr2b, Str cert_hex, List(Int) thct2) {
@@ -314,7 +314,7 @@ Int pick_int(Bool c, Int a, Int b) {
 
 
 // Scan result over received app-data records.
-type H2Scan = { found: Bool, scount: Int(64), eof: Bool, seq: Int(64) };
+type H2Scan = { Bool found; Int(64) scount; Bool eof; Int(64) seq; };
 
 // Walk the frames in `buf` looking for a non-ack SETTINGS payload.
 // Scan for an initial SETTINGS frame: len24=0..4080, type 4, flags 0,
@@ -344,14 +344,14 @@ Int h2_count_at(List(Int) buf, Int p2) {
 // frame appears or tries run out.
 H2Scan h2_scan(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) buf, Int tries) {
     if (tries <= 0) {
-        return H2Scan { found: false, scount: 0, eof: false, seq: seq };
+        return H2Scan {.found = false, .scount = 0, .eof = false, .seq = seq};
     }
     H2Rec rec1 = read_one_record(fd, key, iv, seq);
     if (rec1.alert) {
-        return H2Scan { found: false, scount: 0, eof: false, seq: rec1.seq };
+        return H2Scan {.found = false, .scount = 0, .eof = false, .seq = rec1.seq};
     }
     if (rec1.eof) {
-        return H2Scan { found: false, scount: 0, eof: true, seq: rec1.seq };
+        return H2Scan {.found = false, .scount = 0, .eof = true, .seq = rec1.seq};
     }
     // Coalesced records can mix NewSessionTicket bytes with h2
     // frames; the SETTINGS pattern search below tolerates that.
@@ -360,14 +360,14 @@ H2Scan h2_scan(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) buf, Int 
     Int at = h2_walk_frames(buf2, 0, blen2 - 1);
     if (at > 0) {
         Int cnt = h2_count_at(buf2, at);
-        return H2Scan { found: true, scount: cnt, eof: false, seq: rec1.seq };
+        return H2Scan {.found = true, .scount = cnt, .eof = false, .seq = rec1.seq};
     }
     return h2_scan(fd, key, iv, rec1.seq, buf2, tries - 1);
 }
 
 
 // Response walk result.
-type H2Result = { status: Str, body: Str };
+type H2Result = { Str status; Str body; };
 
 Int app_list_len(List(Int) xs) {
     return xs.len();
@@ -376,7 +376,7 @@ Int app_list_len(List(Int) xs) {
 H2Result h2_collect(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) acc,
                     Int tries, List(Int) ckey, List(Int) civ, Int cseq) {
     if (tries <= 0) {
-        return H2Result { status: "", body: "" };
+        return H2Result {.status = "", .body = ""};
     }
     H2Rec rr = read_one_record(fd, key, iv, seq);
     List(Int) rd = rr.data;
@@ -384,7 +384,7 @@ H2Result h2_collect(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) acc,
     Int rc = rr.ctype;
     println("COLLECT seq=" + IntToString(seq) + " len=" + IntToString(rl) + " ct=" + IntToString(rc));
     if (rr.eof || rr.alert) {
-        return H2Result { status: "", body: "" };
+        return H2Result {.status = "", .body = ""};
     }
     List(Int) acc2 = h2_cat(acc, rr.data);
     // Flow control: every consumed connection window octet must be
@@ -425,13 +425,13 @@ Str h2_find_status(List(HpField) fs, Int i) {
 // HPACK-decoded only once END_HEADERS arrives.
 H2Result h2_walk_response(List(Int) resp, Int p3, Int total, Str st, Str bd, List(Int) pend) {
     if (p3 + 9 > total) {
-        return H2Result { status: st, body: bd };
+        return H2Result {.status = st, .body = bd};
     }
     H2FrameHdr rh = h2_frame_hdr(resp, p3);
     Int rstart = p3 + 9;
     Int rend = p3 + 8 + rh.length;
     if (rend > total) {
-        return H2Result { status: st, body: bd };
+        return H2Result {.status = st, .body = bd};
     }
     Bool ishdr = rh.stype == 1;
     Bool iscont = rh.stype == 9;
@@ -459,7 +459,7 @@ H2Result h2_walk_response(List(Int) resp, Int p3, Int total, Str st, Str bd, Lis
         Int low = rh.flags & 1;
         Bool es = low == 1;
         if (es) {
-            return H2Result { status: st, body: bd2 };
+            return H2Result {.status = st, .body = bd2};
         }
         return h2_walk_response(resp, rend + 1, total, st, bd2, []);
     }

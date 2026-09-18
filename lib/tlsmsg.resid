@@ -363,7 +363,7 @@ pub Int(256) tm_be256(List(Int) b, Int off, Int n) {
 }
 
 // verify ECDSA-P256/SHA256: content bytes, keyb = 00|04|X|Y bit-string
-// content, sig = DER SEQUENCE{r,s}
+// content, sig = DER SEQUENCE { r, s }
 pub Bool tm_ecdsa_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sig) {
     List(Int) digest = sha256_bytes(content);
     Int(256) eint = ec_from_be(digest);

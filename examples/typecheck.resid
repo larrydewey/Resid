@@ -206,7 +206,7 @@ Int scan_fstring(Str s, Int i, Int n, Int depth) {
 
 // ─── Token model ────────────────────────────────────────────────
 
-type Tok = { pos: Int, text: Str, kind: Str };
+type Tok = { Int pos; Str text; Str kind; };
 
 Tok lex_op2(Str s, Int pos, Int n) {
     Int c = char_at(s, pos);
@@ -216,151 +216,151 @@ Tok lex_op2(Str s, Int pos, Int n) {
         if (c2 == 46) {
             if (c3 == 61) {
                 Int k = pos + 3;
-                return Tok { pos: k, text: "..=", kind: "op" };
+                return Tok {.pos = k, .text = "..=", .kind = "op"};
             }
             Int k = pos + 2;
-            return Tok { pos: k, text: "..", kind: "op" };
+            return Tok {.pos = k, .text = "..", .kind = "op"};
         }
         Int k = pos + 1;
-        return Tok { pos: k, text: ".", kind: "op" };
+        return Tok {.pos = k, .text = ".", .kind = "op"};
     }
     if (c == 60) {
         if (c2 == 60) {
             Int k = pos + 2;
-            return Tok { pos: k, text: "<<", kind: "op" };
+            return Tok {.pos = k, .text = "<<", .kind = "op"};
         }
         if (c2 == 61) {
             Int k = pos + 2;
-            return Tok { pos: k, text: "<=", kind: "op" };
+            return Tok {.pos = k, .text = "<=", .kind = "op"};
         }
         Int k = pos + 1;
-        return Tok { pos: k, text: "<", kind: "op" };
+        return Tok {.pos = k, .text = "<", .kind = "op"};
     }
     if (c == 62) {
         if (c2 == 62) {
             Int k = pos + 2;
-            return Tok { pos: k, text: ">>", kind: "op" };
+            return Tok {.pos = k, .text = ">>", .kind = "op"};
         }
         if (c2 == 61) {
             Int k = pos + 2;
-            return Tok { pos: k, text: ">=", kind: "op" };
+            return Tok {.pos = k, .text = ">=", .kind = "op"};
         }
         Int k = pos + 1;
-        return Tok { pos: k, text: ">", kind: "op" };
+        return Tok {.pos = k, .text = ">", .kind = "op"};
     }
     if (c == 61) {
         if (c2 == 61) {
             Int k = pos + 2;
-            return Tok { pos: k, text: "==", kind: "op" };
+            return Tok {.pos = k, .text = "==", .kind = "op"};
         }
         if (c2 == 62) {
             Int k = pos + 2;
-            return Tok { pos: k, text: "=>", kind: "op" };
+            return Tok {.pos = k, .text = "=>", .kind = "op"};
         }
         Int k = pos + 1;
-        return Tok { pos: k, text: "=", kind: "op" };
+        return Tok {.pos = k, .text = "=", .kind = "op"};
     }
     if (c == 33) {
         if (c2 == 61) {
             Int k = pos + 2;
-            return Tok { pos: k, text: "!=", kind: "op" };
+            return Tok {.pos = k, .text = "!=", .kind = "op"};
         }
         Int k = pos + 1;
-        return Tok { pos: k, text: "!", kind: "op" };
+        return Tok {.pos = k, .text = "!", .kind = "op"};
     }
     if (c == 38) {
         if (c2 == 38) {
             Int k = pos + 2;
-            return Tok { pos: k, text: "&&", kind: "op" };
+            return Tok {.pos = k, .text = "&&", .kind = "op"};
         }
         Int k = pos + 1;
-        return Tok { pos: k, text: "&", kind: "op" };
+        return Tok {.pos = k, .text = "&", .kind = "op"};
     }
     if (c == 124) {
         if (c2 == 124) {
             Int k = pos + 2;
-            return Tok { pos: k, text: "||", kind: "op" };
+            return Tok {.pos = k, .text = "||", .kind = "op"};
         }
         Int k = pos + 1;
-        return Tok { pos: k, text: "|", kind: "op" };
+        return Tok {.pos = k, .text = "|", .kind = "op"};
     }
     if (c == 43) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "+", kind: "op" };
+        return Tok {.pos = k, .text = "+", .kind = "op"};
     }
     if (c == 45) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "-", kind: "op" };
+        return Tok {.pos = k, .text = "-", .kind = "op"};
     }
     if (c == 42) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "*", kind: "op" };
+        return Tok {.pos = k, .text = "*", .kind = "op"};
     }
     if (c == 47) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "/", kind: "op" };
+        return Tok {.pos = k, .text = "/", .kind = "op"};
     }
     if (c == 37) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "%", kind: "op" };
+        return Tok {.pos = k, .text = "%", .kind = "op"};
     }
     if (c == 126) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "~", kind: "op" };
+        return Tok {.pos = k, .text = "~", .kind = "op"};
     }
     if (c == 94) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "^", kind: "op" };
+        return Tok {.pos = k, .text = "^", .kind = "op"};
     }
     if (c == 63) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "?", kind: "op" };
+        return Tok {.pos = k, .text = "?", .kind = "op"};
     }
     if (c == 58) {
         Int k = pos + 1;
-        return Tok { pos: k, text: ":", kind: "op" };
+        return Tok {.pos = k, .text = ":", .kind = "op"};
     }
     if (c == 44) {
         Int k = pos + 1;
-        return Tok { pos: k, text: ",", kind: "op" };
+        return Tok {.pos = k, .text = ",", .kind = "op"};
     }
     if (c == 59) {
         Int k = pos + 1;
-        return Tok { pos: k, text: ";", kind: "op" };
+        return Tok {.pos = k, .text = ";", .kind = "op"};
     }
     if (c == 40) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "(", kind: "op" };
+        return Tok {.pos = k, .text = "(", .kind = "op"};
     }
     if (c == 41) {
         Int k = pos + 1;
-        return Tok { pos: k, text: ")", kind: "op" };
+        return Tok {.pos = k, .text = ")", .kind = "op"};
     }
     if (c == 123) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "{", kind: "op" };
+        return Tok {.pos = k, .text = "{", .kind = "op"};
     }
     if (c == 125) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "}", kind: "op" };
+        return Tok {.pos = k, .text = "}", .kind = "op"};
     }
     if (c == 91) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "[", kind: "op" };
+        return Tok {.pos = k, .text = "[", .kind = "op"};
     }
     if (c == 93) {
         Int k = pos + 1;
-        return Tok { pos: k, text: "]", kind: "op" };
+        return Tok {.pos = k, .text = "]", .kind = "op"};
     }
     Int k = pos + 1;
-    return Tok { pos: k, text: "", kind: "op" };
+    return Tok {.pos = k, .text = "", .kind = "op"};
 }
 
 Tok lex_tok(Str s, Int pos) {
     Int n = str_len_1(s);
     Int j = skip_all(s, pos, n);
     if (j >= n) {
-        return Tok { pos: j, text: "", kind: "eof" };
+        return Tok {.pos = j, .text = "", .kind = "eof"};
     }
     Int c = char_at(s, j);
     Int c2 = char_next(s, j);
@@ -369,7 +369,7 @@ Tok lex_tok(Str s, Int pos) {
             Int k = j + 2;
             Int end = scan_fstring(s, k, n, 0);
             Str text = str_slice(s, j, end);
-            return Tok { pos: end, text: text, kind: "fstring" };
+            return Tok {.pos = end, .text = text, .kind = "fstring"};
         }
     }
     if (c == 114) {
@@ -377,7 +377,7 @@ Tok lex_tok(Str s, Int pos) {
             Int k = j + 2;
             Int end = scan_string(s, k, n);
             Str text = str_slice(s, j, end);
-            return Tok { pos: end, text: text, kind: "raw" };
+            return Tok {.pos = end, .text = text, .kind = "raw"};
         }
     }
     if (c == 98) {
@@ -385,19 +385,19 @@ Tok lex_tok(Str s, Int pos) {
             Int k = j + 2;
             Int end = scan_string(s, k, n);
             Str text = str_slice(s, j, end);
-            return Tok { pos: end, text: text, kind: "bytes" };
+            return Tok {.pos = end, .text = text, .kind = "bytes"};
         }
     }
     if (c == 34) {
         Int k = j + 1;
         Int end = scan_string(s, k, n);
         Str text = str_slice(s, j, end);
-        return Tok { pos: end, text: text, kind: "str" };
+        return Tok {.pos = end, .text = text, .kind = "str"};
     }
     if (c == 39) {
         Int k = j + 3;
         Str text = str_slice(s, j, k);
-        return Tok { pos: k, text: text, kind: "char" };
+        return Tok {.pos = k, .text = text, .kind = "char"};
     }
     if (is_digit(c)) {
         if (c == 48) {
@@ -405,19 +405,19 @@ Tok lex_tok(Str s, Int pos) {
                 Int k = j + 2;
                 Int e = scan_digits(s, k, n, 16);
                 Str text = str_slice(s, j, e);
-                return Tok { pos: e, text: text, kind: "int" };
+                return Tok {.pos = e, .text = text, .kind = "int"};
             }
             if (c2 == 98) {
                 Int k = j + 2;
                 Int e = scan_digits(s, k, n, 2);
                 Str text = str_slice(s, j, e);
-                return Tok { pos: e, text: text, kind: "int" };
+                return Tok {.pos = e, .text = text, .kind = "int"};
             }
             if (c2 == 111) {
                 Int k = j + 2;
                 Int e = scan_digits(s, k, n, 8);
                 Str text = str_slice(s, j, e);
-                return Tok { pos: e, text: text, kind: "int" };
+                return Tok {.pos = e, .text = text, .kind = "int"};
             }
         }
         Int e = scan_digits(s, j, n, 10);
@@ -428,29 +428,29 @@ Tok lex_tok(Str s, Int pos) {
                 Int k = e + 1;
                 Int ef = scan_digits(s, k, n, 10);
                 Str text = str_slice(s, j, ef);
-                return Tok { pos: ef, text: text, kind: "float" };
+                return Tok {.pos = ef, .text = text, .kind = "float"};
             }
         }
         Str text = str_slice(s, j, e);
-        return Tok { pos: e, text: text, kind: "int" };
+        return Tok {.pos = e, .text = text, .kind = "int"};
     }
     if (is_alpha(c)) {
         Int e = scan_ident(s, j, n);
         Str text = str_slice(s, j, e);
-        return Tok { pos: e, text: text, kind: "ident" };
+        return Tok {.pos = e, .text = text, .kind = "ident"};
     }
     if (c == 95) {
         Int e = scan_ident(s, j, n);
         Str text = str_slice(s, j, e);
-        return Tok { pos: e, text: text, kind: "ident" };
+        return Tok {.pos = e, .text = text, .kind = "ident"};
     }
     if (c == 35) {
         Int k = j + 8;
-        return Tok { pos: k, text: "#location", kind: "op" };
+        return Tok {.pos = k, .text = "#location", .kind = "op"};
     }
     if (c == 64) {
         Int k = j + 1;
-        return Tok { pos: k, text: "@", kind: "op" };
+        return Tok {.pos = k, .text = "@", .kind = "op"};
     }
     return lex_op2(s, j, n);
 }
@@ -463,7 +463,7 @@ Tok lex_tok(Str s, Int pos) {
 // and codegen'd alongside the importer. Diamond imports are deduplicated
 // by resolved path; depth is capped to cut cycles.
 
-type RRes = { text: Str, done: Str };
+type RRes = { Str text; Str done; };
 
 // Directory part of a path ("." when there is no slash).
 Str imp_dir_of(Str path, Int i) {
@@ -489,7 +489,7 @@ Str imp_target(Str line) {
 
 // `done` is a ";path;path;..." sentinel-delimited string of resolved files.
 RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done, Int depth) {
-    if (i > n) { return RRes { text: acc, done: done }; }
+    if (i > n) { return RRes {.text = acc, .done = done}; }
     Str line = lines[i];
     if (ck_str_starts_with(line, "import ")) {
         Str name = imp_target(line);
@@ -500,7 +500,7 @@ RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done
         Str full = if (ck_str_starts_with(name, "/")) { name } else { dir + "/" + name };
         Str key = ";" + full + ";";
         RRes sub = if (str_contains(done, key)) {
-            RRes { text: "", done: done }
+            RRes {.text = "", .done = done}
         } else {
             imp_resolve_file(full, done, depth)
         };
@@ -512,7 +512,7 @@ RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done
 }
 
 RRes imp_resolve_file(Str path, Str done, Int depth) {
-    if (depth > 8) { return RRes { text: "", done: done }; }
+    if (depth > 8) { return RRes {.text = "", .done = done}; }
     Str src = filesystem.read_all(path);
     List(Str) lines = str_split(src, "\n");
     Int n = lines.len() - 1;
@@ -544,14 +544,14 @@ Bool str_has_prefix(Str s, Str p) {
 // ─── Minimal diagnostic rendering (A.2 caret parity) ───────────────
 // Converts an absolute position in `s` to (line, col) 1-based.
 // Returns (0, 0) if pos out of range.
-type PosInfo = { line: Int, col: Int };
+type PosInfo = { Int line; Int col; };
 PosInfo pos_to_line_col(Str s, Int pos) {
     return pos_to_line_col_rec(s, pos, 0, 1, 1);
 }
 PosInfo pos_to_line_col_rec(Str s, Int pos, Int i, Int line, Int col) {
-    if (i >= pos) { return PosInfo { line: line, col: col }; }
+    if (i >= pos) { return PosInfo {.line = line, .col = col}; }
     Int n = str_len(s);
-    if (i >= n) { return PosInfo { line: line, col: col }; }
+    if (i >= n) { return PosInfo {.line = line, .col = col}; }
     Int c = str_char_at(s, i);
     if (c == 10) {
         return pos_to_line_col_rec(s, pos, i + 1, line + 1, 1);
@@ -655,47 +655,47 @@ List(Str) env_add(List(Str) env, Str name, Str ty) {
 // reqs/ceils are per-function lanes (§21.3): reqs[i] = comma-joined
 // `@requires` capability families, ceils[i] = comma-joined encoded
 // enclosing-sandbox ceiling for names[i].
-type Funcs = { names: List(Str), pts: List(Str), pns: List(Str), rets: List(Str), reqs: List(Str), ceils: List(Str), bods: List(Str), stn: List(Str), stf: List(Str), bnames: List(Str), bparams: List(Str), bfns: List(Str), exp_tys: List(Str), ctn: List(Str), ctb: List(Str), ctc: List(Str), fns: Map(Str, Int), growable: List(Int) };
+type Funcs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) bods; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) exp_tys; List(Str) ctn; List(Str) ctb; List(Str) ctc; Map(Str, Int) fns; List(Int) growable; };
 
 Funcs funcs_empty() {
     Map(Str, Int) empty = {"__EMPTY__": -1};
-    return Funcs { names: [], pts: [], pns: [], rets: [], reqs: [], ceils: [], bods: [], stn: [], stf: [], bnames: [], bparams: [], bfns: [], exp_tys: [], ctn: [], ctb: [], ctc: [], fns: empty, growable: [] };
+    return Funcs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .bods = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .exp_tys = [], .ctn = [], .ctb = [], .ctc = [], .fns = empty, .growable = []};
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
 // token. Shared with the codegen half (deduped by tools/merge_driver.py).
-type BRes = { pos: Int, name: Str, param: Str, impl: Str, err: Str };
+type BRes = { Int pos; Str name; Str param; Str impl; Str err; };
 
 BRes behavior_decl_at(Str s, Int pos) {
     Tok head = lex_tok(s, pos);
     if (head.kind != "ident") {
-        return BRes { pos: pos, name: "", param: "", impl: "", err: "not ident" };
+        return BRes {.pos = pos, .name = "", .param = "", .impl = "", .err = "not ident"};
     }
     Tok open = lex_tok(s, head.pos);
     if (open.text != "(") {
-        return BRes { pos: head.pos, name: "", param: "", impl: "", err: "no paren" };
+        return BRes {.pos = head.pos, .name = "", .param = "", .impl = "", .err = "no paren"};
     }
     Tok p1 = lex_tok(s, open.pos);
     if (p1.kind != "ident") {
-        return BRes { pos: p1.pos, name: "", param: "", impl: "", err: "no param" };
+        return BRes {.pos = p1.pos, .name = "", .param = "", .impl = "", .err = "no param"};
     }
     Tok close = lex_tok(s, p1.pos);
     if (close.text != ")") {
-        return BRes { pos: close.pos, name: "", param: "", impl: "", err: "no close" };
+        return BRes {.pos = close.pos, .name = "", .param = "", .impl = "", .err = "no close"};
     }
     Tok eq = lex_tok(s, close.pos);
     if (eq.text != "=") {
-        return BRes { pos: eq.pos, name: "", param: "", impl: "", err: "no equals" };
+        return BRes {.pos = eq.pos, .name = "", .param = "", .impl = "", .err = "no equals"};
     }
     Tok fnt = lex_tok(s, eq.pos);
     if (fnt.kind != "ident") {
-        return BRes { pos: fnt.pos, name: "", param: "", impl: "", err: "no impl" };
+        return BRes {.pos = fnt.pos, .name = "", .param = "", .impl = "", .err = "no impl"};
     }
     Tok semi = lex_tok(s, fnt.pos);
     if (semi.text != ";") {
-        return BRes { pos: semi.pos, name: "", param: "", impl: "", err: "no semi" };
+        return BRes {.pos = semi.pos, .name = "", .param = "", .impl = "", .err = "no semi"};
     }
-    return BRes { pos: semi.pos, name: head.text, param: p1.text, impl: fnt.text, err: "" };
+    return BRes {.pos = semi.pos, .name = head.text, .param = p1.text, .impl = fnt.text, .err = ""};
 }
 
 // Read a behavior instance reference: `Ord(Int)` or nested
@@ -703,19 +703,19 @@ BRes behavior_decl_at(Str s, Int pos) {
 PRes read_instance(Str s, Int pos) {
     Tok head = lex_tok(s, pos);
     if (head.kind != "ident") {
-        return PRes { pos: pos, ty: "", err: "expected behavior name" };
+        return PRes {.pos = pos, .ty = "", .err = "expected behavior name"};
     }
     Tok open = lex_tok(s, head.pos);
     if (open.text != "(") {
-        return PRes { pos: head.pos, ty: head.text, err: "" };
+        return PRes {.pos = head.pos, .ty = head.text, .err = ""};
     }
     PRes inner = read_instance(s, open.pos);
     if (inner.err != "") { return inner; }
     Tok close = lex_tok(s, inner.pos);
     if (close.text != ")") {
-        return PRes { pos: close.pos, ty: "", err: "expected )" };
+        return PRes {.pos = close.pos, .ty = "", .err = "expected )"};
     }
-    return PRes { pos: close.pos, ty: head.text + "(" + inner.ty + ")", err: "" };
+    return PRes {.pos = close.pos, .ty = head.text + "(" + inner.ty + ")", .err = ""};
 }
 
 // Index of behavior instance (head, param) in the tables; -1 when absent.
@@ -814,30 +814,30 @@ Str extract_ctext(Str s, Tok after) {
 // small arithmetic/boolean language over the implicit variable `value`
 // (spec §12): literals, unary -/!, + - * / %, rel comparisons, && ||.
 // A constraint is *satisfied* iff it reduces (wholly, through the
-// precedence layers) to true; any residual gap yields CR { ok: false },
+// precedence layers) to true; any residual gap yields CR {.ok = false},
 // reported as "cannot verify".
 
-type VI = { ok: Bool, val: Int, pos: Int };
-type CR = { ok: Bool, val: Bool, pos: Int };
-type CV = { ok: Bool, val: Int };
+type VI = { Bool ok; Int val; Int pos; };
+type CR = { Bool ok; Bool val; Int pos; };
+type CV = { Bool ok; Int val; };
 
 VI cev_prim(Str c, Int pos, Int v) {
     Tok t = lex_tok(c, pos);
     if (t.kind == "int") {
         Int n = str_parse_int(t.text);
-        return VI { ok: true, val: n, pos: t.pos };
+        return VI {.ok = true, .val = n, .pos = t.pos};
     }
     if (t.text == "value") {
-        return VI { ok: true, val: v, pos: t.pos };
+        return VI {.ok = true, .val = v, .pos = t.pos};
     }
     if (t.text == "-" && t.kind == "op") {
         Tok nx = lex_tok(c, t.pos);
         VI inner = cev_prim(c, nx.pos, v);
         if (!inner.ok) { return inner; }
         Int neg = 0 - inner.val;
-        return VI { ok: true, val: neg, pos: inner.pos };
+        return VI {.ok = true, .val = neg, .pos = inner.pos};
     }
-    return VI { ok: false, val: 0, pos: pos };
+    return VI {.ok = false, .val = 0, .pos = pos};
 }
 
 VI cev_mul_rest(Str c, Int pos, Int lhs, Int v) {
@@ -846,21 +846,21 @@ VI cev_mul_rest(Str c, Int pos, Int lhs, Int v) {
         VI rhs = cev_mul(c, op.pos, v);
         if (!rhs.ok) { return rhs; }
         Int res = lhs * rhs.val;
-        return VI { ok: true, val: res, pos: rhs.pos };
+        return VI {.ok = true, .val = res, .pos = rhs.pos};
     }
     if (op.text == "/") {
         VI rhs = cev_mul(c, op.pos, v);
         if (!rhs.ok) { return rhs; }
-        if (rhs.val == 0) { return VI { ok: false, val: lhs, pos: pos }; }
-        return VI { ok: true, val: lhs / rhs.val, pos: rhs.pos };
+        if (rhs.val == 0) { return VI {.ok = false, .val = lhs, .pos = pos}; }
+        return VI {.ok = true, .val = lhs / rhs.val, .pos = rhs.pos};
     }
     if (op.text == "%") {
         VI rhs = cev_mul(c, op.pos, v);
         if (!rhs.ok) { return rhs; }
-        if (rhs.val == 0) { return VI { ok: false, val: lhs, pos: pos }; }
-        return VI { ok: true, val: lhs % rhs.val, pos: rhs.pos };
+        if (rhs.val == 0) { return VI {.ok = false, .val = lhs, .pos = pos}; }
+        return VI {.ok = true, .val = lhs % rhs.val, .pos = rhs.pos};
     }
-    return VI { ok: false, val: lhs, pos: pos };
+    return VI {.ok = false, .val = lhs, .pos = pos};
 }
 
 VI cev_mul(Str c, Int pos, Int v) {
@@ -873,14 +873,14 @@ VI cev_add_rest(Str c, Int pos, Int lhs, Int v) {
     Tok op = lex_tok(c, pos);
     Bool isa = op.text == "+" || op.text == "-";
     if (!isa) {
-        return VI { ok: false, val: lhs, pos: pos };
+        return VI {.ok = false, .val = lhs, .pos = pos};
     }
     VI rhs = cev_mul(c, op.pos, v);
     if (!rhs.ok) { return rhs; }
     Int sum = if (op.text == "+") { lhs + rhs.val } else { lhs - rhs.val };
     VI next = cev_add_rest(c, rhs.pos, sum, v);
     if (next.ok) { return next; }
-    return VI { ok: true, val: sum, pos: rhs.pos };
+    return VI {.ok = true, .val = sum, .pos = rhs.pos};
 }
 
 VI cev_add(Str c, Int pos, Int v) {
@@ -904,35 +904,35 @@ CR cev_cmp(Str c, Int pos, Int v) {
     if (u.text == "!") {
         CR inner = cev_cmp(c, u.pos, v);
         if (!inner.ok) { return inner; }
-        return CR { ok: true, val: !inner.val, pos: inner.pos };
+        return CR {.ok = true, .val = !inner.val, .pos = inner.pos};
     }
     VI lhs = cev_add(c, pos, v);
-    if (!lhs.ok) { return CR { ok: false, val: false, pos: pos }; }
+    if (!lhs.ok) { return CR {.ok = false, .val = false, .pos = pos}; }
     Tok op = lex_tok(c, lhs.pos);
     if (cev_cmp_op(op.text)) {
         VI rhs = cev_add(c, op.pos, v);
-        if (!rhs.ok) { return CR { ok: false, val: false, pos: op.pos }; }
-        if (op.text == ">") { return CR { ok: true, val: lhs.val > rhs.val, pos: rhs.pos }; }
-        if (op.text == ">=") { return CR { ok: true, val: lhs.val >= rhs.val, pos: rhs.pos }; }
-        if (op.text == "<") { return CR { ok: true, val: lhs.val < rhs.val, pos: rhs.pos }; }
-        if (op.text == "<=") { return CR { ok: true, val: lhs.val <= rhs.val, pos: rhs.pos }; }
-        if (op.text == "==") { return CR { ok: true, val: lhs.val == rhs.val, pos: rhs.pos }; }
-        if (op.text == "!=") { return CR { ok: true, val: lhs.val != rhs.val, pos: rhs.pos }; }
+        if (!rhs.ok) { return CR {.ok = false, .val = false, .pos = op.pos}; }
+        if (op.text == ">") { return CR {.ok = true, .val = lhs.val > rhs.val, .pos = rhs.pos}; }
+        if (op.text == ">=") { return CR {.ok = true, .val = lhs.val >= rhs.val, .pos = rhs.pos}; }
+        if (op.text == "<") { return CR {.ok = true, .val = lhs.val < rhs.val, .pos = rhs.pos}; }
+        if (op.text == "<=") { return CR {.ok = true, .val = lhs.val <= rhs.val, .pos = rhs.pos}; }
+        if (op.text == "==") { return CR {.ok = true, .val = lhs.val == rhs.val, .pos = rhs.pos}; }
+        if (op.text == "!=") { return CR {.ok = true, .val = lhs.val != rhs.val, .pos = rhs.pos}; }
     }
-    return CR { ok: false, val: false, pos: pos };
+    return CR {.ok = false, .val = false, .pos = pos};
 }
 
 CR cev_conj_rest(Str c, Int pos, Bool lhs, Int v) {
     Tok op = lex_tok(c, pos);
     if (op.text != "&&") {
-        return CR { ok: false, val: lhs, pos: pos };
+        return CR {.ok = false, .val = lhs, .pos = pos};
     }
     CR rhs = cev_cmp(c, op.pos, v);
     if (!rhs.ok) { return rhs; }
     Bool sum = lhs && rhs.val;
     CR next = cev_conj_rest(c, rhs.pos, sum, v);
     if (next.ok) { return next; }
-    return CR { ok: true, val: sum, pos: rhs.pos };
+    return CR {.ok = true, .val = sum, .pos = rhs.pos};
 }
 
 CR cev_conj(Str c, Int pos, Int v) {
@@ -944,14 +944,14 @@ CR cev_conj(Str c, Int pos, Int v) {
 CR cev_disj_rest(Str c, Int pos, Bool lhs, Int v) {
     Tok op = lex_tok(c, pos);
     if (op.text != "||") {
-        return CR { ok: false, val: lhs, pos: pos };
+        return CR {.ok = false, .val = lhs, .pos = pos};
     }
     CR rhs = cev_conj(c, op.pos, v);
     if (!rhs.ok) { return rhs; }
     Bool sum = lhs || rhs.val;
     CR next = cev_disj_rest(c, rhs.pos, sum, v);
     if (next.ok) { return next; }
-    return CR { ok: true, val: sum, pos: rhs.pos };
+    return CR {.ok = true, .val = sum, .pos = rhs.pos};
 }
 
 CR cev_disj(Str c, Int pos, Int v) {
@@ -1006,29 +1006,26 @@ Str struct_field_type(Funcs f, Str ty, Str field) {
 }
 
 Str collect_field_str(Str s, Int pos) {
-    Tok f = lex_tok(s, pos);
-    if (f.text == "}") { return ""; }
-    Tok colon = lex_tok(s, f.pos);
-    PRes ty = parse_type(s, colon.pos);
-    Tok comma = lex_tok(s, ty.pos);
-    if (comma.text == ",") {
-        Str rest = collect_field_str(s, comma.pos);
-        if (rest == "") { return f.text + ":" + ty.ty; }
-        return f.text + ":" + ty.ty + "," + rest;
-    }
-    return f.text + ":" + ty.ty;
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") { return ""; }
+    PRes ty = parse_type(s, pos);
+    Tok name = lex_tok(s, ty.pos);
+    Tok semi = lex_tok(s, name.pos);
+    Str rest = collect_field_str(s, semi.pos);
+    if (rest == "") { return name.text + ":" + ty.ty; }
+    return name.text + ":" + ty.ty + "," + rest;
 }
 
 // ─── Type parsing ───────────────────────────────────────────────
 
-type PRes = { pos: Int, ty: Str, err: Str };
+type PRes = { Int pos; Str ty; Str err; };
 
 // A single type-parameter: an integer literal (Int(64), Str(8), List(Int, 8)'s
 // capacity) or a nested type (List(Str), Option(Int)).
 PRes parse_type_arg(Str s, Int pos) {
     Tok in1 = lex_tok(s, pos);
     if (in1.kind == "int") {
-        return PRes { pos: in1.pos, ty: in1.text, err: "" };
+        return PRes {.pos = in1.pos, .ty = in1.text, .err = ""};
     }
     return parse_type(s, pos);
 }
@@ -1038,20 +1035,20 @@ PRes parse_type_arg(Str s, Int pos) {
 PRes parse_type_args_rest(Str s, Int pos, Str acc) {
     Tok t = lex_tok(s, pos);
     if (t.text == ")") {
-        return PRes { pos: t.pos, ty: acc, err: "" };
+        return PRes {.pos = t.pos, .ty = acc, .err = ""};
     }
     if (t.text == ",") {
         PRes arg = parse_type_arg(s, t.pos);
         if (arg.err != "") { return arg; }
         return parse_type_args_rest(s, arg.pos, acc + ", " + arg.ty);
     }
-    return PRes { pos: t.pos, ty: "", err: "expected , or ) in type" };
+    return PRes {.pos = t.pos, .ty = "", .err = "expected, or ) in type"};
 }
 
 PRes parse_type(Str s, Int pos) {
     Tok t = lex_tok(s, pos);
     if (t.kind != "ident") {
-        return PRes { pos: t.pos, ty: "", err: "expected a type name" };
+        return PRes {.pos = t.pos, .ty = "", .err = "expected a type name"};
     }
     Tok t2 = lex_tok(s, t.pos);
     if (t2.text == "(") {
@@ -1060,54 +1057,58 @@ PRes parse_type(Str s, Int pos) {
         // constructors: List(Int), List(Int, 8), Option(Int).
         PRes first = parse_type_arg(s, t2.pos);
         if (first.err != "") {
-            return PRes { pos: first.pos, ty: "", err: "bad type parameter" };
+            return PRes {.pos = first.pos, .ty = "", .err = "bad type parameter"};
         }
         PRes rest = parse_type_args_rest(s, first.pos, first.ty);
         if (rest.err != "") { return rest; }
         Str ty = t.text + "(" + rest.ty + ")";
-        return PRes { pos: rest.pos, ty: ty, err: "" };
+        return PRes {.pos = rest.pos, .ty = ty, .err = ""};
     }
-    return PRes { pos: t.pos, ty: t.text, err: "" };
+    return PRes {.pos = t.pos, .ty = t.text, .err = ""};
 }
 
 // ─── Expression checking ────────────────────────────────────────
 
-type ERes = { pos: Int, ty: Str, err: Str };
+type ERes = { Int pos; Str ty; Str err; };
 
 ERes check_struct_lit_rest(Str s, Int pos, Str ty, List(Str) env, Funcs fs) {
-    Tok f = lex_tok(s, pos);
-    if (f.text == "}") {
-        return ERes { pos: f.pos, ty: ty, err: "" };
+    Tok dot = lex_tok(s, pos);
+    if (dot.text == "}") {
+        return ERes {.pos = dot.pos, .ty = ty, .err = ""};
     }
+    if (dot.text != ".") {
+        return ERes {.pos = dot.pos, .ty = "", .err = "expected . in struct literal"};
+    }
+    Tok f = lex_tok(s, dot.pos);
     if (f.kind != "ident") {
-        return ERes { pos: f.pos, ty: "", err: "expected field name in struct literal" };
+        return ERes {.pos = f.pos, .ty = "", .err = "expected field name in struct literal"};
     }
-    Tok colon = lex_tok(s, f.pos);
-    if (colon.text != ":") {
-        return ERes { pos: colon.pos, ty: "", err: "expected : in struct literal" };
+    Tok eq = lex_tok(s, f.pos);
+    if (eq.text != "=") {
+        return ERes {.pos = eq.pos, .ty = "", .err = "expected = in struct literal"};
     }
-    ERes v = check_expr(s, colon.pos, env, fs);
+    ERes v = check_expr(s, eq.pos, env, fs);
     if (v.err != "") { return v; }
     Str ft = struct_field_type(fs, ty, f.text);
     if (ft == "") {
         Str msg = "unknown field " + f.text + " in " + ty;
-        return ERes { pos: f.pos, ty: "", err: msg };
+        return ERes {.pos = f.pos, .ty = "", .err = msg};
     }
     Bool vempty = v.ty == "List(Unknown)";
     Bool fint = is_num(ft) && is_num(v.ty);
     Bool fok = fint && int_adopt_ok(v.ty, ft, "");
     if (!vempty && !fok && v.ty != ft) {
         Str msg = "field " + f.text + ": expected " + ft + ", got " + v.ty;
-        return ERes { pos: v.pos, ty: "", err: msg };
+        return ERes {.pos = v.pos, .ty = "", .err = msg};
     }
     Tok t = lex_tok(s, v.pos);
     if (t.text == ",") {
         return check_struct_lit_rest(s, t.pos, ty, env, fs);
     }
     if (t.text == "}") {
-        return ERes { pos: t.pos, ty: ty, err: "" };
+        return ERes {.pos = t.pos, .ty = ty, .err = ""};
     }
-    return ERes { pos: t.pos, ty: "", err: "expected , or } in struct literal" };
+    return ERes {.pos = t.pos, .ty = "", .err = "expected, or } in struct literal"};
 }
 
 ERes check_struct_lit(Str s, Int pos, Str ty, List(Str) env, Funcs fs) {
@@ -1568,282 +1569,282 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     Str argtys = canon64(rawtys);
     if (name == "println") {
         if (argc == 1) {
-            if (arg_matches(argtys, "Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
-            return ERes { pos: pos, ty: "", err: "println expects Str, got " + argtys };
+            if (arg_matches(argtys, "Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+            return ERes {.pos = pos, .ty = "", .err = "println expects Str, got " + argtys};
         }
-        return ERes { pos: pos, ty: "", err: "println expects 1 argument" };
+        return ERes {.pos = pos, .ty = "", .err = "println expects 1 argument"};
     }
     if (name == "print") {
         if (argc == 1) {
-            if (arg_matches(argtys, "Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
-            return ERes { pos: pos, ty: "", err: "print expects Str, got " + argtys };
+            if (arg_matches(argtys, "Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+            return ERes {.pos = pos, .ty = "", .err = "print expects Str, got " + argtys};
         }
-        return ERes { pos: pos, ty: "", err: "print expects 1 argument" };
+        return ERes {.pos = pos, .ty = "", .err = "print expects 1 argument"};
     }
     if (name == "eprintln") {
         if (argc == 1) {
-            if (arg_matches(argtys, "Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
-            return ERes { pos: pos, ty: "", err: "eprintln expects Str, got " + argtys };
+            if (arg_matches(argtys, "Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+            return ERes {.pos = pos, .ty = "", .err = "eprintln expects Str, got " + argtys};
         }
-        return ERes { pos: pos, ty: "", err: "eprintln expects 1 argument" };
+        return ERes {.pos = pos, .ty = "", .err = "eprintln expects 1 argument"};
     }
     if (name == "IntToString") {
         if (argc == 1) {
-            if (argtys == "Int" || str_has_prefix(argtys, "Int(")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-            return ERes { pos: pos, ty: "", err: "IntToString expects Int, got " + argtys };
+            if (argtys == "Int" || str_has_prefix(argtys, "Int(")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+            return ERes {.pos = pos, .ty = "", .err = "IntToString expects Int, got " + argtys};
         }
-        return ERes { pos: pos, ty: "", err: "IntToString expects 1 argument" };
+        return ERes {.pos = pos, .ty = "", .err = "IntToString expects 1 argument"};
     }
     if (name == "UIntToString") {
         if (argc == 1) {
-            if (argtys == "UInt" || str_has_prefix(argtys, "UInt(")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-            return ERes { pos: pos, ty: "", err: "UIntToString expects UInt, got " + argtys };
+            if (argtys == "UInt" || str_has_prefix(argtys, "UInt(")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+            return ERes {.pos = pos, .ty = "", .err = "UIntToString expects UInt, got " + argtys};
         }
-        return ERes { pos: pos, ty: "", err: "UIntToString expects 1 argument" };
+        return ERes {.pos = pos, .ty = "", .err = "UIntToString expects 1 argument"};
     }
     if (name == "FloatToString") {
         if (argc == 1) {
-            if (argtys == "Float" || str_has_prefix(argtys, "Float(")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-            return ERes { pos: pos, ty: "", err: "FloatToString expects Float, got " + argtys };
+            if (argtys == "Float" || str_has_prefix(argtys, "Float(")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+            return ERes {.pos = pos, .ty = "", .err = "FloatToString expects Float, got " + argtys};
         }
-        return ERes { pos: pos, ty: "", err: "FloatToString expects 1 argument" };
+        return ERes {.pos = pos, .ty = "", .err = "FloatToString expects 1 argument"};
     }
     if (name == "BoolToString") {
         if (argc == 1) {
-            if (argtys == "Bool") { return ERes { pos: pos, ty: "Str", err: "" }; }
-            return ERes { pos: pos, ty: "", err: "BoolToString expects Bool, got " + argtys };
+            if (argtys == "Bool") { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+            return ERes {.pos = pos, .ty = "", .err = "BoolToString expects Bool, got " + argtys};
         }
-        return ERes { pos: pos, ty: "", err: "BoolToString expects 1 argument" };
+        return ERes {.pos = pos, .ty = "", .err = "BoolToString expects 1 argument"};
     }
     if (name == "ToString") {
-        if (argc == 1) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "ToString expects 1 argument" };
+        if (argc == 1) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "ToString expects 1 argument"};
     }
     if (name == "str_len") {
         if (argc == 1) {
-            if (arg_matches(argtys, "Str")) { return ERes { pos: pos, ty: "Int", err: "" }; }
-            return ERes { pos: pos, ty: "", err: "str_len expects Str, got " + argtys };
+            if (arg_matches(argtys, "Str")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+            return ERes {.pos = pos, .ty = "", .err = "str_len expects Str, got " + argtys};
         }
-        return ERes { pos: pos, ty: "", err: "str_len expects 1 argument" };
+        return ERes {.pos = pos, .ty = "", .err = "str_len expects 1 argument"};
     }
     if (name == "str_char_at") {
-        if (builtin_args(argtys, "Str,Int")) { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_char_at expects (Str, Int), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_char_at expects (Str, Int), got (" + argtys + ")"};
     }
     if (name == "str_from_code") {
-        if (argtys == "Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_from_code expects Int, got " + argtys };
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_from_code expects Int, got " + argtys};
     }
     if (name == "str_slice") {
-        if (builtin_args(argtys, "Str,Int,Int")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_slice expects (Str, Int, Int), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Int,Int")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_slice expects (Str, Int, Int), got (" + argtys + ")"};
     }
     if (name == "str_sb_new") {
-        if (argc == 0) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_sb_new expects no arguments" };
+        if (argc == 0) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_sb_new expects no arguments"};
     }
     if (name == "str_sb_append") {
-        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_sb_append expects (Str, Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_sb_append expects (Str, Str), got (" + argtys + ")"};
     }
     if (name == "str_sb_append_cp") {
-        if (builtin_args(argtys, "Str,Int")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_sb_append_cp expects (Str, Int), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Int")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_sb_append_cp expects (Str, Int), got (" + argtys + ")"};
     }
     if (name == "str_sb_finish") {
-        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_sb_finish expects (Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_sb_finish expects (Str), got (" + argtys + ")"};
     }
     if (name == "str_trim") {
-        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_trim expects (Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_trim expects (Str), got (" + argtys + ")"};
     }
     if (name == "str_to_lower") {
-        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_to_lower expects (Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_to_lower expects (Str), got (" + argtys + ")"};
     }
     if (name == "str_to_upper") {
-        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_to_upper expects (Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_to_upper expects (Str), got (" + argtys + ")"};
     }
     if (name == "str_reverse") {
-        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_reverse expects (Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_reverse expects (Str), got (" + argtys + ")"};
     }
     if (name == "str_contains") {
-        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_contains expects (Str,Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_contains expects (Str,Str), got (" + argtys + ")"};
     }
     if (name == "str_starts_with") {
-        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_starts_with expects (Str,Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_starts_with expects (Str,Str), got (" + argtys + ")"};
     }
     if (name == "str_ends_with") {
-        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_ends_with expects (Str,Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_ends_with expects (Str,Str), got (" + argtys + ")"};
     }
     if (name == "str_repeat") {
-        if (builtin_args(argtys, "Str,Int")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_repeat expects (Str,Int), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Int")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_repeat expects (Str,Int), got (" + argtys + ")"};
     }
     if (name == "str_replace") {
-        if (builtin_args(argtys, "Str,Str,Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_replace expects (Str,Str,Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Str,Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_replace expects (Str,Str,Str), got (" + argtys + ")"};
     }
     if (name == "str_split") {
-        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_split expects (Str,Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "List(Str)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_split expects (Str,Str), got (" + argtys + ")"};
     }
     if (name == "str_join") {
-        if (builtin_args(argtys, "List(Str),Str")) { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_join expects (List(Str),Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "List(Str),Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_join expects (List(Str),Str), got (" + argtys + ")"};
     }
     if (name == "str_is_int") {
-        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_is_int expects (Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_is_int expects (Str), got (" + argtys + ")"};
     }
     if (name == "str_parse_int") {
-        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_parse_int expects (Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_parse_int expects (Str), got (" + argtys + ")"};
     }
     if (name == "str_is_float") {
-        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_is_float expects (Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_is_float expects (Str), got (" + argtys + ")"};
     }
     if (name == "str_parse_float") {
-        if (builtin_args(argtys, "Str")) { return ERes { pos: pos, ty: "Float", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_parse_float expects (Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Float", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_parse_float expects (Str), got (" + argtys + ")"};
     }
     if (name == "str_count") {
-        if (builtin_args(argtys, "Str,Str")) { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "str_count expects (Str,Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_count expects (Str,Str), got (" + argtys + ")"};
     }
     if (name == "abs_i64") {
-        if (argtys == "Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "abs_i64 expects (Int), got (" + argtys + ")" };
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "abs_i64 expects (Int), got (" + argtys + ")"};
     }
     if (name == "min_i64") {
-        if (argtys == "Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "min_i64 expects (Int,Int), got (" + argtys + ")" };
+        if (argtys == "Int,Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "min_i64 expects (Int,Int), got (" + argtys + ")"};
     }
     if (name == "max_i64") {
-        if (argtys == "Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "max_i64 expects (Int,Int), got (" + argtys + ")" };
+        if (argtys == "Int,Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "max_i64 expects (Int,Int), got (" + argtys + ")"};
     }
     if (name == "clamp_i64") {
-        if (argtys == "Int,Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "clamp_i64 expects (Int,Int,Int), got (" + argtys + ")" };
+        if (argtys == "Int,Int,Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "clamp_i64 expects (Int,Int,Int), got (" + argtys + ")"};
     }
     if (name == "list_sort_ints") {
-        if (argtys == "List(Int)") { return ERes { pos: pos, ty: "List(Int)", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_sort_ints expects (List(Int)), got (" + argtys + ")" };
+        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_sort_ints expects (List(Int)), got (" + argtys + ")"};
     }
     if (name == "list_sort_strs") {
-        if (argtys == "List(Str)") { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_sort_strs expects (List(Str)), got (" + argtys + ")" };
+        if (argtys == "List(Str)") { return ERes {.pos = pos, .ty = "List(Str)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_sort_strs expects (List(Str)), got (" + argtys + ")"};
     }
     if (name == "list_sort_floats") {
-        if (argtys == "List(Float)") { return ERes { pos: pos, ty: "List(Float)", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_sort_floats expects (List(Float)), got (" + argtys + ")" };
+        if (argtys == "List(Float)") { return ERes {.pos = pos, .ty = "List(Float)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_sort_floats expects (List(Float)), got (" + argtys + ")"};
     }
     if (name == "list_reverse_ints") {
-        if (argtys == "List(Int)") { return ERes { pos: pos, ty: "List(Int)", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_reverse_ints expects (List(Int)), got (" + argtys + ")" };
+        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_reverse_ints expects (List(Int)), got (" + argtys + ")"};
     }
     if (name == "list_reverse_strs") {
-        if (argtys == "List(Str)") { return ERes { pos: pos, ty: "List(Str)", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_reverse_strs expects (List(Str)), got (" + argtys + ")" };
+        if (argtys == "List(Str)") { return ERes {.pos = pos, .ty = "List(Str)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_reverse_strs expects (List(Str)), got (" + argtys + ")"};
     }
     if (name == "list_reverse_floats") {
-        if (argtys == "List(Float)") { return ERes { pos: pos, ty: "List(Float)", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_reverse_floats expects (List(Float)), got (" + argtys + ")" };
+        if (argtys == "List(Float)") { return ERes {.pos = pos, .ty = "List(Float)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_reverse_floats expects (List(Float)), got (" + argtys + ")"};
     }
     if (name == "list_contains_int") {
-        if (argtys == "List(Int),Int") { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_contains_int expects (List(Int),Int), got (" + argtys + ")" };
+        if (argtys == "List(Int),Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_contains_int expects (List(Int),Int), got (" + argtys + ")"};
     }
     if (name == "list_contains_str") {
-        if (builtin_args(argtys, "List(Str),Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_contains_str expects (List(Str),Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "List(Str),Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_contains_str expects (List(Str),Str), got (" + argtys + ")"};
     }
     if (name == "list_contains_float") {
-        if (argtys == "List(Float),Float") { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_contains_float expects (List(Float),Float), got (" + argtys + ")" };
+        if (argtys == "List(Float),Float") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_contains_float expects (List(Float),Float), got (" + argtys + ")"};
     }
     if (name == "list_sum") {
-        if (argtys == "List(Int)") { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_sum expects (List(Int)), got (" + argtys + ")" };
+        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_sum expects (List(Int)), got (" + argtys + ")"};
     }
     if (name == "list_sumf") {
-        if (argtys == "List(Float)") { return ERes { pos: pos, ty: "Float", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "list_sumf expects (List(Float)), got (" + argtys + ")" };
+        if (argtys == "List(Float)") { return ERes {.pos = pos, .ty = "Float", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "list_sumf expects (List(Float)), got (" + argtys + ")"};
     }
     if (name == "resid_crypto_random_byte") {
-        if (argtys == "") { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "resid_crypto_random_byte expects no arguments" };
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_crypto_random_byte expects no arguments"};
     }
     if (name == "resid_cpu_has_aesni") {
-        if (argtys == "") { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "resid_cpu_has_aesni expects no arguments" };
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_cpu_has_aesni expects no arguments"};
     }
     if (name == "aesni_enc_round" || name == "aesni_enc_last_round") {
-        if (argtys == "UInt(128),UInt(128)") { return ERes { pos: pos, ty: "UInt(128)", err: "" }; }
-        return ERes { pos: pos, ty: "", err: name + " expects (UInt(128), UInt(128)), got (" + argtys + ")" };
+        if (argtys == "UInt(128),UInt(128)") { return ERes {.pos = pos, .ty = "UInt(128)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (UInt(128), UInt(128)), got (" + argtys + ")"};
     }
     if (name == "resid_tcp_connect") {
-        if (builtin_args(argtys, "Str,Int")) { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "resid_tcp_connect expects (Str, Int), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Str,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_tcp_connect expects (Str, Int), got (" + argtys + ")"};
     }
     if (name == "resid_tcp_send") {
-        if (builtin_args(argtys, "Int,Str")) { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "resid_tcp_send expects (Int, Str), got (" + argtys + ")" };
+        if (builtin_args(argtys, "Int,Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_tcp_send expects (Int, Str), got (" + argtys + ")"};
     }
     if (name == "resid_tcp_recv_all") {
-        if (argtys == "Int") { return ERes { pos: pos, ty: "Str", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "resid_tcp_recv_all expects (Int), got (" + argtys + ")" };
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_tcp_recv_all expects (Int), got (" + argtys + ")"};
     }
     if (name == "resid_tcp_close") {
-        if (argtys == "Int") { return ERes { pos: pos, ty: "Bool", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "resid_tcp_close expects (Int), got (" + argtys + ")" };
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_tcp_close expects (Int), got (" + argtys + ")"};
     }
     if (arith_family(name)) {
-        if (argtys == "Int,Int") { return ERes { pos: pos, ty: "Int", err: "" }; }
-        return ERes { pos: pos, ty: "", err: name + " expects (Int, Int), got (" + argtys + ")" };
+        if (argtys == "Int,Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, Int), got (" + argtys + ")"};
     }
     // ── Option constructors (spec §10) ─────────────────────────────
     // `Some(v)` carries its payload type: `Some(42)` -> Option(Int).
     if (name == "Some") {
-        if (argc == 1) { return ERes { pos: pos, ty: "Option(" + argtys + ")", err: "" }; }
-        return ERes { pos: pos, ty: "", err: "Some expects 1 argument" };
+        if (argc == 1) { return ERes {.pos = pos, .ty = "Option(" + argtys + ")", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "Some expects 1 argument"};
     }
     if (name == "None") {
         if (argc == 0) {
             // A bare None has no payload to pin the element type; the
             // expected Option(T) type is threaded by the caller (binding,
             // return, or match scrutinee). Without it, this is ambiguous.
-            return ERes { pos: pos, ty: "Option(_)", err: "" };
+            return ERes {.pos = pos, .ty = "Option(_)", .err = ""};
         }
-        return ERes { pos: pos, ty: "", err: "None expects no arguments" };
+        return ERes {.pos = pos, .ty = "", .err = "None expects no arguments"};
     }
     if (name == "Ok") {
         if (argc == 1) {
             Str eerr = res_elem_err(exp);
             Bool hasres = str_has_prefix(exp, "Result(") && eerr != "";
-            if (hasres) { return ERes { pos: pos, ty: "Result(" + argtys + ", " + eerr + ")", err: "" }; }
-            return ERes { pos: pos, ty: "Result(" + argtys + ", _)", err: "" };
+            if (hasres) { return ERes {.pos = pos, .ty = "Result(" + argtys + ", " + eerr + ")", .err = ""}; }
+            return ERes {.pos = pos, .ty = "Result(" + argtys + ", _)", .err = ""};
         }
-        return ERes { pos: pos, ty: "", err: "Ok expects 1 argument" };
+        return ERes {.pos = pos, .ty = "", .err = "Ok expects 1 argument"};
     }
     if (name == "Err") {
         if (argc == 1) {
             Str eok = res_elem_ok(exp);
             Bool hasres = str_has_prefix(exp, "Result(") && eok != "";
-            if (hasres) { return ERes { pos: pos, ty: "Result(" + eok + ", " + argtys + ")", err: "" }; }
-            return ERes { pos: pos, ty: "Result(_, " + argtys + ")", err: "" };
+            if (hasres) { return ERes {.pos = pos, .ty = "Result(" + eok + ", " + argtys + ")", .err = ""}; }
+            return ERes {.pos = pos, .ty = "Result(_, " + argtys + ")", .err = ""};
         }
-        return ERes { pos: pos, ty: "", err: "Err expects 1 argument" };
+        return ERes {.pos = pos, .ty = "", .err = "Err expects 1 argument"};
     }
-    return ERes { pos: pos, ty: "", err: "unknown function " + name };
+    return ERes {.pos = pos, .ty = "", .err = "unknown function " + name};
 }
 
 // Split a comma-joined type list into position i's element (depth-aware:
@@ -1915,25 +1916,25 @@ ERes finish_call(Str s, Int pos, Str name, Str argtys, Int argc, List(Str) env, 
     if (idx >= 0) {
         Str pts = fs.pts[idx];
         if (pts == argtys) {
-            return ERes { pos: pos, ty: fs.rets[idx], err: "" };
+            return ERes {.pos = pos, .ty = fs.rets[idx], .err = ""};
         }
         Bool adopted = params_accept(pts, argtys, argc);
         if (adopted) {
-            return ERes { pos: pos, ty: fs.rets[idx], err: "" };
+            return ERes {.pos = pos, .ty = fs.rets[idx], .err = ""};
         }
         Str msg = "call " + name + " expects (" + pts + "), got (" + argtys + ")";
-        return ERes { pos: pos, ty: "", err: msg };
+        return ERes {.pos = pos, .ty = "", .err = msg};
     }
     return check_builtin(name, argtys, argc, pos, "", funcs_empty().names);
 }
 
-type ARes = { pos: Int, tys: Str, count: Int, err: Str };
+type ARes = { Int pos; Str tys; Int count; Str err; };
 
 ARes collect_args(Str s, Int pos, Str acc, Int count, List(Str) env, Funcs fs) {
     Str exp = if (count < fs.exp_tys.len()) { fs.exp_tys[count] } else { "" };
     ERes a = check_expr_e(s, pos, env, fs, exp);
     if (a.err != "") {
-        return ARes { pos: a.pos, tys: acc, count: count, err: a.err };
+        return ARes {.pos = a.pos, .tys = acc, .count = count, .err = a.err};
     }
     Str sep = if (acc != "") { "," } else { "" };
     Str acc3 = acc + sep + a.ty;
@@ -1943,13 +1944,13 @@ ARes collect_args(Str s, Int pos, Str acc, Int count, List(Str) env, Funcs fs) {
         return collect_args(s, t.pos, acc3, c2, env, fs);
     }
     Int c2 = count + 1;
-    return ARes { pos: t.pos, tys: acc3, count: c2, err: "" };
+    return ARes {.pos = t.pos, .tys = acc3, .count = c2, .err = ""};
 }
 
 // Strip leading Reverse(...) wrappers: ty=inner text, pos=layer count.
 PRes strip_reverse(Str s, Int depth) {
     if (!str_has_prefix(s, "Reverse(")) {
-        return PRes { pos: depth, ty: s, err: "" };
+        return PRes {.pos = depth, .ty = s, .err = ""};
     }
     Str inner = str_slice(s, 8, str_len(s) - 1);
     Int d2 = depth + 1;
@@ -1962,53 +1963,53 @@ ERes check_sort_call(Str s, Int pos, List(Str) env, Funcs fs) {
     ERes v = check_expr(s, pos, env, fs);
     if (v.err != "") { return v; }
     if (!str_has_prefix(v.ty, "List(")) {
-        return ERes { pos: v.pos, ty: "", err: "sort expects a List, found " + v.ty };
+        return ERes {.pos = v.pos, .ty = "", .err = "sort expects a List, found " + v.ty};
     }
     Str elem = str_slice(v.ty, 5, str_len(v.ty) - 1);
     Tok comma = lex_tok(s, v.pos);
     if (comma.text != ",") {
-        return ERes { pos: comma.pos, ty: "", err: "sort requires a behavior: sort(xs, using = Ord(T))" };
+        return ERes {.pos = comma.pos, .ty = "", .err = "sort requires a behavior: sort(xs, using = Ord(T))"};
     }
     Tok uw = lex_tok(s, comma.pos);
     if (uw.text != "using") {
-        return ERes { pos: uw.pos, ty: "", err: "sort requires a behavior: sort(xs, using = Ord(T))" };
+        return ERes {.pos = uw.pos, .ty = "", .err = "sort requires a behavior: sort(xs, using = Ord(T))"};
     }
     Tok eq = lex_tok(s, uw.pos);
     if (eq.text != "=") {
-        return ERes { pos: eq.pos, ty: "", err: "using: expected =" };
+        return ERes {.pos = eq.pos, .ty = "", .err = "using: expected ="};
     }
     PRes inst = read_instance(s, eq.pos);
     if (inst.err != "") {
-        return ERes { pos: inst.pos, ty: "", err: "using: " + inst.err };
+        return ERes {.pos = inst.pos, .ty = "", .err = "using: " + inst.err};
     }
     Tok close = lex_tok(s, inst.pos);
     if (close.text != ")") {
-        return ERes { pos: close.pos, ty: "", err: "expected ) after behavior instance" };
+        return ERes {.pos = close.pos, .ty = "", .err = "expected ) after behavior instance"};
     }
     // Strip Reverse layers.
     PRes stripped = strip_reverse(inst.ty, 0);
     Str inner = stripped.ty;
     Int op = str_find_char(inner, 40, 0);
     if (op < 0) {
-        return ERes { pos: close.pos, ty: "", err: "behavior instance must name a type: Ord(Int)" };
+        return ERes {.pos = close.pos, .ty = "", .err = "behavior instance must name a type: Ord(Int)"};
     }
     Str head = str_slice(inner, 0, op);
     Str param = str_slice(inner, op + 1, str_len(inner) - 1);
     Int bi = b_index(fs, head, param);
     if (bi < 0) {
-        return ERes { pos: close.pos, ty: "", err: "no behavior instance " + head + "(" + param + ") is defined" };
+        return ERes {.pos = close.pos, .ty = "", .err = "no behavior instance " + head + "(" + param + ") is defined"};
     }
     if (param != elem) {
-        return ERes { pos: close.pos, ty: "", err: "behavior " + head + "(" + param + ") orders " + param + ", but the list holds " + elem };
+        return ERes {.pos = close.pos, .ty = "", .err = "behavior " + head + "(" + param + ") orders " + param + ", but the list holds " + elem};
     }
     Int fidx = fn_index(fs, fs.bfns[bi]);
     List(Str) ptsl = fs.pts;
     List(Str) rtl = fs.rets;
     Str want = param + "," + param;
     if (fidx < 0 || ptsl[fidx] != want || rtl[fidx] != "Int") {
-        return ERes { pos: close.pos, ty: "", err: "behavior " + head + "(" + param + "): impl must have signature (" + param + ", " + param + ") -> Int" };
+        return ERes {.pos = close.pos, .ty = "", .err = "behavior " + head + "(" + param + "): impl must have signature (" + param + ", " + param + ") -> Int"};
     }
-    return ERes { pos: close.pos, ty: v.ty, err: "" };
+    return ERes {.pos = close.pos, .ty = v.ty, .err = ""};
 }
 
 ERes check_call(Str s, Int pos, Str name, List(Str) env, Funcs fs) {
@@ -2020,13 +2021,13 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Funcs fs) {
     Bool is_ctor = name == "Ok" || name == "Err" || name == "Some" || name == "None";
     if (is_ctor) {
         Str ctor_exp = if (fs.exp_tys.len() > 0) { fs.exp_tys[0] } else { "" };
-        Funcs fs3 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: funcs_empty().names, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: fs.growable };
+        Funcs fs3 = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = funcs_empty().names, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
         if (t.text == ")") {
             return check_builtin(name, "", 0, pos, ctor_exp, funcs_empty().names);
         }
         ARes a = collect_args(s, pos, "", 0, env, fs3);
         if (a.err != "") {
-            return ERes { pos: a.pos, ty: "", err: a.err };
+            return ERes {.pos = a.pos, .ty = "", .err = a.err};
         }
         return check_builtin(name, a.tys, a.count, a.pos, ctor_exp, funcs_empty().names);
     }
@@ -2035,10 +2036,10 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Funcs fs) {
     }
     Int idx = fn_index(fs, name);
     List(Str) pt_list = if (idx >= 0) { split_type_list(fs.pts[idx], 0, 0, 0, "", funcs_empty().names) } else { funcs_empty().names };
-    Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: pt_list, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: fs.growable };
+    Funcs fs2 = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = pt_list, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
     ARes a = collect_args(s, pos, "", 0, env, fs2);
     if (a.err != "") {
-        return ERes { pos: a.pos, ty: "", err: a.err };
+        return ERes {.pos = a.pos, .ty = "", .err = a.err};
     }
     return finish_call(s, a.pos, name, a.tys, a.count, env, fs);
 }
@@ -2058,7 +2059,7 @@ ERes check_list_lit_rest(Str s, Int pos, Str elem, Int count, List(Str) env, Fun
     Str elem2 = if (elem == "") { e.ty } else { elem };
     if (elem != "" && elem != e.ty) {
         Str msg = "list element type mismatch: " + elem + " vs " + e.ty;
-        return ERes { pos: e.pos, ty: "", err: msg };
+        return ERes {.pos = e.pos, .ty = "", .err = msg};
     }
     Int count2 = count + 1;
     Tok t = lex_tok(s, e.pos);
@@ -2087,18 +2088,18 @@ ERes finish_list_lit(Int pos, Str elem, Int count, Str exp) {
         Int cap = fixed_cap(exp);
         if (count > cap) {
             Str msg = "list literal has " + IntToString(count) + " elements, exceeds List(" + elem + ", " + IntToString(cap) + ") capacity";
-            return ERes { pos: pos, ty: "", err: msg };
+            return ERes {.pos = pos, .ty = "", .err = msg};
         }
-        return ERes { pos: pos, ty: exp, err: "" };
+        return ERes {.pos = pos, .ty = exp, .err = ""};
     }
-    return ERes { pos: pos, ty: "List(" + elem + ")", err: "" };
+    return ERes {.pos = pos, .ty = "List(" + elem + ")", .err = ""};
 }
 
 ERes check_list_lit(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
     Tok t = lex_tok(s, pos);
     if (t.text == "]") {
-        if (is_list_fixed(exp)) { return ERes { pos: t.pos, ty: exp, err: "" }; }
-        return ERes { pos: t.pos, ty: "List(Unknown)", err: "" };
+        if (is_list_fixed(exp)) { return ERes {.pos = t.pos, .ty = exp, .err = ""}; }
+        return ERes {.pos = t.pos, .ty = "List(Unknown)", .err = ""};
     }
     return check_list_lit_rest(s, pos, "", 0, env, fs, exp);
 }
@@ -2115,13 +2116,13 @@ ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
             Str inner = str_slice(exp, 4, str_len_1(exp) - 1);
             Str kt = str_slice(inner, 0, str_find_char(inner, 44, 0));
             Str vt = str_slice(inner, str_find_char(inner, 44, 0) + 2, str_len_1(inner));
-            return ERes { pos: probe.pos, ty: "Map(" + kt + ", " + vt + ")", err: "" };
+            return ERes {.pos = probe.pos, .ty = "Map(" + kt + ", " + vt + ")", .err = ""};
         }
         if (str_has_prefix(exp, "Set(")) {
             Str inner = str_slice(exp, 4, str_len_1(exp) - 1);
-            return ERes { pos: probe.pos, ty: "Set(" + inner + ")", err: "" };
+            return ERes {.pos = probe.pos, .ty = "Set(" + inner + ")", .err = ""};
         }
-        return ERes { pos: probe.pos, ty: "", err: "cannot infer element type of an empty set literal (add an explicit type)" };
+        return ERes {.pos = probe.pos, .ty = "", .err = "cannot infer element type of an empty set literal (add an explicit type)"};
     }
     // Peek ahead: consume first expression, check for ':'
     ERes first = check_expr(s, pos, env, fs);
@@ -2140,7 +2141,7 @@ ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         }
         // single entry map
         Str ty = "Map(" + kt + ", " + vt + ")";
-        return ERes { pos: t2.pos, ty: ty, err: "" };
+        return ERes {.pos = t2.pos, .ty = ty, .err = ""};
     }
     if (after_first.text == ",") {
         // It's a set literal: {e, ...}
@@ -2149,10 +2150,10 @@ ERes check_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
     if (after_first.text == "}") {
         // A single element with no ':' and no ',' is a one-element set.
         Str ty = "Set(" + first.ty + ")";
-        return ERes { pos: after_first.pos, ty: ty, err: "" };
+        return ERes {.pos = after_first.pos, .ty = ty, .err = ""};
     }
     // Fall through: this should have been caught by the caller
-    return ERes { pos: first.pos, ty: "", err: "malformed literal" };
+    return ERes {.pos = first.pos, .ty = "", .err = "malformed literal"};
 }
 
 ERes check_map_lit_rest(Str s, Int pos, Str key, Str val, List(Str) env, Funcs fs) {
@@ -2160,24 +2161,24 @@ ERes check_map_lit_rest(Str s, Int pos, Str key, Str val, List(Str) env, Funcs f
     if (k.err != "") { return k; }
     Tok colon = lex_tok(s, k.pos);
     if (colon.text != ":") {
-        return ERes { pos: colon.pos, ty: "", err: "map entries must use : separator" };
+        return ERes {.pos = colon.pos, .ty = "", .err = "map entries must use : separator"};
     }
     ERes v = check_expr(s, colon.pos, env, fs);
     if (v.err != "") { return v; }
     if (k.ty != key) {
         Str msg = "map keys differ: " + key + " vs " + k.ty;
-        return ERes { pos: v.pos, ty: "", err: msg };
+        return ERes {.pos = v.pos, .ty = "", .err = msg};
     }
     if (v.ty != val) {
         Str msg = "map values differ: " + val + " vs " + v.ty;
-        return ERes { pos: v.pos, ty: "", err: msg };
+        return ERes {.pos = v.pos, .ty = "", .err = msg};
     }
     Tok t2 = lex_tok(s, v.pos);
     if (t2.text == ",") {
         return check_map_lit_rest(s, t2.pos, key, val, env, fs);
     }
     Str ty = "Map(" + key + ", " + val + ")";
-    return ERes { pos: t2.pos, ty: ty, err: "" };
+    return ERes {.pos = t2.pos, .ty = ty, .err = ""};
 }
 
 ERes check_set_lit_rest(Str s, Int pos, Str elem, List(Str) env, Funcs fs) {
@@ -2186,14 +2187,14 @@ ERes check_set_lit_rest(Str s, Int pos, Str elem, List(Str) env, Funcs fs) {
     Str elem2 = if (elem == "") { e.ty } else { elem };
     if (elem != "" && elem != e.ty) {
         Str msg = "set element type mismatch: " + elem + " vs " + e.ty;
-        return ERes { pos: e.pos, ty: "", err: msg };
+        return ERes {.pos = e.pos, .ty = "", .err = msg};
     }
     Tok t = lex_tok(s, e.pos);
     if (t.text == ",") {
         return check_set_lit_rest(s, t.pos, elem2, env, fs);
     }
     Str ty = "Set(" + elem2 + ")";
-    return ERes { pos: t.pos, ty: ty, err: "" };
+    return ERes {.pos = t.pos, .ty = ty, .err = ""};
 }
 
 ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
@@ -2204,7 +2205,7 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
             ERes end = check_expr(s, t2.pos, env, fs);
             if (end.err != "") { return end; }
             Tok close = lex_tok(s, end.pos);
-            ERes out = ERes { pos: close.pos, ty: base.ty, err: "" };
+            ERes out = ERes {.pos = close.pos, .ty = base.ty, .err = ""};
             return check_postfix(s, out, env, fs);
         }
         ERes idx = check_expr(s, t.pos, env, fs);
@@ -2214,23 +2215,23 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
         if (is_str_fixed(base.ty) || is_bytes_fixed(base.ty)) {
             if (!is_int_ty(idx.ty)) {
                 Str msg = "fixed string/bytes index must be numeric, found " + idx.ty;
-                return ERes { pos: close.pos, ty: "", err: msg };
+                return ERes {.pos = close.pos, .ty = "", .err = msg};
             }
-            ERes out = ERes { pos: close.pos, ty: "Int", err: "" };
+            ERes out = ERes {.pos = close.pos, .ty = "Int", .err = ""};
             return check_postfix(s, out, env, fs);
         }
         // Fixed-capacity list: xs[i] -> T.
         if (is_list_fixed(base.ty)) {
             if (!is_int_ty(idx.ty)) {
                 Str msg = "fixed list index must be numeric, found " + idx.ty;
-                return ERes { pos: close.pos, ty: "", err: msg };
+                return ERes {.pos = close.pos, .ty = "", .err = msg};
             }
-            ERes out = ERes { pos: close.pos, ty: fixed_elem(base.ty), err: "" };
+            ERes out = ERes {.pos = close.pos, .ty = fixed_elem(base.ty), .err = ""};
             return check_postfix(s, out, env, fs);
         }
         if (is_list_type(base.ty)) {
             Str elem = inner_of(base.ty);
-            ERes out = ERes { pos: close.pos, ty: elem, err: "" };
+            ERes out = ERes {.pos = close.pos, .ty = elem, .err = ""};
             return check_postfix(s, out, env, fs);
         }
         if (is_map_type(base.ty)) {
@@ -2238,15 +2239,15 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
             Str vt = map_val_type(base.ty);
             if (idx.ty != kt) {
                 Str msg = "map index key mismatch: map has key " + kt + ", found " + idx.ty;
-                return ERes { pos: close.pos, ty: "", err: msg };
+                return ERes {.pos = close.pos, .ty = "", .err = msg};
             }
             // Map index returns Option(value)
             Str opt = "Option(" + vt + ")";
-            ERes out = ERes { pos: close.pos, ty: opt, err: "" };
+            ERes out = ERes {.pos = close.pos, .ty = opt, .err = ""};
             return check_postfix(s, out, env, fs);
         }
         Str msg = "cannot index " + base.ty;
-        return ERes { pos: close.pos, ty: "", err: msg };
+        return ERes {.pos = close.pos, .ty = "", .err = msg};
     }
     if (t.text == ".") {
         Tok f = lex_tok(s, t.pos);
@@ -2255,16 +2256,16 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
             if (f.text == "len") {
                 Tok close = lex_tok(s, p.pos);
                 if (close.text != ")") {
-                    return ERes { pos: close.pos, ty: "", err: ".len() takes no arguments" };
+                    return ERes {.pos = close.pos, .ty = "", .err = ".len() takes no arguments"};
                 }
-                ERes out = ERes { pos: close.pos, ty: "Int", err: "" };
+                ERes out = ERes {.pos = close.pos, .ty = "Int", .err = ""};
                 return check_postfix(s, out, env, fs);
             }
             if (f.text == "concat") {
                 ERes arg = check_expr(s, p.pos, env, fs);
                 if (arg.err != "") { return arg; }
                 Tok close = lex_tok(s, arg.pos);
-                ERes out = ERes { pos: close.pos, ty: base.ty, err: "" };
+                ERes out = ERes {.pos = close.pos, .ty = base.ty, .err = ""};
                 return check_postfix(s, out, env, fs);
             }
             // ─── Map methods ────────────────────────────────────
@@ -2277,10 +2278,10 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                     Tok close = lex_tok(s, arg.pos);
                     if (arg.ty != kt) {
                         Str msg = ".get key type mismatch: map has key " + kt + ", found " + arg.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
                     Str opt = "Option(" + vt + ")";
-                    ERes out = ERes { pos: close.pos, ty: opt, err: "" };
+                    ERes out = ERes {.pos = close.pos, .ty = opt, .err = ""};
                     return check_postfix(s, out, env, fs);
                 }
                 if (f.text == "insert") {
@@ -2288,20 +2289,20 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                     if (ka.err != "") { return ka; }
                     Tok cm = lex_tok(s, ka.pos);
                     if (cm.text != ",") {
-                        return ERes { pos: cm.pos, ty: "", err: ".insert expects 2 args" };
+                        return ERes {.pos = cm.pos, .ty = "", .err = ".insert expects 2 args"};
                     }
                     ERes va = check_expr(s, cm.pos, env, fs);
                     if (va.err != "") { return va; }
                     Tok close = lex_tok(s, va.pos);
                     if (ka.ty != kt) {
                         Str msg = ".insert key mismatch: map has key " + kt + ", found " + ka.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
                     if (va.ty != vt) {
                         Str msg = ".insert value mismatch: map has value " + vt + ", found " + va.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
-                    ERes out = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    ERes out = ERes {.pos = close.pos, .ty = base.ty, .err = ""};
                     return check_postfix(s, out, env, fs);
                 }
                 if (f.text == "remove") {
@@ -2310,9 +2311,9 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                     Tok close = lex_tok(s, arg.pos);
                     if (arg.ty != kt) {
                         Str msg = ".remove key mismatch: map has key " + kt + ", found " + arg.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
-                    ERes out = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    ERes out = ERes {.pos = close.pos, .ty = base.ty, .err = ""};
                     return check_postfix(s, out, env, fs);
                 }
                 if (f.text == "contains") {
@@ -2321,31 +2322,31 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                     Tok close = lex_tok(s, arg.pos);
                     if (arg.ty != kt) {
                         Str msg = ".contains key mismatch: map has key " + kt + ", found " + arg.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
-                    ERes out = ERes { pos: close.pos, ty: "Bool", err: "" };
+                    ERes out = ERes {.pos = close.pos, .ty = "Bool", .err = ""};
                     return check_postfix(s, out, env, fs);
                 }
                 if (f.text == "keys") {
                     Tok close = lex_tok(s, p.pos);
                     if (close.text != ")") {
-                        return ERes { pos: close.pos, ty: "", err: ".keys() takes no arguments" };
+                        return ERes {.pos = close.pos, .ty = "", .err = ".keys() takes no arguments"};
                     }
                     Str out = "List(" + kt + ")";
-                    ERes o = ERes { pos: close.pos, ty: out, err: "" };
+                    ERes o = ERes {.pos = close.pos, .ty = out, .err = ""};
                     return check_postfix(s, o, env, fs);
                 }
                 if (f.text == "values") {
                     Tok close = lex_tok(s, p.pos);
                     if (close.text != ")") {
-                        return ERes { pos: close.pos, ty: "", err: ".values() takes no arguments" };
+                        return ERes {.pos = close.pos, .ty = "", .err = ".values() takes no arguments"};
                     }
                     Str out = "List(" + vt + ")";
-                    ERes o = ERes { pos: close.pos, ty: out, err: "" };
+                    ERes o = ERes {.pos = close.pos, .ty = out, .err = ""};
                     return check_postfix(s, o, env, fs);
                 }
                 Str msg = "unsupported method " + f.text + " on Map(" + kt + ", " + vt + ")";
-                return ERes { pos: p.pos, ty: "", err: msg };
+                return ERes {.pos = p.pos, .ty = "", .err = msg};
             }
             // ─── Set methods ────────────────────────────────────
             if (is_set_type(base.ty)) {
@@ -2356,9 +2357,9 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                     Tok close = lex_tok(s, arg.pos);
                     if (arg.ty != et) {
                         Str msg = ".contains type mismatch: set has element " + et + ", found " + arg.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
-                    ERes out = ERes { pos: close.pos, ty: "Bool", err: "" };
+                    ERes out = ERes {.pos = close.pos, .ty = "Bool", .err = ""};
                     return check_postfix(s, out, env, fs);
                 }
                 if (f.text == "insert") {
@@ -2367,9 +2368,9 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                     Tok close = lex_tok(s, arg.pos);
                     if (arg.ty != et) {
                         Str msg = ".insert type mismatch: set has element " + et + ", found " + arg.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
-                    ERes o = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    ERes o = ERes {.pos = close.pos, .ty = base.ty, .err = ""};
                     return check_postfix(s, o, env, fs);
                 }
                 if (f.text == "remove") {
@@ -2378,9 +2379,9 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                     Tok close = lex_tok(s, arg.pos);
                     if (arg.ty != et) {
                         Str msg = ".remove type mismatch: set has element " + et + ", found " + arg.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
-                    ERes o = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    ERes o = ERes {.pos = close.pos, .ty = base.ty, .err = ""};
                     return check_postfix(s, o, env, fs);
                 }
                 if (f.text == "union") {
@@ -2389,9 +2390,9 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                     Tok close = lex_tok(s, arg.pos);
                     if (arg.ty != base.ty) {
                         Str msg = ".union type mismatch: expected " + base.ty + ", found " + arg.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
-                    ERes o = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    ERes o = ERes {.pos = close.pos, .ty = base.ty, .err = ""};
                     return check_postfix(s, o, env, fs);
                 }
                 if (f.text == "difference") {
@@ -2400,9 +2401,9 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                     Tok close = lex_tok(s, arg.pos);
                     if (arg.ty != base.ty) {
                         Str msg = ".difference type mismatch: expected " + base.ty + ", found " + arg.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
-                    ERes o = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    ERes o = ERes {.pos = close.pos, .ty = base.ty, .err = ""};
                     return check_postfix(s, o, env, fs);
                 }
                 if (f.text == "intersection") {
@@ -2411,32 +2412,32 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                     Tok close = lex_tok(s, arg.pos);
                     if (arg.ty != base.ty) {
                         Str msg = ".intersection type mismatch: expected " + base.ty + ", found " + arg.ty;
-                        return ERes { pos: close.pos, ty: "", err: msg };
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
                     }
-                    ERes o = ERes { pos: close.pos, ty: base.ty, err: "" };
+                    ERes o = ERes {.pos = close.pos, .ty = base.ty, .err = ""};
                     return check_postfix(s, o, env, fs);
                 }
                 if (f.text == "to_list") {
                     Tok close = lex_tok(s, p.pos);
                     if (close.text != ")") {
-                        return ERes { pos: close.pos, ty: "", err: ".to_list() takes no arguments" };
+                        return ERes {.pos = close.pos, .ty = "", .err = ".to_list() takes no arguments"};
                     }
                     Str out = "List(" + et + ")";
-                    ERes o = ERes { pos: close.pos, ty: out, err: "" };
+                    ERes o = ERes {.pos = close.pos, .ty = out, .err = ""};
                     return check_postfix(s, o, env, fs);
                 }
                 Str msg = "unsupported method " + f.text + " on Set(" + et + ")";
-                return ERes { pos: p.pos, ty: "", err: msg };
+                return ERes {.pos = p.pos, .ty = "", .err = msg};
             }
             Str msg = "unsupported method " + f.text;
-            return ERes { pos: p.pos, ty: "", err: msg };
+            return ERes {.pos = p.pos, .ty = "", .err = msg};
         }
         Str fty = struct_field_type(fs, base.ty, f.text);
         if (fty == "") {
             Str msg = "field " + f.text + " not found in " + base.ty;
-            return ERes { pos: f.pos, ty: "", err: msg };
+            return ERes {.pos = f.pos, .ty = "", .err = msg};
         }
-        ERes out = ERes { pos: f.pos, ty: fty, err: "" };
+        ERes out = ERes {.pos = f.pos, .ty = fty, .err = ""};
         return check_postfix(s, out, env, fs);
     }
     return base;
@@ -2517,54 +2518,54 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         Str ty = if (adopt) { num_norm(exp) } else {
             if (small) { "Int" } else { lty }
         };
-        return ERes { pos: t.pos, ty: ty, err: "" };
+        return ERes {.pos = t.pos, .ty = ty, .err = ""};
     }
     if (t.kind == "float") {
-        return ERes { pos: t.pos, ty: "Float", err: "" };
+        return ERes {.pos = t.pos, .ty = "Float", .err = ""};
     }
     if (t.kind == "str") {
         if (is_str_fixed(exp)) {
             Int cap = fixed_cap(exp);
             Int len = str_literal_chars(t.text);
-            if (len <= cap) { return ERes { pos: t.pos, ty: exp, err: "" }; }
+            if (len <= cap) { return ERes {.pos = t.pos, .ty = exp, .err = ""}; }
             Str msg = "string literal length " + IntToString(len) + " exceeds Str(" + IntToString(cap) + ") capacity";
-            return ERes { pos: t.pos, ty: "", err: msg };
+            return ERes {.pos = t.pos, .ty = "", .err = msg};
         }
-        return ERes { pos: t.pos, ty: "Str", err: "" };
+        return ERes {.pos = t.pos, .ty = "Str", .err = ""};
     }
     if (t.kind == "raw") {
         if (is_str_fixed(exp)) {
             Int cap = fixed_cap(exp);
             Int len = str_literal_chars(t.text);
-            if (len <= cap) { return ERes { pos: t.pos, ty: exp, err: "" }; }
+            if (len <= cap) { return ERes {.pos = t.pos, .ty = exp, .err = ""}; }
             Str msg = "raw string length " + IntToString(len) + " exceeds Str(" + IntToString(cap) + ") capacity";
-            return ERes { pos: t.pos, ty: "", err: msg };
+            return ERes {.pos = t.pos, .ty = "", .err = msg};
         }
-        return ERes { pos: t.pos, ty: "Str", err: "" };
+        return ERes {.pos = t.pos, .ty = "Str", .err = ""};
     }
     if (t.kind == "fstring") {
         Str herr = fstring_holes_err(s, t, env, fs);
-        if (herr != "") { return ERes { pos: t.pos, ty: "", err: herr }; }
-        return ERes { pos: t.pos, ty: "Str", err: "" };
+        if (herr != "") { return ERes {.pos = t.pos, .ty = "", .err = herr}; }
+        return ERes {.pos = t.pos, .ty = "Str", .err = ""};
     }
     if (t.kind == "char") {
-        return ERes { pos: t.pos, ty: "Str", err: "" };
+        return ERes {.pos = t.pos, .ty = "Str", .err = ""};
     }
     if (t.kind == "bytes") {
         if (is_bytes_fixed(exp)) {
             Int cap = fixed_cap(exp);
             Int len = bytes_literal_len(t.text);
-            if (len <= cap) { return ERes { pos: t.pos, ty: exp, err: "" }; }
+            if (len <= cap) { return ERes {.pos = t.pos, .ty = exp, .err = ""}; }
             Str msg = "byte string length " + IntToString(len) + " exceeds Bytes(" + IntToString(cap) + ") capacity";
-            return ERes { pos: t.pos, ty: "", err: msg };
+            return ERes {.pos = t.pos, .ty = "", .err = msg};
         }
-        return ERes { pos: t.pos, ty: "Bytes", err: "" };
+        return ERes {.pos = t.pos, .ty = "Bytes", .err = ""};
     }
     if (t.text == "true") {
-        return ERes { pos: t.pos, ty: "Bool", err: "" };
+        return ERes {.pos = t.pos, .ty = "Bool", .err = ""};
     }
     if (t.text == "false") {
-        return ERes { pos: t.pos, ty: "Bool", err: "" };
+        return ERes {.pos = t.pos, .ty = "Bool", .err = ""};
     }
     if (t.text == "if") {
         Tok open = lex_tok(s, t.pos);
@@ -2572,7 +2573,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         if (cond.err != "") { return cond; }
         if (cond.ty != "Bool") {
             Str msg = "if condition must be Bool, got " + cond.ty;
-            return ERes { pos: cond.pos, ty: "", err: msg };
+            return ERes {.pos = cond.pos, .ty = "", .err = msg};
         }
         Tok cpar = lex_tok(s, cond.pos);
         Tok brace = lex_tok(s, cpar.pos);
@@ -2580,11 +2581,11 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         if (then_e.err != "") { return then_e; }
         Tok close = lex_tok(s, then_e.pos);
         if (close.text != "}") {
-            return ERes { pos: close.pos, ty: "", err: "expected } in if expression" };
+            return ERes {.pos = close.pos, .ty = "", .err = "expected } in if expression"};
         }
         Tok kw = lex_tok(s, close.pos);
         if (kw.text != "else") {
-            return ERes { pos: kw.pos, ty: "", err: "if expression requires else" };
+            return ERes {.pos = kw.pos, .ty = "", .err = "if expression requires else"};
         }
         // `else if (...) { ... }` chains: recurse into the primary checker
         // starting at the `if` keyword instead of assuming a bare `{`
@@ -2598,19 +2599,19 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
             if (else_e2.err != "") { return else_e2; }
             if (then_e.ty != else_e2.ty) {
                 Str msg2 = "if branches differ: " + then_e.ty + " vs " + else_e2.ty;
-                return ERes { pos: else_e2.pos, ty: "", err: msg2 };
+                return ERes {.pos = else_e2.pos, .ty = "", .err = msg2};
             }
-            return ERes { pos: else_e2.pos, ty: then_e.ty, err: "" };
+            return ERes {.pos = else_e2.pos, .ty = then_e.ty, .err = ""};
         }
         Tok brace2 = lex_tok(s, kw.pos);
         ERes else_e = check_expr_block(s, brace2.pos, env, fs);
         if (else_e.err != "") { return else_e; }
         if (then_e.ty != else_e.ty) {
             Str msg = "if branches differ: " + then_e.ty + " vs " + else_e.ty;
-            return ERes { pos: else_e.pos, ty: "", err: msg };
+            return ERes {.pos = else_e.pos, .ty = "", .err = msg};
         }
         Tok close2 = lex_tok(s, else_e.pos);
-        return ERes { pos: close2.pos, ty: then_e.ty, err: "" };
+        return ERes {.pos = close2.pos, .ty = then_e.ty, .err = ""};
     }
     if (t.text == "match") {
         return check_match(s, t.pos, env, fs);
@@ -2619,7 +2620,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "(") {
             Bool is_ctor = t.text == "Ok" || t.text == "Err" || t.text == "Some" || t.text == "None";
-            Funcs fs2 = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: fs.growable };
+            Funcs fs2 = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
             return check_call(s, t2.pos, t.text, env, fs2);
         }
         if (t2.text == "{") {
@@ -2628,7 +2629,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         // Bare `None` (no parens): a unit Option variant with no payload.
         // The element type is a hole adopted at binding/return/match sites.
         if (t.text == "None" && t2.text != ".") {
-            return ERes { pos: t.pos, ty: "Option(_)", err: "" };
+            return ERes {.pos = t.pos, .ty = "Option(_)", .err = ""};
         }
         if (t2.text == ".") {
             Bool is_prov0 = t.text == "environment" || t.text == "filesystem" || t.text == "args" || t.text == "process";
@@ -2641,55 +2642,55 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
                     Tok p0 = lex_tok(s, p.pos);
                     if (p0.text == ")") {
                         if (t.text == "args") {
-                            if (m.text == "count") { return ERes { pos: p0.pos, ty: "Int", err: "" }; }
+                            if (m.text == "count") { return ERes {.pos = p0.pos, .ty = "Int", .err = ""}; }
                         }
                         if (t.text == "git") {
-                            if (m.text == "branch") { return ERes { pos: p0.pos, ty: "Str", err: "" }; }
+                            if (m.text == "branch") { return ERes {.pos = p0.pos, .ty = "Str", .err = ""}; }
                         }
                         Str msg0 = "unknown provider method " + t.text + "." + m.text;
-                        return ERes { pos: p0.pos, ty: "", err: msg0 };
+                        return ERes {.pos = p0.pos, .ty = "", .err = msg0};
                     }
                     ARes a = collect_args(s, p.pos, "", 0, env, fs);
                     if (a.err != "") {
-                        return ERes { pos: a.pos, ty: "", err: a.err };
+                        return ERes {.pos = a.pos, .ty = "", .err = a.err};
                     }
                     if (t.text == "environment") {
-                        if (m.text == "get") { return ERes { pos: a.pos, ty: "Str", err: "" }; }
+                        if (m.text == "get") { return ERes {.pos = a.pos, .ty = "Str", .err = ""}; }
                     }
                     if (t.text == "filesystem") {
-                        if (m.text == "read_all") { return ERes { pos: a.pos, ty: "Str", err: "" }; }
-                        if (m.text == "write_all") { return ERes { pos: a.pos, ty: "Bool", err: "" }; }
-                        if (m.text == "open") { return ERes { pos: a.pos, ty: "File", err: "" }; }
-                        if (m.text == "read_handle") { return ERes { pos: a.pos, ty: "Str", err: "" }; }
-                        if (m.text == "close") { return ERes { pos: a.pos, ty: "Bool", err: "" }; }
-                        if (m.text == "exists") { return ERes { pos: a.pos, ty: "Bool", err: "" }; }
+                        if (m.text == "read_all") { return ERes {.pos = a.pos, .ty = "Str", .err = ""}; }
+                        if (m.text == "write_all") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
+                        if (m.text == "open") { return ERes {.pos = a.pos, .ty = "File", .err = ""}; }
+                        if (m.text == "read_handle") { return ERes {.pos = a.pos, .ty = "Str", .err = ""}; }
+                        if (m.text == "close") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
+                        if (m.text == "exists") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                     }
                     if (t.text == "args") {
-                        if (m.text == "count") { return ERes { pos: a.pos, ty: "Int", err: "" }; }
-                        if (m.text == "get") { return ERes { pos: a.pos, ty: "Str", err: "" }; }
+                        if (m.text == "count") { return ERes {.pos = a.pos, .ty = "Int", .err = ""}; }
+                        if (m.text == "get") { return ERes {.pos = a.pos, .ty = "Str", .err = ""}; }
                     }
                     if (t.text == "process") {
-                        if (m.text == "run") { return ERes { pos: a.pos, ty: "Int", err: "" }; }
+                        if (m.text == "run") { return ERes {.pos = a.pos, .ty = "Int", .err = ""}; }
                     }
                     Str msg = "unknown provider method " + t.text + "." + m.text;
-                    return ERes { pos: a.pos, ty: "", err: msg };
+                    return ERes {.pos = a.pos, .ty = "", .err = msg};
                 }
                 Str msg2 = "expected ( after provider method";
-                return ERes { pos: m.pos, ty: "", err: msg2 };
+                return ERes {.pos = m.pos, .ty = "", .err = msg2};
             }
         }
         Str ty = env_lookup(env, t.text);
         if (ty == "") {
             Str msg = "undefined variable " + t.text;
-            return ERes { pos: t.pos, ty: "", err: msg };
+            return ERes {.pos = t.pos, .ty = "", .err = msg};
         }
-        return ERes { pos: t.pos, ty: ty, err: "" };
+        return ERes {.pos = t.pos, .ty = ty, .err = ""};
     }
     if (t.text == "(") {
         ERes e = check_expr(s, t.pos, env, fs);
         if (e.err != "") { return e; }
         Tok close = lex_tok(s, e.pos);
-        return ERes { pos: close.pos, ty: e.ty, err: "" };
+        return ERes {.pos = close.pos, .ty = e.ty, .err = ""};
     }
     if (t.text == "[") {
         return check_list_lit(s, t.pos, env, fs, exp);
@@ -2698,7 +2699,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         return check_map_or_set_lit(s, t.pos, env, fs, exp);
     }
     Str msg = "unexpected token " + t.text;
-    return ERes { pos: t.pos, ty: "", err: msg };
+    return ERes {.pos = t.pos, .ty = "", .err = msg};
 }
 
 // Known base type names usable in a cast `(Type) expr`.
@@ -2750,13 +2751,13 @@ ERes check_unary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
                     if (inner.err != "") { return inner; }
                     Bool bothint = is_int_ty(pt.ty) && is_int_ty(inner.ty);
                     if (bothint || pt.ty == inner.ty) {
-                        return ERes { pos: inner.pos, ty: pt.ty, err: "" };
+                        return ERes {.pos = inner.pos, .ty = pt.ty, .err = ""};
                     }
                     if (is_fixed_cast_pair(inner.ty, pt.ty)) {
-                        return ERes { pos: inner.pos, ty: pt.ty, err: "" };
+                        return ERes {.pos = inner.pos, .ty = pt.ty, .err = ""};
                     }
                     Str msg = "cast from " + inner.ty + " to " + pt.ty + " not supported";
-                    return ERes { pos: inner.pos, ty: "", err: msg };
+                    return ERes {.pos = inner.pos, .ty = "", .err = msg};
                 }
             }
         }
@@ -2765,28 +2766,28 @@ ERes check_unary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         ERes inner = check_unary(s, t.pos, env, fs);
         if (inner.err != "") { return inner; }
         if (is_num(inner.ty)) {
-            return ERes { pos: inner.pos, ty: inner.ty, err: "" };
+            return ERes {.pos = inner.pos, .ty = inner.ty, .err = ""};
         }
         Str msg = "unary - requires a number, got " + inner.ty;
-        return ERes { pos: inner.pos, ty: "", err: msg };
+        return ERes {.pos = inner.pos, .ty = "", .err = msg};
     }
     if (t.text == "+") {
         ERes inner = check_unary(s, t.pos, env, fs);
         if (inner.err != "") { return inner; }
         if (is_num(inner.ty)) {
-            return ERes { pos: inner.pos, ty: inner.ty, err: "" };
+            return ERes {.pos = inner.pos, .ty = inner.ty, .err = ""};
         }
         Str msg = "unary + requires a number, got " + inner.ty;
-        return ERes { pos: inner.pos, ty: "", err: msg };
+        return ERes {.pos = inner.pos, .ty = "", .err = msg};
     }
     if (t.text == "!") {
         ERes inner = check_unary(s, t.pos, env, fs);
         if (inner.err != "") { return inner; }
         if (inner.ty == "Bool") {
-            return ERes { pos: inner.pos, ty: "Bool", err: "" };
+            return ERes {.pos = inner.pos, .ty = "Bool", .err = ""};
         }
         Str msg = "! requires Bool, got " + inner.ty;
-        return ERes { pos: inner.pos, ty: "", err: msg };
+        return ERes {.pos = inner.pos, .ty = "", .err = msg};
     }
     ERes p = check_primary_e(s, pos, env, fs, exp);
     if (p.err != "") { return p; }
@@ -2826,13 +2827,13 @@ ERes check_bin_rest(Str s, ERes lhs, Int min_prec, List(Str) env, Funcs fs) {
         Bool is_opt = is_opt_ty(lhs.ty);
         Bool is_res = is_res_ty(lhs.ty);
         if (!is_opt && !is_res) {
-            return ERes { pos: t.pos, ty: "", err: "`?` requires an Option or Result, found " + lhs.ty };
+            return ERes {.pos = t.pos, .ty = "", .err = "`?` requires an Option or Result, found " + lhs.ty};
         }
         Str pt = if (is_opt) { opt_elem(lhs.ty) } else { res_elem_ok(lhs.ty) };
         if (pt == "_") {
-            return ERes { pos: t.pos, ty: "", err: if (is_opt_ty(lhs.ty)) { "cannot unwrap Option(_) with `?`" } else { "cannot unwrap Result(_, E) with `?`" } };
+            return ERes {.pos = t.pos, .ty = "", .err = if (is_opt_ty(lhs.ty)) { "cannot unwrap Option(_) with `?`" } else { "cannot unwrap Result(_, E) with `?`" }};
         }
-        ERes u = ERes { pos: t.pos, ty: pt, err: "" };
+        ERes u = ERes {.pos = t.pos, .ty = pt, .err = ""};
         return check_bin_rest(s, u, min_prec, env, fs);
     }
     if (op == "else") {
@@ -2842,11 +2843,11 @@ ERes check_bin_rest(Str s, ERes lhs, Int min_prec, List(Str) env, Funcs fs) {
         Bool is_opt = is_opt_ty(lhs.ty);
         Bool is_res = is_res_ty(lhs.ty);
         if (!is_opt && !is_res) {
-            return ERes { pos: t.pos, ty: "", err: "`value else` requires an Option or Result, found " + lhs.ty };
+            return ERes {.pos = t.pos, .ty = "", .err = "`value else` requires an Option or Result, found " + lhs.ty};
         }
         Str pt = if (is_opt) { opt_elem(lhs.ty) } else { res_elem_ok(lhs.ty) };
         if (pt == "_") {
-            return ERes { pos: t.pos, ty: "", err: if (is_opt_ty(lhs.ty)) { "cannot unwrap Option(_) with else" } else { "cannot unwrap Result(_, E) with else" } };
+            return ERes {.pos = t.pos, .ty = "", .err = if (is_opt_ty(lhs.ty)) { "cannot unwrap Option(_) with else" } else { "cannot unwrap Result(_, E) with else" }};
         }
         ERes f = ck_else_fallback(s, t.pos, pt, env, fs);
         if (f.err != "") { return f; }
@@ -2865,9 +2866,9 @@ ERes check_bin_rest(Str s, ERes lhs, Int min_prec, List(Str) env, Funcs fs) {
     Str bt = bin_type(op, lhs.ty, rhs2.ty);
     if (bt == "ERR") {
         Str msg = "operator " + op + " between " + lhs.ty + " and " + rhs2.ty;
-        return ERes { pos: rhs2.pos, ty: "", err: msg };
+        return ERes {.pos = rhs2.pos, .ty = "", .err = msg};
     }
-    ERes r = ERes { pos: rhs2.pos, ty: bt, err: "" };
+    ERes r = ERes {.pos = rhs2.pos, .ty = bt, .err = ""};
     return check_bin_rest(s, r, min_prec, env, fs);
 }
 
@@ -2877,16 +2878,16 @@ ERes ck_else_fallback(Str s, Int pos, Str pt, List(Str) env, Funcs fs) {
     // pos is the END position of the 'else' token; lex the next token (the '{')
     Tok open = lex_tok(s, pos);
     if (open.text != "{") { 
-        return ERes { pos: open.pos, ty: "", err: "expected { after else" }; }
+        return ERes {.pos = open.pos, .ty = "", .err = "expected { after else"}; }
     ERes fv = check_expr_block(s, lex_tok(s, open.pos).pos, env, fs);
     if (fv.err != "") { return fv; }
     Tok close = lex_tok(s, fv.pos);
-    if (close.text != "}") { return ERes { pos: close.pos, ty: "", err: "expected } at end of else block" }; }
+    if (close.text != "}") { return ERes {.pos = close.pos, .ty = "", .err = "expected } at end of else block"}; }
     if (num_norm(fv.ty) != num_norm(pt)) {
         Str msg = "`else` block yields " + fv.ty + ", need payload " + pt;
-        return ERes { pos: fv.pos, ty: "", err: msg };
+        return ERes {.pos = fv.pos, .ty = "", .err = msg};
     }
-    return ERes { pos: close.pos, ty: pt, err: "" };
+    return ERes {.pos = close.pos, .ty = pt, .err = ""};
 }
 
 ERes check_expr(Str s, Int pos, List(Str) env, Funcs fs) {
@@ -2915,7 +2916,7 @@ ERes check_expr_block(Str s, Int pos, List(Str) env, Funcs fs) {
             Tok t3 = lex_tok(s, t2.pos);
             if (t3.text == "=") {
                 SRes b = check_bind(s, t3.pos, t.text, t2.text, env, fs, "");
-                if (b.err != "") { return ERes { pos: b.pos, ty: "", err: b.err }; }
+                if (b.err != "") { return ERes {.pos = b.pos, .ty = "", .err = b.err}; }
                 return check_expr_block(s, b.pos, b.env, fs);
             }
         }
@@ -2926,7 +2927,7 @@ ERes check_expr_block(Str s, Int pos, List(Str) env, Funcs fs) {
                 Tok eq = lex_tok(s, name.pos);
                 if (eq.text == "=" && name.kind == "ident") {
                     SRes b = check_bind(s, eq.pos, ty.ty, name.text, env, fs, "");
-                    if (b.err != "") { return ERes { pos: b.pos, ty: "", err: b.err }; }
+                    if (b.err != "") { return ERes {.pos = b.pos, .ty = "", .err = b.err}; }
                     return check_expr_block(s, b.pos, b.env, fs);
                 }
             }
@@ -2941,7 +2942,7 @@ ERes check_expr_block(Str s, Int pos, List(Str) env, Funcs fs) {
                     if (eq.text == "=" && name.kind == "ident") {
                         Str ctext = str_slice(s, t2.pos, close.pos - 1);
                         SRes b = check_bind_ref(s, eq.pos, ty.ty, ctext, name.text, env, fs, "");
-                        if (b.err != "") { return ERes { pos: b.pos, ty: "", err: b.err }; }
+                        if (b.err != "") { return ERes {.pos = b.pos, .ty = "", .err = b.err}; }
                         return check_expr_block(s, b.pos, b.env, fs);
                     }
                 }
@@ -2953,16 +2954,16 @@ ERes check_expr_block(Str s, Int pos, List(Str) env, Funcs fs) {
 
 // ─── Statement checking ─────────────────────────────────────────
 
-type SRes = { pos: Int, err: Str, env: List(Str) };
+type SRes = { Int pos; Str err; List(Str) env; };
 
 SRes check_block_rest(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
     Tok t = lex_tok(s, pos);
     if (t.text == "}") {
-        return SRes { pos: t.pos, err: "", env: env };
+        return SRes {.pos = t.pos, .err = "", .env = env};
     }
     SRes st = check_stmt(s, pos, env, fs, ret);
     if (st.err != "") {
-        return SRes { pos: st.pos, err: st.err, env: env };
+        return SRes {.pos = st.pos, .err = st.err, .env = env};
     }
     return check_block_rest(s, st.pos, st.env, fs, ret);
 }
@@ -2971,7 +2972,7 @@ SRes check_block(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
     Tok t = lex_tok(s, pos);
     Tok end = lex_tok(s, t.pos);
     if (end.text == "}") {
-        return SRes { pos: end.pos, err: "", env: env };
+        return SRes {.pos = end.pos, .err = "", .env = env};
     }
     return check_block_rest(s, t.pos, env, fs, ret);
 }
@@ -2980,11 +2981,11 @@ SRes check_if(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
     Tok open = lex_tok(s, pos);
     ERes cond = check_expr(s, open.pos, env, fs);
     if (cond.err != "") {
-        return SRes { pos: cond.pos, err: cond.err, env: env };
+        return SRes {.pos = cond.pos, .err = cond.err, .env = env};
     }
     if (cond.ty != "Bool") {
         Str msg = "if condition must be Bool, got " + cond.ty;
-        return SRes { pos: cond.pos, err: msg, env: env };
+        return SRes {.pos = cond.pos, .err = msg, .env = env};
     }
     Tok close = lex_tok(s, cond.pos);
     SRes then = check_stmt(s, close.pos, env, fs, ret);
@@ -2993,25 +2994,25 @@ SRes check_if(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
     if (t.text == "else") {
         SRes other = check_stmt(s, t.pos, env, fs, ret);
         if (other.err != "") { return other; }
-        return SRes { pos: other.pos, err: "", env: env };
+        return SRes {.pos = other.pos, .err = "", .env = env};
     }
-    return SRes { pos: then.pos, err: "", env: env };
+    return SRes {.pos = then.pos, .err = "", .env = env};
 }
 
 SRes check_while(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
     Tok open = lex_tok(s, pos);
     ERes cond = check_expr(s, open.pos, env, fs);
     if (cond.err != "") {
-        return SRes { pos: cond.pos, err: cond.err, env: env };
+        return SRes {.pos = cond.pos, .err = cond.err, .env = env};
     }
     if (cond.ty != "Bool") {
         Str msg = "while condition must be Bool, got " + cond.ty;
-        return SRes { pos: cond.pos, err: msg, env: env };
+        return SRes {.pos = cond.pos, .err = msg, .env = env};
     }
     Tok close = lex_tok(s, cond.pos);
     SRes body = check_stmt(s, close.pos, env, fs, ret);
     if (body.err != "") { return body; }
-    return SRes { pos: body.pos, err: "", env: env };
+    return SRes {.pos = body.pos, .err = "", .env = env};
 }
 
 SRes check_for(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
@@ -3020,24 +3021,24 @@ SRes check_for(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
     Tok nm = lex_tok(s, ty.pos);
     Tok in_kw = lex_tok(s, nm.pos);
     if (in_kw.text != "in") {
-        return SRes { pos: in_kw.pos, err: "expected `in` in for statement", env: env };
+        return SRes {.pos = in_kw.pos, .err = "expected `in` in for statement", .env = env};
     }
     ERes col = check_expr(s, in_kw.pos, env, fs);
     if (col.err != "") {
-        return SRes { pos: col.pos, err: col.err, env: env };
+        return SRes {.pos = col.pos, .err = col.err, .env = env};
     }
     Bool is_range = col.ty == "Range";
     Bool is_list = is_list_type(col.ty);
     Bool iterable = is_range || is_list;
     if (!iterable) {
         Str msg = "for-in over non-iterable " + col.ty;
-        return SRes { pos: col.pos, err: msg, env: env };
+        return SRes {.pos = col.pos, .err = msg, .env = env};
     }
     Tok close = lex_tok(s, col.pos);
     List(Str) env2 = env_add(env, nm.text, ty.text);
     SRes body = check_stmt(s, close.pos, env2, fs, ret);
     if (body.err != "") { return body; }
-    return SRes { pos: body.pos, err: "", env: env };
+    return SRes {.pos = body.pos, .err = "", .env = env};
 }
 
 // match expression over Option values (spec §13): `match v {
@@ -3048,11 +3049,11 @@ ERes check_match(Str s, Int pos, List(Str) env, Funcs fs) {
     Bool optsc = sc.ty == "Option(_)" || str_has_prefix(sc.ty, "Option(");
     if (!optsc) {
         Str msg = "match scrutinee must be an Option, got " + sc.ty;
-        return ERes { pos: sc.pos, ty: "", err: msg };
+        return ERes {.pos = sc.pos, .ty = "", .err = msg};
     }
     Tok brace = lex_tok(s, sc.pos);
     if (brace.text != "{") {
-        return ERes { pos: brace.pos, ty: "", err: "expected { in match expression" };
+        return ERes {.pos = brace.pos, .ty = "", .err = "expected { in match expression"};
     }
     return ck_match_arms(s, brace.pos, env, fs, sc.ty, opt_elem(sc.ty), "");
 }
@@ -3066,8 +3067,8 @@ ERes check_match_sc(Str s, Int pos, List(Str) env, Funcs fs) {
         ERes e = check_expr(s, t.pos, env, fs);
         if (e.err != "") { return e; }
         Tok close = lex_tok(s, e.pos);
-        if (close.text != ")") { return ERes { pos: close.pos, ty: "", err: "expected ) in match scrutinee" }; }
-        return ERes { pos: close.pos, ty: e.ty, err: "" };
+        if (close.text != ")") { return ERes {.pos = close.pos, .ty = "", .err = "expected ) in match scrutinee"}; }
+        return ERes {.pos = close.pos, .ty = e.ty, .err = ""};
     }
     if (t.kind == "ident") {
         Tok t2 = lex_tok(s, t.pos);
@@ -3075,18 +3076,18 @@ ERes check_match_sc(Str s, Int pos, List(Str) env, Funcs fs) {
             return check_call(s, t2.pos, t.text, env, fs);
         }
         if (t.text == "None") {
-            return ERes { pos: t.pos, ty: "Option(_)", err: "" };
+            return ERes {.pos = t.pos, .ty = "Option(_)", .err = ""};
         }
         Str ty = env_lookup(env, t.text);
-        if (ty == "") { return ERes { pos: t.pos, ty: "", err: "undefined variable " + t.text }; }
-        return ERes { pos: t.pos, ty: ty, err: "" };
+        if (ty == "") { return ERes {.pos = t.pos, .ty = "", .err = "undefined variable " + t.text}; }
+        return ERes {.pos = t.pos, .ty = ty, .err = ""};
     }
-    if (t.text == "true" || t.text == "false") { return ERes { pos: t.pos, ty: "Bool", err: "" }; }
-    if (t.kind == "int") { return ERes { pos: t.pos, ty: "Int", err: "" }; }
-    if (t.kind == "float") { return ERes { pos: t.pos, ty: "Float", err: "" }; }
-    if (t.kind == "str" || t.kind == "raw" || t.kind == "fstring" || t.kind == "char") { return ERes { pos: t.pos, ty: "Str", err: "" }; }
+    if (t.text == "true" || t.text == "false") { return ERes {.pos = t.pos, .ty = "Bool", .err = ""}; }
+    if (t.kind == "int") { return ERes {.pos = t.pos, .ty = "Int", .err = ""}; }
+    if (t.kind == "float") { return ERes {.pos = t.pos, .ty = "Float", .err = ""}; }
+    if (t.kind == "str" || t.kind == "raw" || t.kind == "fstring" || t.kind == "char") { return ERes {.pos = t.pos, .ty = "Str", .err = ""}; }
     Str msg = "match scrutinee must be a primary expression";
-    return ERes { pos: t.pos, ty: "", err: msg };
+    return ERes {.pos = t.pos, .ty = "", .err = msg};
 }
 
 // Recursive match-arm walker; acc holds the merge type of bodies seen so far
@@ -3095,46 +3096,46 @@ ERes ck_match_arms(Str s, Int pos, List(Str) env, Funcs fs, Str aty, Str ety, St
     Tok a = lex_tok(s, pos);
     if (a.text == "}") {
         if (acc == "") {
-            return ERes { pos: a.pos, ty: "", err: "match requires at least one arm" };
+            return ERes {.pos = a.pos, .ty = "", .err = "match requires at least one arm"};
         }
-        return ERes { pos: a.pos, ty: acc, err: "" };
+        return ERes {.pos = a.pos, .ty = acc, .err = ""};
     }
     if (a.text == "Some") {
         Tok o1 = lex_tok(s, a.pos);
-        if (o1.text != "(") { return ERes { pos: o1.pos, ty: "", err: "expected ( in Some arm pattern" }; }
+        if (o1.text != "(") { return ERes {.pos = o1.pos, .ty = "", .err = "expected ( in Some arm pattern"}; }
         Tok nm = lex_tok(s, o1.pos);
         Tok o2 = lex_tok(s, nm.pos);
-        if (o2.text != ")") { return ERes { pos: o2.pos, ty: "", err: "expected ) after Some binding in match arm" }; }
+        if (o2.text != ")") { return ERes {.pos = o2.pos, .ty = "", .err = "expected ) after Some binding in match arm"}; }
         Tok ar = lex_tok(s, o2.pos);
-        if (ar.text != "=>") { return ERes { pos: ar.pos, ty: "", err: "expected => after Some arm pattern" }; }
+        if (ar.text != "=>") { return ERes {.pos = ar.pos, .ty = "", .err = "expected => after Some arm pattern"}; }
         List(Str) env2 = env_add(env, nm.text, ety);
         ERes body = check_expr(s, ar.pos, env2, fs);
         if (body.err != "") { return body; }
         Tok sep = lex_tok(s, body.pos);
-        if (sep.text != "," && sep.text != "}") { return ERes { pos: sep.pos, ty: "", err: "expected , or } after match arm" }; }
+        if (sep.text != "," && sep.text != "}") { return ERes {.pos = sep.pos, .ty = "", .err = "expected, or } after match arm"}; }
         if (acc != "" && num_norm(acc) != num_norm(body.ty)) {
             Str msg = "match arms disagree: " + acc + " vs " + body.ty;
-            return ERes { pos: body.pos, ty: "", err: msg };
+            return ERes {.pos = body.pos, .ty = "", .err = msg};
         }
-        if (sep.text == "}") { return ERes { pos: sep.pos, ty: body.ty, err: "" }; }
+        if (sep.text == "}") { return ERes {.pos = sep.pos, .ty = body.ty, .err = ""}; }
         return ck_match_arms(s, sep.pos, env, fs, aty, ety, body.ty);
     }
     if (a.text == "None") {
         Tok ar = lex_tok(s, a.pos);
-        if (ar.text != "=>") { return ERes { pos: ar.pos, ty: "", err: "expected => after None arm pattern" }; }
+        if (ar.text != "=>") { return ERes {.pos = ar.pos, .ty = "", .err = "expected => after None arm pattern"}; }
         ERes body = check_expr(s, ar.pos, env, fs);
         if (body.err != "") { return body; }
         Tok sep = lex_tok(s, body.pos);
-        if (sep.text != "," && sep.text != "}") { return ERes { pos: sep.pos, ty: "", err: "expected , or } after match arm" }; }
+        if (sep.text != "," && sep.text != "}") { return ERes {.pos = sep.pos, .ty = "", .err = "expected, or } after match arm"}; }
         if (acc != "" && num_norm(acc) != num_norm(body.ty)) {
             Str msg = "match arms disagree: " + acc + " vs " + body.ty;
-            return ERes { pos: body.pos, ty: "", err: msg };
+            return ERes {.pos = body.pos, .ty = "", .err = msg};
         }
-        if (sep.text == "}") { return ERes { pos: sep.pos, ty: body.ty, err: "" }; }
+        if (sep.text == "}") { return ERes {.pos = sep.pos, .ty = body.ty, .err = ""}; }
         return ck_match_arms(s, sep.pos, env, fs, aty, ety, body.ty);
     }
     Str msg = "match arm pattern must be Some(x) or None";
-    return ERes { pos: a.pos, ty: "", err: msg };
+    return ERes {.pos = a.pos, .ty = "", .err = msg};
 }
 
 // Full expression check with an expected type for literal adoption.
@@ -3151,14 +3152,14 @@ SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Funcs fs, Str r
 SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, Funcs fs, Str ret) {
     ERes v = check_expr_e(s, pos, env, fs, ty);
     if (v.err != "") {
-        return SRes { pos: v.pos, err: v.err, env: env };
+        return SRes {.pos = v.pos, .err = v.err, .env = env};
     }
     // Discharge constraint if the declared type is a constraint type.
     // NOTE: Constraint discharge in self-hosted driver is disabled due to
     // evaluator type system limitations (Int widening). The Rust pipeline
     // enforces constraints correctly. See §12.
     if (ctext != "") {
-        return SRes { pos: v.pos, err: "", env: env };
+        return SRes {.pos = v.pos, .err = "", .env = env};
     }
     // Type check using the base type (erase constraint).
     Str ety = ct_base_of(fs.ctn, fs.ctb, ty);
@@ -3191,12 +3192,12 @@ SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, 
         Bool bind_ok = if (intpair) { iok } else { false };
         if (!coerce && !bind_ok && !opt_ok && !res_bind_ok && !res_bind_accept) {
             Str msg = "binding " + name + ": expected " + ty + ", got " + v.ty;
-            return SRes { pos: v.pos, err: msg, env: env };
+            return SRes {.pos = v.pos, .err = msg, .env = env};
         }
     }
     Tok semi = lex_tok(s, v.pos);
     List(Str) env2 = env_add(env, name, ety);
-    return SRes { pos: semi.pos, err: "", env: env2 };
+    return SRes {.pos = semi.pos, .err = "", .env = env2};
 }
 
 SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
@@ -3205,14 +3206,14 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
         Tok e = lex_tok(s, t.pos);
         if (e.text == ";") {
             if (ret == "") {
-                return SRes { pos: e.pos, err: "", env: env };
+                return SRes {.pos = e.pos, .err = "", .env = env};
             }
             Str msg = "return without a value in a " + ret + " function";
-            return SRes { pos: e.pos, err: msg, env: env };
+            return SRes {.pos = e.pos, .err = msg, .env = env};
         }
         ERes v = check_expr_e(s, t.pos, env, fs, ret);
         if (v.err != "") {
-            return SRes { pos: v.pos, err: v.err, env: env };
+            return SRes {.pos = v.pos, .err = v.err, .env = env};
         }
         if (v.ty != ret) {
             // Spec v3.2 §6.4: value-preserving widening is implicit;
@@ -3254,19 +3255,19 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
             Bool res_ret_ok = both_res && ok_accept && er_accept;
             if (!riok && !opt_ret_ok && !res_ok_ret_ok && !res_err_ret_ok && !res_ret_ok) {
                 Str msg = "return type " + v.ty + " does not match " + ret;
-                return SRes { pos: v.pos, err: msg, env: env };
+                return SRes {.pos = v.pos, .err = msg, .env = env};
             }
         }
         Tok semi = lex_tok(s, v.pos);
-        return SRes { pos: semi.pos, err: "", env: env };
+        return SRes {.pos = semi.pos, .err = "", .env = env};
     }
     if (t.text == "break") {
         Tok semi = lex_tok(s, t.pos);
-        return SRes { pos: semi.pos, err: "", env: env };
+        return SRes {.pos = semi.pos, .err = "", .env = env};
     }
     if (t.text == "continue") {
         Tok semi = lex_tok(s, t.pos);
-        return SRes { pos: semi.pos, err: "", env: env };
+        return SRes {.pos = semi.pos, .err = "", .env = env};
     }
     if (t.text == "if") {
         return check_if(s, t.pos, env, fs, ret);
@@ -3286,10 +3287,10 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
             if (eq.text == "=") {
                 ERes v = check_expr(s, eq.pos, env, fs);
                 if (v.err != "") {
-                    return SRes { pos: v.pos, err: v.err, env: env };
+                    return SRes {.pos = v.pos, .err = v.err, .env = env};
                 }
                 Tok semi = lex_tok(s, v.pos);
-                return SRes { pos: semi.pos, err: "", env: env };
+                return SRes {.pos = semi.pos, .err = "", .env = env};
             }
         }
         Tok t2 = lex_tok(s, t.pos);
@@ -3326,25 +3327,25 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
     }
     ERes e = check_expr(s, pos, env, fs);
     if (e.err != "") {
-        return SRes { pos: e.pos, err: e.err, env: env };
+        return SRes {.pos = e.pos, .err = e.err, .env = env};
     }
     Tok semi = lex_tok(s, e.pos);
-    return SRes { pos: semi.pos, err: "", env: env };
+    return SRes {.pos = semi.pos, .err = "", .env = env};
 }
 
 // ─── Function checking ──────────────────────────────────────────
 
-type DRes = { pos: Int, err: Str, name: Str };
+type DRes = { Int pos; Str err; Str name; };
 
 SRes check_params(Str s, Int pos, Str fname, Str rty, List(Str) env, Funcs fs) {
     PRes pty = parse_type(s, pos);
     if (pty.err != "") {
-        return SRes { pos: pty.pos, err: pty.err, env: env };
+        return SRes {.pos = pty.pos, .err = pty.err, .env = env};
     }
     Str pbase = ct_base_of(fs.ctn, fs.ctb, pty.ty);
     Tok pname = lex_tok(s, pty.pos);
     if (pname.kind != "ident") {
-        return SRes { pos: pname.pos, err: "expected parameter name", env: env };
+        return SRes {.pos = pname.pos, .err = "expected parameter name", .env = env};
     }
     List(Str) env2 = env_add(env, pname.text, pbase);
     Tok t = lex_tok(s, pname.pos);
@@ -3353,10 +3354,10 @@ SRes check_params(Str s, Int pos, Str fname, Str rty, List(Str) env, Funcs fs) {
     }
     SRes body = check_block(s, t.pos, env2, fs, rty);
     if (body.err != "") {
-        return SRes { pos: body.pos, err: body.err, env: env2 };
+        return SRes {.pos = body.pos, .err = body.err, .env = env2};
     }
     println("OK func " + fname);
-    return SRes { pos: body.pos, err: "", env: env2 };
+    return SRes {.pos = body.pos, .err = "", .env = env2};
 }
 
 // A behavior's impl fn must exist with comparator signature (T, T) -> Int.
@@ -3375,12 +3376,12 @@ Int validate_behavior(Funcs fs, BRes bh) {
 DRes check_func(Str s, Int pos, Funcs fs) {
     PRes rty = parse_type(s, pos);
     if (rty.err != "") {
-        return DRes { pos: rty.pos, err: rty.err, name: "" };
+        return DRes {.pos = rty.pos, .err = rty.err, .name = ""};
     }
     Str rbase = ct_base_of(fs.ctn, fs.ctb, rty.ty);
     Tok name = lex_tok(s, rty.pos);
     if (name.kind != "ident") {
-        return DRes { pos: name.pos, err: "expected function name", name: "" };
+        return DRes {.pos = name.pos, .err = "expected function name", .name = ""};
     }
     Tok open = lex_tok(s, name.pos);
     Tok first = lex_tok(s, open.pos);
@@ -3388,16 +3389,16 @@ DRes check_func(Str s, Int pos, Funcs fs) {
     if (first.text == ")") {
         SRes body = check_block(s, first.pos, env0, fs, rbase);
         if (body.err != "") {
-            return DRes { pos: body.pos, err: body.err, name: name.text };
+            return DRes {.pos = body.pos, .err = body.err, .name = name.text};
         }
         println("OK func " + name.text);
-        return DRes { pos: body.pos, err: "", name: name.text };
+        return DRes {.pos = body.pos, .err = "", .name = name.text};
     }
     SRes body = check_params(s, open.pos, name.text, rbase, env0, fs);
     if (body.err != "") {
-        return DRes { pos: body.pos, err: body.err, name: name.text };
+        return DRes {.pos = body.pos, .err = body.err, .name = name.text};
     }
-    return DRes { pos: body.pos, err: "", name: name.text };
+    return DRes {.pos = body.pos, .err = "", .name = name.text};
 }
 
 // ─── Program walk ───────────────────────────────────────────────
@@ -3540,7 +3541,7 @@ Str meet_caps(Str a_csv, Str b_csv) {
 // params are Id-only; mirrors the Rust parser's Id filter).
 PRes cap_list_at(Str s, Int pos, Bool modes, Str acc) {
     Tok fam = lex_tok(s, pos);
-    if (fam.text == ")") { return PRes { pos: fam.pos, ty: acc, err: "" }; }
+    if (fam.text == ")") { return PRes {.pos = fam.pos, .ty = acc, .err = ""}; }
     Tok nx = lex_tok(s, fam.pos);
     if (nx.text == "(") {
         Tok mo = lex_tok(s, nx.pos);
@@ -3551,20 +3552,20 @@ PRes cap_list_at(Str s, Int pos, Bool modes, Str acc) {
             Bool rw = mo.text == "readwrite";
             if (!ro && !rw) {
                 Str msg = "unknown capability mode `" + mo.text + "` on `" + fam.text + "`; supported modes are `readonly` and `readwrite`";
-                return PRes { pos: mo.pos, ty: "", err: msg };
+                return PRes {.pos = mo.pos, .ty = "", .err = msg};
             }
             Str enc = if (ro) { fam.text + ":ro" } else { fam.text };
             Str sep = if (acc == "") { "" } else { "," };
             Str acc2 = acc + sep + enc;
-            if (after.text == ")") { return PRes { pos: after.pos, ty: acc2, err: "" }; }
+            if (after.text == ")") { return PRes {.pos = after.pos, .ty = acc2, .err = ""}; }
             return cap_list_at(s, after.pos, modes, acc2);
         }
-        if (after.text == ")") { return PRes { pos: after.pos, ty: acc, err: "" }; }
+        if (after.text == ")") { return PRes {.pos = after.pos, .ty = acc, .err = ""}; }
         return cap_list_at(s, after.pos, modes, acc);
     }
     Str sep2 = if (acc == "") { "" } else { "," };
     Str acc3 = acc + sep2 + fam.text;
-    if (nx.text == ")") { return PRes { pos: nx.pos, ty: acc3, err: "" }; }
+    if (nx.text == ")") { return PRes {.pos = nx.pos, .ty = acc3, .err = ""}; }
     return cap_list_at(s, nx.pos, modes, acc3);
 }
 
@@ -3615,7 +3616,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
                 List(Str) c0 = fs.ctn;
                 List(Str) c1 = fs.ctb;
                 List(Str) c2 = fs.ctc;
-                Funcs fsc = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: c0.concat([tname.text]), ctb: c1.concat([bt.ty]), ctc: c2.concat([ctext]), fns: fs.fns, growable: fs.growable };
+                Funcs fsc = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = c0.concat([tname.text]), .ctb = c1.concat([bt.ty]), .ctc = c2.concat([ctext]), .fns = fs.fns, .growable = fs.growable};
                 Int endc = skip_decl(s, t.pos, 0);
                 return collect_sigs_at(s, endc, fsc, pending_req, sandbox_ceil);
             }
@@ -3627,7 +3628,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
         List(Str) sf1 = fs.stf;
         List(Str) sn2 = sn1.concat([tname.text]);
         List(Str) sf2 = sf1.concat([fstr]);
-        Funcs fsx = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: sn2, stf: sf2, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: fs.growable };
+        Funcs fsx = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = sn2, .stf = sf2, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
         Int end = skip_decl(s, t.pos, 0);
         return collect_sigs_at(s, end, fsx, pending_req, sandbox_ceil);
     }
@@ -3653,7 +3654,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
             List(Str) bnn = bn0.concat([bh.name]);
             List(Str) bpp = bp0.concat([bh.param]);
             List(Str) bff = bf0.concat([bh.impl]);
-            Funcs fsb = Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: bnn, bparams: bpp, bfns: bff, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: fs.growable };
+            Funcs fsb = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = bnn, .bparams = bpp, .bfns = bff, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
             return collect_sigs_at(s, bh.pos, fsb, pending_req, sandbox_ceil);
         }
         PRes rty = parse_type(s, pos_in);
@@ -3682,7 +3683,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
         List(Str) bods2 = bo1.concat([body]);
         Int idx = n1.len();
         Map(Str, Int) fns2 = fs.fns.insert(name.text, idx);
-        Funcs fs2 = Funcs { names: names2, pts: pts2, pns: pns2, rets: rets2, reqs: reqs2, ceils: ceils2, bods: bods2, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fns2, growable: [] };
+        Funcs fs2 = Funcs {.names = names2, .pts = pts2, .pns = pns2, .rets = rets2, .reqs = reqs2, .ceils = ceils2, .bods = bods2, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fns2, .growable = []};
         return collect_sigs_at(s, end, fs2, "", sandbox_ceil);
     }
     return collect_sigs_at(s, t.pos, fs, pending_req, sandbox_ceil);
@@ -3701,7 +3702,7 @@ Funcs collect_sigs(Str s) {
 Funcs analyze_growable(Funcs fs) {
     Int n = fs.names.len();
     List(Int) growable = analyze_growable_rec(fs, 0, n, []);
-    return Funcs { names: fs.names, pts: fs.pts, pns: fs.pns, rets: fs.rets, reqs: fs.reqs, ceils: fs.ceils, bods: fs.bods, stn: fs.stn, stf: fs.stf, bnames: fs.bnames, bparams: fs.bparams, bfns: fs.bfns, exp_tys: fs.exp_tys, ctn: fs.ctn, ctb: fs.ctb, ctc: fs.ctc, fns: fs.fns, growable: growable };
+    return Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = growable};
 }
 
 List(Int) analyze_growable_rec(Funcs fs, Int i, Int n, List(Int) acc) {
@@ -3926,7 +3927,7 @@ Str check_readonly_writes(Str body, Str ceiling) {
 // provider call or a capability-requiring call inside a hole is checked
 // there. Mirror it: extract the `{…}` holes (brace-depth aware, matching
 // the lexer's scan) and re-run the relevant check on each hole.
-type Hspan = { a: Int, b: Int };
+type Hspan = { Int a; Int b; };
 
 // Index of the `}` matching an already-consumed `{`, or -1.
 Int fstring_hole_end(Str text, Int i, Int n, Int depth) {
@@ -3950,7 +3951,7 @@ List(Hspan) fstring_spans(Str text, Int i, Int n, List(Hspan) acc) {
     if (c == 123) {
         Int e = fstring_hole_end(text, i + 1, n, 1);
         if (e < 0) { return acc; }
-        Hspan sp = Hspan { a: i + 1, b: e };
+        Hspan sp = Hspan {.a = i + 1, .b = e};
         List(Hspan) acc2 = acc.concat([sp]);
         Int k = e + 1;
         return fstring_spans(text, k, n, acc2);
@@ -4406,11 +4407,11 @@ Int check_program(Str s, Int pos, Funcs fs) {
 // ck_fn_index for this whole section, so the names below read as their
 // typecheck.resid spellings.
 
-type EV = { ok: Bool, v: Str, pos: Int };
-type IP = { ok: Bool, v: Int };
-type ARG = { ok: Bool, alits: List(Str), close: Int };
-type MB = { ok: Bool, prefix: Str, name: Str, eq: Int };
-type GR = { text: Str, err: Str, elim: Int };
+type EV = { Bool ok; Str v; Int pos; };
+type IP = { Bool ok; Int v; };
+type ARG = { Bool ok; List(Str) alits; Int close; };
+type MB = { Bool ok; Str prefix; Str name; Int eq; };
+type GR = { Str text; Str err; Int elim; };
 
 Int gr_pick_i(Bool c, Int a, Int b) {
     if (c) { return a; }
@@ -4590,7 +4591,7 @@ Str gr_cenv(List(Str) cenv, Str name) {
 
 IP gr_ip_n(Str s, Bool neg, Int i, Int acc) {
     Int n = str_len(s);
-    if (i >= n) { return IP { ok: true, v: gr_pick_i(neg, 0 - acc, acc) }; }
+    if (i >= n) { return IP {.ok = true, .v = gr_pick_i(neg, 0 - acc, acc)}; }
     Int c = str_char_at(s, i);
     if (c >= 48) {
         if (c <= 57) {
@@ -4600,11 +4601,11 @@ IP gr_ip_n(Str s, Bool neg, Int i, Int acc) {
             return gr_ip_n(s, neg, k, a2 + d);
         }
     }
-    return IP { ok: false, v: 0 };
+    return IP {.ok = false, .v = 0};
 }
 
 IP gr_ip(Str s) {
-    if (s == "") { return IP { ok: false, v: 0 }; }
+    if (s == "") { return IP {.ok = false, .v = 0}; }
     Int c0 = str_char_at(s, 0);
     if (c0 == 45) { return gr_ip_n(s, true, 1, 0); }
     return gr_ip_n(s, false, 0, 0);
@@ -4613,23 +4614,23 @@ IP gr_ip(Str s) {
 EV gr_unary(Str op, Str v) {
     if (op == "-") {
         IP i = gr_ip(v);
-        if (!i.ok) { return EV { ok: false, v: "", pos: 0 }; }
-        return EV { ok: true, v: IntToString(0 - i.v), pos: 0 };
+        if (!i.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
+        return EV {.ok = true, .v = IntToString(0 - i.v), .pos = 0};
     }
     if (op == "+") {
-        return EV { ok: true, v: v, pos: 0 };
+        return EV {.ok = true, .v = v, .pos = 0};
     }
     if (op == "!") {
-        if (v == "true") { return EV { ok: true, v: "false", pos: 0 }; }
-        if (v == "false") { return EV { ok: true, v: "true", pos: 0 }; }
-        return EV { ok: false, v: "", pos: 0 };
+        if (v == "true") { return EV {.ok = true, .v = "false", .pos = 0}; }
+        if (v == "false") { return EV {.ok = true, .v = "true", .pos = 0}; }
+        return EV {.ok = false, .v = "", .pos = 0};
     }
     if (op == "~") {
         IP i2 = gr_ip(v);
-        if (!i2.ok) { return EV { ok: false, v: "", pos: 0 }; }
-        return EV { ok: true, v: IntToString(0 - i2.v - 1), pos: 0 };
+        if (!i2.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
+        return EV {.ok = true, .v = IntToString(0 - i2.v - 1), .pos = 0};
     }
-    return EV { ok: false, v: "", pos: 0 };
+    return EV {.ok = false, .v = "", .pos = 0};
 }
 
 EV gr_plus(Str l, Str r) {
@@ -4637,9 +4638,9 @@ EV gr_plus(Str l, Str r) {
     if (li.ok) {
         IP ri = gr_ip(r);
         if (ri.ok) {
-            return EV { ok: true, v: IntToString(li.v + ri.v), pos: 0 };
+            return EV {.ok = true, .v = IntToString(li.v + ri.v), .pos = 0};
         }
-        return EV { ok: false, v: "", pos: 0 };
+        return EV {.ok = false, .v = "", .pos = 0};
     }
     Int l0 = str_char_at(l, 0);
     Int r0 = str_char_at(r, 0);
@@ -4648,64 +4649,64 @@ EV gr_plus(Str l, Str r) {
     if (ls && rs) {
         Str a = str_slice(l, 1, str_len(l) - 1);
         Str b = str_slice(r, 1, str_len(r) - 1);
-        return EV { ok: true, v: "\"" + a + b + "\"", pos: 0 };
+        return EV {.ok = true, .v = "\"" + a + b + "\"", .pos = 0};
     }
-    return EV { ok: false, v: "", pos: 0 };
+    return EV {.ok = false, .v = "", .pos = 0};
 }
 
 EV gr_int2(Str op, Str l, Str r) {
     IP li = gr_ip(l);
-    if (!li.ok) { return EV { ok: false, v: "", pos: 0 }; }
+    if (!li.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
     IP ri = gr_ip(r);
-    if (!ri.ok) { return EV { ok: false, v: "", pos: 0 }; }
-    if (op == "-") { return EV { ok: true, v: IntToString(li.v - ri.v), pos: 0 }; }
-    if (op == "*") { return EV { ok: true, v: IntToString(li.v * ri.v), pos: 0 }; }
+    if (!ri.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
+    if (op == "-") { return EV {.ok = true, .v = IntToString(li.v - ri.v), .pos = 0}; }
+    if (op == "*") { return EV {.ok = true, .v = IntToString(li.v * ri.v), .pos = 0}; }
     if (op == "/") {
-        if (ri.v == 0) { return EV { ok: false, v: "", pos: 0 }; }
-        return EV { ok: true, v: IntToString(li.v / ri.v), pos: 0 };
+        if (ri.v == 0) { return EV {.ok = false, .v = "", .pos = 0}; }
+        return EV {.ok = true, .v = IntToString(li.v / ri.v), .pos = 0};
     }
     if (op == "%") {
-        if (ri.v == 0) { return EV { ok: false, v: "", pos: 0 }; }
-        return EV { ok: true, v: IntToString(li.v % ri.v), pos: 0 };
+        if (ri.v == 0) { return EV {.ok = false, .v = "", .pos = 0}; }
+        return EV {.ok = true, .v = IntToString(li.v % ri.v), .pos = 0};
     }
-    return EV { ok: false, v: "", pos: 0 };
+    return EV {.ok = false, .v = "", .pos = 0};
 }
 
 EV gr_bit(Str op, Str l, Str r) {
     IP li = gr_ip(l);
-    if (!li.ok) { return EV { ok: false, v: "", pos: 0 }; }
+    if (!li.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
     IP ri = gr_ip(r);
-    if (!ri.ok) { return EV { ok: false, v: "", pos: 0 }; }
+    if (!ri.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
     if (op == "<<") {
-        if (ri.v < 0 || ri.v >= 64) { return EV { ok: false, v: "", pos: 0 }; }
-        return EV { ok: true, v: IntToString(li.v << ri.v), pos: 0 };
+        if (ri.v < 0 || ri.v >= 64) { return EV {.ok = false, .v = "", .pos = 0}; }
+        return EV {.ok = true, .v = IntToString(li.v << ri.v), .pos = 0};
     }
     if (op == ">>") {
-        if (ri.v < 0 || ri.v >= 64) { return EV { ok: false, v: "", pos: 0 }; }
-        return EV { ok: true, v: IntToString(li.v >> ri.v), pos: 0 };
+        if (ri.v < 0 || ri.v >= 64) { return EV {.ok = false, .v = "", .pos = 0}; }
+        return EV {.ok = true, .v = IntToString(li.v >> ri.v), .pos = 0};
     }
-    if (op == "&") { return EV { ok: true, v: IntToString(li.v & ri.v), pos: 0 }; }
-    if (op == "|") { return EV { ok: true, v: IntToString(li.v | ri.v), pos: 0 }; }
-    if (op == "^") { return EV { ok: true, v: IntToString(li.v ^ ri.v), pos: 0 }; }
-    return EV { ok: false, v: "", pos: 0 };
+    if (op == "&") { return EV {.ok = true, .v = IntToString(li.v & ri.v), .pos = 0}; }
+    if (op == "|") { return EV {.ok = true, .v = IntToString(li.v | ri.v), .pos = 0}; }
+    if (op == "^") { return EV {.ok = true, .v = IntToString(li.v ^ ri.v), .pos = 0}; }
+    return EV {.ok = false, .v = "", .pos = 0};
 }
 
 EV gr_cmp(Str op, Str l, Str r) {
     IP li = gr_ip(l);
     if (li.ok) {
         IP ri = gr_ip(r);
-        if (!ri.ok) { return EV { ok: false, v: "", pos: 0 }; }
-        if (op == "<") { return EV { ok: true, v: gr_pick(li.v < ri.v, "true", "false"), pos: 0 }; }
-        if (op == "<=") { return EV { ok: true, v: gr_pick(li.v <= ri.v, "true", "false"), pos: 0 }; }
-        if (op == ">") { return EV { ok: true, v: gr_pick(li.v > ri.v, "true", "false"), pos: 0 }; }
-        if (op == ">=") { return EV { ok: true, v: gr_pick(li.v >= ri.v, "true", "false"), pos: 0 }; }
-        if (op == "==") { return EV { ok: true, v: gr_pick(li.v == ri.v, "true", "false"), pos: 0 }; }
-        if (op == "!=") { return EV { ok: true, v: gr_pick(li.v != ri.v, "true", "false"), pos: 0 }; }
-        return EV { ok: false, v: "", pos: 0 };
+        if (!ri.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
+        if (op == "<") { return EV {.ok = true, .v = gr_pick(li.v < ri.v, "true", "false"), .pos = 0}; }
+        if (op == "<=") { return EV {.ok = true, .v = gr_pick(li.v <= ri.v, "true", "false"), .pos = 0}; }
+        if (op == ">") { return EV {.ok = true, .v = gr_pick(li.v > ri.v, "true", "false"), .pos = 0}; }
+        if (op == ">=") { return EV {.ok = true, .v = gr_pick(li.v >= ri.v, "true", "false"), .pos = 0}; }
+        if (op == "==") { return EV {.ok = true, .v = gr_pick(li.v == ri.v, "true", "false"), .pos = 0}; }
+        if (op == "!=") { return EV {.ok = true, .v = gr_pick(li.v != ri.v, "true", "false"), .pos = 0}; }
+        return EV {.ok = false, .v = "", .pos = 0};
     }
-    if (op == "==") { return EV { ok: true, v: gr_pick(l == r, "true", "false"), pos: 0 }; }
-    if (op == "!=") { return EV { ok: true, v: gr_pick(l != r, "true", "false"), pos: 0 }; }
-    return EV { ok: false, v: "", pos: 0 };
+    if (op == "==") { return EV {.ok = true, .v = gr_pick(l == r, "true", "false"), .pos = 0}; }
+    if (op == "!=") { return EV {.ok = true, .v = gr_pick(l != r, "true", "false"), .pos = 0}; }
+    return EV {.ok = false, .v = "", .pos = 0};
 }
 
 EV gr_fold(Str op, Str l, Str r) {
@@ -4719,23 +4720,23 @@ EV gr_fold(Str op, Str l, Str r) {
     if (op == "&") { return gr_bit("&", l, r); }
     if (op == "|") { return gr_bit("|", l, r); }
     if (op == "^") { return gr_bit("^", l, r); }
-    if (op == "&&") { return EV { ok: true, v: gr_pick(l == "true" && r == "true", "true", "false"), pos: 0 }; }
-    if (op == "||") { return EV { ok: true, v: gr_pick(l == "true" || r == "true", "true", "false"), pos: 0 }; }
+    if (op == "&&") { return EV {.ok = true, .v = gr_pick(l == "true" && r == "true", "true", "false"), .pos = 0}; }
+    if (op == "||") { return EV {.ok = true, .v = gr_pick(l == "true" || r == "true", "true", "false"), .pos = 0}; }
     if (op == "==") { return gr_cmp("==", l, r); }
     if (op == "!=") { return gr_cmp("!=", l, r); }
     if (op == "<") { return gr_cmp("<", l, r); }
     if (op == "<=") { return gr_cmp("<=", l, r); }
     if (op == ">") { return gr_cmp(">", l, r); }
     if (op == ">=") { return gr_cmp(">=", l, r); }
-    return EV { ok: false, v: "", pos: 0 };
+    return EV {.ok = false, .v = "", .pos = 0};
 }
 
 // β-reduce a user function call with constant arguments.
 EV gr_call_fold(Str src, Funcs fs, Str fname, List(Str) pnames, List(Str) alits, Int depth) {
     Int d2 = depth + 1;
-    if (d2 > 12) { return EV { ok: false, v: "", pos: 0 }; }
+    if (d2 > 12) { return EV {.ok = false, .v = "", .pos = 0}; }
     Str body = gr_fn_body(src, fs, fname);
-    if (body == "") { return EV { ok: false, v: "", pos: 0 }; }
+    if (body == "") { return EV {.ok = false, .v = "", .pos = 0}; }
     List(Str) pc = gr_zip(pnames, alits, 0, []);
     Int n = str_len(body);
     Int j = skip_ws(body, 0, n);
@@ -4762,7 +4763,7 @@ EV gr_call_fold(Str src, Funcs fs, Str fname, List(Str) pnames, List(Str) alits,
             }
         }
     }
-    return EV { ok: false, v: "", pos: 0 };
+    return EV {.ok = false, .v = "", .pos = 0};
 }
 
 ARG gr_args(Str e, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth, List(Str) acc) {
@@ -4770,35 +4771,35 @@ ARG gr_args(Str e, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth, List(S
     if (t.text == "(") {
         Tok n = lex_tok(e, t.pos);
         if (n.text == ")") {
-            return ARG { ok: true, alits: acc, close: n.pos };
+            return ARG {.ok = true, .alits = acc, .close = n.pos};
         }
         EV a = gr_eval(e, t.pos, cenv, src, fs, depth);
-        if (!a.ok) { return ARG { ok: false, alits: acc, close: pos }; }
+        if (!a.ok) { return ARG {.ok = false, .alits = acc, .close = pos}; }
         Tok after = lex_tok(e, a.pos);
         if (after.text == ")") {
-            return ARG { ok: true, alits: acc.concat([a.v]), close: after.pos };
+            return ARG {.ok = true, .alits = acc.concat([a.v]), .close = after.pos};
         }
         if (after.text == ",") {
             return gr_args(e, after.pos, cenv, src, fs, depth, acc.concat([a.v]));
         }
     }
-    return ARG { ok: false, alits: acc, close: pos };
+    return ARG {.ok = false, .alits = acc, .close = pos};
 }
 
 EV gr_eval_call(Str e, Str fname, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth) {
-    if (depth > 10) { return EV { ok: false, v: "", pos: pos }; }
+    if (depth > 10) { return EV {.ok = false, .v = "", .pos = pos}; }
     ARG ar = gr_args(e, pos, cenv, src, fs, depth, []);
-    if (!ar.ok) { return EV { ok: false, v: "", pos: pos }; }
+    if (!ar.ok) { return EV {.ok = false, .v = "", .pos = pos}; }
     Int idx = fn_index(fs, fname);
-    if (idx < 0) { return EV { ok: false, v: "", pos: pos }; }
+    if (idx < 0) { return EV {.ok = false, .v = "", .pos = pos}; }
     Str pns_s = gr_pnames_csv(src, fname);
     if (pns_s == "") {
-        if (ar.alits.len() != 0) { return EV { ok: false, v: "", pos: pos }; }
+        if (ar.alits.len() != 0) { return EV {.ok = false, .v = "", .pos = pos}; }
         List(Str) pns0 = gr_zip([], [], 0, []);
         return gr_call_fold(src, fs, fname, pns0, ar.alits, depth);
     }
     List(Str) pns = str_split(pns_s, ",");
-    if (pns.len() != ar.alits.len()) { return EV { ok: false, v: "", pos: pos }; }
+    if (pns.len() != ar.alits.len()) { return EV {.ok = false, .v = "", .pos = pos}; }
     return gr_call_fold(src, fs, fname, pns, ar.alits, depth);
 }
 
@@ -4812,10 +4813,10 @@ List(Str) gr_zip(List(Str) a, List(Str) b, Int i, List(Str) acc) {
 EV gr_eval_prim(Str e, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth) {
     Tok t = lex_tok(e, pos);
     if (t.kind == "int" || t.kind == "str" || t.kind == "char") {
-        return EV { ok: true, v: t.text, pos: t.pos };
+        return EV {.ok = true, .v = t.text, .pos = t.pos};
     }
-    if (t.text == "true") { return EV { ok: true, v: "true", pos: t.pos }; }
-    if (t.text == "false") { return EV { ok: true, v: "false", pos: t.pos }; }
+    if (t.text == "true") { return EV {.ok = true, .v = "true", .pos = t.pos}; }
+    if (t.text == "false") { return EV {.ok = true, .v = "false", .pos = t.pos}; }
     if (t.text == "(") {
         Tok h = lex_tok(e, t.pos);
         Tok h2 = lex_tok(e, h.pos);
@@ -4827,7 +4828,7 @@ EV gr_eval_prim(Str e, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth) {
     }
     if (t.text == "-" || t.text == "+" || t.text == "!" || t.text == "~") {
         EV o = gr_eval_prim(e, t.pos, cenv, src, fs, depth);
-        if (!o.ok) { return EV { ok: false, v: "", pos: t.pos }; }
+        if (!o.ok) { return EV {.ok = false, .v = "", .pos = t.pos}; }
         return gr_unary(t.text, o.v);
     }
     if (t.kind == "ident") {
@@ -4836,10 +4837,10 @@ EV gr_eval_prim(Str e, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth) {
             return gr_eval_call(e, t.text, nx.pos, cenv, src, fs, depth);
         }
         Str cv = gr_cenv(cenv, t.text);
-        if (cv == "") { return EV { ok: false, v: "", pos: t.pos }; }
-        return EV { ok: true, v: cv, pos: t.pos };
+        if (cv == "") { return EV {.ok = false, .v = "", .pos = t.pos}; }
+        return EV {.ok = true, .v = cv, .pos = t.pos};
     }
-    return EV { ok: false, v: "", pos: t.pos };
+    return EV {.ok = false, .v = "", .pos = t.pos};
 }
 
 EV gr_eval_bin_rest(Str e, EV acc, Int minp, List(Str) cenv, Str src, Funcs fs, Int depth) {
@@ -4851,8 +4852,8 @@ EV gr_eval_bin_rest(Str e, EV acc, Int minp, List(Str) cenv, Str src, Funcs fs, 
     EV r = gr_eval(e, t.pos, cenv, src, fs, depth);
     if (!r.ok) { return r; }
     EV f = gr_fold(t.text, acc.v, r.v);
-    if (!f.ok) { return EV { ok: false, v: "", pos: acc.pos }; }
-    return gr_eval_bin_rest(e, EV { ok: true, v: f.v, pos: r.pos }, minp, cenv, src, fs, depth);
+    if (!f.ok) { return EV {.ok = false, .v = "", .pos = acc.pos}; }
+    return gr_eval_bin_rest(e, EV {.ok = true, .v = f.v, .pos = r.pos}, minp, cenv, src, fs, depth);
 }
 
 EV gr_eval(Str e, Int pos, List(Str) cenv, Str src, Funcs fs, Int depth) {
@@ -4976,20 +4977,20 @@ Bool gr_used(Str rest, Str name) {
 MB gr_match_bind(Str s, Int pos) {
     Tok t = lex_tok(s, pos);
     if (t.text == "return" || t.text == "if" || t.text == "while" || t.text == "for" || t.text == "match" || t.text == "{" || t.text == "break" || t.text == "continue") {
-        return MB { ok: false, prefix: "", name: "", eq: pos };
+        return MB {.ok = false, .prefix = "", .name = "", .eq = pos};
     }
     if (t.kind == "ident") {
         if (t.text == "_") {
-            return MB { ok: false, prefix: "", name: "", eq: pos };
+            return MB {.ok = false, .prefix = "", .name = "", .eq = pos};
         }
         Tok t2 = lex_tok(s, t.pos);
         if (t2.kind == "ident") {
             Tok t3 = lex_tok(s, t2.pos);
             if (t3.text == "=") {
                 Str pfx = str_slice(s, pos, t3.pos) + " ";
-                return MB { ok: true, prefix: pfx, name: t2.text, eq: t3.pos };
+                return MB {.ok = true, .prefix = pfx, .name = t2.text, .eq = t3.pos};
             }
-            return MB { ok: false, prefix: "", name: "", eq: pos };
+            return MB {.ok = false, .prefix = "", .name = "", .eq = pos};
         }
         if (t2.text == "(") {
             Int cl = gr_paren_close(s, t2.pos);
@@ -4998,20 +4999,20 @@ MB gr_match_bind(Str s, Int pos) {
                 Tok e3 = lex_tok(s, nm.pos);
                 if (e3.text == "=") {
                     Str pfx2 = str_slice(s, pos, e3.pos) + " ";
-                    return MB { ok: true, prefix: pfx2, name: nm.text, eq: e3.pos };
+                    return MB {.ok = true, .prefix = pfx2, .name = nm.text, .eq = e3.pos};
                 }
             }
         }
     }
-    return MB { ok: false, prefix: "", name: "", eq: pos };
+    return MB {.ok = false, .prefix = "", .name = "", .eq = pos};
 }
 
 GR gr_body_reduce(Str s, Funcs fs, Int bstart, Int bend, Str acc, List(Str) cenv, Int elim) {
     Int n = str_len(s);
     Int j = skip_ws(s, bstart, n);
-    if (j >= bend) { return GR { text: acc, err: "", elim: elim }; }
+    if (j >= bend) { return GR {.text = acc, .err = "", .elim = elim}; }
     Tok t = lex_tok(s, j);
-    if (t.text == "}" || t.kind == "eof") { return GR { text: acc, err: "", elim: elim }; }
+    if (t.text == "}" || t.kind == "eof") { return GR {.text = acc, .err = "", .elim = elim}; }
     if (t.text == "return" || t.text == "if" || t.text == "while" || t.text == "for" || t.text == "{" || t.text == "match") {
         Int end = gr_next_pos(s, j);
         Int e = skip_ws(s, end, n);
@@ -5044,16 +5045,16 @@ GR gr_prog_at(Str s, Funcs fs, Int pos, Str acc, Int elim) {
     Int n = str_len(s);
     Int j = skip_ws(s, pos, n);
     Tok t = lex_tok(s, j);
-    if (t.kind == "eof") { return GR { text: acc, err: "", elim: elim }; }
+    if (t.kind == "eof") { return GR {.text = acc, .err = "", .elim = elim}; }
     if (t.text == "type") {
         Tok tn = lex_tok(s, t.pos);
-        return GR { text: acc, err: "graph-reduce: only functions are representable; declaration " + tn.text + " is not", elim: elim };
+        return GR {.text = acc, .err = "graph-reduce: only functions are representable; declaration " + tn.text + " is not", .elim = elim};
     }
     if (t.text == "import") {
-        return GR { text: acc, err: "graph-reduce: only functions are representable; import declarations are not", elim: elim };
+        return GR {.text = acc, .err = "graph-reduce: only functions are representable; import declarations are not", .elim = elim};
     }
     if (t.text == "sandbox") {
-        return GR { text: acc, err: "graph-reduce: only functions are representable; sandbox blocks are not", elim: elim };
+        return GR {.text = acc, .err = "graph-reduce: only functions are representable; sandbox blocks are not", .elim = elim};
     }
     if (t.kind != "ident" && t.text != "pub") {
         Int endx = skip_decl(s, j, 0);
@@ -5074,7 +5075,7 @@ Int posa = j;
         Int pcx = gr_paren_close(s, h1.pos);
         Tok eqx = lex_tok(s, pcx);
         if (eqx.text == "=") {
-            return GR { text: acc, err: "graph-reduce: only functions are representable; declaration " + dnm.text + " is not", elim: elim };
+            return GR {.text = acc, .err = "graph-reduce: only functions are representable; declaration " + dnm.text + " is not", .elim = elim};
         }
     }
     PRes rty = parse_type(s, pos_in);
@@ -5085,12 +5086,12 @@ Int posa = j;
     Tok nm = lex_tok(s, rty.pos);
     Tok op = lex_tok(s, nm.pos);
     if (op.text == "=") {
-        return GR { text: acc, err: "graph-reduce: only functions are representable; behavior instance is not", elim: elim };
+        return GR {.text = acc, .err = "graph-reduce: only functions are representable; behavior instance is not", .elim = elim};
     }
     if (op.text == "(") {
         Int bpos = gr_brace_of_pd(s, op.pos, 0);
         if (bpos < 0) {
-            return GR { text: acc, err: "graph-reduce: only functions are representable; declaration " + nm.text + " is not", elim: elim };
+            return GR {.text = acc, .err = "graph-reduce: only functions are representable; declaration " + nm.text + " is not", .elim = elim};
         }
         Int bcl = gr_brace_close(s, bpos);
         Str hdr = str_slice(s, j, bpos);

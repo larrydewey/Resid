@@ -467,24 +467,20 @@ impl Parser {
 
     fn parse_type_body(&mut self) -> TypeBody {
         if self.peek_is_op(Op::LBrace) {
+            // C-like product type: `type Name = { Type field; Type field; };`
             self.bump();
             let mut fields = Vec::new();
             while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
+                let type_ = self.parse_type();
                 let name = self
                     .expect_ident("type: expected field name")
                     .unwrap_or_else(|| Id("__error__".to_string()));
-                self.expect_op(Op::Colon, "type: expected :");
-                let type_ = self.parse_type();
+                self.expect_op(Op::Semi, "type: expected ; after field");
                 fields.push((name, type_));
-                if self.peek_is_op(Op::Comma) {
-                    self.bump();
-                }
             }
-            if self.peek_is_op(Op::RBrace) {
-                self.bump();
-            }
+            self.expect_op(Op::RBrace, "type: expected }");
             TypeBody::Product(fields)
-        } else if self.peek_is_op(Op::Pipe) || (self.peek_is_op(Op::LBrace)) {
+        } else if self.peek_is_op(Op::Pipe) {
             // Sum type: A | B
             let mut variants = Vec::new();
             loop {
@@ -1329,29 +1325,30 @@ impl Parser {
                         }
                     }
 
-                    // Check for struct literal: Name { field: value, ... }
-                    // Only a `{` followed by a `field :` pair is a struct literal;
-                    // otherwise the `{` opens a block/match-arms.
+                    // Check for struct literal: Name { .field = value, ... }
+                    // Only a `{` followed by `.` then a field name is a struct
+                    // literal; otherwise the `{` opens a block/match-arms.
                     let lbrace_then_field = {
                         let in_bounds = self.pos + 1 < self.tokens.len();
                         in_bounds
                             && matches!(
                                 self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                                Some(TokenKind::Ident(_))
+                                Some(TokenKind::Op(Op::Dot))
                             )
                             && matches!(
                                 self.tokens.get(self.pos + 2).map(|t| &t.kind),
-                                Some(TokenKind::Op(Op::Colon))
+                                Some(TokenKind::Ident(_))
                             )
                     };
                     if self.peek_is_op(Op::LBrace) && lbrace_then_field {
                         self.bump();
                         let mut fields = Vec::new();
                         while !self.peek_is_op(Op::RBrace) && !self.at_eof() {
+                            self.expect_op(Op::Dot, "struct literal: expected .");
                             let field_name = self
                                 .expect_ident("struct literal: expected field name")
                                 .unwrap_or_else(|| Id("__error__".to_string()));
-                            self.expect_op(Op::Colon, "struct literal: expected :");
+                            self.expect_op(Op::Equals, "struct literal: expected =");
                             let field_value = self.parse_expression_forced();
                             fields.push((field_name, field_value));
                             if self.peek_is_op(Op::Comma) {
@@ -2719,7 +2716,7 @@ Int main() {
     #[test]
     fn test_constraint_type_inline_field() {
         let src = r#"
-type Meter = { v: Int[value >= 0] };
+type Meter = { Int[value >= 0] v; };
 
 Int main() {
     return 0;
@@ -2888,7 +2885,7 @@ import "math.resid" as M;
     #[test]
     fn test_type_def() {
         let src = r#"
-type Point = { x: Int, y: Int };
+type Point = { Int x; Int y; };
 type Option(T) = Some(T) | None;
 "#;
         let (_, errors) = Parser::parse("test.resid", src);
@@ -3484,7 +3481,7 @@ type Opt(T) = Some(T) | None;
     #[test]
     fn parse_struct_lit() {
         let (_result, errors) =
-            Parser::parse("test.resid", "Int f() { Point p = Point { x: 1, y: 2 }; }");
+            Parser::parse("test.resid", "Int f() { Point p = Point { .x = 1, .y = 2 }; }");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
@@ -3724,7 +3721,7 @@ type Opt(T) = Some(T) | None;
     #[test]
     fn parse_type_def() {
         let (_result, errors) =
-            Parser::parse("test.resid", "type Point = { x: Int, y: Int };");
+            Parser::parse("test.resid", "type Point = { Int x; Int y; };");
         assert_eq!(errors.len(), 0, "parse errors: {:?}", errors);
     }
 
@@ -3976,7 +3973,7 @@ type Opt(T) = Some(T) | None;
     #[test]
     fn parse_behavior_def_and_using_instance() {
         let src = concat!(
-            "type Point = { x: Int, y: Int };\n",
+            "type Point = { Int x; Int y; };\n",
             "Int by_y(Point a, Point b) { return 0; }\n",
             "Ord(Point) = by_y;\n",
             "Int main() {\n",
