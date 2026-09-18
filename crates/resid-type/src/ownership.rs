@@ -133,11 +133,32 @@ fn site_key(e: &Expr) -> SiteKey {
 #[derive(Default)]
 pub struct OwnershipInfo {
     last_unique_uses: HashSet<SiteKey>,
+    /// `(function, param_idx) -> field name`, for every whole-program-sound
+    /// struct-parameter root whose tracked field is a `List(T)` grown via a
+    /// local `.concat` chain (the `finish_ifexpr`-shaped straight-line case;
+    /// see `PLAN-resid-only.md`'s Phase E.1). Consumed by resid-codegen to
+    /// grow that field's buffer in place instead of copy-and-leak for the
+    /// duration of one function call, finishing back to a normal boxed List
+    /// wherever the chain is written into a struct literal — see
+    /// `CodeGen::lower_struct_lit`'s growbuf-field handling. Deliberately
+    /// narrower than the full oracle: only parameter roots (never locals,
+    /// which codegen doesn't need this map for) and only `List` (not
+    /// `Map`/`Set`) fields, matching what's actually wired.
+    growable_field_roots: HashMap<(String, usize), String>,
 }
 
 impl OwnershipInfo {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The field name at `func`'s parameter `param_idx`, if that
+    /// (function, parameter, field) triple is a whole-program-sound
+    /// `List(T)`-content-growth root — see `growable_field_roots`.
+    pub fn growable_field(&self, func: &str, param_idx: usize) -> Option<&str> {
+        self.growable_field_roots
+            .get(&(func.to_string(), param_idx))
+            .map(|s| s.as_str())
     }
 
     /// True iff `e` is the proven last, uniquely-owned use of some tracked
@@ -238,6 +259,8 @@ struct AcceptedRoot {
     /// for a local root.
     param_idx: Option<usize>,
     terminals: Vec<SiteKey>,
+    path: RootPath,
+    tracked_ty: Option<String>,
 }
 
 pub fn analyze_ownership(unit: &TranslationUnit) -> OwnershipInfo {
@@ -288,6 +311,8 @@ pub fn analyze_ownership(unit: &TranslationUnit) -> OwnershipInfo {
                     fname: f.name.0.clone(),
                     param_idx: root.param_idx,
                     terminals,
+                    path: root.path.clone(),
+                    tracked_ty: root.tracked_ty.clone(),
                 });
             }
             if debug {
@@ -328,15 +353,21 @@ pub fn analyze_ownership(unit: &TranslationUnit) -> OwnershipInfo {
     // Locals (`param_idx == None`) are self-contained — nothing outside the
     // function can reference them — so they always survive.
     let mut last_unique_uses: HashSet<SiteKey> = HashSet::new();
+    let mut growable_field_roots: HashMap<(String, usize), String> = HashMap::new();
     for r in accepted {
         if let Some(i) = r.param_idx
-            && stale.contains(&(r.fname, i))
+            && stale.contains(&(r.fname.clone(), i))
         {
             continue;
         }
+        if let (Some(i), Some(field), Some(ty)) = (r.param_idx, &r.path.field, &r.tracked_ty)
+            && ty == "List"
+        {
+            growable_field_roots.insert((r.fname.clone(), i), field.clone());
+        }
         last_unique_uses.extend(r.terminals);
     }
-    OwnershipInfo { last_unique_uses }
+    OwnershipInfo { last_unique_uses, growable_field_roots }
 }
 
 /// Whole-program scan: for every call whose callee has an accepted
@@ -1070,6 +1101,48 @@ fn is_safe_nonretaining_handoff(fname: &str, args: &[(Option<Id>, Expr)], root: 
     args.iter().enumerate().filter(|(j, _)| *j != i).all(|(_, (_, a))| !references_tracked(a, root, w, calls))
 }
 
+/// True for a call handing the WHOLE tracked base **bare** (not
+/// field-accessed — `gt_err(msg, ev)`, not `gt_err(msg, ev.lines)`) to a
+/// parameter this module already proved `never_escapes_bare` elsewhere.
+/// Distinct from `is_safe_nonretaining_handoff`, which matches the field
+/// access itself (`base.field` as an argument); this one only applies to a
+/// field-rooted root (`root.path.field.is_some()` — the field=None
+/// box-reuse root for the same base already covers a bare hand-off on its
+/// own terms) and only when the base hasn't already been consumed on this
+/// path. A `never_escapes_bare` callee is proven to never retain the
+/// struct beyond deriving its own return value, so it can't observe
+/// (let alone keep a reference into) the tracked field's buffer either —
+/// safe to treat exactly like the base's own guard-clause passthrough
+/// (see `check_return_expr`'s bare-`Id(root.path.base)` case), just
+/// reached through one more level of indirection. Real motivating case:
+/// `finish_ifexpr`'s `if (...) { return gt_err(msg, ev); }` guard ahead of
+/// its `ev.lines` growth chain.
+fn is_whole_base_handoff_to_never_escapes_bare(
+    fname: &str,
+    args: &[(Option<Id>, Expr)],
+    root: &RootDef,
+    w: &Walk,
+    calls: &Calls,
+) -> bool {
+    if root.path.field.is_none() || w.base_consumed {
+        return false;
+    }
+    let mut hit: Option<usize> = None;
+    for (i, (_, arg)) in args.iter().enumerate() {
+        if matches!(&arg.kind, ExprKind::Id(id) if id.0 == root.path.base) {
+            if hit.is_some() {
+                return false;
+            }
+            hit = Some(i);
+        }
+    }
+    let Some(i) = hit else { return false };
+    if !calls.never_escapes_bare.contains(&(fname.to_string(), i)) {
+        return false;
+    }
+    args.iter().enumerate().filter(|(j, _)| *j != i).all(|(_, (_, a))| !references_tracked(a, root, w, calls))
+}
+
 /// Runs `then_block`/`else_block` on independent clones of `w` (never
 /// shared — see below) and merges the result back into `w`.
 ///
@@ -1222,6 +1295,20 @@ fn check_return_expr(e: &Expr, f: &FuncDef, root: &RootDef, w: &mut Walk, calls:
     if let Some(c) = classify_consumption(e, root, w) {
         return finish_termination(w, c, site_key(e));
     }
+    // A field-rooted path may also legitimately return the WHOLE base
+    // object unchanged — the field itself never touched on this control
+    // path (`if (ev.err != "") { return ev; }` in `finish_ifexpr`-shaped
+    // code, a guard clause ahead of the growth chain). Mirrors
+    // `field_growable.rs`'s explicit base-passthrough carve-out (`if
+    // id.0 == st.base { return Use::Safe }`), dropped when this module
+    // generalized `denotes_tracked_value`/`references_tracked` to
+    // field-rooted paths. Not a chain-consuming event — nothing to
+    // terminate — just a safe, unrelated read of the base whose OWN
+    // never-escapes-bare/box-reuse root (`field: None`) already covers the
+    // whole-object side of this same return separately.
+    if root.path.field.is_some() && matches!(&e.kind, ExprKind::Id(id) if id.0 == root.path.base) {
+        return Use::Safe;
+    }
     if let ExprKind::If { cond, then_block, else_block } = &e.kind {
         if references_tracked(cond, root, w, calls) {
             return Use::Disqualified;
@@ -1258,6 +1345,9 @@ fn check_return_expr(e: &Expr, f: &FuncDef, root: &RootDef, w: &mut Walk, calls:
                 .expect("is_safe_nonretaining_handoff found exactly one match");
             let c = classify_consumption(hit, root, w).expect("denotes_tracked_value already confirmed a match");
             return finish_termination(w, c, site_key(hit));
+        }
+        if is_whole_base_handoff_to_never_escapes_bare(&fname.0, args, root, w, calls) {
+            return finish_termination(w, Consumed::Base, site_key(e));
         }
     }
     if let Some(hr) = rebuild_or_handoff(e, root, w, calls) {
@@ -1681,6 +1771,11 @@ mod tests {
             info.is_last_unique_use(ret_expr),
             "a parameter root fed only a fresh literal at its call site is uniquely owned; its in-place reuse site must be recognized"
         );
+        assert_eq!(
+            info.growable_field("grow", 0),
+            Some("lines"),
+            "growable_field must expose the whole-program-sound List field root for codegen"
+        );
     }
 
     /// Parameter-root ownership, negative (the soundness gate): the same
@@ -1711,6 +1806,11 @@ mod tests {
         assert!(
             !info.is_last_unique_use(ret_expr),
             "a parameter root handed a non-last-use (dupped) alias at ANY call site must not be trusted for in-place reuse"
+        );
+        assert_eq!(
+            info.growable_field("grow", 0),
+            None,
+            "a stale (aliased) parameter root must not be exposed as a codegen-safe growable field"
         );
     }
 
@@ -1822,6 +1922,74 @@ mod tests {
         assert!(
             info.is_last_unique_use(&args[2].1),
             "self-recursive calls are exempt from whole-program freshness; the accumulator root must survive"
+        );
+    }
+
+    /// Regression for a real gap found validating against `examples/
+    /// codegen.resid`'s `finish_ifexpr`: a guard clause ahead of the growth
+    /// chain that returns the whole tracked base unchanged
+    /// (`if (ev.err != "") { return ev; }`) must not disqualify the
+    /// field-rooted growth on the function's OTHER path — `field_growable.rs`
+    /// had this exact carve-out; this module's generalized
+    /// `references_tracked` initially dropped it.
+    #[test]
+    fn early_guard_return_of_whole_base_does_not_disqualify_field_growth() {
+        let src = r#"
+            type GT = { List(Str) lines; Str err; };
+
+            GT finish_ifexpr(GT ev, Str ld) {
+                if (ev.err != "") { return ev; }
+                List(Str) d = ev.lines.concat([ld]);
+                return GT { .lines = d, .err = "" };
+            }
+
+            GT call_fresh() {
+                return finish_ifexpr(GT { .lines = [], .err = "" }, "x");
+            }
+        "#;
+        let unit = parse(src);
+        let info = analyze_ownership(&unit);
+        assert_eq!(
+            info.growable_field("finish_ifexpr", 0),
+            Some("lines"),
+            "an early guard-clause return of the untouched base must not block field growth on the main path"
+        );
+    }
+
+    /// Regression for the matching `gt_err`-shaped gap: a guard clause that
+    /// hands the whole tracked base **bare** (not field-accessed) to a
+    /// proven `never_escapes_bare` callee (`return gt_err(msg, ev);`) must
+    /// also not disqualify field growth on the function's main path — the
+    /// real shape `finish_ifexpr` uses in `examples/codegen.resid`.
+    #[test]
+    fn guard_handoff_of_whole_base_to_never_escapes_bare_does_not_disqualify_field_growth() {
+        let src = r#"
+            type GT = { List(Str) lines; Str ty; Str err; };
+
+            GT gt_err(Str msg, GT c) {
+                return GT { .lines = c.lines, .ty = "", .err = msg };
+            }
+
+            GT finish_ifexpr(GT tv, GT ev) {
+                if (ev.err != "") { return ev; }
+                if (ev.ty != tv.ty) { return gt_err("mismatch", ev); }
+                List(Str) d = ev.lines.concat(["x"]);
+                return GT { .lines = d, .ty = tv.ty, .err = "" };
+            }
+
+            GT call_fresh() {
+                return finish_ifexpr(
+                    GT { .lines = [], .ty = "a", .err = "" },
+                    GT { .lines = [], .ty = "a", .err = "" }
+                );
+            }
+        "#;
+        let unit = parse(src);
+        let info = analyze_ownership(&unit);
+        assert_eq!(
+            info.growable_field("finish_ifexpr", 1),
+            Some("lines"),
+            "a guard-clause hand-off of the whole base to a never-escapes-bare callee must not block field growth"
         );
     }
 }
