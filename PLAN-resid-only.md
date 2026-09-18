@@ -841,12 +841,63 @@ mechanism, not two), retire `growable.rs` into it, per plan.
   Extended GT with `tail: Bool`, threaded `tail_pos` through expression codegen,
   return statements pass `true`, cg_call/cg_print emit `tail call` LLVM IR.
   Mirrors Rust pipeline's `lower_call(is_tail)` path. All bootstrap tests pass.
-- [~] E.4 Dead-local-wrapper static free pass (lexical last-use analysis) — **PARTIAL this session**.
-  Infrastructure in place: `:owned` env tagging for struct literals,
-  `env_find_owned_struct` lookup, `free` emission in `csl_field` on `}`.
-  Current heuristic frees any owned struct in scope; precise per-field
-  tracking needs E.1 ownership oracle. Remaining: integrate with
-  `ownership.rs`/`liveness.rs` for exact last-use free insertion.
+- [~] E.4 Dead-local-wrapper static free pass (lexical last-use analysis) — **REDESIGNED; free-insertion disabled as unsound; reuse-on-terminal is the fix.** See below.
+
+  **Why the original approach was wrong (crash root cause).** The E.1
+  ownership oracle's "terminal use" (`is_last_unique_use`) is, per its own
+  module docs, *"the one syntactic point where codegen could safely reuse the
+  value's allocation in place instead of copying"* — a **reuse /
+  mutate-in-place opportunity**, not a death signal. Every terminal kind the
+  oracle recognizes actually **transfers** the value to a new owner that
+  keeps using the SAME allocation:
+  - `return acc;` → the value flows to the caller (still live);
+  - a self-recursive same-slot call argument → the value flows to the next
+    activation frame (still live — this is exactly the
+    `imp_resolve_lines(lines, i, n, ...)` case in `driver.resid` where the
+    callee dereferences that same pointer again via `lines[i]`);
+  - hand-off into a freshly built container of a different type → the value
+    is embedded in the new container (still reachable).
+
+  Treating "last unique use" as "free here" therefore corrupted values the
+  callee still needed (`free(): invalid pointer`, gdb-confirmed:
+  `resid_list_free <- imp_resolve_lines <- imp_resolve_file <- main`).
+  The free-insertion that landed in `resid-codegen`'s `ExprKind::Id` handler
+  is **disabled** (see the comment block at `lower_expr`, with the GrowBuf
+  representation-switch caveat: a List-typed SSA value inside a growable
+  accumulator function is a raw GrowBuf, not a ResidList, so
+  `resid_list_free` also misinterprets it). The `resid_*_free` runtime
+  primitives in `resid_rt.c` are kept for the sound designs below.
+
+  **Sound E.4 design — two disjoint mechanisms, both keyed off the oracle:**
+
+  1. **Rewire terminals to in-place reuse (mutate/rebuild), never free.**
+     Where the oracle proves a value is at its last unique use AND is being
+     rebuilt "same shape, some fields changed," overwrite the old allocation
+     in place and return the same pointer (exactly what `growable.rs`'s
+     GrowBuf already does for bare-List params; generalize to structs and to
+     `field_growable.rs`'s mechanism A / struct-box reuse — the allocator
+     gains nothing (no free) but loses the leak of the abandoned wrapper).
+     Free is never emitted at `return`/recursive-arg/embed sites.
+  2. **A genuinely separate "final drop" pass** (NOT `is_last_unique_use`):
+     an occurrence qualifies only if the value is used for a plain
+     non-transferring READ with provably no further reference anywhere — in
+     this function's remaining code, in any callee the value is forwarded
+     into, and past any enclosing return (i.e. not transitively reachable
+     from any live output). Only then is `resid_list_free` / box wrapper
+     free emitted. This subsumes the self-hosted `:owned` heuristic; the
+     current imprecise "free any owned struct in scope" in `csl_field`
+     (`codegen.resid`, `:owned` env tagging) is the same unsoundness on the
+     self-hosted side.
+     E.4's original target — freeing the DEAD WRAPPER in
+     `c -> c1 -> c2` rebuild chains — is fully handled by mechanism 1
+     (reuse of c's box for c1) and needs no free at all.
+
+  **Status.** Design settled. Free-insertion disabled (both sides: Rust
+  `ExprKind::Id` handler comment; self-hosted `csl_field` heuristic still
+  gated/impure — do NOT rely on it). Remaining work = implement mechanism 1
+  (struct-box reuse, field_growable generalizer) and mechanism 2 (the
+  forward-reachability final-drop pass) — neither wired; defer until E.1's
+  oracle is the wired substrate, then measure`bootstrap_driver_self_compile_fixed_point` memory.
 - [ ] C.1 Port `merge_driver.py` to Resid
 - [ ] C.2 Port `resid-notes` + `resid-cache`
 - [ ] C.3 Port `resid-diag` caret rendering

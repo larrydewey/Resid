@@ -638,11 +638,11 @@ mod tests {
     #[test]
     fn straight_line_last_use_is_final_occurrence() {
         let src = r#"
-            type GT = { lines: List(Str), tag: Str };
+            type GT = { List(Str) lines; Str tag; };
 
             GT grow(GT ev, Str s) {
                 List(Str) d = ev.lines.concat([s]);
-                return GT { lines: d, tag: ev.tag };
+                return GT { .lines = d, .tag = ev.tag };
             }
         "#;
         let unit = parse(src);

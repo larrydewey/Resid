@@ -26,7 +26,7 @@ pub Int h2_t_continuation() { return 9; }
 // length: payload length (0..16777215); stype: frame type; flags:
 // per-type flags byte; sid: stream id with the reserved bit masked off;
 // bad: true when the buffer is too short.
-type H2FrameHdr = { length: Int(64), stype: Int(64), flags: Int(64), sid: Int(64), bad: Bool };
+type H2FrameHdr = { Int(64) length; Int(64) stype; Int(64) flags; Int(64) sid; Bool bad; };
 
 // u24 big-endian at pos.
 pub Int h2_u24(List(Int) b, Int pos) {
@@ -40,14 +40,14 @@ pub Int h2_u24(List(Int) b, Int pos) {
 pub H2FrameHdr h2_frame_hdr(List(Int) b, Int pos) {
     Int n = b.len() - 1;
     if (pos + 8 > n) {
-        return H2FrameHdr { length: 0, stype: 0, flags: 0, sid: 0, bad: true };
+        return H2FrameHdr { .length = 0, .stype = 0, .flags = 0, .sid = 0, .bad = true };
     }
     Int len = h2_u24(b, pos);
     Int ty = b[pos + 3];
     Int fl = b[pos + 4];
     // 32-bit stream id, reserved bit (msb of first octet) ignored.
     Int sid = (b[pos + 5] - (b[pos + 5] / 128) * 128) * 16777216 + b[pos + 6] * 65536 + b[pos + 7] * 256 + b[pos + 8];
-    return H2FrameHdr { length: len, stype: ty, flags: fl, sid: sid, bad: false };
+    return H2FrameHdr { .length = len, .stype = ty, .flags = fl, .sid = sid, .bad = false };
 }
 
 // Encode a frame header into a fresh list (9 data bytes).
@@ -280,12 +280,12 @@ pub Int pow2(Int k) {
 // HPACK integer decoding per RFC 7541 C.1: prefix bits given by
 // pfxmask (e.g. 127 for 7-bit prefixes). Returns the decoded integer;
 // val_out via hp_int_val. bad=true on truncated input.
-type HpInt = { val: Int(64), next: Int(64), bad: Bool };
+type HpInt = { Int(64) val; Int(64) next; Bool bad; };
 
 pub HpInt hp_read_int(List(Int) b, Int pos, Int first, Int pfxmask) {
     Int v = first & pfxmask;
     if (v < pfxmask) {
-        return HpInt { val: v, next: pos, bad: false };
+        return HpInt { .val = v, .next = pos, .bad = false };
     }
     Int m = 0;
     return hp_int_cont(b, pos + 1, pfxmask, v, m);
@@ -293,14 +293,14 @@ pub HpInt hp_read_int(List(Int) b, Int pos, Int first, Int pfxmask) {
 
 pub HpInt hp_int_cont(List(Int) b, Int pos, Int pfxmask, Int acc, Int m) {
     Int n = b.len() - 1;
-    if (pos > n) { return HpInt { val: 0, next: pos, bad: true }; }
+    if (pos > n) { return HpInt { .val = 0, .next = pos, .bad = true }; }
     Int byte = b[pos];
     Int cont = byte & 128;
     Int low = byte - cont;
     Int step = acc + low * pow2(m);
     if (cont == 0) {
         // next = last consumed byte, matching the single-byte path.
-        return HpInt { val: step, next: pos, bad: false };
+        return HpInt { .val = step, .next = pos, .bad = false };
     }
     Int nm = m + 7;
     return hp_int_cont(b, pos + 1, pfxmask, step, nm);
@@ -323,26 +323,26 @@ pub Str h2_bs_acc(List(Int) b, Int start, Int stop, Int i, Str sb) {
 
 // HPACK string literal: H bit + length-int + raw octets. Non-Huffman
 // only in v1. Returns the decoded string.
-type HpStr = { s: Str, next: Int(64), huffman: Bool, bad: Bool };
+type HpStr = { Str s; Int(64) next; Bool huffman; Bool bad; };
 
 pub HpStr hp_read_str(List(Int) b, Int pos) {
     Int n = b.len() - 1;
-    if (pos > n) { return HpStr { s: "", next: pos, huffman: false, bad: true }; }
+    if (pos > n) { return HpStr { .s = "", .next = pos, .huffman = false, .bad = true }; }
     Int first = b[pos];
     Bool huf = first >= 128;
     HpInt li = hp_read_int(b, pos, first, 127);
-    if (li.bad) { return HpStr { s: "", next: li.next, huffman: huf, bad: true }; }
+    if (li.bad) { return HpStr { .s = "", .next = li.next, .huffman = huf, .bad = true }; }
     if (huf) {
         HuffDec hd = hp_huff_str(b, li.next + 1, li.val);
         Str hs = hd.s;
         Int hn = li.next + 1 + li.val;
         Bool hb = hd.bad;
-        return HpStr { s: hs, next: hn, huffman: true, bad: hb };
+        return HpStr { .s = hs, .next = hn, .huffman = true, .bad = hb };
     }
     Int start = li.next + 1;
     Int stop = li.next + li.val;
-    if (stop > n) { return HpStr { s: "", next: start, huffman: false, bad: true }; }
-    return HpStr { s: h2_bytes_str(b, start, stop), next: stop + 1, huffman: false, bad: false };
+    if (stop > n) { return HpStr { .s = "", .next = start, .huffman = false, .bad = true }; }
+    return HpStr { .s = h2_bytes_str(b, start, stop), .next = stop + 1, .huffman = false, .bad = false };
 }
 
 // ─── Dynamic table ────────────────────────────────────────────────────
@@ -381,28 +381,28 @@ pub List(Str) h2_scat_acc(List(Str) a, List(Str) b, Int i, Int last) {
 // ─── Header block decoding ────────────────────────────────────────────
 
 // One decoded header field.
-type HpField = { name: Str, value: Str };
+type HpField = { Str name; Str value; };
 
 // Decoded header-list accumulator result.
-type HpBlock = { fields: List(HpField), next: Int, dyn: List(Str), bad: Bool };
+type HpBlock = { List(HpField) fields; Int next; List(Str) dyn; Bool bad; };
 
 // Decode a complete header block starting at pos. `dyn` is the current
 // dynamic table (mutated by incremental-indexing literals).
 pub HpBlock hp_decode_block(List(Int) b, Int pos, Int end, List(Str) dyn, List(HpField) accf) {
     if (pos > end) {
-        return HpBlock { fields: accf, next: pos, dyn: dyn, bad: false };
+        return HpBlock { .fields = accf, .next = pos, .dyn = dyn, .bad = false };
     }
     if (pos > b.len() - 1) {
-        return HpBlock { fields: accf, next: pos, dyn: dyn, bad: true };
+        return HpBlock { .fields = accf, .next = pos, .dyn = dyn, .bad = true };
     }
     Int first = b[pos];
     if (first >= 128) {
         // Indexed Header Field: 1xxxxxxx.
         HpInt ii = hp_read_int(b, pos, first, 127);
-        if (ii.bad || ii.val == 0) { return HpBlock { fields: accf, next: ii.next, dyn: dyn, bad: true }; }
+        if (ii.bad || ii.val == 0) { return HpBlock { .fields = accf, .next = ii.next, .dyn = dyn, .bad = true }; }
         Str ent = hp_lookup(ii.val, dyn);
-        if (ent == "") { return HpBlock { fields: accf, next: ii.next, dyn: dyn, bad: true }; }
-        HpField f = HpField { name: hp_static_name(ent), value: hp_static_val(ent) };
+        if (ent == "") { return HpBlock { .fields = accf, .next = ii.next, .dyn = dyn, .bad = true }; }
+        HpField f = HpField { .name = hp_static_name(ent), .value = hp_static_val(ent) };
         List(HpField) fs = accf.concat([f]);
         return hp_decode_block(b, ii.next + 1, end, dyn, fs);
     }
@@ -413,7 +413,7 @@ pub HpBlock hp_decode_block(List(Int) b, Int pos, Int end, List(Str) dyn, List(H
     if (first >= 32) {
         // Dynamic Table Size Update: 001xxxxx — accepted, not enforced.
         HpInt si = hp_read_int(b, pos, first, 31);
-        if (si.bad) { return HpBlock { fields: accf, next: si.next, dyn: dyn, bad: true }; }
+        if (si.bad) { return HpBlock { .fields = accf, .next = si.next, .dyn = dyn, .bad = true }; }
         return hp_decode_block(b, si.next + 1, end, dyn, accf);
     }
     // Literal without indexing (0000xxxx) or never indexed (0001xxxx):
@@ -425,7 +425,7 @@ pub HpBlock hp_decode_block(List(Int) b, Int pos, Int end, List(Str) dyn, List(H
 // Shared literal decoding (indexed-name or new-name variants).
 pub HpBlock hp_literal(List(Int) b, Int pos, Int end, List(Str) dyn, List(HpField) accf, Int pfxmask, Int first, Bool incidx) {
     HpInt ni = hp_read_int(b, pos, first, pfxmask);
-    if (ni.bad) { return HpBlock { fields: accf, next: ni.next, dyn: dyn, bad: true }; }
+    if (ni.bad) { return HpBlock { .fields = accf, .next = ni.next, .dyn = dyn, .bad = true }; }
     // Both variants are evaluated eagerly; only one result is used.
     HpStr ns = hp_read_str(b, ni.next + 1);
     Str ent = hp_lookup(ni.val, dyn);
@@ -433,10 +433,10 @@ pub HpBlock hp_literal(List(Int) b, Int pos, Int end, List(Str) dyn, List(HpFiel
     Str name = if (newname) { ns.s } else { hp_static_name(ent) };
     Int aftername = if (newname) { ns.next } else { ni.next + 1 };
     Bool namebad = if (newname) { ns.bad } else { ent == "" };
-    if (namebad) { return HpBlock { fields: accf, next: aftername, dyn: dyn, bad: true }; }
+    if (namebad) { return HpBlock { .fields = accf, .next = aftername, .dyn = dyn, .bad = true }; }
     HpStr vs = hp_read_str(b, aftername);
-    if (vs.bad) { return HpBlock { fields: accf, next: vs.next, dyn: dyn, bad: true }; }
-    HpField f = HpField { name: name, value: vs.s };
+    if (vs.bad) { return HpBlock { .fields = accf, .next = vs.next, .dyn = dyn, .bad = true }; }
+    HpField f = HpField { .name = name, .value = vs.s };
     List(HpField) fs = accf.concat([f]);
     List(Str) dyn2 = hp_maybe_insert(incidx, dyn, name + "=" + vs.s);
     return hp_decode_block(b, vs.next, end, dyn2, fs);
@@ -548,9 +548,9 @@ pub Int hp_huff_bits(Int s) {
 }
 
 
-type HuffState = { sym: Int(64), nextg: Int(64), bad: Bool };
+type HuffState = { Int(64) sym; Int(64) nextg; Bool bad; };
 
-type HuffDec = { s: Str, nextg: Int(64), bad: Bool };
+type HuffDec = { Str s; Int(64) nextg; Bool bad; };
 
 // Bit value at global bit position g; -1 past the end.
 pub Int hp_bit_at(List(Int) b, Int g, Int gend) {
@@ -579,20 +579,20 @@ pub Int hp_huff_find_at(Int l, Int code, Int s) {
 // Decode one symbol starting at global bit g.
 pub HuffState hp_huff_one(List(Int) b, Int g, Int gend, Int len, Int acc) {
     if (len >= 30) {
-        return HuffState { sym: 0, nextg: g, bad: true };
+        return HuffState { .sym = 0, .nextg = g, .bad = true };
     }
     Int bitv = hp_bit_at(b, g, gend);
     if (bitv < 0) {
-        return HuffState { sym: 0, nextg: g, bad: true };
+        return HuffState { .sym = 0, .nextg = g, .bad = true };
     }
     Int acc2 = acc * 2 + bitv;
     Int l2 = len + 1;
     Int sym = hp_huff_find(l2, acc2);
     if (sym == 256) {
-        return HuffState { sym: 0, nextg: g, bad: true };
+        return HuffState { .sym = 0, .nextg = g, .bad = true };
     }
     if (sym >= 0) {
-        return HuffState { sym: sym, nextg: g + 1, bad: false };
+        return HuffState { .sym = sym, .nextg = g + 1, .bad = false };
     }
     return hp_huff_one(b, g + 1, gend, l2, acc2);
 }
@@ -609,12 +609,12 @@ pub Bool hp_pad_ones(List(Int) b, Int g, Int gend) {
 pub HuffDec hp_huff_loop(List(Int) b, Int g, Int gend, Str sb) {
     Int rem = gend - g;
     if (rem == 0) {
-        return HuffDec { s: str_sb_finish(sb), nextg: gend, bad: false };
+        return HuffDec { .s = str_sb_finish(sb), .nextg = gend, .bad = false };
     }
     if (rem < 5) {
         // Shorter than the minimum code: must be EOS padding.
         Bool pad0 = hp_pad_ones(b, g, gend);
-        return HuffDec { s: str_sb_finish(sb), nextg: gend, bad: !pad0 };
+        return HuffDec { .s = str_sb_finish(sb), .nextg = gend, .bad = !pad0 };
     }
     HuffState st = hp_huff_one(b, g, gend, 0, 0);
     if (st.bad) {
@@ -622,9 +622,9 @@ pub HuffDec hp_huff_loop(List(Int) b, Int g, Int gend, Str sb) {
         // partial byte.
         if (rem < 8) {
             Bool pad1 = hp_pad_ones(b, g, gend);
-            return HuffDec { s: str_sb_finish(sb), nextg: gend, bad: !pad1 };
+            return HuffDec { .s = str_sb_finish(sb), .nextg = gend, .bad = !pad1 };
         }
-        return HuffDec { s: str_sb_finish(sb), nextg: st.nextg, bad: true };
+        return HuffDec { .s = str_sb_finish(sb), .nextg = st.nextg, .bad = true };
     }
     Str sb2 = str_sb_append_cp(sb, st.sym);
     return hp_huff_loop(b, st.nextg, gend, sb2);

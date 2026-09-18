@@ -3,19 +3,15 @@ use std::path::{Path, PathBuf};
 
 use resid_parser::resolve_unit;
 
-fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("resid-resolve-{}-{}", tag, std::process::id()));
+fn temp_dir(tag: &str) -> PathBuf { let dir = std::env::temp_dir().join(format!("resid-resolve-{}-{}", tag, std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    dir
-}
+    dir }
 
-fn write(dir: &Path, rel: &str, content: &str) -> PathBuf {
-    let p = dir.join(rel);
+fn write(dir: &Path, rel: &str, content: &str) -> PathBuf { let p = dir.join(rel);
     fs::create_dir_all(p.parent().unwrap()).unwrap();
     fs::write(&p, content).unwrap();
-    p
-}
+    p }
 
 #[test]
 fn resolves_simple_import() {
@@ -185,11 +181,11 @@ fn non_pub_function_not_visible() {
 #[test]
 fn types_are_always_exported() {
     let dir = temp_dir("types");
-    write(&dir, "geom.resid", "type Point = { x: Int, y: Int };\npub Int px(Point p) { return p.x; }\n");
+    write(&dir, "geom.resid", "type Point = { Int x; Int y; };\npub Int px(Point p) { return p.x; }\n");
     let root = write(
         &dir,
         "main.resid",
-        "import \"geom.resid\";\nInt main() {\n    Point p = Point { x: 1, y: 2 };\n    return px(p);\n}\n",
+        "import \"geom.resid\";\nInt main() {\n    Point p = Point { .x = 1, .y = 2 };\n    return px(p);\n}\n",
     );
     let unit = resolve_unit(&root).expect("resolve ok");
     assert!(

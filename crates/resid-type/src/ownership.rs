@@ -146,6 +146,20 @@ impl OwnershipInfo {
     /// other occurrence (including earlier uses of the *same* root — those
     /// are safe reads, just not terminal) and for any root this analysis
     /// declined to recognize at all.
+    ///
+    /// **Soundness contract (settled against the E.4 crash, see
+    /// `PLAN-resid-only.md`'s E.4 section):** every terminal kind this
+    /// recognizes is a *transfer* — the value flows to the caller
+    /// (`return acc;`), to the next activation frame (a self-recursive
+    /// same-slot call argument, e.g. `imp_resolve_lines`), or into a fresh
+    /// container it is embedded in. Codegen must therefore NEVER read this
+    /// as "free the allocation here": do free-insertion only from a
+    /// dedicated final-drop pass that proves a plain non-transferring read
+    /// with no further reference anywhere (in this function, in any callee
+    /// it's forwarded into, and past any enclosing return). Wireable today
+    /// as: in-place reuse / mutate the allocation and return the same
+    /// pointer (matching `growable.rs`'s GrowBuf and the plan's struct-box
+    /// reuse), or plain copy — never free.
     pub fn is_last_unique_use(&self, e: &Expr) -> bool {
         self.last_unique_uses.contains(&site_key(e))
     }
@@ -1457,14 +1471,14 @@ mod tests {
     #[test]
     fn local_root_field_growth_recognized() {
         let src = r#"
-            type CapPP = { lines: List(Str), glines: List(Str) };
-            type PG = { lines: List(Str), glines: List(Str), tmp: Int };
+            type CapPP = { List(Str) lines; List(Str) glines; };
+            type PG = { List(Str) lines; List(Str) glines; Int tmp; };
 
             PG pg_func(CapPP g, Int t) {
                 CapPP pp1 = mk1();
                 CapPP pp2 = mk2();
                 List(Str) lns = pp1.lines.concat(pp2.lines).concat(["}"]);
-                return PG { lines: lns, glines: pp2.glines, tmp: t };
+                return PG { .lines = lns, .glines = pp2.glines, .tmp = t };
             }
         "#;
         let unit = parse(src);
@@ -1490,11 +1504,11 @@ mod tests {
     #[test]
     fn struct_box_reuse_recognized() {
         let src = r#"
-            type PG = { lines: List(Str), tmp: Int };
+            type PG = { List(Str) lines; Int tmp; };
 
             PG rebuild(PG g) {
                 if (g.tmp < 0) { return g; }
-                return PG { lines: g.lines, tmp: g.tmp + 1 };
+                return PG { .lines = g.lines, .tmp = g.tmp + 1 };
             }
         "#;
         let unit = parse(src);
@@ -1539,12 +1553,12 @@ mod tests {
     #[test]
     fn mid_block_handoff_recognized() {
         let src = r#"
-            type GT = { lines: List(Str), tag: Str };
-            type Box = { l: List(Str) };
+            type GT = { List(Str) lines; Str tag; };
+            type Box = { List(Str) l; };
 
             Box wrap_mid(GT ev, Str s) {
                 List(Str) d = ev.lines.concat([s]);
-                Box b = Box { l: d };
+                Box b = Box { .l = d };
                 Int x = 1 + 1;
                 return b;
             }
@@ -1568,12 +1582,12 @@ mod tests {
     #[test]
     fn double_use_after_mid_block_handoff_disqualifies() {
         let src = r#"
-            type GT = { lines: List(Str), tag: Str };
-            type Box = { l: List(Str) };
+            type GT = { List(Str) lines; Str tag; };
+            type Box = { List(Str) l; };
 
             Box wrap_and_reuse(GT ev, Str s) {
                 List(Str) d = ev.lines.concat([s]);
-                Box b = Box { l: d };
+                Box b = Box { .l = d };
                 Int n = d.len();
                 return b;
             }
@@ -1592,13 +1606,13 @@ mod tests {
     #[test]
     fn escaping_local_disqualified() {
         let src = r#"
-            type CapPP = { lines: List(Str) };
+            type CapPP = { List(Str) lines; };
 
             CapPP leaks() {
                 CapPP acc = mk();
                 CapPP other = stash(acc);
                 List(Str) d = acc.lines.concat(["x"]);
-                return CapPP { lines: d };
+                return CapPP { .lines = d };
             }
         "#;
         let unit = parse(src);
@@ -1615,16 +1629,16 @@ mod tests {
     /// coverage, now via the unified mechanism.
     #[test]
     fn tail_handoff_to_never_escapes_bare_recognized() {        let src = r#"
-            type GT = { lines: List(Str), val: Str };
+            type GT = { List(Str) lines; Str val; };
 
             GT gt_err(Str msg, GT base) {
-                return GT { lines: base.lines, val: msg };
+                return GT { .lines = base.lines, .val = msg };
             }
 
             GT finish_ifexpr(GT ev, Str ld) {
                 if (ld != "") { return gt_err(ld, ev); }
                 List(Str) d = ev.lines.concat([ld]);
-                return GT { lines: d, val: ld };
+                return GT { .lines = d, .val = ld };
             }
         "#;
         let unit = parse(src);
@@ -1648,15 +1662,15 @@ mod tests {
     #[test]
     fn fresh_literal_call_arg_keeps_param_root() {
         let src = r#"
-            type GT = { lines: List(Str), tag: Str };
+            type GT = { List(Str) lines; Str tag; };
 
             GT grow(GT ev) {
                 List(Str) d = ev.lines.concat(["x"]);
-                return GT { lines: d, tag: ev.tag };
+                return GT { .lines = d, .tag = ev.tag };
             }
 
             GT call_fresh() {
-                return grow(GT { lines: [], tag: "t" });
+                return grow(GT { .lines = [], .tag = "t" });
             }
         "#;
         let unit = parse(src);
@@ -1677,11 +1691,11 @@ mod tests {
     #[test]
     fn aliased_call_arg_disqualifies_param_root() {
         let src = r#"
-            type GT = { lines: List(Str), tag: Str };
+            type GT = { List(Str) lines; Str tag; };
 
             GT grow(GT ev) {
                 List(Str) d = ev.lines.concat(["x"]);
-                return GT { lines: d, tag: ev.tag };
+                return GT { .lines = d, .tag = ev.tag };
             }
 
             GT call_alias(GT src) {
@@ -1706,11 +1720,11 @@ mod tests {
     #[test]
     fn moved_call_arg_keeps_param_root() {
         let src = r#"
-            type GT = { lines: List(Str), tag: Str };
+            type GT = { List(Str) lines; Str tag; };
 
             GT grow(GT ev) {
                 List(Str) d = ev.lines.concat(["x"]);
-                return GT { lines: d, tag: ev.tag };
+                return GT { .lines = d, .tag = ev.tag };
             }
 
             GT call_move(GT src) {
@@ -1733,15 +1747,15 @@ mod tests {
     #[test]
     fn call_result_arg_keeps_param_root() {
         let src = r#"
-            type GT = { lines: List(Str), tag: Str };
+            type GT = { List(Str) lines; Str tag; };
 
             GT grow(GT ev) {
                 List(Str) d = ev.lines.concat(["x"]);
-                return GT { lines: d, tag: ev.tag };
+                return GT { .lines = d, .tag = ev.tag };
             }
 
             GT fresh() {
-                return GT { lines: [], tag: "t" };
+                return GT { .lines = [], .tag = "t" };
             }
 
             GT call_result() {
@@ -1770,7 +1784,7 @@ mod tests {
                 return chain(names, k);
             }
 
-            type FS = { ctn: List(Str) };
+            type FS = { List(Str) ctn; };
 
             Bool call_field(FS fs) {
                 return chain(fs.ctn, 0).len() > 0;

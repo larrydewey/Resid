@@ -85,13 +85,13 @@ def main():
     tc = read('examples/typecheck.resid')
     dv = read('examples/driver.resid')
 
-    # 1. base: codegen without CLI
+    # 1. base: codegen without CLI (original recipe)
     base = drop_decls(cg, {'pick_out'})
     base = cut_main(base)
     while base and base[-1].strip() == '':
         base.pop()
 
-    # 2. chunk: typecheck checker section
+# 2. chunk: typecheck checker section
     cs = next(i for i, l in enumerate(tc) if 'Environment' in l)
     # include preceding blank separation cleanly
     chunk = tc[cs:]
@@ -123,7 +123,9 @@ def main():
         # richer family/readonly/meet-caps helpers
         # used for enforcement are NOT duplicated in
         # codegen and so are not in this list.)
-        'cap_list_at', 'ceil_join'
+        'cap_list_at', 'ceil_join',
+        # op_prec is NOT dropped — rename_chunk will rename it to ck_op_prec
+        # so typecheck can call ck_op_prec without conflicting with base's op_prec
     })
     chunk_t = rename_chunk('\n'.join(chunk)).split('\n')
 

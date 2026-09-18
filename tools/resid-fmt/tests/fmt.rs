@@ -37,11 +37,11 @@ fn string_escapes_round_trip() {
 
 #[test]
 fn imports_types_and_match_format() {
-    let src = "import \"u.resid\" as U;\nimport \"v.resid\" (a,b);\ntype P = { x: Int, y: Int };\ntype R = Some(Int) | None;\nInt main() {\n    Option(Int) m = Some(1);\n    Int v = match m { Some(k) => k, None => 0, };\n    return v;\n}\n";
+    let src = "import \"u.resid\" as U;\nimport \"v.resid\" (a,b);\ntype P = { Int x; Int y; };\ntype R = Some(Int) | None;\nInt main() {\n    Option(Int) m = Some(1);\n    Int v = match m { Some(k) => k, None => 0, };\n    return v;\n}\n";
     let once = fmt(src);
     assert!(once.contains("import \"u.resid\" as U;"));
     assert!(once.contains("import \"v.resid\" (a, b);"));
-    assert!(once.contains("type P = { x: Int, y: Int };"));
+    assert!(once.contains("type P = { Int x; Int y; };"));
     assert!(once.contains("type R = Some(Int) | None;"));
     assert!(once.contains("Some(k) => k,"));
     assert_eq!(once, fmt(&once));

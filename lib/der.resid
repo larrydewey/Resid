@@ -9,7 +9,7 @@
 // One parsed DER element.
 // tag: identifier octet; cls: 0=universal 1=app 2=context 3=private;
 // hdr_len: start-to-content bytes; val_len: content length (-1 malformed).
-type DerTlv = { tag: Int, cls: Int, hdr_len: Int, val_len: Int };
+type DerTlv = { Int tag; Int cls; Int hdr_len; Int val_len; };
 
 
 pub Int der_cls_of(Int tag) {
@@ -48,19 +48,19 @@ pub Int der_read_len_acc(List(Int) data, Int i, Int end, Int acc) {
 pub DerTlv der_next(List(Int) data, Int pos) {
     Int n = data.len() - 1;
     if (pos > n) {
-        return DerTlv { tag: 0, cls: 0, hdr_len: 0, val_len: -1 };
+        return DerTlv { .tag = 0, .cls = 0, .hdr_len = 0, .val_len = -1 };
     }
     Int tag = data[pos];
     Int c = der_cls_of(tag);
     Int p1 = pos + 1;
     Int len = der_read_len(data, p1);
     if (len < 0) {
-        return DerTlv { tag: tag, cls: c, hdr_len: 0, val_len: -1 };
+        return DerTlv { .tag = tag, .cls = c, .hdr_len = 0, .val_len = -1 };
     }
     // Total header: identifier octet + length field.
     Int lflen = der_hdr_len(data, p1);
     Int hlen = lflen + 1;
-    return DerTlv { tag: tag, cls: c, hdr_len: hlen, val_len: len };
+    return DerTlv { .tag = tag, .cls = c, .hdr_len = hlen, .val_len = len };
 }
 
 // Bytes consumed by the length field at `pos` (which holds the first

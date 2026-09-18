@@ -192,7 +192,7 @@ Int scan_fstring(Str s, Int i, Int n, Int depth) {
 // A token: text plus where the scan left off (pos = index after the token).
 // kind: "ident" | "keyword" | "int" | "float" | "str" | "raw" | "bytes" |
 //       "fstring" | "char" | "op" | "eof"
-type Tok = { pos: Int, text: Str, kind: Str };
+type Tok = { Int pos; Str text; Str kind; };
 
 Tok lex_op2(Str s, Int pos, Int n) {
     Int c = char_at(s, pos);
@@ -200,55 +200,55 @@ Tok lex_op2(Str s, Int pos, Int n) {
     Int c3 = char_next2(s, pos);
     if (c == 46) {  // .
         if (c2 == 46) {
-            if (c3 == 61) { Int k = pos + 3; return Tok { pos: k, text: "..=", kind: "op" }; }
+            if (c3 == 61) { Int k = pos + 3; return Tok {.pos = k, .text = "..=", .kind = "op"}; }
             Int k = pos + 2;
-            return Tok { pos: k, text: "..", kind: "op" };
+            return Tok {.pos = k, .text = "..", .kind = "op"};
         }
         Int k = pos + 1;
-        return Tok { pos: k, text: ".", kind: "op" };
+        return Tok {.pos = k, .text = ".", .kind = "op"};
     }
     if (c == 60) {  // <
-        if (c2 == 60) { Int k = pos + 2; return Tok { pos: k, text: "<<", kind: "op" }; }
-        if (c2 == 61) { Int k = pos + 2; return Tok { pos: k, text: "<=", kind: "op" }; }
+        if (c2 == 60) { Int k = pos + 2; return Tok {.pos = k, .text = "<<", .kind = "op"}; }
+        if (c2 == 61) { Int k = pos + 2; return Tok {.pos = k, .text = "<=", .kind = "op"}; }
         Int k = pos + 1;
-        return Tok { pos: k, text: "<", kind: "op" };
+        return Tok {.pos = k, .text = "<", .kind = "op"};
     }
     if (c == 62) {  // >
-        if (c2 == 62) { Int k = pos + 2; return Tok { pos: k, text: ">>", kind: "op" }; }
-        if (c2 == 61) { Int k = pos + 2; return Tok { pos: k, text: ">=", kind: "op" }; }
+        if (c2 == 62) { Int k = pos + 2; return Tok {.pos = k, .text = ">>", .kind = "op"}; }
+        if (c2 == 61) { Int k = pos + 2; return Tok {.pos = k, .text = ">=", .kind = "op"}; }
         Int k = pos + 1;
-        return Tok { pos: k, text: ">", kind: "op" };
+        return Tok {.pos = k, .text = ">", .kind = "op"};
     }
     if (c == 61) {  // =
-        if (c2 == 61) { Int k = pos + 2; return Tok { pos: k, text: "==", kind: "op" }; }
-        if (c2 == 62) { Int k = pos + 2; return Tok { pos: k, text: "=>", kind: "op" }; }
+        if (c2 == 61) { Int k = pos + 2; return Tok {.pos = k, .text = "==", .kind = "op"}; }
+        if (c2 == 62) { Int k = pos + 2; return Tok {.pos = k, .text = "=>", .kind = "op"}; }
         Int k = pos + 1;
-        return Tok { pos: k, text: "=", kind: "op" };
+        return Tok {.pos = k, .text = "=", .kind = "op"};
     }
     if (c == 33) {  // !
-        if (c2 == 61) { Int k = pos + 2; return Tok { pos: k, text: "!=", kind: "op" }; }
+        if (c2 == 61) { Int k = pos + 2; return Tok {.pos = k, .text = "!=", .kind = "op"}; }
         Int k = pos + 1;
-        return Tok { pos: k, text: "!", kind: "op" };
+        return Tok {.pos = k, .text = "!", .kind = "op"};
     }
     if (c == 38) {  // &
-        if (c2 == 38) { Int k = pos + 2; return Tok { pos: k, text: "&&", kind: "op" }; }
+        if (c2 == 38) { Int k = pos + 2; return Tok {.pos = k, .text = "&&", .kind = "op"}; }
         Int k = pos + 1;
-        return Tok { pos: k, text: "&", kind: "op" };
+        return Tok {.pos = k, .text = "&", .kind = "op"};
     }
     if (c == 124) {  // |
-        if (c2 == 124) { Int k = pos + 2; return Tok { pos: k, text: "||", kind: "op" }; }
+        if (c2 == 124) { Int k = pos + 2; return Tok {.pos = k, .text = "||", .kind = "op"}; }
         Int k = pos + 1;
-        return Tok { pos: k, text: "|", kind: "op" };
+        return Tok {.pos = k, .text = "|", .kind = "op"};
     }
     Int k = pos + 1;
-    return Tok { pos: k, text: str_from_code(c), kind: "op" };
+    return Tok {.pos = k, .text = str_from_code(c), .kind = "op"};
 }
 
 Tok lex_tok(Str s, Int pos) {
     Int n = str_len_1(s);
     Int j = skip_all(s, pos, n);
     if (j >= n) {
-        return Tok { pos: j, text: "", kind: "eof" };
+        return Tok {.pos = j, .text = "", .kind = "eof"};
     }
     Int c = char_at(s, j);
     Int c2 = char_next(s, j);
@@ -258,7 +258,7 @@ Tok lex_tok(Str s, Int pos) {
             Int k = j + 2;
             Int end = scan_fstring(s, k, n, 0);
             Str text = str_slice(s, j, end);
-            return Tok { pos: end, text: text, kind: "fstring" };
+            return Tok {.pos = end, .text = text, .kind = "fstring"};
         }
     }
     if (c == 114) {  // r
@@ -266,7 +266,7 @@ Tok lex_tok(Str s, Int pos) {
             Int k = j + 2;
             Int end = scan_string(s, k, n);
             Str text = str_slice(s, j, end);
-            return Tok { pos: end, text: text, kind: "raw" };
+            return Tok {.pos = end, .text = text, .kind = "raw"};
         }
     }
     if (c == 98) {  // b
@@ -274,19 +274,19 @@ Tok lex_tok(Str s, Int pos) {
             Int k = j + 2;
             Int end = scan_string(s, k, n);
             Str text = str_slice(s, j, end);
-            return Tok { pos: end, text: text, kind: "bytes" };
+            return Tok {.pos = end, .text = text, .kind = "bytes"};
         }
     }
     if (c == 34) {
         Int k = j + 1;
         Int end = scan_string(s, k, n);
         Str text = str_slice(s, j, end);
-        return Tok { pos: end, text: text, kind: "str" };
+        return Tok {.pos = end, .text = text, .kind = "str"};
     }
     if (c == 39) {
         Int k = j + 3;
         Str text = str_slice(s, j, k);
-        return Tok { pos: k, text: text, kind: "char" };
+        return Tok {.pos = k, .text = text, .kind = "char"};
     }
     if (is_digit(c)) {
         // number: try float, hex/bin/oct, dec
@@ -295,19 +295,19 @@ Tok lex_tok(Str s, Int pos) {
                 Int k = j + 2;
                 Int e = scan_digits(s, k, n, 16);
                 Str text = str_slice(s, j, e);
-                return Tok { pos: e, text: text, kind: "int" };
+                return Tok {.pos = e, .text = text, .kind = "int"};
             }
             if (c2 == 98) {
                 Int k = j + 2;
                 Int e = scan_digits(s, k, n, 2);
                 Str text = str_slice(s, j, e);
-                return Tok { pos: e, text: text, kind: "int" };
+                return Tok {.pos = e, .text = text, .kind = "int"};
             }
             if (c2 == 111) {
                 Int k = j + 2;
                 Int e = scan_digits(s, k, n, 8);
                 Str text = str_slice(s, j, e);
-                return Tok { pos: e, text: text, kind: "int" };
+                return Tok {.pos = e, .text = text, .kind = "int"};
             }
         }
         Int e = scan_digits(s, j, n, 10);
@@ -318,29 +318,29 @@ Tok lex_tok(Str s, Int pos) {
                 Int k = e + 1;
                 Int ef = scan_digits(s, k, n, 10);
                 Str text = str_slice(s, j, ef);
-                return Tok { pos: ef, text: text, kind: "float" };
+                return Tok {.pos = ef, .text = text, .kind = "float"};
             }
         }
         Str text = str_slice(s, j, e);
-        return Tok { pos: e, text: text, kind: "int" };
+        return Tok {.pos = e, .text = text, .kind = "int"};
     }
     if (is_alpha(c)) {
         Int e = scan_ident(s, j, n);
         Str text = str_slice(s, j, e);
-        return Tok { pos: e, text: text, kind: "ident" };
+        return Tok {.pos = e, .text = text, .kind = "ident"};
     }
     if (c == 95) {  // _
         Int e = scan_ident(s, j, n);
         Str text = str_slice(s, j, e);
-        return Tok { pos: e, text: text, kind: "ident" };
+        return Tok {.pos = e, .text = text, .kind = "ident"};
     }
     if (c == 35) {  // #
         Int k = j + 8;
-        return Tok { pos: k, text: "#location", kind: "op" };
+        return Tok {.pos = k, .text = "#location", .kind = "op"};
     }
     if (c == 64) {  // @
         Int k = j + 1;
-        return Tok { pos: k, text: "@", kind: "op" };
+        return Tok {.pos = k, .text = "@", .kind = "op"};
     }
     return lex_op2(s, j, n);
 }
@@ -361,7 +361,7 @@ Bool is_keyword(Str s) {
 
 // ─── Parse result: next position + printed AST fragment ────────
 
-type PRes = { pos: Int, ast: Str };
+type PRes = { Int pos; Str ast; };
 
 // ─── Operator precedence (spec §30) ─────────────────────────────
 
@@ -392,54 +392,54 @@ Int op_prec(Str op) {
 PRes parse_primary(Str s, Int pos) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "int") {
-        return PRes { pos: t.pos, ast: f"(int {t.text})" };
+        return PRes {.pos = t.pos, .ast = f"(int {t.text})"};
     }
     if (t.kind == "float") {
-        return PRes { pos: t.pos, ast: f"(float {t.text})" };
+        return PRes {.pos = t.pos, .ast = f"(float {t.text})"};
     }
     if (t.kind == "str") {
-        return PRes { pos: t.pos, ast: f"(str {t.text})" };
+        return PRes {.pos = t.pos, .ast = f"(str {t.text})"};
     }
     if (t.kind == "char") {
-        return PRes { pos: t.pos, ast: f"(char {t.text})" };
+        return PRes {.pos = t.pos, .ast = f"(char {t.text})"};
     }
     if (t.kind == "raw") {
-        return PRes { pos: t.pos, ast: f"(raw {t.text})" };
+        return PRes {.pos = t.pos, .ast = f"(raw {t.text})"};
     }
     if (t.kind == "bytes") {
-        return PRes { pos: t.pos, ast: f"(bytes {t.text})" };
+        return PRes {.pos = t.pos, .ast = f"(bytes {t.text})"};
     }
     if (t.kind == "fstring") {
-        return PRes { pos: t.pos, ast: f"(fstring {t.text})" };
+        return PRes {.pos = t.pos, .ast = f"(fstring {t.text})"};
     }
     if (t.text == "true") {
-        return PRes { pos: t.pos, ast: "(bool true)" };
+        return PRes {.pos = t.pos, .ast = "(bool true)"};
     }
     if (t.text == "false") {
-        return PRes { pos: t.pos, ast: "(bool false)" };
+        return PRes {.pos = t.pos, .ast = "(bool false)"};
     }
     if (t.text == "match") {
         return parse_match(s, t.pos);
     }
     if (t.kind == "ident") {
-        // struct literal? IDENT { fields } — only when `{ ident :` (avoids
+        // struct literal? IDENT {fields} — only when `{ . ident` (avoids
         // stealing the match/block brace).
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "{") {
             Tok t3 = lex_tok(s, t2.pos);
-            Tok t4 = lex_tok(s, t3.pos);
-            if (t3.kind == "ident") {
-                if (t4.text == ":") {
+            if (t3.text == ".") {
+                Tok t4 = lex_tok(s, t3.pos);
+                if (t4.kind == "ident") {
                     return parse_struct_lit(s, t, t2.pos);
                 }
             }
         }
-        return PRes { pos: t.pos, ast: f"(id {t.text})" };
+        return PRes {.pos = t.pos, .ast = f"(id {t.text})"};
     }
     if (t.text == "(") {
         PRes inner = parse_expr(s, t.pos, 1);
         Tok close = lex_tok(s, inner.pos);
-        return PRes { pos: close.pos, ast: f"(paren {inner.ast})" };
+        return PRes {.pos = close.pos, .ast = f"(paren {inner.ast})"};
     }
     if (t.text == "[") {
         return parse_list_lit(s, t.pos);
@@ -451,12 +451,12 @@ PRes parse_primary(Str s, Int pos) {
         Tok t2 = lex_tok(s, t.pos);
         Tok t3 = lex_tok(s, t2.pos);
         PRes inner = parse_expr(s, t3.pos, 1);
-        return PRes { pos: inner.pos, ast: f"(residual {inner.ast})" };
+        return PRes {.pos = inner.pos, .ast = f"(residual {inner.ast})"};
     }
     if (t.kind == "eof") {
-        return PRes { pos: t.pos, ast: "(err eof)" };
+        return PRes {.pos = t.pos, .ast = "(err eof)"};
     }
-    return PRes { pos: t.pos, ast: f"(err {t.text})" };
+    return PRes {.pos = t.pos, .ast = f"(err {t.text})"};
 }
 
 PRes parse_struct_lit(Str s, Tok name, Int pos) {
@@ -465,17 +465,18 @@ PRes parse_struct_lit(Str s, Tok name, Int pos) {
 }
 
 PRes parse_struct_lit_rest(Str s, Int pos, Str acc) {
-    Tok t = lex_tok(s, pos);
-    if (t.text == "}") {
-        return PRes { pos: t.pos, ast: f"{acc})" };
+    Tok dot = lex_tok(s, pos);
+    if (dot.text == "}") {
+        return PRes {.pos = dot.pos, .ast = f"{acc})"};
     }
-    Tok colon = lex_tok(s, t.pos);
-    PRes v = parse_expr(s, colon.pos, 1);
+    Tok name = lex_tok(s, dot.pos);
+    Tok eq = lex_tok(s, name.pos);
+    PRes v = parse_expr(s, eq.pos, 1);
     Tok comma = lex_tok(s, v.pos);
     if (comma.text == ",") {
-        return parse_struct_lit_rest(s, comma.pos, f"{acc} ({t.text} {v.ast})");
+        return parse_struct_lit_rest(s, comma.pos, f"{acc} ({name.text} {v.ast})");
     }
-    return PRes { pos: comma.pos, ast: f"{acc} ({t.text} {v.ast}))" };
+    return PRes {.pos = comma.pos, .ast = f"{acc} ({name.text} {v.ast}))"};
 }
 
 PRes parse_list_lit(Str s, Int pos) {
@@ -485,14 +486,14 @@ PRes parse_list_lit(Str s, Int pos) {
 PRes parse_list_lit_rest(Str s, Int pos, Str acc) {
     Tok t = lex_tok(s, pos);
     if (t.text == "]") {
-        return PRes { pos: t.pos, ast: f"{acc})" };
+        return PRes {.pos = t.pos, .ast = f"{acc})"};
     }
     PRes v = parse_expr(s, pos, 1);
     Tok comma = lex_tok(s, v.pos);
     if (comma.text == ",") {
         return parse_list_lit_rest(s, comma.pos, f"{acc} {v.ast}");
     }
-    return PRes { pos: comma.pos, ast: f"{acc} {v.ast})" };
+    return PRes {.pos = comma.pos, .ast = f"{acc} {v.ast})"};
 }
 
 PRes parse_match(Str s, Int pos) {
@@ -504,7 +505,7 @@ PRes parse_match(Str s, Int pos) {
 PRes parse_match_arms(Str s, Int pos, Str acc) {
     Tok first = lex_tok(s, pos);
     if (first.text == "}") {
-        return PRes { pos: first.pos, ast: f"{acc})" };
+        return PRes {.pos = first.pos, .ast = f"{acc})"};
     }
     // pattern is a primary-ish expression: Some(k), None, _, literal, id
     PRes pat = parse_expr(s, pos, 1);
@@ -516,12 +517,12 @@ PRes parse_match_arms(Str s, Int pos, Str acc) {
             return parse_match_arms(s, comma.pos, f"{acc} ({pat.ast} {v.ast})");
         }
         if (comma.text == "}") {
-            return PRes { pos: comma.pos, ast: f"{acc} ({pat.ast} {v.ast}))" };
+            return PRes {.pos = comma.pos, .ast = f"{acc} ({pat.ast} {v.ast}))"};
         }
-        return PRes { pos: comma.pos, ast: f"{acc} ({pat.ast} {v.ast}))" };
+        return PRes {.pos = comma.pos, .ast = f"{acc} ({pat.ast} {v.ast}))"};
     }
     // no `=>` — bare arm; stop
-    return PRes { pos: arrow.pos, ast: f"{acc} ({pat.ast}))" };
+    return PRes {.pos = arrow.pos, .ast = f"{acc} ({pat.ast}))"};
 }
 
 PRes parse_postfix(Str s, Int pos) {
@@ -538,10 +539,10 @@ PRes parse_postfix_rest(Str s, PRes acc) {
             if (t2.text == "(") {
                 PRes args = parse_args(s, t2.pos);
                 Str ast = f"(call {acc.ast}.{m.text} {args.ast})";
-                return parse_postfix_rest(s, PRes { pos: args.pos, ast: ast });
+                return parse_postfix_rest(s, PRes {.pos = args.pos, .ast = ast});
             }
             Str ast = f"(field {acc.ast} {m.text})";
-            return parse_postfix_rest(s, PRes { pos: m.pos, ast: ast });
+            return parse_postfix_rest(s, PRes {.pos = m.pos, .ast = ast});
         }
         return acc;
     }
@@ -551,21 +552,21 @@ PRes parse_postfix_rest(Str s, PRes acc) {
     if (t.text == "(") {
         PRes args = parse_args(s, t.pos);
         Str ast = f"(call {acc.ast} {args.ast})";
-        return parse_postfix_rest(s, PRes { pos: args.pos, ast: ast });
+        return parse_postfix_rest(s, PRes {.pos = args.pos, .ast = ast});
     }
     if (t.text == "?") {
         Str ast = f"(unwrap {acc.ast})";
-        return parse_postfix_rest(s, PRes { pos: t.pos, ast: ast });
+        return parse_postfix_rest(s, PRes {.pos = t.pos, .ast = ast});
     }
     if (t.text == "..") {
         PRes rhs = parse_expr(s, t.pos, 1);
         Str ast = f"(range {acc.ast} {rhs.ast})";
-        return parse_postfix_rest(s, PRes { pos: rhs.pos, ast: ast });
+        return parse_postfix_rest(s, PRes {.pos = rhs.pos, .ast = ast});
     }
     if (t.text == "..=") {
         PRes rhs = parse_expr(s, t.pos, 1);
         Str ast = f"(range= {acc.ast} {rhs.ast})";
-        return parse_postfix_rest(s, PRes { pos: rhs.pos, ast: ast });
+        return parse_postfix_rest(s, PRes {.pos = rhs.pos, .ast = ast});
     }
     return acc;
 }
@@ -577,18 +578,18 @@ PRes parse_index_rest(Str s, PRes acc, Int pos) {
         PRes end = parse_expr(s, t.pos, 1);
         Tok close = lex_tok(s, end.pos);
         Str ast = f"(slice {acc.ast} {end.ast})";
-        return PRes { pos: close.pos, ast: ast };
+        return PRes {.pos = close.pos, .ast = ast};
     }
     PRes idx = parse_expr(s, pos, 1);
     Tok close = lex_tok(s, idx.pos);
     Str ast2 = f"(index {acc.ast} {idx.ast})";
-    return PRes { pos: close.pos, ast: ast2 };
+    return PRes {.pos = close.pos, .ast = ast2};
 }
 
 PRes parse_args(Str s, Int pos) {
     Tok t = lex_tok(s, pos);
     if (t.text == ")") {
-        return PRes { pos: t.pos, ast: "" };
+        return PRes {.pos = t.pos, .ast = ""};
     }
     return parse_args_rest(s, pos, "");
 }
@@ -600,28 +601,28 @@ PRes parse_args_rest(Str s, Int pos, Str acc) {
         return parse_args_rest(s, t.pos, f"{acc} {e.ast}");
     }
     if (t.text == ")") {
-        return PRes { pos: t.pos, ast: f"{acc} {e.ast}" };
+        return PRes {.pos = t.pos, .ast = f"{acc} {e.ast}"};
     }
-    return PRes { pos: t.pos, ast: f"{acc} {e.ast}" };
+    return PRes {.pos = t.pos, .ast = f"{acc} {e.ast}"};
 }
 
 PRes parse_unary(Str s, Int pos) {
     Tok t = lex_tok(s, pos);
     if (t.text == "+") {
         PRes inner = parse_unary(s, t.pos);
-        return PRes { pos: inner.pos, ast: f"(un + {inner.ast})" };
+        return PRes {.pos = inner.pos, .ast = f"(un + {inner.ast})"};
     }
     if (t.text == "-") {
         PRes inner = parse_unary(s, t.pos);
-        return PRes { pos: inner.pos, ast: f"(un - {inner.ast})" };
+        return PRes {.pos = inner.pos, .ast = f"(un - {inner.ast})"};
     }
     if (t.text == "!") {
         PRes inner = parse_unary(s, t.pos);
-        return PRes { pos: inner.pos, ast: f"(un ! {inner.ast})" };
+        return PRes {.pos = inner.pos, .ast = f"(un ! {inner.ast})"};
     }
     if (t.text == "~") {
         PRes inner = parse_unary(s, t.pos);
-        return PRes { pos: inner.pos, ast: f"(un ~ {inner.ast})" };
+        return PRes {.pos = inner.pos, .ast = f"(un ~ {inner.ast})"};
     }
     return parse_postfix(s, pos);
 }
@@ -640,7 +641,7 @@ PRes parse_bin_rest(Str s, PRes acc, Int minp) {
     Int q = p + 1;
     PRes rhs = parse_expr(s, t.pos, q);
     Str ast = f"(bin {t.text} {acc.ast} {rhs.ast})";
-    return parse_bin_rest(s, PRes { pos: rhs.pos, ast: ast }, minp);
+    return parse_bin_rest(s, PRes {.pos = rhs.pos, .ast = ast}, minp);
 }
 
 // ─── Type parsing ───────────────────────────────────────────────
@@ -653,19 +654,19 @@ PRes parse_type(Str s, Int pos) {
             // generic / width type: List(Int), UInt(8), Option(Str)
             Tok arg = lex_tok(s, t2.pos);
             if (arg.text == ")") {
-                return PRes { pos: arg.pos, ast: f"(type {t.text} )" };
+                return PRes {.pos = arg.pos, .ast = f"(type {t.text} )"};
             }
             return parse_type_args(s, t, arg.pos, arg.text);
         }
-        return PRes { pos: t.pos, ast: f"(type {t.text})" };
+        return PRes {.pos = t.pos, .ast = f"(type {t.text})"};
     }
-    return PRes { pos: t.pos, ast: "(type ?)" };
+    return PRes {.pos = t.pos, .ast = "(type ?)"};
 }
 
 PRes parse_type_args(Str s, Tok name, Int pos, Str acc) {
     Tok t = lex_tok(s, pos);
     if (t.text == ")") {
-        return PRes { pos: t.pos, ast: f"(type {name.text} {acc})" };
+        return PRes {.pos = t.pos, .ast = f"(type {name.text} {acc})"};
     }
     if (t.kind == "ident") {
         return parse_type_args(s, name, t.pos, f"{acc} {t.text}");
@@ -673,7 +674,7 @@ PRes parse_type_args(Str s, Tok name, Int pos, Str acc) {
     if (t.text == ",") {
         return parse_type_args(s, name, t.pos, acc);
     }
-    return PRes { pos: t.pos, ast: f"(type {name.text} {acc})" };
+    return PRes {.pos = t.pos, .ast = f"(type {name.text} {acc})"};
 }
 
 // ─── Parameter list ─────────────────────────────────────────────
@@ -682,7 +683,7 @@ PRes parse_params(Str s, Int pos) {
     Tok t = lex_tok(s, pos);  // consume (
     Tok close = lex_tok(s, t.pos);
     if (close.text == ")") {
-        return PRes { pos: close.pos, ast: "" };
+        return PRes {.pos = close.pos, .ast = ""};
     }
     return parse_params_rest(s, t.pos, "");
 }
@@ -700,12 +701,12 @@ PRes parse_params_rest(Str s, Int pos, Str acc) {
         if (t2.text == ",") {
             return parse_params_rest(s, t2.pos, f"{acc} {item2}");
         }
-        return PRes { pos: t2.pos, ast: f"{acc} {item2}" };
+        return PRes {.pos = t2.pos, .ast = f"{acc} {item2}"};
     }
     if (t.text == ",") {
         return parse_params_rest(s, t.pos, f"{acc} {item}");
     }
-    return PRes { pos: t.pos, ast: f"{acc} {item}" };
+    return PRes {.pos = t.pos, .ast = f"{acc} {item}"};
 }
 
 // ─── Statements / blocks ────────────────────────────────────────
@@ -714,7 +715,7 @@ PRes parse_block(Str s, Int pos) {
     Tok t = lex_tok(s, pos);  // consume {
     Tok end = lex_tok(s, t.pos);
     if (end.text == "}") {
-        return PRes { pos: end.pos, ast: "(block )" };
+        return PRes {.pos = end.pos, .ast = "(block )"};
     }
     return parse_block_rest(s, t.pos, "(block");
 }
@@ -722,7 +723,7 @@ PRes parse_block(Str s, Int pos) {
 PRes parse_block_rest(Str s, Int pos, Str acc) {
     Tok t = lex_tok(s, pos);
     if (t.text == "}") {
-        return PRes { pos: t.pos, ast: f"{acc})" };
+        return PRes {.pos = t.pos, .ast = f"{acc})"};
     }
     PRes st = parse_stmt(s, pos);
     return parse_block_rest(s, st.pos, f"{acc} {st.ast}");
@@ -733,19 +734,19 @@ PRes parse_stmt(Str s, Int pos) {
     if (t.text == "return") {
         Tok e = lex_tok(s, t.pos);
         if (e.text == ";") {
-            return PRes { pos: e.pos, ast: "(return)" };
+            return PRes {.pos = e.pos, .ast = "(return)"};
         }
         PRes v = parse_expr(s, t.pos, 1);
         Tok semi = lex_tok(s, v.pos);
-        return PRes { pos: semi.pos, ast: f"(return {v.ast})" };
+        return PRes {.pos = semi.pos, .ast = f"(return {v.ast})"};
     }
     if (t.text == "break") {
         Tok semi = lex_tok(s, t.pos);
-        return PRes { pos: semi.pos, ast: "(break)" };
+        return PRes {.pos = semi.pos, .ast = "(break)"};
     }
     if (t.text == "continue") {
         Tok semi = lex_tok(s, t.pos);
-        return PRes { pos: semi.pos, ast: "(continue)" };
+        return PRes {.pos = semi.pos, .ast = "(continue)"};
     }
     if (t.text == "if") {
         return parse_if(s, t.pos);
@@ -755,7 +756,7 @@ PRes parse_stmt(Str s, Int pos) {
         PRes cond = parse_expr(s, open.pos, 1);
         Tok close = lex_tok(s, cond.pos);
         PRes body = parse_stmt(s, close.pos);
-        return PRes { pos: body.pos, ast: f"(while {cond.ast} {body.ast})" };
+        return PRes {.pos = body.pos, .ast = f"(while {cond.ast} {body.ast})"};
     }
     if (t.text == "for") {
         Tok open = lex_tok(s, t.pos);
@@ -770,15 +771,15 @@ PRes parse_stmt(Str s, Int pos) {
                     Tok close = lex_tok(s, col.pos);
                     PRes body = parse_stmt(s, close.pos);
                     Str ast = f"(for-in {t2.text} {t3.text} {col.ast} {body.ast})";
-                    return PRes { pos: body.pos, ast: ast };
+                    return PRes {.pos = body.pos, .ast = ast};
                 }
                 // C-style for with init/cond/step — approximate: skip
-                return PRes { pos: in_kw.pos, ast: f"(for {t2.text} {t3.text})" };
+                return PRes {.pos = in_kw.pos, .ast = f"(for {t2.text} {t3.text})"};
             }
             // for (x ...) — expression loop
-            return PRes { pos: t3.pos, ast: f"(for {t2.text})" };
+            return PRes {.pos = t3.pos, .ast = f"(for {t2.text})"};
         }
-        return PRes { pos: t2.pos, ast: "(for)" };
+        return PRes {.pos = t2.pos, .ast = "(for)"};
     }
     if (t.text == "{") {
         return parse_block(s, pos);
@@ -791,7 +792,7 @@ PRes parse_stmt(Str s, Int pos) {
             if (eq.text == "=") {
                 PRes v = parse_expr(s, eq.pos, 1);
                 Tok semi = lex_tok(s, v.pos);
-                return PRes { pos: semi.pos, ast: f"(discard {v.ast})" };
+                return PRes {.pos = semi.pos, .ast = f"(discard {v.ast})"};
             }
         }
         // Type name = expr; — lookahead: ident then ident then `=`
@@ -802,7 +803,7 @@ PRes parse_stmt(Str s, Int pos) {
                 PRes v = parse_expr(s, t3.pos, 1);
                 Tok semi = lex_tok(s, v.pos);
                 Str ast = f"(bind {t2.text} {t.text} {v.ast})";
-                return PRes { pos: semi.pos, ast: ast };
+                return PRes {.pos = semi.pos, .ast = ast};
             }
         }
         // Type(args) name = expr; e.g. List(Int) xs = ...
@@ -815,7 +816,7 @@ PRes parse_stmt(Str s, Int pos) {
                     PRes v = parse_expr(s, eq.pos, 1);
                     Tok semi = lex_tok(s, v.pos);
                     Str ast = f"(bind {name.text} {ty.ast} {v.ast})";
-                    return PRes { pos: semi.pos, ast: ast };
+                    return PRes {.pos = semi.pos, .ast = ast};
                 }
             }
         }
@@ -823,7 +824,7 @@ PRes parse_stmt(Str s, Int pos) {
     // expression statement
     PRes e = parse_expr(s, pos, 1);
     Tok semi = lex_tok(s, e.pos);
-    return PRes { pos: semi.pos, ast: f"(expr {e.ast})" };
+    return PRes {.pos = semi.pos, .ast = f"(expr {e.ast})"};
 }
 
 PRes parse_if(Str s, Int pos) {
@@ -843,7 +844,7 @@ PRes parse_if(Str s, Int pos) {
                 PRes src = parse_expr(s, t7.pos, 1);
                 Tok close = lex_tok(s, src.pos);
                 PRes then = parse_stmt(s, close.pos);
-                return PRes { pos: then.pos, ast: f"(if-let {t2.text}({t4.text}) {src.ast} {then.ast})" };
+                return PRes {.pos = then.pos, .ast = f"(if-let {t2.text}({t4.text}) {src.ast} {then.ast})"};
             }
         }
     }
@@ -853,9 +854,9 @@ PRes parse_if(Str s, Int pos) {
     Tok t = lex_tok(s, then.pos);
     if (t.text == "else") {
         PRes other = parse_stmt(s, t.pos);
-        return PRes { pos: other.pos, ast: f"(if {cond.ast} {then.ast} {other.ast})" };
+        return PRes {.pos = other.pos, .ast = f"(if {cond.ast} {then.ast} {other.ast})"};
     }
-    return PRes { pos: then.pos, ast: f"(if {cond.ast} {then.ast})" };
+    return PRes {.pos = then.pos, .ast = f"(if {cond.ast} {then.ast})"};
 }
 
 // ─── Declarations ───────────────────────────────────────────────
@@ -866,7 +867,7 @@ PRes parse_func(Str s, Int pos) {
     PRes params = parse_params(s, name.pos);
     PRes body = parse_block(s, params.pos);
     Str ast = f"(func {name.text} -> {ty.ast} ({params.ast}) {body.ast})";
-    return PRes { pos: body.pos, ast: ast };
+    return PRes {.pos = body.pos, .ast = ast};
 }
 
 PRes parse_type_def(Str s, Int pos) {
@@ -886,33 +887,25 @@ PRes parse_type_fields(Str s, Str acc, Int pos) {
     Tok t = lex_tok(s, pos);
     if (t.text == "}") {
         Tok semi = lex_tok(s, t.pos);
-        return PRes { pos: semi.pos, ast: f"{acc})" };
+        return PRes {.pos = semi.pos, .ast = f"{acc})"};
     }
-    Tok colon = lex_tok(s, t.pos);
-    PRes fty = parse_type(s, colon.pos);
-    Tok comma = lex_tok(s, fty.pos);
-    if (comma.text == ",") {
-        return parse_type_fields(s, f"{acc} ({t.text} {fty.ast})", comma.pos);
-    }
-    // comma may be `}` — consume it in the close path
-    if (comma.text == "}") {
-        Tok semi = lex_tok(s, comma.pos);
-        return PRes { pos: semi.pos, ast: f"{acc} ({t.text} {fty.ast}))" };
-    }
-    return PRes { pos: comma.pos, ast: f"{acc} ({t.text} {fty.ast})" };
+    PRes fty = parse_type(s, pos);
+    Tok name = lex_tok(s, fty.pos);
+    Tok semi = lex_tok(s, name.pos);
+    return parse_type_fields(s, f"{acc} ({name.text} {fty.ast})", semi.pos);
 }
 
 PRes parse_type_alias_rest(Str s, Tok first, Str acc) {
     Tok t = lex_tok(s, first.pos);
     if (t.text == ";") {
-        return PRes { pos: t.pos, ast: f"{acc} {first.text})" };
+        return PRes {.pos = t.pos, .ast = f"{acc} {first.text})"};
     }
     if (t.text == "|") {
         Tok v = lex_tok(s, t.pos);
         return parse_type_alias_rest(s, v, f"{acc} {first.text}");
     }
     if (t.kind == "eof") {
-        return PRes { pos: t.pos, ast: f"{acc} {first.text})" };
+        return PRes {.pos = t.pos, .ast = f"{acc} {first.text})"};
     }
     if (t.text == "(") {
         // variant payload: Circle(Float) — skip to matching `)`
@@ -920,7 +913,7 @@ PRes parse_type_alias_rest(Str s, Tok first, Str acc) {
         return parse_type_payload(s, cur, f"{acc} {first.text}", first);
     }
     // unexpected — stop here, treat rest as unknown
-    return PRes { pos: t.pos, ast: f"{acc} {first.text})" };
+    return PRes {.pos = t.pos, .ast = f"{acc} {first.text})"};
 }
 
 PRes parse_type_payload(Str s, Tok cur, Str acc, Tok first) {
@@ -932,15 +925,15 @@ PRes parse_type_payload(Str s, Tok cur, Str acc, Tok first) {
             return parse_type_alias_rest(s, v, acc);
         }
         if (t2.text == ";") {
-            return PRes { pos: t2.pos, ast: f"{acc})" };
+            return PRes {.pos = t2.pos, .ast = f"{acc})"};
         }
         if (t2.kind == "eof") {
-            return PRes { pos: t2.pos, ast: f"{acc})" };
+            return PRes {.pos = t2.pos, .ast = f"{acc})"};
         }
-        return PRes { pos: t2.pos, ast: f"{acc})" };
+        return PRes {.pos = t2.pos, .ast = f"{acc})"};
     }
     if (t.kind == "eof") {
-        return PRes { pos: t.pos, ast: f"{acc})" };
+        return PRes {.pos = t.pos, .ast = f"{acc})"};
     }
     return parse_type_payload(s, t, acc, first);
 }
@@ -964,9 +957,9 @@ PRes parse_decl(Str s, Int pos) {
         return parse_func(s, pos);
     }
     if (t.kind == "eof") {
-        return PRes { pos: t.pos, ast: "(eof)" };
+        return PRes {.pos = t.pos, .ast = "(eof)"};
     }
-    return PRes { pos: t.pos, ast: f"(unknown {t.text})" };
+    return PRes {.pos = t.pos, .ast = f"(unknown {t.text})"};
 }
 
 Bool is_semi(Str s, Tok t) {
@@ -976,14 +969,14 @@ Bool is_semi(Str s, Tok t) {
 
 PRes parse_import_rest(Str s, Tok cur, Bool done) {
     if (done) {
-        return PRes { pos: cur.pos, ast: "(import)" };
+        return PRes {.pos = cur.pos, .ast = "(import)"};
     }
     Tok t = lex_tok(s, cur.pos);
     if (t.text == ";") {
-        return PRes { pos: t.pos, ast: "(import)" };
+        return PRes {.pos = t.pos, .ast = "(import)"};
     }
     if (t.kind == "eof") {
-        return PRes { pos: t.pos, ast: "(import)" };
+        return PRes {.pos = t.pos, .ast = "(import)"};
     }
     return parse_import_rest(s, t, false);
 }
@@ -993,10 +986,10 @@ PRes parse_import_rest(Str s, Tok cur, Bool done) {
 PRes parse_sandbox_caps(Str s, Int pos, Str acc, Int depth) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") {
-        return PRes { pos: t.pos, ast: f"{acc})" };
+        return PRes {.pos = t.pos, .ast = f"{acc})"};
     }
     if (t.text == ")" && depth == 1) {
-        return PRes { pos: t.pos, ast: f"{acc})" };
+        return PRes {.pos = t.pos, .ast = f"{acc})"};
     }
     if (t.text == ",") {
         return parse_sandbox_caps(s, t.pos, acc, depth);
@@ -1013,10 +1006,10 @@ PRes parse_sandbox_caps(Str s, Int pos, Str acc, Int depth) {
 PRes parse_sandbox_body(Str s, Int pos, Str acc) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") {
-        return PRes { pos: t.pos, ast: f"{acc})" };
+        return PRes {.pos = t.pos, .ast = f"{acc})"};
     }
     if (t.text == "}") {
-        return PRes { pos: t.pos, ast: f"{acc})" };
+        return PRes {.pos = t.pos, .ast = f"{acc})"};
     }
     PRes d = parse_decl(s, pos);
     return parse_sandbox_body(s, d.pos, f"{acc} {d.ast}");
@@ -1028,7 +1021,7 @@ PRes parse_sandbox(Str s, Int pos) {
     PRes caps = parse_sandbox_caps(s, open.pos, "(caps", 1);
     Tok brace = lex_tok(s, caps.pos);
     PRes body = parse_sandbox_body(s, brace.pos, f"(sandbox {caps.ast}");
-    return PRes { pos: body.pos, ast: body.ast };
+    return PRes {.pos = body.pos, .ast = body.ast};
 }
 
 // ─── Program loop ───────────────────────────────────────────────

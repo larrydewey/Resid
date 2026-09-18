@@ -59,11 +59,11 @@ fn run_composite_values() {
     let file = dir.join("composites.resid");
     std::fs::write(
         &file,
-        r#"type Point = { x: Int, y: Int };
+        r#"type Point = { Int x; Int y; };
 Int main() {
     List(Int) xs = [10, 20, 30];
     println(IntToString(xs[1]));
-    Point p = Point { x: 3, y: 4 };
+    Point p = Point { .x = 3, .y = 4 };
     println(IntToString(p.x));
     Option(Int) mx = Some(7);
     Int out = match mx {
@@ -400,7 +400,7 @@ fn run_value_formatting() {
     let file = dir.join("fmt.resid");
     std::fs::write(
         &file,
-        r#"type Point = { x: Int, y: Int };
+        r#"type Point = { Int x; Int y; };
     Int main() {
     // IntToString with narrowing i8 value
     Int(8) a = 42;
@@ -433,7 +433,7 @@ fn run_value_formatting() {
     println(ToString(xs));
 
     // Composite: Struct with ToString
-    Point p = Point { x: 3, y: 4 };
+    Point p = Point { .x = 3, .y = 4 };
     println(ToString(p));
 
     // Composite: None with ToString
@@ -988,14 +988,14 @@ fn bootstrap_parser_builds_ast() {
     let src = dir.join("ast_sample.resid");
     std::fs::write(
         &src,
-        r#"type Point = { x: Int, y: Int };
+        r#"type Point = { Int x; Int y; };
 Int add(Int a, Int b) {
     Int c = a + b;
     return c;
 }
 Int main() {
     List(Int) xs = [1, 2, 3];
-    Point p = Point { x: 3, y: 4 };
+    Point p = Point { .x = 3, .y = 4 };
     Int n = add(1, 2) * 3 - 4;
     if (n > 5) {
         println("big");
@@ -1721,7 +1721,7 @@ fn run_result_type_ok_err() {
         Err(e) => 0,
     };
     println(IntToString(out));
-    Result(Int, RegionError) bad = Err(RegionError { message: "boom" });
+    Result(Int, RegionError) bad = Err(RegionError { .message = "boom" });
     Str msg = match bad {
         Ok(n) => "none",
         Err(e) => e.message,
@@ -5666,7 +5666,7 @@ Int main() {
     // C.3.1 block.
     List(Int) b1 = [0, 130, 134, 132, 65, 15, 119, 119, 119, 46, 101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109];
     Int e1 = b1.len() - 1;
-    HpBlock r3 = hp_decode_block(b1, 1, e1, [""], [HpField { name: "", value: "" }]);
+    HpBlock r3 = hp_decode_block(b1, 1, e1, [""], [HpField { .name = "", .value = "" }]);
     List(HpField) fs1 = r3.fields;
     HpField a1 = fs1[1];
     HpField a4 = fs1[4];
@@ -5675,7 +5675,7 @@ Int main() {
     List(Int) b2 = [0, 130, 134, 190, 88, 8, 110, 111, 45, 99, 97, 99, 104, 101];
     Int e2 = b2.len() - 1;
     List(Str) dyn1 = r3.dyn;
-    HpBlock r4 = hp_decode_block(b2, 1, e2, dyn1, [HpField { name: "", value: "" }]);
+    HpBlock r4 = hp_decode_block(b2, 1, e2, dyn1, [HpField { .name = "", .value = "" }]);
     List(HpField) fs2 = r4.fields;
     HpField a5 = fs2[3];
     HpField a6 = fs2[4];
@@ -5683,14 +5683,14 @@ Int main() {
     // Literal without indexing, new name.
     List(Int) b3 = [0, 0, 3, 102, 111, 111, 3, 98, 97, 114];
     Int e3 = b3.len() - 1;
-    HpBlock r5 = hp_decode_block(b3, 1, e3, [""], [HpField { name: "", value: "" }]);
+    HpBlock r5 = hp_decode_block(b3, 1, e3, [""], [HpField { .name = "", .value = "" }]);
     List(HpField) fs3 = r5.fields;
     HpField a7 = fs3[1];
     println("b3=" + a7.name + "|" + a7.value);
     // Huffman string literals (RFC 7541 Appendix B codes).
     List(Int) h1 = [0, 64, 136, 37, 168, 73, 233, 91, 169, 125, 127, 137, 37, 168, 73, 233, 90, 114, 142, 66, 217];
     Int eh1 = h1.len() - 1;
-    HpBlock rh = hp_decode_block(h1, 1, eh1, [""], [HpField { name: "", value: "" }]);
+    HpBlock rh = hp_decode_block(h1, 1, eh1, [""], [HpField { .name = "", .value = "" }]);
     List(HpField) fsh = rh.fields;
     HpField ah = fsh[1];
     println("huf=" + ah.name + "|" + ah.value);
@@ -5700,7 +5700,7 @@ Int main() {
     // Never-indexed literal, indexed name via multi-byte integer (28).
     List(Int) b4 = [0, 31, 13, 2, 55, 55];
     Int e4 = b4.len() - 1;
-    HpBlock r6 = hp_decode_block(b4, 1, e4, [""], [HpField { name: "", value: "" }]);
+    HpBlock r6 = hp_decode_block(b4, 1, e4, [""], [HpField { .name = "", .value = "" }]);
     List(HpField) fs4 = r6.fields;
     HpField a8 = fs4[1];
     println("b4=" + a8.name + "|" + a8.value);
@@ -6250,7 +6250,7 @@ fn run_behavior_ord_sort() {
     let file = dir.join("beh.resid");
     std::fs::write(
         &file,
-        r#"type Point = { x: Int, y: Int };
+        r#"type Point = { Int x; Int y; };
 
 Int by_y(Point a, Point b) {
     return a.y - b.y;
@@ -6269,7 +6269,7 @@ Int y_of(Point p) {
 }
 
 Int main() {
-    List(Point) ps = [Point { x: 1, y: 3 }, Point { x: 2, y: 1 }, Point { x: 3, y: 2 }];
+    List(Point) ps = [Point { .x = 1, .y = 3 }, Point { .x = 2, .y = 1 }, Point { .x = 3, .y = 2 }];
     List(Point) sorted = sort(ps, using = Ord(Point));
     println(IntToString(y_of(sorted[0])));
     println(IntToString(y_of(sorted[1])));
@@ -6390,7 +6390,7 @@ fn bootstrap_behavior_ord_parity() {
     let file = dir.join("parity.resid");
     std::fs::write(
         &file,
-        r#"type Point = { x: Int, y: Int };
+        r#"type Point = { Int x; Int y; };
 
 Int by_y(Point a, Point b) {
     return a.y - b.y;
@@ -6409,7 +6409,7 @@ Int y_of(Point p) {
 }
 
 Int main() {
-    List(Point) ps = [Point { x: 1, y: 3 }, Point { x: 2, y: 1 }, Point { x: 3, y: 2 }];
+    List(Point) ps = [Point { .x = 1, .y = 3 }, Point { .x = 2, .y = 1 }, Point { .x = 3, .y = 2 }];
     List(Point) sorted = sort(ps, using = Ord(Point));
     println(IntToString(y_of(sorted[0])));
     println(IntToString(y_of(sorted[2])));
@@ -6836,7 +6836,7 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
-#[test]
+
 /// ── Error-system diagnostics (resid-diag, spec §34) ───────────────
 /// rustc-style rendering: error code header, source snippet with caret,
 /// span pairs, notes, help. Runtime aborts embed source spans.
@@ -7979,7 +7979,7 @@ fn graph_reduce_rejects_type_declarations() {
     let file = dir.join("gr_type.resid");
     std::fs::write(
         &file,
-        "type Point = { x: Int };\nInt main() {\n    return 0;\n}\n",
+        "type Point = { Int x; };\nInt main() {\n    return 0;\n}\n",
     )
     .unwrap();
 
@@ -8258,7 +8258,7 @@ fn bootstrap_graph_reduce_rejects_declarations() {
         .parent()
         .unwrap();
     let file = dir.join("bgrrej.resid");
-    std::fs::write(&file, "type Point = { x: Int };\nInt main() {\n    return 0;\n}\n").unwrap();
+    std::fs::write(&file, "type Point = { Int x; };\nInt main() {\n    return 0;\n}\n").unwrap();
 
     let out = Command::new(residc_bin())
         .arg(workspace.join("examples/driver.resid"))

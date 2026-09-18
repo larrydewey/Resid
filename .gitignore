@@ -9,3 +9,4 @@ keys/
 *.resid-notes.cbor
 *.resid-prov
 a.out*
+crates/residc/.resid-cache.cbor
