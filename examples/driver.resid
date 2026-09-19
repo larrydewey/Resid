@@ -7994,24 +7994,23 @@ Int t2_pos_after_open(Str s, Tok open) {
     return open.pos;
 }
 
-Str dup_from(List(Str) names, Int i, Int j) {
+Str dup_from(List(Str) names, Int i, Map(Str, Int) seen) {
     Int n = names.len();
     if (i >= n) {
         return "";
     }
-    if (j >= i) {
-        Int i2 = i + 1;
-        return dup_from(names, i2, 0);
+    Str nm = names[i];
+    if (seen.contains(nm)) {
+        return nm;
     }
-    if (names[i] == names[j]) {
-        return names[i];
-    }
-    Int j2 = j + 1;
-    return dup_from(names, i, j2);
+    Map(Str, Int) seen2 = seen.insert(nm, i);
+    Int i2 = i + 1;
+    return dup_from(names, i2, seen2);
 }
 
 Str first_dup_name(List(Str) names) {
-    return dup_from(names, 0, 0);
+    Map(Str, Int) empty = {"__EMPTY__": -1};
+    return dup_from(names, 0, empty);
 }
 
 // ─── Sandbox enforcement (spec §21.3) ───────────────────────────
@@ -9549,6 +9548,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int prc = write_provenance(out, rsrc);
     return prc;
 }
+
 
 
 
