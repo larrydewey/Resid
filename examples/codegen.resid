@@ -2460,27 +2460,6 @@ GT cg_unary(Str s, Int pos, List(Str) env, Funcs fs, GT c, Bool tail_pos) {
     return cg_postfix(s, b, env, fs);
 }
 
-// Box a scalar value into an alloca so it can be passed as ptr to RT calls.
-// Composite types (Str, List, Map, Set, Sum, Struct, Ptr, SourceLoc, File)
-// are already pointers and pass through unchanged.
-GT box_scalar(Str s, GT v, List(Str) env, Funcs fs) {
-    Str t = v.ty;
-    if (is_map_type_cg(t) || is_set_type_cg(t) || str_has_prefix_cg(t, "List(") || str_has_prefix_cg(t, "Sum(") || str_has_prefix_cg(t, "Option(") || t == "Str" || str_has_prefix_cg(t, "Struct") || t == "Ptr" || t == "SourceLoc" || t == "File") {
-        return v;
-    }
-    // Scalar: alloca + store
-    Int t1 = v.tmp + 1;
-    Str addr = "%t" + IntToString(t1);
-    Str line = addr + " = alloca " + ll_ty(t);
-    List(Str) nl = v.lines.concat([line]);
-    Str addr2 = "%t" + IntToString(t1 + 1);
-    Str store = "store " + ll_ty(t) + " " + v.val + ", ptr " + addr2;
-    // We already have addr2 = addr, simplify:
-    List(Str) nl2 = v.lines.concat([addr + " = alloca " + ll_ty(t)]);
-    List(Str) nl3 = nl2.concat(["store " + ll_ty(t) + " " + v.val + ", ptr " + addr]);
-    return GT {.pos = v.pos, .val = addr, .ty = t, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = nl3, .tmp = t1 + 1, .lbl = v.lbl, .tail = false};
-}
-
 // ─── trie List boxing / unboxing helpers ──────────────────────────────
 // A trie-backed list stores each element as a heap-boxed pointer slot
 // (resid_box_* for scalars, raw char*/ptr for composite). These helpers
@@ -2642,7 +2621,13 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
-                    GT kboxed = box_scalar(s, arg, env, fs);
+                    // box_heap_, not box_scalar — resid_map_get hashes/compares
+                    // the key via resid_hash/resid_key_eq, which only recognize
+                    // a real resid_box_* heap box (tag/type-tagged), not a bare
+                    // stack alloca pointer; box_scalar's stack pointer reads as
+                    // garbage there (bug found+fixed 2026-09-19, same shape as
+                    // .insert()'s box_heap_ above).
+                    GT kboxed = box_heap_(s, arg, env, fs);
                     Int t1 = kboxed.tmp + 1;
                     Str reg = "%t" + IntToString(t1);
                     Str line = reg + " = call ptr @resid_map_get(ptr " + base.val + ", ptr " + kboxed.val + ")";
@@ -2683,7 +2668,8 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
-                    GT kboxed = box_scalar(s, arg, env, fs);
+                    // box_heap_, not box_scalar — see .get() above.
+                    GT kboxed = box_heap_(s, arg, env, fs);
                     Int t1 = kboxed.tmp + 1;
                     Str reg = "%t" + IntToString(t1);
                     Str line = reg + " = call ptr @resid_map_remove(ptr " + base.val + ", ptr " + kboxed.val + ")";
@@ -2696,7 +2682,8 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
-                    GT kboxed = box_scalar(s, arg, env, fs);
+                    // box_heap_, not box_scalar — see Map.get above.
+                    GT kboxed = box_heap_(s, arg, env, fs);
                     Int t1 = kboxed.tmp + 1;
                     Int t2 = kboxed.tmp + 2;
                     Str cr = "%t" + IntToString(t1);
@@ -2748,7 +2735,10 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
-                    GT eboxed = box_scalar(s, arg, env, fs);
+                    // box_heap_, not box_scalar — see Map.get above; Sets are
+                    // maps under the hood (resid_set_contains -> resid_map_contains),
+                    // same hashing/equality requirement on the boxed element.
+                    GT eboxed = box_heap_(s, arg, env, fs);
                     Int t1 = eboxed.tmp + 1;
                     Int t2 = eboxed.tmp + 2;
                     Str cr = "%t" + IntToString(t1);
@@ -2780,7 +2770,8 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
-                    GT eboxed = box_scalar(s, arg, env, fs);
+                    // box_heap_, not box_scalar — see Set.contains above.
+                    GT eboxed = box_heap_(s, arg, env, fs);
                     Int t1 = eboxed.tmp + 1;
                     Str reg = "%t" + IntToString(t1);
                     Str line = reg + " = call ptr @resid_set_remove(ptr " + base.val + ", ptr " + eboxed.val + ")";
@@ -2893,7 +2884,8 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
             GT ix = cg_expr(s, t.pos, env, fs, base, false);
             if (ix.err != "") { return ix; }
             Tok close = lex_tok(s, ix.pos);
-            GT kboxed = box_scalar(s, ix, env, fs);
+            // box_heap_, not box_scalar — see Map.get above.
+            GT kboxed = box_heap_(s, ix, env, fs);
             Int t1 = kboxed.tmp + 1;
             Str reg = "%t" + IntToString(t1);
             Str line = reg + " = call ptr @resid_map_get(ptr " + base.val + ", ptr " + kboxed.val + ")";

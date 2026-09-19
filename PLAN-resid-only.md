@@ -841,9 +841,25 @@ mechanism, not two), retire `growable.rs` into it, per plan.
         clean in isolation; 1 failure (`bootstrap_map_set_parity` —
         `Set(Int).contains(2)` stage1/stage2 divergence) reproduces
         identically with every change from this session reverted
-        (`git stash` A/B test) — **confirmed pre-existing, unrelated to
-        this work**, despite PROGRESS.md previously documenting this exact
-        test as green; needs its own investigation (not done this session).
+        (`git stash` A/B test) — confirmed pre-existing, unrelated to this
+        work — **found and fixed same session, see B.4 below**.
+- [x] B.4 `bootstrap_map_set_parity` regression — **DONE**. Root cause:
+      `examples/codegen.resid`'s Map `.get`/`.remove`/`.contains` and Set
+      `.contains`/`.remove`, plus `m[key]` indexing, boxed the key/element
+      via `box_scalar` (a bare stack-alloca `ptr`) instead of `box_heap_`
+      (a real `resid_box_i64`/etc. heap box). `resid_rt.c`'s
+      `resid_hash`/`resid_key_eq` require the heap-box shape to identify
+      scalar keys; a bare stack pointer falls into the "bare C string"
+      hash path and reads garbage, so lookups essentially never match.
+      `m.contains("a")` (Str key) happened to work because `box_scalar` is
+      a no-op for `Str` (already a bare pointer, which is what that hash
+      path expects); `s.contains(2)` (Int element) broke because
+      `box_scalar` actually stack-allocates for non-composite types.
+      `.insert()` on both types already used `box_heap_` correctly (with a
+      comment explaining exactly this requirement) — the other 6 methods
+      never got the same treatment. Fixed all 6 call sites, deleted
+      `box_scalar` (zero remaining legitimate callers). Verified: full
+      `residc` e2e suite, 131/131 green.
 - [ ] E.0 Timing instrumentation to confirm time-cost split before further
       algorithmic work — now MOOT as a pre-step: the OOM kill proves codegen
       memory (cause #2/#3) is the binding constraint, not time; fold timing
