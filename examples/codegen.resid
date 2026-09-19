@@ -1582,6 +1582,21 @@ Str ir_esc(Int ch) {
     return str_from_code(ch);
 }
 
+// UTF-8 encoded byte width of a codepoint (str_char_at/char_at decode
+// codepoints, not bytes — a non-ASCII source character like "§" is ONE
+// codepoint but 2+ output bytes in the LLVM string constant, since
+// ir_esc's default case (str_from_code) re-encodes it back to its raw
+// UTF-8 bytes rather than a \XY escape). Counting 1 per codepoint here
+// under-counts the declared array size for any non-ASCII byte in a
+// string literal, comment-derived diagnostic text, etc. — clang then
+// rejects the constant ("got type '[N x i8]' but expected '[N+k x i8]'").
+Int utf8_byte_width_cg(Int cp) {
+    if (cp < 128) { return 1; }
+    if (cp < 2048) { return 2; }
+    if (cp < 65536) { return 3; }
+    return 4;
+}
+
 Int ll_bytes(Str s, Int i, Int acc) {
     Int n = str_len_1(s);
     if (i >= n) { return acc; }
@@ -1592,7 +1607,7 @@ Int ll_bytes(Str s, Int i, Int acc) {
         return ll_bytes(s, k, a);
     }
     Int k2 = i + 1;
-    Int a2 = acc + 1;
+    Int a2 = acc + utf8_byte_width_cg(c);
     return ll_bytes(s, k2, a2);
 }
 
