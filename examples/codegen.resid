@@ -1216,7 +1216,15 @@ PRes collect_fields_at(Str s, Int pos, Str acc) {
 Int field_slot_at(Str fields, Str fname, Int i, Int slot) {
     Int fl = str_len_1(fields);
     if (i >= fl) { return -1; }
-    Int ce = str_find_char(fields, 44, i);
+    // Depth-aware: a field's OWN type may itself contain a comma inside
+    // parens (Map(Str, Int), Result(A, B), ...) — a bare str_find_char
+    // would split the entry table at that INNER comma instead of the
+    // one actually separating this field from the next, corrupting the
+    // name/type of every field from this point on. _find_comma_at_depth_cg
+    // starting at depth 0 skips commas nested inside any '(' opened
+    // after position i, matching exactly how collect_fields_at built
+    // this string (one field per top-level comma).
+    Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
     Int end = if (ce >= 0) { ce } else { fl };
     Str ent = str_slice(fields, i, end);
     Int co = str_find_char(ent, 58, 0);
@@ -1234,7 +1242,8 @@ Int field_slot(Str fields, Str fname) {
 Str field_ty_at(Str fields, Str fname, Int i) {
     Int fl = str_len_1(fields);
     if (i >= fl) { return ""; }
-    Int ce = str_find_char(fields, 44, i);
+    // Depth-aware entry split — see field_slot_at's comment.
+    Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
     Int end = if (ce >= 0) { ce } else { fl };
     Str ent = str_slice(fields, i, end);
     Int co = str_find_char(ent, 58, 0);
