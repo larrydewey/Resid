@@ -5373,17 +5373,8 @@ CR cev_disj(Str c, Int pos, Int v) {
     return cev_disj_rest(c, a.pos, a.val, v);
 }
 
-Int ck_fn_index_at(Sigs f, Str name, Int i) {
-    List(Str) nms = f.names;
-    Int n = nms.len();
-    if (i >= n) { return -1; }
-    if (f.names[i] == name) { return i; }
-    Int k = i + 1;
-    return ck_fn_index_at(f, name, k);
-}
-
 Int ck_fn_index(Sigs f, Str name) {
-    return ck_fn_index_at(f, name, 0);
+    return f.fns.get(name) else { -1 };
 }
 
 Int ck_struct_index_at(Sigs f, Str ty, Int i) {
@@ -9558,6 +9549,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int prc = write_provenance(out, rsrc);
     return prc;
 }
+
 
 
 

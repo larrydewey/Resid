@@ -960,17 +960,8 @@ CR cev_disj(Str c, Int pos, Int v) {
     return cev_disj_rest(c, a.pos, a.val, v);
 }
 
-Int fn_index_at(Funcs f, Str name, Int i) {
-    List(Str) nms = f.names;
-    Int n = nms.len();
-    if (i >= n) { return -1; }
-    if (f.names[i] == name) { return i; }
-    Int k = i + 1;
-    return fn_index_at(f, name, k);
-}
-
 Int fn_index(Funcs f, Str name) {
-    return fn_index_at(f, name, 0);
+    return f.fns.get(name) else { -1 };
 }
 
 Int struct_index_at(Funcs f, Str ty, Int i) {
