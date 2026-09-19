@@ -6483,8 +6483,17 @@ impl<'ctx> CodeGen<'ctx> {
             ("contains", SemType::Map(k, _)) if args.len() == 1 => {
                 let kv = self.lower_expr(sc, &args[0], None)?;
                 let kp = self.box_scalar(kv)?;
-                let v = self.rt_call("resid_map_contains", vec![tv.v, kp])?;
-                Ok(Val { v, ty: SemType::Bool })
+                let raw = self.rt_call("resid_map_contains", vec![tv.v, kp])?;
+                // The C runtime returns Bool as i8; narrow to i1, same as
+                // lower_provider_call's Bool case (this call bypasses that
+                // path, so it needs its own truncation — omitting it left a
+                // genuine i8/i1 type mismatch wherever the result was used
+                // directly as a branch condition, e.g. `if (m.contains(k))`).
+                let b = self
+                    .builder
+                    .build_int_truncate(raw.into_int_value(), self.cx.bool_type(), "mapcontains_narrow")
+                    .map_err(to_err)?;
+                Ok(Val { v: b.into(), ty: SemType::Bool })
             }
             ("remove", SemType::Map(_, _)) if args.len() == 1 => {
                 let kv = self.lower_expr(sc, &args[0], None)?;
@@ -6508,8 +6517,13 @@ impl<'ctx> CodeGen<'ctx> {
             ("contains", SemType::Set(_)) if args.len() == 1 => {
                 let ev = self.lower_expr(sc, &args[0], None)?;
                 let ep = self.box_scalar(ev)?;
-                let v = self.rt_call("resid_set_contains", vec![tv.v, ep])?;
-                Ok(Val { v, ty: SemType::Bool })
+                let raw = self.rt_call("resid_set_contains", vec![tv.v, ep])?;
+                // Same i8->i1 narrowing as Map's `contains` above.
+                let b = self
+                    .builder
+                    .build_int_truncate(raw.into_int_value(), self.cx.bool_type(), "setcontains_narrow")
+                    .map_err(to_err)?;
+                Ok(Val { v: b.into(), ty: SemType::Bool })
             }
             ("insert", SemType::Set(_)) if args.len() == 1 => {
                 let ev = self.lower_expr(sc, &args[0], None)?;
