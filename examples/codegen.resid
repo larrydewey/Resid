@@ -1747,6 +1747,62 @@ GT cg_some_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     return GT {.pos = close.pos, .val = reg, .ty = opty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = t3, .lbl = p.lbl, .tail = false};
 }
 
+// Wrap a raw nullable pointer (e.g. resid_map_get's result: null when
+// absent, else an already-boxed value pointer matching what .insert's
+// box_scalar produced) into a properly tagged Option(vty) box — same
+// {i64 tag, i64 count, ptr slots, ptr type} representation cg_some_con/
+// cg_none_con build, since every consumer (the `else`/`?` unwrap sugar,
+// match) reads that exact layout via a fixed-offset getelementptr and
+// does not know or care where the Option value came from. Previously
+// `.get()` handed the raw pointer straight through relabeled as
+// "Option(V)" without ever building this box — a real representation
+// mismatch (not just a type-string label), corrupting exactly the field
+// the unwrap sugar's tag check reads. `raw` must already be lowered
+// (its own lines already threaded into `c`).
+GT wrap_map_get_option(Str raw, Str vty, GT c) {
+    Int t1 = c.tmp + 1;
+    Str isnull = "%t" + IntToString(t1);
+    Int l1 = c.lbl + 1;
+    Int l2 = c.lbl + 2;
+    Int l3 = c.lbl + 3;
+    Str labsome = "L" + IntToString(l1);
+    Str labnone = "L" + IntToString(l2);
+    Str labmerge = "L" + IntToString(l3);
+    Str opty = "Option(" + vty + ")";
+    Str body = esc_ll(opty, 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int n1 = bl + 1;
+    Str tsym = "@.oty" + IntToString(t1);
+    Str g = tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\"";
+    List(Str) gl1 = c.glines.concat([g]);
+    List(Str) l0 = c.lines;
+    List(Str) l1a = l0.concat([isnull + " = icmp ne ptr " + raw + ", null"]);
+    List(Str) l1b = l1a.concat(["br i1 " + isnull + ", label %" + labsome + ", label %" + labnone]);
+    List(Str) l2a = l1b.concat([labnone + ":"]);
+    Int t2 = t1 + 1;
+    Str regnone = "%t" + IntToString(t2);
+    List(Str) l2b = l2a.concat([regnone + " = call ptr @resid_box_new(i64 2, i64 0, ptr null, ptr " + tsym + ")"]);
+    List(Str) l2c = l2b.concat(["br label %" + labmerge]);
+    List(Str) l3a = l2c.concat([labsome + ":"]);
+    Int t3 = t2 + 1;
+    Int t4 = t2 + 2;
+    Int t5 = t2 + 3;
+    Str sa = "%t" + IntToString(t3);
+    Str gi = "%t" + IntToString(t4);
+    Str regsome = "%t" + IntToString(t5);
+    List(Str) l3b = l3a.concat([sa + " = alloca [1 x ptr]"]);
+    List(Str) l3c = l3b.concat([gi + " = getelementptr [1 x ptr], ptr " + sa + ", i32 0, i32 0"]);
+    List(Str) l3d = l3c.concat(["store ptr " + raw + ", ptr " + gi]);
+    List(Str) l3e = l3d.concat([regsome + " = call ptr @resid_box_new(i64 1, i64 1, ptr " + sa + ", ptr " + tsym + ")"]);
+    List(Str) l3f = l3e.concat(["br label %" + labmerge]);
+    List(Str) l4a = l3f.concat([labmerge + ":"]);
+    Int t6 = t5 + 1;
+    Str pr = "%t" + IntToString(t6);
+    Str phi = pr + " = phi ptr [ " + regnone + ", %" + labnone + " ], [ " + regsome + ", %" + labsome + " ]";
+    List(Str) l4b = l4a.concat([phi]);
+    return GT {.pos = c.pos, .val = pr, .ty = opty, .cnt = 0, .err = "", .glines = gl1, .lines = l4b, .tmp = t6, .lbl = l3, .tail = false};
+}
+
 // Lower bare `None`: a tag-2 unit Option box with no payload.
 GT cg_none_con(Str ty, Int pos, Int n, GT c) {
     Int t1 = c.tmp + 1;
@@ -2568,7 +2624,8 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     Str line = reg + " = call ptr @resid_map_get(ptr " + base.val + ", ptr " + kboxed.val + ")";
                     List(Str) l20 = kboxed.lines;
                     List(Str) l2 = l20.concat([line]);
-                    GT opt = GT {.pos = rp.pos, .val = reg, .ty = "Option(" + vt + ")", .cnt = 0, .err = "", .glines = arg.glines, .lines = l2, .tmp = t1, .lbl = arg.lbl, .tail = false};
+                    GT raw = GT {.pos = rp.pos, .val = reg, .ty = "", .cnt = 0, .err = "", .glines = arg.glines, .lines = l2, .tmp = t1, .lbl = arg.lbl, .tail = false};
+                    GT opt = wrap_map_get_option(reg, vt, raw);
                     return cg_postfix(s, opt, env, fs);
                 }
                 if (fld.text == "insert") {
@@ -2579,8 +2636,17 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     GT va = cg_expr(s, cm.pos, env, fs, ka, false);
                     if (va.err != "") { return va; }
                     Tok rp = lex_tok(s, va.pos);
-                    GT kboxed = box_scalar(s, ka, env, fs);
-                    GT vboxed = box_scalar(s, va, env, fs);
+                    // box_heap_ (a real resid_box_* heap allocation), not
+                    // box_scalar (a stack alloca meant for a value read back
+                    // synchronously within the same statement): the map
+                    // retains this exact pointer and hands it back later from
+                    // .get(), so a stack slot from the CURRENT statement is
+                    // stale/invalid by then — real segfault, not just a style
+                    // mismatch, and the exact representation resid_unbox_i64/
+                    // f64/bool (used to read a scalar value back out, e.g. by
+                    // the Option-unwrap sugar on .get()'s result) expect.
+                    GT kboxed = box_heap_(s, ka, env, fs);
+                    GT vboxed = box_heap_(s, va, env, fs);
                     Int t1 = vboxed.tmp + 1;
                     Str reg = "%t" + IntToString(t1);
                     Str line = reg + " = call ptr @resid_map_insert(ptr " + base.val + ", ptr " + kboxed.val + ", ptr " + vboxed.val + ")";
@@ -2675,7 +2741,9 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
-                    GT eboxed = box_scalar(s, arg, env, fs);
+                    // box_heap_, not box_scalar — same staleness reasoning as
+                    // Map.insert above: the set retains this exact pointer.
+                    GT eboxed = box_heap_(s, arg, env, fs);
                     Int t1 = eboxed.tmp + 1;
                     Str reg = "%t" + IntToString(t1);
                     Str line = reg + " = call ptr @resid_set_insert(ptr " + base.val + ", ptr " + eboxed.val + ")";
@@ -3354,10 +3422,13 @@ GT cg_map_lit_rest(Str s, Int pos, Str kt, Str vt, GT map_v, List(Str) env, Func
     if (k.err != "") { return k; }
     Tok colon = lex_tok(s, k.pos);
     if (colon.text != ":") { return gt_err("map entries must use : separator", k); }
-    GT kbox = box_scalar(s, k, env, fs);
+    // box_heap_, not box_scalar — same staleness reasoning as the
+    // explicit `.insert()` method call above: the map retains this exact
+    // pointer past the current statement.
+    GT kbox = box_heap_(s, k, env, fs);
     GT v = cg_expr(s, colon.pos, env, fs, kbox, false);
     if (v.err != "") { return v; }
-    GT vbox = box_scalar(s, v, env, fs);
+    GT vbox = box_heap_(s, v, env, fs);
     Int t1 = vbox.tmp + 1;
     Str reg = "%t" + IntToString(t1);
     Str line = reg + " = call ptr @resid_map_insert(ptr " + map_v.val + ", ptr " + kbox.val + ", ptr " + vbox.val + ")";
@@ -3379,7 +3450,8 @@ GT cg_set_lit_rest(Str s, Int pos, Str et, GT set_v, List(Str) env, Funcs fs, GT
     GT e = cg_expr(s, pos, env, fs, set_v, false);
     if (e.err != "") { return e; }
     if (e.ty != et) { return gt_err("set element type mismatch: " + et + " vs " + e.ty, e); }
-    GT ebox = box_scalar(s, e, env, fs);
+    // box_heap_, not box_scalar — same staleness reasoning as Map above.
+    GT ebox = box_heap_(s, e, env, fs);
     Int t1 = ebox.tmp + 1;
     Str reg = "%t" + IntToString(t1);
     Str line = reg + " = call ptr @resid_set_insert(ptr " + set_v.val + ", ptr " + ebox.val + ")";
@@ -3399,11 +3471,12 @@ GT cg_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     Tok after = lex_tok(s, first.pos);
     if (after.text == ":") {
         // Map literal: {k: v, ...} — create empty table, insert first pair,
-        // then continue with remaining pairs.
-        GT kbox = box_scalar(s, first, env, fs);
+        // then continue with remaining pairs. box_heap_, not box_scalar —
+        // see cg_map_lit_rest's matching comment.
+        GT kbox = box_heap_(s, first, env, fs);
         GT val = cg_expr(s, after.pos, env, fs, kbox, false);
         if (val.err != "") { return val; }
-        GT vbox = box_scalar(s, val, env, fs);
+        GT vbox = box_heap_(s, val, env, fs);
         Str kt = first.ty;
         Str vt = val.ty;
         Int t1 = vbox.tmp + 1;
@@ -3421,8 +3494,8 @@ GT cg_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         return cg_map_lit_emit(m1, kt, vt, t2.pos, mt);
     }
     if (after.text == ",") {
-        // Set literal: {e, ...}
-        GT fbox = box_scalar(s, first, env, fs);
+        // Set literal: {e, ...} — box_heap_, see cg_set_lit_rest's comment.
+        GT fbox = box_heap_(s, first, env, fs);
         Int t1 = fbox.tmp + 1;
         Str s0 = "%t" + IntToString(t1);
         Str newl = s0 + " = call ptr @resid_set_new()";
@@ -3434,8 +3507,8 @@ GT cg_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         return cg_set_lit_rest(s, after.pos, first.ty, st, env, fs, fbox);
     }
     if (after.text == "}") {
-        // Single-element set: {e}
-        GT fbox = box_scalar(s, first, env, fs);
+        // Single-element set: {e} — box_heap_, same reasoning.
+        GT fbox = box_heap_(s, first, env, fs);
         Int t1 = fbox.tmp + 1;
         Str s0 = "%t" + IntToString(t1);
         Str newl = s0 + " = call ptr @resid_set_new()";
