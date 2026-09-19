@@ -4785,13 +4785,6 @@ PG pg_next(Str s, Int pos, Funcs fs, PG g) {
     return pg_next(s, end2, fs, g);
 }
 
-Str join_lines(List(Str) lns, Int i, Str acc) {
-    if (i >= lns.len()) { return acc; }
-    Str acc2 = acc + lns[i] + "\n";
-    Int k = i + 1;
-    return join_lines(lns, k, acc2);
-}
-
 Str rt_itoa_def() {
     return "define ptr @e.itoa(ptr %buf, i64 %v) {\nentry:\n  %zn = icmp eq i64 %v, 0\n  br i1 %zn, label %zero, label %prep\nzero:\n  %zp = getelementptr i8, ptr %buf, i64 22\n  store i8 48, ptr %zp\n  %zt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %zt\n  ret ptr %zp\nprep:\n  %neg = icmp slt i64 %v, 0\n  %an = sub i64 0, %v\n  %mag = select i1 %neg, i64 %an, i64 %v\n  br label %loop\nloop:\n  %cur = phi i64 [ %mag, %prep ], [ %q, %body ]\n  %idx = phi i64 [ 22, %prep ], [ %im, %body ]\n  %d = srem i64 %cur, 10\n  %q = sdiv i64 %cur, 10\n  %ai = add i64 %d, 48\n  %ab = trunc i64 %ai to i8\n  %sp = getelementptr i8, ptr %buf, i64 %idx\n  store i8 %ab, ptr %sp\n  %im = sub i64 %idx, 1\n  %more = icmp ne i64 %q, 0\n  br i1 %more, label %body, label %sig\nbody:\n  br label %loop\nsig:\n  br i1 %neg, label %wneg, label %wpos\nwpos:\n  %pp = getelementptr i8, ptr %buf, i64 %idx\n  %pt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %pt\n  ret ptr %pp\nwneg:\n  %mi = sub i64 %idx, 1\n  %mp = getelementptr i8, ptr %buf, i64 %mi\n  store i8 45, ptr %mp\n  %mt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %mt\n  ret ptr %mp\n}";
 }
@@ -8346,18 +8339,48 @@ Str eff_round_at(Sigs fs, List(Str) eff, List(Str) edges, Int i) {
     return meet_caps(base, folded);
 }
 
-List(Str) eff_round(Sigs fs, List(Str) eff, List(Str) edges, Int i) {
-    if (i >= fs.names.len()) { return sigs_empty().names; }
+type EffRound = { List(Str) eff; Bool changed; };
+
+// Forward, appending accumulator (growable.rs's proven bare-List(T)-param
+// shape: `acc` grown by exactly one `.concat` per recursive step, threaded
+// to the same recursive-call slot, fresh `[]` at its one call site) —
+// replaces the earlier cons-from-the-front `[updated].concat(rest)` build,
+// which copied the whole remaining tail at every index (O(n) per index,
+// O(n^2) per round on top of eff_fixpoint's own O(n) round count).
+// `changed` tracks whether this round actually altered any entry, so
+// `eff_fixpoint` can stop the moment the effect set has converged instead
+// of always running exactly `rounds` (= function count) rounds — see that
+// function's docs for why this was the dominant cost of the self-compile
+// OOM (PLAN-resid-only.md Phase E cause #6).
+EffRound eff_round_acc(Sigs fs, List(Str) eff, List(Str) edges, Int i, List(Str) acc, Bool changed) {
+    if (i >= fs.names.len()) { return EffRound {.eff = acc, .changed = changed}; }
     Str updated = eff_round_at(fs, eff, edges, i);
-    List(Str) rest = eff_round(fs, eff, edges, i + 1);
-    List(Str) head = [updated];
-    return head.concat(rest);
+    Bool this_changed = updated != eff[i];
+    List(Str) acc2 = acc.concat([updated]);
+    Bool changed2 = changed || this_changed;
+    Int k = i + 1;
+    return eff_round_acc(fs, eff, edges, k, acc2, changed2);
 }
 
+EffRound eff_round(Sigs fs, List(Str) eff, List(Str) edges) {
+    return eff_round_acc(fs, eff, edges, 0, [], false);
+}
+
+// Least-fixpoint over the call graph (spec §21.3 transitive attenuation):
+// each round can only ever narrow (meet_caps) a function's effective
+// ceiling, never widen it, so `rounds` (a safe worst-case bound — no
+// caller-to-callee chain in an n-function call graph is longer than n) is
+// only an upper bound on how many rounds COULD be needed, not how many
+// actually are. Stopping the instant a round makes no further change is
+// the same final fixpoint, reached in the number of rounds the call
+// graph's actual capability-propagation depth requires — for a real
+// program's call graph that's the diameter of the (typically shallow)
+// sandboxing structure, not its function count.
 List(Str) eff_fixpoint(Sigs fs, List(Str) eff, List(Str) edges, Int rounds) {
     if (rounds <= 0) { return eff; }
-    List(Str) next = eff_round(fs, eff, edges, 0);
-    return eff_fixpoint(fs, next, edges, rounds - 1);
+    EffRound r = eff_round(fs, eff, edges);
+    if (!r.changed) { return r.eff; }
+    return eff_fixpoint(fs, r.eff, edges, rounds - 1);
 }
 
 Str e0211_check_call(Sigs fs, List(Str) eff, List(Str) edges, Int i, Int j) {
@@ -9412,7 +9435,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     List(Str) ol = res.lines;
     List(Str) mid = ol.concat(res.hlines);
     List(Str) all = mid.concat(res.glines);
-    Str doc = join_lines(all, 0, "");
+    Str doc = str_join(all, "\n") + "\n";
     Str ll = out + ".ll";
     filesystem.write_all(ll, doc);
     Str cmd = "clang " + ll + " " + rtc + " -Wno-override-module -pthread -o " + out;
@@ -9425,6 +9448,8 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int prc = write_provenance(out, rsrc);
     return prc;
 }
+
+
 
 
 
