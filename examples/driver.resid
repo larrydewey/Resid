@@ -721,6 +721,7 @@ pub Str num_norm_cg(Str ty) {
 Str ll_ty(Str ty) {
     if (ty == "Int") { return "i64"; }
     if (ty == "Bool") { return "i1"; }
+    if (ty == "Void") { return "i1"; }
     if (ty == "Float") { return "double"; }
     if (ty == "Str") { return "ptr"; }
     // width-parameterized numerics: Int(256) -> i256 etc.
@@ -746,6 +747,20 @@ Str ll_ty(Str ty) {
         return "[" + IntToString(fixed_cap(ty)) + " x " + inner + "]";
     }
     return "ptr";
+}
+
+// The LLVM zero literal for an `ll_ty`-produced type string — used to
+// build a type-correct implicit `ret` when a function's body falls
+// through without an explicit `return` (spec: a Void/Bool-returning
+// function's body may simply end). Every heap/pointer type (Str, List,
+// struct, ...) lowers to "ptr", zeroed as `null`; fixed-capacity stack
+// arrays ("[N x T]") use LLVM's generic `zeroinitializer`; everything
+// else (`i1`, `i64`, `iN`, `double`, ...) is a scalar `0`.
+Str default_zero_for(Str llty) {
+    if (llty == "double") { return "0.0"; }
+    if (llty == "ptr") { return "null"; }
+    if (str_has_prefix_cg(llty, "[")) { return "zeroinitializer"; }
+    return "0";
 }
 
 // Signedness of an integer type string; true for signed families.
@@ -4710,7 +4725,12 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
         return PG {.pos = body.pos, .err = body.err, .glines = body.glines, .hlines = body.hlines, .lines = body.lines, .tmp = body.tmp, .lbl = body.lbl};
     }
     List(Str) lns0 = body.lines;
-    List(Str) lns1 = if (!body.dead) { lns0.concat(["ret i32 0"]) } else { lns0 };
+    // `main`'s signature is hardcoded i32 (C ABI exit code), independent
+    // of ll_ty(rbase) (Int -> i64) — mirror that here, same as the
+    // explicit empty-`return;` path above (sg_stmt's `in_main` case).
+    Str retty = if (is_main) { "i32" } else { ll_ty(rbase) };
+    Str fallthrough_ret = "ret " + retty + " " + default_zero_for(retty);
+    List(Str) lns1 = if (!body.dead) { lns0.concat([fallthrough_ret]) } else { lns0 };
     List(Str) new_body_lines = list_from_idx(lns1, body_start);
     CapPP pp2 = if (sandboxed) { capinject_at(new_body_lines, 0, CapPP {.lines = nil_list(), .glines = body.glines, .n = pp1.n}) } else { CapPP {.lines = new_body_lines, .glines = body.glines, .n = pp1.n} };
     List(Str) lns = pp1.lines.concat(pp2.lines).concat(["}"]);
@@ -9448,6 +9468,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int prc = write_provenance(out, rsrc);
     return prc;
 }
+
 
 
 
