@@ -14,8 +14,8 @@
   resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 1,
   resid-lsp-notes 6,
   resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 131 e2e).
-  1 pre-existing e2e failure not caused by any recent work
-  (`bootstrap_map_set_parity` — see §0a). Full workspace suite ≈ 85 minutes
+  All 131 `residc` e2e tests green (`bootstrap_map_set_parity` was found
+  regressed and fixed same day — see §0a). Full workspace suite ≈ 85 minutes
   wall-clock (`cargo nextest run --workspace`) as of the last full-workspace
   timing; see `AGENTS.md` for the per-test slow-test timing table (31 tests
   ≥60s, dominated by live-network TLS/HTTP and wide-EC crypto property
@@ -50,14 +50,29 @@ faster still but broke codegen at scale) are in `PLAN-resid-only.md` Phase
 B.3. Stage-3 self-hosting fixed point (D2's output == D3's output,
 byte-identical) was independently re-confirmed after this fix.
 
-**Known regression, not caused by this work**: `bootstrap_map_set_parity`
-(`Set(Int).contains(2)` diverges between the Rust pipeline and the
-self-hosted driver: stage1 says `has-2`, stage2 says `no-2`) currently
-fails on a clean checkout — confirmed via `git stash` A/B testing during the
-session above. This contradicts this file's own §7 Map/Set progress notes,
-which document it as green; it has regressed at some point since and is
-untracked. Needs investigation — not done this session (out of scope: pure
-performance work).
+**`bootstrap_map_set_parity` regression — found and fixed same day (2026-09-19)**:
+`Set(Int).contains(2)` diverged between the Rust pipeline (`has-2`, correct)
+and the self-hosted driver (`no-2`, wrong); confirmed via `git stash` A/B
+testing to be a pre-existing bug, not caused by the performance work above.
+Root cause: `examples/codegen.resid`'s `.get`/`.remove`/`.contains` (Map)
+and `.contains`/`.remove` (Set) methods, plus `m[key]` indexing, all boxed
+their key/element argument via `box_scalar` — a bare stack-alloca `ptr`
+(just `alloca T; store T val, ptr`) — instead of `box_heap_`, which
+produces a real `resid_box_i64`/etc. heap box (`ResidVal{tag=-1, type="i64", ...}`).
+`resid_map_contains`/`resid_hash`/`resid_key_eq` in `resid_rt.c` require
+the real heap-box shape to identify and compare scalar keys; handed a bare
+stack pointer instead, `resid_hash` falls into its "bare C string" branch
+and hashes garbage bytes at that stack address, so the lookup essentially
+never matches. Explains the exact failure pattern: `m.contains("a")` (a
+`Str` key) happened to work because `box_scalar` is a no-op for `Str`
+(strings are already bare pointers, which is what the hash path expects);
+`s.contains(2)` (an `Int` element) broke because `box_scalar` actually
+stack-allocates for non-composite types. `.insert()` on both Map and Set
+already correctly used `box_heap_` (with a comment explaining exactly this
+requirement) — the bug was that `get`/`remove`/`contains`/indexing never
+got the same treatment. Fixed by switching all 6 call sites to `box_heap_`
+and deleting `box_scalar` (had zero remaining/legitimate callers after the
+fix). Verified: full `residc` e2e suite, 131/131 green.
 
 ### Major capabilities
 
@@ -860,12 +875,10 @@ pipelines for struct sort, Int sort, and Reverse):
 - Codegen: `wrap_option()` helper boxes raw rt map-get results as
   Some/None for `.get` and `m[k]`; `Map`/`Set` types pass through IR.
 - e2e `run_map_set_types` + parser/type unit tests green.
-- **Stage-2**: driver compiles Map/Set programs end-to-end with
+- **Stage-2 (DONE)**: driver compiles Map/Set programs end-to-end with
   byte-identical output to the Rust pipeline (e2e `bootstrap_map_set_parity`).
-  **Currently regressed** (found 2026-09-19, see §0a): `Set(Int).contains(2)`
-  now diverges between stage-1 and stage-2 output on a clean checkout;
-  confirmed not caused by any work in that session. Root cause not yet
-  investigated.
+  Was regressed as of 2026-09-19 (`Set(Int).contains(2)` diverged
+  stage-1 vs stage-2), root-caused and fixed same day — see §0a.
   Recursion-first port of literal/method typecheck+codingen (no `while`/
   reassignment): map/set literals, `.len/.insert/.remove/.contains/.keys/
   .values`, Set `.union/.difference/.intersection/.to_list`, chained
