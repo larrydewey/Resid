@@ -612,7 +612,7 @@ Str get_line_end_rec(Str s, Int line_start, Int i, Int n) {
 // Emit a full diagnostic: header + caret snippet.
 // `pos` is the absolute character index in `s` (token end position).
 // `col_len` is the token length for the caret width.
-void diag_error(Str code, Str msg, Int pos, Int col_len, Str s) {
+Void diag_error(Str code, Str msg, Int pos, Int col_len, Str s) {
     PosInfo pi = pos_to_line_col(s, pos - col_len);
     Int line = pi.line;
     Int col = pi.col;
