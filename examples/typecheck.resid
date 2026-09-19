@@ -4014,14 +4014,7 @@ Str fstring_holes_err(Str s, Tok t, List(Str) env, Funcs fs) {
 // inert; `prev != "."` excludes provider verbs and methods. A hash map
 // (E.2a) gives O(1) name→index lookups instead of the old O(n) linear scan.
 Bool is_user_fn(Funcs fs, Str n) {
-    return is_user_fn_at(fs.names, n, 0);
-}
-
-Bool is_user_fn_at(List(Str) names, Str n, Int i) {
-    if (i >= names.len()) { return false; }
-    if (names[i] == n) { return true; }
-    Int k = i + 1;
-    return is_user_fn_at(names, n, k);
+    return fs.fns.contains(n);
 }
 
 // A user function called inside an interpolation is a real call-graph edge,
