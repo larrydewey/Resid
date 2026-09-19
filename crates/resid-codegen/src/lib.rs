@@ -33,6 +33,40 @@ pub struct Val<'ctx> {
     pub ty: SemType,
 }
 
+/// Where a `.concat` chain expression's growth root lands, relative to the
+/// current function's tracked growable struct fields
+/// (`CodeGen::cur_growable_fields`). See that field's docs for the design.
+///
+/// **Correctness note (root cause of a real crash caught validating this
+/// against `examples/codegen.resid`):** `FirstTouch` means the expression
+/// syntactically denotes `base.field` (or an alias of it) — nothing more.
+/// The loaded value is only ACTUALLY converted into a GrowBuf pointer at a
+/// site that performs a real `.concat` (`resid_growbuf_from_list` then
+/// `resid_growbuf_push_list`); a pure passthrough with zero `.concat`
+/// calls anywhere (`gt_of_st`-shaped: `return GT { .lines = g.lines, ... }`)
+/// never converts anything, so the value stays an ordinary boxed List.
+/// Callers MUST NOT treat `FirstTouch` alone as "safe to
+/// `resid_growbuf_finish`" — only a value that actually flowed through a
+/// `.concat` (see `finish_growbuf_field_if_live`'s `is_concat_call` check)
+/// is a real GrowBuf. Calling `resid_growbuf_finish` on a plain List
+/// pointer reads/frees through the wrong struct layout — the exact
+/// type-confusion crash class `PLAN-resid-only.md`'s E.4 section already
+/// documented once for a different mechanism.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum GrowbufChainRoot {
+    /// Not part of any tracked chain — lower normally.
+    None,
+    /// The chain's root is `base.field` (or a bare alias of it), which may
+    /// still be an ordinary boxed List (see the note above) — the next
+    /// actual `.concat` on it converts via `resid_growbuf_from_list` before
+    /// its first push.
+    FirstTouch,
+    /// The chain's root already holds a live GrowBuf pointer (a prior
+    /// `.concat` step, or a nested `.concat` chain whose own recursive
+    /// lowering already converted it): push directly.
+    Live,
+}
+
 /// Does `block` end in a guaranteed terminator (return or an if whose both
 /// branches return)? Used to propagate early-return termination out of nested
 /// if/else arms so an enclosing block is not double-terminated.
@@ -340,6 +374,38 @@ pub struct CodeGen<'ctx> {
     /// Computed once in `generate`, queried in `lower_expr` for `ExprKind::Id`
     /// to emit exact free calls at the last unique use of tracked roots.
     ownership: OwnershipInfo,
+    /// `(param name, field name)` pairs of the current function's struct
+    /// parameters whose `List(T)` field is a whole-program-sound content-
+    /// growth root (`resid_type::OwnershipInfo::growable_field` — Phase E.1
+    /// "straight-line" case, e.g. `finish_ifexpr`'s `ev.lines`). Set on
+    /// entry to `lower_function`, cleared on exit. While non-empty, a
+    /// `.concat` chain rooted at `base.field` for a tracked pair is lowered
+    /// through the GrowBuf path (see `growbuf_field_locals`/
+    /// `growbuf_field_aliases`) instead of `resid_list_concat`, finishing
+    /// back to a normal boxed List wherever the chain's value is written
+    /// into a struct literal's field slot (`lower_struct_lit`). The tracked
+    /// parameter's OWN storage is never touched — only fresh local temps
+    /// derived from it carry GrowBuf semantics — so a return/branch that
+    /// hands the field back unchanged (never touching the chain) is
+    /// unaffected by construction, not by a second analysis pass.
+    cur_growable_fields: Vec<(String, String)>,
+    /// Local names currently bound to a GENUINE GrowBuf-typed value: the
+    /// direct result of an actual `.concat` step on a tracked field/alias
+    /// (not merely a rename of one — see `growbuf_field_aliases`), or a
+    /// `let`-bound copy of one. Reset per function alongside
+    /// `cur_growable_fields`. See that field's docs and
+    /// `GrowbufChainRoot`'s for the crash this distinction fixes.
+    growbuf_field_locals: std::collections::HashSet<String>,
+    /// Local names bound to a bare, not-yet-grown alias of a tracked field
+    /// (`List(Str) d0 = ev.lines;` with no `.concat` yet) — still an
+    /// ordinary boxed List at runtime, so the *next* `.concat` on one of
+    /// these must convert via `resid_growbuf_from_list` first, same as
+    /// touching `base.field` directly. Kept separate from
+    /// `growbuf_field_locals` (which never need that conversion, and must
+    /// NEVER be passed to `resid_growbuf_finish` without one) to avoid ever
+    /// calling a GrowBuf-only runtime primitive on a value that is not
+    /// actually a GrowBuf.
+    growbuf_field_aliases: std::collections::HashSet<String>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -369,6 +435,9 @@ impl<'ctx> CodeGen<'ctx> {
             cur_fn_name: String::new(),
             knowledge_cache: None,
             ownership: OwnershipInfo::new(),
+            cur_growable_fields: Vec::new(),
+            growbuf_field_locals: std::collections::HashSet::new(),
+            growbuf_field_aliases: std::collections::HashSet::new(),
         }
     }
 
@@ -979,6 +1048,18 @@ impl<'ctx> CodeGen<'ctx> {
             .enumerate()
             .find(|(i, _)| self.growable.is_growable(name, *i))
             .map(|(i, p)| (p.name.0.clone(), i));
+        self.cur_growable_fields = f
+            .params
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| {
+                self.ownership
+                    .growable_field(name, i)
+                    .map(|field| (p.name.0.clone(), field.to_string()))
+            })
+            .collect();
+        self.growbuf_field_locals.clear();
+        self.growbuf_field_aliases.clear();
         let enter_ret = resid_type::resolve_type_ctx(&f.ret, &self.types).unwrap_or(SemType::Bool);
         self.cur_ret = Some(enter_ret.clone());
         self.cap_ceiling = self
@@ -1092,7 +1173,130 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
         self.cur_growable_param = None;
+        self.cur_growable_fields.clear();
+        self.growbuf_field_locals.clear();
+        self.growbuf_field_aliases.clear();
         Ok(())
+    }
+
+    /// True if `e` is exactly `base.field` for one of the current
+    /// function's tracked growable-field pairs (`cur_growable_fields`) —
+    /// the *first* touch of that field within this function, where the
+    /// loaded value is still an ordinary boxed List and must go through
+    /// `resid_growbuf_from_list` before its first push.
+    fn is_growbuf_field_first_touch(&self, e: &Expr) -> bool {
+        let ExprKind::FieldAccess { target, field } = &e.kind else {
+            return false;
+        };
+        let ExprKind::Id(id) = &target.kind else {
+            return false;
+        };
+        self.cur_growable_fields
+            .iter()
+            .any(|(p, f)| *p == id.0 && *f == field.0)
+    }
+
+    /// Where a `.concat` step's target expression's growth-chain root
+    /// (unwrapping nested `.concat` calls) lands, for the current
+    /// function's tracked growable fields. See `cur_growable_fields`'s and
+    /// `GrowbufChainRoot`'s docs for the overall design and the crash this
+    /// was built to avoid; this mirrors `resid-type`'s own
+    /// `field_growable`/`ownership` chain-recognition structurally (not a
+    /// re-derivation of *soundness* — that's already established by
+    /// `cur_growable_fields` being non-empty only for whole-program-proven
+    /// roots — only of *which* local currently holds the live chain, for
+    /// choosing the right runtime call).
+    fn growbuf_chain_root(&self, e: &Expr) -> GrowbufChainRoot {
+        if let ExprKind::MethodCall { target, method, args } = &e.kind
+            && method.0 == "concat"
+            && args.len() == 1
+        {
+            return self.growbuf_chain_root(target);
+        }
+        if self.is_growbuf_field_first_touch(e) {
+            return GrowbufChainRoot::FirstTouch;
+        }
+        if let ExprKind::Id(id) = &e.kind {
+            if self.growbuf_field_locals.contains(&id.0) {
+                return GrowbufChainRoot::Live;
+            }
+            if self.growbuf_field_aliases.contains(&id.0) {
+                return GrowbufChainRoot::FirstTouch;
+            }
+        }
+        GrowbufChainRoot::None
+    }
+
+    /// True if `e` is itself a single `.concat` call (`X.concat(Y)`) —
+    /// used to distinguish "this expression actually performed a growth
+    /// step" from "this expression merely denotes the tracked path" (see
+    /// `GrowbufChainRoot`'s docs: the latter is NOT automatically a live
+    /// GrowBuf).
+    fn is_concat_call(e: &Expr) -> bool {
+        matches!(
+            &e.kind,
+            ExprKind::MethodCall { method, args, .. } if method.0 == "concat" && args.len() == 1
+        )
+    }
+
+    /// Records what kind of growbuf-chain value (if any) `value` denotes,
+    /// under the name it's about to be bound to — called right after
+    /// lowering a `Bind` statement's value, before it's needed by any
+    /// later reference to `name`.
+    fn record_growbuf_bind(&mut self, name: &str, value: &Expr) {
+        if self.cur_growable_fields.is_empty() {
+            return;
+        }
+        match self.growbuf_chain_root(value) {
+            GrowbufChainRoot::None => {}
+            GrowbufChainRoot::Live => {
+                self.growbuf_field_locals.insert(name.to_string());
+            }
+            GrowbufChainRoot::FirstTouch if Self::is_concat_call(value) => {
+                // This bind's own lowering performed the from_list+push
+                // conversion (see the `.concat` lowering site) — the bound
+                // name now holds a GENUINE live GrowBuf.
+                self.growbuf_field_locals.insert(name.to_string());
+            }
+            GrowbufChainRoot::FirstTouch => {
+                // A bare rename with no growth yet (`d0 = base.field;`):
+                // still an ordinary List at runtime — see
+                // `GrowbufChainRoot::FirstTouch`'s docs.
+                self.growbuf_field_aliases.insert(name.to_string());
+            }
+        }
+    }
+
+    /// If `value_expr`'s lowered value `v` is a GENUINE live GrowBuf chain
+    /// value (per `GrowbufChainRoot`'s docs — NOT merely something that
+    /// syntactically denotes the tracked path; a plain, never-`.concat`ed
+    /// passthrough like `gt_of_st`'s `.lines = g.lines` must NOT be
+    /// finished, since nothing ever converted it), materializes it back
+    /// into a normal boxed List via `resid_growbuf_finish` (using `v.ty`,
+    /// already `List(T)`, for the finished value's type descriptor) before
+    /// it is stored into a struct literal's field slot — see
+    /// `lower_struct_lit`.
+    fn finish_growbuf_field_if_live(
+        &mut self,
+        v: Val<'ctx>,
+        value_expr: &Expr,
+    ) -> Result<Val<'ctx>, String> {
+        if self.cur_growable_fields.is_empty() {
+            return Ok(v);
+        }
+        let is_genuine_growbuf = match &value_expr.kind {
+            _ if Self::is_concat_call(value_expr) => {
+                !matches!(self.growbuf_chain_root(value_expr), GrowbufChainRoot::None)
+            }
+            ExprKind::Id(id) => self.growbuf_field_locals.contains(&id.0),
+            _ => false,
+        };
+        if !is_genuine_growbuf {
+            return Ok(v);
+        }
+        let type_str = self.lower_str(&format!("{}", v.ty));
+        let finished = self.rt_call("resid_growbuf_finish", vec![v.v, type_str.into()])?;
+        Ok(Val { v: finished, ty: v.ty })
     }
 
     /// If `ret_expr` is a bare reference to the current function's
@@ -1208,6 +1412,7 @@ impl<'ctx> CodeGen<'ctx> {
                     };
                     let v = self.cast_val(v, &ty)?;
                     self.builder.build_store(ptr, v.v).map_err(to_err)?;
+                    self.record_growbuf_bind(&name.0, value);
                     sc.vars.insert(name.0.clone(), (ptr, ty));
                 }
                 StmtKind::Expr(e) | StmtKind::Discard(e) => {
@@ -5846,6 +6051,15 @@ impl<'ctx> CodeGen<'ctx> {
             } else {
                 self.lower_expr(sc, vexpr, None)?
             };
+            // Straight-line struct-field growth (Phase E.1): if this
+            // field's value is a GENUINE live GrowBuf chain
+            // (`cur_growable_fields`), this struct literal is where it
+            // crosses back into ordinary Resid values — materialize once
+            // via `resid_growbuf_finish` before boxing/storing. A plain
+            // passthrough that never actually grew anything is left
+            // untouched (see `finish_growbuf_field_if_live`'s docs for why
+            // that distinction is load-bearing, not cosmetic).
+            let v = self.finish_growbuf_field_if_live(v, vexpr)?;
             slots.push(self.box_scalar(v)?);
         }
         self.build_constructor(0, &st, slots)
@@ -6222,7 +6436,18 @@ impl<'ctx> CodeGen<'ctx> {
                     (&target.kind, &self.cur_growable_param),
                     (ExprKind::Id(id), Some((name, _))) if id.0 == *name
                 );
+                // Straight-line struct-field growth fast path (Phase E.1;
+                // see `cur_growable_fields`'s docs): `base.field` (or a
+                // chain temp derived from it) growing via local `.concat`
+                // steps within ONE function call, independent of
+                // `cur_growable_param`'s whole-parameter mechanism above.
+                let field_chain_root = self.growbuf_chain_root(target);
                 let v = if is_growbuf_target {
+                    self.rt_call("resid_growbuf_push_list", vec![tv.v, av.v])?
+                } else if field_chain_root == GrowbufChainRoot::FirstTouch {
+                    let g = self.rt_call("resid_growbuf_from_list", vec![tv.v])?;
+                    self.rt_call("resid_growbuf_push_list", vec![g, av.v])?
+                } else if field_chain_root == GrowbufChainRoot::Live {
                     self.rt_call("resid_growbuf_push_list", vec![tv.v, av.v])?
                 } else {
                     self.rt_call("resid_list_concat", vec![tv.v, av.v])?
