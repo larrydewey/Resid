@@ -3788,17 +3788,24 @@ double bl_sumf(void* box) {
 }
 
 /* Split into a bootstrap-layout List(Str). */
+/* Despite the `bl_` name, these two build/read genuine persistent
+ * ResidList values (resid_list_new/_len/_get) — the codegen.resid
+ * front end calls them for the `str_split`/`str_join` builtins, and
+ * every other list operation it emits (indexing, .len(), .concat())
+ * targets that same persistent representation. They used to build a
+ * distinct flat `{i64 n; slots[n]}` layout, which silently corrupted
+ * any split result the moment it was indexed or lengthed — see the
+ * self-compile segfault this was fixed for. */
 void* bl_str_split(const char* s, const char* sep) {
     size_t lsep = strlen(sep);
     if (lsep == 0) {
-        char** box = (char**)bl_alloc(1);
-        box[1] = (char*)s;
-        return box;
+        void* one = (void*)s;
+        return resid_list_new(1, &one, "Str");
     }
     int64_t parts = 1;
     const char* q = s;
     while ((q = strstr(q, sep)) != NULL) { parts++; q += lsep; }
-    char** box = (char**)bl_alloc(parts);
+    char** tmp = (char**)malloc((size_t)parts * sizeof(char*));
     int64_t i = 0;
     q = s;
     const char* hit;
@@ -3807,26 +3814,27 @@ void* bl_str_split(const char* s, const char* sep) {
         char* part = (char*)malloc(len + 1);
         memcpy(part, q, len);
         part[len] = '\0';
-        box[1 + i++] = part;
+        tmp[i++] = part;
         q = hit + lsep;
     }
-    box[1 + i] = strdup(q);
-    return box;
+    tmp[i] = strdup(q);
+    void* out = resid_list_new(parts, (void**)tmp, "Str");
+    free(tmp);
+    return out;
 }
 
-/* Join a bootstrap-layout List(Str) with separator `sep`. */
 char* bl_str_join(void* box, const char* sep) {
-    int64_t n = ((int64_t*)box)[0];
-    const char** items = (const char**)((int64_t*)box + 1);
+    int64_t n = resid_list_len(box);
     size_t lsep = strlen(sep), total = 0;
-    for (int64_t i = 0; i < n; i++) total += strlen(items[i]);
+    for (int64_t i = 0; i < n; i++) total += strlen((const char*)resid_list_get(box, i));
     if (n > 0) total += lsep * (size_t)(n - 1);
     char* p = (char*)malloc(total + 1);
     char* w = p;
     for (int64_t i = 0; i < n; i++) {
         if (i > 0) { memcpy(w, sep, lsep); w += lsep; }
-        size_t li = strlen(items[i]);
-        memcpy(w, items[i], li); w += li;
+        const char* item = (const char*)resid_list_get(box, i);
+        size_t li = strlen(item);
+        memcpy(w, item, li); w += li;
     }
     *w = '\0';
     return p;
