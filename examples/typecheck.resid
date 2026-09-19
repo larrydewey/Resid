@@ -2870,7 +2870,7 @@ ERes ck_else_fallback(Str s, Int pos, Str pt, List(Str) env, Funcs fs) {
     Tok open = lex_tok(s, pos);
     if (open.text != "{") { 
         return ERes {.pos = open.pos, .ty = "", .err = "expected { after else"}; }
-    ERes fv = check_expr_block(s, lex_tok(s, open.pos).pos, env, fs);
+    ERes fv = check_expr_block(s, open.pos, env, fs);
     if (fv.err != "") { return fv; }
     Tok close = lex_tok(s, fv.pos);
     if (close.text != "}") { return ERes {.pos = close.pos, .ty = "", .err = "expected } at end of else block"}; }
@@ -4045,9 +4045,11 @@ List(Str) call_csv(Funcs fs) {
     return call_csv_at(fs, 0);
 }
 
-Bool call_csv_has(Str csv, Str n) {
-    if (csv == "") { return false; }
-    return list_contains_str(str_split(csv, ","), n);
+// Parse a comma-joined csv lane into its real elements, without the
+// spurious single-"" entry str_split("", ",") would otherwise produce.
+List(Str) csv_split_or_empty(Str csv) {
+    if (csv == "") { List(Str) empty = []; return empty; }
+    return str_split(csv, ",");
 }
 
 // ─── Provider-effect sets (spec §21.3 / §32) ────────────────────
@@ -4174,20 +4176,54 @@ Bool e0218_check_all(Funcs fs, List(Str) eff, List(Str) pcsv, Int i) {
     return rest;
 }
 
+// Reverse call-graph index (callee name -> comma-joined caller names),
+// built once in O(total call-graph edges). `fold_caller_ceils` below then
+// does a single O(1) Map lookup + a scan of the callee's ACTUAL callers
+// per callee, instead of an O(n) linear scan of every function's forward
+// edge list (with a fresh str_split each time) for every callee — that
+// was O(n) per callee, O(n^2) per round, O(rounds * n^2) total.
+Map(Str, Str) add_caller_edges_one(Map(Str, Str) m, Str caller_name, Str callee) {
+    Str existing = m.get(callee) else { "" };
+    Str updated = if (existing == "") { caller_name } else { existing + "," + caller_name };
+    return m.insert(callee, updated);
+}
+Map(Str, Str) add_caller_edges(Map(Str, Str) m, Str caller_name, List(Str) callees, Int k) {
+    if (k >= callees.len()) { return m; }
+    Map(Str, Str) m2 = add_caller_edges_one(m, caller_name, callees[k]);
+    Int k2 = k + 1;
+    return add_caller_edges(m2, caller_name, callees, k2);
+}
+Map(Str, Str) build_caller_index_at(Funcs fs, List(Str) edges, Int j, Map(Str, Str) m) {
+    if (j >= fs.names.len()) { return m; }
+    Map(Str, Str) m2 = add_caller_edges(m, fs.names[j], csv_split_or_empty(edges[j]), 0);
+    Int k = j + 1;
+    return build_caller_index_at(fs, edges, k, m2);
+}
+Map(Str, Str) build_caller_index(Funcs fs, List(Str) edges) {
+    Map(Str, Str) empty = {"__EMPTY__": ""};
+    return build_caller_index_at(fs, edges, 0, empty);
+}
+
 // §21.3 transitive attenuation: fold the effective ceilings of every
 // function whose *real* call graph (see `call_csv`) contains an edge to
 // `callee_name`. "__NONE__" means no restricted caller was found.
-Str fold_caller_ceils(Funcs fs, List(Str) eff, List(Str) edges, Str callee_name, Int j, Str acc) {
-    if (j >= fs.names.len()) { return acc; }
-    Str caller_eff = eff[j];
-    Bool calls_it = call_csv_has(edges[j], callee_name);
-    Str acc2 = if (calls_it && caller_eff != "") { if (acc == "__NONE__") { caller_eff } else { meet_caps(acc, caller_eff) } } else { acc };
-    Int k = j + 1;
-    return fold_caller_ceils(fs, eff, edges, callee_name, k, acc2);
+Str fold_callers(Funcs fs, List(Str) eff, List(Str) callers, Int k, Str acc) {
+    if (k >= callers.len()) { return acc; }
+    Int ci = fs.fns.get(callers[k]) else { -1 };
+    Str acc2 = if (ci < 0) { acc } else {
+        Str caller_eff = eff[ci];
+        if (caller_eff == "") { acc } else { if (acc == "__NONE__") { caller_eff } else { meet_caps(acc, caller_eff) } }
+    };
+    Int k2 = k + 1;
+    return fold_callers(fs, eff, callers, k2, acc2);
+}
+Str fold_caller_ceils(Funcs fs, List(Str) eff, Map(Str, Str) caller_index, Str callee_name) {
+    List(Str) callers = csv_split_or_empty(caller_index.get(callee_name) else { "" });
+    return fold_callers(fs, eff, callers, 0, "__NONE__");
 }
 
-Str eff_round_at(Funcs fs, List(Str) eff, List(Str) edges, Int i) {
-    Str folded = fold_caller_ceils(fs, eff, edges, fs.names[i], 0, "__NONE__");
+Str eff_round_at(Funcs fs, List(Str) eff, Map(Str, Str) caller_index, Int i) {
+    Str folded = fold_caller_ceils(fs, eff, caller_index, fs.names[i]);
     Str base = eff[i];
     if (folded == "__NONE__") { return base; }
     if (base == "") { return folded; }
@@ -4207,18 +4243,18 @@ type EffRound = { List(Str) eff; Bool changed; };
 // of always running exactly `rounds` (= function count) rounds — see that
 // function's docs for why this was the dominant cost of the self-compile
 // OOM (PLAN-resid-only.md Phase E cause #6).
-EffRound eff_round_acc(Funcs fs, List(Str) eff, List(Str) edges, Int i, List(Str) acc, Bool changed) {
+EffRound eff_round_acc(Funcs fs, List(Str) eff, Map(Str, Str) caller_index, Int i, List(Str) acc, Bool changed) {
     if (i >= fs.names.len()) { return EffRound {.eff = acc, .changed = changed}; }
-    Str updated = eff_round_at(fs, eff, edges, i);
+    Str updated = eff_round_at(fs, eff, caller_index, i);
     Bool this_changed = updated != eff[i];
     List(Str) acc2 = acc.concat([updated]);
     Bool changed2 = changed || this_changed;
     Int k = i + 1;
-    return eff_round_acc(fs, eff, edges, k, acc2, changed2);
+    return eff_round_acc(fs, eff, caller_index, k, acc2, changed2);
 }
 
-EffRound eff_round(Funcs fs, List(Str) eff, List(Str) edges) {
-    return eff_round_acc(fs, eff, edges, 0, [], false);
+EffRound eff_round(Funcs fs, List(Str) eff, Map(Str, Str) caller_index) {
+    return eff_round_acc(fs, eff, caller_index, 0, [], false);
 }
 
 // Least-fixpoint over the call graph (spec §21.3 transitive attenuation):
@@ -4231,31 +4267,31 @@ EffRound eff_round(Funcs fs, List(Str) eff, List(Str) edges) {
 // graph's actual capability-propagation depth requires — for a real
 // program's call graph that's the diameter of the (typically shallow)
 // sandboxing structure, not its function count.
-List(Str) eff_fixpoint(Funcs fs, List(Str) eff, List(Str) edges, Int rounds) {
+List(Str) eff_fixpoint(Funcs fs, List(Str) eff, Map(Str, Str) caller_index, Int rounds) {
     if (rounds <= 0) { return eff; }
-    EffRound r = eff_round(fs, eff, edges);
+    EffRound r = eff_round(fs, eff, caller_index);
     if (!r.changed) { return r.eff; }
-    return eff_fixpoint(fs, r.eff, edges, rounds - 1);
+    return eff_fixpoint(fs, r.eff, caller_index, rounds - 1);
 }
 
-Str e0211_check_call(Funcs fs, List(Str) eff, List(Str) edges, Int i, Int j) {
-    if (j >= fs.names.len()) { return ""; }
-    if (j == i) {
-        Int j2 = j + 1;
-        return e0211_check_call(fs, eff, edges, i, j2);
-    }
-    Bool calls_it = call_csv_has(edges[i], fs.names[j]);
-    if (calls_it) {
-        Str caller_eff = eff[i];
-        if (caller_eff != "") {
-            Str missing = first_missing_req(fs.reqs[j], caller_eff);
-            if (missing != "") {
-                return "call to `" + fs.names[j] + "` requires capability `" + missing + "` which exceeds the caller's effective sandbox ceiling [" + fmt_caps(caller_eff) + "] (attenuation is transitive across the call closure)";
-            }
-        }
-    }
-    Int j2 = j + 1;
-    return e0211_check_call(fs, eff, edges, i, j2);
+// E0211 forward check: walks only `i`'s own actual callees (edges[i],
+// parsed once) instead of testing every one of the n functions for
+// membership in edges[i] via a fresh str_split per test — was O(n) per
+// caller (O(n^2) total); now O(out-degree(i)) per caller (O(edges) total).
+Str e0211_check_callee(Funcs fs, Str caller_name, Str caller_eff, Str callee_name) {
+    if (callee_name == caller_name) { return ""; }
+    Int j = fs.fns.get(callee_name) else { -1 };
+    if (j < 0) { return ""; }
+    Str missing = first_missing_req(fs.reqs[j], caller_eff);
+    if (missing == "") { return ""; }
+    return "call to `" + callee_name + "` requires capability `" + missing + "` which exceeds the caller's effective sandbox ceiling [" + fmt_caps(caller_eff) + "] (attenuation is transitive across the call closure)";
+}
+Str e0211_check_callees(Funcs fs, Str caller_name, Str caller_eff, List(Str) callees, Int k) {
+    if (k >= callees.len()) { return ""; }
+    Str m = e0211_check_callee(fs, caller_name, caller_eff, callees[k]);
+    if (m != "") { return m; }
+    Int k2 = k + 1;
+    return e0211_check_callees(fs, caller_name, caller_eff, callees, k2);
 }
 
 // Whole-program passes accumulate (rather than stop at the first hit):
@@ -4263,7 +4299,8 @@ Str e0211_check_call(Funcs fs, List(Str) eff, List(Str) edges, Int i, Int j) {
 // function's diagnostic that a specific caller is looking for.
 Bool e0211_check_all(Funcs fs, List(Str) eff, List(Str) edges, Int i) {
     if (i >= fs.names.len()) { return false; }
-    Str m = e0211_check_call(fs, eff, edges, i, 0);
+    Str caller_eff = eff[i];
+    Str m = if (caller_eff == "") { "" } else { e0211_check_callees(fs, fs.names[i], caller_eff, csv_split_or_empty(edges[i]), 0) };
     Bool printed = if (m != "") { eprintln("error[E0211]: " + m) } else { false };
     Int k = i + 1;
     Bool rest = e0211_check_all(fs, eff, edges, k);
@@ -4310,7 +4347,8 @@ Bool enforce_all(Funcs fs, List(Str) eff, Int i) {
 Int finish_check(Funcs fs) {
     Int n = fs.names.len();
     List(Str) edges = call_csv(fs);
-    List(Str) eff = eff_fixpoint(fs, fs.ceils, edges, n);
+    Map(Str, Str) caller_index = build_caller_index(fs, edges);
+    List(Str) eff = eff_fixpoint(fs, fs.ceils, caller_index, n);
     List(Str) pcsv = prov_csv(fs);
     Bool err1 = enforce_all(fs, eff, 0);
     Bool err2 = e0211_check_all(fs, eff, edges, 0);

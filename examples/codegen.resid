@@ -3002,9 +3002,15 @@ Int payload_tag = if (is_opt) { 1 } else { 1 };
         if (close.text != "}") { return gt_err("expected } at end of else block", fv); }
         List(Str) x0 = fv.lines;
         List(Str) x1 = x0.concat(["br label %" + labm]);
-        // Now PAYLOAD block
+        // Now PAYLOAD block. .glines carries forward fv.glines (not
+        // lhs.glines) — the fallback block may have emitted its own
+        // global lines (e.g. a string-literal constant for `else { "x" }`);
+        // starting the payload branch from the pre-fallback lhs.glines
+        // silently dropped those (latent bug: never triggered before
+        // because every prior `else { <default> }` used an Int literal,
+        // which touches only .lines, not .glines).
         List(Str) x2 = x1.concat([labp + ":"]);
-        GT c1 = GT {.pos = lhs.pos, .val = "", .ty = "", .cnt = 0, .err = "", .glines = lhs.glines, .lines = x2, .tmp = fv.tmp, .lbl = l3, .tail = false};
+        GT c1 = GT {.pos = lhs.pos, .val = "", .ty = "", .cnt = 0, .err = "", .glines = fv.glines, .lines = x2, .tmp = fv.tmp, .lbl = l3, .tail = false};
         GT pv = cg_match_payload(lhs, ety, c1);
         if (pv.err != "") { return pv; }
         List(Str) y0 = pv.lines;

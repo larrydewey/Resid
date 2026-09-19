@@ -13,21 +13,58 @@
   resid-codegen 137, resid-build 47, resid-fmt 5,
   resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 1,
   resid-lsp-notes 6,
-  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 129 e2e).
-  Note: all bootstrap e2e tests now green, including full stage-2 sandbox
-  parity (5 new `bootstrap_driver_sandbox_*` e2e tests — see §6 "Stage-2
-  Parity: Sandbox (§21)" below). Full workspace suite ≈ 85 minutes
-  wall-clock (`cargo nextest run --workspace`); see `AGENTS.md` for the
-  per-test slow-test timing table (31 tests ≥60s, dominated by live-network
-  TLS/HTTP, wide-EC crypto property tests, and bootstrap-driver/parity runs
-  that each lex→parse→typecheck→codegen→clang-link→execute through the
-  self-hosted driver).
+  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 131 e2e).
+  1 pre-existing e2e failure not caused by any recent work
+  (`bootstrap_map_set_parity` — see §0a). Full workspace suite ≈ 85 minutes
+  wall-clock (`cargo nextest run --workspace`) as of the last full-workspace
+  timing; see `AGENTS.md` for the per-test slow-test timing table (31 tests
+  ≥60s, dominated by live-network TLS/HTTP and wide-EC crypto property
+  tests). The `residc` e2e suite specifically (131 tests, the largest single
+  component of that 85 minutes) now runs in ≈16.5 minutes stand-alone
+  (`cargo test -p residc --test e2e`) after the self-compile performance fix
+  in §0a — the full-workspace figure above has not been re-measured since.
+
+### 0a. Self-compile performance fix (2026-09-19): ~3h -> ~101s
+
+A full `driver.resid` self-compile (D1 -> D2, typecheck+codegen+clang) went
+from effectively un-runnable (~3h, historically OOMed before an earlier
+O(n^3) fix, then simply too slow to use routinely) to **101.4s wall, 44.1GB
+peak RSS**. Root cause was NOT the memory-shape problem the existing Phase E
+plan (`PLAN-resid-only.md`) was built around — it was `resid_rt.c`'s
+`str_len(s)` rescanning the WHOLE source string from byte 0 on every call;
+the self-hosted `lex_tok` calls `str_len(s)` as its first statement on every
+single token, always against the full file, so tokenizing cost O(N^2) in
+source length alone, before any real parsing/checking/codegen work. Fixed
+with a trivial pointer-keyed memo cache (no array, no eviction — sound
+because Str buffers are immutable and never freed by this runtime). A
+second, smaller O(n^2) (n = function count) survived in
+`examples/typecheck.resid`'s sandbox-enforcement pass even after the
+earlier O(n^3) fixpoint fix (that fix cut the round *count*, not the
+per-round cost) — fixed via a reverse caller-index. A real, previously
+latent bug in `examples/codegen.resid`'s `value else { fallback }` codegen
+(dropped the fallback branch's emitted globals) was found and fixed along
+the way — only triggered by a `Str`-default use of that sugar, which didn't
+exist anywhere in the codebase before this session. Full writeup, numbers,
+and the reverted alternate approach (a byte-offset-index cache that was
+faster still but broke codegen at scale) are in `PLAN-resid-only.md` Phase
+B.3. Stage-3 self-hosting fixed point (D2's output == D3's output,
+byte-identical) was independently re-confirmed after this fix.
+
+**Known regression, not caused by this work**: `bootstrap_map_set_parity`
+(`Set(Int).contains(2)` diverges between the Rust pipeline and the
+self-hosted driver: stage1 says `has-2`, stage2 says `no-2`) currently
+fails on a clean checkout — confirmed via `git stash` A/B testing during the
+session above. This contradicts this file's own §7 Map/Set progress notes,
+which document it as green; it has regressed at some point since and is
+untracked. Needs investigation — not done this session (out of scope: pure
+performance work).
 
 ### Major capabilities
 
 - **Stage-2 self-hosting proven, including full sandbox/capability parity**:
-  `examples/driver.resid` (~8800 lines) compiles programs identically to the
-  Rust pipeline (all `bootstrap_*` e2e green), including sandbox enforcement
+  `examples/driver.resid` (~9930 lines) compiles programs identically to the
+  Rust pipeline (all `bootstrap_*` e2e green except `bootstrap_map_set_parity`,
+  a pre-existing regression — see §0a), including sandbox enforcement
   (E0211 transitive attenuation, E0212 ceiling violation, E0213 unknown
   capability mode, handle-entry, value-provenance, read-only-write
   rejection) and the `resid_cap_enter`/`resid_cap_check`/`resid_cap_leave`
@@ -823,8 +860,12 @@ pipelines for struct sort, Int sort, and Reverse):
 - Codegen: `wrap_option()` helper boxes raw rt map-get results as
   Some/None for `.get` and `m[k]`; `Map`/`Set` types pass through IR.
 - e2e `run_map_set_types` + parser/type unit tests green.
-- **Stage-2 (DONE)**: driver now compiles Map/Set programs end-to-end with
+- **Stage-2**: driver compiles Map/Set programs end-to-end with
   byte-identical output to the Rust pipeline (e2e `bootstrap_map_set_parity`).
+  **Currently regressed** (found 2026-09-19, see §0a): `Set(Int).contains(2)`
+  now diverges between stage-1 and stage-2 output on a clean checkout;
+  confirmed not caused by any work in that session. Root cause not yet
+  investigated.
   Recursion-first port of literal/method typecheck+codingen (no `while`/
   reassignment): map/set literals, `.len/.insert/.remove/.contains/.keys/
   .values`, Set `.union/.difference/.intersection/.to_list`, chained
