@@ -235,28 +235,112 @@ static int64_t utf8_decode(const unsigned char* p, int len) {
     }
 }
 
-/* Number of Unicode codepoints in a UTF-8 string. */
-int64_t str_len(const char* s) {
+/* ── Per-string byte-offset index (true O(1) random access) ──
+ *
+ * str_len/str_char_at/str_slice used to walk from byte 0 of `s` on
+ * EVERY call, decoding UTF-8 the whole way — O(N) per call regardless
+ * of what's being asked for. The self-hosted lexer's `lex_tok` calls
+ * `str_len(s)` as its very first statement on EVERY token, with `s`
+ * always the WHOLE source file (not the remaining suffix), so
+ * tokenizing an N-character file cost O(N) per token from str_len
+ * alone — O(N^2) just to lex the file once. str_char_at/str_slice add
+ * a further O(position) per call on top. Worse still: a hand-rolled
+ * recursive-descent parser re-lexes the same/nearby positions from
+ * many different call sites for lookahead (no token memoization), so
+ * access is NOT purely forward — a single-entry "resume from last
+ * position" cursor thrashes (full reset) on every backward step and
+ * only recovers a constant factor, not the complexity class (measured:
+ * ~3.7x faster, still O(n^2) — see git history for that attempt).
+ *
+ * Str values are immutable and this runtime's allocator never frees a
+ * string's backing buffer once created (see the "allocator never
+ * frees" design note above), so caching derived data by pointer
+ * identity is permanently sound: an address can never later denote
+ * different content, so there is no ABA staleness hazard.
+ *
+ * Fix: build a codepoint-index -> byte-offset array per distinct
+ * string pointer (O(N), first touch only), then every str_len/
+ * str_char_at/str_slice call is a genuine O(1) array lookup — correct
+ * and fast regardless of access direction/pattern, not just the
+ * forward case.
+ *
+ * A single slot is NOT enough: helpers like `str_has_prefix` build a
+ * short-lived probe string via `str_slice` and test it against a
+ * handful of literal patterns ("List(", "Map(", "Set(", ...), so real
+ * traffic ping-pongs between a small working set of distinct strings
+ * (the big source string plus a few small literals/probes), not one
+ * string at a time. A direct-mapped (1-slot) cache thrashes on that —
+ * every switch is a miss, so it rebuilds the O(N)-sized source index
+ * over and over (measured: ~225 rebuilds per checked function, ~n/4,
+ * i.e. still O(n^2) rebuilds — worse than before in leaked memory even
+ * though each hit was O(1)). A small set-associative cache (any of the
+ * last STR_IDX_SLOTS distinct strings stays resident, LRU-evicted)
+ * fully absorbs a working set that size, same as an L1 cache beating
+ * direct-mapped for a cyclic access pattern. Thread-local to stay safe
+ * under `spawn`, matching resid_cap_stack/resid_spawn_catch above. An
+ * evicted slot's array is intentionally leaked — matches this
+ * runtime's established never-free allocator policy. */
+#define STR_IDX_SLOTS 16
+typedef struct {
+    const char* s;
+    int64_t len;       /* codepoint count; -1 = empty slot */
+    size_t* off;        /* off[i] = byte offset of codepoint i, i in [0,len]; off[len] = byte length */
+    uint64_t touched;   /* LRU clock value at last use */
+} StrIndexSlot;
+static _Thread_local StrIndexSlot g_str_slots[STR_IDX_SLOTS];
+static _Thread_local uint64_t g_str_clock = 0;
+static _Thread_local int g_str_slots_ready = 0;
+
+static StrIndexSlot* str_index_slot(const char* s) {
+    if (!g_str_slots_ready) {
+        for (int k = 0; k < STR_IDX_SLOTS; k++) {
+            g_str_slots[k].s = NULL;
+            g_str_slots[k].len = -1;
+            g_str_slots[k].off = NULL;
+            g_str_slots[k].touched = 0;
+        }
+        g_str_slots_ready = 1;
+    }
+    g_str_clock++;
+    for (int k = 0; k < STR_IDX_SLOTS; k++) {
+        if (g_str_slots[k].s == s) {
+            g_str_slots[k].touched = g_str_clock;
+            return &g_str_slots[k];
+        }
+    }
+    int victim = 0;
+    for (int k = 1; k < STR_IDX_SLOTS; k++) {
+        if (g_str_slots[k].touched < g_str_slots[victim].touched) victim = k;
+    }
     int64_t n = 0;
     const unsigned char* p = (const unsigned char*)s;
-    while (*p) {
-        n++;
+    while (*p) { n++; p += utf8_seq_len(*p); }
+    size_t* off = (size_t*)malloc((size_t)(n + 1) * sizeof(size_t));
+    p = (const unsigned char*)s;
+    for (int64_t i = 0; i < n; i++) {
+        off[i] = (size_t)((const char*)p - s);
         p += utf8_seq_len(*p);
     }
-    return n;
+    off[n] = (size_t)((const char*)p - s);
+    g_str_slots[victim].s = s;
+    g_str_slots[victim].len = n;
+    g_str_slots[victim].off = off;
+    g_str_slots[victim].touched = g_str_clock;
+    return &g_str_slots[victim];
+}
+
+/* Number of Unicode codepoints in a UTF-8 string. */
+int64_t str_len(const char* s) {
+    return str_index_slot(s)->len;
 }
 
 /* Codepoint at index `i` (0-based), or -1 when out of bounds. */
 int64_t str_char_at(const char* s, int64_t i) {
     if (i < 0) return -1;
-    int64_t n = 0;
-    const unsigned char* p = (const unsigned char*)s;
-    while (*p) {
-        if (n == i) return utf8_decode(p, utf8_seq_len(*p));
-        p += utf8_seq_len(*p);
-        n++;
-    }
-    return -1;
+    StrIndexSlot* sl = str_index_slot(s);
+    if (i >= sl->len) return -1;
+    const unsigned char* p = (const unsigned char*)(s + sl->off[i]);
+    return utf8_decode(p, utf8_seq_len(*p));
 }
 
 /* UTF-8 encode one codepoint into `buf` (≥4 bytes); returns bytes written. */
@@ -379,25 +463,21 @@ char* str_sb_finish(void* b) {
     return out;
 }
 
-/* Half-open substring `s[start..end]` by codepoint index (clamped). */
+/* Half-open substring `s[start..end]` by codepoint index (clamped).
+ * O(1) endpoint lookup via the byte-offset index above, O(slice length)
+ * for the copy itself (unavoidable — the result is a fresh string). */
 char* str_slice(const char* s, int64_t start, int64_t end) {
     if (start < 0) start = 0;
     if (end < start) end = start;
-    const unsigned char* p = (const unsigned char*)s;
-    const unsigned char* begin = p;
-    int64_t i = 0;
-    while (*p && i < start) {
-        p += utf8_seq_len(*p);
-        i++;
-    }
-    begin = p;
-    while (*p && i < end) {
-        p += utf8_seq_len(*p);
-        i++;
-    }
-    size_t n = (size_t)(p - begin);
+    StrIndexSlot* sl = str_index_slot(s);
+    int64_t len = sl->len;
+    if (start > len) start = len;
+    if (end > len) end = len;
+    size_t bstart = sl->off[start];
+    size_t bend = sl->off[end];
+    size_t n = bend - bstart;
     char* out = (char*)malloc(n + 1);
-    memcpy(out, begin, n);
+    memcpy(out, s + bstart, n);
     out[n] = '\0';
     return out;
 }

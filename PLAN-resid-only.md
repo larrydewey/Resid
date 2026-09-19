@@ -32,10 +32,19 @@ Phase D.
 
 ## Key research findings (baseline facts, see conversation history for full detail)
 
-- No stage-3 self-compile test exists today. All `bootstrap_*` e2e tests use
-  Rust `residc` to compile `examples/driver.resid` into a native binary, then
-  run that binary on sample programs. Nobody has ever fed `driver.resid` to
-  a `driver.resid`-produced binary and checked a fixed point.
+- **Stage-3 self-compile fixed point is now PROVEN** (2026-09-19, see Phase B
+  checklist below): D1 (Rust-built) compiles `driver.resid` -> D2
+  (self-hosted); D2 compiles `driver.resid` -> D3; D2 and D3's emitted LLVM
+  IR are byte-identical.
+- **Self-compile wall-clock: ~3h -> ~101s** (2026-09-19, same session as the
+  fixed-point proof above, see Phase B.3 below). The `~3h` figure was never
+  an algorithmic property of the language — it was a single O(N^2) runtime
+  bug (`str_len` rescanning the whole source from byte 0 on every one of
+  `lex_tok`'s calls, N = source length) plus a smaller O(n^2) bug in the
+  sandbox-enforcement pass (n = function count). Both fixed; a latent
+  codegen.resid bug that only string-literal `else {}` defaults ever
+  triggered was found and fixed along the way. `bootstrap_driver_self_compile_fixed_point`
+  now finishes in ~130s instead of ~3h and can run in routine CI.
 - Both pipelines shell out to `clang` on textual `.ll` IR; only the Rust side
   additionally uses `inkwell` to *build* that IR before printing it to text.
   Removing Rust does not remove the clang/LLVM dependency.
@@ -517,6 +526,13 @@ killed at ~62 min wall. Phase E work (measured fix, not just analysis) now
 *blocks* closing B.1; a single running self-compile cannot complete reliably on
 this host until the `lines`/`glines` threading is made growable-friendly.
 
+**RESOLVED (`cbe04bb`, see B.1/B.2 checklist above):** the `lines`/`glines`
+diagnosis was a real, confirmed contributor but not the binding one — the
+actual dominant cost was `eff_fixpoint`'s unconditional O(n) rounds x O(n)
+per-round work (cause #6, O(n^3)), fixed by early termination + a forward
+accumulator. That alone took the run from a 10s OOM-kill to a completing
+~61min/~34GB self-compile. B.1 and B.2 are both closed.
+
 **E.1 attempt #1 (AST shape-matcher) — built, verified working in
 isolation, then scrapped after a survey found it doesn't reach the real
 target.** Built a struct-embedded extension of `growable.rs`
@@ -724,15 +740,110 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       `crates/resid-builtin/`; dropped the stale mention from the README
       project tree and `AGENTS.md` test-count list. Workspace `cargo check`
       clean.
-- [ ] B.1 Stage-3 self-compile e2e (D1 -> D2 comparison) — test written;
-      codegen "if arms disagree" bug FIXED (print/println/eprintln now emit
-      Bool-typed `i1` calls, see progress log); a post-fix self-compile runs
-      clean through codegen's former error point but is killed by the OOM
-      killer at ~44GB RSS — **hard-blocked by Phase E (memory) until
-      `lines`/`glines` threading is made growable-friendly**, since not even
-      one self-compile step completes reliably on this host
-- [ ] B.2 Fixed-point proof (D2 -> D3 == D2) — blocked on B.1 and, in
-      practice, on Phase E
+- [x] B.1 Stage-3 self-compile e2e (D1 -> D2 comparison) — **DONE**. The
+      OOM was not the memory-shape problem Phase E assumed: `cbe04bb`
+      root-caused it as `eff_fixpoint` running a full O(n) round for all
+      n=625 functions unconditionally (no early termination) plus an O(n)
+      cons-from-the-front list rebuild per round — genuine O(n^3), matching
+      Phase E cause #6. Early-termination + forward-accumulator rewrite
+      turned the ~10s 4GB->44GB OOM-kill spike into a bounded, completing
+      run (~61 min, ~34GB peak). A run of ordinary correctness bugs surfaced
+      once codegen stopped getting killed early (Void handling, Map/Set
+      i8-as-Bool truncation, UTF-8 byte-counting, struct-field comma
+      splitting, flat-vs-persistent ResidList mismatch in str_split/join,
+      dup_from O(n^2) recursion depth) — see commits `e819c2e`..`afecb73`.
+      D1 (Rust-built) -> D2 (self-hosted) confirmed working end to end.
+- [x] B.2 Fixed-point proof (D2 -> D3 == D2) — **DONE, verified manually**
+      (at the time, outside the e2e harness — see B.3 below, this is no
+      longer necessary): D2 compiling `driver.resid` and D3 (built by D2)
+      compiling `driver.resid` emit byte-identical LLVM IR —
+      `md5sum /tmp/rq/d2_v10.ll /tmp/rq/d3_v2.ll` both
+      `c89171eb5224851ef440622283c4ce73`, 47683 lines, 2026-09-19 04:12 and
+      05:24. This is the actual self-hosting proof: a binary that never
+      touched the Rust pipeline (D2) reproduces itself exactly (D3). Phase
+      E's full ownership-oracle wiring turned out NOT to be required to
+      close B.1/B.2 — the O(n^3) fixpoint fix alone was sufficient; E.1-E.4
+      remain valuable as general perf/memory work but no longer gate
+      self-hosting.
+- [x] B.3 Self-compile wall-clock — **DONE, ~3h -> ~101s** (2026-09-19,
+      same session as B.1/B.2, requested explicitly as "the hour+ per
+      self-compile session is very painful, fix the time complexity").
+      Root-caused via empirical scaling probes (synthetic N-trivial-function
+      programs, 200/900/1800 functions) rather than guesswork — the O(n^3)
+      fix from B.1 turned out to be necessary but not remotely sufficient:
+      - **The dominant bug**: `resid_rt.c`'s `str_len(s)` walked the WHOLE
+        string from byte 0 on every call — O(N), N = source length. The
+        self-hosted `lex_tok` (examples/typecheck.resid + codegen.resid)
+        calls `str_len(s)` as its literal first statement on EVERY token,
+        always against the full top-level source (never the remaining
+        suffix), so tokenizing an N-character file cost O(N) per token —
+        O(N^2) just to lex the file once, before any parsing/checking/
+        codegen work. This was the true dominant cost, not the memory-shape
+        concern Phase E was built around. Fix: a trivial pointer-keyed
+        memo cache (`g_str_len_cache`, one `(ptr,len)` pair, no array, no
+        eviction) — sound because Str buffers are immutable and this
+        runtime's allocator never frees one once created (no ABA hazard).
+        A fancier attempt at also making `str_char_at`/`str_slice` O(1) via
+        a byte-offset index (single-slot, then a 16-way LRU-evicted
+        set-associative version) measured a further ~3-10x on top of this,
+        but broke `codegen.resid`'s string-literal-global emission at full
+        driver.resid scale (clang: `use of undefined value '@.s23865'`) in
+        a way not root-caused in the time available — reverted in favor of
+        the simple, provably-correct `str_len`-only memo. `str_char_at`/
+        `str_slice` are unchanged (still O(position) per call); revisiting
+        the O(1)-random-access version is future work, not required for
+        this fix.
+      - **Secondary bug (typecheck.resid sandbox pass)**: `fold_caller_ceils`
+        (O(n) linear scan of all functions per callee, called once per
+        function per round) and `e0211_check_call` (same O(n) shape, testing
+        "does caller i call function j" for every j instead of only i's
+        actual callees) were both still O(n^2) even after B.1's fixpoint
+        fix — B.1 fixed the ROUND COUNT, not the per-round cost. Fixed by
+        building a reverse caller-index (`Map(Str,Str)`, callee name ->
+        comma-joined caller names, built once in O(edges)) so
+        `fold_caller_ceils` does one O(1) map lookup + a scan of only the
+        callee's actual callers, and by making `e0211_check_all` walk only
+        each function's own parsed callee list (via `fs.fns` index lookups,
+        already O(1) from an earlier session) instead of testing membership
+        against all n functions.
+      - **A real, pre-existing codegen.resid bug, only now triggered**: the
+        `value else { fallback }` sugar's codegen built the payload branch's
+        `GT` context from `lhs.glines` (the pre-fallback-branch state)
+        instead of `fv.glines` (the fallback branch's own accumulated
+        globals), silently dropping any global declaration (e.g. a
+        string-literal constant) emitted while generating the fallback
+        block. Every prior use of this sugar in the codebase used an `Int`
+        default (`-1`), which never touches `.glines` — the new
+        `caller_index.get(name) else { "" }` code from the sandbox-pass fix
+        above is the first `Str`-default use, and the first thing to ever
+        trigger it. One-line fix (`examples/codegen.resid`, the `else`
+        branch of `cg_bin_rest`).
+      - **A matching pre-existing typecheck.resid bug**, found and fixed en
+        route to the above: `ck_else_fallback`'s call to
+        `check_expr_block(s, lex_tok(s, open.pos).pos, env, fs)` skipped the
+        else-block's first lexed token before checking the rest — worked by
+        accident for `-1` defaults (the skipped token was just the leading
+        unary minus, leaving `1` as a valid standalone expression) and broke
+        for any other single-token default (confirmed with `""`). Every
+        other `check_expr_block` call site passes the raw post-`{` position
+        directly; this was the one inconsistent call site. Fixed the same
+        way.
+      - **Verified**: `driver.resid` self-check (`run`) went from never
+        completing (28+ min, then killed) to ~2s. Full `build`
+        (typecheck+codegen+clang) self-compile (D1 -> D2) went from
+        effectively un-runnable to 101.4s wall, 44.1GB peak RSS (memory is
+        still quadratic-ish at this scale — a separate, lower-priority
+        issue, not this fix's concern, and it no longer blocks anything
+        since the run completes). D2 -> D3 fixed point re-confirmed
+        byte-identical (3 independent runs, same md5). Full `residc` e2e
+        suite (131 tests): 989s (~16.5 min) — 127 passed; 3 failures were
+        parallel-execution temp-path races (`--test-threads=4`), all pass
+        clean in isolation; 1 failure (`bootstrap_map_set_parity` —
+        `Set(Int).contains(2)` stage1/stage2 divergence) reproduces
+        identically with every change from this session reverted
+        (`git stash` A/B test) — **confirmed pre-existing, unrelated to
+        this work**, despite PROGRESS.md previously documenting this exact
+        test as green; needs its own investigation (not done this session).
 - [ ] E.0 Timing instrumentation to confirm time-cost split before further
       algorithmic work — now MOOT as a pre-step: the OOM kill proves codegen
       memory (cause #2/#3) is the binding constraint, not time; fold timing
