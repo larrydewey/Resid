@@ -176,10 +176,10 @@ pins resolved versions. See `tools/resid-manifest.resid` for all commands
 
 ### Bootstrapping (from zero-Rust machine)
 
-The frozen stage-0 seed binary lives at `bootstrap/stage0/driver-linux-x86_64` (with `.sha256` checksum). It was built from `examples/driver.resid` by the archived Rust pipeline and is the root of the self-hosting chain:
+The frozen stage-0 seed binary lives at `bootstrap/stage0/residc-linux-x86_64` (with `.sha256` checksum). It was built from `examples/driver.resid` by the archived Rust pipeline and is the root of the self-hosting chain:
 
     # 1. Compile the self-hosted driver (D2) using the frozen seed
-    ./bootstrap/stage0/driver-linux-x86_64 examples/driver.resid -o driver-d2 -rt runtime/resid_rt.c
+    ./bootstrap/stage0/residc-linux-x86_64 examples/driver.resid -o driver-d2 -rt runtime/resid_rt.c
 
     # 2. Use the self-hosted driver to compile programs
     ./driver-d2 hello.resid -o hello -rt runtime/resid_rt.c
