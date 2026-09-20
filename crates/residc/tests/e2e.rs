@@ -9304,3 +9304,217 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// General sum types (spec §12) previously had no test coverage on either
+// pipeline: the self-hosted checker/codegen only ever recognized the
+// compiler-intrinsic Option/Result forms (Some/None/Ok/Err), silently
+// treating any other `type X = A(T) | B | ...;` declaration as an opaque
+// no-op. Fixed this session (see PLAN-resid-only.md); this is the
+// first-ever real fixture for the feature on the Rust pipeline too.
+#[test]
+fn bootstrap_driver_general_sum_type_match() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-sumty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let rtc = workspace.join("crates/residc/resid_rt.c");
+    let driver = workspace.join("examples/driver.resid");
+
+    let sample = dir.join("shapes.resid");
+    std::fs::write(
+        &sample,
+        r#"
+type Shape = Circle(Int) | Square(Int) | Point;
+
+Int area(Shape sh) {
+    return match sh {
+        Circle(r) => (Int)(r * r * 3),
+        Square(s) => (Int)(s * s),
+        Point => 0,
+    };
+}
+
+Str describe(Shape sh) {
+    return match sh {
+        Circle(r) => "circle r=" + IntToString(r),
+        _ => "other",
+    };
+}
+
+Int main() {
+    Shape a = Circle(2);
+    Shape b = Square(3);
+    Shape c = Point;
+    println("circle area: " + IntToString(area(a)));
+    println("square area: " + IntToString(area(b)));
+    println("point area: " + IntToString(area(c)));
+    println(describe(a));
+    println(describe(b));
+    println(describe(c));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let expected = vec![
+        "circle area: 12",
+        "square area: 9",
+        "point area: 0",
+        "circle r=2",
+        "other",
+        "other",
+    ];
+
+    // Rust pipeline (ground truth for this feature as of this session —
+    // the general constructor/match machinery in resid-parser/resid-type/
+    // resid-codegen was real but had never been exercised end to end).
+    let rust_bin = dir.join("shapes_rust");
+    let out = Command::new(residc_bin())
+        .arg(&sample)
+        .arg("build")
+        .arg("-o")
+        .arg(&rust_bin)
+        .arg("-rt")
+        .arg(&rtc)
+        .output()
+        .expect("failed to build via Rust pipeline");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "Rust pipeline failed to build: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let run = Command::new(&rust_bin)
+        .output()
+        .expect("failed to run Rust-built binary");
+    assert_eq!(run.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        expected,
+        "Rust pipeline produced unexpected output"
+    );
+
+    // Self-hosted driver (D1): must match the Rust pipeline exactly.
+    let d1_bin = dir.join("shapes_d1");
+    let out = Command::new(residc_bin())
+        .arg(&driver)
+        .arg("run")
+        .arg(&sample)
+        .arg("-o")
+        .arg(&d1_bin)
+        .arg("-rt")
+        .arg(&rtc)
+        .output()
+        .expect("failed to run self-hosted driver");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "self-hosted driver failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let run = Command::new(&d1_bin)
+        .output()
+        .expect("failed to run self-hosted-built binary");
+    assert_eq!(run.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        expected,
+        "self-hosted driver produced unexpected output"
+    );
+
+    // Exhaustiveness is enforced by the self-hosted checker (a real
+    // improvement beyond the Rust pipeline, which accepts this silently —
+    // see PLAN-resid-only.md). Not asserted against the Rust pipeline.
+    let nonexhaustive = dir.join("nonexhaustive.resid");
+    std::fs::write(
+        &nonexhaustive,
+        r#"
+type Shape = Circle(Int) | Square(Int) | Point;
+
+Int area(Shape sh) {
+    return match sh {
+        Circle(r) => r,
+        Square(s) => s,
+    };
+}
+
+Int main() {
+    return area(Circle(1));
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&driver)
+        .arg("run")
+        .arg(&nonexhaustive)
+        .arg("-o")
+        .arg(dir.join("nonexhaustive_bin"))
+        .arg("-rt")
+        .arg(&rtc)
+        .output()
+        .expect("failed to run self-hosted driver");
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "self-hosted driver should reject a non-exhaustive match"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("not exhaustive"),
+        "expected an exhaustiveness error, got: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Duplicate arm for the same variant is rejected too.
+    let dup = dir.join("dup.resid");
+    std::fs::write(
+        &dup,
+        r#"
+type Shape = Circle(Int) | Square(Int) | Point;
+
+Int area(Shape sh) {
+    return match sh {
+        Circle(r) => r,
+        Circle(q) => q,
+        Square(s) => s,
+        Point => 0,
+    };
+}
+
+Int main() {
+    return area(Circle(1));
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(residc_bin())
+        .arg(&driver)
+        .arg("run")
+        .arg(&dup)
+        .arg("-o")
+        .arg(dir.join("dup_bin"))
+        .arg("-rt")
+        .arg(&rtc)
+        .output()
+        .expect("failed to run self-hosted driver");
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "self-hosted driver should reject a duplicate match arm"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("duplicate match arm"),
+        "expected a duplicate-arm error, got: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
