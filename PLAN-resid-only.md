@@ -1349,33 +1349,73 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       `resid-manifest deps` path (sha256 sidecar check included) —
       publish and consume interoperate, not just each independently
       matching the Rust format. Self-hosted D1-built binary produces the
-      identical hash and file layout, first try. Registry signed-index
-      maintenance (`index.resid-idx`/`-sig`, what a trust-anchor
-      `[registry] pubkey` verifies against) is not done — publish doesn't
-      touch the index yet, a further increment.
+      identical hash and file layout, first try.
+
+      **Registry signed-index maintenance/verification — DONE.**
+      `resid-pkg.resid`'s `publish` now maintains `<registry>/pkg/
+      index.resid-idx` + `-sig` (mirrors `index_text`/`IndexEntry`
+      exactly: `<name> <version> <sha256>` per line, no `sha256:` prefix
+      — that's resid.lock's format, not the index's — sorted canonical
+      order, signed over the text's hash) whenever `publish` is given a
+      signing key. `resid-manifest.resid`'s `resolve_all_deps` now loads
+      + verifies that index when `[registry] pubkey` is configured
+      (rejecting on a missing/unsigned/invalid index, or on a
+      version-dependency not listed in it) before resolving anything.
+      Verified: publish with a key correctly updates the index; resolve
+      with the matching `pubkey` configured succeeds; an unlisted
+      dependency is rejected; a tampered index line (appended by hand,
+      breaking the signature) is correctly rejected. Both directions
+      cross-verified against each other and self-hosted D1-built
+      binaries, matching exactly — hit one more self-hosted-only codegen
+      quirk along the way (same family as the earlier `Int`/`Int(64)`
+      spelling issue: a multi-statement if-arm ending in a bare
+      `[]`-typed local loses its element type, "List(IdxEntry) vs
+      List(Unknown)" — worked around by pulling it into an ordinary
+      function, documented inline).
+
+      **`resid.lock` write-back — DONE.** `resolve_dep_dir_version` now
+      takes a `pinned_sha` (checked in addition to the sidecar
+      `.resid-sha256`); `collect_dep_version` reads any existing pin for
+      the dependency name from `resid.lock` before fetching (rejecting a
+      manifest/lock version mismatch immediately, without even
+      fetching), and writes the resolved `(name, version, sha256)` back
+      after a successful fetch. Verified: first resolve writes
+      `resid.lock`; second resolve reuses the pin and still succeeds;
+      tampering the registry archive *after* locking is correctly caught
+      as a "LOCKED content hash mismatch", not just a generic hash
+      mismatch; bumping the manifest's `version =` without updating the
+      lock is correctly rejected with "manifest requires 'X' but
+      resid.lock pins 'Y'". Self-hosted D1-built binary matches exactly.
+      **Documented scope-trim vs. the Rust original**: this locks to
+      `<root_pkg_dir>/resid.lock` at whichever directory level
+      `resolve_dep_dir_version` is already scoping its cache dir to
+      (avoids threading one more parameter through the whole recursion),
+      not Rust's single lock file at the *ultimate* top-level project
+      root shared across every nesting level — only differs for a
+      project whose *transitive* (not direct) version dependencies span
+      multiple nesting levels, an edge case nothing here exercises.
 
       **Still open**: `registry.rs`'s `serve_dir` (an inbound TCP
       *listener* for `resid-build serve`) — likely fine to defer/drop as
       a dev-convenience feature (the core publish/install path only needs
-      the client + local-directory-write sides, both now done); registry
-      signed-index maintenance/verification; writing `resid.lock` back
-      out (only *read* so far); the CLI/subcommand orchestration in
-      `main.rs` (385 lines) tying manifest+deps+lock+archive+registry
-      into one `resid-build` command with a real `build` subcommand
-      (needs the self-hosted driver to accept a dependency map for
-      import resolution — deeper compiler integration than anything else
-      in C.7, not yet scoped); and COSE encryption (`cose.rs` — rides on
-      ChaCha20-Poly1305, which already works self-hosted:
-      `lib/chacha.resid`, `run_chacha20poly1305_in_resid`). At this point
-      every piece of `resid-build` except `build` itself, the registry
-      index, and COSE has a working self-hosted equivalent, each
-      independently verified against the Rust format/behavior and cross-
-      checked against each other (publish→consume, pack→sign→checksig,
-      manifest→deps→registry). `build` is qualitatively different
-      remaining work — it needs the self-hosted compiler itself to grow
-      dependency-aware import resolution, not just another tool — and
-      deserves its own scoping pass rather than being bundled into "next
-      increment" the way everything above was.
+      the client + local-directory-write sides, both done); the
+      CLI/subcommand orchestration in `main.rs` (385 lines) tying
+      manifest+deps+lock+archive+registry into one `resid-build` command
+      with a real `build` subcommand (needs the self-hosted driver to
+      accept a dependency map for import resolution — deeper compiler
+      integration than anything else in C.7, not yet scoped); and COSE
+      encryption (`cose.rs` — rides on ChaCha20-Poly1305, which already
+      works self-hosted: `lib/chacha.resid`,
+      `run_chacha20poly1305_in_resid`). At this point every piece of
+      `resid-build` except `build` itself and COSE has a working
+      self-hosted equivalent, each independently verified against the
+      Rust format/behavior and cross-checked against each other
+      (publish→consume, pack→sign→checksig, manifest→deps→registry→
+      index→lock). `build` is qualitatively different remaining work —
+      it needs the self-hosted compiler itself to grow dependency-aware
+      import resolution, not just another tool — and deserves its own
+      scoping pass rather than being bundled into "next increment" the
+      way everything above was.
 - [ ] D.1 Freeze stage-0 seed binary
 - [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/`
 - [ ] D.3 Update PROGRESS.md §6 policy
