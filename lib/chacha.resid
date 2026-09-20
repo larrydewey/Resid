@@ -210,14 +210,21 @@ pub Int(256) poly_r_acc(List(Int) b, Int idx, Int(256) v) {
     if (idx < 0) { return v; }
     Int raw = b[idx];
     Int m4 = idx % 4;
-    Int masked = if (m4 == 3) { raw & 15 } else { raw };
+    // `else { raw }`/`else { masked }` (not the bare identifier) — the
+    // self-hosted checker types a bare local reference as "Int" but an
+    // arithmetic expression (even `x & 15`) as "Int(64)", and an
+    // if-expression requires both arms to match that exact spelling;
+    // `| 0` is a value no-op that keeps both arms in the arithmetic
+    // shape. Same family as this session's other Int/Int(64) fixes —
+    // never hit before since nothing had self-hosted-compiled this file.
+    Int masked = if (m4 == 3) { raw & 15 } else { raw | 0 };
     Bool is4 = idx == 4;
     Bool is8 = idx == 8;
     Bool is12 = idx == 12;
     Int sel = if (is4) { 1 } else { 0 };
     Int sel2 = if (is8) { 1 } else { sel };
     Int sel3 = if (is12) { 1 } else { sel2 };
-    Int masked2 = if (sel3 == 1) { masked & 252 } else { masked };
+    Int masked2 = if (sel3 == 1) { masked & 252 } else { masked | 0 };
     Int(256) rv = (Int(256)) masked2;
     Int(256) sh = idx * 8;
     Int(256) part = rv << sh;
@@ -305,11 +312,11 @@ pub Int pad16(Int n) {
 }
 
 // append list b onto a
-pub List(Int) ccat(List(Int) a, List(Int) b, Int i) {
+pub List(Int) cc_ccat(List(Int) a, List(Int) b, Int i) {
     if (i >= b.len()) { return a; }
     List(Int) a2 = a.concat([b[i]]);
     Int ni = i + 1;
-    return ccat(a2, b, ni);
+    return cc_ccat(a2, b, ni);
 }
 
 pub List(Int) zeros_seed(List(Int) acc, Int n) {
@@ -330,7 +337,7 @@ pub List(Int) aead_mac_input(List(Int) aad, List(Int) ct) {
     List(Int) p1 = aad.concat(za);
     List(Int) p2 = p1.concat(ct);
     List(Int) p3 = p2.concat(zc);
-    return p3.concat(ccat(la, lb, 0));
+    return p3.concat(cc_ccat(la, lb, 0));
 }
 
 pub List(Int) slice_list(List(Int) b, Int start, Int count, List(Int) acc) {
