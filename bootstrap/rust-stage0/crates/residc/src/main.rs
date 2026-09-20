@@ -586,7 +586,7 @@ fn collect_expr_caps(
 }
 
 /// The tiny bootstrap runtime linked into every native Resid binary.
-const RUNTIME_C: &str = include_str!("../resid_rt.c");
+const RUNTIME_C: &str = include_str!("../../../../../runtime/resid_rt.c");
 /// Emit IR, link with the bootstrap runtime via clang, and write a native
 /// binary to `out` (defaults to `a.out` in the current directory).
 fn build_native(

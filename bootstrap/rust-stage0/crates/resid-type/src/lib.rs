@@ -797,7 +797,7 @@ pub fn numeric_type_from_surface(s: &str) -> Option<SemType> {
 ///
 /// This is the single source of truth for what each provider exposes. To add a
 /// verb, add a row here, a matching `resid_<provider>_<verb>` helper in
-/// `crates/residc/resid_rt.c`, and a dispatch arm in `resid-codegen`'s
+/// `runtime/resid_rt.c`, and a dispatch arm in `resid-codegen`'s
 /// `lower_provider_call`. Any new provider name must also be added to the
 /// parser's `is_provider_name` and enabled as a callable root there.
 /// Provider verbs. Each entry is `(provider, verb, params, ret, capability)`:

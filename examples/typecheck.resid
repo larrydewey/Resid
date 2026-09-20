@@ -4027,7 +4027,7 @@ Funcs collect_sigs(Str s) {
 // Identify bare List(T) parameters that follow the accumulator shape:
 // only used as `param.concat(expr)` (expr not referencing param),
 // returned directly (base case), or threaded to recursive self-call
-// in the same parameter slot. See crates/resid-type/src/growable.rs.
+// in the same parameter slot. See bootstrap/rust-stage0/crates/resid-type/src/growable.rs.
 Funcs analyze_growable(Funcs fs) {
     Int n = fs.names.len();
     List(Int) growable = analyze_growable_rec(fs, 0, n, []);

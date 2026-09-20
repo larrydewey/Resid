@@ -80,9 +80,10 @@ The standard crypto library is written **in Resid itself** and compiled to nativ
 
 Tooling shipped today:
 - `residc <file> [emit-ir|build|run]`: compiler driver (default checks only)
-- `tools/resid-fmt`: canonical formatter
-- `tools/resid-graph`: import/dependency graph visualization
+- `tools/resid-fmt.resid`: canonical formatter, self-hosted (`residc tools/resid-fmt.resid run -- <file>`)
+- `tools/resid-graph.resid`, `tools/resid-why.resid`, `tools/resid-pkg.resid`, `tools/resid-manifest.resid`, `tools/resid-cose.resid`: call-graph, provenance query, and package-manager tooling, all self-hosted
 - Stage-2 bootstrap compilers in `examples/` (lexer, parser, typechecker, codegen, driver — all written in Resid). The fused `examples/driver.resid` has full parity with the Rust `residc` pipeline, including sandbox/capability enforcement (§21) and its runtime force-time guard.
+- The Rust pipeline (`bootstrap/rust-stage0/crates/`) is archived, not actively developed — see `PLAN-resid-only.md` Phase D and `PROGRESS.md` §6. A frozen stage-0 seed binary (`bootstrap/stage0/`) is the actual bootstrap root going forward.
 
 ---
 
@@ -161,18 +162,24 @@ stack types are demonstrated in `examples/stack_types.resid`.
 ## Project Structure
 
     resid/
-    ├── crates/              # Compiler pipeline (Rust + LLVM)
-    │   ├── resid-lexer      ├── resid-parser     ├── resid-ir
-    │   ├── resid-type       ├── resid-codegen
-    │   ├── resid-build      └── residc           # driver CLI
+    ├── runtime/             # resid_rt.c — permanent C runtime, linked into every
+    │                        #   compiled Resid binary (Rust-built or self-hosted)
+    ├── bootstrap/
+    │   ├── stage0/          # frozen, versioned seed binary — the actual bootstrap
+    │   │                    #   root now (see PLAN-resid-only.md Phase D)
+    │   └── rust-stage0/     # archived Rust pipeline (crates/), not actively
+    │       └── crates/      #   developed — kept only to rebuild stage0 for a new
+    │                        #   host architecture
     ├── lib/                 # Standard library written in Resid
     │   ├── crypto.resid       # SHA-256/512, HMAC, PBKDF2, Base64, random
     │   ├── ed25519.resid      # Ed25519 sign/verify
     │   ├── der.resid          # DER parsing
     │   └── http.resid         # HTTP
     ├── examples/            # Self-hosted stage-2 compilers + feature demos
+    │   ├── driver.resid       # fused self-hosted compiler (typecheck+codegen)
     │   └── stack_types.resid  # fixed-capacity Str(N)/Bytes(N)/List(T,N)
-    ├── tools/               # fmt, graph, notes, cache, why
+    ├── tools/               # fmt, graph, why, pkg, manifest, cose — all self-hosted
+    │                        #   .resid tools now; resid-lsp/resid-lsp-full stay Rust
     └── PROGRESS.md          # Full build log, status, roadmap
 
 ---

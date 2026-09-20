@@ -12,10 +12,10 @@ serde_json = "1"
 anyhow = "1"
 thiserror = "1"
 
-resid-lexer = { path = "../../crates/resid-lexer" }
-resid-parser = { path = "../../crates/resid-parser" }
-resid-type = { path = "../../crates/resid-type" }
-resid-ir = { path = "../../crates/resid-ir" }
+resid-lexer = { path = "../../bootstrap/rust-stage0/crates/resid-lexer" }
+resid-parser = { path = "../../bootstrap/rust-stage0/crates/resid-parser" }
+resid-type = { path = "../../bootstrap/rust-stage0/crates/resid-type" }
+resid-ir = { path = "../../bootstrap/rust-stage0/crates/resid-ir" }
 resid-notes = { path = "../resid-notes" }
 
 [dev-dependencies]

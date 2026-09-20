@@ -50,12 +50,18 @@ sha256sum -c driver-linux-x86_64.sha256
 
 ```sh
 # Compile driver.resid itself with the frozen seed, producing a fresh D2:
-./driver-linux-x86_64 examples/driver.resid -o driver-d2 -rt crates/residc/resid_rt.c
+./driver-linux-x86_64 examples/driver.resid -o driver-d2 -rt runtime/resid_rt.c
 
 # driver-d2 is now a self-hosted-built compiler with no Rust involvement.
 # Compile anything else with it the same way:
-./driver-d2 some_program.resid -o some_program -rt crates/residc/resid_rt.c
+./driver-d2 some_program.resid -o some_program -rt runtime/resid_rt.c
 ```
+
+(`-rt` points at `runtime/resid_rt.c` — the permanent C runtime, linked
+into every compiled Resid binary; not part of the archived Rust pipeline,
+see the repo's top-level `README.md`. The binary in this directory was
+itself built when that file still lived at `crates/residc/resid_rt.c`,
+before `runtime/` existed — see "Provenance" above.)
 
 ## Rebuilding stage0 for a new host architecture
 

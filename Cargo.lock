@@ -816,22 +816,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "resid-fmt"
-version = "0.1.0"
-dependencies = [
- "resid-lexer",
- "resid-parser",
-]
-
-[[package]]
-name = "resid-graph"
-version = "0.1.0"
-dependencies = [
- "resid-parser",
- "resid-type",
-]
-
-[[package]]
 name = "resid-ir"
 version = "0.1.0"
 dependencies = [
@@ -892,15 +876,6 @@ dependencies = [
  "resid-ir",
  "resid-lexer",
  "resid-parser",
-]
-
-[[package]]
-name = "resid-why"
-version = "0.1.0"
-dependencies = [
- "resid-ir",
- "resid-notes",
- "resid-type",
 ]
 
 [[package]]
