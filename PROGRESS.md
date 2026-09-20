@@ -501,21 +501,51 @@ mode lattice) that were previously stage-1-only — see "Stage-2 Parity:
 Sandbox (§21)" below. Remaining work is incremental (new library/crypto
 features, tooling hardening) rather than closing conformance gaps.
 
-### Self-hosting policy (normative)
+### Self-hosting policy (normative) — superseded by the stage-0-seed model
 
-- The Rust pipeline is implemented first (single implementation cost);
+**This section described the bootstrap-period policy and is now
+historical.** `PLAN-resid-only.md` Phase D supersedes it: Phase B (the
+D1→D2→D3 self-compile fixed point) and Phase C (every Rust-only tool
+ported to `.resid`, C.1-C.7) are both done, so the Rust pipeline is no
+longer required as an ongoing dual-implementation partner for new work.
+The replacement model:
+
+- **The self-hosted pipeline (`examples/typecheck.resid` +
+  `examples/codegen.resid` → `examples/driver.resid`) is the only actively
+  developed compiler going forward.** New features are implemented
+  directly there; there is no requirement to also implement them in
+  `crates/resid-type`/`crates/resid-codegen` first or in parallel.
+- **`crates/` (the Rust pipeline) is archived, not maintained.** It is
+  kept only so a stage-0 seed binary can be rebuilt for a new host
+  architecture the frozen seed binary doesn't already cover (see Phase D
+  below) — not as a reference implementation new features must also
+  satisfy.
+- **A frozen, versioned, checksummed stage-0 seed binary** (built once
+  from the last Rust pipeline commit, before archival) is the actual
+  bootstrap root: `stage0 → D1 → D2 → D3 → ...`, each generation built by
+  compiling `driver.resid` with the previous one. No generation after the
+  frozen seed ever depends on Rust again.
+- **clang/LLVM remains a permanent, accepted external dependency** (see
+  Phase D.4) — "resid-only" means no Rust in the toolchain, not zero
+  external tools. Both the historical Rust pipeline and every self-hosted
+  generation shell out to `clang` on textual `.ll` IR.
+
+The original bootstrap-period rules below are preserved for history, not
+as current policy:
+
+- ~~The Rust pipeline is implemented first (single implementation cost);
   the feature is then ported into `examples/typecheck.resid` +
   `examples/codegen.resid`, and `tools/merge_driver.py` regenerates
-  `examples/driver.resid`.
-- **Every conformance item must land with dual-pipeline e2e parity
+  `examples/driver.resid`.~~
+- ~~Every conformance item must land with dual-pipeline e2e parity
   tests (`bootstrap_*`) proving byte-identical output through Rust
-  residc AND the stage-2 driver before it counts as done.**
-- Stage-2 is the acceptance gate, not a side demo. Constraint: bootstrap
+  residc AND the stage-2 driver before it counts as done.~~
+- ~~Stage-2 is the acceptance gate, not a side demo. Constraint: bootstrap
   sources are compiled by the Rust pipeline, so they may only use
   features the Rust compiler already supports — satisfied automatically
-  by Rust-first ordering.
-- Hard constraint from the audit: a feature used by the driver's own
-  sources can never precede Rust support for it.
+  by Rust-first ordering.~~
+- ~~Hard constraint from the audit: a feature used by the driver's own
+  sources can never precede Rust support for it.~~
 
 ### Stage-2 Parity: Sandbox (§21) — ✅ DONE
 

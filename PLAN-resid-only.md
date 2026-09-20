@@ -1784,7 +1784,27 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       against the consumer's grants, same as `deps` always did) — noted
       in `resid-manifest.resid`'s own doc comment rather than silently
       left out.
-- [ ] D.1 Freeze stage-0 seed binary
-- [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/`
-- [ ] D.3 Update PROGRESS.md §6 policy
-- [ ] D.4 Document clang/LLVM as permanent external dep
+- [x] D.1 Freeze stage-0 seed binary — **DONE**. `bootstrap/stage0/
+      driver-linux-x86_64` (+ `.sha256`, + `README.md` documenting
+      provenance/verification/bootstrap-from-scratch usage), built from
+      `examples/driver.resid` at commit `d5c269f`. Sanity-checked: runs a
+      trivial program correctly, and compiles `examples/driver.resid`
+      itself to a working D2 (self-compile still holds at this commit —
+      see `bootstrap_driver_self_compile_fixed_point`). Committed as a
+      binary blob per explicit user decision (vs. a GitHub release
+      attachment or build-recipe-only deferral) — it must be reachable
+      without Rust, which a released/external artifact doesn't guarantee
+      long-term.
+- [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/` — deferred within
+      this session until the in-flight full e2e suite run (using the
+      current `crates/` workspace layout) finishes; moving it mid-run
+      would corrupt that run.
+- [x] D.3 Update PROGRESS.md §6 policy — **DONE**. Replaced the
+      bootstrap-period "Rust implemented first, dual-pipeline parity
+      required" normative rules with the stage-0-seed model (self-hosted
+      pipeline is the only actively developed compiler going forward;
+      `crates/` archived, not a reference implementation new work must
+      also satisfy); old rules kept struck through for history.
+- [x] D.4 Document clang/LLVM as permanent external dep — **DONE**.
+      Already stated in this file's own "Locked decisions" section
+      (pre-existing); reaffirmed in the `PROGRESS.md` §6 rewrite above.
