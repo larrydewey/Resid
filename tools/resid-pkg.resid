@@ -18,6 +18,7 @@
 /// CLI).
 ///
 /// Usage:
+///   residc tools/resid-pkg.resid run -- keygen <secret.hex> <pub.hex>
 ///   residc tools/resid-pkg.resid run -- pack <dir> <out>
 ///   residc tools/resid-pkg.resid run -- sign <out> <keyfile>
 ///   residc tools/resid-pkg.resid run -- checksig <out> <pubkey-hex>
@@ -311,7 +312,22 @@ Int extract_archive(Str archive_path, Str out_dir) {
 // ─── CLI ────────────────────────────────────────────────────────────
 
 Str usage_text() {
-    return "usage: resid-pkg pack <dir> <out> | sign <out> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile]";
+    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile]";
+}
+
+// Ed25519 keypair generation (mirrors `resid_build::archive::keygen`): a
+// fresh 32-byte OS-random seed *is* the secret key, and `pub_key` (already
+// in lib/ed25519.resid, used by `sign`/`verify`) derives the public key
+// from it. Writes both as bare hex, no trailing newline, matching what
+// `sign`/`checksig` already read back.
+Int cmd_keygen(Str secret_path, Str pub_path) {
+    List(Int) seed = random_bytes(32);
+    List(Int) pubk = pub_key(seed);
+    filesystem.write_bytes(secret_path, bytes_of(hex_encode(seed)));
+    filesystem.write_bytes(pub_path, bytes_of(hex_encode(pubk)));
+    println("wrote " + secret_path + " (keep secret!)");
+    println("wrote " + pub_path);
+    return 0;
 }
 
 Int cmd_pack(Str dir, Str out) {
@@ -323,8 +339,7 @@ Int cmd_pack(Str dir, Str out) {
 
 Int cmd_sign(Str out, Str keyfile) {
     Str keyhex = filesystem.read_all(keyfile);
-    Int klen = str_len(keyhex);
-    Str ktrim = if (klen > 0) { str_slice(keyhex, 0, klen - 1) } else { keyhex };
+    Str ktrim = str_trim(keyhex);
     List(Int) seed = hex_decode(ktrim);
     List(Int) archive = filesystem.read_bytes(out + ".resid-pkg");
     Str hash_hex = hex_encode(content_hash(archive));
@@ -550,8 +565,7 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
         return 0;
     }
     Str keyhex = filesystem.read_all(keyfile);
-    Int klen = str_len(keyhex);
-    Str ktrim = if (klen > 0) { str_slice(keyhex, 0, klen - 1) } else { keyhex };
+    Str ktrim = str_trim(keyhex);
     List(Int) seed = hex_decode(ktrim);
     List(Int) sig = sign_msg(seed, hash_hex);
     filesystem.write_bytes(pkg_dir + "/" + base + "-sig", bytes_of(hex_encode(sig)));
@@ -567,6 +581,10 @@ Int main() {
         return 2;
     }
     Str sub = args.get(1);
+    if (sub == "keygen") {
+        if (argc < 4) { eprintln(usage_text()); return 2; }
+        return cmd_keygen(args.get(2), args.get(3));
+    }
     if (sub == "pack") {
         if (argc < 4) { eprintln(usage_text()); return 2; }
         return cmd_pack(args.get(2), args.get(3));

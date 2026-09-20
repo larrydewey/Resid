@@ -242,8 +242,7 @@ Str bytes_to_ascii(List(Int) b, Int i, Int end, Str acc) {
 Int cmd_sign1(Str payload_path, Str kid, Str keyfile, Str out) {
     List(Int) payload = filesystem.read_bytes(payload_path);
     Str keyhex = filesystem.read_all(keyfile);
-    Int klen = str_len(keyhex);
-    Str ktrim = if (klen > 0) { str_slice(keyhex, 0, klen - 1) } else { keyhex };
+    Str ktrim = str_trim(keyhex);
     List(Int) cose = sign1(payload, kid, ktrim);
     filesystem.write_bytes(out, cose);
     println("wrote " + out + " (" + IntToString(cose.len()) + " bytes)");
