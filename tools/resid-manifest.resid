@@ -16,6 +16,8 @@
 ///   residc tools/resid-manifest.resid run -- <resid.toml>
 ///   residc tools/resid-manifest.resid run -- lock <resid.lock>
 ///   residc tools/resid-manifest.resid run -- deps <resid.toml>
+///   residc tools/resid-manifest.resid run -- depmap <resid.toml> <out>
+///   residc tools/resid-manifest.resid run -- build <resid.toml> <driver-binary> [resid_rt.c]
 ///
 /// `deps` resolves this manifest's `[dependencies.*]` transitively —
 /// both `path =` (local directory) and `version =` (fetched from the
@@ -24,22 +26,35 @@
 /// extracted once into `target/resid/deps/<name>-<version>` and reused
 /// after) — checking: cycles (depth > 32), a name claimed by two
 /// different directories, a dependency's declared `capabilities` all
-/// present under this manifest's `[capabilities] grant`, and (when a
+/// present under this manifest's `[capabilities] grant`, (when a
 /// dependency sets `pubkey = "<hex>"`) that its own `<name>.resid-pkg` +
-/// `<name>.resid-sig` verify against exactly that key — mirrors
+/// `<name>.resid-sig` verify against exactly that key, `resid.lock`
+/// pins (a version dependency already pinned there must match the
+/// manifest's requested version, and a freshly resolved one is written
+/// back), and (when `[registry] pubkey` is set) that the registry's
+/// signed index lists every version dependency — mirrors
 /// `resid-build/src/lib.rs`'s `collect_dep`/`resolve_dep_dir`/
-/// `verify_pinned_key`.
+/// `verify_pinned_key`/`Registry::load_verify_index`.
+///
+/// `depmap` resolves the same way and writes the `name::root` sidecar
+/// the self-hosted driver's `-depmap` flag consumes for bare
+/// `import "pkgname";` resolution (spec §35, mirrors
+/// `resid_parser::DependencyMap`). `build` does both, then shells out to
+/// `driver_bin <root> -o <out> -rt <rtc> -depmap <sidecar>` — the
+/// compiler-facing half of `resid-build build`; `driver_bin` is left as
+/// an argument rather than a hardcoded path since this tool has no
+/// privileged knowledge of where a driver binary lives.
 ///
 /// Still open (see PLAN-resid-only.md C.7): remote HTTP registry mode
 /// (`[registry] url`, not just `path`) — the self-hosted TCP/HTTP client
 /// this would ride on already exists and is e2e-tested, just not wired
-/// here yet; the signed-registry-index trust-anchor check
-/// (`[registry] pubkey`); lockfile pinning is not yet threaded through
-/// version-dependency resolution (only the sidecar `.resid-sha256` hash
-/// check applies so far); the global `[signing] require_signatures`
-/// keyring policy (needs directory-scan of a keyring, not just one
-/// pinned key); and writing `resid.lock` back out (this only *reads* one
-/// via the `lock` subcommand above).
+/// here yet; the global `[signing] require_signatures` keyring policy
+/// (needs directory-scan of a keyring, not just one pinned key); and
+/// capability-ceiling enforcement at compile time for dependency source
+/// (spec §21.1's `FileCeiling` — `build` checks a dependency's declared
+/// `capabilities` against the consumer's grants, same as `deps`, but
+/// does not yet seed the self-hosted checker with per-file ceilings the
+/// way `resid_type::check_program_with` does).
 ///
 /// Known scope-trim vs. the Rust original: dependency-directory identity
 /// for cycle/collision detection is plain string equality of the
@@ -954,10 +969,56 @@ Int cmd_depmap(Str manifest_path, Str out_path) {
     return 0;
 }
 
+// `build`: the compiler-facing half of `resid-build build` (spec §35) —
+// resolve deps (same checks as `deps`/`depmap`), write the depmap sidecar
+// under `<pkg_dir>/target/resid/`, then shell out to a self-hosted driver
+// binary with `-depmap` so bare `import "pkgname";` lines in the root file
+// resolve. `driver_bin` is the caller's choice of compiler binary (a D1/D2/
+// D3 driver, or `residc <driver.resid> run --`) rather than a hardcoded
+// path, since this tool has no privileged knowledge of where one lives.
+Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
+    Manifest m = load_manifest(filesystem.read_all(manifest_path));
+    if (m.name == "") {
+        eprintln("error: invalid resid.toml (missing [package] name)");
+        return 1;
+    }
+    Str pkg_dir = dirname_of(manifest_path);
+    DepResolveResult r = resolve_all_deps(m, pkg_dir);
+    if (!r.ok) {
+        eprintln(r.err);
+        return 1;
+    }
+    Str cap_err = check_dep_capabilities(r.deps, grant_families(m.grant));
+    if (cap_err != "") {
+        eprintln(cap_err);
+        return 1;
+    }
+    Str key_err = verify_all_pinned_keys(r.deps);
+    if (key_err != "") {
+        eprintln(key_err);
+        return 1;
+    }
+    println("building " + m.name + " v" + m.version);
+    Str out_dir = pkg_dir + "/target/resid";
+    filesystem.create_dir(out_dir);
+    Str depmap_path = out_dir + "/depmap.txt";
+    filesystem.write_all(depmap_path, depmap_text(r.deps));
+    Str root = pkg_dir + "/" + m.root;
+    Str out = out_dir + "/" + m.name;
+    Str cmd = driver_bin + " " + root + " -o " + out + " -rt " + rtc + " -depmap " + depmap_path;
+    Int rc = process.run(cmd);
+    if (rc != 0) {
+        eprintln("error: build failed");
+        return rc;
+    }
+    println("wrote " + out);
+    return 0;
+}
+
 Int main() {
     Int argc = args.count();
     if (argc < 2) {
-        eprintln("usage: resid-manifest <resid.toml> | resid-manifest lock <resid.lock> | resid-manifest deps <resid.toml> | resid-manifest depmap <resid.toml> <out>");
+        eprintln("usage: resid-manifest <resid.toml> | resid-manifest lock <resid.lock> | resid-manifest deps <resid.toml> | resid-manifest depmap <resid.toml> <out> | resid-manifest build <resid.toml> <driver-binary> [resid_rt.c]");
         return 2;
     }
     Str a1 = args.get(1);
@@ -981,6 +1042,14 @@ Int main() {
             return 2;
         }
         return cmd_depmap(args.get(2), args.get(3));
+    }
+    if (a1 == "build") {
+        if (argc < 4) {
+            eprintln("usage: resid-manifest build <resid.toml> <driver-binary> [resid_rt.c]");
+            return 2;
+        }
+        Str rtc = if (argc >= 5) { args.get(4) } else { "crates/residc/resid_rt.c" };
+        return cmd_build(args.get(2), args.get(3), rtc);
     }
     return cmd_manifest(a1);
 }

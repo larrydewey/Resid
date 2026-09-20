@@ -1162,13 +1162,16 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       missed because their signature line has a stray leading space
       (`examples/driver.resid:3704` etc.), confirming the token-based
       scan is strictly more robust than a line-based one, not buggy.
-- [~] C.7 Port `resid-build` (package manager) — **everything done except
-      `serve_dir` (dev-convenience TCP listener, likely to drop) and CLI
-      unification into one command** — archive
-      (pack/hash/sign/checksig/extract/publish), manifest/lock/deps/
-      registry (local directory, signed index), COSE, and dependency-aware
-      import resolution (compiler-level `build` support) are all ported
-      and verified. See below for the full breakdown.
+- [x] C.7 Port `resid-build` (package manager) — **done**, with one
+      deliberate drop: `serve_dir` (`resid-build serve`'s inbound TCP
+      listener, a dev convenience — the publish/install path only ever
+      needed the client + local-directory-write sides, both ported) is
+      not being ported; every other piece has a working, verified
+      self-hosted equivalent — archive (pack/hash/sign/checksig/extract/
+      publish/keygen), manifest/lock/deps/depmap/registry (local
+      directory, signed index), COSE, dependency-aware import resolution,
+      and a real `build` subcommand tying them together. See below for
+      the full breakdown.
       `tools/resid-pkg.resid`: byte-identical to
       `crates/resid-build/src/archive.rs`'s deterministic "RESIDPKG1"
       archive format (magic + LE u32 count + per-file LE u16 path-len/path/
@@ -1518,14 +1521,71 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       (the Rust pipeline correctly reports `import '...': no such file
       ... and no dependency with that name`). Not in scope here.
 
-      **Still open**: `registry.rs`'s `serve_dir` (an inbound TCP
-      *listener* for `resid-build serve`) — likely fine to defer/drop as
-      a dev-convenience feature (the core publish/install path only needs
-      the client + local-directory-write sides, both done); and the
-      CLI/subcommand orchestration in `main.rs` (385 lines) tying
-      manifest+deps+lock+archive+registry+cose+depmap into one
-      `resid-build`-equivalent command. Both are now pure tooling/CLI
-      work — no more compiler-internals pieces remain in C.7.
+      **`build` subcommand — orchestration, and `keygen` (closes C.7)**:
+      added `resid-manifest build <resid.toml> <driver-binary>
+      [resid_rt.c]`, tying together everything already ported this
+      Phase — `resolve_all_deps` (capability-ceiling and pinned-key
+      checks it already had), `depmap_text` (from the previous
+      increment), `filesystem.create_dir`/`write_all` for
+      `target/resid/`, and `process.run` to invoke a self-hosted driver
+      binary with `-depmap`. `driver_bin` is a caller-supplied argument
+      rather than a hardcoded path, since this tool has no privileged
+      knowledge of where one lives (a real single-binary `resid-build`
+      would bake this in; a thin tool-file layer over an already-built
+      compiler can't). Also added `resid-pkg keygen <secret.hex>
+      <pub.hex>` (`tools/resid-pkg.resid`), the one piece of
+      `resid_build::archive`'s public API with no self-hosted
+      equivalent yet — trivial given `lib/ed25519.resid` already had
+      `pub_key(seed)` and `lib/crypto.resid` already had
+      `random_bytes(32)` for the OS-random seed.
+
+      Verified: the same 3-package transitive-dependency fixture from
+      the previous increment now builds end to end with one command —
+      `resid-manifest build app/resid.toml <driver> <rtc>` — through
+      both a Rust-pipeline-built `resid-manifest` binary and a
+      self-hosted-D1-built one, producing the same `hello, world` /
+      `wow!!!` output as the manual depmap+driver invocation and as the
+      `resid-build` Rust ground truth. `driver.resid`/`typecheck.resid`
+      were untouched this increment (only `resid-manifest.resid`
+      changed), so `bootstrap_driver_self_compile_fixed_point` was not
+      at risk and wasn't re-run.
+
+      `keygen` surfaced a real, previously-latent bug while being
+      tested: `cmd_sign` (`resid-pkg.resid`), `cmd_publish`'s signing
+      step (same file), and `cmd_sign1` (`resid-cose.resid`) all read a
+      keyfile and unconditionally stripped its *last character*
+      (`str_slice(keyhex, 0, klen - 1)`) on the assumption every keyfile
+      ends in a newline — true of every keyfile these tools had ever
+      been tested against (hand-written with `echo`), but `cmd_keygen`
+      writes bare 64-char hex with no trailing newline, so signing with
+      a freshly generated key silently truncated its last hex nibble
+      and produced a signature that verified against the *wrong* key,
+      failing `checksig`/`verify1` outright (a `sign` → `checksig`
+      round trip via `resid-pkg2.out` with a keygen-produced key failed
+      with `FAIL: signature invalid` before the fix, on both a
+      self-hosted-generated *and* a `cargo run -p resid-build --
+      keygen`-generated keypair — ruling out a `pub_key` derivation bug
+      and pointing straight at the trim). Fixed all three sites with
+      `str_trim` (already used elsewhere in both files), which is
+      genuinely newline-tolerant rather than newline-mandatory.
+      Re-verified sign→checksig and sign1→verify1 round trips (plus
+      tamper detection still failing correctly) through both the
+      Rust-built and self-hosted-D1-built binaries of all three tools,
+      and re-ran `run_ed25519_sign_in_resid` +
+      `run_cose_provenance_verify_and_tamper` (unaffected library-level
+      tests, confirming no regression in `lib/ed25519.resid`/
+      `lib/chacha.resid` themselves — the bug was purely in the CLI
+      tools' keyfile handling).
+
+      This closes C.7's checklist: everything is ported except the
+      explicitly-dropped `serve_dir`. What's left unaddressed and
+      undocumented-as-a-gap until this pass: `build` doesn't yet seed
+      the self-hosted type checker with per-dependency capability
+      ceilings the way `resid_type::check_program_with`'s `FileCeiling`
+      does (it only checks a dependency's *declared* `capabilities`
+      against the consumer's grants, same as `deps` always did) — noted
+      in `resid-manifest.resid`'s own doc comment rather than silently
+      left out.
 - [ ] D.1 Freeze stage-0 seed binary
 - [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/`
 - [ ] D.3 Update PROGRESS.md §6 policy
