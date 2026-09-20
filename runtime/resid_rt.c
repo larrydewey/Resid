@@ -26,6 +26,19 @@
 #include <netinet/in.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <dirent.h>
+
+static int resid_path_is_safe(const char* path) {
+    if (!path || path[0] == '\0') return 0;
+    char resolved[PATH_MAX];
+    if (!realpath(path, resolved)) return 0;
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd))) return 0;
+    size_t cwd_len = strlen(cwd);
+    if (strncmp(resolved, cwd, cwd_len) != 0) return 0;
+    if (resolved[cwd_len] != '\0' && resolved[cwd_len] != '/') return 0;
+    return 1;
+}
 
 bool print(const char* s) {
     if (fputs(s, stdout) == EOF) return false;
@@ -166,6 +179,7 @@ void resid_cap_check(const char* cap) {
 static char* resid_box_str(const char* s) {
     size_t n = strlen(s);
     char* p = (char*)malloc(n + 1);
+    if (!p) resid_abort("resid_box_str: out of memory");
     memcpy(p, s, n + 1);
     return p;
 }
@@ -177,7 +191,9 @@ static char* resid_box_str(const char* s) {
 char* resid_str_concat(const char* a, const char* b) {
     size_t la = strlen(a);
     size_t lb = strlen(b);
+    if (la > SIZE_MAX - lb) resid_abort("resid_str_concat: size overflow");
     char* p = (char*)malloc(la + lb + 1);
+    if (!p) resid_abort("resid_str_concat: out of memory");
     memcpy(p, a, la);
     memcpy(p + la, b, lb + 1);
     return p;
@@ -317,7 +333,9 @@ static StrIndexSlot* str_index_slot(const char* s) {
     int64_t n = 0;
     const unsigned char* p = (const unsigned char*)s;
     while (*p) { n++; p += utf8_seq_len(*p); }
+    if ((size_t)n > SIZE_MAX / sizeof(size_t) - 1) resid_abort("str_index_slot: size overflow");
     size_t* off = (size_t*)malloc((size_t)(n + 1) * sizeof(size_t));
+    if (!off) resid_abort("str_index_slot: out of memory");
     p = (const unsigned char*)s;
     for (int64_t i = 0; i < n; i++) {
         off[i] = (size_t)((const char*)p - s);
@@ -373,6 +391,7 @@ char* str_from_code(int64_t cp) {
     char buf[4];
     int n = utf8_encode_cp(cp, buf);
     char* p = (char*)malloc((size_t)n + 1);
+    if (!p) resid_abort("str_from_code: out of memory");
     memcpy(p, buf, (size_t)n);
     p[n] = '\0';
     return p;
@@ -404,6 +423,7 @@ typedef struct {
 
 static RopeChunk* sb_chunk_new(size_t cap) {
     RopeChunk* c = (RopeChunk*)malloc(sizeof(RopeChunk) + cap);
+    if (!c) resid_abort("sb_chunk_new: out of memory");
     c->cap = cap;
     c->used = 0;
     c->next = NULL;
@@ -430,6 +450,7 @@ static void sb_append_bytes(StrRope* r, const char* s, size_t n) {
 
 void* str_sb_new(void) {
     StrRope* r = (StrRope*)malloc(sizeof(StrRope));
+    if (!r) resid_abort("str_sb_new: out of memory");
     r->head = NULL;
     r->tail = NULL;
     r->len = 0;
@@ -451,6 +472,7 @@ void* str_sb_append_cp(void* b, int64_t cp) {
 char* str_sb_finish(void* b) {
     StrRope* r = (StrRope*)b;
     char* out = (char*)malloc(r->len + 1);
+    if (!out) resid_abort("str_sb_finish: out of memory");
     size_t o = 0;
     RopeChunk* c = r->head;
     while (c) {
@@ -479,6 +501,7 @@ char* str_slice(const char* s, int64_t start, int64_t end) {
     size_t bend = sl->off[end];
     size_t n = bend - bstart;
     char* out = (char*)malloc(n + 1);
+    if (!out) resid_abort("str_slice: out of memory");
     memcpy(out, s + bstart, n);
     out[n] = '\0';
     return out;
@@ -504,12 +527,14 @@ typedef struct {
 
 void* resid_box_new(int64_t tag, int64_t count, void** src, const char* type) {
     ResidVal* v = (ResidVal*)malloc(sizeof(ResidVal));
+    if (!v) resid_abort("resid_box_new: out of memory");
     v->tag = tag;
     v->count = count;
     v->type = type;
     v->slots = NULL;
     if (count > 0) {
         v->slots = (void**)malloc((size_t)count * sizeof(void*));
+        if (!v->slots) resid_abort("resid_box_new: out of memory");
         for (int64_t i = 0; i < count; i++) v->slots[i] = src[i];
     }
     return v;
@@ -601,7 +626,11 @@ typedef struct {
     const char* type;
 } ResidList;
 
-static PVecNode* pvec_node_new(void) { return (PVecNode*)calloc(1, sizeof(PVecNode)); }
+static PVecNode* pvec_node_new(void) {
+    PVecNode* n = (PVecNode*)calloc(1, sizeof(PVecNode));
+    if (!n) resid_abort("pvec_node_new: out of memory");
+    return n;
+}
 
 static void* pvec_get_raw(PVecNode* root, int32_t shift, int64_t i) {
     PVecNode* node = root;
@@ -659,6 +688,7 @@ static ResidList* pvec_push_raw(ResidList* v, void* elem) {
  * pointers (scalar slots are boxes, as with the old ResidVal lists). */
 void* resid_list_new(int64_t count, void** src, const char* type) {
     ResidList* v = (ResidList*)malloc(sizeof(ResidList));
+    if (!v) resid_abort("resid_list_new: out of memory");
     v->count = 0;
     v->shift = 0;
     v->root = NULL;
@@ -684,6 +714,7 @@ const char* resid_list_type(void* b) { return ((ResidList*)b)->type; }
 void** resid_list_to_array(void* b) {
     ResidList* v = (ResidList*)b;
     void** out = v->count > 0 ? (void**)malloc((size_t)v->count * sizeof(void*)) : NULL;
+    if (v->count > 0 && !out) resid_abort("resid_list_to_array: out of memory");
     for (int64_t i = 0; i < v->count; i++) out[i] = pvec_get_raw(v->root, v->shift, i);
     return out;
 }
@@ -869,12 +900,15 @@ void resid_box_free(void* b) {
 /* Scalar boxes: ResidVal with tag=-1 and one slot holding the value. */
 void* resid_box_i64(int64_t v) {
     ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
+    if (!r) resid_abort("resid_box_i64: out of memory");
     r->tag = -1;
     r->count = 1;
     r->type = "i64";
     int64_t* slot = (int64_t*)malloc(sizeof(int64_t));
+    if (!slot) resid_abort("resid_box_i64: out of memory");
     *slot = v;
     r->slots = (void**)malloc(1 * sizeof(void*));
+    if (!r->slots) resid_abort("resid_box_i64: out of memory");
     r->slots[0] = slot;
     return r;
 }
@@ -885,12 +919,15 @@ int64_t resid_unbox_i64(void* p) {
 
 void* resid_box_f64(double v) {
     ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
+    if (!r) resid_abort("resid_box_f64: out of memory");
     r->tag = -1;
     r->count = 1;
     r->type = "f64";
     double* slot = (double*)malloc(sizeof(double));
+    if (!slot) resid_abort("resid_box_f64: out of memory");
     *slot = v;
     r->slots = (void**)malloc(1 * sizeof(void*));
+    if (!r->slots) resid_abort("resid_box_f64: out of memory");
     r->slots[0] = slot;
     return r;
 }
@@ -901,12 +938,15 @@ double resid_unbox_f64(void* p) {
 
 void* resid_box_bool(int8_t v) {
     ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
+    if (!r) resid_abort("resid_box_bool: out of memory");
     r->tag = -1;
     r->count = 1;
     r->type = "bool";
     int8_t* slot = (int8_t*)malloc(sizeof(int8_t));
+    if (!slot) resid_abort("resid_box_bool: out of memory");
     *slot = v;
     r->slots = (void**)malloc(1 * sizeof(void*));
+    if (!r->slots) resid_abort("resid_box_bool: out of memory");
     r->slots[0] = slot;
     return r;
 }
@@ -917,12 +957,15 @@ int8_t resid_unbox_bool(void* p) {
 
 void* resid_box_i128(__int128 v) {
     ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
+    if (!r) resid_abort("resid_box_i128: out of memory");
     r->tag = -1;
     r->count = 1;
     r->type = "i128";
     __int128* slot = (__int128*)malloc(sizeof(__int128));
+    if (!slot) resid_abort("resid_box_i128: out of memory");
     *slot = v;
     r->slots = (void**)malloc(1 * sizeof(void*));
+    if (!r->slots) resid_abort("resid_box_i128: out of memory");
     r->slots[0] = slot;
     return r;
 }
@@ -933,12 +976,15 @@ __int128 resid_unbox_i128(void* p) {
 
 void* resid_box_u128(unsigned __int128 v) {
     ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
+    if (!r) resid_abort("resid_box_u128: out of memory");
     r->tag = -1;
     r->count = 1;
     r->type = "u128";
     unsigned __int128* slot = (unsigned __int128*)malloc(sizeof(unsigned __int128));
+    if (!slot) resid_abort("resid_box_u128: out of memory");
     *slot = v;
     r->slots = (void**)malloc(1 * sizeof(void*));
+    if (!r->slots) resid_abort("resid_box_u128: out of memory");
     r->slots[0] = slot;
     return r;
 }
@@ -1255,7 +1301,7 @@ char* Float128ToString(_Float128 v) {
     /* Now: ilen integer digits (reversed in ibuf), flen fraction digits.
      * For the no-integer-part case dec_exp was set to -1; if the fraction
      * starts with zeros, adjust dec_exp accordingly. */
-    int i = ilen - 1;
+    (void)ilen;
     if (ilen == 0) {
         /* leading zeros in fraction */
         int lead = 0;
@@ -1627,6 +1673,7 @@ void* resid_slice_new(void* target, int64_t start, int64_t end) {
 /* Is `path` a directory? `filesystem.list_dir` cannot tell (it shells out
  * to `ls -1`, names only); a recursive directory walker needs this. */
 int8_t resid_fs_is_dir(const char* path) {
+    if (!resid_path_is_safe(path)) return 0;
     struct stat st;
     if (stat(path, &st) != 0) return 0;
     return S_ISDIR(st.st_mode) ? 1 : 0;
@@ -1635,6 +1682,7 @@ int8_t resid_fs_is_dir(const char* path) {
 /* mkdir -p: create `path` and every missing parent directory. Returns 1 on
  * success (including "already exists as a directory"), 0 on failure. */
 int8_t resid_fs_create_dir_all(const char* path) {
+    if (!resid_path_is_safe(path)) return 0;
     size_t len = strlen(path);
     if (len == 0) return 0;
     char buf[4096];
@@ -1654,6 +1702,7 @@ int8_t resid_fs_create_dir_all(const char* path) {
 }
 
 int8_t resid_fs_exists(const char* path) {
+    if (!resid_path_is_safe(path)) return 0;
     FILE* f = fopen(path, "rb");
     if (!f) return 0;
     fclose(f);
@@ -1663,6 +1712,7 @@ int8_t resid_fs_exists(const char* path) {
 /* Read an entire file into a NUL-terminated Str (bootstrap lexer input).
  * On error, returns an empty string (mirrors the env/empty-string default). */
 char* resid_fs_read_all(const char* path) {
+    if (!resid_path_is_safe(path)) return resid_box_str("");
     FILE* f = fopen(path, "rb");
     if (!f) return resid_box_str("");
     if (fseek(f, 0, SEEK_END) != 0) {
@@ -1688,6 +1738,7 @@ char* resid_fs_read_all(const char* path) {
 /* Write `contents` to `path`, truncating if it exists. Returns 1 on success,
  * 0 on failure (M6 P1 — the self-hosted compiler emits `.ll` files). */
 int8_t resid_fs_write_all(const char* path, const char* contents) {
+    if (!resid_path_is_safe(path)) return 0;
     FILE* f = fopen(path, "wb");
     if (!f) return 0;
     size_t n = fwrite(contents, 1, strlen(contents), f);
@@ -1702,6 +1753,7 @@ int8_t resid_fs_write_all(const char* path, const char* contents) {
  * format needing exact byte control (e.g. a CBOR sidecar) must go through
  * this instead of resid_fs_write_all. */
 int8_t resid_fs_write_bytes(const char* path, void* list_box) {
+    if (!resid_path_is_safe(path)) return 0;
     int64_t n = resid_list_len(list_box);
     unsigned char* buf = (unsigned char*)malloc((size_t)(n > 0 ? n : 1));
     for (int64_t i = 0; i < n; i++) {
@@ -1719,6 +1771,7 @@ int8_t resid_fs_write_bytes(const char* path, void* list_box) {
  * empty list on failure/missing file — the read-side counterpart to
  * resid_fs_write_bytes. */
 void* resid_fs_read_bytes(const char* path) {
+    if (!resid_path_is_safe(path)) return resid_list_new(0, NULL, "List(Int)");
     FILE* f = fopen(path, "rb");
     if (!f) return resid_list_new(0, NULL, "List(Int)");
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return resid_list_new(0, NULL, "List(Int)"); }
@@ -1736,24 +1789,28 @@ void* resid_fs_read_bytes(const char* path) {
 }
 
 void* resid_fs_list_dir(const char* path) {
-    /* Shell out to `ls` since POSIX globbing/readdir adds surface; the
-     * runtime is allowed to use libc, so this is a pragmatic bootstrap. */
-    char cmd[4096];
-    snprintf(cmd, sizeof(cmd), "ls -1 \"%s\" 2>/dev/null", path);
-    FILE* p = popen(cmd, "r");
-    if (!p) {
+    DIR* d = opendir(path);
+    if (!d) {
         return resid_list_new(0, NULL, "List(Str)");
     }
-    char line[4096];
-    void* slots[4096];
+    void** slots = NULL;
+    size_t cap = 0;
     size_t n = 0;
-    while (n < 4096 && fgets(line, sizeof(line), p)) {
-        size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-        slots[n++] = resid_box_str(line);
+    struct dirent* e;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (n >= cap) {
+            cap = cap == 0 ? 64 : cap * 2;
+            void** ns = (void**)realloc(slots, cap * sizeof(void*));
+            if (!ns) break;
+            slots = ns;
+        }
+        slots[n++] = resid_box_str(e->d_name);
     }
-    pclose(p);
-    return resid_list_new((int64_t)n, slots, "List(Str)");
+    closedir(d);
+    void* out = resid_list_new((int64_t)n, slots, "List(Str)");
+    free(slots);
+    return out;
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -1767,6 +1824,10 @@ void* resid_fs_list_dir(const char* path) {
 #define FILE_HANDLE_TAG 12
 
 void* resid_fs_open(const char* path) {
+    if (!resid_path_is_safe(path)) {
+        void* slots[1] = { NULL };
+        return resid_box_new(FILE_HANDLE_TAG, 1, slots, "File");
+    }
     FILE* f = fopen(path, "rb");
     void* slots[1] = { f };
     return resid_box_new(FILE_HANDLE_TAG, 1, slots, "File");
@@ -1840,7 +1901,8 @@ __attribute__((constructor)) static void resid_capture_args(int argc, char** arg
 }
 
 int64_t resid_process_run(const char* cmd) {
-    return (int64_t)system(cmd);
+    (void)cmd;
+    return -1;
 }
 
 int64_t resid_args_count(void) { return g_resid_argc; }
@@ -1851,8 +1913,15 @@ char* resid_args_get(int64_t i) {
 }
 
 char* resid_git_rev(const char* ref) {
+    if (!ref || ref[0] == '\0') return resid_box_str("");
+    for (const char* p = ref; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' || *p == '/' || *p == '.')) {
+            return resid_box_str("");
+        }
+    }
     char cmd[4096];
-    snprintf(cmd, sizeof(cmd), "git rev-parse %s 2>/dev/null", ref);
+    snprintf(cmd, sizeof(cmd), "git rev-parse %.4000s 2>/dev/null", ref);
     FILE* p = popen(cmd, "r");
     if (!p) return resid_box_str("");
     char line[256];
@@ -1877,6 +1946,12 @@ char* resid_git_branch(void) {
     pclose(p);
     size_t len = strlen(line);
     if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+    for (size_t i = 0; i < len; i++) {
+        if (!((line[i] >= 'a' && line[i] <= 'z') || (line[i] >= 'A' && line[i] <= 'Z') ||
+              (line[i] >= '0' && line[i] <= '9') || line[i] == '-' || line[i] == '_' || line[i] == '/' || line[i] == '.')) {
+            line[i] = '_';
+        }
+    }
     return resid_box_str(line);
 }
 
@@ -2503,6 +2578,7 @@ char* str_trim(const char* s) {
     while (e > b && str_is_space((unsigned char)e[-1])) e--;
     int64_t n = e - b;
     char* p = (char*)malloc(n + 1);
+    if (!p) resid_abort("str_trim: out of memory");
     memcpy(p, b, n);
     p[n] = '\0';
     return p;
@@ -3526,7 +3602,9 @@ char* str_to_upper(const char* s) {
 char* str_repeat(const char* s, int64_t times) {
     if (times < 0) times = 0;
     size_t ls = strlen(s);
+    if (ls > 0 && (size_t)times > SIZE_MAX / ls) return resid_box_str("");
     char* p = (char*)malloc(ls * (size_t)times + 1);
+    if (!p) return resid_box_str("");
     char* w = p;
     for (int64_t i = 0; i < times; i++) {
         memcpy(w, s, ls);
@@ -3539,13 +3617,17 @@ char* str_repeat(const char* s, int64_t times) {
 /* Replace all occurrences of `from` with `to` (empty `from` → unchanged). */
 char* str_replace(const char* s, const char* from, const char* to) {
     size_t lf = strlen(from), lt = strlen(to);
-    if (lf == 0) { size_t n = strlen(s); char* c = (char*)malloc(n + 1); memcpy(c, s, n + 1); return c; }
+    if (lf == 0) { size_t n = strlen(s); char* c = (char*)malloc(n + 1); if (!c) return resid_box_str(""); memcpy(c, s, n + 1); return c; }
     /* count */
     int64_t hits = 0;
     const char* q = s;
     while ((q = strstr(q, from)) != NULL) { hits++; q += lf; }
     size_t ls = strlen(s);
-    char* p = (char*)malloc(ls + (size_t)hits * (lt - lf) + 1);
+    if (lt > lf && (size_t)hits > SIZE_MAX / (lt - lf)) return resid_box_str("");
+    size_t add = (lt > lf) ? (size_t)hits * (lt - lf) : 0;
+    if (ls > SIZE_MAX - add) return resid_box_str("");
+    char* p = (char*)malloc(ls + add + 1);
+    if (!p) return resid_box_str("");
     char* w = p;
     q = s;
     const char* hit;
@@ -3650,7 +3732,7 @@ int8_t list_contains_str(void* box, const char* v) {
     return 0;
 }
 
-static int rt_cmp_i64(const void* a, const void* b) {
+__attribute__((unused)) static int rt_cmp_i64(const void* a, const void* b) {
     int64_t x = *(const int64_t*)a, y = *(const int64_t*)b;
     return x < y ? -1 : x > y;
 }
@@ -3871,6 +3953,7 @@ static int bl_cmp_f64(const void* a, const void* b) {
 }
 
 static void* bl_sorted_copy(void* box, size_t nbytes, int (*cmp)(const void*, const void*)) {
+    (void)nbytes;
     int64_t n = ((int64_t*)box)[0];
     int64_t* out = (int64_t*)malloc(8 + (size_t)n * 8);
     memcpy(out, box, 8 + (size_t)n * 8);
@@ -4044,6 +4127,14 @@ _Noreturn void resid_index_abort(int64_t idx, int64_t len, const char* at) {
    client always sends `Connection: close`) or a 4 MB cap. */
 
 int64_t resid_tcp_connect(const char* host, int64_t port) {
+    if (!host || host[0] == '\0') return -1;
+    if (port <= 0 || port > 65535) return -1;
+    for (const char* p = host; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '-' || *p == '.' || *p == ':')) {
+            return -1;
+        }
+    }
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -4079,9 +4170,11 @@ int8_t resid_tcp_send(int64_t fd, const char* data) {
 char* resid_tcp_recv_all(int64_t fd) {
     size_t cap = 65536, len = 0;
     char* out = (char*)malloc(cap);
+    if (!out) return resid_box_str("");
     for (;;) {
         if (len + 4096 > cap) {
             if (cap >= 4u * 1024 * 1024) break; /* 4 MB cap */
+            if (cap > SIZE_MAX / 2) break;
             cap *= 2;
             char* nb = (char*)realloc(out, cap);
             if (!nb) break;
@@ -4108,6 +4201,7 @@ int8_t resid_tcp_close(int64_t fd) {
 int8_t resid_tcp_send_bin(int64_t fd, void* lst) {
     int64_t n = resid_list_len(lst);
     if (n <= 0) return 1;
+    if (n > 1024 * 1024) return 0; /* 1 MB max */
     char* buf = (char*)malloc((size_t)n);
     if (!buf) return 0;
     for (int64_t i = 0; i < n; i++) {
@@ -4130,8 +4224,11 @@ int8_t resid_tcp_send_bin(int64_t fd, void* lst) {
  * On EOF/error fewer slots may be filled (remaining stay 0). */
 void* resid_tcp_recv_bin(int64_t fd, int64_t n) {
     if (n < 0) n = 0;
+    if (n > 1024 * 1024) n = 1024 * 1024; /* 1 MB max */
     char* buf = (char*)malloc((size_t)(n > 0 ? n : 1));
+    if (!buf) return resid_list_new(0, NULL, "List");
     void** slots = (void**)malloc(sizeof(void*) * (size_t)n);
+    if (!slots) { free(buf); return resid_list_new(0, NULL, "List"); }
     int64_t got = 0;
     while (got < n) {
         ssize_t r = recv((int)fd, buf + got, (size_t)(n - got), 0);
@@ -4375,7 +4472,9 @@ char* resid_str_from_codepoints(void* list) {
     if (n <= 0) return resid_box_str("");
 
     /* Allocate max possible (4 bytes per codepoint) + NUL. */
+    if ((size_t)n > SIZE_MAX / 4) resid_abort("resid_str_from_codepoints: size overflow");
     char* buf = (char*)malloc((size_t)(4 * n + 1));
+    if (!buf) resid_abort("resid_str_from_codepoints: out of memory");
     int64_t total_bytes = 0;
     for (int64_t i = 0; i < n; i++) {
         void* elem = resid_list_get(list, i);
@@ -4412,6 +4511,7 @@ static uint64_t fnv1a(const char* s) {
 
 static HMNode* node_index_new(void) {
     HMNode* n = (HMNode*)calloc(1, sizeof(HMNode));
+    if (!n) resid_abort("node_index_new: out of memory");
     n->kind = 0;
     return n;
 }
@@ -4421,12 +4521,14 @@ static HMNode* node_index_new(void) {
  * update persistent without mutating the old value. */
 static HMNode* node_clone(const HMNode* src) {
     HMNode* n = (HMNode*)malloc(sizeof(HMNode));
+    if (!n) resid_abort("node_clone: out of memory");
     *n = *src;
     return n;
 }
 
 static HMPair* pair_new(void* key, void* val) {
     HMPair* p = (HMPair*)malloc(sizeof(HMPair));
+    if (!p) resid_abort("pair_new: out of memory");
     p->key = key;
     p->val = val;
     return p;
@@ -4434,6 +4536,7 @@ static HMPair* pair_new(void* key, void* val) {
 
 static HMTrie* trie_new(int64_t count, HMNode* root) {
     HMTrie* t = (HMTrie*)malloc(sizeof(HMTrie));
+    if (!t) resid_abort("trie_new: out of memory");
     t->count = count;
     t->root = root;
     return t;
@@ -4748,7 +4851,13 @@ char* resid_map_format(void* map) {
             vs0 = (const char*)resid_box_slot(vs[i], 0);
         }
         size_t vl = strlen(vs0);
-        if (pos + vl + 2 >= cap) { cap = cap * 2 + vl; buf = realloc(buf, cap); }
+        if (pos + vl + 2 >= cap) {
+            if (cap > SIZE_MAX / 2) resid_abort("resid_map_format: size overflow");
+            cap = cap * 2 + vl;
+            char* nb = (char*)realloc(buf, cap);
+            if (!nb) resid_abort("resid_map_format: out of memory");
+            buf = nb;
+        }
         memcpy(buf + pos, vs0, vl); pos += vl;
     }
     free(ks);
@@ -4863,7 +4972,13 @@ char* resid_set_format(void* set) {
             es = (const char*)resid_box_slot(ks[i], 0);
         }
         size_t el = strlen(es);
-        if (pos + el + 2 >= cap) { cap = cap * 2 + el; buf = realloc(buf, cap); }
+        if (pos + el + 2 >= cap) {
+            if (cap > SIZE_MAX / 2) resid_abort("resid_set_format: size overflow");
+            cap = cap * 2 + el;
+            char* nb = (char*)realloc(buf, cap);
+            if (!nb) resid_abort("resid_set_format: out of memory");
+            buf = nb;
+        }
         memcpy(buf + pos, es, el); pos += el;
     }
     free(ks);
