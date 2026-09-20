@@ -11,15 +11,18 @@
 /// RFC 8949 big-endian; this format predates that choice and this is a
 /// faithful port, not a redesign.)
 ///
-/// Scope: pack/hash/sign/checksig/extract — NOT the `resid.toml`
-/// manifest/dependency/registry/CLI machinery around it (real additional
-/// scope, tracked separately in PLAN-resid-only.md C.7).
+/// Scope: pack/hash/sign/checksig/extract/publish — NOT the `resid.toml`
+/// dependency-resolution/CLI machinery around it (see
+/// tools/resid-manifest.resid, and PLAN-resid-only.md C.7 for what's
+/// still open: remote HTTP registry, signed registry index, unified
+/// CLI).
 ///
 /// Usage:
 ///   residc tools/resid-pkg.resid run -- pack <dir> <out>
 ///   residc tools/resid-pkg.resid run -- sign <out> <keyfile>
 ///   residc tools/resid-pkg.resid run -- checksig <out> <pubkey-hex>
 ///   residc tools/resid-pkg.resid run -- extract <out> <dir>
+///   residc tools/resid-pkg.resid run -- publish <dir> <registry> [keyfile]
 ///
 /// `pack` writes `<out>.resid-pkg`. `sign` reads a hex signing key from
 /// `<keyfile>` (same trailing-newline-tolerant format `write_provenance`
@@ -31,7 +34,15 @@
 /// `checksig` reads `<out>.resid-pkg` + `<out>.resid-sig` and checks against
 /// a given hex public key. `extract` unpacks `<out>.resid-pkg` into `<dir>`
 /// (path-traversal guarded: rejects absolute paths and `..`/empty
-/// segments, same as `archive.rs`'s `extract`).
+/// segments, same as `archive.rs`'s `extract`). `publish` packs `<dir>`
+/// (reading `[package] name`/`version` from its own `resid.toml` — a
+/// minimal 2-field inline reader, not resid-manifest.resid's full
+/// parser, to avoid an import collision) and writes
+/// `<registry>/pkg/<name>-<version>.resid-pkg` + `-sha256` (+ `-sig`
+/// when `keyfile` is given) — the exact layout
+/// `resid-manifest.resid`'s `fetch_pkg_local`/`fetch_sha_local` read
+/// from. Registry signed-index maintenance (`index.resid-idx`/`-sig`)
+/// is not yet done here — a further increment, see PLAN-resid-only.md.
 
 import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
@@ -300,7 +311,7 @@ Int extract_archive(Str archive_path, Str out_dir) {
 // ─── CLI ────────────────────────────────────────────────────────────
 
 Str usage_text() {
-    return "usage: resid-pkg pack <dir> <out> | sign <out> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir>";
+    return "usage: resid-pkg pack <dir> <out> | sign <out> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile]";
 }
 
 Int cmd_pack(Str dir, Str out) {
@@ -355,6 +366,71 @@ Str bytes_to_ascii(List(Int) b, Int i, Int end, Str acc) {
     return bytes_to_ascii(b, i + 1, end, acc + str_from_code(b[i]));
 }
 
+// ─── publish: pack + hash + (optionally) sign, into a registry's
+// canonical <reg>/pkg/ layout — the write-side counterpart to
+// resid-manifest.resid's fetch_pkg_local/fetch_sha_local. Only needs
+// [package] name/version from resid.toml, so a minimal inline extractor
+// here rather than importing resid-manifest.resid's full TOML-subset
+// parser (would collide on shared helper names — same per-file
+// duplication convention as everywhere else this session). ───────────
+
+Int find_eq_pos(Str s, Int i, Int n) {
+    if (i >= n) { return 0 - 1; }
+    if (str_char_at(s, i) == 61) { return i; }
+    return find_eq_pos(s, i + 1, n);
+}
+Str strip_quotes(Str v) {
+    Int n = str_len(v);
+    if (n < 2) { return v; }
+    if (str_char_at(v, 0) != 34) { return v; }
+    if (str_char_at(v, n - 1) != 34) { return v; }
+    return str_slice(v, 1, n - 1);
+}
+Str manifest_field_at(List(Str) lines, Str key, Int i) {
+    if (i >= lines.len()) { return ""; }
+    Str t = str_trim(lines[i]);
+    Int eq = find_eq_pos(t, 0, str_len(t));
+    if (eq >= 0) {
+        Str k = str_trim(str_slice(t, 0, eq));
+        if (k == key) { return strip_quotes(str_trim(str_slice(t, eq + 1, str_len(t)))); }
+    }
+    return manifest_field_at(lines, key, i + 1);
+}
+Str manifest_field(Str text, Str key) {
+    return manifest_field_at(str_split(text, "\n"), key, 0);
+}
+
+Int cmd_publish(Str dir, Str reg, Str keyfile) {
+    Str manifest_text = filesystem.read_all(dir + "/resid.toml");
+    Str name = manifest_field(manifest_text, "name");
+    Str version = manifest_field(manifest_text, "version");
+    if (name == "" || version == "") {
+        eprintln("resid-pkg: cannot read [package] name/version from '" + dir + "/resid.toml'");
+        return 1;
+    }
+    List(Int) archive = build_archive(dir);
+    Str hash_hex = hex_encode(content_hash(archive));
+    Str base = name + "-" + version + ".resid";
+    Str pkg_dir = reg + "/pkg";
+    filesystem.create_dir(pkg_dir);
+    Str pkg_path = pkg_dir + "/" + base + "-pkg";
+    filesystem.write_bytes(pkg_path, archive);
+    filesystem.write_all(pkg_dir + "/" + base + "-sha256", hash_hex + "\n");
+    Str msg = "published " + name + " " + version + " (sha256 " + hash_hex + ") -> " + pkg_path;
+    Bool have_key = keyfile != "" && filesystem.exists(keyfile);
+    if (!have_key) {
+        println(msg);
+        return 0;
+    }
+    Str keyhex = filesystem.read_all(keyfile);
+    Int klen = str_len(keyhex);
+    Str ktrim = if (klen > 0) { str_slice(keyhex, 0, klen - 1) } else { keyhex };
+    List(Int) sig = sign_msg(hex_decode(ktrim), hash_hex);
+    filesystem.write_bytes(pkg_dir + "/" + base + "-sig", bytes_of(hex_encode(sig)));
+    println(msg + " (+ signature)");
+    return 0;
+}
+
 Int main() {
     Int argc = args.count();
     if (argc < 2) {
@@ -377,6 +453,11 @@ Int main() {
     if (sub == "extract") {
         if (argc < 4) { eprintln(usage_text()); return 2; }
         return cmd_extract(args.get(2), args.get(3));
+    }
+    if (sub == "publish") {
+        if (argc < 4) { eprintln(usage_text()); return 2; }
+        Str keyfile = if (argc >= 5) { args.get(4) } else { "" };
+        return cmd_publish(args.get(2), args.get(3), keyfile);
     }
     eprintln(usage_text());
     return 2;

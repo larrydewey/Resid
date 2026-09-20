@@ -1335,21 +1335,47 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       and lockfile pinning during version resolution (only the sidecar
       hash check applies so far) are also open.
 
+      **`publish` — DONE.** Added to `resid-pkg.resid` (not
+      `resid-manifest.resid` — needs the archive/sign machinery that file
+      already has, and only needs 2 manifest fields, so a minimal inline
+      `[package] name`/`version` reader there beats importing the full
+      TOML parser and colliding on shared helper names). `cmd_publish`:
+      packs the directory, hashes it, writes
+      `<registry>/pkg/<name>-<version>.resid-pkg` + `-sha256`, and (when
+      a signing keyfile is given) `-sig` — the exact layout
+      `resid-manifest.resid`'s `fetch_pkg_local`/`fetch_sha_local`
+      already read. Verified: published unsigned and signed, confirmed
+      the freshly-published package resolves correctly through the full
+      `resid-manifest deps` path (sha256 sidecar check included) —
+      publish and consume interoperate, not just each independently
+      matching the Rust format. Self-hosted D1-built binary produces the
+      identical hash and file layout, first try. Registry signed-index
+      maintenance (`index.resid-idx`/`-sig`, what a trust-anchor
+      `[registry] pubkey` verifies against) is not done — publish doesn't
+      touch the index yet, a further increment.
+
       **Still open**: `registry.rs`'s `serve_dir` (an inbound TCP
       *listener* for `resid-build serve`) — likely fine to defer/drop as
-      a dev-convenience feature (the core install/fetch path only needs
-      the client side, now done for local registries); writing
-      `resid.lock` back out (only *read* so far); the CLI/subcommand
-      orchestration in `main.rs` (385 lines) tying
-      manifest+deps+lock+archive+registry into one `resid-build`
-      command; and COSE encryption (`cose.rs` — rides on
+      a dev-convenience feature (the core publish/install path only needs
+      the client + local-directory-write sides, both now done); registry
+      signed-index maintenance/verification; writing `resid.lock` back
+      out (only *read* so far); the CLI/subcommand orchestration in
+      `main.rs` (385 lines) tying manifest+deps+lock+archive+registry
+      into one `resid-build` command with a real `build` subcommand
+      (needs the self-hosted driver to accept a dependency map for
+      import resolution — deeper compiler integration than anything else
+      in C.7, not yet scoped); and COSE encryption (`cose.rs` — rides on
       ChaCha20-Poly1305, which already works self-hosted:
-      `lib/chacha.resid`, `run_chacha20poly1305_in_resid`). Recommend
-      next: the unified CLI (`resid-build build|pack|publish|...`),
-      wiring together everything this file already has. Each remaining
-      piece deserves the same fixture-based byte-comparison verification
-      this session used throughout, given the security stakes — as the
-      ed25519 bug shows, this area rewards it.
+      `lib/chacha.resid`, `run_chacha20poly1305_in_resid`). At this point
+      every piece of `resid-build` except `build` itself, the registry
+      index, and COSE has a working self-hosted equivalent, each
+      independently verified against the Rust format/behavior and cross-
+      checked against each other (publish→consume, pack→sign→checksig,
+      manifest→deps→registry). `build` is qualitatively different
+      remaining work — it needs the self-hosted compiler itself to grow
+      dependency-aware import resolution, not just another tool — and
+      deserves its own scoping pass rather than being bundled into "next
+      increment" the way everything above was.
 - [ ] D.1 Freeze stage-0 seed binary
 - [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/`
 - [ ] D.3 Update PROGRESS.md §6 policy
