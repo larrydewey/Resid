@@ -1,0 +1,438 @@
+/// resid-manifest.resid — TOML-subset parser for `resid.toml` (Phase C.7,
+/// PLAN-resid-only.md), matching `crates/resid-build/src/lib.rs`'s
+/// `ManifestToml`/`Manifest`. Not general TOML — exactly the subset that
+/// schema uses: `[section]` / `[dependencies.<name>]` headers, `key =
+/// value` where value is a quoted string, `true`/`false`, or an array of
+/// quoted strings. No numbers, no dates, no inline tables, no multi-line
+/// strings, no nested arrays — this schema has none of those.
+///
+/// Known, deliberate limitation vs. real TOML: comments must be whole-line
+/// (`#` as the first non-whitespace character) — trailing inline comments
+/// after a value are not stripped. None of the real manifests this schema
+/// describes (see `crates/resid-build/tests/build.rs`'s fixtures, used as
+/// this file's own test fixtures) use trailing comments.
+///
+/// Usage: residc tools/resid-manifest.resid run -- <resid.toml>
+/// (prints the parsed fields — a demonstration/verification driver, not
+/// yet wired into build orchestration; see PLAN-resid-only.md C.7 for
+/// what's still open: dependency resolution, capability-ceiling
+/// enforcement, lock file, registry, CLI).
+
+// ─── quoted-string parsing (minimal escapes: \" \\ \n \t) ──────────
+
+type QStr = { Int pos; Str text; };
+
+QStr parse_quoted_at(Str s, Int i, Int n, Str acc) {
+    if (i >= n) { return QStr {.pos = i, .text = acc}; }
+    Int c = str_char_at(s, i);
+    if (c == 34) { return QStr {.pos = i + 1, .text = acc}; }
+    if (c == 92) {
+        Int c2 = str_char_at(s, i + 1);
+        Str piece = if (c2 == 110) { "\n" }
+            else if (c2 == 116) { "\t" }
+            else if (c2 == 34) { "\"" }
+            else if (c2 == 92) { "\\" }
+            else { str_from_code(c2) };
+        return parse_quoted_at(s, i + 2, n, acc + piece);
+    }
+    return parse_quoted_at(s, i + 1, n, acc + str_from_code(c));
+}
+// `start` points at the opening `"`.
+QStr parse_quoted(Str s, Int start) {
+    return parse_quoted_at(s, start + 1, str_len(s), "");
+}
+
+// ─── array of quoted strings: scan for `"..."` runs, ignore everything
+// else (commas, brackets, whitespace) — sufficient since this schema
+// only ever has flat string arrays ──────────────────────────────────
+
+List(Str) parse_array_acc(Str s, Int i, Int n, List(Str) acc) {
+    if (i >= n) { return acc; }
+    if (str_char_at(s, i) == 34) {
+        QStr q = parse_quoted(s, i);
+        return parse_array_acc(s, q.pos, n, acc.concat([q.text]));
+    }
+    return parse_array_acc(s, i + 1, n, acc);
+}
+List(Str) parse_array(Str s) {
+    return parse_array_acc(s, 0, str_len(s), []);
+}
+
+// ─── value dispatch ─────────────────────────────────────────────────
+
+type TomlVal = { Str kind; Str str_val; Bool bool_val; List(Str) list_val; };
+
+TomlVal parse_value(Str v) {
+    Str t = str_trim(v);
+    if (t == "true") { List(Str) e = []; return TomlVal {.kind = "bool", .str_val = "", .bool_val = true, .list_val = e}; }
+    if (t == "false") { List(Str) e = []; return TomlVal {.kind = "bool", .str_val = "", .bool_val = false, .list_val = e}; }
+    if (str_starts_with(t, "\"")) {
+        QStr q = parse_quoted(t, 0);
+        List(Str) e = [];
+        return TomlVal {.kind = "str", .str_val = q.text, .bool_val = false, .list_val = e};
+    }
+    if (str_starts_with(t, "[")) {
+        return TomlVal {.kind = "list", .str_val = "", .bool_val = false, .list_val = parse_array(t)};
+    }
+    List(Str) e = [];
+    return TomlVal {.kind = "str", .str_val = t, .bool_val = false, .list_val = e};
+}
+
+// ─── line-oriented parse: `[section]` headers thread forward as state,
+// each `key = value` line becomes one entry tagged with its section ────
+
+type TomlEntry = { Str section; Str key; TomlVal val; };
+type ParseState = { Str section; List(TomlEntry) entries; };
+
+Bool is_comment_or_blank(Str t) {
+    if (t == "") { return true; }
+    return str_starts_with(t, "#");
+}
+
+Int find_eq(Str s, Int i, Int n) {
+    if (i >= n) { return 0 - 1; }
+    if (str_char_at(s, i) == 61) { return i; }
+    return find_eq(s, i + 1, n);
+}
+
+ParseState parse_section_header(Str t, ParseState st) {
+    Int n = str_len(t);
+    Str sec = if (str_ends_with(t, "]")) { str_slice(t, 1, n - 1) } else { str_slice(t, 1, n) };
+    return ParseState {.section = sec, .entries = st.entries};
+}
+
+ParseState parse_assignment(Str t, ParseState st) {
+    Int eq = find_eq(t, 0, str_len(t));
+    if (eq < 0) { return st; }
+    Str key = str_trim(str_slice(t, 0, eq));
+    Str valstr = str_trim(str_slice(t, eq + 1, str_len(t)));
+    TomlEntry e = TomlEntry {.section = st.section, .key = key, .val = parse_value(valstr)};
+    return ParseState {.section = st.section, .entries = st.entries.concat([e])};
+}
+
+ParseState parse_line(Str line, ParseState st) {
+    Str t = str_trim(line);
+    if (is_comment_or_blank(t)) { return st; }
+    if (str_starts_with(t, "[")) { return parse_section_header(t, st); }
+    return parse_assignment(t, st);
+}
+
+ParseState parse_lines_acc(List(Str) lines, Int i, ParseState st) {
+    if (i >= lines.len()) { return st; }
+    return parse_lines_acc(lines, i + 1, parse_line(lines[i], st));
+}
+
+List(TomlEntry) parse_toml(Str text) {
+    List(TomlEntry) empty = [];
+    ParseState start = ParseState {.section = "", .entries = empty};
+    ParseState final = parse_lines_acc(str_split(text, "\n"), 0, start);
+    return final.entries;
+}
+
+// ─── generic getters ────────────────────────────────────────────────
+
+TomlVal find_entry(List(TomlEntry) entries, Int i, Str section, Str key, TomlVal fallback) {
+    if (i >= entries.len()) { return fallback; }
+    TomlEntry e = entries[i];
+    Bool hit = e.section == section && e.key == key;
+    if (hit) { return e.val; }
+    return find_entry(entries, i + 1, section, key, fallback);
+}
+
+Str toml_str(List(TomlEntry) entries, Str section, Str key, Str default_val) {
+    List(Str) e = [];
+    TomlVal fb = TomlVal {.kind = "str", .str_val = default_val, .bool_val = false, .list_val = e};
+    TomlVal v = find_entry(entries, 0, section, key, fb);
+    if (v.kind == "str") { return v.str_val; }
+    return default_val;
+}
+Bool toml_bool(List(TomlEntry) entries, Str section, Str key, Bool default_val) {
+    List(Str) e = [];
+    TomlVal fb = TomlVal {.kind = "bool", .str_val = "", .bool_val = default_val, .list_val = e};
+    TomlVal v = find_entry(entries, 0, section, key, fb);
+    if (v.kind == "bool") { return v.bool_val; }
+    return default_val;
+}
+List(Str) toml_list(List(TomlEntry) entries, Str section, Str key) {
+    List(Str) e = [];
+    TomlVal fb = TomlVal {.kind = "list", .str_val = "", .bool_val = false, .list_val = e};
+    TomlVal v = find_entry(entries, 0, section, key, fb);
+    if (v.kind == "list") { return v.list_val; }
+    List(Str) empty = [];
+    return empty;
+}
+
+// ─── `[dependencies.<name>]` discovery ─────────────────────────────
+
+List(Str) dep_names_acc(List(TomlEntry) entries, Int i, List(Str) acc) {
+    if (i >= entries.len()) { return acc; }
+    Str sec = entries[i].section;
+    List(Str) acc2 = if (str_starts_with(sec, "dependencies.")) {
+        dep_name_seen_or_add(acc, str_slice(sec, 13, str_len(sec)))
+    } else { acc };
+    return dep_names_acc(entries, i + 1, acc2);
+}
+List(Str) dep_name_seen_or_add(List(Str) acc, Str nm) {
+    if (list_contains_str(acc, nm)) { return acc; }
+    return acc.concat([nm]);
+}
+List(Str) dep_names(List(TomlEntry) entries) {
+    List(Str) empty = [];
+    return dep_names_acc(entries, 0, empty);
+}
+
+// ─── Manifest assembly ──────────────────────────────────────────────
+
+type Dependency = { Str name; Str path; Str version; List(Str) capabilities; Str pubkey; };
+type Manifest = {
+    Str name; Str version; Str root; List(Str) grant;
+    List(Dependency) dependencies; Bool require_signatures; Str keyring;
+    Str registry_path; Str registry_url; Str registry_pubkey;
+};
+
+Dependency build_dep(List(TomlEntry) entries, Str name) {
+    Str sec = "dependencies." + name;
+    return Dependency {
+        .name = name,
+        .path = toml_str(entries, sec, "path", ""),
+        .version = toml_str(entries, sec, "version", ""),
+        .capabilities = toml_list(entries, sec, "capabilities"),
+        .pubkey = toml_str(entries, sec, "pubkey", "")
+    };
+}
+List(Dependency) build_deps_acc(List(TomlEntry) entries, List(Str) names, Int i, List(Dependency) acc) {
+    if (i >= names.len()) { return acc; }
+    return build_deps_acc(entries, names, i + 1, acc.concat([build_dep(entries, names[i])]));
+}
+List(Dependency) build_deps(List(TomlEntry) entries) {
+    List(Dependency) empty = [];
+    return build_deps_acc(entries, dep_names(entries), 0, empty);
+}
+
+Manifest load_manifest(Str text) {
+    List(TomlEntry) entries = parse_toml(text);
+    return Manifest {
+        .name = toml_str(entries, "package", "name", ""),
+        .version = toml_str(entries, "package", "version", ""),
+        .root = toml_str(entries, "package", "root", "src/main.resid"),
+        .grant = toml_list(entries, "capabilities", "grant"),
+        .dependencies = build_deps(entries),
+        .require_signatures = toml_bool(entries, "signing", "require_signatures", false),
+        .keyring = toml_str(entries, "signing", "keyring", ""),
+        .registry_path = toml_str(entries, "registry", "path", ""),
+        .registry_url = toml_str(entries, "registry", "url", ""),
+        .registry_pubkey = toml_str(entries, "registry", "pubkey", "")
+    };
+}
+
+// ─── resid.lock (dependency content-hash pinning, spec §28) ─────────
+// Format: `<name> <version> sha256:<hex>` per line, `#` comments and
+// blank lines skipped, malformed lines rejected (a lockfile is
+// machine-written; hand edits should fail loudly — matches
+// `crates/resid-build/src/lock.rs` exactly).
+
+type LockEntry = { Str name; Str version; Str sha256; };
+
+Bool is_ws_char(Int c) {
+    if (c == 32) { return true; }
+    return c == 9;
+}
+Int skip_ws_chars(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    if (is_ws_char(str_char_at(s, i))) { return skip_ws_chars(s, i + 1, n); }
+    return i;
+}
+Int scan_nonws(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    if (is_ws_char(str_char_at(s, i))) { return i; }
+    return scan_nonws(s, i + 1, n);
+}
+List(Str) split_ws_acc(Str s, Int i, Int n, List(Str) acc) {
+    Int j = skip_ws_chars(s, i, n);
+    if (j >= n) { return acc; }
+    Int k = scan_nonws(s, j, n);
+    return split_ws_acc(s, k, n, acc.concat([str_slice(s, j, k)]));
+}
+List(Str) split_ws(Str s) {
+    List(Str) empty = [];
+    return split_ws_acc(s, 0, str_len(s), empty);
+}
+
+type LockParseResult = { Bool ok; Str err; List(LockEntry) entries; };
+
+Str lock_line_err(Int lineno) {
+    return "resid.lock line " + IntToString(lineno) + ": expected '<name> <version> sha256:<hex>'";
+}
+
+LockParseResult lock_reject(LockParseResult acc, Int lineno) {
+    return LockParseResult {.ok = false, .err = lock_line_err(lineno), .entries = acc.entries};
+}
+
+LockParseResult parse_lock_line(Str line, Int lineno, LockParseResult acc) {
+    if (!acc.ok) { return acc; }
+    Str t = str_trim(line);
+    if (t == "") { return acc; }
+    if (str_starts_with(t, "#")) { return acc; }
+    List(Str) parts = split_ws(t);
+    if (parts.len() != 3) { return lock_reject(acc, lineno); }
+    if (!str_starts_with(parts[2], "sha256:")) { return lock_reject(acc, lineno); }
+    LockEntry e = LockEntry {.name = parts[0], .version = parts[1], .sha256 = str_slice(parts[2], 7, str_len(parts[2]))};
+    return LockParseResult {.ok = true, .err = "", .entries = acc.entries.concat([e])};
+}
+LockParseResult parse_lock_acc(List(Str) lines, Int i, LockParseResult acc) {
+    if (i >= lines.len()) { return acc; }
+    return parse_lock_acc(lines, i + 1, parse_lock_line(lines[i], i + 1, acc));
+}
+LockParseResult parse_lock(Str text) {
+    List(LockEntry) empty = [];
+    LockParseResult start = LockParseResult {.ok = true, .err = "", .entries = empty};
+    return parse_lock_acc(str_split(text, "\n"), 0, start);
+}
+
+// byte/codepoint-wise Str ordering — no `<`/`>` on Str in this language
+// (only `==`/`!=`; see resid-type's binary-op rules), same helper
+// resid-why.resid/resid-pkg.resid each define locally.
+Int str_cmp_at(Str a, Str b, Int i, Int na, Int nb) {
+    Bool ea = i >= na;
+    Bool eb = i >= nb;
+    if (ea && eb) { return 0; }
+    if (ea) { return 0 - 1; }
+    if (eb) { return 1; }
+    Int ca = str_char_at(a, i);
+    Int cb = str_char_at(b, i);
+    if (ca < cb) { return 0 - 1; }
+    if (ca > cb) { return 1; }
+    return str_cmp_at(a, b, i + 1, na, nb);
+}
+Int str_cmp(Str a, Str b) {
+    return str_cmp_at(a, b, 0, str_len(a), str_len(b));
+}
+
+Int lockentry_cmp(LockEntry a, LockEntry b) {
+    return str_cmp(a.name, b.name);
+}
+List(LockEntry) take_first_le(List(LockEntry) xs, Int i, Int limit, List(LockEntry) acc) {
+    if (i >= limit) { return acc; }
+    return take_first_le(xs, i + 1, limit, acc.concat([xs[i]]));
+}
+List(LockEntry) suffix_from_le(List(LockEntry) xs, Int i) {
+    if (i >= xs.len()) { List(LockEntry) empty = []; return empty; }
+    List(LockEntry) head = [xs[i]];
+    return head.concat(suffix_from_le(xs, i + 1));
+}
+List(LockEntry) insert_sorted_le(List(LockEntry) acc, LockEntry le, Int i) {
+    if (i >= acc.len()) { return acc.concat([le]); }
+    if (lockentry_cmp(le, acc[i]) < 0) {
+        return take_first_le(acc, 0, i, []).concat([le]).concat(suffix_from_le(acc, i));
+    }
+    return insert_sorted_le(acc, le, i + 1);
+}
+List(LockEntry) sort_lock_entries_acc(List(LockEntry) xs, Int i, List(LockEntry) acc) {
+    if (i >= xs.len()) { return acc; }
+    return sort_lock_entries_acc(xs, i + 1, insert_sorted_le(acc, xs[i], 0));
+}
+List(LockEntry) sort_lock_entries(List(LockEntry) xs) {
+    List(LockEntry) empty = [];
+    return sort_lock_entries_acc(xs, 0, empty);
+}
+
+List(Str) lock_lines_acc(List(LockEntry) entries, Int i, List(Str) acc) {
+    if (i >= entries.len()) { return acc; }
+    LockEntry e = entries[i];
+    return lock_lines_acc(entries, i + 1, acc.concat([e.name + " " + e.version + " sha256:" + e.sha256]));
+}
+Str lock_to_text(List(LockEntry) entries) {
+    List(Str) lines = lock_lines_acc(sort_lock_entries(entries), 0, []);
+    Str header = "# resid.lock - generated; dependency content hashes\n";
+    if (lines.len() == 0) { return header; }
+    return header + str_join(lines, "\n") + "\n";
+}
+
+LockEntry lock_get_at(List(LockEntry) entries, Str name, Int i) {
+    if (i >= entries.len()) { return LockEntry {.name = "", .version = "", .sha256 = ""}; }
+    if (entries[i].name == name) { return entries[i]; }
+    return lock_get_at(entries, name, i + 1);
+}
+LockEntry lock_get(List(LockEntry) entries, Str name) {
+    return lock_get_at(entries, name, 0);
+}
+Bool lock_has(List(LockEntry) entries, Str name) {
+    return lock_get(entries, name).name != "";
+}
+List(LockEntry) lock_replace_acc(List(LockEntry) entries, LockEntry ne, Int i) {
+    if (i >= entries.len()) { List(LockEntry) empty = []; return empty; }
+    LockEntry cur = entries[i];
+    LockEntry nxt = if (cur.name == ne.name) { ne } else { cur };
+    List(LockEntry) head = [nxt];
+    return head.concat(lock_replace_acc(entries, ne, i + 1));
+}
+// Replace the entry named `ne.name`, or append it if new; canonical
+// (name-sorted) order either way.
+List(LockEntry) lock_set(List(LockEntry) entries, LockEntry ne) {
+    List(LockEntry) updated = if (lock_has(entries, ne.name)) { lock_replace_acc(entries, ne, 0) } else { entries.concat([ne]) };
+    return sort_lock_entries(updated);
+}
+
+// ─── CLI (verification driver) ──────────────────────────────────────
+
+Str b2s(Bool b) {
+    if (b) { return "true"; }
+    return "false";
+}
+
+Int print_deps(List(Dependency) deps, Int i) {
+    if (i >= deps.len()) { return 0; }
+    Dependency d = deps[i];
+    println("dep[" + d.name + "] path=" + d.path + " version=" + d.version
+        + " caps=" + str_join(d.capabilities, ",") + " pubkey=" + d.pubkey);
+    return print_deps(deps, i + 1);
+}
+
+Int print_lock_entries(List(LockEntry) entries, Int i) {
+    if (i >= entries.len()) { return 0; }
+    LockEntry e = entries[i];
+    println("lock[" + e.name + "] version=" + e.version + " sha256=" + e.sha256);
+    return print_lock_entries(entries, i + 1);
+}
+
+Int cmd_manifest(Str path) {
+    Manifest m = load_manifest(filesystem.read_all(path));
+    println("name=" + m.name);
+    println("version=" + m.version);
+    println("root=" + m.root);
+    println("grant=" + str_join(m.grant, ","));
+    println("require_signatures=" + b2s(m.require_signatures));
+    println("keyring=" + m.keyring);
+    println("registry_path=" + m.registry_path);
+    println("registry_url=" + m.registry_url);
+    println("registry_pubkey=" + m.registry_pubkey);
+    Int _p = print_deps(m.dependencies, 0);
+    return 0;
+}
+
+Int cmd_lock(Str path) {
+    LockParseResult r = parse_lock(filesystem.read_all(path));
+    if (!r.ok) {
+        eprintln(r.err);
+        return 1;
+    }
+    Int _p = print_lock_entries(sort_lock_entries(r.entries), 0);
+    return 0;
+}
+
+Int main() {
+    Int argc = args.count();
+    if (argc < 2) {
+        eprintln("usage: resid-manifest <resid.toml> | resid-manifest lock <resid.lock>");
+        return 2;
+    }
+    Str a1 = args.get(1);
+    if (a1 == "lock") {
+        if (argc < 3) {
+            eprintln("usage: resid-manifest lock <resid.lock>");
+            return 2;
+        }
+        return cmd_lock(args.get(2));
+    }
+    return cmd_manifest(a1);
+}

@@ -1,0 +1,414 @@
+/// resid-why.resid — Resid port of tools/resid-why (Phase C.5,
+/// PLAN-resid-only.md): residual provenance query (spec §37).
+///
+/// Reads `<artifact>.resid-notes.cbor` (written by the self-hosted
+/// driver's `write_notes_cbor`, examples/driver.resid — byte-identical to
+/// the Rust pipeline's `resid_notes`/`resid_cache::cbor` format, verified
+/// by direct comparison) and explains why each residual remains.
+///
+/// Usage:
+///   residc tools/resid-why.resid run -- <artifact> [symbol] [--kind K]
+///     [--file F] [--max N] [--json] [--summary] [--help]
+///
+/// Scope trim vs. the Rust original: malformed/truncated CBOR input is not
+/// defensively rejected (no "malformed" error path) — only a missing
+/// sidecar file is reported. A real sidecar is always produced by
+/// write_notes_cbor, so this only matters for hand-corrupted input.
+
+// ─── CBOR (RFC 8949) decoder: the exact subset resid-notes/resid-cache
+// use (unsigned integers major 0, text strings major 3, arrays major 4),
+// mirrored 1:1 against `resid_notes::from_cbor`'s byte ranges. ──────────
+
+type CborHdr = { Int pos; Int n; };
+type CborStr = { Int pos; Str text; };
+
+CborHdr cbor_read_array_header(List(Int) b, Int pos) {
+    Int byte = b[pos];
+    if (byte >= 128) { if (byte <= 151) { return CborHdr {.pos = pos + 1, .n = byte - 128}; } }
+    if (byte == 152) { return CborHdr {.pos = pos + 2, .n = b[pos + 1]}; }
+    if (byte == 153) {
+        Int v = b[pos + 1] * 256 + b[pos + 2];
+        return CborHdr {.pos = pos + 3, .n = v};
+    }
+    return CborHdr {.pos = pos + 1, .n = -1};
+}
+
+CborHdr cbor_text_len(List(Int) b, Int pos) {
+    Int byte = b[pos];
+    if (byte >= 96) { if (byte <= 119) { return CborHdr {.pos = pos + 1, .n = byte - 96}; } }
+    if (byte == 120) { return CborHdr {.pos = pos + 2, .n = b[pos + 1]}; }
+    if (byte == 121) {
+        Int v = b[pos + 1] * 256 + b[pos + 2];
+        return CborHdr {.pos = pos + 3, .n = v};
+    }
+    return CborHdr {.pos = pos + 1, .n = -1};
+}
+
+// Rebuild an ASCII Str from raw bytes[start,start+count) — exact for the
+// ASCII-only content notes carry (paths, fixed kind tags, source
+// snippets), the same convention the write side's `bytes_of` documents.
+Str bytes_to_str_acc(List(Int) b, Int i, Int end, Str acc) {
+    if (i >= end) { return acc; }
+    return bytes_to_str_acc(b, i + 1, end, acc + str_from_code(b[i]));
+}
+Str bytes_to_str(List(Int) b, Int start, Int count) {
+    return bytes_to_str_acc(b, start, start + count, "");
+}
+
+CborStr cbor_read_text(List(Int) b, Int pos) {
+    CborHdr h = cbor_text_len(b, pos);
+    Str s = bytes_to_str(b, h.pos, h.n);
+    return CborStr {.pos = h.pos + h.n, .text = s};
+}
+
+CborHdr cbor_read_uint(List(Int) b, Int pos) {
+    Int byte = b[pos];
+    Int p1 = pos + 1;
+    if (byte <= 23) { return CborHdr {.pos = p1, .n = byte}; }
+    if (byte == 24) { return CborHdr {.pos = p1 + 1, .n = b[p1]}; }
+    if (byte == 25) {
+        Int v = b[p1] * 256 + b[p1 + 1];
+        return CborHdr {.pos = p1 + 2, .n = v};
+    }
+    if (byte == 26) {
+        Int v = ((b[p1] * 256 + b[p1 + 1]) * 256 + b[p1 + 2]) * 256 + b[p1 + 3];
+        return CborHdr {.pos = p1 + 4, .n = v};
+    }
+    // byte == 27: 8-byte big-endian. Line/column counts never approach
+    // this in practice; decoded faithfully anyway.
+    Int v1 = ((b[p1] * 256 + b[p1 + 1]) * 256 + b[p1 + 2]) * 256 + b[p1 + 3];
+    Int v2 = ((b[p1 + 4] * 256 + b[p1 + 5]) * 256 + b[p1 + 6]) * 256 + b[p1 + 7];
+    Int v = v1 * 4294967296 + v2;
+    return CborHdr {.pos = p1 + 8, .n = v};
+}
+
+// One residual fact — same 5-tuple as `resid_notes::ResidualNote`.
+type Note = { Str kind; Str symbol; Int line; Int col; Str file; };
+type NoteRead = { Int pos; Note note; };
+
+// Backward compatible with 3/4/5-field sidecars (kind, symbol, line[,
+// column[, file]]) exactly like `resid_notes::from_cbor`.
+NoteRead cbor_read_note(List(Int) b, Int pos) {
+    CborHdr arrh = cbor_read_array_header(b, pos);
+    Int fields = arrh.n;
+    CborStr kind = cbor_read_text(b, arrh.pos);
+    CborStr symbol = cbor_read_text(b, kind.pos);
+    CborHdr line = cbor_read_uint(b, symbol.pos);
+    if (fields <= 3) {
+        Note nt = Note {.kind = kind.text, .symbol = symbol.text, .line = line.n, .col = 0, .file = ""};
+        return NoteRead {.pos = line.pos, .note = nt};
+    }
+    CborHdr col = cbor_read_uint(b, line.pos);
+    if (fields == 4) {
+        Note nt = Note {.kind = kind.text, .symbol = symbol.text, .line = line.n, .col = col.n, .file = ""};
+        return NoteRead {.pos = col.pos, .note = nt};
+    }
+    CborStr file = cbor_read_text(b, col.pos);
+    Note nt = Note {.kind = kind.text, .symbol = symbol.text, .line = line.n, .col = col.n, .file = file.text};
+    return NoteRead {.pos = file.pos, .note = nt};
+}
+
+List(Note) cbor_read_notes_acc(List(Int) b, Int pos, Int i, Int n, List(Note) acc) {
+    if (i >= n) { return acc; }
+    NoteRead r = cbor_read_note(b, pos);
+    return cbor_read_notes_acc(b, r.pos, i + 1, n, acc.concat([r.note]));
+}
+
+List(Note) cbor_read_notes(List(Int) b) {
+    CborHdr top = cbor_read_array_header(b, 0);
+    return cbor_read_notes_acc(b, top.pos, 0, top.n, []);
+}
+
+// ─── generic list helpers (forward accumulator, tail-recursive) ────────
+
+List(Note) take_first_acc(List(Note) xs, Int i, Int limit, List(Note) acc) {
+    if (i >= limit) { return acc; }
+    return take_first_acc(xs, i + 1, limit, acc.concat([xs[i]]));
+}
+List(Note) suffix_from_acc(List(Note) xs, Int i, Int n, List(Note) acc) {
+    if (i >= n) { return acc; }
+    return suffix_from_acc(xs, i + 1, n, acc.concat([xs[i]]));
+}
+List(Note) suffix_from(List(Note) xs, Int i) {
+    return suffix_from_acc(xs, i, xs.len(), []);
+}
+
+// ─── byte/codepoint-wise Str ordering (no `<`/`>` on Str in this
+// language — only `==`/`!=`; see resid-type's binary-op rules) ─────────
+
+Int str_cmp_at(Str a, Str b, Int i, Int na, Int nb) {
+    Bool ea = i >= na;
+    Bool eb = i >= nb;
+    if (ea && eb) { return 0; }
+    if (ea) { return 0 - 1; }
+    if (eb) { return 1; }
+    Int ca = str_char_at(a, i);
+    Int cb = str_char_at(b, i);
+    if (ca < cb) { return 0 - 1; }
+    if (ca > cb) { return 1; }
+    return str_cmp_at(a, b, i + 1, na, nb);
+}
+Int str_cmp(Str a, Str b) {
+    return str_cmp_at(a, b, 0, str_len(a), str_len(b));
+}
+
+// ─── sort notes by (file, line, column) — insertion sort; note counts
+// for one compilation are small (tens/hundreds), O(n^2) is a non-issue ──
+
+Int note_cmp(Note a, Note b) {
+    Int fc = str_cmp(a.file, b.file);
+    if (fc != 0) { return fc; }
+    if (a.line != b.line) { if (a.line < b.line) { return 0 - 1; } return 1; }
+    if (a.col != b.col) { if (a.col < b.col) { return 0 - 1; } return 1; }
+    return 0;
+}
+List(Note) insert_sorted(List(Note) acc, Note nt, Int i) {
+    if (i >= acc.len()) { return acc.concat([nt]); }
+    if (note_cmp(nt, acc[i]) < 0) {
+        return take_first_acc(acc, 0, i, []).concat([nt]).concat(suffix_from(acc, i));
+    }
+    return insert_sorted(acc, nt, i + 1);
+}
+List(Note) sort_notes_acc(List(Note) notes, Int i, List(Note) acc) {
+    if (i >= notes.len()) { return acc; }
+    return sort_notes_acc(notes, i + 1, insert_sorted(acc, notes[i], 0));
+}
+List(Note) sort_notes(List(Note) notes) {
+    return sort_notes_acc(notes, 0, []);
+}
+
+// ─── query filter ───────────────────────────────────────────────────
+
+List(Note) filter_notes_acc(List(Note) notes, Int i, Str kind, Str symbol, Str file, List(Note) acc) {
+    if (i >= notes.len()) { return acc; }
+    Note nt = notes[i];
+    Bool km = kind == "" || nt.kind == kind;
+    Bool sm = symbol == "" || str_contains(nt.symbol, symbol);
+    Bool fm = file == "" || str_contains(nt.file, file);
+    List(Note) acc2 = if (km && sm && fm) { acc.concat([nt]) } else { acc };
+    return filter_notes_acc(notes, i + 1, kind, symbol, file, acc2);
+}
+
+// ─── rendering ──────────────────────────────────────────────────────
+
+Str explain(Str kind) {
+    if (kind == "rt-binding") {
+        return "calls a runtime binding whose value is not known at compile time; provide the value as compile-time knowledge or accept the runtime call";
+    }
+    if (kind == "provider-call") {
+        return "queries an external provider (filesystem/env/git/...); grant the capability at build time with a concrete value to discharge it";
+    }
+    return "unknown residual kind";
+}
+
+Str location(Note n) {
+    if (n.file == "") { return "line " + IntToString(n.line); }
+    return n.file + ":" + IntToString(n.line) + ":" + IntToString(n.col + 1);
+}
+
+Str render_text_note(Note n) {
+    return n.symbol + " @ " + location(n) + ":\n    " + n.kind + "\n    -> " + explain(n.kind);
+}
+
+Int print_notes_text(List(Note) notes, Int i) {
+    if (i >= notes.len()) { return 0; }
+    println(render_text_note(notes[i]) + "\n");
+    return print_notes_text(notes, i + 1);
+}
+
+// per-kind counts, sorted by kind name
+type KindCount = { Str kind; Int count; };
+
+Int find_kind_idx(List(KindCount) xs, Str k, Int i) {
+    if (i >= xs.len()) { return -1; }
+    if (xs[i].kind == k) { return i; }
+    return find_kind_idx(xs, k, i + 1);
+}
+List(KindCount) bump_kind_count_acc(List(KindCount) xs, Int idx, Int i, List(KindCount) acc) {
+    if (i >= xs.len()) { return acc; }
+    KindCount cur = xs[i];
+    KindCount nxt = if (i == idx) { KindCount {.kind = cur.kind, .count = cur.count + 1} } else { cur };
+    return bump_kind_count_acc(xs, idx, i + 1, acc.concat([nxt]));
+}
+List(KindCount) bump_kind_count(List(KindCount) xs, Int idx) {
+    return bump_kind_count_acc(xs, idx, 0, []);
+}
+List(KindCount) count_kinds_acc(List(Note) notes, Int i, List(KindCount) acc) {
+    if (i >= notes.len()) { return acc; }
+    Str k = notes[i].kind;
+    Int idx = find_kind_idx(acc, k, 0);
+    List(KindCount) acc2 = if (idx < 0) { acc.concat([KindCount {.kind = k, .count = 1}]) } else { bump_kind_count(acc, idx) };
+    return count_kinds_acc(notes, i + 1, acc2);
+}
+Int kindcount_cmp(KindCount a, KindCount b) {
+    return str_cmp(a.kind, b.kind);
+}
+List(KindCount) take_first_kc(List(KindCount) xs, Int i, Int limit, List(KindCount) acc) {
+    if (i >= limit) { return acc; }
+    return take_first_kc(xs, i + 1, limit, acc.concat([xs[i]]));
+}
+List(KindCount) suffix_from_kc(List(KindCount) xs, Int i) {
+    if (i >= xs.len()) { List(KindCount) empty = []; return empty; }
+    List(KindCount) head = [xs[i]];
+    return head.concat(suffix_from_kc(xs, i + 1));
+}
+List(KindCount) insert_sorted_kc(List(KindCount) acc, KindCount kc, Int i) {
+    if (i >= acc.len()) { return acc.concat([kc]); }
+    if (kindcount_cmp(kc, acc[i]) < 0) {
+        return take_first_kc(acc, 0, i, []).concat([kc]).concat(suffix_from_kc(acc, i));
+    }
+    return insert_sorted_kc(acc, kc, i + 1);
+}
+List(KindCount) sort_kindcounts_acc(List(KindCount) xs, Int i, List(KindCount) acc) {
+    if (i >= xs.len()) { return acc; }
+    return sort_kindcounts_acc(xs, i + 1, insert_sorted_kc(acc, xs[i], 0));
+}
+List(Str) summary_lines_acc(List(KindCount) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return summary_lines_acc(xs, i + 1, acc.concat(["  " + xs[i].kind + ": " + IntToString(xs[i].count)]));
+}
+Str render_summary(List(Note) notes) {
+    List(KindCount) sorted = sort_kindcounts_acc(count_kinds_acc(notes, 0, []), 0, []);
+    List(Str) lines = summary_lines_acc(sorted, 0, []);
+    Str body = if (lines.len() == 0) { "  fully reduced: no residual notes\n" } else { str_join(lines, "\n") + "\n" };
+    return "residual summary:\n" + body;
+}
+
+// LSP Diagnostic[] (editor view). Severity 4 = Hint.
+Str hex_digit_lower(Int d) {
+    List(Str) hd = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"];
+    return hd[d];
+}
+Str hex2(Int c) {
+    return hex_digit_lower(c / 16) + hex_digit_lower(c & 15);
+}
+Str json_escape_acc(Str s, Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(s, i);
+    Str piece = if (c == 34) { "\\\"" }
+        else if (c == 92) { "\\\\" }
+        else if (c == 10) { "\\n" }
+        else if (c == 13) { "\\r" }
+        else if (c == 9) { "\\t" }
+        else if (c < 32) { "\\u00" + hex2(c) }
+        else { str_from_code(c) };
+    return json_escape_acc(s, i + 1, n, acc + piece);
+}
+Str json_escape(Str s) {
+    return json_escape_acc(s, 0, str_len(s), "");
+}
+
+Str lsp_item(Note n) {
+    // `n.line - 0` (not bare `n.line`): the self-hosted checker infers a
+    // struct field access as a differently-spelled numeric type ("Int")
+    // than the arithmetic result of the other arm ("Int(64)"), and
+    // if-expression unification there is a literal string compare — see
+    // typecheck.resid's "if branches differ" message. Forcing both arms
+    // through the same arithmetic shape sidesteps it.
+    Int line0 = if (n.line > 0) { n.line - 1 } else { n.line - 0 };
+    Int col0 = if (n.file == "") { 0 } else { n.col };
+    Str msg = n.symbol + " @ " + location(n) + ": " + explain(n.kind);
+    Str body = "\"range\":{\"start\":{\"line\":" + IntToString(line0) + ",\"character\":" + IntToString(col0)
+        + "},\"end\":{\"line\":" + IntToString(line0) + ",\"character\":" + IntToString(col0)
+        + "}},\"severity\":4,\"code\":\"" + json_escape(n.kind) + "\",\"source\":\"resid-why\",\"message\":\""
+        + json_escape(msg) + "\"}";
+    if (n.file == "") { return "{" + body; }
+    return "{\"uri\":\"file://" + json_escape(n.file) + "\"," + body;
+}
+List(Str) lsp_items_acc(List(Note) notes, Int i, List(Str) acc) {
+    if (i >= notes.len()) { return acc; }
+    return lsp_items_acc(notes, i + 1, acc.concat([lsp_item(notes[i])]));
+}
+Str render_lsp_json(List(Note) notes) {
+    return "[\n  " + str_join(lsp_items_acc(notes, 0, []), ",\n  ") + "\n]\n";
+}
+
+// ─── CLI ────────────────────────────────────────────────────────────
+
+Str usage_text() {
+    return "usage: resid-why <artifact> [symbol] [--kind K] [--file F] [--max N] [--json] [--summary] [--help]";
+}
+
+Bool str_is_int_safe(Str s) {
+    if (s == "") { return false; }
+    return str_is_int(s);
+}
+Int parse_int_or(Str s, Int fallback) {
+    if (str_is_int_safe(s)) { return str_parse_int(s); }
+    return fallback;
+}
+
+type Cli = { Str artifact; Str kind; Str symbol; Str file; Int max; Bool as_json; Bool summary; Bool help; };
+
+Cli parse_cli_acc(Int i, Int n, Str artifact, Str kind, Str symbol, Str file, Int max, Bool as_json, Bool summary, Bool help) {
+    if (help) { return Cli {.artifact = artifact, .kind = kind, .symbol = symbol, .file = file, .max = max, .as_json = as_json, .summary = summary, .help = true}; }
+    if (i >= n) { return Cli {.artifact = artifact, .kind = kind, .symbol = symbol, .file = file, .max = max, .as_json = as_json, .summary = summary, .help = help}; }
+    Str a = args.get(i);
+    if (a == "--help") { return Cli {.artifact = artifact, .kind = kind, .symbol = symbol, .file = file, .max = max, .as_json = as_json, .summary = summary, .help = true}; }
+    if (a == "--json") { return parse_cli_acc(i + 1, n, artifact, kind, symbol, file, max, true, summary, help); }
+    if (a == "--summary") { return parse_cli_acc(i + 1, n, artifact, kind, symbol, file, max, as_json, true, help); }
+    if (a == "--kind") {
+        Str v = if (i + 1 < n) { args.get(i + 1) } else { kind };
+        return parse_cli_acc(i + 2, n, artifact, v, symbol, file, max, as_json, summary, help);
+    }
+    if (a == "--file") {
+        Str v = if (i + 1 < n) { args.get(i + 1) } else { file };
+        return parse_cli_acc(i + 2, n, artifact, kind, symbol, v, max, as_json, summary, help);
+    }
+    if (a == "--max") {
+        Int v = if (i + 1 < n) { parse_int_or(args.get(i + 1), max) } else { max };
+        return parse_cli_acc(i + 2, n, artifact, kind, symbol, file, v, as_json, summary, help);
+    }
+    return parse_cli_acc(i + 1, n, artifact, kind, a, file, max, as_json, summary, help);
+}
+
+// A nested if-expression inside an if-arm that also has a preceding local
+// binding hits a real self-hosted codegen bug (malformed phi nodes) — see
+// git history / PROGRESS.md for the class of bug ("chains of temporaries"
+// + nested-if-in-arm). Pulled out as an ordinary function body (plain
+// statements, not a nested if-expression) to avoid it, rather than debug
+// codegen.resid's LLVM emission here.
+List(Note) clamp_notes(List(Note) sorted, Int max) {
+    if (max < 0) { return sorted; }
+    Int n = sorted.len();
+    Int cap = if (max < n) { max } else { n };
+    return take_first_acc(sorted, 0, cap, []);
+}
+
+Int main() {
+    Int argc = args.count();
+    if (argc < 2) {
+        eprintln(usage_text());
+        return 2;
+    }
+    Str artifact = args.get(1);
+    Cli cli = parse_cli_acc(2, argc, artifact, "", "", "", 0 - 1, false, false, false);
+    if (cli.help) {
+        println(usage_text());
+        return 0;
+    }
+    Str sidecar = cli.artifact + ".resid-notes.cbor";
+    if (!filesystem.exists(sidecar)) {
+        eprintln("resid-why: no readable notes sidecar for '" + cli.artifact + "' (expected '" + sidecar + "')");
+        return 1;
+    }
+    List(Note) notes = cbor_read_notes(filesystem.read_bytes(sidecar));
+    List(Note) sorted = sort_notes(filter_notes_acc(notes, 0, cli.kind, cli.symbol, cli.file, []));
+    List(Note) shown = clamp_notes(sorted, cli.max);
+
+    if (cli.as_json) { print(render_lsp_json(shown)); return 0; }
+    if (cli.summary) { print(render_summary(shown)); return 0; }
+
+    Int total = notes.len();
+    Int _p = print_notes_text(shown, 0);
+    if (shown.len() == 0) {
+        if (total > 0) {
+            println("no residual notes match the query (" + IntToString(total) + " total scanned)");
+        } else {
+            println("fully reduced: no residual notes");
+        }
+    } else {
+        println(IntToString(shown.len()) + "/" + IntToString(total) + " residual notes shown");
+    }
+    return 0;
+}

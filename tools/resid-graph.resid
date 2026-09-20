@@ -1,0 +1,415 @@
+/// resid-graph.resid — Resid port of tools/resid-graph (Phase C.6,
+/// PLAN-resid-only.md). Call-graph extraction for a single Resid source
+/// file (spec §37): reports, per top-level function, which other
+/// top-level functions it calls.
+///
+/// Scope note (deliberate, mirrors the A.6 import-namespacing boundary):
+/// single-file only. The Rust original resolves multi-file `import ...
+/// as M` programs via a full AST (`resid_parser::resolve_unit`); the
+/// self-hosted toolchain does not resolve imports yet (A.6, still open),
+/// so this tool analyzes exactly the functions defined in the one file
+/// given on the command line, same restriction the bootstrap driver
+/// itself already lives under.
+///
+/// Design: a single token-based forward scan (built on the same `Tok`/
+/// `lex_tok` model examples/typecheck.resid uses for its own real
+/// call-graph, A.1a) — never slices out function-body substrings; it
+/// walks brace/paren depth directly over the token stream and records a
+/// candidate callee whenever an `ident` token is immediately followed by
+/// `(` and not immediately preceded by `.` (excludes method/provider
+/// calls, same rule `scan_calls_tok` uses). Candidates are filtered down
+/// to defined top-level function names once the whole file is known,
+/// exactly mirroring the Rust version's `callees.retain(|c|
+/// defined.contains(c))`.
+///
+/// Usage: residc tools/resid-graph.resid run -- <file.resid> [--dot]
+
+// ─── Character classification / lexer primitives (self-contained copy —
+// same duplication convention examples/typecheck.resid and
+// examples/codegen.resid already use for shared lexer helpers) ────────
+
+Bool is_ws(Int c) {
+    if (c == 32) { return true; }
+    if (c == 9) { return true; }
+    if (c == 13) { return true; }
+    if (c == 10) { return true; }
+    return false;
+}
+
+Bool is_alpha(Int c) {
+    if (c >= 65) { if (c <= 90) { return true; } }
+    if (c >= 97) { if (c <= 122) { return true; } }
+    if (c >= 128) { return true; }
+    return false;
+}
+
+Bool is_digit(Int c) {
+    if (c >= 48) { if (c <= 57) { return true; } }
+    return false;
+}
+
+Bool is_alnum(Int c) {
+    if (is_alpha(c)) { return true; }
+    if (is_digit(c)) { return true; }
+    if (c == 95) { return true; }
+    return false;
+}
+
+Bool is_hex(Int c) {
+    if (is_digit(c)) { return true; }
+    if (c >= 65) { if (c <= 70) { return true; } }
+    if (c >= 97) { if (c <= 102) { return true; } }
+    return false;
+}
+
+Bool is_oct(Int c) {
+    if (c >= 48) { if (c <= 55) { return true; } }
+    return false;
+}
+
+Int char_at(Str s, Int i) { return str_char_at(s, i); }
+Int char_next(Str s, Int i) { Int k = i + 1; return str_char_at(s, k); }
+Int char_next2(Str s, Int i) { Int m = i + 2; return str_char_at(s, m); }
+Int str_len_1(Str s) { return str_len(s); }
+
+Int skip_ws(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    if (is_ws(str_char_at(s, i))) { return skip_ws(s, i + 1, n); }
+    return i;
+}
+
+Int skip_line_comment(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    if (str_char_at(s, i) == 10) { return i; }
+    return skip_line_comment(s, i + 1, n);
+}
+
+Int skip_block_comment(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (c == 42) {
+        if (char_next(s, i) == 47) { return i + 2; }
+    }
+    return skip_block_comment(s, i + 1, n);
+}
+
+Int skip_all(Str s, Int i, Int n) {
+    Int j = skip_ws(s, i, n);
+    if (j >= n) { return j; }
+    Int c = char_at(s, j);
+    if (c == 47) {
+        Int c2 = char_next(s, j);
+        if (c2 == 47) { return skip_all(s, skip_line_comment(s, j + 2, n), n); }
+        if (c2 == 42) { return skip_all(s, skip_block_comment(s, j + 2, n), n); }
+    }
+    return j;
+}
+
+Int scan_ident(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    if (is_alnum(str_char_at(s, i))) { return scan_ident(s, i + 1, n); }
+    return i;
+}
+
+Int scan_digits(Str s, Int i, Int n, Int base) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (base == 2) { if (c == 48) { return scan_digits(s, i + 1, n, base); } if (c == 49) { return scan_digits(s, i + 1, n, base); } return i; }
+    if (base == 8) { if (is_oct(c)) { return scan_digits(s, i + 1, n, base); } return i; }
+    if (base == 10) { if (is_digit(c)) { return scan_digits(s, i + 1, n, base); } return i; }
+    if (base == 16) { if (is_hex(c)) { return scan_digits(s, i + 1, n, base); } return i; }
+    return i;
+}
+
+Int scan_string(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (c == 34) { return i + 1; }
+    if (c == 92) { return scan_string(s, i + 2, n); }
+    return scan_string(s, i + 1, n);
+}
+
+Int scan_fstring(Str s, Int i, Int n, Int depth) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (c == 92) { return scan_fstring(s, i + 2, n, depth); }
+    if (c == 123) { return scan_fstring(s, i + 1, n, depth + 1); }
+    if (c == 125) { return scan_fstring(s, i + 1, n, 0); }
+    if (c == 34) { if (depth == 0) { return i + 1; } }
+    return scan_fstring(s, i + 1, n, depth);
+}
+
+// ─── Token model ────────────────────────────────────────────────
+
+type Tok = { Int pos; Str text; Str kind; };
+
+Tok lex_op2(Str s, Int pos, Int n) {
+    Int c = char_at(s, pos);
+    Int c2 = char_next(s, pos);
+    if (c == 46) {
+        if (c2 == 46) { return Tok {.pos = pos + 2, .text = "..", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = ".", .kind = "op"};
+    }
+    if (c == 60) {
+        if (c2 == 61) { return Tok {.pos = pos + 2, .text = "<=", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = "<", .kind = "op"};
+    }
+    if (c == 62) {
+        if (c2 == 61) { return Tok {.pos = pos + 2, .text = ">=", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = ">", .kind = "op"};
+    }
+    if (c == 61) {
+        if (c2 == 61) { return Tok {.pos = pos + 2, .text = "==", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = "=", .kind = "op"};
+    }
+    if (c == 33) {
+        if (c2 == 61) { return Tok {.pos = pos + 2, .text = "!=", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = "!", .kind = "op"};
+    }
+    if (c == 38) {
+        if (c2 == 38) { return Tok {.pos = pos + 2, .text = "&&", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = "&", .kind = "op"};
+    }
+    if (c == 124) {
+        if (c2 == 124) { return Tok {.pos = pos + 2, .text = "||", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = "|", .kind = "op"};
+    }
+    if (c == 43) { return Tok {.pos = pos + 1, .text = "+", .kind = "op"}; }
+    if (c == 45) { return Tok {.pos = pos + 1, .text = "-", .kind = "op"}; }
+    if (c == 42) { return Tok {.pos = pos + 1, .text = "*", .kind = "op"}; }
+    if (c == 47) { return Tok {.pos = pos + 1, .text = "/", .kind = "op"}; }
+    if (c == 37) { return Tok {.pos = pos + 1, .text = "%", .kind = "op"}; }
+    if (c == 63) { return Tok {.pos = pos + 1, .text = "?", .kind = "op"}; }
+    if (c == 58) { return Tok {.pos = pos + 1, .text = ":", .kind = "op"}; }
+    if (c == 44) { return Tok {.pos = pos + 1, .text = ",", .kind = "op"}; }
+    if (c == 59) { return Tok {.pos = pos + 1, .text = ";", .kind = "op"}; }
+    if (c == 40) { return Tok {.pos = pos + 1, .text = "(", .kind = "op"}; }
+    if (c == 41) { return Tok {.pos = pos + 1, .text = ")", .kind = "op"}; }
+    if (c == 123) { return Tok {.pos = pos + 1, .text = "{", .kind = "op"}; }
+    if (c == 125) { return Tok {.pos = pos + 1, .text = "}", .kind = "op"}; }
+    if (c == 91) { return Tok {.pos = pos + 1, .text = "[", .kind = "op"}; }
+    if (c == 93) { return Tok {.pos = pos + 1, .text = "]", .kind = "op"}; }
+    if (c == 64) { return Tok {.pos = pos + 1, .text = "@", .kind = "op"}; }
+    return Tok {.pos = pos + 1, .text = "", .kind = "op"};
+}
+
+Tok lex_tok(Str s, Int pos) {
+    Int n = str_len_1(s);
+    Int j = skip_all(s, pos, n);
+    if (j >= n) { return Tok {.pos = j, .text = "", .kind = "eof"}; }
+    Int c = char_at(s, j);
+    Int c2 = char_next(s, j);
+    if (c == 102) { if (c2 == 34) { Int e = scan_fstring(s, j + 2, n, 0); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "fstring"}; } }
+    if (c == 114) { if (c2 == 34) { Int e = scan_string(s, j + 2, n); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "raw"}; } }
+    if (c == 98) { if (c2 == 34) { Int e = scan_string(s, j + 2, n); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "bytes"}; } }
+    if (c == 34) { Int e = scan_string(s, j + 1, n); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "str"}; }
+    if (c == 39) { Int k = j + 3; return Tok {.pos = k, .text = str_slice(s, j, k), .kind = "char"}; }
+    if (is_digit(c)) {
+        if (c == 48) {
+            if (c2 == 120) { Int e = scan_digits(s, j + 2, n, 16); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "int"}; }
+            if (c2 == 98) { Int e = scan_digits(s, j + 2, n, 2); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "int"}; }
+            if (c2 == 111) { Int e = scan_digits(s, j + 2, n, 8); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "int"}; }
+        }
+        Int e = scan_digits(s, j, n, 10);
+        if (char_at(s, e) == 46) { if (char_next(s, e) != 46) { Int ef = scan_digits(s, e + 1, n, 10); return Tok {.pos = ef, .text = str_slice(s, j, ef), .kind = "float"}; } }
+        return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "int"};
+    }
+    if (is_alpha(c)) { Int e = scan_ident(s, j, n); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "ident"}; }
+    if (c == 95) { Int e = scan_ident(s, j, n); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "ident"}; }
+    if (c == 35) { return Tok {.pos = j + 8, .text = "#location", .kind = "op"}; }
+    return lex_op2(s, j, n);
+}
+
+// ─── generic helpers ────────────────────────────────────────────
+
+Bool name_in_list(List(Str) names, Int i, Str target) {
+    Int n = names.len();
+    if (i >= n) { return false; }
+    if (names[i] == target) { return true; }
+    return name_in_list(names, i + 1, target);
+}
+
+List(Str) csv_split_or_empty(Str csv) {
+    if (csv == "") { List(Str) empty = []; return empty; }
+    return str_split(csv, ",");
+}
+
+// ─── single-pass token scan: top-level decls + per-function call scan ──
+
+type Body = { Int end_pos; List(Str) callees; };
+
+Body scan_body(Str s, Int pos, Int depth, Str prev, List(Str) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return Body {.end_pos = t.pos, .callees = acc}; }
+    if (t.text == "{") { return scan_body(s, t.pos, depth + 1, t.text, acc); }
+    if (t.text == "}") {
+        if (depth == 1) { return Body {.end_pos = t.pos, .callees = acc}; }
+        return scan_body(s, t.pos, depth - 1, t.text, acc);
+    }
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.text == "(") {
+            if (prev != ".") { return scan_body(s, t.pos, depth, t.text, acc.concat([t.text])); }
+        }
+    }
+    return scan_body(s, t.pos, depth, t.text, acc);
+}
+
+Int skip_balanced_parens(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t.pos; }
+    if (t.text == "(") { return skip_balanced_parens(s, t.pos, depth + 1); }
+    if (t.text == ")") {
+        if (depth == 1) { return t.pos; }
+        return skip_balanced_parens(s, t.pos, depth - 1);
+    }
+    return skip_balanced_parens(s, t.pos, depth);
+}
+
+// Skips a `type ...;` or `import ...;` top-level statement: any of
+// ( { [ opens, matching close, terminating `;` only once fully unwound.
+Int skip_to_toplevel_semi(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t.pos; }
+    if (t.text == "{") { return skip_to_toplevel_semi(s, t.pos, depth + 1); }
+    if (t.text == "(") { return skip_to_toplevel_semi(s, t.pos, depth + 1); }
+    if (t.text == "[") { return skip_to_toplevel_semi(s, t.pos, depth + 1); }
+    if (t.text == "}") { return skip_to_toplevel_semi(s, t.pos, depth - 1); }
+    if (t.text == ")") { return skip_to_toplevel_semi(s, t.pos, depth - 1); }
+    if (t.text == "]") { return skip_to_toplevel_semi(s, t.pos, depth - 1); }
+    if (t.text == ";") {
+        if (depth == 0) { return t.pos; }
+        return skip_to_toplevel_semi(s, t.pos, depth);
+    }
+    return skip_to_toplevel_semi(s, t.pos, depth);
+}
+
+type Scan = { List(Str) names; List(Str) raws; };
+
+Scan scan_toplevel(Str s, Int pos, Scan acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return acc; }
+    if (t.text == "pub") { return scan_toplevel(s, t.pos, acc); }
+    if (t.text == "type") { return scan_toplevel(s, skip_to_toplevel_semi(s, t.pos, 0), acc); }
+    if (t.text == "import") { return scan_toplevel(s, skip_to_toplevel_semi(s, t.pos, 0), acc); }
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        Int pos_after_type = if (t2.text == "(") { skip_balanced_parens(s, t2.pos, 1) } else { t.pos };
+        Tok t3 = lex_tok(s, pos_after_type);
+        if (t3.kind != "ident") { return scan_toplevel(s, t.pos, acc); }
+        Tok t4 = lex_tok(s, t3.pos);
+        if (t4.text != "(") { return scan_toplevel(s, t3.pos, acc); }
+        Tok t5 = lex_tok(s, skip_balanced_parens(s, t4.pos, 1));
+        if (t5.text != "{") { return scan_toplevel(s, t5.pos, acc); }
+        Body b = scan_body(s, t5.pos, 1, "", []);
+        Scan acc2 = Scan {.names = acc.names.concat([t3.text]), .raws = acc.raws.concat([str_join(b.callees, ",")])};
+        return scan_toplevel(s, b.end_pos, acc2);
+    }
+    return scan_toplevel(s, t.pos, acc);
+}
+
+Scan scan_file(Str s) {
+    Scan empty = Scan {.names = [], .raws = []};
+    return scan_toplevel(s, 0, empty);
+}
+
+// ─── filtering / dedupe / rendering ─────────────────────────────
+
+List(Str) filter_defined_acc(List(Str) items, Int i, List(Str) defined, List(Str) acc) {
+    Int n = items.len();
+    if (i >= n) { return acc; }
+    if (name_in_list(defined, 0, items[i])) { return filter_defined_acc(items, i + 1, defined, acc.concat([items[i]])); }
+    return filter_defined_acc(items, i + 1, defined, acc);
+}
+
+List(Str) dedupe_sorted_acc(List(Str) sorted, Int i, Str last, Bool have_last, List(Str) acc) {
+    Int n = sorted.len();
+    if (i >= n) { return acc; }
+    Str cur = sorted[i];
+    if (have_last) { if (cur == last) { return dedupe_sorted_acc(sorted, i + 1, last, true, acc); } }
+    return dedupe_sorted_acc(sorted, i + 1, cur, true, acc.concat([cur]));
+}
+
+List(Str) callees_for(Str raw_csv, List(Str) defined) {
+    List(Str) filtered = filter_defined_acc(csv_split_or_empty(raw_csv), 0, defined, []);
+    return dedupe_sorted_acc(list_sort_strs(filtered), 0, "", false, []);
+}
+
+Str raw_for_name(Str fname, List(Str) names, List(Str) raws, Int i) {
+    if (names[i] == fname) { return raws[i]; }
+    return raw_for_name(fname, names, raws, i + 1);
+}
+
+List(Str) append_callee_lines(List(Str) acc, List(Str) callees, Int i) {
+    Int n = callees.len();
+    if (i >= n) { return acc; }
+    return append_callee_lines(acc.concat(["  -> " + callees[i]]), callees, i + 1);
+}
+
+List(Str) render_text_lines_acc(List(Str) sorted_names, Int i, List(Str) names, List(Str) raws, List(Str) acc) {
+    Int n = sorted_names.len();
+    if (i >= n) { return acc; }
+    Str fname = sorted_names[i];
+    List(Str) callees = callees_for(raw_for_name(fname, names, raws, 0), names);
+    List(Str) with_name = acc.concat([fname]);
+    List(Str) with_maybe_none = if (callees.len() == 0) { with_name.concat(["  (no calls)"]) } else { with_name };
+    List(Str) with_callees = append_callee_lines(with_maybe_none, callees, 0);
+    return render_text_lines_acc(sorted_names, i + 1, names, raws, with_callees);
+}
+
+Str render_text(List(Str) sorted_names, List(Str) names, List(Str) raws) {
+    List(Str) lines = render_text_lines_acc(sorted_names, 0, names, raws, []);
+    if (lines.len() == 0) { return ""; }
+    return str_join(lines, "\n") + "\n";
+}
+
+List(Str) append_node_lines(List(Str) acc, List(Str) names, Int i) {
+    Int n = names.len();
+    if (i >= n) { return acc; }
+    return append_node_lines(acc.concat(["    \"" + names[i] + "\";"]), names, i + 1);
+}
+
+List(Str) append_edge_lines_one(List(Str) acc, Str caller, List(Str) callees, Int i) {
+    Int n = callees.len();
+    if (i >= n) { return acc; }
+    return append_edge_lines_one(acc.concat(["    \"" + caller + "\" -> \"" + callees[i] + "\";"]), caller, callees, i + 1);
+}
+
+List(Str) append_edge_lines_all(List(Str) acc, List(Str) sorted_names, List(Str) names, List(Str) raws, Int i) {
+    Int n = sorted_names.len();
+    if (i >= n) { return acc; }
+    Str caller = sorted_names[i];
+    List(Str) callees = callees_for(raw_for_name(caller, names, raws, 0), names);
+    return append_edge_lines_all(append_edge_lines_one(acc, caller, callees, 0), sorted_names, names, raws, i + 1);
+}
+
+Str render_dot(List(Str) sorted_names, List(Str) names, List(Str) raws) {
+    List(Str) header = ["digraph calls {", "    rankdir=LR;"];
+    List(Str) with_nodes = append_node_lines(header, sorted_names, 0);
+    List(Str) with_edges = append_edge_lines_all(with_nodes, sorted_names, names, raws, 0);
+    return str_join(with_edges.concat(["}"]), "\n") + "\n";
+}
+
+// ─── CLI ──────────────────────────────────────────────────────
+
+type CliArgs = { Str path; Bool dot; };
+
+CliArgs parse_args_acc(Int i, Int n, Str path, Bool dot) {
+    if (i >= n) { return CliArgs {.path = path, .dot = dot}; }
+    Str a = args.get(i);
+    if (a == "--dot") { return parse_args_acc(i + 1, n, path, true); }
+    return parse_args_acc(i + 1, n, a, dot);
+}
+
+Int main() {
+    CliArgs cli = parse_args_acc(1, args.count(), "", false);
+    if (cli.path == "") {
+        eprintln("usage: resid-graph <file.resid> [--dot]");
+        return 1;
+    }
+    Scan sc = scan_file(filesystem.read_all(cli.path));
+    List(Str) sorted_names = list_sort_strs(sc.names);
+    Str out = if (cli.dot) { render_dot(sorted_names, sc.names, sc.raws) } else { render_text(sorted_names, sc.names, sc.raws) };
+    print(out);
+    return 0;
+}

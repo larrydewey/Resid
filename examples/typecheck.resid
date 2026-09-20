@@ -2655,6 +2655,11 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
                         if (m.text == "read_handle") { return ERes {.pos = a.pos, .ty = "Str", .err = ""}; }
                         if (m.text == "close") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "exists") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
+                        if (m.text == "list_dir") { return ERes {.pos = a.pos, .ty = "List(Str)", .err = ""}; }
+                        if (m.text == "read_bytes") { return ERes {.pos = a.pos, .ty = "List(Int)", .err = ""}; }
+                        if (m.text == "write_bytes") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
+                        if (m.text == "is_dir") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
+                        if (m.text == "create_dir") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                     }
                     if (t.text == "args") {
                         if (m.text == "count") { return ERes {.pos = a.pos, .ty = "Int", .err = ""}; }
@@ -3492,6 +3497,8 @@ Bool grant_readonly_only(Str caps_csv, Str family) {
 
 Bool is_write_verb(Str family, Str verb) {
     if (family == "filesystem" && verb == "write_all") { return true; }
+    if (family == "filesystem" && verb == "write_bytes") { return true; }
+    if (family == "filesystem" && verb == "create_dir") { return true; }
     if (family == "process" && verb == "run") { return true; }
     return false;
 }
@@ -3904,6 +3911,12 @@ Str check_readonly_writes(Str body, Str ceiling) {
     if (provider_verb_tok(body, 0, "filesystem", "write_all", "") && grant_readonly_only(ceiling, "filesystem")) {
         return "provider call `filesystem.write_all` is a write operation, but only a read-only grant of capability `filesystem` is available here [" + fmt_caps(ceiling) + "] (capability modes only restrict, never amplify)";
     }
+    if (provider_verb_tok(body, 0, "filesystem", "write_bytes", "") && grant_readonly_only(ceiling, "filesystem")) {
+        return "provider call `filesystem.write_bytes` is a write operation, but only a read-only grant of capability `filesystem` is available here [" + fmt_caps(ceiling) + "] (capability modes only restrict, never amplify)";
+    }
+    if (provider_verb_tok(body, 0, "filesystem", "create_dir", "") && grant_readonly_only(ceiling, "filesystem")) {
+        return "provider call `filesystem.create_dir` is a write operation, but only a read-only grant of capability `filesystem` is available here [" + fmt_caps(ceiling) + "] (capability modes only restrict, never amplify)";
+    }
     if (provider_verb_tok(body, 0, "process", "run", "") && grant_readonly_only(ceiling, "process")) {
         return "provider call `process.run` is a write operation, but only a read-only grant of capability `process` is available here [" + fmt_caps(ceiling) + "] (capability modes only restrict, never amplify)";
     }
@@ -4083,6 +4096,10 @@ Bool is_prov_verb_filesystem(Str v) {
     if (v == "open") { return true; }
     if (v == "read_handle") { return true; }
     if (v == "close") { return true; }
+    if (v == "read_bytes") { return true; }
+    if (v == "write_bytes") { return true; }
+    if (v == "is_dir") { return true; }
+    if (v == "create_dir") { return true; }
     return false;
 }
 

@@ -3971,9 +3971,13 @@ impl<'ctx> CodeGen<'ctx> {
     ) -> Result<Val<'ctx>, String> {
         let rt_name = match (provider.0.as_str(), verb.0.as_str()) {
             ("filesystem", "exists") => "resid_fs_exists",
+            ("filesystem", "is_dir") => "resid_fs_is_dir",
+            ("filesystem", "create_dir") => "resid_fs_create_dir_all",
             ("filesystem", "list_dir") => "resid_fs_list_dir",
             ("filesystem", "read_all") => "resid_fs_read_all",
             ("filesystem", "write_all") => "resid_fs_write_all",
+            ("filesystem", "read_bytes") => "resid_fs_read_bytes",
+            ("filesystem", "write_bytes") => "resid_fs_write_bytes",
             ("filesystem", "open") => "resid_fs_open",
             ("filesystem", "read_handle") => "resid_fs_read_handle",
             ("filesystem", "close") => "resid_fs_close",
@@ -4400,9 +4404,13 @@ impl<'ctx> CodeGen<'ctx> {
         // Trusted providers (spec §32): filesystem, environment, git.
         // Names must match the `resid_<provider>_<verb>` helpers in resid_rt.c.
         self.decl_rt("resid_fs_exists", vec![ptr.into()], i8t.into());
+        self.decl_rt("resid_fs_is_dir", vec![ptr.into()], i8t.into());
+        self.decl_rt("resid_fs_create_dir_all", vec![ptr.into()], i8t.into());
         self.decl_rt("resid_fs_list_dir", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_fs_read_all", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_fs_write_all", vec![ptr.into(), ptr.into()], i8t.into());
+        self.decl_rt("resid_fs_read_bytes", vec![ptr.into()], ptr.into());
+        self.decl_rt("resid_fs_write_bytes", vec![ptr.into(), ptr.into()], i8t.into());
         self.decl_rt("resid_fs_open", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_fs_read_handle", vec![ptr.into()], ptr.into());
         self.decl_rt("resid_fs_close", vec![ptr.into()], i8t.into());

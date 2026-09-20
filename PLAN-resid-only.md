@@ -1025,13 +1025,269 @@ mechanism, not two), retire `growable.rs` into it, per plan.
   (struct-box reuse, field_growable generalizer) and mechanism 2 (the
   forward-reachability final-drop pass) — neither wired; defer until E.1's
   oracle is the wired substrate, then measure`bootstrap_driver_self_compile_fixed_point` memory.
-- [ ] C.1 Port `merge_driver.py` to Resid
-- [ ] C.2 Port `resid-notes` + `resid-cache`
-- [ ] C.3 Port `resid-diag` caret rendering
+- [x] C.1 Port `merge_driver.py` to Resid — **DONE**. `tools/merge_driver.resid`
+      (residc pipeline, no Rust). Pure recursive/functional port (no
+      reassignment): `decl_ranges`/`drop_decls`/`cut_main` reimplemented as a
+      hand-rolled scanner matching the Python `DECL` regex's actual behavior
+      (verified the `Str`/`Int`/`Bool`/`Void` literal alternatives are dead
+      code for every real line in `codegen.resid`/`typecheck.resid` — the
+      generic `[A-Z][A-Za-z]*` branch already covers them identically; only
+      `List(Str)` needs literal-casing). `rename_chunk`'s 16 sequential
+      `\b`-anchored regex substitutions collapsed into one identifier-tokenizing
+      pass (equivalent since none of the 16 names is a `\b`-adjacent substring
+      of another). List-building uses the forward-accumulator
+      `acc.concat([x])` + tail self-call idiom throughout (matches
+      `growable.rs`'s proven bare-`List(T)`-parameter GrowBuf case, avoids
+      the O(n^2)/deep-recursion mistakes this same file documents elsewhere).
+      Verified byte-identical output against `tools/merge_driver.py` on the
+      real `examples/{codegen,typecheck,driver}.resid` (fair A/B from the
+      same pristine input; only diff is the intentional banner line naming
+      the new tool). Regenerated `examples/driver.resid` compiles clean
+      (`emit-ir`) and `bootstrap_driver_compiles_and_rejects` e2e passes.
+      `tools/merge_driver.py` kept as reference/fallback, not deleted.
+- [x] C.2 Port `resid-notes` CBOR sidecar — **DONE, with a real new
+      language capability added along the way**. Discovered mid-port that
+      byte-exact CBOR is impossible with any existing Resid primitive:
+      `Str` always UTF-8-*encodes* on write (`str_from_code(153)` writes
+      as 2 raw bytes, `c2 99`, verified with `xxd`) — and this was true of
+      *both* pipelines; `resid_notes::write_notes_file` was always native
+      Rust `std::fs::write`, never a Resid-language call at all. Added
+      `filesystem.write_bytes(Str, List(Int)) -> Bool` /
+      `filesystem.read_bytes(Str) -> List(Int)` (each element 0-255) as a
+      new provider capability — real language work, not a tool port:
+      `resid_fs_write_bytes`/`resid_fs_read_bytes` in
+      `crates/residc/resid_rt.c`; `provider_verbs()` + `is_write_verb` in
+      `crates/resid-type/src/lib.rs`; dispatch + `decl_rt` in
+      `crates/resid-codegen/src/lib.rs`; mirrored in the self-hosted
+      pipeline (`is_prov_verb_filesystem`/`is_write_verb`/
+      `check_readonly_writes` in `examples/typecheck.resid`; `p_sym`/
+      `p_rty`/`p_nargs` + `hdr_core` declares in `examples/codegen.resid`
+      — the `@resid_fs_` prefix already made `provider_family_of_line`'s
+      capability-guard detection generic, no change needed there). Tests:
+      `resid-type::check_program_filesystem_write_bytes_and_read_bytes`,
+      `residc` e2e `run_fs_write_bytes_roundtrip` (asserts exact on-disk
+      bytes, not just the round-trip). Then ported the actual CBOR codec
+      (`crates/resid-cache/src/lib.rs`'s `cbor` module — uint/header/text,
+      major types 0/3/4 only, the exact subset notes need) plus
+      `collect_residual_notes`/`ResidualNote`/`to_cbor` as new functions
+      in `examples/driver.resid`'s tail (`cbor_write_*`, `Note`,
+      `collect_residual_notes`, `write_notes_cbor`, wired into `main()`
+      alongside the existing `write_provenance`). **Verified byte-identical
+      output against the real Rust `residc build` on multiple fixtures**
+      (single-note and multi-note cases, `diff` clean) — including
+      reproducing a pre-existing Rust-side pattern bug faithfully (the
+      hardcoded `"env."` pattern never matches the real `environment.`
+      provider name, so `environment.get(...)` calls are silently never
+      noted by *either* pipeline; not fixed here, out of scope, noted for
+      whoever eventually fixes the Rust reference).
+      **Scope trim**: the "previously-discharged notes" `eprintln`
+      diagnostic (`note_residual`'s prior-vs-new comparison) is not
+      ported — print-only, doesn't touch the written artifact.
+      **`resid-cache` itself (the `Store`/`KnowledgeStore` build-cache
+      logic, not its `cbor` submodule) is explicitly NOT ported** — zero
+      self-hosted consumers exist (no `.resid-cache.cbor` concept anywhere
+      in `examples/*.resid`), and nothing in the self-compile path needs
+      incremental caching (a single self-compile is ~101s end to end,
+      per Phase B.3). Revisit only if a real self-hosted consumer emerges.
+- [x] C.5 Port `resid-why` — **DONE**. `tools/resid-why.resid`: full CBOR
+      decoder (mirrors `resid_notes::from_cbor` exactly, including the
+      3/4/5-field legacy-sidecar compatibility), all four render modes
+      (text/`--summary`/`--json` LSP-diagnostic/quiet), all filters
+      (`--kind`/`--file`/positional symbol substring/`--max`), sorted by
+      (file, line, column) via a hand-rolled `str_cmp` + insertion sort
+      (this language has no `<`/`>` on `Str`, only `==`/`!=` — confirmed
+      in `resid-type`'s binary-op rules — so `list_sort_strs`/a
+      sort-by-key trick were both rejected in favor of the simplest
+      correct thing: O(n^2) insertion sort, fine at realistic per-file
+      note counts). Verified against real `.resid-notes.cbor` sidecars
+      produced by both pipelines, all four modes, plus the missing-sidecar
+      and no-match-found error paths, matching the Rust CLI's messages
+      and JSON shape exactly. **Builds and runs standalone under the
+      self-hosted D1 binary too** (not just the Rust pipeline) — this
+      surfaced and worked around two independent self-hosted-only bugs,
+      neither touching the compiler (fixed by restructuring my source,
+      documented inline in `resid-why.resid`):
+      1. The self-hosted checker's if-expression unification is a literal
+         string compare of `ty` (`"if branches differ: " + then.ty + "
+         vs " + else.ty`), and a struct field access types as `"Int"`
+         while arithmetic on that same field types as `"Int(64)"` — two
+         spellings of the same type. Avoided by shaping both if-arms as
+         arithmetic (`n.line - 0` instead of bare `n.line`).
+      2. A nested if-expression inside an if-arm that also has a
+         preceding local binding hits a real codegen bug (malformed LLVM
+         phi nodes — `PHINode should have one entry for each predecessor`,
+         confirmed via `clang`'s verifier) — the same *class* of
+         "chains of temporaries" / nested-if-in-arm bug B.1 partially
+         fixed for `else if` arms, evidently not fully general. Not
+         debugged in `codegen.resid` (would need real LLVM-emission work,
+         out of scope for a tool port); worked around by pulling the
+         nested if + binding out into an ordinary function body
+         (`clamp_notes`), which uses only proven, heavily-exercised
+         statement-level codegen.
+- [x] C.3 Port `resid-diag` caret rendering — **DONE via A.2, no separate
+      tool needed**. `crates/resid-diag` is a Rust *library* (no CLI
+      binary — confirmed: no `main.rs`/bin target, only consumed by
+      `residc`/`resid-type` for the Rust pipeline's own internal error
+      formatting). Phase C's actual goal — the self-hosted pipeline having
+      equivalent caret-rendering capability for its own diagnostics — was
+      already delivered by A.2 (`pos_to_line_col`/`render_caret`/
+      `diag_error` in `examples/typecheck.resid`). Nothing further to port;
+      `crates/resid-diag` itself is retired along with the rest of
+      `crates/` at Phase D (it has no independent existence outside the
+      Rust pipeline it serves).
 - [ ] C.4 Port `resid-fmt`
 - [ ] C.5 Port `resid-why`
-- [ ] C.6 Port `resid-graph`
-- [ ] C.7 Port `resid-build` (package manager)
+- [x] C.6 Port `resid-graph` — **DONE**. `tools/resid-graph.resid`
+      (residc pipeline). Single token-based forward scan built on the same
+      `Tok`/`lex_tok` model `examples/typecheck.resid` uses for its own
+      real call-graph (A.1a): walks brace/paren depth directly over the
+      token stream (never slices out body substrings), records a
+      candidate callee whenever an `ident` is immediately followed by `(`
+      and not preceded by `.` (excludes method/provider calls), then
+      filters candidates to defined top-level function names once the
+      whole file is scanned — mirrors the Rust version's
+      `callees.retain(|c| defined.contains(c))` exactly. Scoped to
+      single-file analysis (no import resolution) — same boundary as A.6,
+      since the self-hosted toolchain doesn't resolve multi-file imports
+      yet; the Rust original's `aliased_imports_appear_as_nodes` test is
+      out of scope for this reason, not an oversight.
+      Verified against the Rust crate's other 3 tests
+      (`extracts_calls_and_recursion`, `extern_builtins_are_not_nodes`,
+      `dot_output_is_wellformed`) transcribed as `.resid` fixtures — all
+      pass byte-for-byte on the expected edges/self-recursion/DOT shape.
+      Stress-tested against the real ~9900-line `examples/driver.resid`
+      (473 functions, sub-second): cross-checked its function-name set
+      against an independent line-anchored regex scan — the only 3
+      discrepancies were real functions the naive line-anchored check
+      missed because their signature line has a stray leading space
+      (`examples/driver.resid:3704` etc.), confirming the token-based
+      scan is strictly more robust than a line-based one, not buggy.
+- [~] C.7 Port `resid-build` (package manager) — **first increment DONE
+      (archive pack/hash/sign/checksig/extract), rest scoped, not started.**
+      `tools/resid-pkg.resid`: byte-identical to
+      `crates/resid-build/src/archive.rs`'s deterministic "RESIDPKG1"
+      archive format (magic + LE u32 count + per-file LE u16 path-len/path/
+      LE u64 content-len/content), recursive directory walk (`.resid`/
+      `.toml` only, skips a `target/` directory), SHA-256 content hash,
+      Ed25519 sign/checksig via the existing self-hosted `lib/ed25519.resid`
+      (hex-encoding the hash before signing — signing a raw hash directly
+      as `Str` would corrupt it via the same UTF-8-encoding issue
+      `write_bytes` exists to solve), and `extract` (path-traversal guarded:
+      rejects absolute paths and `..`/empty segments, matching
+      `archive.rs`'s `extract` exactly). Verified: packed a real multi-file
+      directory (correctly excluding `target/`), cross-checked the printed
+      hash against the system's real `sha256sum` (exact match), signed
+      with the repo's real key, verified successfully, confirmed tamper
+      detection (corrupting one byte of the archive after signing makes
+      `checksig` correctly report `FAIL`), extracted and diffed the whole
+      tree byte-exact against the original (including the nested `sub/`
+      directory), confirmed a hand-crafted malicious archive with a
+      `../evil.resid` entry is rejected while its other, safe entry still
+      extracts. Both the Rust pipeline and a self-hosted D1-built binary
+      compile and run every subcommand correctly, including extract.
+      `resid-build serve` (inbound TCP listener) still out of scope (dev
+      convenience only; the core install/fetch path only needs the
+      already-working HTTP *client*).
+
+      **Three new provider capabilities added while building this** (same
+      shape as C.2's `write_bytes`/`read_bytes`: `resid_rt.c` primitive +
+      `provider_verbs()`/dispatch in both pipelines):
+      - `filesystem.is_dir(Str) -> Bool` — `list_dir`'s C runtime shells
+        out to `ls -1` (names only, no file/dir distinction), so a
+        recursive walker needs this. `crates/residc/resid_rt.c`'s
+        `resid_fs_is_dir` (new `<sys/stat.h>` include, `S_ISDIR`).
+      - `filesystem.create_dir(Str) -> Bool` — `mkdir -p` (creates every
+        missing parent), needed by `extract` to recreate a package's
+        directory structure. `resid_fs_create_dir_all` (new `<errno.h>`
+        include, walks the path creating each `/`-delimited prefix,
+        tolerates `EEXIST`).
+      - **`filesystem.list_dir` itself was never actually wired into the
+        self-hosted checker/codegen dispatch tables** before this session
+        — present in `is_prov_verb_filesystem`'s effect-checker whitelist
+        (so E0218 scanning knew about it) but absent from the actual
+        type-checking `if (m.text == "read_all") {...}`-style dispatch
+        block and from `codegen.resid`'s `p_sym`/`p_rty`/`p_nargs`/
+        `hdr_core`. A real, previously-undetected gap — nothing had ever
+        called `filesystem.list_dir` from self-hosted code before
+        `resid-pkg.resid`. Fixed in both files; no Rust-side change needed
+        (Rust already had it fully wired).
+
+      **Real, pre-existing, independently-significant bug found and fixed
+      while testing `checksig`** (not introduced by this session, and not
+      specific to package signing — affects *any* self-hosted
+      `verify_sig` call): `lib/ed25519.resid`'s `dec_x` (point
+      decompression, used only inside `verify_sig` — `pub_key`/`sign_msg`
+      never decode points, only encode, which is why this was never
+      caught by the encode-side cross-check against Rust's real
+      `ed25519_dalek` in `run_stage2_provenance_sidecar`) computed
+      `chk = fe_mul(fe_sq(x0), winv)` where `winv` is already `u/v` — i.e.
+      it multiplied the recovered-X-candidate's square by `u/v` again,
+      instead of dividing by it (`fe_mul(fe_sq(x0), fe_inv(winv))`) to
+      test whether `x0² == winv`. `dec_adjust`'s `chk != 1` branch is only
+      correct when `chk` is that ratio; multiplying instead of dividing
+      makes it effectively random, corrupting X-recovery for roughly half
+      of all points (the two square-root candidates differing by the
+      curve's `sqrt(-1)` constant). **Measured**: self-sign-then-verify
+      with one fixed hardcoded seed (the only one the existing
+      `run_ed25519_sign_in_resid` e2e test used) always happened to pass;
+      20/20 fresh random seeds failed before the fix, 20/20 passed after.
+      Verified post-fix: correct sig/msg/key accepted; wrong message,
+      tampered signature (single flipped bit), and wrong public key all
+      still correctly rejected (security properties intact, not just
+      "now it says true more often"). Full existing crypto/TLS/x509/
+      provenance e2e coverage (`run_ed25519_*`, `run_x509_in_resid`,
+      `run_chain_san_validity_in_resid`, `run_tls13_*`,
+      `run_stage2_provenance_sidecar`, `run_cose_provenance_verify_and_tamper`,
+      `run_crypto_kit`) re-run green after the fix — nothing was
+      silently depending on the old broken behavior.
+
+      **`resid.toml` manifest parsing + `resid.lock` — DONE.**
+      `tools/resid-manifest.resid`: a hand-written TOML-*subset* parser
+      (not general TOML — exactly the grammar `ManifestToml` uses:
+      `[section]`/`[dependencies.<name>]` headers, `key = value` where
+      value is a quoted string, `true`/`false`, or a flat array of quoted
+      strings; no numbers/dates/inline-tables/multi-line-strings, since
+      the schema has none) plus the `resid.lock` format from `lock.rs`
+      (`<name> <version> sha256:<hex>` per line, `#`/blank skipped,
+      malformed lines rejected, canonical name-sorted output). Verified
+      against the real fixtures from `crates/resid-build/tests/build.rs`
+      (`GOOD_MANIFEST`, the capabilities+dependencies fixture, a
+      constructed fixture covering every optional field: `[target]`,
+      `[signing]`, `[registry]`, two dependency shapes — path+capabilities
+      vs. version+pubkey) — every field extracted correctly including
+      defaults (`root` → `src/main.resid` when absent,
+      `require_signatures` → `false`) and multi-space `key    = value`
+      spacing. Lock file verified against `lock.rs`'s own three test
+      cases: canonical sort-by-name on parse, roundtrip, and malformed
+      line rejected with the exact same error shape. Both the Rust
+      pipeline and a self-hosted D1-built binary parse and print every
+      fixture identically — no self-hosted-only codegen issues hit this
+      time. Not yet wired to anything — a verification/demonstration
+      driver (`resid-manifest <resid.toml>` / `resid-manifest lock
+      <resid.lock>`), not yet consumed by dependency resolution or build
+      orchestration.
+
+      **Still open**: dependency resolution / capability-ceiling
+      enforcement (`lib.rs`'s `collect_dep` family, already partially
+      mirrored by §21.1 ceiling logic elsewhere per A.5), registry client
+      wiring (transport itself is easy — deliberately "dependency-free
+      HTTP/1.1 GET over TCP" per the Rust doc comment, and the
+      self-hosted TCP/HTTP client already exists and is e2e-tested:
+      `run_http11_client_in_resid`, `run_http_get_in_resid`,
+      `lib/http.resid`; `registry.rs`'s `serve_dir`, an inbound TCP
+      *listener* for `resid-build serve`, is a distinct, unchecked
+      capability — likely fine to defer/drop as a dev-convenience
+      feature), the CLI/subcommand orchestration in `main.rs` (385
+      lines), and COSE encryption (`cose.rs` — rides on
+      ChaCha20-Poly1305, which already works self-hosted:
+      `lib/chacha.resid`, `run_chacha20poly1305_in_resid`). Recommend
+      next: (1) dependency resolution wiring the manifest parser + archive
+      module together (load a dependency's own `resid.toml`, verify its
+      pinned key if any, check its capability ceiling against the
+      consumer's grants); (2) registry client wiring + CLI. Each deserves
+      the same fixture-based byte-comparison verification this session
+      used throughout, given the security stakes — as the ed25519
+      bug above shows, this area rewards it.
 - [ ] D.1 Freeze stage-0 seed binary
 - [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/`
 - [ ] D.3 Update PROGRESS.md §6 policy

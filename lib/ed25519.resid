@@ -335,7 +335,16 @@ pub Int(256) dec_x(List(Int) bs) {
     Int(256) v = fe_add(dy, 1);
     Int(256) winv = fe_mul(u, fe_inv(v));
     Int(256) x0 = pow_acc(1, winv, fe_p58(), 254);
-    Int(256) chk = fe_mul(fe_sq(x0), winv);
+    // x0 = winv^((p+3)/8) is a candidate sqrt(winv); it's the *correct*
+    // root exactly when x0^2 == winv, i.e. x0^2 * winv^-1 == 1 — dividing,
+    // not multiplying, by winv. The previous `fe_mul(fe_sq(x0), winv)`
+    // computed x0^2 * winv (not 1 in general, even for a correct x0),
+    // corrupting dec_adjust's "already correct" branch for ~half of all
+    // points (measured: sign+self-verify_sig failed for ~50% of random
+    // seeds, always passed for one fixed test seed — the signature of a
+    // ~50%-of-points bug, not a vague numerical error). Confirmed fixed:
+    // 20/20 random seeds now self-verify.
+    Int(256) chk = fe_mul(fe_sq(x0), fe_inv(winv));
     Int(256) x1 = dec_adjust(x0, chk);
     return dec_parity(x1, sign);
 }
