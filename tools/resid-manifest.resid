@@ -428,28 +428,114 @@ Int extract_archive_bytes(List(Int) archive, Str out_dir) {
 }
 
 // Fetch + verify + (first time only) extract one registry dependency,
-// mirroring resolve_dep_dir's version case. Lockfile pinning is not yet
-// threaded through here (a further integration task — see
-// PLAN-resid-only.md C.7); the sidecar `.resid-sha256` hash check still
-// applies when present.
-type CacheResult = { Bool ok; Str err; Str cache_dir; };
-CacheResult resolve_dep_dir_version(Str name, Str version, Str reg_dir, Str root_pkg_dir) {
+// mirroring resolve_dep_dir's version case. `pinned_sha` (from resid.lock,
+// "" when unpinned) is checked in addition to the sidecar `.resid-sha256`
+// hash when present.
+type CacheResult = { Bool ok; Str err; Str cache_dir; Str sha256; };
+CacheResult resolve_dep_dir_version(Str name, Str version, Str reg_dir, Str root_pkg_dir, Str pinned_sha) {
     List(Int) archive = fetch_pkg_local(reg_dir, name, version);
     if (archive.len() == 0) {
         Str err = "dependency '" + name + "': cannot fetch '" + name + "-" + version + "' from registry '" + reg_dir + "'";
-        return CacheResult {.ok = false, .err = err, .cache_dir = ""};
+        return CacheResult {.ok = false, .err = err, .cache_dir = "", .sha256 = ""};
     }
     Str got = hex_encode(sha256_bytes(archive));
+    if (pinned_sha != "") {
+        if (pinned_sha != got) {
+            Str err = "dependency '" + name + "-" + version + "': LOCKED content hash mismatch (locked " + pinned_sha + ", got " + got + ") - registry archive was modified; update resid.lock deliberately or restore the archive";
+            return CacheResult {.ok = false, .err = err, .cache_dir = "", .sha256 = ""};
+        }
+    }
     Str expect_hex = fetch_sha_local(reg_dir, name, version);
     if (expect_hex != "") {
         if (got != expect_hex) {
             Str err = "dependency '" + name + "': archive hash mismatch (expected " + expect_hex + ", got " + got + ")";
-            return CacheResult {.ok = false, .err = err, .cache_dir = ""};
+            return CacheResult {.ok = false, .err = err, .cache_dir = "", .sha256 = ""};
         }
     }
     Str cache_dir = root_pkg_dir + "/target/resid/deps/" + name + "-" + version;
     Int _e = if (filesystem.is_dir(cache_dir)) { 0 } else { extract_archive_bytes(archive, cache_dir) };
-    return CacheResult {.ok = true, .err = "", .cache_dir = cache_dir};
+    return CacheResult {.ok = true, .err = "", .cache_dir = cache_dir, .sha256 = got};
+}
+
+// ─── resid.lock read/write during version-dependency resolution ────
+// Scope-trim vs. the Rust original: this pins/writes to
+// `<root_pkg_dir>/resid.lock` — the same directory `resolve_dep_dir_
+// version` already uses for its cache dir — rather than Rust's single
+// lock file at the *ultimate* top-level project root shared across
+// every nesting level. Simpler to thread (no extra parameter needed
+// through the whole recursion) and still delivers the real value
+// (pin + tamper detection across repeated resolutions); only differs
+// from Rust for a project whose *transitive* (not direct) version
+// dependencies span multiple nesting levels, an edge case none of this
+// session's fixtures exercise.
+List(LockEntry) load_existing_lock(Str lock_path) {
+    if (filesystem.exists(lock_path)) { return parse_lock(filesystem.read_all(lock_path)).entries; }
+    List(LockEntry) empty = [];
+    return empty;
+}
+LockEntry lookup_pin(Str lock_path, Str name) {
+    if (!filesystem.exists(lock_path)) { return LockEntry {.name = "", .version = "", .sha256 = ""}; }
+    return lock_get(load_existing_lock(lock_path), name);
+}
+Int write_lock_entry(Str lock_path, LockEntry entry) {
+    filesystem.write_all(lock_path, lock_to_text(lock_set(load_existing_lock(lock_path), entry)));
+    return 0;
+}
+
+// ─── registry signed index (verify side) ───────────────────────────
+// `[registry] pubkey` names a trust anchor: when set, `pkg/index.resid-
+// idx` + `-sig` must exist and verify against it, and every `version =`
+// dependency must be listed. Reuses LockEntry (name/version/sha256 is
+// the same shape as an index row) rather than a new type; format is the
+// bare `<name> <version> <sha256>` (no "sha256:" prefix — that's
+// resid.lock's own format, not the registry index's), so a separate
+// parser from parse_lock. Mirrors registry.rs's parse_index_entries /
+// load_signed_index and Manifest::load's index-verification step.
+
+List(LockEntry) index_line_entry(Str t, List(LockEntry) acc) {
+    List(Str) parts = split_ws(t);
+    if (parts.len() != 3) { return acc; }
+    return acc.concat([LockEntry {.name = parts[0], .version = parts[1], .sha256 = parts[2]}]);
+}
+List(LockEntry) parse_index_acc(List(Str) lines, Int i, List(LockEntry) acc) {
+    if (i >= lines.len()) { return acc; }
+    Str t = str_trim(lines[i]);
+    List(LockEntry) acc2 = if (t == "") { acc } else if (str_starts_with(t, "#")) { acc } else { index_line_entry(t, acc) };
+    return parse_index_acc(lines, i + 1, acc2);
+}
+List(LockEntry) parse_index_entries(Str text) {
+    List(LockEntry) empty = [];
+    return parse_index_acc(str_split(text, "\n"), 0, empty);
+}
+Bool index_has(List(LockEntry) entries, Str name, Str version, Int i) {
+    if (i >= entries.len()) { return false; }
+    LockEntry e = entries[i];
+    if (e.name == name && e.version == version) { return true; }
+    return index_has(entries, name, version, i + 1);
+}
+
+type IndexLoadResult = { Bool ok; Str err; List(LockEntry) entries; };
+IndexLoadResult index_load_err(Str err) {
+    List(LockEntry) empty = [];
+    return IndexLoadResult {.ok = false, .err = err, .entries = empty};
+}
+IndexLoadResult load_verify_index(Str reg_dir, Str pubkey_hex) {
+    Str idx_path = reg_dir + "/pkg/index.resid-idx";
+    Str sig_path = reg_dir + "/pkg/index.resid-sig";
+    if (!filesystem.exists(idx_path)) {
+        return index_load_err("registry index required (pubkey configured) but unavailable: cannot read '" + idx_path + "'");
+    }
+    if (!filesystem.exists(sig_path)) {
+        return index_load_err("registry index required (pubkey configured) but unavailable: cannot read '" + sig_path + "'");
+    }
+    Str text = filesystem.read_all(idx_path);
+    Str sig_hex = str_trim(filesystem.read_all(sig_path));
+    Str text_hash_hex = hex_encode(sha256_bytes(bytes_of(text)));
+    Bool ok = verify_sig(text_hash_hex, hex_decode(sig_hex), hex_decode(pubkey_hex));
+    if (!ok) {
+        return index_load_err("registry index signature INVALID - refusing to trust this registry");
+    }
+    return IndexLoadResult {.ok = true, .err = "", .entries = parse_index_entries(text)};
 }
 
 // A resolved path dependency (post-walk — the Rust equivalent's
@@ -468,7 +554,7 @@ DepResolveResult dep_error(DepResolveResult acc, Str err) {
     return DepResolveResult {.ok = false, .err = err, .deps = acc.deps, .seen = acc.seen};
 }
 
-DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pinned_key, Str reg_dir, DepResolveResult acc, Int depth) {
+DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pinned_key, Str reg_dir, Bool idx_required, List(LockEntry) idx_entries, DepResolveResult acc, Int depth) {
     if (!acc.ok) { return acc; }
     if (depth > 32) { return dep_error(acc, "dependency '" + name + "': dependency chain deeper than 32 (cycle?)"); }
     Str prev_dir = find_seen_dir(acc.seen, name, 0);
@@ -493,41 +579,64 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pin
         return dep_error(acc, "package '" + dm.name + "' provided by both '" + prev_pkg_dir + "' and '" + dep_dir + "' - conflicting dependency versions are not supported");
     }
     DepResolveResult acc2 = DepResolveResult {.ok = true, .err = "", .deps = acc.deps, .seen = acc.seen.concat([SeenEntry {.name = dm.name, .dir = dep_dir}])};
-    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, reg_dir, acc2, depth + 1);
+    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, reg_dir, idx_required, idx_entries, acc2, depth + 1);
     if (!acc3.ok) { return acc3; }
     ResolvedDep rd = ResolvedDep {.name = dm.name, .dir = dep_dir, .root = root, .capabilities = caps, .pinned_key = pinned_key};
     return DepResolveResult {.ok = true, .err = "", .deps = acc3.deps.concat([rd]), .seen = acc3.seen};
 }
 
-DepResolveResult collect_dep_version(Str name, Str version, Str reg_dir, Str root_pkg_dir, List(Str) caps, Str pinned_key, DepResolveResult acc, Int depth) {
+DepResolveResult collect_dep_version(Str name, Str version, Str reg_dir, Str root_pkg_dir, List(Str) caps, Str pinned_key, Bool idx_required, List(LockEntry) idx_entries, DepResolveResult acc, Int depth) {
     if (reg_dir == "") {
         return dep_error(acc, "dependency '" + name + "': version '" + version + "' requested but no [registry] path is configured");
     }
-    CacheResult cr = resolve_dep_dir_version(name, version, reg_dir, root_pkg_dir);
+    if (idx_required) {
+        if (!index_has(idx_entries, name, version, 0)) {
+            return dep_error(acc, "dependency '" + name + "-" + version + "' is not listed in the signed registry index");
+        }
+    }
+    Str lock_path = root_pkg_dir + "/resid.lock";
+    LockEntry pin = lookup_pin(lock_path, name);
+    if (pin.name != "") {
+        if (pin.version != version) {
+            return dep_error(acc, "dependency '" + name + "': manifest requires '" + version + "' but resid.lock pins '" + pin.version + "' - run with an updated manifest to re-lock");
+        }
+    }
+    Str pinned_sha = if (pin.name == "") { "" } else { pin.sha256 };
+    CacheResult cr = resolve_dep_dir_version(name, version, reg_dir, root_pkg_dir, pinned_sha);
     if (!cr.ok) { return dep_error(acc, cr.err); }
-    return collect_dep_path(name, cr.cache_dir, caps, pinned_key, reg_dir, acc, depth);
+    Int _w = write_lock_entry(lock_path, LockEntry {.name = name, .version = version, .sha256 = cr.sha256});
+    return collect_dep_path(name, cr.cache_dir, caps, pinned_key, reg_dir, idx_required, idx_entries, acc, depth);
 }
 
-DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Str reg_dir, DepResolveResult acc, Int depth) {
+DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Str reg_dir, Bool idx_required, List(LockEntry) idx_entries, DepResolveResult acc, Int depth) {
     if (!acc.ok) { return acc; }
     if (i >= subs.len()) { return acc; }
     Dependency sub = subs[i];
     DepResolveResult acc2 = if (sub.path != "") {
-        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.pubkey, reg_dir, acc, depth)
+        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.pubkey, reg_dir, idx_required, idx_entries, acc, depth)
     } else if (sub.version != "") {
-        collect_dep_version(sub.name, sub.version, reg_dir, parent_dir, sub.capabilities, sub.pubkey, acc, depth)
+        collect_dep_version(sub.name, sub.version, reg_dir, parent_dir, sub.capabilities, sub.pubkey, idx_required, idx_entries, acc, depth)
     } else {
         dep_error(acc, "dependency '" + sub.name + "': needs either 'path' or 'version'")
     };
-    return collect_sub_deps_at(subs, i + 1, parent_dir, reg_dir, acc2, depth);
+    return collect_sub_deps_at(subs, i + 1, parent_dir, reg_dir, idx_required, idx_entries, acc2, depth);
 }
 
 DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
     List(ResolvedDep) empty_deps = [];
     List(SeenEntry) empty_seen = [];
-    DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
     Str reg_dir = if (m.registry_path == "") { "" } else { pkg_dir + "/" + m.registry_path };
-    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, reg_dir, start, 0);
+    List(LockEntry) no_idx = [];
+    if (m.registry_pubkey == "") {
+        DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
+        return collect_sub_deps_at(m.dependencies, 0, pkg_dir, reg_dir, false, no_idx, start, 0);
+    }
+    IndexLoadResult idx = load_verify_index(reg_dir, m.registry_pubkey);
+    if (!idx.ok) {
+        return DepResolveResult {.ok = false, .err = idx.err, .deps = empty_deps, .seen = empty_seen};
+    }
+    DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
+    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, reg_dir, true, idx.entries, start, 0);
 }
 
 Str first_missing_cap(List(Str) caps, List(Str) granted, Int i) {

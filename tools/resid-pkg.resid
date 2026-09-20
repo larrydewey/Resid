@@ -400,6 +400,133 @@ Str manifest_field(Str text, Str key) {
     return manifest_field_at(str_split(text, "\n"), key, 0);
 }
 
+// ─── registry signed index (index.resid-idx / index.resid-sig) ────
+// One line per package version: `<name> <version> <sha256-hex>` (no
+// "sha256:" prefix — that's resid.lock's format, not the index's).
+// Maintained here by `publish` when a signing key is given; verified by
+// resid-manifest.resid's dependency resolution when `[registry] pubkey`
+// is configured. Mirrors registry.rs's IndexEntry/parse_index_entries/
+// index_text exactly.
+
+Bool is_ws_char(Int c) {
+    if (c == 32) { return true; }
+    return c == 9;
+}
+Int skip_ws_chars(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    if (is_ws_char(str_char_at(s, i))) { return skip_ws_chars(s, i + 1, n); }
+    return i;
+}
+Int scan_nonws(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    if (is_ws_char(str_char_at(s, i))) { return i; }
+    return scan_nonws(s, i + 1, n);
+}
+List(Str) split_ws_acc(Str s, Int i, Int n, List(Str) acc) {
+    Int j = skip_ws_chars(s, i, n);
+    if (j >= n) { return acc; }
+    Int k = scan_nonws(s, j, n);
+    return split_ws_acc(s, k, n, acc.concat([str_slice(s, j, k)]));
+}
+List(Str) split_ws(Str s) {
+    List(Str) empty = [];
+    return split_ws_acc(s, 0, str_len(s), empty);
+}
+
+type IdxEntry = { Str name; Str version; Str sha256; };
+
+Int idx_cmp(IdxEntry a, IdxEntry b) {
+    Int c = str_cmp(a.name, b.name);
+    if (c != 0) { return c; }
+    return str_cmp(a.version, b.version);
+}
+List(IdxEntry) take_first_idx(List(IdxEntry) xs, Int i, Int limit, List(IdxEntry) acc) {
+    if (i >= limit) { return acc; }
+    return take_first_idx(xs, i + 1, limit, acc.concat([xs[i]]));
+}
+List(IdxEntry) suffix_from_idx(List(IdxEntry) xs, Int i) {
+    if (i >= xs.len()) { List(IdxEntry) empty = []; return empty; }
+    List(IdxEntry) head = [xs[i]];
+    return head.concat(suffix_from_idx(xs, i + 1));
+}
+List(IdxEntry) insert_sorted_idx(List(IdxEntry) acc, IdxEntry ie, Int i) {
+    if (i >= acc.len()) { return acc.concat([ie]); }
+    if (idx_cmp(ie, acc[i]) < 0) {
+        return take_first_idx(acc, 0, i, []).concat([ie]).concat(suffix_from_idx(acc, i));
+    }
+    return insert_sorted_idx(acc, ie, i + 1);
+}
+List(IdxEntry) sort_idx_acc(List(IdxEntry) xs, Int i, List(IdxEntry) acc) {
+    if (i >= xs.len()) { return acc; }
+    return sort_idx_acc(xs, i + 1, insert_sorted_idx(acc, xs[i], 0));
+}
+List(IdxEntry) sort_idx_entries(List(IdxEntry) xs) {
+    List(IdxEntry) empty = [];
+    return sort_idx_acc(xs, 0, empty);
+}
+
+List(IdxEntry) parse_index_line(Str t, List(IdxEntry) acc) {
+    List(Str) parts = split_ws(t);
+    if (parts.len() != 3) { return acc; }
+    return acc.concat([IdxEntry {.name = parts[0], .version = parts[1], .sha256 = parts[2]}]);
+}
+List(IdxEntry) parse_index_acc(List(Str) lines, Int i, List(IdxEntry) acc) {
+    if (i >= lines.len()) { return acc; }
+    Str t = str_trim(lines[i]);
+    List(IdxEntry) acc2 = if (t == "") { acc } else if (str_starts_with(t, "#")) { acc } else { parse_index_line(t, acc) };
+    return parse_index_acc(lines, i + 1, acc2);
+}
+List(IdxEntry) parse_index_text(Str text) {
+    List(IdxEntry) empty = [];
+    return parse_index_acc(str_split(text, "\n"), 0, empty);
+}
+
+List(Str) idx_lines_acc(List(IdxEntry) entries, Int i, List(Str) acc) {
+    if (i >= entries.len()) { return acc; }
+    IdxEntry e = entries[i];
+    return idx_lines_acc(entries, i + 1, acc.concat([e.name + " " + e.version + " " + e.sha256]));
+}
+Str index_text(List(IdxEntry) entries) {
+    List(Str) lines = idx_lines_acc(sort_idx_entries(entries), 0, []);
+    Str header = "# resid registry index\n";
+    if (lines.len() == 0) { return header; }
+    return header + str_join(lines, "\n") + "\n";
+}
+
+List(IdxEntry) idx_remove_acc(List(IdxEntry) entries, Str name, Str version, Int i, List(IdxEntry) acc) {
+    if (i >= entries.len()) { return acc; }
+    IdxEntry e = entries[i];
+    Bool is_dup = e.name == name && e.version == version;
+    List(IdxEntry) acc2 = if (is_dup) { acc } else { acc.concat([e]) };
+    return idx_remove_acc(entries, name, version, i + 1, acc2);
+}
+
+// A multi-statement if-arm ending in a bare `[]`-typed local hits
+// another self-hosted-only checker quirk (the branch's inferred type
+// loses the element type: "List(IdxEntry) vs List(Unknown)") — same
+// family as the Int/Int(64) spelling issue elsewhere this session.
+// Pulled out as an ordinary function to avoid it.
+List(IdxEntry) load_existing_index(Str idx_path) {
+    if (filesystem.exists(idx_path)) { return parse_index_text(filesystem.read_all(idx_path)); }
+    List(IdxEntry) empty = [];
+    return empty;
+}
+
+// Load the existing index (if any), replace this package's entry,
+// write the new index + a fresh signature over its hash.
+Int maintain_index(Str reg, Str name, Str version, Str hash_hex, List(Int) seed) {
+    Str idx_path = reg + "/pkg/index.resid-idx";
+    Str sig_path = reg + "/pkg/index.resid-sig";
+    List(IdxEntry) existing = load_existing_index(idx_path);
+    List(IdxEntry) updated = idx_remove_acc(existing, name, version, 0, []).concat([IdxEntry {.name = name, .version = version, .sha256 = hash_hex}]);
+    Str new_text = index_text(updated);
+    filesystem.write_all(idx_path, new_text);
+    Str text_hash_hex = hex_encode(sha256_bytes(bytes_of(new_text)));
+    List(Int) sig = sign_msg(seed, text_hash_hex);
+    filesystem.write_bytes(sig_path, bytes_of(hex_encode(sig)));
+    return 0;
+}
+
 Int cmd_publish(Str dir, Str reg, Str keyfile) {
     Str manifest_text = filesystem.read_all(dir + "/resid.toml");
     Str name = manifest_field(manifest_text, "name");
@@ -425,9 +552,11 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
     Str keyhex = filesystem.read_all(keyfile);
     Int klen = str_len(keyhex);
     Str ktrim = if (klen > 0) { str_slice(keyhex, 0, klen - 1) } else { keyhex };
-    List(Int) sig = sign_msg(hex_decode(ktrim), hash_hex);
+    List(Int) seed = hex_decode(ktrim);
+    List(Int) sig = sign_msg(seed, hash_hex);
     filesystem.write_bytes(pkg_dir + "/" + base + "-sig", bytes_of(hex_encode(sig)));
-    println(msg + " (+ signature)");
+    Int _m = maintain_index(reg, name, version, hash_hex, seed);
+    println(msg + " (+ signature, index updated)");
     return 0;
 }
 
