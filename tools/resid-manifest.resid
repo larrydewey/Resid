@@ -914,10 +914,50 @@ Int cmd_deps(Str manifest_path) {
     return 0;
 }
 
+// `depmap` sidecar (spec §35 dependency-aware import resolution, consumed by
+// `driver -depmap <file>`): one "name::root" line per resolved dependency,
+// mirroring resid_parser::resolve_unit_with's DependencyMap (name -> resolved
+// root file) exactly, so a bare `import "pkgname";` in the compiled program
+// resolves to the same file the Rust pipeline would pick.
+Str depmap_line(ResolvedDep d) {
+    return d.name + "::" + d.root;
+}
+List(Str) depmap_lines_acc(List(ResolvedDep) deps, Int i, List(Str) acc) {
+    if (i >= deps.len()) { return acc; }
+    return depmap_lines_acc(deps, i + 1, acc.concat([depmap_line(deps[i])]));
+}
+Str depmap_text(List(ResolvedDep) deps) {
+    List(Str) empty = [];
+    return str_join(depmap_lines_acc(deps, 0, empty), "\n");
+}
+
+Int cmd_depmap(Str manifest_path, Str out_path) {
+    Manifest m = load_manifest(filesystem.read_all(manifest_path));
+    DepResolveResult r = resolve_all_deps(m, dirname_of(manifest_path));
+    if (!r.ok) {
+        eprintln(r.err);
+        return 1;
+    }
+    Str cap_err = check_dep_capabilities(r.deps, grant_families(m.grant));
+    if (cap_err != "") {
+        eprintln(cap_err);
+        return 1;
+    }
+    Str key_err = verify_all_pinned_keys(r.deps);
+    if (key_err != "") {
+        eprintln(key_err);
+        return 1;
+    }
+    Str text = depmap_text(r.deps);
+    Bool _w = filesystem.write_all(out_path, text);
+    println("wrote " + out_path + " (" + IntToString(r.deps.len()) + " dependency/ies)");
+    return 0;
+}
+
 Int main() {
     Int argc = args.count();
     if (argc < 2) {
-        eprintln("usage: resid-manifest <resid.toml> | resid-manifest lock <resid.lock> | resid-manifest deps <resid.toml>");
+        eprintln("usage: resid-manifest <resid.toml> | resid-manifest lock <resid.lock> | resid-manifest deps <resid.toml> | resid-manifest depmap <resid.toml> <out>");
         return 2;
     }
     Str a1 = args.get(1);
@@ -934,6 +974,13 @@ Int main() {
             return 2;
         }
         return cmd_deps(args.get(2));
+    }
+    if (a1 == "depmap") {
+        if (argc < 4) {
+            eprintln("usage: resid-manifest depmap <resid.toml> <out>");
+            return 2;
+        }
+        return cmd_depmap(args.get(2), args.get(3));
     }
     return cmd_manifest(a1);
 }

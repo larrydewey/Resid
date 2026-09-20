@@ -1163,10 +1163,11 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       (`examples/driver.resid:3704` etc.), confirming the token-based
       scan is strictly more robust than a line-based one, not buggy.
 - [~] C.7 Port `resid-build` (package manager) — **everything done except
-      the `build` subcommand itself (needs compiler-level dependency-aware
-      import resolution) and CLI unification** — archive
+      `serve_dir` (dev-convenience TCP listener, likely to drop) and CLI
+      unification into one command** — archive
       (pack/hash/sign/checksig/extract/publish), manifest/lock/deps/
-      registry (local directory, signed index), and COSE are all ported
+      registry (local directory, signed index), COSE, and dependency-aware
+      import resolution (compiler-level `build` support) are all ported
       and verified. See below for the full breakdown.
       `tools/resid-pkg.resid`: byte-identical to
       `crates/resid-build/src/archive.rs`'s deterministic "RESIDPKG1"
@@ -1448,24 +1449,83 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       Self-hosted D1-built binary produces byte-identical `COSE_Sign1`
       and `COSE_Encrypt0` output to the Rust pipeline on every case.
 
+      **`build` subcommand — dependency-aware import resolution (compiler-
+      level, done)**: on the Rust side, `resid_parser::resolve_unit_with`
+      already had a `DependencyMap` (package name → resolved root file)
+      as a fallback when a bare `import "pkgname";` doesn't resolve as a
+      path relative to the importer (spec §35); it was just never
+      exercised except through the soon-to-be-retired `resid-build` crate.
+      The self-hosted driver had no such fallback at all — `imp_resolve_
+      file`/`imp_resolve_lines` in `examples/typecheck.resid` only ever
+      tried `dir + "/" + name`. Ported the same two-tier resolution:
+      added `imp_resolve_target(dir, name, depmap)` (relative path wins
+      when `filesystem.exists` says so; otherwise looks the bare name up
+      in `depmap`) and threaded a new `Str depmap` parameter through
+      `imp_resolve_lines`/`imp_resolve_file`. `depmap` is a small sidecar
+      text format (not derived from the Rust `DependencyMap` type, which
+      is Rust-internal-only): one `name::root` line per resolved
+      dependency, parsed with a new `imp_find_dcolon`/`depmap_lookup*`
+      helper family (plain if/return throughout — no if-expression-with-
+      preceding-local-binding, to dodge the by-now-familiar phi-node
+      codegen bug). The driver's CLI (`examples/driver.resid`'s `main()`,
+      which lives in the tail section `tools/merge_driver.resid` carries
+      forward verbatim across regenerations, so this edit went directly
+      into `driver.resid` rather than a generated-from source) gained a
+      `-depmap <path>` flag; when given, its contents are read once and
+      passed down through `imp_resolve_file(path, ";", 0, depmap)`.
+
+      The sidecar itself is produced by a new `resid-manifest depmap
+      <resid.toml> <out>` subcommand (`tools/resid-manifest.resid`),
+      built on the dependency resolution this Phase already has:
+      `resolve_all_deps` (with its existing capability-ceiling and
+      pinned-key checks, same as `deps`) already produces
+      `List(ResolvedDep)`, and `ResolvedDep.root` already held exactly
+      the field needed — the writer is a 15-line `depmap_text`/
+      `cmd_depmap` addition, no new resolution logic.
+
+      Verified against a from-scratch fixture (no existing test coverage
+      to mirror: `crates/resid-build` has zero `#[test]`s of its own for
+      dependency imports, and `crates/resid-parser`'s `DependencyMap` had
+      none either — this is the most exercise this code path has had on
+      either pipeline): a 3-package chain `app → {greet, mid → base}`
+      (`mid` importing `base` transitively, `app` importing both `greet`
+      and `mid` by bare package name via `[dependencies.*] path = "..."`
+      in `resid.toml`). `cargo run -p resid-build -- .` (the Rust
+      ground truth for this feature, since plain `residc` never wires up
+      a non-empty `DependencyMap`) built and ran it correctly, printing
+      `hello, world` / `wow!!!` — but only once `greeting`/`shout`/
+      `decorate` were marked `pub`, since Rust enforces spec §22 import
+      visibility and the self-hosted compiler does not (pre-existing,
+      unrelated to this change — every tool ported this Phase already
+      relies on the self-hosted compiler not enforcing `pub`). Both the
+      D1-built driver (`residc examples/driver.resid build`, then run
+      with `-depmap`) and the D2-built driver (that D1 binary compiling
+      `examples/driver.resid` again) resolved the same transitive
+      dependency chain and produced identical `hello, world` / `wow!!!`
+      output; their emitted `.ll` files diffed byte-identical. Re-ran
+      `bootstrap_driver_self_compile_fixed_point` after the
+      `typecheck.resid`/`driver.resid` edit (before touching
+      `resid-manifest.resid`, since only the former touches the merged
+      driver) — D1→D2→D3 IR still reaches a fixed point.
+
+      One pre-existing gap surfaced, not fixed: an unresolvable bare
+      import (no relative file, not in `depmap`) falls through to
+      `imp_resolve_target`'s last-resort `return full;`, and
+      `filesystem.read_all` on that nonexistent path returns silently
+      (empty text) rather than erroring — `imp_resolve_file` had no
+      existence check at all before this change either, so this is not
+      a regression, just an existing self-hosted-compiler robustness gap
+      (the Rust pipeline correctly reports `import '...': no such file
+      ... and no dependency with that name`). Not in scope here.
+
       **Still open**: `registry.rs`'s `serve_dir` (an inbound TCP
       *listener* for `resid-build serve`) — likely fine to defer/drop as
       a dev-convenience feature (the core publish/install path only needs
       the client + local-directory-write sides, both done); and the
       CLI/subcommand orchestration in `main.rs` (385 lines) tying
-      manifest+deps+lock+archive+registry+cose into one `resid-build`
-      command with a real `build` subcommand (needs the self-hosted
-      driver to accept a dependency map for import resolution — deeper
-      compiler integration than anything else in C.7, not yet scoped).
-      At this point every piece of `resid-build` except `build` itself
-      has a working self-hosted equivalent, each independently verified
-      against the Rust format/behavior and cross-checked against each
-      other (publish→consume, pack→sign→checksig, manifest→deps→
-      registry→index→lock, sign1/encrypt0 round trips). `build` is
-      qualitatively different remaining work — it needs the self-hosted
-      compiler itself to grow dependency-aware import resolution, not
-      just another tool — and deserves its own scoping pass rather than
-      being bundled into "next increment" the way everything above was.
+      manifest+deps+lock+archive+registry+cose+depmap into one
+      `resid-build`-equivalent command. Both are now pure tooling/CLI
+      work — no more compiler-internals pieces remain in C.7.
 - [ ] D.1 Freeze stage-0 seed binary
 - [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/`
 - [ ] D.3 Update PROGRESS.md §6 policy

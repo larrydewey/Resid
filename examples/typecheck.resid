@@ -487,31 +487,82 @@ Str imp_target(Str line) {
     return str_slice(line, p1, q2);
 }
 
+// Dependency-map fallback (mirrors resid_parser::resolve_import, spec §35):
+// `depmap` is a "name::path\nname::path\n..." sidecar (produced by
+// `resid-manifest depmap`). A path-relative import wins when the file
+// exists; otherwise a bare `import "pkgname";` is looked up here.
+Int imp_find_dcolon(Str s, Int i) {
+    Int n = str_len(s);
+    Int ip1 = i + 1;
+    if (ip1 >= n) { return -1; }
+    Int c1 = str_char_at(s, i);
+    Int c2 = str_char_at(s, ip1);
+    if (c1 == 58) { if (c2 == 58) { return i; } }
+    return imp_find_dcolon(s, ip1);
+}
+
+Str depmap_line_name(Str line, Int sep) {
+    return str_slice(line, 0, sep);
+}
+
+Str depmap_line_path(Str line, Int sep) {
+    return str_slice(line, sep + 2, str_len(line));
+}
+
+Str depmap_match_line(Str line, Str name) {
+    Int sep = imp_find_dcolon(line, 0);
+    if (sep < 0) { return ""; }
+    Str lname = depmap_line_name(line, sep);
+    if (lname != name) { return ""; }
+    return depmap_line_path(line, sep);
+}
+
+Str depmap_lookup_lines(List(Str) lines, Int i, Int n, Str name) {
+    if (i > n) { return ""; }
+    Str found = depmap_match_line(lines[i], name);
+    if (found != "") { return found; }
+    return depmap_lookup_lines(lines, i + 1, n, name);
+}
+
+Str depmap_lookup(Str depmap, Str name) {
+    if (depmap == "") { return ""; }
+    List(Str) lines = str_split(depmap, "\n");
+    return depmap_lookup_lines(lines, 0, lines.len() - 1, name);
+}
+
+Str imp_resolve_target(Str dir, Str name, Str depmap) {
+    Str full = if (ck_str_starts_with(name, "/")) { name } else { dir + "/" + name };
+    if (filesystem.exists(full)) { return full; }
+    Str dep = depmap_lookup(depmap, name);
+    if (dep != "") { return dep; }
+    return full;
+}
+
 // `done` is a ";path;path;..." sentinel-delimited string of resolved files.
-RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done, Int depth) {
+RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done, Int depth, Str depmap) {
     if (i > n) { return RRes {.text = acc, .done = done}; }
     Str line = lines[i];
     if (ck_str_starts_with(line, "import ")) {
         Str name = imp_target(line);
         if (name == "") {
             Int ni = i + 1;
-            return imp_resolve_lines(lines, ni, n, dir, acc, done, depth);
+            return imp_resolve_lines(lines, ni, n, dir, acc, done, depth, depmap);
         }
-        Str full = if (ck_str_starts_with(name, "/")) { name } else { dir + "/" + name };
+        Str full = imp_resolve_target(dir, name, depmap);
         Str key = ";" + full + ";";
         RRes sub = if (str_contains(done, key)) {
             RRes {.text = "", .done = done}
         } else {
-            imp_resolve_file(full, done, depth)
+            imp_resolve_file(full, done, depth, depmap)
         };
         Int ni2 = i + 1;
-        return imp_resolve_lines(lines, ni2, n, dir, acc + sub.text, sub.done, depth);
+        return imp_resolve_lines(lines, ni2, n, dir, acc + sub.text, sub.done, depth, depmap);
     }
     Int ni3 = i + 1;
-    return imp_resolve_lines(lines, ni3, n, dir, acc + line + "\n", done, depth);
+    return imp_resolve_lines(lines, ni3, n, dir, acc + line + "\n", done, depth, depmap);
 }
 
-RRes imp_resolve_file(Str path, Str done, Int depth) {
+RRes imp_resolve_file(Str path, Str done, Int depth, Str depmap) {
     if (depth > 8) { return RRes {.text = "", .done = done}; }
     Str src = filesystem.read_all(path);
     List(Str) lines = str_split(src, "\n");
@@ -520,7 +571,7 @@ RRes imp_resolve_file(Str path, Str done, Int depth) {
     Int plast = plen - 1;
     Str dir = imp_dir_of(path, plast);
     Str done2 = done + path + ";";
-    return imp_resolve_lines(lines, 0, n, dir, "", done2, depth);
+    return imp_resolve_lines(lines, 0, n, dir, "", done2, depth, depmap);
 }
 
 Int str_find_char(Str s, Int c, Int i) {
