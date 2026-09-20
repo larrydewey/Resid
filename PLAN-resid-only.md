@@ -1785,7 +1785,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       in `resid-manifest.resid`'s own doc comment rather than silently
       left out.
 - [x] D.1 Freeze stage-0 seed binary — **DONE**. `bootstrap/stage0/
-      residc-linux-x86_64` (+ `.sha256`, + `README.md` documenting
+      residc-seed-linux-x86_64` (+ `.sha256`, + `README.md` documenting
       provenance/verification/bootstrap-from-scratch usage), built from
       `examples/driver.resid` at commit `d5c269f`. Sanity-checked: runs a
       trivial program correctly, and compiles `examples/driver.resid`
