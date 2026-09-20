@@ -1,0 +1,356 @@
+/// merge_driver.resid — Resid port of tools/merge_driver.py (Phase C.1,
+/// PLAN-resid-only.md). Regenerate examples/driver.resid from
+/// examples/codegen.resid + examples/typecheck.resid.
+///
+/// Recipe (unchanged from the Python original):
+///   base   = codegen.resid minus CLI bits (pick_out, Int main)
+///   chunk  = typecheck.resid from its Environment banner onward, minus Int
+///            main, with colliding names renamed ck_* / sigs_empty / Sigs
+///            and shared helpers deduped out (kept as codegen's copies)
+///   tail   = existing driver.resid driver section (pick_opt + main) with
+///            the declare-header list refreshed from codegen.resid's main
+///
+/// Run: residc tools/merge_driver.resid run
+
+// ─── Character classification ──────────────────────────────────
+
+Bool is_upper(Int c) {
+    if (c >= 65) { if (c <= 90) { return true; } }
+    return false;
+}
+
+Bool is_alpha_only(Int c) {
+    if (c >= 65) { if (c <= 90) { return true; } }
+    if (c >= 97) { if (c <= 122) { return true; } }
+    return false;
+}
+
+Bool is_word_char(Int c) {
+    if (is_alpha_only(c)) { return true; }
+    if (c >= 48) { if (c <= 57) { return true; } }
+    if (c == 95) { return true; }
+    return false;
+}
+
+Bool is_space_char(Int c) {
+    if (c == 32) { return true; }
+    if (c == 9) { return true; }
+    return false;
+}
+
+// ─── Line-local scanning primitives ────────────────────────────
+
+Int scan_upper_ident(Str line, Int i, Int n) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(line, i);
+    if (is_alpha_only(c)) { return scan_upper_ident(line, i + 1, n); }
+    return i;
+}
+
+Int skip_ws_line(Str line, Int i, Int n) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(line, i);
+    if (is_space_char(c)) { return skip_ws_line(line, i + 1, n); }
+    return i;
+}
+
+Int scan_word(Str line, Int i, Int n) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(line, i);
+    if (is_word_char(c)) { return scan_word(line, i + 1, n); }
+    return i;
+}
+
+Int scan_nonword(Str text, Int i, Int n) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(text, i);
+    if (is_word_char(c)) { return i; }
+    return scan_nonword(text, i + 1, n);
+}
+
+// Mirrors DECL = re.compile(r'^(?:type )?(?:[A-Z][A-Za-z]*|List\(Str\))\s+(\w+)\s*[({]')
+// (the Str|Int|Bool|Void literal alternatives are redundant with the
+// generic uppercase-ident branch for every real line in this codebase —
+// see PLAN-resid-only.md port notes; only List(Str) needs special-casing).
+Int match_type_token(Str line, Int p, Int n) {
+    if (p + 9 <= n) {
+        if (str_slice(line, p, p + 9) == "List(Str)") { return p + 9; }
+    }
+    if (p < n) {
+        Int c0 = str_char_at(line, p);
+        if (is_upper(c0)) { return scan_upper_ident(line, p + 1, n); }
+    }
+    return -1;
+}
+
+Str match_decl_name(Str line) {
+    Int n = str_len(line);
+    Int p1 = if (str_starts_with(line, "type ")) { 5 } else { 0 };
+    Int p2 = match_type_token(line, p1, n);
+    if (p2 < 0) { return ""; }
+    Int p3 = skip_ws_line(line, p2, n);
+    if (p3 == p2) { return ""; }
+    Int p4 = scan_word(line, p3, n);
+    if (p4 == p3) { return ""; }
+    Str name = str_slice(line, p3, p4);
+    Int p5 = skip_ws_line(line, p4, n);
+    if (p5 >= n) { return ""; }
+    Int c5 = str_char_at(line, p5);
+    if (c5 == 40) { return name; }
+    if (c5 == 123) { return name; }
+    return "";
+}
+
+Bool is_comment_line(Str line) {
+    return str_starts_with(line, "//");
+}
+
+// ─── Generic list-building helpers (forward accumulator, tail-recursive) ───
+
+List(Str) take_first_acc(List(Str) lines, Int i, Int limit, List(Str) acc) {
+    if (i >= limit) { return acc; }
+    return take_first_acc(lines, i + 1, limit, acc.concat([lines[i]]));
+}
+
+List(Str) suffix_from_acc(List(Str) lines, Int i, Int n, List(Str) acc) {
+    if (i >= n) { return acc; }
+    return suffix_from_acc(lines, i + 1, n, acc.concat([lines[i]]));
+}
+
+List(Str) suffix_from(List(Str) lines, Int i) {
+    return suffix_from_acc(lines, i, lines.len(), []);
+}
+
+List(Str) trim_trailing_blank(List(Str) lines) {
+    Int n = lines.len();
+    if (n == 0) { return lines; }
+    Str t = str_trim(lines[n - 1]);
+    if (t == "") { return trim_trailing_blank(take_first_acc(lines, 0, n - 1, [])); }
+    return lines;
+}
+
+Int find_line_containing(List(Str) lines, Int i, Int n, Str needle) {
+    if (i >= n) { return -1; }
+    if (str_contains(lines[i], needle)) { return i; }
+    return find_line_containing(lines, i + 1, n, needle);
+}
+
+Int find_line_prefix(List(Str) lines, Int i, Int n, Str prefix) {
+    if (i >= n) { return -1; }
+    if (str_starts_with(str_trim(lines[i]), prefix)) { return i; }
+    return find_line_prefix(lines, i + 1, n, prefix);
+}
+
+Bool name_in_list(List(Str) names, Int i, Str target) {
+    Int n = names.len();
+    if (i >= n) { return false; }
+    if (names[i] == target) { return true; }
+    return name_in_list(names, i + 1, target);
+}
+
+// ─── decl-range logic (drop_decls / cut_main equivalents) ──────
+
+Int find_close_brace(List(Str) lines, Int i, Int n) {
+    if (i >= n) { return n - 1; }
+    if (lines[i] == "}") { return i; }
+    return find_close_brace(lines, i + 1, n);
+}
+
+List(Str) drop_decls_acc(List(Str) lines, Int i, Int n, List(Str) kill, List(Str) acc) {
+    if (i >= n) { return acc; }
+    Str line = lines[i];
+    Str nm = if (is_comment_line(line)) { "" } else { match_decl_name(line) };
+    if (nm != "") {
+        if (name_in_list(kill, 0, nm)) {
+            Int j = find_close_brace(lines, i, n);
+            return drop_decls_acc(lines, j + 1, n, kill, acc);
+        }
+    }
+    return drop_decls_acc(lines, i + 1, n, kill, acc.concat([line]));
+}
+
+List(Str) drop_decls(List(Str) lines, List(Str) kill) {
+    return drop_decls_acc(lines, 0, lines.len(), kill, []);
+}
+
+Int find_main_line(List(Str) lines, Int i, Int n) {
+    if (i >= n) { return n; }
+    Str line = lines[i];
+    if (!is_comment_line(line)) {
+        if (match_decl_name(line) == "main") { return i; }
+    }
+    return find_main_line(lines, i + 1, n);
+}
+
+List(Str) cut_main(List(Str) lines) {
+    return take_first_acc(lines, 0, find_main_line(lines, 0, lines.len()), []);
+}
+
+// ─── rename_chunk: whole-identifier rename over the joined chunk text ──
+// (a single tokenizing pass is equivalent to the Python original's 16
+// sequential \b-anchored regex substitutions — see port notes: none of
+// these names is a \b-adjacent substring of another, so order never
+// mattered there either.)
+
+Str rename_ident(Str id) {
+    if (id == "env_lookup_rev") { return "ck_env_lookup_rev"; }
+    if (id == "env_lookup_at") { return "ck_env_lookup_at"; }
+    if (id == "env_lookup") { return "ck_env_lookup"; }
+    if (id == "env_add") { return "ck_env_add"; }
+    if (id == "fn_index_at") { return "ck_fn_index_at"; }
+    if (id == "fn_index") { return "ck_fn_index"; }
+    if (id == "struct_index_at") { return "ck_struct_index_at"; }
+    if (id == "struct_index") { return "ck_struct_index"; }
+    if (id == "collect_sigs_at") { return "ck_collect_sigs_at"; }
+    if (id == "collect_sigs") { return "ck_collect_sigs"; }
+    if (id == "collect_ptypes") { return "ck_collect_ptypes"; }
+    if (id == "check_program") { return "ck_check_program"; }
+    if (id == "op_prec") { return "ck_op_prec"; }
+    if (id == "b_index_at") { return "ck_b_index_at"; }
+    if (id == "b_index") { return "ck_b_index"; }
+    if (id == "funcs_empty") { return "sigs_empty"; }
+    if (id == "Funcs") { return "Sigs"; }
+    return id;
+}
+
+List(Str) rename_pieces_acc(Str text, Int i, Int n, List(Str) acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(text, i);
+    if (is_word_char(c)) {
+        Int j = scan_word(text, i + 1, n);
+        return rename_pieces_acc(text, j, n, acc.concat([rename_ident(str_slice(text, i, j))]));
+    }
+    Int j = scan_nonword(text, i + 1, n);
+    return rename_pieces_acc(text, j, n, acc.concat([str_slice(text, i, j)]));
+}
+
+Str rename_chunk(Str text) {
+    return str_join(rename_pieces_acc(text, 0, str_len(text), []), "");
+}
+
+// ─── tail: hdr_core / header extraction + first-occurrence replace ────
+
+Int find_hdr_core_end(List(Str) lines, Int i, Int n) {
+    if (i >= n) { return n - 1; }
+    if (str_ends_with(str_trim(lines[i]), "];")) { return i; }
+    return find_hdr_core_end(lines, i + 1, n);
+}
+
+List(Str) trimmed_slice_acc(List(Str) lines, Int i, Int limit, List(Str) acc) {
+    if (i > limit) { return acc; }
+    return trimmed_slice_acc(lines, i + 1, limit, acc.concat([str_trim(lines[i])]));
+}
+
+Str extract_hdr_core(List(Str) main_lines) {
+    Int n = main_lines.len();
+    Int start = find_line_prefix(main_lines, 0, n, "List(Str) hdr_core =");
+    if (start < 0) { return ""; }
+    Int end = find_hdr_core_end(main_lines, start, n);
+    return str_join(trimmed_slice_acc(main_lines, start, end, []), " ");
+}
+
+Str extract_header_line(List(Str) main_lines) {
+    Int idx = find_line_prefix(main_lines, 0, main_lines.len(), "List(Str) header =");
+    if (idx < 0) { return ""; }
+    return main_lines[idx];
+}
+
+List(Str) replace_hh_acc(List(Str) lines, Int i, Int n, Str hdr_core, Str header, Bool done_core, Bool done_header, List(Str) acc) {
+    if (i >= n) { return acc; }
+    Str line = lines[i];
+    Str t = str_trim(line);
+    if (!done_core) {
+        if (str_starts_with(t, "List(Str) hdr_core =")) {
+            return replace_hh_acc(lines, i + 1, n, hdr_core, header, true, done_header, acc.concat([hdr_core]));
+        }
+    }
+    if (!done_header) {
+        if (str_starts_with(t, "List(Str) header =")) {
+            return replace_hh_acc(lines, i + 1, n, hdr_core, header, done_core, true, acc.concat([header]));
+        }
+    }
+    return replace_hh_acc(lines, i + 1, n, hdr_core, header, done_core, done_header, acc.concat([line]));
+}
+
+List(Str) replace_hdr_core_and_header(List(Str) lines, Str hdr_core, Str header) {
+    return replace_hh_acc(lines, 0, lines.len(), hdr_core, header, false, false, []);
+}
+
+// ─── chunk dedup list (shared helpers kept as codegen's copies) ────
+
+List(Str) chunk_kill_names() {
+    return [
+        "PRes", "parse_type", "parse_type_arg",
+        "parse_type_args_rest", "skip_body", "skip_decl",
+        "str_find_char",
+        "find_sqclose_d", "find_semi0", "extract_ctext",
+        "ct_is_at", "ct_is", "ct_rank_at", "ct_rank",
+        "collect_pnames",
+        "ct_base_of", "ct_text_of",
+        "is_str_fixed", "is_bytes_fixed", "is_list_fixed",
+        "fixed_elem", "fixed_cap", "is_fixed_type",
+        "_all_digits",
+        "behavior_decl_at", "read_instance",
+        "strip_reverse",
+        "cap_list_at", "ceil_join"
+    ];
+}
+
+List(Str) read_lines(Str path) {
+    return str_split(filesystem.read_all(path), "\n");
+}
+
+Int main() {
+    List(Str) cg = read_lines("examples/codegen.resid");
+    List(Str) tc = read_lines("examples/typecheck.resid");
+    List(Str) dv = read_lines("examples/driver.resid");
+
+    // 1. base: codegen without CLI
+    List(Str) base = trim_trailing_blank(cut_main(drop_decls(cg, ["pick_out"])));
+
+    // 2. chunk: typecheck checker section, renamed to avoid collisions
+    Int cs = find_line_containing(tc, 0, tc.len(), "Environment");
+    List(Str) chunk = drop_decls(cut_main(suffix_from(tc, cs)), chunk_kill_names());
+    List(Str) chunk_t = str_split(rename_chunk(str_join(chunk, "\n")), "\n");
+
+    // 3. tail: driver entry point, header refreshed from codegen's main
+    Int ds = find_line_containing(dv, 0, dv.len(), "Driver:");
+    List(Str) tail0 = suffix_from(dv, ds);
+
+    List(Str) cg_main_lines = suffix_from(cg, find_main_line(cg, 0, cg.len()));
+    Str cg_hdr_core = extract_hdr_core(cg_main_lines);
+    Str cg_header = extract_header_line(cg_main_lines);
+    if (cg_hdr_core == "") {
+        eprintln("merge_driver: no hdr_core line found in codegen main");
+        return 1;
+    }
+    if (cg_header == "") {
+        eprintln("merge_driver: no header line found in codegen main");
+        return 1;
+    }
+
+    if (find_line_prefix(tail0, 0, tail0.len(), "List(Str) hdr_core =") < 0) {
+        eprintln("merge_driver: no hdr_core line found in driver tail");
+        return 1;
+    }
+    if (find_line_prefix(tail0, 0, tail0.len(), "List(Str) header =") < 0) {
+        eprintln("merge_driver: no header line found in driver tail");
+        return 1;
+    }
+    List(Str) tail = replace_hdr_core_and_header(tail0, cg_hdr_core, cg_header);
+
+    List(Str) banner = [
+        "",
+        "// =====================================================================",
+        "// Checker stage - fused from typecheck.resid (ck_-prefixed where",
+        "// colliding with the codegen stage above). Regenerated by",
+        "// tools/merge_driver.resid - do not edit by hand.",
+        "// =====================================================================",
+        ""
+    ];
+
+    List(Str) out = base.concat(banner).concat(chunk_t).concat([""]).concat(tail);
+    filesystem.write_all("examples/driver.resid", str_join(out, "\n") + "\n");
+    println("wrote examples/driver.resid (" + IntToString(out.len()) + " lines)");
+    return 0;
+}

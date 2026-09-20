@@ -1,0 +1,383 @@
+/// resid-pkg.resid — first increment of Phase C.7 (PLAN-resid-only.md):
+/// the package-archive core of `resid-build` (spec §28) — pack, hash,
+/// sign, checksig. Byte-identical to `crates/resid-build/src/archive.rs`'s
+/// deterministic format:
+///
+///   "RESIDPKG1"                     (9-byte magic)
+///   u32 LE file count
+///   per file: u16 LE path length, path bytes, u64 LE content length, content
+///
+/// (little-endian — distinct from the CBOR notes sidecar, which is
+/// RFC 8949 big-endian; this format predates that choice and this is a
+/// faithful port, not a redesign.)
+///
+/// Scope: pack/hash/sign/checksig/extract — NOT the `resid.toml`
+/// manifest/dependency/registry/CLI machinery around it (real additional
+/// scope, tracked separately in PLAN-resid-only.md C.7).
+///
+/// Usage:
+///   residc tools/resid-pkg.resid run -- pack <dir> <out>
+///   residc tools/resid-pkg.resid run -- sign <out> <keyfile>
+///   residc tools/resid-pkg.resid run -- checksig <out> <pubkey-hex>
+///   residc tools/resid-pkg.resid run -- extract <out> <dir>
+///
+/// `pack` writes `<out>.resid-pkg`. `sign` reads a hex signing key from
+/// `<keyfile>` (same trailing-newline-tolerant format `write_provenance`
+/// in examples/driver.resid already reads from `keys/resid-ed25519.key`)
+/// and writes `<out>.resid-sig` (hex Ed25519 signature over the archive's
+/// SHA-256 hash, hex-encoded before signing — signing a raw hash directly
+/// as a `Str` would corrupt it, same UTF-8-encoding issue
+/// filesystem.write_bytes was added to solve; see PLAN-resid-only.md).
+/// `checksig` reads `<out>.resid-pkg` + `<out>.resid-sig` and checks against
+/// a given hex public key. `extract` unpacks `<out>.resid-pkg` into `<dir>`
+/// (path-traversal guarded: rejects absolute paths and `..`/empty
+/// segments, same as `archive.rs`'s `extract`).
+
+import "../lib/crypto.resid";
+import "../lib/ed25519.resid";
+
+// ─── little-endian integer encoding (this format's own choice — see
+// module doc comment) ───────────────────────────────────────────────
+
+List(Int) le_u16(Int n) {
+    Int lo = n & 255;
+    Int hi = (n >> 8) & 255;
+    return [lo, hi];
+}
+List(Int) le_u32(Int n) {
+    Int b0 = n & 255;
+    Int b1 = (n >> 8) & 255;
+    Int b2 = (n >> 16) & 255;
+    Int b3 = (n >> 24) & 255;
+    return [b0, b1, b2, b3];
+}
+List(Int) le_u64(Int n) {
+    Int b0 = n & 255;
+    Int b1 = (n >> 8) & 255;
+    Int b2 = (n >> 16) & 255;
+    Int b3 = (n >> 24) & 255;
+    Int b4 = (n >> 32) & 255;
+    Int b5 = (n >> 40) & 255;
+    Int b6 = (n >> 48) & 255;
+    Int b7 = (n >> 56) & 255;
+    return [b0, b1, b2, b3, b4, b5, b6, b7];
+}
+Int read_le_u16(List(Int) b, Int pos) {
+    return b[pos] + b[pos + 1] * 256;
+}
+Int read_le_u32(List(Int) b, Int pos) {
+    return b[pos] + b[pos + 1] * 256 + b[pos + 2] * 65536 + b[pos + 3] * 16777216;
+}
+Int read_le_u64(List(Int) b, Int pos) {
+    Int lo = read_le_u32(b, pos);
+    Int hi = read_le_u32(b, pos + 4);
+    return lo + hi * 4294967296;
+}
+
+// ─── hex decode (crypto.resid only exports encode; mirrors
+// examples/driver.resid's own prov_hex_acc idiom) ───────────────────
+
+Int hex_nibble(Int c) {
+    if (c >= 48) { if (c <= 57) { return c - 48; } }
+    if (c >= 97) { if (c <= 102) { return c - 97 + 10; } }
+    if (c >= 65) { if (c <= 70) { return c - 65 + 10; } }
+    return 0;
+}
+List(Int) hex_decode_acc(Str s, Int i, Int n, List(Int) acc) {
+    if (i + 1 >= n) { return acc; }
+    Int b = hex_nibble(str_char_at(s, i)) * 16 + hex_nibble(str_char_at(s, i + 1));
+    return hex_decode_acc(s, i + 2, n, acc.concat([b]));
+}
+List(Int) hex_decode(Str s) {
+    return hex_decode_acc(s, 0, str_len(s), []);
+}
+
+// ─── generic helpers (forward accumulator, tail-recursive; same
+// per-file duplication convention this session's other tools use) ──
+
+Bool str_cmp_lt(Str a, Str b) {
+    return str_cmp(a, b) < 0;
+}
+Int str_cmp_at(Str a, Str b, Int i, Int na, Int nb) {
+    Bool ea = i >= na;
+    Bool eb = i >= nb;
+    if (ea && eb) { return 0; }
+    if (ea) { return 0 - 1; }
+    if (eb) { return 1; }
+    Int ca = str_char_at(a, i);
+    Int cb = str_char_at(b, i);
+    if (ca < cb) { return 0 - 1; }
+    if (ca > cb) { return 1; }
+    return str_cmp_at(a, b, i + 1, na, nb);
+}
+Int str_cmp(Str a, Str b) {
+    return str_cmp_at(a, b, 0, str_len(a), str_len(b));
+}
+
+// ─── source-file discovery (mirrors archive.rs's walk_sources: only
+// .resid/.toml files, recurse into subdirectories, skip a directory
+// literally named "target") ──────────────────────────────────────────
+
+type FileRef = { Str abs; Str rel; };
+
+Bool is_source_name(Str name) {
+    if (str_ends_with(name, ".resid")) { return true; }
+    return str_ends_with(name, ".toml");
+}
+
+List(FileRef) take_first_fr(List(FileRef) xs, Int i, Int limit, List(FileRef) acc) {
+    if (i >= limit) { return acc; }
+    return take_first_fr(xs, i + 1, limit, acc.concat([xs[i]]));
+}
+List(FileRef) suffix_from_fr(List(FileRef) xs, Int i) {
+    if (i >= xs.len()) { List(FileRef) empty = []; return empty; }
+    List(FileRef) head = [xs[i]];
+    return head.concat(suffix_from_fr(xs, i + 1));
+}
+Int fileref_cmp(FileRef a, FileRef b) {
+    return str_cmp(a.rel, b.rel);
+}
+List(FileRef) insert_sorted_fr(List(FileRef) acc, FileRef fr, Int i) {
+    if (i >= acc.len()) { return acc.concat([fr]); }
+    if (fileref_cmp(fr, acc[i]) < 0) {
+        return take_first_fr(acc, 0, i, []).concat([fr]).concat(suffix_from_fr(acc, i));
+    }
+    return insert_sorted_fr(acc, fr, i + 1);
+}
+List(FileRef) sort_filerefs_acc(List(FileRef) xs, Int i, List(FileRef) acc) {
+    if (i >= xs.len()) { return acc; }
+    return sort_filerefs_acc(xs, i + 1, insert_sorted_fr(acc, xs[i], 0));
+}
+List(FileRef) sort_filerefs(List(FileRef) xs) {
+    return sort_filerefs_acc(xs, 0, []);
+}
+
+List(Str) list_dir_sorted(Str path) {
+    return list_sort_strs(filesystem.list_dir(path));
+}
+
+List(FileRef) walk_dir(Str dir_abs, Str dir_rel) {
+    return walk_dir_acc(dir_abs, dir_rel, list_dir_sorted(dir_abs), 0, []);
+}
+
+// A nested if-expression inside an if-arm hits a real self-hosted codegen
+// bug (malformed phi nodes — confirmed via clang's IR verifier: "PHINode
+// should have one entry for each predecessor"); same class of bug worked
+// around in resid-why.resid's clamp_notes. Pulled the per-entry decision
+// out as an ordinary function body (plain if/return statements, not a
+// nested if-expression) to avoid it.
+List(FileRef) entries_for_child(Str name, Str child_abs, Str child_rel, List(FileRef) acc) {
+    if (filesystem.is_dir(child_abs)) {
+        if (name == "target") { return acc; }
+        return acc.concat(walk_dir(child_abs, child_rel));
+    }
+    if (is_source_name(name)) {
+        return acc.concat([FileRef {.abs = child_abs, .rel = child_rel}]);
+    }
+    return acc;
+}
+
+List(FileRef) walk_dir_acc(Str dir_abs, Str dir_rel, List(Str) names, Int i, List(FileRef) acc) {
+    if (i >= names.len()) { return acc; }
+    Str name = names[i];
+    Str child_abs = dir_abs + "/" + name;
+    Str child_rel = if (dir_rel == "") { name } else { dir_rel + "/" + name };
+    List(FileRef) acc2 = entries_for_child(name, child_abs, child_rel, acc);
+    return walk_dir_acc(dir_abs, dir_rel, names, i + 1, acc2);
+}
+
+// ─── archive pack ───────────────────────────────────────────────────
+
+List(Int) pack_file_entry(FileRef fr, List(Int) acc) {
+    List(Int) rel_bytes = bytes_of(fr.rel);
+    List(Int) content = filesystem.read_bytes(fr.abs);
+    Int rel_len = rel_bytes.len();
+    Int content_len = content.len();
+    return acc.concat(le_u16(rel_len)).concat(rel_bytes).concat(le_u64(content_len)).concat(content);
+}
+List(Int) pack_files_acc(List(FileRef) files, Int i, List(Int) acc) {
+    if (i >= files.len()) { return acc; }
+    return pack_files_acc(files, i + 1, pack_file_entry(files[i], acc));
+}
+
+List(Int) build_archive(Str dir) {
+    List(FileRef) files = sort_filerefs(walk_dir(dir, ""));
+    Int nfiles = files.len();
+    List(Int) header = bytes_of("RESIDPKG1").concat(le_u32(nfiles));
+    return pack_files_acc(files, 0, header);
+}
+
+List(Int) content_hash(List(Int) archive) {
+    return sha256_bytes(archive);
+}
+
+// ─── archive read (checksig + extract) ─────────────────────────────
+
+type ArchiveHdr = { Bool ok; Int count; };
+
+ArchiveHdr read_archive_header(List(Int) archive) {
+    Int n = archive.len();
+    if (n < 13) { return ArchiveHdr {.ok = false, .count = 0}; }
+    List(Int) magic = bytes_of("RESIDPKG1");
+    Bool magic_ok = magic_matches(archive, magic, 0);
+    if (!magic_ok) { return ArchiveHdr {.ok = false, .count = 0}; }
+    return ArchiveHdr {.ok = true, .count = read_le_u32(archive, 9)};
+}
+Bool magic_matches(List(Int) archive, List(Int) magic, Int i) {
+    if (i >= magic.len()) { return true; }
+    if (archive[i] != magic[i]) { return false; }
+    return magic_matches(archive, magic, i + 1);
+}
+
+type ArchiveEntry = { Str rel; List(Int) content; };
+type EntryRead = { Int pos; ArchiveEntry entry; };
+
+EntryRead read_one_entry(List(Int) archive, Int pos) {
+    Int plen = read_le_u16(archive, pos);
+    Int p2 = pos + 2;
+    Str rel = bytes_to_ascii(archive, p2, p2 + plen, "");
+    Int p3 = p2 + plen;
+    Int clen = read_le_u64(archive, p3);
+    Int p4 = p3 + 8;
+    List(Int) content = slice_bytes(archive, p4, p4 + clen - 1);
+    ArchiveEntry e = ArchiveEntry {.rel = rel, .content = content};
+    return EntryRead {.pos = p4 + clen, .entry = e};
+}
+List(ArchiveEntry) read_entries_acc(List(Int) archive, Int pos, Int i, Int n, List(ArchiveEntry) acc) {
+    if (i >= n) { return acc; }
+    EntryRead r = read_one_entry(archive, pos);
+    return read_entries_acc(archive, r.pos, i + 1, n, acc.concat([r.entry]));
+}
+List(ArchiveEntry) read_entries(List(Int) archive) {
+    ArchiveHdr hdr = read_archive_header(archive);
+    if (!hdr.ok) { List(ArchiveEntry) empty = []; return empty; }
+    return read_entries_acc(archive, 13, 0, hdr.count, []);
+}
+
+// ─── extract (path-traversal guard mirrors archive.rs's extract
+// exactly: reject absolute paths and any ".." or empty segment) ────────
+
+Bool any_unsafe_seg(List(Str) segs, Int i) {
+    if (i >= segs.len()) { return false; }
+    if (segs[i] == "..") { return true; }
+    if (segs[i] == "") { return true; }
+    return any_unsafe_seg(segs, i + 1);
+}
+Bool is_unsafe_path(Str rel) {
+    if (str_starts_with(rel, "/")) { return true; }
+    return any_unsafe_seg(str_split(rel, "/"), 0);
+}
+
+Int last_slash_idx(Str s, Int i, Int n, Int last) {
+    if (i >= n) { return last; }
+    Int nl = if (str_char_at(s, i) == 47) { i } else { last };
+    return last_slash_idx(s, i + 1, n, nl);
+}
+Str dirname_of(Str path) {
+    Int idx = last_slash_idx(path, 0, str_len(path), 0 - 1);
+    if (idx < 0) { return "."; }
+    return str_slice(path, 0, idx);
+}
+
+Int write_entry(Str out_dir, ArchiveEntry e) {
+    if (is_unsafe_path(e.rel)) {
+        eprintln("resid-pkg: unsafe path in archive: '" + e.rel + "'");
+        return 0;
+    }
+    Str target = out_dir + "/" + e.rel;
+    filesystem.create_dir(dirname_of(target));
+    filesystem.write_bytes(target, e.content);
+    return 1;
+}
+Int extract_entries_acc(Str out_dir, List(ArchiveEntry) entries, Int i, Int count) {
+    if (i >= entries.len()) { return count; }
+    return extract_entries_acc(out_dir, entries, i + 1, count + write_entry(out_dir, entries[i]));
+}
+Int extract_archive(Str archive_path, Str out_dir) {
+    return extract_entries_acc(out_dir, read_entries(filesystem.read_bytes(archive_path)), 0, 0);
+}
+
+// ─── CLI ────────────────────────────────────────────────────────────
+
+Str usage_text() {
+    return "usage: resid-pkg pack <dir> <out> | sign <out> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir>";
+}
+
+Int cmd_pack(Str dir, Str out) {
+    List(Int) archive = build_archive(dir);
+    filesystem.write_bytes(out + ".resid-pkg", archive);
+    println(hex_encode(content_hash(archive)));
+    return 0;
+}
+
+Int cmd_sign(Str out, Str keyfile) {
+    Str keyhex = filesystem.read_all(keyfile);
+    Int klen = str_len(keyhex);
+    Str ktrim = if (klen > 0) { str_slice(keyhex, 0, klen - 1) } else { keyhex };
+    List(Int) seed = hex_decode(ktrim);
+    List(Int) archive = filesystem.read_bytes(out + ".resid-pkg");
+    Str hash_hex = hex_encode(content_hash(archive));
+    List(Int) sig = sign_msg(seed, hash_hex);
+    filesystem.write_bytes(out + ".resid-sig", bytes_of(hex_encode(sig)));
+    println(hex_encode(sig));
+    return 0;
+}
+
+Int cmd_verify(Str out, Str pubkey_hex) {
+    List(Int) archive = filesystem.read_bytes(out + ".resid-pkg");
+    ArchiveHdr hdr = read_archive_header(archive);
+    if (!hdr.ok) {
+        eprintln("resid-pkg: not a resid package archive '" + out + ".resid-pkg'");
+        return 1;
+    }
+    List(Int) sig_bytes = filesystem.read_bytes(out + ".resid-sig");
+    Str sig_hex = bytes_to_ascii(sig_bytes, 0, sig_bytes.len(), "");
+    List(Int) sig = hex_decode(sig_hex);
+    List(Int) pubk = hex_decode(pubkey_hex);
+    Str hash_hex = hex_encode(content_hash(archive));
+    Bool ok = verify_sig(hash_hex, sig, pubk);
+    if (ok) {
+        println("ok: signature valid (" + IntToString(hdr.count) + " file(s))");
+        return 0;
+    }
+    println("FAIL: signature invalid");
+    return 1;
+}
+
+Int cmd_extract(Str out, Str dir) {
+    Int n = extract_archive(out + ".resid-pkg", dir);
+    println("extracted " + IntToString(n) + " file(s) to " + dir);
+    return 0;
+}
+
+Str bytes_to_ascii(List(Int) b, Int i, Int end, Str acc) {
+    if (i >= end) { return acc; }
+    return bytes_to_ascii(b, i + 1, end, acc + str_from_code(b[i]));
+}
+
+Int main() {
+    Int argc = args.count();
+    if (argc < 2) {
+        eprintln(usage_text());
+        return 2;
+    }
+    Str sub = args.get(1);
+    if (sub == "pack") {
+        if (argc < 4) { eprintln(usage_text()); return 2; }
+        return cmd_pack(args.get(2), args.get(3));
+    }
+    if (sub == "sign") {
+        if (argc < 4) { eprintln(usage_text()); return 2; }
+        return cmd_sign(args.get(2), args.get(3));
+    }
+    if (sub == "checksig") {
+        if (argc < 4) { eprintln(usage_text()); return 2; }
+        return cmd_verify(args.get(2), args.get(3));
+    }
+    if (sub == "extract") {
+        if (argc < 4) { eprintln(usage_text()); return 2; }
+        return cmd_extract(args.get(2), args.get(3));
+    }
+    eprintln(usage_text());
+    return 2;
+}

@@ -24,6 +24,8 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 bool print(const char* s) {
     if (fputs(s, stdout) == EOF) return false;
@@ -1622,6 +1624,35 @@ void* resid_slice_new(void* target, int64_t start, int64_t end) {
  * `PROVIDER_VERBS` table in resid-type; adding a verb here must be mirrored
  * there and in resid-codegen's `lower_provider_call`.
  */
+/* Is `path` a directory? `filesystem.list_dir` cannot tell (it shells out
+ * to `ls -1`, names only); a recursive directory walker needs this. */
+int8_t resid_fs_is_dir(const char* path) {
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return S_ISDIR(st.st_mode) ? 1 : 0;
+}
+
+/* mkdir -p: create `path` and every missing parent directory. Returns 1 on
+ * success (including "already exists as a directory"), 0 on failure. */
+int8_t resid_fs_create_dir_all(const char* path) {
+    size_t len = strlen(path);
+    if (len == 0) return 0;
+    char buf[4096];
+    if (len >= sizeof(buf)) return 0;
+    memcpy(buf, path, len + 1);
+    for (size_t i = 1; i < len; i++) {
+        if (buf[i] == '/') {
+            buf[i] = '\0';
+            if (buf[0] != '\0' && mkdir(buf, 0777) != 0 && errno != EEXIST) return 0;
+            buf[i] = '/';
+        }
+    }
+    if (mkdir(buf, 0777) != 0 && errno != EEXIST) return 0;
+    struct stat st;
+    if (stat(buf, &st) != 0) return 0;
+    return S_ISDIR(st.st_mode) ? 1 : 0;
+}
+
 int8_t resid_fs_exists(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) return 0;
@@ -1663,6 +1694,45 @@ int8_t resid_fs_write_all(const char* path, const char* contents) {
     int ok = (n == strlen(contents)) && (fclose(f) == 0);
     if (!ok) fclose(f);
     return ok ? 1 : 0;
+}
+
+/* Write raw bytes (List(Int), each element 0-255) to `path`, truncating if
+ * it exists. Returns 1 on success, 0 on failure. `Str` always UTF-8-encodes
+ * on write (a codepoint like 153 serializes as two bytes, c2 99) so any
+ * format needing exact byte control (e.g. a CBOR sidecar) must go through
+ * this instead of resid_fs_write_all. */
+int8_t resid_fs_write_bytes(const char* path, void* list_box) {
+    int64_t n = resid_list_len(list_box);
+    unsigned char* buf = (unsigned char*)malloc((size_t)(n > 0 ? n : 1));
+    for (int64_t i = 0; i < n; i++) {
+        buf[i] = (unsigned char)(resid_unbox_i64(resid_list_get(list_box, i)) & 0xFF);
+    }
+    FILE* f = fopen(path, "wb");
+    if (!f) { free(buf); return 0; }
+    size_t written = fwrite(buf, 1, (size_t)n, f);
+    int closed = fclose(f) == 0;
+    free(buf);
+    return (written == (size_t)n && closed) ? 1 : 0;
+}
+
+/* Read `path` as raw bytes into a List(Int) (each element 0-255), or an
+ * empty list on failure/missing file — the read-side counterpart to
+ * resid_fs_write_bytes. */
+void* resid_fs_read_bytes(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return resid_list_new(0, NULL, "List(Int)");
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return resid_list_new(0, NULL, "List(Int)"); }
+    long sz = ftell(f);
+    if (sz < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return resid_list_new(0, NULL, "List(Int)"); }
+    unsigned char* buf = (unsigned char*)malloc((size_t)(sz > 0 ? sz : 1));
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    void** slots = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
+    for (size_t i = 0; i < n; i++) slots[i] = resid_box_i64((int64_t)buf[i]);
+    void* out = resid_list_new((int64_t)n, slots, "List(Int)");
+    free(slots);
+    free(buf);
+    return out;
 }
 
 void* resid_fs_list_dir(const char* path) {

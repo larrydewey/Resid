@@ -1706,6 +1706,153 @@ fn run_fs_write_all_roundtrip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `filesystem.write_bytes`/`read_bytes`: exact raw bytes, not UTF-8-encoded
+/// codepoints — `Str` always UTF-8-encodes on write (codepoint 153 becomes
+/// two bytes, `c2 99`), so a byte-exact format (e.g. a CBOR sidecar) must go
+/// through `List(Int)` instead. Confirms both the on-disk bytes and the
+/// round-trip through `read_bytes`.
+#[test]
+fn run_fs_write_bytes_roundtrip() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-fsbytes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out_path = dir.join("written.bin");
+    let file = dir.join("fsbytes.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"Int main() {{
+    List(Int) bytes = [0, 128, 153, 255, 65];
+    Bool ok = filesystem.write_bytes("{out}", bytes);
+    println(BoolToString(ok));
+    List(Int) back = filesystem.read_bytes("{out}");
+    println(IntToString(back.len()));
+    println(IntToString(back[0]));
+    println(IntToString(back[1]));
+    println(IntToString(back[2]));
+    println(IntToString(back[3]));
+    println(IntToString(back[4]));
+    return 0;
+}}
+"#,
+            out = out_path.display()
+        ),
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout, "true\n5\n0\n128\n153\n255\n65\n");
+
+    let on_disk = std::fs::read(&out_path).expect("written.bin should exist");
+    assert_eq!(on_disk, vec![0u8, 128, 153, 255, 65], "exact raw bytes on disk");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `filesystem.is_dir`: `list_dir` returns names only (no file/dir
+/// distinction), so a recursive walker needs this to tell them apart.
+#[test]
+fn run_fs_is_dir() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-isdir-{}", std::process::id()));
+    let sub = dir.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let file_path = dir.join("f.txt");
+    std::fs::write(&file_path, "hi").unwrap();
+    let missing = dir.join("nope");
+    let file = dir.join("isdir.resid");
+    std::fs::write(
+        &file,
+        format!(
+            r#"Int main() {{
+    println(BoolToString(filesystem.is_dir("{d}")));
+    println(BoolToString(filesystem.is_dir("{s}")));
+    println(BoolToString(filesystem.is_dir("{f}")));
+    println(BoolToString(filesystem.is_dir("{m}")));
+    return 0;
+}}
+"#,
+            d = dir.display(),
+            s = sub.display(),
+            f = file_path.display(),
+            m = missing.display(),
+        ),
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout, "true\ntrue\nfalse\nfalse\n");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `filesystem.create_dir`: `mkdir -p` — creates every missing parent too.
+#[test]
+fn run_fs_create_dir() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-createdir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let nested = dir.join("a").join("b").join("c");
+    let file = dir.join("createdir.resid");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        &file,
+        format!(
+            r#"Int main() {{
+    Bool ok = filesystem.create_dir("{n}");
+    println(BoolToString(ok));
+    println(BoolToString(filesystem.is_dir("{n}")));
+    return 0;
+}}
+"#,
+            n = nested.display(),
+        ),
+    )
+    .unwrap();
+
+    let out = Command::new(residc_bin())
+        .arg(&file)
+        .arg("run")
+        .output()
+        .expect("failed to run residc run");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = out.status.code().unwrap();
+    assert_eq!(
+        code,
+        0,
+        "residc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout, "true\ntrue\n");
+    assert!(nested.is_dir(), "nested directory should exist");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// M6 P2 (type half): `Result(T, RegionError)` construction, match, message.
 #[test]
 fn run_result_type_ok_err() {

@@ -651,6 +651,8 @@ fn grant_readonly_only(caps: &[String], family: &str) -> bool {
 fn is_write_verb(family: &str, verb: &str) -> bool {
     match (family, verb) {
         ("filesystem", "write_all") => true,
+        ("filesystem", "write_bytes") => true,
+        ("filesystem", "create_dir") => true,
         ("process", "run") => true,
         // Git verbs are read-only (git.rev, git.branch); no write verbs yet.
         ("git", "rev") => false,
@@ -812,6 +814,24 @@ pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemTyp
             SemType::Bool,
             "filesystem",
         ),
+        // `list_dir` returns names only (its C runtime shells out to
+        // `ls -1`) — a recursive walker needs this to tell files from
+        // directories.
+        (
+            "filesystem",
+            "is_dir",
+            vec![SemType::Str],
+            SemType::Bool,
+            "filesystem",
+        ),
+        // `mkdir -p`: creates every missing parent too.
+        (
+            "filesystem",
+            "create_dir",
+            vec![SemType::Str],
+            SemType::Bool,
+            "filesystem",
+        ),
         (
             "filesystem",
             "list_dir",
@@ -830,6 +850,27 @@ pub fn provider_verbs() -> Vec<(&'static str, &'static str, Vec<SemType>, SemTyp
             "filesystem",
             "write_all",
             vec![SemType::Str, SemType::Str],
+            SemType::Bool,
+            "filesystem",
+        ),
+        // Raw-byte I/O (spec §16/§32 extension): `Str` always UTF-8-encodes
+        // on write and decodes on read, so any exact-bytes format (e.g. a
+        // CBOR sidecar) must go through `List(Int)` (each element 0-255)
+        // instead of `read_all`/`write_all`.
+        (
+            "filesystem",
+            "read_bytes",
+            vec![SemType::Str],
+            SemType::List(Box::new(SemType::Numeric(NumericType::Int(IntWidth::B64)))),
+            "filesystem",
+        ),
+        (
+            "filesystem",
+            "write_bytes",
+            vec![
+                SemType::Str,
+                SemType::List(Box::new(SemType::Numeric(NumericType::Int(IntWidth::B64)))),
+            ],
             SemType::Bool,
             "filesystem",
         ),
@@ -7851,6 +7892,32 @@ Int main() {
     }
 
     #[test]
+    fn check_program_filesystem_is_dir() {
+        let src = r#"
+Int main() {
+    Bool d = filesystem.is_dir(".");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for filesystem.is_dir, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_filesystem_create_dir() {
+        let src = r#"
+Int main() {
+    Bool ok = filesystem.create_dir("a/b/c");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(errs.is_empty(), "expected no errors for filesystem.create_dir, got: {:?}", errs);
+    }
+
+    #[test]
     fn check_program_filesystem_list_dir() {
         let src = r#"
 Int main() {
@@ -7874,6 +7941,25 @@ Int main() {
         let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
         let errs = check_program(&unit);
         assert!(errs.is_empty(), "expected no errors for filesystem.write_all, got: {:?}", errs);
+    }
+
+    #[test]
+    fn check_program_filesystem_write_bytes_and_read_bytes() {
+        let src = r#"
+Int main() {
+    List(Int) bytes = [0, 128, 255];
+    Bool ok = filesystem.write_bytes("out.bin", bytes);
+    List(Int) back = filesystem.read_bytes("out.bin");
+    return 0;
+}
+"#;
+        let (unit, _errors) = resid_parser::Parser::parse("check.resid", src);
+        let errs = check_program(&unit);
+        assert!(
+            errs.is_empty(),
+            "expected no errors for filesystem.write_bytes/read_bytes, got: {:?}",
+            errs
+        );
     }
 
     #[test]
