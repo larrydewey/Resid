@@ -79,8 +79,8 @@ The standard crypto library is written **in Resid itself** and compiled to nativ
 - `lib/ed25519.resid`: full RFC 8032 Ed25519 signing and verification on `Int(256)`/`Int(512)` arithmetic
 
 Tooling shipped today:
-- `residc <file> [emit-ir|build|run]`: compiler driver (default checks only)
-- `tools/resid-fmt.resid`: canonical formatter, self-hosted (`residc tools/resid-fmt.resid run -- <file>`)
+- `driver-d2 <file> [build|run|emit-ir]`: self-hosted compiler driver (default checks only). Built from `examples/driver.resid` via the stage0 seed.
+- `tools/resid-fmt.resid`: canonical formatter, self-hosted (`driver-d2 tools/resid-fmt.resid run -- <file>`)
 - `tools/resid-graph.resid`, `tools/resid-why.resid`, `tools/resid-pkg.resid`, `tools/resid-manifest.resid`, `tools/resid-cose.resid`: call-graph, provenance query, and package-manager tooling, all self-hosted
 - Stage-2 bootstrap compilers in `examples/` (lexer, parser, typechecker, codegen, driver — all written in Resid). The fused `examples/driver.resid` has full parity with the Rust `residc` pipeline, including sandbox/capability enforcement (§21) and its runtime force-time guard.
 - The Rust pipeline (`bootstrap/rust-stage0/crates/`) is archived, not actively developed — see `PLAN-resid-only.md` Phase D and `PROGRESS.md` §6. A frozen stage-0 seed binary (`bootstrap/stage0/`) is the actual bootstrap root going forward.
@@ -92,7 +92,7 @@ Tooling shipped today:
 ### Hello, Resid!
 
 ```
-// hello.resid
+# hello.resid
 Int main() {
     println("hello from resid");
     return 0;
@@ -101,10 +101,40 @@ Int main() {
 
 Run it:
 
-    residc hello.resid run
+    driver-d2 hello.resid run
 
 A richer example lives at `examples/hello.resid`. Fixed-capacity
 stack types are demonstrated in `examples/stack_types.resid`.
+
+### Multi-File Projects (Package Manager)
+
+Resid has a self-hosted package manager (`tools/resid-manifest.resid`,
+`tools/resid-pkg.resid`). A project uses a `resid.toml` manifest:
+
+```toml
+# resid.toml
+[package]
+name = "myapp"
+version = "0.1.0"
+
+[capabilities]
+grant = ["filesystem", "network"]
+
+[dependencies.http]
+path = "../lib/http.resid"
+
+[dependencies.crypto]
+version = "0.2.0"
+```
+
+Build + run:
+
+    driver-d2 tools/resid-manifest.resid run -- build resid.toml driver-d2 runtime/resid_rt.c
+
+This resolves dependencies (local `path =` or versioned from a registry),
+generates an import depmap, and invokes the compiler. The `resid.lock` file
+pins resolved versions. See `tools/resid-manifest.resid` for all commands
+(`deps`, `depmap`, `pack`, `sign`, `publish`).
 
 ### Sandboxed Example
 
@@ -141,21 +171,38 @@ stack types are demonstrated in `examples/stack_types.resid`.
 ## Installation & Build
 
 ### Prerequisites
-- LLVM 22+
-- Rust Edition 2024+
+- LLVM 22+ (clang for final linking)
+- No Rust toolchain required for normal use
 
-### Building from Source
+### Bootstrapping (from zero-Rust machine)
 
-    git clone https://github.com/your-org/resid.git
-    cd resid
-    cargo build --release
+The frozen stage-0 seed binary lives at `bootstrap/stage0/driver-linux-x86_64` (with `.sha256` checksum). It was built from `examples/driver.resid` by the archived Rust pipeline and is the root of the self-hosting chain:
 
-### Running the Compiler
+    # 1. Compile the self-hosted driver (D2) using the frozen seed
+    ./bootstrap/stage0/driver-linux-x86_64 examples/driver.resid -o driver-d2 -rt runtime/resid_rt.c
 
-    residc hello.resid build [-o out]   # build native binary (clang + tiny C runtime)
-    residc hello.resid run              # build and run it
-    residc hello.resid emit-ir          # print LLVM IR
-    residc hello.resid                  # type-check only
+    # 2. Use the self-hosted driver to compile programs
+    ./driver-d2 hello.resid -o hello -rt runtime/resid_rt.c
+    ./driver-d2 hello.resid run         # build + run
+    ./driver-d2 hello.resid emit-ir     # print LLVM IR
+
+### Running the Compiler (post-bootstrap)
+
+Once you have a self-hosted `driver-d2` (or any later generation):
+
+    driver-d2 hello.resid build [-o out]   # build native binary (clang + C runtime)
+    driver-d2 hello.resid run              # build and run it
+    driver-d2 hello.resid emit-ir          # print LLVM IR
+    driver-d2 hello.resid                  # type-check only
+
+### Rebuilding stage0 for a new host architecture
+
+The archived Rust pipeline lives at `bootstrap/rust-stage0/` (not actively maintained). To build a fresh stage0 binary for a new architecture:
+
+    cd bootstrap/rust-stage0
+    cargo run -p residc -- ../../examples/driver.resid build -o driver-<os>-<arch> -rt ../../runtime/resid_rt.c
+
+Add the resulting binary + `.sha256` to `bootstrap/stage0/`.
 
 ---
 
