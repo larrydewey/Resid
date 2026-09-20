@@ -27,11 +27,16 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <dirent.h>
+#include <libgen.h>
 
 static int resid_path_is_safe(const char* path) {
     if (!path || path[0] == '\0') return 0;
+    char path_copy[PATH_MAX];
+    strncpy(path_copy, path, PATH_MAX - 1);
+    path_copy[PATH_MAX - 1] = '\0';
+    char* dir = dirname(path_copy);
     char resolved[PATH_MAX];
-    if (!realpath(path, resolved)) return 0;
+    if (!realpath(dir, resolved)) return 0;
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof(cwd))) return 0;
     size_t cwd_len = strlen(cwd);
