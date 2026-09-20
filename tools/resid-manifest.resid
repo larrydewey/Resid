@@ -12,11 +12,37 @@
 /// describes (see `crates/resid-build/tests/build.rs`'s fixtures, used as
 /// this file's own test fixtures) use trailing comments.
 ///
-/// Usage: residc tools/resid-manifest.resid run -- <resid.toml>
-/// (prints the parsed fields — a demonstration/verification driver, not
-/// yet wired into build orchestration; see PLAN-resid-only.md C.7 for
-/// what's still open: dependency resolution, capability-ceiling
-/// enforcement, lock file, registry, CLI).
+/// Usage:
+///   residc tools/resid-manifest.resid run -- <resid.toml>
+///   residc tools/resid-manifest.resid run -- lock <resid.lock>
+///   residc tools/resid-manifest.resid run -- deps <resid.toml>
+///
+/// `deps` resolves this manifest's `[dependencies.*]` transitively
+/// (path dependencies only — `version =` registry deps are rejected with
+/// a clear message, since the registry client isn't ported yet),
+/// checking: cycles (depth > 32), a name claimed by two different
+/// directories, a dependency's declared `capabilities` all present under
+/// this manifest's `[capabilities] grant`, and (when a dependency sets
+/// `pubkey = "<hex>"`) that its own `<name>.resid-pkg` +
+/// `<name>.resid-sig` verify against exactly that key — mirrors
+/// `resid-build/src/lib.rs`'s `collect_dep`/`resolve_dep_dir`/
+/// `verify_pinned_key` for the path-dependency case.
+///
+/// Still open (see PLAN-resid-only.md C.7): `version =` registry
+/// dependencies (needs the registry client), the global `[signing]
+/// require_signatures` keyring policy (needs directory-scan of a
+/// keyring, not just one pinned key), and writing `resid.lock` back out
+/// (this only *reads* one via the `lock` subcommand above).
+///
+/// Known scope-trim vs. the Rust original: dependency-directory identity
+/// for cycle/collision detection is plain string equality of the
+/// (non-canonicalized) path, not `Path::canonicalize()` — this language
+/// has no path-canonicalization primitive. Only matters for the same
+/// directory spelled two different ways (symlinks, `./`, `..`); doesn't
+/// affect signature/capability correctness.
+
+import "../lib/crypto.resid";
+import "../lib/ed25519.resid";
 
 // ─── quoted-string parsing (minimal escapes: \" \\ \n \t) ──────────
 
@@ -225,6 +251,179 @@ Manifest load_manifest(Str text) {
     };
 }
 
+// ─── dependency resolution (path dependencies only) ─────────────────
+// Mirrors resid-build/src/lib.rs's collect_dep/resolve_dep_dir/
+// verify_pinned_key — see module doc comment for exact scope.
+
+Int find_char(Str s, Int code, Int i) {
+    if (i >= str_len(s)) { return 0 - 1; }
+    if (str_char_at(s, i) == code) { return i; }
+    return find_char(s, code, i + 1);
+}
+// The capability family of an expression: the text before any `(...)`
+// arguments — `filesystem(scope=["x"])` -> `filesystem`.
+Str cap_family(Str cap) {
+    Int idx = find_char(cap, 40, 0);
+    if (idx < 0) { return str_trim(cap); }
+    return str_trim(str_slice(cap, 0, idx));
+}
+List(Str) grant_families_acc(List(Str) grants, Int i, List(Str) acc) {
+    if (i >= grants.len()) { return acc; }
+    return grant_families_acc(grants, i + 1, acc.concat([cap_family(grants[i])]));
+}
+List(Str) grant_families(List(Str) grants) {
+    List(Str) empty = [];
+    return grant_families_acc(grants, 0, empty);
+}
+
+Int last_slash_idx(Str s, Int i, Int n, Int last) {
+    if (i >= n) { return last; }
+    Int nl = if (str_char_at(s, i) == 47) { i } else { last };
+    return last_slash_idx(s, i + 1, n, nl);
+}
+Str dirname_of(Str path) {
+    Int idx = last_slash_idx(path, 0, str_len(path), 0 - 1);
+    if (idx < 0) { return "."; }
+    return str_slice(path, 0, idx);
+}
+
+Int hex_nibble_val(Int c) {
+    if (c >= 48) { if (c <= 57) { return c - 48; } }
+    if (c >= 97) { if (c <= 102) { return c - 97 + 10; } }
+    if (c >= 65) { if (c <= 70) { return c - 65 + 10; } }
+    return 0;
+}
+List(Int) hex_decode_acc(Str s, Int i, Int n, List(Int) acc) {
+    if (i + 1 >= n) { return acc; }
+    Int b = hex_nibble_val(str_char_at(s, i)) * 16 + hex_nibble_val(str_char_at(s, i + 1));
+    return hex_decode_acc(s, i + 2, n, acc.concat([b]));
+}
+List(Int) hex_decode(Str s) {
+    List(Int) empty = [];
+    return hex_decode_acc(s, 0, str_len(s), empty);
+}
+Str bytes_to_ascii(List(Int) b, Int i, Int end, Str acc) {
+    if (i >= end) { return acc; }
+    return bytes_to_ascii(b, i + 1, end, acc + str_from_code(b[i]));
+}
+
+// A resolved path dependency (post-walk — the Rust equivalent's
+// `Dependency`; that name is already this file's raw manifest-declared
+// entry, so this one is `ResolvedDep`).
+type ResolvedDep = { Str name; Str dir; Str root; List(Str) capabilities; Str pinned_key; };
+type SeenEntry = { Str name; Str dir; };
+type DepResolveResult = { Bool ok; Str err; List(ResolvedDep) deps; List(SeenEntry) seen; };
+
+Str find_seen_dir(List(SeenEntry) seen, Str name, Int i) {
+    if (i >= seen.len()) { return ""; }
+    if (seen[i].name == name) { return seen[i].dir; }
+    return find_seen_dir(seen, name, i + 1);
+}
+DepResolveResult dep_error(DepResolveResult acc, Str err) {
+    return DepResolveResult {.ok = false, .err = err, .deps = acc.deps, .seen = acc.seen};
+}
+
+DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pinned_key, DepResolveResult acc, Int depth) {
+    if (!acc.ok) { return acc; }
+    if (depth > 32) { return dep_error(acc, "dependency '" + name + "': dependency chain deeper than 32 (cycle?)"); }
+    Str prev_dir = find_seen_dir(acc.seen, name, 0);
+    if (prev_dir != "") {
+        if (prev_dir == dep_dir) { return acc; }
+        return dep_error(acc, "dependency name '" + name + "' claimed by both '" + prev_dir + "' and '" + dep_dir + "'");
+    }
+    Str manifest_path = dep_dir + "/resid.toml";
+    if (!filesystem.exists(manifest_path)) {
+        return dep_error(acc, "dependency '" + name + "': cannot read '" + manifest_path + "'");
+    }
+    Manifest dm = load_manifest(filesystem.read_all(manifest_path));
+    if (dm.name == "") {
+        return dep_error(acc, "dependency '" + name + "': invalid resid.toml (missing [package] name)");
+    }
+    Str root = dep_dir + "/" + dm.root;
+    if (!filesystem.exists(root)) {
+        return dep_error(acc, "dependency '" + name + "': root source '" + root + "' not found");
+    }
+    Str prev_pkg_dir = find_seen_dir(acc.seen, dm.name, 0);
+    if (prev_pkg_dir != "") {
+        return dep_error(acc, "package '" + dm.name + "' provided by both '" + prev_pkg_dir + "' and '" + dep_dir + "' - conflicting dependency versions are not supported");
+    }
+    DepResolveResult acc2 = DepResolveResult {.ok = true, .err = "", .deps = acc.deps, .seen = acc.seen.concat([SeenEntry {.name = dm.name, .dir = dep_dir}])};
+    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, acc2, depth + 1);
+    if (!acc3.ok) { return acc3; }
+    ResolvedDep rd = ResolvedDep {.name = dm.name, .dir = dep_dir, .root = root, .capabilities = caps, .pinned_key = pinned_key};
+    return DepResolveResult {.ok = true, .err = "", .deps = acc3.deps.concat([rd]), .seen = acc3.seen};
+}
+
+DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, DepResolveResult acc, Int depth) {
+    if (!acc.ok) { return acc; }
+    if (i >= subs.len()) { return acc; }
+    Dependency sub = subs[i];
+    DepResolveResult acc2 = if (sub.path == "") {
+        dep_error(acc, "dependency '" + sub.name + "': needs 'path' (version/registry dependencies not yet supported by this port — see PLAN-resid-only.md C.7)")
+    } else {
+        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.pubkey, acc, depth)
+    };
+    return collect_sub_deps_at(subs, i + 1, parent_dir, acc2, depth);
+}
+
+DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
+    List(ResolvedDep) empty_deps = [];
+    List(SeenEntry) empty_seen = [];
+    DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
+    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, start, 0);
+}
+
+Str first_missing_cap(List(Str) caps, List(Str) granted, Int i) {
+    if (i >= caps.len()) { return ""; }
+    Str fam = cap_family(caps[i]);
+    if (!list_contains_str(granted, fam)) { return caps[i]; }
+    return first_missing_cap(caps, granted, i + 1);
+}
+Str check_dep_capabilities_at(List(ResolvedDep) deps, List(Str) granted, Int i) {
+    if (i >= deps.len()) { return ""; }
+    ResolvedDep d = deps[i];
+    Str missing = first_missing_cap(d.capabilities, granted, 0);
+    if (missing != "") {
+        return "dependency '" + d.name + "' requires capability '" + missing + "', which is not granted under [capabilities] grant";
+    }
+    return check_dep_capabilities_at(deps, granted, i + 1);
+}
+Str check_dep_capabilities(List(ResolvedDep) deps, List(Str) granted_families) {
+    return check_dep_capabilities_at(deps, granted_families, 0);
+}
+
+// Per-dependency key pinning (spec §28.3): a dependency with `pubkey =
+// "<hex>"` must ship a signed archive whose signature verifies against
+// exactly that key, regardless of any global [signing] policy.
+Str verify_pinned_key(ResolvedDep d) {
+    Str pkg_path = d.dir + "/" + d.name + ".resid-pkg";
+    Str sig_path = d.dir + "/" + d.name + ".resid-sig";
+    if (!filesystem.exists(pkg_path)) {
+        return "dependency '" + d.name + "': pinned key configured but no '" + pkg_path + "' archive found";
+    }
+    if (!filesystem.exists(sig_path)) {
+        return "dependency '" + d.name + "': pinned key configured but no '" + sig_path + "' signature found";
+    }
+    List(Int) archive = filesystem.read_bytes(pkg_path);
+    Str hash_hex = hex_encode(sha256_bytes(archive));
+    List(Int) sig_bytes = filesystem.read_bytes(sig_path);
+    List(Int) sig = hex_decode(bytes_to_ascii(sig_bytes, 0, sig_bytes.len(), ""));
+    List(Int) pubk = hex_decode(d.pinned_key);
+    Bool ok = verify_sig(hash_hex, sig, pubk);
+    if (!ok) { return "dependency '" + d.name + "': signature INVALID for pinned key"; }
+    return "";
+}
+Str verify_all_pinned_keys_at(List(ResolvedDep) deps, Int i) {
+    if (i >= deps.len()) { return ""; }
+    ResolvedDep d = deps[i];
+    Str err = if (d.pinned_key == "") { "" } else { verify_pinned_key(d) };
+    if (err != "") { return err; }
+    return verify_all_pinned_keys_at(deps, i + 1);
+}
+Str verify_all_pinned_keys(List(ResolvedDep) deps) {
+    return verify_all_pinned_keys_at(deps, 0);
+}
+
 // ─── resid.lock (dependency content-hash pinning, spec §28) ─────────
 // Format: `<name> <version> sha256:<hex>` per line, `#` comments and
 // blank lines skipped, malformed lines rejected (a lockfile is
@@ -420,10 +619,39 @@ Int cmd_lock(Str path) {
     return 0;
 }
 
+Int print_resolved_deps(List(ResolvedDep) deps, Int i) {
+    if (i >= deps.len()) { return 0; }
+    ResolvedDep d = deps[i];
+    println("resolved[" + d.name + "] dir=" + d.dir + " root=" + d.root + " caps=" + str_join(d.capabilities, ","));
+    return print_resolved_deps(deps, i + 1);
+}
+
+Int cmd_deps(Str manifest_path) {
+    Manifest m = load_manifest(filesystem.read_all(manifest_path));
+    DepResolveResult r = resolve_all_deps(m, dirname_of(manifest_path));
+    if (!r.ok) {
+        eprintln(r.err);
+        return 1;
+    }
+    Str cap_err = check_dep_capabilities(r.deps, grant_families(m.grant));
+    if (cap_err != "") {
+        eprintln(cap_err);
+        return 1;
+    }
+    Str key_err = verify_all_pinned_keys(r.deps);
+    if (key_err != "") {
+        eprintln(key_err);
+        return 1;
+    }
+    Int _p = print_resolved_deps(r.deps, 0);
+    println("ok: " + IntToString(r.deps.len()) + " dependency/ies resolved");
+    return 0;
+}
+
 Int main() {
     Int argc = args.count();
     if (argc < 2) {
-        eprintln("usage: resid-manifest <resid.toml> | resid-manifest lock <resid.lock>");
+        eprintln("usage: resid-manifest <resid.toml> | resid-manifest lock <resid.lock> | resid-manifest deps <resid.toml>");
         return 2;
     }
     Str a1 = args.get(1);
@@ -433,6 +661,13 @@ Int main() {
             return 2;
         }
         return cmd_lock(args.get(2));
+    }
+    if (a1 == "deps") {
+        if (argc < 3) {
+            eprintln("usage: resid-manifest deps <resid.toml>");
+            return 2;
+        }
+        return cmd_deps(args.get(2));
     }
     return cmd_manifest(a1);
 }
