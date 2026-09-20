@@ -4171,6 +4171,10 @@ fn bootstrap_sources_parse_clean() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     for name in ["typecheck.resid", "lexer.resid", "parser.resid"] {
         let src = std::fs::read_to_string(root.join("examples").join(name)).unwrap();

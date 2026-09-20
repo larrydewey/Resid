@@ -10411,7 +10411,7 @@ Int main() {
     }
     Str path = args.get(1);
     Str out = pick_opt(argc, "-o", "a.out");
-    Str rtc = pick_opt(argc, "-rt", "crates/residc/resid_rt.c");
+    Str rtc = pick_opt(argc, "-rt", "runtime/resid_rt.c");
     Str depmap_path = pick_opt(argc, "-depmap", "");
     Str depmap = if (depmap_path == "") { "" } else { filesystem.read_all(depmap_path) };
     // Import resolution: the merged compilation text is the importing

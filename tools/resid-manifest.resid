@@ -1048,7 +1048,7 @@ Int main() {
             eprintln("usage: resid-manifest build <resid.toml> <driver-binary> [resid_rt.c]");
             return 2;
         }
-        Str rtc = if (argc >= 5) { args.get(4) } else { "crates/residc/resid_rt.c" };
+        Str rtc = if (argc >= 5) { args.get(4) } else { "runtime/resid_rt.c" };
         return cmd_build(args.get(2), args.get(3), rtc);
     }
     return cmd_manifest(a1);

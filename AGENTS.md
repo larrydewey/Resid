@@ -55,5 +55,7 @@ during iteration and what to expect when running the full suite.
 | `bootstrap_graph_reduce_rejects_declarations` | 1m 00.1s |
 | `run_str_builder_in_resid` | 1m 00.0s |
 
-All 31 are in `crates/residc/tests/e2e.rs`. Everything else in the workspace
+All 31 are in `bootstrap/rust-stage0/crates/residc/tests/e2e.rs` (the Rust
+pipeline is archived under `bootstrap/rust-stage0/` as of Phase D — see
+`PLAN-resid-only.md`). Everything else in the workspace
 (the other ~790 tests) finishes in well under a second.

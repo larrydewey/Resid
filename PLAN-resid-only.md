@@ -1795,10 +1795,52 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       attachment or build-recipe-only deferral) — it must be reachable
       without Rust, which a released/external artifact doesn't guarantee
       long-term.
-- [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/` — deferred within
-      this session until the in-flight full e2e suite run (using the
-      current `crates/` workspace layout) finishes; moving it mid-run
-      would corrupt that run.
+- [x] D.2 Archive `crates/` to `bootstrap/rust-stage0/` — **DONE**.
+      `git mv crates bootstrap/rust-stage0/crates` (rename-detected, full
+      history preserved). Two real complications found and resolved
+      before executing, both surfaced to the user rather than decided
+      unilaterally:
+      1. `tools/resid-lsp-full` (locked to stay Rust permanently — out of
+         scope for "resid-only") depends directly on `crates/resid-lexer`/
+         `resid-parser`/`resid-type`/`resid-ir`. Fixed by updating its
+         `Cargo.toml` path references to
+         `../../bootstrap/rust-stage0/crates/...` — it keeps building,
+         just from the archived location.
+      2. `tools/resid-fmt`, `tools/resid-graph`, `tools/resid-why` (Rust
+         crates) were fully superseded by this session's `.resid` ports
+         (C.4/C.5/C.6) and had no remaining reason to exist — deleted
+         outright (`git rm -r`) rather than archived, per explicit user
+         decision. `tools/resid-notes`/`resid-cache` were **not** touched
+         — still load-bearing for `resid-lsp`/`resid-lsp-full` and for
+         `residc` itself (its own `Cargo.toml` depends on both).
+      **A third complication found only by actually running the test
+      suite, not by static inspection**: `resid_rt.c` — the C runtime
+      linked into every compiled Resid binary, Rust-pipeline-built or
+      self-hosted-built alike, forever — was sitting inside
+      `crates/residc/`, about to be swept into "archived, not actively
+      maintained" despite being a permanent, actively-edited dependency.
+      Relocated to a new top-level `runtime/resid_rt.c` (user decision)
+      and fixed every reference: the two Rust `include_str!` embeds
+      (`residc`'s and `resid-build`'s), the self-hosted defaults
+      (`examples/driver.resid`'s `-rt` default, `resid-manifest.resid`'s
+      `cmd_build` default), and `tools/gen_case_tables.py`.
+      **The real cost of this phase, found by actually running the test
+      suite (not caught by `cargo build`, which only checks that code
+      compiles, not that hardcoded test-fixture paths resolve)**: 65
+      separate `env!("CARGO_MANIFEST_DIR")`-based workspace-root
+      computations across `resid-parser`'s and `residc`'s own test files
+      (`.parent().unwrap()` chains, in four different literal formattings)
+      all silently pointed two directories too shallow once their crates
+      moved two levels deeper. Found by actually running `cargo test
+      --workspace` (not just `cargo build --workspace`, which stayed
+      green throughout and would never have caught this) and fixing each
+      pattern class as it surfaced, verified via full-suite reruns each
+      time. Root-caused and fixed all instances (65/65, counted and
+      cross-checked) rather than patching failures one at a time as they
+      appeared. Final full-suite confirmation: 135/136 passed, the one
+      failure (`bootstrap_driver_fixed_size_stack_types`) reproduced as
+      the already-known parallel-execution/shared-`.resid-cache.cbor`
+      race (passes clean in isolation), not a regression from this move.
 - [x] D.3 Update PROGRESS.md §6 policy — **DONE**. Replaced the
       bootstrap-period "Rust implemented first, dual-pipeline parity
       required" normative rules with the stage-0-seed model (self-hosted

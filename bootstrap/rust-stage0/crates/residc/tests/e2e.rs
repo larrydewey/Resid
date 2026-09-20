@@ -933,6 +933,10 @@ fn bootstrap_lexer_tokenizes_source() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     std::fs::copy(workspace.join("examples/lexer.resid"), &lexer).unwrap();
     let src = dir.join("sample.resid");
@@ -980,6 +984,10 @@ fn bootstrap_parser_builds_ast() {
     std::fs::create_dir_all(&dir).unwrap();
     let parser = dir.join("parser.resid");
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -1070,6 +1078,10 @@ fn bootstrap_typechecker_accepts_bootstrap_sources() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     for name in ["typecheck.resid", "lexer.resid", "parser.resid"] {
         let out = Command::new(residc_bin())
@@ -1099,6 +1111,10 @@ fn bootstrap_typechecker_rejects_type_errors() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-tc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -2227,6 +2243,10 @@ fn bootstrap_codegen_emits_runnable_ir() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     let sample = dir.join("sample.resid");
     std::fs::write(
@@ -2281,7 +2301,7 @@ Int main() {
     let bin = dir.join("sample_bin");
     let cc = Command::new("clang")
         .arg(&out_ll)
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .arg("-Wno-override-module")
         .arg("-pthread")
         .arg("-o")
@@ -2315,6 +2335,10 @@ fn bootstrap_driver_compiles_and_rejects() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-drv-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -2357,7 +2381,7 @@ Int main() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("failed to run residc run");
     assert_eq!(
@@ -2396,7 +2420,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("bad_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("failed to run residc run");
     assert_ne!(
@@ -2421,6 +2445,10 @@ fn bootstrap_driver_fixed_size_stack_types() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-drv-fixed-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -2464,7 +2492,7 @@ fn bootstrap_driver_fixed_size_stack_types() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("failed to run residc run");
     assert_eq!(
@@ -2506,7 +2534,7 @@ fn bootstrap_driver_fixed_size_stack_types() {
         .arg("-o")
         .arg(&oob_bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("failed to run residc run");
     assert_eq!(
@@ -2540,6 +2568,10 @@ fn bootstrap_driver_fixed_builtin_widening() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     let sample = dir.join("widen.resid");
     std::fs::write(
@@ -2570,7 +2602,7 @@ fn bootstrap_driver_fixed_builtin_widening() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("failed to run residc run (driver)");
     assert_eq!(
@@ -2624,7 +2656,7 @@ fn bootstrap_driver_fixed_builtin_widening() {
         .arg("-o")
         .arg(dir.join("widen_bad_drv"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("failed to run residc run (bad)");
     assert_ne!(
@@ -2652,6 +2684,10 @@ fn stage2_emitter_compiles_bootstrap_lexer() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
 
     // 1. Build the Resid-written emitter with the Rust residc.
@@ -2661,7 +2697,7 @@ fn stage2_emitter_compiles_bootstrap_lexer() {
         .arg("-o")
         .arg(dir.join("emitter"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("failed to build stage-2 emitter");
     assert_eq!(
@@ -2690,7 +2726,7 @@ fn stage2_emitter_compiles_bootstrap_lexer() {
     // 3. Link the emitted IR and run it on a sample source.
     let clang = Command::new("clang")
         .arg(&ll)
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .arg("-Wno-override-module")
         .arg("-pthread")
         .arg("-o")
@@ -3010,6 +3046,10 @@ fn run_sha256_in_resid() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
     let file = dir.join("main.resid");
@@ -3057,6 +3097,10 @@ fn run_stage2_provenance_sidecar() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     // Reuse the repo keypair if present; otherwise generate one.
     let keys = workspace.join("keys");
@@ -3083,7 +3127,7 @@ fn run_stage2_provenance_sidecar() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(workspace) // driver looks for keys/ relative to cwd
         .output()
         .expect("failed to run driver");
@@ -3127,6 +3171,10 @@ fn run_else_if_chain() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     for (x, want) in [("5", "big"), ("2", "mid"), ("0", "small")] {
         let file = dir.join("main.resid");
@@ -3166,7 +3214,7 @@ Int main() {{
             .arg("-o")
             .arg(&bin)
             .arg("-rt")
-            .arg(workspace.join("crates/residc/resid_rt.c"))
+            .arg(workspace.join("runtime/resid_rt.c"))
             .output()
             .expect("failed to run driver");
         assert_eq!(out2.status.code(), Some(0), "{}", String::from_utf8_lossy(&out2.stderr));
@@ -3183,6 +3231,10 @@ fn run_ed25519_sign_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-edsign-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -3237,6 +3289,10 @@ fn run_ed25519_verify_in_resid() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
     std::fs::copy(workspace.join("lib/ed25519.resid"), dir.join("ed25519.resid")).unwrap();
@@ -3278,6 +3334,10 @@ fn run_x25519_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-x25519-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -3365,6 +3425,10 @@ fn run_hkdf_in_resid() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
     let file = dir.join("main.resid");
@@ -3431,6 +3495,10 @@ fn run_chacha20poly1305_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-chacha-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -3513,6 +3581,10 @@ fn run_aes128gcm_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-aesgcm-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -3607,7 +3679,7 @@ fn run_tls13_handshake_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-tls13-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
     for f in ["crypto.resid", "aesgcm.resid", "ed25519.resid", "x25519.resid", "tls.resid"] {
         std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
     }
@@ -3741,7 +3813,7 @@ fn run_tls13_framing_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-tlsmsg-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
     for f in ["crypto.resid","aesgcm.resid","ed25519.resid","x25519.resid","tls.resid","tlsmsg.resid","chain.resid","rsa.resid","ec256.resid","der.resid","x509.resid"] {
         std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
     }
@@ -3852,7 +3924,7 @@ fn run_ecdsa_prop_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-ecprop-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
     for f in ["crypto.resid","aesgcm.resid","ed25519.resid","x25519.resid","tls.resid","tlsmsg.resid","chain.resid","rsa.resid","ec256.resid","der.resid","x509.resid"] {
         std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
     }
@@ -4089,7 +4161,7 @@ fn run_ecge512_wide_prop_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-ecwide-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
     for f in ["crypto.resid","aesgcm.resid","ed25519.resid","x25519.resid","tls.resid","tlsmsg.resid","chain.resid","rsa.resid","ec256.resid","der.resid","x509.resid"] {
         std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
     }
@@ -4435,7 +4507,7 @@ fn run_ec_ge_zero_max_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-eczero-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
     for f in ["crypto.resid","aesgcm.resid","ed25519.resid","x25519.resid","tls.resid","tlsmsg.resid","chain.resid","rsa.resid","ec256.resid","der.resid","x509.resid"] {
         std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
     }
@@ -4520,6 +4592,10 @@ fn run_sha512_in_resid() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
     let file = dir.join("main.resid");
@@ -4566,6 +4642,10 @@ fn run_hmac_sha256_in_resid() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     std::fs::copy(workspace.join("lib/crypto.resid"), dir.join("crypto.resid")).unwrap();
     let file = dir.join("main.resid");
@@ -4606,6 +4686,10 @@ fn run_crypto_kit() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-kit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -4654,6 +4738,10 @@ fn run_crypto_randomness() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-rnd-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -4730,6 +4818,10 @@ fn run_cose_provenance_verify_and_tamper() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-cose-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -4819,6 +4911,10 @@ fn run_encrypt0_provenance_roundtrip() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     let keys = workspace.join("keys");
     let have_key = keys.join("resid-ed25519.key").exists();
@@ -4886,6 +4982,10 @@ fn run_reduction_reports_discharged_notes() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     let keys = workspace.join("keys");
     let have_key = keys.join("resid-ed25519.key").exists();
@@ -4945,6 +5045,10 @@ fn run_http_get_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-http-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -5017,6 +5121,10 @@ fn run_tcp_externs_both_pipelines() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -5072,7 +5180,7 @@ Int main() {{
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(workspace) // driver looks for keys/ relative to cwd
         .output()
         .expect("driver run");
@@ -5093,6 +5201,10 @@ fn run_stage2_import_resolution() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-imp2-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -5128,7 +5240,7 @@ fn run_stage2_import_resolution() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(workspace)
         .output()
         .expect("driver run");
@@ -5148,6 +5260,10 @@ fn run_der_parser_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-der-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -5201,7 +5317,7 @@ Int main() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(workspace)
         .output()
         .expect("driver run");
@@ -5222,6 +5338,10 @@ fn run_x509_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-x509-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -5275,7 +5395,7 @@ Int main() {{
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(workspace)
         .output()
         .expect("driver run");
@@ -5304,6 +5424,10 @@ fn run_rsa_pkcs1_verify_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-rsa-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -5396,7 +5520,7 @@ Int main() {{
         "-o".into(),
         bin.to_string_lossy().into_owned(),
         "-rt".into(),
-        workspace.join("crates/residc/resid_rt.c").to_string_lossy().into_owned(),
+        workspace.join("runtime/resid_rt.c").to_string_lossy().into_owned(),
     ];
     let mut drv = unlimit(residc_bin(), &drv_args);
     let out = drv.current_dir(workspace).output().expect("driver run");
@@ -5422,6 +5546,10 @@ fn run_ecdsa_p256_verify_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-ec-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -5542,6 +5670,10 @@ fn run_chain_san_validity_in_resid() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     for f in ["der.resid", "x509.resid", "crypto.resid", "rsa.resid", "ec256.resid", "chain.resid"] {
         std::fs::copy(workspace.join("lib").join(f), dir.join(f)).unwrap();
@@ -5602,7 +5734,7 @@ fn run_tls13_live_openssl_in_resid() {
         None => { eprintln!("skipping: openssl not found"); return; }
     };
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
     let dir = std::env::temp_dir().join(format!("residc-e2e-tlslive-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     {
@@ -5708,7 +5840,7 @@ fn run_http11_client_in_resid() {
         None => { eprintln!("skipping: python3 not found"); return; }
     };
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
     let dir = std::env::temp_dir().join(format!("residc-e2e-http11-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for f in ["http.resid", "crypto.resid"] {
@@ -5786,6 +5918,10 @@ fn run_h2_hpack_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-h2-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -5883,7 +6019,7 @@ Int main() {
         "-o".into(),
         bin.to_string_lossy().into_owned(),
         "-rt".into(),
-        workspace.join("crates/residc/resid_rt.c").to_string_lossy().into_owned(),
+        workspace.join("runtime/resid_rt.c").to_string_lossy().into_owned(),
     ];
     let out = unlimit(residc_bin(), &drv_args).current_dir(workspace).output().expect("driver run");
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
@@ -5906,6 +6042,10 @@ fn run_str_builder_in_resid() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-sb-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -5955,7 +6095,7 @@ Int main() {
         "-o".into(),
         bin.to_string_lossy().into_owned(),
         "-rt".into(),
-        workspace.join("crates/residc/resid_rt.c").to_string_lossy().into_owned(),
+        workspace.join("runtime/resid_rt.c").to_string_lossy().into_owned(),
     ];
     let out = Command::new(residc_bin())
         .args(&drv_args)
@@ -5996,7 +6136,7 @@ fn run_h2_live_request_in_resid() {
         None => { eprintln!("skipping: openssl not found"); return; }
     };
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
     let dir = std::env::temp_dir().join(format!("residc-e2e-h2live-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     {
@@ -6058,6 +6198,10 @@ fn run_h2_live_request_in_resid() {
 #[test]
 fn len_arg_and_cross_module_recursive_list_builder() {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -6162,7 +6306,7 @@ Int main() {
         "-o".into(),
         bin.to_string_lossy().into_owned(),
         "-rt".into(),
-        workspace.join("crates/residc/resid_rt.c").to_string_lossy().into_owned(),
+        workspace.join("runtime/resid_rt.c").to_string_lossy().into_owned(),
     ];
     let out = unlimit(residc_bin(), &drv_args).current_dir(workspace).output().expect("driver run");
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
@@ -6197,7 +6341,7 @@ fn run_h2_post_and_continuation_in_resid() {
         None => { eprintln!("skipping: openssl not found"); return; }
     };
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
     let dir = std::env::temp_dir().join(format!("residc-e2e-h2post-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::copy(workspace.join("examples/h2_client.resid"), dir.join("h2_client.resid")).unwrap();
@@ -6531,6 +6675,10 @@ fn bootstrap_behavior_ord_parity() {
         .unwrap()
         .parent()
         .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .to_path_buf();
     let dir = std::env::temp_dir().join(format!("residc-beh-parity-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -6590,7 +6738,7 @@ Int main() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("stage-2 driver run failed");
     assert_eq!(
@@ -6619,7 +6767,7 @@ Int main() {
             .arg("run")
             .arg(&bad)
             .arg("-rt")
-            .arg(workspace.join("crates/residc/resid_rt.c"))
+            .arg(workspace.join("runtime/resid_rt.c"))
             .output()
             .unwrap();
         assert_ne!(out.status.code(), Some(0), "{name} should fail");
@@ -6636,6 +6784,10 @@ Int main() {
 #[test]
 fn bootstrap_map_set_parity() {
     let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -6702,7 +6854,7 @@ fn bootstrap_map_set_parity() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("stage-2 driver run failed");
     assert_eq!(
@@ -6733,7 +6885,7 @@ fn bootstrap_map_set_parity() {
             .arg("run")
             .arg(&bad)
             .arg("-rt")
-            .arg(workspace.join("crates/residc/resid_rt.c"))
+            .arg(workspace.join("runtime/resid_rt.c"))
             .output()
             .unwrap();
         assert_ne!(s2b.status.code(), Some(0), "{name} should fail in stage-2");
@@ -6745,6 +6897,10 @@ fn bootstrap_map_set_parity() {
 #[test]
 fn bootstrap_option_sum_parity() {
     let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -6791,7 +6947,7 @@ Int main() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("stage-2 driver run failed");
     assert_eq!(
@@ -6817,6 +6973,10 @@ Int main() {
 #[test]
 fn bootstrap_question_else_parity() {
     let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -6893,7 +7053,7 @@ Int main() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("stage-2 driver run failed");
     assert_eq!(
@@ -6917,6 +7077,10 @@ Int main() {
 #[test]
 fn bootstrap_match_parity() {
     let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -6964,7 +7128,7 @@ Int main() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("stage-2 driver run failed");
     assert_eq!(
@@ -7120,6 +7284,10 @@ fn run_wide_int_boxing() {
         .unwrap()
         .parent()
         .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .to_path_buf();
     let bin = dir.join("widebox_drv");
     let s2 = Command::new(residc_bin())
@@ -7129,7 +7297,7 @@ fn run_wide_int_boxing() {
         .arg("-o")
         .arg(&bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .expect("stage-2 driver run failed");
     assert_eq!(
@@ -7732,7 +7900,16 @@ fn run_sandbox_force_time_guard_fires() {
     // §21.3) — the process aborts (no spawn catch) with the capability error.
     let dir = std::env::temp_dir().join(format!("residc-e2e-sandbox-guard-fire-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let rt = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resid_rt.c");
+    let rt = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("runtime/resid_rt.c");
     let c = dir.join("harness.c");
     std::fs::write(
         &c,
@@ -8231,6 +8408,10 @@ fn bootstrap_graph_reduce_parity() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     let file = dir.join("bgr.resid");
     std::fs::write(
@@ -8263,7 +8444,7 @@ Int main() {
         .arg("-o")
         .arg(&plain_bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .unwrap();
     assert_eq!(
@@ -8279,7 +8460,7 @@ Int main() {
         .arg("-o")
         .arg(&reduced_bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .arg("--bootstrap-graph-reduce")
         .output()
         .unwrap();
@@ -8316,6 +8497,10 @@ fn bootstrap_graph_reduce_eliminates_dead_bindings() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     let file = dir.join("bgrdce.resid");
     std::fs::write(
@@ -8345,7 +8530,7 @@ Int main() {
         .arg("-o")
         .arg(&plain_bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .unwrap();
     assert_eq!(
@@ -8362,7 +8547,7 @@ Int main() {
         .arg("-o")
         .arg(&reduced_bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .arg("--bootstrap-graph-reduce")
         .output()
         .unwrap();
@@ -8403,6 +8588,10 @@ fn bootstrap_graph_reduce_rejects_declarations() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     let file = dir.join("bgrrej.resid");
     std::fs::write(&file, "type Point = { Int x; };\nInt main() {\n    return 0;\n}\n").unwrap();
@@ -8414,7 +8603,7 @@ fn bootstrap_graph_reduce_rejects_declarations() {
         .arg("-o")
         .arg(dir.join("bgrrej_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .arg("--bootstrap-graph-reduce")
         .output()
         .unwrap();
@@ -8442,6 +8631,10 @@ fn bootstrap_graph_reduce_rejects_behavior_instances() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     let file = dir.join("bgrbeh.resid");
     std::fs::write(
@@ -8457,7 +8650,7 @@ fn bootstrap_graph_reduce_rejects_behavior_instances() {
         .arg("-o")
         .arg(dir.join("bgrbeh_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .arg("--bootstrap-graph-reduce")
         .output()
         .unwrap();
@@ -8486,6 +8679,10 @@ fn bootstrap_driver_sandbox_enforcement() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
 
     let ok = dir.join("ok.resid");
@@ -8508,7 +8705,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("ok_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
@@ -8537,7 +8734,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("bad_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .unwrap();
     assert_ne!(out.status.code(), Some(0), "sandbox ceiling violation must fail");
@@ -8558,6 +8755,10 @@ fn bootstrap_driver_sandbox_fstring_holes() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-fstr-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -8588,7 +8789,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("prov_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .unwrap();
     assert_ne!(out.status.code(), Some(0), "provider call inside an interpolation must be rejected");
@@ -8624,7 +8825,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("call_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .unwrap();
     assert_ne!(out.status.code(), Some(0), "requires-call inside an interpolation must be rejected");
@@ -8661,7 +8862,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("text_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .unwrap();
     assert_eq!(
@@ -8681,6 +8882,10 @@ fn bootstrap_driver_sandbox_transitive_attenuation() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-trans-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -8709,7 +8914,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("ok_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
@@ -8739,7 +8944,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("bad_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .unwrap();
     assert_ne!(out.status.code(), Some(0), "transitive capability violation must fail");
@@ -8772,7 +8977,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("chain_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .output()
         .unwrap();
     assert_ne!(out.status.code(), Some(0), "closure violation through helper must fail");
@@ -8790,6 +8995,10 @@ fn bootstrap_driver_sandbox_handle_entry() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-handle-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -8823,7 +9032,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("ok_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -8857,7 +9066,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("bad_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -8898,7 +9107,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("ok2_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -8937,7 +9146,7 @@ Int main() {
         .arg("-o")
         .arg(dir.join("bad2_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -8956,6 +9165,10 @@ fn bootstrap_driver_sandbox_readonly_mode() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-ro-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -8982,7 +9195,7 @@ Int main() { println(IntToString(read_demo())); return 0; }"#,
         .arg("-o")
         .arg(dir.join("ok_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -9009,7 +9222,7 @@ Int main() { write_demo(); return 0; }"#,
         .arg("-o")
         .arg(dir.join("bad_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -9036,7 +9249,7 @@ Int main() { write_demo(); return 0; }"#,
         .arg("-o")
         .arg(dir.join("typo_bin"))
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -9057,6 +9270,10 @@ fn bootstrap_driver_sandbox_force_time_guard() {
     let dir = std::env::temp_dir().join(format!("residc-e2e-drv-sbx-guard-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -9082,7 +9299,7 @@ Int main() { println(IntToString(read_demo())); return 0; }"#,
         .arg("-o")
         .arg(&out_bin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -9120,7 +9337,7 @@ Int main() {
         .arg("-o")
         .arg(&vbin)
         .arg("-rt")
-        .arg(workspace.join("crates/residc/resid_rt.c"))
+        .arg(workspace.join("runtime/resid_rt.c"))
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -9158,9 +9375,13 @@ fn bootstrap_driver_self_compile_fixed_point() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
     let driver_src = workspace.join("examples/driver.resid");
-    let rtc = workspace.join("crates/residc/resid_rt.c");
+    let rtc = workspace.join("runtime/resid_rt.c");
 
     // Step 1: Rust pipeline compiles driver.resid -> D1.
     let d1 = dir.join("d1");
@@ -9319,8 +9540,12 @@ fn bootstrap_driver_general_sum_type_match() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
-    let rtc = workspace.join("crates/residc/resid_rt.c");
+    let rtc = workspace.join("runtime/resid_rt.c");
     let driver = workspace.join("examples/driver.resid");
 
     let sample = dir.join("shapes.resid");
@@ -9539,8 +9764,12 @@ fn bootstrap_driver_resid_fmt_formats_and_reparses() {
         .parent()
         .unwrap()
         .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
         .unwrap();
-    let rtc = workspace.join("crates/residc/resid_rt.c");
+    let rtc = workspace.join("runtime/resid_rt.c");
     let driver = workspace.join("examples/driver.resid");
     let fmt_tool = workspace.join("tools/resid-fmt.resid");
 

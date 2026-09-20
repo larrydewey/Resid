@@ -945,4 +945,4 @@ pub fn build(manifest: &Manifest, profile: Profile, out_dir: &Path) -> Result<Ar
 }
 
 /// The tiny bootstrap runtime linked into every native Resid binary.
-const RUNTIME_C: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../residc/resid_rt.c"));
+const RUNTIME_C: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../runtime/resid_rt.c"));
