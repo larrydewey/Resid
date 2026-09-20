@@ -9468,8 +9468,12 @@ Int main() {
         "self-hosted driver should reject a non-exhaustive match"
     );
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("not exhaustive"),
-        "expected an exhaustiveness error, got: {}",
+        // E0001 type errors render via diag_error, which uses println
+        // (stdout), not eprintln — unlike the E0211/E0212/E0213/E0218
+        // sandbox/effect errors, which do go to stderr.
+        String::from_utf8_lossy(&out.stdout).contains("not exhaustive"),
+        "expected an exhaustiveness error, got stdout: {} / stderr: {}",
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -9511,8 +9515,9 @@ Int main() {
         "self-hosted driver should reject a duplicate match arm"
     );
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("duplicate match arm"),
-        "expected a duplicate-arm error, got: {}",
+        String::from_utf8_lossy(&out.stdout).contains("duplicate match arm"),
+        "expected a duplicate-arm error, got stdout: {} / stderr: {}",
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
 
