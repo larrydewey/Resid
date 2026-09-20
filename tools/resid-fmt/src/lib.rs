@@ -77,7 +77,16 @@ pub fn format_unit(unit: &TranslationUnit) -> String {
                 p.blank();
             }
             Declaration::Behavior(b) => {
-                p.line(&format!("behavior {} = …;", b.name.0));
+                // Previously printed a literal "…" placeholder instead of
+                // the real declaration — never caught, no test exercised
+                // a behavior declaration.
+                let params: Vec<String> = b.type_params.iter().map(|i| i.0.clone()).collect();
+                p.line(&format!(
+                    "{}({}) = {};",
+                    b.name.0,
+                    params.join(", "),
+                    expr_str(&b.body, 1)
+                ));
                 p.blank();
             }
             Declaration::Sandbox(s) => {
@@ -349,9 +358,13 @@ fn expr_str(e: &Expr, _ctx: usize) -> String {
             format!("{}[{}..{}]", child_str(target, 100), start, end)
         }
         ExprKind::StructLit { name, fields } => {
+            // Real grammar (resid-parser's `parse_struct_lit`) requires
+            // `.field = value`, not `field: value` — the previous spelling
+            // here produced output that failed to reparse; never caught
+            // because no test exercised a struct literal.
             let fs: Vec<String> = fields
                 .iter()
-                .map(|(n, v)| format!("{}: {}", n.0, expr_str(v, 1)))
+                .map(|(n, v)| format!(".{} = {}", n.0, expr_str(v, 1)))
                 .collect();
             format!("{} {{ {} }}", name.0, fs.join(", "))
         }

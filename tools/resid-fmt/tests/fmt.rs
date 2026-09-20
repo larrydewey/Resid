@@ -46,3 +46,36 @@ fn imports_types_and_match_format() {
     assert!(once.contains("Some(k) => k,"));
     assert_eq!(once, fmt(&once));
 }
+
+#[test]
+fn struct_literal_uses_dot_equals_and_reparses() {
+    // Real grammar (resid-parser's parse_struct_lit) requires `.field =
+    // value`; a prior version of this formatter emitted `field: value`,
+    // which fails to reparse. Never caught — no test exercised this.
+    let src = "type Point = { Int x; Int y; };\nPoint mk() {\n    return Point { .x = 1, .y = 2 };\n}\n";
+    let once = fmt(src);
+    assert!(
+        once.contains(".x = 1, .y = 2"),
+        "expected dot-equals struct literal fields, got: {once}"
+    );
+    // Round-trips: the formatter's own output must itself be valid Resid
+    // (the real, load-bearing property a formatter must have).
+    let (_, errors) = resid_parser::Parser::parse("out.resid", &once);
+    assert!(errors.is_empty(), "formatted output failed to reparse: {errors:?}");
+    assert_eq!(once, fmt(&once));
+}
+
+#[test]
+fn behavior_declaration_formats_and_reparses() {
+    // Previously printed a literal "…" placeholder instead of the real
+    // declaration — never caught, no test exercised this either.
+    let src = "Int by_y(Point a, Point b) {\n    return a.y - b.y;\n}\ntype Point = { Int x; Int y; };\nOrd(Point) = by_y;\n";
+    let once = fmt(src);
+    assert!(
+        once.contains("Ord(Point) = by_y;"),
+        "expected a real behavior declaration, got: {once}"
+    );
+    let (_, errors) = resid_parser::Parser::parse("out.resid", &once);
+    assert!(errors.is_empty(), "formatted output failed to reparse: {errors:?}");
+    assert_eq!(once, fmt(&once));
+}
