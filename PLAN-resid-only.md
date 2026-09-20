@@ -1302,26 +1302,54 @@ mechanism, not two), retire `growable.rs` into it, per plan.
 
       **Still open**: the global `[signing] require_signatures` keyring
       policy (needs a directory-scan of a keyring — different from the
-      one-key `verify_pinned_key` case just done), registry client wiring
-      (transport itself is easy — deliberately "dependency-free HTTP/1.1
-      GET over TCP" per the Rust doc comment, and the self-hosted
-      TCP/HTTP client already exists and is e2e-tested:
-      `run_http11_client_in_resid`, `run_http_get_in_resid`,
-      `lib/http.resid`; `registry.rs`'s `serve_dir`, an inbound TCP
-      *listener* for `resid-build serve`, is a distinct, unchecked
-      capability — likely fine to defer/drop as a dev-convenience
-      feature), writing `resid.lock` back out (only *read* so far), the
-      CLI/subcommand orchestration in `main.rs` (385 lines) tying
+      one-key `verify_pinned_key` case just done).
+
+      **Registry client — DONE for local-directory mode.** Added to the
+      same file: `fetch_pkg_local`/`fetch_sha_local` (mirror
+      `registry.rs`'s `Registry::Local` candidate paths exactly —
+      `<reg>/pkg/<name>-<version>.resid<suffix>`, falling back to
+      `<reg>/<name>-<version>.resid<suffix>` without the `pkg/`
+      subdirectory), a duplicated archive reader/extractor (LE
+      header/entry parsing + path-traversal-guarded extract — same
+      format `resid-pkg.resid` writes, can't import that file directly
+      without a name collision, so duplicated per this session's
+      established convention), and `resolve_dep_dir_version` (fetch,
+      hash, check the sidecar `.resid-sha256` when present, extract once
+      into `target/resid/deps/<name>-<version>` and reuse on repeat
+      resolution). `collect_sub_deps_at` now branches on `path =` vs.
+      `version =` and calls into the same `collect_dep_path` either way
+      once a concrete directory is in hand — one resolution machine, two
+      ways to arrive at a directory. Verified against a real 3-fixture
+      setup (a `math` package packed and published into a local registry
+      dir with `resid-pkg.resid`, an `app` depending on `math` by
+      `version = "1.0.0"` via `[registry] path`): successful fetch +
+      extract + resolve; a corrupted `.resid-sha256` sidecar correctly
+      rejected with expected-vs-got hashes in the message; a missing
+      registry package correctly rejected. Self-hosted D1-built binary
+      matches exactly, first try.
+      Remote HTTP registry mode (`[registry] url`) is still open — the
+      self-hosted TCP/HTTP client this would ride on already exists and
+      is e2e-tested (`run_http11_client_in_resid`, `run_http_get_in_resid`,
+      `lib/http.resid`), just not wired to the registry-fetch path yet.
+      The signed-registry-index trust-anchor check (`[registry] pubkey`)
+      and lockfile pinning during version resolution (only the sidecar
+      hash check applies so far) are also open.
+
+      **Still open**: `registry.rs`'s `serve_dir` (an inbound TCP
+      *listener* for `resid-build serve`) — likely fine to defer/drop as
+      a dev-convenience feature (the core install/fetch path only needs
+      the client side, now done for local registries); writing
+      `resid.lock` back out (only *read* so far); the CLI/subcommand
+      orchestration in `main.rs` (385 lines) tying
       manifest+deps+lock+archive+registry into one `resid-build`
-      command, and COSE encryption (`cose.rs` — rides on
+      command; and COSE encryption (`cose.rs` — rides on
       ChaCha20-Poly1305, which already works self-hosted:
       `lib/chacha.resid`, `run_chacha20poly1305_in_resid`). Recommend
-      next: (1) registry client wiring (local-directory registry mode
-      first — no network needed, same shape as path dependencies but
-      pulling a versioned archive instead of a bare directory); (2) the
-      unified CLI. Each deserves the same fixture-based byte-comparison
-      verification this session used throughout, given the security
-      stakes — as the ed25519 bug shows, this area rewards it.
+      next: the unified CLI (`resid-build build|pack|publish|...`),
+      wiring together everything this file already has. Each remaining
+      piece deserves the same fixture-based byte-comparison verification
+      this session used throughout, given the security stakes — as the
+      ed25519 bug shows, this area rewards it.
 - [ ] D.1 Freeze stage-0 seed binary
 - [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/`
 - [ ] D.3 Update PROGRESS.md §6 policy

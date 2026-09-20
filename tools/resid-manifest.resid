@@ -17,22 +17,29 @@
 ///   residc tools/resid-manifest.resid run -- lock <resid.lock>
 ///   residc tools/resid-manifest.resid run -- deps <resid.toml>
 ///
-/// `deps` resolves this manifest's `[dependencies.*]` transitively
-/// (path dependencies only — `version =` registry deps are rejected with
-/// a clear message, since the registry client isn't ported yet),
-/// checking: cycles (depth > 32), a name claimed by two different
-/// directories, a dependency's declared `capabilities` all present under
-/// this manifest's `[capabilities] grant`, and (when a dependency sets
-/// `pubkey = "<hex>"`) that its own `<name>.resid-pkg` +
+/// `deps` resolves this manifest's `[dependencies.*]` transitively —
+/// both `path =` (local directory) and `version =` (fetched from the
+/// `[registry] path` local directory: `<reg>/pkg/<name>-<version>.
+/// resid-pkg`, falling back to `<reg>/<name>-<version>.resid-pkg`,
+/// extracted once into `target/resid/deps/<name>-<version>` and reused
+/// after) — checking: cycles (depth > 32), a name claimed by two
+/// different directories, a dependency's declared `capabilities` all
+/// present under this manifest's `[capabilities] grant`, and (when a
+/// dependency sets `pubkey = "<hex>"`) that its own `<name>.resid-pkg` +
 /// `<name>.resid-sig` verify against exactly that key — mirrors
 /// `resid-build/src/lib.rs`'s `collect_dep`/`resolve_dep_dir`/
-/// `verify_pinned_key` for the path-dependency case.
+/// `verify_pinned_key`.
 ///
-/// Still open (see PLAN-resid-only.md C.7): `version =` registry
-/// dependencies (needs the registry client), the global `[signing]
-/// require_signatures` keyring policy (needs directory-scan of a
-/// keyring, not just one pinned key), and writing `resid.lock` back out
-/// (this only *reads* one via the `lock` subcommand above).
+/// Still open (see PLAN-resid-only.md C.7): remote HTTP registry mode
+/// (`[registry] url`, not just `path`) — the self-hosted TCP/HTTP client
+/// this would ride on already exists and is e2e-tested, just not wired
+/// here yet; the signed-registry-index trust-anchor check
+/// (`[registry] pubkey`); lockfile pinning is not yet threaded through
+/// version-dependency resolution (only the sidecar `.resid-sha256` hash
+/// check applies so far); the global `[signing] require_signatures`
+/// keyring policy (needs directory-scan of a keyring, not just one
+/// pinned key); and writing `resid.lock` back out (this only *reads* one
+/// via the `lock` subcommand above).
 ///
 /// Known scope-trim vs. the Rust original: dependency-directory identity
 /// for cycle/collision detection is plain string equality of the
@@ -307,6 +314,144 @@ Str bytes_to_ascii(List(Int) b, Int i, Int end, Str acc) {
     return bytes_to_ascii(b, i + 1, end, acc + str_from_code(b[i]));
 }
 
+// ─── local-directory registry (`version = "…"` deps) + archive fetch ──
+// Transport is local-filesystem-only this increment (mirrors
+// registry.rs's Registry::Local candidates exactly: `<dir>/pkg/<name>-
+// <version>.resid<suffix>`, falling back to `<dir>/<name>-<version>.
+// resid<suffix>` without the `pkg/` subdirectory). Remote HTTP registry
+// mode is still open — see PLAN-resid-only.md C.7 — the self-hosted
+// TCP/HTTP client this would ride on already exists and is e2e-tested,
+// this just hasn't been wired here yet.
+//
+// Archive reading/extraction here duplicates resid-pkg.resid's (same
+// per-file-duplication convention as everywhere else this session) since
+// that file's own extract isn't importable without a name collision.
+
+Str pkg_path_pkg_subdir(Str reg_dir, Str name, Str version) {
+    return reg_dir + "/pkg/" + name + "-" + version + ".resid-pkg";
+}
+Str pkg_path_flat(Str reg_dir, Str name, Str version) {
+    return reg_dir + "/" + name + "-" + version + ".resid-pkg";
+}
+List(Int) fetch_pkg_local(Str reg_dir, Str name, Str version) {
+    Str c1 = pkg_path_pkg_subdir(reg_dir, name, version);
+    if (filesystem.exists(c1)) { return filesystem.read_bytes(c1); }
+    Str c2 = pkg_path_flat(reg_dir, name, version);
+    if (filesystem.exists(c2)) { return filesystem.read_bytes(c2); }
+    List(Int) empty = [];
+    return empty;
+}
+Str sha_path_pkg_subdir(Str reg_dir, Str name, Str version) {
+    return reg_dir + "/pkg/" + name + "-" + version + ".resid-sha256";
+}
+Str sha_path_flat(Str reg_dir, Str name, Str version) {
+    return reg_dir + "/" + name + "-" + version + ".resid-sha256";
+}
+Str fetch_sha_local(Str reg_dir, Str name, Str version) {
+    Str c1 = sha_path_pkg_subdir(reg_dir, name, version);
+    if (filesystem.exists(c1)) { return str_trim(filesystem.read_all(c1)); }
+    Str c2 = sha_path_flat(reg_dir, name, version);
+    if (filesystem.exists(c2)) { return str_trim(filesystem.read_all(c2)); }
+    return "";
+}
+
+// Little-endian archive body reads (RESIDPKG1 — see resid-pkg.resid's
+// own module doc comment for the full format).
+Int read_le_u16(List(Int) b, Int pos) {
+    return b[pos] + b[pos + 1] * 256;
+}
+Int read_le_u32(List(Int) b, Int pos) {
+    return b[pos] + b[pos + 1] * 256 + b[pos + 2] * 65536 + b[pos + 3] * 16777216;
+}
+Int read_le_u64(List(Int) b, Int pos) {
+    return read_le_u32(b, pos) + read_le_u32(b, pos + 4) * 4294967296;
+}
+
+type ArchiveHdr = { Bool ok; Int count; };
+Bool magic_matches(List(Int) archive, List(Int) magic, Int i) {
+    if (i >= magic.len()) { return true; }
+    if (archive[i] != magic[i]) { return false; }
+    return magic_matches(archive, magic, i + 1);
+}
+ArchiveHdr read_archive_header(List(Int) archive) {
+    if (archive.len() < 13) { return ArchiveHdr {.ok = false, .count = 0}; }
+    if (!magic_matches(archive, bytes_of("RESIDPKG1"), 0)) { return ArchiveHdr {.ok = false, .count = 0}; }
+    return ArchiveHdr {.ok = true, .count = read_le_u32(archive, 9)};
+}
+
+type ArchiveEntry = { Str rel; List(Int) content; };
+type EntryRead = { Int pos; ArchiveEntry entry; };
+EntryRead read_one_entry(List(Int) archive, Int pos) {
+    Int plen = read_le_u16(archive, pos);
+    Int p2 = pos + 2;
+    Str rel = bytes_to_ascii(archive, p2, p2 + plen, "");
+    Int p3 = p2 + plen;
+    Int clen = read_le_u64(archive, p3);
+    Int p4 = p3 + 8;
+    ArchiveEntry e = ArchiveEntry {.rel = rel, .content = slice_bytes(archive, p4, p4 + clen - 1)};
+    return EntryRead {.pos = p4 + clen, .entry = e};
+}
+List(ArchiveEntry) read_entries_acc(List(Int) archive, Int pos, Int i, Int n, List(ArchiveEntry) acc) {
+    if (i >= n) { return acc; }
+    EntryRead r = read_one_entry(archive, pos);
+    return read_entries_acc(archive, r.pos, i + 1, n, acc.concat([r.entry]));
+}
+List(ArchiveEntry) read_entries(List(Int) archive) {
+    ArchiveHdr hdr = read_archive_header(archive);
+    if (!hdr.ok) { List(ArchiveEntry) empty = []; return empty; }
+    return read_entries_acc(archive, 13, 0, hdr.count, []);
+}
+
+Bool any_unsafe_seg(List(Str) segs, Int i) {
+    if (i >= segs.len()) { return false; }
+    if (segs[i] == "..") { return true; }
+    if (segs[i] == "") { return true; }
+    return any_unsafe_seg(segs, i + 1);
+}
+Bool is_unsafe_path(Str rel) {
+    if (str_starts_with(rel, "/")) { return true; }
+    return any_unsafe_seg(str_split(rel, "/"), 0);
+}
+Int write_archive_entry(Str out_dir, ArchiveEntry e) {
+    if (is_unsafe_path(e.rel)) { return 0; }
+    Str target = out_dir + "/" + e.rel;
+    filesystem.create_dir(dirname_of(target));
+    filesystem.write_bytes(target, e.content);
+    return 1;
+}
+Int extract_entries_acc(Str out_dir, List(ArchiveEntry) entries, Int i, Int count) {
+    if (i >= entries.len()) { return count; }
+    return extract_entries_acc(out_dir, entries, i + 1, count + write_archive_entry(out_dir, entries[i]));
+}
+Int extract_archive_bytes(List(Int) archive, Str out_dir) {
+    return extract_entries_acc(out_dir, read_entries(archive), 0, 0);
+}
+
+// Fetch + verify + (first time only) extract one registry dependency,
+// mirroring resolve_dep_dir's version case. Lockfile pinning is not yet
+// threaded through here (a further integration task — see
+// PLAN-resid-only.md C.7); the sidecar `.resid-sha256` hash check still
+// applies when present.
+type CacheResult = { Bool ok; Str err; Str cache_dir; };
+CacheResult resolve_dep_dir_version(Str name, Str version, Str reg_dir, Str root_pkg_dir) {
+    List(Int) archive = fetch_pkg_local(reg_dir, name, version);
+    if (archive.len() == 0) {
+        Str err = "dependency '" + name + "': cannot fetch '" + name + "-" + version + "' from registry '" + reg_dir + "'";
+        return CacheResult {.ok = false, .err = err, .cache_dir = ""};
+    }
+    Str got = hex_encode(sha256_bytes(archive));
+    Str expect_hex = fetch_sha_local(reg_dir, name, version);
+    if (expect_hex != "") {
+        if (got != expect_hex) {
+            Str err = "dependency '" + name + "': archive hash mismatch (expected " + expect_hex + ", got " + got + ")";
+            return CacheResult {.ok = false, .err = err, .cache_dir = ""};
+        }
+    }
+    Str cache_dir = root_pkg_dir + "/target/resid/deps/" + name + "-" + version;
+    Int _e = if (filesystem.is_dir(cache_dir)) { 0 } else { extract_archive_bytes(archive, cache_dir) };
+    return CacheResult {.ok = true, .err = "", .cache_dir = cache_dir};
+}
+
 // A resolved path dependency (post-walk — the Rust equivalent's
 // `Dependency`; that name is already this file's raw manifest-declared
 // entry, so this one is `ResolvedDep`).
@@ -323,7 +468,7 @@ DepResolveResult dep_error(DepResolveResult acc, Str err) {
     return DepResolveResult {.ok = false, .err = err, .deps = acc.deps, .seen = acc.seen};
 }
 
-DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pinned_key, DepResolveResult acc, Int depth) {
+DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pinned_key, Str reg_dir, DepResolveResult acc, Int depth) {
     if (!acc.ok) { return acc; }
     if (depth > 32) { return dep_error(acc, "dependency '" + name + "': dependency chain deeper than 32 (cycle?)"); }
     Str prev_dir = find_seen_dir(acc.seen, name, 0);
@@ -348,29 +493,41 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pin
         return dep_error(acc, "package '" + dm.name + "' provided by both '" + prev_pkg_dir + "' and '" + dep_dir + "' - conflicting dependency versions are not supported");
     }
     DepResolveResult acc2 = DepResolveResult {.ok = true, .err = "", .deps = acc.deps, .seen = acc.seen.concat([SeenEntry {.name = dm.name, .dir = dep_dir}])};
-    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, acc2, depth + 1);
+    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, reg_dir, acc2, depth + 1);
     if (!acc3.ok) { return acc3; }
     ResolvedDep rd = ResolvedDep {.name = dm.name, .dir = dep_dir, .root = root, .capabilities = caps, .pinned_key = pinned_key};
     return DepResolveResult {.ok = true, .err = "", .deps = acc3.deps.concat([rd]), .seen = acc3.seen};
 }
 
-DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, DepResolveResult acc, Int depth) {
+DepResolveResult collect_dep_version(Str name, Str version, Str reg_dir, Str root_pkg_dir, List(Str) caps, Str pinned_key, DepResolveResult acc, Int depth) {
+    if (reg_dir == "") {
+        return dep_error(acc, "dependency '" + name + "': version '" + version + "' requested but no [registry] path is configured");
+    }
+    CacheResult cr = resolve_dep_dir_version(name, version, reg_dir, root_pkg_dir);
+    if (!cr.ok) { return dep_error(acc, cr.err); }
+    return collect_dep_path(name, cr.cache_dir, caps, pinned_key, reg_dir, acc, depth);
+}
+
+DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Str reg_dir, DepResolveResult acc, Int depth) {
     if (!acc.ok) { return acc; }
     if (i >= subs.len()) { return acc; }
     Dependency sub = subs[i];
-    DepResolveResult acc2 = if (sub.path == "") {
-        dep_error(acc, "dependency '" + sub.name + "': needs 'path' (version/registry dependencies not yet supported by this port — see PLAN-resid-only.md C.7)")
+    DepResolveResult acc2 = if (sub.path != "") {
+        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.pubkey, reg_dir, acc, depth)
+    } else if (sub.version != "") {
+        collect_dep_version(sub.name, sub.version, reg_dir, parent_dir, sub.capabilities, sub.pubkey, acc, depth)
     } else {
-        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.pubkey, acc, depth)
+        dep_error(acc, "dependency '" + sub.name + "': needs either 'path' or 'version'")
     };
-    return collect_sub_deps_at(subs, i + 1, parent_dir, acc2, depth);
+    return collect_sub_deps_at(subs, i + 1, parent_dir, reg_dir, acc2, depth);
 }
 
 DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
     List(ResolvedDep) empty_deps = [];
     List(SeenEntry) empty_seen = [];
     DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
-    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, start, 0);
+    Str reg_dir = if (m.registry_path == "") { "" } else { pkg_dir + "/" + m.registry_path };
+    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, reg_dir, start, 0);
 }
 
 Str first_missing_cap(List(Str) caps, List(Str) granted, Int i) {
