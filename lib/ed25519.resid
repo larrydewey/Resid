@@ -425,7 +425,14 @@ pub Int(256) mod_l(List(Int) dig) {
 }
 
 // ── Ed25519 verification ──
-pub Bool verify_sig(Str msg, List(Int) sig, List(Int) pubk) {
+// `verify_sig_bytes` operates on the message as raw bytes directly — the
+// core all `verify_sig` (`Str` message, UTF-8-safe text only) wraps via
+// `bytes_of`. Needed by anything that must verify a signature over
+// arbitrary binary data (e.g. a CBOR structure, COSE_Sign1) where
+// `bytes_of`'s Str round-trip would corrupt bytes ≥128 (same UTF-8-
+// encoding issue `filesystem.write_bytes` exists to solve — see
+// PLAN-resid-only.md).
+pub Bool verify_sig_bytes(List(Int) mb, List(Int) sig, List(Int) pubk) {
     List(Int) rb = slice_bytes(sig, 0, 31);
     List(Int) sbB = slice_bytes(sig, 32, 63);
     Int(256) sv = bytes_to_int(sbB);
@@ -440,7 +447,6 @@ pub Bool verify_sig(Str msg, List(Int) sig, List(Int) pubk) {
     Int(256) ry = dec_y(rb);
     Int(256) rz = 1;
     Int(256) rw = fe_mul(rx, ry);
-    List(Int) mb = bytes_of(msg);
     List(Int) rp = concat_bytes(rb, pubk);
     List(Int) rap = concat_bytes(rp, mb);
     List(Int) dig = sha512_bytes(rap);
@@ -463,6 +469,9 @@ pub Bool verify_sig(Str msg, List(Int) sig, List(Int) pubk) {
         return false;
     }
     return true;
+}
+pub Bool verify_sig(Str msg, List(Int) sig, List(Int) pubk) {
+    return verify_sig_bytes(bytes_of(msg), sig, pubk);
 }
 
 // ── deterministic signing (RFC 8032 §5.1.6) ──
@@ -518,7 +527,10 @@ pub List(Int) pub_key(List(Int) seed) {
     Int(256) axi = bytes_to_int(axb);
     return encode_pt_bytes(axi, ayb);
 }
-pub List(Int) sign_msg(List(Int) seed, Str msg) {
+// `sign_msg_bytes` signs the message as raw bytes directly — see
+// `verify_sig_bytes`'s doc comment for why this needs to exist
+// alongside the `Str`-message `sign_msg` below.
+pub List(Int) sign_msg_bytes(List(Int) seed, List(Int) mb) {
     List(Int) h = sha512_bytes(seed);
     List(Int) hhi = slice_bytes(h, 32, 63);
     Int(256) av2 = clamp_of_seed(seed);
@@ -528,7 +540,6 @@ pub List(Int) sign_msg(List(Int) seed, Str msg) {
     Int(256) axi = bytes_to_int(axb);
     List(Int) Aenc = encode_pt_bytes(axi, ayb);
     // r = SHA-512(prefix || M) mod L
-    List(Int) mb = bytes_of(msg);
     List(Int) rmac = concat_bytes(hhi, mb);
     Int(256) rv = mod_l(sha512_bytes(rmac));
     // R = [r]B
@@ -548,4 +559,7 @@ pub List(Int) sign_msg(List(Int) seed, Str msg) {
     Int(512) sum = pr + rvx;
     Int(256) sv = mod_l_w(sum);
     return concat_bytes(Renc, int_to_bytes(sv));
+}
+pub List(Int) sign_msg(List(Int) seed, Str msg) {
+    return sign_msg_bytes(seed, bytes_of(msg));
 }

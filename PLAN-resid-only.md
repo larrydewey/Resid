@@ -1162,8 +1162,12 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       missed because their signature line has a stray leading space
       (`examples/driver.resid:3704` etc.), confirming the token-based
       scan is strictly more robust than a line-based one, not buggy.
-- [~] C.7 Port `resid-build` (package manager) — **first increment DONE
-      (archive pack/hash/sign/checksig/extract), rest scoped, not started.**
+- [~] C.7 Port `resid-build` (package manager) — **everything done except
+      the `build` subcommand itself (needs compiler-level dependency-aware
+      import resolution) and CLI unification** — archive
+      (pack/hash/sign/checksig/extract/publish), manifest/lock/deps/
+      registry (local directory, signed index), and COSE are all ported
+      and verified. See below for the full breakdown.
       `tools/resid-pkg.resid`: byte-identical to
       `crates/resid-build/src/archive.rs`'s deterministic "RESIDPKG1"
       archive format (magic + LE u32 count + per-file LE u16 path-len/path/
@@ -1395,27 +1399,73 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       project whose *transitive* (not direct) version dependencies span
       multiple nesting levels, an edge case nothing here exercises.
 
+      **COSE (`cose.rs`) — DONE.** `tools/resid-cose.resid`:
+      `COSE_Sign1` (tag 18, EdDSA) and `COSE_Encrypt0` (tag 16,
+      ChaCha20-Poly1305) — a hand-rolled CBOR encoder/decoder covering
+      the richer subset this needs (maps, tags, negative integers, on
+      top of the bytes/text/array this session's other CBOR ports
+      already used), byte-identical to `cose.rs`'s own hand-rolled
+      encoder including one of its real simplifications (any length >23
+      always uses the 2-byte-length form, never the 1-byte form).
+      **Required a real new capability in the shared `lib/ed25519.resid`
+      to be possible at all**: COSE signs the raw `Sig_structure` CBOR
+      bytes directly, which routinely contain bytes ≥128 (CBOR
+      header/length bytes, embedded hashes) — but `sign_msg`/
+      `verify_sig` only ever took a `Str` message (safe only for ASCII
+      text, via `bytes_of`), so signing arbitrary binary through them
+      would corrupt it, same class of issue `filesystem.write_bytes` was
+      added to solve, just for signing instead of file I/O this time.
+      Fixed by extracting `sign_msg_bytes`/`verify_sig_bytes` (the real
+      bodies — both functions already converted to bytes as their first
+      step) with `sign_msg`/`verify_sig` now thin `Str`-taking wrappers
+      around them — a pure extraction, zero behavior change, verified via
+      the existing `run_ed25519_*` e2e tests plus the full downstream
+      crypto/TLS/x509/provenance suite, all still green.
+      **Two more real, independent bugs found while building this, both
+      pre-existing and neither specific to COSE**:
+      1. `lib/ed25519.resid` and `lib/chacha.resid` both independently
+         defined a function named `ccat` with *different* signatures —
+         harmless until something imported both files together, which
+         nothing had before `resid-cose.resid`. Renamed `chacha.resid`'s
+         to `cc_ccat` (no external callers of the old name, confirmed by
+         grep); zero behavior change, `run_chacha20poly1305_in_resid`
+         still green.
+      2. `lib/chacha.resid`'s Poly1305 key-clamping (`poly_r_acc`) has
+         the same self-hosted-only "Int vs Int(64)" if-arm spelling quirk
+         this session hit repeatedly elsewhere — never triggered before
+         because nothing had self-hosted-compiled this file either.
+         Fixed the same way (`| 0` keeps both arms in the arithmetic
+         shape), documented inline.
+      Hit that same quirk a third time in `resid-cose.resid`'s own
+      `cb_head` (list-literal element type inferred from the first
+      element only) and the by-now-familiar fix applied directly.
+      Verified: reproduced all four of `cose.rs`'s own unit test
+      scenarios end to end through the CLI (`sign1_roundtrip_and_
+      structure`, `sign1_tamper_detected`, `encrypt0_roundtrip`,
+      `encrypt0_is_deterministic`, `encrypt0_tamper_and_wrong_key_
+      rejected`) — including confirming the exact CBOR byte layout
+      (`0xd2 0x84 0x52 0xa2 ...`) by hand against the RFC 9052 structure.
+      Self-hosted D1-built binary produces byte-identical `COSE_Sign1`
+      and `COSE_Encrypt0` output to the Rust pipeline on every case.
+
       **Still open**: `registry.rs`'s `serve_dir` (an inbound TCP
       *listener* for `resid-build serve`) — likely fine to defer/drop as
       a dev-convenience feature (the core publish/install path only needs
-      the client + local-directory-write sides, both done); the
+      the client + local-directory-write sides, both done); and the
       CLI/subcommand orchestration in `main.rs` (385 lines) tying
-      manifest+deps+lock+archive+registry into one `resid-build` command
-      with a real `build` subcommand (needs the self-hosted driver to
-      accept a dependency map for import resolution — deeper compiler
-      integration than anything else in C.7, not yet scoped); and COSE
-      encryption (`cose.rs` — rides on ChaCha20-Poly1305, which already
-      works self-hosted: `lib/chacha.resid`,
-      `run_chacha20poly1305_in_resid`). At this point every piece of
-      `resid-build` except `build` itself and COSE has a working
-      self-hosted equivalent, each independently verified against the
-      Rust format/behavior and cross-checked against each other
-      (publish→consume, pack→sign→checksig, manifest→deps→registry→
-      index→lock). `build` is qualitatively different remaining work —
-      it needs the self-hosted compiler itself to grow dependency-aware
-      import resolution, not just another tool — and deserves its own
-      scoping pass rather than being bundled into "next increment" the
-      way everything above was.
+      manifest+deps+lock+archive+registry+cose into one `resid-build`
+      command with a real `build` subcommand (needs the self-hosted
+      driver to accept a dependency map for import resolution — deeper
+      compiler integration than anything else in C.7, not yet scoped).
+      At this point every piece of `resid-build` except `build` itself
+      has a working self-hosted equivalent, each independently verified
+      against the Rust format/behavior and cross-checked against each
+      other (publish→consume, pack→sign→checksig, manifest→deps→
+      registry→index→lock, sign1/encrypt0 round trips). `build` is
+      qualitatively different remaining work — it needs the self-hosted
+      compiler itself to grow dependency-aware import resolution, not
+      just another tool — and deserves its own scoping pass rather than
+      being bundled into "next increment" the way everything above was.
 - [ ] D.1 Freeze stage-0 seed binary
 - [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/`
 - [ ] D.3 Update PROGRESS.md §6 policy
