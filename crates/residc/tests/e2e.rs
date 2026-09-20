@@ -9518,3 +9518,173 @@ Int main() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// tools/resid-fmt.resid (Phase C.4, PLAN-resid-only.md): the self-hosted
+// formatter port. Exercises struct/list/map/set literals, if/else-if
+// chains (both as statements and as values), while/for, match (general
+// sum-type variant arms + wildcard), casts, doc comments, and a type
+// declaration — formats it via both the Rust pipeline and the
+// self-hosted D1 driver, and checks the output reparses, is idempotent,
+// and is byte-identical between the two pipelines.
+#[test]
+fn bootstrap_driver_resid_fmt_formats_and_reparses() {
+    let dir = std::env::temp_dir().join(format!("residc-e2e-fmt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let rtc = workspace.join("crates/residc/resid_rt.c");
+    let driver = workspace.join("examples/driver.resid");
+    let fmt_tool = workspace.join("tools/resid-fmt.resid");
+
+    let sample = dir.join("sample.resid");
+    std::fs::write(
+        &sample,
+        r#"
+/// A tiny doc comment.
+type Shape = Circle(Int) | Square(Int) | Point;
+
+type Pair = { Int x; Int y; };
+
+Str classify(Int n) {
+    Str kind = if (n < 0) { "neg" }
+        else if (n == 0) { "zero" }
+        else { "pos" };
+    return kind;
+}
+
+Int area(Shape sh) {
+    return match sh {
+        Circle(r) => (Int)(r * r * 3),
+        Square(s) => (Int)(s * s),
+        _ => 0,
+    };
+}
+
+Int sum_list(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) {
+        return acc;
+    }
+    return sum_list(xs, i + 1, acc + xs[i]);
+}
+
+Int main() {
+    Pair p = Pair { .x = 1, .y = 2 };
+    List(Int) xs = [1, 2, 3];
+    Map(Str, Int) m = {"a": 1};
+    Set(Int) st = {1, 2};
+    Int total = sum_list(xs, 0, 0);
+    Int j = 3;
+    while (false) {
+        break;
+    }
+    for (Int i in xs) {
+        println(IntToString(i));
+    }
+    println(classify(-1));
+    println(IntToString(area(Circle(2))));
+    println(IntToString(p.x + total + j + xs.len() + m.len() + st.len()));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    // Run the tool via the Rust pipeline.
+    let out_rust = Command::new(residc_bin())
+        .arg(&fmt_tool)
+        .arg("run")
+        .arg(&sample)
+        .output()
+        .expect("failed to run resid-fmt via Rust pipeline");
+    assert_eq!(
+        out_rust.status.code(),
+        Some(0),
+        "Rust-pipeline resid-fmt failed: {}",
+        String::from_utf8_lossy(&out_rust.stderr)
+    );
+    let formatted_rust = String::from_utf8_lossy(&out_rust.stdout).into_owned();
+    assert!(
+        formatted_rust.contains(".x = 1, .y = 2"),
+        "expected dot-equals struct literal, got: {formatted_rust}"
+    );
+    assert!(
+        formatted_rust.contains("Circle(r) => (Int)(r * r * 3),"),
+        "expected a reformatted match arm, got: {formatted_rust}"
+    );
+
+    // Self-host-build resid-fmt.resid itself via D1, then run it the same
+    // way, and confirm byte-identical output to the Rust pipeline.
+    let d1_fmt_bin = dir.join("resid_fmt_d1");
+    let build_d1 = Command::new(residc_bin())
+        .arg(&driver)
+        .arg("run")
+        .arg(&fmt_tool)
+        .arg("-o")
+        .arg(&d1_fmt_bin)
+        .arg("-rt")
+        .arg(&rtc)
+        .output()
+        .expect("failed to self-host-build resid-fmt.resid via D1");
+    assert_eq!(
+        build_d1.status.code(),
+        Some(0),
+        "self-hosted D1 driver failed to build resid-fmt.resid: {}",
+        String::from_utf8_lossy(&build_d1.stderr)
+    );
+    let run_d1 = Command::new(&d1_fmt_bin)
+        .arg(&sample)
+        .output()
+        .expect("failed to run the self-hosted-built resid-fmt binary");
+    assert_eq!(run_d1.status.code(), Some(0));
+    let formatted_d1 = String::from_utf8_lossy(&run_d1.stdout).into_owned();
+    assert_eq!(
+        formatted_rust, formatted_d1,
+        "Rust-pipeline and self-hosted-D1 resid-fmt produced different output"
+    );
+
+    // Idempotent: formatting the already-formatted output changes nothing.
+    let once = dir.join("once.resid");
+    std::fs::write(&once, &formatted_rust).unwrap();
+    let out_twice = Command::new(residc_bin())
+        .arg(&fmt_tool)
+        .arg("run")
+        .arg(&once)
+        .output()
+        .expect("failed to run resid-fmt a second time");
+    assert_eq!(out_twice.status.code(), Some(0));
+    let formatted_twice = String::from_utf8_lossy(&out_twice.stdout).into_owned();
+    assert_eq!(formatted_rust, formatted_twice, "formatting is not idempotent");
+
+    // Reparses: the formatted output is itself valid, well-typed Resid.
+    let reparsed_bin = dir.join("reparsed");
+    let build_reparsed = Command::new(residc_bin())
+        .arg(&once)
+        .arg("build")
+        .arg("-o")
+        .arg(&reparsed_bin)
+        .arg("-rt")
+        .arg(&rtc)
+        .output()
+        .expect("failed to build the formatted output");
+    assert_eq!(
+        build_reparsed.status.code(),
+        Some(0),
+        "formatted output failed to reparse/build: {}",
+        String::from_utf8_lossy(&build_reparsed.stderr)
+    );
+    let run_reparsed = Command::new(&reparsed_bin)
+        .output()
+        .expect("failed to run the reparsed binary");
+    assert_eq!(
+        String::from_utf8_lossy(&run_reparsed.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        vec!["1", "2", "3", "neg", "12", "16"],
+        "reparsed/rebuilt formatted output produced unexpected behavior"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
