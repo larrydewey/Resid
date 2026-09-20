@@ -29,7 +29,7 @@ compiler (`clang`, still a permanent accepted external dependency — see
 | cargo | 1.98.1 (797e8a9bc 2026-08-05) |
 | clang | 22.1.8 |
 | Host | Linux x86_64 (`7.2.3-arch1-3`) |
-| SHA-256 | `06b48811b5dcdd0f98eb2a08f688b713c0a61393f647f717e9b34b93147c446e` (see `residc-linux-x86_64.sha256`) |
+| SHA-256 | `06b48811b5dcdd0f98eb2a08f688b713c0a61393f647f717e9b34b93147c446e` (see `residc-seed-linux-x86_64.sha256`) |
 
 The D1→D2→D3 self-hosting fixed point (D2 and D3's emitted LLVM IR are
 byte-identical) was already proven at this commit — see
@@ -43,18 +43,18 @@ holds, frozen for archival/bootstrap purposes.
 ## Verifying the checksum
 
 ```sh
-sha256sum -c residc-linux-x86_64.sha256
+sha256sum -c residc-seed-linux-x86_64.sha256
 ```
 
 ## Using it to bootstrap on a machine with no Rust
 
 ```sh
 # Compile driver.resid itself with the frozen seed, producing a fresh D2:
-./residc-linux-x86_64 examples/driver.resid -o residc-d2 -rt runtime/resid_rt.c
+./residc-seed-linux-x86_64 examples/driver.resid -o residc -rt runtime/resid_rt.c
 
-# residc-d2 is now a self-hosted-built compiler with no Rust involvement.
+# residc is now a self-hosted-built compiler with no Rust involvement.
 # Compile anything else with it the same way:
-./residc-d2 some_program.resid -o some_program -rt runtime/resid_rt.c
+./residc some_program.resid -o some_program -rt runtime/resid_rt.c
 ```
 
 (`-rt` points at `runtime/resid_rt.c` — the permanent C runtime, linked
@@ -70,5 +70,5 @@ before `runtime/` existed — see "Provenance" above.)
 stage0 binary can still be built for a host architecture this one
 doesn't cover. From `bootstrap/rust-stage0/`, run the same build command
 shown above against that architecture's Rust/clang toolchain, then add
-the new binary here following the `residc-<os>-<arch>` naming convention
+the new binary here following the `residc-seed-<os>-<arch>` naming convention
 with its own `.sha256` file.
