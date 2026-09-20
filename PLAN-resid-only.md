@@ -413,20 +413,18 @@ gates Phase B/D rather than being a narrow one-off fix.
 
 ## Working order for this session / near-term
 
-Start with concrete, well-scoped, independently-verifiable wins before the
-large effect-checker rewrite:
-
-1. Phase B.1 scaffold: stage-3 self-compile e2e test (D1/D2 comparison).
-   Small, high-value, exposes any blocking gaps early. **Status: test
-   written; currently bug-fixing self-hosted typecheck.resid/codegen.resid
-   to get a clean self-compile — see progress log below. Blocked on Phase E
-   (resource cost) before B.2 is practically repeatable.**
-2. Phase E.0/E.1: measure, then fix the memory blowup found while closing
-   B.1 (see Phase E) — this now gates finishing B.1/B.2 in practice.
-3. Phase C.1: port `tools/merge_driver.py` to Resid.
-4. Phase A.1: effect-checker rewrite (large, ongoing across multiple
-   sessions) — now also carries the Phase E.2 performance requirements.
-5. Remaining Phase A items, then Phase C.2 onward, as time allows.
+**Superseded — kept for history, see the checklist above for current
+status.** This section described the plan of attack from very early in
+the overall effort (before Phase B.1 had even landed) and is stale as
+written. As of this session: **Phase B (B.1-B.4) and Phase C (C.1-C.7)
+are both fully done.** The plan's own stated Phase D gate ("Phase B
+proof holds AND Phase C items 1-7 ported + parity-tested") is satisfied
+— Phase D (decommission Rust) can formally start. Still open, neither
+gating Phase D per that stated gate: A.6 (import namespacing, explicitly
+scoped as not required for the single-file bootstrap driver) and Phase E
+(self-hosted compiler memory/perf — ownership-oracle wiring and the
+dead-wrapper free pass remain unwired, tracked as general perf work, not
+a self-hosting blocker per B.1/B.2's own resolution).
 
 Update this file's checklist as items complete (mark with [x] + date/commit).
 
@@ -1241,7 +1239,102 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       `crates/resid-diag` itself is retired along with the rest of
       `crates/` at Phase D (it has no independent existence outside the
       Rust pipeline it serves).
-- [ ] C.4 Port `resid-fmt`
+- [x] C.4 Port `resid-fmt` — **DONE**. `tools/resid-fmt.resid`: a
+      single-pass token-level parser+printer (no AST built) that
+      deliberately preserves the source's own parenthesization instead of
+      recomputing minimal parens from operator precedence — a genuine,
+      documented design divergence from the Rust original (never removes/
+      adds a paren, so it can never change what an expression means,
+      strictly safer than precedence-aware canonicalization at the cost of
+      not stripping redundant parens a human wrote) that also means no
+      operator-precedence table is needed at all: a binary-operator chain
+      is reprinted left-to-right exactly as parsed, correct for reflowing
+      (not restructuring) a token sequence. Covers imports (all 3 forms),
+      `///` doc comments (surfaced as their own lexer token kind instead
+      of being silently discarded like ordinary comments), product/sum/
+      constraint/base type declarations, behavior declarations, sandbox
+      blocks + `@requires` (raw-slice-and-trim, not internally
+      reformatted — zero real usage anywhere in this repo), functions,
+      every statement form, and the full expression grammar including
+      struct/list/map/set literals (fixing the real dot-equals-vs-colon
+      struct-literal bug found this session — see below), if/else-if
+      chains (both as statements and as values, with the "chain of
+      temporaries" idiom), while, for-in, match (uniformly covering
+      Some/None/Ok/Err *and* any general declared sum-type variant, since
+      resid-fmt never needs to know which type owns a variant, only its
+      syntax — see A.9), `?`/`value else {fallback}` sugar, and casts.
+      Deliberately not supported, confirmed zero real usage via grep
+      before writing a line of this file, and unreachable from the
+      self-hosted checker's own grammar too: `spawn`/`with`/`using`/
+      `rt`/`known`/`rt_known`/`todo`/`unimplemented`/`assert`/
+      `rt_assert`/`at_residual`/`if let`/`while let`/C-style `for`/
+      default parameter values/struct-or-literal match patterns/fixed-
+      capacity (`Str(N)`/`Bytes(N)`/`List(T,N)`) cast forms.
+
+      **Two real, previously-undiscovered bugs found in the Rust
+      `resid-fmt` itself while establishing ground truth for this port**
+      (both fixed, both newly tested — neither construct had ever been
+      exercised by `tools/resid-fmt/tests/fmt.rs` before): (1) struct
+      literals printed as `field: value` (colon), but the real grammar
+      (`resid-parser`'s `parse_struct_lit`, confirmed by reading the
+      parser directly) requires `.field = value` (dot) — the old output
+      failed to reparse. (2) behavior declarations printed a literal `…`
+      placeholder instead of the real `name(param) = impl;` text. Fixed
+      in `tools/resid-fmt/src/lib.rs`, `crates/resid-fmt/` has no
+      separate crate (it's `tools/resid-fmt`); two new tests assert the
+      formatter's own output reparses cleanly. Committed separately
+      (`4370da9`) since it stands alone as a genuine bug fix regardless of
+      this port's fate.
+
+      **Two real bugs found and fixed in the new self-hosted port itself
+      while corpus-testing it** (both caught before commit, neither ever
+      shipped): (1) the copied lexer skeleton (based on `tools/resid-
+      graph.resid`'s simpler copy, not `examples/typecheck.resid`'s fuller
+      one) was missing `<<`, `>>`, `..=`, `~`, `^`, and — critically —
+      `=>` as multi-char tokens, silently mis-tokenizing e.g. `x >> n` as
+      three single-char tokens and `Circle(r) => expr` as `=` immediately
+      followed by `>`. Caught by running the formatter over every real
+      `.resid` file in `tools/`/`lib/` (the `<<`/`>>` gap; every real file
+      exercises bit-shift arithmetic in the crypto library) and by a
+      dedicated new match-syntax e2e fixture (the `=>` gap — genuinely
+      unreachable from the pre-existing corpus, since **zero** real
+      `.resid` file in this repo used `match` before this session's own
+      A.9 work and this file). (2) `fmt_if_expr`'s else-if recursion
+      passed the wrong token's `.pos` to the recursive call (`kw.pos`,
+      right after `else`, instead of `peek_if.pos`, right after the
+      following `if`) — every else-if-as-a-*value* chain (the common
+      char-classification idiom `Str piece = if (c) {...} else if (c) {
+      ...} else {...};`) failed with "expected { in if expression";
+      else-if-as-a-*statement* was unaffected (that recursion already
+      used the right offset). Both fixed; full re-run of the corpus test
+      confirmed clean afterward.
+
+      **Verified**: every real `.resid` file in `tools/`, `lib/`, plus
+      `examples/typecheck.resid` and `examples/codegen.resid` themselves
+      (the two largest files in the repo, ~5500 and ~5000 lines) format
+      without error, reparse and rebuild cleanly through the Rust
+      pipeline (confirmed identical `CGFN` function-emission trace
+      between original and formatted source, not just "no error"), and
+      are idempotent (`format(format(x)) == format(x)`). Cross-verified
+      the self-hosted-D1-built `resid-fmt` binary against the
+      Rust-pipeline-built one across the same whole corpus:
+      byte-identical output on every file. New permanent e2e test,
+      `bootstrap_driver_resid_fmt_formats_and_reparses`
+      (`crates/residc/tests/e2e.rs`), exercises struct/list/map/set
+      literals, if/else-if (statement and value forms), while/for, a
+      general-sum-type match with a wildcard arm, casts, and a doc
+      comment, through both pipelines, asserting reparse + idempotency +
+      cross-pipeline byte-identical output.
+
+      **Scope trims, all documented in the file's own header comment**:
+      no precedence-aware paren minimization (see above — a deliberate,
+      safety-motivated design choice, not a limitation); `@requires`/
+      `sandbox (...)` capability lists reprinted raw-and-trimmed rather
+      than internally reformatted (zero real usage); fixed-capacity cast
+      forms not recognized (zero real usage; a cast to one would be
+      misparsed as a parenthesized expression instead — a clear behavior
+      change, not silent corruption, since the result would then fail to
+      reparse as a cast and surface as a downstream type error).
 - [x] C.6 Port `resid-graph` — **DONE**. `tools/resid-graph.resid`
       (residc pipeline). Single token-based forward scan built on the same
       `Tok`/`lex_tok` model `examples/typecheck.resid` uses for its own

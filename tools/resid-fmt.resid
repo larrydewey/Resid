@@ -1,0 +1,1359 @@
+/// resid-fmt.resid — Resid port of tools/resid-fmt (Phase C.4,
+/// PLAN-resid-only.md). Canonical formatter for Resid source (spec §37):
+/// re-prints a translation unit in canonical style (4-space indent, braces
+/// on the same line, one statement per line, blank line between top-level
+/// declarations) so the output still parses to an equivalent program.
+///
+/// Design, deliberately different from the Rust original: this is a
+/// single-pass parser+printer directly over tokens (no AST is built) that
+/// PRESERVES the source's own parenthesization instead of recomputing
+/// minimal parens from operator precedence. This is a genuine scope trim
+/// (never removes/adds a paren, so it can never change what an expression
+/// means — strictly safer than precedence-aware canonicalization, at the
+/// cost of not stripping redundant parens a human wrote) and it also
+/// avoids needing an operator-precedence table at all: a binary-operator
+/// chain is reprinted left-to-right exactly as parsed, which is correct
+/// for REFLOWING (not restructuring) a token sequence.
+///
+/// Scope, matching the "pragmatic subset actually used" boundary every
+/// tool ported this Phase has used: covers everything real `.resid` files
+/// in this repo's `tools/`/`lib/` actually use (imports, doc comments,
+/// product/sum/constraint/base type declarations, behavior declarations,
+/// sandbox blocks, `@requires`, functions, all statement forms, full
+/// expression grammar including struct/list/map/set literals, if/else
+/// (+ else-if chains), while, for-in, match with variant/wildcard arms,
+/// `?` and `value else { fallback }` sugar, casts). Deliberately NOT
+/// supported (confirmed zero real usage via grep before starting, and
+/// unreachable from the self-hosted checker's own grammar too, so nothing
+/// in this toolchain's own self-compile path needs it): `spawn`, `with`,
+/// `using`, `rt`/`known`/`rt_known`, `todo`/`unimplemented`/`assert`/
+/// `rt_assert`, `at_residual`, `if let`/`while let`, C-style `for`,
+/// default parameter values, struct/literal match patterns. Also,
+/// `is_known_type`'s fixed-capacity `Str(N)`/`Bytes(N)`/`List(T,N)` cast
+/// forms are not recognized (zero real usage) — a cast to one of those
+/// would be mis-parsed as a parenthesized expression instead. Any of
+/// these hit a clear parse error rather than silently mis-formatting.
+///
+/// Usage: residc tools/resid-fmt.resid run -- <file> [-w | --check]
+
+// ─── Lexer (self-contained copy, extended to surface `///` doc comments
+// as a "doc" token kind instead of silently discarding them like ordinary
+// `//`/`/* */` comments — the Rust original preserves doc comments
+// immediately preceding a function/type; this is the token-level
+// equivalent) ────────
+
+Bool is_ws(Int c) {
+    if (c == 32) { return true; }
+    if (c == 9) { return true; }
+    if (c == 13) { return true; }
+    if (c == 10) { return true; }
+    return false;
+}
+
+Bool is_alpha(Int c) {
+    if (c >= 65) { if (c <= 90) { return true; } }
+    if (c >= 97) { if (c <= 122) { return true; } }
+    if (c >= 128) { return true; }
+    return false;
+}
+
+Bool is_digit(Int c) {
+    if (c >= 48) { if (c <= 57) { return true; } }
+    return false;
+}
+
+Bool is_alnum(Int c) {
+    if (is_alpha(c)) { return true; }
+    if (is_digit(c)) { return true; }
+    if (c == 95) { return true; }
+    return false;
+}
+
+Bool is_hex(Int c) {
+    if (is_digit(c)) { return true; }
+    if (c >= 65) { if (c <= 70) { return true; } }
+    if (c >= 97) { if (c <= 102) { return true; } }
+    return false;
+}
+
+Bool is_oct(Int c) {
+    if (c >= 48) { if (c <= 55) { return true; } }
+    return false;
+}
+
+Int char_at(Str s, Int i) { return str_char_at(s, i); }
+Int char_next(Str s, Int i) { Int k = i + 1; return str_char_at(s, k); }
+Int char_next2(Str s, Int i) { Int m = i + 2; return str_char_at(s, m); }
+Int str_len_1(Str s) { return str_len(s); }
+
+Int skip_ws(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    if (is_ws(str_char_at(s, i))) { return skip_ws(s, i + 1, n); }
+    return i;
+}
+
+Int skip_line_comment(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    if (str_char_at(s, i) == 10) { return i; }
+    return skip_line_comment(s, i + 1, n);
+}
+
+Int skip_block_comment(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (c == 42) {
+        if (char_next(s, i) == 47) { return i + 2; }
+    }
+    return skip_block_comment(s, i + 1, n);
+}
+
+// True when `s[i..]` starts with exactly three slashes (a doc comment),
+// not four-or-more (a plain divider comment like `////////`).
+Bool is_doc3(Str s, Int i, Int n) {
+    Int i2 = i + 2;
+    if (i2 >= n) { return false; }
+    if (char_at(s, i) != 47) { return false; }
+    if (char_at(s, i + 1) != 47) { return false; }
+    if (char_at(s, i2) != 47) { return false; }
+    Int i3 = i + 3;
+    if (i3 < n) {
+        if (char_at(s, i3) == 47) { return false; }
+    }
+    return true;
+}
+
+Int skip_all(Str s, Int i, Int n) {
+    Int j = skip_ws(s, i, n);
+    if (j >= n) { return j; }
+    Int c = char_at(s, j);
+    if (c == 47) {
+        Int c2 = char_next(s, j);
+        if (c2 == 47) {
+            if (is_doc3(s, j, n)) { return j; }
+            return skip_all(s, skip_line_comment(s, j + 2, n), n);
+        }
+        if (c2 == 42) { return skip_all(s, skip_block_comment(s, j + 2, n), n); }
+    }
+    return j;
+}
+
+Int scan_ident(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    if (is_alnum(str_char_at(s, i))) { return scan_ident(s, i + 1, n); }
+    return i;
+}
+
+Int scan_digits(Str s, Int i, Int n, Int base) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (base == 2) { if (c == 48) { return scan_digits(s, i + 1, n, base); } if (c == 49) { return scan_digits(s, i + 1, n, base); } return i; }
+    if (base == 8) { if (is_oct(c)) { return scan_digits(s, i + 1, n, base); } return i; }
+    if (base == 10) { if (is_digit(c)) { return scan_digits(s, i + 1, n, base); } return i; }
+    if (base == 16) { if (is_hex(c)) { return scan_digits(s, i + 1, n, base); } return i; }
+    return i;
+}
+
+Int scan_string(Str s, Int i, Int n) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (c == 34) { return i + 1; }
+    if (c == 92) { return scan_string(s, i + 2, n); }
+    return scan_string(s, i + 1, n);
+}
+
+Int scan_fstring(Str s, Int i, Int n, Int depth) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (c == 92) { return scan_fstring(s, i + 2, n, depth); }
+    if (c == 123) { return scan_fstring(s, i + 1, n, depth + 1); }
+    if (c == 125) { return scan_fstring(s, i + 1, n, 0); }
+    if (c == 34) { if (depth == 0) { return i + 1; } }
+    return scan_fstring(s, i + 1, n, depth);
+}
+
+// ─── Token model ────────────────────────────────────────────────
+
+type Tok = { Int pos; Str text; Str kind; };
+
+Tok lex_op2(Str s, Int pos, Int n) {
+    Int c = char_at(s, pos);
+    Int c2 = char_next(s, pos);
+    Int c3 = char_next2(s, pos);
+    if (c == 46) {
+        if (c2 == 46) {
+            if (c3 == 61) { return Tok {.pos = pos + 3, .text = "..=", .kind = "op"}; }
+            return Tok {.pos = pos + 2, .text = "..", .kind = "op"};
+        }
+        return Tok {.pos = pos + 1, .text = ".", .kind = "op"};
+    }
+    if (c == 60) {
+        if (c2 == 60) { return Tok {.pos = pos + 2, .text = "<<", .kind = "op"}; }
+        if (c2 == 61) { return Tok {.pos = pos + 2, .text = "<=", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = "<", .kind = "op"};
+    }
+    if (c == 62) {
+        if (c2 == 62) { return Tok {.pos = pos + 2, .text = ">>", .kind = "op"}; }
+        if (c2 == 61) { return Tok {.pos = pos + 2, .text = ">=", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = ">", .kind = "op"};
+    }
+    if (c == 61) {
+        if (c2 == 61) { return Tok {.pos = pos + 2, .text = "==", .kind = "op"}; }
+        if (c2 == 62) { return Tok {.pos = pos + 2, .text = "=>", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = "=", .kind = "op"};
+    }
+    if (c == 33) {
+        if (c2 == 61) { return Tok {.pos = pos + 2, .text = "!=", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = "!", .kind = "op"};
+    }
+    if (c == 38) {
+        if (c2 == 38) { return Tok {.pos = pos + 2, .text = "&&", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = "&", .kind = "op"};
+    }
+    if (c == 124) {
+        if (c2 == 124) { return Tok {.pos = pos + 2, .text = "||", .kind = "op"}; }
+        return Tok {.pos = pos + 1, .text = "|", .kind = "op"};
+    }
+    if (c == 43) { return Tok {.pos = pos + 1, .text = "+", .kind = "op"}; }
+    if (c == 45) { return Tok {.pos = pos + 1, .text = "-", .kind = "op"}; }
+    if (c == 42) { return Tok {.pos = pos + 1, .text = "*", .kind = "op"}; }
+    if (c == 47) { return Tok {.pos = pos + 1, .text = "/", .kind = "op"}; }
+    if (c == 37) { return Tok {.pos = pos + 1, .text = "%", .kind = "op"}; }
+    if (c == 126) { return Tok {.pos = pos + 1, .text = "~", .kind = "op"}; }
+    if (c == 94) { return Tok {.pos = pos + 1, .text = "^", .kind = "op"}; }
+    if (c == 63) { return Tok {.pos = pos + 1, .text = "?", .kind = "op"}; }
+    if (c == 58) { return Tok {.pos = pos + 1, .text = ":", .kind = "op"}; }
+    if (c == 44) { return Tok {.pos = pos + 1, .text = ",", .kind = "op"}; }
+    if (c == 59) { return Tok {.pos = pos + 1, .text = ";", .kind = "op"}; }
+    if (c == 40) { return Tok {.pos = pos + 1, .text = "(", .kind = "op"}; }
+    if (c == 41) { return Tok {.pos = pos + 1, .text = ")", .kind = "op"}; }
+    if (c == 123) { return Tok {.pos = pos + 1, .text = "{", .kind = "op"}; }
+    if (c == 125) { return Tok {.pos = pos + 1, .text = "}", .kind = "op"}; }
+    if (c == 91) { return Tok {.pos = pos + 1, .text = "[", .kind = "op"}; }
+    if (c == 93) { return Tok {.pos = pos + 1, .text = "]", .kind = "op"}; }
+    if (c == 64) { return Tok {.pos = pos + 1, .text = "@", .kind = "op"}; }
+    return Tok {.pos = pos + 1, .text = "", .kind = "op"};
+}
+
+Tok lex_tok(Str s, Int pos) {
+    Int n = str_len_1(s);
+    Int j = skip_all(s, pos, n);
+    if (j >= n) { return Tok {.pos = j, .text = "", .kind = "eof"}; }
+    Int c = char_at(s, j);
+    Int c2 = char_next(s, j);
+    if (c == 47) {
+        if (is_doc3(s, j, n)) {
+            Int e = skip_line_comment(s, j, n);
+            return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "doc"};
+        }
+    }
+    if (c == 102) { if (c2 == 34) { Int e = scan_fstring(s, j + 2, n, 0); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "fstring"}; } }
+    if (c == 114) { if (c2 == 34) { Int e = scan_string(s, j + 2, n); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "raw"}; } }
+    if (c == 98) { if (c2 == 34) { Int e = scan_string(s, j + 2, n); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "bytes"}; } }
+    if (c == 34) { Int e = scan_string(s, j + 1, n); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "str"}; }
+    if (c == 39) { Int k = j + 3; return Tok {.pos = k, .text = str_slice(s, j, k), .kind = "char"}; }
+    if (is_digit(c)) {
+        if (c == 48) {
+            if (c2 == 120) { Int e = scan_digits(s, j + 2, n, 16); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "int"}; }
+            if (c2 == 98) { Int e = scan_digits(s, j + 2, n, 2); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "int"}; }
+            if (c2 == 111) { Int e = scan_digits(s, j + 2, n, 8); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "int"}; }
+        }
+        Int e = scan_digits(s, j, n, 10);
+        if (char_at(s, e) == 46) { if (char_next(s, e) != 46) { Int ef = scan_digits(s, e + 1, n, 10); return Tok {.pos = ef, .text = str_slice(s, j, ef), .kind = "float"}; } }
+        return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "int"};
+    }
+    if (is_alpha(c)) { Int e = scan_ident(s, j, n); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "ident"}; }
+    if (c == 95) { Int e = scan_ident(s, j, n); return Tok {.pos = e, .text = str_slice(s, j, e), .kind = "ident"}; }
+    if (c == 35) { return Tok {.pos = j + 8, .text = "#location", .kind = "op"}; }
+    return lex_op2(s, j, n);
+}
+
+// ─── Indentation helpers ─────────────────────────────────────────
+
+Str indent(Int depth) {
+    return str_repeat("    ", depth);
+}
+
+Str rtrim_ws(Str s) {
+    Int n = str_len(s);
+    if (n == 0) { return s; }
+    Int c = str_char_at(s, n - 1);
+    Bool isws = c == 10 || c == 13 || c == 32 || c == 9;
+    if (!isws) { return s; }
+    return rtrim_ws(str_slice(s, 0, n - 1));
+}
+
+// Strip exactly `indent(depth)` from the front of `s` (used to splice an
+// else-if chain's own recursively-formatted "if (...) {...}" text onto
+// the same physical line as the preceding "} else ").
+Str strip_indent_prefix(Str s, Int depth) {
+    Int n = str_len(indent(depth));
+    return str_slice(s, n, str_len(s));
+}
+
+Bool str_has_prefix(Str s, Str p) {
+    Int ns = str_len(s);
+    Int np = str_len(p);
+    if (np > ns) { return false; }
+    Str head = str_slice(s, 0, np);
+    if (head == p) { return true; }
+    return false;
+}
+
+// ─── Operator classification (mirrors examples/typecheck.resid's
+// is_bin_op exactly, deduped by convention not by import) ─────────
+
+Bool is_bin_op(Str op) {
+    if (op == "+") { return true; }
+    if (op == "-") { return true; }
+    if (op == "*") { return true; }
+    if (op == "/") { return true; }
+    if (op == "%") { return true; }
+    if (op == "<") { return true; }
+    if (op == "<=") { return true; }
+    if (op == ">") { return true; }
+    if (op == ">=") { return true; }
+    if (op == "==") { return true; }
+    if (op == "!=") { return true; }
+    if (op == "&&") { return true; }
+    if (op == "||") { return true; }
+    if (op == "&") { return true; }
+    if (op == "|") { return true; }
+    if (op == "^") { return true; }
+    if (op == "<<") { return true; }
+    if (op == ">>") { return true; }
+    return false;
+}
+
+// Fixed-capacity cast forms (Str(N)/Bytes(N)/List(T,N)) are deliberately
+// not recognized here (see the file's top comment) — zero real usage.
+Bool is_known_type_fmt(Str ty) {
+    if (ty == "Int") { return true; }
+    if (ty == "UInt") { return true; }
+    if (ty == "Float") { return true; }
+    if (ty == "Dec") { return true; }
+    if (ty == "Bool") { return true; }
+    if (ty == "Str") { return true; }
+    if (ty == "Bytes") { return true; }
+    if (str_has_prefix(ty, "Int(")) { return true; }
+    if (str_has_prefix(ty, "UInt(")) { return true; }
+    if (str_has_prefix(ty, "Float(")) { return true; }
+    if (str_has_prefix(ty, "Dec(")) { return true; }
+    if (str_has_prefix(ty, "List(")) { return true; }
+    return false;
+}
+
+// ─── Type formatting ──────────────────────────────────────────────
+
+type FR = { Int pos; Str text; Str err; };
+
+FR fmt_type(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind != "ident") { return FR {.pos = t.pos, .text = "", .err = "expected a type name"}; }
+    Tok t2 = lex_tok(s, t.pos);
+    if (t2.text == "(") {
+        FR first = fmt_type_arg(s, t2.pos);
+        if (first.err != "") { return FR {.pos = first.pos, .text = "", .err = "bad type parameter"}; }
+        FR rest = fmt_type_args_rest(s, first.pos, first.text);
+        if (rest.err != "") { return rest; }
+        return FR {.pos = rest.pos, .text = t.text + "(" + rest.text + ")", .err = ""};
+    }
+    return FR {.pos = t.pos, .text = t.text, .err = ""};
+}
+
+FR fmt_type_arg(Str s, Int pos) {
+    Tok in1 = lex_tok(s, pos);
+    if (in1.kind == "int") { return FR {.pos = in1.pos, .text = in1.text, .err = ""}; }
+    return fmt_type(s, pos);
+}
+
+FR fmt_type_args_rest(Str s, Int pos, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") { return FR {.pos = t.pos, .text = acc, .err = ""}; }
+    if (t.text == ",") {
+        FR arg = fmt_type_arg(s, t.pos);
+        if (arg.err != "") { return arg; }
+        return fmt_type_args_rest(s, arg.pos, acc + ", " + arg.text);
+    }
+    return FR {.pos = t.pos, .text = "", .err = "expected , or ) in type"};
+}
+
+// ─── Expression formatting ────────────────────────────────────────
+// Precedence-free by design (see file header): a binary-operator chain
+// is reprinted left-to-right in source order with normalized spacing,
+// never restructured, so no precedence table is needed for correctness.
+
+FR fmt_expr(Str s, Int pos, Int depth) {
+    FR u = fmt_unary(s, pos, depth);
+    if (u.err != "") { return u; }
+    return fmt_bin_rest(s, u, depth);
+}
+
+FR fmt_bin_rest(Str s, FR lhs, Int depth) {
+    if (lhs.err != "") { return lhs; }
+    Tok t = lex_tok(s, lhs.pos);
+    Str op = t.text;
+    if (op == "?") {
+        return fmt_bin_rest(s, FR {.pos = t.pos, .text = lhs.text + "?", .err = ""}, depth);
+    }
+    if (op == "else") {
+        Tok open = lex_tok(s, t.pos);
+        if (open.text != "{") { return FR {.pos = open.pos, .text = "", .err = "expected { after else"}; }
+        FR fv = fmt_expr(s, open.pos, depth);
+        if (fv.err != "") { return fv; }
+        Tok close = lex_tok(s, fv.pos);
+        if (close.text != "}") { return FR {.pos = close.pos, .text = "", .err = "expected } at end of else block"}; }
+        Str txt = lhs.text + " else { " + fv.text + " }";
+        return fmt_bin_rest(s, FR {.pos = close.pos, .text = txt, .err = ""}, depth);
+    }
+    Bool continues = is_bin_op(op) || op == ".." || op == "..=";
+    if (!continues) { return lhs; }
+    FR rhs = fmt_unary(s, t.pos, depth);
+    if (rhs.err != "") { return rhs; }
+    Str txt2 = lhs.text + " " + op + " " + rhs.text;
+    return fmt_bin_rest(s, FR {.pos = rhs.pos, .text = txt2, .err = ""}, depth);
+}
+
+FR fmt_unary(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "(") {
+        FR pty = fmt_type(s, t.pos);
+        if (pty.err == "") {
+            Tok close = lex_tok(s, pty.pos);
+            if (close.text == ")") {
+                if (is_known_type_fmt(pty.text)) {
+                    FR inner = fmt_unary(s, close.pos, depth);
+                    if (inner.err != "") { return inner; }
+                    return FR {.pos = inner.pos, .text = "(" + pty.text + ")" + inner.text, .err = ""};
+                }
+            }
+        }
+    }
+    if (t.text == "-") {
+        FR inner = fmt_unary(s, t.pos, depth);
+        return FR {.pos = inner.pos, .text = "-" + inner.text, .err = inner.err};
+    }
+    if (t.text == "+") {
+        FR inner = fmt_unary(s, t.pos, depth);
+        return FR {.pos = inner.pos, .text = "+" + inner.text, .err = inner.err};
+    }
+    if (t.text == "!") {
+        FR inner = fmt_unary(s, t.pos, depth);
+        return FR {.pos = inner.pos, .text = "!" + inner.text, .err = inner.err};
+    }
+    FR p = fmt_primary(s, pos, depth);
+    if (p.err != "") { return p; }
+    return fmt_postfix(s, p, depth);
+}
+
+FR fmt_postfix(Str s, FR base, Int depth) {
+    if (base.err != "") { return base; }
+    Tok t = lex_tok(s, base.pos);
+    if (t.text == "[") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.text == "..") {
+            FR end = fmt_expr(s, t2.pos, depth);
+            if (end.err != "") { return end; }
+            Tok close = lex_tok(s, end.pos);
+            if (close.text != "]") { return FR {.pos = close.pos, .text = "", .err = "expected ]"}; }
+            return fmt_postfix(s, FR {.pos = close.pos, .text = base.text + "[.." + end.text + "]", .err = ""}, depth);
+        }
+        FR idx = fmt_expr(s, t.pos, depth);
+        if (idx.err != "") { return idx; }
+        Tok close = lex_tok(s, idx.pos);
+        if (close.text != "]") { return FR {.pos = close.pos, .text = "", .err = "expected ]"}; }
+        return fmt_postfix(s, FR {.pos = close.pos, .text = base.text + "[" + idx.text + "]", .err = ""}, depth);
+    }
+    if (t.text == ".") {
+        Tok f = lex_tok(s, t.pos);
+        if (f.kind != "ident") { return FR {.pos = f.pos, .text = "", .err = "expected a field/method name after ."}; }
+        Tok p = lex_tok(s, f.pos);
+        if (p.text == "(") {
+            FR args = fmt_call_args(s, p.pos, depth);
+            if (args.err != "") { return args; }
+            return fmt_postfix(s, FR {.pos = args.pos, .text = base.text + "." + f.text + "(" + args.text + ")", .err = ""}, depth);
+        }
+        return fmt_postfix(s, FR {.pos = f.pos, .text = base.text + "." + f.text, .err = ""}, depth);
+    }
+    return base;
+}
+
+FR fmt_call_args(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") { return FR {.pos = t.pos, .text = "", .err = ""}; }
+    return fmt_call_args_rest(s, pos, "", depth);
+}
+
+FR fmt_call_args_rest(Str s, Int pos, Str acc, Int depth) {
+    FR a = fmt_expr(s, pos, depth);
+    if (a.err != "") { return a; }
+    Str sep = if (acc == "") { "" } else { ", " };
+    Str acc2 = acc + sep + a.text;
+    Tok t = lex_tok(s, a.pos);
+    if (t.text == ",") { return fmt_call_args_rest(s, t.pos, acc2, depth); }
+    if (t.text == ")") { return FR {.pos = t.pos, .text = acc2, .err = ""}; }
+    return FR {.pos = t.pos, .text = "", .err = "expected , or ) in argument list"};
+}
+
+FR fmt_call(Str s, Int pos, Str name, Int depth) {
+    FR args = fmt_call_args(s, pos, depth);
+    if (args.err != "") { return args; }
+    return FR {.pos = args.pos, .text = name + "(" + args.text + ")", .err = ""};
+}
+
+// Real grammar (resid-parser's parse_struct_lit) requires `.field =
+// value`, confirmed against crates/resid-parser/src/parser.rs directly
+// (the un-exercised Rust resid-fmt printed `field: value`, which fails
+// to reparse — fixed separately, see tools/resid-fmt/src/lib.rs).
+FR fmt_struct_lit_rest(Str s, Int pos, Str acc, Int depth) {
+    Tok dot = lex_tok(s, pos);
+    if (dot.text == "}") { return FR {.pos = dot.pos, .text = acc, .err = ""}; }
+    if (dot.text != ".") { return FR {.pos = dot.pos, .text = "", .err = "expected . in struct literal"}; }
+    Tok f = lex_tok(s, dot.pos);
+    if (f.kind != "ident") { return FR {.pos = f.pos, .text = "", .err = "expected field name in struct literal"}; }
+    Tok eq = lex_tok(s, f.pos);
+    if (eq.text != "=") { return FR {.pos = eq.pos, .text = "", .err = "expected = in struct literal"}; }
+    FR v = fmt_expr(s, eq.pos, depth);
+    if (v.err != "") { return v; }
+    Str sep = if (acc == "") { "" } else { ", " };
+    Str acc2 = acc + sep + "." + f.text + " = " + v.text;
+    Tok t = lex_tok(s, v.pos);
+    if (t.text == ",") { return fmt_struct_lit_rest(s, t.pos, acc2, depth); }
+    if (t.text == "}") { return FR {.pos = t.pos, .text = acc2, .err = ""}; }
+    return FR {.pos = t.pos, .text = "", .err = "expected , or } in struct literal"};
+}
+
+FR fmt_struct_lit(Str s, Int pos, Str name, Int depth) {
+    FR fields = fmt_struct_lit_rest(s, pos, "", depth);
+    if (fields.err != "") { return fields; }
+    Str body = if (fields.text == "") { "{}" } else { "{ " + fields.text + " }" };
+    return FR {.pos = fields.pos, .text = name + " " + body, .err = ""};
+}
+
+FR fmt_list_lit_rest(Str s, Int pos, Str acc, Int depth) {
+    FR e = fmt_expr(s, pos, depth);
+    if (e.err != "") { return e; }
+    Str sep = if (acc == "") { "" } else { ", " };
+    Str acc2 = acc + sep + e.text;
+    Tok t = lex_tok(s, e.pos);
+    if (t.text == "]") { return FR {.pos = t.pos, .text = acc2, .err = ""}; }
+    if (t.text == ",") {
+        Tok nx = lex_tok(s, t.pos);
+        if (nx.text == "]") { return FR {.pos = nx.pos, .text = acc2, .err = ""}; }
+        return fmt_list_lit_rest(s, t.pos, acc2, depth);
+    }
+    // Mirrors the checker's leniency (examples/typecheck.resid's
+    // check_list_lit_rest): a missing comma between elements is tolerated,
+    // matching the Rust reference parser's own lenient behavior.
+    return fmt_list_lit_rest(s, e.pos, acc2, depth);
+}
+
+FR fmt_list_lit(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "]") { return FR {.pos = t.pos, .text = "[]", .err = ""}; }
+    FR items = fmt_list_lit_rest(s, pos, "", depth);
+    if (items.err != "") { return items; }
+    return FR {.pos = items.pos, .text = "[" + items.text + "]", .err = ""};
+}
+
+FR fmt_map_lit_rest(Str s, Int pos, Str acc, Int depth) {
+    FR k = fmt_expr(s, pos, depth);
+    if (k.err != "") { return k; }
+    Tok colon = lex_tok(s, k.pos);
+    if (colon.text != ":") { return FR {.pos = colon.pos, .text = "", .err = "expected : in map literal"}; }
+    FR v = fmt_expr(s, colon.pos, depth);
+    if (v.err != "") { return v; }
+    Str acc2 = acc + ", " + k.text + ": " + v.text;
+    Tok t = lex_tok(s, v.pos);
+    if (t.text == ",") { return fmt_map_lit_rest(s, t.pos, acc2, depth); }
+    if (t.text == "}") { return FR {.pos = t.pos, .text = "{" + acc2 + "}", .err = ""}; }
+    return FR {.pos = t.pos, .text = "", .err = "expected , or } in map literal"};
+}
+
+FR fmt_set_lit_rest(Str s, Int pos, Str acc, Int depth) {
+    FR e = fmt_expr(s, pos, depth);
+    if (e.err != "") { return e; }
+    Str acc2 = acc + ", " + e.text;
+    Tok t = lex_tok(s, e.pos);
+    if (t.text == ",") { return fmt_set_lit_rest(s, t.pos, acc2, depth); }
+    if (t.text == "}") { return FR {.pos = t.pos, .text = "{" + acc2 + "}", .err = ""}; }
+    return FR {.pos = t.pos, .text = "", .err = "expected , or } in set literal"};
+}
+
+FR fmt_map_or_set_lit(Str s, Int pos, Int depth) {
+    Tok probe = lex_tok(s, pos);
+    if (probe.text == "}") { return FR {.pos = probe.pos, .text = "{}", .err = ""}; }
+    FR first = fmt_expr(s, pos, depth);
+    if (first.err != "") { return first; }
+    Tok after = lex_tok(s, first.pos);
+    if (after.text == ":") {
+        FR v = fmt_expr(s, after.pos, depth);
+        if (v.err != "") { return v; }
+        Str acc0 = first.text + ": " + v.text;
+        Tok t2 = lex_tok(s, v.pos);
+        if (t2.text == ",") { return fmt_map_lit_rest(s, t2.pos, acc0, depth); }
+        if (t2.text == "}") { return FR {.pos = t2.pos, .text = "{" + acc0 + "}", .err = ""}; }
+        return FR {.pos = t2.pos, .text = "", .err = "expected , or } in map literal"};
+    }
+    if (after.text == ",") { return fmt_set_lit_rest(s, after.pos, first.text, depth); }
+    if (after.text == "}") { return FR {.pos = after.pos, .text = "{" + first.text + "}", .err = ""}; }
+    return FR {.pos = after.pos, .text = "", .err = "malformed { } literal"};
+}
+
+FR fmt_primary(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "int") { return FR {.pos = t.pos, .text = t.text, .err = ""}; }
+    if (t.kind == "float") { return FR {.pos = t.pos, .text = t.text, .err = ""}; }
+    if (t.kind == "str") { return FR {.pos = t.pos, .text = t.text, .err = ""}; }
+    if (t.kind == "raw") { return FR {.pos = t.pos, .text = t.text, .err = ""}; }
+    if (t.kind == "bytes") { return FR {.pos = t.pos, .text = t.text, .err = ""}; }
+    if (t.kind == "fstring") { return FR {.pos = t.pos, .text = t.text, .err = ""}; }
+    if (t.kind == "char") { return FR {.pos = t.pos, .text = t.text, .err = ""}; }
+    if (t.text == "true") { return FR {.pos = t.pos, .text = "true", .err = ""}; }
+    if (t.text == "false") { return FR {.pos = t.pos, .text = "false", .err = ""}; }
+    if (t.text == "if") { return fmt_if_expr(s, t.pos, depth); }
+    if (t.text == "match") { return fmt_match_expr(s, t.pos, depth); }
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.text == "(") { return fmt_call(s, t2.pos, t.text, depth); }
+        if (t2.text == "{") { return fmt_struct_lit(s, t2.pos, t.text, depth); }
+        if (t.text == "None" && t2.text != ".") { return FR {.pos = t.pos, .text = "None", .err = ""}; }
+        return FR {.pos = t.pos, .text = t.text, .err = ""};
+    }
+    if (t.text == "(") {
+        FR e = fmt_expr(s, t.pos, depth);
+        if (e.err != "") { return e; }
+        Tok close = lex_tok(s, e.pos);
+        if (close.text != ")") { return FR {.pos = close.pos, .text = "", .err = "expected )"}; }
+        return FR {.pos = close.pos, .text = "(" + e.text + ")", .err = ""};
+    }
+    if (t.text == "[") { return fmt_list_lit(s, t.pos, depth); }
+    if (t.text == "{") { return fmt_map_or_set_lit(s, t.pos, depth); }
+    return FR {.pos = t.pos, .text = "", .err = "unexpected token " + t.text};
+}
+
+// `{...}` used as a VALUE (if/else-if arms, `else { fallback }`): zero or
+// more `Type name = expr;` "chain of temporaries" bindings, then a tail
+// expression — mirrors examples/typecheck.resid's check_expr_block.
+// Deliberately does not support the rarer fixed-size-type binding form
+// `Type[N] name = expr;` inside an expression block (zero real usage).
+FR fmt_expr_block(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.kind == "ident") {
+            Tok t3 = lex_tok(s, t2.pos);
+            if (t3.text == "=") {
+                FR v = fmt_expr(s, t3.pos, depth);
+                if (v.err != "") { return v; }
+                Tok semi = lex_tok(s, v.pos);
+                if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after binding"}; }
+                Str line = indent(depth) + t.text + " " + t2.text + " = " + v.text + ";\n";
+                FR rest = fmt_expr_block(s, semi.pos, depth);
+                if (rest.err != "") { return rest; }
+                return FR {.pos = rest.pos, .text = line + rest.text, .err = ""};
+            }
+        }
+        if (t2.text == "(") {
+            FR ty = fmt_type(s, pos);
+            if (ty.err == "") {
+                Tok name = lex_tok(s, ty.pos);
+                Tok eq = lex_tok(s, name.pos);
+                if (eq.text == "=" && name.kind == "ident") {
+                    FR v = fmt_expr(s, eq.pos, depth);
+                    if (v.err != "") { return v; }
+                    Tok semi = lex_tok(s, v.pos);
+                    if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after binding"}; }
+                    Str line = indent(depth) + ty.text + " " + name.text + " = " + v.text + ";\n";
+                    FR rest = fmt_expr_block(s, semi.pos, depth);
+                    if (rest.err != "") { return rest; }
+                    return FR {.pos = rest.pos, .text = line + rest.text, .err = ""};
+                }
+            }
+        }
+    }
+    FR tail = fmt_expr(s, pos, depth);
+    if (tail.err != "") { return tail; }
+    return FR {.pos = tail.pos, .text = indent(depth) + tail.text, .err = ""};
+}
+
+FR fmt_if_expr(Str s, Int pos, Int depth) {
+    Tok open = lex_tok(s, pos);
+    FR cond = fmt_expr(s, open.pos, depth);
+    if (cond.err != "") { return cond; }
+    Tok cpar = lex_tok(s, cond.pos);
+    Tok brace = lex_tok(s, cpar.pos);
+    if (brace.text != "{") { return FR {.pos = brace.pos, .text = "", .err = "expected { in if expression"}; }
+    FR then_e = fmt_expr_block(s, brace.pos, depth + 1);
+    if (then_e.err != "") { return then_e; }
+    Tok close = lex_tok(s, then_e.pos);
+    if (close.text != "}") { return FR {.pos = close.pos, .text = "", .err = "expected } in if expression"}; }
+    Str head = "if (" + cond.text + ") {\n" + then_e.text + "\n" + indent(depth) + "}";
+    Tok kw = lex_tok(s, close.pos);
+    if (kw.text != "else") { return FR {.pos = kw.pos, .text = "", .err = "if expression requires else"}; }
+    Tok peek_if = lex_tok(s, kw.pos);
+    if (peek_if.text == "if") {
+        FR else_e2 = fmt_if_expr(s, peek_if.pos, depth);
+        if (else_e2.err != "") { return else_e2; }
+        return FR {.pos = else_e2.pos, .text = head + " else " + else_e2.text, .err = ""};
+    }
+    Tok brace2 = lex_tok(s, kw.pos);
+    if (brace2.text != "{") { return FR {.pos = brace2.pos, .text = "", .err = "expected { after else"}; }
+    FR else_e = fmt_expr_block(s, brace2.pos, depth + 1);
+    if (else_e.err != "") { return else_e; }
+    Tok close2 = lex_tok(s, else_e.pos);
+    if (close2.text != "}") { return FR {.pos = close2.pos, .text = "", .err = "expected } in if expression"}; }
+    Str full = head + " else {\n" + else_e.text + "\n" + indent(depth) + "}";
+    return FR {.pos = close2.pos, .text = full, .err = ""};
+}
+
+// Primary-only scrutinee (mirrors check_match_sc): `ident {` is a struct
+// literal in the ordinary expression grammar, so a full fmt_expr would
+// swallow the match's own opening brace.
+FR fmt_match_sc(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "(") {
+        FR e = fmt_expr(s, t.pos, depth);
+        if (e.err != "") { return e; }
+        Tok close = lex_tok(s, e.pos);
+        if (close.text != ")") { return FR {.pos = close.pos, .text = "", .err = "expected ) in match scrutinee"}; }
+        return FR {.pos = close.pos, .text = "(" + e.text + ")", .err = ""};
+    }
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.text == "(") { return fmt_call(s, t2.pos, t.text, depth); }
+        return FR {.pos = t.pos, .text = t.text, .err = ""};
+    }
+    if (t.text == "true") { return FR {.pos = t.pos, .text = "true", .err = ""}; }
+    if (t.text == "false") { return FR {.pos = t.pos, .text = "false", .err = ""}; }
+    if (t.kind == "int") { return FR {.pos = t.pos, .text = t.text, .err = ""}; }
+    if (t.kind == "float") { return FR {.pos = t.pos, .text = t.text, .err = ""}; }
+    if (t.kind == "str" || t.kind == "raw" || t.kind == "fstring" || t.kind == "char") { return FR {.pos = t.pos, .text = t.text, .err = ""}; }
+    return FR {.pos = t.pos, .text = "", .err = "match scrutinee must be a primary expression"};
+}
+
+// One arm: `_ => expr` or `VariantName(binding) => expr` or
+// `VariantName => expr` — the same shape covers Some/None/Ok/Err (the
+// Option/Result intrinsics) and any general declared sum-type variant
+// (spec §12, PLAN-resid-only.md A.9) uniformly, since resid-fmt never
+// needs to know which sum type owns a variant, only its syntax.
+FR fmt_match_arm(Str s, Int pos, Int depth) {
+    Tok a = lex_tok(s, pos);
+    if (a.text == "_") {
+        Tok ar = lex_tok(s, a.pos);
+        if (ar.text != "=>") { return FR {.pos = ar.pos, .text = "", .err = "expected => after _ arm pattern"}; }
+        FR body = fmt_expr(s, ar.pos, depth + 1);
+        if (body.err != "") { return body; }
+        Str line = indent(depth + 1) + "_ => " + body.text + ",\n";
+        return FR {.pos = body.pos, .text = line, .err = ""};
+    }
+    if (a.kind != "ident") { return FR {.pos = a.pos, .text = "", .err = "match arm pattern must be a variant name or _"}; }
+    Tok nxt = lex_tok(s, a.pos);
+    if (nxt.text == "(") {
+        Tok nm = lex_tok(s, nxt.pos);
+        if (nm.kind != "ident") { return FR {.pos = nm.pos, .text = "", .err = "expected a binding name in match arm pattern"}; }
+        Tok cl = lex_tok(s, nm.pos);
+        if (cl.text != ")") { return FR {.pos = cl.pos, .text = "", .err = "expected ) in match arm pattern"}; }
+        Tok ar = lex_tok(s, cl.pos);
+        if (ar.text != "=>") { return FR {.pos = ar.pos, .text = "", .err = "expected => after arm pattern"}; }
+        FR body = fmt_expr(s, ar.pos, depth + 1);
+        if (body.err != "") { return body; }
+        Str line = indent(depth + 1) + a.text + "(" + nm.text + ") => " + body.text + ",\n";
+        return FR {.pos = body.pos, .text = line, .err = ""};
+    }
+    Tok ar2 = lex_tok(s, a.pos);
+    if (ar2.text != "=>") { return FR {.pos = ar2.pos, .text = "", .err = "expected => after arm pattern"}; }
+    FR body2 = fmt_expr(s, ar2.pos, depth + 1);
+    if (body2.err != "") { return body2; }
+    Str line2 = indent(depth + 1) + a.text + " => " + body2.text + ",\n";
+    return FR {.pos = body2.pos, .text = line2, .err = ""};
+}
+
+FR fmt_match_arms(Str s, Int pos, Int depth, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") { return FR {.pos = t.pos, .text = acc, .err = ""}; }
+    FR arm = fmt_match_arm(s, pos, depth);
+    if (arm.err != "") { return arm; }
+    Tok sep = lex_tok(s, arm.pos);
+    if (sep.text != "," && sep.text != "}") { return FR {.pos = sep.pos, .text = "", .err = "expected , or } after match arm"}; }
+    Str acc2 = acc + arm.text;
+    if (sep.text == "}") { return FR {.pos = sep.pos, .text = acc2, .err = ""}; }
+    return fmt_match_arms(s, sep.pos, depth, acc2);
+}
+
+FR fmt_match_expr(Str s, Int pos, Int depth) {
+    FR sc = fmt_match_sc(s, pos, depth);
+    if (sc.err != "") { return sc; }
+    Tok brace = lex_tok(s, sc.pos);
+    if (brace.text != "{") { return FR {.pos = brace.pos, .text = "", .err = "expected { in match expression"}; }
+    FR arms = fmt_match_arms(s, brace.pos, depth, "");
+    if (arms.err != "") { return arms; }
+    Str full = "match " + sc.text + " {\n" + arms.text + indent(depth) + "}";
+    return FR {.pos = arms.pos, .text = full, .err = ""};
+}
+
+// ─── Statement / block formatting ─────────────────────────────────
+
+// `{...}` used as a STATEMENT body (if/while/for/bare block): every
+// function body and every if/while/for body in this codebase's real
+// usage is exactly this shape (confirmed by grep before writing this
+// file), so — unlike the general grammar, which allows any single
+// statement — this requires a literal `{` rather than falling back to a
+// bare-statement body.
+FR fmt_brace_block(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.text != "{") { return FR {.pos = t.pos, .text = "", .err = "expected {"}; }
+    FR body = fmt_block_body(s, t.pos, depth + 1);
+    if (body.err != "") { return body; }
+    Str txt = "{\n" + body.text + indent(depth) + "}";
+    return FR {.pos = body.pos, .text = txt, .err = ""};
+}
+
+// Consumes through (and past) the closing `}`; `.text` holds only the
+// statement lines (no closing brace), so the caller supplies its own
+// `indent(depth) + "}"` at the outer depth.
+FR fmt_block_body(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") { return FR {.pos = t.pos, .text = "", .err = ""}; }
+    FR st = fmt_stmt(s, pos, depth);
+    if (st.err != "") { return st; }
+    FR rest = fmt_block_body(s, st.pos, depth);
+    if (rest.err != "") { return rest; }
+    return FR {.pos = rest.pos, .text = st.text + rest.text, .err = ""};
+}
+
+FR fmt_if_stmt(Str s, Int pos, Int depth) {
+    Tok open = lex_tok(s, pos);
+    FR cond = fmt_expr(s, open.pos, depth);
+    if (cond.err != "") { return cond; }
+    Tok cpar = lex_tok(s, cond.pos);
+    FR then = fmt_brace_block(s, cpar.pos, depth);
+    if (then.err != "") { return then; }
+    Tok t = lex_tok(s, then.pos);
+    if (t.text == "else") {
+        Tok peek = lex_tok(s, t.pos);
+        if (peek.text == "if") {
+            FR elif = fmt_if_stmt(s, peek.pos, depth);
+            if (elif.err != "") { return elif; }
+            Str elifTrim = strip_indent_prefix(elif.text, depth);
+            Str txt = indent(depth) + "if (" + cond.text + ") " + then.text + " else " + elifTrim;
+            return FR {.pos = elif.pos, .text = txt, .err = ""};
+        }
+        FR other = fmt_brace_block(s, t.pos, depth);
+        if (other.err != "") { return other; }
+        Str txt2 = indent(depth) + "if (" + cond.text + ") " + then.text + " else " + other.text + "\n";
+        return FR {.pos = other.pos, .text = txt2, .err = ""};
+    }
+    Str txt3 = indent(depth) + "if (" + cond.text + ") " + then.text + "\n";
+    return FR {.pos = then.pos, .text = txt3, .err = ""};
+}
+
+FR fmt_while_stmt(Str s, Int pos, Int depth) {
+    Tok open = lex_tok(s, pos);
+    FR cond = fmt_expr(s, open.pos, depth);
+    if (cond.err != "") { return cond; }
+    Tok cpar = lex_tok(s, cond.pos);
+    FR body = fmt_brace_block(s, cpar.pos, depth);
+    if (body.err != "") { return body; }
+    Str txt = indent(depth) + "while (" + cond.text + ") " + body.text + "\n";
+    return FR {.pos = body.pos, .text = txt, .err = ""};
+}
+
+FR fmt_for_stmt(Str s, Int pos, Int depth) {
+    Tok open = lex_tok(s, pos);
+    Tok ty = lex_tok(s, open.pos);
+    Tok nm = lex_tok(s, ty.pos);
+    Tok in_kw = lex_tok(s, nm.pos);
+    if (in_kw.text != "in") { return FR {.pos = in_kw.pos, .text = "", .err = "expected in in for statement"}; }
+    FR col = fmt_expr(s, in_kw.pos, depth);
+    if (col.err != "") { return col; }
+    Tok cpar = lex_tok(s, col.pos);
+    FR body = fmt_brace_block(s, cpar.pos, depth);
+    if (body.err != "") { return body; }
+    Str txt = indent(depth) + "for (" + ty.text + " " + nm.text + " in " + col.text + ") " + body.text + "\n";
+    return FR {.pos = body.pos, .text = txt, .err = ""};
+}
+
+// Deliberately not supported: `Destructure` (unreachable from source per
+// Phase A.7's audit of the Rust pipeline itself — no code change needed
+// there either) and the rare `Type[N] name = expr;` fixed-size binding
+// form (zero real usage, see file header).
+FR fmt_stmt(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "return") {
+        Tok e = lex_tok(s, t.pos);
+        if (e.text == ";") { return FR {.pos = e.pos, .text = indent(depth) + "return;\n", .err = ""}; }
+        FR v = fmt_expr(s, t.pos, depth);
+        if (v.err != "") { return v; }
+        Tok semi = lex_tok(s, v.pos);
+        if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after return"}; }
+        return FR {.pos = semi.pos, .text = indent(depth) + "return " + v.text + ";\n", .err = ""};
+    }
+    if (t.text == "break") {
+        Tok semi = lex_tok(s, t.pos);
+        return FR {.pos = semi.pos, .text = indent(depth) + "break;\n", .err = ""};
+    }
+    if (t.text == "continue") {
+        Tok semi = lex_tok(s, t.pos);
+        return FR {.pos = semi.pos, .text = indent(depth) + "continue;\n", .err = ""};
+    }
+    if (t.text == "if") { return fmt_if_stmt(s, t.pos, depth); }
+    if (t.text == "while") { return fmt_while_stmt(s, t.pos, depth); }
+    if (t.text == "for") { return fmt_for_stmt(s, t.pos, depth); }
+    if (t.text == "{") {
+        FR blk = fmt_brace_block(s, pos, depth);
+        if (blk.err != "") { return blk; }
+        return FR {.pos = blk.pos, .text = indent(depth) + blk.text + "\n", .err = ""};
+    }
+    if (t.kind == "ident") {
+        if (t.text == "_") {
+            Tok eq = lex_tok(s, t.pos);
+            if (eq.text == "=") {
+                FR v = fmt_expr(s, eq.pos, depth);
+                if (v.err != "") { return v; }
+                Tok semi = lex_tok(s, v.pos);
+                if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ;"}; }
+                return FR {.pos = semi.pos, .text = indent(depth) + "_ = " + v.text + ";\n", .err = ""};
+            }
+        }
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.kind == "ident") {
+            Tok t3 = lex_tok(s, t2.pos);
+            if (t3.text == "=") {
+                FR v = fmt_expr(s, t3.pos, depth);
+                if (v.err != "") { return v; }
+                Tok semi = lex_tok(s, v.pos);
+                if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ;"}; }
+                return FR {.pos = semi.pos, .text = indent(depth) + t.text + " " + t2.text + " = " + v.text + ";\n", .err = ""};
+            }
+        }
+        if (t2.text == "(") {
+            FR ty = fmt_type(s, pos);
+            if (ty.err == "") {
+                Tok name = lex_tok(s, ty.pos);
+                Tok eq = lex_tok(s, name.pos);
+                if (eq.text == "=" && name.kind == "ident") {
+                    FR v = fmt_expr(s, eq.pos, depth);
+                    if (v.err != "") { return v; }
+                    Tok semi = lex_tok(s, v.pos);
+                    if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ;"}; }
+                    return FR {.pos = semi.pos, .text = indent(depth) + ty.text + " " + name.text + " = " + v.text + ";\n", .err = ""};
+                }
+            }
+        }
+    }
+    FR e = fmt_expr(s, pos, depth);
+    if (e.err != "") { return e; }
+    Tok semi = lex_tok(s, e.pos);
+    if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after expression statement"}; }
+    return FR {.pos = semi.pos, .text = indent(depth) + e.text + ";\n", .err = ""};
+}
+
+// ─── Doc comments ──────────────────────────────────────────────────
+
+type DocRes = { List(Str) lines; Int pos; };
+
+DocRes collect_docs(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "doc") {
+        DocRes rest = collect_docs(s, t.pos);
+        List(Str) one = [t.text];
+        List(Str) merged = one.concat(rest.lines);
+        return DocRes {.lines = merged, .pos = rest.pos};
+    }
+    List(Str) empty = [];
+    return DocRes {.lines = empty, .pos = pos};
+}
+
+Str fmt_doc_lines_acc(List(Str) docs, Int i, Int depth, Str acc) {
+    Int n = docs.len();
+    if (i >= n) { return acc; }
+    Str line = indent(depth) + docs[i] + "\n";
+    return fmt_doc_lines_acc(docs, i + 1, depth, acc + line);
+}
+
+Str fmt_doc_lines(List(Str) docs, Int depth) {
+    if (docs.len() == 0) { return ""; }
+    return fmt_doc_lines_acc(docs, 0, depth, "");
+}
+
+// ─── Function / parameter formatting ──────────────────────────────
+
+FR fmt_params_rest(Str s, Int pos, Str acc) {
+    FR ty = fmt_type(s, pos);
+    if (ty.err != "") { return ty; }
+    Tok nm = lex_tok(s, ty.pos);
+    if (nm.kind != "ident") { return FR {.pos = nm.pos, .text = "", .err = "expected parameter name"}; }
+    Str sep = if (acc == "") { "" } else { ", " };
+    Str acc2 = acc + sep + ty.text + " " + nm.text;
+    Tok t = lex_tok(s, nm.pos);
+    if (t.text == ",") { return fmt_params_rest(s, t.pos, acc2); }
+    if (t.text == ")") { return FR {.pos = t.pos, .text = acc2, .err = ""}; }
+    return FR {.pos = t.pos, .text = "", .err = "expected , or ) in parameter list"};
+}
+
+FR fmt_params(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") { return FR {.pos = t.pos, .text = "", .err = ""}; }
+    return fmt_params_rest(s, pos, "");
+}
+
+FR fmt_func(Str s, Int pos, Bool pubk, List(Str) docs, Int depth) {
+    FR rty = fmt_type(s, pos);
+    if (rty.err != "") { return rty; }
+    Tok name = lex_tok(s, rty.pos);
+    if (name.kind != "ident") { return FR {.pos = name.pos, .text = "", .err = "expected function name"}; }
+    Tok open = lex_tok(s, name.pos);
+    if (open.text != "(") { return FR {.pos = open.pos, .text = "", .err = "expected ( after function name"}; }
+    FR params = fmt_params(s, open.pos);
+    if (params.err != "") { return params; }
+    Tok brace = lex_tok(s, params.pos);
+    if (brace.text != "{") { return FR {.pos = brace.pos, .text = "", .err = "expected { to start function body"}; }
+    FR body = fmt_block_body(s, brace.pos, depth + 1);
+    if (body.err != "") { return body; }
+    Str pubtxt = if (pubk) { "pub " } else { "" };
+    Str dochdr = fmt_doc_lines(docs, depth);
+    Str head = indent(depth) + pubtxt + rty.text + " " + name.text + "(" + params.text + ") {\n";
+    Str txt = dochdr + head + body.text + indent(depth) + "}\n\n";
+    return FR {.pos = body.pos, .text = txt, .err = ""};
+}
+
+// ─── Type declarations (spec §12) ─────────────────────────────────
+
+type VER = { Bool ok; Str text; Int pos; };
+
+VER fmt_one_variant(Str s, Int pos) {
+    Tok nm = lex_tok(s, pos);
+    if (nm.kind != "ident") { return VER {.ok = false, .text = "", .pos = pos}; }
+    Tok nxt = lex_tok(s, nm.pos);
+    if (nxt.text != "(") { return VER {.ok = true, .text = nm.text, .pos = nm.pos}; }
+    FR pty = fmt_type(s, nxt.pos);
+    if (pty.err != "") { return VER {.ok = false, .text = "", .pos = pos}; }
+    Tok cp = lex_tok(s, pty.pos);
+    if (cp.text != ")") { return VER {.ok = false, .text = "", .pos = pos}; }
+    return VER {.ok = true, .text = nm.text + "(" + pty.text + ")", .pos = cp.pos};
+}
+
+// Requires >= 1 `|` to be recognized as a sum type at all — a single bare
+// variant with no pipe is syntactically identical to a parameterized-type
+// Base alias (`type X = List(Int);`) and is left to that path instead;
+// mirrors examples/typecheck.resid's parse_variant_list exactly (see
+// PLAN-resid-only.md A.9).
+FR fmt_variant_list(Str s, Int pos, Str acc, Int nseen) {
+    VER v = fmt_one_variant(s, pos);
+    if (!v.ok) { return FR {.pos = pos, .text = "", .err = "not a variant"}; }
+    Str sep = if (acc == "") { "" } else { " | " };
+    Str acc2 = acc + sep + v.text;
+    Tok pipe = lex_tok(s, v.pos);
+    if (pipe.text == "|") { return fmt_variant_list(s, pipe.pos, acc2, nseen + 1); }
+    if (pipe.text == ";") {
+        if (nseen < 1) { return FR {.pos = pos, .text = "", .err = "not a variant"}; }
+        return FR {.pos = pipe.pos, .text = acc2, .err = ""};
+    }
+    return FR {.pos = pos, .text = "", .err = "not a variant"};
+}
+
+FR fmt_product_fields(Str s, Int pos, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") { return FR {.pos = pos, .text = acc, .err = ""}; }
+    FR ty = fmt_type(s, pos);
+    if (ty.err != "") { return ty; }
+    Tok name = lex_tok(s, ty.pos);
+    if (name.kind != "ident") { return FR {.pos = name.pos, .text = "", .err = "expected field name"}; }
+    Tok semi = lex_tok(s, name.pos);
+    if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after field"}; }
+    Str sep = if (acc == "") { "" } else { " " };
+    Str acc2 = acc + sep + ty.text + " " + name.text + ";";
+    return fmt_product_fields(s, semi.pos, acc2);
+}
+
+FR fmt_type_product(Str s, Int pos, Str name, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") {
+        Tok semi = lex_tok(s, t.pos);
+        if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after type declaration"}; }
+        Str txt = indent(depth) + "type " + name + " = {};\n\n";
+        return FR {.pos = semi.pos, .text = txt, .err = ""};
+    }
+    FR fields = fmt_product_fields(s, pos, "");
+    if (fields.err != "") { return fields; }
+    Tok close = lex_tok(s, fields.pos);
+    if (close.text != "}") { return FR {.pos = close.pos, .text = "", .err = "expected } to close type declaration"}; }
+    Tok semi = lex_tok(s, close.pos);
+    if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after type declaration"}; }
+    Str txt = indent(depth) + "type " + name + " = { " + fields.text + " };\n\n";
+    return FR {.pos = semi.pos, .text = txt, .err = ""};
+}
+
+FR fmt_type_decl(Str s, Int pos, Str name, Int depth) {
+    Tok tbrace = lex_tok(s, pos);
+    if (tbrace.text == "{") { return fmt_type_product(s, tbrace.pos, name, depth); }
+    FR vl = fmt_variant_list(s, pos, "", 0);
+    if (vl.err == "") {
+        Str txt = indent(depth) + "type " + name + " = " + vl.text + ";\n\n";
+        return FR {.pos = vl.pos, .text = txt, .err = ""};
+    }
+    FR bt = fmt_type(s, pos);
+    if (bt.err != "") { return bt; }
+    Tok after = lex_tok(s, bt.pos);
+    if (after.text == "[") {
+        FR ce = fmt_expr(s, after.pos, depth);
+        if (ce.err != "") { return ce; }
+        Tok close = lex_tok(s, ce.pos);
+        if (close.text != "]") { return FR {.pos = close.pos, .text = "", .err = "expected ] in constraint type"}; }
+        Tok semi = lex_tok(s, close.pos);
+        if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after type declaration"}; }
+        Str txt = indent(depth) + "type " + name + " = " + bt.text + "[" + ce.text + "];\n\n";
+        return FR {.pos = semi.pos, .text = txt, .err = ""};
+    }
+    if (after.text == "where") {
+        FR ce = fmt_expr(s, after.pos, depth);
+        if (ce.err != "") { return ce; }
+        Tok semi = lex_tok(s, ce.pos);
+        if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after type declaration"}; }
+        Str txt = indent(depth) + "type " + name + " = " + bt.text + " where " + ce.text + ";\n\n";
+        return FR {.pos = semi.pos, .text = txt, .err = ""};
+    }
+    if (after.text != ";") { return FR {.pos = after.pos, .text = "", .err = "expected ; after type declaration"}; }
+    Str txt2 = indent(depth) + "type " + name + " = " + bt.text + ";\n\n";
+    return FR {.pos = after.pos, .text = txt2, .err = ""};
+}
+
+// ─── Behavior declarations ─────────────────────────────────────────
+// `Name(Param) = ImplIdent;` — mirrors examples/typecheck.resid's
+// behavior_decl_at exactly (a bare identifier impl only; the self-hosted
+// checker doesn't accept a general expression there, unlike the fuller
+// Rust grammar, and this codebase has zero real behavior declarations to
+// exercise the difference).
+
+type BDRes = { Bool ok; Str name; Str param; Str impl; Int pos; };
+
+BDRes fmt_behavior_probe(Str s, Int pos) {
+    Tok head = lex_tok(s, pos);
+    if (head.kind != "ident") { return BDRes {.ok = false, .name = "", .param = "", .impl = "", .pos = pos}; }
+    Tok open = lex_tok(s, head.pos);
+    if (open.text != "(") { return BDRes {.ok = false, .name = "", .param = "", .impl = "", .pos = pos}; }
+    Tok p1 = lex_tok(s, open.pos);
+    if (p1.kind != "ident") { return BDRes {.ok = false, .name = "", .param = "", .impl = "", .pos = pos}; }
+    Tok close = lex_tok(s, p1.pos);
+    if (close.text != ")") { return BDRes {.ok = false, .name = "", .param = "", .impl = "", .pos = pos}; }
+    Tok eq = lex_tok(s, close.pos);
+    if (eq.text != "=") { return BDRes {.ok = false, .name = "", .param = "", .impl = "", .pos = pos}; }
+    Tok fnt = lex_tok(s, eq.pos);
+    if (fnt.kind != "ident") { return BDRes {.ok = false, .name = "", .param = "", .impl = "", .pos = pos}; }
+    Tok semi = lex_tok(s, fnt.pos);
+    if (semi.text != ";") { return BDRes {.ok = false, .name = "", .param = "", .impl = "", .pos = pos}; }
+    return BDRes {.ok = true, .name = head.text, .param = p1.text, .impl = fnt.text, .pos = semi.pos};
+}
+
+// ─── Imports ────────────────────────────────────────────────────────
+
+FR fmt_import_names(Str s, Int pos, Str acc) {
+    Tok nm = lex_tok(s, pos);
+    if (nm.kind != "ident") { return FR {.pos = nm.pos, .text = "", .err = "expected an identifier in import list"}; }
+    Str sep = if (acc == "") { "" } else { ", " };
+    Str acc2 = acc + sep + nm.text;
+    Tok t = lex_tok(s, nm.pos);
+    if (t.text == ",") { return fmt_import_names(s, t.pos, acc2); }
+    if (t.text == ")") { return FR {.pos = t.pos, .text = acc2, .err = ""}; }
+    return FR {.pos = t.pos, .text = "", .err = "expected , or ) in import list"};
+}
+
+FR fmt_import(Str s, Int pos) {
+    Tok pathTok = lex_tok(s, pos);
+    if (pathTok.kind != "str") { return FR {.pos = pathTok.pos, .text = "", .err = "expected a quoted path after import"}; }
+    Tok nxt = lex_tok(s, pathTok.pos);
+    if (nxt.text == "as") {
+        Tok alias = lex_tok(s, nxt.pos);
+        if (alias.kind != "ident") { return FR {.pos = alias.pos, .text = "", .err = "expected an alias identifier"}; }
+        Tok semi = lex_tok(s, alias.pos);
+        if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after import"}; }
+        Str txt = "import " + pathTok.text + " as " + alias.text + ";\n";
+        return FR {.pos = semi.pos, .text = txt, .err = ""};
+    }
+    if (nxt.text == "(") {
+        FR names = fmt_import_names(s, nxt.pos, "");
+        if (names.err != "") { return names; }
+        Tok semi = lex_tok(s, names.pos);
+        if (semi.text != ";") { return FR {.pos = semi.pos, .text = "", .err = "expected ; after import"}; }
+        Str txt = "import " + pathTok.text + " (" + names.text + ");\n";
+        return FR {.pos = semi.pos, .text = txt, .err = ""};
+    }
+    if (nxt.text != ";") { return FR {.pos = nxt.pos, .text = "", .err = "expected ; after import"}; }
+    Str txt2 = "import " + pathTok.text + ";\n";
+    return FR {.pos = nxt.pos, .text = txt2, .err = ""};
+}
+
+FR fmt_imports(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.text != "import") { return FR {.pos = pos, .text = "", .err = ""}; }
+    FR one = fmt_import(s, t.pos);
+    if (one.err != "") { return one; }
+    FR rest = fmt_imports(s, one.pos);
+    if (rest.err != "") { return rest; }
+    return FR {.pos = rest.pos, .text = one.text + rest.text, .err = ""};
+}
+
+// ─── Top-level declarations ────────────────────────────────────────
+// Raw-slice-and-trim, not re-formatted internally, for `@requires(...)`
+// and `sandbox (...)` capability lists — real usage is zero anywhere in
+// this repo's tools/lib.resid corpus, so investing in a full capability-
+// list pretty-printer (mirroring examples/typecheck.resid's cap_list_at)
+// wasn't worth the added surface; the raw text is still reprinted
+// byte-exact, never dropped or mangled.
+
+Int scan_balanced_parens(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "(") { return scan_balanced_parens(s, t.pos, depth + 1); }
+    if (t.text == ")") {
+        if (depth <= 1) { return t.pos; }
+        return scan_balanced_parens(s, t.pos, depth - 1);
+    }
+    if (t.kind == "eof") { return t.pos; }
+    return scan_balanced_parens(s, t.pos, depth);
+}
+
+FR fmt_decl_after_pub(Str s, Int startPos, List(Str) docs, Int depth, Bool pubk) {
+    BDRes bh = fmt_behavior_probe(s, startPos);
+    if (bh.ok) {
+        FR rest = fmt_decls(s, bh.pos, depth);
+        if (rest.err != "") { return rest; }
+        Str txt = fmt_doc_lines(docs, depth) + indent(depth) + bh.name + "(" + bh.param + ") = " + bh.impl + ";\n\n" + rest.text;
+        return FR {.pos = rest.pos, .text = txt, .err = ""};
+    }
+    FR fn = fmt_func(s, startPos, pubk, docs, depth);
+    if (fn.err != "") { return fn; }
+    FR rest2 = fmt_decls(s, fn.pos, depth);
+    if (rest2.err != "") { return rest2; }
+    return FR {.pos = rest2.pos, .text = fn.text + rest2.text, .err = ""};
+}
+
+FR fmt_decls(Str s, Int pos, Int depth) {
+    DocRes docs = collect_docs(s, pos);
+    Tok t = lex_tok(s, docs.pos);
+    if (t.kind == "eof") { return FR {.pos = t.pos, .text = "", .err = ""}; }
+    if (t.text == "}") { return FR {.pos = pos, .text = "", .err = ""}; }
+    if (t.text == "@") {
+        Tok an = lex_tok(s, t.pos);
+        if (an.text != "requires") { return FR {.pos = an.pos, .text = "", .err = "unsupported annotation @" + an.text}; }
+        Tok lp = lex_tok(s, an.pos);
+        if (lp.text != "(") { return FR {.pos = lp.pos, .text = "", .err = "expected ( after @requires"}; }
+        Int closeAt = scan_balanced_parens(s, lp.pos, 1);
+        Int atStart = t.pos - 1;
+        Str raw = str_slice(s, atStart, closeAt);
+        FR rest = fmt_decls(s, closeAt, depth);
+        if (rest.err != "") { return rest; }
+        Str txt = fmt_doc_lines(docs.lines, depth) + indent(depth) + raw + "\n" + rest.text;
+        return FR {.pos = rest.pos, .text = txt, .err = ""};
+    }
+    if (t.text == "sandbox") {
+        Tok lp = lex_tok(s, t.pos);
+        if (lp.text != "(") { return FR {.pos = lp.pos, .text = "", .err = "expected ( after sandbox"}; }
+        Int closeAt = scan_balanced_parens(s, lp.pos, 1);
+        Str caps = str_trim(str_slice(s, lp.pos, closeAt - 1));
+        Tok lb = lex_tok(s, closeAt);
+        if (lb.text != "{") { return FR {.pos = lb.pos, .text = "", .err = "expected { after sandbox capabilities"}; }
+        FR inner = fmt_decls(s, lb.pos, depth + 1);
+        if (inner.err != "") { return inner; }
+        Tok close = lex_tok(s, inner.pos);
+        if (close.text != "}") { return FR {.pos = close.pos, .text = "", .err = "expected } to close sandbox block"}; }
+        FR rest = fmt_decls(s, close.pos, depth);
+        if (rest.err != "") { return rest; }
+        Str head = indent(depth) + "sandbox (" + caps + ") {\n";
+        Str txt = fmt_doc_lines(docs.lines, depth) + head + inner.text + indent(depth) + "}\n\n" + rest.text;
+        return FR {.pos = rest.pos, .text = txt, .err = ""};
+    }
+    if (t.text == "type") {
+        Tok tname = lex_tok(s, t.pos);
+        if (tname.kind != "ident") { return FR {.pos = tname.pos, .text = "", .err = "expected type name"}; }
+        Tok teq = lex_tok(s, tname.pos);
+        if (teq.text != "=") { return FR {.pos = teq.pos, .text = "", .err = "expected = after type name"}; }
+        FR decl = fmt_type_decl(s, teq.pos, tname.text, depth);
+        if (decl.err != "") { return decl; }
+        FR rest = fmt_decls(s, decl.pos, depth);
+        if (rest.err != "") { return rest; }
+        Str txt = fmt_doc_lines(docs.lines, depth) + decl.text + rest.text;
+        return FR {.pos = rest.pos, .text = txt, .err = ""};
+    }
+    if (t.text == "import") {
+        return FR {.pos = t.pos, .text = "", .err = "import must appear before any declaration"};
+    }
+    if (t.text == "pub") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.kind != "ident") { return FR {.pos = t2.pos, .text = "", .err = "expected a declaration after pub"}; }
+        return fmt_decl_after_pub(s, t.pos, docs.lines, depth, true);
+    }
+    if (t.kind == "ident") {
+        return fmt_decl_after_pub(s, docs.pos, docs.lines, depth, false);
+    }
+    return FR {.pos = t.pos, .text = "", .err = "unexpected top-level token " + t.text};
+}
+
+// ─── Entry point ────────────────────────────────────────────────────
+
+Str fmt_program(Str s) {
+    // A module-level doc-comment header (before `import`, not attached to
+    // any single declaration) needs its own pass: collect_docs run from 0
+    // only turns out to be "module-level" when the next real token is
+    // literally `import` — otherwise these are the first declaration's own
+    // doc comment, left untouched for fmt_decls's own collect_docs to pick
+    // up (its normal, already-correct path).
+    DocRes headDocs = collect_docs(s, 0);
+    Tok afterDocs = lex_tok(s, headDocs.pos);
+    Bool moduleHeader = afterDocs.text == "import";
+    Int importsStart = if (moduleHeader) { headDocs.pos } else { 0 };
+    FR imports = fmt_imports(s, importsStart);
+    if (imports.err != "") { return "ERROR: " + imports.err + " at " + IntToString(imports.pos) + " near [" + str_slice(s, imports.pos, imports.pos + 30) + "]"; }
+    FR decls = fmt_decls(s, imports.pos, 0);
+    if (decls.err != "") { return "ERROR: " + decls.err + " at " + IntToString(decls.pos) + " near [" + str_slice(s, decls.pos, decls.pos + 30) + "]"; }
+    Str headText = if (moduleHeader) { fmt_doc_lines(headDocs.lines, 0) + "\n" } else { "" };
+    Bool bothNonEmpty = imports.text != "" && decls.text != "";
+    Str blank = if (bothNonEmpty) { "\n" } else { "" };
+    Str whole = headText + imports.text + blank + decls.text;
+    return rtrim_ws(whole) + "\n";
+}
+
+// ─── CLI ─────────────────────────────────────────────────────────────
+
+type Args = { Str path; Bool w; Bool check; };
+
+Args parse_args(Int i, Int n, Str path, Bool w, Bool check) {
+    if (i >= n) { return Args {.path = path, .w = w, .check = check}; }
+    Str a = args.get(i);
+    Int ni = i + 1;
+    if (a == "-w") { return parse_args(ni, n, path, true, check); }
+    if (a == "--check") { return parse_args(ni, n, path, w, true); }
+    return parse_args(ni, n, a, w, check);
+}
+
+Int main() {
+    Int argc = args.count();
+    Args a = parse_args(1, argc, "", false, false);
+    if (a.path == "") {
+        eprintln("usage: resid-fmt <file> [-w | --check]");
+        return 1;
+    }
+    if (!filesystem.exists(a.path)) {
+        eprintln("error: cannot read '" + a.path + "'");
+        return 1;
+    }
+    Str src = filesystem.read_all(a.path);
+    Str formatted = fmt_program(src);
+    if (str_has_prefix(formatted, "ERROR: ")) {
+        eprintln("error: cannot format '" + a.path + "': " + formatted);
+        return 1;
+    }
+    if (a.w) {
+        Bool ok = filesystem.write_all(a.path, formatted);
+        return 0;
+    }
+    if (a.check) {
+        if (src == formatted) {
+            println(a.path + ": formatted");
+            return 0;
+        }
+        eprintln(a.path + ": not formatted (run `resid-fmt " + a.path + " -w`)");
+        return 1;
+    }
+    print(formatted);
+    return 0;
+}
