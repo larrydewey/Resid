@@ -1262,32 +1262,66 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       line rejected with the exact same error shape. Both the Rust
       pipeline and a self-hosted D1-built binary parse and print every
       fixture identically — no self-hosted-only codegen issues hit this
-      time. Not yet wired to anything — a verification/demonstration
-      driver (`resid-manifest <resid.toml>` / `resid-manifest lock
-      <resid.lock>`), not yet consumed by dependency resolution or build
-      orchestration.
+      time.
 
-      **Still open**: dependency resolution / capability-ceiling
-      enforcement (`lib.rs`'s `collect_dep` family, already partially
-      mirrored by §21.1 ceiling logic elsewhere per A.5), registry client
-      wiring (transport itself is easy — deliberately "dependency-free
-      HTTP/1.1 GET over TCP" per the Rust doc comment, and the
-      self-hosted TCP/HTTP client already exists and is e2e-tested:
+      **Dependency resolution — DONE for path dependencies.** Added to
+      the same file: `collect_dep_path`/`collect_sub_deps_at`/
+      `resolve_all_deps` (mirrors `collect_dep`/`resolve_dep_dir`'s
+      path-dependency case: transitive walk, depth>32 cycle guard, a
+      name claimed by two different directories rejected),
+      `check_dep_capabilities` (a dependency's declared `capabilities`
+      must all be present under the consumer's `[capabilities] grant`),
+      and `verify_pinned_key` (a dependency with `pubkey = "<hex>"` must
+      ship a `<name>.resid-pkg` + `<name>.resid-sig` that verifies
+      against exactly that key — wired to `resid-pkg.resid`'s archive
+      format via duplicated `hex_decode`/`sha256_bytes`/`verify_sig`
+      calls, same per-file-duplication convention as everywhere else this
+      session). New `resid-manifest deps <resid.toml>` subcommand.
+      Verified against real 2-package fixtures built for this (an `app`
+      depending on a path `math` package, mirroring
+      `crates/resid-build/tests/build.rs`'s own fixtures): successful
+      resolution; a missing dependency directory rejected with the exact
+      same error shape as the Rust test (`missing_dependency_package_
+      rejected_at_load`); an ungranted dependency capability rejected
+      (`ungranted_dependency_capability_rejected`); a `pubkey`-pinned
+      dependency rejected when unsigned, accepted once packed and signed
+      with `resid-pkg.resid`, and rejected again after a single flipped
+      byte in the signed archive (full trust-chain round trip: unsigned
+      → signed+valid → signed+tampered, all producing the correct
+      verdict). Self-hosted D1-built binary matches the Rust pipeline
+      exactly on every case, first try — no codegen issues hit this
+      round either.
+      **Scope-trim, documented in the file**: dependency-directory
+      identity for cycle/collision detection is plain string equality of
+      the path, not `Path::canonicalize()` (this language has no
+      path-canonicalization primitive) — only matters for the same
+      directory spelled two different ways (symlinks, `./`, `..`), never
+      affects signature/capability correctness. `version =` registry
+      dependencies are rejected with a clear message (registry client not
+      ported yet, see below) rather than silently mishandled.
+
+      **Still open**: the global `[signing] require_signatures` keyring
+      policy (needs a directory-scan of a keyring — different from the
+      one-key `verify_pinned_key` case just done), registry client wiring
+      (transport itself is easy — deliberately "dependency-free HTTP/1.1
+      GET over TCP" per the Rust doc comment, and the self-hosted
+      TCP/HTTP client already exists and is e2e-tested:
       `run_http11_client_in_resid`, `run_http_get_in_resid`,
       `lib/http.resid`; `registry.rs`'s `serve_dir`, an inbound TCP
       *listener* for `resid-build serve`, is a distinct, unchecked
       capability — likely fine to defer/drop as a dev-convenience
-      feature), the CLI/subcommand orchestration in `main.rs` (385
-      lines), and COSE encryption (`cose.rs` — rides on
+      feature), writing `resid.lock` back out (only *read* so far), the
+      CLI/subcommand orchestration in `main.rs` (385 lines) tying
+      manifest+deps+lock+archive+registry into one `resid-build`
+      command, and COSE encryption (`cose.rs` — rides on
       ChaCha20-Poly1305, which already works self-hosted:
       `lib/chacha.resid`, `run_chacha20poly1305_in_resid`). Recommend
-      next: (1) dependency resolution wiring the manifest parser + archive
-      module together (load a dependency's own `resid.toml`, verify its
-      pinned key if any, check its capability ceiling against the
-      consumer's grants); (2) registry client wiring + CLI. Each deserves
-      the same fixture-based byte-comparison verification this session
-      used throughout, given the security stakes — as the ed25519
-      bug above shows, this area rewards it.
+      next: (1) registry client wiring (local-directory registry mode
+      first — no network needed, same shape as path dependencies but
+      pulling a versioned archive instead of a bare directory); (2) the
+      unified CLI. Each deserves the same fixture-based byte-comparison
+      verification this session used throughout, given the security
+      stakes — as the ed25519 bug shows, this area rewards it.
 - [ ] D.1 Freeze stage-0 seed binary
 - [ ] D.2 Archive `crates/` to `bootstrap/rust-stage0/`
 - [ ] D.3 Update PROGRESS.md §6 policy
