@@ -466,10 +466,14 @@ type PRes = { Int pos; Str ty; Str err; };
 // sandbox ceiling for names[i] (drives cap_enter/cap_leave emission).
 // E.1: growable[i] = list of parameter indices that are proven growable
 // accumulators (bare List(T) params following the accumulator shape).
-type Funcs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) ctn; List(Str) ctb; List(Str) ctc; List(Int) growable; };
+// sun/suv (spec §12 general sum types): mirrors examples/typecheck.resid's
+// identically-named fields exactly (sun[i] = a declared sum type's name,
+// suv[i] = "Variant:Payload|..." encoded as "names;types", both "|"-joined
+// and index-aligned — see typecheck.resid for the full comment).
+type Funcs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) ctn; List(Str) ctb; List(Str) ctc; List(Int) growable; List(Str) sun; List(Str) suv; };
 
 Funcs funcs_empty() {
-    return Funcs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .ctn = [], .ctb = [], .ctc = [], .growable = []};
+    return Funcs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .ctn = [], .ctb = [], .ctc = [], .growable = [], .sun = [], .suv = []};
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -983,6 +987,92 @@ Str ceil_join(Str a, Str b) {
     return a + "," + b;
 }
 
+// ─── General sum-type declarations (spec §12) ───────────────────
+// Mirrors examples/typecheck.resid's identically-named functions exactly
+// (deduped by convention, not by import — see tools/merge_driver.resid).
+
+type VLResCg = { Bool ok; Str vnames; Str vtypes; Int pos; };
+
+VLResCg parse_one_variant_cg(Str s, Int pos) {
+    Tok nm = lex_tok(s, pos);
+    if (nm.kind != "ident") { return VLResCg {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
+    Tok nxt = lex_tok(s, nm.pos);
+    if (nxt.text != "(") {
+        return VLResCg {.ok = true, .vnames = nm.text, .vtypes = "", .pos = nm.pos};
+    }
+    PRes pty = parse_type(s, nxt.pos);
+    if (pty.err != "") { return VLResCg {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
+    Tok cp = lex_tok(s, pty.pos);
+    if (cp.text != ")") { return VLResCg {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
+    return VLResCg {.ok = true, .vnames = nm.text, .vtypes = pty.ty, .pos = cp.pos};
+}
+
+VLResCg parse_variant_list_cg(Str s, Int pos, Str vnacc, Str vtacc, Int nseen) {
+    VLResCg v = parse_one_variant_cg(s, pos);
+    if (!v.ok) { return VLResCg {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
+    Str sep = if (vnacc == "") { "" } else { "|" };
+    Str vnacc2 = vnacc + sep + v.vnames;
+    Str vtacc2 = vtacc + sep + v.vtypes;
+    Tok pipe = lex_tok(s, v.pos);
+    if (pipe.text == "|") {
+        Int nseen2 = nseen + 1;
+        return parse_variant_list_cg(s, pipe.pos, vnacc2, vtacc2, nseen2);
+    }
+    if (pipe.text == ";") {
+        if (nseen < 1) { return VLResCg {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
+        return VLResCg {.ok = true, .vnames = vnacc2, .vtypes = vtacc2, .pos = pipe.pos};
+    }
+    return VLResCg {.ok = false, .vnames = "", .vtypes = "", .pos = pos};
+}
+
+List(Str) sumv_names_cg(Str suv) {
+    Int sc = str_find_char(suv, 59, 0);
+    Str names = str_slice(suv, 0, sc);
+    return str_split(names, "|");
+}
+List(Str) sumv_types_cg(Str suv) {
+    Int sc = str_find_char(suv, 59, 0);
+    Str types = str_slice(suv, sc + 1, str_len(suv));
+    return str_split(types, "|");
+}
+
+Int sumtype_index_at_cg(Funcs fs, Str name, Int i) {
+    Int n = fs.sun.len();
+    if (i >= n) { return -1; }
+    if (fs.sun[i] == name) { return i; }
+    Int k = i + 1;
+    return sumtype_index_at_cg(fs, name, k);
+}
+Int sumtype_index_cg(Funcs fs, Str name) {
+    return sumtype_index_at_cg(fs, name, 0);
+}
+
+Int variant_index_at_cg(List(Str) vnames, Str vname, Int i) {
+    Int n = vnames.len();
+    if (i >= n) { return -1; }
+    if (vnames[i] == vname) { return i; }
+    Int k = i + 1;
+    return variant_index_at_cg(vnames, vname, k);
+}
+
+type VOwnCg = { Bool ok; Str sumty; Str payload; Int vidx; };
+
+VOwnCg find_variant_at_cg(Funcs fs, Str vname, Int i) {
+    Int n = fs.sun.len();
+    if (i >= n) { return VOwnCg {.ok = false, .sumty = "", .payload = "", .vidx = -1}; }
+    List(Str) vn = sumv_names_cg(fs.suv[i]);
+    Int vi = variant_index_at_cg(vn, vname, 0);
+    if (vi >= 0) {
+        List(Str) vt = sumv_types_cg(fs.suv[i]);
+        return VOwnCg {.ok = true, .sumty = fs.sun[i], .payload = vt[vi], .vidx = vi};
+    }
+    Int k = i + 1;
+    return find_variant_at_cg(fs, vname, k);
+}
+VOwnCg find_variant_cg(Funcs fs, Str vname) {
+    return find_variant_at_cg(fs, vname, 0);
+}
+
 Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_ceil) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return fs; }
@@ -1014,6 +1104,13 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
         Tok teq = lex_tok(s, tnm.pos);
         Tok tob = lex_tok(s, teq.pos);
         if (tob.text != "{") {
+            VLResCg vl = parse_variant_list_cg(s, teq.pos, "", "", 0);
+            if (vl.ok) {
+                List(Str) u0 = fs.sun;
+                List(Str) v0 = fs.suv;
+                Funcs fsu = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = u0.concat([tnm.text]), .suv = v0.concat([vl.vnames + ";" + vl.vtypes]), .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+                return collect_sigs_at(s, vl.pos, fsu, pending_req, sandbox_ceil);
+            }
             PRes bt = parse_type(s, teq.pos);
             Tok after = lex_tok(s, bt.pos);
             Str ctext = extract_ctext(s, after);
@@ -1021,7 +1118,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
                 List(Str) c0 = fs.ctn;
                 List(Str) c1 = fs.ctb;
                 List(Str) c2 = fs.ctc;
-                Funcs fsc = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = c0.concat([tnm.text]), .ctb = c1.concat([bt.ty]), .ctc = c2.concat([ctext]), .growable = fs.growable};
+                Funcs fsc = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = c0.concat([tnm.text]), .ctb = c1.concat([bt.ty]), .ctc = c2.concat([ctext]), .growable = fs.growable};
                 Int endc = skip_decl(s, t.pos, 0);
                 return collect_sigs_at(s, endc, fsc, pending_req, sandbox_ceil);
             }
@@ -1034,7 +1131,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
         }
         List(Str) sn0 = fs.stn;
         List(Str) sf0 = fs.stf;
-        Funcs fs2 = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = sn0.concat([tnm.text]), .stf = sf0.concat([fl.ty]), .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+        Funcs fs2 = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = sn0.concat([tnm.text]), .stf = sf0.concat([fl.ty]), .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
         return collect_sigs_at(s, fl.pos, fs2, pending_req, sandbox_ceil);
     }
     if (t.text == "import") {
@@ -1068,7 +1165,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
             List(Str) bn0 = fs.bnames;
             List(Str) bp0 = fs.bparams;
             List(Str) bf0 = fs.bfns;
-            Funcs fsb = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .bnames = bn0.concat([bh.name]), .bparams = bp0.concat([bh.param]), .bfns = bf0.concat([bh.impl]), .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+            Funcs fsb = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = bn0.concat([bh.name]), .bparams = bp0.concat([bh.param]), .bfns = bf0.concat([bh.impl]), .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
             return collect_sigs_at(s, bh.pos, fsb, pending_req, sandbox_ceil);
         }
         PRes rty = parse_type(s, pos_in);
@@ -1093,7 +1190,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
                 List(Str) ceils2 = ce1.concat([sandbox_ceil]);
                 List(Str) sn1 = fs.stn;
                 List(Str) sf1 = fs.stf;
-                Funcs fs2 = Funcs {.names = n2, .pts = p2, .pns = q2, .rets = r2, .reqs = reqs2, .ceils = ceils2, .stn = sn1, .stf = sf1, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = []};
+                Funcs fs2 = Funcs {.names = n2, .pts = p2, .pns = q2, .rets = r2, .reqs = reqs2, .ceils = ceils2, .stn = sn1, .stf = sf1, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = []};
                 Int end = skip_body(s, open.pos);
                 return collect_sigs_at(s, end, fs2, "", sandbox_ceil);
             }
@@ -1903,6 +2000,57 @@ GT cg_err_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     return GT {.pos = close.pos, .val = reg, .ty = resty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = t3, .lbl = p.lbl, .tail = false};
 }
 
+// General sum-type variant constructors (spec §12): same tagged-box shape
+// as Some/Ok/Err (tag, count=0 or 1, slots, type-string) but with the
+// variant's declaration-order index as the tag (not the ad hoc 1/2
+// Option/Result convention) and the sum type's own name as the type
+// string. `vidx` is the variant's index within its sum type's variant
+// list (see `find_variant_cg`/`VOwnCg.vidx`).
+
+// Payload-bearing: `VariantName(payload)`.
+GT cg_variant_con(Str s, Int pos, List(Str) env, Funcs fs, GT c, Str sumty, Int vidx) {
+    GT p = cg_expr(s, pos, env, fs, c, false);
+    if (p.err != "") { return p; }
+    Tok close = lex_tok(s, p.pos);
+    if (close.text != ")") { return gt_err("expected ) in variant constructor", p); }
+    GT hb = box_heap_(s, p, env, fs);
+    Int t1 = hb.tmp + 1;
+    Int t2 = hb.tmp + 2;
+    Int t3 = hb.tmp + 3;
+    Str sa = "%t" + IntToString(t1);
+    Str gi = "%t" + IntToString(t2);
+    Str reg = "%t" + IntToString(t3);
+    Str body = esc_ll(sumty, 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int n1 = bl + 1;
+    Str tsym = "@.oty" + IntToString(t1);
+    Str g = tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\"";
+    List(Str) gg0 = hb.glines;
+    List(Str) gl2 = gg0.concat([g]);
+    List(Str) l0 = hb.lines;
+    List(Str) l1 = l0.concat([sa + " = alloca [1 x ptr]"]);
+    List(Str) l2 = l1.concat([gi + " = getelementptr [1 x ptr], ptr " + sa + ", i32 0, i32 0"]);
+    List(Str) l3 = l2.concat(["store ptr " + hb.val + ", ptr " + gi]);
+    List(Str) l4 = l3.concat([reg + " = call ptr @resid_box_new(i64 " + IntToString(vidx) + ", i64 1, ptr " + sa + ", ptr " + tsym + ")"]);
+    return GT {.pos = close.pos, .val = reg, .ty = sumty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = t3, .lbl = p.lbl, .tail = false};
+}
+
+// No-payload: bare `VariantName` (no parens, no argument).
+GT cg_variant_unit_con(Str sumty, Int vidx, Int pos, Int n, GT c) {
+    Int t1 = c.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    Str body = esc_ll(sumty, 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int n1 = bl + 1;
+    Str tsym = "@.oty" + IntToString(n);
+    Str g = tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\"";
+    List(Str) gg0 = c.glines;
+    List(Str) gl2 = gg0.concat([g]);
+    List(Str) l0 = c.lines;
+    List(Str) l1 = l0.concat([reg + " = call ptr @resid_box_new(i64 " + IntToString(vidx) + ", i64 0, ptr null, ptr " + tsym + ")"]);
+    return GT {.pos = pos, .val = reg, .ty = sumty, .cnt = 0, .err = "", .glines = gl2, .lines = l1, .tmp = t1, .lbl = c.lbl, .tail = false};
+}
+
 GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c, Bool tail_pos) {
     if (name == "Some") {
         return cg_some_con(s, pos, env, fs, c);
@@ -1913,10 +2061,17 @@ GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c, Bool tail_po
     if (name == "Err") {
         return cg_err_con(s, pos, env, fs, c);
     }
+    VOwnCg vo = find_variant_cg(fs, name);
+    if (vo.ok && vo.payload != "") {
+        return cg_variant_con(s, pos, env, fs, c, vo.sumty, vo.vidx);
+    }
     Tok t = lex_tok(s, pos);
     if (t.text == ")") {
         if (name == "None") {
             return cg_none_con("Option(_)", t.pos, c.tmp + 1, c);
+        }
+        if (vo.ok) {
+            return cg_variant_unit_con(vo.sumty, vo.vidx, t.pos, c.tmp + 1, c);
         }
         Int idx0 = fn_index(fs, name);
         if (idx0 < 0) { return gt_err("unknown function " + name, c); }
@@ -2035,6 +2190,19 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             Tok tn = lex_tok(s, t.pos);
             if (tn.text != "(") {
                 return cg_none_con("Option(_)", t.pos, c.tmp + 1, c);
+            }
+        }
+        // Bare no-payload general sum-type variant (no parens); a local
+        // binding of the same name always shadows (mirrors the provider
+        // shadow check below and typecheck.resid's identical rule).
+        Str vshadow = env_lookup(env, t.text);
+        if (vshadow == "") {
+            VOwnCg vo0 = find_variant_cg(fs, t.text);
+            if (vo0.ok && vo0.payload == "") {
+                Tok tn0 = lex_tok(s, t.pos);
+                if (tn0.text != "(") {
+                    return cg_variant_unit_con(vo0.sumty, vo0.vidx, t.pos, c.tmp + 1, c);
+                }
             }
         }
         if (t.text == "println" || t.text == "print" || t.text == "eprintln") {
@@ -3894,7 +4062,26 @@ GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     Bool is_opt = str_has_prefix_cg(sc.ty, "Option(") || sc.ty == "Option(_)";
     Bool is_res = str_has_prefix_cg(sc.ty, "Result(");
     if (!is_opt && !is_res) {
-        return gt_err("match scrutinee must be an Option or Result, got " + sc.ty, sc);
+        Int sidx = sumtype_index_cg(fs, sc.ty);
+        if (sidx < 0) {
+            return gt_err("match scrutinee must be an Option, Result, or a declared sum type, got " + sc.ty, sc);
+        }
+        Tok gbrace = lex_tok(s, sc.pos);
+        if (gbrace.text != "{") { return gt_err("expected { in match expression", sc); }
+        List(Str) vn = sumv_names_cg(fs.suv[sidx]);
+        List(Str) vt = sumv_types_cg(fs.suv[sidx]);
+        Int gt1 = sc.tmp + 1;
+        Int gt2 = sc.tmp + 2;
+        Str gg1 = "%t" + IntToString(gt1);
+        Str gg2 = "%t" + IntToString(gt2);
+        List(Str) gq0 = sc.lines;
+        List(Str) gq1 = gq0.concat([gg1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + sc.val + ", i32 0, i32 0"]);
+        List(Str) gq2 = gq1.concat([gg2 + " = load i64, ptr " + gg1]);
+        Int glm = sc.lbl + 1;
+        Str glabm = "L" + IntToString(glm);
+        GT gc0 = GT {.pos = gbrace.pos, .val = "", .ty = "", .cnt = 0, .err = "", .glines = sc.glines, .lines = gq2, .tmp = gt2, .lbl = glm, .tail = false};
+        List(Str) phi0 = [];
+        return cg_match_arms_g(s, gbrace.pos, env, fs, sc, vn, vt, gg2, gc0, glabm, phi0);
     }
     Tok brace = lex_tok(s, sc.pos);
     if (brace.text != "{") { return gt_err("expected { in match expression", sc); }
@@ -3945,6 +4132,151 @@ GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     List(Str) d1 = d0.concat([labm + ":"]);
     List(Str) d2 = d1.concat([phi]);
     return GT {.pos = sep2.pos, .val = pr, .ty = arm1.ty, .cnt = 0, .err = "", .glines = arm2.glines, .lines = d2, .tmp = tp, .lbl = arm2.lbl, .tail = false};
+}
+
+// ─── General N-arm sum-type match codegen (spec §12) ────────────
+// A chain of `icmp eq` tag tests, one per named arm, each branching to
+// its own freshly labeled body block or falling through to the next
+// arm's test block; a trailing `_` arm (if present) is unconditional and
+// terminal. Mirrors cg_match/cg_match_arm's fixed 2-arm shape above,
+// generalized to N. Arm-type agreement and exhaustiveness are enforced
+// by the checker (typecheck.resid's ck_match_arms_general) before codegen
+// ever runs, same trust relationship as every other checker/codegen pair
+// in this file — so a `}` reached with no wildcard and no remaining
+// variants is dead code by construction, and the `unreachable` emitted
+// there is genuinely never reached (unlike the Rust pipeline's identical
+// `unreachable`, which is NOT backed by an exhaustiveness check — see
+// PLAN-resid-only.md).
+
+Str phi_pairs_str(List(Str) philist, Int i) {
+    Int n = philist.len();
+    if (i >= n) { return ""; }
+    Str pair = philist[i];
+    Int sc = str_find_char(pair, 58, 0);
+    Str val = str_slice(pair, 0, sc);
+    Str lab = str_slice(pair, sc + 1, str_len(pair));
+    Str entry = "[ " + val + ", %" + lab + " ]";
+    Str rest = phi_pairs_str(philist, i + 1);
+    if (rest == "") { return entry; }
+    return entry + ", " + rest;
+}
+
+GT cg_match_finish2(GT lastc, Str labm, List(Str) philist) {
+    Int tp = lastc.tmp + 1;
+    Str pr = "%t" + IntToString(tp);
+    Str phi = pr + " = phi " + ll_ty(num_norm_cg(lastc.ty)) + " " + phi_pairs_str(philist, 0);
+    List(Str) d0 = lastc.lines;
+    List(Str) d1 = d0.concat([labm + ":"]);
+    List(Str) d2 = d1.concat([phi]);
+    return GT {.pos = lastc.pos, .val = pr, .ty = lastc.ty, .cnt = 0, .err = "", .glines = lastc.glines, .lines = d2, .tmp = tp, .lbl = lastc.lbl, .tail = false};
+}
+
+GT cg_match_arms_g(Str s, Int pos, List(Str) env, Funcs fs, GT sc, List(Str) vnames, List(Str) vtypes, Str tagreg, GT c, Str labm, List(Str) philist) {
+    Tok a = lex_tok(s, pos);
+    if (a.text == "}") {
+        List(Str) u0 = c.lines;
+        List(Str) u1 = u0.concat(["unreachable"]);
+        GT deadc = GT {.pos = a.pos, .val = c.val, .ty = c.ty, .cnt = 0, .err = "", .glines = c.glines, .lines = u1, .tmp = c.tmp, .lbl = c.lbl, .tail = false};
+        return cg_match_finish2(deadc, labm, philist);
+    }
+    if (a.text == "_") {
+        Tok ar = lex_tok(s, a.pos);
+        if (ar.text != "=>") { return gt_err("expected => after _ arm pattern", c); }
+        Int lb = c.lbl + 1;
+        Str bodyLab = "L" + IntToString(lb);
+        List(Str) e0 = c.lines;
+        List(Str) e1 = e0.concat(["br label %" + bodyLab]);
+        List(Str) e2 = e1.concat([bodyLab + ":"]);
+        GT c1 = GT {.pos = ar.pos, .val = "", .ty = "", .cnt = 0, .err = "", .glines = c.glines, .lines = e2, .tmp = c.tmp, .lbl = lb, .tail = false};
+        GT body = cg_expr(s, ar.pos, env, fs, c1, false);
+        if (body.err != "") { return body; }
+        List(Str) x0 = body.lines;
+        List(Str) x1 = x0.concat(["br label %" + labm]);
+        List(Str) philist2 = philist.concat([body.val + ":" + bodyLab]);
+        Tok sep = lex_tok(s, body.pos);
+        if (sep.text == ",") {
+            Tok peek = lex_tok(s, sep.pos);
+            GT lastc = GT {.pos = peek.pos, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = x1, .tmp = body.tmp, .lbl = body.lbl, .tail = false};
+            return cg_match_finish2(lastc, labm, philist2);
+        }
+        GT lastc2 = GT {.pos = sep.pos, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = x1, .tmp = body.tmp, .lbl = body.lbl, .tail = false};
+        return cg_match_finish2(lastc2, labm, philist2);
+    }
+    Int vi = variant_index_at_cg(vnames, a.text, 0);
+    Str payload = vtypes[vi];
+    Int lb1 = c.lbl + 1;
+    Int lb2 = c.lbl + 2;
+    Str bodyLab = "L" + IntToString(lb1);
+    Str nextLab = "L" + IntToString(lb2);
+    Int t1 = c.tmp + 1;
+    Str cmpreg = "%t" + IntToString(t1);
+    List(Str) q0 = c.lines;
+    List(Str) q1 = q0.concat([cmpreg + " = icmp eq i64 " + tagreg + ", " + IntToString(vi)]);
+    List(Str) q2 = q1.concat(["br i1 " + cmpreg + ", label %" + bodyLab + ", label %" + nextLab]);
+    List(Str) q3 = q2.concat([bodyLab + ":"]);
+    GT c1 = GT {.pos = a.pos, .val = "", .ty = "", .cnt = 0, .err = "", .glines = c.glines, .lines = q3, .tmp = t1, .lbl = lb2, .tail = false};
+    if (payload == "") {
+        Tok ar = lex_tok(s, a.pos);
+        if (ar.text != "=>") { return gt_err("expected => after " + a.text + " arm pattern", c1); }
+        GT body = cg_expr(s, ar.pos, env, fs, c1, false);
+        if (body.err != "") { return body; }
+        List(Str) x0 = body.lines;
+        List(Str) x1 = x0.concat(["br label %" + labm]);
+        List(Str) x2 = x1.concat([nextLab + ":"]);
+        List(Str) philist2 = philist.concat([body.val + ":" + bodyLab]);
+        Tok sep = lex_tok(s, body.pos);
+        if (sep.text == "}") {
+            List(Str) u1 = x2.concat(["unreachable"]);
+            GT lastc = GT {.pos = sep.pos, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = u1, .tmp = body.tmp, .lbl = body.lbl, .tail = false};
+            return cg_match_finish2(lastc, labm, philist2);
+        }
+        // A trailing comma right before `}` (no further arm follows) also
+        // finalizes here — the checker (ck_match_arms_general) accepts this
+        // spelling too, and codegen must consume the same tokens or the
+        // recursive call below would mistake the terminal `}` for a
+        // zero-arm match and lose this arm's val/ty (see the top-of-
+        // function `}` case, which is only correct for that edge case).
+        Tok peek = lex_tok(s, sep.pos);
+        if (peek.text == "}") {
+            List(Str) u1b = x2.concat(["unreachable"]);
+            GT lastcp = GT {.pos = peek.pos, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = u1b, .tmp = body.tmp, .lbl = body.lbl, .tail = false};
+            return cg_match_finish2(lastcp, labm, philist2);
+        }
+        GT c2 = GT {.pos = sep.pos, .val = "", .ty = "", .cnt = 0, .err = "", .glines = body.glines, .lines = x2, .tmp = body.tmp, .lbl = body.lbl, .tail = false};
+        return cg_match_arms_g(s, sep.pos, env, fs, sc, vnames, vtypes, tagreg, c2, labm, philist2);
+    }
+    Tok o1 = lex_tok(s, a.pos);
+    if (o1.text != "(") { return gt_err("expected ( in " + a.text + " arm pattern", c1); }
+    Tok nm = lex_tok(s, o1.pos);
+    Tok o2 = lex_tok(s, nm.pos);
+    if (o2.text != ")") { return gt_err("expected ) after " + a.text + " binding in match arm", c1); }
+    Tok ar2 = lex_tok(s, o2.pos);
+    if (ar2.text != "=>") { return gt_err("expected => after " + a.text + " arm pattern", c1); }
+    GT pv = cg_match_payload(sc, payload, c1);
+    if (pv.err != "") { return pv; }
+    List(Str) env2 = env_add(env, nm.text + ":" + pv.val + ":" + payload);
+    GT body2 = cg_expr(s, ar2.pos, env2, fs, pv, false);
+    if (body2.err != "") { return body2; }
+    List(Str) y0 = body2.lines;
+    List(Str) y1 = y0.concat(["br label %" + labm]);
+    List(Str) y2 = y1.concat([nextLab + ":"]);
+    List(Str) philist3 = philist.concat([body2.val + ":" + bodyLab]);
+    Tok sep2 = lex_tok(s, body2.pos);
+    if (sep2.text == "}") {
+        List(Str) u2 = y2.concat(["unreachable"]);
+        GT lastc2 = GT {.pos = sep2.pos, .val = body2.val, .ty = body2.ty, .cnt = 0, .err = "", .glines = body2.glines, .lines = u2, .tmp = body2.tmp, .lbl = body2.lbl, .tail = false};
+        return cg_match_finish2(lastc2, labm, philist3);
+    }
+    // Same trailing-comma-before-`}` tolerance as the no-payload branch
+    // above.
+    Tok peek2 = lex_tok(s, sep2.pos);
+    if (peek2.text == "}") {
+        List(Str) u2b = y2.concat(["unreachable"]);
+        GT lastc2p = GT {.pos = peek2.pos, .val = body2.val, .ty = body2.ty, .cnt = 0, .err = "", .glines = body2.glines, .lines = u2b, .tmp = body2.tmp, .lbl = body2.lbl, .tail = false};
+        return cg_match_finish2(lastc2p, labm, philist3);
+    }
+    GT c3 = GT {.pos = sep2.pos, .val = "", .ty = "", .cnt = 0, .err = "", .glines = body2.glines, .lines = y2, .tmp = body2.tmp, .lbl = body2.lbl, .tail = false};
+    return cg_match_arms_g(s, sep2.pos, env, fs, sc, vnames, vtypes, tagreg, c3, labm, philist3);
 }
 
 GT fst_emit_global(Str body, Int pos, GT c) {
@@ -5239,11 +5571,18 @@ List(Str) ck_env_add(List(Str) env, Str name, Str ty) {
 // reqs/ceils are per-function lanes (§21.3): reqs[i] = comma-joined
 // `@requires` capability families, ceils[i] = comma-joined encoded
 // enclosing-sandbox ceiling for names[i].
-type Sigs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) bods; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) exp_tys; List(Str) ctn; List(Str) ctb; List(Str) ctc; Map(Str, Int) fns; List(Int) growable; };
+// sun/suv (spec §12 general sum types): sun[i] = a declared sum type's own
+// name, suv[i] = its "Variant:PayloadType|Variant2:|Variant3:PayloadType"
+// table (empty PayloadType = no-payload variant), index-aligned with sun.
+// Built alongside stn/stf by the same `type` dispatch in ck_collect_sigs_at;
+// Option/Result keep their existing separate hardcoded fast path (mirrors
+// the Rust pipeline's own Some/None/Ok/Err special-casing, see
+// PLAN-resid-only.md) rather than being registered here too.
+type Sigs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) bods; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) exp_tys; List(Str) ctn; List(Str) ctb; List(Str) ctc; Map(Str, Int) fns; List(Int) growable; List(Str) sun; List(Str) suv; };
 
 Sigs sigs_empty() {
     Map(Str, Int) empty = {"__EMPTY__": -1};
-    return Sigs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .bods = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .exp_tys = [], .ctn = [], .ctb = [], .ctc = [], .fns = empty, .growable = []};
+    return Sigs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .bods = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .exp_tys = [], .ctn = [], .ctb = [], .ctc = [], .fns = empty, .growable = [], .sun = [], .suv = []};
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -6390,7 +6729,7 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Sigs fs) {
     Bool is_ctor = name == "Ok" || name == "Err" || name == "Some" || name == "None";
     if (is_ctor) {
         Str ctor_exp = if (fs.exp_tys.len() > 0) { fs.exp_tys[0] } else { "" };
-        Sigs fs3 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = sigs_empty().names, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
+        Sigs fs3 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = sigs_empty().names, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
         if (t.text == ")") {
             return check_builtin(name, "", 0, pos, ctor_exp, sigs_empty().names);
         }
@@ -6400,12 +6739,36 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Sigs fs) {
         }
         return check_builtin(name, a.tys, a.count, a.pos, ctor_exp, sigs_empty().names);
     }
+    // General sum-type variant constructor (spec §12): `name` is a
+    // registered variant of some `type Sum = ... | name(Payload) | ...;`.
+    // Mirrors the Rust pipeline's `find_constructor` fast-path-then-general
+    // dispatch (Some/None/Ok/Err handled above as the intrinsic fast path,
+    // exactly like the Rust checker does; everything else lands here).
+    VOwn vo = find_variant(fs, name);
+    if (vo.ok) {
+        if (vo.payload == "") {
+            return ERes {.pos = t.pos, .ty = "", .err = "variant " + name + " takes no payload (write it without parentheses)"};
+        }
+        ERes v = check_expr_e(s, pos, env, fs, vo.payload);
+        if (v.err != "") { return v; }
+        Bool exact = v.ty == vo.payload;
+        Bool intok = is_num(v.ty) && is_num(vo.payload) && int_adopt_ok(v.ty, vo.payload, "");
+        if (!exact && !intok) {
+            Str msg = "variant " + name + " expects " + vo.payload + ", got " + v.ty;
+            return ERes {.pos = v.pos, .ty = "", .err = msg};
+        }
+        Tok vclose = lex_tok(s, v.pos);
+        if (vclose.text != ")") {
+            return ERes {.pos = vclose.pos, .ty = "", .err = "expected ) after variant payload"};
+        }
+        return ERes {.pos = vclose.pos, .ty = vo.sumty, .err = ""};
+    }
     if (t.text == ")") {
         return finish_call(s, t.pos, name, "", 0, env, fs);
     }
     Int idx = ck_fn_index(fs, name);
     List(Str) pt_list = if (idx >= 0) { split_type_list(fs.pts[idx], 0, 0, 0, "", sigs_empty().names) } else { sigs_empty().names };
-    Sigs fs2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = pt_list, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
+    Sigs fs2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = pt_list, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
     ARes a = collect_args(s, pos, "", 0, env, fs2);
     if (a.err != "") {
         return ERes {.pos = a.pos, .ty = "", .err = a.err};
@@ -6989,7 +7352,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "(") {
             Bool is_ctor = t.text == "Ok" || t.text == "Err" || t.text == "Some" || t.text == "None";
-            Sigs fs2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
+            Sigs fs2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
             return check_call(s, t2.pos, t.text, env, fs2);
         }
         if (t2.text == "{") {
@@ -6999,6 +7362,17 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
         // The element type is a hole adopted at binding/return/match sites.
         if (t.text == "None" && t2.text != ".") {
             return ERes {.pos = t.pos, .ty = "Option(_)", .err = ""};
+        }
+        // Bare general sum-type variant with no payload, e.g. `Inactive` for
+        // `type Status = Active | Inactive;`. A local binding of the same
+        // name always shadows (mirrors the provider-name shadow check just
+        // below).
+        Str vshadow = ck_env_lookup(env, t.text);
+        if (vshadow == "") {
+            VOwn vo0 = find_variant(fs, t.text);
+            if (vo0.ok && vo0.payload == "") {
+                return ERes {.pos = t.pos, .ty = vo0.sumty, .err = ""};
+            }
         }
         if (t2.text == ".") {
             Bool is_prov0 = t.text == "environment" || t.text == "filesystem" || t.text == "args" || t.text == "process";
@@ -7421,15 +7795,131 @@ ERes check_match(Str s, Int pos, List(Str) env, Sigs fs) {
     ERes sc = check_match_sc(s, pos, env, fs);
     if (sc.err != "") { return sc; }
     Bool optsc = sc.ty == "Option(_)" || str_has_prefix(sc.ty, "Option(");
-    if (!optsc) {
-        Str msg = "match scrutinee must be an Option, got " + sc.ty;
-        return ERes {.pos = sc.pos, .ty = "", .err = msg};
-    }
     Tok brace = lex_tok(s, sc.pos);
     if (brace.text != "{") {
         return ERes {.pos = brace.pos, .ty = "", .err = "expected { in match expression"};
     }
-    return ck_match_arms(s, brace.pos, env, fs, sc.ty, opt_elem(sc.ty), "");
+    if (optsc) {
+        return ck_match_arms(s, brace.pos, env, fs, sc.ty, opt_elem(sc.ty), "");
+    }
+    // General sum type (spec §12): dispatch to the exhaustiveness-checked
+    // general arm walker instead of the Option-only fixed Some/None form.
+    Int sidx = sumtype_index(fs, sc.ty);
+    if (sidx >= 0) {
+        List(Str) vn = sumv_names(fs.suv[sidx]);
+        List(Str) vt = sumv_types(fs.suv[sidx]);
+        return ck_match_arms_general(s, brace.pos, env, fs, vn, vt, "", "");
+    }
+    Str msg = "match scrutinee must be an Option or a declared sum type, got " + sc.ty;
+    return ERes {.pos = sc.pos, .ty = "", .err = msg};
+}
+
+// One comma-joined name list's exact-segment membership test (never a
+// substring false-positive like plain str_contains would give on e.g.
+// "A" inside "AB").
+Bool csv_has_at(List(Str) parts, Str name, Int i) {
+    Int n = parts.len();
+    if (i >= n) { return false; }
+    if (parts[i] == name) { return true; }
+    Int k = i + 1;
+    return csv_has_at(parts, name, k);
+}
+Bool csv_has(Str csv, Str name) {
+    if (csv == "") { return false; }
+    return csv_has_at(str_split(csv, ","), name, 0);
+}
+
+// Every declared variant name appears in `seen` (exhaustiveness, spec §12
+// — a real improvement over the Rust pipeline, which does not enforce
+// this at all; see PLAN-resid-only.md).
+Bool all_covered_at(List(Str) vnames, Str seen, Int i) {
+    Int n = vnames.len();
+    if (i >= n) { return true; }
+    if (!csv_has(seen, vnames[i])) { return false; }
+    Int k = i + 1;
+    return all_covered_at(vnames, seen, k);
+}
+
+// General match-arm walker over an arbitrary registered sum type. `seen`
+// is a comma-joined list of variant names matched so far, or containing
+// "*" once a `_` wildcard arm has been seen (which must be the final arm).
+ERes ck_match_arms_general(Str s, Int pos, List(Str) env, Sigs fs, List(Str) vnames, List(Str) vtypes, Str seen, Str acc) {
+    Tok a = lex_tok(s, pos);
+    if (a.text == "}") {
+        if (acc == "") {
+            return ERes {.pos = a.pos, .ty = "", .err = "match requires at least one arm"};
+        }
+        Bool exhaustive = csv_has(seen, "*") || all_covered_at(vnames, seen, 0);
+        if (!exhaustive) {
+            return ERes {.pos = a.pos, .ty = "", .err = "match is not exhaustive: not every variant is covered (add the missing arm(s) or a trailing `_ => ...`)"};
+        }
+        return ERes {.pos = a.pos, .ty = acc, .err = ""};
+    }
+    if (a.text == "_") {
+        Tok ar = lex_tok(s, a.pos);
+        if (ar.text != "=>") { return ERes {.pos = ar.pos, .ty = "", .err = "expected => after _ arm pattern"}; }
+        ERes body = check_expr(s, ar.pos, env, fs);
+        if (body.err != "") { return body; }
+        Tok sep = lex_tok(s, body.pos);
+        if (sep.text != "," && sep.text != "}") { return ERes {.pos = sep.pos, .ty = "", .err = "expected, or } after match arm"}; }
+        if (acc != "" && num_norm(acc) != num_norm(body.ty)) {
+            Str msg = "match arms disagree: " + acc + " vs " + body.ty;
+            return ERes {.pos = body.pos, .ty = "", .err = msg};
+        }
+        Str seenw = seen + ",*";
+        if (sep.text == "}") { return ERes {.pos = sep.pos, .ty = body.ty, .err = ""}; }
+        Tok peek = lex_tok(s, sep.pos);
+        if (peek.text != "}") {
+            return ERes {.pos = peek.pos, .ty = "", .err = "the `_` wildcard arm must be the last match arm"};
+        }
+        return ERes {.pos = peek.pos, .ty = body.ty, .err = ""};
+    }
+    if (a.kind != "ident") {
+        return ERes {.pos = a.pos, .ty = "", .err = "match arm pattern must be a variant name or _"};
+    }
+    Int vi = variant_index_at(vnames, a.text, 0);
+    if (vi < 0) {
+        return ERes {.pos = a.pos, .ty = "", .err = "match arm pattern " + a.text + " is not a variant of this sum type"};
+    }
+    if (csv_has(seen, a.text)) {
+        return ERes {.pos = a.pos, .ty = "", .err = "duplicate match arm for variant " + a.text};
+    }
+    Str payload = vtypes[vi];
+    if (payload == "") {
+        Tok ar = lex_tok(s, a.pos);
+        if (ar.text != "=>") { return ERes {.pos = ar.pos, .ty = "", .err = "expected => after " + a.text + " arm pattern"}; }
+        ERes body = check_expr(s, ar.pos, env, fs);
+        if (body.err != "") { return body; }
+        Tok sep = lex_tok(s, body.pos);
+        if (sep.text != "," && sep.text != "}") { return ERes {.pos = sep.pos, .ty = "", .err = "expected, or } after match arm"}; }
+        if (acc != "" && num_norm(acc) != num_norm(body.ty)) {
+            Str msg = "match arms disagree: " + acc + " vs " + body.ty;
+            return ERes {.pos = body.pos, .ty = "", .err = msg};
+        }
+        Str seen2 = seen + "," + a.text;
+        if (sep.text == "}") { return ERes {.pos = sep.pos, .ty = body.ty, .err = ""}; }
+        return ck_match_arms_general(s, sep.pos, env, fs, vnames, vtypes, seen2, body.ty);
+    }
+    Tok o1 = lex_tok(s, a.pos);
+    if (o1.text != "(") { return ERes {.pos = o1.pos, .ty = "", .err = "expected ( in " + a.text + " arm pattern"}; }
+    Tok nm = lex_tok(s, o1.pos);
+    if (nm.kind != "ident") { return ERes {.pos = nm.pos, .ty = "", .err = "expected a binding name in " + a.text + " arm pattern"}; }
+    Tok o2 = lex_tok(s, nm.pos);
+    if (o2.text != ")") { return ERes {.pos = o2.pos, .ty = "", .err = "expected ) after " + a.text + " binding in match arm"}; }
+    Tok ar = lex_tok(s, o2.pos);
+    if (ar.text != "=>") { return ERes {.pos = ar.pos, .ty = "", .err = "expected => after " + a.text + " arm pattern"}; }
+    List(Str) env2 = ck_env_add(env, nm.text, payload);
+    ERes body = check_expr(s, ar.pos, env2, fs);
+    if (body.err != "") { return body; }
+    Tok sep = lex_tok(s, body.pos);
+    if (sep.text != "," && sep.text != "}") { return ERes {.pos = sep.pos, .ty = "", .err = "expected, or } after match arm"}; }
+    if (acc != "" && num_norm(acc) != num_norm(body.ty)) {
+        Str msg = "match arms disagree: " + acc + " vs " + body.ty;
+        return ERes {.pos = body.pos, .ty = "", .err = msg};
+    }
+    Str seen3 = seen + "," + a.text;
+    if (sep.text == "}") { return ERes {.pos = sep.pos, .ty = body.ty, .err = ""}; }
+    return ck_match_arms_general(s, sep.pos, env, fs, vnames, vtypes, seen3, body.ty);
 }
 
 // Primary-only scrutinee: `ident {` is a struct literal in the ordinary
@@ -7453,8 +7943,12 @@ ERes check_match_sc(Str s, Int pos, List(Str) env, Sigs fs) {
             return ERes {.pos = t.pos, .ty = "Option(_)", .err = ""};
         }
         Str ty = ck_env_lookup(env, t.text);
-        if (ty == "") { return ERes {.pos = t.pos, .ty = "", .err = "undefined variable " + t.text}; }
-        return ERes {.pos = t.pos, .ty = ty, .err = ""};
+        if (ty != "") { return ERes {.pos = t.pos, .ty = ty, .err = ""}; }
+        VOwn vosc = find_variant(fs, t.text);
+        if (vosc.ok && vosc.payload == "") {
+            return ERes {.pos = t.pos, .ty = vosc.sumty, .err = ""};
+        }
+        return ERes {.pos = t.pos, .ty = "", .err = "undefined variable " + t.text};
     }
     if (t.text == "true" || t.text == "false") { return ERes {.pos = t.pos, .ty = "Bool", .err = ""}; }
     if (t.kind == "int") { return ERes {.pos = t.pos, .ty = "Int", .err = ""}; }
@@ -7885,6 +8379,117 @@ Str meet_caps(Str a_csv, Str b_csv) {
 // their ceilings; duplicates are harmless for containment/readonly
 // checks). Empty operands are neutral.
 
+// ─── General sum-type declarations (spec §12) ───────────────────
+// `type Name = Variant1(T1) | Variant2 | Variant3(T3);` — a genuine gap
+// vs. the Rust pipeline until this session: the self-hosted checker only
+// ever recognized the compiler-intrinsic Option/Result special forms
+// (Some/None/Ok/Err), silently treating any OTHER sum-type declaration as
+// an opaque no-op (its variants were never registered anywhere, so a
+// program constructing or matching one would fail with "undefined
+// variable"/"unknown function"). Registered in `fs.sun`/`fs.suv`
+// (index-aligned, mirrors `stn`/`stf` for struct types), built by the
+// same `type` dispatch in ck_collect_sigs_at that already builds stn/stf.
+
+type VLRes = { Bool ok; Str vnames; Str vtypes; Int pos; };
+
+// One variant: bare `Ident` (no payload) or `Ident(Type)`. `ok=false`
+// (not a fatal error, just "not a variant here") lets the caller fall
+// back to the existing Base/Constraint type-declaration path.
+VLRes parse_one_variant(Str s, Int pos) {
+    Tok nm = lex_tok(s, pos);
+    if (nm.kind != "ident") { return VLRes {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
+    Tok nxt = lex_tok(s, nm.pos);
+    if (nxt.text != "(") {
+        return VLRes {.ok = true, .vnames = nm.text, .vtypes = "", .pos = nm.pos};
+    }
+    PRes pty = parse_type(s, nxt.pos);
+    if (pty.err != "") { return VLRes {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
+    Tok cp = lex_tok(s, pty.pos);
+    if (cp.text != ")") { return VLRes {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
+    return VLRes {.ok = true, .vnames = nm.text, .vtypes = pty.ty, .pos = cp.pos};
+}
+
+// `Variant1(T1) | Variant2 | ... ;` — requires at least one `|` (i.e. >= 2
+// variants) to be recognized as a sum type at all. A single bare variant
+// with no pipe (`type X = A(Int);`) is syntactically identical to a
+// parameterized-type Base alias (`type X = List(Int);`) and is left to
+// that existing path instead — real sum types in this language always
+// have >= 2 variants (Option/Result included), so this never rejects a
+// genuine sum declaration, only a would-be single-variant one nothing in
+// this codebase needs.
+VLRes parse_variant_list(Str s, Int pos, Str vnacc, Str vtacc, Int nseen) {
+    VLRes v = parse_one_variant(s, pos);
+    if (!v.ok) { return VLRes {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
+    Str sep = if (vnacc == "") { "" } else { "|" };
+    Str vnacc2 = vnacc + sep + v.vnames;
+    Str vtacc2 = vtacc + sep + v.vtypes;
+    Tok pipe = lex_tok(s, v.pos);
+    if (pipe.text == "|") {
+        Int nseen2 = nseen + 1;
+        return parse_variant_list(s, pipe.pos, vnacc2, vtacc2, nseen2);
+    }
+    if (pipe.text == ";") {
+        if (nseen < 1) { return VLRes {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
+        return VLRes {.ok = true, .vnames = vnacc2, .vtypes = vtacc2, .pos = pipe.pos};
+    }
+    return VLRes {.ok = false, .vnames = "", .vtypes = "", .pos = pos};
+}
+
+// `fs.suv[i]` decodes as "names;types" where both halves are "|"-joined
+// and index-aligned (an empty types entry between two "|"s = no payload).
+List(Str) sumv_names(Str suv) {
+    Int sc = str_find_char(suv, 59, 0);
+    Str names = str_slice(suv, 0, sc);
+    return str_split(names, "|");
+}
+List(Str) sumv_types(Str suv) {
+    Int sc = str_find_char(suv, 59, 0);
+    Str types = str_slice(suv, sc + 1, str_len(suv));
+    return str_split(types, "|");
+}
+
+// Index of `name` in fs.sun, or -1. Linear scan (sum-type count is small).
+Int sumtype_index_at(Sigs fs, Str name, Int i) {
+    Int n = fs.sun.len();
+    if (i >= n) { return -1; }
+    if (fs.sun[i] == name) { return i; }
+    Int k = i + 1;
+    return sumtype_index_at(fs, name, k);
+}
+Int sumtype_index(Sigs fs, Str name) {
+    return sumtype_index_at(fs, name, 0);
+}
+
+// Index of `vname` within a variant-name list, or -1.
+Int variant_index_at(List(Str) vnames, Str vname, Int i) {
+    Int n = vnames.len();
+    if (i >= n) { return -1; }
+    if (vnames[i] == vname) { return i; }
+    Int k = i + 1;
+    return variant_index_at(vnames, vname, k);
+}
+
+// Which registered sum type (if any) owns a variant named `vname`, and
+// that variant's payload type ("" = no payload). Used by both the general
+// constructor path (check_call) and bare-name lookup (check_primary_e).
+type VOwn = { Bool ok; Str sumty; Str payload; };
+
+VOwn find_variant_at(Sigs fs, Str vname, Int i) {
+    Int n = fs.sun.len();
+    if (i >= n) { return VOwn {.ok = false, .sumty = "", .payload = ""}; }
+    List(Str) vn = sumv_names(fs.suv[i]);
+    Int vi = variant_index_at(vn, vname, 0);
+    if (vi >= 0) {
+        List(Str) vt = sumv_types(fs.suv[i]);
+        return VOwn {.ok = true, .sumty = fs.sun[i], .payload = vt[vi]};
+    }
+    Int k = i + 1;
+    return find_variant_at(fs, vname, k);
+}
+VOwn find_variant(Sigs fs, Str vname) {
+    return find_variant_at(fs, vname, 0);
+}
+
 Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ceil) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return fs; }
@@ -7916,6 +8521,13 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ce
         Tok teq = lex_tok(s, tname.pos);
         Tok tbrace = lex_tok(s, teq.pos);
         if (tbrace.text != "{") {
+            VLRes vl = parse_variant_list(s, teq.pos, "", "", 0);
+            if (vl.ok) {
+                List(Str) u0 = fs.sun;
+                List(Str) v0 = fs.suv;
+                Sigs fsu = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = u0.concat([tname.text]), .suv = v0.concat([vl.vnames + ";" + vl.vtypes]), .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
+                return ck_collect_sigs_at(s, vl.pos, fsu, pending_req, sandbox_ceil);
+            }
             PRes bt = parse_type(s, teq.pos);
             Tok after = lex_tok(s, bt.pos);
             Str ctext = extract_ctext(s, after);
@@ -7923,7 +8535,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ce
                 List(Str) c0 = fs.ctn;
                 List(Str) c1 = fs.ctb;
                 List(Str) c2 = fs.ctc;
-                Sigs fsc = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = c0.concat([tname.text]), .ctb = c1.concat([bt.ty]), .ctc = c2.concat([ctext]), .fns = fs.fns, .growable = fs.growable};
+                Sigs fsc = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = c0.concat([tname.text]), .ctb = c1.concat([bt.ty]), .ctc = c2.concat([ctext]), .fns = fs.fns, .growable = fs.growable};
                 Int endc = skip_decl(s, t.pos, 0);
                 return ck_collect_sigs_at(s, endc, fsc, pending_req, sandbox_ceil);
             }
@@ -7935,7 +8547,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ce
         List(Str) sf1 = fs.stf;
         List(Str) sn2 = sn1.concat([tname.text]);
         List(Str) sf2 = sf1.concat([fstr]);
-        Sigs fsx = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = sn2, .stf = sf2, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
+        Sigs fsx = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = sn2, .stf = sf2, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
         Int end = skip_decl(s, t.pos, 0);
         return ck_collect_sigs_at(s, end, fsx, pending_req, sandbox_ceil);
     }
@@ -7961,7 +8573,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ce
             List(Str) bnn = bn0.concat([bh.name]);
             List(Str) bpp = bp0.concat([bh.param]);
             List(Str) bff = bf0.concat([bh.impl]);
-            Sigs fsb = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = bnn, .bparams = bpp, .bfns = bff, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
+            Sigs fsb = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = bnn, .bparams = bpp, .bfns = bff, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
             return ck_collect_sigs_at(s, bh.pos, fsb, pending_req, sandbox_ceil);
         }
         PRes rty = parse_type(s, pos_in);
@@ -7990,7 +8602,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ce
         List(Str) bods2 = bo1.concat([body]);
         Int idx = n1.len();
         Map(Str, Int) fns2 = fs.fns.insert(name.text, idx);
-        Sigs fs2 = Sigs {.names = names2, .pts = pts2, .pns = pns2, .rets = rets2, .reqs = reqs2, .ceils = ceils2, .bods = bods2, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fns2, .growable = []};
+        Sigs fs2 = Sigs {.names = names2, .pts = pts2, .pns = pns2, .rets = rets2, .reqs = reqs2, .ceils = ceils2, .bods = bods2, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fns2, .growable = []};
         return ck_collect_sigs_at(s, end, fs2, "", sandbox_ceil);
     }
     return ck_collect_sigs_at(s, t.pos, fs, pending_req, sandbox_ceil);
@@ -8009,7 +8621,7 @@ Sigs ck_collect_sigs(Str s) {
 Sigs analyze_growable(Sigs fs) {
     Int n = fs.names.len();
     List(Int) growable = analyze_growable_rec(fs, 0, n, []);
-    return Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = growable};
+    return Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = growable};
 }
 
 List(Int) analyze_growable_rec(Sigs fs, Int i, Int n, List(Int) acc) {
@@ -9856,6 +10468,12 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int nrc = write_notes_cbor(out, path);
     return prc;
 }
+
+
+
+
+
+
 
 
 

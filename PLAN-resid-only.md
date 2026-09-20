@@ -630,8 +630,10 @@ mechanism, not two), retire `growable.rs` into it, per plan.
 
 ## Checklist
 
-- [ ] A.1 Effect-checker full rewrite
-  - [ ] A.1a Real call graph (E.2b) — done in `examples/typecheck.resid`.
+- [x] A.1 Effect-checker full rewrite — all sub-items done (E.2b's env
+      hash-map is the one deliberate, documented exception — linear-scan
+      `env` remains, acceptable at current scale).
+  - [x] A.1a Real call graph (E.2b) — done in `examples/typecheck.resid`.
         Replaced every `str_contains(body, name + "(")` call-graph edge with a
         lexer-derived edge: `scan_calls_tok` walks `Funcs.bods[i]` via
         `lex_tok`, recording an `ident (` pair only when the identifier names a
@@ -740,6 +742,110 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       `crates/resid-builtin/`; dropped the stale mention from the README
       project tree and `AGENTS.md` test-count list. Workspace `cargo check`
       clean.
+- [x] A.9 General sum-type `match` support — **DONE**. Surfaced by the user
+      while auditing the resid-fmt port's match-formatting needs: the
+      self-hosted checker/codegen (`examples/typecheck.resid`'s
+      `check_match`/`ck_match_arms`, `examples/codegen.resid`'s
+      `cg_match`/`cg_match_arm`) only ever recognized the four
+      compiler-intrinsic Option/Result forms (`Some`/`None`/`Ok`/`Err`,
+      hardcoded by literal name) — any other `type Name = A(T) | B | ...;`
+      sum-type declaration was silently treated as an opaque no-op (never
+      registered anywhere), so constructing or matching a real user-defined
+      sum type failed with "undefined variable"/"unknown function" on the
+      self-hosted pipeline. Spec §13's own written grammar only shows the
+      `Some`/`None` example, but §12 presents general sum types as a
+      first-class type mechanism, and the Rust pipeline
+      (`resid-parser`/`resid-type`/`resid-codegen`) already implements a
+      real, general (non-Option-specific) construction/match mechanism —
+      confirmed via a dedicated research pass before writing any code — but
+      it had **zero test coverage anywhere in the repo**, Rust or
+      self-hosted, before this session.
+      **Rust-side finding, not fixed (documented only)**: `resid-type`'s
+      match-arm type-agreement check requires exact post-`num_norm` width
+      equality, with no int-width-ladder unification the way bindings/
+      returns get via `int_adopt_ok` — two arms doing a different number of
+      multiplications on the same nominal `Int` can infer different
+      overflow-safe widths and get rejected as "match arms disagree:
+      Int(256) vs Int(128)" even though both are conceptually `Int`.
+      Reproduced in isolation, confirmed pre-existing and **identical**
+      on the self-hosted checker (byte-same error message) — a real,
+      cross-pipeline-consistent quirk, not a divergence this session
+      introduced; out of scope to fix here (works around it with an
+      explicit `(Int)` cast in the new test fixture).
+      **Self-hosted port**: registered sum-type declarations in a new
+      `fs.sun`/`fs.suv` table (index-aligned, mirrors the existing `stn`/
+      `stf` struct-type table) built by the same top-level `type` dispatch
+      that already builds `stn`/`stf`
+      (`collect_sigs_at` in both `typecheck.resid` and `codegen.resid`);
+      `Some`/`None`/`Ok`/`Err` keep their existing separate hardcoded fast
+      path untouched, mirroring the Rust pipeline's own fast-path-then-
+      general-dispatch design exactly (`find_constructor` after the
+      intrinsic names). General variant construction (`check_call`'s
+      `find_variant` lookup, both parenthesized-payload and bare no-payload
+      forms) and general `match` (`ck_match_arms_general`, any number of
+      `VariantName`/`VariantName(binding)` arms plus an optional trailing
+      `_` wildcard) added to the checker; the corresponding tagged-box
+      construction (`cg_variant_con`/`cg_variant_unit_con`, reusing the
+      exact `resid_box_new`/tag/slots shape `cg_some_con`/`cg_ok_con`
+      already use, with the variant's declaration-order index as the tag
+      instead of Option/Result's ad hoc 1/2 convention) and an N-arm
+      `icmp`-chain match codegen (`cg_match_arms_g`, generalizing the
+      existing fixed 2-arm `cg_match`/`cg_match_arm` shape) added to
+      codegen. Both files' `Funcs` struct-literal reconstructions (9 sites
+      in `typecheck.resid`, 5 in `codegen.resid`) updated to carry the two
+      new fields; the helper function/type family was duplicated between
+      the two files under the established per-file convention and
+      **required a `_cg` suffix on the codegen.resid side**
+      (`VLResCg`/`VOwnCg`/`find_variant_cg`/etc.) — unlike most of this
+      session's shared-lexer-helper duplication (which merge_driver dedupes
+      via its `chunk_kill_names()` list), these functions take the whole
+      `Funcs`-typed table as a parameter, and `typecheck.resid`'s `Funcs`
+      and `codegen.resid`'s `Funcs` are different shapes merged as
+      distinct `Funcs`/`Sigs` types in `driver.resid` — deduping by name
+      would have collided two genuinely-different-shaped functions.
+      **Real, previously-undiscovered improvement over the Rust pipeline**:
+      exhaustiveness checking. `ck_match_arms_general` rejects a match that
+      doesn't cover every declared variant (unless a trailing `_` wildcard
+      is present) and rejects a duplicate arm for the same variant — the
+      Rust pipeline enforces neither (`infer_match` only checks arm-type
+      agreement, confirmed by testing both cases against it directly: both
+      compile and run silently, first-arm/whatever-matches-first
+      semantics). This closes a real soundness gap the Rust pipeline itself
+      has always had, not just a self-hosted catch-up.
+      **A real codegen bug found and fixed while verifying this** (not a
+      pre-existing bug — introduced and caught within this session's own
+      work, before ever being committed): the new N-arm match codegen's
+      "reached `}` with no wildcard" terminal case is only correct for a
+      genuinely empty (zero-arm) match body; a **trailing comma directly
+      before the closing `}`** after the last real arm (`Variant => expr,
+      }`, a spelling the checker already accepted) hit that same
+      "zero arms" code path by mistake, discarding the last arm's
+      already-computed value/type and silently substituting an empty
+      accumulator — codegen still "succeeded" but emitted an LLVM phi node
+      with a wrong declared type (`ptr` instead of e.g. `i64`), caught by
+      `clang`'s IR verifier (`defined with type 'i64' but expected 'ptr'`),
+      not by either compiler pipeline. Root-caused via targeted `eprintln`
+      instrumentation directly in the self-hosted codegen source (the
+      cheapest way to inspect intermediate `GT` state in this toolchain)
+      once minimized to a 2-arm repro. Fixed by peeking past a trailing
+      comma for `}` in both the payload and no-payload named-arm branches
+      (mirroring the wildcard arm's already-correct handling of the same
+      spelling), instrumentation removed after confirming the fix.
+      **Verified**: a new permanent e2e test,
+      `bootstrap_driver_general_sum_type_match`
+      (`crates/residc/tests/e2e.rs`) — the first real fixture for this
+      feature on *either* pipeline — builds and runs a 3-variant sum type
+      (`Circle(Int) | Square(Int) | Point`) with mixed payload/no-payload
+      variants through both a plain `Some`/`Ok`-style payload match (3
+      named arms) and a named-arm-plus-wildcard match, asserting
+      byte-identical output between the Rust-pipeline-built binary and the
+      self-hosted-D1-built binary, plus asserting the exhaustiveness and
+      duplicate-arm rejections fire only on the self-hosted side with the
+      expected error text. Full existing `residc` e2e suite re-run after
+      all changes (134 tests, including `bootstrap_driver_self_compile_
+      fixed_point`): 0 failures, confirming no regression anywhere and
+      that the D1→D2→D3 self-compile fixed point still holds after this
+      session's `typecheck.resid`/`codegen.resid`/`driver.resid` edits.
 - [x] B.1 Stage-3 self-compile e2e (D1 -> D2 comparison) — **DONE**. The
       OOM was not the memory-shape problem Phase E assumed: `cbe04bb`
       root-caused it as `eff_fixpoint` running a full O(n) round for all
@@ -1136,7 +1242,6 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       `crates/` at Phase D (it has no independent existence outside the
       Rust pipeline it serves).
 - [ ] C.4 Port `resid-fmt`
-- [ ] C.5 Port `resid-why`
 - [x] C.6 Port `resid-graph` — **DONE**. `tools/resid-graph.resid`
       (residc pipeline). Single token-based forward scan built on the same
       `Tok`/`lex_tok` model `examples/typecheck.resid` uses for its own
