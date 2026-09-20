@@ -50,11 +50,11 @@ sha256sum -c residc-linux-x86_64.sha256
 
 ```sh
 # Compile driver.resid itself with the frozen seed, producing a fresh D2:
-./residc-linux-x86_64 examples/driver.resid -o driver-d2 -rt runtime/resid_rt.c
+./residc-linux-x86_64 examples/driver.resid -o residc-d2 -rt runtime/resid_rt.c
 
-# driver-d2 is now a self-hosted-built compiler with no Rust involvement.
+# residc-d2 is now a self-hosted-built compiler with no Rust involvement.
 # Compile anything else with it the same way:
-./driver-d2 some_program.resid -o some_program -rt runtime/resid_rt.c
+./residc-d2 some_program.resid -o some_program -rt runtime/resid_rt.c
 ```
 
 (`-rt` points at `runtime/resid_rt.c` — the permanent C runtime, linked
