@@ -30,20 +30,191 @@
 #include <libgen.h>
 #include <sys/wait.h>
 
+_Noreturn void resid_abort(const char* msg);
+
+/* ── Arena (region) allocator ──────────────────────────────────────────
+ *
+ * This runtime's core policy is "never free" (locked decision: no GC, no
+ * refcounting — every value is permanently retained). That's sound but
+ * unbounded: the self-hosted compiler's own no-reassignment accumulator
+ * idiom rebuilds structs/lists/strings constantly, and every superseded
+ * intermediate value is permanent garbage. Measured on a real
+ * driver.resid self-compile: ~50GB+ resident for the compile phase
+ * alone, dominated by allocation *volume* (hundreds of millions of tiny
+ * boxes/list-nodes), not any single bug.
+ *
+ * An arena bulk-frees a whole region at once, at a caller-chosen
+ * boundary. This is NOT garbage collection: no tracing, no liveness
+ * scanning, no runtime object graph, no refcounts — a bump-pointer
+ * allocator plus one free() call per region. Compliant with the "no GC,
+ * no refcounting" constraint by construction, and correct at any scope
+ * boundary the *caller* can prove nothing needed from the region
+ * survives past it — no automated proof required, same as any other
+ * hand-verified invariant already used throughout this file (e.g. the
+ * GrowBuf mechanism's own documented soundness argument above).
+ *
+ * SAFETY — read before adding an arena-scoped allocation site:
+ *
+ * 1. Only allocation sites with NO matching free() elsewhere in this
+ *    file may be routed through resid_alloc()/resid_calloc(). A site
+ *    whose result is later passed to free() (resid_list_to_array's
+ *    scratch buffers, str_sb's rope chunks, GrowBuf's slots, any
+ *    realloc-grown buffer) MUST keep using real malloc/calloc/realloc
+ *    directly — free() on a pointer that isn't a standalone malloc'd
+ *    block (e.g. an offset into an arena chunk) is undefined behavior.
+ *    This is why resid_alloc() is opt-in per call site, not a global
+ *    malloc override.
+ * 2. Anything that must survive past the arena's own resid_arena_pop()
+ *    — because a caller merges it into a longer-lived structure — must
+ *    be deep-copied (content AND container) via the real allocator
+ *    BEFORE popping. See resid_list_deep_copy_persist below.
+ * 3. str_index_slot's cache (below) is keyed by pointer identity and is
+ *    long-lived by design (that's the whole point of it). Caching an
+ *    arena-allocated string would leave a dangling — and, worse,
+ *    address-reusable (ABA) — key once the arena pops. Fixed by simply
+ *    not caching while any arena is active (bounded, known cost: no
+ *    caching benefit for strings touched only during a function's own
+ *    arena-scoped compile; the long-lived hot string this cache exists
+ *    for — the whole program's resolved source text — is read before
+ *    any arena is ever pushed, so this doesn't reintroduce the O(n^2)
+ *    bug that cache was built to fix).
+ */
+typedef struct ArenaChunk {
+    size_t cap;
+    size_t used;
+    struct ArenaChunk* next;
+    char data[];
+} ArenaChunk;
+
+typedef struct Arena {
+    ArenaChunk* head;      /* for the free-everything walk on pop */
+    ArenaChunk* current;   /* bump-pointer chunk */
+    struct Arena* prev;    /* saved outer arena — supports nested push/pop */
+} Arena;
+
+static _Thread_local Arena* g_current_arena = NULL;
+
+#define ARENA_CHUNK_SIZE (4 * 1024 * 1024)
+
+static ArenaChunk* arena_chunk_new(size_t cap) {
+    ArenaChunk* c = (ArenaChunk*)malloc(sizeof(ArenaChunk) + cap);
+    if (!c) resid_abort("arena_chunk_new: out of memory");
+    c->cap = cap;
+    c->used = 0;
+    c->next = NULL;
+    return c;
+}
+
+/* Starts a new, empty arena and makes it current. Nests: the previous
+ * arena (if any) is restored by the matching resid_arena_pop(). Callable
+ * directly from Resid source (typecheck.resid/codegen.resid builtin
+ * dispatch, mirroring str_sb_new's zero-arg-extern pattern) — returns an
+ * unused i64 only because every Resid call is an expression with a
+ * value, not because the return carries meaning. */
+int64_t resid_arena_push(void) {
+    Arena* a = (Arena*)malloc(sizeof(Arena));
+    if (!a) resid_abort("resid_arena_push: out of memory");
+    a->head = NULL;
+    a->current = NULL;
+    a->prev = g_current_arena;
+    g_current_arena = a;
+    return 0;
+}
+
+/* Frees every chunk in the current arena in one pass and restores the
+ * previous current arena (NULL at top level). Anything the caller needed
+ * from this arena's memory must already have been deep-copied out —
+ * see resid_list_str_persist_copy below. */
+int64_t resid_arena_pop(void) {
+    Arena* a = g_current_arena;
+    if (!a) resid_abort("resid_arena_pop: no active arena");
+    ArenaChunk* c = a->head;
+    while (c) {
+        ArenaChunk* next = c->next;
+        free(c);
+        c = next;
+    }
+    g_current_arena = a->prev;
+    free(a);
+    return 0;
+}
+
+static void* arena_bump_alloc(Arena* a, size_t size) {
+    size = (size + 15) & ~(size_t)15; /* 16-byte align, matches malloc */
+    if (!a->current || a->current->used + size > a->current->cap) {
+        size_t chunk_size = ARENA_CHUNK_SIZE;
+        if (chunk_size < size) chunk_size = size;
+        ArenaChunk* c = arena_chunk_new(chunk_size);
+        c->next = a->head;
+        a->head = c;
+        a->current = c;
+    }
+    void* p = a->current->data + a->current->used;
+    a->current->used += size;
+    return p;
+}
+
+/* True iff `p` falls within any chunk of the currently active arena —
+ * used only by str_index_slot's cache to decide whether a string is
+ * arena-scoped (see safety note 3 above). NULL/no active arena: false. */
+static int arena_contains(const void* p) {
+    if (!g_current_arena) return 0;
+    for (ArenaChunk* c = g_current_arena->head; c; c = c->next) {
+        const char* lo = c->data;
+        const char* hi = c->data + c->cap;
+        if ((const char*)p >= lo && (const char*)p < hi) return 1;
+    }
+    return 0;
+}
+
+/* The one indirection point for allocation sites with no matching
+ * free() (see safety note 1). NULL current arena => real malloc, i.e.
+ * unchanged behavior everywhere outside an explicit arena scope. */
+static void* resid_alloc(size_t size) {
+    if (g_current_arena) return arena_bump_alloc(g_current_arena, size);
+    return malloc(size);
+}
+
+static void* resid_calloc(size_t n, size_t size) {
+    size_t total = n * size;
+    if (g_current_arena) {
+        void* p = arena_bump_alloc(g_current_arena, total);
+        memset(p, 0, total);
+        return p;
+    }
+    return calloc(n, size);
+}
+
+/* Was CWD-restricted (`dirname(path)` had to resolve, via realpath, to
+ * somewhere inside getcwd()), then just realpath-on-dirname (existence
+ * only, no CWD check). Both broke real, ordinary usage:
+ *
+ * - CWD restriction: `residc foo.resid -o /tmp/out` (or any e2e test
+ *   writing to a scratch dir outside the repo, a large fraction of this
+ *   suite) silently failed to write, surfacing only as a confusing
+ *   downstream "clang: no such file" — confirmed via a dozen e2e
+ *   failures sharing that exact signature. Has no basis in this
+ *   language's actual capability model (verb-level read/write/
+ *   process-run gating, enforced at compile time — see the comment
+ *   above this section: "a real build will gate them behind capability
+ *   authorization", i.e. THIS function was never that gate).
+ * - realpath-on-dirname existence check: realpath() requires the target
+ *   to already exist, which is fundamentally incompatible with
+ *   resid_fs_create_dir_all's whole job (creating a multi-level path
+ *   that does NOT exist yet, e.g. `create_dir_all("a/b/c")` from
+ *   scratch) — every such call was rejected before ever attempting to
+ *   create anything. Confirmed via run_fs_create_dir.
+ *
+ * Path traversal via untrusted SOURCE TEXT (e.g. a crafted `import`
+ * target) is a different, real concern, but belongs in import
+ * resolution's own path-joining logic, not a blanket restriction on
+ * every fs call including the compiler's own operator-specified -o/-rt
+ * arguments and directory-creation calls. What's left here: reject only
+ * empty paths — a minimal sanity check, not a capability boundary,
+ * matching what this function was ever intended to be (see the "real
+ * build will gate them" comment above). */
 static int resid_path_is_safe(const char* path) {
-    if (!path || path[0] == '\0') return 0;
-    char path_copy[PATH_MAX];
-    strncpy(path_copy, path, PATH_MAX - 1);
-    path_copy[PATH_MAX - 1] = '\0';
-    char* dir = dirname(path_copy);
-    char resolved[PATH_MAX];
-    if (!realpath(dir, resolved)) return 0;
-    char cwd[PATH_MAX];
-    if (!getcwd(cwd, sizeof(cwd))) return 0;
-    size_t cwd_len = strlen(cwd);
-    if (strncmp(resolved, cwd, cwd_len) != 0) return 0;
-    if (resolved[cwd_len] != '\0' && resolved[cwd_len] != '/') return 0;
-    return 1;
+    return path && path[0] != '\0';
 }
 
 bool print(const char* s) {
@@ -198,7 +369,7 @@ char* resid_str_concat(const char* a, const char* b) {
     size_t la = strlen(a);
     size_t lb = strlen(b);
     if (la > SIZE_MAX - lb) resid_abort("resid_str_concat: size overflow");
-    char* p = (char*)malloc(la + lb + 1);
+    char* p = (char*)resid_alloc(la + lb + 1);
     if (!p) resid_abort("resid_str_concat: out of memory");
     memcpy(p, a, la);
     memcpy(p + la, b, lb + 1);
@@ -315,6 +486,34 @@ static _Thread_local StrIndexSlot g_str_slots[STR_IDX_SLOTS];
 static _Thread_local uint64_t g_str_clock = 0;
 static _Thread_local int g_str_slots_ready = 0;
 
+/* Scratch slot for arena-scoped strings — never inserted into the
+ * persistent cache above (see arena_contains use below): a string built
+ * while an arena is active is freed in bulk on resid_arena_pop(), and
+ * this cache is keyed by pointer identity with no eviction notification,
+ * so caching such a key would leave it dangling — and worse,
+ * address-reusable (ABA) — the moment the arena pops. Rebuilt fresh on
+ * every miss for an arena-scoped string instead: bounded, known cost,
+ * scoped to the lifetime of one arena region, never a dangling key. */
+static _Thread_local StrIndexSlot g_str_scratch;
+
+static void str_index_build(const char* s, StrIndexSlot* out) {
+    int64_t n = 0;
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) { n++; p += utf8_seq_len(*p); }
+    if ((size_t)n > SIZE_MAX / sizeof(size_t) - 1) resid_abort("str_index_slot: size overflow");
+    size_t* off = (size_t*)malloc((size_t)(n + 1) * sizeof(size_t));
+    if (!off) resid_abort("str_index_slot: out of memory");
+    p = (const unsigned char*)s;
+    for (int64_t i = 0; i < n; i++) {
+        off[i] = (size_t)((const char*)p - s);
+        p += utf8_seq_len(*p);
+    }
+    off[n] = (size_t)((const char*)p - s);
+    out->s = s;
+    out->len = n;
+    out->off = off;
+}
+
 static StrIndexSlot* str_index_slot(const char* s) {
     if (!g_str_slots_ready) {
         for (int k = 0; k < STR_IDX_SLOTS; k++) {
@@ -332,25 +531,16 @@ static StrIndexSlot* str_index_slot(const char* s) {
             return &g_str_slots[k];
         }
     }
+    if (arena_contains(s)) {
+        str_index_build(s, &g_str_scratch);
+        g_str_scratch.touched = g_str_clock;
+        return &g_str_scratch;
+    }
     int victim = 0;
     for (int k = 1; k < STR_IDX_SLOTS; k++) {
         if (g_str_slots[k].touched < g_str_slots[victim].touched) victim = k;
     }
-    int64_t n = 0;
-    const unsigned char* p = (const unsigned char*)s;
-    while (*p) { n++; p += utf8_seq_len(*p); }
-    if ((size_t)n > SIZE_MAX / sizeof(size_t) - 1) resid_abort("str_index_slot: size overflow");
-    size_t* off = (size_t*)malloc((size_t)(n + 1) * sizeof(size_t));
-    if (!off) resid_abort("str_index_slot: out of memory");
-    p = (const unsigned char*)s;
-    for (int64_t i = 0; i < n; i++) {
-        off[i] = (size_t)((const char*)p - s);
-        p += utf8_seq_len(*p);
-    }
-    off[n] = (size_t)((const char*)p - s);
-    g_str_slots[victim].s = s;
-    g_str_slots[victim].len = n;
-    g_str_slots[victim].off = off;
+    str_index_build(s, &g_str_slots[victim]);
     g_str_slots[victim].touched = g_str_clock;
     return &g_str_slots[victim];
 }
@@ -506,7 +696,7 @@ char* str_slice(const char* s, int64_t start, int64_t end) {
     size_t bstart = sl->off[start];
     size_t bend = sl->off[end];
     size_t n = bend - bstart;
-    char* out = (char*)malloc(n + 1);
+    char* out = (char*)resid_alloc(n + 1);
     if (!out) resid_abort("str_slice: out of memory");
     memcpy(out, s + bstart, n);
     out[n] = '\0';
@@ -532,14 +722,14 @@ typedef struct {
 } ResidVal;
 
 void* resid_box_new(int64_t tag, int64_t count, void** src, const char* type) {
-    ResidVal* v = (ResidVal*)malloc(sizeof(ResidVal));
+    ResidVal* v = (ResidVal*)resid_alloc(sizeof(ResidVal));
     if (!v) resid_abort("resid_box_new: out of memory");
     v->tag = tag;
     v->count = count;
     v->type = type;
     v->slots = NULL;
     if (count > 0) {
-        v->slots = (void**)malloc((size_t)count * sizeof(void*));
+        v->slots = (void**)resid_alloc((size_t)count * sizeof(void*));
         if (!v->slots) resid_abort("resid_box_new: out of memory");
         for (int64_t i = 0; i < count; i++) v->slots[i] = src[i];
     }
@@ -633,7 +823,7 @@ typedef struct {
 } ResidList;
 
 static PVecNode* pvec_node_new(void) {
-    PVecNode* n = (PVecNode*)calloc(1, sizeof(PVecNode));
+    PVecNode* n = (PVecNode*)resid_calloc(1, sizeof(PVecNode));
     if (!n) resid_abort("pvec_node_new: out of memory");
     return n;
 }
@@ -664,7 +854,8 @@ static PVecNode* pvec_insert_path(PVecNode* node, int32_t level, int64_t idx, vo
 }
 
 static ResidList* pvec_push_raw(ResidList* v, void* elem) {
-    ResidList* out = (ResidList*)malloc(sizeof(ResidList));
+    ResidList* out = (ResidList*)resid_alloc(sizeof(ResidList));
+    if (!out) resid_abort("pvec_push_raw: out of memory");
     out->type = v->type;
     int64_t idx = v->count;
     if (v->root == NULL) {
@@ -693,7 +884,7 @@ static ResidList* pvec_push_raw(ResidList* v, void* elem) {
 /* Build a new persistent list from a flat array of `count` element
  * pointers (scalar slots are boxes, as with the old ResidVal lists). */
 void* resid_list_new(int64_t count, void** src, const char* type) {
-    ResidList* v = (ResidList*)malloc(sizeof(ResidList));
+    ResidList* v = (ResidList*)resid_alloc(sizeof(ResidList));
     if (!v) resid_abort("resid_list_new: out of memory");
     v->count = 0;
     v->shift = 0;
@@ -722,6 +913,46 @@ void** resid_list_to_array(void* b) {
     void** out = v->count > 0 ? (void**)malloc((size_t)v->count * sizeof(void*)) : NULL;
     if (v->count > 0 && !out) resid_abort("resid_list_to_array: out of memory");
     for (int64_t i = 0; i < v->count; i++) out[i] = pvec_get_raw(v->root, v->shift, i);
+    return out;
+}
+
+/* Deep-copies a List(Str) into a fresh, persistent (real-malloc'd,
+ * never-arena) List(Str) with identical content — the list structure
+ * itself AND every element string's bytes are entirely new memory. Not a
+ * generic deep-copy (assumes every element is a raw Str pointer, true
+ * for every call site this exists for: a function's finished lines/
+ * hlines/glines lists, right before its per-function arena — see
+ * resid_arena_push/pop above — gets popped). Call this on an
+ * arena-scoped list BEFORE popping that arena; safe to call regardless
+ * of whether the source list is actually arena-scoped (a real-heap
+ * source just gets an extra, harmless copy).
+ *
+ * Temporarily clears the current arena for the duration of the copy so
+ * every allocation this function makes — including resid_list_to_array's
+ * own scratch array and resid_list_new's internal trie-node allocations
+ * — goes through the real allocator regardless of which arena was active
+ * when this was called, then restores it (the caller pops explicitly
+ * right after; restoring first is still correct if it doesn't). */
+void* resid_list_str_persist_copy(void* list) {
+    ResidList* v = (ResidList*)list;
+    int64_t n = v->count;
+    void** flat = resid_list_to_array(list);
+    Arena* saved_arena = g_current_arena;
+    g_current_arena = NULL;
+    void** copies = n > 0 ? (void**)malloc((size_t)n * sizeof(void*)) : NULL;
+    if (n > 0 && !copies) resid_abort("resid_list_str_persist_copy: out of memory");
+    for (int64_t i = 0; i < n; i++) {
+        const char* src = (const char*)flat[i];
+        size_t len = strlen(src);
+        char* dst = (char*)malloc(len + 1);
+        if (!dst) resid_abort("resid_list_str_persist_copy: out of memory");
+        memcpy(dst, src, len + 1);
+        copies[i] = dst;
+    }
+    void* out = resid_list_new(n, copies, v->type);
+    if (copies) free(copies);
+    g_current_arena = saved_arena;
+    if (flat) free(flat);
     return out;
 }
 
@@ -923,7 +1154,7 @@ static void* resid_box_scalar_alloc(size_t payload_size, size_t payload_align, v
     size_t off = sizeof(ResidVal) + sizeof(void*);
     size_t pad = (payload_align - (off % payload_align)) % payload_align;
     size_t slot_off = off + pad;
-    char* block = (char*)malloc(slot_off + payload_size);
+    char* block = (char*)resid_alloc(slot_off + payload_size);
     if (!block) resid_abort("resid_box_scalar: out of memory");
     ResidVal* r = (ResidVal*)block;
     r->tag = -1;

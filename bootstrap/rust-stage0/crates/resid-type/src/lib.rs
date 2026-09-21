@@ -1390,6 +1390,22 @@ const BUILTIN_SIGS: &[(&str, &[SemType], SemType)] = &[
     ("str_sb_append", &[SemType::Str, SemType::Str], SemType::Str),
     ("str_sb_append_cp", &[SemType::Str, SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Str),
     ("str_sb_finish", &[SemType::Str], SemType::Str),
+    // ─── Arena (region) allocator ───
+    // Callable directly from Resid source so the self-hosted compiler's
+    // own hot-path functions (pg_func) can bulk-free their own per-call
+    // allocation — see runtime/resid_rt.c's "Arena (region) allocator"
+    // section for the full soundness argument. Return values are unused
+    // (every Resid call is an expression with a value); not a
+    // general-purpose language feature, mirrored here only so the
+    // archived Rust pipeline can still compile driver.resid to rebuild
+    // stage0 for a new host architecture.
+    ("resid_arena_push", &[], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    ("resid_arena_pop", &[], SemType::Numeric(NumericType::Int(IntWidth::B64))),
+    // arena_persist_lines (List(Str) -> List(Str)) needs SemType::List,
+    // which isn't const-constructible (Box::new isn't a const fn) — this
+    // table is a `const` array. Synthesized in best_overload below
+    // instead, same pattern already used there for the open-ended dN
+    // conversion helpers.
     // ─── Stdlib v1: string verbs ───
     // Trim leading/trailing ASCII whitespace.
     ("str_trim", &[SemType::Str], SemType::Str),
@@ -1490,6 +1506,8 @@ pub fn builtin_signatures() -> Signatures {
             vec![SemType::List(Box::new(SemType::Str)), SemType::Str],
             SemType::Str,
         ),
+        // See runtime/resid_rt.c's "Arena (region) allocator" section.
+        ("resid_list_str_persist_copy", vec![str_list()], str_list()),
         ("list_reverse_ints", vec![int_list()], int_list()),
         ("list_reverse_strs", vec![str_list()], str_list()),
         ("list_contains_int", vec![int_list(), SemType::Numeric(NumericType::Int(IntWidth::B64))], SemType::Bool),

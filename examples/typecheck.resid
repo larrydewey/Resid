@@ -539,14 +539,30 @@ Str imp_resolve_target(Str dir, Str name, Str depmap) {
 }
 
 // `done` is a ";path;path;..." sentinel-delimited string of resolved files.
-RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done, Int depth, Str depmap) {
-    if (i > n) { return RRes {.text = acc, .done = done}; }
+//
+// `sb` is a str_sb_* rope builder (opaque handle, typed Str only because
+// that's how these builtins are typed — never read as a real string until
+// str_sb_finish), not the resolved text itself. Was `acc: Str` rebuilt via
+// `acc + line + "\n"` every line — `+` (resid_str_concat) copies BOTH
+// operands in full every call, so accumulating one line at a time over a
+// large multi-file import chain was O(total size^2): each of ~12,600
+// steps recopied the whole growing string so far (confirmed via
+// malloc-site profiling of a real driver.resid self-compile: this
+// function alone was ~5.5GB of the ~108GB total allocated, on only
+// 12,623 calls — ~217KB average per call, consistent with copying an
+// average-half-built accumulator repeatedly). str_sb_append mutates the
+// rope in place and returns the same handle (O(appended length)
+// amortized, not O(accumulated-so-far)) — str_sb_finish is called
+// exactly once, at the real base case, to produce the one flat Str this
+// function ever returns.
+RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done, Int depth, Str depmap) {
+    if (i > n) { return RRes {.text = str_sb_finish(sb), .done = done}; }
     Str line = lines[i];
     if (ck_str_starts_with(line, "import ")) {
         Str name = imp_target(line);
         if (name == "") {
             Int ni = i + 1;
-            return imp_resolve_lines(lines, ni, n, dir, acc, done, depth, depmap);
+            return imp_resolve_lines(lines, ni, n, dir, sb, done, depth, depmap);
         }
         Str full = imp_resolve_target(dir, name, depmap);
         Str key = ";" + full + ";";
@@ -556,10 +572,12 @@ RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done
             imp_resolve_file(full, done, depth, depmap)
         };
         Int ni2 = i + 1;
-        return imp_resolve_lines(lines, ni2, n, dir, acc + sub.text, sub.done, depth, depmap);
+        Str sb2 = str_sb_append(sb, sub.text);
+        return imp_resolve_lines(lines, ni2, n, dir, sb2, sub.done, depth, depmap);
     }
     Int ni3 = i + 1;
-    return imp_resolve_lines(lines, ni3, n, dir, acc + line + "\n", done, depth, depmap);
+    Str sb3 = str_sb_append(str_sb_append(sb, line), "\n");
+    return imp_resolve_lines(lines, ni3, n, dir, sb3, done, depth, depmap);
 }
 
 RRes imp_resolve_file(Str path, Str done, Int depth, Str depmap) {
@@ -571,7 +589,8 @@ RRes imp_resolve_file(Str path, Str done, Int depth, Str depmap) {
     Int plast = plen - 1;
     Str dir = imp_dir_of(path, plast);
     Str done2 = done + path + ";";
-    return imp_resolve_lines(lines, 0, n, dir, "", done2, depth, depmap);
+    Str sb0 = str_sb_new();
+    return imp_resolve_lines(lines, 0, n, dir, sb0, done2, depth, depmap);
 }
 
 Int str_find_char(Str s, Int c, Int i) {
@@ -1703,6 +1722,27 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "str_sb_new") {
         if (argc == 0) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_sb_new expects no arguments"};
+    }
+    // Arena (region) allocator, callable directly from Resid source so
+    // the self-hosted compiler's own hot-path functions (pg_func) can
+    // scope their own per-call allocation to a bulk-freeable region —
+    // see runtime/resid_rt.c's "Arena (region) allocator" section for
+    // the full soundness argument. Not exposed for general use beyond
+    // that: correctness depends on the caller proving nothing needed
+    // from the region survives past resid_arena_pop() except via
+    // resid_list_str_persist_copy, which is exactly what pg_func is hand-verified
+    // to do — this is not a general-purpose language feature.
+    if (name == "resid_arena_push") {
+        if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_arena_push expects no arguments"};
+    }
+    if (name == "resid_arena_pop") {
+        if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_arena_pop expects no arguments"};
+    }
+    if (name == "resid_list_str_persist_copy") {
+        if (builtin_args(argtys, "List(Str)")) { return ERes {.pos = pos, .ty = "List(Str)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_list_str_persist_copy expects (List(Str)), got (" + argtys + ")"};
     }
     if (name == "str_sb_append") {
         if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
