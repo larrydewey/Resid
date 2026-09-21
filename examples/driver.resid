@@ -2284,6 +2284,21 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 List(Str) nl1 = nl0.concat([nreg + " = call ptr @str_sb_new()"]);
                 return GT {.pos = cpn.pos, .val = nreg, .ty = "Str", .cnt = 0, .err = "", .glines = c.glines, .lines = nl1, .tmp = ni1, .lbl = c.lbl, .tail = false};
             }
+            if (t.text == "resid_arena_push" || t.text == "resid_arena_pop") {
+                // Zero-arg externs, same shape as resid_crypto_random_byte
+                // below: unused i64 result, called only for the side
+                // effect. See runtime/resid_rt.c's arena section.
+                Tok cpz = lex_tok(s, t2.pos);
+                if (cpz.text != ")") { return gt_err("expected ) in " + t.text, c); }
+                Int zi1 = c.tmp + 1;
+                Str zreg = "%t" + IntToString(zi1);
+                List(Str) zl0 = c.lines;
+                List(Str) zl1 = zl0.concat([zreg + " = call i64 @" + t.text + "()"]);
+                return GT {.pos = cpz.pos, .val = zreg, .ty = "Int", .cnt = 0, .err = "", .glines = c.glines, .lines = zl1, .tmp = zi1, .lbl = c.lbl, .tail = false};
+            }
+            if (t.text == "resid_list_str_persist_copy") {
+                return cg_extern1(s, t2.pos, "resid_list_str_persist_copy", "List(Str)", "List(Str)", env, fs, c);
+            }
             if (t.text == "resid_cpu_has_aesni") {
                 // Zero-arg extern returning i8; icmp-ne-0 into a Bool, same
                 // convention cg_externb1/b2 use for every other bool extern.
@@ -4945,16 +4960,25 @@ Str split_at(Str s, Int i, Str sep) {
     return split_at(s, k, sep);
 }
 
+// Was: `[first].concat(split_rest(rest, sep))` — same O(n^2)-via-concat
+// antipattern as list_from_idx above (recurse first, then push the whole
+// recursively-built rest onto a 1-element list at every level). Small n
+// here (per-function parameter counts) keeps the absolute cost tiny, but
+// it's the same bug — fixed the same way, forward accumulation.
 List(Str) split_rest(Str s, Str sep) {
+    return split_rest_acc(s, sep, nil_list());
+}
+
+List(Str) split_rest_acc(Str s, Str sep, List(Str) acc) {
     Str first = split_at(s, 0, sep);
     Int fl = str_len_1(first);
     Int sl = str_len_1(sep);
     Int tot = str_len_1(s);
-    if (fl + sl > tot) { return [s]; }
+    if (fl + sl > tot) { return acc.concat([s]); }
     Int fp = fl + sl;
     Str rest = str_slice(s, fp, tot);
-    List(Str) one = [first];
-    return one.concat(split_rest(rest, sep));
+    List(Str) acc2 = acc.concat([first]);
+    return split_rest_acc(rest, sep, acc2);
 }
 
 // Find the first top-level (paren-depth 0) occurrence of sep, or -1.
@@ -4970,16 +4994,22 @@ Int find_sep_depth(Str s, Int i, Int depth, Str sep) {
     return find_sep_depth(s, k, depth, sep);
 }
 
+// Same fix as split_rest above — forward accumulation instead of
+// recurse-then-concat-on-the-way-back.
 List(Str) split_rest_depth(Str s, Str sep) {
+    return split_rest_depth_acc(s, sep, nil_list());
+}
+
+List(Str) split_rest_depth_acc(Str s, Str sep, List(Str) acc) {
     Int p = find_sep_depth(s, 0, 0, sep);
-    if (p < 0) { return [s]; }
+    if (p < 0) { return acc.concat([s]); }
     Str first = str_slice(s, 0, p);
     Int sl = str_len_1(sep);
     Int fp = p + sl;
     Int tot = str_len_1(s);
     Str rest = str_slice(s, fp, tot);
-    List(Str) one = [first];
-    return one.concat(split_rest_depth(rest, sep));
+    List(Str) acc2 = acc.concat([first]);
+    return split_rest_depth_acc(rest, sep, acc2);
 }
 
 Int count_seps(Str s, Int i, Str sep) {
@@ -5120,11 +5150,27 @@ CapPP cap_enter_prologue(List(Str) caps, CapPP acc) {
     return CapPP {.lines = newlines, .glines = withglobals.glines, .n = withglobals.n};
 }
 
+// Was: recurse to the end first, then `[l[i]].concat(rest)` on the way
+// back at every level. `concat(a, b)` pushes every element of `b` onto
+// `a` (runtime/resid_rt.c's resid_list_concat) — so concatenating a
+// 1-element list onto an already-built `rest` re-pushed the ENTIRE
+// remaining tail at every recursion level: O(remaining length) work per
+// level, O(n^2) total for a list of length n. Confirmed via malloc-site
+// profiling of a real driver.resid self-compile: this function (called
+// once per top-level function, on that function's own emitted lines)
+// was the dominant path to pvec_insert_path — 250M calls, 64GB, ~60% of
+// all allocation in the whole compile. Forward accumulation (append one
+// element at a time, growable.rs's proven-safe pattern) does one
+// O(log32 n) push per element instead of one O(n) concat per level:
+// O(n log n) total instead of O(n^2).
 List(Str) list_from_idx(List(Str) l, Int i) {
-    if (i >= l.len()) { return nil_list(); }
-    List(Str) rest = list_from_idx(l, i + 1);
-    List(Str) head = [l[i]];
-    return head.concat(rest);
+    return list_from_idx_acc(l, i, l.len(), nil_list());
+}
+
+List(Str) list_from_idx_acc(List(Str) l, Int i, Int n, List(Str) acc) {
+    if (i >= n) { return acc; }
+    List(Str) acc2 = acc.concat([l[i]]);
+    return list_from_idx_acc(l, i + 1, n, acc2);
 }
 
 // Walks the already-emitted body lines, inserting `resid_cap_leave()`
@@ -5152,6 +5198,19 @@ CapPP capinject_at(List(Str) lines, Int i, CapPP acc) {
 PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     PRes rty = parse_type(s, pos);
     if (rty.err != "") { return PG {.pos = g.pos, .err = rty.err, .glines = g.glines, .hlines = g.hlines, .lines = g.lines, .tmp = g.tmp, .lbl = g.lbl}; }
+    // Arena: this whole function's own codegen (parsing, GT/ST struct
+    // rebuilds, every intermediate List(Str)/Str churn) is scoped to one
+    // bulk-freeable region, popped right before returning to pg_next.
+    // Confirmed dominant cost (Phase E, PLAN-resid-only.md): this
+    // never-reassignment codebase rebuilds these structs constantly, and
+    // this runtime never frees, so every superseded intermediate value
+    // was permanent garbage for the rest of the whole-program compile —
+    // not just this one function's. An error return below (body.err)
+    // never pops: the whole compile aborts immediately after (main()
+    // prints the error and exits), so nothing needed from this arena in
+    // that case, and leaving it unpopped there is safe by construction,
+    // not an oversight.
+    Int _arena_in = resid_arena_push();
     Str rbase = ct_base_of(fs.ctn, fs.ctb, rty.ty);
     Tok name = lex_tok(s, rty.pos);
     Tok open = lex_tok(s, name.pos);
@@ -5172,14 +5231,33 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     List(Str) nl0 = nil_list();
     List(Str) nl1 = split_rest(pns, ",");
     List(Str) nl = if (pns == "") { nl0 } else { nl1 };
-    List(Str) gl0 = g.lines;
-    List(Str) dl = gl0.concat([defline]);
+    // Was `gl0 = g.lines; dl = gl0.concat([defline])` — prefixing this
+    // function's own new lines with the ENTIRE whole-program accumulator
+    // so far. `.concat` itself is cheap either way (O(log32 n) to append,
+    // shared structure, not a real copy) — the problem is downstream:
+    // resid_list_str_persist_copy below has to walk and copy every element's
+    // STRING BYTES of whatever list it's handed, so persist-copying a
+    // list that includes the whole prior program would cost O(whole
+    // program size) at EVERY function boundary, not O(this function's
+    // own size) — reintroducing exactly the O(n^2)-across-functions
+    // problem this session already fixed twice tonight (imp_resolve_lines,
+    // list_from_idx), just relocated. Fix: keep this function's own new
+    // content (`lines` AND `glines` — same reasoning, see pp0 below)
+    // entirely separate from `g.lines`/`g.glines` until the final merge
+    // after the arena pops, where concatenating a small new list onto
+    // the big persistent one is the same cheap O(log32 n) operation, now
+    // safely outside the arena.
+    List(Str) dl = [defline];
     List(Str) dl2 = dl.concat(["entry:"]);
     Int fi = fn_index(fs, name.text);
     Str ceiling = if (fi >= 0) { fs.ceils[fi] } else { "" };
     Bool sandboxed = ceiling != "";
     List(Str) caps = if (sandboxed) { str_split(ceiling, ",") } else { nil_list() };
-    CapPP pp0 = CapPP {.lines = dl2, .glines = g.glines, .n = 0};
+    // .glines = nil_list(), not g.glines — same reasoning as `dl` above.
+    // Never randomly read (confirmed: no `.glines.len()`/`.glines[` reads
+    // anywhere in this file, only `.concat`/passthrough), so starting
+    // fresh changes nothing functions can observe.
+    CapPP pp0 = CapPP {.lines = dl2, .glines = nil_list(), .n = 0};
     CapPP pp1 = if (sandboxed) { cap_enter_prologue(caps, pp0) } else { pp0 };
     EnvBuild eb = build_env_with_growbuf(nl, tyl, fs.growable, name.text, pp1.lines, 0, nil_list());
     Int body_start = eb.lines.len();
@@ -5199,9 +5277,46 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     List(Str) lns1 = if (!body.dead) { lns0.concat([fallthrough_ret]) } else { lns0 };
     List(Str) new_body_lines = list_from_idx(lns1, body_start);
     CapPP pp2 = if (sandboxed) { capinject_at(new_body_lines, 0, CapPP {.lines = nil_list(), .glines = body.glines, .n = pp1.n}) } else { CapPP {.lines = new_body_lines, .glines = body.glines, .n = pp1.n} };
-    List(Str) lns = pp1.lines.concat(pp2.lines).concat(["}"]);
+    // own_lines/own_glines: this function's ENTIRE own new output (header
+    // + body + closing brace / new global constants) and NOTHING from the
+    // whole-program accumulator — pp1.lines/pp2.glines never included it
+    // in the first place (see dl/pp0 above). Small, bounded by this one
+    // function's size regardless of how large the program has grown.
+    List(Str) own_lines = pp1.lines.concat(pp2.lines).concat(["}"]);
+    List(Str) own_glines = pp2.glines;
+    // Extract every PLAIN VALUE (Int) this function still needs after the
+    // arena pops, while everything that produced it (open, body — both
+    // structs, hence boxed, hence arena-allocated pointers) is still
+    // valid. Real bug found and fixed here: `open`/`body` are Tok/ST
+    // structs, represented as boxed ResidVal* — reading a field off them
+    // (e.g. `open.pos`, `body.tmp`) is a pointer dereference
+    // (resid_box_slot), not a value copy. The ORIGINAL code read
+    // `open.pos`/`body.tmp`/`body.lbl` AFTER this function returns to
+    // pg_next with no arena in the picture, so it was always safe; this
+    // arena change made `open`/`body` dangling the moment the arena pops
+    // (SIGSEGV in resid_box_slot, confirmed via gdb) — extracting the
+    // Ints (real values, safe by copy) before popping is the fix, not
+    // persist-copying the whole struct (which would still leave any
+    // OTHER field on it dangling if ever read later).
     Int end = skip_body(s, open.pos);
-    return pg_next(s, end, fs, PG {.pos = end, .err = "", .glines = pp2.glines, .hlines = body.hlines, .lines = lns, .tmp = body.tmp, .lbl = body.lbl});
+    Int final_tmp = body.tmp;
+    Int final_lbl = body.lbl;
+    // Persist-copy ONLY this small, own-only content before popping the
+    // arena it was built in — cheap, O(this function's own size), not
+    // O(whole program size so far). hlines is never written anywhere in
+    // this file (confirmed: no `.hlines.concat` call exists) — always
+    // exactly g.hlines, unchanged, so no copy needed for it at all.
+    List(Str) persisted_own_lines = resid_list_str_persist_copy(own_lines);
+    List(Str) persisted_own_glines = resid_list_str_persist_copy(own_glines);
+    Int _arena_out = resid_arena_pop();
+    // Merge with the real, persistent whole-program accumulator OUTSIDE
+    // the arena: appending a small new list onto a big existing one is
+    // the same O(log32 n) resid_list_concat push as anywhere else in
+    // this codebase, now safely using only real (non-arena) memory on
+    // both sides.
+    List(Str) final_lines = g.lines.concat(persisted_own_lines);
+    List(Str) final_glines = g.glines.concat(persisted_own_glines);
+    return pg_next(s, end, fs, PG {.pos = end, .err = "", .glines = final_glines, .hlines = g.hlines, .lines = final_lines, .tmp = final_tmp, .lbl = final_lbl});
 }
 
 PG pg_next(Str s, Int pos, Funcs fs, PG g) {
@@ -5436,14 +5551,30 @@ Str imp_resolve_target(Str dir, Str name, Str depmap) {
 }
 
 // `done` is a ";path;path;..." sentinel-delimited string of resolved files.
-RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done, Int depth, Str depmap) {
-    if (i > n) { return RRes {.text = acc, .done = done}; }
+//
+// `sb` is a str_sb_* rope builder (opaque handle, typed Str only because
+// that's how these builtins are typed — never read as a real string until
+// str_sb_finish), not the resolved text itself. Was `acc: Str` rebuilt via
+// `acc + line + "\n"` every line — `+` (resid_str_concat) copies BOTH
+// operands in full every call, so accumulating one line at a time over a
+// large multi-file import chain was O(total size^2): each of ~12,600
+// steps recopied the whole growing string so far (confirmed via
+// malloc-site profiling of a real driver.resid self-compile: this
+// function alone was ~5.5GB of the ~108GB total allocated, on only
+// 12,623 calls — ~217KB average per call, consistent with copying an
+// average-half-built accumulator repeatedly). str_sb_append mutates the
+// rope in place and returns the same handle (O(appended length)
+// amortized, not O(accumulated-so-far)) — str_sb_finish is called
+// exactly once, at the real base case, to produce the one flat Str this
+// function ever returns.
+RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done, Int depth, Str depmap) {
+    if (i > n) { return RRes {.text = str_sb_finish(sb), .done = done}; }
     Str line = lines[i];
     if (ck_str_starts_with(line, "import ")) {
         Str name = imp_target(line);
         if (name == "") {
             Int ni = i + 1;
-            return imp_resolve_lines(lines, ni, n, dir, acc, done, depth, depmap);
+            return imp_resolve_lines(lines, ni, n, dir, sb, done, depth, depmap);
         }
         Str full = imp_resolve_target(dir, name, depmap);
         Str key = ";" + full + ";";
@@ -5453,10 +5584,12 @@ RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str acc, Str done
             imp_resolve_file(full, done, depth, depmap)
         };
         Int ni2 = i + 1;
-        return imp_resolve_lines(lines, ni2, n, dir, acc + sub.text, sub.done, depth, depmap);
+        Str sb2 = str_sb_append(sb, sub.text);
+        return imp_resolve_lines(lines, ni2, n, dir, sb2, sub.done, depth, depmap);
     }
     Int ni3 = i + 1;
-    return imp_resolve_lines(lines, ni3, n, dir, acc + line + "\n", done, depth, depmap);
+    Str sb3 = str_sb_append(str_sb_append(sb, line), "\n");
+    return imp_resolve_lines(lines, ni3, n, dir, sb3, done, depth, depmap);
 }
 
 RRes imp_resolve_file(Str path, Str done, Int depth, Str depmap) {
@@ -5468,7 +5601,8 @@ RRes imp_resolve_file(Str path, Str done, Int depth, Str depmap) {
     Int plast = plen - 1;
     Str dir = imp_dir_of(path, plast);
     Str done2 = done + path + ";";
-    return imp_resolve_lines(lines, 0, n, dir, "", done2, depth, depmap);
+    Str sb0 = str_sb_new();
+    return imp_resolve_lines(lines, 0, n, dir, sb0, done2, depth, depmap);
 }
 
 
@@ -6391,6 +6525,27 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "str_sb_new") {
         if (argc == 0) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_sb_new expects no arguments"};
+    }
+    // Arena (region) allocator, callable directly from Resid source so
+    // the self-hosted compiler's own hot-path functions (pg_func) can
+    // scope their own per-call allocation to a bulk-freeable region —
+    // see runtime/resid_rt.c's "Arena (region) allocator" section for
+    // the full soundness argument. Not exposed for general use beyond
+    // that: correctness depends on the caller proving nothing needed
+    // from the region survives past resid_arena_pop() except via
+    // resid_list_str_persist_copy, which is exactly what pg_func is hand-verified
+    // to do — this is not a general-purpose language feature.
+    if (name == "resid_arena_push") {
+        if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_arena_push expects no arguments"};
+    }
+    if (name == "resid_arena_pop") {
+        if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_arena_pop expects no arguments"};
+    }
+    if (name == "resid_list_str_persist_copy") {
+        if (builtin_args(argtys, "List(Str)")) { return ERes {.pos = pos, .ty = "List(Str)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_list_str_persist_copy expects (List(Str)), got (" + argtys + ")"};
     }
     if (name == "str_sb_append") {
         if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
@@ -10552,7 +10707,7 @@ Int main() {
     Int tc = ck_check_program(rsrc, 0, ssg);
     if (tc != 0) { return tc; }
     Funcs fs = collect_sigs(rsrc);
-List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"" "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
+List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"" "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
     List(Str) header = header_with_cmps(hdr_core, fs);
     PG g0 = PG {.pos = 0, .err = "", .glines = [], .hlines = [], .lines = header, .tmp = 0, .lbl = 0};
     PG res = pg_next(rsrc, 0, fs, g0);
@@ -10577,6 +10732,16 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int nrc = write_notes_cbor(out, path);
     return prc;
 }
+
+
+
+
+
+
+
+
+
+
 
 
 
