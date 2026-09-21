@@ -464,16 +464,21 @@ type PRes = { Int pos; Str ty; Str err; };
 // `@requires` capability families (unused by codegen; kept for parity
 // with the checker's Funcs), ceils[i] = comma-joined encoded enclosing
 // sandbox ceiling for names[i] (drives cap_enter/cap_leave emission).
-// E.1: growable[i] = list of parameter indices that are proven growable
-// accumulators (bare List(T) params following the accumulator shape).
+// E.1: growable = Map(Str, Int) keyed by "funcname:paramidx" (value
+// unused, always 1) — present iff that (function, parameter) pair is
+// proven growable. Was List(Int) of bare function indices, which
+// conflated function index with parameter index; see
+// examples/typecheck.resid's matching `Funcs.growable` comment for the
+// full explanation of that bug and why this is keyed the way it is.
 // sun/suv (spec §12 general sum types): mirrors examples/typecheck.resid's
 // identically-named fields exactly (sun[i] = a declared sum type's name,
 // suv[i] = "Variant:Payload|..." encoded as "names;types", both "|"-joined
 // and index-aligned — see typecheck.resid for the full comment).
-type Funcs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) ctn; List(Str) ctb; List(Str) ctc; List(Int) growable; List(Str) sun; List(Str) suv; };
+type Funcs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) ctn; List(Str) ctb; List(Str) ctc; Map(Str, Int) growable; List(Str) sun; List(Str) suv; };
 
 Funcs funcs_empty() {
-    return Funcs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .ctn = [], .ctb = [], .ctc = [], .growable = [], .sun = [], .suv = []};
+    Map(Str, Int) empty = {"__EMPTY__": -1};
+    return Funcs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .ctn = [], .ctb = [], .ctc = [], .growable = empty, .sun = [], .suv = []};
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -1190,7 +1195,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
                 List(Str) ceils2 = ce1.concat([sandbox_ceil]);
                 List(Str) sn1 = fs.stn;
                 List(Str) sf1 = fs.stf;
-                Funcs fs2 = Funcs {.names = n2, .pts = p2, .pns = q2, .rets = r2, .reqs = reqs2, .ceils = ceils2, .stn = sn1, .stf = sf1, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = []};
+                Funcs fs2 = Funcs {.names = n2, .pts = p2, .pns = q2, .rets = r2, .reqs = reqs2, .ceils = ceils2, .stn = sn1, .stf = sf1, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = {"__EMPTY__": -1}};
                 Int end = skip_body(s, open.pos);
                 return collect_sigs_at(s, end, fs2, "", sandbox_ceil);
             }
@@ -5012,11 +5017,19 @@ type CapPP = { List(Str) lines; List(Str) glines; Int n; };
 
 type EnvBuild = { List(Str) lines; List(Str) env; };
 
-EnvBuild build_env_with_growbuf(List(Str) nl, List(Str) tyl, List(Int) growable, List(Str) lines, Int i, List(Str) acc) {
+// `growable` is the whole-program Map(Str, Int) keyed by
+// "funcname:paramidx" (see Funcs.growable above) — `fname` is the name of
+// the function currently being codegen'd, so each parameter index `i` is
+// looked up as `fname:i`, never as a bare global index. (Previously this
+// took `List(Int) growable` and checked `list_contains_int_cg_wrap(growable, i)`
+// directly against `i` — a global function-index list misread as this
+// function's own local parameter indices; see the Funcs.growable comment
+// for why that was unsound.)
+EnvBuild build_env_with_growbuf(List(Str) nl, List(Str) tyl, Map(Str, Int) growable, Str fname, List(Str) lines, Int i, List(Str) acc) {
     if (i >= nl.len()) { return EnvBuild {.lines = lines, .env = acc}; }
     Str param_reg = "%p" + IntToString(i);
     Str ty = tyl[i];
-    Bool is_growable = list_contains_int_cg_wrap(growable, i);
+    Bool is_growable = growable.contains(growable_key(fname, i));
     List(Str) new_lines = if (is_growable) {
         Int t = lines.len() + 1;
         Str gb_reg = "%t" + IntToString(t);
@@ -5033,7 +5046,18 @@ EnvBuild build_env_with_growbuf(List(Str) nl, List(Str) tyl, List(Int) growable,
     };
     Str ent = nl[i] + ":" + use_reg + ":" + ty + (if (is_growable) { ":growbuf" } else { "" });
     Int k = i + 1;
-    return build_env_with_growbuf(nl, tyl, growable, new_lines, k, acc.concat([ent]));
+    return build_env_with_growbuf(nl, tyl, growable, fname, new_lines, k, acc.concat([ent]));
+}
+
+// Mirrors examples/typecheck.resid's growable_key exactly — must stay
+// byte-identical since both files write/read the same Funcs.growable map
+// (typecheck.resid populates it, codegen.resid here reads it). Not
+// shared via import: this codebase merges typecheck.resid + codegen.resid
+// into one translation unit (examples/driver.resid) where a duplicate
+// top-level name is a type error, so this can't just call typecheck's
+// copy — it needs its own, identical by construction.
+Str growable_key(Str fname, Int paramidx) {
+    return fname + ":" + IntToString(paramidx);
 }
 
 Str cap_str_name(Int n) {
@@ -5157,7 +5181,7 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     List(Str) caps = if (sandboxed) { str_split(ceiling, ",") } else { nil_list() };
     CapPP pp0 = CapPP {.lines = dl2, .glines = g.glines, .n = 0};
     CapPP pp1 = if (sandboxed) { cap_enter_prologue(caps, pp0) } else { pp0 };
-    EnvBuild eb = build_env_with_growbuf(nl, tyl, fs.growable, pp1.lines, 0, nil_list());
+    EnvBuild eb = build_env_with_growbuf(nl, tyl, fs.growable, name.text, pp1.lines, 0, nil_list());
     Int body_start = eb.lines.len();
     Int cp = close_paren(s, open.pos);
     Tok fbrace = lex_tok(s, cp);
