@@ -342,6 +342,16 @@ otherwise allocate fresh (today's behavior, unconditionally safe).
    self-contained, purely lexical "free the dead wrapper's own box only
    (never its shared list/pointer fields)" pass is tractable independent of
    items 1-6.
+9. **FIXED (2026-09-21)**: `resid_box_i64`/`f64`/`bool`/`i128`/`u128` each
+   did 3 mallocs per scalar box (struct + 1-element slots array + payload)
+   instead of 1 — found via `LD_PRELOAD` malloc-count profiling while
+   investigating an OOM during a D2→D3 self-compile attempt (see
+   `bootstrap/stage0/README.md`, "2026-09-21 rebuild" section, for the
+   measured before/after). Collapsed into one allocation
+   (`resid_box_scalar_alloc`). Real, measured (−39% malloc calls, −6% peak
+   RSS on a 34KB test), but confirmed *not* the dominant cost — consistent
+   with this section's own conclusion that cause #2 (codegen's
+   `lines`/`glines` struct-field threading) dominates, not scalar boxing.
 
 ### Plan
 

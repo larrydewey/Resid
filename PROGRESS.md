@@ -74,6 +74,30 @@ got the same treatment. Fixed by switching all 6 call sites to `box_heap_`
 and deleting `box_scalar` (had zero remaining/legitimate callers after the
 fix). Verified: full `residc` e2e suite, 131/131 green.
 
+### 0b. `resid_process_run` fix + scalar-box allocation fix (2026-09-21)
+
+Two `runtime/resid_rt.c` fixes, full detail in `bootstrap/stage0/README.md`
+(the stage0 seed was rebuilt for both):
+
+1. **`resid_process_run` had been fully disabled** (`return -1` always) by
+   the runtime-hardening commit `ab4f9e7` (it closed a real `system(cmd)`
+   shell-injection hole by disabling the primitive outright, rather than
+   fixing it) — this broke *every* self-hosted compile, not just
+   `driver.resid`'s own: `examples/driver.resid`'s `main()` calls
+   `process.run(cmd)` as its final step to invoke `clang`. Fixed via
+   `fork`+`execvp` on a whitespace-split `argv` (never a shell) — closes the
+   same injection vector without disabling the primitive.
+2. **`resid_box_i64`/`f64`/`bool`/`i128`/`u128` did 3 mallocs per scalar**
+   (struct + 1-element slots array + payload) instead of 1 — a real,
+   independent addition to Phase E's root-cause list (below), not a
+   duplicate of it. Fixed via one combined allocation. Measured:
+   `examples/parser.resid` (34KB) malloc call count −39%, peak RSS −6%.
+
+Neither fix touches the dominant memory cost identified in Phase E
+below (still open, still tens of GB for a full `driver.resid`
+self-compile) — that needs the ownership/last-use analysis described
+there, not a runtime patch.
+
 ### Major capabilities
 
 - **Stage-2 self-hosting proven, including full sandbox/capability parity**:
