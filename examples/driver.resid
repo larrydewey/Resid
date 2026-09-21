@@ -464,16 +464,21 @@ type PRes = { Int pos; Str ty; Str err; };
 // `@requires` capability families (unused by codegen; kept for parity
 // with the checker's Funcs), ceils[i] = comma-joined encoded enclosing
 // sandbox ceiling for names[i] (drives cap_enter/cap_leave emission).
-// E.1: growable[i] = list of parameter indices that are proven growable
-// accumulators (bare List(T) params following the accumulator shape).
+// E.1: growable = Map(Str, Int) keyed by "funcname:paramidx" (value
+// unused, always 1) — present iff that (function, parameter) pair is
+// proven growable. Was List(Int) of bare function indices, which
+// conflated function index with parameter index; see
+// examples/typecheck.resid's matching `Funcs.growable` comment for the
+// full explanation of that bug and why this is keyed the way it is.
 // sun/suv (spec §12 general sum types): mirrors examples/typecheck.resid's
 // identically-named fields exactly (sun[i] = a declared sum type's name,
 // suv[i] = "Variant:Payload|..." encoded as "names;types", both "|"-joined
 // and index-aligned — see typecheck.resid for the full comment).
-type Funcs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) ctn; List(Str) ctb; List(Str) ctc; List(Int) growable; List(Str) sun; List(Str) suv; };
+type Funcs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) ctn; List(Str) ctb; List(Str) ctc; Map(Str, Int) growable; List(Str) sun; List(Str) suv; };
 
 Funcs funcs_empty() {
-    return Funcs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .ctn = [], .ctb = [], .ctc = [], .growable = [], .sun = [], .suv = []};
+    Map(Str, Int) empty = {"__EMPTY__": -1};
+    return Funcs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .ctn = [], .ctb = [], .ctc = [], .growable = empty, .sun = [], .suv = []};
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -1190,7 +1195,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
                 List(Str) ceils2 = ce1.concat([sandbox_ceil]);
                 List(Str) sn1 = fs.stn;
                 List(Str) sf1 = fs.stf;
-                Funcs fs2 = Funcs {.names = n2, .pts = p2, .pns = q2, .rets = r2, .reqs = reqs2, .ceils = ceils2, .stn = sn1, .stf = sf1, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = []};
+                Funcs fs2 = Funcs {.names = n2, .pts = p2, .pns = q2, .rets = r2, .reqs = reqs2, .ceils = ceils2, .stn = sn1, .stf = sf1, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = {"__EMPTY__": -1}};
                 Int end = skip_body(s, open.pos);
                 return collect_sigs_at(s, end, fs2, "", sandbox_ceil);
             }
@@ -5012,11 +5017,19 @@ type CapPP = { List(Str) lines; List(Str) glines; Int n; };
 
 type EnvBuild = { List(Str) lines; List(Str) env; };
 
-EnvBuild build_env_with_growbuf(List(Str) nl, List(Str) tyl, List(Int) growable, List(Str) lines, Int i, List(Str) acc) {
+// `growable` is the whole-program Map(Str, Int) keyed by
+// "funcname:paramidx" (see Funcs.growable above) — `fname` is the name of
+// the function currently being codegen'd, so each parameter index `i` is
+// looked up as `fname:i`, never as a bare global index. (Previously this
+// took `List(Int) growable` and checked `list_contains_int_cg_wrap(growable, i)`
+// directly against `i` — a global function-index list misread as this
+// function's own local parameter indices; see the Funcs.growable comment
+// for why that was unsound.)
+EnvBuild build_env_with_growbuf(List(Str) nl, List(Str) tyl, Map(Str, Int) growable, Str fname, List(Str) lines, Int i, List(Str) acc) {
     if (i >= nl.len()) { return EnvBuild {.lines = lines, .env = acc}; }
     Str param_reg = "%p" + IntToString(i);
     Str ty = tyl[i];
-    Bool is_growable = list_contains_int_cg_wrap(growable, i);
+    Bool is_growable = growable.contains(growable_key(fname, i));
     List(Str) new_lines = if (is_growable) {
         Int t = lines.len() + 1;
         Str gb_reg = "%t" + IntToString(t);
@@ -5033,7 +5046,18 @@ EnvBuild build_env_with_growbuf(List(Str) nl, List(Str) tyl, List(Int) growable,
     };
     Str ent = nl[i] + ":" + use_reg + ":" + ty + (if (is_growable) { ":growbuf" } else { "" });
     Int k = i + 1;
-    return build_env_with_growbuf(nl, tyl, growable, new_lines, k, acc.concat([ent]));
+    return build_env_with_growbuf(nl, tyl, growable, fname, new_lines, k, acc.concat([ent]));
+}
+
+// Mirrors examples/typecheck.resid's growable_key exactly — must stay
+// byte-identical since both files write/read the same Funcs.growable map
+// (typecheck.resid populates it, codegen.resid here reads it). Not
+// shared via import: this codebase merges typecheck.resid + codegen.resid
+// into one translation unit (examples/driver.resid) where a duplicate
+// top-level name is a type error, so this can't just call typecheck's
+// copy — it needs its own, identical by construction.
+Str growable_key(Str fname, Int paramidx) {
+    return fname + ":" + IntToString(paramidx);
 }
 
 Str cap_str_name(Int n) {
@@ -5157,7 +5181,7 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     List(Str) caps = if (sandboxed) { str_split(ceiling, ",") } else { nil_list() };
     CapPP pp0 = CapPP {.lines = dl2, .glines = g.glines, .n = 0};
     CapPP pp1 = if (sandboxed) { cap_enter_prologue(caps, pp0) } else { pp0 };
-    EnvBuild eb = build_env_with_growbuf(nl, tyl, fs.growable, pp1.lines, 0, nil_list());
+    EnvBuild eb = build_env_with_growbuf(nl, tyl, fs.growable, name.text, pp1.lines, 0, nil_list());
     Int body_start = eb.lines.len();
     Int cp = close_paren(s, open.pos);
     Tok fbrace = lex_tok(s, cp);
@@ -5578,12 +5602,21 @@ List(Str) ck_env_add(List(Str) env, Str name, Str ty) {
 // Option/Result keep their existing separate hardcoded fast path (mirrors
 // the Rust pipeline's own Some/None/Ok/Err special-casing, see
 // PLAN-resid-only.md) rather than being registered here too.
-type Sigs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) bods; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) exp_tys; List(Str) ctn; List(Str) ctb; List(Str) ctc; Map(Str, Int) fns; List(Int) growable; List(Str) sun; List(Str) suv; };
+// `growable`: Map(Str, Int) keyed by "funcname:paramidx" (value unused,
+// always 1) — a (function, parameter) pair is present iff that parameter
+// is proven safe to represent as an in-place-growing GrowBuf. Was
+// `List(Int)` of bare function indices, which conflated "which function"
+// with "which parameter" (both integers, same list) and let an unrelated
+// function's parameter at a coincidentally-matching index get treated as
+// growable — see PLAN-resid-only.md's E.1 self-hosted-port notes.
+type Sigs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) bods; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) exp_tys; List(Str) ctn; List(Str) ctb; List(Str) ctc; Map(Str, Int) fns; Map(Str, Int) growable; List(Str) sun; List(Str) suv; };
 
 Sigs sigs_empty() {
     Map(Str, Int) empty = {"__EMPTY__": -1};
-    return Sigs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .bods = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .exp_tys = [], .ctn = [], .ctb = [], .ctc = [], .fns = empty, .growable = [], .sun = [], .suv = []};
+    return Sigs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .bods = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .exp_tys = [], .ctn = [], .ctb = [], .ctc = [], .fns = empty, .growable = empty, .sun = [], .suv = []};
 }
+
+// Build a "funcname:paramidx" lookup key for the `growable` map.
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
 // token. Shared with the codegen half (deduped by tools/merge_driver.py).
@@ -8602,7 +8635,7 @@ Sigs ck_collect_sigs_at(Str s, Int pos, Sigs fs, Str pending_req, Str sandbox_ce
         List(Str) bods2 = bo1.concat([body]);
         Int idx = n1.len();
         Map(Str, Int) fns2 = fs.fns.insert(name.text, idx);
-        Sigs fs2 = Sigs {.names = names2, .pts = pts2, .pns = pns2, .rets = rets2, .reqs = reqs2, .ceils = ceils2, .bods = bods2, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fns2, .growable = []};
+        Sigs fs2 = Sigs {.names = names2, .pts = pts2, .pns = pns2, .rets = rets2, .reqs = reqs2, .ceils = ceils2, .bods = bods2, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fns2, .growable = {"__EMPTY__": -1}};
         return ck_collect_sigs_at(s, end, fs2, "", sandbox_ceil);
     }
     return ck_collect_sigs_at(s, t.pos, fs, pending_req, sandbox_ceil);
@@ -8614,58 +8647,134 @@ Sigs ck_collect_sigs(Str s) {
 }
 
 // ─── E.1: Growable accumulator analysis ───────────────────────────
-// Identify bare List(T) parameters that follow the accumulator shape:
-// only used as `param.concat(expr)` (expr not referencing param),
-// returned directly (base case), or threaded to recursive self-call
-// in the same parameter slot. See bootstrap/rust-stage0/crates/resid-type/src/growable.rs.
+// Identify bare List(T) *parameters* (not fields — that generalization
+// is separate, larger, out of scope here; see PLAN-resid-only.md Phase E)
+// that follow the accumulator shape: only used as `param.concat(expr)`
+// (expr not referencing param), returned directly (base case), or
+// threaded to a recursive self-call in the same parameter slot. Mirrors
+// bootstrap/rust-stage0/crates/resid-type/src/growable.rs (the proven
+// Rust reference — read it before changing this).
+//
+// Iterates per (function, parameter) pair, not per function: `fs.pts[i]`/
+// `fs.pns[i]`/`fs.bods[i]` are one function's *whole* comma-joined
+// parameter-type list / parameter-name list / body text (see
+// `ck_collect_ptypes`/`collect_pnames` above) — a function can have several
+// parameters, any of which (not just the first) might be the growable
+// one, so this must split those per-function strings and check every
+// parameter position, not just index `i` treated as a parameter index
+// directly (that conflation — function index and parameter index sharing
+// one `List(Int)` — was the bug fixed alongside this: see `Sigs.growable`
+// above, now `Map(Str, Int)` keyed by `growable_key(fname, paramidx)`).
 Sigs analyze_growable(Sigs fs) {
     Int n = fs.names.len();
-    List(Int) growable = analyze_growable_rec(fs, 0, n, []);
+    Map(Str, Int) growable = analyze_growable_rec(fs, 0, n, {"__EMPTY__": -1});
     return Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = growable};
 }
 
-List(Int) analyze_growable_rec(Sigs fs, Int i, Int n, List(Int) acc) {
+// Walk every function (index `i`, 0..n).
+Map(Str, Int) analyze_growable_rec(Sigs fs, Int i, Int n, Map(Str, Int) acc) {
     if (i >= n) { return acc; }
-    List(Int) acc2 = if (is_growable_param(fs, i)) { acc.concat([i]) } else { acc };
+    Map(Str, Int) acc2 = analyze_growable_params_for_fn(fs, i, acc);
     Int k = i + 1;
     return analyze_growable_rec(fs, k, n, acc2);
 }
 
-// Is the parameter at index `idx` a List(T) type?
-Bool is_list_param(Sigs fs, Int idx) {
-    if (idx >= fs.pts.len()) { return false; }
-    Str pts = fs.pts[idx];
-    return str_has_prefix(pts, "List(") || str_has_prefix(pts, "List(Str") || str_has_prefix(pts, "List(Int") || str_has_prefix(pts, "List(Float");
+// Depth-aware split on a top-level (paren-depth 0) separator — needed
+// because a parameter TYPE can itself contain a comma (`Map(Str, Int)`),
+// so a naive `,`-split of `fs.pts[i]`/`fs.pns[i]` would misalign parameter
+// names against types the moment such a type appears. Named `gw_*` to
+// avoid colliding with `codegen.resid`'s own `split_rest_depth`/
+// `find_sep_depth` once the two files are merged into one translation
+// unit (duplicate top-level names are a type error — see the driver's
+// own `first_dup_name` check).
+Int gw_find_sep_depth(Str s, Int i, Int depth, Str sep) {
+    if (i >= str_len_1(s)) { return -1; }
+    Int sl = str_len_1(sep);
+    Int isp = i + sl;
+    Int c = str_char_at(s, i);
+    if (c == 40) { return gw_find_sep_depth(s, i + 1, depth + 1, sep); }
+    if (c == 41) { return gw_find_sep_depth(s, i + 1, depth - 1, sep); }
+    if (depth == 0 && str_slice(s, i, isp) == sep) { return i; }
+    Int k = i + 1;
+    return gw_find_sep_depth(s, k, depth, sep);
 }
 
-// Check if parameter at `idx` follows the growable accumulator shape.
-Bool is_growable_param(Sigs fs, Int idx) {
-    if (!is_list_param(fs, idx)) { return false; }
-    Str param_name = fs.pns[idx];
-    Str body = fs.bods[idx];
-    Str fname = fs.names[idx];
-    return check_growable_shape(body, param_name, fname, idx, fs);
+List(Str) gw_split_depth(Str s, Str sep) {
+    if (s == "") { List(Str) empty = []; return empty; }
+    Int p = gw_find_sep_depth(s, 0, 0, sep);
+    if (p < 0) { return [s]; }
+    Str first = str_slice(s, 0, p);
+    Int sl = str_len_1(sep);
+    Int fp = p + sl;
+    Int tot = str_len_1(s);
+    Str rest = str_slice(s, fp, tot);
+    List(Str) one = [first];
+    return one.concat(gw_split_depth(rest, sep));
 }
 
-// Main shape check: walk the body text and verify accumulator shape.
-// Recognizes:
-//   - `param.concat(expr)` where expr doesn't reference param
-//   - `return param` (base case)
-//   - Recursive self-call with grown temp in same param position
-//   - Delegate calls to other growable functions (not implemented yet)
+// Is `ty` (one already-split, single parameter type) a `List(T)` type?
+// `ty` comes from `gw_split_depth`, so a comma-bearing type like
+// `Map(Str, Int)` is never split mid-type — no extra guard needed here.
+Bool gw_is_list_type(Str ty) {
+    return str_has_prefix(ty, "List(");
+}
+
+// Check every parameter of function `fi` for the growable shape, folding
+// any recognized ones into `acc`.
+Map(Str, Int) analyze_growable_params_for_fn(Sigs fs, Int fi, Map(Str, Int) acc) {
+    Str ptstr = fs.pts[fi];
+    if (ptstr == "") { return acc; }
+    List(Str) tys = gw_split_depth(ptstr, ",");
+    List(Str) names = gw_split_depth(fs.pns[fi], ",");
+    return analyze_growable_params_rec(fs, fi, tys, names, 0, tys.len(), acc);
+}
+
+Map(Str, Int) analyze_growable_params_rec(Sigs fs, Int fi, List(Str) tys, List(Str) names, Int pidx, Int n, Map(Str, Int) acc) {
+    if (pidx >= n) { return acc; }
+    Map(Str, Int) acc2 = if (is_growable_param(fs, fi, tys[pidx], names[pidx], pidx)) {
+        acc.insert(growable_key(fs.names[fi], pidx), 1)
+    } else {
+        acc
+    };
+    Int k = pidx + 1;
+    return analyze_growable_params_rec(fs, fi, tys, names, k, n, acc2);
+}
+
+// Check if parameter `pidx` (type `pty`, name `pname`) of function `fi`
+// follows the growable accumulator shape.
+Bool is_growable_param(Sigs fs, Int fi, Str pty, Str pname, Int pidx) {
+    if (!gw_is_list_type(pty)) { return false; }
+    Str body = fs.bods[fi];
+    Str fname = fs.names[fi];
+    return check_growable_shape(body, pname, fname, pidx, fs);
+}
+
+// Main shape check: walk the function body text and verify the
+// accumulator shape (see module comment above / growable.rs).
+//
+// **Deliberately disabled for now — not part of this port.** Enabling
+// real recognition here requires two prerequisite fixes this task did
+// NOT include (found while scoping the analysis, not yet resolved):
+//   1. (DONE, this change) `Sigs.growable`'s representation conflated
+//      function index and parameter index.
+//   2. (NOT DONE) `codegen.resid`'s `build_env_with_growbuf` converts an
+//      incoming parameter via `resid_growbuf_from_list` unconditionally,
+//      on *every* entry to a growable-tagged function — including a
+//      recursive self-call, whose argument is already a raw GrowBuf
+//      (produced by the previous step's `resid_growbuf_push_list`), not
+//      a real `ResidList`. `resid_growbuf_from_list` would then
+//      misinterpret the GrowBuf's `{count, capacity, slots}` layout as a
+//      `ResidList`'s `{count, shift, root, type}` layout — real memory
+//      corruption on the second recursive step of any function this
+//      analysis ever recognizes. There is no existing mechanism in
+//      `codegen.resid` to distinguish "first call" from "recursive
+//      self-call" at a function's own entry block. This needs a real
+//      codegen fix (e.g. splitting a recognized function into a
+//      one-time-conversion outer wrapper plus an inner worker that
+//      operates purely on the raw GrowBuf) before this check can safely
+//      return `true` for anything. Left `false` until that lands.
 Bool check_growable_shape(Str body, Str param, Str fname, Int idx, Sigs fs) {
-    // Simplified check: scan for param occurrences and classify them
-    // For now, use a conservative approximation: if body contains
-    // `param.concat` and `return param`, consider it growable.
-    // Full shape check requires parsing the body which is complex in Resid.
-    // Conservative: if `param.concat` appears and no other param uses,
-    // assume growable.
-    Bool saw_concat = false;
-    Bool saw_return_param = false;
-    Bool other_uses = false;
-    // This is a simplified approximation. Full analysis would require
-    // proper parsing of the body.
-    return false; // Disabled for now - conservative
+    return false; // Disabled — see comment above.
 }
 
 // Helper to check if a string starts with a pattern
@@ -10468,6 +10577,8 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int nrc = write_notes_cbor(out, path);
     return prc;
 }
+
+
 
 
 

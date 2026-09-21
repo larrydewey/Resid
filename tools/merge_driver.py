@@ -117,6 +117,12 @@ def main():
         # halves; keep the codegen (base) versions.
         'behavior_decl_at', 'read_instance',
         'strip_reverse',
+        # E.1 growable-accumulator key helper: identical copies in both
+        # halves; keep the codegen (base) version. (typecheck.resid's
+        # analyze_growable currently populates its own Sigs.growable only
+        # — codegen.resid's Funcs.growable is a separate, not-yet-bridged
+        # structure; see PLAN-resid-only.md's E.1 self-hosted-port notes.)
+        'growable_key',
         # Sandbox capability-list parsing (spec §21):
         # identical copies in both halves; keep the
         # codegen (base) versions. (The checker's
