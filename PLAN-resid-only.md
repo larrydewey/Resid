@@ -1139,6 +1139,82 @@ mechanism, not two), retire `growable.rs` into it, per plan.
   (struct-box reuse, field_growable generalizer) and mechanism 2 (the
   forward-reachability final-drop pass) — neither wired; defer until E.1's
   oracle is the wired substrate, then measure`bootstrap_driver_self_compile_fixed_point` memory.
+
+  **Self-hosted bare-parameter port attempted (2026-09-21), measured NET
+  REGRESSION, not committed — see `git stash list` for the parked diff
+  (`examples/typecheck.resid`, `examples/codegen.resid`,
+  `examples/driver.resid`, `runtime/resid_rt.c`).** Fixed a real,
+  separate bug found along the way first (committed, `e1417f9`):
+  `Funcs.growable` was `List(Int)` conflating whole-program function
+  index with per-function parameter index — codegen read it per-function
+  against local parameter indices, so any two functions with matching
+  parameter counts/positions would misinterpret a normal `ResidList` as a
+  `GrowBuf` (different memory layouts — real corruption, not a slowdown).
+  Fixed to `Map(Str, Int)` keyed by `"funcname:paramidx"`.
+
+  With that fixed, ported `growable.rs`'s bare-parameter shape check
+  (phase 1) and whole-program call-site freshness (phase 3, no
+  delegation/phase 2 — out of scope for bare-parameter-only) into
+  `check_growable_shape`/`gw_freshness_ok` in `typecheck.resid`. Also
+  fixed a real re-entry hazard this exposed for the first time: a
+  self-recursive call's argument to a growable parameter is already a
+  `GrowBuf*` (from the prior step's `resid_growbuf_push_list`), but
+  `resid_growbuf_from_list` unconditionally treated every entry as a
+  fresh `ResidList*` — added a `GROWBUF_TAG` (`INT64_MIN`) discriminator
+  as `GrowBuf`'s first field (a real `ResidList.count` can never equal
+  it) so `resid_growbuf_from_list` detects and passes through an
+  already-converted buffer instead of misreading it. Also found and
+  fixed 3 latent, previously-dead bugs in the never-before-exercised
+  codegen path: `resid_growbuf_from_list`/`push_list`/`finish` were never
+  declared in `hdr_core` (would have been an LLVM link error the instant
+  this ever fired); `pg_func` assembled a growable function's body from
+  `pp1.lines` instead of `eb.lines`, silently dropping the
+  `resid_growbuf_from_list` prologue; `sg_stmt`'s return-statement
+  handling dropped `resid_growbuf_finish`'s generated type-string global
+  constant the same way.
+
+  Verified correct: a positive case recursing 2000 levels
+  (`f(2000, [])`) produced the exact right result (len 2000, sum
+  2,001,000) with GrowBuf calls confirmed firing in the `.ll` — a real
+  stress test of the re-entry fix. Three negative cases (aliasing,
+  self-reference in the concat argument, whole-program freshness
+  violation) all correctly excluded.
+
+  **Measured on the real target, net negative.** D1 (Rust-built)
+  compiling `driver.resid` with this analysis active: peak RSS for
+  typecheck+codegen+clang (isolated from provenance-signing, which is a
+  separate, also-expensive, unrelated code path — measure that
+  separately if it's ever in scope) went from the documented 44.1GB
+  baseline (`PROGRESS.md` §0a) to **~51GB** — confirmed via live cgroup
+  `memory.current` polling under `systemd-run --scope` with headroom
+  above the ceiling (not capped/truncated). The mechanism did fire on
+  real functions in `typecheck.resid`/`codegen.resid` (confirmed via
+  `.ll` inspection — real `resid_growbuf_*` calls beyond the 3
+  unconditional `declare`s), so this isn't "zero effect" — it's that the
+  narrow bare-parameter pattern's real savings are smaller than the
+  analysis's own cost. `gw_freshness_ok` rescans every OTHER function's
+  full body text, tokenizing from scratch, for every phase-1-passing
+  candidate — O(candidates × functions × body length) — across
+  driver.resid's ~400 functions. That overhead, on a runtime that never
+  frees any of the temporary strings it allocates while doing it,
+  outweighs the payoff.
+
+  **Why this doesn't contradict the earlier design work above**: this
+  was scoped from the start as bare-parameter-only, explicitly NOT the
+  struct-field generalization (`field_growable.rs`) that targets the
+  actual dominant cost (`GT`/`ST`'s `lines`/`glines` fields). It was
+  meant to be a safe, small, net-positive-or-neutral confidence-builder
+  before tackling that larger port. It turned out net-negative instead —
+  a real, useful, now-documented data point, not a wasted effort: any
+  future attempt at the struct-field generalization needs to either (a)
+  make the freshness/shape-check analysis itself cheap enough not to
+  matter (memoize per-function tokenization instead of rescanning body
+  text from scratch per candidate; bound freshness checking to only
+  functions that actually call the candidate, via `fs.fns`'s existing
+  name lookup, instead of scanning literally every function), or (b) be
+  confident the larger struct-field savings dwarf the same analysis-cost
+  category regardless. Do the cost analysis before investing in another
+  port — don't rediscover this measurement from scratch.
 - [x] C.1 Port `merge_driver.py` to Resid — **DONE**. `tools/merge_driver.resid`
       (residc pipeline, no Rust). Pure recursive/functional port (no
       reassignment): `decl_ranges`/`drop_decls`/`cut_main` reimplemented as a
