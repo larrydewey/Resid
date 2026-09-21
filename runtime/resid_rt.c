@@ -28,6 +28,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <libgen.h>
+#include <sys/wait.h>
 
 static int resid_path_is_safe(const char* path) {
     if (!path || path[0] == '\0') return 0;
@@ -892,6 +893,10 @@ void resid_struct_free(void* b) {
 void resid_box_free(void* b) {
     if (!b) return;
     ResidVal* v = (ResidVal*)b;
+    /* Scalar box (tag == -1, see resid_box_scalar_alloc): struct, slots
+     * array, and payload are one combined allocation starting at `v` —
+     * a single free() covers all of it. */
+    if (v->tag == -1) { free(v); return; }
     if (v->slots) {
         for (int64_t i = 0; i < v->count; i++) {
             void* slot = v->slots[i];
@@ -902,19 +907,39 @@ void resid_box_free(void* b) {
     free(v);
 }
 
-/* Scalar boxes: ResidVal with tag=-1 and one slot holding the value. */
-void* resid_box_i64(int64_t v) {
-    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
-    if (!r) resid_abort("resid_box_i64: out of memory");
+/* Scalar boxes: ResidVal with tag=-1 and one slot holding the value.
+ *
+ * A scalar box used to be 3 separate mallocs (the ResidVal struct, a
+ * 1-element `slots` array, and the payload) for as little as 1 byte of
+ * real payload — under glibc's ptmalloc, each malloc carries its own
+ * ~16-byte chunk header/alignment overhead, so a boxed bool cost ~3x the
+ * allocation count and a large multiple of the payload in overhead alone.
+ * Scalars are the hottest allocation in the runtime (every Int/Float/Bool
+ * value gets boxed), and this runtime never frees, so that overhead is
+ * never reclaimed. Fix: one combined allocation — struct, slots array,
+ * and payload laid out contiguously — same external `r->slots[0]`
+ * contract, 1/3 the malloc call count and per-call overhead. */
+static void* resid_box_scalar_alloc(size_t payload_size, size_t payload_align, void** out_payload) {
+    size_t off = sizeof(ResidVal) + sizeof(void*);
+    size_t pad = (payload_align - (off % payload_align)) % payload_align;
+    size_t slot_off = off + pad;
+    char* block = (char*)malloc(slot_off + payload_size);
+    if (!block) resid_abort("resid_box_scalar: out of memory");
+    ResidVal* r = (ResidVal*)block;
     r->tag = -1;
     r->count = 1;
+    r->slots = (void**)(block + sizeof(ResidVal));
+    void* payload = block + slot_off;
+    r->slots[0] = payload;
+    *out_payload = payload;
+    return r;
+}
+
+void* resid_box_i64(int64_t v) {
+    void* payload;
+    ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(int64_t), _Alignof(int64_t), &payload);
     r->type = "i64";
-    int64_t* slot = (int64_t*)malloc(sizeof(int64_t));
-    if (!slot) resid_abort("resid_box_i64: out of memory");
-    *slot = v;
-    r->slots = (void**)malloc(1 * sizeof(void*));
-    if (!r->slots) resid_abort("resid_box_i64: out of memory");
-    r->slots[0] = slot;
+    *(int64_t*)payload = v;
     return r;
 }
 int64_t resid_unbox_i64(void* p) {
@@ -923,17 +948,10 @@ int64_t resid_unbox_i64(void* p) {
 }
 
 void* resid_box_f64(double v) {
-    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
-    if (!r) resid_abort("resid_box_f64: out of memory");
-    r->tag = -1;
-    r->count = 1;
+    void* payload;
+    ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(double), _Alignof(double), &payload);
     r->type = "f64";
-    double* slot = (double*)malloc(sizeof(double));
-    if (!slot) resid_abort("resid_box_f64: out of memory");
-    *slot = v;
-    r->slots = (void**)malloc(1 * sizeof(void*));
-    if (!r->slots) resid_abort("resid_box_f64: out of memory");
-    r->slots[0] = slot;
+    *(double*)payload = v;
     return r;
 }
 double resid_unbox_f64(void* p) {
@@ -942,17 +960,10 @@ double resid_unbox_f64(void* p) {
 }
 
 void* resid_box_bool(int8_t v) {
-    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
-    if (!r) resid_abort("resid_box_bool: out of memory");
-    r->tag = -1;
-    r->count = 1;
+    void* payload;
+    ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(int8_t), _Alignof(int8_t), &payload);
     r->type = "bool";
-    int8_t* slot = (int8_t*)malloc(sizeof(int8_t));
-    if (!slot) resid_abort("resid_box_bool: out of memory");
-    *slot = v;
-    r->slots = (void**)malloc(1 * sizeof(void*));
-    if (!r->slots) resid_abort("resid_box_bool: out of memory");
-    r->slots[0] = slot;
+    *(int8_t*)payload = v;
     return r;
 }
 int8_t resid_unbox_bool(void* p) {
@@ -961,17 +972,10 @@ int8_t resid_unbox_bool(void* p) {
 }
 
 void* resid_box_i128(__int128 v) {
-    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
-    if (!r) resid_abort("resid_box_i128: out of memory");
-    r->tag = -1;
-    r->count = 1;
+    void* payload;
+    ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(__int128), _Alignof(__int128), &payload);
     r->type = "i128";
-    __int128* slot = (__int128*)malloc(sizeof(__int128));
-    if (!slot) resid_abort("resid_box_i128: out of memory");
-    *slot = v;
-    r->slots = (void**)malloc(1 * sizeof(void*));
-    if (!r->slots) resid_abort("resid_box_i128: out of memory");
-    r->slots[0] = slot;
+    *(__int128*)payload = v;
     return r;
 }
 __int128 resid_unbox_i128(void* p) {
@@ -980,17 +984,10 @@ __int128 resid_unbox_i128(void* p) {
 }
 
 void* resid_box_u128(unsigned __int128 v) {
-    ResidVal* r = (ResidVal*)malloc(sizeof(ResidVal));
-    if (!r) resid_abort("resid_box_u128: out of memory");
-    r->tag = -1;
-    r->count = 1;
+    void* payload;
+    ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(unsigned __int128), _Alignof(unsigned __int128), &payload);
     r->type = "u128";
-    unsigned __int128* slot = (unsigned __int128*)malloc(sizeof(unsigned __int128));
-    if (!slot) resid_abort("resid_box_u128: out of memory");
-    *slot = v;
-    r->slots = (void**)malloc(1 * sizeof(void*));
-    if (!r->slots) resid_abort("resid_box_u128: out of memory");
-    r->slots[0] = slot;
+    *(unsigned __int128*)payload = v;
     return r;
 }
 unsigned __int128 resid_unbox_u128(void* p) {
@@ -1905,8 +1902,45 @@ __attribute__((constructor)) static void resid_capture_args(int argc, char** arg
     g_resid_argv = argv;
 }
 
+/* Runs `cmd` via fork+execvp on a whitespace-split argv — never through a
+ * shell. This defuses shell-metacharacter injection (;, &&, $(...), `...`,
+ * |, etc. all become inert literal argv bytes instead of being interpreted)
+ * without disabling the primitive the self-hosted compiler needs to invoke
+ * `clang` for its own link step. Tokens are split on plain ASCII spaces —
+ * no quoting support, since every current caller (the driver's clang
+ * invocation, resid-manifest) builds its command from single-token paths. */
+#define RESID_PROC_MAX_ARGS 64
+
 int64_t resid_process_run(const char* cmd) {
-    (void)cmd;
+    if (!cmd) return -1;
+    size_t len = strlen(cmd);
+    char* buf = malloc(len + 1);
+    if (!buf) return -1;
+    memcpy(buf, cmd, len + 1);
+
+    char* argv[RESID_PROC_MAX_ARGS + 1];
+    int argc = 0;
+    char* p = buf;
+    while (*p != '\0' && argc < RESID_PROC_MAX_ARGS) {
+        while (*p == ' ') p++;
+        if (*p == '\0') break;
+        argv[argc++] = p;
+        while (*p != '\0' && *p != ' ') p++;
+        if (*p == ' ') { *p = '\0'; p++; }
+    }
+    argv[argc] = NULL;
+    if (argc == 0) { free(buf); return -1; }
+
+    pid_t pid = fork();
+    if (pid < 0) { free(buf); return -1; }
+    if (pid == 0) {
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) { free(buf); return -1; }
+    free(buf);
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
     return -1;
 }
 
