@@ -29,7 +29,26 @@ def decl_ranges(lines):
         m = DECL.match(lines[i])
         if m and not lines[i].startswith('//'):
             j = i
-            while j < len(lines) and lines[j] != '}':
+            brace_count = 0
+            while j < len(lines):
+                line = lines[j]
+                in_str = False
+                escaped = False
+                for c in line.split('//')[0]:
+                    if escaped:
+                        escaped = False
+                        continue
+                    if c == '\\':
+                        escaped = True
+                    elif c == '"':
+                        in_str = not in_str
+                    elif not in_str:
+                        if c == '{':
+                            brace_count += 1
+                        elif c == '}':
+                            brace_count -= 1
+                if brace_count == 0:
+                    break
                 j += 1
             out.append((i, min(j, len(lines) - 1), m.group(1)))
             i = j + 1
@@ -117,6 +136,11 @@ def main():
         # halves; keep the codegen (base) versions.
         'behavior_decl_at', 'read_instance',
         'strip_reverse',
+        # Test-framework Expect container (SPEC-testing.md §5):
+        # identical copies in both halves; keep the codegen (base) versions.
+        'is_expect_type', 'expect_elem',
+        'is_fn_type', 'fn_arrow_idx', 'fn_inner', 'fn_ret',
+        'fn_param_list',
         # E.1 growable-accumulator key helper: identical copies in both
         # halves; keep the codegen (base) version. (typecheck.resid's
         # analyze_growable currently populates its own Sigs.growable only
@@ -184,6 +208,15 @@ def main():
     if not replaced_header:
         raise SystemExit('merge_driver: no header line found in driver tail')
     tail = new_tail
+    # The tail is read back out of the PREVIOUSLY generated driver.resid, and
+    # that file's trailing newline becomes an empty final element on
+    # split('\n'). Left alone it is re-emitted and a fresh one is added, so
+    # every regeneration appended one more blank line without bound. That
+    # drift changes the text the compiler compiles -- and so the provenance
+    # hash and boot.sh's byte-exact seed reproduction -- purely as a function
+    # of how many times this script has been run.
+    while tail and tail[-1].strip() == '':
+        tail.pop()
 
     banner = ['', '// =====================================================================',
               '// Checker stage - fused from typecheck.resid (ck_-prefixed where',
