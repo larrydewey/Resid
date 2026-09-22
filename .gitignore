@@ -10,3 +10,14 @@ keys/
 *.resid-prov
 a.out*
 crates/residc/.resid-cache.cbor
+
+# Bootstrap build output — boot.sh regenerates everything here except the
+# committed seed. Keep seed.ll tracked; it is the frozen bootstrap input.
+build/boot/*
+!build/boot/seed.ll
+
+# Compiler/test artifacts dropped next to sources by residc and boot.sh
+/residc
+*.ll
+*.testbin
+__pycache__/
