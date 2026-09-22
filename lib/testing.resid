@@ -1,0 +1,63 @@
+// testing.resid — the library half of SPEC-testing.md.
+//
+// Most of the framework is NOT here, by design. `expect(v)` and its matchers
+// (§2.1) and the `test "name" { ... }` block form (§1.1) are compiler
+// builtins: the checker types matchers against the payload type T of
+// Expect(T), so a mismatch is a compile error rather than a runtime one, and
+// `test` blocks are discovered at compile time (§4) and wired into a
+// generated entry point. None of that can be expressed as a library.
+//
+// What IS here is §1.3's explicit registration: building a list of test
+// cases as ordinary data and running it. That is what `test` blocks cannot
+// express — a table of cases generated from data, or a suite assembled at
+// run time.
+//
+// Usage (see examples/registry_test.resid):
+//
+//     import "../lib/testing.resid";
+//
+//     Int main() {
+//         List(TestCase) cases = [
+//             test_case("add: identity", lambda() { expect(add(0, 5)).toEqual(5) }),
+//             test_case("add: zero",     lambda() { expect(add(0, 0)).toEqual(0) })
+//         ];
+//         return run_tests("math", cases);
+//     }
+//
+// Run it like any program; the exit code is 0 when every case passed and 1
+// when any failed (§7.2). RESID_TEST_FORMAT (pretty | tap | json) and
+// RESID_TEST_FILTER (a regex over the case name) apply here exactly as they
+// do to `residc test`.
+
+// One registered case: a display name and the body to run. The body is a
+// zero-argument closure, so it captures whatever the surrounding scope had.
+type TestCase = { Str name; Void closure() body; };
+
+pub TestCase test_case(Str name, Void closure() body) {
+    return TestCase { .name = name, .body = body };
+}
+
+// A property case is registered the same way; `forall` generators and
+// shrinking are Phase 2 of the spec and are not implemented yet, so this
+// records the intent without pretending to generate anything.
+pub TestCase property_case(Str name, Void closure() body) {
+    return TestCase { .name = name, .body = body };
+}
+
+Int run_cases_at(List(TestCase) cases, Int i, Int n, Int failed) {
+    if (i >= n) { return failed; }
+    TestCase tc = cases[i];
+    Int r = resid_test_run_closure(tc.body, tc.name);
+    Int f2 = failed + r;
+    Int k = i + 1;
+    return run_cases_at(cases, k, n, f2);
+}
+
+// Run every registered case under `module`, printing in the configured
+// format. Returns the process exit code: 0 all passed, 1 any failure.
+pub Int run_tests(Str module, List(TestCase) cases) {
+    Int n = cases.len();
+    Bool p = resid_test_plan(n, module);
+    Int f = run_cases_at(cases, 0, n, 0);
+    return resid_test_summary();
+}

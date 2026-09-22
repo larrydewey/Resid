@@ -1,0 +1,31 @@
+// math_test.resid — SPEC-testing.md §1.1 inline test blocks.
+
+Int add(Int a, Int b) {
+    return a + b;
+}
+
+Int mul(Int a, Int b) {
+    return a * b;
+}
+
+test "add: identity" {
+    expect(add(0, 5)).toEqual(5);
+    expect(add(5, 0)).toEqual(5);
+}
+
+test "add: commutativity" {
+    expect(add(2, 3)).toEqual(add(3, 2));
+    expect(add(-4, 9)).toEqual(add(9, -4));
+}
+
+test "mul: zero annihilates" {
+    expect(mul(0, 7)).toEqual(0);
+    expect(mul(7, 0)).toEqual(0);
+}
+
+test "strings and lists" {
+    expect("resid").toHaveLength(5);
+    expect("resid").toMatch("^re[a-z]+d$");
+    expect([1, 2, 3]).toContain(3);
+    expect([1, 2, 3]).toHaveLength(3);
+}

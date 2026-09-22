@@ -31,6 +31,7 @@
 #include <sys/wait.h>
 
 _Noreturn void resid_abort(const char* msg);
+_Noreturn void resid_index_abort(int64_t idx, int64_t len, const char* at);
 
 /* ── Arena (region) allocator ──────────────────────────────────────────
  *
@@ -273,6 +274,360 @@ _Noreturn void resid_abort(const char* msg) {
  * at zero runtime cost (spec §34 diagnostics). */
 _Noreturn void resid_abort_at(const char* msg, const char* at) {
     resid_fail(msg, at);
+}
+
+/* ── Test runner (SPEC-testing.md §5, §7) ───────────────────────────────
+ * A test binary is an ordinary Resid program whose `main` the compiler
+ * generates: it calls resid_test_plan once, then resid_test_run per
+ * discovered `test "name" { ... }` block, then resid_test_summary.
+ *
+ * Per-test isolation reuses the spawn catch above rather than introducing a
+ * second unwind path: resid_test_run installs itself as the catch target, so
+ * ANY abort raised inside the body — a failed expectation, an out-of-range
+ * index, a capability violation, `todo(...)` — unwinds back here and is
+ * reported as one failing test instead of killing the whole run. The catch is
+ * saved and restored around the body so a test that spawns still nests. */
+
+#define RESID_TEST_MSG_MAX 1024
+
+static int    resid_test_in_test = 0;
+static char   resid_test_fail_buf[RESID_TEST_MSG_MAX];
+static int64_t resid_test_passed = 0;
+static int64_t resid_test_failed = 0;
+static int64_t resid_test_skipped = 0;
+static int64_t resid_test_index = 0;
+static double resid_test_total_ms = 0.0;
+static int    resid_test_fmt = -1;          /* 0 pretty, 1 TAP, 2 JSON */
+static int    resid_test_json_first = 1;
+static const char* resid_test_module_name = "";
+/* Set by resid_test_run_closure just before it calls resid_test_run with a
+ * NULL body; consumed there. */
+static int64_t resid_test_closure_env = 0;
+static void (*resid_test_closure_fn)(int64_t) = NULL;
+
+/* Output format, from RESID_TEST_FORMAT (the `residc test --format` flag is
+ * passed to the compiled binary through the environment). */
+static int resid_test_format(void) {
+    if (resid_test_fmt < 0) {
+        const char* f = getenv("RESID_TEST_FORMAT");
+        if (f && strcmp(f, "tap") == 0) resid_test_fmt = 1;
+        else if (f && strcmp(f, "json") == 0) resid_test_fmt = 2;
+        else resid_test_fmt = 0;
+    }
+    return resid_test_fmt;
+}
+
+/* Progress-chatter suppression. The compiler prints an `OK <decl>` line per
+ * declaration, which is useful on a normal build and fatal to a machine-read
+ * test report — stray lines before `TAP version 13` break every TAP parser.
+ * `residc test` raises this flag before type checking, and the checker's
+ * progress prints consult it. */
+static int resid_quiet_flag = 0;
+
+int8_t resid_quiet_set(int8_t on) { resid_quiet_flag = on ? 1 : 0; return 1; }
+int8_t resid_quiet(void) { return (int8_t)resid_quiet_flag; }
+
+/* ── Tiny regex (subset) ────────────────────────────────────────────────
+ * Supports `^` `$` `.` `*` `+` `?` and `[...]` classes (with `^` negation
+ * and `a-z` ranges). Deliberately NOT a full regex engine: it is what
+ * `toMatch` (SPEC-testing.md §2.1) and `--filter` (§7.1) need, and nothing
+ * in the runtime should grow a backtracking engine for them. Alternation and
+ * capture groups are unsupported; a pattern using them will not match. */
+static int resid_rx_class(const char** pp, char c) {
+    const char* p = *pp + 1;            /* past '[' */
+    int neg = 0, hit = 0;
+    if (*p == '^') { neg = 1; p++; }
+    for (; *p && *p != ']'; p++) {
+        if (p[1] == '-' && p[2] && p[2] != ']') {
+            if (c >= p[0] && c <= p[2]) hit = 1;
+            p += 2;
+        } else if (*p == c) {
+            hit = 1;
+        }
+    }
+    if (*p == ']') p++;
+    *pp = p;
+    return neg ? !hit : hit;
+}
+
+/* Length of the single-character matcher starting at p. */
+static int resid_rx_atom_len(const char* p) {
+    if (*p == '[') {
+        const char* q = p + 1;
+        if (*q == '^') q++;
+        if (*q == ']') q++;             /* a literal ']' first in the class */
+        while (*q && *q != ']') q++;
+        return (int)((*q == ']' ? q + 1 : q) - p);
+    }
+    if (*p == '\\' && p[1]) return 2;
+    return 1;
+}
+
+static int resid_rx_one(const char* p, char c) {
+    if (*p == '[') { const char* q = p; return resid_rx_class(&q, c); }
+    if (*p == '\\' && p[1]) return p[1] == c;
+    if (*p == '.') return c != '\0';
+    return *p == c;
+}
+
+static int resid_rx_here(const char* p, const char* s);
+
+/* `atom*` / `atom+` / `atom?` against s, then the rest of the pattern. */
+static int resid_rx_rep(const char* atom, char op, const char* rest, const char* s) {
+    if (op == '?') {
+        if (resid_rx_here(rest, s)) return 1;
+        if (*s && resid_rx_one(atom, *s)) return resid_rx_here(rest, s + 1);
+        return 0;
+    }
+    if (op == '+') {
+        if (!*s || !resid_rx_one(atom, *s)) return 0;
+        s++;
+    }
+    for (;;) {
+        if (resid_rx_here(rest, s)) return 1;
+        if (!*s || !resid_rx_one(atom, *s)) return 0;
+        s++;
+    }
+}
+
+static int resid_rx_here(const char* p, const char* s) {
+    if (p[0] == '\0') return 1;
+    if (p[0] == '$' && p[1] == '\0') return *s == '\0';
+    int alen = resid_rx_atom_len(p);
+    char op = p[alen];
+    if (op == '*' || op == '+' || op == '?') return resid_rx_rep(p, op, p + alen + 1, s);
+    if (*s && resid_rx_one(p, *s)) return resid_rx_here(p + alen, s + 1);
+    return 0;
+}
+
+/* Unanchored search unless the pattern starts with '^'. */
+int8_t resid_regex_match(const char* pattern, const char* text) {
+    if (!pattern || !text) return 0;
+    if (pattern[0] == '^') return (int8_t)(resid_rx_here(pattern + 1, text) != 0);
+    do {
+        if (resid_rx_here(pattern, text)) return 1;
+    } while (*text++);
+    return 0;
+}
+
+/* ── Expectation failure ────────────────────────────────────────────────
+ * `actual`/`expected` are already-rendered strings (ToString output, or the
+ * raw Str for Str comparisons); either may be NULL when the matcher has no
+ * meaningful pair to show, in which case only the method name is reported.
+ * Always terminal: inside a test it unwinds to resid_test_run via the abort
+ * catch, at top level it aborts the process exactly as before. */
+_Noreturn void resid_expect_fail(const char* method, const char* actual, const char* expected) {
+    char buf[RESID_TEST_MSG_MAX];
+    if (actual && expected) {
+        snprintf(buf, sizeof buf,
+                 "expectation failed: %s\n    actual:   %s\n    expected: %s",
+                 method ? method : "?", actual, expected);
+    } else if (actual) {
+        snprintf(buf, sizeof buf, "expectation failed: %s\n    actual:   %s",
+                 method ? method : "?", actual);
+    } else {
+        snprintf(buf, sizeof buf, "expectation failed: %s", method ? method : "?");
+    }
+    if (resid_test_in_test) {
+        snprintf(resid_test_fail_buf, sizeof resid_test_fail_buf, "%s", buf);
+    }
+    /* resid_abort prints `buf` itself on the top-level path, so there is no
+     * separate eprintln here — the message used to be emitted twice. */
+    resid_abort(buf);
+}
+
+/* `expect(closure).toThrow()` (SPEC-testing.md §2.1): call a zero-argument
+ * closure with the abort catch installed and report whether it aborted.
+ * `clo` is the closure value the compiler builds — an i64 array whose slot 0
+ * holds the function pointer and whose address is passed back as the
+ * environment argument, matching cg_fn_call's lowering. */
+int8_t resid_expect_throws(void* clo) {
+    if (!clo) return 0;
+    int64_t fp = ((int64_t*)clo)[0];
+    if (!fp) return 0;
+    void (*fn)(int64_t) = (void (*)(int64_t))(intptr_t)fp;
+
+    sigjmp_buf jb;
+    sigjmp_buf* prev_catch = resid_spawn_catch;
+    const char* prev_msg = resid_spawn_catch_msg;
+    char saved[RESID_TEST_MSG_MAX];
+    int prev_in_test = resid_test_in_test;
+    memcpy(saved, resid_test_fail_buf, sizeof saved);
+
+    int threw = 0;
+    resid_test_in_test = 1;   /* capture any failure text instead of printing it */
+    resid_spawn_catch = &jb;
+    if (setjmp(jb) == 0) {
+        fn((int64_t)(intptr_t)clo);
+    } else {
+        threw = 1;
+    }
+    resid_spawn_catch = prev_catch;
+    resid_spawn_catch_msg = prev_msg;
+    resid_test_in_test = prev_in_test;
+    memcpy(resid_test_fail_buf, saved, sizeof saved);
+    return (int8_t)threw;
+}
+
+/* Should `name` run? RESID_TEST_FILTER is a regex (see resid_regex_match);
+ * an unset or empty filter selects everything. */
+int8_t resid_test_selected(const char* name) {
+    const char* f = getenv("RESID_TEST_FILTER");
+    if (!f || !f[0]) return 1;
+    return resid_regex_match(f, name ? name : "");
+}
+
+/* Emitted once, before any test: the TAP preamble / pretty module header. */
+int8_t resid_test_plan(int64_t n, const char* module) {
+    resid_test_module_name = module ? module : "";
+    switch (resid_test_format()) {
+        case 1:
+            printf("TAP version 13\n1..%lld\n", (long long)n);
+            break;
+        case 2:
+            printf("{\"module\":\"%s\",\"tests\":[", resid_test_module_name);
+            break;
+        default:
+            printf("\n%s\n", resid_test_module_name);
+            break;
+    }
+    fflush(stdout);
+    return 1;
+}
+
+static void resid_test_report(const char* name, int failed, int skipped, double ms) {
+    switch (resid_test_format()) {
+        case 1:
+            if (skipped) {
+                printf("ok %lld %s.%s # SKIP filtered\n",
+                       (long long)resid_test_index, resid_test_module_name, name);
+            } else if (failed) {
+                printf("not ok %lld %s.%s\n",
+                       (long long)resid_test_index, resid_test_module_name, name);
+                printf("  ---\n  message: |\n");
+                for (const char* l = resid_test_fail_buf; *l; ) {
+                    const char* e = strchr(l, '\n');
+                    int len = e ? (int)(e - l) : (int)strlen(l);
+                    printf("    %.*s\n", len, l);
+                    if (!e) break;
+                    l = e + 1;
+                }
+                printf("  ...\n");
+            } else {
+                printf("ok %lld %s.%s\n",
+                       (long long)resid_test_index, resid_test_module_name, name);
+            }
+            break;
+        case 2:
+            printf("%s{\"name\":\"%s\",\"status\":\"%s\",\"duration_ms\":%.3f}",
+                   resid_test_json_first ? "" : ",", name,
+                   skipped ? "skipped" : (failed ? "failed" : "passed"), ms);
+            resid_test_json_first = 0;
+            break;
+        default:
+            if (skipped) {
+                printf("  - %s (skipped)\n", name);
+            } else if (failed) {
+                printf("  \u2717 %s (%.0fms)\n", name, ms);
+                for (const char* l = resid_test_fail_buf; *l; ) {
+                    const char* e = strchr(l, '\n');
+                    int len = e ? (int)(e - l) : (int)strlen(l);
+                    printf("    %.*s\n", len, l);
+                    if (!e) break;
+                    l = e + 1;
+                }
+            } else {
+                printf("  \u2713 %s (%.0fms)\n", name, ms);
+            }
+            break;
+    }
+    fflush(stdout);
+}
+
+/* Run one test body under the abort catch. Returns 1 if it failed. */
+int64_t resid_test_run(void (*body)(void), const char* name) {
+    const char* nm = name ? name : "<unnamed>";
+    resid_test_index++;
+    if (!resid_test_selected(nm)) {
+        resid_test_closure_fn = NULL;
+        resid_test_closure_env = 0;
+        resid_test_skipped++;
+        resid_test_report(nm, 0, 1, 0.0);
+        return 0;
+    }
+    struct timespec t0, t1;
+    sigjmp_buf jb;
+    sigjmp_buf* prev_catch = resid_spawn_catch;
+    const char* prev_msg = resid_spawn_catch_msg;
+    int failed = 0;
+
+    resid_test_fail_buf[0] = '\0';
+    resid_test_in_test = 1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    void (*clo_fn)(int64_t) = resid_test_closure_fn;
+    int64_t clo_env = resid_test_closure_env;
+    resid_test_closure_fn = NULL;
+    resid_test_closure_env = 0;
+    resid_spawn_catch = &jb;
+    if (setjmp(jb) == 0) {
+        if (body) body(); else if (clo_fn) clo_fn(clo_env);
+    } else {
+        failed = 1;
+        if (!resid_test_fail_buf[0]) {
+            snprintf(resid_test_fail_buf, sizeof resid_test_fail_buf, "%s",
+                     resid_spawn_catch_msg ? resid_spawn_catch_msg : "aborted");
+        }
+    }
+    resid_spawn_catch = prev_catch;
+    resid_spawn_catch_msg = prev_msg;
+    resid_test_in_test = 0;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+
+    double ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
+              + (double)(t1.tv_nsec - t0.tv_nsec) / 1000000.0;
+    resid_test_total_ms += ms;
+    if (failed) resid_test_failed++; else resid_test_passed++;
+    resid_test_report(nm, failed, 0, ms);
+    return failed ? 1 : 0;
+}
+
+/* As resid_test_run, but the body is a CLOSURE value rather than a plain
+ * function: slot 0 holds the function pointer and the closure address rides
+ * as the environment argument (SPEC-testing.md §1.3 explicit registration,
+ * where the bodies are lambdas held in a list). */
+int64_t resid_test_run_closure(void* clo, const char* name) {
+    if (!clo) return 1;
+    int64_t fp = ((int64_t*)clo)[0];
+    if (!fp) return 1;
+    resid_test_closure_env = (int64_t)(intptr_t)clo;
+    resid_test_closure_fn = (void (*)(int64_t))(intptr_t)fp;
+    return resid_test_run(NULL, name);
+}
+
+/* Footer; returns the process exit code (0 all passed, 1 any failure). */
+int64_t resid_test_summary(void) {
+    switch (resid_test_format()) {
+        case 1:
+            break;
+        case 2:
+            printf("],\"passed\":%lld,\"failed\":%lld,\"skipped\":%lld,\"duration_ms\":%.3f}\n",
+                   (long long)resid_test_passed, (long long)resid_test_failed,
+                   (long long)resid_test_skipped, resid_test_total_ms);
+            break;
+        default:
+            if (resid_test_skipped) {
+                printf("\nFailures: %lld | Passed: %lld | Skipped: %lld | Duration: %.0fms\n",
+                       (long long)resid_test_failed, (long long)resid_test_passed,
+                       (long long)resid_test_skipped, resid_test_total_ms);
+            } else {
+                printf("\nFailures: %lld | Passed: %lld | Duration: %.0fms\n",
+                       (long long)resid_test_failed, (long long)resid_test_passed,
+                       resid_test_total_ms);
+            }
+            break;
+    }
+    fflush(stdout);
+    return resid_test_failed ? 1 : 0;
 }
 
 /* ── Force-time capability enforcement (spec §21.3) ──────────────────────
@@ -900,6 +1255,11 @@ int64_t resid_list_len(void* b) { return ((ResidList*)b)->count; }
 /* Element `i` of a list (unchecked — callers bounds-check first). */
 void* resid_list_get(void* b, int64_t i) {
     ResidList* v = (ResidList*)b;
+    /* Bounds-checked: pvec_get_raw walks the trie blind, so an out-of-range
+     * index used to return whatever the walk landed on and the caller
+     * segfaulted unboxing it. Spec §24 makes this a force-time abort — which
+     * a test body also catches, so one bad index fails one test. */
+    if (i < 0 || i >= v->count) resid_index_abort(i, v->count, NULL);
     return pvec_get_raw(v->root, v->shift, i);
 }
 
@@ -1633,6 +1993,28 @@ char* ToString(void* boxed) {
     ResidVal* val = (ResidVal*)boxed;
     if (!val || !val->slots) {
         return resid_box_str("null");
+    }
+
+    /* Scalar box (tag -1): the value IS the content, not a container of
+     * slots. Without this case a boxed Int fell through to the struct
+     * branch below and rendered as "i64(...)" — which is what every
+     * expectation diff over a scalar used to show. */
+    if (val->tag == -1) {
+        char s[64];
+        if (val->type && strcmp(val->type, "i128") == 0) {
+            return Int128ToString(resid_unbox_i128(boxed));
+        }
+        if (val->type && strcmp(val->type, "u128") == 0) {
+            return UInt128ToString((unsigned __int128)resid_unbox_i128(boxed));
+        }
+        if (val->type && val->type[0] == 'f') {
+            snprintf(s, sizeof s, "%.17g", resid_unbox_f64(boxed));
+        } else if (val->type && val->type[0] == 'b') {
+            snprintf(s, sizeof s, "%s", resid_unbox_bool(boxed) ? "true" : "false");
+        } else {
+            snprintf(s, sizeof s, "%lld", (long long)resid_unbox_i64(boxed));
+        }
+        return resid_box_str(s);
     }
 
     /* Tag 1 = Some, tag 2 = None (built-in Option). */
@@ -4693,7 +5075,12 @@ static uint64_t resid_hash(void* v) {
         }
         return fnv1a(t ? t : "?");
     }
-    /* Boxed composite — hash its type name. */
+    /* Boxed composite: handle Str specially — hash its content. */
+    if (b->type && strcmp(b->type, "Str") == 0) {
+        const char* s = (const char*)resid_box_slot(v, 0);
+        return fnv1a(s ? s : "");
+    }
+    /* Other boxed composites — hash their type name. */
     return fnv1a(b->type ? b->type : "?");
 }
 
@@ -4722,7 +5109,14 @@ static int resid_key_eq(void* a, void* b) {
             }
             return 0;
         }
-        /* Boxed composites: identical pointer is equal; otherwise not. */
+        /* Boxed composites: handle Str specially — compare content. */
+        if (ba->type && bb->type && strcmp(ba->type, "Str") == 0 && strcmp(bb->type, "Str") == 0) {
+            const char* sa = (const char*)resid_box_slot(a, 0);
+            const char* sb = (const char*)resid_box_slot(b, 0);
+            if (!sa || !sb) return sa == sb;
+            return strcmp(sa, sb) == 0;
+        }
+        /* Other boxed composites: identical pointer is equal; otherwise not. */
         return ba == bb;
     }
     if (!ab && !bb2) {

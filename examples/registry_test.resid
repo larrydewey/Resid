@@ -1,0 +1,20 @@
+// registry_test.resid — SPEC-testing.md §1.3 explicit registration.
+// Unlike a `test "..." { }` file this one has its own main, so it is run
+// directly (`residc examples/registry_test.resid -o t && ./t`) rather than
+// through `residc test`.
+
+import "../lib/testing.resid";
+
+Int add(Int a, Int b) {
+    return a + b;
+}
+
+Int main() {
+    Int base = 10;
+    List(TestCase) cases = [
+        test_case("add: identity", lambda() { expect(add(0, 5)).toEqual(5) }),
+        test_case("add: captures outer scope", lambda() { expect(add(base, 5)).toEqual(15) }),
+        test_case("add: commutativity", lambda() { expect(add(2, 3)).toEqual(add(3, 2)) })
+    ];
+    return run_tests("registry", cases);
+}
