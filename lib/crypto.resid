@@ -305,15 +305,87 @@ pub Str hex_state(List(Int) h, Int i, Str acc) {
 
 // ─── Public entry point ─────────────────────────────────────────
 
+// ─── Streaming string digest ────────────────────────────────────
+// `bytes_of` materializes one list element per character, so hashing a
+// large string costs one recursion frame and one persistent-vector push
+// per byte: a multi-hundred-KB message (e.g. the bootstrap compiler
+// source) overflows the stack before it ever reaches the first block.
+// The helpers below read each 64-byte block straight out of the `Str`,
+// so only the final partial block is ever materialized as a list.
+
+// Same word packing as `bw_acc`, reading bytes from a `Str` instead of a
+// `List(Int)`. `base` is a byte offset into `msg`.
+pub List(Int) bw_acc_str(Str msg, Int base, Int j, List(Int) acc) {
+    if (j >= 16) { return acc; }
+    Int off = base + (j * 4);
+    Int b0 = str_char_at(msg, off);
+    Int b1 = str_char_at(msg, off + 1);
+    Int b2 = str_char_at(msg, off + 2);
+    Int b3 = str_char_at(msg, off + 3);
+    Int sh0 = b0 << 24;
+    Int sh1 = b1 << 16;
+    Int sh2 = b2 << 8;
+    Int or01 = sh0 | sh1;
+    Int or012 = or01 | sh2;
+    Int wv = (or012 | b3) & 4294967295;
+    List(Int) acc2 = acc.concat([wv]);
+    Int nj = j + 1;
+    return bw_acc_str(msg, base, nj, acc2);
+}
+
+pub List(Int) digest_block_str(Str msg, Int base, List(Int) h) {
+    List(Int) first16 = bw_acc_str(msg, base, 0, []);
+    List(Int) w = ext_w(first16, 16);
+    List(Int) hv = sha_rounds(h, w, 0);
+    return add_h(h, hv, 0);
+}
+
+// Digest the whole 64-byte blocks of `msg` in [0, total).
+pub List(Int) digest_blocks_str(Str msg, Int pos, Int total, List(Int) h) {
+    if (pos >= total) { return h; }
+    List(Int) h2 = digest_block_str(msg, pos, h);
+    Int npos = pos + 64;
+    return digest_blocks_str(msg, npos, total, h2);
+}
+
+// Bytes of `msg` in [i, end) as a list. Only ever called for the final
+// partial block, so its recursion depth is at most 63.
+pub List(Int) str_bytes_range(Str msg, Int i, Int end, List(Int) acc) {
+    if (i >= end) { return acc; }
+    Int cp = str_char_at(msg, i);
+    List(Int) acc2 = acc.concat([cp]);
+    Int ni = i + 1;
+    return str_bytes_range(msg, ni, end, acc2);
+}
+
+// `pad_bytes` for a trailing fragment: the 0x80 marker, zero fill and
+// block sizing follow the fragment's own length, but the length suffix
+// must encode the length of the WHOLE message, not just the fragment.
+pub List(Int) pad_tail(List(Int) tail, Int total_len) {
+    Int l = tail.len();
+    List(Int) p = tail.concat([128]);
+    Int l9 = l + 9;
+    Int blocks = (l9 + 63) / 64;
+    Int total = blocks * 64;
+    Int zcount = total - l9;
+    List(Int) p2 = zeros_l(p, zcount);
+    Int bits = total_len * 8;
+    return length_bytes(bits, 7, p2);
+}
+
 pub Str sha256(Str msg) {
     List(Int) h0 = [
         1779033703, -1150833019, 1013904242, -1521486534,
         1359893119, -1694144372, 528734635, 1541459225
     ];
-    List(Int) bytes = bytes_of(msg);
-    List(Int) padded = pad_bytes(bytes);
-    Int total = padded.len();
-    List(Int) hd = digest_blocks(padded, 0, total, h0);
+    Int n = str_len(msg);
+    Int nblocks = n / 64;
+    Int full = nblocks * 64;
+    List(Int) h1 = digest_blocks_str(msg, 0, full, h0);
+    List(Int) tail = str_bytes_range(msg, full, n, []);
+    List(Int) padded = pad_tail(tail, n);
+    Int ptotal = padded.len();
+    List(Int) hd = digest_blocks(padded, 0, ptotal, h1);
     return hex_state(hd, 0, "");
 }
 

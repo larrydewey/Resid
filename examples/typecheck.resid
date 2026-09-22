@@ -564,13 +564,13 @@ RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done,
             Int ni = i + 1;
             return imp_resolve_lines(lines, ni, n, dir, sb, done, depth, depmap);
         }
-        Str full = imp_resolve_target(dir, name, depmap);
-        Str key = ";" + full + ";";
-        RRes sub = if (str_contains(done, key)) {
-            RRes {.text = "", .done = done}
-        } else {
-            imp_resolve_file(full, done, depth, depmap)
-        };
+    Str full = imp_resolve_target(dir, name, depmap);
+    Str key = ";" + full + ";";
+    RRes sub = if (str_contains(done, key)) {
+        RRes {.text = "", .done = done}
+    } else {
+        imp_resolve_file(full, done, depth, depmap)
+    };
         Int ni2 = i + 1;
         Str sb2 = str_sb_append(sb, sub.text);
         return imp_resolve_lines(lines, ni2, n, dir, sb2, sub.done, depth, depmap);
@@ -616,17 +616,22 @@ Bool str_has_prefix(Str s, Str p) {
 // Returns (0, 0) if pos out of range.
 type PosInfo = { Int line; Int col; };
 PosInfo pos_to_line_col(Str s, Int pos) {
-    return pos_to_line_col_rec(s, pos, 0, 1, 1);
-}
-PosInfo pos_to_line_col_rec(Str s, Int pos, Int i, Int line, Int col) {
-    if (i >= pos) { return PosInfo {.line = line, .col = col}; }
     Int n = str_len(s);
-    if (i >= n) { return PosInfo {.line = line, .col = col}; }
-    Int c = str_char_at(s, i);
-    if (c == 10) {
-        return pos_to_line_col_rec(s, pos, i + 1, line + 1, 1);
+    Int p = if (pos > n) { n } else { pos };
+    return pos_to_line_col_rec(s, p, 0, 1);
+}
+// Walks newline to newline, not character to character: one frame per LINE
+// before `pos` rather than one per byte. Reporting an error near the end of a
+// large source used to recurse once for every preceding character, so the
+// compiler died of stack exhaustion instead of printing the diagnostic.
+PosInfo pos_to_line_col_rec(Str s, Int pos, Int start, Int line) {
+    Int nl = str_find_char(s, 10, start);
+    if (nl < 0 || nl >= pos) {
+        return PosInfo {.line = line, .col = pos - start + 1};
     }
-    return pos_to_line_col_rec(s, pos, i + 1, line, col + 1);
+    Int nx = nl + 1;
+    Int l2 = line + 1;
+    return pos_to_line_col_rec(s, pos, nx, l2);
 }
 
 // Recursive string repeat for caret building.
@@ -1144,6 +1149,30 @@ PRes parse_type(Str s, Int pos) {
         Str ty = t.text + "(" + rest.ty + ")";
         return PRes {.pos = rest.pos, .ty = ty, .err = ""};
     }
+    if (t2.text == "closure") {
+        // Closure type: Ret closure(Param1, Param2, ...)
+        Tok t3 = lex_tok(s, t2.pos);
+        if (t3.text != "(") {
+            return PRes {.pos = t3.pos, .ty = "", .err = "expected ( after closure"};
+        }
+        // `Void closure()` — no parameter types at all.
+        Tok empty = lex_tok(s, t3.pos);
+        if (empty.text == ")") {
+            return PRes {.pos = empty.pos, .ty = t.text + " closure()", .err = ""};
+        }
+        PRes first = parse_type_arg(s, t3.pos);
+        if (first.err != "") { return first; }
+        // `parse_type_args_rest` consumes the closing `)` itself and hands
+        // back the position AFTER it, exactly as the generic `Name(...)`
+        // branch above relies on — so there is no separate `)` to lex here.
+        // Re-lexing one produced "expected ) in closure parameter list" for
+        // every well-formed closure type, which in turn left the parameter
+        // TYPE list one entry short of the parameter NAME list.
+        PRes rest = parse_type_args_rest(s, first.pos, first.ty);
+        if (rest.err != "") { return rest; }
+        Str ty = t.text + " closure(" + rest.ty + ")";
+        return PRes {.pos = rest.pos, .ty = ty, .err = ""};
+    }
     return PRes {.pos = t.pos, .ty = t.text, .err = ""};
 }
 
@@ -1167,13 +1196,16 @@ ERes check_struct_lit_rest(Str s, Int pos, Str ty, List(Str) env, Funcs fs) {
     if (eq.text != "=") {
         return ERes {.pos = eq.pos, .ty = "", .err = "expected = in struct literal"};
     }
-    ERes v = check_expr(s, eq.pos, env, fs);
-    if (v.err != "") { return v; }
+    // Resolve the field's declared type BEFORE checking the value: it is the
+    // expected type the value is checked against, and a lambda literal has no
+    // type of its own without one.
     Str ft = struct_field_type(fs, ty, f.text);
     if (ft == "") {
         Str msg = "unknown field " + f.text + " in " + ty;
         return ERes {.pos = f.pos, .ty = "", .err = msg};
     }
+    ERes v = check_expr_e(s, eq.pos, env, fs, ft);
+    if (v.err != "") { return v; }
     Bool vempty = v.ty == "List(Unknown)";
     Bool fint = is_num(ft) && is_num(v.ty);
     Bool fok = fint && int_adopt_ok(v.ty, ft, "");
@@ -1432,6 +1464,78 @@ Bool is_list_type(Str t) {
 
 Bool is_opt_ty(Str t) {
     return t == "Option(_)" || str_has_prefix(t, "Option(");
+}
+
+// The test framework's Expect container (SPEC-testing.md §5): a builtin
+// generic value holder, `Expect(T)` — analogous to Option(T). Defined in
+// both halves; tools/merge_driver.py keeps the codegen (base) copy.
+Bool is_expect_type(Str t) {
+    return str_has_prefix(t, "Expect(");
+}
+
+// "Expect(X)" -> "X" (element type of a concrete Expect container).
+Str expect_elem(Str t) {
+    Str head = "Expect(";
+    Int h = str_len(head);
+    if (str_has_prefix(t, head)) {
+        Int n = str_len(t);
+        Int inner_len = n - h - 1;
+        Int hn = h + inner_len;
+        return str_trim(str_slice(t, h, hn));
+    }
+    return t;
+}
+
+// ─── Fn(...)->R function values (SPEC-testing.md §1.2) ──────────────
+// `Fn(A, B) -> R` is a first-class value type: a closure literal `|a, b| e`
+// conforms when a Fn(...)->R type is expected, and a Fn-typed value is
+// callable via an indirect call (closure struct = { fn ptr; captured slots }).
+Bool is_fn_type(Str t) {
+    return str_contains(t, " closure(");
+}
+
+// "Int closure(A, B)" -> "Int" (return type before " closure(").
+Str fn_ret(Str t) {
+    Int i = str_find(t, " closure(");
+    if (i < 0) { return ""; }
+    return str_trim(str_slice(t, 0, i));
+}
+
+// "Int closure(A, B)" -> "A, B" (the text between "closure(" and ")").
+// `parse_type` builds a closure type as `<ret> closure(<params>)`, so the
+// parameter list runs to the final character. Scanning forward for the first
+// ")" instead would stop inside a nested type like `List(Str)` — and the call
+// that did so passed four arguments to the five-parameter `str_find_at`, which
+// simply reported "not found" and left every closure with no parameters.
+Str fn_inner(Str t) {
+    Int i = str_find(t, " closure(");
+    if (i < 0) { return ""; }
+    Int start = i + 9;
+    Int end = str_len(t) - 1;
+    if (end < start) { return ""; }
+    return str_slice(t, start, end);
+}
+
+// Not used for this syntax; kept for compatibility.
+Int fn_arrow_idx(Str t, Int i) {
+    return -1;
+}
+
+// Parameter types of a Fn type as a list (empty for `Fn() -> R`).
+List(Str) fn_param_list(Str fnty) {
+    Str inner = fn_inner(fnty);
+    if (inner == "") { return funcs_empty().names; }
+    List(Str) parts = split_type_list(inner, 0, 0, 0, "", funcs_empty().names);
+    Int n = parts.len();
+    return if (parts[n - 1] == "") { re_drop_last(parts, 0, n - 1, funcs_empty().names) } else { parts };
+}
+
+// parts[0..n) — drop the trailing "" that split_type_list appends.
+List(Str) re_drop_last(List(Str) parts, Int i, Int n, List(Str) out) {
+    if (i >= n) { return out; }
+    List(Str) o2 = out.concat([parts[i]]);
+    Int i2 = i + 1;
+    return re_drop_last(parts, i2, n, o2);
 }
 
 // Result type helpers.
@@ -1888,6 +1992,27 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_cpu_has_aesni expects no arguments"};
     }
+    // Test-runner entry points (SPEC-testing.md §1.3 explicit registration).
+    if (name == "resid_test_plan") {
+        if (builtin_args(argtys, "Int,Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_test_plan expects (Int, Str), got (" + argtys + ")"};
+    }
+    if (name == "resid_test_run_closure") {
+        if (builtin_args(argtys, "Void closure(),Str")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_test_run_closure expects (Void closure(), Str), got (" + argtys + ")"};
+    }
+    if (name == "resid_test_summary") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_test_summary expects no arguments"};
+    }
+    if (name == "resid_quiet") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_quiet expects no arguments"};
+    }
+    if (name == "resid_quiet_set") {
+        if (argtys == "Bool") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_quiet_set expects (Bool), got (" + argtys + ")"};
+    }
     if (name == "aesni_enc_round" || name == "aesni_enc_last_round") {
         if (argtys == "UInt(128),UInt(128)") { return ERes {.pos = pos, .ty = "UInt(128)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (UInt(128), UInt(128)), got (" + argtys + ")"};
@@ -1944,6 +2069,12 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
             return ERes {.pos = pos, .ty = "Result(_, " + argtys + ")", .err = ""};
         }
         return ERes {.pos = pos, .ty = "", .err = "Err expects 1 argument"};
+    }
+    // ── Expect constructor (test framework, SPEC-testing.md §5) ────
+    // `expect(v)` carries its payload type: `expect(5)` -> Expect(Int).
+    if (name == "expect") {
+        if (argc == 1) { return ERes {.pos = pos, .ty = "Expect(" + argtys + ")", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "expect expects 1 argument"};
     }
     return ERes {.pos = pos, .ty = "", .err = "unknown function " + name};
 }
@@ -2046,6 +2177,26 @@ ARes collect_args(Str s, Int pos, Str acc, Int count, List(Str) env, Funcs fs) {
     }
     Int c2 = count + 1;
     return ARes {.pos = t.pos, .tys = acc3, .count = c2, .err = ""};
+}
+
+// Method sugar for user functions (receiver.m(args) => m(receiver, args)):
+// collect the explicit args after the receiver, expected-typed against the
+// callee's params[1..] (the receiver occupies param slot 0).
+ARes collect_method_args(Str s, Int pos, Str mpts, Str acc, Int count, List(Str) env, Funcs fs) {
+    Str want = ty_list_at(mpts, count);
+    ERes a = check_expr_e(s, pos, env, fs, want);
+    if (a.err != "") {
+        return ARes {.pos = a.pos, .tys = acc, .count = count, .err = a.err};
+    }
+    Str sep = if (acc != "") { "," } else { "" };
+    Str acc2 = acc + sep + a.ty;
+    Tok t = lex_tok(s, a.pos);
+    if (t.text == ",") {
+        Int c2 = count + 1;
+        return collect_method_args(s, t.pos, mpts, acc2, c2, env, fs);
+    }
+    Int c2 = count + 1;
+    return ARes {.pos = t.pos, .tys = acc2, .count = c2, .err = ""};
 }
 
 // Strip leading Reverse(...) wrappers: ty=inner text, pos=layer count.
@@ -2167,6 +2318,103 @@ ERes check_call(Str s, Int pos, Str name, List(Str) env, Funcs fs) {
         return ERes {.pos = a.pos, .ty = "", .err = a.err};
     }
     return finish_call(s, a.pos, name, a.tys, a.count, env, fs);
+}
+
+// Call through a Fn-value (closures and Fn-typed struct fields): the callee
+// type is `fnty`, not a named function, so typing mirrors check_call but the
+// parameter list comes from the Fn declaration.
+ERes check_fn_call(Str s, Int pos, Str fnty, List(Str) env, Funcs fs) {
+    List(Str) pl = fn_param_list(fnty);
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") {
+        Str ret = fn_ret(fnty);
+        return ERes {.pos = t.pos, .ty = ret, .err = ""};
+    }
+    Funcs fs2 = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = pl, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
+    ARes a = collect_args(s, pos, "", 0, env, fs2);
+    if (a.err != "") {
+        return ERes {.pos = a.pos, .ty = "", .err = a.err};
+    }
+    Bool acc = params_accept(fn_inner(fnty), a.tys, a.count);
+    if (!acc) {
+        Str msg = "closure call expects (" + fn_inner(fnty) + "), got (" + a.tys + ")";
+        return ERes {.pos = a.pos, .ty = "", .err = msg};
+    }
+    Str ret = fn_ret(fnty);
+    return ERes {.pos = a.pos, .ty = ret, .err = ""};
+}
+
+// Consume a closure literal `|a, b| expr` (or `|| { ... }`). `exp` is the
+// expected Fn(...)->R type (threaded from the call/binding site). Binds the
+// parameter names to the Fn declaration's parameter types, then checks the
+// body against the return type.
+ERes check_lambda(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
+    if (!is_fn_type(exp)) {
+        return ERes {.pos = pos, .ty = "", .err = "closure literal needs a closure(..) expected type"};
+    }
+    List(Str) pl = fn_param_list(exp);
+    Int env0 = env.len();
+    // Expect "lambda" already consumed; next token should be "("
+    Tok lpar = lex_tok(s, pos);
+    if (lpar.text != "(") {
+        return ERes {.pos = lpar.pos, .ty = "", .err = "expected ( after lambda"};
+    }
+    SRes ps = check_lambda_pnames(s, lpar.pos, pl, 0, env);
+    if (ps.err != "") {
+        return ERes {.pos = ps.pos, .ty = "", .err = ps.err};
+    }
+    Int consumed = ps.env.len() - env0;
+    // `check_lambda_pnames` stops AFTER the closing ")", so the next token is
+    // the body's "{" — lexing another ")" here rejected every lambda literal.
+    Tok body_tok = lex_tok(s, ps.pos);
+    if (body_tok.text != "{") {
+        return ERes {.pos = body_tok.pos, .ty = "", .err = "expected { after lambda parameter list"};
+    }
+    ERes body = check_expr_block(s, body_tok.pos, ps.env, fs);
+    if (body.err != "") { return body; }
+    // `check_expr_block` stops AT the closing "}" (the if-expression arms
+    // above rely on the same convention), so the lambda consumes it here.
+    Tok body_close = lex_tok(s, body.pos);
+    if (body_close.text != "}") {
+        return ERes {.pos = body_close.pos, .ty = "", .err = "expected } to close lambda body"};
+    }
+    Str ret = fn_ret(exp);
+    Bool ty_ok = body.ty == ret;
+    Bool num_adopt = is_num(body.ty) && is_num(ret) && int_adopt_ok(body.ty, ret, "");
+    if (!ty_ok && !num_adopt) {
+        Str msg = "closure body returns " + body.ty + ", expected " + ret;
+        return ERes {.pos = body.pos, .ty = "", .err = msg};
+    }
+    Bool arity_ok = consumed == pl.len();
+    if (!arity_ok) {
+        Str msg = "closure has " + IntToString(consumed) + " parameter(s), expected " + IntToString(pl.len());
+        return ERes {.pos = body.pos, .ty = "", .err = msg};
+    }
+    return ERes {.pos = body_close.pos, .ty = exp, .err = ""};
+}
+
+// Bind `lambda(x, y)` parameter names to the closure's parameter types in order.
+SRes check_lambda_pnames(Str s, Int pos, List(Str) pl, Int i, List(Str) env) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") {
+        return SRes {.pos = t.pos, .err = "", .env = env};
+    }
+    if (t.kind != "ident") {
+        return SRes {.pos = t.pos, .err = "expected lambda parameter name", .env = env};
+    }
+    if (i >= pl.len()) {
+        return SRes {.pos = t.pos, .err = "too many lambda parameters", .env = env};
+    }
+    List(Str) env2 = env_add(env, t.text, pl[i]);
+    Int i2 = i + 1;
+    Tok next = lex_tok(s, t.pos);
+    if (next.text == ")") {
+        return SRes {.pos = next.pos, .err = "", .env = env2};
+    }
+    if (next.text != ",") {
+        return SRes {.pos = next.pos, .err = "expected , or ) in lambda parameter list", .env = env};
+    }
+    return check_lambda_pnames(s, next.pos, pl, i2, env2);
 }
 
 // elem: element type seen so far ("" until first element). count: elements
@@ -2324,6 +2572,9 @@ ERes check_set_lit_rest(Str s, Int pos, Str elem, List(Str) env, Funcs fs) {
 
 ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
     Tok t = lex_tok(s, base.pos);
+    if (t.text == "(" && is_fn_type(base.ty)) {
+        return check_fn_call(s, t.pos, base.ty, env, fs);
+    }
     if (t.text == "[") {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "..") {
@@ -2554,6 +2805,207 @@ ERes check_postfix(Str s, ERes base, List(Str) env, Funcs fs) {
                 Str msg = "unsupported method " + f.text + " on Set(" + et + ")";
                 return ERes {.pos = p.pos, .ty = "", .err = msg};
             }
+            // ─── Expect methods (SPEC-testing.md §5) ─────────────
+            // Receiver is a builtin Expect(T) container: methods are
+            // statically typed against the container's element type T,
+            // mirroring the Map/Set builtin methods above.
+            if (is_expect_type(base.ty)) {
+                Str et = expect_elem(base.ty);
+                if (f.text == "toEqual" || f.text == "toBe" || f.text == "toNotEqual") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Bool acc = params_accept(et, arg.ty, 1);
+                    if (!acc) {
+                        Str msg = "call " + f.text + " expects (" + et + "), got (" + arg.ty + ")";
+                        return ERes {.pos = arg.pos, .ty = "", .err = msg};
+                    }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (close.text != ")") {
+                        return ERes {.pos = close.pos, .ty = "", .err = f.text + " takes 1 argument"};
+                    }
+                    ERes out = ERes {.pos = close.pos, .ty = "Void", .err = ""};
+                    return check_postfix(s, out, env, fs);
+                }
+                if (f.text == "toBeTrue" || f.text == "toBeFalse") {
+                    Tok close = lex_tok(s, p.pos);
+                    if (close.text != ")") {
+                        return ERes {.pos = close.pos, .ty = "", .err = f.text + " takes no arguments"};
+                    }
+                    if (et != "Bool") {
+                        Str msg = f.text + " expects Expect(Bool), got " + base.ty;
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
+                    }
+                    ERes out = ERes {.pos = close.pos, .ty = "Void", .err = ""};
+                    return check_postfix(s, out, env, fs);
+                }
+                if (f.text == "toHaveLength") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Bool isheap = str_has_prefix(et, "List(") && !is_list_fixed(et);
+                    Bool isstr = et == "Str";
+                    if (!isheap && !isstr) {
+                        Str msg = "toHaveLength expects Expect(List(T)) or Expect(Str), got " + base.ty;
+                        return ERes {.pos = arg.pos, .ty = "", .err = msg};
+                    }
+                    Tok close2 = lex_tok(s, arg.pos);
+                    if (arg.ty != "Int") {
+                        Str msg = "toHaveLength expects an Int length, got " + arg.ty;
+                        return ERes {.pos = close2.pos, .ty = "", .err = msg};
+                    }
+                    if (close2.text != ")") {
+                        return ERes {.pos = close2.pos, .ty = "", .err = "toHaveLength takes 1 argument"};
+                    }
+                    ERes out = ERes {.pos = close2.pos, .ty = "Void", .err = ""};
+                    return check_postfix(s, out, env, fs);
+                }
+                if (f.text == "toBeCloseTo") {
+                    ERes e2 = check_expr(s, p.pos, env, fs);
+                    if (e2.err != "") { return e2; }
+                    Tok comma2 = lex_tok(s, e2.pos);
+                    if (comma2.text != ",") {
+                        Str msg = "toBeCloseTo expects (Float, Int), got (" + e2.ty + ")";
+                        return ERes {.pos = comma2.pos, .ty = "", .err = msg};
+                    }
+                    ERes pr2 = check_expr(s, comma2.pos, env, fs);
+                    if (pr2.err != "") { return pr2; }
+                    Bool etf = et == "Float" || str_has_prefix(et, "Float(");
+                    Bool e2f = e2.ty == "Float" || str_has_prefix(e2.ty, "Float(");
+                    if (!etf || !e2f || pr2.ty != "Int") {
+                        Str msg = "toBeCloseTo expects Expect(Float), arg (Float, Int), got " + base.ty + " and (" + e2.ty + ", " + pr2.ty + ")";
+                        return ERes {.pos = pr2.pos, .ty = "", .err = msg};
+                    }
+                    Tok close3 = lex_tok(s, pr2.pos);
+                    if (close3.text != ")") {
+                        return ERes {.pos = close3.pos, .ty = "", .err = "toBeCloseTo takes 2 arguments"};
+                    }
+                    ERes out = ERes {.pos = close3.pos, .ty = "Void", .err = ""};
+                    return check_postfix(s, out, env, fs);
+                }
+                // `toBeNull()` — the Option is None (SPEC-testing.md §2.1).
+                if (f.text == "toBeNull") {
+                    Tok close = lex_tok(s, p.pos);
+                    if (close.text != ")") {
+                        return ERes {.pos = close.pos, .ty = "", .err = "toBeNull takes no arguments"};
+                    }
+                    if (!str_has_prefix(et, "Option(")) {
+                        Str msg = "toBeNull expects Expect(Option(T)), got " + base.ty;
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
+                    }
+                    ERes out = ERes {.pos = close.pos, .ty = "Void", .err = ""};
+                    return check_postfix(s, out, env, fs);
+                }
+                // `toContain(item)` — membership in a List(T) or Set(T).
+                if (f.text == "toContain") {
+                    Bool clist = str_has_prefix(et, "List(") && !is_list_fixed(et);
+                    Bool cset = is_set_type(et);
+                    if (!clist && !cset) {
+                        Str msg = "toContain expects Expect(List(T)) or Expect(Set(T)), got " + base.ty;
+                        return ERes {.pos = p.pos, .ty = "", .err = msg};
+                    }
+                    Str cet = if (cset) { set_elem_type(et) } else { inner_of(et) };
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    Bool cacc = params_accept(cet, arg.ty, 1);
+                    if (!cacc) {
+                        Str msg = "toContain expects (" + cet + "), got (" + arg.ty + ")";
+                        return ERes {.pos = arg.pos, .ty = "", .err = msg};
+                    }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (close.text != ")") {
+                        return ERes {.pos = close.pos, .ty = "", .err = "toContain takes 1 argument"};
+                    }
+                    ERes out = ERes {.pos = close.pos, .ty = "Void", .err = ""};
+                    return check_postfix(s, out, env, fs);
+                }
+                // `toMatch(pattern)` — regex over a Str. The runtime engine is
+                // a documented subset (^ $ . * + ? and [] classes), not PCRE.
+                if (f.text == "toMatch") {
+                    ERes arg = check_expr(s, p.pos, env, fs);
+                    if (arg.err != "") { return arg; }
+                    if (et != "Str") {
+                        Str msg = "toMatch expects Expect(Str), got " + base.ty;
+                        return ERes {.pos = arg.pos, .ty = "", .err = msg};
+                    }
+                    if (arg.ty != "Str") {
+                        Str msg = "toMatch expects a Str pattern, got " + arg.ty;
+                        return ERes {.pos = arg.pos, .ty = "", .err = msg};
+                    }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (close.text != ")") {
+                        return ERes {.pos = close.pos, .ty = "", .err = "toMatch takes 1 argument"};
+                    }
+                    ERes out = ERes {.pos = close.pos, .ty = "Void", .err = ""};
+                    return check_postfix(s, out, env, fs);
+                }
+                // `toThrow()` — the receiver is a zero-argument closure; the
+                // assertion holds when calling it aborts.
+                if (f.text == "toThrow") {
+                    Tok close = lex_tok(s, p.pos);
+                    if (close.text != ")") {
+                        return ERes {.pos = close.pos, .ty = "", .err = "toThrow takes no arguments"};
+                    }
+                    if (!is_fn_type(et)) {
+                        Str msg = "toThrow expects Expect(Ret closure()), got " + base.ty;
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
+                    }
+                    if (fn_param_list(et).len() != 0) {
+                        Str msg = "toThrow expects a zero-argument closure, got " + et;
+                        return ERes {.pos = close.pos, .ty = "", .err = msg};
+                    }
+                    ERes out = ERes {.pos = close.pos, .ty = "Void", .err = ""};
+                    return check_postfix(s, out, env, fs);
+                }
+                // `toSatisfy(predicate)` — SPEC-testing.md §2.3. The custom
+                // matcher the other §2.3 examples (toBeSorted, ...) are
+                // expressible in, now that closures carry a value type.
+                if (f.text == "toSatisfy") {
+                    Str want = "Bool closure(" + et + ")";
+                    ERes arg = check_expr_e(s, p.pos, env, fs, want);
+                    if (arg.err != "") { return arg; }
+                    if (arg.ty != want) {
+                        Str msg = "toSatisfy expects (" + want + "), got (" + arg.ty + ")";
+                        return ERes {.pos = arg.pos, .ty = "", .err = msg};
+                    }
+                    Tok close = lex_tok(s, arg.pos);
+                    if (close.text != ")") {
+                        return ERes {.pos = close.pos, .ty = "", .err = "toSatisfy takes 1 argument"};
+                    }
+                    ERes out = ERes {.pos = close.pos, .ty = "Void", .err = ""};
+                    return check_postfix(s, out, env, fs);
+                }
+                Str msg = "unsupported method " + f.text + " on " + base.ty;
+                return ERes {.pos = p.pos, .ty = "", .err = msg};
+            }
+            // ─── User-function method sugar ─────────────────────
+            // receiver.m(args) desugars to m(receiver, args): the receiver
+            // is arg slot 0, so its type must match the callee's first
+            // parameter. Reached only when no builtin method matched above.
+            Int mfidx = fn_index(fs, f.text);
+            if (mfidx >= 0) {
+                Tok mpeek = lex_tok(s, p.pos);
+                if (mpeek.text == ")") {
+                    ERes mfin0 = finish_call(s, mpeek.pos, f.text, base.ty, 1, env, fs);
+                    if (mfin0.err != "") { return mfin0; }
+                    return check_postfix(s, mfin0, env, fs);
+                }
+                Str mpts = fs.pts[mfidx];
+                ARes mca = collect_method_args(s, p.pos, mpts, "", 1, env, fs);
+                if (mca.err != "") {
+                    return ERes {.pos = mca.pos, .ty = "", .err = mca.err};
+                }
+                Str full = if (mca.tys == "") { base.ty } else { base.ty + "," + mca.tys };
+                ERes mfin = finish_call(s, mca.pos, f.text, full, mca.count, env, fs);
+                if (mfin.err != "") { return mfin; }
+                return check_postfix(s, mfin, env, fs);
+            }
+            // `receiver.field(args)` where `field` HOLDS a closure: an
+            // indirect call through the field's value, not method sugar.
+            Str cfty = struct_field_type(fs, base.ty, f.text);
+            if (cfty != "" && is_fn_type(cfty)) {
+                ERes cfin = check_fn_call(s, p.pos, cfty, env, fs);
+                if (cfin.err != "") { return cfin; }
+                return check_postfix(s, cfin, env, fs);
+            }
             Str msg = "unsupported method " + f.text;
             return ERes {.pos = p.pos, .ty = "", .err = msg};
         }
@@ -2741,9 +3193,16 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
     if (t.text == "match") {
         return check_match(s, t.pos, env, fs);
     }
+    if (t.text == "lambda") {
+        return check_lambda(s, t.pos, env, fs, exp);
+    }
     if (t.kind == "ident") {
         Tok t2 = lex_tok(s, t.pos);
         if (t2.text == "(") {
+            Str lty = env_lookup(env, t.text);
+            if (lty != "" && is_fn_type(lty)) {
+                return check_fn_call(s, t2.pos, lty, env, fs);
+            }
             Bool is_ctor = t.text == "Ok" || t.text == "Err" || t.text == "Some" || t.text == "None";
             Funcs fs2 = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = if (is_ctor && exp != "") { [exp] } else { fs.exp_tys }, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
             return check_call(s, t2.pos, t.text, env, fs2);
@@ -3554,6 +4013,17 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
                 return SRes {.pos = semi.pos, .err = "", .env = env};
             }
         }
+        // Try parsing a type first (handles complex types like Int closure(Int))
+        PRes ty = parse_type(s, pos);
+        if (ty.err == "") {
+            Tok name = lex_tok(s, ty.pos);
+            if (name.kind == "ident") {
+                Tok eq = lex_tok(s, name.pos);
+                if (eq.text == "=") {
+                    return check_bind(s, eq.pos, ty.ty, name.text, env, fs, ret);
+                }
+            }
+        }
         Tok t2 = lex_tok(s, t.pos);
         if (t2.kind == "ident") {
             Tok t3 = lex_tok(s, t2.pos);
@@ -3617,7 +4087,7 @@ SRes check_params(Str s, Int pos, Str fname, Str rty, List(Str) env, Funcs fs) {
     if (body.err != "") {
         return SRes {.pos = body.pos, .err = body.err, .env = env2};
     }
-    println("OK func " + fname);
+    if (!resid_quiet()) { println("OK func " + fname); }
     return SRes {.pos = body.pos, .err = "", .env = env2};
 }
 
@@ -3652,7 +4122,7 @@ DRes check_func(Str s, Int pos, Funcs fs) {
         if (body.err != "") {
             return DRes {.pos = body.pos, .err = body.err, .name = name.text};
         }
-        println("OK func " + name.text);
+        if (!resid_quiet()) { println("OK func " + name.text); }
         return DRes {.pos = body.pos, .err = "", .name = name.text};
     }
     SRes body = check_params(s, open.pos, name.text, rbase, env0, fs);
@@ -4160,6 +4630,14 @@ Map(Str, Int) analyze_growable_params_for_fn(Funcs fs, Int fi, Map(Str, Int) acc
 
 Map(Str, Int) analyze_growable_params_rec(Funcs fs, Int fi, List(Str) tys, List(Str) names, Int pidx, Int n, Map(Str, Int) acc) {
     if (pidx >= n) { return acc; }
+    // The type list and the name list are collected by two separate walks
+    // (`ck_collect_ptypes` and `collect_pnames`), which disagree on how they
+    // recover from a type they cannot parse. A parse failure therefore leaves
+    // one list shorter than the other; indexing past its end used to abort the
+    // whole compiler with a SIGSEGV out of `resid_list_get` rather than
+    // reporting the underlying type error. Growable analysis is an
+    // optimization, so simply decline to classify what it cannot see.
+    if (pidx >= names.len()) { return acc; }
     Map(Str, Int) acc2 = if (is_growable_param(fs, fi, tys[pidx], names[pidx], pidx)) {
         acc.insert(growable_key(fs.names[fi], pidx), 1)
     } else {
@@ -4215,6 +4693,42 @@ Int t2_pos_after_open(Str s, Tok open) {
     return open.pos;
 }
 
+Str first_dup_name(List(Str) names) {
+    List(Str) seen = [];
+    return dup_from_list(names, 0, seen);
+}
+
+Str dup_from_list(List(Str) names, Int i, List(Str) seen) {
+    Int n = names.len();
+    if (i >= n) {
+        return "";
+    }
+    Str nm = names[i];
+    if (names_has_str(seen, nm)) {
+        return nm;
+    }
+    List(Str) seen2 = seen.concat([nm]);
+    Int i2 = i + 1;
+    return dup_from_list(names, i2, seen2);
+}
+
+// Named `names_has_str`, not `list_contains_str`: the latter is a runtime
+// builtin, and a user function of that name collides with its declaration
+// in the emitted IR.
+Bool names_has_str(List(Str) xs, Str x) {
+    Int n = xs.len();
+    Int i = 0;
+    return names_has_str_at(xs, x, i, n);
+}
+
+Bool names_has_str_at(List(Str) xs, Str x, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (xs[i] == x) { return true; }
+    Int k = i + 1;
+    return names_has_str_at(xs, x, k, n);
+}
+
+// dup_from: kept for compatibility but unused
 Str dup_from(List(Str) names, Int i, Map(Str, Int) seen) {
     Int n = names.len();
     if (i >= n) {
@@ -4227,11 +4741,6 @@ Str dup_from(List(Str) names, Int i, Map(Str, Int) seen) {
     Map(Str, Int) seen2 = seen.insert(nm, i);
     Int i2 = i + 1;
     return dup_from(names, i2, seen2);
-}
-
-Str first_dup_name(List(Str) names) {
-    Map(Str, Int) empty = {"__EMPTY__": -1};
-    return dup_from(names, 0, empty);
 }
 
 // ─── Sandbox enforcement (spec §21.3) ───────────────────────────
@@ -4830,7 +5339,7 @@ Int finish_check(Funcs fs) {
     Bool err2 = e0211_check_all(fs, eff, edges, 0);
     Bool err3 = e0218_check_all(fs, eff, pcsv, 0);
     if (err1 || err2 || err3) { return 1; }
-    println("typecheck OK");
+    if (!resid_quiet()) { println("typecheck OK"); }
     return 0;
 }
 
@@ -4866,12 +5375,12 @@ Int check_decls(Str s, Int pos, Funcs fs) {
     }
     if (t.text == "type") {
         Int end = skip_decl(s, t.pos, 0);
-        println("OK type def");
+        if (!resid_quiet()) { println("OK type def"); }
         return check_decls(s, end, fs);
     }
     if (t.text == "import") {
         Int end = skip_decl(s, t.pos, 0);
-        println("OK import");
+        if (!resid_quiet()) { println("OK import"); }
         return check_decls(s, end, fs);
     }
     if (t.text == "pub") {
@@ -4879,7 +5388,7 @@ Int check_decls(Str s, Int pos, Funcs fs) {
         if (bh.err == "") {
             Int v = validate_behavior(fs, bh);
             if (v != 0) { return 1; }
-            println("OK behavior " + bh.name);
+            if (!resid_quiet()) { println("OK behavior " + bh.name); }
             return check_decls(s, bh.pos, fs);
         }
         Tok t2 = lex_tok(s, t.pos);
@@ -4902,7 +5411,7 @@ Int check_decls(Str s, Int pos, Funcs fs) {
         if (bh2.err == "") {
             Int v2 = validate_behavior(fs, bh2);
             if (v2 != 0) { return 1; }
-            println("OK behavior " + bh2.name);
+            if (!resid_quiet()) { println("OK behavior " + bh2.name); }
             return check_decls(s, bh2.pos, fs);
         }
         DRes d = check_func(s, pos, fs);

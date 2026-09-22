@@ -1,0 +1,19 @@
+// simple_test.resid — the same checks the old stub-library version made,
+// written against the real API.
+//
+// The previous version called expect_i/toEqual_i/expect_b/... from the stub
+// half of lib/testing.resid. Those functions had empty bodies, so the file
+// asserted nothing — it passed whatever the values were. The matchers are
+// compiler builtins now, and they are type-checked against the payload type
+// of Expect(T), so the wrong comparison is a compile error.
+
+import "../lib/testing.resid";
+
+Int main() {
+    List(TestCase) cases = [
+        test_case("int equality",    lambda() { expect(2 + 2).toEqual(4) }),
+        test_case("bool is true",    lambda() { expect(true).toBeTrue() }),
+        test_case("string equality", lambda() { expect("hello").toEqual("hello") })
+    ];
+    return run_tests("simple", cases);
+}

@@ -441,31 +441,60 @@ residc test --coverage
 
 ## 10. Implementation Phases
 
-### Phase 1: Core (Week 1-2)
-- [ ] Test syntax parsing (inline blocks, test files)
-- [ ] Explicit registration runtime
-- [ ] Fluent `expect()` assertions with basic diffs
-- [ ] Comptime test collection
-- [ ] `residc test` command skeleton
+### Phase 1: Core (Week 1-2) — DONE
+- [x] Test syntax parsing (inline blocks, test files) — `test "name" { ... }`
+      is rewritten to a plain declaration before any other pass runs
+      (`td_desugar`, examples/codegen.resid); the rewrite never adds or
+      removes a newline, so diagnostics keep their line numbers.
+- [x] Explicit registration runtime — `TestCase`/`test_case`/`run_tests` in
+      lib/testing.resid, bodies held as zero-argument closures. Registration
+      does NOT use a mutable global registry as §1.3 sketches: the language
+      has no mutable globals, so the case list is ordinary data the caller
+      passes to `run_tests`.
+- [x] Fluent `expect()` assertions with basic diffs — the full §2.1 matcher
+      set plus §2.3's `toSatisfy`; failures report actual vs expected.
+- [x] Comptime test collection — discovery happens in the compiler, which
+      emits the `main` that runs what it found (§4.1's `test_main`).
+- [x] `residc test` command — `--filter`, `--format pretty|tap|json`, and
+      §7.2 exit codes 0/1/2.
 
-### Phase 2: Property Testing (Week 2-3)
+Phase 1 deviations from the spec as written, all forced by the language:
+- Spec examples are in a Rust-flavoured syntax (`fn`, `|a, b|`, `var`,
+  `Expect[T]`). The implementation uses Resid syntax: `lambda(a, b) { ... }`,
+  `Ret closure(Args)`, `type T = { ... };`.
+- `toThrow()` takes no error-type argument (§2.1 shows `toThrow(error_type)`):
+  Resid has no exception types, so the matcher asserts only that calling the
+  receiver aborted.
+- `toMatch` uses a documented regex SUBSET — `^ $ . * + ? [...]` with ranges
+  and negation. No alternation, groups or backreferences.
+- Per-test isolation is an abort catch, not a process or thread boundary, so
+  a test that corrupts memory still takes the runner down with it.
+
+### Phase 2: Property Testing (Week 2-3) — NOT STARTED
 - [ ] Generator library (`gen_int`, `gen_list`, combinators)
 - [ ] Shrinking algorithm
 - [ ] Property runner with config
 - [ ] Integration with test registration
 
-### Phase 3: Runner & Sandbox (Week 3-4)
-- [ ] Parallel/sequential execution
+### Phase 3: Runner & Sandbox (Week 3-4) — PARTIAL
+- [ ] Parallel/sequential execution (runs sequentially; §11's deterministic
+      alphabetical ordering is also not implemented — tests run in source
+      order)
 - [ ] Sandbox per test (capability integration)
-- [ ] Timeout handling
-- [ ] Rich output formats (pretty, TAP, JUnit, JSON)
+- [ ] Timeout handling (so exit code 124 is never produced)
+- [x] Output formats: pretty, TAP, JSON. JUnit XML is not implemented.
 
-### Phase 4: Snapshots & Polish (Week 4-5)
+### Phase 4: Snapshots & Polish (Week 4-5) — PARTIAL
 - [ ] Snapshot testing with diffs
 - [ ] `--update-snapshots` flag
-- [ ] Filtering (name, tags, module)
+- [x] Filtering by name (`--filter`, a regex over the test name). Tag and
+      module filtering are not implemented — tests carry no tags yet.
 - [ ] Benchmarks
-- [ ] Documentation
+- [x] Documentation (this section, plus lib/testing.resid's header)
+
+Known limitation: `--filter` reaches the test binary through the environment
+and process.run has no shell, so a filter containing a space is split and
+will not match.
 
 ---
 
