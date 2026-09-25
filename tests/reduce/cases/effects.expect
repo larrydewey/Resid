@@ -1,0 +1,5 @@
+has: Int a = noisy(1);
+has: side("rhs evaluated")
+has: println("55");
+lacks: "dead"
+lacks: noisy(5)

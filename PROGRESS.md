@@ -98,6 +98,33 @@ below (still open, still tens of GB for a full `driver.resid`
 self-compile) — that needs the ownership/last-use analysis described
 there, not a runtime patch.
 
+### 0c. Eager compile-time reduction in the self-hosted compiler (2026-09-24)
+
+The self-hosted pipeline now reduces every program by default (spec §36):
+`examples/reduce.resid`, a source-to-source partial evaluator, runs after
+type checking and before code generation (`--no-reduce` skips it,
+`--dump-reduced <path>` writes the reduced text). It folds operators with
+the generator's exact width/overflow behavior, propagates known locals and
+elides dead known bindings, drops dead `if` arms (statements and
+expressions), evaluates pure runtime builtins by calling the runtime
+function itself, folds f-strings and merges adjacent string literals, and
+β-reduces user calls whose arguments are known (memoized; step, depth and
+global fuel budgets, with fallback to the residual call). Known values
+cover Int/Int(128..512) (64-bit range), Bool, Str, lists, structs and
+Option, including `match`, `else`/`?` unwrapping and `for` loops during
+evaluation. `comptime_print(e)` reports the reduced value at compile time.
+Example: `println(IntToString(fact(10)))` compiles to `println("3628800")`.
+
+Supporting fixes: `IntToString` no longer returns a pointer into a stack
+buffer; `e.itoa` prints INT64_MIN correctly; `if` arms agree up to numeric
+aliases; programs run on a 1 GiB-stack thread (`resid_run_main`,
+`RESID_STACK_MB`), which lets the evaluator go ~20000 calls deep; all-constant
+list literals are built once and cached (`resid_list_const_*`); the SHA-256
+string path carries its state in scalars. Self-compile peak RSS is now
+~0.4-0.6GB (53.8GB before §0-memory commit 89b7b04). Regression suite:
+`tests/reduce/run.sh` (differential against `--no-reduce`, expected output,
+and has/lacks checks on the reduced `main`).
+
 ### Major capabilities
 
 - **Stage-2 self-hosting proven, including full sandbox/capability parity**:

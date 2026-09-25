@@ -1,0 +1,2 @@
+has: println("5000");
+has: count(100000)

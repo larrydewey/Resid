@@ -329,11 +329,97 @@ pub List(Int) bw_acc_str(Str msg, Int base, Int j, List(Int) acc) {
     return bw_acc_str(msg, base, nj, acc2);
 }
 
+// Big-endian 32-bit word `j` of the 64-byte block at byte offset `base`.
+pub Int word_at_str(Str msg, Int base, Int j) {
+    Int off = base + (j * 4);
+    Int b0 = str_char_at(msg, off);
+    Int b1 = str_char_at(msg, off + 1);
+    Int b2 = str_char_at(msg, off + 2);
+    Int b3 = str_char_at(msg, off + 3);
+    Int sh0 = b0 << 24;
+    Int sh1 = b1 << 16;
+    Int sh2 = b2 << 8;
+    Int or01 = sh0 | sh1;
+    Int or012 = or01 | sh2;
+    return (or012 | b3) & 4294967295;
+}
+
+pub Int ssig0(Int x) {
+    Int a = rotr(x, 7);
+    Int b = rotr(x, 18);
+    Int c = x >> 3;
+    return (a ^ b) ^ c;
+}
+
+pub Int ssig1(Int x) {
+    Int a = rotr(x, 17);
+    Int b = rotr(x, 19);
+    Int c = x >> 10;
+    return (a ^ b) ^ c;
+}
+
+pub Int bsig0(Int x) {
+    Int a = rotr(x, 2);
+    Int b = rotr(x, 13);
+    Int c = rotr(x, 22);
+    return (a ^ b) ^ c;
+}
+
+pub Int bsig1(Int x) {
+    Int a = rotr(x, 6);
+    Int b = rotr(x, 11);
+    Int c = rotr(x, 25);
+    return (a ^ b) ^ c;
+}
+
+pub Int maj_of(Int a, Int b, Int c) {
+    Int ab = a & b;
+    Int ac = a & c;
+    Int bc = b & c;
+    return (ab ^ ac) ^ bc;
+}
+
+// Schedule word i, given the window w0..w15 = W[i-16..i-1] (unused while
+// i < 16, where the word comes straight from the block).
+pub Int sched_w(Str msg, Int base, Int i, Int w0, Int w1, Int w9, Int w14) {
+    if (i < 16) { return word_at_str(msg, base, i); }
+    Int s = ssig1(w14) + w9;
+    Int t = ssig0(w1) + w0;
+    return (s + t) & 4294967295;
+}
+
+// All 64 rounds of one block with the working state (a..h) and the
+// 16-word message-schedule window carried in scalar parameters: no list is
+// built per round or per schedule word, only the final state. (Rebuilding
+// an 8-element state list per round and growing a 64-word schedule list
+// per block made hashing a large input allocate tens of kilobytes per
+// block.)
+pub List(Int) sha_blk(Str msg, Int base, Int i, List(Int) h0, Int a, Int b, Int c, Int d, Int e, Int f, Int g, Int h, Int w0, Int w1, Int w2, Int w3, Int w4, Int w5, Int w6, Int w7, Int w8, Int w9, Int w10, Int w11, Int w12, Int w13, Int w14, Int w15) {
+    if (i >= 64) {
+        Int r0 = (h0[0] + a) & 4294967295;
+        Int r1 = (h0[1] + b) & 4294967295;
+        Int r2 = (h0[2] + c) & 4294967295;
+        Int r3 = (h0[3] + d) & 4294967295;
+        Int r4 = (h0[4] + e) & 4294967295;
+        Int r5 = (h0[5] + f) & 4294967295;
+        Int r6 = (h0[6] + g) & 4294967295;
+        Int r7 = (h0[7] + h) & 4294967295;
+        return [r0, r1, r2, r3, r4, r5, r6, r7];
+    }
+    Int wi = sched_w(msg, base, i, w0, w1, w9, w14);
+    Int t1a = h + bsig1(e);
+    Int t1b = t1a + ch_of(e, f, g);
+    Int t1c = t1b + k_at(i);
+    Int t1 = (t1c + wi) & 4294967295;
+    Int t2 = (bsig0(a) + maj_of(a, b, c)) & 4294967295;
+    Int na = (t1 + t2) & 4294967295;
+    Int nd = (d + t1) & 4294967295;
+    Int ni = i + 1;
+    return sha_blk(msg, base, ni, h0, na, a, b, c, nd, e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
+}
+
 pub List(Int) digest_block_str(Str msg, Int base, List(Int) h) {
-    List(Int) first16 = bw_acc_str(msg, base, 0, []);
-    List(Int) w = ext_w(first16, 16);
-    List(Int) hv = sha_rounds(h, w, 0);
-    return add_h(h, hv, 0);
+    return sha_blk(msg, base, 0, h, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 // Digest the whole 64-byte blocks of `msg` in [0, total).

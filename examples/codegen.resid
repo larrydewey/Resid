@@ -3102,6 +3102,16 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             }
         }
         if (t2.text == "(") {
+            if (t.text == "comptime_print") {
+                // Normally removed by the reduction pass, which reports the
+                // value at compile time; unreduced (--no-reduce), the
+                // argument is still evaluated and the result discarded.
+                GT cpv = cg_expr(s, t2.pos, env, fs, c, false);
+                if (cpv.err != "") { return cpv; }
+                Tok cpc = lex_tok(s, cpv.pos);
+                if (cpc.text != ")") { return gt_err("expected ) in comptime_print", cpv); }
+                return GT {.pos = cpc.pos, .val = "false", .ty = "Void", .cnt = 0, .err = "", .glines = cpv.glines, .lines = cpv.lines, .tmp = cpv.tmp, .lbl = cpv.lbl, .tail = false};
+            }
             if (t.text == "ToString") {
                 return cg_extern1(s, t2.pos, "ToString", "Str", "Str", env, fs, c);
             }
@@ -3127,6 +3137,10 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 return cg_extern2(s, t2.pos, "str_sb_append_cp", "Str", "Int", "Str", env, fs, c);
             }
             if (t.text == "IntToString") {
+                // The digits buffer is heap-allocated: the result is an
+                // ordinary Str and may outlive this frame (returned, stored
+                // in a struct). An alloca here dangled once the function
+                // returned.
                 GT v0 = cg_expr(s, t2.pos, env, fs, c, false);
                 if (v0.err != "") { return v0; }
                 GT v = widen_val(v0, "Int(64)");
@@ -3137,7 +3151,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 Str buf = "%t" + IntToString(ti1);
                 Str reg = "%t" + IntToString(ti2);
                 List(Str) x0 = v.lines;
-                List(Str) x1 = x0.concat([buf + " = alloca [24 x i8]"]);
+                List(Str) x1 = x0.concat([buf + " = call ptr @malloc(i64 24)"]);
                 List(Str) x2 = x1.concat([reg + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v.val + ")"]);
                 return GT {.pos = cpit.pos, .val = reg, .ty = "Str", .cnt = 0, .err = "", .glines = v.glines, .lines = x2, .tmp = ti2, .lbl = v.lbl, .tail = false};
             }
@@ -3430,6 +3444,10 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         GT e = cg_unary(s, t.pos, env, fs, c, false);
         if (e.err != "") { return e; }
         Str ety = num_norm_cg(e.ty);
+        // `-<integer literal>` is itself a constant: no instruction needed.
+        if (int_fam(ety) && lst_is_int_const(e.val) && !str_has_prefix_cg(e.val, "-")) {
+            return GT {.pos = e.pos, .val = "-" + e.val, .ty = ety, .cnt = 0, .err = "", .glines = e.glines, .lines = e.lines, .tmp = e.tmp, .lbl = e.lbl, .tail = false};
+        }
         Int t1 = e.tmp + 1;
         Str reg = "%t" + IntToString(t1);
         Str line = reg + " = sub " + ll_ty(ety) + " 0, " + e.val;
@@ -4627,7 +4645,82 @@ List(Str) lst_stores(List(Str) vals, Str sla, Str ety, Int i, Int n, Int tbase, 
     return lst_stores(vals, sla, ety, k, n, tbase + 3, a3);
 }
 
+// Is `v` an integer constant operand ("12", "-7")?
+Bool lst_is_int_const(Str v) {
+    Int n = str_len(v);
+    if (n == 0) { return false; }
+    Int c0 = str_char_at(v, 0);
+    Int st = if (c0 == 45) { 1 } else { 0 };
+    if (st >= n) { return false; }
+    return lst_digits_from(v, st, n);
+}
+
+Bool lst_digits_from(Str v, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int c = str_char_at(v, i);
+    if (c < 48 || c > 57) { return false; }
+    Int k = i + 1;
+    return lst_digits_from(v, k, n);
+}
+
+// "int" / "str" / "bool" when every element operand is a compile-time
+// constant of that kind, else "".
+Str lst_const_kind(Str ety, List(Str) vals, Int i) {
+    Str n = num_norm_cg(ety);
+    Str kind = if (n == "Int(64)") { "int" } else if (ety == "Str") { "str" } else if (ety == "Bool") { "bool" } else { "" };
+    if (kind == "") { return ""; }
+    if (lst_consts_are(kind, vals, 0)) { return kind; }
+    return "";
+}
+
+Bool lst_consts_are(Str kind, List(Str) vals, Int i) {
+    if (i >= vals.len()) { return true; }
+    Str v = vals[i];
+    Bool ok = if (kind == "int") { lst_is_int_const(v) } else if (kind == "str") { str_has_prefix_cg(v, "@.s") } else { v == "true" || v == "false" };
+    if (!ok) { return false; }
+    Int k = i + 1;
+    return lst_consts_are(kind, vals, k);
+}
+
+Str lst_const_elems(Str kind, List(Str) vals, Int i, Str acc) {
+    if (i >= vals.len()) { return acc; }
+    Str v = vals[i];
+    Str lit = if (kind == "int") { "i64 " + v } else if (kind == "str") { "ptr " + v } else { pick_str(v == "true", "i8 1", "i8 0") };
+    Str sep = if (i == 0) { "" } else { ", " };
+    Int k = i + 1;
+    return lst_const_elems(kind, vals, k, acc + sep + lit);
+}
+
+// A list literal whose elements are all constants is known data: it is
+// built once, on first use, by the runtime (outside any arena, never
+// freed) and cached in a per-literal global, instead of being rebuilt on
+// every evaluation. Rebuilding e.g. SHA-256's 64-entry round-constant
+// table per call dominated the cost of hashing large inputs.
+GT lst_emit_const(Str kind, Str ety, Int n, List(Str) vals, Int pos, GT c) {
+    Int t1 = c.tmp + 1;
+    Str cache = "@.lc" + IntToString(t1);
+    Str data = "@.lcd" + IntToString(t1);
+    Str tsym = "@.lty" + IntToString(t1);
+    Str body = esc_ll("List(" + ety + ")", 0, "");
+    Int bl = ll_bytes(body, 0, 0);
+    Int n1 = bl + 1;
+    Str ell = if (kind == "int") { "i64" } else if (kind == "str") { "ptr" } else { "i8" };
+    Str arr = "[" + IntToString(n) + " x " + ell + "]";
+    List(Str) g0 = c.glines;
+    List(Str) g1 = g0.concat([tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\""]);
+    List(Str) g2 = g1.concat([cache + " = private global ptr null"]);
+    List(Str) g3 = g2.concat([data + " = private unnamed_addr constant " + arr + " [" + lst_const_elems(kind, vals, 0, "") + "]"]);
+    Int t2 = t1 + 1;
+    Str reg = "%t" + IntToString(t2);
+    Str fn = if (kind == "int") { "@resid_list_const_i64" } else if (kind == "str") { "@resid_list_const_ptr" } else { "@resid_list_const_bool" };
+    List(Str) l0 = c.lines;
+    List(Str) l1 = l0.concat([reg + " = call ptr " + fn + "(ptr " + cache + ", i64 " + IntToString(n) + ", ptr " + data + ", ptr " + tsym + ")"]);
+    return GT {.pos = pos, .val = reg, .ty = "List(" + ety + ")", .cnt = 0, .err = "", .glines = g3, .lines = l1, .tmp = t2, .lbl = c.lbl, .tail = false};
+}
+
 GT lst_emit(Str ety, Int n, List(Str) vals, Int pos, GT c) {
+    Str ckind = lst_const_kind(ety, vals, 0);
+    if (ckind != "") { return lst_emit_const(ckind, ety, n, vals, pos, c); }
     Int t1 = c.tmp + 1;
     Str sla = "%t" + IntToString(t1);
     List(Str) l0 = c.lines;
@@ -5406,7 +5499,7 @@ GT fst_tostr(GT v) {
         Str buf = "%t" + IntToString(t1);
         Str rr = "%t" + IntToString(t2);
         List(Str) x0 = v64.lines;
-        List(Str) x1 = x0.concat([buf + " = alloca [24 x i8]"]);
+        List(Str) x1 = x0.concat([buf + " = call ptr @malloc(i64 24)"]);
         List(Str) x2 = x1.concat([rr + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v64.val + ")"]);
         return GT {.pos = v.pos, .val = rr, .ty = "Str", .cnt = 0, .err = "", .glines = v.glines, .lines = x2, .tmp = t2, .lbl = v.lbl, .tail = false};
     }
@@ -6310,7 +6403,9 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     // aesni_enc_round/aesni_enc_last_round can select AESENC/AESENCLAST;
     // the actual hardware/software choice stays a runtime gate
     // (resid_cpu_has_aesni), not a compile-time one.
-    Str defline = if (is_main) { "define i32 @main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + ll_ty(rbase) + " @" + name.text + "(" + pd + ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
+    // The program's `main` is emitted as @resid_user_main; the real @main
+    // (main_entry_ir) runs it on a thread with a large stack.
+    Str defline = if (is_main) { "define i32 @resid_user_main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + ll_ty(rbase) + " @" + name.text + "(" + pd + ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
     List(Str) nl0 = nil_list();
     List(Str) nl1 = split_rest(pns, ",");
     List(Str) nl = if (pns == "") { nl0 } else { nl1 };
@@ -6469,8 +6564,18 @@ PG pg_next(Str s, Int pos, Funcs fs, PG g) {
     return pg_next(s, end2, fs, g);
 }
 
+// Process entry point: run the program's main on a thread with a large
+// stack (runtime/resid_rt.c resid_run_main). Resid loops are recursion, and
+// both user programs and the compiler's own evaluator recurse deeply.
+List(Str) main_entry_ir() {
+    return ["define i32 @main() {", "entry:", "  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"];
+}
+
+// %mag is divided as an UNSIGNED value: for INT64_MIN, `0 - v` is INT64_MIN
+// again, whose unsigned reading is the correct magnitude 2^63; the signed
+// srem/sdiv loop printed garbage digits for it.
 Str rt_itoa_def() {
-    return "define ptr @e.itoa(ptr %buf, i64 %v) {\nentry:\n  %zn = icmp eq i64 %v, 0\n  br i1 %zn, label %zero, label %prep\nzero:\n  %zp = getelementptr i8, ptr %buf, i64 22\n  store i8 48, ptr %zp\n  %zt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %zt\n  ret ptr %zp\nprep:\n  %neg = icmp slt i64 %v, 0\n  %an = sub i64 0, %v\n  %mag = select i1 %neg, i64 %an, i64 %v\n  br label %loop\nloop:\n  %cur = phi i64 [ %mag, %prep ], [ %q, %body ]\n  %idx = phi i64 [ 22, %prep ], [ %im, %body ]\n  %d = srem i64 %cur, 10\n  %q = sdiv i64 %cur, 10\n  %ai = add i64 %d, 48\n  %ab = trunc i64 %ai to i8\n  %sp = getelementptr i8, ptr %buf, i64 %idx\n  store i8 %ab, ptr %sp\n  %im = sub i64 %idx, 1\n  %more = icmp ne i64 %q, 0\n  br i1 %more, label %body, label %sig\nbody:\n  br label %loop\nsig:\n  br i1 %neg, label %wneg, label %wpos\nwpos:\n  %pp = getelementptr i8, ptr %buf, i64 %idx\n  %pt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %pt\n  ret ptr %pp\nwneg:\n  %mi = sub i64 %idx, 1\n  %mp = getelementptr i8, ptr %buf, i64 %mi\n  store i8 45, ptr %mp\n  %mt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %mt\n  ret ptr %mp\n}";
+    return "define ptr @e.itoa(ptr %buf, i64 %v) {\nentry:\n  %zn = icmp eq i64 %v, 0\n  br i1 %zn, label %zero, label %prep\nzero:\n  %zp = getelementptr i8, ptr %buf, i64 22\n  store i8 48, ptr %zp\n  %zt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %zt\n  ret ptr %zp\nprep:\n  %neg = icmp slt i64 %v, 0\n  %an = sub i64 0, %v\n  %mag = select i1 %neg, i64 %an, i64 %v\n  br label %loop\nloop:\n  %cur = phi i64 [ %mag, %prep ], [ %q, %body ]\n  %idx = phi i64 [ 22, %prep ], [ %im, %body ]\n  %d = urem i64 %cur, 10\n  %q = udiv i64 %cur, 10\n  %ai = add i64 %d, 48\n  %ab = trunc i64 %ai to i8\n  %sp = getelementptr i8, ptr %buf, i64 %idx\n  store i8 %ab, ptr %sp\n  %im = sub i64 %idx, 1\n  %more = icmp ne i64 %q, 0\n  br i1 %more, label %body, label %sig\nbody:\n  br label %loop\nsig:\n  br i1 %neg, label %wneg, label %wpos\nwpos:\n  %pp = getelementptr i8, ptr %buf, i64 %idx\n  %pt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %pt\n  ret ptr %pp\nwneg:\n  %mi = sub i64 %idx, 1\n  %mp = getelementptr i8, ptr %buf, i64 %mi\n  store i8 45, ptr %mp\n  %mt = getelementptr i8, ptr %buf, i64 23\n  store i8 0, ptr %mt\n  ret ptr %mp\n}";
 }
 Str pick_out(Int i, Str acc) {
     if (i <= 0) { return acc; }
@@ -6564,7 +6669,7 @@ Int main() {
     Str file = pick_out(last, "out.ll");
     Str src = filesystem.read_all(path);
     Funcs fs = collect_sigs(src);
-        List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "declare void @resid_abort(ptr) noreturn", "declare void @resid_expect_fail(ptr, ptr, ptr) noreturn", "declare i8 @resid_regex_match(ptr, ptr)", "declare i8 @resid_quiet()", "declare i8 @resid_quiet_set(i1)", "declare i8 @resid_expect_throws(ptr)", "declare i64 @resid_box_tag(ptr)", "declare i8 @resid_test_plan(i64, ptr)", "declare i64 @resid_test_run_closure(ptr, ptr)", "declare i64 @resid_test_run(ptr, ptr)", "declare i64 @resid_test_summary()", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\""
+        List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i32 @resid_run_main(ptr)", "declare ptr @resid_list_const_i64(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_ptr(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_bool(ptr, i64, ptr, ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "declare void @resid_abort(ptr) noreturn", "declare void @resid_expect_fail(ptr, ptr, ptr) noreturn", "declare i8 @resid_regex_match(ptr, ptr)", "declare i8 @resid_quiet()", "declare i8 @resid_quiet_set(i1)", "declare i8 @resid_expect_throws(ptr)", "declare i64 @resid_box_tag(ptr)", "declare i8 @resid_test_plan(i64, ptr)", "declare i64 @resid_test_run_closure(ptr, ptr)", "declare i64 @resid_test_run(ptr, ptr)", "declare i64 @resid_test_summary()", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\""
                 "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
     List(Str) header = header_with_cmps(hdr_core, fs);
     PG g0 = PG {.pos = 0, .err = "", .glines = [], .hlines = [], .lines = header, .tmp = 0, .lbl = 0};
@@ -6577,7 +6682,8 @@ Int main() {
     List(Str) oh = out.hlines;
     List(Str) og = out.glines;
     List(Str) mid = ol.concat(oh);
-    List(Str) all = mid.concat(og);
+    List(Str) all0 = mid.concat(og);
+    List(Str) all = if (fn_index(fs, "main") >= 0) { all0.concat(main_entry_ir()) } else { all0 };
     Str doc = str_join(all, "\n") + "\n";
     filesystem.write_all(file, doc);
     println("wrote " + file);

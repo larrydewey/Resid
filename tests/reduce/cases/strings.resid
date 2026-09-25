@@ -1,0 +1,29 @@
+Str greet(Str n) { return "hi " + n + "!"; }
+Str rep(Int k) { return if (k <= 0) { "" } else { "ab" + rep(k - 1) }; }
+Int main() {
+    println(greet("bob"));
+    println(IntToString(str_len("héllo ✓")));
+    println(str_slice("hello world", 6, 11));
+    println(str_slice("hello", 3, 99));
+    println(str_slice("hello", -3, 2));
+    println(IntToString(str_char_at("abc", 1)));
+    println(IntToString(str_char_at("abc", 7)));
+    println(str_from_code(955));
+    println("quote\" back\\ tab\tnl\n.");
+    println(str_to_upper("abc") + str_to_lower("DEF"));
+    println(str_trim("  x  ") + "|");
+    println(str_replace("a-b-c", "-", "+"));
+    println(str_repeat("xy", 3));
+    println(IntToString(str_count("banana", "an")));
+    if (str_contains("haystack", "st")) { println("contains"); }
+    if (str_starts_with("haystack", "hay")) { println("starts"); }
+    if (str_ends_with("haystack", "ack")) { println("ends"); }
+    if ("a" == "a") { println("streq"); }
+    if ("a" != "b") { println("strne"); }
+    println(rep(3));
+    println(IntToString(str_parse_int("-42") + 1));
+    Str s = "q";
+    Str t = s + s;
+    println(t);
+    return 0;
+}

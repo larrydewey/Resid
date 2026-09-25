@@ -1751,6 +1751,13 @@ Bool builtin_args(Str got, Str want) {
 
 ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) pt_list) {
     Str argtys = canon64(rawtys);
+    // comptime_print(e) (spec §37): reports e's reduced value at compile
+    // time. The reduction pass (examples/reduce.resid) removes the call, so
+    // it never reaches code generation.
+    if (name == "comptime_print") {
+        if (argc == 1) { return ERes {.pos = pos, .ty = "Void", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "comptime_print expects 1 argument"};
+    }
     if (name == "println") {
         if (argc == 1) {
             if (arg_matches(argtys, "Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
@@ -3174,7 +3181,8 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         if (peek_if.text == "if") {
             ERes else_e2 = check_primary_e(s, kw.pos, env, fs, exp);
             if (else_e2.err != "") { return else_e2; }
-            if (then_e.ty != else_e2.ty) {
+            // Arms agree up to the numeric aliases (Int == Int(64), ...).
+            if (num_norm(then_e.ty) != num_norm(else_e2.ty)) {
                 Str msg2 = "if branches differ: " + then_e.ty + " vs " + else_e2.ty;
                 return ERes {.pos = else_e2.pos, .ty = "", .err = msg2};
             }
@@ -3183,7 +3191,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         Tok brace2 = lex_tok(s, kw.pos);
         ERes else_e = check_expr_block(s, brace2.pos, env, fs);
         if (else_e.err != "") { return else_e; }
-        if (then_e.ty != else_e.ty) {
+        if (num_norm(then_e.ty) != num_norm(else_e.ty)) {
             Str msg = "if branches differ: " + then_e.ty + " vs " + else_e.ty;
             return ERes {.pos = else_e.pos, .ty = "", .err = msg};
         }

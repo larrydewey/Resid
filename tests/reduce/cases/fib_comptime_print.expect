@@ -1,0 +1,2 @@
+has: return 55;
+lacks: comptime_print

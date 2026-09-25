@@ -1,0 +1,9 @@
+Int fact(Int n) {
+    return if (n <= 1) { 1 } else { (Int)(n * fact(n - 1)) };
+}
+
+Int main() {
+    println(IntToString(fact(10)));
+    println(IntToString(fact(20)));
+    return 0;
+}

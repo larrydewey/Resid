@@ -1,0 +1,10 @@
+Int count(Int n) {
+    return if (n == 0) { 0 } else { count(n - 1) + 1 };
+}
+
+Int main() {
+    // Within the depth budget: reduced. Beyond it: left to run time.
+    println(IntToString(count(5000)));
+    println(IntToString(count(100000)));
+    return 0;
+}

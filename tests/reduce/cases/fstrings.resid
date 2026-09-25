@@ -1,0 +1,14 @@
+Str who(Int n) { return f"#{n}:{"x" + "y"}"; }
+Int main() {
+    Int a = 42;
+    Str b = "bee";
+    println(f"a={a} b={b} sum={a + 1}");
+    println(who(7));
+    Int big = 1000000;
+    Int(128) sq = big * big;
+    println(f"{sq}");
+    Str dyn = IntToString(args.count());
+    println(f"prog {str_len(dyn)} {a} {dyn}");
+    println(f"tab\tq\"{b}\"");
+    return 0;
+}

@@ -1,0 +1,3 @@
+has: println("a=42 b=bee sum=43");
+has: 42 {dyn}
+has: println("#7:xy");
