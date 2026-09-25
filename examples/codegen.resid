@@ -6371,6 +6371,175 @@ CapPP cap_maybe_inject(Bool sandboxed, List(Str) lines, List(Str) glines, Int n)
     return CapPP {.lines = lines, .glines = glines, .n = n};
 }
 
+// ─── Tail calls ─────────────────────────────────────────────────
+// The driver runs clang without optimization, where `tail call` is only a
+// hint, so every recursive step used to cost a stack frame. After a
+// function body is emitted, each call whose result is returned on the very
+// next line is rewritten:
+//   - a self tail call becomes a jump back to `tco.head`, where every
+//     parameter is a phi, so self-recursion runs as a loop in constant
+//     stack at any optimization level;
+//   - a tail call to any other function with the identical LLVM signature
+//     becomes `musttail`, which LLVM guarantees to lower as a jump.
+// Allocas are hoisted into the entry block (their sizes are static), so a
+// loop iteration does not grow the frame. Functions that allocate
+// fixed-size stack values are left alone: a pointer into this frame may be
+// an argument, and reusing (or discarding) the frame would change it.
+
+type TcoSite = { Bool ok; Str callee; Str reg; Str call; List(Str) vals; };
+type TcoAcc = { List(Str) lines; List(Str) allocas; List(Str) inc; Int n; Int nmust; };
+
+// "%t5 = tail call ptr @f(ptr %p0, i64 %t4)" -> reg, callee, typed args.
+TcoSite tco_parse_call(Str line, Str rty) {
+    TcoSite none = TcoSite {.ok = false, .callee = "", .reg = "", .call = "", .vals = nil_list()};
+    if (!str_starts_with(line, "%")) { return none; }
+    Int sp = str_find_char(line, 32, 0);
+    if (sp < 0) { return none; }
+    Str reg = str_slice(line, 0, sp);
+    Int n = str_len(line);
+    Str rhs = str_slice(line, sp, n);
+    Str p1 = " = call " + rty + " @";
+    Str p2 = " = tail call " + rty + " @";
+    Bool is1 = str_starts_with(rhs, p1);
+    Bool is2 = str_starts_with(rhs, p2);
+    if (!is1 && !is2) { return none; }
+    if (!str_ends_with(rhs, ")")) { return none; }
+    Int skip = if (is2) { str_len(p2) } else { str_len(p1) };
+    Str rest = str_slice(rhs, skip, str_len(rhs) - 1);
+    Int op = str_find_char(rest, 40, 0);
+    if (op < 0) { return none; }
+    Str callee = str_slice(rest, 0, op);
+    Str args = str_slice(rest, op + 1, str_len(rest));
+    List(Str) vals = if (args == "") { nil_list() } else { str_split(args, ", ") };
+    Str call = "call " + rty + " @" + rest + ")";
+    return TcoSite {.ok = true, .callee = callee, .reg = reg, .call = call, .vals = vals};
+}
+
+// Each argument is `<param type> <single value token>`, and never a
+// pointer into this frame (an alloca), which the jump would overwrite and
+// musttail would free.
+Bool tco_args_match(List(Str) vals, List(Str) ptys, List(Str) frame, Int j) {
+    if (j == 0 && vals.len() != ptys.len()) { return false; }
+    if (j >= ptys.len()) { return true; }
+    Str pre = ptys[j] + " ";
+    Str v = vals[j];
+    if (!str_starts_with(v, pre)) { return false; }
+    Str val = str_slice(v, str_len(pre), str_len(v));
+    if (val == "" || str_find_char(val, 32, 0) >= 0) { return false; }
+    if (list_contains_str(frame, val)) { return false; }
+    return tco_args_match(vals, ptys, frame, j + 1);
+}
+
+Bool tco_is_alloca(Str line) {
+    return str_starts_with(line, "%") && str_contains(line, " = alloca ");
+}
+
+// Argument arrays handed to the runtime (copied out before any call
+// returns) and for-loop counters (re-initialized on every loop entry).
+Bool tco_alloca_ok(Str line) {
+    if (str_starts_with(line, "%lia.") || str_starts_with(line, "%k.a")) { return true; }
+    return str_contains(line, " = alloca [") && str_ends_with(line, " x ptr]");
+}
+
+Bool tco_frame_ok(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return true; }
+    Str line = ls[i];
+    if (tco_is_alloca(line) && !tco_alloca_ok(line)) { return false; }
+    return tco_frame_ok(ls, i + 1);
+}
+
+// musttail needs the value in registers: wide integers (i128 and up) are
+// returned through memory and the backend then cannot emit the jump.
+Bool tco_reg_ty(Str t) {
+    return t == "ptr" || t == "i1" || t == "i8" || t == "i16" || t == "i32" || t == "i64" || t == "double" || t == "float";
+}
+
+Bool tco_reg_tys(List(Str) ts, Int i) {
+    if (i >= ts.len()) { return true; }
+    if (!tco_reg_ty(ts[i])) { return false; }
+    return tco_reg_tys(ts, i + 1);
+}
+
+List(Str) tco_alloca_regs(List(Str) ls, Int i, List(Str) out) {
+    if (i >= ls.len()) { return out; }
+    Str line = ls[i];
+    if (tco_is_alloca(line)) {
+        Int sp = str_find_char(line, 32, 0);
+        return tco_alloca_regs(ls, i + 1, out.concat([str_slice(line, 0, sp)]));
+    }
+    return tco_alloca_regs(ls, i + 1, out);
+}
+
+List(Str) tco_add_inc(List(Str) inc, List(Str) vals, List(Str) ptys, Str lb, Int j, List(Str) out) {
+    if (j >= ptys.len()) { return out; }
+    Str v = vals[j];
+    Str val = str_slice(v, str_len(ptys[j]) + 1, str_len(v));
+    Str prev = if (j < inc.len()) { inc[j] } else { "" };
+    return tco_add_inc(inc, vals, ptys, lb, j + 1, out.concat([prev + ", [ " + val + ", %" + lb + " ]"]));
+}
+
+TcoAcc tco_scan(List(Str) ls, Int i, Str fname, Str rty, List(Str) ptys, List(Str) frame, TcoAcc acc) {
+    if (i >= ls.len()) { return acc; }
+    Str line = ls[i];
+    if (tco_is_alloca(line)) {
+        TcoAcc a1 = TcoAcc {.lines = acc.lines, .allocas = acc.allocas.concat([line]), .inc = acc.inc, .n = acc.n, .nmust = acc.nmust};
+        return tco_scan(ls, i + 1, fname, rty, ptys, frame, a1);
+    }
+    Str nxt = if (i + 1 < ls.len()) { ls[i + 1] } else { "" };
+    TcoSite st = tco_parse_call(line, rty);
+    Bool is_tail = st.ok && nxt == "ret " + rty + " " + st.reg;
+    Bool args_ok = is_tail && tco_args_match(st.vals, ptys, frame, 0);
+    if (args_ok && st.callee == fname) {
+        Str lb = "tco.s" + IntToString(acc.n);
+        List(Str) l2 = acc.lines.concat(["br label %" + lb, lb + ":", "br label %tco.head"]);
+        List(Str) inc2 = tco_add_inc(acc.inc, st.vals, ptys, lb, 0, nil_list());
+        TcoAcc a2 = TcoAcc {.lines = l2, .allocas = acc.allocas, .inc = inc2, .n = acc.n + 1, .nmust = acc.nmust};
+        return tco_scan(ls, i + 2, fname, rty, ptys, frame, a2);
+    }
+    if (args_ok && tco_reg_ty(rty) && tco_reg_tys(ptys, 0)) {
+        List(Str) l3 = acc.lines.concat([st.reg + " = musttail " + st.call]);
+        TcoAcc a3 = TcoAcc {.lines = l3, .allocas = acc.allocas, .inc = acc.inc, .n = acc.n, .nmust = acc.nmust + 1};
+        return tco_scan(ls, i + 1, fname, rty, ptys, frame, a3);
+    }
+    TcoAcc a4 = TcoAcc {.lines = acc.lines.concat([line]), .allocas = acc.allocas, .inc = acc.inc, .n = acc.n, .nmust = acc.nmust};
+    return tco_scan(ls, i + 1, fname, rty, ptys, frame, a4);
+}
+
+List(Str) tco_phis(List(Str) ptys, List(Str) inc, Int j, List(Str) out) {
+    if (j >= ptys.len()) { return out; }
+    Str p = "%p" + IntToString(j);
+    Str ph = p + " = phi " + ptys[j] + " [ " + p + ".in, %entry ]" + inc[j];
+    return tco_phis(ptys, inc, j + 1, out.concat([ph]));
+}
+
+Str param_decl_in_at(List(Str) ptys, Int i, Str acc) {
+    if (i >= ptys.len()) { return acc; }
+    Str sep = if (acc != "") { ", " } else { "" };
+    return param_decl_in_at(ptys, i + 1, acc + sep + ptys[i] + " %p" + IntToString(i) + ".in");
+}
+
+List(Str) ll_ty_list(List(Str) tys, Int i, List(Str) out) {
+    if (i >= tys.len()) { return out; }
+    return ll_ty_list(tys, i + 1, out.concat([ll_ty(tys[i])]));
+}
+
+// Whole-function rewrite: header + entry + body -> own lines (without "}").
+// `head` is [defline, "entry:"]; `body` is everything after it.
+List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(Str) ptys, Str defpre, Str defpost) {
+    if (!tco_frame_ok(body, 0)) { return head.concat(body); }
+    List(Str) frame = tco_alloca_regs(body, 0, nil_list());
+    TcoAcc a = tco_scan(body, 0, fname, rty, ptys, frame, TcoAcc {.lines = nil_list(), .allocas = nil_list(), .inc = nil_list(), .n = 0, .nmust = 0});
+    if (a.n == 0) {
+        if (a.nmust == 0) { return head.concat(body); }
+        return head.concat(a.allocas).concat(a.lines);
+    }
+    Str defline = defpre + param_decl_in_at(ptys, 0, "") + defpost;
+    List(Str) h = [defline, "entry:"];
+    List(Str) h2 = h.concat(a.allocas).concat(["br label %tco.head", "tco.head:"]);
+    List(Str) h3 = h2.concat(tco_phis(ptys, a.inc, 0, nil_list()));
+    return h3.concat(a.lines);
+}
+
 PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     PRes rty = parse_type(s, pos);
     if (rty.err != "") { return PG {.pos = g.pos, .err = rty.err, .glines = g.glines, .hlines = g.hlines, .lines = g.lines, .tmp = g.tmp, .lbl = g.lbl}; }
@@ -6460,7 +6629,13 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     // whole-program accumulator — pp1.lines/pp2.glines never included it
     // in the first place (see dl/pp0 above). Small, bounded by this one
     // function's size regardless of how large the program has grown.
-    List(Str) own_lines = pp1.lines.concat(pp2.lines).concat(["}"]);
+    List(Str) ptys_ll = ll_ty_list(tyl, 0, nil_list());
+    Bool growbuf_params = eb.lines.len() != pp1.lines.len();
+    Bool tco_ok = !is_main && !sandboxed && !growbuf_params;
+    Str defpre = "define " + ll_ty(rbase) + " @" + name.text + "(";
+    Str defpost = ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
+    List(Str) fn_lines = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name.text, ll_ty(rbase), ptys_ll, defpre, defpost) } else { pp1.lines.concat(pp2.lines) };
+    List(Str) own_lines = fn_lines.concat(["}"]);
     List(Str) own_glines = pp2.glines;
     // Extract every PLAIN VALUE (Int) this function still needs after the
     // arena pops, while everything that produced it (open, body — both

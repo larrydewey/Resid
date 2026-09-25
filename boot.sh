@@ -47,8 +47,13 @@ step() { echo -e "\033[1;34m==>\033[0m $*"; }
 ok()   { echo -e "  \033[0;32m✓\033[0m $*"; }
 die()  { echo -e "  \033[0;31m✗\033[0m $*"; exit 1; }
 
+# Optimization level for linking the compiler binaries (RESID_OPT=-O0 for a
+# fast, unoptimized bootstrap). Programs the compiler builds take -O<n> on
+# its own command line instead, also defaulting to -O2.
+RESID_OPT="${RESID_OPT:--O2}"
+
 link_clang() { # link_clang <ll> <out-bin>
-    clang -no-pie "$1" "$RUNTIME_C" -o "$2" -Wno-override-module -pthread
+    clang "$RESID_OPT" -no-pie "$1" "$RUNTIME_C" -o "$2" -Wno-override-module -pthread
 }
 
 # ── Re-seed path: iterate the self-hosted compiler to a new fixed point ──

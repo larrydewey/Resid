@@ -663,25 +663,21 @@ Str render_caret(Str s, Int line, Int col_start, Int col_end, Str label) {
 
 // Get the text of the given 1-based line number.
 Str get_line_at(Str s, Int i, Int cur_line, Int target) {
-    return get_line_at_rec(s, i, 1, target, 0);
+    return get_line_at_rec(s, i, cur_line, target);
 }
-Str get_line_at_rec(Str s, Int i, Int cur_line, Int target, Int line_start) {
+// Walks newline to newline (one frame per line, not per character), for the
+// same reason as pos_to_line_col_rec: a diagnostic near the end of a large
+// source otherwise exhausts the stack.
+Str get_line_at_rec(Str s, Int start, Int cur_line, Int target) {
     Int n = str_len(s);
-    if (i >= n) { return ""; }
+    if (start >= n) { return ""; }
+    Int nl = str_find_char(s, 10, start);
     if (cur_line == target) {
-        return get_line_end_rec(s, line_start, i, n);
+        Int e = if (nl < 0) { n } else { nl };
+        return str_slice(s, start, e);
     }
-    Int c = str_char_at(s, i);
-    if (c == 10) {
-        return get_line_at_rec(s, i + 1, cur_line + 1, target, i + 1);
-    }
-    return get_line_at_rec(s, i + 1, cur_line, target, line_start);
-}
-Str get_line_end_rec(Str s, Int line_start, Int i, Int n) {
-    if (i >= n) { return str_slice(s, line_start, i); }
-    Int c = str_char_at(s, i);
-    if (c == 10) { return str_slice(s, line_start, i); }
-    return get_line_end_rec(s, line_start, i + 1, n);
+    if (nl < 0) { return ""; }
+    return get_line_at_rec(s, nl + 1, cur_line + 1, target);
 }
 
 // Emit a full diagnostic: header + caret snippet.
@@ -1209,7 +1205,7 @@ ERes check_struct_lit_rest(Str s, Int pos, Str ty, List(Str) env, Funcs fs) {
     Bool vempty = v.ty == "List(Unknown)";
     Bool fint = is_num(ft) && is_num(v.ty);
     Bool fok = fint && int_adopt_ok(v.ty, ft, "");
-    if (!vempty && !fok && v.ty != ft) {
+    if (!vempty && !fok && !ty_same(v.ty, ft)) {
         Str msg = "field " + f.text + ": expected " + ft + ", got " + v.ty;
         return ERes {.pos = v.pos, .ty = "", .err = msg};
     }
@@ -1267,6 +1263,36 @@ pub Str num_norm(Str ty) {
     if (ty == "UInt") { return "UInt(64)"; }
     if (ty == "Float") { return "Float(64)"; }
     return ty;
+}
+
+// Deep alias normalization: every bare `Int` / `UInt` / `Float` anywhere
+// inside a type string becomes its explicit width, so `List(Int)` and
+// `List(Int(64))` name the same type.
+pub Str ty_canon_word(Str w, Bool has_args) {
+    if (has_args) { return w; }
+    return num_norm(w);
+}
+
+pub Str ty_canon_at(Str t, Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(t, i);
+    if (is_alpha(c)) {
+        Int e = scan_ident(t, i, n);
+        Str w = str_slice(t, i, e);
+        Bool has_args = str_char_at(t, e) == 40;
+        return ty_canon_at(t, e, n, acc + ty_canon_word(w, has_args));
+    }
+    return ty_canon_at(t, i + 1, n, acc + str_from_code(c));
+}
+
+pub Str ty_canon(Str t) {
+    return ty_canon_at(t, 0, str_len(t), "");
+}
+
+// Type equality modulo the numeric aliases.
+pub Bool ty_same(Str a, Str b) {
+    if (a == b) { return true; }
+    return ty_canon(a) == ty_canon(b);
 }
 
 pub Bool is_int_ty(Str ty) {
@@ -2129,8 +2155,8 @@ pub List(Str) split_type_list(Str tys, Int pos, Int elem_i, Int depth, Str acc, 
 // parity: an empty `[]` argument takes the parameter's element type).
 pub Bool params_accept_at(Str pts, Str argtys, Int i, Int n) {
     if (i >= n) { return true; }
-    Str p = num_norm(ty_list_at(pts, i));
-    Str g = num_norm(ty_list_at(argtys, i));
+    Str p = ty_canon(ty_list_at(pts, i));
+    Str g = ty_canon(ty_list_at(argtys, i));
     Bool same = p == g;
     Bool empty_adopt = g == "List(Unknown)" && str_has_prefix(p, "List(");
     Bool widen_possible = is_int_ty(p) && is_int_ty(g);
@@ -2386,7 +2412,7 @@ ERes check_lambda(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         return ERes {.pos = body_close.pos, .ty = "", .err = "expected } to close lambda body"};
     }
     Str ret = fn_ret(exp);
-    Bool ty_ok = body.ty == ret;
+    Bool ty_ok = ty_same(body.ty, ret);
     Bool num_adopt = is_num(body.ty) && is_num(ret) && int_adopt_ok(body.ty, ret, "");
     if (!ty_ok && !num_adopt) {
         Str msg = "closure body returns " + body.ty + ", expected " + ret;
@@ -2437,7 +2463,7 @@ ERes check_list_lit_rest(Str s, Int pos, Str elem, Int count, List(Str) env, Fun
     ERes e = check_expr_e(s, pos, env, fs, want_elem);
     if (e.err != "") { return e; }
     Str elem2 = if (elem == "") { e.ty } else { elem };
-    if (elem != "" && elem != e.ty) {
+    if (elem != "" && !ty_same(elem, e.ty)) {
         Str msg = "list element type mismatch: " + elem + " vs " + e.ty;
         return ERes {.pos = e.pos, .ty = "", .err = msg};
     }
@@ -2565,7 +2591,7 @@ ERes check_set_lit_rest(Str s, Int pos, Str elem, List(Str) env, Funcs fs) {
     ERes e = check_expr(s, pos, env, fs);
     if (e.err != "") { return e; }
     Str elem2 = if (elem == "") { e.ty } else { elem };
-    if (elem != "" && elem != e.ty) {
+    if (elem != "" && !ty_same(elem, e.ty)) {
         Str msg = "set element type mismatch: " + elem + " vs " + e.ty;
         return ERes {.pos = e.pos, .ty = "", .err = msg};
     }
@@ -3182,7 +3208,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
             ERes else_e2 = check_primary_e(s, kw.pos, env, fs, exp);
             if (else_e2.err != "") { return else_e2; }
             // Arms agree up to the numeric aliases (Int == Int(64), ...).
-            if (num_norm(then_e.ty) != num_norm(else_e2.ty)) {
+            if (!ty_same(then_e.ty, else_e2.ty)) {
                 Str msg2 = "if branches differ: " + then_e.ty + " vs " + else_e2.ty;
                 return ERes {.pos = else_e2.pos, .ty = "", .err = msg2};
             }
@@ -3191,7 +3217,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
         Tok brace2 = lex_tok(s, kw.pos);
         ERes else_e = check_expr_block(s, brace2.pos, env, fs);
         if (else_e.err != "") { return else_e; }
-        if (num_norm(then_e.ty) != num_norm(else_e.ty)) {
+        if (!ty_same(then_e.ty, else_e.ty)) {
             Str msg = "if branches differ: " + then_e.ty + " vs " + else_e.ty;
             return ERes {.pos = else_e.pos, .ty = "", .err = msg};
         }
@@ -3891,7 +3917,7 @@ SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, 
     }
     // Type check using the base type (erase constraint).
     Str ety = ct_base_of(fs.ctn, fs.ctb, ty);
-    if (v.ty != ety) {
+    if (!ty_same(v.ty, ety)) {
         Bool vempty = v.ty == "List(Unknown)";
         Bool listty = str_has_prefix(ety, "List(");
         Bool coerce = vempty && listty;
@@ -3943,7 +3969,7 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
         if (v.err != "") {
             return SRes {.pos = v.pos, .err = v.err, .env = env};
         }
-        if (v.ty != ret) {
+        if (!ty_same(v.ty, ret)) {
             // Spec v3.2 §6.4: value-preserving widening is implicit;
             // narrowing requires literal adoption.
             Bool inrange = is_int_ty(ret) && is_int_ty(v.ty);
@@ -3960,6 +3986,9 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
             Bool opt_hole = v.ty == "Option(_)";
             Bool opt_expected = str_has_prefix(ret, "Option(");
             Bool opt_ret_ok = opt_hole && opt_expected;
+            // return []; in a List(T) function — the empty literal adopts the
+            // declared element type, as it does at bindings and call args.
+            Bool empty_ret_ok = v.ty == "List(Unknown)" && str_has_prefix(ret, "List(");
             // return Ok(v) / Err(v) in a Result(Int, Str) function — the hole
             // adopts the declared return type's missing half.
             Bool res_ok_hole = str_has_prefix(v.ty, "Result(") && (res_elem_err(v.ty) == "_" || res_elem_err(v.ty) == " _");
@@ -3981,7 +4010,7 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
             Bool er_int = is_int_ty(ver) && is_int_ty(res_elem_err(ret));
             Bool er_accept = want_err_hole || er_same || (er_int && int_adopt_ok(ver, res_elem_err(ret), "0"));
             Bool res_ret_ok = both_res && ok_accept && er_accept;
-            if (!riok && !opt_ret_ok && !res_ok_ret_ok && !res_err_ret_ok && !res_ret_ok) {
+            if (!riok && !opt_ret_ok && !empty_ret_ok && !res_ok_ret_ok && !res_err_ret_ok && !res_ret_ok) {
                 Str msg = "return type " + v.ty + " does not match " + ret;
                 return SRes {.pos = v.pos, .err = msg, .env = env};
             }

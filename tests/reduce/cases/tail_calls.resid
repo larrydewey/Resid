@@ -1,0 +1,27 @@
+// Tail calls run in constant stack: 50M-deep self and mutual recursion would
+// exhaust even the 1GB main-thread stack without tail-call elimination.
+Int count(Int n, Int acc) {
+    if (n == 0) { return acc; }
+    return count(n - 1, acc + 1);
+}
+Bool is_even(Int n) {
+    if (n == 0) { return true; }
+    return is_odd(n - 1);
+}
+Bool is_odd(Int n) {
+    if (n == 0) { return false; }
+    return is_even(n - 1);
+}
+Str build(Int n, Str acc) {
+    if (n == 0) { return acc; }
+    List(Str) parts = [acc, "x"];
+    return build(n - 1, str_join(parts, ""));
+}
+Int main() {
+    Int n = str_len(IntToString(args.count())) * 50000000;
+    println(IntToString(count(n, 0)));
+    Bool e = is_even(n);
+    println(if (e) { "even" } else { "odd" });
+    println(IntToString(str_len(build(100000, ""))));
+    return 0;
+}

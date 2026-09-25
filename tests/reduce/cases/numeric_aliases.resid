@@ -1,0 +1,20 @@
+// Int and Int(64) name the same type at every comparison site: call
+// arguments, list literals, struct fields, returns, if-arms and nested types.
+type P = { List(Int) xs; Int n; };
+Int sum(List(Int) xs) { return list_sum(xs); }
+Option(Int) nxt(Int i) { return Some(i + 1); }
+List(Int(64)) wide(List(Int) a) { return a; }
+Int main() {
+    Int i = 3;
+    P p = P {.xs = [i + 1, i + 2], .n = i + 0};
+    Int s = sum([i + 1, i - 1]);
+    Int(64) w = i + 5;
+    List(Int) ws = wide([w, i]);
+    Map(Str, Int) m = {"a": i + 1};
+    Int mv = m["a"] else { 0 };
+    Option(Int) o = nxt(i);
+    Int ov = o else { 0 };
+    List(List(Int)) ll = [[i + 1], [i]];
+    println(IntToString(p.xs[1] + p.n + s + w + ws[0] + mv + ov + ll[0][0]));
+    return 0;
+}
