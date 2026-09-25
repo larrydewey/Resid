@@ -1,0 +1,138 @@
+// The Computer Language Benchmarks Game: k-nucleotide.
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/knucleotide.html
+//
+// Single-threaded port. Every k-nucleotide of the ">THREE" sequence is
+// counted in a hashtable (`Map(Int, Int)`), one table per k, keyed by the
+// 2-bit-per-base code of the k-mer (A=0, C=1, T=2, G=3; k <= 18 fits 36
+// bits). `count` threads its table through a self tail call and consumes it
+// only with `m.insert(..)`, so the compiler runs it as a loop over one
+// privately owned table (a linear accumulator) instead of building a new
+// persistent map per update; the table the caller sees is an ordinary
+// immutable value.
+
+// 2-bit code of a base, branch-free: bits 1-2 of the ASCII code give
+// A/a = 0, C/c = 1, T/t = 2, G/g = 3.
+Int base_code(Int c) {
+    return (c >> 1) & 3;
+}
+
+// The same k-mer's rank in alphabetical order (G and T swap places), used
+// to break frequency ties the way the reference output does.
+Int alpha_rank(Int code, Int k, Int acc) {
+    if (k == 0) { return acc; }
+    Int d = (code >> (2 * (k - 1))) & 3;
+    Int a = if (d == 2) { 3 } else { if (d == 3) { 2 } else { d } };
+    return alpha_rank(code, k - 1, (acc << 2) + a);
+}
+
+// Count every k-mer of t[i..end), skipping line breaks; `code` holds the
+// last `have` bases (at most k) as a rolling 2k-bit code.
+Map(Int, Int) count(Str t, Int i, Int end, Int k, Int mask, Int code, Int have, Map(Int, Int) m) {
+    if (i >= end) { return m; }
+    Int c = str_char_at(t, i);
+    if (c == 10) { return count(t, i + 1, end, k, mask, code, have, m); }
+    Int code2 = ((code << 2) | base_code(c)) & mask;
+    if (have + 1 < k) { return count(t, i + 1, end, k, mask, code2, have + 1, m); }
+    Int n0 = m.get(code2) else { 0 };
+    return count(t, i + 1, end, k, mask, code2, k, m.insert(code2, n0 + 1));
+}
+
+Map(Int, Int) table(Str t, Int lo, Int end, Int k) {
+    Map(Int, Int) e = {};
+    return count(t, lo, end, k, (1 << (2 * k)) - 1, 0, 0, e);
+}
+
+Str decode(Int code, Int k, Str acc) {
+    if (k == 0) { return acc; }
+    Int b = code & 3;
+    Str ch = if (b == 0) { "A" } else { if (b == 1) { "C" } else { if (b == 2) { "T" } else { "G" } } };
+    return decode(code >> 2, k - 1, ch + acc);
+}
+
+Int encode(Str s, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return encode(s, i + 1, n, (acc << 2) | base_code(str_char_at(s, i)));
+}
+
+// "%.3f" of 100 * cnt / total, rounded half up.
+Str percent(Int cnt, Int total) {
+    Int milli = i64((200000 * cnt + total) / (2 * total));
+    Int frac = milli % 1000;
+    Str fs = if (frac < 10) { "00" + IntToString(frac) } else { if (frac < 100) { "0" + IntToString(frac) } else { IntToString(frac) } };
+    return IntToString(milli / 1000) + "." + fs;
+}
+
+Int sum_counts(Map(Int, Int) m, Int c, Int nkeys, Int acc) {
+    if (c >= nkeys) { return acc; }
+    Int v = m.get(c) else { 0 };
+    return sum_counts(m, c + 1, nkeys, acc + v);
+}
+
+// Among codes 0..nkeys not yet printed (`used` bits), the one with the
+// largest count; ties go to the alphabetically first k-mer.
+Int pick(Map(Int, Int) m, Int k, Int c, Int nkeys, Int used, Int best, Int bestcnt) {
+    if (c >= nkeys) { return best; }
+    if (((used >> c) & 1) == 1) { return pick(m, k, c + 1, nkeys, used, best, bestcnt); }
+    Int v = m.get(c) else { -1 };
+    if (v > bestcnt) { return pick(m, k, c + 1, nkeys, used, c, v); }
+    if (v == bestcnt && v >= 0) {
+        if (alpha_rank(c, k, 0) < alpha_rank(best, k, 0)) { return pick(m, k, c + 1, nkeys, used, c, v); }
+    }
+    return pick(m, k, c + 1, nkeys, used, best, bestcnt);
+}
+
+Str freq_lines(Map(Int, Int) m, Int k, Int nkeys, Int total, Int used, Str acc) {
+    Int c = pick(m, k, 0, nkeys, used, -1, -1);
+    if (c < 0) { return acc + "\n"; }
+    Int v = m.get(c) else { 0 };
+    Str line = decode(c, k, "") + " " + percent(v, total) + "\n";
+    return freq_lines(m, k, nkeys, total, used | (1 << c), acc + line);
+}
+
+Str freqs(Str t, Int lo, Int end, Int k) {
+    Map(Int, Int) m = table(t, lo, end, k);
+    Int nkeys = 1 << (2 * k);
+    return freq_lines(m, k, nkeys, sum_counts(m, 0, nkeys, 0), 0, "");
+}
+
+Str count_line(Str t, Int lo, Int end, Str frag) {
+    Int k = str_len(frag);
+    Map(Int, Int) m = table(t, lo, end, k);
+    Int c = m.get(encode(frag, 0, k, 0)) else { 0 };
+    return IntToString(c) + "\t" + frag + "\n";
+}
+
+// Position of the ">THREE" header line.
+Int find_three(Str t, Int i, Int n) {
+    if (i >= n) { return n; }
+    if (str_char_at(t, i) == 62) {
+        if (str_char_at(t, i + 1) == 84) {
+            if (str_char_at(t, i + 2) == 72) { return i; }
+        }
+    }
+    return find_three(t, i + 1, n);
+}
+
+Int line_end(Str t, Int i, Int n) {
+    if (i >= n) { return n; }
+    if (str_char_at(t, i) == 10) { return i; }
+    return line_end(t, i + 1, n);
+}
+
+// End of the sequence: the next header, or the end of input.
+Int seq_end(Str t, Int i, Int n) {
+    if (i >= n) { return n; }
+    if (str_char_at(t, i) == 62) { return i; }
+    return seq_end(t, i + 1, n);
+}
+
+@requires(filesystem)
+Int main() {
+    Str t = filesystem.read_all("/dev/stdin");
+    Int n = str_len(t);
+    Int lo = line_end(t, find_three(t, 0, n), n) + 1;
+    Int end = seq_end(t, lo, n);
+    Str out = freqs(t, lo, end, 1) + freqs(t, lo, end, 2) + count_line(t, lo, end, "GGT") + count_line(t, lo, end, "GGTA") + count_line(t, lo, end, "GGTATT") + count_line(t, lo, end, "GGTATTTTAATT") + count_line(t, lo, end, "GGTATTTTAATTTATAGT");
+    print(out);
+    return 0;
+}

@@ -2065,7 +2065,7 @@ pub Str conv_helper_type(Str name) {
     if (name == "isize") { return "ISize"; }
     if (name == "usize") { return "USize"; }
     Int n = str_len(name);
-    if (n < 2 || n > 4) { return ""; }
+    if (n < 2 || n > 10) { return ""; }  // dN: any N >= 1 (spec §6.7), up to 9 digits
     Int c0 = str_char_at(name, 0);
     Str digits = str_slice(name, 1, n);
     if (!str_is_int(digits)) { return ""; }
@@ -2217,6 +2217,14 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects no arguments"};
     }
+    // resid_dec_persist(x): x itself, copied out of the innermost
+    // resid_bulk_push scope (into the enclosing one, or the heap), so a
+    // Dec result can outlive the scope that computed it.
+    if (name == "resid_dec_persist") {
+        Str pa = str_trim(rawtys);
+        if (argc == 1 && is_dec_ty(pa)) { return ERes {.pos = pos, .ty = pa, .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dec_persist expects (Dec(N)), got (" + argtys + ")"};
+    }
     if (name == "resid_list_str_persist_copy") {
         if (builtin_args(argtys, "List(Str)")) { return ERes {.pos = pos, .ty = "List(Str)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_list_str_persist_copy expects (List(Str)), got (" + argtys + ")"};
@@ -2292,6 +2300,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "str_parse_float") {
         if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Float", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_parse_float expects (Str), got (" + argtys + ")"};
+    }
+    if (name == "str_index_of") {
+        if (builtin_args(argtys, "Str,Str,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_index_of expects (Str,Str,Int), got (" + argtys + ")"};
     }
     if (name == "str_count") {
         if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }

@@ -1,0 +1,1 @@
+java -cp out:out/fastutil-8.3.1.jar knucleotide

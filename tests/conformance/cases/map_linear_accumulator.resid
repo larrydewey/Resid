@@ -1,0 +1,41 @@
+// Linear map/set accumulators (lin_mask in the codegen): a Map/Set
+// parameter consumed only by insert feeding the same parameter of a tail
+// self call runs on one loop-owned table. The values printed check that
+// neither the caller's map nor an older version is ever changed.
+Map(Int, Int) count(Int i, Int n, Map(Int, Int) m) {
+    if (i >= n) { return m; }
+    Int k = (i * 7919) % 1000;
+    Int c = m.get(k) else { 0 };
+    return count(i + 1, n, m.insert(k, c + 1));
+}
+
+Set(Int) evens(Int i, Int n, Set(Int) s) {
+    if (i >= n) { return s; }
+    if (i % 2 == 0) { return evens(i + 1, n, s.insert(i)); }
+    return evens(i + 1, n, s);
+}
+
+Map(Str, Int) words(List(Str) ws, Int i, Map(Str, Int) m) {
+    if (i >= ws.len()) { return m; }
+    Int c = m.get(ws[i]) else { 0 };
+    return words(ws, i + 1, m.insert(ws[i], c + 1));
+}
+
+Int main() {
+    Map(Int, Int) e = {};
+    Map(Int, Int) m = count(0, 100000, e);
+    Map(Int, Int) m2 = m.insert(5, -1);
+    println(IntToString(m.len()));
+    println(IntToString(m.get(5) else { 0 }));
+    println(IntToString(m2.get(5) else { 0 }));
+    println(IntToString(e.len()));
+    Set(Int) es = {};
+    Set(Int) s = evens(0, 20, es);
+    println(IntToString(s.len()));
+    println(if (s.contains(4)) { "yes" } else { "no" });
+    Map(Str, Int) we = {};
+    Map(Str, Int) w = words(["a", "b", "a", "c", "a"], 0, we);
+    println(IntToString(w.get("a") else { 0 }));
+    println(IntToString(w.len()));
+    return 0;
+}

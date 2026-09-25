@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+javac -d out regexredux.java jextract_pcre2/pcre2_h.java

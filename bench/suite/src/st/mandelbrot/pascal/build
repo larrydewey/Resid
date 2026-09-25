@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+fpc -O2 -v0 -FUout -oout/mandelbrot mandelbrot.pas >/dev/null

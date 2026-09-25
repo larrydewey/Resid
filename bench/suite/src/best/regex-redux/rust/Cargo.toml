@@ -1,0 +1,18 @@
+[package]
+name = "regex-redux"
+version = "0.1.0"
+edition = "2015"
+publish = false
+
+# Standalone package: keep it out of the repository-root Cargo workspace.
+[workspace]
+
+[dependencies]
+libc = "0.2"
+pcre2-sys = "0.2"
+rayon = "1"
+
+# Benchmarks Game: rustc -C opt-level=3 -C codegen-units=1 (plus target-cpu, set in ./build).
+[profile.release]
+opt-level = 3
+codegen-units = 1

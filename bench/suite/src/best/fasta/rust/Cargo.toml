@@ -1,0 +1,17 @@
+[package]
+name = "fasta"
+version = "0.1.0"
+edition = "2015"
+publish = false
+
+# Standalone package: keep it out of the repository-root Cargo workspace.
+[workspace]
+
+[dependencies]
+num_cpus = "1"
+spin = "0.9"
+
+# Benchmarks Game: rustc -C opt-level=3 -C codegen-units=1 (plus target-cpu, set in ./build).
+[profile.release]
+opt-level = 3
+codegen-units = 1

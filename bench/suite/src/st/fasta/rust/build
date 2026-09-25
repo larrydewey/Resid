@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+rustc --edition 2021 -C opt-level=3 -o out/fasta fasta.rs

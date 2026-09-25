@@ -1,0 +1,7 @@
+<Project>
+  <!-- Keep every build artifact (obj/ and bin/) under ./out/ per bench/suite/CONTRACT.md. -->
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)out/obj/</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)out/bin/</BaseOutputPath>
+  </PropertyGroup>
+</Project>

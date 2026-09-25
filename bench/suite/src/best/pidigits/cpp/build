@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+g++ -pipe -O3 -fomit-frame-pointer -march=native -std=c++14 -g -o out/pidigits pidigits.cpp -lgmp -lgmpxx

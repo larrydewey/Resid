@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+gcc -pipe -Wall -O3 -fomit-frame-pointer -march=native -fopenmp -o out/spectral-norm spectral-norm.c

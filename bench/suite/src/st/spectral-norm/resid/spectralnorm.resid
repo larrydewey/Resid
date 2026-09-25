@@ -1,0 +1,137 @@
+// The Computer Language Benchmarks Game: spectral-norm.
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/spectralnorm.html
+//
+// Straightforward single-threaded port: vectors are List(Float) built by
+// self-tail-recursive loops (the `acc.concat([x])` accumulator grows in
+// place), dot products are tail-recursive sums in the same order as the
+// reference program. Resid has no sqrt builtin and no printf, so both are
+// implemented below in pure Resid.
+
+// ---- correctly rounded square root in pure Resid ----------------------
+
+// Given x within ~1 ulp of sqrt(d), return the correctly rounded sqrt(d):
+// the residual d - x*x is computed exactly with Dekker's two-product
+// (Veltkamp split), then one Newton correction x + r / (2x) is applied.
+Float sqrt_fix(Float d, Float x) {
+    Float c = 134217729.0 * x;
+    Float xh = c - (c - x);
+    Float xl = x - xh;
+    Float p = x * x;
+    Float e = ((xh * xh - p) + 2.0 * xh * xl) + xl * xl;
+    Float r = (d - p) - e;
+    return x + r / (2.0 * x);
+}
+
+Float newton_iter(Float d, Float x, Int k) {
+    if (k <= 0) { return x; }
+    return newton_iter(d, 0.5 * (x + d / x), k - 1);
+}
+
+// Scale d into [1, 4) by powers of 4 (exact), tracking the matching
+// power of 2 for the root.
+Float sqrt_scaled(Float d, Float s) {
+    if (d >= 4.0) { return sqrt_scaled(d * 0.25, s * 2.0); }
+    if (d < 1.0) { return sqrt_scaled(d * 4.0, s * 0.5); }
+    Float x = newton_iter(d, 0.5 + 0.5 * d, 6);
+    return x * s;
+}
+
+Float sqrt_slow(Float d) {
+    if (d <= 0.0) { return 0.0; }
+    return sqrt_fix(d, sqrt_scaled(d, 1.0));
+}
+
+// ---- printf("%.9f") in pure Resid ---------------------------------------
+
+Str pad_digits(Str s, Int width) {
+    if (str_len(s) >= width) { return s; }
+    return pad_digits("0" + s, width);
+}
+
+// Exact fixed-point formatting with 9 decimals, rounding half to even on
+// the exact binary value (as glibc printf does). The fraction times 1e9 is
+// exact in Float(128) (53-bit x 30-bit product fits the 113-bit mantissa).
+Str fmt9(Float v) {
+    Bool neg = v < 0.0;
+    Float a = if (neg) { 0.0 - v } else { v };
+    Int ip = (Int)a;
+    Float frac = a - (Float)ip;
+    Float(128) p = (Float(128))frac * (Float(128))1000000000.0;
+    Int q = (Int)p;
+    Float(128) rem = p - (Float(128))q;
+    Bool up = if (rem > (Float(128))0.5) { true } else { if (rem == (Float(128))0.5) { q % 2 == 1 } else { false } };
+    Int q2 = if (up) { q + 1 } else { q };
+    Int ip2 = if (q2 >= 1000000000) { ip + 1 } else { ip };
+    Int q3 = if (q2 >= 1000000000) { q2 - 1000000000 } else { q2 };
+    Str sign = if (neg) { "-" } else { "" };
+    return sign + IntToString(ip2) + "." + pad_digits(IntToString(q3), 9);
+}
+
+// ---- spectral norm ------------------------------------------------------
+
+// A(i, j) = 1 / ((i + j) * (i + j + 1) / 2 + i + 1)
+Float eval_a(Int i, Int j) {
+    Int s = i + j;
+    Int t = i64(s * (s + 1));
+    return 1.0 / (Float)(t / 2 + i + 1);
+}
+
+// sum_j A(i, j) * v[j]
+Float row_a(Int i, Int j, Int n, List(Float) v, Float sum) {
+    if (j >= n) { return sum; }
+    return row_a(i, j + 1, n, v, sum + eval_a(i, j) * v[j]);
+}
+
+// sum_j A(j, i) * v[j]
+Float row_at(Int i, Int j, Int n, List(Float) v, Float sum) {
+    if (j >= n) { return sum; }
+    return row_at(i, j + 1, n, v, sum + eval_a(j, i) * v[j]);
+}
+
+List(Float) mul_av(Int i, Int n, List(Float) v, List(Float) acc) {
+    if (i >= n) { return acc; }
+    return mul_av(i + 1, n, v, acc.concat([row_a(i, 0, n, v, 0.0)]));
+}
+
+List(Float) mul_atv(Int i, Int n, List(Float) v, List(Float) acc) {
+    if (i >= n) { return acc; }
+    return mul_atv(i + 1, n, v, acc.concat([row_at(i, 0, n, v, 0.0)]));
+}
+
+List(Float) mul_atav(Int n, List(Float) v) {
+    List(Float) e0 = [];
+    List(Float) e1 = [];
+    List(Float) t = mul_av(0, n, v, e0);
+    return mul_atv(0, n, t, e1);
+}
+
+List(Float) ones(Int i, Int n, List(Float) acc) {
+    if (i >= n) { return acc; }
+    return ones(i + 1, n, acc.concat([1.0]));
+}
+
+Float dot(Int i, Int n, List(Float) a, List(Float) b, Float sum) {
+    if (i >= n) { return sum; }
+    return dot(i + 1, n, a, b, sum + a[i] * b[i]);
+}
+
+// Ten rounds of v = AtA u; u = AtA v, then sqrt(u.v / v.v).
+Float power(Int k, Int n, List(Float) u) {
+    List(Float) v = mul_atav(n, u);
+    List(Float) u2 = mul_atav(n, v);
+    if (k >= 9) {
+        Float vbv = dot(0, n, u2, v, 0.0);
+        Float vv = dot(0, n, v, v, 0.0);
+        return sqrt_slow(vbv / vv);
+    }
+    return power(k + 1, n, u2);
+}
+
+@requires(args)
+Int main() {
+    Int n = str_parse_int(args.get(1));
+    List(Float) e = [];
+    List(Float) u = ones(0, n, e);
+    println(fmt9(power(0, n, u)));
+    return 0;
+}

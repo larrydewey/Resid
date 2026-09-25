@@ -1,0 +1,14 @@
+[package]
+name = "regex-redux"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone package: keep it out of the repository-root Cargo workspace.
+[workspace]
+
+[dependencies]
+regex = "1"
+
+[profile.release]
+opt-level = 3

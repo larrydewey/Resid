@@ -1,0 +1,393 @@
+// The Computer Language Benchmarks Game: n-body.
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/nbody.html
+//
+// Resid has no mutation and no arrays of unboxed floats, so the five
+// bodies live entirely in scalar parameters of the self-tail-recursive
+// `advance` loop (compiled to a jump): no allocation per step. The pair
+// interactions are unrolled in the same order as the reference program
+// (i < j, velocities updated as `v -= d * m * mag`), so every floating
+// point operation happens in the same order and rounding as the C
+// program. Resid has no sqrt builtin: see `sqrt_near`/`sqrt_slow` below.
+// The body of `advance` and `energy` is unrolled by hand (mechanically).
+
+// ---- correctly rounded square root in pure Resid ----------------------
+
+// Given x within ~1 ulp of sqrt(d), return the correctly rounded sqrt(d):
+// the residual d - x*x is computed exactly with Dekker's two-product
+// (Veltkamp split), then one Newton correction x + r / (2x) is applied.
+Float sqrt_fix(Float d, Float x) {
+    Float c = 134217729.0 * x;
+    Float xh = c - (c - x);
+    Float xl = x - xh;
+    Float p = x * x;
+    Float e = ((xh * xh - p) + 2.0 * xh * xl) + xl * xl;
+    Float r = (d - p) - e;
+    return x + r / (2.0 * x);
+}
+
+// Newton iteration from a good guess (the same pair distance one time
+// step earlier, which differs by far less than 1e-3 relative): two
+// iterations reach full double precision, then sqrt_fix rounds exactly.
+Float sqrt_near(Float d, Float g) {
+    Float x1 = 0.5 * (g + d / g);
+    Float x2 = 0.5 * (x1 + d / x1);
+    return sqrt_fix(d, x2);
+}
+
+Float newton_iter(Float d, Float x, Int k) {
+    if (k <= 0) { return x; }
+    return newton_iter(d, 0.5 * (x + d / x), k - 1);
+}
+
+// Scale d into [1, 4) by powers of 4 (exact), tracking the matching
+// power of 2 for the root.
+Float sqrt_scaled(Float d, Float s) {
+    if (d >= 4.0) { return sqrt_scaled(d * 0.25, s * 2.0); }
+    if (d < 1.0) { return sqrt_scaled(d * 4.0, s * 0.5); }
+    Float x = newton_iter(d, 0.5 + 0.5 * d, 6);
+    return x * s;
+}
+
+// General-purpose sqrt, used only for setup and the two energy reports.
+Float sqrt_slow(Float d) {
+    if (d <= 0.0) { return 0.0; }
+    return sqrt_fix(d, sqrt_scaled(d, 1.0));
+}
+
+// ---- printf("%.9f") in pure Resid ---------------------------------------
+
+Str pad_digits(Str s, Int width) {
+    if (str_len(s) >= width) { return s; }
+    return pad_digits("0" + s, width);
+}
+
+// Exact fixed-point formatting with 9 decimals, rounding half to even on
+// the exact binary value (as glibc printf does). The fraction times 1e9 is
+// exact in Float(128) (53-bit x 30-bit product fits the 113-bit mantissa).
+Str fmt9(Float v) {
+    Bool neg = v < 0.0;
+    Float a = if (neg) { 0.0 - v } else { v };
+    Int ip = (Int)a;
+    Float frac = a - (Float)ip;
+    Float(128) p = (Float(128))frac * (Float(128))1000000000.0;
+    Int q = (Int)p;
+    Float(128) rem = p - (Float(128))q;
+    Bool up = if (rem > (Float(128))0.5) { true } else { if (rem == (Float(128))0.5) { q % 2 == 1 } else { false } };
+    Int q2 = if (up) { q + 1 } else { q };
+    Int ip2 = if (q2 >= 1000000000) { ip + 1 } else { ip };
+    Int q3 = if (q2 >= 1000000000) { q2 - 1000000000 } else { q2 };
+    Str sign = if (neg) { "-" } else { "" };
+    return sign + IntToString(ip2) + "." + pad_digits(IntToString(q3), 9);
+}
+
+// ---- simulation ---------------------------------------------------------
+
+Float energy(
+    Float x0, Float y0, Float z0, Float vx0, Float vy0, Float vz0,
+    Float x1, Float y1, Float z1, Float vx1, Float vy1, Float vz1,
+    Float x2, Float y2, Float z2, Float vx2, Float vy2, Float vz2,
+    Float x3, Float y3, Float z3, Float vx3, Float vy3, Float vz3,
+    Float x4, Float y4, Float z4, Float vx4, Float vy4, Float vz4,
+    Float m0, Float m1, Float m2, Float m3, Float m4) {
+    Float e1 = 0.0 + 0.5 * m0 * (vx0 * vx0 + vy0 * vy0 + vz0 * vz0);
+    Float dx01 = x0 - x1;
+    Float dy01 = y0 - y1;
+    Float dz01 = z0 - z1;
+    Float e2 = e1 - m0 * m1 / sqrt_slow(dx01 * dx01 + dy01 * dy01 + dz01 * dz01);
+    Float dx02 = x0 - x2;
+    Float dy02 = y0 - y2;
+    Float dz02 = z0 - z2;
+    Float e3 = e2 - m0 * m2 / sqrt_slow(dx02 * dx02 + dy02 * dy02 + dz02 * dz02);
+    Float dx03 = x0 - x3;
+    Float dy03 = y0 - y3;
+    Float dz03 = z0 - z3;
+    Float e4 = e3 - m0 * m3 / sqrt_slow(dx03 * dx03 + dy03 * dy03 + dz03 * dz03);
+    Float dx04 = x0 - x4;
+    Float dy04 = y0 - y4;
+    Float dz04 = z0 - z4;
+    Float e5 = e4 - m0 * m4 / sqrt_slow(dx04 * dx04 + dy04 * dy04 + dz04 * dz04);
+    Float e6 = e5 + 0.5 * m1 * (vx1 * vx1 + vy1 * vy1 + vz1 * vz1);
+    Float dx12 = x1 - x2;
+    Float dy12 = y1 - y2;
+    Float dz12 = z1 - z2;
+    Float e7 = e6 - m1 * m2 / sqrt_slow(dx12 * dx12 + dy12 * dy12 + dz12 * dz12);
+    Float dx13 = x1 - x3;
+    Float dy13 = y1 - y3;
+    Float dz13 = z1 - z3;
+    Float e8 = e7 - m1 * m3 / sqrt_slow(dx13 * dx13 + dy13 * dy13 + dz13 * dz13);
+    Float dx14 = x1 - x4;
+    Float dy14 = y1 - y4;
+    Float dz14 = z1 - z4;
+    Float e9 = e8 - m1 * m4 / sqrt_slow(dx14 * dx14 + dy14 * dy14 + dz14 * dz14);
+    Float e10 = e9 + 0.5 * m2 * (vx2 * vx2 + vy2 * vy2 + vz2 * vz2);
+    Float dx23 = x2 - x3;
+    Float dy23 = y2 - y3;
+    Float dz23 = z2 - z3;
+    Float e11 = e10 - m2 * m3 / sqrt_slow(dx23 * dx23 + dy23 * dy23 + dz23 * dz23);
+    Float dx24 = x2 - x4;
+    Float dy24 = y2 - y4;
+    Float dz24 = z2 - z4;
+    Float e12 = e11 - m2 * m4 / sqrt_slow(dx24 * dx24 + dy24 * dy24 + dz24 * dz24);
+    Float e13 = e12 + 0.5 * m3 * (vx3 * vx3 + vy3 * vy3 + vz3 * vz3);
+    Float dx34 = x3 - x4;
+    Float dy34 = y3 - y4;
+    Float dz34 = z3 - z4;
+    Float e14 = e13 - m3 * m4 / sqrt_slow(dx34 * dx34 + dy34 * dy34 + dz34 * dz34);
+    Float e15 = e14 + 0.5 * m4 * (vx4 * vx4 + vy4 * vy4 + vz4 * vz4);
+    return e15;
+}
+
+Float advance(Int step, Int n,
+    Float x0, Float y0, Float z0, Float vx0, Float vy0, Float vz0,
+    Float x1, Float y1, Float z1, Float vx1, Float vy1, Float vz1,
+    Float x2, Float y2, Float z2, Float vx2, Float vy2, Float vz2,
+    Float x3, Float y3, Float z3, Float vx3, Float vy3, Float vz3,
+    Float x4, Float y4, Float z4, Float vx4, Float vy4, Float vz4,
+    Float m0, Float m1, Float m2, Float m3, Float m4,
+    Float g01, Float g02, Float g03, Float g04, Float g12, Float g13, Float g14, Float g23, Float g24, Float g34) {
+    if (step >= n) {
+        return energy(
+        x0, y0, z0, vx0, vy0, vz0,
+        x1, y1, z1, vx1, vy1, vz1,
+        x2, y2, z2, vx2, vy2, vz2,
+        x3, y3, z3, vx3, vy3, vz3,
+        x4, y4, z4, vx4, vy4, vz4,
+        m0, m1, m2, m3, m4);
+    }
+    // pair (0, 1)
+    Float dx01 = x0 - x1;
+    Float dy01 = y0 - y1;
+    Float dz01 = z0 - z1;
+    Float d201 = dx01 * dx01 + dy01 * dy01 + dz01 * dz01;
+    Float dist01 = sqrt_near(d201, g01);
+    Float mag01 = 0.01 / (d201 * dist01);
+    Float vx0_1 = vx0 - dx01 * m1 * mag01;
+    Float vy0_1 = vy0 - dy01 * m1 * mag01;
+    Float vz0_1 = vz0 - dz01 * m1 * mag01;
+    Float vx1_1 = vx1 + dx01 * m0 * mag01;
+    Float vy1_1 = vy1 + dy01 * m0 * mag01;
+    Float vz1_1 = vz1 + dz01 * m0 * mag01;
+    // pair (0, 2)
+    Float dx02 = x0 - x2;
+    Float dy02 = y0 - y2;
+    Float dz02 = z0 - z2;
+    Float d202 = dx02 * dx02 + dy02 * dy02 + dz02 * dz02;
+    Float dist02 = sqrt_near(d202, g02);
+    Float mag02 = 0.01 / (d202 * dist02);
+    Float vx0_2 = vx0_1 - dx02 * m2 * mag02;
+    Float vy0_2 = vy0_1 - dy02 * m2 * mag02;
+    Float vz0_2 = vz0_1 - dz02 * m2 * mag02;
+    Float vx2_1 = vx2 + dx02 * m0 * mag02;
+    Float vy2_1 = vy2 + dy02 * m0 * mag02;
+    Float vz2_1 = vz2 + dz02 * m0 * mag02;
+    // pair (0, 3)
+    Float dx03 = x0 - x3;
+    Float dy03 = y0 - y3;
+    Float dz03 = z0 - z3;
+    Float d203 = dx03 * dx03 + dy03 * dy03 + dz03 * dz03;
+    Float dist03 = sqrt_near(d203, g03);
+    Float mag03 = 0.01 / (d203 * dist03);
+    Float vx0_3 = vx0_2 - dx03 * m3 * mag03;
+    Float vy0_3 = vy0_2 - dy03 * m3 * mag03;
+    Float vz0_3 = vz0_2 - dz03 * m3 * mag03;
+    Float vx3_1 = vx3 + dx03 * m0 * mag03;
+    Float vy3_1 = vy3 + dy03 * m0 * mag03;
+    Float vz3_1 = vz3 + dz03 * m0 * mag03;
+    // pair (0, 4)
+    Float dx04 = x0 - x4;
+    Float dy04 = y0 - y4;
+    Float dz04 = z0 - z4;
+    Float d204 = dx04 * dx04 + dy04 * dy04 + dz04 * dz04;
+    Float dist04 = sqrt_near(d204, g04);
+    Float mag04 = 0.01 / (d204 * dist04);
+    Float vx0_4 = vx0_3 - dx04 * m4 * mag04;
+    Float vy0_4 = vy0_3 - dy04 * m4 * mag04;
+    Float vz0_4 = vz0_3 - dz04 * m4 * mag04;
+    Float vx4_1 = vx4 + dx04 * m0 * mag04;
+    Float vy4_1 = vy4 + dy04 * m0 * mag04;
+    Float vz4_1 = vz4 + dz04 * m0 * mag04;
+    // pair (1, 2)
+    Float dx12 = x1 - x2;
+    Float dy12 = y1 - y2;
+    Float dz12 = z1 - z2;
+    Float d212 = dx12 * dx12 + dy12 * dy12 + dz12 * dz12;
+    Float dist12 = sqrt_near(d212, g12);
+    Float mag12 = 0.01 / (d212 * dist12);
+    Float vx1_2 = vx1_1 - dx12 * m2 * mag12;
+    Float vy1_2 = vy1_1 - dy12 * m2 * mag12;
+    Float vz1_2 = vz1_1 - dz12 * m2 * mag12;
+    Float vx2_2 = vx2_1 + dx12 * m1 * mag12;
+    Float vy2_2 = vy2_1 + dy12 * m1 * mag12;
+    Float vz2_2 = vz2_1 + dz12 * m1 * mag12;
+    // pair (1, 3)
+    Float dx13 = x1 - x3;
+    Float dy13 = y1 - y3;
+    Float dz13 = z1 - z3;
+    Float d213 = dx13 * dx13 + dy13 * dy13 + dz13 * dz13;
+    Float dist13 = sqrt_near(d213, g13);
+    Float mag13 = 0.01 / (d213 * dist13);
+    Float vx1_3 = vx1_2 - dx13 * m3 * mag13;
+    Float vy1_3 = vy1_2 - dy13 * m3 * mag13;
+    Float vz1_3 = vz1_2 - dz13 * m3 * mag13;
+    Float vx3_2 = vx3_1 + dx13 * m1 * mag13;
+    Float vy3_2 = vy3_1 + dy13 * m1 * mag13;
+    Float vz3_2 = vz3_1 + dz13 * m1 * mag13;
+    // pair (1, 4)
+    Float dx14 = x1 - x4;
+    Float dy14 = y1 - y4;
+    Float dz14 = z1 - z4;
+    Float d214 = dx14 * dx14 + dy14 * dy14 + dz14 * dz14;
+    Float dist14 = sqrt_near(d214, g14);
+    Float mag14 = 0.01 / (d214 * dist14);
+    Float vx1_4 = vx1_3 - dx14 * m4 * mag14;
+    Float vy1_4 = vy1_3 - dy14 * m4 * mag14;
+    Float vz1_4 = vz1_3 - dz14 * m4 * mag14;
+    Float vx4_2 = vx4_1 + dx14 * m1 * mag14;
+    Float vy4_2 = vy4_1 + dy14 * m1 * mag14;
+    Float vz4_2 = vz4_1 + dz14 * m1 * mag14;
+    // pair (2, 3)
+    Float dx23 = x2 - x3;
+    Float dy23 = y2 - y3;
+    Float dz23 = z2 - z3;
+    Float d223 = dx23 * dx23 + dy23 * dy23 + dz23 * dz23;
+    Float dist23 = sqrt_near(d223, g23);
+    Float mag23 = 0.01 / (d223 * dist23);
+    Float vx2_3 = vx2_2 - dx23 * m3 * mag23;
+    Float vy2_3 = vy2_2 - dy23 * m3 * mag23;
+    Float vz2_3 = vz2_2 - dz23 * m3 * mag23;
+    Float vx3_3 = vx3_2 + dx23 * m2 * mag23;
+    Float vy3_3 = vy3_2 + dy23 * m2 * mag23;
+    Float vz3_3 = vz3_2 + dz23 * m2 * mag23;
+    // pair (2, 4)
+    Float dx24 = x2 - x4;
+    Float dy24 = y2 - y4;
+    Float dz24 = z2 - z4;
+    Float d224 = dx24 * dx24 + dy24 * dy24 + dz24 * dz24;
+    Float dist24 = sqrt_near(d224, g24);
+    Float mag24 = 0.01 / (d224 * dist24);
+    Float vx2_4 = vx2_3 - dx24 * m4 * mag24;
+    Float vy2_4 = vy2_3 - dy24 * m4 * mag24;
+    Float vz2_4 = vz2_3 - dz24 * m4 * mag24;
+    Float vx4_3 = vx4_2 + dx24 * m2 * mag24;
+    Float vy4_3 = vy4_2 + dy24 * m2 * mag24;
+    Float vz4_3 = vz4_2 + dz24 * m2 * mag24;
+    // pair (3, 4)
+    Float dx34 = x3 - x4;
+    Float dy34 = y3 - y4;
+    Float dz34 = z3 - z4;
+    Float d234 = dx34 * dx34 + dy34 * dy34 + dz34 * dz34;
+    Float dist34 = sqrt_near(d234, g34);
+    Float mag34 = 0.01 / (d234 * dist34);
+    Float vx3_4 = vx3_3 - dx34 * m4 * mag34;
+    Float vy3_4 = vy3_3 - dy34 * m4 * mag34;
+    Float vz3_4 = vz3_3 - dz34 * m4 * mag34;
+    Float vx4_4 = vx4_3 + dx34 * m3 * mag34;
+    Float vy4_4 = vy4_3 + dy34 * m3 * mag34;
+    Float vz4_4 = vz4_3 + dz34 * m3 * mag34;
+    Float nx0 = x0 + 0.01 * vx0_4;
+    Float ny0 = y0 + 0.01 * vy0_4;
+    Float nz0 = z0 + 0.01 * vz0_4;
+    Float nx1 = x1 + 0.01 * vx1_4;
+    Float ny1 = y1 + 0.01 * vy1_4;
+    Float nz1 = z1 + 0.01 * vz1_4;
+    Float nx2 = x2 + 0.01 * vx2_4;
+    Float ny2 = y2 + 0.01 * vy2_4;
+    Float nz2 = z2 + 0.01 * vz2_4;
+    Float nx3 = x3 + 0.01 * vx3_4;
+    Float ny3 = y3 + 0.01 * vy3_4;
+    Float nz3 = z3 + 0.01 * vz3_4;
+    Float nx4 = x4 + 0.01 * vx4_4;
+    Float ny4 = y4 + 0.01 * vy4_4;
+    Float nz4 = z4 + 0.01 * vz4_4;
+    return advance(step + 1, n,
+        nx0, ny0, nz0, vx0_4, vy0_4, vz0_4,
+        nx1, ny1, nz1, vx1_4, vy1_4, vz1_4,
+        nx2, ny2, nz2, vx2_4, vy2_4, vz2_4,
+        nx3, ny3, nz3, vx3_4, vy3_4, vz3_4,
+        nx4, ny4, nz4, vx4_4, vy4_4, vz4_4,
+        m0, m1, m2, m3, m4,
+        dist01, dist02, dist03, dist04, dist12, dist13, dist14, dist23, dist24, dist34);
+}
+
+@requires(args)
+Int main() {
+    Int n = str_parse_int(args.get(1));
+    Float pi = 3.141592653589793;
+    Float solar = 4.0 * pi * pi;
+    Float dpy = 365.24;
+
+    Float x0 = 0.0;
+    Float y0 = 0.0;
+    Float z0 = 0.0;
+    Float m0 = solar;
+
+    Float x1 = 4.84143144246472090;
+    Float y1 = -1.16032004402742839;
+    Float z1 = -0.103622044471123109;
+    Float vx1 = 0.00166007664274403694 * dpy;
+    Float vy1 = 0.00769901118419740425 * dpy;
+    Float vz1 = -0.0000690460016972063023 * dpy;
+    Float m1 = 0.000954791938424326609 * solar;
+
+    Float x2 = 8.34336671824457987;
+    Float y2 = 4.12479856412430479;
+    Float z2 = -0.403523417114321381;
+    Float vx2 = -0.00276742510726862411 * dpy;
+    Float vy2 = 0.00499852801234917238 * dpy;
+    Float vz2 = 0.0000230417297573763929 * dpy;
+    Float m2 = 0.000285885980666130812 * solar;
+
+    Float x3 = 12.8943695621391310;
+    Float y3 = -15.1111514016986312;
+    Float z3 = -0.223307578892655734;
+    Float vx3 = 0.00296460137564761618 * dpy;
+    Float vy3 = 0.00237847173959480950 * dpy;
+    Float vz3 = -0.0000296589568540237556 * dpy;
+    Float m3 = 0.0000436624404335156298 * solar;
+
+    Float x4 = 15.3796971148509165;
+    Float y4 = -25.9193146099879641;
+    Float z4 = 0.179258772950371181;
+    Float vx4 = 0.00268067772490389322 * dpy;
+    Float vy4 = 0.00162824170038242295 * dpy;
+    Float vz4 = -0.0000951592254519715870 * dpy;
+    Float m4 = 0.0000515138902046611451 * solar;
+
+    // Offset momentum (the sun starts at rest, so its term is zero).
+    Float px = 0.0 * m0 + vx1 * m1 + vx2 * m2 + vx3 * m3 + vx4 * m4;
+    Float py = 0.0 * m0 + vy1 * m1 + vy2 * m2 + vy3 * m3 + vy4 * m4;
+    Float pz = 0.0 * m0 + vz1 * m1 + vz2 * m2 + vz3 * m3 + vz4 * m4;
+    Float vx0 = (0.0 - px) / solar;
+    Float vy0 = (0.0 - py) / solar;
+    Float vz0 = (0.0 - pz) / solar;
+
+    Float e0 = energy(
+        x0, y0, z0, vx0, vy0, vz0,
+        x1, y1, z1, vx1, vy1, vz1,
+        x2, y2, z2, vx2, vy2, vz2,
+        x3, y3, z3, vx3, vy3, vz3,
+        x4, y4, z4, vx4, vy4, vz4,
+        m0, m1, m2, m3, m4);
+    println(fmt9(e0));
+
+    Float g01 = sqrt_slow((x0 - x1) * (x0 - x1) + (y0 - y1) * (y0 - y1) + (z0 - z1) * (z0 - z1));
+    Float g02 = sqrt_slow((x0 - x2) * (x0 - x2) + (y0 - y2) * (y0 - y2) + (z0 - z2) * (z0 - z2));
+    Float g03 = sqrt_slow((x0 - x3) * (x0 - x3) + (y0 - y3) * (y0 - y3) + (z0 - z3) * (z0 - z3));
+    Float g04 = sqrt_slow((x0 - x4) * (x0 - x4) + (y0 - y4) * (y0 - y4) + (z0 - z4) * (z0 - z4));
+    Float g12 = sqrt_slow((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2));
+    Float g13 = sqrt_slow((x1 - x3) * (x1 - x3) + (y1 - y3) * (y1 - y3) + (z1 - z3) * (z1 - z3));
+    Float g14 = sqrt_slow((x1 - x4) * (x1 - x4) + (y1 - y4) * (y1 - y4) + (z1 - z4) * (z1 - z4));
+    Float g23 = sqrt_slow((x2 - x3) * (x2 - x3) + (y2 - y3) * (y2 - y3) + (z2 - z3) * (z2 - z3));
+    Float g24 = sqrt_slow((x2 - x4) * (x2 - x4) + (y2 - y4) * (y2 - y4) + (z2 - z4) * (z2 - z4));
+    Float g34 = sqrt_slow((x3 - x4) * (x3 - x4) + (y3 - y4) * (y3 - y4) + (z3 - z4) * (z3 - z4));
+    Float e1 = advance(0, n,
+        x0, y0, z0, vx0, vy0, vz0,
+        x1, y1, z1, vx1, vy1, vz1,
+        x2, y2, z2, vx2, vy2, vz2,
+        x3, y3, z3, vx3, vy3, vz3,
+        x4, y4, z4, vx4, vy4, vz4,
+        m0, m1, m2, m3, m4,
+        g01, g02, g03, g04, g12, g13, g14, g23, g24, g34);
+    println(fmt9(e1));
+    return 0;
+}

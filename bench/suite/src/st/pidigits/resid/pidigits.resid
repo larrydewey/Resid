@@ -1,0 +1,163 @@
+// The Computer Language Benchmarks Game: pidigits
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/pidigits.html
+//
+// Resid port of the streaming spigot used by the reference programs
+// (numer / accum / denom with next_term, extract_digit(3) == extract_digit(4)
+// and eliminate_digit), on Dec(1000000): exact decimals (spec §6.6a) whose
+// runtime cost follows the digits a value actually has, so they serve as
+// the bignums (numbers reach about 146000 digits at N = 10000).
+//
+// Two exact rewrites cut the number of full-length passes:
+// - numer is carried doubled (n2 = 2*numer), so accum + 2*numer is one add;
+// - eliminate_digit's "accum *= 10; numer *= 10" is left pending (p = 10)
+//   and folded into the next next_term's multipliers k2 and k.
+// The digit floor((3*numer + accum) / denom) (and the same with 4) is
+// estimated from 34-digit roundings of the three numbers (O(1) each) and
+// checked exactly when the estimate is within 1e-9 of an integer; the
+// numer > accum test is decided the same way.
+//
+// Memory: Resid never frees, so iterations run in blocks of 16 inside
+// runtime arenas (resid_bulk_push / resid_bulk_pop), 32 blocks per outer
+// arena; resid_dec_persist copies the three numbers into the enclosing
+// scope before each pop.
+
+// State: n2 = 2*numer, a = accum, d = denom, all Dec(1000000) integers;
+// p = pending factor (1 or 10) that numer and accum still owe from the
+// last eliminate_digit.
+
+Dec(1000000) big(Int v) { return d1000000(v); }
+
+Bool near_int(Float r) {
+    Float f = r - i64(r);
+    if (f < 0.000000001) { return true; }
+    return f > 0.999999999;
+}
+
+// numer > accum, i.e. n2 > 2a: decided from 34-digit roundings unless the
+// two are too close to call.
+Bool n_gt_a(Dec(1000000) n2, Dec(1000000) a) {
+    Dec(34) fn = d34(n2);
+    Dec(34) diff = fn - d34(a) * 2m;
+    Dec(34) tol = fn * 0.000000000000000000000000000001m;
+    if (diff > tol) { return true; }
+    if (diff < 0m - tol) { return false; }
+    return n2 > a + a;
+}
+
+// floor((m*numer + accum) / denom) = floor((m*n2 + 2a) / 2d) exactly,
+// given an estimate q off by at most one.
+Int exact_digit(Dec(1000000) n2, Dec(1000000) a, Dec(1000000) d, Int m, Int q) {
+    Dec(1000000) x = n2 * big(m) + a + a;
+    Dec(1000000) dd = d + d;
+    if (dd * big(q) > x) { return q - 1; }
+    if (dd * big(q + 1) <= x) { return q + 1; }
+    return q;
+}
+
+Int floor_digit(Dec(1000000) n2, Dec(1000000) a, Dec(1000000) d, Int m, Float r) {
+    Int q = i64(r);
+    if (near_int(r)) { return exact_digit(n2, a, d, m, q); }
+    return q;
+}
+
+Int digit(Dec(1000000) n2, Dec(1000000) a, Dec(1000000) d) {
+    Dec(34) fn = d34(n2);
+    Dec(34) fa = d34(a);
+    Dec(34) fd = d34(d);
+    Int q3 = floor_digit(n2, a, d, 3, f64((fn * 1.5m + fa) / fd));
+    Int q4 = floor_digit(n2, a, d, 4, f64((fn * 2m + fa) / fd));
+    if (q3 == q4) { return q3; }
+    return -1;
+}
+
+Bool print_line(Int line, Int i) {
+    Str ds = IntToString(line);
+    return print(str_slice(ds, 1, str_len(ds)) + "\t:" + IntToString(i) + "\n");
+}
+
+type St = { Dec(1000000) n2; Dec(1000000) a; Dec(1000000) d; Int p; Int k; Int i; Int line; };
+
+St iter(Dec(1000000) n2, Dec(1000000) a, Dec(1000000) d, Int p, Int k, Int i, Int line, Int total, Int left) {
+    if (i >= total || left <= 0) {
+        return St {.n2 = n2, .a = a, .d = d, .p = p, .k = k, .i = i, .line = line};
+    }
+    Int k1 = k + 1;
+    Int k2 = 2 * k1 + 1;
+    // next_term, with the pending factor p folded into the multipliers:
+    // accum = (accum + 2*numer) * k2; denom *= k2; numer *= k
+    Int pk2 = p * k2;
+    Int pk1 = p * k1;
+    Dec(1000000) a1 = (a + n2) * big(pk2);
+    Dec(1000000) d1 = d * big(k2);
+    Dec(1000000) n21 = n2 * big(pk1);
+    if (n_gt_a(n21, a1)) { return iter(n21, a1, d1, 1, k1, i, line, total, left - 1); }
+    Int q = digit(n21, a1, d1);
+    if (q < 0) { return iter(n21, a1, d1, 1, k1, i, line, total, left - 1); }
+    Int i1 = i + 1;
+    Int line1 = line * 10 + q;
+    Bool _p = if (i1 % 10 == 0) { print_line(line1, i1) } else { true };
+    Int line2 = if (i1 % 10 == 0) { 1 } else { line1 };
+    // eliminate_digit: accum = 10 * (accum - denom*q); numer *= 10 (the
+    // factor 10 is left pending)
+    Dec(1000000) a2 = if (q == 0) { a1 } else { a1 - d1 * big(q) };
+    return iter(n21, a2, d1, 10, k1, i1, line2, total, left - 1);
+}
+
+// One block of `m` iterations in its own bulk scope; the three numbers
+// are copied out of it (resid_dec_persist) before it is popped.
+St block(St s, Int total, Int m) {
+    Int _in = resid_bulk_push();
+    St r = iter(s.n2, s.a, s.d, s.p, s.k, s.i, s.line, total, m);
+    Dec(1000000) n2 = resid_dec_persist(r.n2);
+    Dec(1000000) a = resid_dec_persist(r.a);
+    Dec(1000000) d = resid_dec_persist(r.d);
+    Int p = r.p;
+    Int k = r.k;
+    Int i = r.i;
+    Int line = r.line;
+    Int _out = resid_bulk_pop();
+    return St {.n2 = n2, .a = a, .d = d, .p = p, .k = k, .i = i, .line = line};
+}
+
+St blocks(St s, Int total, Int m, Int g) {
+    if (g <= 0 || s.i >= total) { return s; }
+    return blocks(block(s, total, m), total, m, g - 1);
+}
+
+// A group of `g` blocks in an outer bulk scope, copied out once.
+St group(St s, Int total, Int m, Int g) {
+    Int _in = resid_bulk_push();
+    St r = blocks(s, total, m, g);
+    Dec(1000000) n2 = resid_dec_persist(r.n2);
+    Dec(1000000) a = resid_dec_persist(r.a);
+    Dec(1000000) d = resid_dec_persist(r.d);
+    Int p = r.p;
+    Int k = r.k;
+    Int i = r.i;
+    Int line = r.line;
+    Int _out = resid_bulk_pop();
+    return St {.n2 = n2, .a = a, .d = d, .p = p, .k = k, .i = i, .line = line};
+}
+
+St run(St s, Int total, Int m, Int g) {
+    if (s.i >= total) { return s; }
+    return run(group(s, total, m, g), total, m, g);
+}
+
+Str spaces(Int n) {
+    if (n <= 0) { return ""; }
+    return " " + spaces(n - 1);
+}
+
+@requires(args)
+Int main() {
+    Int total = str_parse_int(args.get(1));
+    St s0 = St {.n2 = big(2), .a = big(0), .d = big(1), .p = 1, .k = 0, .i = 0, .line = 1};
+    St r = run(s0, total, 16, 32);
+    if (total % 10 != 0) {
+        Str ds = IntToString(r.line);
+        Str digits = str_slice(ds, 1, str_len(ds));
+        print(digits + spaces(10 - str_len(digits)) + "\t:" + IntToString(total) + "\n");
+    }
+    return 0;
+}

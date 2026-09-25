@@ -1,0 +1,153 @@
+// The Computer Language Benchmarks Game: fasta.
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/fasta.html
+//
+// Single-threaded port of the reference algorithm: the ALU sequence is
+// repeated, then two sequences are drawn with the benchmark's linear
+// congruential generator (IM = 139968, IA = 3877, IC = 29573, seed 42)
+// by cumulative-probability lookup (first entry with r < cumulative p).
+// Lines are 60 characters.
+//
+// Output is built with the runtime string builder (str_sb_*) and printed
+// in blocks of BLOCK_LINES lines, because print/println fflush on every
+// call. The cumulative probability tables are passed as scalar
+// parameters and the lookup is unrolled, so the inner loop allocates
+// nothing but builder bytes. Each printed block string is not freed
+// (Resid has no free), so the program retains memory proportional to
+// its output size.
+
+Int block_lines() { return 16384; }
+
+Int next_seed(Int seed) {
+    return i64(seed * 3877 + 29573) % 139968;
+}
+
+// Emit n characters of s repeated cyclically (starting at index k),
+// 60 per line.
+Int repeat_seq(Str s, Int slen, Int k, Int n, Int col, Int lines, Str sb) {
+    if (n == 0) {
+        Str sb2 = if (col > 0) { str_sb_append_cp(sb, 10) } else { sb };
+        print(str_sb_finish(sb2));
+        return k;
+    }
+    if (col == 60) {
+        Str sb3 = str_sb_append_cp(sb, 10);
+        if (lines + 1 >= block_lines()) {
+            print(str_sb_finish(sb3));
+            return repeat_seq(s, slen, k, n, 0, 0, str_sb_new());
+        }
+        return repeat_seq(s, slen, k, n, 0, lines + 1, sb3);
+    }
+    Str sb4 = str_sb_append_cp(sb, str_char_at(s, k));
+    Int k2 = if (k + 1 == slen) { 0 } else { k + 1 };
+    return repeat_seq(s, slen, k2, n - 1, col + 1, lines, sb4);
+}
+
+Int pick_iub(Float r, Float c0, Float c1, Float c2, Float c3, Float c4, Float c5, Float c6, Float c7, Float c8, Float c9, Float c10, Float c11, Float c12, Float c13, Float c14) {
+    if (r < c0) { return 97; } // 'a'
+    if (r < c1) { return 99; } // 'c'
+    if (r < c2) { return 103; } // 'g'
+    if (r < c3) { return 116; } // 't'
+    if (r < c4) { return 66; } // 'B'
+    if (r < c5) { return 68; } // 'D'
+    if (r < c6) { return 72; } // 'H'
+    if (r < c7) { return 75; } // 'K'
+    if (r < c8) { return 77; } // 'M'
+    if (r < c9) { return 78; } // 'N'
+    if (r < c10) { return 82; } // 'R'
+    if (r < c11) { return 83; } // 'S'
+    if (r < c12) { return 86; } // 'V'
+    if (r < c13) { return 87; } // 'W'
+    return 89; // 'Y'
+}
+
+Int pick_homo(Float r, Float c0, Float c1, Float c2, Float c3) {
+    if (r < c0) { return 97; } // 'a'
+    if (r < c1) { return 99; } // 'c'
+    if (r < c2) { return 103; } // 'g'
+    return 116; // 't'
+}
+
+// Emit n random characters from the iub table, 60 per line, flushing
+// the builder every BLOCK_LINES lines. Returns the final LCG state.
+Int random_iub(Int seed, Int n, Int col, Int lines, Str sb, Float c0, Float c1, Float c2, Float c3, Float c4, Float c5, Float c6, Float c7, Float c8, Float c9, Float c10, Float c11, Float c12, Float c13, Float c14) {
+    if (n == 0) {
+        Str sb2 = if (col > 0) { str_sb_append_cp(sb, 10) } else { sb };
+        print(str_sb_finish(sb2));
+        return seed;
+    }
+    if (col == 60) {
+        Str sb3 = str_sb_append_cp(sb, 10);
+        if (lines + 1 >= block_lines()) {
+            print(str_sb_finish(sb3));
+            return random_iub(seed, n, 0, 0, str_sb_new(), c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14);
+        }
+        return random_iub(seed, n, 0, lines + 1, sb3, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14);
+    }
+    Int s2 = next_seed(seed);
+    Float r = 1.0 * (Float)s2 / 139968.0;
+    Str sb4 = str_sb_append_cp(sb, pick_iub(r, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14));
+    return random_iub(s2, n - 1, col + 1, lines, sb4, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14);
+}
+
+// Emit n random characters from the homo table, 60 per line, flushing
+// the builder every BLOCK_LINES lines. Returns the final LCG state.
+Int random_homo(Int seed, Int n, Int col, Int lines, Str sb, Float c0, Float c1, Float c2, Float c3) {
+    if (n == 0) {
+        Str sb2 = if (col > 0) { str_sb_append_cp(sb, 10) } else { sb };
+        print(str_sb_finish(sb2));
+        return seed;
+    }
+    if (col == 60) {
+        Str sb3 = str_sb_append_cp(sb, 10);
+        if (lines + 1 >= block_lines()) {
+            print(str_sb_finish(sb3));
+            return random_homo(seed, n, 0, 0, str_sb_new(), c0, c1, c2, c3);
+        }
+        return random_homo(seed, n, 0, lines + 1, sb3, c0, c1, c2, c3);
+    }
+    Int s2 = next_seed(seed);
+    Float r = 1.0 * (Float)s2 / 139968.0;
+    Str sb4 = str_sb_append_cp(sb, pick_homo(r, c0, c1, c2, c3));
+    return random_homo(s2, n - 1, col + 1, lines, sb4, c0, c1, c2, c3);
+}
+
+@requires(args)
+Int main() {
+    Int n = str_parse_int(args.get(1));
+    Str alu = "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGG" +
+        "GAGGCCGAGGCGGGCGGATCACCTGAGGTCAGGAGTTCGAGA" +
+        "CCAGCCTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAAT" +
+        "ACAAAAATTAGCCGGGCGTGGTGGCGCGCGCCTGTAATCCCA" +
+        "GCTACTCGGGAGGCTGAGGCAGGAGAATCGCTTGAACCCGGG" +
+        "AGGCGGAGGTTGCAGTGAGCCGAGATCGCGCCACTGCACTCC" +
+        "AGCCTGGGCGACAGAGCGAGACTCCGTCTCAAAAA";
+
+    // Cumulative probabilities, summed in table order as the reference does.
+    Float i0 = 0.0 + 0.27;
+    Float i1 = i0 + 0.12;
+    Float i2 = i1 + 0.12;
+    Float i3 = i2 + 0.27;
+    Float i4 = i3 + 0.02;
+    Float i5 = i4 + 0.02;
+    Float i6 = i5 + 0.02;
+    Float i7 = i6 + 0.02;
+    Float i8 = i7 + 0.02;
+    Float i9 = i8 + 0.02;
+    Float i10 = i9 + 0.02;
+    Float i11 = i10 + 0.02;
+    Float i12 = i11 + 0.02;
+    Float i13 = i12 + 0.02;
+    Float i14 = i13 + 0.02;
+    Float h0 = 0.0 + 0.3029549426680;
+    Float h1 = h0 + 0.1979883004921;
+    Float h2 = h1 + 0.1975473066391;
+    Float h3 = h2 + 0.3015094502008;
+
+    print(">ONE Homo sapiens alu\n");
+    Int k = repeat_seq(alu, str_len(alu), 0, i64(2 * n), 0, 0, str_sb_new());
+    print(">TWO IUB ambiguity codes\n");
+    Int seed = random_iub(42, i64(3 * n), 0, 0, str_sb_new(), i0, i1, i2, i3, i4, i5, i6, i7, i8, i9, i10, i11, i12, i13, i14);
+    print(">THREE Homo sapiens frequency\n");
+    Int seed2 = random_homo(seed, i64(5 * n), 0, 0, str_sb_new(), h0, h1, h2, h3);
+    return 0;
+}

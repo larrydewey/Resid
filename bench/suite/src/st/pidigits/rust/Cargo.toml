@@ -1,0 +1,17 @@
+[package]
+name = "pidigits"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone package: keep it out of the repository-root Cargo workspace.
+[workspace]
+
+[dependencies]
+# rug wraps GMP, same bignum library as the Benchmarks Game C programs.
+# Only the integer part is needed; link the system GMP instead of building it.
+rug = { version = "1.30", default-features = false, features = ["integer", "std"] }
+gmp-mpfr-sys = { version = "1", default-features = false, features = ["use-system-libs"] }
+
+[profile.release]
+opt-level = 3

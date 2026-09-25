@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+gfortran -O2 -Jout -o out/binarytrees binarytrees.f90

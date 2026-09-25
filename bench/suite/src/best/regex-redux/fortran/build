@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+gfortran -O3 -march=native -fopenmp -Jout -o out/regexredux regexredux.f90 -lpcre2-8

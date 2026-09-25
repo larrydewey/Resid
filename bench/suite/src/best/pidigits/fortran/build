@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+gfortran -O3 -march=native -Jout -o out/pidigits pidigits.f90 -lgmp

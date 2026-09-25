@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+# Benchmarks Game builds this program against fastutil 8.3.1; fetch it from
+# Maven Central once (not a system package) and verify its checksum.
+JAR=out/fastutil-8.3.1.jar
+
+if [ ! -s "$JAR" ]; then
+  curl -fsSL -o "$JAR.tmp" https://repo1.maven.org/maven2/it/unimi/dsi/fastutil/8.3.1/fastutil-8.3.1.jar
+  mv "$JAR.tmp" "$JAR"
+fi
+javac -d out -cp "$JAR" knucleotide.java
