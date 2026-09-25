@@ -1,0 +1,14 @@
+type Point = { Int x; Int y; };
+Int main() {
+    List(Int) xs = [10, 20, 30];
+    println(IntToString(xs[1]));
+    Point p = Point { .x = 3, .y = 4 };
+    println(IntToString(p.x));
+    Option(Int) mx = Some(7);
+    Int out = match mx {
+        Some(n) => n,
+        None => 0,
+    };
+    println(IntToString(out));
+    return 0;
+}

@@ -1,0 +1,13 @@
+
+Int inc(Int n) {
+    Int m = n + 1;
+    return m;
+}
+Int main() {
+    Int dead_a = 1;
+    Int live = 40 + 2;
+    Int dead_b = live * 2;
+    Bool unused = println("side-effect");
+    println(IntToString(inc(live)));
+    return 0;
+}

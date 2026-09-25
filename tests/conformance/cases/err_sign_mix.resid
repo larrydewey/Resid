@@ -1,0 +1,6 @@
+Int main() {
+    Int a = 1;
+    UInt b = u64(2);
+    Int c = a + b;
+    return 0;
+}

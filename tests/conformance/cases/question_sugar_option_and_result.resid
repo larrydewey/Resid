@@ -1,0 +1,38 @@
+Option(Int) maybe(Int v) {
+    if (v > 0) { return Some(v); }
+    return None;
+}
+
+Option(Int) twice(Option(Int) m) {
+    Int x = m?;
+    Int d = x * 2;
+    if (d > 100) { return None; }
+    return Some(d);
+}
+
+Result(Int, Str) divide(Int a, Int b) {
+    if (b == 0) { return Err("div0"); }
+    return Ok(a / b);
+}
+
+Result(Int, Str) half(Result(Int, Str) r) {
+    Int v = r?;
+    Int d = v / 2;
+    return Ok(d);
+}
+
+Int main() {
+    Option(Int) a = twice(Some(21));
+    Int av = a else { -1 };
+    println(IntToString(av));
+    Option(Int) b = twice(None);
+    Int bv = b else { -1 };
+    println(IntToString(bv));
+    Result(Int, Str) c = half(divide(10, 2));
+    Int cv = c else { -1 };
+    println(IntToString(cv));
+    Result(Int, Str) e = half(divide(3, 0));
+    Int ev = e else { -1 };
+    println(IntToString(ev));
+    return 0;
+}

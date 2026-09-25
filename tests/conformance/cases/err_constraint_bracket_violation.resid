@@ -1,0 +1,5 @@
+type Even = Int[value % 2 == 0];
+Int main() {
+    Even e = 3;
+    return 0;
+}

@@ -1,0 +1,18 @@
+Int main() {
+    // Range construction.
+    Range(Int) r = 0..5;
+    Range(Int) rc = 0..=4;
+    for (Int i in 0..3) {
+        println(IntToString(i));
+    }
+
+    // Slice construction + indexing back into the list.
+    List(Int) xs = [10, 20, 30, 40, 50];
+    Slice(Int) s = xs[1..4];
+    Slice(Int) po1 = xs[..4];
+    Slice(Int) po2 = xs[1..];
+    Slice(Int) po3 = xs[..];
+    println(IntToString(xs[1]));
+    println(IntToString(xs[3]));
+    return 0;
+}

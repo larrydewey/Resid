@@ -1,0 +1,9 @@
+Int main() {
+    Int(128) big = 1000000 * 1000000;
+    Option(Int(128)) o = Some(big);
+    Int(128) got = match o { Some(v) => v, None => 0 * 0 };
+    if (got == big) { println("I128:PASS"); } else { println("I128:FAIL"); }
+    Str is = f"{got}";
+    println(is);
+    return 0;
+}

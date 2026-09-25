@@ -1,0 +1,12 @@
+Int boom(Int x) {
+    List(Int) xs = [1];
+    return xs[x];
+}
+Int main() {
+    Result(Int, RegionError) r = spawn () {
+        return boom(5);
+    };
+    Str s = match r { Ok(n) => "ok", Err(e) => "err" };
+    println(s);
+    return 0;
+}

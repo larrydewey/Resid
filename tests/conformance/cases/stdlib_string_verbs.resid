@@ -1,0 +1,13 @@
+
+Int main() {
+    Str s = str_trim("  hi  ");
+    println(s);
+    List(Str) parts = str_split("a,b,c", ",");
+    println(str_join(parts, "-"));
+    println(str_to_upper("abc"));
+    println(str_replace("aaa", "a", "ba"));
+    if (str_starts_with("hello", "he") && str_ends_with("hello", "lo")) {
+        println(str_repeat("ab", 3));
+    }
+    return 0;
+}

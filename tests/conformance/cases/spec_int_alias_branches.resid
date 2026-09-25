@@ -1,0 +1,5 @@
+Int(64) f(Int n) { return if (n > 0) { n } else { i64(0) }; }
+Int main() {
+    println(IntToString(f(3)));
+    return 0;
+}

@@ -1,0 +1,1 @@
+Int main() { Int(64) a = 300; Int(16) b = (Int(16))a; UInt(8) c = u8(7); println(IntToString(i64(b))); return 0; }

@@ -1,0 +1,16 @@
+
+Int main() {
+    Int(128) big = 18446744073709551617;
+    println(Int128ToString(big));
+    Int(128) a = 5;
+    Int(128) b = 7;
+    Int(128) s = a + b;
+    println(Int128ToString(s));
+    Int(128) neg = 0 - 170141183460469231731687303715884105728;
+    println(Int128ToString(neg));
+    UInt(128) max = 340282366920938463463374607431768211455;
+    println(UInt128ToString(max));
+    Int(128) hi = (Int(128))9223372036854775807;
+    println(Int128ToString(hi));
+    return 0;
+}

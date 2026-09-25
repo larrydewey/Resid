@@ -1,0 +1,17 @@
+
+Int main() {
+    Str name = "resid";
+    Int n = 7;
+    Float pi = 3.5;
+    Bool ok = true;
+    println(f"hello {name}");
+    println(f"n={n}");
+    println(f"pi={pi}");
+    println(f"ok={ok}");
+    println(f"both={name}{n}");
+    Str a = "foo";
+    Str c = a + "bar";
+    println(c);
+    println(f"{c}!");
+    return 0;
+}

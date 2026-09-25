@@ -1,0 +1,5 @@
+Int main() {
+    UInt(32) a = u32(5);
+    UInt(16) b = a;
+    return 0;
+}

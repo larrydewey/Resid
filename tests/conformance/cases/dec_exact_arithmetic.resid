@@ -1,0 +1,34 @@
+Dec main() {
+    Dec(4) a = 1.5m;
+    Dec(4) b = 2.25m;
+    Dec(4) s = a + b;
+    Dec(4) d = a - b;
+    Dec(4) m = a * b;
+    Dec(4) q = a / b;
+    Dec(4) q2 = 10.0m / 3.0m;
+    Dec(4) neg = -a;
+    println(f"a={a}");
+    println(f"a+b={s}");
+    println(f"a-b={d}");
+    println(f"a*b={m}");
+    println(f"a/b={q}");
+    println(f"10/3={q2}");
+    println(f"-a={neg}");
+    Bool lb = a < b;
+    Bool eq = (a == 1.5m);
+    println(f"a<b={lb}");
+    println(f"a==1.5m={eq}");
+    Dec(6) di = (Dec(6)) 7;
+    println(f"7 as Dec(6)={di}");
+    Dec(6) r = (Dec(6)) 1.23456789m;
+    println(f"round={r}");
+    Int i = i32(12.0m);
+    Float fl = f64(12.5m);
+    Dec(8) y = d8(123.456m);
+    Dec(8) z = d8("9.87654321");
+    println(f"i32={i}");
+    println(f"f64={fl}");
+    println(f"d8={y}");
+    println(f"d8str={z}");
+    return 0m;
+}

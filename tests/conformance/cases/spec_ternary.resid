@@ -1,0 +1,6 @@
+Int pick(Int a) { return a > 2 ? 10 : 20; }
+Int main() {
+    println(IntToString(pick(3)));
+    println(IntToString(pick(1)));
+    return 0;
+}

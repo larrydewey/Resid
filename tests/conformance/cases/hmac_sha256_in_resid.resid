@@ -1,0 +1,11 @@
+
+import "crypto.resid";
+Int main() {
+    List(Int) k1 = bytes_of("key");
+    List(Int) m1 = bytes_of("The quick brown fox jumps over the lazy dog");
+    println(hex_encode(hmac_sha256_bytes(k1, m1)));
+    List(Int) k2 = bytes_of("Jefe");
+    List(Int) m2 = bytes_of("what do ya want for nothing?");
+    println(hex_encode(hmac_sha256_bytes(k2, m2)));
+    return 0;
+}

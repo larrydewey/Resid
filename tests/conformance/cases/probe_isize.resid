@@ -1,0 +1,1 @@
+Int main() { USize n = usize(3); ISize m = isize(-2); println("ok"); return 0; }

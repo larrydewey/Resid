@@ -1,0 +1,7 @@
+Int main() {
+    List(Int) empty = [];
+    List(Str) words = [];
+    println(IntToString(empty.len()));
+    println(IntToString(words.len()));
+    return 0;
+}

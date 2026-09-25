@@ -1,0 +1,19 @@
+
+Int main() {
+    List(Int) xs = [3, 1, 2];
+    List(Int) sorted = list_sort_ints(xs);
+    List(Int) rev = list_reverse_ints(sorted);
+    println(IntToString(list_sum(rev)));
+    println(IntToString(list_sum(xs)));
+    if (list_contains_int(xs, 2)) {
+        println("has 2");
+    }
+    List(Str) ss = list_sort_strs(["pear", "apple", "fig"]);
+    println(str_join(ss, ","));
+    List(Str) rs = list_reverse_strs(ss);
+    println(str_join(rs, ","));
+    if (list_contains_str(ss, "fig")) {
+        println("has fig");
+    }
+    return 0;
+}

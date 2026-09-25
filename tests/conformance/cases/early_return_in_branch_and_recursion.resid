@@ -1,0 +1,17 @@
+
+Int f(Int n) {
+    if (n <= 0) { return 42; }
+    return 7;
+}
+Int sum(Int n) {
+    if (n <= 0) { return 0; }
+    Int m = n - 1;
+    return n + sum(m);
+}
+Int main() {
+    println(IntToString(f(-5)));
+    println(IntToString(f(5)));
+    println(IntToString(sum(5)));
+    println(IntToString(sum(10)));
+    return 0;
+}

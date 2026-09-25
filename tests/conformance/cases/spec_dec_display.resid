@@ -1,0 +1,10 @@
+Int main() {
+    Dec(4) a = 1.5m;
+    println(f"{a}");
+    println(f"{a:.}");
+    Dec(2) b = d2(0.255m);
+    println(f"{b}");
+    Dec(2) c = d2(-0.255m);
+    println(f"{c}");
+    return 0;
+}

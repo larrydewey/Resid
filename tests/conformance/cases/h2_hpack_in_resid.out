@@ -1,0 +1,8 @@
+hdr=12,4,263
+int=10 1337
+b1=:method|GET :authority|www.example.com
+b2=:authority|www.example.com cache-control|no-cache
+b3=foo|bar
+huf=custom-key|custom-header
+huf1=a
+b4=content-length|77

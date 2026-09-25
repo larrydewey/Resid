@@ -1,0 +1,8 @@
+
+Int main() {
+    Int x = 8;
+    println(IntToString(x >> 64));
+    println(IntToString(x << 100));
+    println(IntToString(x >> 1));
+    return 0;
+}

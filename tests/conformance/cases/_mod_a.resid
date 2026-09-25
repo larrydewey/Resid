@@ -1,0 +1,3 @@
+pub Int twice(Int x) { return x * 2; }
+pub Int thrice(Int x) { return x * 3; }
+Int hidden() { return 1; }

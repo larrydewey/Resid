@@ -1,0 +1,8 @@
+Int main() {
+    Str p = "@TMP@/in.txt";
+    Bool wok = filesystem.write_all(p, "data");
+    File h = filesystem.open(p);
+    Bool closed = filesystem.close(h);
+    println(BoolToString(closed));
+    return 0;
+}

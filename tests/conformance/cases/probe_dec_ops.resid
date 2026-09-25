@@ -1,0 +1,1 @@
+Int main() { Dec(4) a = 1.5m; Dec(4) b = 2.25m; Dec(4) c = a * b; println(f"{c}"); println(f"{c:.}"); return 0; }

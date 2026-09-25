@@ -1,0 +1,10 @@
+
+Int main() {
+    List(Float) fs = [3.5, -1.0, 2.25];
+    List(Float) sorted = list_sort_floats(fs);
+    println(f"sum={list_sumf(sorted)}");
+    if (list_contains_float(fs, 2.25)) {
+        println("has 2.25");
+    }
+    return 0;
+}

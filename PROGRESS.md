@@ -150,6 +150,24 @@ and has/lacks checks on the reduced `main`).
   large source recursed once per preceding character and overflowed the
   stack (the "core dump after a type error"); it now walks line to line.
 
+### 0e. Self-hosted compiler reaches the full conformance suite (2026-09-25)
+
+`tests/conformance/run.sh`: 117 / 117 (was 34; the archived Rust reference
+passes 105). Work-package details are in `PLAN-self-hosted-conformance.md`'s
+progress log. New source-level pass `examples/desugar.resid` (default and
+named arguments, spec struct syntax); module visibility and aliases are
+applied during import resolution.
+
+Performance: a self-compile now takes ~2-3s at `-O0` (typecheck ~0.6s,
+down from ~2.8s) and ~9s at the default `-O2` (clang dominates), with peak
+RSS ~0.6-0.8GB. Two regressions found on the way were fixed: `&&`/`||`
+evaluate both operands in this language, so guard checks written as
+`a && expensive()` ran on every node (now nested ifs); and the runtime's
+codepoint-index LRU (16 slots) was being flushed by bursts of short
+strings, forcing re-walks of the whole 880K-character source on the next
+lex step — strings under 256 bytes now use a dedicated slot and never
+enter the LRU.
+
 ### Major capabilities
 
 - **Stage-2 self-hosting proven, including full sandbox/capability parity**:

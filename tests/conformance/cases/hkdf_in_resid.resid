@@ -1,0 +1,31 @@
+
+import "crypto.resid";
+List(Int) rng_acc(Int lo, Int hi, List(Int) acc) {
+    if (lo > hi) { return acc; }
+    List(Int) acc2 = acc.concat([lo]);
+    Int ni = lo + 1;
+    return rng_acc(ni, hi, acc2);
+}
+List(Int) rep_acc(Int n, Int b, List(Int) acc) {
+    if (n == 0) { return acc; }
+    List(Int) acc2 = acc.concat([b]);
+    Int nn = n - 1;
+    return rep_acc(nn, b, acc2);
+}
+Int main() {
+    // RFC 5869 case 1
+    List(Int) salt = rng_acc(0x00, 0x0c, []);
+    List(Int) ikm1 = rep_acc(22, 0x0b, []);
+    List(Int) info = rng_acc(0xf0, 0xf9, []);
+    println(hex_encode(hkdf_extract(salt, ikm1)));
+    println(hex_encode(hkdf_expand(hkdf_extract(salt, ikm1), info, 42)));
+    // RFC 5869 case 3 (empty salt + empty info)
+    println(hex_encode(hkdf_extract([], ikm1)));
+    println(hex_encode(hkdf_expand(hkdf_extract([], ikm1), [], 42)));
+    // RFC 5869 case 2 style long inputs
+    List(Int) ikm2 = rng_acc(0x00, 0x4f, []);
+    List(Int) salt2 = rng_acc(0x60, 0xaf, []);
+    List(Int) info2 = rng_acc(0xb0, 0xff, []);
+    println(hex_encode(hkdf_expand(hkdf_extract(salt2, ikm2), info2, 82)));
+    return 0;
+}

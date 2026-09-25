@@ -1,0 +1,14 @@
+
+import "crypto.resid";
+List(Int) n_as(Int k, List(Int) acc) {
+    if (k == 0) { return acc; }
+    List(Int) acc2 = acc.concat([97]);
+    Int k2 = k - 1;
+    return n_as(k2, acc2);
+}
+Int main() {
+    println(hex_encode(sha512_bytes(bytes_of(""))));
+    println(hex_encode(sha512_bytes(bytes_of("abc"))));
+    println(hex_encode(sha512_bytes(n_as(200, []))));
+    return 0;
+}

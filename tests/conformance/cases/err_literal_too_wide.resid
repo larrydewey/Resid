@@ -1,0 +1,4 @@
+Int main() {
+    Int(8) a = 300;
+    return 0;
+}

@@ -1,0 +1,9 @@
+
+Int fib(Int n) {
+    return if (n < 2) { n } else { fib(n - 1) + fib(n - 2) };
+}
+
+Int main() {
+    comptime_print(fib(10));
+    return fib(10);
+}

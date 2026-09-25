@@ -1,0 +1,13 @@
+Int main() {
+    Int x = 10;
+    Int y = 20;
+    Result(Int, RegionError) r = spawn () {
+        return x + y;
+    };
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    println(IntToString(out));
+    return 0;
+}

@@ -1,0 +1,5 @@
+Int main() {
+    SourceLoc loc = #location;
+    println("ok");
+    return 0;
+}

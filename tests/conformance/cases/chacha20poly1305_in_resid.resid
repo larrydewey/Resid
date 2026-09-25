@@ -1,0 +1,44 @@
+
+import "chacha.resid";
+import "crypto.resid";
+
+List(Int) hb_acc(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Int dhi = c - 87;
+    Int dlo = c - 48;
+    Int hi = if (c > 96) { dhi } else { dlo };
+    Int j = i + 1;
+    Int c2 = str_char_at(s, j);
+    Int ehi = c2 - 87;
+    Int elo = c2 - 48;
+    Int lo = if (c2 > 96) { ehi } else { elo };
+    Int h16 = hi * 16;
+    Int byt = h16 + lo;
+    List(Int) acc2 = acc.concat([byt]);
+    Int ni = i + 2;
+    return hb_acc(s, ni, acc2);
+}
+
+List(Int) hb(Str s) {
+    return hb_acc(s, 0, []);
+}
+
+Int main() {
+    // RFC 8439 section 2.5.2 Poly1305
+    List(Int) mk = hb("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b");
+    println(hex_encode(poly1305(mk, bytes_of("Cryptographic Forum Research Group"))));
+    // RFC 8439 section 2.8.2 AEAD seal
+    List(Int) key = hb("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f");
+    List(Int) nonce = hb("070000004041424344454647");
+    List(Int) pt = bytes_of("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.");
+    List(Int) aad = hb("50515253c0c1c2c3c4c5c6c7");
+    List(Int) sealed = chacha20poly1305_seal(key, nonce, pt, aad);
+    println(hex_encode(sealed));
+    Bool ok = chacha20poly1305_open(key, nonce, sealed, aad);
+    if (ok) { println("OPEN-OK"); }
+    List(Int) bad = ls_set(sealed, 3, sealed[3] ^ 1);
+    Bool ok2 = chacha20poly1305_open(key, nonce, bad, aad);
+    if (!ok2) { println("TAMPER-REJECTED"); }
+    return 0;
+}

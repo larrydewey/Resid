@@ -1,0 +1,7 @@
+Int main() {
+    Bool ok = filesystem.write_all("@TMP@/out.bin", "hello from write_all\n");
+    println(BoolToString(ok));
+    Str back = filesystem.read_all("@TMP@/out.bin");
+    print(back);
+    return 0;
+}

@@ -1,0 +1,5 @@
+type Positive = Int where value > 0;
+Int main() {
+    Positive p = -1;
+    return 0;
+}

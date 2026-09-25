@@ -1,0 +1,11 @@
+
+Int main() {
+    Str kw = "if";
+    Bool is_if = kw == "if";
+    Bool is_else = kw == "else";
+    Bool not_while = kw != "while";
+    if (is_if && !is_else && not_while) {
+        println("lexer-keyword-ok");
+    }
+    return 0;
+}

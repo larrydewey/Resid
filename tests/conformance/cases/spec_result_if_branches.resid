@@ -1,0 +1,10 @@
+Result(Int, Str) f(Int x) {
+    return if (x > 0) { Ok(x) } else { Err("neg") };
+}
+Int main() {
+    Int v = match f(3) { Ok(n) => n, Err(e) => 0 };
+    Int w = match f(-1) { Ok(n) => n, Err(e) => 0 };
+    println(IntToString(v));
+    println(IntToString(w));
+    return 0;
+}

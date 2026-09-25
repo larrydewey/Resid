@@ -1,0 +1,369 @@
+// desugar.resid — source-level desugaring that runs before type checking.
+//
+// Default parameters and named arguments (spec §8):
+//
+//     Str greet(Int count, Str msg = "hello", Str suffix = " world") { ... }
+//     greet(1, suffix = "!")      // == greet(1, "hello", "!")
+//
+// The pass records every top-level function's parameter names and default
+// expressions, strips the defaults from the declarations (replaced by
+// spaces, so positions are unchanged), and rewrites each call to such a
+// function into a plain positional call: named arguments move to their
+// parameter's slot and missing trailing arguments take their defaults.
+// Later stages therefore never see either form. Programs without any
+// default parameter are returned unchanged without a second walk.
+//
+// Spec product-type syntax (spec §11):
+//
+//     type P = { x: Int, y: Int };     // == type P = { Int x; Int y; };
+//     P { x = 1, y = 2 }               // == P { .x = 1, .y = 2 }
+//
+// is rewritten to the declaration and literal forms the later stages use.
+//
+// This file is imported by examples/driver.resid and shares its lexer
+// (lex_tok, Tok).
+
+type DsSig = { List(Str) names; Map(Str, Str) pnames; Map(Str, Str) pdefs; Bool any; };
+
+// Start (codepoint index) of the token that ends at t.pos.
+Int ds_start(Tok t) {
+    return t.pos - str_len(t.text);
+}
+
+// Position just past the `)` matching the `(` whose end is `pos`.
+Int ds_close(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t.pos; }
+    if (t.text == "(" || t.text == "[" || t.text == "{") { return ds_close(s, t.pos, depth + 1); }
+    if (t.text == ")" || t.text == "]" || t.text == "}") {
+        if (depth == 0) { return t.pos; }
+        return ds_close(s, t.pos, depth - 1);
+    }
+    return ds_close(s, t.pos, depth);
+}
+
+// Depth-0 comma positions (token end positions) between `pos` and `end`.
+List(Int) ds_commas(Str s, Int pos, Int end, Int depth, List(Int) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof" || t.pos > end) { return acc; }
+    if (t.text == "(" || t.text == "[" || t.text == "{") { return ds_commas(s, t.pos, end, depth + 1, acc); }
+    if (t.text == ")" || t.text == "]" || t.text == "}") { return ds_commas(s, t.pos, end, depth - 1, acc); }
+    if (t.text == "," && depth == 0) { return ds_commas(s, t.pos, end, depth, acc.concat([t.pos])); }
+    return ds_commas(s, t.pos, end, depth, acc);
+}
+
+// Argument/parameter segments [start, end) of the list whose `(` ends at
+// `open` and whose `)` ends at `close`, as alternating start/end ints.
+List(Int) ds_segments(Str s, Int open, Int close) {
+    Int inner_end = close - 1;
+    List(Int) cs = ds_commas(s, open, inner_end, 0, []);
+    return ds_seg_at(cs, 0, open, inner_end, []);
+}
+
+List(Int) ds_seg_at(List(Int) cs, Int i, Int from, Int end, List(Int) acc) {
+    if (i >= cs.len()) {
+        List(Int) last = [from, end];
+        return acc.concat(last);
+    }
+    Int c = cs[i];
+    List(Int) seg = [from, c - 1];
+    return ds_seg_at(cs, i + 1, c, end, acc.concat(seg));
+}
+
+Bool ds_blank(Str s, Int a, Int b) {
+    return str_trim(str_slice(s, a, b)) == "";
+}
+
+// In one parameter segment: the position of its top-level `=` (token end),
+// or -1.
+Int ds_eq_at(Str s, Int pos, Int end, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof" || t.pos > end) { return -1; }
+    if (t.text == "(" || t.text == "[" || t.text == "{") { return ds_eq_at(s, t.pos, end, depth + 1); }
+    if (t.text == ")" || t.text == "]" || t.text == "}") { return ds_eq_at(s, t.pos, end, depth - 1); }
+    if (t.text == "=" && depth == 0) { return t.pos; }
+    return ds_eq_at(s, t.pos, end, depth);
+}
+
+// Name token of a parameter segment: the last identifier before `=` (or
+// before the end).
+Str ds_last_ident(Str s, Int pos, Int end, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof" || t.pos > end) { return acc; }
+    Str acc2 = if (t.kind == "ident") { t.text } else { acc };
+    return ds_last_ident(s, t.pos, end, acc2);
+}
+
+// ─── Pass A: signatures ─────────────────────────────────────────
+
+DsSig ds_collect(Str s, Int pos, Int depth, DsSig acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return acc; }
+    if (t.text == "{") { return ds_collect(s, t.pos, depth + 1, acc); }
+    if (t.text == "}") { return ds_collect(s, t.pos, depth - 1, acc); }
+    if (depth == 0 && t.kind == "ident") {
+        Tok o = lex_tok(s, t.pos);
+        if (o.text == "(") {
+            Int cl = ds_close(s, o.pos, 0);
+            Tok b = lex_tok(s, cl);
+            if (b.text == "{") {
+                DsSig a2 = ds_record(s, t.text, o.pos, cl, acc);
+                return ds_collect(s, cl, depth, a2);
+            }
+        }
+    }
+    return ds_collect(s, t.pos, depth, acc);
+}
+
+DsSig ds_record(Str s, Str fname, Int open, Int close, DsSig acc) {
+    if (ds_blank(s, open, close - 1)) {
+        return DsSig {.names = acc.names.concat([fname]), .pnames = acc.pnames.insert(fname, ""), .pdefs = acc.pdefs.insert(fname, ""), .any = acc.any};
+    }
+    List(Int) segs = ds_segments(s, open, close);
+    DsSig r = ds_record_params(s, segs, 0, "", "", false);
+    return DsSig {.names = acc.names.concat([fname]), .pnames = acc.pnames.insert(fname, r.names[0]), .pdefs = acc.pdefs.insert(fname, r.names[1]), .any = acc.any || r.any};
+}
+
+// Joined names / defaults of one parameter list (defaults "\u001f"-separated,
+// "" for a required parameter); carried in a DsSig for convenience.
+DsSig ds_record_params(Str s, List(Int) segs, Int i, Str names, Str defs, Bool any) {
+    if (i >= segs.len()) {
+        List(Str) nd = [names, defs];
+        Map(Str, Str) em = {"": ""};
+        return DsSig {.names = nd, .pnames = em, .pdefs = em, .any = any};
+    }
+    Int a = segs[i];
+    Int b = segs[i + 1];
+    Int eq = ds_eq_at(s, a, b, 0);
+    Int nend = if (eq < 0) { b } else { eq - 1 };
+    Str pn = ds_last_ident(s, a, nend, "");
+    Str dv = if (eq < 0) { "" } else { str_trim(str_slice(s, eq, b)) };
+    Str sep = if (i == 0) { "" } else { "," };
+    Str dsep = if (i == 0) { "" } else { str_from_code(31) };
+    return ds_record_params(s, segs, i + 2, names + sep + pn, defs + dsep + dv, any || eq >= 0);
+}
+
+// ─── Pass B: rewrite ────────────────────────────────────────────
+
+Str ds_rewrite(Str s, Int pos, Int end, Int depth, DsSig sg, Str sb, Int copied) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof" || t.pos > end) {
+        return str_sb_append(sb, str_slice(s, copied, end));
+    }
+    if (t.text == "{") { return ds_rewrite(s, t.pos, end, depth + 1, sg, sb, copied); }
+    if (t.text == "}") { return ds_rewrite(s, t.pos, end, depth - 1, sg, sb, copied); }
+    if (t.kind == "ident" && sg.pnames.contains(t.text)) {
+        Tok o = lex_tok(s, t.pos);
+        if (o.text == "(") {
+            Int cl = ds_close(s, o.pos, 0);
+            Tok b = lex_tok(s, cl);
+            // Declaration: blank out each `= default`.
+            if (depth == 0 && b.text == "{") {
+                Str sb2 = str_sb_append(sb, str_slice(s, copied, o.pos));
+                Str params = ds_strip_defaults(s, o.pos, cl);
+                Str sb3 = str_sb_append(sb2, params);
+                return ds_rewrite(s, cl, end, depth, sg, sb3, cl);
+            }
+            // Call: positional, named and default arguments. Only calls to
+            // functions that declare a default are rewritten.
+            if (!ds_has_default(sg, t.text)) { return ds_rewrite(s, t.pos, end, depth, sg, sb, copied); }
+            Str sb2 = str_sb_append(sb, str_slice(s, copied, o.pos));
+            Str args = ds_call_args(s, t.text, o.pos, cl, sg);
+            Str sb3 = str_sb_append(sb2, args);
+            return ds_rewrite(s, cl, end, depth, sg, sb3, cl);
+        }
+    }
+    return ds_rewrite(s, t.pos, end, depth, sg, sb, copied);
+}
+
+// Parameter list text (after `(`, through `)`) with each default blanked.
+Str ds_strip_defaults(Str s, Int open, Int close) {
+    if (ds_blank(s, open, close - 1)) { return str_slice(s, open, close); }
+    List(Int) segs = ds_segments(s, open, close);
+    return ds_strip_at(s, segs, 0, open, "") + ")";
+}
+
+Str ds_strip_at(Str s, List(Int) segs, Int i, Int from, Str acc) {
+    if (i >= segs.len()) { return acc; }
+    Int a = segs[i];
+    Int b = segs[i + 1];
+    Int eq = ds_eq_at(s, a, b, 0);
+    Str seg = if (eq < 0) { str_slice(s, a, b) } else {
+        Int eqs = eq - 1;
+        str_slice(s, a, eqs) + str_repeat(" ", b - eqs)
+    };
+    Str sep = if (i + 2 < segs.len()) { "," } else { "" };
+    return ds_strip_at(s, segs, i + 2, from, acc + seg + sep);
+}
+
+// Argument list text (after `(`, through `)`) of a call to `fname`, with
+// nested calls rewritten too.
+Str ds_call_args(Str s, Str fname, Int open, Int close, DsSig sg) {
+    Str pn = sg.pnames.get(fname) else { "" };
+    Str pd = sg.pdefs.get(fname) else { "" };
+    List(Str) nostr = [];
+    List(Int) noint = [];
+    List(Str) names = if (pn == "") { nostr } else { str_split(pn, ",") };
+    List(Str) defs = if (pn == "") { nostr } else { str_split(pd, str_from_code(31)) };
+    Bool noargs = ds_blank(s, open, close - 1);
+    List(Int) segs = if (noargs) { noint } else { ds_segments(s, open, close) };
+    // Slots start empty; positional arguments fill left to right, named
+    // ones by name.
+    List(Str) slots = ds_fill(s, segs, 0, 0, names, ds_empty(names.len(), []), sg);
+    if (slots.len() != names.len()) {
+        // Arity the pass cannot resolve (e.g. too many arguments): leave the
+        // call for the type checker to report, rewriting nested calls only.
+        Str inner = ds_rewrite(s, open, close - 1, 1, sg, str_sb_new(), open);
+        return str_sb_finish(inner) + ")";
+    }
+    Str joined = ds_join_slots(slots, defs, 0, "");
+    // Keep the line structure: the call's newlines move before its `)`.
+    Int nls = str_count(str_slice(s, open, close), "\n");
+    return joined + str_repeat("\n", nls) + ")";
+}
+
+Bool ds_has_default(DsSig sg, Str fname) {
+    Str pd = sg.pdefs.get(fname) else { "" };
+    return str_replace(pd, str_from_code(31), "") != "";
+}
+
+List(Str) ds_empty(Int n, List(Str) acc) {
+    if (acc.len() >= n) { return acc; }
+    return ds_empty(n, acc.concat([str_from_code(0)]));
+}
+
+List(Str) ds_fill(Str s, List(Int) segs, Int i, Int next_pos, List(Str) names, List(Str) slots, DsSig sg) {
+    if (i >= segs.len()) { return slots; }
+    Int a = segs[i];
+    Int b = segs[i + 1];
+    Tok n1 = lex_tok(s, a);
+    Tok n2 = lex_tok(s, n1.pos);
+    Bool named = n1.kind == "ident" && n2.text == "=" && ds_name_index(names, n1.text, 0) >= 0;
+    Int slot = if (named) { ds_name_index(names, n1.text, 0) } else { next_pos };
+    Int vstart = if (named) { n2.pos } else { a };
+    if (slot >= slots.len()) { List(Str) bad = []; return bad; }
+    Str inner = str_sb_finish(ds_rewrite(s, vstart, b, 1, sg, str_sb_new(), vstart));
+    List(Str) slots2 = ds_set(slots, slot, str_trim(inner), 0, []);
+    Int np = if (named) { next_pos } else { next_pos + 1 };
+    return ds_fill(s, segs, i + 2, np, names, slots2, sg);
+}
+
+Int ds_name_index(List(Str) names, Str n, Int i) {
+    if (i >= names.len()) { return -1; }
+    if (names[i] == n) { return i; }
+    return ds_name_index(names, n, i + 1);
+}
+
+List(Str) ds_set(List(Str) xs, Int k, Str v, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    Str e = if (i == k) { v } else { xs[i] };
+    return ds_set(xs, k, v, i + 1, acc.concat([e]));
+}
+
+// An unfilled slot takes its default; a required one left unfilled keeps
+// an empty argument so the type checker reports the arity.
+Str ds_join_slots(List(Str) slots, List(Str) defs, Int i, Str acc) {
+    if (i >= slots.len()) { return acc; }
+    Str v0 = slots[i];
+    Str d = if (i < defs.len()) { defs[i] } else { "" };
+    Bool unfilled = v0 == str_from_code(0);
+    Str v = if (unfilled) { d } else { v0 };
+    if (v == "") { return acc; }
+    Str sep = if (acc == "") { "" } else { ", " };
+    return ds_join_slots(slots, defs, i + 1, acc + sep + v);
+}
+
+// ─── Spec struct syntax ─────────────────────────────────────────
+
+// ",P,Q," names of `type P = { name: Type, ... }` declarations.
+Str ds_colon_structs(Str s, Int pos, Int depth, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return acc; }
+    if (t.text == "{") { return ds_colon_structs(s, t.pos, depth + 1, acc); }
+    if (t.text == "}") { return ds_colon_structs(s, t.pos, depth - 1, acc); }
+    if (depth == 0 && t.text == "type") {
+        Tok n = lex_tok(s, t.pos);
+        Tok eq = lex_tok(s, n.pos);
+        Tok ob = lex_tok(s, eq.pos);
+        Tok f = lex_tok(s, ob.pos);
+        Tok col = lex_tok(s, f.pos);
+        if (eq.text == "=" && ob.text == "{" && f.kind == "ident" && col.text == ":") {
+            return ds_colon_structs(s, ob.pos, depth + 1, acc + n.text + ",");
+        }
+    }
+    return ds_colon_structs(s, t.pos, depth, acc);
+}
+
+Str ds_struct_rewrite(Str s, Int pos, Int depth, Str names, Str sb, Int copied) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return str_sb_append(sb, str_slice(s, copied, str_len(s))); }
+    if (depth == 0 && t.text == "type") {
+        Tok n = lex_tok(s, t.pos);
+        Tok eq = lex_tok(s, n.pos);
+        Tok ob = lex_tok(s, eq.pos);
+        if (eq.text == "=" && ob.text == "{" && str_contains(names, "," + n.text + ",")) {
+            Int cl = ds_close(s, ob.pos, 0);
+            Str fields = ds_colon_fields(s, ds_segments(s, ob.pos, cl), 0, "");
+            Str sb2 = str_sb_append(str_sb_append(sb, str_slice(s, copied, ob.pos)), fields + " }");
+            return ds_struct_rewrite(s, cl, depth, names, sb2, cl);
+        }
+    }
+    if (t.text == "{") { return ds_struct_rewrite(s, t.pos, depth + 1, names, sb, copied); }
+    if (t.text == "}") { return ds_struct_rewrite(s, t.pos, depth - 1, names, sb, copied); }
+    // `P { x = 1, ... }`: dotless field initializers get their `.`.
+    if (t.kind == "ident" && str_contains(names, "," + t.text + ",")) {
+        Tok ob = lex_tok(s, t.pos);
+        Tok f = lex_tok(s, ob.pos);
+        Tok eq = lex_tok(s, f.pos);
+        if (ob.text == "{" && f.kind == "ident" && eq.text == "=") {
+            Int cl = ds_close(s, ob.pos, 0);
+            List(Int) segs = ds_segments(s, ob.pos, cl);
+            Str sb2 = str_sb_append(sb, str_slice(s, copied, ob.pos));
+            Str sb3 = ds_dot_fields(s, segs, 0, sb2);
+            return ds_struct_rewrite(s, cl - 1, depth, names, sb3, cl - 1);
+        }
+    }
+    return ds_struct_rewrite(s, t.pos, depth, names, sb, copied);
+}
+
+// " Int x; Int y;" from the `x: Int, y: Int` segments.
+Str ds_colon_fields(Str s, List(Int) segs, Int i, Str acc) {
+    if (i >= segs.len()) { return acc; }
+    Str seg = str_trim(str_slice(s, segs[i], segs[i + 1]));
+    Int c = str_find_char(seg, 58, 0);
+    Str acc2 = if (seg == "" || c < 0) { acc } else {
+        acc + " " + str_trim(str_slice(seg, c + 1, str_len(seg))) + " " + str_trim(str_slice(seg, 0, c)) + ";"
+    };
+    return ds_colon_fields(s, segs, i + 2, acc2);
+}
+
+// Copy each initializer segment with a `.` before its field name.
+Str ds_dot_fields(Str s, List(Int) segs, Int i, Str sb) {
+    if (i >= segs.len()) { return sb; }
+    Int a = segs[i];
+    Int b = segs[i + 1];
+    Tok f = lex_tok(s, a);
+    Int fs0 = ds_start(f);
+    Str sep = if (i + 2 < segs.len()) { "," } else { "" };
+    Str sb2 = if (f.kind == "ident") {
+        str_sb_append(sb, str_slice(s, a, fs0) + "." + str_slice(s, fs0, b) + sep)
+    } else { str_sb_append(sb, str_slice(s, a, b) + sep) };
+    return ds_dot_fields(s, segs, i + 2, sb2);
+}
+
+Str ds_structs(Str s) {
+    if (!str_contains(s, "type ")) { return s; }
+    Str names = ds_colon_structs(s, 0, 0, ",");
+    if (names == ",") { return s; }
+    return str_sb_finish(ds_struct_rewrite(s, 0, 0, names, str_sb_new(), 0));
+}
+
+// Entry point: the program text with defaults and named arguments desugared.
+pub Str ds_desugar(Str s0) {
+    Str s = ds_structs(s0);
+    Map(Str, Str) em = {"": ""};
+    DsSig sg0 = DsSig {.names = [], .pnames = em.remove(""), .pdefs = em.remove(""), .any = false};
+    DsSig sg = ds_collect(s, 0, 0, sg0);
+    if (!sg.any) { return s; }
+    return str_sb_finish(ds_rewrite(s, 0, str_len(s), 0, sg, str_sb_new(), 0));
+}
