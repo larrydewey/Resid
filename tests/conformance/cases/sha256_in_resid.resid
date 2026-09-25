@@ -1,0 +1,8 @@
+
+import "crypto.resid";
+Int main() {
+    println(sha256(""));
+    println(sha256("abc"));
+    println(sha256("The quick brown fox jumps over the lazy dog"));
+    return 0;
+}

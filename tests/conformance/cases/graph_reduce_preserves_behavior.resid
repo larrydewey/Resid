@@ -1,0 +1,14 @@
+Str age_string(UInt(8) age) {
+    if (age > (UInt(8)) 20) {
+        return "You are old!";
+    } else {
+        return "You are legit!";
+    }
+}
+Int main() {
+    UInt(8) age = 120;
+    UInt(8) two_year = 2;
+    UInt(8) new_age = age + two_year;
+    println(f"Your age {age} means: {age_string(age)}");
+    return 0;
+}

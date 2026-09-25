@@ -1,0 +1,7 @@
+Int main() {
+    Int a = 0x2A;
+    Int c = 'a';
+    println(IntToString(a));
+    println(IntToString(c));
+    return 0;
+}

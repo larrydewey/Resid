@@ -1,0 +1,1 @@
+Int main() { Option(Int) x = None; println("ok"); return 0; }

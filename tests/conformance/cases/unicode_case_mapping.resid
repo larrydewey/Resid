@@ -1,0 +1,12 @@
+
+Int main() {
+    println(str_to_upper("héllo wörld привет αβγ"));
+    println(str_to_lower("HÉLLO WÖRLD ПРИВЕТ ΑΒΓ"));
+    println(str_to_upper("ßÿ"));
+    println(str_to_upper("ǆ ς ж ά"));
+    println(str_to_lower("Ǆ Σ Ж Ά ẛ"));
+    println(str_to_upper("ﬁle ﬂag ﬃ ŉ ǰ"));
+    println(str_to_upper("ᾈ ᾨ"));
+    println(str_to_lower("ΑΣ ΟΔΟΣ ΣΑ"));
+    return 0;
+}

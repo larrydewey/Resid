@@ -1,0 +1,2 @@
+Int f(Int a, Int b = 2) { return a * 10 + b; }
+Int main() { println(IntToString(f(1, b = 5))); println(IntToString(f(1))); return 0; }

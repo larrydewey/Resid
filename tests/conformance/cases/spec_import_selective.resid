@@ -1,0 +1,5 @@
+import "_mod_a.resid" (twice);
+Int main() {
+    println(IntToString(twice(4)));
+    return 0;
+}

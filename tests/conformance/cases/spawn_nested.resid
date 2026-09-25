@@ -1,0 +1,18 @@
+Int main() {
+    Result(Int, RegionError) r1 = spawn () {
+        Result(Int, RegionError) r2 = spawn () {
+            return 7;
+        };
+        Int inner = match r2 {
+            Ok(n) => n,
+            Err(e) => 0,
+        };
+        return inner * 6;
+    };
+    Int out = match r1 {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    println(IntToString(out));
+    return 0;
+}

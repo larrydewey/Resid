@@ -1,0 +1,52 @@
+
+import "aesgcm.resid";
+import "crypto.resid";
+
+List(Int) hb_acc(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Int dhi = c - 87;
+    Int dlo = c - 48;
+    Int hi = if (c > 96) { dhi } else { dlo };
+    Int j = i + 1;
+    Int c2 = str_char_at(s, j);
+    Int ehi = c2 - 87;
+    Int elo = c2 - 48;
+    Int lo = if (c2 > 96) { ehi } else { elo };
+    Int h16 = hi * 16;
+    Int byt = h16 + lo;
+    List(Int) acc2 = acc.concat([byt]);
+    Int ni = i + 2;
+    return hb_acc(s, ni, acc2);
+}
+
+List(Int) hb(Str s) {
+    return hb_acc(s, 0, []);
+}
+
+List(Int) rep(Int n, Int b, List(Int) acc) {
+    if (n == 0) { return acc; }
+    List(Int) acc2 = acc.concat([b]);
+    Int nn = n - 1;
+    return rep(nn, b, acc2);
+}
+
+Int main() {
+    List(Int) key0 = rep(16, 0, []);
+    List(Int) iv0 = rep(12, 0, []);
+    List(Int) aad0 = [];
+    println(hex_encode(aes128_gcm_seal(key0, iv0, [], aad0)));
+    List(Int) r2 = aes128_gcm_seal(key0, iv0, rep(16, 0, []), aad0);
+    println(hex_encode(r2));
+    List(Int) r3 = aes128_gcm_seal(key0, iv0, rep(16, 0, []), rep(16, 0, []));
+    println(hex_encode(r3));
+    List(Int) key4 = hb("feffe9928665731c6d6a8f9467308308");
+    List(Int) iv4 = hb("cafebabefacedbaddecaf888");
+    List(Int) pt4 = hb("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b3914a2adf83ea685c2acaeaa70a5b99c");
+    List(Int) aad4 = hb("feedfacedeadbeeffeedfacedeadbeefabaddad2");
+    List(Int) r4 = aes128_gcm_seal(key4, iv4, pt4, aad4);
+    println(hex_encode(r4));
+    Bool o4 = aes128_gcm_open(key4, iv4, r4, aad4);
+    if (o4) { println("OPEN-OK"); }
+    return 0;
+}

@@ -1,0 +1,7 @@
+Float half(Float(64) x) { return x; }
+Int main() {
+    Float(64) a = 3.5;
+    Float b = half(a);
+    println(FloatToString(b));
+    return 0;
+}

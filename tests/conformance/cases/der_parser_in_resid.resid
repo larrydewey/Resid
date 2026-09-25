@@ -1,0 +1,17 @@
+
+import "der.resid";
+Int main() {
+    List(Int) blob = [0, 48, 5, 2, 1, 42, 4, 2, 104, 105];
+    DerTlv seq = der_next(blob, 1);
+    println(IntToString(seq.tag));
+    println(IntToString(seq.val_len));
+    Int ipos = der_content_pos(blob, 1);
+    DerTlv intv = der_next(blob, ipos);
+    println(IntToString(intv.val_len));
+    List(Int) v = der_content(blob, ipos);
+    println(IntToString(v[0]));
+    List(Int) big = [0, 2, 130, 32, 21, 9, 9];
+    DerTlv lf = der_next(big, 1);
+    println(IntToString(lf.val_len));
+    return 0;
+}

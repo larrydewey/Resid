@@ -1,0 +1,14 @@
+
+Int main() {
+    Int(256) a = 340282366920938463463374607431768211455;
+    println(Int256ToString(a));
+    Int(256) b = a + a;
+    println(Int256ToString(b));
+    Int(512) w = (Int(512))a * (Int(512))a;
+    println(Int512ToString(w));
+    UInt(512) u = 18446744073709551615;
+    println(UInt512ToString(u));
+    Int(256) neg = 0 - 18446744073709551616;
+    println(Int256ToString(neg));
+    return 0;
+}

@@ -1,0 +1,11 @@
+Int main() {
+    Result(Int, RegionError) r = spawn () {
+        return 42;
+    };
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    println(IntToString(out));
+    return 0;
+}

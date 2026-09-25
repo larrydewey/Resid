@@ -1,0 +1,12 @@
+Int main() {
+    for (Int i in 0..3) {
+        println(IntToString(i));
+    }
+    for (Int j in 0..=2) {
+        println(IntToString(j));
+    }
+    for (Int k in 2..5) {
+        println(IntToString(k));
+    }
+    return 0;
+}

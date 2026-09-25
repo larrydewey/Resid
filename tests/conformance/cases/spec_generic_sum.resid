@@ -1,0 +1,14 @@
+type Box(T) = Full(T) | Nothing;
+Int unbox(Box(Int) b) {
+    return match b {
+        Full(x) => x,
+        Nothing => 0
+    };
+}
+Int main() {
+    Box(Int) a = Full(3);
+    Box(Int) b = Nothing;
+    println(IntToString(unbox(a)));
+    println(IntToString(unbox(b)));
+    return 0;
+}

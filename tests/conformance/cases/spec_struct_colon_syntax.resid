@@ -1,0 +1,6 @@
+type P = { x: Int, y: Int };
+Int main() {
+    P p = P { x = 1, y = 2 };
+    println(IntToString(p.x + p.y));
+    return 0;
+}

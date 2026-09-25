@@ -1,0 +1,9 @@
+@requires(filesystem)
+Int main() {
+    Result(Int, RegionError) r = spawn (filesystem) {
+        return 1;
+    };
+    Int v = match r { Ok(n) => n, Err(e) => 0 };
+    println(IntToString(v));
+    return 0;
+}

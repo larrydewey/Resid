@@ -1,0 +1,20 @@
+Int main() {
+    List(Int) a = [1, 2];
+    List(Int) b = [3, 4, 5];
+    List(Int) c = a.concat(b);
+    println(IntToString(c[0]));
+    println(IntToString(c[2]));
+    println(IntToString(c[4]));
+
+    List(Str) sa = ["hello", " "];
+    List(Str) sb = ["world"];
+    List(Str) sc = sa.concat(sb);
+    println(sc[0]);
+
+    // Empty list concat — empty list takes element type from declared binding
+    List(Int) empty = [];
+    List(Int) d = a.concat(empty);
+    println(IntToString(d[0]));
+
+    return 0;
+}

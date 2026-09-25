@@ -1,0 +1,2 @@
+type Word = Int(32);
+Int main() { Word w = i32(4); println("ok"); return 0; }

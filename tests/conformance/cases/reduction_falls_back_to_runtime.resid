@@ -1,0 +1,9 @@
+
+Int count(Int n) {
+    return if (n == 0) { 0 } else { count(n - 1) };
+}
+
+Int main() {
+    // Deep recursion exceeds step budget → runtime fallback
+    return count(100000);
+}

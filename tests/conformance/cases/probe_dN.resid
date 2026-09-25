@@ -1,0 +1,1 @@
+Int main() { Dec(10) a = d10(5); println(f"{a}"); return 0; }

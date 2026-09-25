@@ -1,0 +1,5 @@
+Int main() {
+    Int b = rt 7;
+    known(b);
+    return 0;
+}

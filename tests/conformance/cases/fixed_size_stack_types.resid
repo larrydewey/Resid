@@ -1,0 +1,24 @@
+Int main() {
+    Str(8) s = "abcdefgh";
+    println(IntToString(str_len((Str)s)));
+    println(IntToString(s[1]));
+
+    Str h = "hello world";
+    Str(8) f = (Str(8))h;
+    println((Str)f);
+    println(IntToString(str_len((Str)f)));
+
+    Bytes(8) b = b"12345678";
+    println(IntToString(b[2]));
+
+    List(Int, 8) xs = [10, 20, 30];
+    println(IntToString(xs[0]));
+    println(IntToString(xs[2]));
+    println(IntToString(xs.len()));
+
+    Str(3) a = "abc";
+    Str(3) d = "def";
+    Str(6) c = (Str(6))((Str)a + (Str)d);
+    println((Str)c);
+    return 0;
+}

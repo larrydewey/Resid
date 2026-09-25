@@ -1,0 +1,1 @@
+Int main() { List(Int) xs = [1,2]; Option(Int) o = Some(1); while (Some(v) = o) { println(IntToString(v)); break; } return 0; }

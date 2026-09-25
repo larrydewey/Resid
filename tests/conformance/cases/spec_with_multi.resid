@@ -1,0 +1,8 @@
+@requires(filesystem)
+Int main() {
+    Bool w = filesystem.write_all("@TMP@/w.txt", "x");
+    with (File a = filesystem.open("@TMP@/w.txt"), File b = filesystem.open("@TMP@/w.txt")) {
+        println("ok");
+    }
+    return 0;
+}

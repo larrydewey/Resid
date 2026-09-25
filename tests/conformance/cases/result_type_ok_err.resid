@@ -1,0 +1,15 @@
+Int main() {
+    Result(Int, RegionError) r = Ok(7);
+    Int out = match r {
+        Ok(n) => n,
+        Err(e) => 0,
+    };
+    println(IntToString(out));
+    Result(Int, RegionError) bad = Err(RegionError { .message = "boom" });
+    Str msg = match bad {
+        Ok(n) => "none",
+        Err(e) => e.message,
+    };
+    println(msg);
+    return 0;
+}

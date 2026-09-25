@@ -1,0 +1,32 @@
+Int main() {
+    Option(Int) a = Some(5);
+    Option(Int) b = None;
+
+    if (Some(v) = a) {
+        println(IntToString(v));
+    } else {
+        println("none");
+    }
+
+    if (Some(v) = b) {
+        println(IntToString(v));
+    } else {
+        println("none");
+    }
+
+    // else-if chain: first arm fails (None), second matches.
+    if (Some(v) = b) {
+        println(IntToString(v));
+    } else if (Some(w) = a) {
+        println(IntToString(w));
+    } else {
+        println("none");
+    }
+
+    while (Some(n) = b) {
+        println(IntToString(n));
+    }
+    println("done");
+
+    return 0;
+}

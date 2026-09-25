@@ -1,0 +1,20 @@
+
+Str rope_repeat(Int i, Int n, Str sb) {
+    if (i >= n) { return str_sb_finish(sb); }
+    Str sb2 = str_sb_append(sb, "ab");
+    Int ni = i + 1;
+    return rope_repeat(ni, n, sb2);
+}
+
+Int main() {
+    Str a = str_sb_new();
+    Str a1 = str_sb_append_cp(a, 72);
+    Str a2 = str_sb_append_cp(a1, 20013);
+    Str a3 = str_sb_append_cp(a2, 33);
+    Str out1 = str_sb_finish(a3);
+    println(out1);
+    println(IntToString(str_len(out1)));
+    Str out2 = rope_repeat(0, 3, str_sb_new());
+    println(out2);
+    return 0;
+}

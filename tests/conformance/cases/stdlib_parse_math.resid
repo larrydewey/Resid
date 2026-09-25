@@ -1,0 +1,11 @@
+
+Int main() {
+    if (str_is_int("-17")) {
+        println(IntToString(str_parse_int("-17")));
+    }
+    println(IntToString(abs_i64(-8)));
+    println(IntToString(min_i64(3, 9)));
+    println(IntToString(max_i64(3, 9)));
+    println(IntToString(clamp_i64(15, 0, 10)));
+    return 0;
+}

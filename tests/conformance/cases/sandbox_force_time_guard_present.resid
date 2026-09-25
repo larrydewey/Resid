@@ -1,0 +1,7 @@
+sandbox (filesystem) {
+    Int read_demo() {
+        Str d = filesystem.read_all("data.txt");
+        return str_len(d);
+    }
+}
+Int main() { println(IntToString(read_demo())); return 0; }

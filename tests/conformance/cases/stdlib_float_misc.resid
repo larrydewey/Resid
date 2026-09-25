@@ -1,0 +1,10 @@
+
+Int main() {
+    if (str_is_float("3.5")) {
+        Float f = str_parse_float("3.5") + str_parse_float("-1.25");
+        println(f"sum={f}");
+    }
+    println(IntToString(str_count("banana", "an")));
+    println(str_reverse("héllo"));
+    return 0;
+}

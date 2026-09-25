@@ -1,0 +1,15 @@
+
+Str greet(Int count, Str msg = "hello", Str suffix = " world") {
+    return msg + suffix;
+}
+Int main() {
+    // Use defaults for msg and suffix
+    println(greet(2));
+    // Override only suffix
+    println(greet(1, "hi", "!"));
+    // All explicit
+    println(greet(1, "hey", "."));
+    // Named args: skip over msg, override suffix
+    println(greet(1, suffix = "!"));
+    return 0;
+}

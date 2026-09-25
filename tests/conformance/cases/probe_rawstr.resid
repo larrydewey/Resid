@@ -1,0 +1,1 @@
+Int main() { Str s = r"C:\path"; Bytes b = b"ab"; println(s); return 0; }

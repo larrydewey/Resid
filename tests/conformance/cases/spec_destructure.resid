@@ -1,0 +1,10 @@
+type Point = { Int x; Int y; };
+Int main() {
+    Point p = Point { .x = 3, .y = 4 };
+    Point { x, y } = p;
+    println(IntToString(x + y));
+    Option(Int) o = Some(5);
+    Some(v) = o;
+    println(IntToString(v));
+    return 0;
+}

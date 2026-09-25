@@ -1,0 +1,13 @@
+
+Int main() {
+    Str s = "hello";
+    Int n = str_len(s);
+    println(IntToString(n));
+    Int c = str_char_at(s, 1);
+    println(IntToString(c));
+    Str one = str_from_code(c);
+    println(one);
+    Str sub = str_slice(s, 1, 3);
+    println(sub);
+    return 0;
+}

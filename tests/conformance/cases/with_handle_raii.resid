@@ -1,0 +1,10 @@
+Int main() {
+    Str p = "@TMP@/in.txt";
+    Bool wok = filesystem.write_all(p, "hello with\n");
+    with (File h = filesystem.open(p)) {
+        Str data = filesystem.read_handle(h);
+        print(data);
+        return 0;
+    }
+    return 1;
+}

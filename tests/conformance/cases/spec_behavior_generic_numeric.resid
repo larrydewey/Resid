@@ -1,0 +1,17 @@
+Int main() {
+    List(Int) a = [3, 1, 2];
+    List(Int) sa = sort(a, using = Ord(Int));
+    println(IntToString(sa[0]));
+    println(IntToString(sa[2]));
+    List(Int) da = sort(a, using = Reverse(Ord(Int)));
+    println(IntToString(da[0]));
+    List(UInt(16)) b = [u16(300), u16(100), u16(200)];
+    List(UInt(16)) sb = sort(b, using = Ord(UInt(16)));
+    println(UIntToString(sb[0]));
+    List(Float) f = [3.5, 1.25, 2.0];
+    List(Float) sf = sort(f, using = Ord(Float));
+    println(FloatToString(sf[0]));
+    List(Float) df = sort(f, using = Reverse(Ord(Float)));
+    println(FloatToString(df[0]));
+    return 0;
+}

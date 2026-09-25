@@ -1,0 +1,12 @@
+
+Int main() {
+    Int x = 5;
+    if (x > 3) {
+        println("big");
+    } else if (x > 1) {
+        println("mid");
+    } else {
+        println("small");
+    }
+    return 0;
+}

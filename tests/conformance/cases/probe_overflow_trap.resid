@@ -1,0 +1,2 @@
+Int(8) add(Int(8) a, Int(8) b) { return a + b; }
+Int main() { Int(8) r = add(i8(100), i8(100)); println(IntToString(i64(r))); return 0; }

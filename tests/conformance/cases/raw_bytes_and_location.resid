@@ -1,0 +1,11 @@
+
+Int main() {
+    Str raw = r"C:\path\file";
+    println(raw);
+    Bytes b = b"bytes";
+    SourceLoc loc = #location;
+    println(loc.file);
+    println(IntToString(loc.line));
+    println(IntToString(loc.col));
+    return 0;
+}

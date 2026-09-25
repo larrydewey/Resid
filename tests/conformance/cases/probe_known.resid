@@ -1,0 +1,1 @@
+Int main() { Int a = 5; known(a); Int b = rt 7; rt_known(b); rt_assert(b == 7, "b"); assert(a == 5, "a"); println(IntToString(a + b)); return 0; }

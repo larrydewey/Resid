@@ -1,0 +1,6 @@
+Int main() {
+    Dec(4) a = 1.5m;
+    Int b = 2;
+    Dec(4) c = a + b;
+    return 0;
+}

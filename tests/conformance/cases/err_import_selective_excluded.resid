@@ -1,0 +1,4 @@
+import "_mod_a.resid" (twice);
+Int main() {
+    return thrice(1);
+}

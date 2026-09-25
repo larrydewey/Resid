@@ -1,0 +1,6 @@
+Int main() {
+    Bool ok = filesystem.create_dir("@TMP@/newdir");
+    println(BoolToString(ok));
+    println(BoolToString(filesystem.is_dir("@TMP@/newdir")));
+    return 0;
+}

@@ -37,7 +37,8 @@
 // This file is imported by examples/driver.resid and shares its lexer
 // (lex_tok, Tok), parse_type/PRes and is_known_type_cg.
 
-type RdT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; };
+// cts: constraint types (spec §12) as "name\x1fbase\x1fconstraint text".
+type RdT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; List(Str) cts; };
 type RdS = { Int steps; Int depth; Int fuel; Map(Str, Str) memo; };
 type RdE = { List(Str) ns; List(Str) vs; List(Str) ts; };
 // sx/px: a residual Str concatenation `px + <literal sx>` whose literal
@@ -735,6 +736,19 @@ RdV rd_bin(Str s, Int start, RdV lhs, Int minp, RdE env, RdT ft) {
 
 RdV rd_unary(Str s, Int pos, RdE env, RdT ft, RdS st) {
     Tok t0 = lex_tok(s, pos);
+    // `rt e` (spec §9): residual by declaration, whatever e reduces to.
+    Bool rt_tok = t0.text == "rt";
+    Bool rt_kw = if (rt_tok) { rd_env_idx(env, "rt") < 0 } else { false };
+    if (rt_kw) {
+        Tok rnx = lex_tok(s, t0.pos);
+        Bool rstart = rnx.kind == "ident" || rnx.kind == "int" || rnx.kind == "float" || rnx.kind == "str" || rnx.text == "(" || rnx.text == "[" || rnx.text == "!";
+        if (rstart) {
+            RdV inner = rd_unary(s, t0.pos, env, ft, st);
+            if (inner.bad) { return inner; }
+            Str rr = if (inner.ch) { "rt " + inner.r } else { str_slice(s, pos, inner.pos) };
+            return rd_unk(rr, inner.ch, inner.pos, inner.st);
+        }
+    }
     if (t0.text == "(") {
         PRes pt = parse_type(s, t0.pos);
         if (pt.err == "") {
@@ -1650,6 +1664,20 @@ RdR rd_stmts(Str s, Int pos, RdE env, RdT ft, RdS st0) {
         Tok cp = lex_tok(s, t.pos);
         if (cp.text == "(" && st.depth == 0) { return rd_comptime_print(s, pos, cp, env, ft, st); }
     }
+    Bool kw_known = if (t.text == "known") { rd_fn_idx(ft, "known") < 0 } else { false };
+    if (kw_known) {
+        Tok kp = lex_tok(s, t.pos);
+        if (kp.text == "(" && st.depth == 0) { return rd_known_stmt(s, pos, kp, env, ft, st); }
+    }
+    // `@residual T x = e;`: the binding stays residual (x is unknown after).
+    if (t.text == "@") {
+        Tok an = lex_tok(s, t.pos);
+        if (an.text == "residual") {
+            Int rend = rd_stmt_end(s, an.pos, 0);
+            RdR restr = rd_stmts(s, rend, env, ft, st);
+            return rd_then(str_slice(s, pos, rend), false, restr);
+        }
+    }
     if (t.kind == "ident") {
         PRes pty = parse_type(s, pos);
         if (pty.err == "") {
@@ -1753,10 +1781,14 @@ RdR rd_return(Str s, Int pos, Tok t, RdE env, RdT ft, RdS st) {
 }
 
 RdR rd_bind(Str s, Int pos, Str ty, Str name, Int eqpos, RdE env, RdT ft, RdS st) {
-    RdV v = rd_expr(s, eqpos, env, ft, st);
-    if (v.bad) { return rd_rbad(v.pos, v.st); }
-    Tok semi = lex_tok(s, v.pos);
-    if (semi.text != ";") { return rd_rbad(semi.pos, v.st); }
+    RdV v0 = rd_expr(s, eqpos, env, ft, st);
+    if (v0.bad) { return rd_rbad(v0.pos, v0.st); }
+    Tok semi = lex_tok(s, v0.pos);
+    if (semi.text != ";") { return rd_rbad(semi.pos, v0.st); }
+    // A known value bound to a constraint type discharges the constraint
+    // now: false is error E0301.
+    Str cent = rd_ct_find(ft.cts, ty, 0);
+    RdV v = if (cent != "" && v0.k) { rd_with_st(v0, rd_ct_check(s, eqpos, name, ty, cent, v0, ft)) } else { v0 };
     Str cty = if (v.k) { rd_coerce(v.ty, ty) } else { "" };
     RdE env2 = if (cty != "") { rd_env_add(env, name, v.v, cty) } else { rd_env_add(env, name, "", "") };
     RdR rest = rd_stmts(s, semi.pos, env2, ft, v.st);
@@ -1836,11 +1868,66 @@ RdR rd_comptime_print(Str s, Int pos, Tok cp, RdE env, RdT ft, RdS st) {
     return rd_then(text, v.k, rest);
 }
 
+Str rd_ct_find(List(Str) cts, Str ty, Int i) {
+    if (i >= cts.len()) { return ""; }
+    Str e = cts[i];
+    if (str_starts_with(e, ty + str_from_code(31))) { return e; }
+    return rd_ct_find(cts, ty, i + 1);
+}
+
+RdS rd_ct_check(Str s, Int pos, Str name, Str ty, Str cent, RdV v, RdT ft) {
+    List(Str) parts = str_split(cent, str_from_code(31));
+    Str base = parts[1];
+    Str ctext = parts[2];
+    RdE cenv = rd_env_add(rd_env_empty(), "value", v.v, rd_coerce(v.ty, base));
+    RdV r = rd_expr(ctext, 0, cenv, ft, v.st);
+    if (r.bad || !r.k || r.v != "false") { return r.st; }
+    Str prev = r.st.memo.get("__ERR__") else { "" };
+    if (prev != "") { return r.st; }
+    Int line = str_count(str_slice(s, 0, pos), "\n") + 1;
+    Str msg = "error[E0301]: constraint of " + ty + " (" + ctext + ") does not hold for " + name + " = " + rd_render(v.v, v.ty) + " at line " + IntToString(line);
+    return rd_st_memo(r.st, "__ERR__", msg);
+}
+
+// `known(e);` (spec §9): e must reduce to a known value here; the check is
+// then erased. A residual e is a compile-time error, reported through
+// the memo table (key "__ERR__").
+RdR rd_known_stmt(Str s, Int pos, Tok kp, RdE env, RdT ft, RdS st) {
+    RdV v = rd_expr(s, kp.pos, env, ft, st);
+    if (v.bad) { return rd_rbad(v.pos, v.st); }
+    Tok rp = lex_tok(s, v.pos);
+    Tok semi = lex_tok(s, rp.pos);
+    if (rp.text != ")" || semi.text != ";") { return rd_rbad(semi.pos, v.st); }
+    Str orig = str_slice(s, pos, semi.pos);
+    Int line = str_count(str_slice(s, 0, kp.pos), "\n") + 1;
+    Str what = str_trim(str_slice(s, kp.pos, v.pos));
+    Str prev = v.st.memo.get("__ERR__") else { "" };
+    RdS st2 = if (v.k || prev != "") { v.st } else {
+        rd_st_memo(v.st, "__ERR__", "error[E0901]: known(" + what + "): the value is residual (not known at compile time) at line " + IntToString(line))
+    };
+    RdR rest = rd_stmts(s, semi.pos, env, ft, st2);
+    return rd_then(rd_nl_pad("", orig), v.k, rest);
+}
+
+// End (after `;`) of the statement starting at pos.
+Int rd_stmt_end(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t.pos; }
+    if (depth == 0 && t.text == ";") { return t.pos; }
+    if (rd_is_open(t.text)) { return rd_stmt_end(s, t.pos, depth + 1); }
+    if (rd_is_close(t.text)) { return rd_stmt_end(s, t.pos, depth - 1); }
+    return rd_stmt_end(s, t.pos, depth);
+}
+
+Int rd_fn_idx(RdT ft, Str name) {
+    return ft.fidx.get(name) else { -1 };
+}
+
 // ─── Program ────────────────────────────────────────────────────
 
 RdT rd_table_empty() {
     Map(Str, Int) e = {"__EMPTY__": -1};
-    return RdT {.fnames = [], .fpns = [], .fpts = [], .frets = [], .fbody = [], .sts = [], .sfs = [], .fidx = e};
+    return RdT {.fnames = [], .fpns = [], .fpts = [], .frets = [], .fbody = [], .sts = [], .sfs = [], .fidx = e, .cts = []};
 }
 
 // Parameters from after `(`: names, types, and whether the list is usable
@@ -1917,8 +2004,19 @@ RdT rd_collect(Str s, Int pos, RdT ft) {
             List(Str) sts = ft.sts;
             List(Str) sfs = ft.sfs;
             Str flds = rd_struct_fields(s, tb.pos, "");
-            RdT ft2 = RdT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = sts.concat([tn.text]), .sfs = sfs.concat([flds]), .fidx = ft.fidx};
+            RdT ft2 = RdT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = sts.concat([tn.text]), .sfs = sfs.concat([flds]), .fidx = ft.fidx, .cts = ft.cts};
             return rd_collect(s, tend, ft2);
+        }
+        // `type N = Base[expr];` / `type N = Base where expr;`
+        PRes cb = parse_type(s, teq.pos);
+        if (cb.err == "") {
+            Tok ck = lex_tok(s, cb.pos);
+            Str ctext = if (ck.text == "[") { str_slice(s, ck.pos, rd_skip_group(s, ck.pos, 1) - 1) } else { if (ck.text == "where") { str_slice(s, ck.pos, tend - 1) } else { "" } };
+            if (ctext != "") {
+                Str ent = tn.text + str_from_code(31) + cb.ty + str_from_code(31) + str_trim(ctext);
+                RdT ftc = RdT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts.concat([ent])};
+                return rd_collect(s, tend, ftc);
+            }
         }
         return rd_collect(s, tend, ft);
     }
@@ -1942,7 +2040,7 @@ RdT rd_collect(Str s, Int pos, RdT ft) {
                     List(Str) fpts = ft.fpts;
                     List(Str) frets = ft.frets;
                     List(Int) fbody = ft.fbody;
-                    RdT ft3 = RdT {.fnames = fnames.concat([name.text]), .fpns = fpns.concat([rd_join(ps.pns, 0, ",", "")]), .fpts = fpts.concat([rd_join(ps.pts, 0, "|", "")]), .frets = frets.concat([rty.ty]), .fbody = fbody.concat([bpos]), .sts = ft.sts, .sfs = ft.sfs, .fidx = fidx.insert(name.text, idx)};
+                    RdT ft3 = RdT {.fnames = fnames.concat([name.text]), .fpns = fpns.concat([rd_join(ps.pns, 0, ",", "")]), .fpts = fpts.concat([rd_join(ps.pts, 0, "|", "")]), .frets = frets.concat([rty.ty]), .fbody = fbody.concat([bpos]), .sts = ft.sts, .sfs = ft.sfs, .fidx = fidx.insert(name.text, idx), .cts = ft.cts};
                     return rd_collect(s, fend, ft3);
                 }
             }
@@ -2026,12 +2124,13 @@ RdG rd_prog_fn(Str s, Int pos, Tok ob, RdT ft, RdG g) {
     return rd_prog(s, fend, ft, RdG {.sb = sbf, .st = body.st, .nred = n2});
 }
 
-type RdOut = { Str text; Int nred; };
+type RdOut = { Str text; Int nred; Str err; };
 
-RdOut rd_reduce_program(Str s) {
+pub RdOut rd_reduce_program(Str s) {
     RdT ft = rd_collect(s, 0, rd_table_empty());
     Map(Str, Str) memo = {"__EMPTY__": "!"};
     RdS st = RdS {.steps = 0, .depth = 0, .fuel = rd_max_fuel(), .memo = memo};
     RdG g = rd_prog(s, 0, ft, RdG {.sb = str_sb_new(), .st = st, .nred = 0});
-    return RdOut {.text = str_sb_finish(g.sb), .nred = g.nred};
+    Str err = g.st.memo.get("__ERR__") else { "" };
+    return RdOut {.text = str_sb_finish(g.sb), .nred = g.nred, .err = err};
 }

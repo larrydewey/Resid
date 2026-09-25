@@ -1,0 +1,15 @@
+type Positive = Int[value > 0];
+type Even = Int[value % 2 == 0];
+type Natural = Int where value >= 0;
+
+Int main() {
+    Positive p = 5;
+    println(IntToString(p));
+    Even e = 10;
+    println(IntToString(e));
+    Natural n = 0;
+    println(IntToString(n));
+    Int y = p * e;
+    println(IntToString(y));
+    return 0;
+}

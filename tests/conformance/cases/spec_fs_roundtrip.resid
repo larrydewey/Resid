@@ -1,0 +1,8 @@
+@requires(filesystem)
+Int main() {
+    Bool ok = filesystem.write_all("@TMP@/rt.txt", "hello");
+    println(BoolToString(ok));
+    Str s = filesystem.read_all("@TMP@/rt.txt");
+    println(s);
+    return 0;
+}

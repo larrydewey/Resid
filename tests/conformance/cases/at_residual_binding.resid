@@ -1,0 +1,6 @@
+Int main() {
+    Int src = 6;
+    @residual Int x = src * 7;
+    println(IntToString(x));
+    return 0;
+}

@@ -838,6 +838,8 @@ typedef struct {
     uint64_t touched;   /* LRU clock value at last use */
 } StrIndexSlot;
 static _Thread_local StrIndexSlot g_str_slots[STR_IDX_SLOTS];
+#define STR_IDX_SMALL 256
+static _Thread_local StrIndexSlot g_str_small = { NULL, -1, NULL, 0 };
 static _Thread_local uint64_t g_str_clock = 0;
 static _Thread_local int g_str_slots_ready = 0;
 
@@ -901,6 +903,17 @@ static StrIndexSlot* str_index_slot(const char* s) {
             g_str_slots[k].touched = 0;
         }
         g_str_slots_ready = 1;
+    }
+    /* Short strings (type names, tokens, identifiers) never enter the LRU:
+     * a burst of them used to evict the big source text's index, so the
+     * next lex step rebuilt it by walking the whole program again. Their
+     * own index is cheap to build and is kept in one dedicated slot. */
+    /* (Arena memory is reused after a pop, so a pointer match there proves
+     * nothing: arena strings always rebuild.) */
+    if (g_str_small.s == s && !arena_contains(s)) return &g_str_small;
+    if (strnlen(s, STR_IDX_SMALL) < STR_IDX_SMALL) {
+        str_index_build(s, &g_str_small);
+        return &g_str_small;
     }
     g_str_clock++;
     for (int k = 0; k < STR_IDX_SLOTS; k++) {
@@ -1150,8 +1163,15 @@ static void* resid_spawn_entry(void* a) {
     const char* msg = resid_spawn_catch_msg ? resid_spawn_catch_msg : "child region aborted";
     resid_spawn_catch = NULL;
     char* m = resid_box_str(msg);
-    void* region = resid_box_new(0, 1, (void*[]){ m }, "RegionError");
-    return resid_box_new(1, 1, (void*[]){ region }, "Result");
+    /* RegionError is a one-field struct: a flat block holding `message`. */
+    void** region = (void**)malloc(sizeof(void*));
+    region[0] = m;
+    return resid_box_new(2, 1, (void*[]){ region }, "Result");
+}
+
+/* Ok(payload) as a Result box (tag 1), for spawn workers. */
+void* resid_ok_box(void* payload) {
+    return resid_box_new(1, 1, (void*[]){ payload }, "Result");
 }
 
 /* Structured spawn (spec §19): run `worker(captures)` on a fresh thread and
@@ -1453,6 +1473,48 @@ void* resid_list_concat(void* a, void* b) {
     if (y->count == 1) return pvec_push_raw(x, pvec_get_raw(y->root, y->shift, 0));
     void** flat = resid_list_to_array(y);
     ResidList* out = pvec_append(x, flat, y->count);
+    free(flat);
+    return out;
+}
+
+
+/* rt_assert(c, msg) / assert(c, msg): abort with the message unless c. */
+void resid_assert(int8_t ok, const char* msg) {
+    if (ok) return;
+    char buf[512];
+    snprintf(buf, sizeof buf, "assertion failed%s%s", msg ? ": " : "", msg ? msg : "");
+    resid_abort(buf);
+}
+
+/* todo(msg) (kind 0) / unimplemented(msg) (kind 1): abort when reached. */
+void resid_todo(int8_t kind, const char* msg) {
+    char buf[512];
+    snprintf(buf, sizeof buf, "%s%s%s", kind ? "not implemented" : "not yet implemented", msg ? ": " : "", msg ? msg : "");
+    resid_abort(buf);
+}
+
+/* xs[lo..hi] as a new list (bounds clamped to [0, count], empty when
+ * lo >= hi). */
+void* resid_list_slice(void* list, int64_t lo, int64_t hi) {
+    ResidList* x = (ResidList*)list;
+    if (lo < 0) lo = 0;
+    if (hi > x->count) hi = x->count;
+    int64_t n = hi > lo ? hi - lo : 0;
+    void** flat = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
+    if (!flat) resid_abort("resid_list_slice: out of memory");
+    for (int64_t i = 0; i < n; i++) flat[i] = pvec_get_raw(x->root, x->shift, lo + i);
+    void* out = resid_list_new(n, flat, x->type);
+    free(flat);
+    return out;
+}
+
+/* lo..hi (hi exclusive) as a List(Int): Range(Int) values are materialized. */
+void* resid_range_list(int64_t lo, int64_t hi) {
+    int64_t n = hi > lo ? hi - lo : 0;
+    void** flat = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
+    if (!flat) resid_abort("resid_range_list: out of memory");
+    for (int64_t i = 0; i < n; i++) flat[i] = resid_box_i64(lo + i);
+    void* out = resid_list_new(n, flat, "List(Int(64))");
     free(flat);
     return out;
 }
@@ -2339,6 +2401,13 @@ uint64_t usize(uint64_t v) { return v; }
  * They are callable from Resid source (e.g. `wrapping_add(a, b)`).
  */
 
+/* Default-operator checked arithmetic trap (spec §6.5): codegen computes
+ * narrow add/sub with llvm.{s,u}{add,sub}.with.overflow and passes the
+ * overflow flag here, so no extra basic block is needed at the use site. */
+void resid_overflow_check(int8_t overflowed) {
+    if (overflowed) resid_abort("integer overflow in checked arithmetic");
+}
+
 /* ── Wrapping operations (C integer overflow is well-defined: wrap) ─ */
 int64_t wrapping_add(int64_t a, int64_t b) { return a + b; }
 int64_t wrapping_sub(int64_t a, int64_t b) { return a - b; }
@@ -2545,18 +2614,18 @@ int8_t resid_fs_write_bytes(const char* path, void* list_box) {
  * empty list on failure/missing file — the read-side counterpart to
  * resid_fs_write_bytes. */
 void* resid_fs_read_bytes(const char* path) {
-    if (!resid_path_is_safe(path)) return resid_list_new(0, NULL, "List(Int)");
+    if (!resid_path_is_safe(path)) return resid_list_new(0, NULL, "List(Int(64))");
     FILE* f = fopen(path, "rb");
-    if (!f) return resid_list_new(0, NULL, "List(Int)");
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return resid_list_new(0, NULL, "List(Int)"); }
+    if (!f) return resid_list_new(0, NULL, "List(Int(64))");
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return resid_list_new(0, NULL, "List(Int(64))"); }
     long sz = ftell(f);
-    if (sz < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return resid_list_new(0, NULL, "List(Int)"); }
+    if (sz < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return resid_list_new(0, NULL, "List(Int(64))"); }
     unsigned char* buf = (unsigned char*)malloc((size_t)(sz > 0 ? sz : 1));
     size_t n = fread(buf, 1, (size_t)sz, f);
     fclose(f);
     void** slots = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
     for (size_t i = 0; i < n; i++) slots[i] = resid_box_i64((int64_t)buf[i]);
-    void* out = resid_list_new((int64_t)n, slots, "List(Int)");
+    void* out = resid_list_new((int64_t)n, slots, "List(Int(64))");
     free(slots);
     free(buf);
     return out;
@@ -5842,4 +5911,95 @@ char* resid_set_format(void* set) {
     buf[pos++] = '}';
     buf[pos] = '\0';
     return buf;
+}
+
+/* ── Dec(N) for the self-hosted code generator ─────────────────────────
+ * Heap-allocated, immutable resid_dec values behind a pointer (the
+ * out-parameter entry points above need caller storage). `prec` is the
+ * static N of the result type; each result is rounded to it once. */
+static resid_dec* decp_new(void) {
+    resid_dec* o = (resid_dec*)malloc(sizeof(resid_dec));
+    if (!o) resid_abort("dec: out of memory");
+    return o;
+}
+
+static resid_dec* decp_rounded(resid_dec* v, int64_t prec) {
+    resid_dec* o = decp_new();
+    resid_dec_round(o, v, (uint16_t)prec);
+    free(v);
+    return o;
+}
+
+void* resid_decp_from_str(const char* s, int64_t prec) {
+    resid_dec* o = decp_new();
+    resid_dec_from_str(o, s, (uint16_t)prec);
+    return o;
+}
+
+void* resid_decp_from_i64(int64_t v, int64_t prec) {
+    resid_dec* o = decp_new();
+    resid_dec_from_int(o, v, (uint16_t)prec);
+    return o;
+}
+
+void* resid_decp_round(void* v, int64_t prec) {
+    resid_dec* o = decp_new();
+    resid_dec_round(o, (resid_dec*)v, (uint16_t)prec);
+    return o;
+}
+
+void* resid_decp_add(void* a, void* b, int64_t prec) {
+    resid_dec* o = decp_new();
+    resid_dec_add(o, (resid_dec*)a, (resid_dec*)b);
+    return decp_rounded(o, prec);
+}
+
+void* resid_decp_sub(void* a, void* b, int64_t prec) {
+    resid_dec* o = decp_new();
+    resid_dec_sub(o, (resid_dec*)a, (resid_dec*)b);
+    return decp_rounded(o, prec);
+}
+
+void* resid_decp_mul(void* a, void* b, int64_t prec) {
+    resid_dec* o = decp_new();
+    resid_dec_mul(o, (resid_dec*)a, (resid_dec*)b);
+    return decp_rounded(o, prec);
+}
+
+void* resid_decp_div(void* a, void* b, int64_t prec) {
+    resid_dec* o = decp_new();
+    resid_dec_div(o, (resid_dec*)a, (resid_dec*)b);
+    return decp_rounded(o, prec);
+}
+
+void* resid_decp_neg(void* a) {
+    resid_dec* o = decp_new();
+    resid_dec_neg(o, (resid_dec*)a);
+    return o;
+}
+
+int64_t resid_decp_cmp(void* a, void* b) {
+    return (int64_t)resid_dec_cmp((resid_dec*)a, (resid_dec*)b);
+}
+
+/* trim != 0: drop trailing fractional zeros (the f-string `:.` spec). */
+char* resid_decp_to_str(void* v, int8_t trim) {
+    char* s = resid_dec_to_string((resid_dec*)v);
+    if (!trim || !strchr(s, '.')) return s;
+    size_t n = strlen(s);
+    char* t = (char*)malloc(n + 1);
+    memcpy(t, s, n + 1);
+    while (n > 0 && t[n - 1] == '0') t[--n] = 0;
+    if (n > 0 && t[n - 1] == '.') t[--n] = 0;
+    char* boxed = resid_box_str(t);
+    free(t);
+    return boxed;
+}
+
+int64_t resid_decp_to_i64(void* v) {
+    return resid_dec_to_int((resid_dec*)v, INT64_MIN, INT64_MAX);
+}
+
+double resid_decp_to_f64(void* v) {
+    return resid_dec_to_f64((resid_dec*)v);
 }

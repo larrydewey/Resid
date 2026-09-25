@@ -1,0 +1,23 @@
+
+Float(128) pow2(Int(64) n) {
+    if (n == 0) {
+        return f128(1.0);
+    } else {
+        return pow2((Int(64))(n - 1)) * f128(2.0);
+    }
+}
+
+Int main() {
+    Float(128) a = f128(1.5);
+    Float(128) b = f128(2.25);
+    println(Float128ToString(a + b));
+    println(Float128ToString(a * b));
+    println(Float128ToString(f128(1.0) / f128(3.0)));
+    println(Float128ToString(f128(2.5)));
+    println(Float128ToString(pow2(100)));
+    println(Float128ToString(f128(0.0001)));
+    println(f"sum = {a + b}");
+    if (a < b) { println("lt"); }
+    if (a == b) { println("eq"); }
+    return 0;
+}

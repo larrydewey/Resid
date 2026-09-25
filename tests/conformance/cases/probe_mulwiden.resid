@@ -1,0 +1,1 @@
+Int main() { Int(8) a = i8(100); Int(8) b = i8(100); Int(16) c = a * b; println(IntToString(i64(c))); return 0; }

@@ -1,0 +1,2 @@
+pub Int f() { return 1; }
+Int main() { println(IntToString(f())); return 0; }

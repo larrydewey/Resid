@@ -1,0 +1,8 @@
+Int main() {
+    for (Int i in 0..10) {
+        if (i == 2) { continue; }
+        if (i == 4) { break; }
+        println(IntToString(i));
+    }
+    return 0;
+}

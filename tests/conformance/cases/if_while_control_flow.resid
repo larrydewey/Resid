@@ -1,0 +1,13 @@
+Int main() {
+    Int x = if (1 < 2) { 10; } else { 20; };
+    println(IntToString(x));
+
+    Int y = if (1 > 2) { 100; };
+    println(IntToString(y));
+
+    while (true) {
+        break;
+    }
+    println("done");
+    return 0;
+}

@@ -1,0 +1,1 @@
+Int main() { Map(Str, Int) m = {"a": 1, "b": 2}; Option(Int) v = m["a"]; Int x = v else { 0 }; println(IntToString(x)); return 0; }
