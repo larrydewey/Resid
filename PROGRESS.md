@@ -180,7 +180,31 @@ rewritten into a worker that appends in place to a growable buffer
 (`resid_sacc_from` / `resid_sacc_append` in the runtime), plus a wrapper
 that copies the caller's initial string once. Accumulating 100k pieces
 went from 16.2s / 51.8GB to 0.005s / 12MB; see `bench/strcat/` for the
-comparison with C, Rust, Go, Node, Python, Ruby and LuaJIT.
+comparison with C, Rust, Go, Node, Python, Ruby and LuaJIT. `IntToString`
+pieces are formatted straight into the buffer (`resid_sacc_append_int`),
+so 10M appends take 0.29s / 78MB (Rust: 0.11s / 79MB).
+
+### 0g. Self-compile peak memory 1.0GB -> 0.26GB (2026-09-25)
+
+Measured by sampling the compiler's own VmHWM (earlier ~600MB figures
+came from a coarser sampler that missed the late peak; the true peak was
+~1.0GB). Each driver phase whose results are written out or copied now
+runs in a `resid_bulk_push`/`resid_bulk_pop` scope: typecheck, reduction,
+the string-accumulator pass, code generation, and the sidecar writers.
+The bulk arena also takes the generated code's own allocations
+(`resid_gmalloc`), which `resid_arena_push` leaves on the heap;
+`resid_list_str_persist_copy` copies into the enclosing arena rather than
+the permanent heap, and the heap is trimmed when the outermost scope
+pops. Provenance hashing and signing compress each SHA-256/SHA-512 block
+in its own scope (`prov_sha256`, `prov_sign`); signatures are
+byte-identical. Self-compile: 1.57s, peak 262MB (was 2.06s, 1017MB).
+
+Also fixed: the reducer had step/fuel budgets but no memory budget, so a
+program signing a constant message exhausted memory at compile time; it
+now stops at 512MB of requested allocation (`resid_mem_since_mark`,
+deterministic) and leaves the call residual. `resid_arena_pop` now
+invalidates the small-string and scratch index slots, which could
+otherwise match a reused address.
 
 ### Major capabilities
 
@@ -491,6 +515,31 @@ residual computation emitted, notes + provenance sidecar produced).
 ---
 
 ## 5. Next Steps
+
+### Open memory/performance gaps (2026-09-25)
+
+- **lib/crypto SHA-512 allocates ~1MB per 128-byte block.** Each round
+  builds dozens of two-element limb lists (`w64_*`, `fw_pair`) with boxed
+  elements, and nothing is freed. The compiler sidesteps it for provenance
+  signing (`prov_sha512` / `prov_sign` in the driver scope each block),
+  but user programs calling `sha512_bytes`, `sign_msg` or `verify_sig`
+  on large inputs still pay it: signing 14.5KB takes ~244MB. Fix: a
+  scalar-state round (limbs as Int parameters or a flat struct, the
+  message schedule as one list per block). The same pattern likely
+  affects SHA-256's `ext_w` schedule.
+- **`examples/stracc.resid` only recognizes `acc + e1 + ...` chains.**
+  Accumulating through `str_join([acc, piece], "")`, an f-string, or a
+  non-tail use still copies the whole accumulator per step.
+  `tests/reduce/cases/tail_calls` builds 100k characters that way and
+  peaks at ~4.7GB; it fails under a 4GB address-space limit.
+- **The runtime never frees outside arena scopes.** User programs have no
+  phase scopes like the driver's (`resid_bulk_push`/`pop` are
+  compiler-internal), so long-running programs keep every intermediate
+  value. The in-place accumulator and per-phase scopes cover the compiler
+  and the benchmark idiom, not programs in general.
+- **Resid is ~2.6x behind Rust on the 10M-append benchmark** (0.29s vs
+  0.11s; memory is level): `resid_sacc_append_int` formats through
+  snprintf, and every piece still pays a strlen.
 
 The §7 spec-conformance roadmap is now effectively complete — every
 curated item has landed in at least stage-1 (many in both pipelines).

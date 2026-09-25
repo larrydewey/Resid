@@ -975,7 +975,7 @@ Int next_pow_width(Int needed) {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)"];
+    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -3450,7 +3450,7 @@ GT cg_spawn(Str s, Int kwpos, Int pos, List(Str) env, Funcs fs, GT c) {
     Int tf0 = body.tmp + 1;
     Str arr = "%t" + IntToString(tf0);
     Int sz = (ncap + 1) * 8;
-    List(Str) cl1 = c.lines.concat([arr + " = call ptr @malloc(i64 " + IntToString(sz) + ")"]);
+    List(Str) cl1 = c.lines.concat([arr + " = call ptr @resid_gmalloc(i64 " + IntToString(sz) + ")"]);
     List(Str) cl5 = clos_store_lines(cap0.vals, cap0.tys, ncap, 0, arr, tf0 + 1, cl1);
     Int tn = tf0 + 1 + ncap * 2;
     Str r = "%t" + IntToString(tn);
@@ -3510,7 +3510,7 @@ GT cg_lambda(Str s, Int pos, Str fnty, List(Str) env, Funcs fs, GT c) {
     Int sz = (ncap + 1) * 8;
     Str fpreg = "%t" + IntToString(tf0 + 1);
     Str g0 = "%t" + IntToString(tf0 + 2);
-    List(Str) cl1 = c.lines.concat([arr + " = call ptr @malloc(i64 " + IntToString(sz) + ")"]);
+    List(Str) cl1 = c.lines.concat([arr + " = call ptr @resid_gmalloc(i64 " + IntToString(sz) + ")"]);
     List(Str) cl2 = cl1.concat([fpreg + " = ptrtoint ptr " + clo + " to i64"]);
     List(Str) cl3 = cl2.concat([g0 + " = getelementptr i64, ptr " + arr + ", i64 0"]);
     List(Str) cl4 = cl3.concat(["store i64 " + fpreg + ", ptr " + g0]);
@@ -4004,7 +4004,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 Str buf = "%t" + IntToString(ti1);
                 Str reg = "%t" + IntToString(ti2);
                 List(Str) x0 = v.lines;
-                List(Str) x1 = x0.concat([buf + " = call ptr @malloc(i64 24)"]);
+                List(Str) x1 = x0.concat([buf + " = call ptr @resid_gmalloc(i64 24)"]);
                 List(Str) x2 = x1.concat([reg + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v.val + ")"]);
                 return GT {.pos = cpit.pos, .val = reg, .ty = "Str", .cnt = 0, .err = "", .glines = v.glines, .lines = x2, .tmp = ti2, .lbl = v.lbl, .tail = false};
             }
@@ -4029,7 +4029,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 List(Str) nl1 = nl0.concat([nreg + " = call ptr @str_sb_new()"]);
                 return GT {.pos = cpn.pos, .val = nreg, .ty = "Str", .cnt = 0, .err = "", .glines = c.glines, .lines = nl1, .tmp = ni1, .lbl = c.lbl, .tail = false};
             }
-            if (t.text == "resid_arena_push" || t.text == "resid_arena_pop") {
+            Bool arena_kw0 = if (t.text == "resid_arena_push" || t.text == "resid_arena_pop") { true } else { t.text == "resid_bulk_push" || t.text == "resid_bulk_pop" };
+            Bool arena_kw = if (arena_kw0) { true } else { t.text == "resid_mem_mark" || t.text == "resid_mem_since_mark" };
+            if (arena_kw) {
                 // Zero-arg externs, same shape as resid_crypto_random_byte
                 // below: unused i64 result, called only for the side
                 // effect. See runtime/resid_rt.c's arena section.
@@ -4146,6 +4148,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             // In-place string accumulators (examples/stracc.resid).
             if (t.text == "resid_sacc_from") {
                 return cg_extern1(s, t2.pos, "resid_sacc_from", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "resid_sacc_append_int") {
+                return cg_extern2(s, t2.pos, "resid_sacc_append_int", "Str", "Int", "Str", env, fs, c);
             }
             if (t.text == "resid_sacc_append") {
                 return cg_extern2(s, t2.pos, "resid_sacc_append", "Str", "Str", "Str", env, fs, c);
@@ -5584,7 +5589,7 @@ GT csl_field(Str s, Int pos, Str fields, Str sname, Str reg, List(Str) env, Func
         Str owned_reg = env_find_owned_struct(env);
         GT result = if (owned_reg != "") {
             Int tf = c.tmp + 1;
-            Str free_line = "call void @free(ptr " + owned_reg + ")";
+            Str free_line = "call void @resid_gfree(ptr " + owned_reg + ")";
             List(Str) fl = c.lines.concat([free_line]);
             GT {.pos = dot.pos, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = c.glines, .lines = fl, .tmp = tf, .lbl = c.lbl, .tail = false}
         } else {
@@ -5656,7 +5661,7 @@ GT cg_struct_lit(Str s, Int pos, Str sname, List(Str) env, Funcs fs, GT c) {
     Int t1 = c.tmp + 1;
     Str reg = "%t" + IntToString(t1);
     List(Str) l0 = c.lines;
-    List(Str) l1 = l0.concat([reg + " = call ptr @malloc(i64 " + IntToString(nb) + ")"]);
+    List(Str) l1 = l0.concat([reg + " = call ptr @resid_gmalloc(i64 " + IntToString(nb) + ")"]);
     GT c1 = GT {.pos = pos, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = c.glines, .lines = l1, .tmp = t1, .lbl = c.lbl, .tail = false};
     return csl_field(s, pos, fields, sname, reg, env, fs, c1);
 }
@@ -6557,7 +6562,7 @@ GT fst_tostr(GT v) {
         Str buf = "%t" + IntToString(t1);
         Str rr = "%t" + IntToString(t2);
         List(Str) x0 = v64.lines;
-        List(Str) x1 = x0.concat([buf + " = call ptr @malloc(i64 24)"]);
+        List(Str) x1 = x0.concat([buf + " = call ptr @resid_gmalloc(i64 24)"]);
         List(Str) x2 = x1.concat([rr + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v64.val + ")"]);
         return GT {.pos = v.pos, .val = rr, .ty = "Str", .cnt = 0, .err = "", .glines = v.glines, .lines = x2, .tmp = t2, .lbl = v.lbl, .tail = false};
     }

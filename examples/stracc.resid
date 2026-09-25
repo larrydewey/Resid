@@ -203,6 +203,18 @@ Int sa_pick(Str s, Int bstart, Int bend, Str f, SaParams ps, Int k) {
     return sa_pick(s, bstart, bend, f, ps, k + 1);
 }
 
+// One append step. `IntToString(e)` is formatted straight into the
+// buffer, skipping its temporary string.
+Str sa_append(Str acc, Str piece) {
+    Int n = str_len(piece);
+    if (str_starts_with(piece, "IntToString(")) {
+        if (sa_skip_group(piece, 12, 1) == n) {
+            return "resid_sacc_append_int(" + acc + ", " + str_slice(piece, 12, n - 1) + ")";
+        }
+    }
+    return "resid_sacc_append(" + acc + ", " + piece + ")";
+}
+
 // `a + b + c` (text of [pos, end)) as nested resid_sacc_append calls.
 Str sa_nest(Str s, Int pos, Int end, Int depth, Int pstart, Str acc) {
     Tok t = lex_tok(s, pos);
@@ -210,11 +222,11 @@ Str sa_nest(Str s, Int pos, Int end, Int depth, Int pstart, Str acc) {
     if (stop) {
         Str last = str_trim(str_slice(s, pstart, end));
         if (acc == "") { return last; }
-        return "resid_sacc_append(" + acc + ", " + last + ")";
+        return sa_append(acc, last);
     }
     if (depth == 0 && t.text == "+") {
         Str piece = str_trim(str_slice(s, pstart, sa_start(t)));
-        Str acc2 = if (acc == "") { piece } else { "resid_sacc_append(" + acc + ", " + piece + ")" };
+        Str acc2 = if (acc == "") { piece } else { sa_append(acc, piece) };
         return sa_nest(s, t.pos, end, depth, t.pos, acc2);
     }
     if (sa_is_open(t.text)) { return sa_nest(s, t.pos, end, depth + 1, pstart, acc); }

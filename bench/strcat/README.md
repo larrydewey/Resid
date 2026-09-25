@@ -11,11 +11,12 @@ immutable-string semantics: every concatenation allocates and copies.
 `run.py` reports wall time and peak RSS per run and cuts a run off after
 `TIMEOUT` seconds (default 30).
 
-Results on 2026-09-25 (`>30s` = cut off):
+Results on 2026-09-25 (`>30s` = cut off; the resid row is after the
+`IntToString` pieces were formatted straight into the buffer):
 
 | impl          | 10k          | 100k          | 1M            | 10M           |
 |---------------|--------------|---------------|---------------|---------------|
-| resid         | 0.005s 12MB  | 0.005s 12MB   | 0.046s 47MB   | 0.392s 511MB  |
+| resid         | 0.005s 12MB  | 0.005s 12MB   | 0.030s 12MB   | 0.294s 78MB   |
 | c (immutable) | 0.010s 12MB  | 2.749s 12MB   | >30s          | >30s          |
 | rust          | 0.006s 12MB  | 0.005s 12MB   | 0.015s 12MB   | 0.112s 77MB   |
 | go            | 0.016s 12MB  | 2.128s 18MB   | >30s          | >30s          |

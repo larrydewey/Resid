@@ -975,7 +975,7 @@ Int next_pow_width(Int needed) {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)"];
+    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -3450,7 +3450,7 @@ GT cg_spawn(Str s, Int kwpos, Int pos, List(Str) env, Funcs fs, GT c) {
     Int tf0 = body.tmp + 1;
     Str arr = "%t" + IntToString(tf0);
     Int sz = (ncap + 1) * 8;
-    List(Str) cl1 = c.lines.concat([arr + " = call ptr @malloc(i64 " + IntToString(sz) + ")"]);
+    List(Str) cl1 = c.lines.concat([arr + " = call ptr @resid_gmalloc(i64 " + IntToString(sz) + ")"]);
     List(Str) cl5 = clos_store_lines(cap0.vals, cap0.tys, ncap, 0, arr, tf0 + 1, cl1);
     Int tn = tf0 + 1 + ncap * 2;
     Str r = "%t" + IntToString(tn);
@@ -3510,7 +3510,7 @@ GT cg_lambda(Str s, Int pos, Str fnty, List(Str) env, Funcs fs, GT c) {
     Int sz = (ncap + 1) * 8;
     Str fpreg = "%t" + IntToString(tf0 + 1);
     Str g0 = "%t" + IntToString(tf0 + 2);
-    List(Str) cl1 = c.lines.concat([arr + " = call ptr @malloc(i64 " + IntToString(sz) + ")"]);
+    List(Str) cl1 = c.lines.concat([arr + " = call ptr @resid_gmalloc(i64 " + IntToString(sz) + ")"]);
     List(Str) cl2 = cl1.concat([fpreg + " = ptrtoint ptr " + clo + " to i64"]);
     List(Str) cl3 = cl2.concat([g0 + " = getelementptr i64, ptr " + arr + ", i64 0"]);
     List(Str) cl4 = cl3.concat(["store i64 " + fpreg + ", ptr " + g0]);
@@ -4004,7 +4004,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 Str buf = "%t" + IntToString(ti1);
                 Str reg = "%t" + IntToString(ti2);
                 List(Str) x0 = v.lines;
-                List(Str) x1 = x0.concat([buf + " = call ptr @malloc(i64 24)"]);
+                List(Str) x1 = x0.concat([buf + " = call ptr @resid_gmalloc(i64 24)"]);
                 List(Str) x2 = x1.concat([reg + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v.val + ")"]);
                 return GT {.pos = cpit.pos, .val = reg, .ty = "Str", .cnt = 0, .err = "", .glines = v.glines, .lines = x2, .tmp = ti2, .lbl = v.lbl, .tail = false};
             }
@@ -4029,7 +4029,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
                 List(Str) nl1 = nl0.concat([nreg + " = call ptr @str_sb_new()"]);
                 return GT {.pos = cpn.pos, .val = nreg, .ty = "Str", .cnt = 0, .err = "", .glines = c.glines, .lines = nl1, .tmp = ni1, .lbl = c.lbl, .tail = false};
             }
-            if (t.text == "resid_arena_push" || t.text == "resid_arena_pop") {
+            Bool arena_kw0 = if (t.text == "resid_arena_push" || t.text == "resid_arena_pop") { true } else { t.text == "resid_bulk_push" || t.text == "resid_bulk_pop" };
+            Bool arena_kw = if (arena_kw0) { true } else { t.text == "resid_mem_mark" || t.text == "resid_mem_since_mark" };
+            if (arena_kw) {
                 // Zero-arg externs, same shape as resid_crypto_random_byte
                 // below: unused i64 result, called only for the side
                 // effect. See runtime/resid_rt.c's arena section.
@@ -4146,6 +4148,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             // In-place string accumulators (examples/stracc.resid).
             if (t.text == "resid_sacc_from") {
                 return cg_extern1(s, t2.pos, "resid_sacc_from", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "resid_sacc_append_int") {
+                return cg_extern2(s, t2.pos, "resid_sacc_append_int", "Str", "Int", "Str", env, fs, c);
             }
             if (t.text == "resid_sacc_append") {
                 return cg_extern2(s, t2.pos, "resid_sacc_append", "Str", "Str", "Str", env, fs, c);
@@ -5584,7 +5589,7 @@ GT csl_field(Str s, Int pos, Str fields, Str sname, Str reg, List(Str) env, Func
         Str owned_reg = env_find_owned_struct(env);
         GT result = if (owned_reg != "") {
             Int tf = c.tmp + 1;
-            Str free_line = "call void @free(ptr " + owned_reg + ")";
+            Str free_line = "call void @resid_gfree(ptr " + owned_reg + ")";
             List(Str) fl = c.lines.concat([free_line]);
             GT {.pos = dot.pos, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = c.glines, .lines = fl, .tmp = tf, .lbl = c.lbl, .tail = false}
         } else {
@@ -5656,7 +5661,7 @@ GT cg_struct_lit(Str s, Int pos, Str sname, List(Str) env, Funcs fs, GT c) {
     Int t1 = c.tmp + 1;
     Str reg = "%t" + IntToString(t1);
     List(Str) l0 = c.lines;
-    List(Str) l1 = l0.concat([reg + " = call ptr @malloc(i64 " + IntToString(nb) + ")"]);
+    List(Str) l1 = l0.concat([reg + " = call ptr @resid_gmalloc(i64 " + IntToString(nb) + ")"]);
     GT c1 = GT {.pos = pos, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = c.glines, .lines = l1, .tmp = t1, .lbl = c.lbl, .tail = false};
     return csl_field(s, pos, fields, sname, reg, env, fs, c1);
 }
@@ -6557,7 +6562,7 @@ GT fst_tostr(GT v) {
         Str buf = "%t" + IntToString(t1);
         Str rr = "%t" + IntToString(t2);
         List(Str) x0 = v64.lines;
-        List(Str) x1 = x0.concat([buf + " = call ptr @malloc(i64 24)"]);
+        List(Str) x1 = x0.concat([buf + " = call ptr @resid_gmalloc(i64 24)"]);
         List(Str) x2 = x1.concat([rr + " = call ptr @e.itoa(ptr " + buf + ", i64 " + v64.val + ")"]);
         return GT {.pos = v.pos, .val = rr, .ty = "Str", .cnt = 0, .err = "", .glines = v.glines, .lines = x2, .tmp = t2, .lbl = v.lbl, .tail = false};
     }
@@ -9588,6 +9593,16 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "resid_arena_pop") {
         if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_arena_pop expects no arguments"};
+    }
+    // resid_bulk_push/pop: an arena scope that also takes the generated
+    // code's own allocations (runtime/resid_rt.c, g_bulk_arena). For the
+    // driver's whole-phase scopes only, under the same caller-proof rule.
+    // resid_mem_mark / resid_mem_since_mark: the reducer's allocation
+    // budget (bytes requested since the mark).
+    Bool zero_arg_rt = if (name == "resid_bulk_push" || name == "resid_bulk_pop") { true } else { name == "resid_mem_mark" || name == "resid_mem_since_mark" };
+    if (zero_arg_rt) {
+        if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects no arguments"};
     }
     if (name == "resid_list_str_persist_copy") {
         if (builtin_args(argtys, "List(Str)")) { return ERes {.pos = pos, .ty = "List(Str)", .err = ""}; }
@@ -14652,6 +14667,8 @@ Str note_pat_text(Int idx) {
 }
 NoteHit first_note_hit_at(Str line, Int idx) {
     if (idx > 5) { return NoteHit {.kind = "", .col = -1}; }
+    // str_find slices at every position: only search lines that match.
+    if (!str_contains(line, note_pat_text(idx))) { return first_note_hit_at(line, idx + 1); }
     Int col  =  str_find(line, note_pat_text(idx));
     if (col >= 0) { return NoteHit {.kind = note_pat_kind(idx), .col = col}; }
     return first_note_hit_at(line, idx + 1);
@@ -14705,6 +14722,85 @@ Int write_notes_cbor(Str out, Str path) {
     return 0;
 }
 
+// lib/crypto's `sha256`, with each 64-byte block compressed inside its
+// own arena: the message schedule and round state of a block are garbage
+// once its eight output words are known, and over the whole program text
+// (~14K blocks) they would otherwise be the compiler's peak allocation.
+List(Int) prov_digest_blocks(Str msg, Int pos, Int total, List(Int) h) {
+    if (pos >= total) { return h; }
+    Int _blk_in = resid_bulk_push();
+    List(Int) h2 = digest_block_str(msg, pos, h);
+    Int w0 = h2[0];
+    Int w1 = h2[1];
+    Int w2 = h2[2];
+    Int w3 = h2[3];
+    Int w4 = h2[4];
+    Int w5 = h2[5];
+    Int w6 = h2[6];
+    Int w7 = h2[7];
+    Int _blk_out = resid_bulk_pop();
+    return prov_digest_blocks(msg, pos + 64, total, [w0, w1, w2, w3, w4, w5, w6, w7]);
+}
+
+Str prov_sha256(Str msg) {
+    List(Int) h0 = [1779033703, -1150833019, 1013904242, -1521486534, 1359893119, -1694144372, 528734635, 1541459225];
+    Int n = str_len(msg);
+    Int full = (n / 64) * 64;
+    List(Int) h1 = prov_digest_blocks(msg, 0, full, h0);
+    List(Int) padded = pad_tail(str_bytes_range(msg, full, n, []), n);
+    return hex_state(digest_blocks(padded, 0, padded.len(), h1), 0, "");
+}
+
+// lib/crypto's `sha512_bytes` and lib/ed25519's `sign_msg`, restated with
+// each 128-byte SHA-512 block compressed inside its own scope (the same
+// reason as prov_digest_blocks: a block's temporaries are ~1MB of limb
+// lists, and signing hashes the whole payload twice).
+List(Int) prov_digest_blocks512(List(Int) m, Int pos, Int total, List(Int) st) {
+    if (pos >= total) { return st; }
+    Int _blk_in = resid_bulk_push();
+    List(Int) s2 = digest_block512f(m, pos, st);
+    Int l0 = s2[0];
+    Int l1 = s2[1];
+    Int l2 = s2[2];
+    Int l3 = s2[3];
+    Int l4 = s2[4];
+    Int l5 = s2[5];
+    Int l6 = s2[6];
+    Int l7 = s2[7];
+    Int l8 = s2[8];
+    Int l9 = s2[9];
+    Int l10 = s2[10];
+    Int l11 = s2[11];
+    Int l12 = s2[12];
+    Int l13 = s2[13];
+    Int l14 = s2[14];
+    Int l15 = s2[15];
+    Int _blk_out = resid_bulk_pop();
+    return prov_digest_blocks512(m, pos + 128, total, [l0, l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11, l12, l13, l14, l15]);
+}
+
+List(Int) prov_sha512(List(Int) msg) {
+    List(Int) padded = pad512(msg);
+    return limbs_to_hex_bytes(prov_digest_blocks512(padded, 0, padded.len(), state512_init()), 0);
+}
+
+List(Int) prov_sign(List(Int) seed, Str msg) {
+    List(Int) mb = bytes_of(msg);
+    List(Int) h = sha512_bytes(seed);
+    List(Int) hhi = slice_bytes(h, 32, 63);
+    Int(256) av2 = clamp_of_seed(seed);
+    List(Int) axb = smul_x_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
+    List(Int) ayb = smul_y_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
+    List(Int) Aenc = encode_pt_bytes(bytes_to_int(axb), ayb);
+    Int(256) rv = mod_l(prov_sha512(concat_bytes(hhi, mb)));
+    List(Int) rxb = smul_x_acc(rv, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
+    List(Int) ryb = smul_y_acc(rv, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
+    List(Int) Renc = encode_pt_bytes(bytes_to_int(rxb), ryb);
+    Int(256) kv = mod_l(prov_sha512(concat_bytes(concat_bytes(Renc, Aenc), mb)));
+    Int(512) sum = ((Int(512)) kv) * ((Int(512)) av2) + ((Int(512)) rv);
+    return concat_bytes(Renc, int_to_bytes(mod_l_w(sum)));
+}
+
 Int write_provenance(Str out, Str src) {
     Str kpath  =  "keys/resid-ed25519.key";
     if (!filesystem.exists(kpath)) {
@@ -14720,8 +14816,8 @@ Int write_provenance(Str out, Str src) {
     Int nlines  =  lines.len() - 1;
     Str notes_acc  =  "";
     Str notes  =  prov_notes_rec(lines, 0, nlines, notes_acc);
-    Str payload  =  f"toolchain=resid-stage2;source_sha256={sha256(src)};records={notes}";
-    List(Int) sig = sign_msg(seed, payload);
+    Str payload  =  f"toolchain=resid-stage2;source_sha256={prov_sha256(src)};records={notes}";
+    List(Int) sig = prov_sign(seed, payload);
     Str sighex  =  hex_encode(sig);
     Str doc  =  payload + "\n" + sighex + "\n";
     filesystem.write_all(out + ".resid-prov", doc);
@@ -14831,7 +14927,11 @@ Int main() {
     }
     Str rsrc  =  g1.text;
     Sigs ssg = if (grflag) { ck_collect_sigs(rsrc) } else { sg };
+    // Type checking yields only a status code: everything it allocates
+    // is freed with its arena.
+    Int _tc_in = resid_bulk_push();
     Int tc  =  ck_check_program(rsrc, 0, ssg);
+    Int _tc_out = resid_bulk_pop();
     if (tc != 0) { return tc; }
     // `--profile check` (spec §35): type checking only, no binary. The
     // `release` profile is the default -O2 build; `debug` builds at -O0.
@@ -14844,7 +14944,15 @@ Int main() {
     // generation sees the reduced text. `--no-reduce` skips it and
     // `--dump-reduced <path>` writes the reduced text out for inspection.
     Bool noreduce  =  pick_flag(argc, "--no-reduce");
-    RdOut red = if (noreduce) { RdOut {.text = rsrc, .nred = 0, .err = ""} } else { rd_reduce_program(rsrc) };
+    // The reducer runs in an arena too; only its output text (and error)
+    // is copied out.
+    // (red0 itself is freed with the scope: its scalar is read first.)
+    Int _rd_in = resid_bulk_push();
+    RdOut red0 = if (noreduce) { RdOut {.text = rsrc, .nred = 0, .err = ""} } else { rd_reduce_program(rsrc) };
+    List(Str) redkeep = resid_list_str_persist_copy([red0.text, red0.err]);
+    Int rednred = red0.nred;
+    Int _rd_out = resid_bulk_pop();
+    RdOut red = RdOut {.text = redkeep[0], .nred = rednred, .err = redkeep[1]};
     if (red.err != "") {
         println(red.err);
         return 1;
@@ -14855,7 +14963,14 @@ Int main() {
         Bool dumped = filesystem.write_all(dump_path, csrc0);
     }
     // Str accumulators become in-place buffers (examples/stracc.resid).
-    Str csrc  =  sa_rewrite(csrc0);
+    Int _sa_in = resid_bulk_push();
+    List(Str) sakeep = resid_list_str_persist_copy([sa_rewrite(csrc0)]);
+    Int _sa_out = resid_bulk_pop();
+    Str csrc  =  sakeep[0];
+    // Code generation's product is the .ll file on disk, so the whole
+    // phase runs in an arena and the sidecar writers below start from a
+    // small heap. (Per-function codegen arenas nest inside it.)
+    Int _cg_in = resid_bulk_push();
     Funcs fs = collect_sigs(csrc);
     if (testmode && fn_index(fs, "main") >= 0) {
         println("test error: " + path + " defines main(); a test file's entry point is generated");
@@ -14888,6 +15003,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
         println("clang failed");
         return 1;
     }
+    Int _cg_out = resid_bulk_pop();
     if (testmode) {
         // Format/filter reach the test binary through the environment: the
         // runtime reads RESID_TEST_FORMAT and RESID_TEST_FILTER. `env` is
@@ -14898,7 +15014,12 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
         return process.run(tcmd);
     }
     println("wrote " + out);
+    // Both sidecar writers return only a status code, so everything they
+    // allocate (SHA-256 over the whole source, CBOR buffers) lives in an
+    // arena freed when they finish.
+    Int _prov_in = resid_bulk_push();
     Int prc  =  write_provenance(out, rsrc);
     Int nrc  =  write_notes_cbor(out, path);
+    Int _prov_out = resid_bulk_pop();
     return prc;
 }
