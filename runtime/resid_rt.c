@@ -834,7 +834,7 @@ static int64_t utf8_decode(const unsigned char* p, int len) {
 typedef struct {
     const char* s;
     int64_t len;       /* codepoint count; -1 = empty slot */
-    size_t* off;        /* off[i] = byte offset of codepoint i, i in [0,len]; off[len] = byte length */
+    size_t* off;        /* NULL for ASCII; else off[k] = byte offset of codepoint k*STR_IDX_STRIDE */
     uint64_t touched;   /* LRU clock value at last use */
 } StrIndexSlot;
 static _Thread_local StrIndexSlot g_str_slots[STR_IDX_SLOTS];
@@ -851,21 +851,44 @@ static _Thread_local int g_str_slots_ready = 0;
  * scoped to the lifetime of one arena region, never a dangling key. */
 static _Thread_local StrIndexSlot g_str_scratch;
 
+/* Byte offset of codepoint `i` in the slot's string (i in [0, len]). An
+ * all-ASCII string needs no table: codepoint i is byte i. Otherwise the
+ * table is sparse — one checkpoint every STR_IDX_STRIDE codepoints — and
+ * the remainder is walked (at most STR_IDX_STRIDE - 1 steps), which keeps
+ * the table 16x smaller than one entry per codepoint. */
+#define STR_IDX_SHIFT 4
+#define STR_IDX_STRIDE (1 << STR_IDX_SHIFT)
+static inline size_t str_slot_off(const StrIndexSlot* sl, int64_t i) {
+    if (!sl->off) return (size_t)i;
+    const unsigned char* p = (const unsigned char*)sl->s + sl->off[i >> STR_IDX_SHIFT];
+    for (int64_t k = i & (STR_IDX_STRIDE - 1); k > 0; k--) p += utf8_seq_len(*p);
+    return (size_t)((const char*)p - sl->s);
+}
+
 static void str_index_build(const char* s, StrIndexSlot* out) {
+    /* The slot owns its previous table (if any): release it rather than
+     * leak one table per rebuild. */
+    if (out->off) { free(out->off); out->off = NULL; }
     int64_t n = 0;
+    int ascii = 1;
     const unsigned char* p = (const unsigned char*)s;
-    while (*p) { n++; p += utf8_seq_len(*p); }
-    if ((size_t)n > SIZE_MAX / sizeof(size_t) - 1) resid_abort("str_index_slot: size overflow");
-    size_t* off = (size_t*)malloc((size_t)(n + 1) * sizeof(size_t));
+    while (*p) {
+        if (*p >= 0x80) ascii = 0;
+        n++;
+        p += utf8_seq_len(*p);
+    }
+    out->s = s;
+    out->len = n;
+    if (ascii) return;
+    int64_t nck = (n >> STR_IDX_SHIFT) + 1;
+    size_t* off = (size_t*)malloc((size_t)nck * sizeof(size_t));
     if (!off) resid_abort("str_index_slot: out of memory");
     p = (const unsigned char*)s;
     for (int64_t i = 0; i < n; i++) {
-        off[i] = (size_t)((const char*)p - s);
+        if ((i & (STR_IDX_STRIDE - 1)) == 0) off[i >> STR_IDX_SHIFT] = (size_t)((const char*)p - s);
         p += utf8_seq_len(*p);
     }
-    off[n] = (size_t)((const char*)p - s);
-    out->s = s;
-    out->len = n;
+    if ((n & (STR_IDX_STRIDE - 1)) == 0) off[n >> STR_IDX_SHIFT] = (size_t)((const char*)p - s);
     out->off = off;
 }
 
@@ -910,7 +933,7 @@ int64_t str_char_at(const char* s, int64_t i) {
     if (i < 0) return -1;
     StrIndexSlot* sl = str_index_slot(s);
     if (i >= sl->len) return -1;
-    const unsigned char* p = (const unsigned char*)(s + sl->off[i]);
+    const unsigned char* p = (const unsigned char*)(s + str_slot_off(sl, i));
     return utf8_decode(p, utf8_seq_len(*p));
 }
 
@@ -1048,8 +1071,8 @@ char* str_slice(const char* s, int64_t start, int64_t end) {
     int64_t len = sl->len;
     if (start > len) start = len;
     if (end > len) end = len;
-    size_t bstart = sl->off[start];
-    size_t bend = sl->off[end];
+    size_t bstart = str_slot_off(sl, start);
+    size_t bend = str_slot_off(sl, end);
     size_t n = bend - bstart;
     char* out = (char*)resid_alloc(n + 1);
     if (!out) resid_abort("str_slice: out of memory");
@@ -1077,15 +1100,16 @@ typedef struct {
 } ResidVal;
 
 void* resid_box_new(int64_t tag, int64_t count, void** src, const char* type) {
-    ResidVal* v = (ResidVal*)resid_alloc(sizeof(ResidVal));
+    /* One allocation: the slot array sits right after the header. */
+    size_t n = count > 0 ? (size_t)count : 0;
+    ResidVal* v = (ResidVal*)resid_alloc(sizeof(ResidVal) + n * sizeof(void*));
     if (!v) resid_abort("resid_box_new: out of memory");
     v->tag = tag;
     v->count = count;
     v->type = type;
     v->slots = NULL;
     if (count > 0) {
-        v->slots = (void**)resid_alloc((size_t)count * sizeof(void*));
-        if (!v->slots) resid_abort("resid_box_new: out of memory");
+        v->slots = (void**)(v + 1);
         for (int64_t i = 0; i < count; i++) v->slots[i] = src[i];
     }
     return v;
@@ -1166,8 +1190,15 @@ void* resid_malloc(size_t size) { return malloc(size); }
 #define PVEC_WIDTH 32
 #define PVEC_MASK 31
 
+/* Nodes are sized to exactly the slots they hold (`cap` <= PVEC_WIDTH), not
+ * a fixed 32-slot block: most lists in real programs are short (tokens,
+ * environments, single-element `[x]` literals fed to concat), and a fixed
+ * 256-byte node per short list dominated the allocator in the self-hosted
+ * compiler. Every valid index of a list lands in an allocated slot, because
+ * a node always covers the populated prefix of its range. */
 typedef struct PVecNode {
-    void* items[PVEC_WIDTH];
+    int64_t cap;
+    void* items[];
 } PVecNode;
 
 typedef struct {
@@ -1177,9 +1208,11 @@ typedef struct {
     const char* type;
 } ResidList;
 
-static PVecNode* pvec_node_new(void) {
-    PVecNode* n = (PVecNode*)resid_calloc(1, sizeof(PVecNode));
+static PVecNode* pvec_node_new(int64_t cap) {
+    PVecNode* n = (PVecNode*)resid_alloc(sizeof(PVecNode) + (size_t)cap * sizeof(void*));
     if (!n) resid_abort("pvec_node_new: out of memory");
+    n->cap = cap;
+    memset(n->items, 0, (size_t)cap * sizeof(void*));
     return n;
 }
 
@@ -1191,62 +1224,88 @@ static void* pvec_get_raw(PVecNode* root, int32_t shift, int64_t i) {
     return node->items[i & PVEC_MASK];
 }
 
-/* Path-copy `elem` into position `idx`; `node` and everything under it
- * except the single path to `idx` is left untouched (shared with whoever
- * still points at `node`). */
-static PVecNode* pvec_insert_path(PVecNode* node, int32_t level, int64_t idx, void* elem) {
-    PVecNode* out = pvec_node_new();
-    if (level == 0) {
-        if (node) memcpy(out->items, node->items, sizeof(out->items));
-        out->items[idx & PVEC_MASK] = elem;
-        return out;
+/* Path-copy: a new node equal to `node` (may be NULL) with slot `slot` set
+ * to `val`, grown to cover `slot`. `node` itself is never modified — it is
+ * still shared by every list that already points at it. */
+static PVecNode* pvec_node_with(PVecNode* node, int64_t slot, void* val) {
+    int64_t old = node ? node->cap : 0;
+    int64_t cap = slot + 1 > old ? slot + 1 : old;
+    PVecNode* out = pvec_node_new(cap);
+    if (old) memcpy(out->items, node->items, (size_t)old * sizeof(void*));
+    out->items[slot] = val;
+    return out;
+}
+
+/* Returns a copy of the subtree `node` (at `level`) with leaf number
+ * `leaf_idx` (leaf_idx = element index >> PVEC_BITS) replaced by `leaf`. */
+static PVecNode* pvec_set_leaf(PVecNode* node, int32_t level, int64_t leaf_idx, PVecNode* leaf) {
+    if (level == 0) return leaf;
+    int64_t slot = (leaf_idx >> (level - PVEC_BITS)) & PVEC_MASK;
+    PVecNode* child = (node && slot < node->cap) ? (PVecNode*)node->items[slot] : NULL;
+    return pvec_node_with(node, slot, pvec_set_leaf(child, level - PVEC_BITS, leaf_idx, leaf));
+}
+
+/* Append `m` elements to `v`, returning a new list. Works a whole leaf at a
+ * time: the partial last leaf of `v` is copied once and filled, then each
+ * further run of 32 elements becomes one new leaf. The old list is left
+ * untouched (only the root-to-leaf paths are copied). */
+static ResidList* pvec_append(ResidList* v, void** elems, int64_t m) {
+    ResidList* out = (ResidList*)resid_alloc(sizeof(ResidList));
+    if (!out) resid_abort("pvec_append: out of memory");
+    out->type = v->type;
+    out->count = v->count;
+    out->shift = v->shift;
+    out->root = v->root;
+    int64_t done = 0;
+    while (done < m) {
+        int64_t idx = out->count;
+        int64_t leaf_idx = idx >> PVEC_BITS;
+        int64_t in_leaf = idx & PVEC_MASK;
+        int64_t take = PVEC_WIDTH - in_leaf;
+        if (take > m - done) take = m - done;
+        PVecNode* leaf = pvec_node_new(in_leaf + take);
+        if (in_leaf > 0) {
+            PVecNode* old_leaf = out->root;
+            for (int32_t level = out->shift; level > 0; level -= PVEC_BITS)
+                old_leaf = (PVecNode*)old_leaf->items[(idx >> level) & PVEC_MASK];
+            memcpy(leaf->items, old_leaf->items, (size_t)in_leaf * sizeof(void*));
+        }
+        memcpy(leaf->items + in_leaf, elems + done, (size_t)take * sizeof(void*));
+        if (out->root == NULL) {
+            out->root = leaf;
+            out->shift = 0;
+        } else {
+            int64_t capacity = ((int64_t)1) << (out->shift + PVEC_BITS);
+            if (idx >= capacity) {
+                /* Tree is full: grow a level; the old root becomes child 0. */
+                PVecNode* new_root = pvec_node_new(1);
+                new_root->items[0] = out->root;
+                out->root = new_root;
+                out->shift += PVEC_BITS;
+            }
+            out->root = out->shift == 0 ? leaf : pvec_set_leaf(out->root, out->shift, leaf_idx, leaf);
+        }
+        out->count += take;
+        done += take;
     }
-    if (node) memcpy(out->items, node->items, sizeof(out->items));
-    int32_t child_idx = (int32_t)((idx >> level) & PVEC_MASK);
-    PVecNode* child = node ? (PVecNode*)node->items[child_idx] : NULL;
-    out->items[child_idx] = pvec_insert_path(child, level - PVEC_BITS, idx, elem);
     return out;
 }
 
 static ResidList* pvec_push_raw(ResidList* v, void* elem) {
-    ResidList* out = (ResidList*)resid_alloc(sizeof(ResidList));
-    if (!out) resid_abort("pvec_push_raw: out of memory");
-    out->type = v->type;
-    int64_t idx = v->count;
-    if (v->root == NULL) {
-        out->root = pvec_insert_path(NULL, 0, 0, elem);
-        out->shift = 0;
-        out->count = 1;
-        return out;
-    }
-    int64_t capacity = ((int64_t)1) << (v->shift + PVEC_BITS);
-    if (idx < capacity) {
-        out->root = pvec_insert_path(v->root, v->shift, idx, elem);
-        out->shift = v->shift;
-    } else {
-        int32_t new_shift = v->shift + PVEC_BITS;
-        PVecNode* new_root = pvec_node_new();
-        new_root->items[0] = v->root;
-        int32_t child_idx = (int32_t)((idx >> new_shift) & PVEC_MASK);
-        new_root->items[child_idx] = pvec_insert_path(NULL, new_shift - PVEC_BITS, idx, elem);
-        out->root = new_root;
-        out->shift = new_shift;
-    }
-    out->count = v->count + 1;
-    return out;
+    return pvec_append(v, &elem, 1);
 }
 
 /* Build a new persistent list from a flat array of `count` element
  * pointers (scalar slots are boxes, as with the old ResidVal lists). */
 void* resid_list_new(int64_t count, void** src, const char* type) {
-    ResidList* v = (ResidList*)resid_alloc(sizeof(ResidList));
-    if (!v) resid_abort("resid_list_new: out of memory");
-    v->count = 0;
-    v->shift = 0;
-    v->root = NULL;
-    v->type = type;
-    for (int64_t i = 0; i < count; i++) v = pvec_push_raw(v, src[i]);
-    return v;
+    ResidList v = { 0, 0, NULL, type };
+    if (count == 0) {
+        ResidList* e = (ResidList*)resid_alloc(sizeof(ResidList));
+        if (!e) resid_abort("resid_list_new: out of memory");
+        *e = v;
+        return e;
+    }
+    return pvec_append(&v, src, count);
 }
 
 /* Length of a list = its element count. */
@@ -1337,11 +1396,12 @@ void* resid_rt_list_to_flat(void* b) {
 void* resid_list_concat(void* a, void* b) {
     ResidList* x = (ResidList*)a;
     ResidList* y = (ResidList*)b;
-    ResidList* cur = x;
-    for (int64_t i = 0; i < y->count; i++) {
-        cur = pvec_push_raw(cur, pvec_get_raw(y->root, y->shift, i));
-    }
-    return cur;
+    if (y->count == 0) return x;
+    if (y->count == 1) return pvec_push_raw(x, pvec_get_raw(y->root, y->shift, 0));
+    void** flat = resid_list_to_array(y);
+    ResidList* out = pvec_append(x, flat, y->count);
+    free(flat);
+    return out;
 }
 
 /* ── Growable accumulator buffer (perf: O(1)-amortized self-recursive
@@ -1434,20 +1494,27 @@ void* resid_growbuf_finish(void* buf, const char* type) {
 /* Precise free for heap-allocated composites (List/Map/Set/Struct/Box).
  * Called by codegen at the exact last unique use of a tracked root
  * (ownership oracle, resid-type::analyze_ownership). */
+static int box_is_interned(const void* p);
+
+/* Frees one element box (not what its slots point at). A scalar box is a
+ * single allocation (see resid_box_scalar_alloc); a composite box's slot
+ * array is a separate block unless it was laid out inline. */
+static void box_free_shallow(ResidVal* val) {
+    if (box_is_interned(val)) return;
+    if (val->tag != -1 && val->slots && val->slots != (void**)(val + 1)) free(val->slots);
+    free(val);
+}
+
 static void free_pvec_node(void* node, int shift) {
     if (!node) return;
     PVecNode* n = (PVecNode*)node;
     if (shift == 0) {
-        for (int i = 0; i < 32; i++) {
+        for (int64_t i = 0; i < n->cap; i++) {
             void* slot = n->items[i];
-            if (slot) {
-                ResidVal* val = (ResidVal*)slot;
-                if (val->slots) free(val->slots);
-                free(val);
-            }
+            if (slot) box_free_shallow((ResidVal*)slot);
         }
     } else {
-        for (int i = 0; i < 32; i++) {
+        for (int64_t i = 0; i < n->cap; i++) {
             free_pvec_node(n->items[i], shift - 5);
         }
     }
@@ -1470,13 +1537,9 @@ void resid_struct_free(void* b) {
     if (v->slots) {
         for (int64_t i = 0; i < v->count; i++) {
             void* slot = v->slots[i];
-            if (slot) {
-                ResidVal* val = (ResidVal*)slot;
-                if (val->slots) free(val->slots);
-                free(val);
-            }
+            if (slot) box_free_shallow((ResidVal*)slot);
         }
-        free(v->slots);
+        if (v->slots != (void**)(v + 1)) free(v->slots);
     }
     free(v);
 }
@@ -1487,13 +1550,14 @@ void resid_box_free(void* b) {
     /* Scalar box (tag == -1, see resid_box_scalar_alloc): struct, slots
      * array, and payload are one combined allocation starting at `v` —
      * a single free() covers all of it. */
+    if (box_is_interned(v)) return;
     if (v->tag == -1) { free(v); return; }
     if (v->slots) {
         for (int64_t i = 0; i < v->count; i++) {
             void* slot = v->slots[i];
-            if (slot) free(slot);
+            if (slot && !box_is_interned(slot)) free(slot);
         }
-        free(v->slots);
+        if (v->slots != (void**)(v + 1)) free(v->slots);
     }
     free(v);
 }
@@ -1526,7 +1590,48 @@ static void* resid_box_scalar_alloc(size_t payload_size, size_t payload_align, v
     return r;
 }
 
+/* Interned scalar boxes. Boxes are immutable once built, so every box of
+ * the same small integer (and each Bool) can be one shared, static object
+ * instead of a fresh allocation: list elements and struct slots holding
+ * small counters, positions, flags and byte values are by far the most
+ * common boxes in real programs. Layout matches resid_box_scalar_alloc
+ * exactly (struct, 1-slot array, payload), so unboxing is unchanged. */
+#define BOX_I64_LO (-256)
+#define BOX_I64_HI 4096
+typedef struct { ResidVal v; void* slot; int64_t payload; } InternedI64;
+typedef struct { ResidVal v; void* slot; int8_t payload; } InternedBool;
+static InternedI64 g_box_i64[BOX_I64_HI - BOX_I64_LO];
+static InternedBool g_box_bool[2];
+
+__attribute__((constructor)) static void box_intern_init(void) {
+    for (int64_t i = 0; i < BOX_I64_HI - BOX_I64_LO; i++) {
+        InternedI64* b = &g_box_i64[i];
+        b->v.tag = -1;
+        b->v.count = 1;
+        b->v.slots = &b->slot;
+        b->v.type = "i64";
+        b->payload = i + BOX_I64_LO;
+        b->slot = &b->payload;
+    }
+    for (int i = 0; i < 2; i++) {
+        InternedBool* b = &g_box_bool[i];
+        b->v.tag = -1;
+        b->v.count = 1;
+        b->v.slots = &b->slot;
+        b->v.type = "bool";
+        b->payload = (int8_t)i;
+        b->slot = &b->payload;
+    }
+}
+
+static int box_is_interned(const void* p) {
+    const char* c = (const char*)p;
+    return (c >= (const char*)g_box_i64 && c < (const char*)(g_box_i64 + (BOX_I64_HI - BOX_I64_LO)))
+        || (c >= (const char*)g_box_bool && c < (const char*)(g_box_bool + 2));
+}
+
 void* resid_box_i64(int64_t v) {
+    if (v >= BOX_I64_LO && v < BOX_I64_HI) return &g_box_i64[v - BOX_I64_LO].v;
     void* payload;
     ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(int64_t), _Alignof(int64_t), &payload);
     r->type = "i64";
@@ -1551,6 +1656,7 @@ double resid_unbox_f64(void* p) {
 }
 
 void* resid_box_bool(int8_t v) {
+    if (v == 0 || v == 1) return &g_box_bool[v].v;
     void* payload;
     ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(int8_t), _Alignof(int8_t), &payload);
     r->type = "bool";
@@ -2476,7 +2582,7 @@ int8_t resid_fs_close(void* b) {
         FILE* f = (FILE*)v->slots[0];
         if (f) fclose(f);
     }
-    if (v->slots) free(v->slots);
+    if (v->slots && v->slots != (void**)(v + 1)) free(v->slots);
     free(v);
     return 1;
 }
@@ -2491,7 +2597,7 @@ void resid_handle_release(void* b) {
         FILE* f = (FILE*)v->slots[0];
         if (f) fclose(f);
     }
-    if (v->slots) free(v->slots);
+    if (v->slots && v->slots != (void**)(v + 1)) free(v->slots);
     free(v);
 }
 
@@ -4992,9 +5098,7 @@ static int is_boxed(const void* v) {
 static void free_boxed_slot(void* v) {
     if (!v) return;
     if (!is_boxed(v)) return; /* bare C string key: not our allocation to walk */
-    ResidVal* val = (ResidVal*)v;
-    if (val->slots) free(val->slots);
-    free(val);
+    box_free_shallow((ResidVal*)v);
 }
 
 static void free_hmnode(HMNode* n) {
