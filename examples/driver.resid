@@ -482,11 +482,11 @@ type PRes = { Int pos; Str ty; Str err; };
 // identically-named fields exactly (sun[i] = a declared sum type's name,
 // suv[i] = "Variant:Payload|..." encoded as "names;types", both "|"-joined
 // and index-aligned — see typecheck.resid for the full comment).
-type Funcs = { List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) ctn; List(Str) ctb; List(Str) ctc; Map(Str, Int) growable; List(Str) sun; List(Str) suv; };
+type Funcs = { List(Int) fpos; Map(Str, Int) leaf; List(Str) names; List(Str) pts; List(Str) pns; List(Str) rets; List(Str) reqs; List(Str) ceils; List(Str) stn; List(Str) stf; List(Str) bnames; List(Str) bparams; List(Str) bfns; List(Str) ctn; List(Str) ctb; List(Str) ctc; Map(Str, Int) growable; List(Str) sun; List(Str) suv; };
 
 Funcs funcs_empty() {
     Map(Str, Int) empty = {"__EMPTY__": -1};
-    return Funcs {.names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .ctn = [], .ctb = [], .ctc = [], .growable = empty, .sun = [], .suv = []};
+    return Funcs {.fpos = [], .leaf = empty, .names = [], .pts = [], .pns = [], .rets = [], .reqs = [], .ceils = [], .stn = [], .stf = [], .bnames = [], .bparams = [], .bfns = [], .ctn = [], .ctb = [], .ctc = [], .growable = empty, .sun = [], .suv = []};
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -980,7 +980,7 @@ List(Str) hdr_map_typed() {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @resid_decp_persist(ptr)"];
+    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -1390,6 +1390,23 @@ VOwnCg find_variant_cg(Funcs fs, Str vname) {
     return find_variant_at_cg(fs, vname, 0);
 }
 
+// A variant whose declared payload is a record stores the record's fields
+// inline as its own slots (one allocation instead of a box plus a separate
+// record), and a match binds the payload to that slot array, which has
+// exactly a record's layout. Decided from the declaration alone, so every
+// construction and every match of the variant agree. Returns the field
+// count, or -1 for a variant that keeps the one-slot form.
+Int sum_inline_fields(Funcs fs, Str sumty, Int vidx) {
+    Int sidx = sumtype_index_cg(fs, sumty);
+    if (sidx < 0 || vidx < 0) { return -1; }
+    List(Str) vt = sumv_types_cg(fs.suv[sidx]);
+    if (vidx >= vt.len()) { return -1; }
+    Int si = struct_index(fs, vt[vidx]);
+    if (si < 0) { return -1; }
+    List(Str) stfl = fs.stf;
+    return struct_nfields(stfl[si]);
+}
+
 Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_ceil) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return fs; }
@@ -1430,7 +1447,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
                 List(Str) u0 = fs.sun;
                 List(Str) v0 = fs.suv;
                 Str gsuf = if (gparams == "") { "" } else { ";" + gparams };
-                Funcs fsu = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = u0.concat([tnm.text]), .suv = v0.concat([vl.vnames + ";" + vl.vtypes + gsuf]), .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+                Funcs fsu = Funcs {.fpos = fs.fpos, .leaf = fs.leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = u0.concat([tnm.text]), .suv = v0.concat([vl.vnames + ";" + vl.vtypes + gsuf]), .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
                 return collect_sigs_at(s, vl.pos, fsu, pending_req, sandbox_ceil);
             }
             PRes bt = parse_type(s, teq.pos);
@@ -1445,7 +1462,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
                 List(Str) c0 = fs.ctn;
                 List(Str) c1 = fs.ctb;
                 List(Str) c2 = fs.ctc;
-                Funcs fsc = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = c0.concat([tnm.text]), .ctb = c1.concat([bt.ty]), .ctc = c2.concat([ctext]), .growable = fs.growable};
+                Funcs fsc = Funcs {.fpos = fs.fpos, .leaf = fs.leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = c0.concat([tnm.text]), .ctb = c1.concat([bt.ty]), .ctc = c2.concat([ctext]), .growable = fs.growable};
                 Int endc = skip_decl(s, t.pos, 0);
                 return collect_sigs_at(s, endc, fsc, pending_req, sandbox_ceil);
             }
@@ -1458,7 +1475,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
         }
         List(Str) sn0 = fs.stn;
         List(Str) sf0 = fs.stf;
-        Funcs fs2 = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = sn0.concat([tnm.text]), .stf = sf0.concat([fl.ty]), .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+        Funcs fs2 = Funcs {.fpos = fs.fpos, .leaf = fs.leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = sn0.concat([tnm.text]), .stf = sf0.concat([fl.ty]), .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
         return collect_sigs_at(s, fl.pos, fs2, pending_req, sandbox_ceil);
     }
     if (t.text == "import") {
@@ -1492,7 +1509,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
             List(Str) bn0 = fs.bnames;
             List(Str) bp0 = fs.bparams;
             List(Str) bf0 = fs.bfns;
-            Funcs fsb = Funcs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = bn0.concat([bh.name]), .bparams = bp0.concat([bh.param]), .bfns = bf0.concat([bh.impl]), .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+            Funcs fsb = Funcs {.fpos = fs.fpos, .leaf = fs.leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = bn0.concat([bh.name]), .bparams = bp0.concat([bh.param]), .bfns = bf0.concat([bh.impl]), .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
             return collect_sigs_at(s, bh.pos, fsb, pending_req, sandbox_ceil);
         }
         PRes rty = parse_type(s, pos_in);
@@ -1503,6 +1520,9 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
                 Tok first = lex_tok(s, open.pos);
                 Str pts = collect_ptypes(s, open.pos, "");
                 Str pns = collect_pnames(s, open.pos, "");
+                // Where the parameter list opens (-1 inside a sandbox block,
+                // whose text is a slice): read by the scalar-scope analysis.
+                Int fpos_here = if (sandbox_ceil == "") { open.pos } else { -1 };
                 List(Str) nm1 = fs.names;
                 List(Str) pt1 = fs.pts;
                 List(Str) pn1 = fs.pns;
@@ -1517,7 +1537,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
                 List(Str) ceils2 = ce1.concat([sandbox_ceil]);
                 List(Str) sn1 = fs.stn;
                 List(Str) sf1 = fs.stf;
-                Funcs fs2 = Funcs {.names = n2, .pts = p2, .pns = q2, .rets = r2, .reqs = reqs2, .ceils = ceils2, .stn = sn1, .stf = sf1, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = {"__EMPTY__": -1}};
+                Funcs fs2 = Funcs {.fpos = fs.fpos.concat([fpos_here]), .leaf = fs.leaf, .names = n2, .pts = p2, .pns = q2, .rets = r2, .reqs = reqs2, .ceils = ceils2, .stn = sn1, .stf = sf1, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = {"__EMPTY__": -1}};
                 Int end = skip_body(s, open.pos);
                 return collect_sigs_at(s, end, fs2, "", sandbox_ceil);
             }
@@ -1527,7 +1547,7 @@ Funcs collect_sigs_at(Str s, Int pos, Funcs fs, Str pending_req, Str sandbox_cei
 }
 
 Funcs collect_sigs(Str s) {
-    return collect_sigs_at(s, 0, funcs_empty(), "", "");
+    return scope_leaves(s, collect_sigs_at(s, 0, funcs_empty(), "", ""));
 }
 
 // ─── Environment: List(Str) of "name:val:ty" entries ───────────
@@ -1540,6 +1560,193 @@ Str env_lookup_at(List(Str) env, Str name, Int i) {
     if (head == name) { return elem; }
     Int k = i + 1;
     return env_lookup_at(env, name, k);
+}
+
+// ─── scalar scopes ───────────────────────────────────────────────────
+// A binding `T x = e;` whose type is a scalar (an integer or float
+// register, no pointer) evaluates `e` between resid_scope_push and
+// resid_scope_pop: every allocation made meanwhile is released right after,
+// because values are immutable (spec §4) and nothing allocated there can be
+// reachable from a scalar. A scope only pays off when `e` may allocate, so
+// calls to leaf functions do not ask for one. A leaf returns a scalar, only
+// reads its other parameters, and calls only leaf functions (itself
+// included) and non-allocating builtins; its body has no string or byte
+// literal, list literal, method call other than `.len()`, capitalised name
+// other than a numeric type, or `+` next to a non-scalar. Leafness only
+// decides whether a scope is worth its push and pop, never whether one is
+// sound.
+
+Bool scal_ll(Str t) {
+    if (t == "double" || t == "float" || t == "half" || t == "fp128") { return true; }
+    if (str_len(t) < 2 || str_char_at(t, 0) != 105) { return false; }
+    return str_is_int(str_slice(t, 1, str_len(t)));
+}
+
+Bool scope_num_head(Str t) {
+    return t == "Int" || t == "UInt" || t == "Float" || t == "Bool" || t == "ISize" || t == "USize";
+}
+
+Bool scope_arith_builtin(Str n) {
+    if (n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64") { return true; }
+    if (n == "str_char_at" || n == "str_len") { return true; }
+    if (str_starts_with(n, "checked_") || str_starts_with(n, "wrapping_") || str_starts_with(n, "saturating_")) { return true; }
+    Int c0 = str_char_at(n, 0);
+    Bool conv = (c0 == 105 || c0 == 117 || c0 == 102) && str_len(n) >= 2 && str_is_int(str_slice(n, 1, str_len(n)));
+    return conv;
+}
+
+// Callee names of a function body from `pos` to `end`, or ["!"] when the
+// body may allocate. `ptrs` names the parameters that are not scalars:
+// reading them (indexing, `.len()`, a field) is fine, but a `+` next to one
+// may be a string concatenation. `prev` is the previous token's text and
+// `pdot` whether it was a field name (read after a `.`).
+List(Str) leaf_calls(Str s, Int pos, Int end, List(Str) ptrs, Str prev, Bool pdot, List(Str) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof" || t.pos > end) { return acc; }
+    if (t.kind == "str" || t.kind == "raw" || t.kind == "bytes") { return ["!"]; }
+    if (t.text == "lambda" || t.text == "closure" || t.text == "spawn") { return ["!"]; }
+    if (t.text == "[") {
+        // Indexing follows a value; anything else opens a list literal.
+        Int p0 = str_char_at(prev, 0);
+        Bool word = (p0 >= 97 && p0 <= 122) || p0 == 95;
+        Bool after_val = prev == ")" || prev == "]" || (word && prev != "return" && prev != "else" && prev != "in");
+        if (!after_val) { return ["!"]; }
+        return leaf_calls(s, t.pos, end, ptrs, t.text, false, acc);
+    }
+    if (t.text == ".") {
+        Tok f = lex_tok(s, t.pos);
+        Tok f2 = lex_tok(s, f.pos);
+        if (f.kind != "ident") { return ["!"]; }
+        if (f2.text == "(") {
+            // The only method a leaf may call is `.len()`.
+            Tok f3 = lex_tok(s, f2.pos);
+            if (f.text != "len" || f3.text != ")") { return ["!"]; }
+            return leaf_calls(s, f3.pos, end, ptrs, ")", false, acc);
+        }
+        return leaf_calls(s, f.pos, end, ptrs, f.text, true, acc);
+    }
+    if (t.text == "+") {
+        Tok nx = lex_tok(s, t.pos);
+        Bool pl = pdot || prev == "]" || list_has_str(ptrs, prev);
+        Bool nl = nx.kind == "ident" && list_has_str(ptrs, nx.text);
+        if (pl || nl) { return ["!"]; }
+        return leaf_calls(s, t.pos, end, ptrs, t.text, false, acc);
+    }
+    if (t.kind != "ident") { return leaf_calls(s, t.pos, end, ptrs, t.text, false, acc); }
+    Tok nx = lex_tok(s, t.pos);
+    Int c0 = str_char_at(t.text, 0);
+    Bool upper = c0 >= 65 && c0 <= 90;
+    if (upper) {
+        if (!scope_num_head(t.text)) { return ["!"]; }
+        return leaf_calls(s, t.pos, end, ptrs, t.text, false, acc);
+    }
+    if (nx.text != "(") { return leaf_calls(s, t.pos, end, ptrs, t.text, false, acc); }
+    Bool kw = t.text == "if" || t.text == "while" || t.text == "for" || t.text == "return" || t.text == "match" || t.text == "else";
+    if (kw || scope_arith_builtin(t.text)) { return leaf_calls(s, t.pos, end, ptrs, t.text, false, acc); }
+    return leaf_calls(s, t.pos, end, ptrs, t.text, false, acc.concat([t.text]));
+}
+
+Bool list_has_str(List(Str) xs, Str x) {
+    if (x == "") { return false; }
+    return list_has_str_at(xs, x, 0);
+}
+
+Bool list_has_str_at(List(Str) xs, Str x, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == x) { return true; }
+    return list_has_str_at(xs, x, i + 1);
+}
+
+// Names of the parameters whose types are not scalars.
+List(Str) ptr_params(Funcs fs, List(Str) tys, List(Str) names, Int i, List(Str) acc) {
+    if (i >= tys.len() || i >= names.len()) { return acc; }
+    Bool sc = scal_ll(ll_ty(ct_base_of(fs.ctn, fs.ctb, tys[i])));
+    List(Str) nx = if (sc) { acc } else { acc.concat([str_trim(names[i])]) };
+    return ptr_params(fs, tys, names, i + 1, nx);
+}
+
+// Per function: its callees, or ["!"] when it cannot be a leaf. A leaf
+// returns a scalar; its parameters may be anything it only reads.
+List(Str) leaf_summary(Str s, Funcs fs, Int i) {
+    Int fp = fs.fpos[i];
+    if (fp < 0) { return ["!"]; }
+    if (!scal_ll(ll_ty(ct_base_of(fs.ctn, fs.ctb, fs.rets[i])))) { return ["!"]; }
+    Str pts = fs.pts[i];
+    Str pns = fs.pns[i];
+    List(Str) tyl = if (pts == "") { nil_list() } else { split_rest_depth(pts, ", ") };
+    List(Str) nml = if (pns == "") { nil_list() } else { split_rest(pns, ",") };
+    List(Str) ptrs = ptr_params(fs, tyl, nml, 0, []);
+    Int cp = close_paren(s, fp);
+    Int end = skip_body(s, fp);
+    return leaf_calls(s, cp, end, ptrs, "", false, []);
+}
+
+List(List(Str)) leaf_summaries(Str s, Funcs fs, Int i, List(List(Str)) acc) {
+    if (i >= fs.names.len() || i >= fs.fpos.len()) { return acc; }
+    return leaf_summaries(s, fs, i + 1, acc.concat([leaf_summary(s, fs, i)]));
+}
+
+Bool leaf_calls_ok(List(Str) cs, Int j, Str self, Map(Str, Int) leaf) {
+    if (j >= cs.len()) { return true; }
+    Str c = cs[j];
+    if (c == "!") { return false; }
+    Int lv = leaf.get(c) else { 0 };
+    if (c != self && lv != 1) { return false; }
+    return leaf_calls_ok(cs, j + 1, self, leaf);
+}
+
+// One pass over every function; `grew` reports whether the set changed.
+type LeafPass = { Map(Str, Int) leaf; Bool grew; };
+
+LeafPass leaf_pass(Funcs fs, List(List(Str)) sums, Int i, LeafPass acc) {
+    if (i >= sums.len()) { return acc; }
+    Str n = fs.names[i];
+    Map(Str, Int) lf = acc.leaf;
+    Bool add = !lf.contains(n) && leaf_calls_ok(sums[i], 0, n, lf);
+    LeafPass nx = if (add) { LeafPass {.leaf = lf.insert(n, 1), .grew = true} } else { acc };
+    return leaf_pass(fs, sums, i + 1, nx);
+}
+
+// Every other function goes in with 0, so a lookup also answers whether a
+// name is a user function at all.
+Map(Str, Int) leaf_rest(List(Str) names, Int i, Map(Str, Int) leaf) {
+    if (i >= names.len()) { return leaf; }
+    Str n = names[i];
+    Map(Str, Int) nx = if (leaf.contains(n)) { leaf } else { leaf.insert(n, 0) };
+    return leaf_rest(names, i + 1, nx);
+}
+
+Map(Str, Int) leaf_fix(Funcs fs, List(List(Str)) sums, Map(Str, Int) leaf, Int rounds) {
+    LeafPass p = leaf_pass(fs, sums, 0, LeafPass {.leaf = leaf, .grew = false});
+    if (!p.grew || rounds >= 8) { return p.leaf; }
+    return leaf_fix(fs, sums, p.leaf, rounds + 1);
+}
+
+Funcs scope_leaves(Str s, Funcs fs) {
+    List(List(Str)) sums = leaf_summaries(s, fs, 0, []);
+    Map(Str, Int) leaf = leaf_rest(fs.names, 0, leaf_fix(fs, sums, fs.leaf, 0));
+    return Funcs {.fpos = fs.fpos, .leaf = leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+}
+
+// Whether `e` (from `pos` to the `;` ending the statement) calls a user
+// function that is not a leaf, and has no early exit (`?`, or a
+// `return`/`break`/`continue` in a block), which would skip the pop.
+Bool scope_wants(Str s, Int pos, Int depth, Funcs fs, Bool found) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return found; }
+    if (depth == 0 && t.text == ";") { return found; }
+    Bool open = t.text == "(" || t.text == "[" || t.text == "{";
+    Bool close = t.text == ")" || t.text == "]" || t.text == "}";
+    Int d2 = if (open) { depth + 1 } else { if (close) { depth - 1 } else { depth } };
+    if (d2 < 0) { return found; }
+    if (t.text == "?" || t.text == "return" || t.text == "break" || t.text == "continue") { return false; }
+    Bool call = if (t.kind == "ident") {
+        Tok nx = lex_tok(s, t.pos);
+        Map(Str, Int) lf = fs.leaf;
+        Int lv = lf.get(t.text) else { 1 };
+        nx.text == "(" && lv == 0
+    } else { false };
+    return scope_wants(s, t.pos, d2, fs, found || call);
 }
 
 Str env_lookup_rev(List(Str) env, Str name, Int i) {
@@ -3086,10 +3293,18 @@ GT cg_err_con(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
 
 // Payload-bearing: `VariantName(payload)`.
 GT cg_variant_con(Str s, Int pos, List(Str) env, Funcs fs, GT c, Str sumty, Int vidx) {
+    Int nif0 = sum_inline_fields(fs, sumty, vidx);
+    Tok a0 = lex_tok(s, pos);
+    Tok a1 = lex_tok(s, a0.pos);
+    Bool lit = nif0 >= 0 && a0.kind == "ident" && a1.text == "{";
+    GT lr = if (lit) { cg_variant_con_lit(s, a0, a1, env, fs, c, sumty, vidx, nif0) } else { gt_err("", c) };
+    if (lit && lr.err == "") { return lr; }
     GT p = cg_expr(s, pos, env, fs, c, false);
     if (p.err != "") { return p; }
     Tok close = lex_tok(s, p.pos);
     if (close.text != ")") { return gt_err("expected ) in variant constructor", p); }
+    Int nif = sum_inline_fields(fs, sumty, vidx);
+    if (nif >= 0) { return cg_variant_con_inline(s, pos, p, close.pos, sumty, vidx, nif); }
     GT hb = box_heap_(s, p, env, fs);
     Int t1 = hb.tmp + 1;
     Int t2 = hb.tmp + 2;
@@ -3110,6 +3325,44 @@ GT cg_variant_con(Str s, Int pos, List(Str) env, Funcs fs, GT c, Str sumty, Int 
     List(Str) l3 = l2.concat(["store ptr " + hb.val + ", ptr " + gi]);
     List(Str) l4 = l3.concat([reg + " = call ptr @resid_box_new(i64 " + IntToString(vidx) + ", i64 1, ptr " + sa + ", ptr " + tsym + ")"]);
     return GT {.pos = close.pos, .val = reg, .ty = sumty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = t3, .lbl = p.lbl, .tail = false};
+}
+
+// Record payload (see sum_inline_fields): the box copies the record's
+// fields as its slots.
+GT cg_variant_con_inline(Str s, Int pos, GT p, Int cpos, Str sumty, Int vidx, Int nf) {
+    Int t1 = p.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    Str tsym = "@.oty" + IntToString(t1);
+    List(Str) l1 = p.lines.concat([reg + " = call ptr @resid_box_new(i64 " + IntToString(vidx) + ", i64 " + IntToString(nf) + ", ptr " + p.val + ", ptr " + tsym + ")"]);
+    return GT {.pos = cpos, .val = reg, .ty = sumty, .cnt = 0, .err = "", .glines = p.glines.concat([oty_global(tsym, sumty)]), .lines = l1, .tmp = t1, .lbl = p.lbl, .tail = false};
+}
+
+Str oty_global(Str tsym, Str sumty) {
+    Str body = esc_ll(sumty, 0, "");
+    Int n1 = ll_bytes(body, 0, 0) + 1;
+    return tsym + " = private unnamed_addr constant [" + IntToString(n1) + " x i8] c\"" + body + "\\00\"";
+}
+
+// `Variant(Rec {...})` with an inline record payload: the box is allocated
+// first and the literal's fields are stored straight into its slots, so no
+// separate record is ever built. `nm`/`br` are the literal's name and `{`.
+GT cg_variant_con_lit(Str s, Tok nm, Tok br, List(Str) env, Funcs fs, GT c, Str sumty, Int vidx, Int nf) {
+    Int si = struct_index(fs, nm.text);
+    if (si < 0) { return gt_err("not a record literal", c); }
+    List(Str) stfl = fs.stf;
+    Str fields = stfl[si];
+    Int t1 = c.tmp + 1;
+    Int t2 = c.tmp + 2;
+    Str box = "%t" + IntToString(t1);
+    Str slots = "%t" + IntToString(t2);
+    Str tsym = "@.oty" + IntToString(t1);
+    List(Str) l1 = c.lines.concat([box + " = call ptr @resid_box_alloc(i64 " + IntToString(vidx) + ", i64 " + IntToString(nf) + ", ptr " + tsym + ")", slots + " = getelementptr {i32, i32, ptr}, ptr " + box + ", i32 1"]);
+    GT c1 = GT {.pos = br.pos, .val = slots, .ty = nm.text, .cnt = 0, .err = "", .glines = c.glines.concat([oty_global(tsym, sumty)]), .lines = l1, .tmp = t2, .lbl = c.lbl, .tail = false};
+    GT f = csl_field(s, br.pos, fields, nm.text, slots, env, fs, c1);
+    if (f.err != "") { return f; }
+    Tok close = lex_tok(s, f.pos);
+    if (close.text != ")") { return gt_err("not a lone record literal", c); }
+    return GT {.pos = close.pos, .val = box, .ty = sumty, .cnt = 0, .err = "", .glines = f.glines, .lines = f.lines, .tmp = f.tmp, .lbl = f.lbl, .tail = false};
 }
 
 // No-payload: bare `VariantName` (no parens, no argument).
@@ -3330,6 +3583,21 @@ GT cg_call(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c, Bool tail_po
 // Rust pipeline's IR and keeps the runtime symbol resolvable at link time.
 GT cg_print(Str s, Int pos, Str name, List(Str) env, Funcs fs, GT c, Bool tail_pos) {
     Tok open = lex_tok(s, pos);
+    // `print(str_sb_finish(b))`: the finished string is a temporary nothing
+    // else can see, so resid_sb_print writes the builder's buffer and frees
+    // it instead of keeping it for the rest of the run.
+    Tok f0 = lex_tok(s, open.pos);
+    Bool fuse = name != "eprintln" && open.kind == "ident" && open.text == "str_sb_finish" && f0.text == "(";
+    GT fb = if (fuse) { cg_expr(s, f0.pos, env, fs, c, false) } else { c };
+    Tok fc1 = lex_tok(s, fb.pos);
+    Tok fc2 = lex_tok(s, fc1.pos);
+    if (fuse && fb.err == "" && fc1.text == ")" && fc2.text == ")") {
+        Int ft = fb.tmp + 1;
+        Str freg = "%t" + IntToString(ft);
+        Str fnl = if (name == "println") { "1" } else { "0" };
+        List(Str) fl = fb.lines.concat([freg + " = call i1 @resid_sb_print(ptr " + fb.val + ", i8 " + fnl + ")"]);
+        return GT {.pos = fc2.pos, .val = freg, .ty = "Bool", .cnt = 0, .err = "", .glines = fb.glines, .lines = fl, .tmp = ft, .lbl = fb.lbl, .tail = false};
+    }
     GT v = cg_expr(s, pos, env, fs, c, tail_pos);
     if (v.err != "") { return v; }
     Tok close = lex_tok(s, v.pos);
@@ -4200,6 +4468,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             }
             if (t.text == "str_parse_float") {
                 return cg_extern1(s, t2.pos, "str_parse_float", "Str", "Float", env, fs, c);
+            }
+            if (t.text == "print_bytes") {
+                return cg_externb1(s, t2.pos, "resid_print_bytes", "List(Int)", env, fs, c);
             }
             if (t.text == "str_index_of") {
                 return cg_extern3(s, t2.pos, "str_index_of", "Str", "Str", "Int", "Int", env, fs, c);
@@ -5270,8 +5541,8 @@ GT cg_bin_rest_l(Str s, GT lhs, Bool lhs_lit, Int min_prec, List(Str) env, Funcs
         Str g2 = "%t" + IntToString(t2);
         Str g3 = "%t" + IntToString(t3);
         List(Str) q0 = lhs.lines;
-        List(Str) q1 = q0.concat([g1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + lhs.val + ", i32 0, i32 0"]);
-        List(Str) q2 = q1.concat([g2 + " = load i64, ptr " + g1]);
+        List(Str) q1 = q0.concat([g1 + " = getelementptr {i32, i32, ptr}, ptr " + lhs.val + ", i32 0, i32 0"]);
+        List(Str) q2 = q1.concat([g2 + "w = load i32, ptr " + g1, g2 + " = sext i32 " + g2 + "w to i64"]);
         List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", " + IntToString(unit_tag)]);
         List(Str) q4 = q3.concat(["br i1 " + g3 + ", label %" + labn + ", label %" + labp]);
         List(Str) q5 = q4.concat([labn + ":"]);
@@ -5305,8 +5576,8 @@ Int payload_tag = if (is_opt) { 1 } else { 1 };
         Str g2 = "%t" + IntToString(t2);
         Str g3 = "%t" + IntToString(t3);
         List(Str) q0 = lhs.lines;
-        List(Str) q1 = q0.concat([g1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + lhs.val + ", i32 0, i32 0"]);
-        List(Str) q2 = q1.concat([g2 + " = load i64, ptr " + g1]);
+        List(Str) q1 = q0.concat([g1 + " = getelementptr {i32, i32, ptr}, ptr " + lhs.val + ", i32 0, i32 0"]);
+        List(Str) q2 = q1.concat([g2 + "w = load i32, ptr " + g1, g2 + " = sext i32 " + g2 + "w to i64"]);
         List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", " + IntToString(payload_tag)]);
         List(Str) q4 = q3.concat(["br i1 " + g3 + ", label %" + labp + ", label %" + labf]);
         // Emit FALLBACK block FIRST so its br to labm appears first in IR,
@@ -6262,6 +6533,16 @@ Bool is_res_ty_cg(Str t) {
     return str_has_prefix_cg(t, "Result(");
 }
 
+// A record payload stored inline (sum_inline_fields): the slot array.
+GT cg_inline_payload(GT sc, Str ety, GT c) {
+    Int t1 = c.tmp + 1;
+    Int t2 = c.tmp + 2;
+    Str p1 = "%t" + IntToString(t1);
+    Str p2 = "%t" + IntToString(t2);
+    List(Str) z = c.lines.concat([p1 + " = getelementptr {i32, i32, ptr}, ptr " + sc.val + ", i32 1", p2 + " = getelementptr i8, ptr " + p1 + ", i64 0"]);
+    return GT {.pos = sc.pos, .val = p2, .ty = ety, .cnt = 0, .err = "", .glines = c.glines, .lines = z, .tmp = t2, .lbl = c.lbl, .tail = false};
+}
+
 // Unbox a tag-1 Option's single payload slot into a usable SSA register.
 // Scalars call resid_unbox_*; Str/composite payloads pass through as-is.
 GT cg_match_payload(GT sc, Str ety, GT c) {
@@ -6274,8 +6555,8 @@ GT cg_match_payload(GT sc, Str ety, GT c) {
     Str p3 = "%t" + IntToString(t3);
     Str p4 = "%t" + IntToString(t4);
     List(Str) z0 = c.lines;
-    List(Str) z1 = z0.concat([p1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + sc.val + ", i32 0, i32 2"]);
-    List(Str) z2 = z1.concat([p2 + " = load ptr, ptr " + p1]);
+    List(Str) z1 = z0.concat([p1 + " = getelementptr {i32, i32, ptr}, ptr " + sc.val + ", i32 1"]);
+    List(Str) z2 = z1.concat([p2 + " = getelementptr i8, ptr " + p1 + ", i64 0"]);
     List(Str) z3 = z2.concat([p3 + " = getelementptr ptr, ptr " + p2 + ", i32 0"]);
     List(Str) z4 = z3.concat([p4 + " = load ptr, ptr " + p3]);
     Str typ = num_norm_cg(ety);
@@ -6411,8 +6692,8 @@ GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
         Str gg1 = "%t" + IntToString(gt1);
         Str gg2 = "%t" + IntToString(gt2);
         List(Str) gq0 = sc.lines;
-        List(Str) gq1 = gq0.concat([gg1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + sc.val + ", i32 0, i32 0"]);
-        List(Str) gq2 = gq1.concat([gg2 + " = load i64, ptr " + gg1]);
+        List(Str) gq1 = gq0.concat([gg1 + " = getelementptr {i32, i32, ptr}, ptr " + sc.val + ", i32 0, i32 0"]);
+        List(Str) gq2 = gq1.concat([gg2 + "w = load i32, ptr " + gg1, gg2 + " = sext i32 " + gg2 + "w to i64"]);
         Int glm = sc.lbl + 1;
         Str glabm = "L" + IntToString(glm);
         GT gc0 = GT {.pos = gbrace.pos, .val = "", .ty = "", .cnt = 0, .err = "", .glines = sc.glines, .lines = gq2, .tmp = gt2, .lbl = glm, .tail = false};
@@ -6436,8 +6717,8 @@ GT cg_match(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
     Str g2 = "%t" + IntToString(t2);
     Str g3 = "%t" + IntToString(t3);
     List(Str) q0 = sc.lines;
-    List(Str) q1 = q0.concat([g1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + sc.val + ", i32 0, i32 0"]);
-    List(Str) q2 = q1.concat([g2 + " = load i64, ptr " + g1]);
+    List(Str) q1 = q0.concat([g1 + " = getelementptr {i32, i32, ptr}, ptr " + sc.val + ", i32 0, i32 0"]);
+    List(Str) q2 = q1.concat([g2 + "w = load i32, ptr " + g1, g2 + " = sext i32 " + g2 + "w to i64"]);
     List(Str) q3 = q2.concat([g3 + " = icmp eq i64 " + g2 + ", " + IntToString(payload_tag)]);
     Tok a1 = lex_tok(s, brace.pos);
     Bool first_payload = a1.text == "Some" || a1.text == "Ok";
@@ -6592,7 +6873,8 @@ GT cg_match_arms_g(Str s, Int pos, List(Str) env, Funcs fs, GT sc, List(Str) vna
     if (o2.text != ")") { return gt_err("expected ) after " + a.text + " binding in match arm", c1); }
     Tok ar2 = lex_tok(s, o2.pos);
     if (ar2.text != "=>") { return gt_err("expected => after " + a.text + " arm pattern", c1); }
-    GT pv = cg_match_payload(sc, payload, c1);
+    Int nif = sum_inline_fields(fs, sc.ty, vi);
+    GT pv = if (nif >= 0) { cg_inline_payload(sc, payload, c1) } else { cg_match_payload(sc, payload, c1) };
     if (pv.err != "") { return pv; }
     List(Str) env2 = env_add(env, nm.text + ":" + pv.val + ":" + payload);
     GT body2 = cg_expr(s, ar2.pos, env2, fs, pv, false);
@@ -7080,9 +7362,16 @@ ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
     // A lambda literal carries no type of its own — it adopts the declared
     // closure type, so it has to be lowered with `dtyb` in hand rather than
     // through the generic expression path.
+    // A scalar binding whose initializer may allocate runs in a scalar
+    // scope (see scope_leaves).
+    Bool scoped = scal_ll(ll_ty(dtyb)) && scope_wants(s, pos, 0, fs, false);
+    Int sct = g.tmp + 1;
+    Str screg = "%t" + IntToString(sct);
+    GT g0 = gt_of_st(g);
+    GT gs = if (scoped) { GT {.pos = g0.pos, .val = g0.val, .ty = g0.ty, .cnt = g0.cnt, .err = "", .glines = g0.glines, .lines = g0.lines.concat([screg + " = call i64 @resid_scope_push()"]), .tmp = sct, .lbl = g0.lbl, .tail = false} } else { g0 };
     GT v = if (b1.text == "lambda" && is_fn_type(dtyb)) {
-        cg_lambda(s, b1.pos, dtyb, env, fs, gt_of_st(g))
-    } else { cg_expr(s, pos, env, fs, gt_of_st(g), false) };
+        cg_lambda(s, b1.pos, dtyb, env, fs, gs)
+    } else { cg_expr(s, pos, env, fs, gs, false) };
     if (v.err != "") { return st_err(v.err, g); }
     Tok semi = lex_tok(s, v.pos);
     // Adopt the declared width for integer bindings (spec v3.2 S6.1a).
@@ -7112,7 +7401,8 @@ ST sg_bind(Str s, Int pos, Str name, Str dty, List(Str) env, Funcs fs, ST g) {
     Bool res_expected = str_has_prefix_cg(dtyb, "Result(");
     Str ent2g = pick_str(res_ok_hole && res_expected, name + ":" + v2.val + ":" + dtyb, ent2f);
     List(Str) env3 = env_add(env, ent2g);
-    return ST {.pos = semi.pos, .dead = g.dead, .err = "", .env = env3, .glines = v2.glines, .hlines = g.hlines, .lines = v2.lines, .tmp = v2.tmp, .lbl = v2.lbl, .rety = g.rety};
+    List(Str) vlines = if (scoped) { v2.lines.concat(["call void @resid_scope_pop(i64 " + screg + ")"]) } else { v2.lines };
+    return ST {.pos = semi.pos, .dead = g.dead, .err = "", .env = env3, .glines = v2.glines, .hlines = g.hlines, .lines = vlines, .tmp = v2.tmp, .lbl = v2.lbl, .rety = g.rety};
 }
 
 Int block_close_pos(Bool dead, Str s, Int rpos) {
@@ -7299,7 +7589,7 @@ LetCond cg_let_cond(Str s, LetHead lh, List(Str) env, Funcs fs, GT c) {
     Str g1 = "%t" + IntToString(t1);
     Str g2 = "%t" + IntToString(t2);
     Str g3 = "%t" + IntToString(t3);
-    List(Str) l1 = sc.lines.concat([g1 + " = getelementptr {i64, i64, ptr, ptr}, ptr " + sc.val + ", i32 0, i32 0", g2 + " = load i64, ptr " + g1, g3 + " = icmp eq i64 " + g2 + ", " + tag]);
+    List(Str) l1 = sc.lines.concat([g1 + " = getelementptr {i32, i32, ptr}, ptr " + sc.val + ", i32 0, i32 0", g2 + "w = load i32, ptr " + g1, g2 + " = sext i32 " + g2 + "w to i64", g3 + " = icmp eq i64 " + g2 + ", " + tag]);
     GT cond = GT {.pos = sc.pos, .val = g3, .ty = "Bool", .cnt = 0, .err = "", .glines = sc.glines, .lines = l1, .tmp = t3, .lbl = sc.lbl, .tail = false};
     return LetCond {.cond = cond, .sc = sc, .ety = ety};
 }
@@ -10063,6 +10353,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "str_parse_float") {
         if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Float", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_parse_float expects (Str), got (" + argtys + ")"};
+    }
+    if (name == "print_bytes") {
+        if (builtin_args(argtys, "List(Int)")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "print_bytes expects (List(Int)), got (" + argtys + ")"};
     }
     if (name == "str_index_of") {
         if (builtin_args(argtys, "Str,Str,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
