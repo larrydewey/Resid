@@ -1,0 +1,144 @@
+// Scalar scopes: a scalar binding whose initializer calls an allocating
+// function is evaluated in an allocation region released right after.
+// Nothing observable may change: values built before the scope and
+// touched inside it (a list's tip append, a map's cached trie, the string
+// index caches) must stay intact afterwards.
+
+type Tree = Node(Pair) | Leaf;
+type Pair = { Tree l; Tree r; Int v; };
+type Box(T) = Full(T) | Empty;
+
+Tree build(Int d) {
+    if (d <= 0) { return Leaf; }
+    return Node(Pair {.l = build(d - 1), .r = build(d - 1), .v = d});
+}
+
+Int sum(Tree t) {
+    return match t {
+        Node(p) => p.v + sum(p.l) + sum(p.r),
+        Leaf => 0
+    };
+}
+
+List(Int) grow(List(Int) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    return grow(xs.concat([i64(i * 3)]), i + 1, n);
+}
+
+Int total(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return total(xs, i + 1, acc + xs[i]);
+}
+
+// Appends to a list created outside the scope (its tip), then sums.
+Int tip_sum(List(Int) base) {
+    return total(base.concat([1000, 2000]), 0, 0);
+}
+
+Int map_sum(Map(Int, Int) m, List(Int) ks, Int i, Int acc) {
+    if (i >= ks.len()) { return acc; }
+    Int v = m.get(ks[i]) else { 0 };
+    return map_sum(m, ks, i + 1, acc + v);
+}
+
+Map(Int, Int) fill(Map(Int, Int) m, Int i, Int n) {
+    if (i >= n) { return m; }
+    return fill(m.insert(i, i64(i * i)), i + 1, n);
+}
+
+Int keys_total(Map(Int, Int) m) {
+    return total(m.keys(), 0, 0);
+}
+
+Str repeat_to(Str s, Int n) {
+    if (str_len(s) >= n) { return s; }
+    return repeat_to(s + "abcdefghij", n);
+}
+
+Int count_c(Str s, Int i, Int acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int d = if (str_char_at(s, i) == 99) { 1 } else { 0 };
+    return count_c(s, i + 1, acc + d);
+}
+
+Int long_count(Int n) {
+    return count_c(repeat_to("", n), 0, 0);
+}
+
+Option(Int) first_big(List(Int) xs, Int i) {
+    if (i >= xs.len()) { return None; }
+    if (xs[i] > 50) { return Some(xs[i]); }
+    return first_big(xs, i + 1);
+}
+
+// `?` in a scalar initializer: an early exit, so no scope there.
+Option(Int) doubled_big(List(Int) xs) {
+    Int v = first_big(grow(xs, 0, 0), 0)?;
+    return Some(v + v);
+}
+
+Int loop(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int s = sum(build(6));
+    Int t = total(grow([], 0, 40), 0, 0);
+    return loop(i + 1, n, acc + s + t);
+}
+
+Int unbox(Box(Pair) b) {
+    return match b {
+        Full(p) => p.v,
+        Empty => -1
+    };
+}
+
+@requires(filesystem)
+Int main() {
+    println(IntToString(loop(0, 20000, 0)));
+
+    List(Int) base = grow([], 0, 10);
+    Int a = tip_sum(base);
+    List(Int) after = base.concat([7]);
+    println(IntToString(a) + " " + IntToString(total(after, 0, 0)) + " " + IntToString(after.len()));
+
+    Map(Int, Int) m = fill({}, 0, 100);
+    Int ks = keys_total(m);
+    Int ms = map_sum(m, m.keys(), 0, 0);
+    println(IntToString(ks) + " " + IntToString(ms) + " " + IntToString(m.len()));
+
+    Int c1 = long_count(5000);
+    Str big = repeat_to("", 5000);
+    Int c2 = count_c(big, 0, 0);
+    Int c3 = long_count(3000);
+    println(IntToString(c1) + " " + IntToString(c2) + " " + IntToString(c3));
+
+    Option(Int) d1 = doubled_big([1, 60, 3]);
+    Option(Int) d2 = doubled_big([1, 2, 3]);
+    Int e1 = d1 else { -1 };
+    Int e2 = d2 else { -1 };
+    println(IntToString(e1) + " " + IntToString(e2));
+
+    Tree kept = build(3);
+    Pair p = Pair {.l = Leaf, .r = kept, .v = 100};
+    Tree t2 = Node(p);
+    println(IntToString(sum(t2)) + " " + IntToString(sum(kept)));
+
+    Box(Pair) bx = Full(Pair {.l = Leaf, .r = Leaf, .v = 9});
+    Box(Pair) be = Empty;
+    println(IntToString(unbox(bx)) + " " + IntToString(unbox(be)));
+
+    Result(Int, RegionError) r = spawn () {
+        Int inner = sum(build(4));
+        return inner;
+    };
+    Int rv = match r {
+        Ok(n) => n,
+        Err(e) => -1
+    };
+    println(IntToString(rv));
+
+    Str sb = str_sb_append(str_sb_append(str_sb_new(), "built "), "line");
+    Bool ok1 = println(str_sb_finish(sb));
+    Bool ok2 = print(str_sb_finish(str_sb_append(str_sb_new(), "no newline|")));
+    Bool ok3 = print_bytes([72, 105, 256 + 33, 10]);
+    return 0;
+}

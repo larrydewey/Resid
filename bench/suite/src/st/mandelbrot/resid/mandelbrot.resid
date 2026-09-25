@@ -5,20 +5,10 @@
 // escape when Zr^2 + Zi^2 > 4, Cr = 2x/w - 1.5, Ci = 2y/h - 1). Every
 // loop is a self tail call compiled to a jump.
 //
-// Output: Resid's print/println go through fputs of a NUL-terminated,
-// UTF-8 string, so they cannot emit NUL bytes or bytes >= 128. The only
-// raw-byte output path is filesystem.write_bytes(path, List(Int)), which
-// fopen()s the path with "wb". The whole PBM file (header included) is
-// therefore collected in one List(Int) and written with a single
-// write_bytes call to /dev/stdout (a second call would reopen, and on a
-// regular-file stdout truncate, the output).
-//
-// List(Int) is a persistent 32-way trie with no in-place append, so
-// pushing one byte at a time copies (and leaks) a leaf plus the
-// root-to-leaf path per byte (~700 bytes of garbage per output byte).
-// Instead the byte stream is packed into four Int words (32 bytes) held
-// in scalar loop parameters, and each full 32-byte chunk is appended with
-// a single leaf-aligned concat of a 32-element list literal.
+// Output is binary PBM. Each row is packed into a List(Int) of bytes and
+// written with print_bytes (raw bytes to stdout). The row is built and
+// written inside a scalar binding (`Bool ok = emit_row(...)`), so the
+// compiler releases the row's memory as soon as it has been written.
 
 // True when c = (cr, ci) stays bounded for all 50 iterations.
 Bool inside(Float cr, Float ci, Float zr, Float zi, Float tr, Float ti, Int i) {
@@ -29,92 +19,40 @@ Bool inside(Float cr, Float ci, Float zr, Float zi, Float tr, Float ti, Int i) {
     return inside(cr, ci, zr2, zi2, zr2 * zr2, zi2 * zi2, i + 1);
 }
 
-// Place byte b at position p (0..31) of the chunk: word p / 8, big-endian.
-Int put_byte(Int word, Int wi, Int p, Int b) {
-    if ((p >> 3) != wi) { return word; }
-    return word | (b << ((7 - (p & 7)) * 8));
-}
-
-// Byte k (0..31) of the chunk held in w0..w3.
-Int chunk_byte(Int k, Int w0, Int w1, Int w2, Int w3) {
-    Int wi = k >> 3;
-    Int w = if (wi == 0) { w0 } else { if (wi == 1) { w1 } else { if (wi == 2) { w2 } else { w3 } } };
-    return (w >> ((7 - (k & 7)) * 8)) & 255;
-}
-
-// Append the first n bytes of a partial chunk (end of output only).
-List(Int) flush_tail(Int k, Int n, Int w0, Int w1, Int w2, Int w3, List(Int) acc) {
-    if (k >= n) { return acc; }
-    return flush_tail(k + 1, n, w0, w1, w2, w3, acc.concat([chunk_byte(k, w0, w1, w2, w3)]));
-}
-
-// Main loop over pixels (x, y). `pend` is a completed byte waiting to be
-// stored in the chunk (or -1); `cnt` bytes of the chunk are filled.
-List(Int) pixels(Int x, Int y, Int w, Float fw, Float ci, Int bits, Int nbits, Int pend,
-                 Int cnt, Int w0, Int w1, Int w2, Int w3, List(Int) acc) {
-    if (pend >= 0) {
-        Int v0 = put_byte(w0, 0, cnt, pend);
-        Int v1 = put_byte(w1, 1, cnt, pend);
-        Int v2 = put_byte(w2, 2, cnt, pend);
-        Int v3 = put_byte(w3, 3, cnt, pend);
-        if (cnt == 31) {
-            return pixels(x, y, w, fw, ci, bits, nbits, -1, 0, 0, 0, 0, 0,
-                acc.concat(chunk_list(v0, v1, v2, v3)));
-        }
-        return pixels(x, y, w, fw, ci, bits, nbits, -1, cnt + 1, v0, v1, v2, v3, acc);
-    }
-    if (y >= w) { return flush_tail(0, cnt, w0, w1, w2, w3, acc); }
+// The bytes of one row: pixels x.. of the row at ci, 8 per byte, the last
+// byte padded with zero bits.
+List(Int) row_bytes(Int x, Int w, Float fw, Float ci, Int bits, Int nbits, List(Int) acc) {
     if (x >= w) {
-        // End of row: flush a partial byte (padded with zero bits), then
-        // start the next row.
-        Float ci2 = 2.0 * (Float)(y + 1) / fw - 1.0;
-        Int pb = if (nbits == 0) { -1 } else { (bits << (8 - nbits)) & 255 };
-        return pixels(0, y + 1, w, fw, ci2, 0, 0, pb, cnt, w0, w1, w2, w3, acc);
+        if (nbits == 0) { return acc; }
+        return acc.concat([(bits << (8 - nbits)) & 255]);
     }
     Float cr = 2.0 * (Float)x / fw - 1.5;
     Int bit = if (inside(cr, ci, 0.0, 0.0, 0.0, 0.0, 0)) { 1 } else { 0 };
     Int b2 = (bits << 1) | bit;
     if (nbits == 7) {
-        return pixels(x + 1, y, w, fw, ci, 0, 0, b2, cnt, w0, w1, w2, w3, acc);
+        return row_bytes(x + 1, w, fw, ci, 0, 0, acc.concat([b2]));
     }
-    return pixels(x + 1, y, w, fw, ci, b2, nbits + 1, -1, cnt, w0, w1, w2, w3, acc);
+    return row_bytes(x + 1, w, fw, ci, b2, nbits + 1, acc);
 }
 
-// The 32 bytes of a full chunk as one list literal (one trie leaf).
-List(Int) chunk_list(Int w0, Int w1, Int w2, Int w3) {
-    return [
-            (w0 >> 56) & 255, (w0 >> 48) & 255, (w0 >> 40) & 255, (w0 >> 32) & 255,
-            (w0 >> 24) & 255, (w0 >> 16) & 255, (w0 >> 8) & 255, w0 & 255,
-            (w1 >> 56) & 255, (w1 >> 48) & 255, (w1 >> 40) & 255, (w1 >> 32) & 255,
-            (w1 >> 24) & 255, (w1 >> 16) & 255, (w1 >> 8) & 255, w1 & 255,
-            (w2 >> 56) & 255, (w2 >> 48) & 255, (w2 >> 40) & 255, (w2 >> 32) & 255,
-            (w2 >> 24) & 255, (w2 >> 16) & 255, (w2 >> 8) & 255, w2 & 255,
-            (w3 >> 56) & 255, (w3 >> 48) & 255, (w3 >> 40) & 255, (w3 >> 32) & 255,
-            (w3 >> 24) & 255, (w3 >> 16) & 255, (w3 >> 8) & 255, w3 & 255
-        ];
+Bool emit_row(Int y, Int w, Float fw) {
+    Float ci = 2.0 * (Float)y / fw - 1.0;
+    List(Int) e = [];
+    return print_bytes(row_bytes(0, w, fw, ci, 0, 0, e));
 }
 
-// Pack header bytes 8*wi .. 8*wi+7 (big-endian) of s into one word.
-Int header_word(Str s, Int wi, Int k, Int acc) {
-    if (k >= 8) { return acc; }
-    Int p = wi * 8 + k;
-    Int b = if (p < str_len(s)) { str_char_at(s, p) } else { 0 };
-    return header_word(s, wi, k + 1, acc | (b << ((7 - k) * 8)));
+Bool rows(Int y, Int w, Float fw) {
+    if (y >= w) { return true; }
+    Bool ok = emit_row(y, w, fw);
+    if (!ok) { return false; }
+    return rows(y + 1, w, fw);
 }
 
-@requires(args, filesystem)
+@requires(args)
 Int main() {
     Int w = str_parse_int(args.get(1));
     Float fw = (Float)w;
-    // The header ("P4\n<w> <w>\n", < 32 bytes) seeds the first chunk.
-    Str header = "P4\n" + IntToString(w) + " " + IntToString(w) + "\n";
-    Int h0 = header_word(header, 0, 0, 0);
-    Int h1 = header_word(header, 1, 0, 0);
-    Int h2 = header_word(header, 2, 0, 0);
-    Int h3 = header_word(header, 3, 0, 0);
-    List(Int) e = [];
-    Float ci0 = 2.0 * 0.0 / fw - 1.0;
-    List(Int) all = pixels(0, 0, w, fw, ci0, 0, 0, -1, str_len(header), h0, h1, h2, h3, e);
-    Bool ok = filesystem.write_bytes("/dev/stdout", all);
+    print("P4\n" + IntToString(w) + " " + IntToString(w) + "\n");
+    Bool ok = rows(0, w, fw);
     return if (ok) { 0 } else { 1 };
 }

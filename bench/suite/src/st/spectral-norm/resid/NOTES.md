@@ -23,8 +23,11 @@ General Resid constraints that shape this port (see the source header too):
 - No mutation or reassignment; every loop is a self tail call (or a tail
   call between functions of identical signature), which the compiler turns
   into a jump/`musttail`, so loops do not grow the stack.
-- No `free`: anything allocated per iteration is leaked for the rest of the
-  run, so hot loops keep their state in scalar parameters.
+- No `free` and no garbage collector. The compiler releases everything a
+  scalar binding's initializer allocates (`Int x = f(...)` runs in a
+  scalar scope, see `runtime/resid_rt.c`); anything else allocated per
+  iteration stays live for the rest of the run, so hot loops keep their
+  state in scalar parameters.
 - `Int * Int` widens to `Int(128)`; products are narrowed with `i64(...)`.
 - `&&`/`||` evaluate both operands, so short-circuit conditions are
   written as nested `if`s.

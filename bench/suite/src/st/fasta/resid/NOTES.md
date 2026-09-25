@@ -15,21 +15,26 @@ Deviations and workarounds:
 - The cumulative tables are passed as `Float` scalar parameters and the
   lookup is an unrolled chain of `if`s (no list lookups, no allocation in
   the inner loop).
-- Each printed block string is never freed (Resid has no `free`), so peak
-  memory grows with total output size (~250 MB at the official size).
+- `print(str_sb_finish(sb))` is compiled to one runtime call that writes
+  the builder's buffer and frees it (the finished string is a temporary no
+  other expression can see), so each ~1 MB block is released after it is
+  written and peak memory stays at one block.
 
 General Resid constraints that shape this port (see the source header too):
 
 - No mutation or reassignment; every loop is a self tail call (or a tail
   call between functions of identical signature), which the compiler turns
   into a jump/`musttail`, so loops do not grow the stack.
-- No `free`: anything allocated per iteration is leaked for the rest of the
-  run, so hot loops keep their state in scalar parameters.
+- No `free` and no garbage collector. The compiler releases everything a
+  scalar binding's initializer allocates (`Int x = f(...)` runs in a
+  scalar scope, see `runtime/resid_rt.c`); anything else allocated per
+  iteration stays live for the rest of the run, so hot loops keep their
+  state in scalar parameters.
 - `Int * Int` widens to `Int(128)`; products are narrowed with `i64(...)`.
 - `&&`/`||` evaluate both operands, so short-circuit conditions are
   written as nested `if`s.
 - Compiled with the default `-O2` (`build/boot/stage2.bin`, which links the
   runtime with `clang -O2`).
 
-Measured (this host): size 2500000 0.28 s, 28 MB peak RSS; size
-25000000 2.84 s, 246 MB (output identical to C).
+Measured (this host, 2026-09-25): size 25000000 2.26 s, 3.2 MB peak RSS
+(C: 2.36 s, 1.7 MB); size 2500000 0.23 s. Output identical to C.

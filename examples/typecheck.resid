@@ -2301,6 +2301,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Float", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_parse_float expects (Str), got (" + argtys + ")"};
     }
+    if (name == "print_bytes") {
+        if (builtin_args(argtys, "List(Int)")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "print_bytes expects (List(Int)), got (" + argtys + ")"};
+    }
     if (name == "str_index_of") {
         if (builtin_args(argtys, "Str,Str,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_index_of expects (Str,Str,Int), got (" + argtys + ")"};

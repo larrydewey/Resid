@@ -114,6 +114,55 @@ static _Thread_local Arena* g_bulk_arena = NULL;
 static _Thread_local uint64_t g_alloc_bytes = 0;
 static _Thread_local uint64_t g_alloc_mark = 0;
 
+/* Scalar scopes: compiler-inferred allocation regions.
+ *
+ * Values are immutable (spec §4), so nothing allocated while evaluating an
+ * expression whose result is a plain scalar (Int, Float, Bool, ...) can be
+ * reachable once the expression has produced its value: no older value can
+ * be made to point at the new memory, and the scalar refers to nothing. The
+ * compiler brackets such expressions with resid_scope_push/resid_scope_pop,
+ * and every allocation in between comes from one thread-local bump region
+ * that the pop rewinds to the push's mark. This is not garbage collection:
+ * nothing is traced or counted, and a pop costs O(chunks released).
+ *
+ * The runtime's few writes that attach new memory to an older object (a
+ * frozen map's cached trie, per-literal list constants, handle boxes)
+ * allocate outside the region (alloc_suspend), and the pointer-keyed string
+ * index caches never keep a region string past a pop.
+ *
+ * A mark is an index into a stack and pop(d) restores depth d. The
+ * compiler never brackets an expression with an early exit, but a pop can
+ * still be skipped by an abort that a test body or a spawned region
+ * catches; its memory then goes to the next enclosing pop, which is
+ * equally sound because the enclosing expression is scalar too, or is
+ * never freed. At depth 0 no region memory is live.
+ * Structured spawn (spec §19) joins before the spawning expression
+ * finishes, and a child thread has its own region, so a region is never
+ * read after its pop. */
+typedef struct ScopeChunk {
+    struct ScopeChunk* prev;
+    size_t cap;
+    char data[];
+} ScopeChunk;
+
+typedef struct {
+    ScopeChunk* chunk;
+    char* ptr;
+} ScopeMark;
+
+#define SCOPE_CHUNK_SIZE ((size_t)1 << 20)
+/* Released standard-size chunks kept for reuse per thread. */
+#define SCOPE_POOL_MAX 16
+
+static _Thread_local int64_t g_sc_depth = 0;
+static _Thread_local ScopeChunk* g_sc_chunk = NULL;
+static _Thread_local char* g_sc_ptr = NULL;
+static _Thread_local char* g_sc_end = NULL;
+static _Thread_local ScopeMark* g_sc_marks = NULL;
+static _Thread_local int64_t g_sc_marks_cap = 0;
+static _Thread_local ScopeChunk* g_sc_pool = NULL;
+static _Thread_local int g_sc_pool_n = 0;
+
 
 #define ARENA_CHUNK_SIZE (4 * 1024 * 1024)
 
@@ -192,11 +241,18 @@ static int arena_chain_contains(Arena* a, const void* p) {
     return 0;
 }
 
+static int scope_contains(const void* p) {
+    for (ScopeChunk* c = g_sc_chunk; c; c = c->prev) {
+        if ((const char*)p >= c->data && (const char*)p < c->data + c->cap) return 1;
+    }
+    return 0;
+}
+
 static int arena_contains(const void* p) {
     /* Every active arena, not just the innermost (a string from an outer
-     * arena must not enter the persistent cache either), and the bulk
-     * arenas. */
-    return arena_chain_contains(g_current_arena, p) || arena_chain_contains(g_bulk_arena, p);
+     * arena must not enter the persistent cache either), the bulk arenas,
+     * and the scalar-scope region. */
+    return arena_chain_contains(g_current_arena, p) || arena_chain_contains(g_bulk_arena, p) || scope_contains(p);
 }
 
 int64_t resid_bulk_push(void) {
@@ -230,8 +286,138 @@ int64_t resid_bulk_pop(void) {
     return 0;
 }
 
+static pthread_key_t g_sc_key;
+static pthread_once_t g_sc_key_once = PTHREAD_ONCE_INIT;
+static _Thread_local int g_sc_key_set = 0;
+
+/* Thread exit: hand the reuse pool back. Chunks still in use are left
+ * alone (an unpopped region may hold a value the thread returned). */
+static void scope_thread_exit(void* unused) {
+    (void)unused;
+    while (g_sc_pool) {
+        ScopeChunk* c = g_sc_pool;
+        g_sc_pool = c->prev;
+        free(c);
+    }
+    g_sc_pool_n = 0;
+    free(g_sc_marks);
+    g_sc_marks = NULL;
+    g_sc_marks_cap = 0;
+}
+
+static void scope_key_init(void) { pthread_key_create(&g_sc_key, scope_thread_exit); }
+
+static __attribute__((noinline)) void scope_marks_grow(void) {
+    int64_t cap = g_sc_marks_cap ? g_sc_marks_cap * 2 : 64;
+    ScopeMark* m = (ScopeMark*)realloc(g_sc_marks, (size_t)cap * sizeof(ScopeMark));
+    if (!m) resid_abort("scope: out of memory");
+    g_sc_marks = m;
+    g_sc_marks_cap = cap;
+    if (!g_sc_key_set) {
+        pthread_once(&g_sc_key_once, scope_key_init);
+        pthread_setspecific(g_sc_key, (void*)1);
+        g_sc_key_set = 1;
+    }
+}
+
+int64_t resid_scope_push(void) {
+    int64_t d = g_sc_depth;
+    if (__builtin_expect(d == g_sc_marks_cap, 0)) scope_marks_grow();
+    g_sc_marks[d].chunk = g_sc_chunk;
+    g_sc_marks[d].ptr = g_sc_ptr;
+    g_sc_depth = d + 1;
+    return d;
+}
+
+static void scope_chunk_release(ScopeChunk* c) {
+    if (c->cap == SCOPE_CHUNK_SIZE && g_sc_pool_n < SCOPE_POOL_MAX) {
+        c->prev = g_sc_pool;
+        g_sc_pool = c;
+        g_sc_pool_n++;
+        return;
+    }
+    free(c);
+}
+
+void resid_scope_pop(int64_t d) {
+    if (d < 0 || d >= g_sc_depth) return;
+    ScopeMark m = g_sc_marks[d];
+    g_sc_depth = d;
+    if (g_sc_ptr == m.ptr) return; /* nothing was allocated */
+    while (g_sc_chunk != m.chunk) {
+        ScopeChunk* c = g_sc_chunk;
+        g_sc_chunk = c->prev;
+        scope_chunk_release(c);
+    }
+    g_sc_ptr = m.ptr;
+    g_sc_end = m.chunk ? m.chunk->data + m.chunk->cap : NULL;
+    /* A pointer-keyed string cache entry may name freed region memory. */
+    str_index_arena_popped();
+}
+
+static __attribute__((noinline)) void* scope_alloc_slow(size_t size) {
+    ScopeChunk* c;
+    if (size > SCOPE_CHUNK_SIZE / 4) {
+        /* A big block gets a chunk of its own. */
+        c = (ScopeChunk*)malloc(sizeof(ScopeChunk) + size);
+        if (!c) resid_abort("out of memory");
+        c->cap = size;
+    } else if (g_sc_pool) {
+        c = g_sc_pool;
+        g_sc_pool = c->prev;
+        g_sc_pool_n--;
+    } else {
+        c = (ScopeChunk*)malloc(sizeof(ScopeChunk) + SCOPE_CHUNK_SIZE);
+        if (!c) resid_abort("out of memory");
+        c->cap = SCOPE_CHUNK_SIZE;
+    }
+    c->prev = g_sc_chunk;
+    g_sc_chunk = c;
+    g_sc_ptr = c->data + size;
+    g_sc_end = c->data + c->cap;
+    return c->data;
+}
+
+/* Blocks whose size is an odd multiple of 8 are placed on an 8-byte
+ * boundary (a 40-byte box holds only 8-byte words); every other block is
+ * 16-byte aligned, as malloc would give. Anything needing 16-byte alignment
+ * inside (the Int(128) scalar box payload) asks for a multiple of 16. */
+static inline void* scope_alloc(size_t size) {
+    size = (size + 7) & ~(size_t)7;
+    char* p = g_sc_ptr;
+    size_t pad = (size & 8) ? 0 : ((uintptr_t)p & 8);
+    if (__builtin_expect(p != NULL && (size_t)(g_sc_end - p) >= size + pad, 1)) {
+        g_sc_ptr = p + pad + size;
+        return p + pad;
+    }
+    return scope_alloc_slow((size + 15) & ~(size_t)15);
+}
+
+/* Runtime writes that attach new memory to an existing (possibly older)
+ * object allocate on the plain heap: no arena and no scalar scope. */
+typedef struct {
+    Arena* cur;
+    Arena* bulk;
+    int64_t depth;
+} AllocSuspend;
+
+static inline AllocSuspend alloc_suspend(void) {
+    AllocSuspend s = { g_current_arena, g_bulk_arena, g_sc_depth };
+    g_current_arena = NULL;
+    g_bulk_arena = NULL;
+    g_sc_depth = 0;
+    return s;
+}
+
+static inline void alloc_resume(AllocSuspend s) {
+    g_current_arena = s.cur;
+    g_bulk_arena = s.bulk;
+    g_sc_depth = s.depth;
+}
+
 void* resid_gmalloc(int64_t size) {
     g_alloc_bytes += (uint64_t)size;
+    if (g_sc_depth) return scope_alloc((size_t)size);
     if (g_bulk_arena) return arena_bump_alloc(g_bulk_arena, (size_t)size);
     void* p = malloc((size_t)size);
     if (!p) resid_abort("out of memory");
@@ -239,6 +425,9 @@ void* resid_gmalloc(int64_t size) {
 }
 
 void resid_gfree(void* p) {
+    /* Inside a scalar scope the block may be region memory; the pop (or
+     * never freeing) covers it. At depth 0 no region memory is live. */
+    if (g_sc_depth) return;
     if (arena_chain_contains(g_bulk_arena, p)) return;
     free(p);
 }
@@ -258,6 +447,7 @@ int64_t resid_mem_since_mark(void) {
 
 static void* resid_alloc(size_t size) {
     g_alloc_bytes += size;
+    if (g_sc_depth) return scope_alloc(size);
     if (g_current_arena) return arena_bump_alloc(g_current_arena, size);
     void* p = malloc(size);
     if (!p && size) resid_abort("out of memory");
@@ -267,6 +457,11 @@ static void* resid_alloc(size_t size) {
 static void* resid_calloc(size_t n, size_t size) {
     size_t total = n * size;
     g_alloc_bytes += total;
+    if (g_sc_depth) {
+        void* p = scope_alloc(total);
+        memset(p, 0, total);
+        return p;
+    }
     if (g_current_arena) {
         void* p = arena_bump_alloc(g_current_arena, total);
         memset(p, 0, total);
@@ -1308,6 +1503,23 @@ char* str_sb_finish(void* b) {
     return out;
 }
 
+/* `print(str_sb_finish(b))` / `println(...)`: the finished string is a
+ * temporary no other expression can see, so the compiler fuses the pair
+ * and the buffer is written, then freed, instead of being kept forever. */
+bool resid_sb_print(void* b, int8_t nl) {
+    StrSb* r = (StrSb*)b;
+    bool ok = true;
+    if (r->buf) {
+        r->buf[r->len] = '\0';
+        if (fputs(r->buf, stdout) == EOF) ok = false;
+    }
+    if (ok && nl && putchar('\n') == EOF) ok = false;
+    if (ok && fflush(stdout) == EOF) ok = false;
+    free(r->buf);
+    free(r);
+    return ok;
+}
+
 /* Half-open substring `s[start..end]` by codepoint index (clamped).
  * O(1) endpoint lookup via the byte-offset index above, O(slice length)
  * for the copy itself (unavoidable — the result is a fresh string). */
@@ -1398,12 +1610,26 @@ int64_t str_index_of(const char* s, const char* needle, int64_t from) {
  * resid_list_new/get/concat/... below) for O(log32 n) push/concat instead
  * of a flat array's O(n) copy-on-every-op.
  */
+/* 16 bytes, followed directly by the `count` slots (RV_SLOTS). A tag and a
+ * slot count fit in 32 bits each (tags are variant indexes or small runtime
+ * markers, counts are field counts), and every variant, record-payload box
+ * and Option/Result pays for the header: a two-field record payload makes a
+ * 32-byte box. */
 typedef struct {
-    int64_t tag;
-    int64_t count;
-    void** slots;
+    int32_t tag;
+    int32_t count;
     const char* type;
 } ResidVal;
+
+#define RV_SLOTS(v) ((void**)((ResidVal*)(v) + 1))
+
+/* Int(128) scalar payloads are only 8-byte aligned (see
+ * resid_box_scalar_alloc). */
+static inline __int128 ld_i128(const void* p) {
+    __int128 v;
+    memcpy(&v, p, sizeof v);
+    return v;
+}
 
 void* resid_box_new(int64_t tag, int64_t count, void** src, const char* type) {
     /* One allocation: the slot array sits right after the header. */
@@ -1413,11 +1639,20 @@ void* resid_box_new(int64_t tag, int64_t count, void** src, const char* type) {
     v->tag = tag;
     v->count = count;
     v->type = type;
-    v->slots = NULL;
-    if (count > 0) {
-        v->slots = (void**)(v + 1);
-        for (int64_t i = 0; i < count; i++) v->slots[i] = src[i];
-    }
+    for (int64_t i = 0; i < count; i++) RV_SLOTS(v)[i] = src[i];
+    return v;
+}
+
+/* resid_box_new without the copy: the caller stores `count` slots right
+ * after the header before the box is used (a variant whose record payload
+ * is built in place). */
+void* resid_box_alloc(int64_t tag, int64_t count, const char* type) {
+    size_t n = count > 0 ? (size_t)count : 0;
+    ResidVal* v = (ResidVal*)resid_alloc(sizeof(ResidVal) + n * sizeof(void*));
+    if (!v) resid_abort("resid_box_alloc: out of memory");
+    v->tag = tag;
+    v->count = count;
+    v->type = type;
     return v;
 }
 
@@ -1425,10 +1660,10 @@ int64_t resid_box_tag(void* b) { return ((ResidVal*)b)->tag; }
 
 int64_t resid_box_count(void* b) { return ((ResidVal*)b)->count; }
 
-void** resid_box_slots(void* b) { return ((ResidVal*)b)->slots; }
+void** resid_box_slots(void* b) { return RV_SLOTS(b); }
 
 /* The i-th slot of a boxed object. */
-void* resid_box_slot(void* b, int64_t i) { return ((ResidVal*)b)->slots[i]; }
+void* resid_box_slot(void* b, int64_t i) { return RV_SLOTS(b)[i]; }
 
 /* A spawn worker ({ fn, captures }), run on a fresh thread. */
 typedef struct {
@@ -1808,28 +2043,26 @@ static void* list_const_publish(void** cache, void* list) {
 void* resid_list_const_i64(void** cache, int64_t n, const int64_t* data, const char* type) {
     void* hit = __atomic_load_n(cache, __ATOMIC_ACQUIRE);
     if (hit) return hit;
-    Arena* saved = g_current_arena;
-    g_current_arena = NULL;
+    AllocSuspend saved = alloc_suspend();
     void** boxes = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
     if (!boxes) resid_abort("resid_list_const_i64: out of memory");
     for (int64_t i = 0; i < n; i++) boxes[i] = resid_box_i64(data[i]);
     void* list = resid_list_new(n, boxes, type);
     free(boxes);
-    g_current_arena = saved;
+    alloc_resume(saved);
     return list_const_publish(cache, list);
 }
 
 void* resid_list_const_bool(void** cache, int64_t n, const int8_t* data, const char* type) {
     void* hit = __atomic_load_n(cache, __ATOMIC_ACQUIRE);
     if (hit) return hit;
-    Arena* saved = g_current_arena;
-    g_current_arena = NULL;
+    AllocSuspend saved = alloc_suspend();
     void** boxes = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
     if (!boxes) resid_abort("resid_list_const_bool: out of memory");
     for (int64_t i = 0; i < n; i++) boxes[i] = resid_box_bool(data[i] ? 1 : 0);
     void* list = resid_list_new(n, boxes, type);
     free(boxes);
-    g_current_arena = saved;
+    alloc_resume(saved);
     return list_const_publish(cache, list);
 }
 
@@ -1837,10 +2070,9 @@ void* resid_list_const_bool(void** cache, int64_t n, const int8_t* data, const c
 void* resid_list_const_ptr(void** cache, int64_t n, void* const* data, const char* type) {
     void* hit = __atomic_load_n(cache, __ATOMIC_ACQUIRE);
     if (hit) return hit;
-    Arena* saved = g_current_arena;
-    g_current_arena = NULL;
+    AllocSuspend saved = alloc_suspend();
     void* list = resid_list_new(n, (void**)data, type);
-    g_current_arena = saved;
+    alloc_resume(saved);
     return list_const_publish(cache, list);
 }
 
@@ -2012,7 +2244,6 @@ static int box_is_interned(const void* p);
  * array is a separate block unless it was laid out inline. */
 static void box_free_shallow(ResidVal* val) {
     if (box_is_interned(val)) return;
-    if (val->tag != -1 && val->slots && val->slots != (void**)(val + 1)) free(val->slots);
     free(val);
 }
 
@@ -2047,12 +2278,9 @@ void resid_list_free(void* b) {
 void resid_struct_free(void* b) {
     if (!b) return;
     ResidVal* v = (ResidVal*)b;
-    if (v->slots) {
-        for (int64_t i = 0; i < v->count; i++) {
-            void* slot = v->slots[i];
-            if (slot) box_free_shallow((ResidVal*)slot);
-        }
-        if (v->slots != (void**)(v + 1)) free(v->slots);
+    for (int64_t i = 0; i < v->count; i++) {
+        void* slot = RV_SLOTS(v)[i];
+        if (slot) box_free_shallow((ResidVal*)slot);
     }
     free(v);
 }
@@ -2065,12 +2293,9 @@ void resid_box_free(void* b) {
      * a single free() covers all of it. */
     if (box_is_interned(v)) return;
     if (v->tag == -1) { free(v); return; }
-    if (v->slots) {
-        for (int64_t i = 0; i < v->count; i++) {
-            void* slot = v->slots[i];
-            if (slot && !box_is_interned(slot)) free(slot);
-        }
-        if (v->slots != (void**)(v + 1)) free(v->slots);
+    for (int64_t i = 0; i < v->count; i++) {
+        void* slot = RV_SLOTS(v)[i];
+        if (slot && !box_is_interned(slot)) free(slot);
     }
     free(v);
 }
@@ -2085,28 +2310,25 @@ void resid_box_free(void* b) {
  * Scalars are the hottest allocation in the runtime (every Int/Float/Bool
  * value gets boxed), and this runtime never frees, so that overhead is
  * never reclaimed. Fix: one combined allocation — struct, slots array,
- * and payload laid out contiguously — same external `r->slots[0]`
+ * and payload laid out contiguously — same external `RV_SLOTS(r)[0]`
  * contract, 1/3 the malloc call count and per-call overhead. */
-/* Layout: header, then the payload at SCALAR_PAYLOAD_OFF (right after the
- * 32-byte header, so 16-byte aligned for Int(128)), then the one-entry slot
- * array. Every scalar box of every width keeps its payload at the same
+/* Layout: header, the one-entry slot array, then the payload at
+ * SCALAR_PAYLOAD_OFF (8-byte aligned; Int(128) payloads are accessed with
+ * memcpy, so they need no more). Every scalar box of every width keeps its payload at the same
  * fixed offset, which lets resid_unbox_* read it without going through
  * slots[0], and keeps a narrower unbox of a wider box (e.g. an Int(128)
  * box read as Int) reading the same low bytes the slots[0] path did. */
-#define SCALAR_PAYLOAD_OFF sizeof(ResidVal)
-_Static_assert(sizeof(ResidVal) % 16 == 0, "scalar payload must stay 16-byte aligned");
+#define SCALAR_PAYLOAD_OFF (sizeof(ResidVal) + sizeof(void*))
 
 static void* resid_box_scalar_alloc(size_t payload_size, size_t payload_align, void** out_payload) {
     (void)payload_align;
-    size_t slot_off = SCALAR_PAYLOAD_OFF + ((payload_size + 7) & ~(size_t)7);
-    char* block = (char*)resid_alloc(slot_off + sizeof(void*));
+    char* block = (char*)resid_alloc(SCALAR_PAYLOAD_OFF + ((payload_size + 7) & ~(size_t)7));
     if (!block) resid_abort("resid_box_scalar: out of memory");
     ResidVal* r = (ResidVal*)block;
     r->tag = -1;
     r->count = 1;
-    r->slots = (void**)(block + slot_off);
     void* payload = block + SCALAR_PAYLOAD_OFF;
-    r->slots[0] = payload;
+    RV_SLOTS(r)[0] = payload;
     *out_payload = payload;
     return r;
 }
@@ -2119,8 +2341,8 @@ static void* resid_box_scalar_alloc(size_t payload_size, size_t payload_align, v
  * exactly (struct, payload, 1-slot array), so unboxing is unchanged. */
 #define BOX_I64_LO (-256)
 #define BOX_I64_HI 4096
-typedef struct { ResidVal v; int64_t payload; void* slot; } InternedI64;
-typedef struct { ResidVal v; int8_t payload; void* slot; } InternedBool;
+typedef struct { ResidVal v; void* slot; int64_t payload; } InternedI64;
+typedef struct { ResidVal v; void* slot; int8_t payload; } InternedBool;
 _Static_assert(offsetof(InternedI64, payload) == SCALAR_PAYLOAD_OFF, "interned i64 layout");
 _Static_assert(offsetof(InternedBool, payload) == SCALAR_PAYLOAD_OFF, "interned bool layout");
 static InternedI64 g_box_i64[BOX_I64_HI - BOX_I64_LO];
@@ -2131,7 +2353,6 @@ __attribute__((constructor)) static void box_intern_init(void) {
         InternedI64* b = &g_box_i64[i];
         b->v.tag = -1;
         b->v.count = 1;
-        b->v.slots = &b->slot;
         b->v.type = "i64";
         b->payload = i + BOX_I64_LO;
         b->slot = &b->payload;
@@ -2140,7 +2361,6 @@ __attribute__((constructor)) static void box_intern_init(void) {
         InternedBool* b = &g_box_bool[i];
         b->v.tag = -1;
         b->v.count = 1;
-        b->v.slots = &b->slot;
         b->v.type = "bool";
         b->payload = (int8_t)i;
         b->slot = &b->payload;
@@ -2188,32 +2408,33 @@ void* resid_box_bool(int8_t v) {
     return r;
 }
 int8_t resid_unbox_bool(void* p) {
-    ResidVal* r = (ResidVal*)p;
-    return *(int8_t*)r->slots[0];
+    return *(const int8_t*)((const char*)p + SCALAR_PAYLOAD_OFF);
 }
 
 void* resid_box_i128(__int128 v) {
     void* payload;
     ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(__int128), _Alignof(__int128), &payload);
     r->type = "i128";
-    *(__int128*)payload = v;
+    memcpy(payload, &v, sizeof v);
     return r;
 }
 __int128 resid_unbox_i128(void* p) {
-    ResidVal* r = (ResidVal*)p;
-    return *(__int128*)r->slots[0];
+    __int128 v;
+    memcpy(&v, (const char*)p + SCALAR_PAYLOAD_OFF, sizeof v);
+    return v;
 }
 
 void* resid_box_u128(unsigned __int128 v) {
     void* payload;
     ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(unsigned __int128), _Alignof(unsigned __int128), &payload);
     r->type = "u128";
-    *(unsigned __int128*)payload = v;
+    memcpy(payload, &v, sizeof v);
     return r;
 }
 unsigned __int128 resid_unbox_u128(void* p) {
-    ResidVal* r = (ResidVal*)p;
-    return *(unsigned __int128*)r->slots[0];
+    unsigned __int128 v;
+    memcpy(&v, (const char*)p + SCALAR_PAYLOAD_OFF, sizeof v);
+    return v;
 }
 
 /*
@@ -2621,7 +2842,7 @@ char* BoolToString(int8_t v) {
  */
 char* ToString(void* boxed) {
     ResidVal* val = (ResidVal*)boxed;
-    if (!val || !val->slots) {
+    if (!val || val->count <= 0) {
         return resid_box_str("null");
     }
 
@@ -2648,20 +2869,20 @@ char* ToString(void* boxed) {
     }
 
     /* Tag 1 = Some, tag 2 = None (built-in Option). */
-    if (val->tag == 1 && val->count == 1 && val->slots[0]) {
+    if (val->tag == 1 && val->count == 1 && RV_SLOTS(val)[0]) {
         /* Some(x) — unbox the inner value and format it. */
-        int64_t inner_tag = resid_box_tag(val->slots[0]);
+        int64_t inner_tag = resid_box_tag(RV_SLOTS(val)[0]);
         if (inner_tag == -1) {
-            ResidVal* sv = (ResidVal*)val->slots[0];
+            ResidVal* sv = (ResidVal*)RV_SLOTS(val)[0];
             char inner_buf[64];
             if (sv->type[0] == 'f') {
-                double dv = resid_unbox_f64(val->slots[0]);
+                double dv = resid_unbox_f64(RV_SLOTS(val)[0]);
                 snprintf(inner_buf, sizeof(inner_buf), "%.17g", dv);
             } else if (sv->type[0] == 'b') {
-                int8_t bv = resid_unbox_bool(val->slots[0]);
+                int8_t bv = resid_unbox_bool(RV_SLOTS(val)[0]);
                 snprintf(inner_buf, sizeof(inner_buf), "%s", bv ? "true" : "false");
             } else {
-                int64_t iv = resid_unbox_i64(val->slots[0]);
+                int64_t iv = resid_unbox_i64(RV_SLOTS(val)[0]);
                 snprintf(inner_buf, sizeof(inner_buf), "%lld", (long long)iv);
             }
             char* out = (char*)malloc(strlen(inner_buf) + 10);
@@ -2685,7 +2906,7 @@ char* ToString(void* boxed) {
     snprintf(buf, buf_size, "%s(", val->type);
     for (int64_t i = 0; i < val->count; i++) {
         if (i > 0) strcat(buf, ", ");
-        void* slot = val->slots[i];
+        void* slot = RV_SLOTS(val)[i];
         if (!slot) {
             strcat(buf, "null");
             continue;
@@ -3036,6 +3257,22 @@ int8_t resid_fs_write_bytes(const char* path, void* list_box) {
     return (written == (size_t)n && closed) ? 1 : 0;
 }
 
+/* print_bytes(List(Int)): each element's low 8 bits, as raw bytes, to
+ * stdout (the stream print writes; no NUL or UTF-8 restrictions). */
+int8_t resid_print_bytes(void* list_box) {
+    ResidList* v = (ResidList*)list_box;
+    int64_t n = v->count;
+    unsigned char buf[8192];
+    int64_t i = 0;
+    while (i < n) {
+        int64_t k = 0;
+        for (; k < (int64_t)sizeof buf && i < n; k++, i++)
+            buf[k] = (unsigned char)(resid_unbox_i64(list_at(v, i)) & 0xFF);
+        if (fwrite(buf, 1, (size_t)k, stdout) != (size_t)k) return 0;
+    }
+    return fflush(stdout) == EOF ? 0 : 1;
+}
+
 /* Read `path` as raw bytes into a List(Int) (each element 0-255), or an
  * empty list on failure/missing file — the read-side counterpart to
  * resid_fs_write_bytes. */
@@ -3093,13 +3330,14 @@ void* resid_fs_list_dir(const char* path) {
 #define FILE_HANDLE_TAG 12
 
 void* resid_fs_open(const char* path) {
-    if (!resid_path_is_safe(path)) {
-        void* slots[1] = { NULL };
-        return resid_box_new(FILE_HANDLE_TAG, 1, slots, "File");
-    }
-    FILE* f = fopen(path, "rb");
+    /* Handle boxes are released with free() (resid_handle_release,
+     * resid_fs_close), so they always come from the plain heap. */
+    FILE* f = resid_path_is_safe(path) ? fopen(path, "rb") : NULL;
     void* slots[1] = { f };
-    return resid_box_new(FILE_HANDLE_TAG, 1, slots, "File");
+    AllocSuspend sus = alloc_suspend();
+    void* h = resid_box_new(FILE_HANDLE_TAG, 1, slots, "File");
+    alloc_resume(sus);
+    return h;
 }
 
 /* Read the whole file from a File handle (rewinding first). Returns a
@@ -3109,7 +3347,7 @@ char* resid_fs_read_handle(void* b) {
     if (!b) return resid_box_str("");
     ResidVal* v = (ResidVal*)b;
     if (v->tag != FILE_HANDLE_TAG || v->count < 1) return resid_box_str("");
-    FILE* f = (FILE*)v->slots[0];
+    FILE* f = (FILE*)RV_SLOTS(v)[0];
     if (!f) return resid_box_str("");
     if (fseek(f, 0, SEEK_END) != 0) return resid_box_str("");
     long sz = ftell(f);
@@ -3127,10 +3365,9 @@ int8_t resid_fs_close(void* b) {
     if (!b) return 0;
     ResidVal* v = (ResidVal*)b;
     if (v->tag == FILE_HANDLE_TAG && v->count >= 1) {
-        FILE* f = (FILE*)v->slots[0];
+        FILE* f = (FILE*)RV_SLOTS(v)[0];
         if (f) fclose(f);
     }
-    if (v->slots && v->slots != (void**)(v + 1)) free(v->slots);
     free(v);
     return 1;
 }
@@ -3142,10 +3379,9 @@ void resid_handle_release(void* b) {
     if (!b) return;
     ResidVal* v = (ResidVal*)b;
     if (v->tag == FILE_HANDLE_TAG && v->count >= 1) {
-        FILE* f = (FILE*)v->slots[0];
+        FILE* f = (FILE*)RV_SLOTS(v)[0];
         if (f) fclose(f);
     }
-    if (v->slots && v->slots != (void**)(v + 1)) free(v->slots);
     free(v);
 }
 
@@ -5834,7 +6070,7 @@ int8_t resid_tcp_send_bin(int64_t fd, void* lst) {
     for (int64_t i = 0; i < n; i++) {
         /* scalar elements are boxed: element -> ResidVal -> slots[0] -> i64 */
         ResidVal* bx = (ResidVal*)resid_list_get(lst, i);
-        buf[i] = (char)(*(int64_t*)bx->slots[0] & 0xFF);
+        buf[i] = (char)(*(int64_t*)RV_SLOTS(bx)[0] & 0xFF);
     }
     const char* p2 = buf;
     size_t left = (size_t)n;
@@ -6059,11 +6295,11 @@ static uint64_t resid_hash(void* v) {
             return fnv1a(*(int8_t*)raw ? "t" : "f");
         }
         if (t && strcmp(t, "i128") == 0) {
-            snprintf(buf, sizeof(buf), "%lld", (long long)*(__int128*)raw);
+            snprintf(buf, sizeof(buf), "%lld", (long long)ld_i128(raw));
             return fnv1a(buf);
         }
         if (t && strcmp(t, "u128") == 0) {
-            snprintf(buf, sizeof(buf), "%llu", (unsigned long long)*(unsigned __int128*)raw);
+            snprintf(buf, sizeof(buf), "%llu", (unsigned long long)(unsigned __int128)ld_i128(raw));
             return fnv1a(buf);
         }
         return fnv1a(t ? t : "?");
@@ -6096,8 +6332,8 @@ static int resid_key_eq(void* a, void* b) {
                 if (strcmp(ta, "i64") == 0) return *(int64_t*)ra == *(int64_t*)rb;
                 if (strcmp(ta, "f64") == 0) return *(double*)ra == *(double*)rb;
                 if (strcmp(ta, "bool") == 0) return *(int8_t*)ra == *(int8_t*)rb;
-                if (strcmp(ta, "i128") == 0) return *(__int128*)ra == *(__int128*)rb;
-                if (strcmp(ta, "u128") == 0) return *(unsigned __int128*)ra == *(unsigned __int128*)rb;
+                if (strcmp(ta, "i128") == 0) return ld_i128(ra) == ld_i128(rb);
+                if (strcmp(ta, "u128") == 0) return ld_i128(ra) == ld_i128(rb);
                 return 0;
             }
             return 0;
@@ -6708,12 +6944,18 @@ static HMNode* map_root(HMTrie* m) {
     HMNode* root = NULL;
     int64_t it = 0;
     uint64_t kw, vw;
+    /* A frozen table caches the trie on itself, so it must outlive any
+     * arena or scalar scope open now: build it on the plain heap. */
+    int cache = !m->transient;
+    AllocSuspend sus;
+    if (cache) sus = alloc_suspend();
     while (mt_next(t, &it, &kw, &vw)) {
         void* k = (void*)(uintptr_t)mt_box(t->kkind, kw);
         void* v = (void*)(uintptr_t)mt_box(t->vkind, vw);
         int isnew = 0;
         root = trie_insert(root, 0, resid_hash(k), k, v, &isnew);
     }
+    if (cache) alloc_resume(sus);
     if (!m->transient) {
         HMNode* expect = NULL;
         if (!__atomic_compare_exchange_n(&m->root, &expect, root, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
