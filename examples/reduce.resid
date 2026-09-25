@@ -1,0 +1,2037 @@
+// reduce.resid — eager compile-time reduction (spec §36, "Compilation is
+// maximal authorized reduction of first-class knowledge").
+//
+// A source-to-source partial evaluator that runs after type checking and
+// before code generation, on every program. It walks every function body
+// and replaces each sub-expression whose value is known at compile time
+// with that value:
+//
+//   - literals, and locals bound to known values (known-binding
+//     propagation), with dead known bindings elided (§36 dead-code
+//     elimination);
+//   - unary / binary operators over known operands, with the exact
+//     semantics the code generator gives them (widths, wrap-free checks:
+//     an operation whose result the generator would overflow is left
+//     residual rather than folded);
+//   - `if` statements and expressions with a known condition (the other
+//     arm is dropped);
+//   - pure runtime builtins with known arguments (str_len, str_slice,
+//     IntToString, ...), evaluated by calling the very runtime function
+//     the program would call;
+//   - calls to user functions whose arguments are all known and whose body
+//     reduces completely (β-reduction), memoized, under step and depth
+//     budgets so non-terminating or very deep recursion falls back to the
+//     residual call.
+//
+// Soundness is by construction: anything the evaluator does not model —
+// an effect (println, providers), a value type it does not represent, an
+// abort, a construct it does not interpret — is simply left as it was.
+// A substituted literal always carries the same code-generator type and
+// value as the expression it replaces, so later stages see an equivalent
+// program. Line structure is preserved (removed text is replaced by the
+// same number of newlines), so runtime diagnostics keep their lines.
+//
+// Known values are (value, type) pairs of strings: Int / Int(128) as
+// decimal text, Bool as true/false, Str as the decoded string contents.
+//
+// This file is imported by examples/driver.resid and shares its lexer
+// (lex_tok, Tok), parse_type/PRes and is_known_type_cg.
+
+type RdT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; };
+type RdS = { Int steps; Int depth; Int fuel; Map(Str, Str) memo; };
+type RdE = { List(Str) ns; List(Str) vs; List(Str) ts; };
+// sx/px: a residual Str concatenation `px + <literal sx>` whose literal
+// tail may absorb further known strings (Str `+` is pure and associative).
+type RdV = { Bool k; Str v; Str ty; Str r; Bool ch; Bool bad; Bool bd; Str sx; Str px; Int pos; RdS st; };
+type RdR = { Str out; Int pos; Bool dead; Bool ok; Bool ret; Str rv; Str rty; Bool bad; RdS st; };
+type RdA = { List(Str) vs; List(Str) ts; List(Str) rs; Bool allk; Bool ch; Bool named; Bool bad; Int pos; RdS st; };
+type RdN = { Bool ok; Int v; };
+type RdP = { List(Str) pns; List(Str) pts; Bool ok; Int pos; };
+
+// Budgets. A single top-level evaluation attempt may run rd_max_steps
+// statements; nesting is capped at rd_max_depth calls (the evaluator
+// recurses natively, ~16 KiB of stack per level, on the 1 GiB stack
+// resid_run_main gives the compiler). rd_max_fuel bounds the whole
+// program.
+Int rd_max_steps() { return 200000; }
+Int rd_max_depth() { return 20000; }
+Int rd_max_fuel() { return 20000000; }
+Int rd_max_lit() { return 4096; }
+
+// ─── Small helpers ──────────────────────────────────────────────
+
+Str rd_nl_pad(Str text, Str orig) {
+    Int want = str_count(orig, "\n");
+    Int have = str_count(text, "\n");
+    if (want <= have) { return text; }
+    Int d = want - have;
+    return text + str_repeat("\n", d);
+}
+
+// Leading whitespace/comments before the token `t` that ends at t.pos.
+Str rd_lead(Str s, Int pos, Tok t) {
+    Int tl = str_len(t.text);
+    Int st = t.pos - tl;
+    return str_slice(s, pos, st);
+}
+
+Bool rd_is_open(Str t) {
+    if (t == "(") { return true; }
+    if (t == "[") { return true; }
+    if (t == "{") { return true; }
+    return false;
+}
+
+Bool rd_is_close(Str t) {
+    if (t == ")") { return true; }
+    if (t == "]") { return true; }
+    if (t == "}") { return true; }
+    return false;
+}
+
+// Position after the bracket closing a group whose opener ends at `pos`.
+Int rd_skip_group(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t.pos; }
+    if (rd_is_open(t.text)) {
+        Int d1 = depth + 1;
+        return rd_skip_group(s, t.pos, d1);
+    }
+    if (rd_is_close(t.text)) {
+        if (depth <= 1) { return t.pos; }
+        Int d2 = depth - 1;
+        return rd_skip_group(s, t.pos, d2);
+    }
+    return rd_skip_group(s, t.pos, depth);
+}
+
+// Position (before whitespace) of the `}` closing the current block.
+Int rd_skip_stmts(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return pos; }
+    if (rd_is_open(t.text)) {
+        Int d1 = depth + 1;
+        return rd_skip_stmts(s, t.pos, d1);
+    }
+    if (rd_is_close(t.text)) {
+        if (depth <= 0) { return pos; }
+        Int d2 = depth - 1;
+        return rd_skip_stmts(s, t.pos, d2);
+    }
+    return rd_skip_stmts(s, t.pos, depth);
+}
+
+// Does `name` occur as an identifier token in `text`?
+Bool rd_uses_at(Str text, Str name, Int pos) {
+    Tok t = lex_tok(text, pos);
+    if (t.kind == "eof") { return false; }
+    if (t.kind == "ident") {
+        if (t.text == name) { return true; }
+    }
+    // f-string holes are expressions inside one token: any mention counts.
+    if (t.kind == "fstring") {
+        if (str_contains(t.text, name)) { return true; }
+    }
+    return rd_uses_at(text, name, t.pos);
+}
+
+Bool rd_uses(Str text, Str name) {
+    if (!str_contains(text, name)) { return false; }
+    return rd_uses_at(text, name, 0);
+}
+
+Str rd_join(List(Str) xs, Int i, Str sep, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    Str a2 = if (i == 0) { xs[i] } else { acc + sep + xs[i] };
+    Int ni = i + 1;
+    return rd_join(xs, ni, sep, a2);
+}
+
+// ─── Values and types ───────────────────────────────────────────
+
+Str rd_norm_ty(Str t) {
+    if (t == "Int(64)") { return "Int"; }
+    if (!str_contains(t, "(")) { return t; }
+    return str_replace(t, "Int(64)", "Int");
+}
+
+Bool rd_ty_ok(Str t) {
+    Str n = rd_norm_ty(t);
+    if (rd_is_int_ty(n)) { return true; }
+    if (n == "Bool") { return true; }
+    if (n == "Str") { return true; }
+    return false;
+}
+
+// Signed integer types the evaluator carries. Values are always within
+// the 64-bit range; the type records the generator's width for them.
+Bool rd_is_int_ty(Str t) {
+    if (t == "Int") { return true; }
+    if (t == "Int(128)") { return true; }
+    if (t == "Int(256)") { return true; }
+    if (t == "Int(512)") { return true; }
+    return false;
+}
+
+Int rd_iw(Str t) {
+    if (t == "Int(128)") { return 128; }
+    if (t == "Int(256)") { return 256; }
+    if (t == "Int(512)") { return 512; }
+    return 64;
+}
+
+Str rd_ity(Int w) {
+    if (w <= 64) { return "Int"; }
+    return "Int(" + rd_itoa(w) + ")";
+}
+
+// Inner type of "Head(T)" ("" when `t` is not that constructor).
+Str rd_inner(Str t, Str head) {
+    if (!str_starts_with(t, head)) { return ""; }
+    Int h = str_len(head);
+    Int n = str_len(t);
+    Int e = n - 1;
+    return str_slice(t, h, e);
+}
+
+// Type a known value takes when it flows into a slot declared `want`
+// (binding, parameter, return). "" when the value cannot be carried.
+// Composite values are built only by the evaluator itself, so their type
+// strings are exact; an empty list / None literal adopts the slot's type.
+Str rd_coerce(Str have, Str want) {
+    Str h = rd_norm_ty(have);
+    Str w = rd_norm_ty(want);
+    if (h == "" || w == "") { return ""; }
+    if (h == w) { return w; }
+    if (rd_is_int_ty(h) && rd_is_int_ty(w)) { return w; }
+    if (h == "List(?)" && str_starts_with(w, "List(")) { return w; }
+    if (h == "Option(_)" && str_starts_with(w, "Option(")) { return w; }
+    return "";
+}
+
+// ─── Composite encoding ─────────────────────────────────────────
+// A list or struct value is its items' values, each prefixed by its
+// length: "3:abc1:x". An Option is "N" or "S" + payload.
+
+Str rd_enc_at(List(Str) items, Int i, Str sb) {
+    if (i >= items.len()) { return str_sb_finish(sb); }
+    Str it = items[i];
+    Str sb2 = str_sb_append(sb, rd_itoa(str_len(it)) + ":");
+    Str sb3 = str_sb_append(sb2, it);
+    Int k = i + 1;
+    return rd_enc_at(items, k, sb3);
+}
+
+Str rd_enc(List(Str) items) {
+    if (items.len() == 0) { return ""; }
+    return rd_enc_at(items, 0, str_sb_new());
+}
+
+List(Str) rd_dec_at(Str v, Int pos, Int n, List(Str) acc) {
+    if (pos >= n) { return acc; }
+    Int colon = str_find_char(v, 58, pos);
+    Int len = rd_atoi(str_slice(v, pos, colon));
+    Int st = colon + 1;
+    Int en = st + len;
+    List(Str) acc2 = acc.concat([str_slice(v, st, en)]);
+    return rd_dec_at(v, en, n, acc2);
+}
+
+List(Str) rd_dec(Str v) {
+    List(Str) none = [];
+    return rd_dec_at(v, 0, str_len(v), none);
+}
+
+Int rd_atoi(Str v) {
+    return str_parse_int(v);
+}
+
+Str rd_itoa(Int v) {
+    // Concatenation copies the digits to the heap; compilers built before
+    // the IntToString fix in codegen.resid return a pointer into the
+    // callee's stack frame otherwise. INT64_MIN is spelled out for the same
+    // reason (older e.itoa printed it wrongly).
+    if (v == rd_i64_min()) { return "-9223372036854775808"; }
+    return "" + IntToString(v);
+}
+
+// Built from 18-digit literals: a literal of 19+ digits is typed Int(128).
+Int rd_i64_max() {
+    Int big = 922337203685477580;
+    Int t = (Int)(big * 10);
+    return t + 7;
+}
+
+Int rd_i64_min() {
+    Int big = 922337203685477580;
+    Int t = (Int)(big * 10);
+    Int n = 0 - t;
+    return n - 8;
+}
+
+Bool rd_all_digits(Str t, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int c = str_char_at(t, i);
+    if (c < 48) { return false; }
+    if (c > 57) { return false; }
+    Int k = i + 1;
+    return rd_all_digits(t, k, n);
+}
+
+// a <= b for two digit strings of equal length.
+Bool rd_digits_le(Str a, Str b, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int ca = str_char_at(a, i);
+    Int cb = str_char_at(b, i);
+    if (ca < cb) { return true; }
+    if (ca > cb) { return false; }
+    Int k = i + 1;
+    return rd_digits_le(a, b, k, n);
+}
+
+// Decimal literal token -> known value when it fits a 64-bit value. The
+// code generator types a literal of more than 18 digits as Int(128).
+RdV rd_int_lit(Str text, Int pos, Str orig, RdS st) {
+    Int n = str_len(text);
+    Bool digits = rd_all_digits(text, 0, n);
+    if (!digits || n == 0 || n > 19) {
+        return rd_unk(orig, false, pos, st);
+    }
+    Str ty = if (n > 18) { "Int(128)" } else { "Int" };
+    if (n == 19) {
+        if (!rd_digits_le(text, "9223372036854775807", 0, 19)) {
+            return rd_unk(orig, false, pos, st);
+        }
+    }
+    Str canon = rd_itoa(rd_atoi(text));
+    return RdV {.k = true, .v = canon, .ty = ty, .r = orig, .ch = false, .bad = false, .bd = false, .sx = "", .px = "", .pos = pos, .st = st};
+}
+
+// Decoded contents of a plain string literal token, mirroring the code
+// generator's escape handling (\n \t \r \0 and \X -> X). ok=false when the
+// literal holds a NUL escape (not representable in a runtime Str).
+type RdSd = { Bool ok; Str v; };
+
+RdSd rd_str_dec_at(Str t, Int i, Int n, Str sb) {
+    if (i >= n) { return RdSd {.ok = true, .v = str_sb_finish(sb)}; }
+    Int c = str_char_at(t, i);
+    if (c == 92) {
+        Int k = i + 1;
+        Int e = str_char_at(t, k);
+        Int k2 = i + 2;
+        if (e == 48) { return RdSd {.ok = false, .v = ""}; }
+        Int d = if (e == 110) { 10 } else if (e == 116) { 9 } else if (e == 114) { 13 } else { e };
+        Str sb2 = str_sb_append_cp(sb, d);
+        return rd_str_dec_at(t, k2, n, sb2);
+    }
+    Str sb3 = str_sb_append_cp(sb, c);
+    Int k3 = i + 1;
+    return rd_str_dec_at(t, k3, n, sb3);
+}
+
+RdSd rd_str_dec(Str tok) {
+    Int n = str_len(tok);
+    Int e = n - 1;
+    return rd_str_dec_at(tok, 1, e, str_sb_new());
+}
+
+// Source text for a Str value, or "" when it cannot be written as a plain
+// literal (control characters other than \n \t \r).
+Str rd_str_enc_at(Str v, Int i, Int n, Str sb) {
+    if (i >= n) { return str_sb_finish(sb); }
+    Int c = str_char_at(v, i);
+    Int k = i + 1;
+    if (c == 34) { return rd_str_enc_at(v, k, n, str_sb_append(sb, "\\\"")); }
+    if (c == 92) { return rd_str_enc_at(v, k, n, str_sb_append(sb, "\\\\")); }
+    if (c == 10) { return rd_str_enc_at(v, k, n, str_sb_append(sb, "\\n")); }
+    if (c == 9) { return rd_str_enc_at(v, k, n, str_sb_append(sb, "\\t")); }
+    if (c == 13) { return rd_str_enc_at(v, k, n, str_sb_append(sb, "\\r")); }
+    if (c < 32 || c == 127) { return ""; }
+    return rd_str_enc_at(v, k, n, str_sb_append_cp(sb, c));
+}
+
+Bool rd_str_renderable_at(Str v, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int c = str_char_at(v, i);
+    if (c < 32) {
+        if (c != 10 && c != 9 && c != 13) { return false; }
+    }
+    if (c == 127) { return false; }
+    Int k = i + 1;
+    return rd_str_renderable_at(v, k, n);
+}
+
+Str rd_render_int(Str v) {
+    Int n = str_len(v);
+    Bool neg = str_starts_with(v, "-");
+    Int nm1 = n - 1;
+    Int digits = if (neg) { nm1 } else { n };
+    if (v == "-9223372036854775808") { return "((Int)(-9223372036854775807 - 1))"; }
+    if (digits > 18) {
+        if (neg) { return "((Int)(" + v + "))"; }
+        return "((Int)" + v + ")";
+    }
+    if (neg) { return "(" + v + ")"; }
+    return v;
+}
+
+// Source text of a known value with exactly its code-generator type, or ""
+// when it has no literal form.
+Str rd_render(Str v, Str ty) {
+    Str t = rd_norm_ty(ty);
+    if (t == "Bool") { return v; }
+    if (t == "Int") { return rd_render_int(v); }
+    if (rd_is_int_ty(t)) { return "((" + t + ")" + rd_render_int(v) + ")"; }
+    if (t == "Str") {
+        Int n = str_len(v);
+        if (n > rd_max_lit()) { return ""; }
+        if (!rd_str_renderable_at(v, 0, n)) { return ""; }
+        return "\"" + rd_str_enc_at(v, 0, n, str_sb_new()) + "\"";
+    }
+    Str et = rd_inner(t, "List(");
+    if (et != "" && et != "?") {
+        // Non-empty lists only: `[]` is typed List(Unknown) by the generator.
+        if (v == "") { return ""; }
+        if (str_len(v) > rd_max_lit()) { return ""; }
+        List(Str) items = rd_dec(v);
+        Str body = rd_render_items(items, et, 0, "");
+        if (body == "") { return ""; }
+        return "[" + body + "]";
+    }
+    Str ot = rd_inner(t, "Option(");
+    if (ot != "" && ot != "_") {
+        if (!str_starts_with(v, "S")) { return ""; }
+        Int vl = str_len(v);
+        Str inner = rd_render(str_slice(v, 1, vl), ot);
+        if (inner == "") { return ""; }
+        return "Some(" + inner + ")";
+    }
+    return "";
+}
+
+Str rd_render_items(List(Str) items, Str et, Int i, Str acc) {
+    if (i >= items.len()) { return acc; }
+    Str r = rd_render(items[i], et);
+    if (r == "") { return ""; }
+    Str sep = if (i == 0) { "" } else { ", " };
+    Int k = i + 1;
+    return rd_render_items(items, et, k, acc + sep + r);
+}
+
+// ─── Result constructors ────────────────────────────────────────
+
+RdV rd_unk(Str r, Bool ch, Int pos, RdS st) {
+    return RdV {.k = false, .v = "", .ty = "", .r = r, .ch = ch, .bad = false, .bd = false, .sx = "", .px = "", .pos = pos, .st = st};
+}
+
+RdV rd_badv(Int pos, RdS st) {
+    return RdV {.k = false, .v = "", .ty = "", .r = "", .ch = false, .bad = true, .bd = false, .sx = "", .px = "", .pos = pos, .st = st};
+}
+
+// A freshly computed known value replacing `orig` (the residual text it
+// came from). Falls back to the residual text when the value has no
+// literal form — it is still known to the evaluator.
+RdV rd_folded(Str v, Str ty, Str orig, Bool och, Int pos, RdS st) {
+    Str lit = rd_render(v, ty);
+    if (lit == "") {
+        return RdV {.k = true, .v = v, .ty = rd_norm_ty(ty), .r = orig, .ch = och, .bad = false, .bd = false, .sx = "", .px = "", .pos = pos, .st = st};
+    }
+    return RdV {.k = true, .v = v, .ty = rd_norm_ty(ty), .r = lit, .ch = true, .bad = false, .bd = false, .sx = "", .px = "", .pos = pos, .st = st};
+}
+
+RdV rd_with_st(RdV x, RdS st) {
+    return RdV {.k = x.k, .v = x.v, .ty = x.ty, .r = x.r, .ch = x.ch, .bad = x.bad, .bd = x.bd, .sx = "", .px = "", .pos = x.pos, .st = st};
+}
+
+RdV rd_with_pos(RdV x, Int pos, Str r, Bool ch) {
+    return RdV {.k = x.k, .v = x.v, .ty = x.ty, .r = r, .ch = ch, .bad = x.bad, .bd = x.bd, .sx = "", .px = "", .pos = pos, .st = x.st};
+}
+
+RdR rd_rbad(Int pos, RdS st) {
+    return RdR {.out = "", .pos = pos, .dead = false, .ok = false, .ret = false, .rv = "", .rty = "", .bad = true, .st = st};
+}
+
+// ─── Environment ────────────────────────────────────────────────
+
+RdE rd_env_empty() {
+    return RdE {.ns = [], .vs = [], .ts = []};
+}
+
+RdE rd_env_add(RdE e, Str name, Str v, Str ty) {
+    List(Str) n1 = e.ns;
+    List(Str) v1 = e.vs;
+    List(Str) t1 = e.ts;
+    return RdE {.ns = n1.concat([name]), .vs = v1.concat([v]), .ts = t1.concat([ty])};
+}
+
+Int rd_env_find(RdE e, Str name, Int i) {
+    if (i < 0) { return -1; }
+    List(Str) ns = e.ns;
+    if (ns[i] == name) { return i; }
+    Int k = i - 1;
+    return rd_env_find(e, name, k);
+}
+
+Int rd_env_idx(RdE e, Str name) {
+    Int n = e.ns.len();
+    Int last = n - 1;
+    return rd_env_find(e, name, last);
+}
+
+// ─── Integer arithmetic with the code generator's semantics ─────
+
+RdN rd_n(Bool ok, Int v) {
+    return RdN {.ok = ok, .v = v};
+}
+
+RdN rd_add(Int a, Int b) {
+    if (b > 0) {
+        Int lim = rd_i64_max() - b;
+        if (a > lim) { return rd_n(false, 0); }
+    }
+    if (b < 0) {
+        Int lim2 = rd_i64_min() - b;
+        if (a < lim2) { return rd_n(false, 0); }
+    }
+    return rd_n(true, a + b);
+}
+
+RdN rd_sub(Int a, Int b) {
+    if (b < 0) {
+        Int lim = rd_i64_max() + b;
+        if (a > lim) { return rd_n(false, 0); }
+    }
+    if (b > 0) {
+        Int lim2 = rd_i64_min() + b;
+        if (a < lim2) { return rd_n(false, 0); }
+    }
+    return rd_n(true, a - b);
+}
+
+RdN rd_mul(Int a, Int b) {
+    Int(128) p = a * b;
+    Int(128) hi = (Int(128))rd_i64_max();
+    Int(128) lo = (Int(128))rd_i64_min();
+    if (p > hi) { return rd_n(false, 0); }
+    if (p < lo) { return rd_n(false, 0); }
+    return rd_n(true, (Int)p);
+}
+
+RdN rd_div(Int a, Int b, Bool rem) {
+    if (b == 0) { return rd_n(false, 0); }
+    if (b == -1) {
+        if (a == rd_i64_min()) { return rd_n(false, 0); }
+    }
+    if (rem) { return rd_n(true, a % b); }
+    return rd_n(true, a / b);
+}
+
+Bool rd_shift_ok(Int b) {
+    if (b < 0) { return false; }
+    if (b > 63) { return false; }
+    return true;
+}
+
+// `wsum` is the sum of the operand widths (the multiplication rule).
+RdV rd_fold_int(Str op, Int a, Int b, Int wsum, Str resty, Str orig, Int pos, RdS st) {
+    Bool wide = resty != "Int";
+    if (op == "+") {
+        RdN x = rd_add(a, b);
+        if (!x.ok) { return rd_unk(orig, true, pos, st); }
+        return rd_folded(rd_itoa(x.v), resty, orig, true, pos, st);
+    }
+    if (op == "-") {
+        RdN x2 = rd_sub(a, b);
+        if (!x2.ok) { return rd_unk(orig, true, pos, st); }
+        return rd_folded(rd_itoa(x2.v), resty, orig, true, pos, st);
+    }
+    if (op == "*") {
+        // The product is typed with the operand widths' sum rounded up the
+        // ladder (spec §6.1): Int(64) * Int(64) -> Int(128), and so on.
+        RdN x3 = rd_mul(a, b);
+        if (!x3.ok) { return rd_unk(orig, true, pos, st); }
+        Int pw = if (wsum <= 128) { 128 } else if (wsum <= 256) { 256 } else { 512 };
+        return rd_folded(rd_itoa(x3.v), rd_ity(pw), orig, true, pos, st);
+    }
+    if (op == "/" || op == "%") {
+        RdN x4 = rd_div(a, b, op == "%");
+        if (!x4.ok) { return rd_unk(orig, true, pos, st); }
+        return rd_folded(rd_itoa(x4.v), resty, orig, true, pos, st);
+    }
+    if (op == "<<") {
+        if (wide || !rd_shift_ok(b)) { return rd_unk(orig, true, pos, st); }
+        return rd_folded(rd_itoa(a << b), resty, orig, true, pos, st);
+    }
+    if (op == ">>") {
+        // The generator emits a logical shift; over 128 bits that only
+        // matches the 64-bit result for non-negative values.
+        if (!rd_shift_ok(b)) { return rd_unk(orig, true, pos, st); }
+        if (wide && a < 0) { return rd_unk(orig, true, pos, st); }
+        return rd_folded(rd_itoa(a >> b), resty, orig, true, pos, st);
+    }
+    if (op == "&") { return rd_folded(rd_itoa(a & b), resty, orig, true, pos, st); }
+    if (op == "|") { return rd_folded(rd_itoa(a | b), resty, orig, true, pos, st); }
+    if (op == "^") { return rd_folded(rd_itoa(a ^ b), resty, orig, true, pos, st); }
+    if (op == "<") { return rd_folded(rd_bool(a < b), "Bool", orig, true, pos, st); }
+    if (op == "<=") { return rd_folded(rd_bool(a <= b), "Bool", orig, true, pos, st); }
+    if (op == ">") { return rd_folded(rd_bool(a > b), "Bool", orig, true, pos, st); }
+    if (op == ">=") { return rd_folded(rd_bool(a >= b), "Bool", orig, true, pos, st); }
+    if (op == "==") { return rd_folded(rd_bool(a == b), "Bool", orig, true, pos, st); }
+    if (op == "!=") { return rd_folded(rd_bool(a != b), "Bool", orig, true, pos, st); }
+    return rd_unk(orig, true, pos, st);
+}
+
+Str rd_bool(Bool b) {
+    if (b) { return "true"; }
+    return "false";
+}
+
+RdV rd_fold(Str op, RdV l, RdV r, Str orig, Int pos, RdS st) {
+    Str lt = rd_norm_ty(l.ty);
+    Str rt = rd_norm_ty(r.ty);
+    if (lt == "Str" && rt == "Str") {
+        if (op == "+") {
+            Int total = str_len(l.v) + str_len(r.v);
+            if (total > 1000000) { return rd_unk(orig, true, pos, st); }
+            return rd_folded(l.v + r.v, "Str", orig, true, pos, st);
+        }
+        if (op == "==") { return rd_folded(rd_bool(l.v == r.v), "Bool", orig, true, pos, st); }
+        if (op == "!=") { return rd_folded(rd_bool(l.v != r.v), "Bool", orig, true, pos, st); }
+        return rd_unk(orig, true, pos, st);
+    }
+    if (lt == "Bool" && rt == "Bool") {
+        Bool a = l.v == "true";
+        Bool b = r.v == "true";
+        if (op == "&&" || op == "&") { return rd_folded(rd_bool(a && b), "Bool", orig, true, pos, st); }
+        if (op == "||" || op == "|") { return rd_folded(rd_bool(a || b), "Bool", orig, true, pos, st); }
+        if (op == "^" || op == "!=") { return rd_folded(rd_bool(a != b), "Bool", orig, true, pos, st); }
+        if (op == "==") { return rd_folded(rd_bool(a == b), "Bool", orig, true, pos, st); }
+        return rd_unk(orig, true, pos, st);
+    }
+    if (rd_is_int_ty(lt) && rd_is_int_ty(rt)) {
+        Int lw = rd_iw(lt);
+        Int rw = rd_iw(rt);
+        Int wmax = if (lw > rw) { lw } else { rw };
+        return rd_fold_int(op, rd_atoi(l.v), rd_atoi(r.v), lw + rw, rd_ity(wmax), orig, pos, st);
+    }
+    return rd_unk(orig, true, pos, st);
+}
+
+Int rd_prec(Str op) {
+    if (op == "*") { return 7; }
+    if (op == "/") { return 7; }
+    if (op == "%") { return 7; }
+    if (op == "+") { return 6; }
+    if (op == "-") { return 6; }
+    if (op == "<<") { return 5; }
+    if (op == ">>") { return 5; }
+    if (op == "<") { return 4; }
+    if (op == "<=") { return 4; }
+    if (op == ">") { return 4; }
+    if (op == ">=") { return 4; }
+    if (op == "==") { return 3; }
+    if (op == "!=") { return 3; }
+    if (op == "&") { return 2; }
+    if (op == "|") { return 2; }
+    if (op == "^") { return 2; }
+    if (op == "&&") { return 1; }
+    if (op == "||") { return 1; }
+    return 0;
+}
+
+// Binary operator node. `&&`/`||` evaluate both operands in the generated
+// code (no short-circuit), so only the identity cases are simplified when
+// one side alone is known.
+RdV rd_apply(Str s, Str op, Int start, RdV l, RdV r) {
+    Str orig0 = str_slice(s, start, r.pos);
+    Bool och = l.ch || r.ch;
+    Str rebuilt = if (och) { "(" + l.r + " " + op + " " + r.r + ")" } else { orig0 };
+    if (l.k && r.k) {
+        return rd_fold(op, l, r, rebuilt, r.pos, r.st);
+    }
+    if (op == "+" && !l.k && r.k && rd_norm_ty(r.ty) == "Str") {
+        // `x + "a"` (x must be a Str): remember the literal tail so a
+        // following `+ "b"` merges into `x + "ab"`.
+        Bool merge = l.sx != "" || l.px != "";
+        Str tail = if (merge) { l.sx + r.v } else { r.v };
+        Str head = if (merge) { l.px } else { l.r };
+        Str lit = rd_render(tail, "Str");
+        if (lit != "" && !l.bad) {
+            Str rt = if (merge) { "(" + head + " + " + lit + ")" } else { rebuilt };
+            Bool mch = merge || och;
+            return RdV {.k = false, .v = "", .ty = "", .r = rt, .ch = mch, .bad = false, .bd = false, .sx = tail, .px = head, .pos = r.pos, .st = r.st};
+        }
+    }
+    if (op == "&&") {
+        if (l.k && l.v == "true") { return rd_with_pos(r, r.pos, "(" + r.r + ")", true); }
+        if (r.k && r.v == "true") { return rd_with_st(rd_with_pos(l, r.pos, "(" + l.r + ")", true), r.st); }
+    }
+    if (op == "||") {
+        if (l.k && l.v == "false") { return rd_with_pos(r, r.pos, "(" + r.r + ")", true); }
+        if (r.k && r.v == "false") { return rd_with_st(rd_with_pos(l, r.pos, "(" + l.r + ")", true), r.st); }
+    }
+    RdV u = rd_unk(rebuilt, och, r.pos, r.st);
+    return RdV {.k = false, .v = "", .ty = "", .r = u.r, .ch = u.ch, .bad = l.bad || r.bad, .bd = false, .sx = "", .px = "", .pos = u.pos, .st = u.st};
+}
+
+// ─── Expressions ────────────────────────────────────────────────
+
+RdV rd_expr(Str s, Int pos, RdE env, RdT ft, RdS st) {
+    RdV lhs = rd_unary(s, pos, env, ft, st);
+    if (lhs.bad) { return lhs; }
+    return rd_bin(s, pos, lhs, 1, env, ft);
+}
+
+RdV rd_bin(Str s, Int start, RdV lhs, Int minp, RdE env, RdT ft) {
+    Tok t = lex_tok(s, lhs.pos);
+    if (t.text == "?") {
+        Str rq = lhs.r + str_slice(s, lhs.pos, t.pos);
+        RdV q = rd_unk(rq, lhs.ch, t.pos, lhs.st);
+        // A known Some unwraps; a known None returns early (left residual).
+        Str qt = rd_inner(lhs.ty, "Option(");
+        if (lhs.k && qt != "" && qt != "_" && str_starts_with(lhs.v, "S")) {
+            Int ql = str_len(lhs.v);
+            RdV qv = rd_folded(str_slice(lhs.v, 1, ql), qt, rq, true, t.pos, lhs.st);
+            return rd_bin(s, start, qv, minp, env, ft);
+        }
+        return rd_bin(s, start, q, minp, env, ft);
+    }
+    if (t.text == "else") {
+        Tok ob = lex_tok(s, t.pos);
+        if (ob.text != "{") { return rd_badv(t.pos, lhs.st); }
+        // The fallback block is reduced too (it may be the value).
+        RdV fb = rd_eblock(s, ob.pos, env, ft, lhs.st);
+        if (fb.bad) { return fb; }
+        Tok cb = lex_tok(s, fb.pos);
+        if (cb.text != "}") { return rd_badv(cb.pos, fb.st); }
+        Int endp = cb.pos;
+        Bool ech = lhs.ch || fb.ch;
+        Str re = if (ech) { lhs.r + str_slice(s, lhs.pos, ob.pos) + fb.r + str_slice(s, fb.pos, endp) } else { lhs.r + str_slice(s, lhs.pos, endp) };
+        RdV q2 = rd_unk(re, ech, endp, fb.st);
+        Str et = rd_inner(lhs.ty, "Option(");
+        if (lhs.k && et != "") {
+            if (str_starts_with(lhs.v, "S") && et != "_") {
+                Int el = str_len(lhs.v);
+                RdV sv = rd_folded(str_slice(lhs.v, 1, el), et, re, true, endp, fb.st);
+                return rd_bin(s, start, sv, minp, env, ft);
+            }
+            if (lhs.v == "N" && fb.k && !fb.bd) {
+                RdV nv = rd_folded(fb.v, fb.ty, re, true, endp, fb.st);
+                return rd_bin(s, start, nv, minp, env, ft);
+            }
+        }
+        return rd_bin(s, start, q2, minp, env, ft);
+    }
+    Int p = rd_prec(t.text);
+    if (p == 0 || p < minp) { return lhs; }
+    RdV rhs = rd_unary(s, t.pos, env, ft, lhs.st);
+    if (rhs.bad) { return rhs; }
+    Int next = p + 1;
+    RdV more = rd_bin(s, t.pos, rhs, next, env, ft);
+    if (more.bad) { return more; }
+    RdV applied = rd_apply(s, t.text, start, lhs, more);
+    return rd_bin(s, start, applied, minp, env, ft);
+}
+
+RdV rd_unary(Str s, Int pos, RdE env, RdT ft, RdS st) {
+    Tok t0 = lex_tok(s, pos);
+    if (t0.text == "(") {
+        PRes pt = parse_type(s, t0.pos);
+        if (pt.err == "") {
+            Tok close = lex_tok(s, pt.pos);
+            if (close.text == ")" && is_known_type_cg(pt.ty)) {
+                RdV inner = rd_unary(s, close.pos, env, ft, st);
+                if (inner.bad) { return inner; }
+                return rd_cast(s, pos, close.pos, pt.ty, inner);
+            }
+        }
+    }
+    RdV b = rd_primary(s, pos, env, ft, st);
+    if (b.bad) { return b; }
+    return rd_postfix(s, pos, b, env, ft);
+}
+
+RdV rd_cast(Str s, Int pos, Int cpos, Str ty, RdV inner) {
+    Str head = str_slice(s, pos, cpos);
+    Str orig = if (inner.ch) { head + inner.r } else { str_slice(s, pos, inner.pos) };
+    Str want = rd_norm_ty(ty);
+    if (inner.k && rd_is_int_ty(rd_norm_ty(inner.ty)) && rd_is_int_ty(want)) {
+        return rd_folded(inner.v, want, orig, true, inner.pos, inner.st);
+    }
+    return rd_unk(orig, inner.ch, inner.pos, inner.st);
+}
+
+Bool rd_same_tys(List(Str) ts, Str t0, Int i) {
+    if (i >= ts.len()) { return true; }
+    if (rd_norm_ty(ts[i]) != t0) { return false; }
+    Int k = i + 1;
+    return rd_same_tys(ts, t0, k);
+}
+
+Int rd_struct_idx(RdT ft, Str name, Int i) {
+    List(Str) sts = ft.sts;
+    if (i >= sts.len()) { return -1; }
+    if (sts[i] == name) { return i; }
+    Int k = i + 1;
+    return rd_struct_idx(ft, name, k);
+}
+
+Bool rd_is_struct(RdT ft, Str name) {
+    List(Str) sts = ft.sts;
+    return list_contains_str(sts, name);
+}
+
+RdV rd_primary(Str s, Int pos, RdE env, RdT ft, RdS st) {
+    Tok t = lex_tok(s, pos);
+    Str orig = str_slice(s, pos, t.pos);
+    if (t.kind == "eof") { return rd_badv(t.pos, st); }
+    if (t.kind == "int") { return rd_int_lit(t.text, t.pos, orig, st); }
+    if (t.kind == "str") {
+        RdSd d = rd_str_dec(t.text);
+        if (!d.ok) { return rd_unk(orig, false, t.pos, st); }
+        return RdV {.k = true, .v = d.v, .ty = "Str", .r = orig, .ch = false, .bad = false, .bd = false, .sx = "", .px = "", .pos = t.pos, .st = st};
+    }
+    if (t.text == "true" || t.text == "false") {
+        return RdV {.k = true, .v = t.text, .ty = "Bool", .r = orig, .ch = false, .bad = false, .bd = false, .sx = "", .px = "", .pos = t.pos, .st = st};
+    }
+    if (t.kind == "fstring") { return rd_fstring(s, pos, t, env, ft, st); }
+    if (t.kind == "float" || t.kind == "raw" || t.kind == "bytes" || t.kind == "char") {
+        return rd_unk(orig, false, t.pos, st);
+    }
+    if (t.text == "if") { return rd_ifexpr(s, pos, env, ft, st); }
+    if (t.text == "match") {
+        RdV sc = rd_expr(s, t.pos, env, ft, st);
+        if (sc.bad) { return sc; }
+        Tok mb = lex_tok(s, sc.pos);
+        if (mb.text != "{") { return rd_badv(mb.pos, sc.st); }
+        Int mend = rd_skip_group(s, mb.pos, 1);
+        Str mo = str_slice(s, pos, mend);
+        if (sc.k && str_starts_with(sc.ty, "Option(")) {
+            return rd_match_opt(s, mb.pos, mend, sc, mo, env, ft);
+        }
+        return rd_unk(mo, false, mend, sc.st);
+    }
+    if (t.text == "lambda") {
+        Tok lp = lex_tok(s, t.pos);
+        if (lp.text != "(") { return rd_badv(lp.pos, st); }
+        Int pend = rd_skip_group(s, lp.pos, 1);
+        Tok lb = lex_tok(s, pend);
+        if (lb.text != "{") { return rd_badv(lb.pos, st); }
+        Int lend = rd_skip_group(s, lb.pos, 1);
+        return rd_unk(str_slice(s, pos, lend), false, lend, st);
+    }
+    if (t.text == "(") {
+        RdV e = rd_expr(s, t.pos, env, ft, st);
+        if (e.bad) { return e; }
+        Tok close = lex_tok(s, e.pos);
+        if (close.text != ")") { return rd_badv(close.pos, e.st); }
+        Str po = str_slice(s, pos, close.pos);
+        if (!e.ch) { return rd_with_pos(e, close.pos, po, false); }
+        if (e.k) { return rd_with_pos(e, close.pos, e.r, true); }
+        return rd_with_pos(e, close.pos, rd_lead(s, pos, t) + "(" + e.r + ")", true);
+    }
+    if (t.text == "[") {
+        Tok nx = lex_tok(s, t.pos);
+        if (nx.text == "]") {
+            return RdV {.k = true, .v = "", .ty = "List(?)", .r = str_slice(s, pos, nx.pos), .ch = false, .bad = false, .bd = false, .sx = "", .px = "", .pos = nx.pos, .st = st};
+        }
+        RdA el = rd_args(s, t.pos, "]", env, ft, st, [], [], [], true, false, false);
+        if (el.bad) { return rd_badv(el.pos, el.st); }
+        Str lo = str_slice(s, pos, el.pos);
+        Str lr = if (el.ch) { rd_lead(s, pos, t) + "[" + rd_join(el.rs, 0, ", ", "") + "]" } else { lo };
+        if (el.allk && !el.named) {
+            List(Str) ets = el.ts;
+            Str et0 = rd_norm_ty(ets[0]);
+            if (rd_same_tys(ets, et0, 1)) {
+                RdV lv = rd_folded(rd_enc(el.vs), "List(" + et0 + ")", lr, el.ch, el.pos, el.st);
+                // An unchanged literal list keeps its own text.
+                if (!el.ch) { return rd_with_pos(lv, el.pos, lo, false); }
+                return lv;
+            }
+        }
+        return rd_unk(lr, el.ch, el.pos, el.st);
+    }
+    if (t.text == "{") {
+        Int bend = rd_skip_group(s, t.pos, 1);
+        return rd_unk(str_slice(s, pos, bend), false, bend, st);
+    }
+    if (t.text == "!") {
+        RdV e2 = rd_unary(s, t.pos, env, ft, st);
+        if (e2.bad) { return e2; }
+        Str no = str_slice(s, pos, e2.pos);
+        Str nr = if (e2.ch) { rd_lead(s, pos, t) + "!" + e2.r } else { no };
+        if (e2.k && e2.ty == "Bool") {
+            Str nv = if (e2.v == "true") { "false" } else { "true" };
+            return rd_folded(nv, "Bool", nr, e2.ch, e2.pos, e2.st);
+        }
+        return rd_unk(nr, e2.ch, e2.pos, e2.st);
+    }
+    if (t.text == "-") {
+        RdV e3 = rd_unary(s, t.pos, env, ft, st);
+        if (e3.bad) { return e3; }
+        Str mo = str_slice(s, pos, e3.pos);
+        Str mr = if (e3.ch) { rd_lead(s, pos, t) + "-" + e3.r } else { mo };
+        if (e3.k && rd_is_int_ty(e3.ty)) {
+            Int iv = rd_atoi(e3.v);
+            if (iv == rd_i64_min()) { return rd_unk(mr, e3.ch, e3.pos, e3.st); }
+            Int neg = 0 - iv;
+            if (!e3.ch) {
+                // A negated literal is already a literal: keep its text.
+                return RdV {.k = true, .v = rd_itoa(neg), .ty = e3.ty, .r = mo, .ch = false, .bad = false, .bd = false, .sx = "", .px = "", .pos = e3.pos, .st = e3.st};
+            }
+            return rd_folded(rd_itoa(neg), e3.ty, mr, true, e3.pos, e3.st);
+        }
+        return rd_unk(mr, e3.ch, e3.pos, e3.st);
+    }
+    if (t.kind == "ident") { return rd_ident(s, pos, t, orig, env, ft, st); }
+    return rd_badv(t.pos, st);
+}
+
+// f"text {expr} text": holes are expressions parsed in place. Known holes
+// of Str / integer type are formatted exactly as the generated code would
+// (decimal for integers); a fully known f-string is a Str literal, and a
+// partly known one gets its known holes inlined as text.
+type RdF = { Bool allk; Bool ch; Bool bad; Str val; Str src; Int pos; RdS st; };
+
+RdF rd_fst_scan(Str s, Int i, Int end, RdE env, RdT ft, RdF acc) {
+    if (i >= end) { return acc; }
+    Int c = str_char_at(s, i);
+    if (c == 123) {
+        Int ip = i + 1;
+        RdV v = rd_expr(s, ip, env, ft, acc.st);
+        if (v.bad) { return RdF {.allk = false, .ch = acc.ch, .bad = true, .val = acc.val, .src = acc.src, .pos = v.pos, .st = v.st}; }
+        Tok cb = lex_tok(s, v.pos);
+        if (cb.text != "}") { return RdF {.allk = false, .ch = acc.ch, .bad = true, .val = acc.val, .src = acc.src, .pos = cb.pos, .st = v.st}; }
+        Str hole = str_slice(s, i, cb.pos);
+        Str txt = if (v.k) { rd_fst_text(v) } else { "" };
+        Bool known = v.k && txt != "" && rd_fst_inlinable(txt);
+        Bool hk = v.k && (txt != "" || rd_norm_ty(v.ty) == "Str");
+        Str piece = if (known) { rd_fst_escape(txt) } else if (v.ch) { "{" + v.r + "}" } else { hole };
+        Bool pch = known || v.ch;
+        RdF acc2 = RdF {.allk = acc.allk && hk, .ch = acc.ch || pch, .bad = false, .val = acc.val + txt, .src = acc.src + piece, .pos = cb.pos, .st = v.st};
+        return rd_fst_scan(s, cb.pos, end, env, ft, acc2);
+    }
+    Int k = i + 1;
+    if (c == 92) {
+        Int e = str_char_at(s, k);
+        Int k2 = k + 1;
+        Int d = if (e == 110) { 10 } else if (e == 116) { 9 } else if (e == 114) { 13 } else { e };
+        Bool nul = e == 48;
+        RdF acc3 = RdF {.allk = acc.allk && !nul, .ch = acc.ch, .bad = false, .val = acc.val + str_from_code(d), .src = acc.src + str_slice(s, i, k2), .pos = k2, .st = acc.st};
+        return rd_fst_scan(s, k2, end, env, ft, acc3);
+    }
+    RdF acc4 = RdF {.allk = acc.allk, .ch = acc.ch, .bad = false, .val = acc.val + str_from_code(c), .src = acc.src + str_from_code(c), .pos = k, .st = acc.st};
+    return rd_fst_scan(s, k, end, env, ft, acc4);
+}
+
+// Text a known hole contributes ("" when its type is not interpolable).
+Str rd_fst_text(RdV v) {
+    Str t = rd_norm_ty(v.ty);
+    if (t == "Str") { return v.v; }
+    if (rd_is_int_ty(t)) { return v.v; }
+    return "";
+}
+
+// Literal f-string text cannot spell `{` or `}` (they open holes).
+Bool rd_fst_inlinable(Str txt) {
+    if (str_contains(txt, "{")) { return false; }
+    if (str_contains(txt, "}")) { return false; }
+    Int n = str_len(txt);
+    return rd_str_renderable_at(txt, 0, n);
+}
+
+Str rd_fst_escape(Str txt) {
+    return rd_str_enc_at(txt, 0, str_len(txt), str_sb_new());
+}
+
+RdV rd_fstring(Str s, Int pos, Tok t, RdE env, RdT ft, RdS st) {
+    Str orig = str_slice(s, pos, t.pos);
+    Int tl = str_len(t.text);
+    Int start = t.pos - tl;
+    Int b0 = start + 2;
+    Int end = t.pos - 1;
+    RdF f = rd_fst_scan(s, b0, end, env, ft, RdF {.allk = true, .ch = false, .bad = false, .val = "", .src = "", .pos = b0, .st = st});
+    if (f.bad) { return rd_unk(orig, false, t.pos, f.st); }
+    Str rebuilt = if (f.ch) { rd_lead(s, pos, t) + "f\"" + f.src + "\"" } else { orig };
+    if (f.allk) { return rd_folded(f.val, "Str", rebuilt, f.ch, t.pos, f.st); }
+    return rd_unk(rebuilt, f.ch, t.pos, f.st);
+}
+
+RdV rd_ident(Str s, Int pos, Tok t, Str orig, RdE env, RdT ft, RdS st) {
+    Tok t2 = lex_tok(s, t.pos);
+    Int ei = rd_env_idx(env, t.text);
+    if (t2.text == "{") {
+        if (ei < 0 && rd_is_struct(ft, t.text)) {
+            return rd_struct_lit(s, pos, t, t2, env, ft, st);
+        }
+    }
+    if (t.text == "None" && t2.text != "(" && ei < 0) {
+        return RdV {.k = true, .v = "N", .ty = "Option(_)", .r = orig, .ch = false, .bad = false, .bd = false, .sx = "", .px = "", .pos = t.pos, .st = st};
+    }
+    if (t2.text == "(") {
+        RdA a = rd_args(s, t2.pos, ")", env, ft, st, [], [], [], true, false, false);
+        if (a.bad) { return rd_badv(a.pos, a.st); }
+        Str co = str_slice(s, pos, a.pos);
+        Str cr = if (a.ch) { rd_lead(s, pos, t) + t.text + "(" + rd_join(a.rs, 0, ", ", "") + ")" } else { co };
+        if (ei >= 0) { return rd_unk(cr, a.ch, a.pos, a.st); }
+        if (!a.allk || a.named) { return rd_unk(cr, a.ch, a.pos, a.st); }
+        if (t.text == "Some") {
+            List(Str) sts0 = a.ts;
+            List(Str) svs = a.vs;
+            if (sts0.len() != 1) { return rd_unk(cr, a.ch, a.pos, a.st); }
+            RdV sv = rd_folded("S" + svs[0], "Option(" + rd_norm_ty(sts0[0]) + ")", cr, a.ch, a.pos, a.st);
+            if (!a.ch) { return rd_with_pos(sv, a.pos, co, false); }
+            return sv;
+        }
+        RdV bv = rd_builtin(t.text, a, cr, a.pos, a.st);
+        if (bv.k) { return bv; }
+        Int fi = ft.fidx.get(t.text) else { -1 };
+        if (fi < 0) { return rd_unk(cr, a.ch, a.pos, a.st); }
+        return rd_call_user(s, fi, a, cr, ft);
+    }
+    if (ei >= 0) {
+        List(Str) ts = env.ts;
+        List(Str) vs = env.vs;
+        Str ety = ts[ei];
+        if (ety != "") { return rd_folded(vs[ei], ety, orig, false, t.pos, st); }
+    }
+    return rd_unk(orig, false, t.pos, st);
+}
+
+// `match` over a known Option: `{ Some(x) => e1, None => e2 }` in either
+// order. The selected arm is reduced with its binding; the result is known
+// when that arm is. Otherwise the match is left as written.
+RdV rd_match_opt(Str s, Int pos, Int mend, RdV sc, Str mo, RdE env, RdT ft) {
+    RdV none = rd_unk(mo, false, mend, sc.st);
+    Bool issome = str_starts_with(sc.v, "S");
+    Str et = rd_inner(sc.ty, "Option(");
+    Int vl = str_len(sc.v);
+    Str payload = str_slice(sc.v, 1, vl);
+    RdV a1 = rd_match_arm(s, pos, issome, payload, et, env, ft, sc.st);
+    if (a1.bad) { return none; }
+    if (a1.k) { return rd_folded(a1.v, a1.ty, mo, true, mend, a1.st); }
+    Tok sep = lex_tok(s, a1.pos);
+    if (sep.text != ",") { return none; }
+    RdV a2 = rd_match_arm(s, sep.pos, issome, payload, et, env, ft, a1.st);
+    if (a2.bad) { return none; }
+    if (a2.k) { return rd_folded(a2.v, a2.ty, mo, true, mend, a2.st); }
+    return none;
+}
+
+// One `Pat => expr` arm; known (with the arm's value) only when it is the
+// arm the scrutinee selects and its expression is known.
+RdV rd_match_arm(Str s, Int pos, Bool issome, Str payload, Str et, RdE env, RdT ft, RdS st) {
+    Tok p = lex_tok(s, pos);
+    if (p.text == "Some") {
+        Tok o1 = lex_tok(s, p.pos);
+        Tok nm = lex_tok(s, o1.pos);
+        Tok o2 = lex_tok(s, nm.pos);
+        Tok ar = lex_tok(s, o2.pos);
+        if (o1.text != "(" || nm.kind != "ident" || o2.text != ")" || ar.text != "=>") { return rd_badv(ar.pos, st); }
+        Bool usable = issome && et != "_";
+        RdE env2 = if (usable) { rd_env_add(env, nm.text, payload, et) } else { rd_env_add(env, nm.text, "", "") };
+        RdV body = rd_expr(s, ar.pos, env2, ft, st);
+        if (body.bad || !usable) { return rd_unk(body.r, body.ch, body.pos, body.st); }
+        return body;
+    }
+    if (p.text == "None") {
+        Tok ar2 = lex_tok(s, p.pos);
+        if (ar2.text != "=>") { return rd_badv(ar2.pos, st); }
+        RdV body2 = rd_expr(s, ar2.pos, env, ft, st);
+        if (body2.bad || issome) { return rd_unk(body2.r, body2.ch, body2.pos, body2.st); }
+        return body2;
+    }
+    return rd_badv(p.pos, st);
+}
+
+// `Name {.f = e, ...}`. Known when every field is known; the value lists
+// the fields in declaration order.
+RdV rd_struct_lit(Str s, Int pos, Tok t, Tok ob, RdE env, RdT ft, RdS st) {
+    RdA fa = rd_fields(s, ob.pos, env, ft, st, [], [], [], [], true, false);
+    if (fa.bad) { return rd_badv(fa.pos, fa.st); }
+    Str so = str_slice(s, pos, fa.pos);
+    Str sr = if (fa.ch) { rd_lead(s, pos, t) + t.text + " {" + rd_join(fa.rs, 0, ", ", "") + "}" } else { so };
+    RdV none = rd_unk(sr, fa.ch, fa.pos, fa.st);
+    if (!fa.allk) { return none; }
+    Int si = rd_struct_idx(ft, t.text, 0);
+    List(Str) sfs = ft.sfs;
+    Str decl = sfs[si];
+    if (decl == "") { return none; }
+    List(Str) dfs = str_split(decl, str_from_code(31));
+    // fa.vs holds "name\x1evalue" pairs; reorder to declaration order.
+    List(Str) vals = rd_field_order(dfs, fa.vs, fa.ts, 0, []);
+    if (vals.len() != dfs.len()) { return none; }
+    RdV kv = RdV {.k = true, .v = rd_enc(vals), .ty = t.text, .r = sr, .ch = fa.ch, .bad = false, .bd = false, .sx = "", .px = "", .pos = fa.pos, .st = fa.st};
+    return kv;
+}
+
+// Field values in declaration order; stops short (shorter list) when a
+// declared field is missing or its value's type does not fit.
+List(Str) rd_field_order(List(Str) dfs, List(Str) nvs, List(Str) nts, Int i, List(Str) acc) {
+    if (i >= dfs.len()) { return acc; }
+    Str d = dfs[i];
+    Int sep = str_find_char(d, 30, 0);
+    Str fname = str_slice(d, 0, sep);
+    Int sp1 = sep + 1;
+    Str fty = str_slice(d, sp1, str_len(d));
+    Int j = rd_find_named(nvs, fname, 0);
+    if (j < 0) { return acc; }
+    Str nv = nvs[j];
+    Int nsep = str_find_char(nv, 30, 0);
+    Int ns1 = nsep + 1;
+    Str val = str_slice(nv, ns1, str_len(nv));
+    if (rd_coerce(nts[j], fty) == "") { return acc; }
+    Int k = i + 1;
+    return rd_field_order(dfs, nvs, nts, k, acc.concat([val]));
+}
+
+Int rd_find_named(List(Str) nvs, Str name, Int i) {
+    if (i >= nvs.len()) { return -1; }
+    if (str_starts_with(nvs[i], name + str_from_code(30))) { return i; }
+    Int k = i + 1;
+    return rd_find_named(nvs, name, k);
+}
+
+// `.name = expr` pairs up to `}` (after the `{`).
+RdA rd_fields(Str s, Int pos, RdE env, RdT ft, RdS st, List(Str) vs, List(Str) ts, List(Str) rs, List(Str) ns, Bool allk, Bool ch) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") {
+        return RdA {.vs = vs, .ts = ts, .rs = rs, .allk = allk, .ch = ch, .named = false, .bad = false, .pos = t.pos, .st = st};
+    }
+    Tok fname = lex_tok(s, t.pos);
+    Tok eq = lex_tok(s, fname.pos);
+    if (t.text != "." || fname.kind != "ident" || eq.text != "=") {
+        return RdA {.vs = vs, .ts = ts, .rs = rs, .allk = false, .ch = ch, .named = false, .bad = true, .pos = eq.pos, .st = st};
+    }
+    RdV v = rd_expr(s, eq.pos, env, ft, st);
+    if (v.bad) {
+        return RdA {.vs = vs, .ts = ts, .rs = rs, .allk = false, .ch = ch, .named = false, .bad = true, .pos = v.pos, .st = v.st};
+    }
+    Str piece = "." + fname.text + " = " + v.r;
+    List(Str) vs2 = vs.concat([fname.text + str_from_code(30) + v.v]);
+    List(Str) ts2 = ts.concat([v.ty]);
+    List(Str) rs2 = rs.concat([piece]);
+    Bool allk2 = allk && v.k;
+    Bool ch2 = ch || v.ch;
+    Tok sep = lex_tok(s, v.pos);
+    if (sep.text == ",") { return rd_fields(s, sep.pos, env, ft, v.st, vs2, ts2, rs2, ns, allk2, ch2); }
+    if (sep.text == "}") {
+        return RdA {.vs = vs2, .ts = ts2, .rs = rs2, .allk = allk2, .ch = ch2, .named = false, .bad = false, .pos = sep.pos, .st = v.st};
+    }
+    return RdA {.vs = vs2, .ts = ts2, .rs = rs2, .allk = false, .ch = ch2, .named = false, .bad = true, .pos = sep.pos, .st = v.st};
+}
+
+// Comma-separated expressions up to `close`, starting after the opener.
+RdA rd_args(Str s, Int pos, Str close, RdE env, RdT ft, RdS st, List(Str) vs, List(Str) ts, List(Str) rs, Bool allk, Bool ch, Bool named) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == close) {
+        return RdA {.vs = vs, .ts = ts, .rs = rs, .allk = allk, .ch = ch, .named = named, .bad = false, .pos = t.pos, .st = st};
+    }
+    // Named argument `name = expr` (a lone `=`; `==` lexes separately).
+    Bool isnamed = false;
+    Tok eqt = lex_tok(s, t.pos);
+    Bool nm = t.kind == "ident" && eqt.text == "=";
+    Int vstart = if (nm) { eqt.pos } else { pos };
+    RdV v = rd_expr(s, vstart, env, ft, st);
+    if (v.bad) {
+        return RdA {.vs = vs, .ts = ts, .rs = rs, .allk = false, .ch = ch, .named = named, .bad = true, .pos = v.pos, .st = v.st};
+    }
+    Str piece = if (nm) { str_slice(s, pos, eqt.pos) + v.r } else { v.r };
+    Tok sep = lex_tok(s, v.pos);
+    List(Str) vs2 = vs.concat([v.v]);
+    List(Str) ts2 = ts.concat([v.ty]);
+    List(Str) rs2 = rs.concat([piece]);
+    Bool allk2 = allk && v.k;
+    Bool ch2 = ch || v.ch;
+    Bool named2 = named || nm;
+    if (sep.text == ",") {
+        return rd_args(s, sep.pos, close, env, ft, v.st, vs2, ts2, rs2, allk2, ch2, named2);
+    }
+    if (sep.text == close) {
+        return RdA {.vs = vs2, .ts = ts2, .rs = rs2, .allk = allk2, .ch = ch2, .named = named2, .bad = false, .pos = sep.pos, .st = v.st};
+    }
+    return RdA {.vs = vs2, .ts = ts2, .rs = rs2, .allk = false, .ch = ch2, .named = named2, .bad = true, .pos = sep.pos, .st = v.st};
+}
+
+RdV rd_postfix(Str s, Int start, RdV base, RdE env, RdT ft) {
+    Tok t = lex_tok(s, base.pos);
+    if (t.text == "(") {
+        Int cend = rd_skip_group(s, t.pos, 1);
+        Str cr = base.r + str_slice(s, base.pos, cend);
+        return rd_postfix(s, start, rd_unk(cr, base.ch, cend, base.st), env, ft);
+    }
+    if (t.text == ".") {
+        Tok fld = lex_tok(s, t.pos);
+        Tok lp = lex_tok(s, fld.pos);
+        if (lp.text == "(") {
+            RdA a = rd_args(s, lp.pos, ")", env, ft, base.st, [], [], [], true, false, false);
+            if (a.bad) { return rd_badv(a.pos, a.st); }
+            Bool mch = base.ch || a.ch;
+            Str mr = if (mch) { base.r + "." + fld.text + "(" + rd_join(a.rs, 0, ", ", "") + ")" } else { str_slice(s, start, a.pos) };
+            RdV mv = rd_method(fld.text, base, a, mr, mch);
+            return rd_postfix(s, start, mv, env, ft);
+        }
+        Str fr = if (base.ch) { base.r + "." + fld.text } else { str_slice(s, start, fld.pos) };
+        RdV fv = rd_field(ft, base, fld.text, fr, fld.pos);
+        return rd_postfix(s, start, fv, env, ft);
+    }
+    if (t.text == "[") {
+        RdV ix = rd_expr(s, t.pos, env, ft, base.st);
+        if (ix.bad) { return ix; }
+        Tok rt = lex_tok(s, ix.pos);
+        if (rt.text == ".." || rt.text == "..=") {
+            RdV hi = rd_expr(s, rt.pos, env, ft, ix.st);
+            if (hi.bad) { return hi; }
+            Tok rb = lex_tok(s, hi.pos);
+            if (rb.text != "]") { return rd_badv(rb.pos, hi.st); }
+            Bool sch = base.ch || ix.ch || hi.ch;
+            Str sr = if (sch) { base.r + "[" + ix.r + rt.text + hi.r + "]" } else { str_slice(s, start, rb.pos) };
+            return rd_postfix(s, start, rd_unk(sr, sch, rb.pos, hi.st), env, ft);
+        }
+        if (rt.text != "]") { return rd_badv(rt.pos, ix.st); }
+        Bool ich = base.ch || ix.ch;
+        Str ir = if (ich) { base.r + "[" + ix.r + "]" } else { str_slice(s, start, rt.pos) };
+        RdV iv = rd_index(base, ix, ir, ich, rt.pos);
+        return rd_postfix(s, start, iv, env, ft);
+    }
+    return base;
+}
+
+// Known-list indexing; an out-of-range index aborts at run time, so it is
+// left residual.
+RdV rd_index(RdV base, RdV ix, Str ir, Bool ich, Int pos) {
+    RdV none = rd_unk(ir, ich, pos, ix.st);
+    if (!base.k || !ix.k) { return none; }
+    Str et = rd_inner(base.ty, "List(");
+    if (et == "" || et == "?") { return none; }
+    if (!rd_is_int_ty(rd_norm_ty(ix.ty))) { return none; }
+    List(Str) items = rd_dec(base.v);
+    Int i = rd_atoi(ix.v);
+    if (i < 0 || i >= items.len()) { return none; }
+    return rd_folded(items[i], et, ir, ich, pos, ix.st);
+}
+
+RdV rd_method(Str name, RdV base, RdA a, Str mr, Bool mch) {
+    RdV none = rd_unk(mr, mch, a.pos, a.st);
+    if (!base.k || !a.allk || a.named) { return none; }
+    Str et = rd_inner(base.ty, "List(");
+    if (et == "") { return none; }
+    List(Str) items = rd_dec(base.v);
+    List(Str) ats = a.ts;
+    if (name == "len") {
+        if (ats.len() != 0) { return none; }
+        return rd_folded(rd_itoa(items.len()), "Int", mr, mch, a.pos, a.st);
+    }
+    if (name == "concat") {
+        if (ats.len() != 1) { return none; }
+        Str ot = rd_norm_ty(ats[0]);
+        List(Str) avs = a.vs;
+        Str rt = if (et == "?") { ot } else { rd_norm_ty(base.ty) };
+        if (rd_coerce(ot, rt) == "" && rd_coerce(base.ty, ot) == "") { return none; }
+        List(Str) more = rd_dec(avs[0]);
+        Str rty = if (rt == "List(?)") { ot } else { rt };
+        return rd_folded(rd_enc(items.concat(more)), rty, mr, mch, a.pos, a.st);
+    }
+    return none;
+}
+
+RdV rd_field(RdT ft, RdV base, Str fname, Str fr, Int pos) {
+    RdV none = rd_unk(fr, base.ch, pos, base.st);
+    if (!base.k) { return none; }
+    Int si = rd_struct_idx(ft, base.ty, 0);
+    if (si < 0) { return none; }
+    List(Str) sfs = ft.sfs;
+    Str decl = sfs[si];
+    if (decl == "") { return none; }
+    List(Str) dfs = str_split(decl, str_from_code(31));
+    Int fi = rd_find_named(dfs, fname, 0);
+    if (fi < 0) { return none; }
+    Str d = dfs[fi];
+    Int sep = str_find_char(d, 30, 0);
+    Int sp1 = sep + 1;
+    Str fty = rd_norm_ty(str_slice(d, sp1, str_len(d)));
+    List(Str) vals = rd_dec(base.v);
+    if (fi >= vals.len()) { return none; }
+    return rd_folded(vals[fi], fty, fr, base.ch, pos, base.st);
+}
+
+// ─── Pure runtime builtins ──────────────────────────────────────
+// Evaluated by calling the same runtime function the program would call,
+// so results match exactly. Only total functions (the runtime clamps
+// every index) whose arguments are all known and correctly typed.
+
+Bool rd_args_are(RdA a, List(Str) want) {
+    List(Str) ts = a.ts;
+    if (ts.len() != want.len()) { return false; }
+    return rd_args_are_at(ts, want, 0);
+}
+
+Bool rd_args_are_at(List(Str) ts, List(Str) want, Int i) {
+    if (i >= ts.len()) { return true; }
+    Str have = rd_norm_ty(ts[i]);
+    Str w = want[i];
+    if (w == "Int") {
+        if (have != "Int") { return false; }
+    }
+    if (w != "Int") {
+        if (have != w) { return false; }
+    }
+    Int k = i + 1;
+    return rd_args_are_at(ts, want, k);
+}
+
+RdV rd_builtin(Str name, RdA a, Str orig, Int pos, RdS st) {
+    List(Str) v = a.vs;
+    RdV none = rd_unk(orig, a.ch, pos, st);
+    if (name == "str_len") {
+        if (!rd_args_are(a, ["Str"])) { return none; }
+        return rd_folded(rd_itoa(str_len(v[0])), "Int", orig, a.ch, pos, st);
+    }
+    if (name == "str_char_at") {
+        if (!rd_args_are(a, ["Str", "Int"])) { return none; }
+        return rd_folded(rd_itoa(str_char_at(v[0], rd_atoi(v[1]))), "Int", orig, a.ch, pos, st);
+    }
+    if (name == "str_slice") {
+        if (!rd_args_are(a, ["Str", "Int", "Int"])) { return none; }
+        return rd_folded(str_slice(v[0], rd_atoi(v[1]), rd_atoi(v[2])), "Str", orig, a.ch, pos, st);
+    }
+    if (name == "str_from_code") {
+        if (!rd_args_are(a, ["Int"])) { return none; }
+        Int cp = rd_atoi(v[0]);
+        if (cp < 1 || cp > 1114111) { return none; }
+        if (cp >= 55296 && cp <= 57343) { return none; }
+        return rd_folded(str_from_code(cp), "Str", orig, a.ch, pos, st);
+    }
+    if (name == "IntToString") {
+        List(Str) ts = a.ts;
+        if (ts.len() != 1) { return none; }
+        if (!rd_is_int_ty(rd_norm_ty(ts[0]))) { return none; }
+        return rd_folded(v[0], "Str", orig, a.ch, pos, st);
+    }
+    if (name == "str_contains") {
+        if (!rd_args_are(a, ["Str", "Str"])) { return none; }
+        return rd_folded(rd_bool(str_contains(v[0], v[1])), "Bool", orig, a.ch, pos, st);
+    }
+    if (name == "str_starts_with") {
+        if (!rd_args_are(a, ["Str", "Str"])) { return none; }
+        return rd_folded(rd_bool(str_starts_with(v[0], v[1])), "Bool", orig, a.ch, pos, st);
+    }
+    if (name == "str_ends_with") {
+        if (!rd_args_are(a, ["Str", "Str"])) { return none; }
+        return rd_folded(rd_bool(str_ends_with(v[0], v[1])), "Bool", orig, a.ch, pos, st);
+    }
+    if (name == "str_trim") {
+        if (!rd_args_are(a, ["Str"])) { return none; }
+        return rd_folded(str_trim(v[0]), "Str", orig, a.ch, pos, st);
+    }
+    if (name == "str_to_lower") {
+        if (!rd_args_are(a, ["Str"])) { return none; }
+        return rd_folded(str_to_lower(v[0]), "Str", orig, a.ch, pos, st);
+    }
+    if (name == "str_to_upper") {
+        if (!rd_args_are(a, ["Str"])) { return none; }
+        return rd_folded(str_to_upper(v[0]), "Str", orig, a.ch, pos, st);
+    }
+    if (name == "str_reverse") {
+        if (!rd_args_are(a, ["Str"])) { return none; }
+        return rd_folded(str_reverse(v[0]), "Str", orig, a.ch, pos, st);
+    }
+    if (name == "str_repeat") {
+        if (!rd_args_are(a, ["Str", "Int"])) { return none; }
+        Int times = rd_atoi(v[1]);
+        Int blen = str_len(v[0]);
+        if (times < 0 || times > 100000) { return none; }
+        if (blen > 100000) { return none; }
+        Int(128) total = blen * times;
+        if (total > 1000000) { return none; }
+        return rd_folded(str_repeat(v[0], times), "Str", orig, a.ch, pos, st);
+    }
+    if (name == "str_replace") {
+        if (!rd_args_are(a, ["Str", "Str", "Str"])) { return none; }
+        if (str_len(v[0]) > 100000) { return none; }
+        if (str_len(v[2]) > 1000) { return none; }
+        return rd_folded(str_replace(v[0], v[1], v[2]), "Str", orig, a.ch, pos, st);
+    }
+    if (name == "str_is_int") {
+        if (!rd_args_are(a, ["Str"])) { return none; }
+        return rd_folded(rd_bool(str_is_int(v[0])), "Bool", orig, a.ch, pos, st);
+    }
+    if (name == "str_parse_int") {
+        if (!rd_args_are(a, ["Str"])) { return none; }
+        // strtoll saturates out-of-range input; only fold what fits.
+        if (!str_is_int(v[0])) { return rd_folded("0", "Int", orig, a.ch, pos, st); }
+        if (str_len(v[0]) > 18) { return none; }
+        return rd_folded(rd_itoa(str_parse_int(v[0])), "Int", orig, a.ch, pos, st);
+    }
+    if (name == "str_count") {
+        if (!rd_args_are(a, ["Str", "Str"])) { return none; }
+        return rd_folded(rd_itoa(str_count(v[0], v[1])), "Int", orig, a.ch, pos, st);
+    }
+    if (name == "abs_i64") {
+        if (!rd_args_are(a, ["Int"])) { return none; }
+        Int x = rd_atoi(v[0]);
+        if (x == rd_i64_min()) { return none; }
+        return rd_folded(rd_itoa(abs_i64(x)), "Int", orig, a.ch, pos, st);
+    }
+    if (name == "min_i64") {
+        if (!rd_args_are(a, ["Int", "Int"])) { return none; }
+        return rd_folded(rd_itoa(min_i64(rd_atoi(v[0]), rd_atoi(v[1]))), "Int", orig, a.ch, pos, st);
+    }
+    if (name == "max_i64") {
+        if (!rd_args_are(a, ["Int", "Int"])) { return none; }
+        return rd_folded(rd_itoa(max_i64(rd_atoi(v[0]), rd_atoi(v[1]))), "Int", orig, a.ch, pos, st);
+    }
+    if (name == "clamp_i64") {
+        if (!rd_args_are(a, ["Int", "Int", "Int"])) { return none; }
+        return rd_folded(rd_itoa(clamp_i64(rd_atoi(v[0]), rd_atoi(v[1]), rd_atoi(v[2]))), "Int", orig, a.ch, pos, st);
+    }
+    return none;
+}
+
+// ─── β-reduction of user functions ──────────────────────────────
+
+Str rd_memo_key(Str name, RdA a) {
+    List(Str) ts = a.ts;
+    List(Str) vs = a.vs;
+    Str sep = str_from_code(1);
+    return name + sep + rd_memo_args(ts, vs, 0, sep, "");
+}
+
+Str rd_memo_args(List(Str) ts, List(Str) vs, Int i, Str sep, Str acc) {
+    if (i >= ts.len()) { return acc; }
+    Str a2 = acc + rd_norm_ty(ts[i]) + sep + vs[i] + sep;
+    Int k = i + 1;
+    return rd_memo_args(ts, vs, k, sep, a2);
+}
+
+RdS rd_st_memo(RdS st, Str key, Str val) {
+    Map(Str, Str) m = st.memo;
+    return RdS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = m.insert(key, val)};
+}
+
+// Bind parameters to known arguments; "" names mark an unusable call.
+RdE rd_bind_params(List(Str) pns, List(Str) pts, RdA a, Int i, RdE env) {
+    List(Str) ts = a.ts;
+    List(Str) vs = a.vs;
+    if (i >= pns.len()) { return env; }
+    Str ty = rd_coerce(ts[i], pts[i]);
+    if (ty == "") { return RdE {.ns = [""], .vs = [], .ts = []}; }
+    RdE e2 = rd_env_add(env, pns[i], vs[i], ty);
+    Int k = i + 1;
+    return rd_bind_params(pns, pts, a, k, e2);
+}
+
+RdV rd_call_user(Str s, Int fi, RdA a, Str orig, RdT ft) {
+    RdS st = a.st;
+    RdV none = rd_unk(orig, a.ch, a.pos, st);
+    List(Int) fb = ft.fbody;
+    Int bpos = fb[fi];
+    if (bpos < 0) { return none; }
+    if (st.fuel <= 0) { return none; }
+    if (st.depth >= rd_max_depth()) { return none; }
+    List(Str) fnames = ft.fnames;
+    Str name = fnames[fi];
+    Str key = rd_memo_key(name, a);
+    Map(Str, Str) memo = st.memo;
+    Str hit = memo.get(key) else { "" };
+    if (hit == "!") { return none; }
+    if (hit != "") {
+        Int sp = str_find_char(hit, 31, 0);
+        Int hl = str_len(hit);
+        Int sp1 = sp + 1;
+        return rd_folded(str_slice(hit, sp1, hl), str_slice(hit, 0, sp), orig, a.ch, a.pos, st);
+    }
+    List(Str) fpns = ft.fpns;
+    List(Str) fpts = ft.fpts;
+    List(Str) frets = ft.frets;
+    List(Str) pns = rd_split(fpns[fi], ",");
+    List(Str) pts = rd_split(fpts[fi], "|");
+    List(Str) ats = a.ts;
+    if (pns.len() != ats.len()) { return none; }
+    RdE env = rd_bind_params(pns, pts, a, 0, rd_env_empty());
+    List(Str) ens = env.ns;
+    if (ens.len() == 1) {
+        if (ens[0] == "") { return none; }
+    }
+    Str rty = rd_norm_ty(frets[fi]);
+    Int steps0 = if (st.depth == 0) { 0 } else { st.steps };
+    Int d1 = st.depth + 1;
+    RdS inner = RdS {.steps = steps0, .depth = d1, .fuel = st.fuel, .memo = st.memo};
+    RdR res = rd_stmts(s, bpos, env, ft, inner);
+    RdS after = RdS {.steps = res.st.steps, .depth = st.depth, .fuel = res.st.fuel, .memo = res.st.memo};
+    Bool fits = res.st.steps <= rd_max_steps();
+    Str cty = if (res.ret) { rd_coerce(res.rty, rty) } else { "" };
+    if (!res.ok || !res.ret || res.bad || !fits || cty == "") {
+        // Out of budget is not a property of the call: do not remember it.
+        RdS after2 = if (fits) { rd_st_memo(after, key, "!") } else { after };
+        return rd_unk(orig, a.ch, a.pos, after2);
+    }
+    RdS after3 = rd_st_memo(after, key, cty + str_from_code(31) + res.rv);
+    return rd_folded(res.rv, cty, orig, a.ch, a.pos, after3);
+}
+
+List(Str) rd_split(Str csv, Str sep) {
+    List(Str) none = [];
+    if (csv == "") { return none; }
+    return str_split(csv, sep);
+}
+
+// ─── if-expressions and expression blocks ───────────────────────
+
+// An if/else-if arm: `{ [Type name = expr;]* tail }` from after the `{`.
+RdV rd_eblock(Str s, Int pos, RdE env, RdT ft, RdS st) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.kind == "ident") {
+            Tok t3 = lex_tok(s, t2.pos);
+            if (t3.text == "=") {
+                return rd_eblock_bind(s, pos, t.text, t2.text, t3.pos, env, ft, st);
+            }
+        }
+        if (t2.text == "(") {
+            PRes ty = parse_type(s, pos);
+            if (ty.err == "") {
+                Tok name = lex_tok(s, ty.pos);
+                Tok eq = lex_tok(s, name.pos);
+                if (eq.text == "=" && name.kind == "ident") {
+                    return rd_eblock_bind(s, pos, ty.ty, name.text, eq.pos, env, ft, st);
+                }
+            }
+        }
+    }
+    return rd_expr(s, pos, env, ft, st);
+}
+
+RdV rd_eblock_bind(Str s, Int pos, Str ty, Str name, Int eqpos, RdE env, RdT ft, RdS st) {
+    RdV v = rd_expr(s, eqpos, env, ft, st);
+    if (v.bad) { return v; }
+    Tok semi = lex_tok(s, v.pos);
+    if (semi.text != ";") { return rd_badv(semi.pos, v.st); }
+    Str cty = if (v.k) { rd_coerce(v.ty, ty) } else { "" };
+    RdE env2 = if (cty != "") { rd_env_add(env, name, v.v, cty) } else { rd_env_add(env, name, "", "") };
+    RdV rest = rd_eblock(s, semi.pos, env2, ft, v.st);
+    if (rest.bad) { return rest; }
+    Str borig = str_slice(s, pos, semi.pos);
+    if (cty != "" && !rd_uses(rest.r, name)) {
+        Str dropped = rd_nl_pad("", borig);
+        return RdV {.k = rest.k, .v = rest.v, .ty = rest.ty, .r = dropped + rest.r, .ch = true, .bad = false, .bd = rest.bd, .sx = "", .px = "", .pos = rest.pos, .st = rest.st};
+    }
+    Str btext = if (v.ch) { rd_nl_pad(str_slice(s, pos, eqpos) + " " + v.r + ";", borig) } else { borig };
+    Bool kk = v.k && rest.k;
+    return RdV {.k = kk, .v = rest.v, .ty = rest.ty, .r = btext + rest.r, .ch = v.ch || rest.ch, .bad = false, .bd = true, .sx = "", .px = "", .pos = rest.pos, .st = rest.st};
+}
+
+RdV rd_ifexpr(Str s, Int pos, RdE env, RdT ft, RdS st) {
+    Tok kif = lex_tok(s, pos);
+    Tok open = lex_tok(s, kif.pos);
+    if (open.text != "(") { return rd_badv(open.pos, st); }
+    RdV c = rd_expr(s, open.pos, env, ft, st);
+    if (c.bad) { return c; }
+    Tok close = lex_tok(s, c.pos);
+    if (close.text != ")") { return rd_badv(close.pos, c.st); }
+    Tok ob = lex_tok(s, close.pos);
+    if (ob.text != "{") { return rd_badv(ob.pos, c.st); }
+    RdV a = rd_eblock(s, ob.pos, env, ft, c.st);
+    if (a.bad) { return a; }
+    Tok cb = lex_tok(s, a.pos);
+    if (cb.text != "}") { return rd_badv(cb.pos, a.st); }
+    Tok kw = lex_tok(s, cb.pos);
+    if (kw.text != "else") { return rd_badv(kw.pos, a.st); }
+    Tok pk = lex_tok(s, kw.pos);
+    Bool elif = pk.text == "if";
+    RdV b = if (elif) { rd_ifexpr(s, kw.pos, env, ft, a.st) } else { rd_eblock(s, pk.pos, env, ft, a.st) };
+    if (b.bad) { return b; }
+    Tok cb2 = lex_tok(s, b.pos);
+    Int endp = if (elif) { b.pos } else { cb2.pos };
+    if (!elif && cb2.text != "}") { return rd_badv(cb2.pos, b.st); }
+    Str bpart = if (elif) { b.r } else { str_slice(s, kw.pos, pk.pos) + b.r + str_slice(s, b.pos, cb2.pos) };
+    Bool anych = c.ch || a.ch || b.ch;
+    Str rebuilt = if (anych) { str_slice(s, pos, open.pos) + c.r + str_slice(s, c.pos, ob.pos) + a.r + str_slice(s, a.pos, kw.pos) + bpart } else { str_slice(s, pos, endp) };
+    if (c.k) {
+        Bool pickt = c.v == "true";
+        RdV x = if (pickt) { a } else { b };
+        if (x.k) { return rd_folded(x.v, x.ty, rebuilt, true, endp, b.st); }
+        if (!x.bd) {
+            return RdV {.k = false, .v = "", .ty = "", .r = rd_nl_pad("(" + x.r + ")", str_slice(s, pos, endp)), .ch = true, .bad = false, .bd = false, .sx = "", .px = "", .pos = endp, .st = b.st};
+        }
+    }
+    return RdV {.k = false, .v = "", .ty = "", .r = rebuilt, .ch = anych, .bad = false, .bd = false, .sx = "", .px = "", .pos = endp, .st = b.st};
+}
+
+// ─── Statements ─────────────────────────────────────────────────
+
+RdR rd_mk(Str out, Int pos, Bool dead, Bool ok, Bool ret, Str rv, Str rty, RdS st) {
+    return RdR {.out = out, .pos = pos, .dead = dead, .ok = ok, .ret = ret, .rv = rv, .rty = rty, .bad = false, .st = st};
+}
+
+RdS rd_tick(RdS st) {
+    if (st.depth == 0) { return st; }
+    Int s1 = st.steps + 1;
+    Int f1 = st.fuel - 1;
+    return RdS {.steps = s1, .depth = st.depth, .fuel = f1, .memo = st.memo};
+}
+
+// One statement's text followed by the rest of the block.
+RdR rd_then(Str text, Bool ok, RdR rest) {
+    return RdR {.out = text + rest.out, .pos = rest.pos, .dead = rest.dead, .ok = ok && rest.ok, .ret = rest.ret, .rv = rest.rv, .rty = rest.rty, .bad = rest.bad, .st = rest.st};
+}
+
+// A statement that ends the block (return, or a block/if whose every path
+// returns): everything after it up to the block's `}` is unreachable and
+// is dropped, keeping its line count.
+RdR rd_finish_dead(Str s, Str text, Int after, RdR r0) {
+    Int endp = rd_skip_stmts(s, after, 0);
+    Str tail = rd_nl_pad("", str_slice(s, after, endp));
+    return RdR {.out = text + tail, .pos = endp, .dead = true, .ok = r0.ok, .ret = r0.ret, .rv = r0.rv, .rty = r0.rty, .bad = false, .st = r0.st};
+}
+
+RdR rd_stmts(Str s, Int pos, RdE env, RdT ft, RdS st0) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}" || t.kind == "eof") {
+        return rd_mk("", pos, false, true, false, "", "", st0);
+    }
+    RdS st = rd_tick(st0);
+    if (st.depth > 0) {
+        if (st.steps > rd_max_steps() || st.fuel <= 0) {
+            Int endq = rd_skip_stmts(s, pos, 0);
+            return RdR {.out = str_slice(s, pos, endq), .pos = endq, .dead = false, .ok = false, .ret = false, .rv = "", .rty = "", .bad = false, .st = st};
+        }
+    }
+    if (t.text == "return") { return rd_return(s, pos, t, env, ft, st); }
+    if (t.text == "_") {
+        Tok eq = lex_tok(s, t.pos);
+        if (eq.text != "=") { return rd_rbad(eq.pos, st); }
+        RdV v = rd_expr(s, eq.pos, env, ft, st);
+        if (v.bad) { return rd_rbad(v.pos, v.st); }
+        Tok semi = lex_tok(s, v.pos);
+        if (semi.text != ";") { return rd_rbad(semi.pos, v.st); }
+        Str orig = str_slice(s, pos, semi.pos);
+        RdR rest = rd_stmts(s, semi.pos, env, ft, v.st);
+        if (v.k) { return rd_then(rd_nl_pad("", orig), true, rest); }
+        Str text = if (v.ch) { rd_nl_pad(str_slice(s, pos, eq.pos) + " " + v.r + ";", orig) } else { orig };
+        return rd_then(text, false, rest);
+    }
+    if (t.text == "if") {
+        RdR ri = rd_ifstmt(s, pos, env, ft, st);
+        if (ri.bad) { return ri; }
+        if (ri.dead) { return rd_finish_dead(s, ri.out, ri.pos, ri); }
+        RdR rest2 = rd_stmts(s, ri.pos, env, ft, ri.st);
+        return rd_then(ri.out, ri.ok, rest2);
+    }
+    if (t.text == "{") {
+        RdR rb = rd_block(s, pos, env, ft, st);
+        if (rb.bad) { return rb; }
+        if (rb.dead) { return rd_finish_dead(s, rb.out, rb.pos, rb); }
+        RdR rest3 = rd_stmts(s, rb.pos, env, ft, rb.st);
+        return rd_then(rb.out, rb.ok, rest3);
+    }
+    if (t.text == "for") {
+        Tok fo = lex_tok(s, t.pos);
+        if (fo.text != "(") { return rd_rbad(fo.pos, st); }
+        Int hend = rd_skip_group(s, fo.pos, 1);
+        Tok fb = lex_tok(s, hend);
+        if (fb.text != "{") { return rd_rbad(fb.pos, st); }
+        Int fend = rd_skip_group(s, fb.pos, 1);
+        if (st.depth > 0) {
+            RdR fr = rd_for_eval(s, pos, fo, hend, env, ft, st);
+            if (fr.ok && !fr.bad) {
+                if (fr.ret) { return rd_finish_dead(s, "", fend, fr); }
+                RdR rest6 = rd_stmts(s, fend, env, ft, fr.st);
+                return rd_then("", true, rest6);
+            }
+            RdR rest7 = rd_stmts(s, fend, env, ft, fr.st);
+            return rd_then(str_slice(s, pos, fend), false, rest7);
+        }
+        RdR rest4 = rd_stmts(s, fend, env, ft, st);
+        return rd_then(str_slice(s, pos, fend), false, rest4);
+    }
+    if (t.text == "comptime_print") {
+        Tok cp = lex_tok(s, t.pos);
+        if (cp.text == "(" && st.depth == 0) { return rd_comptime_print(s, pos, cp, env, ft, st); }
+    }
+    if (t.kind == "ident") {
+        PRes pty = parse_type(s, pos);
+        if (pty.err == "") {
+            Tok name = lex_tok(s, pty.pos);
+            if (name.kind == "ident") {
+                Tok eq2 = lex_tok(s, name.pos);
+                if (eq2.text == "=") {
+                    return rd_bind(s, pos, pty.ty, name.text, eq2.pos, env, ft, st);
+                }
+            }
+        }
+    }
+    RdV e = rd_expr(s, pos, env, ft, st);
+    if (e.bad) { return rd_rbad(e.pos, e.st); }
+    Tok esemi = lex_tok(s, e.pos);
+    if (esemi.text != ";") { return rd_rbad(esemi.pos, e.st); }
+    Str eorig = str_slice(s, pos, esemi.pos);
+    RdR rest5 = rd_stmts(s, esemi.pos, env, ft, e.st);
+    if (e.k) { return rd_then(rd_nl_pad("", eorig), true, rest5); }
+    Str etext = if (e.ch) { rd_nl_pad(e.r + ";", eorig) } else { eorig };
+    return rd_then(etext, false, rest5);
+}
+
+// `for (T x in e) { body }` / `for (T x in a..b)` while β-reducing a
+// call: iterate a known list or range, running the body per element. The
+// body can only matter by returning (no mutation); ok=false when anything
+// is unknown.
+RdR rd_for_eval(Str s, Int pos, Tok fo, Int hend, RdE env, RdT ft, RdS st) {
+    RdR fail = RdR {.out = "", .pos = hend, .dead = false, .ok = false, .ret = false, .rv = "", .rty = "", .bad = false, .st = st};
+    PRes pty = parse_type(s, fo.pos);
+    if (pty.err != "") { return fail; }
+    Tok name = lex_tok(s, pty.pos);
+    Tok inkw = lex_tok(s, name.pos);
+    if (name.kind != "ident" || inkw.text != "in") { return fail; }
+    RdV a = rd_expr(s, inkw.pos, env, ft, st);
+    if (a.bad || !a.k) { return fail; }
+    Tok op = lex_tok(s, a.pos);
+    Str vty = rd_norm_ty(pty.ty);
+    if (op.text == ".." || op.text == "..=") {
+        RdV b = rd_expr(s, op.pos, env, ft, a.st);
+        if (b.bad || !b.k) { return fail; }
+        if (!rd_is_int_ty(rd_norm_ty(a.ty)) || !rd_is_int_ty(rd_norm_ty(b.ty))) { return fail; }
+        if (!rd_is_int_ty(vty)) { return fail; }
+        Int lo = rd_atoi(a.v);
+        Int hi0 = rd_atoi(b.v);
+        Int hm1 = hi0 - 1;
+        Int hi = if (op.text == "..=") { hi0 } else { hm1 };
+        // Iteration recurses natively: bound the trip count.
+        Int span = hi - lo;
+        if (span > 10000) { return fail; }
+        Tok ob = lex_tok(s, hend);
+        return rd_for_range(s, ob.pos, name.text, vty, lo, hi, env, ft, b.st);
+    }
+    Str et = rd_inner(a.ty, "List(");
+    if (et == "") { return fail; }
+    Str cty = if (et == "?") { vty } else { rd_coerce(et, vty) };
+    if (cty == "") { return fail; }
+    List(Str) its = rd_dec(a.v);
+    if (its.len() > 10000) { return fail; }
+    Tok ob2 = lex_tok(s, hend);
+    return rd_for_items(s, ob2.pos, name.text, cty, rd_dec(a.v), 0, env, ft, a.st);
+}
+
+// Run the loop body (from after its `{`) for one binding; ok when it
+// reduced completely, ret when it returned.
+RdR rd_for_body(Str s, Int bpos, Str name, Str v, Str ty, RdE env, RdT ft, RdS st) {
+    RdE env2 = rd_env_add(env, name, v, ty);
+    return rd_stmts(s, bpos, env2, ft, st);
+}
+
+RdR rd_for_items(Str s, Int bpos, Str name, Str ty, List(Str) items, Int i, RdE env, RdT ft, RdS st) {
+    if (i >= items.len()) { return rd_mk("", bpos, false, true, false, "", "", st); }
+    RdR r = rd_for_body(s, bpos, name, items[i], ty, env, ft, st);
+    if (!r.ok || r.bad || r.ret) { return r; }
+    Int k = i + 1;
+    return rd_for_items(s, bpos, name, ty, items, k, env, ft, r.st);
+}
+
+RdR rd_for_range(Str s, Int bpos, Str name, Str ty, Int i, Int hi, RdE env, RdT ft, RdS st) {
+    if (i > hi) { return rd_mk("", bpos, false, true, false, "", "", st); }
+    RdR r = rd_for_body(s, bpos, name, rd_itoa(i), ty, env, ft, st);
+    if (!r.ok || r.bad || r.ret) { return r; }
+    Int k = i + 1;
+    return rd_for_range(s, bpos, name, ty, k, hi, env, ft, r.st);
+}
+
+RdR rd_return(Str s, Int pos, Tok t, RdE env, RdT ft, RdS st) {
+    Tok e1 = lex_tok(s, t.pos);
+    if (e1.text == ";") {
+        RdR r0 = rd_mk("", e1.pos, true, true, false, "", "", st);
+        return rd_finish_dead(s, str_slice(s, pos, e1.pos), e1.pos, r0);
+    }
+    RdV v = rd_expr(s, t.pos, env, ft, st);
+    if (v.bad) { return rd_rbad(v.pos, v.st); }
+    Tok semi = lex_tok(s, v.pos);
+    if (semi.text != ";") { return rd_rbad(semi.pos, v.st); }
+    Str orig = str_slice(s, pos, semi.pos);
+    Str text = if (v.ch) { rd_nl_pad(rd_lead(s, pos, t) + "return " + v.r + ";", orig) } else { orig };
+    RdR r1 = rd_mk("", semi.pos, true, v.k, v.k, v.v, v.ty, v.st);
+    return rd_finish_dead(s, text, semi.pos, r1);
+}
+
+RdR rd_bind(Str s, Int pos, Str ty, Str name, Int eqpos, RdE env, RdT ft, RdS st) {
+    RdV v = rd_expr(s, eqpos, env, ft, st);
+    if (v.bad) { return rd_rbad(v.pos, v.st); }
+    Tok semi = lex_tok(s, v.pos);
+    if (semi.text != ";") { return rd_rbad(semi.pos, v.st); }
+    Str cty = if (v.k) { rd_coerce(v.ty, ty) } else { "" };
+    RdE env2 = if (cty != "") { rd_env_add(env, name, v.v, cty) } else { rd_env_add(env, name, "", "") };
+    RdR rest = rd_stmts(s, semi.pos, env2, ft, v.st);
+    if (rest.bad) { return rest; }
+    Str borig = str_slice(s, pos, semi.pos);
+    if (cty != "" && !rd_uses(rest.out, name)) {
+        return rd_then(rd_nl_pad("", borig), true, rest);
+    }
+    Str btext = if (v.ch) { rd_nl_pad(str_slice(s, pos, eqpos) + " " + v.r + ";", borig) } else { borig };
+    return rd_then(btext, v.k, rest);
+}
+
+// `{ stmts }` statement starting at `pos` (before the `{`).
+RdR rd_block(Str s, Int pos, RdE env, RdT ft, RdS st) {
+    Tok open = lex_tok(s, pos);
+    if (open.text != "{") { return rd_rbad(open.pos, st); }
+    RdR inner = rd_stmts(s, open.pos, env, ft, st);
+    if (inner.bad) { return inner; }
+    Tok close = lex_tok(s, inner.pos);
+    if (close.text != "}") { return rd_rbad(close.pos, inner.st); }
+    Str text = str_slice(s, pos, open.pos) + inner.out + str_slice(s, inner.pos, close.pos);
+    return RdR {.out = text, .pos = close.pos, .dead = inner.dead, .ok = inner.ok, .ret = inner.ret, .rv = inner.rv, .rty = inner.rty, .bad = false, .st = inner.st};
+}
+
+// `if (c) { ... } [else { ... } | else if ...]` statement at `pos`.
+RdR rd_ifstmt(Str s, Int pos, RdE env, RdT ft, RdS st) {
+    Tok kif = lex_tok(s, pos);
+    Tok open = lex_tok(s, kif.pos);
+    if (open.text != "(") { return rd_rbad(open.pos, st); }
+    RdV c = rd_expr(s, open.pos, env, ft, st);
+    if (c.bad) { return rd_rbad(c.pos, c.st); }
+    Tok close = lex_tok(s, c.pos);
+    if (close.text != ")") { return rd_rbad(close.pos, c.st); }
+    RdR a = rd_block(s, close.pos, env, ft, c.st);
+    if (a.bad) { return a; }
+    Tok kw = lex_tok(s, a.pos);
+    Bool hasel = kw.text == "else";
+    Tok pk = lex_tok(s, kw.pos);
+    Bool elif = hasel && pk.text == "if";
+    RdR b = if (!hasel) {
+        rd_mk("", a.pos, false, true, false, "", "", a.st)
+    } else {
+        if (elif) { rd_ifstmt(s, kw.pos, env, ft, a.st) } else { rd_block(s, kw.pos, env, ft, a.st) }
+    };
+    if (b.bad) { return b; }
+    Int endp = b.pos;
+    Str orig = str_slice(s, pos, endp);
+    Str lead = rd_lead(s, pos, kif);
+    if (c.k) {
+        if (c.v == "true") {
+            return RdR {.out = rd_nl_pad(lead + a.out, orig), .pos = endp, .dead = a.dead, .ok = a.ok, .ret = a.ret, .rv = a.rv, .rty = a.rty, .bad = false, .st = b.st};
+        }
+        if (!hasel) {
+            return rd_mk(rd_nl_pad("", orig), endp, false, true, false, "", "", b.st);
+        }
+        return RdR {.out = rd_nl_pad(lead + b.out, orig), .pos = endp, .dead = b.dead, .ok = b.ok, .ret = b.ret, .rv = b.rv, .rty = b.rty, .bad = false, .st = b.st};
+    }
+    Str ep = if (hasel) { str_slice(s, a.pos, kw.pos) + b.out } else { "" };
+    Str out = str_slice(s, pos, open.pos) + c.r + str_slice(s, c.pos, close.pos) + a.out + ep;
+    Bool both = hasel && a.dead && b.dead;
+    return RdR {.out = rd_nl_pad(out, orig), .pos = endp, .dead = both, .ok = false, .ret = false, .rv = "", .rty = "", .bad = false, .st = b.st};
+}
+
+// `comptime_print(e);` — report the reduced value at compile time (spec §37
+// debugging surface); nothing of it survives unless `e` is residual.
+RdR rd_comptime_print(Str s, Int pos, Tok cp, RdE env, RdT ft, RdS st) {
+    RdV v = rd_expr(s, cp.pos, env, ft, st);
+    if (v.bad) { return rd_rbad(v.pos, v.st); }
+    Tok rp = lex_tok(s, v.pos);
+    Tok semi = lex_tok(s, rp.pos);
+    if (rp.text != ")" || semi.text != ";") { return rd_rbad(semi.pos, v.st); }
+    Str shown = if (v.k) { v.v } else { "<residual>" };
+    Bool pr = eprintln("[comptime_print] " + shown);
+    Str orig = str_slice(s, pos, semi.pos);
+    RdR rest = rd_stmts(s, semi.pos, env, ft, v.st);
+    Str text = if (v.k) { rd_nl_pad("", orig) } else { rd_nl_pad("_ = " + v.r + ";", orig) };
+    return rd_then(text, v.k, rest);
+}
+
+// ─── Program ────────────────────────────────────────────────────
+
+RdT rd_table_empty() {
+    Map(Str, Int) e = {"__EMPTY__": -1};
+    return RdT {.fnames = [], .fpns = [], .fpts = [], .frets = [], .fbody = [], .sts = [], .sfs = [], .fidx = e};
+}
+
+// Parameters from after `(`: names, types, and whether the list is usable
+// for evaluation (no defaults, every type parsed).
+RdP rd_params(Str s, Int pos, RdP acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") { return RdP {.pns = acc.pns, .pts = acc.pts, .ok = acc.ok, .pos = t.pos}; }
+    PRes pty = parse_type(s, pos);
+    if (pty.err != "") {
+        Int e1 = rd_skip_group(s, pos, 1);
+        return RdP {.pns = acc.pns, .pts = acc.pts, .ok = false, .pos = e1};
+    }
+    Tok pn = lex_tok(s, pty.pos);
+    Tok nx = lex_tok(s, pn.pos);
+    List(Str) n1 = acc.pns;
+    List(Str) p1 = acc.pts;
+    Bool okn = acc.ok && pn.kind == "ident";
+    RdP acc2 = RdP {.pns = n1.concat([pn.text]), .pts = p1.concat([pty.ty]), .ok = okn, .pos = nx.pos};
+    if (nx.text == ",") { return rd_params(s, nx.pos, acc2); }
+    if (nx.text == ")") { return RdP {.pns = acc2.pns, .pts = acc2.pts, .ok = acc2.ok, .pos = nx.pos}; }
+    if (nx.text == "=") {
+        // A default value: the function is not evaluable (call sites may
+        // omit the argument), but later parameter names still matter.
+        Tok sep = rd_skip_to_sep(s, nx.pos, 0);
+        RdP acc3 = RdP {.pns = acc2.pns, .pts = acc2.pts, .ok = false, .pos = sep.pos};
+        if (sep.text == ",") { return rd_params(s, sep.pos, acc3); }
+        return acc3;
+    }
+    Int e2 = rd_skip_group(s, pos, 1);
+    return RdP {.pns = acc2.pns, .pts = acc2.pts, .ok = false, .pos = e2};
+}
+
+// The `,` or `)` ending a parameter's default value.
+Tok rd_skip_to_sep(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t; }
+    if (depth == 0) {
+        if (t.text == "," || t.text == ")") { return t; }
+    }
+    if (rd_is_open(t.text)) {
+        Int d1 = depth + 1;
+        return rd_skip_to_sep(s, t.pos, d1);
+    }
+    if (rd_is_close(t.text)) {
+        Int d2 = depth - 1;
+        return rd_skip_to_sep(s, t.pos, d2);
+    }
+    return rd_skip_to_sep(s, t.pos, depth);
+}
+
+// Struct fields from after `{`: "name\x1etype" entries joined by \x1f,
+// in declaration order ("" on anything unexpected).
+Str rd_struct_fields(Str s, Int pos, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") { return acc; }
+    PRes fty = parse_type(s, pos);
+    if (fty.err != "") { return ""; }
+    Tok name = lex_tok(s, fty.pos);
+    Tok semi = lex_tok(s, name.pos);
+    if (name.kind != "ident" || semi.text != ";") { return ""; }
+    Str sep = if (acc == "") { "" } else { str_from_code(31) };
+    return rd_struct_fields(s, semi.pos, acc + sep + name.text + str_from_code(30) + fty.ty);
+}
+
+RdT rd_collect(Str s, Int pos, RdT ft) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return ft; }
+    if (t.text == "type") {
+        Tok tn = lex_tok(s, t.pos);
+        Tok teq = lex_tok(s, tn.pos);
+        Tok tb = lex_tok(s, teq.pos);
+        Int tend = skip_decl(s, t.pos, 0);
+        if (tb.text == "{") {
+            List(Str) sts = ft.sts;
+            List(Str) sfs = ft.sfs;
+            Str flds = rd_struct_fields(s, tb.pos, "");
+            RdT ft2 = RdT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = sts.concat([tn.text]), .sfs = sfs.concat([flds]), .fidx = ft.fidx};
+            return rd_collect(s, tend, ft2);
+        }
+        return rd_collect(s, tend, ft);
+    }
+    if (t.text == "pub") { return rd_collect(s, t.pos, ft); }
+    if (t.text == "@") { return rd_collect(s, rd_annot_end(s, t.pos), ft); }
+    if (t.kind == "ident") {
+        PRes rty = parse_type(s, pos);
+        if (rty.err == "") {
+            Tok name = lex_tok(s, rty.pos);
+            Tok op = lex_tok(s, name.pos);
+            if (name.kind == "ident" && op.text == "(") {
+                RdP ps = rd_params(s, op.pos, RdP {.pns = [], .pts = [], .ok = true, .pos = op.pos});
+                Tok ob = lex_tok(s, ps.pos);
+                if (ob.text == "{") {
+                    Int fend = rd_skip_group(s, ob.pos, 1);
+                    Int bpos = if (ps.ok) { ob.pos } else { -1 };
+                    Map(Str, Int) fidx = ft.fidx;
+                    List(Str) fnames = ft.fnames;
+                    Int idx = fnames.len();
+                    List(Str) fpns = ft.fpns;
+                    List(Str) fpts = ft.fpts;
+                    List(Str) frets = ft.frets;
+                    List(Int) fbody = ft.fbody;
+                    RdT ft3 = RdT {.fnames = fnames.concat([name.text]), .fpns = fpns.concat([rd_join(ps.pns, 0, ",", "")]), .fpts = fpts.concat([rd_join(ps.pts, 0, "|", "")]), .frets = frets.concat([rty.ty]), .fbody = fbody.concat([bpos]), .sts = ft.sts, .sfs = ft.sfs, .fidx = fidx.insert(name.text, idx)};
+                    return rd_collect(s, fend, ft3);
+                }
+            }
+        }
+    }
+    Int dend = skip_decl(s, pos, 0);
+    if (dend <= pos) { return ft; }
+    return rd_collect(s, dend, ft);
+}
+
+type RdG = { Str sb; RdS st; Int nred; };
+
+// Reduce one function body; the declaration text is left untouched when the
+// body holds anything the reducer cannot parse.
+RdG rd_prog(Str s, Int pos, RdT ft, RdG g) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") {
+        Str sbe = str_sb_append(g.sb, str_slice(s, pos, t.pos));
+        return RdG {.sb = sbe, .st = g.st, .nred = g.nred};
+    }
+    if (t.kind == "ident" && t.text != "type" && t.text != "import" && t.text != "sandbox" && t.text != "pub") {
+        PRes rty = parse_type(s, pos);
+        if (rty.err == "") {
+            Tok name = lex_tok(s, rty.pos);
+            Tok op = lex_tok(s, name.pos);
+            if (name.kind == "ident" && op.text == "(") {
+                Int pend = rd_skip_group(s, op.pos, 1);
+                Tok ob = lex_tok(s, pend);
+                if (ob.text == "{") {
+                    return rd_prog_fn(s, pos, ob, ft, g);
+                }
+            }
+        }
+    }
+    if (t.text == "pub" || t.text == "@") {
+        // `pub` / annotation prefix: copy the token, then the declaration.
+        Int apos = if (t.text == "@") { rd_annot_end(s, t.pos) } else { t.pos };
+        Str sba = str_sb_append(g.sb, str_slice(s, pos, apos));
+        return rd_prog(s, apos, ft, RdG {.sb = sba, .st = g.st, .nred = g.nred});
+    }
+    Int dend = skip_decl(s, pos, 0);
+    Int dend2 = if (dend <= pos) { t.pos } else { dend };
+    Str sbd = str_sb_append(g.sb, str_slice(s, pos, dend2));
+    return rd_prog(s, dend2, ft, RdG {.sb = sbd, .st = g.st, .nred = g.nred});
+}
+
+// End of `@name` or `@name(...)` starting after the `@`.
+Int rd_annot_end(Str s, Int pos) {
+    Tok an = lex_tok(s, pos);
+    Tok lp = lex_tok(s, an.pos);
+    if (lp.text == "(") { return rd_skip_group(s, lp.pos, 1); }
+    return an.pos;
+}
+
+RdE rd_param_env(List(Str) pns, Int i, RdE env) {
+    if (i >= pns.len()) { return env; }
+    RdE e2 = rd_env_add(env, pns[i], "", "");
+    Int k = i + 1;
+    return rd_param_env(pns, k, e2);
+}
+
+RdG rd_prog_fn(Str s, Int pos, Tok ob, RdT ft, RdG g) {
+    Int fend = rd_skip_group(s, ob.pos, 1);
+    Str orig = str_slice(s, pos, fend);
+    PRes rty = parse_type(s, pos);
+    Tok name = lex_tok(s, rty.pos);
+    Tok op = lex_tok(s, name.pos);
+    RdP ps = rd_params(s, op.pos, RdP {.pns = [], .pts = [], .ok = true, .pos = op.pos});
+    RdE env = rd_param_env(ps.pns, 0, rd_env_empty());
+    RdR body = rd_stmts(s, ob.pos, env, ft, g.st);
+    Tok close = lex_tok(s, body.pos);
+    if (body.bad || close.text != "}" || close.pos != fend) {
+        Str sbv = str_sb_append(g.sb, orig);
+        return rd_prog(s, fend, ft, RdG {.sb = sbv, .st = body.st, .nred = g.nred});
+    }
+    Str text = str_slice(s, pos, ob.pos) + body.out + str_slice(s, body.pos, fend);
+    Bool changed = text != orig;
+    Int np1 = g.nred + 1;
+    Int n2 = if (changed) { np1 } else { g.nred };
+    Str sbf = str_sb_append(g.sb, text);
+    return rd_prog(s, fend, ft, RdG {.sb = sbf, .st = body.st, .nred = n2});
+}
+
+type RdOut = { Str text; Int nred; };
+
+RdOut rd_reduce_program(Str s) {
+    RdT ft = rd_collect(s, 0, rd_table_empty());
+    Map(Str, Str) memo = {"__EMPTY__": "!"};
+    RdS st = RdS {.steps = 0, .depth = 0, .fuel = rd_max_fuel(), .memo = memo};
+    RdG g = rd_prog(s, 0, ft, RdG {.sb = str_sb_new(), .st = st, .nred = 0});
+    return RdOut {.text = str_sb_finish(g.sb), .nred = g.nred};
+}

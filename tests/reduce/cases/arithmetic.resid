@@ -1,0 +1,49 @@
+Int sq(Int x) { return (Int)(x * x); }
+Int big() { return 4611686018427387904; }
+Int maxv() { Int b = 922337203685477580; Int t = (Int)(b * 10); return t + 7; }
+Int minv() { Int m = maxv(); Int z = 0 - m; return z - 1; }
+Int shl(Int a, Int b) { return a << b; }
+Int shr(Int a, Int b) { return a >> b; }
+Int dv(Int a, Int b) { return a / b; }
+Int md(Int a, Int b) { return a % b; }
+Bool both(Bool a, Bool b) { return a && b; }
+Int pick(Int n) {
+    Int a = n + 1;
+    Int r = if (a > 5) {
+        Int t = a * 2;
+        (Int)t
+    } else if (a > 2) { 100 } else { -7 };
+    return r;
+}
+Int deep(Int n) { return if (n == 0) { 0 } else { deep(n - 1) + 1 }; }
+Int main() {
+    println(IntToString(sq(12)));
+    println(IntToString(big() + big() - 1));
+    println(IntToString(maxv()));
+    println(IntToString(minv()));
+    println(IntToString(0 - 5));
+    println(IntToString(-17 / 5));
+    println(IntToString(-17 % 5));
+    println(IntToString(dv(100, 7)));
+    println(IntToString(md(100, -7)));
+    println(IntToString(shl(1, 62)));
+    println(IntToString(shl(1, 63)));
+    println(IntToString(shr(-1, 60)));
+    println(IntToString(shr(256, 4)));
+    println(IntToString(7 & 3));
+    println(IntToString(7 | 8));
+    println(IntToString(7 ^ 2));
+    println(IntToString(pick(10)));
+    println(IntToString(pick(3)));
+    println(IntToString(pick(0)));
+    println(IntToString(deep(50)));
+    println(IntToString(deep(500)));
+    if (both(true, false)) { println("yes"); } else { println("no"); }
+    if (3 < 4 && 5 >= 5) { println("cmp ok"); }
+    if (!(1 == 2)) { println("neq ok"); }
+    Int(128) w = 3 * 4;
+    println(IntToString((Int)(w * 2)));
+    println(IntToString(1000000000000000000));
+    println(IntToString(-1000000000000000000));
+    return 0;
+}

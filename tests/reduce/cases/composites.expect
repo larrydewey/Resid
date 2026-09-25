@@ -1,0 +1,6 @@
+has: println("some 1");
+lacks: find_or(
+lacks: describe(
+lacks: mk(
+lacks: first_big(
+lacks: tri(

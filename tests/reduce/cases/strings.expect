@@ -1,0 +1,3 @@
+has: println("hi bob!");
+lacks: str_len(
+lacks: rep(3)

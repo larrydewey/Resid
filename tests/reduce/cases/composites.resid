@@ -1,0 +1,61 @@
+type P = { Int x; Int y; Str name; };
+Int k_at(Int i) {
+    List(Int) ks = [10, -20, 30, 40];
+    return ks[i];
+}
+Int sum_list(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    Int ni = i + 1;
+    return sum_list(xs, ni, acc + xs[i]);
+}
+List(Int) upto(Int n, List(Int) acc) {
+    if (n <= 0) { return acc; }
+    Int m = n - 1;
+    return upto(m, acc.concat([n]));
+}
+P mk(Int a) { return P {.x = a, .y = a + 1, .name = "p" + IntToString(a)}; }
+Int norm1(P p) { return p.x + p.y; }
+Option(Int) find(List(Int) xs, Int want, Int i) {
+    if (i >= xs.len()) { return None; }
+    if (xs[i] == want) { return Some(i); }
+    Int ni = i + 1;
+    return find(xs, want, ni);
+}
+Int find_or(List(Int) xs, Int want) {
+    Option(Int) r = find(xs, want, 0);
+    return r else { -1 };
+}
+Str describe(Option(Int) o) {
+    return match o { Some(v) => "some " + IntToString(v), None => "none" };
+}
+Int first_big(List(Int) xs) {
+    for (Int x in xs) {
+        if (x > 25) { return x; }
+    }
+    return 0;
+}
+Int tri(Int n) {
+    for (Int i in 0..n) {
+        if (i * i > n) { return i; }
+    }
+    return -1;
+}
+Int main() {
+    println(IntToString(k_at(2)));
+    println(IntToString(sum_list([1, 2, 3, 4], 0, 0)));
+    println(IntToString(sum_list(upto(10, []), 0, 0)));
+    List(Int) u = upto(3, []);
+    println(IntToString(u.len()));
+    println(IntToString(u[0]));
+    println(IntToString(norm1(mk(5))));
+    println(mk(7).name);
+    println(IntToString(find_or([5, 6, 7], 7)));
+    println(IntToString(find_or([5, 6, 7], 9)));
+    println(describe(find([1, 2], 2, 0)));
+    println(describe(find([1, 2], 3, 0)));
+    println(IntToString(first_big([1, 30, 50])));
+    println(IntToString(tri(50)));
+    List(Str) names = ["a", "b"];
+    println(names[1] + names[0]);
+    return 0;
+}

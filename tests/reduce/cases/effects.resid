@@ -1,0 +1,32 @@
+Int noisy(Int x) {
+    println("noisy " + IntToString(x));
+    return x + 1;
+}
+Int pure2(Int x) { return x * 0 + 2; }
+Bool side(Str m) { println(m); return true; }
+Int loopish(Int n, Int acc) {
+    if (n <= 0) { return acc; }
+    return loopish(n - 1, acc + n);
+}
+Int main() {
+    Int a = noisy(1);
+    Int b = pure2(a);
+    println(IntToString(b));
+    Bool z = false && side("rhs evaluated");
+    if (z) { println("never"); }
+    Bool y = side("lhs") || true;
+    if (y) { println("y"); }
+    println(IntToString(loopish(10, 0)));
+    println(IntToString(loopish(100000, 0)));
+    if (false) {
+        println("dead");
+    }
+    if (true) {
+        println("live");
+    } else {
+        println("dead2");
+    }
+    Int q = if (1 > 2) { noisy(5) } else { 9 };
+    println(IntToString(q));
+    return 0;
+}

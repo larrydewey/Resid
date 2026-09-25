@@ -1375,6 +1375,59 @@ void* resid_list_str_persist_copy(void* list) {
     return out;
 }
 
+/* Constant list literals (every element a compile-time constant). The
+ * compiler emits one cache slot per literal and calls these instead of
+ * building the list on every evaluation: the first call builds it —
+ * outside any arena, so it lives for the whole process — and publishes it
+ * in *cache; later calls return the same immutable list. A benign race
+ * between threads can build it twice; either copy is equally valid. */
+void* resid_box_i64(int64_t v);
+void* resid_box_bool(int8_t v);
+
+static void* list_const_publish(void** cache, void* list) {
+    __atomic_store_n(cache, list, __ATOMIC_RELEASE);
+    return list;
+}
+
+void* resid_list_const_i64(void** cache, int64_t n, const int64_t* data, const char* type) {
+    void* hit = __atomic_load_n(cache, __ATOMIC_ACQUIRE);
+    if (hit) return hit;
+    Arena* saved = g_current_arena;
+    g_current_arena = NULL;
+    void** boxes = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
+    if (!boxes) resid_abort("resid_list_const_i64: out of memory");
+    for (int64_t i = 0; i < n; i++) boxes[i] = resid_box_i64(data[i]);
+    void* list = resid_list_new(n, boxes, type);
+    free(boxes);
+    g_current_arena = saved;
+    return list_const_publish(cache, list);
+}
+
+void* resid_list_const_bool(void** cache, int64_t n, const int8_t* data, const char* type) {
+    void* hit = __atomic_load_n(cache, __ATOMIC_ACQUIRE);
+    if (hit) return hit;
+    Arena* saved = g_current_arena;
+    g_current_arena = NULL;
+    void** boxes = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
+    if (!boxes) resid_abort("resid_list_const_bool: out of memory");
+    for (int64_t i = 0; i < n; i++) boxes[i] = resid_box_bool(data[i] ? 1 : 0);
+    void* list = resid_list_new(n, boxes, type);
+    free(boxes);
+    g_current_arena = saved;
+    return list_const_publish(cache, list);
+}
+
+/* Elements are pointers to static data (string literal constants). */
+void* resid_list_const_ptr(void** cache, int64_t n, void* const* data, const char* type) {
+    void* hit = __atomic_load_n(cache, __ATOMIC_ACQUIRE);
+    if (hit) return hit;
+    Arena* saved = g_current_arena;
+    g_current_arena = NULL;
+    void* list = resid_list_new(n, (void**)data, type);
+    g_current_arena = saved;
+    return list_const_publish(cache, list);
+}
+
 /* Convert a list into the length-first flat layout used by the stage-2
  * driver ({ i64 count, [count x ptr] elements }): slot array at offset 8,
  * count at offset 0. Used at the C-runtime boundary so lists returned by
@@ -2664,6 +2717,42 @@ int64_t resid_process_run(const char* cmd) {
 }
 
 int64_t resid_args_count(void) { return g_resid_argc; }
+
+/* Program entry trampoline. The compiler emits the program's `main` as
+ * resid_user_main and a C-level main that calls this: the program runs on
+ * a thread with a large stack (default 1 GiB of reserved address space,
+ * committed only as it is touched; RESID_STACK_MB overrides). Resid loops
+ * are written as recursion and the generated code keeps every local in
+ * its frame, so the default 8 MiB main-thread stack is a real limit on
+ * how deep a program — or the compiler's compile-time evaluator — can go.
+ * Falls back to a direct call if the thread cannot be created. */
+typedef int32_t (*resid_main_fn)(void);
+static void* resid_main_thread(void* arg) {
+    resid_main_fn fn = *(resid_main_fn*)arg;
+    int32_t rc = fn();
+    return (void*)(intptr_t)rc;
+}
+
+int32_t resid_run_main(resid_main_fn fn) {
+    size_t mb = 1024;
+    const char* env = getenv("RESID_STACK_MB");
+    if (env && *env) {
+        long v = strtol(env, NULL, 10);
+        if (v >= 8 && v <= 1048576) mb = (size_t)v;
+    }
+    pthread_attr_t attr;
+    pthread_t t;
+    if (pthread_attr_init(&attr) != 0) return fn();
+    if (pthread_attr_setstacksize(&attr, mb * 1024 * 1024) != 0 ||
+        pthread_create(&t, &attr, resid_main_thread, &fn) != 0) {
+        pthread_attr_destroy(&attr);
+        return fn();
+    }
+    pthread_attr_destroy(&attr);
+    void* ret = NULL;
+    pthread_join(t, &ret);
+    return (int32_t)(intptr_t)ret;
+}
 
 char* resid_args_get(int64_t i) {
     if (i < 0 || i >= g_resid_argc) return resid_box_str("");

@@ -1,0 +1,9 @@
+Str tag(Str x) { return "<" + x + ">" + "!" + "?"; }
+Int main() {
+    Str d = IntToString(args.count() + 6);
+    Str n = "7";
+    println(d + " = " + n + "," + "z");
+    println(tag(d) + "a" + "b" + IntToString(3) + "c");
+    println("[" + "x" + d + "y" + "]");
+    return 0;
+}

@@ -1,0 +1,6 @@
+has: println("144");
+has: println("500");
+has: println("-9223372036854775808");
+lacks: IntToString(sq(
+lacks: big()
+lacks: pick(
