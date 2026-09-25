@@ -1,0 +1,16 @@
+// `return [];` adopts the declared List(T) return type.
+List(Str) parts(Str csv) {
+    if (csv == "") { return []; }
+    return str_split(csv, ",");
+}
+List(Int) nums(Bool b) {
+    if (b) { return []; }
+    return [1, 2];
+}
+Int main() {
+    List(Str) a = parts("");
+    List(Str) b = parts("x,y");
+    List(Int) c = nums(true);
+    println(IntToString(a.len()) + " " + b[1] + " " + IntToString(c.len() + nums(false).len()));
+    return 0;
+}

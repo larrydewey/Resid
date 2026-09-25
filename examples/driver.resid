@@ -6371,6 +6371,175 @@ CapPP cap_maybe_inject(Bool sandboxed, List(Str) lines, List(Str) glines, Int n)
     return CapPP {.lines = lines, .glines = glines, .n = n};
 }
 
+// ─── Tail calls ─────────────────────────────────────────────────
+// The driver runs clang without optimization, where `tail call` is only a
+// hint, so every recursive step used to cost a stack frame. After a
+// function body is emitted, each call whose result is returned on the very
+// next line is rewritten:
+//   - a self tail call becomes a jump back to `tco.head`, where every
+//     parameter is a phi, so self-recursion runs as a loop in constant
+//     stack at any optimization level;
+//   - a tail call to any other function with the identical LLVM signature
+//     becomes `musttail`, which LLVM guarantees to lower as a jump.
+// Allocas are hoisted into the entry block (their sizes are static), so a
+// loop iteration does not grow the frame. Functions that allocate
+// fixed-size stack values are left alone: a pointer into this frame may be
+// an argument, and reusing (or discarding) the frame would change it.
+
+type TcoSite = { Bool ok; Str callee; Str reg; Str call; List(Str) vals; };
+type TcoAcc = { List(Str) lines; List(Str) allocas; List(Str) inc; Int n; Int nmust; };
+
+// "%t5 = tail call ptr @f(ptr %p0, i64 %t4)" -> reg, callee, typed args.
+TcoSite tco_parse_call(Str line, Str rty) {
+    TcoSite none = TcoSite {.ok = false, .callee = "", .reg = "", .call = "", .vals = nil_list()};
+    if (!str_starts_with(line, "%")) { return none; }
+    Int sp = str_find_char(line, 32, 0);
+    if (sp < 0) { return none; }
+    Str reg = str_slice(line, 0, sp);
+    Int n = str_len(line);
+    Str rhs = str_slice(line, sp, n);
+    Str p1 = " = call " + rty + " @";
+    Str p2 = " = tail call " + rty + " @";
+    Bool is1 = str_starts_with(rhs, p1);
+    Bool is2 = str_starts_with(rhs, p2);
+    if (!is1 && !is2) { return none; }
+    if (!str_ends_with(rhs, ")")) { return none; }
+    Int skip = if (is2) { str_len(p2) } else { str_len(p1) };
+    Str rest = str_slice(rhs, skip, str_len(rhs) - 1);
+    Int op = str_find_char(rest, 40, 0);
+    if (op < 0) { return none; }
+    Str callee = str_slice(rest, 0, op);
+    Str args = str_slice(rest, op + 1, str_len(rest));
+    List(Str) vals = if (args == "") { nil_list() } else { str_split(args, ", ") };
+    Str call = "call " + rty + " @" + rest + ")";
+    return TcoSite {.ok = true, .callee = callee, .reg = reg, .call = call, .vals = vals};
+}
+
+// Each argument is `<param type> <single value token>`, and never a
+// pointer into this frame (an alloca), which the jump would overwrite and
+// musttail would free.
+Bool tco_args_match(List(Str) vals, List(Str) ptys, List(Str) frame, Int j) {
+    if (j == 0 && vals.len() != ptys.len()) { return false; }
+    if (j >= ptys.len()) { return true; }
+    Str pre = ptys[j] + " ";
+    Str v = vals[j];
+    if (!str_starts_with(v, pre)) { return false; }
+    Str val = str_slice(v, str_len(pre), str_len(v));
+    if (val == "" || str_find_char(val, 32, 0) >= 0) { return false; }
+    if (list_contains_str(frame, val)) { return false; }
+    return tco_args_match(vals, ptys, frame, j + 1);
+}
+
+Bool tco_is_alloca(Str line) {
+    return str_starts_with(line, "%") && str_contains(line, " = alloca ");
+}
+
+// Argument arrays handed to the runtime (copied out before any call
+// returns) and for-loop counters (re-initialized on every loop entry).
+Bool tco_alloca_ok(Str line) {
+    if (str_starts_with(line, "%lia.") || str_starts_with(line, "%k.a")) { return true; }
+    return str_contains(line, " = alloca [") && str_ends_with(line, " x ptr]");
+}
+
+Bool tco_frame_ok(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return true; }
+    Str line = ls[i];
+    if (tco_is_alloca(line) && !tco_alloca_ok(line)) { return false; }
+    return tco_frame_ok(ls, i + 1);
+}
+
+// musttail needs the value in registers: wide integers (i128 and up) are
+// returned through memory and the backend then cannot emit the jump.
+Bool tco_reg_ty(Str t) {
+    return t == "ptr" || t == "i1" || t == "i8" || t == "i16" || t == "i32" || t == "i64" || t == "double" || t == "float";
+}
+
+Bool tco_reg_tys(List(Str) ts, Int i) {
+    if (i >= ts.len()) { return true; }
+    if (!tco_reg_ty(ts[i])) { return false; }
+    return tco_reg_tys(ts, i + 1);
+}
+
+List(Str) tco_alloca_regs(List(Str) ls, Int i, List(Str) out) {
+    if (i >= ls.len()) { return out; }
+    Str line = ls[i];
+    if (tco_is_alloca(line)) {
+        Int sp = str_find_char(line, 32, 0);
+        return tco_alloca_regs(ls, i + 1, out.concat([str_slice(line, 0, sp)]));
+    }
+    return tco_alloca_regs(ls, i + 1, out);
+}
+
+List(Str) tco_add_inc(List(Str) inc, List(Str) vals, List(Str) ptys, Str lb, Int j, List(Str) out) {
+    if (j >= ptys.len()) { return out; }
+    Str v = vals[j];
+    Str val = str_slice(v, str_len(ptys[j]) + 1, str_len(v));
+    Str prev = if (j < inc.len()) { inc[j] } else { "" };
+    return tco_add_inc(inc, vals, ptys, lb, j + 1, out.concat([prev + ", [ " + val + ", %" + lb + " ]"]));
+}
+
+TcoAcc tco_scan(List(Str) ls, Int i, Str fname, Str rty, List(Str) ptys, List(Str) frame, TcoAcc acc) {
+    if (i >= ls.len()) { return acc; }
+    Str line = ls[i];
+    if (tco_is_alloca(line)) {
+        TcoAcc a1 = TcoAcc {.lines = acc.lines, .allocas = acc.allocas.concat([line]), .inc = acc.inc, .n = acc.n, .nmust = acc.nmust};
+        return tco_scan(ls, i + 1, fname, rty, ptys, frame, a1);
+    }
+    Str nxt = if (i + 1 < ls.len()) { ls[i + 1] } else { "" };
+    TcoSite st = tco_parse_call(line, rty);
+    Bool is_tail = st.ok && nxt == "ret " + rty + " " + st.reg;
+    Bool args_ok = is_tail && tco_args_match(st.vals, ptys, frame, 0);
+    if (args_ok && st.callee == fname) {
+        Str lb = "tco.s" + IntToString(acc.n);
+        List(Str) l2 = acc.lines.concat(["br label %" + lb, lb + ":", "br label %tco.head"]);
+        List(Str) inc2 = tco_add_inc(acc.inc, st.vals, ptys, lb, 0, nil_list());
+        TcoAcc a2 = TcoAcc {.lines = l2, .allocas = acc.allocas, .inc = inc2, .n = acc.n + 1, .nmust = acc.nmust};
+        return tco_scan(ls, i + 2, fname, rty, ptys, frame, a2);
+    }
+    if (args_ok && tco_reg_ty(rty) && tco_reg_tys(ptys, 0)) {
+        List(Str) l3 = acc.lines.concat([st.reg + " = musttail " + st.call]);
+        TcoAcc a3 = TcoAcc {.lines = l3, .allocas = acc.allocas, .inc = acc.inc, .n = acc.n, .nmust = acc.nmust + 1};
+        return tco_scan(ls, i + 1, fname, rty, ptys, frame, a3);
+    }
+    TcoAcc a4 = TcoAcc {.lines = acc.lines.concat([line]), .allocas = acc.allocas, .inc = acc.inc, .n = acc.n, .nmust = acc.nmust};
+    return tco_scan(ls, i + 1, fname, rty, ptys, frame, a4);
+}
+
+List(Str) tco_phis(List(Str) ptys, List(Str) inc, Int j, List(Str) out) {
+    if (j >= ptys.len()) { return out; }
+    Str p = "%p" + IntToString(j);
+    Str ph = p + " = phi " + ptys[j] + " [ " + p + ".in, %entry ]" + inc[j];
+    return tco_phis(ptys, inc, j + 1, out.concat([ph]));
+}
+
+Str param_decl_in_at(List(Str) ptys, Int i, Str acc) {
+    if (i >= ptys.len()) { return acc; }
+    Str sep = if (acc != "") { ", " } else { "" };
+    return param_decl_in_at(ptys, i + 1, acc + sep + ptys[i] + " %p" + IntToString(i) + ".in");
+}
+
+List(Str) ll_ty_list(List(Str) tys, Int i, List(Str) out) {
+    if (i >= tys.len()) { return out; }
+    return ll_ty_list(tys, i + 1, out.concat([ll_ty(tys[i])]));
+}
+
+// Whole-function rewrite: header + entry + body -> own lines (without "}").
+// `head` is [defline, "entry:"]; `body` is everything after it.
+List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(Str) ptys, Str defpre, Str defpost) {
+    if (!tco_frame_ok(body, 0)) { return head.concat(body); }
+    List(Str) frame = tco_alloca_regs(body, 0, nil_list());
+    TcoAcc a = tco_scan(body, 0, fname, rty, ptys, frame, TcoAcc {.lines = nil_list(), .allocas = nil_list(), .inc = nil_list(), .n = 0, .nmust = 0});
+    if (a.n == 0) {
+        if (a.nmust == 0) { return head.concat(body); }
+        return head.concat(a.allocas).concat(a.lines);
+    }
+    Str defline = defpre + param_decl_in_at(ptys, 0, "") + defpost;
+    List(Str) h = [defline, "entry:"];
+    List(Str) h2 = h.concat(a.allocas).concat(["br label %tco.head", "tco.head:"]);
+    List(Str) h3 = h2.concat(tco_phis(ptys, a.inc, 0, nil_list()));
+    return h3.concat(a.lines);
+}
+
 PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     PRes rty = parse_type(s, pos);
     if (rty.err != "") { return PG {.pos = g.pos, .err = rty.err, .glines = g.glines, .hlines = g.hlines, .lines = g.lines, .tmp = g.tmp, .lbl = g.lbl}; }
@@ -6460,7 +6629,13 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     // whole-program accumulator — pp1.lines/pp2.glines never included it
     // in the first place (see dl/pp0 above). Small, bounded by this one
     // function's size regardless of how large the program has grown.
-    List(Str) own_lines = pp1.lines.concat(pp2.lines).concat(["}"]);
+    List(Str) ptys_ll = ll_ty_list(tyl, 0, nil_list());
+    Bool growbuf_params = eb.lines.len() != pp1.lines.len();
+    Bool tco_ok = !is_main && !sandboxed && !growbuf_params;
+    Str defpre = "define " + ll_ty(rbase) + " @" + name.text + "(";
+    Str defpost = ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
+    List(Str) fn_lines = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name.text, ll_ty(rbase), ptys_ll, defpre, defpost) } else { pp1.lines.concat(pp2.lines) };
+    List(Str) own_lines = fn_lines.concat(["}"]);
     List(Str) own_glines = pp2.glines;
     // Extract every PLAIN VALUE (Int) this function still needs after the
     // arena pops, while everything that produced it (open, body — both
@@ -6855,25 +7030,21 @@ Str render_caret(Str s, Int line, Int col_start, Int col_end, Str label) {
 
 // Get the text of the given 1-based line number.
 Str get_line_at(Str s, Int i, Int cur_line, Int target) {
-    return get_line_at_rec(s, i, 1, target, 0);
+    return get_line_at_rec(s, i, cur_line, target);
 }
-Str get_line_at_rec(Str s, Int i, Int cur_line, Int target, Int line_start) {
+// Walks newline to newline (one frame per line, not per character), for the
+// same reason as pos_to_line_col_rec: a diagnostic near the end of a large
+// source otherwise exhausts the stack.
+Str get_line_at_rec(Str s, Int start, Int cur_line, Int target) {
     Int n = str_len(s);
-    if (i >= n) { return ""; }
+    if (start >= n) { return ""; }
+    Int nl = str_find_char(s, 10, start);
     if (cur_line == target) {
-        return get_line_end_rec(s, line_start, i, n);
+        Int e = if (nl < 0) { n } else { nl };
+        return str_slice(s, start, e);
     }
-    Int c = str_char_at(s, i);
-    if (c == 10) {
-        return get_line_at_rec(s, i + 1, cur_line + 1, target, i + 1);
-    }
-    return get_line_at_rec(s, i + 1, cur_line, target, line_start);
-}
-Str get_line_end_rec(Str s, Int line_start, Int i, Int n) {
-    if (i >= n) { return str_slice(s, line_start, i); }
-    Int c = str_char_at(s, i);
-    if (c == 10) { return str_slice(s, line_start, i); }
-    return get_line_end_rec(s, line_start, i + 1, n);
+    if (nl < 0) { return ""; }
+    return get_line_at_rec(s, nl + 1, cur_line + 1, target);
 }
 
 // Emit a full diagnostic: header + caret snippet.
@@ -7227,7 +7398,7 @@ ERes check_struct_lit_rest(Str s, Int pos, Str ty, List(Str) env, Sigs fs) {
     Bool vempty = v.ty == "List(Unknown)";
     Bool fint = is_num(ft) && is_num(v.ty);
     Bool fok = fint && int_adopt_ok(v.ty, ft, "");
-    if (!vempty && !fok && v.ty != ft) {
+    if (!vempty && !fok && !ty_same(v.ty, ft)) {
         Str msg = "field " + f.text + ": expected " + ft + ", got " + v.ty;
         return ERes {.pos = v.pos, .ty = "", .err = msg};
     }
@@ -7285,6 +7456,36 @@ pub Str num_norm(Str ty) {
     if (ty == "UInt") { return "UInt(64)"; }
     if (ty == "Float") { return "Float(64)"; }
     return ty;
+}
+
+// Deep alias normalization: every bare `Int` / `UInt` / `Float` anywhere
+// inside a type string becomes its explicit width, so `List(Int)` and
+// `List(Int(64))` name the same type.
+pub Str ty_canon_word(Str w, Bool has_args) {
+    if (has_args) { return w; }
+    return num_norm(w);
+}
+
+pub Str ty_canon_at(Str t, Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(t, i);
+    if (is_alpha(c)) {
+        Int e = scan_ident(t, i, n);
+        Str w = str_slice(t, i, e);
+        Bool has_args = str_char_at(t, e) == 40;
+        return ty_canon_at(t, e, n, acc + ty_canon_word(w, has_args));
+    }
+    return ty_canon_at(t, i + 1, n, acc + str_from_code(c));
+}
+
+pub Str ty_canon(Str t) {
+    return ty_canon_at(t, 0, str_len(t), "");
+}
+
+// Type equality modulo the numeric aliases.
+pub Bool ty_same(Str a, Str b) {
+    if (a == b) { return true; }
+    return ty_canon(a) == ty_canon(b);
 }
 
 pub Bool is_int_ty(Str ty) {
@@ -8056,8 +8257,8 @@ pub List(Str) split_type_list(Str tys, Int pos, Int elem_i, Int depth, Str acc, 
 // parity: an empty `[]` argument takes the parameter's element type).
 pub Bool params_accept_at(Str pts, Str argtys, Int i, Int n) {
     if (i >= n) { return true; }
-    Str p = num_norm(ty_list_at(pts, i));
-    Str g = num_norm(ty_list_at(argtys, i));
+    Str p = ty_canon(ty_list_at(pts, i));
+    Str g = ty_canon(ty_list_at(argtys, i));
     Bool same = p == g;
     Bool empty_adopt = g == "List(Unknown)" && str_has_prefix(p, "List(");
     Bool widen_possible = is_int_ty(p) && is_int_ty(g);
@@ -8305,7 +8506,7 @@ ERes check_lambda(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
         return ERes {.pos = body_close.pos, .ty = "", .err = "expected } to close lambda body"};
     }
     Str ret = fn_ret(exp);
-    Bool ty_ok = body.ty == ret;
+    Bool ty_ok = ty_same(body.ty, ret);
     Bool num_adopt = is_num(body.ty) && is_num(ret) && int_adopt_ok(body.ty, ret, "");
     if (!ty_ok && !num_adopt) {
         Str msg = "closure body returns " + body.ty + ", expected " + ret;
@@ -8356,7 +8557,7 @@ ERes check_list_lit_rest(Str s, Int pos, Str elem, Int count, List(Str) env, Sig
     ERes e = check_expr_e(s, pos, env, fs, want_elem);
     if (e.err != "") { return e; }
     Str elem2 = if (elem == "") { e.ty } else { elem };
-    if (elem != "" && elem != e.ty) {
+    if (elem != "" && !ty_same(elem, e.ty)) {
         Str msg = "list element type mismatch: " + elem + " vs " + e.ty;
         return ERes {.pos = e.pos, .ty = "", .err = msg};
     }
@@ -8484,7 +8685,7 @@ ERes check_set_lit_rest(Str s, Int pos, Str elem, List(Str) env, Sigs fs) {
     ERes e = check_expr(s, pos, env, fs);
     if (e.err != "") { return e; }
     Str elem2 = if (elem == "") { e.ty } else { elem };
-    if (elem != "" && elem != e.ty) {
+    if (elem != "" && !ty_same(elem, e.ty)) {
         Str msg = "set element type mismatch: " + elem + " vs " + e.ty;
         return ERes {.pos = e.pos, .ty = "", .err = msg};
     }
@@ -9101,7 +9302,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
             ERes else_e2 = check_primary_e(s, kw.pos, env, fs, exp);
             if (else_e2.err != "") { return else_e2; }
             // Arms agree up to the numeric aliases (Int == Int(64), ...).
-            if (num_norm(then_e.ty) != num_norm(else_e2.ty)) {
+            if (!ty_same(then_e.ty, else_e2.ty)) {
                 Str msg2 = "if branches differ: " + then_e.ty + " vs " + else_e2.ty;
                 return ERes {.pos = else_e2.pos, .ty = "", .err = msg2};
             }
@@ -9110,7 +9311,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
         Tok brace2 = lex_tok(s, kw.pos);
         ERes else_e = check_expr_block(s, brace2.pos, env, fs);
         if (else_e.err != "") { return else_e; }
-        if (num_norm(then_e.ty) != num_norm(else_e.ty)) {
+        if (!ty_same(then_e.ty, else_e.ty)) {
             Str msg = "if branches differ: " + then_e.ty + " vs " + else_e.ty;
             return ERes {.pos = else_e.pos, .ty = "", .err = msg};
         }
@@ -9810,7 +10011,7 @@ SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, 
     }
     // Type check using the base type (erase constraint).
     Str ety = ct_base_of(fs.ctn, fs.ctb, ty);
-    if (v.ty != ety) {
+    if (!ty_same(v.ty, ety)) {
         Bool vempty = v.ty == "List(Unknown)";
         Bool listty = str_has_prefix(ety, "List(");
         Bool coerce = vempty && listty;
@@ -9862,7 +10063,7 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
         if (v.err != "") {
             return SRes {.pos = v.pos, .err = v.err, .env = env};
         }
-        if (v.ty != ret) {
+        if (!ty_same(v.ty, ret)) {
             // Spec v3.2 §6.4: value-preserving widening is implicit;
             // narrowing requires literal adoption.
             Bool inrange = is_int_ty(ret) && is_int_ty(v.ty);
@@ -9879,6 +10080,9 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
             Bool opt_hole = v.ty == "Option(_)";
             Bool opt_expected = str_has_prefix(ret, "Option(");
             Bool opt_ret_ok = opt_hole && opt_expected;
+            // return []; in a List(T) function — the empty literal adopts the
+            // declared element type, as it does at bindings and call args.
+            Bool empty_ret_ok = v.ty == "List(Unknown)" && str_has_prefix(ret, "List(");
             // return Ok(v) / Err(v) in a Result(Int, Str) function — the hole
             // adopts the declared return type's missing half.
             Bool res_ok_hole = str_has_prefix(v.ty, "Result(") && (res_elem_err(v.ty) == "_" || res_elem_err(v.ty) == " _");
@@ -9900,7 +10104,7 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
             Bool er_int = is_int_ty(ver) && is_int_ty(res_elem_err(ret));
             Bool er_accept = want_err_hole || er_same || (er_int && int_adopt_ok(ver, res_elem_err(ret), "0"));
             Bool res_ret_ok = both_res && ok_accept && er_accept;
-            if (!riok && !opt_ret_ok && !res_ok_ret_ok && !res_err_ret_ok && !res_ret_ok) {
+            if (!riok && !opt_ret_ok && !empty_ret_ok && !res_ok_ret_ok && !res_err_ret_ok && !res_ret_ok) {
                 Str msg = "return type " + v.ty + " does not match " + ret;
                 return SRes {.pos = v.pos, .err = msg, .env = env};
             }
@@ -12299,6 +12503,20 @@ Str pick_opt(Int i, Str flag, Str acc) {
     return pick_opt(k, flag, acc2);
 }
 
+// clang optimization level for the emitted IR: the last -O0/-O1/-O2/-O3/-Os/-Oz
+// on the command line, -O2 when none is given.
+Bool is_olevel(Str a) {
+    return a == "-O0" || a == "-O1" || a == "-O2" || a == "-O3" || a == "-Os" || a == "-Oz";
+}
+
+Str pick_olevel(Int i, Str acc) {
+    if (i <= 1) { return acc; }
+    Str a  =  args.get(i);
+    Str rest  =  pick_olevel(i - 1, acc);
+    if (is_olevel(a)) { return a; }
+    return rest;
+}
+
 Bool pick_flag(Int i, Str flag) {
     if (i <= 1) { return false; }
     Str a  =  args.get(i);
@@ -12320,7 +12538,7 @@ Str exec_path(Str p) {
 Int main() {
     Int argc  =  args.count();
     if (argc < 2) {
-        println("usage: driver <source.res> [-o out] [-rt resid_rt.c]");
+        println("usage: driver <source.res> [-o out] [-rt resid_rt.c] [-O0|-O1|-O2|-O3|-Os|-Oz]");
         println("       driver test <file.resid> [--filter RE] [--format pretty|tap|json]");
         return 1;
     }
@@ -12413,7 +12631,8 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Str doc  =  str_join(all, "\n") + "\n";
     Str ll  =  out + ".ll";
     filesystem.write_all(ll, doc);
-    Str cmd  =  "clang " + ll + " " + rtc + " -Wno-override-module -pthread -o " + out;
+    Str olevel  =  pick_olevel(argc, "-O2");
+    Str cmd  =  "clang " + olevel + " " + ll + " " + rtc + " -Wno-override-module -pthread -o " + out;
     Int rc  =  process.run(cmd);
     if (rc != 0) {
         println("clang failed");

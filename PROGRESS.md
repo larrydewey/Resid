@@ -125,6 +125,31 @@ string path carries its state in scalars. Self-compile peak RSS is now
 `tests/reduce/run.sh` (differential against `--no-reduce`, expected output,
 and has/lacks checks on the reduced `main`).
 
+### 0d. Tail calls, clang -O2, numeric aliases, diagnostics (2026-09-24)
+
+- **Tail calls.** The driver ran clang with no `-O`, where `tail call` is
+  only a hint, so every recursive step cost a stack frame. Codegen now
+  rewrites a self tail call (`return f(...)` in `f`) into a jump back to a
+  loop head whose phis are the parameters, and marks tail calls to other
+  functions with an identical register-sized signature `musttail`. Both are
+  guaranteed at every optimization level: 50M-deep self recursion and
+  mutual recursion run on an 8MB stack. Functions that hold fixed-size
+  stack values, sandboxed functions and growbuf parameters are left alone.
+  Non-tail recursion (`n * fact(n - 1)`) is unchanged.
+- **Optimization level.** Emitted programs are built with clang `-O2` by
+  default; `-O0|-O1|-O2|-O3|-Os|-Oz` on the driver's command line selects
+  another. `boot.sh` links the compiler binaries with `$RESID_OPT`
+  (default `-O2`). Self-compile went from ~11s to ~7s, of which ~4.8s is
+  clang -O2 (clang -O0 takes ~0.7s).
+- **Numeric aliases.** `Int` and `Int(64)` (and `UInt`/`Float`) now name the
+  same type at every typecheck comparison, including nested (`List(Int)` vs
+  `List(Int(64))`): returns, bindings, call arguments, list/set elements,
+  struct fields, if arms and closure bodies. `return [];` adopts a declared
+  `List(T)` return type, as bindings and arguments already did.
+- **Diagnostics.** Rendering the caret line of an error near the end of a
+  large source recursed once per preceding character and overflowed the
+  stack (the "core dump after a type error"); it now walks line to line.
+
 ### Major capabilities
 
 - **Stage-2 self-hosting proven, including full sandbox/capability parity**:
