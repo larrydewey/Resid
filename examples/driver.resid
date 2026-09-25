@@ -975,7 +975,7 @@ Int next_pow_width(Int needed) {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)"];
+    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -4142,6 +4142,13 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             }
             if (t.text == "str_reverse") {
                 return cg_extern1(s, t2.pos, "str_reverse", "Str", "Str", env, fs, c);
+            }
+            // In-place string accumulators (examples/stracc.resid).
+            if (t.text == "resid_sacc_from") {
+                return cg_extern1(s, t2.pos, "resid_sacc_from", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "resid_sacc_append") {
+                return cg_extern2(s, t2.pos, "resid_sacc_append", "Str", "Str", "Str", env, fs, c);
             }
             if (t.text == "str_contains") {
                 return cg_externb2(s, t2.pos, "str_contains", "Str", "Str", env, fs, c);
@@ -14442,6 +14449,7 @@ import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
 import "reduce.resid";
 import "desugar.resid";
+import "stracc.resid";
 
 Int hex_val(Str s, Int i) {
     Int ip1  =  i + 1;
@@ -14841,11 +14849,13 @@ Int main() {
         println(red.err);
         return 1;
     }
-    Str csrc  =  red.text;
+    Str csrc0  =  red.text;
     Str dump_path  =  pick_opt(argc, "--dump-reduced", "");
     if (dump_path != "") {
-        Bool dumped = filesystem.write_all(dump_path, csrc);
+        Bool dumped = filesystem.write_all(dump_path, csrc0);
     }
+    // Str accumulators become in-place buffers (examples/stracc.resid).
+    Str csrc  =  sa_rewrite(csrc0);
     Funcs fs = collect_sigs(csrc);
     if (testmode && fn_index(fs, "main") >= 0) {
         println("test error: " + path + " defines main(); a test file's entry point is generated");
