@@ -1,0 +1,12 @@
+@requires(filesystem)
+Int touch_disk() {
+    return 7;
+}
+
+@requires(filesystem)
+Int main() {
+    Result(Int, RegionError) r = spawn () {
+        return touch_disk();
+    };
+    return 0;
+}

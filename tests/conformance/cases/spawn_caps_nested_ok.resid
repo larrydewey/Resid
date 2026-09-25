@@ -1,0 +1,18 @@
+@requires(filesystem)
+Int touch_disk() {
+    return 7;
+}
+
+@requires(filesystem, network)
+Int main() {
+    Result(Int, RegionError) r = spawn (filesystem, network) {
+        Result(Int, RegionError) inner = spawn (filesystem) {
+            return touch_disk();
+        };
+        Int v = match inner { Ok(n) => n, Err(e) => 0 };
+        return v + 1;
+    };
+    Int got = match r { Ok(n) => n, Err(e) => 0 };
+    println(IntToString(got));
+    return 0;
+}

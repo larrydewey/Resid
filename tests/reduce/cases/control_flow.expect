@@ -1,0 +1,6 @@
+lacks: sq(4)
+lacks: pick(
+lacks: k + 1
+lacks: never
+has: v + 4
+has: i + 25

@@ -685,6 +685,13 @@ RdV rd_expr(Str s, Int pos, RdE env, RdT ft, RdS st) {
 
 RdV rd_bin(Str s, Int start, RdV lhs, Int minp, RdE env, RdT ft) {
     Tok t = lex_tok(s, lhs.pos);
+    Bool tern = if (t.text == "?") { rd_ternary_ahead(s, t.pos, lhs) } else { false };
+    if (tern) {
+        // `c ? a : b` binds looser than every binary operator: an inner
+        // operand level hands it back to the outermost one.
+        if (minp > 1) { return lhs; }
+        return rd_ternary(s, start, lhs, t, env, ft);
+    }
     if (t.text == "?") {
         Str rq = lhs.r + str_slice(s, lhs.pos, t.pos);
         RdV q = rd_unk(rq, lhs.ch, t.pos, lhs.st);
@@ -732,6 +739,42 @@ RdV rd_bin(Str s, Int start, RdV lhs, Int minp, RdE env, RdT ft) {
     if (more.bad) { return more; }
     RdV applied = rd_apply(s, t.text, start, lhs, more);
     return rd_bin(s, start, applied, minp, env, ft);
+}
+
+// Is the `?` after `lhs` a conditional (`c ? a : b`) rather than the
+// postfix Option operator? A known Option operand is postfix and a known
+// Bool a conditional. Otherwise — including the right operand of an inner
+// operator, as in `a > 2 ? x : y`, where lhs is `2` — the token after `?`
+// decides: an operand start means a conditional, anything else (`;`, `)`,
+// `,`, `.`, an operator, `else`) the postfix form.
+Bool rd_ternary_ahead(Str s, Int qpos, RdV lhs) {
+    if (lhs.k) {
+        Str lt = rd_norm_ty(lhs.ty);
+        if (lt == "Bool") { return true; }
+        if (str_starts_with(lt, "Option(")) { return false; }
+    }
+    Tok nx = lex_tok(s, qpos);
+    if (nx.kind == "ident") { return nx.text != "else"; }
+    if (nx.kind == "int" || nx.kind == "str" || nx.kind == "float" || nx.kind == "fstring") { return true; }
+    return nx.text == "(" || nx.text == "[" || nx.text == "!";
+}
+
+RdV rd_ternary(Str s, Int start, RdV c, Tok q, RdE env, RdT ft) {
+    RdV a = rd_expr(s, q.pos, env, ft, c.st);
+    if (a.bad) { return a; }
+    Tok colon = lex_tok(s, a.pos);
+    if (colon.text != ":") { return rd_badv(colon.pos, a.st); }
+    RdV b = rd_expr(s, colon.pos, env, ft, a.st);
+    if (b.bad) { return b; }
+    Str orig = str_slice(s, start, b.pos);
+    Bool anych = c.ch || a.ch || b.ch;
+    Str rebuilt = if (anych) { c.r + str_slice(s, c.pos, q.pos) + a.r + str_slice(s, a.pos, colon.pos) + b.r } else { orig };
+    if (c.k) {
+        RdV x = if (c.v == "true") { a } else { b };
+        if (x.k) { return rd_folded(x.v, x.ty, rebuilt, true, b.pos, b.st); }
+        return rd_unk(rd_nl_pad("(" + x.r + ")", orig), true, b.pos, b.st);
+    }
+    return rd_unk(rebuilt, anych, b.pos, b.st);
 }
 
 RdV rd_unary(Str s, Int pos, RdE env, RdT ft, RdS st) {
@@ -824,6 +867,19 @@ RdV rd_primary(Str s, Int pos, RdE env, RdT ft, RdS st) {
             return rd_match_opt(s, mb.pos, mend, sc, mo, env, ft);
         }
         return rd_unk(mo, false, mend, sc.st);
+    }
+    // `spawn (caps) { body }`: an isolated region with its own effects;
+    // left as written.
+    Bool spawn_kw = if (t.text == "spawn") { rd_env_idx(env, "spawn") < 0 } else { false };
+    if (spawn_kw) {
+        Tok sp = lex_tok(s, t.pos);
+        if (sp.text == "(") {
+            Int cend = rd_skip_group(s, sp.pos, 1);
+            Tok sb = lex_tok(s, cend);
+            if (sb.text != "{") { return rd_badv(sb.pos, st); }
+            Int send = rd_skip_group(s, sb.pos, 1);
+            return rd_unk(str_slice(s, pos, send), false, send, st);
+        }
     }
     if (t.text == "lambda") {
         Tok lp = lex_tok(s, t.pos);
@@ -1540,6 +1596,17 @@ RdV rd_ifexpr(Str s, Int pos, RdE env, RdT ft, RdS st) {
     Tok kif = lex_tok(s, pos);
     Tok open = lex_tok(s, kif.pos);
     if (open.text != "(") { return rd_badv(open.pos, st); }
+    // `if (Pat = e) {..}` and an `if` without `else` (zero value when
+    // false) are left as written.
+    Int xcend = rd_skip_group(s, open.pos, 1);
+    Int xeq = rd_top_eq(s, open.pos, xcend, 0);
+    Tok xob = lex_tok(s, xcend);
+    Int xbend = if (xob.text == "{") { rd_skip_group(s, xob.pos, 1) } else { xcend };
+    Tok xkw = lex_tok(s, xbend);
+    if (xeq >= 0 || xkw.text != "else") {
+        Int xend = rd_if_chain_end(s, pos);
+        return rd_unk(str_slice(s, pos, xend), false, xend, st);
+    }
     RdV c = rd_expr(s, open.pos, env, ft, st);
     if (c.bad) { return c; }
     Tok close = lex_tok(s, c.pos);
@@ -1548,7 +1615,9 @@ RdV rd_ifexpr(Str s, Int pos, RdE env, RdT ft, RdS st) {
     if (ob.text != "{") { return rd_badv(ob.pos, c.st); }
     RdV a = rd_eblock(s, ob.pos, env, ft, c.st);
     if (a.bad) { return a; }
-    Tok cb = lex_tok(s, a.pos);
+    // A block's value may be followed by a stray `;` (`{ 10; }`).
+    Tok cb0 = lex_tok(s, a.pos);
+    Tok cb = if (cb0.text == ";") { lex_tok(s, cb0.pos) } else { cb0 };
     if (cb.text != "}") { return rd_badv(cb.pos, a.st); }
     Tok kw = lex_tok(s, cb.pos);
     if (kw.text != "else") { return rd_badv(kw.pos, a.st); }
@@ -1556,7 +1625,8 @@ RdV rd_ifexpr(Str s, Int pos, RdE env, RdT ft, RdS st) {
     Bool elif = pk.text == "if";
     RdV b = if (elif) { rd_ifexpr(s, kw.pos, env, ft, a.st) } else { rd_eblock(s, pk.pos, env, ft, a.st) };
     if (b.bad) { return b; }
-    Tok cb2 = lex_tok(s, b.pos);
+    Tok cb20 = lex_tok(s, b.pos);
+    Tok cb2 = if (!elif && cb20.text == ";") { lex_tok(s, cb20.pos) } else { cb20 };
     Int endp = if (elif) { b.pos } else { cb2.pos };
     if (!elif && cb2.text != "}") { return rd_badv(cb2.pos, b.st); }
     Str bpart = if (elif) { b.r } else { str_slice(s, kw.pos, pk.pos) + b.r + str_slice(s, b.pos, cb2.pos) };
@@ -1626,6 +1696,34 @@ RdR rd_stmts(Str s, Int pos, RdE env, RdT ft, RdS st0) {
         Str text = if (v.ch) { rd_nl_pad(str_slice(s, pos, eq.pos) + " " + v.r + ";", orig) } else { orig };
         return rd_then(text, false, rest);
     }
+    if (t.text == "while") { return rd_while(s, pos, t, env, ft, st); }
+    if (t.text == "break" || t.text == "continue") {
+        // Ends its block like `return`; inside a β-reduced loop the call
+        // stays residual (ok=false).
+        Tok bsemi = lex_tok(s, t.pos);
+        if (bsemi.text != ";") { return rd_rbad(bsemi.pos, st); }
+        RdR rb0 = rd_mk("", bsemi.pos, true, false, false, "", "", st);
+        return rd_finish_dead(s, str_slice(s, pos, bsemi.pos), bsemi.pos, rb0);
+    }
+    if (t.text == "with") {
+        // `with (T h = e, ...) { body }`: handle scope with release on
+        // exit; left as written.
+        Tok wo = lex_tok(s, t.pos);
+        if (wo.text != "(") { return rd_rbad(wo.pos, st); }
+        Int whend = rd_skip_group(s, wo.pos, 1);
+        Tok wb = lex_tok(s, whend);
+        if (wb.text != "{") { return rd_rbad(wb.pos, st); }
+        Int wend = rd_skip_group(s, wb.pos, 1);
+        if (st.depth > 0) {
+            RdR restw = rd_stmts(s, wend, env, ft, st);
+            return rd_then(str_slice(s, pos, wend), false, restw);
+        }
+        // The body is reduced with every name the header mentions unknown.
+        RdR wbody = rd_block(s, whend, rd_pat_env(s, wo.pos, whend, env), ft, st);
+        if (wbody.bad) { return rd_then(str_slice(s, pos, wend), false, rd_stmts(s, wend, env, ft, wbody.st)); }
+        RdR restw2 = rd_stmts(s, wbody.pos, env, ft, wbody.st);
+        return rd_then(rd_nl_pad(str_slice(s, pos, whend) + wbody.out, str_slice(s, pos, wend)), false, restw2);
+    }
     if (t.text == "if") {
         RdR ri = rd_ifstmt(s, pos, env, ft, st);
         if (ri.bad) { return ri; }
@@ -1656,6 +1754,18 @@ RdR rd_stmts(Str s, Int pos, RdE env, RdT ft, RdS st0) {
             }
             RdR rest7 = rd_stmts(s, fend, env, ft, fr.st);
             return rd_then(str_slice(s, pos, fend), false, rest7);
+        }
+        // Outside β-reduction the loop runs at run time: the header stays
+        // and the body is reduced with the loop variable unknown.
+        PRes fty = parse_type(s, fo.pos);
+        Tok fname = lex_tok(s, fty.pos);
+        Tok fin = lex_tok(s, fname.pos);
+        Bool simple = if (fty.err == "") { fin.text == "in" } else { false };
+        if (simple) {
+            RdR fbody = rd_block(s, hend, rd_env_add(env, fname.text, "", ""), ft, st);
+            if (fbody.bad) { return rd_then(str_slice(s, pos, fend), false, rd_stmts(s, fend, env, ft, fbody.st)); }
+            RdR rest8 = rd_stmts(s, fbody.pos, env, ft, fbody.st);
+            return rd_then(rd_nl_pad(str_slice(s, pos, hend) + fbody.out, str_slice(s, pos, fend)), false, rest8);
         }
         RdR rest4 = rd_stmts(s, fend, env, ft, st);
         return rd_then(str_slice(s, pos, fend), false, rest4);
@@ -1689,6 +1799,15 @@ RdR rd_stmts(Str s, Int pos, RdE env, RdT ft, RdS st0) {
                 }
             }
         }
+    }
+    // Destructuring `Point { x, y } = p;` / `Some(v) = o;`: left as
+    // written; every name the pattern may bind becomes unknown.
+    Int dend = rd_stmt_end(s, pos, 0);
+    Int deq = rd_top_eq(s, pos, dend, 0);
+    if (deq >= 0) {
+        RdE denv = rd_pat_env(s, pos, deq, env);
+        RdR restd = rd_stmts(s, dend, denv, ft, st);
+        return rd_then(str_slice(s, pos, dend), false, restd);
     }
     RdV e = rd_expr(s, pos, env, ft, st);
     if (e.bad) { return rd_rbad(e.pos, e.st); }
@@ -1801,6 +1920,80 @@ RdR rd_bind(Str s, Int pos, Str ty, Str name, Int eqpos, RdE env, RdT ft, RdS st
     return rd_then(btext, v.k, rest);
 }
 
+// Position of the first `=` at nesting depth 0 in [pos, end), or -1.
+Int rd_top_eq(Str s, Int pos, Int end, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof" || t.pos > end) { return -1; }
+    if (depth == 0 && t.text == "=") { return t.pos; }
+    if (rd_is_open(t.text)) { return rd_top_eq(s, t.pos, end, depth + 1); }
+    if (rd_is_close(t.text)) { return rd_top_eq(s, t.pos, end, depth - 1); }
+    return rd_top_eq(s, t.pos, end, depth);
+}
+
+// Mark every lower-case identifier in a pattern [pos, end) unknown.
+RdE rd_pat_env(Str s, Int pos, Int end, RdE env) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof" || t.pos >= end) { return env; }
+    Int c0 = if (t.kind == "ident") { str_char_at(t.text, 0) } else { 0 };
+    Bool lower = if (c0 >= 97) { c0 <= 122 } else { c0 == 95 };
+    RdE env2 = if (lower) { rd_env_add(env, t.text, "", "") } else { env };
+    return rd_pat_env(s, t.pos, end, env2);
+}
+
+// End of an `if` chain starting at `pos` (the `if` keyword).
+Int rd_if_chain_end(Str s, Int pos) {
+    Tok kif = lex_tok(s, pos);
+    Tok open = lex_tok(s, kif.pos);
+    Int cend = rd_skip_group(s, open.pos, 1);
+    Tok ob = lex_tok(s, cend);
+    Int bend = rd_skip_group(s, ob.pos, 1);
+    Tok kw = lex_tok(s, bend);
+    if (kw.text != "else") { return bend; }
+    Tok pk = lex_tok(s, kw.pos);
+    if (pk.text == "if") { return rd_if_chain_end(s, kw.pos); }
+    return rd_skip_group(s, pk.pos, 1);
+}
+
+// `while (c) { body }`. A known-false condition drops the loop; otherwise
+// the condition and body are reduced in place (bindings are immutable, so
+// every iteration sees the same known values). `while (Pat = e)` and any
+// loop met while β-reducing a call are left as written.
+RdR rd_while(Str s, Int pos, Tok kw, RdE env, RdT ft, RdS st) {
+    Tok open = lex_tok(s, kw.pos);
+    if (open.text != "(") { return rd_rbad(open.pos, st); }
+    Int cend = rd_skip_group(s, open.pos, 1);
+    Tok ob = lex_tok(s, cend);
+    if (ob.text != "{") { return rd_rbad(ob.pos, st); }
+    Int wend = rd_skip_group(s, ob.pos, 1);
+    Str orig = str_slice(s, pos, wend);
+    Int ceq = rd_top_eq(s, open.pos, cend, 0);
+    if (st.depth > 0) {
+        RdR rest = rd_stmts(s, wend, env, ft, st);
+        return rd_then(orig, false, rest);
+    }
+    if (ceq >= 0) {
+        // `while (Pat = e)`: the header stays; the body is reduced with
+        // the pattern's names unknown.
+        RdR lb = rd_block(s, cend, rd_pat_env(s, open.pos, ceq, env), ft, st);
+        if (lb.bad) { return rd_then(orig, false, rd_stmts(s, wend, env, ft, lb.st)); }
+        RdR restl = rd_stmts(s, lb.pos, env, ft, lb.st);
+        return rd_then(rd_nl_pad(str_slice(s, pos, cend) + lb.out, orig), false, restl);
+    }
+    RdV c = rd_expr(s, open.pos, env, ft, st);
+    if (c.bad) { return rd_rbad(c.pos, c.st); }
+    Tok close = lex_tok(s, c.pos);
+    if (close.text != ")") { return rd_rbad(close.pos, c.st); }
+    if (c.k && c.v == "false") {
+        RdR rest0 = rd_stmts(s, wend, env, ft, c.st);
+        return rd_then(rd_nl_pad("", orig), true, rest0);
+    }
+    RdR body = rd_block(s, close.pos, env, ft, c.st);
+    if (body.bad) { return rd_then(orig, false, rd_stmts(s, wend, env, ft, body.st)); }
+    Str text = str_slice(s, pos, open.pos) + c.r + str_slice(s, c.pos, close.pos) + body.out;
+    RdR rest2 = rd_stmts(s, body.pos, env, ft, body.st);
+    return rd_then(rd_nl_pad(text, orig), false, rest2);
+}
+
 // `{ stmts }` statement starting at `pos` (before the `{`).
 RdR rd_block(Str s, Int pos, RdE env, RdT ft, RdS st) {
     Tok open = lex_tok(s, pos);
@@ -1818,6 +2011,34 @@ RdR rd_ifstmt(Str s, Int pos, RdE env, RdT ft, RdS st) {
     Tok kif = lex_tok(s, pos);
     Tok open = lex_tok(s, kif.pos);
     if (open.text != "(") { return rd_rbad(open.pos, st); }
+    // `if (Pat = e)`: the rest of the chain is left as written.
+    Int icend = rd_skip_group(s, open.pos, 1);
+    Int ieq = rd_top_eq(s, open.pos, icend, 0);
+    if (ieq >= 0) {
+        if (st.depth > 0) {
+            Int lend = rd_if_chain_end(s, pos);
+            return rd_mk(str_slice(s, pos, lend), lend, false, false, false, "", "", st);
+        }
+        // The header stays; the then-arm is reduced with the pattern's
+        // names unknown, the rest of the chain as usual.
+        RdR la = rd_block(s, icend, rd_pat_env(s, open.pos, ieq, env), ft, st);
+        Int lend0 = rd_if_chain_end(s, pos);
+        if (la.bad) { return rd_mk(str_slice(s, pos, lend0), lend0, false, false, false, "", "", la.st); }
+        Tok lkw = lex_tok(s, la.pos);
+        Bool lhasel = lkw.text == "else";
+        Tok lpk = lex_tok(s, lkw.pos);
+        Bool lelif = if (lhasel) { lpk.text == "if" } else { false };
+        RdR lb = if (!lhasel) {
+            rd_mk("", la.pos, false, true, false, "", "", la.st)
+        } else {
+            if (lelif) { rd_ifstmt(s, lkw.pos, env, ft, la.st) } else { rd_block(s, lkw.pos, env, ft, la.st) }
+        };
+        if (lb.bad) { return rd_mk(str_slice(s, pos, lend0), lend0, false, false, false, "", "", lb.st); }
+        Str lep = if (lhasel) { str_slice(s, la.pos, lkw.pos) + lb.out } else { "" };
+        Str lout = str_slice(s, pos, icend) + la.out + lep;
+        Bool lboth = if (lhasel) { la.dead && lb.dead } else { false };
+        return RdR {.out = rd_nl_pad(lout, str_slice(s, pos, lb.pos)), .pos = lb.pos, .dead = lboth, .ok = false, .ret = false, .rv = "", .rty = "", .bad = false, .st = lb.st};
+    }
     RdV c = rd_expr(s, open.pos, env, ft, st);
     if (c.bad) { return rd_rbad(c.pos, c.st); }
     Tok close = lex_tok(s, c.pos);
