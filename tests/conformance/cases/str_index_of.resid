@@ -1,0 +1,53 @@
+// str_index_of(s, needle, from): code point index of the first occurrence
+// of `needle` at or after code point `from`, or -1.
+
+Str show(Int v) { return IntToString(v); }
+
+// Every match position of `needle` in `s`, found by repeated searches.
+Str all_hits(Str s, Str needle, Int from, Str acc) {
+    Int j = str_index_of(s, needle, from);
+    if (j < 0) { return acc; }
+    return all_hits(s, needle, j + 1, acc + show(j) + " ");
+}
+
+// A long all-ASCII string with a marker at a known position.
+Str long_text(Int i, Int n, Str sb) {
+    if (i == n) { return str_sb_finish(sb); }
+    return long_text(i + 1, n, str_sb_append_cp(sb, if (i == 70000) { 62 } else { 65 + i % 3 }));
+}
+
+Int main() {
+    Str s = "banana";
+    println(show(str_index_of(s, "an", 0)));      // 1
+    println(show(str_index_of(s, "an", 2)));      // 3
+    println(show(str_index_of(s, "an", 4)));      // -1
+    println(show(str_index_of(s, "", 2)));        // 2
+    println(show(str_index_of(s, "", 6)));        // 6
+    println(show(str_index_of(s, "a", 7)));       // -1 (past the end)
+    println(show(str_index_of(s, "b", -5)));      // 0 (negative from = 0)
+    println(show(str_index_of(s, "bananas", 0))); // -1
+    println(all_hits(s, "a", 0, ""));
+    // Non-ASCII: indices count code points, not bytes.
+    Str u = "héllo wörld, héllo";
+    println(show(str_index_of(u, "llo", 0)));     // 2
+    println(show(str_index_of(u, "wö", 0)));      // 6
+    println(show(str_index_of(u, "héllo", 1)));   // 13
+    println(show(str_index_of(u, "ö", 8)));       // -1
+    println(all_hits(u, "l", 0, ""));
+    // A long string (several index checkpoints), including code points
+    // past the first checkpoint.
+    Str t = long_text(0, 100000, str_sb_new());
+    println(show(str_len(t)));
+    println(show(str_index_of(t, ">", 0)));       // 70000
+    println(show(str_index_of(t, "CA>C", 0)));    // 69998
+    println(show(str_index_of(t, ">", 70001)));   // -1
+    Str w = "日本語のテキスト、日本語";
+    println(show(str_index_of(w, "日本語", 1)));   // 9
+    println(show(str_char_at(w, 9)));
+    // Many near-misses before the match.
+    Str rep = str_repeat("a", 1000) + "b" + str_repeat("a", 10);
+    println(show(str_index_of(rep, "aaab", 0)));  // 997
+    println(show(str_index_of(rep, "aaab", 998))); // -1
+    println(show(str_index_of(rep, "ba", 0)));    // 1000
+    return 0;
+}

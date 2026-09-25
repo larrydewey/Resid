@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+# Benchmarks Game: plain "go build" with GOAMD64=v2 (its host CPU level);
+# use v3 here, the level matching this host (AVX2/FMA/BMI2).
+GOAMD64=v3 go build -o out/k-nucleotide .

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+# Benchmarks Game builds with -C target-cpu=ivybridge (its host CPU); use this host's CPU.
+RUSTFLAGS="-C target-cpu=native" cargo build --release --locked --quiet --target-dir out/target
+cp out/target/release/binary-trees out/binary-trees

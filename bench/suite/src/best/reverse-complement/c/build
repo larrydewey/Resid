@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+gcc -pipe -Wall -O3 -fomit-frame-pointer -march=native -pthread -o out/reverse-complement reverse-complement.c

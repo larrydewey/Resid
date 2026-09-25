@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+gcc -O3 -march=native -c -o out/apr_shim.o apr_shim.c
+gfortran -O3 -march=native -fopenmp -Jout -o out/binarytrees binarytrees.f90 out/apr_shim.o

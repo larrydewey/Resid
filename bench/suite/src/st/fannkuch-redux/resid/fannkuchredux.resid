@@ -1,0 +1,98 @@
+// The Computer Language Benchmarks Game: fannkuch-redux.
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/fannkuchredux.html
+//
+// Single-threaded port of the reference algorithm (permutations generated
+// in the same order via the count[] rotation scheme, checksum alternating
+// sign by permutation index). Resid has no mutable arrays, so each
+// permutation (n <= 16) is packed four bits per element into one Int
+// ("nibble i" = element i), as is the count[] array. Everything lives in
+// scalar parameters of self tail calls (compiled to jumps): the program
+// allocates nothing in its main loop.
+
+// Mask covering nibbles 0 .. len-1.
+Int nib_mask(Int len) {
+    if (len >= 16) { return -1; }
+    return (1 << (4 * len)) - 1;
+}
+
+Int nib_get(Int p, Int i) {
+    return (p >> (4 * i)) & 15;
+}
+
+Int nib_set(Int p, Int i, Int v) {
+    Int sh = 4 * i;
+    return (p & ~(15 << sh)) | (v << sh);
+}
+
+// Reverse the order of all 16 nibbles of a 64-bit word.
+Int nib_reverse_all(Int x) {
+    Int a = ((x >> 4) & 1085102592571150095) | ((x & 1085102592571150095) << 4);
+    Int b = ((a >> 8) & 71777214294589695) | ((a & 71777214294589695) << 8);
+    Int c = ((b >> 16) & 281470681808895) | ((b & 281470681808895) << 16);
+    return (c >> 32) | (c << 32);
+}
+
+// Reverse nibbles 0 .. len-1 of p (a pancake flip of the first len
+// elements), leaving the rest in place.
+Int flip_prefix(Int p, Int len) {
+    Int m = nib_mask(len);
+    Int r = (nib_reverse_all(p) >> (4 * (16 - len))) & m;
+    return (p & ~m) | r;
+}
+
+// Count flips until element 0 is 0.
+Int count_flips(Int p, Int flips) {
+    Int k = p & 15;
+    if (k == 0) { return flips; }
+    return count_flips(flip_prefix(p, k + 1), flips + 1);
+}
+
+// Rotate nibbles 0 .. r left by one: element 0 moves to position r.
+Int rotate_prefix(Int p, Int r) {
+    Int m = nib_mask(r + 1);
+    Int p0 = p & 15;
+    return (p & ~m) | ((p & m) >> 4) | (p0 << (4 * r));
+}
+
+// Reset count[i] = i + 1 for i = r-1 down to 1 ("while r != 1").
+Int fill_count(Int count, Int r) {
+    if (r == 1) { return count; }
+    return fill_count(nib_set(count, r - 1, r), r - 1);
+}
+
+Int identity(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return identity(i + 1, n, nib_set(acc, i, i));
+}
+
+// One outer step: count the flips of perm1, then advance perm1 to the
+// next permutation. `r` is the rotation level, `pc` the permutation
+// index. Returns checksum * 256 + maxflips, packed.
+Int run(Int n, Int perm1, Int count, Int r, Int pc, Int checksum, Int maxflips) {
+    Int count1 = fill_count(count, r);
+    Int flips = count_flips(perm1, 0);
+    Int maxf2 = if (flips > maxflips) { flips } else { maxflips };
+    Int cs2 = if (pc % 2 == 0) { checksum + flips } else { checksum - flips };
+    return next_perm(n, perm1, count1, 1, pc, cs2, maxf2);
+}
+
+// Inner "for (;;)" of the reference: rotate and decrement count[r]
+// until a level with remaining count is found, or r reaches n (done).
+Int next_perm(Int n, Int perm1, Int count, Int r, Int pc, Int checksum, Int maxflips) {
+    if (r == n) { return checksum * 256 + maxflips; }
+    Int p2 = rotate_prefix(perm1, r);
+    Int cr = nib_get(count, r) - 1;
+    Int c2 = nib_set(count, r, cr);
+    if (cr > 0) { return run(n, p2, c2, r, pc + 1, checksum, maxflips); }
+    return next_perm(n, p2, c2, r + 1, pc, checksum, maxflips);
+}
+
+@requires(args)
+Int main() {
+    Int n = str_parse_int(args.get(1));
+    Int res = run(n, identity(0, n, 0), 0, n, 0, 0, 0);
+    Int maxflips = res & 255;
+    Int checksum = (res - maxflips) / 256;
+    println(IntToString(checksum) + "\nPfannkuchen(" + IntToString(n) + ") = " + IntToString(maxflips));
+    return 0;
+}

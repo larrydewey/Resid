@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+# Benchmarks Game flags; target-cpu=ivybridge (its host CPU) replaced by native.
+rustc -C opt-level=3 -C target-cpu=native -C codegen-units=1 -o out/nbody nbody.rs

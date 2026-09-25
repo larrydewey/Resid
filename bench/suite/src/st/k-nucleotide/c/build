@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+gcc -O2 -o out/k-nucleotide k-nucleotide.c

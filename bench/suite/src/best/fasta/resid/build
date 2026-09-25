@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(pwd)"
+ROOT="${RESID_ROOT:-$(git rev-parse --show-toplevel)}"
+mkdir -p out
+# Same program as the st cell, compiled with -O3 (clang -O3; the Resid
+# driver passes no -march flag). The Resid compiler is memory-hungry; cap
+# it at 16 GB.
+ulimit -v 16000000
+(cd "$ROOT" && build/boot/stage2.bin "$HERE/../../../st/fasta/resid/fasta.resid" -o "$HERE/out/fasta" -O3 >/dev/null)

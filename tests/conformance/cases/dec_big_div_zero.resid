@@ -1,0 +1,9 @@
+// Division by zero is an error at any precision (spec §6.6a).
+Int main() {
+    Dec(900) x = d900(str_repeat("7", 800));
+    Dec(900) z = x - x;
+    println("before");
+    Dec(900) q = x / z;
+    println(f"{q:.}");
+    return 0;
+}

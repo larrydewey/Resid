@@ -1,0 +1,48 @@
+// Dec(N) is exact for any N (spec §6.6a): precisions and values well past
+// 512 digits, rounding half away from zero at those widths, and exact
+// integral results converted back to Int.
+Dec(1000) fact(Int k, Dec(1000) acc) {
+    if (k <= 1) { return acc; }
+    return fact(k - 1, acc * d1000(k));
+}
+
+Int main() {
+    Dec(1000) f300 = fact(300, d1000(1));
+    Dec(1000) f298 = fact(298, d1000(1));
+    println(f"{f300:.}");
+    println(IntToString(i64(f300 / f298)));
+    Dec(520) r = d520(f300);
+    println(f"{r}");
+    Dec(1000) back = d1000(r);
+    Bool eq = f300 == back;
+    Bool gt = f300 > back;
+    Bool neg = back - f300 < d1000(0);
+    println(f"{eq} {gt} {neg}");
+    Dec(600) third = d600(1) / d600(3);
+    println(f"{third}");
+    Dec(600) twothirds = d600(2) / d600(3);
+    println(f"{twothirds:.}");
+    Dec(1200) up = d1200("1" + str_repeat("0", 512) + "5");
+    Dec(513) upr = d513(up);
+    Dec(513) upn = d513(d1200(0) - up);
+    println(f"{upr:.} {upn:.}");
+    Dec(1200) down = d1200("1" + str_repeat("0", 512) + "4" + str_repeat("9", 40));
+    Dec(513) downr = d513(down);
+    println(f"{downr:.}");
+    Dec(600) nines = d600(str_repeat("9", 600));
+    Dec(599) n599 = d599(nines);
+    Str s599 = f"{n599:.}";
+    Bool carried = n599 == nines + d600(1);
+    println(IntToString(str_len(s599)) + f" {carried}");
+    Dec(700) tiny = d700("1e-999000");
+    Dec(700) sum = d700(1) + tiny;
+    Bool s1 = sum == d700(1);
+    Bool s2 = sum > d700(1);
+    Bool s3 = tiny > d700(0);
+    println(f"{s1} {s2} {s3}");
+    Dec(40) small = d40(sum);
+    println(f"{small}");
+    Dec(530) frac = d530("0." + str_repeat("3", 530)) * d530(3);
+    println(f"{frac:.}");
+    return 0;
+}

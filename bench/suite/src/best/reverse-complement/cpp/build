@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+g++ -pipe -O3 -fomit-frame-pointer -march=native -DSIMD -std=c++11 -o out/reverse-complement reverse-complement.cpp

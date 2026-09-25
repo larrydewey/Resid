@@ -1,0 +1,9 @@
+// Dec-to-Int requires an integral value (spec §6.6a): a fractional part
+// far below the leading digits is still an error.
+Int main() {
+    Dec(700) x = d700(12345) + d700("1e-650");
+    Dec(700) y = x - d700("1e-650");
+    println(IntToString(i64(y)));
+    println(IntToString(i64(x)));
+    return 0;
+}

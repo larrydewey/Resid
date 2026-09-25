@@ -1,0 +1,71 @@
+// The Computer Language Benchmarks Game: binary-trees
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/binarytrees.html
+//
+// Resid port. Resid has no garbage collector and never frees on its own, so
+// every short-lived tree is built and checked inside a runtime arena scope
+// (resid_bulk_push / resid_bulk_pop): popping the scope releases the whole
+// batch of trees at once and only the Int check survives. The long-lived
+// tree is allocated outside any scope and lives until exit.
+//
+// Resid sum-type variants carry one payload, so a node is Node(Pair) with a
+// two-field record for the children. The children of a bottom node are one
+// shared Leaf value (the equivalent of the C programs' NULL pointers)
+// rather than a fresh allocation each.
+
+type Tree = Node(Pair) | Leaf;
+type Pair = { Tree l; Tree r; };
+
+Tree bottom_up(Int d, Tree leaf) {
+    if (d <= 0) { return Node(Pair {.l = leaf, .r = leaf}); }
+    return Node(Pair {.l = bottom_up(d - 1, leaf), .r = bottom_up(d - 1, leaf)});
+}
+
+Int check(Tree t) {
+    return match t {
+        Node(p) => 1 + check(p.l) + check(p.r),
+        Leaf => 0
+    };
+}
+
+// k trees of depth d, summing their checks.
+Int batch(Int d, Int k, Int acc) {
+    if (k <= 0) { return acc; }
+    return batch(d, k - 1, acc + check(bottom_up(d, Leaf)));
+}
+
+// `left` trees of depth d, `per` trees per arena scope.
+Int iterate(Int d, Int left, Int per, Int acc) {
+    if (left <= 0) { return acc; }
+    Int k = if (left < per) { left } else { per };
+    Int _in = resid_bulk_push();
+    Int c = batch(d, k, 0);
+    Int _out = resid_bulk_pop();
+    return iterate(d, left - k, per, acc + c);
+}
+
+// Trees per arena scope: about 2^16 nodes' worth, at least one tree.
+Int per_scope(Int d) {
+    if (d >= 15) { return 1; }
+    return 1 << (15 - d);
+}
+
+Str depths(Int d, Int max_depth, Str acc) {
+    if (d > max_depth) { return acc; }
+    Int iters = 1 << (max_depth - d + 4);
+    Int c = iterate(d, iters, per_scope(d), 0);
+    return depths(d + 2, max_depth, acc + IntToString(iters) + "\t trees of depth " + IntToString(d) + "\t check: " + IntToString(c) + "\n");
+}
+
+@requires(args)
+Int main() {
+    Int n = str_parse_int(args.get(1));
+    Int min_depth = 4;
+    Int max_depth = if (min_depth + 2 > n) { min_depth + 2 } else { n };
+    Int stretch = max_depth + 1;
+    Int sc = iterate(stretch, 1, 1, 0);
+    println("stretch tree of depth " + IntToString(stretch) + "\t check: " + IntToString(sc));
+    Tree long_lived = bottom_up(max_depth, Leaf);
+    print(depths(min_depth, max_depth, ""));
+    println("long lived tree of depth " + IntToString(max_depth) + "\t check: " + IntToString(check(long_lived)));
+    return 0;
+}

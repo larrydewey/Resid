@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+cargo build --release --locked --quiet --target-dir out/target
+cp out/target/release/regex-redux out/regex-redux

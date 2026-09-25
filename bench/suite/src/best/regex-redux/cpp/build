@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+g++ -pipe -O3 -fomit-frame-pointer -march=native -std=c++17 -I. -o out/regex-redux regex-redux.cpp -lpcre2-8 -lpthread

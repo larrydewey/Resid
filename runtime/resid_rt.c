@@ -994,6 +994,7 @@ typedef struct {
     int64_t len;       /* codepoint count; -1 = empty slot */
     size_t* off;        /* NULL for ASCII; else off[k] = byte offset of codepoint k*STR_IDX_STRIDE */
     uint64_t touched;   /* LRU clock value at last use */
+    size_t blen;        /* byte length */
 } StrIndexSlot;
 static _Thread_local StrIndexSlot g_str_slots[STR_IDX_SLOTS];
 #define STR_IDX_SMALL 256
@@ -1028,17 +1029,38 @@ static void str_index_build(const char* s, StrIndexSlot* out) {
     /* The slot owns its previous table (if any): release it rather than
      * leak one table per rebuild. */
     if (out->off) { free(out->off); out->off = NULL; }
+    /* Pure-ASCII strings (the common case) need only their byte length:
+     * strlen plus a word-at-a-time high-bit test, both at memory speed. */
+    size_t blen = strlen(s);
+    {
+        const unsigned char* q = (const unsigned char*)s;
+        size_t k = 0;
+        uint64_t hi = 0;
+        for (; k + 32 <= blen; k += 32) {
+            uint64_t w0, w1, w2, w3;
+            memcpy(&w0, q + k, 8);
+            memcpy(&w1, q + k + 8, 8);
+            memcpy(&w2, q + k + 16, 8);
+            memcpy(&w3, q + k + 24, 8);
+            hi |= w0 | w1 | w2 | w3;
+        }
+        for (; k < blen; k++) hi |= q[k];
+        if ((hi & 0x8080808080808080ULL) == 0) {
+            out->s = s;
+            out->len = (int64_t)blen;
+            out->blen = blen;
+            return;
+        }
+    }
     int64_t n = 0;
-    int ascii = 1;
     const unsigned char* p = (const unsigned char*)s;
     while (*p) {
-        if (*p >= 0x80) ascii = 0;
         n++;
         p += utf8_seq_len(*p);
     }
     out->s = s;
     out->len = n;
-    if (ascii) return;
+    out->blen = blen;
     int64_t nck = (n >> STR_IDX_SHIFT) + 1;
     size_t* off = (size_t*)malloc((size_t)nck * sizeof(size_t));
     if (!off) resid_abort("str_index_slot: out of memory");
@@ -1051,7 +1073,33 @@ static void str_index_build(const char* s, StrIndexSlot* out) {
     out->off = off;
 }
 
-static StrIndexSlot* str_index_slot(const char* s) {
+/* The slot that answered the previous lookup. A scan over one string
+ * (str_char_at in a loop) hits here without touching the LRU or measuring
+ * the string again. Always checked against the slot's current key, which
+ * every rebuild and eviction updates, so it can never name a stale entry. */
+static _Thread_local StrIndexSlot* g_str_mru = NULL;
+
+/* The last all-ASCII string looked up, and its length: str_char_at and
+ * str_len on it are a compare and a byte load. Cleared wherever a cached
+ * string's address can be freed (str_index_forget, arena pops). */
+static _Thread_local const char* g_str_fast_s = NULL;
+static _Thread_local int64_t g_str_fast_len = 0;
+
+static StrIndexSlot* str_index_slot_slow(const char* s);
+
+static inline StrIndexSlot* str_index_slot(const char* s) {
+    StrIndexSlot* m = g_str_mru;
+    if (m && m->s == s) return m;
+    StrIndexSlot* sl = str_index_slot_slow(s);
+    g_str_mru = sl;
+    if (!sl->off) {
+        g_str_fast_s = s;
+        g_str_fast_len = sl->len;
+    }
+    return sl;
+}
+
+static __attribute__((noinline)) StrIndexSlot* str_index_slot_slow(const char* s) {
     if (!g_str_slots_ready) {
         for (int k = 0; k < STR_IDX_SLOTS; k++) {
             g_str_slots[k].s = NULL;
@@ -1073,6 +1121,9 @@ static StrIndexSlot* str_index_slot(const char* s) {
         return &g_str_small;
     }
     g_str_clock++;
+    /* MRU hits skip the clock; credit the last string used now so a hot
+     * string is not the one evicted. */
+    if (g_str_mru) g_str_mru->touched = g_str_clock;
     for (int k = 0; k < STR_IDX_SLOTS; k++) {
         if (g_str_slots[k].s == s) {
             g_str_slots[k].touched = g_str_clock;
@@ -1099,12 +1150,14 @@ static StrIndexSlot* str_index_slot(const char* s) {
  * again, so neither may survive the pop. (The LRU never holds arena
  * strings.) */
 static void str_index_arena_popped(void) {
+    g_str_fast_s = NULL;
     g_str_small.s = NULL;
     g_str_scratch.s = NULL;
 }
 
 /* Drop every cached index keyed by `s` (about to be freed). */
 static void str_index_forget(const char* s) {
+    if (g_str_fast_s == s) g_str_fast_s = NULL;
     if (g_str_small.s == s) g_str_small.s = NULL;
     if (g_str_scratch.s == s) g_str_scratch.s = NULL;
     if (!g_str_slots_ready) return;
@@ -1115,16 +1168,26 @@ static void str_index_forget(const char* s) {
 
 /* Number of Unicode codepoints in a UTF-8 string. */
 int64_t str_len(const char* s) {
+    if (s == g_str_fast_s) return g_str_fast_len;
     return str_index_slot(s)->len;
 }
 
-/* Codepoint at index `i` (0-based), or -1 when out of bounds. */
-int64_t str_char_at(const char* s, int64_t i) {
-    if (i < 0) return -1;
+static __attribute__((noinline)) int64_t str_char_at_slow(const char* s, int64_t i) {
     StrIndexSlot* sl = str_index_slot(s);
-    if (i >= sl->len) return -1;
+    if ((uint64_t)i >= (uint64_t)sl->len) return -1;
+    if (!sl->off) return (unsigned char)s[i];   /* all-ASCII: byte i */
     const unsigned char* p = (const unsigned char*)(s + str_slot_off(sl, i));
     return utf8_decode(p, utf8_seq_len(*p));
+}
+
+/* Codepoint at index `i` (0-based), or -1 when out of bounds. The fast path
+ * — the string answered the previous lookup and is all ASCII — is small
+ * enough to inline into user loops under LTO. */
+int64_t str_char_at(const char* s, int64_t i) {
+    if (__builtin_expect(s == g_str_fast_s, 1)) {
+        return (uint64_t)i < (uint64_t)g_str_fast_len ? (int64_t)(unsigned char)s[i] : -1;
+    }
+    return str_char_at_slow(s, i);
 }
 
 /* UTF-8 encode one codepoint into `buf` (≥4 bytes); returns bytes written. */
@@ -1162,91 +1225,85 @@ char* str_from_code(int64_t cp) {
 }
 
 /*
- * Rope-backed string builders ("Str rope-backed representation", roadmap).
+ * String builders.
  *
  * `acc + piece` inside a loop materializes a fresh NUL-terminated buffer on
- * every step — O(total²) bytes copied for a byte-at-a-time accumulator (the
- * lib/h2.resid h2_bs_acc pattern). These builders accumulate into a chunked
- * rope (amortized O(1) appends, doubling chunk capacity, never a re-copy of
- * the whole string) and flatten to a single NUL-terminated allocation exactly
- * once, at `str_sb_finish`. The handle is an opaque pointer carried by Resid
- * as a `Str`-typed value; appending to a finished rope is undefined.
+ * every step — O(total^2) bytes copied for a byte-at-a-time accumulator (the
+ * lib/h2.resid h2_bs_acc pattern). A builder accumulates into one flat,
+ * geometrically grown byte buffer (amortized O(1) appends; large blocks grow
+ * by realloc, which glibc services with mremap, so the bytes are not copied)
+ * and `str_sb_finish` hands that same buffer back, shrunk to fit, as the
+ * finished NUL-terminated Str — no second copy of the whole output.
+ *
+ * The handle is an opaque pointer carried by Resid as a `Str`-typed value.
+ * It stays at a fixed address while the buffer behind it moves, so a stale
+ * handle never dangles; appending to a finished builder is undefined, as
+ * before. A builder is used linearly by one thread (each append returns the
+ * handle it was given).
  */
-typedef struct RopeChunk {
-    size_t cap;              /* bytes allocated in data[] */
-    size_t used;             /* bytes filled */
-    struct RopeChunk* next;
-    char data[];             /* flexible array member */
-} RopeChunk;
-
 typedef struct {
-    RopeChunk* head;
-    RopeChunk* tail;
-    size_t len;              /* total bytes appended */
-} StrRope;
+    char* buf;
+    size_t len;              /* bytes appended */
+    size_t cap;              /* bytes allocated in buf, excluding the NUL slot */
+} StrSb;
 
-static RopeChunk* sb_chunk_new(size_t cap) {
-    RopeChunk* c = (RopeChunk*)malloc(sizeof(RopeChunk) + cap);
-    if (!c) resid_abort("sb_chunk_new: out of memory");
-    c->cap = cap;
-    c->used = 0;
-    c->next = NULL;
-    return c;
+static __attribute__((noinline)) void sb_grow(StrSb* r, size_t n) {
+    if (r->len > SIZE_MAX / 2 - n) resid_abort("str_sb: size overflow");
+    size_t cap = r->cap ? r->cap * 2 : 64;
+    if (cap < r->len + n) cap = r->len + n;
+    char* nb = (char*)realloc(r->buf, cap + 1);
+    if (!nb) resid_abort("str_sb: out of memory");
+    r->buf = nb;
+    r->cap = cap;
 }
 
-static void sb_append_bytes(StrRope* r, const char* s, size_t n) {
-    if (n == 0) { return; }
-    if (r->tail == NULL || r->tail->used + n > r->tail->cap) {
-        size_t grow = (r->tail == NULL) ? 64 : r->tail->cap * 2;
-        if (grow < n) { grow = n; }
-        RopeChunk* c = sb_chunk_new(grow);
-        if (r->tail) {
-            r->tail->next = c;
-        } else {
-            r->head = c;
-        }
-        r->tail = c;
-    }
-    memcpy(r->tail->data + r->tail->used, s, n);
-    r->tail->used += n;
+static inline void sb_append_bytes(StrSb* r, const char* s, size_t n) {
+    if (r->cap - r->len < n) sb_grow(r, n);
+    memcpy(r->buf + r->len, s, n);
     r->len += n;
 }
 
 void* str_sb_new(void) {
-    StrRope* r = (StrRope*)malloc(sizeof(StrRope));
+    StrSb* r = (StrSb*)malloc(sizeof(StrSb));
     if (!r) resid_abort("str_sb_new: out of memory");
-    r->head = NULL;
-    r->tail = NULL;
+    r->buf = NULL;
     r->len = 0;
+    r->cap = 0;
     return r;
 }
 
 void* str_sb_append(void* b, const char* s) {
-    sb_append_bytes((StrRope*)b, s, strlen(s));
+    sb_append_bytes((StrSb*)b, s, strlen(s));
     return b;
 }
 
-void* str_sb_append_cp(void* b, int64_t cp) {
+static __attribute__((noinline)) void sb_append_cp_slow(StrSb* r, int64_t cp) {
     char buf[4];
     int n = utf8_encode_cp(cp, buf);
-    sb_append_bytes((StrRope*)b, buf, (size_t)n);
+    sb_append_bytes(r, buf, (size_t)n);
+}
+
+void* str_sb_append_cp(void* b, int64_t cp) {
+    StrSb* r = (StrSb*)b;
+    if (__builtin_expect((uint64_t)cp < 0x80 && r->len < r->cap, 1)) {
+        r->buf[r->len++] = (char)cp;
+        return b;
+    }
+    sb_append_cp_slow(r, cp);
     return b;
 }
 
 char* str_sb_finish(void* b) {
-    StrRope* r = (StrRope*)b;
-    char* out = (char*)malloc(r->len + 1);
-    if (!out) resid_abort("str_sb_finish: out of memory");
-    size_t o = 0;
-    RopeChunk* c = r->head;
-    while (c) {
-        RopeChunk* nx = c->next;
-        memcpy(out + o, c->data, c->used);
-        o += c->used;
-        free(c);
-        c = nx;
+    StrSb* r = (StrSb*)b;
+    char* out = r->buf;
+    if (!out) {
+        out = (char*)malloc(1);
+        if (!out) resid_abort("str_sb_finish: out of memory");
+    } else if (r->cap > r->len + r->len / 8 + 64) {
+        char* shrunk = (char*)realloc(out, r->len + 1);
+        if (shrunk) out = shrunk;
     }
-    out[o] = '\0';
+    out[r->len] = '\0';
     free(r);
     return out;
 }
@@ -1269,6 +1326,65 @@ char* str_slice(const char* s, int64_t start, int64_t end) {
     memcpy(out, s + bstart, n);
     out[n] = '\0';
     return out;
+}
+
+/* Codepoint index of the first occurrence of `needle` in `s` at or after
+ * codepoint `from`, or -1 when there is none. `from` below 0 is taken as 0;
+ * past the end of `s` there is no match. An empty needle matches at `from`.
+ * The byte search is strstr; for an all-ASCII `s` the byte offset is the
+ * codepoint index, otherwise it is converted through the sparse index. */
+/* Rough frequency class of a byte in text (higher = more common), used to
+ * pick the needle byte str_index_of hands to memchr. */
+static int byte_commonness(unsigned char c) {
+    if ((c >= 'a' && c <= 'z') || c == ' ' || c == '\n') return 3;
+    if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return 2;
+    return 1;
+}
+
+/* First occurrence of needle[0..m) in h[0..n). memchr on the needle's
+ * rarest byte finds candidates at memory speed; if candidates keep failing
+ * (a pathological needle), the rest goes to memmem's linear-time search. */
+static const char* find_bytes(const char* h, size_t n, const char* nd, size_t m) {
+    if (m == 0) return h;
+    if (m > n) return NULL;
+    size_t r = 0;
+    for (size_t k = 1; k < m; k++)
+        if (byte_commonness((unsigned char)nd[k]) < byte_commonness((unsigned char)nd[r])) r = k;
+    const char* end = h + n;
+    const char* p = h + r;               /* next place nd[r] may sit */
+    size_t misses = 0;
+    while (p < end - (m - 1 - r)) {
+        const char* hit = (const char*)memchr(p, nd[r], (size_t)(end - (m - 1 - r) - p));
+        if (!hit) return NULL;
+        const char* cand = hit - r;
+        if (memcmp(cand, nd, m) == 0) return cand;
+        p = hit + 1;
+        if (++misses > 64 && (size_t)(p - h) < misses * 16) {
+            return (const char*)memmem(cand + 1, (size_t)(end - cand - 1), nd, m);
+        }
+    }
+    return NULL;
+}
+
+int64_t str_index_of(const char* s, const char* needle, int64_t from) {
+    StrIndexSlot* sl = str_index_slot(s);
+    int64_t len = sl->len;
+    if (from < 0) from = 0;
+    if (from > len) return -1;
+    size_t b = str_slot_off(sl, from);
+    const char* q = find_bytes(s + b, sl->blen - b, needle, strlen(needle));
+    if (!q) return -1;
+    size_t qb = (size_t)(q - s);
+    if (!sl->off) return (int64_t)qb;
+    int64_t lo = 0, hi = len >> STR_IDX_SHIFT;   /* last checkpoint <= qb */
+    while (lo < hi) {
+        int64_t mid = (lo + hi + 1) / 2;
+        if (sl->off[mid] <= qb) lo = mid; else hi = mid - 1;
+    }
+    int64_t idx = lo << STR_IDX_SHIFT;
+    const unsigned char* p = (const unsigned char*)s + sl->off[lo];
+    while ((size_t)((const char*)p - s) < qb) { p += utf8_seq_len(*p); idx++; }
+    return idx;
 }
 
 /*
@@ -1421,6 +1537,49 @@ static void* pvec_get_raw(PVecNode* root, int32_t shift, int64_t i) {
     return node->items[i & PVEC_MASK];
 }
 
+/* Flat lists. A list built from a flat array (literals, slices, map keys,
+ * accumulated results) starts as one contiguous FlatBuf instead of a trie:
+ * `shift == -1` and `root` points at the FlatBuf. Element reads are then a
+ * single indexed load, which the LTO build inlines into user loops.
+ *
+ * Appends stay persistent without copying: a FlatBuf records how many of
+ * its slots are in use (`used`), and a list whose count equals `used` is
+ * the buffer's tip, so an append that fits writes the new elements past the
+ * end, bumps `used`, and returns a new header over the same buffer. Every
+ * older header still sees exactly its own prefix, since slots below `used`
+ * are never written again. Appending to a list that is not the tip (a
+ * second branch off the same base) copies: small lists into a new FlatBuf,
+ * larger ones into a trie, so repeated branching off a big list keeps the
+ * trie's O(log32 n) path-copy cost instead of an O(n) copy per branch.
+ *
+ * A full tip grows by allocating a new, doubled FlatBuf. The old buffer is
+ * never resized in place: headers made before an arena push may still point
+ * at it, and a realloc from inside the arena would leave them dangling
+ * after the pop. */
+typedef struct {
+    int64_t used;
+    int64_t cap;
+    void* items[];
+} FlatBuf;
+
+#define FLAT_SHIFT (-1)
+/* A non-tip append copies into a fresh FlatBuf up to this many elements and
+ * into a trie beyond it. */
+#define FLAT_BRANCH_COPY_MAX 64
+
+static FlatBuf* flatbuf_new(int64_t cap) {
+    FlatBuf* f = (FlatBuf*)resid_alloc(sizeof(FlatBuf) + (size_t)cap * sizeof(void*));
+    if (!f) resid_abort("flatbuf_new: out of memory");
+    f->used = 0;
+    f->cap = cap;
+    return f;
+}
+
+static inline void* list_at(const ResidList* v, int64_t i) {
+    if (v->shift == FLAT_SHIFT) return ((FlatBuf*)v->root)->items[i];
+    return pvec_get_raw(v->root, v->shift, i);
+}
+
 /* Path-copy: a new node equal to `node` (may be NULL) with slot `slot` set
  * to `val`, grown to cover `slot`. `node` itself is never modified — it is
  * still shared by every list that already points at it. */
@@ -1446,7 +1605,43 @@ static PVecNode* pvec_set_leaf(PVecNode* node, int32_t level, int64_t leaf_idx, 
  * time: the partial last leaf of `v` is copied once and filled, then each
  * further run of 32 elements becomes one new leaf. The old list is left
  * untouched (only the root-to-leaf paths are copied). */
+static ResidList* trie_from_items(void** items, int64_t n, const char* type);
+
 static ResidList* pvec_append(ResidList* v, void** elems, int64_t m) {
+    if (v->shift == FLAT_SHIFT || v->root == NULL) {
+        FlatBuf* f = (FlatBuf*)v->root;
+        int64_t n = v->count;
+        FlatBuf* dst = NULL;
+        int64_t expect = n;
+        if (f && n + m <= f->cap &&
+            __atomic_compare_exchange_n(&f->used, &expect, n + m, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            /* Tip with room: claim slots n..n+m atomically, so two regions
+             * appending to one shared list (spawn may run in parallel,
+             * spec §19) never write the same slots; the loser copies. */
+            dst = f;
+        } else if (!f || __atomic_load_n(&f->used, __ATOMIC_ACQUIRE) == n || n <= FLAT_BRANCH_COPY_MAX) {
+            /* Empty, full tip, or a small branch: copy into a new buffer,
+             * doubling so a run of appends stays amortized O(1). */
+            int64_t cap = f ? (n + m) * 2 : n + m; /* a fresh build is exact-size */
+            dst = flatbuf_new(cap);
+            if (n > 0) memcpy(dst->items, f->items, (size_t)n * sizeof(void*));
+            dst->used = n;
+        } else {
+            /* Large non-tip branch: fall back to the persistent trie. */
+            v = trie_from_items(f->items, n, v->type);
+        }
+        if (dst) {
+            memcpy(dst->items + n, elems, (size_t)m * sizeof(void*));
+            if (dst != f) dst->used = n + m;
+            ResidList* out = (ResidList*)resid_alloc(sizeof(ResidList));
+            if (!out) resid_abort("pvec_append: out of memory");
+            out->type = v->type;
+            out->count = n + m;
+            out->shift = FLAT_SHIFT;
+            out->root = (PVecNode*)dst;
+            return out;
+        }
+    }
     ResidList* out = (ResidList*)resid_alloc(sizeof(ResidList));
     if (!out) resid_abort("pvec_append: out of memory");
     out->type = v->type;
@@ -1492,6 +1687,26 @@ static ResidList* pvec_push_raw(ResidList* v, void* elem) {
     return pvec_append(v, &elem, 1);
 }
 
+/* Build a trie-backed list holding `items` (used when a large flat list is
+ * branched: see the flat-list comment above). */
+static ResidList* trie_from_items(void** items, int64_t n, const char* type) {
+    ResidList* out = (ResidList*)resid_alloc(sizeof(ResidList));
+    if (!out) resid_abort("trie_from_items: out of memory");
+    out->count = 0;
+    out->shift = 0;
+    out->root = NULL;
+    out->type = type;
+    /* pvec_append on an empty list takes the flat path, so seed the trie
+     * with its first leaf directly and append the rest as a trie. */
+    int64_t first = n < PVEC_WIDTH ? n : PVEC_WIDTH;
+    PVecNode* leaf = pvec_node_new(first);
+    memcpy(leaf->items, items, (size_t)first * sizeof(void*));
+    out->root = leaf;
+    out->count = first;
+    if (n > first) return pvec_append(out, items + first, n - first);
+    return out;
+}
+
 /* Build a new persistent list from a flat array of `count` element
  * pointers (scalar slots are boxes, as with the old ResidVal lists). */
 void* resid_list_new(int64_t count, void** src, const char* type) {
@@ -1516,7 +1731,7 @@ void* resid_list_get(void* b, int64_t i) {
      * segfaulted unboxing it. Spec §24 makes this a force-time abort — which
      * a test body also catches, so one bad index fails one test. */
     if (i < 0 || i >= v->count) resid_index_abort(i, v->count, NULL);
-    return pvec_get_raw(v->root, v->shift, i);
+    return list_at(v, i);
 }
 
 const char* resid_list_type(void* b) { return ((ResidList*)b)->type; }
@@ -1528,7 +1743,7 @@ void** resid_list_to_array(void* b) {
     ResidList* v = (ResidList*)b;
     void** out = v->count > 0 ? (void**)malloc((size_t)v->count * sizeof(void*)) : NULL;
     if (v->count > 0 && !out) resid_abort("resid_list_to_array: out of memory");
-    for (int64_t i = 0; i < v->count; i++) out[i] = pvec_get_raw(v->root, v->shift, i);
+    for (int64_t i = 0; i < v->count; i++) out[i] = list_at(v, i);
     return out;
 }
 
@@ -1639,7 +1854,7 @@ void* resid_rt_list_to_flat(void* b) {
     int64_t n = v->count;
     void* out = malloc((size_t)n * 8 + 8);
     ((int64_t*)out)[0] = n;
-    for (int64_t i = 0; i < n; i++) ((void**)out)[i + 1] = pvec_get_raw(v->root, v->shift, i);
+    for (int64_t i = 0; i < n; i++) ((void**)out)[i + 1] = list_at(v, i);
     return out;
 }
 
@@ -1651,7 +1866,7 @@ void* resid_list_concat(void* a, void* b) {
     ResidList* x = (ResidList*)a;
     ResidList* y = (ResidList*)b;
     if (y->count == 0) return x;
-    if (y->count == 1) return pvec_push_raw(x, pvec_get_raw(y->root, y->shift, 0));
+    if (y->count == 1) return pvec_push_raw(x, list_at(y, 0));
     void** flat = resid_list_to_array(y);
     ResidList* out = pvec_append(x, flat, y->count);
     free(flat);
@@ -1683,7 +1898,7 @@ void* resid_list_slice(void* list, int64_t lo, int64_t hi) {
     int64_t n = hi > lo ? hi - lo : 0;
     void** flat = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
     if (!flat) resid_abort("resid_list_slice: out of memory");
-    for (int64_t i = 0; i < n; i++) flat[i] = pvec_get_raw(x->root, x->shift, lo + i);
+    for (int64_t i = 0; i < n; i++) flat[i] = list_at(x, lo + i);
     void* out = resid_list_new(n, flat, x->type);
     free(flat);
     return out;
@@ -1820,7 +2035,9 @@ static void free_pvec_node(void* node, int shift) {
 void resid_list_free(void* b) {
     if (!b) return;
     ResidList* v = (ResidList*)b;
-    if (v->root) free_pvec_node(v->root, v->shift);
+    /* A FlatBuf can be shared by several headers (see the flat-list
+     * comment), so only the header is freed. */
+    if (v->root && v->shift != FLAT_SHIFT) free_pvec_node(v->root, v->shift);
     free(v);
 }
 
@@ -1870,17 +2087,25 @@ void resid_box_free(void* b) {
  * never reclaimed. Fix: one combined allocation — struct, slots array,
  * and payload laid out contiguously — same external `r->slots[0]`
  * contract, 1/3 the malloc call count and per-call overhead. */
+/* Layout: header, then the payload at SCALAR_PAYLOAD_OFF (right after the
+ * 32-byte header, so 16-byte aligned for Int(128)), then the one-entry slot
+ * array. Every scalar box of every width keeps its payload at the same
+ * fixed offset, which lets resid_unbox_* read it without going through
+ * slots[0], and keeps a narrower unbox of a wider box (e.g. an Int(128)
+ * box read as Int) reading the same low bytes the slots[0] path did. */
+#define SCALAR_PAYLOAD_OFF sizeof(ResidVal)
+_Static_assert(sizeof(ResidVal) % 16 == 0, "scalar payload must stay 16-byte aligned");
+
 static void* resid_box_scalar_alloc(size_t payload_size, size_t payload_align, void** out_payload) {
-    size_t off = sizeof(ResidVal) + sizeof(void*);
-    size_t pad = (payload_align - (off % payload_align)) % payload_align;
-    size_t slot_off = off + pad;
-    char* block = (char*)resid_alloc(slot_off + payload_size);
+    (void)payload_align;
+    size_t slot_off = SCALAR_PAYLOAD_OFF + ((payload_size + 7) & ~(size_t)7);
+    char* block = (char*)resid_alloc(slot_off + sizeof(void*));
     if (!block) resid_abort("resid_box_scalar: out of memory");
     ResidVal* r = (ResidVal*)block;
     r->tag = -1;
     r->count = 1;
-    r->slots = (void**)(block + sizeof(ResidVal));
-    void* payload = block + slot_off;
+    r->slots = (void**)(block + slot_off);
+    void* payload = block + SCALAR_PAYLOAD_OFF;
     r->slots[0] = payload;
     *out_payload = payload;
     return r;
@@ -1891,11 +2116,13 @@ static void* resid_box_scalar_alloc(size_t payload_size, size_t payload_align, v
  * instead of a fresh allocation: list elements and struct slots holding
  * small counters, positions, flags and byte values are by far the most
  * common boxes in real programs. Layout matches resid_box_scalar_alloc
- * exactly (struct, 1-slot array, payload), so unboxing is unchanged. */
+ * exactly (struct, payload, 1-slot array), so unboxing is unchanged. */
 #define BOX_I64_LO (-256)
 #define BOX_I64_HI 4096
-typedef struct { ResidVal v; void* slot; int64_t payload; } InternedI64;
-typedef struct { ResidVal v; void* slot; int8_t payload; } InternedBool;
+typedef struct { ResidVal v; int64_t payload; void* slot; } InternedI64;
+typedef struct { ResidVal v; int8_t payload; void* slot; } InternedBool;
+_Static_assert(offsetof(InternedI64, payload) == SCALAR_PAYLOAD_OFF, "interned i64 layout");
+_Static_assert(offsetof(InternedBool, payload) == SCALAR_PAYLOAD_OFF, "interned bool layout");
 static InternedI64 g_box_i64[BOX_I64_HI - BOX_I64_LO];
 static InternedBool g_box_bool[2];
 
@@ -1934,9 +2161,11 @@ void* resid_box_i64(int64_t v) {
     *(int64_t*)payload = v;
     return r;
 }
+/* Unboxing reads the payload at its fixed offset (see
+ * resid_box_scalar_alloc) instead of through slots[0], which drops a
+ * dependent load from every element read of a List(Int) / List(Float). */
 int64_t resid_unbox_i64(void* p) {
-    ResidVal* r = (ResidVal*)p;
-    return *(int64_t*)r->slots[0];
+    return *(const int64_t*)((const char*)p + SCALAR_PAYLOAD_OFF);
 }
 
 void* resid_box_f64(double v) {
@@ -1947,8 +2176,7 @@ void* resid_box_f64(double v) {
     return r;
 }
 double resid_unbox_f64(void* p) {
-    ResidVal* r = (ResidVal*)p;
-    return *(double*)r->slots[0];
+    return *(const double*)((const char*)p + SCALAR_PAYLOAD_OFF);
 }
 
 void* resid_box_bool(int8_t v) {
@@ -2502,7 +2730,7 @@ char* resid_list_to_string(void* boxed) {
     snprintf(buf, buf_size, "%s(", val->type);
     for (int64_t i = 0; i < val->count; i++) {
         if (i > 0) strcat(buf, ", ");
-        void* slot = pvec_get_raw(val->root, val->shift, i);
+        void* slot = list_at(val, i);
         if (!slot) {
             strcat(buf, "null");
             continue;
@@ -2734,26 +2962,43 @@ int8_t resid_fs_exists(const char* path) {
 }
 
 /* Read an entire file into a NUL-terminated Str (bootstrap lexer input).
- * On error, returns an empty string (mirrors the env/empty-string default). */
+ * On error, returns an empty string (mirrors the env/empty-string default).
+ * A regular file is read in one piece at its stat size; anything else (a
+ * pipe, a terminal, /dev/stdin on a pipe) is read to end of file into a
+ * geometrically grown buffer. */
 char* resid_fs_read_all(const char* path) {
     if (!resid_path_is_safe(path)) return resid_box_str("");
     FILE* f = fopen(path, "rb");
     if (!f) return resid_box_str("");
-    if (fseek(f, 0, SEEK_END) != 0) {
-        fclose(f);
-        return resid_box_str("");
+    struct stat st;
+    size_t cap = 0;
+    if (fstat(fileno(f), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+        /* Reads start at the file's current offset (0 for a fresh open; an
+         * inherited stdin may have been read already). */
+        off_t pos = lseek(fileno(f), 0, SEEK_CUR);
+        cap = (size_t)st.st_size - (pos > 0 && pos < st.st_size ? (size_t)pos : 0);
     }
-    long sz = ftell(f);
-    if (sz < 0 || fseek(f, 0, SEEK_SET) != 0) {
-        fclose(f);
-        return resid_box_str("");
-    }
-    char* p = (char*)malloc((size_t)sz + 1);
+    if (cap == 0) cap = 65536;
+    char* p = (char*)malloc(cap + 1);
     if (!p) {
         fclose(f);
         return resid_box_str("");
     }
-    size_t n = fread(p, 1, (size_t)sz, f);
+    size_t n = 0;
+    for (;;) {
+        size_t got = fread(p + n, 1, cap - n, f);
+        n += got;
+        if (n < cap) break;              /* EOF or error */
+        int c = fgetc(f);                /* at the expected size: any more? */
+        if (c == EOF) break;
+        if (cap > SIZE_MAX / 2 - 1) break;
+        size_t ncap = cap * 2;
+        char* np = (char*)realloc(p, ncap + 1);
+        if (!np) break;
+        p = np;
+        cap = ncap;
+        p[n++] = (char)c;
+    }
     fclose(f);
     p[n] = '\0';
     return p;
@@ -3056,428 +3301,553 @@ char* resid_git_branch(void) {
  * ─────────────────────────────────────────────────────────────
  * Dec(N) exact-decimal runtime (spec §6.6a).
  *
- * A resid_dec holds
+ * A Dec value is an immutable DecV:
  *
- *     value = sign * int(digits) * 10^exp
+ *     value = sign * coef * 10^exp
  *
- * where digits is an array of EXACTLY nd significant decimal digits
- * (big-endian: digits[0] = most significant, digits[0] != '0' unless
- * the value is zero). nd is the precision N of the value; every
- * Dec(N) value has nd == N, so narrowing happens on store (round half
- * away from zero, spec §6.6a). Zero is sign = 0, digits all '0',
- * exp = 0. There is no NaN and no Inf; division by zero and exponent
- * overflow are errors (resid_abort).
+ * where coef is a non-negative integer held as `n` little-endian limbs in
+ * base 10^19 (no zero limb at the top; zero is n == 0, sign == 0) and has
+ * `nd` decimal digits, nd <= prec. `prec` is the value's N. The spec's
+ * representation (exactly N significant digits and an exponent) is this
+ * coefficient padded with N - nd trailing zeros:
  *
- * Display is fixed notation with all N significant digits; trailing
- * zeros are preserved: `Dec(4) 1.5` prints as "1.500" (the v3.1 spec
- * example `"1.5000"` showed one extra zero and was corrected).
+ *     digits = coef followed by (N - nd) zeros
+ *     E      = exp - (N - nd)          must lie in [-1_000_000, 1_000_000]
+ *
+ * so the cost of an operation follows the digits a value actually has, not
+ * N, and N is not capped. Narrowing to N digits rounds half away from zero
+ * (spec §6.6a); addition, subtraction and multiplication round the exact
+ * result once; division truncates to N + 2 digits, then rounds once.
+ * There is no NaN and no Inf; division by zero, exponent overflow and a
+ * non-integral Dec-to-Int conversion are errors (resid_abort).
+ *
+ * Display is fixed notation with all N significant digits; trailing zeros
+ * are preserved: `Dec(4) 1.5` prints as "1.500".
+ *
+ * Results are allocated with resid_gmalloc (so a resid_bulk_push scope
+ * releases them in bulk); every temporary buffer is malloc'd and freed.
  */
-#define RESID_DEC_MAX_DIGITS 512
-#define RESID_DEC_WORK_DIGITS 2048
 #define RESID_DEC_MAX_EXP 1000000
+#define DEC_B 10000000000000000000ULL          /* limb base 10^19 */
+#define DEC_BINV 15581492618384294730ULL       /* floor((2^128-1)/B) - 2^64 */
+#define DEC_LD 19                              /* digits per limb */
+
+typedef unsigned __int128 dec_u128;
 
 typedef struct {
-    int8_t sign;                                  /* -1, 0, +1 */
-    uint16_t nd;                                  /* precision N */
-    uint8_t digits[RESID_DEC_MAX_DIGITS];         /* '0'..'9', big-endian */
-    int32_t exp;                                  /* -MAX_EXP..MAX_EXP */
-} resid_dec;
-
-/* Little-endian scratch buffer: value = sum d[i] * 10^(exp+i). */
-typedef struct {
-    int32_t d[RESID_DEC_WORK_DIGITS];
-    int32_t n;
+    int8_t sign;     /* -1, 0, +1 */
+    int32_t prec;    /* N */
     int32_t exp;
-    int8_t sign;
-} dec_work;
+    int32_t n;       /* limbs */
+    int32_t nd;      /* digits of coef */
+    uint64_t l[];
+} DecV;
 
-static void dec_zero(int32_t prec, resid_dec* out) {
-    out->sign = 0;
-    out->nd = (uint16_t)prec;
-    memset(out->digits, '0', (size_t)prec);
-    out->exp = 0;
+static const uint64_t dec_p10[20] = {
+    1ULL, 10ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL, 1000000ULL, 10000000ULL,
+    100000000ULL, 1000000000ULL, 10000000000ULL, 100000000000ULL, 1000000000000ULL,
+    10000000000000ULL, 100000000000000ULL, 1000000000000000ULL, 10000000000000000ULL,
+    100000000000000000ULL, 1000000000000000000ULL, 10000000000000000000ULL};
+
+/* v / B and v % B for v < B^2 (Moller-Granlund division by the
+ * normalized invariant B > 2^63). */
+static inline uint64_t dec_divB(dec_u128 v, uint64_t* rem) {
+    uint64_t u1 = (uint64_t)(v >> 64), u0 = (uint64_t)v;
+    dec_u128 q = (dec_u128)DEC_BINV * u1 + v;
+    uint64_t q1 = (uint64_t)(q >> 64) + 1, q0 = (uint64_t)q;
+    uint64_t r = u0 - q1 * DEC_B;
+    if (r > q0) { q1--; r += DEC_B; }
+    if (r >= DEC_B) { q1++; r -= DEC_B; }
+    *rem = r;
+    return q1;
 }
 
-static void dec_load(const resid_dec* v, dec_work* w) {
-    memset(w, 0, sizeof(*w));
-    w->sign = v->sign;
-    w->n = v->nd;
-    w->exp = v->exp;
-    for (int32_t i = 0; i < v->nd; i++) w->d[v->nd - 1 - i] = v->digits[i] - '0';
+static int32_t dec_ndig64(uint64_t x) {
+    int32_t d = 1;
+    while (d < 20 && x >= dec_p10[d]) d++;
+    return d;
 }
 
-/* Drop most-significant (leading, in little-endian terms) zeros. */
-static void work_strip_msd(dec_work* w) {
-    while (w->n > 1 && w->d[w->n - 1] == 0) w->n--;
+static int64_t dec_ndig(const uint64_t* l, int64_t n) {
+    if (n == 0) return 0;
+    return (int64_t)DEC_LD * (n - 1) + dec_ndig64(l[n - 1]);
 }
 
-/* Distribute decimal carries after digit-wise summation. */
-static void work_carry(dec_work* w) {
-    int32_t c = 0;
-    for (int32_t i = 0; i < w->n; i++) {
-        int32_t v = w->d[i] + c;
-        w->d[i] = v % 10;
-        c = v / 10;
+static void* dec_tmp(int64_t limbs) {
+    void* p = malloc((size_t)(limbs > 0 ? limbs : 1) * sizeof(uint64_t));
+    if (!p) resid_abort("dec: out of memory");
+    return p;
+}
+
+static DecV* dec_alloc(int64_t cap) {
+    if (cap < 0 || cap > ((int64_t)1 << 40)) resid_abort("dec: value too large");
+    DecV* v = (DecV*)resid_gmalloc((int64_t)(sizeof(DecV) + (size_t)cap * sizeof(uint64_t)));
+    if (!v) resid_abort("dec: out of memory");
+    return v;
+}
+
+static DecV* dec_zero_v(int64_t prec) {
+    DecV* v = dec_alloc(0);
+    v->sign = 0;
+    v->prec = (int32_t)prec;
+    v->exp = 0;
+    v->n = 0;
+    v->nd = 0;
+    return v;
+}
+
+/* Finish r in place: strip top zero limbs, round the coefficient to `prec`
+ * digits (half away from zero), check the exponent range. r->l holds `n`
+ * limbs; `exp` may be anything representable in i64. */
+static DecV* dec_finish(DecV* r, int sign, int64_t n, int64_t exp, int64_t prec) {
+    if (prec < 1 || prec > INT32_MAX / 2) resid_abort("dec: precision out of range");
+    while (n > 0 && r->l[n - 1] == 0) n--;
+    r->prec = (int32_t)prec;
+    if (n == 0 || sign == 0) {
+        r->sign = 0; r->exp = 0; r->n = 0; r->nd = 0;
+        return r;
     }
-    while (c > 0) {
-        if (w->n >= RESID_DEC_WORK_DIGITS) resid_abort("dec: overflow");
-        w->d[w->n++] = c % 10;
-        c /= 10;
+    int64_t nd = dec_ndig(r->l, n);
+    if (nd > prec) {
+        int64_t k = nd - prec;              /* digits dropped */
+        int64_t rp = k - 1;                 /* rounding digit position */
+        int up = (r->l[rp / DEC_LD] / dec_p10[rp % DEC_LD]) % 10 >= 5;
+        int64_t q = k / DEC_LD;
+        int32_t s = (int32_t)(k % DEC_LD);
+        int64_t on = n - q;                 /* limbs after the shift */
+        if (s == 0) {
+            for (int64_t i = 0; i < on; i++) r->l[i] = r->l[i + q];
+        } else {
+            uint64_t dv = dec_p10[s], mu = dec_p10[DEC_LD - s];
+            for (int64_t i = 0; i < on; i++) {
+                uint64_t lo = r->l[i + q] / dv;
+                uint64_t hi = (i + q + 1 < n) ? (r->l[i + q + 1] % dv) * mu : 0;
+                r->l[i] = lo + hi;
+            }
+        }
+        n = on;
+        while (n > 0 && r->l[n - 1] == 0) n--;
+        exp += k;
+        if (up) {
+            int64_t i = 0;
+            for (; i < n; i++) {
+                if (r->l[i] + 1 < DEC_B) { r->l[i]++; break; }
+                r->l[i] = 0;
+            }
+            if (i == n) r->l[n++] = 1;      /* capacity: on >= n before */
+        }
+        nd = dec_ndig(r->l, n);
+        if (nd > prec) {
+            /* 99..9 rounded up to 10^prec: one digit, prec zeros. */
+            n = 1;
+            r->l[0] = 1;
+            nd = 1;
+            exp += prec;
+        }
     }
+    int64_t E = exp - (prec - nd);
+    if (E > RESID_DEC_MAX_EXP || E < -RESID_DEC_MAX_EXP) resid_abort("dec: exponent out of range");
+    r->sign = (int8_t)(sign < 0 ? -1 : 1);
+    r->exp = (int32_t)exp;
+    r->n = (int32_t)n;
+    r->nd = (int32_t)nd;
+    return r;
 }
 
-/* Round the little-endian value to `prec` significant digits (half away
- * from zero, spec §6.6a) and store big-endian into out with nd == prec. */
-static void work_store(dec_work* w, int32_t prec, resid_dec* out) {
-    work_strip_msd(w);
-    if (w->sign == 0 || (w->n == 1 && w->d[0] == 0)) {
-        dec_zero(prec, out);
-        return;
-    }
-    int32_t exp = w->exp;
-    int32_t n = w->n;
-    if (n <= prec) {
-        /* Exact: shift digits up to the top and drop exp so the stored
-         * precision is exactly `prec` significant digits. Little-endian:
-         * the MSD lives at index n-1 and must land at index prec-1. */
-        int32_t gap = prec - n;
-        for (int32_t i = n - 1; i >= 0; i--) w->d[i + gap] = w->d[i];
-        for (int32_t i = 0; i < gap; i++) w->d[i] = 0;
-        exp -= gap;
-        n = prec;
+/* A fresh value from limbs l[0..n) (copied), rounded to prec. */
+static DecV* dec_from_limbs(int sign, const uint64_t* l, int64_t n, int64_t exp, int64_t prec) {
+    while (n > 0 && l[n - 1] == 0) n--;
+    if (n == 0 || sign == 0) return dec_zero_v(prec);
+    DecV* r = dec_alloc(n + 1);
+    memcpy(r->l, l, (size_t)n * sizeof(uint64_t));
+    return dec_finish(r, sign, n, exp, prec);
+}
+
+/* r[0..n+1) = a[0..n) * m (m < B); returns the limb count. */
+__attribute__((noinline)) static int64_t dec_mul1(uint64_t* r, const uint64_t* a, int64_t n, uint64_t m) {
+    /* Each product splits into (hi, lo) independently of the others; the
+     * carry out of r[i] = lo + hi_prev is folded into hi, so nothing but
+     * a rarely taken branch runs along the limbs. hi + 1 < B always. */
+    uint64_t hprev = 0;
+    if (m < ((uint64_t)1 << 32)) {
+        /* Small multiplier: hi = floor(a*m / B) < 2^32 is estimated in
+         * double precision, biased low by 2^-15 (more than the estimate's
+         * error, < 2^-17), so it is exact or one short, and one short only
+         * when the remainder is below 2^-14 * B. The wrap-around u64
+         * remainder lo + hprev is then below 2B and exact, and one
+         * rarely taken correction finishes the limb. */
+        const double mb = (double)m * 2e-19;
+        /* Scalar is fastest here; -O3's vectorized form of this loop is
+         * slower (measured on pidigits). */
+#if defined(__clang__)
+#pragma clang loop vectorize(disable) interleave(disable)
+#endif
+        for (int64_t i = 0; i < n; i++) {
+            uint64_t ai = a[i];
+            uint64_t hi = (uint64_t)(int64_t)((double)(int64_t)(ai >> 1) * mb - 0.000030517578125);
+            uint64_t s = ai * m - hi * DEC_B + hprev;
+            if (__builtin_expect(s >= DEC_B, 0)) { s -= DEC_B; hi++; }
+            r[i] = s;
+            hprev = hi;
+        }
     } else {
-        int32_t base = exp + (n - prec); /* exponent of the kept integer */
-        int32_t carry = 0;
-        if (w->d[n - prec - 1] >= 5) {
-            carry = 1;
-            for (int32_t k = n - prec; k < n && carry; k++) {
-                w->d[k] += 1;
-                if (w->d[k] == 10) w->d[k] = 0;
-                else carry = 0;
-            }
-            if (carry) {
-                /* 99..9 -> 100..0: becomes 10^prec, so "1" + zeros, exp+1. */
-                w->d[n - 1] = 1;
-                for (int32_t k = n - prec; k < n - 1; k++) w->d[k] = 0;
-                base += 1;
-            }
-        }
-        for (int32_t k = 0; k < prec; k++) w->d[k] = w->d[n - prec + k];
-        exp = base;
-        n = prec;
-    }
-    if (exp > RESID_DEC_MAX_EXP || exp < -RESID_DEC_MAX_EXP)
-        resid_abort("dec: exponent out of range");
-    out->sign = w->sign;
-    out->nd = (uint16_t)prec;
-    out->exp = exp;
-    for (int32_t k = 0; k < prec; k++) out->digits[k] = (uint8_t)('0' + w->d[prec - 1 - k]);
-}
-
-static int work_abs_cmp(const dec_work* x, const dec_work* y) {
-    int64_t hx = (int64_t)x->exp + x->n;
-    int64_t hy = (int64_t)y->exp + y->n;
-    if (hx != hy) return hx > hy ? 1 : -1;
-    for (int64_t p = hx - 1; p >= (int64_t)(x->exp < y->exp ? x->exp : y->exp); p--) {
-        int32_t a = (p >= x->exp && p < x->exp + x->n) ? x->d[p - x->exp] : 0;
-        int32_t b = (p >= y->exp && p < y->exp + y->n) ? y->d[p - y->exp] : 0;
-        if (a != b) return a > b ? 1 : -1;
-    }
-    return 0;
-}
-
-/* |x| + |y|, rounded to `prec` significant digits. An operand is
- * negligible (skipped) when all its digits end strictly below the guard
- * digit of the prec-digit result, so huge exponent gaps can't overflow
- * the work buffer. */
-static void work_add_mag(const dec_work* x, const dec_work* y, int32_t prec, resid_dec* out) {
-    dec_work w;
-    memset(&w, 0, sizeof(w));
-    w.sign = x->sign;
-    int32_t mx = x->exp + x->n;
-    int32_t my = y->exp + y->n;
-    int32_t maxmsd = (mx > my ? mx : my) - 1;
-    int use_x = mx > maxmsd - prec;
-    int use_y = my > maxmsd - prec;
-    int32_t rexp = x->exp;
-    if (use_y && y->exp < rexp) rexp = y->exp;
-    w.exp = rexp;
-    int32_t hi = 0;
-    if (use_x) {
-        for (int32_t i = 0; i < x->n; i++) {
-            int32_t idx = x->exp + i - rexp;
-            if (idx < 0 || idx >= RESID_DEC_WORK_DIGITS) resid_abort("dec: exponent overflow");
-            w.d[idx] += x->d[i];
-            if (x->exp + i + 1 - rexp > hi) hi = x->exp + i + 1 - rexp;
+        for (int64_t i = 0; i < n; i++) {
+            uint64_t lo;
+            uint64_t hi = dec_divB((dec_u128)a[i] * m, &lo);
+            uint64_t t = DEC_B - hprev;
+            if (lo >= t) { r[i] = lo - t; hi++; } else { r[i] = lo + hprev; }
+            hprev = hi;
         }
     }
-    if (use_y) {
-        for (int32_t i = 0; i < y->n; i++) {
-            int32_t idx = y->exp + i - rexp;
-            if (idx < 0 || idx >= RESID_DEC_WORK_DIGITS) resid_abort("dec: exponent overflow");
-            w.d[idx] += y->d[i];
-            if (y->exp + i + 1 - rexp > hi) hi = y->exp + i + 1 - rexp;
-        }
-    }
-    w.n = hi;
-    work_carry(&w);
-    work_store(&w, prec, out);
+    r[n] = hprev;
+    return n + 1;
 }
 
-/* |x| - |y| (requires |x| >= |y|), rounded to `prec` digits. */
-static void work_sub_mag(const dec_work* x, const dec_work* y, int32_t prec, resid_dec* out) {
-    dec_work w;
-    memset(&w, 0, sizeof(w));
-    w.sign = x->sign;
-    int32_t rexp = x->exp < y->exp ? x->exp : y->exp;
-    w.exp = rexp;
-    int32_t hi = 0;
-    for (int32_t i = 0; i < x->n; i++) {
-        int32_t idx = x->exp + i - rexp;
-        if (idx < 0 || idx >= RESID_DEC_WORK_DIGITS) resid_abort("dec: exponent overflow");
-        w.d[idx] += x->d[i];
-        if (x->exp + i + 1 - rexp > hi) hi = x->exp + i + 1 - rexp;
+/* a * 10^k as fresh malloc'd limbs; *on receives the count. */
+static uint64_t* dec_scale(const uint64_t* a, int64_t n, int64_t k, int64_t* on) {
+    int64_t q = k / DEC_LD;
+    int32_t s = (int32_t)(k % DEC_LD);
+    uint64_t* r = (uint64_t*)dec_tmp(n + q + 1);
+    memset(r, 0, (size_t)q * sizeof(uint64_t));
+    if (s == 0) {
+        memcpy(r + q, a, (size_t)n * sizeof(uint64_t));
+        r[q + n] = 0;
+    } else {
+        dec_mul1(r + q, a, n, dec_p10[s]);
     }
-    for (int32_t i = 0; i < y->n; i++) {
-        int32_t idx = y->exp + i - rexp;
-        if (idx < 0 || idx >= RESID_DEC_WORK_DIGITS) resid_abort("dec: exponent overflow");
-        w.d[idx] -= y->d[i];
-    }
-    w.n = hi;
-    for (int32_t i = 0; i < w.n - 1; i++) {
-        while (w.d[i] < 0) {
-            w.d[i] += 10;
-            w.d[i + 1]--;
-        }
-    }
-    work_store(&w, prec, out);
+    *on = n + q + 1;
+    while (*on > 0 && r[*on - 1] == 0) (*on)--;
+    return r;
 }
 
-/* |x| * |y|, rounded to `prec` digits. */
-static void work_mul_mag(const dec_work* x, const dec_work* y, int32_t prec, resid_dec* out) {
-    dec_work w;
-    memset(&w, 0, sizeof(w));
-    w.sign = x->sign;
-    w.exp = x->exp + y->exp;
-    for (int32_t i = 0; i < x->n; i++) {
-        if (x->d[i] == 0) continue;
-        for (int32_t j = 0; j < y->n; j++) {
-            int32_t idx = i + j;
-            if (idx >= RESID_DEC_WORK_DIGITS) resid_abort("dec: overflow");
-            w.d[idx] += x->d[i] * y->d[j];
-        }
-    }
-    w.n = x->n + y->n;
-    work_carry(&w);
-    work_store(&w, prec, out);
-}
-
-/* ── Big-endian big-int helpers for division ───────────────────── */
-static int big_cmp(const uint8_t* a, int32_t an, const uint8_t* b, int32_t bn) {
-    if (an != bn) return an > bn ? 1 : -1;
-    for (int32_t i = 0; i < an; i++) {
+static int dec_cmp_n(const uint64_t* a, int64_t na, const uint64_t* b, int64_t nb) {
+    while (na > 0 && a[na - 1] == 0) na--;
+    while (nb > 0 && b[nb - 1] == 0) nb--;
+    if (na != nb) return na > nb ? 1 : -1;
+    for (int64_t i = na - 1; i >= 0; i--)
         if (a[i] != b[i]) return a[i] > b[i] ? 1 : -1;
-    }
     return 0;
 }
 
-/* In-place a -= b (big-endian, 0-9 digits); requires a >= b. Returns the
- * compacted digit count (leading zeros shifted away, so the returned digits
- * are exactly the significant ones starting at a[0]). */
-static int32_t big_sub(uint8_t* a, int32_t an, const uint8_t* b, int32_t bn) {
-    int32_t borrow = 0;
-    for (int32_t i = 0; i < bn; i++) {
-        int32_t v = a[an - 1 - i] - borrow - b[bn - 1 - i];
-        if (v < 0) { v += 10; borrow = 1; } else { borrow = 0; }
-        a[an - 1 - i] = (uint8_t)v;
+/* |a| * 10^ea vs |b| * 10^eb (both coefficients nonzero, nd given). */
+static int dec_cmp_mag(const uint64_t* a, int64_t na, int64_t nda, int64_t ea,
+                       const uint64_t* b, int64_t nb, int64_t ndb, int64_t eb) {
+    int64_t ma = ea + nda, mb = eb + ndb;
+    if (ma != mb) return ma > mb ? 1 : -1;
+    if (ea == eb) return dec_cmp_n(a, na, b, nb);
+    int64_t sn;
+    int c;
+    if (ea > eb) {
+        uint64_t* s = dec_scale(a, na, ea - eb, &sn);
+        c = dec_cmp_n(s, sn, b, nb);
+        free(s);
+    } else {
+        uint64_t* s = dec_scale(b, nb, eb - ea, &sn);
+        c = dec_cmp_n(a, na, s, sn);
+        free(s);
     }
-    for (int32_t i = bn; i < an && borrow; i++) {
-        int32_t v = a[an - 1 - i] - 1;
-        if (v < 0) { v += 10; borrow = 1; } else { borrow = 0; }
-        a[an - 1 - i] = (uint8_t)v;
-    }
-    int32_t s = 0;
-    while (s < an - 1 && a[s] == 0) s++;
-    if (s > 0) {
-        for (int32_t i = 0; i < an - s; i++) a[i] = a[i + s];
-    }
-    return an - s;
+    return c;
 }
 
-/* Integer quotient q = A / D (big-endian, D != 0, MSD of D nonzero).
- * q holds `an` digits; the significant quotient digits are q[0..qn).
- * Schoolbook long division: the remainder r stays < D after each step, so
- * each quotient digit is at most 9. */
-static void big_div(const uint8_t* A, int32_t an, const uint8_t* D, int32_t dn, uint8_t* q) {
-    uint8_t r[RESID_DEC_WORK_DIGITS];
-    memset(r, 0, sizeof(r));
-    int32_t rn = 0;
-    for (int32_t i = 0; i < an; i++) {
-        /* r = r*10 + A[i] (append the digit at the low end). */
-        r[rn] = A[i];
-        rn++;
-        int32_t s = 0;
-        while (s < rn - 1 && r[s] == 0) s++;
-        if (s > 0) {
-            for (int32_t j = 0; j < rn - s; j++) r[j] = r[j + s];
-            rn -= s;
+/* r = a + b (na >= nb); r has room for na + 1 limbs. */
+static int64_t dec_add_n(uint64_t* r, const uint64_t* a, int64_t na, const uint64_t* b, int64_t nb) {
+    uint64_t c = 0;
+    int64_t i = 0;
+    for (; i < nb; i++) {
+        /* a[i] + b[i] can exceed 2^64 (2B > 2^64): compare against B - b[i]. */
+        uint64_t x = a[i] + c, t = DEC_B - b[i];
+        c = x >= t;
+        r[i] = c ? x - t : x + b[i];
+    }
+    for (; i < na && c; i++) {
+        uint64_t s = a[i] + 1;
+        c = s == DEC_B;
+        r[i] = c ? 0 : s;
+    }
+    if (r != a) for (; i < na; i++) r[i] = a[i];
+    r[na] = c;
+    return na + 1;
+}
+
+/* r = a - b, requires a >= b (as integers); r has room for na limbs. */
+static int64_t dec_sub_n(uint64_t* r, const uint64_t* a, int64_t na, const uint64_t* b, int64_t nb) {
+    uint64_t br = 0;
+    int64_t i = 0;
+    for (; i < nb; i++) {
+        uint64_t x = a[i], y = b[i] + br;
+        br = x < y;
+        r[i] = br ? x + (DEC_B - y) : x - y;
+    }
+    for (; i < na && br; i++) {
+        uint64_t x = a[i];
+        br = x == 0;
+        r[i] = br ? DEC_B - 1 : x - 1;
+    }
+    if (r != a) for (; i < na; i++) r[i] = a[i];
+    return na;
+}
+
+static DecV* dec_round_v(const DecV* v, int64_t prec, int negate) {
+    int s = negate ? -v->sign : v->sign;
+    if (v->sign == 0) return dec_zero_v(prec);
+    if (v->nd <= prec) {
+        /* Exact: keep the coefficient, only the precision changes. */
+        DecV* r = dec_alloc(v->n);
+        memcpy(r->l, v->l, (size_t)v->n * sizeof(uint64_t));
+        return dec_finish(r, s, v->n, v->exp, prec);
+    }
+    /* Only the limbs from the one holding the rounding digit upward can
+     * affect the result (half away from zero looks at that digit alone),
+     * so narrowing a wide value costs O(prec), not O(nd). */
+    int64_t q0 = (v->nd - prec - 1) / DEC_LD;
+    return dec_from_limbs(s, v->l + q0, v->n - q0, (int64_t)v->exp + (int64_t)DEC_LD * q0, prec);
+}
+
+/* a + (negb ? -b : b), rounded once to prec. */
+static DecV* dec_addsub(const DecV* a, const DecV* b, int negb, int64_t prec) {
+    int sb = negb ? -b->sign : b->sign;
+    if (a->sign == 0) return dec_round_v(b, prec, negb);
+    if (b->sign == 0) return dec_round_v(a, prec, 0);
+    int64_t ea = a->exp, eb = b->exp;
+    int64_t mxa = ea + a->nd - 1, mxb = eb + b->nd - 1;
+    /* An operand whose digits all lie two or more places below the guard
+     * digit of the other cannot change the rounded result (the other has
+     * at most prec digits, so its guard digit is 0 and the sum stays
+     * strictly inside the rounding interval). */
+    if (mxb <= mxa - prec - 2) return dec_round_v(a, prec, 0);
+    if (mxa <= mxb - prec - 2) return dec_round_v(b, prec, negb);
+    const uint64_t* A = a->l;
+    const uint64_t* B = b->l;
+    int64_t na = a->n, nb = b->n;
+    uint64_t* tA = NULL;
+    uint64_t* tB = NULL;
+    int64_t e = ea < eb ? ea : eb;
+    if (ea > e) { tA = dec_scale(A, na, ea - e, &na); A = tA; }
+    if (eb > e) { tB = dec_scale(B, nb, eb - e, &nb); B = tB; }
+    DecV* r;
+    int sign;
+    int64_t rn;
+    if (a->sign == sb) {
+        sign = a->sign;
+        int64_t cap = (na > nb ? na : nb) + 1;
+        r = dec_alloc(cap);
+        rn = na >= nb ? dec_add_n(r->l, A, na, B, nb) : dec_add_n(r->l, B, nb, A, na);
+    } else {
+        int c = dec_cmp_n(A, na, B, nb);
+        if (c == 0) {
+            free(tA); free(tB);
+            return dec_zero_v(prec);
         }
-        int32_t d = 0;
-        while (d < 9 && big_cmp(r, rn, D, dn) >= 0) {
-            rn = big_sub(r, rn, D, dn);
-            d++;
+        int64_t cap = (na > nb ? na : nb) + 1;
+        r = dec_alloc(cap);
+        if (c > 0) { sign = a->sign; rn = dec_sub_n(r->l, A, na, B, nb); }
+        else { sign = sb; rn = dec_sub_n(r->l, B, nb, A, na); }
+    }
+    free(tA); free(tB);
+    return dec_finish(r, sign, rn, e, prec);
+}
+
+static DecV* dec_mul_v(const DecV* a, const DecV* b, int64_t prec) {
+    if (a->sign == 0 || b->sign == 0) return dec_zero_v(prec);
+    int sign = a->sign == b->sign ? 1 : -1;
+    int64_t exp = (int64_t)a->exp + b->exp;
+    int64_t na = a->n, nb = b->n;
+    DecV* r = dec_alloc(na + nb + 1);
+    int64_t rn;
+    if (nb == 1) {
+        rn = dec_mul1(r->l, a->l, na, b->l[0]);
+    } else if (na == 1) {
+        rn = dec_mul1(r->l, b->l, nb, a->l[0]);
+    } else {
+        const uint64_t* x = a->l;
+        const uint64_t* y = b->l;
+        memset(r->l, 0, (size_t)(na + nb) * sizeof(uint64_t));
+        for (int64_t i = 0; i < na; i++) {
+            uint64_t xi = x[i];
+            if (xi == 0) continue;
+            uint64_t* ri = r->l + i;
+            /* ri += xi * y, carries split as in dec_mul1 */
+            uint64_t hprev = 0, cb = 0;
+            for (int64_t j = 0; j < nb; j++) {
+                uint64_t lo;
+                uint64_t hi = dec_divB((dec_u128)xi * y[j] + ri[j], &lo);
+                uint64_t xx = lo + cb, t = DEC_B - hprev;
+                cb = xx >= t;
+                ri[j] = cb ? xx - t : xx + hprev;
+                hprev = hi;
+            }
+            ri[nb] = hprev + cb;
         }
-        q[i] = (uint8_t)d;
+        rn = na + nb;
+    }
+    return dec_finish(r, sign, rn, exp, prec);
+}
+
+/* q = floor(u / v) for multi-limb v (Knuth, TAOCP 4.3.1 Algorithm D, in
+ * base 10^19). u has m + n limbs, v has n >= 2 limbs with v[n-1] != 0.
+ * q receives m + 1 limbs. u and v are consumed (normalized in place);
+ * u needs room for m + n + 1 limbs. */
+static void dec_divmod_n(uint64_t* u, int64_t un, uint64_t* v, int64_t n, uint64_t* q) {
+    int64_t m = un - n;
+    uint64_t f = DEC_B / (v[n - 1] + 1);
+    if (f > 1) {
+        dec_mul1(u, u, un, f);             /* in place: reads a[i] before writing r[i] */
+        uint64_t* tv = (uint64_t*)dec_tmp(n + 1);
+        dec_mul1(tv, v, n, f);
+        memcpy(v, tv, (size_t)n * sizeof(uint64_t));
+        free(tv);
+    } else {
+        u[un] = 0;
+    }
+    uint64_t vt = v[n - 1], vs = v[n - 2];
+    for (int64_t j = m; j >= 0; j--) {
+        dec_u128 num = (dec_u128)u[j + n] * DEC_B + u[j + n - 1];
+        dec_u128 qh = num / vt;
+        dec_u128 rh = num - qh * vt;
+        while (qh >= DEC_B || qh * vs > rh * DEC_B + u[j + n - 2]) {
+            qh--;
+            rh += vt;
+            if (rh >= DEC_B) break;
+        }
+        uint64_t qd = (uint64_t)qh;
+        /* u[j..j+n] -= qd * v */
+        uint64_t c = 0, br = 0;
+        for (int64_t i = 0; i < n; i++) {
+            uint64_t lo;
+            c = dec_divB((dec_u128)qd * v[i] + c, &lo);
+            uint64_t x = u[i + j], y = lo + br;
+            if (x >= y) { u[i + j] = x - y; br = 0; } else { u[i + j] = x + (DEC_B - y); br = 1; }
+        }
+        uint64_t x = u[j + n], y = c + br;
+        if (x >= y) {
+            u[j + n] = x - y;
+        } else {
+            /* Went negative: add v back once. */
+            u[j + n] = x + (DEC_B - y);
+            qd--;
+            uint64_t cc = 0;
+            for (int64_t i = 0; i < n; i++) {
+                uint64_t x2 = u[i + j] + cc, t = DEC_B - v[i];
+                if (x2 >= t) { u[i + j] = x2 - t; cc = 1; } else { u[i + j] = x2 + v[i]; cc = 0; }
+            }
+            u[j + n] = (u[j + n] + cc) % DEC_B;
+        }
+        q[j] = qd;
     }
 }
 
-/* value = int(a->digits) / int(b->digits) with the i32 exponents folded in,
- * computed to prec+2 guard digits then rounded once (spec §6.6a).
- *
- * All Dec values cross the LLVM boundary as pointers (an out-ptr for the
- * result, const ptrs for operands) so the aggregate ABI stays exactly in
- * sync between clang and the LLVM IR backend — clang and LLVM disagree on
- * by-value passing for this 520-byte struct. */
-void resid_dec_div(resid_dec* out, const resid_dec* a, const resid_dec* b) {
-    int32_t prec = a->nd > b->nd ? a->nd : b->nd;
+/* value(a) / value(b): the quotient truncated to prec + 2 significant
+ * digits, then rounded once to prec (spec §6.6a). */
+static DecV* dec_div_v(const DecV* a, const DecV* b, int64_t prec) {
     if (b->sign == 0) resid_abort("dec: division by zero");
-    if (a->sign == 0) { dec_zero(prec, out); return; }
-    int32_t nn = a->nd, dn = b->nd;
-    uint8_t num[RESID_DEC_WORK_DIGITS], den[RESID_DEC_WORK_DIGITS];
-    for (int32_t i = 0; i < nn; i++) num[i] = a->digits[i] - '0';
-    for (int32_t i = 0; i < dn; i++) den[i] = b->digits[i] - '0';
-    int32_t e = a->exp - b->exp;
-    /* strip leading zeros (digit count must match int(num)) */
-    while (nn > 1 && num[0] == 0) {
-        for (int32_t i = 0; i < nn - 1; i++) num[i] = num[i + 1];
-        nn--;
-    }
-    while (dn > 1 && den[0] == 0) {
-        for (int32_t i = 0; i < dn - 1; i++) den[i] = den[i + 1];
-        dn--;
-    }
-    /* strip trailing (least-significant) zeros so digit counts are exact */
-    while (nn > 1 && num[nn - 1] == 0) { nn--; e++; }
-    while (dn > 1 && den[dn - 1] == 0) { dn--; e--; }
-    /* P = floor(log10(value)); compare num vs den padded to nn digits. */
-    int32_t cmp = 0;
-    if (nn < dn) {
-        cmp = -1;
+    if (a->sign == 0) return dec_zero_v(prec);
+    int64_t K = prec + 2;
+    int64_t da = a->nd, db = b->nd;
+    /* P = floor(log10(coef_a / coef_b)). */
+    int c = dec_cmp_mag(a->l, a->n, da, 0, b->l, b->n, db, da - db);
+    int64_t P = da - db - (c < 0 ? 1 : 0);
+    int64_t s = K - 1 - P;                  /* floor(coef_a * 10^s / coef_b) has K digits */
+    uint64_t *U, *V;
+    int64_t un, vn;
+    if (s >= 0) {
+        U = dec_scale(a->l, a->n, s, &un);
+        V = (uint64_t*)dec_tmp(b->n);
+        memcpy(V, b->l, (size_t)b->n * sizeof(uint64_t));
+        vn = b->n;
     } else {
-        int32_t pad = nn - dn;
-        for (int32_t i = 0; i < nn && cmp == 0; i++) {
-            uint8_t na = num[i];
-            uint8_t nb = (i < pad) ? 0 : den[i - pad];
-            cmp = na > nb ? 1 : (na < nb ? -1 : 0);
+        U = (uint64_t*)dec_tmp(a->n + 1);
+        memcpy(U, a->l, (size_t)a->n * sizeof(uint64_t));
+        un = a->n;
+        V = dec_scale(b->l, b->n, -s, &vn);
+    }
+    int64_t qn = un - vn + 1;
+    if (qn < 1) qn = 1;
+    DecV* r = dec_alloc(qn + 1);
+    memset(r->l, 0, (size_t)(qn + 1) * sizeof(uint64_t));
+    if (un < vn) {
+        /* quotient 0 cannot happen (K >= 3 digits) */
+        resid_abort("dec: internal");
+    } else if (vn == 1) {
+        uint64_t d = V[0];
+        dec_u128 rem = 0;
+        for (int64_t i = un - 1; i >= 0; i--) {
+            dec_u128 t = rem * DEC_B + U[i];
+            r->l[i] = (uint64_t)(t / d);
+            rem = t % d;
         }
-    }
-    int32_t P = (cmp >= 0) ? (e + nn - dn) : (e + nn - dn - 1);
-    int32_t K = prec + 2;
-    int32_t exp_div = P - K + 1;
-    int32_t shift = e + K - 1 - P;
-    int32_t an;
-    uint8_t anum[RESID_DEC_WORK_DIGITS];
-    if (shift >= 0) {
-        an = nn + shift;
-        if (an > RESID_DEC_WORK_DIGITS) resid_abort("dec: exponent overflow");
-        for (int32_t i = 0; i < nn; i++) anum[i] = num[i];
-        for (int32_t i = nn; i < an; i++) anum[i] = 0;
     } else {
-        an = nn + shift;
-        if (an < 1) resid_abort("dec: internal");
-        for (int32_t i = 0; i < an; i++) anum[i] = num[i];
+        uint64_t* U2 = (uint64_t*)dec_tmp(un + 1);
+        memcpy(U2, U, (size_t)un * sizeof(uint64_t));
+        U2[un] = 0;
+        dec_divmod_n(U2, un, V, vn, r->l);
+        free(U2);
     }
-    uint8_t q[RESID_DEC_WORK_DIGITS];
-    big_div(anum, an, den, dn, q);
-    int32_t qn = an;
-    int32_t s = 0;
-    while (s < qn - 1 && q[s] == 0) s++;
-    qn -= s;
-    if (qn < K) resid_abort("dec: internal");
-    if (qn > K) exp_div += qn - K; /* drop low (qn-K) digits: exp rises */
-    dec_work w;
-    memset(&w, 0, sizeof(w));
-    w.sign = (a->sign == b->sign) ? 1 : -1;
-    w.n = K;
-    w.exp = exp_div;
-    for (int32_t i = 0; i < K; i++) w.d[K - 1 - i] = q[s + i];
-    work_store(&w, prec, out);
+    free(U); free(V);
+    int sign = a->sign == b->sign ? 1 : -1;
+    int64_t exp = (int64_t)a->exp - b->exp - s;
+    /* Exactly K digits by construction; finish rounds K -> prec. */
+    return dec_finish(r, sign, qn + 1, exp, prec);
 }
 
-/* sign * int(digits) * 10^exp (digits verbatim, as from an `m` literal),
- * rounded to `prec` significant digits. */
-void resid_dec_from_digits(resid_dec* out, const char* digits, int32_t exp, uint16_t prec) {
-    while (*digits == '0') digits++;
-    if (*digits == '\0') { dec_zero(prec, out); return; }
-    int32_t len = (int32_t)strlen(digits);
-    if (len > RESID_DEC_MAX_DIGITS) resid_abort("dec: literal too long");
-    dec_work w;
-    memset(&w, 0, sizeof(w));
-    w.sign = 1;
-    w.exp = exp;
-    w.n = len;
-    for (int32_t i = 0; i < len; i++) w.d[len - 1 - i] = digits[i] - '0';
-    work_store(&w, prec, out);
+/* Decimal digits of the coefficient, most significant first (malloc'd,
+ * NUL-terminated, nd chars). */
+static char* dec_coef_digits(const DecV* v) {
+    char* s = (char*)malloc((size_t)v->nd + 1);
+    if (!s) resid_abort("dec: out of memory");
+    int64_t k = v->nd;
+    s[k] = '\0';
+    for (int64_t i = 0; i < v->n; i++) {
+        uint64_t x = v->l[i];
+        int32_t w = (i == v->n - 1) ? dec_ndig64(x) : DEC_LD;
+        for (int32_t j = 0; j < w; j++) { s[--k] = (char)('0' + x % 10); x /= 10; }
+    }
+    return s;
 }
 
-void resid_dec_from_int(resid_dec* out, int64_t v, uint16_t prec) {
-    if (v == 0) { dec_zero(prec, out); return; }
-    int8_t sign = v < 0 ? -1 : 1;
-    uint64_t u = v < 0 ? (uint64_t)(-(v + 1)) + 1 : (uint64_t)v;
-    dec_work w;
-    memset(&w, 0, sizeof(w));
-    w.sign = sign;
-    w.exp = 0;
-    w.n = 0;
-    while (u > 0) { w.d[w.n++] = (int32_t)(u % 10); u /= 10; }
-    work_store(&w, prec, out);
-}
-
-void resid_dec_from_i128(resid_dec* out, __int128 v, uint16_t prec) {
-    if (v == 0) { dec_zero(prec, out); return; }
-    int8_t sign = v < 0 ? -1 : 1;
-    unsigned __int128 u = v < 0 ? (unsigned __int128)(-(v + 1)) + 1 : (unsigned __int128)v;
-    dec_work w;
-    memset(&w, 0, sizeof(w));
-    w.sign = sign;
-    w.exp = 0;
-    w.n = 0;
-    while (u > 0) { w.d[w.n++] = (int32_t)(u % 10); u /= 10; }
-    work_store(&w, prec, out);
+/* Parse digits (a run of '0'..'9', `len` chars, leading zeros allowed)
+ * into fresh limbs. */
+static uint64_t* dec_parse_digits(const char* d, int64_t len, int64_t* on) {
+    int64_t n = (len + DEC_LD - 1) / DEC_LD;
+    uint64_t* l = (uint64_t*)dec_tmp(n + 1);
+    int64_t end = len;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t st = end - DEC_LD;
+        if (st < 0) st = 0;
+        uint64_t x = 0;
+        for (int64_t j = st; j < end; j++) x = x * 10 + (uint64_t)(d[j] - '0');
+        l[i] = x;
+        end = st;
+    }
+    while (n > 0 && l[n - 1] == 0) n--;
+    *on = n;
+    return l;
 }
 
 /* Exact decimal parse of a plain or `e`-notation string (the latter from
- * binary-float %.17g casts). */
-void resid_dec_from_str(resid_dec* out, const char* s, uint16_t prec) {
+ * binary-float %.17g casts), rounded to prec. */
+static DecV* dec_from_str_v(const char* s, int64_t prec) {
     const char* p = s;
-    int8_t sign = 1;
+    int sign = 1;
     if (*p == '-') { sign = -1; p++; }
     else if (*p == '+') p++;
-    uint8_t digs[RESID_DEC_MAX_DIGITS];
-    int32_t dn = 0;
-    while (*p >= '0' && *p <= '9') {
-        if (dn >= RESID_DEC_MAX_DIGITS) resid_abort("dec: string too long");
-        digs[dn++] = (uint8_t)(*p - '0');
-        p++;
-    }
-    int32_t exp = 0;
+    size_t cap = strlen(p) + 1;
+    char* digs = (char*)malloc(cap);
+    if (!digs) resid_abort("dec: out of memory");
+    int64_t dn = 0;
+    while (*p >= '0' && *p <= '9') digs[dn++] = *p++;
+    int64_t exp = 0;
     if (*p == '.') {
         p++;
-        int32_t frac = 0;
-        while (*p >= '0' && *p <= '9') {
-            if (dn >= RESID_DEC_MAX_DIGITS) resid_abort("dec: string too long");
-            digs[dn++] = (uint8_t)(*p - '0');
-            p++;
-            frac++;
-        }
+        int64_t frac = 0;
+        while (*p >= '0' && *p <= '9') { digs[dn++] = *p++; frac++; }
         exp = -frac;
     }
     if (*p == 'e' || *p == 'E') {
         p++;
-        int32_t esign = 1;
+        int64_t esign = 1;
         if (*p == '-') { esign = -1; p++; }
         else if (*p == '+') p++;
-        int32_t ev = 0;
+        int64_t ev = 0;
         while (*p >= '0' && *p <= '9') {
             if (ev > RESID_DEC_MAX_EXP / 10) resid_abort("dec: exponent out of range");
             ev = ev * 10 + (*p - '0');
@@ -3486,71 +3856,200 @@ void resid_dec_from_str(resid_dec* out, const char* s, uint16_t prec) {
         exp += esign * ev;
     }
     if (dn == 0 || *p != '\0') resid_abort("dec: bad decimal string");
-    int32_t s2 = 0;
-    int32_t nonzero = 0;
-    for (int32_t i = 0; i < dn; i++) if (digs[i] != 0) nonzero = 1;
-    if (!nonzero) { dec_zero(prec, out); return; }
-    while (s2 < dn - 1 && digs[s2] == 0) s2++;
-    dec_work w;
-    memset(&w, 0, sizeof(w));
-    w.sign = sign;
-    w.exp = exp;
-    w.n = dn - s2;
-    for (int32_t i = 0; i < w.n; i++) w.d[w.n - 1 - i] = digs[s2 + i];
-    work_store(&w, prec, out);
+    int64_t n;
+    uint64_t* l = dec_parse_digits(digs, dn, &n);
+    free(digs);
+    DecV* r = dec_from_limbs(sign, l, n, exp, prec);
+    free(l);
+    return r;
 }
 
-/* Fixed notation, all nd significant digits, trailing zeros preserved. */
+static DecV* dec_from_i64_v(int64_t v, int64_t prec) {
+    if (v == 0) return dec_zero_v(prec);
+    uint64_t u = v < 0 ? (uint64_t)(-(v + 1)) + 1 : (uint64_t)v; /* < B */
+    return dec_from_limbs(v < 0 ? -1 : 1, &u, 1, 0, prec);
+}
+
+static DecV* dec_from_i128_v(__int128 v, int64_t prec) {
+    if (v == 0) return dec_zero_v(prec);
+    dec_u128 u = v < 0 ? (dec_u128)(-(v + 1)) + 1 : (dec_u128)v;
+    uint64_t l[3];
+    l[0] = (uint64_t)(u % DEC_B); u /= DEC_B;
+    l[1] = (uint64_t)(u % DEC_B); u /= DEC_B;
+    l[2] = (uint64_t)u;
+    return dec_from_limbs(v < 0 ? -1 : 1, l, 3, 0, prec);
+}
+
+static int dec_cmp_v(const DecV* a, const DecV* b) {
+    if (a->sign != b->sign) return a->sign > b->sign ? 1 : -1;
+    if (a->sign == 0) return 0;
+    int c = dec_cmp_mag(a->l, a->n, a->nd, a->exp, b->l, b->n, b->nd, b->exp);
+    return a->sign < 0 ? -c : c;
+}
+
+/* Fixed notation with all N significant digits (trim == 0), or with the
+ * trailing fractional zeros and a bare '.' dropped (trim != 0, the
+ * f-string `:.` spec). Returns a malloc'd string. */
+static char* dec_format(const DecV* v, int trim) {
+    int64_t N = v->prec;
+    if (v->sign == 0) {
+        if (trim) { char* z = (char*)malloc(2); z[0] = '0'; z[1] = 0; return z; }
+        char* z = (char*)malloc((size_t)N + 3);
+        if (!z) resid_abort("dec: out of memory");
+        z[0] = '0'; z[1] = '.';
+        memset(z + 2, '0', (size_t)N);
+        z[N + 2] = 0;
+        return z;
+    }
+    char* cd = dec_coef_digits(v);
+    int64_t nd = v->nd;
+    int64_t ipos = nd + v->exp;             /* integer digit count (N + E) */
+    /* last: digits 0..last-1 of the N-digit string are printed */
+    int64_t last = N;
+    if (trim && ipos < N) {
+        int64_t m = nd;
+        while (m > 0 && cd[m - 1] == '0') m--;
+        last = m > ipos ? m : (ipos > 0 ? ipos : m);
+    }
+    int64_t len = 1 + (ipos > 0 ? ipos : 1) + 1 + (ipos > 0 ? 0 : -ipos) + (last > 0 ? last : 0) + 1;
+    char* t = (char*)malloc((size_t)len + 1);
+    if (!t) resid_abort("dec: out of memory");
+    int64_t k = 0;
+    if (v->sign < 0) t[k++] = '-';
+#define DEC_DIGIT(i) ((i) < nd ? cd[(i)] : '0')
+    if (ipos > 0) {
+        for (int64_t i = 0; i < ipos; i++) t[k++] = DEC_DIGIT(i);
+        if (ipos < last) {
+            t[k++] = '.';
+            for (int64_t i = ipos; i < last; i++) t[k++] = DEC_DIGIT(i);
+        }
+    } else {
+        t[k++] = '0';
+        t[k++] = '.';
+        for (int64_t i = 0; i < -ipos; i++) t[k++] = '0';
+        for (int64_t i = 0; i < last; i++) t[k++] = DEC_DIGIT(i);
+    }
+#undef DEC_DIGIT
+    t[k] = '\0';
+    free(cd);
+    return t;
+}
+
+/* Integral value in [lo, hi], else an error. */
+static int64_t dec_to_int_v(const DecV* v, int64_t lo, int64_t hi) {
+    if (v->sign == 0) return 0;
+    const uint64_t* l = v->l;
+    int64_t sh = 0;                         /* digits to drop */
+    if (v->exp < 0) {
+        int64_t f = -(int64_t)v->exp;
+        if (f >= v->nd) resid_abort("dec: non-integer to Int");
+        for (int64_t i = 0; i < f / DEC_LD; i++)
+            if (l[i] != 0) resid_abort("dec: non-integer to Int");
+        if (l[f / DEC_LD] % dec_p10[f % DEC_LD] != 0) resid_abort("dec: non-integer to Int");
+        sh = f;
+    }
+    int64_t idig = v->nd + v->exp;          /* integer digits */
+    if (idig > 20) resid_abort("dec: value out of range for Int");
+    dec_u128 r = 0;
+    char* cd = dec_coef_digits(v);
+    int64_t keep = v->nd - sh;
+    for (int64_t i = 0; i < keep; i++) r = r * 10 + (dec_u128)(cd[i] - '0');
+    free(cd);
+    for (int64_t i = 0; i < v->exp; i++) r *= 10;
+    dec_u128 lim = v->sign < 0 ? (dec_u128)INT64_MAX + 1 : (dec_u128)INT64_MAX;
+    if (r > lim) resid_abort("dec: value out of range for Int");
+    int64_t out = v->sign < 0 ? (int64_t)(0 - (uint64_t)r) : (int64_t)r;
+    if (out < lo || out > hi) resid_abort("dec: value out of range for Int");
+    return out;
+}
+
+/* Nearest double (strtod of the leading 40 digits; exact for any value
+ * with at most 40 significant digits). */
+static double dec_to_f64_v(const DecV* v) {
+    if (v->sign == 0) return 0.0;
+    char* cd = dec_coef_digits(v);
+    int64_t nd = v->nd;
+    int64_t keep = nd < 40 ? nd : 40;
+    int64_t e = (int64_t)v->exp + (nd - keep);
+    char buf[80];
+    int k = 0;
+    if (v->sign < 0) buf[k++] = '-';
+    memcpy(buf + k, cd, (size_t)keep);
+    k += (int)keep;
+    snprintf(buf + k, sizeof(buf) - (size_t)k, "e%lld", (long long)e);
+    free(cd);
+    return strtod(buf, NULL);
+}
+
+/* ── Legacy fixed-size ABI (the archived Rust pipeline) ─────────────
+ * value = sign * int(digits[0..nd)) * 10^exp, digits as ASCII. Kept as
+ * adapters over DecV, so it is limited to 512 digits. */
+#define RESID_DEC_LEGACY_DIGITS 512
+typedef struct {
+    int8_t sign;
+    uint16_t nd;
+    uint8_t digits[RESID_DEC_LEGACY_DIGITS];
+    int32_t exp;
+} resid_dec;
+
+static DecV* dec_from_legacy(const resid_dec* d) {
+    if (d->sign == 0) return dec_zero_v(d->nd ? d->nd : 1);
+    int64_t n;
+    uint64_t* l = dec_parse_digits((const char*)d->digits, d->nd, &n);
+    DecV* r = dec_from_limbs(d->sign, l, n, d->exp, d->nd);
+    free(l);
+    return r;
+}
+
+static void dec_to_legacy(const DecV* v, resid_dec* out) {
+    if (v->prec > RESID_DEC_LEGACY_DIGITS) resid_abort("dec: precision too large");
+    int32_t N = v->prec;
+    out->nd = (uint16_t)N;
+    if (v->sign == 0) {
+        out->sign = 0; out->exp = 0;
+        memset(out->digits, '0', (size_t)N);
+        return;
+    }
+    char* cd = dec_coef_digits(v);
+    out->sign = v->sign;
+    for (int32_t i = 0; i < N; i++) out->digits[i] = (uint8_t)(i < v->nd ? cd[i] : '0');
+    out->exp = v->exp - (N - v->nd);
+    free(cd);
+}
+
+void resid_dec_div(resid_dec* out, const resid_dec* a, const resid_dec* b) {
+    int32_t prec = a->nd > b->nd ? a->nd : b->nd;
+    dec_to_legacy(dec_div_v(dec_from_legacy(a), dec_from_legacy(b), prec), out);
+}
+
+void resid_dec_from_digits(resid_dec* out, const char* digits, int32_t exp, uint16_t prec) {
+    int64_t n;
+    uint64_t* l = dec_parse_digits(digits, (int64_t)strlen(digits), &n);
+    dec_to_legacy(dec_from_limbs(1, l, n, exp, prec), out);
+    free(l);
+}
+
+void resid_dec_from_int(resid_dec* out, int64_t v, uint16_t prec) {
+    dec_to_legacy(dec_from_i64_v(v, prec), out);
+}
+
+void resid_dec_from_i128(resid_dec* out, __int128 v, uint16_t prec) {
+    dec_to_legacy(dec_from_i128_v(v, prec), out);
+}
+
+void resid_dec_from_str(resid_dec* out, const char* s, uint16_t prec) {
+    dec_to_legacy(dec_from_str_v(s, prec), out);
+}
+
 char* resid_dec_to_string(const resid_dec* v) {
-    int32_t N = v->nd;
-    int32_t ipos = N + v->exp; /* integer digit count */
-    int32_t len;
-    if (v->sign == 0) {
-        len = 2 + N; /* "0." + N zeros */
-    } else {
-        len = (v->sign < 0 ? 1 : 0);
-        if (ipos > 0) {
-            len += ipos;
-            if (ipos < N) len += 1 + (N - ipos);
-        } else {
-            len += 2 + (-ipos) + N;
-        }
-    }
-    char* tmp = (char*)malloc((size_t)len + 1);
-    if (!tmp) resid_abort("dec: out of memory");
-    int32_t k = 0;
-    if (v->sign == 0) {
-        tmp[k++] = '0';
-        tmp[k++] = '.';
-        for (int32_t i = 0; i < N; i++) tmp[k++] = '0';
-    } else {
-        if (v->sign < 0) tmp[k++] = '-';
-        if (ipos > 0) {
-            int32_t iint = ipos < N ? ipos : N;
-            for (int32_t i = 0; i < iint; i++) tmp[k++] = (char)v->digits[i];
-            for (int32_t i = iint; i < ipos; i++) tmp[k++] = '0';
-            if (ipos < N) {
-                tmp[k++] = '.';
-                for (int32_t i = ipos; i < N; i++) tmp[k++] = (char)v->digits[i];
-            }
-        } else {
-            tmp[k++] = '0';
-            tmp[k++] = '.';
-            for (int32_t i = 0; i < -ipos; i++) tmp[k++] = '0';
-            for (int32_t i = 0; i < N; i++) tmp[k++] = (char)v->digits[i];
-        }
-    }
-    tmp[k] = '\0';
-    char* boxed = resid_box_str(tmp);
-    free(tmp);
+    char* t = dec_format(dec_from_legacy(v), 0);
+    char* boxed = resid_box_str(t);
+    free(t);
     return boxed;
 }
 
 void resid_dec_round(resid_dec* out, const resid_dec* v, uint16_t prec) {
-    if (v->sign == 0) { dec_zero(prec, out); return; }
-    dec_work w;
-    dec_load(v, &w);
-    work_store(&w, prec, out);
+    dec_to_legacy(dec_round_v(dec_from_legacy(v), prec, 0), out);
 }
 
 void resid_dec_neg(resid_dec* out, const resid_dec* v) {
@@ -3560,102 +4059,133 @@ void resid_dec_neg(resid_dec* out, const resid_dec* v) {
 
 void resid_dec_add(resid_dec* out, const resid_dec* a, const resid_dec* b) {
     int32_t prec = a->nd > b->nd ? a->nd : b->nd;
-    if (a->sign == 0) { resid_dec_round(out, b, (uint16_t)prec); return; }
-    if (b->sign == 0) { resid_dec_round(out, a, (uint16_t)prec); return; }
-    dec_work wa, wb;
-    dec_load(a, &wa);
-    dec_load(b, &wb);
-    if (wa.sign == wb.sign) {
-        work_add_mag(&wa, &wb, prec, out);
-    } else {
-        int c = work_abs_cmp(&wa, &wb);
-        if (c == 0) { dec_zero(prec, out); }
-        else if (c > 0) { work_sub_mag(&wa, &wb, prec, out); }
-        else { work_sub_mag(&wb, &wa, prec, out); }
-    }
+    dec_to_legacy(dec_addsub(dec_from_legacy(a), dec_from_legacy(b), 0, prec), out);
 }
 
 void resid_dec_sub(resid_dec* out, const resid_dec* a, const resid_dec* b) {
-    resid_dec nb = *b;
-    nb.sign = (int8_t)-nb.sign;
-    resid_dec_add(out, a, &nb);
+    int32_t prec = a->nd > b->nd ? a->nd : b->nd;
+    dec_to_legacy(dec_addsub(dec_from_legacy(a), dec_from_legacy(b), 1, prec), out);
 }
 
 void resid_dec_mul(resid_dec* out, const resid_dec* a, const resid_dec* b) {
     int32_t prec = a->nd > b->nd ? a->nd : b->nd;
-    if (a->sign == 0 || b->sign == 0) { dec_zero(prec, out); return; }
-    dec_work wa, wb;
-    dec_load(a, &wa);
-    dec_load(b, &wb);
-    wa.sign = (wa.sign == wb.sign) ? 1 : -1;
-    work_mul_mag(&wa, &wb, prec, out);
+    dec_to_legacy(dec_mul_v(dec_from_legacy(a), dec_from_legacy(b), prec), out);
 }
 
 int32_t resid_dec_cmp(const resid_dec* a, const resid_dec* b) {
-    if (a->sign == 0 && b->sign == 0) return 0;
-    if (a->sign == 0) return b->sign > 0 ? -1 : 1;
-    if (b->sign == 0) return a->sign > 0 ? 1 : -1;
-    if (a->sign != b->sign) return a->sign > b->sign ? 1 : -1;
-    dec_work wa, wb;
-    dec_load(a, &wa);
-    dec_load(b, &wb);
-    int c = work_abs_cmp(&wa, &wb);
-    if (a->sign < 0) c = -c;
-    return c;
+    return (int32_t)dec_cmp_v(dec_from_legacy(a), dec_from_legacy(b));
 }
 
 int64_t resid_dec_to_int(const resid_dec* v, int64_t lo, int64_t hi) {
-    if (v->sign == 0) return 0;
-    int32_t frac = -v->exp;
-    if (frac > 0) {
-        if (frac > v->nd) resid_abort("dec: non-integer to Int");
-        for (int32_t i = v->nd - frac; i < v->nd; i++)
-            if (v->digits[i] != '0') resid_abort("dec: non-integer to Int");
-    }
-    /* Integer digit count: nd significant digits at exponent exp; a negative
-     * exp shifts that many digits into the fraction (already verified zero),
-     * a positive exp appends that many trailing zeros. */
-    int32_t int_digits = v->nd + v->exp;
-    if (int_digits < 0) int_digits = 0;
-    int64_t r = 0;
-    for (int32_t i = 0; i < int_digits; i++) {
-        int32_t d = (i < v->nd) ? (v->digits[i] - '0') : 0;
-        if (r > (INT64_MAX - d) / 10) resid_abort("dec: value out of range for Int");
-        r = r * 10 + d;
-    }
-    if (v->sign < 0) r = -r;
-    if (r < lo || r > hi) resid_abort("dec: value out of range for Int");
-    return r;
+    return dec_to_int_v(dec_from_legacy(v), lo, hi);
 }
 
-/* Lossy for wide Dec values (documented bootstrap limitation). */
 double resid_dec_to_f64(const resid_dec* v) {
-    /* Accumulate only significant digits; precision-padding trailing zeros
-     * fold into the power-of-ten exponent so e.g. Dec(34) 12.5m → 12.5
-     * exactly, not 1.25e31 / 1e32 (double rounding noise). */
-    int32_t sig = v->nd;
-    while (sig > 0 && v->digits[sig - 1] == '0') sig--;
-    int32_t exp = v->exp + (v->nd - sig);
-    double r = 0.0;
-    for (int32_t i = 0; i < sig; i++) r = r * 10.0 + (double)(v->digits[i] - '0');
-    if (exp != 0) {
-        int32_t e = exp > 0 ? exp : -exp;
-        double p = 1.0;
-        for (int32_t i = 0; i < e && p < 1e308 && p > 1e-308; i++) p *= 10.0;
-        if (exp > 0) r *= p;
-        else r /= p;
-    }
-    if (v->sign < 0) r = -r;
-    return r;
+    return dec_to_f64_v(dec_from_legacy(v));
 }
 
 /* Binary float -> Dec via %.17g (exact decimal of the double). */
 void resid_dec_from_f64(resid_dec* out, double v, uint16_t prec) {
-    if (v == 0.0) { dec_zero(prec, out); return; }
+    if (v == 0.0) { dec_to_legacy(dec_zero_v(prec), out); return; }
     if (!(v > -1e308 && v < 1e308)) resid_abort("dec: value out of range");
     char buf[40];
     snprintf(buf, sizeof(buf), "%.17g", v);
     resid_dec_from_str(out, buf, prec);
+}
+
+/* ── Dec(N) for the self-hosted code generator ─────────────────────────
+ * Values are immutable DecV pointers. `prec` is the static N of the result
+ * type; for the binary operators it is max(N, M) of the operands (spec
+ * §6.6a), and the result is rounded to it once. */
+static int64_t decp_opprec(const DecV* a, const DecV* b, int64_t prec) {
+    (void)prec;
+    return a->prec > b->prec ? a->prec : b->prec;
+}
+
+static void* decp_fit(DecV* r, int64_t prec) {
+    if (r->prec == prec) return r;
+    return dec_round_v(r, prec, 0);
+}
+
+void* resid_decp_from_str(const char* s, int64_t prec) {
+    return dec_from_str_v(s, prec);
+}
+
+void* resid_decp_from_i64(int64_t v, int64_t prec) {
+    return dec_from_i64_v(v, prec);
+}
+
+void* resid_decp_round(void* v, int64_t prec) {
+    return dec_round_v((DecV*)v, prec, 0);
+}
+
+void* resid_decp_add(void* a, void* b, int64_t prec) {
+    DecV *x = (DecV*)a, *y = (DecV*)b;
+    return decp_fit(dec_addsub(x, y, 0, decp_opprec(x, y, prec)), prec);
+}
+
+void* resid_decp_sub(void* a, void* b, int64_t prec) {
+    DecV *x = (DecV*)a, *y = (DecV*)b;
+    return decp_fit(dec_addsub(x, y, 1, decp_opprec(x, y, prec)), prec);
+}
+
+void* resid_decp_mul(void* a, void* b, int64_t prec) {
+    DecV *x = (DecV*)a, *y = (DecV*)b;
+    return decp_fit(dec_mul_v(x, y, decp_opprec(x, y, prec)), prec);
+}
+
+void* resid_decp_div(void* a, void* b, int64_t prec) {
+    DecV *x = (DecV*)a, *y = (DecV*)b;
+    return decp_fit(dec_div_v(x, y, decp_opprec(x, y, prec)), prec);
+}
+
+void* resid_decp_neg(void* a) {
+    DecV* v = (DecV*)a;
+    DecV* r = dec_alloc(v->n);
+    memcpy(r, v, sizeof(DecV) + (size_t)v->n * sizeof(uint64_t));
+    r->sign = (int8_t)-v->sign;
+    return r;
+}
+
+/* resid_dec_persist(x): x, copied out of the innermost resid_bulk_push
+ * scope into the enclosing one (or onto the heap when there is none), so
+ * it survives that scope's resid_bulk_pop. Outside any bulk scope values
+ * already live on the heap and are returned as they are (values are
+ * immutable and have no identity). */
+void* resid_decp_persist(void* a) {
+    DecV* v = (DecV*)a;
+    if (!g_bulk_arena) return v;
+    size_t sz = sizeof(DecV) + (size_t)v->n * sizeof(uint64_t);
+    g_alloc_bytes += sz;
+    DecV* r;
+    if (g_bulk_arena->prev) {
+        r = (DecV*)arena_bump_alloc(g_bulk_arena->prev, sz);
+    } else {
+        r = (DecV*)malloc(sz);
+        if (!r) resid_abort("dec: out of memory");
+    }
+    memcpy(r, v, sz);
+    return r;
+}
+
+int64_t resid_decp_cmp(void* a, void* b) {
+    return (int64_t)dec_cmp_v((DecV*)a, (DecV*)b);
+}
+
+/* trim != 0: drop trailing fractional zeros (the f-string `:.` spec). */
+char* resid_decp_to_str(void* v, int8_t trim) {
+    char* t = dec_format((DecV*)v, trim);
+    char* boxed = resid_box_str(t);
+    free(t);
+    return boxed;
+}
+
+int64_t resid_decp_to_i64(void* v) {
+    return dec_to_int_v((DecV*)v, INT64_MIN, INT64_MAX);
+}
+
+double resid_decp_to_f64(void* v) {
+    return dec_to_f64_v((DecV*)v);
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -5415,9 +5945,27 @@ typedef struct HMNode {
 } HMNode;
 
 /* The map/set value handed out to Resid: a persistent trie root + size. */
+typedef struct MapTab MapTab;
+
+/* The map/set value handed out to Resid. Two representations:
+ *   - trie mode (tab == NULL): the persistent hash trie above;
+ *   - table mode (tab != NULL): a flat open-addressing table, produced only
+ *     for a map the compiler proved is a linear accumulator (a parameter
+ *     consumed solely by `m.insert(..)`/`m.remove(..)` feeding the same
+ *     parameter of a self tail call, see the driver's linear-map analysis).
+ *     While `transient` is set, exactly one loop owns the table and updates
+ *     it in place; returning it freezes it, after which it is immutable like
+ *     any other map value.
+ * Every observable result is identical in both modes: order-dependent
+ * operations (keys, values, format, set algebra) and persistent updates run
+ * on the canonical trie the table materializes to (cached once frozen), and
+ * that trie's shape depends only on the key set. */
 typedef struct {
     int64_t count;
-    HMNode* root; /* NULL for the empty container */
+    HMNode* root;   /* trie mode: NULL for the empty container;
+                       table mode: cached materialized trie (frozen only) */
+    MapTab* tab;
+    int64_t transient;
 } HMTrie;
 
 static uint64_t fnv1a(const char* s);
@@ -5466,17 +6014,19 @@ static void free_hmnode(HMNode* n) {
     free(n);
 }
 
+static void map_free_parts(HMTrie* m);
+
 void resid_map_free(void* b) {
     if (!b) return;
     HMTrie* m = (HMTrie*)b;
-    free_hmnode(m->root);
+    map_free_parts(m);
     free(m);
 }
 
 void resid_set_free(void* b) {
     if (!b) return;
     HMTrie* m = (HMTrie*)b;
-    free_hmnode(m->root);
+    map_free_parts(m);
     free(m);
 }
 
@@ -5646,6 +6196,8 @@ static HMTrie* trie_new(int64_t count, HMNode* root) {
     if (!t) resid_abort("trie_new: out of memory");
     t->count = count;
     t->root = root;
+    t->tab = NULL;
+    t->transient = 0;
     return t;
 }
 
@@ -5857,11 +6409,483 @@ static void trie_collect(HMNode* node, void** keys, void** vals, int64_t* idx) {
     }
 }
 
+/* ── Table mode (see HMTrie) ──────────────────────────────────────────
+ *
+ * Keys and values are 64-bit words tagged by a kind the compiler passes
+ * from the static types: key kind 1 = raw Int, 0 = boxed value pointer;
+ * value kind 1 = raw Int, 2 = raw Float bits, 3 = raw Bool, 0 = boxed
+ * pointer (or a set's opaque marker); -1 = not decided yet (empty table:
+ * the first update decides). A request in another kind is converted, so a
+ * mismatch is only ever slower, never wrong.
+ *
+ * Layout: open addressing with linear probing over a dense key array and a
+ * parallel value array, at most half full. Free and deleted slots are
+ * marked by sentinel keys (0 / 1 for pointers, which are never those
+ * values; INT64_MIN / INT64_MIN + 1 for raw Ints, whose entries, if those
+ * keys are ever used, live in two out-of-band slots). */
+struct MapTab {
+    int64_t cap;   /* power of two */
+    int64_t live;  /* entries, including out-of-band ones */
+    int64_t tombs;
+    int8_t kkind;
+    int8_t vkind;
+    uint64_t* keys; /* NULL while kkind is undecided */
+    uint64_t* vals;
+    int8_t oob_has[2];
+    uint64_t oob_val[2];
+    /* Last raw-key probe (lvalid): `m.insert(k, (m.get(k) else {..}) + 1)`
+     * then reuses the lookup's slot instead of probing again. Only the
+     * owning loop's transient table uses it; any other change clears it. */
+    int8_t lvalid;
+    uint64_t lkey;
+    int64_t lres; /* slot of lkey, or -(free slot + 1) when absent */
+};
+
+#define MT_RAW_EMPTY 0x8000000000000000ULL
+#define MT_RAW_TOMB 0x8000000000000001ULL
+
+static HMNode* map_root(HMTrie* m);
+void* resid_map_insert(void* map, void* key, void* val);
+void* resid_map_remove(void* map, void* key);
+
+static inline uint64_t mt_empty(const MapTab* t) { return t->kkind == 1 ? MT_RAW_EMPTY : 0; }
+static inline uint64_t mt_tomb(const MapTab* t) { return t->kkind == 1 ? MT_RAW_TOMB : 1; }
+
+static inline uint64_t mt_mix(uint64_t k) {
+    k ^= k >> 33;
+    k *= 0xff51afd7ed558ccdULL;
+    k ^= k >> 33;
+    return k;
+}
+
+static int box_is_i64(const void* p) {
+    const ResidVal* b = (const ResidVal*)p;
+    return is_boxed(p) && b->tag == -1 && b->type && strcmp(b->type, "i64") == 0;
+}
+
+static inline uint64_t mt_hash(const MapTab* t, uint64_t kb) {
+    return t->kkind == 1 ? mt_mix(kb) : resid_hash((void*)(uintptr_t)kb);
+}
+
+static inline int mt_keq(const MapTab* t, uint64_t a, uint64_t b) {
+    if (t->kkind == 1) return a == b;
+    return resid_key_eq((void*)(uintptr_t)a, (void*)(uintptr_t)b);
+}
+
+/* Out-of-band index (0/1) of a raw key equal to a sentinel, else -1. */
+static inline int mt_oob(const MapTab* t, uint64_t k) {
+    if (t->kkind != 1) return -1;
+    if (k == MT_RAW_EMPTY) return 0;
+    if (k == MT_RAW_TOMB) return 1;
+    return -1;
+}
+
+static void mt_alloc(MapTab* t, int64_t cap) {
+    t->cap = cap;
+    t->keys = (uint64_t*)malloc((size_t)cap * sizeof(uint64_t));
+    t->vals = (uint64_t*)malloc((size_t)cap * sizeof(uint64_t));
+    if (!t->keys || !t->vals) resid_abort("map table: out of memory");
+    uint64_t e = mt_empty(t);
+    for (int64_t i = 0; i < cap; i++) t->keys[i] = e;
+}
+
+static MapTab* mt_new(int64_t cap, int8_t kk, int8_t vk) {
+    MapTab* t = (MapTab*)calloc(1, sizeof(MapTab));
+    if (!t) resid_abort("map table: out of memory");
+    t->cap = cap;
+    t->kkind = kk;
+    t->vkind = vk;
+    if (kk != -1) mt_alloc(t, cap);
+    return t;
+}
+
+/* Slot of key `k` (already in the table's key kind, not a sentinel), or
+ * -(first free slot + 1). */
+static inline int64_t mt_probe(const MapTab* t, uint64_t k) {
+    uint64_t mask = (uint64_t)t->cap - 1;
+    uint64_t e = mt_empty(t), tb = mt_tomb(t);
+    for (uint64_t i = mt_hash(t, k) & mask;; i = (i + 1) & mask) {
+        uint64_t s = t->keys[i];
+        if (s == e) return -(int64_t)i - 1;
+        if (s != tb && mt_keq(t, s, k)) return (int64_t)i;
+    }
+}
+
+/* mt_probe for a raw Int table, through the last-probe cache. */
+static inline int64_t mt_probe_raw_cached(MapTab* t, uint64_t k) {
+    if (t->lvalid && t->lkey == k) return t->lres;
+    uint64_t mask = (uint64_t)t->cap - 1;
+    int64_t r;
+    for (uint64_t i = mt_mix(k) & mask;; i = (i + 1) & mask) {
+        uint64_t s = t->keys[i];
+        if (s == MT_RAW_EMPTY) { r = -(int64_t)i - 1; break; }
+        if (s == k) { r = (int64_t)i; break; }
+    }
+    t->lvalid = 1;
+    t->lkey = k;
+    t->lres = r;
+    return r;
+}
+
+/* Iterate live entries: *idx starts at 0; returns 0 when done. */
+static int mt_next(const MapTab* t, int64_t* idx, uint64_t* k, uint64_t* v) {
+    while (*idx < t->cap) {
+        int64_t i = (*idx)++;
+        if (!t->keys) { *idx = t->cap; break; }
+        uint64_t s = t->keys[i];
+        if (s == mt_empty(t) || s == mt_tomb(t)) continue;
+        *k = s;
+        *v = t->vals[i];
+        return 1;
+    }
+    while (*idx < t->cap + 2) {
+        int o = (int)((*idx)++ - t->cap);
+        if (!t->oob_has[o]) continue;
+        *k = o == 0 ? MT_RAW_EMPTY : MT_RAW_TOMB;
+        *v = t->oob_val[o];
+        return 1;
+    }
+    return 0;
+}
+
+static void mt_insert_new(MapTab* t, uint64_t k, uint64_t v);
+
+/* Rebuild into `cap` slots with key kind `kk` (keys already converted by
+ * `conv`, which may be NULL). */
+static void mt_rebuild(MapTab* t, int64_t cap, int8_t kk, uint64_t (*conv)(int8_t, uint64_t)) {
+    MapTab old = *t;
+    t->kkind = kk;
+    t->live = 0;
+    t->tombs = 0;
+    t->oob_has[0] = t->oob_has[1] = 0;
+    t->lvalid = 0;
+    mt_alloc(t, cap);
+    int64_t it = 0;
+    uint64_t k, v;
+    while (mt_next(&old, &it, &k, &v)) mt_insert_new(t, conv ? conv(old.kkind, k) : k, v);
+    free(old.keys);
+    free(old.vals);
+}
+
+/* Insert a key known to be absent. */
+static void mt_insert_new(MapTab* t, uint64_t k, uint64_t v) {
+    int o = mt_oob(t, k);
+    if (o >= 0) { t->oob_has[o] = 1; t->oob_val[o] = v; t->live++; return; }
+    if ((t->live + t->tombs + 1) * 2 > t->cap) mt_rebuild(t, t->live * 4 > t->cap ? t->cap * 2 : t->cap, t->kkind, NULL);
+    int64_t r = mt_probe(t, k);
+    t->keys[-r - 1] = k;
+    t->vals[-r - 1] = v;
+    t->live++;
+    t->lvalid = 0;
+}
+
+/* Box a stored word of kind `k` into a Resid value pointer. */
+static uint64_t mt_box(int8_t k, uint64_t w) {
+    switch (k) {
+    case 1: return (uint64_t)(uintptr_t)resid_box_i64((int64_t)w);
+    case 2: { double d; memcpy(&d, &w, 8); return (uint64_t)(uintptr_t)resid_box_f64(d); }
+    case 3: return (uint64_t)(uintptr_t)resid_box_bool((int8_t)(w != 0));
+    default: return w;
+    }
+}
+
+/* Unbox a boxed value pointer to kind `k` (1/2/3), or 0 when the box does
+ * not hold that kind. */
+static int mt_unbox(int8_t k, uint64_t w, uint64_t* out) {
+    void* p = (void*)(uintptr_t)w;
+    if (!p || !is_boxed(p) || ((ResidVal*)p)->tag != -1 || !((ResidVal*)p)->type) return 0;
+    const char* ty = ((ResidVal*)p)->type;
+    if (k == 1 && strcmp(ty, "i64") == 0) { *out = (uint64_t)resid_unbox_i64(p); return 1; }
+    if (k == 2 && strcmp(ty, "f64") == 0) { double d = resid_unbox_f64(p); memcpy(out, &d, 8); return 1; }
+    if (k == 3 && strcmp(ty, "bool") == 0) { *out = (uint64_t)resid_unbox_bool(p); return 1; }
+    return 0;
+}
+
+static void mt_decide(MapTab* t, int8_t kk, int8_t vk) {
+    if (t->vkind == -1) t->vkind = vk;
+    if (t->kkind == -1) { t->kkind = kk; mt_alloc(t, t->cap); }
+}
+
+/* Store every value boxed from now on. */
+static void mt_vals_boxed(MapTab* t) {
+    int64_t it = 0;
+    uint64_t k, v;
+    for (int64_t i = 0; i < t->cap; i++) {
+        uint64_t s = t->keys[i];
+        if (s != mt_empty(t) && s != mt_tomb(t)) t->vals[i] = mt_box(t->vkind, t->vals[i]);
+    }
+    for (int o = 0; o < 2; o++) if (t->oob_has[o]) t->oob_val[o] = mt_box(t->vkind, t->oob_val[o]);
+    (void)it; (void)k; (void)v;
+    t->vkind = 0;
+}
+
+/* Bring a request key of kind `rk` to the table's key kind. */
+static uint64_t mt_key_in(MapTab* t, int8_t rk, uint64_t kb) {
+    if (t->kkind == rk) return kb;
+    if (t->kkind == 0) return mt_box(rk, kb);
+    uint64_t raw;
+    if (mt_unbox(t->kkind, kb, &raw)) return raw;
+    mt_rebuild(t, t->cap, 0, mt_box); /* keys of another type: go boxed */
+    return kb;
+}
+
+static uint64_t mt_val_in(MapTab* t, int8_t rk, uint64_t vb) {
+    if (t->vkind == rk) return vb;
+    if (t->vkind == 0) return mt_box(rk, vb);
+    uint64_t raw;
+    if (rk == 0 && mt_unbox(t->vkind, vb, &raw)) return raw;
+    mt_vals_boxed(t);
+    return mt_box(rk, vb);
+}
+
+static uint64_t mt_val_out(const MapTab* t, int8_t want, uint64_t w) {
+    if (t->vkind == want || t->vkind == -1) return w;
+    if (want == 0) return mt_box(t->vkind, w);
+    uint64_t raw = 0;
+    if (t->vkind == 0 && mt_unbox(want, w, &raw)) return raw;
+    return w;
+}
+
+/* Pointer to the value of a request key, or NULL. Never converts. */
+static uint64_t* mt_vref(MapTab* t, int8_t rk, uint64_t kb) {
+    if (t->live == 0 || !t->keys) return NULL;
+    uint64_t k = kb;
+    if (t->kkind != rk) {
+        if (t->kkind == 0) {
+            if (rk != 1) return NULL;
+            k = (uint64_t)(uintptr_t)resid_box_i64((int64_t)kb);
+        } else if (!mt_unbox(t->kkind, kb, &k)) {
+            return NULL;
+        }
+    }
+    int o = mt_oob(t, k);
+    if (o >= 0) return t->oob_has[o] ? &t->oob_val[o] : NULL;
+    int64_t r = mt_probe(t, k);
+    return r >= 0 ? &t->vals[r] : NULL;
+}
+
+static void mt_put(MapTab* t, int8_t kk, uint64_t kb, int8_t vk, uint64_t vb) {
+    mt_decide(t, kk, vk);
+    uint64_t k = mt_key_in(t, kk, kb);
+    uint64_t v = mt_val_in(t, vk, vb);
+    uint64_t* at = mt_vref(t, t->kkind, k);
+    if (at) { *at = v; return; }
+    mt_insert_new(t, k, v);
+}
+
+static int mt_del(MapTab* t, int8_t kk, uint64_t kb) {
+    if (t->live == 0 || !t->keys) return 0;
+    uint64_t k = kb;
+    if (t->kkind != kk) {
+        if (t->kkind == 0) k = mt_box(kk, kb);
+        else if (!mt_unbox(t->kkind, kb, &k)) return 0;
+    }
+    t->lvalid = 0;
+    int o = mt_oob(t, k);
+    if (o >= 0) {
+        if (!t->oob_has[o]) return 0;
+        t->oob_has[o] = 0;
+        t->live--;
+        return 1;
+    }
+    int64_t r = mt_probe(t, k);
+    if (r < 0) return 0;
+    t->keys[r] = mt_tomb(t);
+    t->live--;
+    t->tombs++;
+    return 1;
+}
+
+/* The canonical trie holding the same entries: cached on a frozen table,
+ * rebuilt for a transient one (whose table may still change). */
+static HMNode* map_root(HMTrie* m) {
+    if (!m->tab) return m->root;
+    if (!m->transient) {
+        HMNode* c = __atomic_load_n(&m->root, __ATOMIC_ACQUIRE);
+        if (c || m->count == 0) return c;
+    }
+    MapTab* t = m->tab;
+    HMNode* root = NULL;
+    int64_t it = 0;
+    uint64_t kw, vw;
+    while (mt_next(t, &it, &kw, &vw)) {
+        void* k = (void*)(uintptr_t)mt_box(t->kkind, kw);
+        void* v = (void*)(uintptr_t)mt_box(t->vkind, vw);
+        int isnew = 0;
+        root = trie_insert(root, 0, resid_hash(k), k, v, &isnew);
+    }
+    if (!m->transient) {
+        HMNode* expect = NULL;
+        if (!__atomic_compare_exchange_n(&m->root, &expect, root, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            root = expect; /* another thread cached an identical trie first */
+    }
+    return root;
+}
+
+static void map_free_parts(HMTrie* m) {
+    if (m->tab) {
+        free(m->tab->keys);
+        free(m->tab->vals);
+        free(m->tab);
+    }
+    free_hmnode(m->root);
+}
+
+#define MAP_TRANSIENT_COPY_MAX 64
+
+/* Entry of a proven linear accumulator loop: an exclusively owned, mutable
+ * table holding the same entries as `map`. `map` itself is untouched. */
+void* resid_map_transient(void* map) {
+    HMTrie* src = (HMTrie*)map;
+    /* Entering the loop copies the incoming map. For a big trie that copy
+     * could cost more than the loop saves (a few inserts into a large map),
+     * so such a loop just keeps using ordinary persistent updates: handing
+     * back the untouched persistent map makes every owned update take the
+     * persistent path. */
+    if (!src->tab && src->count > MAP_TRANSIENT_COPY_MAX) return map;
+    HMTrie* m = trie_new(src->count, NULL);
+    m->transient = 1;
+    if (src->tab) {
+        MapTab* s = src->tab;
+        MapTab* t = (MapTab*)malloc(sizeof(MapTab));
+        if (!t) resid_abort("map table: out of memory");
+        *t = *s;
+        t->lvalid = 0;
+        if (s->keys) {
+            t->keys = (uint64_t*)malloc((size_t)s->cap * sizeof(uint64_t));
+            t->vals = (uint64_t*)malloc((size_t)s->cap * sizeof(uint64_t));
+            if (!t->keys || !t->vals) resid_abort("map table: out of memory");
+            memcpy(t->keys, s->keys, (size_t)s->cap * sizeof(uint64_t));
+            memcpy(t->vals, s->vals, (size_t)s->cap * sizeof(uint64_t));
+        }
+        m->tab = t;
+        return m;
+    }
+    int64_t n = src->count;
+    int64_t cap = 16;
+    while (cap < (n + 1) * 2) cap *= 2;
+    m->tab = mt_new(cap, n == 0 ? -1 : 0, n == 0 ? -1 : 0);
+    if (n > 0) {
+        void** ks = (void**)malloc((size_t)n * sizeof(void*));
+        void** vs = (void**)malloc((size_t)n * sizeof(void*));
+        int64_t j = 0;
+        trie_collect(src->root, ks, vs, &j);
+        for (int64_t i = 0; i < n; i++)
+            mt_put(m->tab, 0, (uint64_t)(uintptr_t)ks[i], 0, (uint64_t)(uintptr_t)vs[i]);
+        free(ks);
+        free(vs);
+    }
+    return m;
+}
+
+/* The loop is done with it: from here on the table is an ordinary
+ * immutable map value. */
+void* resid_map_freeze(void* map) {
+    HMTrie* m = (HMTrie*)map;
+    if (m->transient) m->transient = 0;
+    return map;
+}
+
+static __attribute__((noinline)) void* map_put_slow(HMTrie* m, int8_t owned, int8_t kk, int64_t kb, int8_t vk, int64_t vb) {
+    if (owned && m->transient) {
+        m->tab->lvalid = 0;
+        mt_put(m->tab, kk, (uint64_t)kb, vk, (uint64_t)vb);
+        m->count = m->tab->live;
+        return m;
+    }
+    return resid_map_insert(m, (void*)(uintptr_t)mt_box(kk, (uint64_t)kb), (void*)(uintptr_t)mt_box(vk, (uint64_t)vb));
+}
+
+/* Typed insert. `owned` is set by codegen only for the consuming update of
+ * a proven linear accumulator; on a transient table that updates in place.
+ * Every other case is the ordinary persistent insert. */
+__attribute__((always_inline)) void* resid_map_put(void* map, int8_t owned, int8_t kk, int64_t kb, int8_t vk, int64_t vb) {
+    HMTrie* m = (HMTrie*)map;
+    MapTab* t = m->tab;
+    uint64_t k = (uint64_t)kb;
+    if (owned && m->transient && kk == 1 && t->kkind == 1 && t->vkind == vk && (k >> 1) != (MT_RAW_EMPTY >> 1)) {
+        int64_t r = mt_probe_raw_cached(t, k);
+        if (r >= 0) { t->vals[r] = (uint64_t)vb; return m; }
+        if ((t->live + t->tombs + 1) * 2 <= t->cap) {
+            t->keys[-r - 1] = k;
+            t->vals[-r - 1] = (uint64_t)vb;
+            t->live++;
+            t->lres = -r - 1; /* the cached key now lives there */
+            m->count = t->live;
+            return m;
+        }
+    }
+    return map_put_slow(m, owned, kk, kb, vk, vb);
+}
+
+void* resid_map_del(void* map, int8_t owned, int8_t kk, int64_t kb) {
+    HMTrie* m = (HMTrie*)map;
+    if (owned && m->transient) {
+        mt_del(m->tab, kk, (uint64_t)kb);
+        m->count = m->tab->live;
+        return m;
+    }
+    return resid_map_remove(map, (void*)(uintptr_t)mt_box(kk, (uint64_t)kb));
+}
+
+void* resid_set_put(void* set, int8_t owned, int8_t kk, int64_t kb) {
+    return resid_map_put(set, owned, kk, kb, 0, 1);
+}
+
+/* Typed lookup: {value word of kind `vk`, found}. No allocation on the
+ * table path, so `m.get(k) else { d }` on an Int-keyed map is a probe. */
+typedef struct { int64_t val; int64_t found; } MapFind;
+
+static __attribute__((noinline)) MapFind map_find_slow(HMTrie* m, int8_t kk, int64_t kb, int8_t vk) {
+    MapFind r = { 0, 0 };
+    if (m->tab) {
+        uint64_t* at = mt_vref(m->tab, kk, (uint64_t)kb);
+        if (!at) return r;
+        r.val = (int64_t)mt_val_out(m->tab, vk, *at);
+        r.found = 1;
+        return r;
+    }
+    void* key = (void*)(uintptr_t)mt_box(kk, (uint64_t)kb);
+    void* v = trie_get(m->root, 0, resid_hash(key), key);
+    if (!v) return r;
+    uint64_t w = (uint64_t)(uintptr_t)v;
+    if (vk != 0 && !mt_unbox(vk, w, &w)) return r;
+    r.val = (int64_t)w;
+    r.found = 1;
+    return r;
+}
+
+__attribute__((always_inline)) MapFind resid_map_find(void* map, int8_t kk, int64_t kb, int8_t vk) {
+    HMTrie* m = (HMTrie*)map;
+    MapTab* t = m->tab;
+    uint64_t k = (uint64_t)kb;
+    /* A frozen table may be read by several threads, so only the owning
+     * loop's transient table goes through the last-probe cache. */
+    if (m->transient && kk == 1 && t->kkind == 1 && t->vkind == vk && (k >> 1) != (MT_RAW_EMPTY >> 1)) {
+        MapFind r = { 0, 0 };
+        int64_t at = mt_probe_raw_cached(t, k);
+        if (at >= 0) { r.val = (int64_t)t->vals[at]; r.found = 1; }
+        return r;
+    }
+    return map_find_slow(m, kk, kb, vk);
+}
+
+int8_t resid_map_has(void* map, int8_t kk, int64_t kb) {
+    HMTrie* m = (HMTrie*)map;
+    if (m->tab) return mt_vref(m->tab, kk, (uint64_t)kb) != NULL;
+    void* key = (void*)(uintptr_t)mt_box(kk, (uint64_t)kb);
+    return trie_contains(m->root, 0, resid_hash(key), key) ? 1 : 0;
+}
+
 /* Lookup a key in the map. Returns the value or NULL. */
 void* resid_map_get(void* map, void* key) {
     HMTrie* t = (HMTrie*)map;
+    if (t->tab) {
+        uint64_t* at = mt_vref(t->tab, 0, (uint64_t)(uintptr_t)key);
+        return at ? (void*)(uintptr_t)mt_val_out(t->tab, 0, *at) : NULL;
+    }
     uint64_t h = resid_hash(key);
-    return trie_get(t->root, 0, h, key);
+    return trie_get(map_root(t), 0, h, key);
 }
 
 /* Insert a key-value pair, returning a NEW map (immutable). */
@@ -5869,7 +6893,7 @@ void* resid_map_insert(void* map, void* key, void* val) {
     HMTrie* t = (HMTrie*)map;
     uint64_t h = resid_hash(key);
     int isnew = 0;
-    HMNode* root = trie_insert(t->root, 0, h, key, val, &isnew);
+    HMNode* root = trie_insert(map_root(t), 0, h, key, val, &isnew);
     return trie_new(t->count + (isnew ? 1 : 0), root);
 }
 
@@ -5878,16 +6902,20 @@ void* resid_map_remove(void* map, void* key) {
     HMTrie* t = (HMTrie*)map;
     uint64_t h = resid_hash(key);
     int did = 0;
-    HMNode* root = trie_remove(t->root, 0, h, key, &did);
-    if (!did) return map; /* unchanged: share */
+    HMNode* base = map_root(t);
+    HMNode* root = trie_remove(base, 0, h, key, &did);
+    /* unchanged: share — but never hand out a transient table itself, which
+     * its owning loop may still update in place */
+    if (!did) return t->transient ? (void*)trie_new(t->count, base) : map;
     return trie_new(t->count - 1, root);
 }
 
 /* Check if a key exists. Returns 1/0. */
 int8_t resid_map_contains(void* map, void* key) {
     HMTrie* t = (HMTrie*)map;
+    if (t->tab) return mt_vref(t->tab, 0, (uint64_t)(uintptr_t)key) != NULL;
     uint64_t h = resid_hash(key);
-    return trie_contains(t->root, 0, h, key) ? 1 : 0;
+    return trie_contains(map_root(t), 0, h, key) ? 1 : 0;
 }
 
 /* Number of entries. */
@@ -5902,7 +6930,7 @@ void* resid_map_keys(void* map) {
     void** ks = NULL;
     if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    trie_collect(m->root, ks, NULL, &j);
+    trie_collect(map_root(m), ks, NULL, &j);
     void* r = resid_list_new(n, ks, "list");
     free(ks);
     return r;
@@ -5915,7 +6943,7 @@ void* resid_map_values(void* map) {
     void** vs = NULL;
     if (n > 0) vs = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    trie_collect(m->root, NULL, vs, &j);
+    trie_collect(map_root(m), NULL, vs, &j);
     void* r = resid_list_new(n, vs, "list");
     free(vs);
     return r;
@@ -5939,7 +6967,7 @@ char* resid_map_format(void* map) {
     void** ks = (void**)malloc((size_t)n * sizeof(void*));
     void** vs = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    trie_collect(m->root, ks, vs, &j);
+    trie_collect(map_root(m), ks, vs, &j);
     for (int64_t i = 0; i < n; i++) {
         if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
         /* Key: assume string. */
@@ -6004,7 +7032,7 @@ void* resid_set_union(void* a, void* b) {
     void** ks = NULL;
     if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    trie_collect(tb->root, ks, NULL, &j);
+    trie_collect(map_root(tb), ks, NULL, &j);
     void* result = a;
     for (int64_t i = 0; i < n; i++) {
         result = resid_set_insert(result, ks[i]);
@@ -6020,7 +7048,7 @@ void* resid_set_difference(void* a, void* b) {
     void** ks = NULL;
     if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    trie_collect(tb->root, ks, NULL, &j);
+    trie_collect(map_root(tb), ks, NULL, &j);
     void* result = a;
     for (int64_t i = 0; i < n; i++) {
         result = resid_set_remove(result, ks[i]);
@@ -6040,7 +7068,7 @@ void* resid_set_intersection(void* a, void* b) {
     void** ks = NULL;
     if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    trie_collect(smaller->root, ks, NULL, &j);
+    trie_collect(map_root(smaller), ks, NULL, &j);
     void* result = (void*)smaller;
     for (int64_t i = 0; i < n; i++) {
         if (!resid_map_contains(larger, ks[i])) {
@@ -6071,7 +7099,7 @@ char* resid_set_format(void* set) {
     int64_t n = m->count;
     void** ks = (void**)malloc((size_t)n * sizeof(void*));
     int64_t j = 0;
-    trie_collect(m->root, ks, NULL, &j);
+    trie_collect(map_root(m), ks, NULL, &j);
     for (int64_t i = 0; i < n; i++) {
         if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
         const char* es = (const char*)ks[i];
@@ -6092,95 +7120,4 @@ char* resid_set_format(void* set) {
     buf[pos++] = '}';
     buf[pos] = '\0';
     return buf;
-}
-
-/* ── Dec(N) for the self-hosted code generator ─────────────────────────
- * Heap-allocated, immutable resid_dec values behind a pointer (the
- * out-parameter entry points above need caller storage). `prec` is the
- * static N of the result type; each result is rounded to it once. */
-static resid_dec* decp_new(void) {
-    resid_dec* o = (resid_dec*)malloc(sizeof(resid_dec));
-    if (!o) resid_abort("dec: out of memory");
-    return o;
-}
-
-static resid_dec* decp_rounded(resid_dec* v, int64_t prec) {
-    resid_dec* o = decp_new();
-    resid_dec_round(o, v, (uint16_t)prec);
-    free(v);
-    return o;
-}
-
-void* resid_decp_from_str(const char* s, int64_t prec) {
-    resid_dec* o = decp_new();
-    resid_dec_from_str(o, s, (uint16_t)prec);
-    return o;
-}
-
-void* resid_decp_from_i64(int64_t v, int64_t prec) {
-    resid_dec* o = decp_new();
-    resid_dec_from_int(o, v, (uint16_t)prec);
-    return o;
-}
-
-void* resid_decp_round(void* v, int64_t prec) {
-    resid_dec* o = decp_new();
-    resid_dec_round(o, (resid_dec*)v, (uint16_t)prec);
-    return o;
-}
-
-void* resid_decp_add(void* a, void* b, int64_t prec) {
-    resid_dec* o = decp_new();
-    resid_dec_add(o, (resid_dec*)a, (resid_dec*)b);
-    return decp_rounded(o, prec);
-}
-
-void* resid_decp_sub(void* a, void* b, int64_t prec) {
-    resid_dec* o = decp_new();
-    resid_dec_sub(o, (resid_dec*)a, (resid_dec*)b);
-    return decp_rounded(o, prec);
-}
-
-void* resid_decp_mul(void* a, void* b, int64_t prec) {
-    resid_dec* o = decp_new();
-    resid_dec_mul(o, (resid_dec*)a, (resid_dec*)b);
-    return decp_rounded(o, prec);
-}
-
-void* resid_decp_div(void* a, void* b, int64_t prec) {
-    resid_dec* o = decp_new();
-    resid_dec_div(o, (resid_dec*)a, (resid_dec*)b);
-    return decp_rounded(o, prec);
-}
-
-void* resid_decp_neg(void* a) {
-    resid_dec* o = decp_new();
-    resid_dec_neg(o, (resid_dec*)a);
-    return o;
-}
-
-int64_t resid_decp_cmp(void* a, void* b) {
-    return (int64_t)resid_dec_cmp((resid_dec*)a, (resid_dec*)b);
-}
-
-/* trim != 0: drop trailing fractional zeros (the f-string `:.` spec). */
-char* resid_decp_to_str(void* v, int8_t trim) {
-    char* s = resid_dec_to_string((resid_dec*)v);
-    if (!trim || !strchr(s, '.')) return s;
-    size_t n = strlen(s);
-    char* t = (char*)malloc(n + 1);
-    memcpy(t, s, n + 1);
-    while (n > 0 && t[n - 1] == '0') t[--n] = 0;
-    if (n > 0 && t[n - 1] == '.') t[--n] = 0;
-    char* boxed = resid_box_str(t);
-    free(t);
-    return boxed;
-}
-
-int64_t resid_decp_to_i64(void* v) {
-    return resid_dec_to_int((resid_dec*)v, INT64_MIN, INT64_MAX);
-}
-
-double resid_decp_to_f64(void* v) {
-    return resid_dec_to_f64((resid_dec*)v);
 }

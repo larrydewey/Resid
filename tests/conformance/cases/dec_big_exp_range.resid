@@ -1,0 +1,10 @@
+// The exponent of the N-digit representation must stay within
+// [-1_000_000, 1_000_000] (spec §6.6a); leaving it is an error.
+Int main() {
+    Dec(600) big = d600("1e999000");
+    Dec(600) ok = big * d600(10);
+    println(f"{ok > big}");
+    Dec(600) bad = ok * d600("1e2000");
+    println(f"{bad > ok}");
+    return 0;
+}

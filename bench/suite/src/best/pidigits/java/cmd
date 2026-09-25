@@ -1,0 +1,1 @@
+java --enable-native-access=ALL-UNNAMED -Djava.library.path=out -cp out pidigits

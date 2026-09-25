@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+g++ -O2 -std=c++17 -o out/reverse-complement reverse-complement.cpp

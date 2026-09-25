@@ -1,0 +1,77 @@
+// The Computer Language Benchmarks Game: reverse-complement
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/revcomp.html
+//
+// Resid port. Reads the whole FASTA file from stdin, and for each sequence
+// writes its header followed by the reverse complement of the sequence,
+// 60 bases per line. The input is never split into lines: sequence
+// boundaries are found with str_index_of, and the body is walked backwards
+// in place with str_char_at (O(1) on an all-ASCII string), skipping the
+// newlines. The output is accumulated in one string builder and written
+// once (print flushes on every call).
+
+// IUPAC complement (upper and lower case in, upper case out); anything
+// else passes through unchanged.
+Int complement(Int c) {
+    Int u = if (c >= 97) { c - 32 } else { c };
+    if (u == 65) { return 84; }   // A -> T
+    if (u == 67) { return 71; }   // C -> G
+    if (u == 71) { return 67; }   // G -> C
+    if (u == 84) { return 65; }   // T -> A
+    if (u == 85) { return 65; }   // U -> A
+    if (u == 77) { return 75; }   // M -> K
+    if (u == 82) { return 89; }   // R -> Y
+    if (u == 87) { return 87; }   // W -> W
+    if (u == 83) { return 83; }   // S -> S
+    if (u == 89) { return 82; }   // Y -> R
+    if (u == 75) { return 77; }   // K -> M
+    if (u == 86) { return 66; }   // V -> B
+    if (u == 72) { return 68; }   // H -> D
+    if (u == 68) { return 72; }   // D -> H
+    if (u == 66) { return 86; }   // B -> V
+    if (u == 78) { return 78; }   // N -> N
+    return c;
+}
+
+// Reverse complement of t[lo..=k], walking backwards over the text and
+// skipping its line breaks, 60 bases per output line.
+Str rc(Str t, Int lo, Int k, Int col, Str sb) {
+    if (k < lo) {
+        if (col > 0) { return str_sb_append_cp(sb, 10); }
+        return sb;
+    }
+    Int c = str_char_at(t, k);
+    if (c == 10) { return rc(t, lo, k - 1, col, sb); }
+    Str sb1 = str_sb_append_cp(sb, complement(c));
+    if (col == 59) { return rc(t, lo, k - 1, 0, str_sb_append_cp(sb1, 10)); }
+    return rc(t, lo, k - 1, col + 1, sb1);
+}
+
+// End (exclusive) of the text from `from` up to the next occurrence of
+// `needle`, or n when there is none.
+Int upto(Str t, Str needle, Int from, Int n) {
+    Int j = str_index_of(t, needle, from);
+    return if (j < 0) { n } else { j };
+}
+
+// The sequence whose header line starts at h: copy the header, then emit
+// the reverse complement of the body, which runs up to the next line that
+// starts with '>'.
+Str seqs(Str t, Int h, Int n, Str sb) {
+    if (h >= n) { return sb; }
+    Int eol = upto(t, "\n", h, n);
+    Str sb1 = str_sb_append_cp(str_sb_append(sb, str_slice(t, h, eol)), 10);
+    Int body = if (eol < n) { eol + 1 } else { n };
+    Int nh = upto(t, "\n>", eol, n);
+    Str sb2 = rc(t, body, nh - 1, 0, sb1);
+    return seqs(t, if (nh < n) { nh + 1 } else { n }, n, sb2);
+}
+
+@requires(filesystem)
+Int main() {
+    Str text = filesystem.read_all("/dev/stdin");
+    Int n = str_len(text);
+    Int first = if (str_char_at(text, 0) == 62) { 0 } else { upto(text, "\n>", 0, n) + 1 };
+    Str sb = seqs(text, if (first > n) { n } else { first }, n, str_sb_new());
+    print(str_sb_finish(sb));
+    return 0;
+}

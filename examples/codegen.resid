@@ -972,10 +972,15 @@ Int next_pow_width(Int needed) {
 // ─── Dec(N) (spec §6.6a) ────────────────────────────────────────
 // A Dec value is a pointer to an immutable runtime decimal; N (the
 // precision, 34 for a bare `Dec` or an `m` literal) is static.
+// Typed and linear-accumulator map/set entry points (see lin_* below).
+List(Str) hdr_map_typed() {
+    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare {i64, i64} @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)"];
+}
+
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()"];
+    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @resid_decp_persist(ptr)"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -3621,7 +3626,7 @@ Str conv_helper_type_cg(Str name) {
     if (name == "isize") { return "ISize"; }
     if (name == "usize") { return "USize"; }
     Int n = str_len(name);
-    if (n < 2 || n > 4) { return ""; }
+    if (n < 2 || n > 10) { return ""; }  // dN: any N >= 1 (spec §6.7), up to 9 digits
     Int c0 = str_char_at(name, 0);
     Str digits = str_slice(name, 1, n);
     if (!str_is_int(digits)) { return ""; }
@@ -4046,6 +4051,14 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             if (t.text == "resid_list_str_persist_copy") {
                 return cg_extern1(s, t2.pos, "resid_list_str_persist_copy", "List(Str)", "List(Str)", env, fs, c);
             }
+            if (t.text == "resid_dec_persist") {
+                GT pa = cg_expr(s, t2.pos, env, fs, c, false);
+                if (pa.err != "") { return pa; }
+                Tok pcp = lex_tok(s, pa.pos);
+                if (pcp.text != ")") { return gt_err("expected ) in call to resid_dec_persist", pa); }
+                GT pr = dec_call(pa, "ptr", "@resid_decp_persist(ptr " + pa.val + ")", pa.ty);
+                return GT {.pos = pcp.pos, .val = pr.val, .ty = pr.ty, .cnt = 0, .err = "", .glines = pr.glines, .lines = pr.lines, .tmp = pr.tmp, .lbl = pr.lbl, .tail = false};
+            }
             if (t.text == "resid_cpu_has_aesni") {
                 // Zero-arg extern returning i8; icmp-ne-0 into a Bool, same
                 // convention cg_externb1/b2 use for every other bool extern.
@@ -4187,6 +4200,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             }
             if (t.text == "str_parse_float") {
                 return cg_extern1(s, t2.pos, "str_parse_float", "Str", "Float", env, fs, c);
+            }
+            if (t.text == "str_index_of") {
+                return cg_extern3(s, t2.pos, "str_index_of", "Str", "Str", "Int", "Int", env, fs, c);
             }
             if (t.text == "str_count") {
                 return cg_extern2(s, t2.pos, "str_count", "Str", "Str", "Int", env, fs, c);
@@ -4645,6 +4661,23 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
                     Tok rp = lex_tok(s, arg.pos);
+                    Tok gnx = lex_tok(s, rp.pos);
+                    Bool plain_v = lin_vk(vt) != 0 || ll_ty(vt) == "ptr";
+                    if (gnx.text == "else" && plain_v) {
+                        return lin_get_else(s, base, arg, rp, kt, vt, env, fs);
+                    }
+                    if (lin_kk(kt) == 1) {
+                        // Raw Int key; the value comes back boxed for the Option.
+                        GT kw = lin_word(s, arg, 1, env, fs);
+                        Int tg = kw.tmp + 1;
+                        Str fr = "%t" + IntToString(tg);
+                        Str w = "%t" + IntToString(tg + 1);
+                        Str rawp = "%t" + IntToString(tg + 2);
+                        List(Str) gl = kw.lines.concat([fr + " = call {i64, i64} @resid_map_find(ptr " + base.val + ", i8 1, i64 " + kw.val + ", i8 0)", w + " = extractvalue {i64, i64} " + fr + ", 0", rawp + " = inttoptr i64 " + w + " to ptr"]);
+                        GT rawg = GT {.pos = rp.pos, .val = rawp, .ty = "", .cnt = 0, .err = "", .glines = kw.glines, .lines = gl, .tmp = tg + 2, .lbl = kw.lbl, .tail = false};
+                        GT opt = wrap_map_get_option(rawp, vt, rawg);
+                        return cg_postfix(s, opt, env, fs);
+                    }
                     // box_heap_, not box_scalar — resid_map_get hashes/compares
                     // the key via resid_hash/resid_key_eq, which only recognize
                     // a real resid_box_* heap box (tag/type-tagged), not a bare
@@ -4660,6 +4693,24 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     GT raw = GT {.pos = rp.pos, .val = reg, .ty = "", .cnt = 0, .err = "", .glines = arg.glines, .lines = l2, .tmp = t1, .lbl = arg.lbl, .tail = false};
                     GT opt = wrap_map_get_option(reg, vt, raw);
                     return cg_postfix(s, opt, env, fs);
+                }
+                Bool m_owned = lin_owned(env, base.val);
+                if (fld.text == "insert" && (m_owned || lin_kk(kt) == 1 || lin_vk(vt) != 0)) {
+                    GT tka = cg_expr(s, lp.pos, env, fs, base, false);
+                    if (tka.err != "") { return tka; }
+                    Tok tcm = lex_tok(s, tka.pos);
+                    if (tcm.text != ",") { return gt_err("expected , in .insert", tka); }
+                    GT kw = lin_word(s, tka, lin_kk(kt), env, fs);
+                    GT tva = cg_expr(s, tcm.pos, env, fs, kw, false);
+                    if (tva.err != "") { return tva; }
+                    Tok trp = lex_tok(s, tva.pos);
+                    GT vw = lin_word(s, tva, lin_vk(vt), env, fs);
+                    Int ti = vw.tmp + 1;
+                    Str treg = "%t" + IntToString(ti);
+                    Str own = if (m_owned) { "1" } else { "0" };
+                    Str tline = treg + " = call ptr @resid_map_put(ptr " + base.val + ", i8 " + own + ", i8 " + IntToString(lin_kk(kt)) + ", i64 " + kw.val + ", i8 " + IntToString(lin_vk(vt)) + ", i64 " + vw.val + ")";
+                    GT tb = GT {.pos = trp.pos, .val = treg, .ty = base.ty, .cnt = 0, .err = "", .glines = vw.glines, .lines = vw.lines.concat([tline]), .tmp = ti, .lbl = vw.lbl, .tail = false};
+                    return cg_postfix(s, tb, env, fs);
                 }
                 if (fld.text == "insert") {
                     GT ka = cg_expr(s, lp.pos, env, fs, base, false);
@@ -4688,6 +4739,18 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     GT b3 = GT {.pos = rp.pos, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = va.glines, .lines = l2, .tmp = t1, .lbl = va.lbl, .tail = false};
                     return cg_postfix(s, b3, env, fs);
                 }
+                if (fld.text == "remove" && (m_owned || lin_kk(kt) == 1)) {
+                    GT targ = cg_expr(s, lp.pos, env, fs, base, false);
+                    if (targ.err != "") { return targ; }
+                    Tok trp = lex_tok(s, targ.pos);
+                    GT kw = lin_word(s, targ, lin_kk(kt), env, fs);
+                    Int ti = kw.tmp + 1;
+                    Str treg = "%t" + IntToString(ti);
+                    Str own = if (m_owned) { "1" } else { "0" };
+                    Str tline = treg + " = call ptr @resid_map_del(ptr " + base.val + ", i8 " + own + ", i8 " + IntToString(lin_kk(kt)) + ", i64 " + kw.val + ")";
+                    GT tb = GT {.pos = trp.pos, .val = treg, .ty = base.ty, .cnt = 0, .err = "", .glines = kw.glines, .lines = kw.lines.concat([tline]), .tmp = ti, .lbl = kw.lbl, .tail = false};
+                    return cg_postfix(s, tb, env, fs);
+                }
                 if (fld.text == "remove") {
                     GT arg = cg_expr(s, lp.pos, env, fs, base, false);
                     if (arg.err != "") { return arg; }
@@ -4701,6 +4764,17 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     List(Str) l2 = l20.concat([line]);
                     GT b3 = GT {.pos = rp.pos, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = arg.glines, .lines = l2, .tmp = t1, .lbl = arg.lbl, .tail = false};
                     return cg_postfix(s, b3, env, fs);
+                }
+                if (fld.text == "contains" && lin_kk(kt) == 1) {
+                    GT targ = cg_expr(s, lp.pos, env, fs, base, false);
+                    if (targ.err != "") { return targ; }
+                    Tok trp = lex_tok(s, targ.pos);
+                    Int ti = targ.tmp + 1;
+                    Str cr = "%t" + IntToString(ti);
+                    Str treg = "%t" + IntToString(ti + 1);
+                    List(Str) tl = targ.lines.concat([cr + " = call i8 @resid_map_has(ptr " + base.val + ", i8 1, i64 " + targ.val + ")", treg + " = icmp ne i8 " + cr + ", 0"]);
+                    GT tb = GT {.pos = trp.pos, .val = treg, .ty = "Bool", .cnt = 0, .err = "", .glines = targ.glines, .lines = tl, .tmp = ti + 1, .lbl = targ.lbl, .tail = false};
+                    return cg_postfix(s, tb, env, fs);
                 }
                 if (fld.text == "contains") {
                     GT arg = cg_expr(s, lp.pos, env, fs, base, false);
@@ -4754,6 +4828,32 @@ GT cg_postfix(Str s, GT base, List(Str) env, Funcs fs) {
                     List(Str) l2 = l20.concat([line]);
                     GT b2 = GT {.pos = rp.pos, .val = reg, .ty = "Int", .cnt = 0, .err = "", .glines = base.glines, .lines = l2, .tmp = t1, .lbl = base.lbl, .tail = false};
                     return cg_postfix(s, b2, env, fs);
+                }
+                Str set_et = lin_set_elem(base.ty);
+                Bool s_owned = lin_owned(env, base.val);
+                if (fld.text == "contains" && lin_kk(set_et) == 1) {
+                    GT targ = cg_expr(s, lp.pos, env, fs, base, false);
+                    if (targ.err != "") { return targ; }
+                    Tok trp = lex_tok(s, targ.pos);
+                    Int ti = targ.tmp + 1;
+                    Str cr = "%t" + IntToString(ti);
+                    Str treg = "%t" + IntToString(ti + 1);
+                    List(Str) tl = targ.lines.concat([cr + " = call i8 @resid_map_has(ptr " + base.val + ", i8 1, i64 " + targ.val + ")", treg + " = icmp ne i8 " + cr + ", 0"]);
+                    GT tb = GT {.pos = trp.pos, .val = treg, .ty = "Bool", .cnt = 0, .err = "", .glines = targ.glines, .lines = tl, .tmp = ti + 1, .lbl = targ.lbl, .tail = false};
+                    return cg_postfix(s, tb, env, fs);
+                }
+                if ((fld.text == "insert" || fld.text == "remove") && (s_owned || lin_kk(set_et) == 1)) {
+                    GT targ = cg_expr(s, lp.pos, env, fs, base, false);
+                    if (targ.err != "") { return targ; }
+                    Tok trp = lex_tok(s, targ.pos);
+                    GT kw = lin_word(s, targ, lin_kk(set_et), env, fs);
+                    Int ti = kw.tmp + 1;
+                    Str treg = "%t" + IntToString(ti);
+                    Str own = if (s_owned) { "1" } else { "0" };
+                    Str fnm = if (fld.text == "insert") { "@resid_set_put" } else { "@resid_map_del" };
+                    Str tline = treg + " = call ptr " + fnm + "(ptr " + base.val + ", i8 " + own + ", i8 " + IntToString(lin_kk(set_et)) + ", i64 " + kw.val + ")";
+                    GT tb = GT {.pos = trp.pos, .val = treg, .ty = base.ty, .cnt = 0, .err = "", .glines = kw.glines, .lines = kw.lines.concat([tline]), .tmp = ti, .lbl = kw.lbl, .tail = false};
+                    return cg_postfix(s, tb, env, fs);
                 }
                 if (fld.text == "contains") {
                     GT arg = cg_expr(s, lp.pos, env, fs, base, false);
@@ -5867,6 +5967,14 @@ GT cg_set_lit_rest(Str s, Int pos, Str et, GT set_v, List(Str) env, Funcs fs, GT
 }
 
 GT cg_map_or_set_lit(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
+    // `{}`: the empty map or set (one representation serves both; the
+    // declared type of the binding / parameter gives it its type).
+    Tok e0 = lex_tok(s, pos);
+    if (e0.text == "}") {
+        Int te = c.tmp + 1;
+        Str er = "%t" + IntToString(te);
+        return GT {.pos = e0.pos, .val = er, .ty = "Map(Unknown, Unknown)", .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat([er + " = call ptr @resid_set_new()"]), .tmp = te, .lbl = c.lbl, .tail = false};
+    }
     // Peek: first expression, then decide map (:) vs set (,) vs single set (})
     GT first = cg_expr(s, pos, env, fs, c, false);
     if (first.err != "") { return first; }
@@ -6667,15 +6775,22 @@ ST sg_stmt(Str s, Int pos, List(Str) env, Funcs fs, Bool in_main, ST g) {
         Bool need_conv = (rw_int || rw_flt) && rw_diff;
         GT v1 = pick_widen(need_conv, v, rwant);
         Str vty = pick_str(need_conv, rwant, v.ty);
+        // Returning a linear accumulator hands out its table frozen.
+        Bool ret_lin = lin_owned(env, v1.val);
+        GT v1f = if (ret_lin) {
+            Int tz = v1.tmp + 1;
+            Str zr = "%t" + IntToString(tz);
+            GT {.pos = v1.pos, .val = zr, .ty = v1.ty, .cnt = v1.cnt, .err = "", .glines = v1.glines, .lines = v1.lines.concat([zr + " = call ptr @resid_map_freeze(ptr " + v1.val + ")"]), .tmp = tz, .lbl = v1.lbl, .tail = false}
+        } else { v1 };
         // If return value is a growbuf, call growbuf_finish
-        Bool ret_is_growbuf = env_has_growbuf(env, v1.val);
+        Bool ret_is_growbuf = env_has_growbuf(env, v1f.val);
         GT v2 = if (ret_is_growbuf) {
             Int tg = v1.tmp + 1;
             Str gb_reg = "%t" + IntToString(tg);
             Str gb_line = gb_reg + " = call ptr @resid_growbuf_finish(ptr " + v1.val + ")";
             List(Str) gln = v1.lines.concat([gb_line]);
             GT {.pos = v1.pos, .val = gb_reg, .ty = v1.ty, .cnt = v1.cnt, .err = "", .glines = v1.glines, .lines = gln, .tmp = tg, .lbl = v1.lbl, .tail = false}
-        } else { v1 };
+        } else { v1f };
         Tok semi = lex_tok(s, v.pos);
         Int t1 = v2.tmp + 1;
         Str reg = "%t" + IntToString(t1);
@@ -7800,11 +7915,14 @@ TcoAcc tco_scan(List(Str) ls, Int i, Str fname, Str rty, List(Str) ptys, List(St
     return tco_scan(ls, i + 1, fname, rty, ptys, frame, a4);
 }
 
-List(Str) tco_phis(List(Str) ptys, List(Str) inc, Int j, List(Str) out) {
+List(Str) tco_phis(List(Str) ptys, List(Str) inc, Str mask, Int j, List(Str) out) {
     if (j >= ptys.len()) { return out; }
     Str p = "%p" + IntToString(j);
-    Str ph = p + " = phi " + ptys[j] + " [ " + p + ".in, %entry ]" + inc[j];
-    return tco_phis(ptys, inc, j + 1, out.concat([ph]));
+    // A linear accumulator enters the loop as its private copy (lin_entry).
+    Bool lin = if (j < str_len(mask)) { str_char_at(mask, j) == 49 } else { false };
+    Str init = if (lin) { p + ".tr" } else { p + ".in" };
+    Str ph = p + " = phi " + ptys[j] + " [ " + init + ", %entry ]" + inc[j];
+    return tco_phis(ptys, inc, mask, j + 1, out.concat([ph]));
 }
 
 Str param_decl_in_at(List(Str) ptys, Int i, Str acc) {
@@ -7818,9 +7936,262 @@ List(Str) ll_ty_list(List(Str) tys, Int i, List(Str) out) {
     return ll_ty_list(tys, i + 1, out.concat([ll_ty(tys[i])]));
 }
 
+// ─── Typed map/set calls ─────────────────────────────────────────
+// Int keys and Int/Float/Bool values cross into the runtime as raw 64-bit
+// words tagged with a kind (see the runtime's table-mode comment), so
+// neither side boxes them. Other types pass a boxed pointer (kind 0).
+Int lin_kk(Str kt) {
+    if (kt == "Int" || kt == "Int(64)") { return 1; }
+    return 0;
+}
+
+Int lin_vk(Str vt) {
+    if (vt == "Int" || vt == "Int(64)") { return 1; }
+    if (vt == "Float" || vt == "Float(64)") { return 2; }
+    if (vt == "Bool") { return 3; }
+    return 0;
+}
+
+Str lin_set_elem(Str ty) {
+    return str_slice(ty, 4, str_len(ty) - 1);
+}
+
+// `v` as the i64 word of kind `kind`.
+GT lin_word(Str s, GT v, Int kind, List(Str) env, Funcs fs) {
+    if (kind == 1) { return v; }
+    GT b = if (kind == 0) { box_heap_(s, v, env, fs) } else { v };
+    Int t1 = b.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    Str line = if (kind == 2) { reg + " = bitcast double " + b.val + " to i64" } else { if (kind == 3) { reg + " = zext i1 " + b.val + " to i64" } else { reg + " = ptrtoint ptr " + b.val + " to i64" } };
+    return GT {.pos = b.pos, .val = reg, .ty = "Int", .cnt = 0, .err = "", .glines = b.glines, .lines = b.lines.concat([line]), .tmp = t1, .lbl = b.lbl, .tail = false};
+}
+
+// The value word of a resid_map_find result as an LLVM value of type `vt`.
+Str lin_from_word(Str reg, Str w, Str vt) {
+    Int vk = lin_vk(vt);
+    if (vk == 2) { return reg + " = bitcast i64 " + w + " to double"; }
+    if (vk == 3) { return reg + " = trunc i64 " + w + " to i1"; }
+    if (vk == 1) { return reg + " = add i64 " + w + ", 0"; }
+    return reg + " = inttoptr i64 " + w + " to ptr";
+}
+
+// `m.get(k) else { d }` on a map whose value needs no unboxing: one
+// resid_map_find, no Option allocated. `rp` is the `)` closing get's args.
+GT lin_get_else(Str s, GT base, GT ka, Tok rp, Str kt, Str vt, List(Str) env, Funcs fs) {
+    Int kk = lin_kk(kt);
+    GT kw = lin_word(s, ka, kk, env, fs);
+    Int t1 = kw.tmp + 1;
+    Str fr = "%t" + IntToString(t1);
+    Str fnd = "%t" + IntToString(t1 + 1);
+    Str ok = "%t" + IntToString(t1 + 2);
+    Str w = "%t" + IntToString(t1 + 3);
+    Str pv = "%t" + IntToString(t1 + 4);
+    Int l0 = kw.lbl;
+    Str labp = "L" + IntToString(l0 + 1);
+    Str labf = "L" + IntToString(l0 + 2);
+    Str labfe = "L" + IntToString(l0 + 3);
+    Str labm = "L" + IntToString(l0 + 4);
+    List(Str) q = kw.lines.concat([fr + " = call {i64, i64} @resid_map_find(ptr " + base.val + ", i8 " + IntToString(kk) + ", i64 " + kw.val + ", i8 " + IntToString(lin_vk(vt)) + ")", fnd + " = extractvalue {i64, i64} " + fr + ", 1", ok + " = icmp ne i64 " + fnd + ", 0", w + " = extractvalue {i64, i64} " + fr + ", 0", lin_from_word(pv, w, vt), "br i1 " + ok + ", label %" + labp + ", label %" + labf, labf + ":"]);
+    Tok elseTok = lex_tok(s, rp.pos);
+    Tok open = lex_tok(s, elseTok.pos);
+    if (open.text != "{") { return gt_err("expected { after else", kw); }
+    GT fv0 = GT {.pos = open.pos, .val = "", .ty = "", .cnt = 0, .err = "", .glines = kw.glines, .lines = q, .tmp = t1 + 4, .lbl = l0 + 4, .tail = false};
+    GT fv = cg_expr_block(s, open.pos, env, fs, fv0, false);
+    if (fv.err != "") { return fv; }
+    Tok close = lex_tok(s, fv.pos);
+    if (close.text != "}") { return gt_err("expected } at end of else block", fv); }
+    // The fallback may open blocks of its own, so it ends in a fresh label
+    // that is the phi's real predecessor.
+    Int tr = fv.tmp + 1;
+    Str res = "%t" + IntToString(tr);
+    Str lty = ll_ty(num_norm_cg(vt));
+    List(Str) q2 = fv.lines.concat(["br label %" + labfe, labfe + ":", "br label %" + labm, labp + ":", "br label %" + labm, labm + ":", res + " = phi " + lty + " [ " + fv.val + ", %" + labfe + " ], [ " + pv + ", %" + labp + " ]"]);
+    GT r = GT {.pos = close.pos, .val = res, .ty = vt, .cnt = 0, .err = "", .glines = fv.glines, .lines = q2, .tmp = tr, .lbl = max_i64(fv.lbl, l0 + 4), .tail = false};
+    return cg_postfix(s, r, env, fs);
+}
+
+// ─── Linear map/set accumulators ─────────────────────────────────
+// A Map/Set parameter `p` of function `f` is a linear accumulator when the
+// body uses it only as
+//   - a read: `p.get(..)`, `p.contains(..)`, `p.len()`, `p.keys()`,
+//     `p.values()`, `p[..]`;
+//   - the whole argument, at p's own position, of a tail self call
+//     `return f(.., p.insert(..), ..);` / `p.remove(..)` / plain `p`, with p
+//     appearing in no other argument of that call;
+//   - `return p;`
+// and the body has no closures or spawns (which could capture p). Under
+// those rules no version of p is ever read after the next one is built, so
+// once the tail calls become a loop (tco_function) the loop can own one
+// mutable table: the entry block takes a private copy (resid_map_transient,
+// the caller's map is never touched), the consuming updates write it in
+// place (resid_map_put/del with owned = 1), and `return p` freezes it back
+// into an ordinary immutable value. Nothing observable changes; see the
+// runtime's HMTrie comment.
+type LinA = { Int pos; Int appr; Int cons; Bool bad; };
+
+Bool lin_is_mapset(Str ty) {
+    return str_has_prefix(ty, "Map(") || str_has_prefix(ty, "Set(");
+}
+
+Bool lin_has_closure(Str b, Int pos) {
+    Tok t = lex_tok(b, pos);
+    if (t.kind == "eof") { return false; }
+    if (t.text == "lambda" || t.text == "spawn") { return true; }
+    return lin_has_closure(b, t.pos);
+}
+
+// Position just past the `)` that closes a bracket opened before `pos`.
+Int lin_skip_bal(Str b, Int pos, Int depth) {
+    Tok t = lex_tok(b, pos);
+    if (t.kind == "eof") { return -1; }
+    Bool open = t.text == "(" || t.text == "[" || t.text == "{";
+    Bool close = t.text == ")" || t.text == "]" || t.text == "}";
+    Int d = if (open) { depth + 1 } else { if (close) { depth - 1 } else { depth } };
+    if (d == 0) { return t.pos; }
+    return lin_skip_bal(b, t.pos, d);
+}
+
+// After the `p` token (ending at `pos`) that starts a tail-call argument:
+// 2 when the argument is `p.insert(..)`/`p.remove(..)`, 1 when it is plain
+// `p`, 0 otherwise.
+Int lin_arg_kind(Str b, Int pos) {
+    Tok t = lex_tok(b, pos);
+    if (t.text == "," || t.text == ")") { return 1; }
+    if (t.text != ".") { return 0; }
+    Tok m = lex_tok(b, t.pos);
+    if (m.text != "insert" && m.text != "remove") { return 0; }
+    Tok o = lex_tok(b, m.pos);
+    if (o.text != "(") { return 0; }
+    Int c = lin_skip_bal(b, o.pos, 1);
+    if (c < 0) { return 0; }
+    Tok nx = lex_tok(b, c);
+    if (nx.text == "," || nx.text == ")") { return 2; }
+    return 0;
+}
+
+// Walk the arguments of one self call (just past its `(`). `appr` is the
+// end position of the approved `p` token of argument `pidx` (-1 if none).
+LinA lin_args(Str b, Int pos, Str p, Int ai, Int pidx, Int depth, Bool first, LinA a) {
+    Tok t = lex_tok(b, pos);
+    if (t.kind == "eof") { return LinA {.pos = t.pos, .appr = a.appr, .cons = a.cons, .bad = true}; }
+    if (depth == 0 && t.text == ")") { return LinA {.pos = t.pos, .appr = a.appr, .cons = a.cons, .bad = a.bad}; }
+    if (depth == 0 && t.text == ",") { return lin_args(b, t.pos, p, ai + 1, pidx, 0, true, a); }
+    Bool open = t.text == "(" || t.text == "[" || t.text == "{";
+    Bool close = t.text == ")" || t.text == "]" || t.text == "}";
+    Int d = if (open) { depth + 1 } else { if (close) { depth - 1 } else { depth } };
+    Bool isp = t.kind == "ident" && t.text == p;
+    Bool cand = isp && ai == pidx && first && depth == 0;
+    Int k = if (cand) { lin_arg_kind(b, t.pos) } else { 0 };
+    Bool stray = isp && ai != pidx;
+    LinA a2 = if (k > 0) {
+        LinA {.pos = a.pos, .appr = t.pos, .cons = if (k == 2) { 1 } else { 0 }, .bad = a.bad}
+    } else {
+        LinA {.pos = a.pos, .appr = a.appr, .cons = a.cons, .bad = a.bad || stray}
+    };
+    return lin_args(b, t.pos, p, ai, pidx, d, false, a2);
+}
+
+type LinS = { List(Int) appr; Int cons; Bool bad; };
+
+// Collect the approved `p` occurrences of every tail self call.
+LinS lin_tails(Str b, Int pos, Str p, Str fname, Int pidx, LinS acc) {
+    Tok t = lex_tok(b, pos);
+    if (t.kind == "eof") { return acc; }
+    if (t.text != "return") { return lin_tails(b, t.pos, p, fname, pidx, acc); }
+    Tok f = lex_tok(b, t.pos);
+    if (f.text != fname) { return lin_tails(b, t.pos, p, fname, pidx, acc); }
+    Tok o = lex_tok(b, f.pos);
+    if (o.text != "(") { return lin_tails(b, t.pos, p, fname, pidx, acc); }
+    LinA a = lin_args(b, o.pos, p, 0, pidx, 0, true, LinA {.pos = 0, .appr = -1, .cons = 0, .bad = false});
+    Tok semi = lex_tok(b, a.pos);
+    if (semi.text != ";") { return lin_tails(b, t.pos, p, fname, pidx, acc); }
+    List(Int) ap = if (a.appr >= 0) { acc.appr.concat([a.appr]) } else { acc.appr };
+    LinS acc2 = LinS {.appr = ap, .cons = acc.cons + a.cons, .bad = acc.bad || a.bad};
+    return lin_tails(b, a.pos, p, fname, pidx, acc2);
+}
+
+Bool lin_is_read(Str b, Int pos) {
+    Tok n = lex_tok(b, pos);
+    if (n.text == "[") { return true; }
+    if (n.text != ".") { return false; }
+    Tok m = lex_tok(b, n.pos);
+    return m.text == "get" || m.text == "contains" || m.text == "len" || m.text == "keys" || m.text == "values";
+}
+
+// Every occurrence of `p` must be a read, an approved tail-call argument,
+// or `return p;`.
+Bool lin_occ_ok(Str b, Int pos, Str p, Bool prevdot, Bool prevret, List(Int) appr) {
+    Tok t = lex_tok(b, pos);
+    if (t.kind == "eof") { return true; }
+    Bool isp = t.kind == "ident" && t.text == p && !prevdot;
+    if (isp) {
+        Tok nx = lex_tok(b, t.pos);
+        Bool ok = if (lin_has_int(appr, t.pos, 0)) { true } else { if (lin_is_read(b, t.pos)) { true } else { if (prevret) { nx.text == ";" } else { false } } };
+        if (!ok) { return false; }
+    }
+    return lin_occ_ok(b, t.pos, p, t.text == ".", t.text == "return", appr);
+}
+
+Bool lin_has_int(List(Int) xs, Int v, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == v) { return true; }
+    return lin_has_int(xs, v, i + 1);
+}
+
+Bool lin_param_ok(Str b, Str p, Str fname, Int pidx) {
+    LinS ls = lin_tails(b, 0, p, fname, pidx, LinS {.appr = [], .cons = 0, .bad = false});
+    if (ls.bad || ls.cons == 0) { return false; }
+    return lin_occ_ok(b, 0, p, false, false, ls.appr);
+}
+
+// One character per parameter: "1" for a linear accumulator, else "0".
+Str lin_mask(Str b, List(Str) names, List(Str) tys, Str fname, Bool has_cl, Int i, Str acc) {
+    if (i >= names.len() || i >= tys.len()) { return acc; }
+    Bool ok = if (!has_cl && lin_is_mapset(tys[i])) { lin_param_ok(b, names[i], fname, i) } else { false };
+    Str bit = if (ok) { "1" } else { "0" };
+    return lin_mask(b, names, tys, fname, has_cl, i + 1, acc + bit);
+}
+
+Bool lin_any_mapset(List(Str) tys, Int i) {
+    if (i >= tys.len()) { return false; }
+    if (lin_is_mapset(tys[i])) { return true; }
+    return lin_any_mapset(tys, i + 1);
+}
+
+// lin_mask over the body of the function whose parameter list opens at `op`.
+Str lin_mask_fn(Str s, Int op, List(Str) names, List(Str) tys, Str fname) {
+    Str b = str_slice(s, close_paren(s, op), skip_body(s, op));
+    return lin_mask(b, names, tys, fname, lin_has_closure(b, 0), 0, "");
+}
+
+// Env marker for a linear-accumulator parameter register (never a valid
+// identifier, so it can't collide with a binding).
+Str lin_marker(Str reg) {
+    return "#tr" + reg;
+}
+
+Bool lin_owned(List(Str) env, Str reg) {
+    return env_lookup(env, lin_marker(reg)) != "";
+}
+
+List(Str) lin_env(Str mask, List(Str) env, Int i) {
+    if (i >= str_len(mask)) { return env; }
+    Str reg = "%p" + IntToString(i);
+    List(Str) e2 = if (str_char_at(mask, i) == 49) { env.concat([lin_marker(reg) + ":" + reg + ":Marker"]) } else { env };
+    return lin_env(mask, e2, i + 1);
+}
+
+// Entry-block copies for the TCO loop: `%pI.tr` for each accumulator.
+List(Str) lin_entry(Str mask, Int i, List(Str) acc) {
+    if (i >= str_len(mask)) { return acc; }
+    Str p = "%p" + IntToString(i);
+    List(Str) a2 = if (str_char_at(mask, i) == 49) { acc.concat([p + ".tr = call ptr @resid_map_transient(ptr " + p + ".in)"]) } else { acc };
+    return lin_entry(mask, i + 1, a2);
+}
+
 // Whole-function rewrite: header + entry + body -> own lines (without "}").
 // `head` is [defline, "entry:"]; `body` is everything after it.
-List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(Str) ptys, Str defpre, Str defpost) {
+List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(Str) ptys, Str defpre, Str defpost, Str mask) {
     if (!tco_frame_ok(body, 0)) { return head.concat(body); }
     List(Str) frame = tco_alloca_regs(body, 0, nil_list());
     TcoAcc a = tco_scan(body, 0, fname, rty, ptys, frame, TcoAcc {.lines = nil_list(), .allocas = nil_list(), .inc = nil_list(), .n = 0, .nmust = 0});
@@ -7830,8 +8201,8 @@ List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(
     }
     Str defline = defpre + param_decl_in_at(ptys, 0, "") + defpost;
     List(Str) h = [defline, "entry:"];
-    List(Str) h2 = h.concat(a.allocas).concat(["br label %tco.head", "tco.head:"]);
-    List(Str) h3 = h2.concat(tco_phis(ptys, a.inc, 0, nil_list()));
+    List(Str) h2 = h.concat(a.allocas).concat(lin_entry(mask, 0, nil_list())).concat(["br label %tco.head", "tco.head:"]);
+    List(Str) h3 = h2.concat(tco_phis(ptys, a.inc, mask, 0, nil_list()));
     return h3.concat(a.lines);
 }
 
@@ -7901,7 +8272,12 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     // fresh changes nothing functions can observe.
     CapPP pp0 = CapPP {.lines = dl2, .glines = nil_list(), .n = 0};
     CapPP pp1 = cap_maybe_prologue(sandboxed, caps, pp0);
-    EnvBuild eb = build_env_with_growbuf(nl, tyl, fs.growable, name.text, pp1.lines, 0, nil_list());
+    EnvBuild eb0 = build_env_with_growbuf(nl, tyl, fs.growable, name.text, pp1.lines, 0, nil_list());
+    // Linear map/set accumulators (lin_mask): the env marks their parameter
+    // registers so the consuming updates and `return p` know to use the
+    // loop-owned table; tco_function adds the entry copy.
+    Str lmask = if (is_main || !lin_any_mapset(tyl, 0)) { "" } else { lin_mask_fn(s, open.pos, nl, tyl, name.text) };
+    EnvBuild eb = EnvBuild {.lines = eb0.lines, .env = lin_env(lmask, eb0.env, 0)};
     Int body_start = eb.lines.len();
     Int cp = close_paren(s, open.pos);
     Tok fbrace = lex_tok(s, cp);
@@ -7929,7 +8305,7 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     Bool tco_ok = !is_main && !sandboxed && !growbuf_params;
     Str defpre = "define " + ll_ty(rbase) + " @" + name.text + "(";
     Str defpost = ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
-    List(Str) fn_lines = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name.text, ll_ty(rbase), ptys_ll, defpre, defpost) } else { pp1.lines.concat(pp2.lines) };
+    List(Str) fn_lines = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name.text, ll_ty(rbase), ptys_ll, defpre, defpost, lmask) } else { pp1.lines.concat(pp2.lines) };
     List(Str) own_lines = fn_lines.concat(["}"]);
     List(Str) own_glines = pp2.glines;
     // Extract every PLAIN VALUE (Int) this function still needs after the
@@ -8141,7 +8517,7 @@ Int main() {
     Funcs fs = collect_sigs(src);
         List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i32 @resid_run_main(ptr)", "declare ptr @resid_list_const_i64(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_ptr(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_bool(ptr, i64, ptr, ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @resid_list_slice(ptr, i64, i64)", "declare ptr @resid_range_list(i64, i64)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_list_to_string(ptr)", "declare void @resid_assert(i8, ptr)", "declare void @resid_todo(i8, ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @UIntToString(i64)", "declare ptr @Int256ToString(i64, i64, i64, i64)", "declare ptr @UInt256ToString(i64, i64, i64, i64)", "declare ptr @Int512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @UInt512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @FloatToString(double)", "declare ptr @Float128ToString(fp128)", "declare ptr @BoolToString(i8)", "declare void @resid_overflow_check(i8)", "declare {i8, i1} @llvm.sadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.sadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)", "declare {i8, i1} @llvm.uadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.uadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.uadd.with.overflow.i32(i32, i32)", "declare {i8, i1} @llvm.ssub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.ssub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.ssub.with.overflow.i32(i32, i32)", "declare {i8, i1} @llvm.usub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.usub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.usub.with.overflow.i32(i32, i32)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "declare void @resid_abort(ptr) noreturn", "declare void @resid_expect_fail(ptr, ptr, ptr) noreturn", "declare i8 @resid_regex_match(ptr, ptr)", "declare i8 @resid_quiet()", "declare i8 @resid_quiet_set(i1)", "declare i8 @resid_expect_throws(ptr)", "declare i64 @resid_box_tag(ptr)", "declare i8 @resid_test_plan(i64, ptr)", "declare i64 @resid_test_run_closure(ptr, ptr)", "declare i64 @resid_test_run(ptr, ptr)", "declare i64 @resid_test_summary()", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\""
                 "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
-    List(Str) header = header_with_cmps(hdr_core.concat(hdr_extra()), fs);
+    List(Str) header = header_with_cmps(hdr_core.concat(hdr_extra()).concat(hdr_map_typed()), fs);
     PG g0 = PG {.pos = 0, .err = "", .glines = [], .hlines = [], .lines = header, .tmp = 0, .lbl = 0};
     PG out = pg_next(src, 0, fs, g0);
     if (out.err != "") {

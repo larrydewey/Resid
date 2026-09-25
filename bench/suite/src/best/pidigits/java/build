@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p out
+JAVA_HOME="${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")}"
+gcc -O2 -fPIC -shared -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+    -o out/libJava_GMP_Wrapper.so Java_GMP_Wrapper.c -lgmp
+javac -d out pidigits.java

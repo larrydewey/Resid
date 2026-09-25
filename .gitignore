@@ -21,3 +21,14 @@ build/boot/*
 *.ll
 *.testbin
 __pycache__/
+
+# Benchmark suite (bench/suite): generated inputs, logs, harness tools and
+# per-cell build outputs. results/env.json, builds.json, inputs.json and
+# runs.jsonl are committed.
+bench/suite/results/inputs/
+bench/suite/results/logs/
+bench/suite/results/tools/
+bench/suite/src/**/out/
+bench/suite/src/**/target/
+bench/suite/src/**/obj/
+bench/suite/src/**/bin/
