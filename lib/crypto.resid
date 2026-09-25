@@ -218,15 +218,10 @@ pub List(Int) sha_round(List(Int) hv, List(Int) w, Int i) {
     Int na = na_raw & 4294967295;
     Int nd_raw = d + t1;
     Int nd = nd_raw & 4294967295;
-    List(Int) s1l = ls_set(hv, 0, na);
-    List(Int) s2l = ls_set(s1l, 1, a);
-    List(Int) s3l = ls_set(s2l, 2, b);
-    List(Int) s4l = ls_set(s3l, 3, c);
-    List(Int) s5l = ls_set(s4l, 4, nd);
-    List(Int) s6l = ls_set(s5l, 5, e);
-    List(Int) s7l = ls_set(s6l, 6, f);
-    List(Int) s8l = ls_set(s7l, 7, g);
-    return s8l;
+    // One fresh 8-word state per round. (A chain of eight ls_set calls here
+    // allocated ~20x more per round, which dominated the memory cost of
+    // hashing large inputs such as the compiler's own source.)
+    return [na, a, b, c, nd, e, f, g];
 }
 
 pub List(Int) sha_rounds(List(Int) hv, List(Int) w, Int i) {
@@ -238,13 +233,14 @@ pub List(Int) sha_rounds(List(Int) hv, List(Int) w, Int i) {
 
 // ─── Compression over all blocks ────────────────────────────────
 
-pub List(Int) add_h(List(Int) h, List(Int) hv, Int i) {
-    if (i >= 8) { return h; }
+pub Int add_w(List(Int) h, List(Int) hv, Int i) {
     Int raw = h[i] + hv[i];
-    Int sum = raw & 4294967295;
-    List(Int) h2 = ls_set(h, i, sum);
-    Int ni = i + 1;
-    return add_h(h2, hv, ni);
+    return raw & 4294967295;
+}
+
+pub List(Int) add_h(List(Int) h, List(Int) hv, Int i) {
+    return [add_w(h, hv, 0), add_w(h, hv, 1), add_w(h, hv, 2), add_w(h, hv, 3),
+            add_w(h, hv, 4), add_w(h, hv, 5), add_w(h, hv, 6), add_w(h, hv, 7)];
 }
 
 pub List(Int) digest_block(List(Int) m, Int base, List(Int) h) {
@@ -1112,15 +1108,9 @@ pub List(Int) sha512_round_flat(List(Int) st, List(Int) w, Int i) {
     List(Int) t2 = w64_add(S0, mjv);
     List(Int) na = w64_add(t1, t2);
     List(Int) nd = w64_add(d, t1);
-    List(Int) s1l = st_set(st, 0, na);
-    List(Int) s2l = st_set(s1l, 1, a);
-    List(Int) s3l = st_set(s2l, 2, b);
-    List(Int) s4l = st_set(s3l, 3, c);
-    List(Int) s5l = st_set(s4l, 4, nd);
-    List(Int) s6l = st_set(s5l, 5, e);
-    List(Int) s7l = st_set(s6l, 6, f);
-    List(Int) s8l = st_set(s7l, 7, g);
-    return s8l;
+    // Build the next state directly (see sha_round for why).
+    return [na[0], na[1], a[0], a[1], b[0], b[1], c[0], c[1],
+            nd[0], nd[1], e[0], e[1], f[0], f[1], g[0], g[1]];
 }
 
 pub List(Int) sha512_rounds_flat(List(Int) st, List(Int) w, Int i) {
@@ -1130,17 +1120,22 @@ pub List(Int) sha512_rounds_flat(List(Int) st, List(Int) w, Int i) {
     return sha512_rounds_flat(st2, w, ni);
 }
 
-pub List(Int) add_st(List(Int) h, List(Int) hv, Int i) {
-    if (i >= 8) { return h; }
+pub List(Int) add_st_word(List(Int) h, List(Int) hv, Int i) {
     Int hi_i = i * 2;
     Int lo_i = hi_i + 1;
     List(Int) hp = w64(h[hi_i], h[lo_i]);
     List(Int) hv_p = w64(hv[hi_i], hv[lo_i]);
-    List(Int) sum = w64_add(hp, hv_p);
-    List(Int) s1 = ls_set(h, hi_i, w64_hi(sum));
-    List(Int) s2 = ls_set(s1, lo_i, w64_lo(sum));
+    return w64_add(hp, hv_p);
+}
+
+pub List(Int) add_st_acc(List(Int) h, List(Int) hv, Int i, List(Int) acc) {
+    if (i >= 8) { return acc; }
     Int ni = i + 1;
-    return add_st(s2, hv, ni);
+    return add_st_acc(h, hv, ni, acc.concat(add_st_word(h, hv, i)));
+}
+
+pub List(Int) add_st(List(Int) h, List(Int) hv, Int i) {
+    return add_st_acc(h, hv, i, []);
 }
 
 pub List(Int) digest_block512f(List(Int) m, Int base, List(Int) st) {
