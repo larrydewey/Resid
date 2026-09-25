@@ -58,6 +58,12 @@ Int rd_max_steps() { return 200000; }
 Int rd_max_depth() { return 20000; }
 Int rd_max_fuel() { return 20000000; }
 Int rd_max_lit() { return 4096; }
+// Bytes the whole reduction may request (runtime allocation counter; see
+// resid_mem_mark). Evaluating something heavy at compile time — a
+// signature over a constant message, say — must fall back to the
+// residual call, not exhaust memory. Normal programs use well under a
+// quarter of this (the compiler's own source: ~100MB).
+Int rd_max_mem() { return 536870912; }
 
 // ─── Small helpers ──────────────────────────────────────────────
 
@@ -1652,7 +1658,9 @@ RdR rd_mk(Str out, Int pos, Bool dead, Bool ok, Bool ret, Str rv, Str rty, RdS s
 RdS rd_tick(RdS st) {
     if (st.depth == 0) { return st; }
     Int s1 = st.steps + 1;
-    Int f1 = st.fuel - 1;
+    // Over the memory budget: the fuel is spent, for the rest of the
+    // program.
+    Int f1 = if (resid_mem_since_mark() > rd_max_mem()) { 0 } else { st.fuel - 1 };
     return RdS {.steps = s1, .depth = st.depth, .fuel = f1, .memo = st.memo};
 }
 
@@ -2348,6 +2356,7 @@ RdG rd_prog_fn(Str s, Int pos, Tok ob, RdT ft, RdG g) {
 type RdOut = { Str text; Int nred; Str err; };
 
 pub RdOut rd_reduce_program(Str s) {
+    Int _mm = resid_mem_mark();
     RdT ft = rd_collect(s, 0, rd_table_empty());
     Map(Str, Str) memo = {"__EMPTY__": "!"};
     RdS st = RdS {.steps = 0, .depth = 0, .fuel = rd_max_fuel(), .memo = memo};

@@ -12,6 +12,9 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <stdint.h>
 #include <time.h>
 #include <execinfo.h>
@@ -95,6 +98,23 @@ typedef struct Arena {
 
 static _Thread_local Arena* g_current_arena = NULL;
 
+/* The bulk arena backs the compiler-generated allocations (struct
+ * values, boxes, IntToString buffers: resid_gmalloc below), which
+ * resid_arena_push leaves on the real heap because values such as a
+ * function's returned struct routinely outlive a per-function arena.
+ * resid_bulk_push opens a scope for both kinds of allocation, meant for
+ * whole compiler phases whose only surviving results are copied out
+ * (resid_list_str_persist_copy) or are scalars read before the pop. */
+static _Thread_local Arena* g_bulk_arena = NULL;
+
+/* Bytes requested through the arena-aware allocators. The compile-time
+ * reducer bounds its evaluation by this (resid_mem_mark /
+ * resid_mem_since_mark): it counts requests, not RSS, so the limit is
+ * deterministic and the reduced program is the same on every run. */
+static _Thread_local uint64_t g_alloc_bytes = 0;
+static _Thread_local uint64_t g_alloc_mark = 0;
+
+
 #define ARENA_CHUNK_SIZE (4 * 1024 * 1024)
 
 static ArenaChunk* arena_chunk_new(size_t cap) {
@@ -126,9 +146,12 @@ int64_t resid_arena_push(void) {
  * previous current arena (NULL at top level). Anything the caller needed
  * from this arena's memory must already have been deep-copied out —
  * see resid_list_str_persist_copy below. */
+static void str_index_arena_popped(void);
+
 int64_t resid_arena_pop(void) {
     Arena* a = g_current_arena;
     if (!a) resid_abort("resid_arena_pop: no active arena");
+    str_index_arena_popped();
     ArenaChunk* c = a->head;
     while (c) {
         ArenaChunk* next = c->next;
@@ -155,29 +178,95 @@ static void* arena_bump_alloc(Arena* a, size_t size) {
     return p;
 }
 
-/* True iff `p` falls within any chunk of the currently active arena —
+/* True iff `p` falls within any chunk of an active arena —
  * used only by str_index_slot's cache to decide whether a string is
  * arena-scoped (see safety note 3 above). NULL/no active arena: false. */
-static int arena_contains(const void* p) {
-    if (!g_current_arena) return 0;
-    for (ArenaChunk* c = g_current_arena->head; c; c = c->next) {
-        const char* lo = c->data;
-        const char* hi = c->data + c->cap;
-        if ((const char*)p >= lo && (const char*)p < hi) return 1;
+static int arena_chain_contains(Arena* a, const void* p) {
+    for (; a; a = a->prev) {
+        for (ArenaChunk* c = a->head; c; c = c->next) {
+            const char* lo = c->data;
+            const char* hi = c->data + c->cap;
+            if ((const char*)p >= lo && (const char*)p < hi) return 1;
+        }
     }
     return 0;
+}
+
+static int arena_contains(const void* p) {
+    /* Every active arena, not just the innermost (a string from an outer
+     * arena must not enter the persistent cache either), and the bulk
+     * arenas. */
+    return arena_chain_contains(g_current_arena, p) || arena_chain_contains(g_bulk_arena, p);
+}
+
+int64_t resid_bulk_push(void) {
+    Arena* a = (Arena*)malloc(sizeof(Arena));
+    if (!a) resid_abort("resid_bulk_push: out of memory");
+    a->head = NULL;
+    a->current = NULL;
+    a->prev = g_bulk_arena;
+    g_bulk_arena = a;
+    return resid_arena_push();
+}
+
+int64_t resid_bulk_pop(void) {
+    resid_arena_pop();
+    Arena* a = g_bulk_arena;
+    if (!a) resid_abort("resid_bulk_pop: no active bulk arena");
+    str_index_arena_popped();
+    ArenaChunk* c = a->head;
+    while (c) {
+        ArenaChunk* next = c->next;
+        free(c);
+        c = next;
+    }
+    g_bulk_arena = a->prev;
+    free(a);
+#ifdef __GLIBC__
+    /* A phase scope just released its whole heap footprint; hand it back
+     * so the next phase's growth does not stack on top of it. */
+    if (!g_bulk_arena) malloc_trim(0);
+#endif
+    return 0;
+}
+
+void* resid_gmalloc(int64_t size) {
+    g_alloc_bytes += (uint64_t)size;
+    if (g_bulk_arena) return arena_bump_alloc(g_bulk_arena, (size_t)size);
+    void* p = malloc((size_t)size);
+    if (!p) resid_abort("out of memory");
+    return p;
+}
+
+void resid_gfree(void* p) {
+    if (arena_chain_contains(g_bulk_arena, p)) return;
+    free(p);
 }
 
 /* The one indirection point for allocation sites with no matching
  * free() (see safety note 1). NULL current arena => real malloc, i.e.
  * unchanged behavior everywhere outside an explicit arena scope. */
+
+int64_t resid_mem_mark(void) {
+    g_alloc_mark = g_alloc_bytes;
+    return 0;
+}
+
+int64_t resid_mem_since_mark(void) {
+    return (int64_t)(g_alloc_bytes - g_alloc_mark);
+}
+
 static void* resid_alloc(size_t size) {
+    g_alloc_bytes += size;
     if (g_current_arena) return arena_bump_alloc(g_current_arena, size);
-    return malloc(size);
+    void* p = malloc(size);
+    if (!p && size) resid_abort("out of memory");
+    return p;
 }
 
 static void* resid_calloc(size_t n, size_t size) {
     size_t total = n * size;
+    g_alloc_bytes += total;
     if (g_current_arena) {
         void* p = arena_bump_alloc(g_current_arena, total);
         memset(p, 0, total);
@@ -739,11 +828,12 @@ char* resid_str_concat(const char* a, const char* b) {
  * it grows. The buffer is an ordinary NUL-terminated string preceded by a
  * {len, cap} header, so it can be returned and used as any other Str.
  *
- * Growth never frees the old block: the string-index caches are keyed by
- * pointer, and a freed-then-reused address could alias a cached entry.
- * Doubling capacity keeps the abandoned blocks' total below the final
- * size, so memory stays linear.
+ * Growth reallocates. The old block has no other reader, but the
+ * string-index caches are keyed by pointer, so its address is evicted
+ * from them first (a freed-then-reused address must not hit a stale
+ * entry).
  */
+static void str_index_forget(const char* s);
 typedef struct {
     size_t len;
     size_t cap;
@@ -766,21 +856,36 @@ char* resid_sacc_from(const char* s) {
     return d;
 }
 
-char* resid_sacc_append(char* d, const char* s) {
+static char* sacc_reserve(char* d, size_t n) {
     SaccHdr* h = (SaccHdr*)d - 1;
-    size_t n = strlen(s);
     if (h->len > SIZE_MAX / 2 - n) resid_abort("resid_sacc_append: size overflow");
-    if (h->len + n > h->cap) {
-        size_t cap = h->cap * 2;
-        if (cap < h->len + n) cap = h->len + n;
-        char* nd = sacc_alloc(cap);
-        memcpy(nd, d, h->len);
-        ((SaccHdr*)nd - 1)->len = h->len;
-        d = nd;
-        h = (SaccHdr*)d - 1;
-    }
+    if (h->len + n <= h->cap) return d;
+    size_t cap = h->cap * 2;
+    if (cap < h->len + n) cap = h->len + n;
+    str_index_forget(d);
+    h = (SaccHdr*)realloc(h, sizeof(SaccHdr) + cap + 1);
+    if (!h) resid_abort("resid_sacc: out of memory");
+    h->cap = cap;
+    return (char*)(h + 1);
+}
+
+char* resid_sacc_append(char* d, const char* s) {
+    size_t n = strlen(s);
+    d = sacc_reserve(d, n);
+    SaccHdr* h = (SaccHdr*)d - 1;
     memcpy(d + h->len, s, n + 1);
     h->len += n;
+    return d;
+}
+
+/* acc + IntToString(v), formatted straight into the buffer. */
+char* resid_sacc_append_int(char* d, int64_t v) {
+    char tmp[24];
+    int n = snprintf(tmp, sizeof tmp, "%lld", (long long)v);
+    d = sacc_reserve(d, (size_t)n);
+    SaccHdr* h = (SaccHdr*)d - 1;
+    memcpy(d + h->len, tmp, (size_t)n + 1);
+    h->len += (size_t)n;
     return d;
 }
 
@@ -901,9 +1006,8 @@ static _Thread_local int g_str_slots_ready = 0;
  * while an arena is active is freed in bulk on resid_arena_pop(), and
  * this cache is keyed by pointer identity with no eviction notification,
  * so caching such a key would leave it dangling — and worse,
- * address-reusable (ABA) — the moment the arena pops. Rebuilt fresh on
- * every miss for an arena-scoped string instead: bounded, known cost,
- * scoped to the lifetime of one arena region, never a dangling key. */
+ * address-reusable (ABA) — the moment the arena pops. It holds the most
+ * recent arena-scoped string instead, and resid_arena_pop clears it. */
 static _Thread_local StrIndexSlot g_str_scratch;
 
 /* Byte offset of codepoint `i` in the slot's string (i in [0, len]). An
@@ -961,9 +1065,9 @@ static StrIndexSlot* str_index_slot(const char* s) {
      * a burst of them used to evict the big source text's index, so the
      * next lex step rebuilt it by walking the whole program again. Their
      * own index is cheap to build and is kept in one dedicated slot. */
-    /* (Arena memory is reused after a pop, so a pointer match there proves
-     * nothing: arena strings always rebuild.) */
-    if (g_str_small.s == s && !arena_contains(s)) return &g_str_small;
+    /* resid_arena_pop clears this slot and the scratch slot, so a pointer
+     * match always names the live string it was built from. */
+    if (g_str_small.s == s) return &g_str_small;
     if (strnlen(s, STR_IDX_SMALL) < STR_IDX_SMALL) {
         str_index_build(s, &g_str_small);
         return &g_str_small;
@@ -975,6 +1079,7 @@ static StrIndexSlot* str_index_slot(const char* s) {
             return &g_str_slots[k];
         }
     }
+    if (g_str_scratch.s == s) return &g_str_scratch;
     if (arena_contains(s)) {
         str_index_build(s, &g_str_scratch);
         g_str_scratch.touched = g_str_clock;
@@ -987,6 +1092,25 @@ static StrIndexSlot* str_index_slot(const char* s) {
     str_index_build(s, &g_str_slots[victim]);
     g_str_slots[victim].touched = g_str_clock;
     return &g_str_slots[victim];
+}
+
+/* An arena is about to be freed: the small-string and scratch slots may
+ * be keyed by a string inside it, and malloc may hand that address out
+ * again, so neither may survive the pop. (The LRU never holds arena
+ * strings.) */
+static void str_index_arena_popped(void) {
+    g_str_small.s = NULL;
+    g_str_scratch.s = NULL;
+}
+
+/* Drop every cached index keyed by `s` (about to be freed). */
+static void str_index_forget(const char* s) {
+    if (g_str_small.s == s) g_str_small.s = NULL;
+    if (g_str_scratch.s == s) g_str_scratch.s = NULL;
+    if (!g_str_slots_ready) return;
+    for (int k = 0; k < STR_IDX_SLOTS; k++) {
+        if (g_str_slots[k].s == s) { g_str_slots[k].s = NULL; g_str_slots[k].touched = 0; }
+    }
 }
 
 /* Number of Unicode codepoints in a UTF-8 string. */
@@ -1430,13 +1554,17 @@ void* resid_list_str_persist_copy(void* list) {
     int64_t n = v->count;
     void** flat = resid_list_to_array(list);
     Arena* saved_arena = g_current_arena;
-    g_current_arena = NULL;
+    /* The copy has to outlive the current arena, and no more: it goes to
+     * the enclosing arena when there is one (freed with that scope), the
+     * real heap otherwise. */
+    Arena* target = saved_arena ? saved_arena->prev : NULL;
+    g_current_arena = target;
     void** copies = n > 0 ? (void**)malloc((size_t)n * sizeof(void*)) : NULL;
     if (n > 0 && !copies) resid_abort("resid_list_str_persist_copy: out of memory");
     for (int64_t i = 0; i < n; i++) {
         const char* src = (const char*)flat[i];
         size_t len = strlen(src);
-        char* dst = (char*)malloc(len + 1);
+        char* dst = (char*)resid_alloc(len + 1);
         if (!dst) resid_abort("resid_list_str_persist_copy: out of memory");
         memcpy(dst, src, len + 1);
         copies[i] = dst;

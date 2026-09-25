@@ -2207,6 +2207,16 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_arena_pop expects no arguments"};
     }
+    // resid_bulk_push/pop: an arena scope that also takes the generated
+    // code's own allocations (runtime/resid_rt.c, g_bulk_arena). For the
+    // driver's whole-phase scopes only, under the same caller-proof rule.
+    // resid_mem_mark / resid_mem_since_mark: the reducer's allocation
+    // budget (bytes requested since the mark).
+    Bool zero_arg_rt = if (name == "resid_bulk_push" || name == "resid_bulk_pop") { true } else { name == "resid_mem_mark" || name == "resid_mem_since_mark" };
+    if (zero_arg_rt) {
+        if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects no arguments"};
+    }
     if (name == "resid_list_str_persist_copy") {
         if (builtin_args(argtys, "List(Str)")) { return ERes {.pos = pos, .ty = "List(Str)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_list_str_persist_copy expects (List(Str)), got (" + argtys + ")"};
