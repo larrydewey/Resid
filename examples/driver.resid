@@ -13370,6 +13370,85 @@ Bool e0218_check_all(Sigs fs, List(Str) eff, List(Str) pcsv, Int i) {
     return rest;
 }
 
+// ─── Spawn capability bounds (spec §19) ─────────────────────────
+// E0214 (child ≤ parent): a spawn's declared capabilities must fit the
+// ceiling active where it appears — the function's effective sandbox
+// ceiling at the top level, or the enclosing spawn's caps once nested.
+// E0215: inside a spawn, a direct call to a function whose @requires is
+// not granted by the spawn's caps is rejected. A function outside every
+// sandbox and spawn is unrestricted (`bounded` false), matching the Rust
+// pipeline's `walk_spawn_cap_env`.
+
+Str spawn_strip_mode(Str cap) {
+    if (cap_readonly(cap)) { return str_slice(cap, 0, str_len(cap) - 3); }
+    return cap;
+}
+
+Str spawn_cap_exceeds_at(List(Str) caps, Str parent, Int i) {
+    if (i >= caps.len()) { return ""; }
+    Str fam = spawn_strip_mode(caps[i]);
+    if (!caps_contain_family(parent, fam)) { return fam; }
+    Int k = i + 1;
+    return spawn_cap_exceeds_at(caps, parent, k);
+}
+
+Str spawn_call_check(Sigs fs, Str callee, Str parent) {
+    Int idx = ck_fn_index(fs, callee);
+    if (idx < 0) { return ""; }
+    Str reqcsv = fs.reqs[idx];
+    if (reqcsv == "") { return ""; }
+    Str missing = first_missing_req(reqcsv, parent);
+    if (missing == "") { return ""; }
+    return "error[E0215]: call to `" + callee + "` requires capability `" + missing + "` which is not granted to this region's capability set [" + fmt_caps(parent) + "]";
+}
+
+Str spawn_region(Str s, Int pos, Bool bounded, Str parent, Sigs fs) {
+    PRes caps = cap_list_at(s, pos, true, "");
+    if (caps.err != "") { return ""; }
+    Tok lb = lex_tok(s, caps.pos);
+    if (lb.text != "{") { return ""; }
+    if (bounded) {
+        Str over = if (caps.ty == "") { "" } else { spawn_cap_exceeds_at(str_split(caps.ty, ","), parent, 0) };
+        if (over != "") {
+            return "error[E0214]: spawn declares capability `" + over + "` which exceeds the parent's capability ceiling [" + fmt_caps(parent) + "] (child ≤ parent)";
+        }
+    }
+    Int close = skip_body(s, caps.pos);
+    Str inner = str_slice(s, lb.pos, close - 1);
+    Str m = spawn_scan(inner, 0, "", true, caps.ty, fs);
+    if (m != "") { return m; }
+    return spawn_scan(s, close, "}", bounded, parent, fs);
+}
+
+Str spawn_scan(Str s, Int pos, Str prev, Bool bounded, Str parent, Sigs fs) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return ""; }
+    if (t.kind == "ident") {
+        if (prev != ".") {
+            Tok nx = lex_tok(s, t.pos);
+            if (nx.text == "(") {
+                if (t.text == "spawn") { return spawn_region(s, nx.pos, bounded, parent, fs); }
+                if (bounded) {
+                    Str m = spawn_call_check(fs, t.text, parent);
+                    if (m != "") { return m; }
+                }
+            }
+        }
+    }
+    return spawn_scan(s, t.pos, t.text, bounded, parent, fs);
+}
+
+Bool spawn_check_all(Sigs fs, List(Str) eff, Int i) {
+    if (i >= fs.names.len()) { return false; }
+    Str body = fs.bods[i];
+    Str m = if (str_contains(body, "spawn")) { spawn_scan(body, 0, "", eff[i] != "", eff[i], fs) } else { "" };
+    Bool printed = if (m != "") { eprintln(m) } else { false };
+    Int k = i + 1;
+    Bool rest = spawn_check_all(fs, eff, k);
+    if (printed) { return true; }
+    return rest;
+}
+
 // Reverse call-graph index (callee name -> comma-joined caller names),
 // built once in O(total call-graph edges). `fold_caller_ceils` below then
 // does a single O(1) Map lookup + a scan of the callee's ACTUAL callers
@@ -13547,7 +13626,8 @@ Int finish_check(Sigs fs) {
     Bool err1 = enforce_all(fs, eff, 0);
     Bool err2 = e0211_check_all(fs, eff, edges, 0);
     Bool err3 = e0218_check_all(fs, eff, pcsv, 0);
-    if (err1 || err2 || err3) { return 1; }
+    Bool err4 = spawn_check_all(fs, eff, 0);
+    if (err1 || err2 || err3 || err4) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
     return 0;
 }

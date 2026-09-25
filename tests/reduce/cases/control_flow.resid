@@ -1,0 +1,34 @@
+type Point = { Int x; Int y; };
+
+Int sq(Int n) { return n * n; }
+
+Int pick(Bool c) { return c ? 10 : 20; }
+
+Int main() {
+    Int k = sq(6);
+    Int t = 3 > 2 ? sq(4) : 0;
+    Int u = pick(true);
+    Int w = if (k > 100) { 1; } else { k + 1; };
+    Int lim = 3;
+    while (lim > 5) {
+        println("never");
+    }
+    Option(Int) o = Some(k);
+    while (Some(v) = o) {
+        println(IntToString(v + sq(2)));
+        break;
+    }
+    if (Some(v) = o) {
+        println(IntToString(v));
+    }
+    Point p = Point { .x = sq(3), .y = 1 };
+    Point { x, y } = p;
+    println(IntToString(x + y + t + u + w));
+    Int r = lim;
+    for (Int i in 0..10) {
+        if (i == 2) { continue; }
+        if (i == r) { break; }
+        println(IntToString(i + sq(5)));
+    }
+    return 0;
+}

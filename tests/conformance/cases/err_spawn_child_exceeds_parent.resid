@@ -1,0 +1,10 @@
+@requires(filesystem, network)
+Int main() {
+    Result(Int, RegionError) r = spawn (filesystem) {
+        Result(Int, RegionError) inner = spawn (network) {
+            return 1;
+        };
+        return 2;
+    };
+    return 0;
+}

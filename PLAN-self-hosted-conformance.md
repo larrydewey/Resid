@@ -218,5 +218,15 @@ suite totals.)
   - WP7: built-in numeric `Ord` / `Reverse(Ord)` for `sort`.
   - WP8: `import "f" as M`, selective imports, default-private visibility.
   - WP9: `--profile check|debug|release`.
-  Remaining non-goals are listed under "Deliberately out of scope". Child
-  capability narrowing (E0214/E0215) is parsed but not yet enforced.
+  Remaining non-goals are listed under "Deliberately out of scope".
+- 2026-09-25: closed the two remaining gaps. Spawn capability bounds are
+  enforced in the whole-program sandbox pass: E0214 (a spawn's caps must
+  fit the enclosing ceiling — the sandbox ceiling at function level, the
+  parent spawn's caps when nested) and E0215 (a call inside a spawn to a
+  function whose `@requires` the spawn does not grant). The reducer now
+  handles the new syntax instead of leaving the whole function residual:
+  `c ? a : b` folds on a known condition, `while` with a known-false
+  condition is dropped, loop / `with` / if-let / while-let bodies are
+  reduced with pattern names unknown, `break`/`continue` end their block,
+  destructuring statements and `spawn` stay as written. Conformance
+  120 / 120; `tests/reduce` 13 / 13 (new `control_flow` case).

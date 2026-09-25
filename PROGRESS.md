@@ -152,8 +152,11 @@ and has/lacks checks on the reduced `main`).
 
 ### 0e. Self-hosted compiler reaches the full conformance suite (2026-09-25)
 
-`tests/conformance/run.sh`: 117 / 117 (was 34; the archived Rust reference
-passes 105). Work-package details are in `PLAN-self-hosted-conformance.md`'s
+`tests/conformance/run.sh`: 120 / 120 (was 34; the archived Rust reference
+passes 105). Spawn capability bounds (E0214/E0215) are enforced, and the
+reducer folds through the new control-flow syntax (ternary, `while`,
+`break`/`continue`, `with`, if-let/while-let, destructuring) rather than
+leaving such functions residual. Work-package details are in `PLAN-self-hosted-conformance.md`'s
 progress log. New source-level pass `examples/desugar.resid` (default and
 named arguments, spec struct syntax); module visibility and aliases are
 applied during import resolution.
