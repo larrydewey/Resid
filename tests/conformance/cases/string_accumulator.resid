@@ -1,0 +1,52 @@
+// Str accumulators threaded through self tail calls are built in place
+// (examples/stracc.resid). Each shape below must behave exactly like the
+// copying semantics; the last one is large enough that quadratic copying
+// would not finish.
+Str build(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    return build(i + 1, n, acc + IntToString(i) + ",");
+}
+
+// The accumulator is read by its own piece: must not be rewritten.
+Str doubling(Int i, Str acc) {
+    if (i == 0) { return acc; }
+    return doubling(i - 1, acc + str_slice(acc, 0, 1));
+}
+
+// Two tail-call sites, accumulator in the middle position.
+Str fizz(Int i, Str acc, Int n) {
+    if (i > n) { return acc; }
+    if (i % 3 == 0) { return fizz(i + 1, acc + "F", n); }
+    return fizz(i + 1, acc + IntToString(i), n);
+}
+
+// Non-tail use of the recursive result.
+Str wrapped(Int i, Str acc) {
+    if (i == 0) { return acc; }
+    Str inner = wrapped(i - 1, acc + "<");
+    return inner + ">";
+}
+
+// Returned with a suffix: not a pure accumulator.
+Str suffixed(Int i, Str acc) {
+    if (i == 0) { return acc + "!"; }
+    return suffixed(i - 1, acc + "a");
+}
+
+Int main() {
+    Str base = "x";
+    Str a = build(0, 3, base);
+    Str b = build(0, 2, base);
+    println(base);
+    println(a);
+    println(b);
+    println(build(0, 3, a));
+    println(doubling(3, "ab"));
+    println(fizz(1, "", 7));
+    println(wrapped(3, "["));
+    println(suffixed(3, ""));
+    Str big = build(0, 200000, "");
+    println(IntToString(str_len(big)));
+    println(str_slice(big, 0, 10));
+    return 0;
+}

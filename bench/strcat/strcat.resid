@@ -1,0 +1,14 @@
+// String-accumulation benchmark: build "0,1,2,...,N-1," by repeated
+// `acc + piece`, the idiomatic accumulator in a language without mutation.
+Str build(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    return build(i + 1, n, acc + IntToString(i) + ",");
+}
+
+@requires(args)
+Int main() {
+    Int n = str_parse_int(args.get(1));
+    Str s = build(0, n, "");
+    println(IntToString(str_len(s)));
+    return 0;
+}

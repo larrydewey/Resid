@@ -731,6 +731,59 @@ char* resid_str_concat(const char* a, const char* b) {
     return p;
 }
 
+/*
+ * In-place string accumulators (examples/stracc.resid). The compiler
+ * rewrites a Str accumulator threaded through a self tail call so that
+ * `acc + piece` becomes resid_sacc_append(acc, piece) on a buffer made by
+ * resid_sacc_from at entry; it proves the buffer has no other reader while
+ * it grows. The buffer is an ordinary NUL-terminated string preceded by a
+ * {len, cap} header, so it can be returned and used as any other Str.
+ *
+ * Growth never frees the old block: the string-index caches are keyed by
+ * pointer, and a freed-then-reused address could alias a cached entry.
+ * Doubling capacity keeps the abandoned blocks' total below the final
+ * size, so memory stays linear.
+ */
+typedef struct {
+    size_t len;
+    size_t cap;
+} SaccHdr;
+
+static char* sacc_alloc(size_t cap) {
+    SaccHdr* h = (SaccHdr*)malloc(sizeof(SaccHdr) + cap + 1);
+    if (!h) resid_abort("resid_sacc: out of memory");
+    h->len = 0;
+    h->cap = cap;
+    return (char*)(h + 1);
+}
+
+char* resid_sacc_from(const char* s) {
+    size_t n = strlen(s);
+    size_t cap = n < 32 ? 64 : n * 2;
+    char* d = sacc_alloc(cap);
+    memcpy(d, s, n + 1);
+    ((SaccHdr*)d - 1)->len = n;
+    return d;
+}
+
+char* resid_sacc_append(char* d, const char* s) {
+    SaccHdr* h = (SaccHdr*)d - 1;
+    size_t n = strlen(s);
+    if (h->len > SIZE_MAX / 2 - n) resid_abort("resid_sacc_append: size overflow");
+    if (h->len + n > h->cap) {
+        size_t cap = h->cap * 2;
+        if (cap < h->len + n) cap = h->len + n;
+        char* nd = sacc_alloc(cap);
+        memcpy(nd, d, h->len);
+        ((SaccHdr*)nd - 1)->len = h->len;
+        d = nd;
+        h = (SaccHdr*)d - 1;
+    }
+    memcpy(d + h->len, s, n + 1);
+    h->len += n;
+    return d;
+}
+
 /* Copy a NUL-terminated string into a fixed-capacity stack buffer
  * (Str(N) = N chars + NUL, cap = N + 1). Copies at most cap - 1 bytes,
  * truncating on overflow (a NUL terminator is always written). Returns

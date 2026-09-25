@@ -171,6 +171,17 @@ strings, forcing re-walks of the whole 880K-character source on the next
 lex step — strings under 256 bytes now use a dedicated slot and never
 enter the LRU.
 
+### 0f. In-place string accumulators (2026-09-25)
+
+`examples/stracc.resid` runs on the reduced program before code
+generation. A Str parameter threaded through a self tail call as
+`return f(..., acc + e1 + ..., ...)` and otherwise only returned is
+rewritten into a worker that appends in place to a growable buffer
+(`resid_sacc_from` / `resid_sacc_append` in the runtime), plus a wrapper
+that copies the caller's initial string once. Accumulating 100k pieces
+went from 16.2s / 51.8GB to 0.005s / 12MB; see `bench/strcat/` for the
+comparison with C, Rust, Go, Node, Python, Ruby and LuaJIT.
+
 ### Major capabilities
 
 - **Stage-2 self-hosting proven, including full sandbox/capability parity**:

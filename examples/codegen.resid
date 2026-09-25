@@ -975,7 +975,7 @@ Int next_pow_width(Int needed) {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)"];
+    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -4142,6 +4142,13 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             }
             if (t.text == "str_reverse") {
                 return cg_extern1(s, t2.pos, "str_reverse", "Str", "Str", env, fs, c);
+            }
+            // In-place string accumulators (examples/stracc.resid).
+            if (t.text == "resid_sacc_from") {
+                return cg_extern1(s, t2.pos, "resid_sacc_from", "Str", "Str", env, fs, c);
+            }
+            if (t.text == "resid_sacc_append") {
+                return cg_extern2(s, t2.pos, "resid_sacc_append", "Str", "Str", "Str", env, fs, c);
             }
             if (t.text == "str_contains") {
                 return cg_externb2(s, t2.pos, "str_contains", "Str", "Str", env, fs, c);
