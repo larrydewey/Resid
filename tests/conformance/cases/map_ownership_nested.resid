@@ -1,0 +1,17 @@
+// A call result stored in a nested struct field is frozen: no chain hides
+// a transient table where field-wise tracking cannot see it.
+type St = { Map(Int, Int) m; Int n; };
+type Pair = { St a; Int k; };
+St mk(Int n) {
+    Map(Int, Int) e = {};
+    return St {.m = e.insert(1, 1).insert(2, 2), .n = n};
+}
+Pair mkp() { return Pair {.a = mk(1), .k = 0}; }
+St step(St s, Int k) { return St {.m = s.m.insert(k, k), .n = s.n + 1}; }
+Int main() {
+    Pair p = mkp();
+    St x = step(p.a, 5);
+    St y = step(p.a, 6);
+    println(f"{p.a.m.len()} {x.m.len()} {y.m.len()}");
+    return 0;
+}

@@ -2525,9 +2525,10 @@ LOC lo_ce_call(Kg g, Int c, Int i, LV V, LOP P, Int j, LOC child, Int last_rd) {
     return lo_ce_call(g, c, i + 1, V, P, i, ch, last_rd);
 }
 
-// A struct literal's fields (run in order): exactly one consumes V (a
-// Map/Set field); the others may read V before it, and after it only
-// while it is the bare item.
+// A struct literal's fields (run in order): exactly one consumes V, and
+// it is one of the struct's Map/Set fields (a chain never hides in a
+// nested struct, whose fields nothing tracks); the others may read V
+// before it, and after it only while it is the bare item.
 LOC lo_ce_fields(Kg g, Int s, Int i, LV V, LOP P, Bool seen, LOC child) {
     if (i >= g.ns[s].nk) {
         if (!seen) { return lo_cfail(); }
@@ -2543,6 +2544,7 @@ LOC lo_ce_fields(Kg g, Int s, Int i, LV V, LOP P, Bool seen, LOC child) {
         return lo_cfail();
     }
     if (rd) { return lo_ce_fields(g, s, i + 1, V, P, seen, child); }
+    if (!lo_has_str(lo_mfs(P, g.ns[s].text), g.ns[fi].text, 0)) { return lo_cfail(); }
     LOC ch = lo_ce(g, e, V, P);
     if (!ch.ok) { return ch; }
     return lo_ce_fields(g, s, i + 1, V, P, true, ch);
@@ -2585,7 +2587,8 @@ LOC lo_anon_arg(Kg g, Int c, Int i, LOP P) {
 LOC lo_anon_fields(Kg g, Int s, Int i, LOP P, LOC acc) {
     if (i >= g.ns[s].nk) { return acc; }
     Int fi = kg_kid(g, s, i);
-    LOC a = if (g.ns[fi].nk > 0) { lo_anon(g, kg_kid(g, fi, 0), P) } else { lo_cfail() };
+    Bool mf = g.ns[fi].nk > 0 && lo_has_str(lo_mfs(P, g.ns[s].text), g.ns[fi].text, 0);
+    LOC a = if (mf) { lo_anon(g, kg_kid(g, fi, 0), P) } else { lo_cfail() };
     LOC acc2 = if (!a.ok) { acc } else { if (!acc.ok) { a } else { LOC {.ok = true, .mut = a.mut || acc.mut, .ce = acc.ce.concat(a.ce), .bare = false} } };
     return lo_anon_fields(g, s, i + 1, P, acc2);
 }
