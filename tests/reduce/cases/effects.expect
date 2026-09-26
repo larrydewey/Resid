@@ -1,5 +1,6 @@
 has: Int a = noisy(1);
-has: side("rhs evaluated")
+lacks: side("rhs evaluated")
+has: side("lhs")
 has: println("55");
 lacks: "dead"
 lacks: noisy(5)

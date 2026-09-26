@@ -647,9 +647,97 @@ Int rd_prec(Str op) {
     return 0;
 }
 
-// Binary operator node. `&&`/`||` evaluate both operands in the generated
-// code (no short-circuit), so only the identity cases are simplified when
-// one side alone is known.
+// ─── Skipping an unevaluated operand (token level) ──────────────
+
+Bool rd_term_start(Tok t) {
+    if (t.kind == "ident" || t.kind == "int" || t.kind == "float" || t.kind == "dec" || t.kind == "str" || t.kind == "raw" || t.kind == "bytes" || t.kind == "char" || t.kind == "fstring") {
+        return t.text != "else";
+    }
+    return t.text == "(" || t.text == "[" || t.text == "{" || t.text == "!" || t.text == "~";
+}
+
+// Position after the `{ ... }` group whose opener is the next token.
+Int rd_skip_brace(Str s, Int pos) {
+    Tok ob = lex_tok(s, pos);
+    if (ob.text != "{") { return pos; }
+    return rd_skip_group(s, ob.pos, 1);
+}
+
+// `if (...) { } [else if ... | else { }]`; pos is after `if`.
+Int rd_skip_ifx(Str s, Int pos) {
+    Tok open = lex_tok(s, pos);
+    Int b = rd_skip_brace(s, rd_skip_group(s, open.pos, 1));
+    Tok kw = lex_tok(s, b);
+    if (kw.text != "else") { return b; }
+    Tok nx = lex_tok(s, kw.pos);
+    if (nx.text == "if") { return rd_skip_ifx(s, nx.pos); }
+    return rd_skip_brace(s, kw.pos);
+}
+
+Int rd_skip_atom(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "(") {
+        Int e = rd_skip_group(s, t.pos, 1);
+        PRes pt = parse_type(s, t.pos);
+        Bool cast = pt.err == "" && lex_tok(s, pt.pos).text == ")" && is_known_type_cg(pt.ty) && rd_term_start(lex_tok(s, e));
+        if (cast) { return rd_skip_term(s, e); }
+        return e;
+    }
+    if (t.text == "[" || t.text == "{") { return rd_skip_group(s, t.pos, 1); }
+    if (t.text == "if") { return rd_skip_ifx(s, t.pos); }
+    if (t.text == "match") {
+        Tok sc = lex_tok(s, t.pos);
+        Int se = if (sc.text == "(") { rd_skip_group(s, sc.pos, 1) } else { sc.pos };
+        Tok sp = lex_tok(s, se);
+        Int se2 = if (sc.text != "(" && sp.text == "(") { rd_skip_group(s, sp.pos, 1) } else { se };
+        return rd_skip_brace(s, se2);
+    }
+    if (t.text == "lambda" || t.text == "spawn") {
+        Tok lp = lex_tok(s, t.pos);
+        return rd_skip_brace(s, rd_skip_group(s, lp.pos, 1));
+    }
+    if (t.kind == "ident") {
+        Tok nx = lex_tok(s, t.pos);
+        if (nx.text == "(" || nx.text == "{") { return rd_skip_group(s, nx.pos, 1); }
+    }
+    return t.pos;
+}
+
+Int rd_skip_post(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ".") {
+        Tok f = lex_tok(s, t.pos);
+        Tok p = lex_tok(s, f.pos);
+        if (p.text == "(") { return rd_skip_post(s, rd_skip_group(s, p.pos, 1)); }
+        return rd_skip_post(s, f.pos);
+    }
+    if (t.text == "[" || t.text == "(") { return rd_skip_post(s, rd_skip_group(s, t.pos, 1)); }
+    if (t.text == "?" && !rd_term_start(lex_tok(s, t.pos))) { return rd_skip_post(s, t.pos); }
+    if (t.text == "else") { return rd_skip_post(s, rd_skip_brace(s, t.pos)); }
+    return pos;
+}
+
+Int rd_skip_term(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "-" || t.text == "+" || t.text == "!" || t.text == "~") { return rd_skip_term(s, t.pos); }
+    if (t.text == "rt" && rd_term_start(lex_tok(s, t.pos))) { return rd_skip_term(s, t.pos); }
+    return rd_skip_post(s, rd_skip_atom(s, pos));
+}
+
+// End of the operand starting at pos, with operators binding at >= minp.
+Int rd_skip_ops(Str s, Int pos, Int minp) {
+    return rd_skip_more(s, rd_skip_term(s, pos), minp);
+}
+
+Int rd_skip_more(Str s, Int pos, Int minp) {
+    Tok t = lex_tok(s, pos);
+    Int p = rd_prec(t.text);
+    if (p == 0 || p < minp) { return pos; }
+    return rd_skip_more(s, rd_skip_term(s, t.pos), minp);
+}
+
+// Binary operator node. `&&`/`||` short-circuit (rd_bin skips a decided
+// right operand); here only the identity cases remain.
 RdV rd_apply(Str s, Str op, Int start, RdV l, RdV r) {
     Str orig0 = str_slice(s, start, r.pos);
     Bool och = l.ch || r.ch;
@@ -739,6 +827,13 @@ RdV rd_bin(Str s, Int start, RdV lhs, Int minp, RdE env, RdT ft) {
     }
     Int p = rd_prec(t.text);
     if (p == 0 || p < minp) { return lhs; }
+    // `false && e` / `true || e`: e is never evaluated (spec §30).
+    Bool decided = lhs.k && ((t.text == "&&" && lhs.v == "false") || (t.text == "||" && lhs.v == "true"));
+    if (decided) {
+        Int dend = rd_skip_ops(s, t.pos, p + 1);
+        RdV dv = rd_folded(lhs.v, "Bool", str_slice(s, start, dend), true, dend, lhs.st);
+        return rd_bin(s, start, dv, minp, env, ft);
+    }
     RdV rhs = rd_unary(s, t.pos, env, ft, lhs.st);
     if (rhs.bad) { return rhs; }
     Int next = p + 1;

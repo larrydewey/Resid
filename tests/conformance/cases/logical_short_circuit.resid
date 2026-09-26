@@ -1,0 +1,16 @@
+Bool boom() { List(Int) xs = [1]; return xs[5] == 0; }
+Bool say(Str m, Bool v) { println(m); return v; }
+Int fact(Int n) { return if (n <= 1 || (n > 100 && boom())) { 1 } else { n * fact(n - 1) }; }
+Int main() {
+    println(BoolToString(false && boom()));
+    println(BoolToString(true || boom()));
+    Int i = rt 3;
+    List(Int) xs = [1, 2];
+    println(BoolToString(i < xs.len() && xs[i] == 0));
+    println(BoolToString(say("a", true) && say("b", false) || say("c", true)));
+    println(BoolToString(say("d", false) && say("e", true)));
+    println(IntToString(fact(5)));
+    Bool f = rt false;
+    println(BoolToString(f && boom()));
+    return 0;
+}

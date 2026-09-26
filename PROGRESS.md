@@ -255,8 +255,11 @@ false. The graph lint confirmed that no in-repo program relied on the
 wrong grouping. Assignment: `x = 5;` type-checked and compiled to nothing;
 it is now an error, and the one codegen block that relied on it (the
 `expect().toEqual` widening for narrow ints) is rewritten. List literals:
-a missing comma is now an error. Still open: `&&` and `||` evaluate both
-operands. The spec does not say they short-circuit.
+a missing comma is now an error. Short-circuit: `&&` and `||` evaluated
+both operands, so a guard like `i < n && xs[i] == 0` aborted. The spec now
+requires short-circuit (§30). Codegen branches to a phi, and the reducer
+folds `false && e` and `true || e` without evaluating e. The `else`
+fallback's phi now names the arms' exit blocks.
 
 ### Major capabilities
 
