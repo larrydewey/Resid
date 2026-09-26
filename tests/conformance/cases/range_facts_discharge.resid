@@ -1,0 +1,53 @@
+// Range facts drop checks only where they cannot fire (spec §3.2a).
+Int below(Int i, Int n) {
+    if (i >= n) { return 0 - 1; }
+    return i + 1;
+}
+
+Int digits(Int x, Int acc) {
+    if (x <= 0) { return acc; }
+    return digits(x / 10, acc + 1);
+}
+
+Int small(Int(8) a) {
+    Int(8) b = a % 100;
+    Int(8) c = b + 27;
+    return (Int)c;
+}
+
+Int sum_to(Int n) {
+    Int s = 0;
+    for (Int i in 0..n) {
+        if (i % 2 == 0) { continue; }
+        println(IntToString(i * 3));
+    }
+    return s;
+}
+
+Int div_by(Int x, Int d) {
+    if (d == 0) { return 0; }
+    return x / d;
+}
+
+Int edge(Int x) {
+    if (x < 9223372036854775807) { return x + 1; }
+    return x;
+}
+
+Int main() {
+    Int z = args.count() - 1;
+    println(IntToString(below(z + 5, 10)));
+    println(IntToString(below(z + 10, 10)));
+    println(IntToString(digits(z + 123456, 0)));
+    println(IntToString(small((Int(8))(z + 99))));
+    println(IntToString(small((Int(8))(z - 99))));
+    Int s = sum_to(z + 6);
+    println(IntToString(div_by(z + 100, z + 7)));
+    println(IntToString(div_by(z + 100, z)));
+    println(IntToString(edge(z + 9223372036854775806)));
+    println(IntToString(edge(z + 9223372036854775807)));
+    // d may be -1 with x the minimum: this division keeps its check.
+    Int m = z - 9223372036854775807 - 1;
+    println(IntToString(div_by(m, z - 1)));
+    return 0;
+}

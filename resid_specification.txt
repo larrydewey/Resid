@@ -1208,6 +1208,16 @@ accumulate (the in-place string rewrite) and rebuild (a
 node copied because a child was reduced). A derived node
 has the type and def of the node it derives from.
 
+Range facts are computed per function over its immutable
+bindings: from integer literals, the operators + - * / %
+and &, lengths (in [0, 2^47]), `for` over a range, and the
+comparisons of dominating if and while conditions,
+including an if whose branch always returns, breaks or
+continues. A + - * / or % whose operand ranges, within
+their types, prove it cannot overflow or divide by zero
+(or compute MIN / -1) is lowered without its check. The
+artifact lists a RESIDUAL node's range as a fact.
+
 33.1  Signed Provenance
 
 Every binary carries signed provenance: a COSE_Sign1

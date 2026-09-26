@@ -2362,6 +2362,30 @@ GT bin_wide_op(Str ins, Bool is_cmp, Str cc, GT l0, GT r0) {
     return GT {.pos = r0.pos, .val = reg, .ty = arty2, .cnt = 0, .err = "", .glines = r0.glines, .lines = l2, .tmp = t1, .lbl = r0.lbl, .tail = false};
 }
 
+// bin_wide_op's arithmetic without its overflow and division checks, for
+// an operation whose operand ranges prove it cannot trap (lower.resid).
+GT bin_arith_nc(Str ins, GT l0, GT r0) {
+    Str lt = num_norm_cg(l0.ty);
+    Str rtn = num_norm_cg(r0.ty);
+    Int lw = ll_width_of(lt);
+    Int rw = ll_width_of(rtn);
+    Int tw = imax(lw, rw);
+    Str head = fam_head(lt);
+    Bool uns = head == "UInt";
+    Str tws = head + "(" + IntToString(tw) + ")";
+    GT r1 = pick_widen(need_widen(true, rw, tw), r0, tws);
+    Int tmax = imax(r1.tmp, l0.tmp);
+    GT lcarr = GT {.pos = l0.pos, .val = l0.val, .ty = l0.ty, .cnt = l0.cnt, .err = "", .glines = r1.glines, .lines = r1.lines, .tmp = tmax, .lbl = l0.lbl, .tail = false};
+    GT lwiden = pick_widen(need_widen(true, lw, tw), lcarr, tws);
+    Bool wrapf = ins == "add" || ins == "sub" || ins == "mul";
+    Str flag = if (!wrapf) { "" } else { if (uns) { " nuw" } else { " nsw" } };
+    Str op = if (uns && ins == "sdiv") { "udiv" } else { if (uns && ins == "srem") { "urem" } else { ins } };
+    Int t1 = lwiden.tmp + 1;
+    Str reg = "%t" + IntToString(t1);
+    List(Str) l2 = lwiden.lines.concat([reg + " = " + op + flag + " " + ll_ty(tws) + " " + lwiden.val + ", " + r1.val]);
+    return GT {.pos = r0.pos, .val = reg, .ty = tws, .cnt = 0, .err = "", .glines = r0.glines, .lines = l2, .tmp = t1, .lbl = r0.lbl, .tail = false};
+}
+
 Str unsigned_cc(Str cc) {
     if (cc == "slt") { return "ult"; }
     if (cc == "sle") { return "ule"; }
