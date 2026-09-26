@@ -23,6 +23,13 @@
 /// defined.contains(c))`.
 ///
 /// Usage: residc tools/resid-graph.resid run -- <file.resid> [--dot]
+///        residc tools/resid-graph.resid run -- <artifact> --node ID [--depth N]
+///
+/// The second form reads the knowledge-graph artifact
+/// `<artifact>.resid-graph.cbor` (spec §34) and prints, as DOT, the nodes
+/// within N edges of ID: operand, def and derive edges.
+
+import "../lib/kgart.resid";
 
 // ─── Character classification / lexer primitives (self-contained copy —
 // same duplication convention examples/typecheck.resid and
@@ -401,7 +408,95 @@ CliArgs parse_args_acc(Int i, Int n, Str path, Bool dot) {
     return parse_args_acc(i + 1, n, a, dot);
 }
 
+// ─── Knowledge-graph neighbourhood as DOT ───────────────────────────
+
+Str kg_dot_q(Str s) { return str_replace(s, "\"", "\\\""); }
+
+Str kg_dot_color(Str know) {
+    if (know == "known") { return "palegreen"; }
+    if (know == "effect") { return "lightpink"; }
+    if (know == "invalid") { return "gray"; }
+    return "moccasin";
+}
+
+Str kg_dot_node(GA a, GN n) {
+    Str v = if (n.value == "") { "" } else { " = " + n.value };
+    Str r = if (n.reason == "") { "" } else { "\\n" + n.reason };
+    Str f = if (n.facts == "") { "" } else { "\\n" + n.facts };
+    Str lab = "#" + IntToString(n.id) + " " + n.kind + v + "\\n" + n.ty + "\\n" + n.know + r + f + "\\n" + gn_where(a, n);
+    return "  n" + IntToString(n.id) + " [label=\"" + kg_dot_q(lab) + "\", fillcolor=" + kg_dot_color(n.know) + "];";
+}
+
+// Drawn nodes, edges with their targets, and the next level's ids.
+type KD = { List(Str) nodes; List(Str) edges; List(Int) to; Map(Int, Bool) seen; List(Int) next; };
+
+KD kg_edge(KD k, Int from, Int to, Str attr) {
+    return KD {.nodes = k.nodes, .edges = k.edges.concat(["  n" + IntToString(from) + " -> n" + IntToString(to) + attr + ";"]), .to = k.to.concat([to]), .seen = k.seen, .next = k.next.concat([to])};
+}
+
+KD kg_dot_deps(GN n, Int i, KD acc) {
+    if (i >= n.deps.len()) { return acc; }
+    return kg_dot_deps(n, i + 1, kg_edge(acc, n.id, n.deps[i], ""));
+}
+
+KD kg_dot_level(GA a, List(Int) ids, Int i, KD acc) {
+    if (i >= ids.len()) { return acc; }
+    Int id = ids[i];
+    if (acc.seen.contains(id)) { return kg_dot_level(a, ids, i + 1, acc); }
+    GN n = gn_read(a, id);
+    KD a1 = KD {.nodes = acc.nodes.concat([kg_dot_node(a, n)]), .edges = acc.edges, .to = acc.to, .seen = acc.seen.insert(id, true), .next = acc.next};
+    KD a2 = kg_dot_deps(n, 0, a1);
+    KD a3 = if (n.def >= 0) { kg_edge(a2, id, n.def, " [style=dashed, label=\"def\"]") } else { a2 };
+    KD a4 = if (n.from >= 0) { kg_edge(a3, id, n.from, " [style=dotted, label=\"" + n.rule + "\"]") } else { a3 };
+    return kg_dot_level(a, ids, i + 1, a4);
+}
+
+// Nodes reached within `depth` edges.
+KD kg_dot_walk(GA a, List(Int) ids, Int depth, KD acc) {
+    List(Int) none = [];
+    KD k = kg_dot_level(a, ids, 0, KD {.nodes = acc.nodes, .edges = acc.edges, .to = acc.to, .seen = acc.seen, .next = none});
+    if (depth <= 0 || k.next.len() == 0) { return k; }
+    return kg_dot_walk(a, k.next, depth - 1, k);
+}
+
+// Edges whose target was drawn.
+List(Str) kg_dot_keep(KD k, Int i, List(Str) acc) {
+    if (i >= k.edges.len()) { return acc; }
+    return kg_dot_keep(k, i + 1, if (k.seen.contains(k.to[i])) { acc.concat([k.edges[i]]) } else { acc });
+}
+
+Int kg_dot_main(Str artifact, Int id, Int depth) {
+    Str path = artifact + ".resid-graph.cbor";
+    if (!filesystem.exists(path)) {
+        eprintln("resid-graph: no graph artifact '" + path + "' (build with --profile debug or check)");
+        return 1;
+    }
+    GA a = ga_load(filesystem.read_bytes(path));
+    if (id < 0 || id >= a.offs.len()) {
+        eprintln("resid-graph: no node " + IntToString(id));
+        return 1;
+    }
+    Map(Int, Bool) s0 = {};
+    List(Str) l0 = [];
+    List(Int) i0 = [];
+    KD k = kg_dot_walk(a, [id], depth, KD {.nodes = l0, .edges = l0, .to = i0, .seen = s0, .next = i0});
+    List(Str) body = k.nodes.concat(kg_dot_keep(k, 0, []));
+    print("digraph kg {\n  rankdir=BT;\n  node [shape=box, style=filled, fontname=monospace];\n" + str_join(body, "\n") + "\n}\n");
+    return 0;
+}
+
+Str kg_arg_after(Int i, Int n, Str flag) {
+    if (i + 1 >= n) { return ""; }
+    if (args.get(i) == flag) { return args.get(i + 1); }
+    return kg_arg_after(i + 1, n, flag);
+}
+
 Int main() {
+    Str knode = kg_arg_after(1, args.count(), "--node");
+    if (knode != "" && str_is_int(knode)) {
+        Str dp = kg_arg_after(1, args.count(), "--depth");
+        return kg_dot_main(args.get(1), str_parse_int(knode), if (dp != "" && str_is_int(dp)) { str_parse_int(dp) } else { 2 });
+    }
     CliArgs cli = parse_args_acc(1, args.count(), "", false);
     if (cli.path == "") {
         eprintln("usage: resid-graph <file.resid> [--dot]");

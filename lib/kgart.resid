@@ -1,0 +1,210 @@
+// kgart.resid — reading the knowledge-graph artifact
+// `<out>.resid-graph.cbor` (spec §34) for tools: a CBOR skipper, an offset
+// index over the nodes, and decoded node records.
+//
+// Imported by tools/resid-why.resid and tools/resid-graph.resid.
+
+// Head of a CBOR item: major type, argument, position after the head.
+type CH = { Int major; Int arg; Int pos; };
+
+pub CH ch_read(List(Int) b, Int pos) {
+    Int byte = b[pos];
+    Int major = byte / 32;
+    Int ai = byte & 31;
+    Int p1 = pos + 1;
+    if (ai < 24) { return CH {.major = major, .arg = ai, .pos = p1}; }
+    if (ai == 24) { return CH {.major = major, .arg = b[p1], .pos = p1 + 1}; }
+    if (ai == 25) { return CH {.major = major, .arg = b[p1] * 256 + b[p1 + 1], .pos = p1 + 2}; }
+    if (ai == 26) { return CH {.major = major, .arg = ((b[p1] * 256 + b[p1 + 1]) * 256 + b[p1 + 2]) * 256 + b[p1 + 3], .pos = p1 + 4}; }
+    return CH {.major = major, .arg = ch_be(b, p1, 8, 0), .pos = p1 + 8};
+}
+
+pub Int ch_be(List(Int) b, Int pos, Int k, Int acc) {
+    if (k == 0) { return acc; }
+    return ch_be(b, pos + 1, k - 1, acc * 256 + b[pos]);
+}
+
+// Position after the item at pos.
+pub Int ch_skip(List(Int) b, Int pos) {
+    CH h = ch_read(b, pos);
+    if (h.major == 2 || h.major == 3) { return h.pos + h.arg; }
+    if (h.major == 4) { return ch_skip_n(b, h.pos, h.arg); }
+    if (h.major == 5) { return ch_skip_n(b, h.pos, h.arg * 2); }
+    return h.pos;
+}
+
+pub Int ch_skip_n(List(Int) b, Int pos, Int n) {
+    if (n <= 0) { return pos; }
+    return ch_skip_n(b, ch_skip(b, pos), n - 1);
+}
+
+// Text (UTF-8 bytes decoded) at pos.
+pub Str ch_text(List(Int) b, Int pos) {
+    CH h = ch_read(b, pos);
+    return ch_utf8(b, h.pos, h.pos + h.arg, StrBuf());
+}
+
+pub Str ch_utf8(List(Int) b, Int i, Int e, StrBuf acc) {
+    if (i >= e) { return acc.finish(); }
+    Int c = b[i];
+    if (c < 128) { return ch_utf8(b, i + 1, e, acc.push_char(c)); }
+    Int k = if (c >= 240) { 3 } else { if (c >= 224) { 2 } else { 1 } };
+    Int lead = if (k == 3) { c & 7 } else { if (k == 2) { c & 15 } else { c & 31 } };
+    return ch_utf8(b, i + 1 + k, e, acc.push_char(ch_cont(b, i + 1, k, lead)));
+}
+
+pub Int ch_cont(List(Int) b, Int i, Int k, Int acc) {
+    if (k == 0) { return acc; }
+    return ch_cont(b, i + 1, k - 1, acc * 64 + (b[i] & 63));
+}
+
+// An integer (major 0 or 1) at pos.
+pub Int ch_int(List(Int) b, Int pos) {
+    CH h = ch_read(b, pos);
+    return if (h.major == 1) { 0 - 1 - h.arg } else { h.arg };
+}
+
+// Position of key `k`'s value in the map at pos, or -1.
+pub Int ch_field(List(Int) b, Int pos, Str k) {
+    CH h = ch_read(b, pos);
+    return ch_field_at(b, h.pos, h.arg, k);
+}
+
+pub Int ch_field_at(List(Int) b, Int pos, Int n, Str k) {
+    if (n <= 0) { return -1; }
+    Int v = ch_skip(b, pos);
+    if (ch_text(b, pos) == k) { return v; }
+    return ch_field_at(b, ch_skip(b, v), n - 1, k);
+}
+
+pub List(Int) ch_ints(List(Int) b, Int pos) {
+    CH h = ch_read(b, pos);
+    return ch_ints_at(b, h.pos, h.arg, ListBuf());
+}
+
+pub List(Int) ch_ints_at(List(Int) b, Int pos, Int n, ListBuf(Int) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return ch_ints_at(b, ch_skip(b, pos), n - 1, acc.push(ch_int(b, pos)));
+}
+
+pub List(Str) ch_texts(List(Int) b, Int pos) {
+    CH h = ch_read(b, pos);
+    return ch_texts_at(b, h.pos, h.arg, ListBuf());
+}
+
+pub List(Str) ch_texts_at(List(Int) b, Int pos, Int n, ListBuf(Str) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return ch_texts_at(b, ch_skip(b, pos), n - 1, acc.push(ch_text(b, pos)));
+}
+
+// A value (for a node's `value`) rendered as text.
+pub Str ch_show(List(Int) b, Int pos) {
+    CH h = ch_read(b, pos);
+    if (h.major == 0 || h.major == 1) { return IntToString(ch_int(b, pos)); }
+    if (h.major == 3) { return "\"" + ch_text(b, pos) + "\""; }
+    if (h.major == 7) { return if (h.arg == 21) { "true" } else { if (h.arg == 20) { "false" } else { "?" } }; }
+    return "...";
+}
+
+// The artifact: bytes, the offset of every node, source paths, roots.
+type GA = { List(Int) b; List(Int) offs; List(Str) paths; List(Int) sroots; List(Int) rroots; };
+
+pub List(Int) ga_offsets(List(Int) b, Int pos, Int n, ListBuf(Int) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return ga_offsets(b, ch_skip(b, pos), n - 1, acc.push(pos));
+}
+
+pub List(Str) ga_paths(List(Int) b, Int pos, Int n, ListBuf(Str) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return ga_paths(b, ch_skip(b, pos), n - 1, acc.push(ch_text(b, ch_field(b, pos, "path"))));
+}
+
+pub GA ga_load(List(Int) b) {
+    Int np = ch_field(b, 0, "nodes");
+    CH nh = ch_read(b, np);
+    Int sp = ch_field(b, 0, "source");
+    CH sh = ch_read(b, sp);
+    Int rp = ch_field(b, 0, "roots");
+    return GA {.b = b, .offs = ga_offsets(b, nh.pos, nh.arg, ListBuf()), .paths = ga_paths(b, sh.pos, sh.arg, ListBuf()), .sroots = ch_ints(b, ch_field(b, rp, "source")), .rroots = ch_ints(b, ch_field(b, rp, "residual"))};
+}
+
+// One node's fields, decoded.
+type GN = { Int id; Str kind; Str ty; Str know; Str value; List(Int) deps; Int def; List(Str) effects; List(Int) span; Int from; Str rule; Str reason; Str facts; };
+
+pub Str gn_opt_text(List(Int) b, Int p) { return if (p < 0) { "" } else { ch_text(b, p) }; }
+
+// `reason: {kind, ? dep, ? detail}` as `kind(detail) dep #n`.
+pub Str gn_reason(List(Int) b, Int p) {
+    if (p < 0) { return ""; }
+    Str k = ch_text(b, ch_field(b, p, "kind"));
+    Int dp = ch_field(b, p, "dep");
+    Int tp = ch_field(b, p, "detail");
+    Str d = if (tp < 0) { "" } else { "(" + ch_text(b, tp) + ")" };
+    Str dep = if (dp < 0) { "" } else { " on #" + IntToString(ch_int(b, dp)) };
+    return k + d + dep;
+}
+
+// `facts: [{kind: range, lo, hi}]` as `range [lo, hi]`.
+pub Str gn_facts(List(Int) b, Int p) {
+    if (p < 0) { return ""; }
+    CH h = ch_read(b, p);
+    if (h.arg == 0) { return ""; }
+    Int f = h.pos;
+    Str k = ch_text(b, ch_field(b, f, "kind"));
+    Int lo = ch_field(b, f, "lo");
+    Int hi = ch_field(b, f, "hi");
+    Str r = if (lo >= 0 && hi >= 0) { " [" + IntToString(ch_int(b, lo)) + ", " + IntToString(ch_int(b, hi)) + "]" } else { "" };
+    return k + r;
+}
+
+pub GN gn_read(GA a, Int id) {
+    List(Int) b = a.b;
+    Int p = a.offs[id];
+    Int vp = ch_field(b, p, "value");
+    Int dp = ch_field(b, p, "def");
+    Int dv = ch_field(b, p, "derive");
+    return GN {.id = id, .kind = ch_text(b, ch_field(b, p, "kind")), .ty = ch_text(b, ch_field(b, p, "type")), .know = ch_text(b, ch_field(b, p, "knowledge")), .value = if (vp < 0) { "" } else { ch_show(b, vp) }, .deps = ch_ints(b, ch_field(b, p, "deps")), .def = if (dp < 0) { -1 } else { ch_int(b, dp) }, .effects = ch_texts(b, ch_field(b, p, "effects")), .span = ch_ints(b, ch_field(b, p, "span")), .from = if (dv < 0) { -1 } else { ch_int(b, ch_field(b, dv, "from")) }, .rule = if (dv < 0) { "" } else { ch_text(b, ch_field(b, dv, "rule")) }, .reason = gn_reason(b, ch_field(b, p, "reason")), .facts = gn_facts(b, ch_field(b, p, "facts"))};
+}
+
+pub Str gn_where(GA a, GN n) {
+    Int fi = n.span[0];
+    Str f = if (fi < a.paths.len()) { a.paths[fi] } else { "?" };
+    return f + ":" + IntToString(n.span[1]) + ":" + IntToString(n.span[2]);
+}
+
+// `#id kind: Type knowledge [= value] [because ...] [facts ...]`.
+pub Str gn_line(GA a, GN n) {
+    Str ty = if (n.ty == "") { "" } else { ": " + n.ty };
+    Str v = if (n.value == "") { "" } else { " = " + n.value };
+    Str r = if (n.reason == "") { "" } else { ", " + n.reason };
+    Str f = if (n.facts == "") { "" } else { ", " + n.facts };
+    Str e = if (n.effects.len() == 0) { "" } else { " effects " + str_join(n.effects, ",") };
+    Str d = if (n.from < 0) { "" } else { " <- " + n.rule + " #" + IntToString(n.from) };
+    return "#" + IntToString(n.id) + " " + n.kind + ty + " " + n.know + v + r + f + e + d + " @ " + gn_where(a, n);
+}
+
+// The node, then each node it derives from back to a source node.
+pub Int gn_chain(GA a, Int id, Int depth) {
+    GN n = gn_read(a, id);
+    Str pad = if (depth == 0) { "" } else { str_repeat("  ", depth) + "from " };
+    println(pad + gn_line(a, n));
+    if (n.def >= 0 && depth == 0) { println("  def " + gn_line(a, gn_read(a, n.def))); }
+    if (n.from < 0 || depth > 64) { return 0; }
+    return gn_chain(a, n.from, depth + 1);
+}
+
+// Nodes whose span starts on line `line` of file index fi.
+pub Int ga_at(GA a, Int fi, Int line, Int id, Int shown, Int max) {
+    if (id >= a.offs.len() || (max >= 0 && shown >= max)) { return shown; }
+    List(Int) sp = ch_ints(a.b, ch_field(a.b, a.offs[id], "span"));
+    Bool hit = sp[0] == fi && sp[1] == line;
+    Int _p = if (hit) { gn_chain(a, id, 0) } else { 0 };
+    return ga_at(a, fi, line, id + 1, if (hit) { shown + 1 } else { shown }, max);
+}
+
+pub Int ga_file_idx(List(Str) ps, Str f, Int i) {
+    if (i >= ps.len()) { return -1; }
+    if (ps[i] == f || str_ends_with(ps[i], "/" + f)) { return i; }
+    return ga_file_idx(ps, f, i + 1);
+}
+

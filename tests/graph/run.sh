@@ -136,5 +136,16 @@ if "$COMPILER" tools/resid-why.resid -o "$CK/why" >/dev/null 2>&1 \
 else
     fail=$((fail + 1)); echo "FAIL resid-why build"
 fi
+# resid-graph draws a node's neighbourhood as DOT from the artifact.
+if "$COMPILER" tools/resid-graph.resid -o "$CK/rg" >/dev/null 2>&1; then
+    got="$("$CK/rg" "$CK/ns" --node 0 --depth 1 2>&1)"
+    if [[ "$got" == "digraph kg {"* && "$got" == *"n0 [label="* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL resid-graph --node: $got"
+    fi
+else
+    fail=$((fail + 1)); echo "FAIL resid-graph build"
+fi
 echo "graph: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -325,7 +325,9 @@ and later calls on a line that the scan missed. `tools/resid-why.resid`
 explains the new kinds, and with `--node ID` or `--at FILE:LINE` answers
 from the graph artifact instead (knowledge, value, reason, facts,
 effects, def and the derive chain back to source; 0.3s on the
-self-compile's 35MB artifact). Self-compile: 187 notes (92 provider calls, 95
+self-compile's 35MB artifact). `tools/resid-graph.resid <artifact>
+--node ID [--depth N]` prints a node's neighbourhood as DOT; both tools
+read the artifact through `lib/kgart.resid`. Self-compile: 187 notes (92 provider calls, 95
 whistles).
 
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
