@@ -624,25 +624,26 @@ RdV rd_fold(Str op, RdV l, RdV r, Str orig, Int pos, RdS st) {
     return rd_unk(orig, true, pos, st);
 }
 
+// Spec §30 precedence (higher binds tighter).
 Int rd_prec(Str op) {
-    if (op == "*") { return 7; }
-    if (op == "/") { return 7; }
-    if (op == "%") { return 7; }
-    if (op == "+") { return 6; }
-    if (op == "-") { return 6; }
-    if (op == "<<") { return 5; }
-    if (op == ">>") { return 5; }
-    if (op == "<") { return 4; }
-    if (op == "<=") { return 4; }
-    if (op == ">") { return 4; }
-    if (op == ">=") { return 4; }
-    if (op == "==") { return 3; }
-    if (op == "!=") { return 3; }
-    if (op == "&") { return 2; }
-    if (op == "|") { return 2; }
-    if (op == "^") { return 2; }
-    if (op == "&&") { return 1; }
-    if (op == "||") { return 1; }
+    if (op == "*") { return 12; }
+    if (op == "/") { return 12; }
+    if (op == "%") { return 12; }
+    if (op == "+") { return 11; }
+    if (op == "-") { return 11; }
+    if (op == "<<") { return 10; }
+    if (op == ">>") { return 10; }
+    if (op == "<") { return 9; }
+    if (op == "<=") { return 9; }
+    if (op == ">") { return 9; }
+    if (op == ">=") { return 9; }
+    if (op == "==") { return 8; }
+    if (op == "!=") { return 8; }
+    if (op == "&") { return 7; }
+    if (op == "^") { return 6; }
+    if (op == "|") { return 5; }
+    if (op == "&&") { return 4; }
+    if (op == "||") { return 3; }
     return 0;
 }
 

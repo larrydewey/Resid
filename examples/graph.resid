@@ -1,0 +1,1189 @@
+// graph.resid — the knowledge graph (spec §3): node store, parser from
+// desugared source, printer and a token round-trip check (PLAN-graph-ir G1).
+//
+// Nodes live in parallel columns indexed by id; a node's children are the
+// slice kids[a0 .. a0 + nk). Children are built before their parent, so ids
+// are topologically ordered. Types, annotations and capability lists are
+// kept as text in `text`/`aux` until resolution (G2) gives them nodes.
+//
+// Imported by examples/driver.resid; shares its lexer (lex_tok, Tok),
+// parse_type/PRes, is_known_type, imp_close_paren and find_sqclose_d.
+
+type Kg = { List(Str) kind; List(Str) text; List(Str) aux; List(Int) a0; List(Int) nk; List(Int) sp; List(Int) ep; List(Int) kids; };
+// A parse result: the grown graph, the node built, the position after it.
+type KP = { Kg g; Int id; Int pos; Str err; };
+// A list of child ids built so far.
+type KL = { Kg g; List(Int) ids; Int pos; Str err; };
+
+pub Kg kg_empty() {
+    List(Str) s0 = [];
+    List(Int) i0 = [];
+    return Kg {.kind = s0, .text = s0, .aux = s0, .a0 = i0, .nk = i0, .sp = i0, .ep = i0, .kids = i0};
+}
+
+pub Int kg_count(Kg g) { return g.kind.len(); }
+
+pub Int kg_kid(Kg g, Int id, Int i) { return g.kids[g.a0[id] + i]; }
+
+// Append a node; its id is the node count before the append.
+pub KP kg_add(Kg g, Str kind, Str text, Str aux, List(Int) ks, Int sp, Int pos) {
+    Int id = g.kind.len();
+    Int a0 = g.kids.len();
+    Kg g2 = Kg {.kind = g.kind.concat([kind]), .text = g.text.concat([text]), .aux = g.aux.concat([aux]), .a0 = g.a0.concat([a0]), .nk = g.nk.concat([ks.len()]), .sp = g.sp.concat([sp]), .ep = g.ep.concat([pos]), .kids = g.kids.concat(ks)};
+    return KP {.g = g2, .id = id, .pos = pos, .err = ""};
+}
+
+pub KP kg_fail(Kg g, Int pos, Str msg) {
+    return KP {.g = g, .id = -1, .pos = pos, .err = msg};
+}
+
+KL kl_fail(Kg g, Int pos, Str msg) {
+    List(Int) e = [];
+    return KL {.g = g, .ids = e, .pos = pos, .err = msg};
+}
+
+KL kl_of(KP p, List(Int) ids) {
+    if (p.err != "") { return KL {.g = p.g, .ids = ids, .pos = p.pos, .err = p.err}; }
+    return KL {.g = p.g, .ids = ids.concat([p.id]), .pos = p.pos, .err = ""};
+}
+
+// Start of the token that ends at t.pos.
+Int kg_tstart(Tok t) { return t.pos - str_len(t.text); }
+
+// Start of the next token at or after pos.
+Int kg_at(Str s, Int pos) { return kg_tstart(lex_tok(s, pos)); }
+
+KP kg_leaf(Kg g, Str kind, Tok t) {
+    List(Int) e = [];
+    return kg_add(g, kind, t.text, "", e, kg_tstart(t), t.pos);
+}
+
+KP kg_expect(KP p, Str s, Str tok) {
+    if (p.err != "") { return p; }
+    Tok t = lex_tok(s, p.pos);
+    if (t.text != tok) { return kg_fail(p.g, t.pos, "expected " + tok + ", found " + t.text); }
+    return KP {.g = p.g, .id = p.id, .pos = t.pos, .err = ""};
+}
+
+// ─── Types ──────────────────────────────────────────────────────────
+
+KP kg_type(Str s, Kg g, Int pos) {
+    PRes pt = parse_type(s, pos);
+    if (pt.err != "") { return kg_fail(g, pt.pos, pt.err); }
+    List(Int) e = [];
+    return kg_add(g, "ty", pt.ty, "", e, kg_at(s, pos), pt.pos);
+}
+
+// ─── Expressions ────────────────────────────────────────────────────
+
+pub KP kg_expr(Str s, Kg g, Int pos) {
+    KP u = kg_unary(s, g, pos);
+    if (u.err != "") { return u; }
+    return kg_bin(s, u, kg_at(s, pos), 1);
+}
+
+// Spec §30 precedence (higher binds tighter).
+Int kg_prec(Str op) {
+    if (op == ".." || op == "..=") { return 1; }
+    if (op == "||") { return 3; }
+    if (op == "&&") { return 4; }
+    if (op == "|") { return 5; }
+    if (op == "^") { return 6; }
+    if (op == "&") { return 7; }
+    if (op == "==" || op == "!=") { return 8; }
+    if (op == "<" || op == "<=" || op == ">" || op == ">=") { return 9; }
+    if (op == "<<" || op == ">>") { return 10; }
+    if (op == "+" || op == "-") { return 11; }
+    if (op == "*" || op == "/" || op == "%") { return 12; }
+    return 0;
+}
+
+// `c ? a : b` arms from pos (just after `?`); ok only when a `:` follows.
+KL kg_try_tern(Str s, Kg g, Int pos) {
+    KP a = kg_expr(s, g, pos);
+    if (a.err != "") { return kl_fail(a.g, a.pos, a.err); }
+    Tok c = lex_tok(s, a.pos);
+    if (c.text != ":") { return kl_fail(g, a.pos, "no ternary"); }
+    KP b = kg_expr(s, a.g, c.pos);
+    if (b.err != "") { return kl_fail(b.g, b.pos, b.err); }
+    return KL {.g = b.g, .ids = [a.id, b.id], .pos = b.pos, .err = ""};
+}
+
+// Precedence climbing over binary operators, `?`, `else { }` and ranges.
+KP kg_bin(Str s, KP lhs, Int sp, Int min_prec) {
+    Tok t = lex_tok(s, lhs.pos);
+    Str op = t.text;
+    if (op == "?") {
+        KL tern = kg_try_tern(s, lhs.g, t.pos);
+        if (tern.err == "" && min_prec > 1) { return lhs; }
+        if (tern.err == "") {
+            return kg_add(tern.g, "tern", "", "", [lhs.id].concat(tern.ids), sp, tern.pos);
+        }
+        KP u = kg_add(lhs.g, "try", "", "", [lhs.id], sp, t.pos);
+        return kg_bin(s, u, sp, min_prec);
+    }
+    if (op == "else") {
+        Tok open = lex_tok(s, t.pos);
+        if (open.text != "{") { return kg_fail(lhs.g, open.pos, "expected { after else"); }
+        KP fb = kg_bexpr(s, lhs.g, open.pos);
+        KP fc = kg_expect(fb, s, "}");
+        if (fc.err != "") { return fc; }
+        KP u = kg_add(fc.g, "orelse", "", "", [lhs.id, fb.id], sp, fc.pos);
+        return kg_bin(s, u, sp, min_prec);
+    }
+    Int prec = kg_prec(op);
+    if (prec == 0 || prec < min_prec) { return lhs; }
+    Tok after = lex_tok(s, t.pos);
+    if (op == ".." && after.text == "]") {
+        return kg_add(lhs.g, "rangefrom", "..", "", [lhs.id], sp, t.pos);
+    }
+    KP rhs = kg_unary(s, lhs.g, t.pos);
+    if (rhs.err != "") { return rhs; }
+    Bool right = op == ".." || op == "..=";
+    Int next_min = if (right) { prec } else { prec + 1 };
+    KP rhs2 = kg_bin(s, rhs, kg_tstart(after), next_min);
+    if (rhs2.err != "") { return rhs2; }
+    KP node = kg_add(rhs2.g, "bin", op, "", [lhs.id, rhs2.id], sp, rhs2.pos);
+    return kg_bin(s, node, sp, min_prec);
+}
+
+Bool kg_is_rt_prefix(Str s, Tok t) {
+    if (t.text != "rt") { return false; }
+    Tok nx = lex_tok(s, t.pos);
+    return nx.kind == "ident" || nx.kind == "int" || nx.kind == "float" || nx.kind == "str" || nx.text == "(" || nx.text == "[" || nx.text == "!";
+}
+
+// `(Type)` at pos when it is a cast; the type text, or "".
+PRes kg_cast_head(Str s, Int pos) {
+    Tok open = lex_tok(s, pos);
+    PRes none = PRes {.pos = pos, .ty = "", .err = "no"};
+    if (open.text != "(") { return none; }
+    PRes pt = parse_type(s, open.pos);
+    if (pt.err != "") { return none; }
+    Tok close = lex_tok(s, pt.pos);
+    if (close.text != ")" || !is_known_type(pt.ty)) { return none; }
+    return PRes {.pos = close.pos, .ty = pt.ty, .err = ""};
+}
+
+KP kg_unary(Str s, Kg g, Int pos) {
+    Tok t = lex_tok(s, pos);
+    Int sp = kg_tstart(t);
+    if (kg_is_rt_prefix(s, t)) {
+        KP e = kg_unary(s, g, t.pos);
+        if (e.err != "") { return e; }
+        return kg_add(e.g, "rt", "", "", [e.id], sp, e.pos);
+    }
+    PRes ch = kg_cast_head(s, pos);
+    if (ch.err == "") {
+        List(Int) none = [];
+        KP ty = kg_add(g, "ty", ch.ty, "", none, kg_tstart(lex_tok(s, t.pos)), ch.pos);
+        KP e = kg_unary(s, ty.g, ch.pos);
+        if (e.err != "") { return e; }
+        return kg_add(e.g, "cast", "", "", [ty.id, e.id], sp, e.pos);
+    }
+    if (t.text == "-" || t.text == "+" || t.text == "~" || t.text == "!") {
+        KP e = kg_unary(s, g, t.pos);
+        if (e.err != "") { return e; }
+        return kg_add(e.g, "un", t.text, "", [e.id], sp, e.pos);
+    }
+    KP p = kg_primary(s, g, pos);
+    if (p.err != "") { return p; }
+    return kg_postfix(s, p, sp);
+}
+
+// Comma-separated expressions up to `close`; pos is just after the opener.
+KL kg_args(Str s, Kg g, Int pos, Str close, List(Int) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == close) { return KL {.g = g, .ids = acc, .pos = t.pos, .err = ""}; }
+    KP e = kg_arg(s, g, pos, t);
+    if (e.err != "") { return kl_fail(e.g, e.pos, e.err); }
+    Tok sep = lex_tok(s, e.pos);
+    List(Int) acc2 = acc.concat([e.id]);
+    if (sep.text == ",") { return kg_args(s, e.g, sep.pos, close, acc2); }
+    if (sep.text == close) { return KL {.g = e.g, .ids = acc2, .pos = sep.pos, .err = ""}; }
+    return kl_fail(e.g, sep.pos, "expected , or " + close + ", found " + sep.text);
+}
+
+// An argument; `name = e` is a named argument (e.g. `using = Ord(Int)`).
+KP kg_arg(Str s, Kg g, Int pos, Tok t) {
+    Tok eq = lex_tok(s, t.pos);
+    if (t.kind != "ident" || eq.text != "=") { return kg_expr(s, g, pos); }
+    KP v = kg_expr(s, g, eq.pos);
+    if (v.err != "") { return v; }
+    return kg_add(v.g, "named", t.text, "", [v.id], kg_tstart(t), v.pos);
+}
+
+KP kg_postfix(Str s, KP base, Int sp) {
+    if (base.err != "") { return base; }
+    Tok t = lex_tok(s, base.pos);
+    if (t.text == ".") {
+        Tok f = lex_tok(s, t.pos);
+        Tok p = lex_tok(s, f.pos);
+        if (p.text == "(") {
+            List(Int) acc = [base.id];
+            KL a = kg_args(s, base.g, p.pos, ")", acc);
+            if (a.err != "") { return kg_fail(a.g, a.pos, a.err); }
+            return kg_postfix(s, kg_add(a.g, "mcall", f.text, "", a.ids, sp, a.pos), sp);
+        }
+        return kg_postfix(s, kg_add(base.g, "field", f.text, "", [base.id], sp, f.pos), sp);
+    }
+    if (t.text == "[") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.text == "..") {
+            Tok t3 = lex_tok(s, t2.pos);
+            if (t3.text == "]") {
+                return kg_postfix(s, kg_add(base.g, "slice", "", "", [base.id], sp, t3.pos), sp);
+            }
+            KP hi = kg_expr(s, base.g, t2.pos);
+            KP hc = kg_expect(hi, s, "]");
+            if (hc.err != "") { return hc; }
+            return kg_postfix(s, kg_add(hc.g, "slice", "", "", [base.id, hi.id], sp, hc.pos), sp);
+        }
+        KP ix = kg_expr(s, base.g, t.pos);
+        KP ic = kg_expect(ix, s, "]");
+        if (ic.err != "") { return ic; }
+        return kg_postfix(s, kg_add(ic.g, "index", "", "", [base.id, ix.id], sp, ic.pos), sp);
+    }
+    if (t.text == "(") {
+        List(Int) acc = [base.id];
+        KL a = kg_args(s, base.g, t.pos, ")", acc);
+        if (a.err != "") { return kg_fail(a.g, a.pos, a.err); }
+        return kg_postfix(s, kg_add(a.g, "callv", "", "", a.ids, sp, a.pos), sp);
+    }
+    return base;
+}
+
+// `T { .f = e, ... }`; pos is just after `{`.
+KL kg_finits(Str s, Kg g, Int pos, List(Int) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") { return KL {.g = g, .ids = acc, .pos = t.pos, .err = ""}; }
+    if (t.text != ".") { return kl_fail(g, t.pos, "expected . in struct literal"); }
+    Tok f = lex_tok(s, t.pos);
+    Tok eq = lex_tok(s, f.pos);
+    if (eq.text != "=") { return kl_fail(g, eq.pos, "expected = in struct literal"); }
+    KP v = kg_expr(s, g, eq.pos);
+    if (v.err != "") { return kl_fail(v.g, v.pos, v.err); }
+    KP fi = kg_add(v.g, "finit", f.text, "", [v.id], kg_tstart(t), v.pos);
+    Tok sep = lex_tok(s, v.pos);
+    List(Int) acc2 = acc.concat([fi.id]);
+    if (sep.text == ",") { return kg_finits(s, fi.g, sep.pos, acc2); }
+    if (sep.text == "}") { return KL {.g = fi.g, .ids = acc2, .pos = sep.pos, .err = ""}; }
+    return kl_fail(fi.g, sep.pos, "expected , or } in struct literal");
+}
+
+// Map entries `k: v, ...` after the first key; pos is after its `:`.
+KL kg_entries(Str s, Kg g, Int kpos, Int pos, Int kid, List(Int) acc) {
+    KP v = kg_expr(s, g, pos);
+    if (v.err != "") { return kl_fail(v.g, v.pos, v.err); }
+    KP en = kg_add(v.g, "entry", "", "", [kid, v.id], kpos, v.pos);
+    List(Int) acc2 = acc.concat([en.id]);
+    Tok sep = lex_tok(s, v.pos);
+    if (sep.text == "}") { return KL {.g = en.g, .ids = acc2, .pos = sep.pos, .err = ""}; }
+    if (sep.text != ",") { return kl_fail(en.g, sep.pos, "expected , or } in map literal"); }
+    Tok nx = lex_tok(s, sep.pos);
+    if (nx.text == "}") { return KL {.g = en.g, .ids = acc2, .pos = nx.pos, .err = ""}; }
+    KP k = kg_expr(s, en.g, sep.pos);
+    KP kc = kg_expect(k, s, ":");
+    if (kc.err != "") { return kl_fail(kc.g, kc.pos, kc.err); }
+    return kg_entries(s, kc.g, kg_tstart(nx), kc.pos, k.id, acc2);
+}
+
+// `{}`, `{k: v, ...}` or `{a, b}`; pos is just after `{`.
+KP kg_brace_lit(Str s, Kg g, Int pos, Int sp) {
+    Tok t = lex_tok(s, pos);
+    List(Int) none = [];
+    if (t.text == "}") { return kg_add(g, "emptyb", "", "", none, sp, t.pos); }
+    KP first = kg_expr(s, g, pos);
+    if (first.err != "") { return first; }
+    Tok nx = lex_tok(s, first.pos);
+    if (nx.text == ":") {
+        KL es = kg_entries(s, first.g, kg_tstart(t), nx.pos, first.id, none);
+        if (es.err != "") { return kg_fail(es.g, es.pos, es.err); }
+        return kg_add(es.g, "map", "", "", es.ids, sp, es.pos);
+    }
+    if (nx.text == "}") { return kg_add(first.g, "set", "", "", [first.id], sp, nx.pos); }
+    if (nx.text != ",") { return kg_fail(first.g, nx.pos, "malformed brace literal"); }
+    KL rest = kg_args(s, first.g, nx.pos, "}", [first.id]);
+    if (rest.err != "") { return kg_fail(rest.g, rest.pos, rest.err); }
+    return kg_add(rest.g, "set", "", "", rest.ids, sp, rest.pos);
+}
+
+// Parts of an f-string token: literal segments (fpart) and hole
+// expressions, parsed in place from the enclosing source.
+KL kg_fparts(Str s, Kg g, Str text, Int base, Int i, Int n, Int seg, List(Int) acc) {
+    if (i >= n) {
+        List(Int) none = [];
+        KP last = kg_add(g, "fpart", str_slice(text, seg, n), "", none, base + seg, base + n);
+        return KL {.g = last.g, .ids = acc.concat([last.id]), .pos = base + n, .err = ""};
+    }
+    Int c = str_char_at(text, i);
+    if (c != 123) { return kg_fparts(s, g, text, base, i + 1, n, seg, acc); }
+    Int e = fstring_hole_end(text, i + 1, n, 1);
+    if (e < 0) { return kl_fail(g, base + i, "unterminated f-string hole"); }
+    List(Int) none = [];
+    KP part = kg_add(g, "fpart", str_slice(text, seg, i), "", none, base + seg, base + i);
+    KP h = kg_expr(s, part.g, base + i + 1);
+    if (h.err != "") { return kl_fail(h.g, h.pos, h.err); }
+    Tok close = lex_tok(s, h.pos);
+    Bool spec = close.text == ":";
+    if (!spec && close.pos != base + e + 1) { return kl_fail(h.g, h.pos, "f-string hole is not one expression"); }
+    List(Int) acc2 = acc.concat([part.id, h.id]);
+    if (!spec) { return kg_fparts(s, h.g, text, base, e + 1, n, e + 1, acc2); }
+    // `{e:spec}`: the format spec is kept as text.
+    KP fs = kg_add(h.g, "fspec", str_slice(text, close.pos - base, e), "", none, close.pos, base + e);
+    return kg_fparts(s, fs.g, text, base, e + 1, n, e + 1, acc2.concat([fs.id]));
+}
+
+KP kg_fstring(Str s, Kg g, Tok t) {
+    Int base = kg_tstart(t);
+    Int n = str_len(t.text) - 1;
+    List(Int) none = [];
+    KL ps = kg_fparts(s, g, t.text, base, 2, n, 2, none);
+    if (ps.err != "") { return kg_fail(ps.g, ps.pos, ps.err); }
+    return kg_add(ps.g, "fstr", "", "", ps.ids, base, t.pos);
+}
+
+// `if (c) { e } [else if ... | else { e }]` as an expression.
+KP kg_ifx(Str s, Kg g, Int pos, Int sp) {
+    Tok open = lex_tok(s, pos);
+    KP c = kg_expr(s, g, open.pos);
+    KP cc = kg_expect(c, s, ")");
+    KP ob = kg_expect(cc, s, "{");
+    if (ob.err != "") { return ob; }
+    KP tb = kg_bexpr(s, ob.g, ob.pos);
+    KP tc = kg_expect(tb, s, "}");
+    if (tc.err != "") { return tc; }
+    Tok kw = lex_tok(s, tc.pos);
+    if (kw.text != "else") { return kg_add(tc.g, "ifx", "", "", [c.id, tb.id], sp, tc.pos); }
+    Tok nx = lex_tok(s, kw.pos);
+    if (nx.text == "if") {
+        KP ei = kg_ifx(s, tc.g, nx.pos, kg_tstart(nx));
+        if (ei.err != "") { return ei; }
+        return kg_add(ei.g, "ifx", "", "", [c.id, tb.id, ei.id], sp, ei.pos);
+    }
+    if (nx.text != "{") { return kg_fail(tc.g, nx.pos, "expected { after else"); }
+    KP eb = kg_bexpr(s, tc.g, nx.pos);
+    KP ec = kg_expect(eb, s, "}");
+    if (ec.err != "") { return ec; }
+    return kg_add(ec.g, "ifx", "", "", [c.id, tb.id, eb.id], sp, ec.pos);
+}
+
+// Match arms after `{`: `_ => e`, `V => e`, `V(n) => e`, comma-separated.
+KL kg_arms(Str s, Kg g, Int pos, List(Int) acc) {
+    Tok a = lex_tok(s, pos);
+    if (a.text == "}") { return KL {.g = g, .ids = acc, .pos = a.pos, .err = ""}; }
+    if (a.kind != "ident") { return kl_fail(g, a.pos, "match arm pattern must be a variant name or _"); }
+    Tok o = lex_tok(s, a.pos);
+    Bool bound = o.text == "(";
+    Tok nm = lex_tok(s, o.pos);
+    Tok cp = lex_tok(s, nm.pos);
+    Int apos = if (bound) { cp.pos } else { a.pos };
+    Str bname = if (bound) { nm.text } else { "" };
+    if (bound && cp.text != ")") { return kl_fail(g, cp.pos, "expected ) in match arm pattern"); }
+    Tok ar = lex_tok(s, apos);
+    if (ar.text != "=>") { return kl_fail(g, ar.pos, "expected => in match arm"); }
+    KP body = kg_expr(s, g, ar.pos);
+    if (body.err != "") { return kl_fail(body.g, body.pos, body.err); }
+    KP arm = kg_add(body.g, "arm", a.text, bname, [body.id], kg_tstart(a), body.pos);
+    List(Int) acc2 = acc.concat([arm.id]);
+    Tok sep = lex_tok(s, body.pos);
+    if (sep.text == ",") { return kg_arms(s, arm.g, sep.pos, acc2); }
+    if (sep.text == "}") { return KL {.g = arm.g, .ids = acc2, .pos = sep.pos, .err = ""}; }
+    return kl_fail(arm.g, sep.pos, "expected , or } after match arm");
+}
+
+KP kg_match(Str s, Kg g, Int pos, Int sp) {
+    Tok t = lex_tok(s, pos);
+    KP sc = kg_match_sc(s, g, pos, t);
+    KP ob = kg_expect(sc, s, "{");
+    if (ob.err != "") { return ob; }
+    List(Int) acc = [sc.id];
+    KL arms = kg_arms(s, ob.g, ob.pos, acc);
+    if (arms.err != "") { return kg_fail(arms.g, arms.pos, arms.err); }
+    return kg_add(arms.g, "match", "", "", arms.ids, sp, arms.pos);
+}
+
+// Scrutinee: `(e)`, `f(args)` or a name (so the `{` is not a struct literal).
+KP kg_match_sc(Str s, Kg g, Int pos, Tok t) {
+    if (t.text == "(") { return kg_primary(s, g, pos); }
+    Tok t2 = lex_tok(s, t.pos);
+    if (t2.text == "(") { return kg_primary(s, g, pos); }
+    return kg_leaf(g, "ref", t);
+}
+
+// `lambda(a, b) { e }`
+KP kg_lambda(Str s, Kg g, Int pos, Int sp) {
+    Tok open = lex_tok(s, pos);
+    if (open.text != "(") { return kg_fail(g, open.pos, "expected ( after lambda"); }
+    List(Int) none = [];
+    KL ps = kg_lparams(s, g, open.pos, none);
+    if (ps.err != "") { return kg_fail(ps.g, ps.pos, ps.err); }
+    Tok ob = lex_tok(s, ps.pos);
+    if (ob.text != "{") { return kg_fail(ps.g, ob.pos, "expected { after lambda parameters"); }
+    KP body = kg_bexpr(s, ps.g, ob.pos);
+    KP bc = kg_expect(body, s, "}");
+    if (bc.err != "") { return bc; }
+    return kg_add(bc.g, "lambda", "", "", ps.ids.concat([body.id]), sp, bc.pos);
+}
+
+KL kg_lparams(Str s, Kg g, Int pos, List(Int) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") { return KL {.g = g, .ids = acc, .pos = t.pos, .err = ""}; }
+    KP p = kg_leaf(g, "lparam", t);
+    Tok sep = lex_tok(s, t.pos);
+    List(Int) acc2 = acc.concat([p.id]);
+    if (sep.text == ",") { return kg_lparams(s, p.g, sep.pos, acc2); }
+    if (sep.text == ")") { return KL {.g = p.g, .ids = acc2, .pos = sep.pos, .err = ""}; }
+    return kl_fail(p.g, sep.pos, "expected , or ) in lambda parameters");
+}
+
+Bool kg_lit_kind(Str k) {
+    return k == "int" || k == "float" || k == "dec" || k == "str" || k == "raw" || k == "bytes" || k == "char";
+}
+
+KP kg_primary(Str s, Kg g, Int pos) {
+    Tok t = lex_tok(s, pos);
+    Int sp = kg_tstart(t);
+    List(Int) none = [];
+    if (kg_lit_kind(t.kind)) { return kg_add(g, "lit", t.text, t.kind, none, sp, t.pos); }
+    if (t.kind == "fstring") { return kg_fstring(s, g, t); }
+    if (t.text == "true" || t.text == "false") { return kg_add(g, "lit", t.text, "bool", none, sp, t.pos); }
+    if (t.text == "spawn") {
+        Tok sp1 = lex_tok(s, t.pos);
+        if (sp1.text == "(") {
+            Int cend = imp_close_paren(s, sp1.pos, 0);
+            Str caps = str_trim(str_slice(s, sp1.pos, cend - 1));
+            KP body = kg_block(s, g, cend);
+            if (body.err != "") { return body; }
+            return kg_add(body.g, "spawn", "", caps, [body.id], sp, body.pos);
+        }
+    }
+    if (t.text == "if") { return kg_ifx(s, g, t.pos, sp); }
+    if (t.text == "match") { return kg_match(s, g, t.pos, sp); }
+    if (t.text == "lambda") { return kg_lambda(s, g, t.pos, sp); }
+    if (t.kind == "ident") {
+        Tok t2 = lex_tok(s, t.pos);
+        if (t2.text == "(") {
+            KL a = kg_args(s, g, t2.pos, ")", none);
+            if (a.err != "") { return kg_fail(a.g, a.pos, a.err); }
+            return kg_add(a.g, "call", t.text, "", a.ids, sp, a.pos);
+        }
+        if (t2.text == "{") {
+            KL fs = kg_finits(s, g, t2.pos, none);
+            if (fs.err != "") { return kg_fail(fs.g, fs.pos, fs.err); }
+            return kg_add(fs.g, "struct", t.text, "", fs.ids, sp, fs.pos);
+        }
+        return kg_leaf(g, "ref", t);
+    }
+    if (t.text == "(") {
+        KP e = kg_expr(s, g, t.pos);
+        KP c = kg_expect(e, s, ")");
+        if (c.err != "") { return c; }
+        return kg_add(c.g, "paren", "", "", [e.id], sp, c.pos);
+    }
+    if (t.text == "[") {
+        KL a = kg_args(s, g, t.pos, "]", none);
+        if (a.err != "") { return kg_fail(a.g, a.pos, a.err); }
+        return kg_add(a.g, "list", "", "", a.ids, sp, a.pos);
+    }
+    if (t.text == "{") { return kg_brace_lit(s, g, t.pos, sp); }
+    return kg_fail(g, t.pos, "unexpected token " + t.text);
+}
+
+// ─── Expression blocks: `{ T x = e; ... e [;] }` bodies ─────────────
+
+// A binding head `Type name =` (or `Type[pred] name =`) at pos.
+type KBH = { Bool ok; Str ty; Int typos; Int tyend; Str name; Int eqpos; Int pstart; Int pend; };
+
+KBH kbh_none() {
+    return KBH {.ok = false, .ty = "", .typos = 0, .tyend = 0, .name = "", .eqpos = 0, .pstart = 0, .pend = 0};
+}
+
+KBH kg_bind_head(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind != "ident") { return kbh_none(); }
+    Tok t2 = lex_tok(s, t.pos);
+    if (t2.text == "[") {
+        Tok close = find_sqclose_d(s, t2.pos);
+        if (close.kind == "eof") { return kbh_none(); }
+        Tok nm = lex_tok(s, close.pos);
+        Tok eq = lex_tok(s, nm.pos);
+        if (nm.kind != "ident" || eq.text != "=") { return kbh_none(); }
+        return KBH {.ok = true, .ty = t.text, .typos = kg_tstart(t), .tyend = t.pos, .name = nm.text, .eqpos = eq.pos, .pstart = t2.pos, .pend = kg_tstart(close)};
+    }
+    PRes ty = parse_type(s, pos);
+    if (ty.err != "") { return kbh_none(); }
+    Tok nm = lex_tok(s, ty.pos);
+    Tok eq = lex_tok(s, nm.pos);
+    if (nm.kind != "ident" || eq.text != "=") { return kbh_none(); }
+    return KBH {.ok = true, .ty = ty.ty, .typos = kg_tstart(t), .tyend = ty.pos, .name = nm.text, .eqpos = eq.pos, .pstart = -1, .pend = -1};
+}
+
+// A binding from its head; `aux` carries `@residual`. Ends after the value.
+KP kg_bind(Str s, Kg g, KBH h, Str aux, Int sp) {
+    List(Int) none = [];
+    KP ty = kg_add(g, "ty", h.ty, "", none, h.typos, h.tyend);
+    KP pred = if (h.pstart >= 0) { kg_expr(s, ty.g, h.pstart) } else { ty };
+    if (pred.err != "") { return pred; }
+    KP v = kg_expr(s, pred.g, h.eqpos);
+    if (v.err != "") { return v; }
+    List(Int) ks = if (h.pstart >= 0) { [ty.id, pred.id, v.id] } else { [ty.id, v.id] };
+    Str kind = if (h.pstart >= 0) { "rbind" } else { "bind" };
+    return kg_add(v.g, kind, h.name, aux, ks, sp, v.pos);
+}
+
+// Expression-block body after `{`; stops before the closing `}`.
+KP kg_bexpr(Str s, Kg g, Int pos) {
+    List(Int) none = [];
+    return kg_bexpr_at(s, g, pos, kg_at(s, pos), none);
+}
+
+KP kg_bexpr_at(Str s, Kg g, Int pos, Int sp, List(Int) acc) {
+    KBH h = kg_bind_head(s, pos);
+    if (h.ok) {
+        KP b = kg_bind(s, g, h, "", kg_at(s, pos));
+        KP bs = kg_expect(b, s, ";");
+        if (bs.err != "") { return bs; }
+        return kg_bexpr_at(s, bs.g, bs.pos, sp, acc.concat([b.id]));
+    }
+    KP e = kg_expr(s, g, pos);
+    if (e.err != "") { return e; }
+    Tok semi = lex_tok(s, e.pos);
+    Tok after = lex_tok(s, semi.pos);
+    Bool trail = semi.text == ";" && after.text == "}";
+    Int end = if (trail) { semi.pos } else { e.pos };
+    return kg_add(e.g, "bexpr", "", if (trail) { ";" } else { "" }, acc.concat([e.id]), sp, end);
+}
+
+// ─── Statements ─────────────────────────────────────────────────────
+
+pub KP kg_block(Str s, Kg g, Int pos) {
+    Tok open = lex_tok(s, pos);
+    if (open.text != "{") { return kg_fail(g, open.pos, "expected {, found " + open.text); }
+    List(Int) none = [];
+    KL st = kg_stmts(s, g, open.pos, none);
+    if (st.err != "") { return kg_fail(st.g, st.pos, st.err); }
+    return kg_add(st.g, "block", "", "", st.ids, kg_tstart(open), st.pos);
+}
+
+KL kg_stmts(Str s, Kg g, Int pos, List(Int) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") { return KL {.g = g, .ids = acc, .pos = t.pos, .err = ""}; }
+    if (t.kind == "eof") { return kl_fail(g, t.pos, "unexpected end of input in block"); }
+    KP st = kg_stmt(s, g, pos);
+    if (st.err != "") { return kl_fail(st.g, st.pos, st.err); }
+    return kg_stmts(s, st.g, st.pos, acc.concat([st.id]));
+}
+
+KP kg_semi(KP p, Str s) { return kg_expect(p, s, ";"); }
+
+// `V(name) = e` pattern heads (if/while conditions, statements).
+type KPat = { Bool ok; Str v; Str name; Int eqpos; };
+
+KPat kg_pat_head(Str s, Int pos) {
+    KPat no = KPat {.ok = false, .v = "", .name = "", .eqpos = 0};
+    Tok v = lex_tok(s, pos);
+    if (v.text != "Some" && v.text != "Ok" && v.text != "Err") { return no; }
+    Tok o = lex_tok(s, v.pos);
+    Tok nm = lex_tok(s, o.pos);
+    Tok c = lex_tok(s, nm.pos);
+    Tok eq = lex_tok(s, c.pos);
+    if (o.text != "(" || nm.kind != "ident" || c.text != ")" || eq.text != "=") { return no; }
+    return KPat {.ok = true, .v = v.text, .name = nm.text, .eqpos = eq.pos};
+}
+
+// A condition inside `( )`: a pattern head or an expression.
+KP kg_cond(Str s, Kg g, Int pos) {
+    KPat ph = kg_pat_head(s, pos);
+    if (!ph.ok) { return kg_expr(s, g, pos); }
+    KP v = kg_expr(s, g, ph.eqpos);
+    if (v.err != "") { return v; }
+    return kg_add(v.g, "pat", ph.v, ph.name, [v.id], kg_at(s, pos), v.pos);
+}
+
+KP kg_if(Str s, Kg g, Int pos, Int sp) {
+    Tok open = lex_tok(s, pos);
+    if (open.text != "(") { return kg_fail(g, open.pos, "expected ( after if"); }
+    KP c = kg_cond(s, g, open.pos);
+    KP cc = kg_expect(c, s, ")");
+    if (cc.err != "") { return cc; }
+    KP th = kg_stmt(s, cc.g, cc.pos);
+    if (th.err != "") { return th; }
+    Tok kw = lex_tok(s, th.pos);
+    if (kw.text != "else") { return kg_add(th.g, "if", "", "", [c.id, th.id], sp, th.pos); }
+    KP el = kg_stmt(s, th.g, kw.pos);
+    if (el.err != "") { return el; }
+    return kg_add(el.g, "if", "", "", [c.id, th.id, el.id], sp, el.pos);
+}
+
+KP kg_while(Str s, Kg g, Int pos, Int sp) {
+    Tok open = lex_tok(s, pos);
+    KP c = kg_cond(s, g, open.pos);
+    KP cc = kg_expect(c, s, ")");
+    if (cc.err != "") { return cc; }
+    KP body = kg_stmt(s, cc.g, cc.pos);
+    if (body.err != "") { return body; }
+    return kg_add(body.g, "while", "", "", [c.id, body.id], sp, body.pos);
+}
+
+// `for (T x in e) stmt`
+KP kg_for(Str s, Kg g, Int pos, Int sp) {
+    Tok open = lex_tok(s, pos);
+    KP ty = kg_type(s, g, open.pos);
+    if (ty.err != "") { return ty; }
+    Tok nm = lex_tok(s, ty.pos);
+    Tok kw = lex_tok(s, nm.pos);
+    if (kw.text != "in") { return kg_fail(ty.g, kw.pos, "expected `in` in for statement"); }
+    KP it = kg_expr(s, ty.g, kw.pos);
+    KP ic = kg_expect(it, s, ")");
+    if (ic.err != "") { return ic; }
+    KP body = kg_stmt(s, ic.g, ic.pos);
+    if (body.err != "") { return body; }
+    return kg_add(body.g, "for", nm.text, "", [ty.id, it.id, body.id], sp, body.pos);
+}
+
+// `with (T a = e, ...) stmt`; pos is after `(`.
+KL kg_withbinds(Str s, Kg g, Int pos, List(Int) acc) {
+    KBH h = kg_bind_head(s, pos);
+    if (!h.ok) { return kl_fail(g, pos, "expected `Type name = expr` in with"); }
+    KP b = kg_bind(s, g, h, "", kg_at(s, pos));
+    if (b.err != "") { return kl_fail(b.g, b.pos, b.err); }
+    Tok sep = lex_tok(s, b.pos);
+    List(Int) acc2 = acc.concat([b.id]);
+    if (sep.text == ",") { return kg_withbinds(s, b.g, sep.pos, acc2); }
+    if (sep.text == ")") { return KL {.g = b.g, .ids = acc2, .pos = sep.pos, .err = ""}; }
+    return kl_fail(b.g, sep.pos, "expected , or ) in with");
+}
+
+KP kg_with(Str s, Kg g, Int pos, Int sp) {
+    Tok open = lex_tok(s, pos);
+    if (open.text != "(") { return kg_fail(g, open.pos, "expected ( after with"); }
+    List(Int) none = [];
+    KL bs = kg_withbinds(s, g, open.pos, none);
+    if (bs.err != "") { return kg_fail(bs.g, bs.pos, bs.err); }
+    KP body = kg_stmt(s, bs.g, bs.pos);
+    if (body.err != "") { return body; }
+    return kg_add(body.g, "with", "", "", bs.ids.concat([body.id]), sp, body.pos);
+}
+
+// `T { a, b } = e;` names after `{`.
+KL kg_dnames(Str s, Kg g, Int pos, List(Int) acc) {
+    Tok n = lex_tok(s, pos);
+    if (n.kind != "ident") { return kl_fail(g, n.pos, "expected field name in destructuring"); }
+    KP nd = kg_leaf(g, "name", n);
+    Tok sep = lex_tok(s, n.pos);
+    List(Int) acc2 = acc.concat([nd.id]);
+    if (sep.text == ",") { return kg_dnames(s, nd.g, sep.pos, acc2); }
+    if (sep.text == "}") { return KL {.g = nd.g, .ids = acc2, .pos = sep.pos, .err = ""}; }
+    return kl_fail(nd.g, sep.pos, "expected , or } in destructuring");
+}
+
+Bool kg_is_destructure(Str s, Tok t) {
+    if (t.kind != "ident") { return false; }
+    Tok b = lex_tok(s, t.pos);
+    if (b.text != "{") { return false; }
+    Tok f = lex_tok(s, b.pos);
+    Tok sep = lex_tok(s, f.pos);
+    return f.kind == "ident" && (sep.text == "," || sep.text == "}");
+}
+
+pub KP kg_stmt(Str s, Kg g, Int pos) {
+    Tok t = lex_tok(s, pos);
+    Int sp = kg_tstart(t);
+    List(Int) none = [];
+    if (t.text == "return") {
+        Tok e = lex_tok(s, t.pos);
+        if (e.text == ";") { return kg_add(g, "ret", "", "", none, sp, e.pos); }
+        KP v = kg_expr(s, g, t.pos);
+        if (v.err != "") { return v; }
+        KP r = kg_add(v.g, "ret", "", "", [v.id], sp, v.pos);
+        return kg_semi(r, s);
+    }
+    if (t.text == "@") {
+        Tok an = lex_tok(s, t.pos);
+        KBH h = kg_bind_head(s, an.pos);
+        if (an.text == "residual" && h.ok) { return kg_semi(kg_bind(s, g, h, "@residual", sp), s); }
+    }
+    if (t.text == "break") { return kg_semi(kg_add(g, "brk", "", "", none, sp, t.pos), s); }
+    if (t.text == "continue") { return kg_semi(kg_add(g, "cont", "", "", none, sp, t.pos), s); }
+    if (t.text == "if") { return kg_if(s, g, t.pos, sp); }
+    if (t.text == "while") { return kg_while(s, g, t.pos, sp); }
+    if (t.text == "with") { return kg_with(s, g, t.pos, sp); }
+    if (t.text == "for") { return kg_for(s, g, t.pos, sp); }
+    if (t.text == "{") { return kg_block(s, g, pos); }
+    KPat ph = kg_pat_head(s, pos);
+    if (ph.ok) {
+        KP v = kg_expr(s, g, ph.eqpos);
+        if (v.err != "") { return v; }
+        return kg_semi(kg_add(v.g, "letpat", ph.v, ph.name, [v.id], sp, v.pos), s);
+    }
+    if (kg_is_destructure(s, t)) {
+        KL ns = kg_dnames(s, g, lex_tok(s, t.pos).pos, none);
+        if (ns.err != "") { return kg_fail(ns.g, ns.pos, ns.err); }
+        Tok eq = lex_tok(s, ns.pos);
+        if (eq.text != "=") { return kg_fail(ns.g, eq.pos, "expected = after destructuring pattern"); }
+        KP v = kg_expr(s, ns.g, eq.pos);
+        if (v.err != "") { return v; }
+        return kg_semi(kg_add(v.g, "destr", t.text, "", ns.ids.concat([v.id]), sp, v.pos), s);
+    }
+    if (t.text == "_") {
+        Tok eq = lex_tok(s, t.pos);
+        if (eq.text == "=") {
+            KP v = kg_expr(s, g, eq.pos);
+            if (v.err != "") { return v; }
+            return kg_semi(kg_add(v.g, "discard", "", "", [v.id], sp, v.pos), s);
+        }
+    }
+    KBH h = kg_bind_head(s, pos);
+    if (h.ok) { return kg_semi(kg_bind(s, g, h, "", sp), s); }
+    KP e = kg_expr(s, g, pos);
+    if (e.err != "") { return e; }
+    return kg_semi(kg_add(e.g, "estmt", "", "", [e.id], sp, e.pos), s);
+}
+
+// ─── Declarations ───────────────────────────────────────────────────
+
+// End of the annotation / `pub` prefix of a declaration.
+Int kg_prefix_end(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "pub") { return kg_prefix_end(s, t.pos); }
+    if (t.text != "@") { return pos; }
+    Tok an = lex_tok(s, t.pos);
+    Tok lp = lex_tok(s, an.pos);
+    if (lp.text != "(") { return kg_prefix_end(s, an.pos); }
+    return kg_prefix_end(s, imp_close_paren(s, lp.pos, 0));
+}
+
+KL kg_params(Str s, Kg g, Int pos, List(Int) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == ")") { return KL {.g = g, .ids = acc, .pos = t.pos, .err = ""}; }
+    KP ty = kg_type(s, g, pos);
+    if (ty.err != "") { return kl_fail(ty.g, ty.pos, ty.err); }
+    Tok nm = lex_tok(s, ty.pos);
+    if (nm.kind != "ident") { return kl_fail(ty.g, nm.pos, "expected parameter name"); }
+    KP p = kg_add(ty.g, "param", nm.text, "", [ty.id], kg_tstart(t), nm.pos);
+    Tok sep = lex_tok(s, nm.pos);
+    List(Int) acc2 = acc.concat([p.id]);
+    if (sep.text == ",") { return kg_params(s, p.g, sep.pos, acc2); }
+    if (sep.text == ")") { return KL {.g = p.g, .ids = acc2, .pos = sep.pos, .err = ""}; }
+    return kl_fail(p.g, sep.pos, "expected , or ) in parameters");
+}
+
+// `Ret name(params) { body }`, with its raw prefix in aux.
+KP kg_fn(Str s, Kg g, Int pos, Str prefix, Int sp) {
+    KP rty = kg_type(s, g, pos);
+    if (rty.err != "") { return rty; }
+    Tok nm = lex_tok(s, rty.pos);
+    Tok open = lex_tok(s, nm.pos);
+    if (nm.kind != "ident" || open.text != "(") { return kg_fail(rty.g, open.pos, "expected a function declaration"); }
+    KL ps = kg_params(s, rty.g, open.pos, [rty.id]);
+    if (ps.err != "") { return kg_fail(ps.g, ps.pos, ps.err); }
+    KP body = kg_block(s, ps.g, ps.pos);
+    if (body.err != "") { return body; }
+    return kg_add(body.g, "fn", nm.text, prefix, ps.ids.concat([body.id]), sp, body.pos);
+}
+
+// Struct fields `Type name;` up to `}`.
+KL kg_fields(Str s, Kg g, Int pos, List(Int) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") { return KL {.g = g, .ids = acc, .pos = t.pos, .err = ""}; }
+    KP ty = kg_type(s, g, pos);
+    if (ty.err != "") { return kl_fail(ty.g, ty.pos, ty.err); }
+    Tok nm = lex_tok(s, ty.pos);
+    Tok semi = lex_tok(s, nm.pos);
+    if (nm.kind != "ident" || semi.text != ";") { return kl_fail(ty.g, semi.pos, "expected `Type name;` in struct"); }
+    KP f = kg_add(ty.g, "sfield", nm.text, "", [ty.id], kg_tstart(t), semi.pos);
+    return kg_fields(s, f.g, semi.pos, acc.concat([f.id]));
+}
+
+KL kg_variants(Kg g, List(Str) names, List(Str) tys, Int i, Int sp, Int ep, List(Int) acc) {
+    if (i >= names.len()) { return KL {.g = g, .ids = acc, .pos = ep, .err = ""}; }
+    List(Int) none = [];
+    KP v = kg_add(g, "variant", names[i], tys[i], none, sp, ep);
+    return kg_variants(v.g, names, tys, i + 1, sp, ep, acc.concat([v.id]));
+}
+
+// `type N[(G)] = { ... };` | `A(T) | B;` | `T;` | `T[pred];` | `T where pred;`
+KP kg_typedecl(Str s, Kg g, Int pos, Str prefix, Int sp) {
+    Tok nm = lex_tok(s, pos);
+    Tok gen = lex_tok(s, nm.pos);
+    Int gclose = if (gen.text == "(") { imp_close_paren(s, gen.pos, 0) } else { nm.pos };
+    Str gparams = if (gen.text == "(") { str_slice(s, kg_tstart(gen), gclose) } else { "" };
+    Str aux = if (prefix == "") { gparams } else { prefix + "\x1f" + gparams };
+    Tok eq = lex_tok(s, gclose);
+    if (eq.text != "=") { return kg_fail(g, eq.pos, "expected = in type declaration"); }
+    Tok br = lex_tok(s, eq.pos);
+    List(Int) none = [];
+    if (br.text == "{") {
+        KL fs = kg_fields(s, g, br.pos, none);
+        if (fs.err != "") { return kg_fail(fs.g, fs.pos, fs.err); }
+        KP st = kg_add(fs.g, "struct_t", nm.text, aux, fs.ids, sp, fs.pos);
+        return kg_semi(st, s);
+    }
+    VLRes vl = parse_variant_list(s, eq.pos, "", "", 0);
+    if (vl.ok) {
+        KL vs = kg_variants(g, str_split(vl.vnames, "|"), str_split(vl.vtypes, "|"), 0, kg_tstart(br), vl.pos, none);
+        return kg_add(vs.g, "sum_t", nm.text, aux, vs.ids, sp, vl.pos);
+    }
+    KP ty = kg_type(s, g, eq.pos);
+    if (ty.err != "") { return ty; }
+    Tok after = lex_tok(s, ty.pos);
+    if (after.text == ";") { return kg_add(ty.g, "alias_t", nm.text, aux, [ty.id], sp, after.pos); }
+    if (after.text == "[") {
+        KP pr = kg_expr(s, ty.g, after.pos);
+        KP pc = kg_expect(pr, s, "]");
+        if (pc.err != "") { return pc; }
+        return kg_semi(kg_add(pc.g, "ctype_t", nm.text, aux, [ty.id, pr.id], sp, pc.pos), s);
+    }
+    if (after.text == "where") {
+        KP pr = kg_expr(s, ty.g, after.pos);
+        if (pr.err != "") { return pr; }
+        return kg_semi(kg_add(pr.g, "cwhere_t", nm.text, aux, [ty.id, pr.id], sp, pr.pos), s);
+    }
+    return kg_fail(ty.g, after.pos, "malformed type declaration");
+}
+
+KL kg_decls(Str s, Kg g, Int pos, Str close, List(Int) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof" || t.text == close) { return KL {.g = g, .ids = acc, .pos = t.pos, .err = ""}; }
+    if (t.text == ";") { return kg_decls(s, g, t.pos, close, acc); }
+    KP d = kg_decl(s, g, pos);
+    if (d.err != "") { return kl_fail(d.g, d.pos, d.err); }
+    return kg_decls(s, d.g, d.pos, close, acc.concat([d.id]));
+}
+
+KP kg_decl(Str s, Kg g, Int pos) {
+    Int sp = kg_at(s, pos);
+    Int pe = kg_prefix_end(s, pos);
+    Str prefix = str_trim(str_slice(s, sp, kg_at(s, pe)));
+    Tok t = lex_tok(s, pe);
+    List(Int) none = [];
+    if (t.text == "sandbox") {
+        Tok lp = lex_tok(s, t.pos);
+        Int cend = imp_close_paren(s, lp.pos, 0);
+        Str caps = str_trim(str_slice(s, lp.pos, cend - 1));
+        Tok lb = lex_tok(s, cend);
+        if (lb.text != "{") { return kg_fail(g, lb.pos, "expected { after sandbox capabilities"); }
+        KL ds = kg_decls(s, g, lb.pos, "}", none);
+        if (ds.err != "") { return kg_fail(ds.g, ds.pos, ds.err); }
+        return kg_add(ds.g, "sandbox", "", caps, ds.ids, sp, ds.pos);
+    }
+    if (t.text == "type") { return kg_typedecl(s, g, t.pos, prefix, sp); }
+    Tok tn = lex_tok(s, t.pos);
+    if (t.text == "test" && tn.kind == "str") {
+        KP body = kg_block(s, g, tn.pos);
+        if (body.err != "") { return body; }
+        return kg_add(body.g, "test", tn.text, prefix, [body.id], sp, body.pos);
+    }
+    BRes bh = behavior_decl_at(s, pe);
+    if (bh.err == "") { return kg_add(g, "behavior", bh.name, prefix + "|" + bh.param + "|" + bh.impl, none, sp, bh.pos); }
+    return kg_fn(s, g, pe, prefix, sp);
+}
+
+// Parse a whole (desugared) program into a graph rooted at a `unit` node.
+pub KP kg_parse(Str s) {
+    List(Int) none = [];
+    KL ds = kg_decls(s, kg_empty(), 0, "", none);
+    if (ds.err != "") { return kg_fail(ds.g, ds.pos, ds.err); }
+    return kg_add(ds.g, "unit", "", "", ds.ids, 0, ds.pos);
+}
+
+// ─── Printer ────────────────────────────────────────────────────────
+// Prints source whose token stream equals the parsed one (see kg_roundtrip).
+
+Str kg_pr_list(Kg g, Int id, Int from, Int to, Str sep, Str sb) {
+    if (from >= to) { return sb; }
+    Str sb1 = kg_pr(g, kg_kid(g, id, from), sb);
+    Str sb2 = if (from + 1 < to) { str_sb_append(sb1, sep) } else { sb1 };
+    return kg_pr_list(g, id, from + 1, to, sep, sb2);
+}
+
+Str kg_pr_all(Kg g, Int id, Str sep, Str sb) { return kg_pr_list(g, id, 0, g.nk[id], sep, sb); }
+
+Str kg_pr_k(Kg g, Int id, Int i, Str sb) { return kg_pr(g, kg_kid(g, id, i), sb); }
+
+Str kg_ap(Str sb, Str a) { return str_sb_append(sb, a); }
+
+// Split "a|b|c" field i.
+Str kg_part(Str s, Int i) {
+    List(Str) ps = str_split(s, "|");
+    if (i >= ps.len()) { return ""; }
+    return ps[i];
+}
+
+Str kg_pr_type_head(Kg g, Int id, Str sb) {
+    Str aux = g.aux[id];
+    Bool hasp = str_contains(aux, "\x1f");
+    List(Str) ps = str_split(aux, "\x1f");
+    Str prefix = if (hasp) { ps[0] } else { "" };
+    Str gen = if (hasp) { ps[1] } else { aux };
+    Str p1 = if (prefix == "") { "" } else { prefix + " " };
+    return kg_ap(sb, p1 + "type " + g.text[id] + gen + " = ");
+}
+
+Str kg_pr_variants(Kg g, Int id, Int i, Str sb) {
+    if (i >= g.nk[id]) { return sb; }
+    Int v = kg_kid(g, id, i);
+    Str pay = if (g.aux[v] == "") { "" } else { "(" + g.aux[v] + ")" };
+    Str sep = if (i + 1 < g.nk[id]) { " | " } else { ";" };
+    return kg_pr_variants(g, id, i + 1, kg_ap(sb, g.text[v] + pay + sep));
+}
+
+Str kg_pr_decl(Kg g, Int id, Str k, Str sb) {
+    Str pre = if (g.aux[id] == "") { "" } else { g.aux[id] + " " };
+    if (k == "fn") {
+        Int n = g.nk[id];
+        Str s1 = kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, pre)), " " + g.text[id] + "(");
+        Str s2 = kg_pr_list(g, id, 1, n - 1, ", ", s1);
+        return kg_pr_k(g, id, n - 1, kg_ap(s2, ") "));
+    }
+    if (k == "param") { return kg_ap(kg_pr_k(g, id, 0, sb), " " + g.text[id]); }
+    if (k == "struct_t") { return kg_ap(kg_pr_all(g, id, " ", kg_ap(kg_pr_type_head(g, id, sb), "{ ")), " };"); }
+    if (k == "sfield") { return kg_ap(kg_pr_k(g, id, 0, sb), " " + g.text[id] + ";"); }
+    if (k == "sum_t") { return kg_pr_variants(g, id, 0, kg_pr_type_head(g, id, sb)); }
+    if (k == "alias_t") { return kg_ap(kg_pr_k(g, id, 0, kg_pr_type_head(g, id, sb)), ";"); }
+    if (k == "ctype_t") { return kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_pr_type_head(g, id, sb)), "[")), "];"); }
+    if (k == "cwhere_t") { return kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_pr_type_head(g, id, sb)), " where ")), ";"); }
+    if (k == "behavior") {
+        Str bp = kg_part(g.aux[id], 0);
+        Str bpre = if (bp == "") { "" } else { bp + " " };
+        return kg_ap(sb, bpre + g.text[id] + "(" + kg_part(g.aux[id], 1) + ") = " + kg_part(g.aux[id], 2) + ";");
+    }
+    if (k == "test") { return kg_pr_k(g, id, 0, kg_ap(sb, pre + "test " + g.text[id] + " ")); }
+    if (k == "sandbox") { return kg_ap(kg_pr_all(g, id, "\n", kg_ap(sb, "sandbox (" + g.aux[id] + ") {\n")), "\n}"); }
+    return kg_pr_all(g, id, "\n", sb);
+}
+
+Str kg_pr_stmt(Kg g, Int id, Str k, Str sb) {
+    if (k == "block") { return kg_ap(kg_pr_all(g, id, "\n", kg_ap(sb, "{\n")), "\n}"); }
+    if (k == "bind" || k == "rbind") {
+        Str pre = if (g.aux[id] == "") { "" } else { g.aux[id] + " " };
+        Str s1 = kg_pr_k(g, id, 0, kg_ap(sb, pre));
+        Str s2 = if (k == "rbind") { kg_ap(kg_pr_k(g, id, 1, kg_ap(s1, "[")), "]") } else { s1 };
+        return kg_pr_k(g, id, g.nk[id] - 1, kg_ap(s2, " " + g.text[id] + " = "));
+    }
+    if (k == "ret") {
+        if (g.nk[id] == 0) { return kg_ap(sb, "return"); }
+        return kg_pr_k(g, id, 0, kg_ap(sb, "return "));
+    }
+    if (k == "brk") { return kg_ap(sb, "break"); }
+    if (k == "cont") { return kg_ap(sb, "continue"); }
+    if (k == "discard") { return kg_pr_k(g, id, 0, kg_ap(sb, "_ = ")); }
+    if (k == "letpat" || k == "pat") { return kg_pr_k(g, id, 0, kg_ap(sb, g.text[id] + "(" + g.aux[id] + ") = ")); }
+    if (k == "destr") {
+        Int n = g.nk[id];
+        Str s1 = kg_pr_list(g, id, 0, n - 1, ", ", kg_ap(sb, g.text[id] + " { "));
+        return kg_pr_k(g, id, n - 1, kg_ap(s1, " } = "));
+    }
+    if (k == "if") {
+        Str s1 = kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "if (")), ") "));
+        if (g.nk[id] < 3) { return s1; }
+        return kg_pr_k(g, id, 2, kg_ap(s1, " else "));
+    }
+    if (k == "while") { return kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "while (")), ") ")); }
+    if (k == "for") {
+        Str s1 = kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "for (")), " " + g.text[id] + " in ");
+        return kg_pr_k(g, id, 2, kg_ap(kg_pr_k(g, id, 1, s1), ") "));
+    }
+    if (k == "with") {
+        Int n = g.nk[id];
+        return kg_pr_k(g, id, n - 1, kg_ap(kg_pr_wbinds(g, id, 0, n - 1, kg_ap(sb, "with (")), ") "));
+    }
+    if (k == "estmt") { return kg_pr_k(g, id, 0, sb); }
+    return kg_pr_decl(g, id, k, sb);
+}
+
+// `with` bindings: comma-separated, no `;`.
+Str kg_pr_wbinds(Kg g, Int id, Int i, Int n, Str sb) {
+    if (i >= n) { return sb; }
+    Str sb1 = kg_pr_stmt(g, kg_kid(g, id, i), "bind", sb);
+    Str sb2 = if (i + 1 < n) { kg_ap(sb1, ", ") } else { sb1 };
+    return kg_pr_wbinds(g, id, i + 1, n, sb2);
+}
+
+// Statements that the printer terminates with `;`.
+Bool kg_semi_kind(Str k) {
+    return k == "bind" || k == "rbind" || k == "ret" || k == "brk" || k == "cont" || k == "discard" || k == "letpat" || k == "destr" || k == "estmt";
+}
+
+Str kg_pr_fparts(Kg g, Int id, Int i, Str sb) {
+    if (i >= g.nk[id]) { return sb; }
+    Int c = kg_kid(g, id, i);
+    if (g.kind[c] == "fpart") { return kg_pr_fparts(g, id, i + 1, kg_ap(sb, g.text[c])); }
+    Bool spec = i + 1 < g.nk[id] && g.kind[kg_kid(g, id, i + 1)] == "fspec";
+    Str sb1 = kg_pr(g, c, kg_ap(sb, "{"));
+    if (!spec) { return kg_pr_fparts(g, id, i + 1, kg_ap(sb1, "}")); }
+    return kg_pr_fparts(g, id, i + 2, kg_ap(sb1, ":" + g.text[kg_kid(g, id, i + 1)] + "}"));
+}
+
+Str kg_pr_expr(Kg g, Int id, Str k, Str sb) {
+    if (k == "lit" || k == "ref" || k == "ty" || k == "name" || k == "lparam") { return kg_ap(sb, g.text[id]); }
+    if (k == "fstr") { return kg_ap(kg_pr_fparts(g, id, 0, kg_ap(sb, "f\"")), "\""); }
+    if (k == "call") { return kg_ap(kg_pr_all(g, id, ", ", kg_ap(sb, g.text[id] + "(")), ")"); }
+    if (k == "callv") { return kg_ap(kg_pr_list(g, id, 1, g.nk[id], ", ", kg_ap(kg_pr_k(g, id, 0, sb), "(")), ")"); }
+    if (k == "mcall") { return kg_ap(kg_pr_list(g, id, 1, g.nk[id], ", ", kg_ap(kg_pr_k(g, id, 0, sb), "." + g.text[id] + "(")), ")"); }
+    if (k == "field") { return kg_ap(kg_pr_k(g, id, 0, sb), "." + g.text[id]); }
+    if (k == "index") { return kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), "[")), "]"); }
+    if (k == "slice") {
+        Str s1 = kg_ap(kg_pr_k(g, id, 0, sb), "[..");
+        Str s2 = if (g.nk[id] > 1) { kg_pr_k(g, id, 1, s1) } else { s1 };
+        return kg_ap(s2, "]");
+    }
+    if (k == "rangefrom") { return kg_ap(kg_pr_k(g, id, 0, sb), ".."); }
+    if (k == "struct") { return kg_ap(kg_pr_all(g, id, ", ", kg_ap(sb, g.text[id] + " { ")), " }"); }
+    if (k == "finit") { return kg_pr_k(g, id, 0, kg_ap(sb, "." + g.text[id] + " = ")); }
+    if (k == "list") { return kg_ap(kg_pr_all(g, id, ", ", kg_ap(sb, "[")), "]"); }
+    if (k == "map" || k == "set") { return kg_ap(kg_pr_all(g, id, ", ", kg_ap(sb, "{")), "}"); }
+    if (k == "entry") { return kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), ": ")); }
+    if (k == "emptyb") { return kg_ap(sb, "{}"); }
+    if (k == "named") { return kg_pr_k(g, id, 0, kg_ap(sb, g.text[id] + " = ")); }
+    if (k == "un") { return kg_pr_k(g, id, 0, kg_ap(sb, g.text[id])); }
+    if (k == "cast") { return kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "(")), ") ")); }
+    if (k == "rt") { return kg_pr_k(g, id, 0, kg_ap(sb, "rt ")); }
+    if (k == "paren") { return kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "(")), ")"); }
+    if (k == "bin") { return kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), " " + g.text[id] + " ")); }
+    if (k == "tern") { return kg_pr_k(g, id, 2, kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), " ? ")), " : ")); }
+    if (k == "try") { return kg_ap(kg_pr_k(g, id, 0, sb), "?"); }
+    if (k == "orelse") { return kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), " else { ")), " }"); }
+    if (k == "ifx") {
+        Str s1 = kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "if (")), ") { ")), " }");
+        if (g.nk[id] < 3) { return s1; }
+        Int e = kg_kid(g, id, 2);
+        if (g.kind[e] == "ifx") { return kg_pr(g, e, kg_ap(s1, " else ")); }
+        return kg_ap(kg_pr(g, e, kg_ap(s1, " else { ")), " }");
+    }
+    if (k == "bexpr") { return kg_ap(kg_pr_bexpr(g, id, 0, sb), g.aux[id]); }
+    if (k == "match") { return kg_ap(kg_pr_list(g, id, 1, g.nk[id], ",\n", kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "match ")), " {\n")), "\n}"); }
+    if (k == "arm") {
+        Str pat = if (g.aux[id] == "") { g.text[id] } else { g.text[id] + "(" + g.aux[id] + ")" };
+        return kg_pr_k(g, id, 0, kg_ap(sb, pat + " => "));
+    }
+    if (k == "lambda") {
+        Int n = g.nk[id];
+        return kg_ap(kg_pr_k(g, id, n - 1, kg_ap(kg_pr_list(g, id, 0, n - 1, ", ", kg_ap(sb, "lambda(")), ") { ")), " }");
+    }
+    if (k == "spawn") { return kg_pr_k(g, id, 0, kg_ap(sb, "spawn (" + g.aux[id] + ") ")); }
+    return kg_pr_stmt(g, id, k, sb);
+}
+
+Str kg_pr_bexpr(Kg g, Int id, Int i, Str sb) {
+    Int n = g.nk[id];
+    if (i >= n) { return sb; }
+    Str sb1 = kg_pr_k(g, id, i, sb);
+    Str sb2 = if (i + 1 < n) { kg_ap(sb1, " ") } else { sb1 };
+    return kg_pr_bexpr(g, id, i + 1, sb2);
+}
+
+pub Str kg_pr(Kg g, Int id, Str sb) {
+    Str k = g.kind[id];
+    Str sb1 = kg_pr_expr(g, id, k, sb);
+    if (kg_semi_kind(k)) { return kg_ap(sb1, ";"); }
+    return sb1;
+}
+
+pub Str kg_print(Kg g, Int root) {
+    return str_sb_finish(kg_ap(kg_pr(g, root, str_sb_new()), "\n"));
+}
+
+// ─── Round-trip check ───────────────────────────────────────────────
+// The printed program must lex to the same tokens as the parsed one;
+// f-string tokens compare by their literal parts and hole tokens.
+
+Str kg_fnorm_holes(Str text, Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(text, i);
+    if (c != 123) { return kg_fnorm_holes(text, i + 1, n, acc + str_from_code(c)); }
+    Int e = fstring_hole_end(text, i + 1, n, 1);
+    if (e < 0) { return acc + str_slice(text, i, n); }
+    Str inner = kg_tokens_joined(str_slice(text, i + 1, e), 0, "");
+    return kg_fnorm_holes(text, e + 1, n, acc + "{" + inner + "}");
+}
+
+Str kg_tok_norm(Tok t) {
+    if (t.kind != "fstring") { return t.text; }
+    return kg_fnorm_holes(t.text, 0, str_len(t.text), "");
+}
+
+Str kg_tokens_joined(Str s, Int pos, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return acc; }
+    return kg_tokens_joined(s, t.pos, acc + kg_tok_norm(t) + " ");
+}
+
+// First differing token pair, or "" when the streams agree.
+// Next token, skipping a trailing comma before a closing bracket.
+Tok kg_tok_nc(Str s, Int pos) {
+    Tok t = lex_tok(s, pos);
+    if (t.text != ",") { return t; }
+    Tok nx = lex_tok(s, t.pos);
+    if (nx.text == "]" || nx.text == ")" || nx.text == "}") { return nx; }
+    return t;
+}
+
+pub Str kg_tokdiff(Str a, Int pa, Str b, Int pb, Int n) {
+    Tok ta = kg_tok_nc(a, pa);
+    Tok tb = kg_tok_nc(b, pb);
+    if (ta.kind == "eof" && tb.kind == "eof") { return ""; }
+    Str na = kg_tok_norm(ta);
+    Str nb = kg_tok_norm(tb);
+    if (na != nb) {
+        PosInfo li = pos_to_line_col(a, kg_tstart(ta));
+        return "token " + IntToString(n) + " (source line " + IntToString(li.line) + "): `" + na + "` vs `" + nb + "`";
+    }
+    return kg_tokdiff(a, ta.pos, b, tb.pos, n + 1);
+}
+
+// Parse, print, compare. "" on success, else the first failure.
+pub Str kg_roundtrip(Str s) {
+    KP p = kg_parse(s);
+    if (p.err != "") {
+        PosInfo li = pos_to_line_col(s, p.pos);
+        return "parse error at line " + IntToString(li.line) + ": " + p.err;
+    }
+    return kg_tokdiff(s, 0, kg_print(p.g, p.id), 0, 0);
+}
+
+// ─── Dump (tests, debugging) ────────────────────────────────────────
+
+Str kg_dump_at(Kg g, Int id, Int depth, Str sb) {
+    Str line = str_repeat("  ", depth) + g.kind[id] + (if (g.text[id] == "") { "" } else { " " + g.text[id] }) + (if (g.aux[id] == "") { "" } else { " [" + g.aux[id] + "]" }) + "\n";
+    return kg_dump_kids(g, id, 0, depth + 1, kg_ap(sb, line));
+}
+
+Str kg_dump_kids(Kg g, Int id, Int i, Int depth, Str sb) {
+    if (i >= g.nk[id]) { return sb; }
+    return kg_dump_kids(g, id, i + 1, depth, kg_dump_at(g, kg_kid(g, id, i), depth, sb));
+}
+
+pub Str kg_dump(Kg g, Int root) {
+    return str_sb_finish(kg_dump_at(g, root, 0, str_sb_new()));
+}
+
+// ─── Lint: operators whose grouping differed under the old table ────
+// The old code generator ranked & | ^ as one level and && || as another
+// (left-associative); mixing them without parentheses changed meaning.
+
+Int kg_legacy_group(Str op) {
+    if (op == "&" || op == "|" || op == "^") { return 1; }
+    if (op == "&&" || op == "||") { return 2; }
+    return 0;
+}
+
+Bool kg_mixed(Kg g, Int id, Int c) {
+    if (g.kind[c] != "bin") { return false; }
+    Int ga = kg_legacy_group(g.text[id]);
+    return ga != 0 && ga == kg_legacy_group(g.text[c]) && g.text[id] != g.text[c];
+}
+
+List(Int) kg_lint_prec_at(Kg g, Int id, List(Int) acc) {
+    if (id < 0) { return acc; }
+    Bool hit = g.kind[id] == "bin" && (kg_mixed(g, id, kg_kid(g, id, 0)) || kg_mixed(g, id, kg_kid(g, id, 1)));
+    List(Int) acc2 = if (hit) { acc.concat([id]) } else { acc };
+    return kg_lint_prec_at(g, id - 1, acc2);
+}
+
+// Source positions of mixed-precedence expressions.
+pub List(Int) kg_lint_prec(Kg g) {
+    List(Int) none = [];
+    return kg_lint_prec_at(g, kg_count(g) - 1, none);
+}

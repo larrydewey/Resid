@@ -245,6 +245,19 @@ the test harnesses create a throwaway key when none is configured.
 `tests/provenance/run.sh` covers tamper detection, keys, concealment and
 reproducibility. Self-compile time is unchanged.
 
+### 0j. Knowledge graph parser (G1) and three silent-semantics fixes (2026-09-26)
+
+`examples/graph.resid` parses desugared programs into the §3 node store.
+It round-trips every in-repo program, compiler included (`tests/graph`).
+Building it exposed three bugs, now fixed. Precedence: codegen and the
+reducer ranked `& ^ |` equal and `&& ||` equal, so `t || f && f` gave
+false. The graph lint confirmed that no in-repo program relied on the
+wrong grouping. Assignment: `x = 5;` type-checked and compiled to nothing;
+it is now an error, and the one codegen block that relied on it (the
+`expect().toEqual` widening for narrow ints) is rewritten. List literals:
+a missing comma is now an error. Still open: `&&` and `||` evaluate both
+operands. The spec does not say they short-circuit.
+
 ### Major capabilities
 
 - **Stage-2 self-hosting proven, including full sandbox/capability parity**:

@@ -38,14 +38,26 @@ are imported the same way `reduce.resid` is.
 - [x] G0 Signed provenance (§33.1): COSE_Sign1 trailer, verify, keygen. The
   graph artifact's hash joins the payload when G4 emits it.
 
-- [ ] G1 Graph core: `examples/graph.resid`.
-  - Nodes stored as struct-of-arrays with id = index: kind, type, knowledge,
-    and dep offsets into one shared dep list.
-  - Hash-consing for pure nodes, content hashes, and the CBOR writer
-    (§34 schema).
-  - Parser from tokens to graph, with spans. It replaces body slicing.
-  - Memory budget: stay within about 1.5x of today's 283MB self-compile peak.
-    Use phase-scoped arenas.
+- [~] G1 Graph core: `examples/graph.resid`.
+  - [x] Nodes stored as parallel columns with id = index (kind, text, aux,
+    child slice, span). Children come before parents.
+  - [x] Parser from desugared source covering the whole accepted grammar,
+    a printer, a token round-trip check (`--graph-check`), a tree dump
+    (`--dump-graph`) and a precedence lint (`--graph-lint`).
+    `tests/graph/run.sh` passes on all 208 in-repo programs, including the
+    compiler itself (138K nodes, parsed in about 0.3s).
+  - [ ] Source map: import resolution records (merged line, file, line)
+    segments so spans resolve to real files.
+  - [ ] Hash-consing and content hashes.
+  - [ ] Doc comments attached to declarations.
+  - The CBOR writer moves to G3, once knowledge states mean something.
+  - Found while building the parser, and fixed:
+    - codegen and the reducer used a precedence table where `&`, `|`, `^`
+      shared one level and `&&`, `||` shared another. That miscompiled
+      `a || b && c`.
+    - The checker accepted assignment (`x = 5;`) as a no-op.
+    - The checker accepted list literals without commas.
+    - Three `:owned` stripping lines in codegen were dead assignments.
 - [ ] G2 Resolution and type checking on the graph.
   - def edges, types on nodes, and capability and effect sets.
   - Port `typecheck.resid` checks by walking nodes instead of text.

@@ -1,0 +1,12 @@
+Bool t() { return true; }
+Bool f() { return false; }
+Int main() {
+    println(BoolToString(t() || f() && f()));
+    println(BoolToString(f() && f() || t()));
+    println(IntToString(1 | 2 & 0));
+    println(IntToString(6 ^ 3 & 1));
+    println(IntToString(1 | 6 ^ 2));
+    Int a = rt 5;
+    println(IntToString(a & 4 | 1 ^ 3));
+    return 0;
+}
