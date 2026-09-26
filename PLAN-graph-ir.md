@@ -1,6 +1,6 @@
 # Plan: Knowledge Graph as the Sole IR (spec v3.5 §3)
 
-Status: ACTIVE. Written 2026-09-26.
+Status: DONE (G0–G7), 2026-09-26. Open follow-ups are listed at the end.
 
 ## Why
 
@@ -73,8 +73,8 @@ are imported the same way `reduce.resid` is.
     table from declarations, and runs the capability passes (E0211-E0218)
     from def edges and provider-call nodes instead of token scans. The type
     algebra (`bin_type`, `check_builtin`, widening, unification) is shared
-    with the text checker, which stays behind `--text-check` for
-    differential testing until G7.
+    with the text checker, which was kept behind `--text-check` for
+    differential testing until G7 retired it.
     - Parity: identical accept/reject and diagnostic lines on all 215
       in-repo programs and on 91 rejection cases
       (`tests/graph/check_cases.txt`).
@@ -124,10 +124,10 @@ are imported the same way `reduce.resid` is.
     analysis that `check_growable_shape` never enabled.
   - Then migrate hand-threaded builder code and retire `examples/stracc.resid`'s
     pattern matching.
-- [ ] G3 Reduction on the graph.
+- [x] G3 Reduction on the graph.
   - [x] `examples/greduce.resid` reduces the graph, mirroring
-    `reduce.resid`; `--graph-reduce-check` token-matches its printed
-    residual against the text reducer on every program.
+    `reduce.resid`; until G7, `--graph-reduce-check` token-matched its
+    printed residual against the text reducer on every program.
   - [x] The default pipeline lowers the residual graph directly, with
     `stracc` on the graph (`gs_program`); `--text-reduce` keeps the text
     path. IR matches it modulo position-numbered symbols.
@@ -137,8 +137,8 @@ are imported the same way `reduce.resid` is.
   - [x] Reasons on RESIDUAL and EFFECT nodes in the artifact: effect,
     annotated, unknown(dep), and the reducer's budget(fuel|steps|specs),
     loop and whistle.
-  - Port fold, beta, eval, specialize, generalize, dead-arm and elide from
-    `reduce.resid`, recording derive edges and reasons.
+  - [x] Fold, beta, eval, specialize, generalize, dead-arm and elide run on
+    the graph, recording derive edges and reasons.
   - [x] Range facts (`lr_facts` in lower.resid): literals, arithmetic,
     lengths, range loops and branch conditions; + - * / % lose their
     check when the ranges prove it cannot fire (`--no-facts` keeps every
@@ -146,9 +146,9 @@ are imported the same way `reduce.resid` is.
     78 division checks; the artifact lists ranges as facts.
   - Next facts: nonzero (a divisor known only != 0), discharge derive
     records, then length (bounds), tag (arm selection), fields.
-  - Exit criterion: `tests/reduce` passes, and the self-compile specializes
-    at least as much as today.
-- [ ] G4 Lowering from the residual graph.
+  - Exit criterion met: `tests/reduce` passes, and the self-compile
+    specializes as much as the text reducer did (the 400-attempt limit).
+- [x] G4 Lowering from the residual graph.
   - [x] `examples/lower.resid` is the driver's lowering (`--text-lower`
     keeps the text codegen for differential runs). It mirrors the text
     codegen node for node, and every module of all 174 in-repo programs
@@ -159,7 +159,7 @@ are imported the same way `reduce.resid` is.
   - [x] The linear map/set mask runs on the body's nodes (`lg_mask`), and
     `ToString` of a struct lowers its formatting expression from a scratch
     graph; lowering the residual no longer calls the text codegen.
-  - Codegen walks residual roots.
+  - [x] Lowering walks the residual root (`lw_program` over the unit).
   - [x] `<out>.resid-graph.cbor` (§34) in debug and check builds, streamed
     in chunks; its hash is embedded in the binary and signed.
   - [x] Debug builds carry DWARF: a DISubprogram per function, a
@@ -174,7 +174,7 @@ are imported the same way `reduce.resid` is.
     reads them back (`resid-debug <bin> lowered`).
   - Exit criterion: `./boot.sh` reaches a fixed point with `--graph` as the
     default.
-- [ ] G5 Tools and conformance.
+- [x] G5 Tools and conformance.
   - [x] Notes are a projection of the residual graph (`ga_notes`): rt
     values, provider calls and the reducer's budget / loop / whistle
     reasons, at their spans in any file; `--text-reduce` keeps the line
@@ -209,10 +209,28 @@ are imported the same way `reduce.resid` is.
     into that line. `step N` steps by instruction and reports each change
     of node.
   - Open: a native ptrace backend, so live mode needs no gdb.
-- [ ] G7 Retire the text passes.
-  - Delete the text typecheck, codegen and reduce paths, the `gr_*` pass and
-    the notes line-scan.
-  - Update AGENTS.md and PROGRESS.md.
+- [x] G7 Retire the text passes.
+  - [x] Deleted the text typecheck, codegen and reduce paths, the `gr_*`
+    pass (`--bootstrap-graph-reduce`), the notes line scan and the
+    differential flags (`--text-check`, `--text-reduce`, `--text-lower`,
+    `--graph-reduce-check`, `--graph-sigs-check`). Every declaration no
+    longer reachable from the driver's `main` was pruned (about 10,500
+    lines); `examples/stracc.resid` folded into greduce.
+  - [x] After parsing, passes read the graph, not the source: pattern and
+    `with` headers come from printed nodes, `known`/`comptime_print` from
+    call nodes, the specialization gain from node token counts, and a
+    sandbox's body position from its node. The source is read only for
+    diagnostic text and file/line mapping. IR stayed byte-identical on
+    every in-repo program.
+  - [x] AGENTS.md and PROGRESS.md updated.
+
+## Follow-ups
+
+- A native ptrace backend for `resid-debug` live mode (gdb today).
+- Facts: nonzero, discharge derive records, then length, tag and fields.
+- Pre-parse text passes remain by design: import resolution, `ds_desugar`
+  and test discovery rewrite source before the graph exists.
+- G2b: migrate the remaining hand-threaded accumulators to builders.
 
 ## Open questions
 
