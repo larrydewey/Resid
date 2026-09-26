@@ -133,12 +133,37 @@ if "$COMPILER" tools/resid-debug.resid -o "$CK/rdbg" >/dev/null 2>&1 && [ -x "$D
     else
         fail=$((fail + 1)); echo "FAIL resid-debug static: $got"
     fi
+    # Live, natively (ptrace): breakpoints, variables from their DWARF
+    # locations, node stepping over calls, and an abort traced to its node.
+    got="$(timeout 60 "$CK/rdbg" "$DB" -ex "break sq" -ex "step 60" -ex run 2>&1)"
+    if [[ "$got" == *"stop 1 at sq+"* && "$got" == *'msg = "hi!"   #'*"bind msg: Str"* && "$got" == *"b = 136   #"*"bind b: Int"* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL resid-debug native step: $got"
+    fi
+    got="$(timeout 60 "$CK/rdbg" "$DB" -ex "break debug_locals.resid:11" -ex "stops 2" -ex run 2>&1)"
+    if [[ "$got" == *"acc = 16   #"*"param acc: Int"* && "$got" == *"i = 15   #"* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL resid-debug native stops: $got"
+    fi
+    if "$COMPILER" tests/graph/cases/debug_abort.resid -o "$CK/dab" --profile debug >/dev/null 2>&1; then
+        got="$(timeout 60 "$CK/rdbg" "$CK/dab" -ex "break debug_abort.resid:5" -ex run 2>&1)"
+        if [[ "$got" == *"z = true   #"* && "$got" == *"w = true   #"* && "$got" == *"program received signal 6"* && "$got" == *"called from f+"*"bind big: Int"* && "$got" == *"exited with code 134"* ]]; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1)); echo "FAIL resid-debug native abort: $got"
+        fi
+    else
+        fail=$((fail + 1)); echo "FAIL debug_abort build"
+    fi
+    # The gdb backend, when gdb is installed, sees the same.
     if command -v gdb >/dev/null 2>&1; then
-        got="$("$CK/rdbg" "$DB" -ex "break sq" -ex "step 40" -ex run 2>&1)"
+        got="$("$CK/rdbg" "$DB" -ex "backend gdb" -ex "break sq" -ex "step 40" -ex run 2>&1)"
         if [[ "$got" == *"stop 1 at sq+"* && "$got" == *'msg = "hi!"   #'*"bind msg: Str"* && "$got" == *"bind b: Int"* ]]; then
             pass=$((pass + 1))
         else
-            fail=$((fail + 1)); echo "FAIL resid-debug live: $got"
+            fail=$((fail + 1)); echo "FAIL resid-debug gdb: $got"
         fi
     fi
 else

@@ -324,3 +324,260 @@ pub Str el_hex_at(Int n, Str acc) {
     Str c = if (d < 10) { IntToString(d) } else { str_from_code(87 + d) };
     return el_hex_at(n / 16, c + acc);
 }
+
+// ─── Variables (DWARF 5 .debug_info, .debug_loclists) ───────────────
+
+// The sections and bases a unit's attribute values are resolved against.
+type DX = { List(Int) b; Int abbrev; Int str; Int stroff; Int addr; Int loc; Int info; Int infoend; };
+
+pub DX el_dx(List(Int) b, List(ES) ss) {
+    return DX {.b = b, .abbrev = el_off(ss, ".debug_abbrev"), .str = el_off(ss, ".debug_str"), .stroff = el_off(ss, ".debug_str_offsets"), .addr = el_off(ss, ".debug_addr"), .loc = el_off(ss, ".debug_loclists"), .info = el_off(ss, ".debug_info"), .infoend = el_end(ss, ".debug_info")};
+}
+
+pub Int el_off(List(ES) ss, Str name) {
+    Int k = el_find(ss, name, 0);
+    return if (k < 0) { -1 } else { ss[k].off };
+}
+
+pub Int el_end(List(ES) ss, Str name) {
+    Int k = el_find(ss, name, 0);
+    return if (k < 0) { -1 } else { ss[k].off + ss[k].size };
+}
+
+// An abbreviation table: per code, the tag, whether it has children, and
+// its (attribute, form, implicit constant) triples.
+type AB = { Map(Int, Int) idx; List(Int) tags; List(Bool) kids; List(List(Int)) attrs; List(List(Int)) forms; List(List(Int)) consts; };
+
+pub AB el_abbrevs(List(Int) b, Int pos) {
+    Map(Int, Int) m = {};
+    List(Int) ni = [];
+    List(Bool) nb = [];
+    List(List(Int)) nl = [];
+    return el_abbrevs_at(b, pos, AB {.idx = m, .tags = ni, .kids = nb, .attrs = nl, .forms = nl, .consts = nl});
+}
+
+pub AB el_abbrevs_at(List(Int) b, Int pos, AB acc) {
+    UL code = el_uleb(b, pos);
+    if (code.v == 0) { return acc; }
+    UL tag = el_uleb(b, code.pos);
+    Bool ch = b[tag.pos] != 0;
+    AE e = el_abbrev_attrs(b, tag.pos + 1, ListBuf(), ListBuf(), ListBuf());
+    AB a1 = AB {.idx = acc.idx.insert(code.v, acc.tags.len()), .tags = acc.tags.concat([tag.v]), .kids = acc.kids.concat([ch]), .attrs = acc.attrs.concat([e.attrs]), .forms = acc.forms.concat([e.forms]), .consts = acc.consts.concat([e.consts])};
+    return el_abbrevs_at(b, e.pos, a1);
+}
+
+type AE = { List(Int) attrs; List(Int) forms; List(Int) consts; Int pos; };
+
+pub AE el_abbrev_attrs(List(Int) b, Int pos, ListBuf(Int) at, ListBuf(Int) fm, ListBuf(Int) cs) {
+    UL a = el_uleb(b, pos);
+    UL f = el_uleb(b, a.pos);
+    if (a.v == 0 && f.v == 0) { return AE {.attrs = at.finish(), .forms = fm.finish(), .consts = cs.finish(), .pos = f.pos}; }
+    if (f.v == 33) {
+        UL c = el_sleb(b, f.pos);
+        return el_abbrev_attrs(b, c.pos, at.push(a.v), fm.push(f.v), cs.push(c.v));
+    }
+    return el_abbrev_attrs(b, f.pos, at.push(a.v), fm.push(f.v), cs.push(0));
+}
+
+// One attribute value as read: an integer (an index for the x forms), a
+// block (exprloc), an inline string, and the position after it.
+type AV = { Int v; List(Int) blk; Str s; Int pos; };
+
+pub AV el_av(List(Int) b, Int form, Int pos, Int ic) {
+    List(Int) nb = [];
+    if (form == 1 || form == 7 || form == 20 || form == 32) { return AV {.v = el_u(b, pos, 8), .blk = nb, .s = "", .pos = pos + 8}; }
+    if (form == 11 || form == 12 || form == 17 || form == 37 || form == 41) { return AV {.v = b[pos], .blk = nb, .s = "", .pos = pos + 1}; }
+    if (form == 5 || form == 18 || form == 38 || form == 42) { return AV {.v = el_u(b, pos, 2), .blk = nb, .s = "", .pos = pos + 2}; }
+    if (form == 39 || form == 43) { return AV {.v = el_u(b, pos, 3), .blk = nb, .s = "", .pos = pos + 3}; }
+    if (form == 6 || form == 14 || form == 16 || form == 19 || form == 23 || form == 28 || form == 29 || form == 31 || form == 40 || form == 44) { return AV {.v = el_u(b, pos, 4), .blk = nb, .s = "", .pos = pos + 4}; }
+    if (form == 15 || form == 21 || form == 26 || form == 27 || form == 34 || form == 35) {
+        UL u = el_uleb(b, pos);
+        return AV {.v = u.v, .blk = nb, .s = "", .pos = u.pos};
+    }
+    if (form == 13) {
+        UL u = el_sleb(b, pos);
+        return AV {.v = u.v, .blk = nb, .s = "", .pos = u.pos};
+    }
+    if (form == 8) {
+        Str s = el_cstr(b, pos);
+        return AV {.v = 0, .blk = nb, .s = s, .pos = pos + str_len(s) + 1};
+    }
+    if (form == 24 || form == 9) {
+        UL u = el_uleb(b, pos);
+        return AV {.v = 0, .blk = b[u.pos..u.pos + u.v], .s = "", .pos = u.pos + u.v};
+    }
+    if (form == 10) { return AV {.v = 0, .blk = b[pos + 1..pos + 1 + b[pos]], .s = "", .pos = pos + 1 + b[pos]}; }
+    if (form == 3) { return AV {.v = 0, .blk = nb, .s = "", .pos = pos + 2 + el_u(b, pos, 2)}; }
+    if (form == 4) { return AV {.v = 0, .blk = nb, .s = "", .pos = pos + 4 + el_u(b, pos, 4)}; }
+    if (form == 30) { return AV {.v = 0, .blk = nb, .s = "", .pos = pos + 16}; }
+    return AV {.v = ic, .blk = nb, .s = "", .pos = pos};
+}
+
+// A variable or parameter: name, type, and its location, either an
+// expression or a location list (offset into .debug_loclists).
+type DV = { Str name; Bool param; Str ty; List(Int) expr; Int list; Int base; Int addrbase; };
+
+// A function: name, code range, frame base expression, variables.
+type DF = { Str name; Int lo; Int hi; List(Int) fb; List(DV) vars; };
+
+// One DIE's attributes of interest, resolved.
+type DI = { Str name; Int lo; Int hi; List(Int) expr; Int list; Int ty; Int pos; Int lbase; Int abase; Int sbase; };
+
+// The unit bases (strings, addresses, location lists) and the current DIE.
+type DU = { Int cu; Int sbase; Int abase; Int lbase; Int lo; };
+
+pub Str el_strx(DX x, DU u, Int idx) {
+    return el_cstr(x.b, x.str + el_u(x.b, x.stroff + u.sbase + idx * 4, 4));
+}
+
+pub Int el_addrx(DX x, DU u, Int idx) {
+    return el_u(x.b, x.addr + u.abase + idx * 8, 8);
+}
+
+// Read a DIE's attributes (abbrev k) from pos.
+pub DI el_die(DX x, AB ab, Int k, DU u, Int pos) {
+    List(Int) nb = [];
+    return el_die_at(x, ab.attrs[k], ab.forms[k], ab.consts[k], 0, u, DI {.name = "", .lo = 0, .hi = -1, .expr = nb, .list = -1, .ty = -1, .pos = pos, .lbase = -1, .abase = -1, .sbase = -1}, false);
+}
+
+pub DI el_die_at(DX x, List(Int) at, List(Int) fm, List(Int) cs, Int i, DU u, DI d, Bool hirel) {
+    if (i >= at.len()) {
+        Int hi = if (hirel) { d.lo + d.hi } else { d.hi };
+        return DI {.name = d.name, .lo = d.lo, .hi = hi, .expr = d.expr, .list = d.list, .ty = d.ty, .pos = d.pos, .lbase = d.lbase, .abase = d.abase, .sbase = d.sbase};
+    }
+    Int a = at[i];
+    Int f = fm[i];
+    AV v = el_av(x.b, f, d.pos, cs[i]);
+    Bool strx = f == 26 || f == 37 || f == 38 || f == 39 || f == 40;
+    Bool addrx = f == 27 || f == 41 || f == 42 || f == 43 || f == 44;
+    Str nm = if (a != 3) { d.name } else if (strx) { el_strx(x, u, v.v) } else if (f == 14) { el_cstr(x.b, x.str + v.v) } else { v.s };
+    Int lo = if (a != 17) { d.lo } else if (addrx) { el_addrx(x, u, v.v) } else { v.v };
+    Int hi = if (a != 18) { d.hi } else if (addrx) { el_addrx(x, u, v.v) } else { v.v };
+    Bool hr = if (a == 18) { !(f == 1 || addrx) } else { hirel };
+    List(Int) ex = if ((a == 2 || a == 64) && (f == 24 || f == 9 || f == 10)) { v.blk } else { d.expr };
+    Int li = if (a == 2 && f == 34) { x.loc + u.lbase + el_u(x.b, x.loc + u.lbase + v.v * 4, 4) } else if (a == 2 && f == 23) { x.loc + v.v } else { d.list };
+    Int ty = if (a == 73) { u.cu + v.v } else { d.ty };
+    Int lb = if (a == 140) { v.v } else { d.lbase };
+    Int abv = if (a == 115) { v.v } else { d.abase };
+    Int sb = if (a == 114) { v.v } else { d.sbase };
+    return el_die_at(x, at, fm, cs, i + 1, u, DI {.name = nm, .lo = lo, .hi = hi, .expr = ex, .list = li, .ty = ty, .pos = v.pos, .lbase = lb, .abase = abv, .sbase = sb}, hr);
+}
+
+// Types by DIE offset: a base type's name, or "*" + the pointee's offset.
+type DT = { Map(Int, Str) m; };
+
+// Every function with its variables, over all units.
+pub List(DF) el_funcs(DX x) {
+    if (x.info < 0) { return []; }
+    return el_units_info(x, x.info, ListBuf());
+}
+
+pub List(DF) el_units_info(DX x, Int off, ListBuf(DF) acc) {
+    if (off >= x.infoend) { return acc.finish(); }
+    List(Int) b = x.b;
+    Int len = el_u(b, off, 4);
+    Int ver = el_u(b, off + 4, 2);
+    Int next = off + 4 + len;
+    if (ver != 5) { return el_units_info(x, next, acc); }
+    AB ab = el_abbrevs(b, x.abbrev + el_u(b, off + 8, 4));
+    // The unit DIE first, with no bases known: its string and address
+    // attributes are re-read once they are.
+    DU u0 = DU {.cu = off, .sbase = 0, .abase = 0, .lbase = 0, .lo = 0};
+    Int p0 = off + 12;
+    UL code = el_uleb(b, p0);
+    Int k = ab.idx.get(code.v) else { -1 };
+    if (k < 0) { return el_units_info(x, next, acc); }
+    DI cu0 = el_die(x, ab, k, u0, code.pos);
+    DU u1 = DU {.cu = off, .sbase = max_i64(cu0.sbase, 0), .abase = max_i64(cu0.abase, 0), .lbase = max_i64(cu0.lbase, 0), .lo = 0};
+    DI cu = el_die(x, ab, k, u1, code.pos);
+    DU u = DU {.cu = off, .sbase = u1.sbase, .abase = u1.abase, .lbase = u1.lbase, .lo = cu.lo};
+    Map(Int, Str) tm = {};
+    List(DF) nf = [];
+    DW w = el_dies(x, ab, u, cu.pos, next, DW {.fs = nf, .tys = tm});
+    return el_units_info(x, next, el_push_fns(acc, w.fs, w.tys, 0));
+}
+
+type DW = { List(DF) fs; Map(Int, Str) tys; };
+
+pub DW el_dies(DX x, AB ab, DU u, Int pos, Int end, DW w) {
+    if (pos >= end) { return w; }
+    Int die = pos;
+    UL code = el_uleb(x.b, pos);
+    if (code.v == 0) { return el_dies(x, ab, u, code.pos, end, w); }
+    Int k = ab.idx.get(code.v) else { -1 };
+    if (k < 0) { return w; }
+    DI d = el_die(x, ab, k, u, code.pos);
+    Int tag = ab.tags[k];
+    List(DV) nv = [];
+    if (tag == 46) {
+        DF f = DF {.name = d.name, .lo = d.lo, .hi = d.hi, .fb = d.expr, .vars = nv};
+        return el_dies(x, ab, u, d.pos, end, DW {.fs = w.fs.concat([f]), .tys = w.tys});
+    }
+    if ((tag == 5 || tag == 52) && w.fs.len() > 0) {
+        DV v = DV {.name = d.name, .param = tag == 5, .ty = IntToString(d.ty), .expr = d.expr, .list = d.list, .base = u.lo, .addrbase = u.abase};
+        Int li = w.fs.len() - 1;
+        DF f = w.fs[li];
+        DF f2 = DF {.name = f.name, .lo = f.lo, .hi = f.hi, .fb = f.fb, .vars = f.vars.concat([v])};
+        return el_dies(x, ab, u, d.pos, end, DW {.fs = w.fs[0..li].concat([f2]), .tys = w.tys});
+    }
+    if (tag == 36) { return el_dies(x, ab, u, d.pos, end, DW {.fs = w.fs, .tys = w.tys.insert(die, d.name)}); }
+    if (tag == 15) { return el_dies(x, ab, u, d.pos, end, DW {.fs = w.fs, .tys = w.tys.insert(die, "*" + IntToString(d.ty))}); }
+    return el_dies(x, ab, u, d.pos, end, w);
+}
+
+// Type names resolved ("Int", "char *").
+pub Str el_tyname(Map(Int, Str) tys, Int off, Int depth) {
+    Str t = tys.get(off) else { "?" };
+    if (depth < 8 && str_starts_with(t, "*")) { return el_tyname(tys, str_parse_int(str_slice(t, 1, str_len(t))), depth + 1) + " *"; }
+    return t;
+}
+
+pub ListBuf(DF) el_push_fns(ListBuf(DF) acc, List(DF) fs, Map(Int, Str) tys, Int i) {
+    if (i >= fs.len()) { return acc; }
+    DF f = fs[i];
+    DF f2 = DF {.name = f.name, .lo = f.lo, .hi = f.hi, .fb = f.fb, .vars = el_type_vars(f.vars, tys, 0, ListBuf())};
+    return el_push_fns(acc.push(f2), fs, tys, i + 1);
+}
+
+pub List(DV) el_type_vars(List(DV) vs, Map(Int, Str) tys, Int i, ListBuf(DV) acc) {
+    if (i >= vs.len()) { return acc.finish(); }
+    DV v = vs[i];
+    DV v2 = DV {.name = v.name, .param = v.param, .ty = el_tyname(tys, str_parse_int(v.ty), 0), .expr = v.expr, .list = v.list, .base = v.base, .addrbase = v.addrbase};
+    return el_type_vars(vs, tys, i + 1, acc.push(v2));
+}
+
+pub Int el_fn_at(List(DF) fs, Int pc, Int i) {
+    if (i >= fs.len()) { return -1; }
+    if (pc >= fs[i].lo && pc < fs[i].hi) { return i; }
+    return el_fn_at(fs, pc, i + 1);
+}
+
+// The location expression of v at pc (link address); empty when none.
+pub List(Int) el_loc_at(DX x, DV v, Int pc) {
+    if (v.list < 0) { return v.expr; }
+    return el_list_at(x, v, v.list, v.base, pc);
+}
+
+pub List(Int) el_list_at(DX x, DV v, Int pos, Int base, Int pc) {
+    List(Int) b = x.b;
+    List(Int) none = [];
+    Int k = b[pos];
+    if (k == 0) { return none; }
+    DU u = DU {.cu = 0, .sbase = 0, .abase = v.addrbase, .lbase = 0, .lo = 0};
+    if (k == 1) {
+        UL i = el_uleb(b, pos + 1);
+        return el_list_at(x, v, i.pos, el_addrx(x, u, i.v), pc);
+    }
+    if (k == 6) { return el_list_at(x, v, pos + 9, el_u(b, pos + 1, 8), pc); }
+    // Ranges: [lo, hi) and the position of the counted expression.
+    UL a = el_uleb(b, pos + 1);
+    UL c = if (k == 4 || k == 2 || k == 3) { el_uleb(b, a.pos) } else { a };
+    Int lo = if (k == 4) { base + a.v } else if (k == 2 || k == 3) { el_addrx(x, u, a.v) } else if (k == 7 || k == 8) { el_u(b, pos + 1, 8) } else { 0 };
+    Int hi = if (k == 4) { base + c.v } else if (k == 2) { el_addrx(x, u, c.v) } else if (k == 3) { lo + c.v } else if (k == 7) { el_u(b, pos + 9, 8) } else { 0 };
+    Int ep = if (k == 4 || k == 2 || k == 3) { c.pos } else if (k == 7) { pos + 17 } else if (k == 8) { el_uleb(b, pos + 9).pos } else { pos + 1 };
+    Int hi2 = if (k == 8) { lo + el_uleb(b, pos + 9).v } else { hi };
+    UL n = el_uleb(b, ep);
+    Bool hit = k == 5 || (pc >= lo && pc < hi2);
+    if (hit) { return b[n.pos..n.pos + n.v]; }
+    return el_list_at(x, v, n.pos + n.v, base, pc);
+}
