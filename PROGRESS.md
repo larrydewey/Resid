@@ -245,6 +245,14 @@ the test harnesses create a throwaway key when none is configured.
 `tests/provenance/run.sh` covers tamper detection, keys, concealment and
 reproducibility. Self-compile time is unchanged.
 
+### 0k. Graph name resolution (G2 step 1, 2026-09-26)
+
+`examples/resolve.resid` adds def edges: each use of a name points at the
+node that binds it. `--graph-resolve` reports unresolved uses. Every
+in-repo program resolves fully, and `tests/graph/cases/resolve_scopes`
+checks that block, branch, loop, pattern, arm and lambda scopes do not
+leak. Field and method names wait for types.
+
 ### 0j. Knowledge graph parser (G1) and three silent-semantics fixes (2026-09-26)
 
 `examples/graph.resid` parses desugared programs into the §3 node store.

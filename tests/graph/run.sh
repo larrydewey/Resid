@@ -31,12 +31,21 @@ for f in examples/driver.resid lib/*.resid tools/*.resid examples/*.resid tests/
     case "$f" in *operator_precedence_*|*logical_short_circuit*) want_lint="$("$COMPILER" "$f" --graph-lint 2>&1 | grep '^graph-lint' | tail -1)" ;; esac
     rt="$("$COMPILER" "$f" --graph-check 2>&1 | grep '^graph' | tail -1)"
     lint="$("$COMPILER" "$f" --graph-lint 2>&1 | grep '^graph-lint' | tail -1)"
-    if [ "$rt" = "graph: ok" ] && [ "$lint" = "$want_lint" ]; then
+    res="$("$COMPILER" "$f" --graph-resolve 2>&1 | grep '^graph-resolve' | tail -1)"
+    if [ "$rt" = "graph: ok" ] && [ "$lint" = "$want_lint" ] && [ "${res##*, }" = "0 unresolved" ]; then
         pass=$((pass + 1))
     else
         fail=$((fail + 1))
-        echo "FAIL $f: $rt / $lint"
+        echo "FAIL $f: $rt / $lint / $res"
     fi
 done
+# Resolution must reject every out-of-scope use in the scopes case.
+got="$("$COMPILER" tests/graph/cases/resolve_scopes.resid --graph-resolve 2>&1 | grep -E ':11: |^graph-resolve' | sed 's/.*:11: //' | tr '\n' ' ')"
+if [ "$got" = "q v i z inner nope graph-resolve: 34 uses, 6 unresolved " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1))
+    echo "FAIL resolve_scopes: $got"
+fi
 echo "graph: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -15392,6 +15392,7 @@ import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
 import "../lib/cose.resid";
 import "graph.resid";
+import "resolve.resid";
 import "reduce.resid";
 import "desugar.resid";
 import "stracc.resid";
@@ -16041,6 +16042,18 @@ Int main() {
         Int nh = kg_print_hits(src, kg_srcmap(rr.map), kgl.g, hits, 0);
         println("graph-lint: " + IntToString(hits.len()) + " mixed-precedence expression(s)");
         return 0;
+    }
+    // `--graph-resolve`: def edges for every name use; lists unresolved ones.
+    if (pick_flag(argc, "--graph-resolve")) {
+        KP kgr = kg_parse(src);
+        if (kgr.err != "") {
+            println("graph: parse error: " + kgr.err);
+            return 1;
+        }
+        RS rsv = kg_resolve(kgr.g, kgr.id);
+        Int nu = kg_print_hits(src, kg_srcmap(rr.map), kgr.g, rsv.unres, 0);
+        println("graph-resolve: " + IntToString(rsv.uses) + " uses, " + IntToString(rsv.unres.len()) + " unresolved");
+        return if (rsv.unres.len() == 0) { 0 } else { 1 };
     }
     Str kgwhere  =  pick_opt(argc, "--graph-where", "");
     if (kgwhere != "") {

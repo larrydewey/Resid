@@ -62,7 +62,14 @@ are imported the same way `reduce.resid` is.
     - The checker accepted list literals without commas.
     - Three `:owned` stripping lines in codegen were dead assignments.
 - [ ] G2 Resolution and type checking on the graph.
-  - def edges, types on nodes, and capability and effect sets.
+  - [x] def edges: `examples/resolve.resid` links every ref, call, struct
+    literal and type use to its binder (param, bind, for, with, pattern,
+    arm, lambda parameter, fn or type declaration). `--graph-resolve`
+    lists unresolved uses; `tests/graph` requires none in-repo, and a scope
+    case requires every out-of-scope use to be caught. The compiler has
+    61K uses, resolved in about 0.4s.
+  - [ ] Field and method uses (need types).
+  - [ ] Types on nodes, and capability and effect sets.
   - Port `typecheck.resid` checks by walking nodes instead of text.
   - Exit criterion: identical diagnostics on `tests/conformance`.
 - [ ] G2b `StrBuf`: a linear string builder type.

@@ -1,0 +1,220 @@
+// resolve.resid — name resolution on the knowledge graph (spec §3, PLAN-graph-ir
+// G2): def edges from each use of a name to the node that binds it.
+//
+// A def edge goes from a `ref`, `call`, `struct` or `ty` node to its binder:
+// a param, bind, for, with-binding, pattern, lambda parameter, fn or type
+// declaration. Builtins and prelude names get RS_BUILTIN. Field and method
+// names need types and are resolved by the type pass.
+
+// def edges (use id -> binder id) and uses left unresolved.
+type RS = { Map(Int, Int) def; List(Int) unres; Int uses; };
+// Global names: functions, types and sum variants.
+type RSG = { Map(Str, Int) fns; Map(Str, Int) tys; Map(Str, Int) vars; };
+// A walk result: the resolution so far and the scope after a statement.
+type RSW = { RS r; Map(Str, Int) env; };
+
+pub Int rs_builtin() { return -2; }
+
+Map(Str, Int) rs_noenv() {
+    Map(Str, Int) m = {};
+    return m;
+}
+
+RS rs_empty() {
+    Map(Int, Int) d = {};
+    List(Int) u = [];
+    return RS {.def = d, .unres = u, .uses = 0};
+}
+
+RS rs_edge(RS r, Int use, Int def) {
+    if (def == -1) { return RS {.def = r.def, .unres = r.unres.concat([use]), .uses = r.uses + 1}; }
+    return RS {.def = r.def.insert(use, def), .unres = r.unres, .uses = r.uses + 1};
+}
+
+// ─── Globals ────────────────────────────────────────────────────────
+
+RSG rs_add_variants(Kg g, Int id, Int i, RSG a) {
+    if (i >= g.nk[id]) { return a; }
+    Int v = kg_kid(g, id, i);
+    RSG a2 = RSG {.fns = a.fns, .tys = a.tys, .vars = a.vars.insert(g.text[v], v)};
+    return rs_add_variants(g, id, i + 1, a2);
+}
+
+RSG rs_globals(Kg g, Int id, Int i, RSG a) {
+    if (i >= g.nk[id]) { return a; }
+    Int d = kg_kid(g, id, i);
+    Str k = g.kind[d];
+    Str nm = g.text[d];
+    RSG a2 = if (k == "sandbox") { rs_globals(g, d, 0, a) }
+        else { if (k == "fn") { RSG {.fns = a.fns.insert(nm, d), .tys = a.tys, .vars = a.vars} }
+        else { if (k == "sum_t") { rs_add_variants(g, d, 0, RSG {.fns = a.fns, .tys = a.tys.insert(nm, d), .vars = a.vars}) }
+        else { if (k == "struct_t" || k == "alias_t" || k == "ctype_t" || k == "cwhere_t") { RSG {.fns = a.fns, .tys = a.tys.insert(nm, d), .vars = a.vars} }
+        else { a } } } };
+    return rs_globals(g, id, i + 1, a2);
+}
+
+// ─── Lookup ─────────────────────────────────────────────────────────
+
+Bool rs_prelude_value(Str n) {
+    return n == "None" || n == "value" || n == "self" || n == "args" || n == "environment" || n == "filesystem" || n == "network" || n == "clock" || n == "random" || n == "process";
+}
+
+// A value name: local, function, variant, type (behavior instances like
+// `Ord(Int)` take types as arguments), then prelude.
+Int rs_value(RSG gl, Map(Str, Int) env, Str n) {
+    Int l = env.get(n) else { -1 };
+    if (l >= 0) { return l; }
+    Int f = gl.fns.get(n) else { -1 };
+    if (f >= 0) { return f; }
+    Int v = gl.vars.get(n) else { -1 };
+    if (v >= 0) { return v; }
+    Int t = gl.tys.get(n) else { -1 };
+    if (t >= 0) { return t; }
+    if (rs_prelude_value(n) || is_known_type(n)) { return rs_builtin(); }
+    return -1;
+}
+
+// A callee: local closure, function, variant, else a builtin (extern or runtime).
+Int rs_callee(RSG gl, Map(Str, Int) env, Str n) {
+    Int v = rs_value(gl, env, n);
+    if (v != -1) { return v; }
+    return rs_builtin();
+}
+
+// Head identifier of a type text: `List(Int)` -> List, `Int[..]` -> Int.
+Str rs_type_head(Str t) {
+    Int p = str_find_char(t, 40, 0);
+    Int b = str_find_char(t, 91, 0);
+    Int e0 = if (p >= 0) { p } else { str_len(t) };
+    Int e = if (b >= 0 && b < e0) { b } else { e0 };
+    return str_trim(str_slice(t, 0, e));
+}
+
+Int rs_type(RSG gl, Str t) {
+    Int d = gl.tys.get(rs_type_head(t)) else { -1 };
+    if (d >= 0) { return d; }
+    return rs_builtin();
+}
+
+// ─── Walk ───────────────────────────────────────────────────────────
+
+RSW rsw(RS r, Map(Str, Int) env) { return RSW {.r = r, .env = env}; }
+
+// Children from..to in one scope, which does not grow.
+RS rs_kids(Kg g, RSG gl, Int id, Int from, Int to, Map(Str, Int) env, RS r) {
+    if (from >= to) { return r; }
+    RS r2 = rs_expr(g, gl, kg_kid(g, id, from), env, r);
+    return rs_kids(g, gl, id, from + 1, to, env, r2);
+}
+
+// Statements from..to, each seeing the bindings before it.
+RSW rs_seq(Kg g, RSG gl, Int id, Int from, Int to, Map(Str, Int) env, RS r) {
+    if (from >= to) { return rsw(r, env); }
+    RSW w = rs_stmt(g, gl, kg_kid(g, id, from), env, r);
+    return rs_seq(g, gl, id, from + 1, to, w.env, w.r);
+}
+
+// Bind the ids of kids from..to by their text (params, lambda params, names).
+Map(Str, Int) rs_bind_kids(Kg g, Int id, Int from, Int to, Map(Str, Int) env) {
+    if (from >= to) { return env; }
+    Int k = kg_kid(g, id, from);
+    return rs_bind_kids(g, id, from + 1, to, env.insert(g.text[k], k));
+}
+
+// A statement; binding forms extend the scope for the statements after it.
+RSW rs_stmt(Kg g, RSG gl, Int id, Map(Str, Int) env, RS r) {
+    Str k = g.kind[id];
+    Int n = g.nk[id];
+    if (k == "bind" || k == "rbind") {
+        RS r1 = rs_expr(g, gl, kg_kid(g, id, 0), env, r);
+        Map(Str, Int) penv = env.insert("value", id);
+        RS r2 = rs_kids(g, gl, id, 1, n - 1, penv, r1);
+        RS r3 = rs_expr(g, gl, kg_kid(g, id, n - 1), env, r2);
+        return rsw(r3, env.insert(g.text[id], id));
+    }
+    if (k == "letpat") {
+        RS r1 = rs_kids(g, gl, id, 0, n, env, r);
+        return rsw(r1, env.insert(g.aux[id], id));
+    }
+    if (k == "destr") {
+        RS r0 = rs_edge(r, id, rs_type(gl, g.text[id]));
+        RS r1 = rs_expr(g, gl, kg_kid(g, id, n - 1), env, r0);
+        return rsw(r1, rs_bind_kids(g, id, 0, n - 1, env));
+    }
+    return rsw(rs_expr(g, gl, id, env, r), env);
+}
+
+// Scope a pattern condition adds to the branch it guards.
+Map(Str, Int) rs_cond_env(Kg g, Int c, Map(Str, Int) env) {
+    if (g.kind[c] == "pat") { return env.insert(g.aux[c], c); }
+    return env;
+}
+
+pub RS rs_expr(Kg g, RSG gl, Int id, Map(Str, Int) env, RS r) {
+    Str k = g.kind[id];
+    Int n = g.nk[id];
+    Str t = g.text[id];
+    if (k == "ref") { return rs_edge(r, id, rs_value(gl, env, t)); }
+    if (k == "ty") { return rs_edge(r, id, rs_type(gl, t)); }
+    if (k == "call") { return rs_kids(g, gl, id, 0, n, env, rs_edge(r, id, rs_callee(gl, env, t))); }
+    if (k == "struct") { return rs_kids(g, gl, id, 0, n, env, rs_edge(r, id, rs_type(gl, t))); }
+    if (k == "block") { return rs_seq(g, gl, id, 0, n, env, r).r; }
+    if (k == "bexpr") { return rs_seq(g, gl, id, 0, n, env, r).r; }
+    if (k == "bind" || k == "rbind" || k == "letpat" || k == "destr") { return rs_stmt(g, gl, id, env, r).r; }
+    if (k == "if" || k == "while") {
+        Int c = kg_kid(g, id, 0);
+        RS r1 = rs_expr(g, gl, c, env, r);
+        RS r2 = rs_expr(g, gl, kg_kid(g, id, 1), rs_cond_env(g, c, env), r1);
+        return rs_kids(g, gl, id, 2, n, env, r2);
+    }
+    if (k == "for") {
+        RS r1 = rs_kids(g, gl, id, 0, 2, env, r);
+        return rs_expr(g, gl, kg_kid(g, id, 2), env.insert(t, id), r1);
+    }
+    if (k == "with") {
+        RSW w = rs_seq(g, gl, id, 0, n - 1, env, r);
+        return rs_expr(g, gl, kg_kid(g, id, n - 1), w.env, w.r);
+    }
+    if (k == "arm") {
+        Map(Str, Int) aenv = if (g.aux[id] != "") { env.insert(g.aux[id], id) } else { env };
+        return rs_kids(g, gl, id, 0, n, aenv, r);
+    }
+    if (k == "lambda") { return rs_expr(g, gl, kg_kid(g, id, n - 1), rs_bind_kids(g, id, 0, n - 1, env), r); }
+    if (k == "named") { return rs_kids(g, gl, id, 0, n, env, r); }
+    return rs_kids(g, gl, id, 0, n, env, r);
+}
+
+// A declaration: params scope the body; type declarations resolve their types.
+RS rs_decl(Kg g, RSG gl, Int d, RS r) {
+    Str k = g.kind[d];
+    Int n = g.nk[d];
+    if (k == "sandbox") { return rs_decls(g, gl, d, 0, r); }
+    if (k == "fn") {
+        RS r1 = rs_kids(g, gl, d, 0, n - 1, rs_noenv(), r);
+        Map(Str, Int) env = rs_bind_kids(g, d, 1, n - 1, rs_noenv());
+        return rs_expr(g, gl, kg_kid(g, d, n - 1), env, r1);
+    }
+    if (k == "ctype_t" || k == "cwhere_t") {
+        RS r1 = rs_expr(g, gl, kg_kid(g, d, 0), rs_noenv(), r);
+        return rs_expr(g, gl, kg_kid(g, d, 1), rs_noenv().insert("value", d), r1);
+    }
+    if (k == "variant" || k == "behavior") { return r; }
+    return rs_kids(g, gl, d, 0, n, rs_noenv(), r);
+}
+
+RS rs_decls(Kg g, RSG gl, Int id, Int i, RS r) {
+    if (i >= g.nk[id]) { return r; }
+    return rs_decls(g, gl, id, i + 1, rs_decl(g, gl, kg_kid(g, id, i), r));
+}
+
+// Resolve a whole unit.
+pub RS kg_resolve(Kg g, Int unit) {
+    Map(Str, Int) e = {};
+    RSG gl = rs_globals(g, unit, 0, RSG {.fns = e, .tys = e, .vars = e});
+    return rs_decls(g, gl, unit, 0, rs_empty());
+}
+
+// The def edge of a use, -1 when unresolved or not a use.
+pub Int kg_def(RS r, Int id) {
+    return r.def.get(id) else { -1 };
+}
