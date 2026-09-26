@@ -1184,6 +1184,12 @@ Debug and check profiles always emit the graph. Release
 builds may omit it; if they do, they omit the hash too.
 The hash is the global `resid_graph_hash`, 32 bytes.
 
+Debug builds carry DWARF: a subprogram per function and,
+per statement, a line entry at the statement's source line
+and column, which every instruction of the statement uses.
+A debugger maps a location to nodes through the graph's
+spans; specialized functions keep their originals' lines.
+
 In the graph artifact, a node's knowledge is `known` for
 literals and for literal structure over them (negation,
 parentheses, casts, lists, `Some`), `effect` for a node

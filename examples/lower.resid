@@ -13,8 +13,8 @@
 // where the innermost sandbox body starts (the text codegen numbers lambda,
 // spawn and assertion symbols by position within that body). rg: the graph
 // is the reducer's residual, whose specialized functions share nodes with
-// their originals.
-type LW = { Kg g; Str src; Funcs fs; Int base; Bool rg; };
+// their originals. dbg: emit DWARF locations, with df the file table.
+type LW = { Kg g; Str src; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; };
 // Program walk result: the module so far, functions lowered from the graph
 // vs by the text fallback, and why each fallback happened.
 type LP = { PG pg; Int nodes; Int texts; Map(Str, Int) why; };
@@ -1556,7 +1556,9 @@ ST lw_block(LW w, Int id, List(Str) env, Bool in_main, ST g) {
 
 ST lw_stmts(LW w, Int id, Int i, List(Str) env, Bool in_main, ST g) {
     if (i >= w.g.ns[id].nk) { return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines, .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety}; }
-    ST r = lw_stmt(w, lw_kid(w, id, i), env, in_main, g);
+    // A `;@dbg node` marker starts each statement's lines (lw_dbg_fn).
+    ST g2 = if (w.dbg) { ST {.pos = 0, .dead = g.dead, .err = "", .env = g.env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines.concat([";@dbg " + IntToString(lw_kid(w, id, i))]), .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety} } else { g };
+    ST r = lw_stmt(w, lw_kid(w, id, i), env, in_main, g2);
     if (r.err != "" || r.dead) { return r; }
     return lw_stmts(w, id, i + 1, r.env, in_main, r);
 }
@@ -2046,13 +2048,50 @@ PG lw_fn(LW w, Int d, PG g) {
     Str defpre = "define " + ll_ty(rbase) + " @" + name + "(";
     Str defpost = ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
     List(Str) fn_lines = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, lmask) } else { pp1.lines.concat(pp2.lines) };
-    List(Str) own_lines = fn_lines.concat(["}"]);
+    List(Str) own0 = fn_lines.concat(["}"]);
+    LDG dg = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
     Int final_tmp = body.tmp;
     Int final_lbl = body.lbl;
-    List(Str) persisted_own_lines = resid_list_str_persist_copy(own_lines);
-    List(Str) persisted_own_glines = resid_list_str_persist_copy(pp2.glines);
+    List(Str) persisted_own_lines = resid_list_str_persist_copy(dg.lines);
+    List(Str) persisted_own_glines = resid_list_str_persist_copy(pp2.glines.concat(dg.meta));
     Int _arena_out = resid_arena_pop();
-    return PG {.pos = 0, .err = "", .glines = g.glines.concat(persisted_own_glines), .hlines = g.hlines, .lines = g.lines.concat(persisted_own_lines), .tmp = final_tmp, .lbl = final_lbl};
+    return PG {.pos = dg.next, .err = "", .glines = g.glines.concat(persisted_own_glines), .hlines = g.hlines, .lines = g.lines.concat(persisted_own_lines), .tmp = final_tmp, .lbl = final_lbl};
+}
+
+// ─── Debug info ─────────────────────────────────────────────────────
+// Each function gets a DISubprogram, each statement a DILocation at its
+// source line and column; every instruction carries the location of the
+// statement it belongs to (the prologue, the function's). Metadata ids
+// count up from PG.pos; the driver emits the unit and file table.
+type LDG = { List(Str) lines; List(Str) meta; Int next; };
+
+pub Str lw_dbg_q(Str s) { return str_replace(str_replace(s, "\\", "\\5C"), "\"", "\\22"); }
+
+LDG lw_dbg_fn(LW w, Int d, Str name, List(Str) ls, Int next) {
+    List(Int) at = ga_where(w.df, w.g.ns[d].sp);
+    Str file = "!" + IntToString(10 + at[0]);
+    Str sp = "!" + IntToString(next);
+    Str spl = sp + " = distinct !DISubprogram(name: \"" + lw_dbg_q(name) + "\", scope: " + file + ", file: " + file + ", line: " + IntToString(at[1]) + ", type: !4, scopeLine: " + IntToString(at[1]) + ", spFlags: DISPFlagDefinition, unit: !1)";
+    Str l0 = "!" + IntToString(next + 1);
+    Str l0l = l0 + " = !DILocation(line: " + IntToString(at[1]) + ", column: " + IntToString(at[2]) + ", scope: " + sp + ")";
+    Str def = ls[0];
+    Str def2 = str_slice(def, 0, str_len(def) - 2) + " !dbg " + sp + " {";
+    ListBuf(Str) o0 = ListBuf();
+    return lw_dbg_lines(w, ls, 1, sp, l0, next + 2, o0.push(def2), [spl, l0l]);
+}
+
+LDG lw_dbg_lines(LW w, List(Str) ls, Int i, Str sp, Str cur, Int next, ListBuf(Str) out, List(Str) meta) {
+    if (i >= ls.len()) { return LDG {.lines = out.finish(), .meta = meta, .next = next}; }
+    Str l = ls[i];
+    if (str_starts_with(l, ";@dbg ")) {
+        List(Int) at = ga_where(w.df, w.g.ns[str_parse_int(str_slice(l, 6, str_len(l)))].sp);
+        Str id = "!" + IntToString(next);
+        Str ml = id + " = !DILocation(line: " + IntToString(at[1]) + ", column: " + IntToString(at[2]) + ", scope: " + sp + ")";
+        return lw_dbg_lines(w, ls, i + 1, sp, id, next + 1, out, meta.concat([ml]));
+    }
+    Bool plain = l == "" || l == "}" || str_ends_with(l, ":") || str_starts_with(l, ";");
+    Str l2 = if (plain) { l } else { l + ", !dbg " + cur };
+    return lw_dbg_lines(w, ls, i + 1, sp, cur, next, out.push(l2), meta);
 }
 
 Str lw_lin_mask(LW w, Int body, List(Str) nl, List(Str) tyl, Str name) {
@@ -2095,12 +2134,12 @@ LP lw_decls(LW w, Int id, Int i, LP acc) {
         Tok st = lex_tok(w.src, w.g.ns[d].sp);
         Tok lp = lex_tok(w.src, st.pos);
         Tok lb = lex_tok(w.src, imp_close_paren(w.src, lp.pos, 0));
-        LW wi = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = lb.pos, .rg = w.rg};
+        LW wi = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = lb.pos, .rg = w.rg, .dbg = w.dbg, .df = w.df};
         return lw_decls(w, id, i + 1, lw_decls(wi, d, 0, acc));
     }
     if (kind != "fn") { return lw_decls(w, id, i + 1, acc); }
     Int off = if (w.rg) { lw_spec_off(w.g.ns[d].text) } else { 0 };
-    LW wf = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = w.base - off, .rg = w.rg};
+    LW wf = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df};
     PG r = lw_fn(wf, d, acc.pg);
     if (r.err == "") { return lw_decls(w, id, i + 1, lp_of(r, acc.nodes + 1, acc.texts, acc.why)); }
     // A residual graph has no source text to fall back on.
@@ -2112,8 +2151,8 @@ LP lw_decls(LW w, Int id, Int i, LP acc) {
 }
 
 // Lower a program parsed from `src` (rg: the reducer's residual graph).
-pub LP lw_program(Kg g, Int unit, Str src, Funcs fs, PG g0, Bool rg) {
-    LW w = LW {.g = g, .src = src, .fs = fs, .base = 0, .rg = rg};
+pub LP lw_program(Kg g, Int unit, Str src, Funcs fs, PG g0, Bool rg, Bool dbg, GAF df) {
+    LW w = LW {.g = g, .src = src, .fs = fs, .base = 0, .rg = rg, .dbg = dbg, .df = df};
     Map(Str, Int) why = {};
     return lw_decls(w, unit, 0, lp_of(g0, 0, 0, why));
 }

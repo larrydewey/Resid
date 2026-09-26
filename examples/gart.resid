@@ -66,14 +66,14 @@ Str ga_bytes_hex(List(Int) bs, Int i, StrBuf acc) {
 // ─── Spans ──────────────────────────────────────────────────────────
 
 // Positions where lines start (after each newline, with 0 first).
-List(Int) ga_line_starts(Str s, Int from, ListBuf(Int) acc) {
+pub List(Int) ga_line_starts(Str s, Int from, ListBuf(Int) acc) {
     Int nl = str_find_char(s, 10, from);
     if (nl < 0) { return acc.finish(); }
     return ga_line_starts(s, nl + 1, acc.push(nl + 1));
 }
 
 // Index of the last line starting at or before pos.
-Int ga_line(List(Int) ls, Int pos, Int lo, Int hi) {
+pub Int ga_line(List(Int) ls, Int pos, Int lo, Int hi) {
     if (lo >= hi) { return lo; }
     Int mid = (lo + hi + 1) / 2;
     if (ls[mid] <= pos) { return ga_line(ls, pos, mid, hi); }
@@ -82,7 +82,7 @@ Int ga_line(List(Int) ls, Int pos, Int lo, Int hi) {
 
 // Index of the last source-map segment starting at or before merged line
 // `line`, or -1.
-Int ga_seg(KgMap m, Int line, Int lo, Int hi) {
+pub Int ga_seg(KgMap m, Int line, Int lo, Int hi) {
     if (lo > hi) { return hi; }
     Int mid = (lo + hi) / 2;
     if (m.ml[mid] <= line) { return ga_seg(m, line, mid + 1, hi); }
@@ -98,7 +98,7 @@ Int ga_path_idx(List(Str) ps, Str p, Int i) {
     return ga_path_idx(ps, p, i + 1);
 }
 
-GAF ga_files(KgMap m, Int i, GAF acc) {
+pub GAF ga_files(KgMap m, Int i, GAF acc) {
     if (i >= m.path.len()) { return acc; }
     Str p = m.path[i];
     Int at = ga_path_idx(acc.paths, p, 0);
@@ -281,16 +281,31 @@ Bool ga_stream(Str path, GAX x, Int id, Int n) {
     return ga_stream(path, x, e, n);
 }
 
+// Line starts and the file table of a program's merged source.
+pub GAF ga_fileinfo(Str src, Str smap, Str main) {
+    KgMap m = kg_srcmap(smap);
+    List(Str) ps0 = [main];
+    ListBuf(Int) l0 = ListBuf();
+    return ga_files(m, 0, GAF {.m = m, .paths = ps0, .segf = gx_none(), .ls = ga_line_starts(src, 0, l0.push(0))});
+}
+
+// [file, line, col] of a position.
+pub List(Int) ga_where(GAF f, Int pos) {
+    Int li = ga_line(f.ls, pos, 0, f.ls.len() - 1);
+    Int line = li + 1;
+    Int k = ga_seg(f.m, line, 0, f.m.ml.len() - 1);
+    Int file = if (k < 0) { 0 } else { f.segf[k] };
+    Int fline = if (k < 0) { line } else { f.m.fl[k] + line - f.m.ml[k] };
+    return [file, fline, pos - f.ls[li] + 1];
+}
+
 // Write the artifact for graph p (root p.id) whose source nodes are
 // 0..n0-1; with `resid`, p.id is the residual root. The file's SHA-256 as
 // hex, or "" when it could not be written.
 pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, List(Str) tys, Str defs, Str src, Str smap, Str main) {
     Kg g = p.g;
     Int n = kg_count(g);
-    KgMap m = kg_srcmap(smap);
-    List(Str) ps0 = [main];
-    ListBuf(Int) l0 = ListBuf();
-    GAF f = ga_files(m, 0, GAF {.m = m, .paths = ps0, .segf = gx_none(), .ls = ga_line_starts(src, 0, l0.push(0))});
+    GAF f = ga_fileinfo(src, smap, main);
     List(Bool) nb = [];
     List(Str) ns = [];
     GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}), .f = f};
