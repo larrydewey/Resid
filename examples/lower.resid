@@ -14,7 +14,8 @@
 // spawn and assertion symbols by position within that body). rg: the graph
 // is the reducer's residual, whose specialized functions share nodes with
 // their originals. dbg: emit DWARF locations, with df the file table.
-type LW = { Kg g; Str src; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; };
+// rf: the function's range facts (lr_facts), computed when `facts`.
+type LW = { Kg g; Str src; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; };
 // Program walk result: the module so far, functions lowered from the graph
 // vs by the text fallback, and why each fallback happened.
 type LP = { PG pg; Int nodes; Int texts; Map(Str, Int) why; };
@@ -1003,7 +1004,36 @@ GT lw_bin(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     Bool adopt_r = rlit && !lhs_lit && !shift && int_fam(lhs.ty);
     GT lhs2 = if (adopt_l) { gt_retype(lhs, more.ty) } else { lhs };
     GT more2 = if (adopt_r) { gt_retype(more, lhs.ty) } else { more };
+    // Range facts discharge the overflow / division check (spec §3.2a).
+    Bool arith = op == "+" || op == "-" || op == "*" || op == "/" || op == "%";
+    if (arith && w.facts && int_fam(num_norm_cg(lhs2.ty)) && int_fam(num_norm_cg(more2.ty)) && lw_discharged(w, op, l, r, lhs2.ty, more2.ty)) {
+        return bin_arith_nc(lw_ins(op), lhs2, more2);
+    }
     return bin_apply(op, lhs2, more2);
+}
+
+Str lw_ins(Str op) {
+    if (op == "+") { return "add"; }
+    if (op == "-") { return "sub"; }
+    if (op == "*") { return "mul"; }
+    if (op == "/") { return "sdiv"; }
+    return "srem";
+}
+
+// An operand's range: its fact within its type's values.
+LR lw_range(LW w, Int id, Str ty) {
+    LR f = lr_parse(w.rf.get(id) else { "" });
+    LRT t = lr_type(ty);
+    return lr_meet(f, t.r);
+}
+
+Bool lw_discharged(LW w, Str op, Int l, Int r, Str lty, Str rty) {
+    if (!lr_type(lty).ok || !lr_type(rty).ok) { return false; }
+    Str lt = num_norm_cg(lty);
+    Str rt = num_norm_cg(rty);
+    Int tw = imax(ll_width_of(lt), ll_width_of(rt));
+    Str ty = fam_head(lt) + "(" + IntToString(tw) + ")";
+    return lr_safe(op, lw_range(w, l, lty), lw_range(w, r, rty), ty);
 }
 
 GT lw_short_circuit(LW w, Str op, Int r, GT lhs, List(Str) env) {
@@ -2008,11 +2038,12 @@ PG pg_with_err(PG g, Str err) {
 }
 
 // pg_func_one, with the body lowered from the graph.
-PG lw_fn(LW w, Int d, PG g) {
-    Funcs fs = w.fs;
-    Int n = w.g.ns[d].nk;
-    Str rty = lw_text(w, lw_kid(w, d, 0));
+PG lw_fn(LW w0, Int d, PG g) {
+    Funcs fs = w0.fs;
+    Int n = w0.g.ns[d].nk;
+    Str rty = lw_text(w0, lw_kid(w0, d, 0));
     Int _arena_in = resid_arena_push();
+    LW w = if (w0.facts) { LW {.g = w0.g, .src = w0.src, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true} } else { w0 };
     Str rbase = ct_base_of(fs.ctn, fs.ctb, rty);
     Str name = lw_text(w, d);
     Bool is_main = name == "main";
@@ -2186,7 +2217,7 @@ GT lw_struct_ts(LW w, GT v, Str fields, List(Str) env) {
     Str src = "\"" + v.ty + "(\"" + ts_fields_src(tmpn, fields, 0, "") + " + \")\"";
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .src = src, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df};
+    LW ws = LW {.g = e.g, .src = src, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false};
     GT r = lw_expr(ws, e.id, env2, v);
     if (r.err != "") { return r; }
     return GT {.pos = 0, .val = r.val, .ty = "Str", .cnt = 0, .err = "", .glines = r.glines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .tail = false};
@@ -2348,12 +2379,12 @@ LP lw_decls(LW w, Int id, Int i, LP acc) {
         Tok st = lex_tok(w.src, w.g.ns[d].sp);
         Tok lp = lex_tok(w.src, st.pos);
         Tok lb = lex_tok(w.src, imp_close_paren(w.src, lp.pos, 0));
-        LW wi = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = lb.pos, .rg = w.rg, .dbg = w.dbg, .df = w.df};
+        LW wi = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = lb.pos, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts};
         return lw_decls(w, id, i + 1, lw_decls(wi, d, 0, acc));
     }
     if (kind != "fn") { return lw_decls(w, id, i + 1, acc); }
     Int off = if (w.rg) { lw_spec_off(w.g.ns[d].text) } else { 0 };
-    LW wf = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df};
+    LW wf = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts};
     PG r = lw_fn(wf, d, acc.pg);
     if (r.err == "") { return lw_decls(w, id, i + 1, lp_of(r, acc.nodes + 1, acc.texts, acc.why)); }
     // A residual graph has no source text to fall back on.
@@ -2365,8 +2396,8 @@ LP lw_decls(LW w, Int id, Int i, LP acc) {
 }
 
 // Lower a program parsed from `src` (rg: the reducer's residual graph).
-pub LP lw_program(Kg g, Int unit, Str src, Funcs fs, PG g0, Bool rg, Bool dbg, GAF df) {
-    LW w = LW {.g = g, .src = src, .fs = fs, .base = 0, .rg = rg, .dbg = dbg, .df = df};
+pub LP lw_program(Kg g, Int unit, Str src, Funcs fs, PG g0, Bool rg, Bool dbg, GAF df, Bool facts) {
+    LW w = LW {.g = g, .src = src, .fs = fs, .base = 0, .rg = rg, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts};
     Map(Str, Int) why = {};
     return lw_decls(w, unit, 0, lp_of(g0, 0, 0, why));
 }
@@ -2703,4 +2734,407 @@ Str lsd_leaf(List(Str) ns, Map(Str, Int) a, Map(Str, Int) b, Int i, Str acc) {
     Int y = b.get(ns[i]) else { -1 };
     Str acc2 = if (x != y) { acc + "leaf " + ns[i] + ": " + IntToString(x) + " vs " + IntToString(y) + "\n" } else { acc };
     return lsd_leaf(ns, a, b, i + 1, acc2);
+}
+
+// ─── Range facts (spec §3.2a) ───────────────────────────────────────
+// Per function, an integer range for expression nodes, from literals,
+// operators, lengths, loop bounds and branch conditions over immutable
+// bindings. Lowering drops an overflow or division check when the operand
+// ranges prove the operation cannot trap. A range is "lo,hi"; a node
+// without one is unconstrained.
+
+type LR = { Int lo; Int hi; };
+
+Int lr_max() { return 9223372036854775807; }
+Int lr_min() { return 0 - 9223372036854775807 - 1; }
+LR lr_full() { return LR {.lo = lr_min(), .hi = lr_max()}; }
+Bool lr_is_full(LR r) { return r.lo == lr_min() && r.hi == lr_max(); }
+pub Str lr_str(LR r) { return IntToString(r.lo) + "," + IntToString(r.hi); }
+
+pub LR lr_parse(Str s) {
+    if (s == "") { return lr_full(); }
+    Int c = str_find_char(s, 44, 0);
+    return LR {.lo = str_parse_int(str_slice(s, 0, c)), .hi = str_parse_int(str_slice(s, c + 1, str_len(s)))};
+}
+
+LR lr_meet(LR a, LR b) { return LR {.lo = max_i64(a.lo, b.lo), .hi = min_i64(a.hi, b.hi)}; }
+pub LR lr_join(LR a, LR b) { return LR {.lo = min_i64(a.lo, b.lo), .hi = max_i64(a.hi, b.hi)}; }
+
+// The values of an integer type, or ok = false for one wider than 63 bits
+// of magnitude (UInt(64), Int(128), ...), whose values a range cannot hold.
+type LRT = { Bool ok; LR r; };
+
+LRT lr_type(Str ty) {
+    Str t = num_norm_cg(ty);
+    if (!int_fam(t)) { return LRT {.ok = false, .r = lr_full()}; }
+    Int w = ll_width_of(t);
+    Bool uns = fam_head(t) == "UInt";
+    if (w == 64 && !uns) { return LRT {.ok = true, .r = lr_full()}; }
+    if (w >= 64) { return LRT {.ok = false, .r = lr_full()}; }
+    Int p = lr_pow2(w - 1, 1);
+    if (uns) { return LRT {.ok = true, .r = LR {.lo = 0, .hi = p * 2 - 1}}; }
+    return LRT {.ok = true, .r = LR {.lo = 0 - p, .hi = p - 1}};
+}
+
+Int lr_pow2(Int k, Int acc) {
+    if (k <= 0) { return acc; }
+    return lr_pow2(k - 1, acc * 2);
+}
+
+// a + b, a - b and a * b on i64, or ok = false when they overflow.
+type LRV = { Bool ok; Int v; };
+
+LRV lr_add(Int a, Int b) {
+    if (b > 0 && a > lr_max() - b) { return LRV {.ok = false, .v = lr_max()}; }
+    if (b < 0 && a < lr_min() - b) { return LRV {.ok = false, .v = lr_min()}; }
+    return LRV {.ok = true, .v = a + b};
+}
+
+LRV lr_sub(Int a, Int b) {
+    if (b < 0 && a > lr_max() + b) { return LRV {.ok = false, .v = lr_max()}; }
+    if (b > 0 && a < lr_min() + b) { return LRV {.ok = false, .v = lr_min()}; }
+    return LRV {.ok = true, .v = a - b};
+}
+
+LRV lr_mul(Int a, Int b) {
+    Int m = saturating_mul(a, b);
+    Bool sat = m == lr_max() || m == lr_min();
+    return LRV {.ok = !sat, .v = m};
+}
+
+// The range of `a op b` (op one of + - * / % &), and whether it is exact
+// (no corner overflowed i64).
+type LRO = { Bool exact; LR r; };
+
+LRO lr_op(Str op, LR a, LR b) {
+    if (op == "+") {
+        LRV lo = lr_add(a.lo, b.lo);
+        LRV hi = lr_add(a.hi, b.hi);
+        return LRO {.exact = lo.ok && hi.ok, .r = LR {.lo = lo.v, .hi = hi.v}};
+    }
+    if (op == "-") {
+        LRV lo = lr_sub(a.lo, b.hi);
+        LRV hi = lr_sub(a.hi, b.lo);
+        return LRO {.exact = lo.ok && hi.ok, .r = LR {.lo = lo.v, .hi = hi.v}};
+    }
+    if (op == "*") {
+        LRV p1 = lr_mul(a.lo, b.lo);
+        LRV p2 = lr_mul(a.lo, b.hi);
+        LRV p3 = lr_mul(a.hi, b.lo);
+        LRV p4 = lr_mul(a.hi, b.hi);
+        Bool ok = p1.ok && p2.ok && p3.ok && p4.ok;
+        Int lo = min_i64(min_i64(p1.v, p2.v), min_i64(p3.v, p4.v));
+        Int hi = max_i64(max_i64(p1.v, p2.v), max_i64(p3.v, p4.v));
+        return LRO {.exact = ok, .r = LR {.lo = lo, .hi = hi}};
+    }
+    if (op == "/") {
+        if (b.lo < 1) { return LRO {.exact = false, .r = lr_full()}; }
+        Int q1 = a.lo / b.lo;
+        Int q2 = a.lo / b.hi;
+        Int q3 = a.hi / b.lo;
+        Int q4 = a.hi / b.hi;
+        return LRO {.exact = true, .r = LR {.lo = min_i64(min_i64(q1, q2), min_i64(q3, q4)), .hi = max_i64(max_i64(q1, q2), max_i64(q3, q4))}};
+    }
+    if (op == "%") {
+        if (b.lo < 1) { return LRO {.exact = false, .r = lr_full()}; }
+        Int m = b.hi - 1;
+        Int lo = if (a.lo >= 0) { 0 } else { 0 - m };
+        Int hi = if (a.hi <= 0) { 0 } else { m };
+        LR r = LR {.lo = lo, .hi = hi};
+        return LRO {.exact = true, .r = if (a.lo >= 0) { LR {.lo = 0, .hi = min_i64(a.hi, m)} } else { r }};
+    }
+    if (op == "&") {
+        if (a.lo >= 0 && b.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = min_i64(a.hi, b.hi)}}; }
+        if (a.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = a.hi}}; }
+        if (b.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = b.hi}}; }
+    }
+    return LRO {.exact = false, .r = lr_full()};
+}
+
+// Whether `a op b` at type `ty` (the operation's width) cannot trap.
+Bool lr_safe(Str op, LR a, LR b, Str ty) {
+    LRT t = lr_type(ty);
+    if (!t.ok) { return false; }
+    Bool uns = fam_head(num_norm_cg(ty)) == "UInt";
+    if (op == "/" || op == "%") {
+        Bool nz = b.lo > 0 || b.hi < 0;
+        if (uns) { return b.lo > 0; }
+        Bool nm1 = b.lo > -1 || b.hi < -1 || a.lo > t.r.lo;
+        return nz && nm1;
+    }
+    LRO o = lr_op(op, a, b);
+    return o.exact && o.r.lo >= t.r.lo && o.r.hi <= t.r.hi;
+}
+
+// ─── The per-function walk ──────────────────────────────────────────
+
+type LRS = { Map(Str, Str) env; Map(Int, Str) facts; };
+type LRE = { LR r; Map(Int, Str) facts; };
+
+Map(Int, Str) lr_note(Map(Int, Str) f, Int id, LR r) {
+    if (lr_is_full(r)) { return f; }
+    Str old = f.get(id) else { "" };
+    if (old == "") { return f.insert(id, lr_str(r)); }
+    // A node reached twice keeps what holds on both paths.
+    return f.insert(id, lr_str(lr_join(lr_parse(old), r)));
+}
+
+LR lr_lit(Str t) {
+    if (str_len(t) > 18 || !str_is_int(t)) { return lr_full(); }
+    Int v = str_parse_int(t);
+    return LR {.lo = v, .hi = v};
+}
+
+LRE lr_kids(Kg g, Int id, Int i, Map(Str, Str) env, Map(Int, Str) f) {
+    if (i >= g.ns[id].nk) { return LRE {.r = lr_full(), .facts = f}; }
+    LRE e = lr_expr(g, kg_kid(g, id, i), env, f);
+    return lr_kids(g, id, i + 1, env, e.facts);
+}
+
+LRE lr_expr(Kg g, Int id, Map(Str, Str) env, Map(Int, Str) f) {
+    LRE e = lr_expr_at(g, id, env, f);
+    return LRE {.r = e.r, .facts = lr_note(e.facts, id, e.r)};
+}
+
+LRE lr_expr_at(Kg g, Int id, Map(Str, Str) env, Map(Int, Str) f) {
+    KN n = g.ns[id];
+    Str k = n.kind;
+    if (k == "lit") { return LRE {.r = if (n.aux == "int") { lr_lit(n.text) } else { lr_full() }, .facts = f}; }
+    if (k == "ref") { return LRE {.r = lr_parse(env.get(n.text) else { "" }), .facts = f}; }
+    if (k == "paren") { return lr_expr(g, kg_kid(g, id, 0), env, f); }
+    if (k == "un" && n.text == "-") {
+        LRE a = lr_expr(g, kg_kid(g, id, 0), env, f);
+        if (a.r.lo == lr_min()) { return LRE {.r = lr_full(), .facts = a.facts}; }
+        return LRE {.r = LR {.lo = 0 - a.r.hi, .hi = 0 - a.r.lo}, .facts = a.facts};
+    }
+    if (k == "bin") {
+        Str op = n.text;
+        if (op == "&&" || op == "||") { return lr_cond_kids(g, id, env, f); }
+        LRE a = lr_expr(g, kg_kid(g, id, 0), env, f);
+        LRE b = lr_expr(g, kg_kid(g, id, 1), env, a.facts);
+        Bool arith = op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "&";
+        // A checked operation traps rather than leave the i64 range, so a
+        // saturated corner still bounds its value.
+        LR r = if (arith) { lr_op(op, a.r, b.r).r } else { lr_full() };
+        return LRE {.r = r, .facts = b.facts};
+    }
+    if ((k == "mcall" && n.text == "len" && n.nk == 1) || (k == "call" && n.text == "str_len")) {
+        LRE a = lr_kids(g, id, 0, env, f);
+        return LRE {.r = LR {.lo = 0, .hi = 140737488355328}, .facts = a.facts};
+    }
+    if (k == "ifx") {
+        Int c = kg_kid(g, id, 0);
+        LRE ce = lr_expr(g, c, env, f);
+        LRE t = lr_expr(g, kg_kid(g, id, 1), lr_cond(g, c, true, env), ce.facts);
+        if (n.nk < 3) { return LRE {.r = lr_full(), .facts = t.facts}; }
+        LRE e = lr_expr(g, kg_kid(g, id, 2), lr_cond(g, c, false, env), t.facts);
+        return LRE {.r = lr_join(t.r, e.r), .facts = e.facts};
+    }
+    if (k == "bexpr" || k == "block") {
+        LRS s = lr_stmts(g, id, 0, LRS {.env = env, .facts = f});
+        Int last = n.nk - 1;
+        Str lr0 = if (last >= 0) { s.facts.get(kg_kid(g, id, last)) else { "" } } else { "" };
+        return LRE {.r = lr_parse(lr0), .facts = s.facts};
+    }
+    if (k == "lambda") {
+        Map(Str, Str) e2 = lr_unbind_kids(g, id, 0, n.nk - 1, env);
+        return LRE {.r = lr_full(), .facts = lr_expr(g, kg_kid(g, id, n.nk - 1), e2, f).facts};
+    }
+    if (k == "match") { return LRE {.r = lr_full(), .facts = lr_arms(g, id, 1, env, lr_expr(g, kg_kid(g, id, 0), env, f).facts)}; }
+    if (k == "fstr") { return LRE {.r = lr_full(), .facts = f}; }
+    LRE ks = lr_kids(g, id, 0, env, f);
+    return LRE {.r = lr_full(), .facts = ks.facts};
+}
+
+// && / ||: the right operand is evaluated under the left's outcome.
+LRE lr_cond_kids(Kg g, Int id, Map(Str, Str) env, Map(Int, Str) f) {
+    Int l = kg_kid(g, id, 0);
+    LRE a = lr_expr(g, l, env, f);
+    Map(Str, Str) e2 = lr_cond(g, l, g.ns[id].text == "&&", env);
+    LRE b = lr_expr(g, kg_kid(g, id, 1), e2, a.facts);
+    return LRE {.r = lr_full(), .facts = b.facts};
+}
+
+Map(Int, Str) lr_arms(Kg g, Int id, Int i, Map(Str, Str) env, Map(Int, Str) f) {
+    if (i >= g.ns[id].nk) { return f; }
+    Int a = kg_kid(g, id, i);
+    Map(Str, Str) e2 = if (g.ns[a].aux == "") { env } else { env.remove(g.ns[a].aux) };
+    return lr_arms(g, id, i + 1, env, lr_kids(g, a, 0, e2, f).facts);
+}
+
+Map(Str, Str) lr_unbind_kids(Kg g, Int id, Int i, Int n, Map(Str, Str) env) {
+    if (i >= n) { return env; }
+    return lr_unbind_kids(g, id, i + 1, n, env.remove(g.ns[kg_kid(g, id, i)].text));
+}
+
+// ─── Conditions ─────────────────────────────────────────────────────
+
+Str lr_flip(Str op) {
+    if (op == "<") { return ">="; }
+    if (op == "<=") { return ">"; }
+    if (op == ">") { return "<="; }
+    if (op == ">=") { return "<"; }
+    if (op == "==") { return "!="; }
+    if (op == "!=") { return "=="; }
+    return "";
+}
+
+// The operator seen from the right operand (`a < b` is `b > a`).
+Str lr_mirror(Str op) {
+    if (op == "<") { return ">"; }
+    if (op == "<=") { return ">="; }
+    if (op == ">") { return "<"; }
+    if (op == ">=") { return "<="; }
+    return op;
+}
+
+// Bindings refined by condition c holding (pos) or failing.
+Map(Int, Str) lr_nof() {
+    Map(Int, Str) f = {};
+    return f;
+}
+
+Map(Str, Str) lr_cond(Kg g, Int c, Bool pos, Map(Str, Str) env) {
+    KN n = g.ns[c];
+    // `V(x) = e` binds x.
+    if (n.kind == "pat") { return env.remove(n.aux); }
+    if (n.kind == "paren") { return lr_cond(g, kg_kid(g, c, 0), pos, env); }
+    if (n.kind == "un" && n.text == "!") { return lr_cond(g, kg_kid(g, c, 0), !pos, env); }
+    if (n.kind != "bin") { return env; }
+    Str op = n.text;
+    Int l = kg_kid(g, c, 0);
+    Int r = kg_kid(g, c, 1);
+    if (op == "&&") { return if (pos) { lr_cond(g, r, true, lr_cond(g, l, true, env)) } else { env }; }
+    if (op == "||") { return if (pos) { env } else { lr_cond(g, r, false, lr_cond(g, l, false, env)) }; }
+    Str o = if (pos) { op } else { lr_flip(op) };
+    if (o == "") { return env; }
+    LR lv = lr_expr(g, l, env, lr_nof()).r;
+    LR rv = lr_expr(g, r, env, lr_nof()).r;
+    Map(Str, Str) e1 = if (g.ns[l].kind == "ref") { lr_refine(env, g.ns[l].text, o, rv) } else { env };
+    return if (g.ns[r].kind == "ref") { lr_refine(e1, g.ns[r].text, lr_mirror(o), lv) } else { e1 };
+}
+
+// x `o` e for e in range v.
+Map(Str, Str) lr_refine(Map(Str, Str) env, Str x, Str o, LR v) {
+    LR cur = lr_parse(env.get(x) else { "" });
+    LR b = if (o == "<" && v.hi > lr_min()) { LR {.lo = lr_min(), .hi = v.hi - 1} } else if (o == "<=") { LR {.lo = lr_min(), .hi = v.hi} } else if (o == ">" && v.lo < lr_max()) { LR {.lo = v.lo + 1, .hi = lr_max()} } else if (o == ">=") { LR {.lo = v.lo, .hi = lr_max()} } else if (o == "==") { v } else { lr_full() };
+    LR m0 = lr_meet(cur, b);
+    // x != v where v is one value: shave it off an end.
+    Bool one = o == "!=" && v.lo == v.hi;
+    LR m = if (one && m0.lo == v.lo && m0.lo < lr_max()) { LR {.lo = m0.lo + 1, .hi = m0.hi} } else if (one && m0.hi == v.lo && m0.hi > lr_min()) { LR {.lo = m0.lo, .hi = m0.hi - 1} } else { m0 };
+    // An empty range: the branch is unreachable; keep what was known.
+    if (m.lo > m.hi) { return env; }
+    if (lr_is_full(m)) { return env; }
+    return env.insert(x, lr_str(m));
+}
+
+// ─── Statements ─────────────────────────────────────────────────────
+
+// Whether a statement always leaves the enclosing block (return, break,
+// continue, or an if whose arms all do).
+Bool lr_exits(Kg g, Int id) {
+    Str k = g.ns[id].kind;
+    if (k == "ret" || k == "brk" || k == "cont") { return true; }
+    if (k == "block") { return g.ns[id].nk > 0 && lr_exits(g, kg_kid(g, id, g.ns[id].nk - 1)); }
+    if (k == "if") { return g.ns[id].nk == 3 && lr_exits(g, kg_kid(g, id, 1)) && lr_exits(g, kg_kid(g, id, 2)); }
+    return false;
+}
+
+Bool lr_int_ty(Str ty) { return lr_type(ty).ok; }
+
+LRS lr_stmts(Kg g, Int id, Int i, LRS st) {
+    if (i >= g.ns[id].nk) { return st; }
+    return lr_stmts(g, id, i + 1, lr_stmt(g, kg_kid(g, id, i), st));
+}
+
+LRS lr_stmt(Kg g, Int id, LRS st) {
+    KN n = g.ns[id];
+    Str k = n.kind;
+    if (k == "bind" || k == "rbind") {
+        Str ty = g.ns[kg_kid(g, id, 0)].text;
+        LRE v = lr_expr(g, kg_kid(g, id, n.nk - 1), st.env, st.facts);
+        Map(Str, Str) e0 = st.env.remove(n.text);
+        LRT t = lr_type(ty);
+        LR r = if (t.ok) { lr_meet(v.r, t.r) } else { lr_full() };
+        Map(Str, Str) e1 = if (t.ok && !lr_is_full(r) && r.lo <= r.hi) { e0.insert(n.text, lr_str(r)) } else { e0 };
+        return LRS {.env = e1, .facts = v.facts};
+    }
+    if (k == "if") {
+        Int c = kg_kid(g, id, 0);
+        LRE ce = lr_expr(g, c, st.env, st.facts);
+        Map(Str, Str) et = lr_cond(g, c, true, st.env);
+        Map(Str, Str) ef = lr_cond(g, c, false, st.env);
+        LRS t = lr_stmt(g, kg_kid(g, id, 1), LRS {.env = et, .facts = ce.facts});
+        LRS e = if (n.nk == 3) { lr_stmt(g, kg_kid(g, id, 2), LRS {.env = ef, .facts = t.facts}) } else { t };
+        Bool tx = lr_exits(g, kg_kid(g, id, 1));
+        Bool ex = n.nk == 3 && lr_exits(g, kg_kid(g, id, 2));
+        Map(Str, Str) after = if (tx && !ex) { ef } else if (ex && !tx) { et } else { st.env };
+        return LRS {.env = after, .facts = e.facts};
+    }
+    if (k == "block") {
+        LRS b = lr_stmts(g, id, 0, st);
+        return LRS {.env = st.env, .facts = b.facts};
+    }
+    if (k == "for") {
+        Int it = kg_kid(g, id, 1);
+        Str op = g.ns[it].text;
+        Bool range = g.ns[it].kind == "bin" && (op == ".." || op == "..=");
+        LRE a = if (range) { lr_expr(g, kg_kid(g, it, 0), st.env, st.facts) } else { lr_expr(g, it, st.env, st.facts) };
+        LRE b = if (range) { lr_expr(g, kg_kid(g, it, 1), st.env, a.facts) } else { a };
+        Int hi = if (op == "..=") { b.r.hi } else { if (b.r.hi > lr_min()) { b.r.hi - 1 } else { lr_min() } };
+        LR vr = LR {.lo = a.r.lo, .hi = hi};
+        Map(Str, Str) e0 = st.env.remove(n.text);
+        Bool ok = range && lr_int_ty(g.ns[kg_kid(g, id, 0)].text) && vr.lo <= vr.hi && !lr_is_full(vr);
+        Map(Str, Str) e1 = if (ok) { e0.insert(n.text, lr_str(vr)) } else { e0 };
+        LRS body = lr_stmt(g, kg_kid(g, id, 2), LRS {.env = e1, .facts = b.facts});
+        return LRS {.env = st.env, .facts = body.facts};
+    }
+    if (k == "while") {
+        Int c = kg_kid(g, id, 0);
+        LRE ce = lr_expr(g, c, st.env, st.facts);
+        LRS body = lr_stmt(g, kg_kid(g, id, 1), LRS {.env = lr_cond(g, c, true, st.env), .facts = ce.facts});
+        return LRS {.env = st.env, .facts = body.facts};
+    }
+    if (k == "letpat" || k == "pat" || k == "destr" || k == "with") {
+        // Names these bind carry no range (and hide an outer one).
+        Map(Str, Str) e1 = if (k == "letpat" || k == "pat") { st.env.remove(n.aux) } else { lr_unbind_kids(g, id, 0, n.nk - 1, st.env) };
+        LRE v = lr_kids(g, id, 0, if (k == "with") { e1 } else { st.env }, st.facts);
+        return LRS {.env = e1, .facts = v.facts};
+    }
+    LRE v = lr_kids(g, id, 0, st.env, st.facts);
+    return LRS {.env = st.env, .facts = v.facts};
+}
+
+// The walk's intermediate values are compiler-generated allocations, so it
+// runs in a bulk arena and its map comes out as text ("id=lo,hi;").
+pub Map(Int, Str) lr_facts_kept(Kg g, Int d) {
+    return lr_facts_read(lr_facts_kept_text(g, d), 0, lr_nof());
+}
+
+pub Str lr_facts_kept_text(Kg g, Int d) {
+    Int _in = resid_bulk_push();
+    Map(Int, Str) f = lr_facts(g, d);
+    List(Str) kept = resid_list_str_persist_copy([lr_facts_text(f, f.keys(), 0, StrBuf())]);
+    Int _out = resid_bulk_pop();
+    return kept[0];
+}
+
+Str lr_facts_text(Map(Int, Str) f, List(Int) ks, Int i, StrBuf acc) {
+    if (i >= ks.len()) { return acc.finish(); }
+    Str v = f.get(ks[i]) else { "" };
+    return lr_facts_text(f, ks, i + 1, acc.push(IntToString(ks[i])).push_char(61).push(v).push_char(59));
+}
+
+Map(Int, Str) lr_facts_read(Str s, Int pos, Map(Int, Str) acc) {
+    if (pos >= str_len(s)) { return acc; }
+    Int eq = str_find_char(s, 61, pos);
+    Int semi = str_find_char(s, 59, eq);
+    return lr_facts_read(s, semi + 1, acc.insert(str_parse_int(str_slice(s, pos, eq)), str_slice(s, eq + 1, semi)));
+}
+
+// The range facts of function d's body.
+pub Map(Int, Str) lr_facts(Kg g, Int d) {
+    Map(Str, Str) e = {};
+    Map(Int, Str) f = {};
+    return lr_stmt(g, kg_kid(g, d, g.ns[d].nk - 1), LRS {.env = e, .facts = f}).facts;
 }

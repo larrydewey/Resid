@@ -139,8 +139,13 @@ are imported the same way `reduce.resid` is.
     loop and whistle.
   - Port fold, beta, eval, specialize, generalize, dead-arm and elide from
     `reduce.resid`, recording derive edges and reasons.
-  - Facts: range and nonzero first (overflow and div0 discharge), then
-    length (bounds), tag (arm selection), fields and path.
+  - [x] Range facts (`lr_facts` in lower.resid): literals, arithmetic,
+    lengths, range loops and branch conditions; + - * / % lose their
+    check when the ranges prove it cannot fire (`--no-facts` keeps every
+    check). The self-compile drops 890 of 2,500 overflow checks and 65 of
+    78 division checks; the artifact lists ranges as facts.
+  - Next facts: nonzero (a divisor known only != 0), discharge derive
+    records, then length (bounds), tag (arm selection), fields.
   - Exit criterion: `tests/reduce` passes, and the self-compile specializes
     at least as much as today.
 - [ ] G4 Lowering from the residual graph.

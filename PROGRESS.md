@@ -299,6 +299,19 @@ re-entry) and `whistle` (a generalized specialization), recorded against
 the call and inherited along derive edges. Self-compile: 2,517 budget and
 605 whistle reasons; debug peak 690MB.
 
+### 0v. Range facts discharge checks (G3, 2026-09-26)
+
+Lowering computes range facts per function (spec §3.2a, `lr_facts` in
+`examples/lower.resid`): integer literals, + - * / % &, lengths, `for`
+over a range and branch conditions, including the early-exit
+`if (i >= n) { return ...; }` pattern. A + - * / % whose operand ranges
+prove it cannot trap is emitted as a plain `add nsw` / `sdiv` etc.; the
+rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
+2,500 overflow checks and 13 of 78 division checks remain; release peak
+619MB (606MB without facts). The artifact carries a RESIDUAL node's range
+as `facts`. Conformance case `range_facts_discharge` covers the
+boundaries, ending in a MIN / -1 that must still trap.
+
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
 
 `examples/greduce.resid` reduces the parsed graph instead of source text.

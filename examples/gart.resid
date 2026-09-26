@@ -204,7 +204,35 @@ Str ga_type(Int id, Int n0, List(Str) tys, GAD d) {
 
 // ─── Nodes ──────────────────────────────────────────────────────────
 
-type GAX = { Kg g; Int n0; List(Str) tys; List(Int) defs; GAD d; GAC c; GAF f; Map(Int, Str) rs; };
+type GAX = { Kg g; Int n0; List(Str) tys; List(Int) defs; GAD d; GAC c; GAF f; Map(Int, Str) rs; Map(Int, Str) rf; };
+
+// Range facts (lr_facts) of every function under a unit, as "id=lo,hi;"
+// text; a node shared by several functions keeps the join.
+StrBuf ga_facts(Kg g, Int unit, Int i, StrBuf acc) {
+    if (unit < 0 || i >= g.ns[unit].nk) { return acc; }
+    Int d = kg_kid(g, unit, i);
+    Str k = g.ns[d].kind;
+    StrBuf acc2 = if (k == "fn") { acc.push(lr_facts_kept_text(g, d)) } else { if (k == "sandbox") { ga_facts(g, d, 0, acc) } else { acc } };
+    return ga_facts(g, unit, i + 1, acc2);
+}
+
+Map(Int, Str) ga_facts_read(Str s, Int pos, Map(Int, Str) acc) {
+    if (pos >= str_len(s)) { return acc; }
+    Int eq = str_find_char(s, 61, pos);
+    Int semi = str_find_char(s, 59, eq);
+    Int id = str_parse_int(str_slice(s, pos, eq));
+    Str v = str_slice(s, eq + 1, semi);
+    Str old = acc.get(id) else { "" };
+    Str nv = if (old == "") { v } else { lr_str(lr_join(lr_parse(old), lr_parse(v))) };
+    return ga_facts_read(s, semi + 1, acc.insert(id, nv));
+}
+
+// `facts: [{kind: "range", lo, hi}]`.
+StrBuf ga_range(StrBuf b, Str r) {
+    LR x = lr_parse(r);
+    StrBuf b1 = ga_text(ga_key(ga_head(ga_head(b, 4, 1), 5, 3), "kind"), "range");
+    return ga_int(ga_key(ga_int(ga_key(b1, "lo"), x.lo), "hi"), x.hi);
+}
 
 // Reducer-recorded reasons "id,why;" by node.
 Map(Int, Str) ga_reasons(Str rs, Int pos, Map(Int, Str) acc) {
@@ -282,7 +310,8 @@ StrBuf ga_node(StrBuf b, GAX x, Int id) {
     Int def = ga_def(x, id);
     Int from = x.d.from[id];
     Str know = if (eff != "") { "effect" } else if (x.c.kn[id]) { "known" } else { "residual" };
-    Int nf = 9 + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 }) + (if (know != "known") { 1 } else { 0 });
+    Str fr = if (know != "known") { x.rf.get(id) else { "" } } else { "" };
+    Int nf = 9 + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 }) + (if (know != "known") { 1 } else { 0 }) + (if (fr != "") { 1 } else { 0 });
     StrBuf b1 = ga_text(ga_key(ga_int(ga_key(ga_head(b, 5, nf), "id"), id), "kind"), n.kind);
     StrBuf b2 = ga_text(ga_key(ga_text(ga_key(b1, "type"), ga_type(id, x.n0, x.tys, x.d)), "knowledge"), know);
     StrBuf b3 = if (hv) { ga_value(ga_key(b2, "value"), n) } else { b2 };
@@ -294,7 +323,8 @@ StrBuf ga_node(StrBuf b, GAX x, Int id) {
     StrBuf b8 = ga_pos(ga_pos(ga_head(ga_key(b7, "span"), 4, 5), x.f, n.sp, true), x.f, n.ep, false);
     StrBuf b9 = if (from >= 0) { ga_text(ga_key(ga_int(ga_key(ga_head(ga_key(b8, "derive"), 5, 2), "from"), from), "rule"), x.d.rule[id]) } else { b8 };
     StrBuf b10 = if (know != "known") { ga_reason(ga_key(b9, "reason"), x, id, eff, def) } else { b9 };
-    return ga_hexbytes(ga_key(b10, "hash"), x.c.hs[id]);
+    StrBuf b11 = if (fr != "") { ga_range(ga_key(b10, "facts"), fr) } else { b10 };
+    return ga_hexbytes(ga_key(b11, "hash"), x.c.hs[id]);
 }
 
 StrBuf ga_nodes(StrBuf b, GAX x, Int id, Int n) {
@@ -349,7 +379,7 @@ pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, Str rs, List(Str) t
     List(Bool) nb = [];
     List(Str) ns = [];
     Map(Int, Str) r0 = {};
-    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}), .f = f, .rs = ga_reasons(rs, 0, r0)};
+    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}), .f = f, .rs = ga_reasons(rs, 0, r0), .rf = ga_facts_read(ga_facts(g, p.id, 0, StrBuf()).finish(), 0, r0)};
     StrBuf h0 = ga_int(ga_key(ga_head(StrBuf(), 5, 4), "version"), 1);
     StrBuf h1 = ga_sources(ga_head(ga_key(h0, "source"), 4, f.paths.len()), f.paths, 0);
     if (!filesystem.write_hex(path, ga_head(ga_key(h1, "nodes"), 4, n).finish())) { return ""; }
