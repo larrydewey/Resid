@@ -1,0 +1,9 @@
+a 7 70 70 0
+b 77 a 70
+c 2 a 0
+reads_old 7008 7
+later_read 7 8 7
+whole_after 7008 7
+whole_pass 71 70
+pair 70 71
+list 70 73
