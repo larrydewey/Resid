@@ -7531,7 +7531,7 @@ Int main() {
     Bool noreduce  =  pick_flag(argc, "--no-reduce");
     Int _gr_in = resid_bulk_push();
     GXO grd = gx_run(gx_unpack(ckpk[0]), rsrc, !noreduce);
-    GSR gsa0 = if (grd.err != "") { GSR {.g = grd.g, .id = -1, .dv = ""} } else { gs_program(grd.g, grd.root, rsrc) };
+    GSR gsa0 = if (grd.err != "") { GSR {.g = grd.g, .id = -1, .dv = ""} } else { gs_program(grd.g, grd.root) };
     List(Str) gpk = resid_list_str_persist_copy([grd.notes, grd.err, if (gsa0.id < 0) { "" } else { gx_pack(gsa0.g, gsa0.id) }, grd.dv + gsa0.dv, grd.rs]);
     Int _gr_out = resid_bulk_pop();
     if (gpk[0] != "") { print(gpk[0]); }
@@ -7565,7 +7565,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Bool gdbg = profile == "debug";
     GAF gdf = if (gdbg) { ga_fileinfo(rsrc, rr.map, path) } else { ga_fileinfo("", "", path) };
     PG g0 = PG {.pos = if (gdbg) { 1000 } else { 0 }, .err = "", .glines = [], .hlines = [], .lines = header, .tmp = 0, .lbl = 0};
-    PG res = lw_program(lkp.g, lkp.id, rsrc, fs, g0, gdbg, gdf, !pick_flag(argc, "--no-facts"));
+    PG res = lw_program(lkp.g, lkp.id, fs, g0, gdbg, gdf, !pick_flag(argc, "--no-facts"));
     if (res.err != "") {
         println("codegen error: " + res.err + " @ " + IntToString(res.pos));
         return 1;

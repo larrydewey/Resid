@@ -911,7 +911,9 @@ KP kg_decl_at(Str s, Kg g, Int pos) {
         if (lb.text != "{") { return kg_fail(g, lb.pos, "expected { after sandbox capabilities"); }
         KL ds = kg_decls(s, g, lb.pos, "}", none);
         if (ds.err != "") { return kg_fail(ds.g, ds.pos, ds.err); }
-        return kg_add(ds.g, "sandbox", "", caps, ds.ids, sp, ds.pos);
+        // The text is where the body starts: lowering numbers lambda and
+        // assertion symbols by position within it.
+        return kg_add(ds.g, "sandbox", IntToString(lb.pos), caps, ds.ids, sp, ds.pos);
     }
     if (t.text == "type") { return kg_typedecl(s, g, t.pos, prefix, sp); }
     Tok tn = lex_tok(s, t.pos);
