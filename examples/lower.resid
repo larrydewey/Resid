@@ -2047,14 +2047,14 @@ GT lw_expect_method(LW w, Int id, GT base, Str m, List(Str) env) {
 
 // ─── Functions ──────────────────────────────────────────────────────
 
-List(Str) lw_param_tys(LW w, Int d, Int i, Int n, List(Str) acc) {
-    if (i >= n) { return acc; }
-    return lw_param_tys(w, d, i + 1, n, acc.concat([lw_text(w, lw_kid(w, lw_kid(w, d, i), 0))]));
+List(Str) lw_param_tys(LW w, Int d, Int i, Int n, ListBuf(Str) acc) {
+    if (i >= n) { return acc.finish(); }
+    return lw_param_tys(w, d, i + 1, n, acc.push(lw_text(w, lw_kid(w, lw_kid(w, d, i), 0))));
 }
 
-List(Str) lw_param_names(LW w, Int d, Int i, Int n, List(Str) acc) {
-    if (i >= n) { return acc; }
-    return lw_param_names(w, d, i + 1, n, acc.concat([lw_text(w, lw_kid(w, d, i))]));
+List(Str) lw_param_names(LW w, Int d, Int i, Int n, ListBuf(Str) acc) {
+    if (i >= n) { return acc.finish(); }
+    return lw_param_names(w, d, i + 1, n, acc.push(lw_text(w, lw_kid(w, d, i))));
 }
 
 PG pg_with_err(PG g, Str err) {
@@ -2071,11 +2071,11 @@ PG lw_fn(LW w0, Int d, PG g) {
     Str rbase = ct_base_of(fs.ctn, fs.ctb, rty);
     Str name = lw_text(w, d);
     Bool is_main = name == "main";
-    List(Str) tyl0 = lw_param_tys(w, d, 1, n - 1, nil_list());
+    List(Str) tyl0 = lw_param_tys(w, d, 1, n - 1, ListBuf());
     List(Str) tyl = ct_erase_list(fs, tyl0, 0, nil_list());
     Str pd = param_decl_at(tyl, 0, "");
     Str defline = if (is_main) { "define i32 @resid_user_main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + ll_ty(rbase) + " @" + name + "(" + pd + ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
-    List(Str) nl = lw_param_names(w, d, 1, n - 1, nil_list());
+    List(Str) nl = lw_param_names(w, d, 1, n - 1, ListBuf());
     List(Str) dl2 = [defline, "entry:"];
     Int fi = fn_index(fs, name);
     Str ceiling = if (fi >= 0) { fs.ceils[fi] } else { "" };
@@ -2686,15 +2686,15 @@ List(Str) lf_summary(Kg g, Funcs fs, Int i) {
     return lf_node(g, kg_kid(g, d, g.ns[d].nk - 1), ptrs, []);
 }
 
-List(List(Str)) lf_summaries(Kg g, Funcs fs, Int i, List(List(Str)) acc) {
-    if (i >= fs.names.len()) { return acc; }
-    return lf_summaries(g, fs, i + 1, acc.concat([lf_summary(g, fs, i)]));
+List(List(Str)) lf_summaries(Kg g, Funcs fs, Int i, ListBuf(List(Str)) acc) {
+    if (i >= fs.names.len()) { return acc.finish(); }
+    return lf_summaries(g, fs, i + 1, acc.push(lf_summary(g, fs, i)));
 }
 
 // Signatures and leaf functions of a parsed or residual program.
 pub Funcs lw_sigs(Kg g, Int unit) {
     Funcs fs = lsg_decls(g, unit, 0, "", LSG {.fs = funcs_empty(), .req = ""}).fs;
-    List(List(Str)) sums = lf_summaries(g, fs, 0, []);
+    List(List(Str)) sums = lf_summaries(g, fs, 0, ListBuf());
     Map(Str, Int) leaf = leaf_rest(fs.names, 0, leaf_fix(fs, sums, fs.leaf, 0));
     return Funcs {.fpos = fs.fpos, .leaf = leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
 }
