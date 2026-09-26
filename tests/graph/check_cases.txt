@@ -1,0 +1,319 @@
+# Type-checker cases for tests/graph/run.sh: `=== name`, the expected
+# first diagnostic (substring; `check: ok` when accepted), then the program.
+=== and
+operator && between Bool and Int
+Int main() { Bool b = true && 5; return 0; }
+=== behavior
+type error: behavior Ord(Int): impl must have signature (Int, Int) -> Int
+Int cmpx(Str a, Str b) { return 0; }
+Ord(Int) = cmpx;
+Int main() { return 0; }
+=== bexprbind
+binding t: expected Int, got Str
+Int main() { Int x = if (true) { Int t = "s"; 1 } else { 2 }; return 0; }
+=== bindty
+binding a: expected Str, got Int
+Int main() { Str a = 5; return 0; }
+=== binop
+operator + between Int(64) and Str
+Int main() { Int x = 1 + "a"; return 0; }
+=== builtin
+str_len expects Str, got Int
+Int main() { Int n = str_len(5); return 0; }
+=== callargs
+call f expects (Int), got (Str)
+Int f(Int a) { return a; }
+Int main() { Int x = f("s"); return 0; }
+=== callfew
+call f expects (Int,Int), got (Int(64))
+Int f(Int a, Int b) { return a; }
+Int main() { Int x = f(1); return 0; }
+=== callmany
+call f expects (Int), got (Int(64),Int)
+Int f(Int a) { return a; }
+Int main() { Int x = f(1, 2); return 0; }
+=== cast
+cast from Str to Int not supported
+Int main() { Int b = (Int) "a"; return 0; }
+=== clcall
+closure call expects (Int), got (Str)
+Int main() { Int closure(Int) f = lambda(x) { x }; Int y = f("a"); return 0; }
+=== cmp
+operator < between Str and Int
+Int main() { Bool b = "a" < 5; return 0; }
+=== decmix
+cannot mix Dec with a non-Dec operand: Dec + Int (convert explicitly with dN / iN / fN)
+Int main() { Dec d = 1.5m; Int y = 2; Dec z = d + y; return 0; }
+=== destr
+unknown field z in P
+type P = { Int x; Int y; };
+Int main() { P p = P {.x = 1, .y = 2}; P { x, z } = p; return 0; }
+=== destrty
+destructuring P from Int
+type P = { Int x; Int y; };
+Int main() { Int p = 1; P { x, y } = p; return 0; }
+=== discard
+undefined variable nope
+Int main() { _ = nope; return 0; }
+=== dup_ok_ret
+check: ok
+Int main() { Int a = 1; return a; }
+=== e0211
+error[E0211]: call to `r` requires capability `filesystem` which exceeds the caller's effective sandbox ceiling [environment] (attenuation is transitive across the call closure)
+@requires(filesystem)
+Int r() { return 0; }
+sandbox(environment) {
+Int g() { return r(); }
+}
+Int main() { return 0; }
+=== e0212
+error[E0212]: function `g` requires capability `filesystem` which exceeds the effective capability ceiling [environment]
+@requires(filesystem)
+Int r() { return 0; }
+sandbox(environment) {
+@requires(filesystem)
+Int g() { return 0; }
+}
+Int main() { return 0; }
+=== e0213
+error[E0213]: unknown capability mode `bogus` on `filesystem`; supported modes are `readonly` and `readwrite`
+sandbox(filesystem(bogus)) {
+Int g() { return 0; }
+}
+Int main() { return 0; }
+=== e0218
+error[E0218]: provider call family `filesystem` is not granted to this region's capability set [environment] (spec §21.3)
+sandbox(environment) {
+Int g() { Str s = filesystem.read_all("x"); return 0; }
+}
+Int main() { return 0; }
+=== emptyset
+cannot infer element type of an empty set literal (add an explicit type)
+Int main() { Int n = {}.len(); return 0; }
+=== estmt
+operator + between Int and Str
+Int main() { 5 + "s"; return 0; }
+=== expect
+call toEqual expects (Int), got (Str)
+Int main() { expect(5).toEqual("a"); return 0; }
+=== field
+field z not found in P
+type P = { Int x; };
+Int main() { P p = P {.x = 1}; Int y = p.z; return 0; }
+=== fnvalue
+undefined variable f
+Int f() { return 1; }
+Int main() { Int x = f; return 0; }
+=== forit
+for-in over non-iterable Int
+Int main() { for (Int i in 5) { println("x"); } return 0; }
+=== fstr
+undefined variable nope
+Int main() { Str s = f"a {nope} b"; return 0; }
+=== ifcond
+if condition must be Bool, got Int
+Int main() { if (5) { return 1; } return 0; }
+=== ifpat
+Ok(...) pattern needs a Result, found Int
+Int main() { Int a = 1; if (Ok(v) = a) { return v; } return 0; }
+=== ifxbr
+if branches differ: Int vs Str
+Int main() { Int x = if (true) { 1 } else { "a" }; return 0; }
+=== index
+cannot index Int
+Int main() { Int a = 5; Int b = a[0]; return 0; }
+=== lambdaar
+closure has 1 parameter(s), expected 2
+Int main() { Int closure(Int, Int) f = lambda(x) { x }; return 0; }
+=== lambda
+closure literal needs a closure(..) expected type
+Int main() { Int f = lambda(x) { x }; return 0; }
+=== lambdaret
+closure body returns Str, expected Int
+Int main() { Int closure(Int) f = lambda(x) { "s" }; return 0; }
+=== letpat
+Some(...) pattern needs an Option, found Int
+Int main() { Int a = 1; Some(v) = a; return 0; }
+=== listcap
+list literal has 3 elements, exceeds List(Int(64), 2) capacity
+Int main() { List(Int, 2) xs = [1, 2, 3]; return 0; }
+=== listmix
+list element type mismatch: Int vs Str
+Int main() { List(Int) xs = [1, "a"]; return 0; }
+=== litwide
+binding y: integer literal 300 does not fit the expected type Int(8)
+Int main() { Int(8) y = 300; return 0; }
+=== mapget
+.get key type mismatch: map has key Str, found Int
+Int main() { Map(Str, Int) m = {"a": 1}; Option(Int) v = m.get(5); return 0; }
+=== mapins
+.insert value mismatch: map has value Int, found Str
+Int main() { Map(Str, Int) m = {"a": 1}; Map(Str, Int) m2 = m.insert("b", "c"); return 0; }
+=== mapkey
+map index key mismatch: map has key Str, found Int
+Int main() { Map(Str, Int) m = {"a": 1}; Option(Int) v = m[5]; return 0; }
+=== mapmeth
+unsupported method frob on Map(Str, Int)
+Int main() { Map(Str, Int) m = {"a": 1}; Int v = m.frob(); return 0; }
+=== mapmix
+map values differ: Int vs Str
+Int main() { Map(Str, Int) xs = {"a": 1, "b": "c"}; return 0; }
+=== matcharms
+match arms disagree: Int vs Str
+type C = Red | Green;
+Int main() { C c = Red; Int b = match (c) { Red => 1, Green => "a" }; return 0; }
+=== matchbad
+match arm pattern Blue is not a variant of this sum type
+type C = Red | Green;
+Int main() { C c = Red; Int b = match (c) { Blue => 1, _ => 2 }; return 0; }
+=== matchdup
+duplicate match arm for variant Red
+type C = Red | Green;
+Int main() { C c = Red; Int b = match (c) { Red => 1, Red => 2, Green => 3 }; return 0; }
+=== matchnoex
+match is not exhaustive: not every variant is covered (add the missing arm(s) or a trailing `_ => ...`)
+type C = Red | Green;
+Int main() { C c = Red; Int b = match (c) { Red => 1 }; return 0; }
+=== matchsc
+match scrutinee must be an Option or a declared sum type, got Int
+Int main() { Int a = 5; Int b = match (a) { _ => 1 }; return 0; }
+=== matchwild
+the `_` wildcard arm must be the last match arm
+type C = Red | Green;
+Int main() { C c = Red; Int b = match (c) { _ => 1, Red => 2 }; return 0; }
+=== methsugar
+call dbl expects (Int), got (Str)
+Int dbl(Int a) { return a * 2; }
+Int main() { Str s = "x"; Int y = s.dbl(); return 0; }
+=== mulnarrow
+integer literal 300 does not fit the expected type Int(8)
+Int main() { Int(8) a = 2; Int(8) b = a * 300; return 0; }
+=== narrow
+binding y: implicit narrowing from Int to Int(8) requires an explicit cast
+Int main() { Int x = 300; Int(8) y = x; return 0; }
+=== neg
+unary - requires a number, got Str
+Int main() { Int b = -"a"; return 0; }
+=== notbool
+! requires Bool, got Int
+Int main() { Bool b = !5; return 0; }
+=== optarm
+match arm pattern must be Some(x) or None
+Int main() { Option(Int) o = Some(1); Int b = match (o) { Some(x) => x, Other => 0 }; return 0; }
+=== optbind
+binding o: expected Option(Int), got Option(Str)
+Int main() { Option(Int) o = Some("s"); return 0; }
+=== orelse
+`value else` requires an Option or Result, found Int
+Int main() { Int a = 5; Int b = a else { 0 }; return 0; }
+=== orelsety
+`else` block yields Str, need payload Int
+Int main() { Option(Int) a = Some(5); Int b = a else { "x" }; return 0; }
+=== println
+println expects Str, got Int
+Int main() { println(5); return 0; }
+=== provider
+unknown provider method environment.frob
+Int main() { Str s = environment.frob("x"); return 0; }
+=== range
+range bounds must be integers, got Int .. Str
+Int main() { List(Int) xs = [1]; List(Int) ys = xs[0.."a"]; return 0; }
+=== resbind
+binding r: expected Result(Int, Str), got Result(Str, Str)
+Int main() { Result(Int, Str) r = Ok("s"); return 0; }
+=== retres
+return type Result(Int, Int) does not match Result(Int, Str)
+Result(Int, Str) f() { return Err(5); }
+Int main() { return 0; }
+=== retty
+return type Int does not match Str
+Str f() { return 5; }
+Int main() { return 0; }
+=== retunify
+return type Option(Str) does not match Option(Int)
+Option(Int) f() { return Some("a"); }
+Int main() { return 0; }
+=== retvoid
+return without a value in a Int function
+Int f() { return; }
+Int main() { return 0; }
+=== rowrite
+error[E0212]: provider call `filesystem.write_all` is a write operation, but only a read-only grant of capability `filesystem` is available here [filesystem:ro] (capability modes only restrict, never amplify)
+sandbox(filesystem(readonly)) {
+Int g() { Bool b = filesystem.write_all("x", "y"); return 0; }
+}
+Int main() { return 0; }
+=== setmeth
+.contains type mismatch: set has element Int, found Str
+Int main() { Set(Int) s = {1, 2}; Bool v = s.contains("a"); return 0; }
+=== setmix
+set element type mismatch: Int vs Str
+Int main() { Set(Int) xs = {1, "a"}; return 0; }
+=== sfield
+unknown field y in P
+type P = { Int x; };
+Int main() { P p = P {.y = 1}; return 0; }
+=== sfieldty
+field x: expected Int, got Str
+type P = { Int x; };
+Int main() { P p = P {.x = "s"}; return 0; }
+=== shadow
+shadowing: `a` is already bound in this scope
+Int main() { Int a = 1; if (true) { Int a = 2; } return 0; }
+=== shiftty
+operator << between Int(64) and Str
+Int main() { Int a = 1 << "s"; return 0; }
+=== signmix
+cannot mix signed and unsigned operands in one operation: Int + UInt (use an explicit cast)
+Int main() { UInt u = 1; Int x = 2; Int y = x + u; return 0; }
+=== slicety
+cannot index Int
+Int main() { Int a = 1; Int b = a[1..]; return 0; }
+=== sortbeh
+no behavior instance Ord(Str) is defined
+Int main() { List(Int) a = [1]; List(Int) b = sort(a, using = Ord(Str)); return 0; }
+=== sortnobeh
+sort requires a behavior: sort(xs, using = Ord(T))
+Int main() { List(Int) a = [1]; List(Int) b = sort(a); return 0; }
+=== sortnolist
+sort expects a List, found Int
+Int main() { Int a = 1; Int b = sort(a, using = Ord(Int)); return 0; }
+=== strcap
+string literal is 5 bytes, exceeds Str(2) capacity
+Int main() { Str(2) s = "hello"; return 0; }
+=== structunk
+unknown field a in Q
+Int main() { Q q = Q {.a = 1}; return 0; }
+=== tern
+conditional arms differ: Int vs Str
+Int main() { Int b = true ? 1 : "a"; return 0; }
+=== tilde
+~ requires an integer, got Bool
+Int main() { Int b = ~true; return 0; }
+=== tryopt
+`?` requires an Option or Result, found Int
+Int f() { Int a = 5; Int b = a?; return b; }
+Int main() { return 0; }
+=== undef
+undefined variable b
+Int main() { Int a = b; return 0; }
+=== unkfn
+unknown function nosuch
+Int main() { Int x = nosuch(1); return 0; }
+=== unkmeth
+unsupported method frob
+Int main() { Int a = 5; Int b = a.frob(); return 0; }
+=== variantnp
+variant Empty takes no payload (write it without parentheses)
+type B = Full(Int) | Empty;
+Int main() { B b = Empty(1); return 0; }
+=== variant
+variant Full expects Int, got Str
+type B = Full(Int) | Empty;
+Int main() { B b = Full("a"); return 0; }
+=== whilecond
+while condition must be Bool, got Str
+Int main() { while ("x") { return 1; } return 0; }
+=== with
+with binding a: expected Int, got Str
+Int main() { with (Int a = "x") { println("a"); } return 0; }

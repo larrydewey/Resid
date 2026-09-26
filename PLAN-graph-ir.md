@@ -68,10 +68,24 @@ are imported the same way `reduce.resid` is.
     lists unresolved uses; `tests/graph` requires none in-repo, and a scope
     case requires every out-of-scope use to be caught. The compiler has
     61K uses, resolved in about 0.4s.
-  - [ ] Field and method uses (need types).
-  - [ ] Types on nodes, and capability and effect sets.
-  - Port `typecheck.resid` checks by walking nodes instead of text.
-  - Exit criterion: identical diagnostics on `tests/conformance`.
+  - [x] Type checking: `examples/gcheck.resid` is the driver's checker.
+    It walks nodes, resolves names by def edges, builds the signature
+    table from declarations, and runs the capability passes (E0211-E0218)
+    from def edges and provider-call nodes instead of token scans. The type
+    algebra (`bin_type`, `check_builtin`, widening, unification) is shared
+    with the text checker, which stays behind `--text-check` for
+    differential testing until G7.
+    - Parity: identical accept/reject and diagnostic lines on all 215
+      in-repo programs and on 91 rejection cases
+      (`tests/graph/check_cases.txt`).
+    - Stricter than the text checker, which accepted: calls with too few
+      or too many arguments, a match missing a variant when its last arm
+      had no trailing comma, non-integer range bounds, and an adopted
+      literal that does not fit (`Int(8) a; a * 300`).
+    - Peak memory of a check-only run of the compiler rose from 198MB to
+      498MB (graph plus def-edge maps). Revisit with the G3 node columns.
+  - [ ] Types stored on nodes (a column), and effect sets as node facts.
+  - [ ] Field and method uses get def edges once types are stored.
 - [ ] G2b `StrBuf`: a linear string builder type.
   - Spec: `StrBuf b = StrBuf(); StrBuf b2 = b.push(x); Str s = b2.finish();`.
     Every StrBuf value must be used exactly once (moved, never copied or
