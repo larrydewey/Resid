@@ -149,8 +149,9 @@ are imported the same way `reduce.resid` is.
     porting, a function with an unported construct fell back to the text
     codegen at its span (`pg_func_one`); no function needs that now.
   - [x] Fixed point with graph lowering as the default.
-  - Still text-derived: the linear map/set mask (`lin_mask_fn`, over the
-    printed function body) and `ToString` of structs (synthesized source).
+  - [x] The linear map/set mask runs on the body's nodes (`lg_mask`), and
+    `ToString` of a struct lowers its formatting expression from a scratch
+    graph; lowering the residual no longer calls the text codegen.
   - Codegen walks residual roots.
   - [x] `<out>.resid-graph.cbor` (§34) in debug and check builds, streamed
     in chunks; its hash is embedded in the binary and signed.
