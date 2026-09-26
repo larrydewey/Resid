@@ -1659,6 +1659,37 @@ typedef struct {
 
 #define RV_SLOTS(v) ((void**)((ResidVal*)(v) + 1))
 
+/* Int and Float boxes are usually immediate words, not pointers. User
+ * space pointers stay below 2^48 (Linux maps above 2^47 only on request;
+ * resid_check_address_space enforces it), so no pointer reads as one:
+ *   [2^48, 2^48 + 2^55)  an Int v in [-2^54, 2^54), stored as v + IMM_OFF;
+ *   [2^56, 2^64)         a Float, its own bits (all but +0.0 and positive
+ *                        magnitudes below 2^-975).
+ * Other values get heap boxes. */
+#define IMM_LO ((uint64_t)1 << 48)
+#define IMM_OFF (IMM_LO + ((uint64_t)1 << 54))
+#define FIMM_LO ((uint64_t)1 << 56)
+#define IMM_MIN (-((int64_t)1 << 54))
+#define IMM_MAX (((int64_t)1 << 54) - 1)
+static inline int box_imm(const void* p) { return (uint64_t)(uintptr_t)p - IMM_LO < ((uint64_t)1 << 55); }
+static inline int box_fimm(const void* p) { return (uint64_t)(uintptr_t)p >= FIMM_LO; }
+static inline int64_t imm_val(const void* p) { return (int64_t)((uint64_t)(uintptr_t)p - IMM_OFF); }
+static inline void* imm_box(int64_t v) { return (void*)(uintptr_t)((uint64_t)v + IMM_OFF); }
+static inline double fimm_val(const void* p) {
+    uint64_t b = (uint64_t)(uintptr_t)p;
+    double d;
+    memcpy(&d, &b, 8);
+    return d;
+}
+
+/* A scalar box's type name ("i64", "f64", "bool", ...), or NULL. */
+static inline const char* scalar_type(const void* p) {
+    if (box_imm(p)) return "i64";
+    if (box_fimm(p)) return "f64";
+    const ResidVal* b = (const ResidVal*)p;
+    return b->tag == -1 ? b->type : NULL;
+}
+
 /* Int(128) scalar payloads are only 8-byte aligned (see
  * resid_box_scalar_alloc). */
 static inline __int128 ld_i128(const void* p) {
@@ -1692,9 +1723,9 @@ void* resid_box_alloc(int64_t tag, int64_t count, const char* type) {
     return v;
 }
 
-int64_t resid_box_tag(void* b) { return ((ResidVal*)b)->tag; }
+int64_t resid_box_tag(void* b) { return box_imm(b) || box_fimm(b) ? -1 : ((ResidVal*)b)->tag; }
 
-int64_t resid_box_count(void* b) { return ((ResidVal*)b)->count; }
+int64_t resid_box_count(void* b) { return box_imm(b) || box_fimm(b) ? 1 : ((ResidVal*)b)->count; }
 
 void** resid_box_slots(void* b) { return RV_SLOTS(b); }
 
@@ -2422,24 +2453,36 @@ static void* resid_box_scalar_alloc(size_t payload_size, size_t payload_align, v
  * small counters, positions, flags and byte values are by far the most
  * common boxes in real programs. Layout matches resid_box_scalar_alloc
  * exactly (struct, payload, 1-slot array), so unboxing is unchanged. */
-#define BOX_I64_LO (-256)
-#define BOX_I64_HI 4096
-typedef struct { ResidVal v; void* slot; int64_t payload; } InternedI64;
 typedef struct { ResidVal v; void* slot; int8_t payload; } InternedBool;
-_Static_assert(offsetof(InternedI64, payload) == SCALAR_PAYLOAD_OFF, "interned i64 layout");
+typedef struct { ResidVal v; void* slot; double payload; } InternedF64;
 _Static_assert(offsetof(InternedBool, payload) == SCALAR_PAYLOAD_OFF, "interned bool layout");
-static InternedI64 g_box_i64[BOX_I64_HI - BOX_I64_LO];
+_Static_assert(offsetof(InternedF64, payload) == SCALAR_PAYLOAD_OFF, "interned f64 layout");
 static InternedBool g_box_bool[2];
+static InternedF64 g_box_f64z; /* 0.0 */
+
+/* Immediate boxes need every pointer below IMM_LO: abort at startup on a
+ * system that maps the stack, the heap or the program above it. */
+static void resid_check_address_space(void) {
+    int local = 0;
+    void* heap = malloc(1);
+    void* big = malloc((size_t)1 << 20); /* an mmap'd block */
+    uint64_t top = (uint64_t)(uintptr_t)&local | (uint64_t)(uintptr_t)heap
+        | (uint64_t)(uintptr_t)big | (uint64_t)(uintptr_t)&g_box_bool;
+    free(heap);
+    free(big);
+    if (top >= IMM_LO) {
+        fputs("resid: address space above 2^48 is not supported\n", stderr);
+        abort();
+    }
+}
 
 __attribute__((constructor)) static void box_intern_init(void) {
-    for (int64_t i = 0; i < BOX_I64_HI - BOX_I64_LO; i++) {
-        InternedI64* b = &g_box_i64[i];
-        b->v.tag = -1;
-        b->v.count = 1;
-        b->v.type = "i64";
-        b->payload = i + BOX_I64_LO;
-        b->slot = &b->payload;
-    }
+    resid_check_address_space();
+    g_box_f64z.v.tag = -1;
+    g_box_f64z.v.count = 1;
+    g_box_f64z.v.type = "f64";
+    g_box_f64z.payload = 0.0;
+    g_box_f64z.slot = &g_box_f64z.payload;
     for (int i = 0; i < 2; i++) {
         InternedBool* b = &g_box_bool[i];
         b->v.tag = -1;
@@ -2450,14 +2493,16 @@ __attribute__((constructor)) static void box_intern_init(void) {
     }
 }
 
+/* Static or immediate: nothing to free or move. */
 static int box_is_interned(const void* p) {
     const char* c = (const char*)p;
-    return (c >= (const char*)g_box_i64 && c < (const char*)(g_box_i64 + (BOX_I64_HI - BOX_I64_LO)))
-        || (c >= (const char*)g_box_bool && c < (const char*)(g_box_bool + 2));
+    return box_imm(p) || box_fimm(p) || (c >= (const char*)g_box_bool && c < (const char*)(g_box_bool + 2))
+        || c == (const char*)&g_box_f64z;
 }
 
+/* Values outside the immediate range (|v| >= 2^62) get a heap box. */
 void* resid_box_i64(int64_t v) {
-    if (v >= BOX_I64_LO && v < BOX_I64_HI) return &g_box_i64[v - BOX_I64_LO].v;
+    if (v >= IMM_MIN && v <= IMM_MAX) return imm_box(v);
     void* payload;
     ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(int64_t), _Alignof(int64_t), &payload);
     r->type = "i64";
@@ -2468,10 +2513,15 @@ void* resid_box_i64(int64_t v) {
  * resid_box_scalar_alloc) instead of through slots[0], which drops a
  * dependent load from every element read of a List(Int) / List(Float). */
 int64_t resid_unbox_i64(void* p) {
+    if (__builtin_expect(box_imm(p), 1)) return imm_val(p);
     return *(const int64_t*)((const char*)p + SCALAR_PAYLOAD_OFF);
 }
 
 void* resid_box_f64(double v) {
+    uint64_t b;
+    memcpy(&b, &v, 8);
+    if (b >= FIMM_LO) return (void*)(uintptr_t)b;
+    if (b == 0) return &g_box_f64z.v;
     void* payload;
     ResidVal* r = (ResidVal*)resid_box_scalar_alloc(sizeof(double), _Alignof(double), &payload);
     r->type = "f64";
@@ -2479,6 +2529,7 @@ void* resid_box_f64(double v) {
     return r;
 }
 double resid_unbox_f64(void* p) {
+    if (__builtin_expect(box_fimm(p), 1)) return fimm_val(p);
     return *(const double*)((const char*)p + SCALAR_PAYLOAD_OFF);
 }
 
@@ -2502,6 +2553,7 @@ void* resid_box_i128(__int128 v) {
     return r;
 }
 __int128 resid_unbox_i128(void* p) {
+    if (box_imm(p)) return imm_val(p);
     __int128 v;
     memcpy(&v, (const char*)p + SCALAR_PAYLOAD_OFF, sizeof v);
     return v;
@@ -2515,6 +2567,7 @@ void* resid_box_u128(unsigned __int128 v) {
     return r;
 }
 unsigned __int128 resid_unbox_u128(void* p) {
+    if (box_imm(p)) return (unsigned __int128)(__int128)imm_val(p);
     unsigned __int128 v;
     memcpy(&v, (const char*)p + SCALAR_PAYLOAD_OFF, sizeof v);
     return v;
@@ -2925,6 +2978,12 @@ char* BoolToString(int8_t v) {
  */
 char* ToString(void* boxed) {
     ResidVal* val = (ResidVal*)boxed;
+    if (box_imm(boxed)) return IntToString(imm_val(boxed));
+    if (box_fimm(boxed)) {
+        char s[64];
+        snprintf(s, sizeof s, "%.17g", fimm_val(boxed));
+        return resid_box_str(s);
+    }
     if (!val || val->count <= 0) {
         return resid_box_str("null");
     }
@@ -2954,14 +3013,13 @@ char* ToString(void* boxed) {
     /* Tag 1 = Some, tag 2 = None (built-in Option). */
     if (val->tag == 1 && val->count == 1 && RV_SLOTS(val)[0]) {
         /* Some(x) — unbox the inner value and format it. */
-        int64_t inner_tag = resid_box_tag(RV_SLOTS(val)[0]);
-        if (inner_tag == -1) {
-            ResidVal* sv = (ResidVal*)RV_SLOTS(val)[0];
+        const char* st = scalar_type(RV_SLOTS(val)[0]);
+        if (st) {
             char inner_buf[64];
-            if (sv->type[0] == 'f') {
+            if (st[0] == 'f') {
                 double dv = resid_unbox_f64(RV_SLOTS(val)[0]);
                 snprintf(inner_buf, sizeof(inner_buf), "%.17g", dv);
-            } else if (sv->type[0] == 'b') {
+            } else if (st[0] == 'b') {
                 int8_t bv = resid_unbox_bool(RV_SLOTS(val)[0]);
                 snprintf(inner_buf, sizeof(inner_buf), "%s", bv ? "true" : "false");
             } else {
@@ -2994,15 +3052,14 @@ char* ToString(void* boxed) {
             strcat(buf, "null");
             continue;
         }
-        int64_t tag = resid_box_tag(slot);
-        if (tag == -1) {
-            ResidVal* sv = (ResidVal*)slot;
-            if (sv->type[0] == 'f') {
+        const char* st = scalar_type(slot);
+        if (st) {
+            if (st[0] == 'f') {
                 double dv = resid_unbox_f64(slot);
                 char s[64];
                 snprintf(s, sizeof(s), "%.17g", dv);
                 strcat(buf, s);
-            } else if (sv->type[0] == 'b') {
+            } else if (st[0] == 'b') {
                 int8_t bv = resid_unbox_bool(slot);
                 strcat(buf, bv ? "true" : "false");
             } else {
@@ -3039,15 +3096,14 @@ char* resid_list_to_string(void* boxed) {
             strcat(buf, "null");
             continue;
         }
-        int64_t tag = resid_box_tag(slot);
-        if (tag == -1) {
-            ResidVal* sv = (ResidVal*)slot;
-            if (sv->type[0] == 'f') {
+        const char* st = scalar_type(slot);
+        if (st) {
+            if (st[0] == 'f') {
                 double dv = resid_unbox_f64(slot);
                 char s[64];
                 snprintf(s, sizeof(s), "%.17g", dv);
                 strcat(buf, s);
-            } else if (sv->type[0] == 'b') {
+            } else if (st[0] == 'b') {
                 int8_t bv = resid_unbox_bool(slot);
                 strcat(buf, bv ? "true" : "false");
             } else {
@@ -6493,9 +6549,7 @@ int8_t resid_tcp_send_bin(int64_t fd, void* lst) {
     char* buf = (char*)malloc((size_t)n);
     if (!buf) return 0;
     for (int64_t i = 0; i < n; i++) {
-        /* scalar elements are boxed: element -> ResidVal -> slots[0] -> i64 */
-        ResidVal* bx = (ResidVal*)resid_list_get(lst, i);
-        buf[i] = (char)(*(int64_t*)RV_SLOTS(bx)[0] & 0xFF);
+        buf[i] = (char)(resid_unbox_i64(resid_list_get(lst, i)) & 0xFF);
     }
     const char* p2 = buf;
     size_t left = (size_t)n;
@@ -6629,7 +6683,7 @@ static uint64_t fnv1a(const char* s);
  * byte). Reading a single byte is safe for both, so we can branch without
  * over-reading a short malloc'd string the way resid_box_tag would. */
 static int is_boxed(const void* v) {
-    return ((const unsigned char*)v)[0] == 0xFF;
+    return box_imm(v) || box_fimm(v) || ((const unsigned char*)v)[0] == 0xFF;
 }
 
 /* Maps are never freed piecemeal: their nodes are shared between versions. */
@@ -6667,6 +6721,12 @@ static uint64_t resid_hash(void* v) {
         /* Bare C string key. */
         return fnv1a((const char*)v);
     }
+    if (box_imm(v)) return fnv1a_i64(imm_val(v));
+    if (box_fimm(v)) {
+        char fb[64];
+        snprintf(fb, sizeof(fb), "%.17g", fimm_val(v));
+        return fnv1a(fb);
+    }
     ResidVal* b = (ResidVal*)v;
     int64_t tag = b->tag;
     if (tag == -1) {
@@ -6700,6 +6760,15 @@ static uint64_t resid_hash(void* v) {
 
 /* Compare two Resid values for key equality. Returns 1 if equal. */
 static int resid_key_eq(void* a, void* b) {
+    /* Immediates first: a NaN Float is not equal to itself. */
+    if (box_imm(a) || box_imm(b) || box_fimm(a) || box_fimm(b)) {
+        /* An immediate equals only a scalar of its own type and value. */
+        const char* ta = is_boxed(a) ? scalar_type(a) : NULL;
+        const char* tb = is_boxed(b) ? scalar_type(b) : NULL;
+        if (!ta || !tb || strcmp(ta, tb) != 0) return 0;
+        if (strcmp(ta, "i64") == 0) return resid_unbox_i64(a) == resid_unbox_i64(b);
+        return strcmp(ta, "f64") == 0 && resid_unbox_f64(a) == resid_unbox_f64(b);
+    }
     if (a == b) return 1;
     int ab = is_boxed(a);
     int bb2 = is_boxed(b);
@@ -6817,11 +6886,6 @@ static void map_obj_free(void* p) {
 
 /* ── Words ──────────────────────────────────────────────────────────── */
 
-static int box_is_i64(const void* p) {
-    const ResidVal* b = (const ResidVal*)p;
-    return is_boxed(p) && b->tag == -1 && b->type && strcmp(b->type, "i64") == 0;
-}
-
 /* Box a stored word of kind `k` into a Resid value pointer. */
 static uint64_t mt_box_any(int8_t k, uint64_t w);
 
@@ -6848,8 +6912,9 @@ static uint64_t mt_box_any(int8_t k, uint64_t w) {
  * not hold that kind. */
 static int mt_unbox(int8_t k, uint64_t w, uint64_t* out) {
     void* p = (void*)(uintptr_t)w;
-    if (w < 4096 || !is_boxed(p) || ((ResidVal*)p)->tag != -1 || !((ResidVal*)p)->type) return 0;
-    const char* ty = ((ResidVal*)p)->type;
+    if (w < 4096 || !is_boxed(p)) return 0;
+    const char* ty = scalar_type(p);
+    if (!ty) return 0;
     if (k == 1 && strcmp(ty, "i64") == 0) { *out = (uint64_t)resid_unbox_i64(p); return 1; }
     if (k == 2 && strcmp(ty, "f64") == 0) { double d = resid_unbox_f64(p); memcpy(out, &d, 8); return 1; }
     if (k == 3 && strcmp(ty, "bool") == 0) { *out = (uint64_t)resid_unbox_bool(p); return 1; }
@@ -6860,8 +6925,8 @@ static int mt_unbox(int8_t k, uint64_t w, uint64_t* out) {
 static int8_t word_of_box(void* p, uint64_t* out, int for_key) {
     uint64_t w = (uint64_t)(uintptr_t)p;
     /* (A set's value is the marker 1, not a pointer.) */
-    if (w >= 4096 && is_boxed(p) && ((ResidVal*)p)->tag == -1 && ((ResidVal*)p)->type) {
-        const char* ty = ((ResidVal*)p)->type;
+    const char* ty = w >= 4096 && is_boxed(p) ? scalar_type(p) : NULL;
+    if (ty) {
         if (strcmp(ty, "i64") == 0) { *out = (uint64_t)resid_unbox_i64(p); return 1; }
         if (!for_key && strcmp(ty, "f64") == 0) { double d = resid_unbox_f64(p); memcpy(out, &d, 8); return 2; }
         if (!for_key && strcmp(ty, "bool") == 0) { *out = (uint64_t)resid_unbox_bool(p); return 3; }
@@ -7952,6 +8017,16 @@ void* resid_map_values(void* map) {
     return r;
 }
 
+/* A map entry's text: a string as is, a scalar formatted into `tmp`. */
+static const char* entry_text(void* p, char* tmp) {
+    const char* st = is_boxed(p) ? scalar_type(p) : NULL;
+    if (!st) return (const char*)p;
+    if (st[0] == 'f') snprintf(tmp, 64, "%.17g", resid_unbox_f64(p));
+    else if (st[0] == 'b') snprintf(tmp, 64, "%s", resid_unbox_bool(p) ? "true" : "false");
+    else snprintf(tmp, 64, "%lld", (long long)resid_unbox_i64(p));
+    return tmp;
+}
+
 /* Format a map as a string: {key1: val1, key2: val2}. Keys and values
  * print as strings (a scalar box shows its first slot). Caller must free
  * the returned string. */
@@ -7973,20 +8048,16 @@ char* resid_map_format(void* map) {
     for (int64_t i = 0; i < n; i++) {
         if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
         /* Key: assume string. */
-        const char* ks0 = (const char*)ks[i];
-        if (resid_box_tag(ks[i]) == -1) {
-            ks0 = (const char*)resid_box_slot(ks[i], 0);
-        }
+        char kt[64];
+        const char* ks0 = entry_text(ks[i], kt);
         size_t kl = strlen(ks0);
         if (pos + kl + 4 >= cap) { cap = cap * 2 + kl; buf = realloc(buf, cap); }
         memcpy(buf + pos, ks0, kl); pos += kl;
         buf[pos++] = ':';
         buf[pos++] = ' ';
         /* Value: assume string. */
-        const char* vs0 = (const char*)vs[i];
-        if (resid_box_tag(vs[i]) == -1) {
-            vs0 = (const char*)resid_box_slot(vs[i], 0);
-        }
+        char vt[64];
+        const char* vs0 = entry_text(vs[i], vt);
         size_t vl = strlen(vs0);
         if (pos + vl + 2 >= cap) {
             if (cap > SIZE_MAX / 2) resid_abort("resid_map_format: size overflow");
@@ -8151,10 +8222,8 @@ char* resid_set_format(void* set) {
     int64_t n = map_boxed_entries(m, &ks, NULL);
     for (int64_t i = 0; i < n; i++) {
         if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
-        const char* es = (const char*)ks[i];
-        if (resid_box_tag(ks[i]) == -1) {
-            es = (const char*)resid_box_slot(ks[i], 0);
-        }
+        char et[64];
+        const char* es = entry_text(ks[i], et);
         size_t el = strlen(es);
         if (pos + el + 2 >= cap) {
             if (cap > SIZE_MAX / 2) resid_abort("resid_set_format: size overflow");

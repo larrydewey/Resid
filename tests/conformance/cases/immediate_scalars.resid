@@ -1,0 +1,57 @@
+// Int and Float list elements, map values and set members are immediate
+// words when they fit (runtime IMM_* / FIMM_*), heap boxes otherwise. Both
+// forms must behave the same: values at and past each boundary, zero,
+// negative zero, NaN and extreme Floats round-trip through every container.
+Str ints_str(List(Int) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    return ints_str(xs, i + 1, acc + " " + IntToString(xs[i]));
+}
+
+Str floats_str(List(Float) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    return floats_str(xs, i + 1, acc + " " + FloatToString(xs[i]));
+}
+
+Float scale(Float x, Float f, Int n) {
+    if (n <= 0) { return x; }
+    return scale(x * f, f, n - 1);
+}
+
+Map(Int, Int) squares(List(Int) xs, Int i, Map(Int, Int) m) {
+    if (i >= xs.len()) { return m; }
+    return squares(xs, i + 1, m.insert(xs[i], i));
+}
+
+Int main() {
+    Int big = 18014398509481984;
+    Int imax = 9223372036854775807;
+    Int imin = 0 - imax - 1;
+    Int one = 1;
+    List(Int) xs = [0, one, 0 - one, big - 1, 0 - big, big, 0 - big - 1, imax, imin, 4096, 0 - 257];
+    println("ints" + ints_str(xs, 0, ""));
+    println("sorted" + ints_str(list_sort_ints(xs), 0, ""));
+    println(IntToString(list_sum([big, 0 - big, big - 1, 1])));
+    if (list_contains_int(xs, big) && list_contains_int(xs, 0 - big - 1) && !list_contains_int(xs, 7)) { println("contains ok"); }
+    Map(Int, Int) m0 = {};
+    Map(Int, Int) m = squares(xs, 0, m0);
+    println(IntToString(m.len()) + " " + IntToString(m.get(big) else { -9 }) + " " + IntToString(m.get(big - 1) else { -9 }) + " " + IntToString(m.get(imax) else { -9 }));
+    Set(Int) s0 = {};
+    Set(Int) s = s0.insert(big).insert(big - 1).insert(big).insert(0 - big - 1).insert(0 - big - 1);
+    println(IntToString(s.len()));
+    Float tiny = scale(1.0, 0.1, 300);
+    Float huge = scale(1.0, 10.0, 300);
+    Float zero = 0.0;
+    Float nz = 0.0 - zero;
+    List(Float) fs = [0.0, nz, 1.5, -2.25, tiny, 0.0 - tiny, huge, 0.0 - huge, 3.141592653589793];
+    println("floats" + floats_str(fs, 0, ""));
+    println("sorted" + floats_str(list_sort_floats(fs), 0, ""));
+    if (list_contains_float(fs, tiny) && list_contains_float(fs, 0.0)) { println("float contains ok"); }
+    Float nan = zero / zero;
+    List(Float) ns = [nan];
+    Float back = ns[0];
+    if (back != back) { println("nan ok"); }
+    Map(Int, Float) fm0 = {};
+    Map(Int, Float) fm = fm0.insert(1, tiny).insert(2, nz).insert(3, 2.5);
+    println(FloatToString(fm.get(1) else { 9.0 }) + " " + FloatToString(fm.get(2) else { 9.0 }) + " " + FloatToString(fm.get(3) else { 9.0 }));
+    return 0;
+}

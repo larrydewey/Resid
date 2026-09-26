@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  165, reduce 14, provenance 20, graph 394. The archived Rust workspace
+  166, reduce 14, provenance 20, graph 394. The archived Rust workspace
   (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
   821 tests; its e2e now has 128 after removing tests of the retired text
   paths); see `AGENTS.md` for its slow-test table.
@@ -305,6 +305,30 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 619MB (606MB without facts). The artifact carries a RESIDUAL node's range
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
+
+### 0zd. Immediate Int and Float words (2026-09-26)
+
+- Int and Float values in list slots, sum payloads and
+  untyped map words no longer need a heap box when they fit a word that
+  no pointer can be (`IMM_*` / `FIMM_*` in `runtime/resid_rt.c`): an Int
+  in [-2^54, 2^54) is stored as `v + 2^48 + 2^54`, landing in
+  [2^48, 2^48 + 2^55); a Float whose bits are at least 2^56 (every Float
+  except +0.0 and positive magnitudes below about 2^-975) is stored as its
+  own bits. Other values keep heap boxes; +0.0 has a static one. Pointers
+  must stay below 2^48, which Linux guarantees unless a program asks for
+  high mappings; the runtime checks the stack, heap, an mmap'd block and
+  its data at startup and aborts otherwise.
+- Every runtime reader goes through `resid_unbox_*`, `resid_box_tag`,
+  `scalar_type` or `is_boxed`, which recognize immediates; the compiler
+  only calls the runtime, so its IR is unchanged. Key hashing and
+  equality are unchanged (canonical key order holds; NaN still differs
+  from itself).
+- Measured: BFS with adjacency lists 87MB -> 60MB (Rust 21MB: the rest is
+  a list header per append and flat-buffer growth); self-compile peak
+  391MB -> 383MB. The benchmark suite is unchanged (spectral-norm, the
+  one tight List(Float) read loop, 1.08s -> 1.10s).
+- Test: `immediate_scalars` (boundary Ints, zero, -0.0, NaN, tiny and
+  huge Floats through lists, maps, sets, sort, contains and sum).
 
 ### 0zc. Dead maps and list versions in loop regions (2026-09-26)
 
