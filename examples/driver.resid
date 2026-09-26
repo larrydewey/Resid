@@ -15486,6 +15486,7 @@ import "resolve.resid";
 import "gcheck.resid";
 import "lower.resid";
 import "reduce.resid";
+import "greduce.resid";
 import "desugar.resid";
 import "stracc.resid";
 
@@ -16209,6 +16210,31 @@ Int main() {
     Int tc  =  if (textck) { check_program_map(rsrc, 0, ssg, if (grflag) { "" } else { rr.map }) } else { gk_run(rsrc, rr.map) };
     Int _tc_out = resid_bulk_pop();
     if (tc != 0) { return tc; }
+    // `--graph-reduce-check`: the graph reducer (examples/greduce.resid)
+    // against the text reducer, token for token.
+    if (pick_flag(argc, "--graph-reduce-check")) {
+        RdOut trd = rd_reduce_program(rsrc);
+        GXO grd = gx_reduce_program(rsrc);
+        if (grd.root < 0) {
+            println(grd.err);
+            return 1;
+        }
+        Str gpr = kg_print(grd.g, grd.root);
+        Str gout = pick_opt(argc, "--graph-reduce-out", "");
+        if (gout != "") {
+            Bool w1 = filesystem.write_all(gout + ".graph", gpr);
+            Bool w2 = filesystem.write_all(gout + ".text", trd.text);
+        }
+        Str gdiff = kg_tokdiff(trd.text, 0, gpr, 0, 0);
+        Str gerr = if (grd.err != trd.err) { "; err `" + grd.err + "` vs `" + trd.err + "`" } else { "" };
+        Str gnote = if (grd.notes != trd.notes) { "; notes differ" } else { "" };
+        if (gdiff == "" && gerr == "" && gnote == "") {
+            println("graph-reduce: ok, " + IntToString(grd.nred) + " function(s) reduced, " + IntToString(kg_count(grd.g)) + " nodes");
+            return 0;
+        }
+        println("graph-reduce: DIFF " + gdiff + gerr + gnote);
+        return 1;
+    }
     // `--profile check` (spec §35): type checking only, no binary. The
     // `release` profile is the default -O2 build; `debug` builds at -O0.
     Str profile  =  pick_opt(argc, "--profile", "release");
