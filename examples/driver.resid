@@ -16336,7 +16336,10 @@ Int main() {
     // the code-generation arena.
     Int _cg_in0 = if (textred) { 0 } else { resid_bulk_push() };
     KP gsa = if (textred) { KP {.g = kg_empty(), .id = -1, .pos = 0, .err = ""} } else { gx_unpack(gpk[2]) };
-    Str gtext = if (textred) { "" } else { kg_print(gsa.g, gsa.id) };
+    // The residual is printed only for --dump-reduced and the sigs check.
+    Bool gsck = pick_flag(argc, "--graph-sigs-check");
+    Bool gprint = !textred && (gsck || pick_opt(argc, "--dump-reduced", "") != "");
+    Str gtext = if (gprint) { kg_print(gsa.g, gsa.id) } else { "" };
     // The text reducer runs in an arena too; only its output text (and
     // error) is copied out.
     // (red0 itself is freed with the scope: its scalar is read first.)
@@ -16360,13 +16363,26 @@ Int main() {
     Int _sa_in = resid_bulk_push();
     List(Str) sakeep = resid_list_str_persist_copy([if (textred) { sa_rewrite(csrc0) } else { "" }]);
     Int _sa_out = resid_bulk_pop();
-    // Signatures are still collected from text: the residual graph printed.
     Str csrc  =  if (textred) { sakeep[0] } else { gtext };
     // Code generation's product is the .ll file on disk, so the whole
     // phase runs in an arena and the sidecar writers below start from a
     // small heap. (Per-function codegen arenas nest inside it.)
     Int _cg_in = if (textred) { resid_bulk_push() } else { _cg_in0 };
-    Funcs fs = collect_sigs(csrc);
+    // Lowering is from the residual graph; after `--text-reduce`, from the
+    // reduced text parsed. Signatures come from the same graph.
+    KP lkp = if (!glow) { KP {.g = kg_empty(), .id = -1, .pos = 0, .err = "off"} } else { if (textred) { kg_parse(csrc) } else { gsa } };
+    if (glow && lkp.err != "") { println("graph-lower: parse error: " + lkp.err); }
+    Funcs fs = if (glow && lkp.err == "") { lw_sigs(lkp.g, lkp.id) } else { collect_sigs(csrc) };
+    // `--graph-sigs-check`: those against the printed program's.
+    if (gsck) {
+        Str sd = lw_sigs_diff(fs, collect_sigs(csrc));
+        if (sd != "") {
+            print("graph-sigs: mismatch\n" + sd);
+            return 1;
+        }
+        println("graph-sigs: ok (" + IntToString(fs.names.len()) + " functions)");
+        return 0;
+    }
     if (testmode && fn_index(fs, "main") >= 0) {
         println("test error: " + path + " defines main(); a test file's entry point is generated");
         return 2;
@@ -16382,10 +16398,6 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Bool gdbg = profile == "debug" && glow && !textred;
     GAF gdf = if (gdbg) { ga_fileinfo(rsrc, rr.map, path) } else { ga_fileinfo("", "", path) };
     PG g0 = PG {.pos = if (gdbg) { 1000 } else { 0 }, .err = "", .glines = [], .hlines = [], .lines = header, .tmp = 0, .lbl = 0};
-    // Lowering is from the residual graph; after `--text-reduce`, from the
-    // reduced text parsed.
-    KP lkp = if (!glow) { KP {.g = kg_empty(), .id = -1, .pos = 0, .err = "off"} } else { if (textred) { kg_parse(csrc) } else { gsa } };
-    if (glow && lkp.err != "") { println("graph-lower: parse error: " + lkp.err); }
     Map(Str, Int) lnowhy = {};
     LP lres = if (glow && lkp.err == "") { lw_program(lkp.g, lkp.id, if (textred) { csrc } else { rsrc }, fs, g0, !textred, gdbg, gdf) } else { LP {.pg = pg_next(csrc, 0, fs, g0), .nodes = 0, .texts = 0, .why = lnowhy} };
     if (glow && (pick_flag(argc, "--graph-lower") || lres.texts > 0)) {

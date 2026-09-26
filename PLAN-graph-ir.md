@@ -132,8 +132,9 @@ are imported the same way `reduce.resid` is.
     `stracc` on the graph (`gs_program`); `--text-reduce` keeps the text
     path. IR matches it modulo position-numbered symbols.
   - [x] Derive edges (origin and rule) on every reduction-made node.
-  - Next: reasons for residual nodes; collect signatures from the graph
-    instead of its printed text.
+  - [x] Signatures and leaf analysis come from the graph (`lw_sigs`);
+    `--graph-sigs-check` compares them with the printed residual's.
+  - Next: reasons for residual nodes.
   - Port fold, beta, eval, specialize, generalize, dead-arm and elide from
     `reduce.resid`, recording derive edges and reasons.
   - Facts: range and nonzero first (overflow and div0 discharge), then
@@ -148,10 +149,8 @@ are imported the same way `reduce.resid` is.
     porting, a function with an unported construct fell back to the text
     codegen at its span (`pg_func_one`); no function needs that now.
   - [x] Fixed point with graph lowering as the default.
-  - Still text-derived: signature collection and leaf analysis
-    (`collect_sigs`), the linear map/set mask (`lin_mask_fn`) and
-    `ToString` of structs (synthesized source). These move to the graph
-    with G3's single shared graph.
+  - Still text-derived: the linear map/set mask (`lin_mask_fn`, over the
+    printed function body) and `ToString` of structs (synthesized source).
   - Codegen walks residual roots.
   - [x] `<out>.resid-graph.cbor` (§34) in debug and check builds, streamed
     in chunks; its hash is embedded in the binary and signed.
