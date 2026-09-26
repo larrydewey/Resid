@@ -61,11 +61,6 @@ KL kl_fail(Kg g, Int pos, Str msg) {
     return KL {.g = g, .ids = e, .pos = pos, .err = msg};
 }
 
-KL kl_of(KP p, List(Int) ids) {
-    if (p.err != "") { return KL {.g = p.g, .ids = ids, .pos = p.pos, .err = p.err}; }
-    return KL {.g = p.g, .ids = ids.concat([p.id]), .pos = p.pos, .err = ""};
-}
-
 // Start of the token that ends at t.pos.
 Int kg_tstart(Tok t) { return t.pos - str_len(t.text); }
 

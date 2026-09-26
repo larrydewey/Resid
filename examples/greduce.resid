@@ -1444,13 +1444,6 @@ RdE gx_param_env(Kg g, Int d, Int i, Int n, RdE env) {
     return gx_param_env(g, d, i + 1, n, rd_env_add(env, g.ns[kg_kid(g, d, i)].text, "", ""));
 }
 
-// The residual program: every function reduced, specializations appended.
-pub GXO gx_reduce_program(Str src) {
-    KP p = kg_parse(src);
-    if (p.err != "") { return GXO {.g = p.g, .root = -1, .nred = 0, .err = "graph-reduce: parse error: " + p.err, .notes = "", .dv = "", .rs = ""}; }
-    return gx_reduce_graph(p, src);
-}
-
 // The same over the program's parsed graph.
 pub GXO gx_reduce_graph(KP p, Str src) {
     Int _mm = resid_mem_mark();
@@ -1698,11 +1691,6 @@ pub GSR gs_program(Kg g, Int unit, Str src) {
     KN u = o.g.ns[unit];
     KP r = kg_add(o.g, "unit", "", "", o.decls.concat(o.tail), u.sp, u.ep);
     return GSR {.g = r.g, .id = r.id, .dv = o.dv + IntToString(r.id) + "," + IntToString(unit) + ",rebuild;"};
-}
-
-// No graph (the text pipeline runs instead).
-pub GXO gx_no_out() {
-    return GXO {.g = kg_empty(), .root = -1, .nred = 0, .err = "", .notes = "", .dv = "", .rs = ""};
 }
 
 // The residual of a parsed program (as parsed with `--no-reduce`).
