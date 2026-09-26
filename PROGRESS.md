@@ -281,7 +281,9 @@ collecting them from the printed residual; the residual is no longer
 printed unless `--dump-reduced` asks. The leaf walk mirrors the text
 analysis over what the printer would emit. `--graph-sigs-check` compares
 the two tables field for field; they agree on all 173 programs, and the
-self-compile IR is unchanged.
+self-compile IR is unchanged. The linear map/set accumulator mask
+(`lg_mask`) and struct `ToString` moved to the graph as well, with IR
+identical on all programs.
 
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
 

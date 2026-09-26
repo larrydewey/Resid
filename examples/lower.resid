@@ -1202,7 +1202,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
         if (tsv.err != "") { return tsv; }
         if (str_has_prefix_cg(tsv.ty, "List(")) { return lw_extern(w, id, "resid_list_to_string", l1s("Str"), "Str", env, c); }
         Int tsi = struct_index(fs, tsv.ty);
-        if (tsi >= 0) { return cg_struct_to_string(tsv, fs.stf[tsi], 0, env, fs); }
+        if (tsi >= 0) { return lw_struct_ts(w, tsv, fs.stf[tsi], env); }
         return lw_extern(w, id, "ToString", l1s("Str"), "Str", env, c);
     }
     if (n == "IntToString") {
@@ -2026,7 +2026,7 @@ PG lw_fn(LW w, Int d, PG g) {
     List(Str) caps = if (sandboxed) { str_split(ceiling, ",") } else { nil_list() };
     CapPP pp1 = cap_maybe_prologue(sandboxed, caps, CapPP {.lines = dl2, .glines = nil_list(), .n = 0});
     EnvBuild eb0 = build_env_with_growbuf(nl, tyl, fs.growable, name, pp1.lines, 0, nil_list());
-    // The linear map/set mask scans the printed body (lin_mask).
+    // The linear map/set mask (lin_mask's rules, on the body's nodes).
     Str lmask = if (is_main || !lin_any_mapset(tyl, 0)) { "" } else { lw_lin_mask(w, lw_kid(w, d, n - 1), nl, tyl, name) };
     EnvBuild eb = EnvBuild {.lines = eb0.lines, .env = lin_env(lmask, eb0.env, 0)};
     Int body_start = eb.lines.len();
@@ -2094,9 +2094,139 @@ LDG lw_dbg_lines(LW w, List(Str) ls, Int i, Str sp, Str cur, Int next, ListBuf(S
     return lw_dbg_lines(w, ls, i + 1, sp, cur, next, out.push(l2), meta);
 }
 
+// ToString of a struct (cg_struct_to_string): the formatting expression is
+// parsed into a scratch graph and lowered over a binding of the value.
+GT lw_struct_ts(LW w, GT v, Str fields, List(Str) env) {
+    Str tmpn = "__ts" + IntToString(v.tmp);
+    List(Str) env2 = env_add(env, tmpn + ":" + v.val + ":" + v.ty);
+    Str src = "\"" + v.ty + "(\"" + ts_fields_src(tmpn, fields, 0, "") + " + \")\"";
+    KP e = kg_expr(src, kg_empty(), 0);
+    if (e.err != "") { return gt_err(e.err, v); }
+    LW ws = LW {.g = e.g, .src = src, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df};
+    GT r = lw_expr(ws, e.id, env2, v);
+    if (r.err != "") { return r; }
+    return GT {.pos = 0, .val = r.val, .ty = "Str", .cnt = 0, .err = "", .glines = r.glines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .tail = false};
+}
+
 Str lw_lin_mask(LW w, Int body, List(Str) nl, List(Str) tyl, Str name) {
-    Str b = str_sb_finish(kg_pr(w.g, body, str_sb_new()));
-    return lin_mask(b, nl, tyl, name, lin_has_closure(b, 0), 0, "");
+    return lg_mask(w.g, body, nl, tyl, name, lg_closure(w.g, body), 0, "");
+}
+
+// ─── Linear map/set accumulators on the graph (mirrors lin_mask) ────
+// The token scan's rules, per node: `p` may be read (index, slice,
+// get/contains/len/keys/values), be a tail self call's argument at its own
+// position (plain or `.insert`/`.remove`), or be returned.
+
+type LGS = { List(Int) appr; Int cons; Bool bad; };
+
+Bool lg_closure(Kg g, Int id) {
+    Str k = g.ns[id].kind;
+    if (k == "lambda" || k == "spawn") { return true; }
+    if (k == "fstr") { return false; }
+    return lg_closure_kids(g, id, 0);
+}
+
+Bool lg_closure_kids(Kg g, Int id, Int i) {
+    if (i >= g.ns[id].nk) { return false; }
+    if (lg_closure(g, kg_kid(g, id, i))) { return true; }
+    return lg_closure_kids(g, id, i + 1);
+}
+
+// Whether a text holds identifier token `p`.
+Bool lg_text_has(Str s, Int pos, Str p) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return false; }
+    if (t.kind == "ident" && t.text == p) { return true; }
+    return lg_text_has(s, t.pos, p);
+}
+
+// Whether a subtree prints identifier token `p` anywhere (f-strings are
+// one token, so their holes do not count).
+Bool lg_has(Kg g, Int id, Str p) {
+    Str k = g.ns[id].kind;
+    if (k == "fstr") { return false; }
+    if (k == "lit") { return false; }
+    Str t = g.ns[id].text;
+    Bool here = if (k == "ty") { lg_text_has(t, 0, p) } else { if (k == "arm" || k == "letpat" || k == "pat" || k == "bind" || k == "rbind" || k == "spawn") { t == p || lg_text_has(g.ns[id].aux, 0, p) } else { t == p } };
+    if (here) { return true; }
+    return lg_has_kids(g, id, 0, p);
+}
+
+Bool lg_has_kids(Kg g, Int id, Int i, Str p) {
+    if (i >= g.ns[id].nk) { return false; }
+    if (lg_has(g, kg_kid(g, id, i), p)) { return true; }
+    return lg_has_kids(g, id, i + 1, p);
+}
+
+Bool lg_is_p(Kg g, Int id, Str p) { return g.ns[id].kind == "ref" && g.ns[id].text == p; }
+
+// One tail self call's arguments.
+LGS lg_args(Kg g, Int c, Str p, Int pidx, Int i, LGS acc) {
+    if (i >= g.ns[c].nk) { return acc; }
+    Int a = kg_kid(g, c, i);
+    if (i != pidx) {
+        LGS nx = if (lg_has(g, a, p)) { LGS {.appr = acc.appr, .cons = acc.cons, .bad = true} } else { acc };
+        return lg_args(g, c, p, pidx, i + 1, nx);
+    }
+    Str m = g.ns[a].text;
+    Bool upd = g.ns[a].kind == "mcall" && (m == "insert" || m == "remove") && lg_is_p(g, kg_kid(g, a, 0), p);
+    if (lg_is_p(g, a, p)) { return lg_args(g, c, p, pidx, i + 1, LGS {.appr = acc.appr.concat([a]), .cons = acc.cons, .bad = acc.bad}); }
+    if (upd) { return lg_args(g, c, p, pidx, i + 1, LGS {.appr = acc.appr.concat([kg_kid(g, a, 0)]), .cons = acc.cons + 1, .bad = acc.bad}); }
+    return lg_args(g, c, p, pidx, i + 1, acc);
+}
+
+LGS lg_tails(Kg g, Int id, Str p, Str fname, Int pidx, LGS acc) {
+    Str k = g.ns[id].kind;
+    if (k == "fstr") { return acc; }
+    if (k == "ret" && g.ns[id].nk == 1) {
+        Int c = kg_kid(g, id, 0);
+        if (g.ns[c].kind == "call" && g.ns[c].text == fname) { return lg_args(g, c, p, pidx, 0, acc); }
+    }
+    return lg_tails_kids(g, id, 0, p, fname, pidx, acc);
+}
+
+LGS lg_tails_kids(Kg g, Int id, Int i, Str p, Str fname, Int pidx, LGS acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return lg_tails_kids(g, id, i + 1, p, fname, pidx, lg_tails(g, kg_kid(g, id, i), p, fname, pidx, acc));
+}
+
+Bool lg_read(Str m) { return m == "get" || m == "contains" || m == "len" || m == "keys" || m == "values"; }
+
+// Every `p` token not after a `.` is a read, approved, or `return p;`.
+Bool lg_occ(Kg g, Int id, Int par, Int ki, Str p, List(Int) appr) {
+    Str k = g.ns[id].kind;
+    if (k == "fstr" || k == "lit") { return true; }
+    Str t = g.ns[id].text;
+    if (k == "ref" || k == "name" || k == "lparam") {
+        if (t != p) { return true; }
+        if (k == "ref" && lin_has_int(appr, id, 0)) { return true; }
+        Str pk = if (par >= 0) { g.ns[par].kind } else { "" };
+        if ((pk == "index" || pk == "slice") && ki == 0) { return true; }
+        if ((pk == "mcall" || pk == "field") && ki == 0 && lg_read(g.ns[par].text)) { return true; }
+        return pk == "ret";
+    }
+    Bool dotted = k == "field" || k == "mcall" || k == "finit";
+    Bool here = if (dotted) { false } else { if (k == "ty") { lg_text_has(t, 0, p) } else { if (k == "arm" || k == "letpat" || k == "pat" || k == "bind" || k == "rbind" || k == "spawn") { t == p || lg_text_has(g.ns[id].aux, 0, p) } else { t == p } } };
+    if (here) { return false; }
+    return lg_occ_kids(g, id, 0, p, appr);
+}
+
+Bool lg_occ_kids(Kg g, Int id, Int i, Str p, List(Int) appr) {
+    if (i >= g.ns[id].nk) { return true; }
+    if (!lg_occ(g, kg_kid(g, id, i), id, i, p, appr)) { return false; }
+    return lg_occ_kids(g, id, i + 1, p, appr);
+}
+
+Bool lg_param_ok(Kg g, Int body, Str p, Str fname, Int pidx) {
+    LGS ls = lg_tails(g, body, p, fname, pidx, LGS {.appr = [], .cons = 0, .bad = false});
+    if (ls.bad || ls.cons == 0) { return false; }
+    return lg_occ(g, body, -1, 0, p, ls.appr);
+}
+
+Str lg_mask(Kg g, Int body, List(Str) names, List(Str) tys, Str fname, Bool has_cl, Int i, Str acc) {
+    if (i >= names.len() || i >= tys.len()) { return acc; }
+    Bool ok = if (!has_cl && lin_is_mapset(tys[i])) { lg_param_ok(g, body, str_trim(names[i]), fname, i) } else { false };
+    return lg_mask(g, body, names, tys, fname, has_cl, i + 1, acc + if (ok) { "1" } else { "0" });
 }
 
 // ─── Program walk ───────────────────────────────────────────────────
