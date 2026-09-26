@@ -818,7 +818,11 @@ GT lw_index(LW w, Int id, List(Str) env, GT c) {
     Int t2 = t1 + 1;
     Str slot = "%t" + IntToString(t1);
     Str ldr = lst_read_reg(ety, slot, t2);
-    List(Str) l2 = lst_read_lines(ety, slot, t2, ixx.lines.concat([slot + " = call ptr @resid_list_get(ptr " + base.val + ", i64 " + ixx.val + ")"]));
+    // Facts that prove the index in bounds drop the bounds check.
+    Bool inb = w.facts && lr_has_seg(w.rf.get(0 - id - 1) else { "" }, "inb");
+    Str get = if (inb) { "@resid_list_get_nc" } else { "@resid_list_get" };
+    List(Str) l1 = ixx.lines.concat([slot + " = call ptr " + get + "(ptr " + base.val + ", i64 " + ixx.val + ")"]).concat(lw_check_note(w, id, "bounds", inb));
+    List(Str) l2 = lst_read_lines(ety, slot, t2, l1);
     return GT {.pos = 0, .val = ldr, .ty = ety, .cnt = 0, .err = "", .glines = ix.glines, .lines = l2, .tmp = t2 + 1, .lbl = ix.lbl, .tail = false};
 }
 
@@ -998,10 +1002,13 @@ GT lw_bin(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     GT more2 = if (adopt_r) { gt_retype(more, lhs.ty) } else { more };
     // Range facts discharge the overflow / division check (spec §3.2a).
     Bool arith = op == "+" || op == "-" || op == "*" || op == "/" || op == "%";
-    if (arith && w.facts && int_fam(num_norm_cg(lhs2.ty)) && int_fam(num_norm_cg(more2.ty)) && lw_discharged(w, op, l, r, lhs2.ty, more2.ty)) {
-        return bin_arith_nc(lw_ins(op), lhs2, more2);
+    Bool ints = arith && int_fam(num_norm_cg(lhs2.ty)) && int_fam(num_norm_cg(more2.ty));
+    Str check = if (op == "/" || op == "%") { "division" } else { "overflow" };
+    if (ints && w.facts && lw_discharged(w, op, l, r, lhs2.ty, more2.ty)) {
+        return lw_noted(w, id, check, true, bin_arith_nc(lw_ins(op), lhs2, more2));
     }
-    return bin_apply(op, lhs2, more2);
+    GT res = bin_apply(op, lhs2, more2);
+    return if (ints) { lw_noted(w, id, check, false, res) } else { res };
 }
 
 Str lw_ins(Str op) {
@@ -1010,6 +1017,18 @@ Str lw_ins(Str op) {
     if (op == "*") { return "mul"; }
     if (op == "/") { return "sdiv"; }
     return "srem";
+}
+
+// In debug builds, each runtime check is recorded for the graph artifact
+// as a comment: `; discharged #id check` or `; checked #id check`.
+List(Str) lw_check_note(LW w, Int id, Str check, Bool gone) {
+    if (!w.dbg) { return []; }
+    return ["; " + (if (gone) { "discharged" } else { "checked" }) + " #" + IntToString(id) + " " + check];
+}
+
+GT lw_noted(LW w, Int id, Str check, Bool gone, GT g) {
+    if (!w.dbg || g.err != "") { return g; }
+    return GT {.pos = g.pos, .val = g.val, .ty = g.ty, .cnt = g.cnt, .err = g.err, .glines = g.glines, .lines = g.lines.concat(lw_check_note(w, id, check, gone)), .tmp = g.tmp, .lbl = g.lbl, .tail = g.tail};
 }
 
 // An operand's range: its fact within its type's values.
@@ -1707,7 +1726,7 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
         Str ev = lst_read_reg(vty, gs2, tloop);
         Str LC2 = "LC" + n2s;
         List(Str) envl = env_add(env_add(env, vname + ":" + ev + ":" + vty), "__loop:" + LC2 + ":" + LD2);
-        List(Str) f10 = g.lines.concat([ixa + " = alloca i64", "store i64 0, ptr " + ixa, "br label %" + LB2, LB2 + ":", iv + " = load i64, ptr " + ixa, cnt + " = call i64 @resid_list_len(ptr " + a.val + ")", cc2 + " = icmp slt i64 " + iv + ", " + cnt, "br i1 " + cc2 + ", label %" + LBODY2 + ", label %" + LD2, LBODY2 + ":", gs2 + " = call ptr @resid_list_get(ptr " + a.val + ", i64 " + iv + ")"]);
+        List(Str) f10 = a.lines.concat([ixa + " = alloca i64", "store i64 0, ptr " + ixa, "br label %" + LB2, LB2 + ":", iv + " = load i64, ptr " + ixa, cnt + " = call i64 @resid_list_len(ptr " + a.val + ")", cc2 + " = icmp slt i64 " + iv + ", " + cnt, "br i1 " + cc2 + ", label %" + LBODY2 + ", label %" + LD2, LBODY2 + ":", gs2 + " = call ptr @resid_list_get(ptr " + a.val + ", i64 " + iv + ")"]);
         List(Str) f11 = lst_read_lines(vty, gs2, tloop, f10);
         ST gb2 = ST {.pos = 0, .dead = false, .err = "", .env = envl, .glines = a.glines, .hlines = g.hlines, .lines = f11, .tmp = tloop, .lbl = nlbl2, .rety = g.rety};
         ST body2 = lw_body(w, bodyn, envl, in_main, gb2);
@@ -1730,7 +1749,7 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     Str LC = "LC" + lbs;
     List(Str) env2 = env_add(env_add(env, vname + ":" + kreg + ":Int"), "__loop:" + LC + ":" + LD);
     Str cmp = if (lw_text(w, it) == "..=") { "icmp sle" } else { "icmp slt" };
-    List(Str) p8 = g.lines.concat([kaddr + " = alloca i64", "store i64 " + a.val + ", ptr " + kaddr, "br label %" + LB, LB + ":", kreg + " = load i64, ptr " + kaddr, "%c" + lbs + " = " + cmp + " i64 " + kreg + ", " + b.val, "br i1 %c" + lbs + ", label %" + LBODY + ", label %" + LD, LBODY + ":"]);
+    List(Str) p8 = b.lines.concat([kaddr + " = alloca i64", "store i64 " + a.val + ", ptr " + kaddr, "br label %" + LB, LB + ":", kreg + " = load i64, ptr " + kaddr, "%c" + lbs + " = " + cmp + " i64 " + kreg + ", " + b.val, "br i1 %c" + lbs + ", label %" + LBODY + ", label %" + LD, LBODY + ":"]);
     ST gb = ST {.pos = 0, .dead = false, .err = "", .env = env2, .glines = b.glines, .hlines = g.hlines, .lines = p8, .tmp = b.tmp, .lbl = newlbl, .rety = g.rety};
     ST body = lw_body(w, bodyn, env2, in_main, gb);
     if (body.err != "") { return body; }
@@ -2687,22 +2706,26 @@ pub Funcs lw_sigs(Kg g, Int unit) {
 // ranges prove the operation cannot trap. A range is "lo,hi"; a node
 // without one is unconstrained.
 
-type LR = { Int lo; Int hi; };
+type LR = { Int lo; Int hi; Bool nz; };
 
-Int lr_max() { return 9223372036854775807; }
-Int lr_min() { return 0 - 9223372036854775807 - 1; }
-LR lr_full() { return LR {.lo = lr_min(), .hi = lr_max()}; }
-Bool lr_is_full(LR r) { return r.lo == lr_min() && r.hi == lr_max(); }
-pub Str lr_str(LR r) { return IntToString(r.lo) + "," + IntToString(r.hi); }
+pub Int lr_max() { return 9223372036854775807; }
+pub Int lr_min() { return 0 - 9223372036854775807 - 1; }
+LR lr_full() { return LR {.lo = lr_min(), .hi = lr_max(), .nz = false}; }
+// Whether 0 is excluded: by the flag or by the bounds.
+pub Bool lr_nz(LR r) { return r.nz || r.lo > 0 || r.hi < 0; }
+Bool lr_is_full(LR r) { return r.lo == lr_min() && r.hi == lr_max() && !r.nz; }
+pub Str lr_str(LR r) { return IntToString(r.lo) + "," + IntToString(r.hi) + (if (r.nz && r.lo <= 0 && r.hi >= 0) { ",nz" } else { "" }); }
 
 pub LR lr_parse(Str s) {
     if (s == "") { return lr_full(); }
     Int c = str_find_char(s, 44, 0);
-    return LR {.lo = str_parse_int(str_slice(s, 0, c)), .hi = str_parse_int(str_slice(s, c + 1, str_len(s)))};
+    Int c2 = str_find_char(s, 44, c + 1);
+    Int he = if (c2 < 0) { str_len(s) } else { c2 };
+    return LR {.lo = str_parse_int(str_slice(s, 0, c)), .hi = str_parse_int(str_slice(s, c + 1, he)), .nz = c2 >= 0};
 }
 
-LR lr_meet(LR a, LR b) { return LR {.lo = max_i64(a.lo, b.lo), .hi = min_i64(a.hi, b.hi)}; }
-pub LR lr_join(LR a, LR b) { return LR {.lo = min_i64(a.lo, b.lo), .hi = max_i64(a.hi, b.hi)}; }
+LR lr_meet(LR a, LR b) { return LR {.lo = max_i64(a.lo, b.lo), .hi = min_i64(a.hi, b.hi), .nz = a.nz || b.nz}; }
+pub LR lr_join(LR a, LR b) { return LR {.lo = min_i64(a.lo, b.lo), .hi = max_i64(a.hi, b.hi), .nz = lr_nz(a) && lr_nz(b)}; }
 
 // The values of an integer type, or ok = false for one wider than 63 bits
 // of magnitude (UInt(64), Int(128), ...), whose values a range cannot hold.
@@ -2716,8 +2739,8 @@ LRT lr_type(Str ty) {
     if (w == 64 && !uns) { return LRT {.ok = true, .r = lr_full()}; }
     if (w >= 64) { return LRT {.ok = false, .r = lr_full()}; }
     Int p = lr_pow2(w - 1, 1);
-    if (uns) { return LRT {.ok = true, .r = LR {.lo = 0, .hi = p * 2 - 1}}; }
-    return LRT {.ok = true, .r = LR {.lo = 0 - p, .hi = p - 1}};
+    if (uns) { return LRT {.ok = true, .r = LR {.lo = 0, .hi = p * 2 - 1, .nz = false}}; }
+    return LRT {.ok = true, .r = LR {.lo = 0 - p, .hi = p - 1, .nz = false}};
 }
 
 Int lr_pow2(Int k, Int acc) {
@@ -2754,12 +2777,12 @@ LRO lr_op(Str op, LR a, LR b) {
     if (op == "+") {
         LRV lo = lr_add(a.lo, b.lo);
         LRV hi = lr_add(a.hi, b.hi);
-        return LRO {.exact = lo.ok && hi.ok, .r = LR {.lo = lo.v, .hi = hi.v}};
+        return LRO {.exact = lo.ok && hi.ok, .r = LR {.lo = lo.v, .hi = hi.v, .nz = false}};
     }
     if (op == "-") {
         LRV lo = lr_sub(a.lo, b.hi);
         LRV hi = lr_sub(a.hi, b.lo);
-        return LRO {.exact = lo.ok && hi.ok, .r = LR {.lo = lo.v, .hi = hi.v}};
+        return LRO {.exact = lo.ok && hi.ok, .r = LR {.lo = lo.v, .hi = hi.v, .nz = false}};
     }
     if (op == "*") {
         LRV p1 = lr_mul(a.lo, b.lo);
@@ -2769,7 +2792,7 @@ LRO lr_op(Str op, LR a, LR b) {
         Bool ok = p1.ok && p2.ok && p3.ok && p4.ok;
         Int lo = min_i64(min_i64(p1.v, p2.v), min_i64(p3.v, p4.v));
         Int hi = max_i64(max_i64(p1.v, p2.v), max_i64(p3.v, p4.v));
-        return LRO {.exact = ok, .r = LR {.lo = lo, .hi = hi}};
+        return LRO {.exact = ok, .r = LR {.lo = lo, .hi = hi, .nz = lr_nz(a) && lr_nz(b)}};
     }
     if (op == "/") {
         if (b.lo < 1) { return LRO {.exact = false, .r = lr_full()}; }
@@ -2777,20 +2800,20 @@ LRO lr_op(Str op, LR a, LR b) {
         Int q2 = a.lo / b.hi;
         Int q3 = a.hi / b.lo;
         Int q4 = a.hi / b.hi;
-        return LRO {.exact = true, .r = LR {.lo = min_i64(min_i64(q1, q2), min_i64(q3, q4)), .hi = max_i64(max_i64(q1, q2), max_i64(q3, q4))}};
+        return LRO {.exact = true, .r = LR {.lo = min_i64(min_i64(q1, q2), min_i64(q3, q4)), .hi = max_i64(max_i64(q1, q2), max_i64(q3, q4)), .nz = false}};
     }
     if (op == "%") {
         if (b.lo < 1) { return LRO {.exact = false, .r = lr_full()}; }
         Int m = b.hi - 1;
         Int lo = if (a.lo >= 0) { 0 } else { 0 - m };
         Int hi = if (a.hi <= 0) { 0 } else { m };
-        LR r = LR {.lo = lo, .hi = hi};
-        return LRO {.exact = true, .r = if (a.lo >= 0) { LR {.lo = 0, .hi = min_i64(a.hi, m)} } else { r }};
+        LR r = LR {.lo = lo, .hi = hi, .nz = false};
+        return LRO {.exact = true, .r = if (a.lo >= 0) { LR {.lo = 0, .hi = min_i64(a.hi, m), .nz = false} } else { r }};
     }
     if (op == "&") {
-        if (a.lo >= 0 && b.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = min_i64(a.hi, b.hi)}}; }
-        if (a.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = a.hi}}; }
-        if (b.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = b.hi}}; }
+        if (a.lo >= 0 && b.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = min_i64(a.hi, b.hi), .nz = false}}; }
+        if (a.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = a.hi, .nz = false}}; }
+        if (b.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = b.hi, .nz = false}}; }
     }
     return LRO {.exact = false, .r = lr_full()};
 }
@@ -2801,7 +2824,7 @@ Bool lr_safe(Str op, LR a, LR b, Str ty) {
     if (!t.ok) { return false; }
     Bool uns = fam_head(num_norm_cg(ty)) == "UInt";
     if (op == "/" || op == "%") {
-        Bool nz = b.lo > 0 || b.hi < 0;
+        Bool nz = lr_nz(b);
         if (uns) { return b.lo > 0; }
         Bool nm1 = b.lo > -1 || b.hi < -1 || a.lo > t.r.lo;
         return nz && nm1;
@@ -2823,10 +2846,72 @@ Map(Int, Str) lr_note(Map(Int, Str) f, Int id, LR r) {
     return f.insert(id, lr_str(lr_join(lr_parse(old), r)));
 }
 
+// A node's other facts live under key -(id + 1), as "|"-separated
+// segments: len:lo,hi (a List's length), tag:V (a sum's variant),
+// fields:f=id,... (a struct literal's field nodes), inb (an index in bounds).
+Map(Int, Str) lr_note_x(Map(Int, Str) f, Int id, Str seg) {
+    Int k = 0 - id - 1;
+    Str old = f.get(k) else { "" };
+    if (old == "") { return f.insert(k, seg); }
+    if (lr_has_seg(old, seg)) { return f; }
+    return f.insert(k, old + "|" + seg);
+}
+
+pub Bool lr_has_seg(Str s, Str seg) { return list_has_str(str_split(s, "|"), seg); }
+
+// Rebinding x forgets its facts, and every `i < len(x)` relation.
+Map(Str, Str) lr_forget(Map(Str, Str) env, Str x) {
+    if (x == "") { return env; }
+    Map(Str, Str) e1 = env.remove(x).remove("<:" + x).remove("#len:" + x).remove("#tag:" + x).remove("#fields:" + x);
+    if (!e1.contains("#rel")) { return e1; }
+    return lr_forget_rel(e1, e1.keys(), x, 0);
+}
+
+Map(Str, Str) lr_forget_rel(Map(Str, Str) env, List(Str) ks, Str x, Int i) {
+    if (i >= ks.len()) { return env; }
+    Str k = ks[i];
+    Bool drop = str_starts_with(k, "<:") && (env.get(k) else { "" }) == x;
+    return lr_forget_rel(if (drop) { env.remove(k) } else { env }, ks, x, i + 1);
+}
+
+// `i < len(xs)` for immutable i and xs.
+Map(Str, Str) lr_rel(Map(Str, Str) env, Str i, Str xs) { return env.insert("<:" + i, xs).insert("#rel", "1"); }
+
+Int lr_unparen(Kg g, Int id) {
+    if (g.ns[id].kind == "paren" && g.ns[id].nk == 1) { return lr_unparen(g, kg_kid(g, id, 0)); }
+    return id;
+}
+
+// The list a `xs.len()` node measures, or "".
+Str lr_len_of(Kg g, Int id) {
+    KN n = g.ns[id];
+    if (n.kind == "mcall" && n.text == "len" && n.nk == 1 && g.ns[kg_kid(g, id, 0)].kind == "ref") { return g.ns[kg_kid(g, id, 0)].text; }
+    return "";
+}
+
+// Facts a ref inherits from its binding.
+Map(Int, Str) lr_ref_x(Map(Int, Str) f, Int id, Str x, Map(Str, Str) env) {
+    Str ln = env.get("#len:" + x) else { "" };
+    Str tg = env.get("#tag:" + x) else { "" };
+    Str fl = env.get("#fields:" + x) else { "" };
+    Map(Int, Str) f1 = if (ln != "") { lr_note_x(f, id, "len:" + ln) } else { f };
+    Map(Int, Str) f2 = if (tg != "") { lr_note_x(f1, id, "tag:" + tg) } else { f1 };
+    return if (fl != "") { lr_note_x(f2, id, "fields:" + fl) } else { f2 };
+}
+
+// "f=id,..." of a struct literal's field initializers.
+Str lr_fields(Kg g, Int id, Int i, Str acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    Int k = kg_kid(g, id, i);
+    if (g.ns[k].kind != "finit" || g.ns[k].nk < 1) { return lr_fields(g, id, i + 1, acc); }
+    Str e = g.ns[k].text + "=" + IntToString(kg_kid(g, k, 0));
+    return lr_fields(g, id, i + 1, if (acc == "") { e } else { acc + "," + e });
+}
+
 LR lr_lit(Str t) {
     if (str_len(t) > 18 || !str_is_int(t)) { return lr_full(); }
     Int v = str_parse_int(t);
-    return LR {.lo = v, .hi = v};
+    return LR {.lo = v, .hi = v, .nz = false};
 }
 
 LRE lr_kids(Kg g, Int id, Int i, Map(Str, Str) env, Map(Int, Str) f) {
@@ -2844,12 +2929,12 @@ LRE lr_expr_at(Kg g, Int id, Map(Str, Str) env, Map(Int, Str) f) {
     KN n = g.ns[id];
     Str k = n.kind;
     if (k == "lit") { return LRE {.r = if (n.aux == "int") { lr_lit(n.text) } else { lr_full() }, .facts = f}; }
-    if (k == "ref") { return LRE {.r = lr_parse(env.get(n.text) else { "" }), .facts = f}; }
+    if (k == "ref") { return LRE {.r = lr_parse(env.get(n.text) else { "" }), .facts = lr_ref_x(f, id, n.text, env)}; }
     if (k == "paren") { return lr_expr(g, kg_kid(g, id, 0), env, f); }
     if (k == "un" && n.text == "-") {
         LRE a = lr_expr(g, kg_kid(g, id, 0), env, f);
         if (a.r.lo == lr_min()) { return LRE {.r = lr_full(), .facts = a.facts}; }
-        return LRE {.r = LR {.lo = 0 - a.r.hi, .hi = 0 - a.r.lo}, .facts = a.facts};
+        return LRE {.r = LR {.lo = 0 - a.r.hi, .hi = 0 - a.r.lo, .nz = a.r.nz}, .facts = a.facts};
     }
     if (k == "bin") {
         Str op = n.text;
@@ -2864,7 +2949,25 @@ LRE lr_expr_at(Kg g, Int id, Map(Str, Str) env, Map(Int, Str) f) {
     }
     if ((k == "mcall" && n.text == "len" && n.nk == 1) || (k == "call" && n.text == "str_len")) {
         LRE a = lr_kids(g, id, 0, env, f);
-        return LRE {.r = LR {.lo = 0, .hi = 140737488355328}, .facts = a.facts};
+        Str xs = lr_len_of(g, id);
+        Str ln = if (xs == "") { "" } else { env.get("#len:" + xs) else { "" } };
+        return LRE {.r = if (ln != "") { lr_parse(ln) } else { LR {.lo = 0, .hi = 140737488355328, .nz = false} }, .facts = a.facts};
+    }
+    // xs[i] is in bounds when i >= 0 and i < len(xs) by a relation or by
+    // xs's length.
+    Str bk = if (k == "index" && n.nk == 2) { g.ns[kg_kid(g, id, 0)].kind } else { "" };
+    if (bk == "ref" || bk == "list") {
+        Int base = kg_kid(g, id, 0);
+        Str xs = if (bk == "ref") { g.ns[base].text } else { "" };
+        LRE b = lr_expr(g, base, env, f);
+        Int ix = kg_kid(g, id, 1);
+        LRE i = lr_expr(g, ix, env, b.facts);
+        Bool rel = xs != "" && g.ns[ix].kind == "ref" && (env.get("<:" + g.ns[ix].text) else { "" }) == xs;
+        Str nl = IntToString(g.ns[base].nk);
+        Str ln = if (bk == "list") { nl + "," + nl } else { env.get("#len:" + xs) else { "" } };
+        Bool short = ln != "" && i.r.hi < lr_parse(ln).lo;
+        Bool inb = i.r.lo >= 0 && (rel || short);
+        return LRE {.r = lr_full(), .facts = if (inb) { lr_note_x(i.facts, id, "inb") } else { i.facts }};
     }
     if (k == "ifx") {
         Int c = kg_kid(g, id, 0);
@@ -2902,13 +3005,18 @@ LRE lr_cond_kids(Kg g, Int id, Map(Str, Str) env, Map(Int, Str) f) {
 Map(Int, Str) lr_arms(Kg g, Int id, Int i, Map(Str, Str) env, Map(Int, Str) f) {
     if (i >= g.ns[id].nk) { return f; }
     Int a = kg_kid(g, id, i);
-    Map(Str, Str) e2 = if (g.ns[a].aux == "") { env } else { env.remove(g.ns[a].aux) };
+    Map(Str, Str) e1 = lr_forget(env, g.ns[a].aux);
+    // Inside an arm, a ref scrutinee is that arm's variant.
+    Int sc = lr_unparen(g, kg_kid(g, id, 0));
+    Str v = g.ns[a].text;
+    Bool vt = g.ns[sc].kind == "ref" && v != "_" && v != "" && str_char_at(v, 0) >= 65 && str_char_at(v, 0) <= 90 && g.ns[a].aux != g.ns[sc].text;
+    Map(Str, Str) e2 = if (vt) { e1.insert("#tag:" + g.ns[sc].text, v) } else { e1 };
     return lr_arms(g, id, i + 1, env, lr_kids(g, a, 0, e2, f).facts);
 }
 
 Map(Str, Str) lr_unbind_kids(Kg g, Int id, Int i, Int n, Map(Str, Str) env) {
     if (i >= n) { return env; }
-    return lr_unbind_kids(g, id, i + 1, n, env.remove(g.ns[kg_kid(g, id, i)].text));
+    return lr_unbind_kids(g, id, i + 1, n, lr_forget(env, g.ns[kg_kid(g, id, i)].text));
 }
 
 // ─── Conditions ─────────────────────────────────────────────────────
@@ -2941,7 +3049,12 @@ Map(Int, Str) lr_nof() {
 Map(Str, Str) lr_cond(Kg g, Int c, Bool pos, Map(Str, Str) env) {
     KN n = g.ns[c];
     // `V(x) = e` binds x.
-    if (n.kind == "pat") { return env.remove(n.aux); }
+    if (n.kind == "pat") {
+        Map(Str, Str) e0 = lr_forget(env, n.aux);
+        Int v = lr_unparen(g, kg_kid(g, c, 0));
+        Bool vt = pos && g.ns[v].kind == "ref" && g.ns[v].text != n.aux;
+        return if (vt) { e0.insert("#tag:" + g.ns[v].text, n.text) } else { e0 };
+    }
     if (n.kind == "paren") { return lr_cond(g, kg_kid(g, c, 0), pos, env); }
     if (n.kind == "un" && n.text == "!") { return lr_cond(g, kg_kid(g, c, 0), !pos, env); }
     if (n.kind != "bin") { return env; }
@@ -2955,21 +3068,27 @@ Map(Str, Str) lr_cond(Kg g, Int c, Bool pos, Map(Str, Str) env) {
     LR lv = lr_expr(g, l, env, lr_nof()).r;
     LR rv = lr_expr(g, r, env, lr_nof()).r;
     Map(Str, Str) e1 = if (g.ns[l].kind == "ref") { lr_refine(env, g.ns[l].text, o, rv) } else { env };
-    return if (g.ns[r].kind == "ref") { lr_refine(e1, g.ns[r].text, lr_mirror(o), lv) } else { e1 };
+    Map(Str, Str) e2 = if (g.ns[r].kind == "ref") { lr_refine(e1, g.ns[r].text, lr_mirror(o), lv) } else { e1 };
+    Str lx = lr_len_of(g, r);
+    Str rx = lr_len_of(g, l);
+    Map(Str, Str) e3 = if (o == "<" && g.ns[l].kind == "ref" && lx != "") { lr_rel(e2, g.ns[l].text, lx) } else { e2 };
+    return if (o == ">" && g.ns[r].kind == "ref" && rx != "") { lr_rel(e3, g.ns[r].text, rx) } else { e3 };
 }
 
 // x `o` e for e in range v.
 Map(Str, Str) lr_refine(Map(Str, Str) env, Str x, Str o, LR v) {
     LR cur = lr_parse(env.get(x) else { "" });
-    LR b = if (o == "<" && v.hi > lr_min()) { LR {.lo = lr_min(), .hi = v.hi - 1} } else if (o == "<=") { LR {.lo = lr_min(), .hi = v.hi} } else if (o == ">" && v.lo < lr_max()) { LR {.lo = v.lo + 1, .hi = lr_max()} } else if (o == ">=") { LR {.lo = v.lo, .hi = lr_max()} } else if (o == "==") { v } else { lr_full() };
+    LR b = if (o == "<" && v.hi > lr_min()) { LR {.lo = lr_min(), .hi = v.hi - 1, .nz = false} } else if (o == "<=") { LR {.lo = lr_min(), .hi = v.hi, .nz = false} } else if (o == ">" && v.lo < lr_max()) { LR {.lo = v.lo + 1, .hi = lr_max(), .nz = false} } else if (o == ">=") { LR {.lo = v.lo, .hi = lr_max(), .nz = false} } else if (o == "==") { v } else { lr_full() };
     LR m0 = lr_meet(cur, b);
     // x != v where v is one value: shave it off an end.
     Bool one = o == "!=" && v.lo == v.hi;
-    LR m = if (one && m0.lo == v.lo && m0.lo < lr_max()) { LR {.lo = m0.lo + 1, .hi = m0.hi} } else if (one && m0.hi == v.lo && m0.hi > lr_min()) { LR {.lo = m0.lo, .hi = m0.hi - 1} } else { m0 };
+    LR m = if (one && m0.lo == v.lo && m0.lo < lr_max()) { LR {.lo = m0.lo + 1, .hi = m0.hi, .nz = false} } else if (one && m0.hi == v.lo && m0.hi > lr_min()) { LR {.lo = m0.lo, .hi = m0.hi - 1, .nz = false} } else { m0 };
+    // x != 0: nonzero, whatever the bounds.
+    LR m1 = if (one && v.lo == 0) { LR {.lo = m.lo, .hi = m.hi, .nz = true} } else { m };
     // An empty range: the branch is unreachable; keep what was known.
-    if (m.lo > m.hi) { return env; }
-    if (lr_is_full(m)) { return env; }
-    return env.insert(x, lr_str(m));
+    if (m1.lo > m1.hi) { return env; }
+    if (lr_is_full(m1)) { return env; }
+    return env.insert(x, lr_str(m1));
 }
 
 // ─── Statements ─────────────────────────────────────────────────────
@@ -2997,11 +3116,17 @@ LRS lr_stmt(Kg g, Int id, LRS st) {
     if (k == "bind" || k == "rbind") {
         Str ty = g.ns[kg_kid(g, id, 0)].text;
         LRE v = lr_expr(g, kg_kid(g, id, n.nk - 1), st.env, st.facts);
-        Map(Str, Str) e0 = st.env.remove(n.text);
+        Map(Str, Str) e0 = lr_forget(st.env, n.text);
         LRT t = lr_type(ty);
         LR r = if (t.ok) { lr_meet(v.r, t.r) } else { lr_full() };
         Map(Str, Str) e1 = if (t.ok && !lr_is_full(r) && r.lo <= r.hi) { e0.insert(n.text, lr_str(r)) } else { e0 };
-        return LRS {.env = e1, .facts = v.facts};
+        Int vk = kg_kid(g, id, n.nk - 1);
+        Str vkind = g.ns[vk].kind;
+        Str nl = IntToString(g.ns[vk].nk);
+        Map(Str, Str) e2 = if (vkind == "list") { e1.insert("#len:" + n.text, nl + "," + nl) } else { e1 };
+        Str fl = if (vkind == "struct") { lr_fields(g, vk, 0, "") } else { "" };
+        Map(Str, Str) e3 = if (fl != "") { e2.insert("#fields:" + n.text, fl) } else { e2 };
+        return LRS {.env = e3, .facts = v.facts};
     }
     if (k == "if") {
         Int c = kg_kid(g, id, 0);
@@ -3026,10 +3151,13 @@ LRS lr_stmt(Kg g, Int id, LRS st) {
         LRE a = if (range) { lr_expr(g, kg_kid(g, it, 0), st.env, st.facts) } else { lr_expr(g, it, st.env, st.facts) };
         LRE b = if (range) { lr_expr(g, kg_kid(g, it, 1), st.env, a.facts) } else { a };
         Int hi = if (op == "..=") { b.r.hi } else { if (b.r.hi > lr_min()) { b.r.hi - 1 } else { lr_min() } };
-        LR vr = LR {.lo = a.r.lo, .hi = hi};
-        Map(Str, Str) e0 = st.env.remove(n.text);
+        LR vr = LR {.lo = a.r.lo, .hi = hi, .nz = false};
+        Map(Str, Str) e0 = lr_forget(st.env, n.text);
         Bool ok = range && lr_int_ty(g.ns[kg_kid(g, id, 0)].text) && vr.lo <= vr.hi && !lr_is_full(vr);
-        Map(Str, Str) e1 = if (ok) { e0.insert(n.text, lr_str(vr)) } else { e0 };
+        Map(Str, Str) e1a = if (ok) { e0.insert(n.text, lr_str(vr)) } else { e0 };
+        // `for (Int i in a..xs.len())`: i < len(xs) in the body.
+        Str lx = if (range && op == "..") { lr_len_of(g, kg_kid(g, it, 1)) } else { "" };
+        Map(Str, Str) e1 = if (lx != "" && lx != n.text) { lr_rel(e1a, n.text, lx) } else { e1a };
         LRS body = lr_stmt(g, kg_kid(g, id, 2), LRS {.env = e1, .facts = b.facts});
         return LRS {.env = st.env, .facts = body.facts};
     }
@@ -3041,7 +3169,7 @@ LRS lr_stmt(Kg g, Int id, LRS st) {
     }
     if (k == "letpat" || k == "pat" || k == "destr" || k == "with") {
         // Names these bind carry no range (and hide an outer one).
-        Map(Str, Str) e1 = if (k == "letpat" || k == "pat") { st.env.remove(n.aux) } else { lr_unbind_kids(g, id, 0, n.nk - 1, st.env) };
+        Map(Str, Str) e1 = if (k == "letpat" || k == "pat") { lr_forget(st.env, n.aux) } else { lr_unbind_kids(g, id, 0, n.nk - 1, st.env) };
         LRE v = lr_kids(g, id, 0, if (k == "with") { e1 } else { st.env }, st.facts);
         return LRS {.env = e1, .facts = v.facts};
     }

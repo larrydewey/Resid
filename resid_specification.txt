@@ -147,10 +147,13 @@ asserts and known fields. Reduction uses them to:
     composite;
   - specialize on known fields (§36).
 
-A discharged check is recorded as a derive edge with rule
-discharge, naming the facts used, so a debugger can show
-why a check is absent. When a check cannot be discharged,
-it stays and its node's reason names the missing fact.
+A discharged check is recorded on its node as a
+discharged fact naming the check (overflow, division,
+bounds) and the operand nodes whose facts were used, so a
+debugger can show why a check is absent. When a check
+cannot be discharged, it stays, and its node carries a
+check fact naming the check and the operands that had no
+range.
 
 3.3  Edges
 
@@ -1217,10 +1220,19 @@ bindings: from integer literals, the operators + - * / %
 and &, lengths (in [0, 2^47]), `for` over a range, and the
 comparisons of dominating if and while conditions,
 including an if whose branch always returns, breaks or
-continues. A + - * / or % whose operand ranges, within
-their types, prove it cannot overflow or divide by zero
-(or compute MIN / -1) is lowered without its check. The
-artifact lists a RESIDUAL node's range as a fact.
+continues; `x != 0` makes x nonzero. A + - * / or % whose
+operand ranges, within their types, prove it cannot
+overflow or divide by zero (or compute MIN / -1) is
+lowered without its check. A list's length is known from
+a list literal, and `i < xs.len()` holds for i inside
+`for (i in a..xs.len())` and under a condition
+`i < xs.len()`; an index `xs[i]` with i >= 0 and below the
+length is lowered without its bounds check. A match arm
+or pattern gives a RESIDUAL scrutinee its variant (tag),
+and a binding of a struct literal gives its references
+the field nodes (fields). The artifact lists these as
+facts of RESIDUAL nodes, with the discharged and check
+facts of debug builds.
 
 33.1  Signed Provenance
 

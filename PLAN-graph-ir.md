@@ -224,15 +224,20 @@ are imported the same way `reduce.resid` is.
     every in-repo program.
   - [x] AGENTS.md and PROGRESS.md updated.
 
-## Follow-ups
+## Follow-ups (done 2026-09-26)
 
-- A native ptrace backend for `resid-debug` live mode (gdb today).
-- Facts: nonzero, discharge derive records, then length, tag and fields.
+- [x] A native ptrace backend for `resid-debug` live mode: runtime
+  `resid_dbg_*` primitives, the rest in resid (`lib/dwarf.resid` reads
+  `.debug_info` and location lists; `resid-debug` evaluates DWARF
+  expressions, plants breakpoints, steps by node over calls, and traces a
+  signal in runtime code to the calling node). gdb stays as
+  `backend gdb`.
+- [x] Facts: nonzero (divisions discharged under `d != 0`), discharged and
+  check records in the artifact, length (bounds checks discharged for
+  `for (i in 0..xs.len())`, `i < xs.len()` and literal lists), tag and
+  fields. Tag and fields are recorded for tools; arm selection and field
+  projection on them stay with the reducer's own known values.
 - Pre-parse text passes remain by design: import resolution, `ds_desugar`
   and test discovery rewrite source before the graph exists.
-- G2b: migrate the remaining hand-threaded accumulators to builders.
-
-## Open questions
-
-- Live debugger backend: decided. gdb/lldb first, native ptrace as the goal.
-- Facts: all of §3.2a, staged in the order listed under G3.
+- [x] G2b: hand-threaded accumulators migrated to builders where the
+  pattern is a straight accumulation (see PROGRESS §0z).
