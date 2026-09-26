@@ -128,8 +128,11 @@ are imported the same way `reduce.resid` is.
   - [x] `examples/greduce.resid` reduces the graph, mirroring
     `reduce.resid`; `--graph-reduce-check` token-matches its printed
     residual against the text reducer on every program.
-  - Next: lower from the residual graph (no reparse), port `stracc` to the
-    graph, then record derive edges and reasons.
+  - [x] The default pipeline lowers the residual graph directly, with
+    `stracc` on the graph (`gs_program`); `--text-reduce` keeps the text
+    path. IR matches it modulo position-numbered symbols.
+  - Next: record derive edges and reasons on the residual nodes; collect
+    signatures from the graph instead of its printed text.
   - Port fold, beta, eval, specialize, generalize, dead-arm and elide from
     `reduce.resid`, recording derive edges and reasons.
   - Facts: range and nonzero first (overflow and div0 discharge), then

@@ -1781,8 +1781,10 @@ pub Int gk_check_program(Kg g, Int unit, Str src, Str smap) {
 }
 
 // Parse and check desugared source (the driver's default checker).
-pub Int gk_run(Str src, Str smap) {
-    KP p = kg_parse(src);
+pub Int gk_run(Str src, Str smap) { return gk_run_parsed(kg_parse(src), src, smap); }
+
+// The same over the program as parsed.
+pub Int gk_run_parsed(KP p, Str src, Str smap) {
     if (p.err != "") {
         diag_error("E0001", "type error: " + p.err, p.pos, 3, src, smap, 0);
         return 1;

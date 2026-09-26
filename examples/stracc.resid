@@ -104,7 +104,7 @@ SaScan sa_count(Str s, Int pos, Int end, Str p, Str prev, SaScan acc) {
 
 // Tokens that may not appear at depth 0 of the accumulator argument: it
 // must be a plain `+` chain.
-Bool sa_chain_breaker(Str t) {
+pub Bool sa_chain_breaker(Str t) {
     if (t == "?" || t == ":" || t == "else") { return true; }
     if (t == "==" || t == "!=" || t == "<" || t == ">" || t == "<=" || t == ">=") { return true; }
     if (t == "&&" || t == "||" || t == "-" || t == "*" || t == "/" || t == "%") { return true; }
