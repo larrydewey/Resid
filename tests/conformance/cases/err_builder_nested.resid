@@ -1,0 +1,2 @@
+// Linear builders (spec §45.1): E0404.
+Int main() { List(StrBuf) bs = []; return 0; }

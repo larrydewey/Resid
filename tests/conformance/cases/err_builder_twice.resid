@@ -1,0 +1,2 @@
+// Linear builders (spec §45.1): E0402.
+Int main() { StrBuf b = StrBuf(); StrBuf c = b.push("a"); StrBuf d = b.push("b"); println(c.finish()); println(d.finish()); return 0; }

@@ -317,3 +317,66 @@ Int main() { while ("x") { return 1; } return 0; }
 === with
 with binding a: expected Int, got Str
 Int main() { with (Int a = "x") { println("a"); } return 0; }
+=== lin_and
+error[E0401]: builder `b` is consumed on one branch but not the other (spec §45.1)
+Int main() { StrBuf b = StrBuf(); Bool x = false && b.finish() == ""; return 0; }
+=== lin_branch_ok
+check: ok
+Int main() { StrBuf b = StrBuf(); if (true) { println(b.finish()); } else { println(b.push("x").finish()); } return 0; }
+=== lin_branch
+error[E0401]: builder `b` is consumed on one branch but not the other (spec §45.1)
+Int main() { StrBuf b = StrBuf(); if (true) { println(b.finish()); } return 0; }
+=== lin_drop
+error[E0401]: a StrBuf value is dropped without being consumed (spec §45.1)
+Int main() { StrBuf().push("a"); return 0; }
+=== lin_early_ret_ok
+check: ok
+Str f(Bool c) { StrBuf b = StrBuf(); if (c) { return b.finish(); } return b.push("z").finish(); }
+Int main() { println(f(true)); return 0; }
+=== lin_ifx
+error[E0401]: builder `b` is consumed on one branch but not the other (spec §45.1)
+Int main() { StrBuf b = StrBuf(); Str s = if (true) { b.finish() } else { "n" }; println(s); return 0; }
+=== lin_lambda
+error[E0403]: builder `b` is bound outside this loop or lambda and cannot be used inside it (spec §45.1)
+Int main() { StrBuf b = StrBuf(); Str closure() f = lambda() { b.finish() }; println(f()); return 0; }
+=== lin_listbuf_noexp
+ListBuf() needs an expected type: ListBuf(T) b = ListBuf();
+Int main() { List(Int) xs = ListBuf().finish(); return 0; }
+=== lin_listbuf_ty
+ListBuf.push expects Int, got Str
+Int main() { ListBuf(Int) b = ListBuf(); List(Int) xs = b.push("s").finish(); return 0; }
+=== lin_loop
+error[E0403]: builder `b` is bound outside this loop or lambda and cannot be used inside it (spec §45.1)
+Int main() { StrBuf b = StrBuf(); Int i = 0; while (i < 1) { println(b.finish()); break; } return 0; }
+=== lin_match_ok
+check: ok
+Int main() { StrBuf b = StrBuf(); Option(Int) o = Some(1); Str s = match (o) { Some(v) => b.push(IntToString(v)).finish(), None => b.finish() }; println(s); return 0; }
+=== lin_nested_field
+error[E0404]: builder type StrBuf cannot be a struct field (spec §45.1)
+type P = { StrBuf b; };
+Int main() { return 0; }
+=== lin_nested_param
+error[E0404]: builder type cannot appear inside Option(StrBuf) (spec §45.1)
+Int f(Option(StrBuf) o) { return 0; }
+Int main() { return 0; }
+=== lin_nested
+error[E0404]: builder type cannot appear inside List(StrBuf) (spec §45.1)
+Int main() { List(StrBuf) bs = []; return 0; }
+=== lin_param_unused
+error[E0401]: builder `b` is not consumed before this return (spec §45.1)
+Int f(StrBuf b) { return 1; }
+Int main() { return f(StrBuf()); }
+=== lin_same_expr
+error[E0402]: builder `b` is used more than once (spec §45.1)
+Str cat(Str a, Str b) { return a + b; }
+Int main() { StrBuf b = StrBuf(); println(cat(b.finish(), b.finish())); return 0; }
+=== lin_twice
+error[E0402]: builder `b` is used more than once (spec §45.1)
+Int main() { StrBuf b = StrBuf(); StrBuf c = b.push("a"); StrBuf d = b.push("b"); println(c.finish()); println(d.finish()); return 0; }
+=== lin_unused_fallthrough
+error[E0401]: builder `b` is never consumed on this path (spec §45.1)
+Void f() { StrBuf b = StrBuf(); }
+Int main() { return 0; }
+=== lin_unused
+error[E0401]: builder `b` is not consumed before this return (spec §45.1)
+Int main() { StrBuf b = StrBuf(); return 0; }

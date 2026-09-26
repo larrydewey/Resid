@@ -1,0 +1,2 @@
+// Linear builders (spec §45.1): E0401.
+Int main() { StrBuf b = StrBuf(); if (true) { println(b.finish()); } return 0; }

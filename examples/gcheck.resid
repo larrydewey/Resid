@@ -253,6 +253,15 @@ GKT gk_call(GK k, Int id, Str exp) {
         if (b.err != "") { return gterr(a.k, b.err, id); }
         return gt(a.k, b.ty, id);
     }
+    if (n == "StrBuf" && ck_fn_index(k.fs, n) < 0) {
+        if (argn != 0) { return gterr(k, "StrBuf() takes no arguments", id); }
+        return gt(k, "StrBuf", id);
+    }
+    if (n == "ListBuf" && ck_fn_index(k.fs, n) < 0) {
+        if (argn != 0) { return gterr(k, "ListBuf() takes no arguments", id); }
+        if (!str_has_prefix(exp, "ListBuf(")) { return gterr(k, "ListBuf() needs an expected type: ListBuf(T) b = ListBuf();", id); }
+        return gt(k, exp, id);
+    }
     VOwn vo = find_variant(k.fs, n);
     if (vo.ok) { return gk_variant_call(k, id, n, vo); }
     if (argn == 0) { return gk_finish_call(k, id, n, "", 0, false); }
@@ -742,6 +751,7 @@ GKT gk_mcall(GK k0, Int id) {
     if (b.err != "") { return b; }
     GK k = b.k;
     Str bt = b.ty;
+    if (gk_is_builder(bt)) { return gk_builder_method(k, id, bt, m, na); }
     if (m == "len") {
         if (na != 0) { return gterr(k, ".len() takes no arguments", id); }
         return gt(k, "Int", id);
@@ -765,6 +775,58 @@ GKT gk_mcall(GK k0, Int id) {
     Str cfty = struct_field_type(k.fs, bt, m);
     if (cfty != "" && is_fn_type(cfty)) { return gk_fn_call(gk_mem(k, id, gk_sfield(k, bt, m)), id, 1, cfty); }
     return gterr(k, "unsupported method " + m, id);
+}
+
+// ─── Linear builders (spec §45) ─────────────────────────────────────
+
+pub Bool gk_is_builder(Str t) { return t == "StrBuf" || str_has_prefix(t, "ListBuf("); }
+
+// A builder type nested inside another type (E0404), or "".
+Str gk_nested_builder(Str t) {
+    Bool has = str_contains(t, "StrBuf") || str_contains(t, "ListBuf(");
+    if (!has) { return ""; }
+    if (t == "StrBuf") { return ""; }
+    if (str_has_prefix(t, "ListBuf(")) { return gk_nested_builder_in(str_slice(t, 8, str_len(t) - 1), t); }
+    return "E0404: builder type cannot appear inside " + t + " (spec §45.1)";
+}
+
+Str gk_nested_builder_in(Str inner, Str t) {
+    if (str_contains(inner, "StrBuf") || str_contains(inner, "ListBuf(")) { return "E0404: builder type cannot appear inside " + t + " (spec §45.1)"; }
+    return "";
+}
+
+GKT gk_builder_method(GK k, Int id, Str bt, Str m, Int na) {
+    if (bt == "StrBuf") {
+        if (m == "finish") {
+            if (na != 0) { return gterr(k, ".finish() takes no arguments", id); }
+            return gt(k, "Str", id);
+        }
+        if (m == "push" || m == "push_char") {
+            if (na != 1) { return gterr(k, "StrBuf." + m + " takes 1 argument", id); }
+            GKT a = gk_marg(k, id, 0);
+            if (a.err != "") { return a; }
+            Bool ok = if (m == "push") { arg_matches(a.ty, "Str") } else { is_int_ty(a.ty) };
+            Str want = if (m == "push") { "Str" } else { "Int" };
+            if (!ok) { return gterr(a.k, "StrBuf." + m + " expects " + want + ", got " + a.ty, id); }
+            return gt(a.k, bt, id);
+        }
+        return gterr(k, "unsupported method " + m + " on StrBuf", id);
+    }
+    Str et = str_slice(bt, 8, str_len(bt) - 1);
+    if (m == "finish") {
+        if (na != 0) { return gterr(k, ".finish() takes no arguments", id); }
+        return gt(k, "List(" + et + ")", id);
+    }
+    if (m == "push") {
+        if (na != 1) { return gterr(k, "ListBuf.push takes 1 argument", id); }
+        Int ae = gk_kid(k, id, 1);
+        GKT a = gk_expr(k, ae, et);
+        if (a.err != "") { return a; }
+        Bool ok = ty_same(a.ty, et) || (is_num(a.ty) && is_num(et) && int_adopt_ok(a.ty, et, gk_whole_lit(k.g, ae))) || params_accept(et, a.ty, 1);
+        if (!ok) { return gterr(a.k, "ListBuf.push expects " + et + ", got " + a.ty, id); }
+        return gt(a.k, bt, id);
+    }
+    return gterr(k, "unsupported method " + m + " on " + bt, id);
 }
 
 GKT gk_map_method(GK k, Int id, Str bt, Str m, Int na) {
@@ -979,6 +1041,8 @@ GKS gk_bindst(GK k, Int id) {
     Str name = g.ns[id].text;
     if (kg_shadows(k.rs, id)) { return gk_shadow_err(k, id, name); }
     Str ty = g.ns[kg_kid(g, id, 0)].text;
+    Str nb = gk_nested_builder(ty);
+    if (nb != "") { return gs_err(k, nb, id); }
     Int ve = kg_kid(g, id, g.ns[id].nk - 1);
     GKT v = gk_expr(k, ve, ty);
     if (v.err != "") { return gs_of(v); }
@@ -1069,6 +1133,7 @@ pub GKS gk_stmt(GK k, Int id, Str ret) {
     if (kind == "discard" || kind == "estmt") {
         GKT e = gk_expr(k, kg_kid(g, id, 0), "");
         if (e.err != "") { return gs_of(e); }
+        if (gk_is_builder(e.ty)) { return gs_err(e.k, "E0401: a " + e.ty + " value is dropped without being consumed (spec §45.1)", id); }
         return gs_ok(e.k);
     }
     return gs_err(k, "unexpected statement " + kind, id);
@@ -1089,20 +1154,42 @@ GK gk_params(GK k, Int d, Int i, Int n) {
     return gk_params(gk_bind(k, p, pty), d, i + 1, n);
 }
 
+// E0404 over the types of kids from..to (their `ty` kid, or themselves);
+// `field` also rejects a builder as the whole type (struct fields).
+GKS gk_nested_kids(GK k, Int d, Int from, Int to, Bool field) {
+    if (from >= to) { return gs_ok(k); }
+    Int c = gk_kid(k, d, from);
+    Int tn = if (k.g.ns[c].kind == "ty") { c } else { kg_kid(k.g, c, 0) };
+    Str t = k.g.ns[tn].text;
+    Str nb0 = gk_nested_builder(t);
+    Str nb = if (nb0 == "" && field && gk_is_builder(t)) { "E0404: builder type " + t + " cannot be a struct field (spec §45.1)" } else { nb0 };
+    if (nb != "") { return gs_err(k, nb, c); }
+    return gk_nested_kids(k, d, from + 1, to, field);
+}
+
 GKS gk_fn(GK k, Int d) {
     Int n = k.g.ns[d].nk;
+    GKS nb = gk_nested_kids(k, d, 0, n - 1, false);
+    if (nb.err != "") { return nb; }
     Str rbase = ct_base_of(k.fs.ctn, k.fs.ctb, k.g.ns[gk_kid(k, d, 0)].text);
     GK k2 = gk_params(gk_with(k, gk_notys()), d, 1, n - 1);
     GKS b = gk_stmt(k2, gk_kid(k, d, n - 1), rbase);
     if (b.err != "") { return b; }
+    LS lin = lin_fn(k, d);
+    if (lin.err != "") { return gs_err(b.k, lin.err, lin.at); }
     if (!resid_quiet()) { println("OK func " + k.g.ns[d].text); }
     return gs_ok(gk_scope(k, b.k));
 }
 
 // A graph diagnostic in the text checker's format, at node `at`.
+// A message "E04xx: text" carries its own code.
 Void gk_diag(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
     Int pos = if (at >= 0) { g.ns[at].ep } else { 0 };
-    diag_error(code, msg, pos, 3, src, smap, 0);
+    Int c = str_find(msg, ": E04");
+    Bool own = c >= 0 && str_slice(msg, c + 7, c + 9) == ": ";
+    Str code2 = if (own) { str_slice(msg, c + 2, c + 7) } else { code };
+    Str msg2 = if (own) { str_slice(msg, c + 9, str_len(msg)) } else { msg };
+    diag_error(code2, msg2, pos, 3, src, smap, 0);
 }
 
 // Check declarations; `err` is set once a diagnostic has been printed.
@@ -1143,8 +1230,228 @@ GKS gk_decls(GK k, Int id, Int i, Str src, Str smap) {
         }
         return gk_decls(gk_scope(k, t.k), id, i + 1, src, smap);
     }
+    if (kind == "struct_t") {
+        GKS nb = gk_nested_kids(k, d, 0, k.g.ns[d].nk, true);
+        if (nb.err != "") {
+            gk_diag("E0001", "type error: " + nb.err, k.g, nb.at, src, smap);
+            return gs_err(k, "reported", d);
+        }
+    }
     if (!resid_quiet()) { println("OK type def"); }
     return gk_decls(k, id, i + 1, src, smap);
+}
+
+// ─── Builder linearity (spec §45.1, E0401-E0403) ────────────────────
+
+// Walk state: builders consumed on this path, builders in scope, builders
+// that may not be used here (outer ones inside a loop or lambda), where the
+// innermost loop's builders start in `live`, and whether the path left.
+type LS = { List(Int) used; List(Int) live; List(Int) locked; Int lbase; Bool div; List(Int) bs; Str err; Int at; };
+
+LS ls_err(LS l, Str msg, Int at) { return LS {.used = l.used, .live = l.live, .locked = l.locked, .lbase = l.lbase, .div = l.div, .bs = l.bs, .err = msg, .at = at}; }
+LS ls_with(LS l, List(Int) used, List(Int) live, Bool div) { return LS {.used = used, .live = live, .locked = l.locked, .lbase = l.lbase, .div = div, .bs = l.bs, .err = "", .at = -1}; }
+LS ls_frame(LS l, List(Int) locked, Int lbase) { return LS {.used = l.used, .live = l.live, .locked = locked, .lbase = lbase, .div = false, .bs = l.bs, .err = "", .at = -1}; }
+
+Str lin_name(GK k, Int b) {
+    return "builder `" + k.g.ns[b].text + "`";
+}
+
+Bool gk_builder_binder(GK k, Int n) {
+    Str kd = k.g.ns[n].kind;
+    if (kd != "param" && kd != "bind" && kd != "rbind" && kd != "for") { return false; }
+    return gk_is_builder(ct_base_of(k.fs.ctn, k.fs.ctb, k.g.ns[kg_kid(k.g, n, 0)].text));
+}
+
+// Builder binders in the subtree of `id`.
+List(Int) lin_binders(GK k, Int id, List(Int) acc) {
+    List(Int) acc2 = if (gk_builder_binder(k, id)) { acc.concat([id]) } else { acc };
+    return lin_binders_kids(k, id, 0, acc2);
+}
+
+List(Int) lin_binders_kids(GK k, Int id, Int i, List(Int) acc) {
+    if (i >= k.g.ns[id].nk) { return acc; }
+    return lin_binders_kids(k, id, i + 1, lin_binders(k, kg_kid(k.g, id, i), acc));
+}
+
+// First builder in live[from..] not consumed on this path, or -1.
+Int lin_leak(LS l, Int from) {
+    if (from >= l.live.len()) { return -1; }
+    if (!list_contains_int(l.used, l.live[from])) { return l.live[from]; }
+    return lin_leak(l, from + 1);
+}
+
+// Close a scope that started with `n0` live builders.
+LS lin_close(GK k, LS l, Int n0, Int at) {
+    if (l.err != "") { return l; }
+    Int leak = if (l.div) { -1 } else { lin_leak(l, n0) };
+    if (leak >= 0) { return ls_err(l, "E0401: " + lin_name(k, leak) + " is never consumed on this path (spec §45.1)", leak); }
+    return ls_with(l, l.used, l.live[0..n0], l.div);
+}
+
+Bool lin_same(List(Int) a, List(Int) b, Int i) {
+    if (a.len() != b.len()) { return false; }
+    if (i >= a.len()) { return true; }
+    if (!list_contains_int(b, a[i])) { return false; }
+    return lin_same(a, b, i + 1);
+}
+
+// Merge two branches that both started from `base`.
+LS lin_merge(GK k, LS base, LS a, LS b, Int at) {
+    if (a.err != "") { return a; }
+    if (b.err != "") { return b; }
+    if (a.div && b.div) { return ls_with(base, a.used, base.live, true); }
+    if (a.div) { return ls_with(base, b.used, base.live, false); }
+    if (b.div) { return ls_with(base, a.used, base.live, false); }
+    if (!lin_same(a.used, b.used, 0)) {
+        Int w = lin_diff(a.used, b.used, 0);
+        Int w2 = if (w >= 0) { w } else { lin_diff(b.used, a.used, 0) };
+        return ls_err(base, "E0401: " + lin_name(k, w2) + " is consumed on one branch but not the other (spec §45.1)", at);
+    }
+    return ls_with(base, a.used, base.live, false);
+}
+
+Int lin_diff(List(Int) a, List(Int) b, Int i) {
+    if (i >= a.len()) { return -1; }
+    if (!list_contains_int(b, a[i])) { return a[i]; }
+    return lin_diff(a, b, i + 1);
+}
+
+LS lin_use(GK k, LS l, Int use) {
+    Int d = kg_def(k.rs, use);
+    if (d < 0 || !list_contains_int(l.bs, d)) { return l; }
+    if (list_contains_int(l.locked, d)) { return ls_err(l, "E0403: " + lin_name(k, d) + " is bound outside this loop or lambda and cannot be used inside it (spec §45.1)", use); }
+    if (list_contains_int(l.used, d)) { return ls_err(l, "E0402: " + lin_name(k, d) + " is used more than once (spec §45.1)", use); }
+    return ls_with(l, l.used.concat([d]), l.live, l.div);
+}
+
+LS lin_kids(GK k, Int id, Int i, LS l) {
+    if (l.err != "" || i >= k.g.ns[id].nk) { return l; }
+    return lin_kids(k, id, i + 1, lin_expr(k, kg_kid(k.g, id, i), l));
+}
+
+// A body that may not touch builders outside it (loop body, lambda).
+LS lin_fenced(GK k, Int body, LS l, Bool stmt) {
+    LS inner = ls_frame(l, l.locked.concat(l.live), l.live.len());
+    Int n0 = l.live.len();
+    LS r = if (stmt) { lin_stmt(k, body, inner) } else { lin_expr(k, body, inner) };
+    LS c = if (stmt) { r } else { lin_close(k, r, n0, body) };
+    if (c.err != "") { return c; }
+    return l;
+}
+
+LS lin_arms(GK k, Int id, Int i, LS base, LS acc) {
+    if (acc.err != "" || i >= k.g.ns[id].nk) { return acc; }
+    LS arm = lin_expr(k, kg_kid(k.g, kg_kid(k.g, id, i), 0), base);
+    return lin_arms(k, id, i + 1, base, lin_merge(k, base, acc, arm, kg_kid(k.g, id, i)));
+}
+
+LS lin_expr(GK k, Int id, LS l) {
+    if (l.err != "") { return l; }
+    Kg g = k.g;
+    Str kd = g.ns[id].kind;
+    if (kd == "ref") { return lin_use(k, l, id); }
+    if (kd == "ty" || kd == "fpart" || kd == "fspec") { return l; }
+    if (kd == "ifx" || kd == "tern") {
+        LS c = lin_expr(k, kg_kid(g, id, 0), l);
+        if (c.err != "") { return c; }
+        LS a = lin_expr(k, kg_kid(g, id, 1), c);
+        LS b = if (g.ns[id].nk > 2) { lin_expr(k, kg_kid(g, id, 2), c) } else { c };
+        return lin_merge(k, c, a, b, id);
+    }
+    if (kd == "orelse" || (kd == "bin" && (g.ns[id].text == "&&" || g.ns[id].text == "||"))) {
+        LS c = lin_expr(k, kg_kid(g, id, 0), l);
+        if (c.err != "") { return c; }
+        return lin_merge(k, c, lin_expr(k, kg_kid(g, id, 1), c), c, id);
+    }
+    if (kd == "match") {
+        LS c = lin_expr(k, kg_kid(g, id, 0), l);
+        if (c.err != "" || g.ns[id].nk < 2) { return c; }
+        LS first = lin_expr(k, kg_kid(g, kg_kid(g, id, 1), 0), c);
+        return lin_arms(k, id, 2, c, first);
+    }
+    if (kd == "lambda") { return lin_fenced(k, kg_kid(g, id, g.ns[id].nk - 1), l, false); }
+    if (kd == "spawn") { return lin_fenced(k, kg_kid(g, id, 0), l, true); }
+    if (kd == "bexpr") {
+        Int n0 = l.live.len();
+        LS b = lin_stmts(k, id, 0, g.ns[id].nk - 1, l);
+        LS t = lin_expr(k, kg_kid(g, id, g.ns[id].nk - 1), b);
+        return lin_close(k, t, n0, id);
+    }
+    if (kd == "bind" || kd == "rbind") { return lin_stmt(k, id, l); }
+    return lin_kids(k, id, 0, l);
+}
+
+LS lin_stmts(GK k, Int id, Int i, Int n, LS l) {
+    if (l.err != "" || i >= n) { return l; }
+    return lin_stmts(k, id, i + 1, n, lin_stmt(k, kg_kid(k.g, id, i), l));
+}
+
+LS lin_stmt(GK k, Int id, LS l) {
+    if (l.err != "") { return l; }
+    Kg g = k.g;
+    Str kd = g.ns[id].kind;
+    Int n = g.ns[id].nk;
+    if (l.div) { return l; }
+    if (kd == "ret") {
+        LS r = if (n > 0) { lin_expr(k, kg_kid(g, id, 0), l) } else { l };
+        if (r.err != "") { return r; }
+        Int leak = lin_leak(r, 0);
+        if (leak >= 0) { return ls_err(r, "E0401: " + lin_name(k, leak) + " is not consumed before this return (spec §45.1)", id); }
+        return ls_with(r, r.used, r.live, true);
+    }
+    if (kd == "brk" || kd == "cont") {
+        Int leak = lin_leak(l, l.lbase);
+        Str word = if (kd == "brk") { "break" } else { "continue" };
+        if (leak >= 0) { return ls_err(l, "E0401: " + lin_name(k, leak) + " is not consumed before this " + word + " (spec §45.1)", id); }
+        return ls_with(l, l.used, l.live, true);
+    }
+    if (kd == "bind" || kd == "rbind") {
+        LS v = lin_expr(k, kg_kid(g, id, n - 1), l);
+        if (v.err != "" || !list_contains_int(l.bs, id)) { return v; }
+        return ls_with(v, v.used, v.live.concat([id]), false);
+    }
+    if (kd == "block") {
+        Int n0 = l.live.len();
+        return lin_close(k, lin_stmts(k, id, 0, n, l), n0, id);
+    }
+    if (kd == "with") {
+        Int n0 = l.live.len();
+        LS b = lin_stmts(k, id, 0, n, l);
+        return lin_close(k, b, n0, id);
+    }
+    if (kd == "if") {
+        Int ci = kg_kid(g, id, 0);
+        LS c = if (g.ns[ci].kind == "pat") { lin_expr(k, kg_kid(g, ci, 0), l) } else { lin_expr(k, ci, l) };
+        if (c.err != "") { return c; }
+        LS a = lin_stmt(k, kg_kid(g, id, 1), c);
+        LS b = if (n > 2) { lin_stmt(k, kg_kid(g, id, 2), c) } else { c };
+        return lin_merge(k, c, a, b, id);
+    }
+    if (kd == "while" || kd == "for") {
+        Int ci = kg_kid(g, id, if (kd == "for") { 1 } else { 0 });
+        LS c = if (g.ns[ci].kind == "pat") { lin_expr(k, kg_kid(g, ci, 0), l) } else { lin_expr(k, ci, l) };
+        if (c.err != "") { return c; }
+        return lin_fenced(k, kg_kid(g, id, n - 1), c, true);
+    }
+    return lin_kids(k, id, 0, l);
+}
+
+// Linearity of fn `d`'s builder parameters and bindings.
+LS lin_fn(GK k, Int d) {
+    List(Int) none = [];
+    List(Int) bs = lin_binders(k, d, none);
+    LS l0 = LS {.used = none, .live = none, .locked = none, .lbase = 0, .div = false, .bs = bs, .err = "", .at = -1};
+    if (bs.len() == 0) { return l0; }
+    List(Int) ps = lin_params(k, d, 1, k.g.ns[d].nk - 1, bs, none);
+    LS l1 = ls_with(l0, none, ps, false);
+    LS r = lin_stmt(k, kg_kid(k.g, d, k.g.ns[d].nk - 1), l1);
+    return lin_close(k, r, 0, d);
+}
+
+List(Int) lin_params(GK k, Int d, Int i, Int n, List(Int) bs, List(Int) acc) {
+    if (i >= n) { return acc; }
+    Int p = kg_kid(k.g, d, i);
+    return lin_params(k, d, i + 1, n, bs, if (list_contains_int(bs, p)) { acc.concat([p]) } else { acc });
 }
 
 // ─── Signatures from the graph ──────────────────────────────────────
@@ -1429,21 +1736,21 @@ Int gk_finish(GK k, List(Int) fnode) {
 type GKR = { Int status; List(Str) ty; List(Int) def; RS rs; Sigs fs; };
 
 // Sorted log keys to one type per node id (the last one logged wins).
-List(Str) gk_dense_ty(List(Int) ks, List(Str) tys, Int i, Int id, Int n, Str cur, List(Str) acc) {
-    if (id >= n) { return acc; }
+List(Str) gk_dense_ty(List(Int) ks, List(Str) tys, Int i, Int id, Int n, Str cur, ListBuf(Str) acc) {
+    if (id >= n) { return acc.finish(); }
     if (i < ks.len() && ks[i] / 4294967296 == id) {
         return gk_dense_ty(ks, tys, i + 1, id, n, tys[ks[i] % 4294967296], acc);
     }
-    return gk_dense_ty(ks, tys, i, id + 1, n, "", acc.concat([cur]));
+    return gk_dense_ty(ks, tys, i, id + 1, n, "", acc.push(cur));
 }
 
 // Resolver def edges with member edges (fields, methods) filled in.
-List(Int) gk_dense_def(List(Int) ms, RS rs, Int i, Int id, Int n, List(Int) acc) {
-    if (id >= n) { return acc; }
+List(Int) gk_dense_def(List(Int) ms, RS rs, Int i, Int id, Int n, ListBuf(Int) acc) {
+    if (id >= n) { return acc.finish(); }
     Bool hit = i < ms.len() && ms[i] / 4294967296 == id;
     Int d = if (hit) { ms[i] % 4294967296 - 2 } else { kg_def(rs, id) };
     Int i2 = if (hit) { gk_skip_id(ms, i + 1, id) } else { i };
-    return gk_dense_def(ms, rs, i2, id + 1, n, acc.concat([d]));
+    return gk_dense_def(ms, rs, i2, id + 1, n, acc.push(d));
 }
 
 Int gk_skip_id(List(Int) ms, Int i, Int id) {
@@ -1463,8 +1770,8 @@ pub GKR gk_analyze(Kg g, Int unit, Str src, Str smap, Bool log) {
     if (r.err != "") { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs}; }
     Int st = gk_finish(r.k, sg.fnode);
     Int n = kg_count(g);
-    List(Str) ty = gk_dense_ty(list_sort_ints(r.k.tl.keys), r.k.tl.tys, 0, 0, n, "", es);
-    List(Int) def = gk_dense_def(list_sort_ints(r.k.tl.mem), rs, 0, 0, n, e);
+    List(Str) ty = gk_dense_ty(list_sort_ints(r.k.tl.keys), r.k.tl.tys, 0, 0, n, "", ListBuf());
+    List(Int) def = gk_dense_def(list_sort_ints(r.k.tl.mem), rs, 0, 0, n, ListBuf());
     return GKR {.status = st, .ty = ty, .def = def, .rs = rs, .fs = sg.fs};
 }
 

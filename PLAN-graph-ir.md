@@ -102,7 +102,14 @@ are imported the same way `reduce.resid` is.
     outside test mode too.
   - Effect sets stay in the capability passes (per function); they become
     node facts in G3.
-- [ ] G2b Linear builders: `StrBuf` and `ListBuf(T)`.
+- [x] G2b Linear builders: `StrBuf` and `ListBuf(T)` (spec v3.6 §45).
+  - Done: checker typing, the linearity pass (E0401-E0404), codegen onto
+    `str_sb_*` and new `resid_listbuf_*` runtime entry points, conformance
+    cases, and the compiler's dense-column builders use `ListBuf`. The text
+    checker (`--text-check`) does not know builders, so it no longer
+    accepts the compiler.
+  - Open: migrating other hand-threaded accumulators and retiring
+    `examples/stracc.resid`.
   - Spec: `StrBuf b = StrBuf(); StrBuf b2 = b.push(x); Str s = b2.finish();`.
     Every StrBuf value must be used exactly once (moved, never copied or
     dropped), so push appends in place.
