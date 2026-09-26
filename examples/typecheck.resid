@@ -2067,6 +2067,55 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_crypto_random_byte expects no arguments"};
     }
+    // Native debugging (resid-debug's ptrace backend).
+    if (name == "resid_dbg_spawn") {
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_spawn expects (Str), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_wait") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_wait expects (), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_cont") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_cont expects (Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_step") {
+        if (builtin_args(argtys, "Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_step expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_peek") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_peek expects (Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_poke") {
+        if (builtin_args(argtys, "Int,Int,Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_poke expects (Int, Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_reg") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_reg expects (Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_set_pc") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_set_pc expects (Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_signal") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_signal expects (), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_exit_code") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_exit_code expects (), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_kill") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_kill expects (), got (" + argtys + ")"};
+    }
+    if (name == "resid_dbg_f64") {
+        if (builtin_args(argtys, "Int")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_dbg_f64 expects (Int), got (" + argtys + ")"};
+    }
     if (name == "resid_read_line") {
         if (argtys == "") { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_read_line expects no arguments"};

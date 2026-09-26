@@ -32,6 +32,10 @@
 #include <dirent.h>
 #include <libgen.h>
 #include <sys/wait.h>
+#include <sys/ptrace.h>
+#include <sys/user.h>
+#include <sys/personality.h>
+#include <signal.h>
 
 _Noreturn void resid_abort(const char* msg);
 _Noreturn void resid_index_abort(int64_t idx, int64_t len, const char* at);
@@ -3655,6 +3659,186 @@ int64_t resid_process_run(const char* cmd) {
 }
 
 int64_t resid_args_count(void) { return g_resid_argc; }
+
+/* ── Native debugging (resid-debug's ptrace backend) ────────────────
+ * One traced program at a time. Every thread it creates is traced
+ * (PTRACE_O_TRACECLONE); resid_dbg_wait returns the thread that stopped
+ * with a trap or a signal, and handles thread creation and exit itself. */
+#define RESID_DBG_MAX_THREADS 1024
+static pid_t dbg_leader = -1;
+static pid_t dbg_threads[RESID_DBG_MAX_THREADS];
+static int dbg_nthreads = 0;
+static int64_t dbg_last_signal = 0;
+static int64_t dbg_exit_status = 0;
+
+static int dbg_known(pid_t t) {
+    for (int i = 0; i < dbg_nthreads; i++) if (dbg_threads[i] == t) return 1;
+    return 0;
+}
+static void dbg_add(pid_t t) {
+    if (!dbg_known(t) && dbg_nthreads < RESID_DBG_MAX_THREADS) dbg_threads[dbg_nthreads++] = t;
+}
+static void dbg_remove(pid_t t) {
+    for (int i = 0; i < dbg_nthreads; i++) if (dbg_threads[i] == t) { dbg_threads[i] = dbg_threads[--dbg_nthreads]; return; }
+}
+
+/* Start `cmd` (split on spaces) stopped at its first instruction, with
+ * address randomization off. Returns its pid, or -1. */
+int64_t resid_dbg_spawn(const char* cmd) {
+    if (!cmd) return -1;
+    size_t len = strlen(cmd);
+    char* buf = malloc(len + 1);
+    if (!buf) return -1;
+    memcpy(buf, cmd, len + 1);
+    char* argv[RESID_PROC_MAX_ARGS + 1];
+    int argc = 0;
+    char* p = buf;
+    while (*p != '\0' && argc < RESID_PROC_MAX_ARGS) {
+        while (*p == ' ') p++;
+        if (*p == '\0') break;
+        argv[argc++] = p;
+        while (*p != '\0' && *p != ' ') p++;
+        if (*p == ' ') { *p = '\0'; p++; }
+    }
+    argv[argc] = NULL;
+    if (argc == 0) { free(buf); return -1; }
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid < 0) { free(buf); return -1; }
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        personality(ADDR_NO_RANDOMIZE);
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    free(buf);
+    int st = 0;
+    if (waitpid(pid, &st, 0) < 0 || !WIFSTOPPED(st)) return -1;
+    ptrace(PTRACE_SETOPTIONS, pid, NULL, (void*)(long)(PTRACE_O_TRACECLONE | PTRACE_O_EXITKILL));
+    dbg_leader = pid;
+    dbg_nthreads = 0;
+    dbg_add(pid);
+    return pid;
+}
+
+/* Resume a stopped thread, delivering `sig` (0 for none). */
+int8_t resid_dbg_cont(int64_t tid, int64_t sig) {
+    return ptrace(PTRACE_CONT, (pid_t)tid, NULL, (void*)(long)sig) == 0 ? 1 : 0;
+}
+
+/* Wait for the next stop: returns the thread that stopped (a trap when
+ * resid_dbg_signal() is 0, else that signal), or -1 once the program has
+ * ended (resid_dbg_exit_code()). */
+int64_t resid_dbg_wait(void) {
+    for (;;) {
+        int st = 0;
+        pid_t t = waitpid(-1, &st, __WALL);
+        if (t < 0) return -1;
+        if (WIFEXITED(st) || WIFSIGNALED(st)) {
+            dbg_remove(t);
+            if (t == dbg_leader) {
+                dbg_exit_status = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+                dbg_leader = -1;
+                return -1;
+            }
+            continue;
+        }
+        if (!WIFSTOPPED(st)) continue;
+        int sig = WSTOPSIG(st);
+        int ev = st >> 16;
+        if (sig == SIGTRAP && ev == PTRACE_EVENT_CLONE) {
+            unsigned long nt = 0;
+            ptrace(PTRACE_GETEVENTMSG, t, NULL, &nt);
+            dbg_add((pid_t)nt);
+            ptrace(PTRACE_CONT, t, NULL, NULL);
+            continue;
+        }
+        if (sig == SIGSTOP && !dbg_known(t)) {
+            dbg_add(t);
+            ptrace(PTRACE_CONT, t, NULL, NULL);
+            continue;
+        }
+        if (sig == SIGSTOP && ev == 0 && t != dbg_leader) {
+            /* A new thread's initial stop after its clone event. */
+            ptrace(PTRACE_CONT, t, NULL, NULL);
+            continue;
+        }
+        dbg_last_signal = sig == SIGTRAP ? 0 : sig;
+        return t;
+    }
+}
+
+int64_t resid_dbg_signal(void) { return dbg_last_signal; }
+int64_t resid_dbg_exit_code(void) { return dbg_exit_status; }
+
+/* Execute one instruction of a stopped thread; 0 if it ended. */
+int8_t resid_dbg_step(int64_t tid) {
+    if (ptrace(PTRACE_SINGLESTEP, (pid_t)tid, NULL, NULL) != 0) return 0;
+    int st = 0;
+    if (waitpid((pid_t)tid, &st, __WALL) < 0) return 0;
+    if (WIFEXITED(st) || WIFSIGNALED(st)) {
+        dbg_remove((pid_t)tid);
+        if ((pid_t)tid == dbg_leader) {
+            dbg_exit_status = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+            dbg_leader = -1;
+        }
+        return 0;
+    }
+    return 1;
+}
+
+int64_t resid_dbg_peek(int64_t tid, int64_t addr) {
+    errno = 0;
+    long v = ptrace(PTRACE_PEEKDATA, (pid_t)tid, (void*)addr, NULL);
+    return (int64_t)v;
+}
+
+int8_t resid_dbg_poke(int64_t tid, int64_t addr, int64_t word) {
+    return ptrace(PTRACE_POKEDATA, (pid_t)tid, (void*)addr, (void*)word) == 0 ? 1 : 0;
+}
+
+/* A register by its DWARF x86-64 number (0 rax .. 15 r15, 16 rip). */
+int64_t resid_dbg_reg(int64_t tid, int64_t n) {
+    struct user_regs_struct r;
+    if (ptrace(PTRACE_GETREGS, (pid_t)tid, NULL, &r) != 0) return 0;
+    switch (n) {
+        case 0: return (int64_t)r.rax; case 1: return (int64_t)r.rdx;
+        case 2: return (int64_t)r.rcx; case 3: return (int64_t)r.rbx;
+        case 4: return (int64_t)r.rsi; case 5: return (int64_t)r.rdi;
+        case 6: return (int64_t)r.rbp; case 7: return (int64_t)r.rsp;
+        case 8: return (int64_t)r.r8; case 9: return (int64_t)r.r9;
+        case 10: return (int64_t)r.r10; case 11: return (int64_t)r.r11;
+        case 12: return (int64_t)r.r12; case 13: return (int64_t)r.r13;
+        case 14: return (int64_t)r.r14; case 15: return (int64_t)r.r15;
+        case 16: return (int64_t)r.rip;
+        default: return 0;
+    }
+}
+
+int8_t resid_dbg_set_pc(int64_t tid, int64_t pc) {
+    struct user_regs_struct r;
+    if (ptrace(PTRACE_GETREGS, (pid_t)tid, NULL, &r) != 0) return 0;
+    r.rip = (unsigned long long)pc;
+    return ptrace(PTRACE_SETREGS, (pid_t)tid, NULL, &r) == 0 ? 1 : 0;
+}
+
+/* End the traced program. */
+int8_t resid_dbg_kill(void) {
+    if (dbg_leader < 0) return 0;
+    kill(dbg_leader, SIGKILL);
+    int st = 0;
+    while (waitpid(-1, &st, __WALL) > 0) {}
+    dbg_leader = -1;
+    dbg_nthreads = 0;
+    return 1;
+}
+
+/* A Float from its bits, formatted as the program would print it. */
+char* resid_dbg_f64(int64_t bits) {
+    double d;
+    memcpy(&d, &bits, sizeof d);
+    return FloatToString(d);
+}
 
 /* Program entry trampoline. The compiler emits the program's `main` as
  * resid_user_main and a C-level main that calls this: the program runs on

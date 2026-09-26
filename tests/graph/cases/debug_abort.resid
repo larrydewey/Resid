@@ -1,0 +1,14 @@
+// resid-debug: Bool locations, and an overflow abort traced to its node.
+Int f(Int x, Float y, Bool z) {
+    Bool w = x > 2;
+    println(FloatToString(y * 2.0) + BoolToString(w && z));
+    Int big = 9223372036854775801 + x;
+    return big;
+}
+
+Int main() {
+    Float q = if (args.count() > 0) { 1.25 } else { 2.5 };
+    Int r = f(args.count() + 6, q, args.count() > 0);
+    println(IntToString(r));
+    return 0;
+}

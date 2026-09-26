@@ -3,9 +3,10 @@
 /// Static mode walks a debug build's knowledge-graph artifact
 /// (`<binary>.resid-graph.cbor`) and its DWARF line table: nodes, symbols,
 /// derivations, and the lowered map from code addresses to nodes. Live mode
-/// runs the binary under gdb, stops at breakpoints, maps each stop's
-/// program counter to its node and each variable to the node that binds it,
-/// and steps by node.
+/// runs the binary under ptrace (the runtime's resid_dbg_* primitives; gdb
+/// optionally), stops at breakpoints, maps each stop's program counter to
+/// its node, reads each variable from its DWARF location and pairs it with
+/// the node that binds it, and steps by node.
 ///
 /// Usage:
 ///   resid-debug <binary> [-ex CMD]...      (no -ex: commands from stdin)
@@ -20,8 +21,9 @@
 ///   break FILE:LINE|FN   add a breakpoint for `run`
 ///   run [ARGS]           run under gdb, report each stop (see `stops`)
 ///   stops N              stops reported by `run` (default 8)
-///   step N               after the first stop, step N instructions and
-///                        report each change of node
+///   step N               after the first stop, step N instructions (over
+///                        calls) and report each change of node
+///   backend native|gdb   live backend: ptrace (default) or gdb in batch
 ///   quit
 
 import "../lib/kgart.resid";
@@ -29,7 +31,11 @@ import "../lib/dwarf.resid";
 
 // A session: the artifact and its index, the binary's sections, symbols
 // and line rows, and the live-mode settings.
-type DB = { Str bin; GA a; List(GI) ix; List(Int) b; List(ES) ss; List(SY) ys; List(LRow) rows; Map(Str, Int) at; List(Str) brk; Int stops; Int steps; };
+type DB = { Str bin; GA a; List(GI) ix; List(Int) b; List(ES) ss; List(SY) ys; List(LRow) rows; Map(Str, Int) at; List(Str) brk; Int stops; Int steps; Str backend; DX dx; List(DF) dfs; };
+
+DB db_with(DB d, List(Str) brk, Int stops, Int steps, Str backend) {
+    return DB {.bin = d.bin, .a = d.a, .ix = d.ix, .b = d.b, .ss = d.ss, .ys = d.ys, .rows = d.rows, .at = d.at, .brk = brk, .stops = stops, .steps = steps, .backend = backend, .dx = d.dx, .dfs = d.dfs};
+}
 
 // ─── Places to nodes ────────────────────────────────────────────────
 
@@ -399,6 +405,373 @@ Int db_run(DB d, Str args) {
     return 0;
 }
 
+// ─── Live mode (native, ptrace) ─────────────────────────────────────
+
+// A traced run: pid, load bias, breakpoints (runtime addresses) with the
+// words they replaced, the stops reported and the last node reported.
+type NT = { Int pid; Int bias; List(Int) bps; Map(Int, Int) saved; Int shown; Int last; };
+
+// Where the binary is mapped (its first mapping, file offset 0).
+Int db_bias(Str bin, Int pid) {
+    List(Str) ls = str_split(filesystem.read_all("/proc/" + IntToString(pid) + "/maps"), "\n");
+    Int sl = db_last_slash(bin, str_len(bin) - 1);
+    Str base = str_slice(bin, sl + 1, str_len(bin));
+    return db_bias_at(ls, "/" + base, 0);
+}
+
+Int db_last_slash(Str s, Int i) {
+    if (i < 0) { return -1; }
+    if (str_char_at(s, i) == 47) { return i; }
+    return db_last_slash(s, i - 1);
+}
+
+Int db_bias_at(List(Str) ls, Str suffix, Int i) {
+    if (i >= ls.len()) { return 0; }
+    Str l = ls[i];
+    List(Str) f = str_split(l, " ");
+    Bool hit = str_ends_with(l, suffix) && f.len() > 2 && db_hex_val(f[2], 0, 0) == 0;
+    if (hit) { return db_hex_val(str_slice(l, 0, db_find(l, "-", 0)), 0, 0); }
+    return db_bias_at(ls, suffix, i + 1);
+}
+
+// Link addresses a breakpoint spec names: each function's first row on
+// FILE:LINE, or a function's first row after its entry.
+List(Int) db_bp_addrs(DB d, Str spec) {
+    Int colon = db_last_colon(spec, str_len(spec) - 1);
+    Str ln = if (colon < 0) { "" } else { str_slice(spec, colon + 1, str_len(spec)) };
+    if (colon > 0 && str_is_int(ln)) {
+        Str f = str_slice(spec, 0, colon);
+        return db_line_rows(d, f, str_parse_int(ln), 0, -1, ListBuf());
+    }
+    Int k = db_df(d.dfs, spec, 0);
+    if (k < 0) { return []; }
+    DF fn = d.dfs[k];
+    Int r = db_first_after(d.rows, fn.lo, fn.hi, 0);
+    return [if (r < 0) { fn.lo } else { d.rows[r].addr }];
+}
+
+Int db_df(List(DF) fs, Str name, Int i) {
+    if (i >= fs.len()) { return -1; }
+    if (fs[i].name == name) { return i; }
+    return db_df(fs, name, i + 1);
+}
+
+Int db_first_after(List(LRow) rs, Int lo, Int hi, Int i) {
+    if (i >= rs.len()) { return -1; }
+    LRow r = rs[i];
+    if (!r.end && r.addr > lo && r.addr < hi) { return i; }
+    return db_first_after(rs, lo, hi, i + 1);
+}
+
+Bool db_file_is(Str row, Str f) {
+    return row == f || str_ends_with(row, "/" + f) || str_ends_with(f, "/" + row);
+}
+
+// The first row on the line in each function (fn: the last one taken).
+List(Int) db_line_rows(DB d, Str f, Int line, Int i, Int fn, ListBuf(Int) acc) {
+    if (i >= d.rows.len()) { return acc.finish(); }
+    LRow r = d.rows[i];
+    Bool on = !r.end && r.line == line && db_file_is(r.file, f);
+    Int k = if (on) { el_fn_at(d.dfs, r.addr, 0) } else { -1 };
+    Bool take = on && k != fn;
+    return db_line_rows(d, f, line, i + 1, if (take) { k } else { fn }, if (take) { acc.push(r.addr) } else { acc });
+}
+
+List(Int) db_all_bps(DB d, Int i, List(Int) acc) {
+    if (i >= d.brk.len()) { return acc; }
+    List(Int) as = db_bp_addrs(d, d.brk[i]);
+    Int _w = if (as.len() == 0) { db_say("breakpoint " + IntToString(i + 1) + ": no code for " + d.brk[i], 0) } else { 0 };
+    return db_all_bps(d, i + 1, acc.concat(as));
+}
+
+// Plant int3 at each address, remembering the word it replaced.
+Map(Int, Int) db_plant(Int pid, List(Int) as, Int i, Map(Int, Int) saved) {
+    if (i >= as.len()) { return saved; }
+    Int a = as[i];
+    if (saved.contains(a)) { return db_plant(pid, as, i + 1, saved); }
+    Int w = resid_dbg_peek(pid, a);
+    Bool ok = resid_dbg_poke(pid, a, (w & -256) | 204);
+    return db_plant(pid, as, i + 1, saved.insert(a, w));
+}
+
+Bool db_is_bp(NT n, Int a) { return n.saved.contains(a); }
+
+// Execute the instruction under a breakpoint with its original word back.
+Bool db_step_over(NT n, Int t, Int a) {
+    if (!db_is_bp(n, a)) { return resid_dbg_step(t); }
+    Int w = n.saved.get(a) else { 0 };
+    Bool r = resid_dbg_poke(t, a, w);
+    Bool ok = resid_dbg_step(t);
+    Bool p = if (ok) { resid_dbg_poke(t, a, (w & -256) | 204) } else { false };
+    return ok;
+}
+
+// ─── Reading variables ──────────────────────────────────────────────
+
+// A DWARF location: 0 none, 1 in memory at v, 2 the value v.
+type DL = { Int kind; Int v; };
+
+DL db_eval(DB d, Int t, NT n, List(Int) e, Int fb, Int i, List(Int) st, Bool isreg) {
+    if (i >= e.len()) {
+        if (st.len() == 0) { return DL {.kind = 0, .v = 0}; }
+        Int top = st[st.len() - 1];
+        return if (isreg) { DL {.kind = 2, .v = top} } else { DL {.kind = 1, .v = top} };
+    }
+    List(Int) b = e;
+    Int op = b[i];
+    Int sn = st.len();
+    if (op >= 80 && op <= 96) { return db_eval(d, t, n, e, fb, i + 1, st.concat([resid_dbg_reg(t, op - 80)]), true); }
+    if (op >= 112 && op <= 128) {
+        UL o = el_sleb(b, i + 1);
+        return db_eval(d, t, n, e, fb, o.pos, st.concat([resid_dbg_reg(t, op - 112) + o.v]), false);
+    }
+    if (op >= 48 && op <= 79) { return db_eval(d, t, n, e, fb, i + 1, st.concat([op - 48]), false); }
+    if (op == 145) {
+        UL o = el_sleb(b, i + 1);
+        if (fb == 0) { return DL {.kind = 0, .v = 0}; }
+        return db_eval(d, t, n, e, fb, o.pos, st.concat([fb + o.v]), false);
+    }
+    if (op == 3) { return db_eval(d, t, n, e, fb, i + 9, st.concat([el_u(b, i + 1, 8) + n.bias]), false); }
+    if (op == 6 && sn > 0) { return db_eval(d, t, n, e, fb, i + 1, st[0..sn - 1].concat([resid_dbg_peek(t, st[sn - 1])]), false); }
+    if (op >= 8 && op <= 15) {
+        Int sz = if (op <= 9) { 1 } else if (op <= 11) { 2 } else if (op <= 13) { 4 } else { 8 };
+        Int u = el_u(b, i + 1, sz);
+        Int half = if (sz == 8) { 0 } else { db_pow256(sz) / 2 };
+        Int v = if (op % 2 == 1 && sz < 8 && u >= half) { u - half * 2 } else { u };
+        return db_eval(d, t, n, e, fb, i + 1 + sz, st.concat([v]), false);
+    }
+    if (op == 148 && sn > 0) {
+        Int sz = b[i + 1];
+        Int w = resid_dbg_peek(t, st[sn - 1]);
+        Int v = if (sz >= 8) { w } else { w & (db_pow256(sz) - 1) };
+        return db_eval(d, t, n, e, fb, i + 2, st[0..sn - 1].concat([v]), false);
+    }
+    if (op == 144) {
+        UL r = el_uleb(b, i + 1);
+        return db_eval(d, t, n, e, fb, r.pos, st.concat([resid_dbg_reg(t, r.v)]), true);
+    }
+    if (op == 146) {
+        UL r = el_uleb(b, i + 1);
+        UL o = el_sleb(b, r.pos);
+        return db_eval(d, t, n, e, fb, o.pos, st.concat([resid_dbg_reg(t, r.v) + o.v]), false);
+    }
+    if (op == 19 && sn > 0) { return db_eval(d, t, n, e, fb, i + 1, st[0..sn - 1], false); }
+    if (op == 22 && sn > 1) { return db_eval(d, t, n, e, fb, i + 1, st[0..sn - 2].concat([st[sn - 1], st[sn - 2]]), false); }
+    if (op == 20 && sn > 1) { return db_eval(d, t, n, e, fb, i + 1, st.concat([st[sn - 2]]), false); }
+    if (op == 16) {
+        UL u = el_uleb(b, i + 1);
+        return db_eval(d, t, n, e, fb, u.pos, st.concat([u.v]), false);
+    }
+    if (op == 17) {
+        UL u = el_sleb(b, i + 1);
+        return db_eval(d, t, n, e, fb, u.pos, st.concat([u.v]), false);
+    }
+    if (op == 35 && sn > 0) {
+        UL u = el_uleb(b, i + 1);
+        return db_eval(d, t, n, e, fb, u.pos, st[0..sn - 1].concat([st[sn - 1] + u.v]), false);
+    }
+    if ((op == 26 || op == 34 || op == 28 || op == 33 || op == 30 || op == 39) && sn > 1) {
+        Int x = st[sn - 2];
+        Int y = st[sn - 1];
+        Int r = if (op == 26) { x & y } else if (op == 34) { x + y } else if (op == 28) { x - y } else if (op == 30) { wrapping_mul(x, y) } else if (op == 39) { x ^ y } else { x | y };
+        return db_eval(d, t, n, e, fb, i + 1, st[0..sn - 2].concat([r]), false);
+    }
+    if (op == 18 && sn > 0) { return db_eval(d, t, n, e, fb, i + 1, st.concat([st[sn - 1]]), false); }
+    if (op == 159) { return if (sn > 0) { DL {.kind = 2, .v = st[sn - 1]} } else { DL {.kind = 0, .v = 0} }; }
+    if (op == 150) { return db_eval(d, t, n, e, fb, i + 1, st, isreg); }
+    // Entry values, CFA, pieces and the rest: not described here.
+    return DL {.kind = 0, .v = 0};
+}
+
+Int db_pow256(Int k) {
+    if (k <= 0) { return 1; }
+    return 256 * db_pow256(k - 1);
+}
+
+// The C string at p, quoted as gdb shows it.
+Str db_cstr(Int t, Int p, Int i, StrBuf acc) {
+    if (i >= 512) { return acc.push("...\"").finish(); }
+    Int w = resid_dbg_peek(t, p + i);
+    Int c = w & 255;
+    if (c == 0) { return acc.push_char(34).finish(); }
+    StrBuf a1 = if (c == 34 || c == 92) { acc.push_char(92).push_char(c) } else if (c == 10) { acc.push("\\n") } else { acc.push_char(c) };
+    return db_cstr(t, p, i + 1, a1);
+}
+
+Str db_render(Int t, Str ty, DL l) {
+    if (l.kind == 0) { return "<optimized out>"; }
+    Int w = if (l.kind == 1) { resid_dbg_peek(t, l.v) } else { l.v };
+    if (ty == "Int") { return IntToString(w); }
+    if (ty == "Bool") { return if ((w & 255) != 0) { "true" } else { "false" }; }
+    if (ty == "Float") { return resid_dbg_f64(w); }
+    if (ty == "char *") { return if (w == 0) { "0x0" } else { db_cstr(t, w, 0, StrBuf().push_char(34)) }; }
+    return el_hex(w);
+}
+
+// "name = value" for each parameter, then each local, of the function at
+// pc (a link address).
+List(Str) db_nvars(DB d, Int t, NT n, Int pc) {
+    Int k = el_fn_at(d.dfs, pc, 0);
+    if (k < 0) { return []; }
+    DF f = d.dfs[k];
+    List(Int) none = [];
+    DL fl = db_eval(d, t, n, f.fb, 0, 0, none, false);
+    Int fb = if (fl.kind == 0) { 0 } else { fl.v };
+    List(Str) ps = db_nvars_at(d, t, n, f.vars, pc, fb, true, 0, ListBuf());
+    return ps.concat(db_nvars_at(d, t, n, f.vars, pc, fb, false, 0, ListBuf()));
+}
+
+List(Str) db_nvars_at(DB d, Int t, NT n, List(DV) vs, Int pc, Int fb, Bool params, Int i, ListBuf(Str) acc) {
+    if (i >= vs.len()) { return acc.finish(); }
+    DV v = vs[i];
+    if (v.param != params) { return db_nvars_at(d, t, n, vs, pc, fb, params, i + 1, acc); }
+    List(Int) none = [];
+    List(Int) e = el_loc_at(d.dx, v, pc);
+    DL l = if (e.len() == 0) { DL {.kind = 0, .v = 0} } else { db_eval(d, t, n, e, fb, 0, none, false) };
+    return db_nvars_at(d, t, n, vs, pc, fb, params, i + 1, acc.push(v.name + " = " + db_render(t, v.ty, l)));
+}
+
+// Report thread t's stop at runtime pc, unless stepping stays on one node.
+NT db_nreport(DB d, NT n, Int t, Int pc, Bool stepping) {
+    Int lp = pc - n.bias;
+    Int node = db_pc_node(d, lp);
+    if (stepping && (node == n.last || node < 0)) { return n; }
+    Int _r = db_report(d, ST {.pc = lp, .vars = db_nvars(d, t, n, lp)}, n.shown + 1);
+    Int _f = if (node < 0 && !stepping) { db_caller(d, n, t) } else { 0 };
+    return NT {.pid = n.pid, .bias = n.bias, .bps = n.bps, .saved = n.saved, .shown = n.shown + 1, .last = node};
+}
+
+// Outside the program's code (the runtime, libc): the nearest return
+// address on the stack into the program names the call it is under.
+Int db_caller(DB d, NT n, Int t) {
+    Int ra = db_scan_ret(d, n, t, resid_dbg_reg(t, 7), 0);
+    if (ra < 0) { return 0; }
+    Int node = db_pc_node(d, ra - 1);
+    println("  called from " + db_fn_at(d, ra - 1) + (if (node < 0) { "" } else { ": " + gn_line(d.a, gn_read(d.a, node)) }));
+    return 1;
+}
+
+Int db_scan_ret(DB d, NT n, Int t, Int sp, Int i) {
+    if (i >= 4096) { return -1; }
+    Int w = resid_dbg_peek(t, sp + i * 8) - n.bias;
+    Int k = el_fn_at(d.dfs, w, 0);
+    if (k >= 0 && w > d.dfs[k].lo) { return w; }
+    return db_scan_ret(d, n, t, sp, i + 1);
+}
+
+// Run to the return address ret of a call made with the stack at sp.
+Bool db_finish_call(NT n, Int t, Int ret, Int sp) {
+    Bool had = db_is_bp(n, ret);
+    Int w = resid_dbg_peek(t, ret);
+    Bool p = if (had) { true } else { resid_dbg_poke(t, ret, (w & -256) | 204) };
+    Bool ok = db_run_to(n, t, ret, sp, if (had) { n.saved.get(ret) else { w } } else { w });
+    Bool r = if (had || !ok) { true } else { resid_dbg_poke(t, ret, w) };
+    return ok;
+}
+
+Bool db_run_to(NT n, Int t, Int ret, Int sp, Int orig) {
+    Bool c = resid_dbg_cont(t, 0);
+    Int tt = resid_dbg_wait();
+    if (tt < 0) { return false; }
+    Int pc = resid_dbg_reg(tt, 16);
+    Int a = pc - 1;
+    Int sig = resid_dbg_signal();
+    if (sig != 0) {
+        Bool c2 = resid_dbg_cont(tt, sig);
+        return db_run_to_wait(n, t, ret, sp, orig);
+    }
+    Bool mine = tt == t && a == ret && resid_dbg_reg(tt, 7) == sp + 8;
+    if (mine) { return resid_dbg_set_pc(tt, ret); }
+    // Another breakpoint, or this one hit by a deeper frame: step past it.
+    Bool bp = a == ret || db_is_bp(n, a);
+    Bool s = if (bp) { resid_dbg_set_pc(tt, a) } else { true };
+    Bool w = if (bp && a == ret) { db_past_temp(tt, a, orig) } else if (bp) { db_step_over(n, tt, a) } else { true };
+    return db_run_to(n, t, ret, sp, orig);
+}
+
+Bool db_run_to_wait(NT n, Int t, Int ret, Int sp, Int orig) {
+    Int tt = resid_dbg_wait();
+    if (tt < 0) { return false; }
+    return db_run_to(n, t, ret, sp, orig);
+}
+
+// Step a thread past the temporary int3 at a, whose word was orig.
+Bool db_past_temp(Int t, Int a, Int orig) {
+    Bool r = resid_dbg_poke(t, a, orig);
+    Bool ok = resid_dbg_step(t);
+    Bool p = resid_dbg_poke(t, a, (orig & -256) | 204);
+    return ok;
+}
+
+// `step N` from a stop: N instructions, stepping over calls, reporting
+// each change of node.
+NT db_nsteps(DB d, NT n, Int t, Int k) {
+    if (k <= 0) { return n; }
+    Int pc = resid_dbg_reg(t, 16);
+    Int sp = resid_dbg_reg(t, 7);
+    if (!db_step_over(n, t, pc)) { return n; }
+    Int sp2 = resid_dbg_reg(t, 7);
+    Int ret = if (sp2 == sp - 8) { resid_dbg_peek(t, sp2) } else { 0 };
+    Bool call = ret > pc && ret <= pc + 16;
+    Bool ok = if (call) { db_finish_call(n, t, ret, sp2) } else { true };
+    if (!ok) { return n; }
+    NT n2 = db_nreport(d, n, t, resid_dbg_reg(t, 16), true);
+    return db_nsteps(d, n2, t, k - 1);
+}
+
+// The event loop: report breakpoint stops until `stops` are shown.
+Int db_nloop(DB d, NT n) {
+    Int t = resid_dbg_wait();
+    if (t < 0) { return db_say("program exited with code " + IntToString(resid_dbg_exit_code()), 0); }
+    Int pc = resid_dbg_reg(t, 16);
+    Int sig = resid_dbg_signal();
+    if (sig != 0) {
+        println("program received signal " + IntToString(sig));
+        NT ns = db_nreport(d, n, t, pc, false);
+        Bool c = resid_dbg_cont(t, sig);
+        return db_nloop(d, ns);
+    }
+    Int a = pc - 1;
+    if (!db_is_bp(n, a)) {
+        Bool c = resid_dbg_cont(t, 0);
+        return db_nloop(d, n);
+    }
+    Bool s = resid_dbg_set_pc(t, a);
+    NT n2 = db_nreport(d, n, t, a, false);
+    if (d.steps > 0) {
+        NT n3 = db_nsteps(d, n2, t, d.steps);
+        Bool k = resid_dbg_kill();
+        return 0;
+    }
+    if (n2.shown >= d.stops) {
+        Bool k = resid_dbg_kill();
+        return 0;
+    }
+    Bool so = db_step_over(n2, t, a);
+    Bool c = resid_dbg_cont(t, 0);
+    return db_nloop(d, n2);
+}
+
+Int db_nrun(DB d, Str args) {
+    if (d.brk.len() == 0) { return db_say("no breakpoints: add one with `break FILE:LINE` or `break FN`", 1); }
+    if (d.dfs.len() == 0) { return db_say("no DWARF functions in " + d.bin + " (build with --profile debug)", 1); }
+    Str path = if (str_contains(d.bin, "/")) { d.bin } else { "./" + d.bin };
+    Int pid = resid_dbg_spawn(str_trim(path + " " + args));
+    if (pid < 0) { return db_say("cannot start " + d.bin, 1); }
+    Int bias = db_bias(d.bin, pid);
+    List(Int) link = db_all_bps(d, 0, []);
+    List(Int) rt = db_add_all(link, bias, 0, ListBuf());
+    Map(Int, Int) m0 = {};
+    Map(Int, Int) saved = db_plant(pid, rt, 0, m0);
+    Bool c = resid_dbg_cont(pid, 0);
+    return db_nloop(d, NT {.pid = pid, .bias = bias, .bps = rt, .saved = saved, .shown = 0, .last = -2});
+}
+
+List(Int) db_add_all(List(Int) xs, Int k, Int i, ListBuf(Int) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return db_add_all(xs, k, i + 1, acc.push(xs[i] + k));
+}
+
 // ─── Command loop ───────────────────────────────────────────────────
 
 type CR = { DB d; Int rc; Bool quit; };
@@ -412,20 +785,25 @@ CR db_cmd(DB d, Str line0) {
     if (c == "quit" || c == "q") { return CR {.d = d, .rc = 0, .quit = true}; }
     if (c == "break" || c == "b") {
         println("breakpoint " + IntToString(d.brk.len() + 1) + " at " + arg);
-        return CR {.d = DB {.bin = d.bin, .a = d.a, .ix = d.ix, .b = d.b, .ss = d.ss, .ys = d.ys, .rows = d.rows, .at = d.at, .brk = d.brk.concat([arg]), .stops = d.stops, .steps = d.steps}, .rc = 0, .quit = false};
+        return CR {.d = db_with(d, d.brk.concat([arg]), d.stops, d.steps, d.backend), .rc = 0, .quit = false};
     }
     if (c == "stops" || c == "step") {
         Int n = if (str_is_int(arg)) { str_parse_int(arg) } else { 1 };
         Bool st = c == "step";
-        return CR {.d = DB {.bin = d.bin, .a = d.a, .ix = d.ix, .b = d.b, .ss = d.ss, .ys = d.ys, .rows = d.rows, .at = d.at, .brk = d.brk, .stops = if (st) { d.stops } else { n }, .steps = if (st) { n } else { 0 }}, .rc = 0, .quit = false};
+        return CR {.d = db_with(d, d.brk, if (st) { d.stops } else { n }, if (st) { n } else { 0 }, d.backend), .rc = 0, .quit = false};
     }
-    Int rc = if (c == "info") { db_info(d) } else if (c == "node" || c == "n") { db_node(d, arg) } else if (c == "kids") { db_kids(d, arg) } else if (c == "at") { db_at(d, arg) } else if (c == "sym") { ga_sym(d.a, d.ix, arg, 8) } else if (c == "lowered") { db_lowered(d, arg) } else if (c == "pc") { db_pc(d, arg) } else if (c == "check") { db_check(d) } else if (c == "run" || c == "r") { db_run(d, arg) } else if (c == "help") { db_help() } else { db_say("unknown command `" + c + "` (help lists them)", 1) };
+    if (c == "backend") {
+        if (arg != "native" && arg != "gdb") { return CR {.d = d, .rc = db_say("backend is native or gdb", 1), .quit = false}; }
+        println("backend " + arg);
+        return CR {.d = db_with(d, d.brk, d.stops, d.steps, arg), .rc = 0, .quit = false};
+    }
+    Int rc = if (c == "info") { db_info(d) } else if (c == "node" || c == "n") { db_node(d, arg) } else if (c == "kids") { db_kids(d, arg) } else if (c == "at") { db_at(d, arg) } else if (c == "sym") { ga_sym(d.a, d.ix, arg, 8) } else if (c == "lowered") { db_lowered(d, arg) } else if (c == "pc") { db_pc(d, arg) } else if (c == "check") { db_check(d) } else if (c == "run" || c == "r") { if (d.backend == "gdb") { db_run(d, arg) } else { db_nrun(d, arg) } } else if (c == "help") { db_help() } else { db_say("unknown command `" + c + "` (help lists them)", 1) };
     return CR {.d = d, .rc = rc, .quit = false};
 }
 
 Int db_help() {
     println("info | node ID | kids ID | at FILE:LINE | sym NAME | lowered [FN] | pc ADDR | check");
-    println("break FILE:LINE|FN | stops N | step N | run [ARGS] | quit");
+    println("break FILE:LINE|FN | stops N | step N | backend native|gdb | run [ARGS] | quit");
     return 0;
 }
 
@@ -464,7 +842,9 @@ DB db_open(Str bin) {
     List(LRow) rows = if (ss.len() > 0) { el_lines(b, ss) } else { [] };
     Map(Str, Int) m0 = {};
     List(Str) nb = [];
-    return DB {.bin = bin, .a = a, .ix = ix, .b = b, .ss = ss, .ys = ys, .rows = rows, .at = db_places(a, ix, 0, m0), .brk = nb, .stops = 8, .steps = 0};
+    DX dx = if (ss.len() > 0) { el_dx(b, ss) } else { el_dx(b, ss) };
+    List(DF) dfs = if (ss.len() > 0) { el_funcs(dx) } else { [] };
+    return DB {.bin = bin, .a = a, .ix = ix, .b = b, .ss = ss, .ys = ys, .rows = rows, .at = db_places(a, ix, 0, m0), .brk = nb, .stops = 8, .steps = 0, .backend = "native", .dx = dx, .dfs = dfs};
 }
 
 Int main() {
