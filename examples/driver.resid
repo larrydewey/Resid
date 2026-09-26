@@ -15393,6 +15393,7 @@ import "../lib/ed25519.resid";
 import "../lib/cose.resid";
 import "graph.resid";
 import "resolve.resid";
+import "gcheck.resid";
 import "reduce.resid";
 import "desugar.resid";
 import "stracc.resid";
@@ -16093,7 +16094,10 @@ Int main() {
     // Type checking yields only a status code: everything it allocates
     // is freed with its arena.
     Int _tc_in = resid_bulk_push();
-    Int tc  =  check_program_map(rsrc, 0, ssg, if (grflag) { "" } else { rr.map });
+    // The graph checker (examples/gcheck.resid) is the default; `--text-check`
+    // runs the text checker for differential testing.
+    Bool textck  =  grflag || pick_flag(argc, "--text-check");
+    Int tc  =  if (textck) { check_program_map(rsrc, 0, ssg, if (grflag) { "" } else { rr.map }) } else { gk_run(rsrc, rr.map) };
     Int _tc_out = resid_bulk_pop();
     if (tc != 0) { return tc; }
     // `--profile check` (spec §35): type checking only, no binary. The

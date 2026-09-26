@@ -47,5 +47,21 @@ else
     fail=$((fail + 1))
     echo "FAIL resolve_scopes: $got"
 fi
+# Type-checker cases: each program's first diagnostic must contain the
+# expected text.
+CK="$(mktemp -d)"
+trap 'rm -rf "$CK"' EXIT
+awk -v d="$CK" '/^#/ && !name { next } /^=== / { name = $2; getline want; print want > (d "/" name ".want"); next } name { print > (d "/" name ".resid") }' tests/graph/check_cases.txt
+for w in "$CK"/*.want; do
+    c="${w%.want}.resid"
+    want="$(cat "$w")"
+    got="$("$COMPILER" "$c" --profile check 2>&1 | grep -E 'error|check: ok' | head -1)"
+    if [[ "$got" == *"$want"* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        echo "FAIL check case $(basename "$c" .resid): want '$want', got '$got'"
+    fi
+done
 echo "graph: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

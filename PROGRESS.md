@@ -245,6 +245,15 @@ the test harnesses create a throwaway key when none is configured.
 `tests/provenance/run.sh` covers tamper detection, keys, concealment and
 reproducibility. Self-compile time is unchanged.
 
+### 0l. Type checking on the graph (G2, 2026-09-26)
+
+`examples/gcheck.resid` replaces the text checker in the driver
+(`--text-check` keeps the old one for differential runs). It matches the
+text checker on every in-repo program and on 91 rejection cases in
+`tests/graph/check_cases.txt`, and it closes four gaps the text checker
+had: call arity, match exhaustiveness without a trailing comma, range bound
+types, and adopted literals that do not fit.
+
 ### 0k. Graph name resolution (G2 step 1, 2026-09-26)
 
 `examples/resolve.resid` adds def edges: each use of a name points at the

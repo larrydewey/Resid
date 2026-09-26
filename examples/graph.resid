@@ -219,7 +219,8 @@ KL kg_args(Str s, Kg g, Int pos, Str close, List(Int) acc) {
     List(Int) acc2 = acc.concat([e.id]);
     if (sep.text == ",") { return kg_args(s, e.g, sep.pos, close, acc2); }
     if (sep.text == close) { return KL {.g = e.g, .ids = acc2, .pos = sep.pos, .err = ""}; }
-    return kl_fail(e.g, sep.pos, "expected , or " + close + ", found " + sep.text);
+    Str what = if (close == "]") { " in list literal" } else { "" };
+    return kl_fail(e.g, sep.pos, "expected , or " + close + what + ", found " + sep.text);
 }
 
 // An argument; `name = e` is a named argument (e.g. `using = Ord(Int)`).
@@ -756,6 +757,7 @@ pub KP kg_stmt(Str s, Kg g, Int pos) {
     if (h.ok) { return kg_semi(kg_bind(s, g, h, "", sp), s); }
     KP e = kg_expr(s, g, pos);
     if (e.err != "") { return e; }
+    if (lex_tok(s, e.pos).text == "=") { return kg_fail(e.g, e.pos, "cannot assign: bindings are immutable and there are no assignment operators (spec §7, §30)"); }
     return kg_semi(kg_add(e.g, "estmt", "", "", [e.id], sp, e.pos), s);
 }
 
@@ -949,7 +951,7 @@ Str kg_pr_k(Kg g, Int id, Int i, Str sb) { return kg_pr(g, kg_kid(g, id, i), sb)
 Str kg_ap(Str sb, Str a) { return str_sb_append(sb, a); }
 
 // Split "a|b|c" field i.
-Str kg_part(Str s, Int i) {
+pub Str kg_part(Str s, Int i) {
     List(Str) ps = str_split(s, "|");
     if (i >= ps.len()) { return ""; }
     return ps[i];
