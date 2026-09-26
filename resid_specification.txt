@@ -1,6 +1,6 @@
 ==================================================
 RESID LANGUAGE DESIGN DOCUMENT
-Version 3.4 — Production Ready
+Version 3.5 — Production Ready
 ==================================================
 
 
@@ -71,11 +71,144 @@ computations remain. Compilation is knowledge reduction.
 ==================================================
 
 Programs are represented as a knowledge graph (enriched
-expression DAG). Each node tracks expression, type,
-knowledge state, dependencies, effects, capabilities,
-and provenance.
+expression DAG). The graph is the compiler's sole
+representation between parsing and lowering: name
+resolution, type checking, capability checking, reduction
+and lowering all read and extend the graph, and no phase
+re-reads source text. The graph is observable: it is
+emitted as an artifact (§33, §34) and is what debuggers
+and tools walk (§37).
 
-Knowledge states: KNOWN, EFFECT, RESIDUAL, INVALID.
+3.1  Nodes
+
+Each node has:
+
+  id            NodeId, unique within the artifact and
+                deterministic (§3.5)
+  kind          what the node computes (literal, reference,
+                binding, call, operator, cast, if, match,
+                loop, provider call, spawn, function, ...)
+  type          its resolved type
+  knowledge     its knowledge state (§3.2)
+  value         the value, when knowledge is KNOWN
+  deps          ordered operand edges
+  effects       the effects it may perform
+  capabilities  the capabilities it requires
+  provenance    where it came from (source span, provider
+                result, or a derivation, §3.3)
+  doc           attached doc comments, if any
+
+Pure nodes with equal kind, type and operands may be
+shared (hash-consed). Nodes with effects are never
+shared: each occurrence is its own node.
+
+3.2  Knowledge States
+
+  KNOWN     value fully determined at compile time
+  EFFECT    performs an effect; its order is fixed
+  RESIDUAL  depends on runtime values; it is lowered
+  INVALID   carries a diagnostic; the program is rejected
+
+A node is INVALID if it or any dep is INVALID. Otherwise
+it is EFFECT if it performs an effect, KNOWN if it is
+pure and reduction determined its value, and RESIDUAL
+otherwise. Every RESIDUAL or EFFECT node records why it
+was not reduced (§3.4).
+
+3.2a  Facts (Partial Knowledge)
+
+A RESIDUAL or EFFECT node may carry facts: properties that
+hold of its runtime value on every execution. Facts are
+knowledge (§1); they are sound, never guessed.
+
+  range(lo, hi)     integer value lies in [lo, hi]
+  bits(zero, one)   masks of bits known to be 0 / 1
+  nonzero           value is not 0
+  length(lo, hi)    Str, Bytes, List, Map or Set length
+                    lies in [lo, hi]
+  fields            per-field (or per-element) node ids;
+                    known fields are KNOWN nodes
+  tag(V)            sum value is variant V
+  unreachable       node is never evaluated
+  path(c)           condition node c holds here (from a
+                    dominating if, match arm, loop test
+                    or assert)
+
+Facts come from literals, types (an Int(8) is in
+[-128, 127]), operators, conversions, branch conditions,
+asserts and known fields. Reduction uses them to:
+
+  - discharge checks: overflow, division by zero, index
+    and slice bounds, conversion range, Str(N) capacity,
+    capability checks (§27);
+  - select a match arm or if branch under a RESIDUAL
+    scrutinee (tag, range, path);
+  - fold a projection of a known field out of a RESIDUAL
+    composite;
+  - specialize on known fields (§36).
+
+A discharged check is recorded as a derive edge with rule
+discharge, naming the facts used, so a debugger can show
+why a check is absent. When a check cannot be discharged,
+it stays and its node's reason names the missing fact.
+
+3.3  Edges
+
+  operand   node → its i-th dep
+  def       reference → the binding, parameter or
+            function it resolves to
+  seq       effect node → the effect that precedes it in
+            evaluation order
+  derive    result node → the node it replaces, labelled
+            with the rule that produced it (§36)
+  lowered   node → the code range and runtime location
+            emitted for it (§33)
+
+operand, def and seq edges are acyclic, so the graph is
+a DAG; recursion appears as a def edge to a function
+node, never as a cycle of operand edges.
+
+3.4  Derivation
+
+Reduction (§36) is graph rewriting that preserves
+provenance. A rewrite never deletes a node reachable from
+a source root. It adds the result node with a derive edge
+to the replaced node, labelled with the rule:
+
+  fold, beta, eval, specialize, generalize, dead-arm,
+  elide, discharge, provider, behavior, desugar, widen,
+  interpolate
+
+A node left RESIDUAL or EFFECT carries a reason:
+
+  unknown(dep)     depends on the named RESIDUAL dep
+  effect(e)        performs effect e
+  capability(c)    requires capability c that is not granted
+  annotated        written with rt / @residual
+  budget(kind)     a reduction budget ran out (§27)
+  loop             re-entered itself with identical arguments
+  whistle          specialization was generalized (§36)
+
+Evaluating a fully known call is recorded as a single eval
+derivation. Its internal steps are not graph nodes; they
+can be replayed because reduction is deterministic (§27).
+
+Invariants:
+
+  - Every node in the residual program (the part that is
+    lowered) is a source node or reaches source nodes
+    through derive edges.
+  - Every source node is KNOWN, INVALID or lowered, or has
+    a derive edge from the node that replaced it.
+
+3.5  Identity
+
+Node ids are assigned in source order and then in
+reduction order, so the same compiler emits the same
+graph for the same program. Each node also has a content
+hash over kind, type and the hashes of its operands; the
+knowledge cache (§21.4) and cross-build tools key on the
+hash, never on the id.
 
 
 ==================================================
@@ -1010,10 +1143,28 @@ family), Serialize, Allocator, Reverse.
 33. ARTIFACTS AND CODE GENERATION
 ==================================================
 
-Native binary / object files via LLVM plus optional
-CBOR residual-notes sidecar. Residuals become LLVM
-thunks carrying computation, provenance, and
-capabilities.
+Native binary / object files via LLVM, plus CBOR
+sidecars: the knowledge graph and the residual notes.
+Residuals become LLVM thunks carrying computation,
+provenance, and capabilities.
+
+Lowering reads only the residual part of the graph (§3.4)
+and records a lowered edge for each node it emits:
+
+  - each emitted code range is mapped to the id of the node
+    it lowers;
+  - each residual binding and parameter is mapped to its
+    runtime location (register, stack slot, or thunk field)
+    over the code ranges where it is live.
+
+The map may be carried in the graph's lowered table or
+in the binary's debug information (for example DWARF line
+and variable-location entries keyed by node id); a
+debugger shall be able to resolve both. The binary
+records the content hash of its graph artifact, so a
+debugger can check that the two match.
+Debug and check profiles always emit the graph. Release
+builds may omit it; if they do, they omit the hash too.
 
 The implementation may employ any target ISA extensions
 (AVX-512, NEON, SVE, etc.) for code generation and for
@@ -1028,8 +1179,44 @@ Provenance, Capability, ResidualNotes, ResidualNote,
 KnowledgeCache, CacheEntry — as previously defined
 (RFC 8949 preferred serialization).
 
+KnowledgeGraph (CDDL):
+
+  graph    = { version: 1, source: [* file], nodes: [* node],
+               roots: roots, ? lowered: [* lowering] }
+  file     = { path: tstr, hash: bstr }
+  roots    = { source: [* id], residual: [* id] }
+  node     = { id: id, kind: tstr, type: tstr,
+               knowledge: "known" / "effect" /
+                          "residual" / "invalid",
+               ? value: any, deps: [* id], ? def: id,
+               ? seq: id, effects: [* tstr],
+               capabilities: [* tstr], span: span,
+               ? derive: { from: id, rule: tstr },
+               ? reason: { kind: tstr, ? dep: id,
+                           ? detail: tstr },
+               ? facts: [* fact], ? doc: [* tstr],
+               hash: bstr }
+  fact     = { kind: tstr, ? lo: int, ? hi: int,
+               ? zero: bstr, ? one: bstr, ? tag: tstr,
+               ? nodes: [* id] }
+  span     = [file-index: uint, line: uint, col: uint,
+              end-line: uint, end-col: uint]
+  lowering = { node: id, symbol: tstr, lo: uint, hi: uint,
+               ? loc: [* location] }
+  location = { lo: uint, hi: uint, where: tstr }
+  id       = uint
+
+Offsets in lowering are relative to the symbol. Nodes
+created by reduction have the span of the node they
+derive from.
+
+ResidualNotes is a projection of the graph: one note for
+each RESIDUAL or EFFECT node in the residual roots, with
+its reason.
+
 Files:
 
+  <artifact>.resid-graph.cbor
   <artifact>.resid-notes.cbor
   <project>.resid-cache.cbor
 
@@ -1054,6 +1241,7 @@ resid.toml:
   [reduction]
   residual_notes        = true
   residual_notes_format = "cbor"
+  knowledge_graph       = true
   knowledge_cache       = true
 
   [target]
@@ -1075,8 +1263,13 @@ constraint discharge, provider substitution, behavior
 insertion, method desugaring (handles), pattern matching,
 destructuring, checked arithmetic, numeric interoperability
 widening, string interpolation, range/slice construction,
-dead-code elimination (dead-binding elision), and
-structural identity.
+dead-code elimination (dead-binding elision), check
+discharge from facts (§3.2a), and structural identity.
+
+Reduction is performed on the knowledge graph (§3). Each
+step adds nodes and derive edges and never deletes a
+source node (§3.4), so every reduction the compiler makes
+can be traced after the build.
 
 The implementation shall eliminate every residual that
 is dischargeable under current knowledge and capabilities.
@@ -1084,7 +1277,11 @@ is dischargeable under current knowledge and capabilities.
 Specialization is part of the reduction relation: a call
 whose arguments are partly known is replaced by a call to a
 copy of the callee reduced under the known arguments (only
-the unknown arguments remain parameters). Knowledge is thus
+the unknown arguments remain parameters). Known fields of
+a partly-known composite argument (§3.2a fields) count as
+known for specialization. The copy is a new function node
+with a specialize derive edge from the original, labelled
+with the known-argument pattern. Knowledge is thus
 preserved across residual calls (Law 6).
 
 Termination of reduction:
@@ -1121,10 +1318,32 @@ presence or absence of an elided binding.
 37. DEBUGGING AND TOOLING
 ==================================================
 
-Canonical debug artifact: CBOR residual notes.
+Debug artifacts: the CBOR knowledge graph and the
+residual notes projected from it.
 
 “Why is this residual?” is a tooling query (IDE / resid
 why), not a language construct.
+
+Canonical debug structure: the knowledge graph artifact
+(§3, §34). Tools and debuggers answer questions by walking
+it, never by re-analyzing source:
+
+  - Static: for any source span, symbol or node, show its
+    knowledge state, value or facts, and the chain of
+    derive edges back to source ("what was reduced, by
+    which rule, and why"), or the reason it stayed
+    residual.
+  - Live: a debugger attached to a running binary maps
+    the program counter to a node through the lowered
+    edges, reads residual bindings from their recorded
+    locations, and shows the KNOWN nodes that were
+    folded into the running code, with their values. It
+    steps by node (seq edges order effects), not only by
+    source line.
+
+`resid why` accepts a symbol, file:line, or node id and
+reports both what was reduced (derive edges, with rules)
+and what stayed residual (reasons, missing facts).
 
 Normative tooling expectations:
 
@@ -1132,8 +1351,12 @@ Normative tooling expectations:
   resid fmt       – canonical formatter
   resid-notes     – residual-notes viewer
   resid-cache     – knowledge-cache inspector
-  resid-graph     – dependency graph emitter
-  resid why       – residual provenance query
+  resid-graph     – knowledge graph and dependency
+                    graph viewer
+  resid why       – reduction and residual provenance
+                    query
+  resid debug     – graph-aware debugger (static and
+                    live)
   resid verify    – package signature verification
   LSP surface     – residual status, capabilities,
                     knowledge state, doc comments,
@@ -1180,6 +1403,10 @@ Conformance includes all prior rules plus:
   - sandbox attenuation and transitive closure (§21)
   - package signature verification (§28)
   - normative reduction/minimization obligation (§27)
+  - the knowledge graph (§3): the emitted graph artifact
+    satisfies the §3.4 invariants, its derive edges and
+    reasons match the reductions performed, and its
+    lowered edges cover every emitted code range
   - for-in, destructuring, if-let/while-let, ranges,
     slicing, known/rt_known, comptime_print, raw/byte
     strings, #location, discard binding
@@ -1190,7 +1417,7 @@ Conformance includes all prior rules plus:
 40. PRODUCTION-READY STATUS
 ==================================================
 
-Resid 3.4 is production-ready as a language specification.
+Resid 3.5 is production-ready as a language specification.
 
 All core semantics, syntax, numeric types (first-class
 with interoperability), concurrency, sandboxing,
@@ -1268,6 +1495,24 @@ matches every rule below.
   - Reduction (§27, §36): specialization on partly-known
     arguments, termination by homeomorphic embedding,
     deterministic budgets reported as notes.
+
+v3.5: the knowledge graph (§3) is made normative and
+observable. v3.4 and earlier stated that programs "are
+represented as" a graph but gave no contract, and the
+self-hosted compiler worked on source text with no graph.
+  - The graph is the sole IR between parsing and lowering.
+  - Node fields, knowledge-state rules, edge kinds (operand,
+    def, seq, derive, lowered), derivation rules and
+    residual reasons are defined (§3.1–3.5).
+  - Facts (§3.2a) add partial knowledge to RESIDUAL nodes
+    (range, bits, length, fields, tag, path, ...); reduction
+    uses them to discharge checks and select arms.
+  - Reduction is provenance-preserving graph rewriting
+    (§36); specialization records its pattern.
+  - The graph is emitted as <artifact>.resid-graph.cbor
+    (§33, §34) with a code-range and runtime-location map,
+    so debuggers walk it both statically and live (§37).
+  - Residual notes are a projection of the graph.
 
 
 ==================================================
