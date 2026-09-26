@@ -312,6 +312,19 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0w. Residual notes from the graph (G5, 2026-09-26)
+
+`<out>.resid-notes.cbor` is projected from the residual graph
+(`ga_notes` in `examples/gart.resid`) instead of scanning the main file's
+lines for `rt ` and provider prefixes: `rt` values (rt-binding), provider
+calls (provider-call) and the reducer's budget, loop and whistle reasons,
+at their real positions in any imported file, sorted by place. Across 140
+programs the scan's extra hits were all false (comments, strings,
+`import`, `start = ...`, `args.ast` fields), and the graph finds `rt(...)`
+and later calls on a line that the scan missed. `tools/resid-why.resid`
+explains the new kinds. Self-compile: 187 notes (92 provider calls, 95
+whistles).
+
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
 
 `examples/greduce.resid` reduces the parsed graph instead of source text.

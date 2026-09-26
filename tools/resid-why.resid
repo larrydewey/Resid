@@ -198,6 +198,15 @@ Str explain(Str kind) {
     if (kind == "provider-call") {
         return "queries an external provider (filesystem/env/git/...); grant the capability at build time with a concrete value to discharge it";
     }
+    if (kind == "budget") {
+        return "compile-time evaluation ran out of its reduction budget (steps or fuel); the call runs at run time";
+    }
+    if (kind == "loop") {
+        return "the call re-entered itself with identical arguments during compile-time evaluation, so it stays a run-time call";
+    }
+    if (kind == "whistle") {
+        return "specialization was generalized to terminate: the call's known arguments embed an earlier specialization of the same function";
+    }
     return "unknown residual kind";
 }
 
