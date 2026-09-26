@@ -1,0 +1,78 @@
+// Loop regions with carried lists and maps of lists (resid_list_evac,
+// resid_map_evac): each iteration's dead maps and list versions are
+// freed; what the loop carries on keeps every element.
+Map(Int, List(Int)) edges(Int i, Int n, Map(Int, List(Int)) adj) {
+    if (i >= n) { return adj; }
+    Int u = (i * 7919) % 97;
+    List(Int) nil = [];
+    List(Int) lu = adj.get(u) else { nil };
+    return edges(i + 1, n, adj.insert(u, lu.concat([i * 1000003])));
+}
+
+List(Int) grow(Int i, Int n, List(Int) acc) {
+    if (i >= n) { return acc; }
+    return grow(i + 1, n, acc.concat([i * 1000003, i]));
+}
+
+List(Str) words(Int i, Int n, List(Str) acc) {
+    if (i >= n) { return acc; }
+    return words(i + 1, n, acc.concat(["w" + IntToString(i)]));
+}
+
+Map(Str, List(Str)) groups(Int i, Int n, Map(Str, List(Str)) g) {
+    if (i >= n) { return g; }
+    Str k = "g" + IntToString(i % 7);
+    List(Str) nil = [];
+    List(Str) cur = g.get(k) else { nil };
+    return groups(i + 1, n, g.insert(k, cur.concat(["m" + IntToString(i)])));
+}
+
+// Dead set algebra results inside a read-only loop.
+Int rounds(Set(Int) a, Set(Int) b, Int r, Int acc) {
+    if (r <= 0) { return acc; }
+    Set(Int) u = a.union(b);
+    Set(Int) x = a.intersection(b);
+    return rounds(a, b, r - 1, acc + u.len() + x.len());
+}
+
+// A persistent map carried on: each version keeps the older ones' nodes.
+Map(Int, Int) versions(Int i, Int n, Map(Int, Int) m, Map(Int, Int) keep) {
+    if (i >= n) { return m; }
+    return versions(i + 1, n, keep.insert(i, i), keep);
+}
+
+Set(Int) fill(Int i, Int n, Int step, Set(Int) s) {
+    if (i >= n) { return s; }
+    return fill(i + 1, n, step, s.insert(i * step));
+}
+
+Int sum(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum(xs, i + 1, wrapping_add(acc, xs[i]));
+}
+
+Int main() {
+    Map(Int, List(Int)) e = {};
+    Map(Int, List(Int)) adj = edges(0, 20000, e);
+    List(Int) nil = [];
+    List(Int) l5 = adj.get(5) else { nil };
+    println(f"edges {adj.len()} {l5.len()} {sum(l5, 0, 0)}");
+    List(Int) g = grow(0, 5000, nil);
+    println(f"grow {g.len()} {sum(g, 0, 0)} {g[9999]}");
+    List(Str) ns = [];
+    List(Str) ws = words(0, 3000, ns);
+    println(f"words {ws.len()} {ws[0]} {ws[2999]}");
+    Map(Str, List(Str)) ge = {};
+    Map(Str, List(Str)) gm = groups(0, 700, ge);
+    List(Str) g3 = gm.get("g3") else { ns };
+    println(f"groups {gm.len()} {g3.len()} {g3[0]} {g3[99]}");
+    Set(Int) se = {};
+    Set(Int) a = fill(0, 3000, 2, se);
+    Set(Int) b = fill(0, 3000, 3, se);
+    println(f"rounds {rounds(a, b, 30, 0)} {a.len()}");
+    Map(Int, Int) me = {};
+    Map(Int, Int) base = {1: 1, 2: 2};
+    Map(Int, Int) v = versions(0, 500, me, base);
+    println(f"versions {v.len()} {v.get(499) else { -1 }} {base.len()}");
+    return 0;
+}

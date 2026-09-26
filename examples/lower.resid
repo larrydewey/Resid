@@ -718,7 +718,7 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
         GT raw = GT {.pos = 0, .val = reg, .ty = "", .cnt = 0, .err = "", .glines = arg.glines, .lines = kb.lines.concat([reg + " = call ptr @resid_map_get(ptr " + base.val + ", ptr " + kb.val + ")"]), .tmp = t1, .lbl = arg.lbl, .tail = false};
         return wrap_map_get_option(reg, vt, raw);
     }
-    if (m == "insert" && (m_owned || lin_kk(kt) == 1 || lin_vk(vt) != 0 || kt == "Str" || vt == "Str")) {
+    if (m == "insert" && (m_owned || lin_kk(kt) == 1 || lin_vk(vt) != 0 || kt == "Str" || vt == "Str" || lr_list_word(vt))) {
         GT kw = lin_word(src, arg, lo_put_kind(lin_kk(kt), kt), env, fs);
         GT tva = lw_marg(w, id, 1, env, kw);
         if (tva.err != "") { return tva; }
@@ -1456,9 +1456,10 @@ GT lw_fn_call(LW w, Int id, Int from, Str cval, Str fnty, List(Str) env, GT c) {
     return lo_freeze(w, -1, lw_step(a, cr, ret, a.lines.concat([fp0 + " = load i64, ptr " + cval, fp + " = inttoptr i64 " + fp0 + " to ptr", envr + " = ptrtoint ptr " + cval + " to i64", cr + " = call " + ll_ty(ret) + " " + fp + "(" + cal2 + ")"]), a.tmp + 4));
 }
 
-// The runtime kind of a word stored by a typed insert: kind 4 for a Str
-// (copied out of a scope region when stored).
-Int lo_put_kind(Int k, Str ty) { return if (ty == "Str") { 4 } else { k }; }
+// The runtime kind of a word stored by a typed insert: 4 for a Str, 5
+// for a list of Int, Float, Bool or Str (moved out of a scope region when
+// stored).
+Int lo_put_kind(Int k, Str ty) { return if (ty == "Str") { 4 } else { if (lr_list_word(ty)) { 5 } else { k } }; }
 
 // A Str about to be stored in a map or set: copied out of a scope region,
 // whose map outlives it (loop regions, lr_region).
@@ -2182,7 +2183,7 @@ PG lw_fn(LW w0, Int d, PG g) {
     // A loop whose iterations carry nothing they allocate frees each
     // iteration's allocations when the next one starts (lr_region).
     Bool region = tco_ok && lw_find_line(fn_lines0, "tco.head:", 1) >= 0 && lr_region_ok(w, d, fn_lines0, tyl);
-    List(Str) fn_lines = if (region) { lr_region(fn_lines0) } else { fn_lines0 };
+    List(Str) fn_lines = if (region) { lr_region(fn_lines0, tyl) } else { fn_lines0 };
     List(Str) own0 = fn_lines.concat(["}"]);
     LDG dg = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos, tyl) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
     Int final_tmp = body.tmp;
@@ -2196,11 +2197,13 @@ PG lw_fn(LW w0, Int d, PG g) {
 // ─── Loop regions ───────────────────────────────────────────────────
 // A tail-call loop runs each iteration in a scope region (like a scalar
 // scope) popped when the next iteration starts, when every parameter
-// that changes between iterations is a scalar or a Map/Set whose keys and
-// values are Int, Float, Bool or Str: such a map lives on the heap, and a
-// string stored in it is copied out of any region (lo_keep). Unchanged
-// parameters are older values. Every exit must return a scalar or a
-// loop parameter, so the region pops there too.
+// that changes between iterations is a scalar, a Map/Set of Int, Float,
+// Bool or Str keys and such values or lists of them, or such a list. At
+// each back edge those are moved to the heap (resid_map_evac,
+// resid_list_evac copy only their parts made in a region), and strings
+// and lists stored into maps are moved when stored (kinds 4 and 5).
+// Unchanged parameters are older values. Every exit must return a scalar
+// or a loop parameter, so the region pops there too.
 
 Bool lr_region_ok(LW w, Int d, List(Str) ls, List(Str) tyl) {
     if (lg_closure(w.g, lw_kid(w, d, w.g.ns[d].nk - 1))) { return false; }
@@ -2218,19 +2221,28 @@ Bool lr_allocates(LW w, List(Str) ls, Int i) {
     if (at >= 0) {
         Int c = str_find_char(l, 64, at);
         Int e = str_find_char(l, 40, c);
-        if (c > 0 && e > c && lr_call_allocs(w, str_slice(l, c + 1, e))) { return true; }
+        Str f = if (c > 0 && e > c) { str_slice(l, c + 1, e) } else { "" };
+        if (f != "" && lr_call_allocs(w, f, l)) { return true; }
     }
     return lr_allocates(w, ls, i + 1);
 }
 
-Bool lr_call_allocs(LW w, Str f) {
+Bool lr_call_allocs(LW w, Str f, Str l) {
     if (fn_index(w.fs, f) >= 0) {
         Map(Str, Int) lf = w.fs.leaf;
         return (lf.get(f) else { 1 }) == 0;
     }
     if (str_starts_with(f, "llvm.") || str_starts_with(f, "checked_") || str_starts_with(f, "wrapping_") || str_starts_with(f, "saturating_")) { return false; }
-    // (Map updates allocate on the heap, which a region does not free.)
-    if (str_starts_with(f, "resid_unbox_") || f == "resid_map_put" || f == "resid_map_del" || f == "resid_set_put" || f == "resid_map_contains" || f == "resid_set_contains" || f == "resid_box_tag") { return false; }
+    // An owned map update writes in place (on the heap); any other makes
+    // a new map, in the region.
+    if (f == "resid_map_put" || f == "resid_map_del" || f == "resid_set_put") {
+        Int o = str_find(l, ", i8 ");
+        return o < 0 || str_char_at(l, o + 5) != 49;
+    }
+    if (str_starts_with(f, "resid_unbox_") || f == "resid_map_contains" || f == "resid_set_contains" || f == "resid_box_tag") { return false; }
+    // Appending a scalar to a list builds what the loop carries on (moved
+    // out at the back edge anyway), not garbage.
+    if (f == "resid_list_push" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
     return !lo_has_str(["resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_get", "resid_list_get_nc", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
 }
 
@@ -2255,7 +2267,7 @@ Bool lr_phis_ok(List(Str) ls, Int i, List(Str) tyl) {
     Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
     Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
     Str ty = if (j >= 0 && j < tyl.len()) { tyl[j] } else { "" };
-    Bool ok = !str_contains(l, " = phi ptr ") || lr_map_ok(ty) || lr_same_in(str_split(l, "[ "), 2, reg);
+    Bool ok = !str_contains(l, " = phi ptr ") || lr_evac_fn(ty) != "" || lr_same_in(str_split(l, "[ "), 2, reg);
     if (!ok) { return false; }
     return lr_phis_ok(ls, i + 1, tyl);
 }
@@ -2270,26 +2282,98 @@ Bool lr_same_in(List(Str) parts, Int k, Str reg) {
 
 Bool lr_word_ty(Str t) { return lin_kk(t) == 1 || lin_vk(t) != 0 || t == "Str"; }
 
-Bool lr_map_ok(Str ty) {
-    if (str_has_prefix(ty, "Set(")) { return lr_word_ty(set_elem_type_cg(ty)); }
-    if (str_has_prefix(ty, "Map(")) { return lr_word_ty(map_key_type_cg(ty)) && lr_word_ty(map_val_type_cg(ty)); }
-    return false;
+Bool lr_list_word(Str t) { return str_has_prefix(t, "List(") && lr_word_ty(str_slice(t, 5, str_len(t) - 1)); }
+
+// A word's kind for resid_map_evac: 4 a string, 5 a list, 0 plain.
+Int lr_kind(Str t) { return if (t == "Str") { 4 } else { if (lr_list_word(t)) { 5 } else { 0 } }; }
+
+// The call that moves a carried value of type `ty` to the heap, or "".
+Str lr_evac_fn(Str ty) {
+    if (str_has_prefix(ty, "Set(") && lr_word_ty(set_elem_type_cg(ty))) { return "@resid_map_evac(ptr %V, i8 " + IntToString(lr_kind(set_elem_type_cg(ty))) + ", i8 0)"; }
+    if (str_has_prefix(ty, "Map(") && lr_word_ty(map_key_type_cg(ty)) && (lr_word_ty(map_val_type_cg(ty)) || lr_list_word(map_val_type_cg(ty)))) {
+        return "@resid_map_evac(ptr %V, i8 " + IntToString(lr_kind(map_key_type_cg(ty))) + ", i8 " + IntToString(lr_kind(map_val_type_cg(ty))) + ")";
+    }
+    if (lr_list_word(ty)) { return "@resid_list_evac(ptr %V)"; }
+    return "";
 }
 
 // The loop's lines with its region: pushed after the head's phis, popped
-// on each back edge and before each ret.
-List(Str) lr_region(List(Str) ls) {
+// on each back edge (after moving the carried values that changed) and
+// before each ret.
+List(Str) lr_region(List(Str) ls, List(Str) tyl) {
     Int h = lw_find_line(ls, "tco.head:", 1);
-    return lr_region_at(ls, 0, lw_after_phis(ls, h + 1), ListBuf());
+    Int b = lw_after_phis(ls, h + 1);
+    // Per back-edge label, its moves: "label|param|value|call".
+    List(Str) mv = lr_moves(ls, h + 1, b, tyl, []);
+    return lr_region_at(ls, 0, h, b, mv, ListBuf());
 }
 
-List(Str) lr_region_at(List(Str) ls, Int i, Int b, ListBuf(Str) acc) {
+List(Str) lr_moves(List(Str) ls, Int i, Int b, List(Str) tyl, List(Str) acc) {
+    if (i >= b) { return acc; }
+    Str l = ls[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
+    Str fnc = if (str_contains(l, " = phi ptr ") && j >= 0 && j < tyl.len()) { lr_evac_fn(tyl[j]) } else { "" };
+    List(Str) a2 = if (fnc == "") { acc } else { lr_moves_in(str_split(l, "[ "), 2, reg, fnc, acc) };
+    return lr_moves(ls, i + 1, b, tyl, a2);
+}
+
+List(Str) lr_moves_in(List(Str) parts, Int k, Str reg, Str fnc, List(Str) acc) {
+    if (k >= parts.len()) { return acc; }
+    Str p = parts[k];
+    Int c = str_find_char(p, 44, 0);
+    Str v = str_slice(p, 0, c);
+    Str lab = str_slice(p, c + 3, str_find_char(p, 32, c + 2));
+    List(Str) a2 = if (v == reg) { acc } else { acc.concat([lab + "|" + reg + "|" + v + "|" + fnc]) };
+    return lr_moves_in(parts, k + 1, reg, fnc, a2);
+}
+
+// The moved register of param `reg` on the back edge from `lab`.
+Str lr_moved(Str reg, Str lab) { return reg + ".ev." + lab; }
+
+// A phi line with its moved incoming values.
+Str lr_phi(Str l, List(Str) mv) {
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    List(Str) parts = str_split(l, "[ ");
+    return lr_phi_at(parts, 1, reg, mv, parts[0]);
+}
+
+Str lr_phi_at(List(Str) parts, Int k, Str reg, List(Str) mv, Str acc) {
+    if (k >= parts.len()) { return acc; }
+    Str p = parts[k];
+    Int c = str_find_char(p, 44, 0);
+    Str lab = str_slice(p, c + 3, str_find_char(p, 32, c + 2));
+    Bool moved = k >= 2 && lr_has_move(mv, lab, reg, 0);
+    Str p2 = if (moved) { lr_moved(reg, lab) + str_slice(p, c, str_len(p)) } else { p };
+    return lr_phi_at(parts, k + 1, reg, mv, acc + "[ " + p2);
+}
+
+Bool lr_has_move(List(Str) mv, Str lab, Str reg, Int i) {
+    if (i >= mv.len()) { return false; }
+    List(Str) q = str_split(mv[i], "|");
+    if (q[0] == lab && q[1] == reg) { return true; }
+    return lr_has_move(mv, lab, reg, i + 1);
+}
+
+// The moves of back edge `lab`, as calls.
+ListBuf(Str) lr_move_lines(List(Str) mv, Str lab, Int i, ListBuf(Str) acc) {
+    if (i >= mv.len()) { return acc; }
+    List(Str) q = str_split(mv[i], "|");
+    ListBuf(Str) a2 = if (q[0] == lab) { acc.push(lr_moved(q[1], lab) + " = call ptr " + str_replace(q[3], "%V", q[2])) } else { acc };
+    return lr_move_lines(mv, lab, i + 1, a2);
+}
+
+List(Str) lr_region_at(List(Str) ls, Int i, Int h, Int b, List(Str) mv, ListBuf(Str) acc) {
     if (i >= ls.len()) { return acc.finish(); }
     Str l = ls[i];
     ListBuf(Str) a0 = if (i == b) { acc.push("%lsc = call i64 @resid_scope_push()") } else { acc };
-    Bool exit = i > b && (l == "br label %tco.head" || str_starts_with(l, "ret "));
-    ListBuf(Str) a1 = if (exit) { a0.push("call void @resid_scope_pop(i64 %lsc)") } else { a0 };
-    return lr_region_at(ls, i + 1, b, a1.push(l));
+    Bool phi = i > h && i < b;
+    Bool back = i > b && l == "br label %tco.head";
+    Bool ret = i > b && str_starts_with(l, "ret ");
+    // A back edge's block starts with its label; its moves go after it.
+    Str lab = if (back && i > 0 && str_ends_with(ls[i - 1], ":")) { str_slice(ls[i - 1], 0, str_len(ls[i - 1]) - 1) } else { "" };
+    ListBuf(Str) a1 = if (back) { lr_move_lines(mv, lab, 0, a0).push("call void @resid_scope_pop(i64 %lsc)") } else { if (ret) { a0.push("call void @resid_scope_pop(i64 %lsc)") } else { a0 } };
+    return lr_region_at(ls, i + 1, h, b, mv, a1.push(if (phi) { lr_phi(l, mv) } else { l }));
 }
 
 // ─── Debug info ─────────────────────────────────────────────────────

@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  164, reduce 14, provenance 20, graph 393. The archived Rust workspace
+  165, reduce 14, provenance 20, graph 394. The archived Rust workspace
   (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
   821 tests; its e2e now has 128 after removing tests of the retired text
   paths); see `AGENTS.md` for its slow-test table.
@@ -305,6 +305,29 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 619MB (606MB without facts). The artifact carries a RESIDUAL node's range
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
+
+### 0zc. Dead maps and list versions in loop regions (2026-09-26)
+
+- **Region maps**: a map made inside a scope region (a new table, trie
+  node, handle or transient copy) now lives in the region, so maps that
+  die within a loop iteration go with it. An in-place update of an older
+  map allocates where that map lives (`g_map_heap`).
+- **Moving out**: loops may now carry Map/Set values holding Int, Float,
+  Bool or Str words or lists of them, and such lists. At each back edge
+  the compiler moves them to the heap (`resid_map_evac`,
+  `resid_list_evac`), copying only the parts made in a region; a
+  FlatBuf's `kept` watermark bounds the element scan. Strings and lists
+  stored by typed inserts (kinds 4, 5) are moved when stored. Moved
+  values allocate as they would outside every region (the current arena,
+  else the heap), so the compiler's phase arenas still reclaim them.
+- A loop gets a region only if its body can make garbage: owned map
+  updates and scalar appends to the carried list do not count.
+- Measured: set algebra in a loop 0.18s/148MB -> 0.16s/28MB (Rust
+  0.19s/12MB); copy-then-modify 0.05s/52MB -> 0.03s/23MB (0.01s/12MB);
+  BFS with adjacency lists 0.16s/111MB -> 0.17s/87MB (0.05s/21MB: the
+  rest is boxed list elements and a header per append, which needs
+  in-place list appends). The benchmark suite is unchanged.
+- Test: `loop_regions_lists`.
 
 ### 0zb. Struct record reuse and loop regions (2026-09-26)
 

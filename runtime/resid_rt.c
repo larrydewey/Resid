@@ -1830,6 +1830,7 @@ static void* pvec_get_raw(PVecNode* root, int32_t shift, int64_t i) {
 typedef struct {
     int64_t used;
     int64_t cap;
+    int64_t kept; /* leading slots known to hold no scope-region element */
     void* items[];
 } FlatBuf;
 
@@ -1843,6 +1844,7 @@ static FlatBuf* flatbuf_new(int64_t cap) {
     if (!f) resid_abort("flatbuf_new: out of memory");
     f->used = 0;
     f->cap = cap;
+    f->kept = 0;
     return f;
 }
 
@@ -6785,6 +6787,34 @@ static uint64_t fnv1a(const char* s) {
     return h;
 }
 
+/* Scratch memory, freed by its user. */
+static void* map_tmp(size_t n) {
+    void* p = malloc(n);
+    if (!p) resid_abort("map: out of memory");
+    return p;
+}
+
+/* Map memory (handles, nodes, tables) lives where its map does. A new
+ * map made inside a scope region lives in the region, so a loop
+ * iteration's dead maps go with it; an update that writes into an older
+ * map (g_map_heap) allocates on the heap, like the map itself. A loop
+ * carrying a map moves the region parts it made to the heap at each back
+ * edge (resid_map_evac). */
+static _Thread_local int g_map_heap = 0;
+
+static inline int in_region(const void* p) { return g_sc_depth && scope_contains(p); }
+
+static void* map_obj(size_t n) {
+    if (!g_map_heap && g_sc_depth) return scope_alloc(n);
+    void* p = malloc(n);
+    if (!p) resid_abort("map: out of memory");
+    return p;
+}
+
+static void map_obj_free(void* p) {
+    if (p && !in_region(p)) free(p);
+}
+
 /* ── Words ──────────────────────────────────────────────────────────── */
 
 static int box_is_i64(const void* p) {
@@ -6793,7 +6823,19 @@ static int box_is_i64(const void* p) {
 }
 
 /* Box a stored word of kind `k` into a Resid value pointer. */
+static uint64_t mt_box_any(int8_t k, uint64_t w);
+
+/* A box stored into an older map must live on the heap as the map does. */
 static uint64_t mt_box(int8_t k, uint64_t w) {
+    if (k < 1 || k > 3 || !g_map_heap || !g_sc_depth) return mt_box_any(k, w);
+    int64_t d = g_sc_depth;
+    g_sc_depth = 0;
+    uint64_t r = mt_box_any(k, w);
+    g_sc_depth = d;
+    return r;
+}
+
+static uint64_t mt_box_any(int8_t k, uint64_t w) {
     switch (k) {
     case 1: return (uint64_t)(uintptr_t)resid_box_i64((int64_t)w);
     case 2: { double d; memcpy(&d, &w, 8); return (uint64_t)(uintptr_t)resid_box_f64(d); }
@@ -6831,11 +6873,22 @@ static int8_t word_of_box(void* p, uint64_t* out, int for_key) {
 /* A string about to be stored in a map or set, which lives on the heap:
  * copied out of a scope region (a loop iteration's region is popped while
  * the map lives on). The compiler calls it for Str keys and values. */
+void* resid_list_keep(void* l);
+
+/* Allocation as it would be outside every scope region (an arena, or the
+ * heap): where a value moved out of a loop region belongs. */
+static void* outer_alloc(size_t n) {
+    int64_t d = g_sc_depth;
+    g_sc_depth = 0;
+    void* p = resid_alloc(n);
+    g_sc_depth = d;
+    return p;
+}
+
 char* resid_str_keep(char* p) {
     if (!g_sc_depth || !scope_contains(p)) return p;
     size_t n = strlen(p) + 1;
-    char* q = (char*)malloc(n);
-    if (!q) resid_abort("out of memory");
+    char* q = (char*)outer_alloc(n);
     memcpy(q, p, n);
     return q;
 }
@@ -6858,12 +6911,6 @@ static inline uint64_t canon_rank(uint64_t h) {
     return (r << 4) | (h >> 60);
 }
 
-static void* map_alloc(size_t n) {
-    void* p = malloc(n);
-    if (!p) resid_abort("map: out of memory");
-    return p;
-}
-
 static uint64_t g_edit_seq = 0;
 
 static uint64_t new_edit_token(void) {
@@ -6879,7 +6926,7 @@ static inline int node_words(const HMNode* n) { return 2 * node_nd(n) + node_nn(
 static inline uint32_t slot_bit(uint64_t h, int level) { return 1u << ((h >> (level * HT_SHIFT)) & HT_MASK); }
 
 static HMNode* node_new(uint32_t capw, uint64_t edit) {
-    HMNode* n = (HMNode*)map_alloc(sizeof(HMNode) + (size_t)capw * 8);
+    HMNode* n = (HMNode*)map_obj(sizeof(HMNode) + (size_t)capw * 8);
     n->dmap = 0;
     n->nmap = 0;
     n->ncoll = 0;
@@ -7152,7 +7199,7 @@ static void hn_collect(const HMNode* n, uint64_t* ks, uint64_t* vs, int64_t* idx
 }
 
 static HMTrie* trie_new(int64_t count, HMNode* root, int8_t kk, int8_t vk) {
-    HMTrie* t = (HMTrie*)map_alloc(sizeof(HMTrie));
+    HMTrie* t = (HMTrie*)map_obj(sizeof(HMTrie));
     t->count = count;
     t->root = root;
     t->tab = NULL;
@@ -7223,16 +7270,15 @@ static inline int mt_oob(const MapTab* t, uint64_t k) {
 
 static void mt_alloc(MapTab* t, int64_t cap) {
     t->cap = cap;
-    t->keys = (uint64_t*)malloc((size_t)cap * sizeof(uint64_t));
-    t->vals = t->nov ? NULL : (uint64_t*)malloc((size_t)cap * sizeof(uint64_t));
-    if (!t->keys || (!t->nov && !t->vals)) resid_abort("map table: out of memory");
+    t->keys = (uint64_t*)map_obj((size_t)cap * sizeof(uint64_t));
+    t->vals = t->nov ? NULL : (uint64_t*)map_obj((size_t)cap * sizeof(uint64_t));
     uint64_t e = mt_empty(t);
     for (int64_t i = 0; i < cap; i++) t->keys[i] = e;
 }
 
 static MapTab* mt_new(int64_t cap, int8_t kk, int8_t vk, int8_t nov) {
-    MapTab* t = (MapTab*)calloc(1, sizeof(MapTab));
-    if (!t) resid_abort("map table: out of memory");
+    MapTab* t = (MapTab*)map_obj(sizeof(MapTab));
+    memset(t, 0, sizeof(MapTab));
     t->cap = cap;
     t->kkind = kk;
     t->vkind = vk;
@@ -7316,8 +7362,8 @@ static void mt_rebuild(MapTab* t, int64_t cap, int8_t kk, uint64_t (*conv)(int8_
     int64_t it = 0;
     uint64_t k, v;
     while (mt_next(&old, &it, &k, &v)) mt_insert_new(t, conv ? conv(old.kkind, k) : k, v);
-    free(old.keys);
-    free(old.vals);
+    map_obj_free(old.keys);
+    map_obj_free(old.vals);
 }
 
 /* Insert a key known to be absent. */
@@ -7347,8 +7393,7 @@ static void mt_decide(MapTab* t, int8_t kk, int8_t vk, uint64_t vb) {
 
 /* A value other than 1 for a value-less table: give it its values. */
 static void mt_vals_make(MapTab* t) {
-    t->vals = (uint64_t*)malloc((size_t)t->cap * sizeof(uint64_t));
-    if (!t->vals) resid_abort("map table: out of memory");
+    t->vals = (uint64_t*)map_obj((size_t)t->cap * sizeof(uint64_t));
     for (int64_t i = 0; i < t->cap; i++) t->vals[i] = 1;
     t->nov = 0;
 }
@@ -7414,15 +7459,17 @@ static uint64_t* mt_vref(MapTab* t, int8_t rk, uint64_t kb) {
 
 /* `ks` / `vs`: the key / value is a string to copy out of any scope
  * region when it is stored (resid_str_keep). */
+static inline uint64_t word_keep(int k, uint64_t w);
+
 static void mt_put_s(MapTab* t, int8_t kk, uint64_t kb, int8_t vk, uint64_t vb, int ks, int vs) {
     mt_decide(t, kk, vk, vb);
     uint64_t k = mt_key_in(t, kk, kb);
     uint64_t v = mt_val_in(t, vk, vb);
     if (t->nov && v != 1) mt_vals_make(t);
     uint64_t* at = mt_vref(t, t->kkind, k);
-    if (vs) v = (uint64_t)(uintptr_t)resid_str_keep((char*)(uintptr_t)v);
+    if (vs) v = word_keep(vs, v);
     if (at) { if (!t->nov) *at = v; return; }
-    if (ks) k = (uint64_t)(uintptr_t)resid_str_keep((char*)(uintptr_t)k);
+    if (ks) k = word_keep(4, k);
     mt_insert_new(t, k, v);
 }
 
@@ -7485,7 +7532,7 @@ static int canon_cmp(const void* a, const void* b) {
 static void mt_entries(const MapTab* t, uint64_t* ks, uint64_t* vs) {
     int64_t n = t->live;
     if (n == 0) return;
-    CanonEnt* es = (CanonEnt*)map_alloc((size_t)n * sizeof(CanonEnt));
+    CanonEnt* es = (CanonEnt*)map_tmp((size_t)n * sizeof(CanonEnt));
     int64_t it = 0, j = 0;
     uint64_t k, v;
     while (mt_next(t, &it, &k, &v)) {
@@ -7525,8 +7572,8 @@ static HMNode* map_root(HMTrie* m) {
     int cache = !m->transient;
     AllocSuspend sus;
     if (cache) sus = alloc_suspend();
-    uint64_t* ks = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
-    uint64_t* vs = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    uint64_t* ks = (uint64_t*)map_tmp((size_t)(n ? n : 1) * 8);
+    uint64_t* vs = (uint64_t*)map_tmp((size_t)(n ? n : 1) * 8);
     int64_t it = 0, j = 0;
     uint64_t kw, vw;
     while (mt_next(t, &it, &kw, &vw)) { ks[j] = kw; vs[j] = vw; j++; }
@@ -7551,8 +7598,8 @@ static TrieBase map_base(HMTrie* m) {
     TrieBase b = { NULL, map_kk(m), map_vk(m) };
     if (m->tab || !m->transient) { b.root = map_root(m); return b; }
     int64_t n = m->count;
-    uint64_t* ks = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
-    uint64_t* vs = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    uint64_t* ks = (uint64_t*)map_tmp((size_t)(n ? n : 1) * 8);
+    uint64_t* vs = (uint64_t*)map_tmp((size_t)(n ? n : 1) * 8);
     map_entries(m, ks, vs);
     b.root = trie_build(ks, vs, n, b.kk);
     free(ks);
@@ -7562,8 +7609,8 @@ static TrieBase map_base(HMTrie* m) {
 
 /* A trie base whose words are all boxed (a request of another kind). */
 static TrieBase base_boxed(TrieBase b, int64_t n, int keys, int vals) {
-    uint64_t* ks = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
-    uint64_t* vs = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    uint64_t* ks = (uint64_t*)map_tmp((size_t)(n ? n : 1) * 8);
+    uint64_t* vs = (uint64_t*)map_tmp((size_t)(n ? n : 1) * 8);
     int64_t j = 0;
     hn_collect(b.root, ks, vs, &j);
     int8_t kk = keys ? 0 : b.kk, vk = vals ? 0 : b.vk;
@@ -7651,14 +7698,12 @@ void* resid_map_transient(void* map) {
     m->transient = 1;
     if (src->tab) {
         MapTab* s = src->tab;
-        MapTab* t = (MapTab*)malloc(sizeof(MapTab));
-        if (!t) resid_abort("map table: out of memory");
+        MapTab* t = (MapTab*)map_obj(sizeof(MapTab));
         *t = *s;
         t->lvalid = 0;
         if (s->keys) {
-            t->keys = (uint64_t*)malloc((size_t)s->cap * sizeof(uint64_t));
-            t->vals = s->vals ? (uint64_t*)malloc((size_t)s->cap * sizeof(uint64_t)) : NULL;
-            if (!t->keys || (s->vals && !t->vals)) resid_abort("map table: out of memory");
+            t->keys = (uint64_t*)map_obj((size_t)s->cap * sizeof(uint64_t));
+            t->vals = s->vals ? (uint64_t*)map_obj((size_t)s->cap * sizeof(uint64_t)) : NULL;
             memcpy(t->keys, s->keys, (size_t)s->cap * sizeof(uint64_t));
             if (s->vals) memcpy(t->vals, s->vals, (size_t)s->cap * sizeof(uint64_t));
         }
@@ -7667,8 +7712,8 @@ void* resid_map_transient(void* map) {
     }
     m->tab = mt_new(mt_cap_for(n), -1, -1, 0);
     if (n > 0) {
-        uint64_t* ks = (uint64_t*)map_alloc((size_t)n * 8);
-        uint64_t* vs = (uint64_t*)map_alloc((size_t)n * 8);
+        uint64_t* ks = (uint64_t*)map_tmp((size_t)n * 8);
+        uint64_t* vs = (uint64_t*)map_tmp((size_t)n * 8);
         map_entries(src, ks, vs);
         for (int64_t i = 0; i < n; i++) mt_put(m->tab, src->kk, ks[i], src->vk, vs[i]);
         free(ks);
@@ -7705,24 +7750,36 @@ static void* trie_put_owned(HMTrie* m, int8_t rk, uint64_t kb, int8_t rv, uint64
     return m;
 }
 
-/* Kind 4 (from the compiler): a string, stored as kind 0 but copied out
- * of any scope region when stored (loop regions, resid_str_keep). */
+/* Kinds 4 and 5 (from the compiler): a string, and a list of Int, Float,
+ * Bool or Str, stored as kind 0 but moved out of any scope region when
+ * stored (loop regions: resid_str_keep, resid_list_keep). */
+static inline uint64_t word_keep(int k, uint64_t w) {
+    if (k == 4) return (uint64_t)(uintptr_t)resid_str_keep((char*)(uintptr_t)w);
+    if (k == 5) return (uint64_t)(uintptr_t)resid_list_keep((void*)(uintptr_t)w);
+    return w;
+}
+
 static __attribute__((noinline)) void* map_put_slow(HMTrie* m, int8_t owned, int8_t kk, int64_t kb, int8_t vk, int64_t vb) {
-    int ks = kk == 4, vs = vk == 4;
+    int ks = kk == 4, vs = vk;
     if (ks) kk = 0;
-    if (vs) vk = 0;
+    if (vk == 4 || vk == 5) vk = 0; else vs = 0;
     /* The first owned update of a shared map takes a private copy. */
     if (owned && !m->transient) m = (HMTrie*)resid_map_transient(m);
-    if (owned && m->transient && m->tab) {
-        m->tab->lvalid = 0;
-        mt_put_s(m->tab, kk, (uint64_t)kb, vk, (uint64_t)vb, ks, vs);
-        m->count = m->tab->live;
+    if (owned && m->transient) {
+        /* In place: allocate where the map lives. */
+        int saved = g_map_heap;
+        g_map_heap = !in_region(m);
+        if (m->tab) {
+            m->tab->lvalid = 0;
+            mt_put_s(m->tab, kk, (uint64_t)kb, vk, (uint64_t)vb, ks, vs);
+            m->count = m->tab->live;
+        } else {
+            m = (HMTrie*)trie_put_owned(m, kk, word_keep(ks ? 4 : 0, (uint64_t)kb), vk, word_keep(vs, (uint64_t)vb));
+        }
+        g_map_heap = saved;
         return m;
     }
-    if (ks) kb = (int64_t)(uintptr_t)resid_str_keep((char*)(uintptr_t)kb);
-    if (vs) vb = (int64_t)(uintptr_t)resid_str_keep((char*)(uintptr_t)vb);
-    if (owned && m->transient) return trie_put_owned(m, kk, (uint64_t)kb, vk, (uint64_t)vb);
-    return map_insert_p(m, kk, (uint64_t)kb, vk, (uint64_t)vb);
+    return map_insert_p(m, kk, word_keep(ks ? 4 : 0, (uint64_t)kb), vk, word_keep(vs, (uint64_t)vb));
 }
 
 /* Typed insert. `owned` is set by codegen only for an update the
@@ -7753,6 +7810,18 @@ void* resid_map_del(void* map, int8_t owned, int8_t kk, int64_t kb) {
     HMTrie* m = (HMTrie*)map;
     if (kk == 4) kk = 0;
     if (owned && !m->transient && m->count > 0) m = (HMTrie*)resid_map_transient(m);
+    if (owned && m->transient && !m->tab) {
+        int saved = g_map_heap;
+        g_map_heap = !in_region(m);
+        uint64_t k;
+        if (m->count > 0 && key_lookup_word(m->kk, kk, (uint64_t)kb, &k)) {
+            int did = 0;
+            m->root = hn_remove(m->root, 0, key_hash(m->kk, k), m->kk, k, m->edit, &did);
+            m->count -= did;
+        }
+        g_map_heap = saved;
+        return m;
+    }
     if (owned && m->transient) {
         if (m->tab) {
             mt_del(m->tab, kk, (uint64_t)kb);
@@ -7852,8 +7921,8 @@ int64_t resid_map_len(void* map) {
  * caller frees the arrays. */
 static int64_t map_boxed_entries(HMTrie* m, void*** ks, void*** vs) {
     int64_t n = m->count;
-    uint64_t* kw = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
-    uint64_t* vw = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    uint64_t* kw = (uint64_t*)map_tmp((size_t)(n ? n : 1) * 8);
+    uint64_t* vw = (uint64_t*)map_tmp((size_t)(n ? n : 1) * 8);
     map_entries(m, kw, vw);
     int8_t kk = map_kk(m), vk = map_vk(m);
     for (int64_t i = 0; i < n; i++) {
@@ -7961,7 +8030,7 @@ int64_t resid_set_len(void* set) {
 /* A set's element words (of its key kind) in no particular order; the
  * caller frees them. */
 static uint64_t* set_words(HMTrie* s) {
-    uint64_t* ks = (uint64_t*)map_alloc((size_t)(s->count ? s->count : 1) * 8);
+    uint64_t* ks = (uint64_t*)map_tmp((size_t)(s->count ? s->count : 1) * 8);
     if (s->tab) {
         int64_t it = 0, j = 0;
         uint64_t k, v;
@@ -8100,4 +8169,124 @@ char* resid_set_format(void* set) {
     buf[pos++] = '}';
     buf[pos] = '\0';
     return buf;
+}
+
+/* ── Moving loop-region values to the heap ──────────────────────────────
+ * A loop region (the compiler's lr_region) frees an iteration's memory at
+ * its back edge. Values the loop carries on, and values stored into maps
+ * that outlive the region, are first moved out: only their parts that
+ * live in a region are copied (older parts are shared), so a map or list
+ * that grew by a little costs a little. They hold Int, Float, Bool or Str
+ * words, or lists of them (the compiler checks the types). */
+
+/* A list element (a scalar box or a string), on the heap. */
+static void* elem_keep(void* p) {
+    if (!p || (uintptr_t)p < 4096 || !in_region(p)) return p;
+    if (is_boxed(p)) {
+        uint64_t raw;
+        int8_t k = word_of_box(p, &raw, 0);
+        if (k == 0) return p;
+        int64_t d = g_sc_depth;
+        g_sc_depth = 0;
+        void* r = (void*)(uintptr_t)mt_box_any(k, raw);
+        g_sc_depth = d;
+        return r;
+    }
+    return resid_str_keep((char*)p);
+}
+
+static PVecNode* pvec_keep(PVecNode* n, int32_t level) {
+    if (!n || !in_region(n)) return n;
+    PVecNode* c = (PVecNode*)outer_alloc(sizeof(PVecNode) + (size_t)n->cap * sizeof(void*));
+    c->cap = n->cap;
+    for (int64_t i = 0; i < n->cap; i++)
+        c->items[i] = level > 0 ? (void*)pvec_keep((PVecNode*)n->items[i], level - PVEC_BITS) : elem_keep(n->items[i]);
+    return c;
+}
+
+/* A list with no part in a scope region. */
+void* resid_list_keep(void* l) {
+    ResidList* v = (ResidList*)l;
+    if (!v || !g_sc_depth) return l;
+    PVecNode* root = v->root;
+    PVecNode* nroot = root;
+    if (v->shift == FLAT_SHIFT && root) {
+        FlatBuf* f = (FlatBuf*)root;
+        if (in_region(f)) {
+            /* Same capacity: the next appends still fit in place. */
+            int64_t cap = f->cap > v->count ? f->cap : (v->count ? v->count : 1);
+            FlatBuf* g = (FlatBuf*)outer_alloc(sizeof(FlatBuf) + (size_t)cap * sizeof(void*));
+            g->used = v->count;
+            g->cap = cap;
+            g->kept = v->count;
+            for (int64_t i = 0; i < v->count; i++) g->items[i] = elem_keep(f->items[i]);
+            nroot = (PVecNode*)g;
+        } else if (f->kept < v->count) {
+            /* An older buffer: only slots appended since its last move can
+             * hold region elements, and no older list sees them. */
+            for (int64_t i = f->kept; i < v->count; i++) f->items[i] = elem_keep(f->items[i]);
+            f->kept = v->count;
+        }
+    } else if (root) {
+        nroot = pvec_keep(root, v->shift);
+    }
+    if (nroot == root && !in_region(v)) return l;
+    ResidList* out = (ResidList*)outer_alloc(sizeof(ResidList));
+    *out = *v;
+    out->root = nroot;
+    return out;
+}
+
+void* resid_list_evac(void* l) { return resid_list_keep(l); }
+
+static HMNode* hnode_evac(HMNode* n, int kf, int vf) {
+    if (!n || !in_region(n)) return n;
+    int nd = node_nd(n), nn = node_nn(n);
+    HMNode* c = (HMNode*)map_tmp(sizeof(HMNode) + (size_t)n->cap * 8);
+    memcpy(c, n, sizeof(HMNode) + (size_t)(2 * nd + nn) * 8);
+    for (int i = 0; i < nd; i++) {
+        c->w[2 * i] = word_keep(kf, c->w[2 * i]);
+        c->w[2 * i + 1] = word_keep(vf, c->w[2 * i + 1]);
+    }
+    for (int i = 0; i < nn; i++) c->w[2 * nd + i] = (uint64_t)(uintptr_t)hnode_evac((HMNode*)(uintptr_t)c->w[2 * nd + i], kf, vf);
+    return c;
+}
+
+/* A map a loop carries across its back edge, with no part in a scope
+ * region. kf / vf: the kinds of its keys / values (4: strings, 5: lists,
+ * else plain words). */
+void* resid_map_evac(void* map, int8_t kf, int8_t vf) {
+    HMTrie* m = (HMTrie*)map;
+    if (!m || !g_sc_depth) return map;
+    MapTab* t = m->tab;
+    MapTab* nt = t;
+    HMNode* nr = m->root;
+    if (t) {
+        int tt = in_region(t);
+        int kt = t->keys && in_region(t->keys);
+        int vt = t->vals && in_region(t->vals);
+        if (tt || kt || vt) {
+            nt = (MapTab*)map_tmp(sizeof(MapTab));
+            *nt = *t;
+            if (kt) { nt->keys = (uint64_t*)map_tmp((size_t)t->cap * 8); memcpy(nt->keys, t->keys, (size_t)t->cap * 8); }
+            if (vt) { nt->vals = (uint64_t*)map_tmp((size_t)t->cap * 8); memcpy(nt->vals, t->vals, (size_t)t->cap * 8); }
+            /* A table made in the region may hold region words. */
+            if (nt->keys && (kf == 4 || (vf >= 4 && nt->vals))) {
+                for (int64_t i = 0; i < nt->cap; i++) {
+                    uint64_t k = nt->keys[i];
+                    if (k == mt_empty(nt) || k == mt_tomb(nt)) continue;
+                    if (kt && kf == 4) nt->keys[i] = word_keep(4, k);
+                    if (vt && vf >= 4) nt->vals[i] = word_keep(vf, nt->vals[i]);
+                }
+            }
+        }
+    } else {
+        nr = hnode_evac(m->root, kf, vf);
+    }
+    if (nt == t && nr == m->root && !in_region(m)) return map;
+    HMTrie* out = (HMTrie*)map_tmp(sizeof(HMTrie));
+    *out = *m;
+    out->tab = nt;
+    out->root = nr;
+    return out;
 }
