@@ -259,7 +259,9 @@ a missing comma is now an error. Short-circuit: `&&` and `||` evaluated
 both operands, so a guard like `i < n && xs[i] == 0` aborted. The spec now
 requires short-circuit (§30). Codegen branches to a phi, and the reducer
 folds `false && e` and `true || e` without evaluating e. The `else`
-fallback's phi now names the arms' exit blocks.
+fallback's phi now names the arms' exit blocks. Checker diagnostics use
+the import source map: they print `--> path:line:col`, and the caret
+gutter shows the file's own line rather than the merged line.
 
 ### Major capabilities
 

@@ -1,0 +1,6 @@
+// Diagnostics name the imported file and its own line (spec v3.5 source map).
+import "_mod_diag.resid";
+
+Int main() {
+    return diag_bad(1);
+}

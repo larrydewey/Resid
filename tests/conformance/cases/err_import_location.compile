@@ -1,0 +1,3 @@
+binding s: expected Str, got Int
+_mod_diag.resid:3:
+3 |     Str s = x;
