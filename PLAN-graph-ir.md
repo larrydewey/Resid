@@ -48,7 +48,8 @@ are imported the same way `reduce.resid` is.
     compiler itself (138K nodes, parsed in about 0.3s).
   - [x] Source map: import resolution records (merged line, file line,
     path) segments (`RRes.map`), so spans resolve to real files
-    (`kg_where`; `--graph-lint` reports file:line across imports).
+    (`kg_where`; `--graph-lint` and checker diagnostics report
+    file:line across imports).
   - [x] `///` doc comments attached to declarations (`kg_doc`).
   - Hash-consing and content hashes move to G2/G3: sharing is only sound
     for pure nodes, and purity needs G2's effect information.

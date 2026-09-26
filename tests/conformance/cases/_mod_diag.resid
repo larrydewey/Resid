@@ -1,0 +1,5 @@
+// Helper for err_import_location: a type error on line 3.
+pub Int diag_bad(Int x) {
+    Str s = x;
+    return x;
+}

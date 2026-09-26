@@ -9354,12 +9354,13 @@ Str diag_str_repeat(Str s, Int n) {
 
 // Render a source snippet with caret for the given span.
 // `label` is optional text printed after the carets.
-Str render_caret(Str s, Int line, Int col_start, Int col_end, Str label) {
+// `gl` is the line number shown in the gutter.
+Str render_caret(Str s, Int line, Int gl, Int col_start, Int col_end, Str label) {
     if (line <= 0) { return ""; }
     Int n = str_len(s);
     Str src_line = get_line_at(s, 0, 1, line);
     if (src_line == "") { return ""; }
-    Str gutter = IntToString(line) + " | ";
+    Str gutter = IntToString(gl) + " | ";
     Int(64) one = 1;
     Int caret_len = if (col_end > col_start) { col_end - col_start } else { one };
     Str carets = diag_str_repeat("^", caret_len);
@@ -9392,15 +9393,36 @@ Str get_line_at_rec(Str s, Int start, Int cur_line, Int target) {
 // Emit a full diagnostic: header + caret snippet.
 // `pos` is the absolute character index in `s` (token end position).
 // `col_len` is the token length for the caret width.
-Void diag_error(Str code, Str msg, Int pos, Int col_len, Str s) {
+// `smap` is import resolution's source map; `lbase` is the merged line
+// before `s` starts (nonzero inside a sliced sandbox body).
+Void diag_error(Str code, Str msg, Int pos, Int col_len, Str s, Str smap, Int lbase) {
     PosInfo pi = pos_to_line_col(s, pos - col_len);
     Int line = pi.line;
     Int col = pi.col;
     println("error[" + code + "]: " + msg);
+    DiagAt at = diag_where(smap, line + lbase);
+    if (line > 0 && at.path != "") { println("  --> " + at.path + ":" + IntToString(at.line) + ":" + IntToString(col)); }
+    Int gl = if (at.path == "") { line } else { at.line };
     if (line > 0) {
-        Str caret = render_caret(s, line, col, col + col_len, "");
+        Str caret = render_caret(s, line, gl, col, col + col_len, "");
         println(caret);
     }
+}
+
+// Source-map lookup of merged line `line`; empty path without a map.
+type DiagAt = { Str path; Int line; };
+DiagAt diag_where(Str smap, Int line) {
+    return diag_where_at(str_split(smap, "\n"), 0, line, DiagAt {.path = "", .line = line});
+}
+DiagAt diag_where_at(List(Str) es, Int i, Int line, DiagAt best) {
+    if (i >= es.len()) { return best; }
+    List(Str) f = str_split(es[i], " ");
+    if (f.len() < 3) { return diag_where_at(es, i + 1, line, best); }
+    Int ml = str_parse_int(f[0]);
+    if (ml > line) { return best; }
+    Str p = str_slice(es[i], str_len(f[0]) + str_len(f[1]) + 2, str_len(es[i]));
+    DiagAt b2 = DiagAt {.path = p, .line = str_parse_int(f[1]) + line - ml};
+    return diag_where_at(es, i + 1, line, b2);
 }
 
 Str ck_env_lookup_at(List(Str) env, Str name, Int i) {
@@ -14548,7 +14570,7 @@ Int finish_check(Sigs fs) {
     return 0;
 }
 
-Int check_decls(Str s, Int pos, Sigs fs) {
+Int check_decls(Str s, Int pos, Sigs fs, Str smap, Int lbase) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return 0; }
     if (t.text == "@") {
@@ -14556,9 +14578,9 @@ Int check_decls(Str s, Int pos, Sigs fs) {
         if (an.text == "requires") {
             Tok lp = lex_tok(s, an.pos);
             PRes reqs = cap_list_at(s, lp.pos, false, "");
-            return check_decls(s, reqs.pos, fs);
+            return check_decls(s, reqs.pos, fs, smap, lbase);
         }
-        return check_decls(s, an.pos, fs);
+        return check_decls(s, an.pos, fs, smap, lbase);
     }
     if (t.text == "sandbox") {
         Tok lp = lex_tok(s, t.pos);
@@ -14569,24 +14591,25 @@ Int check_decls(Str s, Int pos, Sigs fs) {
         }
         Tok lb = lex_tok(s, caps.pos);
         if (lb.text != "{") {
-            diag_error("E0020", "expected { after sandbox capabilities", lb.pos, 3, s);
+            diag_error("E0020", "expected { after sandbox capabilities", lb.pos, 3, s, smap, lbase);
             return 1;
         }
         Int close = skip_body(s, caps.pos);
         Str inner = str_slice(s, lb.pos, close - 1);
-        Int r = check_decls(inner, 0, fs);
+        Int ilb = lbase + pos_to_line_col(s, lb.pos).line - 1;
+        Int r = check_decls(inner, 0, fs, smap, ilb);
         if (r != 0) { return r; }
-        return check_decls(s, close, fs);
+        return check_decls(s, close, fs, smap, lbase);
     }
     if (t.text == "type") {
         Int end = skip_decl(s, t.pos, 0);
         if (!resid_quiet()) { println("OK type def"); }
-        return check_decls(s, end, fs);
+        return check_decls(s, end, fs, smap, lbase);
     }
     if (t.text == "import") {
         Int end = skip_decl(s, t.pos, 0);
         if (!resid_quiet()) { println("OK import"); }
-        return check_decls(s, end, fs);
+        return check_decls(s, end, fs, smap, lbase);
     }
     if (t.text == "pub") {
         BRes bh = behavior_decl_at(s, t.pos);
@@ -14594,22 +14617,22 @@ Int check_decls(Str s, Int pos, Sigs fs) {
             Int v = validate_behavior(fs, bh);
             if (v != 0) { return 1; }
             if (!resid_quiet()) { println("OK behavior " + bh.name); }
-            return check_decls(s, bh.pos, fs);
+            return check_decls(s, bh.pos, fs, smap, lbase);
         }
         Tok t2 = lex_tok(s, t.pos);
         if (t2.kind == "ident") {
             DRes d = check_func(s, t.pos, fs);
             if (d.err != "") {
-                diag_error("E0001", "type error: " + d.err, d.pos, 3, s);
+                diag_error("E0001", "type error: " + d.err, d.pos, 3, s, smap, lbase);
                 return 1;
             }
-            return check_decls(s, d.pos, fs);
+            return check_decls(s, d.pos, fs, smap, lbase);
         }
         Int end = skip_decl(s, t.pos, 0);
-        return check_decls(s, end, fs);
+        return check_decls(s, end, fs, smap, lbase);
     }
     if (t.text == ";") {
-        return check_decls(s, t.pos, fs);
+        return check_decls(s, t.pos, fs, smap, lbase);
     }
     if (t.kind == "ident") {
         BRes bh2 = behavior_decl_at(s, pos);
@@ -14617,21 +14640,24 @@ Int check_decls(Str s, Int pos, Sigs fs) {
             Int v2 = validate_behavior(fs, bh2);
             if (v2 != 0) { return 1; }
             if (!resid_quiet()) { println("OK behavior " + bh2.name); }
-            return check_decls(s, bh2.pos, fs);
+            return check_decls(s, bh2.pos, fs, smap, lbase);
         }
         DRes d = check_func(s, pos, fs);
         if (d.err != "") {
-            diag_error("E0001", "type error: " + d.err, d.pos, 3, s);
+            diag_error("E0001", "type error: " + d.err, d.pos, 3, s, smap, lbase);
             return 1;
         }
-        return check_decls(s, d.pos, fs);
+        return check_decls(s, d.pos, fs, smap, lbase);
     }
-    diag_error("E0020", "unexpected declaration", t.pos, 3, s);
+    diag_error("E0020", "unexpected declaration", t.pos, 3, s, smap, lbase);
     return 1;
 }
 
 Int ck_check_program(Str s, Int pos, Sigs fs) {
-    Int r = check_decls(s, pos, fs);
+    return check_program_map(s, pos, fs, "");
+}
+Int check_program_map(Str s, Int pos, Sigs fs, Str smap) {
+    Int r = check_decls(s, pos, fs, smap, 0);
     if (r != 0) { return r; }
     return finish_check(fs);
 }
@@ -16054,7 +16080,7 @@ Int main() {
     // Type checking yields only a status code: everything it allocates
     // is freed with its arena.
     Int _tc_in = resid_bulk_push();
-    Int tc  =  ck_check_program(rsrc, 0, ssg);
+    Int tc  =  check_program_map(rsrc, 0, ssg, if (grflag) { "" } else { rr.map });
     Int _tc_out = resid_bulk_pop();
     if (tc != 0) { return tc; }
     // `--profile check` (spec §35): type checking only, no binary. The
