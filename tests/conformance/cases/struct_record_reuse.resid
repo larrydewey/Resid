@@ -1,0 +1,65 @@
+// Record reuse (lo_ret_reuse in lower.resid): a returned struct literal
+// may take over the record of a dead field-wise linear variable of its
+// type. Every line checks that a record still reachable elsewhere keeps
+// its fields.
+type P = { Int x; Int y; Str tag; };
+type W = { P p; Int k; };
+
+P bump(P a) { return P {.x = a.x + 1, .y = a.y, .tag = a.tag}; }
+P swap(P a) { return P {.x = a.y, .y = a.x, .tag = a.tag + "s"}; }
+
+// Hands `a` on whole, then reads a field: the read must see the old record.
+Int after(P a) {
+    P b = bump(a);
+    return a.x * 100 + b.x;
+}
+
+// A field read after the call in the same argument list.
+Int args(P a) { return pair(bump(a), a.x); }
+Int pair(P b, Int old) { return b.x * 100 + old; }
+
+// Borrowed then rebuilt.
+Int sum(P a) { return a.x + a.y; }
+P borrow_then(P a) {
+    Int s = sum(a);
+    return P {.x = s, .y = a.y, .tag = a.tag};
+}
+
+P pick(P a, P b, Bool first) {
+    if (first) {
+        return P {.x = a.x, .y = b.y, .tag = "a"};
+    }
+    return P {.x = b.x, .y = a.y, .tag = "b"};
+}
+
+P loop(Int i, Int n, P a) {
+    if (i >= n) { return a; }
+    return loop(i + 1, n, bump(swap(a)));
+}
+
+P mk(Int x) { return P {.x = x, .y = x * 2, .tag = "m"}; }
+
+Int main() {
+    P a = mk(1);
+    P b = bump(a);
+    P c = bump(a);
+    println(f"{a.x} {b.x} {c.x}");
+    println(f"after {after(a)} {a.x}");
+    println(f"args {args(a)} {a.x}");
+    P d = borrow_then(a);
+    println(f"borrow {d.x} {a.x}");
+    P e = pick(a, b, true);
+    P f = pick(a, b, false);
+    println(f"pick {e.x} {e.y} {f.x} {f.y} {a.x} {a.y} {b.x} {b.y}");
+    W w = W {.p = mk(5), .k = 1};
+    P g = bump(w.p);
+    println(f"nested {w.p.x} {g.x}");
+    List(P) ls = [mk(7)];
+    P h = bump(ls[0]);
+    println(f"list {ls[0].x} {h.x}");
+    P l = loop(0, 5, mk(3));
+    println(f"loop {l.x} {l.y} {l.tag}");
+    P m = loop(0, 4, a);
+    println(f"loop2 {m.x} {m.y} {a.x} {a.y} {a.tag}");
+    return 0;
+}

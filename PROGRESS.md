@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  162, reduce 14, provenance 20, graph 391. The archived Rust workspace
+  163, reduce 14, provenance 20, graph 392. The archived Rust workspace
   (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
   821 tests; its e2e now has 128 after removing tests of the retired text
   paths); see `AGENTS.md` for its slow-test table.

@@ -436,6 +436,34 @@ void resid_gfree(void* p) {
     free(p);
 }
 
+/* Struct records. Each carries a header word before its fields: a tag
+ * (REC_TAG << 32), its size in bytes << 1, and a UNIQUE bit, set when the
+ * compiler's ownership analysis proved the record referred to from one
+ * place only (the literal starts an ownership chain) and cleared when it
+ * leaves one (resid_rec_share). A returned literal may then take over a
+ * dead variable's unique record instead of allocating (resid_rec_reuse).
+ * A struct stored inline in a sum value has no header; the tag keeps these
+ * from ever being read as unique or written. */
+#define REC_TAG 0x5245C0DEULL
+
+void* resid_rec_new(int64_t size, int8_t unique) {
+    uint64_t* h = (uint64_t*)resid_gmalloc(size + 8);
+    h[0] = (REC_TAG << 32) | ((uint64_t)size << 1) | (uint64_t)(unique != 0);
+    return h + 1;
+}
+
+void* resid_rec_reuse(void* old, int64_t size) {
+    uint64_t* h = (uint64_t*)old - 1;
+    if (*h == ((REC_TAG << 32) | ((uint64_t)size << 1) | 1)) return old;
+    return resid_rec_new(size, 1);
+}
+
+void resid_rec_share(void* rec) {
+    uint64_t* h = (uint64_t*)rec - 1;
+    uint64_t v = *h;
+    if ((v >> 32) == REC_TAG && (v & 1)) *h = v & ~(uint64_t)1;
+}
+
 /* The one indirection point for allocation sites with no matching
  * free() (see safety note 1). NULL current arena => real malloc, i.e.
  * unchanged behavior everywhere outside an explicit arena scope. */
