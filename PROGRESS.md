@@ -9,20 +9,14 @@
 
 ## 0. Current Snapshot
 
-**821 tests pass** (lexer 17, parser 122, resid-ir 59, resid-type 260,
-  resid-codegen 137, resid-build 47, resid-fmt 5,
-  resid-cache 17, resid-notes 3, resid-why 8, resid-lsp 1,
-  resid-lsp-notes 6,
-  resid-graph 4, resid-builtin 0, resid-diag 6, residc 0 unit + 131 e2e).
-  All 131 `residc` e2e tests green (`bootstrap_map_set_parity` was found
-  regressed and fixed same day — see §0a). Full workspace suite ≈ 85 minutes
-  wall-clock (`cargo nextest run --workspace`) as of the last full-workspace
-  timing; see `AGENTS.md` for the per-test slow-test timing table (31 tests
-  ≥60s, dominated by live-network TLS/HTTP and wide-EC crypto property
-  tests). The `residc` e2e suite specifically (131 tests, the largest single
-  component of that 85 minutes) now runs in ≈16.5 minutes stand-alone
-  (`cargo test -p residc --test e2e`) after the self-compile performance fix
-  in §0a — the full-workspace figure above has not been re-measured since.
+**Self-hosted, graph-only compiler.** `./boot.sh` reaches a byte-identical
+  self-compile fixed point from the committed seed with no Rust. The
+  pipeline is parse → resolve → check → reduce → lower on the knowledge
+  graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
+  156, reduce 14, provenance 20, graph 380. The archived Rust workspace
+  (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
+  821 tests; its e2e now has 128 after removing tests of the retired text
+  paths); see `AGENTS.md` for its slow-test table.
 
 ### 0a. Self-compile performance fix (2026-09-19): ~3h -> ~101s
 
@@ -311,6 +305,30 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 619MB (606MB without facts). The artifact carries a RESIDUAL node's range
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
+
+### 0y. Text passes retired: the compiler runs on the graph (G7, 2026-09-26)
+
+The driver always checks, reduces and lowers on the knowledge graph. The
+text checker, text reducer, text codegen path, `gr_*` graph-reduce pass
+and notes line scan are gone, with their flags (`--text-check`,
+`--text-reduce`, `--text-lower`, `--graph-reduce-check`,
+`--graph-sigs-check`, `--bootstrap-graph-reduce`). A reachability sweep
+from the driver's `main` pruned about 10,500 lines that only those paths
+used (codegen.resid 9.1K to 4.6K lines, typecheck.resid 7.3K to 3.2K,
+reduce.resid 2.7K to 0.9K; the generated driver.resid 16.5K to 7.6K), and
+`examples/stracc.resid` folded into greduce. After parsing, no pass reads
+the source except for diagnostic text and line mapping: the reducer takes
+pattern and `with` headers from printed nodes, `known`/`comptime_print`
+from call nodes and the specialization gain from node token counts, and
+a sandbox node carries its body position for lowering's symbol
+numbering. The reducer also dropped two guards that only mirrored text
+parsing hazards (a `?` the text reducer read as a conditional, comments
+inside a string-accumulator argument). IR is byte-identical on all 157
+in-repo programs that compile. Self-compile: about 2s, 423MB peak
+release (was 624MB) and 506MB debug (was 749MB), because the driver no
+longer builds the text pipeline's signature tables. Archived Rust e2e
+tests that ran the standalone text checker and codegen or
+`--bootstrap-graph-reduce` were removed.
 
 ### 0x. `resid-debug` and a DWARF reader (G6, 2026-09-26)
 
