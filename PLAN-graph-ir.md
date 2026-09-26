@@ -125,6 +125,11 @@ are imported the same way `reduce.resid` is.
   - Then migrate hand-threaded builder code and retire `examples/stracc.resid`'s
     pattern matching.
 - [ ] G3 Reduction on the graph.
+  - [x] `examples/greduce.resid` reduces the graph, mirroring
+    `reduce.resid`; `--graph-reduce-check` token-matches its printed
+    residual against the text reducer on every program.
+  - Next: lower from the residual graph (no reparse), port `stracc` to the
+    graph, then record derive edges and reasons.
   - Port fold, beta, eval, specialize, generalize, dead-arm and elide from
     `reduce.resid`, recording derive edges and reasons.
   - Facts: range and nonzero first (overflow and div0 discharge), then

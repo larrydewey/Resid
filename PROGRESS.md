@@ -245,6 +245,19 @@ the test harnesses create a throwaway key when none is configured.
 `tests/provenance/run.sh` covers tamper detection, keys, concealment and
 reproducibility. Self-compile time is unchanged.
 
+### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
+
+`examples/greduce.resid` reduces the parsed graph instead of source text.
+It makes the text reducer's decisions (folding, known bindings, dead arms,
+β-reduction, specialization with the whistle, budgets, notes) and builds
+the residual program as new nodes appended to the graph. Unchanged subtrees
+are shared, and new nodes keep the span of the node they replace.
+`--graph-reduce-check` compares the printed residual graph with
+`rd_reduce_program`'s text token for token. All 177 in-repo programs that
+type-check match, the self-compile included; `tests/graph/run.sh` runs the
+check. While β-reducing, no residual nodes are built (they are never used);
+building them had pushed a deep evaluation past the memory budget.
+
 ### 0p. Lowering from the knowledge graph (G4, 2026-09-26)
 
 `examples/lower.resid` replaced the text codegen's walkers: every function

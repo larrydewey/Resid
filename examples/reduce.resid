@@ -59,16 +59,16 @@ type RdP = { List(Str) pns; List(Str) pts; Bool ok; Int pos; };
 // recurses natively, ~16 KiB of stack per level, on the 1 GiB stack
 // resid_run_main gives the compiler). rd_max_fuel bounds the whole
 // program.
-Int rd_max_steps() { return 200000; }
-Int rd_max_depth() { return 20000; }
-Int rd_max_fuel() { return 20000000; }
+pub Int rd_max_steps() { return 200000; }
+pub Int rd_max_depth() { return 20000; }
+pub Int rd_max_fuel() { return 20000000; }
 Int rd_max_lit() { return 4096; }
 // Bytes the whole reduction may request (runtime allocation counter; see
 // resid_mem_mark). Evaluating something heavy at compile time — a
 // signature over a constant message, say — must fall back to the
 // residual call, not exhaust memory. Normal programs use well under a
 // quarter of this (the compiler's own source: ~100MB).
-Int rd_max_mem() { return 536870912; }
+pub Int rd_max_mem() { return 536870912; }
 
 // ─── Small helpers ──────────────────────────────────────────────
 
@@ -102,7 +102,7 @@ Bool rd_is_close(Str t) {
 }
 
 // Position after the bracket closing a group whose opener ends at `pos`.
-Int rd_skip_group(Str s, Int pos, Int depth) {
+pub Int rd_skip_group(Str s, Int pos, Int depth) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return t.pos; }
     if (rd_is_open(t.text)) {
@@ -147,12 +147,12 @@ Bool rd_uses_at(Str text, Str name, Int pos) {
     return rd_uses_at(text, name, t.pos);
 }
 
-Bool rd_uses(Str text, Str name) {
+pub Bool rd_uses(Str text, Str name) {
     if (!str_contains(text, name)) { return false; }
     return rd_uses_at(text, name, 0);
 }
 
-Str rd_join(List(Str) xs, Int i, Str sep, Str acc) {
+pub Str rd_join(List(Str) xs, Int i, Str sep, Str acc) {
     if (i >= xs.len()) { return acc; }
     Str a2 = if (i == 0) { xs[i] } else { acc + sep + xs[i] };
     Int ni = i + 1;
@@ -161,7 +161,7 @@ Str rd_join(List(Str) xs, Int i, Str sep, Str acc) {
 
 // ─── Values and types ───────────────────────────────────────────
 
-Str rd_norm_ty(Str t) {
+pub Str rd_norm_ty(Str t) {
     if (t == "Int(64)") { return "Int"; }
     if (!str_contains(t, "(")) { return t; }
     return str_replace(t, "Int(64)", "Int");
@@ -177,7 +177,7 @@ Bool rd_ty_ok(Str t) {
 
 // Signed integer types the evaluator carries. Values are always within
 // the 64-bit range; the type records the generator's width for them.
-Bool rd_is_int_ty(Str t) {
+pub Bool rd_is_int_ty(Str t) {
     if (t == "Int") { return true; }
     if (t == "Int(128)") { return true; }
     if (t == "Int(256)") { return true; }
@@ -198,7 +198,7 @@ Str rd_ity(Int w) {
 }
 
 // Inner type of "Head(T)" ("" when `t` is not that constructor).
-Str rd_inner(Str t, Str head) {
+pub Str rd_inner(Str t, Str head) {
     if (!str_starts_with(t, head)) { return ""; }
     Int h = str_len(head);
     Int n = str_len(t);
@@ -210,7 +210,7 @@ Str rd_inner(Str t, Str head) {
 // (binding, parameter, return). "" when the value cannot be carried.
 // Composite values are built only by the evaluator itself, so their type
 // strings are exact; an empty list / None literal adopts the slot's type.
-Str rd_coerce(Str have, Str want) {
+pub Str rd_coerce(Str have, Str want) {
     Str h = rd_norm_ty(have);
     Str w = rd_norm_ty(want);
     if (h == "" || w == "") { return ""; }
@@ -234,7 +234,7 @@ Str rd_enc_at(List(Str) items, Int i, Str sb) {
     return rd_enc_at(items, k, sb3);
 }
 
-Str rd_enc(List(Str) items) {
+pub Str rd_enc(List(Str) items) {
     if (items.len() == 0) { return ""; }
     return rd_enc_at(items, 0, str_sb_new());
 }
@@ -249,16 +249,16 @@ List(Str) rd_dec_at(Str v, Int pos, Int n, List(Str) acc) {
     return rd_dec_at(v, en, n, acc2);
 }
 
-List(Str) rd_dec(Str v) {
+pub List(Str) rd_dec(Str v) {
     List(Str) none = [];
     return rd_dec_at(v, 0, str_len(v), none);
 }
 
-Int rd_atoi(Str v) {
+pub Int rd_atoi(Str v) {
     return str_parse_int(v);
 }
 
-Str rd_itoa(Int v) {
+pub Str rd_itoa(Int v) {
     // Concatenation copies the digits to the heap; compilers built before
     // the IntToString fix in codegen.resid return a pointer into the
     // callee's stack frame otherwise. INT64_MIN is spelled out for the same
@@ -274,14 +274,14 @@ Int rd_i64_max() {
     return t + 7;
 }
 
-Int rd_i64_min() {
+pub Int rd_i64_min() {
     Int big = 922337203685477580;
     Int t = (Int)(big * 10);
     Int n = 0 - t;
     return n - 8;
 }
 
-Bool rd_all_digits(Str t, Int i, Int n) {
+pub Bool rd_all_digits(Str t, Int i, Int n) {
     if (i >= n) { return true; }
     Int c = str_char_at(t, i);
     if (c < 48) { return false; }
@@ -291,7 +291,7 @@ Bool rd_all_digits(Str t, Int i, Int n) {
 }
 
 // a <= b for two digit strings of equal length.
-Bool rd_digits_le(Str a, Str b, Int i, Int n) {
+pub Bool rd_digits_le(Str a, Str b, Int i, Int n) {
     if (i >= n) { return true; }
     Int ca = str_char_at(a, i);
     Int cb = str_char_at(b, i);
@@ -341,7 +341,7 @@ RdSd rd_str_dec_at(Str t, Int i, Int n, Str sb) {
     return rd_str_dec_at(t, k3, n, sb3);
 }
 
-RdSd rd_str_dec(Str tok) {
+pub RdSd rd_str_dec(Str tok) {
     Int n = str_len(tok);
     Int e = n - 1;
     return rd_str_dec_at(tok, 1, e, str_sb_new());
@@ -389,7 +389,7 @@ Str rd_render_int(Str v) {
 
 // Source text of a known value with exactly its code-generator type, or ""
 // when it has no literal form.
-Str rd_render(Str v, Str ty) {
+pub Str rd_render(Str v, Str ty) {
     Str t = rd_norm_ty(ty);
     if (t == "Bool") { return v; }
     if (t == "Int") { return rd_render_int(v); }
@@ -465,11 +465,11 @@ RdR rd_rbad(Int pos, RdS st) {
 
 // ─── Environment ────────────────────────────────────────────────
 
-RdE rd_env_empty() {
+pub RdE rd_env_empty() {
     return RdE {.ns = [], .vs = [], .ts = []};
 }
 
-RdE rd_env_add(RdE e, Str name, Str v, Str ty) {
+pub RdE rd_env_add(RdE e, Str name, Str v, Str ty) {
     List(Str) n1 = e.ns;
     List(Str) v1 = e.vs;
     List(Str) t1 = e.ts;
@@ -484,7 +484,7 @@ Int rd_env_find(RdE e, Str name, Int i) {
     return rd_env_find(e, name, k);
 }
 
-Int rd_env_idx(RdE e, Str name) {
+pub Int rd_env_idx(RdE e, Str name) {
     Int n = e.ns.len();
     Int last = n - 1;
     return rd_env_find(e, name, last);
@@ -593,7 +593,7 @@ Str rd_bool(Bool b) {
     return "false";
 }
 
-RdV rd_fold(Str op, RdV l, RdV r, Str orig, Int pos, RdS st) {
+pub RdV rd_fold(Str op, RdV l, RdV r, Str orig, Int pos, RdS st) {
     Str lt = rd_norm_ty(l.ty);
     Str rt = rd_norm_ty(r.ty);
     if (lt == "Str" && rt == "Str") {
@@ -625,7 +625,7 @@ RdV rd_fold(Str op, RdV l, RdV r, Str orig, Int pos, RdS st) {
 }
 
 // Spec §30 precedence (higher binds tighter).
-Int rd_prec(Str op) {
+pub Int rd_prec(Str op) {
     if (op == "*") { return 12; }
     if (op == "/") { return 12; }
     if (op == "%") { return 12; }
@@ -920,7 +920,7 @@ RdV rd_cast(Str s, Int pos, Int cpos, Str ty, RdV inner) {
     return rd_unk(orig, inner.ch, inner.pos, inner.st);
 }
 
-Bool rd_same_tys(List(Str) ts, Str t0, Int i) {
+pub Bool rd_same_tys(List(Str) ts, Str t0, Int i) {
     if (i >= ts.len()) { return true; }
     if (rd_norm_ty(ts[i]) != t0) { return false; }
     Int k = i + 1;
@@ -1105,14 +1105,14 @@ Str rd_fst_text(RdV v) {
 }
 
 // Literal f-string text cannot spell `{` or `}` (they open holes).
-Bool rd_fst_inlinable(Str txt) {
+pub Bool rd_fst_inlinable(Str txt) {
     if (str_contains(txt, "{")) { return false; }
     if (str_contains(txt, "}")) { return false; }
     Int n = str_len(txt);
     return rd_str_renderable_at(txt, 0, n);
 }
 
-Str rd_fst_escape(Str txt) {
+pub Str rd_fst_escape(Str txt) {
     return rd_str_enc_at(txt, 0, str_len(txt), str_sb_new());
 }
 
@@ -1243,7 +1243,7 @@ RdV rd_struct_lit(Str s, Int pos, Tok t, Tok ob, RdE env, RdT ft, RdS st) {
 
 // Field values in declaration order; stops short (shorter list) when a
 // declared field is missing or its value's type does not fit.
-List(Str) rd_field_order(List(Str) dfs, List(Str) nvs, List(Str) nts, Int i, List(Str) acc) {
+pub List(Str) rd_field_order(List(Str) dfs, List(Str) nvs, List(Str) nts, Int i, List(Str) acc) {
     if (i >= dfs.len()) { return acc; }
     Str d = dfs[i];
     Int sep = str_find_char(d, 30, 0);
@@ -1261,7 +1261,7 @@ List(Str) rd_field_order(List(Str) dfs, List(Str) nvs, List(Str) nts, Int i, Lis
     return rd_field_order(dfs, nvs, nts, k, acc.concat([val]));
 }
 
-Int rd_find_named(List(Str) nvs, Str name, Int i) {
+pub Int rd_find_named(List(Str) nvs, Str name, Int i) {
     if (i >= nvs.len()) { return -1; }
     if (str_starts_with(nvs[i], name + str_from_code(30))) { return i; }
     Int k = i + 1;
@@ -1456,7 +1456,7 @@ Bool rd_args_are_at(List(Str) ts, List(Str) want, Int i) {
     return rd_args_are_at(ts, want, k);
 }
 
-RdV rd_builtin(Str name, RdA a, Str orig, Int pos, RdS st) {
+pub RdV rd_builtin(Str name, RdA a, Str orig, Int pos, RdS st) {
     List(Str) v = a.vs;
     RdV none = rd_unk(orig, a.ch, pos, st);
     if (name == "str_len") {
@@ -1566,7 +1566,7 @@ RdV rd_builtin(Str name, RdA a, Str orig, Int pos, RdS st) {
 
 // ─── β-reduction of user functions ──────────────────────────────
 
-Str rd_memo_key(Str name, RdA a) {
+pub Str rd_memo_key(Str name, RdA a) {
     List(Str) ts = a.ts;
     List(Str) vs = a.vs;
     Str sep = str_from_code(1);
@@ -1586,7 +1586,7 @@ RdS rd_st_memo(RdS st, Str key, Str val) {
 }
 
 // Bind parameters to known arguments; "" names mark an unusable call.
-RdE rd_bind_params(List(Str) pns, List(Str) pts, RdA a, Int i, RdE env) {
+pub RdE rd_bind_params(List(Str) pns, List(Str) pts, RdA a, Int i, RdE env) {
     List(Str) ts = a.ts;
     List(Str) vs = a.vs;
     if (i >= pns.len()) { return env; }
@@ -1655,8 +1655,8 @@ RdV rd_call_user(Str s, Int fi, RdA a, Str orig, RdT ft) {
 // A residual call f(k, x) with k known becomes f__rsN(x), where f__rsN is
 // f's body reduced with k bound; it is kept only when that shrinks the body.
 
-Int rd_max_specs() { return 400; }
-Int rd_max_specs_per_fn() { return 8; }
+pub Int rd_max_specs() { return 400; }
+pub Int rd_max_specs_per_fn() { return 8; }
 
 // Pattern of a call: which arguments are specialized, their values, and
 // the pieces needed to emit the specialized function and call.
@@ -1714,7 +1714,7 @@ Bool rd_embeds_all(List(Str) ts, List(Str) avs, List(Str) bvs, Int i) {
 
 // Keep mask for generalizing `p` against ancestor values `avs`: a position
 // stays known only when its value is unchanged.
-Str rd_sp_keep(Str mask, List(Str) kvs, List(Str) avs, Int i, Int k, Str acc) {
+pub Str rd_sp_keep(Str mask, List(Str) kvs, List(Str) avs, Int i, Int k, Str acc) {
     if (i >= str_len(mask)) { return acc; }
     if (str_slice(mask, i, i + 1) == "D") { return rd_sp_keep(mask, kvs, avs, i + 1, k, acc + "D"); }
     Str m = if (kvs[k] == avs[k]) { "K" } else { "D" };
@@ -1723,7 +1723,7 @@ Str rd_sp_keep(Str mask, List(Str) kvs, List(Str) avs, Int i, Int k, Str acc) {
 
 // Most recent active specialization of `fname` with the same mask whose
 // values embed in `p`'s (the whistle), as its value list; [] when none.
-List(Str) rd_whistle(List(Str) hist, Str fname, RdSp p, Int i) {
+pub List(Str) rd_whistle(List(Str) hist, Str fname, RdSp p, Int i) {
     List(Str) none = [];
     if (i < 0) { return none; }
     Str sep = str_from_code(30);
@@ -1736,7 +1736,7 @@ List(Str) rd_whistle(List(Str) hist, Str fname, RdSp p, Int i) {
     return rd_whistle(hist, fname, p, i - 1);
 }
 
-Int rd_tok_count(Str t, Int pos, Int acc) {
+pub Int rd_tok_count(Str t, Int pos, Int acc) {
     Tok k = lex_tok(t, pos);
     if (k.kind == "eof") { return acc; }
     return rd_tok_count(t, k.pos, acc + 1);
@@ -1831,13 +1831,13 @@ RdSp rd_sp_empty() {
     return RdSp {.mask = "", .vals = "", .nk = 0, .kvs = [], .kts = [], .dargs = [], .dparams = [], .knames = [], .kbind = [], .env = rd_env_empty()};
 }
 
-Bool rd_list_has(List(Str) xs, Str x, Int i) {
+pub Bool rd_list_has(List(Str) xs, Str x, Int i) {
     if (i >= xs.len()) { return false; }
     if (xs[i] == x) { return true; }
     return rd_list_has(xs, x, i + 1);
 }
 
-List(Str) rd_split(Str csv, Str sep) {
+pub List(Str) rd_split(Str csv, Str sep) {
     List(Str) none = [];
     if (csv == "") { return none; }
     return str_split(csv, sep);
@@ -2220,7 +2220,7 @@ RdR rd_bind(Str s, Int pos, Str ty, Str name, Int eqpos, RdE env, RdT ft, RdS st
 }
 
 // Position of the first `=` at nesting depth 0 in [pos, end), or -1.
-Int rd_top_eq(Str s, Int pos, Int end, Int depth) {
+pub Int rd_top_eq(Str s, Int pos, Int end, Int depth) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof" || t.pos > end) { return -1; }
     if (depth == 0 && t.text == "=") { return t.pos; }
@@ -2230,7 +2230,7 @@ Int rd_top_eq(Str s, Int pos, Int end, Int depth) {
 }
 
 // Mark every lower-case identifier in a pattern [pos, end) unknown.
-RdE rd_pat_env(Str s, Int pos, Int end, RdE env) {
+pub RdE rd_pat_env(Str s, Int pos, Int end, RdE env) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof" || t.pos >= end) { return env; }
     Int c0 = if (t.kind == "ident") { str_char_at(t.text, 0) } else { 0 };
@@ -2430,7 +2430,7 @@ RdR rd_known_stmt(Str s, Int pos, Tok kp, RdE env, RdT ft, RdS st) {
 }
 
 // End (after `;`) of the statement starting at pos.
-Int rd_stmt_end(Str s, Int pos, Int depth) {
+pub Int rd_stmt_end(Str s, Int pos, Int depth) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return t.pos; }
     if (depth == 0 && t.text == ";") { return t.pos; }
