@@ -8758,6 +8758,14 @@ List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(
 }
 
 PG pg_func(Str s, Int pos, Funcs fs, PG g) {
+    PG r = pg_func_one(s, pos, fs, g);
+    if (r.err != "") { return r; }
+    return pg_next(s, r.pos, fs, r);
+}
+
+// One function at `pos`; the result's `pos` is the end of its body. The
+// graph lowering (examples/lower.resid) also calls this as its fallback.
+pub PG pg_func_one(Str s, Int pos, Funcs fs, PG g) {
     PRes rty = parse_type(s, pos);
     if (rty.err != "") { return PG {.pos = g.pos, .err = rty.err, .glines = g.glines, .hlines = g.hlines, .lines = g.lines, .tmp = g.tmp, .lbl = g.lbl}; }
     // Arena: this whole function's own codegen (parsing, GT/ST struct
@@ -8891,7 +8899,7 @@ PG pg_func(Str s, Int pos, Funcs fs, PG g) {
     // both sides.
     List(Str) final_lines = g.lines.concat(persisted_own_lines);
     List(Str) final_glines = g.glines.concat(persisted_own_glines);
-    return pg_next(s, end, fs, PG {.pos = end, .err = "", .glines = final_glines, .hlines = g.hlines, .lines = final_lines, .tmp = final_tmp, .lbl = final_lbl});
+    return PG {.pos = end, .err = "", .glines = final_glines, .hlines = g.hlines, .lines = final_lines, .tmp = final_tmp, .lbl = final_lbl};
 }
 
 PG pg_next(Str s, Int pos, Funcs fs, PG g) {
