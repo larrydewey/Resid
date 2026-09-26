@@ -132,6 +132,17 @@ are imported the same way `reduce.resid` is.
   - Exit criterion: `tests/reduce` passes, and the self-compile specializes
     at least as much as today.
 - [ ] G4 Lowering from the residual graph.
+  - [x] `examples/lower.resid` is the driver's lowering (`--text-lower`
+    keeps the text codegen for differential runs). It mirrors the text
+    codegen node for node, and every module of all 174 in-repo programs
+    (9,631 functions) is byte-identical to the text pipeline's. While
+    porting, a function with an unported construct fell back to the text
+    codegen at its span (`pg_func_one`); no function needs that now.
+  - [x] Fixed point with graph lowering as the default.
+  - Still text-derived: signature collection and leaf analysis
+    (`collect_sigs`), the linear map/set mask (`lin_mask_fn`) and
+    `ToString` of structs (synthesized source). These move to the graph
+    with G3's single shared graph.
   - Codegen walks residual roots.
   - Every instruction gets a DILocation keyed by node id. Residual bindings
     get dbg.value with their node id.

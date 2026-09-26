@@ -245,6 +245,15 @@ the test harnesses create a throwaway key when none is configured.
 `tests/provenance/run.sh` covers tamper detection, keys, concealment and
 reproducibility. Self-compile time is unchanged.
 
+### 0p. Lowering from the knowledge graph (G4, 2026-09-26)
+
+`examples/lower.resid` replaced the text codegen's walkers: every function
+of every in-repo program lowers from graph nodes, byte-identical to the
+text codegen (`--text-lower`), and the compiler reaches its fixed point with
+graph lowering as the default. It was ported with a per-function fallback
+to the text codegen, grown construct by construct against a byte-for-byte
+differential over all 174 programs.
+
 ### 0o. Self-compile peak memory 1470MB -> 411MB (2026-09-26)
 
 A DHAT profile of the self-compile showed signed provenance (commit
