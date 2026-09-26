@@ -2924,13 +2924,7 @@ ERes check_list_lit_rest(Str s, Int pos, Str elem, Int count, List(Str) env, Fun
         }
         return check_list_lit_rest(s, t.pos, elem2, count2, env, fs, exp);
     }
-    // No comma between elements: the Rust reference parser's list-literal
-    // loop (`parse_list_lit` in resid-parser) only consumes a comma when
-    // present — it never requires one, so `[a, b c, d]` and `[a, b, c, d]`
-    // parse identically there. Mirror that leniency instead of erroring,
-    // so both pipelines accept exactly the same programs (see e.g.
-    // examples/driver.resid's own `hdr_core` list, which has one such gap).
-    return check_list_lit_rest(s, e.pos, elem2, count2, env, fs, exp);
+    return ERes {.pos = e.pos, .ty = "", .err = "expected , or ] in list literal, found " + t.text};
 }
 
 ERes finish_list_lit(Int pos, Str elem, Int count, Str exp) {
@@ -4925,6 +4919,12 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
         return SRes {.pos = e.pos, .err = e.err, .env = env};
     }
     Tok semi = lex_tok(s, e.pos);
+    if (semi.text == "=") {
+        return SRes {.pos = e.pos, .err = "cannot assign: bindings are immutable and there are no assignment operators (spec §7, §30)", .env = env};
+    }
+    if (semi.text != ";") {
+        return SRes {.pos = e.pos, .err = "expected ; after expression statement, found " + semi.text, .env = env};
+    }
     return SRes {.pos = semi.pos, .err = "", .env = env};
 }
 

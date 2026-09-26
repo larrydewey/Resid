@@ -1,0 +1,4 @@
+Int main() {
+    List(Str) xs = ["a" "b"];
+    return 0;
+}
