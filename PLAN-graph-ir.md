@@ -177,8 +177,10 @@ are imported the same way `reduce.resid` is.
     values, provider calls and the reducer's budget / loop / whistle
     reasons, at their spans in any file; `--text-reduce` keeps the line
     scan. The scan's false hits (comments, strings, `import`) are gone.
-  - `resid why` queries by symbol, file:line or node, covering derive chains
-    and reasons.
+  - [x] `resid-why <artifact> --node ID | --at FILE:LINE` answers from the
+    graph artifact: kind, type, knowledge, value, reason, facts, effects,
+    def and the derive chain back to source.
+  - `resid why` by symbol over the graph (the artifact has no names yet).
   - `resid-graph` view and DOT output.
   - A conformance checker for the §3.4 invariants and lowered coverage.
 - [ ] G6 `resid debug`.
