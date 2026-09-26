@@ -12,7 +12,9 @@
 // is the reducer's residual, whose specialized functions share nodes with
 // their originals. dbg: emit DWARF locations, with df the file table.
 // rf: the function's range facts (lr_facts), computed when `facts`.
-type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; };
+// lo: the program's linear Map/Set parameters; lof: the function's
+// ownership flags by node (lo_fn_flags).
+type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; };
 
 Str lw_unsup(Str what) { return "unsupported: " + what; }
 Bool lw_is_unsup(Str err) { return str_starts_with(err, "unsupported"); }
@@ -234,7 +236,7 @@ GT lw_bexpr(LW w, Int id, Int i, List(Str) env, GT c) {
     GT cv = pick_widen(adoptable || fl_adopt, v, dn);
     Bool adopt = adoptable && cv.err == "";
     Str recty0 = pick_str(adopt, dn, pick_str(fl_adopt, dn, v.ty));
-    Str recty = if (dtyb != recty0 && ty_head_cg(dtyb) == ty_head_cg(recty0) && str_find_char(dtyb, 40, 0) >= 0) { dtyb } else { recty0 };
+    Str recty = lw_bind_ty(dtyb, recty0);
     Str ent2 = name + ":" + cv.val + ":" + recty;
     Str ent2f = pick_str(v.ty == "Option(_)" && str_has_prefix_cg(dtyb, "Option("), name + ":" + cv.val + ":" + dtyb, ent2);
     Bool res_ok_hole = str_has_prefix_cg(cv.ty, "Result(") && res_elem_ok_cg(cv.ty) == "_";
@@ -254,9 +256,10 @@ GT lw_ifx(LW w, Int id, List(Str) env, GT c) {
     GT cond = lw_expr(w, lw_kid(w, id, 0), env, c);
     if (cond.err != "") { return cond; }
     if (cond.ty != "Bool") { return gt_err("if condition must be Bool", cond); }
-    Int l3 = c.lbl + 3;
-    Str lt = "L" + IntToString(c.lbl + 1);
-    Str le = "L" + IntToString(c.lbl + 2);
+    // Labels after the condition's own (an `else` fallback there has some).
+    Int l3 = cond.lbl + 3;
+    Str lt = "L" + IntToString(cond.lbl + 1);
+    Str le = "L" + IntToString(cond.lbl + 2);
     Str ld = "L" + IntToString(l3);
     GT ct = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = cond.glines, .lines = cond.lines.concat(["br i1 " + cond.val + ", label %" + lt + ", label %" + le, lt + ":"]), .tmp = cond.tmp, .lbl = l3, .tail = false};
     GT tv = lw_arm(w, lw_kid(w, id, 1), env, ct);
@@ -675,7 +678,7 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
     if (m == "values") { return lw_rt1(base, "ptr", "@resid_map_values(ptr " + base.val + ")", "List(" + vt + ")"); }
     GT arg = lw_marg(w, id, 0, env, base);
     if (arg.err != "") { return arg; }
-    Bool m_owned = lin_owned(env, base.val);
+    Bool m_owned = lo_is(w, id, 1);
     if (m == "get") {
         if (lin_kk(kt) == 1) {
             GT kw = lin_word(src, arg, 1, env, fs);
@@ -739,7 +742,7 @@ GT lw_set_method(LW w, Int id, GT base, Str m, List(Str) env) {
     if (m == "len") { return lw_rt1(base, "i64", "@resid_set_len(ptr " + base.val + ")", "Int"); }
     if (m == "to_list") { return lw_rt1(base, "ptr", "@resid_set_to_list(ptr " + base.val + ")", "List(" + et + ")"); }
     Str set_et = lin_set_elem(base.ty);
-    Bool s_owned = lin_owned(env, base.val);
+    Bool s_owned = lo_is(w, id, 1);
     GT arg = lw_marg(w, id, 0, env, base);
     if (arg.err != "") { return arg; }
     if (m == "contains" && lin_kk(set_et) == 1) { return lw_rtb(arg, "@resid_map_has(ptr " + base.val + ", i8 1, i64 " + arg.val + ")"); }
@@ -1332,7 +1335,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
         Str rraw0 = fs.rets[idx];
         Int t1 = c.tmp + 1;
         Str reg = "%t" + IntToString(t1);
-        return GT {.pos = 0, .val = reg, .ty = rraw0, .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat([reg + " = call " + ll_ty(rraw0) + " @" + n + "()"]), .tmp = t1, .lbl = c.lbl, .tail = false};
+        return lo_freeze(w, id, GT {.pos = 0, .val = reg, .ty = rraw0, .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat([reg + " = call " + ll_ty(rraw0) + " @" + n + "()"]), .tmp = t1, .lbl = c.lbl, .tail = false});
     }
     Str ptstr = fs.pts[idx];
     List(Str) ptys = if (ptstr == "") { nil_list() } else { split_rest_depth(ptstr, ", ") };
@@ -1341,7 +1344,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     Str rraw = fs.rets[idx];
     Int t1 = a.tmp + 1;
     Str reg = "%t" + IntToString(t1);
-    return GT {.pos = 0, .val = reg, .ty = rraw, .cnt = a.cnt, .err = "", .glines = a.glines, .lines = a.lines.concat([reg + " = call " + ll_ty(rraw) + " @" + n + "(" + a.val + ")"]), .tmp = t1, .lbl = a.lbl, .tail = false};
+    return lo_freeze(w, id, GT {.pos = 0, .val = reg, .ty = rraw, .cnt = a.cnt, .err = "", .glines = a.glines, .lines = a.lines.concat([reg + " = call " + ll_ty(rraw) + " @" + n + "(" + a.val + ")"]), .tmp = t1, .lbl = a.lbl, .tail = false});
 }
 
 // cg_debug_builtin: known / rt_known / rt_assert / assert / todo / unimplemented.
@@ -1424,7 +1427,31 @@ GT lw_fn_call(LW w, Int id, Int from, Str cval, Str fnty, List(Str) env, GT c) {
     Str cr = "%t" + IntToString(a.tmp + 4);
     Str cal = "i64 " + envr;
     Str cal2 = if (a.val == "") { cal } else { cal + ", " + a.val };
-    return lw_step(a, cr, ret, a.lines.concat([fp0 + " = load i64, ptr " + cval, fp + " = inttoptr i64 " + fp0 + " to ptr", envr + " = ptrtoint ptr " + cval + " to i64", cr + " = call " + ll_ty(ret) + " " + fp + "(" + cal2 + ")"]), a.tmp + 4);
+    return lo_freeze(w, -1, lw_step(a, cr, ret, a.lines.concat([fp0 + " = load i64, ptr " + cval, fp + " = inttoptr i64 " + fp0 + " to ptr", envr + " = ptrtoint ptr " + cval + " to i64", cr + " = call " + ll_ty(ret) + " " + fp + "(" + cal2 + ")"]), a.tmp + 4));
+}
+
+// A Map/Set call result outside a consuming chain is frozen: a transient
+// table must stay reachable from one place only.
+GT lo_freeze(LW w, Int id, GT v) {
+    if (id >= 0 && lo_is(w, id, 1)) { return v; }
+    if (lin_is_mapset(v.ty)) {
+        Int t = v.tmp + 1;
+        Str r = "%t" + IntToString(t);
+        return GT {.pos = 0, .val = r, .ty = v.ty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = v.lines.concat([r + " = call ptr @resid_map_freeze(ptr " + v.val + ")"]), .tmp = t, .lbl = v.lbl, .tail = false};
+    }
+    List(Str) mfs = lo_mfs(w.lo, v.ty);
+    if (mfs.len() == 0) { return v; }
+    return lo_freeze_fields(w, v, mfs, 0, v);
+}
+
+// A struct result's Map/Set fields, frozen in place (the struct is new).
+GT lo_freeze_fields(LW w, GT v, List(Str) mfs, Int i, GT c) {
+    if (i >= mfs.len()) { return GT {.pos = 0, .val = v.val, .ty = v.ty, .cnt = v.cnt, .err = "", .glines = c.glines, .lines = c.lines, .tmp = c.tmp, .lbl = c.lbl, .tail = false}; }
+    GT f = lw_field_of(w, lw_step(c, v.val, v.ty, c.lines, c.tmp), mfs[i]);
+    if (f.err != "") { return f; }
+    Int t = f.tmp + 1;
+    Str r = "%t" + IntToString(t);
+    return lo_freeze_fields(w, v, mfs, i + 1, lw_step(f, r, "", f.lines.concat([r + " = call ptr @resid_map_freeze(ptr " + f.val + ")"]), t));
 }
 
 // cg_some_con / cg_ok_con / cg_err_con: a one-slot tagged box.
@@ -1508,6 +1535,15 @@ SW lw_scope_kids(LW w, Int id, Int i, SW acc) {
     return lw_scope_kids(w, id, i + 1, lw_scope_wants(w, lw_kid(w, id, i), acc));
 }
 
+// A binding's recorded type: the declared one when it refines the value's
+// (same head), or when the value is `{}`, typed Map(Unknown, Unknown)
+// until its binding says Map or Set.
+Str lw_bind_ty(Str dtyb, Str vty) {
+    if (vty == "Map(Unknown, Unknown)" && lin_is_mapset(dtyb)) { return dtyb; }
+    if (dtyb != vty && ty_head_cg(dtyb) == ty_head_cg(vty) && str_find_char(dtyb, 40, 0) >= 0) { return dtyb; }
+    return vty;
+}
+
 // sg_bind (the plain path).
 ST lw_bind(LW w, Int id, List(Str) env, ST g) {
     Int n = w.g.ns[id].nk;
@@ -1544,7 +1580,7 @@ ST lw_bind(LW w, Int id, List(Str) env, ST g) {
     Bool adopt = adoptable && cv.err == "";
     GT v2 = cv;
     Str recty0 = pick_str(adopt, dn, pick_str(fl_adopt, dn, v.ty));
-    Str recty = if (dtyb != recty0 && ty_head_cg(dtyb) == ty_head_cg(recty0) && str_find_char(dtyb, 40, 0) >= 0) { dtyb } else { recty0 };
+    Str recty = lw_bind_ty(dtyb, recty0);
     Str ent2 = name + ":" + v2.val + ":" + recty;
     Bool opt_hole = v.ty == "Option(_)";
     Bool opt_expected = str_has_prefix_cg(dtyb, "Option(");
@@ -1576,12 +1612,7 @@ ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     Bool need_conv = (rw_int || rw_flt) && rwant != num_norm_cg(v.ty);
     GT v1 = pick_widen(need_conv, v, rwant);
     Str vty = pick_str(need_conv, rwant, v.ty);
-    Bool ret_lin = lin_owned(env, v1.val);
-    GT v1f = if (ret_lin) {
-        Int tz = v1.tmp + 1;
-        Str zr = "%t" + IntToString(tz);
-        GT {.pos = 0, .val = zr, .ty = v1.ty, .cnt = v1.cnt, .err = "", .glines = v1.glines, .lines = v1.lines.concat([zr + " = call ptr @resid_map_freeze(ptr " + v1.val + ")"]), .tmp = tz, .lbl = v1.lbl, .tail = false}
-    } else { v1 };
+    GT v1f = v1;
     Bool ret_is_growbuf = env_has_growbuf(env, v1f.val);
     GT v2 = if (ret_is_growbuf) {
         Int tg = v1.tmp + 1;
@@ -2067,25 +2098,24 @@ PG lw_fn(LW w0, Int d, PG g) {
     Int n = w0.g.ns[d].nk;
     Str rty = lw_text(w0, lw_kid(w0, d, 0));
     Int _arena_in = resid_arena_push();
-    LW w = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true} } else { w0 };
+    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof} } else { w0 };
     Str rbase = ct_base_of(fs.ctn, fs.ctb, rty);
-    Str name = lw_text(w, d);
+    Str name = lw_text(w1, d);
     Bool is_main = name == "main";
-    List(Str) tyl0 = lw_param_tys(w, d, 1, n - 1, ListBuf());
+    List(Str) tyl0 = lw_param_tys(w1, d, 1, n - 1, ListBuf());
     List(Str) tyl = ct_erase_list(fs, tyl0, 0, nil_list());
     Str pd = param_decl_at(tyl, 0, "");
     Str defline = if (is_main) { "define i32 @resid_user_main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + ll_ty(rbase) + " @" + name + "(" + pd + ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
-    List(Str) nl = lw_param_names(w, d, 1, n - 1, ListBuf());
+    List(Str) nl = lw_param_names(w1, d, 1, n - 1, ListBuf());
+    // Linear Map/Set ownership: the node flags the body's lowering reads.
+    LW w = LW {.g = w1.g, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lo_fn_flags(w1.g, d, w1.lo, fs)};
     List(Str) dl2 = [defline, "entry:"];
     Int fi = fn_index(fs, name);
     Str ceiling = if (fi >= 0) { fs.ceils[fi] } else { "" };
     Bool sandboxed = ceiling != "";
     List(Str) caps = if (sandboxed) { str_split(ceiling, ",") } else { nil_list() };
     CapPP pp1 = cap_maybe_prologue(sandboxed, caps, CapPP {.lines = dl2, .glines = nil_list(), .n = 0});
-    EnvBuild eb0 = build_env_with_growbuf(nl, tyl, fs.growable, name, pp1.lines, 0, nil_list());
-    // The linear map/set mask (lin_mask's rules, on the body's nodes).
-    Str lmask = if (is_main || !lin_any_mapset(tyl, 0)) { "" } else { lw_lin_mask(w, lw_kid(w, d, n - 1), nl, tyl, name) };
-    EnvBuild eb = EnvBuild {.lines = eb0.lines, .env = lin_env(lmask, eb0.env, 0)};
+    EnvBuild eb = build_env_with_growbuf(nl, tyl, fs.growable, name, pp1.lines, 0, nil_list());
     Int body_start = eb.lines.len();
     ST gb = ST {.pos = 0, .dead = false, .err = "", .env = eb.env, .glines = pp1.glines, .hlines = g.hlines, .lines = eb.lines, .tmp = g.tmp, .lbl = g.lbl, .rety = rbase};
     ST body = lw_block(w, lw_kid(w, d, n - 1), eb.env, is_main, gb);
@@ -2104,7 +2134,7 @@ PG lw_fn(LW w0, Int d, PG g) {
     Bool tco_ok = !is_main && !sandboxed && !growbuf_params;
     Str defpre = "define " + ll_ty(rbase) + " @" + name + "(";
     Str defpost = ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
-    List(Str) fn_lines = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, lmask) } else { pp1.lines.concat(pp2.lines) };
+    List(Str) fn_lines = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, "") } else { pp1.lines.concat(pp2.lines) };
     List(Str) own0 = fn_lines.concat(["}"]);
     LDG dg = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos, tyl) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
     Int final_tmp = body.tmp;
@@ -2241,27 +2271,50 @@ GT lw_struct_ts(LW w, GT v, Str fields, List(Str) env) {
     Str src = "\"" + v.ty + "(\"" + ts_fields_src(tmpn, fields, 0, "") + " + \")\"";
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl()};
     GT r = lw_expr(ws, e.id, env2, v);
     if (r.err != "") { return r; }
     return GT {.pos = 0, .val = r.val, .ty = "Str", .cnt = 0, .err = "", .glines = r.glines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .tail = false};
 }
 
-Str lw_lin_mask(LW w, Int body, List(Str) nl, List(Str) tyl, Str name) {
-    return lg_mask(w.g, body, nl, tyl, name, lg_closure(w.g, body), 0, "");
-}
+// ─── Linear ownership of Map/Set values ────────────────────────────
+// A Map/Set variable is linear when each mention is a read, or, on each
+// path, its one consuming use: a return, the binding of a linear local, or
+// the receiver or argument of the next consuming step (`insert`,
+// `remove`, a call whose parameter is linear, or a struct literal field).
+// Nothing reads a linear value after it is consumed, so its updates are
+// "owned": the first one takes a private transient table and later ones
+// update it in place (the runtime's resid_map_put). Calls outside such a
+// chain freeze their Map/Set results (and a struct result's Map/Set
+// fields), so a transient table is only ever reachable from one place.
+//
+// A struct variable with Map/Set fields is linear field-wise (each such
+// field, `s.m`, is read and then consumed at most once, and the struct
+// itself is only read from) or whole (its Map/Set fields are only read,
+// then the struct is consumed as a value). Its other fields are
+// immutable values, read at any time.
+//
+// Parameters are solved over the whole program: `lin` starts true and
+// only falls, `mut` (may update the parameter) starts false and only
+// rises, until neither changes. A call passing a linear value to a linear
+// parameter that is never updated and whose result holds no Map/Set only
+// borrows it (a read).
 
-// ─── Linear map/set accumulators on the graph (mirrors lin_mask) ────
-// The token scan's rules, per node: `p` may be read (index, slice,
-// get/contains/len/keys/values), be a tail self call's argument at its own
-// position (plain or `.insert`/`.remove`), or be returned.
-
-type LGS = { List(Int) appr; Int cons; Bool bad; };
+// Per function: parameter masks ('1' per position) and the return type;
+// sm: each struct type with Map/Set fields, to those fields' names.
+type LOP = { Map(Str, Str) lin; Map(Str, Str) mut; Map(Str, Str) ret; Map(Str, Str) sm; };
+// A tracked item: Map/Set variable `v` (f == "", !whole), its struct's
+// Map/Set field `v.f` (a path), or struct variable `v` whole. mfs: the
+// struct's Map/Set fields.
+type LV = { Str v; Str f; Bool whole; List(Str) mfs; };
+// One consuming expression: valid, updates, its chain's nodes, bare item.
+type LOC = { Bool ok; Bool mut; List(Int) ce; Bool bare; };
+// One item over statements; chain: linear locals it is bound into.
+type LOS = { Bool ok; Bool mut; List(Int) ce; List(Int) chain; };
 
 Bool lg_closure(Kg g, Int id) {
     Str k = g.ns[id].kind;
     if (k == "lambda" || k == "spawn") { return true; }
-    if (k == "fstr") { return false; }
     return lg_closure_kids(g, id, 0);
 }
 
@@ -2279,94 +2332,544 @@ Bool lg_text_has(Str s, Int pos, Str p) {
     return lg_text_has(s, t.pos, p);
 }
 
-// Whether a subtree prints identifier token `p` anywhere (f-strings are
-// one token, so their holes do not count).
-Bool lg_has(Kg g, Int id, Str p) {
-    Str k = g.ns[id].kind;
-    if (k == "fstr") { return false; }
-    if (k == "lit") { return false; }
-    Str t = g.ns[id].text;
-    Bool here = if (k == "ty") { lg_text_has(t, 0, p) } else { if (k == "arm" || k == "letpat" || k == "pat" || k == "bind" || k == "rbind" || k == "spawn") { t == p || lg_text_has(g.ns[id].aux, 0, p) } else { t == p } };
-    if (here) { return true; }
-    return lg_has_kids(g, id, 0, p);
+Map(Int, Int) lo_nofl() {
+    Map(Int, Int) f = {};
+    return f;
 }
 
-Bool lg_has_kids(Kg g, Int id, Int i, Str p) {
+Map(Str, Str) lo_nomap() {
+    Map(Str, Str) f = {};
+    return f;
+}
+
+LOS lo_empty() { return LOS {.ok = true, .mut = false, .ce = [], .chain = []}; }
+LOS lo_fail() { return LOS {.ok = false, .mut = false, .ce = [], .chain = []}; }
+LOC lo_cfail() { return LOC {.ok = false, .mut = false, .ce = [], .bare = false}; }
+LV lo_var(Str v) { return LV {.v = v, .f = "", .whole = false, .mfs = []}; }
+
+Bool lo_bit(Map(Str, Str) m, Str f, Int i) {
+    Str s = m.get(f) else { "" };
+    return i < str_len(s) && str_char_at(s, i) == 49;
+}
+
+Bool lo_read(Str m) { return m == "get" || m == "contains" || m == "len" || m == "keys" || m == "values" || m == "to_list"; }
+
+Bool lo_has_str(List(Str) xs, Str s, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == s) { return true; }
+    return lo_has_str(xs, s, i + 1);
+}
+
+// A Map/Set type, or a struct type with Map/Set fields.
+Bool lo_tracked(LOP P, Str ty) { return lin_is_mapset(ty) || P.sm.contains(strip_owned_cg(ty)); }
+Bool lo_tracked_ret(LOP P, Str f) { return lo_tracked(P, P.ret.get(f) else { "" }); }
+List(Str) lo_mfs(LOP P, Str ty) {
+    Str s = P.sm.get(strip_owned_cg(ty)) else { "" };
+    if (s == "") { return []; }
+    return str_split(s, ",");
+}
+
+Int lo_unparen(Kg g, Int id) {
+    Str k = g.ns[id].kind;
+    if (k == "paren" || k == "rt") { return lo_unparen(g, kg_kid(g, id, 0)); }
+    return id;
+}
+
+// How a node refers to item V by itself: 1, V's own reference; 2, a field
+// of V's struct that is no part of V; 3, a Map/Set field of struct V taken
+// whole (a mention that may be read); 0, none of these.
+Int lo_cls(Kg g, Int id, LV V) {
+    Str k = g.ns[id].kind;
+    if (k == "field" && g.ns[id].nk > 0) {
+        Int b = lo_unparen(g, kg_kid(g, id, 0));
+        if (g.ns[b].kind != "ref" || g.ns[b].text != V.v) { return 0; }
+        Str fl = g.ns[id].text;
+        if (V.whole) { return if (lo_has_str(V.mfs, fl, 0)) { 3 } else { 2 }; }
+        if (V.f != "" && fl == V.f) { return 1; }
+        return 2;
+    }
+    if (k == "ref" && g.ns[id].text == V.v && V.f == "") { return 1; }
+    return 0;
+}
+
+// A name written by this node itself (not by its kids).
+Bool lo_here(Kg g, Int id, Str v) {
+    Str k = g.ns[id].kind;
+    Str t = g.ns[id].text;
+    if (k == "field" || k == "mcall" || k == "finit" || k == "lit" || k == "fpart" || k == "fspec") { return false; }
+    if (k == "ty") { return str_contains(t, v) && lg_text_has(t, 0, v); }
+    if (k == "arm" || k == "letpat" || k == "pat" || k == "bind" || k == "rbind" || k == "spawn") {
+        Str aux = g.ns[id].aux;
+        return t == v || (str_contains(aux, v) && lg_text_has(aux, 0, v));
+    }
+    return t == v;
+}
+
+// Whether a subtree mentions item V (f-string holes included).
+Bool lo_has(Kg g, Int id, LV V) {
+    Int c = lo_cls(g, id, V);
+    if (c == 1 || c == 3) { return true; }
+    if (c == 2) { return false; }
+    if (lo_here(g, id, V.v)) { return true; }
+    return lo_has_kids(g, id, 0, V);
+}
+
+Bool lo_has_kids(Kg g, Int id, Int i, LV V) {
     if (i >= g.ns[id].nk) { return false; }
-    if (lg_has(g, kg_kid(g, id, i), p)) { return true; }
-    return lg_has_kids(g, id, i + 1, p);
+    if (lo_has(g, kg_kid(g, id, i), V)) { return true; }
+    return lo_has_kids(g, id, i + 1, V);
 }
 
-Bool lg_is_p(Kg g, Int id, Str p) { return g.ns[id].kind == "ref" && g.ns[id].text == p; }
-
-// One tail self call's arguments.
-LGS lg_args(Kg g, Int c, Str p, Int pidx, Int i, LGS acc) {
-    if (i >= g.ns[c].nk) { return acc; }
-    Int a = kg_kid(g, c, i);
-    if (i != pidx) {
-        LGS nx = if (lg_has(g, a, p)) { LGS {.appr = acc.appr, .cons = acc.cons, .bad = true} } else { acc };
-        return lg_args(g, c, p, pidx, i + 1, nx);
-    }
-    Str m = g.ns[a].text;
-    Bool upd = g.ns[a].kind == "mcall" && (m == "insert" || m == "remove") && lg_is_p(g, kg_kid(g, a, 0), p);
-    if (lg_is_p(g, a, p)) { return lg_args(g, c, p, pidx, i + 1, LGS {.appr = acc.appr.concat([a]), .cons = acc.cons, .bad = acc.bad}); }
-    if (upd) { return lg_args(g, c, p, pidx, i + 1, LGS {.appr = acc.appr.concat([kg_kid(g, a, 0)]), .cons = acc.cons + 1, .bad = acc.bad}); }
-    return lg_args(g, c, p, pidx, i + 1, acc);
+Bool lo_has_from(Kg g, Int blk, Int i, LV V) {
+    if (i >= g.ns[blk].nk) { return false; }
+    if (lo_has(g, kg_kid(g, blk, i), V)) { return true; }
+    return lo_has_from(g, blk, i + 1, V);
 }
 
-LGS lg_tails(Kg g, Int id, Str p, Str fname, Int pidx, LGS acc) {
+Bool lo_isv(Kg g, Int id, LV V) { return lo_cls(g, lo_unparen(g, id), V) == 1; }
+
+// A reference whose Map/Set can be read here: V's own (not a whole
+// struct), or a whole struct's Map/Set field.
+Bool lo_readable(Kg g, Int id, LV V) {
+    Int c = lo_cls(g, lo_unparen(g, id), V);
+    return (c == 1 && !V.whole) || c == 3;
+}
+
+// An argument a borrowing call may read: V's own reference, a whole
+// struct's Map/Set field, or the struct holding path V.
+Bool lo_argref(Kg g, Int id, LV V) {
+    Int u = lo_unparen(g, id);
+    Int c = lo_cls(g, u, V);
+    if (c == 1 || c == 3) { return true; }
+    return V.f != "" && g.ns[u].kind == "ref" && g.ns[u].text == V.v;
+}
+
+// A call only borrows its argument `i`.
+Bool lo_borrow(LOP P, Str f, Int i) { return lo_bit(P.lin, f, i) && !lo_bit(P.mut, f, i) && !lo_tracked_ret(P, f); }
+
+// Every mention of item V in the subtree is a read.
+Bool lo_rd(Kg g, Int id, LV V, LOP P) {
     Str k = g.ns[id].kind;
-    if (k == "fstr") { return acc; }
-    if (k == "ret" && g.ns[id].nk == 1) {
-        Int c = kg_kid(g, id, 0);
-        if (g.ns[c].kind == "call" && g.ns[c].text == fname) { return lg_args(g, c, p, pidx, 0, acc); }
-    }
-    return lg_tails_kids(g, id, 0, p, fname, pidx, acc);
-}
-
-LGS lg_tails_kids(Kg g, Int id, Int i, Str p, Str fname, Int pidx, LGS acc) {
-    if (i >= g.ns[id].nk) { return acc; }
-    return lg_tails_kids(g, id, i + 1, p, fname, pidx, lg_tails(g, kg_kid(g, id, i), p, fname, pidx, acc));
-}
-
-Bool lg_read(Str m) { return m == "get" || m == "contains" || m == "len" || m == "keys" || m == "values"; }
-
-// Every `p` token not after a `.` is a read, approved, or `return p;`.
-Bool lg_occ(Kg g, Int id, Int par, Int ki, Str p, List(Int) appr) {
-    Str k = g.ns[id].kind;
-    if (k == "fstr" || k == "lit") { return true; }
+    if (k == "lit" || k == "fpart" || k == "fspec") { return true; }
+    Int c = lo_cls(g, id, V);
+    if (c == 2) { return true; }
+    if (c == 1 || c == 3) { return false; }
     Str t = g.ns[id].text;
-    if (k == "ref" || k == "name" || k == "lparam") {
-        if (t != p) { return true; }
-        if (k == "ref" && lin_has_int(appr, id, 0)) { return true; }
-        Str pk = if (par >= 0) { g.ns[par].kind } else { "" };
-        if ((pk == "index" || pk == "slice") && ki == 0) { return true; }
-        if ((pk == "mcall" || pk == "field") && ki == 0 && lg_read(g.ns[par].text)) { return true; }
-        return pk == "ret";
+    if (k == "ref" || k == "name" || k == "lparam") { return t != V.v; }
+    if (g.ns[id].nk > 0) {
+        Bool on_v = lo_readable(g, kg_kid(g, id, 0), V);
+        if (on_v && (k == "mcall" || k == "field") && lo_read(t)) { return lo_rd_kids(g, id, 1, V, P); }
+        if (on_v && (k == "index" || k == "slice")) { return lo_rd_kids(g, id, 1, V, P); }
     }
-    Bool dotted = k == "field" || k == "mcall" || k == "finit";
-    Bool here = if (dotted) { false } else { if (k == "ty") { lg_text_has(t, 0, p) } else { if (k == "arm" || k == "letpat" || k == "pat" || k == "bind" || k == "rbind" || k == "spawn") { t == p || lg_text_has(g.ns[id].aux, 0, p) } else { t == p } } };
-    if (here) { return false; }
-    return lg_occ_kids(g, id, 0, p, appr);
+    if (k == "call" && P.lin.contains(t)) { return lo_rd_call(g, id, 0, V, P); }
+    if (lo_here(g, id, V.v)) { return false; }
+    return lo_rd_kids(g, id, 0, V, P);
 }
 
-Bool lg_occ_kids(Kg g, Int id, Int i, Str p, List(Int) appr) {
+Bool lo_rd_kids(Kg g, Int id, Int i, LV V, LOP P) {
     if (i >= g.ns[id].nk) { return true; }
-    if (!lg_occ(g, kg_kid(g, id, i), id, i, p, appr)) { return false; }
-    return lg_occ_kids(g, id, i + 1, p, appr);
+    if (!lo_rd(g, kg_kid(g, id, i), V, P)) { return false; }
+    return lo_rd_kids(g, id, i + 1, V, P);
 }
 
-Bool lg_param_ok(Kg g, Int body, Str p, Str fname, Int pidx) {
-    LGS ls = lg_tails(g, body, p, fname, pidx, LGS {.appr = [], .cons = 0, .bad = false});
-    if (ls.bad || ls.cons == 0) { return false; }
-    return lg_occ(g, body, -1, 0, p, ls.appr);
+Bool lo_rd_call(Kg g, Int c, Int i, LV V, LOP P) {
+    if (i >= g.ns[c].nk) { return true; }
+    Int a = kg_kid(g, c, i);
+    Bool ok = (lo_argref(g, a, V) && lo_borrow(P, g.ns[c].text, i)) || lo_rd(g, a, V, P);
+    if (!ok) { return false; }
+    return lo_rd_call(g, c, i + 1, V, P);
 }
 
-Str lg_mask(Kg g, Int body, List(Str) names, List(Str) tys, Str fname, Bool has_cl, Int i, Str acc) {
-    if (i >= names.len() || i >= tys.len()) { return acc; }
-    Bool ok = if (!has_cl && lin_is_mapset(tys[i])) { lg_param_ok(g, body, str_trim(names[i]), fname, i) } else { false };
-    return lg_mask(g, body, names, tys, fname, has_cl, i + 1, acc + if (ok) { "1" } else { "0" });
+// A consuming expression of item V (one that is not a read).
+LOC lo_ce(Kg g, Int id, LV V, LOP P) {
+    Int u = lo_unparen(g, id);
+    Str k = g.ns[u].kind;
+    Str t = g.ns[u].text;
+    if (lo_cls(g, u, V) == 1) { return LOC {.ok = true, .mut = false, .ce = [], .bare = true}; }
+    if (k == "mcall" && (t == "insert" || t == "remove") && g.ns[u].nk > 0 && !V.whole) {
+        LOC b = lo_ce(g, kg_kid(g, u, 0), V, P);
+        if (!b.ok) { return b; }
+        // Arguments run after the receiver: they may read V only while
+        // nothing has updated it yet.
+        if (!lo_args_after(g, u, 1, V, b.bare, P)) { return lo_cfail(); }
+        return LOC {.ok = true, .mut = true, .ce = b.ce.concat([u]), .bare = false};
+    }
+    if (k == "call" && P.lin.contains(t)) { return lo_ce_call(g, u, 0, V, P, -1, lo_cfail(), -1); }
+    if (k == "struct" && !V.whole) { return lo_ce_fields(g, u, 0, V, P, false, lo_cfail()); }
+    return lo_cfail();
 }
+
+Bool lo_args_after(Kg g, Int c, Int i, LV V, Bool bare, LOP P) {
+    if (i >= g.ns[c].nk) { return true; }
+    Int a = kg_kid(g, c, i);
+    Bool ok = if (bare) { lo_rd(g, a, V, P) } else { !lo_has(g, a, V) };
+    if (!ok) { return false; }
+    return lo_args_after(g, c, i + 1, V, bare, P);
+}
+
+// Arguments of a call: exactly one consumes V, at a linear parameter;
+// reads after it are allowed only while it is the bare item.
+LOC lo_ce_call(Kg g, Int c, Int i, LV V, LOP P, Int j, LOC child, Int last_rd) {
+    Str f = g.ns[c].text;
+    if (i >= g.ns[c].nk) {
+        if (j < 0) { return lo_cfail(); }
+        if (last_rd > j && !child.bare) { return lo_cfail(); }
+        return LOC {.ok = true, .mut = child.mut || lo_bit(P.mut, f, j), .ce = child.ce.concat([c]), .bare = false};
+    }
+    Int a = kg_kid(g, c, i);
+    if (!lo_has(g, a, V)) { return lo_ce_call(g, c, i + 1, V, P, j, child, last_rd); }
+    if ((lo_argref(g, a, V) && lo_borrow(P, f, i)) || lo_rd(g, a, V, P)) { return lo_ce_call(g, c, i + 1, V, P, j, child, i); }
+    if (j >= 0 || !lo_bit(P.lin, f, i)) { return lo_cfail(); }
+    LOC ch = lo_ce(g, a, V, P);
+    if (!ch.ok) { return ch; }
+    return lo_ce_call(g, c, i + 1, V, P, i, ch, last_rd);
+}
+
+// A struct literal's fields (run in order): exactly one consumes V (a
+// Map/Set field); the others may read V before it, and after it only
+// while it is the bare item.
+LOC lo_ce_fields(Kg g, Int s, Int i, LV V, LOP P, Bool seen, LOC child) {
+    if (i >= g.ns[s].nk) {
+        if (!seen) { return lo_cfail(); }
+        return LOC {.ok = true, .mut = child.mut, .ce = child.ce, .bare = false};
+    }
+    Int fi = kg_kid(g, s, i);
+    if (g.ns[fi].nk == 0) { return lo_ce_fields(g, s, i + 1, V, P, seen, child); }
+    Int e = kg_kid(g, fi, 0);
+    if (!lo_has(g, e, V)) { return lo_ce_fields(g, s, i + 1, V, P, seen, child); }
+    Bool rd = lo_rd(g, e, V, P);
+    if (seen) {
+        if (child.bare && rd) { return lo_ce_fields(g, s, i + 1, V, P, seen, child); }
+        return lo_cfail();
+    }
+    if (rd) { return lo_ce_fields(g, s, i + 1, V, P, seen, child); }
+    LOC ch = lo_ce(g, e, V, P);
+    if (!ch.ok) { return ch; }
+    return lo_ce_fields(g, s, i + 1, V, P, true, ch);
+}
+
+// An anonymous consuming chain: rooted at a user call's result that
+// holds Map/Set values, which nothing else refers to, then `insert` /
+// `remove` on it, a call passing it to a linear parameter, or a struct
+// literal field. Its steps may update in place when its end is consumed
+// too (returned, or bound to a linear local).
+LOC lo_anon(Kg g, Int id, LOP P) {
+    Int u = lo_unparen(g, id);
+    Str k = g.ns[u].kind;
+    Str t = g.ns[u].text;
+    if (k == "mcall" && (t == "insert" || t == "remove") && g.ns[u].nk > 0) {
+        LOC b = lo_anon(g, kg_kid(g, u, 0), P);
+        if (!b.ok) { return b; }
+        return LOC {.ok = true, .mut = true, .ce = b.ce.concat([u]), .bare = false};
+    }
+    if (k == "call" && P.lin.contains(t)) {
+        LOC inner = lo_anon_arg(g, u, 0, P);
+        if (inner.ok) { return LOC {.ok = true, .mut = inner.mut, .ce = inner.ce.concat([u]), .bare = false}; }
+        if (lo_tracked_ret(P, t)) { return LOC {.ok = true, .mut = false, .ce = [u], .bare = false}; }
+    }
+    if (k == "struct") { return lo_anon_fields(g, u, 0, P, lo_cfail()); }
+    return lo_cfail();
+}
+
+// Every argument that is an anonymous chain at a linear parameter.
+LOC lo_anon_arg(Kg g, Int c, Int i, LOP P) {
+    if (i >= g.ns[c].nk) { return lo_cfail(); }
+    LOC rest = lo_anon_arg(g, c, i + 1, P);
+    if (!lo_bit(P.lin, g.ns[c].text, i)) { return rest; }
+    LOC a = lo_anon(g, kg_kid(g, c, i), P);
+    if (!a.ok) { return rest; }
+    if (!rest.ok) { return a; }
+    return LOC {.ok = true, .mut = a.mut || rest.mut, .ce = a.ce.concat(rest.ce), .bare = false};
+}
+
+LOC lo_anon_fields(Kg g, Int s, Int i, LOP P, LOC acc) {
+    if (i >= g.ns[s].nk) { return acc; }
+    Int fi = kg_kid(g, s, i);
+    LOC a = if (g.ns[fi].nk > 0) { lo_anon(g, kg_kid(g, fi, 0), P) } else { lo_cfail() };
+    LOC acc2 = if (!a.ok) { acc } else { if (!acc.ok) { a } else { LOC {.ok = true, .mut = a.mut || acc.mut, .ce = acc.ce.concat(a.ce), .bare = false} } };
+    return lo_anon_fields(g, s, i + 1, P, acc2);
+}
+
+// Whether every path through a block ends in a return.
+Bool lo_term(Kg g, Int blk) {
+    Int n = g.ns[blk].nk;
+    if (n == 0) { return false; }
+    return lo_term_stmt(g, kg_kid(g, blk, n - 1));
+}
+
+Bool lo_term_stmt(Kg g, Int s) {
+    Str k = g.ns[s].kind;
+    if (k == "ret") { return true; }
+    if (k == "block") { return lo_term(g, s); }
+    if (k == "if" && g.ns[s].nk > 2) { return lo_term(g, kg_kid(g, s, 1)) && lo_term_stmt(g, kg_kid(g, s, 2)); }
+    return false;
+}
+
+LOS lo_merge(LOS a, LOS b) {
+    if (!a.ok || !b.ok) { return lo_fail(); }
+    return LOS {.ok = true, .mut = a.mut || b.mut, .ce = a.ce.concat(b.ce), .chain = a.chain.concat(b.chain)};
+}
+
+LOS lo_with_ce(LOS acc, LOC c) {
+    if (!c.ok) { return lo_fail(); }
+    return LOS {.ok = acc.ok, .mut = acc.mut || c.mut, .ce = acc.ce.concat(c.ce), .chain = acc.chain};
+}
+
+Str lo_bind_ty(Kg g, Int s, Funcs fs) { return ct_base_of(fs.ctn, fs.ctb, g.ns[kg_kid(g, s, 0)].text); }
+
+// Item V over a block's statements from `i`. `top`: the block V is
+// declared in (or the function body); a consuming binding in a nested
+// block needs that block to end in a return on every path.
+LOS lo_stmts(Kg g, Int blk, Int i, LV V, Bool top, LOP P, Funcs fs, LOS acc) {
+    if (!acc.ok || i >= g.ns[blk].nk) { return acc; }
+    Int s = kg_kid(g, blk, i);
+    if (!lo_has(g, s, V)) { return lo_stmts(g, blk, i + 1, V, top, P, fs, acc); }
+    Str k = g.ns[s].kind;
+    if (k == "ret") {
+        Int e = kg_kid(g, s, 0);
+        if (lo_rd(g, e, V, P)) { return acc; }
+        return lo_with_ce(acc, lo_ce(g, e, V, P));
+    }
+    if (k == "bind" || k == "rbind") {
+        Int e = kg_kid(g, s, g.ns[s].nk - 1);
+        if (lo_rd(g, e, V, P)) { return lo_stmts(g, blk, i + 1, V, top, P, fs, acc); }
+        LOC c = lo_ce(g, e, V, P);
+        if (!c.ok || lo_has_from(g, blk, i + 1, V) || (!top && !lo_term(g, blk))) { return lo_fail(); }
+        Str ty = lo_bind_ty(g, s, fs);
+        if (!lo_tracked(P, ty)) { return lo_with_ce(acc, c); }
+        LOS a = lo_item(g, blk, i + 1, g.ns[s].text, ty, P, fs);
+        if (!a.ok) { return lo_fail(); }
+        LOS a2 = LOS {.ok = true, .mut = a.mut, .ce = a.ce, .chain = [s].concat(a.chain)};
+        return lo_merge(lo_with_ce(acc, c), a2);
+    }
+    if (k == "if") { return lo_stmts(g, blk, i + 1, V, top, P, fs, lo_if(g, s, V, P, fs, acc)); }
+    if (k == "while") {
+        if (!lo_rd(g, kg_kid(g, s, 0), V, P)) { return lo_fail(); }
+        return lo_stmts(g, blk, i + 1, V, top, P, fs, lo_stmts(g, kg_kid(g, s, 1), 0, V, false, P, fs, acc));
+    }
+    if (k == "for") {
+        if (!lo_rd(g, kg_kid(g, s, 1), V, P)) { return lo_fail(); }
+        return lo_stmts(g, blk, i + 1, V, top, P, fs, lo_stmts(g, kg_kid(g, s, 2), 0, V, false, P, fs, acc));
+    }
+    if (k == "block") { return lo_stmts(g, blk, i + 1, V, top, P, fs, lo_stmts(g, s, 0, V, false, P, fs, acc)); }
+    if (lo_rd(g, s, V, P)) { return lo_stmts(g, blk, i + 1, V, top, P, fs, acc); }
+    return lo_fail();
+}
+
+LOS lo_if(Kg g, Int s, LV V, LOP P, Funcs fs, LOS acc) {
+    if (!lo_rd(g, kg_kid(g, s, 0), V, P)) { return lo_fail(); }
+    LOS a1 = lo_stmts(g, kg_kid(g, s, 1), 0, V, false, P, fs, acc);
+    if (g.ns[s].nk < 3) { return a1; }
+    Int el = kg_kid(g, s, 2);
+    if (g.ns[el].kind == "if") { return lo_if(g, el, V, P, fs, a1); }
+    return lo_stmts(g, el, 0, V, false, P, fs, a1);
+}
+
+// Variable `v` of tracked type `ty`, declared before statement `i` of
+// `blk`: a Map/Set, or a struct linear field-wise or else whole.
+LOS lo_item(Kg g, Int blk, Int i, Str v, Str ty, LOP P, Funcs fs) {
+    if (lin_is_mapset(ty)) { return lo_stmts(g, blk, i, lo_var(v), true, P, fs, lo_empty()); }
+    List(Str) mfs = lo_mfs(P, ty);
+    LOS fw = lo_fields(g, blk, i, v, mfs, 0, P, fs, lo_empty());
+    if (fw.ok) { return fw; }
+    return lo_stmts(g, blk, i, LV {.v = v, .f = "", .whole = true, .mfs = mfs}, true, P, fs, lo_empty());
+}
+
+LOS lo_fields(Kg g, Int blk, Int i, Str v, List(Str) mfs, Int j, LOP P, Funcs fs, LOS acc) {
+    if (!acc.ok || j >= mfs.len()) { return acc; }
+    LOS r = lo_stmts(g, blk, i, LV {.v = v, .f = mfs[j], .whole = false, .mfs = mfs}, true, P, fs, lo_empty());
+    return lo_fields(g, blk, i, v, mfs, j + 1, P, fs, lo_merge(acc, r));
+}
+
+// ─── The program's linear parameters ───────────────────────────────
+
+// Struct types with Map/Set fields.
+Map(Str, Str) lo_structs(Funcs fs, Int i, Map(Str, Str) acc) {
+    if (i >= fs.stn.len()) { return acc; }
+    Str m = lo_struct_mfs(fs, fs.stf[i], 0, "");
+    if (m == "") { return lo_structs(fs, i + 1, acc); }
+    return lo_structs(fs, i + 1, acc.insert(fs.stn[i], m));
+}
+
+Str lo_struct_mfs(Funcs fs, Str fields, Int i, Str acc) {
+    Int fl = str_len(fields);
+    if (i >= fl) { return acc; }
+    Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
+    Int end = if (ce >= 0) { ce } else { fl };
+    Str ent = str_slice(fields, i, end);
+    Int co = str_find_char(ent, 58, 0);
+    Str nm = str_slice(ent, 0, co);
+    Str ty = ct_base_of(fs.ctn, fs.ctb, str_slice(ent, co + 1, str_len(ent)));
+    Str acc2 = if (co > 0 && lin_is_mapset(ty)) { if (acc == "") { nm } else { acc + "," + nm } } else { acc };
+    return lo_struct_mfs(fs, fields, end + 1, acc2);
+}
+
+// Functions with a tracked parameter or result.
+ListBuf(Int) lo_fns(Kg g, Int id, Int i, LOP P, Funcs fs, ListBuf(Int) acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    Int d = kg_kid(g, id, i);
+    Str k = g.ns[d].kind;
+    if (k == "sandbox") { return lo_fns(g, id, i + 1, P, fs, lo_fns(g, d, 0, P, fs, acc)); }
+    if (k == "fn" && lo_fn_tracked(g, d, P, fs)) { return lo_fns(g, id, i + 1, P, fs, acc.push(d)); }
+    return lo_fns(g, id, i + 1, P, fs, acc);
+}
+
+Bool lo_fn_tracked(Kg g, Int d, LOP P, Funcs fs) {
+    if (lo_tracked(P, ct_base_of(fs.ctn, fs.ctb, g.ns[kg_kid(g, d, 0)].text))) { return true; }
+    return lo_any_tracked(g, d, 0, g.ns[d].nk - 2, P, fs);
+}
+
+Bool lo_any_tracked(Kg g, Int d, Int i, Int np, LOP P, Funcs fs) {
+    if (i >= np) { return false; }
+    if (lo_tracked(P, lo_pty(g, d, i, fs))) { return true; }
+    return lo_any_tracked(g, d, i + 1, np, P, fs);
+}
+
+Str lo_pty(Kg g, Int d, Int i, Funcs fs) { return ct_base_of(fs.ctn, fs.ctb, g.ns[kg_kid(g, kg_kid(g, d, i + 1), 0)].text); }
+Str lo_pname(Kg g, Int d, Int i) { return str_trim(g.ns[kg_kid(g, d, i + 1)].text); }
+
+// Initial masks: every tracked parameter linear (functions holding a
+// closure: none, and assumed to update all of them).
+Str lo_init_mask(Kg g, Int d, Int i, Int np, Bool cl, Bool mut, LOP P, Funcs fs, Str acc) {
+    if (i >= np) { return acc; }
+    Bool tr = lo_tracked(P, lo_pty(g, d, i, fs));
+    Bool b = if (mut) { cl } else { tr && !cl };
+    return lo_init_mask(g, d, i + 1, np, cl, mut, P, fs, acc + if (b) { "1" } else { "0" });
+}
+
+LOP lo_init(Kg g, List(Int) ds, Int i, Funcs fs, LOP P) {
+    if (i >= ds.len()) { return P; }
+    Int d = ds[i];
+    Str f = g.ns[d].text;
+    Int np = g.ns[d].nk - 2;
+    Bool cl = lg_closure(g, kg_kid(g, d, np + 1));
+    LOP P2 = LOP {.lin = P.lin.insert(f, lo_init_mask(g, d, 0, np, cl, false, P, fs, "")), .mut = P.mut.insert(f, lo_init_mask(g, d, 0, np, cl, true, P, fs, "")), .ret = P.ret.insert(f, ct_base_of(fs.ctn, fs.ctb, g.ns[kg_kid(g, d, 0)].text)), .sm = P.sm};
+    return lo_init(g, ds, i + 1, fs, P2);
+}
+
+type LOM = { Str lin; Str mut; };
+
+LOS lo_param(Kg g, Int d, Int i, Int np, LOP P, Funcs fs) {
+    return lo_item(g, kg_kid(g, d, np + 1), 0, lo_pname(g, d, i), lo_pty(g, d, i, fs), P, fs);
+}
+
+LOM lo_masks(Kg g, Int d, Int i, Int np, LOP P, Funcs fs, LOM acc) {
+    if (i >= np) { return acc; }
+    Str f = g.ns[d].text;
+    Bool l0 = lo_bit(P.lin, f, i);
+    Bool m0 = lo_bit(P.mut, f, i);
+    LOS r = if (l0) { lo_param(g, d, i, np, P, fs) } else { lo_fail() };
+    Bool l1 = l0 && r.ok;
+    Bool m1 = m0 || (l1 && r.mut);
+    return lo_masks(g, d, i + 1, np, P, fs, LOM {.lin = acc.lin + if (l1) { "1" } else { "0" }, .mut = acc.mut + if (m1) { "1" } else { "0" }});
+}
+
+type LOR = { LOP p; Bool changed; };
+
+LOR lo_round(Kg g, List(Int) ds, Int i, Funcs fs, LOR acc) {
+    if (i >= ds.len()) { return acc; }
+    Int d = ds[i];
+    Str f = g.ns[d].text;
+    Str l0 = acc.p.lin.get(f) else { "" };
+    if (!str_contains(l0, "1")) { return lo_round(g, ds, i + 1, fs, acc); }
+    Str m0 = acc.p.mut.get(f) else { "" };
+    LOM m = lo_masks(g, d, 0, g.ns[d].nk - 2, acc.p, fs, LOM {.lin = "", .mut = ""});
+    if (m.lin == l0 && m.mut == m0) { return lo_round(g, ds, i + 1, fs, acc); }
+    LOP p2 = LOP {.lin = acc.p.lin.insert(f, m.lin), .mut = acc.p.mut.insert(f, m.mut), .ret = acc.p.ret, .sm = acc.p.sm};
+    return lo_round(g, ds, i + 1, fs, LOR {.p = p2, .changed = true});
+}
+
+LOP lo_fix(Kg g, List(Int) ds, Funcs fs, LOP P, Int n) {
+    LOR r = lo_round(g, ds, 0, fs, LOR {.p = P, .changed = false});
+    if (!r.changed || n >= 64) { return r.p; }
+    return lo_fix(g, ds, fs, r.p, n + 1);
+}
+
+pub LOP lo_program(Kg g, Int unit, Funcs fs) {
+    LOP p0 = LOP {.lin = lo_nomap(), .mut = lo_nomap(), .ret = lo_nomap(), .sm = lo_structs(fs, 0, lo_nomap())};
+    List(Int) ds = lo_fns(g, unit, 0, p0, fs, ListBuf()).finish();
+    return lo_fix(g, ds, fs, lo_init(g, ds, 0, fs, p0), 0);
+}
+
+// ─── One function's flags ───────────────────────────────────────────
+
+type LOW = { Map(Int, Int) fl; List(Int) chained; };
+
+Map(Int, Int) lo_flag(Map(Int, Int) fl, List(Int) ns, Int i, Int bit) {
+    if (i >= ns.len()) { return fl; }
+    Int old = fl.get(ns[i]) else { 0 };
+    return lo_flag(fl.insert(ns[i], old | bit), ns, i + 1, bit);
+}
+
+LOW lo_params(Kg g, Int d, Int i, Int np, LOP P, Funcs fs, LOW acc) {
+    if (i >= np) { return acc; }
+    if (!lo_bit(P.lin, g.ns[d].text, i)) { return lo_params(g, d, i + 1, np, P, fs, acc); }
+    LOS r = lo_param(g, d, i, np, P, fs);
+    if (!r.ok) { return lo_params(g, d, i + 1, np, P, fs, acc); }
+    return lo_params(g, d, i + 1, np, P, fs, LOW {.fl = lo_flag(acc.fl, r.ce, 0, 1), .chained = acc.chained.concat(r.chain)});
+}
+
+// Linear locals not bound from another linear value, in statement order;
+// the chains of those that are updated.
+LOW lo_locals(Kg g, Int blk, Int i, LOP P, Funcs fs, LOW acc) {
+    if (i >= g.ns[blk].nk) { return acc; }
+    Int s = kg_kid(g, blk, i);
+    Str k = g.ns[s].kind;
+    LOW a1 = if ((k == "bind" || k == "rbind") && !lin_has_int(acc.chained, s, 0) && lo_tracked(P, lo_bind_ty(g, s, fs))) { lo_local(g, blk, i, s, P, fs, acc) } else { acc };
+    LOW a2 = if (k == "if") { lo_locals_if(g, s, P, fs, a1) } else { if (k == "while") { lo_locals(g, kg_kid(g, s, 1), 0, P, fs, a1) } else { if (k == "for") { lo_locals(g, kg_kid(g, s, 2), 0, P, fs, a1) } else { if (k == "block") { lo_locals(g, s, 0, P, fs, a1) } else { a1 } } } };
+    return lo_locals(g, blk, i + 1, P, fs, a2);
+}
+
+// A linear local holds the only reference to its value, so an anonymous
+// chain bound to it may update in place; so may its own chain, when it is
+// updated.
+LOW lo_local(Kg g, Int blk, Int i, Int s, LOP P, Funcs fs, LOW acc) {
+    LOS r = lo_item(g, blk, i + 1, g.ns[s].text, lo_bind_ty(g, s, fs), P, fs);
+    if (!r.ok) { return acc; }
+    LOC a = lo_anon(g, kg_kid(g, s, g.ns[s].nk - 1), P);
+    Map(Int, Int) f1 = if (a.ok) { lo_flag(acc.fl, a.ce, 0, 1) } else { acc.fl };
+    if (!r.mut) { return LOW {.fl = f1, .chained = acc.chained}; }
+    return LOW {.fl = lo_flag(f1, r.ce, 0, 1), .chained = acc.chained.concat(r.chain)};
+}
+
+LOW lo_locals_if(Kg g, Int s, LOP P, Funcs fs, LOW acc) {
+    LOW a1 = lo_locals(g, kg_kid(g, s, 1), 0, P, fs, acc);
+    if (g.ns[s].nk < 3) { return a1; }
+    Int el = kg_kid(g, s, 2);
+    if (g.ns[el].kind == "if") { return lo_locals_if(g, el, P, fs, a1); }
+    return lo_locals(g, el, 0, P, fs, a1);
+}
+
+Map(Int, Int) lo_fn_flags(Kg g, Int d, LOP P, Funcs fs) {
+    Int np = g.ns[d].nk - 2;
+    Int body = kg_kid(g, d, np + 1);
+    Map(Int, Int) rf = lo_rets(g, body, P, lo_nofl());
+    if (lg_closure(g, body)) { return rf; }
+    LOW w0 = lo_params(g, d, 0, np, P, fs, LOW {.fl = rf, .chained = []});
+    return lo_locals(g, body, 0, P, fs, w0).fl;
+}
+
+// A call returned by `return` hands its result to this function's caller,
+// which freezes it unless it continues a chain there; so it is not frozen
+// here (that also keeps a self tail call a tail call), and neither is an
+// anonymous chain ending there. Not inside a spawn, whose result crosses
+// to another thread.
+Map(Int, Int) lo_rets(Kg g, Int id, LOP P, Map(Int, Int) fl) {
+    Str k = g.ns[id].kind;
+    if (k == "lambda" || k == "spawn") { return fl; }
+    if (k == "ret" && g.ns[id].nk > 0) {
+        LOC a = lo_anon(g, kg_kid(g, id, 0), P);
+        if (a.ok) { return lo_rets_kids(g, id, 0, P, lo_flag(fl, a.ce, 0, 1)); }
+    }
+    return lo_rets_kids(g, id, 0, P, fl);
+}
+
+Map(Int, Int) lo_rets_kids(Kg g, Int id, Int i, LOP P, Map(Int, Int) fl) {
+    if (i >= g.ns[id].nk) { return fl; }
+    return lo_rets_kids(g, id, i + 1, P, lo_rets(g, kg_kid(g, id, i), P, fl));
+}
+
+Bool lo_is(LW w, Int id, Int bit) { return ((w.lof.get(id) else { 0 }) & bit) != 0; }
 
 // ─── Program walk ───────────────────────────────────────────────────
 
@@ -2390,18 +2893,19 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
     Int d = kg_kid(w.g, id, i);
     Str kind = w.g.ns[d].kind;
     if (kind == "sandbox") {
-        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts};
+        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof};
         return lw_decls(w, id, i + 1, lw_decls(wi, d, 0, acc));
     }
     if (kind != "fn") { return lw_decls(w, id, i + 1, acc); }
     Int off = if (w.rg) { lw_spec_off(w.g.ns[d].text) } else { 0 };
-    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts};
+    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof};
     return lw_decls(w, id, i + 1, lw_fn(wf, d, acc));
 }
 
 // Lower the reducer's residual graph.
 pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
-    LW w = LW {.g = g, .fs = fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts};
+    LOP lo = lo_program(g, unit, fs);
+    LW w = LW {.g = g, .fs = fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl()};
     return lw_decls(w, unit, 0, g0);
 }
 

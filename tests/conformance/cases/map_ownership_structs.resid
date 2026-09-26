@@ -1,0 +1,77 @@
+// Linear ownership through struct fields (lo_item in lower.resid): a
+// struct's Map/Set field is updated in place only when neither the old
+// struct nor the old field is observed afterwards.
+type St = { Map(Int, Int) m; Int n; Set(Str) tags; };
+type Pair = { St a; Int k; };
+
+St step(St s, Int k) {
+    Int c = s.m.get(k) else { 0 };
+    return St {.m = s.m.insert(k, c + 1), .n = s.n + 1, .tags = s.tags};
+}
+
+St run(Int i, Int n, St s) {
+    if (i >= n) { return s; }
+    return run(i + 1, n, step(s, i % 7));
+}
+
+St tag(St s, Str t) {
+    return St {.m = s.m, .n = s.n, .tags = s.tags.insert(t)};
+}
+
+// Reads the old field after building the new struct: not linear.
+Int reads_old(St s) {
+    St t = St {.m = s.m.insert(100, 1), .n = s.n, .tags = s.tags};
+    return s.m.len() * 1000 + t.m.len();
+}
+
+// A later field reads the field an earlier one updated: not linear.
+St later_read(St s) {
+    return St {.m = s.m.insert(200, 2), .n = s.m.len(), .tags = s.tags};
+}
+
+// The whole struct used after its field was consumed: not linear.
+Int whole_after(St s) {
+    Map(Int, Int) m2 = s.m.insert(300, 3);
+    St again = s;
+    return again.m.len() * 1000 + m2.len();
+}
+
+// Whole: fields only read, then the struct passed on.
+St whole_pass(St s, Int k) {
+    Int c = s.m.get(k) else { 0 };
+    if (c > 1000) { return s; }
+    return step(s, k);
+}
+
+Int total(St s, Int k, Int acc) {
+    if (k >= 7) { return acc; }
+    return total(s, k + 1, acc + (s.m.get(k) else { 0 }));
+}
+
+St build(Int n) {
+    Map(Int, Int) e = {};
+    Set(Str) t0 = {};
+    return run(0, n, St {.m = e, .n = 0, .tags = t0});
+}
+
+Int main() {
+    St a = build(70);
+    println(f"a {a.m.len()} {a.n} {total(a, 0, 0)} {a.tags.len()}");
+    St b = run(0, 7, a);
+    println(f"b {total(b, 0, 0)} a {total(a, 0, 0)}");
+    St c = tag(tag(a, "x"), "y");
+    println(f"c {c.tags.len()} a {a.tags.len()}");
+    println(f"reads_old {reads_old(a)} {a.m.len()}");
+    St d = later_read(a);
+    println(f"later_read {d.n} {d.m.len()} {a.m.len()}");
+    println(f"whole_after {whole_after(a)} {a.m.len()}");
+    St e = whole_pass(a, 3);
+    println(f"whole_pass {total(e, 0, 0)} {total(a, 0, 0)}");
+    Pair p = Pair {.a = a, .k = 1};
+    St f = step(p.a, 5);
+    println(f"pair {total(p.a, 0, 0)} {total(f, 0, 0)}");
+    List(St) ls = [a, b];
+    St g = run(0, 3, ls[0]);
+    println(f"list {total(ls[0], 0, 0)} {total(g, 0, 0)}");
+    return 0;
+}

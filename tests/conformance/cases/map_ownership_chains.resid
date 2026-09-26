@@ -1,0 +1,28 @@
+// Updates on call results (lo_anon in lower.resid): a returned or
+// linearly bound call result is updated in place; callers that keep a
+// result see it unchanged.
+Map(Int, Int) build(Int i, Int n) {
+    if (i >= n) {
+        Map(Int, Int) e = {};
+        return e;
+    }
+    return build(i + 1, n).insert(i, i * i);
+}
+
+Map(Int, Int) twice(Int n) {
+    Map(Int, Int) r = build(0, n);
+    return r.insert(-1, -1).remove(0);
+}
+
+Map(Int, Int) keep(Map(Int, Int) m) { return m; }
+
+Int main() {
+    Map(Int, Int) a = build(0, 100);
+    Map(Int, Int) b = keep(a).insert(1000, 1);
+    Map(Int, Int) c = twice(100);
+    Map(Int, Int) d = keep(c);
+    Map(Int, Int) f = d.insert(5, 0);
+    println(f"{a.len()} {b.len()} {a.get(99) else { -1 }} {a.contains(1000)}");
+    println(f"{c.len()} {c.get(0) else { -2 }} {c.get(-1) else { 0 }} {d.len()} {f.get(5) else { 9 }} {c.get(5) else { 9 }}");
+    return 0;
+}

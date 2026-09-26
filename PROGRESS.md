@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  157, reduce 14, provenance 20, graph 386. The archived Rust workspace
+  161, reduce 14, provenance 20, graph 390. The archived Rust workspace
   (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
   821 tests; its e2e now has 128 after removing tests of the retired text
   paths); see `AGENTS.md` for its slow-test table.
@@ -305,6 +305,46 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 619MB (606MB without facts). The artifact carries a RESIDUAL node's range
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
+
+### 0za. Map/Set ownership and a compact persistent runtime (2026-09-26)
+
+Map/Set programs no longer allocate far more than C/Rust.
+
+- **Linear ownership** (`lo_*` in `examples/lower.resid`, replacing the
+  self-tail-call-only `lg_mask`): a whole-program analysis marks Map/Set
+  parameters and locals as linear when each mention is a read or one
+  consuming use per path (return, a linear local's binding, `insert` /
+  `remove`, a call's linear parameter, a struct literal field). It covers
+  helpers (`bump(m, k)`), nested loops, let-chains, mutual recursion,
+  updates on call results (`return f(x).insert(..)`, non-tail recursion)
+  and Map/Set fields of structs, linear field-wise
+  (`S {.m = s.m.insert(..), ..}`) or whole. Parameters are solved as a
+  fixpoint (`lin` falls, `mut` rises); a call to a linear parameter that
+  is never updated, with no Map/Set in its result, only borrows. Owned
+  updates pass `owned` to the runtime; call results outside a chain are
+  frozen (a struct result's Map/Set fields too), return-position calls
+  are not (the caller decides, and self tail calls stay tail calls).
+- **Runtime** (`runtime/resid_rt.c`): the first owned update of a shared
+  map takes a private transient (small: a table copy; big: a trie
+  transient sharing every node, Clojure-style edit tokens). The trie has
+  compact CHAMP-layout nodes with unboxed key/value words and keeps the
+  exact canonical key order (tables sort into it instead of building a
+  trie); tables are built in place; set union/intersection/difference
+  build tables; set tables keep no value array.
+- Fixed along the way (pre-existing): `Set(T) s = {}` was typed as a Map;
+  a `get(..) else` fallback in an if-expression condition reused labels.
+- Measured against Rust `HashMap` (time / peak RSS): counting through a
+  helper 1.95s/3.3GB -> 0.02s/12MB (Rust 0.02s/12MB); nested loops
+  0.93s/1.9GB -> 0.04s/50MB (0.04s/53MB); set algebra 4.15s/6.9GB ->
+  0.18s/147MB (0.19s/12MB); non-tail build 0.52s/1.1GB -> 0.03s/40MB;
+  map in a state struct 1.02s/1.7GB -> 0.04s/50MB (0.02s/12MB).
+  k-nucleotide: the committed compiler had regressed to 23.4s/11.7GB;
+  now 5.4s/268MB (C 4.2s, Rust 11.0s). Self-compile peak 425 -> 370MB.
+- Remaining gaps are not map cost: dead strings and struct records are
+  never freed (no per-iteration reclamation), and `List` appends inside
+  map values are persistent.
+- Tests: conformance `map_ownership_aliasing`, `map_ownership_structs`,
+  `map_ownership_chains`, `map_set_regressions`.
 
 ### 0z. Native debugger backend, more facts, builders (2026-09-26)
 

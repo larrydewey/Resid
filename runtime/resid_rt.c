@@ -2326,8 +2326,7 @@ void resid_list_free(void* b) {
     free(v);
 }
 
-/* resid_map_free / resid_set_free live further down (after HMTrie/HMNode
- * are declared — see the Persistent Map/Set section). */
+/* resid_map_free / resid_set_free live in the Map/Set section. */
 
 void resid_struct_free(void* b) {
     if (!b) return;
@@ -6524,80 +6523,72 @@ _Noreturn void resid_arith_overflow(void) {
     abort();
 }
 
-/* ─── Immutable Map / Set (spec §32 core types) ────────────────────
+/* ─── Immutable Map / Set (spec §32 core types) ─────────────────────
  *
- * Maps and sets are immutable values backed by a persistent hash table
- * (separate chaining). Every mutation (insert/remove) allocates a new
- * table — no COW, no refcounting. Simple and correct.
+ * A map or set value (a set is a map whose values are the marker 1) is an
+ * HMTrie handle in one of two representations:
  *
- * Keys are opaque pointers (compared by address for integers and
- * compared as NUL-terminated C strings for Str). All Resid values
- * passed as keys are string-ified via resid_val_str for hashing and
- * comparison — this works because integers are boxed and pointer-
- * comparable strings are interned.
+ *   - trie mode (tab == NULL): a persistent 32-way hash trie. Updates copy
+ *     the nodes on the root-to-leaf path and share the rest, so an older
+ *     value is never changed.
+ *   - table mode (tab != NULL): a flat open-addressing table (MapTab).
+ *
+ * Either one can be TRANSIENT: owned by exactly one place in the program,
+ * which the compiler proved never observes an older version (its linear
+ * ownership analysis; such updates pass `owned`). A transient value is
+ * updated in place: a table directly, a trie through edit tokens (a node
+ * stamped with the handle's token belongs to it and is written in place;
+ * any other node is copied into it first, as in Clojure's transients).
+ * The first owned update of a shared value makes the transient: a small
+ * value is copied into a table, a big one becomes a trie transient that
+ * shares every node until it writes it. Freezing a transient (a call
+ * result leaving the ownership chain) makes it an ordinary immutable value
+ * again.
+ *
+ * Keys and values are 64-bit words of a kind fixed per map: key kind 1 = a
+ * raw Int, 0 = a boxed value pointer (a bare C string or a ResidVal);
+ * value kind 1 = a raw Int, 2 = raw Float bits, 3 = a raw Bool, 0 = a
+ * boxed pointer (or a set's marker); -1 = not decided yet (an empty map:
+ * its first update decides). A request in another kind is converted, so a
+ * mismatch is only ever slower, never wrong.
+ *
+ * Order: keys(), values(), formatting and set algebra see entries in the
+ * CANONICAL order, which depends only on the key set: ascending by the key
+ * hash's 5-bit chunks, lowest chunk first (the trie's slot order), with
+ * entries whose full hashes are equal in insertion order. A trie walk
+ * yields it directly; a table sorts its entries into it.
  */
 
-/* ─── Persistent Map / Set (Hash Array Mapped Trie) ──────────────────
- * Slots hold boxed keys and values (resid_box_*), exactly like the flat
- * table they replace. Strings hash by content; integers/booleans are
- * string-ified (see resid_hash) — so hash/key-eq stay consistent for all
- * key shapes.
- *
- * Representation: a shallow 32-way hash trie. Each map/set value is a
- * persistent HMTrie { count, root }. Insert/remove copy only the nodes on
- * the root-to-leaf path (O(log32 n)); all other nodes are shared by
- * pointer, so the old value is never mutated — identical observable
- * immutability to the prior whole-table copy, but O(log n) instead of
- * O(n) per operation.
- *
- * Nodes: an INDEX node holds up to 32 children reached by 5 bits of the
- * key hash per trie level. A slot holds either a leaf (HMPair) or a
- * subnode (HMNode). On a full-hash collision the shared bits run out,
- * so at HT_MAX_LEVEL the slot becomes a COLLISION node (a small bucket of
- * pairs sharing a full hash). `kind` distinguishes the two.
- */
-
-#define HT_DEGREE 32
 #define HT_SHIFT 5
 #define HT_MASK 31
 #define HT_MAX_LEVEL 12 /* 13 levels x 5 bits = 65 >= 64-bit hash */
 
-typedef struct {
-    void* key; /* boxed key */
-    void* val; /* boxed value (1 for set entries) */
-} HMPair;
-
+/* A trie node. An INDEX node maps slot bits to entries (dmap) and to
+ * subnodes (nmap); its words are the entries' (key, value) pairs in slot
+ * order, then the subnode pointers in slot order. A COLLISION node
+ * (ncoll > 0) holds ncoll pairs whose full hashes are equal, in insertion
+ * order. `edit` is the token of the transient that owns the node (0 or a
+ * frozen token: shared). */
 typedef struct HMNode {
-    uint32_t kind;   /* 0 = index node, 1 = collision node */
-    uint32_t used;   /* index: bitmap of occupied slots;
-                        collision: number of pairs */
-    void*    slot[32]; /* index: HMPair* (leaf) or HMNode* (sub);
-                          collision: pairs packed key,val,key,val,... */
-    uint32_t sub[32];  /* index: 1 if slot[i] is a subnode pointer */
+    uint32_t dmap;
+    uint32_t nmap;
+    uint32_t ncoll;
+    uint32_t cap;   /* words allocated */
+    uint64_t edit;
+    uint64_t w[];
 } HMNode;
 
-/* The map/set value handed out to Resid: a persistent trie root + size. */
 typedef struct MapTab MapTab;
 
-/* The map/set value handed out to Resid. Two representations:
- *   - trie mode (tab == NULL): the persistent hash trie above;
- *   - table mode (tab != NULL): a flat open-addressing table, produced only
- *     for a map the compiler proved is a linear accumulator (a parameter
- *     consumed solely by `m.insert(..)`/`m.remove(..)` feeding the same
- *     parameter of a self tail call, see the driver's linear-map analysis).
- *     While `transient` is set, exactly one loop owns the table and updates
- *     it in place; returning it freezes it, after which it is immutable like
- *     any other map value.
- * Every observable result is identical in both modes: order-dependent
- * operations (keys, values, format, set algebra) and persistent updates run
- * on the canonical trie the table materializes to (cached once frozen), and
- * that trie's shape depends only on the key set. */
 typedef struct {
     int64_t count;
-    HMNode* root;   /* trie mode: NULL for the empty container;
-                       table mode: cached materialized trie (frozen only) */
+    HMNode* root;   /* trie mode: NULL when empty; table mode: the cached
+                       canonical trie (frozen only) */
     MapTab* tab;
     int64_t transient;
+    uint64_t edit;  /* transient trie: its token */
+    int8_t kk;      /* trie mode: key / value kinds */
+    int8_t vk;
 } HMTrie;
 
 static uint64_t fnv1a(const char* s);
@@ -6611,55 +6602,29 @@ static int is_boxed(const void* v) {
     return ((const unsigned char*)v)[0] == 0xFF;
 }
 
-/* Precise free for Map/Set (E.4: ownership oracle integration). Frees a
- * boxed key/val slot (bare C string keys are not owned by the trie — only
- * boxed values are ours to free; see is_boxed). */
-static void free_boxed_slot(void* v) {
-    if (!v) return;
-    if (!is_boxed(v)) return; /* bare C string key: not our allocation to walk */
-    box_free_shallow((ResidVal*)v);
-}
+/* Maps are never freed piecemeal: their nodes are shared between versions. */
+void resid_map_free(void* b) { (void)b; }
+void resid_set_free(void* b) { (void)b; }
 
-static void free_hmnode(HMNode* n) {
-    if (!n) return;
-    if (n->kind == 1) {
-        /* Collision node: `used` pairs packed key,val,key,val,... in slot[]. */
-        for (uint32_t i = 0; i < n->used; i++) {
-            HMPair* p = (HMPair*)n->slot[i];
-            free_boxed_slot(p->key);
-            free_boxed_slot(p->val);
-            free(p);
-        }
-    } else {
-        for (int i = 0; i < 32; i++) {
-            if (!n->slot[i]) continue;
-            if (n->sub[i]) {
-                free_hmnode((HMNode*)n->slot[i]);
-            } else {
-                HMPair* p = (HMPair*)n->slot[i];
-                free_boxed_slot(p->key);
-                free_boxed_slot(p->val);
-                free(p);
-            }
-        }
+/* FNV-1a of the decimal text of v (what `%lld` prints), without printing. */
+static uint64_t fnv1a_i64(int64_t v) {
+    char buf[24];
+    int n = 0;
+    uint64_t mag = v < 0 ? 0 - (uint64_t)v : (uint64_t)v;
+    do {
+        buf[n++] = (char)('0' + mag % 10);
+        mag /= 10;
+    } while (mag);
+    uint64_t h = 14695981039346656037ULL;
+    if (v < 0) {
+        h ^= (unsigned char)'-';
+        h *= 1099511628211ULL;
     }
-    free(n);
-}
-
-static void map_free_parts(HMTrie* m);
-
-void resid_map_free(void* b) {
-    if (!b) return;
-    HMTrie* m = (HMTrie*)b;
-    map_free_parts(m);
-    free(m);
-}
-
-void resid_set_free(void* b) {
-    if (!b) return;
-    HMTrie* m = (HMTrie*)b;
-    map_free_parts(m);
-    free(m);
+    while (n) {
+        h ^= (unsigned char)buf[--n];
+        h *= 1099511628211ULL;
+    }
+    return h;
 }
 
 /* Hash a Resid value for use as a map/set key. Bare strings hash by content;
@@ -6679,10 +6644,7 @@ static uint64_t resid_hash(void* v) {
         const char* t = b->type;
         void* raw = resid_box_slot(v, 0);
         char buf[64];
-        if (t && strcmp(t, "i64") == 0) {
-            snprintf(buf, sizeof(buf), "%lld", (long long)*(int64_t*)raw);
-            return fnv1a(buf);
-        }
+        if (t && strcmp(t, "i64") == 0) return fnv1a_i64(*(int64_t*)raw);
         if (t && strcmp(t, "f64") == 0) {
             snprintf(buf, sizeof(buf), "%.17g", *(double*)raw);
             return fnv1a(buf);
@@ -6690,10 +6652,7 @@ static uint64_t resid_hash(void* v) {
         if (t && strcmp(t, "bool") == 0) {
             return fnv1a(*(int8_t*)raw ? "t" : "f");
         }
-        if (t && strcmp(t, "i128") == 0) {
-            snprintf(buf, sizeof(buf), "%lld", (long long)ld_i128(raw));
-            return fnv1a(buf);
-        }
+        if (t && strcmp(t, "i128") == 0) return fnv1a_i64((int64_t)ld_i128(raw));
         if (t && strcmp(t, "u128") == 0) {
             snprintf(buf, sizeof(buf), "%llu", (unsigned long long)(unsigned __int128)ld_i128(raw));
             return fnv1a(buf);
@@ -6798,259 +6757,375 @@ static uint64_t fnv1a(const char* s) {
     return h;
 }
 
-static HMNode* node_index_new(void) {
-    HMNode* n = (HMNode*)calloc(1, sizeof(HMNode));
-    if (!n) resid_abort("node_index_new: out of memory");
-    n->kind = 0;
-    return n;
+/* ── Words ──────────────────────────────────────────────────────────── */
+
+static int box_is_i64(const void* p) {
+    const ResidVal* b = (const ResidVal*)p;
+    return is_boxed(p) && b->tag == -1 && b->type && strcmp(b->type, "i64") == 0;
 }
 
-/* Shallow-copy a node: the slot/sub arrays are copied but child nodes are
- * shared by pointer — this is exactly the path-copying that makes every
- * update persistent without mutating the old value. */
-static HMNode* node_clone(const HMNode* src) {
-    HMNode* n = (HMNode*)malloc(sizeof(HMNode));
-    if (!n) resid_abort("node_clone: out of memory");
-    *n = *src;
-    return n;
+/* Box a stored word of kind `k` into a Resid value pointer. */
+static uint64_t mt_box(int8_t k, uint64_t w) {
+    switch (k) {
+    case 1: return (uint64_t)(uintptr_t)resid_box_i64((int64_t)w);
+    case 2: { double d; memcpy(&d, &w, 8); return (uint64_t)(uintptr_t)resid_box_f64(d); }
+    case 3: return (uint64_t)(uintptr_t)resid_box_bool((int8_t)(w != 0));
+    default: return w;
+    }
 }
 
-static HMPair* pair_new(void* key, void* val) {
-    HMPair* p = (HMPair*)malloc(sizeof(HMPair));
-    if (!p) resid_abort("pair_new: out of memory");
-    p->key = key;
-    p->val = val;
+/* Unbox a boxed value pointer to kind `k` (1/2/3), or 0 when the box does
+ * not hold that kind. */
+static int mt_unbox(int8_t k, uint64_t w, uint64_t* out) {
+    void* p = (void*)(uintptr_t)w;
+    if (w < 4096 || !is_boxed(p) || ((ResidVal*)p)->tag != -1 || !((ResidVal*)p)->type) return 0;
+    const char* ty = ((ResidVal*)p)->type;
+    if (k == 1 && strcmp(ty, "i64") == 0) { *out = (uint64_t)resid_unbox_i64(p); return 1; }
+    if (k == 2 && strcmp(ty, "f64") == 0) { double d = resid_unbox_f64(p); memcpy(out, &d, 8); return 1; }
+    if (k == 3 && strcmp(ty, "bool") == 0) { *out = (uint64_t)resid_unbox_bool(p); return 1; }
+    return 0;
+}
+
+/* The kind a boxed value pointer is best stored as, and that word. */
+static int8_t word_of_box(void* p, uint64_t* out, int for_key) {
+    uint64_t w = (uint64_t)(uintptr_t)p;
+    /* (A set's value is the marker 1, not a pointer.) */
+    if (w >= 4096 && is_boxed(p) && ((ResidVal*)p)->tag == -1 && ((ResidVal*)p)->type) {
+        const char* ty = ((ResidVal*)p)->type;
+        if (strcmp(ty, "i64") == 0) { *out = (uint64_t)resid_unbox_i64(p); return 1; }
+        if (!for_key && strcmp(ty, "f64") == 0) { double d = resid_unbox_f64(p); memcpy(out, &d, 8); return 2; }
+        if (!for_key && strcmp(ty, "bool") == 0) { *out = (uint64_t)resid_unbox_bool(p); return 3; }
+    }
+    *out = w;
+    return 0;
+}
+
+/* The canonical hash of a key word. */
+static inline uint64_t key_hash(int8_t kk, uint64_t k) {
+    return kk == 1 ? fnv1a_i64((int64_t)k) : resid_hash((void*)(uintptr_t)k);
+}
+
+static inline int key_eq(int8_t kk, uint64_t a, uint64_t b) {
+    if (kk == 1) return a == b;
+    return resid_key_eq((void*)(uintptr_t)a, (void*)(uintptr_t)b);
+}
+
+/* A hash as a number whose order is the canonical order: the lowest 5-bit
+ * chunk most significant (12 chunks of 5 bits, then the top 4 bits). */
+static inline uint64_t canon_rank(uint64_t h) {
+    uint64_t r = 0;
+    for (int l = 0; l < HT_MAX_LEVEL; l++) r = (r << 5) | ((h >> (l * HT_SHIFT)) & HT_MASK);
+    return (r << 4) | (h >> 60);
+}
+
+static void* map_alloc(size_t n) {
+    void* p = malloc(n);
+    if (!p) resid_abort("map: out of memory");
     return p;
 }
 
-static HMTrie* trie_new(int64_t count, HMNode* root) {
-    HMTrie* t = (HMTrie*)malloc(sizeof(HMTrie));
-    if (!t) resid_abort("trie_new: out of memory");
-    t->count = count;
-    t->root = root;
-    t->tab = NULL;
-    t->transient = 0;
-    return t;
+static uint64_t g_edit_seq = 0;
+
+static uint64_t new_edit_token(void) {
+    return __atomic_add_fetch(&g_edit_seq, 1, __ATOMIC_RELAXED);
 }
 
-/* Insert key/val into `node` at `level`, returning a new persistent node.
- * `isnew` (out) is 1 if a brand-new key was inserted (so count grows). */
-static HMNode* trie_insert(HMNode* node, int level, uint64_t h,
-                           void* key, void* val, int* isnew) {
-    if (node == NULL) {
-        HMNode* n = node_index_new();
-        uint32_t idx = (uint32_t)((h >> (level * HT_SHIFT)) & HT_MASK);
-        n->used = (1u << idx);
-        n->slot[idx] = pair_new(key, val);
-        n->sub[idx] = 0;
-        *isnew = 1;
-        return n;
-    }
-    if (node->kind == 1) {
-        /* collision node: pairs packed key,val,key,val,... */
-        int cnt = (int)node->used;
-        for (int i = 0; i < cnt; i++) {
-            if (resid_key_eq(node->slot[2 * i], key)) {
-                HMNode* n = node_clone(node);
-                n->slot[2 * i + 1] = val; /* replace value in-place (copy) */
-                *isnew = 0;
-                return n;
-            }
-        }
-        HMNode* n = node_clone(node);
-        n->used = (uint32_t)(cnt + 1);
-        n->slot[2 * cnt] = key;
-        n->slot[2 * cnt + 1] = val;
-        *isnew = 1;
-        return n;
-    }
-    /* index node */
-    uint32_t idx = (uint32_t)((h >> (level * HT_SHIFT)) & HT_MASK);
-    uint32_t bit = (1u << idx);
-    if (!(node->used & bit)) {
-        HMNode* n = node_clone(node);
-        n->used |= bit;
-        n->slot[idx] = pair_new(key, val);
-        n->sub[idx] = 0;
-        *isnew = 1;
-        return n;
-    }
-    if (node->sub[idx]) {
-        HMNode* child = trie_insert((HMNode*)node->slot[idx], level + 1, h, key, val, isnew);
-        HMNode* n = node_clone(node);
-        n->slot[idx] = child;
-        return n;
-    }
-    /* existing leaf in this slot */
-    HMPair* p = (HMPair*)node->slot[idx];
-    if (resid_key_eq(p->key, key)) {
-        HMNode* n = node_clone(node);
-        n->slot[idx] = pair_new(key, val);
-        *isnew = 0;
-        return n;
-    }
-    /* two different keys collide into the same slot */
-    if (level >= HT_MAX_LEVEL) {
-        /* no hash bits left: promote to a collision node holding both keys. */
-        HMNode* n = node_clone(node);
-        HMNode* c = node_index_new();
-        c->kind = 1;
-        c->used = 2;
-        c->slot[0] = p->key;
-        c->slot[1] = p->val;
-        c->slot[2] = key;
-        c->slot[3] = val;
-        n->sub[idx] = 1;
-        n->slot[idx] = c;
-        *isnew = 1;
-        return n;
-    }
-    /* descend: put the old leaf and the new key into a child index node. */
-    uint64_t ho = resid_hash(p->key);
-    HMNode* child = trie_insert(NULL, level + 1, ho, p->key, p->val, isnew);
-    child = trie_insert(child, level + 1, h, key, val, isnew);
-    HMNode* n = node_clone(node);
-    n->sub[idx] = 1;
-    n->slot[idx] = child;
+/* ── Trie nodes ─────────────────────────────────────────────────────── */
+
+static inline int popc(uint32_t x) { return __builtin_popcount(x); }
+static inline int node_nd(const HMNode* n) { return n->ncoll ? (int)n->ncoll : popc(n->dmap); }
+static inline int node_nn(const HMNode* n) { return n->ncoll ? 0 : popc(n->nmap); }
+static inline int node_words(const HMNode* n) { return 2 * node_nd(n) + node_nn(n); }
+static inline uint32_t slot_bit(uint64_t h, int level) { return 1u << ((h >> (level * HT_SHIFT)) & HT_MASK); }
+
+static HMNode* node_new(uint32_t capw, uint64_t edit) {
+    HMNode* n = (HMNode*)map_alloc(sizeof(HMNode) + (size_t)capw * 8);
+    n->dmap = 0;
+    n->nmap = 0;
+    n->ncoll = 0;
+    n->cap = capw;
+    n->edit = edit;
     return n;
 }
 
-/* Return the value for key, or NULL if absent. */
-static void* trie_get(HMNode* node, int level, uint64_t h, void* key) {
-    while (node != NULL) {
-        if (node->kind == 1) {
-            int cnt = (int)node->used;
-            for (int i = 0; i < cnt; i++) {
-                if (resid_key_eq(node->slot[2 * i], key))
-                    return node->slot[2 * i + 1];
+/* The node to write, with room for `add` more words: `n` itself when the
+ * transient `edit` owns it and it has room, else a copy owned by `edit`
+ * (a transient's copy gets some spare room). */
+static HMNode* node_room(HMNode* n, int add, uint64_t edit) {
+    int used = node_words(n);
+    if (edit && n->edit == edit && used + add <= (int)n->cap) return n;
+    int extra = add > 0 ? add : 0;
+    if (edit) extra += 4;
+    HMNode* m = node_new((uint32_t)(used + extra), edit);
+    m->dmap = n->dmap;
+    m->nmap = n->nmap;
+    m->ncoll = n->ncoll;
+    memcpy(m->w, n->w, (size_t)used * 8);
+    return m;
+}
+
+static HMNode* node_leaf(int level, uint64_t h, uint64_t k, uint64_t v, uint64_t edit) {
+    HMNode* m = node_new(edit ? 6 : 2, edit);
+    m->dmap = slot_bit(h, level);
+    m->w[0] = k;
+    m->w[1] = v;
+    return m;
+}
+
+static HMNode* node_coll2(uint64_t k1, uint64_t v1, uint64_t k2, uint64_t v2, uint64_t edit) {
+    HMNode* m = node_new(edit ? 8 : 4, edit);
+    m->ncoll = 2;
+    m->w[0] = k1;
+    m->w[1] = v1;
+    m->w[2] = k2;
+    m->w[3] = v2;
+    return m;
+}
+
+/* A node at `level` holding two keys with different words; entry 1 is the
+ * older one (it goes first in a collision). */
+static HMNode* node_pair(int level, uint64_t h1, uint64_t k1, uint64_t v1, uint64_t h2, uint64_t k2, uint64_t v2, uint64_t edit) {
+    /* Past the last level the full hashes are equal. */
+    if (level > HT_MAX_LEVEL) return node_coll2(k1, v1, k2, v2, edit);
+    uint32_t b1 = slot_bit(h1, level), b2 = slot_bit(h2, level);
+    if (b1 == b2) {
+        HMNode* sub = node_pair(level + 1, h1, k1, v1, h2, k2, v2, edit);
+        HMNode* m = node_new(edit ? 5 : 1, edit);
+        m->nmap = b1;
+        m->w[0] = (uint64_t)(uintptr_t)sub;
+        return m;
+    }
+    HMNode* m = node_new(edit ? 8 : 4, edit);
+    m->dmap = b1 | b2;
+    int first1 = b1 < b2;
+    m->w[0] = first1 ? k1 : k2;
+    m->w[1] = first1 ? v1 : v2;
+    m->w[2] = first1 ? k2 : k1;
+    m->w[3] = first1 ? v2 : v1;
+    return m;
+}
+
+static HMNode* node_ins_data(HMNode* n, uint32_t bit, uint64_t k, uint64_t v, uint64_t edit) {
+    int di = popc(n->dmap & (bit - 1));
+    int used = node_words(n);
+    HMNode* m = node_room(n, 2, edit);
+    memmove(&m->w[2 * di + 2], &m->w[2 * di], (size_t)(used - 2 * di) * 8);
+    m->w[2 * di] = k;
+    m->w[2 * di + 1] = v;
+    m->dmap |= bit;
+    return m;
+}
+
+static HMNode* node_data_to_sub(HMNode* n, uint32_t bit, HMNode* sub, uint64_t edit) {
+    int di = popc(n->dmap & (bit - 1));
+    int nd = popc(n->dmap), nn = popc(n->nmap);
+    int ni = popc(n->nmap & (bit - 1));
+    HMNode* m = node_room(n, 0, edit);
+    uint64_t* w = m->w;
+    memmove(&w[2 * di], &w[2 * di + 2], (size_t)(2 * (nd - di - 1)) * 8);
+    memmove(&w[2 * (nd - 1)], &w[2 * nd], (size_t)ni * 8);
+    memmove(&w[2 * (nd - 1) + ni + 1], &w[2 * nd + ni], (size_t)(nn - ni) * 8);
+    w[2 * (nd - 1) + ni] = (uint64_t)(uintptr_t)sub;
+    m->dmap &= ~bit;
+    m->nmap |= bit;
+    return m;
+}
+
+static HMNode* node_sub_to_data(HMNode* n, uint32_t bit, uint64_t k, uint64_t v, uint64_t edit) {
+    int di = popc(n->dmap & (bit - 1));
+    int nd = popc(n->dmap), nn = popc(n->nmap);
+    int ni = popc(n->nmap & (bit - 1));
+    HMNode* m = node_room(n, 1, edit);
+    uint64_t* w = m->w;
+    memmove(&w[2 * nd + 2 + ni], &w[2 * nd + ni + 1], (size_t)(nn - ni - 1) * 8);
+    memmove(&w[2 * nd + 2], &w[2 * nd], (size_t)ni * 8);
+    memmove(&w[2 * di + 2], &w[2 * di], (size_t)(2 * (nd - di)) * 8);
+    w[2 * di] = k;
+    w[2 * di + 1] = v;
+    m->dmap |= bit;
+    m->nmap &= ~bit;
+    return m;
+}
+
+/* Insert into `n` (NULL: empty) at `level`. The result is `n` itself when
+ * it was written in place (or nothing changed), else a new node.
+ * *added is 1 when the key was new. */
+static HMNode* hn_insert(HMNode* n, int level, uint64_t h, int8_t kk, uint64_t k, uint64_t v, uint64_t edit, int* added) {
+    if (!n) {
+        *added = 1;
+        return node_leaf(level, h, k, v, edit);
+    }
+    if (n->ncoll) {
+        int cnt = (int)n->ncoll;
+        for (int i = 0; i < cnt; i++) {
+            if (key_eq(kk, n->w[2 * i], k)) {
+                *added = 0;
+                if (n->w[2 * i + 1] == v && n->w[2 * i] == k) return n;
+                HMNode* m = node_room(n, 0, edit);
+                m->w[2 * i] = k;
+                m->w[2 * i + 1] = v;
+                return m;
             }
+        }
+        HMNode* m = node_room(n, 2, edit);
+        m->w[2 * cnt] = k;
+        m->w[2 * cnt + 1] = v;
+        m->ncoll = (uint32_t)(cnt + 1);
+        *added = 1;
+        return m;
+    }
+    uint32_t bit = slot_bit(h, level);
+    if (n->nmap & bit) {
+        int ni = popc(n->nmap & (bit - 1));
+        int nd = popc(n->dmap);
+        HMNode* c = (HMNode*)(uintptr_t)n->w[2 * nd + ni];
+        HMNode* c2 = hn_insert(c, level + 1, h, kk, k, v, edit, added);
+        if (c2 == c) return n;
+        HMNode* m = node_room(n, 0, edit);
+        m->w[2 * nd + ni] = (uint64_t)(uintptr_t)c2;
+        return m;
+    }
+    if (n->dmap & bit) {
+        int di = popc(n->dmap & (bit - 1));
+        uint64_t ok = n->w[2 * di], ov = n->w[2 * di + 1];
+        if (key_eq(kk, ok, k)) {
+            *added = 0;
+            if (ov == v && ok == k) return n;
+            HMNode* m = node_room(n, 0, edit);
+            m->w[2 * di] = k;
+            m->w[2 * di + 1] = v;
+            return m;
+        }
+        *added = 1;
+        HMNode* sub = level >= HT_MAX_LEVEL ? node_coll2(ok, ov, k, v, edit)
+                                            : node_pair(level + 1, key_hash(kk, ok), ok, ov, h, k, v, edit);
+        return node_data_to_sub(n, bit, sub, edit);
+    }
+    *added = 1;
+    return node_ins_data(n, bit, k, v, edit);
+}
+
+/* The value word of key `k`, or NULL. */
+static uint64_t* hn_find(HMNode* n, uint64_t h, int8_t kk, uint64_t k) {
+    int level = 0;
+    while (n) {
+        if (n->ncoll) {
+            for (uint32_t i = 0; i < n->ncoll; i++)
+                if (key_eq(kk, n->w[2 * i], k)) return &n->w[2 * i + 1];
             return NULL;
         }
-        uint32_t idx = (uint32_t)((h >> (level * HT_SHIFT)) & HT_MASK);
-        uint32_t bit = (1u << idx);
-        if (!(node->used & bit)) return NULL;
-        if (node->sub[idx]) {
-            node = (HMNode*)node->slot[idx];
-            level++;
-            continue;
+        uint32_t bit = slot_bit(h, level);
+        if (n->dmap & bit) {
+            int di = popc(n->dmap & (bit - 1));
+            return key_eq(kk, n->w[2 * di], k) ? &n->w[2 * di + 1] : NULL;
         }
-        HMPair* p = (HMPair*)node->slot[idx];
-        return resid_key_eq(p->key, key) ? p->val : NULL;
+        if (!(n->nmap & bit)) return NULL;
+        n = (HMNode*)(uintptr_t)n->w[2 * popc(n->dmap) + popc(n->nmap & (bit - 1))];
+        level++;
     }
     return NULL;
 }
 
-static int trie_contains(HMNode* node, int level, uint64_t h, void* key) {
-    while (node != NULL) {
-        if (node->kind == 1) {
-            int cnt = (int)node->used;
-            for (int i = 0; i < cnt; i++) {
-                if (resid_key_eq(node->slot[2 * i], key)) return 1;
-            }
-            return 0;
-        }
-        uint32_t idx = (uint32_t)((h >> (level * HT_SHIFT)) & HT_MASK);
-        uint32_t bit = (1u << idx);
-        if (!(node->used & bit)) return 0;
-        if (node->sub[idx]) {
-            node = (HMNode*)node->slot[idx];
-            level++;
-            continue;
-        }
-        return resid_key_eq(((HMPair*)node->slot[idx])->key, key);
-    }
-    return 0;
+/* A node holding exactly one entry and no subnodes (it folds into its
+ * parent's slot). */
+static inline int node_single(const HMNode* n) {
+    return n->ncoll == 1 || (!n->ncoll && n->nmap == 0 && popc(n->dmap) == 1);
 }
 
-/* Remove key from `node` at `level`, returning a new persistent node.
- * `did` (out) is 1 if the key was actually removed. If absent, returns
- * the ORIGINAL node unchanged (shared) and *did = 0. */
-static HMNode* trie_remove(HMNode* node, int level, uint64_t h, void* key, int* did) {
-    if (node == NULL) { *did = 0; return NULL; }
-    if (node->kind == 1) {
-        int cnt = (int)node->used;
-        for (int i = 0; i < cnt; i++) {
-            if (resid_key_eq(node->slot[2 * i], key)) {
-                HMNode* n = node_clone(node);
-                for (int j = i; j < cnt - 1; j++) {
-                    n->slot[2 * j] = n->slot[2 * (j + 1)];
-                    n->slot[2 * j + 1] = n->slot[2 * (j + 1) + 1];
-                }
-                n->used = (uint32_t)(cnt - 1);
-                *did = 1;
-                return n;
-            }
-        }
-        *did = 0;
-        return node;
-    }
-    uint32_t idx = (uint32_t)((h >> (level * HT_SHIFT)) & HT_MASK);
-    uint32_t bit = (1u << idx);
-    if (!(node->used & bit)) { *did = 0; return node; }
-    if (node->sub[idx]) {
-        HMNode* child = (HMNode*)node->slot[idx];
-        HMNode* newchild = trie_remove(child, level + 1, h, key, did);
-        if (!*did) return node;
-        HMNode* n = node_clone(node);
-        if (newchild == NULL || newchild->used == 0) {
-            n->used &= ~bit; /* collapsed child: drop the slot */
-            n->sub[idx] = 0;
-            n->slot[idx] = NULL;
-        } else {
-            n->slot[idx] = newchild;
-        }
-        return n;
-    }
-    HMPair* p = (HMPair*)node->slot[idx];
-    if (resid_key_eq(p->key, key)) {
-        HMNode* n = node_clone(node);
-        n->used &= ~bit;
-        n->sub[idx] = 0;
-        n->slot[idx] = NULL;
-        *did = 1;
-        return n;
-    }
+/* Remove `k` from `n`. NULL when the node empties; `n` itself when
+ * unchanged (*did = 0) or written in place. */
+static HMNode* hn_remove(HMNode* n, int level, uint64_t h, int8_t kk, uint64_t k, uint64_t edit, int* did) {
     *did = 0;
-    return node;
+    if (!n) return NULL;
+    if (n->ncoll) {
+        int cnt = (int)n->ncoll;
+        for (int i = 0; i < cnt; i++) {
+            if (!key_eq(kk, n->w[2 * i], k)) continue;
+            *did = 1;
+            if (cnt == 1) return NULL;
+            HMNode* m = node_room(n, 0, edit);
+            memmove(&m->w[2 * i], &m->w[2 * i + 2], (size_t)(2 * (cnt - i - 1)) * 8);
+            m->ncoll = (uint32_t)(cnt - 1);
+            return m;
+        }
+        return n;
+    }
+    uint32_t bit = slot_bit(h, level);
+    if (n->nmap & bit) {
+        int nd = popc(n->dmap), nn = popc(n->nmap);
+        int ni = popc(n->nmap & (bit - 1));
+        HMNode* c = (HMNode*)(uintptr_t)n->w[2 * nd + ni];
+        HMNode* c2 = hn_remove(c, level + 1, h, kk, k, edit, did);
+        if (!*did) return n;
+        if (c2 == NULL) {
+            if (nd == 0 && nn == 1) return NULL;
+            HMNode* m = node_room(n, 0, edit);
+            memmove(&m->w[2 * nd + ni], &m->w[2 * nd + ni + 1], (size_t)(nn - ni - 1) * 8);
+            m->nmap &= ~bit;
+            return m;
+        }
+        if (node_single(c2)) return node_sub_to_data(n, bit, c2->w[0], c2->w[1], edit);
+        if (c2 == c) return n;
+        HMNode* m = node_room(n, 0, edit);
+        m->w[2 * nd + ni] = (uint64_t)(uintptr_t)c2;
+        return m;
+    }
+    if (n->dmap & bit) {
+        int di = popc(n->dmap & (bit - 1));
+        if (!key_eq(kk, n->w[2 * di], k)) return n;
+        *did = 1;
+        if (n->dmap == bit && n->nmap == 0) return NULL;
+        int used = node_words(n);
+        HMNode* m = node_room(n, 0, edit);
+        memmove(&m->w[2 * di], &m->w[2 * di + 2], (size_t)(used - 2 * di - 2) * 8);
+        m->dmap &= ~bit;
+        return m;
+    }
+    return n;
 }
 
-/* Collect all (key, val) into flat arrays starting at *idx. Pass NULL for
- * either array to skip that field. */
-static void trie_collect(HMNode* node, void** keys, void** vals, int64_t* idx) {
-    if (node == NULL) return;
-    if (node->kind == 1) {
-        int cnt = (int)node->used;
-        for (int i = 0; i < cnt; i++) {
-            if (keys) keys[*idx] = node->slot[2 * i];
-            if (vals) vals[*idx] = node->slot[2 * i + 1];
+/* Entries in canonical order into ks / vs (either may be NULL). */
+static void hn_collect(const HMNode* n, uint64_t* ks, uint64_t* vs, int64_t* idx) {
+    if (!n) return;
+    if (n->ncoll) {
+        for (uint32_t i = 0; i < n->ncoll; i++) {
+            if (ks) ks[*idx] = n->w[2 * i];
+            if (vs) vs[*idx] = n->w[2 * i + 1];
             (*idx)++;
         }
         return;
     }
-    for (int i = 0; i < HT_DEGREE; i++) {
-        if (node->used & (1u << i)) {
-            if (node->sub[i]) {
-                trie_collect((HMNode*)node->slot[i], keys, vals, idx);
-            } else {
-                HMPair* p = (HMPair*)node->slot[i];
-                if (keys) keys[*idx] = p->key;
-                if (vals) vals[*idx] = p->val;
-                (*idx)++;
-            }
+    int nd = popc(n->dmap);
+    uint32_t all = n->dmap | n->nmap;
+    while (all) {
+        uint32_t bit = all & (0u - all);
+        all &= all - 1;
+        if (n->dmap & bit) {
+            int di = popc(n->dmap & (bit - 1));
+            if (ks) ks[*idx] = n->w[2 * di];
+            if (vs) vs[*idx] = n->w[2 * di + 1];
+            (*idx)++;
+        } else {
+            hn_collect((const HMNode*)(uintptr_t)n->w[2 * nd + popc(n->nmap & (bit - 1))], ks, vs, idx);
         }
     }
 }
 
-/* ── Table mode (see HMTrie) ──────────────────────────────────────────
+static HMTrie* trie_new(int64_t count, HMNode* root, int8_t kk, int8_t vk) {
+    HMTrie* t = (HMTrie*)map_alloc(sizeof(HMTrie));
+    t->count = count;
+    t->root = root;
+    t->tab = NULL;
+    t->transient = 0;
+    t->edit = 0;
+    t->kk = kk;
+    t->vk = vk;
+    return t;
+}
+
+/* ── Table mode ─────────────────────────────────────────────────────────
  *
- * Keys and values are 64-bit words tagged by a kind the compiler passes
- * from the static types: key kind 1 = raw Int, 0 = boxed value pointer;
- * value kind 1 = raw Int, 2 = raw Float bits, 3 = raw Bool, 0 = boxed
- * pointer (or a set's opaque marker); -1 = not decided yet (empty table:
- * the first update decides). A request in another kind is converted, so a
- * mismatch is only ever slower, never wrong.
- *
- * Layout: open addressing with linear probing over a dense key array and a
+ * Open addressing with linear probing over a dense key array and a
  * parallel value array, at most half full. Free and deleted slots are
  * marked by sentinel keys (0 / 1 for pointers, which are never those
  * values; INT64_MIN / INT64_MIN + 1 for raw Ints, whose entries, if those
@@ -7061,8 +7136,9 @@ struct MapTab {
     int64_t tombs;
     int8_t kkind;
     int8_t vkind;
+    int8_t nov;     /* no value array: every value is the word 1 (a set) */
     uint64_t* keys; /* NULL while kkind is undecided */
-    uint64_t* vals;
+    uint64_t* vals; /* NULL while undecided or `nov` */
     int8_t oob_has[2];
     uint64_t oob_val[2];
     /* Last raw-key probe (lvalid): `m.insert(k, (m.get(k) else {..}) + 1)`
@@ -7077,8 +7153,6 @@ struct MapTab {
 #define MT_RAW_TOMB 0x8000000000000001ULL
 
 static HMNode* map_root(HMTrie* m);
-void* resid_map_insert(void* map, void* key, void* val);
-void* resid_map_remove(void* map, void* key);
 
 static inline uint64_t mt_empty(const MapTab* t) { return t->kkind == 1 ? MT_RAW_EMPTY : 0; }
 static inline uint64_t mt_tomb(const MapTab* t) { return t->kkind == 1 ? MT_RAW_TOMB : 1; }
@@ -7088,11 +7162,6 @@ static inline uint64_t mt_mix(uint64_t k) {
     k *= 0xff51afd7ed558ccdULL;
     k ^= k >> 33;
     return k;
-}
-
-static int box_is_i64(const void* p) {
-    const ResidVal* b = (const ResidVal*)p;
-    return is_boxed(p) && b->tag == -1 && b->type && strcmp(b->type, "i64") == 0;
 }
 
 static inline uint64_t mt_hash(const MapTab* t, uint64_t kb) {
@@ -7115,20 +7184,32 @@ static inline int mt_oob(const MapTab* t, uint64_t k) {
 static void mt_alloc(MapTab* t, int64_t cap) {
     t->cap = cap;
     t->keys = (uint64_t*)malloc((size_t)cap * sizeof(uint64_t));
-    t->vals = (uint64_t*)malloc((size_t)cap * sizeof(uint64_t));
-    if (!t->keys || !t->vals) resid_abort("map table: out of memory");
+    t->vals = t->nov ? NULL : (uint64_t*)malloc((size_t)cap * sizeof(uint64_t));
+    if (!t->keys || (!t->nov && !t->vals)) resid_abort("map table: out of memory");
     uint64_t e = mt_empty(t);
     for (int64_t i = 0; i < cap; i++) t->keys[i] = e;
 }
 
-static MapTab* mt_new(int64_t cap, int8_t kk, int8_t vk) {
+static MapTab* mt_new(int64_t cap, int8_t kk, int8_t vk, int8_t nov) {
     MapTab* t = (MapTab*)calloc(1, sizeof(MapTab));
     if (!t) resid_abort("map table: out of memory");
     t->cap = cap;
     t->kkind = kk;
     t->vkind = vk;
+    t->nov = nov;
     if (kk != -1) mt_alloc(t, cap);
     return t;
+}
+
+/* Whether `used` slots (live + deleted) overfill `cap` (half at most:
+ * fuller tables cost probe-heavy loops like k-nucleotide ~10%). */
+#define MT_OVER(used, cap) ((used) * 2 > (cap))
+
+/* Slots for `n` entries: a power of two, at most half full. */
+static int64_t mt_cap_for(int64_t n) {
+    int64_t cap = 16;
+    while (MT_OVER(n + 1, cap)) cap *= 2;
+    return cap;
 }
 
 /* Slot of key `k` (already in the table's key kind, not a sentinel), or
@@ -7167,7 +7248,7 @@ static int mt_next(const MapTab* t, int64_t* idx, uint64_t* k, uint64_t* v) {
         uint64_t s = t->keys[i];
         if (s == mt_empty(t) || s == mt_tomb(t)) continue;
         *k = s;
-        *v = t->vals[i];
+        *v = t->vals ? t->vals[i] : 1;
         return 1;
     }
     while (*idx < t->cap + 2) {
@@ -7203,51 +7284,44 @@ static void mt_rebuild(MapTab* t, int64_t cap, int8_t kk, uint64_t (*conv)(int8_
 static void mt_insert_new(MapTab* t, uint64_t k, uint64_t v) {
     int o = mt_oob(t, k);
     if (o >= 0) { t->oob_has[o] = 1; t->oob_val[o] = v; t->live++; return; }
-    if ((t->live + t->tombs + 1) * 2 > t->cap) mt_rebuild(t, t->live * 4 > t->cap ? t->cap * 2 : t->cap, t->kkind, NULL);
+    /* Full: twice the slots, or the same number when deleted slots are
+     * most of it. */
+    if (MT_OVER(t->live + t->tombs + 1, t->cap)) mt_rebuild(t, t->live * 4 > t->cap ? t->cap * 2 : t->cap, t->kkind, NULL);
     int64_t r = mt_probe(t, k);
     t->keys[-r - 1] = k;
-    t->vals[-r - 1] = v;
+    if (t->vals) t->vals[-r - 1] = v;
     t->live++;
     t->lvalid = 0;
 }
 
-/* Box a stored word of kind `k` into a Resid value pointer. */
-static uint64_t mt_box(int8_t k, uint64_t w) {
-    switch (k) {
-    case 1: return (uint64_t)(uintptr_t)resid_box_i64((int64_t)w);
-    case 2: { double d; memcpy(&d, &w, 8); return (uint64_t)(uintptr_t)resid_box_f64(d); }
-    case 3: return (uint64_t)(uintptr_t)resid_box_bool((int8_t)(w != 0));
-    default: return w;
+/* The first update decides the kinds, and whether the table keeps
+ * values (a set's first value is the marker 1). */
+static void mt_decide(MapTab* t, int8_t kk, int8_t vk, uint64_t vb) {
+    if (t->vkind == -1) t->vkind = vk;
+    if (t->kkind == -1) {
+        t->kkind = kk;
+        t->nov = vk == 0 && vb == 1;
+        mt_alloc(t, t->cap);
     }
 }
 
-/* Unbox a boxed value pointer to kind `k` (1/2/3), or 0 when the box does
- * not hold that kind. */
-static int mt_unbox(int8_t k, uint64_t w, uint64_t* out) {
-    void* p = (void*)(uintptr_t)w;
-    if (!p || !is_boxed(p) || ((ResidVal*)p)->tag != -1 || !((ResidVal*)p)->type) return 0;
-    const char* ty = ((ResidVal*)p)->type;
-    if (k == 1 && strcmp(ty, "i64") == 0) { *out = (uint64_t)resid_unbox_i64(p); return 1; }
-    if (k == 2 && strcmp(ty, "f64") == 0) { double d = resid_unbox_f64(p); memcpy(out, &d, 8); return 1; }
-    if (k == 3 && strcmp(ty, "bool") == 0) { *out = (uint64_t)resid_unbox_bool(p); return 1; }
-    return 0;
+/* A value other than 1 for a value-less table: give it its values. */
+static void mt_vals_make(MapTab* t) {
+    t->vals = (uint64_t*)malloc((size_t)t->cap * sizeof(uint64_t));
+    if (!t->vals) resid_abort("map table: out of memory");
+    for (int64_t i = 0; i < t->cap; i++) t->vals[i] = 1;
+    t->nov = 0;
 }
 
-static void mt_decide(MapTab* t, int8_t kk, int8_t vk) {
-    if (t->vkind == -1) t->vkind = vk;
-    if (t->kkind == -1) { t->kkind = kk; mt_alloc(t, t->cap); }
-}
+static uint64_t g_map_one = 1;
 
 /* Store every value boxed from now on. */
 static void mt_vals_boxed(MapTab* t) {
-    int64_t it = 0;
-    uint64_t k, v;
     for (int64_t i = 0; i < t->cap; i++) {
         uint64_t s = t->keys[i];
         if (s != mt_empty(t) && s != mt_tomb(t)) t->vals[i] = mt_box(t->vkind, t->vals[i]);
     }
     for (int o = 0; o < 2; o++) if (t->oob_has[o]) t->oob_val[o] = mt_box(t->vkind, t->oob_val[o]);
-    (void)it; (void)k; (void)v;
     t->vkind = 0;
 }
 
@@ -7270,11 +7344,12 @@ static uint64_t mt_val_in(MapTab* t, int8_t rk, uint64_t vb) {
     return mt_box(rk, vb);
 }
 
-static uint64_t mt_val_out(const MapTab* t, int8_t want, uint64_t w) {
-    if (t->vkind == want || t->vkind == -1) return w;
-    if (want == 0) return mt_box(t->vkind, w);
+/* A stored value word of kind `have` as kind `want`. */
+static uint64_t word_out(int8_t have, int8_t want, uint64_t w) {
+    if (have == want || have == -1) return w;
+    if (want == 0) return mt_box(have, w);
     uint64_t raw = 0;
-    if (t->vkind == 0 && mt_unbox(want, w, &raw)) return raw;
+    if (have == 0 && mt_unbox(want, w, &raw)) return raw;
     return w;
 }
 
@@ -7293,15 +7368,17 @@ static uint64_t* mt_vref(MapTab* t, int8_t rk, uint64_t kb) {
     int o = mt_oob(t, k);
     if (o >= 0) return t->oob_has[o] ? &t->oob_val[o] : NULL;
     int64_t r = mt_probe(t, k);
-    return r >= 0 ? &t->vals[r] : NULL;
+    if (r < 0) return NULL;
+    return t->vals ? &t->vals[r] : &g_map_one;
 }
 
 static void mt_put(MapTab* t, int8_t kk, uint64_t kb, int8_t vk, uint64_t vb) {
-    mt_decide(t, kk, vk);
+    mt_decide(t, kk, vk, vb);
     uint64_t k = mt_key_in(t, kk, kb);
     uint64_t v = mt_val_in(t, vk, vb);
+    if (t->nov && v != 1) mt_vals_make(t);
     uint64_t* at = mt_vref(t, t->kkind, k);
-    if (at) { *at = v; return; }
+    if (at) { if (!t->nov) *at = v; return; }
     mt_insert_new(t, k, v);
 }
 
@@ -7328,8 +7405,65 @@ static int mt_del(MapTab* t, int8_t kk, uint64_t kb) {
     return 1;
 }
 
+/* ── Either mode ────────────────────────────────────────────────────── */
+
+static inline int8_t map_kk(const HMTrie* m) { return m->tab ? m->tab->kkind : m->kk; }
+static inline int8_t map_vk(const HMTrie* m) { return m->tab ? m->tab->vkind : m->vk; }
+
+/* A trie over the words of ks / vs (entries with equal hashes keep this
+ * order), shared once built: it is built in place under a token that is
+ * never used again. */
+static HMNode* trie_build(const uint64_t* ks, const uint64_t* vs, int64_t n, int8_t kk) {
+    HMNode* root = NULL;
+    uint64_t edit = new_edit_token();
+    for (int64_t i = 0; i < n; i++) {
+        int added = 0;
+        root = hn_insert(root, 0, key_hash(kk, ks[i]), kk, ks[i], vs ? vs[i] : 1, edit, &added);
+    }
+    return root;
+}
+
+typedef struct { uint64_t rank; int64_t ord; uint64_t k; uint64_t v; } CanonEnt;
+
+static int canon_cmp(const void* a, const void* b) {
+    const CanonEnt* x = (const CanonEnt*)a;
+    const CanonEnt* y = (const CanonEnt*)b;
+    if (x->rank != y->rank) return x->rank < y->rank ? -1 : 1;
+    return x->ord < y->ord ? -1 : (x->ord > y->ord ? 1 : 0);
+}
+
+/* A table's entries in canonical order (entries with equal full hashes
+ * keep table order, as the trie built from the table would). */
+static void mt_entries(const MapTab* t, uint64_t* ks, uint64_t* vs) {
+    int64_t n = t->live;
+    if (n == 0) return;
+    CanonEnt* es = (CanonEnt*)map_alloc((size_t)n * sizeof(CanonEnt));
+    int64_t it = 0, j = 0;
+    uint64_t k, v;
+    while (mt_next(t, &it, &k, &v)) {
+        es[j].rank = canon_rank(key_hash(t->kkind, k));
+        es[j].ord = j;
+        es[j].k = k;
+        es[j].v = v;
+        j++;
+    }
+    qsort(es, (size_t)n, sizeof(CanonEnt), canon_cmp);
+    for (int64_t i = 0; i < n; i++) {
+        if (ks) ks[i] = es[i].k;
+        if (vs) vs[i] = es[i].v;
+    }
+    free(es);
+}
+
+/* A map's entries as words of its kinds, in canonical order. */
+static void map_entries(HMTrie* m, uint64_t* ks, uint64_t* vs) {
+    if (m->tab) { mt_entries(m->tab, ks, vs); return; }
+    int64_t j = 0;
+    hn_collect(m->root, ks, vs, &j);
+}
+
 /* The canonical trie holding the same entries: cached on a frozen table,
- * rebuilt for a transient one (whose table may still change). */
+ * built afresh for a transient one (whose table may still change). */
 static HMNode* map_root(HMTrie* m) {
     if (!m->tab) return m->root;
     if (!m->transient) {
@@ -7337,20 +7471,20 @@ static HMNode* map_root(HMTrie* m) {
         if (c || m->count == 0) return c;
     }
     MapTab* t = m->tab;
-    HMNode* root = NULL;
-    int64_t it = 0;
-    uint64_t kw, vw;
+    int64_t n = t->live;
     /* A frozen table caches the trie on itself, so it must outlive any
      * arena or scalar scope open now: build it on the plain heap. */
     int cache = !m->transient;
     AllocSuspend sus;
     if (cache) sus = alloc_suspend();
-    while (mt_next(t, &it, &kw, &vw)) {
-        void* k = (void*)(uintptr_t)mt_box(t->kkind, kw);
-        void* v = (void*)(uintptr_t)mt_box(t->vkind, vw);
-        int isnew = 0;
-        root = trie_insert(root, 0, resid_hash(k), k, v, &isnew);
-    }
+    uint64_t* ks = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    uint64_t* vs = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    int64_t it = 0, j = 0;
+    uint64_t kw, vw;
+    while (mt_next(t, &it, &kw, &vw)) { ks[j] = kw; vs[j] = vw; j++; }
+    HMNode* root = trie_build(ks, vs, n, t->kkind);
+    free(ks);
+    free(vs);
     if (cache) alloc_resume(sus);
     if (!m->transient) {
         HMNode* expect = NULL;
@@ -7360,30 +7494,112 @@ static HMNode* map_root(HMTrie* m) {
     return root;
 }
 
-static void map_free_parts(HMTrie* m) {
-    if (m->tab) {
-        free(m->tab->keys);
-        free(m->tab->vals);
-        free(m->tab);
+/* The trie-mode base of a persistent update: kinds and a root that no
+ * transient will write (a transient trie's own nodes may still change, so
+ * it is rebuilt). */
+typedef struct { HMNode* root; int8_t kk; int8_t vk; } TrieBase;
+
+static TrieBase map_base(HMTrie* m) {
+    TrieBase b = { NULL, map_kk(m), map_vk(m) };
+    if (m->tab || !m->transient) { b.root = map_root(m); return b; }
+    int64_t n = m->count;
+    uint64_t* ks = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    uint64_t* vs = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    map_entries(m, ks, vs);
+    b.root = trie_build(ks, vs, n, b.kk);
+    free(ks);
+    free(vs);
+    return b;
+}
+
+/* A trie base whose words are all boxed (a request of another kind). */
+static TrieBase base_boxed(TrieBase b, int64_t n, int keys, int vals) {
+    uint64_t* ks = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    uint64_t* vs = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    int64_t j = 0;
+    hn_collect(b.root, ks, vs, &j);
+    int8_t kk = keys ? 0 : b.kk, vk = vals ? 0 : b.vk;
+    for (int64_t i = 0; i < n; i++) {
+        if (keys) ks[i] = mt_box(b.kk, ks[i]);
+        if (vals) vs[i] = mt_box(b.vk, vs[i]);
     }
-    free_hmnode(m->root);
+    TrieBase r = { trie_build(ks, vs, n, kk), kk, vk };
+    free(ks);
+    free(vs);
+    return r;
+}
+
+/* Bring a request word of kind `rk` to kind `have`; 0 when it cannot be. */
+static int word_in(int8_t have, int8_t rk, uint64_t w, uint64_t* out) {
+    if (have == rk) { *out = w; return 1; }
+    if (have == 0) { *out = mt_box(rk, w); return 1; }
+    if (rk == 0) return mt_unbox(have, w, out);
+    return 0;
+}
+
+/* Persistent insert: a new frozen trie-mode map. */
+static HMTrie* map_insert_p(HMTrie* m, int8_t rk, uint64_t kb, int8_t rv, uint64_t vb) {
+    TrieBase b = map_base(m);
+    if (m->count == 0) { b.root = NULL; b.kk = rk; b.vk = rv; }
+    if (b.kk == -1) b.kk = rk;
+    if (b.vk == -1) b.vk = rv;
+    uint64_t k, v;
+    if (!word_in(b.kk, rk, kb, &k)) { b = base_boxed(b, m->count, 1, 0); k = mt_box(rk, kb); }
+    if (!word_in(b.vk, rv, vb, &v)) { b = base_boxed(b, m->count, 0, 1); v = mt_box(rv, vb); }
+    int added = 0;
+    HMNode* root = hn_insert(b.root, 0, key_hash(b.kk, k), b.kk, k, v, 0, &added);
+    return trie_new(m->count + added, root, b.kk, b.vk);
+}
+
+/* A request key as a word of the map's key kind; 0 when no entry can
+ * have it. */
+static int key_lookup_word(int8_t kk, int8_t rk, uint64_t kb, uint64_t* out) {
+    if (kk == rk) { *out = kb; return 1; }
+    if (kk == 0) { *out = mt_box(rk, kb); return 1; }
+    return mt_unbox(kk, kb, out);
+}
+
+/* Persistent remove: `m` itself when the key is absent (unless it is
+ * transient: that is never handed out as is). */
+static HMTrie* map_remove_p(HMTrie* m, int8_t rk, uint64_t kb) {
+    uint64_t k;
+    if (m->count == 0 || !key_lookup_word(map_kk(m), rk, kb, &k)) {
+        return m->transient ? trie_new(m->count, map_base(m).root, map_kk(m), map_vk(m)) : m;
+    }
+    TrieBase b = map_base(m);
+    int did = 0;
+    HMNode* root = hn_remove(b.root, 0, key_hash(b.kk, k), b.kk, k, 0, &did);
+    if (!did) return m->transient ? trie_new(m->count, b.root, b.kk, b.vk) : m;
+    return trie_new(m->count - 1, root, b.kk, b.vk);
+}
+
+/* The value word (of the map's value kind) of a request key, or NULL. */
+static uint64_t* map_vref(HMTrie* m, int8_t rk, uint64_t kb) {
+    if (m->count == 0) return NULL;
+    if (m->tab) return mt_vref(m->tab, rk, kb);
+    uint64_t k;
+    if (!key_lookup_word(m->kk, rk, kb, &k)) return NULL;
+    return hn_find(m->root, key_hash(m->kk, k), m->kk, k);
 }
 
 #define MAP_TRANSIENT_COPY_MAX 64
 
-/* Entry of a proven linear accumulator loop: an exclusively owned, mutable
- * table holding the same entries as `map`. `map` itself is untouched. */
+/* An exclusively owned, mutable copy of `map` for the first owned update
+ * of a shared map; `map` itself is untouched. A small map is copied into a
+ * table (fast in-place growth). A big one becomes a transient trie sharing
+ * all of `map`'s nodes (its canonical trie, for a table), copying a node
+ * only when it first writes it. A transient source (owned elsewhere) is
+ * copied in full. */
 void* resid_map_transient(void* map) {
     HMTrie* src = (HMTrie*)map;
-    /* Entering the loop copies the incoming map. For a big map that copy
-     * could cost more than the loop saves (a few inserts into a large map),
-     * and a loop entered once per element of a growing map would copy it
-     * every time, so such a loop just keeps using ordinary persistent
-     * updates: handing back the untouched persistent map makes every owned
-     * update take the persistent path. This holds for a frozen table too
-     * (the result of an earlier loop). */
-    if (src->count > MAP_TRANSIENT_COPY_MAX) return map;
-    HMTrie* m = trie_new(src->count, NULL);
+    int64_t n = src->count;
+    if (n > MAP_TRANSIENT_COPY_MAX && !src->transient) {
+        HMTrie* m = trie_new(n, map_root(src), map_kk(src), map_vk(src));
+        m->transient = 1;
+        m->edit = new_edit_token();
+        return m;
+    }
+    HMTrie* m = trie_new(n, NULL, -1, -1);
     m->transient = 1;
     if (src->tab) {
         MapTab* s = src->tab;
@@ -7393,62 +7609,82 @@ void* resid_map_transient(void* map) {
         t->lvalid = 0;
         if (s->keys) {
             t->keys = (uint64_t*)malloc((size_t)s->cap * sizeof(uint64_t));
-            t->vals = (uint64_t*)malloc((size_t)s->cap * sizeof(uint64_t));
-            if (!t->keys || !t->vals) resid_abort("map table: out of memory");
+            t->vals = s->vals ? (uint64_t*)malloc((size_t)s->cap * sizeof(uint64_t)) : NULL;
+            if (!t->keys || (s->vals && !t->vals)) resid_abort("map table: out of memory");
             memcpy(t->keys, s->keys, (size_t)s->cap * sizeof(uint64_t));
-            memcpy(t->vals, s->vals, (size_t)s->cap * sizeof(uint64_t));
+            if (s->vals) memcpy(t->vals, s->vals, (size_t)s->cap * sizeof(uint64_t));
         }
         m->tab = t;
         return m;
     }
-    int64_t n = src->count;
-    int64_t cap = 16;
-    while (cap < (n + 1) * 2) cap *= 2;
-    m->tab = mt_new(cap, n == 0 ? -1 : 0, n == 0 ? -1 : 0);
+    m->tab = mt_new(mt_cap_for(n), -1, -1, 0);
     if (n > 0) {
-        void** ks = (void**)malloc((size_t)n * sizeof(void*));
-        void** vs = (void**)malloc((size_t)n * sizeof(void*));
-        int64_t j = 0;
-        trie_collect(src->root, ks, vs, &j);
-        for (int64_t i = 0; i < n; i++)
-            mt_put(m->tab, 0, (uint64_t)(uintptr_t)ks[i], 0, (uint64_t)(uintptr_t)vs[i]);
+        uint64_t* ks = (uint64_t*)map_alloc((size_t)n * 8);
+        uint64_t* vs = (uint64_t*)map_alloc((size_t)n * 8);
+        map_entries(src, ks, vs);
+        for (int64_t i = 0; i < n; i++) mt_put(m->tab, src->kk, ks[i], src->vk, vs[i]);
         free(ks);
         free(vs);
     }
     return m;
 }
 
-/* The loop is done with it: from here on the table is an ordinary
- * immutable map value. */
+/* The owner is done with it: from here on the value is an ordinary
+ * immutable map. */
 void* resid_map_freeze(void* map) {
     HMTrie* m = (HMTrie*)map;
     if (m->transient) m->transient = 0;
     return map;
 }
 
+/* An owned update of a transient trie, in place. */
+static void* trie_put_owned(HMTrie* m, int8_t rk, uint64_t kb, int8_t rv, uint64_t vb) {
+    if (m->count == 0) { m->kk = rk; m->vk = rv; }
+    uint64_t k, v;
+    if (!word_in(m->kk, rk, kb, &k) || !word_in(m->vk, rv, vb, &v)) {
+        /* Words of another kind: go boxed (a fresh transient trie). */
+        TrieBase b = base_boxed((TrieBase){ m->root, m->kk, m->vk }, m->count, 1, 1);
+        m->root = b.root;
+        m->kk = 0;
+        m->vk = 0;
+        m->edit = new_edit_token();
+        k = mt_box(rk, kb);
+        v = mt_box(rv, vb);
+    }
+    int added = 0;
+    m->root = hn_insert(m->root, 0, key_hash(m->kk, k), m->kk, k, v, m->edit, &added);
+    m->count += added;
+    return m;
+}
+
 static __attribute__((noinline)) void* map_put_slow(HMTrie* m, int8_t owned, int8_t kk, int64_t kb, int8_t vk, int64_t vb) {
+    /* The first owned update of a shared map takes a private copy. */
+    if (owned && !m->transient) m = (HMTrie*)resid_map_transient(m);
     if (owned && m->transient) {
+        if (!m->tab) return trie_put_owned(m, kk, (uint64_t)kb, vk, (uint64_t)vb);
         m->tab->lvalid = 0;
         mt_put(m->tab, kk, (uint64_t)kb, vk, (uint64_t)vb);
         m->count = m->tab->live;
         return m;
     }
-    return resid_map_insert(m, (void*)(uintptr_t)mt_box(kk, (uint64_t)kb), (void*)(uintptr_t)mt_box(vk, (uint64_t)vb));
+    return map_insert_p(m, kk, (uint64_t)kb, vk, (uint64_t)vb);
 }
 
-/* Typed insert. `owned` is set by codegen only for the consuming update of
- * a proven linear accumulator; on a transient table that updates in place.
- * Every other case is the ordinary persistent insert. */
+/* Typed insert. `owned` is set by codegen only for an update the
+ * compiler proved nothing else observes (the old version is dead): on a
+ * transient it updates in place, and a shared map is first made into one
+ * (resid_map_transient). Every other case is the ordinary persistent
+ * insert. */
 __attribute__((always_inline)) void* resid_map_put(void* map, int8_t owned, int8_t kk, int64_t kb, int8_t vk, int64_t vb) {
     HMTrie* m = (HMTrie*)map;
     MapTab* t = m->tab;
     uint64_t k = (uint64_t)kb;
-    if (owned && m->transient && kk == 1 && t->kkind == 1 && t->vkind == vk && (k >> 1) != (MT_RAW_EMPTY >> 1)) {
+    if (owned && m->transient && t && kk == 1 && t->kkind == 1 && t->vkind == vk && (t->vals || vb == 1) && (k >> 1) != (MT_RAW_EMPTY >> 1)) {
         int64_t r = mt_probe_raw_cached(t, k);
-        if (r >= 0) { t->vals[r] = (uint64_t)vb; return m; }
-        if ((t->live + t->tombs + 1) * 2 <= t->cap) {
+        if (r >= 0) { if (t->vals) t->vals[r] = (uint64_t)vb; return m; }
+        if (!MT_OVER(t->live + t->tombs + 1, t->cap)) {
             t->keys[-r - 1] = k;
-            t->vals[-r - 1] = (uint64_t)vb;
+            if (t->vals) t->vals[-r - 1] = (uint64_t)vb;
             t->live++;
             t->lres = -r - 1; /* the cached key now lives there */
             m->count = t->live;
@@ -7460,12 +7696,21 @@ __attribute__((always_inline)) void* resid_map_put(void* map, int8_t owned, int8
 
 void* resid_map_del(void* map, int8_t owned, int8_t kk, int64_t kb) {
     HMTrie* m = (HMTrie*)map;
+    if (owned && !m->transient && m->count > 0) m = (HMTrie*)resid_map_transient(m);
     if (owned && m->transient) {
-        mt_del(m->tab, kk, (uint64_t)kb);
-        m->count = m->tab->live;
+        if (m->tab) {
+            mt_del(m->tab, kk, (uint64_t)kb);
+            m->count = m->tab->live;
+            return m;
+        }
+        uint64_t k;
+        if (m->count == 0 || !key_lookup_word(m->kk, kk, (uint64_t)kb, &k)) return m;
+        int did = 0;
+        m->root = hn_remove(m->root, 0, key_hash(m->kk, k), m->kk, k, m->edit, &did);
+        m->count -= did;
         return m;
     }
-    return resid_map_remove(map, (void*)(uintptr_t)mt_box(kk, (uint64_t)kb));
+    return map_remove_p(m, kk, (uint64_t)kb);
 }
 
 void* resid_set_put(void* set, int8_t owned, int8_t kk, int64_t kb) {
@@ -7478,18 +7723,10 @@ typedef struct { int64_t val; int64_t found; } MapFind;
 
 static __attribute__((noinline)) MapFind map_find_slow(HMTrie* m, int8_t kk, int64_t kb, int8_t vk) {
     MapFind r = { 0, 0 };
-    if (m->tab) {
-        uint64_t* at = mt_vref(m->tab, kk, (uint64_t)kb);
-        if (!at) return r;
-        r.val = (int64_t)mt_val_out(m->tab, vk, *at);
-        r.found = 1;
-        return r;
-    }
-    void* key = (void*)(uintptr_t)mt_box(kk, (uint64_t)kb);
-    void* v = trie_get(m->root, 0, resid_hash(key), key);
-    if (!v) return r;
-    uint64_t w = (uint64_t)(uintptr_t)v;
-    if (vk != 0 && !mt_unbox(vk, w, &w)) return r;
+    uint64_t* at = map_vref(m, kk, (uint64_t)kb);
+    if (!at) return r;
+    uint64_t w = word_out(map_vk(m), vk, *at);
+    if (vk != 0 && map_vk(m) == 0 && !mt_unbox(vk, *at, &w)) return r;
     r.val = (int64_t)w;
     r.found = 1;
     return r;
@@ -7501,61 +7738,50 @@ __attribute__((always_inline)) MapFind resid_map_find(void* map, int8_t kk, int6
     uint64_t k = (uint64_t)kb;
     /* A frozen table may be read by several threads, so only the owning
      * loop's transient table goes through the last-probe cache. */
-    if (m->transient && kk == 1 && t->kkind == 1 && t->vkind == vk && (k >> 1) != (MT_RAW_EMPTY >> 1)) {
+    if (m->transient && t && kk == 1 && t->kkind == 1 && t->vkind == vk && (k >> 1) != (MT_RAW_EMPTY >> 1)) {
         MapFind r = { 0, 0 };
         int64_t at = mt_probe_raw_cached(t, k);
-        if (at >= 0) { r.val = (int64_t)t->vals[at]; r.found = 1; }
+        if (at >= 0) { r.val = t->vals ? (int64_t)t->vals[at] : 1; r.found = 1; }
         return r;
     }
     return map_find_slow(m, kk, kb, vk);
 }
 
 int8_t resid_map_has(void* map, int8_t kk, int64_t kb) {
-    HMTrie* m = (HMTrie*)map;
-    if (m->tab) return mt_vref(m->tab, kk, (uint64_t)kb) != NULL;
-    void* key = (void*)(uintptr_t)mt_box(kk, (uint64_t)kb);
-    return trie_contains(m->root, 0, resid_hash(key), key) ? 1 : 0;
+    return map_vref((HMTrie*)map, kk, (uint64_t)kb) != NULL;
 }
+
+/* ── Boxed-value API (keys and values as Resid value pointers) ──────── */
 
 /* Lookup a key in the map. Returns the value or NULL. */
 void* resid_map_get(void* map, void* key) {
-    HMTrie* t = (HMTrie*)map;
-    if (t->tab) {
-        uint64_t* at = mt_vref(t->tab, 0, (uint64_t)(uintptr_t)key);
-        return at ? (void*)(uintptr_t)mt_val_out(t->tab, 0, *at) : NULL;
-    }
-    uint64_t h = resid_hash(key);
-    return trie_get(map_root(t), 0, h, key);
+    HMTrie* m = (HMTrie*)map;
+    uint64_t kb;
+    int8_t rk = word_of_box(key, &kb, 1);
+    uint64_t* at = map_vref(m, rk, kb);
+    return at ? (void*)(uintptr_t)word_out(map_vk(m), 0, *at) : NULL;
 }
 
 /* Insert a key-value pair, returning a NEW map (immutable). */
 void* resid_map_insert(void* map, void* key, void* val) {
-    HMTrie* t = (HMTrie*)map;
-    uint64_t h = resid_hash(key);
-    int isnew = 0;
-    HMNode* root = trie_insert(map_root(t), 0, h, key, val, &isnew);
-    return trie_new(t->count + (isnew ? 1 : 0), root);
+    uint64_t kb, vb;
+    int8_t rk = word_of_box(key, &kb, 1);
+    int8_t rv = word_of_box(val, &vb, 0);
+    return map_insert_p((HMTrie*)map, rk, kb, rv, vb);
 }
 
 /* Remove a key, returning a NEW map (or the same map if key absent). */
 void* resid_map_remove(void* map, void* key) {
-    HMTrie* t = (HMTrie*)map;
-    uint64_t h = resid_hash(key);
-    int did = 0;
-    HMNode* base = map_root(t);
-    HMNode* root = trie_remove(base, 0, h, key, &did);
-    /* unchanged: share — but never hand out a transient table itself, which
-     * its owning loop may still update in place */
-    if (!did) return t->transient ? (void*)trie_new(t->count, base) : map;
-    return trie_new(t->count - 1, root);
+    uint64_t kb;
+    int8_t rk = word_of_box(key, &kb, 1);
+    return map_remove_p((HMTrie*)map, rk, kb);
 }
 
 /* Check if a key exists. Returns 1/0. */
 int8_t resid_map_contains(void* map, void* key) {
-    HMTrie* t = (HMTrie*)map;
-    if (t->tab) return mt_vref(t->tab, 0, (uint64_t)(uintptr_t)key) != NULL;
-    uint64_t h = resid_hash(key);
-    return trie_contains(map_root(t), 0, h, key) ? 1 : 0;
+    uint64_t kb;
+    int8_t rk = word_of_box(key, &kb, 1);
+    return map_vref((HMTrie*)map, rk, kb) != NULL;
 }
 
 /* Number of entries. */
@@ -7563,14 +7789,27 @@ int64_t resid_map_len(void* map) {
     return ((HMTrie*)map)->count;
 }
 
-/* Build a List of keys. Returns a trie-backed list. */
-void* resid_map_keys(void* map) {
-    HMTrie* m = (HMTrie*)map;
+/* Keys or values (or both) as boxed pointers in canonical order; the
+ * caller frees the arrays. */
+static int64_t map_boxed_entries(HMTrie* m, void*** ks, void*** vs) {
     int64_t n = m->count;
-    void** ks = NULL;
-    if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
-    int64_t j = 0;
-    trie_collect(map_root(m), ks, NULL, &j);
+    uint64_t* kw = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    uint64_t* vw = (uint64_t*)map_alloc((size_t)(n ? n : 1) * 8);
+    map_entries(m, kw, vw);
+    int8_t kk = map_kk(m), vk = map_vk(m);
+    for (int64_t i = 0; i < n; i++) {
+        if (ks) kw[i] = mt_box(kk, kw[i]);
+        if (vs) vw[i] = mt_box(vk, vw[i]);
+    }
+    if (ks) *ks = (void**)kw; else free(kw);
+    if (vs) *vs = (void**)vw; else free(vw);
+    return n;
+}
+
+/* Build a List of keys. */
+void* resid_map_keys(void* map) {
+    void** ks;
+    int64_t n = map_boxed_entries((HMTrie*)map, &ks, NULL);
     void* r = resid_list_new(n, ks, "list");
     free(ks);
     return r;
@@ -7578,19 +7817,16 @@ void* resid_map_keys(void* map) {
 
 /* Build a List of values. */
 void* resid_map_values(void* map) {
-    HMTrie* m = (HMTrie*)map;
-    int64_t n = m->count;
-    void** vs = NULL;
-    if (n > 0) vs = (void**)malloc((size_t)n * sizeof(void*));
-    int64_t j = 0;
-    trie_collect(map_root(m), NULL, vs, &j);
+    void** vs;
+    int64_t n = map_boxed_entries((HMTrie*)map, NULL, &vs);
     void* r = resid_list_new(n, vs, "list");
     free(vs);
     return r;
 }
 
-/* Format a map as a string: {key1: val1, key2: val2}. Uses resid_format_val
- * on each entry. Caller must free the returned string. */
+/* Format a map as a string: {key1: val1, key2: val2}. Keys and values
+ * print as strings (a scalar box shows its first slot). Caller must free
+ * the returned string. */
 char* resid_map_format(void* map) {
     HMTrie* m = (HMTrie*)map;
     if (m->count == 0) {
@@ -7603,11 +7839,9 @@ char* resid_map_format(void* map) {
     char* buf = (char*)malloc(cap);
     size_t pos = 0;
     buf[pos++] = '{';
-    int64_t n = m->count;
-    void** ks = (void**)malloc((size_t)n * sizeof(void*));
-    void** vs = (void**)malloc((size_t)n * sizeof(void*));
-    int64_t j = 0;
-    trie_collect(map_root(m), ks, vs, &j);
+    void** ks;
+    void** vs;
+    int64_t n = map_boxed_entries(m, &ks, &vs);
     for (int64_t i = 0; i < n; i++) {
         if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
         /* Key: assume string. */
@@ -7645,7 +7879,7 @@ char* resid_map_format(void* map) {
 /* ─── Set operations (sets are maps with value 1) ─────────────────── */
 
 void* resid_set_new(void) {
-    return trie_new(0, NULL);
+    return trie_new(0, NULL, -1, -1);
 }
 
 /* Insert an element into a set. Returns a NEW set. */
@@ -7665,36 +7899,89 @@ int64_t resid_set_len(void* set) {
     return resid_map_len(set);
 }
 
+/* A set's element words (of its key kind) in no particular order; the
+ * caller frees them. */
+static uint64_t* set_words(HMTrie* s) {
+    uint64_t* ks = (uint64_t*)map_alloc((size_t)(s->count ? s->count : 1) * 8);
+    if (s->tab) {
+        int64_t it = 0, j = 0;
+        uint64_t k, v;
+        while (mt_next(s->tab, &it, &k, &v)) ks[j++] = k;
+    } else {
+        int64_t j = 0;
+        hn_collect(s->root, ks, NULL, &j);
+    }
+    return ks;
+}
+
+/* A new frozen set of the given element words: a table. */
+static HMTrie* set_of_words(const uint64_t* ks, int64_t n, int8_t kk) {
+    HMTrie* r = trie_new(0, NULL, -1, -1);
+    if (n == 0) return r;
+    r->tab = mt_new(mt_cap_for(n), kk, 0, 1);
+    for (int64_t i = 0; i < n; i++) mt_insert_new(r->tab, ks[i], 1);
+    r->count = r->tab->live;
+    return r;
+}
+
+/* Every element of `s` put into the transient `t` (owned updates). */
+static HMTrie* set_put_all(HMTrie* t, HMTrie* s) {
+    uint64_t* ks = set_words(s);
+    int8_t kk = map_kk(s);
+    for (int64_t i = 0; i < s->count; i++) t = (HMTrie*)map_put_slow(t, 1, kk, (int64_t)ks[i], 0, 1);
+    free(ks);
+    return t;
+}
+
 /* Set union: elements from both sets. */
 void* resid_set_union(void* a, void* b) {
+    HMTrie* ta = (HMTrie*)a;
     HMTrie* tb = (HMTrie*)b;
-    int64_t n = tb->count;
-    void** ks = NULL;
-    if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
-    int64_t j = 0;
-    trie_collect(map_root(tb), ks, NULL, &j);
-    void* result = a;
-    for (int64_t i = 0; i < n; i++) {
-        result = resid_set_insert(result, ks[i]);
+    if (tb->count == 0) return ta;
+    if (ta->count == 0) return tb;
+    HMTrie* big = ta->count >= tb->count ? ta : tb;
+    HMTrie* small = big == ta ? tb : ta;
+    if (!big->tab && small->count * 8 < big->count) {
+        /* A few more elements for a big trie: a transient sharing it. */
+        HMTrie* t = (HMTrie*)resid_map_transient(big);
+        return resid_map_freeze(set_put_all(t, small));
     }
+    /* Otherwise one new table holding both. */
+    HMTrie* r = trie_new(0, NULL, -1, -1);
+    r->tab = mt_new(mt_cap_for(big->count + small->count), map_kk(big), 0, 1);
+    uint64_t* ks = set_words(big);
+    for (int64_t i = 0; i < big->count; i++) mt_insert_new(r->tab, ks[i], 1);
     free(ks);
-    return result;
+    ks = set_words(small);
+    int8_t kk = map_kk(small);
+    for (int64_t i = 0; i < small->count; i++) mt_put(r->tab, kk, ks[i], 0, 1);
+    free(ks);
+    r->count = r->tab->live;
+    return r;
 }
 
 /* Set difference: elements in a but not in b. */
 void* resid_set_difference(void* a, void* b) {
+    HMTrie* ta = (HMTrie*)a;
     HMTrie* tb = (HMTrie*)b;
-    int64_t n = tb->count;
-    void** ks = NULL;
-    if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
-    int64_t j = 0;
-    trie_collect(map_root(tb), ks, NULL, &j);
-    void* result = a;
-    for (int64_t i = 0; i < n; i++) {
-        result = resid_set_remove(result, ks[i]);
+    if (ta->count == 0 || tb->count == 0) return ta;
+    if (tb->count * 4 < ta->count) {
+        /* Few removals: a private copy of `a` without them. */
+        HMTrie* t = (HMTrie*)resid_map_transient(ta);
+        uint64_t* ks = set_words(tb);
+        int8_t kk = map_kk(tb);
+        for (int64_t i = 0; i < tb->count; i++) t = (HMTrie*)resid_map_del(t, 1, kk, (int64_t)ks[i]);
+        free(ks);
+        return resid_map_freeze(t);
     }
+    uint64_t* ks = set_words(ta);
+    int8_t kk = map_kk(ta);
+    int64_t j = 0;
+    for (int64_t i = 0; i < ta->count; i++)
+        if (!map_vref(tb, kk, ks[i])) ks[j++] = ks[i];
+    HMTrie* r = j == ta->count ? ta : set_of_words(ks, j, kk);
     free(ks);
-    return result;
+    return r;
 }
 
 /* Set intersection: elements in both sets. */
@@ -7704,19 +7991,15 @@ void* resid_set_intersection(void* a, void* b) {
     /* Iterate over the smaller set. */
     HMTrie* smaller = ta->count <= tb->count ? ta : tb;
     HMTrie* larger = ta->count <= tb->count ? tb : ta;
-    int64_t n = smaller->count;
-    void** ks = NULL;
-    if (n > 0) ks = (void**)malloc((size_t)n * sizeof(void*));
+    if (smaller->count == 0) return smaller;
+    uint64_t* ks = set_words(smaller);
+    int8_t kk = map_kk(smaller);
     int64_t j = 0;
-    trie_collect(map_root(smaller), ks, NULL, &j);
-    void* result = (void*)smaller;
-    for (int64_t i = 0; i < n; i++) {
-        if (!resid_map_contains(larger, ks[i])) {
-            result = resid_set_remove(result, ks[i]);
-        }
-    }
+    for (int64_t i = 0; i < smaller->count; i++)
+        if (map_vref(larger, kk, ks[i])) ks[j++] = ks[i];
+    HMTrie* r = j == smaller->count ? smaller : set_of_words(ks, j, kk);
     free(ks);
-    return result;
+    return r;
 }
 
 /* Convert a set to a list. */
@@ -7736,10 +8019,8 @@ char* resid_set_format(void* set) {
     char* buf = (char*)malloc(cap);
     size_t pos = 0;
     buf[pos++] = '{';
-    int64_t n = m->count;
-    void** ks = (void**)malloc((size_t)n * sizeof(void*));
-    int64_t j = 0;
-    trie_collect(map_root(m), ks, NULL, &j);
+    void** ks;
+    int64_t n = map_boxed_entries(m, &ks, NULL);
     for (int64_t i = 0; i < n; i++) {
         if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
         const char* es = (const char*)ks[i];

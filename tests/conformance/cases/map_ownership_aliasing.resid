@@ -1,0 +1,135 @@
+// Linear ownership (lo_* in lower.resid): Map/Set values updated in place
+// only where nothing can observe the old version. Every line checks that a
+// value still reachable after an update keeps its old contents.
+type Box = { Map(Int, Int) m; Int tag; };
+
+Map(Int, Int) add(Map(Int, Int) m, Int k) {
+    return m.insert(k, k * 10);
+}
+
+Map(Int, Int) bump(Map(Int, Int) m, Int k) {
+    Int c = m.get(k) else { 0 };
+    return m.insert(k, c + 1);
+}
+
+Int size(Map(Int, Int) m) { return m.len(); }
+
+Map(Int, Int) fill(Int i, Int n, Map(Int, Int) m) {
+    if (i >= n) { return m; }
+    return fill(i + 1, n, add(m, i));
+}
+
+// Returns its parameter on one path, an update on the other.
+Map(Int, Int) maybe_add(Map(Int, Int) m, Int k) {
+    if (m.contains(k)) { return m; }
+    return m.insert(k, -k);
+}
+
+// The second argument reads `m` after the first updated it: not linear.
+Int after(Map(Int, Int) m2, Int n) { return m2.len() * 100 + n; }
+
+Int reads_after(Map(Int, Int) m) {
+    return after(m.insert(77, 1), m.len());
+}
+
+Int chain_reads(Map(Int, Int) m) {
+    Map(Int, Int) r = m.insert(1, 1).insert(2, m.len());
+    return r.get(2) else { -1 };
+}
+
+// A borrow: size only reads its argument.
+Map(Int, Int) borrow_then_add(Map(Int, Int) m) {
+    Int n = size(m);
+    return m.insert(n + 1000, n);
+}
+
+// Mutual recursion through two consuming functions.
+Map(Int, Int) even_step(Int i, Map(Int, Int) m) {
+    if (i <= 0) { return m; }
+    return odd_step(i - 1, m.insert(i, 0));
+}
+
+Map(Int, Int) odd_step(Int i, Map(Int, Int) m) {
+    if (i <= 0) { return m; }
+    return even_step(i - 1, m.insert(i, 1));
+}
+
+Map(Int, Int) let_chain(Map(Int, Int) m) {
+    Map(Int, Int) a = m.insert(500, 5);
+    Map(Int, Int) b = add(a, 501);
+    if (b.len() > 1000000) { return b; }
+    Map(Int, Int) c = b.remove(500);
+    return bump(c, 502);
+}
+
+Int sink(Map(Int, Int) m) { return m.len(); }
+
+Int consume_count(Map(Int, Int) m) {
+    Int n = sink(add(m, 999));
+    return n;
+}
+
+Set(Str) tag_all(List(Str) ws, Int i, Set(Str) s) {
+    if (i >= ws.len()) { return s; }
+    return tag_all(ws, i + 1, s.insert(ws[i]));
+}
+
+Map(Int, Int) big(Int n) {
+    Map(Int, Int) e = {};
+    return fill(0, n, e);
+}
+
+Int main() {
+    Map(Int, Int) e = {};
+    Map(Int, Int) a = add(e, 1);
+    Map(Int, Int) b = add(a, 2);
+    Map(Int, Int) c = add(b, 3);
+    println(f"versions {e.len()} {a.len()} {b.len()} {c.len()}");
+
+    Map(Int, Int) f = fill(0, 100, e);
+    Map(Int, Int) g = add(f, 1000);
+    Map(Int, Int) h = bump(f, 5);
+    println(f"fill {f.len()} {g.len()} {h.len()} {f.get(5) else { -1 }} {h.get(5) else { -1 }}");
+
+    Map(Int, Int) m1 = maybe_add(f, 5);
+    Map(Int, Int) m2 = maybe_add(f, 555);
+    println(f"maybe {f.len()} {m1.len()} {m2.len()}");
+
+    println(f"reads_after {reads_after(f)} {f.len()}");
+    println(f"chain_reads {chain_reads(f)} {f.len()}");
+    Map(Int, Int) bt = borrow_then_add(f);
+    println(f"borrow {bt.get(1100) else { -1 }} {f.len()}");
+
+    Map(Int, Int) ev = even_step(10, e);
+    println(f"mutual {ev.len()} {ev.get(10) else { -1 }} {ev.get(9) else { -1 }} {e.len()}");
+
+    Map(Int, Int) lc = let_chain(f);
+    println(f"let_chain {lc.len()} {lc.get(500) else { -1 }} {lc.get(502) else { -1 }} {f.len()} {f.get(500) else { -1 }}");
+
+    println(f"sink {consume_count(f)} {f.len()}");
+
+    Box bx = Box {.m = fill(0, 10, e), .tag = 1};
+    Map(Int, Int) fromb = add(bx.m, 42);
+    println(f"struct {bx.m.len()} {fromb.len()}");
+
+    List(Map(Int, Int)) ls = [f, a];
+    Map(Int, Int) fl = add(ls[1], 7);
+    println(f"list {ls[1].len()} {fl.len()} {a.len()}");
+
+    Set(Str) s0 = {};
+    Set(Str) s1 = tag_all(["x", "y", "x", "z"], 0, s0);
+    Set(Str) s2 = tag_all(["w"], 0, s1);
+    Set(Str) s3 = s1.union(s0);
+    Set(Str) s4 = tag_all(["q"], 0, s3);
+    println(f"sets {s0.len()} {s1.len()} {s2.len()} {s3.len()} {s4.len()} {s1.contains("w")}");
+
+    // A big frozen map entering a consuming function.
+    Map(Int, Int) bg = big(5000);
+    Map(Int, Int) bg2 = add(bg, 100000);
+    Map(Int, Int) bg3 = fill(4990, 5010, bg);
+    println(f"big {bg.len()} {bg2.len()} {bg3.len()} {bg.contains(100000)}");
+
+    Map(Int, Int) cond = if (bg.len() > 10) { add(bg, -1) } else { bg };
+    println(f"cond {cond.len()} {bg.len()}");
+    return 0;
+}
