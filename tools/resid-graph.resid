@@ -24,10 +24,12 @@
 ///
 /// Usage: residc tools/resid-graph.resid run -- <file.resid> [--dot]
 ///        residc tools/resid-graph.resid run -- <artifact> --node ID [--depth N]
+///        residc tools/resid-graph.resid run -- <artifact> --check
 ///
 /// The second form reads the knowledge-graph artifact
 /// `<artifact>.resid-graph.cbor` (spec §34) and prints, as DOT, the nodes
-/// within N edges of ID: operand, def and derive edges.
+/// within N edges of ID: operand, def and derive edges. The third checks
+/// the graph's §3.4 invariants.
 
 import "../lib/kgart.resid";
 
@@ -485,6 +487,93 @@ Int kg_dot_main(Str artifact, Int id, Int depth) {
     return 0;
 }
 
+// ─── Invariant check (spec §3.4) ────────────────────────────────────
+// `--check`: operand edges point to earlier nodes; every node reachable
+// from the residual roots is a source node or derives from one; every
+// RESIDUAL or EFFECT node has a reason; every source node is KNOWN,
+// reachable (lowered), or inside a subtree some node derives from.
+
+type KC = { Int bad; List(Str) msgs; };
+
+KC kc_fail(KC k, Str m) {
+    List(Str) ms = if (k.msgs.len() < 20) { k.msgs.concat([m]) } else { k.msgs };
+    return KC {.bad = k.bad + 1, .msgs = ms};
+}
+
+// Nodes reachable from the roots: ids only go down along operands, so
+// one pass from the top id marks them.
+Map(Int, Bool) kc_reach(GA a, Int id, Map(Int, Bool) r) {
+    if (id < 0) { return r; }
+    if (!r.contains(id)) { return kc_reach(a, id - 1, r); }
+    List(Int) ds = ch_ints(a.b, ch_field(a.b, a.offs[id], "deps"));
+    return kc_reach(a, id - 1, kc_mark(ds, 0, r));
+}
+
+Map(Int, Bool) kc_mark(List(Int) ds, Int i, Map(Int, Bool) r) {
+    if (i >= ds.len()) { return r; }
+    return kc_mark(ds, i + 1, r.insert(ds[i], true));
+}
+
+// Nodes some node derives from.
+Map(Int, Bool) kc_replaced(GA a, Int id, Map(Int, Bool) acc) {
+    if (id >= a.offs.len()) { return acc; }
+    Int dv = ch_field(a.b, a.offs[id], "derive");
+    Map(Int, Bool) a2 = if (dv < 0) { acc } else { acc.insert(ch_int(a.b, ch_field(a.b, dv, "from")), true) };
+    return kc_replaced(a, id + 1, a2);
+}
+
+// Whether a node reaches a source node (id < n0) along derive edges.
+Bool kc_to_source(GA a, Int id, Int n0, Int fuel) {
+    if (id < n0) { return true; }
+    if (fuel <= 0) { return false; }
+    Int dv = ch_field(a.b, a.offs[id], "derive");
+    if (dv < 0) { return false; }
+    return kc_to_source(a, ch_int(a.b, ch_field(a.b, dv, "from")), n0, fuel - 1);
+}
+
+KC kc_nodes(GA a, Int id, Int n0, Map(Int, Bool) reach, Map(Int, Bool) repl, KC k) {
+    if (id >= a.offs.len()) { return k; }
+    GN n = gn_read(a, id);
+    Str at = "#" + IntToString(id) + " " + n.kind;
+    KC k1 = if (kc_deps_ok(n.deps, 0, id)) { k } else { kc_fail(k, at + ": an operand is not an earlier node") };
+    KC k2 = if (n.know != "known" && n.reason == "") { kc_fail(k1, at + ": " + n.know + " without a reason") } else { k1 };
+    Bool r = reach.contains(id);
+    KC k3 = if (r && !kc_to_source(a, id, n0, 256)) { kc_fail(k2, at + ": residual node with no derive path to source") } else { k2 };
+    Bool src_ok = id >= n0 || n.know == "known" || n.know == "invalid" || r || repl.contains(id);
+    KC k4 = if (src_ok) { k3 } else { kc_fail(k3, at + ": source node neither known, lowered nor replaced") };
+    return kc_nodes(a, id + 1, n0, reach, repl, k4);
+}
+
+Bool kc_deps_ok(List(Int) ds, Int i, Int id) {
+    if (i >= ds.len()) { return true; }
+    if (ds[i] >= id) { return false; }
+    return kc_deps_ok(ds, i + 1, id);
+}
+
+Int kc_main(Str artifact) {
+    Str path = artifact + ".resid-graph.cbor";
+    if (!filesystem.exists(path)) {
+        eprintln("resid-graph: no graph artifact '" + path + "'");
+        return 1;
+    }
+    GA a = ga_load(filesystem.read_bytes(path));
+    Int n0 = if (a.sroots.len() > 0) { a.sroots[0] + 1 } else { a.offs.len() };
+    Map(Int, Bool) r0 = {};
+    Map(Int, Bool) reach = kc_reach(a, a.offs.len() - 1, kc_mark(a.rroots, 0, r0));
+    // A derive edge replaces its target's whole subtree.
+    Map(Int, Bool) repl = kc_reach(a, a.offs.len() - 1, kc_replaced(a, 0, r0));
+    KC k = kc_nodes(a, 0, n0, reach, repl, KC {.bad = 0, .msgs = []});
+    Int _m = kc_print(k.msgs, 0);
+    println("graph check: " + IntToString(a.offs.len()) + " nodes (" + IntToString(n0) + " source, " + IntToString(reach.len()) + " residual), " + IntToString(k.bad) + " violation(s)");
+    return if (k.bad == 0) { 0 } else { 1 };
+}
+
+Int kc_print(List(Str) ms, Int i) {
+    if (i >= ms.len()) { return 0; }
+    println("  " + ms[i]);
+    return kc_print(ms, i + 1);
+}
+
 Str kg_arg_after(Int i, Int n, Str flag) {
     if (i + 1 >= n) { return ""; }
     if (args.get(i) == flag) { return args.get(i + 1); }
@@ -492,6 +581,7 @@ Str kg_arg_after(Int i, Int n, Str flag) {
 }
 
 Int main() {
+    if (args.count() > 2 && args.get(2) == "--check") { return kc_main(args.get(1)); }
     Str knode = kg_arg_after(1, args.count(), "--node");
     if (knode != "" && str_is_int(knode)) {
         Str dp = kg_arg_after(1, args.count(), "--depth");

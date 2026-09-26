@@ -7169,12 +7169,14 @@ static void map_free_parts(HMTrie* m) {
  * table holding the same entries as `map`. `map` itself is untouched. */
 void* resid_map_transient(void* map) {
     HMTrie* src = (HMTrie*)map;
-    /* Entering the loop copies the incoming map. For a big trie that copy
+    /* Entering the loop copies the incoming map. For a big map that copy
      * could cost more than the loop saves (a few inserts into a large map),
-     * so such a loop just keeps using ordinary persistent updates: handing
-     * back the untouched persistent map makes every owned update take the
-     * persistent path. */
-    if (!src->tab && src->count > MAP_TRANSIENT_COPY_MAX) return map;
+     * and a loop entered once per element of a growing map would copy it
+     * every time, so such a loop just keeps using ordinary persistent
+     * updates: handing back the untouched persistent map makes every owned
+     * update take the persistent path. This holds for a frozen table too
+     * (the result of an earlier loop). */
+    if (src->count > MAP_TRANSIENT_COPY_MAX) return map;
     HMTrie* m = trie_new(src->count, NULL);
     m->transient = 1;
     if (src->tab) {
