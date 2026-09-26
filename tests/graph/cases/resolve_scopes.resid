@@ -1,0 +1,14 @@
+// Scope leaks: every name on line 11 is out of scope (tests/graph/run.sh).
+Int f(Int a) {
+    if (a > 0) {
+        Int inner = 1;
+    }
+    for (Int i in 0..3) { println(IntToString(i)); }
+    Option(Int) o = Some(1);
+    if (Some(v) = o) { println(IntToString(v)); }
+    Int w = match (o) { Some(q) => q, None => 0 };
+    Int k = lambda(z) { z + 1 }(2);
+    println(IntToString(q + v + i + z + inner + nope));
+    return a;
+}
+Int main() { return f(1); }
