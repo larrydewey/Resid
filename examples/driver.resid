@@ -8983,7 +8983,9 @@ List(Str) header_with_cmps(List(Str) core, Funcs fs) {
 // and codegen'd alongside the importer. Diamond imports are deduplicated
 // by resolved path; depth is capped to cut cycles.
 
-type RRes = { Str text; Str done; };
+// map: one "merged-line file-line path" entry per segment start (source map);
+// nl: lines contributed to the merged text.
+type RRes = { Str text; Str done; Str map; Int nl; };
 
 // Directory part of a path ("." when there is no slash).
 Str imp_dir_of(Str path, Int i) {
@@ -9075,20 +9077,22 @@ Str imp_resolve_target(Str dir, Str name, Str depmap) {
 // amortized, not O(accumulated-so-far)) — str_sb_finish is called
 // exactly once, at the real base case, to produce the one flat Str this
 // function ever returns.
-RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done, Int depth, Str depmap) {
-    return imp_resolve_lines_a(lines, i, n, dir, sb, done, depth, depmap, "");
+RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done, Int depth, Str depmap, Str path, Int ml) {
+    Str m0 = IntToString(ml) + " 1 " + path + "\n";
+    return imp_resolve_lines_a(lines, i, n, dir, sb, done, depth, depmap, "", path, ml, ml, m0);
 }
 
 // `aliases` is ";M;N;" for this file's `import "f" as M;` lines: `M.name`
 // in the rest of the file refers to the module's `name`.
-RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done, Int depth, Str depmap, Str aliases) {
-    if (i > n) { return RRes {.text = str_sb_finish(sb), .done = done}; }
+// ml0: merged line of this file's first line; ml: of the next line emitted.
+RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done, Int depth, Str depmap, Str aliases, Str path, Int ml0, Int ml, Str map) {
+    if (i > n) { return RRes {.text = str_sb_finish(sb), .done = done, .map = map, .nl = ml - ml0}; }
     Str line = lines[i];
     if (ck_str_starts_with(line, "import ")) {
         Str name = imp_target(line);
         if (name == "") {
             Int ni = i + 1;
-            return imp_resolve_lines_a(lines, ni, n, dir, sb, done, depth, depmap, aliases);
+            return imp_resolve_lines_a(lines, ni, n, dir, sb, done, depth, depmap, aliases, path, ml0, ml, map);
         }
         Str clause = imp_clause(line);
         Str alias = if (ck_str_starts_with(clause, "as ")) { str_trim(str_slice(clause, 3, str_len(clause))) } else { "" };
@@ -9096,9 +9100,9 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         Str full = imp_resolve_target(dir, name, depmap);
         Str key = ";" + full + ";";
         RRes sub = if (str_contains(done, key)) {
-            RRes {.text = "", .done = done}
+            RRes {.text = "", .done = done, .map = "", .nl = 0}
         } else {
-            imp_resolve_file_vis(full, done, depth, depmap, sel)
+            imp_resolve_file_vis(full, done, depth, depmap, sel, ml)
         };
         Int ni2 = i + 1;
         // Keep the importing file's line numbering: the module text goes
@@ -9106,12 +9110,14 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         // the newline that ends it.
         Str sb2 = str_sb_append(sb, sub.text);
         Str al2 = if (alias == "") { aliases } else { aliases + ";" + alias + ";" };
-        return imp_resolve_lines_a(lines, ni2, n, dir, sb2, sub.done, depth, depmap, al2);
+        Int ml2 = ml + sub.nl;
+        Str map2 = map + sub.map + IntToString(ml2) + " " + IntToString(i + 2) + " " + path + "\n";
+        return imp_resolve_lines_a(lines, ni2, n, dir, sb2, sub.done, depth, depmap, al2, path, ml0, ml2, map2);
     }
     Int ni3 = i + 1;
     Str line2 = if (aliases == "") { line } else { imp_unalias(line, aliases) };
     Str sb3 = str_sb_append(str_sb_append(sb, line2), "\n");
-    return imp_resolve_lines_a(lines, ni3, n, dir, sb3, done, depth, depmap, aliases);
+    return imp_resolve_lines_a(lines, ni3, n, dir, sb3, done, depth, depmap, aliases, path, ml0, ml + 1, map);
 }
 
 // Text after an import's quoted path, without the trailing `;`.
@@ -9285,13 +9291,13 @@ pub Str with_builtin_types(Str src) {
 }
 
 RRes imp_resolve_file(Str path, Str done, Int depth, Str depmap) {
-    return imp_resolve_file_vis(path, done, depth, depmap, "");
+    return imp_resolve_file_vis(path, done, depth, depmap, "", 1);
 }
 
 // `vis`: "" for the program's own file (nothing hidden), "*" for a plain
 // import (pub functions visible), ",a,b," for a selective import.
-RRes imp_resolve_file_vis(Str path, Str done, Int depth, Str depmap, Str vis) {
-    if (depth > 8) { return RRes {.text = "", .done = done}; }
+RRes imp_resolve_file_vis(Str path, Str done, Int depth, Str depmap, Str vis, Int ml) {
+    if (depth > 8) { return RRes {.text = "", .done = done, .map = "", .nl = 0}; }
     Str src0 = loc_rewrite(filesystem.read_all(path), path);
     Str src = if (vis == "") { src0 } else { imp_apply_vis(src0, vis, path) };
     List(Str) lines = str_split(src, "\n");
@@ -9301,7 +9307,7 @@ RRes imp_resolve_file_vis(Str path, Str done, Int depth, Str depmap, Str vis) {
     Str dir = imp_dir_of(path, plast);
     Str done2 = done + path + ";";
     Str sb0 = str_sb_new();
-    return imp_resolve_lines(lines, 0, n, dir, sb0, done2, depth, depmap);
+    return imp_resolve_lines(lines, 0, n, dir, sb0, done2, depth, depmap, path, ml);
 }
 
 
@@ -15922,12 +15928,12 @@ Str exec_path(Str p) {
     return "./" + p;
 }
 
-Int kg_print_hits(Str src, Kg g, List(Int) hits, Int i) {
+Int kg_print_hits(Str src, KgMap sm, Kg g, List(Int) hits, Int i) {
     if (i >= hits.len()) { return i; }
     Int id = hits[i];
     PosInfo li = pos_to_line_col(src, g.sp[id]);
-    println("  line " + IntToString(li.line) + ": " + str_slice(src, g.sp[id], g.ep[id]));
-    return kg_print_hits(src, g, hits, i + 1);
+    println("  " + kg_where(sm, li.line) + ": " + str_slice(src, g.sp[id], g.ep[id]));
+    return kg_print_hits(src, sm, g, hits, i + 1);
 }
 
 Int main() {
@@ -15970,7 +15976,7 @@ Int main() {
     // `depmap` (spec §35 dependency-aware resolution; sidecar produced by
     // `resid-manifest depmap`).
     RRes rr0 = imp_resolve_file(path, ";", 0, depmap);
-    RRes rr = RRes {.text = ds_desugar(with_builtin_types(rr0.text)), .done = rr0.done};
+    RRes rr = RRes {.text = ds_desugar(with_builtin_types(rr0.text)), .done = rr0.done, .map = rr0.map, .nl = rr0.nl};
     if (!testmode) {
         println(IntToString(str_len(rr.text)));
         println(str_slice(rr.text, 0, 40));
@@ -15987,7 +15993,9 @@ Int main() {
     // compares tokens; `--dump-graph <path>` writes the node tree.
     if (pick_flag(argc, "--graph-check")) {
         Int _kg_in = resid_bulk_push();
-        Str kgr = kg_roundtrip(src);
+        Int mlines = str_count(rr0.text, "\n");
+        Str kgr0 = kg_roundtrip(src);
+        Str kgr = if (kgr0 == "" && mlines != rr0.nl) { "source map covers " + IntToString(rr0.nl) + " lines, merged text has " + IntToString(mlines) } else { kgr0 };
         List(Str) kgkeep = resid_list_str_persist_copy([kgr]);
         Int _kg_out = resid_bulk_pop();
         if (kgkeep[0] != "") {
@@ -16004,8 +16012,14 @@ Int main() {
             return 1;
         }
         List(Int) hits = kg_lint_prec(kgl.g);
-        Int nh = kg_print_hits(src, kgl.g, hits, 0);
+        Int nh = kg_print_hits(src, kg_srcmap(rr.map), kgl.g, hits, 0);
         println("graph-lint: " + IntToString(hits.len()) + " mixed-precedence expression(s)");
+        return 0;
+    }
+    Str kgwhere  =  pick_opt(argc, "--graph-where", "");
+    if (kgwhere != "") {
+        if (kgwhere == "map") { print(rr.map); }
+        println(kg_where(kg_srcmap(rr.map), str_parse_int(kgwhere)));
         return 0;
     }
     Str kgdump  =  pick_opt(argc, "--dump-graph", "");
