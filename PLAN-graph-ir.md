@@ -169,7 +169,9 @@ are imported the same way `reduce.resid` is.
   - [x] Parameters and bindings get dbg.value (gdb `info locals` /
     `info args`); variables map to nodes through their lines, like
     locations.
-  - The graph's lowered table (needs code offsets: G6's DWARF reader).
+  - [x] The lowered map is the DWARF line table (spec §33 allows either
+    carrier): rows start at their node's span, and `lib/dwarf.resid`
+    reads them back (`resid-debug <bin> lowered`).
   - Exit criterion: `./boot.sh` reaches a fixed point with `--graph` as the
     default.
 - [ ] G5 Tools and conformance.
@@ -180,7 +182,9 @@ are imported the same way `reduce.resid` is.
   - [x] `resid-why <artifact> --node ID | --at FILE:LINE` answers from the
     graph artifact: kind, type, knowledge, value, reason, facts, effects,
     def and the derive chain back to source.
-  - `resid why` by symbol over the graph (the artifact has no names yet).
+  - [x] `resid why` by symbol over the graph: declarations and uses carry
+    `name` in the artifact; `resid-why <artifact> NAME` shows each
+    declaration's chain and its residual uses.
   - [x] `resid-graph <artifact> --node ID [--depth N]` prints the node's
     neighbourhood (operand, def and derive edges, coloured by knowledge)
     as DOT; the artifact reader is shared in `lib/kgart.resid`.
@@ -189,12 +193,22 @@ are imported the same way `reduce.resid` is.
     through derive edges, every RESIDUAL / EFFECT node has a reason, and
     every source node is KNOWN, reachable from the residual roots, or
     inside a subtree some node derives from. The self-compile's graph has
-    no violations. Lowered coverage waits for the lowered table.
-- [ ] G6 `resid debug`.
-  - Static mode first: walk the graph, show knowledge, facts and derivations.
-  - Live mode reads the DWARF node map. First backend: drive gdb/lldb
-    (MI). The goal is a native ptrace backend with a DWARF reader, so the
-    toolchain stays resid-only.
+    no violations. Lowered coverage: `resid-debug <bin> check` requires
+    every line-table row with a source line to map to a node.
+- [x] G6 `resid debug` (`tools/resid-debug.resid`).
+  - [x] A resid-only ELF and DWARF 5 reader (`lib/dwarf.resid`): sections,
+    symbols, the line program, and the artifact hash compiled into the
+    binary (`info` checks it against the artifact).
+  - [x] Static mode: `node`, `kids`, `at`, `sym`, `lowered [FN]`, `pc ADDR`
+    and `check`, from `-ex` commands or an interactive prompt
+    (`resid_read_line`).
+  - [x] Live mode drives gdb in batch: `break FILE:LINE|FN`, `run [ARGS]`,
+    `stops N`; each stop maps its program counter to a node through the
+    line table (load bias from `resid_run_main`), pairs each variable
+    with its binding or parameter node, and lists the KNOWN values folded
+    into that line. `step N` steps by instruction and reports each change
+    of node.
+  - Open: a native ptrace backend, so live mode needs no gdb.
 - [ ] G7 Retire the text passes.
   - Delete the text typecheck, codegen and reduce paths, the `gr_*` pass and
     the notes line-scan.

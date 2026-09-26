@@ -128,13 +128,42 @@ fi
 if "$COMPILER" tools/resid-why.resid -o "$CK/why" >/dev/null 2>&1 \
     && "$COMPILER" tests/graph/cases/notes_sample.resid -o "$CK/ns" --profile debug >/dev/null 2>&1; then
     got="$("$CK/why" "$CK/ns" --at notes_sample.resid:4 2>&1)"
-    if [[ "$got" == *"mcall: Int effect, effect(args.count)"* ]]; then
+    if [[ "$got" == *"mcall count: Int effect, effect(args.count)"* ]]; then
         pass=$((pass + 1))
     else
         fail=$((fail + 1)); echo "FAIL resid-why --at: $got"
     fi
 else
     fail=$((fail + 1)); echo "FAIL resid-why build"
+fi
+# resid-why by symbol: a declaration and how its uses fared.
+if [ -x "$CK/why" ] && [ -x "$DB" ]; then
+    got="$("$CK/why" "$DB" sum 2>&1)"
+    if [[ "$got" == *"fn sum residual"* && "$got" == *"2 use(s): 0 known"* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL resid-why symbol: $got"
+    fi
+fi
+# resid-debug: the artifact matches the binary, every line-table row maps
+# to a node, and under gdb a stop shows its node and the variables' nodes.
+if "$COMPILER" tools/resid-debug.resid -o "$CK/rdbg" >/dev/null 2>&1 && [ -x "$DB" ]; then
+    got="$("$CK/rdbg" "$DB" -ex info -ex check -ex "pc 0" -ex "sym sq" 2>&1)"
+    if [[ "$got" == *"hash matches the binary"* && "$got" == *", 0 without a node"* && "$got" == *"fn sq residual"* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL resid-debug static: $got"
+    fi
+    if command -v gdb >/dev/null 2>&1; then
+        got="$("$CK/rdbg" "$DB" -ex "break sq" -ex "step 40" -ex run 2>&1)"
+        if [[ "$got" == *"stop 1 at sq+"* && "$got" == *'msg = "hi!"   #'*"bind msg: Str"* && "$got" == *"bind b: Int"* ]]; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1)); echo "FAIL resid-debug live: $got"
+        fi
+    fi
+else
+    fail=$((fail + 1)); echo "FAIL resid-debug build"
 fi
 # resid-graph draws a node's neighbourhood as DOT from the artifact.
 if "$COMPILER" tools/resid-graph.resid -o "$CK/rg" >/dev/null 2>&1; then
@@ -157,6 +186,13 @@ for c in tests/graph/cases/debug_locals.resid tests/graph/cases/notes_sample.res
         pass=$((pass + 1))
     else
         fail=$((fail + 1)); echo "FAIL graph check $c: $got"
+    fi
+    [ -x "$b" ] && [ -x "$CK/rdbg" ] || continue
+    got="$("$CK/rdbg" "$b" -ex check 2>&1 | tail -1)"
+    if [[ "$got" == *", 0 without a node"* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL lowered check $c: $got"
     fi
 done
 echo "graph: $pass passed, $fail failed"

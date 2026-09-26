@@ -1177,7 +1177,11 @@ and records a lowered edge for each node it emits:
 The map may be carried in the graph's lowered table or
 in the binary's debug information (for example DWARF line
 and variable-location entries keyed by node id); a
-debugger shall be able to resolve both. The binary
+debugger shall be able to resolve both. When it is carried
+in DWARF, each line-table row's (file, line, column) is
+the span start of the node it lowers, and a row at column
+0 is its function's entry; variables are named as their
+binding or parameter nodes. The binary
 records the content hash of its graph artifact, so a
 debugger can check that the two match.
 Debug and check profiles always emit the graph. Release
@@ -1271,7 +1275,8 @@ KnowledgeGraph (CDDL):
   node     = { id: id, kind: tstr, type: tstr,
                knowledge: "known" / "effect" /
                           "residual" / "invalid",
-               ? value: any, deps: [* id], ? def: id,
+               ? name: tstr, ? value: any, deps: [* id],
+               ? def: id,
                ? seq: id, effects: [* tstr],
                capabilities: [* tstr], span: span,
                ? derive: { from: id, rule: tstr },
@@ -1289,7 +1294,10 @@ KnowledgeGraph (CDDL):
   location = { lo: uint, hi: uint, where: tstr }
   id       = uint
 
-Offsets in lowering are relative to the symbol. Nodes
+A declaration or a use (function, parameter, binding,
+reference, call, field) carries its name, so tools can
+answer queries by symbol. Offsets in lowering are
+relative to the symbol. Nodes
 created by reduction have the span of the node they
 derive from. Every RESIDUAL or EFFECT node has a reason;
 its detail is the effect for effect and the budget that

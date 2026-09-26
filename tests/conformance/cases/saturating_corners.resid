@@ -1,0 +1,23 @@
+// Saturating and wrapping arithmetic at the i64 corners (spec §6.5), and
+// a range fact over an unbounded product: `n * n` has no useful bound, so
+// the addition after it keeps its overflow check.
+Int sq_plus(Int n, Int k) {
+    Int m = n * n;
+    return m + k;
+}
+
+Int main() {
+    Int big = 9223372036854775807;
+    Int low = 0 - big - 1;
+    println(IntToString(saturating_mul(big, big)));
+    println(IntToString(saturating_mul(low, big)));
+    println(IntToString(saturating_mul(low, low)));
+    println(IntToString(saturating_mul(3037000500, 3037000500)));
+    println(IntToString(wrapping_mul(big, big)));
+    println(IntToString(wrapping_add(big, 1)));
+    println(IntToString(wrapping_sub(low, 1)));
+    println(IntToString(wrapping_div(low, 0 - 1)));
+    println(IntToString(sq_plus(args.count() + 3, 5)));
+    println(IntToString(sq_plus(args.count() + 3, big)));
+    return 0;
+}
