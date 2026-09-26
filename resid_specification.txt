@@ -1277,7 +1277,10 @@ KnowledgeGraph (CDDL):
 
 Offsets in lowering are relative to the symbol. Nodes
 created by reduction have the span of the node they
-derive from.
+derive from. Every RESIDUAL or EFFECT node has a reason;
+its detail is the effect for effect and the budget that
+ran out (fuel, steps, specs) for budget, and dep names
+the first RESIDUAL operand or definition for unknown.
 
 Provenance (CDDL; the COSE_Sign1 payload, §33.1):
 

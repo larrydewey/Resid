@@ -16299,7 +16299,7 @@ Int main() {
     if (profile == "check") {
         if (gart) {
             Int _ga_in = resid_bulk_push();
-            Str gh = ga_write(out + ".resid-graph.cbor", gx_unpack(ckpk[0]), str_parse_int(ckpk[2]), false, "", cktys, ckpk[1], rsrc, rr.map, path);
+            Str gh = ga_write(out + ".resid-graph.cbor", gx_unpack(ckpk[0]), str_parse_int(ckpk[2]), false, "", "", cktys, ckpk[1], rsrc, rr.map, path);
             Int _ga_out = resid_bulk_pop();
         }
         println("check: ok");
@@ -16325,7 +16325,7 @@ Int main() {
     GXO grd = if (textred) { gx_no_out() } else { gx_run(if (ckpk[0] != "") { gx_unpack(ckpk[0]) } else { kg_parse(rsrc) }, rsrc, !noreduce) };
     // Str accumulators become in-place buffers (gs_program).
     GSR gsa0 = if (textred || grd.err != "") { GSR {.g = grd.g, .id = -1, .dv = ""} } else { gs_program(grd.g, grd.root, rsrc) };
-    List(Str) gpk = resid_list_str_persist_copy([grd.notes, grd.err, if (gsa0.id < 0) { "" } else { gx_pack(gsa0.g, gsa0.id) }, grd.dv + gsa0.dv]);
+    List(Str) gpk = resid_list_str_persist_copy([grd.notes, grd.err, if (gsa0.id < 0) { "" } else { gx_pack(gsa0.g, gsa0.id) }, grd.dv + gsa0.dv, grd.rs]);
     Int _gr_out = resid_bulk_pop();
     if (gpk[0] != "") { print(gpk[0]); }
     if (gpk[1] != "") {
@@ -16424,7 +16424,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // freed, from the persisted residual pack; its hash goes into the binary.
     Bool emitg = gart && !textred;
     Int _ga_in = resid_bulk_push();
-    List(Str) ghk = resid_list_str_persist_copy([if (emitg) { ga_write(out + ".resid-graph.cbor", gx_unpack(gpk[2]), str_parse_int(ckpk[2]), true, gpk[3], cktys, ckpk[1], rsrc, rr.map, path) } else { "" }]);
+    List(Str) ghk = resid_list_str_persist_copy([if (emitg) { ga_write(out + ".resid-graph.cbor", gx_unpack(gpk[2]), str_parse_int(ckpk[2]), true, gpk[3], gpk[4], cktys, ckpk[1], rsrc, rr.map, path) } else { "" }]);
     Int _ga_out = resid_bulk_pop();
     // A stale artifact from an earlier build must not be signed as this one's.
     Bool gclr = if (!emitg && filesystem.exists(out + ".resid-graph.cbor")) { filesystem.write_all(out + ".resid-graph.cbor", "") } else { false };
