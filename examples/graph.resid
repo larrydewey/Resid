@@ -1,7 +1,7 @@
 // graph.resid — the knowledge graph (spec §3): node store, parser from
 // desugared source, printer and a token round-trip check (PLAN-graph-ir G1).
 //
-// Nodes live in parallel columns indexed by id; a node's children are the
+// Nodes are records in one list indexed by id; a node's children are the
 // slice kids[a0 .. a0 + nk). Children are built before their parent, so ids
 // are topologically ordered. Types, annotations and capability lists are
 // kept as text in `text`/`aux` until resolution (G2) gives them nodes.
@@ -9,28 +9,29 @@
 // Imported by examples/driver.resid; shares its lexer (lex_tok, Tok),
 // parse_type/PRes, is_known_type, imp_close_paren and find_sqclose_d.
 
-type Kg = { List(Str) kind; List(Str) text; List(Str) aux; List(Int) a0; List(Int) nk; List(Int) sp; List(Int) ep; List(Int) kids; Map(Int, Str) docs; };
+// One node: kind, text, aux, child slice kids[a0 .. a0 + nk), source span.
+type KN = { Str kind; Str text; Str aux; Int a0; Int nk; Int sp; Int ep; };
+type Kg = { List(KN) ns; List(Int) kids; Map(Int, Str) docs; };
 // A parse result: the grown graph, the node built, the position after it.
 type KP = { Kg g; Int id; Int pos; Str err; };
 // A list of child ids built so far.
 type KL = { Kg g; List(Int) ids; Int pos; Str err; };
 
 pub Kg kg_empty() {
-    List(Str) s0 = [];
+    List(KN) n0 = [];
     List(Int) i0 = [];
-    return Kg {.kind = s0, .text = s0, .aux = s0, .a0 = i0, .nk = i0, .sp = i0, .ep = i0, .kids = i0, .docs = kg_nodocs()};
+    return Kg {.ns = n0, .kids = i0, .docs = kg_nodocs()};
 }
 
-pub Int kg_count(Kg g) { return g.kind.len(); }
+pub Int kg_count(Kg g) { return g.ns.len(); }
 
-pub Int kg_kid(Kg g, Int id, Int i) { return g.kids[g.a0[id] + i]; }
+pub Int kg_kid(Kg g, Int id, Int i) { return g.kids[g.ns[id].a0 + i]; }
 
-// Append a node; its id is the node count before the append.
 // Append a node; its id is the node count before the append.
 pub KP kg_add(Kg g, Str kind, Str text, Str aux, List(Int) ks, Int sp, Int pos) {
-    Int id = g.kind.len();
-    Int a0 = g.kids.len();
-    Kg g2 = Kg {.kind = g.kind.concat([kind]), .text = g.text.concat([text]), .aux = g.aux.concat([aux]), .a0 = g.a0.concat([a0]), .nk = g.nk.concat([ks.len()]), .sp = g.sp.concat([sp]), .ep = g.ep.concat([pos]), .kids = g.kids.concat(ks), .docs = g.docs};
+    Int id = g.ns.len();
+    KN n = KN {.kind = kind, .text = text, .aux = aux, .a0 = g.kids.len(), .nk = ks.len(), .sp = sp, .ep = pos};
+    Kg g2 = Kg {.ns = g.ns.concat([n]), .kids = g.kids.concat(ks), .docs = g.docs};
     return KP {.g = g2, .id = id, .pos = pos, .err = ""};
 }
 
@@ -43,7 +44,7 @@ Map(Int, Str) kg_nodocs() {
 KP kg_with_doc(KP p, Str doc) {
     if (p.err != "" || doc == "") { return p; }
     Kg g = p.g;
-    Kg g2 = Kg {.kind = g.kind, .text = g.text, .aux = g.aux, .a0 = g.a0, .nk = g.nk, .sp = g.sp, .ep = g.ep, .kids = g.kids, .docs = g.docs.insert(p.id, doc)};
+    Kg g2 = Kg {.ns = g.ns, .kids = g.kids, .docs = g.docs.insert(p.id, doc)};
     return KP {.g = g2, .id = p.id, .pos = p.pos, .err = ""};
 }
 
@@ -944,7 +945,7 @@ Str kg_pr_list(Kg g, Int id, Int from, Int to, Str sep, Str sb) {
     return kg_pr_list(g, id, from + 1, to, sep, sb2);
 }
 
-Str kg_pr_all(Kg g, Int id, Str sep, Str sb) { return kg_pr_list(g, id, 0, g.nk[id], sep, sb); }
+Str kg_pr_all(Kg g, Int id, Str sep, Str sb) { return kg_pr_list(g, id, 0, g.ns[id].nk, sep, sb); }
 
 Str kg_pr_k(Kg g, Int id, Int i, Str sb) { return kg_pr(g, kg_kid(g, id, i), sb); }
 
@@ -958,81 +959,81 @@ pub Str kg_part(Str s, Int i) {
 }
 
 Str kg_pr_type_head(Kg g, Int id, Str sb) {
-    Str aux = g.aux[id];
+    Str aux = g.ns[id].aux;
     Bool hasp = str_contains(aux, "\x1f");
     List(Str) ps = str_split(aux, "\x1f");
     Str prefix = if (hasp) { ps[0] } else { "" };
     Str gen = if (hasp) { ps[1] } else { aux };
     Str p1 = if (prefix == "") { "" } else { prefix + " " };
-    return kg_ap(sb, p1 + "type " + g.text[id] + gen + " = ");
+    return kg_ap(sb, p1 + "type " + g.ns[id].text + gen + " = ");
 }
 
 Str kg_pr_variants(Kg g, Int id, Int i, Str sb) {
-    if (i >= g.nk[id]) { return sb; }
+    if (i >= g.ns[id].nk) { return sb; }
     Int v = kg_kid(g, id, i);
-    Str pay = if (g.aux[v] == "") { "" } else { "(" + g.aux[v] + ")" };
-    Str sep = if (i + 1 < g.nk[id]) { " | " } else { ";" };
-    return kg_pr_variants(g, id, i + 1, kg_ap(sb, g.text[v] + pay + sep));
+    Str pay = if (g.ns[v].aux == "") { "" } else { "(" + g.ns[v].aux + ")" };
+    Str sep = if (i + 1 < g.ns[id].nk) { " | " } else { ";" };
+    return kg_pr_variants(g, id, i + 1, kg_ap(sb, g.ns[v].text + pay + sep));
 }
 
 Str kg_pr_decl(Kg g, Int id, Str k, Str sb) {
-    Str pre = if (g.aux[id] == "") { "" } else { g.aux[id] + " " };
+    Str pre = if (g.ns[id].aux == "") { "" } else { g.ns[id].aux + " " };
     if (k == "fn") {
-        Int n = g.nk[id];
-        Str s1 = kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, pre)), " " + g.text[id] + "(");
+        Int n = g.ns[id].nk;
+        Str s1 = kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, pre)), " " + g.ns[id].text + "(");
         Str s2 = kg_pr_list(g, id, 1, n - 1, ", ", s1);
         return kg_pr_k(g, id, n - 1, kg_ap(s2, ") "));
     }
-    if (k == "param") { return kg_ap(kg_pr_k(g, id, 0, sb), " " + g.text[id]); }
+    if (k == "param") { return kg_ap(kg_pr_k(g, id, 0, sb), " " + g.ns[id].text); }
     if (k == "struct_t") { return kg_ap(kg_pr_all(g, id, " ", kg_ap(kg_pr_type_head(g, id, sb), "{ ")), " };"); }
-    if (k == "sfield") { return kg_ap(kg_pr_k(g, id, 0, sb), " " + g.text[id] + ";"); }
+    if (k == "sfield") { return kg_ap(kg_pr_k(g, id, 0, sb), " " + g.ns[id].text + ";"); }
     if (k == "sum_t") { return kg_pr_variants(g, id, 0, kg_pr_type_head(g, id, sb)); }
     if (k == "alias_t") { return kg_ap(kg_pr_k(g, id, 0, kg_pr_type_head(g, id, sb)), ";"); }
     if (k == "ctype_t") { return kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_pr_type_head(g, id, sb)), "[")), "];"); }
     if (k == "cwhere_t") { return kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_pr_type_head(g, id, sb)), " where ")), ";"); }
     if (k == "behavior") {
-        Str bp = kg_part(g.aux[id], 0);
+        Str bp = kg_part(g.ns[id].aux, 0);
         Str bpre = if (bp == "") { "" } else { bp + " " };
-        return kg_ap(sb, bpre + g.text[id] + "(" + kg_part(g.aux[id], 1) + ") = " + kg_part(g.aux[id], 2) + ";");
+        return kg_ap(sb, bpre + g.ns[id].text + "(" + kg_part(g.ns[id].aux, 1) + ") = " + kg_part(g.ns[id].aux, 2) + ";");
     }
-    if (k == "test") { return kg_pr_k(g, id, 0, kg_ap(sb, pre + "test " + g.text[id] + " ")); }
-    if (k == "sandbox") { return kg_ap(kg_pr_all(g, id, "\n", kg_ap(sb, "sandbox (" + g.aux[id] + ") {\n")), "\n}"); }
+    if (k == "test") { return kg_pr_k(g, id, 0, kg_ap(sb, pre + "test " + g.ns[id].text + " ")); }
+    if (k == "sandbox") { return kg_ap(kg_pr_all(g, id, "\n", kg_ap(sb, "sandbox (" + g.ns[id].aux + ") {\n")), "\n}"); }
     return kg_pr_all(g, id, "\n", sb);
 }
 
 Str kg_pr_stmt(Kg g, Int id, Str k, Str sb) {
     if (k == "block") { return kg_ap(kg_pr_all(g, id, "\n", kg_ap(sb, "{\n")), "\n}"); }
     if (k == "bind" || k == "rbind") {
-        Str pre = if (g.aux[id] == "") { "" } else { g.aux[id] + " " };
+        Str pre = if (g.ns[id].aux == "") { "" } else { g.ns[id].aux + " " };
         Str s1 = kg_pr_k(g, id, 0, kg_ap(sb, pre));
         Str s2 = if (k == "rbind") { kg_ap(kg_pr_k(g, id, 1, kg_ap(s1, "[")), "]") } else { s1 };
-        return kg_pr_k(g, id, g.nk[id] - 1, kg_ap(s2, " " + g.text[id] + " = "));
+        return kg_pr_k(g, id, g.ns[id].nk - 1, kg_ap(s2, " " + g.ns[id].text + " = "));
     }
     if (k == "ret") {
-        if (g.nk[id] == 0) { return kg_ap(sb, "return"); }
+        if (g.ns[id].nk == 0) { return kg_ap(sb, "return"); }
         return kg_pr_k(g, id, 0, kg_ap(sb, "return "));
     }
     if (k == "brk") { return kg_ap(sb, "break"); }
     if (k == "cont") { return kg_ap(sb, "continue"); }
     if (k == "discard") { return kg_pr_k(g, id, 0, kg_ap(sb, "_ = ")); }
-    if (k == "letpat" || k == "pat") { return kg_pr_k(g, id, 0, kg_ap(sb, g.text[id] + "(" + g.aux[id] + ") = ")); }
+    if (k == "letpat" || k == "pat") { return kg_pr_k(g, id, 0, kg_ap(sb, g.ns[id].text + "(" + g.ns[id].aux + ") = ")); }
     if (k == "destr") {
-        Int n = g.nk[id];
-        Str s1 = kg_pr_list(g, id, 0, n - 1, ", ", kg_ap(sb, g.text[id] + " { "));
+        Int n = g.ns[id].nk;
+        Str s1 = kg_pr_list(g, id, 0, n - 1, ", ", kg_ap(sb, g.ns[id].text + " { "));
         return kg_pr_k(g, id, n - 1, kg_ap(s1, " } = "));
     }
     if (k == "if") {
         Str s1 = kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "if (")), ") "));
-        if (g.nk[id] < 3) { return s1; }
+        if (g.ns[id].nk < 3) { return s1; }
         return kg_pr_k(g, id, 2, kg_ap(s1, " else "));
     }
     if (k == "while") { return kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "while (")), ") ")); }
     if (k == "for") {
-        Str s1 = kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "for (")), " " + g.text[id] + " in ");
+        Str s1 = kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "for (")), " " + g.ns[id].text + " in ");
         return kg_pr_k(g, id, 2, kg_ap(kg_pr_k(g, id, 1, s1), ") "));
     }
     if (k == "with") {
-        Int n = g.nk[id];
+        Int n = g.ns[id].nk;
         return kg_pr_k(g, id, n - 1, kg_ap(kg_pr_wbinds(g, id, 0, n - 1, kg_ap(sb, "with (")), ") "));
     }
     if (k == "estmt") { return kg_pr_k(g, id, 0, sb); }
@@ -1053,67 +1054,67 @@ Bool kg_semi_kind(Str k) {
 }
 
 Str kg_pr_fparts(Kg g, Int id, Int i, Str sb) {
-    if (i >= g.nk[id]) { return sb; }
+    if (i >= g.ns[id].nk) { return sb; }
     Int c = kg_kid(g, id, i);
-    if (g.kind[c] == "fpart") { return kg_pr_fparts(g, id, i + 1, kg_ap(sb, g.text[c])); }
-    Bool spec = i + 1 < g.nk[id] && g.kind[kg_kid(g, id, i + 1)] == "fspec";
+    if (g.ns[c].kind == "fpart") { return kg_pr_fparts(g, id, i + 1, kg_ap(sb, g.ns[c].text)); }
+    Bool spec = i + 1 < g.ns[id].nk && g.ns[kg_kid(g, id, i + 1)].kind == "fspec";
     Str sb1 = kg_pr(g, c, kg_ap(sb, "{"));
     if (!spec) { return kg_pr_fparts(g, id, i + 1, kg_ap(sb1, "}")); }
-    return kg_pr_fparts(g, id, i + 2, kg_ap(sb1, ":" + g.text[kg_kid(g, id, i + 1)] + "}"));
+    return kg_pr_fparts(g, id, i + 2, kg_ap(sb1, ":" + g.ns[kg_kid(g, id, i + 1)].text + "}"));
 }
 
 Str kg_pr_expr(Kg g, Int id, Str k, Str sb) {
-    if (k == "lit" || k == "ref" || k == "ty" || k == "name" || k == "lparam") { return kg_ap(sb, g.text[id]); }
+    if (k == "lit" || k == "ref" || k == "ty" || k == "name" || k == "lparam") { return kg_ap(sb, g.ns[id].text); }
     if (k == "fstr") { return kg_ap(kg_pr_fparts(g, id, 0, kg_ap(sb, "f\"")), "\""); }
-    if (k == "call") { return kg_ap(kg_pr_all(g, id, ", ", kg_ap(sb, g.text[id] + "(")), ")"); }
-    if (k == "callv") { return kg_ap(kg_pr_list(g, id, 1, g.nk[id], ", ", kg_ap(kg_pr_k(g, id, 0, sb), "(")), ")"); }
-    if (k == "mcall") { return kg_ap(kg_pr_list(g, id, 1, g.nk[id], ", ", kg_ap(kg_pr_k(g, id, 0, sb), "." + g.text[id] + "(")), ")"); }
-    if (k == "field") { return kg_ap(kg_pr_k(g, id, 0, sb), "." + g.text[id]); }
+    if (k == "call") { return kg_ap(kg_pr_all(g, id, ", ", kg_ap(sb, g.ns[id].text + "(")), ")"); }
+    if (k == "callv") { return kg_ap(kg_pr_list(g, id, 1, g.ns[id].nk, ", ", kg_ap(kg_pr_k(g, id, 0, sb), "(")), ")"); }
+    if (k == "mcall") { return kg_ap(kg_pr_list(g, id, 1, g.ns[id].nk, ", ", kg_ap(kg_pr_k(g, id, 0, sb), "." + g.ns[id].text + "(")), ")"); }
+    if (k == "field") { return kg_ap(kg_pr_k(g, id, 0, sb), "." + g.ns[id].text); }
     if (k == "index") { return kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), "[")), "]"); }
     if (k == "slice") {
         Str s1 = kg_ap(kg_pr_k(g, id, 0, sb), "[..");
-        Str s2 = if (g.nk[id] > 1) { kg_pr_k(g, id, 1, s1) } else { s1 };
+        Str s2 = if (g.ns[id].nk > 1) { kg_pr_k(g, id, 1, s1) } else { s1 };
         return kg_ap(s2, "]");
     }
     if (k == "rangefrom") { return kg_ap(kg_pr_k(g, id, 0, sb), ".."); }
-    if (k == "struct") { return kg_ap(kg_pr_all(g, id, ", ", kg_ap(sb, g.text[id] + " { ")), " }"); }
-    if (k == "finit") { return kg_pr_k(g, id, 0, kg_ap(sb, "." + g.text[id] + " = ")); }
+    if (k == "struct") { return kg_ap(kg_pr_all(g, id, ", ", kg_ap(sb, g.ns[id].text + " { ")), " }"); }
+    if (k == "finit") { return kg_pr_k(g, id, 0, kg_ap(sb, "." + g.ns[id].text + " = ")); }
     if (k == "list") { return kg_ap(kg_pr_all(g, id, ", ", kg_ap(sb, "[")), "]"); }
     if (k == "map" || k == "set") { return kg_ap(kg_pr_all(g, id, ", ", kg_ap(sb, "{")), "}"); }
     if (k == "entry") { return kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), ": ")); }
     if (k == "emptyb") { return kg_ap(sb, "{}"); }
-    if (k == "named") { return kg_pr_k(g, id, 0, kg_ap(sb, g.text[id] + " = ")); }
-    if (k == "un") { return kg_pr_k(g, id, 0, kg_ap(sb, g.text[id])); }
+    if (k == "named") { return kg_pr_k(g, id, 0, kg_ap(sb, g.ns[id].text + " = ")); }
+    if (k == "un") { return kg_pr_k(g, id, 0, kg_ap(sb, g.ns[id].text)); }
     if (k == "cast") { return kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "(")), ") ")); }
     if (k == "rt") { return kg_pr_k(g, id, 0, kg_ap(sb, "rt ")); }
     if (k == "paren") { return kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "(")), ")"); }
-    if (k == "bin") { return kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), " " + g.text[id] + " ")); }
+    if (k == "bin") { return kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), " " + g.ns[id].text + " ")); }
     if (k == "tern") { return kg_pr_k(g, id, 2, kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), " ? ")), " : ")); }
     if (k == "try") { return kg_ap(kg_pr_k(g, id, 0, sb), "?"); }
     if (k == "orelse") { return kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, sb), " else { ")), " }"); }
     if (k == "ifx") {
         Str s1 = kg_ap(kg_pr_k(g, id, 1, kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "if (")), ") { ")), " }");
-        if (g.nk[id] < 3) { return s1; }
+        if (g.ns[id].nk < 3) { return s1; }
         Int e = kg_kid(g, id, 2);
-        if (g.kind[e] == "ifx") { return kg_pr(g, e, kg_ap(s1, " else ")); }
+        if (g.ns[e].kind == "ifx") { return kg_pr(g, e, kg_ap(s1, " else ")); }
         return kg_ap(kg_pr(g, e, kg_ap(s1, " else { ")), " }");
     }
-    if (k == "bexpr") { return kg_ap(kg_pr_bexpr(g, id, 0, sb), g.aux[id]); }
-    if (k == "match") { return kg_ap(kg_pr_list(g, id, 1, g.nk[id], ",\n", kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "match ")), " {\n")), "\n}"); }
+    if (k == "bexpr") { return kg_ap(kg_pr_bexpr(g, id, 0, sb), g.ns[id].aux); }
+    if (k == "match") { return kg_ap(kg_pr_list(g, id, 1, g.ns[id].nk, ",\n", kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "match ")), " {\n")), "\n}"); }
     if (k == "arm") {
-        Str pat = if (g.aux[id] == "") { g.text[id] } else { g.text[id] + "(" + g.aux[id] + ")" };
+        Str pat = if (g.ns[id].aux == "") { g.ns[id].text } else { g.ns[id].text + "(" + g.ns[id].aux + ")" };
         return kg_pr_k(g, id, 0, kg_ap(sb, pat + " => "));
     }
     if (k == "lambda") {
-        Int n = g.nk[id];
+        Int n = g.ns[id].nk;
         return kg_ap(kg_pr_k(g, id, n - 1, kg_ap(kg_pr_list(g, id, 0, n - 1, ", ", kg_ap(sb, "lambda(")), ") { ")), " }");
     }
-    if (k == "spawn") { return kg_pr_k(g, id, 0, kg_ap(sb, "spawn (" + g.aux[id] + ") ")); }
+    if (k == "spawn") { return kg_pr_k(g, id, 0, kg_ap(sb, "spawn (" + g.ns[id].aux + ") ")); }
     return kg_pr_stmt(g, id, k, sb);
 }
 
 Str kg_pr_bexpr(Kg g, Int id, Int i, Str sb) {
-    Int n = g.nk[id];
+    Int n = g.ns[id].nk;
     if (i >= n) { return sb; }
     Str sb1 = kg_pr_k(g, id, i, sb);
     Str sb2 = if (i + 1 < n) { kg_ap(sb1, " ") } else { sb1 };
@@ -1121,7 +1122,7 @@ Str kg_pr_bexpr(Kg g, Int id, Int i, Str sb) {
 }
 
 pub Str kg_pr(Kg g, Int id, Str sb) {
-    Str k = g.kind[id];
+    Str k = g.ns[id].kind;
     Str sb1 = kg_pr_expr(g, id, k, sb);
     if (kg_semi_kind(k)) { return kg_ap(sb1, ";"); }
     return sb1;
@@ -1194,12 +1195,12 @@ pub Str kg_roundtrip(Str s) {
 Str kg_dump_at(Kg g, Int id, Int depth, Str sb) {
     Str dtext = kg_doc(g, id);
     Str doc = if (dtext == "") { "" } else { " /// " + str_replace(dtext, "\n", " / ") };
-    Str line = str_repeat("  ", depth) + g.kind[id] + (if (g.text[id] == "") { "" } else { " " + g.text[id] }) + (if (g.aux[id] == "") { "" } else { " [" + g.aux[id] + "]" }) + doc + "\n";
+    Str line = str_repeat("  ", depth) + g.ns[id].kind + (if (g.ns[id].text == "") { "" } else { " " + g.ns[id].text }) + (if (g.ns[id].aux == "") { "" } else { " [" + g.ns[id].aux + "]" }) + doc + "\n";
     return kg_dump_kids(g, id, 0, depth + 1, kg_ap(sb, line));
 }
 
 Str kg_dump_kids(Kg g, Int id, Int i, Int depth, Str sb) {
-    if (i >= g.nk[id]) { return sb; }
+    if (i >= g.ns[id].nk) { return sb; }
     return kg_dump_kids(g, id, i + 1, depth, kg_dump_at(g, kg_kid(g, id, i), depth, sb));
 }
 
@@ -1218,14 +1219,14 @@ Int kg_legacy_group(Str op) {
 }
 
 Bool kg_mixed(Kg g, Int id, Int c) {
-    if (g.kind[c] != "bin") { return false; }
-    Int ga = kg_legacy_group(g.text[id]);
-    return ga != 0 && ga == kg_legacy_group(g.text[c]) && g.text[id] != g.text[c];
+    if (g.ns[c].kind != "bin") { return false; }
+    Int ga = kg_legacy_group(g.ns[id].text);
+    return ga != 0 && ga == kg_legacy_group(g.ns[c].text) && g.ns[id].text != g.ns[c].text;
 }
 
 List(Int) kg_lint_prec_at(Kg g, Int id, List(Int) acc) {
     if (id < 0) { return acc; }
-    Bool hit = g.kind[id] == "bin" && (kg_mixed(g, id, kg_kid(g, id, 0)) || kg_mixed(g, id, kg_kid(g, id, 1)));
+    Bool hit = g.ns[id].kind == "bin" && (kg_mixed(g, id, kg_kid(g, id, 0)) || kg_mixed(g, id, kg_kid(g, id, 1)));
     List(Int) acc2 = if (hit) { acc.concat([id]) } else { acc };
     return kg_lint_prec_at(g, id - 1, acc2);
 }
