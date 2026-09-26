@@ -9,7 +9,7 @@
 // Imported by examples/driver.resid; shares its lexer (lex_tok, Tok),
 // parse_type/PRes, is_known_type, imp_close_paren and find_sqclose_d.
 
-type Kg = { List(Str) kind; List(Str) text; List(Str) aux; List(Int) a0; List(Int) nk; List(Int) sp; List(Int) ep; List(Int) kids; };
+type Kg = { List(Str) kind; List(Str) text; List(Str) aux; List(Int) a0; List(Int) nk; List(Int) sp; List(Int) ep; List(Int) kids; Map(Int, Str) docs; };
 // A parse result: the grown graph, the node built, the position after it.
 type KP = { Kg g; Int id; Int pos; Str err; };
 // A list of child ids built so far.
@@ -18,7 +18,7 @@ type KL = { Kg g; List(Int) ids; Int pos; Str err; };
 pub Kg kg_empty() {
     List(Str) s0 = [];
     List(Int) i0 = [];
-    return Kg {.kind = s0, .text = s0, .aux = s0, .a0 = i0, .nk = i0, .sp = i0, .ep = i0, .kids = i0};
+    return Kg {.kind = s0, .text = s0, .aux = s0, .a0 = i0, .nk = i0, .sp = i0, .ep = i0, .kids = i0, .docs = kg_nodocs()};
 }
 
 pub Int kg_count(Kg g) { return g.kind.len(); }
@@ -26,11 +26,29 @@ pub Int kg_count(Kg g) { return g.kind.len(); }
 pub Int kg_kid(Kg g, Int id, Int i) { return g.kids[g.a0[id] + i]; }
 
 // Append a node; its id is the node count before the append.
+// Append a node; its id is the node count before the append.
 pub KP kg_add(Kg g, Str kind, Str text, Str aux, List(Int) ks, Int sp, Int pos) {
     Int id = g.kind.len();
     Int a0 = g.kids.len();
-    Kg g2 = Kg {.kind = g.kind.concat([kind]), .text = g.text.concat([text]), .aux = g.aux.concat([aux]), .a0 = g.a0.concat([a0]), .nk = g.nk.concat([ks.len()]), .sp = g.sp.concat([sp]), .ep = g.ep.concat([pos]), .kids = g.kids.concat(ks)};
+    Kg g2 = Kg {.kind = g.kind.concat([kind]), .text = g.text.concat([text]), .aux = g.aux.concat([aux]), .a0 = g.a0.concat([a0]), .nk = g.nk.concat([ks.len()]), .sp = g.sp.concat([sp]), .ep = g.ep.concat([pos]), .kids = g.kids.concat(ks), .docs = g.docs};
     return KP {.g = g2, .id = id, .pos = pos, .err = ""};
+}
+
+Map(Int, Str) kg_nodocs() {
+    Map(Int, Str) m = {};
+    return m;
+}
+
+// Attach a doc comment to the node just built.
+KP kg_with_doc(KP p, Str doc) {
+    if (p.err != "" || doc == "") { return p; }
+    Kg g = p.g;
+    Kg g2 = Kg {.kind = g.kind, .text = g.text, .aux = g.aux, .a0 = g.a0, .nk = g.nk, .sp = g.sp, .ep = g.ep, .kids = g.kids, .docs = g.docs.insert(p.id, doc)};
+    return KP {.g = g2, .id = p.id, .pos = p.pos, .err = ""};
+}
+
+pub Str kg_doc(Kg g, Int id) {
+    return g.docs.get(id) else { "" };
 }
 
 pub KP kg_fail(Kg g, Int pos, Str msg) {
@@ -852,7 +870,33 @@ KL kg_decls(Str s, Kg g, Int pos, Str close, List(Int) acc) {
     return kg_decls(s, d.g, d.pos, close, acc.concat([d.id]));
 }
 
+// `///` lines directly above position sp, joined with newlines.
+Str kg_doc_above(Str s, Int sp) {
+    Int ls = kg_line_start(s, sp);
+    return kg_doc_lines(s, ls, "");
+}
+
+Int kg_line_start(Str s, Int i) {
+    if (i <= 0) { return 0; }
+    if (str_char_at(s, i - 1) == 10) { return i; }
+    return kg_line_start(s, i - 1);
+}
+
+Str kg_doc_lines(Str s, Int ls, Str acc) {
+    if (ls <= 0) { return acc; }
+    Int ps = kg_line_start(s, ls - 1);
+    Str line = str_trim(str_slice(s, ps, ls - 1));
+    if (!str_starts_with(line, "///")) { return acc; }
+    Str body = str_trim(str_slice(line, 3, str_len(line)));
+    Str acc2 = if (acc == "") { body } else { body + "\n" + acc };
+    return kg_doc_lines(s, ps, acc2);
+}
+
 KP kg_decl(Str s, Kg g, Int pos) {
+    return kg_with_doc(kg_decl_at(s, g, pos), kg_doc_above(s, kg_at(s, pos)));
+}
+
+KP kg_decl_at(Str s, Kg g, Int pos) {
     Int sp = kg_at(s, pos);
     Int pe = kg_prefix_end(s, pos);
     Str prefix = str_trim(str_slice(s, sp, kg_at(s, pe)));
@@ -1146,7 +1190,9 @@ pub Str kg_roundtrip(Str s) {
 // ─── Dump (tests, debugging) ────────────────────────────────────────
 
 Str kg_dump_at(Kg g, Int id, Int depth, Str sb) {
-    Str line = str_repeat("  ", depth) + g.kind[id] + (if (g.text[id] == "") { "" } else { " " + g.text[id] }) + (if (g.aux[id] == "") { "" } else { " [" + g.aux[id] + "]" }) + "\n";
+    Str dtext = kg_doc(g, id);
+    Str doc = if (dtext == "") { "" } else { " /// " + str_replace(dtext, "\n", " / ") };
+    Str line = str_repeat("  ", depth) + g.kind[id] + (if (g.text[id] == "") { "" } else { " " + g.text[id] }) + (if (g.aux[id] == "") { "" } else { " [" + g.aux[id] + "]" }) + doc + "\n";
     return kg_dump_kids(g, id, 0, depth + 1, kg_ap(sb, line));
 }
 
@@ -1186,4 +1232,39 @@ List(Int) kg_lint_prec_at(Kg g, Int id, List(Int) acc) {
 pub List(Int) kg_lint_prec(Kg g) {
     List(Int) none = [];
     return kg_lint_prec_at(g, kg_count(g) - 1, none);
+}
+
+// ─── Source map ─────────────────────────────────────────────────────
+// Segments from import resolution: merged line ml is line fl of path.
+
+type KgMap = { List(Int) ml; List(Int) fl; List(Str) path; };
+
+KgMap kg_srcmap_at(List(Str) lines, Int i, KgMap acc) {
+    if (i >= lines.len()) { return acc; }
+    List(Str) f = str_split(lines[i], " ");
+    if (f.len() < 3) { return kg_srcmap_at(lines, i + 1, acc); }
+    Int sp2 = str_len(f[0]) + str_len(f[1]) + 2;
+    Str p = str_slice(lines[i], sp2, str_len(lines[i]));
+    KgMap acc2 = KgMap {.ml = acc.ml.concat([str_parse_int(f[0])]), .fl = acc.fl.concat([str_parse_int(f[1])]), .path = acc.path.concat([p])};
+    return kg_srcmap_at(lines, i + 1, acc2);
+}
+
+pub KgMap kg_srcmap(Str map) {
+    List(Int) e = [];
+    List(Str) es = [];
+    return kg_srcmap_at(str_split(map, "\n"), 0, KgMap {.ml = e, .fl = e, .path = es});
+}
+
+// Index of the last segment starting at or before merged line `line`.
+Int kg_seg(KgMap m, Int line, Int i, Int best) {
+    if (i >= m.ml.len()) { return best; }
+    Int b2 = if (m.ml[i] <= line) { i } else { best };
+    return kg_seg(m, line, i + 1, b2);
+}
+
+// "path:line" for a merged line; "<builtin>:n" past the last file.
+pub Str kg_where(KgMap m, Int line) {
+    Int k = kg_seg(m, line, 0, -1);
+    if (k < 0) { return "<merged>:" + IntToString(line); }
+    return m.path[k] + ":" + IntToString(m.fl[k] + line - m.ml[k]);
 }

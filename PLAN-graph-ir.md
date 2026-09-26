@@ -38,7 +38,7 @@ are imported the same way `reduce.resid` is.
 - [x] G0 Signed provenance (§33.1): COSE_Sign1 trailer, verify, keygen. The
   graph artifact's hash joins the payload when G4 emits it.
 
-- [~] G1 Graph core: `examples/graph.resid`.
+- [x] G1 Graph core: `examples/graph.resid`.
   - [x] Nodes stored as parallel columns with id = index (kind, text, aux,
     child slice, span). Children come before parents.
   - [x] Parser from desugared source covering the whole accepted grammar,
@@ -46,10 +46,12 @@ are imported the same way `reduce.resid` is.
     (`--dump-graph`) and a precedence lint (`--graph-lint`).
     `tests/graph/run.sh` passes on all 208 in-repo programs, including the
     compiler itself (138K nodes, parsed in about 0.3s).
-  - [ ] Source map: import resolution records (merged line, file, line)
-    segments so spans resolve to real files.
-  - [ ] Hash-consing and content hashes.
-  - [ ] Doc comments attached to declarations.
+  - [x] Source map: import resolution records (merged line, file line,
+    path) segments (`RRes.map`), so spans resolve to real files
+    (`kg_where`; `--graph-lint` reports file:line across imports).
+  - [x] `///` doc comments attached to declarations (`kg_doc`).
+  - Hash-consing and content hashes move to G2/G3: sharing is only sound
+    for pure nodes, and purity needs G2's effect information.
   - The CBOR writer moves to G3, once knowledge states mean something.
   - Found while building the parser, and fixed:
     - codegen and the reducer used a precedence table where `&`, `|`, `^`
