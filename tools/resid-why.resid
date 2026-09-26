@@ -378,7 +378,7 @@ Int str_find_last_colon(Str s, Int i) {
 // ─── CLI ────────────────────────────────────────────────────────────
 
 Str usage_text() {
-    return "usage: resid-why <artifact> [symbol] [--kind K] [--file F] [--max N] [--json] [--summary] [--help]\n       resid-why <artifact> --node ID | --at FILE:LINE [--max N]   (graph artifact)";
+    return "usage: resid-why <artifact> [symbol] [--kind K] [--file F] [--max N] [--json] [--summary] [--help]\n       resid-why <artifact> SYMBOL | --node ID | --at FILE:LINE [--max N]   (graph artifact)";
 }
 
 Bool str_is_int_safe(Str s) {
@@ -449,6 +449,12 @@ Int main() {
     Str gnode = arg_after(2, argc, "--node");
     Str gat = arg_after(2, argc, "--at");
     if (gnode != "" || gat != "") { return graph_main(cli.artifact, gnode, gat, cli.max); }
+    // A symbol, with a graph artifact present, is answered from the graph.
+    Str gpath = cli.artifact + ".resid-graph.cbor";
+    if (cli.symbol != "" && cli.kind == "" && cli.file == "" && !cli.as_json && !cli.summary && filesystem.exists(gpath)) {
+        GA ga = ga_load(filesystem.read_bytes(gpath));
+        return ga_sym(ga, ga_index(ga), cli.symbol, cli.max);
+    }
     Str sidecar = cli.artifact + ".resid-notes.cbor";
     if (!filesystem.exists(sidecar)) {
         eprintln("resid-why: no readable notes sidecar for '" + cli.artifact + "' (expected '" + sidecar + "')");

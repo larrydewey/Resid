@@ -1,0 +1,489 @@
+/// resid-debug.resid — graph-aware debugger (spec §37, PLAN-graph-ir G6).
+///
+/// Static mode walks a debug build's knowledge-graph artifact
+/// (`<binary>.resid-graph.cbor`) and its DWARF line table: nodes, symbols,
+/// derivations, and the lowered map from code addresses to nodes. Live mode
+/// runs the binary under gdb, stops at breakpoints, maps each stop's
+/// program counter to its node and each variable to the node that binds it,
+/// and steps by node.
+///
+/// Usage:
+///   resid-debug <binary> [-ex CMD]...      (no -ex: commands from stdin)
+///
+/// Commands:
+///   info                 binary, artifact, hash check, sizes
+///   node ID | at FILE:LINE | sym NAME     a node and its derive chain
+///   kids ID              a node's operands
+///   lowered [FN]         code ranges and the nodes they lower
+///   pc ADDR              the node at a code address
+///   check                every line-table row of the program maps to a node
+///   break FILE:LINE|FN   add a breakpoint for `run`
+///   run [ARGS]           run under gdb, report each stop (see `stops`)
+///   stops N              stops reported by `run` (default 8)
+///   step N               after the first stop, step N instructions and
+///                        report each change of node
+///   quit
+
+import "../lib/kgart.resid";
+import "../lib/dwarf.resid";
+
+// A session: the artifact and its index, the binary's sections, symbols
+// and line rows, and the live-mode settings.
+type DB = { Str bin; GA a; List(GI) ix; List(Int) b; List(ES) ss; List(SY) ys; List(LRow) rows; Map(Str, Int) at; List(Str) brk; Int stops; Int steps; };
+
+// ─── Places to nodes ────────────────────────────────────────────────
+
+// "file:line:col" of a span start.
+Str db_key(GA a, List(Int) sp) {
+    Str f = if (sp[0] < a.paths.len()) { a.paths[sp[0]] } else { "?" };
+    return f + ":" + IntToString(sp[1]) + ":" + IntToString(sp[2]);
+}
+
+Str db_line_key(GA a, List(Int) sp) {
+    Str f = if (sp[0] < a.paths.len()) { a.paths[sp[0]] } else { "?" };
+    return f + ":" + IntToString(sp[1]);
+}
+
+// The node lowered at each place: the latest node starting there (parents
+// follow children, and reduction's nodes follow the source's). A line's
+// latest node stands for the line, and a function's entry (column 0) too.
+Map(Str, Int) db_places(GA a, List(GI) ix, Int i, Map(Str, Int) acc) {
+    if (i >= ix.len()) { return acc; }
+    GI r = ix[i];
+    if (r.kind == "unit") { return db_places(a, ix, i + 1, acc); }
+    Map(Str, Int) a1 = acc.insert(db_key(a, r.span), r.id);
+    Str lk = db_line_key(a, r.span);
+    return db_places(a, ix, i + 1, a1.insert(lk, r.id));
+}
+
+// Row paths are as the compiler wrote them; match an artifact path.
+Str db_path(GA a, Str f) {
+    Int k = ga_file_idx(a.paths, f, 0);
+    return if (k < 0) { f } else { a.paths[k] };
+}
+
+// The node for a line-table row, or -1 (compiler-made code has line 0).
+Int db_row_node(DB d, LRow r) {
+    if (r.line == 0 || r.end) { return -1; }
+    Str f = db_path(d.a, r.file);
+    Str k = f + ":" + IntToString(r.line) + ":" + IntToString(r.col);
+    if (d.at.contains(k)) { return d.at.get(k) else { -1 }; }
+    Str k1 = f + ":" + IntToString(r.line) + ":1";
+    if (r.col == 0 && d.at.contains(k1)) { return d.at.get(k1) else { -1 }; }
+    return d.at.get(f + ":" + IntToString(r.line)) else { -1 };
+}
+
+// The node at a code address: its row's, or the nearest earlier row's in
+// the same function when the address is in compiler-made code.
+Int db_pc_node(DB d, Int pc) {
+    Int ri = el_row_at(d.rows, pc, 0, -1);
+    if (ri < 0) { return -1; }
+    return db_back(d, ri);
+}
+
+Int db_back(DB d, Int ri) {
+    if (ri < 0 || d.rows[ri].end) { return -1; }
+    Int n = db_row_node(d, d.rows[ri]);
+    if (n >= 0) { return n; }
+    return db_back(d, ri - 1);
+}
+
+// A symbol's name as written: module functions drop `__m<module>__`.
+Str db_demangle(Str s) {
+    if (!str_starts_with(s, "__m")) { return s; }
+    Int k = db_find(s, "__", 3);
+    return if (k < 0) { s } else { str_slice(s, k + 2, str_len(s)) };
+}
+
+Int db_find(Str s, Str pat, Int i) {
+    Int n = str_len(s);
+    Int m = str_len(pat);
+    if (i + m > n) { return -1; }
+    if (str_slice(s, i, i + m) == pat) { return i; }
+    return db_find(s, pat, i + 1);
+}
+
+Str db_fn_at(DB d, Int pc) {
+    Int k = el_func_at(d.ys, pc, 0);
+    if (k < 0) { return "?"; }
+    SY s = d.ys[k];
+    return db_demangle(s.name) + "+" + el_hex(pc - s.value);
+}
+
+Int db_say(Str s, Int rc) {
+    println(s);
+    return rc;
+}
+
+// ─── Static commands ────────────────────────────────────────────────
+
+Int db_node(DB d, Str arg) {
+    Int id = if (str_is_int(arg)) { str_parse_int(arg) } else { -1 };
+    if (id < 0 || id >= d.a.offs.len()) {
+        println("no node " + arg + " (" + IntToString(d.a.offs.len()) + " nodes)");
+        return 1;
+    }
+    return gn_chain(d.a, id, 0);
+}
+
+Int db_kids(DB d, Str arg) {
+    Int id = if (str_is_int(arg)) { str_parse_int(arg) } else { -1 };
+    if (id < 0 || id >= d.a.offs.len()) {
+        println("no node " + arg);
+        return 1;
+    }
+    GN n = gn_read(d.a, id);
+    println(gn_line(d.a, n));
+    return db_kids_at(d, n.deps, 0);
+}
+
+Int db_kids_at(DB d, List(Int) ks, Int i) {
+    if (i >= ks.len()) { return 0; }
+    println("  " + IntToString(i) + ": " + gn_line(d.a, gn_read(d.a, ks[i])));
+    return db_kids_at(d, ks, i + 1);
+}
+
+Int db_at(DB d, Str arg) {
+    Int colon = db_last_colon(arg, str_len(arg) - 1);
+    if (colon < 0) {
+        println("at wants FILE:LINE");
+        return 1;
+    }
+    Int fi = ga_file_idx(d.a.paths, str_slice(arg, 0, colon), 0);
+    if (fi < 0) {
+        println("'" + str_slice(arg, 0, colon) + "' is not a source of this build");
+        return 1;
+    }
+    Str ln = str_slice(arg, colon + 1, str_len(arg));
+    Int n = ga_at(d.a, fi, if (str_is_int(ln)) { str_parse_int(ln) } else { 0 }, 0, 0, 20);
+    if (n == 0) { println("no nodes start on " + arg); }
+    return 0;
+}
+
+Int db_last_colon(Str s, Int i) {
+    if (i < 0) { return -1; }
+    if (str_char_at(s, i) == 58) { return i; }
+    return db_last_colon(s, i - 1);
+}
+
+// `lowered [FN]`: the lowered table, rows merged while the node repeats.
+Int db_lowered(DB d, Str only) {
+    Int n = db_low_at(d, only, 0, -1, -1, "");
+    println(IntToString(n) + " range(s)");
+    return 0;
+}
+
+Str db_low_row(DB d, Int node, Int lo, Int hi) {
+    Int k = el_func_at(d.ys, lo, 0);
+    Str sym = if (k < 0) { "?" } else { d.ys[k].name };
+    Int base = if (k < 0) { 0 } else { d.ys[k].value };
+    return "#" + IntToString(node) + " " + db_demangle(sym) + " [" + el_hex(lo - base) + ", " + el_hex(hi - base) + ")";
+}
+
+Bool db_in_fn(DB d, Int addr, Str only) {
+    if (only == "") { return true; }
+    Int k = el_func_at(d.ys, addr, 0);
+    return k >= 0 && db_demangle(d.ys[k].name) == only;
+}
+
+// Walks rows; (node, lo) is the open range.
+Int db_low_at(DB d, Str only, Int i, Int node, Int lo, Str acc) {
+    if (i >= d.rows.len()) { return 0; }
+    LRow r = d.rows[i];
+    Int nn = if (r.end) { -1 } else { db_row_node(d, r) };
+    Bool close = node >= 0 && (nn != node || r.end);
+    Int shown = if (close && db_in_fn(d, lo, only)) { db_say(db_low_row(d, node, lo, r.addr), 1) } else { 0 };
+    Bool keep = nn == node && !r.end;
+    Int nlo = if (keep) { lo } else { r.addr };
+    return shown + db_low_at(d, only, i + 1, if (keep) { node } else { nn }, nlo, acc);
+}
+
+// `check`: rows with a source line that map to no node.
+Int db_check(DB d) {
+    Int bad = db_check_at(d, 0, 0, 0);
+    println("lowered check: " + IntToString(d.rows.len()) + " row(s), " + IntToString(bad) + " without a node");
+    return if (bad == 0) { 0 } else { 1 };
+}
+
+Int db_check_at(DB d, Int i, Int bad, Int shown) {
+    if (i >= d.rows.len()) { return bad; }
+    LRow r = d.rows[i];
+    Bool miss = !r.end && r.line > 0 && db_row_node(d, r) < 0;
+    Int _p = if (miss && shown < 10) { db_say("  no node for " + r.file + ":" + IntToString(r.line) + ":" + IntToString(r.col) + " at " + el_hex(r.addr), 0) } else { 0 };
+    return db_check_at(d, i + 1, if (miss) { bad + 1 } else { bad }, if (miss) { shown + 1 } else { shown });
+}
+
+Int db_pc(DB d, Str arg) {
+    Int pc = db_parse_addr(arg);
+    Int n = db_pc_node(d, pc);
+    println(el_hex(pc) + " " + db_fn_at(d, pc));
+    if (n < 0) {
+        println("  no node");
+        return 1;
+    }
+    return gn_chain(d.a, n, 0);
+}
+
+Int db_parse_addr(Str s) {
+    if (str_starts_with(s, "0x")) { return db_hex_val(s, 2, 0); }
+    return if (str_is_int(s)) { str_parse_int(s) } else { 0 };
+}
+
+Int db_hex_val(Str s, Int i, Int acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Int v = if (c >= 48 && c <= 57) { c - 48 } else if (c >= 97 && c <= 102) { c - 87 } else if (c >= 65 && c <= 70) { c - 55 } else { 0 };
+    return db_hex_val(s, i + 1, acc * 16 + v);
+}
+
+// `info`: the binary, its artifact, and whether the artifact's hash matches
+// the one compiled into the binary (spec §33).
+Int db_info(DB d) {
+    Int k = el_sym(d.ys, "resid_graph_hash", 0);
+    Str want = if (k < 0) { "" } else { ga_hex(el_read_addr(d.b, d.ss, d.ys[k].value, 32), 0, StrBuf()) };
+    Str got = ga_hex(filesystem.sha256(d.bin + ".resid-graph.cbor"), 0, StrBuf());
+    Str hs = if (want == "") { "no resid_graph_hash in the binary" } else if (want == got) { "matches the binary" } else { "MISMATCH (binary " + str_slice(want, 0, 16) + ", artifact " + str_slice(got, 0, 16) + ")" };
+    println("binary " + d.bin + ": " + IntToString(d.ys.len()) + " symbols, " + IntToString(d.rows.len()) + " line rows");
+    println("graph " + IntToString(d.a.offs.len()) + " nodes over " + IntToString(d.a.paths.len()) + " file(s); hash " + hs);
+    return if (want != "" && want != got) { 1 } else { 0 };
+}
+
+// ─── Live mode (gdb) ────────────────────────────────────────────────
+
+Str db_gdb_script(DB d, Str log, Str args) {
+    List(Str) head = ["set pagination off", "set confirm off", "set width 0", "set print address off", "set logging file " + log, "set logging overwrite on", "set logging redirect on", "set logging enabled on"];
+    List(Str) bs = db_break_lines(d.brk, 0, ListBuf());
+    Str run = "run " + args + " > " + d.bin + ".rdbg.out 2>&1";
+    Str bias = "printf \"@@main %lu\\n\", (unsigned long) &resid_run_main";
+    List(Str) stop = ["printf \"@@pc %lu\\n\", $pc", "printf \"@@args\\n\"", "info args", "printf \"@@locals\\n\"", "info locals"];
+    List(Str) body = if (d.steps > 0) { stop.concat(db_step_lines(stop, d.steps, 0, ListBuf())) } else { db_stop_lines(stop, d.stops, 0, ListBuf()) };
+    return str_join(head.concat(bs).concat([run, bias]).concat(body), "\n") + "\n";
+}
+
+List(Str) db_break_lines(List(Str) bs, Int i, ListBuf(Str) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    return db_break_lines(bs, i + 1, acc.push("break " + bs[i]));
+}
+
+List(Str) db_stop_lines(List(Str) stop, Int n, Int i, ListBuf(Str) acc) {
+    if (i >= n) { return acc.finish(); }
+    ListBuf(Str) a1 = db_push_all(acc, stop, 0);
+    return db_stop_lines(stop, n, i + 1, if (i + 1 < n) { a1.push("continue") } else { a1 });
+}
+
+List(Str) db_step_lines(List(Str) stop, Int n, Int i, ListBuf(Str) acc) {
+    if (i >= n) { return acc.finish(); }
+    return db_step_lines(stop, n, i + 1, db_push_all(acc.push("nexti"), stop, 0));
+}
+
+ListBuf(Str) db_push_all(ListBuf(Str) acc, List(Str) xs, Int i) {
+    if (i >= xs.len()) { return acc; }
+    return db_push_all(acc.push(xs[i]), xs, i + 1);
+}
+
+// One stop parsed from the gdb log.
+type ST = { Int pc; List(Str) vars; };
+
+List(ST) db_parse_log(List(Str) ls, Int i, Int pc, List(Str) vs, Bool invars, List(ST) acc) {
+    if (i >= ls.len()) { return if (pc >= 0) { acc.concat([ST {.pc = pc, .vars = vs}]) } else { acc }; }
+    Str l = ls[i];
+    List(Str) none = [];
+    if (str_starts_with(l, "@@pc ")) {
+        List(ST) a1 = if (pc >= 0) { acc.concat([ST {.pc = pc, .vars = vs}]) } else { acc };
+        Str v = str_slice(l, 5, str_len(l));
+        return db_parse_log(ls, i + 1, if (str_is_int(v)) { str_parse_int(v) } else { 0 }, none, false, a1);
+    }
+    if (l == "@@args" || l == "@@locals") { return db_parse_log(ls, i + 1, pc, vs, true, acc); }
+    Int c0 = if (str_len(l) > 0) { str_char_at(l, 0) } else { 0 };
+    Bool ident = (c0 >= 97 && c0 <= 122) || (c0 >= 65 && c0 <= 90) || c0 == 95;
+    Bool var = invars && pc >= 0 && ident && str_contains(l, " = ");
+    return db_parse_log(ls, i + 1, pc, if (var) { vs.concat([l]) } else { vs }, invars, acc);
+}
+
+// Where gdb saw `main` (the load bias of a position-independent binary).
+Int db_main_at(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return 0; }
+    Str l = ls[i];
+    if (str_starts_with(l, "@@main ")) {
+        Str v = str_slice(l, 7, str_len(l));
+        return if (str_is_int(v)) { str_parse_int(v) } else { 0 };
+    }
+    return db_main_at(ls, i + 1);
+}
+
+List(ST) db_unbias(List(ST) ss, Int bias, Int i, ListBuf(ST) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return db_unbias(ss, bias, i + 1, acc.push(ST {.pc = ss[i].pc - bias, .vars = ss[i].vars}));
+}
+
+// The declaration a variable at a stop reads: the latest one named `name`
+// that starts before the stop, inside the stopped node's function.
+Int db_var_node(DB d, Str name, List(Int) at, Int i, Int best, Int bline) {
+    if (i >= d.ix.len()) { return best; }
+    GI r = d.ix[i];
+    Bool c = r.name == name && (r.kind == "param" || r.kind == "bind" || r.kind == "rbind" || r.kind == "for" || r.kind == "lparam") && r.span[0] == at[0];
+    Bool before = c && (r.span[1] < at[1] || (r.span[1] == at[1] && r.span[2] <= at[2]));
+    Bool better = before && r.span[1] >= bline;
+    return db_var_node(d, name, at, i + 1, if (better) { r.id } else { best }, if (better) { r.span[1] } else { bline });
+}
+
+// KNOWN nodes with a value on the stopped line: what was folded into the
+// running code there.
+Int db_folded(DB d, List(Int) at, Int i, Int shown) {
+    if (i >= d.ix.len() || shown >= 6) { return shown; }
+    GI r = d.ix[i];
+    Bool line = r.span[0] == at[0] && r.span[1] == at[1];
+    GN n = if (line) { gn_read(d.a, r.id) } else { gn_read(d.a, 0) };
+    Bool hit = line && n.know == "known" && n.value != "";
+    Int _p = if (hit) { db_say("  folded " + gn_line(d.a, n), 0) } else { 0 };
+    return db_folded(d, at, i + 1, if (hit) { shown + 1 } else { shown });
+}
+
+Int db_report(DB d, ST s, Int k) {
+    Int n = db_pc_node(d, s.pc);
+    println("stop " + IntToString(k) + " at " + db_fn_at(d, s.pc) + " (" + el_hex(s.pc) + ")");
+    if (n < 0) {
+        println("  no node (runtime or compiler-made code)");
+        return 0;
+    }
+    GN g = gn_read(d.a, n);
+    println("  " + gn_line(d.a, g));
+    Int _v = db_vars(d, s.vars, g.span, 0);
+    return db_folded(d, g.span, 0, 0);
+}
+
+Int db_vars(DB d, List(Str) vs, List(Int) at, Int i) {
+    if (i >= vs.len()) { return 0; }
+    Str l = vs[i];
+    Int eq = db_find(l, " = ", 0);
+    Str name = str_slice(l, 0, eq);
+    Int vn = db_var_node(d, name, at, 0, -1, -1);
+    Str ref = if (vn < 0) { "" } else { "   " + gn_line(d.a, gn_read(d.a, vn)) };
+    println("  " + l + ref);
+    return db_vars(d, vs, at, i + 1);
+}
+
+// Stepping reports a stop only when its node differs from the last one.
+Int db_reports(DB d, List(ST) ss, Int i, Int k, Int last) {
+    if (i >= ss.len()) { return k; }
+    Int n = db_pc_node(d, ss[i].pc);
+    Bool show = d.steps == 0 || i == 0 || n != last;
+    Int _r = if (show) { db_report(d, ss[i], k + 1) } else { 0 };
+    return db_reports(d, ss, i + 1, if (show) { k + 1 } else { k }, n);
+}
+
+Int db_run(DB d, Str args) {
+    if (d.brk.len() == 0) {
+        println("no breakpoints: add one with `break FILE:LINE` or `break FN`");
+        return 1;
+    }
+    Str gs = d.bin + ".rdbg.gdb";
+    Str log = d.bin + ".rdbg.log";
+    Str sh = d.bin + ".rdbg.sh";
+    Bool w1 = filesystem.write_all(gs, db_gdb_script(d, log, args));
+    Bool w2 = filesystem.write_all(sh, "gdb -q -batch -nx -x " + gs + " " + d.bin + " >/dev/null 2>&1\n");
+    Bool w3 = filesystem.write_all(log, "");
+    Int rc = process.run("sh " + sh);
+    List(Str) nb = [];
+    List(ST) ns = [];
+    List(Str) ls = str_split(filesystem.read_all(log), "\n");
+    Int mk = el_sym(d.ys, "resid_run_main", 0);
+    Int bias = if (mk < 0) { 0 } else { db_main_at(ls, 0) - d.ys[mk].value };
+    List(ST) ss = db_unbias(db_parse_log(ls, 0, -1, nb, false, ns), bias, 0, ListBuf());
+    if (ss.len() == 0) {
+        println("the program did not stop (gdb exit " + IntToString(rc) + ")");
+    }
+    Int n = db_reports(d, ss, 0, 0, -2);
+    Str out = filesystem.read_all(d.bin + ".rdbg.out");
+    if (out != "") { print("program output:\n" + out); }
+    return 0;
+}
+
+// ─── Command loop ───────────────────────────────────────────────────
+
+type CR = { DB d; Int rc; Bool quit; };
+
+CR db_cmd(DB d, Str line0) {
+    Str line = str_trim(line0);
+    Int sp = db_find(line, " ", 0);
+    Str c = if (sp < 0) { line } else { str_slice(line, 0, sp) };
+    Str arg = if (sp < 0) { "" } else { str_trim(str_slice(line, sp + 1, str_len(line))) };
+    if (c == "" || str_starts_with(c, "#")) { return CR {.d = d, .rc = 0, .quit = false}; }
+    if (c == "quit" || c == "q") { return CR {.d = d, .rc = 0, .quit = true}; }
+    if (c == "break" || c == "b") {
+        println("breakpoint " + IntToString(d.brk.len() + 1) + " at " + arg);
+        return CR {.d = DB {.bin = d.bin, .a = d.a, .ix = d.ix, .b = d.b, .ss = d.ss, .ys = d.ys, .rows = d.rows, .at = d.at, .brk = d.brk.concat([arg]), .stops = d.stops, .steps = d.steps}, .rc = 0, .quit = false};
+    }
+    if (c == "stops" || c == "step") {
+        Int n = if (str_is_int(arg)) { str_parse_int(arg) } else { 1 };
+        Bool st = c == "step";
+        return CR {.d = DB {.bin = d.bin, .a = d.a, .ix = d.ix, .b = d.b, .ss = d.ss, .ys = d.ys, .rows = d.rows, .at = d.at, .brk = d.brk, .stops = if (st) { d.stops } else { n }, .steps = if (st) { n } else { 0 }}, .rc = 0, .quit = false};
+    }
+    Int rc = if (c == "info") { db_info(d) } else if (c == "node" || c == "n") { db_node(d, arg) } else if (c == "kids") { db_kids(d, arg) } else if (c == "at") { db_at(d, arg) } else if (c == "sym") { ga_sym(d.a, d.ix, arg, 8) } else if (c == "lowered") { db_lowered(d, arg) } else if (c == "pc") { db_pc(d, arg) } else if (c == "check") { db_check(d) } else if (c == "run" || c == "r") { db_run(d, arg) } else if (c == "help") { db_help() } else { db_say("unknown command `" + c + "` (help lists them)", 1) };
+    return CR {.d = d, .rc = rc, .quit = false};
+}
+
+Int db_help() {
+    println("info | node ID | kids ID | at FILE:LINE | sym NAME | lowered [FN] | pc ADDR | check");
+    println("break FILE:LINE|FN | stops N | step N | run [ARGS] | quit");
+    return 0;
+}
+
+// -ex commands in order; the last status is the exit code.
+Int db_script(DB d, List(Str) cs, Int i, Int rc) {
+    if (i >= cs.len()) { return rc; }
+    CR r = db_cmd(d, cs[i]);
+    if (r.quit) { return r.rc; }
+    return db_script(r.d, cs, i + 1, r.rc);
+}
+
+Int db_repl(DB d) {
+    print("(resid-debug) ");
+    Str l = resid_read_line();
+    if (l == "") {
+        println("");
+        return 0;
+    }
+    CR r = db_cmd(d, l);
+    if (r.quit) { return 0; }
+    return db_repl(r.d);
+}
+
+List(Str) db_exs(Int i, Int n, ListBuf(Str) acc) {
+    if (i + 1 >= n) { return acc.finish(); }
+    if (args.get(i) == "-ex") { return db_exs(i + 2, n, acc.push(args.get(i + 1))); }
+    return db_exs(i + 1, n, acc);
+}
+
+DB db_open(Str bin) {
+    GA a = ga_load(filesystem.read_bytes(bin + ".resid-graph.cbor"));
+    List(GI) ix = ga_index(a);
+    List(Int) b = filesystem.read_bytes(bin);
+    List(ES) ss = if (el_is_elf(b)) { el_sections(b) } else { [] };
+    List(SY) ys = if (ss.len() > 0) { el_symbols(b, ss) } else { [] };
+    List(LRow) rows = if (ss.len() > 0) { el_lines(b, ss) } else { [] };
+    Map(Str, Int) m0 = {};
+    List(Str) nb = [];
+    return DB {.bin = bin, .a = a, .ix = ix, .b = b, .ss = ss, .ys = ys, .rows = rows, .at = db_places(a, ix, 0, m0), .brk = nb, .stops = 8, .steps = 0};
+}
+
+Int main() {
+    Int argc = args.count();
+    if (argc < 2 || args.get(1) == "--help") {
+        println("usage: resid-debug <binary> [-ex CMD]...   (a debug build: residc --profile debug)");
+        return if (argc < 2) { 2 } else { 0 };
+    }
+    Str bin = args.get(1);
+    if (!filesystem.exists(bin + ".resid-graph.cbor")) {
+        eprintln("resid-debug: no graph artifact '" + bin + ".resid-graph.cbor' (build with --profile debug)");
+        return 1;
+    }
+    if (!filesystem.exists(bin)) {
+        eprintln("resid-debug: no binary '" + bin + "'");
+        return 1;
+    }
+    DB d = db_open(bin);
+    List(Str) cs = db_exs(2, argc, ListBuf());
+    if (cs.len() > 0) { return db_script(d, cs, 0, 0); }
+    return db_repl(d);
+}

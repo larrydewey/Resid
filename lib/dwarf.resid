@@ -1,0 +1,326 @@
+// dwarf.resid — reading an ELF64 binary's symbols and DWARF 5 line table
+// for tools (resid-debug, resid-graph): the lowered map of spec §33 is the
+// line table, whose rows resolve to graph nodes through their spans.
+//
+// Little-endian x86-64 only: that is what the compiler emits.
+
+// An unsigned little-endian integer of k bytes at pos.
+pub Int el_u(List(Int) b, Int pos, Int k) {
+    return el_u_at(b, pos + k - 1, k, 0);
+}
+
+pub Int el_u_at(List(Int) b, Int pos, Int k, Int acc) {
+    if (k == 0) { return acc; }
+    return el_u_at(b, pos - 1, k - 1, acc * 256 + b[pos]);
+}
+
+// A NUL-terminated string at pos.
+pub Str el_cstr(List(Int) b, Int pos) {
+    return el_cstr_at(b, pos, StrBuf());
+}
+
+pub Str el_cstr_at(List(Int) b, Int pos, StrBuf acc) {
+    if (pos >= b.len() || b[pos] == 0) { return acc.finish(); }
+    return el_cstr_at(b, pos + 1, acc.push_char(b[pos]));
+}
+
+// One section header: name, type, load address, file offset, size, link.
+type ES = { Str name; Int ty; Int addr; Int off; Int size; Int link; };
+
+pub Bool el_is_elf(List(Int) b) {
+    return b.len() > 64 && b[0] == 127 && b[1] == 69 && b[2] == 76 && b[3] == 70 && b[4] == 2;
+}
+
+pub List(ES) el_sections(List(Int) b) {
+    Int shoff = el_u(b, 40, 8);
+    Int shnum = el_u(b, 60, 2);
+    Int shstr = el_u(b, 62, 2);
+    Int stroff = el_u(b, shoff + shstr * 64 + 24, 8);
+    return el_sections_at(b, shoff, stroff, 0, shnum, ListBuf());
+}
+
+pub List(ES) el_sections_at(List(Int) b, Int shoff, Int stroff, Int i, Int n, ListBuf(ES) acc) {
+    if (i >= n) { return acc.finish(); }
+    Int h = shoff + i * 64;
+    ES s = ES {.name = el_cstr(b, stroff + el_u(b, h, 4)), .ty = el_u(b, h + 4, 4), .addr = el_u(b, h + 16, 8), .off = el_u(b, h + 24, 8), .size = el_u(b, h + 32, 8), .link = el_u(b, h + 40, 4)};
+    return el_sections_at(b, shoff, stroff, i + 1, n, acc.push(s));
+}
+
+pub Int el_find(List(ES) ss, Str name, Int i) {
+    if (i >= ss.len()) { return -1; }
+    if (ss[i].name == name) { return i; }
+    return el_find(ss, name, i + 1);
+}
+
+// A symbol: name, value (address), size, and STT kind (1 object, 2 func).
+type SY = { Str name; Int value; Int size; Int kind; };
+
+pub List(SY) el_symbols(List(Int) b, List(ES) ss) {
+    Int k = el_find(ss, ".symtab", 0);
+    if (k < 0) { return []; }
+    ES st = ss[k];
+    Int stroff = ss[st.link].off;
+    return el_syms_at(b, st.off, stroff, 0, st.size / 24, ListBuf());
+}
+
+pub List(SY) el_syms_at(List(Int) b, Int off, Int stroff, Int i, Int n, ListBuf(SY) acc) {
+    if (i >= n) { return acc.finish(); }
+    Int e = off + i * 24;
+    SY s = SY {.name = el_cstr(b, stroff + el_u(b, e, 4)), .value = el_u(b, e + 8, 8), .size = el_u(b, e + 16, 8), .kind = b[e + 4] & 15};
+    return el_syms_at(b, off, stroff, i + 1, n, acc.push(s));
+}
+
+pub Int el_sym(List(SY) ys, Str name, Int i) {
+    if (i >= ys.len()) { return -1; }
+    if (ys[i].name == name) { return i; }
+    return el_sym(ys, name, i + 1);
+}
+
+// The function symbol containing addr, or -1.
+pub Int el_func_at(List(SY) ys, Int addr, Int i) {
+    if (i >= ys.len()) { return -1; }
+    SY s = ys[i];
+    if (s.kind == 2 && addr >= s.value && addr < s.value + s.size) { return i; }
+    return el_func_at(ys, addr, i + 1);
+}
+
+// n bytes at the load address addr, from the section holding it.
+pub List(Int) el_read_addr(List(Int) b, List(ES) ss, Int addr, Int n) {
+    Int k = el_sec_at(ss, addr, 0);
+    if (k < 0) { return []; }
+    Int p = ss[k].off + addr - ss[k].addr;
+    return b[p..p + n];
+}
+
+pub Int el_sec_at(List(ES) ss, Int addr, Int i) {
+    if (i >= ss.len()) { return -1; }
+    ES s = ss[i];
+    if (s.addr > 0 && s.ty != 8 && addr >= s.addr && addr < s.addr + s.size) { return i; }
+    return el_sec_at(ss, addr, i + 1);
+}
+
+// ─── LEB128 ─────────────────────────────────────────────────────────
+
+type UL = { Int v; Int pos; };
+
+pub UL el_uleb(List(Int) b, Int pos) {
+    return el_uleb_at(b, pos, 0, 1);
+}
+
+pub UL el_uleb_at(List(Int) b, Int pos, Int acc, Int mul) {
+    Int c = b[pos];
+    Int a = acc + (c & 127) * mul;
+    if (c < 128) { return UL {.v = a, .pos = pos + 1}; }
+    return el_uleb_at(b, pos + 1, a, mul * 128);
+}
+
+pub UL el_sleb(List(Int) b, Int pos) {
+    return el_sleb_at(b, pos, 0, 1);
+}
+
+pub UL el_sleb_at(List(Int) b, Int pos, Int acc, Int mul) {
+    Int c = b[pos];
+    Int a = acc + (c & 127) * mul;
+    if (c >= 128) { return el_sleb_at(b, pos + 1, a, mul * 128); }
+    Int v = if ((c & 64) != 0) { a - mul * 128 } else { a };
+    return UL {.v = v, .pos = pos + 1};
+}
+
+// ─── Line table (DWARF 5 .debug_line) ───────────────────────────────
+
+// One row: address, file path, line, column; `end` closes a sequence.
+type LRow = { Int addr; Str file; Int line; Int col; Bool end; };
+
+// Section offsets the line-program header's string forms point into.
+type LX = { List(Int) b; Int lstr; Int str; };
+
+// A form's value (string forms decoded) and the position after it.
+type LF = { Str s; Int v; Int pos; };
+
+pub LF el_form(LX x, Int form, Int pos) {
+    List(Int) b = x.b;
+    if (form == 8) {
+        Str s = el_cstr(b, pos);
+        return LF {.s = s, .v = 0, .pos = pos + str_len(s) + 1};
+    }
+    if (form == 31) { return LF {.s = el_cstr(b, x.lstr + el_u(b, pos, 4)), .v = 0, .pos = pos + 4}; }
+    if (form == 14) { return LF {.s = el_cstr(b, x.str + el_u(b, pos, 4)), .v = 0, .pos = pos + 4}; }
+    if (form == 15) {
+        UL u = el_uleb(b, pos);
+        return LF {.s = "", .v = u.v, .pos = u.pos};
+    }
+    if (form == 11) { return LF {.s = "", .v = b[pos], .pos = pos + 1}; }
+    if (form == 5) { return LF {.s = "", .v = el_u(b, pos, 2), .pos = pos + 2}; }
+    if (form == 6) { return LF {.s = "", .v = el_u(b, pos, 4), .pos = pos + 4}; }
+    if (form == 7) { return LF {.s = "", .v = el_u(b, pos, 8), .pos = pos + 8}; }
+    if (form == 30) { return LF {.s = "", .v = 0, .pos = pos + 16}; }
+    if (form == 9) {
+        UL u = el_uleb(b, pos);
+        return LF {.s = "", .v = 0, .pos = u.pos + u.v};
+    }
+    return LF {.s = "", .v = 0, .pos = pos};
+}
+
+// An entry-format list: (content type, form) pairs.
+type LEF = { List(Int) ct; List(Int) fm; Int pos; };
+
+pub LEF el_formats(List(Int) b, Int pos, Int n, ListBuf(Int) ct, ListBuf(Int) fm) {
+    if (n <= 0) { return LEF {.ct = ct.finish(), .fm = fm.finish(), .pos = pos}; }
+    UL c = el_uleb(b, pos);
+    UL f = el_uleb(b, c.pos);
+    return el_formats(b, f.pos, n - 1, ct.push(c.v), fm.push(f.v));
+}
+
+// One directory or file entry: its path and directory index.
+type LE = { Str path; Int dir; Int pos; };
+
+pub LE el_entry(LX x, LEF f, Int i, Int pos, LE acc) {
+    if (i >= f.ct.len()) { return LE {.path = acc.path, .dir = acc.dir, .pos = pos}; }
+    LF v = el_form(x, f.fm[i], pos);
+    Int c = f.ct[i];
+    LE a1 = if (c == 1) { LE {.path = v.s, .dir = acc.dir, .pos = 0} } else if (c == 2) { LE {.path = acc.path, .dir = v.v, .pos = 0} } else { acc };
+    return el_entry(x, f, i + 1, v.pos, a1);
+}
+
+type LES = { List(Str) paths; List(Int) dirs; Int pos; };
+
+pub LES el_entries(LX x, LEF f, Int pos, Int n, ListBuf(Str) ps, ListBuf(Int) ds) {
+    if (n <= 0) { return LES {.paths = ps.finish(), .dirs = ds.finish(), .pos = pos}; }
+    LE e = el_entry(x, f, 0, pos, LE {.path = "", .dir = 0, .pos = 0});
+    return el_entries(x, f, e.pos, n - 1, ps.push(e.path), ds.push(e.dir));
+}
+
+// The line-program header's parameters.
+type LH = { Int minlen; Int lbase; Int lrange; Int obase; List(Int) oplen; List(Str) files; Int prog; Int end; };
+
+// File paths as written, joined to their directory unless absolute or ".".
+pub List(Str) el_join_dirs(List(Str) fs, List(Int) ds, List(Str) dirs, Int i, ListBuf(Str) acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    Str d = if (ds[i] < dirs.len()) { dirs[ds[i]] } else { "" };
+    Str f = fs[i];
+    Str p = if (str_starts_with(f, "/") || d == "" || d == ".") { f } else { d + "/" + f };
+    return el_join_dirs(fs, ds, dirs, i + 1, acc.push(p));
+}
+
+pub LH el_header(LX x, Int off) {
+    List(Int) b = x.b;
+    Int len = el_u(b, off, 4);
+    Int end = off + 4 + len;
+    Int ver = el_u(b, off + 4, 2);
+    Int hlen = el_u(b, off + 8, 4);
+    Int prog = off + 12 + hlen;
+    Int p = off + 12;
+    Int obase = b[p + 5];
+    List(Int) ol = b[p + 6..p + 6 + obase - 1];
+    Int q = p + 6 + obase - 1;
+    if (ver != 5) {
+        return LH {.minlen = b[p], .lbase = 0, .lrange = 1, .obase = obase, .oplen = ol, .files = [], .prog = end, .end = end};
+    }
+    LEF df = el_formats(b, q + 1, b[q], ListBuf(), ListBuf());
+    UL dn = el_uleb(b, df.pos);
+    LES dirs = el_entries(x, df, dn.pos, dn.v, ListBuf(), ListBuf());
+    Int fq = dirs.pos;
+    LEF ff = el_formats(b, fq + 1, b[fq], ListBuf(), ListBuf());
+    UL fnn = el_uleb(b, ff.pos);
+    LES files = el_entries(x, ff, fnn.pos, fnn.v, ListBuf(), ListBuf());
+    Int lb = b[p + 3];
+    return LH {.minlen = b[p], .lbase = if (lb >= 128) { lb - 256 } else { lb }, .lrange = b[p + 4], .obase = obase, .oplen = ol, .files = el_join_dirs(files.paths, files.dirs, dirs.paths, 0, ListBuf()), .prog = prog, .end = end};
+}
+
+// The state machine's registers.
+type LS = { Int addr; Int file; Int line; Int col; };
+
+pub LS el_ls0() { return LS {.addr = 0, .file = 1, .line = 1, .col = 0}; }
+
+pub LRow el_row(LH h, LS s, Bool end) {
+    Str f = if (s.file < h.files.len()) { h.files[s.file] } else { "" };
+    return LRow {.addr = s.addr, .file = f, .line = s.line, .col = s.col, .end = end};
+}
+
+pub Int el_skip_ulebs(List(Int) b, Int pos, Int n) {
+    if (n <= 0) { return pos; }
+    return el_skip_ulebs(b, el_uleb(b, pos).pos, n - 1);
+}
+
+pub List(LRow) el_run(List(Int) b, LH h, Int pos, LS s, ListBuf(LRow) acc) {
+    if (pos >= h.end) { return acc.finish(); }
+    Int op = b[pos];
+    if (op >= h.obase) {
+        Int adj = op - h.obase;
+        LS s1 = LS {.addr = s.addr + (adj / h.lrange) * h.minlen, .file = s.file, .line = s.line + h.lbase + adj % h.lrange, .col = s.col};
+        return el_run(b, h, pos + 1, s1, acc.push(el_row(h, s1, false)));
+    }
+    if (op == 0) {
+        UL n = el_uleb(b, pos + 1);
+        Int sub = b[n.pos];
+        Int nx = n.pos + n.v;
+        if (sub == 1) { return el_run(b, h, nx, el_ls0(), acc.push(el_row(h, s, true))); }
+        if (sub == 2) { return el_run(b, h, nx, LS {.addr = el_u(b, n.pos + 1, 8), .file = s.file, .line = s.line, .col = s.col}, acc); }
+        return el_run(b, h, nx, s, acc);
+    }
+    if (op == 1) { return el_run(b, h, pos + 1, s, acc.push(el_row(h, s, false))); }
+    if (op == 2) {
+        UL u = el_uleb(b, pos + 1);
+        return el_run(b, h, u.pos, LS {.addr = s.addr + u.v * h.minlen, .file = s.file, .line = s.line, .col = s.col}, acc);
+    }
+    if (op == 3) {
+        UL u = el_sleb(b, pos + 1);
+        return el_run(b, h, u.pos, LS {.addr = s.addr, .file = s.file, .line = s.line + u.v, .col = s.col}, acc);
+    }
+    if (op == 4) {
+        UL u = el_uleb(b, pos + 1);
+        return el_run(b, h, u.pos, LS {.addr = s.addr, .file = u.v, .line = s.line, .col = s.col}, acc);
+    }
+    if (op == 5) {
+        UL u = el_uleb(b, pos + 1);
+        return el_run(b, h, u.pos, LS {.addr = s.addr, .file = s.file, .line = s.line, .col = u.v}, acc);
+    }
+    if (op == 8) {
+        Int d = ((255 - h.obase) / h.lrange) * h.minlen;
+        return el_run(b, h, pos + 1, LS {.addr = s.addr + d, .file = s.file, .line = s.line, .col = s.col}, acc);
+    }
+    if (op == 9) { return el_run(b, h, pos + 3, LS {.addr = s.addr + el_u(b, pos + 1, 2), .file = s.file, .line = s.line, .col = s.col}, acc); }
+    return el_run(b, h, el_skip_ulebs(b, pos + 1, h.oplen[op - 1]), s, acc);
+}
+
+// Every row of every line program in the binary, in section order.
+pub List(LRow) el_lines(List(Int) b, List(ES) ss) {
+    Int k = el_find(ss, ".debug_line", 0);
+    if (k < 0) { return []; }
+    Int ls = el_find(ss, ".debug_line_str", 0);
+    Int st = el_find(ss, ".debug_str", 0);
+    LX x = LX {.b = b, .lstr = if (ls < 0) { 0 } else { ss[ls].off }, .str = if (st < 0) { 0 } else { ss[st].off }};
+    return el_units(x, ss[k].off, ss[k].off + ss[k].size, ListBuf());
+}
+
+pub List(LRow) el_units(LX x, Int off, Int end, ListBuf(LRow) acc) {
+    if (off >= end) { return acc.finish(); }
+    LH h = el_header(x, off);
+    List(LRow) rs = el_run(x.b, h, h.prog, el_ls0(), ListBuf());
+    return el_units(x, h.end, end, el_push_rows(acc, rs, 0));
+}
+
+pub ListBuf(LRow) el_push_rows(ListBuf(LRow) acc, List(LRow) rs, Int i) {
+    if (i >= rs.len()) { return acc; }
+    return el_push_rows(acc.push(rs[i]), rs, i + 1);
+}
+
+// The row covering addr (the last row at or before it in its sequence).
+pub Int el_row_at(List(LRow) rs, Int addr, Int i, Int best) {
+    if (i >= rs.len()) { return best; }
+    LRow r = rs[i];
+    Bool inside = !r.end && r.addr <= addr && i + 1 < rs.len() && rs[i + 1].addr > addr;
+    return el_row_at(rs, addr, i + 1, if (inside) { i } else { best });
+}
+
+pub Str el_hex(Int n) {
+    if (n == 0) { return "0x0"; }
+    return "0x" + el_hex_at(n, "");
+}
+
+pub Str el_hex_at(Int n, Str acc) {
+    if (n == 0) { return acc; }
+    Int d = n % 16;
+    Str c = if (d < 10) { IntToString(d) } else { str_from_code(87 + d) };
+    return el_hex_at(n / 16, c + acc);
+}

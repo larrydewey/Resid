@@ -294,6 +294,13 @@ StrBuf ga_deps(StrBuf b, Kg g, Int id, Int i) {
     return ga_deps(ga_int(b, kg_kid(g, id, i)), g, id, i + 1);
 }
 
+// Declarations and uses carry their name, for queries by symbol.
+Bool ga_named(KN n) {
+    Str k = n.kind;
+    Bool nk = k == "fn" || k == "param" || k == "bind" || k == "rbind" || k == "ref" || k == "call" || k == "mcall" || k == "field" || k == "for" || k == "sfield" || k == "struct" || k == "lparam" || k == "test";
+    return nk && n.text != "";
+}
+
 // A node's def edge (-1 none); a derived node has its origin's.
 Int ga_def(GAX x, Int id) {
     if (id < x.n0) { return if (id < x.defs.len()) { x.defs[id] } else { -1 }; }
@@ -311,10 +318,12 @@ StrBuf ga_node(StrBuf b, GAX x, Int id) {
     Int from = x.d.from[id];
     Str know = if (eff != "") { "effect" } else if (x.c.kn[id]) { "known" } else { "residual" };
     Str fr = if (know != "known") { x.rf.get(id) else { "" } } else { "" };
-    Int nf = 9 + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 }) + (if (know != "known") { 1 } else { 0 }) + (if (fr != "") { 1 } else { 0 });
+    Bool hn = ga_named(n);
+    Int nf = 9 + (if (hn) { 1 } else { 0 }) + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 }) + (if (know != "known") { 1 } else { 0 }) + (if (fr != "") { 1 } else { 0 });
     StrBuf b1 = ga_text(ga_key(ga_int(ga_key(ga_head(b, 5, nf), "id"), id), "kind"), n.kind);
     StrBuf b2 = ga_text(ga_key(ga_text(ga_key(b1, "type"), ga_type(id, x.n0, x.tys, x.d)), "knowledge"), know);
-    StrBuf b3 = if (hv) { ga_value(ga_key(b2, "value"), n) } else { b2 };
+    StrBuf b2n = if (hn) { ga_text(ga_key(b2, "name"), n.text) } else { b2 };
+    StrBuf b3 = if (hv) { ga_value(ga_key(b2n, "value"), n) } else { b2n };
     StrBuf b4 = ga_deps(ga_head(ga_key(b3, "deps"), 4, n.nk), g, id, 0);
     StrBuf b5 = if (def >= 0) { ga_int(ga_key(b4, "def"), def) } else { b4 };
     StrBuf b6 = if (eff != "") { ga_text(ga_head(ga_key(b5, "effects"), 4, 1), eff) } else { ga_head(ga_key(b5, "effects"), 4, 0) };

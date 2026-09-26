@@ -3089,12 +3089,14 @@ void resid_conv_check(int8_t bad) {
     if (bad) resid_abort("numeric conversion out of range");
 }
 
-/* ── Wrapping operations (C integer overflow is well-defined: wrap) ─ */
-int64_t wrapping_add(int64_t a, int64_t b) { return a + b; }
-int64_t wrapping_sub(int64_t a, int64_t b) { return a - b; }
-int64_t wrapping_mul(int64_t a, int64_t b) { return a * b; }
+/* ── Wrapping operations (two's complement, computed unsigned: signed
+ * overflow is undefined in C) ─ */
+int64_t wrapping_add(int64_t a, int64_t b) { return (int64_t)((uint64_t)a + (uint64_t)b); }
+int64_t wrapping_sub(int64_t a, int64_t b) { return (int64_t)((uint64_t)a - (uint64_t)b); }
+int64_t wrapping_mul(int64_t a, int64_t b) { return (int64_t)((uint64_t)a * (uint64_t)b); }
 int64_t wrapping_div(int64_t a, int64_t b) {
     if (b == 0) resid_abort("wrapping_div: division by zero");
+    if (b == -1) return (int64_t)(0u - (uint64_t)a);
     return a / b;
 }
 uint64_t wrapping_uadd(uint64_t a, uint64_t b) { return a + b; }
@@ -3117,14 +3119,8 @@ int64_t saturating_sub(int64_t a, int64_t b) {
     return a - b;
 }
 int64_t saturating_mul(int64_t a, int64_t b) {
-    if (a == 0 || b == 0) return 0;
-    int64_t r = a * b;
-    /* Check overflow: if (a > 0 && b > 0 && r < 0) || (a < 0 && b < 0 && r > 0) ||
-       (a > 0 && b < 0 && r > 0) || (a < 0 && b > 0 && r < 0) */
-    if ((a > 0 && b > 0 && r < 0) || (a < 0 && b < 0 && r > 0) ||
-        (a > 0 && b < 0 && r > 0) || (a < 0 && b > 0 && r < 0)) {
-        return (a > 0) == (b > 0) ? INT64_MAX : INT64_MIN;
-    }
+    int64_t r;
+    if (__builtin_mul_overflow(a, b, &r)) return (a > 0) == (b > 0) ? INT64_MAX : INT64_MIN;
     return r;
 }
 uint64_t saturating_uadd(uint64_t a, uint64_t b) {
@@ -3145,9 +3141,9 @@ uint64_t saturating_umul(uint64_t a, uint64_t b) {
 /* ── Checked operations (returns result; caller checks via overflow flag) ─ */
 /* These return the computation result; the caller must have emitted an
    overflow check before calling. For division by zero, resid_abort is called. */
-int64_t checked_add(int64_t a, int64_t b) { return a + b; }
-int64_t checked_sub(int64_t a, int64_t b) { return a - b; }
-int64_t checked_mul(int64_t a, int64_t b) { return a * b; }
+int64_t checked_add(int64_t a, int64_t b) { return wrapping_add(a, b); }
+int64_t checked_sub(int64_t a, int64_t b) { return wrapping_sub(a, b); }
+int64_t checked_mul(int64_t a, int64_t b) { return wrapping_mul(a, b); }
 int64_t checked_div(int64_t a, int64_t b) {
     if (b == 0) resid_abort("checked_div: division by zero");
     return a / b;
@@ -3231,6 +3227,27 @@ int8_t resid_fs_exists(const char* path) {
     if (!f) return 0;
     fclose(f);
     return 1;
+}
+
+/* One line of standard input, with its newline; "" at end of input. For
+ * interactive tools (resid-debug). */
+char* resid_read_line(void) {
+    size_t cap = 256, n = 0;
+    char* p = (char*)malloc(cap);
+    if (!p) return resid_box_str("");
+    int c;
+    while ((c = fgetc(stdin)) != EOF) {
+        if (n + 2 > cap) {
+            cap *= 2;
+            char* q = (char*)realloc(p, cap);
+            if (!q) break;
+            p = q;
+        }
+        p[n++] = (char)c;
+        if (c == '\n') break;
+    }
+    p[n] = '\0';
+    return p;
 }
 
 /* Read an entire file into a NUL-terminated Str (bootstrap lexer input).

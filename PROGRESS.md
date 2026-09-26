@@ -312,6 +312,30 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0x. `resid-debug` and a DWARF reader (G6, 2026-09-26)
+
+`tools/resid-debug.resid <binary>` is the graph-aware debugger. It reads
+the debug build's artifact and, through `lib/dwarf.resid` (ELF sections,
+symbols and the DWARF 5 line program, in resid), the binary's line table,
+which is the lowered map: each row starts at its node's span. Static
+commands (`node`, `kids`, `at`, `sym`, `lowered`, `pc`, `check`, `info`)
+run from `-ex` or an interactive prompt (new builtin `resid_read_line`).
+`info` checks the binary's `resid_graph_hash` against the artifact, and
+`check` requires every row with a source line to map to a node. Live
+mode drives gdb in batch: at each breakpoint stop it maps the program
+counter to its node, pairs `info args`/`info locals` with the binding and
+parameter nodes, and lists the known values folded into that line;
+`step N` reports each change of node. The artifact now names declarations
+and uses, so `resid-why <artifact> NAME` answers by symbol.
+
+While reading facts back, `n * n` showed the range [MIN, 1]: the
+runtime's `saturating_mul` multiplied in signed C (undefined on overflow)
+and tested the wrapped product's sign, so `MAX * MAX` returned 1. Range
+facts use it for their corners. It now uses `__builtin_mul_overflow`, and
+the wrapping and `checked_*` helpers compute in unsigned arithmetic
+(`wrapping_div(MIN, -1)` included). Conformance case
+`saturating_corners` covers the corners.
+
 ### 0w. Residual notes from the graph (G5, 2026-09-26)
 
 `<out>.resid-notes.cbor` is projected from the residual graph

@@ -129,7 +129,7 @@ pub GA ga_load(List(Int) b) {
 }
 
 // One node's fields, decoded.
-type GN = { Int id; Str kind; Str ty; Str know; Str value; List(Int) deps; Int def; List(Str) effects; List(Int) span; Int from; Str rule; Str reason; Str facts; };
+type GN = { Int id; Str kind; Str name; Str ty; Str know; Str value; List(Int) deps; Int def; List(Str) effects; List(Int) span; Int from; Str rule; Str reason; Str facts; };
 
 pub Str gn_opt_text(List(Int) b, Int p) { return if (p < 0) { "" } else { ch_text(b, p) }; }
 
@@ -163,7 +163,7 @@ pub GN gn_read(GA a, Int id) {
     Int vp = ch_field(b, p, "value");
     Int dp = ch_field(b, p, "def");
     Int dv = ch_field(b, p, "derive");
-    return GN {.id = id, .kind = ch_text(b, ch_field(b, p, "kind")), .ty = ch_text(b, ch_field(b, p, "type")), .know = ch_text(b, ch_field(b, p, "knowledge")), .value = if (vp < 0) { "" } else { ch_show(b, vp) }, .deps = ch_ints(b, ch_field(b, p, "deps")), .def = if (dp < 0) { -1 } else { ch_int(b, dp) }, .effects = ch_texts(b, ch_field(b, p, "effects")), .span = ch_ints(b, ch_field(b, p, "span")), .from = if (dv < 0) { -1 } else { ch_int(b, ch_field(b, dv, "from")) }, .rule = if (dv < 0) { "" } else { ch_text(b, ch_field(b, dv, "rule")) }, .reason = gn_reason(b, ch_field(b, p, "reason")), .facts = gn_facts(b, ch_field(b, p, "facts"))};
+    return GN {.id = id, .kind = ch_text(b, ch_field(b, p, "kind")), .name = gn_opt_text(b, ch_field(b, p, "name")), .ty = ch_text(b, ch_field(b, p, "type")), .know = ch_text(b, ch_field(b, p, "knowledge")), .value = if (vp < 0) { "" } else { ch_show(b, vp) }, .deps = ch_ints(b, ch_field(b, p, "deps")), .def = if (dp < 0) { -1 } else { ch_int(b, dp) }, .effects = ch_texts(b, ch_field(b, p, "effects")), .span = ch_ints(b, ch_field(b, p, "span")), .from = if (dv < 0) { -1 } else { ch_int(b, ch_field(b, dv, "from")) }, .rule = if (dv < 0) { "" } else { ch_text(b, ch_field(b, dv, "rule")) }, .reason = gn_reason(b, ch_field(b, p, "reason")), .facts = gn_facts(b, ch_field(b, p, "facts"))};
 }
 
 pub Str gn_where(GA a, GN n) {
@@ -180,7 +180,8 @@ pub Str gn_line(GA a, GN n) {
     Str f = if (n.facts == "") { "" } else { ", " + n.facts };
     Str e = if (n.effects.len() == 0) { "" } else { " effects " + str_join(n.effects, ",") };
     Str d = if (n.from < 0) { "" } else { " <- " + n.rule + " #" + IntToString(n.from) };
-    return "#" + IntToString(n.id) + " " + n.kind + ty + " " + n.know + v + r + f + e + d + " @ " + gn_where(a, n);
+    Str nm = if (n.name == "") { "" } else { " " + n.name };
+    return "#" + IntToString(n.id) + " " + n.kind + nm + ty + " " + n.know + v + r + f + e + d + " @ " + gn_where(a, n);
 }
 
 // The node, then each node it derives from back to a source node.
@@ -208,3 +209,84 @@ pub Int ga_file_idx(List(Str) ps, Str f, Int i) {
     return ga_file_idx(ps, f, i + 1);
 }
 
+
+// A light index row per node: kind, name and span, for queries by symbol
+// and by place.
+type GI = { Int id; Str kind; Str name; List(Int) span; };
+
+pub List(GI) ga_index(GA a) {
+    return ga_index_at(a, 0, ListBuf());
+}
+
+pub List(GI) ga_index_at(GA a, Int id, ListBuf(GI) acc) {
+    if (id >= a.offs.len()) { return acc.finish(); }
+    List(Int) b = a.b;
+    Int p = a.offs[id];
+    GI r = GI {.id = id, .kind = ch_text(b, ch_field(b, p, "kind")), .name = gn_opt_text(b, ch_field(b, p, "name")), .span = ch_ints(b, ch_field(b, p, "span"))};
+    return ga_index_at(a, id + 1, acc.push(r));
+}
+
+// Declarations bind a name; uses (ref, call) point at one by def.
+pub Bool gi_decl(Str k) {
+    return k == "fn" || k == "param" || k == "bind" || k == "rbind" || k == "for" || k == "sfield" || k == "struct" || k == "lparam";
+}
+
+// Ids of the declarations named `name`.
+pub List(Int) ga_decls(List(GI) ix, Str name, Int i, ListBuf(Int) acc) {
+    if (i >= ix.len()) { return acc.finish(); }
+    GI r = ix[i];
+    Bool hit = r.name == name && gi_decl(r.kind);
+    return ga_decls(ix, name, i + 1, if (hit) { acc.push(r.id) } else { acc });
+}
+
+// Uses of `name` (refs and calls) whose def is `decl`.
+pub List(Int) ga_uses(GA a, List(GI) ix, Str name, Int decl, Int i, ListBuf(Int) acc) {
+    if (i >= ix.len()) { return acc.finish(); }
+    GI r = ix[i];
+    Bool cand = r.name == name && !gi_decl(r.kind);
+    Bool hit = cand && gn_read(a, r.id).def == decl;
+    return ga_uses(a, ix, name, decl, i + 1, if (hit) { acc.push(r.id) } else { acc });
+}
+
+// Bytes as lowercase hex.
+pub Str ga_hex(List(Int) bs, Int i, StrBuf acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    Str d = "0123456789abcdef";
+    return ga_hex(bs, i + 1, acc.push(str_slice(d, bs[i] / 16, bs[i] / 16 + 1)).push(str_slice(d, bs[i] % 16, bs[i] % 16 + 1)));
+}
+
+// `why NAME`: each declaration named NAME with its derive chain, then its
+// uses: the residual ones with their reasons (up to max), and a count.
+pub Int ga_sym(GA a, List(GI) ix, Str name, Int max) {
+    List(Int) ds = ga_decls(ix, name, 0, ListBuf());
+    if (ds.len() == 0) {
+        println("no declaration named " + name);
+        return 1;
+    }
+    return ga_sym_at(a, ix, name, ds, 0, max);
+}
+
+pub Int ga_sym_at(GA a, List(GI) ix, Str name, List(Int) ds, Int i, Int max) {
+    if (i >= ds.len()) { return 0; }
+    Int _c = gn_chain(a, ds[i], 0);
+    List(Int) us = ga_uses(a, ix, name, ds[i], 0, ListBuf());
+    Int _u = ga_use_lines(a, us, 0, 0, 0, max);
+    return ga_sym_at(a, ix, name, ds, i + 1, max);
+}
+
+pub Int ga_use_lines(GA a, List(Int) us, Int i, Int kn, Int shown, Int max) {
+    if (i >= us.len()) {
+        println("  " + IntToString(us.len()) + " use(s): " + IntToString(kn) + " known, " + IntToString(us.len() - kn) + " residual or effect");
+        return 0;
+    }
+    GN n = gn_read(a, us[i]);
+    Bool k = n.know == "known";
+    Bool show = !k && (max < 0 || shown < max);
+    Int _p = if (show) { ga_say("  use " + gn_line(a, n)) } else { 0 };
+    return ga_use_lines(a, us, i + 1, if (k) { kn + 1 } else { kn }, if (show) { shown + 1 } else { shown }, max);
+}
+
+pub Int ga_say(Str s) {
+    println(s);
+    return 0;
+}
