@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  163, reduce 14, provenance 20, graph 392. The archived Rust workspace
+  164, reduce 14, provenance 20, graph 393. The archived Rust workspace
   (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
   821 tests; its e2e now has 128 after removing tests of the retired text
   paths); see `AGENTS.md` for its slow-test table.
@@ -305,6 +305,36 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 619MB (606MB without facts). The artifact carries a RESIDUAL node's range
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
+
+### 0zb. Struct record reuse and loop regions (2026-09-26)
+
+Dead strings and struct records are reclaimed.
+
+- **Record reuse** (`lo_ret_reuse` in `examples/lower.resid`): ownership
+  tracking covers every struct type. A `return T {..}` literal takes over
+  the record of a field-wise linear variable of type T when that record
+  is unique at run time (`resid_rec_reuse`). Records of types some
+  literal may reuse (`LOP.hdr`) carry a tagged header with a unique bit,
+  set by literals that start an ownership chain and cleared on call
+  results outside one (`resid_rec_share`). Reuse counts as an update in
+  the parameter fixpoint; a struct handed on whole may not be read
+  afterwards (its record may be reused), and a chain never ends in a
+  nested struct field. Such literals compute every field before storing.
+- **Loop regions** (`lr_region`): a tail-call loop runs each iteration in a
+  scope region popped at the back edge, when every changed parameter is a
+  scalar or a Map/Set of Int/Float/Bool/Str, every exit returns a scalar
+  or a loop parameter, and the body can allocate. Str keys and values
+  stored by typed inserts pass kind 4, and the runtime copies them out of
+  a region only when stored (`resid_str_keep`).
+- Measured (time / peak RSS, Rust `HashMap` in parentheses): word count
+  0.16s/124MB -> 0.09s/12MB (0.09s/12MB); string set with lookups
+  0.08s/49MB -> 0.06s/12MB (0.09s/15MB); state record threading
+  0.04s/50MB -> 0.01s/12MB (0.02s/12MB); memoized Collatz 0.31s/164MB ->
+  0.18s/98MB (0.13s/53MB; the rest is the half-full hash table). The
+  benchmark suite is unchanged or faster; self-compile peak 390MB.
+- Left: heap-allocated maps and lists that die inside a loop (dead set
+  algebra results, persistent `List` appends in map values).
+- Tests: `struct_record_reuse`, `loop_regions`, `map_ownership_nested`.
 
 ### 0za. Map/Set ownership and a compact persistent runtime (2026-09-26)
 

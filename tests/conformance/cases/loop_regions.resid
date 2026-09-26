@@ -1,0 +1,73 @@
+// Loop regions (lr_region in lower.resid): a tail-call loop frees each
+// iteration's allocations when the next starts. Strings stored in the
+// maps and sets it carries must survive (they are copied out).
+Str word(Int i) { return "w" + IntToString((i * 7919) % 50) + "-" + IntToString(i % 3); }
+
+Map(Str, Int) count(Int i, Int n, Map(Str, Int) m) {
+    if (i >= n) { return m; }
+    Str w = word(i);
+    Int c = m.get(w) else { 0 };
+    return count(i + 1, n, m.insert(w, c + 1));
+}
+
+// String values, overwritten across iterations.
+Map(Int, Str) names(Int i, Int n, Map(Int, Str) m) {
+    if (i >= n) { return m; }
+    return names(i + 1, n, m.insert(i % 10, "v" + IntToString(i)));
+}
+
+Map(Str, Str) pairs(Int i, Int n, Map(Str, Str) m) {
+    if (i >= n) { return m; }
+    return pairs(i + 1, n, m.insert(word(i), word(i + 1) + "!"));
+}
+
+// Big: past the table-copy size, and a shared start (trie transient).
+Set(Str) many(Int i, Int n, Set(Str) s) {
+    if (i >= n) { return s; }
+    return many(i + 1, n, s.insert("k" + IntToString(i)));
+}
+
+// A read-only loop over a map, allocating temporaries.
+Int hits(Set(Str) s, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int h = if (s.contains("k" + IntToString(i * 3))) { 1 } else { 0 };
+    return hits(s, i + 1, n, acc + h);
+}
+
+// Nested loops, both with regions.
+Map(Str, Int) outer(Int i, Int n, Map(Str, Int) m) {
+    if (i >= n) { return m; }
+    return outer(i + 1, n, count(i * 100, i * 100 + 30, m));
+}
+
+// Changed Str parameter: no region (the string lives on).
+Str join(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    return join(i + 1, n, acc + IntToString(i));
+}
+
+Str keys_str(List(Str) ks, Int i, Str acc) {
+    if (i >= ks.len() || i >= 12) { return acc; }
+    return keys_str(ks, i + 1, acc + ks[i] + ",");
+}
+
+Int main() {
+    Map(Str, Int) e = {};
+    Map(Str, Int) c = count(0, 5000, e);
+    println(f"count {c.len()} {c.get(word(7)) else { -1 }} {keys_str(c.keys(), 0, "")}");
+    Map(Int, Str) ne = {};
+    Map(Int, Str) nm = names(0, 1000, ne);
+    println(f"names {nm.len()} {nm.get(3) else { "?" }} {nm.get(9) else { "?" }}");
+    Map(Str, Str) pe = {};
+    Map(Str, Str) pm = pairs(0, 300, pe);
+    println(f"pairs {pm.len()} {pm.get(word(10)) else { "?" }}");
+    Set(Str) se = {};
+    Set(Str) big = many(0, 20000, se);
+    Set(Str) big2 = many(20000, 20100, big);
+    println(f"many {big.len()} {big2.len()} {big.contains("k19999")} {big2.contains("k20050")} {big.contains("k20050")}");
+    println(f"hits {hits(big, 0, 10000, 0)}");
+    Map(Str, Int) o = outer(0, 20, e);
+    println(f"outer {o.len()} {o.get(word(1901)) else { -1 }} {keys_str(o.keys(), 0, "")}");
+    println(f"join {str_len(join(0, 200, ""))}");
+    return 0;
+}

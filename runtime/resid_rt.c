@@ -6828,6 +6828,18 @@ static int8_t word_of_box(void* p, uint64_t* out, int for_key) {
     return 0;
 }
 
+/* A string about to be stored in a map or set, which lives on the heap:
+ * copied out of a scope region (a loop iteration's region is popped while
+ * the map lives on). The compiler calls it for Str keys and values. */
+char* resid_str_keep(char* p) {
+    if (!g_sc_depth || !scope_contains(p)) return p;
+    size_t n = strlen(p) + 1;
+    char* q = (char*)malloc(n);
+    if (!q) resid_abort("out of memory");
+    memcpy(q, p, n);
+    return q;
+}
+
 /* The canonical hash of a key word. */
 static inline uint64_t key_hash(int8_t kk, uint64_t k) {
     return kk == 1 ? fnv1a_i64((int64_t)k) : resid_hash((void*)(uintptr_t)k);
@@ -7400,14 +7412,22 @@ static uint64_t* mt_vref(MapTab* t, int8_t rk, uint64_t kb) {
     return t->vals ? &t->vals[r] : &g_map_one;
 }
 
-static void mt_put(MapTab* t, int8_t kk, uint64_t kb, int8_t vk, uint64_t vb) {
+/* `ks` / `vs`: the key / value is a string to copy out of any scope
+ * region when it is stored (resid_str_keep). */
+static void mt_put_s(MapTab* t, int8_t kk, uint64_t kb, int8_t vk, uint64_t vb, int ks, int vs) {
     mt_decide(t, kk, vk, vb);
     uint64_t k = mt_key_in(t, kk, kb);
     uint64_t v = mt_val_in(t, vk, vb);
     if (t->nov && v != 1) mt_vals_make(t);
     uint64_t* at = mt_vref(t, t->kkind, k);
+    if (vs) v = (uint64_t)(uintptr_t)resid_str_keep((char*)(uintptr_t)v);
     if (at) { if (!t->nov) *at = v; return; }
+    if (ks) k = (uint64_t)(uintptr_t)resid_str_keep((char*)(uintptr_t)k);
     mt_insert_new(t, k, v);
+}
+
+static void mt_put(MapTab* t, int8_t kk, uint64_t kb, int8_t vk, uint64_t vb) {
+    mt_put_s(t, kk, kb, vk, vb, 0, 0);
 }
 
 static int mt_del(MapTab* t, int8_t kk, uint64_t kb) {
@@ -7685,16 +7705,23 @@ static void* trie_put_owned(HMTrie* m, int8_t rk, uint64_t kb, int8_t rv, uint64
     return m;
 }
 
+/* Kind 4 (from the compiler): a string, stored as kind 0 but copied out
+ * of any scope region when stored (loop regions, resid_str_keep). */
 static __attribute__((noinline)) void* map_put_slow(HMTrie* m, int8_t owned, int8_t kk, int64_t kb, int8_t vk, int64_t vb) {
+    int ks = kk == 4, vs = vk == 4;
+    if (ks) kk = 0;
+    if (vs) vk = 0;
     /* The first owned update of a shared map takes a private copy. */
     if (owned && !m->transient) m = (HMTrie*)resid_map_transient(m);
-    if (owned && m->transient) {
-        if (!m->tab) return trie_put_owned(m, kk, (uint64_t)kb, vk, (uint64_t)vb);
+    if (owned && m->transient && m->tab) {
         m->tab->lvalid = 0;
-        mt_put(m->tab, kk, (uint64_t)kb, vk, (uint64_t)vb);
+        mt_put_s(m->tab, kk, (uint64_t)kb, vk, (uint64_t)vb, ks, vs);
         m->count = m->tab->live;
         return m;
     }
+    if (ks) kb = (int64_t)(uintptr_t)resid_str_keep((char*)(uintptr_t)kb);
+    if (vs) vb = (int64_t)(uintptr_t)resid_str_keep((char*)(uintptr_t)vb);
+    if (owned && m->transient) return trie_put_owned(m, kk, (uint64_t)kb, vk, (uint64_t)vb);
     return map_insert_p(m, kk, (uint64_t)kb, vk, (uint64_t)vb);
 }
 
@@ -7724,6 +7751,7 @@ __attribute__((always_inline)) void* resid_map_put(void* map, int8_t owned, int8
 
 void* resid_map_del(void* map, int8_t owned, int8_t kk, int64_t kb) {
     HMTrie* m = (HMTrie*)map;
+    if (kk == 4) kk = 0;
     if (owned && !m->transient && m->count > 0) m = (HMTrie*)resid_map_transient(m);
     if (owned && m->transient) {
         if (m->tab) {
@@ -7762,6 +7790,8 @@ static __attribute__((noinline)) MapFind map_find_slow(HMTrie* m, int8_t kk, int
 
 __attribute__((always_inline)) MapFind resid_map_find(void* map, int8_t kk, int64_t kb, int8_t vk) {
     HMTrie* m = (HMTrie*)map;
+    if (kk == 4) kk = 0;
+    if (vk == 4) vk = 0;
     MapTab* t = m->tab;
     uint64_t k = (uint64_t)kb;
     /* A frozen table may be read by several threads, so only the owning
@@ -7776,6 +7806,7 @@ __attribute__((always_inline)) MapFind resid_map_find(void* map, int8_t kk, int6
 }
 
 int8_t resid_map_has(void* map, int8_t kk, int64_t kb) {
+    if (kk == 4) kk = 0;
     return map_vref((HMTrie*)map, kk, (uint64_t)kb) != NULL;
 }
 
