@@ -99,7 +99,7 @@ pub Int(256) pow_acc(Int(256) res, Int(256) base, Int(256) e, Int i) {
     Int ni = i - 1;
     Int(256) sh = i;
     Int(256) mw = ((e >> sh) & 1);
-    Int bit = mw;
+    Int bit = i64(mw);
     if (bit == 1) {
         Int(256) nr = fe_mul(rs, base);
         return pow_acc(nr, base, e, ni);
@@ -133,7 +133,7 @@ pub List(Int) itob_acc(Int(256) v, Int i, List(Int) acc) {
     if (i > 31) { return acc; }
     Int(256) sh = i * 8;
     Int(256) mw = ((v >> sh) & 255);
-    Int b = mw;
+    Int b = i64(mw);
     List(Int) acc2 = acc.concat([b]);
     Int ni = i + 1;
     return itob_acc(v, ni, acc2);
@@ -254,7 +254,7 @@ pub List(Int) smul_x_acc(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(
     Int ni = i - 1;
     Int(256) sh = i;
     Int(256) mw = ((k >> sh) & 1);
-    Int bit = mw;
+    Int bit = i64(mw);
     Int(256) dxv = dbl_x(rx, ry, rz);
     Int(256) dyv = dbl_y(rx, ry, rz);
     Int(256) dzv = dbl_z(rx, ry, rz);
@@ -274,7 +274,7 @@ pub List(Int) smul_y_acc(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(
     Int ni = i - 1;
     Int(256) sh = i;
     Int(256) mw = ((k >> sh) & 1);
-    Int bit = mw;
+    Int bit = i64(mw);
     Int(256) dxv = dbl_x(rx, ry, rz);
     Int(256) dyv = dbl_y(rx, ry, rz);
     Int(256) dzv = dbl_z(rx, ry, rz);
@@ -305,7 +305,7 @@ pub Int(256) dec_adjust(Int(256) x, Int(256) chk) {
     return x;
 }
 pub Int(256) dec_parity(Int(256) x, Int sign) {
-    Int par = x & 1;
+    Int par = i64(x & 1);
     if (par != sign) {
         return fe_sub(0, x);
     }
@@ -360,7 +360,7 @@ pub List(Int) wmul_wx(Int(256) h, Int(256) ax, Int(256) ay, Int(256) az, Int(256
     Int ni = i - 1;
     Int(256) sh = i;
     Int(256) mw = ((h >> sh) & 1);
-    Int bit = mw;
+    Int bit = i64(mw);
     Int(256) dxv = dbl_x(rx, ry, rz);
     Int(256) dyv = dbl_y(rx, ry, rz);
     Int(256) dzv = dbl_z(rx, ry, rz);
@@ -395,7 +395,7 @@ pub List(Int) wmul_wy(Int(256) h, Int(256) ax, Int(256) ay, Int(256) az, Int(256
     Int ni = i - 1;
     Int(256) sh = i;
     Int(256) mw = ((h >> sh) & 1);
-    Int bit = mw;
+    Int bit = i64(mw);
     Int(256) dxv = dbl_x(rx, ry, rz);
     Int(256) dyv = dbl_y(rx, ry, rz);
     Int(256) dzv = dbl_z(rx, ry, rz);
@@ -509,7 +509,7 @@ pub Int(256) clamp_scalar(Int(256) s) {
     return a1 | setb;
 }
 pub List(Int) encode_pt_bytes(Int(256) axi, List(Int) ayb) {
-    Int sign = axi & 1;
+    Int sign = i64(axi & 1);
     Int last = ayb[31];
     Int lb = last + sign * 128;
     List(Int) apre = slice_bytes(ayb, 0, 30);

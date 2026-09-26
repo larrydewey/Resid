@@ -2297,11 +2297,6 @@ Str cmp_op(Str ins, Str cc, Bool is_cmp) {
     return ins;
 }
 
-Int mul_width(Str ins, Int a, Int b, Int wmax) {
-    if (ins == "mul") { return next_pow_width(a + b); }
-    return wmax;
-}
-
 // Struct-valued picks: the bootstrap parser rejects struct-typed
 // if-expressions, so route them through plain functions.
 GT pick_widen(Bool cond, GT v, Str target) {
@@ -2335,16 +2330,12 @@ GT bin_wide_op(Str ins, Bool is_cmp, Str cc, GT l0, GT r0) {
     Bool f1 = int_fam(lt);
     Bool f2 = int_fam(rtn);
     Bool fams = f1 && f2;
-    // Compute width: imax for most ops, a+b rounded up the ladder for mul
-    // (spec v3.2 S6.1 range rule). Both operands are widened to this width.
-    Int wmax = imax(lw, rw);
-    Int w = mul_width(ins, lw, rw, wmax);
+    // Every operator works at the widest operand width (spec §6.1).
+    Int tw = imax(lw, rw);
     Str head = fam_head(lt);
-    Int tw = ipick(ins == "mul", w, wmax);
+    Bool uns = fams && head == "UInt";
     Str tws = head + "(" + IntToString(tw) + ")";
-    // Widen the right operand first (its own counter), then the left with
-    // a carrier threaded past everything emitted so far so no temp
-    // register collides.
+    // Widen the right operand first, then the left past its temporaries.
     Bool wr = need_widen(fams, rw, tw);
     GT r1 = pick_widen(wr, r0, tws);
     Int tmax = imax(r1.tmp, l0.tmp);
@@ -2353,23 +2344,33 @@ GT bin_wide_op(Str ins, Bool is_cmp, Str cc, GT l0, GT r0) {
     GT lwiden = pick_widen(wwx, lcarr, tws);
     Str arty2 = pick_str(is_cmp, "Bool", tws);
     Str opty = pick_str(is_cmp, ll_ty(tws), ll_ty(arty2));
-    // Spec §6.5: checked arithmetic — narrow (< 64-bit) add/sub trap on
-    // overflow of the result type instead of wrapping silently.
-    Bool narrow_chk = fams && tw < 64 && (ins == "add" || ins == "sub");
-    if (narrow_chk) {
-        return bin_checked_narrow(ins, head, tw, lwiden, r1, r0);
+    // Spec §6.5: add/sub/mul trap on overflow at every width.
+    if (fams && (ins == "add" || ins == "sub" || ins == "mul")) {
+        return bin_checked(ins, head, tw, lwiden, r1, r0);
     }
+    if (fams && (ins == "sdiv" || ins == "srem")) {
+        return bin_checked_div(ins, uns, tw, lwiden, r1, r0);
+    }
+    Str cc2 = if (uns) { unsigned_cc(cc) } else { cc };
     Int t1 = lwiden.tmp + 1;
     Str reg = "%t" + IntToString(t1);
-    Str core = cmp_op(ins, cc, is_cmp);
+    Str core = cmp_op(ins, cc2, is_cmp);
     Str line = reg + " = " + core + " " + opty + " " + lwiden.val + ", " + r1.val;
     List(Str) plns = lwiden.lines;
     List(Str) l2 = plns.concat([line]);
     return GT {.pos = r0.pos, .val = reg, .ty = arty2, .cnt = 0, .err = "", .glines = r0.glines, .lines = l2, .tmp = t1, .lbl = r0.lbl, .tail = false};
 }
 
-// `{iN, i1} @llvm.{s,u}{add,sub}.with.overflow.iN` + a trap on the flag.
-GT bin_checked_narrow(Str ins, Str head, Int tw, GT lw, GT rw, GT r0) {
+Str unsigned_cc(Str cc) {
+    if (cc == "slt") { return "ult"; }
+    if (cc == "sle") { return "ule"; }
+    if (cc == "sgt") { return "ugt"; }
+    if (cc == "sge") { return "uge"; }
+    return cc;
+}
+
+// `{iN, i1} @llvm.{s,u}{add,sub,mul}.with.overflow.iN` + a trap on the flag.
+GT bin_checked(Str ins, Str head, Int tw, GT lw, GT rw, GT r0) {
     Str ll = "i" + IntToString(tw);
     Str sg = if (head == "UInt") { "u" } else { "s" };
     Str intr = "@llvm." + sg + ins + ".with.overflow." + ll;
@@ -2390,6 +2391,39 @@ GT bin_checked_narrow(Str ins, Str head, Int tw, GT lw, GT rw, GT r0) {
     List(Str) p5 = p4.concat(["call void @resid_overflow_check(i8 " + ob + ")"]);
     Str rty = head + "(" + IntToString(tw) + ")";
     return GT {.pos = r0.pos, .val = reg, .ty = rty, .cnt = 0, .err = "", .glines = r0.glines, .lines = p5, .tmp = t4, .lbl = r0.lbl, .tail = false};
+}
+
+// Division/remainder: zero divisor traps; signed MIN / -1 traps, MIN % -1 is 0.
+GT bin_checked_div(Str ins, Bool uns, Int tw, GT lw, GT rw, GT r0) {
+    Str ll = "i" + IntToString(tw);
+    Bool is_rem = ins == "srem";
+    Str uop = if (is_rem) { "urem" } else { "udiv" };
+    Str op = if (uns) { uop } else { ins };
+    Int b = lw.tmp;
+    Str z = "%t" + IntToString(b + 1);
+    Str zb = "%t" + IntToString(b + 2);
+    List(Str) p0 = lw.lines;
+    List(Str) p1 = p0.concat([z + " = icmp eq " + ll + " " + rw.val + ", 0", zb + " = zext i1 " + z + " to i8", "call void @resid_div_check(i8 " + zb + ")"]);
+    Str reg = "%t" + IntToString(b + 7);
+    Str rty = pick_str(uns, "UInt", "Int") + "(" + IntToString(tw) + ")";
+    if (uns) {
+        List(Str) u1 = p1.concat([reg + " = " + op + " " + ll + " " + lw.val + ", " + rw.val]);
+        return GT {.pos = r0.pos, .val = reg, .ty = rty, .cnt = 0, .err = "", .glines = r0.glines, .lines = u1, .tmp = b + 7, .lbl = r0.lbl, .tail = false};
+    }
+    Str m1 = "%t" + IntToString(b + 3);
+    Str mn = "%t" + IntToString(b + 4);
+    Str both = "%t" + IntToString(b + 5);
+    Str dv = "%t" + IntToString(b + 6);
+    Str minv = "-" + dec_pow2_cg(tw - 1, "1");
+    List(Str) p2 = p1.concat([m1 + " = icmp eq " + ll + " " + rw.val + ", -1", mn + " = icmp eq " + ll + " " + lw.val + ", " + minv, both + " = and i1 " + m1 + ", " + mn]);
+    Str ob = "%t" + IntToString(b + 8);
+    List(Str) p3 = if (is_rem) {
+        p2.concat([dv + " = select i1 " + m1 + ", " + ll + " 1, " + ll + " " + rw.val])
+    } else {
+        p2.concat([ob + " = zext i1 " + both + " to i8", "call void @resid_overflow_check(i8 " + ob + ")", dv + " = add " + ll + " " + rw.val + ", 0"])
+    };
+    List(Str) p4 = p3.concat([reg + " = " + op + " " + ll + " " + lw.val + ", " + dv]);
+    return GT {.pos = r0.pos, .val = reg, .ty = rty, .cnt = 0, .err = "", .glines = r0.glines, .lines = p4, .tmp = b + 8, .lbl = r0.lbl, .tail = false};
 }
 
 GT bin_icmp(Str cc, GT l0, GT r0) {
@@ -2470,8 +2504,8 @@ GT bin_float(Str op, GT l0, GT r0) {
     return GT {.pos = r0.pos, .val = reg, .ty = rty, .cnt = 0, .err = "", .glines = r0.glines, .lines = l2, .tmp = t1, .lbl = r0.lbl, .tail = false};
 }
 
-// Shifts (spec §6.1, §17): result is the left operand's width; the amount
-// is a pure (unsigned) count, and counts >= the bit width yield 0.
+// Shifts (§6.1): left operand's width; a count >= width (or negative) gives 0,
+// or -1 for `>>` of a negative signed value (arithmetic shift).
 GT bin_shift(Str ins, GT l0, GT r0) {
     Str lt = num_norm_cg(l0.ty);
     Int lw = ll_width_of(lt);
@@ -2504,8 +2538,17 @@ GT bin_shift(Str ins, GT l0, GT r0) {
     List(Str) p0 = r1.lines;
     List(Str) p1 = p0.concat([big + " = icmp uge " + cll + " " + r1.val + ", " + IntToString(lw)]);
     List(Str) p2 = p1.concat([amt_line]);
-    List(Str) p3 = p2.concat([sh + " = " + ins + " " + lll + " " + l0.val + ", " + amt]);
-    List(Str) p4 = p3.concat([reg + " = select i1 " + big + ", " + lll + " 0, " + lll + " " + sh]);
+    Bool ar = ins == "ashr";
+    List(Str) p3 = if (ar) {
+        p2.concat([sh + " = select i1 " + big + ", " + lll + " " + IntToString(lw - 1) + ", " + lll + " " + amt])
+    } else {
+        p2.concat([sh + " = " + ins + " " + lll + " " + l0.val + ", " + amt])
+    };
+    List(Str) p4 = if (ar) {
+        p3.concat([reg + " = ashr " + lll + " " + l0.val + ", " + sh])
+    } else {
+        p3.concat([reg + " = select i1 " + big + ", " + lll + " 0, " + lll + " " + sh])
+    };
     return GT {.pos = r0.pos, .val = reg, .ty = lt, .cnt = 0, .err = "", .glines = r0.glines, .lines = p4, .tmp = t4, .lbl = r0.lbl, .tail = false};
 }
 
@@ -2531,7 +2574,7 @@ GT bin_apply(Str op, GT l, GT r) {
     if (op == "/") { return bin_arith("sdiv", l, r); }
     if (op == "%") { return bin_arith("srem", l, r); }
     if (op == "<<") { return bin_shift("shl", l, r); }
-    if (op == ">>") { return bin_shift("lshr", l, r); }
+    if (op == ">>") { return bin_shift(pick_str(ll_is_signed(num_norm_cg(l.ty)), "ashr", "lshr"), l, r); }
     if (op == "&") {
         if (l.ty == "Bool") { return bin_logic("and", l, r); }
         return bin_arith("and", l, r);
@@ -2687,9 +2730,16 @@ Str cg_extern_ret(Str name) {
     return "";
 }
 
+// `wrapping_i8` .. `wrapping_u512`: truncating conversion target, or "".
+Str wrap_conv_type_cg(Str name) {
+    Str t = conv_helper_type_cg(str_slice(name, 9, str_len(name)));
+    if (int_fam(t)) { return t; }
+    return "";
+}
+
 Bool cg_arith_family(Str name) {
     if (str_starts_with(name, "checked_")) { return true; }
-    if (str_starts_with(name, "wrapping_")) { return true; }
+    if (str_starts_with(name, "wrapping_")) { return wrap_conv_type_cg(name) == ""; }
     if (str_starts_with(name, "saturating_")) { return true; }
     return false;
 }
@@ -3891,6 +3941,7 @@ Str dec_pow2_m1_cg(Int k) {
 
 // Target type of a conversion helper (spec §6.7), or "".
 Str conv_helper_type_cg(Str name) {
+    if (str_starts_with(name, "wrapping_")) { return wrap_conv_type_cg(name); }
     if (name == "isize") { return "ISize"; }
     if (name == "usize") { return "USize"; }
     Int n = str_len(name);
@@ -3908,15 +3959,101 @@ Str conv_helper_type_cg(Str name) {
     return "";
 }
 
-// `i8(x)` / `f32(x)` / `usize(x)` ...: an explicit conversion, lowered
-// exactly like the `(Type)expr` cast (ext / trunc / fp conversions).
-GT cg_conv_helper(Str s, Int pos, Str toty, List(Str) env, Funcs fs, GT c) {
+// `i8(x)` / `f32(x)` / `usize(x)`: checked like `(Type)expr`; `wrap` keeps low bits.
+GT cg_conv_helper(Str s, Int pos, Str toty, Bool wrap, List(Str) env, Funcs fs, GT c) {
     GT a = cg_expr(s, pos, env, fs, c, false);
     if (a.err != "") { return a; }
     Tok cp = lex_tok(s, a.pos);
     if (cp.text != ")") { return gt_err("expected ) in conversion to " + toty, a); }
-    GT cv = widen_val(a, toty);
+    GT cv = pick_gt(wrap, widen_val(a, toty), conv_checked(a, toty));
     return GT {.pos = cp.pos, .val = cv.val, .ty = toty, .cnt = 0, .err = "", .glines = cv.glines, .lines = cv.lines, .tmp = cv.tmp, .lbl = cv.lbl, .tail = false};
+}
+
+// Explicit numeric conversion (§6.4): traps unless the value fits `toty`.
+GT conv_checked(GT v, Str toty) {
+    Str vt = num_norm_cg(v.ty);
+    Str tt = num_norm_cg(toty);
+    if (int_fam(vt) && int_fam(tt)) { return int_conv_checked(v, vt, tt, toty); }
+    if (is_float_cg(vt) && int_fam(tt)) { return float_int_checked(v, vt, tt, toty); }
+    return widen_val(v, toty);
+}
+
+Str copy_line(Str dst, Str ll, Str src) {
+    return dst + " = add " + ll + " " + src + ", 0";
+}
+
+// Round-trips the value through `tt` and traps when it changed or flipped sign.
+GT int_conv_checked(GT v, Str vt, Str tt, Str toty) {
+    Int sw = ll_width_of(vt);
+    Int tw = ll_width_of(tt);
+    Bool ss = ll_is_signed(vt);
+    Bool ts = ll_is_signed(tt);
+    Bool keeps = (ss == ts && tw >= sw) || (!ss && ts && tw > sw);
+    if (keeps) { return widen_val(v, toty); }
+    Int w = imax(sw, tw);
+    Str sl = "i" + IntToString(sw);
+    Str tl = "i" + IntToString(tw);
+    Str wl = "i" + IntToString(w);
+    Int b = v.tmp;
+    Str vw = "%t" + IntToString(b + 1);
+    Str t = "%t" + IntToString(b + 2);
+    Str back = "%t" + IntToString(b + 3);
+    Str ne = "%t" + IntToString(b + 4);
+    Str neg = "%t" + IntToString(b + 5);
+    Str bad = "%t" + IntToString(b + 6);
+    Str bb = "%t" + IntToString(b + 7);
+    Str sext = pick_str(ss, "sext", "zext");
+    Str text = pick_str(ts, "sext", "zext");
+    Str l1 = if (sw < w) { vw + " = " + sext + " " + sl + " " + v.val + " to " + wl } else { copy_line(vw, wl, v.val) };
+    Str l2 = if (tw < w) { t + " = trunc " + wl + " " + vw + " to " + tl } else { copy_line(t, tl, vw) };
+    Str l3 = if (tw < w) { back + " = " + text + " " + tl + " " + t + " to " + wl } else { copy_line(back, wl, t) };
+    Str l5 = if (ss && !ts) { neg + " = icmp slt " + sl + " " + v.val + ", 0" } else if (!ss && ts) { neg + " = icmp slt " + tl + " " + t + ", 0" } else { neg + " = icmp eq i8 0, 1" };
+    List(Str) p0 = v.lines;
+    List(Str) p1 = p0.concat([l1, l2, l3, ne + " = icmp ne " + wl + " " + back + ", " + vw, l5, bad + " = or i1 " + ne + ", " + neg, bb + " = zext i1 " + bad + " to i8", "call void @resid_conv_check(i8 " + bb + ")"]);
+    return GT {.pos = v.pos, .val = t, .ty = toty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = p1, .tmp = b + 7, .lbl = v.lbl, .tail = false};
+}
+
+Str hex_n_cg(Int v, Int n, Str acc) {
+    if (n <= 0) { return acc; }
+    Str digs = "0123456789ABCDEF";
+    return hex_n_cg(v / 16, n - 1, str_slice(digs, v % 16, v % 16 + 1) + acc);
+}
+
+// LLVM constant for +/-2^k in float type `fb` bits (infinity when out of range).
+Str fpow2_const(Int fb, Int k, Bool neg) {
+    if (fb == 128) {
+        Int e = 16383 + k + pick_int(neg, 32768, 0);
+        return "0xL0000000000000000" + hex_n_cg(e, 4, "") + "000000000000";
+    }
+    Int maxk = if (fb == 16) { 15 } else if (fb == 32) { 127 } else { 1023 };
+    Int e = if (k > maxk) { 2047 } else { 1023 + k };
+    return "0x" + hex_n_cg(e + pick_int(neg, 2048, 0), 3, "") + "0000000000000";
+}
+
+Int pick_int(Bool c, Int a, Int b) {
+    if (c) { return a; }
+    return b;
+}
+
+// fptosi/fptoui are poison out of range: trap unless lo <= v < 2^(w-1) (or 2^w).
+GT float_int_checked(GT v, Str vt, Str tt, Str toty) {
+    Int fb = float_bits_cg(vt);
+    Int tw = ll_width_of(tt);
+    Bool ts = ll_is_signed(tt);
+    Str fl = ll_ty(vt);
+    Int b = v.tmp;
+    Str lo = "%t" + IntToString(b + 1);
+    Str hi = "%t" + IntToString(b + 2);
+    Str ok = "%t" + IntToString(b + 3);
+    Str bad = "%t" + IntToString(b + 4);
+    Str bb = "%t" + IntToString(b + 5);
+    Str r = "%t" + IntToString(b + 6);
+    Int hk = if (ts) { tw - 1 } else { tw };
+    Str lo_line = if (ts) { lo + " = fcmp oge " + fl + " " + v.val + ", " + fpow2_const(fb, tw - 1, true) } else { lo + " = fcmp ogt " + fl + " " + v.val + ", " + fpow2_const(fb, 0, true) };
+    Str op = pick_str(ts, "fptosi", "fptoui");
+    List(Str) p0 = v.lines;
+    List(Str) p1 = p0.concat([lo_line, hi + " = fcmp olt " + fl + " " + v.val + ", " + fpow2_const(fb, hk, false), ok + " = and i1 " + lo + ", " + hi, bad + " = xor i1 " + ok + ", true", bb + " = zext i1 " + bad + " to i8", "call void @resid_conv_check(i8 " + bb + ")", r + " = " + op + " " + fl + " " + v.val + " to " + ll_ty(tt)]);
+    return GT {.pos = v.pos, .val = r, .ty = toty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = p1, .tmp = b + 6, .lbl = v.lbl, .tail = false};
 }
 
 Bool is_tostr_builtin(Str name) {
@@ -4536,7 +4673,7 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             if (!user_fn) {
                 Str conv_to = conv_helper_type_cg(t.text);
                 if (conv_to != "") {
-                    return cg_conv_helper(s, t2.pos, conv_to, env, fs, c);
+                    return cg_conv_helper(s, t2.pos, conv_to, str_starts_with(t.text, "wrapping_"), env, fs, c);
                 }
                 if (is_tostr_builtin(t.text)) {
                     return cg_tostr_builtin(s, t2.pos, t.text, env, fs, c);
@@ -4755,8 +4892,9 @@ GT cg_unary(Str s, Int pos, List(Str) env, Funcs fs, GT c, Bool tail_pos) {
                         GT fx = cg_cast_fixed(inner, pt.ty, c);
                         if (fx.err != "unsupported fixed cast") { return fx; }
                     }
+                    Bool numeric = (int_fam(num_norm_cg(inner.ty)) || is_float_cg(inner.ty)) && int_fam(num_norm_cg(pt.ty));
                     Str fromty = ll_ty(inner.ty);
-                    GT conv = cg_convert(inner, fromty, ll_ty(pt.ty), ll_is_signed(inner.ty), c);
+                    GT conv = pick_gt(numeric, conv_checked(gt_tmp(inner, imax(inner.tmp, c.tmp)), pt.ty), cg_convert(inner, fromty, ll_ty(pt.ty), ll_is_signed(inner.ty), c));
                     GT out = GT {.pos = conv.pos, .val = conv.val, .ty = pt.ty, .cnt = 0, .err = "", .glines = conv.glines, .lines = conv.lines, .tmp = conv.tmp, .lbl = conv.lbl, .tail = false};
                     return out;
                 }
@@ -4846,6 +4984,18 @@ List(Str) lst_read_lines(Str ety, Str slot, Int tr, List(Str) acc) {
 // inline array (spec §44). The index is compared against the compile-time
 // capacity N; out-of-range aborts via resid_index_abort, matching the Rust
 // pipeline's fixed_capacity_guard.
+// Str(N)[i]: codepoint i, bounds-checked against the content's codepoint length.
+GT cg_index_fixed_str(GT base, GT ixx, Int endpos) {
+    Str okl = "L" + IntToString(ixx.lbl + 1);
+    Str oobl = "L" + IntToString(ixx.lbl + 2);
+    Str r = "%t" + IntToString(ixx.tmp + 1);
+    Str miss = "%t" + IntToString(ixx.tmp + 2);
+    Str len = "%t" + IntToString(ixx.tmp + 3);
+    List(Str) l0 = ixx.lines;
+    List(Str) l1 = l0.concat([r + " = call i64 @str_char_at(ptr " + base.val + ", i64 " + ixx.val + ")", miss + " = icmp eq i64 " + r + ", -1", "br i1 " + miss + ", label %" + oobl + ", label %" + okl, oobl + ":", len + " = call i64 @str_len(ptr " + base.val + ")", "call void @resid_index_abort(i64 " + ixx.val + ", i64 " + len + ", ptr @.fixedidx)", "unreachable", okl + ":"]);
+    return GT {.pos = endpos, .val = r, .ty = "Int", .cnt = 0, .err = "", .glines = ixx.glines, .lines = l1, .tmp = ixx.tmp + 3, .lbl = ixx.lbl + 2, .tail = false};
+}
+
 GT cg_index_fixed(Str s, Int pos, GT base, List(Str) env, Funcs fs) {
     Int cap = fixed_cap(base.ty);
     GT ix = cg_expr(s, pos, env, fs, base, false);
@@ -4853,6 +5003,7 @@ GT cg_index_fixed(Str s, Int pos, GT base, List(Str) env, Funcs fs) {
     Tok close = lex_tok(s, ix.pos);
     if (close.text != "]") { return gt_err("expected ] in index", ix); }
     GT ixx = pick_widen(num_norm_cg(ix.ty) != "Int(64)", ix, "Int(64)");
+    if (is_str_fixed(base.ty)) { return cg_index_fixed_str(base, ixx, close.pos); }
     Int l1 = ixx.lbl + 1;
     Int l2 = ixx.lbl + 2;
     Str okl = "L" + IntToString(l1);
@@ -4867,11 +5018,6 @@ GT cg_index_fixed(Str s, Int pos, GT base, List(Str) env, Funcs fs) {
     List(Str) le = ld.concat(["unreachable"]);
     List(Str) lf = le.concat([okl + ":"]);
     Int tn = t1 + 1;
-    if (is_str_fixed(base.ty)) {
-        Str r = "%t" + IntToString(tn);
-        List(Str) lg = lf.concat([r + " = call i64 @str_char_at(ptr " + base.val + ", i64 " + ixx.val + ")"]);
-        return GT {.pos = close.pos, .val = r, .ty = "Int", .cnt = 0, .err = "", .glines = ixx.glines, .lines = lg, .tmp = tn, .lbl = l2, .tail = false};
-    }
     if (is_bytes_fixed(base.ty)) {
         Str gp = "%t" + IntToString(tn);
         Str lda = "%t" + IntToString(tn + 1);
@@ -6395,6 +6541,10 @@ GT cg_expr_block(Str s, Int pos, List(Str) env, Funcs fs, GT c, Bool tail_pos) {
     Tok after = lex_tok(s, semi.pos);
     if (semi.text == ";" && after.text == "}") { return gt_repos(e, semi.pos); }
     return e;
+}
+
+GT gt_tmp(GT v, Int t) {
+    return GT {.pos = v.pos, .val = v.val, .ty = v.ty, .cnt = v.cnt, .err = v.err, .glines = v.glines, .lines = v.lines, .tmp = t, .lbl = v.lbl, .tail = v.tail};
 }
 
 GT gt_repos(GT v, Int pos) {
@@ -9747,32 +9897,45 @@ pub Str int_bin_result(Str op, Str a, Str b) {
     Int bw = ty_bits(b);
     Int mx = if (aw > bw) { aw } else { bw };
     Str fam = if (signed_ty(a)) { "Int(" } else { "UInt(" };
-    if (op == "*") {
-        Int need = aw + bw;
-        Int w = width_at_least(need);
-        return fam + IntToString(w) + ")";
-    }
-    // add/sub/div/rem/shifts/bitwise: widest operand
+    // Every operator yields the widest operand width; overflow traps (§6.1).
     return fam + IntToString(mx) + ")";
 }
 
-// Can a value of int type `got` initialize a binding/param/return of
-// int type `want`? Widening is implicit; narrowing requires a literal
-// whose magnitude fits the target (checked against digit count).
-pub Bool int_adopt_ok(Str got, Str want, Str lit_text) {
+// Value-preserving integer widening (spec §6.4): same signedness and no
+// narrower, or unsigned into a strictly wider signed type.
+pub Bool int_widen_ok(Str got, Str want) {
     Int gw = ty_bits(got);
     Int ww = ty_bits(want);
-    if (gw <= ww) { return true; }
-    // narrowing: only a literal can be adopted; magnitude heuristic on
-    // decimal digit count (hex digits carry 4 bits each)
+    Bool gs = signed_ty(got);
+    Bool ws = signed_ty(want);
+    if (gs == ws) { return gw <= ww; }
+    if (ws) { return gw < ww; }
+    return false;
+}
+
+// Can `got` initialize `want`? Widening is implicit; narrowing only for a
+// whole integer literal `lit_text` that fits ("" when not a literal).
+pub Bool int_adopt_ok(Str got, Str want, Str lit_text) {
+    if (!is_int_ty(got) || !is_int_ty(want)) {
+        if (is_float_ty(got) && is_float_ty(want)) { return float_bits(got) <= float_bits(want); }
+        if (is_dec_ty(got) && is_dec_ty(want)) { return true; }
+        return false;
+    }
+    if (int_widen_ok(got, want)) { return true; }
+    if (lit_text == "") { return false; }
     Bool neg = str_has_prefix(lit_text, "-");
     Str t = if (neg) { str_slice(lit_text, 1, str_len(lit_text)) } else { lit_text };
-    Bool ishex = str_has_prefix(t, "0x");
-    Int hexdigits = (str_len(t) - 2) * 4;
-    Int decdigits = str_len(t);
-    Int digits = if (ishex) { hexdigits } else { decdigits };
-    Int need = ww - 1;
-    return digits <= need;
+    return lit_range_err(t, neg, num_norm(want)) == "";
+}
+
+// Integer literal text (with any `-`) forming all of [pos, end), else "".
+pub Str whole_int_literal(Str s, Int pos, Int end) {
+    Tok t0 = lex_tok(s, pos);
+    Bool neg = t0.text == "-";
+    Tok t1 = tok_pick(neg, lex_tok(s, t0.pos), t0);
+    if (t1.kind != "int" || t1.pos != end) { return ""; }
+    if (neg) { return "-" + t1.text; }
+    return t1.text;
 }
 
 // Signed/unsigned integer operands in one operation (spec §6.1, §6.3).
@@ -10034,9 +10197,16 @@ Str set_elem_type(Str t) {
     return str_trim(str_slice(t, h, n - 1));
 }
 
+// `wrapping_i8(x)` .. `wrapping_u512(x)`: keeps the low bits (§6.7), or "".
+pub Str wrap_conv_type(Str name) {
+    Str t = conv_helper_type(str_slice(name, 9, str_len(name)));
+    if (is_int_ty(t)) { return t; }
+    return "";
+}
+
 Bool arith_family(Str name) {
     if (ck_str_starts_with(name, "checked_")) { return true; }
-    if (ck_str_starts_with(name, "wrapping_")) { return true; }
+    if (ck_str_starts_with(name, "wrapping_")) { return wrap_conv_type(name) == ""; }
     if (ck_str_starts_with(name, "saturating_")) { return true; }
     return false;
 }
@@ -10115,6 +10285,7 @@ Bool arith_unsigned(Str name) {
 
 // Target type of a conversion helper name, or "".
 pub Str conv_helper_type(Str name) {
+    if (ck_str_starts_with(name, "wrapping_")) { return wrap_conv_type(name); }
     if (name == "isize") { return "ISize"; }
     if (name == "usize") { return "USize"; }
     Int n = str_len(name);
@@ -11563,6 +11734,31 @@ Int _count_chars(Str inner, Int i, Int count) {
     if (c == 92) { return _count_chars(inner, i + 2, count + 1); }
     return _count_chars(inner, i + 1, count + 1);
 }
+// UTF-8 byte length of a string literal: the extent Str(N) bounds (§44).
+Int str_literal_bytes(Str text) {
+    Str inner = str_slice(text, 1, str_len(text) - 1);
+    return _count_utf8(inner, 0, 0);
+}
+Int _count_utf8(Str inner, Int i, Int count) {
+    Int n = str_len(inner);
+    if (i >= n) { return count; }
+    Int c = str_char_at(inner, i);
+    if (c == 92) { return _count_utf8(inner, i + 2, count + 1); }
+    Int w = if (c < 128) { 1 } else if (c < 2048) { 2 } else if (c < 65536) { 3 } else { 4 };
+    return _count_utf8(inner, i + 1, count + w);
+}
+// Raw string `r"..."`: no escapes, every codepoint is itself.
+Int raw_literal_bytes(Str text) {
+    Str inner = str_slice(text, 2, str_len(text) - 1);
+    return _count_utf8_raw(inner, 0, 0);
+}
+Int _count_utf8_raw(Str inner, Int i, Int count) {
+    Int n = str_len(inner);
+    if (i >= n) { return count; }
+    Int c = str_char_at(inner, i);
+    Int w = if (c < 128) { 1 } else if (c < 2048) { 2 } else if (c < 65536) { 3 } else { 4 };
+    return _count_utf8_raw(inner, i + 1, count + w);
+}
 Int bytes_literal_len(Str text) {
     Str inner = str_slice(text, 2, str_len(text) - 1);
     return _count_bytes(inner, 0, 0);
@@ -11617,9 +11813,9 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
     if (t.kind == "str") {
         if (is_str_fixed(exp)) {
             Int cap = fixed_cap(exp);
-            Int len = str_literal_chars(t.text);
+            Int len = str_literal_bytes(t.text);
             if (len <= cap) { return ERes {.pos = t.pos, .ty = exp, .err = ""}; }
-            Str msg = "string literal length " + IntToString(len) + " exceeds Str(" + IntToString(cap) + ") capacity";
+            Str msg = "string literal is " + IntToString(len) + " bytes, exceeds Str(" + IntToString(cap) + ") capacity";
             return ERes {.pos = t.pos, .ty = "", .err = msg};
         }
         return ERes {.pos = t.pos, .ty = "Str", .err = ""};
@@ -11627,9 +11823,9 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
     if (t.kind == "raw") {
         if (is_str_fixed(exp)) {
             Int cap = fixed_cap(exp);
-            Int len = str_literal_chars(t.text);
+            Int len = raw_literal_bytes(t.text);
             if (len <= cap) { return ERes {.pos = t.pos, .ty = exp, .err = ""}; }
-            Str msg = "raw string length " + IntToString(len) + " exceeds Str(" + IntToString(cap) + ") capacity";
+            Str msg = "raw string is " + IntToString(len) + " bytes, exceeds Str(" + IntToString(cap) + ") capacity";
             return ERes {.pos = t.pos, .ty = "", .err = msg};
         }
         return ERes {.pos = t.pos, .ty = "Str", .err = ""};
@@ -12643,11 +12839,10 @@ Tok tok_pick(Bool c, Tok a, Tok b) {
 }
 
 // Range check of a (possibly negated) integer literal against an integer
-// target type. Wide targets (>= 128 bits) accept any literal, matching the
-// reference pipeline. Returns "" when it fits, else the diagnostic.
+// target type, at every width. Returns "" when it fits, else the
+// diagnostic.
 Str lit_range_err(Str text, Bool neg, Str ty) {
     Int bits = ty_bits(ty);
-    if (bits >= 128) { return ""; }
     Str d = lit_dec(text);
     Bool sg = signed_ty(ty);
     Bool zero = d == "0";
@@ -12660,18 +12855,6 @@ Str lit_range_err(Str text, Bool neg, Str ty) {
     Bool at_min = sg && neg && d == lim;
     if (fits_pos || at_min) { return ""; }
     return msg;
-}
-
-// Is the expression [pos, end) a single primary with no top-level
-// operator, and not a literal? (spec §6.4: such a value is never
-// implicitly narrowed; arithmetic results keep the margin rule.)
-Bool narrow_forbidden(Str s, Int pos, Int end, List(Str) env, Sigs fs, Str ty) {
-    Tok t = lex_tok(s, pos);
-    if (t.kind == "int" || t.kind == "char" || t.kind == "float") { return false; }
-    if (t.text == "-" || t.text == "(") { return false; }
-    ERes u = check_unary_e(s, pos, env, fs, ty);
-    if (u.err != "") { return false; }
-    return u.pos == end;
 }
 
 SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Sigs fs, Str ret) {
@@ -12703,13 +12886,10 @@ SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, 
     if (lrerr != "") {
         return SRes {.pos = v.pos, .err = "binding " + name + ": " + lrerr, .env = env};
     }
-    // Spec §6.4: narrowing is never implicit. Enforced for targets below
-    // 64 bits only: the shipped crypto stack (lib/ed25519.resid et al.)
-    // binds `Int bit = mw;` from Int(256) values, which the reference
-    // pipeline also accepts (its margin-narrowing rule), so a 64-bit
-    // target keeps that compatibility until those sources are migrated.
-    Bool narrowing = is_int_ty(ety) && is_int_ty(v.ty) && ty_bits(v.ty) > ty_bits(ety) && ty_bits(ety) < 64;
-    if (narrowing && narrow_forbidden(s, pos, v.pos, env, fs, ty)) {
+    // Spec §6.4: narrowing is never implicit, except a fitting whole literal.
+    Str whole_text = whole_int_literal(s, pos, v.pos);
+    Bool narrowing = is_int_ty(ety) && is_int_ty(v.ty) && !int_adopt_ok(v.ty, num_norm(ety), whole_text);
+    if (narrowing) {
         Str nmsg = "binding " + name + ": implicit narrowing from " + v.ty + " to " + ty + " requires an explicit cast";
         return SRes {.pos = v.pos, .err = nmsg, .env = env};
     }
@@ -12733,15 +12913,14 @@ SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, 
         // same int-width acceptance as plain integer bindings.
         Bool both_res = str_has_prefix(v.ty, "Result(") && res_expected;
         Bool ok_accept = res_elem_ok(ety) == "_" || res_elem_ok(v.ty) == res_elem_ok(ety)
-            || (is_int_ty(res_elem_ok(v.ty)) && is_int_ty(res_elem_ok(ety)) && int_adopt_ok(res_elem_ok(v.ty), res_elem_ok(ety), "0"));
+            || (is_int_ty(res_elem_ok(v.ty)) && is_int_ty(res_elem_ok(ety)) && int_adopt_ok(res_elem_ok(v.ty), res_elem_ok(ety), ""));
         Bool er_accept = res_elem_err(ety) == "_" || res_elem_err(v.ty) == res_elem_err(ety)
-            || (is_int_ty(res_elem_err(v.ty)) && is_int_ty(res_elem_err(ety)) && int_adopt_ok(res_elem_err(v.ty), res_elem_err(ety), "0"));
+            || (is_int_ty(res_elem_err(v.ty)) && is_int_ty(res_elem_err(ety)) && int_adopt_ok(res_elem_err(v.ty), res_elem_err(ety), ""));
         Bool res_bind_accept = both_res && ok_accept && er_accept;
         // Spec v3.2 §6.1a/§6.4: integer literal adoption + implicit
         // value-preserving widening at bindings.
         Bool intpair = is_int_ty(ety) && is_int_ty(v.ty);
-        Tok first_tok = lex_tok(s, pos);
-        Bool iok = int_adopt_ok(v.ty, ety, first_tok.text);
+        Bool iok = int_adopt_ok(v.ty, ety, whole_text);
         Bool bind_ok = if (intpair) { iok } else { false };
         if (!coerce && !bind_ok && !opt_ok && !res_bind_ok && !res_bind_accept) {
             Str msg = "binding " + name + ": expected " + ty + ", got " + v.ty;
@@ -12793,14 +12972,7 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
             // Spec v3.2 §6.4: value-preserving widening is implicit;
             // narrowing requires literal adoption.
             Bool inrange = is_int_ty(ret) && is_int_ty(v.ty);
-            Bool widen = ty_bits(v.ty) <= ty_bits(ret);
-            Tok first = lex_tok(s, t.pos);
-            Bool adopt = int_adopt_ok(v.ty, ret, first.text);
-            Bool riok = if (!inrange) {
-                false
-            } else {
-                if (widen) { true } else { adopt }
-            };
+            Bool riok = inrange && int_adopt_ok(v.ty, ret, whole_int_literal(s, t.pos, v.pos));
             // return None; in an Option(Int) function — the hole adopts
             // the declared return type.
             Bool opt_hole = v.ty == "Option(_)";
@@ -12823,12 +12995,12 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Sigs fs, Str ret) {
             Bool want_ok_hole = res_elem_ok(ret) == "_";
             Bool ok_same = vok == res_elem_ok(ret);
             Bool ok_int = is_int_ty(vok) && is_int_ty(res_elem_ok(ret));
-            Bool ok_accept = want_ok_hole || ok_same || (ok_int && int_adopt_ok(vok, res_elem_ok(ret), "0"));
+            Bool ok_accept = want_ok_hole || ok_same || (ok_int && int_adopt_ok(vok, res_elem_ok(ret), ""));
             Str ver = res_elem_err(v.ty);
             Bool want_err_hole = res_elem_err(ret) == "_";
             Bool er_same = ver == res_elem_err(ret);
             Bool er_int = is_int_ty(ver) && is_int_ty(res_elem_err(ret));
-            Bool er_accept = want_err_hole || er_same || (er_int && int_adopt_ok(ver, res_elem_err(ret), "0"));
+            Bool er_accept = want_err_hole || er_same || (er_int && int_adopt_ok(ver, res_elem_err(ret), ""));
             Bool res_ret_ok = both_res && ok_accept && er_accept;
             if (!riok && !opt_ret_ok && !empty_ret_ok && !res_ok_ret_ok && !res_err_ret_ok && !res_ret_ok) {
                 Str msg = "return type " + v.ty + " does not match " + ret;
@@ -14644,7 +14816,7 @@ EV gr_unary(Str op, Str v) {
     if (op == "-") {
         IP i = gr_ip(v);
         if (!i.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
-        return EV {.ok = true, .v = IntToString(0 - i.v), .pos = 0};
+        return gr_wide(0 - (Int(128))i.v);
     }
     if (op == "+") {
         return EV {.ok = true, .v = v, .pos = 0};
@@ -14657,9 +14829,16 @@ EV gr_unary(Str op, Str v) {
     if (op == "~") {
         IP i2 = gr_ip(v);
         if (!i2.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
-        return EV {.ok = true, .v = IntToString(0 - i2.v - 1), .pos = 0};
+        return EV {.ok = true, .v = IntToString(i2.v ^ -1), .pos = 0};
     }
     return EV {.ok = false, .v = "", .pos = 0};
+}
+
+// Int result of a folded Int op; not known when it overflows 64 bits (it traps).
+EV gr_wide(Int(128) v) {
+    Int(128) hi = 9223372036854775807;
+    if (v > hi || v < 0 - hi - 1) { return EV {.ok = false, .v = "", .pos = 0}; }
+    return EV {.ok = true, .v = IntToString(i64(v)), .pos = 0};
 }
 
 EV gr_plus(Str l, Str r) {
@@ -14667,7 +14846,7 @@ EV gr_plus(Str l, Str r) {
     if (li.ok) {
         IP ri = gr_ip(r);
         if (ri.ok) {
-            return EV {.ok = true, .v = IntToString(li.v + ri.v), .pos = 0};
+            return gr_wide((Int(128))li.v + ri.v);
         }
         return EV {.ok = false, .v = "", .pos = 0};
     }
@@ -14688,11 +14867,12 @@ EV gr_int2(Str op, Str l, Str r) {
     if (!li.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
     IP ri = gr_ip(r);
     if (!ri.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
-    if (op == "-") { return EV {.ok = true, .v = IntToString(li.v - ri.v), .pos = 0}; }
-    if (op == "*") { return EV {.ok = true, .v = IntToString(li.v * ri.v), .pos = 0}; }
+    if (op == "-") { return gr_wide((Int(128))li.v - ri.v); }
+    Int(128) prod = (Int(128))li.v * ri.v;
+    if (op == "*") { return gr_wide(prod); }
     if (op == "/") {
         if (ri.v == 0) { return EV {.ok = false, .v = "", .pos = 0}; }
-        return EV {.ok = true, .v = IntToString(li.v / ri.v), .pos = 0};
+        return gr_wide((Int(128))li.v / ri.v);
     }
     if (op == "%") {
         if (ri.v == 0) { return EV {.ok = false, .v = "", .pos = 0}; }
@@ -15630,11 +15810,12 @@ Int main() {
     // is copied out.
     // (red0 itself is freed with the scope: its scalar is read first.)
     Int _rd_in = resid_bulk_push();
-    RdOut red0 = if (noreduce) { RdOut {.text = rsrc, .nred = 0, .err = ""} } else { rd_reduce_program(rsrc) };
-    List(Str) redkeep = resid_list_str_persist_copy([red0.text, red0.err]);
+    RdOut red0 = if (noreduce) { RdOut {.text = rsrc, .nred = 0, .err = "", .notes = ""} } else { rd_reduce_program(rsrc) };
+    List(Str) redkeep = resid_list_str_persist_copy([red0.text, red0.err, red0.notes]);
     Int rednred = red0.nred;
     Int _rd_out = resid_bulk_pop();
-    RdOut red = RdOut {.text = redkeep[0], .nred = rednred, .err = redkeep[1]};
+    RdOut red = RdOut {.text = redkeep[0], .nred = rednred, .err = redkeep[1], .notes = redkeep[2]};
+    if (red.notes != "") { print(red.notes); }
     if (red.err != "") {
         println(red.err);
         return 1;
@@ -15662,7 +15843,7 @@ Int main() {
         println("test error: no `test \"...\" { ... }` blocks found in " + path);
         return 2;
     }
-List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i32 @resid_run_main(ptr)", "declare ptr @resid_list_const_i64(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_ptr(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_bool(ptr, i64, ptr, ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @resid_list_slice(ptr, i64, i64)", "declare ptr @resid_range_list(i64, i64)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_list_to_string(ptr)", "declare void @resid_assert(i8, ptr)", "declare void @resid_todo(i8, ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @UIntToString(i64)", "declare ptr @Int256ToString(i64, i64, i64, i64)", "declare ptr @UInt256ToString(i64, i64, i64, i64)", "declare ptr @Int512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @UInt512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @FloatToString(double)", "declare ptr @Float128ToString(fp128)", "declare ptr @BoolToString(i8)", "declare void @resid_overflow_check(i8)", "declare {i8, i1} @llvm.sadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.sadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)", "declare {i8, i1} @llvm.uadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.uadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.uadd.with.overflow.i32(i32, i32)", "declare {i8, i1} @llvm.ssub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.ssub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.ssub.with.overflow.i32(i32, i32)", "declare {i8, i1} @llvm.usub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.usub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.usub.with.overflow.i32(i32, i32)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "declare void @resid_abort(ptr) noreturn", "declare void @resid_expect_fail(ptr, ptr, ptr) noreturn", "declare i8 @resid_regex_match(ptr, ptr)", "declare i8 @resid_quiet()", "declare i8 @resid_quiet_set(i1)", "declare i8 @resid_expect_throws(ptr)", "declare i64 @resid_box_tag(ptr)", "declare i8 @resid_test_plan(i64, ptr)", "declare i64 @resid_test_run_closure(ptr, ptr)", "declare i64 @resid_test_run(ptr, ptr)", "declare i64 @resid_test_summary()", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"" "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
+List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i32 @resid_run_main(ptr)", "declare ptr @resid_list_const_i64(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_ptr(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_bool(ptr, i64, ptr, ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @resid_list_slice(ptr, i64, i64)", "declare ptr @resid_range_list(i64, i64)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_list_to_string(ptr)", "declare void @resid_assert(i8, ptr)", "declare void @resid_todo(i8, ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @UIntToString(i64)", "declare ptr @Int256ToString(i64, i64, i64, i64)", "declare ptr @UInt256ToString(i64, i64, i64, i64)", "declare ptr @Int512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @UInt512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @FloatToString(double)", "declare ptr @Float128ToString(fp128)", "declare ptr @BoolToString(i8)", "declare void @resid_overflow_check(i8)", "declare void @resid_div_check(i8)", "declare void @resid_conv_check(i8)", "declare {i8, i1} @llvm.sadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.sadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.sadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.sadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.sadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.ssub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.ssub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.ssub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.ssub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.ssub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.ssub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.smul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.smul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.smul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.smul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.smul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.smul.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.uadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.uadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.uadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.uadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.uadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.uadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.uadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.usub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.usub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.usub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.usub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.usub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.usub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.usub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.umul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.umul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.umul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.umul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.umul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.umul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.umul.with.overflow.i512(i512, i512)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "declare void @resid_abort(ptr) noreturn", "declare void @resid_expect_fail(ptr, ptr, ptr) noreturn", "declare i8 @resid_regex_match(ptr, ptr)", "declare i8 @resid_quiet()", "declare i8 @resid_quiet_set(i1)", "declare i8 @resid_expect_throws(ptr)", "declare i64 @resid_box_tag(ptr)", "declare i8 @resid_test_plan(i64, ptr)", "declare i64 @resid_test_run_closure(ptr, ptr)", "declare i64 @resid_test_run(ptr, ptr)", "declare i64 @resid_test_summary()", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"" "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
     List(Str) header = header_with_cmps(hdr_core.concat(hdr_extra()).concat(hdr_map_typed()), fs);
     PG g0 = PG {.pos = 0, .err = "", .glines = [], .hlines = [], .lines = header, .tmp = 0, .lbl = 0};
     PG res = pg_next(csrc, 0, fs, g0);

@@ -1,0 +1,7 @@
+has: power__rs
+lacks: power(x, 5)
+lacks: n == 0
+has: count_up(0, x, 0)
+has: greet__rs
+lacks: loud
+has: forever(1)

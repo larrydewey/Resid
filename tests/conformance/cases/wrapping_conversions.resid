@@ -1,0 +1,9 @@
+Int main() {
+    Int y = rt 300;
+    println(IntToString(i64(wrapping_u8(y))));
+    Int z = rt(0 - 1);
+    println(UIntToString(wrapping_u64(z)));
+    Int(512) big = i512(rt 1) << 300;
+    println(IntToString(i64(wrapping_i64(big + 5))));
+    return 0;
+}

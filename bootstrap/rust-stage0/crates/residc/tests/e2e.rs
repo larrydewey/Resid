@@ -4190,8 +4190,8 @@ Int(512) be512_acc(List(Int) b, Int i, Int last, Int(512) acc) {
     if (i > last) { return acc; }
     Int byte = b[i];
     Int(512) bv = (Int(512)) byte;
-    Int(512) a8 = acc * 256;
-    Int(512) a2v = a8 + bv;
+    Int(512) a8 = acc << 8;
+    Int(512) a2v = a8 | bv;
     Int ni = i + 1;
     return be512_acc(b, ni, last, a2v);
 }
@@ -5578,8 +5578,8 @@ pub Int(256) be_acc(List(Int) bytes, Int i, Int(256) acc) {{
     if (i > 31) {{ return acc; }}
     Int byte = bytes[i];
     Int(256) bv = (Int(256)) byte;
-    Int(256) acc8 = acc * 256;
-    Int(256) acc2 = acc8 + bv;
+    Int(256) acc8 = acc << 8;
+    Int(256) acc2 = acc8 | bv;
     Int ni = i + 1;
     return be_acc(bytes, ni, acc2);
 }}

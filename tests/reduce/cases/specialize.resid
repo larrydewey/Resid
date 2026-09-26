@@ -1,0 +1,22 @@
+Int power(Int x, Int n) {
+    if (n == 0) { return 1; }
+    return x * power(x, n - 1);
+}
+Int count_up(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return count_up(i + 1, n, acc + i);
+}
+Str greet(Str who, Bool loud) {
+    if (loud) { return "HELLO " + who + "!"; }
+    return "hello " + who;
+}
+Int forever(Int a) { return forever(a); }
+Int main() {
+    Int x = rt 3;
+    println(IntToString(power(x, 5)));
+    println(IntToString(count_up(0, x, 0)));
+    println(greet(rt "bob", true));
+    println(greet(rt "amy", false));
+    if (x > 100) { println(IntToString(forever(1))); }
+    return 0;
+}

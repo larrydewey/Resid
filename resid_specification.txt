@@ -1,6 +1,6 @@
 ==================================================
 RESID LANGUAGE DESIGN DOCUMENT
-Version 3.3 — Production Ready
+Version 3.4 — Production Ready
 ==================================================
 
 
@@ -160,66 +160,69 @@ between any numeric types.
 Mixed-width integer operations are permitted when both
 operands are signed or both are unsigned.
 
-Result widths follow an operator-specific rule:
+Result width: every integer operator — addition,
+subtraction, multiplication, division, remainder, and the
+bitwise and/or/xor — yields the widest operand width. The
+narrower operand is widened (value-preserving) first.
 
-  Addition and subtraction:
-    The result width is the widest operand width.
-    Overflow is NOT handled by static promotion. It is
-    governed by the checked-arithmetic rule of 6.5:
-    a compile-time error when operand values are
-    provable in-range violations, otherwise a residual
-    runtime trap. Implementations must not emit
-    widen-then-narrow sequences for these operators;
-    silently discarding a carry is forbidden.
+Arithmetic (+ - * / %) is checked (6.5): a result that does
+not fit the result type is an error, never a wider type and
+never a silently discarded carry. Implementations must not
+emit widen-then-narrow sequences that hide a carry.
 
-  Multiplication:
-    The result width is the smallest width W from
-    {8,16,32,64,128,256,512} such that the largest
-    possible product of the two operand types fits.
-
-  Division and remainder:
-    The result width is the widest operand width.
-
-  Shifts:
-    The result width is the left operand's width. The
-    shift amount is treated as a pure integer; counts
-    >= the bit width yield zero (never wrap mod width).
-
-  Bitwise and/or/xor:
-    The result width is the widest operand width.
+Shifts:
+    The result width is the left operand's width. Shifts
+    and bitwise operators are bit operations on the two's-
+    complement representation and are not checked: bits
+    shifted out are discarded.
+    `<<` fills with zeros. `>>` is arithmetic (sign-filling)
+    for signed operands and logical for unsigned operands.
+    A shift count that is negative or >= the bit width
+    yields 0, except that `>>` of a negative signed value
+    yields -1 (counts never wrap modulo the width).
 
 Examples:
 
   Int(8)   + Int(8)   -> Int(8)    // checked; traps on overflow
   UInt(16) + UInt(8)  -> UInt(16)  // widest operand
-  Int(256) * Int(256) -> Int(512)  // mul keeps headroom
+  Int(256) * Int(256) -> Int(256)  // checked; traps on overflow
   Int(32)  << 4       -> Int(32)
+  Int(-8)  >> 1       -> -4        // arithmetic shift
 
 Headroom for a wide answer must be requested explicitly,
-by casting one operand up before the operation:
+by converting one operand up before the operation:
 
-  Int(16)(a) + b      // explicit: result Int(16)
+  Int(512) p = (Int(512))a * b;    // a, b : Int(256)
 
 ISize / USize participate with their actual target width.
 
 Signed and unsigned operands may never be mixed in a
-single arithmetic operation; an explicit cast is required.
+single arithmetic operation; an explicit conversion is
+required. Unsigned operands use unsigned comparison,
+division and remainder.
 
 
+--------------------------------------------------
 6.1a  Integer Literal Typing
 --------------------------------------------------
 
-An integer literal adopts the expected numeric type from
-its context when one exists: the declared type of a
-binding, a parameter or return position, an explicit cast,
-or comparison against a concretely typed operand. A
-literal that does not fit the expected width is a
-compile-time error.
+An integer literal takes its type from its context:
 
-Without an expected type, an integer literal has the
-smallest signed width from {64,128,256,512} that its
-magnitude fits; magnitudes within 64 bits yield plain
-Int(64).
+  - As an operand of a binary operator whose other operand
+    has a concrete integer type, it adopts that type.
+  - When it is the whole expression of a binding
+    initializer, argument, return value or field, it
+    adopts the declared type of that position.
+  - Otherwise (for example `1000000 * 1000000`, where both
+    operands are literals) it has the smallest signed
+    width from {64,128,256,512} that its magnitude fits;
+    magnitudes within 64 bits yield plain Int(64).
+
+A literal that does not fit its adopted type is a
+compile-time error at every width. Literal adoption does
+not reach through `if` / `match` arms: arms must agree in
+type (§18), so write `i128(0)` in an arm that must match an
+Int(128) arm.
 
 
 --------------------------------------------------
@@ -258,12 +261,21 @@ The result of a comparison is Bool.
 Narrowing conversions are never implicit.
 
   UInt(16) x = some_u32;     // hard error
-  UInt(16) x = u16(some_u32); // ok (explicit)
+  UInt(16) x = u16(some_u32); // ok (explicit, checked)
 
-Narrowing assignments always require an explicit cast.
-Value-preserving widening assignments are permitted
-implicitly. Integer literal adoption (6.1a) applies as
-specified there.
+Narrowing assignments always require an explicit
+conversion. Value-preserving widening is permitted
+implicitly at bindings, returns and fields: same
+signedness and no narrower, or unsigned into a strictly
+wider signed type. Signed into unsigned is never implicit.
+Integer literal adoption (6.1a) applies as specified there.
+
+Explicit conversions — the helpers of 6.7 and the cast
+(Type)expr — are checked: a value that the target type
+cannot represent (too large, too small, negative into
+unsigned, or a NaN / out-of-range float into an integer)
+is a runtime error. Bit-level truncation is requested
+explicitly with the wrapping conversions of 6.7.
 
 Argument expressions must match the parameter's declared
 type exactly, after literal adoption. Computed argument
@@ -272,8 +284,7 @@ fit a parameter.
 
 Implementations must never emit widen-then-narrow code
 around an assignment: if a computed value does not fit
-its target type, the program fails (compile-time when
-provable, checked trap otherwise), never truncates
+its target type, the program fails, never truncates
 silently.
 
 
@@ -282,12 +293,21 @@ silently.
 --------------------------------------------------
 
 After operands have been brought to the common result
-type, the operation itself is still checked by default.
-Overflow of the result type is an error (compile-time
-when provable, residual error when forced at runtime).
+type, + - * / % are checked at every width (8 through
+512 bits). Overflow of the result type, division or
+remainder by zero, and signed MIN / -1 are runtime errors
+that abort the process (a region's failure inside spawn,
+§19). MIN % -1 is 0.
 
-Wrapping and saturating variants are supplied by the
-standard library for every width.
+An out-of-range integer literal is a compile-time error
+(6.1a). Any other overflow is detected when the operation
+executes. Compile-time reduction never folds an
+overflowing operation: it leaves it residual, so reduced
+and unreduced programs fail identically (§36).
+
+Wrapping and saturating variants (wrapping_add,
+saturating_mul, …) are supplied by the standard library
+for every width.
 
 
 --------------------------------------------------
@@ -371,7 +391,17 @@ need to declare per-width instances.
                 // from Int (exact) or Str (exact decimal parse)
   isize usize
 
-Plus the ordinary C-style cast (Type)expr.
+Plus the ordinary C-style cast (Type)expr. Both are checked
+(6.4).
+
+Wrapping conversions keep the low bits of the two's-
+complement representation, for bit-level code:
+
+  wrapping_i8 … wrapping_i512
+  wrapping_u8 … wrapping_u512
+
+  wrapping_u8(300)    // 44
+  wrapping_u64(-1)    // 18446744073709551615
 
 
 ==================================================
@@ -485,7 +515,7 @@ if-let / while-let:
 14. LITERALS AND COMPOSITES
 ==================================================
 
-  42  0x2A  3.14  1.5m  'a'  "hello"  true  false  null
+  42  0x2A  3.14  1.5m  'a'  "hello"  true  false
   [1, 2, 3]   {"a": 1}   Point { x = 1, y = 2 }
 
   f"hello {name}"
@@ -494,8 +524,9 @@ if-let / while-let:
   b"bytes"
 
 Literals default to Int / Float / Dec (for m-suffix
-decimals). Width is changed only by explicit cast or
-conversion helper.
+decimals); integer literals follow 6.1a. There is no null
+literal: absence is Option's None. Width is otherwise
+changed only by an explicit conversion.
 
 A literal may adopt a fixed-capacity expected type from an
 annotated binding when its extent fits the declared
@@ -538,9 +569,9 @@ Access to a fixed-capacity value is bounds-checked against its
 declared capacity and aborts identically on an out-of-range
 index (§44.3).
 
-Shift counts equal to or greater than the operand's bit width
-yield 0 (machine shift counts wrap modulo the width, which would
-otherwise be silent UB). Implemented for every integer width,
+Shift counts that are negative or >= the operand's bit width
+yield 0, or -1 for `>>` of a negative signed value (§6.1); they
+never wrap modulo the width. This holds for every integer width,
 including wide Int(N)/UInt(N).
 
 
@@ -554,6 +585,11 @@ Classic C plus:
 
   if (Some(x) = opt) { ... }
   while (Some(x) = it.next()) { ... }
+
+The arms of an if-expression or match must all have the
+same type (numeric aliases such as Int and Int(64) are the
+same type). Arms are not implicitly widened to a common
+type.
 
 
 ==================================================
@@ -723,6 +759,15 @@ therefore:
   3. Lower only what remains to efficient native code
      (LLVM).
 
+The reduction outcome is deterministic: budgets count
+evaluation steps, calls and allocations, never time, so a
+given compiler reduces a given program the same way every
+time. Program meaning never depends on a budget: reduced
+and unreduced programs have identical observable
+behavior, and a budget only decides how much work is left
+residual. Every budget that leaves work residual is
+reported as a compiler note ("note: reduce: ...").
+
 Release builds may omit diagnostic metadata from residual
 thunks. Capability checks may be elided when the required
 set is statically known to be present for the relevant
@@ -791,7 +836,7 @@ under a development profile.
   // numeric types are first-class
   UInt(8) a = u8(1);
   UInt(16) b = u16(2);
-  UInt(32) c = a + b;          // range rule → UInt(32)
+  UInt(32) c = a + b;          // a + b : UInt(16), widened on binding
 
   // sandboxing
   import "http.resid" @requires(filesystem(readonly));
@@ -849,7 +894,8 @@ under a development profile.
   value?    value else { … }
   assert / rt_assert / known / rt_known
   comptime_print / todo / unimplemented
-  i32(42)  u64(n)  f32(x)  usize(len)
+  i32(42)  u64(n)  f32(x)  usize(len)   // checked
+  wrapping_u8(x)                        // keeps low bits
   #location
 
 
@@ -950,7 +996,8 @@ Fixed-capacity forms (see §44): Str(N), Bytes(N),
 List(T, N) — statically bounded, never heap-allocated.
 
 Conversion helpers: i8…i512, u8…u512, f16…f128,
-dN (any N >= 1), isize, usize.
+dN (any N >= 1), isize, usize (checked), and
+wrapping_i8…wrapping_i512, wrapping_u8…wrapping_u512.
 
 Checked arithmetic (default) + wrapping_* + saturating_*
 for every width.
@@ -1033,6 +1080,30 @@ structural identity.
 
 The implementation shall eliminate every residual that
 is dischargeable under current knowledge and capabilities.
+
+Specialization is part of the reduction relation: a call
+whose arguments are partly known is replaced by a call to a
+copy of the callee reduced under the known arguments (only
+the unknown arguments remain parameters). Knowledge is thus
+preserved across residual calls (Law 6).
+
+Termination of reduction:
+
+  - A call with all arguments known is evaluated; a pure
+    call that re-enters itself with identical arguments is
+    left residual immediately, and step / depth / fuel /
+    memory budgets bound the rest.
+  - Specialization terminates by a homeomorphic-embedding
+    test on the active chain of specializations of the same
+    function with the same known positions: integers embed
+    by sign and magnitude, strings by length, other values
+    by equality. When an ancestor's known values embed in
+    the new call's, the known positions whose values
+    changed are generalized (made unknown); an identical
+    pattern reuses the specialization in progress.
+  - A specialization is kept only when it shrinks the
+    callee; implementations may bound the number of
+    specializations (reported as a note).
 
 Dead-code elimination is part of the reduction relation:
 a binding whose reduced value is a fully-known constant
@@ -1119,7 +1190,7 @@ Conformance includes all prior rules plus:
 40. PRODUCTION-READY STATUS
 ==================================================
 
-Resid 3.0 is production-ready as a language specification.
+Resid 3.4 is production-ready as a language specification.
 
 All core semantics, syntax, numeric types (first-class
 with interoperability), concurrency, sandboxing,
@@ -1172,21 +1243,52 @@ view, and the runtime built-in functions accept them
 wherever a Str / Bytes is declared.
 
 
+v3.4: numeric soundness pass; the implementation now
+matches every rule below.
+  - Multiplication follows the same width rule as the
+    other operators (widest operand, checked); the
+    range rule is removed. It widened types without a
+    matching guarantee: products were bound back to
+    the operand width and wrapped silently.
+  - Checked arithmetic covers + - * / % at every width,
+    including division by zero and MIN / -1.
+  - Signed `>>` is arithmetic; shift counts that are
+    negative or >= the width are specified.
+  - Unsigned operands compare, divide and take the
+    remainder as unsigned.
+  - Explicit conversions are checked; wrapping_iN /
+    wrapping_uN conversions added for bit-level code.
+  - Literal adoption (6.1a) stated precisely, including
+    wide targets; if/match arms must agree in type.
+  - Str(N) capacity is N UTF-8 bytes; casts never split
+    a codepoint; Str(N) indexing is checked against the
+    content.
+  - The `null` literal is removed (it contradicted the
+    no-null non-goal and was never implemented).
+  - Reduction (§27, §36): specialization on partly-known
+    arguments, termination by homeomorphic embedding,
+    deterministic budgets reported as notes.
+
+
 ==================================================
 42. NUMERIC INTEROPERABILITY SUMMARY
 ==================================================
 
   - Every width is a distinct first-class type.
-  - No subtyping, no implicit narrowing or widening
-    on assignment.
-  - Integer literal typing follows 6.1a: literals
-    adopt the expected type from context, else the
+  - No subtyping and no implicit narrowing; value-
+    preserving widening is implicit at bindings,
+    returns and fields.
+  - Integer literal typing follows 6.1a: a literal
+    adopts the other operand's type or the declared
+    type of the position it wholly fills, else the
     smallest fitting signed width >= 64.
-  - Addition/subtraction/division/remainder/shifts/
-    bitwise yield the widest operand width; overflow
-    is a checked error (compile-time when provable,
-    runtime trap otherwise). Multiplication keeps the
-    range rule (smallest fitting width).
+  - Every integer operator yields the widest operand
+    width. + - * / % are checked at every width
+    (overflow, division by zero, MIN / -1 trap).
+  - Shifts and bitwise operators are unchecked bit
+    operations; signed `>>` is arithmetic.
+  - Explicit conversions are checked; wrapping_iN /
+    wrapping_uN keep the low bits.
   - Argument expressions match parameter types
     exactly after literal adoption.
   - Widen-then-narrow code is forbidden; carries are
@@ -1197,7 +1299,8 @@ wherever a Str / Bytes is declared.
   - Dec(N) op Dec(M) yields Dec(max(N, M)).
   - Mixing Dec with Int/UInt/Float is a hard error.
   - Dec has no NaN/Inf; invalid operations are errors.
-  - Checked arithmetic remains the default.
+  - Checked arithmetic is the default; wrapping and
+    saturating variants are explicit.
   - Behaviors Eq/Ord/Hash are generic over the family.
 
 
@@ -1227,7 +1330,7 @@ bound on their extent. Storage is fixed and known at
 compile time, so the compiler may place values inline in
 the activation frame; they never require heap allocation.
 
-  Str(N)         a string of at most N characters;
+  Str(N)         a UTF-8 string of at most N bytes;
                  storage N + 1 bytes, NUL-terminated
   Bytes(N)       a byte array of at most N bytes;
                  storage exactly N bytes
@@ -1250,7 +1353,8 @@ A literal whose extent fits the declared capacity may be
 bound directly to a fixed-capacity type; the annotation
 provides the literal with its expected type:
 
-  Str(8) s = "abc";           // ok — 3 characters
+  Str(8) s = "abc";           // ok — 3 bytes
+  Str(2) e = "é";             // ok — 2 bytes
   Bytes(4) b = b"1234";       // ok
   List(Int, 8) xs = [10, 20, 30];
                               // ok — slots 3..7 are
@@ -1260,6 +1364,7 @@ A literal whose extent exceeds the declared capacity is a
 compile-time error. It is never silently truncated:
 
   Str(4) s = "toolong";       // error — 7 > 4
+  Str(2) e = "éé";            // error — 4 bytes > 2
   List(Int, 2) xs = [1, 2, 3];
                               // error — 3 > 2
 
@@ -1278,8 +1383,9 @@ the only operators that may change a fixed capacity.
                             NUL-terminated buffer
   Bytes(N) -> Bytes         identity retype
   Str      -> Str(N)        explicit bounded copy;
-                            content truncated to N
-                            characters from the left
+                            keeps the longest prefix of
+                            whole codepoints that fits
+                            in N bytes
   Bytes    -> Bytes(N)      explicit bounded copy
   Str(N)   -> Str(M)        explicit bounded copy
   Bytes(N) -> Bytes(M)      explicit bounded copy
@@ -1288,8 +1394,9 @@ the only operators that may change a fixed capacity.
                             resulting list's length is N
 
 Widening a capacity copies and pads; narrowing copies and
-truncates on the right. Truncation never happens apart
-from an explicit cast.
+drops the end of the content, never splitting a UTF-8
+codepoint. Truncation never happens apart from an
+explicit cast.
 
 A heap-to-fixed list cast (List → List(T, N)) is not
 provided.
@@ -1298,13 +1405,15 @@ provided.
 44.3  Access
 --------------------------------------------------
 
-Indexing a fixed-capacity value is bounds-checked against
-its declared capacity and aborts on an out-of-range index
-(resid_index_abort), identically to heap lists (§17):
+Indexing a fixed-capacity value is bounds-checked and
+aborts on an out-of-range index (resid_index_abort),
+identically to heap lists (§17):
 
-  s[i]    // Str(N): Int — the codepoint at i
-  b[i]    // Bytes(N): Int — the byte at i
-  xs[i]   // List(T, N): T
+  s[i]    // Str(N): Int — the codepoint at index i,
+          // checked against the content's codepoint count
+  b[i]    // Bytes(N): Int — the byte at i, checked
+          // against the capacity N
+  xs[i]   // List(T, N): T, checked against N
 
 `.len()` on a List(T, N) is the statically known capacity
 N; a fixed-capacity list carries no dynamic length.

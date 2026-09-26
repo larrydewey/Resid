@@ -1,0 +1,8 @@
+Int main() {
+    Float f = rt 1.5;
+    println(IntToString(i64(i32(f))));
+    Float g = rt 10000000000.0;
+    Int(32) h = i32(g);
+    println("unreachable");
+    return 0;
+}

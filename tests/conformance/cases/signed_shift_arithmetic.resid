@@ -1,0 +1,15 @@
+Int main() {
+    Int x = rt(0 - 8);
+    println(IntToString(x >> 1));
+    println(IntToString(x >> 70));
+    Int(8) a = i8(rt(0 - 8));
+    println(IntToString(i64(a >> 1)));
+    Int(256) b = i256(rt(0 - 8));
+    println(IntToString(i64(b >> 300)));
+    UInt(8) u = u8(rt 200);
+    println(IntToString(i64(u >> 1)));
+    println(IntToString(i64(u >> 9)));
+    Int y = rt 8;
+    println(IntToString(y >> 64));
+    return 0;
+}
