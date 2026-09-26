@@ -1130,6 +1130,13 @@ Numeric operators obey the interoperability rules of §6.
 Trusted providers: filesystem, environment, git, args, process
 (all volatile by default).
 
+filesystem verbs: read_all, write_all, read_bytes, write_bytes,
+append_bytes (write), sha256 (a file's SHA-256 as 32 bytes,
+computed without materializing its contents), exists, is_dir,
+list_dir, create_dir (write), open, read_handle, close.
+
+Linear builders (see §45): StrBuf, ListBuf(T).
+
 Core types: Bool, full Int/UInt/Float/Dec family,
 ISize, USize, Str, Bytes, Option, Result, List, Map,
 Set, RegionError, SourceLoc.
@@ -1581,6 +1588,7 @@ v3.6: linear builders (§45). StrBuf and ListBuf(T) build a
 string or a list by appending in place into one growing
 buffer. Each builder value must be used exactly once, which
 is what makes the in-place append unobservable.
+  - filesystem.sha256 and filesystem.append_bytes (§32).
 
 
 ==================================================

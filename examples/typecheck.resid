@@ -3808,6 +3808,8 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
                         if (m.text == "exists") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "list_dir") { return ERes {.pos = a.pos, .ty = "List(Str)", .err = ""}; }
                         if (m.text == "read_bytes") { return ERes {.pos = a.pos, .ty = "List(Int)", .err = ""}; }
+                        if (m.text == "sha256") { return ERes {.pos = a.pos, .ty = "List(Int)", .err = ""}; }
+                        if (m.text == "append_bytes") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "write_bytes") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "is_dir") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "create_dir") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
@@ -5125,6 +5127,7 @@ Bool grant_readonly_only(Str caps_csv, Str family) {
 Bool is_write_verb(Str family, Str verb) {
     if (family == "filesystem" && verb == "write_all") { return true; }
     if (family == "filesystem" && verb == "write_bytes") { return true; }
+    if (family == "filesystem" && verb == "append_bytes") { return true; }
     if (family == "filesystem" && verb == "create_dir") { return true; }
     if (family == "process" && verb == "run") { return true; }
     return false;
@@ -6052,6 +6055,8 @@ Bool is_prov_verb_filesystem(Str v) {
     if (v == "read_handle") { return true; }
     if (v == "close") { return true; }
     if (v == "read_bytes") { return true; }
+    if (v == "sha256") { return true; }
+    if (v == "append_bytes") { return true; }
     if (v == "write_bytes") { return true; }
     if (v == "is_dir") { return true; }
     if (v == "create_dir") { return true; }
