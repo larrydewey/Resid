@@ -10,8 +10,9 @@
 // (rd_render, rd_coerce, rd_fold, rd_builtin, rd_env_*, the whistle).
 
 // Reduction state: RdS plus the graph being built; specs are the
-// specialized functions' fn nodes in emission order.
-type GS = { Int steps; Int depth; Int fuel; Map(Str, Str) memo; List(Int) specs; Int nspec; List(Str) hist; Str notes; Kg g; };
+// specialized functions' fn nodes in emission order; dn/df/dr are derive
+// edges (new node, the node it derives from, the rule).
+type GS = { Int steps; Int depth; Int fuel; Map(Str, Str) memo; List(Int) specs; Int nspec; List(Str) hist; Str notes; Kg g; List(Int) dn; List(Int) df; List(Str) dr; };
 // Function table (RdT) over the graph: fbody is each body block, cpred the
 // predicate node of each constraint type in cts.
 // rds: the placeholder state reduce.resid's helpers are called with.
@@ -23,7 +24,8 @@ type GV = { Bool k; Str v; Str ty; Int r; Bool ch; Bool bad; List(Int) bs; Str s
 type GXR = { List(Int) out; Bool dead; Bool ok; Bool ret; Str rv; Str rty; Bool bad; GS st; };
 type GXA = { List(Str) vs; List(Str) ts; List(Int) rs; Bool allk; Bool ch; Bool named; Bool bad; GS st; };
 type GXN = { GS st; Int id; };
-type GXO = { Kg g; Int root; Int nred; Str err; Str notes; };
+// dv: derive edges as `id,from,rule;` entries.
+type GXO = { Kg g; Int root; Int nred; Str err; Str notes; Str dv; };
 
 // ─── Graph helpers ──────────────────────────────────────────────────
 
@@ -37,17 +39,23 @@ List(Int) gx_kids(Kg g, Int id) {
 }
 
 GS gx_with_g(GS s, Kg g) {
-    return GS {.steps = s.steps, .depth = s.depth, .fuel = s.fuel, .memo = s.memo, .specs = s.specs, .nspec = s.nspec, .hist = s.hist, .notes = s.notes, .g = g};
+    return GS {.steps = s.steps, .depth = s.depth, .fuel = s.fuel, .memo = s.memo, .specs = s.specs, .nspec = s.nspec, .hist = s.hist, .notes = s.notes, .g = g, .dn = s.dn, .df = s.df, .dr = s.dr};
 }
 
 GXN gx_n(GS st, Int id) { return GXN {.st = st, .id = id}; }
 
-// A new node spanning `like`'s source. While β-reducing (depth > 0) the
-// residual is never used, so no node is made.
-GXN gx_add(GS st, Str kind, Str text, Str aux, List(Int) ks, Int like) {
+// A new node spanning `like`'s source, derived from it by `rule`. While
+// β-reducing (depth > 0) the residual is never used, so no node is made.
+GXN gx_add_r(GS st, Str kind, Str text, Str aux, List(Int) ks, Int like, Str rule) {
     if (st.depth > 0) { return gx_n(st, like); }
     KP p = kg_add(st.g, kind, text, aux, ks, st.g.ns[like].sp, st.g.ns[like].ep);
-    return GXN {.st = gx_with_g(st, p.g), .id = p.id};
+    return GXN {.st = gx_derive(gx_with_g(st, p.g), p.id, like, rule), .id = p.id};
+}
+
+GXN gx_add(GS st, Str kind, Str text, Str aux, List(Int) ks, Int like) { return gx_add_r(st, kind, text, aux, ks, like, "rebuild"); }
+
+GS gx_derive(GS s, Int id, Int from, Str rule) {
+    return GS {.steps = s.steps, .depth = s.depth, .fuel = s.fuel, .memo = s.memo, .specs = s.specs, .nspec = s.nspec, .hist = s.hist, .notes = s.notes, .g = s.g, .dn = s.dn.concat([id]), .df = s.df.concat([from]), .dr = s.dr.concat([rule])};
 }
 
 // `orig` with new kids; `orig` itself when they are its own.
@@ -79,16 +87,16 @@ KL gx_graft_kids(Kg dst, Kg src, Int id, Int i, Int sp, Int ep, List(Int) acc) {
 }
 
 // Nodes for a rendered literal (rd_render's text).
-GXN gx_lit(GS st, Str lit, Int like) {
+GXN gx_lit(GS st, Str lit, Int like, Str rule) {
     List(Int) none = [];
     Int c0 = str_char_at(lit, 0);
-    if (c0 == 34) { return gx_add(st, "lit", lit, "str", none, like); }
-    if (lit == "true" || lit == "false") { return gx_add(st, "lit", lit, "bool", none, like); }
-    if (c0 >= 48 && c0 <= 57) { return gx_add(st, "lit", lit, "int", none, like); }
+    if (c0 == 34) { return gx_add_r(st, "lit", lit, "str", none, like, rule); }
+    if (lit == "true" || lit == "false") { return gx_add_r(st, "lit", lit, "bool", none, like, rule); }
+    if (c0 >= 48 && c0 <= 57) { return gx_add_r(st, "lit", lit, "int", none, like, rule); }
     if (st.depth > 0) { return gx_n(st, like); }
     KP p = kg_expr(lit, kg_empty(), 0);
     KP q = gx_graft(st.g, p.g, p.id, st.g.ns[like].sp, st.g.ns[like].ep);
-    return GXN {.st = gx_with_g(st, q.g), .id = q.id};
+    return GXN {.st = gx_derive(gx_with_g(st, q.g), q.id, like, rule), .id = q.id};
 }
 
 GXN gx_paren(GS st, Int r, Int like) { return gx_add(st, "paren", "", "", [r], like); }
@@ -112,10 +120,12 @@ GV gx_kv(Str v, Str ty, Int r, Bool ch, GS st) {
 
 // rd_folded: the value's literal replaces `orig`; `orig` stays when the
 // value has no literal form.
-GV gx_folded(Str v, Str ty, Int orig, Bool och, GS st) {
+GV gx_folded(Str v, Str ty, Int orig, Bool och, GS st) { return gx_folded_r(v, ty, orig, och, st, "fold"); }
+
+GV gx_folded_r(Str v, Str ty, Int orig, Bool och, GS st, Str rule) {
     Str lit = rd_render(v, ty);
     if (lit == "") { return gx_kv(v, rd_norm_ty(ty), orig, och, st); }
-    GXN n = gx_lit(st, lit, orig);
+    GXN n = gx_lit(st, lit, orig, rule);
     return gx_kv(v, rd_norm_ty(ty), n.id, true, n.st);
 }
 
@@ -143,17 +153,17 @@ RdA gx_rda(GXA a, RdS rs) {
 }
 
 GS gx_st_memo(GS st, Str key, Str val) {
-    return GS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo.insert(key, val), .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g};
+    return GS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo.insert(key, val), .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr};
 }
 
 GS gx_note(GS st, Str msg) {
     Str line = "note: reduce: " + msg + "\n";
     if (str_contains(st.notes, line)) { return st; }
-    return GS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes + line, .g = st.g};
+    return GS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes + line, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr};
 }
 
 GS gx_st_spec(GS st, List(Int) specs, Int nspec, List(Str) hist) {
-    return GS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo, .specs = specs, .nspec = nspec, .hist = hist, .notes = st.notes, .g = st.g};
+    return GS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo, .specs = specs, .nspec = nspec, .hist = hist, .notes = st.notes, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr};
 }
 
 // ─── Name mentions (rd_uses over the printed residual) ─────────────
@@ -265,7 +275,7 @@ GV gx_ref(Int id, RdE env, GS st) {
     if (name == "None" && ei < 0) { return gx_kv("N", "Option(_)", id, false, st); }
     if (ei >= 0) {
         Str ety = env.ts[ei];
-        if (ety != "") { return gx_folded(env.vs[ei], ety, id, false, st); }
+        if (ety != "") { return gx_folded_r(env.vs[ei], ety, id, false, st, "known"); }
     }
     return gx_unk(id, false, st);
 }
@@ -350,7 +360,7 @@ GV gx_apply(GXT ft, Str op, Int id, GV l, GV r) {
     GXN rb = if (och) { gx_pbin(r.st, op, l.r, r.r, id) } else { gx_n(r.st, id) };
     if (l.k && r.k) {
         RdV x = rd_fold(op, gx_rdv(l, ft.rds), gx_rdv(r, ft.rds), "", 0, ft.rds);
-        if (x.k) { return gx_folded(x.v, x.ty, rb.id, true, rb.st); }
+        if (x.k) { return gx_folded_r(x.v, x.ty, rb.id, true, rb.st, "select"); }
         return gx_unk(rb.id, true, rb.st);
     }
     if (op == "+" && !l.k && r.k && rd_norm_ty(r.ty) == "Str") {
@@ -380,7 +390,7 @@ GV gx_apply(GXT ft, Str op, Int id, GV l, GV r) {
 }
 
 GXN gx_merge(GS st, Int head, Str lit, Int like) {
-    GXN ln = gx_lit(st, lit, like);
+    GXN ln = gx_lit(st, lit, like, "concat");
     return gx_pbin(ln.st, "+", head, ln.id, like);
 }
 
@@ -406,7 +416,7 @@ GV gx_try(GXT ft, Int id, RdE env, GS st) {
     Str qt = rd_inner(l.ty, "Option(");
     // A known Some unwraps; a known None returns early (left residual).
     if (l.k && qt != "" && qt != "_" && str_starts_with(l.v, "S")) {
-        return gx_folded(str_slice(l.v, 1, str_len(l.v)), qt, rq.id, true, rq.st);
+        return gx_folded_r(str_slice(l.v, 1, str_len(l.v)), qt, rq.id, true, rq.st, "unwrap");
     }
     return gx_unk(rq.id, l.ch, rq.st);
 }
@@ -425,7 +435,7 @@ GV gx_tern(GXT ft, Int id, RdE env, GS st) {
     GXN rb = if (anych) { gx_re(b.st, id, [c.r, a.r, b.r]) } else { gx_n(b.st, id) };
     if (c.k) {
         GV x = if (c.v == "true") { a } else { b };
-        if (x.k) { return gx_folded(x.v, x.ty, rb.id, true, rb.st); }
+        if (x.k) { return gx_folded_r(x.v, x.ty, rb.id, true, rb.st, "select"); }
         GXN p = gx_paren(rb.st, x.r, id);
         return gx_unk(p.id, true, p.st);
     }
@@ -447,9 +457,9 @@ GV gx_orelse(GXT ft, Int id, RdE env, GS st) {
     Str et = rd_inner(l.ty, "Option(");
     if (l.k && et != "") {
         if (str_starts_with(l.v, "S") && et != "_") {
-            return gx_folded(str_slice(l.v, 1, str_len(l.v)), et, re.id, true, re.st);
+            return gx_folded_r(str_slice(l.v, 1, str_len(l.v)), et, re.id, true, re.st, "unwrap");
         }
-        if (l.v == "N" && fb.k && fb.bs.len() == 0) { return gx_folded(fb.v, fb.ty, re.id, true, re.st); }
+        if (l.v == "N" && fb.k && fb.bs.len() == 0) { return gx_folded_r(fb.v, fb.ty, re.id, true, re.st, "select"); }
     }
     return gx_unk(re.id, ech, re.st);
 }
@@ -491,7 +501,7 @@ GV gx_call(GXT ft, Int id, RdE env, GS st) {
         return sv;
     }
     RdV bv = rd_builtin(name, gx_rda(a, ft.rds), "", 0, ft.rds);
-    if (bv.k) { return gx_folded(bv.v, bv.ty, cr.id, a.ch, s1); }
+    if (bv.k) { return gx_folded_r(bv.v, bv.ty, cr.id, a.ch, s1, "eval"); }
     if (ufi < 0) { return gx_unk(cr.id, a.ch, s1); }
     return gx_call_user(ft, ufi, a, cr.id, s1);
 }
@@ -677,7 +687,7 @@ GV gx_ifx(GXT ft, Int id, RdE env, GS st) {
     GXN rb = if (anych) { gx_ifx_node(b.st, id, c, tk, a, ek, b, elif) } else { gx_n(b.st, id) };
     if (c.k) {
         GV x = if (c.v == "true") { a } else { b };
-        if (x.k) { return gx_folded(x.v, x.ty, rb.id, true, rb.st); }
+        if (x.k) { return gx_folded_r(x.v, x.ty, rb.id, true, rb.st, "select"); }
         if (x.bs.len() == 0) {
             GXN p = gx_paren(rb.st, x.r, id);
             return gx_unk(p.id, true, p.st);
@@ -707,12 +717,12 @@ GV gx_match(GXT ft, Int id, RdE env, GS st) {
     // stay on the newest version.
     GV none1 = gx_unk(id, false, gx_with_g(sc.st, a1.st.g));
     if (a1.bad) { return none1; }
-    if (a1.k) { return gx_folded(a1.v, a1.ty, id, true, a1.st); }
+    if (a1.k) { return gx_folded_r(a1.v, a1.ty, id, true, a1.st, "select"); }
     if (gx_nk(st, id) < 3) { return none1; }
     GV a2 = gx_arm(ft, gx_kid(st, id, 2), issome, payload, et, env, a1.st);
     GV none2 = gx_unk(id, false, gx_with_g(sc.st, a2.st.g));
     if (a2.bad) { return none2; }
-    if (a2.k) { return gx_folded(a2.v, a2.ty, id, true, a2.st); }
+    if (a2.k) { return gx_folded_r(a2.v, a2.ty, id, true, a2.st, "select"); }
     return none2;
 }
 
@@ -797,7 +807,7 @@ GV gx_fstr(GXT ft, Int id, RdE env, GS st) {
     GXF f = gx_fst_scan(ft, id, 0, env, GXF {.allk = true, .ch = false, .bad = false, .val = "", .pend = "", .parts = none, .st = st});
     if (f.bad) { return gx_unk(id, false, f.st); }
     GXN rb = if (f.ch) { gx_fstr_node(f, id) } else { gx_n(f.st, id) };
-    if (f.allk) { return gx_folded(f.val, "Str", rb.id, f.ch, rb.st); }
+    if (f.allk) { return gx_folded_r(f.val, "Str", rb.id, f.ch, rb.st, "interpolate"); }
     return gx_unk(rb.id, f.ch, rb.st);
 }
 
@@ -819,7 +829,7 @@ GV gx_call_user(GXT ft, Int fi, GXA a, Int orig, GS st) {
     if (hit == "!" || hit == "?") { return none; }
     if (hit != "" && hit != "~") {
         Int sp = str_find_char(hit, 31, 0);
-        return gx_folded(str_slice(hit, sp + 1, str_len(hit)), str_slice(hit, 0, sp), orig, a.ch, st);
+        return gx_folded_r(str_slice(hit, sp + 1, str_len(hit)), str_slice(hit, 0, sp), orig, a.ch, st, "beta");
     }
     List(Str) pns = rd_split(ft.fpns[fi], ",");
     List(Str) pts = rd_split(ft.fpts[fi], "|");
@@ -830,11 +840,11 @@ GV gx_call_user(GXT ft, Int fi, GXA a, Int orig, GS st) {
     Int steps0 = if (st.depth == 0) { 0 } else { st.steps };
     // "?" marks the call in progress: an identical re-entry stays residual.
     GS in0 = gx_st_memo(st, key, "?");
-    GS inner = GS {.steps = steps0, .depth = st.depth + 1, .fuel = st.fuel, .memo = in0.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g};
+    GS inner = GS {.steps = steps0, .depth = st.depth + 1, .fuel = st.fuel, .memo = in0.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr};
     GXR res = gx_stmts(ft, bk, 0, env, inner);
     // The body's residual nodes stay unused (restoring the older graph
     // would make the next append copy it).
-    GS after = GS {.steps = res.st.steps, .depth = st.depth, .fuel = res.st.fuel, .memo = res.st.memo, .specs = res.st.specs, .nspec = res.st.nspec, .hist = st.hist, .notes = res.st.notes, .g = res.st.g};
+    GS after = GS {.steps = res.st.steps, .depth = st.depth, .fuel = res.st.fuel, .memo = res.st.memo, .specs = res.st.specs, .nspec = res.st.nspec, .hist = st.hist, .notes = res.st.notes, .g = res.st.g, .dn = res.st.dn, .df = res.st.df, .dr = res.st.dr};
     Bool fits = res.st.steps <= rd_max_steps();
     Str cty = if (res.ret) { rd_coerce(res.rty, rty) } else { "" };
     if (!res.ok || !res.ret || res.bad || !fits || cty == "") {
@@ -844,7 +854,7 @@ GV gx_call_user(GXT ft, Int fi, GXA a, Int orig, GS st) {
         GS after2 = if (spent && st.depth == 0) { gx_note(after1, "reduction budget exhausted evaluating " + name + "(...); the call stays residual") } else { after1 };
         return gx_unk(orig, a.ch, after2);
     }
-    return gx_folded(res.rv, cty, orig, a.ch, gx_st_memo(after, key, cty + str_from_code(31) + res.rv));
+    return gx_folded_r(res.rv, cty, orig, a.ch, gx_st_memo(after, key, cty + str_from_code(31) + res.rv), "beta");
 }
 
 // Specialization pattern (RdSp) with residual argument nodes; kbty/klit
@@ -948,7 +958,7 @@ GXL gx_sp_binds(GXP p, List(Int) stmts, Int i, GXL acc) {
     Int like = stmts[0];
     List(Int) none = [];
     GXN ty = gx_add(acc.st, "ty", p.kbty[i], "", none, like);
-    GXN lit = gx_lit(ty.st, p.klit[i], like);
+    GXN lit = gx_lit(ty.st, p.klit[i], like, "specialize");
     GXN b = gx_add(lit.st, "bind", p.knames[i], "", [ty.id, lit.id], like);
     return gx_sp_binds(p, stmts, i + 1, GXL {.st = b.st, .ids = acc.ids.concat([b.id])});
 }
@@ -958,8 +968,8 @@ GXN gx_sp_decl(GS st, GXT ft, Int fi, Str sname, GXP p, List(Int) stmts, Int bk)
     List(Int) none = [];
     GXN rt = gx_add(st, "ty", ft.frets[fi], "", none, bk);
     GXL ps = gx_sp_params(p, 0, bk, GXL {.st = rt.st, .ids = [rt.id]});
-    GXN blk = gx_add(ps.st, "block", "", "", stmts, bk);
-    return gx_add(blk.st, "fn", sname, "", ps.ids.concat([blk.id]), bk);
+    GXN blk = gx_add_r(ps.st, "block", "", "", stmts, bk, "specialize");
+    return gx_add_r(blk.st, "fn", sname, "", ps.ids.concat([blk.id]), bk, "specialize");
 }
 
 GXL gx_sp_params(GXP p, Int i, Int like, GXL acc) {
@@ -971,7 +981,7 @@ GXL gx_sp_params(GXP p, Int i, Int like, GXL acc) {
 }
 
 GV gx_sp_call(Str sname, GXP p, Int co, GS st) {
-    GXN c = gx_add(st, "call", sname, "", p.dargs, co);
+    GXN c = gx_add_r(st, "call", sname, "", p.dargs, co, "specialize");
     return gx_unk(c.id, true, c.st);
 }
 
@@ -1010,7 +1020,7 @@ GS gx_tick(GS st) {
     if (st.depth == 0) { return st; }
     // Over the memory budget: the fuel is spent, for the rest of the program.
     Int f1 = if (resid_mem_since_mark() > rd_max_mem()) { 0 } else { st.fuel - 1 };
-    return GS {.steps = st.steps + 1, .depth = st.depth, .fuel = f1, .memo = st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g};
+    return GS {.steps = st.steps + 1, .depth = st.depth, .fuel = f1, .memo = st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr};
 }
 
 // Statements of block `blk` from kid i (rd_stmts).
@@ -1069,7 +1079,7 @@ GXR gx_stmts(GXT ft, Int blk, Int i, RdE env, GS st0) {
     return gx_then([id], false, gx_stmts(ft, blk, i + 1, rd_pat_env(src, nd.sp, deq, env), st));
 }
 
-List(Int) gx_none() {
+pub List(Int) gx_none() {
     List(Int) e = [];
     return e;
 }
@@ -1118,7 +1128,7 @@ GXR gx_cprint(GXT ft, Int blk, Int i, Int ek, RdE env, GS st) {
     Bool pr = eprintln("[comptime_print] " + shown);
     GXR rest = gx_stmts(ft, blk, i + 1, env, v.st);
     if (v.k) { return gx_then(gx_none(), true, rest); }
-    GXN d = gx_add(rest.st, "discard", "", "", [v.r], gx_kid(st, blk, i));
+    GXN d = gx_add_r(rest.st, "discard", "", "", [v.r], gx_kid(st, blk, i), "comptime");
     return gx_then_n(d, false, rest);
 }
 
@@ -1420,7 +1430,7 @@ RdE gx_param_env(Kg g, Int d, Int i, Int n, RdE env) {
 // The residual program: every function reduced, specializations appended.
 pub GXO gx_reduce_program(Str src) {
     KP p = kg_parse(src);
-    if (p.err != "") { return GXO {.g = p.g, .root = -1, .nred = 0, .err = "graph-reduce: parse error: " + p.err, .notes = ""}; }
+    if (p.err != "") { return GXO {.g = p.g, .root = -1, .nred = 0, .err = "graph-reduce: parse error: " + p.err, .notes = "", .dv = ""}; }
     return gx_reduce_graph(p, src);
 }
 
@@ -1431,11 +1441,16 @@ pub GXO gx_reduce_graph(KP p, Str src) {
     Map(Str, Str) memo = {"__EMPTY__": "!"};
     List(Str) nh = [];
     List(Int) ns = [];
-    GS st = GS {.steps = 0, .depth = 0, .fuel = rd_max_fuel(), .memo = memo, .specs = ns, .nspec = 0, .hist = nh, .notes = "", .g = p.g};
+    GS st = GS {.steps = 0, .depth = 0, .fuel = rd_max_fuel(), .memo = memo, .specs = ns, .nspec = 0, .hist = nh, .notes = "", .g = p.g, .dn = ns, .df = ns, .dr = nh};
     GXG r = gx_prog(ft, p.id, 0, GXG {.st = st, .decls = ns, .nred = 0});
     Str err = r.st.memo.get("__ERR__") else { "" };
     GXN u = gx_re(r.st, p.id, r.decls.concat(r.st.specs));
-    return GXO {.g = u.st.g, .root = u.id, .nred = r.nred, .err = err, .notes = r.st.notes};
+    return GXO {.g = u.st.g, .root = u.id, .nred = r.nred, .err = err, .notes = r.st.notes, .dv = gx_dv(u.st, 0, StrBuf())};
+}
+
+Str gx_dv(GS st, Int i, StrBuf acc) {
+    if (i >= st.dn.len()) { return acc.finish(); }
+    return gx_dv(st, i + 1, gx_pk_i(gx_pk_i(acc, st.dn[i]), st.df[i]).push(st.dr[i]).push_char(';'));
 }
 
 // ─── In-place string accumulators (examples/stracc.resid on the graph) ─
@@ -1616,7 +1631,7 @@ KL gs_wargs(Kg g, Int fnid, Int k, Int i, List(Int) acc) {
     return gs_wargs(a.g, fnid, k, i + 1, acc.concat([a.id]));
 }
 
-type GSO = { Kg g; List(Int) decls; List(Int) tail; Int n; };
+type GSO = { Kg g; List(Int) decls; List(Int) tail; Int n; Str dv; };
 
 // Top-level `Str f(...)` functions with an accumulator parameter become a
 // renamed worker in place plus a wrapper at the end (sa_walk).
@@ -1628,7 +1643,7 @@ GSO gs_walk(Str src, Int unit, Int i, GSO acc) {
     Bool cand = n.kind == "fn" && g.ns[kg_kid(g, d, 0)].text == "Str";
     Int bk = if (cand) { kg_kid(g, d, n.nk - 1) } else { -1 };
     Int k = if (cand) { gs_pick(g, src, d, bk, 0) } else { -1 };
-    if (k < 0) { return gs_walk(src, unit, i + 1, GSO {.g = g, .decls = acc.decls.concat([d]), .tail = acc.tail, .n = acc.n}); }
+    if (k < 0) { return gs_walk(src, unit, i + 1, GSO {.g = g, .decls = acc.decls.concat([d]), .tail = acc.tail, .n = acc.n, .dv = acc.dv}); }
     Str f = n.text;
     KP body = gs_rw(g, src, bk, f, g.ns[kg_kid(g, d, k + 1)].text, k);
     List(Int) ks = gx_kids(body.g, d);
@@ -1639,28 +1654,39 @@ GSO gs_walk(Str src, Int unit, Int i, GSO acc) {
     KP wr = gs_add(wc.g, "ret", "", [wc.id], d);
     KP wb = gs_add(wr.g, "block", "", [wr.id], d);
     KP wf = kg_add(wb.g, "fn", f, "", ks[0..n.nk - 1].concat([wb.id]), n.sp, n.ep);
-    return gs_walk(src, unit, i + 1, GSO {.g = wf.g, .decls = acc.decls.concat([worker.id]), .tail = acc.tail.concat([wf.id]), .n = acc.n + 1});
+    // Every node of the rewrite derives from the function.
+    Str dv = gs_dv(g.ns.len(), wf.g.ns.len(), d, StrBuf());
+    return gs_walk(src, unit, i + 1, GSO {.g = wf.g, .decls = acc.decls.concat([worker.id]), .tail = acc.tail.concat([wf.id]), .n = acc.n + 1, .dv = acc.dv + dv});
 }
+
+Str gs_dv(Int i, Int n, Int from, StrBuf acc) {
+    if (i >= n) { return acc.finish(); }
+    return gs_dv(i + 1, n, from, gx_pk_i(gx_pk_i(acc, i), from).push("accumulate;"));
+}
+
+// The rewritten program and its derive edges (`id,from,rule;`).
+type GSR = { Kg g; Int id; Str dv; };
 
 // Rewrite the residual program's string accumulators; the unit is the
 // same node when none qualifies.
-pub KP gs_program(Kg g, Int unit, Str src) {
+pub GSR gs_program(Kg g, Int unit, Str src) {
     List(Int) none = [];
-    GSO o = gs_walk(src, unit, 0, GSO {.g = g, .decls = none, .tail = none, .n = 0});
-    if (o.n == 0) { return KP {.g = g, .id = unit, .pos = 0, .err = ""}; }
+    GSO o = gs_walk(src, unit, 0, GSO {.g = g, .decls = none, .tail = none, .n = 0, .dv = ""});
+    if (o.n == 0) { return GSR {.g = g, .id = unit, .dv = ""}; }
     KN u = o.g.ns[unit];
-    return kg_add(o.g, "unit", "", "", o.decls.concat(o.tail), u.sp, u.ep);
+    KP r = kg_add(o.g, "unit", "", "", o.decls.concat(o.tail), u.sp, u.ep);
+    return GSR {.g = r.g, .id = r.id, .dv = o.dv};
 }
 
 // No graph (the text pipeline runs instead).
 pub GXO gx_no_out() {
-    return GXO {.g = kg_empty(), .root = -1, .nred = 0, .err = "", .notes = ""};
+    return GXO {.g = kg_empty(), .root = -1, .nred = 0, .err = "", .notes = "", .dv = ""};
 }
 
 // The residual of a parsed program (as parsed with `--no-reduce`).
 pub GXO gx_run(KP p, Str src, Bool reduce) {
-    if (p.err != "") { return GXO {.g = p.g, .root = -1, .nred = 0, .err = "graph-reduce: parse error: " + p.err, .notes = ""}; }
-    if (!reduce) { return GXO {.g = p.g, .root = p.id, .nred = 0, .err = "", .notes = ""}; }
+    if (p.err != "") { return GXO {.g = p.g, .root = -1, .nred = 0, .err = "graph-reduce: parse error: " + p.err, .notes = "", .dv = ""}; }
+    if (!reduce) { return GXO {.g = p.g, .root = p.id, .nred = 0, .err = "", .notes = "", .dv = ""}; }
     return gx_reduce_graph(p, src);
 }
 
@@ -1724,7 +1750,7 @@ Str gx_sl(Str s, Int a, Int b) {
 // A decimal from pos up to its `,` or `:`, and the position after that.
 type GXI = { Int v; Int pos; };
 
-GXI gx_int_at(Str pk, Int pos, Int acc) {
+pub GXI gx_int_at(Str pk, Int pos, Int acc) {
     Int c = str_char_at(pk, pos);
     if (c < 48 || c > 57) { return GXI {.v = acc, .pos = pos + 1}; }
     return gx_int_at(pk, pos + 1, acc * 10 + c - 48);

@@ -980,7 +980,7 @@ List(Str) hdr_map_typed() {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)"];
+    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @str_sha256(ptr)", "declare i8 @resid_fs_write_hex(ptr, ptr)", "declare i8 @resid_fs_append_hex(ptr, ptr)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -4569,6 +4569,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             if (t.text == "str_trim") {
                 return cg_extern1(s, t2.pos, "str_trim", "Str", "Str", env, fs, c);
             }
+            if (t.text == "str_sha256") {
+                return cg_extern1(s, t2.pos, "str_sha256", "Str", "Str", env, fs, c);
+            }
             if (t.text == "str_to_lower") {
                 return cg_extern1(s, t2.pos, "str_to_lower", "Str", "Str", env, fs, c);
             }
@@ -5942,6 +5945,8 @@ Str p_sym(Str pname, Str meth) {
         if (meth == "write_bytes") { return "resid_fs_write_bytes"; }
         if (meth == "sha256") { return "resid_fs_sha256"; }
         if (meth == "append_bytes") { return "resid_fs_append_bytes"; }
+        if (meth == "write_hex") { return "resid_fs_write_hex"; }
+        if (meth == "append_hex") { return "resid_fs_append_hex"; }
         if (meth == "is_dir") { return "resid_fs_is_dir"; }
         if (meth == "list_dir") { return "resid_fs_list_dir"; }
         if (meth == "create_dir") { return "resid_fs_create_dir_all"; }
@@ -5971,6 +5976,7 @@ Str p_rty(Str pname, Str meth) {
         if (meth == "write_bytes") { return "Bool"; }
         if (meth == "sha256") { return "List(Int)"; }
         if (meth == "append_bytes") { return "Bool"; }
+        if (meth == "write_hex" || meth == "append_hex") { return "Bool"; }
         if (meth == "is_dir") { return "Bool"; }
         if (meth == "list_dir") { return "List(Str)"; }
         if (meth == "create_dir") { return "Bool"; }
@@ -5999,6 +6005,7 @@ Int p_nargs(Str pname, Str meth) {
         if (meth == "write_bytes") { return 2; }
         if (meth == "sha256") { return 1; }
         if (meth == "append_bytes") { return 2; }
+        if (meth == "write_hex" || meth == "append_hex") { return 2; }
         if (meth == "is_dir") { return 1; }
         if (meth == "list_dir") { return 1; }
         if (meth == "create_dir") { return 1; }
@@ -10612,6 +10619,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_sb_finish expects (Str), got (" + argtys + ")"};
     }
+    if (name == "str_sha256") {
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_sha256 expects (Str), got (" + argtys + ")"};
+    }
     if (name == "str_trim") {
         if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_trim expects (Str), got (" + argtys + ")"};
@@ -12124,6 +12135,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Sigs fs, Str exp) {
                         if (m.text == "read_bytes") { return ERes {.pos = a.pos, .ty = "List(Int)", .err = ""}; }
                         if (m.text == "sha256") { return ERes {.pos = a.pos, .ty = "List(Int)", .err = ""}; }
                         if (m.text == "append_bytes") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
+                        if (m.text == "write_hex" || m.text == "append_hex") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "write_bytes") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "is_dir") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "create_dir") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
@@ -13407,6 +13419,7 @@ Bool is_write_verb(Str family, Str verb) {
     if (family == "filesystem" && verb == "write_all") { return true; }
     if (family == "filesystem" && verb == "write_bytes") { return true; }
     if (family == "filesystem" && verb == "append_bytes") { return true; }
+    if (family == "filesystem" && (verb == "write_hex" || verb == "append_hex")) { return true; }
     if (family == "filesystem" && verb == "create_dir") { return true; }
     if (family == "process" && verb == "run") { return true; }
     return false;
@@ -14302,6 +14315,7 @@ Bool is_prov_verb_filesystem(Str v) {
     if (v == "read_bytes") { return true; }
     if (v == "sha256") { return true; }
     if (v == "append_bytes") { return true; }
+    if (v == "write_hex" || v == "append_hex") { return true; }
     if (v == "write_bytes") { return true; }
     if (v == "is_dir") { return true; }
     if (v == "create_dir") { return true; }
@@ -15487,6 +15501,7 @@ import "gcheck.resid";
 import "lower.resid";
 import "reduce.resid";
 import "greduce.resid";
+import "gart.resid";
 import "desugar.resid";
 import "stracc.resid";
 
@@ -15817,7 +15832,20 @@ Int prov_count_paths(List(Str) paths, Int i, Int acc) {
 List(Int) prov_file_hash(Str p) {
     List(Int) empty = [];
     if (!filesystem.exists(p)) { return empty; }
-    return filesystem.sha256(p);
+    List(Int) h = filesystem.sha256(p);
+    // An emptied sidecar (a cleared stale graph artifact) counts as absent.
+    if (h.len() == 32 && h[0] == 227 && h[1] == 176 && h[2] == 196 && h[3] == 66) { return empty; }
+    return h;
+}
+
+// The graph artifact's hash as a retained global (spec §33).
+Str graph_hash_ir(Str hex) {
+    return "@resid_graph_hash = constant [32 x i8] c\"" + graph_hash_esc(hex, 0, StrBuf()) + "\"\n@llvm.used = appending global [1 x ptr] [ptr @resid_graph_hash], section \"llvm.metadata\"\n";
+}
+
+Str graph_hash_esc(Str hex, Int i, StrBuf acc) {
+    if (i + 1 >= str_len(hex)) { return acc.finish(); }
+    return graph_hash_esc(hex, i + 2, acc.push_char(92).push(str_slice(hex, i, i + 2)));
 }
 
 // The Provenance map, keys in deterministic (length, then bytewise) order.
@@ -16208,9 +16236,14 @@ Int main() {
     // runs the text checker for differential testing.
     Bool textck  =  grflag || pick_flag(argc, "--text-check");
     // The checked graph is kept, packed, for graph reduction.
+    // Debug and check builds emit the graph artifact (spec §33), which
+    // carries the checker's type and def columns.
+    Bool gart = !textck && pick_opt(argc, "--profile", "release") != "release";
     KP ckp = if (textck) { KP {.g = kg_empty(), .id = -1, .pos = 0, .err = "off"} } else { kg_parse(rsrc) };
-    Int tc  =  if (textck) { check_program_map(rsrc, 0, ssg, if (grflag) { "" } else { rr.map }) } else { gk_run_parsed(ckp, rsrc, rr.map) };
-    List(Str) ckpk = resid_list_str_persist_copy([if (textck || tc != 0) { "" } else { gx_pack(ckp.g, ckp.id) }]);
+    GKC ckc = if (textck) { GKC {.status = 0, .ty = nil_list(), .def = ""} } else { gk_run_cols(ckp, rsrc, rr.map, gart) };
+    Int tc  =  if (textck) { check_program_map(rsrc, 0, ssg, if (grflag) { "" } else { rr.map }) } else { ckc.status };
+    List(Str) ckpk = resid_list_str_persist_copy([if (textck || tc != 0) { "" } else { gx_pack(ckp.g, ckp.id) }, ckc.def, IntToString(if (textck) { 0 } else { kg_count(ckp.g) })]);
+    List(Str) cktys = resid_list_str_persist_copy(ckc.ty);
     Int _tc_out = resid_bulk_pop();
     if (tc != 0) { return tc; }
     // `--graph-reduce-check`: the graph reducer (examples/greduce.resid)
@@ -16230,7 +16263,7 @@ Int main() {
         }
         Str gdiff0 = kg_tokdiff(trd.text, 0, gpr, 0, 0);
         // Then the string-accumulator rewrite on both.
-        KP gsa = gs_program(grd.g, grd.root, rsrc);
+        GSR gsa = gs_program(grd.g, grd.root, rsrc);
         Str gsp = kg_print(gsa.g, gsa.id);
         Str tsa = sa_rewrite(trd.text);
         Str gdiff1 = if (gdiff0 == "") { kg_tokdiff(tsa, 0, gsp, 0, 0) } else { "" };
@@ -16252,6 +16285,11 @@ Int main() {
     // `release` profile is the default -O2 build; `debug` builds at -O0.
     Str profile  =  pick_opt(argc, "--profile", "release");
     if (profile == "check") {
+        if (gart) {
+            Int _ga_in = resid_bulk_push();
+            Str gh = ga_write(out + ".resid-graph.cbor", gx_unpack(ckpk[0]), str_parse_int(ckpk[2]), false, "", cktys, ckpk[1], rsrc, rr.map, path);
+            Int _ga_out = resid_bulk_pop();
+        }
         println("check: ok");
         return 0;
     }
@@ -16274,8 +16312,8 @@ Int main() {
     Int _gr_in = resid_bulk_push();
     GXO grd = if (textred) { gx_no_out() } else { gx_run(if (ckpk[0] != "") { gx_unpack(ckpk[0]) } else { kg_parse(rsrc) }, rsrc, !noreduce) };
     // Str accumulators become in-place buffers (gs_program).
-    KP gsa0 = if (textred || grd.err != "") { KP {.g = grd.g, .id = -1, .pos = 0, .err = ""} } else { gs_program(grd.g, grd.root, rsrc) };
-    List(Str) gpk = resid_list_str_persist_copy([grd.notes, grd.err, if (gsa0.id < 0) { "" } else { gx_pack(gsa0.g, gsa0.id) }]);
+    GSR gsa0 = if (textred || grd.err != "") { GSR {.g = grd.g, .id = -1, .dv = ""} } else { gs_program(grd.g, grd.root, rsrc) };
+    List(Str) gpk = resid_list_str_persist_copy([grd.notes, grd.err, if (gsa0.id < 0) { "" } else { gx_pack(gsa0.g, gsa0.id) }, grd.dv + gsa0.dv]);
     Int _gr_out = resid_bulk_pop();
     if (gpk[0] != "") { print(gpk[0]); }
     if (gpk[1] != "") {
@@ -16349,8 +16387,19 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     List(Str) all1 = if (fn_index(fs, "main") >= 0) { all0.concat(main_entry_ir()) } else { all0 };
     List(Str) all = if (testmode) { all1.concat(td_main_ir(td.names, td.syms, td_module_name(path))) } else { all1 };
     Str doc  =  str_join(all, "\n") + "\n";
+    Str ll0  =  out + ".ll";
+    filesystem.write_all(ll0, doc);
+    Int _cg_out = resid_bulk_pop();
     Str ll  =  out + ".ll";
-    filesystem.write_all(ll, doc);
+    // The graph artifact (spec §33), after code generation's arena is
+    // freed, from the persisted residual pack; its hash goes into the binary.
+    Bool emitg = gart && !textred;
+    Int _ga_in = resid_bulk_push();
+    List(Str) ghk = resid_list_str_persist_copy([if (emitg) { ga_write(out + ".resid-graph.cbor", gx_unpack(gpk[2]), str_parse_int(ckpk[2]), true, gpk[3], cktys, ckpk[1], rsrc, rr.map, path) } else { "" }]);
+    Int _ga_out = resid_bulk_pop();
+    // A stale artifact from an earlier build must not be signed as this one's.
+    Bool gclr = if (!emitg && filesystem.exists(out + ".resid-graph.cbor")) { filesystem.write_all(out + ".resid-graph.cbor", "") } else { false };
+    Bool ghw = if (ghk[0] != "") { filesystem.append_bytes(ll, bytes_of(graph_hash_ir(ghk[0]))) } else { false };
     Str olevel  =  pick_olevel(argc, if (profile == "debug") { "-O0" } else { "-O2" });
     // Optimized builds compile the program and the runtime as one LTO unit,
     // so hot runtime helpers (list indexing, unboxing) inline into user loops.
@@ -16361,7 +16410,6 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
         println("clang failed");
         return 1;
     }
-    Int _cg_out = resid_bulk_pop();
     if (testmode) {
         // Format/filter reach the test binary through the environment: the
         // runtime reads RESID_TEST_FORMAT and RESID_TEST_FILTER. `env` is

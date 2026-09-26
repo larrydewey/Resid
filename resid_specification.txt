@@ -1131,7 +1131,8 @@ Trusted providers: filesystem, environment, git, args, process
 (all volatile by default).
 
 filesystem verbs: read_all, write_all, read_bytes, write_bytes,
-append_bytes (write), sha256 (a file's SHA-256 as 32 bytes,
+append_bytes (write), write_hex and append_hex (write; the
+bytes a hex string spells), sha256 (a file's SHA-256 as 32 bytes,
 computed without materializing its contents), exists, is_dir,
 list_dir, create_dir (write), open, read_handle, close.
 
@@ -1181,6 +1182,21 @@ records the content hash of its graph artifact, so a
 debugger can check that the two match.
 Debug and check profiles always emit the graph. Release
 builds may omit it; if they do, they omit the hash too.
+The hash is the global `resid_graph_hash`, 32 bytes.
+
+In the graph artifact, a node's knowledge is `known` for
+literals and for literal structure over them (negation,
+parentheses, casts, lists, `Some`), `effect` for a node
+that performs an effect itself, and `residual` otherwise.
+An effect is named `stdout` or `stderr` for printing and
+`family.verb` for a provider call, whose family is also
+the node's capability. Derive rules name the reduction
+step: fold, known (a binding's value), beta, eval (a pure
+builtin), select (an arm chosen by a known condition),
+unwrap, interpolate, concat, specialize, comptime,
+accumulate (the in-place string rewrite) and rebuild (a
+node copied because a child was reduced). A derived node
+has the type and def of the node it derives from.
 
 33.1  Signed Provenance
 
@@ -1589,6 +1605,9 @@ string or a list by appending in place into one growing
 buffer. Each builder value must be used exactly once, which
 is what makes the in-place append unobservable.
   - filesystem.sha256 and filesystem.append_bytes (§32).
+  - filesystem.write_hex and append_hex (§32); the graph
+    artifact's knowledge states, effect names and derive
+    rules, and the `resid_graph_hash` global (§33).
 
 
 ==================================================

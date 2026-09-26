@@ -2290,6 +2290,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_sb_finish expects (Str), got (" + argtys + ")"};
     }
+    if (name == "str_sha256") {
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_sha256 expects (Str), got (" + argtys + ")"};
+    }
     if (name == "str_trim") {
         if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_trim expects (Str), got (" + argtys + ")"};
@@ -3810,6 +3814,7 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
                         if (m.text == "read_bytes") { return ERes {.pos = a.pos, .ty = "List(Int)", .err = ""}; }
                         if (m.text == "sha256") { return ERes {.pos = a.pos, .ty = "List(Int)", .err = ""}; }
                         if (m.text == "append_bytes") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
+                        if (m.text == "write_hex" || m.text == "append_hex") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "write_bytes") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "is_dir") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
                         if (m.text == "create_dir") { return ERes {.pos = a.pos, .ty = "Bool", .err = ""}; }
@@ -5128,6 +5133,7 @@ Bool is_write_verb(Str family, Str verb) {
     if (family == "filesystem" && verb == "write_all") { return true; }
     if (family == "filesystem" && verb == "write_bytes") { return true; }
     if (family == "filesystem" && verb == "append_bytes") { return true; }
+    if (family == "filesystem" && (verb == "write_hex" || verb == "append_hex")) { return true; }
     if (family == "filesystem" && verb == "create_dir") { return true; }
     if (family == "process" && verb == "run") { return true; }
     return false;
@@ -6057,6 +6063,7 @@ Bool is_prov_verb_filesystem(Str v) {
     if (v == "read_bytes") { return true; }
     if (v == "sha256") { return true; }
     if (v == "append_bytes") { return true; }
+    if (v == "write_hex" || v == "append_hex") { return true; }
     if (v == "write_bytes") { return true; }
     if (v == "is_dir") { return true; }
     if (v == "create_dir") { return true; }
