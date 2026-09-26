@@ -14,7 +14,8 @@
 type GS = { Int steps; Int depth; Int fuel; Map(Str, Str) memo; List(Int) specs; Int nspec; List(Str) hist; Str notes; Kg g; };
 // Function table (RdT) over the graph: fbody is each body block, cpred the
 // predicate node of each constraint type in cts.
-type GXT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; List(Str) cts; List(Int) cpred; List(Str) fann; Str src; };
+// rds: the placeholder state reduce.resid's helpers are called with.
+type GXT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; List(Str) cts; List(Int) cpred; List(Str) fann; Str src; RdS rds; };
 // A reduced expression (RdV): r is the residual node (the original when
 // !ch); bs are an expression block's kept bindings, before r.
 type GV = { Bool k; Str v; Str ty; Int r; Bool ch; Bool bad; List(Int) bs; Str sx; Int px; GS st; };
@@ -132,13 +133,13 @@ RdS gx_rds0() {
     return RdS {.steps = 0, .depth = 0, .fuel = 0, .memo = m, .specs = "", .nspec = 0, .hist = nh, .notes = ""};
 }
 
-RdV gx_rdv(GV x) {
-    return RdV {.k = x.k, .v = x.v, .ty = x.ty, .r = "", .ch = x.ch, .bad = false, .bd = false, .sx = "", .px = "", .pos = 0, .st = gx_rds0()};
+RdV gx_rdv(GV x, RdS rs) {
+    return RdV {.k = x.k, .v = x.v, .ty = x.ty, .r = "", .ch = x.ch, .bad = false, .bd = false, .sx = "", .px = "", .pos = 0, .st = rs};
 }
 
-RdA gx_rda(GXA a) {
+RdA gx_rda(GXA a, RdS rs) {
     List(Str) nr = [];
-    return RdA {.vs = a.vs, .ts = a.ts, .rs = nr, .allk = a.allk, .ch = a.ch, .named = a.named, .bad = a.bad, .pos = 0, .st = gx_rds0()};
+    return RdA {.vs = a.vs, .ts = a.ts, .rs = nr, .allk = a.allk, .ch = a.ch, .named = a.named, .bad = a.bad, .pos = 0, .st = rs};
 }
 
 GS gx_st_memo(GS st, Str key, Str val) {
@@ -335,7 +336,7 @@ GV gx_bin(GXT ft, Int id, RdE env, GS st) {
     if (decided) { return gx_folded(l.v, "Bool", id, true, l.st); }
     GV r = gx_expr(ft, gx_kid(st, id, 1), env, l.st);
     if (r.bad) { return r; }
-    return gx_apply(op, id, l, r);
+    return gx_apply(ft, op, id, l, r);
 }
 
 // `(l op r)` over residual operands.
@@ -344,11 +345,11 @@ GXN gx_pbin(GS st, Str op, Int l, Int r, Int like) {
     return gx_paren(b.st, b.id, like);
 }
 
-GV gx_apply(Str op, Int id, GV l, GV r) {
+GV gx_apply(GXT ft, Str op, Int id, GV l, GV r) {
     Bool och = l.ch || r.ch;
     GXN rb = if (och) { gx_pbin(r.st, op, l.r, r.r, id) } else { gx_n(r.st, id) };
     if (l.k && r.k) {
-        RdV x = rd_fold(op, gx_rdv(l), gx_rdv(r), "", 0, gx_rds0());
+        RdV x = rd_fold(op, gx_rdv(l, ft.rds), gx_rdv(r, ft.rds), "", 0, ft.rds);
         if (x.k) { return gx_folded(x.v, x.ty, rb.id, true, rb.st); }
         return gx_unk(rb.id, true, rb.st);
     }
@@ -489,7 +490,7 @@ GV gx_call(GXT ft, Int id, RdE env, GS st) {
         if (!a.ch) { return gx_with_r(sv, id, false); }
         return sv;
     }
-    RdV bv = rd_builtin(name, gx_rda(a), "", 0, gx_rds0());
+    RdV bv = rd_builtin(name, gx_rda(a, ft.rds), "", 0, ft.rds);
     if (bv.k) { return gx_folded(bv.v, bv.ty, cr.id, a.ch, s1); }
     if (ufi < 0) { return gx_unk(cr.id, a.ch, s1); }
     return gx_call_user(ft, ufi, a, cr.id, s1);
@@ -702,13 +703,17 @@ GV gx_match(GXT ft, Int id, RdE env, GS st) {
     Str et = rd_inner(sc.ty, "Option(");
     Str payload = str_slice(sc.v, 1, str_len(sc.v));
     GV a1 = gx_arm(ft, gx_kid(st, id, 1), issome, payload, et, env, sc.st);
-    if (a1.bad) { return none; }
+    // A discarded arm's state is dropped but its graph kept, so appends
+    // stay on the newest version.
+    GV none1 = gx_unk(id, false, gx_with_g(sc.st, a1.st.g));
+    if (a1.bad) { return none1; }
     if (a1.k) { return gx_folded(a1.v, a1.ty, id, true, a1.st); }
-    if (gx_nk(st, id) < 3) { return none; }
+    if (gx_nk(st, id) < 3) { return none1; }
     GV a2 = gx_arm(ft, gx_kid(st, id, 2), issome, payload, et, env, a1.st);
-    if (a2.bad) { return none; }
+    GV none2 = gx_unk(id, false, gx_with_g(sc.st, a2.st.g));
+    if (a2.bad) { return none2; }
     if (a2.k) { return gx_folded(a2.v, a2.ty, id, true, a2.st); }
-    return none;
+    return none2;
 }
 
 // One arm; known only when it is the one the scrutinee selects.
@@ -809,7 +814,7 @@ GV gx_call_user(GXT ft, Int fi, GXA a, Int orig, GS st) {
     Int bk = ft.fbody[fi];
     if (bk < 0 || st.fuel <= 0 || st.depth >= rd_max_depth()) { return none; }
     Str name = ft.fnames[fi];
-    Str key = rd_memo_key(name, gx_rda(a));
+    Str key = rd_memo_key(name, gx_rda(a, ft.rds));
     Str hit = st.memo.get(key) else { "" };
     if (hit == "!" || hit == "?") { return none; }
     if (hit != "" && hit != "~") {
@@ -819,7 +824,7 @@ GV gx_call_user(GXT ft, Int fi, GXA a, Int orig, GS st) {
     List(Str) pns = rd_split(ft.fpns[fi], ",");
     List(Str) pts = rd_split(ft.fpts[fi], "|");
     if (pns.len() != a.ts.len()) { return none; }
-    RdE env = rd_bind_params(pns, pts, gx_rda(a), 0, rd_env_empty());
+    RdE env = rd_bind_params(pns, pts, gx_rda(a, ft.rds), 0, rd_env_empty());
     if (env.ns.len() == 1 && env.ns[0] == "") { return none; }
     Str rty = rd_norm_ty(ft.frets[fi]);
     Int steps0 = if (st.depth == 0) { 0 } else { st.steps };
@@ -1336,7 +1341,7 @@ GXT gx_table_empty(Str src) {
     Map(Str, Int) e = {"__EMPTY__": -1};
     List(Str) es = [];
     List(Int) ei = [];
-    return GXT {.fnames = es, .fpns = es, .fpts = es, .frets = es, .fbody = ei, .sts = es, .sfs = es, .fidx = e, .cts = es, .cpred = ei, .fann = es, .src = src};
+    return GXT {.fnames = es, .fpns = es, .fpts = es, .frets = es, .fbody = ei, .sts = es, .sfs = es, .fidx = e, .cts = es, .cpred = ei, .fann = es, .src = src, .rds = gx_rds0()};
 }
 
 // The generic parameters of a type declaration ("" when none).
@@ -1367,20 +1372,20 @@ GXT gx_collect(Kg g, Int unit, Int i, GXT ft) {
     Int d = kg_kid(g, unit, i);
     KN n = g.ns[d];
     if (n.kind == "struct_t" && gx_gparams(n.aux) == "") {
-        GXT f1 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts.concat([n.text]), .sfs = ft.sfs.concat([gx_fields(g, d, 0, "")]), .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src};
+        GXT f1 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts.concat([n.text]), .sfs = ft.sfs.concat([gx_fields(g, d, 0, "")]), .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds};
         return gx_collect(g, unit, i + 1, f1);
     }
     if ((n.kind == "ctype_t" || n.kind == "cwhere_t") && gx_gparams(n.aux) == "") {
         Int pk = kg_kid(g, d, 1);
         Str ctext = str_trim(str_slice(ft.src, g.ns[pk].sp, g.ns[pk].ep));
         Str ent = n.text + str_from_code(31) + g.ns[kg_kid(g, d, 0)].text + str_from_code(31) + ctext;
-        GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts.concat([ent]), .cpred = ft.cpred.concat([pk]), .fann = ft.fann, .src = ft.src};
+        GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts.concat([ent]), .cpred = ft.cpred.concat([pk]), .fann = ft.fann, .src = ft.src, .rds = ft.rds};
         return gx_collect(g, unit, i + 1, f2);
     }
     if (n.kind == "fn") {
         Int nk = n.nk;
         List(Str) fa = if (str_contains(n.aux, "@")) { ft.fann.concat([n.text]) } else { ft.fann };
-        GXT f3 = GXT {.fnames = ft.fnames.concat([n.text]), .fpns = ft.fpns.concat([gx_param_list(g, d, 1, nk - 1, false, ",", "")]), .fpts = ft.fpts.concat([gx_param_list(g, d, 1, nk - 1, true, "|", "")]), .frets = ft.frets.concat([g.ns[kg_kid(g, d, 0)].text]), .fbody = ft.fbody.concat([kg_kid(g, d, nk - 1)]), .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx.insert(n.text, ft.fnames.len()), .cts = ft.cts, .cpred = ft.cpred, .fann = fa, .src = ft.src};
+        GXT f3 = GXT {.fnames = ft.fnames.concat([n.text]), .fpns = ft.fpns.concat([gx_param_list(g, d, 1, nk - 1, false, ",", "")]), .fpts = ft.fpts.concat([gx_param_list(g, d, 1, nk - 1, true, "|", "")]), .frets = ft.frets.concat([g.ns[kg_kid(g, d, 0)].text]), .fbody = ft.fbody.concat([kg_kid(g, d, nk - 1)]), .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx.insert(n.text, ft.fnames.len()), .cts = ft.cts, .cpred = ft.cpred, .fann = fa, .src = ft.src, .rds = ft.rds};
         return gx_collect(g, unit, i + 1, f3);
     }
     return gx_collect(g, unit, i + 1, ft);
@@ -1414,9 +1419,14 @@ RdE gx_param_env(Kg g, Int d, Int i, Int n, RdE env) {
 
 // The residual program: every function reduced, specializations appended.
 pub GXO gx_reduce_program(Str src) {
-    Int _mm = resid_mem_mark();
     KP p = kg_parse(src);
     if (p.err != "") { return GXO {.g = p.g, .root = -1, .nred = 0, .err = "graph-reduce: parse error: " + p.err, .notes = ""}; }
+    return gx_reduce_graph(p, src);
+}
+
+// The same over the program's parsed graph.
+pub GXO gx_reduce_graph(KP p, Str src) {
+    Int _mm = resid_mem_mark();
     GXT ft = gx_collect(p.g, p.id, 0, gx_table_empty(src));
     Map(Str, Str) memo = {"__EMPTY__": "!"};
     List(Str) nh = [];
@@ -1426,4 +1436,304 @@ pub GXO gx_reduce_program(Str src) {
     Str err = r.st.memo.get("__ERR__") else { "" };
     GXN u = gx_re(r.st, p.id, r.decls.concat(r.st.specs));
     return GXO {.g = u.st.g, .root = u.id, .nred = r.nred, .err = err, .notes = r.st.notes};
+}
+
+// ─── In-place string accumulators (examples/stracc.resid on the graph) ─
+
+// Uses of p (ident tokens not after `.`), accepted uses, tail-call sites;
+// bad: a lambda, spawn or f-string mentioning p.
+type GSC = { Int uses; Int oks; Int sites; Bool bad; };
+
+GSC gs_c(Int uses, Int oks, Int sites, Bool bad) { return GSC {.uses = uses, .oks = oks, .sites = sites, .bad = bad}; }
+
+Int gs_hits(KN n, Str p) {
+    Str k = n.kind;
+    if (k == "ref" || k == "call" || k == "named" || k == "struct" || k == "destr" || k == "name" || k == "lparam" || k == "param" || k == "for") { return if (n.text == p) { 1 } else { 0 }; }
+    if (k == "bind" || k == "rbind") { return if (n.text == p) { 1 } else { 0 }; }
+    if (k == "arm" || k == "pat" || k == "letpat") {
+        Int a = if (n.text == p) { 1 } else { 0 };
+        return if (n.aux == p) { a + 1 } else { a };
+    }
+    if (k == "lit") { return if (n.aux == "bool" && n.text == p) { 1 } else { 0 }; }
+    if (k == "ty") { return if (rd_uses(n.text, p)) { 1 } else { 0 }; }
+    if (k == "rt") { return if (p == "rt") { 1 } else { 0 }; }
+    return 0;
+}
+
+GSC gs_count(Kg g, Int id, Str p, GSC acc) {
+    KN n = g.ns[id];
+    if (n.kind == "lambda" || n.kind == "spawn") { return gs_c(acc.uses, acc.oks, acc.sites, true); }
+    if (n.kind == "fstr") {
+        if (str_contains(str_sb_finish(kg_pr(g, id, str_sb_new())), p)) { return gs_c(acc.uses, acc.oks, acc.sites, true); }
+        return acc;
+    }
+    return gs_count_kids(g, id, 0, p, gs_c(acc.uses + gs_hits(n, p), acc.oks, acc.sites, acc.bad));
+}
+
+GSC gs_count_kids(Kg g, Int id, Int i, Str p, GSC acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return gs_count_kids(g, id, i + 1, p, gs_count(g, kg_kid(g, id, i), p, acc));
+}
+
+// Leaves of a left-leaning `+` chain.
+List(Int) gs_chain(Kg g, Int id, List(Int) acc) {
+    KN n = g.ns[id];
+    if (n.kind == "bin" && n.text == "+") { return gs_chain(g, kg_kid(g, id, 0), [kg_kid(g, id, 1)].concat(acc)); }
+    return [id].concat(acc);
+}
+
+// Does the node print a token that ends a plain `+` chain at its depth 0
+// (sa_chain_breaker)?
+Bool gs_brk(Kg g, Int id) {
+    KN n = g.ns[id];
+    Str k = n.kind;
+    if (k == "tern" || k == "ifx" || k == "orelse" || k == "try") { return true; }
+    if (k == "bin") {
+        if (sa_chain_breaker(n.text)) { return true; }
+        return gs_brk(g, kg_kid(g, id, 0)) || gs_brk(g, kg_kid(g, id, 1));
+    }
+    if (k == "un") { return n.text == "-" || gs_brk(g, kg_kid(g, id, 0)); }
+    if (k == "cast") { return gs_brk(g, kg_kid(g, id, 1)); }
+    if (k == "rt" || k == "mcall" || k == "field" || k == "index" || k == "slice" || k == "callv") { return gs_brk(g, kg_kid(g, id, 0)); }
+    return false;
+}
+
+Bool gs_brk_any(Kg g, List(Int) ids, Int i) {
+    if (i >= ids.len()) { return false; }
+    if (gs_brk(g, ids[i])) { return true; }
+    return gs_brk_any(g, ids, i + 1);
+}
+
+// `return f(..., p + e1 + ... + en, ...);` with p only as the leading
+// operand of argument k (sa_site).
+Bool gs_site(Kg g, Str src, Int ret, Str f, Str p, Int k) {
+    if (g.ns[ret].nk != 1) { return false; }
+    Int c = kg_kid(g, ret, 0);
+    KN cn = g.ns[c];
+    if (cn.kind != "call" || cn.text != f || cn.nk <= k) { return false; }
+    Int a = kg_kid(g, c, k);
+    if (g.ns[a].kind == "named") { return false; }
+    List(Int) none = [];
+    List(Int) ls = gs_chain(g, a, none);
+    if (ls.len() < 2) { return false; }
+    KN h = g.ns[ls[0]];
+    if (h.kind != "ref" || h.text != p) { return false; }
+    if (gs_brk_any(g, ls, 1)) { return false; }
+    // A comment inside the argument could swallow the rewritten text.
+    Str atext = str_slice(src, g.ns[a].sp, g.ns[a].ep);
+    if (str_contains(atext, "//") || str_contains(atext, "/*")) { return false; }
+    GSC rest = gs_count_list(g, ls, 1, p, gs_c(0, 0, 0, false));
+    return !rest.bad && rest.uses == 0;
+}
+
+GSC gs_count_list(Kg g, List(Int) ids, Int i, Str p, GSC acc) {
+    if (i >= ids.len()) { return acc; }
+    return gs_count_list(g, ids, i + 1, p, gs_count(g, ids[i], p, acc));
+}
+
+// Accepted uses: `return p;` and qualifying tail-call sites (sa_accept).
+GSC gs_accept(Kg g, Str src, Int id, Str f, Str p, Int k, GSC acc) {
+    KN n = g.ns[id];
+    if (n.kind == "ret" && n.nk == 1) {
+        Int e = kg_kid(g, id, 0);
+        if (g.ns[e].kind == "ref" && g.ns[e].text == p) { return gs_c(acc.uses, acc.oks + 1, acc.sites, acc.bad); }
+        if (gs_site(g, src, id, f, p, k)) { return gs_c(acc.uses, acc.oks + 1, acc.sites + 1, acc.bad); }
+    }
+    return gs_accept_kids(g, src, id, 0, f, p, k, acc);
+}
+
+GSC gs_accept_kids(Kg g, Str src, Int id, Int i, Str f, Str p, Int k, GSC acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return gs_accept_kids(g, src, id, i + 1, f, p, k, gs_accept(g, src, kg_kid(g, id, i), f, p, k, acc));
+}
+
+// Index of the first Str parameter that is a sound accumulator, or -1.
+Int gs_pick(Kg g, Str src, Int fnid, Int bk, Int k) {
+    Int np = g.ns[fnid].nk - 2;
+    if (k >= np) { return -1; }
+    Int pa = kg_kid(g, fnid, k + 1);
+    if (g.ns[kg_kid(g, pa, 0)].text == "Str") {
+        Str p = g.ns[pa].text;
+        Str f = g.ns[fnid].text;
+        GSC all = gs_count(g, bk, p, gs_c(0, 0, 0, false));
+        if (!all.bad) {
+            GSC ok = gs_accept(g, src, bk, f, p, k, gs_c(0, 0, 0, false));
+            if (ok.sites > 0 && ok.oks == all.uses) { return k; }
+        }
+    }
+    return gs_pick(g, src, fnid, bk, k + 1);
+}
+
+KP gs_add(Kg g, Str kind, Str text, List(Int) ks, Int like) {
+    return kg_add(g, kind, text, "", ks, g.ns[like].sp, g.ns[like].ep);
+}
+
+// The accumulator argument as nested appends; `IntToString(e)` is
+// formatted straight into the buffer.
+KP gs_nest(Kg g, List(Int) ls, Int i, Int acc, Int like) {
+    if (i >= ls.len()) { return KP {.g = g, .id = acc, .pos = 0, .err = ""}; }
+    Int l = ls[i];
+    KN ln = g.ns[l];
+    Bool its = ln.kind == "call" && ln.text == "IntToString";
+    KP c = if (its) { gs_add(g, "call", "resid_sacc_append_int", [acc].concat(gx_kids(g, l)), like) } else { gs_add(g, "call", "resid_sacc_append", [acc, l], like) };
+    return gs_nest(c.g, ls, i + 1, c.id, like);
+}
+
+// The worker body: every qualifying site renamed, its accumulator
+// argument turned into appends (sa_body).
+KP gs_rw(Kg g, Str src, Int id, Str f, Str p, Int k) {
+    KN n = g.ns[id];
+    if (n.kind == "ret" && gs_site(g, src, id, f, p, k)) {
+        Int c = kg_kid(g, id, 0);
+        List(Int) args = gx_kids(g, c);
+        List(Int) none = [];
+        List(Int) ls = gs_chain(g, args[k], none);
+        KP nest = gs_nest(g, ls, 1, ls[0], args[k]);
+        List(Int) args2 = args[0..k].concat([nest.id]).concat(args[k + 1..args.len()]);
+        KP call = gs_add(nest.g, "call", f + "__sacc", args2, c);
+        return gs_add(call.g, "ret", "", [call.id], id);
+    }
+    if (n.nk == 0) { return KP {.g = g, .id = id, .pos = 0, .err = ""}; }
+    List(Int) none2 = [];
+    KL ks = gs_rw_kids(g, src, id, 0, f, p, k, none2);
+    if (gx_same(gx_kids(ks.g, id), ks.ids, 0)) { return KP {.g = ks.g, .id = id, .pos = 0, .err = ""}; }
+    return kg_add(ks.g, n.kind, n.text, n.aux, ks.ids, n.sp, n.ep);
+}
+
+KL gs_rw_kids(Kg g, Str src, Int id, Int i, Str f, Str p, Int k, List(Int) acc) {
+    if (i >= g.ns[id].nk) { return KL {.g = g, .ids = acc, .pos = 0, .err = ""}; }
+    KP r = gs_rw(g, src, kg_kid(g, id, i), f, p, k);
+    return gs_rw_kids(r.g, src, id, i + 1, f, p, k, acc.concat([r.id]));
+}
+
+// Wrapper arguments: the parameters, p_k through resid_sacc_from.
+KL gs_wargs(Kg g, Int fnid, Int k, Int i, List(Int) acc) {
+    if (i >= g.ns[fnid].nk - 2) { return KL {.g = g, .ids = acc, .pos = 0, .err = ""}; }
+    Int pa = kg_kid(g, fnid, i + 1);
+    List(Int) none = [];
+    KP r = gs_add(g, "ref", g.ns[pa].text, none, pa);
+    KP a = if (i == k) { gs_add(r.g, "call", "resid_sacc_from", [r.id], pa) } else { r };
+    return gs_wargs(a.g, fnid, k, i + 1, acc.concat([a.id]));
+}
+
+type GSO = { Kg g; List(Int) decls; List(Int) tail; Int n; };
+
+// Top-level `Str f(...)` functions with an accumulator parameter become a
+// renamed worker in place plus a wrapper at the end (sa_walk).
+GSO gs_walk(Str src, Int unit, Int i, GSO acc) {
+    Kg g = acc.g;
+    if (i >= g.ns[unit].nk) { return acc; }
+    Int d = kg_kid(g, unit, i);
+    KN n = g.ns[d];
+    Bool cand = n.kind == "fn" && g.ns[kg_kid(g, d, 0)].text == "Str";
+    Int bk = if (cand) { kg_kid(g, d, n.nk - 1) } else { -1 };
+    Int k = if (cand) { gs_pick(g, src, d, bk, 0) } else { -1 };
+    if (k < 0) { return gs_walk(src, unit, i + 1, GSO {.g = g, .decls = acc.decls.concat([d]), .tail = acc.tail, .n = acc.n}); }
+    Str f = n.text;
+    KP body = gs_rw(g, src, bk, f, g.ns[kg_kid(g, d, k + 1)].text, k);
+    List(Int) ks = gx_kids(body.g, d);
+    KP worker = kg_add(body.g, "fn", f + "__sacc", n.aux, ks[0..n.nk - 1].concat([body.id]), n.sp, n.ep);
+    List(Int) none = [];
+    KL wa = gs_wargs(worker.g, d, k, 0, none);
+    KP wc = gs_add(wa.g, "call", f + "__sacc", wa.ids, d);
+    KP wr = gs_add(wc.g, "ret", "", [wc.id], d);
+    KP wb = gs_add(wr.g, "block", "", [wr.id], d);
+    KP wf = kg_add(wb.g, "fn", f, "", ks[0..n.nk - 1].concat([wb.id]), n.sp, n.ep);
+    return gs_walk(src, unit, i + 1, GSO {.g = wf.g, .decls = acc.decls.concat([worker.id]), .tail = acc.tail.concat([wf.id]), .n = acc.n + 1});
+}
+
+// Rewrite the residual program's string accumulators; the unit is the
+// same node when none qualifies.
+pub KP gs_program(Kg g, Int unit, Str src) {
+    List(Int) none = [];
+    GSO o = gs_walk(src, unit, 0, GSO {.g = g, .decls = none, .tail = none, .n = 0});
+    if (o.n == 0) { return KP {.g = g, .id = unit, .pos = 0, .err = ""}; }
+    KN u = o.g.ns[unit];
+    return kg_add(o.g, "unit", "", "", o.decls.concat(o.tail), u.sp, u.ep);
+}
+
+// No graph (the text pipeline runs instead).
+pub GXO gx_no_out() {
+    return GXO {.g = kg_empty(), .root = -1, .nred = 0, .err = "", .notes = ""};
+}
+
+// The residual of a parsed program (as parsed with `--no-reduce`).
+pub GXO gx_run(KP p, Str src, Bool reduce) {
+    if (p.err != "") { return GXO {.g = p.g, .root = -1, .nred = 0, .err = "graph-reduce: parse error: " + p.err, .notes = ""}; }
+    if (!reduce) { return GXO {.g = p.g, .root = p.id, .nred = 0, .err = "", .notes = ""}; }
+    return gx_reduce_graph(p, src);
+}
+
+// ─── Packing (moving the residual out of the reducer's arena) ─────────
+
+// Nodes 0..root (kids precede parents, so the root reaches no later
+// node) in one string: per node kind, text and aux as `len:bytes`, then
+// sp, ep, the kid count and the kid ids, each `n,`.
+pub Str gx_pack(Kg g, Int root) {
+    return gx_pack_at(g, 0, root, StrBuf());
+}
+
+Str gx_pack_at(Kg g, Int id, Int root, StrBuf acc) {
+    if (id > root) { return acc.finish(); }
+    KN n = g.ns[id];
+    StrBuf b1 = gx_pk_s(gx_pk_s(gx_pk_s(acc, n.kind), n.text), n.aux);
+    StrBuf b2 = gx_pk_i(gx_pk_i(gx_pk_i(b1, n.sp), n.ep), n.nk);
+    return gx_pack_at(g, id + 1, root, gx_pack_ids(g, id, 0, b2));
+}
+
+StrBuf gx_pk_s(StrBuf b, Str x) { return gx_pk_digits(b, str_len(x)).push_char(':').push(x); }
+StrBuf gx_pk_i(StrBuf b, Int x) { return gx_pk_digits(b, x).push_char(','); }
+
+// Decimal digits of x >= 0, straight into the buffer.
+StrBuf gx_pk_digits(StrBuf b, Int x) {
+    if (x < 10) { return b.push_char(48 + x); }
+    return gx_pk_digits(b, x / 10).push_char(48 + x % 10);
+}
+
+StrBuf gx_pack_ids(Kg g, Int id, Int i, StrBuf acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return gx_pack_ids(g, id, i + 1, gx_pk_i(acc, kg_kid(g, id, i)));
+}
+
+// The packed graph rebuilt; the root is the last node.
+pub KP gx_unpack(Str pk) {
+    return gx_unpack_at(pk, 0, str_len(pk), KP {.g = kg_empty(), .id = -1, .pos = 0, .err = ""});
+}
+
+KP gx_unpack_at(Str pk, Int pos, Int n, KP acc) {
+    if (pos >= n) { return acc; }
+    GXI l1 = gx_int_at(pk, pos, 0);
+    Int e1 = l1.pos + l1.v;
+    GXI l2 = gx_int_at(pk, e1, 0);
+    Int e2 = l2.pos + l2.v;
+    GXI l3 = gx_int_at(pk, e2, 0);
+    Int e3 = l3.pos + l3.v;
+    GXI sp = gx_int_at(pk, e3, 0);
+    GXI ep = gx_int_at(pk, sp.pos, 0);
+    GXI nk = gx_int_at(pk, ep.pos, 0);
+    GXL2 ks = gx_unpack_ids(pk, nk.pos, nk.v, ListBuf());
+    KP p = kg_add(acc.g, str_slice(pk, l1.pos, e1), gx_sl(pk, l2.pos, e2), gx_sl(pk, l3.pos, e3), ks.ids, sp.v, ep.v);
+    return gx_unpack_at(pk, ks.pos, n, p);
+}
+
+Str gx_sl(Str s, Int a, Int b) {
+    if (a == b) { return ""; }
+    return str_slice(s, a, b);
+}
+
+// A decimal from pos up to its `,` or `:`, and the position after that.
+type GXI = { Int v; Int pos; };
+
+GXI gx_int_at(Str pk, Int pos, Int acc) {
+    Int c = str_char_at(pk, pos);
+    if (c < 48 || c > 57) { return GXI {.v = acc, .pos = pos + 1}; }
+    return gx_int_at(pk, pos + 1, acc * 10 + c - 48);
+}
+
+type GXL2 = { List(Int) ids; Int pos; };
+
+GXL2 gx_unpack_ids(Str pk, Int pos, Int k, ListBuf(Int) acc) {
+    if (k == 0) { return GXL2 {.ids = acc.finish(), .pos = pos}; }
+    GXI x = gx_int_at(pk, pos, 0);
+    return gx_unpack_ids(pk, x.pos, k - 1, acc.push(x.v));
 }

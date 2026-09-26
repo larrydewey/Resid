@@ -11,8 +11,10 @@
 
 // Lowering context: graph, the source it was parsed from, signatures, and
 // where the innermost sandbox body starts (the text codegen numbers lambda,
-// spawn and assertion symbols by position within that body).
-type LW = { Kg g; Str src; Funcs fs; Int base; };
+// spawn and assertion symbols by position within that body). rg: the graph
+// is the reducer's residual, whose specialized functions share nodes with
+// their originals.
+type LW = { Kg g; Str src; Funcs fs; Int base; Bool rg; };
 // Program walk result: the module so far, functions lowered from the graph
 // vs by the text fallback, and why each fallback happened.
 type LP = { PG pg; Int nodes; Int texts; Map(Str, Int) why; };
@@ -2022,10 +2024,8 @@ PG lw_fn(LW w, Int d, PG g) {
     List(Str) caps = if (sandboxed) { str_split(ceiling, ",") } else { nil_list() };
     CapPP pp1 = cap_maybe_prologue(sandboxed, caps, CapPP {.lines = dl2, .glines = nil_list(), .n = 0});
     EnvBuild eb0 = build_env_with_growbuf(nl, tyl, fs.growable, name, pp1.lines, 0, nil_list());
-    // The linear map/set mask still scans the body text (lin_mask_fn).
-    Tok ntok = lex_tok(w.src, w.g.ns[lw_kid(w, d, 0)].ep);
-    Tok open = lex_tok(w.src, ntok.pos);
-    Str lmask = if (is_main || !lin_any_mapset(tyl, 0)) { "" } else { lin_mask_fn(w.src, open.pos, nl, tyl, name) };
+    // The linear map/set mask scans the printed body (lin_mask).
+    Str lmask = if (is_main || !lin_any_mapset(tyl, 0)) { "" } else { lw_lin_mask(w, lw_kid(w, d, n - 1), nl, tyl, name) };
     EnvBuild eb = EnvBuild {.lines = eb0.lines, .env = lin_env(lmask, eb0.env, 0)};
     Int body_start = eb.lines.len();
     ST gb = ST {.pos = 0, .dead = false, .err = "", .env = eb.env, .glines = pp1.glines, .hlines = g.hlines, .lines = eb.lines, .tmp = g.tmp, .lbl = g.lbl, .rety = rbase};
@@ -2055,7 +2055,27 @@ PG lw_fn(LW w, Int d, PG g) {
     return PG {.pos = 0, .err = "", .glines = g.glines.concat(persisted_own_glines), .hlines = g.hlines, .lines = g.lines.concat(persisted_own_lines), .tmp = final_tmp, .lbl = final_lbl};
 }
 
+Str lw_lin_mask(LW w, Int body, List(Str) nl, List(Str) tyl, Str name) {
+    Str b = str_sb_finish(kg_pr(w.g, body, str_sb_new()));
+    return lin_mask(b, nl, tyl, name, lin_has_closure(b, 0), 0, "");
+}
+
 // ─── Program walk ───────────────────────────────────────────────────
+
+// In a residual graph, symbols numbered by position in a specialized
+// function `f__rsN` are offset by N * 10^9, apart from its original's.
+Int lw_spec_off(Str name) {
+    Int at = str_index_of(name, "__rs", 0);
+    if (at < 0) { return 0; }
+    return lw_digits(name, at + 4, 0) * 1000000000;
+}
+
+Int lw_digits(Str s, Int i, Int acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    if (c < 48 || c > 57) { return acc; }
+    return lw_digits(s, i + 1, acc * 10 + c - 48);
+}
 
 // The fallback reason's first word pair ("unsupported: call foo" -> "call").
 Str lw_reason(Str err) {
@@ -2075,22 +2095,25 @@ LP lw_decls(LW w, Int id, Int i, LP acc) {
         Tok st = lex_tok(w.src, w.g.ns[d].sp);
         Tok lp = lex_tok(w.src, st.pos);
         Tok lb = lex_tok(w.src, imp_close_paren(w.src, lp.pos, 0));
-        LW wi = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = lb.pos};
+        LW wi = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = lb.pos, .rg = w.rg};
         return lw_decls(w, id, i + 1, lw_decls(wi, d, 0, acc));
     }
     if (kind != "fn") { return lw_decls(w, id, i + 1, acc); }
-    PG r = lw_fn(w, d, acc.pg);
+    Int off = if (w.rg) { lw_spec_off(w.g.ns[d].text) } else { 0 };
+    LW wf = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = w.base - off, .rg = w.rg};
+    PG r = lw_fn(wf, d, acc.pg);
     if (r.err == "") { return lw_decls(w, id, i + 1, lp_of(r, acc.nodes + 1, acc.texts, acc.why)); }
-    if (!lw_is_unsup(r.err)) { return lp_of(r, acc.nodes, acc.texts, acc.why); }
+    // A residual graph has no source text to fall back on.
+    if (!lw_is_unsup(r.err) || w.rg) { return lp_of(r, acc.nodes, acc.texts, acc.why); }
     Str why = lw_reason(r.err);
     Int wn = acc.why.get(why) else { 0 };
     PG t = pg_func_one(w.src, w.g.ns[kg_kid(w.g, d, 0)].sp, w.fs, acc.pg);
     return lw_decls(w, id, i + 1, lp_of(t, acc.nodes, acc.texts + 1, acc.why.insert(why, wn + 1)));
 }
 
-// Lower a program parsed from `src`.
-pub LP lw_program(Kg g, Int unit, Str src, Funcs fs, PG g0) {
-    LW w = LW {.g = g, .src = src, .fs = fs, .base = 0};
+// Lower a program parsed from `src` (rg: the reducer's residual graph).
+pub LP lw_program(Kg g, Int unit, Str src, Funcs fs, PG g0, Bool rg) {
+    LW w = LW {.g = g, .src = src, .fs = fs, .base = 0, .rg = rg};
     Map(Str, Int) why = {};
     return lw_decls(w, unit, 0, lp_of(g0, 0, 0, why));
 }

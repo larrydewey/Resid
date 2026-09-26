@@ -119,10 +119,13 @@ Int kg_prec(Str op) {
 
 // `c ? a : b` arms from pos (just after `?`); ok only when a `:` follows.
 KL kg_try_tern(Str s, Kg g, Int pos) {
+    // Look ahead in a scratch graph, so a failed attempt adds nothing to g
+    // (appending to an older version of g would copy its node list).
+    KP a0 = kg_expr(s, kg_empty(), pos);
+    if (a0.err != "") { return kl_fail(g, a0.pos, a0.err); }
+    Tok c = lex_tok(s, a0.pos);
+    if (c.text != ":") { return kl_fail(g, a0.pos, "no ternary"); }
     KP a = kg_expr(s, g, pos);
-    if (a.err != "") { return kl_fail(a.g, a.pos, a.err); }
-    Tok c = lex_tok(s, a.pos);
-    if (c.text != ":") { return kl_fail(g, a.pos, "no ternary"); }
     KP b = kg_expr(s, a.g, c.pos);
     if (b.err != "") { return kl_fail(b.g, b.pos, b.err); }
     return KL {.g = b.g, .ids = [a.id, b.id], .pos = b.pos, .err = ""};

@@ -16207,7 +16207,10 @@ Int main() {
     // The graph checker (examples/gcheck.resid) is the default; `--text-check`
     // runs the text checker for differential testing.
     Bool textck  =  grflag || pick_flag(argc, "--text-check");
-    Int tc  =  if (textck) { check_program_map(rsrc, 0, ssg, if (grflag) { "" } else { rr.map }) } else { gk_run(rsrc, rr.map) };
+    // The checked graph is kept, packed, for graph reduction.
+    KP ckp = if (textck) { KP {.g = kg_empty(), .id = -1, .pos = 0, .err = "off"} } else { kg_parse(rsrc) };
+    Int tc  =  if (textck) { check_program_map(rsrc, 0, ssg, if (grflag) { "" } else { rr.map }) } else { gk_run_parsed(ckp, rsrc, rr.map) };
+    List(Str) ckpk = resid_list_str_persist_copy([if (textck || tc != 0) { "" } else { gx_pack(ckp.g, ckp.id) }]);
     Int _tc_out = resid_bulk_pop();
     if (tc != 0) { return tc; }
     // `--graph-reduce-check`: the graph reducer (examples/greduce.resid)
@@ -16225,7 +16228,17 @@ Int main() {
             Bool w1 = filesystem.write_all(gout + ".graph", gpr);
             Bool w2 = filesystem.write_all(gout + ".text", trd.text);
         }
-        Str gdiff = kg_tokdiff(trd.text, 0, gpr, 0, 0);
+        Str gdiff0 = kg_tokdiff(trd.text, 0, gpr, 0, 0);
+        // Then the string-accumulator rewrite on both.
+        KP gsa = gs_program(grd.g, grd.root, rsrc);
+        Str gsp = kg_print(gsa.g, gsa.id);
+        Str tsa = sa_rewrite(trd.text);
+        Str gdiff1 = if (gdiff0 == "") { kg_tokdiff(tsa, 0, gsp, 0, 0) } else { "" };
+        if (gout != "") {
+            Bool w3 = filesystem.write_all(gout + ".sgraph", gsp);
+            Bool w4 = filesystem.write_all(gout + ".stext", tsa);
+        }
+        Str gdiff = if (gdiff1 != "") { "stracc: " + gdiff1 } else { gdiff0 };
         Str gerr = if (grd.err != trd.err) { "; err `" + grd.err + "` vs `" + trd.err + "`" } else { "" };
         Str gnote = if (grd.notes != trd.notes) { "; notes differ" } else { "" };
         if (gdiff == "" && gerr == "" && gnote == "") {
@@ -16251,11 +16264,34 @@ Int main() {
     // generation sees the reduced text. `--no-reduce` skips it and
     // `--dump-reduced <path>` writes the reduced text out for inspection.
     Bool noreduce  =  pick_flag(argc, "--no-reduce");
-    // The reducer runs in an arena too; only its output text (and error)
-    // is copied out.
+    // Reduction and lowering work on the knowledge graph (examples/
+    // greduce.resid, lower.resid); `--text-reduce` / `--text-lower` run the
+    // text passes for differential testing.
+    Bool glow  =  !pick_flag(argc, "--text-lower");
+    Bool textred  =  !glow || pick_flag(argc, "--text-reduce");
+    // Graph reduction runs in an arena; the reachable residual nodes are
+    // copied out packed (with the notes and error first).
+    Int _gr_in = resid_bulk_push();
+    GXO grd = if (textred) { gx_no_out() } else { gx_run(if (ckpk[0] != "") { gx_unpack(ckpk[0]) } else { kg_parse(rsrc) }, rsrc, !noreduce) };
+    // Str accumulators become in-place buffers (gs_program).
+    KP gsa0 = if (textred || grd.err != "") { KP {.g = grd.g, .id = -1, .pos = 0, .err = ""} } else { gs_program(grd.g, grd.root, rsrc) };
+    List(Str) gpk = resid_list_str_persist_copy([grd.notes, grd.err, if (gsa0.id < 0) { "" } else { gx_pack(gsa0.g, gsa0.id) }]);
+    Int _gr_out = resid_bulk_pop();
+    if (gpk[0] != "") { print(gpk[0]); }
+    if (gpk[1] != "") {
+        println(gpk[1]);
+        return 1;
+    }
+    // The residual graph lives until lowering, so the graph path runs in
+    // the code-generation arena.
+    Int _cg_in0 = if (textred) { 0 } else { resid_bulk_push() };
+    KP gsa = if (textred) { KP {.g = kg_empty(), .id = -1, .pos = 0, .err = ""} } else { gx_unpack(gpk[2]) };
+    Str gtext = if (textred) { "" } else { kg_print(gsa.g, gsa.id) };
+    // The text reducer runs in an arena too; only its output text (and
+    // error) is copied out.
     // (red0 itself is freed with the scope: its scalar is read first.)
     Int _rd_in = resid_bulk_push();
-    RdOut red0 = if (noreduce) { RdOut {.text = rsrc, .nred = 0, .err = "", .notes = ""} } else { rd_reduce_program(rsrc) };
+    RdOut red0 = if (!textred || noreduce) { RdOut {.text = if (textred) { rsrc } else { "" }, .nred = 0, .err = "", .notes = ""} } else { rd_reduce_program(rsrc) };
     List(Str) redkeep = resid_list_str_persist_copy([red0.text, red0.err, red0.notes]);
     Int rednred = red0.nred;
     Int _rd_out = resid_bulk_pop();
@@ -16265,20 +16301,21 @@ Int main() {
         println(red.err);
         return 1;
     }
-    Str csrc0  =  red.text;
+    Str csrc0  =  if (textred) { red.text } else { gtext };
     Str dump_path  =  pick_opt(argc, "--dump-reduced", "");
     if (dump_path != "") {
         Bool dumped = filesystem.write_all(dump_path, csrc0);
     }
     // Str accumulators become in-place buffers (examples/stracc.resid).
     Int _sa_in = resid_bulk_push();
-    List(Str) sakeep = resid_list_str_persist_copy([sa_rewrite(csrc0)]);
+    List(Str) sakeep = resid_list_str_persist_copy([if (textred) { sa_rewrite(csrc0) } else { "" }]);
     Int _sa_out = resid_bulk_pop();
-    Str csrc  =  sakeep[0];
+    // Signatures are still collected from text: the residual graph printed.
+    Str csrc  =  if (textred) { sakeep[0] } else { gtext };
     // Code generation's product is the .ll file on disk, so the whole
     // phase runs in an arena and the sidecar writers below start from a
     // small heap. (Per-function codegen arenas nest inside it.)
-    Int _cg_in = resid_bulk_push();
+    Int _cg_in = if (textred) { resid_bulk_push() } else { _cg_in0 };
     Funcs fs = collect_sigs(csrc);
     if (testmode && fn_index(fs, "main") >= 0) {
         println("test error: " + path + " defines main(); a test file's entry point is generated");
@@ -16291,13 +16328,12 @@ Int main() {
 List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare ptr @resid_fs_sha256(ptr)", "declare i8 @resid_fs_append_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i32 @resid_run_main(ptr)", "declare ptr @resid_list_const_i64(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_ptr(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_bool(ptr, i64, ptr, ptr)", "declare i64 @resid_crypto_random_byte()", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @bl_str_split(ptr, ptr)", "declare ptr @bl_str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @resid_list_push(ptr, ptr)", "declare ptr @resid_listbuf_new()", "declare ptr @resid_listbuf_push(ptr, ptr)", "declare ptr @resid_listbuf_finish(ptr, ptr)", "declare ptr @resid_list_slice(ptr, i64, i64)", "declare ptr @resid_range_list(i64, i64)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare ptr @list_reverse_strs(ptr)", "declare ptr @list_reverse_floats(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_list_to_string(ptr)", "declare void @resid_assert(i8, ptr)", "declare void @resid_todo(i8, ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @UIntToString(i64)", "declare ptr @Int256ToString(i64, i64, i64, i64)", "declare ptr @UInt256ToString(i64, i64, i64, i64)", "declare ptr @Int512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @UInt512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @FloatToString(double)", "declare ptr @Float128ToString(fp128)", "declare ptr @BoolToString(i8)", "declare void @resid_overflow_check(i8)", "declare void @resid_div_check(i8)", "declare void @resid_conv_check(i8)", "declare {i8, i1} @llvm.sadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.sadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.sadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.sadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.sadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.ssub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.ssub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.ssub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.ssub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.ssub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.ssub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.smul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.smul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.smul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.smul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.smul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.smul.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.uadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.uadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.uadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.uadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.uadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.uadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.uadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.usub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.usub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.usub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.usub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.usub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.usub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.usub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.umul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.umul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.umul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.umul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.umul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.umul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.umul.with.overflow.i512(i512, i512)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "declare void @resid_abort(ptr) noreturn", "declare void @resid_expect_fail(ptr, ptr, ptr) noreturn", "declare i8 @resid_regex_match(ptr, ptr)", "declare i8 @resid_quiet()", "declare i8 @resid_quiet_set(i1)", "declare i8 @resid_expect_throws(ptr)", "declare i64 @resid_box_tag(ptr)", "declare i8 @resid_test_plan(i64, ptr)", "declare i64 @resid_test_run_closure(ptr, ptr)", "declare i64 @resid_test_run(ptr, ptr)", "declare i64 @resid_test_summary()", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"", "declare ptr @UInt128ToString(i128)", rt_itoa_def()];
     List(Str) header = header_with_cmps(hdr_core.concat(hdr_extra()).concat(hdr_map_typed()), fs);
     PG g0 = PG {.pos = 0, .err = "", .glines = [], .hlines = [], .lines = header, .tmp = 0, .lbl = 0};
-    // Lowering is from the knowledge graph (examples/lower.resid);
-    // `--text-lower` runs the text codegen for differential testing.
-    Bool glow  =  !pick_flag(argc, "--text-lower");
-    KP lkp = if (glow) { kg_parse(csrc) } else { KP {.g = kg_empty(), .id = -1, .pos = 0, .err = "off"} };
+    // Lowering is from the residual graph; after `--text-reduce`, from the
+    // reduced text parsed.
+    KP lkp = if (!glow) { KP {.g = kg_empty(), .id = -1, .pos = 0, .err = "off"} } else { if (textred) { kg_parse(csrc) } else { gsa } };
     if (glow && lkp.err != "") { println("graph-lower: parse error: " + lkp.err); }
     Map(Str, Int) lnowhy = {};
-    LP lres = if (glow && lkp.err == "") { lw_program(lkp.g, lkp.id, csrc, fs, g0) } else { LP {.pg = pg_next(csrc, 0, fs, g0), .nodes = 0, .texts = 0, .why = lnowhy} };
+    LP lres = if (glow && lkp.err == "") { lw_program(lkp.g, lkp.id, if (textred) { csrc } else { rsrc }, fs, g0, !textred) } else { LP {.pg = pg_next(csrc, 0, fs, g0), .nodes = 0, .texts = 0, .why = lnowhy} };
     if (glow && (pick_flag(argc, "--graph-lower") || lres.texts > 0)) {
         println("graph-lower: " + IntToString(lres.nodes) + " function(s) from the graph, " + IntToString(lres.texts) + " by the text fallback");
         if (pick_flag(argc, "--graph-lower-why")) { print(lw_why_text(lres)); }

@@ -258,6 +258,17 @@ type-check match, the self-compile included; `tests/graph/run.sh` runs the
 check. While β-reducing, no residual nodes are built (they are never used);
 building them had pushed a deep evaluation past the memory budget.
 
+The graph path is now the default: the checker's parse is packed out of
+its arena and reused, the residual graph (with `stracc`'s rewrite ported
+to the graph as `gs_program`) is packed out of the reducer's arena, and
+lowering walks it directly, with no reparse. Specialized functions share
+nodes with their originals, so their position-numbered symbols (`@clo`,
+`@spw`, `@.tmsg`) are offset by the specialization number. On all 173
+in-repo programs the IR equals the text pipeline's (`--text-reduce`) once
+those numbers are normalized, and the fixed point holds. Self-compile:
+1.87s and 589MB peak, against 2.03s and 589MB with `--text-reduce`.
+Signatures (`collect_sigs`) still come from the residual graph printed.
+
 ### 0p. Lowering from the knowledge graph (G4, 2026-09-26)
 
 `examples/lower.resid` replaced the text codegen's walkers: every function
