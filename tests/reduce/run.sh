@@ -23,6 +23,11 @@ while getopts "c:" opt; do
     esac
 done
 shift $((OPTIND - 1))
+# Release builds need a signing key (spec §33.1); use a throwaway one.
+if [ -z "${RESID_SIGNING_KEY:-}" ] && [ ! -f "$ROOT/keys/resid-ed25519.key" ]; then
+    KEYDIR="$(mktemp -d)"
+    "$COMPILER" keygen "$KEYDIR" >/dev/null && export RESID_SIGNING_KEY="$KEYDIR/resid-ed25519.key"
+fi
 [ -x "$COMPILER" ] || { echo "compiler not found: $COMPILER (run ./boot.sh)"; exit 2; }
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

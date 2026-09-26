@@ -932,9 +932,9 @@ signature over:
   - provenance of any included knowledge-cache entries
   - the public key identity of the publisher
 
-The signature is stored alongside the package
-(e.g. <package>.resid-sig or inside the archive
-manifest).
+The signature is a COSE_Sign1 (§33.1) over a CBOR map of
+these fields, stored alongside the package
+(<package>.resid-sig) or inside the archive manifest.
 
 --------------------------------------------------
 28.2  Verification
@@ -1166,6 +1166,37 @@ debugger can check that the two match.
 Debug and check profiles always emit the graph. Release
 builds may omit it; if they do, they omit the hash too.
 
+33.1  Signed Provenance
+
+Every binary carries signed provenance: a COSE_Sign1
+(RFC 9052, tag 18, alg EdDSA -8, protected header with
+kid) over a Provenance payload (§34). It is appended to
+the binary as a trailer:
+
+  [code][COSE_Sign1][cose length: u32 BE]["RESIDPROV2"]
+
+The code hash covers the bytes before the trailer. The
+payload binds the source, the binary and every sidecar by
+hash, so one signature covers them all; a sidecar whose
+hash does not match is rejected, not trusted. A detached
+copy of the COSE_Sign1 may also be written as
+<artifact>.resid-prov.cbor.
+
+The payload may be concealed: the COSE_Sign1 payload is
+then a COSE_Encrypt0 (alg ChaCha20-Poly1305, 24) of the
+Provenance map, with deterministic nonces so builds stay
+reproducible.
+
+Release builds require a signing key and fail without
+one. Debug builds without a key are unsigned: they carry
+no trailer and the compiler reports it as a note.
+
+`resid verify <binary>` checks the signature against the
+keyring (§28.3), the code hash, and the hash of each
+sidecar present. Debuggers and tools verify before
+trusting a graph or notes artifact, and report an
+unverified one as untrusted.
+
 The implementation may employ any target ISA extensions
 (AVX-512, NEON, SVE, etc.) for code generation and for
 the realization of wide numeric types.
@@ -1210,6 +1241,19 @@ Offsets in lowering are relative to the symbol. Nodes
 created by reduction have the span of the node they
 derive from.
 
+Provenance (CDDL; the COSE_Sign1 payload, §33.1):
+
+  provenance = { toolchain: tstr, profile: tstr,
+                 sources: [* file], code: bstr,
+                 ? graph: bstr, ? notes: bstr,
+                 ? cache: bstr, grant: [* tstr],
+                 output: tstr }
+
+Hashes are SHA-256. code is the hash of the binary before
+its trailer; graph, notes and cache are the hashes of
+those sidecars' bytes; grant is the capability set the
+build ran under.
+
 ResidualNotes is a projection of the graph: one note for
 each RESIDUAL or EFFECT node in the residual roots, with
 its reason.
@@ -1218,6 +1262,7 @@ Files:
 
   <artifact>.resid-graph.cbor
   <artifact>.resid-notes.cbor
+  <artifact>.resid-prov.cbor     (detached COSE_Sign1)
   <project>.resid-cache.cbor
 
 
@@ -1513,6 +1558,13 @@ self-hosted compiler worked on source text with no graph.
     (§33, §34) with a code-range and runtime-location map,
     so debuggers walk it both statically and live (§37).
   - Residual notes are a projection of the graph.
+  - Signed provenance is specified (§33.1, §34): one
+    COSE_Sign1 trailer binds the source, the binary code
+    and every sidecar (graph, notes, cache) by hash, with
+    optional COSE_Encrypt0 concealment. Release builds
+    require a key. Package signatures use the same
+    envelope (§28.1). Earlier versions named a Provenance
+    schema without defining it.
 
 
 ==================================================

@@ -56,6 +56,20 @@ link_clang() { # link_clang <ll> <out-bin>
     clang "$RESID_OPT" -no-pie "$1" "$RUNTIME_C" -o "$2" -Wno-override-module -pthread
 }
 
+# Release builds must be signed (spec §33.1). Without a configured key,
+# generate a throwaway one under build/boot/keys with the given compiler
+# (a compiler that predates keygen doesn't need one).
+ensure_key() { # ensure_key <compiler>
+    [ -n "${RESID_SIGNING_KEY:-}" ] && return 0
+    [ -f "${SCRIPT_DIR}/keys/resid-ed25519.key" ] && return 0
+    if [ ! -f "${OUT}/keys/resid-ed25519.key" ]; then
+        "$1" keygen "${OUT}/keys" >/dev/null 2>&1 || return 0
+    fi
+    [ -f "${OUT}/keys/resid-ed25519.key" ] || return 0
+    export RESID_SIGNING_KEY="${OUT}/keys/resid-ed25519.key"
+    export RESID_VERIFY_PUB="$(cat "${OUT}/keys/resid-ed25519.pub")"
+}
+
 # ── Re-seed path: iterate the self-hosted compiler to a new fixed point ──
 MAX_SELF_ROUNDS=10
 if [ "$BOOTSTRAP_SELF" -eq 1 ]; then
@@ -70,6 +84,7 @@ if [ "$BOOTSTRAP_SELF" -eq 1 ]; then
         # so each round hands us both a binary and the IR to compare.
         NEXT_BIN="${OUT}/reseed_round${i}.bin"
         NEXT_LL="${NEXT_BIN}.ll"
+        ensure_key "$PREV_BIN"
         timeout 600 "$PREV_BIN" "$SRC" -o "$NEXT_BIN"
         [ -f "$NEXT_LL" ] || die "round $i produced no output"
         if cmp -s "$PREV_LL" "$NEXT_LL"; then
@@ -120,6 +135,7 @@ ok "stage1 linked"
 # The compiler links to -o itself and writes its IR to <out>.ll, so each
 # stage yields both a ready-to-run binary and the IR to compare.
 step "stage2: stage1 compiles the driver source"
+ensure_key "${OUT}/stage1.bin"
 timeout 600 "${OUT}/stage1.bin" "$SRC" -o "${OUT}/stage2.bin"
 [ -f "${OUT}/stage2.bin.ll" ] || die "stage1 produced no output"
 if cmp -s "${OUT}/stage2.bin.ll" "$SEED_LL"; then
@@ -134,6 +150,7 @@ ok "stage2 linked"
 
 # ── 3+4. stage2 -> stage3, fixed-point check ─────────────────────────────
 step "stage3: stage2 compiles the driver source"
+ensure_key "${OUT}/stage2.bin"
 timeout 600 "${OUT}/stage2.bin" "$SRC" -o "${OUT}/stage3.bin"
 [ -f "${OUT}/stage3.bin.ll" ] || die "stage2 produced no output"
 ok "stage3 emitted"
@@ -162,6 +179,8 @@ timeout 120 "${OUT}/stage2.bin" /tmp/resid_smoke.resid -o "${OUT}/smoke.bin" >/d
 RESULT="$("${OUT}/smoke.bin")"
 echo "$RESULT" | grep -q "smoke test passed" || die "smoke output was '$RESULT'"
 ok "smoke output correct"
+"${OUT}/stage2.bin" verify "${OUT}/smoke.bin" >/dev/null || die "smoke binary failed provenance verification"
+ok "smoke binary provenance verified"
 
 step "Generating build/boot/residc wrapper"
 rm -rf "${OUT}/runtime"

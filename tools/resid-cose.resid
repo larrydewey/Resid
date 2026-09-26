@@ -1,19 +1,5 @@
-/// resid-cose.resid — Phase C.7 (PLAN-resid-only.md): minimal COSE
-/// (RFC 9052) support, matching `crates/resid-build/src/cose.rs` exactly
-/// — `COSE_Sign1` (tag 18) with EdDSA (Ed25519), and `COSE_Encrypt0`
-/// (tag 16) with ChaCha20-Poly1305 (alg 24) for confidential provenance.
-/// Only the deterministic subset that module implements, nothing more.
-///
-/// Required a new capability in `lib/ed25519.resid` to build at all:
-/// `sign_msg`/`verify_sig` only ever took a `Str` message (UTF-8-safe
-/// text only, via `bytes_of`) — but COSE signs the raw CBOR
-/// `Sig_structure` bytes directly, which routinely contain bytes ≥128
-/// (CBOR major-type/length bytes, embedded hashes). Signing that through
-/// the `Str` path would corrupt it, same UTF-8-encoding issue
-/// `filesystem.write_bytes` exists to solve. Added `sign_msg_bytes`/
-/// `verify_sig_bytes` (the real bodies — both already converted to bytes
-/// as their first step) with `sign_msg`/`verify_sig` now thin wrappers;
-/// zero behavior change verified via the existing ed25519 e2e tests.
+/// resid-cose.resid — COSE (RFC 9052) command-line tool over lib/cose.resid:
+/// COSE_Sign1 (tag 18, EdDSA) and COSE_Encrypt0 (tag 16, ChaCha20-Poly1305).
 ///
 /// Usage:
 ///   residc tools/resid-cose.resid run -- sign1 <payload> <kid> <keyfile> <out>
@@ -21,256 +7,47 @@
 ///   residc tools/resid-cose.resid run -- encrypt0 <payload> <kid> <keyhex> <out>
 ///   residc tools/resid-cose.resid run -- decrypt0 <blob> <keyhex>
 ///
-/// `sign1`/`encrypt0` read `<payload>` as raw bytes and write the COSE
-/// structure to `<out>`. `verify1` prints the verified payload as text
-/// (this session's provenance payloads are always ASCII); `decrypt0`
-/// prints the decrypted plaintext as text. `<keyfile>` is the same
-/// trailing-newline-tolerant hex format `write_provenance` reads from
-/// `keys/resid-ed25519.key`; `<keyhex>`/`<pubkey-hex>` are given
-/// directly (encrypt0's key is symmetric, not a keyfile — matches the
-/// Rust CLI's own `key_hex: &str` parameter, no file indirection there).
+/// `<keyfile>` holds a hex Ed25519 seed (trailing newline allowed).
+/// verify1 and decrypt0 print the payload as text.
 
-import "../lib/crypto.resid";
-import "../lib/ed25519.resid";
-import "../lib/chacha.resid";
-
-// ─── CBOR (write side): unsigned/negative ints, bytes, text, array,
-// map, tag — the exact subset cose.rs's own hand-rolled encoder has.
-// Faithfully mirrors one real simplification in the Rust original: any
-// length/value > 23 always uses the 2-byte-length form (major|25 + 2
-// BE bytes), *never* the 1-byte form (major|24 + 1 byte) — not maximally
-// compact CBOR, but self-consistent (this file's own decoder expects
-// exactly this), and byte-for-byte what `cose.rs`'s `head` produces. ──
-
-List(Int) cb_head(Int major, Int val, List(Int) acc) {
-    Int m = major << 5;
-    if (val <= 23) { return acc.concat([m | val]); }
-    Int hi = (val >> 8) & 255;
-    Int lo = val & 255;
-    // `hi + 0`/`lo + 0` (not the bare locals): the self-hosted checker
-    // infers a list literal's element type from its *first* element
-    // only, and `m | 25` (computed) vs a bare local reference are two
-    // different spellings of Int — same fix as this session's earlier
-    // cbor_write_header. See PLAN-resid-only.md.
-    return acc.concat([m | 25, hi + 0, lo + 0]);
-}
-List(Int) cb_text(Str s, List(Int) acc) {
-    List(Int) b = bytes_of(s);
-    return cb_head(3, b.len(), acc).concat(b);
-}
-List(Int) cb_bytes(List(Int) b, List(Int) acc) {
-    return cb_head(2, b.len(), acc).concat(b);
-}
-List(Int) cb_nint(Int n, List(Int) acc) {
-    if (n >= 0) { return cb_head(0, n, acc); }
-    return cb_head(1, (0 - n) - 1, acc);
-}
-List(Int) cb_map_header(Int pairs, List(Int) acc) {
-    return cb_head(5, pairs, acc);
-}
-List(Int) cb_array_header(Int n, List(Int) acc) {
-    return cb_head(4, n, acc);
-}
-List(Int) cb_tag(Int tag, List(Int) acc) {
-    return cb_head(6, tag, acc);
-}
-
-// ─── CBOR (read side): only byte-string decode is needed — every
-// structural position this file reads is a fixed literal byte the
-// caller checks directly (array/map/tag headers, the `iv` key `5`). ──
-
-type CbLen = { Int pos; Int val; };
-CbLen cb_read_len(List(Int) b, Int pos) {
-    Int byte = b[pos];
-    Int minor = byte & 31;
-    if (minor <= 23) { return CbLen {.pos = pos + 1, .val = minor}; }
-    if (minor == 24) { return CbLen {.pos = pos + 2, .val = b[pos + 1]}; }
-    Int v = b[pos + 1] * 256 + b[pos + 2];
-    return CbLen {.pos = pos + 3, .val = v};
-}
-type CbBytesRead = { Int pos; List(Int) bytes; };
-CbBytesRead cb_read_bytes(List(Int) b, Int pos) {
-    CbLen h = cb_read_len(b, pos);
-    return CbBytesRead {.pos = h.pos + h.val, .bytes = slice_bytes(b, h.pos, h.pos + h.val - 1)};
-}
-
-// crypto.resid only exports hex_encode — mirrors examples/driver.resid's
-// own prov_hex_acc idiom for the decode direction.
-Int hex_nibble(Int c) {
-    if (c >= 48) { if (c <= 57) { return c - 48; } }
-    if (c >= 97) { if (c <= 102) { return c - 97 + 10; } }
-    if (c >= 65) { if (c <= 70) { return c - 65 + 10; } }
-    return 0;
-}
-List(Int) hex_decode_acc(Str s, Int i, Int n, List(Int) acc) {
-    if (i + 1 >= n) { return acc; }
-    Int b = hex_nibble(str_char_at(s, i)) * 16 + hex_nibble(str_char_at(s, i + 1));
-    return hex_decode_acc(s, i + 2, n, acc.concat([b]));
-}
-List(Int) hex_decode(Str s) {
-    List(Int) empty = [];
-    return hex_decode_acc(s, 0, str_len(s), empty);
-}
-
-// ─── COSE_Sign1 (tag 18) ────────────────────────────────────────────
-
-// Sig_structure (RFC 9052 §4.4): ["Signature1", body_protected, "", payload]
-List(Int) sig_structure(List(Int) body_protected, List(Int) payload) {
-    List(Int) a1 = cb_array_header(4, []);
-    List(Int) a2 = cb_text("Signature1", a1);
-    List(Int) a3 = cb_bytes(body_protected, a2);
-    List(Int) a4 = cb_bytes([], a3);
-    return cb_bytes(payload, a4);
-}
-// Protected header bucket: {1 (alg): -8 (EdDSA), 4 (kid): <text>}.
-List(Int) sign1_protected_header(Str kid) {
-    List(Int) a1 = cb_map_header(2, []);
-    List(Int) a2 = cb_head(0, 1, a1);
-    List(Int) a3 = cb_nint(0 - 8, a2);
-    List(Int) a4 = cb_head(0, 4, a3);
-    return cb_text(kid, a4);
-}
-List(Int) sign1(List(Int) payload, Str kid, Str secret_hex) {
-    List(Int) prot = sign1_protected_header(kid);
-    List(Int) ss = sig_structure(prot, payload);
-    List(Int) sig = sign_msg_bytes(hex_decode(secret_hex), ss);
-    List(Int) o1 = cb_tag(18, []);
-    List(Int) o2 = cb_array_header(4, o1);
-    List(Int) o3 = cb_bytes(prot, o2);
-    List(Int) o4 = cb_map_header(0, o3);
-    List(Int) o5 = cb_bytes(payload, o4);
-    return cb_bytes(sig, o5);
-}
-
-type Sign1Result = { Bool ok; Str err; List(Int) payload; };
-Sign1Result sign1_err(Str err) {
-    List(Int) empty = [];
-    return Sign1Result {.ok = false, .err = err, .payload = empty};
-}
-// Parse a tagged COSE_Sign1 and EdDSA-verify it.
-Sign1Result sign1_verify(List(Int) cose, Str pub_hex) {
-    if (cose.len() == 0) { return sign1_err("cose: empty"); }
-    if (cose[0] != 210) { return sign1_err("cose: missing tag 18"); }
-    Int p1 = 1;
-    if (cose[p1] != 132) { return sign1_err("cose: expected array(4)"); }
-    CbBytesRead protr = cb_read_bytes(cose, p1 + 1);
-    Int up = cose[protr.pos];
-    Int p2 = protr.pos + 1;
-    if (up != 160) { return sign1_err("cose: expected empty unprotected map"); }
-    CbBytesRead payr = cb_read_bytes(cose, p2);
-    CbBytesRead sigr = cb_read_bytes(cose, payr.pos);
-    List(Int) ss = sig_structure(protr.bytes, payr.bytes);
-    Bool ok = verify_sig_bytes(ss, sigr.bytes, hex_decode(pub_hex));
-    if (!ok) { return sign1_err("cose: signature error"); }
-    return Sign1Result {.ok = true, .err = "", .payload = payr.bytes};
-}
-
-// ─── COSE_Encrypt0 (tag 16) · ChaCha20-Poly1305 (alg 24) ────────────
-// Wire shape (RFC 9052 §5.2): tag(16) [ protected:{1:24},
-// unprotected:{5:iv}, ciphertext ]. AAD is the Enc_structure
-// ["Encrypt0", protected, ""] (RFC 9052 §5.3). Nonces are synthetic and
-// deterministic (SHA-256 over key‖kid‖plaintext) so repeated builds
-// reproduce byte-for-byte while distinct payloads never reuse a nonce.
-
-List(Int) enc_structure(List(Int) protected_hdr) {
-    List(Int) a1 = cb_array_header(3, []);
-    List(Int) a2 = cb_text("Encrypt0", a1);
-    List(Int) a3 = cb_bytes(protected_hdr, a2);
-    return cb_bytes([], a3);
-}
-List(Int) encrypt0_protected() {
-    List(Int) a1 = cb_map_header(1, []);
-    List(Int) a2 = cb_head(0, 1, a1);
-    return cb_nint(24, a2);
-}
-List(Int) encrypt0_nonce(List(Int) key, Str kid, List(Int) plaintext) {
-    List(Int) m1 = bytes_of("resid/cose/encrypt0/nonce").concat(key);
-    List(Int) m2 = m1.concat(bytes_of(kid));
-    List(Int) m3 = m2.concat(plaintext);
-    return slice_bytes(sha256_bytes(m3), 0, 11);
-}
-List(Int) encrypt0_seal(List(Int) plaintext, Str key_hex, Str kid) {
-    List(Int) key = hex_decode(key_hex);
-    List(Int) nonce = encrypt0_nonce(key, kid, plaintext);
-    List(Int) prot = encrypt0_protected();
-    List(Int) aad = enc_structure(prot);
-    List(Int) ct = chacha20poly1305_seal(key, nonce, plaintext, aad);
-    List(Int) o1 = cb_tag(16, []);
-    List(Int) o2 = cb_array_header(3, o1);
-    List(Int) o3 = cb_bytes(prot, o2);
-    List(Int) o4 = cb_map_header(1, o3);
-    List(Int) o5 = cb_head(0, 5, o4);
-    List(Int) o6 = cb_bytes(nonce, o5);
-    return cb_bytes(ct, o6);
-}
-
-type OpenResult = { Bool ok; Str err; List(Int) plaintext; };
-OpenResult open_err(Str err) {
-    List(Int) empty = [];
-    return OpenResult {.ok = false, .err = err, .plaintext = empty};
-}
-OpenResult encrypt0_open(List(Int) blob, Str key_hex) {
-    if (blob.len() == 0) { return open_err("cose: empty"); }
-    if (blob[0] != 208) { return open_err("cose: missing tag 16"); }
-    Int p1 = 1;
-    if (blob[p1] != 131) { return open_err("cose: expected array(3)"); }
-    CbBytesRead protr = cb_read_bytes(blob, p1 + 1);
-    Int um = blob[protr.pos];
-    Int p2 = protr.pos + 1;
-    if (um != 161) { return open_err("cose: expected unprotected map(1)"); }
-    if (blob[p2] != 5) { return open_err("cose: expected iv key 5"); }
-    CbBytesRead ivr = cb_read_bytes(blob, p2 + 1);
-    if (ivr.bytes.len() != 12) { return open_err("cose: iv must be 12 bytes"); }
-    CbBytesRead ctr = cb_read_bytes(blob, ivr.pos);
-    List(Int) key = hex_decode(key_hex);
-    List(Int) aad = enc_structure(protr.bytes);
-    Bool tag_ok = chacha20poly1305_open(key, ivr.bytes, ctr.bytes, aad);
-    if (!tag_ok) { return open_err("cose: authentication failed"); }
-    Int ctlen = ctr.bytes.len() - 16;
-    List(Int) ct_only = slice_bytes(ctr.bytes, 0, ctlen - 1);
-    List(Int) plaintext = chacha20_xor(key, 1, ivr.bytes, ct_only);
-    return OpenResult {.ok = true, .err = "", .plaintext = plaintext};
-}
-
-// ─── CLI ────────────────────────────────────────────────────────────
-
-Str bytes_to_ascii(List(Int) b, Int i, Int end, Str acc) {
-    if (i >= end) { return acc; }
-    return bytes_to_ascii(b, i + 1, end, acc + str_from_code(b[i]));
-}
+import "../lib/cose.resid";
 
 Int cmd_sign1(Str payload_path, Str kid, Str keyfile, Str out) {
     List(Int) payload = filesystem.read_bytes(payload_path);
     Str keyhex = filesystem.read_all(keyfile);
     Str ktrim = str_trim(keyhex);
-    List(Int) cose = sign1(payload, kid, ktrim);
+    List(Int) cose = cose_sign1(payload, kid, cose_hex_decode(ktrim));
     filesystem.write_bytes(out, cose);
     println("wrote " + out + " (" + IntToString(cose.len()) + " bytes)");
     return 0;
 }
 Int cmd_verify1(Str cose_path, Str pub_hex) {
-    Sign1Result r = sign1_verify(filesystem.read_bytes(cose_path), pub_hex);
-    if (!r.ok) {
-        eprintln(r.err);
+    CoseSign1 c = cose_sign1_parse(filesystem.read_bytes(cose_path));
+    if (!c.ok) {
+        eprintln(c.err);
         return 1;
     }
-    println(bytes_to_ascii(r.payload, 0, r.payload.len(), ""));
+    if (!cose_sign1_check(c, cose_hex_decode(pub_hex))) {
+        eprintln("cose: signature error");
+        return 1;
+    }
+    println(cbe_ascii(c.payload, 0, ""));
     return 0;
 }
 Int cmd_encrypt0(Str payload_path, Str kid, Str key_hex, Str out) {
     List(Int) payload = filesystem.read_bytes(payload_path);
-    List(Int) blob = encrypt0_seal(payload, key_hex, kid);
+    List(Int) blob = cose_encrypt0_seal(payload, cose_hex_decode(key_hex), kid);
     filesystem.write_bytes(out, blob);
     println("wrote " + out + " (" + IntToString(blob.len()) + " bytes)");
     return 0;
 }
 Int cmd_decrypt0(Str blob_path, Str key_hex) {
-    OpenResult r = encrypt0_open(filesystem.read_bytes(blob_path), key_hex);
+    CoseOpen r = cose_encrypt0_open(filesystem.read_bytes(blob_path), cose_hex_decode(key_hex));
     if (!r.ok) {
         eprintln(r.err);
         return 1;
     }
-    println(bytes_to_ascii(r.plaintext, 0, r.plaintext.len(), ""));
+    println(cbe_ascii(r.plaintext, 0, ""));
     return 0;
 }
 

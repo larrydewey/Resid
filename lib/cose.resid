@@ -1,0 +1,229 @@
+// cose.resid — CBOR (RFC 8949, preferred serialization) and COSE
+// (RFC 9052): COSE_Sign1 with EdDSA (-8) and COSE_Encrypt0 with
+// ChaCha20-Poly1305 (24). Used by the driver's provenance trailer
+// (spec §33.1) and tools/resid-cose.resid.
+
+import "crypto.resid";
+import "ed25519.resid";
+import "chacha.resid";
+
+// ─── CBOR write side ────────────────────────────────────────────────
+
+// Big-endian bytes of v, `n` bytes long.
+pub List(Int) cbe_be(Int v, Int n, List(Int) acc) {
+    if (n <= 0) { return acc; }
+    Int sh = (n - 1) * 8;
+    return cbe_be(v, n - 1, acc.concat([(v >> sh) & 255]));
+}
+
+// Head with the shortest argument encoding (RFC 8949 §4.2.1).
+pub List(Int) cbe_head(Int major, Int val, List(Int) acc) {
+    Int m = major << 5;
+    if (val <= 23) { return acc.concat([m | val]); }
+    if (val <= 255) { return acc.concat([m | 24, val + 0]); }
+    if (val <= 65535) { return cbe_be(val, 2, acc.concat([m | 25])); }
+    if (val <= 4294967295) { return cbe_be(val, 4, acc.concat([m | 26])); }
+    return cbe_be(val, 8, acc.concat([m | 27]));
+}
+pub List(Int) cbe_uint(Int v, List(Int) acc) { return cbe_head(0, v, acc); }
+pub List(Int) cbe_int(Int n, List(Int) acc) {
+    if (n >= 0) { return cbe_head(0, n, acc); }
+    return cbe_head(1, (0 - n) - 1, acc);
+}
+pub List(Int) cbe_bytes(List(Int) b, List(Int) acc) {
+    return cbe_head(2, b.len(), acc).concat(b);
+}
+pub List(Int) cbe_text(Str s, List(Int) acc) {
+    List(Int) b = bytes_of(s);
+    return cbe_head(3, b.len(), acc).concat(b);
+}
+pub List(Int) cbe_array(Int n, List(Int) acc) { return cbe_head(4, n, acc); }
+pub List(Int) cbe_map(Int n, List(Int) acc) { return cbe_head(5, n, acc); }
+pub List(Int) cbe_tag(Int t, List(Int) acc) { return cbe_head(6, t, acc); }
+
+// ─── CBOR read side ─────────────────────────────────────────────────
+
+// A decoded head: major type, argument, position after it. ok is false
+// past the end or on an indefinite length.
+type CbeHead = { Bool ok; Int major; Int val; Int pos; };
+
+pub Int cbe_be_read(List(Int) b, Int pos, Int n, Int acc) {
+    if (n <= 0) { return acc; }
+    return cbe_be_read(b, pos + 1, n - 1, (acc << 8) | b[pos]);
+}
+pub CbeHead cbe_read_head(List(Int) b, Int pos) {
+    if (pos >= b.len()) { return CbeHead {.ok = false, .major = 0, .val = 0, .pos = pos}; }
+    Int byte = b[pos];
+    Int major = byte >> 5;
+    Int minor = byte & 31;
+    if (minor <= 23) { return CbeHead {.ok = true, .major = major, .val = minor, .pos = pos + 1}; }
+    Int n = cbe_arg_len(minor);
+    if (n == 0) { return CbeHead {.ok = false, .major = major, .val = 0, .pos = pos}; }
+    if (pos + n >= b.len()) { return CbeHead {.ok = false, .major = major, .val = 0, .pos = pos}; }
+    return CbeHead {.ok = true, .major = major, .val = cbe_be_read(b, pos + 1, n, 0), .pos = pos + 1 + n};
+}
+pub Int cbe_arg_len(Int minor) {
+    if (minor == 24) { return 1; }
+    if (minor == 25) { return 2; }
+    if (minor == 26) { return 4; }
+    if (minor == 27) { return 8; }
+    return 0;
+}
+
+// A byte or text string at pos, checked against its major type.
+type CbeStr = { Bool ok; List(Int) bytes; Int pos; };
+
+pub CbeStr cbe_read_str(List(Int) b, Int pos, Int major) {
+    List(Int) empty = [];
+    CbeHead h = cbe_read_head(b, pos);
+    if (!h.ok || h.major != major) { return CbeStr {.ok = false, .bytes = empty, .pos = pos}; }
+    Int end = h.pos + h.val;
+    if (end > b.len()) { return CbeStr {.ok = false, .bytes = empty, .pos = pos}; }
+    return CbeStr {.ok = true, .bytes = slice_bytes(b, h.pos, end - 1), .pos = end};
+}
+
+pub Str cbe_ascii(List(Int) b, Int i, Str acc) {
+    if (i >= b.len()) { return acc; }
+    return cbe_ascii(b, i + 1, acc + str_from_code(b[i]));
+}
+
+pub Int cose_nibble(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return 0;
+}
+pub List(Int) cose_hex_acc(Str s, Int i, Int n, List(Int) acc) {
+    if (i + 1 >= n) { return acc; }
+    Int v = cose_nibble(str_char_at(s, i)) * 16 + cose_nibble(str_char_at(s, i + 1));
+    return cose_hex_acc(s, i + 2, n, acc.concat([v]));
+}
+pub List(Int) cose_hex_decode(Str s) {
+    List(Int) empty = [];
+    return cose_hex_acc(s, 0, str_len(s), empty);
+}
+
+// ─── COSE_Sign1 (tag 18) ────────────────────────────────────────────
+
+// Sig_structure (RFC 9052 §4.4): ["Signature1", protected, h'', payload].
+pub List(Int) cose_sig_structure(List(Int) prot, List(Int) payload) {
+    List(Int) a1 = cbe_array(4, []);
+    List(Int) a2 = cbe_text("Signature1", a1);
+    List(Int) a3 = cbe_bytes(prot, a2);
+    List(Int) a4 = cbe_bytes([], a3);
+    return cbe_bytes(payload, a4);
+}
+// Protected header {1: -8, 4: kid}.
+pub List(Int) cose_sign1_protected(Str kid) {
+    List(Int) a1 = cbe_map(2, []);
+    List(Int) a2 = cbe_int(-8, cbe_uint(1, a1));
+    return cbe_bytes(bytes_of(kid), cbe_uint(4, a2));
+}
+pub List(Int) cose_sign1(List(Int) payload, Str kid, List(Int) seed) {
+    List(Int) prot = cose_sign1_protected(kid);
+    List(Int) sig = sign_msg_bytes(seed, cose_sig_structure(prot, payload));
+    List(Int) o1 = cbe_array(4, cbe_tag(18, []));
+    List(Int) o2 = cbe_map(0, cbe_bytes(prot, o1));
+    return cbe_bytes(sig, cbe_bytes(payload, o2));
+}
+
+// A parsed COSE_Sign1; kid comes from the protected header.
+type CoseSign1 = { Bool ok; Str err; Str kid; List(Int) prot; List(Int) payload; List(Int) sig; };
+
+pub CoseSign1 cose_sign1_err(Str err) {
+    List(Int) e = [];
+    return CoseSign1 {.ok = false, .err = err, .kid = "", .prot = e, .payload = e, .sig = e};
+}
+// kid (label 4) from a protected-header map; "" when absent.
+pub Str cose_kid_of(List(Int) prot) {
+    CbeHead m = cbe_read_head(prot, 0);
+    if (!m.ok || m.major != 5) { return ""; }
+    return cose_kid_scan(prot, m.pos, m.val);
+}
+pub Str cose_kid_scan(List(Int) prot, Int pos, Int left) {
+    if (left <= 0) { return ""; }
+    CbeHead k = cbe_read_head(prot, pos);
+    if (!k.ok) { return ""; }
+    CbeHead v = cbe_read_head(prot, k.pos);
+    if (!v.ok) { return ""; }
+    if (k.major == 0 && k.val == 4 && v.major == 2) {
+        CbeStr s = cbe_read_str(prot, k.pos, 2);
+        return cbe_ascii(s.bytes, 0, "");
+    }
+    Int next = if (v.major == 2 || v.major == 3) { v.pos + v.val } else { v.pos };
+    return cose_kid_scan(prot, next, left - 1);
+}
+pub CoseSign1 cose_sign1_parse(List(Int) cose) {
+    CbeHead t = cbe_read_head(cose, 0);
+    if (!t.ok || t.major != 6 || t.val != 18) { return cose_sign1_err("cose: missing tag 18"); }
+    CbeHead a = cbe_read_head(cose, t.pos);
+    if (!a.ok || a.major != 4 || a.val != 4) { return cose_sign1_err("cose: expected array(4)"); }
+    CbeStr prot = cbe_read_str(cose, a.pos, 2);
+    if (!prot.ok) { return cose_sign1_err("cose: bad protected header"); }
+    CbeHead u = cbe_read_head(cose, prot.pos);
+    if (!u.ok || u.major != 5 || u.val != 0) { return cose_sign1_err("cose: expected empty unprotected map"); }
+    CbeStr pay = cbe_read_str(cose, u.pos, 2);
+    if (!pay.ok) { return cose_sign1_err("cose: bad payload"); }
+    CbeStr sig = cbe_read_str(cose, pay.pos, 2);
+    if (!sig.ok || sig.bytes.len() != 64) { return cose_sign1_err("cose: bad signature"); }
+    return CoseSign1 {.ok = true, .err = "", .kid = cose_kid_of(prot.bytes), .prot = prot.bytes, .payload = pay.bytes, .sig = sig.bytes};
+}
+pub Bool cose_sign1_check(CoseSign1 c, List(Int) pubk) {
+    return verify_sig_bytes(cose_sig_structure(c.prot, c.payload), c.sig, pubk);
+}
+
+// ─── COSE_Encrypt0 (tag 16) · ChaCha20-Poly1305 ─────────────────────
+// Nonces are SHA-256(domain ‖ key ‖ kid ‖ plaintext)[0..12]: builds
+// reproduce byte-for-byte and distinct payloads never share a nonce.
+
+pub List(Int) cose_enc_structure(List(Int) prot) {
+    List(Int) a1 = cbe_text("Encrypt0", cbe_array(3, []));
+    return cbe_bytes([], cbe_bytes(prot, a1));
+}
+pub List(Int) cose_encrypt0_protected() {
+    return cbe_uint(24, cbe_uint(1, cbe_map(1, [])));
+}
+pub List(Int) cose_encrypt0_nonce(List(Int) key, Str kid, List(Int) pt) {
+    List(Int) m1 = bytes_of("resid/cose/encrypt0/nonce").concat(key);
+    List(Int) m2 = m1.concat(bytes_of(kid)).concat(pt);
+    return slice_bytes(sha256_bytes(m2), 0, 11);
+}
+pub List(Int) cose_encrypt0_seal(List(Int) pt, List(Int) key, Str kid) {
+    List(Int) nonce = cose_encrypt0_nonce(key, kid, pt);
+    List(Int) prot = cose_encrypt0_protected();
+    List(Int) ct = chacha20poly1305_seal(key, nonce, pt, cose_enc_structure(prot));
+    List(Int) o1 = cbe_bytes(prot, cbe_array(3, cbe_tag(16, [])));
+    List(Int) o2 = cbe_bytes(nonce, cbe_uint(5, cbe_map(1, o1)));
+    return cbe_bytes(ct, o2);
+}
+
+type CoseOpen = { Bool ok; Str err; List(Int) plaintext; };
+
+pub CoseOpen cose_open_err(Str err) {
+    List(Int) e = [];
+    return CoseOpen {.ok = false, .err = err, .plaintext = e};
+}
+pub Bool cose_is_encrypt0(List(Int) b) {
+    CbeHead t = cbe_read_head(b, 0);
+    return t.ok && t.major == 6 && t.val == 16;
+}
+pub CoseOpen cose_encrypt0_open(List(Int) blob, List(Int) key) {
+    CbeHead t = cbe_read_head(blob, 0);
+    if (!t.ok || t.major != 6 || t.val != 16) { return cose_open_err("cose: missing tag 16"); }
+    CbeHead a = cbe_read_head(blob, t.pos);
+    if (!a.ok || a.major != 4 || a.val != 3) { return cose_open_err("cose: expected array(3)"); }
+    CbeStr prot = cbe_read_str(blob, a.pos, 2);
+    if (!prot.ok) { return cose_open_err("cose: bad protected header"); }
+    CbeHead um = cbe_read_head(blob, prot.pos);
+    if (!um.ok || um.major != 5 || um.val != 1) { return cose_open_err("cose: expected unprotected map(1)"); }
+    CbeHead ivk = cbe_read_head(blob, um.pos);
+    if (!ivk.ok || ivk.major != 0 || ivk.val != 5) { return cose_open_err("cose: expected iv key 5"); }
+    CbeStr iv = cbe_read_str(blob, ivk.pos, 2);
+    if (!iv.ok || iv.bytes.len() != 12) { return cose_open_err("cose: iv must be 12 bytes"); }
+    CbeStr ct = cbe_read_str(blob, iv.pos, 2);
+    if (!ct.ok || ct.bytes.len() < 16) { return cose_open_err("cose: bad ciphertext"); }
+    Bool tag_ok = chacha20poly1305_open(key, iv.bytes, ct.bytes, cose_enc_structure(prot.bytes));
+    if (!tag_ok) { return cose_open_err("cose: authentication failed"); }
+    List(Int) body = slice_bytes(ct.bytes, 0, ct.bytes.len() - 17);
+    return CoseOpen {.ok = true, .err = "", .plaintext = chacha20_xor(key, 1, iv.bytes, body)};
+}
