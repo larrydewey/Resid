@@ -32,11 +32,15 @@ for f in examples/driver.resid lib/*.resid tools/*.resid examples/*.resid tests/
     rt="$("$COMPILER" "$f" --graph-check 2>&1 | grep '^graph' | tail -1)"
     lint="$("$COMPILER" "$f" --graph-lint 2>&1 | grep '^graph-lint' | tail -1)"
     res="$("$COMPILER" "$f" --graph-resolve 2>&1 | grep '^graph-resolve' | tail -1)"
-    if [ "$rt" = "graph: ok" ] && [ "$lint" = "$want_lint" ] && [ "${res##*, }" = "0 unresolved" ]; then
+    # Every checked expression gets a type (programs that type-check).
+    tys="$("$COMPILER" "$f" --graph-types 2>&1 | grep '^graph-types' | tail -1)"
+    tys_ok=1
+    case "$tys" in "graph-types: "*" untyped"*) [[ "$tys" == "graph-types: 0 untyped"* ]] || tys_ok=0 ;; esac
+    if [ "$rt" = "graph: ok" ] && [ "$lint" = "$want_lint" ] && [ "${res##*, }" = "0 unresolved" ] && [ "$tys_ok" = 1 ]; then
         pass=$((pass + 1))
     else
         fail=$((fail + 1))
-        echo "FAIL $f: $rt / $lint / $res"
+        echo "FAIL $f: $rt / $lint / $res / $tys"
     fi
 done
 # Resolution must reject every out-of-scope use in the scopes case.
@@ -47,6 +51,17 @@ else
     fail=$((fail + 1))
     echo "FAIL resolve_scopes: $got"
 fi
+# Golden type column: node types and def edges of a sample program.
+TT="$(mktemp)"
+"$COMPILER" tests/graph/cases/types_sample.resid --graph-types "$TT" >/dev/null 2>&1
+if grep -v " SourceLoc\| RegionError\|message\| line \| col \| file " "$TT" | cmp -s - tests/graph/cases/types_sample.types; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1))
+    echo "FAIL types_sample: type column differs"
+fi
+rm -f "$TT"
+
 # Type-checker cases: each program's first diagnostic must contain the
 # expected text.
 CK="$(mktemp -d)"

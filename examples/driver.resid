@@ -16062,6 +16062,25 @@ Int main() {
         println("graph-resolve: " + IntToString(rsv.uses) + " uses, " + IntToString(rsv.unres.len()) + " unresolved");
         return if (rsv.unres.len() == 0) { 0 } else { 1 };
     }
+    // `--graph-types [path]`: type coverage of the checked graph; with a
+    // path, also writes each typed node and its def edge.
+    Bool kgtys  =  pick_flag(argc, "--graph-types");
+    if (kgtys) {
+        KP kgt = kg_parse(src);
+        if (kgt.err != "") {
+            println("graph: parse error: " + kgt.err);
+            return 1;
+        }
+        GKR gr = gk_analyze(kgt.g, kgt.id, src, rr.map, true);
+        if (gr.status != 0) { return gr.status; }
+        List(Int) none = [];
+        List(Int) un = gk_untyped(kgt.g, gr.ty, kgt.id, none);
+        Int nu = kg_print_hits(src, kg_srcmap(rr.map), kgt.g, un[0..min_i64(un.len(), 10)], 0);
+        Str tpath  =  pick_opt(argc, "--graph-types", "");
+        Bool tw = if (tpath != "" && !str_starts_with(tpath, "-")) { filesystem.write_all(tpath, gk_dump_types(kgt.g, gr, 0, str_sb_new())) } else { false };
+        println("graph-types: " + IntToString(un.len()) + " untyped, " + IntToString(gk_count_members(kgt.g, gr, 0, 0)) + " member edges");
+        return if (un.len() == 0) { 0 } else { 1 };
+    }
     Str kgwhere  =  pick_opt(argc, "--graph-where", "");
     if (kgwhere != "") {
         if (kgwhere == "map") { print(rr.map); }

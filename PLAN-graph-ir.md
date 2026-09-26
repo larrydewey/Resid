@@ -61,7 +61,7 @@ are imported the same way `reduce.resid` is.
     - The checker accepted assignment (`x = 5;`) as a no-op.
     - The checker accepted list literals without commas.
     - Three `:owned` stripping lines in codegen were dead assignments.
-- [ ] G2 Resolution and type checking on the graph.
+- [x] G2 Resolution and type checking on the graph.
   - [x] def edges: `examples/resolve.resid` links every ref, call, struct
     literal and type use to its binder (param, bind, for, with, pattern,
     arm, lambda parameter, fn or type declaration). `--graph-resolve`
@@ -89,8 +89,19 @@ are imported the same way `reduce.resid` is.
       `xs.concat([e])` to `resid_list_push`, which skips the one-element
       list. Profiling showed lexing is only ~30MB of the parse, so a token
       array would not pay for itself.
-  - [ ] Types stored on nodes (a column), and effect sets as node facts.
-  - [ ] Field and method uses get def edges once types are stored.
+  - [x] Types stored on nodes: the checker threads its state through every
+    result and logs each node's type; `gk_analyze` sorts the log into a
+    column indexed by node id. Logging is off for a plain check (325MB
+    peak), on for `--graph-types` (430MB).
+  - [x] Member def edges: field accesses, struct literal fields and
+    destructured names point at their `sfield`, and method-sugar calls at
+    their `fn`, merged into the def column.
+  - Coverage: `tests/graph` requires every checked expression node of every
+    in-repo program to be typed, and compares a golden type column
+    (`tests/graph/cases/types_sample.types`). Test blocks are now checked
+    outside test mode too.
+  - Effect sets stay in the capability passes (per function); they become
+    node facts in G3.
 - [ ] G2b Linear builders: `StrBuf` and `ListBuf(T)`.
   - Spec: `StrBuf b = StrBuf(); StrBuf b2 = b.push(x); Str s = b2.finish();`.
     Every StrBuf value must be used exactly once (moved, never copied or

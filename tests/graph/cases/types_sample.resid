@@ -1,0 +1,14 @@
+// Golden type column (tests/graph/run.sh compares types_sample.types).
+type P = { Int x; Int y; };
+Int twice(Int v) { return v * 2; }
+Int f(Int a, P p) {
+    Int b = a + p.x;
+    Int(8) small = 3;
+    Option(Int) o = Some(b);
+    Int c = o else { 0 };
+    List(Str) xs = ["a", "b"];
+    for (Str s in xs) { println(s + IntToString(small)); }
+    Int d = match (o) { Some(q) => q.twice(), None => 0 };
+    return d + c;
+}
+Int main() { return f(2, P {.x = 1, .y = 2}); }
