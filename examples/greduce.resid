@@ -95,8 +95,15 @@ GXN gx_lit(GS st, Str lit, Int like, Str rule) {
     if (c0 >= 48 && c0 <= 57) { return gx_add_r(st, "lit", lit, "int", none, like, rule); }
     if (st.depth > 0) { return gx_n(st, like); }
     KP p = kg_expr(lit, kg_empty(), 0);
+    Int n0 = kg_count(st.g);
     KP q = gx_graft(st.g, p.g, p.id, st.g.ns[like].sp, st.g.ns[like].ep);
-    return GXN {.st = gx_derive(gx_with_g(st, q.g), q.id, like, rule), .id = q.id};
+    // Every grafted node is part of the result, so each derives from `like`.
+    return GXN {.st = gx_derive_all(gx_with_g(st, q.g), n0, q.id + 1, like, rule), .id = q.id};
+}
+
+GS gx_derive_all(GS st, Int i, Int n, Int from, Str rule) {
+    if (i >= n) { return st; }
+    return gx_derive_all(gx_derive(st, i, from, rule), i + 1, n, from, rule);
 }
 
 GXN gx_paren(GS st, Int r, Int like) { return gx_add(st, "paren", "", "", [r], like); }
@@ -1690,7 +1697,7 @@ pub GSR gs_program(Kg g, Int unit, Str src) {
     if (o.n == 0) { return GSR {.g = g, .id = unit, .dv = ""}; }
     KN u = o.g.ns[unit];
     KP r = kg_add(o.g, "unit", "", "", o.decls.concat(o.tail), u.sp, u.ep);
-    return GSR {.g = r.g, .id = r.id, .dv = o.dv};
+    return GSR {.g = r.g, .id = r.id, .dv = o.dv + IntToString(r.id) + "," + IntToString(unit) + ",rebuild;"};
 }
 
 // No graph (the text pipeline runs instead).

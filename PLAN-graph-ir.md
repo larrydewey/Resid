@@ -184,7 +184,12 @@ are imported the same way `reduce.resid` is.
   - [x] `resid-graph <artifact> --node ID [--depth N]` prints the node's
     neighbourhood (operand, def and derive edges, coloured by knowledge)
     as DOT; the artifact reader is shared in `lib/kgart.resid`.
-  - A conformance checker for the §3.4 invariants and lowered coverage.
+  - [x] `resid-graph <artifact> --check` checks the §3.4 invariants:
+    operands point to earlier nodes, every residual node reaches source
+    through derive edges, every RESIDUAL / EFFECT node has a reason, and
+    every source node is KNOWN, reachable from the residual roots, or
+    inside a subtree some node derives from. The self-compile's graph has
+    no violations. Lowered coverage waits for the lowered table.
 - [ ] G6 `resid debug`.
   - Static mode first: walk the graph, show knowledge, facts and derivations.
   - Live mode reads the DWARF node map. First backend: drive gdb/lldb

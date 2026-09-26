@@ -327,7 +327,14 @@ from the graph artifact instead (knowledge, value, reason, facts,
 effects, def and the derive chain back to source; 0.3s on the
 self-compile's 35MB artifact). `tools/resid-graph.resid <artifact>
 --node ID [--depth N]` prints a node's neighbourhood as DOT; both tools
-read the artifact through `lib/kgart.resid`. Self-compile: 187 notes (92 provider calls, 95
+read the artifact through `lib/kgart.resid`. `resid-graph <artifact>
+--check` verifies the §3.4 invariants; it found literals grafted by the
+reducer's fold and the string-accumulator rewrite's unit without derive
+edges (fixed), and the self-compile's graph now has no violations. It
+also exposed a runtime bug: a linear map loop entered with a large
+frozen table copied the table on every entry (never freed), so a loop run
+once per element of a growing map was quadratic; such loops now take the
+persistent path like large tries. Self-compile: 187 notes (92 provider calls, 95
 whistles).
 
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)

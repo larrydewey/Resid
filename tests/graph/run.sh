@@ -147,5 +147,17 @@ if "$COMPILER" tools/resid-graph.resid -o "$CK/rg" >/dev/null 2>&1; then
 else
     fail=$((fail + 1)); echo "FAIL resid-graph build"
 fi
+# The §3.4 invariants hold on debug builds' graphs.
+for c in tests/graph/cases/debug_locals.resid tests/graph/cases/notes_sample.resid tests/conformance/cases/range_facts_discharge.resid tests/reduce/cases/*.resid; do
+    b="$CK/inv_$(basename "$c" .resid)"
+    "$COMPILER" "$c" -o "$b" --profile debug >/dev/null 2>&1 || continue
+    [ -f "$b.resid-graph.cbor" ] || continue
+    got="$("$CK/rg" "$b" --check 2>&1 | tail -1)"
+    if [[ "$got" == *" 0 violation(s)"* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL graph check $c: $got"
+    fi
+done
 echo "graph: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
