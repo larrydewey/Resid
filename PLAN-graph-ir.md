@@ -155,8 +155,12 @@ are imported the same way `reduce.resid` is.
   - Codegen walks residual roots.
   - [x] `<out>.resid-graph.cbor` (§34) in debug and check builds, streamed
     in chunks; its hash is embedded in the binary and signed.
-  - Every instruction gets a DILocation keyed by node id. Residual bindings
-    get dbg.value with their node id. The graph's lowered table.
+  - [x] Debug builds carry DWARF: a DISubprogram per function, a
+    DILocation per statement (its source line and column) on every
+    instruction. Columns cannot hold node ids (LLVM keeps 16 bits), so
+    locations map to nodes through the artifact's spans.
+  - Residual bindings get dbg.value with their node id; the graph's
+    lowered table.
   - Exit criterion: `./boot.sh` reaches a fixed point with `--graph` as the
     default.
 - [ ] G5 Tools and conformance.

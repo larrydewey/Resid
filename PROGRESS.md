@@ -261,6 +261,16 @@ cleared when none is emitted. New runtime pieces: `str_sha256`,
 `filesystem.write_hex`, `filesystem.append_hex`. Debug self-compile:
 649MB peak (579MB before the artifact), 5.0s.
 
+### 0s. DWARF debug info (G4, 2026-09-26)
+
+Debug builds on the graph path emit DWARF 5: a DISubprogram per function
+and a DILocation per statement at its source line and column (through the
+import source map), attached to every instruction of that statement, so
+gdb breaks, steps and backtraces in Resid source; specialized functions
+report their original's lines. Lowering marks statement starts with
+`;@dbg` lines and a post-pass (after tail-call rewriting) tags them.
+Debug self-compile: 664MB peak, 5.3s.
+
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
 
 `examples/greduce.resid` reduces the parsed graph instead of source text.
