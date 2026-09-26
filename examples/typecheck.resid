@@ -1,20 +1,10 @@
-/// typecheck.res — M6a bootstrap milestone: a Resid type checker written in Resid.
-///
-/// Reads `.resid` source (path from `RESID_TYPECHECK_SRC` env var), lexes it with
-/// the M4 lexer primitives, collects every function signature in a first pass,
-/// then re-walks the program checking each function body against a growing
-/// environment of parameter/local bindings. On success it prints one `OK <decl>`
-/// line per declaration and exits 0; on the first type error it prints
-/// `type error: <message>` and exits 1.
-///
-/// Proof: run `RESID_TYPECHECK_SRC=<file> residc examples/typecheck.res run`.
-///
-/// Supported subset: primitive types (Int/Float/Bool/Str), `List(T)`, functions
-/// with typed params and a return type, bind/discard/return/if-else/while/for-in
-/// statements, block statements, unary/binary expressions (incl. Str + Str and
-/// `..` ranges), list literals, indexing, slicing, `.len()` / `.concat(...)`,
-/// calls to user functions and the numeric/string built-ins. `type` defs and
-/// `import` declarations are parsed and skipped (reported OK).
+/// typecheck.resid — the type algebra the graph checker
+/// (examples/gcheck.resid) is built on: signature tables (Sigs), operator
+/// and builtin typing (bin_type, check_builtin), numeric widening,
+/// constraint and fixed-capacity types, and capability lists. The part
+/// after the lexer is fused into examples/driver.resid by
+/// tools/merge_driver.py (colliding names become ck_*); the lexer lets the
+/// file be read on its own.
 
 // ─── Character classification (M4 lexer primitives) ────────────
 

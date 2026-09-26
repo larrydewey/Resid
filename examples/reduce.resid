@@ -1,43 +1,14 @@
-// reduce.resid — eager compile-time reduction (spec §36, "Compilation is
-// maximal authorized reduction of first-class knowledge").
+// reduce.resid — the value model of compile-time reduction (spec §36),
+// used by the graph reducer (examples/greduce.resid): known values as
+// (value, type) text pairs (Int / Int(128) as decimal text, Bool as
+// true/false, Str as the decoded contents), folding with the code
+// generator's exact semantics (an operation that would trap is left
+// residual), pure runtime builtins evaluated by calling the runtime
+// function the program would call, environments, budgets, and the
+// homeomorphic-embedding whistle that ends specialization.
 //
-// A source-to-source partial evaluator that runs after type checking and
-// before code generation, on every program. It walks every function body
-// and replaces each sub-expression whose value is known at compile time
-// with that value:
-//
-//   - literals, and locals bound to known values (known-binding
-//     propagation), with dead known bindings elided (§36 dead-code
-//     elimination);
-//   - unary / binary operators over known operands, with the exact
-//     semantics the code generator gives them (widths, wrap-free checks:
-//     an operation whose result the generator would overflow is left
-//     residual rather than folded);
-//   - `if` statements and expressions with a known condition (the other
-//     arm is dropped);
-//   - pure runtime builtins with known arguments (str_len, str_slice,
-//     IntToString, ...), evaluated by calling the very runtime function
-//     the program would call;
-//   - calls to user functions whose arguments are all known and whose body
-//     reduces completely (β-reduction), memoized, under step and depth
-//     budgets so non-terminating or very deep recursion falls back to the
-//     residual call (an identical call re-entering itself stops at once);
-//   - calls with some known arguments: specialized to f__rsN (see
-//     rd_specialize), terminating by a homeomorphic-embedding whistle.
-//
-// Soundness is by construction: anything the evaluator does not model —
-// an effect (println, providers), a value type it does not represent, an
-// abort, a construct it does not interpret — is simply left as it was.
-// A substituted literal always carries the same code-generator type and
-// value as the expression it replaces, so later stages see an equivalent
-// program. Line structure is preserved (removed text is replaced by the
-// same number of newlines), so runtime diagnostics keep their lines.
-//
-// Known values are (value, type) pairs of strings: Int / Int(128) as
-// decimal text, Bool as true/false, Str as the decoded string contents.
-//
-// This file is imported by examples/driver.resid and shares its lexer
-// (lex_tok, Tok), parse_type/PRes and is_known_type_cg.
+// Imported by examples/driver.resid; shares its lexer (lex_tok, Tok) and
+// parse_type/PRes.
 
 // specs: emitted specialized functions; hist: active specialization chain;
 // notes: "note: ..." lines for residual work left by a budget.

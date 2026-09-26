@@ -1,20 +1,9 @@
-/// typecheck.res — M6a bootstrap milestone: a Resid type checker written in Resid.
-///
-/// Reads `.resid` source (path from `RESID_TYPECHECK_SRC` env var), lexes it with
-/// the M4 lexer primitives, collects every function signature in a first pass,
-/// then re-walks the program checking each function body against a growing
-/// environment of parameter/local bindings. On success it prints one `OK <decl>`
-/// line per declaration and exits 0; on the first type error it prints
-/// `type error: <message>` and exits 1.
-///
-/// Proof: run `RESID_TYPECHECK_SRC=<file> residc examples/typecheck.res run`.
-///
-/// Supported subset: primitive types (Int/Float/Bool/Str), `List(T)`, functions
-/// with typed params and a return type, bind/discard/return/if-else/while/for-in
-/// statements, block statements, unary/binary expressions (incl. Str + Str and
-/// `..` ranges), list literals, indexing, slicing, `.len()` / `.concat(...)`,
-/// calls to user functions and the numeric/string built-ins. `type` defs and
-/// `import` declarations are parsed and skipped (reported OK).
+/// codegen.resid — the LLVM emission layer: the lexer, type layout
+/// (ll_ty, widths), arithmetic with its overflow and division checks,
+/// boxing, runtime-call emitters, collections, closures, variants and the
+/// test framework's expectations. Lowering (examples/lower.resid) calls it
+/// per graph node. tools/merge_driver.py fuses it, with typecheck.resid's
+/// checker section, into examples/driver.resid.
 
 // ─── Character classification (M4 lexer primitives) ────────────
 

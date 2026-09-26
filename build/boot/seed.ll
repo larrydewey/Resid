@@ -96849,156 +96849,286 @@ store ptr %t63623, ptr %t63625
 %t63627 = call ptr @resid_list_concat(ptr %t63626, ptr %p2)
 ret ptr %t63627
 }
+define i1 @sa_chain_breaker(ptr %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
+entry:
+%t63629 = call i8 @resid_str_eq(ptr %p0, ptr @.s63628)
+%t63630 = icmp ne i8 %t63629, 0
+br label %LSL63631
+LSL63631:
+br i1 %t63630, label %LSJ63631, label %LSR63631
+LSR63631:
+%t63633 = call i8 @resid_str_eq(ptr %p0, ptr @.s63632)
+%t63634 = icmp ne i8 %t63633, 0
+br label %LSJ63631
+LSJ63631:
+%t63635 = phi i1 [ true, %LSL63631 ], [ %t63634, %LSR63631 ]
+br label %LSL63636
+LSL63636:
+br i1 %t63635, label %LSJ63636, label %LSR63636
+LSR63636:
+%t63638 = call i8 @resid_str_eq(ptr %p0, ptr @.s63637)
+%t63639 = icmp ne i8 %t63638, 0
+br label %LSJ63636
+LSJ63636:
+%t63640 = phi i1 [ true, %LSL63636 ], [ %t63639, %LSR63636 ]
+br i1 %t63640, label %L12396, label %L12398
+L12396:
+ret i1 true
+L12398:
+%t63642 = call i8 @resid_str_eq(ptr %p0, ptr @.s63641)
+%t63643 = icmp ne i8 %t63642, 0
+br label %LSL63644
+LSL63644:
+br i1 %t63643, label %LSJ63644, label %LSR63644
+LSR63644:
+%t63646 = call i8 @resid_str_eq(ptr %p0, ptr @.s63645)
+%t63647 = icmp ne i8 %t63646, 0
+br label %LSJ63644
+LSJ63644:
+%t63648 = phi i1 [ true, %LSL63644 ], [ %t63647, %LSR63644 ]
+br label %LSL63649
+LSL63649:
+br i1 %t63648, label %LSJ63649, label %LSR63649
+LSR63649:
+%t63651 = call i8 @resid_str_eq(ptr %p0, ptr @.s63650)
+%t63652 = icmp ne i8 %t63651, 0
+br label %LSJ63649
+LSJ63649:
+%t63653 = phi i1 [ true, %LSL63649 ], [ %t63652, %LSR63649 ]
+br label %LSL63654
+LSL63654:
+br i1 %t63653, label %LSJ63654, label %LSR63654
+LSR63654:
+%t63656 = call i8 @resid_str_eq(ptr %p0, ptr @.s63655)
+%t63657 = icmp ne i8 %t63656, 0
+br label %LSJ63654
+LSJ63654:
+%t63658 = phi i1 [ true, %LSL63654 ], [ %t63657, %LSR63654 ]
+br label %LSL63659
+LSL63659:
+br i1 %t63658, label %LSJ63659, label %LSR63659
+LSR63659:
+%t63661 = call i8 @resid_str_eq(ptr %p0, ptr @.s63660)
+%t63662 = icmp ne i8 %t63661, 0
+br label %LSJ63659
+LSJ63659:
+%t63663 = phi i1 [ true, %LSL63659 ], [ %t63662, %LSR63659 ]
+br label %LSL63664
+LSL63664:
+br i1 %t63663, label %LSJ63664, label %LSR63664
+LSR63664:
+%t63666 = call i8 @resid_str_eq(ptr %p0, ptr @.s63665)
+%t63667 = icmp ne i8 %t63666, 0
+br label %LSJ63664
+LSJ63664:
+%t63668 = phi i1 [ true, %LSL63664 ], [ %t63667, %LSR63664 ]
+br i1 %t63668, label %L12399, label %L12401
+L12399:
+ret i1 true
+L12401:
+%t63670 = call i8 @resid_str_eq(ptr %p0, ptr @.s63669)
+%t63671 = icmp ne i8 %t63670, 0
+br label %LSL63672
+LSL63672:
+br i1 %t63671, label %LSJ63672, label %LSR63672
+LSR63672:
+%t63674 = call i8 @resid_str_eq(ptr %p0, ptr @.s63673)
+%t63675 = icmp ne i8 %t63674, 0
+br label %LSJ63672
+LSJ63672:
+%t63676 = phi i1 [ true, %LSL63672 ], [ %t63675, %LSR63672 ]
+br label %LSL63677
+LSL63677:
+br i1 %t63676, label %LSJ63677, label %LSR63677
+LSR63677:
+%t63679 = call i8 @resid_str_eq(ptr %p0, ptr @.s63678)
+%t63680 = icmp ne i8 %t63679, 0
+br label %LSJ63677
+LSJ63677:
+%t63681 = phi i1 [ true, %LSL63677 ], [ %t63680, %LSR63677 ]
+br label %LSL63682
+LSL63682:
+br i1 %t63681, label %LSJ63682, label %LSR63682
+LSR63682:
+%t63684 = call i8 @resid_str_eq(ptr %p0, ptr @.s63683)
+%t63685 = icmp ne i8 %t63684, 0
+br label %LSJ63682
+LSJ63682:
+%t63686 = phi i1 [ true, %LSL63682 ], [ %t63685, %LSR63682 ]
+br label %LSL63687
+LSL63687:
+br i1 %t63686, label %LSJ63687, label %LSR63687
+LSR63687:
+%t63689 = call i8 @resid_str_eq(ptr %p0, ptr @.s63688)
+%t63690 = icmp ne i8 %t63689, 0
+br label %LSJ63687
+LSJ63687:
+%t63691 = phi i1 [ true, %LSL63687 ], [ %t63690, %LSR63687 ]
+br label %LSL63692
+LSL63692:
+br i1 %t63691, label %LSJ63692, label %LSR63692
+LSR63692:
+%t63694 = call i8 @resid_str_eq(ptr %p0, ptr @.s63693)
+%t63695 = icmp ne i8 %t63694, 0
+br label %LSJ63692
+LSJ63692:
+%t63696 = phi i1 [ true, %LSL63692 ], [ %t63695, %LSR63692 ]
+br i1 %t63696, label %L12402, label %L12404
+L12402:
+ret i1 true
+L12404:
+ret i1 false
+}
 define i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk(ptr %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t63680, %tco.s0 ], [ %t63710, %tco.s1 ]
-%t63628 = getelementptr i8, ptr %p0, i64 0
-%t63629 = load ptr, ptr %t63628
-%t63630 = call ptr @resid_list_get(ptr %t63629, i64 %p1)
-%t63633 = getelementptr i8, ptr %t63630, i64 0
-%t63634 = load ptr, ptr %t63633
-%t63636 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63635)
-%t63637 = icmp ne i8 %t63636, 0
-br label %LSL63638
-LSL63638:
-br i1 %t63637, label %LSJ63638, label %LSR63638
-LSR63638:
-%t63640 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63639)
-%t63641 = icmp ne i8 %t63640, 0
-br label %LSJ63638
-LSJ63638:
-%t63642 = phi i1 [ true, %LSL63638 ], [ %t63641, %LSR63638 ]
-br label %LSL63643
-LSL63643:
-br i1 %t63642, label %LSJ63643, label %LSR63643
-LSR63643:
-%t63645 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63644)
-%t63646 = icmp ne i8 %t63645, 0
-br label %LSJ63643
-LSJ63643:
-%t63647 = phi i1 [ true, %LSL63643 ], [ %t63646, %LSR63643 ]
-br label %LSL63648
-LSL63648:
-br i1 %t63647, label %LSJ63648, label %LSR63648
-LSR63648:
-%t63650 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63649)
-%t63651 = icmp ne i8 %t63650, 0
-br label %LSJ63648
-LSJ63648:
-%t63652 = phi i1 [ true, %LSL63648 ], [ %t63651, %LSR63648 ]
-br i1 %t63652, label %L12396, label %L12398
-L12396:
-ret i1 true
-L12398:
-%t63654 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63653)
-%t63655 = icmp ne i8 %t63654, 0
-br i1 %t63655, label %L12399, label %L12401
-L12399:
-%t63656 = getelementptr i8, ptr %t63630, i64 8
-%t63657 = load ptr, ptr %t63656
-%t63658 = call i1 @sa_chain_breaker(ptr %t63657)
-br i1 %t63658, label %L12402, label %L12404
-L12402:
-ret i1 true
-L12404:
-%t63659 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
-%t63660 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk(ptr %p0, i64 %t63659)
-br label %LSL63661
-LSL63661:
-br i1 %t63660, label %LSJ63661, label %LSR63661
-LSR63661:
-%t63662 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 1)
-%t63663 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk(ptr %p0, i64 %t63662)
-br label %LSJ63661
-LSJ63661:
-%t63664 = phi i1 [ true, %LSL63661 ], [ %t63663, %LSR63661 ]
-ret i1 %t63664
-L12401:
-%t63666 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63665)
-%t63667 = icmp ne i8 %t63666, 0
-br i1 %t63667, label %L12405, label %L12407
+%p1 = phi i64 [ %p1.in, %entry ], [ %t63749, %tco.s0 ], [ %t63779, %tco.s1 ]
+%t63697 = getelementptr i8, ptr %p0, i64 0
+%t63698 = load ptr, ptr %t63697
+%t63699 = call ptr @resid_list_get(ptr %t63698, i64 %p1)
+%t63702 = getelementptr i8, ptr %t63699, i64 0
+%t63703 = load ptr, ptr %t63702
+%t63705 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63704)
+%t63706 = icmp ne i8 %t63705, 0
+br label %LSL63707
+LSL63707:
+br i1 %t63706, label %LSJ63707, label %LSR63707
+LSR63707:
+%t63709 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63708)
+%t63710 = icmp ne i8 %t63709, 0
+br label %LSJ63707
+LSJ63707:
+%t63711 = phi i1 [ true, %LSL63707 ], [ %t63710, %LSR63707 ]
+br label %LSL63712
+LSL63712:
+br i1 %t63711, label %LSJ63712, label %LSR63712
+LSR63712:
+%t63714 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63713)
+%t63715 = icmp ne i8 %t63714, 0
+br label %LSJ63712
+LSJ63712:
+%t63716 = phi i1 [ true, %LSL63712 ], [ %t63715, %LSR63712 ]
+br label %LSL63717
+LSL63717:
+br i1 %t63716, label %LSJ63717, label %LSR63717
+LSR63717:
+%t63719 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63718)
+%t63720 = icmp ne i8 %t63719, 0
+br label %LSJ63717
+LSJ63717:
+%t63721 = phi i1 [ true, %LSL63717 ], [ %t63720, %LSR63717 ]
+br i1 %t63721, label %L12405, label %L12407
 L12405:
-%t63668 = getelementptr i8, ptr %t63630, i64 8
-%t63669 = load ptr, ptr %t63668
-%t63671 = call i8 @resid_str_eq(ptr %t63669, ptr @.s63670)
-%t63672 = icmp ne i8 %t63671, 0
-br label %LSL63673
-LSL63673:
-br i1 %t63672, label %LSJ63673, label %LSR63673
-LSR63673:
-%t63674 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
-%t63675 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk(ptr %p0, i64 %t63674)
-br label %LSJ63673
-LSJ63673:
-%t63676 = phi i1 [ true, %LSL63673 ], [ %t63675, %LSR63673 ]
-ret i1 %t63676
+ret i1 true
 L12407:
-%t63678 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63677)
-%t63679 = icmp ne i8 %t63678, 0
-br i1 %t63679, label %L12408, label %L12410
+%t63723 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63722)
+%t63724 = icmp ne i8 %t63723, 0
+br i1 %t63724, label %L12408, label %L12410
 L12408:
-%t63680 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 1)
+%t63725 = getelementptr i8, ptr %t63699, i64 8
+%t63726 = load ptr, ptr %t63725
+%t63727 = call i1 @sa_chain_breaker(ptr %t63726)
+br i1 %t63727, label %L12411, label %L12413
+L12411:
+ret i1 true
+L12413:
+%t63728 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
+%t63729 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk(ptr %p0, i64 %t63728)
+br label %LSL63730
+LSL63730:
+br i1 %t63729, label %LSJ63730, label %LSR63730
+LSR63730:
+%t63731 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 1)
+%t63732 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk(ptr %p0, i64 %t63731)
+br label %LSJ63730
+LSJ63730:
+%t63733 = phi i1 [ true, %LSL63730 ], [ %t63732, %LSR63730 ]
+ret i1 %t63733
+L12410:
+%t63735 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63734)
+%t63736 = icmp ne i8 %t63735, 0
+br i1 %t63736, label %L12414, label %L12416
+L12414:
+%t63737 = getelementptr i8, ptr %t63699, i64 8
+%t63738 = load ptr, ptr %t63737
+%t63740 = call i8 @resid_str_eq(ptr %t63738, ptr @.s63739)
+%t63741 = icmp ne i8 %t63740, 0
+br label %LSL63742
+LSL63742:
+br i1 %t63741, label %LSJ63742, label %LSR63742
+LSR63742:
+%t63743 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
+%t63744 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk(ptr %p0, i64 %t63743)
+br label %LSJ63742
+LSJ63742:
+%t63745 = phi i1 [ true, %LSL63742 ], [ %t63744, %LSR63742 ]
+ret i1 %t63745
+L12416:
+%t63747 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63746)
+%t63748 = icmp ne i8 %t63747, 0
+br i1 %t63748, label %L12417, label %L12419
+L12417:
+%t63749 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 1)
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L12410:
-%t63683 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63682)
-%t63684 = icmp ne i8 %t63683, 0
-br label %LSL63685
-LSL63685:
-br i1 %t63684, label %LSJ63685, label %LSR63685
-LSR63685:
-%t63687 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63686)
-%t63688 = icmp ne i8 %t63687, 0
-br label %LSJ63685
-LSJ63685:
-%t63689 = phi i1 [ true, %LSL63685 ], [ %t63688, %LSR63685 ]
-br label %LSL63690
-LSL63690:
-br i1 %t63689, label %LSJ63690, label %LSR63690
-LSR63690:
-%t63692 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63691)
-%t63693 = icmp ne i8 %t63692, 0
-br label %LSJ63690
-LSJ63690:
-%t63694 = phi i1 [ true, %LSL63690 ], [ %t63693, %LSR63690 ]
-br label %LSL63695
-LSL63695:
-br i1 %t63694, label %LSJ63695, label %LSR63695
-LSR63695:
-%t63697 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63696)
-%t63698 = icmp ne i8 %t63697, 0
-br label %LSJ63695
-LSJ63695:
-%t63699 = phi i1 [ true, %LSL63695 ], [ %t63698, %LSR63695 ]
-br label %LSL63700
-LSL63700:
-br i1 %t63699, label %LSJ63700, label %LSR63700
-LSR63700:
-%t63702 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63701)
-%t63703 = icmp ne i8 %t63702, 0
-br label %LSJ63700
-LSJ63700:
-%t63704 = phi i1 [ true, %LSL63700 ], [ %t63703, %LSR63700 ]
-br label %LSL63705
-LSL63705:
-br i1 %t63704, label %LSJ63705, label %LSR63705
-LSR63705:
-%t63707 = call i8 @resid_str_eq(ptr %t63634, ptr @.s63706)
-%t63708 = icmp ne i8 %t63707, 0
-br label %LSJ63705
-LSJ63705:
-%t63709 = phi i1 [ true, %LSL63705 ], [ %t63708, %LSR63705 ]
-br i1 %t63709, label %L12411, label %L12413
-L12411:
-%t63710 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
+L12419:
+%t63752 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63751)
+%t63753 = icmp ne i8 %t63752, 0
+br label %LSL63754
+LSL63754:
+br i1 %t63753, label %LSJ63754, label %LSR63754
+LSR63754:
+%t63756 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63755)
+%t63757 = icmp ne i8 %t63756, 0
+br label %LSJ63754
+LSJ63754:
+%t63758 = phi i1 [ true, %LSL63754 ], [ %t63757, %LSR63754 ]
+br label %LSL63759
+LSL63759:
+br i1 %t63758, label %LSJ63759, label %LSR63759
+LSR63759:
+%t63761 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63760)
+%t63762 = icmp ne i8 %t63761, 0
+br label %LSJ63759
+LSJ63759:
+%t63763 = phi i1 [ true, %LSL63759 ], [ %t63762, %LSR63759 ]
+br label %LSL63764
+LSL63764:
+br i1 %t63763, label %LSJ63764, label %LSR63764
+LSR63764:
+%t63766 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63765)
+%t63767 = icmp ne i8 %t63766, 0
+br label %LSJ63764
+LSJ63764:
+%t63768 = phi i1 [ true, %LSL63764 ], [ %t63767, %LSR63764 ]
+br label %LSL63769
+LSL63769:
+br i1 %t63768, label %LSJ63769, label %LSR63769
+LSR63769:
+%t63771 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63770)
+%t63772 = icmp ne i8 %t63771, 0
+br label %LSJ63769
+LSJ63769:
+%t63773 = phi i1 [ true, %LSL63769 ], [ %t63772, %LSR63769 ]
+br label %LSL63774
+LSL63774:
+br i1 %t63773, label %LSJ63774, label %LSR63774
+LSR63774:
+%t63776 = call i8 @resid_str_eq(ptr %t63703, ptr @.s63775)
+%t63777 = icmp ne i8 %t63776, 0
+br label %LSJ63774
+LSJ63774:
+%t63778 = phi i1 [ true, %LSL63774 ], [ %t63777, %LSR63774 ]
+br i1 %t63778, label %L12420, label %L12422
+L12420:
+%t63779 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
 br label %tco.s1
 tco.s1:
 br label %tco.head
-L12413:
+L12422:
 ret i1 false
 }
 define i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk_any(ptr %p0.in, ptr %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
@@ -97007,186 +97137,74 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t63718, %tco.s0 ]
-%t63712 = call i64 @resid_list_len(ptr %p1)
-%t63713 = icmp sge i64 %p2, %t63712
-br i1 %t63713, label %L12414, label %L12416
-L12414:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t63787, %tco.s0 ]
+%t63781 = call i64 @resid_list_len(ptr %p1)
+%t63782 = icmp sge i64 %p2, %t63781
+br i1 %t63782, label %L12423, label %L12425
+L12423:
 ret i1 false
-L12416:
-%t63714 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-%t63715 = call i64 @resid_unbox_i64(ptr %t63714)
-%t63717 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk(ptr %p0, i64 %t63715)
-br i1 %t63717, label %L12417, label %L12419
-L12417:
+L12425:
+%t63783 = call ptr @resid_list_get(ptr %p1, i64 %p2)
+%t63784 = call i64 @resid_unbox_i64(ptr %t63783)
+%t63786 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk(ptr %p0, i64 %t63784)
+br i1 %t63786, label %L12426, label %L12428
+L12426:
 ret i1 true
-L12419:
-%t63718 = add nsw i64 %p2, 1
+L12428:
+%t63787 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_site(ptr %p0, i64 %p1, ptr %p2, ptr %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t63720 = getelementptr i8, ptr %p0, i64 0
-%t63721 = load ptr, ptr %t63720
-%t63722 = call ptr @resid_list_get(ptr %t63721, i64 %p1)
-%t63725 = getelementptr i8, ptr %t63722, i64 32
-%t63726 = load i64, ptr %t63725
-%t63727 = icmp ne i64 %t63726, 1
-br i1 %t63727, label %L12420, label %L12422
-L12420:
-ret i1 false
-L12422:
-%t63728 = call i64 @resid_scope_push()
-%t63729 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
-call void @resid_scope_pop(i64 %t63728)
-%t63730 = getelementptr i8, ptr %p0, i64 0
-%t63731 = load ptr, ptr %t63730
-%t63732 = call ptr @resid_list_get(ptr %t63731, i64 %t63729)
-%t63735 = getelementptr i8, ptr %t63732, i64 0
-%t63736 = load ptr, ptr %t63735
-%t63738 = call i8 @resid_str_eq(ptr %t63736, ptr @.s63737)
-%t63739 = icmp eq i8 %t63738, 0
-br label %LSL63740
-LSL63740:
-br i1 %t63739, label %LSJ63740, label %LSR63740
-LSR63740:
-%t63741 = getelementptr i8, ptr %t63732, i64 8
-%t63742 = load ptr, ptr %t63741
-%t63743 = call i8 @resid_str_eq(ptr %t63742, ptr %p2)
-%t63744 = icmp eq i8 %t63743, 0
-br label %LSJ63740
-LSJ63740:
-%t63745 = phi i1 [ true, %LSL63740 ], [ %t63744, %LSR63740 ]
-br label %LSL63746
-LSL63746:
-br i1 %t63745, label %LSJ63746, label %LSR63746
-LSR63746:
-%t63747 = getelementptr i8, ptr %t63732, i64 32
-%t63748 = load i64, ptr %t63747
-%t63749 = icmp sle i64 %t63748, %p4
-br label %LSJ63746
-LSJ63746:
-%t63750 = phi i1 [ true, %LSL63746 ], [ %t63749, %LSR63746 ]
-br i1 %t63750, label %L12423, label %L12425
-L12423:
-ret i1 false
-L12425:
-%t63751 = call i64 @resid_scope_push()
-%t63752 = call i64 @kg_kid(ptr %p0, i64 %t63729, i64 %p4)
-call void @resid_scope_pop(i64 %t63751)
-%t63753 = getelementptr i8, ptr %p0, i64 0
-%t63754 = load ptr, ptr %t63753
-%t63755 = call ptr @resid_list_get(ptr %t63754, i64 %t63752)
-%t63758 = getelementptr i8, ptr %t63755, i64 0
-%t63759 = load ptr, ptr %t63758
-%t63761 = call i8 @resid_str_eq(ptr %t63759, ptr @.s63760)
-%t63762 = icmp ne i8 %t63761, 0
-br i1 %t63762, label %L12426, label %L12428
-L12426:
-ret i1 false
-L12428:
-%t63763 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB63763)
-%t63764 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_chain(ptr %p0, i64 %t63752, ptr %t63763)
-%t63765 = call i64 @resid_list_len(ptr %t63764)
-%t63766 = icmp slt i64 %t63765, 2
-br i1 %t63766, label %L12429, label %L12431
+%t63789 = getelementptr i8, ptr %p0, i64 0
+%t63790 = load ptr, ptr %t63789
+%t63791 = call ptr @resid_list_get(ptr %t63790, i64 %p1)
+%t63794 = getelementptr i8, ptr %t63791, i64 32
+%t63795 = load i64, ptr %t63794
+%t63796 = icmp ne i64 %t63795, 1
+br i1 %t63796, label %L12429, label %L12431
 L12429:
 ret i1 false
 L12431:
-%t63767 = getelementptr i8, ptr %p0, i64 0
-%t63768 = load ptr, ptr %t63767
-%t63769 = call ptr @resid_list_get(ptr %t63764, i64 0)
-%t63770 = call i64 @resid_unbox_i64(ptr %t63769)
-%t63772 = call ptr @resid_list_get(ptr %t63768, i64 %t63770)
-%t63775 = getelementptr i8, ptr %t63772, i64 0
-%t63776 = load ptr, ptr %t63775
-%t63778 = call i8 @resid_str_eq(ptr %t63776, ptr @.s63777)
-%t63779 = icmp eq i8 %t63778, 0
-br label %LSL63780
-LSL63780:
-br i1 %t63779, label %LSJ63780, label %LSR63780
-LSR63780:
-%t63781 = getelementptr i8, ptr %t63772, i64 8
-%t63782 = load ptr, ptr %t63781
-%t63783 = call i8 @resid_str_eq(ptr %t63782, ptr %p3)
-%t63784 = icmp eq i8 %t63783, 0
-br label %LSJ63780
-LSJ63780:
-%t63785 = phi i1 [ true, %LSL63780 ], [ %t63784, %LSR63780 ]
-br i1 %t63785, label %L12432, label %L12434
+%t63797 = call i64 @resid_scope_push()
+%t63798 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
+call void @resid_scope_pop(i64 %t63797)
+%t63799 = getelementptr i8, ptr %p0, i64 0
+%t63800 = load ptr, ptr %t63799
+%t63801 = call ptr @resid_list_get(ptr %t63800, i64 %t63798)
+%t63804 = getelementptr i8, ptr %t63801, i64 0
+%t63805 = load ptr, ptr %t63804
+%t63807 = call i8 @resid_str_eq(ptr %t63805, ptr @.s63806)
+%t63808 = icmp eq i8 %t63807, 0
+br label %LSL63809
+LSL63809:
+br i1 %t63808, label %LSJ63809, label %LSR63809
+LSR63809:
+%t63810 = getelementptr i8, ptr %t63801, i64 8
+%t63811 = load ptr, ptr %t63810
+%t63812 = call i8 @resid_str_eq(ptr %t63811, ptr %p2)
+%t63813 = icmp eq i8 %t63812, 0
+br label %LSJ63809
+LSJ63809:
+%t63814 = phi i1 [ true, %LSL63809 ], [ %t63813, %LSR63809 ]
+br label %LSL63815
+LSL63815:
+br i1 %t63814, label %LSJ63815, label %LSR63815
+LSR63815:
+%t63816 = getelementptr i8, ptr %t63801, i64 32
+%t63817 = load i64, ptr %t63816
+%t63818 = icmp sle i64 %t63817, %p4
+br label %LSJ63815
+LSJ63815:
+%t63819 = phi i1 [ true, %LSL63815 ], [ %t63818, %LSR63815 ]
+br i1 %t63819, label %L12432, label %L12434
 L12432:
 ret i1 false
 L12434:
-%t63786 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk_any(ptr %p0, ptr %t63764, i64 1)
-br i1 %t63786, label %L12435, label %L12437
-L12435:
-ret i1 false
-L12437:
-%t63787 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_c(i64 0, i64 0, i64 0, i1 false)
-%t63788 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_count_list(ptr %p0, ptr %t63764, i64 1, ptr %p3, ptr %t63787)
-%t63789 = getelementptr i8, ptr %t63788, i64 24
-%t63790 = load i1, ptr %t63789
-%t63791 = xor i1 %t63790, true
-br label %LSL63792
-LSL63792:
-br i1 %t63791, label %LSR63792, label %LSJ63792
-LSR63792:
-%t63793 = getelementptr i8, ptr %t63788, i64 0
-%t63794 = load i64, ptr %t63793
-%t63795 = icmp eq i64 %t63794, 0
-br label %LSJ63792
-LSJ63792:
-%t63796 = phi i1 [ false, %LSL63792 ], [ %t63795, %LSR63792 ]
-ret i1 %t63796
-}
-define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_count_list(ptr %p0.in, ptr %p1.in, i64 %p2.in, ptr %p3.in, ptr %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
-entry:
-br label %tco.head
-tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t63799, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %t63803, %tco.s0 ]
-%t63797 = call i64 @resid_list_len(ptr %p1)
-%t63798 = icmp sge i64 %p2, %t63797
-br i1 %t63798, label %L12438, label %L12440
-L12438:
-ret ptr %p4
-L12440:
-%t63799 = add nsw i64 %p2, 1
-%t63800 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-%t63801 = call i64 @resid_unbox_i64(ptr %t63800)
-%t63803 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_count(ptr %p0, i64 %t63801, ptr %p3, ptr %p4)
-br label %tco.s0
-tco.s0:
-br label %tco.head
-}
-define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_accept(ptr %p0, i64 %p1, ptr %p2, ptr %p3, i64 %p4, ptr %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
-entry:
-%t63805 = getelementptr i8, ptr %p0, i64 0
-%t63806 = load ptr, ptr %t63805
-%t63807 = call ptr @resid_list_get(ptr %t63806, i64 %p1)
-%t63810 = getelementptr i8, ptr %t63807, i64 0
-%t63811 = load ptr, ptr %t63810
-%t63813 = call i8 @resid_str_eq(ptr %t63811, ptr @.s63812)
-%t63814 = icmp ne i8 %t63813, 0
-br label %LSL63815
-LSL63815:
-br i1 %t63814, label %LSR63815, label %LSJ63815
-LSR63815:
-%t63816 = getelementptr i8, ptr %t63807, i64 32
-%t63817 = load i64, ptr %t63816
-%t63818 = icmp eq i64 %t63817, 1
-br label %LSJ63815
-LSJ63815:
-%t63819 = phi i1 [ false, %LSL63815 ], [ %t63818, %LSR63815 ]
-br i1 %t63819, label %L12441, label %L12443
-L12441:
 %t63820 = call i64 @resid_scope_push()
-%t63821 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
+%t63821 = call i64 @kg_kid(ptr %p0, i64 %t63798, i64 %p4)
 call void @resid_scope_pop(i64 %t63820)
 %t63822 = getelementptr i8, ptr %p0, i64 0
 %t63823 = load ptr, ptr %t63822
@@ -97195,66 +97213,178 @@ call void @resid_scope_pop(i64 %t63820)
 %t63828 = load ptr, ptr %t63827
 %t63830 = call i8 @resid_str_eq(ptr %t63828, ptr @.s63829)
 %t63831 = icmp ne i8 %t63830, 0
-br label %LSL63832
-LSL63832:
-br i1 %t63831, label %LSR63832, label %LSJ63832
-LSR63832:
-%t63833 = getelementptr i8, ptr %p0, i64 0
-%t63834 = load ptr, ptr %t63833
-%t63835 = call ptr @resid_list_get(ptr %t63834, i64 %t63821)
-%t63838 = getelementptr i8, ptr %t63835, i64 8
-%t63839 = load ptr, ptr %t63838
-%t63840 = call i8 @resid_str_eq(ptr %t63839, ptr %p3)
-%t63841 = icmp ne i8 %t63840, 0
-br label %LSJ63832
-LSJ63832:
-%t63842 = phi i1 [ false, %LSL63832 ], [ %t63841, %LSR63832 ]
-br i1 %t63842, label %L12444, label %L12446
-L12444:
-%t63843 = getelementptr i8, ptr %p5, i64 0
-%t63844 = load i64, ptr %t63843
-%t63845 = getelementptr i8, ptr %p5, i64 8
-%t63846 = load i64, ptr %t63845
-%t63847 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t63846, i64 1)
-%t63848 = extractvalue {i64, i1} %t63847, 0
-%t63849 = extractvalue {i64, i1} %t63847, 1
-%t63850 = zext i1 %t63849 to i8
-call void @resid_overflow_check(i8 %t63850)
-%t63851 = getelementptr i8, ptr %p5, i64 16
-%t63852 = load i64, ptr %t63851
-%t63853 = getelementptr i8, ptr %p5, i64 24
-%t63854 = load i1, ptr %t63853
-%t63855 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_c(i64 %t63844, i64 %t63848, i64 %t63852, i1 %t63854)
-ret ptr %t63855
-L12446:
-%t63856 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_site(ptr %p0, i64 %p1, ptr %p2, ptr %p3, i64 %p4)
-br i1 %t63856, label %L12447, label %L12449
-L12447:
-%t63857 = getelementptr i8, ptr %p5, i64 0
-%t63858 = load i64, ptr %t63857
-%t63859 = getelementptr i8, ptr %p5, i64 8
-%t63860 = load i64, ptr %t63859
-%t63861 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t63860, i64 1)
-%t63862 = extractvalue {i64, i1} %t63861, 0
-%t63863 = extractvalue {i64, i1} %t63861, 1
-%t63864 = zext i1 %t63863 to i8
-call void @resid_overflow_check(i8 %t63864)
-%t63865 = getelementptr i8, ptr %p5, i64 16
-%t63866 = load i64, ptr %t63865
-%t63867 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t63866, i64 1)
-%t63868 = extractvalue {i64, i1} %t63867, 0
-%t63869 = extractvalue {i64, i1} %t63867, 1
-%t63870 = zext i1 %t63869 to i8
-call void @resid_overflow_check(i8 %t63870)
-%t63871 = getelementptr i8, ptr %p5, i64 24
-%t63872 = load i1, ptr %t63871
-%t63873 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_c(i64 %t63858, i64 %t63862, i64 %t63868, i1 %t63872)
-ret ptr %t63873
-L12449:
-br label %L12443
+br i1 %t63831, label %L12435, label %L12437
+L12435:
+ret i1 false
+L12437:
+%t63832 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB63832)
+%t63833 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_chain(ptr %p0, i64 %t63821, ptr %t63832)
+%t63834 = call i64 @resid_list_len(ptr %t63833)
+%t63835 = icmp slt i64 %t63834, 2
+br i1 %t63835, label %L12438, label %L12440
+L12438:
+ret i1 false
+L12440:
+%t63836 = getelementptr i8, ptr %p0, i64 0
+%t63837 = load ptr, ptr %t63836
+%t63838 = call ptr @resid_list_get(ptr %t63833, i64 0)
+%t63839 = call i64 @resid_unbox_i64(ptr %t63838)
+%t63841 = call ptr @resid_list_get(ptr %t63837, i64 %t63839)
+%t63844 = getelementptr i8, ptr %t63841, i64 0
+%t63845 = load ptr, ptr %t63844
+%t63847 = call i8 @resid_str_eq(ptr %t63845, ptr @.s63846)
+%t63848 = icmp eq i8 %t63847, 0
+br label %LSL63849
+LSL63849:
+br i1 %t63848, label %LSJ63849, label %LSR63849
+LSR63849:
+%t63850 = getelementptr i8, ptr %t63841, i64 8
+%t63851 = load ptr, ptr %t63850
+%t63852 = call i8 @resid_str_eq(ptr %t63851, ptr %p3)
+%t63853 = icmp eq i8 %t63852, 0
+br label %LSJ63849
+LSJ63849:
+%t63854 = phi i1 [ true, %LSL63849 ], [ %t63853, %LSR63849 ]
+br i1 %t63854, label %L12441, label %L12443
+L12441:
+ret i1 false
 L12443:
-%t63874 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_accept_kids(ptr %p0, i64 %p1, i64 0, ptr %p2, ptr %p3, i64 %p4, ptr %p5)
-ret ptr %t63874
+%t63855 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_brk_any(ptr %p0, ptr %t63833, i64 1)
+br i1 %t63855, label %L12444, label %L12446
+L12444:
+ret i1 false
+L12446:
+%t63856 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_c(i64 0, i64 0, i64 0, i1 false)
+%t63857 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_count_list(ptr %p0, ptr %t63833, i64 1, ptr %p3, ptr %t63856)
+%t63858 = getelementptr i8, ptr %t63857, i64 24
+%t63859 = load i1, ptr %t63858
+%t63860 = xor i1 %t63859, true
+br label %LSL63861
+LSL63861:
+br i1 %t63860, label %LSR63861, label %LSJ63861
+LSR63861:
+%t63862 = getelementptr i8, ptr %t63857, i64 0
+%t63863 = load i64, ptr %t63862
+%t63864 = icmp eq i64 %t63863, 0
+br label %LSJ63861
+LSJ63861:
+%t63865 = phi i1 [ false, %LSL63861 ], [ %t63864, %LSR63861 ]
+ret i1 %t63865
+}
+define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_count_list(ptr %p0.in, ptr %p1.in, i64 %p2.in, ptr %p3.in, ptr %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t63868, %tco.s0 ]
+%p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%p4 = phi ptr [ %p4.in, %entry ], [ %t63872, %tco.s0 ]
+%t63866 = call i64 @resid_list_len(ptr %p1)
+%t63867 = icmp sge i64 %p2, %t63866
+br i1 %t63867, label %L12447, label %L12449
+L12447:
+ret ptr %p4
+L12449:
+%t63868 = add nsw i64 %p2, 1
+%t63869 = call ptr @resid_list_get(ptr %p1, i64 %p2)
+%t63870 = call i64 @resid_unbox_i64(ptr %t63869)
+%t63872 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_count(ptr %p0, i64 %t63870, ptr %p3, ptr %p4)
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_accept(ptr %p0, i64 %p1, ptr %p2, ptr %p3, i64 %p4, ptr %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
+entry:
+%t63874 = getelementptr i8, ptr %p0, i64 0
+%t63875 = load ptr, ptr %t63874
+%t63876 = call ptr @resid_list_get(ptr %t63875, i64 %p1)
+%t63879 = getelementptr i8, ptr %t63876, i64 0
+%t63880 = load ptr, ptr %t63879
+%t63882 = call i8 @resid_str_eq(ptr %t63880, ptr @.s63881)
+%t63883 = icmp ne i8 %t63882, 0
+br label %LSL63884
+LSL63884:
+br i1 %t63883, label %LSR63884, label %LSJ63884
+LSR63884:
+%t63885 = getelementptr i8, ptr %t63876, i64 32
+%t63886 = load i64, ptr %t63885
+%t63887 = icmp eq i64 %t63886, 1
+br label %LSJ63884
+LSJ63884:
+%t63888 = phi i1 [ false, %LSL63884 ], [ %t63887, %LSR63884 ]
+br i1 %t63888, label %L12450, label %L12452
+L12450:
+%t63889 = call i64 @resid_scope_push()
+%t63890 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
+call void @resid_scope_pop(i64 %t63889)
+%t63891 = getelementptr i8, ptr %p0, i64 0
+%t63892 = load ptr, ptr %t63891
+%t63893 = call ptr @resid_list_get(ptr %t63892, i64 %t63890)
+%t63896 = getelementptr i8, ptr %t63893, i64 0
+%t63897 = load ptr, ptr %t63896
+%t63899 = call i8 @resid_str_eq(ptr %t63897, ptr @.s63898)
+%t63900 = icmp ne i8 %t63899, 0
+br label %LSL63901
+LSL63901:
+br i1 %t63900, label %LSR63901, label %LSJ63901
+LSR63901:
+%t63902 = getelementptr i8, ptr %p0, i64 0
+%t63903 = load ptr, ptr %t63902
+%t63904 = call ptr @resid_list_get(ptr %t63903, i64 %t63890)
+%t63907 = getelementptr i8, ptr %t63904, i64 8
+%t63908 = load ptr, ptr %t63907
+%t63909 = call i8 @resid_str_eq(ptr %t63908, ptr %p3)
+%t63910 = icmp ne i8 %t63909, 0
+br label %LSJ63901
+LSJ63901:
+%t63911 = phi i1 [ false, %LSL63901 ], [ %t63910, %LSR63901 ]
+br i1 %t63911, label %L12453, label %L12455
+L12453:
+%t63912 = getelementptr i8, ptr %p5, i64 0
+%t63913 = load i64, ptr %t63912
+%t63914 = getelementptr i8, ptr %p5, i64 8
+%t63915 = load i64, ptr %t63914
+%t63916 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t63915, i64 1)
+%t63917 = extractvalue {i64, i1} %t63916, 0
+%t63918 = extractvalue {i64, i1} %t63916, 1
+%t63919 = zext i1 %t63918 to i8
+call void @resid_overflow_check(i8 %t63919)
+%t63920 = getelementptr i8, ptr %p5, i64 16
+%t63921 = load i64, ptr %t63920
+%t63922 = getelementptr i8, ptr %p5, i64 24
+%t63923 = load i1, ptr %t63922
+%t63924 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_c(i64 %t63913, i64 %t63917, i64 %t63921, i1 %t63923)
+ret ptr %t63924
+L12455:
+%t63925 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_site(ptr %p0, i64 %p1, ptr %p2, ptr %p3, i64 %p4)
+br i1 %t63925, label %L12456, label %L12458
+L12456:
+%t63926 = getelementptr i8, ptr %p5, i64 0
+%t63927 = load i64, ptr %t63926
+%t63928 = getelementptr i8, ptr %p5, i64 8
+%t63929 = load i64, ptr %t63928
+%t63930 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t63929, i64 1)
+%t63931 = extractvalue {i64, i1} %t63930, 0
+%t63932 = extractvalue {i64, i1} %t63930, 1
+%t63933 = zext i1 %t63932 to i8
+call void @resid_overflow_check(i8 %t63933)
+%t63934 = getelementptr i8, ptr %p5, i64 16
+%t63935 = load i64, ptr %t63934
+%t63936 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t63935, i64 1)
+%t63937 = extractvalue {i64, i1} %t63936, 0
+%t63938 = extractvalue {i64, i1} %t63936, 1
+%t63939 = zext i1 %t63938 to i8
+call void @resid_overflow_check(i8 %t63939)
+%t63940 = getelementptr i8, ptr %p5, i64 24
+%t63941 = load i1, ptr %t63940
+%t63942 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_c(i64 %t63927, i64 %t63931, i64 %t63937, i1 %t63941)
+ret ptr %t63942
+L12458:
+br label %L12452
+L12452:
+%t63943 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_accept_kids(ptr %p0, i64 %p1, i64 0, ptr %p2, ptr %p3, i64 %p4, ptr %p5)
+ret ptr %t63943
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_accept_kids(ptr %p0.in, i64 %p1.in, i64 %p2.in, ptr %p3.in, ptr %p4.in, i64 %p5.in, ptr %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
@@ -97262,24 +97392,24 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t63883, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t63952, %tco.s0 ]
 %p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ]
 %p4 = phi ptr [ %p4.in, %entry ], [ %p4, %tco.s0 ]
 %p5 = phi i64 [ %p5.in, %entry ], [ %p5, %tco.s0 ]
-%p6 = phi ptr [ %p6.in, %entry ], [ %t63885, %tco.s0 ]
-%t63875 = getelementptr i8, ptr %p0, i64 0
-%t63876 = load ptr, ptr %t63875
-%t63877 = call ptr @resid_list_get(ptr %t63876, i64 %p1)
-%t63880 = getelementptr i8, ptr %t63877, i64 32
-%t63881 = load i64, ptr %t63880
-%t63882 = icmp sge i64 %p2, %t63881
-br i1 %t63882, label %L12450, label %L12452
-L12450:
+%p6 = phi ptr [ %p6.in, %entry ], [ %t63954, %tco.s0 ]
+%t63944 = getelementptr i8, ptr %p0, i64 0
+%t63945 = load ptr, ptr %t63944
+%t63946 = call ptr @resid_list_get(ptr %t63945, i64 %p1)
+%t63949 = getelementptr i8, ptr %t63946, i64 32
+%t63950 = load i64, ptr %t63949
+%t63951 = icmp sge i64 %p2, %t63950
+br i1 %t63951, label %L12459, label %L12461
+L12459:
 ret ptr %p6
-L12452:
-%t63883 = add nsw i64 %p2, 1
-%t63884 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
-%t63885 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_accept(ptr %p0, i64 %t63884, ptr %p3, ptr %p4, i64 %p5, ptr %p6)
+L12461:
+%t63952 = add nsw i64 %p2, 1
+%t63953 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
+%t63954 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_accept(ptr %p0, i64 %t63953, ptr %p3, ptr %p4, i64 %p5, ptr %p6)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -97291,676 +97421,676 @@ tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t63944, %tco.s0 ]
-%t63887 = getelementptr i8, ptr %p0, i64 0
-%t63888 = load ptr, ptr %t63887
-%t63889 = call ptr @resid_list_get(ptr %t63888, i64 %p1)
-%t63892 = getelementptr i8, ptr %t63889, i64 32
-%t63893 = load i64, ptr %t63892
-%t63894 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t63893, i64 2)
-%t63895 = extractvalue {i64, i1} %t63894, 0
-%t63896 = extractvalue {i64, i1} %t63894, 1
-%t63897 = zext i1 %t63896 to i8
-call void @resid_overflow_check(i8 %t63897)
-%t63898 = icmp sge i64 %p3, %t63895
-br i1 %t63898, label %L12453, label %L12455
-L12453:
-ret i64 -1
-L12455:
-%t63899 = call i64 @resid_scope_push()
-%t63900 = add nsw i64 %p3, 1
-%t63901 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %t63900)
-call void @resid_scope_pop(i64 %t63899)
-%t63902 = getelementptr i8, ptr %p0, i64 0
-%t63903 = load ptr, ptr %t63902
-%t63904 = call i64 @kg_kid(ptr %p0, i64 %t63901, i64 0)
-%t63905 = call ptr @resid_list_get(ptr %t63903, i64 %t63904)
-%t63908 = getelementptr i8, ptr %t63905, i64 8
-%t63909 = load ptr, ptr %t63908
-%t63911 = call i8 @resid_str_eq(ptr %t63909, ptr @.s63910)
-%t63912 = icmp ne i8 %t63911, 0
-br i1 %t63912, label %L12456, label %L12458
-L12456:
-%t63913 = getelementptr i8, ptr %p0, i64 0
-%t63914 = load ptr, ptr %t63913
-%t63915 = call ptr @resid_list_get(ptr %t63914, i64 %t63901)
-%t63918 = getelementptr i8, ptr %t63915, i64 8
-%t63919 = load ptr, ptr %t63918
-%t63920 = getelementptr i8, ptr %p0, i64 0
-%t63921 = load ptr, ptr %t63920
-%t63922 = call ptr @resid_list_get(ptr %t63921, i64 %p1)
-%t63925 = getelementptr i8, ptr %t63922, i64 8
-%t63926 = load ptr, ptr %t63925
-%t63927 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_c(i64 0, i64 0, i64 0, i1 false)
-%t63928 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_count(ptr %p0, i64 %p2, ptr %t63919, ptr %t63927)
-%t63929 = getelementptr i8, ptr %t63928, i64 24
-%t63930 = load i1, ptr %t63929
-%t63931 = xor i1 %t63930, true
-br i1 %t63931, label %L12459, label %L12461
-L12459:
-%t63932 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_c(i64 0, i64 0, i64 0, i1 false)
-%t63933 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_accept(ptr %p0, i64 %p2, ptr %t63926, ptr %t63919, i64 %p3, ptr %t63932)
-%t63934 = getelementptr i8, ptr %t63933, i64 16
-%t63935 = load i64, ptr %t63934
-%t63936 = icmp sgt i64 %t63935, 0
-br label %LSL63937
-LSL63937:
-br i1 %t63936, label %LSR63937, label %LSJ63937
-LSR63937:
-%t63938 = getelementptr i8, ptr %t63933, i64 8
-%t63939 = load i64, ptr %t63938
-%t63940 = getelementptr i8, ptr %t63928, i64 0
-%t63941 = load i64, ptr %t63940
-%t63942 = icmp eq i64 %t63939, %t63941
-br label %LSJ63937
-LSJ63937:
-%t63943 = phi i1 [ false, %LSL63937 ], [ %t63942, %LSR63937 ]
-br i1 %t63943, label %L12462, label %L12464
+%p3 = phi i64 [ %p3.in, %entry ], [ %t64013, %tco.s0 ]
+%t63956 = getelementptr i8, ptr %p0, i64 0
+%t63957 = load ptr, ptr %t63956
+%t63958 = call ptr @resid_list_get(ptr %t63957, i64 %p1)
+%t63961 = getelementptr i8, ptr %t63958, i64 32
+%t63962 = load i64, ptr %t63961
+%t63963 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t63962, i64 2)
+%t63964 = extractvalue {i64, i1} %t63963, 0
+%t63965 = extractvalue {i64, i1} %t63963, 1
+%t63966 = zext i1 %t63965 to i8
+call void @resid_overflow_check(i8 %t63966)
+%t63967 = icmp sge i64 %p3, %t63964
+br i1 %t63967, label %L12462, label %L12464
 L12462:
-ret i64 %p3
+ret i64 -1
 L12464:
-br label %L12461
-L12461:
-br label %L12458
-L12458:
-%t63944 = add nsw i64 %p3, 1
+%t63968 = call i64 @resid_scope_push()
+%t63969 = add nsw i64 %p3, 1
+%t63970 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %t63969)
+call void @resid_scope_pop(i64 %t63968)
+%t63971 = getelementptr i8, ptr %p0, i64 0
+%t63972 = load ptr, ptr %t63971
+%t63973 = call i64 @kg_kid(ptr %p0, i64 %t63970, i64 0)
+%t63974 = call ptr @resid_list_get(ptr %t63972, i64 %t63973)
+%t63977 = getelementptr i8, ptr %t63974, i64 8
+%t63978 = load ptr, ptr %t63977
+%t63980 = call i8 @resid_str_eq(ptr %t63978, ptr @.s63979)
+%t63981 = icmp ne i8 %t63980, 0
+br i1 %t63981, label %L12465, label %L12467
+L12465:
+%t63982 = getelementptr i8, ptr %p0, i64 0
+%t63983 = load ptr, ptr %t63982
+%t63984 = call ptr @resid_list_get(ptr %t63983, i64 %t63970)
+%t63987 = getelementptr i8, ptr %t63984, i64 8
+%t63988 = load ptr, ptr %t63987
+%t63989 = getelementptr i8, ptr %p0, i64 0
+%t63990 = load ptr, ptr %t63989
+%t63991 = call ptr @resid_list_get(ptr %t63990, i64 %p1)
+%t63994 = getelementptr i8, ptr %t63991, i64 8
+%t63995 = load ptr, ptr %t63994
+%t63996 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_c(i64 0, i64 0, i64 0, i1 false)
+%t63997 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_count(ptr %p0, i64 %p2, ptr %t63988, ptr %t63996)
+%t63998 = getelementptr i8, ptr %t63997, i64 24
+%t63999 = load i1, ptr %t63998
+%t64000 = xor i1 %t63999, true
+br i1 %t64000, label %L12468, label %L12470
+L12468:
+%t64001 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_c(i64 0, i64 0, i64 0, i1 false)
+%t64002 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_accept(ptr %p0, i64 %p2, ptr %t63995, ptr %t63988, i64 %p3, ptr %t64001)
+%t64003 = getelementptr i8, ptr %t64002, i64 16
+%t64004 = load i64, ptr %t64003
+%t64005 = icmp sgt i64 %t64004, 0
+br label %LSL64006
+LSL64006:
+br i1 %t64005, label %LSR64006, label %LSJ64006
+LSR64006:
+%t64007 = getelementptr i8, ptr %t64002, i64 8
+%t64008 = load i64, ptr %t64007
+%t64009 = getelementptr i8, ptr %t63997, i64 0
+%t64010 = load i64, ptr %t64009
+%t64011 = icmp eq i64 %t64008, %t64010
+br label %LSJ64006
+LSJ64006:
+%t64012 = phi i1 [ false, %LSL64006 ], [ %t64011, %LSR64006 ]
+br i1 %t64012, label %L12471, label %L12473
+L12471:
+ret i64 %p3
+L12473:
+br label %L12470
+L12470:
+br label %L12467
+L12467:
+%t64013 = add nsw i64 %p3, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %p0, ptr %p1, ptr %p2, ptr %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t63947 = getelementptr i8, ptr %p0, i64 0
-%t63948 = load ptr, ptr %t63947
-%t63949 = call ptr @resid_list_get(ptr %t63948, i64 %p4)
-%t63952 = getelementptr i8, ptr %t63949, i64 40
-%t63953 = load i64, ptr %t63952
-%t63954 = getelementptr i8, ptr %p0, i64 0
-%t63955 = load ptr, ptr %t63954
-%t63956 = call ptr @resid_list_get(ptr %t63955, i64 %p4)
-%t63959 = getelementptr i8, ptr %t63956, i64 48
-%t63960 = load i64, ptr %t63959
-%t63961 = call ptr @kg_add(ptr %p0, ptr %p1, ptr %p2, ptr @.s63946, ptr %p3, i64 %t63953, i64 %t63960)
-ret ptr %t63961
+%t64016 = getelementptr i8, ptr %p0, i64 0
+%t64017 = load ptr, ptr %t64016
+%t64018 = call ptr @resid_list_get(ptr %t64017, i64 %p4)
+%t64021 = getelementptr i8, ptr %t64018, i64 40
+%t64022 = load i64, ptr %t64021
+%t64023 = getelementptr i8, ptr %p0, i64 0
+%t64024 = load ptr, ptr %t64023
+%t64025 = call ptr @resid_list_get(ptr %t64024, i64 %p4)
+%t64028 = getelementptr i8, ptr %t64025, i64 48
+%t64029 = load i64, ptr %t64028
+%t64030 = call ptr @kg_add(ptr %p0, ptr %p1, ptr %p2, ptr @.s64015, ptr %p3, i64 %t64022, i64 %t64029)
+ret ptr %t64030
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_nest(ptr %p0.in, ptr %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t63988 = alloca [1 x ptr]
-%t63999 = alloca [2 x ptr]
+%t64057 = alloca [1 x ptr]
+%t64068 = alloca [2 x ptr]
 br label %tco.head
 tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %t64011, %tco.s0 ]
+%p0 = phi ptr [ %p0.in, %entry ], [ %t64080, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t64012, %tco.s0 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t64014, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t64081, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t64083, %tco.s0 ]
 %p4 = phi i64 [ %p4.in, %entry ], [ %p4, %tco.s0 ]
-%t63962 = call i64 @resid_list_len(ptr %p1)
-%t63963 = icmp sge i64 %p2, %t63962
-br i1 %t63963, label %L12465, label %L12467
-L12465:
-%t63964 = call ptr @resid_gmalloc(i64 32)
-%t63964.f0 = getelementptr i8, ptr %t63964, i64 0
-store ptr %p0, ptr %t63964.f0
-%t63964.f1 = getelementptr i8, ptr %t63964, i64 8
-store i64 %p3, ptr %t63964.f1
-%t63964.f2 = getelementptr i8, ptr %t63964, i64 16
-store i64 0, ptr %t63964.f2
-%t63964.f3 = getelementptr i8, ptr %t63964, i64 24
-store ptr @.s63965, ptr %t63964.f3
-ret ptr %t63964
-L12467:
-%t63966 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-%t63967 = call i64 @resid_unbox_i64(ptr %t63966)
-%t63969 = getelementptr i8, ptr %p0, i64 0
-%t63970 = load ptr, ptr %t63969
-%t63971 = call ptr @resid_list_get(ptr %t63970, i64 %t63967)
-%t63974 = getelementptr i8, ptr %t63971, i64 0
-%t63975 = load ptr, ptr %t63974
-%t63977 = call i8 @resid_str_eq(ptr %t63975, ptr @.s63976)
-%t63978 = icmp ne i8 %t63977, 0
-br label %LSL63979
-LSL63979:
-br i1 %t63978, label %LSR63979, label %LSJ63979
-LSR63979:
-%t63980 = getelementptr i8, ptr %t63971, i64 8
-%t63981 = load ptr, ptr %t63980
-%t63983 = call i8 @resid_str_eq(ptr %t63981, ptr @.s63982)
-%t63984 = icmp ne i8 %t63983, 0
-br label %LSJ63979
-LSJ63979:
-%t63985 = phi i1 [ false, %LSL63979 ], [ %t63984, %LSR63979 ]
-br i1 %t63985, label %L12468, label %L12469
-L12468:
-%t63990 = call ptr @resid_box_i64(i64 %p3)
-%t63992 = getelementptr i8, ptr %t63988, i64 0
-store ptr %t63990, ptr %t63992
-%t63993 = call ptr @resid_list_new(i64 1, ptr %t63988, ptr @.lty63988)
-%t63994 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_kids(ptr %p0, i64 %t63967)
-%t63995 = call ptr @resid_list_concat(ptr %t63993, ptr %t63994)
-%t63996 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %p0, ptr @.s63986, ptr @.s63987, ptr %t63995, i64 %p4)
-br label %L12470
-L12469:
-%t64001 = call ptr @resid_box_i64(i64 %p3)
-%t64003 = getelementptr i8, ptr %t63999, i64 0
-store ptr %t64001, ptr %t64003
-%t64004 = call ptr @resid_box_i64(i64 %t63967)
-%t64006 = getelementptr i8, ptr %t63999, i64 8
-store ptr %t64004, ptr %t64006
-%t64007 = call ptr @resid_list_new(i64 2, ptr %t63999, ptr @.lty63999)
-%t64008 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %p0, ptr @.s63997, ptr @.s63998, ptr %t64007, i64 %p4)
-br label %L12470
-L12470:
-%t64009 = phi ptr [ %t63996, %L12468 ], [ %t64008, %L12469 ]
-%t64010 = getelementptr i8, ptr %t64009, i64 0
-%t64011 = load ptr, ptr %t64010
-%t64012 = add nsw i64 %p2, 1
-%t64013 = getelementptr i8, ptr %t64009, i64 8
-%t64014 = load i64, ptr %t64013
+%t64031 = call i64 @resid_list_len(ptr %p1)
+%t64032 = icmp sge i64 %p2, %t64031
+br i1 %t64032, label %L12474, label %L12476
+L12474:
+%t64033 = call ptr @resid_gmalloc(i64 32)
+%t64033.f0 = getelementptr i8, ptr %t64033, i64 0
+store ptr %p0, ptr %t64033.f0
+%t64033.f1 = getelementptr i8, ptr %t64033, i64 8
+store i64 %p3, ptr %t64033.f1
+%t64033.f2 = getelementptr i8, ptr %t64033, i64 16
+store i64 0, ptr %t64033.f2
+%t64033.f3 = getelementptr i8, ptr %t64033, i64 24
+store ptr @.s64034, ptr %t64033.f3
+ret ptr %t64033
+L12476:
+%t64035 = call ptr @resid_list_get(ptr %p1, i64 %p2)
+%t64036 = call i64 @resid_unbox_i64(ptr %t64035)
+%t64038 = getelementptr i8, ptr %p0, i64 0
+%t64039 = load ptr, ptr %t64038
+%t64040 = call ptr @resid_list_get(ptr %t64039, i64 %t64036)
+%t64043 = getelementptr i8, ptr %t64040, i64 0
+%t64044 = load ptr, ptr %t64043
+%t64046 = call i8 @resid_str_eq(ptr %t64044, ptr @.s64045)
+%t64047 = icmp ne i8 %t64046, 0
+br label %LSL64048
+LSL64048:
+br i1 %t64047, label %LSR64048, label %LSJ64048
+LSR64048:
+%t64049 = getelementptr i8, ptr %t64040, i64 8
+%t64050 = load ptr, ptr %t64049
+%t64052 = call i8 @resid_str_eq(ptr %t64050, ptr @.s64051)
+%t64053 = icmp ne i8 %t64052, 0
+br label %LSJ64048
+LSJ64048:
+%t64054 = phi i1 [ false, %LSL64048 ], [ %t64053, %LSR64048 ]
+br i1 %t64054, label %L12477, label %L12478
+L12477:
+%t64059 = call ptr @resid_box_i64(i64 %p3)
+%t64061 = getelementptr i8, ptr %t64057, i64 0
+store ptr %t64059, ptr %t64061
+%t64062 = call ptr @resid_list_new(i64 1, ptr %t64057, ptr @.lty64057)
+%t64063 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_kids(ptr %p0, i64 %t64036)
+%t64064 = call ptr @resid_list_concat(ptr %t64062, ptr %t64063)
+%t64065 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %p0, ptr @.s64055, ptr @.s64056, ptr %t64064, i64 %p4)
+br label %L12479
+L12478:
+%t64070 = call ptr @resid_box_i64(i64 %p3)
+%t64072 = getelementptr i8, ptr %t64068, i64 0
+store ptr %t64070, ptr %t64072
+%t64073 = call ptr @resid_box_i64(i64 %t64036)
+%t64075 = getelementptr i8, ptr %t64068, i64 8
+store ptr %t64073, ptr %t64075
+%t64076 = call ptr @resid_list_new(i64 2, ptr %t64068, ptr @.lty64068)
+%t64077 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %p0, ptr @.s64066, ptr @.s64067, ptr %t64076, i64 %p4)
+br label %L12479
+L12479:
+%t64078 = phi ptr [ %t64065, %L12477 ], [ %t64077, %L12478 ]
+%t64079 = getelementptr i8, ptr %t64078, i64 0
+%t64080 = load ptr, ptr %t64079
+%t64081 = add nsw i64 %p2, 1
+%t64082 = getelementptr i8, ptr %t64078, i64 8
+%t64083 = load i64, ptr %t64082
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_rw(ptr %p0, i64 %p1, ptr %p2, ptr %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64016 = getelementptr i8, ptr %p0, i64 0
-%t64017 = load ptr, ptr %t64016
-%t64018 = call ptr @resid_list_get(ptr %t64017, i64 %p1)
-%t64021 = getelementptr i8, ptr %t64018, i64 0
-%t64022 = load ptr, ptr %t64021
-%t64024 = call i8 @resid_str_eq(ptr %t64022, ptr @.s64023)
-%t64025 = icmp ne i8 %t64024, 0
-br label %LSL64026
-LSL64026:
-br i1 %t64025, label %LSR64026, label %LSJ64026
-LSR64026:
-%t64027 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_site(ptr %p0, i64 %p1, ptr %p2, ptr %p3, i64 %p4)
-br label %LSJ64026
-LSJ64026:
-%t64028 = phi i1 [ false, %LSL64026 ], [ %t64027, %LSR64026 ]
-br i1 %t64028, label %L12471, label %L12473
-L12471:
-%t64029 = call i64 @resid_scope_push()
-%t64030 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
-call void @resid_scope_pop(i64 %t64029)
-%t64031 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_kids(ptr %p0, i64 %t64030)
-%t64032 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB64032)
-%t64033 = call ptr @resid_list_get(ptr %t64031, i64 %p4)
-%t64034 = call i64 @resid_unbox_i64(ptr %t64033)
-%t64036 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_chain(ptr %p0, i64 %t64034, ptr %t64032)
-%t64037 = call ptr @resid_list_get(ptr %t64036, i64 0)
-%t64038 = call i64 @resid_unbox_i64(ptr %t64037)
-%t64040 = call ptr @resid_list_get(ptr %t64031, i64 %p4)
-%t64041 = call i64 @resid_unbox_i64(ptr %t64040)
-%t64043 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_nest(ptr %p0, ptr %t64036, i64 1, i64 %t64038, i64 %t64041)
-%t64044 = call ptr @resid_list_slice(ptr %t64031, i64 0, i64 %p4)
-%t64045 = getelementptr i8, ptr %t64043, i64 8
-%t64046 = load i64, ptr %t64045
-%t64047 = alloca [1 x ptr]
-%t64049 = call ptr @resid_box_i64(i64 %t64046)
-%t64051 = getelementptr i8, ptr %t64047, i64 0
-store ptr %t64049, ptr %t64051
-%t64053e = load ptr, ptr %t64047
-%t64053 = call ptr @resid_list_push(ptr %t64044, ptr %t64053e)
-%t64054 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p4, i64 1)
-%t64055 = extractvalue {i64, i1} %t64054, 0
-%t64056 = extractvalue {i64, i1} %t64054, 1
-%t64057 = zext i1 %t64056 to i8
-call void @resid_overflow_check(i8 %t64057)
-%t64058 = call i64 @resid_list_len(ptr %t64031)
-%t64059 = call ptr @resid_list_slice(ptr %t64031, i64 %t64055, i64 %t64058)
-%t64060 = call ptr @resid_list_concat(ptr %t64053, ptr %t64059)
-%t64061 = getelementptr i8, ptr %t64043, i64 0
-%t64062 = load ptr, ptr %t64061
-%t64065 = call ptr @resid_str_concat(ptr %p2, ptr @.s64064)
-%t64066 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64062, ptr @.s64063, ptr %t64065, ptr %t64060, i64 %t64030)
-%t64067 = getelementptr i8, ptr %t64066, i64 0
-%t64068 = load ptr, ptr %t64067
-%t64071 = getelementptr i8, ptr %t64066, i64 8
-%t64072 = load i64, ptr %t64071
-%t64073 = alloca [1 x ptr]
-%t64075 = call ptr @resid_box_i64(i64 %t64072)
-%t64077 = getelementptr i8, ptr %t64073, i64 0
-store ptr %t64075, ptr %t64077
-%t64078 = call ptr @resid_list_new(i64 1, ptr %t64073, ptr @.lty64073)
-%t64079 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64068, ptr @.s64069, ptr @.s64070, ptr %t64078, i64 %p1)
-ret ptr %t64079
-L12473:
-%t64080 = getelementptr i8, ptr %t64018, i64 32
-%t64081 = load i64, ptr %t64080
-%t64082 = icmp eq i64 %t64081, 0
-br i1 %t64082, label %L12474, label %L12476
-L12474:
-%t64083 = call ptr @resid_gmalloc(i64 32)
-%t64083.f0 = getelementptr i8, ptr %t64083, i64 0
-store ptr %p0, ptr %t64083.f0
-%t64083.f1 = getelementptr i8, ptr %t64083, i64 8
-store i64 %p1, ptr %t64083.f1
-%t64083.f2 = getelementptr i8, ptr %t64083, i64 16
-store i64 0, ptr %t64083.f2
-%t64083.f3 = getelementptr i8, ptr %t64083, i64 24
-store ptr @.s64084, ptr %t64083.f3
-ret ptr %t64083
-L12476:
-%t64085 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB64085)
-%t64086 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_rw_kids(ptr %p0, i64 %p1, i64 0, ptr %p2, ptr %p3, i64 %p4, ptr %t64085)
-%t64087 = getelementptr i8, ptr %t64086, i64 0
-%t64088 = load ptr, ptr %t64087
-%t64089 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_kids(ptr %t64088, i64 %p1)
-%t64090 = getelementptr i8, ptr %t64086, i64 8
+%t64085 = getelementptr i8, ptr %p0, i64 0
+%t64086 = load ptr, ptr %t64085
+%t64087 = call ptr @resid_list_get(ptr %t64086, i64 %p1)
+%t64090 = getelementptr i8, ptr %t64087, i64 0
 %t64091 = load ptr, ptr %t64090
-%t64092 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_same(ptr %t64089, ptr %t64091, i64 0)
-br i1 %t64092, label %L12477, label %L12479
-L12477:
-%t64093 = call ptr @resid_gmalloc(i64 32)
-%t64094 = getelementptr i8, ptr %t64086, i64 0
-%t64095 = load ptr, ptr %t64094
-%t64093.f0 = getelementptr i8, ptr %t64093, i64 0
-store ptr %t64095, ptr %t64093.f0
-%t64093.f1 = getelementptr i8, ptr %t64093, i64 8
-store i64 %p1, ptr %t64093.f1
-%t64093.f2 = getelementptr i8, ptr %t64093, i64 16
-store i64 0, ptr %t64093.f2
-%t64093.f3 = getelementptr i8, ptr %t64093, i64 24
-store ptr @.s64096, ptr %t64093.f3
-ret ptr %t64093
-L12479:
-%t64097 = getelementptr i8, ptr %t64086, i64 0
-%t64098 = load ptr, ptr %t64097
-%t64099 = getelementptr i8, ptr %t64018, i64 0
-%t64100 = load ptr, ptr %t64099
-%t64101 = getelementptr i8, ptr %t64018, i64 8
-%t64102 = load ptr, ptr %t64101
-%t64103 = getelementptr i8, ptr %t64018, i64 16
-%t64104 = load ptr, ptr %t64103
-%t64105 = getelementptr i8, ptr %t64086, i64 8
-%t64106 = load ptr, ptr %t64105
-%t64107 = getelementptr i8, ptr %t64018, i64 40
-%t64108 = load i64, ptr %t64107
-%t64109 = getelementptr i8, ptr %t64018, i64 48
-%t64110 = load i64, ptr %t64109
-%t64111 = call ptr @kg_add(ptr %t64098, ptr %t64100, ptr %t64102, ptr %t64104, ptr %t64106, i64 %t64108, i64 %t64110)
-ret ptr %t64111
+%t64093 = call i8 @resid_str_eq(ptr %t64091, ptr @.s64092)
+%t64094 = icmp ne i8 %t64093, 0
+br label %LSL64095
+LSL64095:
+br i1 %t64094, label %LSR64095, label %LSJ64095
+LSR64095:
+%t64096 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_site(ptr %p0, i64 %p1, ptr %p2, ptr %p3, i64 %p4)
+br label %LSJ64095
+LSJ64095:
+%t64097 = phi i1 [ false, %LSL64095 ], [ %t64096, %LSR64095 ]
+br i1 %t64097, label %L12480, label %L12482
+L12480:
+%t64098 = call i64 @resid_scope_push()
+%t64099 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
+call void @resid_scope_pop(i64 %t64098)
+%t64100 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_kids(ptr %p0, i64 %t64099)
+%t64101 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB64101)
+%t64102 = call ptr @resid_list_get(ptr %t64100, i64 %p4)
+%t64103 = call i64 @resid_unbox_i64(ptr %t64102)
+%t64105 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_chain(ptr %p0, i64 %t64103, ptr %t64101)
+%t64106 = call ptr @resid_list_get(ptr %t64105, i64 0)
+%t64107 = call i64 @resid_unbox_i64(ptr %t64106)
+%t64109 = call ptr @resid_list_get(ptr %t64100, i64 %p4)
+%t64110 = call i64 @resid_unbox_i64(ptr %t64109)
+%t64112 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_nest(ptr %p0, ptr %t64105, i64 1, i64 %t64107, i64 %t64110)
+%t64113 = call ptr @resid_list_slice(ptr %t64100, i64 0, i64 %p4)
+%t64114 = getelementptr i8, ptr %t64112, i64 8
+%t64115 = load i64, ptr %t64114
+%t64116 = alloca [1 x ptr]
+%t64118 = call ptr @resid_box_i64(i64 %t64115)
+%t64120 = getelementptr i8, ptr %t64116, i64 0
+store ptr %t64118, ptr %t64120
+%t64122e = load ptr, ptr %t64116
+%t64122 = call ptr @resid_list_push(ptr %t64113, ptr %t64122e)
+%t64123 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p4, i64 1)
+%t64124 = extractvalue {i64, i1} %t64123, 0
+%t64125 = extractvalue {i64, i1} %t64123, 1
+%t64126 = zext i1 %t64125 to i8
+call void @resid_overflow_check(i8 %t64126)
+%t64127 = call i64 @resid_list_len(ptr %t64100)
+%t64128 = call ptr @resid_list_slice(ptr %t64100, i64 %t64124, i64 %t64127)
+%t64129 = call ptr @resid_list_concat(ptr %t64122, ptr %t64128)
+%t64130 = getelementptr i8, ptr %t64112, i64 0
+%t64131 = load ptr, ptr %t64130
+%t64134 = call ptr @resid_str_concat(ptr %p2, ptr @.s64133)
+%t64135 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64131, ptr @.s64132, ptr %t64134, ptr %t64129, i64 %t64099)
+%t64136 = getelementptr i8, ptr %t64135, i64 0
+%t64137 = load ptr, ptr %t64136
+%t64140 = getelementptr i8, ptr %t64135, i64 8
+%t64141 = load i64, ptr %t64140
+%t64142 = alloca [1 x ptr]
+%t64144 = call ptr @resid_box_i64(i64 %t64141)
+%t64146 = getelementptr i8, ptr %t64142, i64 0
+store ptr %t64144, ptr %t64146
+%t64147 = call ptr @resid_list_new(i64 1, ptr %t64142, ptr @.lty64142)
+%t64148 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64137, ptr @.s64138, ptr @.s64139, ptr %t64147, i64 %p1)
+ret ptr %t64148
+L12482:
+%t64149 = getelementptr i8, ptr %t64087, i64 32
+%t64150 = load i64, ptr %t64149
+%t64151 = icmp eq i64 %t64150, 0
+br i1 %t64151, label %L12483, label %L12485
+L12483:
+%t64152 = call ptr @resid_gmalloc(i64 32)
+%t64152.f0 = getelementptr i8, ptr %t64152, i64 0
+store ptr %p0, ptr %t64152.f0
+%t64152.f1 = getelementptr i8, ptr %t64152, i64 8
+store i64 %p1, ptr %t64152.f1
+%t64152.f2 = getelementptr i8, ptr %t64152, i64 16
+store i64 0, ptr %t64152.f2
+%t64152.f3 = getelementptr i8, ptr %t64152, i64 24
+store ptr @.s64153, ptr %t64152.f3
+ret ptr %t64152
+L12485:
+%t64154 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB64154)
+%t64155 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_rw_kids(ptr %p0, i64 %p1, i64 0, ptr %p2, ptr %p3, i64 %p4, ptr %t64154)
+%t64156 = getelementptr i8, ptr %t64155, i64 0
+%t64157 = load ptr, ptr %t64156
+%t64158 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_kids(ptr %t64157, i64 %p1)
+%t64159 = getelementptr i8, ptr %t64155, i64 8
+%t64160 = load ptr, ptr %t64159
+%t64161 = call i1 @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_same(ptr %t64158, ptr %t64160, i64 0)
+br i1 %t64161, label %L12486, label %L12488
+L12486:
+%t64162 = call ptr @resid_gmalloc(i64 32)
+%t64163 = getelementptr i8, ptr %t64155, i64 0
+%t64164 = load ptr, ptr %t64163
+%t64162.f0 = getelementptr i8, ptr %t64162, i64 0
+store ptr %t64164, ptr %t64162.f0
+%t64162.f1 = getelementptr i8, ptr %t64162, i64 8
+store i64 %p1, ptr %t64162.f1
+%t64162.f2 = getelementptr i8, ptr %t64162, i64 16
+store i64 0, ptr %t64162.f2
+%t64162.f3 = getelementptr i8, ptr %t64162, i64 24
+store ptr @.s64165, ptr %t64162.f3
+ret ptr %t64162
+L12488:
+%t64166 = getelementptr i8, ptr %t64155, i64 0
+%t64167 = load ptr, ptr %t64166
+%t64168 = getelementptr i8, ptr %t64087, i64 0
+%t64169 = load ptr, ptr %t64168
+%t64170 = getelementptr i8, ptr %t64087, i64 8
+%t64171 = load ptr, ptr %t64170
+%t64172 = getelementptr i8, ptr %t64087, i64 16
+%t64173 = load ptr, ptr %t64172
+%t64174 = getelementptr i8, ptr %t64155, i64 8
+%t64175 = load ptr, ptr %t64174
+%t64176 = getelementptr i8, ptr %t64087, i64 40
+%t64177 = load i64, ptr %t64176
+%t64178 = getelementptr i8, ptr %t64087, i64 48
+%t64179 = load i64, ptr %t64178
+%t64180 = call ptr @kg_add(ptr %t64167, ptr %t64169, ptr %t64171, ptr %t64173, ptr %t64175, i64 %t64177, i64 %t64179)
+ret ptr %t64180
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_rw_kids(ptr %p0.in, i64 %p1.in, i64 %p2.in, ptr %p3.in, ptr %p4.in, i64 %p5.in, ptr %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64129 = alloca [1 x ptr]
+%t64198 = alloca [1 x ptr]
 br label %tco.head
 tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %t64125, %tco.s0 ]
+%p0 = phi ptr [ %p0.in, %entry ], [ %t64194, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t64126, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t64195, %tco.s0 ]
 %p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ]
 %p4 = phi ptr [ %p4.in, %entry ], [ %p4, %tco.s0 ]
 %p5 = phi i64 [ %p5.in, %entry ], [ %p5, %tco.s0 ]
-%p6 = phi ptr [ %p6.in, %entry ], [ %t64135, %tco.s0 ]
-%t64112 = getelementptr i8, ptr %p0, i64 0
-%t64113 = load ptr, ptr %t64112
-%t64114 = call ptr @resid_list_get(ptr %t64113, i64 %p1)
-%t64117 = getelementptr i8, ptr %t64114, i64 32
-%t64118 = load i64, ptr %t64117
-%t64119 = icmp sge i64 %p2, %t64118
-br i1 %t64119, label %L12480, label %L12482
-L12480:
-%t64120 = call ptr @resid_gmalloc(i64 32)
-%t64120.f0 = getelementptr i8, ptr %t64120, i64 0
-store ptr %p0, ptr %t64120.f0
-%t64120.f1 = getelementptr i8, ptr %t64120, i64 8
-store ptr %p6, ptr %t64120.f1
-%t64120.f2 = getelementptr i8, ptr %t64120, i64 16
-store i64 0, ptr %t64120.f2
-%t64120.f3 = getelementptr i8, ptr %t64120, i64 24
-store ptr @.s64121, ptr %t64120.f3
-ret ptr %t64120
-L12482:
-%t64122 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
-%t64123 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_rw(ptr %p0, i64 %t64122, ptr %p3, ptr %p4, i64 %p5)
-%t64124 = getelementptr i8, ptr %t64123, i64 0
-%t64125 = load ptr, ptr %t64124
-%t64126 = add nsw i64 %p2, 1
-%t64127 = getelementptr i8, ptr %t64123, i64 8
-%t64128 = load i64, ptr %t64127
-%t64131 = call ptr @resid_box_i64(i64 %t64128)
-%t64133 = getelementptr i8, ptr %t64129, i64 0
-store ptr %t64131, ptr %t64133
-%t64135e = load ptr, ptr %t64129
-%t64135 = call ptr @resid_list_push(ptr %p6, ptr %t64135e)
+%p6 = phi ptr [ %p6.in, %entry ], [ %t64204, %tco.s0 ]
+%t64181 = getelementptr i8, ptr %p0, i64 0
+%t64182 = load ptr, ptr %t64181
+%t64183 = call ptr @resid_list_get(ptr %t64182, i64 %p1)
+%t64186 = getelementptr i8, ptr %t64183, i64 32
+%t64187 = load i64, ptr %t64186
+%t64188 = icmp sge i64 %p2, %t64187
+br i1 %t64188, label %L12489, label %L12491
+L12489:
+%t64189 = call ptr @resid_gmalloc(i64 32)
+%t64189.f0 = getelementptr i8, ptr %t64189, i64 0
+store ptr %p0, ptr %t64189.f0
+%t64189.f1 = getelementptr i8, ptr %t64189, i64 8
+store ptr %p6, ptr %t64189.f1
+%t64189.f2 = getelementptr i8, ptr %t64189, i64 16
+store i64 0, ptr %t64189.f2
+%t64189.f3 = getelementptr i8, ptr %t64189, i64 24
+store ptr @.s64190, ptr %t64189.f3
+ret ptr %t64189
+L12491:
+%t64191 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
+%t64192 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_rw(ptr %p0, i64 %t64191, ptr %p3, ptr %p4, i64 %p5)
+%t64193 = getelementptr i8, ptr %t64192, i64 0
+%t64194 = load ptr, ptr %t64193
+%t64195 = add nsw i64 %p2, 1
+%t64196 = getelementptr i8, ptr %t64192, i64 8
+%t64197 = load i64, ptr %t64196
+%t64200 = call ptr @resid_box_i64(i64 %t64197)
+%t64202 = getelementptr i8, ptr %t64198, i64 0
+store ptr %t64200, ptr %t64202
+%t64204e = load ptr, ptr %t64198
+%t64204 = call ptr @resid_list_push(ptr %p6, ptr %t64204e)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_wargs(ptr %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, ptr %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64171 = alloca [1 x ptr]
-%t64184 = alloca [1 x ptr]
+%t64240 = alloca [1 x ptr]
+%t64253 = alloca [1 x ptr]
 br label %tco.head
 tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %t64180, %tco.s0 ]
+%p0 = phi ptr [ %p0.in, %entry ], [ %t64249, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t64181, %tco.s0 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %t64190, %tco.s0 ]
-%t64137 = getelementptr i8, ptr %p0, i64 0
-%t64138 = load ptr, ptr %t64137
-%t64139 = call ptr @resid_list_get(ptr %t64138, i64 %p1)
-%t64142 = getelementptr i8, ptr %t64139, i64 32
-%t64143 = load i64, ptr %t64142
-%t64144 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t64143, i64 2)
-%t64145 = extractvalue {i64, i1} %t64144, 0
-%t64146 = extractvalue {i64, i1} %t64144, 1
-%t64147 = zext i1 %t64146 to i8
-call void @resid_overflow_check(i8 %t64147)
-%t64148 = icmp sge i64 %p3, %t64145
-br i1 %t64148, label %L12483, label %L12485
-L12483:
-%t64149 = call ptr @resid_gmalloc(i64 32)
-%t64149.f0 = getelementptr i8, ptr %t64149, i64 0
-store ptr %p0, ptr %t64149.f0
-%t64149.f1 = getelementptr i8, ptr %t64149, i64 8
-store ptr %p4, ptr %t64149.f1
-%t64149.f2 = getelementptr i8, ptr %t64149, i64 16
-store i64 0, ptr %t64149.f2
-%t64149.f3 = getelementptr i8, ptr %t64149, i64 24
-store ptr @.s64150, ptr %t64149.f3
-ret ptr %t64149
-L12485:
-%t64151 = call i64 @resid_scope_push()
-%t64152 = add nsw i64 %p3, 1
-%t64153 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %t64152)
-call void @resid_scope_pop(i64 %t64151)
-%t64154 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB64154)
-%t64156 = getelementptr i8, ptr %p0, i64 0
-%t64157 = load ptr, ptr %t64156
-%t64158 = call ptr @resid_list_get(ptr %t64157, i64 %t64153)
-%t64161 = getelementptr i8, ptr %t64158, i64 8
-%t64162 = load ptr, ptr %t64161
-%t64163 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %p0, ptr @.s64155, ptr %t64162, ptr %t64154, i64 %t64153)
-%t64164 = icmp eq i64 %p3, %p2
-br i1 %t64164, label %L12486, label %L12487
-L12486:
-%t64165 = getelementptr i8, ptr %t64163, i64 0
-%t64166 = load ptr, ptr %t64165
-%t64169 = getelementptr i8, ptr %t64163, i64 8
-%t64170 = load i64, ptr %t64169
-%t64173 = call ptr @resid_box_i64(i64 %t64170)
-%t64175 = getelementptr i8, ptr %t64171, i64 0
-store ptr %t64173, ptr %t64175
-%t64176 = call ptr @resid_list_new(i64 1, ptr %t64171, ptr @.lty64171)
-%t64177 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64166, ptr @.s64167, ptr @.s64168, ptr %t64176, i64 %t64153)
-br label %L12488
-L12487:
-br label %L12488
-L12488:
-%t64178 = phi ptr [ %t64177, %L12486 ], [ %t64163, %L12487 ]
-%t64179 = getelementptr i8, ptr %t64178, i64 0
-%t64180 = load ptr, ptr %t64179
-%t64181 = add nsw i64 %p3, 1
-%t64182 = getelementptr i8, ptr %t64178, i64 8
-%t64183 = load i64, ptr %t64182
-%t64186 = call ptr @resid_box_i64(i64 %t64183)
-%t64188 = getelementptr i8, ptr %t64184, i64 0
-store ptr %t64186, ptr %t64188
-%t64190e = load ptr, ptr %t64184
-%t64190 = call ptr @resid_list_push(ptr %p4, ptr %t64190e)
+%p3 = phi i64 [ %p3.in, %entry ], [ %t64250, %tco.s0 ]
+%p4 = phi ptr [ %p4.in, %entry ], [ %t64259, %tco.s0 ]
+%t64206 = getelementptr i8, ptr %p0, i64 0
+%t64207 = load ptr, ptr %t64206
+%t64208 = call ptr @resid_list_get(ptr %t64207, i64 %p1)
+%t64211 = getelementptr i8, ptr %t64208, i64 32
+%t64212 = load i64, ptr %t64211
+%t64213 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t64212, i64 2)
+%t64214 = extractvalue {i64, i1} %t64213, 0
+%t64215 = extractvalue {i64, i1} %t64213, 1
+%t64216 = zext i1 %t64215 to i8
+call void @resid_overflow_check(i8 %t64216)
+%t64217 = icmp sge i64 %p3, %t64214
+br i1 %t64217, label %L12492, label %L12494
+L12492:
+%t64218 = call ptr @resid_gmalloc(i64 32)
+%t64218.f0 = getelementptr i8, ptr %t64218, i64 0
+store ptr %p0, ptr %t64218.f0
+%t64218.f1 = getelementptr i8, ptr %t64218, i64 8
+store ptr %p4, ptr %t64218.f1
+%t64218.f2 = getelementptr i8, ptr %t64218, i64 16
+store i64 0, ptr %t64218.f2
+%t64218.f3 = getelementptr i8, ptr %t64218, i64 24
+store ptr @.s64219, ptr %t64218.f3
+ret ptr %t64218
+L12494:
+%t64220 = call i64 @resid_scope_push()
+%t64221 = add nsw i64 %p3, 1
+%t64222 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %t64221)
+call void @resid_scope_pop(i64 %t64220)
+%t64223 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB64223)
+%t64225 = getelementptr i8, ptr %p0, i64 0
+%t64226 = load ptr, ptr %t64225
+%t64227 = call ptr @resid_list_get(ptr %t64226, i64 %t64222)
+%t64230 = getelementptr i8, ptr %t64227, i64 8
+%t64231 = load ptr, ptr %t64230
+%t64232 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %p0, ptr @.s64224, ptr %t64231, ptr %t64223, i64 %t64222)
+%t64233 = icmp eq i64 %p3, %p2
+br i1 %t64233, label %L12495, label %L12496
+L12495:
+%t64234 = getelementptr i8, ptr %t64232, i64 0
+%t64235 = load ptr, ptr %t64234
+%t64238 = getelementptr i8, ptr %t64232, i64 8
+%t64239 = load i64, ptr %t64238
+%t64242 = call ptr @resid_box_i64(i64 %t64239)
+%t64244 = getelementptr i8, ptr %t64240, i64 0
+store ptr %t64242, ptr %t64244
+%t64245 = call ptr @resid_list_new(i64 1, ptr %t64240, ptr @.lty64240)
+%t64246 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64235, ptr @.s64236, ptr @.s64237, ptr %t64245, i64 %t64222)
+br label %L12497
+L12496:
+br label %L12497
+L12497:
+%t64247 = phi ptr [ %t64246, %L12495 ], [ %t64232, %L12496 ]
+%t64248 = getelementptr i8, ptr %t64247, i64 0
+%t64249 = load ptr, ptr %t64248
+%t64250 = add nsw i64 %p3, 1
+%t64251 = getelementptr i8, ptr %t64247, i64 8
+%t64252 = load i64, ptr %t64251
+%t64255 = call ptr @resid_box_i64(i64 %t64252)
+%t64257 = getelementptr i8, ptr %t64253, i64 0
+store ptr %t64255, ptr %t64257
+%t64259e = load ptr, ptr %t64253
+%t64259 = call ptr @resid_list_push(ptr %p4, ptr %t64259e)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_walk(i64 %p0.in, i64 %p1.in, ptr %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64245 = alloca [1 x ptr]
-%t64293 = alloca [1 x ptr]
-%t64323 = alloca [1 x ptr]
-%t64336 = alloca [1 x ptr]
-%t64356 = alloca [1 x ptr]
-%t64386 = alloca [1 x ptr]
-%t64397 = alloca [1 x ptr]
+%t64314 = alloca [1 x ptr]
+%t64362 = alloca [1 x ptr]
+%t64392 = alloca [1 x ptr]
+%t64405 = alloca [1 x ptr]
+%t64425 = alloca [1 x ptr]
+%t64455 = alloca [1 x ptr]
+%t64466 = alloca [1 x ptr]
 br label %tco.head
 tco.head:
 %p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t64241, %tco.s0 ], [ %t64378, %tco.s1 ]
-%p2 = phi ptr [ %p2.in, %entry ], [ %t64242, %tco.s0 ], [ %t64379, %tco.s1 ]
-%t64192 = getelementptr i8, ptr %p2, i64 0
-%t64193 = load ptr, ptr %t64192
-%t64194 = getelementptr i8, ptr %t64193, i64 0
-%t64195 = load ptr, ptr %t64194
-%t64196 = call ptr @resid_list_get(ptr %t64195, i64 %p0)
-%t64199 = getelementptr i8, ptr %t64196, i64 32
-%t64200 = load i64, ptr %t64199
-%t64201 = icmp sge i64 %p1, %t64200
-br i1 %t64201, label %L12489, label %L12491
-L12489:
-ret ptr %p2
-L12491:
-%t64202 = call i64 @resid_scope_push()
-%t64203 = call i64 @kg_kid(ptr %t64193, i64 %p0, i64 %p1)
-call void @resid_scope_pop(i64 %t64202)
-%t64204 = getelementptr i8, ptr %t64193, i64 0
-%t64205 = load ptr, ptr %t64204
-%t64206 = call ptr @resid_list_get(ptr %t64205, i64 %t64203)
-%t64209 = call i64 @resid_scope_push()
-%t64210 = getelementptr i8, ptr %t64206, i64 0
-%t64211 = load ptr, ptr %t64210
-%t64213 = call i8 @resid_str_eq(ptr %t64211, ptr @.s64212)
-%t64214 = icmp ne i8 %t64213, 0
-br label %LSL64215
-LSL64215:
-br i1 %t64214, label %LSR64215, label %LSJ64215
-LSR64215:
-%t64216 = getelementptr i8, ptr %t64193, i64 0
-%t64217 = load ptr, ptr %t64216
-%t64218 = call i64 @kg_kid(ptr %t64193, i64 %t64203, i64 0)
-%t64219 = call ptr @resid_list_get(ptr %t64217, i64 %t64218)
-%t64222 = getelementptr i8, ptr %t64219, i64 8
-%t64223 = load ptr, ptr %t64222
-%t64225 = call i8 @resid_str_eq(ptr %t64223, ptr @.s64224)
-%t64226 = icmp ne i8 %t64225, 0
-br label %LSJ64215
-LSJ64215:
-%t64227 = phi i1 [ false, %LSL64215 ], [ %t64226, %LSR64215 ]
-call void @resid_scope_pop(i64 %t64209)
-%t64228 = call i64 @resid_scope_push()
-br i1 %t64227, label %L12492, label %L12493
-L12492:
-%t64229 = getelementptr i8, ptr %t64206, i64 32
-%t64230 = load i64, ptr %t64229
-%t64231 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t64230, i64 1)
-%t64232 = extractvalue {i64, i1} %t64231, 0
-%t64233 = extractvalue {i64, i1} %t64231, 1
-%t64234 = zext i1 %t64233 to i8
-call void @resid_overflow_check(i8 %t64234)
-%t64235 = call i64 @kg_kid(ptr %t64193, i64 %t64203, i64 %t64232)
-br label %L12494
-L12493:
-br label %L12494
-L12494:
-%t64236 = phi i64 [ %t64235, %L12492 ], [ -1, %L12493 ]
-call void @resid_scope_pop(i64 %t64228)
-%t64237 = call i64 @resid_scope_push()
-br i1 %t64227, label %L12495, label %L12496
-L12495:
-%t64238 = call i64 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_pick(ptr %t64193, i64 %t64203, i64 %t64236, i64 0)
-br label %L12497
-L12496:
-br label %L12497
-L12497:
-%t64239 = phi i64 [ %t64238, %L12495 ], [ -1, %L12496 ]
-call void @resid_scope_pop(i64 %t64237)
-%t64240 = icmp slt i64 %t64239, 0
-br i1 %t64240, label %L12498, label %L12500
+%p1 = phi i64 [ %p1.in, %entry ], [ %t64310, %tco.s0 ], [ %t64447, %tco.s1 ]
+%p2 = phi ptr [ %p2.in, %entry ], [ %t64311, %tco.s0 ], [ %t64448, %tco.s1 ]
+%t64261 = getelementptr i8, ptr %p2, i64 0
+%t64262 = load ptr, ptr %t64261
+%t64263 = getelementptr i8, ptr %t64262, i64 0
+%t64264 = load ptr, ptr %t64263
+%t64265 = call ptr @resid_list_get(ptr %t64264, i64 %p0)
+%t64268 = getelementptr i8, ptr %t64265, i64 32
+%t64269 = load i64, ptr %t64268
+%t64270 = icmp sge i64 %p1, %t64269
+br i1 %t64270, label %L12498, label %L12500
 L12498:
-%t64241 = add nsw i64 %p1, 1
-%t64242 = call ptr @resid_gmalloc(i64 40)
-%t64242.f0 = getelementptr i8, ptr %t64242, i64 0
-store ptr %t64193, ptr %t64242.f0
-%t64243 = getelementptr i8, ptr %p2, i64 8
-%t64244 = load ptr, ptr %t64243
-%t64247 = call ptr @resid_box_i64(i64 %t64203)
-%t64249 = getelementptr i8, ptr %t64245, i64 0
-store ptr %t64247, ptr %t64249
-%t64251e = load ptr, ptr %t64245
-%t64251 = call ptr @resid_list_push(ptr %t64244, ptr %t64251e)
-%t64242.f1 = getelementptr i8, ptr %t64242, i64 8
-store ptr %t64251, ptr %t64242.f1
-%t64252 = getelementptr i8, ptr %p2, i64 16
-%t64253 = load ptr, ptr %t64252
-%t64242.f2 = getelementptr i8, ptr %t64242, i64 16
-store ptr %t64253, ptr %t64242.f2
-%t64254 = getelementptr i8, ptr %p2, i64 24
-%t64255 = load i64, ptr %t64254
-%t64242.f3 = getelementptr i8, ptr %t64242, i64 24
-store i64 %t64255, ptr %t64242.f3
-%t64256 = getelementptr i8, ptr %p2, i64 32
-%t64257 = load ptr, ptr %t64256
-%t64242.f4 = getelementptr i8, ptr %t64242, i64 32
-store ptr %t64257, ptr %t64242.f4
+ret ptr %p2
+L12500:
+%t64271 = call i64 @resid_scope_push()
+%t64272 = call i64 @kg_kid(ptr %t64262, i64 %p0, i64 %p1)
+call void @resid_scope_pop(i64 %t64271)
+%t64273 = getelementptr i8, ptr %t64262, i64 0
+%t64274 = load ptr, ptr %t64273
+%t64275 = call ptr @resid_list_get(ptr %t64274, i64 %t64272)
+%t64278 = call i64 @resid_scope_push()
+%t64279 = getelementptr i8, ptr %t64275, i64 0
+%t64280 = load ptr, ptr %t64279
+%t64282 = call i8 @resid_str_eq(ptr %t64280, ptr @.s64281)
+%t64283 = icmp ne i8 %t64282, 0
+br label %LSL64284
+LSL64284:
+br i1 %t64283, label %LSR64284, label %LSJ64284
+LSR64284:
+%t64285 = getelementptr i8, ptr %t64262, i64 0
+%t64286 = load ptr, ptr %t64285
+%t64287 = call i64 @kg_kid(ptr %t64262, i64 %t64272, i64 0)
+%t64288 = call ptr @resid_list_get(ptr %t64286, i64 %t64287)
+%t64291 = getelementptr i8, ptr %t64288, i64 8
+%t64292 = load ptr, ptr %t64291
+%t64294 = call i8 @resid_str_eq(ptr %t64292, ptr @.s64293)
+%t64295 = icmp ne i8 %t64294, 0
+br label %LSJ64284
+LSJ64284:
+%t64296 = phi i1 [ false, %LSL64284 ], [ %t64295, %LSR64284 ]
+call void @resid_scope_pop(i64 %t64278)
+%t64297 = call i64 @resid_scope_push()
+br i1 %t64296, label %L12501, label %L12502
+L12501:
+%t64298 = getelementptr i8, ptr %t64275, i64 32
+%t64299 = load i64, ptr %t64298
+%t64300 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t64299, i64 1)
+%t64301 = extractvalue {i64, i1} %t64300, 0
+%t64302 = extractvalue {i64, i1} %t64300, 1
+%t64303 = zext i1 %t64302 to i8
+call void @resid_overflow_check(i8 %t64303)
+%t64304 = call i64 @kg_kid(ptr %t64262, i64 %t64272, i64 %t64301)
+br label %L12503
+L12502:
+br label %L12503
+L12503:
+%t64305 = phi i64 [ %t64304, %L12501 ], [ -1, %L12502 ]
+call void @resid_scope_pop(i64 %t64297)
+%t64306 = call i64 @resid_scope_push()
+br i1 %t64296, label %L12504, label %L12505
+L12504:
+%t64307 = call i64 @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_pick(ptr %t64262, i64 %t64272, i64 %t64305, i64 0)
+br label %L12506
+L12505:
+br label %L12506
+L12506:
+%t64308 = phi i64 [ %t64307, %L12504 ], [ -1, %L12505 ]
+call void @resid_scope_pop(i64 %t64306)
+%t64309 = icmp slt i64 %t64308, 0
+br i1 %t64309, label %L12507, label %L12509
+L12507:
+%t64310 = add nsw i64 %p1, 1
+%t64311 = call ptr @resid_gmalloc(i64 40)
+%t64311.f0 = getelementptr i8, ptr %t64311, i64 0
+store ptr %t64262, ptr %t64311.f0
+%t64312 = getelementptr i8, ptr %p2, i64 8
+%t64313 = load ptr, ptr %t64312
+%t64316 = call ptr @resid_box_i64(i64 %t64272)
+%t64318 = getelementptr i8, ptr %t64314, i64 0
+store ptr %t64316, ptr %t64318
+%t64320e = load ptr, ptr %t64314
+%t64320 = call ptr @resid_list_push(ptr %t64313, ptr %t64320e)
+%t64311.f1 = getelementptr i8, ptr %t64311, i64 8
+store ptr %t64320, ptr %t64311.f1
+%t64321 = getelementptr i8, ptr %p2, i64 16
+%t64322 = load ptr, ptr %t64321
+%t64311.f2 = getelementptr i8, ptr %t64311, i64 16
+store ptr %t64322, ptr %t64311.f2
+%t64323 = getelementptr i8, ptr %p2, i64 24
+%t64324 = load i64, ptr %t64323
+%t64311.f3 = getelementptr i8, ptr %t64311, i64 24
+store i64 %t64324, ptr %t64311.f3
+%t64325 = getelementptr i8, ptr %p2, i64 32
+%t64326 = load ptr, ptr %t64325
+%t64311.f4 = getelementptr i8, ptr %t64311, i64 32
+store ptr %t64326, ptr %t64311.f4
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L12500:
-%t64259 = getelementptr i8, ptr %t64206, i64 8
-%t64260 = load ptr, ptr %t64259
-%t64261 = getelementptr i8, ptr %t64193, i64 0
-%t64262 = load ptr, ptr %t64261
-%t64263 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64239, i64 1)
-%t64264 = extractvalue {i64, i1} %t64263, 0
-%t64265 = extractvalue {i64, i1} %t64263, 1
-%t64266 = zext i1 %t64265 to i8
-call void @resid_overflow_check(i8 %t64266)
-%t64267 = call i64 @kg_kid(ptr %t64193, i64 %t64203, i64 %t64264)
-%t64268 = call ptr @resid_list_get(ptr %t64262, i64 %t64267)
-%t64271 = getelementptr i8, ptr %t64268, i64 8
-%t64272 = load ptr, ptr %t64271
-%t64273 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_rw(ptr %t64193, i64 %t64236, ptr %t64260, ptr %t64272, i64 %t64239)
-%t64274 = getelementptr i8, ptr %t64273, i64 0
-%t64275 = load ptr, ptr %t64274
-%t64276 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_kids(ptr %t64275, i64 %t64203)
-%t64277 = getelementptr i8, ptr %t64273, i64 0
-%t64278 = load ptr, ptr %t64277
-%t64281 = call ptr @resid_str_concat(ptr %t64260, ptr @.s64280)
-%t64282 = getelementptr i8, ptr %t64206, i64 16
-%t64283 = load ptr, ptr %t64282
-%t64284 = getelementptr i8, ptr %t64206, i64 32
-%t64285 = load i64, ptr %t64284
-%t64286 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t64285, i64 1)
-%t64287 = extractvalue {i64, i1} %t64286, 0
-%t64288 = extractvalue {i64, i1} %t64286, 1
-%t64289 = zext i1 %t64288 to i8
-call void @resid_overflow_check(i8 %t64289)
-%t64290 = call ptr @resid_list_slice(ptr %t64276, i64 0, i64 %t64287)
-%t64291 = getelementptr i8, ptr %t64273, i64 8
-%t64292 = load i64, ptr %t64291
-%t64295 = call ptr @resid_box_i64(i64 %t64292)
-%t64297 = getelementptr i8, ptr %t64293, i64 0
-store ptr %t64295, ptr %t64297
-%t64299e = load ptr, ptr %t64293
-%t64299 = call ptr @resid_list_push(ptr %t64290, ptr %t64299e)
-%t64300 = getelementptr i8, ptr %t64206, i64 40
-%t64301 = load i64, ptr %t64300
-%t64302 = getelementptr i8, ptr %t64206, i64 48
-%t64303 = load i64, ptr %t64302
-%t64304 = call ptr @kg_add(ptr %t64278, ptr @.s64279, ptr %t64281, ptr %t64283, ptr %t64299, i64 %t64301, i64 %t64303)
-%t64305 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB64305)
-%t64306 = getelementptr i8, ptr %t64304, i64 0
-%t64307 = load ptr, ptr %t64306
-%t64308 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_wargs(ptr %t64307, i64 %t64203, i64 %t64239, i64 0, ptr %t64305)
-%t64309 = getelementptr i8, ptr %t64308, i64 0
-%t64310 = load ptr, ptr %t64309
-%t64313 = call ptr @resid_str_concat(ptr %t64260, ptr @.s64312)
-%t64314 = getelementptr i8, ptr %t64308, i64 8
-%t64315 = load ptr, ptr %t64314
-%t64316 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64310, ptr @.s64311, ptr %t64313, ptr %t64315, i64 %t64203)
-%t64317 = getelementptr i8, ptr %t64316, i64 0
-%t64318 = load ptr, ptr %t64317
-%t64321 = getelementptr i8, ptr %t64316, i64 8
-%t64322 = load i64, ptr %t64321
-%t64325 = call ptr @resid_box_i64(i64 %t64322)
-%t64327 = getelementptr i8, ptr %t64323, i64 0
-store ptr %t64325, ptr %t64327
-%t64328 = call ptr @resid_list_new(i64 1, ptr %t64323, ptr @.lty64323)
-%t64329 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64318, ptr @.s64319, ptr @.s64320, ptr %t64328, i64 %t64203)
-%t64330 = getelementptr i8, ptr %t64329, i64 0
+L12509:
+%t64328 = getelementptr i8, ptr %t64275, i64 8
+%t64329 = load ptr, ptr %t64328
+%t64330 = getelementptr i8, ptr %t64262, i64 0
 %t64331 = load ptr, ptr %t64330
-%t64334 = getelementptr i8, ptr %t64329, i64 8
-%t64335 = load i64, ptr %t64334
-%t64338 = call ptr @resid_box_i64(i64 %t64335)
-%t64340 = getelementptr i8, ptr %t64336, i64 0
-store ptr %t64338, ptr %t64340
-%t64341 = call ptr @resid_list_new(i64 1, ptr %t64336, ptr @.lty64336)
-%t64342 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64331, ptr @.s64332, ptr @.s64333, ptr %t64341, i64 %t64203)
+%t64332 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64308, i64 1)
+%t64333 = extractvalue {i64, i1} %t64332, 0
+%t64334 = extractvalue {i64, i1} %t64332, 1
+%t64335 = zext i1 %t64334 to i8
+call void @resid_overflow_check(i8 %t64335)
+%t64336 = call i64 @kg_kid(ptr %t64262, i64 %t64272, i64 %t64333)
+%t64337 = call ptr @resid_list_get(ptr %t64331, i64 %t64336)
+%t64340 = getelementptr i8, ptr %t64337, i64 8
+%t64341 = load ptr, ptr %t64340
+%t64342 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_rw(ptr %t64262, i64 %t64305, ptr %t64329, ptr %t64341, i64 %t64308)
 %t64343 = getelementptr i8, ptr %t64342, i64 0
 %t64344 = load ptr, ptr %t64343
-%t64347 = getelementptr i8, ptr %t64206, i64 32
-%t64348 = load i64, ptr %t64347
-%t64349 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t64348, i64 1)
-%t64350 = extractvalue {i64, i1} %t64349, 0
-%t64351 = extractvalue {i64, i1} %t64349, 1
-%t64352 = zext i1 %t64351 to i8
-call void @resid_overflow_check(i8 %t64352)
-%t64353 = call ptr @resid_list_slice(ptr %t64276, i64 0, i64 %t64350)
-%t64354 = getelementptr i8, ptr %t64342, i64 8
-%t64355 = load i64, ptr %t64354
-%t64358 = call ptr @resid_box_i64(i64 %t64355)
-%t64360 = getelementptr i8, ptr %t64356, i64 0
-store ptr %t64358, ptr %t64360
-%t64362e = load ptr, ptr %t64356
-%t64362 = call ptr @resid_list_push(ptr %t64353, ptr %t64362e)
-%t64363 = getelementptr i8, ptr %t64206, i64 40
-%t64364 = load i64, ptr %t64363
-%t64365 = getelementptr i8, ptr %t64206, i64 48
-%t64366 = load i64, ptr %t64365
-%t64367 = call ptr @kg_add(ptr %t64344, ptr @.s64345, ptr %t64260, ptr @.s64346, ptr %t64362, i64 %t64364, i64 %t64366)
-%t64368 = getelementptr i8, ptr %t64193, i64 0
-%t64369 = load ptr, ptr %t64368
-%t64370 = call i64 @resid_list_len(ptr %t64369)
-%t64371 = getelementptr i8, ptr %t64367, i64 0
-%t64372 = load ptr, ptr %t64371
-%t64373 = getelementptr i8, ptr %t64372, i64 0
-%t64374 = load ptr, ptr %t64373
-%t64375 = call i64 @resid_list_len(ptr %t64374)
-%t64376 = call ptr @str_sb_new()
-%t64377 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_dv(i64 %t64370, i64 %t64375, i64 %t64203, ptr %t64376)
-%t64378 = add nsw i64 %p1, 1
-%t64379 = call ptr @resid_gmalloc(i64 40)
-%t64380 = getelementptr i8, ptr %t64367, i64 0
-%t64381 = load ptr, ptr %t64380
-%t64379.f0 = getelementptr i8, ptr %t64379, i64 0
-store ptr %t64381, ptr %t64379.f0
-%t64382 = getelementptr i8, ptr %p2, i64 8
-%t64383 = load ptr, ptr %t64382
-%t64384 = getelementptr i8, ptr %t64304, i64 8
-%t64385 = load i64, ptr %t64384
-%t64388 = call ptr @resid_box_i64(i64 %t64385)
-%t64390 = getelementptr i8, ptr %t64386, i64 0
-store ptr %t64388, ptr %t64390
-%t64392e = load ptr, ptr %t64386
-%t64392 = call ptr @resid_list_push(ptr %t64383, ptr %t64392e)
-%t64379.f1 = getelementptr i8, ptr %t64379, i64 8
-store ptr %t64392, ptr %t64379.f1
-%t64393 = getelementptr i8, ptr %p2, i64 16
-%t64394 = load ptr, ptr %t64393
-%t64395 = getelementptr i8, ptr %t64367, i64 8
-%t64396 = load i64, ptr %t64395
-%t64399 = call ptr @resid_box_i64(i64 %t64396)
-%t64401 = getelementptr i8, ptr %t64397, i64 0
-store ptr %t64399, ptr %t64401
-%t64403e = load ptr, ptr %t64397
-%t64403 = call ptr @resid_list_push(ptr %t64394, ptr %t64403e)
-%t64379.f2 = getelementptr i8, ptr %t64379, i64 16
-store ptr %t64403, ptr %t64379.f2
-%t64404 = getelementptr i8, ptr %p2, i64 24
-%t64405 = load i64, ptr %t64404
-%t64406 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64405, i64 1)
-%t64407 = extractvalue {i64, i1} %t64406, 0
-%t64408 = extractvalue {i64, i1} %t64406, 1
-%t64409 = zext i1 %t64408 to i8
-call void @resid_overflow_check(i8 %t64409)
-%t64379.f3 = getelementptr i8, ptr %t64379, i64 24
-store i64 %t64407, ptr %t64379.f3
-%t64410 = getelementptr i8, ptr %p2, i64 32
-%t64411 = load ptr, ptr %t64410
-%t64412 = call ptr @resid_str_concat(ptr %t64411, ptr %t64377)
-%t64379.f4 = getelementptr i8, ptr %t64379, i64 32
-store ptr %t64412, ptr %t64379.f4
+%t64345 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_kids(ptr %t64344, i64 %t64272)
+%t64346 = getelementptr i8, ptr %t64342, i64 0
+%t64347 = load ptr, ptr %t64346
+%t64350 = call ptr @resid_str_concat(ptr %t64329, ptr @.s64349)
+%t64351 = getelementptr i8, ptr %t64275, i64 16
+%t64352 = load ptr, ptr %t64351
+%t64353 = getelementptr i8, ptr %t64275, i64 32
+%t64354 = load i64, ptr %t64353
+%t64355 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t64354, i64 1)
+%t64356 = extractvalue {i64, i1} %t64355, 0
+%t64357 = extractvalue {i64, i1} %t64355, 1
+%t64358 = zext i1 %t64357 to i8
+call void @resid_overflow_check(i8 %t64358)
+%t64359 = call ptr @resid_list_slice(ptr %t64345, i64 0, i64 %t64356)
+%t64360 = getelementptr i8, ptr %t64342, i64 8
+%t64361 = load i64, ptr %t64360
+%t64364 = call ptr @resid_box_i64(i64 %t64361)
+%t64366 = getelementptr i8, ptr %t64362, i64 0
+store ptr %t64364, ptr %t64366
+%t64368e = load ptr, ptr %t64362
+%t64368 = call ptr @resid_list_push(ptr %t64359, ptr %t64368e)
+%t64369 = getelementptr i8, ptr %t64275, i64 40
+%t64370 = load i64, ptr %t64369
+%t64371 = getelementptr i8, ptr %t64275, i64 48
+%t64372 = load i64, ptr %t64371
+%t64373 = call ptr @kg_add(ptr %t64347, ptr @.s64348, ptr %t64350, ptr %t64352, ptr %t64368, i64 %t64370, i64 %t64372)
+%t64374 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB64374)
+%t64375 = getelementptr i8, ptr %t64373, i64 0
+%t64376 = load ptr, ptr %t64375
+%t64377 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_wargs(ptr %t64376, i64 %t64272, i64 %t64308, i64 0, ptr %t64374)
+%t64378 = getelementptr i8, ptr %t64377, i64 0
+%t64379 = load ptr, ptr %t64378
+%t64382 = call ptr @resid_str_concat(ptr %t64329, ptr @.s64381)
+%t64383 = getelementptr i8, ptr %t64377, i64 8
+%t64384 = load ptr, ptr %t64383
+%t64385 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64379, ptr @.s64380, ptr %t64382, ptr %t64384, i64 %t64272)
+%t64386 = getelementptr i8, ptr %t64385, i64 0
+%t64387 = load ptr, ptr %t64386
+%t64390 = getelementptr i8, ptr %t64385, i64 8
+%t64391 = load i64, ptr %t64390
+%t64394 = call ptr @resid_box_i64(i64 %t64391)
+%t64396 = getelementptr i8, ptr %t64392, i64 0
+store ptr %t64394, ptr %t64396
+%t64397 = call ptr @resid_list_new(i64 1, ptr %t64392, ptr @.lty64392)
+%t64398 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64387, ptr @.s64388, ptr @.s64389, ptr %t64397, i64 %t64272)
+%t64399 = getelementptr i8, ptr %t64398, i64 0
+%t64400 = load ptr, ptr %t64399
+%t64403 = getelementptr i8, ptr %t64398, i64 8
+%t64404 = load i64, ptr %t64403
+%t64407 = call ptr @resid_box_i64(i64 %t64404)
+%t64409 = getelementptr i8, ptr %t64405, i64 0
+store ptr %t64407, ptr %t64409
+%t64410 = call ptr @resid_list_new(i64 1, ptr %t64405, ptr @.lty64405)
+%t64411 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_add(ptr %t64400, ptr @.s64401, ptr @.s64402, ptr %t64410, i64 %t64272)
+%t64412 = getelementptr i8, ptr %t64411, i64 0
+%t64413 = load ptr, ptr %t64412
+%t64416 = getelementptr i8, ptr %t64275, i64 32
+%t64417 = load i64, ptr %t64416
+%t64418 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t64417, i64 1)
+%t64419 = extractvalue {i64, i1} %t64418, 0
+%t64420 = extractvalue {i64, i1} %t64418, 1
+%t64421 = zext i1 %t64420 to i8
+call void @resid_overflow_check(i8 %t64421)
+%t64422 = call ptr @resid_list_slice(ptr %t64345, i64 0, i64 %t64419)
+%t64423 = getelementptr i8, ptr %t64411, i64 8
+%t64424 = load i64, ptr %t64423
+%t64427 = call ptr @resid_box_i64(i64 %t64424)
+%t64429 = getelementptr i8, ptr %t64425, i64 0
+store ptr %t64427, ptr %t64429
+%t64431e = load ptr, ptr %t64425
+%t64431 = call ptr @resid_list_push(ptr %t64422, ptr %t64431e)
+%t64432 = getelementptr i8, ptr %t64275, i64 40
+%t64433 = load i64, ptr %t64432
+%t64434 = getelementptr i8, ptr %t64275, i64 48
+%t64435 = load i64, ptr %t64434
+%t64436 = call ptr @kg_add(ptr %t64413, ptr @.s64414, ptr %t64329, ptr @.s64415, ptr %t64431, i64 %t64433, i64 %t64435)
+%t64437 = getelementptr i8, ptr %t64262, i64 0
+%t64438 = load ptr, ptr %t64437
+%t64439 = call i64 @resid_list_len(ptr %t64438)
+%t64440 = getelementptr i8, ptr %t64436, i64 0
+%t64441 = load ptr, ptr %t64440
+%t64442 = getelementptr i8, ptr %t64441, i64 0
+%t64443 = load ptr, ptr %t64442
+%t64444 = call i64 @resid_list_len(ptr %t64443)
+%t64445 = call ptr @str_sb_new()
+%t64446 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_dv(i64 %t64439, i64 %t64444, i64 %t64272, ptr %t64445)
+%t64447 = add nsw i64 %p1, 1
+%t64448 = call ptr @resid_gmalloc(i64 40)
+%t64449 = getelementptr i8, ptr %t64436, i64 0
+%t64450 = load ptr, ptr %t64449
+%t64448.f0 = getelementptr i8, ptr %t64448, i64 0
+store ptr %t64450, ptr %t64448.f0
+%t64451 = getelementptr i8, ptr %p2, i64 8
+%t64452 = load ptr, ptr %t64451
+%t64453 = getelementptr i8, ptr %t64373, i64 8
+%t64454 = load i64, ptr %t64453
+%t64457 = call ptr @resid_box_i64(i64 %t64454)
+%t64459 = getelementptr i8, ptr %t64455, i64 0
+store ptr %t64457, ptr %t64459
+%t64461e = load ptr, ptr %t64455
+%t64461 = call ptr @resid_list_push(ptr %t64452, ptr %t64461e)
+%t64448.f1 = getelementptr i8, ptr %t64448, i64 8
+store ptr %t64461, ptr %t64448.f1
+%t64462 = getelementptr i8, ptr %p2, i64 16
+%t64463 = load ptr, ptr %t64462
+%t64464 = getelementptr i8, ptr %t64436, i64 8
+%t64465 = load i64, ptr %t64464
+%t64468 = call ptr @resid_box_i64(i64 %t64465)
+%t64470 = getelementptr i8, ptr %t64466, i64 0
+store ptr %t64468, ptr %t64470
+%t64472e = load ptr, ptr %t64466
+%t64472 = call ptr @resid_list_push(ptr %t64463, ptr %t64472e)
+%t64448.f2 = getelementptr i8, ptr %t64448, i64 16
+store ptr %t64472, ptr %t64448.f2
+%t64473 = getelementptr i8, ptr %p2, i64 24
+%t64474 = load i64, ptr %t64473
+%t64475 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64474, i64 1)
+%t64476 = extractvalue {i64, i1} %t64475, 0
+%t64477 = extractvalue {i64, i1} %t64475, 1
+%t64478 = zext i1 %t64477 to i8
+call void @resid_overflow_check(i8 %t64478)
+%t64448.f3 = getelementptr i8, ptr %t64448, i64 24
+store i64 %t64476, ptr %t64448.f3
+%t64479 = getelementptr i8, ptr %p2, i64 32
+%t64480 = load ptr, ptr %t64479
+%t64481 = call ptr @resid_str_concat(ptr %t64480, ptr %t64446)
+%t64448.f4 = getelementptr i8, ptr %t64448, i64 32
+store ptr %t64481, ptr %t64448.f4
 br label %tco.s1
 tco.s1:
 br label %tco.head
@@ -97969,232 +98099,232 @@ define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_dv(i64 %p0
 entry:
 br label %tco.head
 tco.head:
-%p0 = phi i64 [ %p0.in, %entry ], [ %t64416, %tco.s0 ]
+%p0 = phi i64 [ %p0.in, %entry ], [ %t64485, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t64420, %tco.s0 ]
-%t64414 = icmp sge i64 %p0, %p1
-br i1 %t64414, label %L12501, label %L12503
-L12501:
-%t64415 = call ptr @str_sb_finish(ptr %p3)
-ret ptr %t64415
-L12503:
-%t64416 = add nsw i64 %p0, 1
-%t64417 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %p3, i64 %p0)
-%t64418 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %t64417, i64 %p2)
-%t64420 = call ptr @str_sb_append(ptr %t64418, ptr @.s64419)
+%p3 = phi ptr [ %p3.in, %entry ], [ %t64489, %tco.s0 ]
+%t64483 = icmp sge i64 %p0, %p1
+br i1 %t64483, label %L12510, label %L12512
+L12510:
+%t64484 = call ptr @str_sb_finish(ptr %p3)
+ret ptr %t64484
+L12512:
+%t64485 = add nsw i64 %p0, 1
+%t64486 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %p3, i64 %p0)
+%t64487 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %t64486, i64 %p2)
+%t64489 = call ptr @str_sb_append(ptr %t64487, ptr @.s64488)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @gs_program(ptr %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64422 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB64422)
-%t64423 = call ptr @resid_gmalloc(i64 40)
-%t64423.f0 = getelementptr i8, ptr %t64423, i64 0
-store ptr %p0, ptr %t64423.f0
-%t64423.f1 = getelementptr i8, ptr %t64423, i64 8
-store ptr %t64422, ptr %t64423.f1
-%t64423.f2 = getelementptr i8, ptr %t64423, i64 16
-store ptr %t64422, ptr %t64423.f2
-%t64423.f3 = getelementptr i8, ptr %t64423, i64 24
-store i64 0, ptr %t64423.f3
-%t64423.f4 = getelementptr i8, ptr %t64423, i64 32
-store ptr @.s64424, ptr %t64423.f4
-%t64425 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_walk(i64 %p1, i64 0, ptr %t64423)
-%t64426 = getelementptr i8, ptr %t64425, i64 24
-%t64427 = load i64, ptr %t64426
-%t64428 = icmp eq i64 %t64427, 0
-br i1 %t64428, label %L12504, label %L12506
-L12504:
-%t64429 = call ptr @resid_gmalloc(i64 24)
-%t64429.f0 = getelementptr i8, ptr %t64429, i64 0
-store ptr %p0, ptr %t64429.f0
-%t64429.f1 = getelementptr i8, ptr %t64429, i64 8
-store i64 %p1, ptr %t64429.f1
-%t64429.f2 = getelementptr i8, ptr %t64429, i64 16
-store ptr @.s64430, ptr %t64429.f2
-ret ptr %t64429
-L12506:
-%t64431 = getelementptr i8, ptr %t64425, i64 0
-%t64432 = load ptr, ptr %t64431
-%t64433 = getelementptr i8, ptr %t64432, i64 0
-%t64434 = load ptr, ptr %t64433
-%t64435 = call ptr @resid_list_get(ptr %t64434, i64 %p1)
-%t64438 = getelementptr i8, ptr %t64425, i64 0
-%t64439 = load ptr, ptr %t64438
-%t64443 = getelementptr i8, ptr %t64425, i64 8
-%t64444 = load ptr, ptr %t64443
-%t64445 = getelementptr i8, ptr %t64425, i64 16
-%t64446 = load ptr, ptr %t64445
-%t64447 = call ptr @resid_list_concat(ptr %t64444, ptr %t64446)
-%t64448 = getelementptr i8, ptr %t64435, i64 40
-%t64449 = load i64, ptr %t64448
-%t64450 = getelementptr i8, ptr %t64435, i64 48
-%t64451 = load i64, ptr %t64450
-%t64452 = call ptr @kg_add(ptr %t64439, ptr @.s64440, ptr @.s64441, ptr @.s64442, ptr %t64447, i64 %t64449, i64 %t64451)
-%t64453 = call ptr @resid_gmalloc(i64 24)
-%t64454 = getelementptr i8, ptr %t64452, i64 0
-%t64455 = load ptr, ptr %t64454
-%t64453.f0 = getelementptr i8, ptr %t64453, i64 0
-store ptr %t64455, ptr %t64453.f0
-%t64456 = getelementptr i8, ptr %t64452, i64 8
-%t64457 = load i64, ptr %t64456
-%t64453.f1 = getelementptr i8, ptr %t64453, i64 8
-store i64 %t64457, ptr %t64453.f1
-%t64458 = getelementptr i8, ptr %t64425, i64 32
-%t64459 = load ptr, ptr %t64458
-%t64460 = getelementptr i8, ptr %t64452, i64 8
-%t64461 = load i64, ptr %t64460
-%t64462 = call ptr @resid_gmalloc(i64 24)
-%t64463 = call ptr @e.itoa(ptr %t64462, i64 %t64461)
-%t64464 = call ptr @resid_str_concat(ptr %t64459, ptr %t64463)
-%t64466 = call ptr @resid_str_concat(ptr %t64464, ptr @.s64465)
-%t64467 = call ptr @resid_gmalloc(i64 24)
-%t64468 = call ptr @e.itoa(ptr %t64467, i64 %p1)
-%t64469 = call ptr @resid_str_concat(ptr %t64466, ptr %t64468)
-%t64471 = call ptr @resid_str_concat(ptr %t64469, ptr @.s64470)
-%t64453.f2 = getelementptr i8, ptr %t64453, i64 16
-store ptr %t64471, ptr %t64453.f2
-ret ptr %t64453
+%t64491 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB64491)
+%t64492 = call ptr @resid_gmalloc(i64 40)
+%t64492.f0 = getelementptr i8, ptr %t64492, i64 0
+store ptr %p0, ptr %t64492.f0
+%t64492.f1 = getelementptr i8, ptr %t64492, i64 8
+store ptr %t64491, ptr %t64492.f1
+%t64492.f2 = getelementptr i8, ptr %t64492, i64 16
+store ptr %t64491, ptr %t64492.f2
+%t64492.f3 = getelementptr i8, ptr %t64492, i64 24
+store i64 0, ptr %t64492.f3
+%t64492.f4 = getelementptr i8, ptr %t64492, i64 32
+store ptr @.s64493, ptr %t64492.f4
+%t64494 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gs_walk(i64 %p1, i64 0, ptr %t64492)
+%t64495 = getelementptr i8, ptr %t64494, i64 24
+%t64496 = load i64, ptr %t64495
+%t64497 = icmp eq i64 %t64496, 0
+br i1 %t64497, label %L12513, label %L12515
+L12513:
+%t64498 = call ptr @resid_gmalloc(i64 24)
+%t64498.f0 = getelementptr i8, ptr %t64498, i64 0
+store ptr %p0, ptr %t64498.f0
+%t64498.f1 = getelementptr i8, ptr %t64498, i64 8
+store i64 %p1, ptr %t64498.f1
+%t64498.f2 = getelementptr i8, ptr %t64498, i64 16
+store ptr @.s64499, ptr %t64498.f2
+ret ptr %t64498
+L12515:
+%t64500 = getelementptr i8, ptr %t64494, i64 0
+%t64501 = load ptr, ptr %t64500
+%t64502 = getelementptr i8, ptr %t64501, i64 0
+%t64503 = load ptr, ptr %t64502
+%t64504 = call ptr @resid_list_get(ptr %t64503, i64 %p1)
+%t64507 = getelementptr i8, ptr %t64494, i64 0
+%t64508 = load ptr, ptr %t64507
+%t64512 = getelementptr i8, ptr %t64494, i64 8
+%t64513 = load ptr, ptr %t64512
+%t64514 = getelementptr i8, ptr %t64494, i64 16
+%t64515 = load ptr, ptr %t64514
+%t64516 = call ptr @resid_list_concat(ptr %t64513, ptr %t64515)
+%t64517 = getelementptr i8, ptr %t64504, i64 40
+%t64518 = load i64, ptr %t64517
+%t64519 = getelementptr i8, ptr %t64504, i64 48
+%t64520 = load i64, ptr %t64519
+%t64521 = call ptr @kg_add(ptr %t64508, ptr @.s64509, ptr @.s64510, ptr @.s64511, ptr %t64516, i64 %t64518, i64 %t64520)
+%t64522 = call ptr @resid_gmalloc(i64 24)
+%t64523 = getelementptr i8, ptr %t64521, i64 0
+%t64524 = load ptr, ptr %t64523
+%t64522.f0 = getelementptr i8, ptr %t64522, i64 0
+store ptr %t64524, ptr %t64522.f0
+%t64525 = getelementptr i8, ptr %t64521, i64 8
+%t64526 = load i64, ptr %t64525
+%t64522.f1 = getelementptr i8, ptr %t64522, i64 8
+store i64 %t64526, ptr %t64522.f1
+%t64527 = getelementptr i8, ptr %t64494, i64 32
+%t64528 = load ptr, ptr %t64527
+%t64529 = getelementptr i8, ptr %t64521, i64 8
+%t64530 = load i64, ptr %t64529
+%t64531 = call ptr @resid_gmalloc(i64 24)
+%t64532 = call ptr @e.itoa(ptr %t64531, i64 %t64530)
+%t64533 = call ptr @resid_str_concat(ptr %t64528, ptr %t64532)
+%t64535 = call ptr @resid_str_concat(ptr %t64533, ptr @.s64534)
+%t64536 = call ptr @resid_gmalloc(i64 24)
+%t64537 = call ptr @e.itoa(ptr %t64536, i64 %p1)
+%t64538 = call ptr @resid_str_concat(ptr %t64535, ptr %t64537)
+%t64540 = call ptr @resid_str_concat(ptr %t64538, ptr @.s64539)
+%t64522.f2 = getelementptr i8, ptr %t64522, i64 16
+store ptr %t64540, ptr %t64522.f2
+ret ptr %t64522
 }
 define ptr @gx_run(ptr %p0, ptr %p1, i1 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64472 = getelementptr i8, ptr %p0, i64 24
-%t64473 = load ptr, ptr %t64472
-%t64475 = call i8 @resid_str_eq(ptr %t64473, ptr @.s64474)
-%t64476 = icmp eq i8 %t64475, 0
-br i1 %t64476, label %L12507, label %L12509
-L12507:
-%t64477 = call ptr @resid_gmalloc(i64 56)
-%t64478 = getelementptr i8, ptr %p0, i64 0
-%t64479 = load ptr, ptr %t64478
-%t64477.f0 = getelementptr i8, ptr %t64477, i64 0
-store ptr %t64479, ptr %t64477.f0
-%t64477.f1 = getelementptr i8, ptr %t64477, i64 8
-store i64 -1, ptr %t64477.f1
-%t64477.f2 = getelementptr i8, ptr %t64477, i64 16
-store i64 0, ptr %t64477.f2
-%t64481 = getelementptr i8, ptr %p0, i64 24
-%t64482 = load ptr, ptr %t64481
-%t64483 = call ptr @resid_str_concat(ptr @.s64480, ptr %t64482)
-%t64477.f3 = getelementptr i8, ptr %t64477, i64 24
-store ptr %t64483, ptr %t64477.f3
-%t64477.f4 = getelementptr i8, ptr %t64477, i64 32
-store ptr @.s64484, ptr %t64477.f4
-%t64477.f5 = getelementptr i8, ptr %t64477, i64 40
-store ptr @.s64485, ptr %t64477.f5
-%t64477.f6 = getelementptr i8, ptr %t64477, i64 48
-store ptr @.s64486, ptr %t64477.f6
-ret ptr %t64477
-L12509:
-%t64487 = xor i1 %p2, true
-br i1 %t64487, label %L12510, label %L12512
-L12510:
-%t64488 = call ptr @resid_gmalloc(i64 56)
-%t64489 = getelementptr i8, ptr %p0, i64 0
-%t64490 = load ptr, ptr %t64489
-%t64488.f0 = getelementptr i8, ptr %t64488, i64 0
-store ptr %t64490, ptr %t64488.f0
-%t64491 = getelementptr i8, ptr %p0, i64 8
-%t64492 = load i64, ptr %t64491
-%t64488.f1 = getelementptr i8, ptr %t64488, i64 8
-store i64 %t64492, ptr %t64488.f1
-%t64488.f2 = getelementptr i8, ptr %t64488, i64 16
-store i64 0, ptr %t64488.f2
-%t64488.f3 = getelementptr i8, ptr %t64488, i64 24
-store ptr @.s64493, ptr %t64488.f3
-%t64488.f4 = getelementptr i8, ptr %t64488, i64 32
-store ptr @.s64494, ptr %t64488.f4
-%t64488.f5 = getelementptr i8, ptr %t64488, i64 40
-store ptr @.s64495, ptr %t64488.f5
-%t64488.f6 = getelementptr i8, ptr %t64488, i64 48
-store ptr @.s64496, ptr %t64488.f6
-ret ptr %t64488
-L12512:
-%t64497 = call ptr @gx_reduce_graph(ptr %p0, ptr %p1)
-ret ptr %t64497
+%t64541 = getelementptr i8, ptr %p0, i64 24
+%t64542 = load ptr, ptr %t64541
+%t64544 = call i8 @resid_str_eq(ptr %t64542, ptr @.s64543)
+%t64545 = icmp eq i8 %t64544, 0
+br i1 %t64545, label %L12516, label %L12518
+L12516:
+%t64546 = call ptr @resid_gmalloc(i64 56)
+%t64547 = getelementptr i8, ptr %p0, i64 0
+%t64548 = load ptr, ptr %t64547
+%t64546.f0 = getelementptr i8, ptr %t64546, i64 0
+store ptr %t64548, ptr %t64546.f0
+%t64546.f1 = getelementptr i8, ptr %t64546, i64 8
+store i64 -1, ptr %t64546.f1
+%t64546.f2 = getelementptr i8, ptr %t64546, i64 16
+store i64 0, ptr %t64546.f2
+%t64550 = getelementptr i8, ptr %p0, i64 24
+%t64551 = load ptr, ptr %t64550
+%t64552 = call ptr @resid_str_concat(ptr @.s64549, ptr %t64551)
+%t64546.f3 = getelementptr i8, ptr %t64546, i64 24
+store ptr %t64552, ptr %t64546.f3
+%t64546.f4 = getelementptr i8, ptr %t64546, i64 32
+store ptr @.s64553, ptr %t64546.f4
+%t64546.f5 = getelementptr i8, ptr %t64546, i64 40
+store ptr @.s64554, ptr %t64546.f5
+%t64546.f6 = getelementptr i8, ptr %t64546, i64 48
+store ptr @.s64555, ptr %t64546.f6
+ret ptr %t64546
+L12518:
+%t64556 = xor i1 %p2, true
+br i1 %t64556, label %L12519, label %L12521
+L12519:
+%t64557 = call ptr @resid_gmalloc(i64 56)
+%t64558 = getelementptr i8, ptr %p0, i64 0
+%t64559 = load ptr, ptr %t64558
+%t64557.f0 = getelementptr i8, ptr %t64557, i64 0
+store ptr %t64559, ptr %t64557.f0
+%t64560 = getelementptr i8, ptr %p0, i64 8
+%t64561 = load i64, ptr %t64560
+%t64557.f1 = getelementptr i8, ptr %t64557, i64 8
+store i64 %t64561, ptr %t64557.f1
+%t64557.f2 = getelementptr i8, ptr %t64557, i64 16
+store i64 0, ptr %t64557.f2
+%t64557.f3 = getelementptr i8, ptr %t64557, i64 24
+store ptr @.s64562, ptr %t64557.f3
+%t64557.f4 = getelementptr i8, ptr %t64557, i64 32
+store ptr @.s64563, ptr %t64557.f4
+%t64557.f5 = getelementptr i8, ptr %t64557, i64 40
+store ptr @.s64564, ptr %t64557.f5
+%t64557.f6 = getelementptr i8, ptr %t64557, i64 48
+store ptr @.s64565, ptr %t64557.f6
+ret ptr %t64557
+L12521:
+%t64566 = call ptr @gx_reduce_graph(ptr %p0, ptr %p1)
+ret ptr %t64566
 }
 define ptr @gx_pack(ptr %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64498 = call ptr @str_sb_new()
-%t64499 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pack_at(ptr %p0, i64 0, i64 %p1, ptr %t64498)
-ret ptr %t64499
+%t64567 = call ptr @str_sb_new()
+%t64568 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pack_at(ptr %p0, i64 0, i64 %p1, ptr %t64567)
+ret ptr %t64568
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pack_at(ptr %p0.in, i64 %p1.in, i64 %p2.in, ptr %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t64526, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t64595, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t64529, %tco.s0 ]
-%t64500 = icmp sgt i64 %p1, %p2
-br i1 %t64500, label %L12513, label %L12515
-L12513:
-%t64501 = call ptr @str_sb_finish(ptr %p3)
-ret ptr %t64501
-L12515:
-%t64502 = getelementptr i8, ptr %p0, i64 0
-%t64503 = load ptr, ptr %t64502
-%t64504 = call ptr @resid_list_get(ptr %t64503, i64 %p1)
-%t64507 = getelementptr i8, ptr %t64504, i64 0
-%t64508 = load ptr, ptr %t64507
-%t64509 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_s(ptr %p3, ptr %t64508)
-%t64510 = getelementptr i8, ptr %t64504, i64 8
-%t64511 = load ptr, ptr %t64510
-%t64512 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_s(ptr %t64509, ptr %t64511)
-%t64513 = getelementptr i8, ptr %t64504, i64 16
-%t64514 = load ptr, ptr %t64513
-%t64515 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_s(ptr %t64512, ptr %t64514)
-%t64516 = getelementptr i8, ptr %t64504, i64 40
-%t64517 = load i64, ptr %t64516
-%t64518 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %t64515, i64 %t64517)
-%t64519 = getelementptr i8, ptr %t64504, i64 48
-%t64520 = load i64, ptr %t64519
-%t64521 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %t64518, i64 %t64520)
-%t64522 = getelementptr i8, ptr %t64504, i64 32
-%t64523 = load i64, ptr %t64522
-%t64524 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %t64521, i64 %t64523)
-%t64525 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p1, i64 1)
-%t64526 = extractvalue {i64, i1} %t64525, 0
-%t64527 = extractvalue {i64, i1} %t64525, 1
-%t64528 = zext i1 %t64527 to i8
-call void @resid_overflow_check(i8 %t64528)
-%t64529 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pack_ids(ptr %p0, i64 %p1, i64 0, ptr %t64524)
+%p3 = phi ptr [ %p3.in, %entry ], [ %t64598, %tco.s0 ]
+%t64569 = icmp sgt i64 %p1, %p2
+br i1 %t64569, label %L12522, label %L12524
+L12522:
+%t64570 = call ptr @str_sb_finish(ptr %p3)
+ret ptr %t64570
+L12524:
+%t64571 = getelementptr i8, ptr %p0, i64 0
+%t64572 = load ptr, ptr %t64571
+%t64573 = call ptr @resid_list_get(ptr %t64572, i64 %p1)
+%t64576 = getelementptr i8, ptr %t64573, i64 0
+%t64577 = load ptr, ptr %t64576
+%t64578 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_s(ptr %p3, ptr %t64577)
+%t64579 = getelementptr i8, ptr %t64573, i64 8
+%t64580 = load ptr, ptr %t64579
+%t64581 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_s(ptr %t64578, ptr %t64580)
+%t64582 = getelementptr i8, ptr %t64573, i64 16
+%t64583 = load ptr, ptr %t64582
+%t64584 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_s(ptr %t64581, ptr %t64583)
+%t64585 = getelementptr i8, ptr %t64573, i64 40
+%t64586 = load i64, ptr %t64585
+%t64587 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %t64584, i64 %t64586)
+%t64588 = getelementptr i8, ptr %t64573, i64 48
+%t64589 = load i64, ptr %t64588
+%t64590 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %t64587, i64 %t64589)
+%t64591 = getelementptr i8, ptr %t64573, i64 32
+%t64592 = load i64, ptr %t64591
+%t64593 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %t64590, i64 %t64592)
+%t64594 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p1, i64 1)
+%t64595 = extractvalue {i64, i1} %t64594, 0
+%t64596 = extractvalue {i64, i1} %t64594, 1
+%t64597 = zext i1 %t64596 to i8
+call void @resid_overflow_check(i8 %t64597)
+%t64598 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pack_ids(ptr %p0, i64 %p1, i64 0, ptr %t64593)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_s(ptr %p0, ptr %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64531 = call i64 @str_len(ptr %p1)
-%t64532 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_digits(ptr %p0, i64 %t64531)
-%t64533 = call ptr @str_sb_append_cp(ptr %t64532, i64 58)
-%t64534 = musttail call ptr @str_sb_append(ptr %t64533, ptr %p1)
-ret ptr %t64534
+%t64600 = call i64 @str_len(ptr %p1)
+%t64601 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_digits(ptr %p0, i64 %t64600)
+%t64602 = call ptr @str_sb_append_cp(ptr %t64601, i64 58)
+%t64603 = musttail call ptr @str_sb_append(ptr %t64602, ptr %p1)
+ret ptr %t64603
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64535 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_digits(ptr %p0, i64 %p1)
-%t64536 = musttail call ptr @str_sb_append_cp(ptr %t64535, i64 44)
-ret ptr %t64536
+%t64604 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_digits(ptr %p0, i64 %p1)
+%t64605 = musttail call ptr @str_sb_append_cp(ptr %t64604, i64 44)
+ret ptr %t64605
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_digits(ptr %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64537 = icmp slt i64 %p1, 10
-br i1 %t64537, label %L12516, label %L12518
-L12516:
-%t64538 = add nsw i64 48, %p1
-%t64539 = musttail call ptr @str_sb_append_cp(ptr %p0, i64 %t64538)
-ret ptr %t64539
-L12518:
-%t64540 = sdiv i64 %p1, 10
-%t64541 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_digits(ptr %p0, i64 %t64540)
-%t64542 = srem i64 %p1, 10
-%t64543 = add nsw i64 48, %t64542
-%t64544 = musttail call ptr @str_sb_append_cp(ptr %t64541, i64 %t64543)
-ret ptr %t64544
+%t64606 = icmp slt i64 %p1, 10
+br i1 %t64606, label %L12525, label %L12527
+L12525:
+%t64607 = add nsw i64 48, %p1
+%t64608 = musttail call ptr @str_sb_append_cp(ptr %p0, i64 %t64607)
+ret ptr %t64608
+L12527:
+%t64609 = sdiv i64 %p1, 10
+%t64610 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_digits(ptr %p0, i64 %t64609)
+%t64611 = srem i64 %p1, 10
+%t64612 = add nsw i64 48, %t64611
+%t64613 = musttail call ptr @str_sb_append_cp(ptr %t64610, i64 %t64612)
+ret ptr %t64613
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pack_ids(ptr %p0.in, i64 %p1.in, i64 %p2.in, ptr %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
@@ -98202,178 +98332,178 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t64553, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t64555, %tco.s0 ]
-%t64545 = getelementptr i8, ptr %p0, i64 0
-%t64546 = load ptr, ptr %t64545
-%t64547 = call ptr @resid_list_get(ptr %t64546, i64 %p1)
-%t64550 = getelementptr i8, ptr %t64547, i64 32
-%t64551 = load i64, ptr %t64550
-%t64552 = icmp sge i64 %p2, %t64551
-br i1 %t64552, label %L12519, label %L12521
-L12519:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t64622, %tco.s0 ]
+%p3 = phi ptr [ %p3.in, %entry ], [ %t64624, %tco.s0 ]
+%t64614 = getelementptr i8, ptr %p0, i64 0
+%t64615 = load ptr, ptr %t64614
+%t64616 = call ptr @resid_list_get(ptr %t64615, i64 %p1)
+%t64619 = getelementptr i8, ptr %t64616, i64 32
+%t64620 = load i64, ptr %t64619
+%t64621 = icmp sge i64 %p2, %t64620
+br i1 %t64621, label %L12528, label %L12530
+L12528:
 ret ptr %p3
-L12521:
-%t64553 = add nsw i64 %p2, 1
-%t64554 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
-%t64555 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %p3, i64 %t64554)
+L12530:
+%t64622 = add nsw i64 %p2, 1
+%t64623 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
+%t64624 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_pk_i(ptr %p3, i64 %t64623)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @gx_unpack(ptr %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64557 = call i64 @str_len(ptr %p0)
-%t64558 = call ptr @resid_gmalloc(i64 32)
-%t64559 = call ptr @kg_empty()
-%t64558.f0 = getelementptr i8, ptr %t64558, i64 0
-store ptr %t64559, ptr %t64558.f0
-%t64558.f1 = getelementptr i8, ptr %t64558, i64 8
-store i64 -1, ptr %t64558.f1
-%t64558.f2 = getelementptr i8, ptr %t64558, i64 16
-store i64 0, ptr %t64558.f2
-%t64558.f3 = getelementptr i8, ptr %t64558, i64 24
-store ptr @.s64560, ptr %t64558.f3
-%t64561 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_unpack_at(ptr %p0, i64 0, i64 %t64557, ptr %t64558)
-ret ptr %t64561
+%t64626 = call i64 @str_len(ptr %p0)
+%t64627 = call ptr @resid_gmalloc(i64 32)
+%t64628 = call ptr @kg_empty()
+%t64627.f0 = getelementptr i8, ptr %t64627, i64 0
+store ptr %t64628, ptr %t64627.f0
+%t64627.f1 = getelementptr i8, ptr %t64627, i64 8
+store i64 -1, ptr %t64627.f1
+%t64627.f2 = getelementptr i8, ptr %t64627, i64 16
+store i64 0, ptr %t64627.f2
+%t64627.f3 = getelementptr i8, ptr %t64627, i64 24
+store ptr @.s64629, ptr %t64627.f3
+%t64630 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_unpack_at(ptr %p0, i64 0, i64 %t64626, ptr %t64627)
+ret ptr %t64630
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_unpack_at(ptr %p0.in, i64 %p1.in, i64 %p2.in, ptr %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t64622, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t64691, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t64620, %tco.s0 ]
-%t64562 = icmp sge i64 %p1, %p2
-br i1 %t64562, label %L12522, label %L12524
-L12522:
+%p3 = phi ptr [ %p3.in, %entry ], [ %t64689, %tco.s0 ]
+%t64631 = icmp sge i64 %p1, %p2
+br i1 %t64631, label %L12531, label %L12533
+L12531:
 ret ptr %p3
-L12524:
-%t64563 = call ptr @gx_int_at(ptr %p0, i64 %p1, i64 0)
-%t64564 = getelementptr i8, ptr %t64563, i64 8
-%t64565 = load i64, ptr %t64564
-%t64566 = getelementptr i8, ptr %t64563, i64 0
-%t64567 = load i64, ptr %t64566
-%t64568 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64565, i64 %t64567)
-%t64569 = extractvalue {i64, i1} %t64568, 0
-%t64570 = extractvalue {i64, i1} %t64568, 1
-%t64571 = zext i1 %t64570 to i8
-call void @resid_overflow_check(i8 %t64571)
-%t64572 = call ptr @gx_int_at(ptr %p0, i64 %t64569, i64 0)
-%t64573 = getelementptr i8, ptr %t64572, i64 8
-%t64574 = load i64, ptr %t64573
-%t64575 = getelementptr i8, ptr %t64572, i64 0
-%t64576 = load i64, ptr %t64575
-%t64577 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64574, i64 %t64576)
-%t64578 = extractvalue {i64, i1} %t64577, 0
-%t64579 = extractvalue {i64, i1} %t64577, 1
-%t64580 = zext i1 %t64579 to i8
-call void @resid_overflow_check(i8 %t64580)
-%t64581 = call ptr @gx_int_at(ptr %p0, i64 %t64578, i64 0)
-%t64582 = getelementptr i8, ptr %t64581, i64 8
-%t64583 = load i64, ptr %t64582
-%t64584 = getelementptr i8, ptr %t64581, i64 0
-%t64585 = load i64, ptr %t64584
-%t64586 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64583, i64 %t64585)
-%t64587 = extractvalue {i64, i1} %t64586, 0
-%t64588 = extractvalue {i64, i1} %t64586, 1
-%t64589 = zext i1 %t64588 to i8
-call void @resid_overflow_check(i8 %t64589)
-%t64590 = call ptr @gx_int_at(ptr %p0, i64 %t64587, i64 0)
-%t64591 = getelementptr i8, ptr %t64590, i64 8
-%t64592 = load i64, ptr %t64591
-%t64593 = call ptr @gx_int_at(ptr %p0, i64 %t64592, i64 0)
-%t64594 = getelementptr i8, ptr %t64593, i64 8
-%t64595 = load i64, ptr %t64594
-%t64596 = call ptr @gx_int_at(ptr %p0, i64 %t64595, i64 0)
-%t64597 = getelementptr i8, ptr %t64596, i64 8
-%t64598 = load i64, ptr %t64597
-%t64599 = getelementptr i8, ptr %t64596, i64 0
-%t64600 = load i64, ptr %t64599
-%t64601 = call ptr @resid_listbuf_new()
-%t64602 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_unpack_ids(ptr %p0, i64 %t64598, i64 %t64600, ptr %t64601)
-%t64603 = getelementptr i8, ptr %p3, i64 0
-%t64604 = load ptr, ptr %t64603
-%t64605 = getelementptr i8, ptr %t64563, i64 8
-%t64606 = load i64, ptr %t64605
-%t64607 = call ptr @str_slice(ptr %p0, i64 %t64606, i64 %t64569)
-%t64608 = getelementptr i8, ptr %t64572, i64 8
-%t64609 = load i64, ptr %t64608
-%t64610 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_sl(ptr %p0, i64 %t64609, i64 %t64578)
-%t64611 = getelementptr i8, ptr %t64581, i64 8
-%t64612 = load i64, ptr %t64611
-%t64613 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_sl(ptr %p0, i64 %t64612, i64 %t64587)
-%t64614 = getelementptr i8, ptr %t64602, i64 0
-%t64615 = load ptr, ptr %t64614
-%t64616 = getelementptr i8, ptr %t64590, i64 0
-%t64617 = load i64, ptr %t64616
-%t64618 = getelementptr i8, ptr %t64593, i64 0
-%t64619 = load i64, ptr %t64618
-%t64620 = call ptr @kg_add(ptr %t64604, ptr %t64607, ptr %t64610, ptr %t64613, ptr %t64615, i64 %t64617, i64 %t64619)
-%t64621 = getelementptr i8, ptr %t64602, i64 8
-%t64622 = load i64, ptr %t64621
+L12533:
+%t64632 = call ptr @gx_int_at(ptr %p0, i64 %p1, i64 0)
+%t64633 = getelementptr i8, ptr %t64632, i64 8
+%t64634 = load i64, ptr %t64633
+%t64635 = getelementptr i8, ptr %t64632, i64 0
+%t64636 = load i64, ptr %t64635
+%t64637 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64634, i64 %t64636)
+%t64638 = extractvalue {i64, i1} %t64637, 0
+%t64639 = extractvalue {i64, i1} %t64637, 1
+%t64640 = zext i1 %t64639 to i8
+call void @resid_overflow_check(i8 %t64640)
+%t64641 = call ptr @gx_int_at(ptr %p0, i64 %t64638, i64 0)
+%t64642 = getelementptr i8, ptr %t64641, i64 8
+%t64643 = load i64, ptr %t64642
+%t64644 = getelementptr i8, ptr %t64641, i64 0
+%t64645 = load i64, ptr %t64644
+%t64646 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64643, i64 %t64645)
+%t64647 = extractvalue {i64, i1} %t64646, 0
+%t64648 = extractvalue {i64, i1} %t64646, 1
+%t64649 = zext i1 %t64648 to i8
+call void @resid_overflow_check(i8 %t64649)
+%t64650 = call ptr @gx_int_at(ptr %p0, i64 %t64647, i64 0)
+%t64651 = getelementptr i8, ptr %t64650, i64 8
+%t64652 = load i64, ptr %t64651
+%t64653 = getelementptr i8, ptr %t64650, i64 0
+%t64654 = load i64, ptr %t64653
+%t64655 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64652, i64 %t64654)
+%t64656 = extractvalue {i64, i1} %t64655, 0
+%t64657 = extractvalue {i64, i1} %t64655, 1
+%t64658 = zext i1 %t64657 to i8
+call void @resid_overflow_check(i8 %t64658)
+%t64659 = call ptr @gx_int_at(ptr %p0, i64 %t64656, i64 0)
+%t64660 = getelementptr i8, ptr %t64659, i64 8
+%t64661 = load i64, ptr %t64660
+%t64662 = call ptr @gx_int_at(ptr %p0, i64 %t64661, i64 0)
+%t64663 = getelementptr i8, ptr %t64662, i64 8
+%t64664 = load i64, ptr %t64663
+%t64665 = call ptr @gx_int_at(ptr %p0, i64 %t64664, i64 0)
+%t64666 = getelementptr i8, ptr %t64665, i64 8
+%t64667 = load i64, ptr %t64666
+%t64668 = getelementptr i8, ptr %t64665, i64 0
+%t64669 = load i64, ptr %t64668
+%t64670 = call ptr @resid_listbuf_new()
+%t64671 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_unpack_ids(ptr %p0, i64 %t64667, i64 %t64669, ptr %t64670)
+%t64672 = getelementptr i8, ptr %p3, i64 0
+%t64673 = load ptr, ptr %t64672
+%t64674 = getelementptr i8, ptr %t64632, i64 8
+%t64675 = load i64, ptr %t64674
+%t64676 = call ptr @str_slice(ptr %p0, i64 %t64675, i64 %t64638)
+%t64677 = getelementptr i8, ptr %t64641, i64 8
+%t64678 = load i64, ptr %t64677
+%t64679 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_sl(ptr %p0, i64 %t64678, i64 %t64647)
+%t64680 = getelementptr i8, ptr %t64650, i64 8
+%t64681 = load i64, ptr %t64680
+%t64682 = call ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_sl(ptr %p0, i64 %t64681, i64 %t64656)
+%t64683 = getelementptr i8, ptr %t64671, i64 0
+%t64684 = load ptr, ptr %t64683
+%t64685 = getelementptr i8, ptr %t64659, i64 0
+%t64686 = load i64, ptr %t64685
+%t64687 = getelementptr i8, ptr %t64662, i64 0
+%t64688 = load i64, ptr %t64687
+%t64689 = call ptr @kg_add(ptr %t64673, ptr %t64676, ptr %t64679, ptr %t64682, ptr %t64684, i64 %t64686, i64 %t64688)
+%t64690 = getelementptr i8, ptr %t64671, i64 8
+%t64691 = load i64, ptr %t64690
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_greduce_resid__gx_sl(ptr %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64624 = icmp eq i64 %p1, %p2
-br i1 %t64624, label %L12525, label %L12527
-L12525:
-ret ptr @.s64625
-L12527:
-%t64626 = musttail call ptr @str_slice(ptr %p0, i64 %p1, i64 %p2)
-ret ptr %t64626
+%t64693 = icmp eq i64 %p1, %p2
+br i1 %t64693, label %L12534, label %L12536
+L12534:
+ret ptr @.s64694
+L12536:
+%t64695 = musttail call ptr @str_slice(ptr %p0, i64 %p1, i64 %p2)
+ret ptr %t64695
 }
 define ptr @gx_int_at(ptr %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t64638, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t64649, %tco.s0 ]
-%t64627 = call i64 @str_char_at(ptr %p0, i64 %p1)
-%t64628 = icmp slt i64 %t64627, 48
-br label %LSL64629
-LSL64629:
-br i1 %t64628, label %LSJ64629, label %LSR64629
-LSR64629:
-%t64630 = icmp sgt i64 %t64627, 57
-br label %LSJ64629
-LSJ64629:
-%t64631 = phi i1 [ true, %LSL64629 ], [ %t64630, %LSR64629 ]
-br i1 %t64631, label %L12528, label %L12530
-L12528:
-%t64632 = call ptr @resid_gmalloc(i64 16)
-%t64632.f0 = getelementptr i8, ptr %t64632, i64 0
-store i64 %p2, ptr %t64632.f0
-%t64633 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p1, i64 1)
-%t64634 = extractvalue {i64, i1} %t64633, 0
-%t64635 = extractvalue {i64, i1} %t64633, 1
-%t64636 = zext i1 %t64635 to i8
-call void @resid_overflow_check(i8 %t64636)
-%t64632.f1 = getelementptr i8, ptr %t64632, i64 8
-store i64 %t64634, ptr %t64632.f1
-ret ptr %t64632
-L12530:
-%t64637 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p1, i64 1)
-%t64638 = extractvalue {i64, i1} %t64637, 0
-%t64639 = extractvalue {i64, i1} %t64637, 1
-%t64640 = zext i1 %t64639 to i8
-call void @resid_overflow_check(i8 %t64640)
-%t64641 = call {i64, i1} @llvm.smul.with.overflow.i64(i64 %p2, i64 10)
-%t64642 = extractvalue {i64, i1} %t64641, 0
-%t64643 = extractvalue {i64, i1} %t64641, 1
-%t64644 = zext i1 %t64643 to i8
-call void @resid_overflow_check(i8 %t64644)
-%t64645 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64642, i64 %t64627)
-%t64646 = extractvalue {i64, i1} %t64645, 0
-%t64647 = extractvalue {i64, i1} %t64645, 1
-%t64648 = zext i1 %t64647 to i8
-call void @resid_overflow_check(i8 %t64648)
-%t64649 = sub nsw i64 %t64646, 48
+%p1 = phi i64 [ %p1.in, %entry ], [ %t64707, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t64718, %tco.s0 ]
+%t64696 = call i64 @str_char_at(ptr %p0, i64 %p1)
+%t64697 = icmp slt i64 %t64696, 48
+br label %LSL64698
+LSL64698:
+br i1 %t64697, label %LSJ64698, label %LSR64698
+LSR64698:
+%t64699 = icmp sgt i64 %t64696, 57
+br label %LSJ64698
+LSJ64698:
+%t64700 = phi i1 [ true, %LSL64698 ], [ %t64699, %LSR64698 ]
+br i1 %t64700, label %L12537, label %L12539
+L12537:
+%t64701 = call ptr @resid_gmalloc(i64 16)
+%t64701.f0 = getelementptr i8, ptr %t64701, i64 0
+store i64 %p2, ptr %t64701.f0
+%t64702 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p1, i64 1)
+%t64703 = extractvalue {i64, i1} %t64702, 0
+%t64704 = extractvalue {i64, i1} %t64702, 1
+%t64705 = zext i1 %t64704 to i8
+call void @resid_overflow_check(i8 %t64705)
+%t64701.f1 = getelementptr i8, ptr %t64701, i64 8
+store i64 %t64703, ptr %t64701.f1
+ret ptr %t64701
+L12539:
+%t64706 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p1, i64 1)
+%t64707 = extractvalue {i64, i1} %t64706, 0
+%t64708 = extractvalue {i64, i1} %t64706, 1
+%t64709 = zext i1 %t64708 to i8
+call void @resid_overflow_check(i8 %t64709)
+%t64710 = call {i64, i1} @llvm.smul.with.overflow.i64(i64 %p2, i64 10)
+%t64711 = extractvalue {i64, i1} %t64710, 0
+%t64712 = extractvalue {i64, i1} %t64710, 1
+%t64713 = zext i1 %t64712 to i8
+call void @resid_overflow_check(i8 %t64713)
+%t64714 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64711, i64 %t64696)
+%t64715 = extractvalue {i64, i1} %t64714, 0
+%t64716 = extractvalue {i64, i1} %t64714, 1
+%t64717 = zext i1 %t64716 to i8
+call void @resid_overflow_check(i8 %t64717)
+%t64718 = sub nsw i64 %t64715, 48
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -98383,232 +98513,232 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t64656, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t64658, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t64666, %tco.s0 ]
-%t64651 = icmp eq i64 %p2, 0
-br i1 %t64651, label %L12531, label %L12533
-L12531:
-%t64652 = call ptr @resid_gmalloc(i64 16)
-%t64653 = call ptr @resid_listbuf_finish(ptr %p3, ptr @.lty64653)
-%t64652.f0 = getelementptr i8, ptr %t64652, i64 0
-store ptr %t64653, ptr %t64652.f0
-%t64652.f1 = getelementptr i8, ptr %t64652, i64 8
-store i64 %p1, ptr %t64652.f1
-ret ptr %t64652
-L12533:
-%t64654 = call ptr @gx_int_at(ptr %p0, i64 %p1, i64 0)
-%t64655 = getelementptr i8, ptr %t64654, i64 8
-%t64656 = load i64, ptr %t64655
-%t64657 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
-%t64658 = extractvalue {i64, i1} %t64657, 0
-%t64659 = extractvalue {i64, i1} %t64657, 1
-%t64660 = zext i1 %t64659 to i8
-call void @resid_overflow_check(i8 %t64660)
-%t64661 = getelementptr i8, ptr %t64654, i64 0
-%t64662 = load i64, ptr %t64661
-%t64663 = call ptr @resid_box_i64(i64 %t64662)
-%t64666 = call ptr @resid_listbuf_push(ptr %p3, ptr %t64663)
+%p1 = phi i64 [ %p1.in, %entry ], [ %t64725, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t64727, %tco.s0 ]
+%p3 = phi ptr [ %p3.in, %entry ], [ %t64735, %tco.s0 ]
+%t64720 = icmp eq i64 %p2, 0
+br i1 %t64720, label %L12540, label %L12542
+L12540:
+%t64721 = call ptr @resid_gmalloc(i64 16)
+%t64722 = call ptr @resid_listbuf_finish(ptr %p3, ptr @.lty64722)
+%t64721.f0 = getelementptr i8, ptr %t64721, i64 0
+store ptr %t64722, ptr %t64721.f0
+%t64721.f1 = getelementptr i8, ptr %t64721, i64 8
+store i64 %p1, ptr %t64721.f1
+ret ptr %t64721
+L12542:
+%t64723 = call ptr @gx_int_at(ptr %p0, i64 %p1, i64 0)
+%t64724 = getelementptr i8, ptr %t64723, i64 8
+%t64725 = load i64, ptr %t64724
+%t64726 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t64727 = extractvalue {i64, i1} %t64726, 0
+%t64728 = extractvalue {i64, i1} %t64726, 1
+%t64729 = zext i1 %t64728 to i8
+call void @resid_overflow_check(i8 %t64729)
+%t64730 = getelementptr i8, ptr %t64723, i64 0
+%t64731 = load i64, ptr %t64730
+%t64732 = call ptr @resid_box_i64(i64 %t64731)
+%t64735 = call ptr @resid_listbuf_push(ptr %p3, ptr %t64732)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_nib(ptr %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64668 = icmp slt i64 %p1, 10
-br i1 %t64668, label %L12534, label %L12535
-L12534:
-%t64669 = add nsw i64 48, %p1
-br label %L12536
-L12535:
-%t64670 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 87, i64 %p1)
-%t64671 = extractvalue {i64, i1} %t64670, 0
-%t64672 = extractvalue {i64, i1} %t64670, 1
-%t64673 = zext i1 %t64672 to i8
-call void @resid_overflow_check(i8 %t64673)
-br label %L12536
-L12536:
-%t64674 = phi i64 [ %t64669, %L12534 ], [ %t64671, %L12535 ]
-%t64675 = musttail call ptr @str_sb_append_cp(ptr %p0, i64 %t64674)
-ret ptr %t64675
+%t64737 = icmp slt i64 %p1, 10
+br i1 %t64737, label %L12543, label %L12544
+L12543:
+%t64738 = add nsw i64 48, %p1
+br label %L12545
+L12544:
+%t64739 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 87, i64 %p1)
+%t64740 = extractvalue {i64, i1} %t64739, 0
+%t64741 = extractvalue {i64, i1} %t64739, 1
+%t64742 = zext i1 %t64741 to i8
+call void @resid_overflow_check(i8 %t64742)
+br label %L12545
+L12545:
+%t64743 = phi i64 [ %t64738, %L12543 ], [ %t64740, %L12544 ]
+%t64744 = musttail call ptr @str_sb_append_cp(ptr %p0, i64 %t64743)
+ret ptr %t64744
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64676 = ashr i64 %p1, 4
-%t64677 = and i64 %t64676, 15
-%t64678 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_nib(ptr %p0, i64 %t64677)
-%t64679 = and i64 %p1, 15
-%t64680 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_nib(ptr %t64678, i64 %t64679)
-ret ptr %t64680
+%t64745 = ashr i64 %p1, 4
+%t64746 = and i64 %t64745, 15
+%t64747 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_nib(ptr %p0, i64 %t64746)
+%t64748 = and i64 %p1, 15
+%t64749 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_nib(ptr %t64747, i64 %t64748)
+ret ptr %t64749
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_be(ptr %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %t64695, %tco.s0 ]
+%p0 = phi ptr [ %p0.in, %entry ], [ %t64764, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t64697, %tco.s0 ]
-%t64681 = icmp eq i64 %p2, 0
-br i1 %t64681, label %L12537, label %L12539
-L12537:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t64766, %tco.s0 ]
+%t64750 = icmp eq i64 %p2, 0
+br i1 %t64750, label %L12546, label %L12548
+L12546:
 ret ptr %p0
-L12539:
-%t64682 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
-%t64683 = extractvalue {i64, i1} %t64682, 0
-%t64684 = extractvalue {i64, i1} %t64682, 1
-%t64685 = zext i1 %t64684 to i8
-call void @resid_overflow_check(i8 %t64685)
-%t64686 = call {i64, i1} @llvm.smul.with.overflow.i64(i64 8, i64 %t64683)
-%t64687 = extractvalue {i64, i1} %t64686, 0
-%t64688 = extractvalue {i64, i1} %t64686, 1
-%t64689 = zext i1 %t64688 to i8
-call void @resid_overflow_check(i8 %t64689)
-%t64690 = icmp uge i64 %t64687, 64
-%t64691 = add i64 %t64687, 0
-%t64692 = select i1 %t64690, i64 63, i64 %t64691
-%t64693 = ashr i64 %p1, %t64692
-%t64694 = and i64 %t64693, 255
-%t64695 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64694)
-%t64696 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
-%t64697 = extractvalue {i64, i1} %t64696, 0
-%t64698 = extractvalue {i64, i1} %t64696, 1
-%t64699 = zext i1 %t64698 to i8
-call void @resid_overflow_check(i8 %t64699)
+L12548:
+%t64751 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t64752 = extractvalue {i64, i1} %t64751, 0
+%t64753 = extractvalue {i64, i1} %t64751, 1
+%t64754 = zext i1 %t64753 to i8
+call void @resid_overflow_check(i8 %t64754)
+%t64755 = call {i64, i1} @llvm.smul.with.overflow.i64(i64 8, i64 %t64752)
+%t64756 = extractvalue {i64, i1} %t64755, 0
+%t64757 = extractvalue {i64, i1} %t64755, 1
+%t64758 = zext i1 %t64757 to i8
+call void @resid_overflow_check(i8 %t64758)
+%t64759 = icmp uge i64 %t64756, 64
+%t64760 = add i64 %t64756, 0
+%t64761 = select i1 %t64759, i64 63, i64 %t64760
+%t64762 = ashr i64 %p1, %t64761
+%t64763 = and i64 %t64762, 255
+%t64764 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64763)
+%t64765 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t64766 = extractvalue {i64, i1} %t64765, 0
+%t64767 = extractvalue {i64, i1} %t64765, 1
+%t64768 = zext i1 %t64767 to i8
+call void @resid_overflow_check(i8 %t64768)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64701 = call {i64, i1} @llvm.smul.with.overflow.i64(i64 %p1, i64 32)
-%t64702 = extractvalue {i64, i1} %t64701, 0
-%t64703 = extractvalue {i64, i1} %t64701, 1
-%t64704 = zext i1 %t64703 to i8
-call void @resid_overflow_check(i8 %t64704)
-%t64705 = icmp slt i64 %p2, 24
-br i1 %t64705, label %L12540, label %L12542
-L12540:
-%t64706 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64702, i64 %p2)
-%t64707 = extractvalue {i64, i1} %t64706, 0
-%t64708 = extractvalue {i64, i1} %t64706, 1
-%t64709 = zext i1 %t64708 to i8
-call void @resid_overflow_check(i8 %t64709)
-%t64710 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64707)
-ret ptr %t64710
-L12542:
-%t64711 = icmp slt i64 %p2, 256
-br i1 %t64711, label %L12543, label %L12545
-L12543:
-%t64712 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64702, i64 24)
-%t64713 = extractvalue {i64, i1} %t64712, 0
-%t64714 = extractvalue {i64, i1} %t64712, 1
-%t64715 = zext i1 %t64714 to i8
-call void @resid_overflow_check(i8 %t64715)
-%t64716 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64713)
-%t64717 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64716, i64 %p2)
-ret ptr %t64717
-L12545:
-%t64718 = icmp slt i64 %p2, 65536
-br i1 %t64718, label %L12546, label %L12548
-L12546:
-%t64719 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64702, i64 25)
-%t64720 = extractvalue {i64, i1} %t64719, 0
-%t64721 = extractvalue {i64, i1} %t64719, 1
-%t64722 = zext i1 %t64721 to i8
-call void @resid_overflow_check(i8 %t64722)
-%t64723 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64720)
-%t64724 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_be(ptr %t64723, i64 %p2, i64 2)
-ret ptr %t64724
-L12548:
-%t64725 = icmp slt i64 %p2, 4294967296
-br i1 %t64725, label %L12549, label %L12551
+%t64770 = call {i64, i1} @llvm.smul.with.overflow.i64(i64 %p1, i64 32)
+%t64771 = extractvalue {i64, i1} %t64770, 0
+%t64772 = extractvalue {i64, i1} %t64770, 1
+%t64773 = zext i1 %t64772 to i8
+call void @resid_overflow_check(i8 %t64773)
+%t64774 = icmp slt i64 %p2, 24
+br i1 %t64774, label %L12549, label %L12551
 L12549:
-%t64726 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64702, i64 26)
-%t64727 = extractvalue {i64, i1} %t64726, 0
-%t64728 = extractvalue {i64, i1} %t64726, 1
-%t64729 = zext i1 %t64728 to i8
-call void @resid_overflow_check(i8 %t64729)
-%t64730 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64727)
-%t64731 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_be(ptr %t64730, i64 %p2, i64 4)
-ret ptr %t64731
+%t64775 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64771, i64 %p2)
+%t64776 = extractvalue {i64, i1} %t64775, 0
+%t64777 = extractvalue {i64, i1} %t64775, 1
+%t64778 = zext i1 %t64777 to i8
+call void @resid_overflow_check(i8 %t64778)
+%t64779 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64776)
+ret ptr %t64779
 L12551:
-%t64732 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64702, i64 27)
-%t64733 = extractvalue {i64, i1} %t64732, 0
-%t64734 = extractvalue {i64, i1} %t64732, 1
-%t64735 = zext i1 %t64734 to i8
-call void @resid_overflow_check(i8 %t64735)
-%t64736 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64733)
-%t64737 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_be(ptr %t64736, i64 %p2, i64 8)
-ret ptr %t64737
+%t64780 = icmp slt i64 %p2, 256
+br i1 %t64780, label %L12552, label %L12554
+L12552:
+%t64781 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64771, i64 24)
+%t64782 = extractvalue {i64, i1} %t64781, 0
+%t64783 = extractvalue {i64, i1} %t64781, 1
+%t64784 = zext i1 %t64783 to i8
+call void @resid_overflow_check(i8 %t64784)
+%t64785 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64782)
+%t64786 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64785, i64 %p2)
+ret ptr %t64786
+L12554:
+%t64787 = icmp slt i64 %p2, 65536
+br i1 %t64787, label %L12555, label %L12557
+L12555:
+%t64788 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64771, i64 25)
+%t64789 = extractvalue {i64, i1} %t64788, 0
+%t64790 = extractvalue {i64, i1} %t64788, 1
+%t64791 = zext i1 %t64790 to i8
+call void @resid_overflow_check(i8 %t64791)
+%t64792 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64789)
+%t64793 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_be(ptr %t64792, i64 %p2, i64 2)
+ret ptr %t64793
+L12557:
+%t64794 = icmp slt i64 %p2, 4294967296
+br i1 %t64794, label %L12558, label %L12560
+L12558:
+%t64795 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64771, i64 26)
+%t64796 = extractvalue {i64, i1} %t64795, 0
+%t64797 = extractvalue {i64, i1} %t64795, 1
+%t64798 = zext i1 %t64797 to i8
+call void @resid_overflow_check(i8 %t64798)
+%t64799 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64796)
+%t64800 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_be(ptr %t64799, i64 %p2, i64 4)
+ret ptr %t64800
+L12560:
+%t64801 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64771, i64 27)
+%t64802 = extractvalue {i64, i1} %t64801, 0
+%t64803 = extractvalue {i64, i1} %t64801, 1
+%t64804 = zext i1 %t64803 to i8
+call void @resid_overflow_check(i8 %t64804)
+%t64805 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64802)
+%t64806 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_be(ptr %t64805, i64 %p2, i64 8)
+ret ptr %t64806
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64738 = icmp sge i64 %p1, 0
-br i1 %t64738, label %L12552, label %L12554
-L12552:
-%t64739 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 0, i64 %p1)
-ret ptr %t64739
-L12554:
-%t64740 = sub nsw i64 -1, %p1
-%t64741 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 1, i64 %t64740)
-ret ptr %t64741
+%t64807 = icmp sge i64 %p1, 0
+br i1 %t64807, label %L12561, label %L12563
+L12561:
+%t64808 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 0, i64 %p1)
+ret ptr %t64808
+L12563:
+%t64809 = sub nsw i64 -1, %p1
+%t64810 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 1, i64 %t64809)
+ret ptr %t64810
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_bool(ptr %p0, i1 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-br i1 %p1, label %L12555, label %L12556
-L12555:
-br label %L12557
-L12556:
-br label %L12557
-L12557:
-%t64742 = phi i64 [ 245, %L12555 ], [ 244, %L12556 ]
-%t64743 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64742)
-ret ptr %t64743
+br i1 %p1, label %L12564, label %L12565
+L12564:
+br label %L12566
+L12565:
+br label %L12566
+L12566:
+%t64811 = phi i64 [ 245, %L12564 ], [ 244, %L12565 ]
+%t64812 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64811)
+ret ptr %t64812
 }
 define i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_utf8_len(ptr %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t64752, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t64821, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t64754, %tco.s0 ]
-%t64744 = icmp sge i64 %p1, %p2
-br i1 %t64744, label %L12558, label %L12560
-L12558:
-ret i64 %p3
-L12560:
-%t64745 = call i64 @str_char_at(ptr %p0, i64 %p1)
-%t64746 = icmp slt i64 %t64745, 128
-br i1 %t64746, label %L12561, label %L12562
-L12561:
-br label %L12563
-L12562:
-%t64747 = icmp slt i64 %t64745, 2048
-br i1 %t64747, label %L12564, label %L12565
-L12564:
-br label %L12566
-L12565:
-%t64748 = icmp slt i64 %t64745, 65536
-br i1 %t64748, label %L12567, label %L12568
+%p3 = phi i64 [ %p3.in, %entry ], [ %t64823, %tco.s0 ]
+%t64813 = icmp sge i64 %p1, %p2
+br i1 %t64813, label %L12567, label %L12569
 L12567:
-br label %L12569
-L12568:
-br label %L12569
+ret i64 %p3
 L12569:
-%t64749 = phi i64 [ 3, %L12567 ], [ 4, %L12568 ]
-br label %L12566
-L12566:
-%t64750 = phi i64 [ 2, %L12564 ], [ %t64749, %L12569 ]
-br label %L12563
-L12563:
-%t64751 = phi i64 [ 1, %L12561 ], [ %t64750, %L12566 ]
-%t64752 = add nsw i64 %p1, 1
-%t64753 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p3, i64 %t64751)
-%t64754 = extractvalue {i64, i1} %t64753, 0
-%t64755 = extractvalue {i64, i1} %t64753, 1
-%t64756 = zext i1 %t64755 to i8
-call void @resid_overflow_check(i8 %t64756)
+%t64814 = call i64 @str_char_at(ptr %p0, i64 %p1)
+%t64815 = icmp slt i64 %t64814, 128
+br i1 %t64815, label %L12570, label %L12571
+L12570:
+br label %L12572
+L12571:
+%t64816 = icmp slt i64 %t64814, 2048
+br i1 %t64816, label %L12573, label %L12574
+L12573:
+br label %L12575
+L12574:
+%t64817 = icmp slt i64 %t64814, 65536
+br i1 %t64817, label %L12576, label %L12577
+L12576:
+br label %L12578
+L12577:
+br label %L12578
+L12578:
+%t64818 = phi i64 [ 3, %L12576 ], [ 4, %L12577 ]
+br label %L12575
+L12575:
+%t64819 = phi i64 [ 2, %L12573 ], [ %t64818, %L12578 ]
+br label %L12572
+L12572:
+%t64820 = phi i64 [ 1, %L12570 ], [ %t64819, %L12575 ]
+%t64821 = add nsw i64 %p1, 1
+%t64822 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p3, i64 %t64820)
+%t64823 = extractvalue {i64, i1} %t64822, 0
+%t64824 = extractvalue {i64, i1} %t64822, 1
+%t64825 = zext i1 %t64824 to i8
+call void @resid_overflow_check(i8 %t64825)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -98617,127 +98747,127 @@ define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_utf8(ptr %p0.
 entry:
 br label %tco.head
 tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %t64805, %tco.s0 ]
+%p0 = phi ptr [ %p0.in, %entry ], [ %t64874, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t64806, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t64875, %tco.s0 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%t64758 = icmp sge i64 %p2, %p3
-br i1 %t64758, label %L12570, label %L12572
-L12570:
-ret ptr %p0
-L12572:
-%t64759 = call i64 @str_char_at(ptr %p1, i64 %p2)
-%t64760 = icmp slt i64 %t64759, 128
-br i1 %t64760, label %L12573, label %L12574
-L12573:
-%t64761 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64759)
-br label %L12575
-L12574:
-%t64762 = icmp slt i64 %t64759, 2048
-br i1 %t64762, label %L12576, label %L12577
-L12576:
-%t64763 = ashr i64 %t64759, 6
-%t64764 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 192, i64 %t64763)
-%t64765 = extractvalue {i64, i1} %t64764, 0
-%t64766 = extractvalue {i64, i1} %t64764, 1
-%t64767 = zext i1 %t64766 to i8
-call void @resid_overflow_check(i8 %t64767)
-%t64768 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64765)
-%t64769 = and i64 %t64759, 63
-%t64770 = add nsw i64 128, %t64769
-%t64771 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64768, i64 %t64770)
-br label %L12578
-L12577:
-%t64772 = icmp slt i64 %t64759, 65536
-br i1 %t64772, label %L12579, label %L12580
+%t64827 = icmp sge i64 %p2, %p3
+br i1 %t64827, label %L12579, label %L12581
 L12579:
-%t64773 = ashr i64 %t64759, 12
-%t64774 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 224, i64 %t64773)
-%t64775 = extractvalue {i64, i1} %t64774, 0
-%t64776 = extractvalue {i64, i1} %t64774, 1
-%t64777 = zext i1 %t64776 to i8
-call void @resid_overflow_check(i8 %t64777)
-%t64778 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64775)
-%t64779 = ashr i64 %t64759, 6
-%t64780 = and i64 %t64779, 63
-%t64781 = add nsw i64 128, %t64780
-%t64782 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64778, i64 %t64781)
-%t64783 = and i64 %t64759, 63
-%t64784 = add nsw i64 128, %t64783
-%t64785 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64782, i64 %t64784)
-br label %L12581
-L12580:
-%t64786 = ashr i64 %t64759, 18
-%t64787 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 240, i64 %t64786)
-%t64788 = extractvalue {i64, i1} %t64787, 0
-%t64789 = extractvalue {i64, i1} %t64787, 1
-%t64790 = zext i1 %t64789 to i8
-call void @resid_overflow_check(i8 %t64790)
-%t64791 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64788)
-%t64792 = ashr i64 %t64759, 12
-%t64793 = and i64 %t64792, 63
-%t64794 = add nsw i64 128, %t64793
-%t64795 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64791, i64 %t64794)
-%t64796 = ashr i64 %t64759, 6
-%t64797 = and i64 %t64796, 63
-%t64798 = add nsw i64 128, %t64797
-%t64799 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64795, i64 %t64798)
-%t64800 = and i64 %t64759, 63
-%t64801 = add nsw i64 128, %t64800
-%t64802 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64799, i64 %t64801)
-br label %L12581
+ret ptr %p0
 L12581:
-%t64803 = phi ptr [ %t64785, %L12579 ], [ %t64802, %L12580 ]
-br label %L12578
-L12578:
-%t64804 = phi ptr [ %t64771, %L12576 ], [ %t64803, %L12581 ]
-br label %L12575
-L12575:
-%t64805 = phi ptr [ %t64761, %L12573 ], [ %t64804, %L12578 ]
-%t64806 = add nsw i64 %p2, 1
+%t64828 = call i64 @str_char_at(ptr %p1, i64 %p2)
+%t64829 = icmp slt i64 %t64828, 128
+br i1 %t64829, label %L12582, label %L12583
+L12582:
+%t64830 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64828)
+br label %L12584
+L12583:
+%t64831 = icmp slt i64 %t64828, 2048
+br i1 %t64831, label %L12585, label %L12586
+L12585:
+%t64832 = ashr i64 %t64828, 6
+%t64833 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 192, i64 %t64832)
+%t64834 = extractvalue {i64, i1} %t64833, 0
+%t64835 = extractvalue {i64, i1} %t64833, 1
+%t64836 = zext i1 %t64835 to i8
+call void @resid_overflow_check(i8 %t64836)
+%t64837 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64834)
+%t64838 = and i64 %t64828, 63
+%t64839 = add nsw i64 128, %t64838
+%t64840 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64837, i64 %t64839)
+br label %L12587
+L12586:
+%t64841 = icmp slt i64 %t64828, 65536
+br i1 %t64841, label %L12588, label %L12589
+L12588:
+%t64842 = ashr i64 %t64828, 12
+%t64843 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 224, i64 %t64842)
+%t64844 = extractvalue {i64, i1} %t64843, 0
+%t64845 = extractvalue {i64, i1} %t64843, 1
+%t64846 = zext i1 %t64845 to i8
+call void @resid_overflow_check(i8 %t64846)
+%t64847 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64844)
+%t64848 = ashr i64 %t64828, 6
+%t64849 = and i64 %t64848, 63
+%t64850 = add nsw i64 128, %t64849
+%t64851 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64847, i64 %t64850)
+%t64852 = and i64 %t64828, 63
+%t64853 = add nsw i64 128, %t64852
+%t64854 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64851, i64 %t64853)
+br label %L12590
+L12589:
+%t64855 = ashr i64 %t64828, 18
+%t64856 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 240, i64 %t64855)
+%t64857 = extractvalue {i64, i1} %t64856, 0
+%t64858 = extractvalue {i64, i1} %t64856, 1
+%t64859 = zext i1 %t64858 to i8
+call void @resid_overflow_check(i8 %t64859)
+%t64860 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p0, i64 %t64857)
+%t64861 = ashr i64 %t64828, 12
+%t64862 = and i64 %t64861, 63
+%t64863 = add nsw i64 128, %t64862
+%t64864 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64860, i64 %t64863)
+%t64865 = ashr i64 %t64828, 6
+%t64866 = and i64 %t64865, 63
+%t64867 = add nsw i64 128, %t64866
+%t64868 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64864, i64 %t64867)
+%t64869 = and i64 %t64828, 63
+%t64870 = add nsw i64 128, %t64869
+%t64871 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %t64868, i64 %t64870)
+br label %L12590
+L12590:
+%t64872 = phi ptr [ %t64854, %L12588 ], [ %t64871, %L12589 ]
+br label %L12587
+L12587:
+%t64873 = phi ptr [ %t64840, %L12585 ], [ %t64872, %L12590 ]
+br label %L12584
+L12584:
+%t64874 = phi ptr [ %t64830, %L12582 ], [ %t64873, %L12587 ]
+%t64875 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %p0, ptr %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64808 = call i64 @str_len(ptr %p1)
-%t64809 = call i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_utf8_len(ptr %p1, i64 0, i64 %t64808, i64 0)
-%t64810 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 3, i64 %t64809)
-%t64811 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_utf8(ptr %t64810, ptr %p1, i64 0, i64 %t64808)
-ret ptr %t64811
+%t64877 = call i64 @str_len(ptr %p1)
+%t64878 = call i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_utf8_len(ptr %p1, i64 0, i64 %t64877, i64 0)
+%t64879 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 3, i64 %t64878)
+%t64880 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_utf8(ptr %t64879, ptr %p1, i64 0, i64 %t64877)
+ret ptr %t64880
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hexbytes(ptr %p0, ptr %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64812 = call i64 @str_len(ptr %p1)
-%t64813 = sdiv i64 %t64812, 2
-%t64814 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 2, i64 %t64813)
-%t64815 = musttail call ptr @str_sb_append(ptr %t64814, ptr %p1)
-ret ptr %t64815
+%t64881 = call i64 @str_len(ptr %p1)
+%t64882 = sdiv i64 %t64881, 2
+%t64883 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 2, i64 %t64882)
+%t64884 = musttail call ptr @str_sb_append(ptr %t64883, ptr %p1)
+ret ptr %t64884
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %p0, ptr %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64816 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %p0, ptr %p1)
-ret ptr %t64816
+%t64885 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %p0, ptr %p1)
+ret ptr %t64885
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_bytes_hex(ptr %p0.in, i64 %p1.in, ptr %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t64820, %tco.s0 ]
-%p2 = phi ptr [ %p2.in, %entry ], [ %t64824, %tco.s0 ]
-%t64817 = call i64 @resid_list_len(ptr %p0)
-%t64818 = icmp sge i64 %p1, %t64817
-br i1 %t64818, label %L12582, label %L12584
-L12582:
-%t64819 = call ptr @str_sb_finish(ptr %p2)
-ret ptr %t64819
-L12584:
-%t64820 = add nsw i64 %p1, 1
-%t64821 = call ptr @resid_list_get(ptr %p0, i64 %p1)
-%t64822 = call i64 @resid_unbox_i64(ptr %t64821)
-%t64824 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p2, i64 %t64822)
+%p1 = phi i64 [ %p1.in, %entry ], [ %t64889, %tco.s0 ]
+%p2 = phi ptr [ %p2.in, %entry ], [ %t64893, %tco.s0 ]
+%t64886 = call i64 @resid_list_len(ptr %p0)
+%t64887 = icmp sge i64 %p1, %t64886
+br i1 %t64887, label %L12591, label %L12593
+L12591:
+%t64888 = call ptr @str_sb_finish(ptr %p2)
+ret ptr %t64888
+L12593:
+%t64889 = add nsw i64 %p1, 1
+%t64890 = call ptr @resid_list_get(ptr %p0, i64 %p1)
+%t64891 = call i64 @resid_unbox_i64(ptr %t64890)
+%t64893 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hb(ptr %p2, i64 %t64891)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -98747,27 +98877,27 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t64830, %tco.s0 ]
-%p2 = phi ptr [ %p2.in, %entry ], [ %t64840, %tco.s0 ]
-%t64826 = call i64 @str_find_char(ptr %p0, i64 10, i64 %p1)
-%t64827 = icmp slt i64 %t64826, 0
-br i1 %t64827, label %L12585, label %L12587
-L12585:
-%t64828 = call ptr @resid_listbuf_finish(ptr %p2, ptr @.lty64828)
-ret ptr %t64828
-L12587:
-%t64829 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64826, i64 1)
-%t64830 = extractvalue {i64, i1} %t64829, 0
-%t64831 = extractvalue {i64, i1} %t64829, 1
-%t64832 = zext i1 %t64831 to i8
-call void @resid_overflow_check(i8 %t64832)
-%t64833 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64826, i64 1)
-%t64834 = extractvalue {i64, i1} %t64833, 0
-%t64835 = extractvalue {i64, i1} %t64833, 1
-%t64836 = zext i1 %t64835 to i8
-call void @resid_overflow_check(i8 %t64836)
-%t64837 = call ptr @resid_box_i64(i64 %t64834)
-%t64840 = call ptr @resid_listbuf_push(ptr %p2, ptr %t64837)
+%p1 = phi i64 [ %p1.in, %entry ], [ %t64899, %tco.s0 ]
+%p2 = phi ptr [ %p2.in, %entry ], [ %t64909, %tco.s0 ]
+%t64895 = call i64 @str_find_char(ptr %p0, i64 10, i64 %p1)
+%t64896 = icmp slt i64 %t64895, 0
+br i1 %t64896, label %L12594, label %L12596
+L12594:
+%t64897 = call ptr @resid_listbuf_finish(ptr %p2, ptr @.lty64897)
+ret ptr %t64897
+L12596:
+%t64898 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64895, i64 1)
+%t64899 = extractvalue {i64, i1} %t64898, 0
+%t64900 = extractvalue {i64, i1} %t64898, 1
+%t64901 = zext i1 %t64900 to i8
+call void @resid_overflow_check(i8 %t64901)
+%t64902 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64895, i64 1)
+%t64903 = extractvalue {i64, i1} %t64902, 0
+%t64904 = extractvalue {i64, i1} %t64902, 1
+%t64905 = zext i1 %t64904 to i8
+call void @resid_overflow_check(i8 %t64905)
+%t64906 = call ptr @resid_box_i64(i64 %t64903)
+%t64909 = call ptr @resid_listbuf_push(ptr %p2, ptr %t64906)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -98778,34 +98908,34 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ], [ %p1, %tco.s1 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t64851, %tco.s0 ], [ %p2, %tco.s1 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %t64857, %tco.s1 ]
-%t64842 = icmp sge i64 %p2, %p3
-br i1 %t64842, label %L12588, label %L12590
-L12588:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t64920, %tco.s0 ], [ %p2, %tco.s1 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %t64926, %tco.s1 ]
+%t64911 = icmp sge i64 %p2, %p3
+br i1 %t64911, label %L12597, label %L12599
+L12597:
 ret i64 %p2
-L12590:
-%t64843 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 %p3)
-%t64844 = extractvalue {i64, i1} %t64843, 0
-%t64845 = extractvalue {i64, i1} %t64843, 1
-%t64846 = zext i1 %t64845 to i8
-call void @resid_overflow_check(i8 %t64846)
-%t64847 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64844, i64 1)
-%t64848 = extractvalue {i64, i1} %t64847, 0
-%t64849 = extractvalue {i64, i1} %t64847, 1
-%t64850 = zext i1 %t64849 to i8
-call void @resid_overflow_check(i8 %t64850)
-%t64851 = sdiv i64 %t64848, 2
-%t64852 = call ptr @resid_list_get(ptr %p0, i64 %t64851)
-%t64853 = call i64 @resid_unbox_i64(ptr %t64852)
-%t64855 = icmp sle i64 %t64853, %p1
-br i1 %t64855, label %L12591, label %L12593
-L12591:
+L12599:
+%t64912 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 %p3)
+%t64913 = extractvalue {i64, i1} %t64912, 0
+%t64914 = extractvalue {i64, i1} %t64912, 1
+%t64915 = zext i1 %t64914 to i8
+call void @resid_overflow_check(i8 %t64915)
+%t64916 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64913, i64 1)
+%t64917 = extractvalue {i64, i1} %t64916, 0
+%t64918 = extractvalue {i64, i1} %t64916, 1
+%t64919 = zext i1 %t64918 to i8
+call void @resid_overflow_check(i8 %t64919)
+%t64920 = sdiv i64 %t64917, 2
+%t64921 = call ptr @resid_list_get(ptr %p0, i64 %t64920)
+%t64922 = call i64 @resid_unbox_i64(ptr %t64921)
+%t64924 = icmp sle i64 %t64922, %p1
+br i1 %t64924, label %L12600, label %L12602
+L12600:
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L12593:
-%t64857 = sub nsw i64 %t64851, 1
+L12602:
+%t64926 = sub nsw i64 %t64920, 1
 br label %tco.s1
 tco.s1:
 br label %tco.head
@@ -98816,32 +98946,32 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ], [ %p1, %tco.s1 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t64871, %tco.s0 ], [ %p2, %tco.s1 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %t64873, %tco.s1 ]
-%t64859 = icmp sgt i64 %p2, %p3
-br i1 %t64859, label %L12594, label %L12596
-L12594:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t64940, %tco.s0 ], [ %p2, %tco.s1 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %t64942, %tco.s1 ]
+%t64928 = icmp sgt i64 %p2, %p3
+br i1 %t64928, label %L12603, label %L12605
+L12603:
 ret i64 %p3
-L12596:
-%t64860 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 %p3)
-%t64861 = extractvalue {i64, i1} %t64860, 0
-%t64862 = extractvalue {i64, i1} %t64860, 1
-%t64863 = zext i1 %t64862 to i8
-call void @resid_overflow_check(i8 %t64863)
-%t64864 = sdiv i64 %t64861, 2
-%t64865 = getelementptr i8, ptr %p0, i64 0
-%t64866 = load ptr, ptr %t64865
-%t64867 = call ptr @resid_list_get(ptr %t64866, i64 %t64864)
-%t64868 = call i64 @resid_unbox_i64(ptr %t64867)
-%t64870 = icmp sle i64 %t64868, %p1
-br i1 %t64870, label %L12597, label %L12599
-L12597:
-%t64871 = add nsw i64 %t64864, 1
+L12605:
+%t64929 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 %p3)
+%t64930 = extractvalue {i64, i1} %t64929, 0
+%t64931 = extractvalue {i64, i1} %t64929, 1
+%t64932 = zext i1 %t64931 to i8
+call void @resid_overflow_check(i8 %t64932)
+%t64933 = sdiv i64 %t64930, 2
+%t64934 = getelementptr i8, ptr %p0, i64 0
+%t64935 = load ptr, ptr %t64934
+%t64936 = call ptr @resid_list_get(ptr %t64935, i64 %t64933)
+%t64937 = call i64 @resid_unbox_i64(ptr %t64936)
+%t64939 = icmp sle i64 %t64937, %p1
+br i1 %t64939, label %L12606, label %L12608
+L12606:
+%t64940 = add nsw i64 %t64933, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L12599:
-%t64873 = sub nsw i64 %t64864, 1
+L12608:
+%t64942 = sub nsw i64 %t64933, 1
 br label %tco.s1
 tco.s1:
 br label %tco.head
@@ -98852,439 +98982,439 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t64882, %tco.s0 ]
-%t64875 = call i64 @resid_list_len(ptr %p0)
-%t64876 = icmp sge i64 %p2, %t64875
-br i1 %t64876, label %L12600, label %L12602
-L12600:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t64951, %tco.s0 ]
+%t64944 = call i64 @resid_list_len(ptr %p0)
+%t64945 = icmp sge i64 %p2, %t64944
+br i1 %t64945, label %L12609, label %L12611
+L12609:
 ret i64 -1
-L12602:
-%t64877 = call ptr @resid_list_get(ptr %p0, i64 %p2)
-%t64880 = call i8 @resid_str_eq(ptr %t64877, ptr %p1)
-%t64881 = icmp ne i8 %t64880, 0
-br i1 %t64881, label %L12603, label %L12605
-L12603:
+L12611:
+%t64946 = call ptr @resid_list_get(ptr %p0, i64 %p2)
+%t64949 = call i8 @resid_str_eq(ptr %t64946, ptr %p1)
+%t64950 = icmp ne i8 %t64949, 0
+br i1 %t64950, label %L12612, label %L12614
+L12612:
 ret i64 %p2
-L12605:
-%t64882 = add nsw i64 %p2, 1
+L12614:
+%t64951 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @ga_files(ptr %p0.in, i64 %p1.in, ptr %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64899 = alloca [1 x ptr]
-%t64920 = alloca [1 x ptr]
+%t64968 = alloca [1 x ptr]
+%t64989 = alloca [1 x ptr]
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t64914, %tco.s0 ]
-%p2 = phi ptr [ %p2.in, %entry ], [ %t64915, %tco.s0 ]
-%t64884 = getelementptr i8, ptr %p0, i64 16
-%t64885 = load ptr, ptr %t64884
-%t64886 = call i64 @resid_list_len(ptr %t64885)
-%t64887 = icmp sge i64 %p1, %t64886
-br i1 %t64887, label %L12606, label %L12608
-L12606:
+%p1 = phi i64 [ %p1.in, %entry ], [ %t64983, %tco.s0 ]
+%p2 = phi ptr [ %p2.in, %entry ], [ %t64984, %tco.s0 ]
+%t64953 = getelementptr i8, ptr %p0, i64 16
+%t64954 = load ptr, ptr %t64953
+%t64955 = call i64 @resid_list_len(ptr %t64954)
+%t64956 = icmp sge i64 %p1, %t64955
+br i1 %t64956, label %L12615, label %L12617
+L12615:
 ret ptr %p2
-L12608:
-%t64888 = getelementptr i8, ptr %p0, i64 16
-%t64889 = load ptr, ptr %t64888
-%t64890 = call ptr @resid_list_get(ptr %t64889, i64 %p1)
-%t64893 = getelementptr i8, ptr %p2, i64 8
-%t64894 = load ptr, ptr %t64893
-%t64895 = call i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_path_idx(ptr %t64894, ptr %t64890, i64 0)
-%t64896 = icmp slt i64 %t64895, 0
-br i1 %t64896, label %L12609, label %L12610
-L12609:
-%t64897 = getelementptr i8, ptr %p2, i64 8
-%t64898 = load ptr, ptr %t64897
-%t64903 = getelementptr i8, ptr %t64899, i64 0
-store ptr %t64890, ptr %t64903
-%t64905e = load ptr, ptr %t64899
-%t64905 = call ptr @resid_list_push(ptr %t64898, ptr %t64905e)
-br label %L12611
-L12610:
-%t64906 = getelementptr i8, ptr %p2, i64 8
-%t64907 = load ptr, ptr %t64906
-br label %L12611
-L12611:
-%t64908 = phi ptr [ %t64905, %L12609 ], [ %t64907, %L12610 ]
-%t64909 = icmp slt i64 %t64895, 0
-br i1 %t64909, label %L12612, label %L12613
-L12612:
-%t64910 = getelementptr i8, ptr %p2, i64 8
-%t64911 = load ptr, ptr %t64910
-%t64912 = call i64 @resid_list_len(ptr %t64911)
-br label %L12614
-L12613:
-br label %L12614
-L12614:
-%t64913 = phi i64 [ %t64912, %L12612 ], [ %t64895, %L12613 ]
-%t64914 = add nsw i64 %p1, 1
-%t64915 = call ptr @resid_gmalloc(i64 32)
-%t64916 = getelementptr i8, ptr %p2, i64 0
-%t64917 = load ptr, ptr %t64916
-%t64915.f0 = getelementptr i8, ptr %t64915, i64 0
-store ptr %t64917, ptr %t64915.f0
-%t64915.f1 = getelementptr i8, ptr %t64915, i64 8
-store ptr %t64908, ptr %t64915.f1
-%t64918 = getelementptr i8, ptr %p2, i64 16
-%t64919 = load ptr, ptr %t64918
-%t64922 = call ptr @resid_box_i64(i64 %t64913)
-%t64924 = getelementptr i8, ptr %t64920, i64 0
-store ptr %t64922, ptr %t64924
-%t64926e = load ptr, ptr %t64920
-%t64926 = call ptr @resid_list_push(ptr %t64919, ptr %t64926e)
-%t64915.f2 = getelementptr i8, ptr %t64915, i64 16
-store ptr %t64926, ptr %t64915.f2
-%t64927 = getelementptr i8, ptr %p2, i64 24
-%t64928 = load ptr, ptr %t64927
-%t64915.f3 = getelementptr i8, ptr %t64915, i64 24
-store ptr %t64928, ptr %t64915.f3
+L12617:
+%t64957 = getelementptr i8, ptr %p0, i64 16
+%t64958 = load ptr, ptr %t64957
+%t64959 = call ptr @resid_list_get(ptr %t64958, i64 %p1)
+%t64962 = getelementptr i8, ptr %p2, i64 8
+%t64963 = load ptr, ptr %t64962
+%t64964 = call i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_path_idx(ptr %t64963, ptr %t64959, i64 0)
+%t64965 = icmp slt i64 %t64964, 0
+br i1 %t64965, label %L12618, label %L12619
+L12618:
+%t64966 = getelementptr i8, ptr %p2, i64 8
+%t64967 = load ptr, ptr %t64966
+%t64972 = getelementptr i8, ptr %t64968, i64 0
+store ptr %t64959, ptr %t64972
+%t64974e = load ptr, ptr %t64968
+%t64974 = call ptr @resid_list_push(ptr %t64967, ptr %t64974e)
+br label %L12620
+L12619:
+%t64975 = getelementptr i8, ptr %p2, i64 8
+%t64976 = load ptr, ptr %t64975
+br label %L12620
+L12620:
+%t64977 = phi ptr [ %t64974, %L12618 ], [ %t64976, %L12619 ]
+%t64978 = icmp slt i64 %t64964, 0
+br i1 %t64978, label %L12621, label %L12622
+L12621:
+%t64979 = getelementptr i8, ptr %p2, i64 8
+%t64980 = load ptr, ptr %t64979
+%t64981 = call i64 @resid_list_len(ptr %t64980)
+br label %L12623
+L12622:
+br label %L12623
+L12623:
+%t64982 = phi i64 [ %t64981, %L12621 ], [ %t64964, %L12622 ]
+%t64983 = add nsw i64 %p1, 1
+%t64984 = call ptr @resid_gmalloc(i64 32)
+%t64985 = getelementptr i8, ptr %p2, i64 0
+%t64986 = load ptr, ptr %t64985
+%t64984.f0 = getelementptr i8, ptr %t64984, i64 0
+store ptr %t64986, ptr %t64984.f0
+%t64984.f1 = getelementptr i8, ptr %t64984, i64 8
+store ptr %t64977, ptr %t64984.f1
+%t64987 = getelementptr i8, ptr %p2, i64 16
+%t64988 = load ptr, ptr %t64987
+%t64991 = call ptr @resid_box_i64(i64 %t64982)
+%t64993 = getelementptr i8, ptr %t64989, i64 0
+store ptr %t64991, ptr %t64993
+%t64995e = load ptr, ptr %t64989
+%t64995 = call ptr @resid_list_push(ptr %t64988, ptr %t64995e)
+%t64984.f2 = getelementptr i8, ptr %t64984, i64 16
+store ptr %t64995, ptr %t64984.f2
+%t64996 = getelementptr i8, ptr %p2, i64 24
+%t64997 = load ptr, ptr %t64996
+%t64984.f3 = getelementptr i8, ptr %t64984, i64 24
+store ptr %t64997, ptr %t64984.f3
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pos(ptr %p0, ptr %p1, i64 %p2, i1 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64930 = getelementptr i8, ptr %p1, i64 24
-%t64931 = load ptr, ptr %t64930
-%t64932 = getelementptr i8, ptr %p1, i64 24
-%t64933 = load ptr, ptr %t64932
-%t64934 = call i64 @resid_list_len(ptr %t64933)
-%t64935 = sub nsw i64 %t64934, 1
-%t64936 = call i64 @ga_line(ptr %t64931, i64 %p2, i64 0, i64 %t64935)
-%t64937 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64936, i64 1)
-%t64938 = extractvalue {i64, i1} %t64937, 0
-%t64939 = extractvalue {i64, i1} %t64937, 1
-%t64940 = zext i1 %t64939 to i8
-call void @resid_overflow_check(i8 %t64940)
-%t64941 = getelementptr i8, ptr %p1, i64 24
-%t64942 = load ptr, ptr %t64941
-%t64943 = call ptr @resid_list_get(ptr %t64942, i64 %t64936)
-%t64944 = call i64 @resid_unbox_i64(ptr %t64943)
-%t64946 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 %t64944)
-%t64947 = extractvalue {i64, i1} %t64946, 0
-%t64948 = extractvalue {i64, i1} %t64946, 1
-%t64949 = zext i1 %t64948 to i8
-call void @resid_overflow_check(i8 %t64949)
-%t64950 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64947, i64 1)
-%t64951 = extractvalue {i64, i1} %t64950, 0
-%t64952 = extractvalue {i64, i1} %t64950, 1
-%t64953 = zext i1 %t64952 to i8
-call void @resid_overflow_check(i8 %t64953)
-%t64954 = getelementptr i8, ptr %p1, i64 0
-%t64955 = load ptr, ptr %t64954
-%t64956 = getelementptr i8, ptr %p1, i64 0
-%t64957 = load ptr, ptr %t64956
-%t64958 = getelementptr i8, ptr %t64957, i64 0
-%t64959 = load ptr, ptr %t64958
-%t64960 = call i64 @resid_list_len(ptr %t64959)
-%t64961 = sub nsw i64 %t64960, 1
-%t64962 = call i64 @ga_seg(ptr %t64955, i64 %t64938, i64 0, i64 %t64961)
-%t64963 = icmp slt i64 %t64962, 0
-br i1 %t64963, label %L12615, label %L12616
-L12615:
-br label %L12617
-L12616:
-%t64964 = getelementptr i8, ptr %p1, i64 16
-%t64965 = load ptr, ptr %t64964
-%t64966 = call ptr @resid_list_get(ptr %t64965, i64 %t64962)
-%t64967 = call i64 @resid_unbox_i64(ptr %t64966)
-br label %L12617
-L12617:
-%t64969 = phi i64 [ 0, %L12615 ], [ %t64967, %L12616 ]
-%t64970 = icmp slt i64 %t64962, 0
-br i1 %t64970, label %L12618, label %L12619
-L12618:
-br label %L12620
-L12619:
-%t64971 = getelementptr i8, ptr %p1, i64 0
-%t64972 = load ptr, ptr %t64971
-%t64973 = getelementptr i8, ptr %t64972, i64 8
-%t64974 = load ptr, ptr %t64973
-%t64975 = call ptr @resid_list_get(ptr %t64974, i64 %t64962)
-%t64976 = call i64 @resid_unbox_i64(ptr %t64975)
-%t64978 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t64976, i64 %t64938)
-%t64979 = extractvalue {i64, i1} %t64978, 0
-%t64980 = extractvalue {i64, i1} %t64978, 1
-%t64981 = zext i1 %t64980 to i8
-call void @resid_overflow_check(i8 %t64981)
-%t64982 = getelementptr i8, ptr %p1, i64 0
-%t64983 = load ptr, ptr %t64982
-%t64984 = getelementptr i8, ptr %t64983, i64 0
-%t64985 = load ptr, ptr %t64984
-%t64986 = call ptr @resid_list_get(ptr %t64985, i64 %t64962)
-%t64987 = call i64 @resid_unbox_i64(ptr %t64986)
-%t64989 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t64979, i64 %t64987)
-%t64990 = extractvalue {i64, i1} %t64989, 0
-%t64991 = extractvalue {i64, i1} %t64989, 1
-%t64992 = zext i1 %t64991 to i8
-call void @resid_overflow_check(i8 %t64992)
-br label %L12620
-L12620:
-%t64993 = phi i64 [ %t64938, %L12618 ], [ %t64990, %L12619 ]
-br i1 %p3, label %L12621, label %L12622
-L12621:
-%t64994 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %p0, i64 %t64969)
-br label %L12623
-L12622:
-br label %L12623
-L12623:
-%t64995 = phi ptr [ %t64994, %L12621 ], [ %p0, %L12622 ]
-%t64996 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t64995, i64 %t64993)
-%t64997 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t64996, i64 %t64951)
-ret ptr %t64997
+%t64999 = getelementptr i8, ptr %p1, i64 24
+%t65000 = load ptr, ptr %t64999
+%t65001 = getelementptr i8, ptr %p1, i64 24
+%t65002 = load ptr, ptr %t65001
+%t65003 = call i64 @resid_list_len(ptr %t65002)
+%t65004 = sub nsw i64 %t65003, 1
+%t65005 = call i64 @ga_line(ptr %t65000, i64 %p2, i64 0, i64 %t65004)
+%t65006 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65005, i64 1)
+%t65007 = extractvalue {i64, i1} %t65006, 0
+%t65008 = extractvalue {i64, i1} %t65006, 1
+%t65009 = zext i1 %t65008 to i8
+call void @resid_overflow_check(i8 %t65009)
+%t65010 = getelementptr i8, ptr %p1, i64 24
+%t65011 = load ptr, ptr %t65010
+%t65012 = call ptr @resid_list_get(ptr %t65011, i64 %t65005)
+%t65013 = call i64 @resid_unbox_i64(ptr %t65012)
+%t65015 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 %t65013)
+%t65016 = extractvalue {i64, i1} %t65015, 0
+%t65017 = extractvalue {i64, i1} %t65015, 1
+%t65018 = zext i1 %t65017 to i8
+call void @resid_overflow_check(i8 %t65018)
+%t65019 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65016, i64 1)
+%t65020 = extractvalue {i64, i1} %t65019, 0
+%t65021 = extractvalue {i64, i1} %t65019, 1
+%t65022 = zext i1 %t65021 to i8
+call void @resid_overflow_check(i8 %t65022)
+%t65023 = getelementptr i8, ptr %p1, i64 0
+%t65024 = load ptr, ptr %t65023
+%t65025 = getelementptr i8, ptr %p1, i64 0
+%t65026 = load ptr, ptr %t65025
+%t65027 = getelementptr i8, ptr %t65026, i64 0
+%t65028 = load ptr, ptr %t65027
+%t65029 = call i64 @resid_list_len(ptr %t65028)
+%t65030 = sub nsw i64 %t65029, 1
+%t65031 = call i64 @ga_seg(ptr %t65024, i64 %t65007, i64 0, i64 %t65030)
+%t65032 = icmp slt i64 %t65031, 0
+br i1 %t65032, label %L12624, label %L12625
+L12624:
+br label %L12626
+L12625:
+%t65033 = getelementptr i8, ptr %p1, i64 16
+%t65034 = load ptr, ptr %t65033
+%t65035 = call ptr @resid_list_get(ptr %t65034, i64 %t65031)
+%t65036 = call i64 @resid_unbox_i64(ptr %t65035)
+br label %L12626
+L12626:
+%t65038 = phi i64 [ 0, %L12624 ], [ %t65036, %L12625 ]
+%t65039 = icmp slt i64 %t65031, 0
+br i1 %t65039, label %L12627, label %L12628
+L12627:
+br label %L12629
+L12628:
+%t65040 = getelementptr i8, ptr %p1, i64 0
+%t65041 = load ptr, ptr %t65040
+%t65042 = getelementptr i8, ptr %t65041, i64 8
+%t65043 = load ptr, ptr %t65042
+%t65044 = call ptr @resid_list_get(ptr %t65043, i64 %t65031)
+%t65045 = call i64 @resid_unbox_i64(ptr %t65044)
+%t65047 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65045, i64 %t65007)
+%t65048 = extractvalue {i64, i1} %t65047, 0
+%t65049 = extractvalue {i64, i1} %t65047, 1
+%t65050 = zext i1 %t65049 to i8
+call void @resid_overflow_check(i8 %t65050)
+%t65051 = getelementptr i8, ptr %p1, i64 0
+%t65052 = load ptr, ptr %t65051
+%t65053 = getelementptr i8, ptr %t65052, i64 0
+%t65054 = load ptr, ptr %t65053
+%t65055 = call ptr @resid_list_get(ptr %t65054, i64 %t65031)
+%t65056 = call i64 @resid_unbox_i64(ptr %t65055)
+%t65058 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t65048, i64 %t65056)
+%t65059 = extractvalue {i64, i1} %t65058, 0
+%t65060 = extractvalue {i64, i1} %t65058, 1
+%t65061 = zext i1 %t65060 to i8
+call void @resid_overflow_check(i8 %t65061)
+br label %L12629
+L12629:
+%t65062 = phi i64 [ %t65007, %L12627 ], [ %t65059, %L12628 ]
+br i1 %p3, label %L12630, label %L12631
+L12630:
+%t65063 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %p0, i64 %t65038)
+br label %L12632
+L12631:
+br label %L12632
+L12632:
+%t65064 = phi ptr [ %t65063, %L12630 ], [ %p0, %L12631 ]
+%t65065 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65064, i64 %t65062)
+%t65066 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65065, i64 %t65020)
+ret ptr %t65066
 }
 define i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_provider(ptr %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t64999 = call i8 @resid_str_eq(ptr %p0, ptr @.s64998)
-%t65000 = icmp ne i8 %t64999, 0
-br label %LSL65001
-LSL65001:
-br i1 %t65000, label %LSJ65001, label %LSR65001
-LSR65001:
-%t65003 = call i8 @resid_str_eq(ptr %p0, ptr @.s65002)
-%t65004 = icmp ne i8 %t65003, 0
-br label %LSJ65001
-LSJ65001:
-%t65005 = phi i1 [ true, %LSL65001 ], [ %t65004, %LSR65001 ]
-br label %LSL65006
-LSL65006:
-br i1 %t65005, label %LSJ65006, label %LSR65006
-LSR65006:
-%t65008 = call i8 @resid_str_eq(ptr %p0, ptr @.s65007)
-%t65009 = icmp ne i8 %t65008, 0
-br label %LSJ65006
-LSJ65006:
-%t65010 = phi i1 [ true, %LSL65006 ], [ %t65009, %LSR65006 ]
-br label %LSL65011
-LSL65011:
-br i1 %t65010, label %LSJ65011, label %LSR65011
-LSR65011:
-%t65013 = call i8 @resid_str_eq(ptr %p0, ptr @.s65012)
-%t65014 = icmp ne i8 %t65013, 0
-br label %LSJ65011
-LSJ65011:
-%t65015 = phi i1 [ true, %LSL65011 ], [ %t65014, %LSR65011 ]
-br label %LSL65016
-LSL65016:
-br i1 %t65015, label %LSJ65016, label %LSR65016
-LSR65016:
-%t65018 = call i8 @resid_str_eq(ptr %p0, ptr @.s65017)
-%t65019 = icmp ne i8 %t65018, 0
-br label %LSJ65016
-LSJ65016:
-%t65020 = phi i1 [ true, %LSL65016 ], [ %t65019, %LSR65016 ]
-ret i1 %t65020
+%t65068 = call i8 @resid_str_eq(ptr %p0, ptr @.s65067)
+%t65069 = icmp ne i8 %t65068, 0
+br label %LSL65070
+LSL65070:
+br i1 %t65069, label %LSJ65070, label %LSR65070
+LSR65070:
+%t65072 = call i8 @resid_str_eq(ptr %p0, ptr @.s65071)
+%t65073 = icmp ne i8 %t65072, 0
+br label %LSJ65070
+LSJ65070:
+%t65074 = phi i1 [ true, %LSL65070 ], [ %t65073, %LSR65070 ]
+br label %LSL65075
+LSL65075:
+br i1 %t65074, label %LSJ65075, label %LSR65075
+LSR65075:
+%t65077 = call i8 @resid_str_eq(ptr %p0, ptr @.s65076)
+%t65078 = icmp ne i8 %t65077, 0
+br label %LSJ65075
+LSJ65075:
+%t65079 = phi i1 [ true, %LSL65075 ], [ %t65078, %LSR65075 ]
+br label %LSL65080
+LSL65080:
+br i1 %t65079, label %LSJ65080, label %LSR65080
+LSR65080:
+%t65082 = call i8 @resid_str_eq(ptr %p0, ptr @.s65081)
+%t65083 = icmp ne i8 %t65082, 0
+br label %LSJ65080
+LSJ65080:
+%t65084 = phi i1 [ true, %LSL65080 ], [ %t65083, %LSR65080 ]
+br label %LSL65085
+LSL65085:
+br i1 %t65084, label %LSJ65085, label %LSR65085
+LSR65085:
+%t65087 = call i8 @resid_str_eq(ptr %p0, ptr @.s65086)
+%t65088 = icmp ne i8 %t65087, 0
+br label %LSJ65085
+LSJ65085:
+%t65089 = phi i1 [ true, %LSL65085 ], [ %t65088, %LSR65085 ]
+ret i1 %t65089
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_effect(ptr %p0, i64 %p1, ptr %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t65021 = getelementptr i8, ptr %p0, i64 0
-%t65022 = load ptr, ptr %t65021
-%t65023 = call ptr @resid_list_get(ptr %t65022, i64 %p1)
-%t65026 = getelementptr i8, ptr %t65023, i64 0
-%t65027 = load ptr, ptr %t65026
-%t65029 = call i8 @resid_str_eq(ptr %t65027, ptr @.s65028)
-%t65030 = icmp ne i8 %t65029, 0
-br i1 %t65030, label %L12624, label %L12626
-L12624:
-%t65031 = getelementptr i8, ptr %t65023, i64 8
-%t65032 = load ptr, ptr %t65031
-%t65034 = call i8 @resid_str_eq(ptr %t65032, ptr @.s65033)
-%t65035 = icmp ne i8 %t65034, 0
-br label %LSL65036
-LSL65036:
-br i1 %t65035, label %LSJ65036, label %LSR65036
-LSR65036:
-%t65037 = getelementptr i8, ptr %t65023, i64 8
-%t65038 = load ptr, ptr %t65037
-%t65040 = call i8 @resid_str_eq(ptr %t65038, ptr @.s65039)
-%t65041 = icmp ne i8 %t65040, 0
-br label %LSJ65036
-LSJ65036:
-%t65042 = phi i1 [ true, %LSL65036 ], [ %t65041, %LSR65036 ]
-br label %LSL65043
-LSL65043:
-br i1 %t65042, label %LSJ65043, label %LSR65043
-LSR65043:
-%t65044 = getelementptr i8, ptr %t65023, i64 8
-%t65045 = load ptr, ptr %t65044
-%t65047 = call i8 @resid_str_eq(ptr %t65045, ptr @.s65046)
-%t65048 = icmp ne i8 %t65047, 0
-br label %LSJ65043
-LSJ65043:
-%t65049 = phi i1 [ true, %LSL65043 ], [ %t65048, %LSR65043 ]
-br i1 %t65049, label %L12627, label %L12629
-L12627:
-ret ptr @.s65050
-L12629:
-%t65051 = getelementptr i8, ptr %t65023, i64 8
-%t65052 = load ptr, ptr %t65051
-%t65054 = call i8 @resid_str_eq(ptr %t65052, ptr @.s65053)
-%t65055 = icmp ne i8 %t65054, 0
-br i1 %t65055, label %L12630, label %L12632
-L12630:
-ret ptr @.s65056
-L12632:
-br label %L12626
-L12626:
-%t65057 = getelementptr i8, ptr %t65023, i64 0
-%t65058 = load ptr, ptr %t65057
-%t65060 = call i8 @resid_str_eq(ptr %t65058, ptr @.s65059)
-%t65061 = icmp ne i8 %t65060, 0
-br i1 %t65061, label %L12633, label %L12635
+%t65090 = getelementptr i8, ptr %p0, i64 0
+%t65091 = load ptr, ptr %t65090
+%t65092 = call ptr @resid_list_get(ptr %t65091, i64 %p1)
+%t65095 = getelementptr i8, ptr %t65092, i64 0
+%t65096 = load ptr, ptr %t65095
+%t65098 = call i8 @resid_str_eq(ptr %t65096, ptr @.s65097)
+%t65099 = icmp ne i8 %t65098, 0
+br i1 %t65099, label %L12633, label %L12635
 L12633:
-%t65062 = call i64 @resid_scope_push()
-%t65063 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
-call void @resid_scope_pop(i64 %t65062)
-%t65064 = getelementptr i8, ptr %p0, i64 0
-%t65065 = load ptr, ptr %t65064
-%t65066 = call ptr @resid_list_get(ptr %t65065, i64 %t65063)
-%t65069 = getelementptr i8, ptr %t65066, i64 0
-%t65070 = load ptr, ptr %t65069
-%t65072 = call i8 @resid_str_eq(ptr %t65070, ptr @.s65071)
-%t65073 = icmp ne i8 %t65072, 0
-br label %LSL65074
-LSL65074:
-br i1 %t65073, label %LSR65074, label %LSJ65074
-LSR65074:
-%t65075 = getelementptr i8, ptr %t65066, i64 8
-%t65076 = load ptr, ptr %t65075
-%t65077 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_provider(ptr %t65076)
-br label %LSJ65074
-LSJ65074:
-%t65078 = phi i1 [ false, %LSL65074 ], [ %t65077, %LSR65074 ]
-br label %LSL65079
-LSL65079:
-br i1 %t65078, label %LSR65079, label %LSJ65079
-LSR65079:
-%t65080 = call i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_def(ptr %p2, i64 %t65063)
-%t65081 = icmp slt i64 %t65080, 0
-br label %LSJ65079
-LSJ65079:
-%t65082 = phi i1 [ false, %LSL65079 ], [ %t65081, %LSR65079 ]
-br i1 %t65082, label %L12636, label %L12638
+%t65100 = getelementptr i8, ptr %t65092, i64 8
+%t65101 = load ptr, ptr %t65100
+%t65103 = call i8 @resid_str_eq(ptr %t65101, ptr @.s65102)
+%t65104 = icmp ne i8 %t65103, 0
+br label %LSL65105
+LSL65105:
+br i1 %t65104, label %LSJ65105, label %LSR65105
+LSR65105:
+%t65106 = getelementptr i8, ptr %t65092, i64 8
+%t65107 = load ptr, ptr %t65106
+%t65109 = call i8 @resid_str_eq(ptr %t65107, ptr @.s65108)
+%t65110 = icmp ne i8 %t65109, 0
+br label %LSJ65105
+LSJ65105:
+%t65111 = phi i1 [ true, %LSL65105 ], [ %t65110, %LSR65105 ]
+br label %LSL65112
+LSL65112:
+br i1 %t65111, label %LSJ65112, label %LSR65112
+LSR65112:
+%t65113 = getelementptr i8, ptr %t65092, i64 8
+%t65114 = load ptr, ptr %t65113
+%t65116 = call i8 @resid_str_eq(ptr %t65114, ptr @.s65115)
+%t65117 = icmp ne i8 %t65116, 0
+br label %LSJ65112
+LSJ65112:
+%t65118 = phi i1 [ true, %LSL65112 ], [ %t65117, %LSR65112 ]
+br i1 %t65118, label %L12636, label %L12638
 L12636:
-%t65083 = getelementptr i8, ptr %t65066, i64 8
-%t65084 = load ptr, ptr %t65083
-%t65086 = call ptr @resid_str_concat(ptr %t65084, ptr @.s65085)
-%t65087 = getelementptr i8, ptr %t65023, i64 8
-%t65088 = load ptr, ptr %t65087
-%t65089 = call ptr @resid_str_concat(ptr %t65086, ptr %t65088)
-ret ptr %t65089
+ret ptr @.s65119
 L12638:
+%t65120 = getelementptr i8, ptr %t65092, i64 8
+%t65121 = load ptr, ptr %t65120
+%t65123 = call i8 @resid_str_eq(ptr %t65121, ptr @.s65122)
+%t65124 = icmp ne i8 %t65123, 0
+br i1 %t65124, label %L12639, label %L12641
+L12639:
+ret ptr @.s65125
+L12641:
 br label %L12635
 L12635:
-ret ptr @.s65090
+%t65126 = getelementptr i8, ptr %t65092, i64 0
+%t65127 = load ptr, ptr %t65126
+%t65129 = call i8 @resid_str_eq(ptr %t65127, ptr @.s65128)
+%t65130 = icmp ne i8 %t65129, 0
+br i1 %t65130, label %L12642, label %L12644
+L12642:
+%t65131 = call i64 @resid_scope_push()
+%t65132 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
+call void @resid_scope_pop(i64 %t65131)
+%t65133 = getelementptr i8, ptr %p0, i64 0
+%t65134 = load ptr, ptr %t65133
+%t65135 = call ptr @resid_list_get(ptr %t65134, i64 %t65132)
+%t65138 = getelementptr i8, ptr %t65135, i64 0
+%t65139 = load ptr, ptr %t65138
+%t65141 = call i8 @resid_str_eq(ptr %t65139, ptr @.s65140)
+%t65142 = icmp ne i8 %t65141, 0
+br label %LSL65143
+LSL65143:
+br i1 %t65142, label %LSR65143, label %LSJ65143
+LSR65143:
+%t65144 = getelementptr i8, ptr %t65135, i64 8
+%t65145 = load ptr, ptr %t65144
+%t65146 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_provider(ptr %t65145)
+br label %LSJ65143
+LSJ65143:
+%t65147 = phi i1 [ false, %LSL65143 ], [ %t65146, %LSR65143 ]
+br label %LSL65148
+LSL65148:
+br i1 %t65147, label %LSR65148, label %LSJ65148
+LSR65148:
+%t65149 = call i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_def(ptr %p2, i64 %t65132)
+%t65150 = icmp slt i64 %t65149, 0
+br label %LSJ65148
+LSJ65148:
+%t65151 = phi i1 [ false, %LSL65148 ], [ %t65150, %LSR65148 ]
+br i1 %t65151, label %L12645, label %L12647
+L12645:
+%t65152 = getelementptr i8, ptr %t65135, i64 8
+%t65153 = load ptr, ptr %t65152
+%t65155 = call ptr @resid_str_concat(ptr %t65153, ptr @.s65154)
+%t65156 = getelementptr i8, ptr %t65092, i64 8
+%t65157 = load ptr, ptr %t65156
+%t65158 = call ptr @resid_str_concat(ptr %t65155, ptr %t65157)
+ret ptr %t65158
+L12647:
+br label %L12644
+L12644:
+ret ptr @.s65159
 }
 define i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_known(ptr %p0, i64 %p1, ptr %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t65091 = getelementptr i8, ptr %p0, i64 0
-%t65092 = load ptr, ptr %t65091
-%t65093 = call ptr @resid_list_get(ptr %t65092, i64 %p1)
-%t65096 = getelementptr i8, ptr %t65093, i64 0
-%t65097 = load ptr, ptr %t65096
-%t65099 = call i8 @resid_str_eq(ptr %t65097, ptr @.s65098)
-%t65100 = icmp ne i8 %t65099, 0
-br label %LSL65101
-LSL65101:
-br i1 %t65100, label %LSJ65101, label %LSR65101
-LSR65101:
-%t65103 = call i8 @resid_str_eq(ptr %t65097, ptr @.s65102)
-%t65104 = icmp ne i8 %t65103, 0
-br label %LSJ65101
-LSJ65101:
-%t65105 = phi i1 [ true, %LSL65101 ], [ %t65104, %LSR65101 ]
-br label %LSL65106
-LSL65106:
-br i1 %t65105, label %LSJ65106, label %LSR65106
-LSR65106:
-%t65108 = call i8 @resid_str_eq(ptr %t65097, ptr @.s65107)
-%t65109 = icmp ne i8 %t65108, 0
-br label %LSJ65106
-LSJ65106:
-%t65110 = phi i1 [ true, %LSL65106 ], [ %t65109, %LSR65106 ]
-br label %LSL65111
-LSL65111:
-br i1 %t65110, label %LSJ65111, label %LSR65111
-LSR65111:
-%t65113 = call i8 @resid_str_eq(ptr %t65097, ptr @.s65112)
-%t65114 = icmp ne i8 %t65113, 0
-br label %LSJ65111
-LSJ65111:
-%t65115 = phi i1 [ true, %LSL65111 ], [ %t65114, %LSR65111 ]
-br i1 %t65115, label %L12639, label %L12641
-L12639:
+%t65160 = getelementptr i8, ptr %p0, i64 0
+%t65161 = load ptr, ptr %t65160
+%t65162 = call ptr @resid_list_get(ptr %t65161, i64 %p1)
+%t65165 = getelementptr i8, ptr %t65162, i64 0
+%t65166 = load ptr, ptr %t65165
+%t65168 = call i8 @resid_str_eq(ptr %t65166, ptr @.s65167)
+%t65169 = icmp ne i8 %t65168, 0
+br label %LSL65170
+LSL65170:
+br i1 %t65169, label %LSJ65170, label %LSR65170
+LSR65170:
+%t65172 = call i8 @resid_str_eq(ptr %t65166, ptr @.s65171)
+%t65173 = icmp ne i8 %t65172, 0
+br label %LSJ65170
+LSJ65170:
+%t65174 = phi i1 [ true, %LSL65170 ], [ %t65173, %LSR65170 ]
+br label %LSL65175
+LSL65175:
+br i1 %t65174, label %LSJ65175, label %LSR65175
+LSR65175:
+%t65177 = call i8 @resid_str_eq(ptr %t65166, ptr @.s65176)
+%t65178 = icmp ne i8 %t65177, 0
+br label %LSJ65175
+LSJ65175:
+%t65179 = phi i1 [ true, %LSL65175 ], [ %t65178, %LSR65175 ]
+br label %LSL65180
+LSL65180:
+br i1 %t65179, label %LSJ65180, label %LSR65180
+LSR65180:
+%t65182 = call i8 @resid_str_eq(ptr %t65166, ptr @.s65181)
+%t65183 = icmp ne i8 %t65182, 0
+br label %LSJ65180
+LSJ65180:
+%t65184 = phi i1 [ true, %LSL65180 ], [ %t65183, %LSR65180 ]
+br i1 %t65184, label %L12648, label %L12650
+L12648:
 ret i1 true
-L12641:
-%t65117 = call i8 @resid_str_eq(ptr %t65097, ptr @.s65116)
-%t65118 = icmp ne i8 %t65117, 0
-br label %LSL65119
-LSL65119:
-br i1 %t65118, label %LSJ65119, label %LSR65119
-LSR65119:
-%t65121 = call i8 @resid_str_eq(ptr %t65097, ptr @.s65120)
-%t65122 = icmp ne i8 %t65121, 0
-br label %LSJ65119
-LSJ65119:
-%t65123 = phi i1 [ true, %LSL65119 ], [ %t65122, %LSR65119 ]
-br label %LSL65124
-LSL65124:
-br i1 %t65123, label %LSJ65124, label %LSR65124
-LSR65124:
-%t65126 = call i8 @resid_str_eq(ptr %t65097, ptr @.s65125)
-%t65127 = icmp ne i8 %t65126, 0
-br label %LSJ65124
-LSJ65124:
-%t65128 = phi i1 [ true, %LSL65124 ], [ %t65127, %LSR65124 ]
-br label %LSL65129
-LSL65129:
-br i1 %t65128, label %LSJ65129, label %LSR65129
-LSR65129:
-%t65131 = call i8 @resid_str_eq(ptr %t65097, ptr @.s65130)
-%t65132 = icmp ne i8 %t65131, 0
-br label %LSJ65129
-LSJ65129:
-%t65133 = phi i1 [ true, %LSL65129 ], [ %t65132, %LSR65129 ]
-br label %LSL65134
-LSL65134:
-br i1 %t65133, label %LSJ65134, label %LSR65134
-LSR65134:
-%t65136 = call i8 @resid_str_eq(ptr %t65097, ptr @.s65135)
-%t65137 = icmp ne i8 %t65136, 0
-br label %LSL65138
-LSL65138:
-br i1 %t65137, label %LSR65138, label %LSJ65138
-LSR65138:
-%t65139 = getelementptr i8, ptr %t65093, i64 8
-%t65140 = load ptr, ptr %t65139
-%t65142 = call i8 @resid_str_eq(ptr %t65140, ptr @.s65141)
-%t65143 = icmp ne i8 %t65142, 0
-br label %LSJ65138
-LSJ65138:
-%t65144 = phi i1 [ false, %LSL65138 ], [ %t65143, %LSR65138 ]
-br label %LSJ65134
-LSJ65134:
-%t65145 = phi i1 [ true, %LSL65134 ], [ %t65144, %LSJ65138 ]
-%t65146 = xor i1 %t65145, true
-br label %LSL65147
-LSL65147:
-br i1 %t65146, label %LSJ65147, label %LSR65147
-LSR65147:
-%t65148 = getelementptr i8, ptr %t65093, i64 32
-%t65149 = load i64, ptr %t65148
-%t65150 = icmp eq i64 %t65149, 0
-br label %LSJ65147
-LSJ65147:
-%t65151 = phi i1 [ true, %LSL65147 ], [ %t65150, %LSR65147 ]
-br i1 %t65151, label %L12642, label %L12644
-L12642:
+L12650:
+%t65186 = call i8 @resid_str_eq(ptr %t65166, ptr @.s65185)
+%t65187 = icmp ne i8 %t65186, 0
+br label %LSL65188
+LSL65188:
+br i1 %t65187, label %LSJ65188, label %LSR65188
+LSR65188:
+%t65190 = call i8 @resid_str_eq(ptr %t65166, ptr @.s65189)
+%t65191 = icmp ne i8 %t65190, 0
+br label %LSJ65188
+LSJ65188:
+%t65192 = phi i1 [ true, %LSL65188 ], [ %t65191, %LSR65188 ]
+br label %LSL65193
+LSL65193:
+br i1 %t65192, label %LSJ65193, label %LSR65193
+LSR65193:
+%t65195 = call i8 @resid_str_eq(ptr %t65166, ptr @.s65194)
+%t65196 = icmp ne i8 %t65195, 0
+br label %LSJ65193
+LSJ65193:
+%t65197 = phi i1 [ true, %LSL65193 ], [ %t65196, %LSR65193 ]
+br label %LSL65198
+LSL65198:
+br i1 %t65197, label %LSJ65198, label %LSR65198
+LSR65198:
+%t65200 = call i8 @resid_str_eq(ptr %t65166, ptr @.s65199)
+%t65201 = icmp ne i8 %t65200, 0
+br label %LSJ65198
+LSJ65198:
+%t65202 = phi i1 [ true, %LSL65198 ], [ %t65201, %LSR65198 ]
+br label %LSL65203
+LSL65203:
+br i1 %t65202, label %LSJ65203, label %LSR65203
+LSR65203:
+%t65205 = call i8 @resid_str_eq(ptr %t65166, ptr @.s65204)
+%t65206 = icmp ne i8 %t65205, 0
+br label %LSL65207
+LSL65207:
+br i1 %t65206, label %LSR65207, label %LSJ65207
+LSR65207:
+%t65208 = getelementptr i8, ptr %t65162, i64 8
+%t65209 = load ptr, ptr %t65208
+%t65211 = call i8 @resid_str_eq(ptr %t65209, ptr @.s65210)
+%t65212 = icmp ne i8 %t65211, 0
+br label %LSJ65207
+LSJ65207:
+%t65213 = phi i1 [ false, %LSL65207 ], [ %t65212, %LSR65207 ]
+br label %LSJ65203
+LSJ65203:
+%t65214 = phi i1 [ true, %LSL65203 ], [ %t65213, %LSJ65207 ]
+%t65215 = xor i1 %t65214, true
+br label %LSL65216
+LSL65216:
+br i1 %t65215, label %LSJ65216, label %LSR65216
+LSR65216:
+%t65217 = getelementptr i8, ptr %t65162, i64 32
+%t65218 = load i64, ptr %t65217
+%t65219 = icmp eq i64 %t65218, 0
+br label %LSJ65216
+LSJ65216:
+%t65220 = phi i1 [ true, %LSL65216 ], [ %t65219, %LSR65216 ]
+br i1 %t65220, label %L12651, label %L12653
+L12651:
 ret i1 false
-L12644:
-%t65152 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_all_known(ptr %p0, i64 %p1, i64 0, ptr %p2)
-ret i1 %t65152
+L12653:
+%t65221 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_all_known(ptr %p0, i64 %p1, i64 0, ptr %p2)
+ret i1 %t65221
 }
 define i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_all_known(ptr %p0.in, i64 %p1.in, i64 %p2.in, ptr %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
@@ -99292,54 +99422,54 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t65166, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t65235, %tco.s0 ]
 %p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%t65153 = getelementptr i8, ptr %p0, i64 0
-%t65154 = load ptr, ptr %t65153
-%t65155 = call ptr @resid_list_get(ptr %t65154, i64 %p1)
-%t65158 = getelementptr i8, ptr %t65155, i64 32
-%t65159 = load i64, ptr %t65158
-%t65160 = icmp sge i64 %p2, %t65159
-br i1 %t65160, label %L12645, label %L12647
-L12645:
+%t65222 = getelementptr i8, ptr %p0, i64 0
+%t65223 = load ptr, ptr %t65222
+%t65224 = call ptr @resid_list_get(ptr %t65223, i64 %p1)
+%t65227 = getelementptr i8, ptr %t65224, i64 32
+%t65228 = load i64, ptr %t65227
+%t65229 = icmp sge i64 %p2, %t65228
+br i1 %t65229, label %L12654, label %L12656
+L12654:
 ret i1 true
-L12647:
-%t65161 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
-%t65162 = call ptr @resid_list_get(ptr %p3, i64 %t65161)
-%t65164 = call i8 @resid_unbox_bool(ptr %t65162)
-%t65163 = trunc i8 %t65164 to i1
-%t65165 = xor i1 %t65163, true
-br i1 %t65165, label %L12648, label %L12650
-L12648:
+L12656:
+%t65230 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
+%t65231 = call ptr @resid_list_get(ptr %p3, i64 %t65230)
+%t65233 = call i8 @resid_unbox_bool(ptr %t65231)
+%t65232 = trunc i8 %t65233 to i1
+%t65234 = xor i1 %t65232, true
+br i1 %t65234, label %L12657, label %L12659
+L12657:
 ret i1 false
-L12650:
-%t65166 = add nsw i64 %p2, 1
+L12659:
+%t65235 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hash(ptr %p0, i64 %p1, ptr %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t65168 = getelementptr i8, ptr %p0, i64 0
-%t65169 = load ptr, ptr %t65168
-%t65170 = call ptr @resid_list_get(ptr %t65169, i64 %p1)
-%t65173 = call ptr @str_sb_new()
-%t65174 = getelementptr i8, ptr %t65170, i64 0
-%t65175 = load ptr, ptr %t65174
-%t65176 = call ptr @str_sb_append(ptr %t65173, ptr %t65175)
-%t65177 = call ptr @str_sb_append_cp(ptr %t65176, i64 31)
-%t65178 = getelementptr i8, ptr %t65170, i64 8
-%t65179 = load ptr, ptr %t65178
-%t65180 = call ptr @str_sb_append(ptr %t65177, ptr %t65179)
-%t65181 = call ptr @str_sb_append_cp(ptr %t65180, i64 31)
-%t65182 = getelementptr i8, ptr %t65170, i64 16
-%t65183 = load ptr, ptr %t65182
-%t65184 = call ptr @str_sb_append(ptr %t65181, ptr %t65183)
-%t65185 = call ptr @str_sb_append_cp(ptr %t65184, i64 31)
-%t65186 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_kid_hashes(ptr %p0, i64 %p1, i64 0, ptr %p2, ptr %t65185)
-%t65187 = call ptr @str_sb_finish(ptr %t65186)
-%t65188 = call ptr @str_sha256(ptr %t65187)
-ret ptr %t65188
+%t65237 = getelementptr i8, ptr %p0, i64 0
+%t65238 = load ptr, ptr %t65237
+%t65239 = call ptr @resid_list_get(ptr %t65238, i64 %p1)
+%t65242 = call ptr @str_sb_new()
+%t65243 = getelementptr i8, ptr %t65239, i64 0
+%t65244 = load ptr, ptr %t65243
+%t65245 = call ptr @str_sb_append(ptr %t65242, ptr %t65244)
+%t65246 = call ptr @str_sb_append_cp(ptr %t65245, i64 31)
+%t65247 = getelementptr i8, ptr %t65239, i64 8
+%t65248 = load ptr, ptr %t65247
+%t65249 = call ptr @str_sb_append(ptr %t65246, ptr %t65248)
+%t65250 = call ptr @str_sb_append_cp(ptr %t65249, i64 31)
+%t65251 = getelementptr i8, ptr %t65239, i64 16
+%t65252 = load ptr, ptr %t65251
+%t65253 = call ptr @str_sb_append(ptr %t65250, ptr %t65252)
+%t65254 = call ptr @str_sb_append_cp(ptr %t65253, i64 31)
+%t65255 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_kid_hashes(ptr %p0, i64 %p1, i64 0, ptr %p2, ptr %t65254)
+%t65256 = call ptr @str_sb_finish(ptr %t65255)
+%t65257 = call ptr @str_sha256(ptr %t65256)
+ret ptr %t65257
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_kid_hashes(ptr %p0.in, i64 %p1.in, i64 %p2.in, ptr %p3.in, ptr %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
@@ -99347,69 +99477,69 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t65197, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t65266, %tco.s0 ]
 %p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %t65203, %tco.s0 ]
-%t65189 = getelementptr i8, ptr %p0, i64 0
-%t65190 = load ptr, ptr %t65189
-%t65191 = call ptr @resid_list_get(ptr %t65190, i64 %p1)
-%t65194 = getelementptr i8, ptr %t65191, i64 32
-%t65195 = load i64, ptr %t65194
-%t65196 = icmp sge i64 %p2, %t65195
-br i1 %t65196, label %L12651, label %L12653
-L12651:
+%p4 = phi ptr [ %p4.in, %entry ], [ %t65272, %tco.s0 ]
+%t65258 = getelementptr i8, ptr %p0, i64 0
+%t65259 = load ptr, ptr %t65258
+%t65260 = call ptr @resid_list_get(ptr %t65259, i64 %p1)
+%t65263 = getelementptr i8, ptr %t65260, i64 32
+%t65264 = load i64, ptr %t65263
+%t65265 = icmp sge i64 %p2, %t65264
+br i1 %t65265, label %L12660, label %L12662
+L12660:
 ret ptr %p4
-L12653:
-%t65197 = add nsw i64 %p2, 1
-%t65198 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
-%t65199 = call ptr @resid_list_get(ptr %p3, i64 %t65198)
-%t65202 = call ptr @str_sb_append(ptr %p4, ptr %t65199)
-%t65203 = call ptr @str_sb_append_cp(ptr %t65202, i64 44)
+L12662:
+%t65266 = add nsw i64 %p2, 1
+%t65267 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
+%t65268 = call ptr @resid_list_get(ptr %p3, i64 %t65267)
+%t65271 = call ptr @str_sb_append(ptr %p4, ptr %t65268)
+%t65272 = call ptr @str_sb_append_cp(ptr %t65271, i64 44)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_cols(ptr %p0.in, i64 %p1.in, i64 %p2.in, ptr %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t65212 = alloca [1 x ptr]
-%t65224 = alloca [1 x ptr]
+%t65281 = alloca [1 x ptr]
+%t65293 = alloca [1 x ptr]
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t65231, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t65300, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t65206, %tco.s0 ]
-%t65205 = icmp sge i64 %p1, %p2
-br i1 %t65205, label %L12654, label %L12656
-L12654:
+%p3 = phi ptr [ %p3.in, %entry ], [ %t65275, %tco.s0 ]
+%t65274 = icmp sge i64 %p1, %p2
+br i1 %t65274, label %L12663, label %L12665
+L12663:
 ret ptr %p3
-L12656:
-%t65206 = call ptr @resid_gmalloc(i64 16)
-%t65207 = getelementptr i8, ptr %p3, i64 0
-%t65208 = load ptr, ptr %t65207
-%t65209 = getelementptr i8, ptr %p3, i64 0
-%t65210 = load ptr, ptr %t65209
-%t65211 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_known(ptr %p0, i64 %p1, ptr %t65210)
-%t65215 = zext i1 %t65211 to i8
-%t65214 = call ptr @resid_box_bool(i8 %t65215)
-%t65216 = getelementptr i8, ptr %t65212, i64 0
-store ptr %t65214, ptr %t65216
-%t65218e = load ptr, ptr %t65212
-%t65218 = call ptr @resid_list_push(ptr %t65208, ptr %t65218e)
-%t65206.f0 = getelementptr i8, ptr %t65206, i64 0
-store ptr %t65218, ptr %t65206.f0
-%t65219 = getelementptr i8, ptr %p3, i64 8
-%t65220 = load ptr, ptr %t65219
-%t65221 = getelementptr i8, ptr %p3, i64 8
-%t65222 = load ptr, ptr %t65221
-%t65223 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hash(ptr %p0, i64 %p1, ptr %t65222)
-%t65228 = getelementptr i8, ptr %t65224, i64 0
-store ptr %t65223, ptr %t65228
-%t65230e = load ptr, ptr %t65224
-%t65230 = call ptr @resid_list_push(ptr %t65220, ptr %t65230e)
-%t65206.f1 = getelementptr i8, ptr %t65206, i64 8
-store ptr %t65230, ptr %t65206.f1
-%t65231 = add nsw i64 %p1, 1
+L12665:
+%t65275 = call ptr @resid_gmalloc(i64 16)
+%t65276 = getelementptr i8, ptr %p3, i64 0
+%t65277 = load ptr, ptr %t65276
+%t65278 = getelementptr i8, ptr %p3, i64 0
+%t65279 = load ptr, ptr %t65278
+%t65280 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_known(ptr %p0, i64 %p1, ptr %t65279)
+%t65284 = zext i1 %t65280 to i8
+%t65283 = call ptr @resid_box_bool(i8 %t65284)
+%t65285 = getelementptr i8, ptr %t65281, i64 0
+store ptr %t65283, ptr %t65285
+%t65287e = load ptr, ptr %t65281
+%t65287 = call ptr @resid_list_push(ptr %t65277, ptr %t65287e)
+%t65275.f0 = getelementptr i8, ptr %t65275, i64 0
+store ptr %t65287, ptr %t65275.f0
+%t65288 = getelementptr i8, ptr %p3, i64 8
+%t65289 = load ptr, ptr %t65288
+%t65290 = getelementptr i8, ptr %p3, i64 8
+%t65291 = load ptr, ptr %t65290
+%t65292 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hash(ptr %p0, i64 %p1, ptr %t65291)
+%t65297 = getelementptr i8, ptr %t65293, i64 0
+store ptr %t65292, ptr %t65297
+%t65299e = load ptr, ptr %t65293
+%t65299 = call ptr @resid_list_push(ptr %t65289, ptr %t65299e)
+%t65275.f1 = getelementptr i8, ptr %t65275, i64 8
+store ptr %t65299, ptr %t65275.f1
+%t65300 = add nsw i64 %p1, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -99419,71 +99549,71 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ], [ %t65263, %tco.s1 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t65245, %tco.s0 ], [ %t65266, %tco.s1 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ], [ %t65332, %tco.s1 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t65314, %tco.s0 ], [ %t65335, %tco.s1 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %p3, %tco.s1 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %t65249, %tco.s0 ], [ %t65272, %tco.s1 ]
-%p5 = phi ptr [ %p5.in, %entry ], [ %t65254, %tco.s0 ], [ %t65279, %tco.s1 ]
-%t65233 = icmp sge i64 %p2, %p3
-br i1 %t65233, label %L12657, label %L12659
-L12657:
-%t65234 = call ptr @resid_gmalloc(i64 16)
-%t65235 = call ptr @resid_listbuf_finish(ptr %p4, ptr @.lty65235)
-%t65234.f0 = getelementptr i8, ptr %t65234, i64 0
-store ptr %t65235, ptr %t65234.f0
-%t65236 = call ptr @resid_listbuf_finish(ptr %p5, ptr @.lty65236)
-%t65234.f1 = getelementptr i8, ptr %t65234, i64 8
-store ptr %t65236, ptr %t65234.f1
-ret ptr %t65234
-L12659:
-%t65237 = call i64 @str_len(ptr %p0)
-%t65238 = icmp slt i64 %p1, %t65237
-br i1 %t65238, label %L12660, label %L12661
-L12660:
-%t65239 = call ptr @gx_int_at(ptr %p0, i64 %p1, i64 0)
-br label %L12662
-L12661:
-%t65240 = call ptr @resid_gmalloc(i64 16)
-%t65240.f0 = getelementptr i8, ptr %t65240, i64 0
-store i64 -1, ptr %t65240.f0
-%t65240.f1 = getelementptr i8, ptr %t65240, i64 8
-store i64 %p1, ptr %t65240.f1
-br label %L12662
-L12662:
-%t65241 = phi ptr [ %t65239, %L12660 ], [ %t65240, %L12661 ]
-%t65242 = getelementptr i8, ptr %t65241, i64 0
-%t65243 = load i64, ptr %t65242
-%t65244 = icmp ne i64 %t65243, %p2
-br i1 %t65244, label %L12663, label %L12665
-L12663:
-%t65245 = add nsw i64 %p2, 1
-%t65246 = call ptr @resid_box_i64(i64 -1)
-%t65249 = call ptr @resid_listbuf_push(ptr %p4, ptr %t65246)
-%t65254 = call ptr @resid_listbuf_push(ptr %p5, ptr @.s65250)
+%p4 = phi ptr [ %p4.in, %entry ], [ %t65318, %tco.s0 ], [ %t65341, %tco.s1 ]
+%p5 = phi ptr [ %p5.in, %entry ], [ %t65323, %tco.s0 ], [ %t65348, %tco.s1 ]
+%t65302 = icmp sge i64 %p2, %p3
+br i1 %t65302, label %L12666, label %L12668
+L12666:
+%t65303 = call ptr @resid_gmalloc(i64 16)
+%t65304 = call ptr @resid_listbuf_finish(ptr %p4, ptr @.lty65304)
+%t65303.f0 = getelementptr i8, ptr %t65303, i64 0
+store ptr %t65304, ptr %t65303.f0
+%t65305 = call ptr @resid_listbuf_finish(ptr %p5, ptr @.lty65305)
+%t65303.f1 = getelementptr i8, ptr %t65303, i64 8
+store ptr %t65305, ptr %t65303.f1
+ret ptr %t65303
+L12668:
+%t65306 = call i64 @str_len(ptr %p0)
+%t65307 = icmp slt i64 %p1, %t65306
+br i1 %t65307, label %L12669, label %L12670
+L12669:
+%t65308 = call ptr @gx_int_at(ptr %p0, i64 %p1, i64 0)
+br label %L12671
+L12670:
+%t65309 = call ptr @resid_gmalloc(i64 16)
+%t65309.f0 = getelementptr i8, ptr %t65309, i64 0
+store i64 -1, ptr %t65309.f0
+%t65309.f1 = getelementptr i8, ptr %t65309, i64 8
+store i64 %p1, ptr %t65309.f1
+br label %L12671
+L12671:
+%t65310 = phi ptr [ %t65308, %L12669 ], [ %t65309, %L12670 ]
+%t65311 = getelementptr i8, ptr %t65310, i64 0
+%t65312 = load i64, ptr %t65311
+%t65313 = icmp ne i64 %t65312, %p2
+br i1 %t65313, label %L12672, label %L12674
+L12672:
+%t65314 = add nsw i64 %p2, 1
+%t65315 = call ptr @resid_box_i64(i64 -1)
+%t65318 = call ptr @resid_listbuf_push(ptr %p4, ptr %t65315)
+%t65323 = call ptr @resid_listbuf_push(ptr %p5, ptr @.s65319)
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L12665:
-%t65256 = getelementptr i8, ptr %t65241, i64 8
-%t65257 = load i64, ptr %t65256
-%t65258 = call ptr @gx_int_at(ptr %p0, i64 %t65257, i64 0)
-%t65259 = getelementptr i8, ptr %t65258, i64 8
-%t65260 = load i64, ptr %t65259
-%t65261 = call i64 @str_find_char(ptr %p0, i64 59, i64 %t65260)
-%t65262 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65261, i64 1)
-%t65263 = extractvalue {i64, i1} %t65262, 0
-%t65264 = extractvalue {i64, i1} %t65262, 1
-%t65265 = zext i1 %t65264 to i8
-call void @resid_overflow_check(i8 %t65265)
-%t65266 = add nsw i64 %p2, 1
-%t65267 = getelementptr i8, ptr %t65258, i64 0
-%t65268 = load i64, ptr %t65267
-%t65269 = call ptr @resid_box_i64(i64 %t65268)
-%t65272 = call ptr @resid_listbuf_push(ptr %p4, ptr %t65269)
-%t65273 = getelementptr i8, ptr %t65258, i64 8
-%t65274 = load i64, ptr %t65273
-%t65275 = call ptr @str_slice(ptr %p0, i64 %t65274, i64 %t65261)
-%t65279 = call ptr @resid_listbuf_push(ptr %p5, ptr %t65275)
+L12674:
+%t65325 = getelementptr i8, ptr %t65310, i64 8
+%t65326 = load i64, ptr %t65325
+%t65327 = call ptr @gx_int_at(ptr %p0, i64 %t65326, i64 0)
+%t65328 = getelementptr i8, ptr %t65327, i64 8
+%t65329 = load i64, ptr %t65328
+%t65330 = call i64 @str_find_char(ptr %p0, i64 59, i64 %t65329)
+%t65331 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65330, i64 1)
+%t65332 = extractvalue {i64, i1} %t65331, 0
+%t65333 = extractvalue {i64, i1} %t65331, 1
+%t65334 = zext i1 %t65333 to i8
+call void @resid_overflow_check(i8 %t65334)
+%t65335 = add nsw i64 %p2, 1
+%t65336 = getelementptr i8, ptr %t65327, i64 0
+%t65337 = load i64, ptr %t65336
+%t65338 = call ptr @resid_box_i64(i64 %t65337)
+%t65341 = call ptr @resid_listbuf_push(ptr %p4, ptr %t65338)
+%t65342 = getelementptr i8, ptr %t65327, i64 8
+%t65343 = load i64, ptr %t65342
+%t65344 = call ptr @str_slice(ptr %p0, i64 %t65343, i64 %t65330)
+%t65348 = call ptr @resid_listbuf_push(ptr %p5, ptr %t65344)
 br label %tco.s1
 tco.s1:
 br label %tco.head
@@ -99493,25 +99623,25 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t65286, %tco.s0 ]
-%p2 = phi ptr [ %p2.in, %entry ], [ %t65294, %tco.s0 ]
-%t65281 = call i64 @str_len(ptr %p0)
-%t65282 = icmp sge i64 %p1, %t65281
-br i1 %t65282, label %L12666, label %L12668
-L12666:
-%t65283 = call ptr @resid_listbuf_finish(ptr %p2, ptr @.lty65283)
-ret ptr %t65283
-L12668:
-%t65284 = call i64 @str_find_char(ptr %p0, i64 44, i64 %p1)
-%t65285 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65284, i64 1)
-%t65286 = extractvalue {i64, i1} %t65285, 0
-%t65287 = extractvalue {i64, i1} %t65285, 1
-%t65288 = zext i1 %t65287 to i8
-call void @resid_overflow_check(i8 %t65288)
-%t65289 = call ptr @str_slice(ptr %p0, i64 %p1, i64 %t65284)
-%t65290 = call i64 @str_parse_int(ptr %t65289)
-%t65291 = call ptr @resid_box_i64(i64 %t65290)
-%t65294 = call ptr @resid_listbuf_push(ptr %p2, ptr %t65291)
+%p1 = phi i64 [ %p1.in, %entry ], [ %t65355, %tco.s0 ]
+%p2 = phi ptr [ %p2.in, %entry ], [ %t65363, %tco.s0 ]
+%t65350 = call i64 @str_len(ptr %p0)
+%t65351 = icmp sge i64 %p1, %t65350
+br i1 %t65351, label %L12675, label %L12677
+L12675:
+%t65352 = call ptr @resid_listbuf_finish(ptr %p2, ptr @.lty65352)
+ret ptr %t65352
+L12677:
+%t65353 = call i64 @str_find_char(ptr %p0, i64 44, i64 %p1)
+%t65354 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65353, i64 1)
+%t65355 = extractvalue {i64, i1} %t65354, 0
+%t65356 = extractvalue {i64, i1} %t65354, 1
+%t65357 = zext i1 %t65356 to i8
+call void @resid_overflow_check(i8 %t65357)
+%t65358 = call ptr @str_slice(ptr %p0, i64 %p1, i64 %t65353)
+%t65359 = call i64 @str_parse_int(ptr %t65358)
+%t65360 = call ptr @resid_box_i64(i64 %t65359)
+%t65363 = call ptr @resid_listbuf_push(ptr %p2, ptr %t65360)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -99520,34 +99650,34 @@ define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_type(i64 %p0.
 entry:
 br label %tco.head
 tco.head:
-%p0 = phi i64 [ %p0.in, %entry ], [ %t65307, %tco.s0 ]
+%p0 = phi i64 [ %p0.in, %entry ], [ %t65376, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
 %p2 = phi ptr [ %p2.in, %entry ], [ %p2, %tco.s0 ]
 %p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%t65296 = icmp slt i64 %p0, %p1
-br i1 %t65296, label %L12669, label %L12671
-L12669:
-%t65297 = call i64 @resid_list_len(ptr %p2)
-%t65298 = icmp slt i64 %p0, %t65297
-br i1 %t65298, label %L12672, label %L12673
-L12672:
-%t65299 = call ptr @resid_list_get(ptr %p2, i64 %p0)
-br label %L12674
-L12673:
-br label %L12674
-L12674:
-%t65303 = phi ptr [ %t65299, %L12672 ], [ @.s65302, %L12673 ]
-ret ptr %t65303
-L12671:
-%t65304 = getelementptr i8, ptr %p3, i64 0
-%t65305 = load ptr, ptr %t65304
-%t65306 = call ptr @resid_list_get(ptr %t65305, i64 %p0)
-%t65307 = call i64 @resid_unbox_i64(ptr %t65306)
-%t65309 = icmp slt i64 %t65307, 0
-br i1 %t65309, label %L12675, label %L12677
-L12675:
-ret ptr @.s65310
-L12677:
+%t65365 = icmp slt i64 %p0, %p1
+br i1 %t65365, label %L12678, label %L12680
+L12678:
+%t65366 = call i64 @resid_list_len(ptr %p2)
+%t65367 = icmp slt i64 %p0, %t65366
+br i1 %t65367, label %L12681, label %L12682
+L12681:
+%t65368 = call ptr @resid_list_get(ptr %p2, i64 %p0)
+br label %L12683
+L12682:
+br label %L12683
+L12683:
+%t65372 = phi ptr [ %t65368, %L12681 ], [ @.s65371, %L12682 ]
+ret ptr %t65372
+L12680:
+%t65373 = getelementptr i8, ptr %p3, i64 0
+%t65374 = load ptr, ptr %t65373
+%t65375 = call ptr @resid_list_get(ptr %t65374, i64 %p0)
+%t65376 = call i64 @resid_unbox_i64(ptr %t65375)
+%t65378 = icmp slt i64 %t65376, 0
+br i1 %t65378, label %L12684, label %L12686
+L12684:
+ret ptr @.s65379
+L12686:
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -99558,56 +99688,56 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t65343, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t65342, %tco.s0 ]
-%t65312 = icmp slt i64 %p1, 0
-br label %LSL65313
-LSL65313:
-br i1 %t65312, label %LSJ65313, label %LSR65313
-LSR65313:
-%t65314 = getelementptr i8, ptr %p0, i64 0
-%t65315 = load ptr, ptr %t65314
-%t65316 = call ptr @resid_list_get(ptr %t65315, i64 %p1)
-%t65319 = getelementptr i8, ptr %t65316, i64 32
-%t65320 = load i64, ptr %t65319
-%t65321 = icmp sge i64 %p2, %t65320
-br label %LSJ65313
-LSJ65313:
-%t65322 = phi i1 [ true, %LSL65313 ], [ %t65321, %LSR65313 ]
-br i1 %t65322, label %L12678, label %L12680
-L12678:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t65412, %tco.s0 ]
+%p3 = phi ptr [ %p3.in, %entry ], [ %t65411, %tco.s0 ]
+%t65381 = icmp slt i64 %p1, 0
+br label %LSL65382
+LSL65382:
+br i1 %t65381, label %LSJ65382, label %LSR65382
+LSR65382:
+%t65383 = getelementptr i8, ptr %p0, i64 0
+%t65384 = load ptr, ptr %t65383
+%t65385 = call ptr @resid_list_get(ptr %t65384, i64 %p1)
+%t65388 = getelementptr i8, ptr %t65385, i64 32
+%t65389 = load i64, ptr %t65388
+%t65390 = icmp sge i64 %p2, %t65389
+br label %LSJ65382
+LSJ65382:
+%t65391 = phi i1 [ true, %LSL65382 ], [ %t65390, %LSR65382 ]
+br i1 %t65391, label %L12687, label %L12689
+L12687:
 ret ptr %p3
-L12680:
-%t65323 = call i64 @resid_scope_push()
-%t65324 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
-call void @resid_scope_pop(i64 %t65323)
-%t65325 = getelementptr i8, ptr %p0, i64 0
-%t65326 = load ptr, ptr %t65325
-%t65327 = call ptr @resid_list_get(ptr %t65326, i64 %t65324)
-%t65330 = getelementptr i8, ptr %t65327, i64 0
-%t65331 = load ptr, ptr %t65330
-%t65333 = call i8 @resid_str_eq(ptr %t65331, ptr @.s65332)
-%t65334 = icmp ne i8 %t65333, 0
-br i1 %t65334, label %L12681, label %L12682
-L12681:
-%t65335 = call ptr @lr_facts_kept_text(ptr %p0, i64 %t65324)
-%t65336 = call ptr @str_sb_append(ptr %p3, ptr %t65335)
-br label %L12683
-L12682:
-%t65338 = call i8 @resid_str_eq(ptr %t65331, ptr @.s65337)
-%t65339 = icmp ne i8 %t65338, 0
-br i1 %t65339, label %L12684, label %L12685
-L12684:
-%t65340 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_facts(ptr %p0, i64 %t65324, i64 0, ptr %p3)
-br label %L12686
-L12685:
-br label %L12686
-L12686:
-%t65341 = phi ptr [ %t65340, %L12684 ], [ %p3, %L12685 ]
-br label %L12683
-L12683:
-%t65342 = phi ptr [ %t65336, %L12681 ], [ %t65341, %L12686 ]
-%t65343 = add nsw i64 %p2, 1
+L12689:
+%t65392 = call i64 @resid_scope_push()
+%t65393 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
+call void @resid_scope_pop(i64 %t65392)
+%t65394 = getelementptr i8, ptr %p0, i64 0
+%t65395 = load ptr, ptr %t65394
+%t65396 = call ptr @resid_list_get(ptr %t65395, i64 %t65393)
+%t65399 = getelementptr i8, ptr %t65396, i64 0
+%t65400 = load ptr, ptr %t65399
+%t65402 = call i8 @resid_str_eq(ptr %t65400, ptr @.s65401)
+%t65403 = icmp ne i8 %t65402, 0
+br i1 %t65403, label %L12690, label %L12691
+L12690:
+%t65404 = call ptr @lr_facts_kept_text(ptr %p0, i64 %t65393)
+%t65405 = call ptr @str_sb_append(ptr %p3, ptr %t65404)
+br label %L12692
+L12691:
+%t65407 = call i8 @resid_str_eq(ptr %t65400, ptr @.s65406)
+%t65408 = icmp ne i8 %t65407, 0
+br i1 %t65408, label %L12693, label %L12694
+L12693:
+%t65409 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_facts(ptr %p0, i64 %t65393, i64 0, ptr %p3)
+br label %L12695
+L12694:
+br label %L12695
+L12695:
+%t65410 = phi ptr [ %t65409, %L12693 ], [ %p3, %L12694 ]
+br label %L12692
+L12692:
+%t65411 = phi ptr [ %t65405, %L12690 ], [ %t65410, %L12695 ]
+%t65412 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -99618,79 +99748,79 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t65373, %tco.s0 ]
-%p2 = phi ptr [ %p2.tr, %entry ], [ %t65377, %tco.s0 ]
-%t65345 = call i64 @str_len(ptr %p0)
-%t65346 = icmp sge i64 %p1, %t65345
-br i1 %t65346, label %L12687, label %L12689
-L12687:
-%t65347 = call ptr @resid_map_freeze(ptr %p2)
-ret ptr %t65347
-L12689:
-%t65348 = call i64 @str_find_char(ptr %p0, i64 61, i64 %p1)
-%t65349 = call i64 @str_find_char(ptr %p0, i64 59, i64 %t65348)
-%t65350 = call ptr @str_slice(ptr %p0, i64 %p1, i64 %t65348)
-%t65351 = call i64 @str_parse_int(ptr %t65350)
-%t65352 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65348, i64 1)
-%t65353 = extractvalue {i64, i1} %t65352, 0
-%t65354 = extractvalue {i64, i1} %t65352, 1
-%t65355 = zext i1 %t65354 to i8
-call void @resid_overflow_check(i8 %t65355)
-%t65356 = call ptr @str_slice(ptr %p0, i64 %t65353, i64 %t65349)
-%t65357 = call {i64, i64} @resid_map_find(ptr %p2, i8 1, i64 %t65351, i8 0)
-%t65358 = extractvalue {i64, i64} %t65357, 1
-%t65359 = icmp ne i64 %t65358, 0
-%t65360 = extractvalue {i64, i64} %t65357, 0
-%t65361 = inttoptr i64 %t65360 to ptr
-br i1 %t65359, label %L12690, label %L12691
-L12691:
-br label %L12692
-L12692:
-br label %L12693
-L12690:
-br label %L12693
-L12693:
-%t65363 = phi ptr [ @.s65362, %L12692 ], [ %t65361, %L12690 ]
-%t65365 = call i8 @resid_str_eq(ptr %t65363, ptr @.s65364)
-%t65366 = icmp ne i8 %t65365, 0
-br i1 %t65366, label %L12694, label %L12695
-L12694:
-br label %L12696
-L12695:
-%t65367 = call ptr @lr_parse(ptr %t65363)
-%t65368 = call ptr @lr_parse(ptr %t65356)
-%t65369 = call ptr @lr_join(ptr %t65367, ptr %t65368)
-%t65370 = call ptr @lr_str(ptr %t65369)
-br label %L12696
+%p1 = phi i64 [ %p1.in, %entry ], [ %t65442, %tco.s0 ]
+%p2 = phi ptr [ %p2.tr, %entry ], [ %t65446, %tco.s0 ]
+%t65414 = call i64 @str_len(ptr %p0)
+%t65415 = icmp sge i64 %p1, %t65414
+br i1 %t65415, label %L12696, label %L12698
 L12696:
-%t65371 = phi ptr [ %t65356, %L12694 ], [ %t65370, %L12695 ]
-%t65372 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65349, i64 1)
-%t65373 = extractvalue {i64, i1} %t65372, 0
-%t65374 = extractvalue {i64, i1} %t65372, 1
-%t65375 = zext i1 %t65374 to i8
-call void @resid_overflow_check(i8 %t65375)
-%t65376 = ptrtoint ptr %t65371 to i64
-%t65377 = call ptr @resid_map_put(ptr %p2, i8 1, i8 1, i64 %t65351, i8 0, i64 %t65376)
+%t65416 = call ptr @resid_map_freeze(ptr %p2)
+ret ptr %t65416
+L12698:
+%t65417 = call i64 @str_find_char(ptr %p0, i64 61, i64 %p1)
+%t65418 = call i64 @str_find_char(ptr %p0, i64 59, i64 %t65417)
+%t65419 = call ptr @str_slice(ptr %p0, i64 %p1, i64 %t65417)
+%t65420 = call i64 @str_parse_int(ptr %t65419)
+%t65421 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65417, i64 1)
+%t65422 = extractvalue {i64, i1} %t65421, 0
+%t65423 = extractvalue {i64, i1} %t65421, 1
+%t65424 = zext i1 %t65423 to i8
+call void @resid_overflow_check(i8 %t65424)
+%t65425 = call ptr @str_slice(ptr %p0, i64 %t65422, i64 %t65418)
+%t65426 = call {i64, i64} @resid_map_find(ptr %p2, i8 1, i64 %t65420, i8 0)
+%t65427 = extractvalue {i64, i64} %t65426, 1
+%t65428 = icmp ne i64 %t65427, 0
+%t65429 = extractvalue {i64, i64} %t65426, 0
+%t65430 = inttoptr i64 %t65429 to ptr
+br i1 %t65428, label %L12699, label %L12700
+L12700:
+br label %L12701
+L12701:
+br label %L12702
+L12699:
+br label %L12702
+L12702:
+%t65432 = phi ptr [ @.s65431, %L12701 ], [ %t65430, %L12699 ]
+%t65434 = call i8 @resid_str_eq(ptr %t65432, ptr @.s65433)
+%t65435 = icmp ne i8 %t65434, 0
+br i1 %t65435, label %L12703, label %L12704
+L12703:
+br label %L12705
+L12704:
+%t65436 = call ptr @lr_parse(ptr %t65432)
+%t65437 = call ptr @lr_parse(ptr %t65425)
+%t65438 = call ptr @lr_join(ptr %t65436, ptr %t65437)
+%t65439 = call ptr @lr_str(ptr %t65438)
+br label %L12705
+L12705:
+%t65440 = phi ptr [ %t65425, %L12703 ], [ %t65439, %L12704 ]
+%t65441 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65418, i64 1)
+%t65442 = extractvalue {i64, i1} %t65441, 0
+%t65443 = extractvalue {i64, i1} %t65441, 1
+%t65444 = zext i1 %t65443 to i8
+call void @resid_overflow_check(i8 %t65444)
+%t65445 = ptrtoint ptr %t65440 to i64
+%t65446 = call ptr @resid_map_put(ptr %p2, i8 1, i8 1, i64 %t65420, i8 0, i64 %t65445)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_range(ptr %p0, ptr %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t65379 = call ptr @lr_parse(ptr %p1)
-%t65380 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 4, i64 1)
-%t65381 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65380, i64 5, i64 3)
-%t65383 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65381, ptr @.s65382)
-%t65385 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65383, ptr @.s65384)
-%t65387 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65385, ptr @.s65386)
-%t65388 = getelementptr i8, ptr %t65379, i64 0
-%t65389 = load i64, ptr %t65388
-%t65390 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65387, i64 %t65389)
-%t65392 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65390, ptr @.s65391)
-%t65393 = getelementptr i8, ptr %t65379, i64 8
-%t65394 = load i64, ptr %t65393
-%t65395 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65392, i64 %t65394)
-ret ptr %t65395
+%t65448 = call ptr @lr_parse(ptr %p1)
+%t65449 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 4, i64 1)
+%t65450 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65449, i64 5, i64 3)
+%t65452 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65450, ptr @.s65451)
+%t65454 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65452, ptr @.s65453)
+%t65456 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65454, ptr @.s65455)
+%t65457 = getelementptr i8, ptr %t65448, i64 0
+%t65458 = load i64, ptr %t65457
+%t65459 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65456, i64 %t65458)
+%t65461 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65459, ptr @.s65460)
+%t65462 = getelementptr i8, ptr %t65448, i64 8
+%t65463 = load i64, ptr %t65462
+%t65464 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65461, i64 %t65463)
+ret ptr %t65464
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_reasons(ptr %p0.in, i64 %p1.in, ptr %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
@@ -99698,32 +99828,32 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t65402, %tco.s0 ]
-%p2 = phi ptr [ %p2.tr, %entry ], [ %t65413, %tco.s0 ]
-%t65396 = call i64 @str_len(ptr %p0)
-%t65397 = icmp sge i64 %p1, %t65396
-br i1 %t65397, label %L12697, label %L12699
-L12697:
-%t65398 = call ptr @resid_map_freeze(ptr %p2)
-ret ptr %t65398
-L12699:
-%t65399 = call i64 @str_find_char(ptr %p0, i64 44, i64 %p1)
-%t65400 = call i64 @str_find_char(ptr %p0, i64 59, i64 %t65399)
-%t65401 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65400, i64 1)
-%t65402 = extractvalue {i64, i1} %t65401, 0
-%t65403 = extractvalue {i64, i1} %t65401, 1
-%t65404 = zext i1 %t65403 to i8
-call void @resid_overflow_check(i8 %t65404)
-%t65405 = call ptr @str_slice(ptr %p0, i64 %p1, i64 %t65399)
-%t65406 = call i64 @str_parse_int(ptr %t65405)
-%t65407 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65399, i64 1)
-%t65408 = extractvalue {i64, i1} %t65407, 0
-%t65409 = extractvalue {i64, i1} %t65407, 1
-%t65410 = zext i1 %t65409 to i8
-call void @resid_overflow_check(i8 %t65410)
-%t65411 = call ptr @str_slice(ptr %p0, i64 %t65408, i64 %t65400)
-%t65412 = ptrtoint ptr %t65411 to i64
-%t65413 = call ptr @resid_map_put(ptr %p2, i8 1, i8 1, i64 %t65406, i8 0, i64 %t65412)
+%p1 = phi i64 [ %p1.in, %entry ], [ %t65471, %tco.s0 ]
+%p2 = phi ptr [ %p2.tr, %entry ], [ %t65482, %tco.s0 ]
+%t65465 = call i64 @str_len(ptr %p0)
+%t65466 = icmp sge i64 %p1, %t65465
+br i1 %t65466, label %L12706, label %L12708
+L12706:
+%t65467 = call ptr @resid_map_freeze(ptr %p2)
+ret ptr %t65467
+L12708:
+%t65468 = call i64 @str_find_char(ptr %p0, i64 44, i64 %p1)
+%t65469 = call i64 @str_find_char(ptr %p0, i64 59, i64 %t65468)
+%t65470 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65469, i64 1)
+%t65471 = extractvalue {i64, i1} %t65470, 0
+%t65472 = extractvalue {i64, i1} %t65470, 1
+%t65473 = zext i1 %t65472 to i8
+call void @resid_overflow_check(i8 %t65473)
+%t65474 = call ptr @str_slice(ptr %p0, i64 %p1, i64 %t65468)
+%t65475 = call i64 @str_parse_int(ptr %t65474)
+%t65476 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65468, i64 1)
+%t65477 = extractvalue {i64, i1} %t65476, 0
+%t65478 = extractvalue {i64, i1} %t65476, 1
+%t65479 = zext i1 %t65478 to i8
+call void @resid_overflow_check(i8 %t65479)
+%t65480 = call ptr @str_slice(ptr %p0, i64 %t65477, i64 %t65469)
+%t65481 = ptrtoint ptr %t65480 to i64
+%t65482 = call ptr @resid_map_put(ptr %p2, i8 1, i8 1, i64 %t65475, i8 0, i64 %t65481)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -99733,50 +99863,50 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t65437, %tco.s0 ]
-%t65415 = getelementptr i8, ptr %p0, i64 56
-%t65416 = load ptr, ptr %t65415
-%t65417 = call {i64, i64} @resid_map_find(ptr %t65416, i8 1, i64 %p1, i8 0)
-%t65418 = extractvalue {i64, i64} %t65417, 1
-%t65419 = icmp ne i64 %t65418, 0
-%t65420 = extractvalue {i64, i64} %t65417, 0
-%t65421 = inttoptr i64 %t65420 to ptr
-br i1 %t65419, label %L12700, label %L12701
-L12701:
-br label %L12702
-L12702:
-br label %L12703
-L12700:
-br label %L12703
-L12703:
-%t65423 = phi ptr [ @.s65422, %L12702 ], [ %t65421, %L12700 ]
-%t65425 = call i8 @resid_str_eq(ptr %t65423, ptr @.s65424)
-%t65426 = icmp eq i8 %t65425, 0
-br label %LSL65427
-LSL65427:
-br i1 %t65426, label %LSJ65427, label %LSR65427
-LSR65427:
-%t65428 = getelementptr i8, ptr %p0, i64 8
-%t65429 = load i64, ptr %t65428
-%t65430 = icmp slt i64 %p1, %t65429
-br label %LSJ65427
-LSJ65427:
-%t65431 = phi i1 [ true, %LSL65427 ], [ %t65430, %LSR65427 ]
-br i1 %t65431, label %L12704, label %L12706
-L12704:
-ret ptr %t65423
-L12706:
-%t65432 = getelementptr i8, ptr %p0, i64 32
-%t65433 = load ptr, ptr %t65432
-%t65434 = getelementptr i8, ptr %t65433, i64 0
-%t65435 = load ptr, ptr %t65434
-%t65436 = call ptr @resid_list_get(ptr %t65435, i64 %p1)
-%t65437 = call i64 @resid_unbox_i64(ptr %t65436)
-%t65439 = icmp slt i64 %t65437, 0
-br i1 %t65439, label %L12707, label %L12709
-L12707:
-ret ptr @.s65440
+%p1 = phi i64 [ %p1.in, %entry ], [ %t65506, %tco.s0 ]
+%t65484 = getelementptr i8, ptr %p0, i64 56
+%t65485 = load ptr, ptr %t65484
+%t65486 = call {i64, i64} @resid_map_find(ptr %t65485, i8 1, i64 %p1, i8 0)
+%t65487 = extractvalue {i64, i64} %t65486, 1
+%t65488 = icmp ne i64 %t65487, 0
+%t65489 = extractvalue {i64, i64} %t65486, 0
+%t65490 = inttoptr i64 %t65489 to ptr
+br i1 %t65488, label %L12709, label %L12710
+L12710:
+br label %L12711
+L12711:
+br label %L12712
 L12709:
+br label %L12712
+L12712:
+%t65492 = phi ptr [ @.s65491, %L12711 ], [ %t65490, %L12709 ]
+%t65494 = call i8 @resid_str_eq(ptr %t65492, ptr @.s65493)
+%t65495 = icmp eq i8 %t65494, 0
+br label %LSL65496
+LSL65496:
+br i1 %t65495, label %LSJ65496, label %LSR65496
+LSR65496:
+%t65497 = getelementptr i8, ptr %p0, i64 8
+%t65498 = load i64, ptr %t65497
+%t65499 = icmp slt i64 %p1, %t65498
+br label %LSJ65496
+LSJ65496:
+%t65500 = phi i1 [ true, %LSL65496 ], [ %t65499, %LSR65496 ]
+br i1 %t65500, label %L12713, label %L12715
+L12713:
+ret ptr %t65492
+L12715:
+%t65501 = getelementptr i8, ptr %p0, i64 32
+%t65502 = load ptr, ptr %t65501
+%t65503 = getelementptr i8, ptr %t65502, i64 0
+%t65504 = load ptr, ptr %t65503
+%t65505 = call ptr @resid_list_get(ptr %t65504, i64 %p1)
+%t65506 = call i64 @resid_unbox_i64(ptr %t65505)
+%t65508 = icmp slt i64 %t65506, 0
+br i1 %t65508, label %L12716, label %L12718
+L12716:
+ret ptr @.s65509
+L12718:
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -99787,851 +99917,851 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t65464, %tco.s0 ]
-%t65442 = getelementptr i8, ptr %p0, i64 0
-%t65443 = load ptr, ptr %t65442
-%t65444 = getelementptr i8, ptr %t65443, i64 0
-%t65445 = load ptr, ptr %t65444
-%t65446 = call ptr @resid_list_get(ptr %t65445, i64 %p1)
-%t65449 = getelementptr i8, ptr %t65446, i64 32
-%t65450 = load i64, ptr %t65449
-%t65451 = icmp sge i64 %p2, %t65450
-br i1 %t65451, label %L12710, label %L12712
-L12710:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t65533, %tco.s0 ]
+%t65511 = getelementptr i8, ptr %p0, i64 0
+%t65512 = load ptr, ptr %t65511
+%t65513 = getelementptr i8, ptr %t65512, i64 0
+%t65514 = load ptr, ptr %t65513
+%t65515 = call ptr @resid_list_get(ptr %t65514, i64 %p1)
+%t65518 = getelementptr i8, ptr %t65515, i64 32
+%t65519 = load i64, ptr %t65518
+%t65520 = icmp sge i64 %p2, %t65519
+br i1 %t65520, label %L12719, label %L12721
+L12719:
 ret i64 -1
-L12712:
-%t65452 = call i64 @resid_scope_push()
-%t65453 = getelementptr i8, ptr %p0, i64 0
-%t65454 = load ptr, ptr %t65453
-%t65455 = call i64 @kg_kid(ptr %t65454, i64 %p1, i64 %p2)
-call void @resid_scope_pop(i64 %t65452)
-%t65456 = getelementptr i8, ptr %p0, i64 40
-%t65457 = load ptr, ptr %t65456
-%t65458 = getelementptr i8, ptr %t65457, i64 0
-%t65459 = load ptr, ptr %t65458
-%t65460 = call ptr @resid_list_get(ptr %t65459, i64 %t65455)
-%t65462 = call i8 @resid_unbox_bool(ptr %t65460)
-%t65461 = trunc i8 %t65462 to i1
-%t65463 = xor i1 %t65461, true
-br i1 %t65463, label %L12713, label %L12715
-L12713:
-ret i64 %t65455
-L12715:
-%t65464 = add nsw i64 %p2, 1
+L12721:
+%t65521 = call i64 @resid_scope_push()
+%t65522 = getelementptr i8, ptr %p0, i64 0
+%t65523 = load ptr, ptr %t65522
+%t65524 = call i64 @kg_kid(ptr %t65523, i64 %p1, i64 %p2)
+call void @resid_scope_pop(i64 %t65521)
+%t65525 = getelementptr i8, ptr %p0, i64 40
+%t65526 = load ptr, ptr %t65525
+%t65527 = getelementptr i8, ptr %t65526, i64 0
+%t65528 = load ptr, ptr %t65527
+%t65529 = call ptr @resid_list_get(ptr %t65528, i64 %t65524)
+%t65531 = call i8 @resid_unbox_bool(ptr %t65529)
+%t65530 = trunc i8 %t65531 to i1
+%t65532 = xor i1 %t65530, true
+br i1 %t65532, label %L12722, label %L12724
+L12722:
+ret i64 %t65524
+L12724:
+%t65533 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_reason(ptr %p0, ptr %p1, i64 %p2, ptr %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t65466 = getelementptr i8, ptr %p1, i64 0
-%t65467 = load ptr, ptr %t65466
-%t65468 = getelementptr i8, ptr %t65467, i64 0
-%t65469 = load ptr, ptr %t65468
-%t65470 = call ptr @resid_list_get(ptr %t65469, i64 %p2)
-%t65473 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_rec(ptr %p1, i64 %p2)
-%t65474 = getelementptr i8, ptr %t65470, i64 0
-%t65475 = load ptr, ptr %t65474
-%t65477 = call i8 @resid_str_eq(ptr %t65475, ptr @.s65476)
-%t65478 = icmp ne i8 %t65477, 0
-br label %LSL65479
-LSL65479:
-br i1 %t65478, label %LSJ65479, label %LSR65479
-LSR65479:
-%t65480 = getelementptr i8, ptr %t65470, i64 0
-%t65481 = load ptr, ptr %t65480
-%t65483 = call i8 @resid_str_eq(ptr %t65481, ptr @.s65482)
-%t65484 = icmp ne i8 %t65483, 0
-br label %LSL65485
-LSL65485:
-br i1 %t65484, label %LSJ65485, label %LSR65485
-LSR65485:
-%t65486 = getelementptr i8, ptr %t65470, i64 0
-%t65487 = load ptr, ptr %t65486
-%t65489 = call i8 @resid_str_eq(ptr %t65487, ptr @.s65488)
-%t65490 = icmp ne i8 %t65489, 0
-br label %LSJ65485
-LSJ65485:
-%t65491 = phi i1 [ true, %LSL65485 ], [ %t65490, %LSR65485 ]
-br label %LSL65492
-LSL65492:
-br i1 %t65491, label %LSR65492, label %LSJ65492
-LSR65492:
-%t65493 = getelementptr i8, ptr %t65470, i64 16
-%t65494 = load ptr, ptr %t65493
-%t65496 = call i8 @str_contains(ptr %t65494, ptr @.s65495)
-%t65497 = icmp ne i8 %t65496, 0
-br label %LSJ65492
-LSJ65492:
-%t65498 = phi i1 [ false, %LSL65492 ], [ %t65497, %LSR65492 ]
-br label %LSJ65479
-LSJ65479:
-%t65499 = phi i1 [ true, %LSL65479 ], [ %t65498, %LSJ65492 ]
-%t65500 = call i64 @str_find_char(ptr %t65473, i64 40, i64 0)
-%t65502 = call i8 @resid_str_eq(ptr %p3, ptr @.s65501)
-%t65503 = icmp eq i8 %t65502, 0
-br i1 %t65503, label %L12716, label %L12717
-L12716:
-br label %L12718
-L12717:
-%t65506 = call i8 @resid_str_eq(ptr %t65473, ptr @.s65505)
-%t65507 = icmp eq i8 %t65506, 0
-br i1 %t65507, label %L12719, label %L12720
-L12719:
-%t65508 = icmp slt i64 %t65500, 0
-br i1 %t65508, label %L12722, label %L12723
-L12722:
-br label %L12724
-L12723:
-%t65509 = call ptr @str_slice(ptr %t65473, i64 0, i64 %t65500)
-br label %L12724
-L12724:
-%t65510 = phi ptr [ %t65473, %L12722 ], [ %t65509, %L12723 ]
-br label %L12721
-L12720:
-br i1 %t65499, label %L12725, label %L12726
+%t65535 = getelementptr i8, ptr %p1, i64 0
+%t65536 = load ptr, ptr %t65535
+%t65537 = getelementptr i8, ptr %t65536, i64 0
+%t65538 = load ptr, ptr %t65537
+%t65539 = call ptr @resid_list_get(ptr %t65538, i64 %p2)
+%t65542 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_rec(ptr %p1, i64 %p2)
+%t65543 = getelementptr i8, ptr %t65539, i64 0
+%t65544 = load ptr, ptr %t65543
+%t65546 = call i8 @resid_str_eq(ptr %t65544, ptr @.s65545)
+%t65547 = icmp ne i8 %t65546, 0
+br label %LSL65548
+LSL65548:
+br i1 %t65547, label %LSJ65548, label %LSR65548
+LSR65548:
+%t65549 = getelementptr i8, ptr %t65539, i64 0
+%t65550 = load ptr, ptr %t65549
+%t65552 = call i8 @resid_str_eq(ptr %t65550, ptr @.s65551)
+%t65553 = icmp ne i8 %t65552, 0
+br label %LSL65554
+LSL65554:
+br i1 %t65553, label %LSJ65554, label %LSR65554
+LSR65554:
+%t65555 = getelementptr i8, ptr %t65539, i64 0
+%t65556 = load ptr, ptr %t65555
+%t65558 = call i8 @resid_str_eq(ptr %t65556, ptr @.s65557)
+%t65559 = icmp ne i8 %t65558, 0
+br label %LSJ65554
+LSJ65554:
+%t65560 = phi i1 [ true, %LSL65554 ], [ %t65559, %LSR65554 ]
+br label %LSL65561
+LSL65561:
+br i1 %t65560, label %LSR65561, label %LSJ65561
+LSR65561:
+%t65562 = getelementptr i8, ptr %t65539, i64 16
+%t65563 = load ptr, ptr %t65562
+%t65565 = call i8 @str_contains(ptr %t65563, ptr @.s65564)
+%t65566 = icmp ne i8 %t65565, 0
+br label %LSJ65561
+LSJ65561:
+%t65567 = phi i1 [ false, %LSL65561 ], [ %t65566, %LSR65561 ]
+br label %LSJ65548
+LSJ65548:
+%t65568 = phi i1 [ true, %LSL65548 ], [ %t65567, %LSJ65561 ]
+%t65569 = call i64 @str_find_char(ptr %t65542, i64 40, i64 0)
+%t65571 = call i8 @resid_str_eq(ptr %p3, ptr @.s65570)
+%t65572 = icmp eq i8 %t65571, 0
+br i1 %t65572, label %L12725, label %L12726
 L12725:
 br label %L12727
 L12726:
-br label %L12727
-L12727:
-%t65513 = phi ptr [ @.s65511, %L12725 ], [ @.s65512, %L12726 ]
-br label %L12721
-L12721:
-%t65514 = phi ptr [ %t65510, %L12724 ], [ %t65513, %L12727 ]
-br label %L12718
-L12718:
-%t65515 = phi ptr [ @.s65504, %L12716 ], [ %t65514, %L12721 ]
-%t65517 = call i8 @resid_str_eq(ptr %p3, ptr @.s65516)
-%t65518 = icmp eq i8 %t65517, 0
-br i1 %t65518, label %L12728, label %L12729
+%t65575 = call i8 @resid_str_eq(ptr %t65542, ptr @.s65574)
+%t65576 = icmp eq i8 %t65575, 0
+br i1 %t65576, label %L12728, label %L12729
 L12728:
-br label %L12730
-L12729:
-%t65519 = icmp sge i64 %t65500, 0
-br i1 %t65519, label %L12731, label %L12732
+%t65577 = icmp slt i64 %t65569, 0
+br i1 %t65577, label %L12731, label %L12732
 L12731:
-%t65520 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65500, i64 1)
-%t65521 = extractvalue {i64, i1} %t65520, 0
-%t65522 = extractvalue {i64, i1} %t65520, 1
-%t65523 = zext i1 %t65522 to i8
-call void @resid_overflow_check(i8 %t65523)
-%t65524 = call i64 @str_len(ptr %t65473)
-%t65525 = sub nsw i64 %t65524, 1
-%t65526 = call ptr @str_slice(ptr %t65473, i64 %t65521, i64 %t65525)
 br label %L12733
 L12732:
+%t65578 = call ptr @str_slice(ptr %t65542, i64 0, i64 %t65569)
 br label %L12733
 L12733:
-%t65528 = phi ptr [ %t65526, %L12731 ], [ @.s65527, %L12732 ]
+%t65579 = phi ptr [ %t65542, %L12731 ], [ %t65578, %L12732 ]
 br label %L12730
-L12730:
-%t65529 = phi ptr [ %p3, %L12728 ], [ %t65528, %L12733 ]
-%t65530 = call i64 @resid_scope_push()
-%t65532 = call i8 @resid_str_eq(ptr %t65515, ptr @.s65531)
-%t65533 = icmp eq i8 %t65532, 0
-br i1 %t65533, label %L12734, label %L12735
+L12729:
+br i1 %t65568, label %L12734, label %L12735
 L12734:
 br label %L12736
 L12735:
-%t65534 = icmp sge i64 %p4, 0
-br label %LSL65535
-LSL65535:
-br i1 %t65534, label %LSR65535, label %LSJ65535
-LSR65535:
-%t65536 = getelementptr i8, ptr %p1, i64 40
-%t65537 = load ptr, ptr %t65536
-%t65538 = getelementptr i8, ptr %t65537, i64 0
-%t65539 = load ptr, ptr %t65538
-%t65540 = call i64 @resid_list_len(ptr %t65539)
-%t65541 = icmp slt i64 %p4, %t65540
-br label %LSJ65535
-LSJ65535:
-%t65542 = phi i1 [ false, %LSL65535 ], [ %t65541, %LSR65535 ]
-br label %LSL65543
-LSL65543:
-br i1 %t65542, label %LSR65543, label %LSJ65543
-LSR65543:
-%t65544 = getelementptr i8, ptr %p1, i64 40
-%t65545 = load ptr, ptr %t65544
-%t65546 = getelementptr i8, ptr %t65545, i64 0
-%t65547 = load ptr, ptr %t65546
-%t65548 = call ptr @resid_list_get(ptr %t65547, i64 %p4)
-%t65550 = call i8 @resid_unbox_bool(ptr %t65548)
-%t65549 = trunc i8 %t65550 to i1
-%t65551 = xor i1 %t65549, true
-br label %LSJ65543
-LSJ65543:
-%t65552 = phi i1 [ false, %LSL65543 ], [ %t65551, %LSR65543 ]
-br i1 %t65552, label %L12737, label %L12738
+br label %L12736
+L12736:
+%t65582 = phi ptr [ @.s65580, %L12734 ], [ @.s65581, %L12735 ]
+br label %L12730
+L12730:
+%t65583 = phi ptr [ %t65579, %L12733 ], [ %t65582, %L12736 ]
+br label %L12727
+L12727:
+%t65584 = phi ptr [ @.s65573, %L12725 ], [ %t65583, %L12730 ]
+%t65586 = call i8 @resid_str_eq(ptr %p3, ptr @.s65585)
+%t65587 = icmp eq i8 %t65586, 0
+br i1 %t65587, label %L12737, label %L12738
 L12737:
 br label %L12739
 L12738:
-%t65553 = call i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_first_unknown(ptr %p1, i64 %p2, i64 0)
-br label %L12739
-L12739:
-%t65554 = phi i64 [ %p4, %L12737 ], [ %t65553, %L12738 ]
-br label %L12736
-L12736:
-%t65555 = phi i64 [ -1, %L12734 ], [ %t65554, %L12739 ]
-call void @resid_scope_pop(i64 %t65530)
-%t65556 = icmp sge i64 %t65555, 0
-br i1 %t65556, label %L12740, label %L12741
+%t65588 = icmp sge i64 %t65569, 0
+br i1 %t65588, label %L12740, label %L12741
 L12740:
+%t65589 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65569, i64 1)
+%t65590 = extractvalue {i64, i1} %t65589, 0
+%t65591 = extractvalue {i64, i1} %t65589, 1
+%t65592 = zext i1 %t65591 to i8
+call void @resid_overflow_check(i8 %t65592)
+%t65593 = call i64 @str_len(ptr %t65542)
+%t65594 = sub nsw i64 %t65593, 1
+%t65595 = call ptr @str_slice(ptr %t65542, i64 %t65590, i64 %t65594)
 br label %L12742
 L12741:
 br label %L12742
 L12742:
-%t65557 = phi i64 [ 1, %L12740 ], [ 0, %L12741 ]
-%t65558 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 1, i64 %t65557)
-%t65559 = extractvalue {i64, i1} %t65558, 0
-%t65560 = extractvalue {i64, i1} %t65558, 1
-%t65561 = zext i1 %t65560 to i8
-call void @resid_overflow_check(i8 %t65561)
-%t65563 = call i8 @resid_str_eq(ptr %t65529, ptr @.s65562)
-%t65564 = icmp eq i8 %t65563, 0
-br i1 %t65564, label %L12743, label %L12744
+%t65597 = phi ptr [ %t65595, %L12740 ], [ @.s65596, %L12741 ]
+br label %L12739
+L12739:
+%t65598 = phi ptr [ %p3, %L12737 ], [ %t65597, %L12742 ]
+%t65599 = call i64 @resid_scope_push()
+%t65601 = call i8 @resid_str_eq(ptr %t65584, ptr @.s65600)
+%t65602 = icmp eq i8 %t65601, 0
+br i1 %t65602, label %L12743, label %L12744
 L12743:
 br label %L12745
 L12744:
-br label %L12745
-L12745:
-%t65565 = phi i64 [ 1, %L12743 ], [ 0, %L12744 ]
-%t65566 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65559, i64 %t65565)
-%t65567 = extractvalue {i64, i1} %t65566, 0
-%t65568 = extractvalue {i64, i1} %t65566, 1
-%t65569 = zext i1 %t65568 to i8
-call void @resid_overflow_check(i8 %t65569)
-%t65570 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 5, i64 %t65567)
-%t65572 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65570, ptr @.s65571)
-%t65573 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65572, ptr %t65515)
-%t65574 = icmp sge i64 %t65555, 0
-br i1 %t65574, label %L12746, label %L12747
+%t65603 = icmp sge i64 %p4, 0
+br label %LSL65604
+LSL65604:
+br i1 %t65603, label %LSR65604, label %LSJ65604
+LSR65604:
+%t65605 = getelementptr i8, ptr %p1, i64 40
+%t65606 = load ptr, ptr %t65605
+%t65607 = getelementptr i8, ptr %t65606, i64 0
+%t65608 = load ptr, ptr %t65607
+%t65609 = call i64 @resid_list_len(ptr %t65608)
+%t65610 = icmp slt i64 %p4, %t65609
+br label %LSJ65604
+LSJ65604:
+%t65611 = phi i1 [ false, %LSL65604 ], [ %t65610, %LSR65604 ]
+br label %LSL65612
+LSL65612:
+br i1 %t65611, label %LSR65612, label %LSJ65612
+LSR65612:
+%t65613 = getelementptr i8, ptr %p1, i64 40
+%t65614 = load ptr, ptr %t65613
+%t65615 = getelementptr i8, ptr %t65614, i64 0
+%t65616 = load ptr, ptr %t65615
+%t65617 = call ptr @resid_list_get(ptr %t65616, i64 %p4)
+%t65619 = call i8 @resid_unbox_bool(ptr %t65617)
+%t65618 = trunc i8 %t65619 to i1
+%t65620 = xor i1 %t65618, true
+br label %LSJ65612
+LSJ65612:
+%t65621 = phi i1 [ false, %LSL65612 ], [ %t65620, %LSR65612 ]
+br i1 %t65621, label %L12746, label %L12747
 L12746:
-%t65576 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65573, ptr @.s65575)
-%t65577 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65576, i64 %t65555)
 br label %L12748
 L12747:
+%t65622 = call i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_first_unknown(ptr %p1, i64 %p2, i64 0)
 br label %L12748
 L12748:
-%t65578 = phi ptr [ %t65577, %L12746 ], [ %t65573, %L12747 ]
-%t65580 = call i8 @resid_str_eq(ptr %t65529, ptr @.s65579)
-%t65581 = icmp eq i8 %t65580, 0
-br i1 %t65581, label %L12749, label %L12750
+%t65623 = phi i64 [ %p4, %L12746 ], [ %t65622, %L12747 ]
+br label %L12745
+L12745:
+%t65624 = phi i64 [ -1, %L12743 ], [ %t65623, %L12748 ]
+call void @resid_scope_pop(i64 %t65599)
+%t65625 = icmp sge i64 %t65624, 0
+br i1 %t65625, label %L12749, label %L12750
 L12749:
-%t65583 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65578, ptr @.s65582)
-%t65584 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65583, ptr %t65529)
 br label %L12751
 L12750:
 br label %L12751
 L12751:
-%t65585 = phi ptr [ %t65584, %L12749 ], [ %t65578, %L12750 ]
-ret ptr %t65585
+%t65626 = phi i64 [ 1, %L12749 ], [ 0, %L12750 ]
+%t65627 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 1, i64 %t65626)
+%t65628 = extractvalue {i64, i1} %t65627, 0
+%t65629 = extractvalue {i64, i1} %t65627, 1
+%t65630 = zext i1 %t65629 to i8
+call void @resid_overflow_check(i8 %t65630)
+%t65632 = call i8 @resid_str_eq(ptr %t65598, ptr @.s65631)
+%t65633 = icmp eq i8 %t65632, 0
+br i1 %t65633, label %L12752, label %L12753
+L12752:
+br label %L12754
+L12753:
+br label %L12754
+L12754:
+%t65634 = phi i64 [ 1, %L12752 ], [ 0, %L12753 ]
+%t65635 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65628, i64 %t65634)
+%t65636 = extractvalue {i64, i1} %t65635, 0
+%t65637 = extractvalue {i64, i1} %t65635, 1
+%t65638 = zext i1 %t65637 to i8
+call void @resid_overflow_check(i8 %t65638)
+%t65639 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 5, i64 %t65636)
+%t65641 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65639, ptr @.s65640)
+%t65642 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65641, ptr %t65584)
+%t65643 = icmp sge i64 %t65624, 0
+br i1 %t65643, label %L12755, label %L12756
+L12755:
+%t65645 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65642, ptr @.s65644)
+%t65646 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65645, i64 %t65624)
+br label %L12757
+L12756:
+br label %L12757
+L12757:
+%t65647 = phi ptr [ %t65646, %L12755 ], [ %t65642, %L12756 ]
+%t65649 = call i8 @resid_str_eq(ptr %t65598, ptr @.s65648)
+%t65650 = icmp eq i8 %t65649, 0
+br i1 %t65650, label %L12758, label %L12759
+L12758:
+%t65652 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65647, ptr @.s65651)
+%t65653 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65652, ptr %t65598)
+br label %L12760
+L12759:
+br label %L12760
+L12760:
+%t65654 = phi ptr [ %t65653, %L12758 ], [ %t65647, %L12759 ]
+ret ptr %t65654
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_value(ptr %p0, ptr %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t65586 = getelementptr i8, ptr %p1, i64 16
-%t65587 = load ptr, ptr %t65586
-%t65589 = call i8 @resid_str_eq(ptr %t65587, ptr @.s65588)
-%t65590 = icmp ne i8 %t65589, 0
-br i1 %t65590, label %L12752, label %L12754
-L12752:
-%t65591 = getelementptr i8, ptr %p1, i64 8
-%t65592 = load ptr, ptr %t65591
-%t65594 = call i8 @resid_str_eq(ptr %t65592, ptr @.s65593)
-%t65595 = icmp ne i8 %t65594, 0
-%t65596 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_bool(ptr %p0, i1 %t65595)
-ret ptr %t65596
-L12754:
-%t65597 = getelementptr i8, ptr %p1, i64 8
-%t65598 = load ptr, ptr %t65597
-%t65599 = call ptr @rd_str_dec(ptr %t65598)
-%t65600 = getelementptr i8, ptr %p1, i64 16
-%t65601 = load ptr, ptr %t65600
-%t65603 = call i8 @resid_str_eq(ptr %t65601, ptr @.s65602)
-%t65604 = icmp ne i8 %t65603, 0
-br i1 %t65604, label %L12755, label %L12757
-L12755:
-%t65605 = getelementptr i8, ptr %t65599, i64 8
-%t65606 = load ptr, ptr %t65605
-%t65607 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %p0, ptr %t65606)
-ret ptr %t65607
-L12757:
-%t65608 = getelementptr i8, ptr %p1, i64 8
-%t65609 = load ptr, ptr %t65608
-%t65610 = call i64 @str_parse_int(ptr %t65609)
-%t65611 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %p0, i64 %t65610)
-ret ptr %t65611
+%t65655 = getelementptr i8, ptr %p1, i64 16
+%t65656 = load ptr, ptr %t65655
+%t65658 = call i8 @resid_str_eq(ptr %t65656, ptr @.s65657)
+%t65659 = icmp ne i8 %t65658, 0
+br i1 %t65659, label %L12761, label %L12763
+L12761:
+%t65660 = getelementptr i8, ptr %p1, i64 8
+%t65661 = load ptr, ptr %t65660
+%t65663 = call i8 @resid_str_eq(ptr %t65661, ptr @.s65662)
+%t65664 = icmp ne i8 %t65663, 0
+%t65665 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_bool(ptr %p0, i1 %t65664)
+ret ptr %t65665
+L12763:
+%t65666 = getelementptr i8, ptr %p1, i64 8
+%t65667 = load ptr, ptr %t65666
+%t65668 = call ptr @rd_str_dec(ptr %t65667)
+%t65669 = getelementptr i8, ptr %p1, i64 16
+%t65670 = load ptr, ptr %t65669
+%t65672 = call i8 @resid_str_eq(ptr %t65670, ptr @.s65671)
+%t65673 = icmp ne i8 %t65672, 0
+br i1 %t65673, label %L12764, label %L12766
+L12764:
+%t65674 = getelementptr i8, ptr %t65668, i64 8
+%t65675 = load ptr, ptr %t65674
+%t65676 = musttail call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %p0, ptr %t65675)
+ret ptr %t65676
+L12766:
+%t65677 = getelementptr i8, ptr %p1, i64 8
+%t65678 = load ptr, ptr %t65677
+%t65679 = call i64 @str_parse_int(ptr %t65678)
+%t65680 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %p0, i64 %t65679)
+ret ptr %t65680
 }
 define i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_has_value(ptr %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t65612 = getelementptr i8, ptr %p0, i64 0
-%t65613 = load ptr, ptr %t65612
-%t65615 = call i8 @resid_str_eq(ptr %t65613, ptr @.s65614)
-%t65616 = icmp eq i8 %t65615, 0
-br i1 %t65616, label %L12758, label %L12760
-L12758:
-ret i1 false
-L12760:
-%t65617 = getelementptr i8, ptr %p0, i64 16
-%t65618 = load ptr, ptr %t65617
-%t65620 = call i8 @resid_str_eq(ptr %t65618, ptr @.s65619)
-%t65621 = icmp ne i8 %t65620, 0
-br i1 %t65621, label %L12761, label %L12763
-L12761:
-ret i1 true
-L12763:
-%t65622 = getelementptr i8, ptr %p0, i64 8
-%t65623 = load ptr, ptr %t65622
-%t65624 = call ptr @rd_str_dec(ptr %t65623)
-%t65625 = getelementptr i8, ptr %p0, i64 16
-%t65626 = load ptr, ptr %t65625
-%t65628 = call i8 @resid_str_eq(ptr %t65626, ptr @.s65627)
-%t65629 = icmp ne i8 %t65628, 0
-br i1 %t65629, label %L12764, label %L12766
-L12764:
-%t65630 = getelementptr i8, ptr %t65624, i64 0
-%t65631 = load i1, ptr %t65630
-ret i1 %t65631
-L12766:
-%t65632 = getelementptr i8, ptr %p0, i64 16
-%t65633 = load ptr, ptr %t65632
-%t65635 = call i8 @resid_str_eq(ptr %t65633, ptr @.s65634)
-%t65636 = icmp ne i8 %t65635, 0
-br i1 %t65636, label %L12767, label %L12769
+%t65681 = getelementptr i8, ptr %p0, i64 0
+%t65682 = load ptr, ptr %t65681
+%t65684 = call i8 @resid_str_eq(ptr %t65682, ptr @.s65683)
+%t65685 = icmp eq i8 %t65684, 0
+br i1 %t65685, label %L12767, label %L12769
 L12767:
-%t65637 = getelementptr i8, ptr %p0, i64 8
-%t65638 = load ptr, ptr %t65637
-%t65639 = call i64 @str_len(ptr %t65638)
-%t65640 = icmp sle i64 %t65639, 18
-br label %LSL65641
-LSL65641:
-br i1 %t65640, label %LSR65641, label %LSJ65641
-LSR65641:
-%t65642 = getelementptr i8, ptr %p0, i64 8
-%t65643 = load ptr, ptr %t65642
-%t65644 = getelementptr i8, ptr %p0, i64 8
-%t65645 = load ptr, ptr %t65644
-%t65646 = call i64 @str_len(ptr %t65645)
-%t65647 = call i1 @rd_all_digits(ptr %t65643, i64 0, i64 %t65646)
-br label %LSJ65641
-LSJ65641:
-%t65648 = phi i1 [ false, %LSL65641 ], [ %t65647, %LSR65641 ]
-ret i1 %t65648
+ret i1 false
 L12769:
+%t65686 = getelementptr i8, ptr %p0, i64 16
+%t65687 = load ptr, ptr %t65686
+%t65689 = call i8 @resid_str_eq(ptr %t65687, ptr @.s65688)
+%t65690 = icmp ne i8 %t65689, 0
+br i1 %t65690, label %L12770, label %L12772
+L12770:
+ret i1 true
+L12772:
+%t65691 = getelementptr i8, ptr %p0, i64 8
+%t65692 = load ptr, ptr %t65691
+%t65693 = call ptr @rd_str_dec(ptr %t65692)
+%t65694 = getelementptr i8, ptr %p0, i64 16
+%t65695 = load ptr, ptr %t65694
+%t65697 = call i8 @resid_str_eq(ptr %t65695, ptr @.s65696)
+%t65698 = icmp ne i8 %t65697, 0
+br i1 %t65698, label %L12773, label %L12775
+L12773:
+%t65699 = getelementptr i8, ptr %t65693, i64 0
+%t65700 = load i1, ptr %t65699
+ret i1 %t65700
+L12775:
+%t65701 = getelementptr i8, ptr %p0, i64 16
+%t65702 = load ptr, ptr %t65701
+%t65704 = call i8 @resid_str_eq(ptr %t65702, ptr @.s65703)
+%t65705 = icmp ne i8 %t65704, 0
+br i1 %t65705, label %L12776, label %L12778
+L12776:
+%t65706 = getelementptr i8, ptr %p0, i64 8
+%t65707 = load ptr, ptr %t65706
+%t65708 = call i64 @str_len(ptr %t65707)
+%t65709 = icmp sle i64 %t65708, 18
+br label %LSL65710
+LSL65710:
+br i1 %t65709, label %LSR65710, label %LSJ65710
+LSR65710:
+%t65711 = getelementptr i8, ptr %p0, i64 8
+%t65712 = load ptr, ptr %t65711
+%t65713 = getelementptr i8, ptr %p0, i64 8
+%t65714 = load ptr, ptr %t65713
+%t65715 = call i64 @str_len(ptr %t65714)
+%t65716 = call i1 @rd_all_digits(ptr %t65712, i64 0, i64 %t65715)
+br label %LSJ65710
+LSJ65710:
+%t65717 = phi i1 [ false, %LSL65710 ], [ %t65716, %LSR65710 ]
+ret i1 %t65717
+L12778:
 ret i1 false
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_deps(ptr %p0.in, ptr %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %t65658, %tco.s0 ]
+%p0 = phi ptr [ %p0.in, %entry ], [ %t65727, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t65659, %tco.s0 ]
-%t65649 = getelementptr i8, ptr %p1, i64 0
-%t65650 = load ptr, ptr %t65649
-%t65651 = call ptr @resid_list_get(ptr %t65650, i64 %p2)
-%t65654 = getelementptr i8, ptr %t65651, i64 32
-%t65655 = load i64, ptr %t65654
-%t65656 = icmp sge i64 %p3, %t65655
-br i1 %t65656, label %L12770, label %L12772
-L12770:
+%p3 = phi i64 [ %p3.in, %entry ], [ %t65728, %tco.s0 ]
+%t65718 = getelementptr i8, ptr %p1, i64 0
+%t65719 = load ptr, ptr %t65718
+%t65720 = call ptr @resid_list_get(ptr %t65719, i64 %p2)
+%t65723 = getelementptr i8, ptr %t65720, i64 32
+%t65724 = load i64, ptr %t65723
+%t65725 = icmp sge i64 %p3, %t65724
+br i1 %t65725, label %L12779, label %L12781
+L12779:
 ret ptr %p0
-L12772:
-%t65657 = call i64 @kg_kid(ptr %p1, i64 %p2, i64 %p3)
-%t65658 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %p0, i64 %t65657)
-%t65659 = add nsw i64 %p3, 1
+L12781:
+%t65726 = call i64 @kg_kid(ptr %p1, i64 %p2, i64 %p3)
+%t65727 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %p0, i64 %t65726)
+%t65728 = add nsw i64 %p3, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_named(ptr %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t65661 = getelementptr i8, ptr %p0, i64 0
-%t65662 = load ptr, ptr %t65661
-%t65664 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65663)
-%t65665 = icmp ne i8 %t65664, 0
-br label %LSL65666
-LSL65666:
-br i1 %t65665, label %LSJ65666, label %LSR65666
-LSR65666:
-%t65668 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65667)
-%t65669 = icmp ne i8 %t65668, 0
-br label %LSJ65666
-LSJ65666:
-%t65670 = phi i1 [ true, %LSL65666 ], [ %t65669, %LSR65666 ]
-br label %LSL65671
-LSL65671:
-br i1 %t65670, label %LSJ65671, label %LSR65671
-LSR65671:
-%t65673 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65672)
-%t65674 = icmp ne i8 %t65673, 0
-br label %LSJ65671
-LSJ65671:
-%t65675 = phi i1 [ true, %LSL65671 ], [ %t65674, %LSR65671 ]
-br label %LSL65676
-LSL65676:
-br i1 %t65675, label %LSJ65676, label %LSR65676
-LSR65676:
-%t65678 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65677)
-%t65679 = icmp ne i8 %t65678, 0
-br label %LSJ65676
-LSJ65676:
-%t65680 = phi i1 [ true, %LSL65676 ], [ %t65679, %LSR65676 ]
-br label %LSL65681
-LSL65681:
-br i1 %t65680, label %LSJ65681, label %LSR65681
-LSR65681:
-%t65683 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65682)
-%t65684 = icmp ne i8 %t65683, 0
-br label %LSJ65681
-LSJ65681:
-%t65685 = phi i1 [ true, %LSL65681 ], [ %t65684, %LSR65681 ]
-br label %LSL65686
-LSL65686:
-br i1 %t65685, label %LSJ65686, label %LSR65686
-LSR65686:
-%t65688 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65687)
-%t65689 = icmp ne i8 %t65688, 0
-br label %LSJ65686
-LSJ65686:
-%t65690 = phi i1 [ true, %LSL65686 ], [ %t65689, %LSR65686 ]
-br label %LSL65691
-LSL65691:
-br i1 %t65690, label %LSJ65691, label %LSR65691
-LSR65691:
-%t65693 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65692)
-%t65694 = icmp ne i8 %t65693, 0
-br label %LSJ65691
-LSJ65691:
-%t65695 = phi i1 [ true, %LSL65691 ], [ %t65694, %LSR65691 ]
-br label %LSL65696
-LSL65696:
-br i1 %t65695, label %LSJ65696, label %LSR65696
-LSR65696:
-%t65698 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65697)
-%t65699 = icmp ne i8 %t65698, 0
-br label %LSJ65696
-LSJ65696:
-%t65700 = phi i1 [ true, %LSL65696 ], [ %t65699, %LSR65696 ]
-br label %LSL65701
-LSL65701:
-br i1 %t65700, label %LSJ65701, label %LSR65701
-LSR65701:
-%t65703 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65702)
-%t65704 = icmp ne i8 %t65703, 0
-br label %LSJ65701
-LSJ65701:
-%t65705 = phi i1 [ true, %LSL65701 ], [ %t65704, %LSR65701 ]
-br label %LSL65706
-LSL65706:
-br i1 %t65705, label %LSJ65706, label %LSR65706
-LSR65706:
-%t65708 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65707)
-%t65709 = icmp ne i8 %t65708, 0
-br label %LSJ65706
-LSJ65706:
-%t65710 = phi i1 [ true, %LSL65706 ], [ %t65709, %LSR65706 ]
-br label %LSL65711
-LSL65711:
-br i1 %t65710, label %LSJ65711, label %LSR65711
-LSR65711:
-%t65713 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65712)
-%t65714 = icmp ne i8 %t65713, 0
-br label %LSJ65711
-LSJ65711:
-%t65715 = phi i1 [ true, %LSL65711 ], [ %t65714, %LSR65711 ]
-br label %LSL65716
-LSL65716:
-br i1 %t65715, label %LSJ65716, label %LSR65716
-LSR65716:
-%t65718 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65717)
-%t65719 = icmp ne i8 %t65718, 0
-br label %LSJ65716
-LSJ65716:
-%t65720 = phi i1 [ true, %LSL65716 ], [ %t65719, %LSR65716 ]
-br label %LSL65721
-LSL65721:
-br i1 %t65720, label %LSJ65721, label %LSR65721
-LSR65721:
-%t65723 = call i8 @resid_str_eq(ptr %t65662, ptr @.s65722)
-%t65724 = icmp ne i8 %t65723, 0
-br label %LSJ65721
-LSJ65721:
-%t65725 = phi i1 [ true, %LSL65721 ], [ %t65724, %LSR65721 ]
-br label %LSL65726
-LSL65726:
-br i1 %t65725, label %LSR65726, label %LSJ65726
-LSR65726:
-%t65727 = getelementptr i8, ptr %p0, i64 8
-%t65728 = load ptr, ptr %t65727
-%t65730 = call i8 @resid_str_eq(ptr %t65728, ptr @.s65729)
-%t65731 = icmp eq i8 %t65730, 0
-br label %LSJ65726
-LSJ65726:
-%t65732 = phi i1 [ false, %LSL65726 ], [ %t65731, %LSR65726 ]
-ret i1 %t65732
+%t65730 = getelementptr i8, ptr %p0, i64 0
+%t65731 = load ptr, ptr %t65730
+%t65733 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65732)
+%t65734 = icmp ne i8 %t65733, 0
+br label %LSL65735
+LSL65735:
+br i1 %t65734, label %LSJ65735, label %LSR65735
+LSR65735:
+%t65737 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65736)
+%t65738 = icmp ne i8 %t65737, 0
+br label %LSJ65735
+LSJ65735:
+%t65739 = phi i1 [ true, %LSL65735 ], [ %t65738, %LSR65735 ]
+br label %LSL65740
+LSL65740:
+br i1 %t65739, label %LSJ65740, label %LSR65740
+LSR65740:
+%t65742 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65741)
+%t65743 = icmp ne i8 %t65742, 0
+br label %LSJ65740
+LSJ65740:
+%t65744 = phi i1 [ true, %LSL65740 ], [ %t65743, %LSR65740 ]
+br label %LSL65745
+LSL65745:
+br i1 %t65744, label %LSJ65745, label %LSR65745
+LSR65745:
+%t65747 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65746)
+%t65748 = icmp ne i8 %t65747, 0
+br label %LSJ65745
+LSJ65745:
+%t65749 = phi i1 [ true, %LSL65745 ], [ %t65748, %LSR65745 ]
+br label %LSL65750
+LSL65750:
+br i1 %t65749, label %LSJ65750, label %LSR65750
+LSR65750:
+%t65752 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65751)
+%t65753 = icmp ne i8 %t65752, 0
+br label %LSJ65750
+LSJ65750:
+%t65754 = phi i1 [ true, %LSL65750 ], [ %t65753, %LSR65750 ]
+br label %LSL65755
+LSL65755:
+br i1 %t65754, label %LSJ65755, label %LSR65755
+LSR65755:
+%t65757 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65756)
+%t65758 = icmp ne i8 %t65757, 0
+br label %LSJ65755
+LSJ65755:
+%t65759 = phi i1 [ true, %LSL65755 ], [ %t65758, %LSR65755 ]
+br label %LSL65760
+LSL65760:
+br i1 %t65759, label %LSJ65760, label %LSR65760
+LSR65760:
+%t65762 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65761)
+%t65763 = icmp ne i8 %t65762, 0
+br label %LSJ65760
+LSJ65760:
+%t65764 = phi i1 [ true, %LSL65760 ], [ %t65763, %LSR65760 ]
+br label %LSL65765
+LSL65765:
+br i1 %t65764, label %LSJ65765, label %LSR65765
+LSR65765:
+%t65767 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65766)
+%t65768 = icmp ne i8 %t65767, 0
+br label %LSJ65765
+LSJ65765:
+%t65769 = phi i1 [ true, %LSL65765 ], [ %t65768, %LSR65765 ]
+br label %LSL65770
+LSL65770:
+br i1 %t65769, label %LSJ65770, label %LSR65770
+LSR65770:
+%t65772 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65771)
+%t65773 = icmp ne i8 %t65772, 0
+br label %LSJ65770
+LSJ65770:
+%t65774 = phi i1 [ true, %LSL65770 ], [ %t65773, %LSR65770 ]
+br label %LSL65775
+LSL65775:
+br i1 %t65774, label %LSJ65775, label %LSR65775
+LSR65775:
+%t65777 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65776)
+%t65778 = icmp ne i8 %t65777, 0
+br label %LSJ65775
+LSJ65775:
+%t65779 = phi i1 [ true, %LSL65775 ], [ %t65778, %LSR65775 ]
+br label %LSL65780
+LSL65780:
+br i1 %t65779, label %LSJ65780, label %LSR65780
+LSR65780:
+%t65782 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65781)
+%t65783 = icmp ne i8 %t65782, 0
+br label %LSJ65780
+LSJ65780:
+%t65784 = phi i1 [ true, %LSL65780 ], [ %t65783, %LSR65780 ]
+br label %LSL65785
+LSL65785:
+br i1 %t65784, label %LSJ65785, label %LSR65785
+LSR65785:
+%t65787 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65786)
+%t65788 = icmp ne i8 %t65787, 0
+br label %LSJ65785
+LSJ65785:
+%t65789 = phi i1 [ true, %LSL65785 ], [ %t65788, %LSR65785 ]
+br label %LSL65790
+LSL65790:
+br i1 %t65789, label %LSJ65790, label %LSR65790
+LSR65790:
+%t65792 = call i8 @resid_str_eq(ptr %t65731, ptr @.s65791)
+%t65793 = icmp ne i8 %t65792, 0
+br label %LSJ65790
+LSJ65790:
+%t65794 = phi i1 [ true, %LSL65790 ], [ %t65793, %LSR65790 ]
+br label %LSL65795
+LSL65795:
+br i1 %t65794, label %LSR65795, label %LSJ65795
+LSR65795:
+%t65796 = getelementptr i8, ptr %p0, i64 8
+%t65797 = load ptr, ptr %t65796
+%t65799 = call i8 @resid_str_eq(ptr %t65797, ptr @.s65798)
+%t65800 = icmp eq i8 %t65799, 0
+br label %LSJ65795
+LSJ65795:
+%t65801 = phi i1 [ false, %LSL65795 ], [ %t65800, %LSR65795 ]
+ret i1 %t65801
 }
 define i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_def(ptr %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t65751, %tco.s0 ]
-%t65733 = getelementptr i8, ptr %p0, i64 8
-%t65734 = load i64, ptr %t65733
-%t65735 = icmp slt i64 %p1, %t65734
-br i1 %t65735, label %L12773, label %L12775
-L12773:
-%t65736 = getelementptr i8, ptr %p0, i64 24
-%t65737 = load ptr, ptr %t65736
-%t65738 = call i64 @resid_list_len(ptr %t65737)
-%t65739 = icmp slt i64 %p1, %t65738
-br i1 %t65739, label %L12776, label %L12777
-L12776:
-%t65740 = getelementptr i8, ptr %p0, i64 24
-%t65741 = load ptr, ptr %t65740
-%t65742 = call ptr @resid_list_get(ptr %t65741, i64 %p1)
-%t65743 = call i64 @resid_unbox_i64(ptr %t65742)
-br label %L12778
-L12777:
-br label %L12778
-L12778:
-%t65745 = phi i64 [ %t65743, %L12776 ], [ -1, %L12777 ]
-ret i64 %t65745
-L12775:
-%t65746 = getelementptr i8, ptr %p0, i64 32
-%t65747 = load ptr, ptr %t65746
-%t65748 = getelementptr i8, ptr %t65747, i64 0
-%t65749 = load ptr, ptr %t65748
-%t65750 = call ptr @resid_list_get(ptr %t65749, i64 %p1)
-%t65751 = call i64 @resid_unbox_i64(ptr %t65750)
-%t65753 = icmp slt i64 %t65751, 0
-br i1 %t65753, label %L12779, label %L12781
-L12779:
+%p1 = phi i64 [ %p1.in, %entry ], [ %t65820, %tco.s0 ]
+%t65802 = getelementptr i8, ptr %p0, i64 8
+%t65803 = load i64, ptr %t65802
+%t65804 = icmp slt i64 %p1, %t65803
+br i1 %t65804, label %L12782, label %L12784
+L12782:
+%t65805 = getelementptr i8, ptr %p0, i64 24
+%t65806 = load ptr, ptr %t65805
+%t65807 = call i64 @resid_list_len(ptr %t65806)
+%t65808 = icmp slt i64 %p1, %t65807
+br i1 %t65808, label %L12785, label %L12786
+L12785:
+%t65809 = getelementptr i8, ptr %p0, i64 24
+%t65810 = load ptr, ptr %t65809
+%t65811 = call ptr @resid_list_get(ptr %t65810, i64 %p1)
+%t65812 = call i64 @resid_unbox_i64(ptr %t65811)
+br label %L12787
+L12786:
+br label %L12787
+L12787:
+%t65814 = phi i64 [ %t65812, %L12785 ], [ -1, %L12786 ]
+ret i64 %t65814
+L12784:
+%t65815 = getelementptr i8, ptr %p0, i64 32
+%t65816 = load ptr, ptr %t65815
+%t65817 = getelementptr i8, ptr %t65816, i64 0
+%t65818 = load ptr, ptr %t65817
+%t65819 = call ptr @resid_list_get(ptr %t65818, i64 %p1)
+%t65820 = call i64 @resid_unbox_i64(ptr %t65819)
+%t65822 = icmp slt i64 %t65820, 0
+br i1 %t65822, label %L12788, label %L12790
+L12788:
 ret i64 -1
-L12781:
+L12790:
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_node(ptr %p0, ptr %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t65755 = getelementptr i8, ptr %p1, i64 0
-%t65756 = load ptr, ptr %t65755
-%t65757 = getelementptr i8, ptr %t65756, i64 0
-%t65758 = load ptr, ptr %t65757
-%t65759 = call ptr @resid_list_get(ptr %t65758, i64 %p2)
-%t65762 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_effect(ptr %t65756, i64 %p2, ptr %p1)
-%t65763 = call i64 @resid_scope_push()
-%t65764 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_has_value(ptr %t65759)
-call void @resid_scope_pop(i64 %t65763)
-%t65765 = call i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_def(ptr %p1, i64 %p2)
-%t65766 = getelementptr i8, ptr %p1, i64 32
-%t65767 = load ptr, ptr %t65766
-%t65768 = getelementptr i8, ptr %t65767, i64 0
-%t65769 = load ptr, ptr %t65768
-%t65770 = call ptr @resid_list_get(ptr %t65769, i64 %p2)
-%t65771 = call i64 @resid_unbox_i64(ptr %t65770)
-%t65774 = call i8 @resid_str_eq(ptr %t65762, ptr @.s65773)
-%t65775 = icmp eq i8 %t65774, 0
-br i1 %t65775, label %L12782, label %L12783
-L12782:
-br label %L12784
-L12783:
-%t65777 = getelementptr i8, ptr %p1, i64 40
-%t65778 = load ptr, ptr %t65777
-%t65779 = getelementptr i8, ptr %t65778, i64 0
-%t65780 = load ptr, ptr %t65779
-%t65781 = call ptr @resid_list_get(ptr %t65780, i64 %p2)
-%t65783 = call i8 @resid_unbox_bool(ptr %t65781)
-%t65782 = trunc i8 %t65783 to i1
-br i1 %t65782, label %L12785, label %L12786
-L12785:
-br label %L12787
-L12786:
-br label %L12787
-L12787:
-%t65786 = phi ptr [ @.s65784, %L12785 ], [ @.s65785, %L12786 ]
-br label %L12784
-L12784:
-%t65787 = phi ptr [ @.s65776, %L12782 ], [ %t65786, %L12787 ]
-%t65789 = call i8 @resid_str_eq(ptr %t65787, ptr @.s65788)
-%t65790 = icmp eq i8 %t65789, 0
-br i1 %t65790, label %L12788, label %L12789
-L12788:
-%t65791 = getelementptr i8, ptr %p1, i64 64
-%t65792 = load ptr, ptr %t65791
-%t65793 = call {i64, i64} @resid_map_find(ptr %t65792, i8 1, i64 %p2, i8 0)
-%t65794 = extractvalue {i64, i64} %t65793, 1
-%t65795 = icmp ne i64 %t65794, 0
-%t65796 = extractvalue {i64, i64} %t65793, 0
-%t65797 = inttoptr i64 %t65796 to ptr
-br i1 %t65795, label %L12791, label %L12792
+%t65824 = getelementptr i8, ptr %p1, i64 0
+%t65825 = load ptr, ptr %t65824
+%t65826 = getelementptr i8, ptr %t65825, i64 0
+%t65827 = load ptr, ptr %t65826
+%t65828 = call ptr @resid_list_get(ptr %t65827, i64 %p2)
+%t65831 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_effect(ptr %t65825, i64 %p2, ptr %p1)
+%t65832 = call i64 @resid_scope_push()
+%t65833 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_has_value(ptr %t65828)
+call void @resid_scope_pop(i64 %t65832)
+%t65834 = call i64 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_def(ptr %p1, i64 %p2)
+%t65835 = getelementptr i8, ptr %p1, i64 32
+%t65836 = load ptr, ptr %t65835
+%t65837 = getelementptr i8, ptr %t65836, i64 0
+%t65838 = load ptr, ptr %t65837
+%t65839 = call ptr @resid_list_get(ptr %t65838, i64 %p2)
+%t65840 = call i64 @resid_unbox_i64(ptr %t65839)
+%t65843 = call i8 @resid_str_eq(ptr %t65831, ptr @.s65842)
+%t65844 = icmp eq i8 %t65843, 0
+br i1 %t65844, label %L12791, label %L12792
+L12791:
+br label %L12793
 L12792:
+%t65846 = getelementptr i8, ptr %p1, i64 40
+%t65847 = load ptr, ptr %t65846
+%t65848 = getelementptr i8, ptr %t65847, i64 0
+%t65849 = load ptr, ptr %t65848
+%t65850 = call ptr @resid_list_get(ptr %t65849, i64 %p2)
+%t65852 = call i8 @resid_unbox_bool(ptr %t65850)
+%t65851 = trunc i8 %t65852 to i1
+br i1 %t65851, label %L12794, label %L12795
+L12794:
+br label %L12796
+L12795:
+br label %L12796
+L12796:
+%t65855 = phi ptr [ @.s65853, %L12794 ], [ @.s65854, %L12795 ]
 br label %L12793
 L12793:
-br label %L12794
-L12791:
-br label %L12794
-L12794:
-%t65799 = phi ptr [ @.s65798, %L12793 ], [ %t65797, %L12791 ]
-br label %L12790
-L12789:
-br label %L12790
-L12790:
-%t65801 = phi ptr [ %t65799, %L12794 ], [ @.s65800, %L12789 ]
-%t65802 = call i64 @resid_scope_push()
-%t65803 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_named(ptr %t65759)
-call void @resid_scope_pop(i64 %t65802)
-br i1 %t65803, label %L12795, label %L12796
-L12795:
-br label %L12797
-L12796:
-br label %L12797
+%t65856 = phi ptr [ @.s65845, %L12791 ], [ %t65855, %L12796 ]
+%t65858 = call i8 @resid_str_eq(ptr %t65856, ptr @.s65857)
+%t65859 = icmp eq i8 %t65858, 0
+br i1 %t65859, label %L12797, label %L12798
 L12797:
-%t65804 = phi i64 [ 1, %L12795 ], [ 0, %L12796 ]
-%t65805 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 9, i64 %t65804)
-%t65806 = extractvalue {i64, i1} %t65805, 0
-%t65807 = extractvalue {i64, i1} %t65805, 1
-%t65808 = zext i1 %t65807 to i8
-call void @resid_overflow_check(i8 %t65808)
-br i1 %t65764, label %L12798, label %L12799
-L12798:
-br label %L12800
-L12799:
-br label %L12800
-L12800:
-%t65809 = phi i64 [ 1, %L12798 ], [ 0, %L12799 ]
-%t65810 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65806, i64 %t65809)
-%t65811 = extractvalue {i64, i1} %t65810, 0
-%t65812 = extractvalue {i64, i1} %t65810, 1
-%t65813 = zext i1 %t65812 to i8
-call void @resid_overflow_check(i8 %t65813)
-%t65814 = icmp sge i64 %t65765, 0
-br i1 %t65814, label %L12801, label %L12802
+%t65860 = getelementptr i8, ptr %p1, i64 64
+%t65861 = load ptr, ptr %t65860
+%t65862 = call {i64, i64} @resid_map_find(ptr %t65861, i8 1, i64 %p2, i8 0)
+%t65863 = extractvalue {i64, i64} %t65862, 1
+%t65864 = icmp ne i64 %t65863, 0
+%t65865 = extractvalue {i64, i64} %t65862, 0
+%t65866 = inttoptr i64 %t65865 to ptr
+br i1 %t65864, label %L12800, label %L12801
 L12801:
-br label %L12803
+br label %L12802
 L12802:
 br label %L12803
+L12800:
+br label %L12803
 L12803:
-%t65815 = phi i64 [ 1, %L12801 ], [ 0, %L12802 ]
-%t65816 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65811, i64 %t65815)
-%t65817 = extractvalue {i64, i1} %t65816, 0
-%t65818 = extractvalue {i64, i1} %t65816, 1
-%t65819 = zext i1 %t65818 to i8
-call void @resid_overflow_check(i8 %t65819)
-%t65820 = icmp sge i64 %t65771, 0
-br i1 %t65820, label %L12804, label %L12805
+%t65868 = phi ptr [ @.s65867, %L12802 ], [ %t65866, %L12800 ]
+br label %L12799
+L12798:
+br label %L12799
+L12799:
+%t65870 = phi ptr [ %t65868, %L12803 ], [ @.s65869, %L12798 ]
+%t65871 = call i64 @resid_scope_push()
+%t65872 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_named(ptr %t65828)
+call void @resid_scope_pop(i64 %t65871)
+br i1 %t65872, label %L12804, label %L12805
 L12804:
 br label %L12806
 L12805:
 br label %L12806
 L12806:
-%t65821 = phi i64 [ 1, %L12804 ], [ 0, %L12805 ]
-%t65822 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65817, i64 %t65821)
-%t65823 = extractvalue {i64, i1} %t65822, 0
-%t65824 = extractvalue {i64, i1} %t65822, 1
-%t65825 = zext i1 %t65824 to i8
-call void @resid_overflow_check(i8 %t65825)
-%t65827 = call i8 @resid_str_eq(ptr %t65787, ptr @.s65826)
-%t65828 = icmp eq i8 %t65827, 0
-br i1 %t65828, label %L12807, label %L12808
+%t65873 = phi i64 [ 1, %L12804 ], [ 0, %L12805 ]
+%t65874 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 9, i64 %t65873)
+%t65875 = extractvalue {i64, i1} %t65874, 0
+%t65876 = extractvalue {i64, i1} %t65874, 1
+%t65877 = zext i1 %t65876 to i8
+call void @resid_overflow_check(i8 %t65877)
+br i1 %t65833, label %L12807, label %L12808
 L12807:
 br label %L12809
 L12808:
 br label %L12809
 L12809:
-%t65829 = phi i64 [ 1, %L12807 ], [ 0, %L12808 ]
-%t65830 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65823, i64 %t65829)
-%t65831 = extractvalue {i64, i1} %t65830, 0
-%t65832 = extractvalue {i64, i1} %t65830, 1
-%t65833 = zext i1 %t65832 to i8
-call void @resid_overflow_check(i8 %t65833)
-%t65835 = call i8 @resid_str_eq(ptr %t65801, ptr @.s65834)
-%t65836 = icmp eq i8 %t65835, 0
-br i1 %t65836, label %L12810, label %L12811
+%t65878 = phi i64 [ 1, %L12807 ], [ 0, %L12808 ]
+%t65879 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65875, i64 %t65878)
+%t65880 = extractvalue {i64, i1} %t65879, 0
+%t65881 = extractvalue {i64, i1} %t65879, 1
+%t65882 = zext i1 %t65881 to i8
+call void @resid_overflow_check(i8 %t65882)
+%t65883 = icmp sge i64 %t65834, 0
+br i1 %t65883, label %L12810, label %L12811
 L12810:
 br label %L12812
 L12811:
 br label %L12812
 L12812:
-%t65837 = phi i64 [ 1, %L12810 ], [ 0, %L12811 ]
-%t65838 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65831, i64 %t65837)
-%t65839 = extractvalue {i64, i1} %t65838, 0
-%t65840 = extractvalue {i64, i1} %t65838, 1
-%t65841 = zext i1 %t65840 to i8
-call void @resid_overflow_check(i8 %t65841)
-%t65842 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 5, i64 %t65839)
-%t65844 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65842, ptr @.s65843)
-%t65845 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65844, i64 %p2)
-%t65847 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65845, ptr @.s65846)
-%t65848 = getelementptr i8, ptr %t65759, i64 0
-%t65849 = load ptr, ptr %t65848
-%t65850 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65847, ptr %t65849)
-%t65852 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65850, ptr @.s65851)
-%t65853 = getelementptr i8, ptr %p1, i64 8
-%t65854 = load i64, ptr %t65853
-%t65855 = getelementptr i8, ptr %p1, i64 16
-%t65856 = load ptr, ptr %t65855
-%t65857 = getelementptr i8, ptr %p1, i64 32
-%t65858 = load ptr, ptr %t65857
-%t65859 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_type(i64 %p2, i64 %t65854, ptr %t65856, ptr %t65858)
-%t65860 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65852, ptr %t65859)
-%t65862 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65860, ptr @.s65861)
-%t65863 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65862, ptr %t65787)
-br i1 %t65803, label %L12813, label %L12814
+%t65884 = phi i64 [ 1, %L12810 ], [ 0, %L12811 ]
+%t65885 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65880, i64 %t65884)
+%t65886 = extractvalue {i64, i1} %t65885, 0
+%t65887 = extractvalue {i64, i1} %t65885, 1
+%t65888 = zext i1 %t65887 to i8
+call void @resid_overflow_check(i8 %t65888)
+%t65889 = icmp sge i64 %t65840, 0
+br i1 %t65889, label %L12813, label %L12814
 L12813:
-%t65865 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65863, ptr @.s65864)
-%t65866 = getelementptr i8, ptr %t65759, i64 8
-%t65867 = load ptr, ptr %t65866
-%t65868 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65865, ptr %t65867)
 br label %L12815
 L12814:
 br label %L12815
 L12815:
-%t65869 = phi ptr [ %t65868, %L12813 ], [ %t65863, %L12814 ]
-br i1 %t65764, label %L12816, label %L12817
+%t65890 = phi i64 [ 1, %L12813 ], [ 0, %L12814 ]
+%t65891 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65886, i64 %t65890)
+%t65892 = extractvalue {i64, i1} %t65891, 0
+%t65893 = extractvalue {i64, i1} %t65891, 1
+%t65894 = zext i1 %t65893 to i8
+call void @resid_overflow_check(i8 %t65894)
+%t65896 = call i8 @resid_str_eq(ptr %t65856, ptr @.s65895)
+%t65897 = icmp eq i8 %t65896, 0
+br i1 %t65897, label %L12816, label %L12817
 L12816:
-%t65871 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65869, ptr @.s65870)
-%t65872 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_value(ptr %t65871, ptr %t65759)
 br label %L12818
 L12817:
 br label %L12818
 L12818:
-%t65873 = phi ptr [ %t65872, %L12816 ], [ %t65869, %L12817 ]
-%t65875 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65873, ptr @.s65874)
-%t65876 = getelementptr i8, ptr %t65759, i64 32
-%t65877 = load i64, ptr %t65876
-%t65878 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65875, i64 4, i64 %t65877)
-%t65879 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_deps(ptr %t65878, ptr %t65756, i64 %p2, i64 0)
-%t65880 = icmp sge i64 %t65765, 0
-br i1 %t65880, label %L12819, label %L12820
+%t65898 = phi i64 [ 1, %L12816 ], [ 0, %L12817 ]
+%t65899 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65892, i64 %t65898)
+%t65900 = extractvalue {i64, i1} %t65899, 0
+%t65901 = extractvalue {i64, i1} %t65899, 1
+%t65902 = zext i1 %t65901 to i8
+call void @resid_overflow_check(i8 %t65902)
+%t65904 = call i8 @resid_str_eq(ptr %t65870, ptr @.s65903)
+%t65905 = icmp eq i8 %t65904, 0
+br i1 %t65905, label %L12819, label %L12820
 L12819:
-%t65882 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65879, ptr @.s65881)
-%t65883 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65882, i64 %t65765)
 br label %L12821
 L12820:
 br label %L12821
 L12821:
-%t65884 = phi ptr [ %t65883, %L12819 ], [ %t65879, %L12820 ]
-%t65886 = call i8 @resid_str_eq(ptr %t65762, ptr @.s65885)
-%t65887 = icmp eq i8 %t65886, 0
-br i1 %t65887, label %L12822, label %L12823
+%t65906 = phi i64 [ 1, %L12819 ], [ 0, %L12820 ]
+%t65907 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t65900, i64 %t65906)
+%t65908 = extractvalue {i64, i1} %t65907, 0
+%t65909 = extractvalue {i64, i1} %t65907, 1
+%t65910 = zext i1 %t65909 to i8
+call void @resid_overflow_check(i8 %t65910)
+%t65911 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 5, i64 %t65908)
+%t65913 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65911, ptr @.s65912)
+%t65914 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65913, i64 %p2)
+%t65916 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65914, ptr @.s65915)
+%t65917 = getelementptr i8, ptr %t65828, i64 0
+%t65918 = load ptr, ptr %t65917
+%t65919 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65916, ptr %t65918)
+%t65921 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65919, ptr @.s65920)
+%t65922 = getelementptr i8, ptr %p1, i64 8
+%t65923 = load i64, ptr %t65922
+%t65924 = getelementptr i8, ptr %p1, i64 16
+%t65925 = load ptr, ptr %t65924
+%t65926 = getelementptr i8, ptr %p1, i64 32
+%t65927 = load ptr, ptr %t65926
+%t65928 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_type(i64 %p2, i64 %t65923, ptr %t65925, ptr %t65927)
+%t65929 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65921, ptr %t65928)
+%t65931 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65929, ptr @.s65930)
+%t65932 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65931, ptr %t65856)
+br i1 %t65872, label %L12822, label %L12823
 L12822:
-%t65889 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65884, ptr @.s65888)
-%t65890 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65889, i64 4, i64 1)
-%t65891 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65890, ptr %t65762)
+%t65934 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65932, ptr @.s65933)
+%t65935 = getelementptr i8, ptr %t65828, i64 8
+%t65936 = load ptr, ptr %t65935
+%t65937 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65934, ptr %t65936)
 br label %L12824
 L12823:
-%t65893 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65884, ptr @.s65892)
-%t65894 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65893, i64 4, i64 0)
 br label %L12824
 L12824:
-%t65895 = phi ptr [ %t65891, %L12822 ], [ %t65894, %L12823 ]
-%t65897 = call i8 @str_contains(ptr %t65762, ptr @.s65896)
-%t65898 = icmp ne i8 %t65897, 0
-br i1 %t65898, label %L12825, label %L12826
+%t65938 = phi ptr [ %t65937, %L12822 ], [ %t65932, %L12823 ]
+br i1 %t65833, label %L12825, label %L12826
 L12825:
-%t65899 = call i64 @str_find_char(ptr %t65762, i64 46, i64 0)
-%t65900 = call ptr @str_slice(ptr %t65762, i64 0, i64 %t65899)
+%t65940 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65938, ptr @.s65939)
+%t65941 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_value(ptr %t65940, ptr %t65828)
 br label %L12827
 L12826:
 br label %L12827
 L12827:
-%t65902 = phi ptr [ %t65900, %L12825 ], [ @.s65901, %L12826 ]
-%t65904 = call i8 @resid_str_eq(ptr %t65902, ptr @.s65903)
-%t65905 = icmp eq i8 %t65904, 0
-br i1 %t65905, label %L12828, label %L12829
+%t65942 = phi ptr [ %t65941, %L12825 ], [ %t65938, %L12826 ]
+%t65944 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65942, ptr @.s65943)
+%t65945 = getelementptr i8, ptr %t65828, i64 32
+%t65946 = load i64, ptr %t65945
+%t65947 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65944, i64 4, i64 %t65946)
+%t65948 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_deps(ptr %t65947, ptr %t65825, i64 %p2, i64 0)
+%t65949 = icmp sge i64 %t65834, 0
+br i1 %t65949, label %L12828, label %L12829
 L12828:
-%t65907 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65895, ptr @.s65906)
-%t65908 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65907, i64 4, i64 1)
-%t65909 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65908, ptr %t65902)
+%t65951 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65948, ptr @.s65950)
+%t65952 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65951, i64 %t65834)
 br label %L12830
 L12829:
-%t65911 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65895, ptr @.s65910)
-%t65912 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65911, i64 4, i64 0)
 br label %L12830
 L12830:
-%t65913 = phi ptr [ %t65909, %L12828 ], [ %t65912, %L12829 ]
-%t65915 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65913, ptr @.s65914)
-%t65916 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65915, i64 4, i64 5)
-%t65917 = getelementptr i8, ptr %p1, i64 48
-%t65918 = load ptr, ptr %t65917
-%t65919 = getelementptr i8, ptr %t65759, i64 40
-%t65920 = load i64, ptr %t65919
-%t65921 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pos(ptr %t65916, ptr %t65918, i64 %t65920, i1 true)
-%t65922 = getelementptr i8, ptr %p1, i64 48
-%t65923 = load ptr, ptr %t65922
-%t65924 = getelementptr i8, ptr %t65759, i64 48
-%t65925 = load i64, ptr %t65924
-%t65926 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pos(ptr %t65921, ptr %t65923, i64 %t65925, i1 false)
-%t65927 = icmp sge i64 %t65771, 0
-br i1 %t65927, label %L12831, label %L12832
+%t65953 = phi ptr [ %t65952, %L12828 ], [ %t65948, %L12829 ]
+%t65955 = call i8 @resid_str_eq(ptr %t65831, ptr @.s65954)
+%t65956 = icmp eq i8 %t65955, 0
+br i1 %t65956, label %L12831, label %L12832
 L12831:
-%t65929 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65926, ptr @.s65928)
-%t65930 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65929, i64 5, i64 2)
-%t65932 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65930, ptr @.s65931)
-%t65933 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t65932, i64 %t65771)
-%t65935 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65933, ptr @.s65934)
-%t65936 = getelementptr i8, ptr %p1, i64 32
-%t65937 = load ptr, ptr %t65936
-%t65938 = getelementptr i8, ptr %t65937, i64 8
-%t65939 = load ptr, ptr %t65938
-%t65940 = call ptr @resid_list_get(ptr %t65939, i64 %p2)
-%t65943 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65935, ptr %t65940)
+%t65958 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65953, ptr @.s65957)
+%t65959 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65958, i64 4, i64 1)
+%t65960 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65959, ptr %t65831)
 br label %L12833
 L12832:
+%t65962 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65953, ptr @.s65961)
+%t65963 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65962, i64 4, i64 0)
 br label %L12833
 L12833:
-%t65944 = phi ptr [ %t65943, %L12831 ], [ %t65926, %L12832 ]
-%t65946 = call i8 @resid_str_eq(ptr %t65787, ptr @.s65945)
-%t65947 = icmp eq i8 %t65946, 0
-br i1 %t65947, label %L12834, label %L12835
+%t65964 = phi ptr [ %t65960, %L12831 ], [ %t65963, %L12832 ]
+%t65966 = call i8 @str_contains(ptr %t65831, ptr @.s65965)
+%t65967 = icmp ne i8 %t65966, 0
+br i1 %t65967, label %L12834, label %L12835
 L12834:
-%t65949 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65944, ptr @.s65948)
-%t65950 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_reason(ptr %t65949, ptr %p1, i64 %p2, ptr %t65762, i64 %t65765)
+%t65968 = call i64 @str_find_char(ptr %t65831, i64 46, i64 0)
+%t65969 = call ptr @str_slice(ptr %t65831, i64 0, i64 %t65968)
 br label %L12836
 L12835:
 br label %L12836
 L12836:
-%t65951 = phi ptr [ %t65950, %L12834 ], [ %t65944, %L12835 ]
-%t65953 = call i8 @resid_str_eq(ptr %t65801, ptr @.s65952)
-%t65954 = icmp eq i8 %t65953, 0
-br i1 %t65954, label %L12837, label %L12838
+%t65971 = phi ptr [ %t65969, %L12834 ], [ @.s65970, %L12835 ]
+%t65973 = call i8 @resid_str_eq(ptr %t65971, ptr @.s65972)
+%t65974 = icmp eq i8 %t65973, 0
+br i1 %t65974, label %L12837, label %L12838
 L12837:
-%t65956 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65951, ptr @.s65955)
-%t65957 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_range(ptr %t65956, ptr %t65801)
+%t65976 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65964, ptr @.s65975)
+%t65977 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65976, i64 4, i64 1)
+%t65978 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65977, ptr %t65971)
 br label %L12839
 L12838:
+%t65980 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65964, ptr @.s65979)
+%t65981 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65980, i64 4, i64 0)
 br label %L12839
 L12839:
-%t65958 = phi ptr [ %t65957, %L12837 ], [ %t65951, %L12838 ]
-%t65960 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65958, ptr @.s65959)
-%t65961 = getelementptr i8, ptr %p1, i64 40
-%t65962 = load ptr, ptr %t65961
-%t65963 = getelementptr i8, ptr %t65962, i64 8
-%t65964 = load ptr, ptr %t65963
-%t65965 = call ptr @resid_list_get(ptr %t65964, i64 %p2)
-%t65968 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hexbytes(ptr %t65960, ptr %t65965)
-ret ptr %t65968
+%t65982 = phi ptr [ %t65978, %L12837 ], [ %t65981, %L12838 ]
+%t65984 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65982, ptr @.s65983)
+%t65985 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65984, i64 4, i64 5)
+%t65986 = getelementptr i8, ptr %p1, i64 48
+%t65987 = load ptr, ptr %t65986
+%t65988 = getelementptr i8, ptr %t65828, i64 40
+%t65989 = load i64, ptr %t65988
+%t65990 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pos(ptr %t65985, ptr %t65987, i64 %t65989, i1 true)
+%t65991 = getelementptr i8, ptr %p1, i64 48
+%t65992 = load ptr, ptr %t65991
+%t65993 = getelementptr i8, ptr %t65828, i64 48
+%t65994 = load i64, ptr %t65993
+%t65995 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pos(ptr %t65990, ptr %t65992, i64 %t65994, i1 false)
+%t65996 = icmp sge i64 %t65840, 0
+br i1 %t65996, label %L12840, label %L12841
+L12840:
+%t65998 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65995, ptr @.s65997)
+%t65999 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t65998, i64 5, i64 2)
+%t66001 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65999, ptr @.s66000)
+%t66002 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66001, i64 %t65840)
+%t66004 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66002, ptr @.s66003)
+%t66005 = getelementptr i8, ptr %p1, i64 32
+%t66006 = load ptr, ptr %t66005
+%t66007 = getelementptr i8, ptr %t66006, i64 8
+%t66008 = load ptr, ptr %t66007
+%t66009 = call ptr @resid_list_get(ptr %t66008, i64 %p2)
+%t66012 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t66004, ptr %t66009)
+br label %L12842
+L12841:
+br label %L12842
+L12842:
+%t66013 = phi ptr [ %t66012, %L12840 ], [ %t65995, %L12841 ]
+%t66015 = call i8 @resid_str_eq(ptr %t65856, ptr @.s66014)
+%t66016 = icmp eq i8 %t66015, 0
+br i1 %t66016, label %L12843, label %L12844
+L12843:
+%t66018 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66013, ptr @.s66017)
+%t66019 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_reason(ptr %t66018, ptr %p1, i64 %p2, ptr %t65831, i64 %t65834)
+br label %L12845
+L12844:
+br label %L12845
+L12845:
+%t66020 = phi ptr [ %t66019, %L12843 ], [ %t66013, %L12844 ]
+%t66022 = call i8 @resid_str_eq(ptr %t65870, ptr @.s66021)
+%t66023 = icmp eq i8 %t66022, 0
+br i1 %t66023, label %L12846, label %L12847
+L12846:
+%t66025 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66020, ptr @.s66024)
+%t66026 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_range(ptr %t66025, ptr %t65870)
+br label %L12848
+L12847:
+br label %L12848
+L12848:
+%t66027 = phi ptr [ %t66026, %L12846 ], [ %t66020, %L12847 ]
+%t66029 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66027, ptr @.s66028)
+%t66030 = getelementptr i8, ptr %p1, i64 40
+%t66031 = load ptr, ptr %t66030
+%t66032 = getelementptr i8, ptr %t66031, i64 8
+%t66033 = load ptr, ptr %t66032
+%t66034 = call ptr @resid_list_get(ptr %t66033, i64 %p2)
+%t66037 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hexbytes(ptr %t66029, ptr %t66034)
+ret ptr %t66037
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_nodes(ptr %p0.in, ptr %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %t65970, %tco.s0 ]
+%p0 = phi ptr [ %p0.in, %entry ], [ %t66039, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t65971, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t66040, %tco.s0 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%t65969 = icmp sge i64 %p2, %p3
-br i1 %t65969, label %L12840, label %L12842
-L12840:
+%t66038 = icmp sge i64 %p2, %p3
+br i1 %t66038, label %L12849, label %L12851
+L12849:
 ret ptr %p0
-L12842:
-%t65970 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_node(ptr %p0, ptr %p1, i64 %p2)
-%t65971 = add nsw i64 %p2, 1
+L12851:
+%t66039 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_node(ptr %p0, ptr %p1, i64 %p2)
+%t66040 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -100640,26 +100770,26 @@ define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_sources(ptr %
 entry:
 br label %tco.head
 tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %t65990, %tco.s0 ]
+%p0 = phi ptr [ %p0.in, %entry ], [ %t66059, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t65991, %tco.s0 ]
-%t65973 = call i64 @resid_list_len(ptr %p1)
-%t65974 = icmp sge i64 %p2, %t65973
-br i1 %t65974, label %L12843, label %L12845
-L12843:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t66060, %tco.s0 ]
+%t66042 = call i64 @resid_list_len(ptr %p1)
+%t66043 = icmp sge i64 %p2, %t66042
+br i1 %t66043, label %L12852, label %L12854
+L12852:
 ret ptr %p0
-L12845:
-%t65975 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 5, i64 2)
-%t65977 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65975, ptr @.s65976)
-%t65978 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-%t65981 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t65977, ptr %t65978)
-%t65982 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-%t65985 = call ptr @resid_fs_sha256(ptr %t65982)
-%t65986 = call ptr @str_sb_new()
-%t65987 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_bytes_hex(ptr %t65985, i64 0, ptr %t65986)
-%t65989 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t65981, ptr @.s65988)
-%t65990 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hexbytes(ptr %t65989, ptr %t65987)
-%t65991 = add nsw i64 %p2, 1
+L12854:
+%t66044 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 5, i64 2)
+%t66046 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66044, ptr @.s66045)
+%t66047 = call ptr @resid_list_get(ptr %p1, i64 %p2)
+%t66050 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t66046, ptr %t66047)
+%t66051 = call ptr @resid_list_get(ptr %p1, i64 %p2)
+%t66054 = call ptr @resid_fs_sha256(ptr %t66051)
+%t66055 = call ptr @str_sb_new()
+%t66056 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_bytes_hex(ptr %t66054, i64 0, ptr %t66055)
+%t66058 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66050, ptr @.s66057)
+%t66059 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_hexbytes(ptr %t66058, ptr %t66056)
+%t66060 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -100670,459 +100800,459 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t65998, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t66067, %tco.s0 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%t65993 = icmp sge i64 %p2, %p3
-br i1 %t65993, label %L12846, label %L12848
-L12846:
+%t66062 = icmp sge i64 %p2, %p3
+br i1 %t66062, label %L12855, label %L12857
+L12855:
 ret i1 true
-L12848:
-%t65994 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 2048)
-%t65995 = extractvalue {i64, i1} %t65994, 0
-%t65996 = extractvalue {i64, i1} %t65994, 1
-%t65997 = zext i1 %t65996 to i8
-call void @resid_overflow_check(i8 %t65997)
-%t65998 = call i64 @min_i64(i64 %t65995, i64 %p3)
-%t65999 = call i64 @resid_bulk_push()
-%t66000 = call i64 @resid_scope_push()
-%t66001 = call ptr @str_sb_new()
-%t66002 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_nodes(ptr %t66001, ptr %p1, i64 %p2, i64 %t65998)
-%t66003 = call ptr @str_sb_finish(ptr %t66002)
-%t66004 = call i1 @resid_fs_append_hex(ptr %p0, ptr %t66003)
-call void @resid_scope_pop(i64 %t66000)
-%t66005 = call i64 @resid_bulk_pop()
-%t66006 = xor i1 %t66004, true
-br i1 %t66006, label %L12849, label %L12851
-L12849:
+L12857:
+%t66063 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 2048)
+%t66064 = extractvalue {i64, i1} %t66063, 0
+%t66065 = extractvalue {i64, i1} %t66063, 1
+%t66066 = zext i1 %t66065 to i8
+call void @resid_overflow_check(i8 %t66066)
+%t66067 = call i64 @min_i64(i64 %t66064, i64 %p3)
+%t66068 = call i64 @resid_bulk_push()
+%t66069 = call i64 @resid_scope_push()
+%t66070 = call ptr @str_sb_new()
+%t66071 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_nodes(ptr %t66070, ptr %p1, i64 %p2, i64 %t66067)
+%t66072 = call ptr @str_sb_finish(ptr %t66071)
+%t66073 = call i1 @resid_fs_append_hex(ptr %p0, ptr %t66072)
+call void @resid_scope_pop(i64 %t66069)
+%t66074 = call i64 @resid_bulk_pop()
+%t66075 = xor i1 %t66073, true
+br i1 %t66075, label %L12858, label %L12860
+L12858:
 ret i1 false
-L12851:
+L12860:
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @ga_fileinfo(ptr %p0, ptr %p1, ptr %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66008 = call ptr @kg_srcmap(ptr %p1)
-%t66009 = alloca [1 x ptr]
-%t66013 = getelementptr i8, ptr %t66009, i64 0
-store ptr %p2, ptr %t66013
-%t66014 = call ptr @resid_list_new(i64 1, ptr %t66009, ptr @.lty66009)
-%t66015 = call ptr @resid_listbuf_new()
-%t66016 = call ptr @resid_gmalloc(i64 32)
-%t66016.f0 = getelementptr i8, ptr %t66016, i64 0
-store ptr %t66008, ptr %t66016.f0
-%t66016.f1 = getelementptr i8, ptr %t66016, i64 8
-store ptr %t66014, ptr %t66016.f1
-%t66017 = call ptr @gx_none()
-%t66016.f2 = getelementptr i8, ptr %t66016, i64 16
-store ptr %t66017, ptr %t66016.f2
-%t66018 = call ptr @resid_box_i64(i64 0)
-%t66021 = call ptr @resid_listbuf_push(ptr %t66015, ptr %t66018)
-%t66022 = call ptr @ga_line_starts(ptr %p0, i64 0, ptr %t66021)
-%t66016.f3 = getelementptr i8, ptr %t66016, i64 24
-store ptr %t66022, ptr %t66016.f3
-%t66023 = call ptr @ga_files(ptr %t66008, i64 0, ptr %t66016)
-ret ptr %t66023
+%t66077 = call ptr @kg_srcmap(ptr %p1)
+%t66078 = alloca [1 x ptr]
+%t66082 = getelementptr i8, ptr %t66078, i64 0
+store ptr %p2, ptr %t66082
+%t66083 = call ptr @resid_list_new(i64 1, ptr %t66078, ptr @.lty66078)
+%t66084 = call ptr @resid_listbuf_new()
+%t66085 = call ptr @resid_gmalloc(i64 32)
+%t66085.f0 = getelementptr i8, ptr %t66085, i64 0
+store ptr %t66077, ptr %t66085.f0
+%t66085.f1 = getelementptr i8, ptr %t66085, i64 8
+store ptr %t66083, ptr %t66085.f1
+%t66086 = call ptr @gx_none()
+%t66085.f2 = getelementptr i8, ptr %t66085, i64 16
+store ptr %t66086, ptr %t66085.f2
+%t66087 = call ptr @resid_box_i64(i64 0)
+%t66090 = call ptr @resid_listbuf_push(ptr %t66084, ptr %t66087)
+%t66091 = call ptr @ga_line_starts(ptr %p0, i64 0, ptr %t66090)
+%t66085.f3 = getelementptr i8, ptr %t66085, i64 24
+store ptr %t66091, ptr %t66085.f3
+%t66092 = call ptr @ga_files(ptr %t66077, i64 0, ptr %t66085)
+ret ptr %t66092
 }
 define ptr @ga_where(ptr %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66024 = getelementptr i8, ptr %p0, i64 24
-%t66025 = load ptr, ptr %t66024
-%t66026 = getelementptr i8, ptr %p0, i64 24
-%t66027 = load ptr, ptr %t66026
-%t66028 = call i64 @resid_list_len(ptr %t66027)
-%t66029 = sub nsw i64 %t66028, 1
-%t66030 = call i64 @ga_line(ptr %t66025, i64 %p1, i64 0, i64 %t66029)
-%t66031 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t66030, i64 1)
-%t66032 = extractvalue {i64, i1} %t66031, 0
-%t66033 = extractvalue {i64, i1} %t66031, 1
-%t66034 = zext i1 %t66033 to i8
-call void @resid_overflow_check(i8 %t66034)
-%t66035 = getelementptr i8, ptr %p0, i64 0
-%t66036 = load ptr, ptr %t66035
-%t66037 = getelementptr i8, ptr %p0, i64 0
-%t66038 = load ptr, ptr %t66037
-%t66039 = getelementptr i8, ptr %t66038, i64 0
-%t66040 = load ptr, ptr %t66039
-%t66041 = call i64 @resid_list_len(ptr %t66040)
-%t66042 = sub nsw i64 %t66041, 1
-%t66043 = call i64 @ga_seg(ptr %t66036, i64 %t66032, i64 0, i64 %t66042)
-%t66044 = icmp slt i64 %t66043, 0
-br i1 %t66044, label %L12852, label %L12853
-L12852:
-br label %L12854
-L12853:
-%t66045 = getelementptr i8, ptr %p0, i64 16
-%t66046 = load ptr, ptr %t66045
-%t66047 = call ptr @resid_list_get(ptr %t66046, i64 %t66043)
-%t66048 = call i64 @resid_unbox_i64(ptr %t66047)
-br label %L12854
-L12854:
-%t66050 = phi i64 [ 0, %L12852 ], [ %t66048, %L12853 ]
-%t66051 = icmp slt i64 %t66043, 0
-br i1 %t66051, label %L12855, label %L12856
-L12855:
-br label %L12857
-L12856:
-%t66052 = getelementptr i8, ptr %p0, i64 0
-%t66053 = load ptr, ptr %t66052
-%t66054 = getelementptr i8, ptr %t66053, i64 8
-%t66055 = load ptr, ptr %t66054
-%t66056 = call ptr @resid_list_get(ptr %t66055, i64 %t66043)
-%t66057 = call i64 @resid_unbox_i64(ptr %t66056)
-%t66059 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t66057, i64 %t66032)
-%t66060 = extractvalue {i64, i1} %t66059, 0
-%t66061 = extractvalue {i64, i1} %t66059, 1
-%t66062 = zext i1 %t66061 to i8
-call void @resid_overflow_check(i8 %t66062)
-%t66063 = getelementptr i8, ptr %p0, i64 0
-%t66064 = load ptr, ptr %t66063
-%t66065 = getelementptr i8, ptr %t66064, i64 0
-%t66066 = load ptr, ptr %t66065
-%t66067 = call ptr @resid_list_get(ptr %t66066, i64 %t66043)
-%t66068 = call i64 @resid_unbox_i64(ptr %t66067)
-%t66070 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t66060, i64 %t66068)
-%t66071 = extractvalue {i64, i1} %t66070, 0
-%t66072 = extractvalue {i64, i1} %t66070, 1
-%t66073 = zext i1 %t66072 to i8
-call void @resid_overflow_check(i8 %t66073)
-br label %L12857
-L12857:
-%t66074 = phi i64 [ %t66032, %L12855 ], [ %t66071, %L12856 ]
-%t66075 = getelementptr i8, ptr %p0, i64 24
-%t66076 = load ptr, ptr %t66075
-%t66077 = call ptr @resid_list_get(ptr %t66076, i64 %t66030)
-%t66078 = call i64 @resid_unbox_i64(ptr %t66077)
-%t66080 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p1, i64 %t66078)
-%t66081 = extractvalue {i64, i1} %t66080, 0
-%t66082 = extractvalue {i64, i1} %t66080, 1
-%t66083 = zext i1 %t66082 to i8
-call void @resid_overflow_check(i8 %t66083)
-%t66084 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t66081, i64 1)
-%t66085 = extractvalue {i64, i1} %t66084, 0
-%t66086 = extractvalue {i64, i1} %t66084, 1
-%t66087 = zext i1 %t66086 to i8
-call void @resid_overflow_check(i8 %t66087)
-%t66088 = alloca [3 x ptr]
-%t66090 = call ptr @resid_box_i64(i64 %t66050)
-%t66092 = getelementptr i8, ptr %t66088, i64 0
-store ptr %t66090, ptr %t66092
-%t66093 = call ptr @resid_box_i64(i64 %t66074)
-%t66095 = getelementptr i8, ptr %t66088, i64 8
-store ptr %t66093, ptr %t66095
-%t66096 = call ptr @resid_box_i64(i64 %t66085)
-%t66098 = getelementptr i8, ptr %t66088, i64 16
-store ptr %t66096, ptr %t66098
-%t66099 = call ptr @resid_list_new(i64 3, ptr %t66088, ptr @.lty66088)
-ret ptr %t66099
-}
-define ptr @ga_write(ptr %p0, ptr %p1, i64 %p2, i1 %p3, ptr %p4, ptr %p5, ptr %p6, ptr %p7, ptr %p8, ptr %p9, ptr %p10) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
-entry:
-%t66100 = getelementptr i8, ptr %p1, i64 0
-%t66101 = load ptr, ptr %t66100
-%t66102 = call i64 @kg_count(ptr %t66101)
-%t66103 = call ptr @ga_fileinfo(ptr %p8, ptr %p9, ptr %p10)
-%t66104 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB66104)
-%t66105 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB66105)
-%t66106 = call ptr @resid_set_new()
-%t66107 = call ptr @resid_gmalloc(i64 88)
-%t66107.f0 = getelementptr i8, ptr %t66107, i64 0
-store ptr %t66101, ptr %t66107.f0
-%t66107.f1 = getelementptr i8, ptr %t66107, i64 8
-store i64 %p2, ptr %t66107.f1
-%t66107.f2 = getelementptr i8, ptr %t66107, i64 16
-store ptr %p6, ptr %t66107.f2
-%t66108 = call ptr @resid_listbuf_new()
-%t66109 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_defs(ptr %p7, i64 0, ptr %t66108)
-%t66107.f3 = getelementptr i8, ptr %t66107, i64 24
-store ptr %t66109, ptr %t66107.f3
-%t66110 = call ptr @resid_listbuf_new()
-%t66111 = call ptr @resid_listbuf_new()
-%t66112 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_derive(ptr %p4, i64 0, i64 0, i64 %t66102, ptr %t66110, ptr %t66111)
-%t66107.f4 = getelementptr i8, ptr %t66107, i64 32
-store ptr %t66112, ptr %t66107.f4
-%t66113 = call ptr @resid_gmalloc(i64 16)
-%t66113.f0 = getelementptr i8, ptr %t66113, i64 0
-store ptr %t66104, ptr %t66113.f0
-%t66113.f1 = getelementptr i8, ptr %t66113, i64 8
-store ptr %t66105, ptr %t66113.f1
-%t66114 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_cols(ptr %t66101, i64 0, i64 %t66102, ptr %t66113)
-%t66107.f5 = getelementptr i8, ptr %t66107, i64 40
-store ptr %t66114, ptr %t66107.f5
-%t66107.f6 = getelementptr i8, ptr %t66107, i64 48
-store ptr %t66103, ptr %t66107.f6
-%t66115 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_reasons(ptr %p5, i64 0, ptr %t66106)
-%t66107.f7 = getelementptr i8, ptr %t66107, i64 56
-store ptr %t66115, ptr %t66107.f7
-%t66116 = getelementptr i8, ptr %p1, i64 8
-%t66117 = load i64, ptr %t66116
-%t66118 = call ptr @str_sb_new()
-%t66119 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_facts(ptr %t66101, i64 %t66117, i64 0, ptr %t66118)
-%t66120 = call ptr @str_sb_finish(ptr %t66119)
-%t66121 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_facts_read(ptr %t66120, i64 0, ptr %t66106)
-%t66107.f8 = getelementptr i8, ptr %t66107, i64 64
-store ptr %t66121, ptr %t66107.f8
-%t66122 = call ptr @str_sb_new()
-%t66123 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66122, i64 5, i64 4)
-%t66125 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66123, ptr @.s66124)
-%t66126 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66125, i64 1)
-%t66128 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66126, ptr @.s66127)
-%t66129 = getelementptr i8, ptr %t66103, i64 8
-%t66130 = load ptr, ptr %t66129
-%t66131 = call i64 @resid_list_len(ptr %t66130)
-%t66132 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66128, i64 4, i64 %t66131)
-%t66133 = getelementptr i8, ptr %t66103, i64 8
-%t66134 = load ptr, ptr %t66133
-%t66135 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_sources(ptr %t66132, ptr %t66134, i64 0)
-%t66137 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66135, ptr @.s66136)
-%t66138 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66137, i64 4, i64 %t66102)
-%t66139 = call ptr @str_sb_finish(ptr %t66138)
-%t66140 = call i1 @resid_fs_write_hex(ptr %p0, ptr %t66139)
-%t66141 = xor i1 %t66140, true
-br i1 %t66141, label %L12858, label %L12860
-L12858:
-ret ptr @.s66142
-L12860:
-%t66143 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_stream(ptr %p0, ptr %t66107, i64 0, i64 %t66102)
-%t66144 = xor i1 %t66143, true
-br i1 %t66144, label %L12861, label %L12863
+%t66093 = getelementptr i8, ptr %p0, i64 24
+%t66094 = load ptr, ptr %t66093
+%t66095 = getelementptr i8, ptr %p0, i64 24
+%t66096 = load ptr, ptr %t66095
+%t66097 = call i64 @resid_list_len(ptr %t66096)
+%t66098 = sub nsw i64 %t66097, 1
+%t66099 = call i64 @ga_line(ptr %t66094, i64 %p1, i64 0, i64 %t66098)
+%t66100 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t66099, i64 1)
+%t66101 = extractvalue {i64, i1} %t66100, 0
+%t66102 = extractvalue {i64, i1} %t66100, 1
+%t66103 = zext i1 %t66102 to i8
+call void @resid_overflow_check(i8 %t66103)
+%t66104 = getelementptr i8, ptr %p0, i64 0
+%t66105 = load ptr, ptr %t66104
+%t66106 = getelementptr i8, ptr %p0, i64 0
+%t66107 = load ptr, ptr %t66106
+%t66108 = getelementptr i8, ptr %t66107, i64 0
+%t66109 = load ptr, ptr %t66108
+%t66110 = call i64 @resid_list_len(ptr %t66109)
+%t66111 = sub nsw i64 %t66110, 1
+%t66112 = call i64 @ga_seg(ptr %t66105, i64 %t66101, i64 0, i64 %t66111)
+%t66113 = icmp slt i64 %t66112, 0
+br i1 %t66113, label %L12861, label %L12862
 L12861:
-ret ptr @.s66145
+br label %L12863
+L12862:
+%t66114 = getelementptr i8, ptr %p0, i64 16
+%t66115 = load ptr, ptr %t66114
+%t66116 = call ptr @resid_list_get(ptr %t66115, i64 %t66112)
+%t66117 = call i64 @resid_unbox_i64(ptr %t66116)
+br label %L12863
 L12863:
-%t66146 = call ptr @str_sb_new()
-%t66148 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66146, ptr @.s66147)
-%t66149 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66148, i64 5, i64 2)
-%t66151 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66149, ptr @.s66150)
-%t66152 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66151, i64 4, i64 1)
-%t66153 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t66119 = phi i64 [ 0, %L12861 ], [ %t66117, %L12862 ]
+%t66120 = icmp slt i64 %t66112, 0
+br i1 %t66120, label %L12864, label %L12865
+L12864:
+br label %L12866
+L12865:
+%t66121 = getelementptr i8, ptr %p0, i64 0
+%t66122 = load ptr, ptr %t66121
+%t66123 = getelementptr i8, ptr %t66122, i64 8
+%t66124 = load ptr, ptr %t66123
+%t66125 = call ptr @resid_list_get(ptr %t66124, i64 %t66112)
+%t66126 = call i64 @resid_unbox_i64(ptr %t66125)
+%t66128 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t66126, i64 %t66101)
+%t66129 = extractvalue {i64, i1} %t66128, 0
+%t66130 = extractvalue {i64, i1} %t66128, 1
+%t66131 = zext i1 %t66130 to i8
+call void @resid_overflow_check(i8 %t66131)
+%t66132 = getelementptr i8, ptr %p0, i64 0
+%t66133 = load ptr, ptr %t66132
+%t66134 = getelementptr i8, ptr %t66133, i64 0
+%t66135 = load ptr, ptr %t66134
+%t66136 = call ptr @resid_list_get(ptr %t66135, i64 %t66112)
+%t66137 = call i64 @resid_unbox_i64(ptr %t66136)
+%t66139 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t66129, i64 %t66137)
+%t66140 = extractvalue {i64, i1} %t66139, 0
+%t66141 = extractvalue {i64, i1} %t66139, 1
+%t66142 = zext i1 %t66141 to i8
+call void @resid_overflow_check(i8 %t66142)
+br label %L12866
+L12866:
+%t66143 = phi i64 [ %t66101, %L12864 ], [ %t66140, %L12865 ]
+%t66144 = getelementptr i8, ptr %p0, i64 24
+%t66145 = load ptr, ptr %t66144
+%t66146 = call ptr @resid_list_get(ptr %t66145, i64 %t66099)
+%t66147 = call i64 @resid_unbox_i64(ptr %t66146)
+%t66149 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p1, i64 %t66147)
+%t66150 = extractvalue {i64, i1} %t66149, 0
+%t66151 = extractvalue {i64, i1} %t66149, 1
+%t66152 = zext i1 %t66151 to i8
+call void @resid_overflow_check(i8 %t66152)
+%t66153 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t66150, i64 1)
 %t66154 = extractvalue {i64, i1} %t66153, 0
 %t66155 = extractvalue {i64, i1} %t66153, 1
 %t66156 = zext i1 %t66155 to i8
 call void @resid_overflow_check(i8 %t66156)
-%t66157 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66152, i64 %t66154)
-br i1 %p3, label %L12864, label %L12865
-L12864:
-%t66159 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66157, ptr @.s66158)
-%t66160 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66159, i64 4, i64 1)
-%t66161 = getelementptr i8, ptr %p1, i64 8
-%t66162 = load i64, ptr %t66161
-%t66163 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66160, i64 %t66162)
-br label %L12866
-L12865:
-%t66165 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66157, ptr @.s66164)
-%t66166 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66165, i64 4, i64 0)
-br label %L12866
-L12866:
-%t66167 = phi ptr [ %t66163, %L12864 ], [ %t66166, %L12865 ]
-%t66168 = call ptr @str_sb_finish(ptr %t66167)
-%t66169 = call i1 @resid_fs_append_hex(ptr %p0, ptr %t66168)
-%t66170 = xor i1 %t66169, true
-br i1 %t66170, label %L12867, label %L12869
+%t66157 = alloca [3 x ptr]
+%t66159 = call ptr @resid_box_i64(i64 %t66119)
+%t66161 = getelementptr i8, ptr %t66157, i64 0
+store ptr %t66159, ptr %t66161
+%t66162 = call ptr @resid_box_i64(i64 %t66143)
+%t66164 = getelementptr i8, ptr %t66157, i64 8
+store ptr %t66162, ptr %t66164
+%t66165 = call ptr @resid_box_i64(i64 %t66154)
+%t66167 = getelementptr i8, ptr %t66157, i64 16
+store ptr %t66165, ptr %t66167
+%t66168 = call ptr @resid_list_new(i64 3, ptr %t66157, ptr @.lty66157)
+ret ptr %t66168
+}
+define ptr @ga_write(ptr %p0, ptr %p1, i64 %p2, i1 %p3, ptr %p4, ptr %p5, ptr %p6, ptr %p7, ptr %p8, ptr %p9, ptr %p10) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
+entry:
+%t66169 = getelementptr i8, ptr %p1, i64 0
+%t66170 = load ptr, ptr %t66169
+%t66171 = call i64 @kg_count(ptr %t66170)
+%t66172 = call ptr @ga_fileinfo(ptr %p8, ptr %p9, ptr %p10)
+%t66173 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB66173)
+%t66174 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB66174)
+%t66175 = call ptr @resid_set_new()
+%t66176 = call ptr @resid_gmalloc(i64 88)
+%t66176.f0 = getelementptr i8, ptr %t66176, i64 0
+store ptr %t66170, ptr %t66176.f0
+%t66176.f1 = getelementptr i8, ptr %t66176, i64 8
+store i64 %p2, ptr %t66176.f1
+%t66176.f2 = getelementptr i8, ptr %t66176, i64 16
+store ptr %p6, ptr %t66176.f2
+%t66177 = call ptr @resid_listbuf_new()
+%t66178 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_defs(ptr %p7, i64 0, ptr %t66177)
+%t66176.f3 = getelementptr i8, ptr %t66176, i64 24
+store ptr %t66178, ptr %t66176.f3
+%t66179 = call ptr @resid_listbuf_new()
+%t66180 = call ptr @resid_listbuf_new()
+%t66181 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_derive(ptr %p4, i64 0, i64 0, i64 %t66171, ptr %t66179, ptr %t66180)
+%t66176.f4 = getelementptr i8, ptr %t66176, i64 32
+store ptr %t66181, ptr %t66176.f4
+%t66182 = call ptr @resid_gmalloc(i64 16)
+%t66182.f0 = getelementptr i8, ptr %t66182, i64 0
+store ptr %t66173, ptr %t66182.f0
+%t66182.f1 = getelementptr i8, ptr %t66182, i64 8
+store ptr %t66174, ptr %t66182.f1
+%t66183 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_cols(ptr %t66170, i64 0, i64 %t66171, ptr %t66182)
+%t66176.f5 = getelementptr i8, ptr %t66176, i64 40
+store ptr %t66183, ptr %t66176.f5
+%t66176.f6 = getelementptr i8, ptr %t66176, i64 48
+store ptr %t66172, ptr %t66176.f6
+%t66184 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_reasons(ptr %p5, i64 0, ptr %t66175)
+%t66176.f7 = getelementptr i8, ptr %t66176, i64 56
+store ptr %t66184, ptr %t66176.f7
+%t66185 = getelementptr i8, ptr %p1, i64 8
+%t66186 = load i64, ptr %t66185
+%t66187 = call ptr @str_sb_new()
+%t66188 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_facts(ptr %t66170, i64 %t66186, i64 0, ptr %t66187)
+%t66189 = call ptr @str_sb_finish(ptr %t66188)
+%t66190 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_facts_read(ptr %t66189, i64 0, ptr %t66175)
+%t66176.f8 = getelementptr i8, ptr %t66176, i64 64
+store ptr %t66190, ptr %t66176.f8
+%t66191 = call ptr @str_sb_new()
+%t66192 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66191, i64 5, i64 4)
+%t66194 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66192, ptr @.s66193)
+%t66195 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66194, i64 1)
+%t66197 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66195, ptr @.s66196)
+%t66198 = getelementptr i8, ptr %t66172, i64 8
+%t66199 = load ptr, ptr %t66198
+%t66200 = call i64 @resid_list_len(ptr %t66199)
+%t66201 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66197, i64 4, i64 %t66200)
+%t66202 = getelementptr i8, ptr %t66172, i64 8
+%t66203 = load ptr, ptr %t66202
+%t66204 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_sources(ptr %t66201, ptr %t66203, i64 0)
+%t66206 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66204, ptr @.s66205)
+%t66207 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66206, i64 4, i64 %t66171)
+%t66208 = call ptr @str_sb_finish(ptr %t66207)
+%t66209 = call i1 @resid_fs_write_hex(ptr %p0, ptr %t66208)
+%t66210 = xor i1 %t66209, true
+br i1 %t66210, label %L12867, label %L12869
 L12867:
-ret ptr @.s66171
+ret ptr @.s66211
 L12869:
-%t66172 = call ptr @resid_fs_sha256(ptr %p0)
-%t66173 = call ptr @str_sb_new()
-%t66174 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_bytes_hex(ptr %t66172, i64 0, ptr %t66173)
-ret ptr %t66174
+%t66212 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_stream(ptr %p0, ptr %t66176, i64 0, i64 %t66171)
+%t66213 = xor i1 %t66212, true
+br i1 %t66213, label %L12870, label %L12872
+L12870:
+ret ptr @.s66214
+L12872:
+%t66215 = call ptr @str_sb_new()
+%t66217 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66215, ptr @.s66216)
+%t66218 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66217, i64 5, i64 2)
+%t66220 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66218, ptr @.s66219)
+%t66221 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66220, i64 4, i64 1)
+%t66222 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t66223 = extractvalue {i64, i1} %t66222, 0
+%t66224 = extractvalue {i64, i1} %t66222, 1
+%t66225 = zext i1 %t66224 to i8
+call void @resid_overflow_check(i8 %t66225)
+%t66226 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66221, i64 %t66223)
+br i1 %p3, label %L12873, label %L12874
+L12873:
+%t66228 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66226, ptr @.s66227)
+%t66229 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66228, i64 4, i64 1)
+%t66230 = getelementptr i8, ptr %p1, i64 8
+%t66231 = load i64, ptr %t66230
+%t66232 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66229, i64 %t66231)
+br label %L12875
+L12874:
+%t66234 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_key(ptr %t66226, ptr @.s66233)
+%t66235 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66234, i64 4, i64 0)
+br label %L12875
+L12875:
+%t66236 = phi ptr [ %t66232, %L12873 ], [ %t66235, %L12874 ]
+%t66237 = call ptr @str_sb_finish(ptr %t66236)
+%t66238 = call i1 @resid_fs_append_hex(ptr %p0, ptr %t66237)
+%t66239 = xor i1 %t66238, true
+br i1 %t66239, label %L12876, label %L12878
+L12876:
+ret ptr @.s66240
+L12878:
+%t66241 = call ptr @resid_fs_sha256(ptr %p0)
+%t66242 = call ptr @str_sb_new()
+%t66243 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_bytes_hex(ptr %t66241, i64 0, ptr %t66242)
+ret ptr %t66243
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_sym(ptr %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66175 = call i64 @str_find_char(ptr %p0, i64 10, i64 %p1)
-%t66176 = icmp slt i64 %t66175, 0
-br i1 %t66176, label %L12870, label %L12871
-L12870:
-%t66177 = call i64 @str_len(ptr %p0)
-br label %L12872
-L12871:
-br label %L12872
-L12872:
-%t66178 = phi i64 [ %t66177, %L12870 ], [ %t66175, %L12871 ]
-%t66179 = call ptr @str_slice(ptr %p0, i64 %p1, i64 %t66178)
-%t66180 = call ptr @str_trim(ptr %t66179)
-%t66181 = call i64 @str_len(ptr %t66180)
-%t66182 = icmp sgt i64 %t66181, 40
-br i1 %t66182, label %L12873, label %L12874
-L12873:
-%t66183 = call ptr @str_slice(ptr %t66180, i64 0, i64 40)
-br label %L12875
-L12874:
-br label %L12875
-L12875:
-%t66184 = phi ptr [ %t66183, %L12873 ], [ %t66180, %L12874 ]
-ret ptr %t66184
+%t66244 = call i64 @str_find_char(ptr %p0, i64 10, i64 %p1)
+%t66245 = icmp slt i64 %t66244, 0
+br i1 %t66245, label %L12879, label %L12880
+L12879:
+%t66246 = call i64 @str_len(ptr %p0)
+br label %L12881
+L12880:
+br label %L12881
+L12881:
+%t66247 = phi i64 [ %t66246, %L12879 ], [ %t66244, %L12880 ]
+%t66248 = call ptr @str_slice(ptr %p0, i64 %p1, i64 %t66247)
+%t66249 = call ptr @str_trim(ptr %t66248)
+%t66250 = call i64 @str_len(ptr %t66249)
+%t66251 = icmp sgt i64 %t66250, 40
+br i1 %t66251, label %L12882, label %L12883
+L12882:
+%t66252 = call ptr @str_slice(ptr %t66249, i64 0, i64 40)
+br label %L12884
+L12883:
+br label %L12884
+L12884:
+%t66253 = phi ptr [ %t66252, %L12882 ], [ %t66249, %L12883 ]
+ret ptr %t66253
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pad(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66185 = call ptr @resid_gmalloc(i64 24)
-%t66186 = call ptr @e.itoa(ptr %t66185, i64 %p0)
-%t66187 = call i64 @str_len(ptr %t66186)
-%t66188 = icmp sge i64 %t66187, %p1
-br i1 %t66188, label %L12876, label %L12877
-L12876:
-br label %L12878
-L12877:
-%t66190 = call i64 @str_len(ptr %t66186)
-%t66191 = sub nsw i64 %p1, %t66190
-%t66192 = call ptr @str_repeat(ptr @.s66189, i64 %t66191)
-%t66193 = call ptr @resid_str_concat(ptr %t66192, ptr %t66186)
-br label %L12878
-L12878:
-%t66194 = phi ptr [ %t66186, %L12876 ], [ %t66193, %L12877 ]
-ret ptr %t66194
+%t66254 = call ptr @resid_gmalloc(i64 24)
+%t66255 = call ptr @e.itoa(ptr %t66254, i64 %p0)
+%t66256 = call i64 @str_len(ptr %t66255)
+%t66257 = icmp sge i64 %t66256, %p1
+br i1 %t66257, label %L12885, label %L12886
+L12885:
+br label %L12887
+L12886:
+%t66259 = call i64 @str_len(ptr %t66255)
+%t66260 = sub nsw i64 %p1, %t66259
+%t66261 = call ptr @str_repeat(ptr @.s66258, i64 %t66260)
+%t66262 = call ptr @resid_str_concat(ptr %t66261, ptr %t66255)
+br label %L12887
+L12887:
+%t66263 = phi ptr [ %t66255, %L12885 ], [ %t66262, %L12886 ]
+ret ptr %t66263
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_add(ptr %p0, ptr %p1, ptr %p2, ptr %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66195 = call ptr @ga_where(ptr %p1, i64 %p4)
-%t66196 = call ptr @resid_list_get(ptr %t66195, i64 0)
-%t66197 = call i64 @resid_unbox_i64(ptr %t66196)
-%t66199 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pad(i64 %t66197, i64 4)
-%t66201 = call ptr @resid_str_concat(ptr %t66199, ptr @.s66200)
-%t66202 = call ptr @resid_list_get(ptr %t66195, i64 1)
-%t66203 = call i64 @resid_unbox_i64(ptr %t66202)
-%t66205 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pad(i64 %t66203, i64 8)
-%t66206 = call ptr @resid_str_concat(ptr %t66201, ptr %t66205)
-%t66208 = call ptr @resid_str_concat(ptr %t66206, ptr @.s66207)
-%t66209 = call ptr @resid_list_get(ptr %t66195, i64 2)
-%t66210 = call i64 @resid_unbox_i64(ptr %t66209)
-%t66212 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pad(i64 %t66210, i64 6)
-%t66213 = call ptr @resid_str_concat(ptr %t66208, ptr %t66212)
-%t66215 = call ptr @resid_str_concat(ptr %t66213, ptr @.s66214)
-%t66216 = call ptr @resid_str_concat(ptr %t66215, ptr %p3)
-%t66217 = getelementptr i8, ptr %p0, i64 8
-%t66218 = load ptr, ptr %t66217
-%t66219 = call i8 @resid_map_contains(ptr %t66218, ptr %t66216)
-%t66220 = icmp ne i8 %t66219, 0
-br i1 %t66220, label %L12879, label %L12881
-L12879:
+%t66264 = call ptr @ga_where(ptr %p1, i64 %p4)
+%t66265 = call ptr @resid_list_get(ptr %t66264, i64 0)
+%t66266 = call i64 @resid_unbox_i64(ptr %t66265)
+%t66268 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pad(i64 %t66266, i64 4)
+%t66270 = call ptr @resid_str_concat(ptr %t66268, ptr @.s66269)
+%t66271 = call ptr @resid_list_get(ptr %t66264, i64 1)
+%t66272 = call i64 @resid_unbox_i64(ptr %t66271)
+%t66274 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pad(i64 %t66272, i64 8)
+%t66275 = call ptr @resid_str_concat(ptr %t66270, ptr %t66274)
+%t66277 = call ptr @resid_str_concat(ptr %t66275, ptr @.s66276)
+%t66278 = call ptr @resid_list_get(ptr %t66264, i64 2)
+%t66279 = call i64 @resid_unbox_i64(ptr %t66278)
+%t66281 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_pad(i64 %t66279, i64 6)
+%t66282 = call ptr @resid_str_concat(ptr %t66277, ptr %t66281)
+%t66284 = call ptr @resid_str_concat(ptr %t66282, ptr @.s66283)
+%t66285 = call ptr @resid_str_concat(ptr %t66284, ptr %p3)
+%t66286 = getelementptr i8, ptr %p0, i64 8
+%t66287 = load ptr, ptr %t66286
+%t66288 = call i8 @resid_map_contains(ptr %t66287, ptr %t66285)
+%t66289 = icmp ne i8 %t66288, 0
+br i1 %t66289, label %L12888, label %L12890
+L12888:
 ret ptr %p0
-L12881:
-%t66222 = call ptr @resid_str_concat(ptr %t66216, ptr @.s66221)
-%t66223 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_sym(ptr %p2, i64 %p4)
-%t66224 = call ptr @resid_str_concat(ptr %t66222, ptr %t66223)
-%t66226 = call ptr @resid_str_concat(ptr %t66224, ptr @.s66225)
-%t66227 = call ptr @resid_list_get(ptr %t66195, i64 1)
-%t66228 = call i64 @resid_unbox_i64(ptr %t66227)
-%t66230 = call ptr @resid_gmalloc(i64 24)
-%t66231 = call ptr @e.itoa(ptr %t66230, i64 %t66228)
-%t66232 = call ptr @resid_str_concat(ptr %t66226, ptr %t66231)
-%t66234 = call ptr @resid_str_concat(ptr %t66232, ptr @.s66233)
-%t66235 = call ptr @resid_list_get(ptr %t66195, i64 2)
-%t66236 = call i64 @resid_unbox_i64(ptr %t66235)
-%t66238 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t66236, i64 1)
-%t66239 = extractvalue {i64, i1} %t66238, 0
-%t66240 = extractvalue {i64, i1} %t66238, 1
-%t66241 = zext i1 %t66240 to i8
-call void @resid_overflow_check(i8 %t66241)
-%t66242 = call ptr @resid_gmalloc(i64 24)
-%t66243 = call ptr @e.itoa(ptr %t66242, i64 %t66239)
-%t66244 = call ptr @resid_str_concat(ptr %t66234, ptr %t66243)
-%t66246 = call ptr @resid_str_concat(ptr %t66244, ptr @.s66245)
-%t66247 = call ptr @resid_list_get(ptr %t66195, i64 0)
-%t66248 = call i64 @resid_unbox_i64(ptr %t66247)
-%t66250 = call ptr @resid_gmalloc(i64 24)
-%t66251 = call ptr @e.itoa(ptr %t66250, i64 %t66248)
-%t66252 = call ptr @resid_str_concat(ptr %t66246, ptr %t66251)
-%t66253 = call ptr @resid_gmalloc(i64 24)
-%t66254 = getelementptr i8, ptr %p0, i64 0
-%t66255 = load ptr, ptr %t66254
-%t66256 = alloca [1 x ptr]
-%t66260 = getelementptr i8, ptr %t66256, i64 0
-store ptr %t66252, ptr %t66260
-%t66262e = load ptr, ptr %t66256
-%t66262 = call ptr @resid_list_push(ptr %t66255, ptr %t66262e)
-%t66253.f0 = getelementptr i8, ptr %t66253, i64 0
-store ptr %t66262, ptr %t66253.f0
-%t66263 = getelementptr i8, ptr %p0, i64 8
-%t66264 = load ptr, ptr %t66263
-%t66265 = ptrtoint ptr %t66216 to i64
-%t66266 = zext i1 true to i64
-%t66267 = call ptr @resid_map_put(ptr %t66264, i8 0, i8 0, i64 %t66265, i8 3, i64 %t66266)
-%t66253.f1 = getelementptr i8, ptr %t66253, i64 8
-store ptr %t66267, ptr %t66253.f1
-ret ptr %t66253
+L12890:
+%t66291 = call ptr @resid_str_concat(ptr %t66285, ptr @.s66290)
+%t66292 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_sym(ptr %p2, i64 %p4)
+%t66293 = call ptr @resid_str_concat(ptr %t66291, ptr %t66292)
+%t66295 = call ptr @resid_str_concat(ptr %t66293, ptr @.s66294)
+%t66296 = call ptr @resid_list_get(ptr %t66264, i64 1)
+%t66297 = call i64 @resid_unbox_i64(ptr %t66296)
+%t66299 = call ptr @resid_gmalloc(i64 24)
+%t66300 = call ptr @e.itoa(ptr %t66299, i64 %t66297)
+%t66301 = call ptr @resid_str_concat(ptr %t66295, ptr %t66300)
+%t66303 = call ptr @resid_str_concat(ptr %t66301, ptr @.s66302)
+%t66304 = call ptr @resid_list_get(ptr %t66264, i64 2)
+%t66305 = call i64 @resid_unbox_i64(ptr %t66304)
+%t66307 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t66305, i64 1)
+%t66308 = extractvalue {i64, i1} %t66307, 0
+%t66309 = extractvalue {i64, i1} %t66307, 1
+%t66310 = zext i1 %t66309 to i8
+call void @resid_overflow_check(i8 %t66310)
+%t66311 = call ptr @resid_gmalloc(i64 24)
+%t66312 = call ptr @e.itoa(ptr %t66311, i64 %t66308)
+%t66313 = call ptr @resid_str_concat(ptr %t66303, ptr %t66312)
+%t66315 = call ptr @resid_str_concat(ptr %t66313, ptr @.s66314)
+%t66316 = call ptr @resid_list_get(ptr %t66264, i64 0)
+%t66317 = call i64 @resid_unbox_i64(ptr %t66316)
+%t66319 = call ptr @resid_gmalloc(i64 24)
+%t66320 = call ptr @e.itoa(ptr %t66319, i64 %t66317)
+%t66321 = call ptr @resid_str_concat(ptr %t66315, ptr %t66320)
+%t66322 = call ptr @resid_gmalloc(i64 24)
+%t66323 = getelementptr i8, ptr %p0, i64 0
+%t66324 = load ptr, ptr %t66323
+%t66325 = alloca [1 x ptr]
+%t66329 = getelementptr i8, ptr %t66325, i64 0
+store ptr %t66321, ptr %t66329
+%t66331e = load ptr, ptr %t66325
+%t66331 = call ptr @resid_list_push(ptr %t66324, ptr %t66331e)
+%t66322.f0 = getelementptr i8, ptr %t66322, i64 0
+store ptr %t66331, ptr %t66322.f0
+%t66332 = getelementptr i8, ptr %p0, i64 8
+%t66333 = load ptr, ptr %t66332
+%t66334 = ptrtoint ptr %t66285 to i64
+%t66335 = zext i1 true to i64
+%t66336 = call ptr @resid_map_put(ptr %t66333, i8 0, i8 0, i64 %t66334, i8 3, i64 %t66335)
+%t66322.f1 = getelementptr i8, ptr %t66322, i64 8
+store ptr %t66336, ptr %t66322.f1
+ret ptr %t66322
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_walk(ptr %p0, i64 %p1, ptr %p2, ptr %p3, ptr %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66268 = getelementptr i8, ptr %p0, i64 0
-%t66269 = load ptr, ptr %t66268
-%t66270 = call ptr @resid_list_get(ptr %t66269, i64 %p1)
-%t66273 = getelementptr i8, ptr %t66270, i64 0
-%t66274 = load ptr, ptr %t66273
-%t66276 = call i8 @resid_str_eq(ptr %t66274, ptr @.s66275)
-%t66277 = icmp ne i8 %t66276, 0
-br i1 %t66277, label %L12882, label %L12883
-L12882:
-%t66279 = getelementptr i8, ptr %t66270, i64 40
-%t66280 = load i64, ptr %t66279
-%t66281 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_add(ptr %p4, ptr %p2, ptr %p3, ptr @.s66278, i64 %t66280)
-br label %L12884
-L12883:
-%t66282 = getelementptr i8, ptr %t66270, i64 0
-%t66283 = load ptr, ptr %t66282
-%t66285 = call i8 @resid_str_eq(ptr %t66283, ptr @.s66284)
-%t66286 = icmp ne i8 %t66285, 0
-br label %LSL66287
-LSL66287:
-br i1 %t66286, label %LSR66287, label %LSJ66287
-LSR66287:
-%t66288 = getelementptr i8, ptr %t66270, i64 32
-%t66289 = load i64, ptr %t66288
-%t66290 = icmp sgt i64 %t66289, 0
-br label %LSJ66287
-LSJ66287:
-%t66291 = phi i1 [ false, %LSL66287 ], [ %t66290, %LSR66287 ]
-br i1 %t66291, label %L12885, label %L12886
-L12885:
-%t66292 = getelementptr i8, ptr %p0, i64 0
-%t66293 = load ptr, ptr %t66292
-%t66294 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
-%t66295 = call ptr @resid_list_get(ptr %t66293, i64 %t66294)
-%t66298 = getelementptr i8, ptr %t66295, i64 0
-%t66299 = load ptr, ptr %t66298
-%t66301 = call i8 @resid_str_eq(ptr %t66299, ptr @.s66300)
-%t66302 = icmp ne i8 %t66301, 0
-br label %LSL66303
-LSL66303:
-br i1 %t66302, label %LSR66303, label %LSJ66303
-LSR66303:
-%t66304 = getelementptr i8, ptr %t66295, i64 8
-%t66305 = load ptr, ptr %t66304
-%t66306 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_provider(ptr %t66305)
-br label %LSL66307
-LSL66307:
-br i1 %t66306, label %LSJ66307, label %LSR66307
-LSR66307:
-%t66308 = getelementptr i8, ptr %t66295, i64 8
-%t66309 = load ptr, ptr %t66308
-%t66311 = call i8 @resid_str_eq(ptr %t66309, ptr @.s66310)
-%t66312 = icmp ne i8 %t66311, 0
-br label %LSJ66307
-LSJ66307:
-%t66313 = phi i1 [ true, %LSL66307 ], [ %t66312, %LSR66307 ]
-br label %LSJ66303
-LSJ66303:
-%t66314 = phi i1 [ false, %LSL66303 ], [ %t66313, %LSJ66307 ]
-br i1 %t66314, label %L12888, label %L12889
-L12888:
-%t66316 = getelementptr i8, ptr %t66270, i64 40
-%t66317 = load i64, ptr %t66316
-%t66318 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_add(ptr %p4, ptr %p2, ptr %p3, ptr @.s66315, i64 %t66317)
-br label %L12890
-L12889:
-br label %L12890
-L12890:
-%t66319 = phi ptr [ %t66318, %L12888 ], [ %p4, %L12889 ]
-br label %L12887
-L12886:
-br label %L12887
-L12887:
-%t66320 = phi ptr [ %t66319, %L12890 ], [ %p4, %L12886 ]
-br label %L12884
-L12884:
-%t66321 = phi ptr [ %t66281, %L12882 ], [ %t66320, %L12887 ]
-%t66322 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_kids(ptr %p0, i64 %p1, i64 0, ptr %p2, ptr %p3, ptr %t66321)
-ret ptr %t66322
+%t66337 = getelementptr i8, ptr %p0, i64 0
+%t66338 = load ptr, ptr %t66337
+%t66339 = call ptr @resid_list_get(ptr %t66338, i64 %p1)
+%t66342 = getelementptr i8, ptr %t66339, i64 0
+%t66343 = load ptr, ptr %t66342
+%t66345 = call i8 @resid_str_eq(ptr %t66343, ptr @.s66344)
+%t66346 = icmp ne i8 %t66345, 0
+br i1 %t66346, label %L12891, label %L12892
+L12891:
+%t66348 = getelementptr i8, ptr %t66339, i64 40
+%t66349 = load i64, ptr %t66348
+%t66350 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_add(ptr %p4, ptr %p2, ptr %p3, ptr @.s66347, i64 %t66349)
+br label %L12893
+L12892:
+%t66351 = getelementptr i8, ptr %t66339, i64 0
+%t66352 = load ptr, ptr %t66351
+%t66354 = call i8 @resid_str_eq(ptr %t66352, ptr @.s66353)
+%t66355 = icmp ne i8 %t66354, 0
+br label %LSL66356
+LSL66356:
+br i1 %t66355, label %LSR66356, label %LSJ66356
+LSR66356:
+%t66357 = getelementptr i8, ptr %t66339, i64 32
+%t66358 = load i64, ptr %t66357
+%t66359 = icmp sgt i64 %t66358, 0
+br label %LSJ66356
+LSJ66356:
+%t66360 = phi i1 [ false, %LSL66356 ], [ %t66359, %LSR66356 ]
+br i1 %t66360, label %L12894, label %L12895
+L12894:
+%t66361 = getelementptr i8, ptr %p0, i64 0
+%t66362 = load ptr, ptr %t66361
+%t66363 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 0)
+%t66364 = call ptr @resid_list_get(ptr %t66362, i64 %t66363)
+%t66367 = getelementptr i8, ptr %t66364, i64 0
+%t66368 = load ptr, ptr %t66367
+%t66370 = call i8 @resid_str_eq(ptr %t66368, ptr @.s66369)
+%t66371 = icmp ne i8 %t66370, 0
+br label %LSL66372
+LSL66372:
+br i1 %t66371, label %LSR66372, label %LSJ66372
+LSR66372:
+%t66373 = getelementptr i8, ptr %t66364, i64 8
+%t66374 = load ptr, ptr %t66373
+%t66375 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_provider(ptr %t66374)
+br label %LSL66376
+LSL66376:
+br i1 %t66375, label %LSJ66376, label %LSR66376
+LSR66376:
+%t66377 = getelementptr i8, ptr %t66364, i64 8
+%t66378 = load ptr, ptr %t66377
+%t66380 = call i8 @resid_str_eq(ptr %t66378, ptr @.s66379)
+%t66381 = icmp ne i8 %t66380, 0
+br label %LSJ66376
+LSJ66376:
+%t66382 = phi i1 [ true, %LSL66376 ], [ %t66381, %LSR66376 ]
+br label %LSJ66372
+LSJ66372:
+%t66383 = phi i1 [ false, %LSL66372 ], [ %t66382, %LSJ66376 ]
+br i1 %t66383, label %L12897, label %L12898
+L12897:
+%t66385 = getelementptr i8, ptr %t66339, i64 40
+%t66386 = load i64, ptr %t66385
+%t66387 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_add(ptr %p4, ptr %p2, ptr %p3, ptr @.s66384, i64 %t66386)
+br label %L12899
+L12898:
+br label %L12899
+L12899:
+%t66388 = phi ptr [ %t66387, %L12897 ], [ %p4, %L12898 ]
+br label %L12896
+L12895:
+br label %L12896
+L12896:
+%t66389 = phi ptr [ %t66388, %L12899 ], [ %p4, %L12895 ]
+br label %L12893
+L12893:
+%t66390 = phi ptr [ %t66350, %L12891 ], [ %t66389, %L12896 ]
+%t66391 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_kids(ptr %p0, i64 %p1, i64 0, ptr %p2, ptr %p3, ptr %t66390)
+ret ptr %t66391
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_kids(ptr %p0.in, i64 %p1.in, i64 %p2.in, ptr %p3.in, ptr %p4.in, ptr %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
@@ -101130,23 +101260,23 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t66331, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t66400, %tco.s0 ]
 %p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ]
 %p4 = phi ptr [ %p4.in, %entry ], [ %p4, %tco.s0 ]
-%p5 = phi ptr [ %p5.in, %entry ], [ %t66333, %tco.s0 ]
-%t66323 = getelementptr i8, ptr %p0, i64 0
-%t66324 = load ptr, ptr %t66323
-%t66325 = call ptr @resid_list_get(ptr %t66324, i64 %p1)
-%t66328 = getelementptr i8, ptr %t66325, i64 32
-%t66329 = load i64, ptr %t66328
-%t66330 = icmp sge i64 %p2, %t66329
-br i1 %t66330, label %L12891, label %L12893
-L12891:
+%p5 = phi ptr [ %p5.in, %entry ], [ %t66402, %tco.s0 ]
+%t66392 = getelementptr i8, ptr %p0, i64 0
+%t66393 = load ptr, ptr %t66392
+%t66394 = call ptr @resid_list_get(ptr %t66393, i64 %p1)
+%t66397 = getelementptr i8, ptr %t66394, i64 32
+%t66398 = load i64, ptr %t66397
+%t66399 = icmp sge i64 %p2, %t66398
+br i1 %t66399, label %L12900, label %L12902
+L12900:
 ret ptr %p5
-L12893:
-%t66331 = add nsw i64 %p2, 1
-%t66332 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
-%t66333 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_walk(ptr %p0, i64 %t66332, ptr %p3, ptr %p4, ptr %p5)
+L12902:
+%t66400 = add nsw i64 %p2, 1
+%t66401 = call i64 @kg_kid(ptr %p0, i64 %p1, i64 %p2)
+%t66402 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_walk(ptr %p0, i64 %t66401, ptr %p3, ptr %p4, ptr %p5)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -101157,73 +101287,73 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t66370, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t66439, %tco.s0 ]
 %p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ]
 %p4 = phi ptr [ %p4.in, %entry ], [ %p4, %tco.s0 ]
-%p5 = phi ptr [ %p5.in, %entry ], [ %t66368, %tco.s0 ]
-%t66335 = call i64 @str_len(ptr %p1)
-%t66336 = icmp sge i64 %p2, %t66335
-br i1 %t66336, label %L12894, label %L12896
-L12894:
+%p5 = phi ptr [ %p5.in, %entry ], [ %t66437, %tco.s0 ]
+%t66404 = call i64 @str_len(ptr %p1)
+%t66405 = icmp sge i64 %p2, %t66404
+br i1 %t66405, label %L12903, label %L12905
+L12903:
 ret ptr %p5
-L12896:
-%t66337 = call i64 @str_find_char(ptr %p1, i64 44, i64 %p2)
-%t66338 = call i64 @str_find_char(ptr %p1, i64 59, i64 %t66337)
-%t66339 = call ptr @str_slice(ptr %p1, i64 %p2, i64 %t66337)
-%t66340 = call i64 @str_parse_int(ptr %t66339)
-%t66341 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t66337, i64 1)
-%t66342 = extractvalue {i64, i1} %t66341, 0
-%t66343 = extractvalue {i64, i1} %t66341, 1
-%t66344 = zext i1 %t66343 to i8
-call void @resid_overflow_check(i8 %t66344)
-%t66345 = call ptr @str_slice(ptr %p1, i64 %t66342, i64 %t66338)
-%t66346 = call i64 @str_find_char(ptr %t66345, i64 40, i64 0)
-%t66347 = icmp slt i64 %t66346, 0
-br i1 %t66347, label %L12897, label %L12898
-L12897:
-br label %L12899
-L12898:
-%t66348 = call ptr @str_slice(ptr %t66345, i64 0, i64 %t66346)
-br label %L12899
-L12899:
-%t66349 = phi ptr [ %t66345, %L12897 ], [ %t66348, %L12898 ]
-%t66350 = icmp sge i64 %t66340, 0
-br label %LSL66351
-LSL66351:
-br i1 %t66350, label %LSR66351, label %LSJ66351
-LSR66351:
-%t66352 = call i64 @kg_count(ptr %p0)
-%t66353 = icmp slt i64 %t66340, %t66352
-br label %LSJ66351
-LSJ66351:
-%t66354 = phi i1 [ false, %LSL66351 ], [ %t66353, %LSR66351 ]
-br label %LSL66355
-LSL66355:
-br i1 %t66354, label %LSR66355, label %LSJ66355
-LSR66355:
-%t66357 = call i8 @resid_str_eq(ptr %t66345, ptr @.s66356)
-%t66358 = icmp eq i8 %t66357, 0
-br label %LSJ66355
-LSJ66355:
-%t66359 = phi i1 [ false, %LSL66355 ], [ %t66358, %LSR66355 ]
-br i1 %t66359, label %L12900, label %L12901
-L12900:
-%t66360 = getelementptr i8, ptr %p0, i64 0
-%t66361 = load ptr, ptr %t66360
-%t66362 = call ptr @resid_list_get(ptr %t66361, i64 %t66340)
-%t66365 = getelementptr i8, ptr %t66362, i64 40
-%t66366 = load i64, ptr %t66365
-%t66367 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_add(ptr %p5, ptr %p3, ptr %p4, ptr %t66349, i64 %t66366)
-br label %L12902
-L12901:
-br label %L12902
-L12902:
-%t66368 = phi ptr [ %t66367, %L12900 ], [ %p5, %L12901 ]
-%t66369 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t66338, i64 1)
-%t66370 = extractvalue {i64, i1} %t66369, 0
-%t66371 = extractvalue {i64, i1} %t66369, 1
-%t66372 = zext i1 %t66371 to i8
-call void @resid_overflow_check(i8 %t66372)
+L12905:
+%t66406 = call i64 @str_find_char(ptr %p1, i64 44, i64 %p2)
+%t66407 = call i64 @str_find_char(ptr %p1, i64 59, i64 %t66406)
+%t66408 = call ptr @str_slice(ptr %p1, i64 %p2, i64 %t66406)
+%t66409 = call i64 @str_parse_int(ptr %t66408)
+%t66410 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t66406, i64 1)
+%t66411 = extractvalue {i64, i1} %t66410, 0
+%t66412 = extractvalue {i64, i1} %t66410, 1
+%t66413 = zext i1 %t66412 to i8
+call void @resid_overflow_check(i8 %t66413)
+%t66414 = call ptr @str_slice(ptr %p1, i64 %t66411, i64 %t66407)
+%t66415 = call i64 @str_find_char(ptr %t66414, i64 40, i64 0)
+%t66416 = icmp slt i64 %t66415, 0
+br i1 %t66416, label %L12906, label %L12907
+L12906:
+br label %L12908
+L12907:
+%t66417 = call ptr @str_slice(ptr %t66414, i64 0, i64 %t66415)
+br label %L12908
+L12908:
+%t66418 = phi ptr [ %t66414, %L12906 ], [ %t66417, %L12907 ]
+%t66419 = icmp sge i64 %t66409, 0
+br label %LSL66420
+LSL66420:
+br i1 %t66419, label %LSR66420, label %LSJ66420
+LSR66420:
+%t66421 = call i64 @kg_count(ptr %p0)
+%t66422 = icmp slt i64 %t66409, %t66421
+br label %LSJ66420
+LSJ66420:
+%t66423 = phi i1 [ false, %LSL66420 ], [ %t66422, %LSR66420 ]
+br label %LSL66424
+LSL66424:
+br i1 %t66423, label %LSR66424, label %LSJ66424
+LSR66424:
+%t66426 = call i8 @resid_str_eq(ptr %t66414, ptr @.s66425)
+%t66427 = icmp eq i8 %t66426, 0
+br label %LSJ66424
+LSJ66424:
+%t66428 = phi i1 [ false, %LSL66424 ], [ %t66427, %LSR66424 ]
+br i1 %t66428, label %L12909, label %L12910
+L12909:
+%t66429 = getelementptr i8, ptr %p0, i64 0
+%t66430 = load ptr, ptr %t66429
+%t66431 = call ptr @resid_list_get(ptr %t66430, i64 %t66409)
+%t66434 = getelementptr i8, ptr %t66431, i64 40
+%t66435 = load i64, ptr %t66434
+%t66436 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_add(ptr %p5, ptr %p3, ptr %p4, ptr %t66418, i64 %t66435)
+br label %L12911
+L12910:
+br label %L12911
+L12911:
+%t66437 = phi ptr [ %t66436, %L12909 ], [ %p5, %L12910 ]
+%t66438 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t66407, i64 1)
+%t66439 = extractvalue {i64, i1} %t66438, 0
+%t66440 = extractvalue {i64, i1} %t66438, 1
+%t66441 = zext i1 %t66440 to i8
+call void @resid_overflow_check(i8 %t66441)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -101232,43 +101362,43 @@ define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_cbor(ptr
 entry:
 br label %tco.head
 tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %t66411, %tco.s0 ]
+%p0 = phi ptr [ %p0.in, %entry ], [ %t66480, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
 %p2 = phi ptr [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t66412, %tco.s0 ]
-%t66374 = call i64 @resid_list_len(ptr %p1)
-%t66375 = icmp sge i64 %p3, %t66374
-br i1 %t66375, label %L12903, label %L12905
-L12903:
+%p3 = phi i64 [ %p3.in, %entry ], [ %t66481, %tco.s0 ]
+%t66443 = call i64 @resid_list_len(ptr %p1)
+%t66444 = icmp sge i64 %p3, %t66443
+br i1 %t66444, label %L12912, label %L12914
+L12912:
 ret ptr %p0
-L12905:
-%t66376 = call ptr @resid_list_get(ptr %p1, i64 %p3)
-%t66380 = call ptr @bl_str_split(ptr %t66376, ptr @.s66379)
-%t66381 = call ptr @resid_list_get(ptr %t66380, i64 5)
-%t66384 = call i64 @str_parse_int(ptr %t66381)
-%t66385 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 4, i64 5)
-%t66386 = call ptr @resid_list_get(ptr %t66380, i64 1)
-%t66389 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t66385, ptr %t66386)
-%t66390 = call ptr @resid_list_get(ptr %t66380, i64 2)
-%t66393 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t66389, ptr %t66390)
-%t66394 = call ptr @resid_list_get(ptr %t66380, i64 3)
-%t66397 = call i64 @str_parse_int(ptr %t66394)
-%t66398 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66393, i64 %t66397)
-%t66399 = call ptr @resid_list_get(ptr %t66380, i64 4)
-%t66402 = call i64 @str_parse_int(ptr %t66399)
-%t66403 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66398, i64 %t66402)
-%t66404 = call i64 @resid_list_len(ptr %p2)
-%t66405 = icmp slt i64 %t66384, %t66404
-br i1 %t66405, label %L12906, label %L12907
-L12906:
-%t66406 = call ptr @resid_list_get(ptr %p2, i64 %t66384)
-br label %L12908
-L12907:
-br label %L12908
-L12908:
-%t66410 = phi ptr [ %t66406, %L12906 ], [ @.s66409, %L12907 ]
-%t66411 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t66403, ptr %t66410)
-%t66412 = add nsw i64 %p3, 1
+L12914:
+%t66445 = call ptr @resid_list_get(ptr %p1, i64 %p3)
+%t66449 = call ptr @bl_str_split(ptr %t66445, ptr @.s66448)
+%t66450 = call ptr @resid_list_get(ptr %t66449, i64 5)
+%t66453 = call i64 @str_parse_int(ptr %t66450)
+%t66454 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %p0, i64 4, i64 5)
+%t66455 = call ptr @resid_list_get(ptr %t66449, i64 1)
+%t66458 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t66454, ptr %t66455)
+%t66459 = call ptr @resid_list_get(ptr %t66449, i64 2)
+%t66462 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t66458, ptr %t66459)
+%t66463 = call ptr @resid_list_get(ptr %t66449, i64 3)
+%t66466 = call i64 @str_parse_int(ptr %t66463)
+%t66467 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66462, i64 %t66466)
+%t66468 = call ptr @resid_list_get(ptr %t66449, i64 4)
+%t66471 = call i64 @str_parse_int(ptr %t66468)
+%t66472 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_int(ptr %t66467, i64 %t66471)
+%t66473 = call i64 @resid_list_len(ptr %p2)
+%t66474 = icmp slt i64 %t66453, %t66473
+br i1 %t66474, label %L12915, label %L12916
+L12915:
+%t66475 = call ptr @resid_list_get(ptr %p2, i64 %t66453)
+br label %L12917
+L12916:
+br label %L12917
+L12917:
+%t66479 = phi ptr [ %t66475, %L12915 ], [ @.s66478, %L12916 ]
+%t66480 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_text(ptr %t66472, ptr %t66479)
+%t66481 = add nsw i64 %p3, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -101279,50 +101409,50 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t66422, %tco.s0 ]
-%t66414 = call i64 @str_len(ptr %p1)
-%t66415 = icmp sge i64 %p2, %t66414
-br i1 %t66415, label %L12909, label %L12911
-L12909:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t66491, %tco.s0 ]
+%t66483 = call i64 @str_len(ptr %p1)
+%t66484 = icmp sge i64 %p2, %t66483
+br i1 %t66484, label %L12918, label %L12920
+L12918:
 ret i1 false
-L12911:
-%t66416 = call i64 @str_len(ptr %p0)
-%t66417 = icmp sge i64 %p2, %t66416
-br i1 %t66417, label %L12912, label %L12914
-L12912:
+L12920:
+%t66485 = call i64 @str_len(ptr %p0)
+%t66486 = icmp sge i64 %p2, %t66485
+br i1 %t66486, label %L12921, label %L12923
+L12921:
 ret i1 true
-L12914:
-%t66418 = call i64 @str_char_at(ptr %p0, i64 %p2)
-%t66419 = call i64 @str_char_at(ptr %p1, i64 %p2)
-%t66420 = icmp ne i64 %t66418, %t66419
-br i1 %t66420, label %L12915, label %L12917
-L12915:
-%t66421 = icmp slt i64 %t66418, %t66419
-ret i1 %t66421
-L12917:
-%t66422 = add nsw i64 %p2, 1
+L12923:
+%t66487 = call i64 @str_char_at(ptr %p0, i64 %p2)
+%t66488 = call i64 @str_char_at(ptr %p1, i64 %p2)
+%t66489 = icmp ne i64 %t66487, %t66488
+br i1 %t66489, label %L12924, label %L12926
+L12924:
+%t66490 = icmp slt i64 %t66487, %t66488
+ret i1 %t66490
+L12926:
+%t66491 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_msort(ptr %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66424 = call i64 @resid_list_len(ptr %p0)
-%t66425 = icmp sle i64 %t66424, 1
-br i1 %t66425, label %L12918, label %L12920
-L12918:
+%t66493 = call i64 @resid_list_len(ptr %p0)
+%t66494 = icmp sle i64 %t66493, 1
+br i1 %t66494, label %L12927, label %L12929
+L12927:
 ret ptr %p0
-L12920:
-%t66426 = call i64 @resid_list_len(ptr %p0)
-%t66427 = sdiv i64 %t66426, 2
-%t66428 = call ptr @resid_list_slice(ptr %p0, i64 0, i64 %t66427)
-%t66429 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_msort(ptr %t66428)
-%t66430 = call i64 @resid_list_len(ptr %p0)
-%t66431 = call ptr @resid_list_slice(ptr %p0, i64 %t66427, i64 %t66430)
-%t66432 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_msort(ptr %t66431)
-%t66433 = call ptr @resid_listbuf_new()
-%t66434 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_merge(ptr %t66429, ptr %t66432, i64 0, i64 0, ptr %t66433)
-ret ptr %t66434
+L12929:
+%t66495 = call i64 @resid_list_len(ptr %p0)
+%t66496 = sdiv i64 %t66495, 2
+%t66497 = call ptr @resid_list_slice(ptr %p0, i64 0, i64 %t66496)
+%t66498 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_msort(ptr %t66497)
+%t66499 = call i64 @resid_list_len(ptr %p0)
+%t66500 = call ptr @resid_list_slice(ptr %p0, i64 %t66496, i64 %t66499)
+%t66501 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_msort(ptr %t66500)
+%t66502 = call ptr @resid_listbuf_new()
+%t66503 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_merge(ptr %t66498, ptr %t66501, i64 0, i64 0, ptr %t66502)
+ret ptr %t66503
 }
 define ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_merge(ptr %p0.in, ptr %p1.in, i64 %p2.in, i64 %p3.in, ptr %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
@@ -101330,255 +101460,135 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ], [ %p1, %tco.s1 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t66458, %tco.s0 ], [ %p2, %tco.s1 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %t66469, %tco.s1 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %t66467, %tco.s0 ], [ %t66476, %tco.s1 ]
-%t66435 = call i64 @resid_list_len(ptr %p0)
-%t66436 = icmp sge i64 %p2, %t66435
-br label %LSL66437
-LSL66437:
-br i1 %t66436, label %LSR66437, label %LSJ66437
-LSR66437:
-%t66438 = call i64 @resid_list_len(ptr %p1)
-%t66439 = icmp sge i64 %p3, %t66438
-br label %LSJ66437
-LSJ66437:
-%t66440 = phi i1 [ false, %LSL66437 ], [ %t66439, %LSR66437 ]
-br i1 %t66440, label %L12921, label %L12923
-L12921:
-%t66441 = call ptr @resid_listbuf_finish(ptr %p4, ptr @.lty66441)
-ret ptr %t66441
-L12923:
-%t66442 = call i64 @resid_list_len(ptr %p1)
-%t66443 = icmp sge i64 %p3, %t66442
-br label %LSL66444
-LSL66444:
-br i1 %t66443, label %LSJ66444, label %LSR66444
-LSR66444:
-%t66445 = call i64 @resid_list_len(ptr %p0)
-%t66446 = icmp slt i64 %p2, %t66445
-br label %LSL66447
-LSL66447:
-br i1 %t66446, label %LSR66447, label %LSJ66447
-LSR66447:
-%t66448 = call ptr @resid_list_get(ptr %p0, i64 %p2)
-%t66451 = call ptr @resid_list_get(ptr %p1, i64 %p3)
-%t66454 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_lt(ptr %t66448, ptr %t66451, i64 0)
-br label %LSJ66447
-LSJ66447:
-%t66455 = phi i1 [ false, %LSL66447 ], [ %t66454, %LSR66447 ]
-br label %LSJ66444
-LSJ66444:
-%t66456 = phi i1 [ true, %LSL66444 ], [ %t66455, %LSJ66447 ]
-br i1 %t66456, label %L12924, label %L12926
-L12924:
-%t66457 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 1)
-%t66458 = extractvalue {i64, i1} %t66457, 0
-%t66459 = extractvalue {i64, i1} %t66457, 1
-%t66460 = zext i1 %t66459 to i8
-call void @resid_overflow_check(i8 %t66460)
-%t66461 = call ptr @resid_list_get(ptr %p0, i64 %p2)
-%t66467 = call ptr @resid_listbuf_push(ptr %p4, ptr %t66461)
+%p2 = phi i64 [ %p2.in, %entry ], [ %t66527, %tco.s0 ], [ %p2, %tco.s1 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %t66538, %tco.s1 ]
+%p4 = phi ptr [ %p4.in, %entry ], [ %t66536, %tco.s0 ], [ %t66545, %tco.s1 ]
+%t66504 = call i64 @resid_list_len(ptr %p0)
+%t66505 = icmp sge i64 %p2, %t66504
+br label %LSL66506
+LSL66506:
+br i1 %t66505, label %LSR66506, label %LSJ66506
+LSR66506:
+%t66507 = call i64 @resid_list_len(ptr %p1)
+%t66508 = icmp sge i64 %p3, %t66507
+br label %LSJ66506
+LSJ66506:
+%t66509 = phi i1 [ false, %LSL66506 ], [ %t66508, %LSR66506 ]
+br i1 %t66509, label %L12930, label %L12932
+L12930:
+%t66510 = call ptr @resid_listbuf_finish(ptr %p4, ptr @.lty66510)
+ret ptr %t66510
+L12932:
+%t66511 = call i64 @resid_list_len(ptr %p1)
+%t66512 = icmp sge i64 %p3, %t66511
+br label %LSL66513
+LSL66513:
+br i1 %t66512, label %LSJ66513, label %LSR66513
+LSR66513:
+%t66514 = call i64 @resid_list_len(ptr %p0)
+%t66515 = icmp slt i64 %p2, %t66514
+br label %LSL66516
+LSL66516:
+br i1 %t66515, label %LSR66516, label %LSJ66516
+LSR66516:
+%t66517 = call ptr @resid_list_get(ptr %p0, i64 %p2)
+%t66520 = call ptr @resid_list_get(ptr %p1, i64 %p3)
+%t66523 = call i1 @__m_home_larry_git_larry_resid_examples_gart_resid__ga_lt(ptr %t66517, ptr %t66520, i64 0)
+br label %LSJ66516
+LSJ66516:
+%t66524 = phi i1 [ false, %LSL66516 ], [ %t66523, %LSR66516 ]
+br label %LSJ66513
+LSJ66513:
+%t66525 = phi i1 [ true, %LSL66513 ], [ %t66524, %LSJ66516 ]
+br i1 %t66525, label %L12933, label %L12935
+L12933:
+%t66526 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 1)
+%t66527 = extractvalue {i64, i1} %t66526, 0
+%t66528 = extractvalue {i64, i1} %t66526, 1
+%t66529 = zext i1 %t66528 to i8
+call void @resid_overflow_check(i8 %t66529)
+%t66530 = call ptr @resid_list_get(ptr %p0, i64 %p2)
+%t66536 = call ptr @resid_listbuf_push(ptr %p4, ptr %t66530)
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L12926:
-%t66469 = add nsw i64 %p3, 1
-%t66470 = call ptr @resid_list_get(ptr %p1, i64 %p3)
-%t66476 = call ptr @resid_listbuf_push(ptr %p4, ptr %t66470)
+L12935:
+%t66538 = add nsw i64 %p3, 1
+%t66539 = call ptr @resid_list_get(ptr %p1, i64 %p3)
+%t66545 = call ptr @resid_listbuf_push(ptr %p4, ptr %t66539)
 br label %tco.s1
 tco.s1:
 br label %tco.head
 }
 define ptr @ga_notes(ptr %p0, ptr %p1, ptr %p2, ptr %p3, ptr %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66478 = call ptr @ga_fileinfo(ptr %p2, ptr %p3, ptr %p4)
-%t66479 = call ptr @resid_set_new()
-%t66480 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB66480)
-%t66481 = getelementptr i8, ptr %p0, i64 0
-%t66482 = load ptr, ptr %t66481
-%t66483 = getelementptr i8, ptr %p0, i64 0
-%t66484 = load ptr, ptr %t66483
-%t66485 = getelementptr i8, ptr %p0, i64 8
-%t66486 = load i64, ptr %t66485
-%t66487 = call ptr @resid_gmalloc(i64 24)
-%t66487.f0 = getelementptr i8, ptr %t66487, i64 0
-store ptr %t66480, ptr %t66487.f0
-%t66487.f1 = getelementptr i8, ptr %t66487, i64 8
-store ptr %t66479, ptr %t66487.f1
-%t66488 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_walk(ptr %t66484, i64 %t66486, ptr %t66478, ptr %p2, ptr %t66487)
-%t66489 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_reasons(ptr %t66482, ptr %p1, i64 0, ptr %t66478, ptr %p2, ptr %t66488)
-%t66490 = getelementptr i8, ptr %t66489, i64 0
-%t66491 = load ptr, ptr %t66490
-%t66492 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_msort(ptr %t66491)
-%t66493 = call ptr @resid_gmalloc(i64 16)
-%t66494 = call ptr @str_sb_new()
-%t66495 = call i64 @resid_list_len(ptr %t66492)
-%t66496 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66494, i64 4, i64 %t66495)
-%t66497 = getelementptr i8, ptr %t66478, i64 8
-%t66498 = load ptr, ptr %t66497
-%t66499 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_cbor(ptr %t66496, ptr %t66492, ptr %t66498, i64 0)
-%t66500 = call ptr @str_sb_finish(ptr %t66499)
-%t66493.f0 = getelementptr i8, ptr %t66493, i64 0
-store ptr %t66500, ptr %t66493.f0
-%t66501 = call i64 @resid_list_len(ptr %t66492)
-%t66493.f1 = getelementptr i8, ptr %t66493, i64 8
-store i64 %t66501, ptr %t66493.f1
-ret ptr %t66493
+%t66547 = call ptr @ga_fileinfo(ptr %p2, ptr %p3, ptr %p4)
+%t66548 = call ptr @resid_set_new()
+%t66549 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB66549)
+%t66550 = getelementptr i8, ptr %p0, i64 0
+%t66551 = load ptr, ptr %t66550
+%t66552 = getelementptr i8, ptr %p0, i64 0
+%t66553 = load ptr, ptr %t66552
+%t66554 = getelementptr i8, ptr %p0, i64 8
+%t66555 = load i64, ptr %t66554
+%t66556 = call ptr @resid_gmalloc(i64 24)
+%t66556.f0 = getelementptr i8, ptr %t66556, i64 0
+store ptr %t66549, ptr %t66556.f0
+%t66556.f1 = getelementptr i8, ptr %t66556, i64 8
+store ptr %t66548, ptr %t66556.f1
+%t66557 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_walk(ptr %t66553, i64 %t66555, ptr %t66547, ptr %p2, ptr %t66556)
+%t66558 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_reasons(ptr %t66551, ptr %p1, i64 0, ptr %t66547, ptr %p2, ptr %t66557)
+%t66559 = getelementptr i8, ptr %t66558, i64 0
+%t66560 = load ptr, ptr %t66559
+%t66561 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_msort(ptr %t66560)
+%t66562 = call ptr @resid_gmalloc(i64 16)
+%t66563 = call ptr @str_sb_new()
+%t66564 = call i64 @resid_list_len(ptr %t66561)
+%t66565 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_head(ptr %t66563, i64 4, i64 %t66564)
+%t66566 = getelementptr i8, ptr %t66547, i64 8
+%t66567 = load ptr, ptr %t66566
+%t66568 = call ptr @__m_home_larry_git_larry_resid_examples_gart_resid__ga_note_cbor(ptr %t66565, ptr %t66561, ptr %t66567, i64 0)
+%t66569 = call ptr @str_sb_finish(ptr %t66568)
+%t66562.f0 = getelementptr i8, ptr %t66562, i64 0
+store ptr %t66569, ptr %t66562.f0
+%t66570 = call i64 @resid_list_len(ptr %t66561)
+%t66562.f1 = getelementptr i8, ptr %t66562, i64 8
+store i64 %t66570, ptr %t66562.f1
+ret ptr %t66562
 }
 define i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_start(ptr %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66502 = getelementptr i8, ptr %p0, i64 0
-%t66503 = load i64, ptr %t66502
-%t66504 = getelementptr i8, ptr %p0, i64 8
-%t66505 = load ptr, ptr %t66504
-%t66506 = call i64 @str_len(ptr %t66505)
-%t66507 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t66503, i64 %t66506)
-%t66508 = extractvalue {i64, i1} %t66507, 0
-%t66509 = extractvalue {i64, i1} %t66507, 1
-%t66510 = zext i1 %t66509 to i8
-call void @resid_overflow_check(i8 %t66510)
-ret i64 %t66508
+%t66571 = getelementptr i8, ptr %p0, i64 0
+%t66572 = load i64, ptr %t66571
+%t66573 = getelementptr i8, ptr %p0, i64 8
+%t66574 = load ptr, ptr %t66573
+%t66575 = call i64 @str_len(ptr %t66574)
+%t66576 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t66572, i64 %t66575)
+%t66577 = extractvalue {i64, i1} %t66576, 0
+%t66578 = extractvalue {i64, i1} %t66576, 1
+%t66579 = zext i1 %t66578 to i8
+call void @resid_overflow_check(i8 %t66579)
+ret i64 %t66577
 }
 define i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_close(ptr %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ], [ %p0, %tco.s2 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t66539, %tco.s0 ], [ %t66568, %tco.s1 ], [ %t66575, %tco.s2 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t66541, %tco.s0 ], [ %t66570, %tco.s1 ], [ %p2, %tco.s2 ]
-%t66511 = call ptr @lex_tok(ptr %p0, i64 %p1)
-%t66512 = getelementptr i8, ptr %t66511, i64 16
-%t66513 = load ptr, ptr %t66512
-%t66515 = call i8 @resid_str_eq(ptr %t66513, ptr @.s66514)
-%t66516 = icmp ne i8 %t66515, 0
-br i1 %t66516, label %L12927, label %L12929
-L12927:
-%t66517 = getelementptr i8, ptr %t66511, i64 0
-%t66518 = load i64, ptr %t66517
-ret i64 %t66518
-L12929:
-%t66519 = getelementptr i8, ptr %t66511, i64 8
-%t66520 = load ptr, ptr %t66519
-%t66522 = call i8 @resid_str_eq(ptr %t66520, ptr @.s66521)
-%t66523 = icmp ne i8 %t66522, 0
-br label %LSL66524
-LSL66524:
-br i1 %t66523, label %LSJ66524, label %LSR66524
-LSR66524:
-%t66525 = getelementptr i8, ptr %t66511, i64 8
-%t66526 = load ptr, ptr %t66525
-%t66528 = call i8 @resid_str_eq(ptr %t66526, ptr @.s66527)
-%t66529 = icmp ne i8 %t66528, 0
-br label %LSJ66524
-LSJ66524:
-%t66530 = phi i1 [ true, %LSL66524 ], [ %t66529, %LSR66524 ]
-br label %LSL66531
-LSL66531:
-br i1 %t66530, label %LSJ66531, label %LSR66531
-LSR66531:
-%t66532 = getelementptr i8, ptr %t66511, i64 8
-%t66533 = load ptr, ptr %t66532
-%t66535 = call i8 @resid_str_eq(ptr %t66533, ptr @.s66534)
-%t66536 = icmp ne i8 %t66535, 0
-br label %LSJ66531
-LSJ66531:
-%t66537 = phi i1 [ true, %LSL66531 ], [ %t66536, %LSR66531 ]
-br i1 %t66537, label %L12930, label %L12932
-L12930:
-%t66538 = getelementptr i8, ptr %t66511, i64 0
-%t66539 = load i64, ptr %t66538
-%t66540 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 1)
-%t66541 = extractvalue {i64, i1} %t66540, 0
-%t66542 = extractvalue {i64, i1} %t66540, 1
-%t66543 = zext i1 %t66542 to i8
-call void @resid_overflow_check(i8 %t66543)
-br label %tco.s0
-tco.s0:
-br label %tco.head
-L12932:
-%t66545 = getelementptr i8, ptr %t66511, i64 8
-%t66546 = load ptr, ptr %t66545
-%t66548 = call i8 @resid_str_eq(ptr %t66546, ptr @.s66547)
-%t66549 = icmp ne i8 %t66548, 0
-br label %LSL66550
-LSL66550:
-br i1 %t66549, label %LSJ66550, label %LSR66550
-LSR66550:
-%t66551 = getelementptr i8, ptr %t66511, i64 8
-%t66552 = load ptr, ptr %t66551
-%t66554 = call i8 @resid_str_eq(ptr %t66552, ptr @.s66553)
-%t66555 = icmp ne i8 %t66554, 0
-br label %LSJ66550
-LSJ66550:
-%t66556 = phi i1 [ true, %LSL66550 ], [ %t66555, %LSR66550 ]
-br label %LSL66557
-LSL66557:
-br i1 %t66556, label %LSJ66557, label %LSR66557
-LSR66557:
-%t66558 = getelementptr i8, ptr %t66511, i64 8
-%t66559 = load ptr, ptr %t66558
-%t66561 = call i8 @resid_str_eq(ptr %t66559, ptr @.s66560)
-%t66562 = icmp ne i8 %t66561, 0
-br label %LSJ66557
-LSJ66557:
-%t66563 = phi i1 [ true, %LSL66557 ], [ %t66562, %LSR66557 ]
-br i1 %t66563, label %L12933, label %L12935
-L12933:
-%t66564 = icmp eq i64 %p2, 0
-br i1 %t66564, label %L12936, label %L12938
+%p1 = phi i64 [ %p1.in, %entry ], [ %t66608, %tco.s0 ], [ %t66637, %tco.s1 ], [ %t66644, %tco.s2 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t66610, %tco.s0 ], [ %t66639, %tco.s1 ], [ %p2, %tco.s2 ]
+%t66580 = call ptr @lex_tok(ptr %p0, i64 %p1)
+%t66581 = getelementptr i8, ptr %t66580, i64 16
+%t66582 = load ptr, ptr %t66581
+%t66584 = call i8 @resid_str_eq(ptr %t66582, ptr @.s66583)
+%t66585 = icmp ne i8 %t66584, 0
+br i1 %t66585, label %L12936, label %L12938
 L12936:
-%t66565 = getelementptr i8, ptr %t66511, i64 0
-%t66566 = load i64, ptr %t66565
-ret i64 %t66566
+%t66586 = getelementptr i8, ptr %t66580, i64 0
+%t66587 = load i64, ptr %t66586
+ret i64 %t66587
 L12938:
-%t66567 = getelementptr i8, ptr %t66511, i64 0
-%t66568 = load i64, ptr %t66567
-%t66569 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
-%t66570 = extractvalue {i64, i1} %t66569, 0
-%t66571 = extractvalue {i64, i1} %t66569, 1
-%t66572 = zext i1 %t66571 to i8
-call void @resid_overflow_check(i8 %t66572)
-br label %tco.s1
-tco.s1:
-br label %tco.head
-L12935:
-%t66574 = getelementptr i8, ptr %t66511, i64 0
-%t66575 = load i64, ptr %t66574
-br label %tco.s2
-tco.s2:
-br label %tco.head
-}
-define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_commas(ptr %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, ptr %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
-entry:
-%t66652 = alloca [1 x ptr]
-br label %tco.head
-tco.head:
-%p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ], [ %p0, %tco.s2 ], [ %p0, %tco.s3 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t66608, %tco.s0 ], [ %t66634, %tco.s1 ], [ %t66649, %tco.s2 ], [ %t66661, %tco.s3 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ], [ %p2, %tco.s1 ], [ %p2, %tco.s2 ], [ %p2, %tco.s3 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t66610, %tco.s0 ], [ %t66636, %tco.s1 ], [ %p3, %tco.s2 ], [ %p3, %tco.s3 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %p4, %tco.s0 ], [ %p4, %tco.s1 ], [ %t66658, %tco.s2 ], [ %p4, %tco.s3 ]
-%t66577 = call ptr @lex_tok(ptr %p0, i64 %p1)
-%t66578 = getelementptr i8, ptr %t66577, i64 16
-%t66579 = load ptr, ptr %t66578
-%t66581 = call i8 @resid_str_eq(ptr %t66579, ptr @.s66580)
-%t66582 = icmp ne i8 %t66581, 0
-br label %LSL66583
-LSL66583:
-br i1 %t66582, label %LSJ66583, label %LSR66583
-LSR66583:
-%t66584 = getelementptr i8, ptr %t66577, i64 0
-%t66585 = load i64, ptr %t66584
-%t66586 = icmp sgt i64 %t66585, %p2
-br label %LSJ66583
-LSJ66583:
-%t66587 = phi i1 [ true, %LSL66583 ], [ %t66586, %LSR66583 ]
-br i1 %t66587, label %L12939, label %L12941
-L12939:
-ret ptr %p4
-L12941:
-%t66588 = getelementptr i8, ptr %t66577, i64 8
+%t66588 = getelementptr i8, ptr %t66580, i64 8
 %t66589 = load ptr, ptr %t66588
 %t66591 = call i8 @resid_str_eq(ptr %t66589, ptr @.s66590)
 %t66592 = icmp ne i8 %t66591, 0
@@ -101586,7 +101596,7 @@ br label %LSL66593
 LSL66593:
 br i1 %t66592, label %LSJ66593, label %LSR66593
 LSR66593:
-%t66594 = getelementptr i8, ptr %t66577, i64 8
+%t66594 = getelementptr i8, ptr %t66580, i64 8
 %t66595 = load ptr, ptr %t66594
 %t66597 = call i8 @resid_str_eq(ptr %t66595, ptr @.s66596)
 %t66598 = icmp ne i8 %t66597, 0
@@ -101597,18 +101607,18 @@ br label %LSL66600
 LSL66600:
 br i1 %t66599, label %LSJ66600, label %LSR66600
 LSR66600:
-%t66601 = getelementptr i8, ptr %t66577, i64 8
+%t66601 = getelementptr i8, ptr %t66580, i64 8
 %t66602 = load ptr, ptr %t66601
 %t66604 = call i8 @resid_str_eq(ptr %t66602, ptr @.s66603)
 %t66605 = icmp ne i8 %t66604, 0
 br label %LSJ66600
 LSJ66600:
 %t66606 = phi i1 [ true, %LSL66600 ], [ %t66605, %LSR66600 ]
-br i1 %t66606, label %L12942, label %L12944
-L12942:
-%t66607 = getelementptr i8, ptr %t66577, i64 0
+br i1 %t66606, label %L12939, label %L12941
+L12939:
+%t66607 = getelementptr i8, ptr %t66580, i64 0
 %t66608 = load i64, ptr %t66607
-%t66609 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p3, i64 1)
+%t66609 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 1)
 %t66610 = extractvalue {i64, i1} %t66609, 0
 %t66611 = extractvalue {i64, i1} %t66609, 1
 %t66612 = zext i1 %t66611 to i8
@@ -101616,8 +101626,8 @@ call void @resid_overflow_check(i8 %t66612)
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L12944:
-%t66614 = getelementptr i8, ptr %t66577, i64 8
+L12941:
+%t66614 = getelementptr i8, ptr %t66580, i64 8
 %t66615 = load ptr, ptr %t66614
 %t66617 = call i8 @resid_str_eq(ptr %t66615, ptr @.s66616)
 %t66618 = icmp ne i8 %t66617, 0
@@ -101625,7 +101635,7 @@ br label %LSL66619
 LSL66619:
 br i1 %t66618, label %LSJ66619, label %LSR66619
 LSR66619:
-%t66620 = getelementptr i8, ptr %t66577, i64 8
+%t66620 = getelementptr i8, ptr %t66580, i64 8
 %t66621 = load ptr, ptr %t66620
 %t66623 = call i8 @resid_str_eq(ptr %t66621, ptr @.s66622)
 %t66624 = icmp ne i8 %t66623, 0
@@ -101636,250 +101646,370 @@ br label %LSL66626
 LSL66626:
 br i1 %t66625, label %LSJ66626, label %LSR66626
 LSR66626:
-%t66627 = getelementptr i8, ptr %t66577, i64 8
+%t66627 = getelementptr i8, ptr %t66580, i64 8
 %t66628 = load ptr, ptr %t66627
 %t66630 = call i8 @resid_str_eq(ptr %t66628, ptr @.s66629)
 %t66631 = icmp ne i8 %t66630, 0
 br label %LSJ66626
 LSJ66626:
 %t66632 = phi i1 [ true, %LSL66626 ], [ %t66631, %LSR66626 ]
-br i1 %t66632, label %L12945, label %L12947
+br i1 %t66632, label %L12942, label %L12944
+L12942:
+%t66633 = icmp eq i64 %p2, 0
+br i1 %t66633, label %L12945, label %L12947
 L12945:
-%t66633 = getelementptr i8, ptr %t66577, i64 0
-%t66634 = load i64, ptr %t66633
-%t66635 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
-%t66636 = extractvalue {i64, i1} %t66635, 0
-%t66637 = extractvalue {i64, i1} %t66635, 1
-%t66638 = zext i1 %t66637 to i8
-call void @resid_overflow_check(i8 %t66638)
+%t66634 = getelementptr i8, ptr %t66580, i64 0
+%t66635 = load i64, ptr %t66634
+ret i64 %t66635
+L12947:
+%t66636 = getelementptr i8, ptr %t66580, i64 0
+%t66637 = load i64, ptr %t66636
+%t66638 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t66639 = extractvalue {i64, i1} %t66638, 0
+%t66640 = extractvalue {i64, i1} %t66638, 1
+%t66641 = zext i1 %t66640 to i8
+call void @resid_overflow_check(i8 %t66641)
 br label %tco.s1
 tco.s1:
 br label %tco.head
-L12947:
-%t66640 = getelementptr i8, ptr %t66577, i64 8
-%t66641 = load ptr, ptr %t66640
-%t66643 = call i8 @resid_str_eq(ptr %t66641, ptr @.s66642)
-%t66644 = icmp ne i8 %t66643, 0
-br label %LSL66645
-LSL66645:
-br i1 %t66644, label %LSR66645, label %LSJ66645
-LSR66645:
-%t66646 = icmp eq i64 %p3, 0
-br label %LSJ66645
-LSJ66645:
-%t66647 = phi i1 [ false, %LSL66645 ], [ %t66646, %LSR66645 ]
-br i1 %t66647, label %L12948, label %L12950
-L12948:
-%t66648 = getelementptr i8, ptr %t66577, i64 0
-%t66649 = load i64, ptr %t66648
-%t66650 = getelementptr i8, ptr %t66577, i64 0
-%t66651 = load i64, ptr %t66650
-%t66654 = call ptr @resid_box_i64(i64 %t66651)
-%t66656 = getelementptr i8, ptr %t66652, i64 0
-store ptr %t66654, ptr %t66656
-%t66658e = load ptr, ptr %t66652
-%t66658 = call ptr @resid_list_push(ptr %p4, ptr %t66658e)
+L12944:
+%t66643 = getelementptr i8, ptr %t66580, i64 0
+%t66644 = load i64, ptr %t66643
 br label %tco.s2
 tco.s2:
 br label %tco.head
+}
+define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_commas(ptr %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, ptr %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
+entry:
+%t66721 = alloca [1 x ptr]
+br label %tco.head
+tco.head:
+%p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ], [ %p0, %tco.s2 ], [ %p0, %tco.s3 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t66677, %tco.s0 ], [ %t66703, %tco.s1 ], [ %t66718, %tco.s2 ], [ %t66730, %tco.s3 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ], [ %p2, %tco.s1 ], [ %p2, %tco.s2 ], [ %p2, %tco.s3 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t66679, %tco.s0 ], [ %t66705, %tco.s1 ], [ %p3, %tco.s2 ], [ %p3, %tco.s3 ]
+%p4 = phi ptr [ %p4.in, %entry ], [ %p4, %tco.s0 ], [ %p4, %tco.s1 ], [ %t66727, %tco.s2 ], [ %p4, %tco.s3 ]
+%t66646 = call ptr @lex_tok(ptr %p0, i64 %p1)
+%t66647 = getelementptr i8, ptr %t66646, i64 16
+%t66648 = load ptr, ptr %t66647
+%t66650 = call i8 @resid_str_eq(ptr %t66648, ptr @.s66649)
+%t66651 = icmp ne i8 %t66650, 0
+br label %LSL66652
+LSL66652:
+br i1 %t66651, label %LSJ66652, label %LSR66652
+LSR66652:
+%t66653 = getelementptr i8, ptr %t66646, i64 0
+%t66654 = load i64, ptr %t66653
+%t66655 = icmp sgt i64 %t66654, %p2
+br label %LSJ66652
+LSJ66652:
+%t66656 = phi i1 [ true, %LSL66652 ], [ %t66655, %LSR66652 ]
+br i1 %t66656, label %L12948, label %L12950
+L12948:
+ret ptr %p4
 L12950:
-%t66660 = getelementptr i8, ptr %t66577, i64 0
-%t66661 = load i64, ptr %t66660
+%t66657 = getelementptr i8, ptr %t66646, i64 8
+%t66658 = load ptr, ptr %t66657
+%t66660 = call i8 @resid_str_eq(ptr %t66658, ptr @.s66659)
+%t66661 = icmp ne i8 %t66660, 0
+br label %LSL66662
+LSL66662:
+br i1 %t66661, label %LSJ66662, label %LSR66662
+LSR66662:
+%t66663 = getelementptr i8, ptr %t66646, i64 8
+%t66664 = load ptr, ptr %t66663
+%t66666 = call i8 @resid_str_eq(ptr %t66664, ptr @.s66665)
+%t66667 = icmp ne i8 %t66666, 0
+br label %LSJ66662
+LSJ66662:
+%t66668 = phi i1 [ true, %LSL66662 ], [ %t66667, %LSR66662 ]
+br label %LSL66669
+LSL66669:
+br i1 %t66668, label %LSJ66669, label %LSR66669
+LSR66669:
+%t66670 = getelementptr i8, ptr %t66646, i64 8
+%t66671 = load ptr, ptr %t66670
+%t66673 = call i8 @resid_str_eq(ptr %t66671, ptr @.s66672)
+%t66674 = icmp ne i8 %t66673, 0
+br label %LSJ66669
+LSJ66669:
+%t66675 = phi i1 [ true, %LSL66669 ], [ %t66674, %LSR66669 ]
+br i1 %t66675, label %L12951, label %L12953
+L12951:
+%t66676 = getelementptr i8, ptr %t66646, i64 0
+%t66677 = load i64, ptr %t66676
+%t66678 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p3, i64 1)
+%t66679 = extractvalue {i64, i1} %t66678, 0
+%t66680 = extractvalue {i64, i1} %t66678, 1
+%t66681 = zext i1 %t66680 to i8
+call void @resid_overflow_check(i8 %t66681)
+br label %tco.s0
+tco.s0:
+br label %tco.head
+L12953:
+%t66683 = getelementptr i8, ptr %t66646, i64 8
+%t66684 = load ptr, ptr %t66683
+%t66686 = call i8 @resid_str_eq(ptr %t66684, ptr @.s66685)
+%t66687 = icmp ne i8 %t66686, 0
+br label %LSL66688
+LSL66688:
+br i1 %t66687, label %LSJ66688, label %LSR66688
+LSR66688:
+%t66689 = getelementptr i8, ptr %t66646, i64 8
+%t66690 = load ptr, ptr %t66689
+%t66692 = call i8 @resid_str_eq(ptr %t66690, ptr @.s66691)
+%t66693 = icmp ne i8 %t66692, 0
+br label %LSJ66688
+LSJ66688:
+%t66694 = phi i1 [ true, %LSL66688 ], [ %t66693, %LSR66688 ]
+br label %LSL66695
+LSL66695:
+br i1 %t66694, label %LSJ66695, label %LSR66695
+LSR66695:
+%t66696 = getelementptr i8, ptr %t66646, i64 8
+%t66697 = load ptr, ptr %t66696
+%t66699 = call i8 @resid_str_eq(ptr %t66697, ptr @.s66698)
+%t66700 = icmp ne i8 %t66699, 0
+br label %LSJ66695
+LSJ66695:
+%t66701 = phi i1 [ true, %LSL66695 ], [ %t66700, %LSR66695 ]
+br i1 %t66701, label %L12954, label %L12956
+L12954:
+%t66702 = getelementptr i8, ptr %t66646, i64 0
+%t66703 = load i64, ptr %t66702
+%t66704 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
+%t66705 = extractvalue {i64, i1} %t66704, 0
+%t66706 = extractvalue {i64, i1} %t66704, 1
+%t66707 = zext i1 %t66706 to i8
+call void @resid_overflow_check(i8 %t66707)
+br label %tco.s1
+tco.s1:
+br label %tco.head
+L12956:
+%t66709 = getelementptr i8, ptr %t66646, i64 8
+%t66710 = load ptr, ptr %t66709
+%t66712 = call i8 @resid_str_eq(ptr %t66710, ptr @.s66711)
+%t66713 = icmp ne i8 %t66712, 0
+br label %LSL66714
+LSL66714:
+br i1 %t66713, label %LSR66714, label %LSJ66714
+LSR66714:
+%t66715 = icmp eq i64 %p3, 0
+br label %LSJ66714
+LSJ66714:
+%t66716 = phi i1 [ false, %LSL66714 ], [ %t66715, %LSR66714 ]
+br i1 %t66716, label %L12957, label %L12959
+L12957:
+%t66717 = getelementptr i8, ptr %t66646, i64 0
+%t66718 = load i64, ptr %t66717
+%t66719 = getelementptr i8, ptr %t66646, i64 0
+%t66720 = load i64, ptr %t66719
+%t66723 = call ptr @resid_box_i64(i64 %t66720)
+%t66725 = getelementptr i8, ptr %t66721, i64 0
+store ptr %t66723, ptr %t66725
+%t66727e = load ptr, ptr %t66721
+%t66727 = call ptr @resid_list_push(ptr %p4, ptr %t66727e)
+br label %tco.s2
+tco.s2:
+br label %tco.head
+L12959:
+%t66729 = getelementptr i8, ptr %t66646, i64 0
+%t66730 = load i64, ptr %t66729
 br label %tco.s3
 tco.s3:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66663 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
-%t66664 = extractvalue {i64, i1} %t66663, 0
-%t66665 = extractvalue {i64, i1} %t66663, 1
-%t66666 = zext i1 %t66665 to i8
-call void @resid_overflow_check(i8 %t66666)
-%t66668 = call ptr @resid_list_new(i64 0, ptr null, ptr @.lty66667)
-%t66669 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_commas(ptr %p0, i64 %p1, i64 %t66664, i64 0, ptr %t66668)
-%t66671 = call ptr @resid_list_new(i64 0, ptr null, ptr @.lty66670)
-%t66672 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_seg_at(ptr %t66669, i64 0, i64 %p1, i64 %t66664, ptr %t66671)
-ret ptr %t66672
+%t66732 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t66733 = extractvalue {i64, i1} %t66732, 0
+%t66734 = extractvalue {i64, i1} %t66732, 1
+%t66735 = zext i1 %t66734 to i8
+call void @resid_overflow_check(i8 %t66735)
+%t66737 = call ptr @resid_list_new(i64 0, ptr null, ptr @.lty66736)
+%t66738 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_commas(ptr %p0, i64 %p1, i64 %t66733, i64 0, ptr %t66737)
+%t66740 = call ptr @resid_list_new(i64 0, ptr null, ptr @.lty66739)
+%t66741 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_seg_at(ptr %t66738, i64 0, i64 %p1, i64 %t66733, ptr %t66740)
+ret ptr %t66741
 }
 define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_seg_at(ptr %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, ptr %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66675 = alloca [2 x ptr]
-%t66692 = alloca [2 x ptr]
+%t66744 = alloca [2 x ptr]
+%t66761 = alloca [2 x ptr]
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t66701, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t66686, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t66770, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t66755, %tco.s0 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %t66702, %tco.s0 ]
-%t66673 = call i64 @resid_list_len(ptr %p0)
-%t66674 = icmp sge i64 %p1, %t66673
-br i1 %t66674, label %L12951, label %L12953
-L12951:
-%t66677 = call ptr @resid_box_i64(i64 %p2)
-%t66679 = getelementptr i8, ptr %t66675, i64 0
-store ptr %t66677, ptr %t66679
-%t66680 = call ptr @resid_box_i64(i64 %p3)
-%t66682 = getelementptr i8, ptr %t66675, i64 8
-store ptr %t66680, ptr %t66682
-%t66683 = call ptr @resid_list_new(i64 2, ptr %t66675, ptr @.lty66675)
-%t66684 = call ptr @resid_list_concat(ptr %p4, ptr %t66683)
-ret ptr %t66684
-L12953:
-%t66685 = call ptr @resid_list_get(ptr %p0, i64 %p1)
-%t66686 = call i64 @resid_unbox_i64(ptr %t66685)
-%t66688 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t66686, i64 1)
-%t66689 = extractvalue {i64, i1} %t66688, 0
-%t66690 = extractvalue {i64, i1} %t66688, 1
-%t66691 = zext i1 %t66690 to i8
-call void @resid_overflow_check(i8 %t66691)
-%t66694 = call ptr @resid_box_i64(i64 %p2)
-%t66696 = getelementptr i8, ptr %t66692, i64 0
-store ptr %t66694, ptr %t66696
-%t66697 = call ptr @resid_box_i64(i64 %t66689)
-%t66699 = getelementptr i8, ptr %t66692, i64 8
-store ptr %t66697, ptr %t66699
-%t66700 = call ptr @resid_list_new(i64 2, ptr %t66692, ptr @.lty66692)
-%t66701 = add nsw i64 %p1, 1
-%t66702 = call ptr @resid_list_concat(ptr %p4, ptr %t66700)
+%p4 = phi ptr [ %p4.in, %entry ], [ %t66771, %tco.s0 ]
+%t66742 = call i64 @resid_list_len(ptr %p0)
+%t66743 = icmp sge i64 %p1, %t66742
+br i1 %t66743, label %L12960, label %L12962
+L12960:
+%t66746 = call ptr @resid_box_i64(i64 %p2)
+%t66748 = getelementptr i8, ptr %t66744, i64 0
+store ptr %t66746, ptr %t66748
+%t66749 = call ptr @resid_box_i64(i64 %p3)
+%t66751 = getelementptr i8, ptr %t66744, i64 8
+store ptr %t66749, ptr %t66751
+%t66752 = call ptr @resid_list_new(i64 2, ptr %t66744, ptr @.lty66744)
+%t66753 = call ptr @resid_list_concat(ptr %p4, ptr %t66752)
+ret ptr %t66753
+L12962:
+%t66754 = call ptr @resid_list_get(ptr %p0, i64 %p1)
+%t66755 = call i64 @resid_unbox_i64(ptr %t66754)
+%t66757 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t66755, i64 1)
+%t66758 = extractvalue {i64, i1} %t66757, 0
+%t66759 = extractvalue {i64, i1} %t66757, 1
+%t66760 = zext i1 %t66759 to i8
+call void @resid_overflow_check(i8 %t66760)
+%t66763 = call ptr @resid_box_i64(i64 %p2)
+%t66765 = getelementptr i8, ptr %t66761, i64 0
+store ptr %t66763, ptr %t66765
+%t66766 = call ptr @resid_box_i64(i64 %t66758)
+%t66768 = getelementptr i8, ptr %t66761, i64 8
+store ptr %t66766, ptr %t66768
+%t66769 = call ptr @resid_list_new(i64 2, ptr %t66761, ptr @.lty66761)
+%t66770 = add nsw i64 %p1, 1
+%t66771 = call ptr @resid_list_concat(ptr %p4, ptr %t66769)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_blank(ptr %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66704 = call ptr @str_slice(ptr %p0, i64 %p1, i64 %p2)
-%t66705 = call ptr @str_trim(ptr %t66704)
-%t66707 = call i8 @resid_str_eq(ptr %t66705, ptr @.s66706)
-%t66708 = icmp ne i8 %t66707, 0
-ret i1 %t66708
+%t66773 = call ptr @str_slice(ptr %p0, i64 %p1, i64 %p2)
+%t66774 = call ptr @str_trim(ptr %t66773)
+%t66776 = call i8 @resid_str_eq(ptr %t66774, ptr @.s66775)
+%t66777 = icmp ne i8 %t66776, 0
+ret i1 %t66777
 }
 define i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_eq_at(ptr %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ], [ %p0, %tco.s2 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t66740, %tco.s0 ], [ %t66766, %tco.s1 ], [ %t66783, %tco.s2 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t66809, %tco.s0 ], [ %t66835, %tco.s1 ], [ %t66852, %tco.s2 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ], [ %p2, %tco.s1 ], [ %p2, %tco.s2 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t66742, %tco.s0 ], [ %t66768, %tco.s1 ], [ %p3, %tco.s2 ]
-%t66709 = call ptr @lex_tok(ptr %p0, i64 %p1)
-%t66710 = getelementptr i8, ptr %t66709, i64 16
-%t66711 = load ptr, ptr %t66710
-%t66713 = call i8 @resid_str_eq(ptr %t66711, ptr @.s66712)
-%t66714 = icmp ne i8 %t66713, 0
-br label %LSL66715
-LSL66715:
-br i1 %t66714, label %LSJ66715, label %LSR66715
-LSR66715:
-%t66716 = getelementptr i8, ptr %t66709, i64 0
-%t66717 = load i64, ptr %t66716
-%t66718 = icmp sgt i64 %t66717, %p2
-br label %LSJ66715
-LSJ66715:
-%t66719 = phi i1 [ true, %LSL66715 ], [ %t66718, %LSR66715 ]
-br i1 %t66719, label %L12954, label %L12956
-L12954:
+%p3 = phi i64 [ %p3.in, %entry ], [ %t66811, %tco.s0 ], [ %t66837, %tco.s1 ], [ %p3, %tco.s2 ]
+%t66778 = call ptr @lex_tok(ptr %p0, i64 %p1)
+%t66779 = getelementptr i8, ptr %t66778, i64 16
+%t66780 = load ptr, ptr %t66779
+%t66782 = call i8 @resid_str_eq(ptr %t66780, ptr @.s66781)
+%t66783 = icmp ne i8 %t66782, 0
+br label %LSL66784
+LSL66784:
+br i1 %t66783, label %LSJ66784, label %LSR66784
+LSR66784:
+%t66785 = getelementptr i8, ptr %t66778, i64 0
+%t66786 = load i64, ptr %t66785
+%t66787 = icmp sgt i64 %t66786, %p2
+br label %LSJ66784
+LSJ66784:
+%t66788 = phi i1 [ true, %LSL66784 ], [ %t66787, %LSR66784 ]
+br i1 %t66788, label %L12963, label %L12965
+L12963:
 ret i64 -1
-L12956:
-%t66720 = getelementptr i8, ptr %t66709, i64 8
-%t66721 = load ptr, ptr %t66720
-%t66723 = call i8 @resid_str_eq(ptr %t66721, ptr @.s66722)
-%t66724 = icmp ne i8 %t66723, 0
-br label %LSL66725
-LSL66725:
-br i1 %t66724, label %LSJ66725, label %LSR66725
-LSR66725:
-%t66726 = getelementptr i8, ptr %t66709, i64 8
-%t66727 = load ptr, ptr %t66726
-%t66729 = call i8 @resid_str_eq(ptr %t66727, ptr @.s66728)
-%t66730 = icmp ne i8 %t66729, 0
-br label %LSJ66725
-LSJ66725:
-%t66731 = phi i1 [ true, %LSL66725 ], [ %t66730, %LSR66725 ]
-br label %LSL66732
-LSL66732:
-br i1 %t66731, label %LSJ66732, label %LSR66732
-LSR66732:
-%t66733 = getelementptr i8, ptr %t66709, i64 8
-%t66734 = load ptr, ptr %t66733
-%t66736 = call i8 @resid_str_eq(ptr %t66734, ptr @.s66735)
-%t66737 = icmp ne i8 %t66736, 0
-br label %LSJ66732
-LSJ66732:
-%t66738 = phi i1 [ true, %LSL66732 ], [ %t66737, %LSR66732 ]
-br i1 %t66738, label %L12957, label %L12959
-L12957:
-%t66739 = getelementptr i8, ptr %t66709, i64 0
-%t66740 = load i64, ptr %t66739
-%t66741 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p3, i64 1)
-%t66742 = extractvalue {i64, i1} %t66741, 0
-%t66743 = extractvalue {i64, i1} %t66741, 1
-%t66744 = zext i1 %t66743 to i8
-call void @resid_overflow_check(i8 %t66744)
+L12965:
+%t66789 = getelementptr i8, ptr %t66778, i64 8
+%t66790 = load ptr, ptr %t66789
+%t66792 = call i8 @resid_str_eq(ptr %t66790, ptr @.s66791)
+%t66793 = icmp ne i8 %t66792, 0
+br label %LSL66794
+LSL66794:
+br i1 %t66793, label %LSJ66794, label %LSR66794
+LSR66794:
+%t66795 = getelementptr i8, ptr %t66778, i64 8
+%t66796 = load ptr, ptr %t66795
+%t66798 = call i8 @resid_str_eq(ptr %t66796, ptr @.s66797)
+%t66799 = icmp ne i8 %t66798, 0
+br label %LSJ66794
+LSJ66794:
+%t66800 = phi i1 [ true, %LSL66794 ], [ %t66799, %LSR66794 ]
+br label %LSL66801
+LSL66801:
+br i1 %t66800, label %LSJ66801, label %LSR66801
+LSR66801:
+%t66802 = getelementptr i8, ptr %t66778, i64 8
+%t66803 = load ptr, ptr %t66802
+%t66805 = call i8 @resid_str_eq(ptr %t66803, ptr @.s66804)
+%t66806 = icmp ne i8 %t66805, 0
+br label %LSJ66801
+LSJ66801:
+%t66807 = phi i1 [ true, %LSL66801 ], [ %t66806, %LSR66801 ]
+br i1 %t66807, label %L12966, label %L12968
+L12966:
+%t66808 = getelementptr i8, ptr %t66778, i64 0
+%t66809 = load i64, ptr %t66808
+%t66810 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p3, i64 1)
+%t66811 = extractvalue {i64, i1} %t66810, 0
+%t66812 = extractvalue {i64, i1} %t66810, 1
+%t66813 = zext i1 %t66812 to i8
+call void @resid_overflow_check(i8 %t66813)
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L12959:
-%t66746 = getelementptr i8, ptr %t66709, i64 8
-%t66747 = load ptr, ptr %t66746
-%t66749 = call i8 @resid_str_eq(ptr %t66747, ptr @.s66748)
-%t66750 = icmp ne i8 %t66749, 0
-br label %LSL66751
-LSL66751:
-br i1 %t66750, label %LSJ66751, label %LSR66751
-LSR66751:
-%t66752 = getelementptr i8, ptr %t66709, i64 8
-%t66753 = load ptr, ptr %t66752
-%t66755 = call i8 @resid_str_eq(ptr %t66753, ptr @.s66754)
-%t66756 = icmp ne i8 %t66755, 0
-br label %LSJ66751
-LSJ66751:
-%t66757 = phi i1 [ true, %LSL66751 ], [ %t66756, %LSR66751 ]
-br label %LSL66758
-LSL66758:
-br i1 %t66757, label %LSJ66758, label %LSR66758
-LSR66758:
-%t66759 = getelementptr i8, ptr %t66709, i64 8
-%t66760 = load ptr, ptr %t66759
-%t66762 = call i8 @resid_str_eq(ptr %t66760, ptr @.s66761)
-%t66763 = icmp ne i8 %t66762, 0
-br label %LSJ66758
-LSJ66758:
-%t66764 = phi i1 [ true, %LSL66758 ], [ %t66763, %LSR66758 ]
-br i1 %t66764, label %L12960, label %L12962
-L12960:
-%t66765 = getelementptr i8, ptr %t66709, i64 0
-%t66766 = load i64, ptr %t66765
-%t66767 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
-%t66768 = extractvalue {i64, i1} %t66767, 0
-%t66769 = extractvalue {i64, i1} %t66767, 1
-%t66770 = zext i1 %t66769 to i8
-call void @resid_overflow_check(i8 %t66770)
+L12968:
+%t66815 = getelementptr i8, ptr %t66778, i64 8
+%t66816 = load ptr, ptr %t66815
+%t66818 = call i8 @resid_str_eq(ptr %t66816, ptr @.s66817)
+%t66819 = icmp ne i8 %t66818, 0
+br label %LSL66820
+LSL66820:
+br i1 %t66819, label %LSJ66820, label %LSR66820
+LSR66820:
+%t66821 = getelementptr i8, ptr %t66778, i64 8
+%t66822 = load ptr, ptr %t66821
+%t66824 = call i8 @resid_str_eq(ptr %t66822, ptr @.s66823)
+%t66825 = icmp ne i8 %t66824, 0
+br label %LSJ66820
+LSJ66820:
+%t66826 = phi i1 [ true, %LSL66820 ], [ %t66825, %LSR66820 ]
+br label %LSL66827
+LSL66827:
+br i1 %t66826, label %LSJ66827, label %LSR66827
+LSR66827:
+%t66828 = getelementptr i8, ptr %t66778, i64 8
+%t66829 = load ptr, ptr %t66828
+%t66831 = call i8 @resid_str_eq(ptr %t66829, ptr @.s66830)
+%t66832 = icmp ne i8 %t66831, 0
+br label %LSJ66827
+LSJ66827:
+%t66833 = phi i1 [ true, %LSL66827 ], [ %t66832, %LSR66827 ]
+br i1 %t66833, label %L12969, label %L12971
+L12969:
+%t66834 = getelementptr i8, ptr %t66778, i64 0
+%t66835 = load i64, ptr %t66834
+%t66836 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
+%t66837 = extractvalue {i64, i1} %t66836, 0
+%t66838 = extractvalue {i64, i1} %t66836, 1
+%t66839 = zext i1 %t66838 to i8
+call void @resid_overflow_check(i8 %t66839)
 br label %tco.s1
 tco.s1:
 br label %tco.head
-L12962:
-%t66772 = getelementptr i8, ptr %t66709, i64 8
-%t66773 = load ptr, ptr %t66772
-%t66775 = call i8 @resid_str_eq(ptr %t66773, ptr @.s66774)
-%t66776 = icmp ne i8 %t66775, 0
-br label %LSL66777
-LSL66777:
-br i1 %t66776, label %LSR66777, label %LSJ66777
-LSR66777:
-%t66778 = icmp eq i64 %p3, 0
-br label %LSJ66777
-LSJ66777:
-%t66779 = phi i1 [ false, %LSL66777 ], [ %t66778, %LSR66777 ]
-br i1 %t66779, label %L12963, label %L12965
-L12963:
-%t66780 = getelementptr i8, ptr %t66709, i64 0
-%t66781 = load i64, ptr %t66780
-ret i64 %t66781
-L12965:
-%t66782 = getelementptr i8, ptr %t66709, i64 0
-%t66783 = load i64, ptr %t66782
+L12971:
+%t66841 = getelementptr i8, ptr %t66778, i64 8
+%t66842 = load ptr, ptr %t66841
+%t66844 = call i8 @resid_str_eq(ptr %t66842, ptr @.s66843)
+%t66845 = icmp ne i8 %t66844, 0
+br label %LSL66846
+LSL66846:
+br i1 %t66845, label %LSR66846, label %LSJ66846
+LSR66846:
+%t66847 = icmp eq i64 %p3, 0
+br label %LSJ66846
+LSJ66846:
+%t66848 = phi i1 [ false, %LSL66846 ], [ %t66847, %LSR66846 ]
+br i1 %t66848, label %L12972, label %L12974
+L12972:
+%t66849 = getelementptr i8, ptr %t66778, i64 0
+%t66850 = load i64, ptr %t66849
+ret i64 %t66850
+L12974:
+%t66851 = getelementptr i8, ptr %t66778, i64 0
+%t66852 = load i64, ptr %t66851
 br label %tco.s2
 tco.s2:
 br label %tco.head
@@ -101889,43 +102019,43 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t66805, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t66874, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t66803, %tco.s0 ]
-%t66785 = call ptr @lex_tok(ptr %p0, i64 %p1)
-%t66786 = getelementptr i8, ptr %t66785, i64 16
-%t66787 = load ptr, ptr %t66786
-%t66789 = call i8 @resid_str_eq(ptr %t66787, ptr @.s66788)
-%t66790 = icmp ne i8 %t66789, 0
-br label %LSL66791
-LSL66791:
-br i1 %t66790, label %LSJ66791, label %LSR66791
-LSR66791:
-%t66792 = getelementptr i8, ptr %t66785, i64 0
-%t66793 = load i64, ptr %t66792
-%t66794 = icmp sgt i64 %t66793, %p2
-br label %LSJ66791
-LSJ66791:
-%t66795 = phi i1 [ true, %LSL66791 ], [ %t66794, %LSR66791 ]
-br i1 %t66795, label %L12966, label %L12968
-L12966:
+%p3 = phi ptr [ %p3.in, %entry ], [ %t66872, %tco.s0 ]
+%t66854 = call ptr @lex_tok(ptr %p0, i64 %p1)
+%t66855 = getelementptr i8, ptr %t66854, i64 16
+%t66856 = load ptr, ptr %t66855
+%t66858 = call i8 @resid_str_eq(ptr %t66856, ptr @.s66857)
+%t66859 = icmp ne i8 %t66858, 0
+br label %LSL66860
+LSL66860:
+br i1 %t66859, label %LSJ66860, label %LSR66860
+LSR66860:
+%t66861 = getelementptr i8, ptr %t66854, i64 0
+%t66862 = load i64, ptr %t66861
+%t66863 = icmp sgt i64 %t66862, %p2
+br label %LSJ66860
+LSJ66860:
+%t66864 = phi i1 [ true, %LSL66860 ], [ %t66863, %LSR66860 ]
+br i1 %t66864, label %L12975, label %L12977
+L12975:
 ret ptr %p3
-L12968:
-%t66796 = getelementptr i8, ptr %t66785, i64 16
-%t66797 = load ptr, ptr %t66796
-%t66799 = call i8 @resid_str_eq(ptr %t66797, ptr @.s66798)
-%t66800 = icmp ne i8 %t66799, 0
-br i1 %t66800, label %L12969, label %L12970
-L12969:
-%t66801 = getelementptr i8, ptr %t66785, i64 8
-%t66802 = load ptr, ptr %t66801
-br label %L12971
-L12970:
-br label %L12971
-L12971:
-%t66803 = phi ptr [ %t66802, %L12969 ], [ %p3, %L12970 ]
-%t66804 = getelementptr i8, ptr %t66785, i64 0
-%t66805 = load i64, ptr %t66804
+L12977:
+%t66865 = getelementptr i8, ptr %t66854, i64 16
+%t66866 = load ptr, ptr %t66865
+%t66868 = call i8 @resid_str_eq(ptr %t66866, ptr @.s66867)
+%t66869 = icmp ne i8 %t66868, 0
+br i1 %t66869, label %L12978, label %L12979
+L12978:
+%t66870 = getelementptr i8, ptr %t66854, i64 8
+%t66871 = load ptr, ptr %t66870
+br label %L12980
+L12979:
+br label %L12980
+L12980:
+%t66872 = phi ptr [ %t66871, %L12978 ], [ %p3, %L12979 ]
+%t66873 = getelementptr i8, ptr %t66854, i64 0
+%t66874 = load i64, ptr %t66873
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -101935,276 +102065,276 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ], [ %p0, %tco.s2 ], [ %p0, %tco.s3 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t66819, %tco.s0 ], [ %t66831, %tco.s1 ], [ %t66856, %tco.s2 ], [ %t66870, %tco.s3 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t66821, %tco.s0 ], [ %t66833, %tco.s1 ], [ %p2, %tco.s2 ], [ %p2, %tco.s3 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %p3, %tco.s1 ], [ %t66867, %tco.s2 ], [ %p3, %tco.s3 ]
-%t66807 = call ptr @lex_tok(ptr %p0, i64 %p1)
-%t66808 = getelementptr i8, ptr %t66807, i64 16
-%t66809 = load ptr, ptr %t66808
-%t66811 = call i8 @resid_str_eq(ptr %t66809, ptr @.s66810)
-%t66812 = icmp ne i8 %t66811, 0
-br i1 %t66812, label %L12972, label %L12974
-L12972:
+%p1 = phi i64 [ %p1.in, %entry ], [ %t66888, %tco.s0 ], [ %t66900, %tco.s1 ], [ %t66925, %tco.s2 ], [ %t66939, %tco.s3 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t66890, %tco.s0 ], [ %t66902, %tco.s1 ], [ %p2, %tco.s2 ], [ %p2, %tco.s3 ]
+%p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %p3, %tco.s1 ], [ %t66936, %tco.s2 ], [ %p3, %tco.s3 ]
+%t66876 = call ptr @lex_tok(ptr %p0, i64 %p1)
+%t66877 = getelementptr i8, ptr %t66876, i64 16
+%t66878 = load ptr, ptr %t66877
+%t66880 = call i8 @resid_str_eq(ptr %t66878, ptr @.s66879)
+%t66881 = icmp ne i8 %t66880, 0
+br i1 %t66881, label %L12981, label %L12983
+L12981:
 ret ptr %p3
-L12974:
-%t66813 = getelementptr i8, ptr %t66807, i64 8
-%t66814 = load ptr, ptr %t66813
-%t66816 = call i8 @resid_str_eq(ptr %t66814, ptr @.s66815)
-%t66817 = icmp ne i8 %t66816, 0
-br i1 %t66817, label %L12975, label %L12977
-L12975:
-%t66818 = getelementptr i8, ptr %t66807, i64 0
-%t66819 = load i64, ptr %t66818
-%t66820 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 1)
-%t66821 = extractvalue {i64, i1} %t66820, 0
-%t66822 = extractvalue {i64, i1} %t66820, 1
-%t66823 = zext i1 %t66822 to i8
-call void @resid_overflow_check(i8 %t66823)
+L12983:
+%t66882 = getelementptr i8, ptr %t66876, i64 8
+%t66883 = load ptr, ptr %t66882
+%t66885 = call i8 @resid_str_eq(ptr %t66883, ptr @.s66884)
+%t66886 = icmp ne i8 %t66885, 0
+br i1 %t66886, label %L12984, label %L12986
+L12984:
+%t66887 = getelementptr i8, ptr %t66876, i64 0
+%t66888 = load i64, ptr %t66887
+%t66889 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 1)
+%t66890 = extractvalue {i64, i1} %t66889, 0
+%t66891 = extractvalue {i64, i1} %t66889, 1
+%t66892 = zext i1 %t66891 to i8
+call void @resid_overflow_check(i8 %t66892)
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L12977:
-%t66825 = getelementptr i8, ptr %t66807, i64 8
-%t66826 = load ptr, ptr %t66825
-%t66828 = call i8 @resid_str_eq(ptr %t66826, ptr @.s66827)
-%t66829 = icmp ne i8 %t66828, 0
-br i1 %t66829, label %L12978, label %L12980
-L12978:
-%t66830 = getelementptr i8, ptr %t66807, i64 0
-%t66831 = load i64, ptr %t66830
-%t66832 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
-%t66833 = extractvalue {i64, i1} %t66832, 0
-%t66834 = extractvalue {i64, i1} %t66832, 1
-%t66835 = zext i1 %t66834 to i8
-call void @resid_overflow_check(i8 %t66835)
+L12986:
+%t66894 = getelementptr i8, ptr %t66876, i64 8
+%t66895 = load ptr, ptr %t66894
+%t66897 = call i8 @resid_str_eq(ptr %t66895, ptr @.s66896)
+%t66898 = icmp ne i8 %t66897, 0
+br i1 %t66898, label %L12987, label %L12989
+L12987:
+%t66899 = getelementptr i8, ptr %t66876, i64 0
+%t66900 = load i64, ptr %t66899
+%t66901 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t66902 = extractvalue {i64, i1} %t66901, 0
+%t66903 = extractvalue {i64, i1} %t66901, 1
+%t66904 = zext i1 %t66903 to i8
+call void @resid_overflow_check(i8 %t66904)
 br label %tco.s1
 tco.s1:
 br label %tco.head
-L12980:
-%t66837 = icmp eq i64 %p2, 0
-br label %LSL66838
-LSL66838:
-br i1 %t66837, label %LSR66838, label %LSJ66838
-LSR66838:
-%t66839 = getelementptr i8, ptr %t66807, i64 16
-%t66840 = load ptr, ptr %t66839
-%t66842 = call i8 @resid_str_eq(ptr %t66840, ptr @.s66841)
-%t66843 = icmp ne i8 %t66842, 0
-br label %LSJ66838
-LSJ66838:
-%t66844 = phi i1 [ false, %LSL66838 ], [ %t66843, %LSR66838 ]
-br i1 %t66844, label %L12981, label %L12983
-L12981:
-%t66845 = getelementptr i8, ptr %t66807, i64 0
-%t66846 = load i64, ptr %t66845
-%t66847 = call ptr @lex_tok(ptr %p0, i64 %t66846)
-%t66848 = getelementptr i8, ptr %t66847, i64 8
-%t66849 = load ptr, ptr %t66848
-%t66851 = call i8 @resid_str_eq(ptr %t66849, ptr @.s66850)
-%t66852 = icmp ne i8 %t66851, 0
-br i1 %t66852, label %L12984, label %L12986
-L12984:
-%t66853 = call i64 @resid_scope_push()
-%t66854 = getelementptr i8, ptr %t66847, i64 0
-%t66855 = load i64, ptr %t66854
-%t66856 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_close(ptr %p0, i64 %t66855, i64 0)
-call void @resid_scope_pop(i64 %t66853)
-%t66857 = call ptr @lex_tok(ptr %p0, i64 %t66856)
-%t66858 = getelementptr i8, ptr %t66857, i64 8
-%t66859 = load ptr, ptr %t66858
-%t66861 = call i8 @resid_str_eq(ptr %t66859, ptr @.s66860)
-%t66862 = icmp ne i8 %t66861, 0
-br i1 %t66862, label %L12987, label %L12989
-L12987:
-%t66863 = getelementptr i8, ptr %t66807, i64 8
-%t66864 = load ptr, ptr %t66863
-%t66865 = getelementptr i8, ptr %t66847, i64 0
-%t66866 = load i64, ptr %t66865
-%t66867 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_record(ptr %p0, ptr %t66864, i64 %t66866, i64 %t66856, ptr %p3)
+L12989:
+%t66906 = icmp eq i64 %p2, 0
+br label %LSL66907
+LSL66907:
+br i1 %t66906, label %LSR66907, label %LSJ66907
+LSR66907:
+%t66908 = getelementptr i8, ptr %t66876, i64 16
+%t66909 = load ptr, ptr %t66908
+%t66911 = call i8 @resid_str_eq(ptr %t66909, ptr @.s66910)
+%t66912 = icmp ne i8 %t66911, 0
+br label %LSJ66907
+LSJ66907:
+%t66913 = phi i1 [ false, %LSL66907 ], [ %t66912, %LSR66907 ]
+br i1 %t66913, label %L12990, label %L12992
+L12990:
+%t66914 = getelementptr i8, ptr %t66876, i64 0
+%t66915 = load i64, ptr %t66914
+%t66916 = call ptr @lex_tok(ptr %p0, i64 %t66915)
+%t66917 = getelementptr i8, ptr %t66916, i64 8
+%t66918 = load ptr, ptr %t66917
+%t66920 = call i8 @resid_str_eq(ptr %t66918, ptr @.s66919)
+%t66921 = icmp ne i8 %t66920, 0
+br i1 %t66921, label %L12993, label %L12995
+L12993:
+%t66922 = call i64 @resid_scope_push()
+%t66923 = getelementptr i8, ptr %t66916, i64 0
+%t66924 = load i64, ptr %t66923
+%t66925 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_close(ptr %p0, i64 %t66924, i64 0)
+call void @resid_scope_pop(i64 %t66922)
+%t66926 = call ptr @lex_tok(ptr %p0, i64 %t66925)
+%t66927 = getelementptr i8, ptr %t66926, i64 8
+%t66928 = load ptr, ptr %t66927
+%t66930 = call i8 @resid_str_eq(ptr %t66928, ptr @.s66929)
+%t66931 = icmp ne i8 %t66930, 0
+br i1 %t66931, label %L12996, label %L12998
+L12996:
+%t66932 = getelementptr i8, ptr %t66876, i64 8
+%t66933 = load ptr, ptr %t66932
+%t66934 = getelementptr i8, ptr %t66916, i64 0
+%t66935 = load i64, ptr %t66934
+%t66936 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_record(ptr %p0, ptr %t66933, i64 %t66935, i64 %t66925, ptr %p3)
 br label %tco.s2
 tco.s2:
 br label %tco.head
-L12989:
-br label %L12986
-L12986:
-br label %L12983
-L12983:
-%t66869 = getelementptr i8, ptr %t66807, i64 0
-%t66870 = load i64, ptr %t66869
+L12998:
+br label %L12995
+L12995:
+br label %L12992
+L12992:
+%t66938 = getelementptr i8, ptr %t66876, i64 0
+%t66939 = load i64, ptr %t66938
 br label %tco.s3
 tco.s3:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_record(ptr %p0, ptr %p1, i64 %p2, i64 %p3, ptr %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66872 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
-%t66873 = extractvalue {i64, i1} %t66872, 0
-%t66874 = extractvalue {i64, i1} %t66872, 1
-%t66875 = zext i1 %t66874 to i8
-call void @resid_overflow_check(i8 %t66875)
-%t66876 = call i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_blank(ptr %p0, i64 %p2, i64 %t66873)
-br i1 %t66876, label %L12990, label %L12992
-L12990:
-%t66877 = call ptr @resid_gmalloc(i64 48)
-%t66878 = getelementptr i8, ptr %p4, i64 0
-%t66879 = load ptr, ptr %t66878
-%t66880 = alloca [1 x ptr]
-%t66884 = getelementptr i8, ptr %t66880, i64 0
-store ptr %p1, ptr %t66884
-%t66886e = load ptr, ptr %t66880
-%t66886 = call ptr @resid_list_push(ptr %t66879, ptr %t66886e)
-%t66877.f0 = getelementptr i8, ptr %t66877, i64 0
-store ptr %t66886, ptr %t66877.f0
-%t66887 = getelementptr i8, ptr %p4, i64 8
-%t66888 = load ptr, ptr %t66887
-%t66890 = call ptr @resid_map_insert(ptr %t66888, ptr %p1, ptr @.s66889)
-%t66877.f1 = getelementptr i8, ptr %t66877, i64 8
-store ptr %t66890, ptr %t66877.f1
-%t66891 = getelementptr i8, ptr %p4, i64 16
-%t66892 = load ptr, ptr %t66891
-%t66894 = call ptr @resid_map_insert(ptr %t66892, ptr %p1, ptr @.s66893)
-%t66877.f2 = getelementptr i8, ptr %t66877, i64 16
-store ptr %t66894, ptr %t66877.f2
-%t66895 = getelementptr i8, ptr %p4, i64 24
-%t66896 = load i1, ptr %t66895
-%t66877.f3 = getelementptr i8, ptr %t66877, i64 24
-store i1 %t66896, ptr %t66877.f3
-ret ptr %t66877
-L12992:
-%t66897 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %p2, i64 %p3)
-%t66900 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_record_params(ptr %p0, ptr %t66897, i64 0, ptr @.s66898, ptr @.s66899, i1 false)
-%t66901 = call ptr @resid_gmalloc(i64 48)
-%t66902 = getelementptr i8, ptr %p4, i64 0
-%t66903 = load ptr, ptr %t66902
-%t66904 = alloca [1 x ptr]
-%t66908 = getelementptr i8, ptr %t66904, i64 0
-store ptr %p1, ptr %t66908
-%t66910e = load ptr, ptr %t66904
-%t66910 = call ptr @resid_list_push(ptr %t66903, ptr %t66910e)
-%t66901.f0 = getelementptr i8, ptr %t66901, i64 0
-store ptr %t66910, ptr %t66901.f0
-%t66911 = getelementptr i8, ptr %p4, i64 8
-%t66912 = load ptr, ptr %t66911
-%t66913 = getelementptr i8, ptr %t66900, i64 0
-%t66914 = load ptr, ptr %t66913
-%t66915 = call ptr @resid_list_get(ptr %t66914, i64 0)
-%t66918 = call ptr @resid_map_insert(ptr %t66912, ptr %p1, ptr %t66915)
-%t66901.f1 = getelementptr i8, ptr %t66901, i64 8
-store ptr %t66918, ptr %t66901.f1
-%t66919 = getelementptr i8, ptr %p4, i64 16
-%t66920 = load ptr, ptr %t66919
-%t66921 = getelementptr i8, ptr %t66900, i64 0
-%t66922 = load ptr, ptr %t66921
-%t66923 = call ptr @resid_list_get(ptr %t66922, i64 1)
-%t66926 = call ptr @resid_map_insert(ptr %t66920, ptr %p1, ptr %t66923)
-%t66901.f2 = getelementptr i8, ptr %t66901, i64 16
-store ptr %t66926, ptr %t66901.f2
-%t66927 = getelementptr i8, ptr %p4, i64 24
-%t66928 = load i1, ptr %t66927
-br label %LSL66929
-LSL66929:
-br i1 %t66928, label %LSJ66929, label %LSR66929
-LSR66929:
-%t66930 = getelementptr i8, ptr %t66900, i64 24
-%t66931 = load i1, ptr %t66930
-br label %LSJ66929
-LSJ66929:
-%t66932 = phi i1 [ true, %LSL66929 ], [ %t66931, %LSR66929 ]
-%t66901.f3 = getelementptr i8, ptr %t66901, i64 24
-store i1 %t66932, ptr %t66901.f3
-ret ptr %t66901
+%t66941 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
+%t66942 = extractvalue {i64, i1} %t66941, 0
+%t66943 = extractvalue {i64, i1} %t66941, 1
+%t66944 = zext i1 %t66943 to i8
+call void @resid_overflow_check(i8 %t66944)
+%t66945 = call i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_blank(ptr %p0, i64 %p2, i64 %t66942)
+br i1 %t66945, label %L12999, label %L13001
+L12999:
+%t66946 = call ptr @resid_gmalloc(i64 48)
+%t66947 = getelementptr i8, ptr %p4, i64 0
+%t66948 = load ptr, ptr %t66947
+%t66949 = alloca [1 x ptr]
+%t66953 = getelementptr i8, ptr %t66949, i64 0
+store ptr %p1, ptr %t66953
+%t66955e = load ptr, ptr %t66949
+%t66955 = call ptr @resid_list_push(ptr %t66948, ptr %t66955e)
+%t66946.f0 = getelementptr i8, ptr %t66946, i64 0
+store ptr %t66955, ptr %t66946.f0
+%t66956 = getelementptr i8, ptr %p4, i64 8
+%t66957 = load ptr, ptr %t66956
+%t66959 = call ptr @resid_map_insert(ptr %t66957, ptr %p1, ptr @.s66958)
+%t66946.f1 = getelementptr i8, ptr %t66946, i64 8
+store ptr %t66959, ptr %t66946.f1
+%t66960 = getelementptr i8, ptr %p4, i64 16
+%t66961 = load ptr, ptr %t66960
+%t66963 = call ptr @resid_map_insert(ptr %t66961, ptr %p1, ptr @.s66962)
+%t66946.f2 = getelementptr i8, ptr %t66946, i64 16
+store ptr %t66963, ptr %t66946.f2
+%t66964 = getelementptr i8, ptr %p4, i64 24
+%t66965 = load i1, ptr %t66964
+%t66946.f3 = getelementptr i8, ptr %t66946, i64 24
+store i1 %t66965, ptr %t66946.f3
+ret ptr %t66946
+L13001:
+%t66966 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %p2, i64 %p3)
+%t66969 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_record_params(ptr %p0, ptr %t66966, i64 0, ptr @.s66967, ptr @.s66968, i1 false)
+%t66970 = call ptr @resid_gmalloc(i64 48)
+%t66971 = getelementptr i8, ptr %p4, i64 0
+%t66972 = load ptr, ptr %t66971
+%t66973 = alloca [1 x ptr]
+%t66977 = getelementptr i8, ptr %t66973, i64 0
+store ptr %p1, ptr %t66977
+%t66979e = load ptr, ptr %t66973
+%t66979 = call ptr @resid_list_push(ptr %t66972, ptr %t66979e)
+%t66970.f0 = getelementptr i8, ptr %t66970, i64 0
+store ptr %t66979, ptr %t66970.f0
+%t66980 = getelementptr i8, ptr %p4, i64 8
+%t66981 = load ptr, ptr %t66980
+%t66982 = getelementptr i8, ptr %t66969, i64 0
+%t66983 = load ptr, ptr %t66982
+%t66984 = call ptr @resid_list_get(ptr %t66983, i64 0)
+%t66987 = call ptr @resid_map_insert(ptr %t66981, ptr %p1, ptr %t66984)
+%t66970.f1 = getelementptr i8, ptr %t66970, i64 8
+store ptr %t66987, ptr %t66970.f1
+%t66988 = getelementptr i8, ptr %p4, i64 16
+%t66989 = load ptr, ptr %t66988
+%t66990 = getelementptr i8, ptr %t66969, i64 0
+%t66991 = load ptr, ptr %t66990
+%t66992 = call ptr @resid_list_get(ptr %t66991, i64 1)
+%t66995 = call ptr @resid_map_insert(ptr %t66989, ptr %p1, ptr %t66992)
+%t66970.f2 = getelementptr i8, ptr %t66970, i64 16
+store ptr %t66995, ptr %t66970.f2
+%t66996 = getelementptr i8, ptr %p4, i64 24
+%t66997 = load i1, ptr %t66996
+br label %LSL66998
+LSL66998:
+br i1 %t66997, label %LSJ66998, label %LSR66998
+LSR66998:
+%t66999 = getelementptr i8, ptr %t66969, i64 24
+%t67000 = load i1, ptr %t66999
+br label %LSJ66998
+LSJ66998:
+%t67001 = phi i1 [ true, %LSL66998 ], [ %t67000, %LSR66998 ]
+%t66970.f3 = getelementptr i8, ptr %t66970, i64 24
+store i1 %t67001, ptr %t66970.f3
+ret ptr %t66970
 }
 define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_record_params(ptr %p0.in, ptr %p1.in, i64 %p2.in, ptr %p3.in, ptr %p4.in, i1 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t66935 = alloca [2 x ptr]
+%t67004 = alloca [2 x ptr]
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t66976, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t66978, %tco.s0 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %t66980, %tco.s0 ]
-%p5 = phi i1 [ %p5.in, %entry ], [ %t66983, %tco.s0 ]
-%t66933 = call i64 @resid_list_len(ptr %p1)
-%t66934 = icmp sge i64 %p2, %t66933
-br i1 %t66934, label %L12993, label %L12995
-L12993:
-%t66939 = getelementptr i8, ptr %t66935, i64 0
-store ptr %p3, ptr %t66939
-%t66942 = getelementptr i8, ptr %t66935, i64 8
-store ptr %p4, ptr %t66942
-%t66943 = call ptr @resid_list_new(i64 2, ptr %t66935, ptr @.lty66935)
-%t66946 = call ptr @resid_set_new()
-%t66947 = call ptr @resid_map_insert(ptr %t66946, ptr @.s66944, ptr @.s66945)
-%t66948 = call ptr @resid_gmalloc(i64 48)
-%t66948.f0 = getelementptr i8, ptr %t66948, i64 0
-store ptr %t66943, ptr %t66948.f0
-%t66948.f1 = getelementptr i8, ptr %t66948, i64 8
-store ptr %t66947, ptr %t66948.f1
-%t66948.f2 = getelementptr i8, ptr %t66948, i64 16
-store ptr %t66947, ptr %t66948.f2
-%t66948.f3 = getelementptr i8, ptr %t66948, i64 24
-store i1 %p5, ptr %t66948.f3
-ret ptr %t66948
-L12995:
-%t66949 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-%t66950 = call i64 @resid_unbox_i64(ptr %t66949)
-%t66952 = add nsw i64 %p2, 1
-%t66953 = call ptr @resid_list_get(ptr %p1, i64 %t66952)
-%t66954 = call i64 @resid_unbox_i64(ptr %t66953)
-%t66956 = call i64 @resid_scope_push()
-%t66957 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_eq_at(ptr %p0, i64 %t66950, i64 %t66954, i64 0)
-call void @resid_scope_pop(i64 %t66956)
-%t66958 = icmp slt i64 %t66957, 0
-br i1 %t66958, label %L12996, label %L12997
-L12996:
-br label %L12998
-L12997:
-%t66959 = sub nsw i64 %t66957, 1
-br label %L12998
-L12998:
-%t66960 = phi i64 [ %t66954, %L12996 ], [ %t66959, %L12997 ]
-%t66962 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_last_ident(ptr %p0, i64 %t66950, i64 %t66960, ptr @.s66961)
-%t66963 = icmp slt i64 %t66957, 0
-br i1 %t66963, label %L12999, label %L13000
-L12999:
-br label %L13001
-L13000:
-%t66965 = call ptr @str_slice(ptr %p0, i64 %t66957, i64 %t66954)
-%t66966 = call ptr @str_trim(ptr %t66965)
-br label %L13001
-L13001:
-%t66967 = phi ptr [ @.s66964, %L12999 ], [ %t66966, %L13000 ]
-%t66968 = icmp eq i64 %p2, 0
-br i1 %t66968, label %L13002, label %L13003
+%p2 = phi i64 [ %p2.in, %entry ], [ %t67045, %tco.s0 ]
+%p3 = phi ptr [ %p3.in, %entry ], [ %t67047, %tco.s0 ]
+%p4 = phi ptr [ %p4.in, %entry ], [ %t67049, %tco.s0 ]
+%p5 = phi i1 [ %p5.in, %entry ], [ %t67052, %tco.s0 ]
+%t67002 = call i64 @resid_list_len(ptr %p1)
+%t67003 = icmp sge i64 %p2, %t67002
+br i1 %t67003, label %L13002, label %L13004
 L13002:
-br label %L13004
-L13003:
-br label %L13004
+%t67008 = getelementptr i8, ptr %t67004, i64 0
+store ptr %p3, ptr %t67008
+%t67011 = getelementptr i8, ptr %t67004, i64 8
+store ptr %p4, ptr %t67011
+%t67012 = call ptr @resid_list_new(i64 2, ptr %t67004, ptr @.lty67004)
+%t67015 = call ptr @resid_set_new()
+%t67016 = call ptr @resid_map_insert(ptr %t67015, ptr @.s67013, ptr @.s67014)
+%t67017 = call ptr @resid_gmalloc(i64 48)
+%t67017.f0 = getelementptr i8, ptr %t67017, i64 0
+store ptr %t67012, ptr %t67017.f0
+%t67017.f1 = getelementptr i8, ptr %t67017, i64 8
+store ptr %t67016, ptr %t67017.f1
+%t67017.f2 = getelementptr i8, ptr %t67017, i64 16
+store ptr %t67016, ptr %t67017.f2
+%t67017.f3 = getelementptr i8, ptr %t67017, i64 24
+store i1 %p5, ptr %t67017.f3
+ret ptr %t67017
 L13004:
-%t66971 = phi ptr [ @.s66969, %L13002 ], [ @.s66970, %L13003 ]
-%t66972 = icmp eq i64 %p2, 0
-br i1 %t66972, label %L13005, label %L13006
+%t67018 = call ptr @resid_list_get(ptr %p1, i64 %p2)
+%t67019 = call i64 @resid_unbox_i64(ptr %t67018)
+%t67021 = add nsw i64 %p2, 1
+%t67022 = call ptr @resid_list_get(ptr %p1, i64 %t67021)
+%t67023 = call i64 @resid_unbox_i64(ptr %t67022)
+%t67025 = call i64 @resid_scope_push()
+%t67026 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_eq_at(ptr %p0, i64 %t67019, i64 %t67023, i64 0)
+call void @resid_scope_pop(i64 %t67025)
+%t67027 = icmp slt i64 %t67026, 0
+br i1 %t67027, label %L13005, label %L13006
 L13005:
 br label %L13007
 L13006:
-%t66974 = call ptr @str_from_code(i64 31)
+%t67028 = sub nsw i64 %t67026, 1
 br label %L13007
 L13007:
-%t66975 = phi ptr [ @.s66973, %L13005 ], [ %t66974, %L13006 ]
-%t66976 = add nsw i64 %p2, 2
-%t66977 = call ptr @resid_str_concat(ptr %p3, ptr %t66971)
-%t66978 = call ptr @resid_str_concat(ptr %t66977, ptr %t66962)
-%t66979 = call ptr @resid_str_concat(ptr %p4, ptr %t66975)
-%t66980 = call ptr @resid_str_concat(ptr %t66979, ptr %t66967)
-br label %LSL66981
-LSL66981:
-br i1 %p5, label %LSJ66981, label %LSR66981
-LSR66981:
-%t66982 = icmp sge i64 %t66957, 0
-br label %LSJ66981
-LSJ66981:
-%t66983 = phi i1 [ true, %LSL66981 ], [ %t66982, %LSR66981 ]
+%t67029 = phi i64 [ %t67023, %L13005 ], [ %t67028, %L13006 ]
+%t67031 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_last_ident(ptr %p0, i64 %t67019, i64 %t67029, ptr @.s67030)
+%t67032 = icmp slt i64 %t67026, 0
+br i1 %t67032, label %L13008, label %L13009
+L13008:
+br label %L13010
+L13009:
+%t67034 = call ptr @str_slice(ptr %p0, i64 %t67026, i64 %t67023)
+%t67035 = call ptr @str_trim(ptr %t67034)
+br label %L13010
+L13010:
+%t67036 = phi ptr [ @.s67033, %L13008 ], [ %t67035, %L13009 ]
+%t67037 = icmp eq i64 %p2, 0
+br i1 %t67037, label %L13011, label %L13012
+L13011:
+br label %L13013
+L13012:
+br label %L13013
+L13013:
+%t67040 = phi ptr [ @.s67038, %L13011 ], [ @.s67039, %L13012 ]
+%t67041 = icmp eq i64 %p2, 0
+br i1 %t67041, label %L13014, label %L13015
+L13014:
+br label %L13016
+L13015:
+%t67043 = call ptr @str_from_code(i64 31)
+br label %L13016
+L13016:
+%t67044 = phi ptr [ @.s67042, %L13014 ], [ %t67043, %L13015 ]
+%t67045 = add nsw i64 %p2, 2
+%t67046 = call ptr @resid_str_concat(ptr %p3, ptr %t67040)
+%t67047 = call ptr @resid_str_concat(ptr %t67046, ptr %t67031)
+%t67048 = call ptr @resid_str_concat(ptr %p4, ptr %t67044)
+%t67049 = call ptr @resid_str_concat(ptr %t67048, ptr %t67036)
+br label %LSL67050
+LSL67050:
+br i1 %p5, label %LSJ67050, label %LSR67050
+LSR67050:
+%t67051 = icmp sge i64 %t67026, 0
+br label %LSJ67050
+LSJ67050:
+%t67052 = phi i1 [ true, %LSL67050 ], [ %t67051, %LSR67050 ]
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -102214,178 +102344,178 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ], [ %p0, %tco.s2 ], [ %p0, %tco.s3 ], [ %p0, %tco.s4 ], [ %p0, %tco.s5 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t67004, %tco.s0 ], [ %t67016, %tco.s1 ], [ %t67046, %tco.s2 ], [ %t67070, %tco.s3 ], [ %t67046, %tco.s4 ], [ %t67084, %tco.s5 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t67073, %tco.s0 ], [ %t67085, %tco.s1 ], [ %t67115, %tco.s2 ], [ %t67139, %tco.s3 ], [ %t67115, %tco.s4 ], [ %t67153, %tco.s5 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ], [ %p2, %tco.s1 ], [ %p2, %tco.s2 ], [ %p2, %tco.s3 ], [ %p2, %tco.s4 ], [ %p2, %tco.s5 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t67006, %tco.s0 ], [ %t67018, %tco.s1 ], [ %p3, %tco.s2 ], [ %p3, %tco.s3 ], [ %p3, %tco.s4 ], [ %p3, %tco.s5 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t67075, %tco.s0 ], [ %t67087, %tco.s1 ], [ %p3, %tco.s2 ], [ %p3, %tco.s3 ], [ %p3, %tco.s4 ], [ %p3, %tco.s5 ]
 %p4 = phi ptr [ %p4.in, %entry ], [ %p4, %tco.s0 ], [ %p4, %tco.s1 ], [ %p4, %tco.s2 ], [ %p4, %tco.s3 ], [ %p4, %tco.s4 ], [ %p4, %tco.s5 ]
-%p5 = phi ptr [ %p5.in, %entry ], [ %p5, %tco.s0 ], [ %p5, %tco.s1 ], [ %t67063, %tco.s2 ], [ %p5, %tco.s3 ], [ %t67081, %tco.s4 ], [ %p5, %tco.s5 ]
-%p6 = phi i64 [ %p6.in, %entry ], [ %p6, %tco.s0 ], [ %p6, %tco.s1 ], [ %t67046, %tco.s2 ], [ %p6, %tco.s3 ], [ %t67046, %tco.s4 ], [ %p6, %tco.s5 ]
-%t66985 = call ptr @lex_tok(ptr %p0, i64 %p1)
-%t66986 = getelementptr i8, ptr %t66985, i64 16
-%t66987 = load ptr, ptr %t66986
-%t66989 = call i8 @resid_str_eq(ptr %t66987, ptr @.s66988)
-%t66990 = icmp ne i8 %t66989, 0
-br label %LSL66991
-LSL66991:
-br i1 %t66990, label %LSJ66991, label %LSR66991
-LSR66991:
-%t66992 = getelementptr i8, ptr %t66985, i64 0
-%t66993 = load i64, ptr %t66992
-%t66994 = icmp sgt i64 %t66993, %p2
-br label %LSJ66991
-LSJ66991:
-%t66995 = phi i1 [ true, %LSL66991 ], [ %t66994, %LSR66991 ]
-br i1 %t66995, label %L13008, label %L13010
-L13008:
-%t66996 = call ptr @str_slice(ptr %p0, i64 %p6, i64 %p2)
-%t66997 = call ptr @str_sb_append(ptr %p5, ptr %t66996)
-ret ptr %t66997
-L13010:
-%t66998 = getelementptr i8, ptr %t66985, i64 8
-%t66999 = load ptr, ptr %t66998
-%t67001 = call i8 @resid_str_eq(ptr %t66999, ptr @.s67000)
-%t67002 = icmp ne i8 %t67001, 0
-br i1 %t67002, label %L13011, label %L13013
-L13011:
-%t67003 = getelementptr i8, ptr %t66985, i64 0
-%t67004 = load i64, ptr %t67003
-%t67005 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p3, i64 1)
-%t67006 = extractvalue {i64, i1} %t67005, 0
-%t67007 = extractvalue {i64, i1} %t67005, 1
-%t67008 = zext i1 %t67007 to i8
-call void @resid_overflow_check(i8 %t67008)
+%p5 = phi ptr [ %p5.in, %entry ], [ %p5, %tco.s0 ], [ %p5, %tco.s1 ], [ %t67132, %tco.s2 ], [ %p5, %tco.s3 ], [ %t67150, %tco.s4 ], [ %p5, %tco.s5 ]
+%p6 = phi i64 [ %p6.in, %entry ], [ %p6, %tco.s0 ], [ %p6, %tco.s1 ], [ %t67115, %tco.s2 ], [ %p6, %tco.s3 ], [ %t67115, %tco.s4 ], [ %p6, %tco.s5 ]
+%t67054 = call ptr @lex_tok(ptr %p0, i64 %p1)
+%t67055 = getelementptr i8, ptr %t67054, i64 16
+%t67056 = load ptr, ptr %t67055
+%t67058 = call i8 @resid_str_eq(ptr %t67056, ptr @.s67057)
+%t67059 = icmp ne i8 %t67058, 0
+br label %LSL67060
+LSL67060:
+br i1 %t67059, label %LSJ67060, label %LSR67060
+LSR67060:
+%t67061 = getelementptr i8, ptr %t67054, i64 0
+%t67062 = load i64, ptr %t67061
+%t67063 = icmp sgt i64 %t67062, %p2
+br label %LSJ67060
+LSJ67060:
+%t67064 = phi i1 [ true, %LSL67060 ], [ %t67063, %LSR67060 ]
+br i1 %t67064, label %L13017, label %L13019
+L13017:
+%t67065 = call ptr @str_slice(ptr %p0, i64 %p6, i64 %p2)
+%t67066 = call ptr @str_sb_append(ptr %p5, ptr %t67065)
+ret ptr %t67066
+L13019:
+%t67067 = getelementptr i8, ptr %t67054, i64 8
+%t67068 = load ptr, ptr %t67067
+%t67070 = call i8 @resid_str_eq(ptr %t67068, ptr @.s67069)
+%t67071 = icmp ne i8 %t67070, 0
+br i1 %t67071, label %L13020, label %L13022
+L13020:
+%t67072 = getelementptr i8, ptr %t67054, i64 0
+%t67073 = load i64, ptr %t67072
+%t67074 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p3, i64 1)
+%t67075 = extractvalue {i64, i1} %t67074, 0
+%t67076 = extractvalue {i64, i1} %t67074, 1
+%t67077 = zext i1 %t67076 to i8
+call void @resid_overflow_check(i8 %t67077)
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L13013:
-%t67010 = getelementptr i8, ptr %t66985, i64 8
-%t67011 = load ptr, ptr %t67010
-%t67013 = call i8 @resid_str_eq(ptr %t67011, ptr @.s67012)
-%t67014 = icmp ne i8 %t67013, 0
-br i1 %t67014, label %L13014, label %L13016
-L13014:
-%t67015 = getelementptr i8, ptr %t66985, i64 0
-%t67016 = load i64, ptr %t67015
-%t67017 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
-%t67018 = extractvalue {i64, i1} %t67017, 0
-%t67019 = extractvalue {i64, i1} %t67017, 1
-%t67020 = zext i1 %t67019 to i8
-call void @resid_overflow_check(i8 %t67020)
+L13022:
+%t67079 = getelementptr i8, ptr %t67054, i64 8
+%t67080 = load ptr, ptr %t67079
+%t67082 = call i8 @resid_str_eq(ptr %t67080, ptr @.s67081)
+%t67083 = icmp ne i8 %t67082, 0
+br i1 %t67083, label %L13023, label %L13025
+L13023:
+%t67084 = getelementptr i8, ptr %t67054, i64 0
+%t67085 = load i64, ptr %t67084
+%t67086 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
+%t67087 = extractvalue {i64, i1} %t67086, 0
+%t67088 = extractvalue {i64, i1} %t67086, 1
+%t67089 = zext i1 %t67088 to i8
+call void @resid_overflow_check(i8 %t67089)
 br label %tco.s1
 tco.s1:
 br label %tco.head
-L13016:
-%t67022 = getelementptr i8, ptr %t66985, i64 16
-%t67023 = load ptr, ptr %t67022
-%t67025 = call i8 @resid_str_eq(ptr %t67023, ptr @.s67024)
-%t67026 = icmp ne i8 %t67025, 0
-br label %LSL67027
-LSL67027:
-br i1 %t67026, label %LSR67027, label %LSJ67027
-LSR67027:
-%t67028 = getelementptr i8, ptr %p4, i64 8
-%t67029 = load ptr, ptr %t67028
-%t67030 = getelementptr i8, ptr %t66985, i64 8
-%t67031 = load ptr, ptr %t67030
-%t67032 = call i8 @resid_map_contains(ptr %t67029, ptr %t67031)
-%t67033 = icmp ne i8 %t67032, 0
-br label %LSJ67027
-LSJ67027:
-%t67034 = phi i1 [ false, %LSL67027 ], [ %t67033, %LSR67027 ]
-br i1 %t67034, label %L13017, label %L13019
-L13017:
-%t67035 = getelementptr i8, ptr %t66985, i64 0
-%t67036 = load i64, ptr %t67035
-%t67037 = call ptr @lex_tok(ptr %p0, i64 %t67036)
-%t67038 = getelementptr i8, ptr %t67037, i64 8
-%t67039 = load ptr, ptr %t67038
-%t67041 = call i8 @resid_str_eq(ptr %t67039, ptr @.s67040)
-%t67042 = icmp ne i8 %t67041, 0
-br i1 %t67042, label %L13020, label %L13022
-L13020:
-%t67043 = call i64 @resid_scope_push()
-%t67044 = getelementptr i8, ptr %t67037, i64 0
-%t67045 = load i64, ptr %t67044
-%t67046 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_close(ptr %p0, i64 %t67045, i64 0)
-call void @resid_scope_pop(i64 %t67043)
-%t67047 = call ptr @lex_tok(ptr %p0, i64 %t67046)
-%t67048 = icmp eq i64 %p3, 0
-br label %LSL67049
-LSL67049:
-br i1 %t67048, label %LSR67049, label %LSJ67049
-LSR67049:
-%t67050 = getelementptr i8, ptr %t67047, i64 8
-%t67051 = load ptr, ptr %t67050
-%t67053 = call i8 @resid_str_eq(ptr %t67051, ptr @.s67052)
-%t67054 = icmp ne i8 %t67053, 0
-br label %LSJ67049
-LSJ67049:
-%t67055 = phi i1 [ false, %LSL67049 ], [ %t67054, %LSR67049 ]
-br i1 %t67055, label %L13023, label %L13025
-L13023:
-%t67056 = getelementptr i8, ptr %t67037, i64 0
-%t67057 = load i64, ptr %t67056
-%t67058 = call ptr @str_slice(ptr %p0, i64 %p6, i64 %t67057)
-%t67059 = call ptr @str_sb_append(ptr %p5, ptr %t67058)
-%t67060 = getelementptr i8, ptr %t67037, i64 0
-%t67061 = load i64, ptr %t67060
-%t67062 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_strip_defaults(ptr %p0, i64 %t67061, i64 %t67046)
-%t67063 = call ptr @str_sb_append(ptr %t67059, ptr %t67062)
+L13025:
+%t67091 = getelementptr i8, ptr %t67054, i64 16
+%t67092 = load ptr, ptr %t67091
+%t67094 = call i8 @resid_str_eq(ptr %t67092, ptr @.s67093)
+%t67095 = icmp ne i8 %t67094, 0
+br label %LSL67096
+LSL67096:
+br i1 %t67095, label %LSR67096, label %LSJ67096
+LSR67096:
+%t67097 = getelementptr i8, ptr %p4, i64 8
+%t67098 = load ptr, ptr %t67097
+%t67099 = getelementptr i8, ptr %t67054, i64 8
+%t67100 = load ptr, ptr %t67099
+%t67101 = call i8 @resid_map_contains(ptr %t67098, ptr %t67100)
+%t67102 = icmp ne i8 %t67101, 0
+br label %LSJ67096
+LSJ67096:
+%t67103 = phi i1 [ false, %LSL67096 ], [ %t67102, %LSR67096 ]
+br i1 %t67103, label %L13026, label %L13028
+L13026:
+%t67104 = getelementptr i8, ptr %t67054, i64 0
+%t67105 = load i64, ptr %t67104
+%t67106 = call ptr @lex_tok(ptr %p0, i64 %t67105)
+%t67107 = getelementptr i8, ptr %t67106, i64 8
+%t67108 = load ptr, ptr %t67107
+%t67110 = call i8 @resid_str_eq(ptr %t67108, ptr @.s67109)
+%t67111 = icmp ne i8 %t67110, 0
+br i1 %t67111, label %L13029, label %L13031
+L13029:
+%t67112 = call i64 @resid_scope_push()
+%t67113 = getelementptr i8, ptr %t67106, i64 0
+%t67114 = load i64, ptr %t67113
+%t67115 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_close(ptr %p0, i64 %t67114, i64 0)
+call void @resid_scope_pop(i64 %t67112)
+%t67116 = call ptr @lex_tok(ptr %p0, i64 %t67115)
+%t67117 = icmp eq i64 %p3, 0
+br label %LSL67118
+LSL67118:
+br i1 %t67117, label %LSR67118, label %LSJ67118
+LSR67118:
+%t67119 = getelementptr i8, ptr %t67116, i64 8
+%t67120 = load ptr, ptr %t67119
+%t67122 = call i8 @resid_str_eq(ptr %t67120, ptr @.s67121)
+%t67123 = icmp ne i8 %t67122, 0
+br label %LSJ67118
+LSJ67118:
+%t67124 = phi i1 [ false, %LSL67118 ], [ %t67123, %LSR67118 ]
+br i1 %t67124, label %L13032, label %L13034
+L13032:
+%t67125 = getelementptr i8, ptr %t67106, i64 0
+%t67126 = load i64, ptr %t67125
+%t67127 = call ptr @str_slice(ptr %p0, i64 %p6, i64 %t67126)
+%t67128 = call ptr @str_sb_append(ptr %p5, ptr %t67127)
+%t67129 = getelementptr i8, ptr %t67106, i64 0
+%t67130 = load i64, ptr %t67129
+%t67131 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_strip_defaults(ptr %p0, i64 %t67130, i64 %t67115)
+%t67132 = call ptr @str_sb_append(ptr %t67128, ptr %t67131)
 br label %tco.s2
 tco.s2:
 br label %tco.head
-L13025:
-%t67065 = getelementptr i8, ptr %t66985, i64 8
-%t67066 = load ptr, ptr %t67065
-%t67067 = call i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_has_default(ptr %p4, ptr %t67066)
-%t67068 = xor i1 %t67067, true
-br i1 %t67068, label %L13026, label %L13028
-L13026:
-%t67069 = getelementptr i8, ptr %t66985, i64 0
-%t67070 = load i64, ptr %t67069
+L13034:
+%t67134 = getelementptr i8, ptr %t67054, i64 8
+%t67135 = load ptr, ptr %t67134
+%t67136 = call i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_has_default(ptr %p4, ptr %t67135)
+%t67137 = xor i1 %t67136, true
+br i1 %t67137, label %L13035, label %L13037
+L13035:
+%t67138 = getelementptr i8, ptr %t67054, i64 0
+%t67139 = load i64, ptr %t67138
 br label %tco.s3
 tco.s3:
 br label %tco.head
-L13028:
-%t67072 = getelementptr i8, ptr %t67037, i64 0
-%t67073 = load i64, ptr %t67072
-%t67074 = call ptr @str_slice(ptr %p0, i64 %p6, i64 %t67073)
-%t67075 = call ptr @str_sb_append(ptr %p5, ptr %t67074)
-%t67076 = getelementptr i8, ptr %t66985, i64 8
-%t67077 = load ptr, ptr %t67076
-%t67078 = getelementptr i8, ptr %t67037, i64 0
-%t67079 = load i64, ptr %t67078
-%t67080 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_call_args(ptr %p0, ptr %t67077, i64 %t67079, i64 %t67046, ptr %p4)
-%t67081 = call ptr @str_sb_append(ptr %t67075, ptr %t67080)
+L13037:
+%t67141 = getelementptr i8, ptr %t67106, i64 0
+%t67142 = load i64, ptr %t67141
+%t67143 = call ptr @str_slice(ptr %p0, i64 %p6, i64 %t67142)
+%t67144 = call ptr @str_sb_append(ptr %p5, ptr %t67143)
+%t67145 = getelementptr i8, ptr %t67054, i64 8
+%t67146 = load ptr, ptr %t67145
+%t67147 = getelementptr i8, ptr %t67106, i64 0
+%t67148 = load i64, ptr %t67147
+%t67149 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_call_args(ptr %p0, ptr %t67146, i64 %t67148, i64 %t67115, ptr %p4)
+%t67150 = call ptr @str_sb_append(ptr %t67144, ptr %t67149)
 br label %tco.s4
 tco.s4:
 br label %tco.head
-L13022:
-br label %L13019
-L13019:
-%t67083 = getelementptr i8, ptr %t66985, i64 0
-%t67084 = load i64, ptr %t67083
+L13031:
+br label %L13028
+L13028:
+%t67152 = getelementptr i8, ptr %t67054, i64 0
+%t67153 = load i64, ptr %t67152
 br label %tco.s5
 tco.s5:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_strip_defaults(ptr %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t67086 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
-%t67087 = extractvalue {i64, i1} %t67086, 0
-%t67088 = extractvalue {i64, i1} %t67086, 1
-%t67089 = zext i1 %t67088 to i8
-call void @resid_overflow_check(i8 %t67089)
-%t67090 = call i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_blank(ptr %p0, i64 %p1, i64 %t67087)
-br i1 %t67090, label %L13029, label %L13031
-L13029:
-%t67091 = musttail call ptr @str_slice(ptr %p0, i64 %p1, i64 %p2)
-ret ptr %t67091
-L13031:
-%t67092 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %p1, i64 %p2)
-%t67094 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_strip_at(ptr %p0, ptr %t67092, i64 0, i64 %p1, ptr @.s67093)
-%t67096 = call ptr @resid_str_concat(ptr %t67094, ptr @.s67095)
-ret ptr %t67096
+%t67155 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t67156 = extractvalue {i64, i1} %t67155, 0
+%t67157 = extractvalue {i64, i1} %t67155, 1
+%t67158 = zext i1 %t67157 to i8
+call void @resid_overflow_check(i8 %t67158)
+%t67159 = call i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_blank(ptr %p0, i64 %p1, i64 %t67156)
+br i1 %t67159, label %L13038, label %L13040
+L13038:
+%t67160 = musttail call ptr @str_slice(ptr %p0, i64 %p1, i64 %p2)
+ret ptr %t67160
+L13040:
+%t67161 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %p1, i64 %p2)
+%t67163 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_strip_at(ptr %p0, ptr %t67161, i64 0, i64 %p1, ptr @.s67162)
+%t67165 = call ptr @resid_str_concat(ptr %t67163, ptr @.s67164)
+ret ptr %t67165
 }
 define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_strip_at__sacc(ptr %p0.in, ptr %p1.in, i64 %p2.in, i64 %p3.in, ptr %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
@@ -102393,164 +102523,61 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t67126, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t67195, %tco.s0 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %t67128, %tco.s0 ]
-%t67097 = call i64 @resid_list_len(ptr %p1)
-%t67098 = icmp sge i64 %p2, %t67097
-br i1 %t67098, label %L13032, label %L13034
-L13032:
+%p4 = phi ptr [ %p4.in, %entry ], [ %t67197, %tco.s0 ]
+%t67166 = call i64 @resid_list_len(ptr %p1)
+%t67167 = icmp sge i64 %p2, %t67166
+br i1 %t67167, label %L13041, label %L13043
+L13041:
 ret ptr %p4
-L13034:
-%t67099 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-%t67100 = call i64 @resid_unbox_i64(ptr %t67099)
-%t67102 = add nsw i64 %p2, 1
-%t67103 = call ptr @resid_list_get(ptr %p1, i64 %t67102)
-%t67104 = call i64 @resid_unbox_i64(ptr %t67103)
-%t67106 = call i64 @resid_scope_push()
-%t67107 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_eq_at(ptr %p0, i64 %t67100, i64 %t67104, i64 0)
-call void @resid_scope_pop(i64 %t67106)
-%t67108 = icmp slt i64 %t67107, 0
-br i1 %t67108, label %L13035, label %L13036
-L13035:
-%t67109 = call ptr @str_slice(ptr %p0, i64 %t67100, i64 %t67104)
-br label %L13037
-L13036:
-%t67110 = sub nsw i64 %t67107, 1
-%t67111 = call ptr @str_slice(ptr %p0, i64 %t67100, i64 %t67110)
-%t67113 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t67104, i64 %t67110)
-%t67114 = extractvalue {i64, i1} %t67113, 0
-%t67115 = extractvalue {i64, i1} %t67113, 1
-%t67116 = zext i1 %t67115 to i8
-call void @resid_overflow_check(i8 %t67116)
-%t67117 = call ptr @str_repeat(ptr @.s67112, i64 %t67114)
-%t67118 = call ptr @resid_str_concat(ptr %t67111, ptr %t67117)
-br label %L13037
-L13037:
-%t67119 = phi ptr [ %t67109, %L13035 ], [ %t67118, %L13036 ]
-%t67120 = add nsw i64 %p2, 2
-%t67121 = call i64 @resid_list_len(ptr %p1)
-%t67122 = icmp slt i64 %t67120, %t67121
-br i1 %t67122, label %L13038, label %L13039
-L13038:
-br label %L13040
-L13039:
-br label %L13040
-L13040:
-%t67125 = phi ptr [ @.s67123, %L13038 ], [ @.s67124, %L13039 ]
-%t67126 = add nsw i64 %p2, 2
-%t67127 = call ptr @resid_sacc_append(ptr %p4, ptr %t67119)
-%t67128 = call ptr @resid_sacc_append(ptr %t67127, ptr %t67125)
+L13043:
+%t67168 = call ptr @resid_list_get(ptr %p1, i64 %p2)
+%t67169 = call i64 @resid_unbox_i64(ptr %t67168)
+%t67171 = add nsw i64 %p2, 1
+%t67172 = call ptr @resid_list_get(ptr %p1, i64 %t67171)
+%t67173 = call i64 @resid_unbox_i64(ptr %t67172)
+%t67175 = call i64 @resid_scope_push()
+%t67176 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_eq_at(ptr %p0, i64 %t67169, i64 %t67173, i64 0)
+call void @resid_scope_pop(i64 %t67175)
+%t67177 = icmp slt i64 %t67176, 0
+br i1 %t67177, label %L13044, label %L13045
+L13044:
+%t67178 = call ptr @str_slice(ptr %p0, i64 %t67169, i64 %t67173)
+br label %L13046
+L13045:
+%t67179 = sub nsw i64 %t67176, 1
+%t67180 = call ptr @str_slice(ptr %p0, i64 %t67169, i64 %t67179)
+%t67182 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t67173, i64 %t67179)
+%t67183 = extractvalue {i64, i1} %t67182, 0
+%t67184 = extractvalue {i64, i1} %t67182, 1
+%t67185 = zext i1 %t67184 to i8
+call void @resid_overflow_check(i8 %t67185)
+%t67186 = call ptr @str_repeat(ptr @.s67181, i64 %t67183)
+%t67187 = call ptr @resid_str_concat(ptr %t67180, ptr %t67186)
+br label %L13046
+L13046:
+%t67188 = phi ptr [ %t67178, %L13044 ], [ %t67187, %L13045 ]
+%t67189 = add nsw i64 %p2, 2
+%t67190 = call i64 @resid_list_len(ptr %p1)
+%t67191 = icmp slt i64 %t67189, %t67190
+br i1 %t67191, label %L13047, label %L13048
+L13047:
+br label %L13049
+L13048:
+br label %L13049
+L13049:
+%t67194 = phi ptr [ @.s67192, %L13047 ], [ @.s67193, %L13048 ]
+%t67195 = add nsw i64 %p2, 2
+%t67196 = call ptr @resid_sacc_append(ptr %p4, ptr %t67188)
+%t67197 = call ptr @resid_sacc_append(ptr %t67196, ptr %t67194)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_call_args(ptr %p0, ptr %p1, i64 %p2, i64 %p3, ptr %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t67130 = getelementptr i8, ptr %p4, i64 8
-%t67131 = load ptr, ptr %t67130
-%t67132 = ptrtoint ptr %p1 to i64
-%t67133 = call {i64, i64} @resid_map_find(ptr %t67131, i8 0, i64 %t67132, i8 0)
-%t67134 = extractvalue {i64, i64} %t67133, 1
-%t67135 = icmp ne i64 %t67134, 0
-%t67136 = extractvalue {i64, i64} %t67133, 0
-%t67137 = inttoptr i64 %t67136 to ptr
-br i1 %t67135, label %L13041, label %L13042
-L13042:
-br label %L13043
-L13043:
-br label %L13044
-L13041:
-br label %L13044
-L13044:
-%t67139 = phi ptr [ @.s67138, %L13043 ], [ %t67137, %L13041 ]
-%t67140 = getelementptr i8, ptr %p4, i64 16
-%t67141 = load ptr, ptr %t67140
-%t67142 = ptrtoint ptr %p1 to i64
-%t67143 = call {i64, i64} @resid_map_find(ptr %t67141, i8 0, i64 %t67142, i8 0)
-%t67144 = extractvalue {i64, i64} %t67143, 1
-%t67145 = icmp ne i64 %t67144, 0
-%t67146 = extractvalue {i64, i64} %t67143, 0
-%t67147 = inttoptr i64 %t67146 to ptr
-br i1 %t67145, label %L13045, label %L13046
-L13046:
-br label %L13047
-L13047:
-br label %L13048
-L13045:
-br label %L13048
-L13048:
-%t67149 = phi ptr [ @.s67148, %L13047 ], [ %t67147, %L13045 ]
-%t67150 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB67150)
-%t67151 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB67151)
-%t67153 = call i8 @resid_str_eq(ptr %t67139, ptr @.s67152)
-%t67154 = icmp ne i8 %t67153, 0
-br i1 %t67154, label %L13049, label %L13050
-L13049:
-br label %L13051
-L13050:
-%t67156 = call ptr @bl_str_split(ptr %t67139, ptr @.s67155)
-br label %L13051
-L13051:
-%t67157 = phi ptr [ %t67150, %L13049 ], [ %t67156, %L13050 ]
-%t67159 = call i8 @resid_str_eq(ptr %t67139, ptr @.s67158)
-%t67160 = icmp ne i8 %t67159, 0
-br i1 %t67160, label %L13052, label %L13053
-L13052:
-br label %L13054
-L13053:
-%t67161 = call ptr @str_from_code(i64 31)
-%t67162 = call ptr @bl_str_split(ptr %t67149, ptr %t67161)
-br label %L13054
-L13054:
-%t67163 = phi ptr [ %t67150, %L13052 ], [ %t67162, %L13053 ]
-%t67164 = call i64 @resid_scope_push()
-%t67165 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
-%t67166 = extractvalue {i64, i1} %t67165, 0
-%t67167 = extractvalue {i64, i1} %t67165, 1
-%t67168 = zext i1 %t67167 to i8
-call void @resid_overflow_check(i8 %t67168)
-%t67169 = call i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_blank(ptr %p0, i64 %p2, i64 %t67166)
-call void @resid_scope_pop(i64 %t67164)
-br i1 %t67169, label %L13055, label %L13056
-L13055:
-br label %L13057
-L13056:
-%t67170 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %p2, i64 %p3)
-br label %L13057
-L13057:
-%t67171 = phi ptr [ %t67151, %L13055 ], [ %t67170, %L13056 ]
-%t67172 = call i64 @resid_list_len(ptr %t67157)
-%t67174 = call ptr @resid_list_new(i64 0, ptr null, ptr @.lty67173)
-%t67175 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_empty(i64 %t67172, ptr %t67174)
-%t67176 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_fill(ptr %p0, ptr %t67171, i64 0, i64 0, ptr %t67157, ptr %t67175, ptr %p4)
-%t67177 = call i64 @resid_list_len(ptr %t67176)
-%t67178 = call i64 @resid_list_len(ptr %t67157)
-%t67179 = icmp ne i64 %t67177, %t67178
-br i1 %t67179, label %L13058, label %L13060
-L13058:
-%t67180 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
-%t67181 = extractvalue {i64, i1} %t67180, 0
-%t67182 = extractvalue {i64, i1} %t67180, 1
-%t67183 = zext i1 %t67182 to i8
-call void @resid_overflow_check(i8 %t67183)
-%t67184 = call ptr @str_sb_new()
-%t67185 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_rewrite(ptr %p0, i64 %p2, i64 %t67181, i64 1, ptr %p4, ptr %t67184, i64 %p2)
-%t67186 = call ptr @str_sb_finish(ptr %t67185)
-%t67188 = call ptr @resid_str_concat(ptr %t67186, ptr @.s67187)
-ret ptr %t67188
-L13060:
-%t67190 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_join_slots(ptr %t67176, ptr %t67163, i64 0, ptr @.s67189)
-%t67191 = call ptr @str_slice(ptr %p0, i64 %p2, i64 %p3)
-%t67193 = call i64 @str_count(ptr %t67191, ptr @.s67192)
-%t67195 = call ptr @str_repeat(ptr @.s67194, i64 %t67193)
-%t67196 = call ptr @resid_str_concat(ptr %t67190, ptr %t67195)
-%t67198 = call ptr @resid_str_concat(ptr %t67196, ptr @.s67197)
-ret ptr %t67198
-}
-define i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_has_default(ptr %p0, ptr %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
-entry:
-%t67199 = getelementptr i8, ptr %p0, i64 16
+%t67199 = getelementptr i8, ptr %p4, i64 8
 %t67200 = load ptr, ptr %t67199
 %t67201 = ptrtoint ptr %p1 to i64
 %t67202 = call {i64, i64} @resid_map_find(ptr %t67200, i8 0, i64 %t67201, i8 0)
@@ -102558,39 +102585,142 @@ entry:
 %t67204 = icmp ne i64 %t67203, 0
 %t67205 = extractvalue {i64, i64} %t67202, 0
 %t67206 = inttoptr i64 %t67205 to ptr
-br i1 %t67204, label %L13061, label %L13062
+br i1 %t67204, label %L13050, label %L13051
+L13051:
+br label %L13052
+L13052:
+br label %L13053
+L13050:
+br label %L13053
+L13053:
+%t67208 = phi ptr [ @.s67207, %L13052 ], [ %t67206, %L13050 ]
+%t67209 = getelementptr i8, ptr %p4, i64 16
+%t67210 = load ptr, ptr %t67209
+%t67211 = ptrtoint ptr %p1 to i64
+%t67212 = call {i64, i64} @resid_map_find(ptr %t67210, i8 0, i64 %t67211, i8 0)
+%t67213 = extractvalue {i64, i64} %t67212, 1
+%t67214 = icmp ne i64 %t67213, 0
+%t67215 = extractvalue {i64, i64} %t67212, 0
+%t67216 = inttoptr i64 %t67215 to ptr
+br i1 %t67214, label %L13054, label %L13055
+L13055:
+br label %L13056
+L13056:
+br label %L13057
+L13054:
+br label %L13057
+L13057:
+%t67218 = phi ptr [ @.s67217, %L13056 ], [ %t67216, %L13054 ]
+%t67219 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB67219)
+%t67220 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB67220)
+%t67222 = call i8 @resid_str_eq(ptr %t67208, ptr @.s67221)
+%t67223 = icmp ne i8 %t67222, 0
+br i1 %t67223, label %L13058, label %L13059
+L13058:
+br label %L13060
+L13059:
+%t67225 = call ptr @bl_str_split(ptr %t67208, ptr @.s67224)
+br label %L13060
+L13060:
+%t67226 = phi ptr [ %t67219, %L13058 ], [ %t67225, %L13059 ]
+%t67228 = call i8 @resid_str_eq(ptr %t67208, ptr @.s67227)
+%t67229 = icmp ne i8 %t67228, 0
+br i1 %t67229, label %L13061, label %L13062
+L13061:
+br label %L13063
 L13062:
+%t67230 = call ptr @str_from_code(i64 31)
+%t67231 = call ptr @bl_str_split(ptr %t67218, ptr %t67230)
 br label %L13063
 L13063:
-br label %L13064
-L13061:
-br label %L13064
+%t67232 = phi ptr [ %t67219, %L13061 ], [ %t67231, %L13062 ]
+%t67233 = call i64 @resid_scope_push()
+%t67234 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
+%t67235 = extractvalue {i64, i1} %t67234, 0
+%t67236 = extractvalue {i64, i1} %t67234, 1
+%t67237 = zext i1 %t67236 to i8
+call void @resid_overflow_check(i8 %t67237)
+%t67238 = call i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_blank(ptr %p0, i64 %p2, i64 %t67235)
+call void @resid_scope_pop(i64 %t67233)
+br i1 %t67238, label %L13064, label %L13065
 L13064:
-%t67208 = phi ptr [ @.s67207, %L13063 ], [ %t67206, %L13061 ]
-%t67209 = call ptr @str_from_code(i64 31)
-%t67211 = call ptr @str_replace(ptr %t67208, ptr %t67209, ptr @.s67210)
-%t67213 = call i8 @resid_str_eq(ptr %t67211, ptr @.s67212)
-%t67214 = icmp eq i8 %t67213, 0
-ret i1 %t67214
+br label %L13066
+L13065:
+%t67239 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %p2, i64 %p3)
+br label %L13066
+L13066:
+%t67240 = phi ptr [ %t67220, %L13064 ], [ %t67239, %L13065 ]
+%t67241 = call i64 @resid_list_len(ptr %t67226)
+%t67243 = call ptr @resid_list_new(i64 0, ptr null, ptr @.lty67242)
+%t67244 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_empty(i64 %t67241, ptr %t67243)
+%t67245 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_fill(ptr %p0, ptr %t67240, i64 0, i64 0, ptr %t67226, ptr %t67244, ptr %p4)
+%t67246 = call i64 @resid_list_len(ptr %t67245)
+%t67247 = call i64 @resid_list_len(ptr %t67226)
+%t67248 = icmp ne i64 %t67246, %t67247
+br i1 %t67248, label %L13067, label %L13069
+L13067:
+%t67249 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p3, i64 1)
+%t67250 = extractvalue {i64, i1} %t67249, 0
+%t67251 = extractvalue {i64, i1} %t67249, 1
+%t67252 = zext i1 %t67251 to i8
+call void @resid_overflow_check(i8 %t67252)
+%t67253 = call ptr @str_sb_new()
+%t67254 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_rewrite(ptr %p0, i64 %p2, i64 %t67250, i64 1, ptr %p4, ptr %t67253, i64 %p2)
+%t67255 = call ptr @str_sb_finish(ptr %t67254)
+%t67257 = call ptr @resid_str_concat(ptr %t67255, ptr @.s67256)
+ret ptr %t67257
+L13069:
+%t67259 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_join_slots(ptr %t67245, ptr %t67232, i64 0, ptr @.s67258)
+%t67260 = call ptr @str_slice(ptr %p0, i64 %p2, i64 %p3)
+%t67262 = call i64 @str_count(ptr %t67260, ptr @.s67261)
+%t67264 = call ptr @str_repeat(ptr @.s67263, i64 %t67262)
+%t67265 = call ptr @resid_str_concat(ptr %t67259, ptr %t67264)
+%t67267 = call ptr @resid_str_concat(ptr %t67265, ptr @.s67266)
+ret ptr %t67267
+}
+define i1 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_has_default(ptr %p0, ptr %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
+entry:
+%t67268 = getelementptr i8, ptr %p0, i64 16
+%t67269 = load ptr, ptr %t67268
+%t67270 = ptrtoint ptr %p1 to i64
+%t67271 = call {i64, i64} @resid_map_find(ptr %t67269, i8 0, i64 %t67270, i8 0)
+%t67272 = extractvalue {i64, i64} %t67271, 1
+%t67273 = icmp ne i64 %t67272, 0
+%t67274 = extractvalue {i64, i64} %t67271, 0
+%t67275 = inttoptr i64 %t67274 to ptr
+br i1 %t67273, label %L13070, label %L13071
+L13071:
+br label %L13072
+L13072:
+br label %L13073
+L13070:
+br label %L13073
+L13073:
+%t67277 = phi ptr [ @.s67276, %L13072 ], [ %t67275, %L13070 ]
+%t67278 = call ptr @str_from_code(i64 31)
+%t67280 = call ptr @str_replace(ptr %t67277, ptr %t67278, ptr @.s67279)
+%t67282 = call i8 @resid_str_eq(ptr %t67280, ptr @.s67281)
+%t67283 = icmp eq i8 %t67282, 0
+ret i1 %t67283
 }
 define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_empty(i64 %p0.in, ptr %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t67218 = alloca [1 x ptr]
+%t67287 = alloca [1 x ptr]
 br label %tco.head
 tco.head:
 %p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi ptr [ %p1.in, %entry ], [ %t67224, %tco.s0 ]
-%t67215 = call i64 @resid_list_len(ptr %p1)
-%t67216 = icmp sge i64 %t67215, %p0
-br i1 %t67216, label %L13065, label %L13067
-L13065:
+%p1 = phi ptr [ %p1.in, %entry ], [ %t67293, %tco.s0 ]
+%t67284 = call i64 @resid_list_len(ptr %p1)
+%t67285 = icmp sge i64 %t67284, %p0
+br i1 %t67285, label %L13074, label %L13076
+L13074:
 ret ptr %p1
-L13067:
-%t67217 = call ptr @str_from_code(i64 0)
-%t67222 = getelementptr i8, ptr %t67218, i64 0
-store ptr %t67217, ptr %t67222
-%t67224e = load ptr, ptr %t67218
-%t67224 = call ptr @resid_list_push(ptr %p1, ptr %t67224e)
+L13076:
+%t67286 = call ptr @str_from_code(i64 0)
+%t67291 = getelementptr i8, ptr %t67287, i64 0
+store ptr %t67286, ptr %t67291
+%t67293e = load ptr, ptr %t67287
+%t67293 = call ptr @resid_list_push(ptr %p1, ptr %t67293e)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -102601,97 +102731,97 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t67279, %tco.s0 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t67278, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t67348, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t67347, %tco.s0 ]
 %p4 = phi ptr [ %p4.in, %entry ], [ %p4, %tco.s0 ]
-%p5 = phi ptr [ %p5.in, %entry ], [ %t67273, %tco.s0 ]
+%p5 = phi ptr [ %p5.in, %entry ], [ %t67342, %tco.s0 ]
 %p6 = phi ptr [ %p6.in, %entry ], [ %p6, %tco.s0 ]
-%t67226 = call i64 @resid_list_len(ptr %p1)
-%t67227 = icmp sge i64 %p2, %t67226
-br i1 %t67227, label %L13068, label %L13070
-L13068:
-ret ptr %p5
-L13070:
-%t67228 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-%t67229 = call i64 @resid_unbox_i64(ptr %t67228)
-%t67231 = add nsw i64 %p2, 1
-%t67232 = call ptr @resid_list_get(ptr %p1, i64 %t67231)
-%t67233 = call i64 @resid_unbox_i64(ptr %t67232)
-%t67235 = call ptr @lex_tok(ptr %p0, i64 %t67229)
-%t67236 = getelementptr i8, ptr %t67235, i64 0
-%t67237 = load i64, ptr %t67236
-%t67238 = call ptr @lex_tok(ptr %p0, i64 %t67237)
-%t67239 = getelementptr i8, ptr %t67235, i64 16
-%t67240 = load ptr, ptr %t67239
-%t67242 = call i8 @resid_str_eq(ptr %t67240, ptr @.s67241)
-%t67243 = icmp ne i8 %t67242, 0
-br label %LSL67244
-LSL67244:
-br i1 %t67243, label %LSR67244, label %LSJ67244
-LSR67244:
-%t67245 = getelementptr i8, ptr %t67238, i64 8
-%t67246 = load ptr, ptr %t67245
-%t67248 = call i8 @resid_str_eq(ptr %t67246, ptr @.s67247)
-%t67249 = icmp ne i8 %t67248, 0
-br label %LSJ67244
-LSJ67244:
-%t67250 = phi i1 [ false, %LSL67244 ], [ %t67249, %LSR67244 ]
-br label %LSL67251
-LSL67251:
-br i1 %t67250, label %LSR67251, label %LSJ67251
-LSR67251:
-%t67252 = getelementptr i8, ptr %t67235, i64 8
-%t67253 = load ptr, ptr %t67252
-%t67254 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_name_index(ptr %p4, ptr %t67253, i64 0)
-%t67255 = icmp sge i64 %t67254, 0
-br label %LSJ67251
-LSJ67251:
-%t67256 = phi i1 [ false, %LSL67251 ], [ %t67255, %LSR67251 ]
-br i1 %t67256, label %L13071, label %L13072
-L13071:
-%t67257 = getelementptr i8, ptr %t67235, i64 8
-%t67258 = load ptr, ptr %t67257
-%t67259 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_name_index(ptr %p4, ptr %t67258, i64 0)
-br label %L13073
-L13072:
-br label %L13073
-L13073:
-%t67260 = phi i64 [ %t67259, %L13071 ], [ %p3, %L13072 ]
-br i1 %t67256, label %L13074, label %L13075
-L13074:
-%t67261 = getelementptr i8, ptr %t67238, i64 0
-%t67262 = load i64, ptr %t67261
-br label %L13076
-L13075:
-br label %L13076
-L13076:
-%t67263 = phi i64 [ %t67262, %L13074 ], [ %t67229, %L13075 ]
-%t67264 = call i64 @resid_list_len(ptr %p5)
-%t67265 = icmp sge i64 %t67260, %t67264
-br i1 %t67265, label %L13077, label %L13079
+%t67295 = call i64 @resid_list_len(ptr %p1)
+%t67296 = icmp sge i64 %p2, %t67295
+br i1 %t67296, label %L13077, label %L13079
 L13077:
-%t67266 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB67266)
-ret ptr %t67266
+ret ptr %p5
 L13079:
-%t67267 = call ptr @str_sb_new()
-%t67268 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_rewrite(ptr %p0, i64 %t67263, i64 %t67233, i64 1, ptr %p6, ptr %t67267, i64 %t67263)
-%t67269 = call ptr @str_sb_finish(ptr %t67268)
-%t67270 = call ptr @str_trim(ptr %t67269)
-%t67272 = call ptr @resid_list_new(i64 0, ptr null, ptr @.lty67271)
-%t67273 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_set(ptr %p5, i64 %t67260, ptr %t67270, i64 0, ptr %t67272)
-br i1 %t67256, label %L13080, label %L13081
+%t67297 = call ptr @resid_list_get(ptr %p1, i64 %p2)
+%t67298 = call i64 @resid_unbox_i64(ptr %t67297)
+%t67300 = add nsw i64 %p2, 1
+%t67301 = call ptr @resid_list_get(ptr %p1, i64 %t67300)
+%t67302 = call i64 @resid_unbox_i64(ptr %t67301)
+%t67304 = call ptr @lex_tok(ptr %p0, i64 %t67298)
+%t67305 = getelementptr i8, ptr %t67304, i64 0
+%t67306 = load i64, ptr %t67305
+%t67307 = call ptr @lex_tok(ptr %p0, i64 %t67306)
+%t67308 = getelementptr i8, ptr %t67304, i64 16
+%t67309 = load ptr, ptr %t67308
+%t67311 = call i8 @resid_str_eq(ptr %t67309, ptr @.s67310)
+%t67312 = icmp ne i8 %t67311, 0
+br label %LSL67313
+LSL67313:
+br i1 %t67312, label %LSR67313, label %LSJ67313
+LSR67313:
+%t67314 = getelementptr i8, ptr %t67307, i64 8
+%t67315 = load ptr, ptr %t67314
+%t67317 = call i8 @resid_str_eq(ptr %t67315, ptr @.s67316)
+%t67318 = icmp ne i8 %t67317, 0
+br label %LSJ67313
+LSJ67313:
+%t67319 = phi i1 [ false, %LSL67313 ], [ %t67318, %LSR67313 ]
+br label %LSL67320
+LSL67320:
+br i1 %t67319, label %LSR67320, label %LSJ67320
+LSR67320:
+%t67321 = getelementptr i8, ptr %t67304, i64 8
+%t67322 = load ptr, ptr %t67321
+%t67323 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_name_index(ptr %p4, ptr %t67322, i64 0)
+%t67324 = icmp sge i64 %t67323, 0
+br label %LSJ67320
+LSJ67320:
+%t67325 = phi i1 [ false, %LSL67320 ], [ %t67324, %LSR67320 ]
+br i1 %t67325, label %L13080, label %L13081
 L13080:
+%t67326 = getelementptr i8, ptr %t67304, i64 8
+%t67327 = load ptr, ptr %t67326
+%t67328 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_name_index(ptr %p4, ptr %t67327, i64 0)
 br label %L13082
 L13081:
-%t67274 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p3, i64 1)
-%t67275 = extractvalue {i64, i1} %t67274, 0
-%t67276 = extractvalue {i64, i1} %t67274, 1
-%t67277 = zext i1 %t67276 to i8
-call void @resid_overflow_check(i8 %t67277)
 br label %L13082
 L13082:
-%t67278 = phi i64 [ %p3, %L13080 ], [ %t67275, %L13081 ]
-%t67279 = add nsw i64 %p2, 2
+%t67329 = phi i64 [ %t67328, %L13080 ], [ %p3, %L13081 ]
+br i1 %t67325, label %L13083, label %L13084
+L13083:
+%t67330 = getelementptr i8, ptr %t67307, i64 0
+%t67331 = load i64, ptr %t67330
+br label %L13085
+L13084:
+br label %L13085
+L13085:
+%t67332 = phi i64 [ %t67331, %L13083 ], [ %t67298, %L13084 ]
+%t67333 = call i64 @resid_list_len(ptr %p5)
+%t67334 = icmp sge i64 %t67329, %t67333
+br i1 %t67334, label %L13086, label %L13088
+L13086:
+%t67335 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyB67335)
+ret ptr %t67335
+L13088:
+%t67336 = call ptr @str_sb_new()
+%t67337 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_rewrite(ptr %p0, i64 %t67332, i64 %t67302, i64 1, ptr %p6, ptr %t67336, i64 %t67332)
+%t67338 = call ptr @str_sb_finish(ptr %t67337)
+%t67339 = call ptr @str_trim(ptr %t67338)
+%t67341 = call ptr @resid_list_new(i64 0, ptr null, ptr @.lty67340)
+%t67342 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_set(ptr %p5, i64 %t67329, ptr %t67339, i64 0, ptr %t67341)
+br i1 %t67325, label %L13089, label %L13090
+L13089:
+br label %L13091
+L13090:
+%t67343 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p3, i64 1)
+%t67344 = extractvalue {i64, i1} %t67343, 0
+%t67345 = extractvalue {i64, i1} %t67343, 1
+%t67346 = zext i1 %t67345 to i8
+call void @resid_overflow_check(i8 %t67346)
+br label %L13091
+L13091:
+%t67347 = phi i64 [ %p3, %L13089 ], [ %t67344, %L13090 ]
+%t67348 = add nsw i64 %p2, 2
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -102702,55 +102832,55 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t67288, %tco.s0 ]
-%t67281 = call i64 @resid_list_len(ptr %p0)
-%t67282 = icmp sge i64 %p2, %t67281
-br i1 %t67282, label %L13083, label %L13085
-L13083:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t67357, %tco.s0 ]
+%t67350 = call i64 @resid_list_len(ptr %p0)
+%t67351 = icmp sge i64 %p2, %t67350
+br i1 %t67351, label %L13092, label %L13094
+L13092:
 ret i64 -1
-L13085:
-%t67283 = call ptr @resid_list_get(ptr %p0, i64 %p2)
-%t67286 = call i8 @resid_str_eq(ptr %t67283, ptr %p1)
-%t67287 = icmp ne i8 %t67286, 0
-br i1 %t67287, label %L13086, label %L13088
-L13086:
+L13094:
+%t67352 = call ptr @resid_list_get(ptr %p0, i64 %p2)
+%t67355 = call i8 @resid_str_eq(ptr %t67352, ptr %p1)
+%t67356 = icmp ne i8 %t67355, 0
+br i1 %t67356, label %L13095, label %L13097
+L13095:
 ret i64 %p2
-L13088:
-%t67288 = add nsw i64 %p2, 1
+L13097:
+%t67357 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_set(ptr %p0.in, i64 %p1.in, ptr %p2.in, i64 %p3.in, ptr %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t67298 = alloca [1 x ptr]
+%t67367 = alloca [1 x ptr]
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
 %p2 = phi ptr [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%p3 = phi i64 [ %p3.in, %entry ], [ %t67297, %tco.s0 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %t67304, %tco.s0 ]
-%t67290 = call i64 @resid_list_len(ptr %p0)
-%t67291 = icmp sge i64 %p3, %t67290
-br i1 %t67291, label %L13089, label %L13091
-L13089:
+%p3 = phi i64 [ %p3.in, %entry ], [ %t67366, %tco.s0 ]
+%p4 = phi ptr [ %p4.in, %entry ], [ %t67373, %tco.s0 ]
+%t67359 = call i64 @resid_list_len(ptr %p0)
+%t67360 = icmp sge i64 %p3, %t67359
+br i1 %t67360, label %L13098, label %L13100
+L13098:
 ret ptr %p4
-L13091:
-%t67292 = icmp eq i64 %p3, %p1
-br i1 %t67292, label %L13092, label %L13093
-L13092:
-br label %L13094
-L13093:
-%t67293 = call ptr @resid_list_get(ptr %p0, i64 %p3)
-br label %L13094
-L13094:
-%t67296 = phi ptr [ %p2, %L13092 ], [ %t67293, %L13093 ]
-%t67297 = add nsw i64 %p3, 1
-%t67302 = getelementptr i8, ptr %t67298, i64 0
-store ptr %t67296, ptr %t67302
-%t67304e = load ptr, ptr %t67298
-%t67304 = call ptr @resid_list_push(ptr %p4, ptr %t67304e)
+L13100:
+%t67361 = icmp eq i64 %p3, %p1
+br i1 %t67361, label %L13101, label %L13102
+L13101:
+br label %L13103
+L13102:
+%t67362 = call ptr @resid_list_get(ptr %p0, i64 %p3)
+br label %L13103
+L13103:
+%t67365 = phi ptr [ %p2, %L13101 ], [ %t67362, %L13102 ]
+%t67366 = add nsw i64 %p3, 1
+%t67371 = getelementptr i8, ptr %t67367, i64 0
+store ptr %t67365, ptr %t67371
+%t67373e = load ptr, ptr %t67367
+%t67373 = call ptr @resid_list_push(ptr %p4, ptr %t67373e)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -102761,53 +102891,53 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t67331, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t67333, %tco.s0 ]
-%t67306 = call i64 @resid_list_len(ptr %p0)
-%t67307 = icmp sge i64 %p2, %t67306
-br i1 %t67307, label %L13095, label %L13097
-L13095:
-ret ptr %p3
-L13097:
-%t67308 = call ptr @resid_list_get(ptr %p0, i64 %p2)
-%t67311 = call i64 @resid_list_len(ptr %p1)
-%t67312 = icmp slt i64 %p2, %t67311
-br i1 %t67312, label %L13098, label %L13099
-L13098:
-%t67313 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-br label %L13100
-L13099:
-br label %L13100
-L13100:
-%t67317 = phi ptr [ %t67313, %L13098 ], [ @.s67316, %L13099 ]
-%t67318 = call ptr @str_from_code(i64 0)
-%t67319 = call i8 @resid_str_eq(ptr %t67308, ptr %t67318)
-%t67320 = icmp ne i8 %t67319, 0
-br i1 %t67320, label %L13101, label %L13102
-L13101:
-br label %L13103
-L13102:
-br label %L13103
-L13103:
-%t67321 = phi ptr [ %t67317, %L13101 ], [ %t67308, %L13102 ]
-%t67323 = call i8 @resid_str_eq(ptr %t67321, ptr @.s67322)
-%t67324 = icmp ne i8 %t67323, 0
-br i1 %t67324, label %L13104, label %L13106
+%p2 = phi i64 [ %p2.in, %entry ], [ %t67400, %tco.s0 ]
+%p3 = phi ptr [ %p3.in, %entry ], [ %t67402, %tco.s0 ]
+%t67375 = call i64 @resid_list_len(ptr %p0)
+%t67376 = icmp sge i64 %p2, %t67375
+br i1 %t67376, label %L13104, label %L13106
 L13104:
 ret ptr %p3
 L13106:
-%t67326 = call i8 @resid_str_eq(ptr %p3, ptr @.s67325)
-%t67327 = icmp ne i8 %t67326, 0
-br i1 %t67327, label %L13107, label %L13108
+%t67377 = call ptr @resid_list_get(ptr %p0, i64 %p2)
+%t67380 = call i64 @resid_list_len(ptr %p1)
+%t67381 = icmp slt i64 %p2, %t67380
+br i1 %t67381, label %L13107, label %L13108
 L13107:
+%t67382 = call ptr @resid_list_get(ptr %p1, i64 %p2)
 br label %L13109
 L13108:
 br label %L13109
 L13109:
-%t67330 = phi ptr [ @.s67328, %L13107 ], [ @.s67329, %L13108 ]
-%t67331 = add nsw i64 %p2, 1
-%t67332 = call ptr @resid_str_concat(ptr %p3, ptr %t67330)
-%t67333 = call ptr @resid_str_concat(ptr %t67332, ptr %t67321)
+%t67386 = phi ptr [ %t67382, %L13107 ], [ @.s67385, %L13108 ]
+%t67387 = call ptr @str_from_code(i64 0)
+%t67388 = call i8 @resid_str_eq(ptr %t67377, ptr %t67387)
+%t67389 = icmp ne i8 %t67388, 0
+br i1 %t67389, label %L13110, label %L13111
+L13110:
+br label %L13112
+L13111:
+br label %L13112
+L13112:
+%t67390 = phi ptr [ %t67386, %L13110 ], [ %t67377, %L13111 ]
+%t67392 = call i8 @resid_str_eq(ptr %t67390, ptr @.s67391)
+%t67393 = icmp ne i8 %t67392, 0
+br i1 %t67393, label %L13113, label %L13115
+L13113:
+ret ptr %p3
+L13115:
+%t67395 = call i8 @resid_str_eq(ptr %p3, ptr @.s67394)
+%t67396 = icmp ne i8 %t67395, 0
+br i1 %t67396, label %L13116, label %L13117
+L13116:
+br label %L13118
+L13117:
+br label %L13118
+L13118:
+%t67399 = phi ptr [ @.s67397, %L13116 ], [ @.s67398, %L13117 ]
+%t67400 = add nsw i64 %p2, 1
+%t67401 = call ptr @resid_str_concat(ptr %p3, ptr %t67399)
+%t67402 = call ptr @resid_str_concat(ptr %t67401, ptr %t67390)
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -102817,135 +102947,135 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ], [ %p0, %tco.s2 ], [ %p0, %tco.s3 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t67347, %tco.s0 ], [ %t67359, %tco.s1 ], [ %t67415, %tco.s2 ], [ %t67424, %tco.s3 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t67349, %tco.s0 ], [ %t67361, %tco.s1 ], [ %t67416, %tco.s2 ], [ %p2, %tco.s3 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %p3, %tco.s1 ], [ %t67421, %tco.s2 ], [ %p3, %tco.s3 ]
-%t67335 = call ptr @lex_tok(ptr %p0, i64 %p1)
-%t67336 = getelementptr i8, ptr %t67335, i64 16
-%t67337 = load ptr, ptr %t67336
-%t67339 = call i8 @resid_str_eq(ptr %t67337, ptr @.s67338)
-%t67340 = icmp ne i8 %t67339, 0
-br i1 %t67340, label %L13110, label %L13112
-L13110:
+%p1 = phi i64 [ %p1.in, %entry ], [ %t67416, %tco.s0 ], [ %t67428, %tco.s1 ], [ %t67484, %tco.s2 ], [ %t67493, %tco.s3 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t67418, %tco.s0 ], [ %t67430, %tco.s1 ], [ %t67485, %tco.s2 ], [ %p2, %tco.s3 ]
+%p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %p3, %tco.s1 ], [ %t67490, %tco.s2 ], [ %p3, %tco.s3 ]
+%t67404 = call ptr @lex_tok(ptr %p0, i64 %p1)
+%t67405 = getelementptr i8, ptr %t67404, i64 16
+%t67406 = load ptr, ptr %t67405
+%t67408 = call i8 @resid_str_eq(ptr %t67406, ptr @.s67407)
+%t67409 = icmp ne i8 %t67408, 0
+br i1 %t67409, label %L13119, label %L13121
+L13119:
 ret ptr %p3
-L13112:
-%t67341 = getelementptr i8, ptr %t67335, i64 8
-%t67342 = load ptr, ptr %t67341
-%t67344 = call i8 @resid_str_eq(ptr %t67342, ptr @.s67343)
-%t67345 = icmp ne i8 %t67344, 0
-br i1 %t67345, label %L13113, label %L13115
-L13113:
-%t67346 = getelementptr i8, ptr %t67335, i64 0
-%t67347 = load i64, ptr %t67346
-%t67348 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 1)
-%t67349 = extractvalue {i64, i1} %t67348, 0
-%t67350 = extractvalue {i64, i1} %t67348, 1
-%t67351 = zext i1 %t67350 to i8
-call void @resid_overflow_check(i8 %t67351)
+L13121:
+%t67410 = getelementptr i8, ptr %t67404, i64 8
+%t67411 = load ptr, ptr %t67410
+%t67413 = call i8 @resid_str_eq(ptr %t67411, ptr @.s67412)
+%t67414 = icmp ne i8 %t67413, 0
+br i1 %t67414, label %L13122, label %L13124
+L13122:
+%t67415 = getelementptr i8, ptr %t67404, i64 0
+%t67416 = load i64, ptr %t67415
+%t67417 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 1)
+%t67418 = extractvalue {i64, i1} %t67417, 0
+%t67419 = extractvalue {i64, i1} %t67417, 1
+%t67420 = zext i1 %t67419 to i8
+call void @resid_overflow_check(i8 %t67420)
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L13115:
-%t67353 = getelementptr i8, ptr %t67335, i64 8
-%t67354 = load ptr, ptr %t67353
-%t67356 = call i8 @resid_str_eq(ptr %t67354, ptr @.s67355)
-%t67357 = icmp ne i8 %t67356, 0
-br i1 %t67357, label %L13116, label %L13118
-L13116:
-%t67358 = getelementptr i8, ptr %t67335, i64 0
-%t67359 = load i64, ptr %t67358
-%t67360 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
-%t67361 = extractvalue {i64, i1} %t67360, 0
-%t67362 = extractvalue {i64, i1} %t67360, 1
-%t67363 = zext i1 %t67362 to i8
-call void @resid_overflow_check(i8 %t67363)
+L13124:
+%t67422 = getelementptr i8, ptr %t67404, i64 8
+%t67423 = load ptr, ptr %t67422
+%t67425 = call i8 @resid_str_eq(ptr %t67423, ptr @.s67424)
+%t67426 = icmp ne i8 %t67425, 0
+br i1 %t67426, label %L13125, label %L13127
+L13125:
+%t67427 = getelementptr i8, ptr %t67404, i64 0
+%t67428 = load i64, ptr %t67427
+%t67429 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t67430 = extractvalue {i64, i1} %t67429, 0
+%t67431 = extractvalue {i64, i1} %t67429, 1
+%t67432 = zext i1 %t67431 to i8
+call void @resid_overflow_check(i8 %t67432)
 br label %tco.s1
 tco.s1:
 br label %tco.head
-L13118:
-%t67365 = icmp eq i64 %p2, 0
-br label %LSL67366
-LSL67366:
-br i1 %t67365, label %LSR67366, label %LSJ67366
-LSR67366:
-%t67367 = getelementptr i8, ptr %t67335, i64 8
-%t67368 = load ptr, ptr %t67367
-%t67370 = call i8 @resid_str_eq(ptr %t67368, ptr @.s67369)
-%t67371 = icmp ne i8 %t67370, 0
-br label %LSJ67366
-LSJ67366:
-%t67372 = phi i1 [ false, %LSL67366 ], [ %t67371, %LSR67366 ]
-br i1 %t67372, label %L13119, label %L13121
-L13119:
-%t67373 = getelementptr i8, ptr %t67335, i64 0
-%t67374 = load i64, ptr %t67373
-%t67375 = call ptr @lex_tok(ptr %p0, i64 %t67374)
-%t67376 = getelementptr i8, ptr %t67375, i64 0
-%t67377 = load i64, ptr %t67376
-%t67378 = call ptr @lex_tok(ptr %p0, i64 %t67377)
-%t67379 = getelementptr i8, ptr %t67378, i64 0
-%t67380 = load i64, ptr %t67379
-%t67381 = call ptr @lex_tok(ptr %p0, i64 %t67380)
-%t67382 = getelementptr i8, ptr %t67381, i64 0
-%t67383 = load i64, ptr %t67382
-%t67384 = call ptr @lex_tok(ptr %p0, i64 %t67383)
-%t67385 = getelementptr i8, ptr %t67384, i64 0
-%t67386 = load i64, ptr %t67385
-%t67387 = call ptr @lex_tok(ptr %p0, i64 %t67386)
-%t67388 = getelementptr i8, ptr %t67378, i64 8
-%t67389 = load ptr, ptr %t67388
-%t67391 = call i8 @resid_str_eq(ptr %t67389, ptr @.s67390)
-%t67392 = icmp ne i8 %t67391, 0
-br label %LSL67393
-LSL67393:
-br i1 %t67392, label %LSR67393, label %LSJ67393
-LSR67393:
-%t67394 = getelementptr i8, ptr %t67381, i64 8
-%t67395 = load ptr, ptr %t67394
-%t67397 = call i8 @resid_str_eq(ptr %t67395, ptr @.s67396)
-%t67398 = icmp ne i8 %t67397, 0
-br label %LSJ67393
-LSJ67393:
-%t67399 = phi i1 [ false, %LSL67393 ], [ %t67398, %LSR67393 ]
-br label %LSL67400
-LSL67400:
-br i1 %t67399, label %LSR67400, label %LSJ67400
-LSR67400:
-%t67401 = getelementptr i8, ptr %t67384, i64 16
-%t67402 = load ptr, ptr %t67401
-%t67404 = call i8 @resid_str_eq(ptr %t67402, ptr @.s67403)
-%t67405 = icmp ne i8 %t67404, 0
-br label %LSJ67400
-LSJ67400:
-%t67406 = phi i1 [ false, %LSL67400 ], [ %t67405, %LSR67400 ]
-br label %LSL67407
-LSL67407:
-br i1 %t67406, label %LSR67407, label %LSJ67407
-LSR67407:
-%t67408 = getelementptr i8, ptr %t67387, i64 8
-%t67409 = load ptr, ptr %t67408
-%t67411 = call i8 @resid_str_eq(ptr %t67409, ptr @.s67410)
-%t67412 = icmp ne i8 %t67411, 0
-br label %LSJ67407
-LSJ67407:
-%t67413 = phi i1 [ false, %LSL67407 ], [ %t67412, %LSR67407 ]
-br i1 %t67413, label %L13122, label %L13124
-L13122:
-%t67414 = getelementptr i8, ptr %t67381, i64 0
-%t67415 = load i64, ptr %t67414
-%t67416 = add nsw i64 %p2, 1
-%t67417 = getelementptr i8, ptr %t67375, i64 8
-%t67418 = load ptr, ptr %t67417
-%t67419 = call ptr @resid_str_concat(ptr %p3, ptr %t67418)
-%t67421 = call ptr @resid_str_concat(ptr %t67419, ptr @.s67420)
+L13127:
+%t67434 = icmp eq i64 %p2, 0
+br label %LSL67435
+LSL67435:
+br i1 %t67434, label %LSR67435, label %LSJ67435
+LSR67435:
+%t67436 = getelementptr i8, ptr %t67404, i64 8
+%t67437 = load ptr, ptr %t67436
+%t67439 = call i8 @resid_str_eq(ptr %t67437, ptr @.s67438)
+%t67440 = icmp ne i8 %t67439, 0
+br label %LSJ67435
+LSJ67435:
+%t67441 = phi i1 [ false, %LSL67435 ], [ %t67440, %LSR67435 ]
+br i1 %t67441, label %L13128, label %L13130
+L13128:
+%t67442 = getelementptr i8, ptr %t67404, i64 0
+%t67443 = load i64, ptr %t67442
+%t67444 = call ptr @lex_tok(ptr %p0, i64 %t67443)
+%t67445 = getelementptr i8, ptr %t67444, i64 0
+%t67446 = load i64, ptr %t67445
+%t67447 = call ptr @lex_tok(ptr %p0, i64 %t67446)
+%t67448 = getelementptr i8, ptr %t67447, i64 0
+%t67449 = load i64, ptr %t67448
+%t67450 = call ptr @lex_tok(ptr %p0, i64 %t67449)
+%t67451 = getelementptr i8, ptr %t67450, i64 0
+%t67452 = load i64, ptr %t67451
+%t67453 = call ptr @lex_tok(ptr %p0, i64 %t67452)
+%t67454 = getelementptr i8, ptr %t67453, i64 0
+%t67455 = load i64, ptr %t67454
+%t67456 = call ptr @lex_tok(ptr %p0, i64 %t67455)
+%t67457 = getelementptr i8, ptr %t67447, i64 8
+%t67458 = load ptr, ptr %t67457
+%t67460 = call i8 @resid_str_eq(ptr %t67458, ptr @.s67459)
+%t67461 = icmp ne i8 %t67460, 0
+br label %LSL67462
+LSL67462:
+br i1 %t67461, label %LSR67462, label %LSJ67462
+LSR67462:
+%t67463 = getelementptr i8, ptr %t67450, i64 8
+%t67464 = load ptr, ptr %t67463
+%t67466 = call i8 @resid_str_eq(ptr %t67464, ptr @.s67465)
+%t67467 = icmp ne i8 %t67466, 0
+br label %LSJ67462
+LSJ67462:
+%t67468 = phi i1 [ false, %LSL67462 ], [ %t67467, %LSR67462 ]
+br label %LSL67469
+LSL67469:
+br i1 %t67468, label %LSR67469, label %LSJ67469
+LSR67469:
+%t67470 = getelementptr i8, ptr %t67453, i64 16
+%t67471 = load ptr, ptr %t67470
+%t67473 = call i8 @resid_str_eq(ptr %t67471, ptr @.s67472)
+%t67474 = icmp ne i8 %t67473, 0
+br label %LSJ67469
+LSJ67469:
+%t67475 = phi i1 [ false, %LSL67469 ], [ %t67474, %LSR67469 ]
+br label %LSL67476
+LSL67476:
+br i1 %t67475, label %LSR67476, label %LSJ67476
+LSR67476:
+%t67477 = getelementptr i8, ptr %t67456, i64 8
+%t67478 = load ptr, ptr %t67477
+%t67480 = call i8 @resid_str_eq(ptr %t67478, ptr @.s67479)
+%t67481 = icmp ne i8 %t67480, 0
+br label %LSJ67476
+LSJ67476:
+%t67482 = phi i1 [ false, %LSL67476 ], [ %t67481, %LSR67476 ]
+br i1 %t67482, label %L13131, label %L13133
+L13131:
+%t67483 = getelementptr i8, ptr %t67450, i64 0
+%t67484 = load i64, ptr %t67483
+%t67485 = add nsw i64 %p2, 1
+%t67486 = getelementptr i8, ptr %t67444, i64 8
+%t67487 = load ptr, ptr %t67486
+%t67488 = call ptr @resid_str_concat(ptr %p3, ptr %t67487)
+%t67490 = call ptr @resid_str_concat(ptr %t67488, ptr @.s67489)
 br label %tco.s2
 tco.s2:
 br label %tco.head
-L13124:
-br label %L13121
-L13121:
-%t67423 = getelementptr i8, ptr %t67335, i64 0
-%t67424 = load i64, ptr %t67423
+L13133:
+br label %L13130
+L13130:
+%t67492 = getelementptr i8, ptr %t67404, i64 0
+%t67493 = load i64, ptr %t67492
 br label %tco.s3
 tco.s3:
 br label %tco.head
@@ -102955,218 +103085,218 @@ entry:
 br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ], [ %p0, %tco.s2 ], [ %p0, %tco.s3 ], [ %p0, %tco.s4 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t67477, %tco.s0 ], [ %t67497, %tco.s1 ], [ %t67509, %tco.s2 ], [ %t67571, %tco.s3 ], [ %t67580, %tco.s4 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ], [ %t67499, %tco.s1 ], [ %t67511, %tco.s2 ], [ %p2, %tco.s3 ], [ %p2, %tco.s4 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t67546, %tco.s0 ], [ %t67566, %tco.s1 ], [ %t67578, %tco.s2 ], [ %t67640, %tco.s3 ], [ %t67649, %tco.s4 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ], [ %t67568, %tco.s1 ], [ %t67580, %tco.s2 ], [ %p2, %tco.s3 ], [ %p2, %tco.s4 ]
 %p3 = phi ptr [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %p3, %tco.s1 ], [ %p3, %tco.s2 ], [ %p3, %tco.s3 ], [ %p3, %tco.s4 ]
-%p4 = phi ptr [ %p4.in, %entry ], [ %t67489, %tco.s0 ], [ %p4, %tco.s1 ], [ %p4, %tco.s2 ], [ %t67569, %tco.s3 ], [ %p4, %tco.s4 ]
-%p5 = phi i64 [ %p5.in, %entry ], [ %t67477, %tco.s0 ], [ %p5, %tco.s1 ], [ %p5, %tco.s2 ], [ %t67575, %tco.s3 ], [ %p5, %tco.s4 ]
-%t67426 = call ptr @lex_tok(ptr %p0, i64 %p1)
-%t67427 = getelementptr i8, ptr %t67426, i64 16
-%t67428 = load ptr, ptr %t67427
-%t67430 = call i8 @resid_str_eq(ptr %t67428, ptr @.s67429)
-%t67431 = icmp ne i8 %t67430, 0
-br i1 %t67431, label %L13125, label %L13127
-L13125:
-%t67432 = call i64 @str_len(ptr %p0)
-%t67433 = call ptr @str_slice(ptr %p0, i64 %p5, i64 %t67432)
-%t67434 = call ptr @str_sb_append(ptr %p4, ptr %t67433)
-ret ptr %t67434
-L13127:
-%t67435 = icmp eq i64 %p2, 0
-br label %LSL67436
-LSL67436:
-br i1 %t67435, label %LSR67436, label %LSJ67436
-LSR67436:
-%t67437 = getelementptr i8, ptr %t67426, i64 8
-%t67438 = load ptr, ptr %t67437
-%t67440 = call i8 @resid_str_eq(ptr %t67438, ptr @.s67439)
-%t67441 = icmp ne i8 %t67440, 0
-br label %LSJ67436
-LSJ67436:
-%t67442 = phi i1 [ false, %LSL67436 ], [ %t67441, %LSR67436 ]
-br i1 %t67442, label %L13128, label %L13130
-L13128:
-%t67443 = getelementptr i8, ptr %t67426, i64 0
-%t67444 = load i64, ptr %t67443
-%t67445 = call ptr @lex_tok(ptr %p0, i64 %t67444)
-%t67446 = getelementptr i8, ptr %t67445, i64 0
-%t67447 = load i64, ptr %t67446
-%t67448 = call ptr @lex_tok(ptr %p0, i64 %t67447)
-%t67449 = getelementptr i8, ptr %t67448, i64 0
-%t67450 = load i64, ptr %t67449
-%t67451 = call ptr @lex_tok(ptr %p0, i64 %t67450)
-%t67452 = getelementptr i8, ptr %t67448, i64 8
-%t67453 = load ptr, ptr %t67452
-%t67455 = call i8 @resid_str_eq(ptr %t67453, ptr @.s67454)
-%t67456 = icmp ne i8 %t67455, 0
-br label %LSL67457
-LSL67457:
-br i1 %t67456, label %LSR67457, label %LSJ67457
-LSR67457:
-%t67458 = getelementptr i8, ptr %t67451, i64 8
-%t67459 = load ptr, ptr %t67458
-%t67461 = call i8 @resid_str_eq(ptr %t67459, ptr @.s67460)
-%t67462 = icmp ne i8 %t67461, 0
-br label %LSJ67457
-LSJ67457:
-%t67463 = phi i1 [ false, %LSL67457 ], [ %t67462, %LSR67457 ]
-br label %LSL67464
-LSL67464:
-br i1 %t67463, label %LSR67464, label %LSJ67464
-LSR67464:
-%t67466 = getelementptr i8, ptr %t67445, i64 8
-%t67467 = load ptr, ptr %t67466
-%t67468 = call ptr @resid_str_concat(ptr @.s67465, ptr %t67467)
-%t67470 = call ptr @resid_str_concat(ptr %t67468, ptr @.s67469)
-%t67471 = call i8 @str_contains(ptr %p3, ptr %t67470)
-%t67472 = icmp ne i8 %t67471, 0
-br label %LSJ67464
-LSJ67464:
-%t67473 = phi i1 [ false, %LSL67464 ], [ %t67472, %LSR67464 ]
-br i1 %t67473, label %L13131, label %L13133
-L13131:
-%t67474 = call i64 @resid_scope_push()
-%t67475 = getelementptr i8, ptr %t67451, i64 0
-%t67476 = load i64, ptr %t67475
-%t67477 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_close(ptr %p0, i64 %t67476, i64 0)
-call void @resid_scope_pop(i64 %t67474)
-%t67478 = getelementptr i8, ptr %t67451, i64 0
-%t67479 = load i64, ptr %t67478
-%t67480 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %t67479, i64 %t67477)
-%t67482 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_colon_fields(ptr %p0, ptr %t67480, i64 0, ptr @.s67481)
-%t67483 = getelementptr i8, ptr %t67451, i64 0
-%t67484 = load i64, ptr %t67483
-%t67485 = call ptr @str_slice(ptr %p0, i64 %p5, i64 %t67484)
-%t67486 = call ptr @str_sb_append(ptr %p4, ptr %t67485)
-%t67488 = call ptr @resid_str_concat(ptr %t67482, ptr @.s67487)
-%t67489 = call ptr @str_sb_append(ptr %t67486, ptr %t67488)
+%p4 = phi ptr [ %p4.in, %entry ], [ %t67558, %tco.s0 ], [ %p4, %tco.s1 ], [ %p4, %tco.s2 ], [ %t67638, %tco.s3 ], [ %p4, %tco.s4 ]
+%p5 = phi i64 [ %p5.in, %entry ], [ %t67546, %tco.s0 ], [ %p5, %tco.s1 ], [ %p5, %tco.s2 ], [ %t67644, %tco.s3 ], [ %p5, %tco.s4 ]
+%t67495 = call ptr @lex_tok(ptr %p0, i64 %p1)
+%t67496 = getelementptr i8, ptr %t67495, i64 16
+%t67497 = load ptr, ptr %t67496
+%t67499 = call i8 @resid_str_eq(ptr %t67497, ptr @.s67498)
+%t67500 = icmp ne i8 %t67499, 0
+br i1 %t67500, label %L13134, label %L13136
+L13134:
+%t67501 = call i64 @str_len(ptr %p0)
+%t67502 = call ptr @str_slice(ptr %p0, i64 %p5, i64 %t67501)
+%t67503 = call ptr @str_sb_append(ptr %p4, ptr %t67502)
+ret ptr %t67503
+L13136:
+%t67504 = icmp eq i64 %p2, 0
+br label %LSL67505
+LSL67505:
+br i1 %t67504, label %LSR67505, label %LSJ67505
+LSR67505:
+%t67506 = getelementptr i8, ptr %t67495, i64 8
+%t67507 = load ptr, ptr %t67506
+%t67509 = call i8 @resid_str_eq(ptr %t67507, ptr @.s67508)
+%t67510 = icmp ne i8 %t67509, 0
+br label %LSJ67505
+LSJ67505:
+%t67511 = phi i1 [ false, %LSL67505 ], [ %t67510, %LSR67505 ]
+br i1 %t67511, label %L13137, label %L13139
+L13137:
+%t67512 = getelementptr i8, ptr %t67495, i64 0
+%t67513 = load i64, ptr %t67512
+%t67514 = call ptr @lex_tok(ptr %p0, i64 %t67513)
+%t67515 = getelementptr i8, ptr %t67514, i64 0
+%t67516 = load i64, ptr %t67515
+%t67517 = call ptr @lex_tok(ptr %p0, i64 %t67516)
+%t67518 = getelementptr i8, ptr %t67517, i64 0
+%t67519 = load i64, ptr %t67518
+%t67520 = call ptr @lex_tok(ptr %p0, i64 %t67519)
+%t67521 = getelementptr i8, ptr %t67517, i64 8
+%t67522 = load ptr, ptr %t67521
+%t67524 = call i8 @resid_str_eq(ptr %t67522, ptr @.s67523)
+%t67525 = icmp ne i8 %t67524, 0
+br label %LSL67526
+LSL67526:
+br i1 %t67525, label %LSR67526, label %LSJ67526
+LSR67526:
+%t67527 = getelementptr i8, ptr %t67520, i64 8
+%t67528 = load ptr, ptr %t67527
+%t67530 = call i8 @resid_str_eq(ptr %t67528, ptr @.s67529)
+%t67531 = icmp ne i8 %t67530, 0
+br label %LSJ67526
+LSJ67526:
+%t67532 = phi i1 [ false, %LSL67526 ], [ %t67531, %LSR67526 ]
+br label %LSL67533
+LSL67533:
+br i1 %t67532, label %LSR67533, label %LSJ67533
+LSR67533:
+%t67535 = getelementptr i8, ptr %t67514, i64 8
+%t67536 = load ptr, ptr %t67535
+%t67537 = call ptr @resid_str_concat(ptr @.s67534, ptr %t67536)
+%t67539 = call ptr @resid_str_concat(ptr %t67537, ptr @.s67538)
+%t67540 = call i8 @str_contains(ptr %p3, ptr %t67539)
+%t67541 = icmp ne i8 %t67540, 0
+br label %LSJ67533
+LSJ67533:
+%t67542 = phi i1 [ false, %LSL67533 ], [ %t67541, %LSR67533 ]
+br i1 %t67542, label %L13140, label %L13142
+L13140:
+%t67543 = call i64 @resid_scope_push()
+%t67544 = getelementptr i8, ptr %t67520, i64 0
+%t67545 = load i64, ptr %t67544
+%t67546 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_close(ptr %p0, i64 %t67545, i64 0)
+call void @resid_scope_pop(i64 %t67543)
+%t67547 = getelementptr i8, ptr %t67520, i64 0
+%t67548 = load i64, ptr %t67547
+%t67549 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %t67548, i64 %t67546)
+%t67551 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_colon_fields(ptr %p0, ptr %t67549, i64 0, ptr @.s67550)
+%t67552 = getelementptr i8, ptr %t67520, i64 0
+%t67553 = load i64, ptr %t67552
+%t67554 = call ptr @str_slice(ptr %p0, i64 %p5, i64 %t67553)
+%t67555 = call ptr @str_sb_append(ptr %p4, ptr %t67554)
+%t67557 = call ptr @resid_str_concat(ptr %t67551, ptr @.s67556)
+%t67558 = call ptr @str_sb_append(ptr %t67555, ptr %t67557)
 br label %tco.s0
 tco.s0:
 br label %tco.head
-L13133:
-br label %L13130
-L13130:
-%t67491 = getelementptr i8, ptr %t67426, i64 8
-%t67492 = load ptr, ptr %t67491
-%t67494 = call i8 @resid_str_eq(ptr %t67492, ptr @.s67493)
-%t67495 = icmp ne i8 %t67494, 0
-br i1 %t67495, label %L13134, label %L13136
-L13134:
-%t67496 = getelementptr i8, ptr %t67426, i64 0
-%t67497 = load i64, ptr %t67496
-%t67498 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 1)
-%t67499 = extractvalue {i64, i1} %t67498, 0
-%t67500 = extractvalue {i64, i1} %t67498, 1
-%t67501 = zext i1 %t67500 to i8
-call void @resid_overflow_check(i8 %t67501)
+L13142:
+br label %L13139
+L13139:
+%t67560 = getelementptr i8, ptr %t67495, i64 8
+%t67561 = load ptr, ptr %t67560
+%t67563 = call i8 @resid_str_eq(ptr %t67561, ptr @.s67562)
+%t67564 = icmp ne i8 %t67563, 0
+br i1 %t67564, label %L13143, label %L13145
+L13143:
+%t67565 = getelementptr i8, ptr %t67495, i64 0
+%t67566 = load i64, ptr %t67565
+%t67567 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %p2, i64 1)
+%t67568 = extractvalue {i64, i1} %t67567, 0
+%t67569 = extractvalue {i64, i1} %t67567, 1
+%t67570 = zext i1 %t67569 to i8
+call void @resid_overflow_check(i8 %t67570)
 br label %tco.s1
 tco.s1:
 br label %tco.head
-L13136:
-%t67503 = getelementptr i8, ptr %t67426, i64 8
-%t67504 = load ptr, ptr %t67503
-%t67506 = call i8 @resid_str_eq(ptr %t67504, ptr @.s67505)
-%t67507 = icmp ne i8 %t67506, 0
-br i1 %t67507, label %L13137, label %L13139
-L13137:
-%t67508 = getelementptr i8, ptr %t67426, i64 0
-%t67509 = load i64, ptr %t67508
-%t67510 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
-%t67511 = extractvalue {i64, i1} %t67510, 0
-%t67512 = extractvalue {i64, i1} %t67510, 1
-%t67513 = zext i1 %t67512 to i8
-call void @resid_overflow_check(i8 %t67513)
+L13145:
+%t67572 = getelementptr i8, ptr %t67495, i64 8
+%t67573 = load ptr, ptr %t67572
+%t67575 = call i8 @resid_str_eq(ptr %t67573, ptr @.s67574)
+%t67576 = icmp ne i8 %t67575, 0
+br i1 %t67576, label %L13146, label %L13148
+L13146:
+%t67577 = getelementptr i8, ptr %t67495, i64 0
+%t67578 = load i64, ptr %t67577
+%t67579 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %p2, i64 1)
+%t67580 = extractvalue {i64, i1} %t67579, 0
+%t67581 = extractvalue {i64, i1} %t67579, 1
+%t67582 = zext i1 %t67581 to i8
+call void @resid_overflow_check(i8 %t67582)
 br label %tco.s2
 tco.s2:
 br label %tco.head
-L13139:
-%t67515 = getelementptr i8, ptr %t67426, i64 16
-%t67516 = load ptr, ptr %t67515
-%t67518 = call i8 @resid_str_eq(ptr %t67516, ptr @.s67517)
-%t67519 = icmp ne i8 %t67518, 0
-br label %LSL67520
-LSL67520:
-br i1 %t67519, label %LSR67520, label %LSJ67520
-LSR67520:
-%t67522 = getelementptr i8, ptr %t67426, i64 8
-%t67523 = load ptr, ptr %t67522
-%t67524 = call ptr @resid_str_concat(ptr @.s67521, ptr %t67523)
-%t67526 = call ptr @resid_str_concat(ptr %t67524, ptr @.s67525)
-%t67527 = call i8 @str_contains(ptr %p3, ptr %t67526)
-%t67528 = icmp ne i8 %t67527, 0
-br label %LSJ67520
-LSJ67520:
-%t67529 = phi i1 [ false, %LSL67520 ], [ %t67528, %LSR67520 ]
-br i1 %t67529, label %L13140, label %L13142
-L13140:
-%t67530 = getelementptr i8, ptr %t67426, i64 0
-%t67531 = load i64, ptr %t67530
-%t67532 = call ptr @lex_tok(ptr %p0, i64 %t67531)
-%t67533 = getelementptr i8, ptr %t67532, i64 0
-%t67534 = load i64, ptr %t67533
-%t67535 = call ptr @lex_tok(ptr %p0, i64 %t67534)
-%t67536 = getelementptr i8, ptr %t67535, i64 0
-%t67537 = load i64, ptr %t67536
-%t67538 = call ptr @lex_tok(ptr %p0, i64 %t67537)
-%t67539 = getelementptr i8, ptr %t67532, i64 8
-%t67540 = load ptr, ptr %t67539
-%t67542 = call i8 @resid_str_eq(ptr %t67540, ptr @.s67541)
-%t67543 = icmp ne i8 %t67542, 0
-br label %LSL67544
-LSL67544:
-br i1 %t67543, label %LSR67544, label %LSJ67544
-LSR67544:
-%t67545 = getelementptr i8, ptr %t67535, i64 16
-%t67546 = load ptr, ptr %t67545
-%t67548 = call i8 @resid_str_eq(ptr %t67546, ptr @.s67547)
-%t67549 = icmp ne i8 %t67548, 0
-br label %LSJ67544
-LSJ67544:
-%t67550 = phi i1 [ false, %LSL67544 ], [ %t67549, %LSR67544 ]
-br label %LSL67551
-LSL67551:
-br i1 %t67550, label %LSR67551, label %LSJ67551
-LSR67551:
-%t67552 = getelementptr i8, ptr %t67538, i64 8
-%t67553 = load ptr, ptr %t67552
-%t67555 = call i8 @resid_str_eq(ptr %t67553, ptr @.s67554)
-%t67556 = icmp ne i8 %t67555, 0
-br label %LSJ67551
-LSJ67551:
-%t67557 = phi i1 [ false, %LSL67551 ], [ %t67556, %LSR67551 ]
-br i1 %t67557, label %L13143, label %L13145
-L13143:
-%t67558 = call i64 @resid_scope_push()
-%t67559 = getelementptr i8, ptr %t67532, i64 0
-%t67560 = load i64, ptr %t67559
-%t67561 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_close(ptr %p0, i64 %t67560, i64 0)
-call void @resid_scope_pop(i64 %t67558)
-%t67562 = getelementptr i8, ptr %t67532, i64 0
-%t67563 = load i64, ptr %t67562
-%t67564 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %t67563, i64 %t67561)
-%t67565 = getelementptr i8, ptr %t67532, i64 0
-%t67566 = load i64, ptr %t67565
-%t67567 = call ptr @str_slice(ptr %p0, i64 %p5, i64 %t67566)
-%t67568 = call ptr @str_sb_append(ptr %p4, ptr %t67567)
-%t67569 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_dot_fields(ptr %p0, ptr %t67564, i64 0, ptr %t67568)
-%t67570 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t67561, i64 1)
-%t67571 = extractvalue {i64, i1} %t67570, 0
-%t67572 = extractvalue {i64, i1} %t67570, 1
-%t67573 = zext i1 %t67572 to i8
-call void @resid_overflow_check(i8 %t67573)
-%t67574 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t67561, i64 1)
-%t67575 = extractvalue {i64, i1} %t67574, 0
-%t67576 = extractvalue {i64, i1} %t67574, 1
-%t67577 = zext i1 %t67576 to i8
-call void @resid_overflow_check(i8 %t67577)
+L13148:
+%t67584 = getelementptr i8, ptr %t67495, i64 16
+%t67585 = load ptr, ptr %t67584
+%t67587 = call i8 @resid_str_eq(ptr %t67585, ptr @.s67586)
+%t67588 = icmp ne i8 %t67587, 0
+br label %LSL67589
+LSL67589:
+br i1 %t67588, label %LSR67589, label %LSJ67589
+LSR67589:
+%t67591 = getelementptr i8, ptr %t67495, i64 8
+%t67592 = load ptr, ptr %t67591
+%t67593 = call ptr @resid_str_concat(ptr @.s67590, ptr %t67592)
+%t67595 = call ptr @resid_str_concat(ptr %t67593, ptr @.s67594)
+%t67596 = call i8 @str_contains(ptr %p3, ptr %t67595)
+%t67597 = icmp ne i8 %t67596, 0
+br label %LSJ67589
+LSJ67589:
+%t67598 = phi i1 [ false, %LSL67589 ], [ %t67597, %LSR67589 ]
+br i1 %t67598, label %L13149, label %L13151
+L13149:
+%t67599 = getelementptr i8, ptr %t67495, i64 0
+%t67600 = load i64, ptr %t67599
+%t67601 = call ptr @lex_tok(ptr %p0, i64 %t67600)
+%t67602 = getelementptr i8, ptr %t67601, i64 0
+%t67603 = load i64, ptr %t67602
+%t67604 = call ptr @lex_tok(ptr %p0, i64 %t67603)
+%t67605 = getelementptr i8, ptr %t67604, i64 0
+%t67606 = load i64, ptr %t67605
+%t67607 = call ptr @lex_tok(ptr %p0, i64 %t67606)
+%t67608 = getelementptr i8, ptr %t67601, i64 8
+%t67609 = load ptr, ptr %t67608
+%t67611 = call i8 @resid_str_eq(ptr %t67609, ptr @.s67610)
+%t67612 = icmp ne i8 %t67611, 0
+br label %LSL67613
+LSL67613:
+br i1 %t67612, label %LSR67613, label %LSJ67613
+LSR67613:
+%t67614 = getelementptr i8, ptr %t67604, i64 16
+%t67615 = load ptr, ptr %t67614
+%t67617 = call i8 @resid_str_eq(ptr %t67615, ptr @.s67616)
+%t67618 = icmp ne i8 %t67617, 0
+br label %LSJ67613
+LSJ67613:
+%t67619 = phi i1 [ false, %LSL67613 ], [ %t67618, %LSR67613 ]
+br label %LSL67620
+LSL67620:
+br i1 %t67619, label %LSR67620, label %LSJ67620
+LSR67620:
+%t67621 = getelementptr i8, ptr %t67607, i64 8
+%t67622 = load ptr, ptr %t67621
+%t67624 = call i8 @resid_str_eq(ptr %t67622, ptr @.s67623)
+%t67625 = icmp ne i8 %t67624, 0
+br label %LSJ67620
+LSJ67620:
+%t67626 = phi i1 [ false, %LSL67620 ], [ %t67625, %LSR67620 ]
+br i1 %t67626, label %L13152, label %L13154
+L13152:
+%t67627 = call i64 @resid_scope_push()
+%t67628 = getelementptr i8, ptr %t67601, i64 0
+%t67629 = load i64, ptr %t67628
+%t67630 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_close(ptr %p0, i64 %t67629, i64 0)
+call void @resid_scope_pop(i64 %t67627)
+%t67631 = getelementptr i8, ptr %t67601, i64 0
+%t67632 = load i64, ptr %t67631
+%t67633 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_segments(ptr %p0, i64 %t67632, i64 %t67630)
+%t67634 = getelementptr i8, ptr %t67601, i64 0
+%t67635 = load i64, ptr %t67634
+%t67636 = call ptr @str_slice(ptr %p0, i64 %p5, i64 %t67635)
+%t67637 = call ptr @str_sb_append(ptr %p4, ptr %t67636)
+%t67638 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_dot_fields(ptr %p0, ptr %t67633, i64 0, ptr %t67637)
+%t67639 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t67630, i64 1)
+%t67640 = extractvalue {i64, i1} %t67639, 0
+%t67641 = extractvalue {i64, i1} %t67639, 1
+%t67642 = zext i1 %t67641 to i8
+call void @resid_overflow_check(i8 %t67642)
+%t67643 = call {i64, i1} @llvm.ssub.with.overflow.i64(i64 %t67630, i64 1)
+%t67644 = extractvalue {i64, i1} %t67643, 0
+%t67645 = extractvalue {i64, i1} %t67643, 1
+%t67646 = zext i1 %t67645 to i8
+call void @resid_overflow_check(i8 %t67646)
 br label %tco.s3
 tco.s3:
 br label %tco.head
-L13145:
-br label %L13142
-L13142:
-%t67579 = getelementptr i8, ptr %t67426, i64 0
-%t67580 = load i64, ptr %t67579
+L13154:
+br label %L13151
+L13151:
+%t67648 = getelementptr i8, ptr %t67495, i64 0
+%t67649 = load i64, ptr %t67648
 br label %tco.s4
 tco.s4:
 br label %tco.head
@@ -103177,55 +103307,55 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t67618, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t67617, %tco.s0 ]
-%t67582 = call i64 @resid_list_len(ptr %p1)
-%t67583 = icmp sge i64 %p2, %t67582
-br i1 %t67583, label %L13146, label %L13148
-L13146:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t67687, %tco.s0 ]
+%p3 = phi ptr [ %p3.in, %entry ], [ %t67686, %tco.s0 ]
+%t67651 = call i64 @resid_list_len(ptr %p1)
+%t67652 = icmp sge i64 %p2, %t67651
+br i1 %t67652, label %L13155, label %L13157
+L13155:
 ret ptr %p3
-L13148:
-%t67584 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-%t67585 = call i64 @resid_unbox_i64(ptr %t67584)
-%t67587 = add nsw i64 %p2, 1
-%t67588 = call ptr @resid_list_get(ptr %p1, i64 %t67587)
-%t67589 = call i64 @resid_unbox_i64(ptr %t67588)
-%t67591 = call ptr @str_slice(ptr %p0, i64 %t67585, i64 %t67589)
-%t67592 = call ptr @str_trim(ptr %t67591)
-%t67593 = call i64 @str_find_char(ptr %t67592, i64 58, i64 0)
-%t67595 = call i8 @resid_str_eq(ptr %t67592, ptr @.s67594)
-%t67596 = icmp ne i8 %t67595, 0
-br label %LSL67597
-LSL67597:
-br i1 %t67596, label %LSJ67597, label %LSR67597
-LSR67597:
-%t67598 = icmp slt i64 %t67593, 0
-br label %LSJ67597
-LSJ67597:
-%t67599 = phi i1 [ true, %LSL67597 ], [ %t67598, %LSR67597 ]
-br i1 %t67599, label %L13149, label %L13150
-L13149:
-br label %L13151
-L13150:
-%t67601 = call ptr @resid_str_concat(ptr %p3, ptr @.s67600)
-%t67602 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t67593, i64 1)
-%t67603 = extractvalue {i64, i1} %t67602, 0
-%t67604 = extractvalue {i64, i1} %t67602, 1
-%t67605 = zext i1 %t67604 to i8
-call void @resid_overflow_check(i8 %t67605)
-%t67606 = call i64 @str_len(ptr %t67592)
-%t67607 = call ptr @str_slice(ptr %t67592, i64 %t67603, i64 %t67606)
-%t67608 = call ptr @str_trim(ptr %t67607)
-%t67609 = call ptr @resid_str_concat(ptr %t67601, ptr %t67608)
-%t67611 = call ptr @resid_str_concat(ptr %t67609, ptr @.s67610)
-%t67612 = call ptr @str_slice(ptr %t67592, i64 0, i64 %t67593)
-%t67613 = call ptr @str_trim(ptr %t67612)
-%t67614 = call ptr @resid_str_concat(ptr %t67611, ptr %t67613)
-%t67616 = call ptr @resid_str_concat(ptr %t67614, ptr @.s67615)
-br label %L13151
-L13151:
-%t67617 = phi ptr [ %p3, %L13149 ], [ %t67616, %L13150 ]
-%t67618 = add nsw i64 %p2, 2
+L13157:
+%t67653 = call ptr @resid_list_get(ptr %p1, i64 %p2)
+%t67654 = call i64 @resid_unbox_i64(ptr %t67653)
+%t67656 = add nsw i64 %p2, 1
+%t67657 = call ptr @resid_list_get(ptr %p1, i64 %t67656)
+%t67658 = call i64 @resid_unbox_i64(ptr %t67657)
+%t67660 = call ptr @str_slice(ptr %p0, i64 %t67654, i64 %t67658)
+%t67661 = call ptr @str_trim(ptr %t67660)
+%t67662 = call i64 @str_find_char(ptr %t67661, i64 58, i64 0)
+%t67664 = call i8 @resid_str_eq(ptr %t67661, ptr @.s67663)
+%t67665 = icmp ne i8 %t67664, 0
+br label %LSL67666
+LSL67666:
+br i1 %t67665, label %LSJ67666, label %LSR67666
+LSR67666:
+%t67667 = icmp slt i64 %t67662, 0
+br label %LSJ67666
+LSJ67666:
+%t67668 = phi i1 [ true, %LSL67666 ], [ %t67667, %LSR67666 ]
+br i1 %t67668, label %L13158, label %L13159
+L13158:
+br label %L13160
+L13159:
+%t67670 = call ptr @resid_str_concat(ptr %p3, ptr @.s67669)
+%t67671 = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 %t67662, i64 1)
+%t67672 = extractvalue {i64, i1} %t67671, 0
+%t67673 = extractvalue {i64, i1} %t67671, 1
+%t67674 = zext i1 %t67673 to i8
+call void @resid_overflow_check(i8 %t67674)
+%t67675 = call i64 @str_len(ptr %t67661)
+%t67676 = call ptr @str_slice(ptr %t67661, i64 %t67672, i64 %t67675)
+%t67677 = call ptr @str_trim(ptr %t67676)
+%t67678 = call ptr @resid_str_concat(ptr %t67670, ptr %t67677)
+%t67680 = call ptr @resid_str_concat(ptr %t67678, ptr @.s67679)
+%t67681 = call ptr @str_slice(ptr %t67661, i64 0, i64 %t67662)
+%t67682 = call ptr @str_trim(ptr %t67681)
+%t67683 = call ptr @resid_str_concat(ptr %t67680, ptr %t67682)
+%t67685 = call ptr @resid_str_concat(ptr %t67683, ptr @.s67684)
+br label %L13160
+L13160:
+%t67686 = phi ptr [ %p3, %L13158 ], [ %t67685, %L13159 ]
+%t67687 = add nsw i64 %p2, 2
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -103236,237 +103366,107 @@ br label %tco.head
 tco.head:
 %p0 = phi ptr [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi ptr [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t67653, %tco.s0 ]
-%p3 = phi ptr [ %p3.in, %entry ], [ %t67652, %tco.s0 ]
-%t67620 = call i64 @resid_list_len(ptr %p1)
-%t67621 = icmp sge i64 %p2, %t67620
-br i1 %t67621, label %L13152, label %L13154
-L13152:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t67722, %tco.s0 ]
+%p3 = phi ptr [ %p3.in, %entry ], [ %t67721, %tco.s0 ]
+%t67689 = call i64 @resid_list_len(ptr %p1)
+%t67690 = icmp sge i64 %p2, %t67689
+br i1 %t67690, label %L13161, label %L13163
+L13161:
 ret ptr %p3
-L13154:
-%t67622 = call ptr @resid_list_get(ptr %p1, i64 %p2)
-%t67623 = call i64 @resid_unbox_i64(ptr %t67622)
-%t67625 = add nsw i64 %p2, 1
-%t67626 = call ptr @resid_list_get(ptr %p1, i64 %t67625)
-%t67627 = call i64 @resid_unbox_i64(ptr %t67626)
-%t67629 = call ptr @lex_tok(ptr %p0, i64 %t67623)
-%t67630 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_start(ptr %t67629)
-%t67631 = add nsw i64 %p2, 2
-%t67632 = call i64 @resid_list_len(ptr %p1)
-%t67633 = icmp slt i64 %t67631, %t67632
-br i1 %t67633, label %L13155, label %L13156
-L13155:
-br label %L13157
-L13156:
-br label %L13157
-L13157:
-%t67636 = phi ptr [ @.s67634, %L13155 ], [ @.s67635, %L13156 ]
-%t67637 = getelementptr i8, ptr %t67629, i64 16
-%t67638 = load ptr, ptr %t67637
-%t67640 = call i8 @resid_str_eq(ptr %t67638, ptr @.s67639)
-%t67641 = icmp ne i8 %t67640, 0
-br i1 %t67641, label %L13158, label %L13159
-L13158:
-%t67642 = call ptr @str_slice(ptr %p0, i64 %t67623, i64 %t67630)
-%t67644 = call ptr @resid_str_concat(ptr %t67642, ptr @.s67643)
-%t67645 = call ptr @str_slice(ptr %p0, i64 %t67630, i64 %t67627)
-%t67646 = call ptr @resid_str_concat(ptr %t67644, ptr %t67645)
-%t67647 = call ptr @resid_str_concat(ptr %t67646, ptr %t67636)
-%t67648 = call ptr @str_sb_append(ptr %p3, ptr %t67647)
-br label %L13160
-L13159:
-%t67649 = call ptr @str_slice(ptr %p0, i64 %t67623, i64 %t67627)
-%t67650 = call ptr @resid_str_concat(ptr %t67649, ptr %t67636)
-%t67651 = call ptr @str_sb_append(ptr %p3, ptr %t67650)
-br label %L13160
-L13160:
-%t67652 = phi ptr [ %t67648, %L13158 ], [ %t67651, %L13159 ]
-%t67653 = add nsw i64 %p2, 2
+L13163:
+%t67691 = call ptr @resid_list_get(ptr %p1, i64 %p2)
+%t67692 = call i64 @resid_unbox_i64(ptr %t67691)
+%t67694 = add nsw i64 %p2, 1
+%t67695 = call ptr @resid_list_get(ptr %p1, i64 %t67694)
+%t67696 = call i64 @resid_unbox_i64(ptr %t67695)
+%t67698 = call ptr @lex_tok(ptr %p0, i64 %t67692)
+%t67699 = call i64 @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_start(ptr %t67698)
+%t67700 = add nsw i64 %p2, 2
+%t67701 = call i64 @resid_list_len(ptr %p1)
+%t67702 = icmp slt i64 %t67700, %t67701
+br i1 %t67702, label %L13164, label %L13165
+L13164:
+br label %L13166
+L13165:
+br label %L13166
+L13166:
+%t67705 = phi ptr [ @.s67703, %L13164 ], [ @.s67704, %L13165 ]
+%t67706 = getelementptr i8, ptr %t67698, i64 16
+%t67707 = load ptr, ptr %t67706
+%t67709 = call i8 @resid_str_eq(ptr %t67707, ptr @.s67708)
+%t67710 = icmp ne i8 %t67709, 0
+br i1 %t67710, label %L13167, label %L13168
+L13167:
+%t67711 = call ptr @str_slice(ptr %p0, i64 %t67692, i64 %t67699)
+%t67713 = call ptr @resid_str_concat(ptr %t67711, ptr @.s67712)
+%t67714 = call ptr @str_slice(ptr %p0, i64 %t67699, i64 %t67696)
+%t67715 = call ptr @resid_str_concat(ptr %t67713, ptr %t67714)
+%t67716 = call ptr @resid_str_concat(ptr %t67715, ptr %t67705)
+%t67717 = call ptr @str_sb_append(ptr %p3, ptr %t67716)
+br label %L13169
+L13168:
+%t67718 = call ptr @str_slice(ptr %p0, i64 %t67692, i64 %t67696)
+%t67719 = call ptr @resid_str_concat(ptr %t67718, ptr %t67705)
+%t67720 = call ptr @str_sb_append(ptr %p3, ptr %t67719)
+br label %L13169
+L13169:
+%t67721 = phi ptr [ %t67717, %L13167 ], [ %t67720, %L13168 ]
+%t67722 = add nsw i64 %p2, 2
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_structs(ptr %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t67656 = call i8 @str_contains(ptr %p0, ptr @.s67655)
-%t67657 = icmp ne i8 %t67656, 0
-%t67658 = xor i1 %t67657, true
-br i1 %t67658, label %L13161, label %L13163
-L13161:
+%t67725 = call i8 @str_contains(ptr %p0, ptr @.s67724)
+%t67726 = icmp ne i8 %t67725, 0
+%t67727 = xor i1 %t67726, true
+br i1 %t67727, label %L13170, label %L13172
+L13170:
 ret ptr %p0
-L13163:
-%t67660 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_colon_structs(ptr %p0, i64 0, i64 0, ptr @.s67659)
-%t67662 = call i8 @resid_str_eq(ptr %t67660, ptr @.s67661)
-%t67663 = icmp ne i8 %t67662, 0
-br i1 %t67663, label %L13164, label %L13166
-L13164:
+L13172:
+%t67729 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_colon_structs(ptr %p0, i64 0, i64 0, ptr @.s67728)
+%t67731 = call i8 @resid_str_eq(ptr %t67729, ptr @.s67730)
+%t67732 = icmp ne i8 %t67731, 0
+br i1 %t67732, label %L13173, label %L13175
+L13173:
 ret ptr %p0
-L13166:
-%t67664 = call ptr @str_sb_new()
-%t67665 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_struct_rewrite(ptr %p0, i64 0, i64 0, ptr %t67660, ptr %t67664, i64 0)
-%t67666 = musttail call ptr @str_sb_finish(ptr %t67665)
-ret ptr %t67666
+L13175:
+%t67733 = call ptr @str_sb_new()
+%t67734 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_struct_rewrite(ptr %p0, i64 0, i64 0, ptr %t67729, ptr %t67733, i64 0)
+%t67735 = musttail call ptr @str_sb_finish(ptr %t67734)
+ret ptr %t67735
 }
 define ptr @ds_desugar(ptr %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
-%t67667 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_structs(ptr %p0)
-%t67670 = call ptr @resid_set_new()
-%t67671 = call ptr @resid_map_insert(ptr %t67670, ptr @.s67668, ptr @.s67669)
-%t67672 = call ptr @resid_gmalloc(i64 48)
-%t67673 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyE67673)
-%t67672.f0 = getelementptr i8, ptr %t67672, i64 0
-store ptr %t67673, ptr %t67672.f0
-%t67675 = call ptr @resid_map_remove(ptr %t67671, ptr @.s67674)
-%t67672.f1 = getelementptr i8, ptr %t67672, i64 8
-store ptr %t67675, ptr %t67672.f1
-%t67677 = call ptr @resid_map_remove(ptr %t67671, ptr @.s67676)
-%t67672.f2 = getelementptr i8, ptr %t67672, i64 16
-store ptr %t67677, ptr %t67672.f2
-%t67672.f3 = getelementptr i8, ptr %t67672, i64 24
-store i1 false, ptr %t67672.f3
-%t67678 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_collect(ptr %t67667, i64 0, i64 0, ptr %t67672)
-%t67679 = getelementptr i8, ptr %t67678, i64 24
-%t67680 = load i1, ptr %t67679
-%t67681 = xor i1 %t67680, true
-br i1 %t67681, label %L13167, label %L13169
-L13167:
-ret ptr %t67667
-L13169:
-%t67682 = call i64 @str_len(ptr %t67667)
-%t67683 = call ptr @str_sb_new()
-%t67684 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_rewrite(ptr %t67667, i64 0, i64 %t67682, i64 0, ptr %t67678, ptr %t67683, i64 0)
-%t67685 = musttail call ptr @str_sb_finish(ptr %t67684)
-ret ptr %t67685
-}
-define i1 @sa_chain_breaker(ptr %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
-entry:
-%t67687 = call i8 @resid_str_eq(ptr %p0, ptr @.s67686)
-%t67688 = icmp ne i8 %t67687, 0
-br label %LSL67689
-LSL67689:
-br i1 %t67688, label %LSJ67689, label %LSR67689
-LSR67689:
-%t67691 = call i8 @resid_str_eq(ptr %p0, ptr @.s67690)
-%t67692 = icmp ne i8 %t67691, 0
-br label %LSJ67689
-LSJ67689:
-%t67693 = phi i1 [ true, %LSL67689 ], [ %t67692, %LSR67689 ]
-br label %LSL67694
-LSL67694:
-br i1 %t67693, label %LSJ67694, label %LSR67694
-LSR67694:
-%t67696 = call i8 @resid_str_eq(ptr %p0, ptr @.s67695)
-%t67697 = icmp ne i8 %t67696, 0
-br label %LSJ67694
-LSJ67694:
-%t67698 = phi i1 [ true, %LSL67694 ], [ %t67697, %LSR67694 ]
-br i1 %t67698, label %L13170, label %L13172
-L13170:
-ret i1 true
-L13172:
-%t67700 = call i8 @resid_str_eq(ptr %p0, ptr @.s67699)
-%t67701 = icmp ne i8 %t67700, 0
-br label %LSL67702
-LSL67702:
-br i1 %t67701, label %LSJ67702, label %LSR67702
-LSR67702:
-%t67704 = call i8 @resid_str_eq(ptr %p0, ptr @.s67703)
-%t67705 = icmp ne i8 %t67704, 0
-br label %LSJ67702
-LSJ67702:
-%t67706 = phi i1 [ true, %LSL67702 ], [ %t67705, %LSR67702 ]
-br label %LSL67707
-LSL67707:
-br i1 %t67706, label %LSJ67707, label %LSR67707
-LSR67707:
-%t67709 = call i8 @resid_str_eq(ptr %p0, ptr @.s67708)
-%t67710 = icmp ne i8 %t67709, 0
-br label %LSJ67707
-LSJ67707:
-%t67711 = phi i1 [ true, %LSL67707 ], [ %t67710, %LSR67707 ]
-br label %LSL67712
-LSL67712:
-br i1 %t67711, label %LSJ67712, label %LSR67712
-LSR67712:
-%t67714 = call i8 @resid_str_eq(ptr %p0, ptr @.s67713)
-%t67715 = icmp ne i8 %t67714, 0
-br label %LSJ67712
-LSJ67712:
-%t67716 = phi i1 [ true, %LSL67712 ], [ %t67715, %LSR67712 ]
-br label %LSL67717
-LSL67717:
-br i1 %t67716, label %LSJ67717, label %LSR67717
-LSR67717:
-%t67719 = call i8 @resid_str_eq(ptr %p0, ptr @.s67718)
-%t67720 = icmp ne i8 %t67719, 0
-br label %LSJ67717
-LSJ67717:
-%t67721 = phi i1 [ true, %LSL67717 ], [ %t67720, %LSR67717 ]
-br label %LSL67722
-LSL67722:
-br i1 %t67721, label %LSJ67722, label %LSR67722
-LSR67722:
-%t67724 = call i8 @resid_str_eq(ptr %p0, ptr @.s67723)
-%t67725 = icmp ne i8 %t67724, 0
-br label %LSJ67722
-LSJ67722:
-%t67726 = phi i1 [ true, %LSL67722 ], [ %t67725, %LSR67722 ]
-br i1 %t67726, label %L13173, label %L13175
-L13173:
-ret i1 true
-L13175:
-%t67728 = call i8 @resid_str_eq(ptr %p0, ptr @.s67727)
-%t67729 = icmp ne i8 %t67728, 0
-br label %LSL67730
-LSL67730:
-br i1 %t67729, label %LSJ67730, label %LSR67730
-LSR67730:
-%t67732 = call i8 @resid_str_eq(ptr %p0, ptr @.s67731)
-%t67733 = icmp ne i8 %t67732, 0
-br label %LSJ67730
-LSJ67730:
-%t67734 = phi i1 [ true, %LSL67730 ], [ %t67733, %LSR67730 ]
-br label %LSL67735
-LSL67735:
-br i1 %t67734, label %LSJ67735, label %LSR67735
-LSR67735:
-%t67737 = call i8 @resid_str_eq(ptr %p0, ptr @.s67736)
-%t67738 = icmp ne i8 %t67737, 0
-br label %LSJ67735
-LSJ67735:
-%t67739 = phi i1 [ true, %LSL67735 ], [ %t67738, %LSR67735 ]
-br label %LSL67740
-LSL67740:
-br i1 %t67739, label %LSJ67740, label %LSR67740
-LSR67740:
-%t67742 = call i8 @resid_str_eq(ptr %p0, ptr @.s67741)
-%t67743 = icmp ne i8 %t67742, 0
-br label %LSJ67740
-LSJ67740:
-%t67744 = phi i1 [ true, %LSL67740 ], [ %t67743, %LSR67740 ]
-br label %LSL67745
-LSL67745:
-br i1 %t67744, label %LSJ67745, label %LSR67745
-LSR67745:
-%t67747 = call i8 @resid_str_eq(ptr %p0, ptr @.s67746)
-%t67748 = icmp ne i8 %t67747, 0
-br label %LSJ67745
-LSJ67745:
-%t67749 = phi i1 [ true, %LSL67745 ], [ %t67748, %LSR67745 ]
-br label %LSL67750
-LSL67750:
-br i1 %t67749, label %LSJ67750, label %LSR67750
-LSR67750:
-%t67752 = call i8 @resid_str_eq(ptr %p0, ptr @.s67751)
-%t67753 = icmp ne i8 %t67752, 0
-br label %LSJ67750
-LSJ67750:
-%t67754 = phi i1 [ true, %LSL67750 ], [ %t67753, %LSR67750 ]
-br i1 %t67754, label %L13176, label %L13178
+%t67736 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_structs(ptr %p0)
+%t67739 = call ptr @resid_set_new()
+%t67740 = call ptr @resid_map_insert(ptr %t67739, ptr @.s67737, ptr @.s67738)
+%t67741 = call ptr @resid_gmalloc(i64 48)
+%t67742 = call ptr @resid_list_new(i64 0, ptr null, ptr @.ltyE67742)
+%t67741.f0 = getelementptr i8, ptr %t67741, i64 0
+store ptr %t67742, ptr %t67741.f0
+%t67744 = call ptr @resid_map_remove(ptr %t67740, ptr @.s67743)
+%t67741.f1 = getelementptr i8, ptr %t67741, i64 8
+store ptr %t67744, ptr %t67741.f1
+%t67746 = call ptr @resid_map_remove(ptr %t67740, ptr @.s67745)
+%t67741.f2 = getelementptr i8, ptr %t67741, i64 16
+store ptr %t67746, ptr %t67741.f2
+%t67741.f3 = getelementptr i8, ptr %t67741, i64 24
+store i1 false, ptr %t67741.f3
+%t67747 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_collect(ptr %t67736, i64 0, i64 0, ptr %t67741)
+%t67748 = getelementptr i8, ptr %t67747, i64 24
+%t67749 = load i1, ptr %t67748
+%t67750 = xor i1 %t67749, true
+br i1 %t67750, label %L13176, label %L13178
 L13176:
-ret i1 true
+ret ptr %t67736
 L13178:
-ret i1 false
+%t67751 = call i64 @str_len(ptr %t67736)
+%t67752 = call ptr @str_sb_new()
+%t67753 = call ptr @__m_home_larry_git_larry_resid_examples_desugar_resid__ds_rewrite(ptr %t67736, i64 0, i64 %t67751, i64 0, ptr %t67747, ptr %t67752, i64 0)
+%t67754 = musttail call ptr @str_sb_finish(ptr %t67753)
+ret ptr %t67754
 }
 define i64 @str_find_at(ptr %p0.in, ptr %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
@@ -117344,399 +117344,399 @@ ret ptr %t70793
 @.s63607 = private unnamed_addr constant [2 x i8] c"+\00"
 @.lty63613 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
 @.lty63621 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s63635 = private unnamed_addr constant [5 x i8] c"tern\00"
-@.s63639 = private unnamed_addr constant [4 x i8] c"ifx\00"
-@.s63644 = private unnamed_addr constant [7 x i8] c"orelse\00"
-@.s63649 = private unnamed_addr constant [4 x i8] c"try\00"
-@.s63653 = private unnamed_addr constant [4 x i8] c"bin\00"
-@.s63665 = private unnamed_addr constant [3 x i8] c"un\00"
-@.s63670 = private unnamed_addr constant [2 x i8] c"-\00"
-@.s63677 = private unnamed_addr constant [5 x i8] c"cast\00"
-@.s63682 = private unnamed_addr constant [3 x i8] c"rt\00"
-@.s63686 = private unnamed_addr constant [6 x i8] c"mcall\00"
-@.s63691 = private unnamed_addr constant [6 x i8] c"field\00"
-@.s63696 = private unnamed_addr constant [6 x i8] c"index\00"
-@.s63701 = private unnamed_addr constant [6 x i8] c"slice\00"
-@.s63706 = private unnamed_addr constant [6 x i8] c"callv\00"
-@.s63737 = private unnamed_addr constant [5 x i8] c"call\00"
-@.s63760 = private unnamed_addr constant [6 x i8] c"named\00"
-@.ltyB63763 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
-@.s63777 = private unnamed_addr constant [4 x i8] c"ref\00"
-@.s63812 = private unnamed_addr constant [4 x i8] c"ret\00"
-@.s63829 = private unnamed_addr constant [4 x i8] c"ref\00"
-@.s63910 = private unnamed_addr constant [4 x i8] c"Str\00"
-@.s63946 = private unnamed_addr constant [1 x i8] c"\00"
-@.s63965 = private unnamed_addr constant [1 x i8] c"\00"
-@.s63976 = private unnamed_addr constant [5 x i8] c"call\00"
-@.s63982 = private unnamed_addr constant [12 x i8] c"IntToString\00"
-@.s63986 = private unnamed_addr constant [5 x i8] c"call\00"
-@.s63987 = private unnamed_addr constant [22 x i8] c"resid_sacc_append_int\00"
-@.lty63988 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s63997 = private unnamed_addr constant [5 x i8] c"call\00"
-@.s63998 = private unnamed_addr constant [18 x i8] c"resid_sacc_append\00"
-@.lty63999 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s64023 = private unnamed_addr constant [4 x i8] c"ret\00"
-@.ltyB64032 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
-@.lty64047 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s64063 = private unnamed_addr constant [5 x i8] c"call\00"
-@.s64064 = private unnamed_addr constant [7 x i8] c"__sacc\00"
-@.s64069 = private unnamed_addr constant [4 x i8] c"ret\00"
-@.s64070 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty64073 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s64084 = private unnamed_addr constant [1 x i8] c"\00"
-@.ltyB64085 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
-@.s64096 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64121 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty64129 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s64150 = private unnamed_addr constant [1 x i8] c"\00"
+@.s63628 = private unnamed_addr constant [2 x i8] c"?\00"
+@.s63632 = private unnamed_addr constant [2 x i8] c":\00"
+@.s63637 = private unnamed_addr constant [5 x i8] c"else\00"
+@.s63641 = private unnamed_addr constant [3 x i8] c"==\00"
+@.s63645 = private unnamed_addr constant [3 x i8] c"!=\00"
+@.s63650 = private unnamed_addr constant [2 x i8] c"<\00"
+@.s63655 = private unnamed_addr constant [2 x i8] c">\00"
+@.s63660 = private unnamed_addr constant [3 x i8] c"<=\00"
+@.s63665 = private unnamed_addr constant [3 x i8] c">=\00"
+@.s63669 = private unnamed_addr constant [3 x i8] c"&&\00"
+@.s63673 = private unnamed_addr constant [3 x i8] c"||\00"
+@.s63678 = private unnamed_addr constant [2 x i8] c"-\00"
+@.s63683 = private unnamed_addr constant [2 x i8] c"*\00"
+@.s63688 = private unnamed_addr constant [2 x i8] c"/\00"
+@.s63693 = private unnamed_addr constant [2 x i8] c"%\00"
+@.s63704 = private unnamed_addr constant [5 x i8] c"tern\00"
+@.s63708 = private unnamed_addr constant [4 x i8] c"ifx\00"
+@.s63713 = private unnamed_addr constant [7 x i8] c"orelse\00"
+@.s63718 = private unnamed_addr constant [4 x i8] c"try\00"
+@.s63722 = private unnamed_addr constant [4 x i8] c"bin\00"
+@.s63734 = private unnamed_addr constant [3 x i8] c"un\00"
+@.s63739 = private unnamed_addr constant [2 x i8] c"-\00"
+@.s63746 = private unnamed_addr constant [5 x i8] c"cast\00"
+@.s63751 = private unnamed_addr constant [3 x i8] c"rt\00"
+@.s63755 = private unnamed_addr constant [6 x i8] c"mcall\00"
+@.s63760 = private unnamed_addr constant [6 x i8] c"field\00"
+@.s63765 = private unnamed_addr constant [6 x i8] c"index\00"
+@.s63770 = private unnamed_addr constant [6 x i8] c"slice\00"
+@.s63775 = private unnamed_addr constant [6 x i8] c"callv\00"
+@.s63806 = private unnamed_addr constant [5 x i8] c"call\00"
+@.s63829 = private unnamed_addr constant [6 x i8] c"named\00"
+@.ltyB63832 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
+@.s63846 = private unnamed_addr constant [4 x i8] c"ref\00"
+@.s63881 = private unnamed_addr constant [4 x i8] c"ret\00"
+@.s63898 = private unnamed_addr constant [4 x i8] c"ref\00"
+@.s63979 = private unnamed_addr constant [4 x i8] c"Str\00"
+@.s64015 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64034 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64045 = private unnamed_addr constant [5 x i8] c"call\00"
+@.s64051 = private unnamed_addr constant [12 x i8] c"IntToString\00"
+@.s64055 = private unnamed_addr constant [5 x i8] c"call\00"
+@.s64056 = private unnamed_addr constant [22 x i8] c"resid_sacc_append_int\00"
+@.lty64057 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s64066 = private unnamed_addr constant [5 x i8] c"call\00"
+@.s64067 = private unnamed_addr constant [18 x i8] c"resid_sacc_append\00"
+@.lty64068 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s64092 = private unnamed_addr constant [4 x i8] c"ret\00"
+@.ltyB64101 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
+@.lty64116 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s64132 = private unnamed_addr constant [5 x i8] c"call\00"
+@.s64133 = private unnamed_addr constant [7 x i8] c"__sacc\00"
+@.s64138 = private unnamed_addr constant [4 x i8] c"ret\00"
+@.s64139 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty64142 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s64153 = private unnamed_addr constant [1 x i8] c"\00"
 @.ltyB64154 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
-@.s64155 = private unnamed_addr constant [4 x i8] c"ref\00"
-@.s64167 = private unnamed_addr constant [5 x i8] c"call\00"
-@.s64168 = private unnamed_addr constant [16 x i8] c"resid_sacc_from\00"
-@.lty64171 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.lty64184 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s64212 = private unnamed_addr constant [3 x i8] c"fn\00"
-@.s64224 = private unnamed_addr constant [4 x i8] c"Str\00"
-@.lty64245 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s64279 = private unnamed_addr constant [3 x i8] c"fn\00"
-@.s64280 = private unnamed_addr constant [7 x i8] c"__sacc\00"
-@.lty64293 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.ltyB64305 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
-@.s64311 = private unnamed_addr constant [5 x i8] c"call\00"
-@.s64312 = private unnamed_addr constant [7 x i8] c"__sacc\00"
-@.s64319 = private unnamed_addr constant [4 x i8] c"ret\00"
-@.s64320 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty64323 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s64332 = private unnamed_addr constant [6 x i8] c"block\00"
-@.s64333 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty64336 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s64345 = private unnamed_addr constant [3 x i8] c"fn\00"
-@.s64346 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty64356 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.lty64386 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.lty64397 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s64419 = private unnamed_addr constant [12 x i8] c"accumulate;\00"
-@.ltyB64422 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
-@.s64424 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64430 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64440 = private unnamed_addr constant [5 x i8] c"unit\00"
-@.s64441 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64442 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64465 = private unnamed_addr constant [2 x i8] c",\00"
-@.s64470 = private unnamed_addr constant [10 x i8] c",rebuild;\00"
-@.s64474 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64480 = private unnamed_addr constant [28 x i8] c"graph-reduce: parse error: \00"
-@.s64484 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64485 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64486 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64165 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64190 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty64198 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s64219 = private unnamed_addr constant [1 x i8] c"\00"
+@.ltyB64223 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
+@.s64224 = private unnamed_addr constant [4 x i8] c"ref\00"
+@.s64236 = private unnamed_addr constant [5 x i8] c"call\00"
+@.s64237 = private unnamed_addr constant [16 x i8] c"resid_sacc_from\00"
+@.lty64240 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.lty64253 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s64281 = private unnamed_addr constant [3 x i8] c"fn\00"
+@.s64293 = private unnamed_addr constant [4 x i8] c"Str\00"
+@.lty64314 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s64348 = private unnamed_addr constant [3 x i8] c"fn\00"
+@.s64349 = private unnamed_addr constant [7 x i8] c"__sacc\00"
+@.lty64362 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.ltyB64374 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
+@.s64380 = private unnamed_addr constant [5 x i8] c"call\00"
+@.s64381 = private unnamed_addr constant [7 x i8] c"__sacc\00"
+@.s64388 = private unnamed_addr constant [4 x i8] c"ret\00"
+@.s64389 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty64392 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s64401 = private unnamed_addr constant [6 x i8] c"block\00"
+@.s64402 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty64405 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s64414 = private unnamed_addr constant [3 x i8] c"fn\00"
+@.s64415 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty64425 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.lty64455 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.lty64466 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s64488 = private unnamed_addr constant [12 x i8] c"accumulate;\00"
+@.ltyB64491 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
 @.s64493 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64494 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64495 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64496 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64560 = private unnamed_addr constant [1 x i8] c"\00"
-@.s64625 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty64653 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.lty64828 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.lty64899 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.lty64920 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s64998 = private unnamed_addr constant [11 x i8] c"filesystem\00"
-@.s65002 = private unnamed_addr constant [12 x i8] c"environment\00"
-@.s65007 = private unnamed_addr constant [5 x i8] c"args\00"
-@.s65012 = private unnamed_addr constant [8 x i8] c"process\00"
-@.s65017 = private unnamed_addr constant [4 x i8] c"git\00"
-@.s65028 = private unnamed_addr constant [5 x i8] c"call\00"
-@.s65033 = private unnamed_addr constant [6 x i8] c"print\00"
-@.s65039 = private unnamed_addr constant [8 x i8] c"println\00"
-@.s65046 = private unnamed_addr constant [12 x i8] c"print_bytes\00"
-@.s65050 = private unnamed_addr constant [7 x i8] c"stdout\00"
-@.s65053 = private unnamed_addr constant [9 x i8] c"eprintln\00"
-@.s65056 = private unnamed_addr constant [7 x i8] c"stderr\00"
-@.s65059 = private unnamed_addr constant [6 x i8] c"mcall\00"
-@.s65071 = private unnamed_addr constant [4 x i8] c"ref\00"
-@.s65085 = private unnamed_addr constant [2 x i8] c".\00"
-@.s65090 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65098 = private unnamed_addr constant [4 x i8] c"lit\00"
-@.s65102 = private unnamed_addr constant [3 x i8] c"ty\00"
-@.s65107 = private unnamed_addr constant [6 x i8] c"fpart\00"
-@.s65112 = private unnamed_addr constant [6 x i8] c"fspec\00"
-@.s65116 = private unnamed_addr constant [3 x i8] c"un\00"
-@.s65120 = private unnamed_addr constant [6 x i8] c"paren\00"
-@.s65125 = private unnamed_addr constant [5 x i8] c"cast\00"
-@.s65130 = private unnamed_addr constant [5 x i8] c"list\00"
-@.s65135 = private unnamed_addr constant [5 x i8] c"call\00"
-@.s65141 = private unnamed_addr constant [5 x i8] c"Some\00"
-@.lty65212 = private unnamed_addr constant [11 x i8] c"List(Bool)\00"
-@.lty65224 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.lty65235 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.lty65236 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.s65250 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty65283 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s65302 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65310 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65332 = private unnamed_addr constant [3 x i8] c"fn\00"
-@.s65337 = private unnamed_addr constant [8 x i8] c"sandbox\00"
-@.s65362 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65364 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65382 = private unnamed_addr constant [5 x i8] c"kind\00"
-@.s65384 = private unnamed_addr constant [6 x i8] c"range\00"
-@.s65386 = private unnamed_addr constant [3 x i8] c"lo\00"
-@.s65391 = private unnamed_addr constant [3 x i8] c"hi\00"
-@.s65422 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65424 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65440 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65476 = private unnamed_addr constant [3 x i8] c"rt\00"
-@.s65482 = private unnamed_addr constant [5 x i8] c"bind\00"
-@.s65488 = private unnamed_addr constant [6 x i8] c"rbind\00"
-@.s65495 = private unnamed_addr constant [10 x i8] c"@residual\00"
-@.s65501 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65504 = private unnamed_addr constant [7 x i8] c"effect\00"
-@.s65505 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65511 = private unnamed_addr constant [10 x i8] c"annotated\00"
-@.s65512 = private unnamed_addr constant [8 x i8] c"unknown\00"
-@.s65516 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65527 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65531 = private unnamed_addr constant [8 x i8] c"unknown\00"
-@.s65562 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65571 = private unnamed_addr constant [5 x i8] c"kind\00"
-@.s65575 = private unnamed_addr constant [4 x i8] c"dep\00"
-@.s65579 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65582 = private unnamed_addr constant [7 x i8] c"detail\00"
-@.s65588 = private unnamed_addr constant [5 x i8] c"bool\00"
-@.s65593 = private unnamed_addr constant [5 x i8] c"true\00"
-@.s65602 = private unnamed_addr constant [4 x i8] c"str\00"
-@.s65614 = private unnamed_addr constant [4 x i8] c"lit\00"
-@.s65619 = private unnamed_addr constant [5 x i8] c"bool\00"
-@.s65627 = private unnamed_addr constant [4 x i8] c"str\00"
-@.s65634 = private unnamed_addr constant [4 x i8] c"int\00"
-@.s65663 = private unnamed_addr constant [3 x i8] c"fn\00"
-@.s65667 = private unnamed_addr constant [6 x i8] c"param\00"
-@.s65672 = private unnamed_addr constant [5 x i8] c"bind\00"
-@.s65677 = private unnamed_addr constant [6 x i8] c"rbind\00"
-@.s65682 = private unnamed_addr constant [4 x i8] c"ref\00"
-@.s65687 = private unnamed_addr constant [5 x i8] c"call\00"
-@.s65692 = private unnamed_addr constant [6 x i8] c"mcall\00"
-@.s65697 = private unnamed_addr constant [6 x i8] c"field\00"
-@.s65702 = private unnamed_addr constant [4 x i8] c"for\00"
-@.s65707 = private unnamed_addr constant [7 x i8] c"sfield\00"
-@.s65712 = private unnamed_addr constant [7 x i8] c"struct\00"
-@.s65717 = private unnamed_addr constant [7 x i8] c"lparam\00"
-@.s65722 = private unnamed_addr constant [5 x i8] c"test\00"
-@.s65729 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65773 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65776 = private unnamed_addr constant [7 x i8] c"effect\00"
-@.s65784 = private unnamed_addr constant [6 x i8] c"known\00"
-@.s65785 = private unnamed_addr constant [9 x i8] c"residual\00"
-@.s65788 = private unnamed_addr constant [6 x i8] c"known\00"
+@.s64499 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64509 = private unnamed_addr constant [5 x i8] c"unit\00"
+@.s64510 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64511 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64534 = private unnamed_addr constant [2 x i8] c",\00"
+@.s64539 = private unnamed_addr constant [10 x i8] c",rebuild;\00"
+@.s64543 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64549 = private unnamed_addr constant [28 x i8] c"graph-reduce: parse error: \00"
+@.s64553 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64554 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64555 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64562 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64563 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64564 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64565 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64629 = private unnamed_addr constant [1 x i8] c"\00"
+@.s64694 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty64722 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.lty64897 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.lty64968 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.lty64989 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s65067 = private unnamed_addr constant [11 x i8] c"filesystem\00"
+@.s65071 = private unnamed_addr constant [12 x i8] c"environment\00"
+@.s65076 = private unnamed_addr constant [5 x i8] c"args\00"
+@.s65081 = private unnamed_addr constant [8 x i8] c"process\00"
+@.s65086 = private unnamed_addr constant [4 x i8] c"git\00"
+@.s65097 = private unnamed_addr constant [5 x i8] c"call\00"
+@.s65102 = private unnamed_addr constant [6 x i8] c"print\00"
+@.s65108 = private unnamed_addr constant [8 x i8] c"println\00"
+@.s65115 = private unnamed_addr constant [12 x i8] c"print_bytes\00"
+@.s65119 = private unnamed_addr constant [7 x i8] c"stdout\00"
+@.s65122 = private unnamed_addr constant [9 x i8] c"eprintln\00"
+@.s65125 = private unnamed_addr constant [7 x i8] c"stderr\00"
+@.s65128 = private unnamed_addr constant [6 x i8] c"mcall\00"
+@.s65140 = private unnamed_addr constant [4 x i8] c"ref\00"
+@.s65154 = private unnamed_addr constant [2 x i8] c".\00"
+@.s65159 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65167 = private unnamed_addr constant [4 x i8] c"lit\00"
+@.s65171 = private unnamed_addr constant [3 x i8] c"ty\00"
+@.s65176 = private unnamed_addr constant [6 x i8] c"fpart\00"
+@.s65181 = private unnamed_addr constant [6 x i8] c"fspec\00"
+@.s65185 = private unnamed_addr constant [3 x i8] c"un\00"
+@.s65189 = private unnamed_addr constant [6 x i8] c"paren\00"
+@.s65194 = private unnamed_addr constant [5 x i8] c"cast\00"
+@.s65199 = private unnamed_addr constant [5 x i8] c"list\00"
+@.s65204 = private unnamed_addr constant [5 x i8] c"call\00"
+@.s65210 = private unnamed_addr constant [5 x i8] c"Some\00"
+@.lty65281 = private unnamed_addr constant [11 x i8] c"List(Bool)\00"
+@.lty65293 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.lty65304 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.lty65305 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.s65319 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty65352 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s65371 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65379 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65401 = private unnamed_addr constant [3 x i8] c"fn\00"
+@.s65406 = private unnamed_addr constant [8 x i8] c"sandbox\00"
+@.s65431 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65433 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65451 = private unnamed_addr constant [5 x i8] c"kind\00"
+@.s65453 = private unnamed_addr constant [6 x i8] c"range\00"
+@.s65455 = private unnamed_addr constant [3 x i8] c"lo\00"
+@.s65460 = private unnamed_addr constant [3 x i8] c"hi\00"
+@.s65491 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65493 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65509 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65545 = private unnamed_addr constant [3 x i8] c"rt\00"
+@.s65551 = private unnamed_addr constant [5 x i8] c"bind\00"
+@.s65557 = private unnamed_addr constant [6 x i8] c"rbind\00"
+@.s65564 = private unnamed_addr constant [10 x i8] c"@residual\00"
+@.s65570 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65573 = private unnamed_addr constant [7 x i8] c"effect\00"
+@.s65574 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65580 = private unnamed_addr constant [10 x i8] c"annotated\00"
+@.s65581 = private unnamed_addr constant [8 x i8] c"unknown\00"
+@.s65585 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65596 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65600 = private unnamed_addr constant [8 x i8] c"unknown\00"
+@.s65631 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65640 = private unnamed_addr constant [5 x i8] c"kind\00"
+@.s65644 = private unnamed_addr constant [4 x i8] c"dep\00"
+@.s65648 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65651 = private unnamed_addr constant [7 x i8] c"detail\00"
+@.s65657 = private unnamed_addr constant [5 x i8] c"bool\00"
+@.s65662 = private unnamed_addr constant [5 x i8] c"true\00"
+@.s65671 = private unnamed_addr constant [4 x i8] c"str\00"
+@.s65683 = private unnamed_addr constant [4 x i8] c"lit\00"
+@.s65688 = private unnamed_addr constant [5 x i8] c"bool\00"
+@.s65696 = private unnamed_addr constant [4 x i8] c"str\00"
+@.s65703 = private unnamed_addr constant [4 x i8] c"int\00"
+@.s65732 = private unnamed_addr constant [3 x i8] c"fn\00"
+@.s65736 = private unnamed_addr constant [6 x i8] c"param\00"
+@.s65741 = private unnamed_addr constant [5 x i8] c"bind\00"
+@.s65746 = private unnamed_addr constant [6 x i8] c"rbind\00"
+@.s65751 = private unnamed_addr constant [4 x i8] c"ref\00"
+@.s65756 = private unnamed_addr constant [5 x i8] c"call\00"
+@.s65761 = private unnamed_addr constant [6 x i8] c"mcall\00"
+@.s65766 = private unnamed_addr constant [6 x i8] c"field\00"
+@.s65771 = private unnamed_addr constant [4 x i8] c"for\00"
+@.s65776 = private unnamed_addr constant [7 x i8] c"sfield\00"
+@.s65781 = private unnamed_addr constant [7 x i8] c"struct\00"
+@.s65786 = private unnamed_addr constant [7 x i8] c"lparam\00"
+@.s65791 = private unnamed_addr constant [5 x i8] c"test\00"
 @.s65798 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65800 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65826 = private unnamed_addr constant [6 x i8] c"known\00"
-@.s65834 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65843 = private unnamed_addr constant [3 x i8] c"id\00"
-@.s65846 = private unnamed_addr constant [5 x i8] c"kind\00"
-@.s65851 = private unnamed_addr constant [5 x i8] c"type\00"
-@.s65861 = private unnamed_addr constant [10 x i8] c"knowledge\00"
-@.s65864 = private unnamed_addr constant [5 x i8] c"name\00"
-@.s65870 = private unnamed_addr constant [6 x i8] c"value\00"
-@.s65874 = private unnamed_addr constant [5 x i8] c"deps\00"
-@.s65881 = private unnamed_addr constant [4 x i8] c"def\00"
-@.s65885 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65888 = private unnamed_addr constant [8 x i8] c"effects\00"
-@.s65892 = private unnamed_addr constant [8 x i8] c"effects\00"
-@.s65896 = private unnamed_addr constant [2 x i8] c".\00"
-@.s65901 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65842 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65845 = private unnamed_addr constant [7 x i8] c"effect\00"
+@.s65853 = private unnamed_addr constant [6 x i8] c"known\00"
+@.s65854 = private unnamed_addr constant [9 x i8] c"residual\00"
+@.s65857 = private unnamed_addr constant [6 x i8] c"known\00"
+@.s65867 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65869 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65895 = private unnamed_addr constant [6 x i8] c"known\00"
 @.s65903 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65906 = private unnamed_addr constant [13 x i8] c"capabilities\00"
-@.s65910 = private unnamed_addr constant [13 x i8] c"capabilities\00"
-@.s65914 = private unnamed_addr constant [5 x i8] c"span\00"
-@.s65928 = private unnamed_addr constant [7 x i8] c"derive\00"
-@.s65931 = private unnamed_addr constant [5 x i8] c"from\00"
-@.s65934 = private unnamed_addr constant [5 x i8] c"rule\00"
-@.s65945 = private unnamed_addr constant [6 x i8] c"known\00"
-@.s65948 = private unnamed_addr constant [7 x i8] c"reason\00"
-@.s65952 = private unnamed_addr constant [1 x i8] c"\00"
-@.s65955 = private unnamed_addr constant [6 x i8] c"facts\00"
-@.s65959 = private unnamed_addr constant [5 x i8] c"hash\00"
-@.s65976 = private unnamed_addr constant [5 x i8] c"path\00"
-@.s65988 = private unnamed_addr constant [5 x i8] c"hash\00"
-@.lty66009 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.lty66088 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.ltyB66104 = private unnamed_addr constant [11 x i8] c"List(Bool)\00"
-@.ltyB66105 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.s66124 = private unnamed_addr constant [8 x i8] c"version\00"
-@.s66127 = private unnamed_addr constant [7 x i8] c"source\00"
-@.s66136 = private unnamed_addr constant [6 x i8] c"nodes\00"
-@.s66142 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66145 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66147 = private unnamed_addr constant [6 x i8] c"roots\00"
-@.s66150 = private unnamed_addr constant [7 x i8] c"source\00"
-@.s66158 = private unnamed_addr constant [9 x i8] c"residual\00"
-@.s66164 = private unnamed_addr constant [9 x i8] c"residual\00"
-@.s66171 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66189 = private unnamed_addr constant [2 x i8] c"0\00"
-@.s66200 = private unnamed_addr constant [2 x i8] c":\00"
-@.s66207 = private unnamed_addr constant [2 x i8] c":\00"
-@.s66214 = private unnamed_addr constant [4 x i8] c"x1f\00"
-@.s66221 = private unnamed_addr constant [4 x i8] c"x1f\00"
-@.s66225 = private unnamed_addr constant [4 x i8] c"x1f\00"
-@.s66233 = private unnamed_addr constant [4 x i8] c"x1f\00"
-@.s66245 = private unnamed_addr constant [4 x i8] c"x1f\00"
-@.lty66256 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.s66275 = private unnamed_addr constant [3 x i8] c"rt\00"
-@.s66278 = private unnamed_addr constant [11 x i8] c"rt-binding\00"
-@.s66284 = private unnamed_addr constant [6 x i8] c"mcall\00"
-@.s66300 = private unnamed_addr constant [4 x i8] c"ref\00"
-@.s66310 = private unnamed_addr constant [4 x i8] c"env\00"
-@.s66315 = private unnamed_addr constant [14 x i8] c"provider-call\00"
-@.s66356 = private unnamed_addr constant [14 x i8] c"budget(specs)\00"
-@.s66379 = private unnamed_addr constant [4 x i8] c"x1f\00"
-@.s66409 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty66441 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.ltyB66480 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.s66514 = private unnamed_addr constant [4 x i8] c"eof\00"
-@.s66521 = private unnamed_addr constant [2 x i8] c"(\00"
-@.s66527 = private unnamed_addr constant [2 x i8] c"[\00"
-@.s66534 = private unnamed_addr constant [2 x i8] c"{\00"
-@.s66547 = private unnamed_addr constant [2 x i8] c")\00"
-@.s66553 = private unnamed_addr constant [2 x i8] c"]\00"
-@.s66560 = private unnamed_addr constant [2 x i8] c"}\00"
-@.s66580 = private unnamed_addr constant [4 x i8] c"eof\00"
+@.s65912 = private unnamed_addr constant [3 x i8] c"id\00"
+@.s65915 = private unnamed_addr constant [5 x i8] c"kind\00"
+@.s65920 = private unnamed_addr constant [5 x i8] c"type\00"
+@.s65930 = private unnamed_addr constant [10 x i8] c"knowledge\00"
+@.s65933 = private unnamed_addr constant [5 x i8] c"name\00"
+@.s65939 = private unnamed_addr constant [6 x i8] c"value\00"
+@.s65943 = private unnamed_addr constant [5 x i8] c"deps\00"
+@.s65950 = private unnamed_addr constant [4 x i8] c"def\00"
+@.s65954 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65957 = private unnamed_addr constant [8 x i8] c"effects\00"
+@.s65961 = private unnamed_addr constant [8 x i8] c"effects\00"
+@.s65965 = private unnamed_addr constant [2 x i8] c".\00"
+@.s65970 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65972 = private unnamed_addr constant [1 x i8] c"\00"
+@.s65975 = private unnamed_addr constant [13 x i8] c"capabilities\00"
+@.s65979 = private unnamed_addr constant [13 x i8] c"capabilities\00"
+@.s65983 = private unnamed_addr constant [5 x i8] c"span\00"
+@.s65997 = private unnamed_addr constant [7 x i8] c"derive\00"
+@.s66000 = private unnamed_addr constant [5 x i8] c"from\00"
+@.s66003 = private unnamed_addr constant [5 x i8] c"rule\00"
+@.s66014 = private unnamed_addr constant [6 x i8] c"known\00"
+@.s66017 = private unnamed_addr constant [7 x i8] c"reason\00"
+@.s66021 = private unnamed_addr constant [1 x i8] c"\00"
+@.s66024 = private unnamed_addr constant [6 x i8] c"facts\00"
+@.s66028 = private unnamed_addr constant [5 x i8] c"hash\00"
+@.s66045 = private unnamed_addr constant [5 x i8] c"path\00"
+@.s66057 = private unnamed_addr constant [5 x i8] c"hash\00"
+@.lty66078 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.lty66157 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.ltyB66173 = private unnamed_addr constant [11 x i8] c"List(Bool)\00"
+@.ltyB66174 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.s66193 = private unnamed_addr constant [8 x i8] c"version\00"
+@.s66196 = private unnamed_addr constant [7 x i8] c"source\00"
+@.s66205 = private unnamed_addr constant [6 x i8] c"nodes\00"
+@.s66211 = private unnamed_addr constant [1 x i8] c"\00"
+@.s66214 = private unnamed_addr constant [1 x i8] c"\00"
+@.s66216 = private unnamed_addr constant [6 x i8] c"roots\00"
+@.s66219 = private unnamed_addr constant [7 x i8] c"source\00"
+@.s66227 = private unnamed_addr constant [9 x i8] c"residual\00"
+@.s66233 = private unnamed_addr constant [9 x i8] c"residual\00"
+@.s66240 = private unnamed_addr constant [1 x i8] c"\00"
+@.s66258 = private unnamed_addr constant [2 x i8] c"0\00"
+@.s66269 = private unnamed_addr constant [2 x i8] c":\00"
+@.s66276 = private unnamed_addr constant [2 x i8] c":\00"
+@.s66283 = private unnamed_addr constant [4 x i8] c"x1f\00"
+@.s66290 = private unnamed_addr constant [4 x i8] c"x1f\00"
+@.s66294 = private unnamed_addr constant [4 x i8] c"x1f\00"
+@.s66302 = private unnamed_addr constant [4 x i8] c"x1f\00"
+@.s66314 = private unnamed_addr constant [4 x i8] c"x1f\00"
+@.lty66325 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.s66344 = private unnamed_addr constant [3 x i8] c"rt\00"
+@.s66347 = private unnamed_addr constant [11 x i8] c"rt-binding\00"
+@.s66353 = private unnamed_addr constant [6 x i8] c"mcall\00"
+@.s66369 = private unnamed_addr constant [4 x i8] c"ref\00"
+@.s66379 = private unnamed_addr constant [4 x i8] c"env\00"
+@.s66384 = private unnamed_addr constant [14 x i8] c"provider-call\00"
+@.s66425 = private unnamed_addr constant [14 x i8] c"budget(specs)\00"
+@.s66448 = private unnamed_addr constant [4 x i8] c"x1f\00"
+@.s66478 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty66510 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.ltyB66549 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.s66583 = private unnamed_addr constant [4 x i8] c"eof\00"
 @.s66590 = private unnamed_addr constant [2 x i8] c"(\00"
 @.s66596 = private unnamed_addr constant [2 x i8] c"[\00"
 @.s66603 = private unnamed_addr constant [2 x i8] c"{\00"
 @.s66616 = private unnamed_addr constant [2 x i8] c")\00"
 @.s66622 = private unnamed_addr constant [2 x i8] c"]\00"
 @.s66629 = private unnamed_addr constant [2 x i8] c"}\00"
-@.s66642 = private unnamed_addr constant [2 x i8] c",\00"
-@.lty66652 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.lty66667 = private unnamed_addr constant [14 x i8] c"List(Unknown)\00"
-@.lty66670 = private unnamed_addr constant [14 x i8] c"List(Unknown)\00"
-@.lty66675 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.lty66692 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-@.s66706 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66712 = private unnamed_addr constant [4 x i8] c"eof\00"
-@.s66722 = private unnamed_addr constant [2 x i8] c"(\00"
-@.s66728 = private unnamed_addr constant [2 x i8] c"[\00"
-@.s66735 = private unnamed_addr constant [2 x i8] c"{\00"
-@.s66748 = private unnamed_addr constant [2 x i8] c")\00"
-@.s66754 = private unnamed_addr constant [2 x i8] c"]\00"
-@.s66761 = private unnamed_addr constant [2 x i8] c"}\00"
-@.s66774 = private unnamed_addr constant [2 x i8] c"=\00"
-@.s66788 = private unnamed_addr constant [4 x i8] c"eof\00"
-@.s66798 = private unnamed_addr constant [6 x i8] c"ident\00"
-@.s66810 = private unnamed_addr constant [4 x i8] c"eof\00"
-@.s66815 = private unnamed_addr constant [2 x i8] c"{\00"
-@.s66827 = private unnamed_addr constant [2 x i8] c"}\00"
-@.s66841 = private unnamed_addr constant [6 x i8] c"ident\00"
-@.s66850 = private unnamed_addr constant [2 x i8] c"(\00"
-@.s66860 = private unnamed_addr constant [2 x i8] c"{\00"
-@.lty66880 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.s66889 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66893 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66898 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66899 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty66904 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.lty66935 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.s66944 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66945 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66961 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66964 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66969 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66970 = private unnamed_addr constant [2 x i8] c",\00"
-@.s66973 = private unnamed_addr constant [1 x i8] c"\00"
-@.s66988 = private unnamed_addr constant [4 x i8] c"eof\00"
-@.s67000 = private unnamed_addr constant [2 x i8] c"{\00"
-@.s67012 = private unnamed_addr constant [2 x i8] c"}\00"
-@.s67024 = private unnamed_addr constant [6 x i8] c"ident\00"
-@.s67040 = private unnamed_addr constant [2 x i8] c"(\00"
-@.s67052 = private unnamed_addr constant [2 x i8] c"{\00"
-@.s67093 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67095 = private unnamed_addr constant [2 x i8] c")\00"
-@.s67112 = private unnamed_addr constant [2 x i8] c" \00"
-@.s67123 = private unnamed_addr constant [2 x i8] c",\00"
-@.s67124 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67138 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67148 = private unnamed_addr constant [1 x i8] c"\00"
-@.ltyB67150 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.ltyB67151 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
-@.s67152 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67155 = private unnamed_addr constant [2 x i8] c",\00"
-@.s67158 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty67173 = private unnamed_addr constant [14 x i8] c"List(Unknown)\00"
-@.s67187 = private unnamed_addr constant [2 x i8] c")\00"
-@.s67189 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67192 = private unnamed_addr constant [2 x i8] c"\0A\00"
-@.s67194 = private unnamed_addr constant [2 x i8] c"\0A\00"
-@.s67197 = private unnamed_addr constant [2 x i8] c")\00"
+@.s66649 = private unnamed_addr constant [4 x i8] c"eof\00"
+@.s66659 = private unnamed_addr constant [2 x i8] c"(\00"
+@.s66665 = private unnamed_addr constant [2 x i8] c"[\00"
+@.s66672 = private unnamed_addr constant [2 x i8] c"{\00"
+@.s66685 = private unnamed_addr constant [2 x i8] c")\00"
+@.s66691 = private unnamed_addr constant [2 x i8] c"]\00"
+@.s66698 = private unnamed_addr constant [2 x i8] c"}\00"
+@.s66711 = private unnamed_addr constant [2 x i8] c",\00"
+@.lty66721 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.lty66736 = private unnamed_addr constant [14 x i8] c"List(Unknown)\00"
+@.lty66739 = private unnamed_addr constant [14 x i8] c"List(Unknown)\00"
+@.lty66744 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.lty66761 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s66775 = private unnamed_addr constant [1 x i8] c"\00"
+@.s66781 = private unnamed_addr constant [4 x i8] c"eof\00"
+@.s66791 = private unnamed_addr constant [2 x i8] c"(\00"
+@.s66797 = private unnamed_addr constant [2 x i8] c"[\00"
+@.s66804 = private unnamed_addr constant [2 x i8] c"{\00"
+@.s66817 = private unnamed_addr constant [2 x i8] c")\00"
+@.s66823 = private unnamed_addr constant [2 x i8] c"]\00"
+@.s66830 = private unnamed_addr constant [2 x i8] c"}\00"
+@.s66843 = private unnamed_addr constant [2 x i8] c"=\00"
+@.s66857 = private unnamed_addr constant [4 x i8] c"eof\00"
+@.s66867 = private unnamed_addr constant [6 x i8] c"ident\00"
+@.s66879 = private unnamed_addr constant [4 x i8] c"eof\00"
+@.s66884 = private unnamed_addr constant [2 x i8] c"{\00"
+@.s66896 = private unnamed_addr constant [2 x i8] c"}\00"
+@.s66910 = private unnamed_addr constant [6 x i8] c"ident\00"
+@.s66919 = private unnamed_addr constant [2 x i8] c"(\00"
+@.s66929 = private unnamed_addr constant [2 x i8] c"{\00"
+@.lty66949 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.s66958 = private unnamed_addr constant [1 x i8] c"\00"
+@.s66962 = private unnamed_addr constant [1 x i8] c"\00"
+@.s66967 = private unnamed_addr constant [1 x i8] c"\00"
+@.s66968 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty66973 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.lty67004 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.s67013 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67014 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67030 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67033 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67038 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67039 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67042 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67057 = private unnamed_addr constant [4 x i8] c"eof\00"
+@.s67069 = private unnamed_addr constant [2 x i8] c"{\00"
+@.s67081 = private unnamed_addr constant [2 x i8] c"}\00"
+@.s67093 = private unnamed_addr constant [6 x i8] c"ident\00"
+@.s67109 = private unnamed_addr constant [2 x i8] c"(\00"
+@.s67121 = private unnamed_addr constant [2 x i8] c"{\00"
+@.s67162 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67164 = private unnamed_addr constant [2 x i8] c")\00"
+@.s67181 = private unnamed_addr constant [2 x i8] c" \00"
+@.s67192 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67193 = private unnamed_addr constant [1 x i8] c"\00"
 @.s67207 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67210 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67212 = private unnamed_addr constant [1 x i8] c"\00"
-@.lty67218 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.s67241 = private unnamed_addr constant [6 x i8] c"ident\00"
-@.s67247 = private unnamed_addr constant [2 x i8] c"=\00"
-@.ltyB67266 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.lty67271 = private unnamed_addr constant [14 x i8] c"List(Unknown)\00"
-@.lty67298 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.s67316 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67322 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67325 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67328 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67329 = private unnamed_addr constant [3 x i8] c", \00"
-@.s67338 = private unnamed_addr constant [4 x i8] c"eof\00"
-@.s67343 = private unnamed_addr constant [2 x i8] c"{\00"
-@.s67355 = private unnamed_addr constant [2 x i8] c"}\00"
-@.s67369 = private unnamed_addr constant [5 x i8] c"type\00"
-@.s67390 = private unnamed_addr constant [2 x i8] c"=\00"
-@.s67396 = private unnamed_addr constant [2 x i8] c"{\00"
-@.s67403 = private unnamed_addr constant [6 x i8] c"ident\00"
-@.s67410 = private unnamed_addr constant [2 x i8] c":\00"
-@.s67420 = private unnamed_addr constant [2 x i8] c",\00"
-@.s67429 = private unnamed_addr constant [4 x i8] c"eof\00"
-@.s67439 = private unnamed_addr constant [5 x i8] c"type\00"
-@.s67454 = private unnamed_addr constant [2 x i8] c"=\00"
-@.s67460 = private unnamed_addr constant [2 x i8] c"{\00"
-@.s67465 = private unnamed_addr constant [2 x i8] c",\00"
-@.s67469 = private unnamed_addr constant [2 x i8] c",\00"
-@.s67481 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67487 = private unnamed_addr constant [3 x i8] c" }\00"
-@.s67493 = private unnamed_addr constant [2 x i8] c"{\00"
-@.s67505 = private unnamed_addr constant [2 x i8] c"}\00"
-@.s67517 = private unnamed_addr constant [6 x i8] c"ident\00"
-@.s67521 = private unnamed_addr constant [2 x i8] c",\00"
-@.s67525 = private unnamed_addr constant [2 x i8] c",\00"
-@.s67541 = private unnamed_addr constant [2 x i8] c"{\00"
-@.s67547 = private unnamed_addr constant [6 x i8] c"ident\00"
-@.s67554 = private unnamed_addr constant [2 x i8] c"=\00"
-@.s67594 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67600 = private unnamed_addr constant [2 x i8] c" \00"
-@.s67610 = private unnamed_addr constant [2 x i8] c" \00"
-@.s67615 = private unnamed_addr constant [2 x i8] c";\00"
-@.s67634 = private unnamed_addr constant [2 x i8] c",\00"
-@.s67635 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67639 = private unnamed_addr constant [6 x i8] c"ident\00"
-@.s67643 = private unnamed_addr constant [2 x i8] c".\00"
-@.s67655 = private unnamed_addr constant [6 x i8] c"type \00"
-@.s67659 = private unnamed_addr constant [2 x i8] c",\00"
-@.s67661 = private unnamed_addr constant [2 x i8] c",\00"
-@.s67668 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67669 = private unnamed_addr constant [1 x i8] c"\00"
-@.ltyE67673 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
-@.s67674 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67676 = private unnamed_addr constant [1 x i8] c"\00"
-@.s67686 = private unnamed_addr constant [2 x i8] c"?\00"
-@.s67690 = private unnamed_addr constant [2 x i8] c":\00"
-@.s67695 = private unnamed_addr constant [5 x i8] c"else\00"
-@.s67699 = private unnamed_addr constant [3 x i8] c"==\00"
-@.s67703 = private unnamed_addr constant [3 x i8] c"!=\00"
-@.s67708 = private unnamed_addr constant [2 x i8] c"<\00"
-@.s67713 = private unnamed_addr constant [2 x i8] c">\00"
-@.s67718 = private unnamed_addr constant [3 x i8] c"<=\00"
-@.s67723 = private unnamed_addr constant [3 x i8] c">=\00"
-@.s67727 = private unnamed_addr constant [3 x i8] c"&&\00"
-@.s67731 = private unnamed_addr constant [3 x i8] c"||\00"
-@.s67736 = private unnamed_addr constant [2 x i8] c"-\00"
-@.s67741 = private unnamed_addr constant [2 x i8] c"*\00"
-@.s67746 = private unnamed_addr constant [2 x i8] c"/\00"
-@.s67751 = private unnamed_addr constant [2 x i8] c"%\00"
+@.s67217 = private unnamed_addr constant [1 x i8] c"\00"
+@.ltyB67219 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.ltyB67220 = private unnamed_addr constant [10 x i8] c"List(Int)\00"
+@.s67221 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67224 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67227 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty67242 = private unnamed_addr constant [14 x i8] c"List(Unknown)\00"
+@.s67256 = private unnamed_addr constant [2 x i8] c")\00"
+@.s67258 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67261 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.s67263 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.s67266 = private unnamed_addr constant [2 x i8] c")\00"
+@.s67276 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67279 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67281 = private unnamed_addr constant [1 x i8] c"\00"
+@.lty67287 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.s67310 = private unnamed_addr constant [6 x i8] c"ident\00"
+@.s67316 = private unnamed_addr constant [2 x i8] c"=\00"
+@.ltyB67335 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.lty67340 = private unnamed_addr constant [14 x i8] c"List(Unknown)\00"
+@.lty67367 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.s67385 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67391 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67394 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67397 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67398 = private unnamed_addr constant [3 x i8] c", \00"
+@.s67407 = private unnamed_addr constant [4 x i8] c"eof\00"
+@.s67412 = private unnamed_addr constant [2 x i8] c"{\00"
+@.s67424 = private unnamed_addr constant [2 x i8] c"}\00"
+@.s67438 = private unnamed_addr constant [5 x i8] c"type\00"
+@.s67459 = private unnamed_addr constant [2 x i8] c"=\00"
+@.s67465 = private unnamed_addr constant [2 x i8] c"{\00"
+@.s67472 = private unnamed_addr constant [6 x i8] c"ident\00"
+@.s67479 = private unnamed_addr constant [2 x i8] c":\00"
+@.s67489 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67498 = private unnamed_addr constant [4 x i8] c"eof\00"
+@.s67508 = private unnamed_addr constant [5 x i8] c"type\00"
+@.s67523 = private unnamed_addr constant [2 x i8] c"=\00"
+@.s67529 = private unnamed_addr constant [2 x i8] c"{\00"
+@.s67534 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67538 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67550 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67556 = private unnamed_addr constant [3 x i8] c" }\00"
+@.s67562 = private unnamed_addr constant [2 x i8] c"{\00"
+@.s67574 = private unnamed_addr constant [2 x i8] c"}\00"
+@.s67586 = private unnamed_addr constant [6 x i8] c"ident\00"
+@.s67590 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67594 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67610 = private unnamed_addr constant [2 x i8] c"{\00"
+@.s67616 = private unnamed_addr constant [6 x i8] c"ident\00"
+@.s67623 = private unnamed_addr constant [2 x i8] c"=\00"
+@.s67663 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67669 = private unnamed_addr constant [2 x i8] c" \00"
+@.s67679 = private unnamed_addr constant [2 x i8] c" \00"
+@.s67684 = private unnamed_addr constant [2 x i8] c";\00"
+@.s67703 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67704 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67708 = private unnamed_addr constant [6 x i8] c"ident\00"
+@.s67712 = private unnamed_addr constant [2 x i8] c".\00"
+@.s67724 = private unnamed_addr constant [6 x i8] c"type \00"
+@.s67728 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67730 = private unnamed_addr constant [2 x i8] c",\00"
+@.s67737 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67738 = private unnamed_addr constant [1 x i8] c"\00"
+@.ltyE67742 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
+@.s67743 = private unnamed_addr constant [1 x i8] c"\00"
+@.s67745 = private unnamed_addr constant [1 x i8] c"\00"
 @.s67775 = private unnamed_addr constant [18 x i8] c".resid-notes.cbor\00"
 @.s67780 = private unnamed_addr constant [14 x i8] c"note: notes: \00"
 @.s67786 = private unnamed_addr constant [27 x i8] c" residual note(s) recorded\00"

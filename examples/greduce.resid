@@ -1,13 +1,15 @@
 // greduce.resid — compile-time reduction on the knowledge graph (spec §36;
-// PLAN-graph-ir G3). Makes the same decisions as examples/reduce.resid,
-// but reads the parsed graph and builds the residual program as nodes
-// appended to it. Unchanged subtrees are shared by id, and each new node
-// keeps the source span of the node it replaces. Known values, budgets,
-// memo keys, specialization and notes are the text reducer's, so the
-// printed residual graph token-matches rd_reduce_program's output.
+// PLAN-graph-ir G3). Reads the checked graph and builds the residual
+// program as nodes appended to it: folding, known bindings, dead arms,
+// β-reduction and specialization under budgets and the whistle. Unchanged
+// subtrees are shared by id, each new node keeps the source span of the
+// node it replaces and has a derive edge to it, and the reasons a call
+// stayed residual are recorded for the artifact. Then gs_program turns
+// string accumulators into in-place buffers.
 //
-// Imported by examples/driver.resid; reuses reduce.resid's value helpers
-// (rd_render, rd_coerce, rd_fold, rd_builtin, rd_env_*, the whistle).
+// Imported by examples/driver.resid; known values, budgets and the
+// whistle are reduce.resid's (rd_render, rd_coerce, rd_fold, rd_builtin,
+// rd_env_*).
 
 // Reduction state: RdS plus the graph being built; specs are the
 // specialized functions' fn nodes in emission order; dn/df/dr are derive
@@ -1452,7 +1454,9 @@ Str gx_dv(GS st, Int i, StrBuf acc) {
     return gx_dv(st, i + 1, gx_pk_i(gx_pk_i(acc, st.dn[i]), st.df[i]).push(st.dr[i]).push_char(';'));
 }
 
-// ─── In-place string accumulators (examples/stracc.resid on the graph) ─
+// ─── In-place string accumulators ───────────────────────────────────
+// `Str f(.., Str acc)` whose acc is only returned or extended by a self tail
+// call becomes worker f__sacc appending in place, plus a wrapper f.
 
 // Uses of p (ident tokens not after `.`), accepted uses, tail-call sites;
 // bad: a lambda, spawn or f-string mentioning p.
@@ -1494,6 +1498,15 @@ List(Int) gs_chain(Kg g, Int id, List(Int) acc) {
     KN n = g.ns[id];
     if (n.kind == "bin" && n.text == "+") { return gs_chain(g, kg_kid(g, id, 0), [kg_kid(g, id, 1)].concat(acc)); }
     return [id].concat(acc);
+}
+
+// Tokens that may not appear at depth 0 of the accumulator argument: it
+// must be a plain `+` chain.
+pub Bool sa_chain_breaker(Str t) {
+    if (t == "?" || t == ":" || t == "else") { return true; }
+    if (t == "==" || t == "!=" || t == "<" || t == ">" || t == "<=" || t == ">=") { return true; }
+    if (t == "&&" || t == "||" || t == "-" || t == "*" || t == "/" || t == "%") { return true; }
+    return false;
 }
 
 // Does the node print a token that ends a plain `+` chain at its depth 0
