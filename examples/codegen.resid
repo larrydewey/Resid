@@ -5667,6 +5667,34 @@ GT gt_retype(GT v, Str ty) {
     return GT {.pos = v.pos, .val = v.val, .ty = ty, .cnt = v.cnt, .err = v.err, .glines = v.glines, .lines = v.lines, .tmp = v.tmp, .lbl = v.lbl, .tail = v.tail};
 }
 
+// `a && b` / `a || b`: b runs only when a does not decide (spec §30).
+GT cg_short_circuit(Str s, Tok t, Int p, GT lhs, Int min_prec, List(Str) env, Funcs fs) {
+    Bool is_and = t.text == "&&";
+    // Block names come from a reserved temp number: unique in the function
+    // even when an enclosing construct reserved its labels before this one.
+    Int tl = lhs.tmp + 1;
+    Str lr = "LSR" + IntToString(tl);
+    Str lj = "LSJ" + IntToString(tl);
+    // The decision gets its own block so the phi's predecessor is exact
+    // even when later passes split the enclosing block (tail calls).
+    Str from = "LSL" + IntToString(tl);
+    Str br = if (is_and) { "br i1 " + lhs.val + ", label %" + lr + ", label %" + lj } else { "br i1 " + lhs.val + ", label %" + lj + ", label %" + lr };
+    List(Str) l1 = lhs.lines.concat(["br label %" + from, from + ":", br, lr + ":"]);
+    GT c = GT {.pos = lhs.pos, .val = lhs.val, .ty = lhs.ty, .cnt = lhs.cnt, .err = "", .glines = lhs.glines, .lines = l1, .tmp = tl, .lbl = lhs.lbl, .tail = false};
+    GT rhs = cg_unary(s, t.pos, env, fs, c, false);
+    if (rhs.err != "") { return rhs; }
+    GT joined = GT {.pos = rhs.pos, .val = rhs.val, .ty = rhs.ty, .cnt = rhs.cnt, .err = "", .glines = rhs.glines, .lines = rhs.lines, .tmp = rhs.tmp, .lbl = rhs.lbl, .tail = false};
+    GT more = cg_bin_rest_l(s, joined, false, p + 1, env, fs, false);
+    if (more.err != "") { return more; }
+    Str rend = last_label_line_cg(more.lines, lr);
+    Int tr = more.tmp + 1;
+    Str res = "%t" + IntToString(tr);
+    Str dflt = if (is_and) { "false" } else { "true" };
+    List(Str) l2 = more.lines.concat(["br label %" + lj, lj + ":", res + " = phi i1 [ " + dflt + ", %" + from + " ], [ " + more.val + ", %" + rend + " ]"]);
+    GT out = GT {.pos = more.pos, .val = res, .ty = "Bool", .cnt = 0, .err = "", .glines = more.glines, .lines = l2, .tmp = tr, .lbl = more.lbl, .tail = false};
+    return cg_bin_rest_l(s, out, false, min_prec, env, fs, false);
+}
+
 GT cg_bin_rest_l(Str s, GT lhs, Bool lhs_lit, Int min_prec, List(Str) env, Funcs fs, Bool tail_pos) {
     Tok t = lex_tok(s, lhs.pos);
     if (t.text == "?") {
@@ -5765,13 +5793,16 @@ Int payload_tag = if (is_opt) { 1 } else { 1 };
         Int tp = pv.tmp + 1;
         Str pr = "%t" + IntToString(tp);
         // phi operands: [fallback_val, %labf], [payload_val, %labp]
-        Str phi = pr + " = phi " + ll_ty(num_norm_cg(ety)) + " [ " + fv.val + ", %" + labf + " ], [ " + pv.val + ", %" + labp + " ]";
+        Str fexit = last_label_line_cg(x0, labf);
+        Str pexit = last_label_line_cg(y0, labp);
+        Str phi = pr + " = phi " + ll_ty(num_norm_cg(ety)) + " [ " + fv.val + ", %" + fexit + " ], [ " + pv.val + ", %" + pexit + " ]";
         List(Str) y3 = y2.concat([phi]);
         GT q = GT {.pos = close.pos, .val = pr, .ty = ety, .cnt = 0, .err = "", .glines = pv.glines, .lines = y3, .tmp = tp, .lbl = max_i64(pv.lbl, l3), .tail = false};
         return cg_bin_rest(s, q, min_prec, env, fs, false);
     }
     Int p = op_prec(t.text);
     if (p < min_prec || p == 0) { return lhs; }
+    if (t.text == "&&" || t.text == "||") { return cg_short_circuit(s, t, p, lhs, min_prec, env, fs); }
     GT rhs = cg_unary(s, t.pos, env, fs, lhs, false);
     if (rhs.err != "") { return rhs; }
     Int next = p + 1;

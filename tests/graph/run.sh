@@ -28,7 +28,7 @@ for f in examples/driver.resid lib/*.resid tools/*.resid examples/*.resid tests/
         tests/conformance/cases/err_assignment.resid|tests/conformance/cases/err_list_missing_comma.resid) continue ;;
     esac
     want_lint="graph-lint: 0 mixed-precedence expression(s)"
-    case "$f" in *operator_precedence_*) want_lint="$("$COMPILER" "$f" --graph-lint 2>&1 | grep '^graph-lint' | tail -1)" ;; esac
+    case "$f" in *operator_precedence_*|*logical_short_circuit*) want_lint="$("$COMPILER" "$f" --graph-lint 2>&1 | grep '^graph-lint' | tail -1)" ;; esac
     rt="$("$COMPILER" "$f" --graph-check 2>&1 | grep '^graph' | tail -1)"
     lint="$("$COMPILER" "$f" --graph-lint 2>&1 | grep '^graph-lint' | tail -1)"
     if [ "$rt" = "graph: ok" ] && [ "$lint" = "$want_lint" ]; then

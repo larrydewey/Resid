@@ -62,6 +62,15 @@ are imported the same way `reduce.resid` is.
   - def edges, types on nodes, and capability and effect sets.
   - Port `typecheck.resid` checks by walking nodes instead of text.
   - Exit criterion: identical diagnostics on `tests/conformance`.
+- [ ] G2b `StrBuf`: a linear string builder type.
+  - Spec: `StrBuf b = StrBuf(); StrBuf b2 = b.push(x); Str s = b2.finish();`.
+    Every StrBuf value must be used exactly once (moved, never copied or
+    dropped), so push appends in place.
+  - Checker: a use-count pass over the graph (def edges); a second use or
+    an unused value is an error.
+  - Lowering onto the existing `str_sb_*` runtime.
+  - Then migrate hand-threaded builder code and retire `examples/stracc.resid`'s
+    pattern matching.
 - [ ] G3 Reduction on the graph.
   - Port fold, beta, eval, specialize, generalize, dead-arm and elide from
     `reduce.resid`, recording derive edges and reasons.
