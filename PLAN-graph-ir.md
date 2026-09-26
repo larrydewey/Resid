@@ -82,17 +82,28 @@ are imported the same way `reduce.resid` is.
       or too many arguments, a match missing a variant when its last arm
       had no trailing comma, non-integer range bounds, and an adopted
       literal that does not fit (`Int(8) a; a * 300`).
-    - Peak memory of a check-only run of the compiler rose from 198MB to
-      498MB (graph plus def-edge maps). Revisit with the G3 node columns.
+    - Peak memory of a check-only run of the compiler first rose from
+      198MB to 498MB, then came down to 298MB. Nodes are now one record per
+      list slot (`KN`) instead of eight parallel columns. Def edges are
+      sorted pairs made dense by node id instead of a Map. Codegen lowers
+      `xs.concat([e])` to `resid_list_push`, which skips the one-element
+      list. Profiling showed lexing is only ~30MB of the parse, so a token
+      array would not pay for itself.
   - [ ] Types stored on nodes (a column), and effect sets as node facts.
   - [ ] Field and method uses get def edges once types are stored.
-- [ ] G2b `StrBuf`: a linear string builder type.
+- [ ] G2b Linear builders: `StrBuf` and `ListBuf(T)`.
   - Spec: `StrBuf b = StrBuf(); StrBuf b2 = b.push(x); Str s = b2.finish();`.
     Every StrBuf value must be used exactly once (moved, never copied or
     dropped), so push appends in place.
   - Checker: a use-count pass over the graph (def edges); a second use or
     an unused value is an error.
   - Lowering onto the existing `str_sb_*` runtime.
+  - `ListBuf(T)`: `ListBuf(Int) b = ListBuf(); ListBuf(Int) b2 = b.push(x);
+    List(Int) xs = b2.finish();`. The same use-once rule lets push write in
+    place into one growing buffer (amortized O(1), one allocation per
+    doubling), and `finish` hands the buffer to a list with no copy. This
+    replaces the `acc.concat([x])` accumulator pattern and the growable
+    analysis that `check_growable_shape` never enabled.
   - Then migrate hand-threaded builder code and retire `examples/stracc.resid`'s
     pattern matching.
 - [ ] G3 Reduction on the graph.

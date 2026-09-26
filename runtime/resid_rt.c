@@ -2110,6 +2110,11 @@ void* resid_list_concat(void* a, void* b) {
 }
 
 
+/* xs.concat([e]) without the one-element list (codegen peephole). */
+void* resid_list_push(void* a, void* elem) {
+    return pvec_push_raw((ResidList*)a, elem);
+}
+
 /* rt_assert(c, msg) / assert(c, msg): abort with the message unless c. */
 void resid_assert(int8_t ok, const char* msg) {
     if (ok) return;

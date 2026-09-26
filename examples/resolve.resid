@@ -6,9 +6,11 @@
 // declaration. Builtins and prelude names get RS_BUILTIN. Field and method
 // names need types and are resolved by the type pass.
 
-// def edges (use id -> binder id), uses left unresolved, and binders that
-// rebind a local already in scope (binder id -> the earlier binder).
-type RS = { Map(Int, Int) def; List(Int) unres; Int uses; Map(Int, Int) shadow; };
+// def edges, uses left unresolved, and binders that rebind a local already
+// in scope (binder id -> the earlier binder). The walk appends each edge to
+// `pairs` as use * 2^32 + (def + 2); kg_resolve sorts them into `def`, a
+// column indexed by node id (-1 where a node is not a resolved use).
+type RS = { List(Int) pairs; List(Int) def; List(Int) unres; Int uses; Map(Int, Int) shadow; };
 // Global names: functions, types and sum variants.
 type RSG = { Map(Str, Int) fns; Map(Str, Int) tys; Map(Str, Int) vars; };
 // A walk result: the resolution so far and the scope after a statement.
@@ -24,41 +26,41 @@ Map(Str, Int) rs_noenv() {
 RS rs_empty() {
     Map(Int, Int) d = {};
     List(Int) u = [];
-    return RS {.def = d, .unres = u, .uses = 0, .shadow = d};
+    return RS {.pairs = u, .def = u, .unres = u, .uses = 0, .shadow = d};
 }
 
 RS rs_edge(RS r, Int use, Int def) {
-    if (def == -1) { return RS {.def = r.def, .unres = r.unres.concat([use]), .uses = r.uses + 1, .shadow = r.shadow}; }
-    return RS {.def = r.def.insert(use, def), .unres = r.unres, .uses = r.uses + 1, .shadow = r.shadow};
+    if (def == -1) { return RS {.pairs = r.pairs, .def = r.def, .unres = r.unres.concat([use]), .uses = r.uses + 1, .shadow = r.shadow}; }
+    return RS {.pairs = r.pairs.concat([use * 4294967296 + def + 2]), .def = r.def, .unres = r.unres, .uses = r.uses + 1, .shadow = r.shadow};
 }
 
 // Record `id` as a shadowing binder when `name` is already a local.
 RS rs_shadow(RS r, Map(Str, Int) env, Str name, Int id) {
     Int prev = env.get(name) else { -1 };
     if (prev < 0 || name == "_") { return r; }
-    return RS {.def = r.def, .unres = r.unres, .uses = r.uses, .shadow = r.shadow.insert(id, prev)};
+    return RS {.pairs = r.pairs, .def = r.def, .unres = r.unres, .uses = r.uses, .shadow = r.shadow.insert(id, prev)};
 }
 
 RS rs_shadow_kids(Kg g, Int id, Int from, Int to, Map(Str, Int) env, RS r) {
     if (from >= to) { return r; }
     Int k = kg_kid(g, id, from);
-    return rs_shadow_kids(g, id, from + 1, to, env.insert(g.text[k], k), rs_shadow(r, env, g.text[k], k));
+    return rs_shadow_kids(g, id, from + 1, to, env.insert(g.ns[k].text, k), rs_shadow(r, env, g.ns[k].text, k));
 }
 
 // ─── Globals ────────────────────────────────────────────────────────
 
 RSG rs_add_variants(Kg g, Int id, Int i, RSG a) {
-    if (i >= g.nk[id]) { return a; }
+    if (i >= g.ns[id].nk) { return a; }
     Int v = kg_kid(g, id, i);
-    RSG a2 = RSG {.fns = a.fns, .tys = a.tys, .vars = a.vars.insert(g.text[v], v)};
+    RSG a2 = RSG {.fns = a.fns, .tys = a.tys, .vars = a.vars.insert(g.ns[v].text, v)};
     return rs_add_variants(g, id, i + 1, a2);
 }
 
 RSG rs_globals(Kg g, Int id, Int i, RSG a) {
-    if (i >= g.nk[id]) { return a; }
+    if (i >= g.ns[id].nk) { return a; }
     Int d = kg_kid(g, id, i);
-    Str k = g.kind[d];
-    Str nm = g.text[d];
+    Str k = g.ns[d].kind;
+    Str nm = g.ns[d].text;
     RSG a2 = if (k == "sandbox") { rs_globals(g, d, 0, a) }
         else { if (k == "fn") { RSG {.fns = a.fns.insert(nm, d), .tys = a.tys, .vars = a.vars} }
         else { if (k == "sum_t") { rs_add_variants(g, d, 0, RSG {.fns = a.fns, .tys = a.tys.insert(nm, d), .vars = a.vars}) }
@@ -132,26 +134,26 @@ RSW rs_seq(Kg g, RSG gl, Int id, Int from, Int to, Map(Str, Int) env, RS r) {
 Map(Str, Int) rs_bind_kids(Kg g, Int id, Int from, Int to, Map(Str, Int) env) {
     if (from >= to) { return env; }
     Int k = kg_kid(g, id, from);
-    return rs_bind_kids(g, id, from + 1, to, env.insert(g.text[k], k));
+    return rs_bind_kids(g, id, from + 1, to, env.insert(g.ns[k].text, k));
 }
 
 // A statement; binding forms extend the scope for the statements after it.
 RSW rs_stmt(Kg g, RSG gl, Int id, Map(Str, Int) env, RS r) {
-    Str k = g.kind[id];
-    Int n = g.nk[id];
+    Str k = g.ns[id].kind;
+    Int n = g.ns[id].nk;
     if (k == "bind" || k == "rbind") {
         RS r1 = rs_expr(g, gl, kg_kid(g, id, 0), env, r);
         Map(Str, Int) penv = env.insert("value", id);
         RS r2 = rs_kids(g, gl, id, 1, n - 1, penv, r1);
         RS r3 = rs_expr(g, gl, kg_kid(g, id, n - 1), env, r2);
-        return rsw(rs_shadow(r3, env, g.text[id], id), env.insert(g.text[id], id));
+        return rsw(rs_shadow(r3, env, g.ns[id].text, id), env.insert(g.ns[id].text, id));
     }
     if (k == "letpat") {
         RS r1 = rs_kids(g, gl, id, 0, n, env, r);
-        return rsw(rs_shadow(r1, env, g.aux[id], id), env.insert(g.aux[id], id));
+        return rsw(rs_shadow(r1, env, g.ns[id].aux, id), env.insert(g.ns[id].aux, id));
     }
     if (k == "destr") {
-        RS r0 = rs_edge(r, id, rs_type(gl, g.text[id]));
+        RS r0 = rs_edge(r, id, rs_type(gl, g.ns[id].text));
         RS r1 = rs_expr(g, gl, kg_kid(g, id, n - 1), env, r0);
         return rsw(rs_shadow_kids(g, id, 0, n - 1, env, r1), rs_bind_kids(g, id, 0, n - 1, env));
     }
@@ -160,14 +162,14 @@ RSW rs_stmt(Kg g, RSG gl, Int id, Map(Str, Int) env, RS r) {
 
 // Scope a pattern condition adds to the branch it guards.
 Map(Str, Int) rs_cond_env(Kg g, Int c, Map(Str, Int) env) {
-    if (g.kind[c] == "pat") { return env.insert(g.aux[c], c); }
+    if (g.ns[c].kind == "pat") { return env.insert(g.ns[c].aux, c); }
     return env;
 }
 
 pub RS rs_expr(Kg g, RSG gl, Int id, Map(Str, Int) env, RS r) {
-    Str k = g.kind[id];
-    Int n = g.nk[id];
-    Str t = g.text[id];
+    Str k = g.ns[id].kind;
+    Int n = g.ns[id].nk;
+    Str t = g.ns[id].text;
     if (k == "ref") { return rs_edge(r, id, rs_value(gl, env, t)); }
     if (k == "ty") { return rs_edge(r, id, rs_type(gl, t)); }
     if (k == "call") { return rs_kids(g, gl, id, 0, n, env, rs_edge(r, id, rs_callee(gl, env, t))); }
@@ -190,7 +192,7 @@ pub RS rs_expr(Kg g, RSG gl, Int id, Map(Str, Int) env, RS r) {
         return rs_expr(g, gl, kg_kid(g, id, n - 1), w.env, w.r);
     }
     if (k == "arm") {
-        Map(Str, Int) aenv = if (g.aux[id] != "") { env.insert(g.aux[id], id) } else { env };
+        Map(Str, Int) aenv = if (g.ns[id].aux != "") { env.insert(g.ns[id].aux, id) } else { env };
         return rs_kids(g, gl, id, 0, n, aenv, r);
     }
     if (k == "lambda") { return rs_expr(g, gl, kg_kid(g, id, n - 1), rs_bind_kids(g, id, 0, n - 1, env), r); }
@@ -200,8 +202,8 @@ pub RS rs_expr(Kg g, RSG gl, Int id, Map(Str, Int) env, RS r) {
 
 // A declaration: params scope the body; type declarations resolve their types.
 RS rs_decl(Kg g, RSG gl, Int d, RS r) {
-    Str k = g.kind[d];
-    Int n = g.nk[d];
+    Str k = g.ns[d].kind;
+    Int n = g.ns[d].nk;
     if (k == "sandbox") { return rs_decls(g, gl, d, 0, r); }
     if (k == "fn") {
         RS r1 = rs_kids(g, gl, d, 0, n - 1, rs_noenv(), r);
@@ -217,7 +219,7 @@ RS rs_decl(Kg g, RSG gl, Int d, RS r) {
 }
 
 RS rs_decls(Kg g, RSG gl, Int id, Int i, RS r) {
-    if (i >= g.nk[id]) { return r; }
+    if (i >= g.ns[id].nk) { return r; }
     return rs_decls(g, gl, id, i + 1, rs_decl(g, gl, kg_kid(g, id, i), r));
 }
 
@@ -225,12 +227,24 @@ RS rs_decls(Kg g, RSG gl, Int id, Int i, RS r) {
 pub RS kg_resolve(Kg g, Int unit) {
     Map(Str, Int) e = {};
     RSG gl = rs_globals(g, unit, 0, RSG {.fns = e, .tys = e, .vars = e});
-    return rs_decls(g, gl, unit, 0, rs_empty());
+    RS r = rs_decls(g, gl, unit, 0, rs_empty());
+    List(Int) none = [];
+    List(Int) dense = rs_dense(list_sort_ints(r.pairs), 0, 0, kg_count(g), none);
+    return RS {.pairs = none, .def = dense, .unres = r.unres, .uses = r.uses, .shadow = r.shadow};
+}
+
+// Sorted edge pairs to one def entry per node id.
+List(Int) rs_dense(List(Int) ps, Int i, Int id, Int n, List(Int) acc) {
+    if (id >= n) { return acc; }
+    Bool hit = i < ps.len() && ps[i] / 4294967296 == id;
+    Int d = if (hit) { ps[i] % 4294967296 - 2 } else { -1 };
+    return rs_dense(ps, if (hit) { i + 1 } else { i }, id + 1, n, acc.concat([d]));
 }
 
 // The def edge of a use, -1 when unresolved or not a use.
 pub Int kg_def(RS r, Int id) {
-    return r.def.get(id) else { -1 };
+    if (id >= r.def.len()) { return -1; }
+    return r.def[id];
 }
 
 pub Bool kg_shadows(RS r, Int id) {

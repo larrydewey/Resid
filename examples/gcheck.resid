@@ -33,20 +33,20 @@ Str gk_local(GK k, Int use) {
 
 // Integer literal text of a node that is `N` or `-N`, else "".
 Str gk_whole_lit(Kg g, Int id) {
-    if (g.kind[id] == "lit" && g.aux[id] == "int") { return g.text[id]; }
-    if (g.kind[id] == "un" && g.text[id] == "-") {
+    if (g.ns[id].kind == "lit" && g.ns[id].aux == "int") { return g.ns[id].text; }
+    if (g.ns[id].kind == "un" && g.ns[id].text == "-") {
         Int c = kg_kid(g, id, 0);
-        if (g.kind[c] == "lit" && g.aux[c] == "int") { return "-" + g.text[c]; }
+        if (g.ns[c].kind == "lit" && g.ns[c].aux == "int") { return "-" + g.ns[c].text; }
     }
     return "";
 }
 
-Bool gk_bare_int(Kg g, Int id) { return g.kind[id] == "lit" && g.aux[id] == "int"; }
+Bool gk_bare_int(Kg g, Int id) { return g.ns[id].kind == "lit" && g.ns[id].aux == "int"; }
 
 // Literal flag of a binary chain operand (the text checker's lhs_lit):
 // a chain stays literal while every right operand is a bare literal.
 Bool gk_lit_flag(Kg g, Int id) {
-    if (g.kind[id] == "bin" && g.text[id] != ".." && g.text[id] != "..=") {
+    if (g.ns[id].kind == "bin" && g.ns[id].text != ".." && g.ns[id].text != "..=") {
         return gk_lit_flag(g, kg_kid(g, id, 0)) && gk_bare_int(g, kg_kid(g, id, 1));
     }
     return gk_bare_int(g, id);
@@ -56,8 +56,8 @@ Bool gk_lit_flag(Kg g, Int id) {
 
 pub GKT gk_expr(GK k, Int id, Str exp) {
     Kg g = k.g;
-    Str kind = g.kind[id];
-    Str t = g.text[id];
+    Str kind = g.ns[id].kind;
+    Str t = g.ns[id].text;
     if (kind == "lit") { return gk_lit(k, id, exp); }
     if (kind == "fstr") { return gk_fstr(k, id, 0); }
     if (kind == "ref") { return gk_ref(k, id); }
@@ -94,7 +94,7 @@ pub GKT gk_expr(GK k, Int id, Str exp) {
     if (kind == "slice") {
         GKT b = gk_expr(k, gk_kid(k, id, 0), "");
         if (b.err != "") { return b; }
-        if (g.nk[id] > 1) {
+        if (g.ns[id].nk > 1) {
             GKT h = gk_expr(k, gk_kid(k, id, 1), "");
             if (h.err != "") { return h; }
         }
@@ -111,8 +111,8 @@ pub GKT gk_expr(GK k, Int id, Str exp) {
 }
 
 GKT gk_lit(GK k, Int id, Str exp) {
-    Str lk = k.g.aux[id];
-    Str t = k.g.text[id];
+    Str lk = k.g.ns[id].aux;
+    Str t = k.g.ns[id].text;
     if (lk == "int") { return gt(if (is_int_ty(exp)) { num_norm(exp) } else { "Int" }, id); }
     if (lk == "float") { return gt(if (is_float_ty(exp)) { num_norm(exp) } else { "Float" }, id); }
     if (lk == "dec") { return gt("Dec(34)", id); }
@@ -138,9 +138,9 @@ GKT gk_lit(GK k, Int id, Str exp) {
 
 // f-string holes are checked like standalone expressions.
 GKT gk_fstr(GK k, Int id, Int i) {
-    if (i >= k.g.nk[id]) { return gt("Str", id); }
+    if (i >= k.g.ns[id].nk) { return gt("Str", id); }
     Int c = gk_kid(k, id, i);
-    Str ck = k.g.kind[c];
+    Str ck = k.g.ns[c].kind;
     if (ck == "fpart" || ck == "fspec") { return gk_fstr(k, id, i + 1); }
     GKT h = gk_expr(k, c, "");
     if (h.err != "") { return h; }
@@ -148,7 +148,7 @@ GKT gk_fstr(GK k, Int id, Int i) {
 }
 
 GKT gk_ref(GK k, Int id) {
-    Str n = k.g.text[id];
+    Str n = k.g.ns[id].text;
     if (n == "None") { return gt("Option(_)", id); }
     Str lt = gk_local(k, id);
     if (lt != "") { return gt(lt, id); }
@@ -163,7 +163,7 @@ GKT gk_ref(GK k, Int id) {
 type GKA = { Str tys; Int count; Str err; Int at; };
 
 GKA gk_args(GK k, Int id, Int i, List(Str) pts, Int pi, Str acc, Int count) {
-    if (i >= k.g.nk[id]) { return GKA {.tys = acc, .count = count, .err = "", .at = id}; }
+    if (i >= k.g.ns[id].nk) { return GKA {.tys = acc, .count = count, .err = "", .at = id}; }
     Str exp = if (pi < pts.len()) { pts[pi] } else { "" };
     GKT a = gk_expr(k, gk_kid(k, id, i), exp);
     if (a.err != "") { return GKA {.tys = acc, .count = count, .err = a.err, .at = a.at}; }
@@ -191,8 +191,8 @@ GKT gk_finish_call(GK k, Int id, Str name, Str argtys, Int argc) {
 }
 
 GKT gk_call(GK k, Int id, Str exp) {
-    Str n = k.g.text[id];
-    Int argn = k.g.nk[id];
+    Str n = k.g.ns[id].text;
+    Int argn = k.g.ns[id].nk;
     Str lty = gk_local(k, id);
     if (lty != "" && is_fn_type(lty)) { return gk_fn_call(k, id, 0, lty); }
     if (n == "sort") { return gk_sort(k, id); }
@@ -215,7 +215,7 @@ GKT gk_call(GK k, Int id, Str exp) {
 
 GKT gk_variant_call(GK k, Int id, Str n, VOwn vo) {
     if (vo.payload == "") { return gterr("variant " + n + " takes no payload (write it without parentheses)", id); }
-    if (k.g.nk[id] != 1) { return gterr("expected ) after variant payload", id); }
+    if (k.g.ns[id].nk != 1) { return gterr("expected ) after variant payload", id); }
     Int vsi = sumtype_index(k.fs, vo.sumty);
     Str vps = if (vsi >= 0) { sumv_params(k.fs.suv[vsi]) } else { "" };
     Bool gparam = vps != "" && str_contains("," + vps + ",", "," + vo.payload + ",");
@@ -247,12 +247,12 @@ GKT gk_callv(GK k, Int id) {
 
 // Behavior instance text of `Ord(Int)` / `Reverse(Ord(UInt(16)))`.
 Str gk_inst(Kg g, Int id) {
-    if (g.kind[id] != "call") { return g.text[id]; }
-    return g.text[id] + "(" + gk_inst_args(g, id, 0, "") + ")";
+    if (g.ns[id].kind != "call") { return g.ns[id].text; }
+    return g.ns[id].text + "(" + gk_inst_args(g, id, 0, "") + ")";
 }
 
 Str gk_inst_args(Kg g, Int id, Int i, Str acc) {
-    if (i >= g.nk[id]) { return acc; }
+    if (i >= g.ns[id].nk) { return acc; }
     Str a = gk_inst(g, kg_kid(g, id, i));
     return gk_inst_args(g, id, i + 1, if (acc == "") { a } else { acc + ", " + a });
 }
@@ -260,13 +260,13 @@ Str gk_inst_args(Kg g, Int id, Int i, Str acc) {
 // `sort(xs, using = Ord(T))` (spec §11).
 GKT gk_sort(GK k, Int id) {
     Kg g = k.g;
-    if (g.nk[id] < 1) { return gterr("sort expects a List, found Void", id); }
+    if (g.ns[id].nk < 1) { return gterr("sort expects a List, found Void", id); }
     GKT v = gk_expr(k, gk_kid(k, id, 0), "");
     if (v.err != "") { return v; }
     if (!str_has_prefix(v.ty, "List(")) { return gterr("sort expects a List, found " + v.ty, id); }
     Str elem = str_slice(v.ty, 5, str_len(v.ty) - 1);
-    Int u = if (g.nk[id] == 2) { gk_kid(k, id, 1) } else { -1 };
-    if (u < 0 || g.kind[u] != "named" || g.text[u] != "using") { return gterr("sort requires a behavior: sort(xs, using = Ord(T))", id); }
+    Int u = if (g.ns[id].nk == 2) { gk_kid(k, id, 1) } else { -1 };
+    if (u < 0 || g.ns[u].kind != "named" || g.ns[u].text != "using") { return gterr("sort requires a behavior: sort(xs, using = Ord(T))", id); }
     PRes stripped = strip_reverse(gk_inst(g, kg_kid(g, u, 0)), 0);
     Str inner = stripped.ty;
     Int op = str_find_char(inner, 40, 0);
@@ -291,9 +291,9 @@ GKT gk_sort(GK k, Int id) {
 // ─── Literals and aggregates ────────────────────────────────────────
 
 GKT gk_struct(GK k, Int id, Str ty, Int i) {
-    if (i >= k.g.nk[id]) { return gt(ty, id); }
+    if (i >= k.g.ns[id].nk) { return gt(ty, id); }
     Int fi = gk_kid(k, id, i);
-    Str f = k.g.text[fi];
+    Str f = k.g.ns[fi].text;
     Str ft = struct_field_type(k.fs, ty, f);
     if (ft == "") { return gterr("unknown field " + f + " in " + ty, fi); }
     GKT v = gk_expr(k, kg_kid(k.g, fi, 0), ft);
@@ -305,14 +305,14 @@ GKT gk_struct(GK k, Int id, Str ty, Int i) {
 }
 
 GKT gk_list(GK k, Int id, Str exp) {
-    if (k.g.nk[id] == 0) { return gt(if (is_list_fixed(exp)) { exp } else { "List(Unknown)" }, id); }
+    if (k.g.ns[id].nk == 0) { return gt(if (is_list_fixed(exp)) { exp } else { "List(Unknown)" }, id); }
     Str want = if (is_list_fixed(exp)) { fixed_elem(exp) } else { "" };
     return gk_list_at(k, id, 0, want, "", exp);
 }
 
 GKT gk_list_at(GK k, Int id, Int i, Str want, Str elem, Str exp) {
-    if (i >= k.g.nk[id]) {
-        Int count = k.g.nk[id];
+    if (i >= k.g.ns[id].nk) {
+        Int count = k.g.ns[id].nk;
         if (is_list_fixed(exp) && num_norm(fixed_elem(exp)) == num_norm(elem)) {
             Int cap = fixed_cap(exp);
             if (count > cap) { return gterr("list literal has " + IntToString(count) + " elements, exceeds List(" + elem + ", " + IntToString(cap) + ") capacity", id); }
@@ -346,7 +346,7 @@ GKT gk_map(GK k, Int id) {
 }
 
 GKT gk_map_at(GK k, Int id, Int i, Str key, Str val) {
-    if (i >= k.g.nk[id]) { return gt("Map(" + key + ", " + val + ")", id); }
+    if (i >= k.g.ns[id].nk) { return gt("Map(" + key + ", " + val + ")", id); }
     Int en = gk_kid(k, id, i);
     GKT kt = gk_expr(k, kg_kid(k.g, en, 0), "");
     if (kt.err != "") { return kt; }
@@ -358,7 +358,7 @@ GKT gk_map_at(GK k, Int id, Int i, Str key, Str val) {
 }
 
 GKT gk_set(GK k, Int id, Int i, Str elem) {
-    if (i >= k.g.nk[id]) { return gt("Set(" + elem + ")", id); }
+    if (i >= k.g.ns[id].nk) { return gt("Set(" + elem + ")", id); }
     GKT e = gk_expr(k, gk_kid(k, id, i), "");
     if (e.err != "") { return e; }
     if (elem != "" && !ty_same(elem, e.ty)) { return gterr("set element type mismatch: " + elem + " vs " + e.ty, e.at); }
@@ -368,7 +368,7 @@ GKT gk_set(GK k, Int id, Int i, Str elem) {
 // ─── Operators ──────────────────────────────────────────────────────
 
 GKT gk_un(GK k, Int id) {
-    Str op = k.g.text[id];
+    Str op = k.g.ns[id].text;
     GKT e = gk_expr(k, gk_kid(k, id, 0), "");
     if (e.err != "") { return e; }
     if (op == "-" || op == "+") {
@@ -384,7 +384,7 @@ GKT gk_un(GK k, Int id) {
 }
 
 GKT gk_cast(GK k, Int id) {
-    Str to = k.g.text[gk_kid(k, id, 0)];
+    Str to = k.g.ns[gk_kid(k, id, 0)].text;
     GKT e = gk_expr(k, gk_kid(k, id, 1), "");
     if (e.err != "") { return e; }
     Bool bothint = is_int_ty(to) && is_int_ty(e.ty);
@@ -396,7 +396,7 @@ GKT gk_cast(GK k, Int id) {
 
 GKT gk_bin(GK k, Int id, Str exp) {
     Kg g = k.g;
-    Str op = g.text[id];
+    Str op = g.ns[id].text;
     Int l = gk_kid(k, id, 0);
     Int r = gk_kid(k, id, 1);
     GKT lt = gk_expr(k, l, exp);
@@ -409,8 +409,8 @@ GKT gk_bin(GK k, Int id, Str exp) {
     Str lty = if (lhs_lit && !rhs_lit && !shift && is_int_ty(rt.ty)) { rt.ty } else { lt.ty };
     Str rty = if (rhs_lit && !lhs_lit && !shift && is_int_ty(lt.ty)) { lt.ty } else { rt.ty };
     // An adopted literal must fit the type it adopts (spec §6.1a).
-    Str lfit = if (lhs_lit && lty != lt.ty && gk_bare_int(g, l)) { lit_range_err(g.text[l], false, num_norm(lty)) } else { "" };
-    Str rfit = if (rhs_lit && rty != rt.ty) { lit_range_err(g.text[r], false, num_norm(rty)) } else { "" };
+    Str lfit = if (lhs_lit && lty != lt.ty && gk_bare_int(g, l)) { lit_range_err(g.ns[l].text, false, num_norm(lty)) } else { "" };
+    Str rfit = if (rhs_lit && rty != rt.ty) { lit_range_err(g.ns[r].text, false, num_norm(rty)) } else { "" };
     if (lfit != "") { return gterr(lfit, id); }
     if (rfit != "") { return gterr(rfit, id); }
     Bool range = op == ".." || op == "..=";
@@ -469,9 +469,9 @@ GKT gk_ifx(GK k, Int id, Str exp) {
     if (c.ty != "Bool") { return gterr("if condition must be Bool, got " + c.ty, c.at); }
     GKT th = gk_expr(k, gk_kid(k, id, 1), "");
     if (th.err != "") { return th; }
-    if (k.g.nk[id] < 3) { return gt(th.ty, id); }
+    if (k.g.ns[id].nk < 3) { return gt(th.ty, id); }
     Int el = gk_kid(k, id, 2);
-    GKT et = gk_expr(k, el, if (k.g.kind[el] == "ifx") { exp } else { "" });
+    GKT et = gk_expr(k, el, if (k.g.ns[el].kind == "ifx") { exp } else { "" });
     if (et.err != "") { return et; }
     Str u = gk_unify(th.ty, et.ty);
     if (u == "") { return gterr("if branches differ: " + th.ty + " vs " + et.ty, id); }
@@ -480,7 +480,7 @@ GKT gk_ifx(GK k, Int id, Str exp) {
 
 // `{ T a = e; ...; tail }`: bindings in order, then the tail's type.
 GKT gk_bexpr(GK k, Int id, Int i) {
-    Int n = k.g.nk[id];
+    Int n = k.g.ns[id].nk;
     Int c = gk_kid(k, id, i);
     if (i >= n - 1) {
         GKT t = gk_expr(k, c, "");
@@ -510,7 +510,7 @@ GKT gk_match(GK k, Int id) {
 
 // An arm body; its binding (aux) gets `bty` when it has one.
 GKT gk_arm_body(GK k, Int arm, Str bty) {
-    GK k2 = if (k.g.aux[arm] != "") { gk_bind(k, arm, bty) } else { k };
+    GK k2 = if (k.g.ns[arm].aux != "") { gk_bind(k, arm, bty) } else { k };
     return gk_expr(k2, kg_kid(k.g, arm, 0), "");
 }
 
@@ -521,13 +521,13 @@ GKT gk_arm_merge(GKT body, Str acc) {
 }
 
 GKT gk_opt_arms(GK k, Int id, Int i, Str ety, Str acc) {
-    if (i >= k.g.nk[id]) {
+    if (i >= k.g.ns[id].nk) {
         if (acc == "") { return gterr("match requires at least one arm", id); }
         return gt(acc, id);
     }
     Int a = gk_kid(k, id, i);
-    Str v = k.g.text[a];
-    Bool bound = k.g.aux[a] != "";
+    Str v = k.g.ns[a].text;
+    Bool bound = k.g.ns[a].aux != "";
     if (v == "Some" && !bound) { return gterr("expected ( in Some arm pattern", a); }
     if (v == "None" && bound) { return gterr("expected => after None arm pattern", a); }
     if (v != "Some" && v != "None") { return gterr("match arm pattern must be Some(x) or None", a); }
@@ -538,7 +538,7 @@ GKT gk_opt_arms(GK k, Int id, Int i, Str ety, Str acc) {
 
 // General sum arms; `seen` holds matched variant names (",*" after `_`).
 GKT gk_arms(GK k, Int id, Int i, List(Str) vnames, List(Str) vtypes, Str seen, Str acc) {
-    Int n = k.g.nk[id];
+    Int n = k.g.ns[id].nk;
     if (i >= n) {
         if (acc == "") { return gterr("match requires at least one arm", id); }
         if (!csv_has(seen, "*") && !all_covered_at(vnames, seen, 0)) {
@@ -547,8 +547,8 @@ GKT gk_arms(GK k, Int id, Int i, List(Str) vnames, List(Str) vtypes, Str seen, S
         return gt(acc, id);
     }
     Int a = gk_kid(k, id, i);
-    Str v = k.g.text[a];
-    Bool bound = k.g.aux[a] != "";
+    Str v = k.g.ns[a].text;
+    Bool bound = k.g.ns[a].aux != "";
     if (v == "_") {
         if (i + 1 < n) { return gterr("the `_` wildcard arm must be the last match arm", a); }
         GKT b = gk_arm_merge(gk_arm_body(k, a, ""), acc);
@@ -571,7 +571,7 @@ GKT gk_arms(GK k, Int id, Int i, List(Str) vnames, List(Str) vtypes, Str seen, S
 GKT gk_lambda(GK k, Int id, Str exp) {
     if (!is_fn_type(exp)) { return gterr("closure literal needs a closure(..) expected type", id); }
     List(Str) pl = fn_param_list(exp);
-    Int np = k.g.nk[id] - 1;
+    Int np = k.g.ns[id].nk - 1;
     if (np > pl.len()) { return gterr("too many lambda parameters", id); }
     GK k2 = gk_bind_lparams(k, id, 0, np, pl);
     GKT body = gk_expr(k2, gk_kid(k, id, np), "");
@@ -593,7 +593,7 @@ GK gk_bind_lparams(GK k, Int id, Int i, Int n, List(Str) pl) {
 GKT gk_field(GK k, Int id) {
     GKT b = gk_expr(k, gk_kid(k, id, 0), "");
     if (b.err != "") { return b; }
-    Str f = k.g.text[id];
+    Str f = k.g.ns[id].text;
     Str fty = struct_field_type(k.fs, b.ty, f);
     if (fty == "") { return gterr("field " + f + " not found in " + b.ty, id); }
     return gt(fty, id);
@@ -625,7 +625,7 @@ GKT gk_index(GK k, Int id) {
 
 // Argument `i` of a method call (kid i + 1), typed without context.
 GKT gk_marg(GK k, Int id, Int i) {
-    if (i + 1 >= k.g.nk[id]) { return gterr("unexpected token )", id); }
+    if (i + 1 >= k.g.ns[id].nk) { return gterr("unexpected token )", id); }
     return gk_expr(k, gk_kid(k, id, i + 1), "");
 }
 
@@ -638,14 +638,14 @@ GKT gk_marg_same(GK k, Int id, Str want, Str msg, Str ty) {
 }
 
 Bool gk_is_provider(GK k, Int recv) {
-    if (k.g.kind[recv] != "ref") { return false; }
-    Str n = k.g.text[recv];
+    if (k.g.ns[recv].kind != "ref") { return false; }
+    Str n = k.g.ns[recv].text;
     if (n != "environment" && n != "filesystem" && n != "args" && n != "process") { return false; }
     return kg_def(k.rs, recv) == rs_builtin();
 }
 
 GKT gk_provider(GK k, Int id, Str fam, Str m) {
-    if (k.g.nk[id] == 1) {
+    if (k.g.ns[id].nk == 1) {
         if (fam == "args" && m == "count") { return gt("Int", id); }
         return gterr("unknown provider method " + fam + "." + m, id);
     }
@@ -667,9 +667,9 @@ GKT gk_provider(GK k, Int id, Str fam, Str m) {
 
 GKT gk_mcall(GK k, Int id) {
     Int recv = gk_kid(k, id, 0);
-    Str m = k.g.text[id];
-    Int na = k.g.nk[id] - 1;
-    if (gk_is_provider(k, recv)) { return gk_provider(k, id, k.g.text[recv], m); }
+    Str m = k.g.ns[id].text;
+    Int na = k.g.ns[id].nk - 1;
+    if (gk_is_provider(k, recv)) { return gk_provider(k, id, k.g.ns[recv].text, m); }
     GKT b = gk_expr(k, recv, "");
     if (b.err != "") { return b; }
     Str bt = b.ty;
@@ -816,7 +816,7 @@ GKT gk_expect_method(GK k, Int id, Str bt, Str m, Int na) {
 // ─── Statements ─────────────────────────────────────────────────────
 
 GKS gk_stmts(GK k, Int id, Int i, Str ret) {
-    if (i >= k.g.nk[id]) { return gs_ok(k.tys); }
+    if (i >= k.g.ns[id].nk) { return gs_ok(k.tys); }
     GKS s = gk_stmt(k, gk_kid(k, id, i), ret);
     if (s.err != "") { return s; }
     return gk_stmts(gk_with(k, s.tys), id, i + 1, ret);
@@ -824,7 +824,7 @@ GKS gk_stmts(GK k, Int id, Int i, Str ret) {
 
 // Pattern head `V(x) = e`: the payload type bound to x, or an error.
 GKT gk_pat(GK k, Int id) {
-    Str v = k.g.text[id];
+    Str v = k.g.ns[id].text;
     GKT e = gk_expr(k, gk_kid(k, id, 0), "");
     if (e.err != "") { return e; }
     Bool isopt = is_opt_ty(e.ty);
@@ -836,7 +836,7 @@ GKT gk_pat(GK k, Int id) {
 
 // if / while condition: Bool, or a pattern whose binding scopes the body.
 GKS gk_cond(GK k, Int c, Str what) {
-    if (k.g.kind[c] == "pat") {
+    if (k.g.ns[c].kind == "pat") {
         GKT p = gk_pat(k, c);
         if (p.err != "") { return gs_of(k.tys, p); }
         return gs_ok(k.tys.insert(c, p.ty));
@@ -874,7 +874,7 @@ Bool gk_ret_ok(Str vt, Str ret, Str whole) {
 }
 
 GKS gk_ret(GK k, Int id, Str ret) {
-    if (k.g.nk[id] == 0) {
+    if (k.g.ns[id].nk == 0) {
         if (ret == "" || ret == "__spawn") { return gs_ok(k.tys); }
         return gs_err(k.tys, "return without a value in a " + ret + " function", id);
     }
@@ -906,10 +906,10 @@ Bool gk_bind_ok(Str vt, Str ety, Str whole) {
 
 GKS gk_bindst(GK k, Int id) {
     Kg g = k.g;
-    Str name = g.text[id];
+    Str name = g.ns[id].text;
     if (kg_shadows(k.rs, id)) { return gk_shadow_err(k, id, name); }
-    Str ty = g.text[kg_kid(g, id, 0)];
-    Int ve = kg_kid(g, id, g.nk[id] - 1);
+    Str ty = g.ns[kg_kid(g, id, 0)].text;
+    Int ve = kg_kid(g, id, g.ns[id].nk - 1);
     GKT v = gk_expr(k, ve, ty);
     if (v.err != "") { return gs_of(k.tys, v); }
     Str ety = ct_base_of(k.fs.ctn, k.fs.ctb, ty);
@@ -926,23 +926,23 @@ GKS gk_bindst(GK k, Int id) {
 }
 
 GKS gk_withbinds(GK k, Int id, Int i, Str ret) {
-    Int n = k.g.nk[id];
+    Int n = k.g.ns[id].nk;
     if (i >= n - 1) {
         GKS b = gk_stmt(k, gk_kid(k, id, n - 1), ret);
         return GKS {.tys = k.tys, .err = b.err, .at = b.at};
     }
     Int b = gk_kid(k, id, i);
-    Str ty = k.g.text[kg_kid(k.g, b, 0)];
+    Str ty = k.g.ns[kg_kid(k.g, b, 0)].text;
     GKT v = gk_expr(k, kg_kid(k.g, b, 1), ty);
     if (v.err != "") { return gs_of(k.tys, v); }
-    if (!ty_same(v.ty, ty)) { return gs_err(k.tys, "with binding " + k.g.text[b] + ": expected " + ty + ", got " + v.ty, b); }
+    if (!ty_same(v.ty, ty)) { return gs_err(k.tys, "with binding " + k.g.ns[b].text + ": expected " + ty + ", got " + v.ty, b); }
     return gk_withbinds(gk_bind(k, b, ty), id, i + 1, ret);
 }
 
 GKS gk_destr(GK k, Int id) {
     Kg g = k.g;
-    Str ty = g.text[id];
-    Int n = g.nk[id];
+    Str ty = g.ns[id].text;
+    Int n = g.ns[id].nk;
     GKT v = gk_expr(k, kg_kid(g, id, n - 1), "");
     if (v.err != "") { return gs_of(k.tys, v); }
     if (v.ty != ty) { return gs_err(k.tys, "destructuring " + ty + " from " + v.ty, id); }
@@ -952,7 +952,7 @@ GKS gk_destr(GK k, Int id) {
 GKS gk_destr_names(GK k, Int id, Int i, Int n, Str ty) {
     if (i >= n) { return gs_ok(k.tys); }
     Int nm = gk_kid(k, id, i);
-    Str f = k.g.text[nm];
+    Str f = k.g.ns[nm].text;
     Str fty = struct_field_type(k.fs, ty, f);
     if (fty == "") { return gs_err(k.tys, "unknown field " + f + " in " + ty, id); }
     if (kg_shadows(k.rs, nm)) { return gk_shadow_err(k, id, f); }
@@ -961,7 +961,7 @@ GKS gk_destr_names(GK k, Int id, Int i, Int n, Str ty) {
 
 pub GKS gk_stmt(GK k, Int id, Str ret) {
     Kg g = k.g;
-    Str kind = g.kind[id];
+    Str kind = g.ns[id].kind;
     if (kind == "ret") { return gk_ret(k, id, ret); }
     if (kind == "bind" || kind == "rbind") { return gk_bindst(k, id); }
     if (kind == "brk" || kind == "cont") { return gs_ok(k.tys); }
@@ -974,7 +974,7 @@ pub GKS gk_stmt(GK k, Int id, Str ret) {
         if (c.err != "") { return c; }
         GKS th = gk_stmt(gk_with(k, c.tys), kg_kid(g, id, 1), ret);
         if (th.err != "") { return th; }
-        if (g.nk[id] < 3) { return gs_ok(k.tys); }
+        if (g.ns[id].nk < 3) { return gs_ok(k.tys); }
         GKS el = gk_stmt(k, kg_kid(g, id, 2), ret);
         if (el.err != "") { return el; }
         return gs_ok(k.tys);
@@ -984,14 +984,14 @@ pub GKS gk_stmt(GK k, Int id, Str ret) {
         GKT it = gk_expr(k, kg_kid(g, id, 1), "");
         if (it.err != "") { return gs_of(k.tys, it); }
         if (!str_has_prefix(it.ty, "Range") && !is_list_type(it.ty)) { return gs_err(k.tys, "for-in over non-iterable " + it.ty, id); }
-        GK kb = gk_bind(k, id, g.text[kg_kid(g, id, 0)]);
+        GK kb = gk_bind(k, id, g.ns[kg_kid(g, id, 0)].text);
         GKS b = gk_stmt(kb, kg_kid(g, id, 2), ret);
         return GKS {.tys = k.tys, .err = b.err, .at = b.at};
     }
     if (kind == "letpat") {
         GKT p = gk_pat(k, id);
         if (p.err != "") { return gs_of(k.tys, p); }
-        if (kg_shadows(k.rs, id)) { return gk_shadow_err(k, id, g.aux[id]); }
+        if (kg_shadows(k.rs, id)) { return gk_shadow_err(k, id, g.ns[id].aux); }
         return gs_ok(k.tys.insert(id, p.ty));
     }
     if (kind == "destr") { return gk_destr(k, id); }
@@ -1014,32 +1014,32 @@ Map(Int, Str) gk_notys() {
 GK gk_params(GK k, Int d, Int i, Int n) {
     if (i >= n) { return k; }
     Int p = gk_kid(k, d, i);
-    Str pty = ct_base_of(k.fs.ctn, k.fs.ctb, k.g.text[kg_kid(k.g, p, 0)]);
+    Str pty = ct_base_of(k.fs.ctn, k.fs.ctb, k.g.ns[kg_kid(k.g, p, 0)].text);
     return gk_params(gk_bind(k, p, pty), d, i + 1, n);
 }
 
 GKS gk_fn(GK k, Int d) {
-    Int n = k.g.nk[d];
-    Str rbase = ct_base_of(k.fs.ctn, k.fs.ctb, k.g.text[gk_kid(k, d, 0)]);
+    Int n = k.g.ns[d].nk;
+    Str rbase = ct_base_of(k.fs.ctn, k.fs.ctb, k.g.ns[gk_kid(k, d, 0)].text);
     GK k2 = gk_params(gk_with(k, gk_notys()), d, 1, n - 1);
     GKS b = gk_stmt(k2, gk_kid(k, d, n - 1), rbase);
     if (b.err != "") { return b; }
-    if (!resid_quiet()) { println("OK func " + k.g.text[d]); }
+    if (!resid_quiet()) { println("OK func " + k.g.ns[d].text); }
     return gs_ok(k.tys);
 }
 
 // A graph diagnostic in the text checker's format, at node `at`.
 Void gk_diag(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
-    Int pos = if (at >= 0) { g.ep[at] } else { 0 };
+    Int pos = if (at >= 0) { g.ns[at].ep } else { 0 };
     diag_error(code, msg, pos, 3, src, smap, 0);
 }
 
 Int gk_decls(GK k, Int id, Int i, Str src, Str smap) {
-    if (i >= k.g.nk[id]) { return 0; }
+    if (i >= k.g.ns[id].nk) { return 0; }
     Int d = gk_kid(k, id, i);
-    Str kind = k.g.kind[d];
+    Str kind = k.g.ns[d].kind;
     if (kind == "sandbox") {
-        PRes caps = cap_list_at(k.g.aux[d] + ")", 0, true, "");
+        PRes caps = cap_list_at(k.g.ns[d].aux + ")", 0, true, "");
         if (caps.err != "") {
             eprintln("error[E0213]: " + caps.err);
             return 1;
@@ -1057,8 +1057,8 @@ Int gk_decls(GK k, Int id, Int i, Str src, Str smap) {
         return gk_decls(k, id, i + 1, src, smap);
     }
     if (kind == "behavior") {
-        Str aux = k.g.aux[d];
-        BRes bh = BRes {.pos = 0, .name = k.g.text[d], .param = kg_part(aux, 1), .impl = kg_part(aux, 2), .err = ""};
+        Str aux = k.g.ns[d].aux;
+        BRes bh = BRes {.pos = 0, .name = k.g.ns[d].text, .param = kg_part(aux, 1), .impl = kg_part(aux, 2), .err = ""};
         if (validate_behavior(k.fs, bh) != 0) { return 1; }
         if (!resid_quiet()) { println("OK behavior " + bh.name); }
         return gk_decls(k, id, i + 1, src, smap);
@@ -1080,34 +1080,34 @@ Str gk_requires(Str prefix) {
 
 Str gk_join_kids_ty(Kg g, Int id, Int from, Int to, Str acc) {
     if (from >= to) { return acc; }
-    Str t = g.text[kg_kid(g, kg_kid(g, id, from), 0)];
+    Str t = g.ns[kg_kid(g, kg_kid(g, id, from), 0)].text;
     return gk_join_kids_ty(g, id, from + 1, to, if (from == 1) { t } else { acc + "," + t });
 }
 
 Str gk_join_kids_name(Kg g, Int id, Int from, Int to, Str acc) {
     if (from >= to) { return acc; }
-    Str t = g.text[kg_kid(g, id, from)];
+    Str t = g.ns[kg_kid(g, id, from)].text;
     return gk_join_kids_name(g, id, from + 1, to, if (from == 1) { t } else { acc + "," + t });
 }
 
 // "x:Int,y:Str" for a struct declaration.
 Str gk_fields(Kg g, Int id, Int i, Str acc) {
-    if (i >= g.nk[id]) { return acc; }
+    if (i >= g.ns[id].nk) { return acc; }
     Int f = kg_kid(g, id, i);
-    Str e = g.text[f] + ":" + g.text[kg_kid(g, f, 0)];
+    Str e = g.ns[f].text + ":" + g.ns[kg_kid(g, f, 0)].text;
     return gk_fields(g, id, i + 1, if (acc == "") { e } else { acc + "," + e });
 }
 
 Str gk_variant_names(Kg g, Int id, Int i, Str acc) {
-    if (i >= g.nk[id]) { return acc; }
+    if (i >= g.ns[id].nk) { return acc; }
     Int v = kg_kid(g, id, i);
-    return gk_variant_names(g, id, i + 1, if (i == 0) { g.text[v] } else { acc + "|" + g.text[v] });
+    return gk_variant_names(g, id, i + 1, if (i == 0) { g.ns[v].text } else { acc + "|" + g.ns[v].text });
 }
 
 Str gk_variant_types(Kg g, Int id, Int i, Str acc) {
-    if (i >= g.nk[id]) { return acc; }
+    if (i >= g.ns[id].nk) { return acc; }
     Int v = kg_kid(g, id, i);
-    return gk_variant_types(g, id, i + 1, if (i == 0) { g.aux[v] } else { acc + "|" + g.aux[v] });
+    return gk_variant_types(g, id, i + 1, if (i == 0) { g.ns[v].aux } else { acc + "|" + g.ns[v].aux });
 }
 
 // Generic parameters of a type declaration as "T,U" ("" when none).
@@ -1122,41 +1122,41 @@ Str gk_type_params(Str aux) {
 type GKSig = { Sigs fs; List(Int) fnode; };
 
 GKSig gk_sigs_at(Kg g, Int id, Int i, Str ceil, GKSig a) {
-    if (i >= g.nk[id]) { return a; }
+    if (i >= g.ns[id].nk) { return a; }
     Int d = kg_kid(g, id, i);
-    Str kind = g.kind[d];
+    Str kind = g.ns[d].kind;
     Sigs fs = a.fs;
     if (kind == "sandbox") {
-        PRes caps = cap_list_at(g.aux[d] + ")", 0, true, "");
+        PRes caps = cap_list_at(g.ns[d].aux + ")", 0, true, "");
         GKSig inner = if (caps.err == "") { gk_sigs_at(g, d, 0, ceil_join(ceil, caps.ty), a) } else { a };
         return gk_sigs_at(g, id, i + 1, ceil, inner);
     }
     if (kind == "fn") {
-        Int n = g.nk[d];
-        Str nm = g.text[d];
+        Int n = g.ns[d].nk;
+        Str nm = g.ns[d].text;
         Int idx = fs.names.len();
-        Sigs f2 = Sigs {.names = fs.names.concat([nm]), .pts = fs.pts.concat([gk_join_kids_ty(g, d, 1, n - 1, "")]), .pns = fs.pns.concat([gk_join_kids_name(g, d, 1, n - 1, "")]), .rets = fs.rets.concat([g.text[kg_kid(g, d, 0)]]), .reqs = fs.reqs.concat([gk_requires(g.aux[d])]), .ceils = fs.ceils.concat([ceil]), .bods = fs.bods.concat([""]), .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns.insert(nm, idx), .growable = fs.growable};
+        Sigs f2 = Sigs {.names = fs.names.concat([nm]), .pts = fs.pts.concat([gk_join_kids_ty(g, d, 1, n - 1, "")]), .pns = fs.pns.concat([gk_join_kids_name(g, d, 1, n - 1, "")]), .rets = fs.rets.concat([g.ns[kg_kid(g, d, 0)].text]), .reqs = fs.reqs.concat([gk_requires(g.ns[d].aux)]), .ceils = fs.ceils.concat([ceil]), .bods = fs.bods.concat([""]), .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns.insert(nm, idx), .growable = fs.growable};
         return gk_sigs_at(g, id, i + 1, ceil, GKSig {.fs = f2, .fnode = a.fnode.concat([d])});
     }
     if (kind == "struct_t") {
-        Sigs f2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn.concat([g.text[d]]), .stf = fs.stf.concat([gk_fields(g, d, 0, "")]), .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
+        Sigs f2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn.concat([g.ns[d].text]), .stf = fs.stf.concat([gk_fields(g, d, 0, "")]), .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
         return gk_sigs_at(g, id, i + 1, ceil, GKSig {.fs = f2, .fnode = a.fnode});
     }
     if (kind == "sum_t") {
-        Str gp = gk_type_params(g.aux[d]);
+        Str gp = gk_type_params(g.ns[d].aux);
         Str suv = gk_variant_names(g, d, 0, "") + ";" + gk_variant_types(g, d, 0, "") + if (gp == "") { "" } else { ";" + gp };
-        Sigs f2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun.concat([g.text[d]]), .suv = fs.suv.concat([suv]), .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
+        Sigs f2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun.concat([g.ns[d].text]), .suv = fs.suv.concat([suv]), .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
         return gk_sigs_at(g, id, i + 1, ceil, GKSig {.fs = f2, .fnode = a.fnode});
     }
     if (kind == "alias_t" || kind == "ctype_t" || kind == "cwhere_t") {
-        Str base = g.text[kg_kid(g, d, 0)];
+        Str base = g.ns[kg_kid(g, d, 0)].text;
         Str ctext = if (kind == "alias_t") { "" } else { kg_print(g, kg_kid(g, d, 1)) };
-        Sigs f2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn.concat([g.text[d]]), .ctb = fs.ctb.concat([base]), .ctc = fs.ctc.concat([ctext]), .fns = fs.fns, .growable = fs.growable};
+        Sigs f2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .exp_tys = fs.exp_tys, .ctn = fs.ctn.concat([g.ns[d].text]), .ctb = fs.ctb.concat([base]), .ctc = fs.ctc.concat([ctext]), .fns = fs.fns, .growable = fs.growable};
         return gk_sigs_at(g, id, i + 1, ceil, GKSig {.fs = f2, .fnode = a.fnode});
     }
     if (kind == "behavior") {
-        Str aux = g.aux[d];
-        Sigs f2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames.concat([g.text[d]]), .bparams = fs.bparams.concat([kg_part(aux, 1)]), .bfns = fs.bfns.concat([kg_part(aux, 2)]), .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
+        Str aux = g.ns[d].aux;
+        Sigs f2 = Sigs {.names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .bods = fs.bods, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames.concat([g.ns[d].text]), .bparams = fs.bparams.concat([kg_part(aux, 1)]), .bfns = fs.bfns.concat([kg_part(aux, 2)]), .exp_tys = fs.exp_tys, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .fns = fs.fns, .growable = fs.growable};
         return gk_sigs_at(g, id, i + 1, ceil, GKSig {.fs = f2, .fnode = a.fnode});
     }
     return gk_sigs_at(g, id, i + 1, ceil, a);
@@ -1188,31 +1188,31 @@ GKF gf_add(GKF f, Str which, Str v) {
 
 // Is `id` a call of a user function (by def edge)?
 Bool gk_user_call(GK k, Int id) {
-    if (k.g.kind[id] != "call") { return false; }
+    if (k.g.ns[id].kind != "call") { return false; }
     Int d = kg_def(k.rs, id);
-    return d >= 0 && k.g.kind[d] == "fn";
+    return d >= 0 && k.g.ns[d].kind == "fn";
 }
 
 // Provider family of a provider method call node, or "".
 Str gk_prov_family(GK k, Int id) {
-    if (k.g.kind[id] != "mcall") { return ""; }
+    if (k.g.ns[id].kind != "mcall") { return ""; }
     Int recv = kg_kid(k.g, id, 0);
     if (!gk_is_provider(k, recv)) { return ""; }
-    Str fam = k.g.text[recv];
-    if (!is_prov_family(fam) || !is_prov_verb(fam, k.g.text[id])) { return ""; }
+    Str fam = k.g.ns[recv].text;
+    if (!is_prov_family(fam) || !is_prov_verb(fam, k.g.ns[id].text)) { return ""; }
     return fam;
 }
 
 GKF gk_facts(GK k, Int id, GKF f) {
-    GKF f1 = if (gk_user_call(k, id)) { gf_add(f, "c", k.g.text[id]) } else { f };
+    GKF f1 = if (gk_user_call(k, id)) { gf_add(f, "c", k.g.ns[id].text) } else { f };
     Str fam = gk_prov_family(k, id);
     GKF f2 = if (fam == "") { f1 } else { gf_add(f1, "p", fam) };
-    GKF f3 = if (fam != "" && is_write_verb(fam, k.g.text[id])) { gf_add(f2, "w", fam + "." + k.g.text[id]) } else { f2 };
+    GKF f3 = if (fam != "" && is_write_verb(fam, k.g.ns[id].text)) { gf_add(f2, "w", fam + "." + k.g.ns[id].text) } else { f2 };
     return gk_facts_kids(k, id, 0, f3);
 }
 
 GKF gk_facts_kids(GK k, Int id, Int i, GKF f) {
-    if (i >= k.g.nk[id]) { return f; }
+    if (i >= k.g.ns[id].nk) { return f; }
     return gk_facts_kids(k, id, i + 1, gk_facts(k, kg_kid(k.g, id, i), f));
 }
 
@@ -1228,23 +1228,23 @@ GKFs gk_all_facts(GK k, List(Int) fnode, Int i, GKFs a) {
 
 // File-typed parameter names of fn node `d`.
 List(Str) gk_file_params(Kg g, Int d, Int i, List(Str) acc) {
-    if (i >= g.nk[d] - 1) { return acc; }
+    if (i >= g.ns[d].nk - 1) { return acc; }
     Int p = kg_kid(g, d, i);
-    Bool file = g.kind[p] == "param" && g.text[kg_kid(g, p, 0)] == "File";
-    return gk_file_params(g, d, i + 1, if (file) { acc.concat([g.text[p]]) } else { acc });
+    Bool file = g.ns[p].kind == "param" && g.ns[kg_kid(g, p, 0)].text == "File";
+    return gk_file_params(g, d, i + 1, if (file) { acc.concat([g.ns[p].text]) } else { acc });
 }
 
 // Does the body pass a File parameter as the sole argument of another user fn?
 Bool gk_file_passed(GK k, Int id, Int self, List(Str) fps) {
-    if (gk_user_call(k, id) && kg_def(k.rs, id) != self && k.g.nk[id] == 1) {
+    if (gk_user_call(k, id) && kg_def(k.rs, id) != self && k.g.ns[id].nk == 1) {
         Int a = kg_kid(k.g, id, 0);
-        if (k.g.kind[a] == "ref" && list_contains_str(fps, k.g.text[a])) { return true; }
+        if (k.g.ns[a].kind == "ref" && list_contains_str(fps, k.g.ns[a].text)) { return true; }
     }
     return gk_file_passed_kids(k, id, 0, self, fps);
 }
 
 Bool gk_file_passed_kids(GK k, Int id, Int i, Int self, List(Str) fps) {
-    if (i >= k.g.nk[id]) { return false; }
+    if (i >= k.g.ns[id].nk) { return false; }
     if (gk_file_passed(k, kg_kid(k.g, id, i), self, fps)) { return true; }
     return gk_file_passed_kids(k, id, i + 1, self, fps);
 }
@@ -1297,8 +1297,8 @@ Bool gk_enforce_all(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int i
 // Spawn bounds (E0214, E0215) over a body; the first violation or "".
 Str gk_spawn_scan(GK k, Int id, Bool bounded, Str parent) {
     Kg g = k.g;
-    if (g.kind[id] == "spawn") {
-        PRes caps = cap_list_at(g.aux[id] + ")", 0, true, "");
+    if (g.ns[id].kind == "spawn") {
+        PRes caps = cap_list_at(g.ns[id].aux + ")", 0, true, "");
         if (caps.err != "") { return ""; }
         if (bounded) {
             Str over = if (caps.ty == "") { "" } else { spawn_cap_exceeds_at(str_split(caps.ty, ","), parent, 0) };
@@ -1307,14 +1307,14 @@ Str gk_spawn_scan(GK k, Int id, Bool bounded, Str parent) {
         return gk_spawn_kids(k, id, 0, true, caps.ty);
     }
     if (bounded && gk_user_call(k, id)) {
-        Str m = spawn_call_check(k.fs, g.text[id], parent);
+        Str m = spawn_call_check(k.fs, g.ns[id].text, parent);
         if (m != "") { return m; }
     }
     return gk_spawn_kids(k, id, 0, bounded, parent);
 }
 
 Str gk_spawn_kids(GK k, Int id, Int i, Bool bounded, Str parent) {
-    if (i >= k.g.nk[id]) { return ""; }
+    if (i >= k.g.ns[id].nk) { return ""; }
     Str m = gk_spawn_scan(k, kg_kid(k.g, id, i), bounded, parent);
     if (m != "") { return m; }
     return gk_spawn_kids(k, id, i + 1, bounded, parent);
