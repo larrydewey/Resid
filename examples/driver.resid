@@ -15841,7 +15841,7 @@ List(Int) prov_file_hash(Str p) {
 // The debug-info unit: compile unit !1, flags !2 !3, subroutine type !4,
 // and a DIFile !10+k per source.
 List(Str) dbg_unit_ir(List(Str) paths) {
-    List(Str) head = ["!llvm.dbg.cu = !{!1}", "!llvm.module.flags = !{!2, !3}", "!1 = distinct !DICompileUnit(language: DW_LANG_C, file: !10, producer: \"residc\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)", "!2 = !{i32 2, !\"Debug Info Version\", i32 3}", "!3 = !{i32 7, !\"Dwarf Version\", i32 5}", "!4 = !DISubroutineType(types: !{})"];
+    List(Str) head = ["!llvm.dbg.cu = !{!1}", "!llvm.module.flags = !{!2, !3}", "!1 = distinct !DICompileUnit(language: DW_LANG_C, file: !10, producer: \"residc\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)", "!2 = !{i32 2, !\"Debug Info Version\", i32 3}", "!3 = !{i32 7, !\"Dwarf Version\", i32 5}", "!4 = !DISubroutineType(types: !{})", "!0 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64)", "!5 = !DIBasicType(name: \"Int\", size: 64, encoding: DW_ATE_signed)", "!6 = !DIBasicType(name: \"Bool\", size: 8, encoding: DW_ATE_boolean)", "!7 = !DIBasicType(name: \"Float\", size: 64, encoding: DW_ATE_float)", "!8 = !DIBasicType(name: \"char\", size: 8, encoding: DW_ATE_signed_char)", "!9 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !8, size: 64)", "declare void @llvm.dbg.value(metadata, metadata, metadata)"];
     return head.concat(dbg_files(paths, 0, nil_list()));
 }
 
@@ -16136,10 +16136,6 @@ Int main() {
     // `resid-manifest depmap`).
     RRes rr0 = imp_resolve_file(path, ";", 0, depmap);
     RRes rr = RRes {.text = ds_desugar(with_builtin_types(rr0.text)), .done = rr0.done, .map = rr0.map, .nl = rr0.nl};
-    if (!testmode) {
-        println(IntToString(str_len(rr.text)));
-        println(str_slice(rr.text, 0, 40));
-    }
     // Comptime discovery: rewrite each `test "..." { }` into a plain
     // declaration and keep the display names for the generated entry point.
     TD td  =  if (testmode) { td_desugar(rr.text) } else { TD {.text = rr.text, .names = [], .syms = [], .err = ""} };

@@ -269,7 +269,11 @@ import source map), attached to every instruction of that statement, so
 gdb breaks, steps and backtraces in Resid source; specialized functions
 report their original's lines. Lowering marks statement starts with
 `;@dbg` lines and a post-pass (after tail-call rewriting) tags them.
-Debug self-compile: 664MB peak, 5.3s.
+Debug self-compile: 664MB peak, 5.3s. Parameters and bindings are
+DWARF local variables through `llvm.dbg.value` (after the tail-call
+loop's phis for parameters), so `info args` and `info locals` work, and a
+module function is named without its `__m<module>__` prefix, so
+`break lw_fn` works. Debug self-compile: 700MB peak.
 
 ### 0t. Signatures from the graph (G3/G4, 2026-09-26)
 

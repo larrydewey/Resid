@@ -1558,8 +1558,10 @@ ST lw_stmts(LW w, Int id, Int i, List(Str) env, Bool in_main, ST g) {
     if (i >= w.g.ns[id].nk) { return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines, .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety}; }
     // A `;@dbg node` marker starts each statement's lines (lw_dbg_fn).
     ST g2 = if (w.dbg) { ST {.pos = 0, .dead = g.dead, .err = "", .env = g.env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines.concat([";@dbg " + IntToString(lw_kid(w, id, i))]), .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety} } else { g };
-    ST r = lw_stmt(w, lw_kid(w, id, i), env, in_main, g2);
-    if (r.err != "" || r.dead) { return r; }
+    Int sid = lw_kid(w, id, i);
+    ST r0 = lw_stmt(w, sid, env, in_main, g2);
+    if (r0.err != "" || r0.dead) { return r0; }
+    ST r = if (w.dbg) { lw_dbv(w, sid, r0) } else { r0 };
     return lw_stmts(w, id, i + 1, r.env, in_main, r);
 }
 
@@ -2049,7 +2051,7 @@ PG lw_fn(LW w, Int d, PG g) {
     Str defpost = ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
     List(Str) fn_lines = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, lmask) } else { pp1.lines.concat(pp2.lines) };
     List(Str) own0 = fn_lines.concat(["}"]);
-    LDG dg = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
+    LDG dg = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos, tyl) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
     Int final_tmp = body.tmp;
     Int final_lbl = body.lbl;
     List(Str) persisted_own_lines = resid_list_str_persist_copy(dg.lines);
@@ -2067,31 +2069,113 @@ type LDG = { List(Str) lines; List(Str) meta; Int next; };
 
 pub Str lw_dbg_q(Str s) { return str_replace(str_replace(s, "\\", "\\5C"), "\"", "\\22"); }
 
-LDG lw_dbg_fn(LW w, Int d, Str name, List(Str) ls, Int next) {
+LDG lw_dbg_fn(LW w, Int d, Str name, List(Str) ls, Int next, List(Str) tyl) {
     List(Int) at = ga_where(w.df, w.g.ns[d].sp);
     Str file = "!" + IntToString(10 + at[0]);
     Str sp = "!" + IntToString(next);
-    Str spl = sp + " = distinct !DISubprogram(name: \"" + lw_dbg_q(name) + "\", scope: " + file + ", file: " + file + ", line: " + IntToString(at[1]) + ", type: !4, scopeLine: " + IntToString(at[1]) + ", spFlags: DISPFlagDefinition, unit: !1)";
+    // A module function's symbol is `__m<module>__name`; the debugger
+    // shows the name (C units take a linkage name over it, so none).
+    Int mm = if (str_starts_with(name, "__m")) { str_find(str_slice(name, 3, str_len(name)), "__") } else { -1 };
+    Str shown = if (mm >= 0) { str_slice(name, mm + 5, str_len(name)) } else { name };
+    Str spl = sp + " = distinct !DISubprogram(name: \"" + lw_dbg_q(shown) + "\", scope: " + file + ", file: " + file + ", line: " + IntToString(at[1]) + ", type: !4, scopeLine: " + IntToString(at[1]) + ", spFlags: DISPFlagDefinition, unit: !1)";
     Str l0 = "!" + IntToString(next + 1);
     Str l0l = l0 + " = !DILocation(line: " + IntToString(at[1]) + ", column: " + IntToString(at[2]) + ", scope: " + sp + ")";
     Str def = ls[0];
     Str def2 = str_slice(def, 0, str_len(def) - 2) + " !dbg " + sp + " {";
     ListBuf(Str) o0 = ListBuf();
-    return lw_dbg_lines(w, ls, 1, sp, l0, next + 2, o0.push(def2), [spl, l0l]);
+    // Parameters: after the tail-call loop's phis, else at entry.
+    Int th = lw_find_line(ls, "tco.head:", 1);
+    Int pk = if (th < 0) { lw_find_line(ls, "entry:", 1) + 1 } else { lw_after_phis(ls, th + 1) };
+    LDV pv = if (name == "main") { LDV {.lines = [], .meta = [], .next = next + 2} } else { lw_dbg_params(w, d, tyl, 1, sp, file, at[1], l0, LDV {.lines = [], .meta = [], .next = next + 2}) };
+    return lw_dbg_lines(w, ls, 1, sp, l0, pv.next, o0.push(def2), [spl, l0l].concat(pv.meta), pk, pv.lines);
 }
 
-LDG lw_dbg_lines(LW w, List(Str) ls, Int i, Str sp, Str cur, Int next, ListBuf(Str) out, List(Str) meta) {
+type LDV = { List(Str) lines; List(Str) meta; Int next; };
+
+Int lw_find_line(List(Str) ls, Str l, Int i) {
+    if (i >= ls.len()) { return -1; }
+    if (ls[i] == l) { return i; }
+    return lw_find_line(ls, l, i + 1);
+}
+
+Int lw_after_phis(List(Str) ls, Int i) {
+    if (i < ls.len() && str_contains(ls[i], " = phi ")) { return lw_after_phis(ls, i + 1); }
+    return i;
+}
+
+LDV lw_dbg_params(LW w, Int d, List(Str) tyl, Int i, Str sp, Str file, Int line, Str loc, LDV acc) {
+    if (i >= w.g.ns[d].nk - 1 || i - 1 >= tyl.len()) { return acc; }
+    Str ty = tyl[i - 1];
+    Str id = "!" + IntToString(acc.next);
+    List(Str) v = lw_dbg_var(id, lw_text(w, lw_kid(w, d, i)), i, sp, file, line, ll_ty(ty), ty, "%p" + IntToString(i - 1), loc);
+    LDV nx = if (v.len() == 0) { acc } else { LDV {.lines = acc.lines.concat([v[1]]), .meta = acc.meta.concat([v[0]]), .next = acc.next + 1} };
+    return lw_dbg_params(w, d, tyl, i + 1, sp, file, line, loc, nx);
+}
+
+LDG lw_dbg_lines(LW w, List(Str) ls, Int i, Str sp, Str cur, Int next, ListBuf(Str) out, List(Str) meta, Int pk, List(Str) pls) {
     if (i >= ls.len()) { return LDG {.lines = out.finish(), .meta = meta, .next = next}; }
+    if (i == pk && pls.len() > 0) { return lw_dbg_lines(w, ls, i, sp, cur, next, lw_push_all(out, pls, 0), meta, -1, pls); }
     Str l = ls[i];
+    if (str_starts_with(l, ";@dbv ")) {
+        List(Str) ps = str_split(str_slice(l, 6, str_len(l)), "|");
+        Int nid = str_parse_int(ps[0]);
+        List(Int) at = ga_where(w.df, w.g.ns[nid].sp);
+        Str id = "!" + IntToString(next);
+        Str ty = w.g.ns[kg_kid(w.g, nid, 0)].text;
+        List(Str) v = lw_dbg_var(id, ps[1], 0, sp, "!" + IntToString(10 + at[0]), at[1], ps[2], ty, ps[3], cur);
+        if (v.len() == 0) { return lw_dbg_lines(w, ls, i + 1, sp, cur, next, out, meta, pk, pls); }
+        return lw_dbg_lines(w, ls, i + 1, sp, cur, next + 1, out.push(v[1]), meta.concat([v[0]]), pk, pls);
+    }
     if (str_starts_with(l, ";@dbg ")) {
         List(Int) at = ga_where(w.df, w.g.ns[str_parse_int(str_slice(l, 6, str_len(l)))].sp);
         Str id = "!" + IntToString(next);
         Str ml = id + " = !DILocation(line: " + IntToString(at[1]) + ", column: " + IntToString(at[2]) + ", scope: " + sp + ")";
-        return lw_dbg_lines(w, ls, i + 1, sp, id, next + 1, out, meta.concat([ml]));
+        return lw_dbg_lines(w, ls, i + 1, sp, id, next + 1, out, meta.concat([ml]), pk, pls);
     }
     Bool plain = l == "" || l == "}" || str_ends_with(l, ":") || str_starts_with(l, ";");
     Str l2 = if (plain) { l } else { l + ", !dbg " + cur };
-    return lw_dbg_lines(w, ls, i + 1, sp, cur, next, out.push(l2), meta);
+    return lw_dbg_lines(w, ls, i + 1, sp, cur, next, out.push(l2), meta, pk, pls);
+}
+
+ListBuf(Str) lw_push_all(ListBuf(Str) b, List(Str) xs, Int i) {
+    if (i >= xs.len()) { return b; }
+    return lw_push_all(b.push(xs[i]), xs, i + 1);
+}
+
+// After a binding: a `;@dbv node|name|llty|val` marker for its dbg.value.
+ST lw_dbv(LW w, Int sid, ST r) {
+    Str k = lw_kind(w, sid);
+    if (k != "bind" && k != "rbind") { return r; }
+    Str nm = lw_text(w, sid);
+    Str e = env_lookup(r.env, nm);
+    if (e == "") { return r; }
+    List(Str) ps = str_split(e, ":");
+    if (ps.len() < 3 || ps[1] == "") { return r; }
+    Str m = ";@dbv " + IntToString(sid) + "|" + nm + "|" + ll_ty(ps[2]) + "|" + ps[1];
+    return ST {.pos = r.pos, .dead = r.dead, .err = r.err, .env = r.env, .glines = r.glines, .hlines = r.hlines, .lines = r.lines.concat([m]), .tmp = r.tmp, .lbl = r.lbl, .rety = r.rety};
+}
+
+// DWARF type of an LLVM value type (the driver's fixed !0, !5-!9), or ""
+// when none is described.
+Str lw_dbg_ty(Str llty, Str ty) {
+    if (llty == "i64") { return "!5"; }
+    if (llty == "i1") { return "!6"; }
+    if (llty == "double") { return "!7"; }
+    if (llty == "ptr") { return if (ty == "Str") { "!9" } else { "!0" }; }
+    return "";
+}
+
+// A variable's metadata and its dbg.value call; "" when its type is not
+// described.
+List(Str) lw_dbg_var(Str id, Str nm, Int arg, Str sp, Str file, Int line, Str llty, Str ty, Str val, Str loc) {
+    Str dt = lw_dbg_ty(llty, ty);
+    if (dt == "") { return []; }
+    Str ap = if (arg > 0) { ", arg: " + IntToString(arg) } else { "" };
+    Str ml = id + " = !DILocalVariable(name: \"" + lw_dbg_q(nm) + "\"" + ap + ", scope: " + sp + ", file: " + file + ", line: " + IntToString(line) + ", type: " + dt + ")";
+    // An i1 may sit in its register as 0 / -1; the expression masks it.
+    Str ex = if (llty == "i1") { "!DIExpression(DW_OP_constu, 1, DW_OP_and, DW_OP_stack_value)" } else { "!DIExpression()" };
+    Str cl = "call void @llvm.dbg.value(metadata " + llty + " " + val + ", metadata " + id + ", metadata " + ex + "), !dbg " + loc;
+    return [ml, cl];
 }
 
 // ToString of a struct (cg_struct_to_string): the formatting expression is
