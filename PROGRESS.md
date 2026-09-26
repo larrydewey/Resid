@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  156, reduce 14, provenance 20, graph 380. The archived Rust workspace
+  157, reduce 14, provenance 20, graph 386. The archived Rust workspace
   (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
   821 tests; its e2e now has 128 after removing tests of the retired text
   paths); see `AGENTS.md` for its slow-test table.
@@ -305,6 +305,34 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 619MB (606MB without facts). The artifact carries a RESIDUAL node's range
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
+
+### 0z. Native debugger backend, more facts, builders (2026-09-26)
+
+`resid-debug` live mode no longer needs gdb. The runtime has small
+ptrace primitives (`resid_dbg_spawn/wait/cont/step/peek/poke/reg/set_pc/
+kill`; every thread of the program is traced, since `main` runs on its
+own thread), and everything else is resid: `lib/dwarf.resid` reads
+`.debug_info`, abbreviations and DWARF 5 location lists; resid-debug
+evaluates location expressions (registers, `fbreg`, `breg`, `deref_size`,
+stack values), plants int3 breakpoints, steps by node over calls
+(recursion-safe: a return breakpoint only counts at the caller's stack
+depth), and on a signal in runtime code scans the stack for the
+program's calling node, so an overflow abort names the binding that
+overflowed. Its output matches the gdb backend's (`backend gdb`).
+
+Facts: `x != 0` makes x nonzero, which discharges divisions; a list
+literal's length and `i < xs.len()` (from `for (i in a..xs.len())` or a
+condition) discharge list bounds checks (`resid_list_get_nc`); match
+arms and patterns give a scrutinee its variant, and struct-literal
+bindings give references their field nodes. Debug builds record every
+runtime check (`; discharged #id check` / `; checked #id check` in the
+IR), and the artifact lists them as discharged facts with the operands
+used, or check facts with the operands that lacked a range. Self-compile:
+840 checks discharged, 2,431 kept. Found on the way: lowering of
+`for (i in a..b)` dropped the code computing non-literal bounds (and of
+`for (x in e)` the code computing e), a latent bug the text codegen
+shared; fixed. The straight accumulators (parser lists, parameter lists,
+grafts, lint hits, checker lists) now use `ListBuf`.
 
 ### 0y. Text passes retired: the compiler runs on the graph (G7, 2026-09-26)
 
