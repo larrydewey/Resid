@@ -161,8 +161,10 @@ are imported the same way `reduce.resid` is.
     DILocation per statement (its source line and column) on every
     instruction. Columns cannot hold node ids (LLVM keeps 16 bits), so
     locations map to nodes through the artifact's spans.
-  - Residual bindings get dbg.value with their node id; the graph's
-    lowered table.
+  - [x] Parameters and bindings get dbg.value (gdb `info locals` /
+    `info args`); variables map to nodes through their lines, like
+    locations.
+  - The graph's lowered table (needs code offsets: G6's DWARF reader).
   - Exit criterion: `./boot.sh` reaches a fixed point with `--graph` as the
     default.
 - [ ] G5 Tools and conformance.

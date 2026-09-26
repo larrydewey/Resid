@@ -1,0 +1,19 @@
+Int sq(Int n, Str tag) {
+    Int m = n * n;
+    Bool big = m > 10;
+    Str msg = tag + "!";
+    println(msg);
+    return m;
+}
+
+Int sum(Int acc, Int i) {
+    if (i == 0) { return acc; }
+    return sum(acc + i, i - 1);
+}
+
+Int main() {
+    Int a = sq(args.count() + 3, "hi");
+    Int b = sum(0, a);
+    println(IntToString(b));
+    return 0;
+}

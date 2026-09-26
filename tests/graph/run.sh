@@ -99,5 +99,22 @@ for f in examples/driver.resid tests/reduce/cases/*.resid tests/conformance/case
     esac
 done
 rm -f /tmp/resid_gsig_$$*
+# Debug builds describe functions, parameters and bindings in DWARF; with
+# gdb present, a breakpoint shows them.
+DB="$CK/dbg"
+if "$COMPILER" tests/graph/cases/debug_locals.resid -o "$DB" --profile debug >/dev/null 2>&1 \
+    && grep -q 'DILocalVariable(name: "msg"' "$DB.ll" && grep -q 'DILocalVariable(name: "acc", arg: 1' "$DB.ll"; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL debug_locals: no DILocalVariable for a binding or parameter"
+fi
+if command -v gdb >/dev/null 2>&1 && [ -x "$DB" ]; then
+    got="$(gdb -batch -ex 'break debug_locals.resid:5' -ex run -ex 'info locals' -ex 'info args' "$DB" 2>&1)"
+    if [[ "$got" == *"m = 16"* && "$got" == *'msg = '*'"hi!"'* && "$got" == *'tag = '*'"hi"'* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL debug_locals under gdb"
+    fi
+fi
 echo "graph: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
