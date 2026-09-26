@@ -56,6 +56,12 @@ pub KP kg_fail(Kg g, Int pos, Str msg) {
     return KP {.g = g, .id = -1, .pos = pos, .err = msg};
 }
 
+// A failure that drops the ids built so far.
+KL kl_fail_b(ListBuf(Int) acc, Kg g, Int pos, Str msg) {
+    List(Int) dropped = acc.finish();
+    return kl_fail(g, pos, msg);
+}
+
 KL kl_fail(Kg g, Int pos, Str msg) {
     List(Int) e = [];
     return KL {.g = g, .ids = e, .pos = pos, .err = msg};
@@ -579,18 +585,18 @@ pub KP kg_block(Str s, Kg g, Int pos) {
     Tok open = lex_tok(s, pos);
     if (open.text != "{") { return kg_fail(g, open.pos, "expected {, found " + open.text); }
     List(Int) none = [];
-    KL st = kg_stmts(s, g, open.pos, none);
+    KL st = kg_stmts(s, g, open.pos, ListBuf());
     if (st.err != "") { return kg_fail(st.g, st.pos, st.err); }
     return kg_add(st.g, "block", "", "", st.ids, kg_tstart(open), st.pos);
 }
 
-KL kg_stmts(Str s, Kg g, Int pos, List(Int) acc) {
+KL kg_stmts(Str s, Kg g, Int pos, ListBuf(Int) acc) {
     Tok t = lex_tok(s, pos);
-    if (t.text == "}") { return KL {.g = g, .ids = acc, .pos = t.pos, .err = ""}; }
-    if (t.kind == "eof") { return kl_fail(g, t.pos, "unexpected end of input in block"); }
+    if (t.text == "}") { return KL {.g = g, .ids = acc.finish(), .pos = t.pos, .err = ""}; }
+    if (t.kind == "eof") { return kl_fail_b(acc, g, t.pos, "unexpected end of input in block"); }
     KP st = kg_stmt(s, g, pos);
-    if (st.err != "") { return kl_fail(st.g, st.pos, st.err); }
-    return kg_stmts(s, st.g, st.pos, acc.concat([st.id]));
+    if (st.err != "") { return kl_fail_b(acc, st.g, st.pos, st.err); }
+    return kg_stmts(s, st.g, st.pos, acc.push(st.id));
 }
 
 KP kg_semi(KP p, Str s) { return kg_expect(p, s, ";"); }
@@ -803,23 +809,23 @@ KP kg_fn(Str s, Kg g, Int pos, Str prefix, Int sp) {
 }
 
 // Struct fields `Type name;` up to `}`.
-KL kg_fields(Str s, Kg g, Int pos, List(Int) acc) {
+KL kg_fields(Str s, Kg g, Int pos, ListBuf(Int) acc) {
     Tok t = lex_tok(s, pos);
-    if (t.text == "}") { return KL {.g = g, .ids = acc, .pos = t.pos, .err = ""}; }
+    if (t.text == "}") { return KL {.g = g, .ids = acc.finish(), .pos = t.pos, .err = ""}; }
     KP ty = kg_type(s, g, pos);
-    if (ty.err != "") { return kl_fail(ty.g, ty.pos, ty.err); }
+    if (ty.err != "") { return kl_fail_b(acc, ty.g, ty.pos, ty.err); }
     Tok nm = lex_tok(s, ty.pos);
     Tok semi = lex_tok(s, nm.pos);
-    if (nm.kind != "ident" || semi.text != ";") { return kl_fail(ty.g, semi.pos, "expected `Type name;` in struct"); }
+    if (nm.kind != "ident" || semi.text != ";") { return kl_fail_b(acc, ty.g, semi.pos, "expected `Type name;` in struct"); }
     KP f = kg_add(ty.g, "sfield", nm.text, "", [ty.id], kg_tstart(t), semi.pos);
-    return kg_fields(s, f.g, semi.pos, acc.concat([f.id]));
+    return kg_fields(s, f.g, semi.pos, acc.push(f.id));
 }
 
-KL kg_variants(Kg g, List(Str) names, List(Str) tys, Int i, Int sp, Int ep, List(Int) acc) {
-    if (i >= names.len()) { return KL {.g = g, .ids = acc, .pos = ep, .err = ""}; }
+KL kg_variants(Kg g, List(Str) names, List(Str) tys, Int i, Int sp, Int ep, ListBuf(Int) acc) {
+    if (i >= names.len()) { return KL {.g = g, .ids = acc.finish(), .pos = ep, .err = ""}; }
     List(Int) none = [];
     KP v = kg_add(g, "variant", names[i], tys[i], none, sp, ep);
-    return kg_variants(v.g, names, tys, i + 1, sp, ep, acc.concat([v.id]));
+    return kg_variants(v.g, names, tys, i + 1, sp, ep, acc.push(v.id));
 }
 
 // `type N[(G)] = { ... };` | `A(T) | B;` | `T;` | `T[pred];` | `T where pred;`
@@ -834,14 +840,14 @@ KP kg_typedecl(Str s, Kg g, Int pos, Str prefix, Int sp) {
     Tok br = lex_tok(s, eq.pos);
     List(Int) none = [];
     if (br.text == "{") {
-        KL fs = kg_fields(s, g, br.pos, none);
+        KL fs = kg_fields(s, g, br.pos, ListBuf());
         if (fs.err != "") { return kg_fail(fs.g, fs.pos, fs.err); }
         KP st = kg_add(fs.g, "struct_t", nm.text, aux, fs.ids, sp, fs.pos);
         return kg_semi(st, s);
     }
     VLRes vl = parse_variant_list(s, eq.pos, "", "", 0);
     if (vl.ok) {
-        KL vs = kg_variants(g, str_split(vl.vnames, "|"), str_split(vl.vtypes, "|"), 0, kg_tstart(br), vl.pos, none);
+        KL vs = kg_variants(g, str_split(vl.vnames, "|"), str_split(vl.vtypes, "|"), 0, kg_tstart(br), vl.pos, ListBuf());
         return kg_add(vs.g, "sum_t", nm.text, aux, vs.ids, sp, vl.pos);
     }
     KP ty = kg_type(s, g, eq.pos);
@@ -862,13 +868,13 @@ KP kg_typedecl(Str s, Kg g, Int pos, Str prefix, Int sp) {
     return kg_fail(ty.g, after.pos, "malformed type declaration");
 }
 
-KL kg_decls(Str s, Kg g, Int pos, Str close, List(Int) acc) {
+KL kg_decls(Str s, Kg g, Int pos, Str close, ListBuf(Int) acc) {
     Tok t = lex_tok(s, pos);
-    if (t.kind == "eof" || t.text == close) { return KL {.g = g, .ids = acc, .pos = t.pos, .err = ""}; }
+    if (t.kind == "eof" || t.text == close) { return KL {.g = g, .ids = acc.finish(), .pos = t.pos, .err = ""}; }
     if (t.text == ";") { return kg_decls(s, g, t.pos, close, acc); }
     KP d = kg_decl(s, g, pos);
-    if (d.err != "") { return kl_fail(d.g, d.pos, d.err); }
-    return kg_decls(s, d.g, d.pos, close, acc.concat([d.id]));
+    if (d.err != "") { return kl_fail_b(acc, d.g, d.pos, d.err); }
+    return kg_decls(s, d.g, d.pos, close, acc.push(d.id));
 }
 
 // `///` lines directly above position sp, joined with newlines.
@@ -909,7 +915,7 @@ KP kg_decl_at(Str s, Kg g, Int pos) {
         Str caps = str_trim(str_slice(s, lp.pos, cend - 1));
         Tok lb = lex_tok(s, cend);
         if (lb.text != "{") { return kg_fail(g, lb.pos, "expected { after sandbox capabilities"); }
-        KL ds = kg_decls(s, g, lb.pos, "}", none);
+        KL ds = kg_decls(s, g, lb.pos, "}", ListBuf());
         if (ds.err != "") { return kg_fail(ds.g, ds.pos, ds.err); }
         // The text is where the body starts: lowering numbers lambda and
         // assertion symbols by position within it.
@@ -930,7 +936,7 @@ KP kg_decl_at(Str s, Kg g, Int pos) {
 // Parse a whole (desugared) program into a graph rooted at a `unit` node.
 pub KP kg_parse(Str s) {
     List(Int) none = [];
-    KL ds = kg_decls(s, kg_empty(), 0, "", none);
+    KL ds = kg_decls(s, kg_empty(), 0, "", ListBuf());
     if (ds.err != "") { return kg_fail(ds.g, ds.pos, ds.err); }
     return kg_add(ds.g, "unit", "", "", ds.ids, 0, ds.pos);
 }
@@ -1224,17 +1230,17 @@ Bool kg_mixed(Kg g, Int id, Int c) {
     return ga != 0 && ga == kg_legacy_group(g.ns[c].text) && g.ns[id].text != g.ns[c].text;
 }
 
-List(Int) kg_lint_prec_at(Kg g, Int id, List(Int) acc) {
-    if (id < 0) { return acc; }
+List(Int) kg_lint_prec_at(Kg g, Int id, ListBuf(Int) acc) {
+    if (id < 0) { return acc.finish(); }
     Bool hit = g.ns[id].kind == "bin" && (kg_mixed(g, id, kg_kid(g, id, 0)) || kg_mixed(g, id, kg_kid(g, id, 1)));
-    List(Int) acc2 = if (hit) { acc.concat([id]) } else { acc };
+    ListBuf(Int) acc2 = if (hit) { acc.push(id) } else { acc };
     return kg_lint_prec_at(g, id - 1, acc2);
 }
 
 // Source positions of mixed-precedence expressions.
 pub List(Int) kg_lint_prec(Kg g) {
     List(Int) none = [];
-    return kg_lint_prec_at(g, kg_count(g) - 1, none);
+    return kg_lint_prec_at(g, kg_count(g) - 1, ListBuf());
 }
 
 // ─── Source map ─────────────────────────────────────────────────────

@@ -2806,12 +2806,12 @@ pub List(Str) sum_payloads(Funcs fs, Int sidx, Str ty) {
     List(Str) vt = sumv_types(fs.suv[sidx]);
     Str ps = sumv_params(fs.suv[sidx]);
     if (ps == "") { return vt; }
-    return sum_subst_all(vt, 0, str_split(ps, ","), ty_args(ty), []);
+    return sum_subst_all(vt, 0, str_split(ps, ","), ty_args(ty), ListBuf());
 }
 
-pub List(Str) sum_subst_all(List(Str) vt, Int i, List(Str) params, List(Str) args, List(Str) acc) {
-    if (i >= vt.len()) { return acc; }
-    return sum_subst_all(vt, i + 1, params, args, acc.concat([ty_subst(vt[i], params, args)]));
+pub List(Str) sum_subst_all(List(Str) vt, Int i, List(Str) params, List(Str) args, ListBuf(Str) acc) {
+    if (i >= vt.len()) { return acc.finish(); }
+    return sum_subst_all(vt, i + 1, params, args, acc.push(ty_subst(vt[i], params, args)));
 }
 
 // "Box(_)" for a generic sum (one hole per parameter), else the name.

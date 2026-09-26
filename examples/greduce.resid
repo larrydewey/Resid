@@ -77,15 +77,15 @@ Bool gx_same(List(Int) a, List(Int) b, Int i) {
 // Copy node `id` of `src` (and its subtree) into `dst` with span [sp, ep).
 KP gx_graft(Kg dst, Kg src, Int id, Int sp, Int ep) {
     List(Int) none = [];
-    KL ks = gx_graft_kids(dst, src, id, 0, sp, ep, none);
+    KL ks = gx_graft_kids(dst, src, id, 0, sp, ep, ListBuf());
     KN n = src.ns[id];
     return kg_add(ks.g, n.kind, n.text, n.aux, ks.ids, sp, ep);
 }
 
-KL gx_graft_kids(Kg dst, Kg src, Int id, Int i, Int sp, Int ep, List(Int) acc) {
-    if (i >= src.ns[id].nk) { return KL {.g = dst, .ids = acc, .pos = ep, .err = ""}; }
+KL gx_graft_kids(Kg dst, Kg src, Int id, Int i, Int sp, Int ep, ListBuf(Int) acc) {
+    if (i >= src.ns[id].nk) { return KL {.g = dst, .ids = acc.finish(), .pos = ep, .err = ""}; }
     KP k = gx_graft(dst, src, kg_kid(src, id, i), sp, ep);
-    return gx_graft_kids(k.g, src, id, i + 1, sp, ep, acc.concat([k.id]));
+    return gx_graft_kids(k.g, src, id, i + 1, sp, ep, acc.push(k.id));
 }
 
 // Nodes for a rendered literal (rd_render's text).
@@ -1619,25 +1619,25 @@ KP gs_rw(Kg g, Int id, Str f, Str p, Int k) {
     }
     if (n.nk == 0) { return KP {.g = g, .id = id, .pos = 0, .err = ""}; }
     List(Int) none2 = [];
-    KL ks = gs_rw_kids(g, id, 0, f, p, k, none2);
+    KL ks = gs_rw_kids(g, id, 0, f, p, k, ListBuf());
     if (gx_same(gx_kids(ks.g, id), ks.ids, 0)) { return KP {.g = ks.g, .id = id, .pos = 0, .err = ""}; }
     return kg_add(ks.g, n.kind, n.text, n.aux, ks.ids, n.sp, n.ep);
 }
 
-KL gs_rw_kids(Kg g, Int id, Int i, Str f, Str p, Int k, List(Int) acc) {
-    if (i >= g.ns[id].nk) { return KL {.g = g, .ids = acc, .pos = 0, .err = ""}; }
+KL gs_rw_kids(Kg g, Int id, Int i, Str f, Str p, Int k, ListBuf(Int) acc) {
+    if (i >= g.ns[id].nk) { return KL {.g = g, .ids = acc.finish(), .pos = 0, .err = ""}; }
     KP r = gs_rw(g, kg_kid(g, id, i), f, p, k);
-    return gs_rw_kids(r.g, id, i + 1, f, p, k, acc.concat([r.id]));
+    return gs_rw_kids(r.g, id, i + 1, f, p, k, acc.push(r.id));
 }
 
 // Wrapper arguments: the parameters, p_k through resid_sacc_from.
-KL gs_wargs(Kg g, Int fnid, Int k, Int i, List(Int) acc) {
-    if (i >= g.ns[fnid].nk - 2) { return KL {.g = g, .ids = acc, .pos = 0, .err = ""}; }
+KL gs_wargs(Kg g, Int fnid, Int k, Int i, ListBuf(Int) acc) {
+    if (i >= g.ns[fnid].nk - 2) { return KL {.g = g, .ids = acc.finish(), .pos = 0, .err = ""}; }
     Int pa = kg_kid(g, fnid, i + 1);
     List(Int) none = [];
     KP r = gs_add(g, "ref", g.ns[pa].text, none, pa);
     KP a = if (i == k) { gs_add(r.g, "call", "resid_sacc_from", [r.id], pa) } else { r };
-    return gs_wargs(a.g, fnid, k, i + 1, acc.concat([a.id]));
+    return gs_wargs(a.g, fnid, k, i + 1, acc.push(a.id));
 }
 
 type GSO = { Kg g; List(Int) decls; List(Int) tail; Int n; Str dv; };
@@ -1658,7 +1658,7 @@ GSO gs_walk(Int unit, Int i, GSO acc) {
     List(Int) ks = gx_kids(body.g, d);
     KP worker = kg_add(body.g, "fn", f + "__sacc", n.aux, ks[0..n.nk - 1].concat([body.id]), n.sp, n.ep);
     List(Int) none = [];
-    KL wa = gs_wargs(worker.g, d, k, 0, none);
+    KL wa = gs_wargs(worker.g, d, k, 0, ListBuf());
     KP wc = gs_add(wa.g, "call", f + "__sacc", wa.ids, d);
     KP wr = gs_add(wc.g, "ret", "", [wc.id], d);
     KP wb = gs_add(wr.g, "block", "", [wr.id], d);

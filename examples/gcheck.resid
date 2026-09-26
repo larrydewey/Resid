@@ -1443,16 +1443,16 @@ LS lin_fn(GK k, Int d) {
     List(Int) bs = lin_binders(k, d, none);
     LS l0 = LS {.used = none, .live = none, .locked = none, .lbase = 0, .div = false, .bs = bs, .err = "", .at = -1};
     if (bs.len() == 0) { return l0; }
-    List(Int) ps = lin_params(k, d, 1, k.g.ns[d].nk - 1, bs, none);
+    List(Int) ps = lin_params(k, d, 1, k.g.ns[d].nk - 1, bs, ListBuf());
     LS l1 = ls_with(l0, none, ps, false);
     LS r = lin_stmt(k, kg_kid(k.g, d, k.g.ns[d].nk - 1), l1);
     return lin_close(k, r, 0, d);
 }
 
-List(Int) lin_params(GK k, Int d, Int i, Int n, List(Int) bs, List(Int) acc) {
-    if (i >= n) { return acc; }
+List(Int) lin_params(GK k, Int d, Int i, Int n, List(Int) bs, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
     Int p = kg_kid(k.g, d, i);
-    return lin_params(k, d, i + 1, n, bs, if (list_contains_int(bs, p)) { acc.concat([p]) } else { acc });
+    return lin_params(k, d, i + 1, n, bs, if (list_contains_int(bs, p)) { acc.push(p) } else { acc });
 }
 
 // ─── Signatures from the graph ──────────────────────────────────────
@@ -1616,11 +1616,11 @@ GKFs gk_all_facts(GK k, List(Int) fnode, Int i, GKFs a) {
 }
 
 // File-typed parameter names of fn node `d`.
-List(Str) gk_file_params(Kg g, Int d, Int i, List(Str) acc) {
-    if (i >= g.ns[d].nk - 1) { return acc; }
+List(Str) gk_file_params(Kg g, Int d, Int i, ListBuf(Str) acc) {
+    if (i >= g.ns[d].nk - 1) { return acc.finish(); }
     Int p = kg_kid(g, d, i);
     Bool file = g.ns[p].kind == "param" && g.ns[kg_kid(g, p, 0)].text == "File";
-    return gk_file_params(g, d, i + 1, if (file) { acc.concat([g.ns[p].text]) } else { acc });
+    return gk_file_params(g, d, i + 1, if (file) { acc.push(g.ns[p].text) } else { acc });
 }
 
 // Does the body pass a File parameter as the sole argument of another user fn?
@@ -1665,7 +1665,7 @@ Str gk_enforce_func(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int f
     }
     Str effc = eff[fi];
     List(Str) none = [];
-    List(Str) fps = gk_file_params(k.g, fnode[fi], 1, none);
+    List(Str) fps = gk_file_params(k.g, fnode[fi], 1, ListBuf());
     if (fps.len() > 0 && effc != "" && !caps_contain_family(effc, "filesystem")) {
         if (gk_file_passed(k, fnode[fi], fnode[fi], fps)) {
             return "call passes a File handle value as an argument into a region whose capability set [" + fmt_caps(effc) + "] does not grant `filesystem`";
