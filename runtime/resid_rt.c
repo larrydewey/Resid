@@ -3371,6 +3371,67 @@ void* resid_fs_sha256(const char* path) {
     return resid_list_new(32, slots, "List(Int(64))");
 }
 
+/* str_sha256(s): SHA-256 of the string's UTF-8 bytes, as 64 lowercase hex
+ * digits. */
+char* str_sha256(const char* s) {
+    uint32_t h[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+    size_t n = strlen(s);
+    size_t full = n & ~(size_t)63;
+    for (size_t i = 0; i < full; i += 64) sha256_block(h, (const unsigned char*)s + i);
+    unsigned char tail[128];
+    size_t keep = n - full;
+    memcpy(tail, s + full, keep);
+    tail[keep] = 0x80;
+    size_t tl = keep + 1 <= 56 ? 64 : 128;
+    memset(tail + keep + 1, 0, tl - keep - 1);
+    uint64_t bits = (uint64_t)n * 8;
+    for (int i = 0; i < 8; i++) tail[tl - 1 - i] = (unsigned char)(bits >> (8 * i));
+    for (size_t i = 0; i < tl; i += 64) sha256_block(h, tail + i);
+    char* p = (char*)malloc(65);
+    if (!p) resid_abort("str_sha256: out of memory");
+    static const char hx[] = "0123456789abcdef";
+    for (int i = 0; i < 32; i++) {
+        unsigned b = (h[i / 4] >> (24 - 8 * (i % 4))) & 0xFF;
+        p[2 * i] = hx[b >> 4];
+        p[2 * i + 1] = hx[b & 15];
+    }
+    p[64] = '\0';
+    return p;
+}
+
+static int hex_val(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* filesystem.write_hex / append_hex(path, hex): write (or append) the
+ * bytes a hex string spells, two digits per byte. Returns 1 on success, 0
+ * on failure or bad hex. */
+static int8_t fs_put_hex(const char* path, const char* hex, const char* mode);
+int8_t resid_fs_write_hex(const char* path, const char* hex) { return fs_put_hex(path, hex, "wb"); }
+int8_t resid_fs_append_hex(const char* path, const char* hex) { return fs_put_hex(path, hex, "ab"); }
+
+static int8_t fs_put_hex(const char* path, const char* hex, const char* mode) {
+    if (!resid_path_is_safe(path)) return 0;
+    size_t n = strlen(hex);
+    if (n % 2) return 0;
+    unsigned char* buf = (unsigned char*)malloc(n / 2 + 1);
+    if (!buf) resid_abort("filesystem.write_hex: out of memory");
+    for (size_t i = 0; i < n / 2; i++) {
+        int a = hex_val((unsigned char)hex[2 * i]), b = hex_val((unsigned char)hex[2 * i + 1]);
+        if (a < 0 || b < 0) { free(buf); return 0; }
+        buf[i] = (unsigned char)(a * 16 + b);
+    }
+    FILE* f = fopen(path, mode);
+    if (!f) { free(buf); return 0; }
+    size_t written = fwrite(buf, 1, n / 2, f);
+    int closed = fclose(f) == 0;
+    free(buf);
+    return (written == n / 2 && closed) ? 1 : 0;
+}
+
 /* filesystem.append_bytes(path, bytes): append raw bytes to an existing
  * file. Returns 1 on success, 0 on failure. */
 int8_t resid_fs_append_bytes(const char* path, void* list_box) {

@@ -245,6 +245,22 @@ the test harnesses create a throwaway key when none is configured.
 `tests/provenance/run.sh` covers tamper detection, keys, concealment and
 reproducibility. Self-compile time is unchanged.
 
+### 0r. Graph artifact and derive edges (G3/G4, 2026-09-26)
+
+Debug and check builds write `<out>.resid-graph.cbor` (spec §33, §34,
+`examples/gart.resid`): source and residual nodes in one graph with kind,
+checked type, knowledge state, literal value, deps, def, effects and
+capabilities, span through the import source map, derive edge and a
+SHA-256 content hash; roots name the parse unit and the residual unit. The
+reducer and the string-accumulator rewrite record a derive edge (origin
+and rule) for every node they create. The CBOR is streamed: the header,
+then nodes in chunks of 2048, each built in its own arena and appended
+(`filesystem.write_hex` / `append_hex`). The binary carries the file's
+hash as `resid_graph_hash`, provenance signs it, and a stale artifact is
+cleared when none is emitted. New runtime pieces: `str_sha256`,
+`filesystem.write_hex`, `filesystem.append_hex`. Debug self-compile:
+649MB peak (579MB before the artifact), 5.0s.
+
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
 
 `examples/greduce.resid` reduces the parsed graph instead of source text.

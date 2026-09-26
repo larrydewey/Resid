@@ -1,0 +1,305 @@
+// gart.resid — the knowledge-graph artifact `<out>.resid-graph.cbor`
+// (spec §33, §34). Source and residual nodes share one graph: the parse is
+// nodes 0..n0-1 (its unit the source root) and reduction appended the rest.
+// The CBOR is built as hex, two digits per byte, and written with
+// filesystem.write_hex.
+//
+// Imported by examples/driver.resid (after graph.resid and greduce.resid).
+
+// ─── Hex CBOR (RFC 8949 preferred serialization) ───────────────────
+
+StrBuf ga_nib(StrBuf b, Int d) { return b.push_char(if (d < 10) { 48 + d } else { 87 + d }); }
+
+StrBuf ga_hb(StrBuf b, Int x) { return ga_nib(ga_nib(b, (x >> 4) & 15), x & 15); }
+
+// The low k bytes of n, big-endian.
+StrBuf ga_be(StrBuf b, Int n, Int k) {
+    if (k == 0) { return b; }
+    return ga_be(ga_hb(b, (n >> (8 * (k - 1))) & 255), n, k - 1);
+}
+
+StrBuf ga_head(StrBuf b, Int major, Int n) {
+    Int m = major * 32;
+    if (n < 24) { return ga_hb(b, m + n); }
+    if (n < 256) { return ga_hb(ga_hb(b, m + 24), n); }
+    if (n < 65536) { return ga_be(ga_hb(b, m + 25), n, 2); }
+    if (n < 4294967296) { return ga_be(ga_hb(b, m + 26), n, 4); }
+    return ga_be(ga_hb(b, m + 27), n, 8);
+}
+
+StrBuf ga_int(StrBuf b, Int n) {
+    if (n >= 0) { return ga_head(b, 0, n); }
+    return ga_head(b, 1, -1 - n);
+}
+
+StrBuf ga_bool(StrBuf b, Bool x) { return ga_hb(b, if (x) { 245 } else { 244 }); }
+
+Int ga_utf8_len(Str s, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(s, i);
+    Int k = if (c < 128) { 1 } else if (c < 2048) { 2 } else if (c < 65536) { 3 } else { 4 };
+    return ga_utf8_len(s, i + 1, n, acc + k);
+}
+
+StrBuf ga_utf8(StrBuf b, Str s, Int i, Int n) {
+    if (i >= n) { return b; }
+    Int c = str_char_at(s, i);
+    StrBuf b2 = if (c < 128) { ga_hb(b, c) } else if (c < 2048) { ga_hb(ga_hb(b, 192 + (c >> 6)), 128 + (c & 63)) } else if (c < 65536) { ga_hb(ga_hb(ga_hb(b, 224 + (c >> 12)), 128 + ((c >> 6) & 63)), 128 + (c & 63)) } else { ga_hb(ga_hb(ga_hb(ga_hb(b, 240 + (c >> 18)), 128 + ((c >> 12) & 63)), 128 + ((c >> 6) & 63)), 128 + (c & 63)) };
+    return ga_utf8(b2, s, i + 1, n);
+}
+
+StrBuf ga_text(StrBuf b, Str s) {
+    Int n = str_len(s);
+    return ga_utf8(ga_head(b, 3, ga_utf8_len(s, 0, n, 0)), s, 0, n);
+}
+
+// A byte string given as hex.
+StrBuf ga_hexbytes(StrBuf b, Str hex) { return ga_head(b, 2, str_len(hex) / 2).push(hex); }
+
+StrBuf ga_key(StrBuf b, Str k) { return ga_text(b, k); }
+
+Str ga_bytes_hex(List(Int) bs, Int i, StrBuf acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    return ga_bytes_hex(bs, i + 1, ga_hb(acc, bs[i]));
+}
+
+// ─── Spans ──────────────────────────────────────────────────────────
+
+// Positions where lines start (after each newline, with 0 first).
+List(Int) ga_line_starts(Str s, Int from, ListBuf(Int) acc) {
+    Int nl = str_find_char(s, 10, from);
+    if (nl < 0) { return acc.finish(); }
+    return ga_line_starts(s, nl + 1, acc.push(nl + 1));
+}
+
+// Index of the last line starting at or before pos.
+Int ga_line(List(Int) ls, Int pos, Int lo, Int hi) {
+    if (lo >= hi) { return lo; }
+    Int mid = (lo + hi + 1) / 2;
+    if (ls[mid] <= pos) { return ga_line(ls, pos, mid, hi); }
+    return ga_line(ls, pos, lo, mid - 1);
+}
+
+// Index of the last source-map segment starting at or before merged line
+// `line`, or -1.
+Int ga_seg(KgMap m, Int line, Int lo, Int hi) {
+    if (lo > hi) { return hi; }
+    Int mid = (lo + hi) / 2;
+    if (m.ml[mid] <= line) { return ga_seg(m, line, mid + 1, hi); }
+    return ga_seg(m, line, lo, mid - 1);
+}
+
+// Source files: the main path first, then each other mapped path once.
+type GAF = { KgMap m; List(Str) paths; List(Int) segf; List(Int) ls; };
+
+Int ga_path_idx(List(Str) ps, Str p, Int i) {
+    if (i >= ps.len()) { return -1; }
+    if (ps[i] == p) { return i; }
+    return ga_path_idx(ps, p, i + 1);
+}
+
+GAF ga_files(KgMap m, Int i, GAF acc) {
+    if (i >= m.path.len()) { return acc; }
+    Str p = m.path[i];
+    Int at = ga_path_idx(acc.paths, p, 0);
+    List(Str) ps = if (at < 0) { acc.paths.concat([p]) } else { acc.paths };
+    Int fi = if (at < 0) { acc.paths.len() } else { at };
+    return ga_files(m, i + 1, GAF {.m = acc.m, .paths = ps, .segf = acc.segf.concat([fi]), .ls = acc.ls});
+}
+
+// [file, line, col] of a position (lines and columns from 1).
+StrBuf ga_pos(StrBuf b, GAF f, Int pos, Bool first) {
+    Int li = ga_line(f.ls, pos, 0, f.ls.len() - 1);
+    Int line = li + 1;
+    Int col = pos - f.ls[li] + 1;
+    Int k = ga_seg(f.m, line, 0, f.m.ml.len() - 1);
+    Int file = if (k < 0) { 0 } else { f.segf[k] };
+    Int fline = if (k < 0) { line } else { f.m.fl[k] + line - f.m.ml[k] };
+    StrBuf b1 = if (first) { ga_int(b, file) } else { b };
+    return ga_int(ga_int(b1, fline), col);
+}
+
+// ─── Per-node columns ───────────────────────────────────────────────
+
+Bool ga_provider(Str n) { return n == "filesystem" || n == "environment" || n == "args" || n == "process" || n == "git"; }
+
+// The effect a node performs itself ("" when none); a provider is a name
+// with no local def.
+Str ga_effect(Kg g, Int id, GAX x) {
+    KN n = g.ns[id];
+    if (n.kind == "call") {
+        if (n.text == "print" || n.text == "println" || n.text == "print_bytes") { return "stdout"; }
+        if (n.text == "eprintln") { return "stderr"; }
+    }
+    if (n.kind == "mcall") {
+        Int bi = kg_kid(g, id, 0);
+        KN b = g.ns[bi];
+        if (b.kind == "ref" && ga_provider(b.text) && ga_def(x, bi) < 0) { return b.text + "." + n.text; }
+    }
+    return "";
+}
+
+// Literal forms whose value is known: literals and structure over them.
+Bool ga_known(Kg g, Int id, List(Bool) kn) {
+    KN n = g.ns[id];
+    Str k = n.kind;
+    if (k == "lit" || k == "ty" || k == "fpart" || k == "fspec") { return true; }
+    Bool shape = k == "un" || k == "paren" || k == "cast" || k == "list" || (k == "call" && n.text == "Some");
+    if (!shape || n.nk == 0) { return false; }
+    return ga_all_known(g, id, 0, kn);
+}
+
+Bool ga_all_known(Kg g, Int id, Int i, List(Bool) kn) {
+    if (i >= g.ns[id].nk) { return true; }
+    if (!kn[kg_kid(g, id, i)]) { return false; }
+    return ga_all_known(g, id, i + 1, kn);
+}
+
+// Content hash: kind, text, aux and the kids' hashes.
+Str ga_hash(Kg g, Int id, List(Str) hs) {
+    KN n = g.ns[id];
+    StrBuf b = StrBuf().push(n.kind).push_char(31).push(n.text).push_char(31).push(n.aux).push_char(31);
+    return str_sha256(ga_kid_hashes(g, id, 0, hs, b).finish());
+}
+
+StrBuf ga_kid_hashes(Kg g, Int id, Int i, List(Str) hs, StrBuf acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return ga_kid_hashes(g, id, i + 1, hs, acc.push(hs[kg_kid(g, id, i)]).push_char(44));
+}
+
+type GAC = { List(Bool) kn; List(Str) hs; };
+
+GAC ga_cols(Kg g, Int id, Int n, GAC acc) {
+    if (id >= n) { return acc; }
+    GAC a2 = GAC {.kn = acc.kn.concat([ga_known(g, id, acc.kn)]), .hs = acc.hs.concat([ga_hash(g, id, acc.hs)])};
+    return ga_cols(g, id + 1, n, a2);
+}
+
+// Derive edges `id,from,rule;` as dense columns (from -1: none).
+type GAD = { List(Int) from; List(Str) rule; };
+
+GAD ga_derive(Str dv, Int pos, Int id, Int n, ListBuf(Int) fr, ListBuf(Str) ru) {
+    if (id >= n) { return GAD {.from = fr.finish(), .rule = ru.finish()}; }
+    GXI e = if (pos < str_len(dv)) { gx_int_at(dv, pos, 0) } else { GXI {.v = -1, .pos = pos} };
+    if (e.v != id) { return ga_derive(dv, pos, id + 1, n, fr.push(-1), ru.push("")); }
+    GXI f = gx_int_at(dv, e.pos, 0);
+    Int semi = str_find_char(dv, 59, f.pos);
+    return ga_derive(dv, semi + 1, id + 1, n, fr.push(f.v), ru.push(str_slice(dv, f.pos, semi)));
+}
+
+// Def edges `d,` per source node.
+List(Int) ga_defs(Str ds, Int pos, ListBuf(Int) acc) {
+    if (pos >= str_len(ds)) { return acc.finish(); }
+    Int c = str_find_char(ds, 44, pos);
+    return ga_defs(ds, c + 1, acc.push(str_parse_int(str_slice(ds, pos, c))));
+}
+
+// The checked type of a node; a derived node has its origin's.
+Str ga_type(Int id, Int n0, List(Str) tys, GAD d) {
+    if (id < n0) { return if (id < tys.len()) { tys[id] } else { "" }; }
+    Int f = d.from[id];
+    if (f < 0) { return ""; }
+    return ga_type(f, n0, tys, d);
+}
+
+// ─── Nodes ──────────────────────────────────────────────────────────
+
+type GAX = { Kg g; Int n0; List(Str) tys; List(Int) defs; GAD d; GAC c; GAF f; };
+
+StrBuf ga_value(StrBuf b, KN n) {
+    if (n.aux == "bool") { return ga_bool(b, n.text == "true"); }
+    RdSd d = rd_str_dec(n.text);
+    if (n.aux == "str") { return ga_text(b, d.v); }
+    return ga_int(b, str_parse_int(n.text));
+}
+
+Bool ga_has_value(KN n) {
+    if (n.kind != "lit") { return false; }
+    if (n.aux == "bool") { return true; }
+    RdSd d = rd_str_dec(n.text);
+    if (n.aux == "str") { return d.ok; }
+    if (n.aux == "int") { return str_len(n.text) <= 18 && rd_all_digits(n.text, 0, str_len(n.text)); }
+    return false;
+}
+
+StrBuf ga_deps(StrBuf b, Kg g, Int id, Int i) {
+    if (i >= g.ns[id].nk) { return b; }
+    return ga_deps(ga_int(b, kg_kid(g, id, i)), g, id, i + 1);
+}
+
+// A node's def edge (-1 none); a derived node has its origin's.
+Int ga_def(GAX x, Int id) {
+    if (id < x.n0) { return if (id < x.defs.len()) { x.defs[id] } else { -1 }; }
+    Int f = x.d.from[id];
+    if (f < 0) { return -1; }
+    return ga_def(x, f);
+}
+
+StrBuf ga_node(StrBuf b, GAX x, Int id) {
+    Kg g = x.g;
+    KN n = g.ns[id];
+    Str eff = ga_effect(g, id, x);
+    Bool hv = ga_has_value(n);
+    Int def = ga_def(x, id);
+    Int from = x.d.from[id];
+    Int nf = 9 + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 });
+    Str know = if (eff != "") { "effect" } else if (x.c.kn[id]) { "known" } else { "residual" };
+    StrBuf b1 = ga_text(ga_key(ga_int(ga_key(ga_head(b, 5, nf), "id"), id), "kind"), n.kind);
+    StrBuf b2 = ga_text(ga_key(ga_text(ga_key(b1, "type"), ga_type(id, x.n0, x.tys, x.d)), "knowledge"), know);
+    StrBuf b3 = if (hv) { ga_value(ga_key(b2, "value"), n) } else { b2 };
+    StrBuf b4 = ga_deps(ga_head(ga_key(b3, "deps"), 4, n.nk), g, id, 0);
+    StrBuf b5 = if (def >= 0) { ga_int(ga_key(b4, "def"), def) } else { b4 };
+    StrBuf b6 = if (eff != "") { ga_text(ga_head(ga_key(b5, "effects"), 4, 1), eff) } else { ga_head(ga_key(b5, "effects"), 4, 0) };
+    Str cap = if (str_contains(eff, ".")) { str_slice(eff, 0, str_find_char(eff, 46, 0)) } else { "" };
+    StrBuf b7 = if (cap != "") { ga_text(ga_head(ga_key(b6, "capabilities"), 4, 1), cap) } else { ga_head(ga_key(b6, "capabilities"), 4, 0) };
+    StrBuf b8 = ga_pos(ga_pos(ga_head(ga_key(b7, "span"), 4, 5), x.f, n.sp, true), x.f, n.ep, false);
+    StrBuf b9 = if (from >= 0) { ga_text(ga_key(ga_int(ga_key(ga_head(ga_key(b8, "derive"), 5, 2), "from"), from), "rule"), x.d.rule[id]) } else { b8 };
+    return ga_hexbytes(ga_key(b9, "hash"), x.c.hs[id]);
+}
+
+StrBuf ga_nodes(StrBuf b, GAX x, Int id, Int n) {
+    if (id >= n) { return b; }
+    return ga_nodes(ga_node(b, x, id), x, id + 1, n);
+}
+
+StrBuf ga_sources(StrBuf b, List(Str) ps, Int i) {
+    if (i >= ps.len()) { return b; }
+    StrBuf b1 = ga_text(ga_key(ga_head(b, 5, 2), "path"), ps[i]);
+    Str h = ga_bytes_hex(filesystem.sha256(ps[i]), 0, StrBuf());
+    return ga_sources(ga_hexbytes(ga_key(b1, "hash"), h), ps, i + 1);
+}
+
+// Nodes id..n in chunks, each built in its own arena and appended, so only
+// one chunk of CBOR is in memory at a time.
+Bool ga_stream(Str path, GAX x, Int id, Int n) {
+    if (id >= n) { return true; }
+    Int e = min_i64(id + 2048, n);
+    Int _in = resid_bulk_push();
+    Bool ok = filesystem.append_hex(path, ga_nodes(StrBuf(), x, id, e).finish());
+    Int _out = resid_bulk_pop();
+    if (!ok) { return false; }
+    return ga_stream(path, x, e, n);
+}
+
+// Write the artifact for graph p (root p.id) whose source nodes are
+// 0..n0-1; with `resid`, p.id is the residual root. The file's SHA-256 as
+// hex, or "" when it could not be written.
+pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, List(Str) tys, Str defs, Str src, Str smap, Str main) {
+    Kg g = p.g;
+    Int n = kg_count(g);
+    KgMap m = kg_srcmap(smap);
+    List(Str) ps0 = [main];
+    ListBuf(Int) l0 = ListBuf();
+    GAF f = ga_files(m, 0, GAF {.m = m, .paths = ps0, .segf = gx_none(), .ls = ga_line_starts(src, 0, l0.push(0))});
+    List(Bool) nb = [];
+    List(Str) ns = [];
+    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}), .f = f};
+    StrBuf h0 = ga_int(ga_key(ga_head(StrBuf(), 5, 4), "version"), 1);
+    StrBuf h1 = ga_sources(ga_head(ga_key(h0, "source"), 4, f.paths.len()), f.paths, 0);
+    if (!filesystem.write_hex(path, ga_head(ga_key(h1, "nodes"), 4, n).finish())) { return ""; }
+    if (!ga_stream(path, x, 0, n)) { return ""; }
+    StrBuf t0 = ga_int(ga_head(ga_key(ga_head(ga_key(StrBuf(), "roots"), 5, 2), "source"), 4, 1), n0 - 1);
+    StrBuf t1 = if (resid) { ga_int(ga_head(ga_key(t0, "residual"), 4, 1), p.id) } else { ga_head(ga_key(t0, "residual"), 4, 0) };
+    if (!filesystem.append_hex(path, t1.finish())) { return ""; }
+    return ga_bytes_hex(filesystem.sha256(path), 0, StrBuf());
+}

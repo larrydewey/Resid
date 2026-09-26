@@ -131,8 +131,9 @@ are imported the same way `reduce.resid` is.
   - [x] The default pipeline lowers the residual graph directly, with
     `stracc` on the graph (`gs_program`); `--text-reduce` keeps the text
     path. IR matches it modulo position-numbered symbols.
-  - Next: record derive edges and reasons on the residual nodes; collect
-    signatures from the graph instead of its printed text.
+  - [x] Derive edges (origin and rule) on every reduction-made node.
+  - Next: reasons for residual nodes; collect signatures from the graph
+    instead of its printed text.
   - Port fold, beta, eval, specialize, generalize, dead-arm and elide from
     `reduce.resid`, recording derive edges and reasons.
   - Facts: range and nonzero first (overflow and div0 discharge), then
@@ -152,9 +153,10 @@ are imported the same way `reduce.resid` is.
     `ToString` of structs (synthesized source). These move to the graph
     with G3's single shared graph.
   - Codegen walks residual roots.
+  - [x] `<out>.resid-graph.cbor` (§34) in debug and check builds, streamed
+    in chunks; its hash is embedded in the binary and signed.
   - Every instruction gets a DILocation keyed by node id. Residual bindings
-    get dbg.value with their node id.
-  - The graph hash is embedded in the binary.
+    get dbg.value with their node id. The graph's lowered table.
   - Exit criterion: `./boot.sh` reaches a fixed point with `--graph` as the
     default.
 - [ ] G5 Tools and conformance.

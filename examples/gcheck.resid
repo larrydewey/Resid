@@ -735,7 +735,7 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
         if (m == "open") { return gt(k, "File", id); }
         if (m == "list_dir") { return gt(k, "List(Str)", id); }
         if (m == "read_bytes" || m == "sha256") { return gt(k, "List(Int)", id); }
-        if (m == "append_bytes") { return gt(k, "Bool", id); }
+        if (m == "append_bytes" || m == "write_hex" || m == "append_hex") { return gt(k, "Bool", id); }
     }
     if (fam == "args" && m == "count") { return gt(k, "Int", id); }
     if (fam == "args" && m == "get") { return gt(k, "Str", id); }
@@ -1790,6 +1790,22 @@ pub Int gk_run_parsed(KP p, Str src, Str smap) {
         return 1;
     }
     return gk_check_program(p.g, p.id, src, smap);
+}
+
+// A check, with the type column and the def column (`d,` per node) when
+// `cols` (for the graph artifact).
+type GKC = { Int status; List(Str) ty; Str def; };
+
+pub GKC gk_run_cols(KP p, Str src, Str smap, Bool cols) {
+    List(Str) es = [];
+    if (p.err != "" || !cols) { return GKC {.status = gk_run_parsed(p, src, smap), .ty = es, .def = ""}; }
+    GKR r = gk_analyze(p.g, p.id, src, smap, true);
+    return GKC {.status = r.status, .ty = r.ty, .def = gk_def_text(r.def, 0, StrBuf())};
+}
+
+Str gk_def_text(List(Int) d, Int i, StrBuf acc) {
+    if (i >= d.len()) { return acc.finish(); }
+    return gk_def_text(d, i + 1, acc.push(IntToString(d[i])).push_char(','));
 }
 
 // ─── Type coverage (tests/graph) ────────────────────────────────────

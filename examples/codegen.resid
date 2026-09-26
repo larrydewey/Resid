@@ -980,7 +980,7 @@ List(Str) hdr_map_typed() {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)"];
+    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @str_sha256(ptr)", "declare i8 @resid_fs_write_hex(ptr, ptr)", "declare i8 @resid_fs_append_hex(ptr, ptr)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -4569,6 +4569,9 @@ GT cg_primary(Str s, Int pos, List(Str) env, Funcs fs, GT c) {
             if (t.text == "str_trim") {
                 return cg_extern1(s, t2.pos, "str_trim", "Str", "Str", env, fs, c);
             }
+            if (t.text == "str_sha256") {
+                return cg_extern1(s, t2.pos, "str_sha256", "Str", "Str", env, fs, c);
+            }
             if (t.text == "str_to_lower") {
                 return cg_extern1(s, t2.pos, "str_to_lower", "Str", "Str", env, fs, c);
             }
@@ -5942,6 +5945,8 @@ Str p_sym(Str pname, Str meth) {
         if (meth == "write_bytes") { return "resid_fs_write_bytes"; }
         if (meth == "sha256") { return "resid_fs_sha256"; }
         if (meth == "append_bytes") { return "resid_fs_append_bytes"; }
+        if (meth == "write_hex") { return "resid_fs_write_hex"; }
+        if (meth == "append_hex") { return "resid_fs_append_hex"; }
         if (meth == "is_dir") { return "resid_fs_is_dir"; }
         if (meth == "list_dir") { return "resid_fs_list_dir"; }
         if (meth == "create_dir") { return "resid_fs_create_dir_all"; }
@@ -5971,6 +5976,7 @@ Str p_rty(Str pname, Str meth) {
         if (meth == "write_bytes") { return "Bool"; }
         if (meth == "sha256") { return "List(Int)"; }
         if (meth == "append_bytes") { return "Bool"; }
+        if (meth == "write_hex" || meth == "append_hex") { return "Bool"; }
         if (meth == "is_dir") { return "Bool"; }
         if (meth == "list_dir") { return "List(Str)"; }
         if (meth == "create_dir") { return "Bool"; }
@@ -5999,6 +6005,7 @@ Int p_nargs(Str pname, Str meth) {
         if (meth == "write_bytes") { return 2; }
         if (meth == "sha256") { return 1; }
         if (meth == "append_bytes") { return 2; }
+        if (meth == "write_hex" || meth == "append_hex") { return 2; }
         if (meth == "is_dir") { return 1; }
         if (meth == "list_dir") { return 1; }
         if (meth == "create_dir") { return 1; }
