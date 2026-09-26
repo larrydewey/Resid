@@ -1,10 +1,6 @@
 // lower.resid — LLVM lowering from the knowledge graph (spec §3, §33;
-// PLAN-graph-ir G4). Walks the graph's declarations in source order and
-// lowers each function from its nodes. A function using a construct not
-// ported yet falls back to the text codegen (pg_func_one) at its span, so
-// the combined module stays byte-identical to the text pipeline while
-// coverage grows. Each lowering mirrors its text-codegen counterpart
-// (named in the comment) instruction for instruction.
+// PLAN-graph-ir G4). Walks the residual graph's declarations in source
+// order and lowers each function from its nodes.
 //
 // Imported by examples/driver.resid; emitters (GT, ST, bin_apply,
 // widen_val, ...) are the codegen half's.
@@ -16,11 +12,6 @@
 // their originals. dbg: emit DWARF locations, with df the file table.
 // rf: the function's range facts (lr_facts), computed when `facts`.
 type LW = { Kg g; Str src; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; };
-// Program walk result: the module so far, functions lowered from the graph
-// vs by the text fallback, and why each fallback happened.
-type LP = { PG pg; Int nodes; Int texts; Map(Str, Int) why; };
-
-LP lp_of(PG pg, Int nodes, Int texts, Map(Str, Int) why) { return LP {.pg = pg, .nodes = nodes, .texts = texts, .why = why}; }
 
 Str lw_unsup(Str what) { return "unsupported: " + what; }
 Bool lw_is_unsup(Str err) { return str_starts_with(err, "unsupported"); }
@@ -2362,18 +2353,8 @@ Int lw_digits(Str s, Int i, Int acc) {
     return lw_digits(s, i + 1, acc * 10 + c - 48);
 }
 
-// The fallback reason's first word pair ("unsupported: call foo" -> "call").
-Str lw_reason(Str err) {
-    Str r = str_slice(err, 13, str_len(err));
-    Int sp = str_find_char(r, 32, 0);
-    Str head = if (sp < 0) { r } else { str_slice(r, 0, sp) };
-    // Calls and statements keep their name ("call:u8").
-    if ((head == "call" || head == "statement" || head == "builtin" || head == "method") && sp >= 0) { return head + ":" + str_slice(r, sp + 1, str_len(r)); }
-    return head;
-}
-
-LP lw_decls(LW w, Int id, Int i, LP acc) {
-    if (acc.pg.err != "" || i >= w.g.ns[id].nk) { return acc; }
+PG lw_decls(LW w, Int id, Int i, PG acc) {
+    if (acc.err != "" || i >= w.g.ns[id].nk) { return acc; }
     Int d = kg_kid(w.g, id, i);
     Str kind = w.g.ns[d].kind;
     if (kind == "sandbox") {
@@ -2386,33 +2367,13 @@ LP lw_decls(LW w, Int id, Int i, LP acc) {
     if (kind != "fn") { return lw_decls(w, id, i + 1, acc); }
     Int off = if (w.rg) { lw_spec_off(w.g.ns[d].text) } else { 0 };
     LW wf = LW {.g = w.g, .src = w.src, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts};
-    PG r = lw_fn(wf, d, acc.pg);
-    if (r.err == "") { return lw_decls(w, id, i + 1, lp_of(r, acc.nodes + 1, acc.texts, acc.why)); }
-    // A residual graph has no source text to fall back on.
-    if (!lw_is_unsup(r.err) || w.rg) { return lp_of(r, acc.nodes, acc.texts, acc.why); }
-    Str why = lw_reason(r.err);
-    Int wn = acc.why.get(why) else { 0 };
-    PG t = pg_func_one(w.src, w.g.ns[kg_kid(w.g, d, 0)].sp, w.fs, acc.pg);
-    return lw_decls(w, id, i + 1, lp_of(t, acc.nodes, acc.texts + 1, acc.why.insert(why, wn + 1)));
+    return lw_decls(w, id, i + 1, lw_fn(wf, d, acc));
 }
 
-// Lower a program parsed from `src` (rg: the reducer's residual graph).
-pub LP lw_program(Kg g, Int unit, Str src, Funcs fs, PG g0, Bool rg, Bool dbg, GAF df, Bool facts) {
-    LW w = LW {.g = g, .src = src, .fs = fs, .base = 0, .rg = rg, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts};
-    Map(Str, Int) why = {};
-    return lw_decls(w, unit, 0, lp_of(g0, 0, 0, why));
-}
-
-// "reason:count" lines, most frequent first is left to the caller.
-pub Str lw_why_text(LP r) {
-    List(Str) ks = r.why.keys();
-    return lw_why_at(r, ks, 0, "");
-}
-
-Str lw_why_at(LP r, List(Str) ks, Int i, Str acc) {
-    if (i >= ks.len()) { return acc; }
-    Int n = r.why.get(ks[i]) else { 0 };
-    return lw_why_at(r, ks, i + 1, acc + "  " + IntToString(n) + " " + ks[i] + "\n");
+// Lower the reducer's residual graph (parsed from `src`).
+pub PG lw_program(Kg g, Int unit, Str src, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
+    LW w = LW {.g = g, .src = src, .fs = fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts};
+    return lw_decls(w, unit, 0, g0);
 }
 
 // ─── Signatures from the graph ──────────────────────────────────────
@@ -2707,34 +2668,6 @@ pub Funcs lw_sigs(Kg g, Int unit) {
     List(List(Str)) sums = lf_summaries(g, fs, 0, []);
     Map(Str, Int) leaf = leaf_rest(fs.names, 0, leaf_fix(fs, sums, fs.leaf, 0));
     return Funcs {.fpos = fs.fpos, .leaf = leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
-}
-
-// Differences between two signature tables ("" when equal), for
-// --graph-sigs-check.
-pub Str lw_sigs_diff(Funcs a, Funcs b) {
-    Str d1 = lsd_l("names", a.names, b.names) + lsd_l("pts", a.pts, b.pts) + lsd_l("pns", a.pns, b.pns) + lsd_l("rets", a.rets, b.rets) + lsd_l("reqs", a.reqs, b.reqs) + lsd_l("ceils", a.ceils, b.ceils);
-    Str d2 = lsd_l("stn", a.stn, b.stn) + lsd_l("stf", a.stf, b.stf) + lsd_l("sun", a.sun, b.sun) + lsd_l("suv", a.suv, b.suv) + lsd_l("bnames", a.bnames, b.bnames) + lsd_l("bparams", a.bparams, b.bparams) + lsd_l("bfns", a.bfns, b.bfns);
-    Str d3 = lsd_l("ctn", a.ctn, b.ctn) + lsd_l("ctb", a.ctb, b.ctb) + lsd_l("ctc", a.ctc, b.ctc) + lsd_leaf(a.names, a.leaf, b.leaf, 0, "");
-    return d1 + d2 + d3;
-}
-
-Str lsd_l(Str what, List(Str) a, List(Str) b) {
-    if (a.len() != b.len()) { return what + ": " + IntToString(a.len()) + " vs " + IntToString(b.len()) + "\n"; }
-    return lsd_at(what, a, b, 0);
-}
-
-Str lsd_at(Str what, List(Str) a, List(Str) b, Int i) {
-    if (i >= a.len()) { return ""; }
-    if (a[i] != b[i]) { return what + "[" + IntToString(i) + "]: `" + a[i] + "` vs `" + b[i] + "`\n"; }
-    return lsd_at(what, a, b, i + 1);
-}
-
-Str lsd_leaf(List(Str) ns, Map(Str, Int) a, Map(Str, Int) b, Int i, Str acc) {
-    if (i >= ns.len()) { return acc; }
-    Int x = a.get(ns[i]) else { -1 };
-    Int y = b.get(ns[i]) else { -1 };
-    Str acc2 = if (x != y) { acc + "leaf " + ns[i] + ": " + IntToString(x) + " vs " + IntToString(y) + "\n" } else { acc };
-    return lsd_leaf(ns, a, b, i + 1, acc2);
 }
 
 // ─── Range facts (spec §3.2a) ───────────────────────────────────────

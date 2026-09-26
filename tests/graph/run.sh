@@ -78,27 +78,6 @@ for w in "$CK"/*.want; do
         echo "FAIL check case $(basename "$c" .resid): want '$want', got '$got'"
     fi
 done
-# Graph reduction (examples/greduce.resid) must token-match the text
-# reducer on every program that type-checks.
-for f in examples/driver.resid tests/reduce/cases/*.resid tests/conformance/cases/*.resid bench/suite/src/*/*/resid/*.resid; do
-    got="$("$COMPILER" "$f" --graph-reduce-check 2>&1 | grep -E '^graph-reduce|^error' | head -1)"
-    case "$got" in
-        "graph-reduce: ok"*) pass=$((pass + 1)) ;;
-        "error"*|"") ;;
-        *) fail=$((fail + 1)); echo "FAIL graph-reduce $f: $got" ;;
-    esac
-done
-# Signatures and leaf functions from the graph (lw_sigs) must equal those
-# collected from the printed residual.
-for f in examples/driver.resid tests/reduce/cases/*.resid tests/conformance/cases/*.resid bench/suite/src/*/*/resid/*.resid; do
-    got="$("$COMPILER" "$f" -o /tmp/resid_gsig_$$ --graph-sigs-check 2>&1 | grep -E '^graph-sigs|^error' | head -1)"
-    case "$got" in
-        "graph-sigs: ok"*) pass=$((pass + 1)) ;;
-        "error"*|"") ;;
-        *) fail=$((fail + 1)); echo "FAIL graph-sigs $f: $got" ;;
-    esac
-done
-rm -f /tmp/resid_gsig_$$*
 # Debug builds describe functions, parameters and bindings in DWARF; with
 # gdb present, a breakpoint shows them.
 DB="$CK/dbg"

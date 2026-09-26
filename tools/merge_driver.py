@@ -7,8 +7,8 @@ Recipe (M6 stage-2):
            with colliding names renamed ck_* / sigs_empty / Sigs and shared
            helpers (parse_type, skip_body, skip_decl, str_find_char, op_prec,
            type PRes) deduped out
-  tail   = existing driver.resid driver section (pick_opt + main) with the
-           declare-header list refreshed from codegen.resid's main
+  tail   = existing driver.resid driver section (pick_opt + main), which
+           owns the declare-header list (hdr_core)
 """
 import re
 import sys
@@ -105,8 +105,7 @@ def main():
     dv = read('examples/driver.resid')
 
     # 1. base: codegen without CLI (original recipe)
-    base = drop_decls(cg, {'pick_out'})
-    base = cut_main(base)
+    base = cut_main(cg)
     while base and base[-1].strip() == '':
         base.pop()
 
@@ -164,50 +163,6 @@ def main():
     # accumulates stale intermediate functions between merges).
     ds = next(i for i, l in enumerate(dv) if 'Driver:' in l)
     tail = dv[ds:]
-    # Refresh hdr_core/header from codegen's main (same as before)
-    cg_main_start = next(a for (a, b, n) in decl_ranges(cg) if n == 'main')
-    cg_hdr_core = None
-    cg_header = None
-    cg_main_lines = cg[cg_main_start:]
-    i = 0
-    while i < len(cg_main_lines):
-        l = cg_main_lines[i]
-        stripped = l.strip()
-        if stripped.startswith('List(Str) hdr_core ='):
-            parts = [l]
-            j = i
-            while not cg_main_lines[j].rstrip().endswith('];'):
-                j += 1
-                parts.append(cg_main_lines[j])
-            cg_hdr_core = ' '.join(p.strip() for p in parts)
-            i = j
-        if stripped.startswith('List(Str) header ='):
-            cg_header = l
-            break
-        i += 1
-    if cg_hdr_core is None:
-        raise SystemExit('merge_driver: no hdr_core line found in codegen main')
-    if cg_header is None:
-        raise SystemExit('merge_driver: no header line found in codegen main')
-    # Replace hdr_core/header in the extracted tail
-    replaced_core = False
-    replaced_header = False
-    new_tail = []
-    for l in tail:
-        stripped = l.strip()
-        if stripped.startswith('List(Str) hdr_core =') and not replaced_core:
-            new_tail.append(cg_hdr_core)
-            replaced_core = True
-        elif stripped.startswith('List(Str) header =') and not replaced_header:
-            new_tail.append(cg_header)
-            replaced_header = True
-        else:
-            new_tail.append(l)
-    if not replaced_core:
-        raise SystemExit('merge_driver: no hdr_core line found in driver tail')
-    if not replaced_header:
-        raise SystemExit('merge_driver: no header line found in driver tail')
-    tail = new_tail
     # The tail is read back out of the PREVIOUSLY generated driver.resid, and
     # that file's trailing newline becomes an empty final element on
     # split('\n'). Left alone it is re-emitted and a fresh one is added, so
