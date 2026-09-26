@@ -204,7 +204,46 @@ Str ga_type(Int id, Int n0, List(Str) tys, GAD d) {
 
 // ─── Nodes ──────────────────────────────────────────────────────────
 
-type GAX = { Kg g; Int n0; List(Str) tys; List(Int) defs; GAD d; GAC c; GAF f; };
+type GAX = { Kg g; Int n0; List(Str) tys; List(Int) defs; GAD d; GAC c; GAF f; Map(Int, Str) rs; };
+
+// Reducer-recorded reasons "id,why;" by node.
+Map(Int, Str) ga_reasons(Str rs, Int pos, Map(Int, Str) acc) {
+    if (pos >= str_len(rs)) { return acc; }
+    Int c = str_find_char(rs, 44, pos);
+    Int e = str_find_char(rs, 59, c);
+    return ga_reasons(rs, e + 1, acc.insert(str_parse_int(str_slice(rs, pos, c)), str_slice(rs, c + 1, e)));
+}
+
+// A recorded reason of the node or of one it derives from.
+Str ga_rec(GAX x, Int id) {
+    Str r = x.rs.get(id) else { "" };
+    if (r != "" || id < x.n0) { return r; }
+    Int f = x.d.from[id];
+    if (f < 0) { return ""; }
+    return ga_rec(x, f);
+}
+
+Int ga_first_unknown(GAX x, Int id, Int i) {
+    if (i >= x.g.ns[id].nk) { return -1; }
+    Int k = kg_kid(x.g, id, i);
+    if (!x.c.kn[k]) { return k; }
+    return ga_first_unknown(x, id, i + 1);
+}
+
+// Why a RESIDUAL or EFFECT node is one (spec §3.4): { kind, ? dep, ? detail }.
+StrBuf ga_reason(StrBuf b, GAX x, Int id, Str eff, Int def) {
+    KN n = x.g.ns[id];
+    Str rec = ga_rec(x, id);
+    Bool ann = n.kind == "rt" || ((n.kind == "bind" || n.kind == "rbind") && str_contains(n.aux, "@residual"));
+    Int po = str_find_char(rec, 40, 0);
+    Str kind = if (eff != "") { "effect" } else if (rec != "") { if (po < 0) { rec } else { str_slice(rec, 0, po) } } else if (ann) { "annotated" } else { "unknown" };
+    Str detail = if (eff != "") { eff } else if (po >= 0) { str_slice(rec, po + 1, str_len(rec) - 1) } else { "" };
+    Int dep = if (kind != "unknown") { -1 } else if (def >= 0 && def < x.c.kn.len() && !x.c.kn[def]) { def } else { ga_first_unknown(x, id, 0) };
+    Int nf = 1 + (if (dep >= 0) { 1 } else { 0 }) + (if (detail != "") { 1 } else { 0 });
+    StrBuf b1 = ga_text(ga_key(ga_head(b, 5, nf), "kind"), kind);
+    StrBuf b2 = if (dep >= 0) { ga_int(ga_key(b1, "dep"), dep) } else { b1 };
+    return if (detail != "") { ga_text(ga_key(b2, "detail"), detail) } else { b2 };
+}
 
 StrBuf ga_value(StrBuf b, KN n) {
     if (n.aux == "bool") { return ga_bool(b, n.text == "true"); }
@@ -242,8 +281,8 @@ StrBuf ga_node(StrBuf b, GAX x, Int id) {
     Bool hv = ga_has_value(n);
     Int def = ga_def(x, id);
     Int from = x.d.from[id];
-    Int nf = 9 + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 });
     Str know = if (eff != "") { "effect" } else if (x.c.kn[id]) { "known" } else { "residual" };
+    Int nf = 9 + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 }) + (if (know != "known") { 1 } else { 0 });
     StrBuf b1 = ga_text(ga_key(ga_int(ga_key(ga_head(b, 5, nf), "id"), id), "kind"), n.kind);
     StrBuf b2 = ga_text(ga_key(ga_text(ga_key(b1, "type"), ga_type(id, x.n0, x.tys, x.d)), "knowledge"), know);
     StrBuf b3 = if (hv) { ga_value(ga_key(b2, "value"), n) } else { b2 };
@@ -254,7 +293,8 @@ StrBuf ga_node(StrBuf b, GAX x, Int id) {
     StrBuf b7 = if (cap != "") { ga_text(ga_head(ga_key(b6, "capabilities"), 4, 1), cap) } else { ga_head(ga_key(b6, "capabilities"), 4, 0) };
     StrBuf b8 = ga_pos(ga_pos(ga_head(ga_key(b7, "span"), 4, 5), x.f, n.sp, true), x.f, n.ep, false);
     StrBuf b9 = if (from >= 0) { ga_text(ga_key(ga_int(ga_key(ga_head(ga_key(b8, "derive"), 5, 2), "from"), from), "rule"), x.d.rule[id]) } else { b8 };
-    return ga_hexbytes(ga_key(b9, "hash"), x.c.hs[id]);
+    StrBuf b10 = if (know != "known") { ga_reason(ga_key(b9, "reason"), x, id, eff, def) } else { b9 };
+    return ga_hexbytes(ga_key(b10, "hash"), x.c.hs[id]);
 }
 
 StrBuf ga_nodes(StrBuf b, GAX x, Int id, Int n) {
@@ -302,13 +342,14 @@ pub List(Int) ga_where(GAF f, Int pos) {
 // Write the artifact for graph p (root p.id) whose source nodes are
 // 0..n0-1; with `resid`, p.id is the residual root. The file's SHA-256 as
 // hex, or "" when it could not be written.
-pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, List(Str) tys, Str defs, Str src, Str smap, Str main) {
+pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, Str rs, List(Str) tys, Str defs, Str src, Str smap, Str main) {
     Kg g = p.g;
     Int n = kg_count(g);
     GAF f = ga_fileinfo(src, smap, main);
     List(Bool) nb = [];
     List(Str) ns = [];
-    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}), .f = f};
+    Map(Int, Str) r0 = {};
+    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}), .f = f, .rs = ga_reasons(rs, 0, r0)};
     StrBuf h0 = ga_int(ga_key(ga_head(StrBuf(), 5, 4), "version"), 1);
     StrBuf h1 = ga_sources(ga_head(ga_key(h0, "source"), 4, f.paths.len()), f.paths, 0);
     if (!filesystem.write_hex(path, ga_head(ga_key(h1, "nodes"), 4, n).finish())) { return ""; }

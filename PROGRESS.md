@@ -285,6 +285,16 @@ self-compile IR is unchanged. The linear map/set accumulator mask
 (`lg_mask`) and struct `ToString` moved to the graph as well, with IR
 identical on all programs.
 
+### 0u. Reasons for residual nodes (G3, 2026-09-26)
+
+Every RESIDUAL or EFFECT node in `<out>.resid-graph.cbor` carries a
+reason (spec §3.4, §34): `effect` with the effect, `annotated` for `rt` /
+`@residual`, `unknown` with the first RESIDUAL operand or definition, and
+the reducer's own: `budget` (fuel, steps or specs), `loop` (an identical
+re-entry) and `whistle` (a generalized specialization), recorded against
+the call and inherited along derive edges. Self-compile: 2,517 budget and
+605 whistle reasons; debug peak 690MB.
+
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
 
 `examples/greduce.resid` reduces the parsed graph instead of source text.

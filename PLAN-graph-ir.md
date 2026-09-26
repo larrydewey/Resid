@@ -134,7 +134,9 @@ are imported the same way `reduce.resid` is.
   - [x] Derive edges (origin and rule) on every reduction-made node.
   - [x] Signatures and leaf analysis come from the graph (`lw_sigs`);
     `--graph-sigs-check` compares them with the printed residual's.
-  - Next: reasons for residual nodes.
+  - [x] Reasons on RESIDUAL and EFFECT nodes in the artifact: effect,
+    annotated, unknown(dep), and the reducer's budget(fuel|steps|specs),
+    loop and whistle.
   - Port fold, beta, eval, specialize, generalize, dead-arm and elide from
     `reduce.resid`, recording derive edges and reasons.
   - Facts: range and nonzero first (overflow and div0 discharge), then
