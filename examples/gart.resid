@@ -204,7 +204,7 @@ Str ga_type(Int id, Int n0, List(Str) tys, GAD d) {
 
 // ─── Nodes ──────────────────────────────────────────────────────────
 
-type GAX = { Kg g; Int n0; List(Str) tys; List(Int) defs; GAD d; GAC c; GAF f; Map(Int, Str) rs; Map(Int, Str) rf; };
+type GAX = { Kg g; Int n0; List(Str) tys; List(Int) defs; GAD d; GAC c; GAF f; Map(Int, Str) rs; Map(Int, Str) rf; Map(Int, Str) ck; };
 
 // Range facts (lr_facts) of every function under a unit, as "id=lo,hi;"
 // text; a node shared by several functions keeps the join.
@@ -223,15 +223,113 @@ Map(Int, Str) ga_facts_read(Str s, Int pos, Map(Int, Str) acc) {
     Int id = str_parse_int(str_slice(s, pos, eq));
     Str v = str_slice(s, eq + 1, semi);
     Str old = acc.get(id) else { "" };
-    Str nv = if (old == "") { v } else { lr_str(lr_join(lr_parse(old), lr_parse(v))) };
+    // Other facts (negative keys) keep the segments both copies have.
+    Str nv = if (old == "") { v } else if (id < 0) { ga_common_segs(str_split(old, "|"), v, 0, "") } else { lr_str(lr_join(lr_parse(old), lr_parse(v))) };
     return ga_facts_read(s, semi + 1, acc.insert(id, nv));
 }
 
-// `facts: [{kind: "range", lo, hi}]`.
-StrBuf ga_range(StrBuf b, Str r) {
-    LR x = lr_parse(r);
-    StrBuf b1 = ga_text(ga_key(ga_head(ga_head(b, 4, 1), 5, 3), "kind"), "range");
-    return ga_int(ga_key(ga_int(ga_key(b1, "lo"), x.lo), "hi"), x.hi);
+Str ga_common_segs(List(Str) xs, Str v, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    Bool keep = lr_has_seg(v, xs[i]);
+    return ga_common_segs(xs, v, i + 1, if (!keep) { acc } else if (acc == "") { xs[i] } else { acc + "|" + xs[i] });
+}
+
+// The check records in lowered IR lines (`; discharged #id check`), as
+// "id kind check;" text.
+pub Str ga_check_lines(List(Str) ls, Int i, StrBuf acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    Bool rec = str_starts_with(l, "; discharged #") || str_starts_with(l, "; checked #");
+    if (!rec) { return ga_check_lines(ls, i + 1, acc); }
+    List(Str) p = str_split(l, " ");
+    Str ck0 = if (p.len() > 3) { p[3] } else { "" };
+    Int cm = str_find_char(ck0, 44, 0);
+    Str ck = if (cm < 0) { ck0 } else { str_slice(ck0, 0, cm) };
+    Str id = str_slice(p[2], 1, str_len(p[2]));
+    return ga_check_lines(ls, i + 1, acc.push(id + " " + p[1] + " " + ck + ";"));
+}
+
+// Checks lowering recorded ("id kind check;", kind discharged or checked).
+Map(Int, Str) ga_checks(Str s, Int pos, Map(Int, Str) acc) {
+    if (pos >= str_len(s)) { return acc; }
+    Int semi = str_find_char(s, 59, pos);
+    List(Str) p = str_split(str_slice(s, pos, semi), " ");
+    Int id = str_parse_int(p[0]);
+    Str old = acc.get(id) else { "" };
+    Str e = p[1] + ":" + p[2];
+    return ga_checks(s, semi + 1, acc.insert(id, if (old == "") { e } else { old + "|" + e }));
+}
+
+// The `facts` array: range, nonzero, length, tag, fields, and the checks
+// lowering discharged (with the operands whose facts it used) or kept
+// (with the operands that had no range).
+StrBuf ga_facts_out(StrBuf b, GAX x, Int id, Str fr, Str fx, Str ck) {
+    LR r = lr_parse(fr);
+    Bool rg = fr != "" && !(r.lo == lr_min() && r.hi == lr_max());
+    Bool nz = fr != "" && lr_nz(r) && !(r.lo > 0 || r.hi < 0);
+    List(Str) xs = if (fx == "") { [] } else { str_split(fx, "|") };
+    List(Str) cs = if (ck == "") { [] } else { str_split(ck, "|") };
+    List(Str) keep = ga_fact_segs(xs, 0, ListBuf());
+    Int n = (if (rg) { 1 } else { 0 }) + (if (nz) { 1 } else { 0 }) + keep.len() + cs.len();
+    StrBuf b0 = ga_head(b, 4, n);
+    StrBuf b1 = if (rg) { ga_int(ga_key(ga_int(ga_key(ga_text(ga_key(ga_head(b0, 5, 3), "kind"), "range"), "lo"), r.lo), "hi"), r.hi) } else { b0 };
+    StrBuf b2 = if (nz) { ga_text(ga_key(ga_head(b1, 5, 1), "kind"), "nonzero") } else { b1 };
+    StrBuf b3 = ga_seg_facts(b2, keep, 0);
+    return ga_check_facts(b3, x, id, cs, 0);
+}
+
+List(Str) ga_fact_segs(List(Str) xs, Int i, ListBuf(Str) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    Bool k = str_starts_with(xs[i], "len:") || str_starts_with(xs[i], "tag:") || str_starts_with(xs[i], "fields:");
+    return ga_fact_segs(xs, i + 1, if (k) { acc.push(xs[i]) } else { acc });
+}
+
+StrBuf ga_seg_facts(StrBuf b, List(Str) xs, Int i) {
+    if (i >= xs.len()) { return b; }
+    Str x = xs[i];
+    Int c = str_find_char(x, 58, 0);
+    Str k = str_slice(x, 0, c);
+    Str v = str_slice(x, c + 1, str_len(x));
+    StrBuf b1 = if (k == "len") {
+        LR l = lr_parse(v);
+        ga_int(ga_key(ga_int(ga_key(ga_text(ga_key(ga_head(b, 5, 3), "kind"), "length"), "lo"), l.lo), "hi"), l.hi)
+    } else if (k == "tag") { ga_text(ga_key(ga_text(ga_key(ga_head(b, 5, 2), "kind"), "tag"), "tag"), v) } else {
+        List(Str) fs = str_split(v, ",");
+        ga_field_ids(ga_head(ga_key(ga_text(ga_key(ga_head(b, 5, 2), "kind"), "fields"), "nodes"), 4, fs.len()), fs, 0)
+    };
+    return ga_seg_facts(b1, xs, i + 1);
+}
+
+StrBuf ga_field_ids(StrBuf b, List(Str) fs, Int i) {
+    if (i >= fs.len()) { return b; }
+    Str f = fs[i];
+    Int e = str_find_char(f, 61, 0);
+    return ga_field_ids(ga_int(b, str_parse_int(str_slice(f, e + 1, str_len(f)))), fs, i + 1);
+}
+
+StrBuf ga_check_facts(StrBuf b, GAX x, Int id, List(Str) cs, Int i) {
+    if (i >= cs.len()) { return b; }
+    Str c = cs[i];
+    Int k = str_find_char(c, 58, 0);
+    Bool gone = str_slice(c, 0, k) == "discharged";
+    List(Int) ops = ga_check_ops(x, id, gone, 0, ListBuf());
+    StrBuf b1 = ga_text(ga_key(ga_text(ga_key(ga_head(b, 5, 3), "kind"), if (gone) { "discharged" } else { "check" }), "tag"), str_slice(c, k + 1, str_len(c)));
+    StrBuf b2 = ga_check_ids(ga_head(ga_key(b1, "nodes"), 4, ops.len()), ops, 0);
+    return ga_check_facts(b2, x, id, cs, i + 1);
+}
+
+// Operands a check depends on: all of them when discharged (their facts
+// were used), else those without a range.
+List(Int) ga_check_ops(GAX x, Int id, Bool all, Int i, ListBuf(Int) acc) {
+    if (i >= x.g.ns[id].nk) { return acc.finish(); }
+    Int k = kg_kid(x.g, id, i);
+    Bool has = (x.rf.get(k) else { "" }) != "";
+    return ga_check_ops(x, id, all, i + 1, if (all || !has) { acc.push(k) } else { acc });
+}
+
+StrBuf ga_check_ids(StrBuf b, List(Int) ids, Int i) {
+    if (i >= ids.len()) { return b; }
+    return ga_check_ids(ga_int(b, ids[i]), ids, i + 1);
 }
 
 // Reducer-recorded reasons "id,why;" by node.
@@ -318,8 +416,11 @@ StrBuf ga_node(StrBuf b, GAX x, Int id) {
     Int from = x.d.from[id];
     Str know = if (eff != "") { "effect" } else if (x.c.kn[id]) { "known" } else { "residual" };
     Str fr = if (know != "known") { x.rf.get(id) else { "" } } else { "" };
+    Str fx = if (know != "known") { x.rf.get(0 - id - 1) else { "" } } else { "" };
+    Str ck = x.ck.get(id) else { "" };
+    Bool hf = fr != "" || ga_fact_segs(if (fx == "") { [] } else { str_split(fx, "|") }, 0, ListBuf()).len() > 0 || ck != "";
     Bool hn = ga_named(n);
-    Int nf = 9 + (if (hn) { 1 } else { 0 }) + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 }) + (if (know != "known") { 1 } else { 0 }) + (if (fr != "") { 1 } else { 0 });
+    Int nf = 9 + (if (hn) { 1 } else { 0 }) + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 }) + (if (know != "known") { 1 } else { 0 }) + (if (hf) { 1 } else { 0 });
     StrBuf b1 = ga_text(ga_key(ga_int(ga_key(ga_head(b, 5, nf), "id"), id), "kind"), n.kind);
     StrBuf b2 = ga_text(ga_key(ga_text(ga_key(b1, "type"), ga_type(id, x.n0, x.tys, x.d)), "knowledge"), know);
     StrBuf b2n = if (hn) { ga_text(ga_key(b2, "name"), n.text) } else { b2 };
@@ -332,7 +433,7 @@ StrBuf ga_node(StrBuf b, GAX x, Int id) {
     StrBuf b8 = ga_pos(ga_pos(ga_head(ga_key(b7, "span"), 4, 5), x.f, n.sp, true), x.f, n.ep, false);
     StrBuf b9 = if (from >= 0) { ga_text(ga_key(ga_int(ga_key(ga_head(ga_key(b8, "derive"), 5, 2), "from"), from), "rule"), x.d.rule[id]) } else { b8 };
     StrBuf b10 = if (know != "known") { ga_reason(ga_key(b9, "reason"), x, id, eff, def) } else { b9 };
-    StrBuf b11 = if (fr != "") { ga_range(ga_key(b10, "facts"), fr) } else { b10 };
+    StrBuf b11 = if (hf) { ga_facts_out(ga_key(b10, "facts"), x, id, fr, fx, ck) } else { b10 };
     return ga_hexbytes(ga_key(b11, "hash"), x.c.hs[id]);
 }
 
@@ -381,14 +482,14 @@ pub List(Int) ga_where(GAF f, Int pos) {
 // Write the artifact for graph p (root p.id) whose source nodes are
 // 0..n0-1; with `resid`, p.id is the residual root. The file's SHA-256 as
 // hex, or "" when it could not be written.
-pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, Str rs, List(Str) tys, Str defs, Str src, Str smap, Str main) {
+pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, Str rs, List(Str) tys, Str defs, Str src, Str smap, Str main, Str checks) {
     Kg g = p.g;
     Int n = kg_count(g);
     GAF f = ga_fileinfo(src, smap, main);
     List(Bool) nb = [];
     List(Str) ns = [];
     Map(Int, Str) r0 = {};
-    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}), .f = f, .rs = ga_reasons(rs, 0, r0), .rf = ga_facts_read(ga_facts(g, p.id, 0, StrBuf()).finish(), 0, r0)};
+    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}), .f = f, .rs = ga_reasons(rs, 0, r0), .rf = ga_facts_read(ga_facts(g, p.id, 0, StrBuf()).finish(), 0, r0), .ck = ga_checks(checks, 0, r0)};
     StrBuf h0 = ga_int(ga_key(ga_head(StrBuf(), 5, 4), "version"), 1);
     StrBuf h1 = ga_sources(ga_head(ga_key(h0, "source"), 4, f.paths.len()), f.paths, 0);
     if (!filesystem.write_hex(path, ga_head(ga_key(h1, "nodes"), 4, n).finish())) { return ""; }

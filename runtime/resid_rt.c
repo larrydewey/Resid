@@ -1977,6 +1977,11 @@ void* resid_list_get(void* b, int64_t i) {
     return list_at(v, i);
 }
 
+/* An element whose index the compiler proved in bounds (range facts). */
+void* resid_list_get_nc(void* b, int64_t i) {
+    return list_at((ResidList*)b, i);
+}
+
 const char* resid_list_type(void* b) { return ((ResidList*)b)->type; }
 
 /* Flatten a list to a fresh void** array (caller frees). Used by list verbs

@@ -169,6 +169,20 @@ if "$COMPILER" tools/resid-debug.resid -o "$CK/rdbg" >/dev/null 2>&1 && [ -x "$D
 else
     fail=$((fail + 1)); echo "FAIL resid-debug build"
 fi
+# The artifact carries nonzero, length, tag and fields facts, and every
+# runtime check lowering discharged or kept.
+if [ -x "$CK/why" ] && "$COMPILER" tests/graph/cases/facts_sample.resid -o "$CK/facts" --profile debug >/dev/null 2>&1; then
+    got="$(for l in 6 12 35; do "$CK/why" "$CK/facts" --at facts_sample.resid:$l; done 2>&1)"
+    if [[ "$got" == *"nonzero"* && "$got" == *"discharged division using #"* && "$got" == *"discharged bounds using #"* && "$got" == *"tag Circle"* && "$got" == *"check overflow lacking #"* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL facts_sample: $got"
+    fi
+    got="$("$CK/why" "$CK/facts" p 2>&1)"
+    if [[ "$got" == *"bind p: P"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL facts_sample p: $got"; fi
+else
+    fail=$((fail + 1)); echo "FAIL facts_sample build"
+fi
 # resid-graph draws a node's neighbourhood as DOT from the artifact.
 if "$COMPILER" tools/resid-graph.resid -o "$CK/rg" >/dev/null 2>&1; then
     got="$("$CK/rg" "$CK/ns" --node 0 --depth 1 2>&1)"

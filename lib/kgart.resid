@@ -144,17 +144,33 @@ pub Str gn_reason(List(Int) b, Int p) {
     return k + d + dep;
 }
 
-// `facts: [{kind: range, lo, hi}]` as `range [lo, hi]`.
+// `facts: [...]` as `range [lo, hi], nonzero, length [lo, hi], tag V,
+// fields #a #b, discharged overflow using #x #y, check bounds lacking #z`.
 pub Str gn_facts(List(Int) b, Int p) {
     if (p < 0) { return ""; }
     CH h = ch_read(b, p);
-    if (h.arg == 0) { return ""; }
-    Int f = h.pos;
-    Str k = ch_text(b, ch_field(b, f, "kind"));
-    Int lo = ch_field(b, f, "lo");
-    Int hi = ch_field(b, f, "hi");
+    return gn_facts_at(b, h.pos, h.arg, "");
+}
+
+pub Str gn_facts_at(List(Int) b, Int pos, Int n, Str acc) {
+    if (n <= 0) { return acc; }
+    Str k = ch_text(b, ch_field(b, pos, "kind"));
+    Int lo = ch_field(b, pos, "lo");
+    Int hi = ch_field(b, pos, "hi");
+    Int tg = ch_field(b, pos, "tag");
+    Int ns = ch_field(b, pos, "nodes");
     Str r = if (lo >= 0 && hi >= 0) { " [" + IntToString(ch_int(b, lo)) + ", " + IntToString(ch_int(b, hi)) + "]" } else { "" };
-    return k + r;
+    Str t = if (tg >= 0) { " " + ch_text(b, tg) } else { "" };
+    List(Int) ids = if (ns >= 0) { ch_ints(b, ns) } else { [] };
+    Str word = if (k == "discharged") { " using" } else if (k == "check") { " lacking" } else { "" };
+    Str is = if (ids.len() > 0) { word + gn_ids(ids, 0, "") } else { "" };
+    Str one = k + r + t + is;
+    return gn_facts_at(b, ch_skip(b, pos), n - 1, if (acc == "") { one } else { acc + ", " + one });
+}
+
+pub Str gn_ids(List(Int) ids, Int i, Str acc) {
+    if (i >= ids.len()) { return acc; }
+    return gn_ids(ids, i + 1, acc + " #" + IntToString(ids[i]));
 }
 
 pub GN gn_read(GA a, Int id) {

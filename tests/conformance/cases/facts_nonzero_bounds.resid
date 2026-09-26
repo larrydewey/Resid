@@ -1,0 +1,40 @@
+// Nonzero and bounds facts drop checks only where they cannot fire
+// (spec §3.2a): a divisor known != 0, an index below a list's length.
+Int div_nz(Int a, Int d) {
+    if (d != 0) { return (a % 1000) / d; }
+    return 0;
+}
+
+Int sum_all(List(Int) xs) {
+    Int n = xs.len();
+    return sum_at(xs, 0, n, 0);
+}
+
+Int sum_at(List(Int) xs, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return sum_at(xs, i + 1, n, acc + xs[i]);
+}
+
+Int loop_sum(List(Int) xs) {
+    for (Int i in 0..xs.len()) { println(IntToString(xs[i] * 2)); }
+    return 0;
+}
+
+Int pick(List(Int) xs, Int i) {
+    if (i < xs.len()) { return xs[i]; }
+    return -1;
+}
+
+Int main() {
+    Int k = args.count();
+    println(IntToString(div_nz(k + 7, k)));
+    println(IntToString(div_nz(k + 7, 0 - k)));
+    println(IntToString(div_nz(k, 0)));
+    println(IntToString(sum_all([1, 2, 3, k])));
+    Int l = loop_sum([k, k + 1, k + 2]);
+    println(IntToString(pick([10, 20, 30], k)));
+    println(IntToString(pick([10, 20, 30], k + 5)));
+    // i < len but negative: the check stays, and fires.
+    println(IntToString(pick([10, 20, 30], 0 - k - 1)));
+    return 0;
+}

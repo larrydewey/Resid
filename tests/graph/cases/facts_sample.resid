@@ -1,0 +1,38 @@
+// Facts in the graph artifact: nonzero, discharged checks, length, tag, fields.
+type P = { Int x; Int y; };
+type Shape = Circle(Int) | Square(Int);
+
+Int div_nz(Int a, Int d) {
+    if (d != 0) { return (a % 1000) / d; }
+    return 0;
+}
+
+Int total(List(Int) xs) {
+    Int s = 0;
+    for (Int i in 0..xs.len()) { println(IntToString(xs[i])); }
+    List(Int) ys = [4, 5, 6];
+    return ys[2] + ys[args.count() % 3];
+}
+
+Int area(Shape s) {
+    return match (s) {
+        Circle(r) => r * 3,
+        Square(w) => w * w,
+    };
+}
+
+Int main() {
+    P p = P {.x = args.count(), .y = 2};
+    println(IntToString(div_nz(args.count() + 7, args.count())));
+    println(IntToString(total([1, 2, 3])));
+    println(IntToString(p.x + p.y));
+    println(IntToString(area(Circle(args.count()))));
+    println(IntToString(again(Square(args.count() + 1))));
+    return 0;
+}
+Int again(Shape s) {
+    return match (s) {
+        Circle(r) => area(s) + r,
+        Square(w) => w,
+    };
+}
