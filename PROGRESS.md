@@ -227,6 +227,24 @@ generalization; an identical re-entrant call stops evaluation at once;
 budget hits print `note: reduce: ...`. The compiler specializes 53 of its
 own calls; self-compile time and memory are unchanged.
 
+### 0i. Signed provenance restored (spec v3.5 §33.1) (2026-09-26)
+
+The self-hosted driver had regressed from the Rust pipeline's COSE trailer
+to a plaintext `.resid-prov` sidecar that covered neither the binary nor
+the notes. Now every build appends `[COSE_Sign1][u32 BE len]["RESIDPROV2"]`
+to the binary. The payload (§34 Provenance map, deterministic key order)
+binds the source files, the code bytes and the sidecars (notes, and graph
+once G4 lands) by SHA-256. `RESID_PROV_ENCRYPT=1` + `RESID_PROV_KEY`
+conceal it with COSE_Encrypt0. Release builds fail without a key
+(`RESID_SIGNING_KEY` or `keys/resid-ed25519.key`), and debug builds are
+unsigned with a note. New commands: `residc keygen [dir]` and
+`residc verify <binary> [--pub HEX]`. The keyring is `keys/*.pub` or
+`RESID_VERIFY_PUB`. Shared code lives in `lib/cose.resid` (preferred CBOR
+serialization), which `tools/resid-cose.resid` now uses too. boot.sh and
+the test harnesses create a throwaway key when none is configured.
+`tests/provenance/run.sh` covers tamper detection, keys, concealment and
+reproducibility. Self-compile time is unchanged.
+
 ### Major capabilities
 
 - **Stage-2 self-hosting proven, including full sandbox/capability parity**:

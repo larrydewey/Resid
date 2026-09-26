@@ -15324,6 +15324,7 @@ GR gr_reduce_program(Str s, Sigs fs) {
 
 import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
+import "../lib/cose.resid";
 import "reduce.resid";
 import "desugar.resid";
 import "stracc.resid";
@@ -15365,38 +15366,6 @@ pub List(Int) prov_hex_acc(Str s, Int i, Int n, List(Int) acc) {
     List(Int) acc2 = acc.concat([b]);
     Int ni  =  i + 2;
     return prov_hex_acc(s, ni, n, acc2);
-}
-
-// Emit `<out>.resid-prov`: cleartext provenance payload + Ed25519 signature
-// over it, produced by the self-hosted signer in lib/ed25519.res. The
-// payload embeds the full residual notes the driver itself discovered.
-Str prov_esc(Str s) {
-    Str a  =  str_replace(s, ";", "_");
-    Str b  =  str_replace(a, "=", "_");
-    Str c  =  str_replace(b, "\n", " ");
-    return c;
-}
-
-Str prov_line_tag(Str line) {
-    if (str_contains(line, "rt ")) { return "rt-binding"; }
-    if (str_contains(line, "filesystem.")) { return "provider-call"; }
-    if (str_contains(line, "env.")) { return "provider-call"; }
-    if (str_contains(line, "args.")) { return "provider-call"; }
-    if (str_contains(line, "process.")) { return "provider-call"; }
-    return "";
-}
-
-Str prov_notes_rec(List(Str) lines, Int i, Int n, Str acc) {
-    if (i > n) { return acc; }
-    Str line  =  lines[i];
-    Str tag  =  prov_line_tag(line);
-    Int ln  =  i + 1;
-    Str esc  =  prov_esc(line);
-    Str rec  =  f"{tag}@{ln}:{esc}";
-    Str sep  =  if (acc == "") { "" } else { ";" };
-    Str acc2  =  if (tag == "") { acc } else { acc + sep + rec };
-    Int ni  =  i + 1;
-    return prov_notes_rec(lines, ni, n, acc2);
 }
 
 // ─── `<out>.resid-notes.cbor` sidecar (spec §27/§34) ───────────────
@@ -15613,77 +15582,266 @@ Str prov_sha256(Str msg) {
     return hex_state(digest_blocks(padded, 0, padded.len(), h1), 0, "");
 }
 
-// lib/crypto's `sha512_bytes` and lib/ed25519's `sign_msg`, restated with
-// each 128-byte SHA-512 block compressed inside its own scope (the same
-// reason as prov_digest_blocks: a block's temporaries are ~1MB of limb
-// lists, and signing hashes the whole payload twice).
-List(Int) prov_digest_blocks512(List(Int) m, Int pos, Int total, List(Int) st) {
-    if (pos >= total) { return st; }
+// ─── Signed provenance (spec §33.1, §34) ──────────────────────────
+// The binary gets a trailer [COSE_Sign1][u32 BE length]["RESIDPROV2"];
+// its payload binds the sources, the code and the sidecars by SHA-256.
+
+// SHA-256 of a byte list, each block compressed in its own arena.
+List(Int) prov_digest_list(List(Int) m, Int pos, Int total, List(Int) h) {
+    if (pos >= total) { return h; }
     Int _blk_in = resid_bulk_push();
-    List(Int) s2 = digest_block512f(m, pos, st);
-    Int l0 = s2[0];
-    Int l1 = s2[1];
-    Int l2 = s2[2];
-    Int l3 = s2[3];
-    Int l4 = s2[4];
-    Int l5 = s2[5];
-    Int l6 = s2[6];
-    Int l7 = s2[7];
-    Int l8 = s2[8];
-    Int l9 = s2[9];
-    Int l10 = s2[10];
-    Int l11 = s2[11];
-    Int l12 = s2[12];
-    Int l13 = s2[13];
-    Int l14 = s2[14];
-    Int l15 = s2[15];
+    List(Int) h2 = digest_block(m, pos, h);
+    Int w0 = h2[0];
+    Int w1 = h2[1];
+    Int w2 = h2[2];
+    Int w3 = h2[3];
+    Int w4 = h2[4];
+    Int w5 = h2[5];
+    Int w6 = h2[6];
+    Int w7 = h2[7];
     Int _blk_out = resid_bulk_pop();
-    return prov_digest_blocks512(m, pos + 128, total, [l0, l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11, l12, l13, l14, l15]);
+    return prov_digest_list(m, pos + 64, total, [w0, w1, w2, w3, w4, w5, w6, w7]);
 }
 
-List(Int) prov_sha512(List(Int) msg) {
-    List(Int) padded = pad512(msg);
-    return limbs_to_hex_bytes(prov_digest_blocks512(padded, 0, padded.len(), state512_init()), 0);
+List(Int) prov_sha256_bytes(List(Int) m) {
+    List(Int) h0 = [1779033703, -1150833019, 1013904242, -1521486534, 1359893119, -1694144372, 528734635, 1541459225];
+    Int n = m.len();
+    Int full = (n / 64) * 64;
+    List(Int) h1 = prov_digest_list(m, 0, full, h0);
+    List(Int) padded = pad_tail(slice_bytes(m, full, n - 1), n);
+    return words_to_bytes(digest_blocks(padded, 0, padded.len(), h1));
 }
 
-List(Int) prov_sign(List(Int) seed, Str msg) {
-    List(Int) mb = bytes_of(msg);
-    List(Int) h = sha512_bytes(seed);
-    List(Int) hhi = slice_bytes(h, 32, 63);
-    Int(256) av2 = clamp_of_seed(seed);
-    List(Int) axb = smul_x_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
-    List(Int) ayb = smul_y_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
-    List(Int) Aenc = encode_pt_bytes(bytes_to_int(axb), ayb);
-    Int(256) rv = mod_l(prov_sha512(concat_bytes(hhi, mb)));
-    List(Int) rxb = smul_x_acc(rv, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
-    List(Int) ryb = smul_y_acc(rv, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
-    List(Int) Renc = encode_pt_bytes(bytes_to_int(rxb), ryb);
-    Int(256) kv = mod_l(prov_sha512(concat_bytes(concat_bytes(Renc, Aenc), mb)));
-    Int(512) sum = ((Int(512)) kv) * ((Int(512)) av2) + ((Int(512)) rv);
-    return concat_bytes(Renc, int_to_bytes(mod_l_w(sum)));
+Str prov_magic() { return "RESIDPROV2"; }
+
+// Signing key file: $RESID_SIGNING_KEY, else keys/resid-ed25519.key; ""
+// when neither exists.
+Str prov_key_path() {
+    Str e = environment.get("RESID_SIGNING_KEY");
+    if (e != "") {
+        if (filesystem.exists(e)) { return e; }
+        return "";
+    }
+    if (filesystem.exists("keys/resid-ed25519.key")) { return "keys/resid-ed25519.key"; }
+    return "";
 }
 
-Int write_provenance(Str out, Str src) {
-    Str kpath  =  "keys/resid-ed25519.key";
-    if (!filesystem.exists(kpath)) {
-        println("note: provenance: unsigned (no signing key)");
+List(Int) prov_read_seed(Str kpath) {
+    return cose_hex_decode(str_trim(filesystem.read_all(kpath)));
+}
+
+// kid: the first 8 bytes of the public key, hex.
+Str prov_kid(List(Int) pubk) {
+    return hex_encode(slice_bytes(pubk, 0, 7));
+}
+
+// {path, hash} for each resolved source ("…;a;b;" from import resolution).
+List(Int) prov_sources(List(Str) paths, Int i, List(Int) acc) {
+    if (i >= paths.len()) { return acc; }
+    Str p = paths[i];
+    if (p == "") { return prov_sources(paths, i + 1, acc); }
+    List(Int) keep = prov_sha256_bytes(filesystem.read_bytes(p));
+    List(Int) a1 = cbe_text("path", cbe_map(2, acc));
+    List(Int) a2 = cbe_text("hash", cbe_text(p, a1));
+    return prov_sources(paths, i + 1, cbe_bytes(keep, a2));
+}
+
+Int prov_count_paths(List(Str) paths, Int i, Int acc) {
+    if (i >= paths.len()) { return acc; }
+    Int d = if (paths[i] == "") { 0 } else { 1 };
+    return prov_count_paths(paths, i + 1, acc + d);
+}
+
+// Hash of a sidecar, or [] when the file is absent.
+List(Int) prov_file_hash(Str p) {
+    List(Int) empty = [];
+    if (!filesystem.exists(p)) { return empty; }
+    return prov_sha256_bytes(filesystem.read_bytes(p));
+}
+
+// The Provenance map, keys in deterministic (length, then bytewise) order.
+List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph) {
+    List(Str) paths = str_split(done, ";");
+    Int nopt = if (notes.len() > 0) { 1 } else { 0 };
+    Int gopt = if (graph.len() > 0) { 1 } else { 0 };
+    List(Int) m0 = cbe_map(6 + nopt + gopt, []);
+    List(Int) m1 = cbe_bytes(code, cbe_text("code", m0));
+    List(Int) m2 = cbe_array(0, cbe_text("grant", m1));
+    List(Int) m3 = if (gopt == 1) { cbe_bytes(graph, cbe_text("graph", m2)) } else { m2 };
+    List(Int) m4 = if (nopt == 1) { cbe_bytes(notes, cbe_text("notes", m3)) } else { m3 };
+    List(Int) m5 = cbe_text(out, cbe_text("output", m4));
+    List(Int) m6 = cbe_text(profile, cbe_text("profile", m5));
+    List(Int) m7 = cbe_array(prov_count_paths(paths, 0, 0), cbe_text("sources", m6));
+    List(Int) m8 = prov_sources(paths, 0, m7);
+    return cbe_text("resid-stage2 3.5", cbe_text("toolchain", m8));
+}
+
+List(Int) prov_u32(Int v) {
+    return cbe_be(v, 4, []);
+}
+
+// Sign `out` in place. Returns 0, or 1 when signing is required but fails.
+Int write_provenance(Str out, Str profile, Str done) {
+    Str kpath = prov_key_path();
+    if (kpath == "") {
+        println("note: provenance: unsigned " + profile + " build (no signing key)");
         return 0;
     }
-    Str keyhex  =  filesystem.read_all(kpath);
-    Int klen  =  str_len(keyhex);
-    Int km1  =  klen - 1;
-    Str ktrim  =  str_slice(keyhex, 0, km1);
-    List(Int) seed = prov_hex_seed(ktrim);
-    List(Str) lines = str_split(src, "\n");
-    Int nlines  =  lines.len() - 1;
-    Str notes_acc  =  "";
-    Str notes  =  prov_notes_rec(lines, 0, nlines, notes_acc);
-    Str payload  =  f"toolchain=resid-stage2;source_sha256={prov_sha256(src)};records={notes}";
-    List(Int) sig = prov_sign(seed, payload);
-    Str sighex  =  hex_encode(sig);
-    Str doc  =  payload + "\n" + sighex + "\n";
-    filesystem.write_all(out + ".resid-prov", doc);
-    println("note: provenance: signed (stage-2)");
+    List(Int) seed = prov_read_seed(kpath);
+    if (seed.len() != 32) {
+        println("error: provenance: signing key " + kpath + " is not a 32-byte hex seed");
+        return 1;
+    }
+    List(Int) bin = filesystem.read_bytes(out);
+    List(Int) code = prov_sha256_bytes(bin);
+    List(Int) notes = prov_file_hash(out + ".resid-notes.cbor");
+    List(Int) graph = prov_file_hash(out + ".resid-graph.cbor");
+    List(Int) map = prov_payload(out, profile, done, code, notes, graph);
+    Str ekey = environment.get("RESID_PROV_KEY");
+    Bool conceal = environment.get("RESID_PROV_ENCRYPT") == "1";
+    if (conceal && ekey == "") {
+        println("error: provenance: RESID_PROV_ENCRYPT=1 needs RESID_PROV_KEY");
+        return 1;
+    }
+    List(Int) pubk = pub_key(seed);
+    Str kid = prov_kid(pubk);
+    List(Int) payload = if (conceal) { cose_encrypt0_seal(map, cose_hex_decode(ekey), kid) } else { map };
+    List(Int) cose = cose_sign1(payload, kid, seed);
+    List(Int) trailer = cose.concat(prov_u32(cose.len())).concat(bytes_of(prov_magic()));
+    Bool w1 = filesystem.write_bytes(out, bin.concat(trailer));
+    Bool w2 = filesystem.write_bytes(out + ".resid-prov.cbor", cose);
+    if (!w1 || !w2) {
+        println("error: provenance: cannot write " + out);
+        return 1;
+    }
+    println("note: provenance: signed (kid " + kid + ")");
+    return 0;
+}
+
+// ─── `residc keygen [dir]` ────────────────────────────────────────
+
+Int cmd_keygen(Str dir) {
+    Str kp = dir + "/resid-ed25519.key";
+    if (filesystem.exists(kp)) {
+        println("error: keygen: " + kp + " already exists");
+        return 1;
+    }
+    Bool mk = filesystem.create_dir(dir);
+    List(Int) seed = random_bytes(32);
+    Str pub = hex_encode(pub_key(seed));
+    Bool w1 = filesystem.write_all(kp, hex_encode(seed) + "\n");
+    Bool w2 = filesystem.write_all(dir + "/resid-ed25519.pub", pub + "\n");
+    if (!w1 || !w2) {
+        println("error: keygen: cannot write keys in " + dir);
+        return 1;
+    }
+    println("wrote " + kp + " (public " + pub + ")");
+    return 0;
+}
+
+// ─── `residc verify <binary> [--pub HEX]` ─────────────────────────
+
+// Items to skip after a head: strings skip their bytes, containers recurse.
+Int cbe_skip(List(Int) b, Int pos) {
+    CbeHead h = cbe_read_head(b, pos);
+    if (!h.ok) { return b.len() + 1; }
+    if (h.major == 2 || h.major == 3) { return h.pos + h.val; }
+    if (h.major == 4) { return cbe_skip_n(b, h.pos, h.val); }
+    if (h.major == 5) { return cbe_skip_n(b, h.pos, h.val * 2); }
+    if (h.major == 6) { return cbe_skip(b, h.pos); }
+    return h.pos;
+}
+
+Int cbe_skip_n(List(Int) b, Int pos, Int n) {
+    if (n <= 0 || pos > b.len()) { return pos; }
+    return cbe_skip_n(b, cbe_skip(b, pos), n - 1);
+}
+
+// Byte-string value of text key `key` in the map at `pos`; [] when absent.
+List(Int) cbe_map_bytes(List(Int) b, Str key) {
+    List(Int) empty = [];
+    CbeHead m = cbe_read_head(b, 0);
+    if (!m.ok || m.major != 5) { return empty; }
+    return cbe_map_bytes_at(b, m.pos, m.val, key);
+}
+
+List(Int) cbe_map_bytes_at(List(Int) b, Int pos, Int left, Str key) {
+    List(Int) empty = [];
+    if (left <= 0 || pos >= b.len()) { return empty; }
+    CbeStr k = cbe_read_str(b, pos, 3);
+    if (!k.ok) { return empty; }
+    if (cbe_ascii(k.bytes, 0, "") == key) {
+        CbeStr v = cbe_read_str(b, k.pos, 2);
+        return v.bytes;
+    }
+    return cbe_map_bytes_at(b, cbe_skip(b, k.pos), left - 1, key);
+}
+
+// Public keys to try: --pub, $RESID_VERIFY_PUB, then keys/*.pub.
+List(Str) vf_pubs(Str given) {
+    List(Str) a = if (given != "") { [given] } else { [] };
+    Str e = environment.get("RESID_VERIFY_PUB");
+    List(Str) b = if (e != "") { a.concat([e]) } else { a };
+    if (!filesystem.is_dir("keys")) { return b; }
+    return vf_pub_files(filesystem.list_dir("keys"), 0, b);
+}
+
+List(Str) vf_pub_files(List(Str) names, Int i, List(Str) acc) {
+    if (i >= names.len()) { return acc; }
+    Str n = names[i];
+    if (!str_ends_with(n, ".pub")) { return vf_pub_files(names, i + 1, acc); }
+    Str k = str_trim(filesystem.read_all("keys/" + n));
+    return vf_pub_files(names, i + 1, acc.concat([k]));
+}
+
+// The key whose kid matches, or "".
+Str vf_pick(List(Str) pubs, Int i, Str kid) {
+    if (i >= pubs.len()) { return ""; }
+    Str p = pubs[i];
+    if (str_len(p) == 64 && str_slice(p, 0, 16) == kid) { return p; }
+    return vf_pick(pubs, i + 1, kid);
+}
+
+Int vf_fail(Str msg) {
+    println("verify: FAIL: " + msg);
+    return 1;
+}
+
+// A sidecar check: "" when it matches or is absent, else the failure.
+Str vf_sidecar(Str path, List(Int) want) {
+    if (!filesystem.exists(path)) { return ""; }
+    if (want.len() == 0) { return path + " is not covered by the signature"; }
+    if (hex_encode(prov_sha256_bytes(filesystem.read_bytes(path))) != hex_encode(want)) { return path + " does not match its signed hash"; }
+    return "";
+}
+
+Int cmd_verify(Str bin_path, Str pub_given) {
+    List(Int) b = filesystem.read_bytes(bin_path);
+    Int n = b.len();
+    Int ml = str_len(prov_magic());
+    if (n < ml + 4) { return vf_fail("no provenance trailer"); }
+    if (cbe_ascii(slice_bytes(b, n - ml, n - 1), 0, "") != prov_magic()) { return vf_fail("no provenance trailer"); }
+    Int clen = cbe_be_read(b, n - ml - 4, 4, 0);
+    Int cstart = n - ml - 4 - clen;
+    if (cstart < 0) { return vf_fail("malformed trailer"); }
+    CoseSign1 c = cose_sign1_parse(slice_bytes(b, cstart, cstart + clen - 1));
+    if (!c.ok) { return vf_fail(c.err); }
+    Str pub = vf_pick(vf_pubs(pub_given), 0, c.kid);
+    if (pub == "") { return vf_fail("no trusted key with kid " + c.kid + " (keyring: keys/*.pub, --pub, RESID_VERIFY_PUB)"); }
+    if (!cose_sign1_check(c, cose_hex_decode(pub))) { return vf_fail("bad signature"); }
+    Str ekey = environment.get("RESID_PROV_KEY");
+    Bool concealed = cose_is_encrypt0(c.payload);
+    if (concealed && ekey == "") { return vf_fail("payload is concealed; set RESID_PROV_KEY to check its hashes"); }
+    CoseOpen op = if (concealed) { cose_encrypt0_open(c.payload, cose_hex_decode(ekey)) } else { CoseOpen {.ok = true, .err = "", .plaintext = c.payload} };
+    if (!op.ok) { return vf_fail(op.err); }
+    List(Int) map = op.plaintext;
+    List(Int) code = prov_sha256_bytes(slice_bytes(b, 0, cstart - 1));
+    if (hex_encode(code) != hex_encode(cbe_map_bytes(map, "code"))) { return vf_fail("code hash mismatch (binary modified after signing)"); }
+    Str e1 = vf_sidecar(bin_path + ".resid-notes.cbor", cbe_map_bytes(map, "notes"));
+    if (e1 != "") { return vf_fail(e1); }
+    Str e2 = vf_sidecar(bin_path + ".resid-graph.cbor", cbe_map_bytes(map, "graph"));
+    if (e2 != "") { return vf_fail(e2); }
+    println("verify: ok (kid " + c.kid + ", code " + hex_encode(code) + ")");
     return 0;
 }
 
@@ -15733,10 +15891,21 @@ Int main() {
     Int argc  =  args.count();
     if (argc < 2) {
         println("usage: driver <source.res> [-o out] [-rt resid_rt.c] [-O0|-O1|-O2|-O3|-Os|-Oz]");
+        println("       driver keygen [dir] | driver verify <binary> [--pub HEX]");
         println("       driver test <file.resid> [--filter RE] [--format pretty|tap|json]");
         return 1;
     }
     Str arg1  =  args.get(1);
+    if (arg1 == "keygen") {
+        return cmd_keygen(if (argc >= 3) { args.get(2) } else { "keys" });
+    }
+    if (arg1 == "verify") {
+        if (argc < 3) {
+            println("usage: driver verify <binary> [--pub HEX]");
+            return 2;
+        }
+        return cmd_verify(args.get(2), pick_opt(argc, "--pub", ""));
+    }
     // `residc test <file>` (SPEC-testing.md §7.1): discover the file's
     // `test "..." { }` blocks, generate an entry point that runs them, then
     // execute the result and forward its exit code.
@@ -15801,6 +15970,11 @@ Int main() {
     if (profile == "check") {
         println("check: ok");
         return 0;
+    }
+    // Release builds must be signed (spec §33.1).
+    if (profile == "release" && !testmode && prov_key_path() == "") {
+        println("error: release builds require a signing key: set RESID_SIGNING_KEY or run `residc keygen` (or build with --profile debug)");
+        return 1;
     }
     // Eager compile-time reduction (spec §36) of the checked program; code
     // generation sees the reduced text. `--no-reduce` skips it and
@@ -15884,8 +16058,8 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // allocate (SHA-256 over the whole source, CBOR buffers) lives in an
     // arena freed when they finish.
     Int _prov_in = resid_bulk_push();
-    Int prc  =  write_provenance(out, rsrc);
     Int nrc  =  write_notes_cbor(out, path);
+    Int prc  =  write_provenance(out, profile, rr.done);
     Int _prov_out = resid_bulk_pop();
     return prc;
 }

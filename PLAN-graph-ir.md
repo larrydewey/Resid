@@ -35,6 +35,9 @@ are imported the same way `reduce.resid` is.
 
 ## Phases
 
+- [x] G0 Signed provenance (§33.1): COSE_Sign1 trailer, verify, keygen. The
+  graph artifact's hash joins the payload when G4 emits it.
+
 - [ ] G1 Graph core: `examples/graph.resid`.
   - Nodes stored as struct-of-arrays with id = index: kind, type, knowledge,
     and dep offsets into one shared dep list.
