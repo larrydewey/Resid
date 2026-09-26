@@ -173,7 +173,10 @@ are imported the same way `reduce.resid` is.
   - Exit criterion: `./boot.sh` reaches a fixed point with `--graph` as the
     default.
 - [ ] G5 Tools and conformance.
-  - Emit notes as a projection of the graph.
+  - [x] Notes are a projection of the residual graph (`ga_notes`): rt
+    values, provider calls and the reducer's budget / loop / whistle
+    reasons, at their spans in any file; `--text-reduce` keeps the line
+    scan. The scan's false hits (comments, strings, `import`) are gone.
   - `resid why` queries by symbol, file:line or node, covering derive chains
     and reasons.
   - `resid-graph` view and DOT output.

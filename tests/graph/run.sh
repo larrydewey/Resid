@@ -116,5 +116,13 @@ if command -v gdb >/dev/null 2>&1 && [ -x "$DB" ]; then
         fail=$((fail + 1)); echo "FAIL debug_locals under gdb"
     fi
 fi
+# Residual notes are projected from the graph: the rt value and the
+# provider call, not the comment or string mentioning them.
+got="$("$COMPILER" tests/graph/cases/notes_sample.resid -o "$CK/notes" 2>&1 | grep 'residual note')"
+if [[ "$got" == *"notes: 2 residual"* ]]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL notes_sample: $got"
+fi
 echo "graph: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

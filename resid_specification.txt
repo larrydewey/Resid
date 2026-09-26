@@ -1310,8 +1310,15 @@ those sidecars' bytes; grant is the capability set the
 build ran under.
 
 ResidualNotes is a projection of the graph: one note for
-each RESIDUAL or EFFECT node in the residual roots, with
-its reason.
+each residual node, reachable from the residual roots,
+that a programmer can act on: an `rt` value
+(rt-binding), a provider call (provider-call), and a call
+whose reason is budget (fuel or steps), loop or whistle.
+A note is [kind, symbol, line, col, file]: symbol is the
+source from the node to the end of its line (at most 40
+characters), col is 0-based, and notes are sorted by
+file, line and column. The graph's reasons cover every
+other RESIDUAL and EFFECT node.
 
 Files:
 

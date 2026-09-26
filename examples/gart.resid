@@ -389,3 +389,108 @@ pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, Str rs, List(Str) t
     if (!filesystem.append_hex(path, t1.finish())) { return ""; }
     return ga_bytes_hex(filesystem.sha256(path), 0, StrBuf());
 }
+
+// ─── Residual notes (spec §34 ResidualNotes) ────────────────────────
+// A projection of the residual graph: an `rt` value (rt-binding), a
+// provider call (provider-call), and a call the reducer gave up on
+// (budget, loop, whistle), each at its source position. Notes are
+// `[kind, symbol, line, col, file]` with a 0-based col, sorted by place.
+
+type GNW = { List(Str) keys; Map(Str, Bool) seen; };
+
+// The source text from pos to the end of its line, trimmed, 40 chars.
+Str ga_note_sym(Str src, Int pos) {
+    Int nl = str_find_char(src, 10, pos);
+    Int e = if (nl < 0) { str_len(src) } else { nl };
+    Str t = str_trim(str_slice(src, pos, e));
+    return if (str_len(t) > 40) { str_slice(t, 0, 40) } else { t };
+}
+
+Str ga_pad(Int n, Int w) {
+    Str s = IntToString(n);
+    return if (str_len(s) >= w) { s } else { str_repeat("0", w - str_len(s)) + s };
+}
+
+GNW ga_note_add(GNW acc, GAF f, Str src, Str kind, Int pos) {
+    List(Int) at = ga_where(f, pos);
+    Str place = ga_pad(at[0], 4) + ":" + ga_pad(at[1], 8) + ":" + ga_pad(at[2], 6);
+    Str key = place + "\x1f" + kind;
+    if (acc.seen.contains(key)) { return acc; }
+    Str ent = key + "\x1f" + ga_note_sym(src, pos) + "\x1f" + IntToString(at[1]) + "\x1f" + IntToString(at[2] - 1) + "\x1f" + IntToString(at[0]);
+    return GNW {.keys = acc.keys.concat([ent]), .seen = acc.seen.insert(key, true)};
+}
+
+GNW ga_note_walk(Kg g, Int id, GAF f, Str src, GNW acc) {
+    KN n = g.ns[id];
+    GNW a1 = if (n.kind == "rt") { ga_note_add(acc, f, src, "rt-binding", n.sp) } else {
+        if (n.kind == "mcall" && n.nk > 0) {
+            KN b = g.ns[kg_kid(g, id, 0)];
+            if (b.kind == "ref" && (ga_provider(b.text) || b.text == "env")) { ga_note_add(acc, f, src, "provider-call", n.sp) } else { acc }
+        } else { acc }
+    };
+    return ga_note_kids(g, id, 0, f, src, a1);
+}
+
+GNW ga_note_kids(Kg g, Int id, Int i, GAF f, Str src, GNW acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return ga_note_kids(g, id, i + 1, f, src, ga_note_walk(g, kg_kid(g, id, i), f, src, acc));
+}
+
+// The reducer's reasons "id,why;": budget(...) -> budget, loop, whistle.
+GNW ga_note_reasons(Kg g, Str rs, Int pos, GAF f, Str src, GNW acc) {
+    if (pos >= str_len(rs)) { return acc; }
+    Int c = str_find_char(rs, 44, pos);
+    Int e = str_find_char(rs, 59, c);
+    Int id = str_parse_int(str_slice(rs, pos, c));
+    Str why = str_slice(rs, c + 1, e);
+    Int po = str_find_char(why, 40, 0);
+    Str kind = if (po < 0) { why } else { str_slice(why, 0, po) };
+    // Calls past the specialization limit are ordinary general calls; the
+    // limit itself is reported once by the reducer.
+    Bool keep = id >= 0 && id < kg_count(g) && why != "budget(specs)";
+    GNW a1 = if (keep) { ga_note_add(acc, f, src, kind, g.ns[id].sp) } else { acc };
+    return ga_note_reasons(g, rs, e + 1, f, src, a1);
+}
+
+StrBuf ga_note_cbor(StrBuf b, List(Str) es, List(Str) paths, Int i) {
+    if (i >= es.len()) { return b; }
+    List(Str) p = str_split(es[i], "\x1f");
+    Int fi = str_parse_int(p[5]);
+    StrBuf b1 = ga_text(ga_text(ga_head(b, 4, 5), p[1]), p[2]);
+    StrBuf b2 = ga_text(ga_int(ga_int(b1, str_parse_int(p[3])), str_parse_int(p[4])), if (fi < paths.len()) { paths[fi] } else { "" });
+    return ga_note_cbor(b2, es, paths, i + 1);
+}
+
+// Byte-wise a < b.
+Bool ga_lt(Str a, Str b, Int i) {
+    if (i >= str_len(b)) { return false; }
+    if (i >= str_len(a)) { return true; }
+    Int x = str_char_at(a, i);
+    Int y = str_char_at(b, i);
+    if (x != y) { return x < y; }
+    return ga_lt(a, b, i + 1);
+}
+
+List(Str) ga_msort(List(Str) xs) {
+    if (xs.len() <= 1) { return xs; }
+    Int h = xs.len() / 2;
+    return ga_merge(ga_msort(xs[0..h]), ga_msort(xs[h..xs.len()]), 0, 0, ListBuf());
+}
+
+List(Str) ga_merge(List(Str) a, List(Str) b, Int i, Int j, ListBuf(Str) acc) {
+    if (i >= a.len() && j >= b.len()) { return acc.finish(); }
+    if (j >= b.len() || (i < a.len() && ga_lt(a[i], b[j], 0))) { return ga_merge(a, b, i + 1, j, acc.push(a[i])); }
+    return ga_merge(a, b, i, j + 1, acc.push(b[j]));
+}
+
+type GNO = { Str hex; Int n; };
+
+// The notes of residual graph p (root p.id) as CBOR hex, and their count.
+pub GNO ga_notes(KP p, Str rs, Str src, Str smap, Str main) {
+    GAF f = ga_fileinfo(src, smap, main);
+    Map(Str, Bool) m0 = {};
+    List(Str) k0 = [];
+    GNW w = ga_note_reasons(p.g, rs, 0, f, src, ga_note_walk(p.g, p.id, f, src, GNW {.keys = k0, .seen = m0}));
+    List(Str) es = ga_msort(w.keys);
+    return GNO {.hex = ga_note_cbor(ga_head(StrBuf(), 4, es.len()), es, f.paths, 0).finish(), .n = es.len()};
+}
