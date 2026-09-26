@@ -181,7 +181,9 @@ are imported the same way `reduce.resid` is.
     graph artifact: kind, type, knowledge, value, reason, facts, effects,
     def and the derive chain back to source.
   - `resid why` by symbol over the graph (the artifact has no names yet).
-  - `resid-graph` view and DOT output.
+  - [x] `resid-graph <artifact> --node ID [--depth N]` prints the node's
+    neighbourhood (operand, def and derive edges, coloured by knowledge)
+    as DOT; the artifact reader is shared in `lib/kgart.resid`.
   - A conformance checker for the §3.4 invariants and lowered coverage.
 - [ ] G6 `resid debug`.
   - Static mode first: walk the graph, show knowledge, facts and derivations.
