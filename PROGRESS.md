@@ -245,6 +245,15 @@ the test harnesses create a throwaway key when none is configured.
 `tests/provenance/run.sh` covers tamper detection, keys, concealment and
 reproducibility. Self-compile time is unchanged.
 
+### 0n. Linear builders StrBuf / ListBuf(T) (G2b, spec v3.6 §45, 2026-09-26)
+
+`StrBuf` and `ListBuf(T)` append in place; each value must be used exactly
+once (E0401 unconsumed, E0402 used twice, E0403 used across a loop or
+lambda boundary, E0404 nested in another type). The graph checker enforces
+it with a path-sensitive pass over def edges. ListBuf push is an in-place
+append into a doubling buffer (`resid_listbuf_*`), and finish hands the
+buffer to the list without copying.
+
 ### 0m. Types on graph nodes (G2 complete, 2026-09-26)
 
 The graph checker now records a type for every expression node, plus def

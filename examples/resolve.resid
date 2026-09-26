@@ -229,16 +229,16 @@ pub RS kg_resolve(Kg g, Int unit) {
     RSG gl = rs_globals(g, unit, 0, RSG {.fns = e, .tys = e, .vars = e});
     RS r = rs_decls(g, gl, unit, 0, rs_empty());
     List(Int) none = [];
-    List(Int) dense = rs_dense(list_sort_ints(r.pairs), 0, 0, kg_count(g), none);
+    List(Int) dense = rs_dense(list_sort_ints(r.pairs), 0, 0, kg_count(g), ListBuf());
     return RS {.pairs = none, .def = dense, .unres = r.unres, .uses = r.uses, .shadow = r.shadow};
 }
 
 // Sorted edge pairs to one def entry per node id.
-List(Int) rs_dense(List(Int) ps, Int i, Int id, Int n, List(Int) acc) {
-    if (id >= n) { return acc; }
+List(Int) rs_dense(List(Int) ps, Int i, Int id, Int n, ListBuf(Int) acc) {
+    if (id >= n) { return acc.finish(); }
     Bool hit = i < ps.len() && ps[i] / 4294967296 == id;
     Int d = if (hit) { ps[i] % 4294967296 - 2 } else { -1 };
-    return rs_dense(ps, if (hit) { i + 1 } else { i }, id + 1, n, acc.concat([d]));
+    return rs_dense(ps, if (hit) { i + 1 } else { i }, id + 1, n, acc.push(d));
 }
 
 // The def edge of a use, -1 when unresolved or not a use.

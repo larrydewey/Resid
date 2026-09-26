@@ -1,6 +1,6 @@
 ==================================================
 RESID LANGUAGE DESIGN DOCUMENT
-Version 3.5 — Production Ready
+Version 3.6 — Production Ready
 ==================================================
 
 
@@ -1577,6 +1577,11 @@ self-hosted compiler worked on source text with no graph.
     envelope (§28.1). Earlier versions named a Provenance
     schema without defining it.
 
+v3.6: linear builders (§45). StrBuf and ListBuf(T) build a
+string or a list by appending in place into one growing
+buffer. Each builder value must be used exactly once, which
+is what makes the in-place append unobservable.
+
 
 ==================================================
 42. NUMERIC INTEROPERABILITY SUMMARY
@@ -1743,6 +1748,73 @@ explicitly with the identity cast.
 Eq / Ord / Hash behaviors do not extend to fixed-capacity
 types; use the heap forms for behaviors requiring them.
 
+
+==================================================
+45. LINEAR BUILDERS
+==================================================
+
+Bindings are immutable (§7), so building a string or a list
+one piece at a time creates a new value per step. A linear
+builder lets that loop append in place instead:
+
+  StrBuf         builds a Str
+  ListBuf(T)     builds a List(T)
+
+  StrBuf b0 = StrBuf();
+  StrBuf b1 = b0.push("ab");
+  StrBuf b2 = b1.push_char('c');
+  Str s = b2.finish();                  // "abc"
+
+  ListBuf(Int) l0 = ListBuf();          // T from the binding
+  ListBuf(Int) l1 = l0.push(1);
+  List(Int) xs = l1.push(2).finish();   // [1, 2]
+
+Operations:
+
+  StrBuf()               an empty StrBuf
+  ListBuf()              an empty ListBuf(T); T comes from
+                         the expected type, as for []
+  b.push(s)              StrBuf: appends a Str; returns the
+                         builder
+  b.push_char(c)         StrBuf: appends the codepoint c (Int)
+  b.push(x)              ListBuf(T): appends x (T, with the
+                         usual literal adoption and widening)
+  b.finish()             StrBuf -> Str, ListBuf(T) -> List(T)
+
+--------------------------------------------------
+45.1  Linearity
+--------------------------------------------------
+
+A builder value is used exactly once. Every operation
+consumes its builder, and push returns the builder to use
+next. Because no code can observe a builder after it is
+used, push may write into the same buffer, and finish hands
+that buffer to the result without copying. Push is amortized
+O(1), and a doubling buffer needs one allocation.
+
+The rule is checked statically on every binding and
+parameter of a builder type (E0401-E0404):
+
+  - E0401: a builder is never consumed on some path. That
+    covers a path that reaches the end of its scope, or a
+    `return` that does not consume it.
+  - E0402: a builder is used twice. Two uses in one
+    expression or on one path count, and so does a use
+    after it was consumed.
+  - E0403: a builder bound outside a loop is used inside
+    the loop body, or captured by a lambda.
+  - E0404: a builder type appears inside another type (a
+    struct field, a List, Map, Set, Option or Result
+    element, or a closure type).
+
+Branches (`if`/`else`, `match` arms, `c ? a : b`,
+`value else { }`) must consume the same builders, except a
+branch that leaves by `return`, `break` or `continue`. The
+right operand of `&&` / `||` is conditional, so it must not
+consume a builder bound outside it.
+
+A builder that is only passed along (`return b;`, or an
+argument to a function taking a builder) counts as one use.
 
 ==================================================
 END OF DOCUMENT

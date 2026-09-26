@@ -2110,6 +2110,42 @@ void* resid_list_concat(void* a, void* b) {
 }
 
 
+/* ListBuf(T) (spec §45): a list header whose flat buffer is appended in
+ * place. The checker guarantees each builder value is used once, so no
+ * other header ever sees the buffer while it grows. */
+void* resid_listbuf_new(void) {
+    ResidList* l = (ResidList*)resid_alloc(sizeof(ResidList));
+    if (!l) resid_abort("resid_listbuf_new: out of memory");
+    l->count = 0;
+    l->shift = FLAT_SHIFT;
+    l->root = NULL;
+    l->type = NULL;
+    return l;
+}
+
+void* resid_listbuf_push(void* b, void* elem) {
+    ResidList* l = (ResidList*)b;
+    FlatBuf* f = (FlatBuf*)l->root;
+    if (!f || l->count >= f->cap) {
+        int64_t cap = l->count < 4 ? 8 : l->count * 2;
+        FlatBuf* nf = flatbuf_new(cap);
+        if (l->count > 0) memcpy(nf->items, f->items, (size_t)l->count * sizeof(void*));
+        l->root = (PVecNode*)nf;
+        f = nf;
+    }
+    f->items[l->count] = elem;
+    l->count += 1;
+    f->used = l->count;
+    return l;
+}
+
+void* resid_listbuf_finish(void* b, const char* type) {
+    ResidList* l = (ResidList*)b;
+    l->type = type;
+    if (l->root == NULL) l->shift = 0;
+    return l;
+}
+
 /* xs.concat([e]) without the one-element list (codegen peephole). */
 void* resid_list_push(void* a, void* elem) {
     return pvec_push_raw((ResidList*)a, elem);
