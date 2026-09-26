@@ -124,5 +124,17 @@ if [[ "$got" == *"notes: 2 residual"* ]]; then
 else
     fail=$((fail + 1)); echo "FAIL notes_sample: $got"
 fi
+# resid-why answers from the graph artifact: a provider call's line.
+if "$COMPILER" tools/resid-why.resid -o "$CK/why" >/dev/null 2>&1 \
+    && "$COMPILER" tests/graph/cases/notes_sample.resid -o "$CK/ns" --profile debug >/dev/null 2>&1; then
+    got="$("$CK/why" "$CK/ns" --at notes_sample.resid:4 2>&1)"
+    if [[ "$got" == *"mcall: Int effect, effect(args.count)"* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL resid-why --at: $got"
+    fi
+else
+    fail=$((fail + 1)); echo "FAIL resid-why build"
+fi
 echo "graph: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

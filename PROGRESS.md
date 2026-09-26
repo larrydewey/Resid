@@ -322,7 +322,10 @@ at their real positions in any imported file, sorted by place. Across 140
 programs the scan's extra hits were all false (comments, strings,
 `import`, `start = ...`, `args.ast` fields), and the graph finds `rt(...)`
 and later calls on a line that the scan missed. `tools/resid-why.resid`
-explains the new kinds. Self-compile: 187 notes (92 provider calls, 95
+explains the new kinds, and with `--node ID` or `--at FILE:LINE` answers
+from the graph artifact instead (knowledge, value, reason, facts,
+effects, def and the derive chain back to source; 0.3s on the
+self-compile's 35MB artifact). Self-compile: 187 notes (92 provider calls, 95
 whistles).
 
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
