@@ -2168,3 +2168,325 @@ Str lw_why_at(LP r, List(Str) ks, Int i, Str acc) {
     Int n = r.why.get(ks[i]) else { 0 };
     return lw_why_at(r, ks, i + 1, acc + "  " + IntToString(n) + " " + ks[i] + "\n");
 }
+
+// ─── Signatures from the graph ──────────────────────────────────────
+// lw_sigs builds the Funcs table that collect_sigs reads from the printed
+// program, walking declarations instead; the leaf analysis mirrors
+// leaf_calls token for token over what the printer would emit.
+
+type LSG = { Funcs fs; Str req; };
+
+Funcs lsg_fn(Funcs fs, List(Str) nm, List(Str) pt, List(Str) pn, List(Str) rt, List(Str) rq, List(Str) ce, List(Int) fp) {
+    Map(Str, Int) empty = {"__EMPTY__": -1};
+    return Funcs {.fpos = fp, .leaf = fs.leaf, .names = nm, .pts = pt, .pns = pn, .rets = rt, .reqs = rq, .ceils = ce, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = empty};
+}
+
+// `@requires(...)` in a declaration prefix: its capability list, or "".
+Str lsg_req(Str pre, Int pos) {
+    Tok t = lex_tok(pre, pos);
+    if (t.kind == "eof") { return ""; }
+    if (t.text == "@") {
+        Tok an = lex_tok(pre, t.pos);
+        Tok lp = lex_tok(pre, an.pos);
+        if (an.text == "requires" && lp.text == "(") { return cap_list_at(pre, lp.pos, false, "").ty; }
+    }
+    return lsg_req(pre, t.pos);
+}
+
+Str lsg_join(Kg g, Int d, Int i, Int n, Bool names, Str sep, Str acc) {
+    if (i >= n) { return acc; }
+    Int p = kg_kid(g, d, i);
+    Str x = if (names) { g.ns[p].text } else { g.ns[kg_kid(g, p, 0)].text };
+    Str acc2 = if (acc == "") { x } else { acc + sep + x };
+    return lsg_join(g, d, i + 1, n, names, sep, acc2);
+}
+
+LSG lsg_decl(Kg g, Int d, Str ceil, LSG st) {
+    Str k = g.ns[d].kind;
+    Funcs fs = st.fs;
+    Str pre = g.ns[d].aux;
+    if (k == "fn") {
+        Int n = g.ns[d].nk;
+        Str rq = if (str_contains(pre, "@")) { lsg_req(pre, 0) } else { "" };
+        Str req = if (rq != "") { rq } else { st.req };
+        Str pts = lsg_join(g, d, 1, n - 1, false, ", ", "");
+        Str pns = lsg_join(g, d, 1, n - 1, true, ",", "");
+        Int fp = if (ceil == "") { d } else { -1 };
+        Funcs f2 = lsg_fn(fs, fs.names.concat([g.ns[d].text]), fs.pts.concat([pts]), fs.pns.concat([pns]), fs.rets.concat([g.ns[kg_kid(g, d, 0)].text]), fs.reqs.concat([req]), fs.ceils.concat([ceil]), fs.fpos.concat([fp]));
+        return LSG {.fs = f2, .req = ""};
+    }
+    if (k == "sandbox") {
+        PRes caps = cap_list_at(pre + ")", 0, true, "");
+        if (caps.err != "") { return LSG {.fs = fs, .req = ""}; }
+        LSG inner = lsg_decls(g, d, 0, ceil_join(ceil, caps.ty), LSG {.fs = fs, .req = ""});
+        return LSG {.fs = inner.fs, .req = ""};
+    }
+    Str req0 = if (str_contains(pre, "@")) { lsg_req(pre, 0) } else { "" };
+    Str req = if (req0 != "") { req0 } else { st.req };
+    if (k == "struct_t") {
+        Str fl = lsg_fields(g, d, 0, "");
+        Funcs f2 = Funcs {.fpos = fs.fpos, .leaf = fs.leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn.concat([g.ns[d].text]), .stf = fs.stf.concat([fl]), .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+        return LSG {.fs = f2, .req = req};
+    }
+    if (k == "sum_t") {
+        Str gp = lsg_gparams(pre);
+        Str gsuf = if (gp == "") { "" } else { ";" + gp };
+        Str v = lsg_variants(g, d, 0, true, "") + ";" + lsg_variants(g, d, 0, false, "") + gsuf;
+        Funcs f2 = Funcs {.fpos = fs.fpos, .leaf = fs.leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun.concat([g.ns[d].text]), .suv = fs.suv.concat([v]), .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+        return LSG {.fs = f2, .req = req};
+    }
+    if (k == "alias_t" || k == "ctype_t" || k == "cwhere_t") {
+        Str ct = if (k == "alias_t") { "" } else {
+            Str p = str_sb_finish(kg_pr(g, kg_kid(g, d, 1), str_sb_new()));
+            if (k == "cwhere_t") { " " + p } else { p }
+        };
+        Funcs f2 = Funcs {.fpos = fs.fpos, .leaf = fs.leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn.concat([g.ns[d].text]), .ctb = fs.ctb.concat([g.ns[kg_kid(g, d, 0)].text]), .ctc = fs.ctc.concat([ct]), .growable = fs.growable};
+        return LSG {.fs = f2, .req = req};
+    }
+    if (k == "behavior") {
+        Funcs f2 = Funcs {.fpos = fs.fpos, .leaf = fs.leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames.concat([g.ns[d].text]), .bparams = fs.bparams.concat([kg_part(pre, 1)]), .bfns = fs.bfns.concat([kg_part(pre, 2)]), .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+        return LSG {.fs = f2, .req = req};
+    }
+    return LSG {.fs = fs, .req = req};
+}
+
+// Generic parameters of a type declaration's aux ("prefix\x1f(T, U)"), no
+// parentheses or spaces.
+Str lsg_gparams(Str aux) {
+    List(Str) ps = str_split(aux, "\x1f");
+    Str gen = if (ps.len() > 1) { ps[1] } else { aux };
+    if (!str_starts_with(gen, "(")) { return ""; }
+    return str_replace(str_slice(gen, 1, str_len(gen) - 1), " ", "");
+}
+
+Str lsg_fields(Kg g, Int d, Int i, Str acc) {
+    if (i >= g.ns[d].nk) { return acc; }
+    Int f = kg_kid(g, d, i);
+    Str x = g.ns[f].text + ":" + g.ns[kg_kid(g, f, 0)].text;
+    return lsg_fields(g, d, i + 1, if (acc == "") { x } else { acc + "," + x });
+}
+
+Str lsg_variants(Kg g, Int d, Int i, Bool names, Str acc) {
+    if (i >= g.ns[d].nk) { return acc; }
+    Int v = kg_kid(g, d, i);
+    Str x = if (names) { g.ns[v].text } else { g.ns[v].aux };
+    return lsg_variants(g, d, i + 1, names, if (i == 0) { x } else { acc + "|" + x });
+}
+
+LSG lsg_decls(Kg g, Int id, Int i, Str ceil, LSG st) {
+    if (i >= g.ns[id].nk) { return st; }
+    return lsg_decls(g, id, i + 1, ceil, lsg_decl(g, kg_kid(g, id, i), ceil, st));
+}
+
+// ─── Leaf analysis (mirrors leaf_calls) ─────────────────────────────
+
+Bool lf_bad(List(Str) a) { return a.len() == 1 && a[0] == "!"; }
+List(Str) lf_no() { return ["!"]; }
+
+List(Str) lf_cat(List(Str) a, List(Str) b) {
+    if (lf_bad(a) || lf_bad(b)) { return lf_no(); }
+    return a.concat(b);
+}
+
+Bool lf_upper(Str t) {
+    Int c = str_char_at(t, 0);
+    return c >= 65 && c <= 90;
+}
+
+Bool lf_word(Str t) {
+    Int c = str_char_at(t, 0);
+    return (c >= 97 && c <= 122) || c == 95;
+}
+
+// An identifier token: the uppercase rule (only numeric type heads), and
+// a lowercase one followed by `(` names a callee.
+List(Str) lf_ident(Str t, Bool paren, List(Str) acc) {
+    if (lf_upper(t)) { return if (scope_num_head(t)) { acc } else { lf_no() }; }
+    if (!paren || !lf_word(t)) { return acc; }
+    Bool kw = t == "if" || t == "while" || t == "for" || t == "return" || t == "match" || t == "else";
+    if (kw || scope_arith_builtin(t)) { return acc; }
+    return acc.concat([t]);
+}
+
+// Text kept on nodes (types, patterns) goes through leaf_calls itself.
+List(Str) lf_text(Str s, Str prev, List(Str) ptrs, List(Str) acc) {
+    if (lf_bad(acc)) { return acc; }
+    return lf_cat(acc, leaf_calls(s, 0, str_len(s), ptrs, prev, false, []));
+}
+
+// The last token a node prints: "." + name after a field, else its text.
+Str lf_last(Kg g, Int id) {
+    Str k = g.ns[id].kind;
+    Int n = g.ns[id].nk;
+    if (k == "ref" || k == "name" || k == "lparam" || k == "lit") { return g.ns[id].text; }
+    if (k == "field") { return "." + g.ns[id].text; }
+    if (k == "index" || k == "slice" || k == "list") { return "]"; }
+    if (k == "call" || k == "callv" || k == "mcall" || k == "paren") { return ")"; }
+    if (k == "try") { return "?"; }
+    if (k == "rangefrom") { return ".."; }
+    if (k == "un" || k == "bin" || k == "tern" || k == "cast" || k == "named" || k == "rt") { return lf_last(g, kg_kid(g, id, n - 1)); }
+    if (k == "fstr") { return "f\"\""; }
+    return "}";
+}
+
+// The first token a node prints.
+Str lf_first(Kg g, Int id) {
+    Str k = g.ns[id].kind;
+    if (k == "ref" || k == "name" || k == "lparam" || k == "lit" || k == "call" || k == "struct" || k == "un" || k == "named") { return g.ns[id].text; }
+    if (k == "field" || k == "index" || k == "slice" || k == "mcall" || k == "callv" || k == "try" || k == "bin" || k == "tern" || k == "orelse" || k == "rangefrom") { return lf_first(g, kg_kid(g, id, 0)); }
+    if (k == "paren" || k == "cast") { return "("; }
+    if (k == "list") { return "["; }
+    if (k == "ifx") { return "if"; }
+    if (k == "match") { return "match"; }
+    if (k == "lambda") { return "lambda"; }
+    if (k == "spawn") { return "spawn"; }
+    if (k == "rt") { return "rt"; }
+    return "{";
+}
+
+List(Str) lf_kids(Kg g, Int id, Int i, Int n, List(Str) ptrs, List(Str) acc) {
+    if (i >= n || lf_bad(acc)) { return acc; }
+    return lf_kids(g, id, i + 1, n, ptrs, lf_node(g, kg_kid(g, id, i), ptrs, acc));
+}
+
+// `[` after `prev`: indexing follows a value, else it opens a list.
+Bool lf_after_val(Str prev) {
+    Str p = if (str_starts_with(prev, ".")) { str_slice(prev, 1, str_len(prev)) } else { prev };
+    return p == ")" || p == "]" || (lf_word(p) && p != "return" && p != "else" && p != "in");
+}
+
+// A keyword or word printed right before a child: an identifier followed
+// by `(` when the child starts with one.
+List(Str) lf_kw(Str w, Kg g, Int c, List(Str) acc) {
+    return lf_ident(w, lf_first(g, c) == "(", acc);
+}
+
+List(Str) lf_node(Kg g, Int id, List(Str) ptrs, List(Str) acc) {
+    if (lf_bad(acc)) { return acc; }
+    Str k = g.ns[id].kind;
+    Str t = g.ns[id].text;
+    Int n = g.ns[id].nk;
+    if (k == "lit") {
+        Str a = g.ns[id].aux;
+        if (a == "str" || a == "raw" || a == "bytes") { return lf_no(); }
+        return acc;
+    }
+    if (k == "fstr") { return acc; }
+    if (k == "lambda" || k == "spawn" || k == "list") { return lf_no(); }
+    if (k == "ref" || k == "name" || k == "lparam") { return lf_ident(t, false, acc); }
+    if (k == "ty") { return lf_text(t, "", ptrs, acc); }
+    if (k == "call") { return lf_kids(g, id, 0, n, ptrs, lf_ident(t, true, acc)); }
+    if (k == "callv") {
+        Int f = kg_kid(g, id, 0);
+        Str fk = g.ns[f].kind;
+        if (fk == "field") {
+            if (g.ns[f].text != "len" || n > 1) { return lf_no(); }
+            return lf_node(g, kg_kid(g, f, 0), ptrs, acc);
+        }
+        List(Str) a1 = if (fk == "ref") { lf_ident(g.ns[f].text, true, acc) } else { lf_node(g, f, ptrs, acc) };
+        return lf_kids(g, id, 1, n, ptrs, a1);
+    }
+    if (k == "mcall") {
+        if (t != "len" || n > 1) { return lf_no(); }
+        return lf_node(g, kg_kid(g, id, 0), ptrs, acc);
+    }
+    if (k == "field") {
+        if (!lf_word(t) && !lf_upper(t)) { return lf_no(); }
+        return lf_node(g, kg_kid(g, id, 0), ptrs, acc);
+    }
+    if (k == "index" || k == "slice") {
+        Int b = kg_kid(g, id, 0);
+        List(Str) a1 = lf_node(g, b, ptrs, acc);
+        if (lf_bad(a1) || !lf_after_val(lf_last(g, b))) { return lf_no(); }
+        return lf_kids(g, id, 1, n, ptrs, a1);
+    }
+    if (k == "struct" || k == "destr") { return lf_kids(g, id, 0, n, ptrs, lf_ident(t, false, acc)); }
+    if (k == "bin" && t == "+") {
+        Str pl = lf_last(g, kg_kid(g, id, 0));
+        Str nf = lf_first(g, kg_kid(g, id, 1));
+        if (str_starts_with(pl, ".") || pl == "]" || list_has_str(ptrs, pl)) { return lf_no(); }
+        if (list_has_str(ptrs, nf)) { return lf_no(); }
+        return lf_kids(g, id, 0, n, ptrs, acc);
+    }
+    if (k == "arm" || k == "letpat" || k == "pat") {
+        Str pat = if (g.ns[id].aux == "" && k == "arm") { t } else { t + "(" + g.ns[id].aux + ")" };
+        return lf_kids(g, id, 0, n, ptrs, lf_text(pat, "", ptrs, acc));
+    }
+    if (k == "rbind") {
+        Int ty = kg_kid(g, id, 0);
+        List(Str) a1 = lf_node(g, ty, ptrs, acc);
+        Tok lt = lf_last_tok(g.ns[ty].text, 0, "");
+        if (!lf_after_val(lt.text)) { return lf_no(); }
+        return lf_kids(g, id, 1, n, ptrs, a1);
+    }
+    if (k == "bind") { return lf_kids(g, id, 0, n, ptrs, lf_text(g.ns[id].aux, "", ptrs, acc)); }
+    if (k == "for") {
+        List(Str) a1 = lf_node(g, kg_kid(g, id, 0), ptrs, acc);
+        return lf_kids(g, id, 1, n, ptrs, lf_kw("in", g, kg_kid(g, id, 1), a1));
+    }
+    if (k == "with") { return lf_kids(g, id, 0, n, ptrs, lf_ident("with", true, acc)); }
+    if (k == "rt") { return lf_kids(g, id, 0, n, ptrs, lf_kw("rt", g, kg_kid(g, id, 0), acc)); }
+    if (k == "named") { return lf_kids(g, id, 0, n, ptrs, acc); }
+    if (k == "un") { return lf_kids(g, id, 0, n, ptrs, acc); }
+    return lf_kids(g, id, 0, n, ptrs, acc);
+}
+
+// Last token of a text: its text in a Tok.
+Tok lf_last_tok(Str s, Int pos, Str last) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return Tok {.pos = pos, .text = last, .kind = ""}; }
+    return lf_last_tok(s, t.pos, t.text);
+}
+
+List(Str) lf_summary(Kg g, Funcs fs, Int i) {
+    Int d = fs.fpos[i];
+    if (d < 0) { return lf_no(); }
+    if (!scal_ll(ll_ty(ct_base_of(fs.ctn, fs.ctb, fs.rets[i])))) { return lf_no(); }
+    Str pts = fs.pts[i];
+    Str pns = fs.pns[i];
+    List(Str) tyl = if (pts == "") { nil_list() } else { split_rest_depth(pts, ", ") };
+    List(Str) nml = if (pns == "") { nil_list() } else { split_rest(pns, ",") };
+    List(Str) ptrs = ptr_params(fs, tyl, nml, 0, []);
+    return lf_node(g, kg_kid(g, d, g.ns[d].nk - 1), ptrs, []);
+}
+
+List(List(Str)) lf_summaries(Kg g, Funcs fs, Int i, List(List(Str)) acc) {
+    if (i >= fs.names.len()) { return acc; }
+    return lf_summaries(g, fs, i + 1, acc.concat([lf_summary(g, fs, i)]));
+}
+
+// Signatures and leaf functions of a parsed or residual program.
+pub Funcs lw_sigs(Kg g, Int unit) {
+    Funcs fs = lsg_decls(g, unit, 0, "", LSG {.fs = funcs_empty(), .req = ""}).fs;
+    List(List(Str)) sums = lf_summaries(g, fs, 0, []);
+    Map(Str, Int) leaf = leaf_rest(fs.names, 0, leaf_fix(fs, sums, fs.leaf, 0));
+    return Funcs {.fpos = fs.fpos, .leaf = leaf, .names = fs.names, .pts = fs.pts, .pns = fs.pns, .rets = fs.rets, .reqs = fs.reqs, .ceils = fs.ceils, .stn = fs.stn, .stf = fs.stf, .sun = fs.sun, .suv = fs.suv, .bnames = fs.bnames, .bparams = fs.bparams, .bfns = fs.bfns, .ctn = fs.ctn, .ctb = fs.ctb, .ctc = fs.ctc, .growable = fs.growable};
+}
+
+// Differences between two signature tables ("" when equal), for
+// --graph-sigs-check.
+pub Str lw_sigs_diff(Funcs a, Funcs b) {
+    Str d1 = lsd_l("names", a.names, b.names) + lsd_l("pts", a.pts, b.pts) + lsd_l("pns", a.pns, b.pns) + lsd_l("rets", a.rets, b.rets) + lsd_l("reqs", a.reqs, b.reqs) + lsd_l("ceils", a.ceils, b.ceils);
+    Str d2 = lsd_l("stn", a.stn, b.stn) + lsd_l("stf", a.stf, b.stf) + lsd_l("sun", a.sun, b.sun) + lsd_l("suv", a.suv, b.suv) + lsd_l("bnames", a.bnames, b.bnames) + lsd_l("bparams", a.bparams, b.bparams) + lsd_l("bfns", a.bfns, b.bfns);
+    Str d3 = lsd_l("ctn", a.ctn, b.ctn) + lsd_l("ctb", a.ctb, b.ctb) + lsd_l("ctc", a.ctc, b.ctc) + lsd_leaf(a.names, a.leaf, b.leaf, 0, "");
+    return d1 + d2 + d3;
+}
+
+Str lsd_l(Str what, List(Str) a, List(Str) b) {
+    if (a.len() != b.len()) { return what + ": " + IntToString(a.len()) + " vs " + IntToString(b.len()) + "\n"; }
+    return lsd_at(what, a, b, 0);
+}
+
+Str lsd_at(Str what, List(Str) a, List(Str) b, Int i) {
+    if (i >= a.len()) { return ""; }
+    if (a[i] != b[i]) { return what + "[" + IntToString(i) + "]: `" + a[i] + "` vs `" + b[i] + "`\n"; }
+    return lsd_at(what, a, b, i + 1);
+}
+
+Str lsd_leaf(List(Str) ns, Map(Str, Int) a, Map(Str, Int) b, Int i, Str acc) {
+    if (i >= ns.len()) { return acc; }
+    Int x = a.get(ns[i]) else { -1 };
+    Int y = b.get(ns[i]) else { -1 };
+    Str acc2 = if (x != y) { acc + "leaf " + ns[i] + ": " + IntToString(x) + " vs " + IntToString(y) + "\n" } else { acc };
+    return lsd_leaf(ns, a, b, i + 1, acc2);
+}

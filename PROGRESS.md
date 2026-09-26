@@ -271,6 +271,18 @@ report their original's lines. Lowering marks statement starts with
 `;@dbg` lines and a post-pass (after tail-call rewriting) tags them.
 Debug self-compile: 664MB peak, 5.3s.
 
+### 0t. Signatures from the graph (G3/G4, 2026-09-26)
+
+The driver's signature table (`Funcs`: functions, parameter types and
+names, requires and sandbox ceilings, structs, sum types, behaviors,
+constraint types) and the leaf-function analysis behind scalar scopes are
+built from the graph (`lw_sigs` in `examples/lower.resid`) instead of
+collecting them from the printed residual; the residual is no longer
+printed unless `--dump-reduced` asks. The leaf walk mirrors the text
+analysis over what the printer would emit. `--graph-sigs-check` compares
+the two tables field for field; they agree on all 173 programs, and the
+self-compile IR is unchanged.
+
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
 
 `examples/greduce.resid` reduces the parsed graph instead of source text.

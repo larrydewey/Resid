@@ -88,5 +88,16 @@ for f in examples/driver.resid tests/reduce/cases/*.resid tests/conformance/case
         *) fail=$((fail + 1)); echo "FAIL graph-reduce $f: $got" ;;
     esac
 done
+# Signatures and leaf functions from the graph (lw_sigs) must equal those
+# collected from the printed residual.
+for f in examples/driver.resid tests/reduce/cases/*.resid tests/conformance/cases/*.resid bench/suite/src/*/*/resid/*.resid; do
+    got="$("$COMPILER" "$f" -o /tmp/resid_gsig_$$ --graph-sigs-check 2>&1 | grep -E '^graph-sigs|^error' | head -1)"
+    case "$got" in
+        "graph-sigs: ok"*) pass=$((pass + 1)) ;;
+        "error"*|"") ;;
+        *) fail=$((fail + 1)); echo "FAIL graph-sigs $f: $got" ;;
+    esac
+done
+rm -f /tmp/resid_gsig_$$*
 echo "graph: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
