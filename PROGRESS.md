@@ -206,6 +206,27 @@ deterministic) and leaves the call residual. `resid_arena_pop` now
 invalidates the small-string and scratch index slots, which could
 otherwise match a reused address.
 
+### 0h. Numeric soundness pass (spec v3.4) and reducer specialization (2026-09-26)
+
+Spec and implementation now agree on numerics. Before: `Int(64)` add and
+all multiplies wrapped silently, division by zero was unchecked, unsigned
+values compared/divided as signed, signed `>>` was logical below 256 bits,
+explicit casts truncated, and binding checks accepted any narrowing whose
+first token was short. Now: every operator yields the widest operand width
+(multiplication's range rule removed); `+ - * / %` are checked at every
+width (`llvm.*.with.overflow`, `resid_div_check`); unsigned ops use
+`ult`/`udiv`/`urem`; signed `>>` is `ashr`; explicit conversions trap out
+of range (`resid_conv_check`, float-to-int included) and `wrapping_iN/uN`
+keep low bits; narrowing is rejected except whole fitting literals;
+`Str(N)` capacity is UTF-8 bytes and casts never split a codepoint.
+lib/ec256 and lib/tlsmsg use explicit wrapping/shift packing.
+
+`examples/reduce.resid` specializes calls with partly-known arguments
+(`f__rsN`), terminating by a homeomorphic-embedding whistle with
+generalization; an identical re-entrant call stops evaluation at once;
+budget hits print `note: reduce: ...`. The compiler specializes 53 of its
+own calls; self-compile time and memory are unchanged.
+
 ### Major capabilities
 
 - **Stage-2 self-hosting proven, including full sandbox/capability parity**:

@@ -1603,32 +1603,45 @@ pub Str int_bin_result(Str op, Str a, Str b) {
     Int bw = ty_bits(b);
     Int mx = if (aw > bw) { aw } else { bw };
     Str fam = if (signed_ty(a)) { "Int(" } else { "UInt(" };
-    if (op == "*") {
-        Int need = aw + bw;
-        Int w = width_at_least(need);
-        return fam + IntToString(w) + ")";
-    }
-    // add/sub/div/rem/shifts/bitwise: widest operand
+    // Every operator yields the widest operand width; overflow traps (§6.1).
     return fam + IntToString(mx) + ")";
 }
 
-// Can a value of int type `got` initialize a binding/param/return of
-// int type `want`? Widening is implicit; narrowing requires a literal
-// whose magnitude fits the target (checked against digit count).
-pub Bool int_adopt_ok(Str got, Str want, Str lit_text) {
+// Value-preserving integer widening (spec §6.4): same signedness and no
+// narrower, or unsigned into a strictly wider signed type.
+pub Bool int_widen_ok(Str got, Str want) {
     Int gw = ty_bits(got);
     Int ww = ty_bits(want);
-    if (gw <= ww) { return true; }
-    // narrowing: only a literal can be adopted; magnitude heuristic on
-    // decimal digit count (hex digits carry 4 bits each)
+    Bool gs = signed_ty(got);
+    Bool ws = signed_ty(want);
+    if (gs == ws) { return gw <= ww; }
+    if (ws) { return gw < ww; }
+    return false;
+}
+
+// Can `got` initialize `want`? Widening is implicit; narrowing only for a
+// whole integer literal `lit_text` that fits ("" when not a literal).
+pub Bool int_adopt_ok(Str got, Str want, Str lit_text) {
+    if (!is_int_ty(got) || !is_int_ty(want)) {
+        if (is_float_ty(got) && is_float_ty(want)) { return float_bits(got) <= float_bits(want); }
+        if (is_dec_ty(got) && is_dec_ty(want)) { return true; }
+        return false;
+    }
+    if (int_widen_ok(got, want)) { return true; }
+    if (lit_text == "") { return false; }
     Bool neg = str_has_prefix(lit_text, "-");
     Str t = if (neg) { str_slice(lit_text, 1, str_len(lit_text)) } else { lit_text };
-    Bool ishex = str_has_prefix(t, "0x");
-    Int hexdigits = (str_len(t) - 2) * 4;
-    Int decdigits = str_len(t);
-    Int digits = if (ishex) { hexdigits } else { decdigits };
-    Int need = ww - 1;
-    return digits <= need;
+    return lit_range_err(t, neg, num_norm(want)) == "";
+}
+
+// Integer literal text (with any `-`) forming all of [pos, end), else "".
+pub Str whole_int_literal(Str s, Int pos, Int end) {
+    Tok t0 = lex_tok(s, pos);
+    Bool neg = t0.text == "-";
+    Tok t1 = tok_pick(neg, lex_tok(s, t0.pos), t0);
+    if (t1.kind != "int" || t1.pos != end) { return ""; }
+    if (neg) { return "-" + t1.text; }
+    return t1.text;
 }
 
 // Signed/unsigned integer operands in one operation (spec §6.1, §6.3).
@@ -1981,9 +1994,16 @@ Str set_elem_type(Str t) {
     return str_trim(str_slice(t, h, n - 1));
 }
 
+// `wrapping_i8(x)` .. `wrapping_u512(x)`: keeps the low bits (§6.7), or "".
+pub Str wrap_conv_type(Str name) {
+    Str t = conv_helper_type(str_slice(name, 9, str_len(name)));
+    if (is_int_ty(t)) { return t; }
+    return "";
+}
+
 Bool arith_family(Str name) {
     if (ck_str_starts_with(name, "checked_")) { return true; }
-    if (ck_str_starts_with(name, "wrapping_")) { return true; }
+    if (ck_str_starts_with(name, "wrapping_")) { return wrap_conv_type(name) == ""; }
     if (ck_str_starts_with(name, "saturating_")) { return true; }
     return false;
 }
@@ -2062,6 +2082,7 @@ Bool arith_unsigned(Str name) {
 
 // Target type of a conversion helper name, or "".
 pub Str conv_helper_type(Str name) {
+    if (ck_str_starts_with(name, "wrapping_")) { return wrap_conv_type(name); }
     if (name == "isize") { return "ISize"; }
     if (name == "usize") { return "USize"; }
     Int n = str_len(name);
@@ -3518,6 +3539,31 @@ Int _count_chars(Str inner, Int i, Int count) {
     if (c == 92) { return _count_chars(inner, i + 2, count + 1); }
     return _count_chars(inner, i + 1, count + 1);
 }
+// UTF-8 byte length of a string literal: the extent Str(N) bounds (§44).
+Int str_literal_bytes(Str text) {
+    Str inner = str_slice(text, 1, str_len(text) - 1);
+    return _count_utf8(inner, 0, 0);
+}
+Int _count_utf8(Str inner, Int i, Int count) {
+    Int n = str_len(inner);
+    if (i >= n) { return count; }
+    Int c = str_char_at(inner, i);
+    if (c == 92) { return _count_utf8(inner, i + 2, count + 1); }
+    Int w = if (c < 128) { 1 } else if (c < 2048) { 2 } else if (c < 65536) { 3 } else { 4 };
+    return _count_utf8(inner, i + 1, count + w);
+}
+// Raw string `r"..."`: no escapes, every codepoint is itself.
+Int raw_literal_bytes(Str text) {
+    Str inner = str_slice(text, 2, str_len(text) - 1);
+    return _count_utf8_raw(inner, 0, 0);
+}
+Int _count_utf8_raw(Str inner, Int i, Int count) {
+    Int n = str_len(inner);
+    if (i >= n) { return count; }
+    Int c = str_char_at(inner, i);
+    Int w = if (c < 128) { 1 } else if (c < 2048) { 2 } else if (c < 65536) { 3 } else { 4 };
+    return _count_utf8_raw(inner, i + 1, count + w);
+}
 Int bytes_literal_len(Str text) {
     Str inner = str_slice(text, 2, str_len(text) - 1);
     return _count_bytes(inner, 0, 0);
@@ -3572,9 +3618,9 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
     if (t.kind == "str") {
         if (is_str_fixed(exp)) {
             Int cap = fixed_cap(exp);
-            Int len = str_literal_chars(t.text);
+            Int len = str_literal_bytes(t.text);
             if (len <= cap) { return ERes {.pos = t.pos, .ty = exp, .err = ""}; }
-            Str msg = "string literal length " + IntToString(len) + " exceeds Str(" + IntToString(cap) + ") capacity";
+            Str msg = "string literal is " + IntToString(len) + " bytes, exceeds Str(" + IntToString(cap) + ") capacity";
             return ERes {.pos = t.pos, .ty = "", .err = msg};
         }
         return ERes {.pos = t.pos, .ty = "Str", .err = ""};
@@ -3582,9 +3628,9 @@ ERes check_primary_e(Str s, Int pos, List(Str) env, Funcs fs, Str exp) {
     if (t.kind == "raw") {
         if (is_str_fixed(exp)) {
             Int cap = fixed_cap(exp);
-            Int len = str_literal_chars(t.text);
+            Int len = raw_literal_bytes(t.text);
             if (len <= cap) { return ERes {.pos = t.pos, .ty = exp, .err = ""}; }
-            Str msg = "raw string length " + IntToString(len) + " exceeds Str(" + IntToString(cap) + ") capacity";
+            Str msg = "raw string is " + IntToString(len) + " bytes, exceeds Str(" + IntToString(cap) + ") capacity";
             return ERes {.pos = t.pos, .ty = "", .err = msg};
         }
         return ERes {.pos = t.pos, .ty = "Str", .err = ""};
@@ -4598,11 +4644,10 @@ Tok tok_pick(Bool c, Tok a, Tok b) {
 }
 
 // Range check of a (possibly negated) integer literal against an integer
-// target type. Wide targets (>= 128 bits) accept any literal, matching the
-// reference pipeline. Returns "" when it fits, else the diagnostic.
+// target type, at every width. Returns "" when it fits, else the
+// diagnostic.
 Str lit_range_err(Str text, Bool neg, Str ty) {
     Int bits = ty_bits(ty);
-    if (bits >= 128) { return ""; }
     Str d = lit_dec(text);
     Bool sg = signed_ty(ty);
     Bool zero = d == "0";
@@ -4615,18 +4660,6 @@ Str lit_range_err(Str text, Bool neg, Str ty) {
     Bool at_min = sg && neg && d == lim;
     if (fits_pos || at_min) { return ""; }
     return msg;
-}
-
-// Is the expression [pos, end) a single primary with no top-level
-// operator, and not a literal? (spec §6.4: such a value is never
-// implicitly narrowed; arithmetic results keep the margin rule.)
-Bool narrow_forbidden(Str s, Int pos, Int end, List(Str) env, Funcs fs, Str ty) {
-    Tok t = lex_tok(s, pos);
-    if (t.kind == "int" || t.kind == "char" || t.kind == "float") { return false; }
-    if (t.text == "-" || t.text == "(") { return false; }
-    ERes u = check_unary_e(s, pos, env, fs, ty);
-    if (u.err != "") { return false; }
-    return u.pos == end;
 }
 
 SRes check_bind(Str s, Int pos, Str ty, Str name, List(Str) env, Funcs fs, Str ret) {
@@ -4658,13 +4691,10 @@ SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, 
     if (lrerr != "") {
         return SRes {.pos = v.pos, .err = "binding " + name + ": " + lrerr, .env = env};
     }
-    // Spec §6.4: narrowing is never implicit. Enforced for targets below
-    // 64 bits only: the shipped crypto stack (lib/ed25519.resid et al.)
-    // binds `Int bit = mw;` from Int(256) values, which the reference
-    // pipeline also accepts (its margin-narrowing rule), so a 64-bit
-    // target keeps that compatibility until those sources are migrated.
-    Bool narrowing = is_int_ty(ety) && is_int_ty(v.ty) && ty_bits(v.ty) > ty_bits(ety) && ty_bits(ety) < 64;
-    if (narrowing && narrow_forbidden(s, pos, v.pos, env, fs, ty)) {
+    // Spec §6.4: narrowing is never implicit, except a fitting whole literal.
+    Str whole_text = whole_int_literal(s, pos, v.pos);
+    Bool narrowing = is_int_ty(ety) && is_int_ty(v.ty) && !int_adopt_ok(v.ty, num_norm(ety), whole_text);
+    if (narrowing) {
         Str nmsg = "binding " + name + ": implicit narrowing from " + v.ty + " to " + ty + " requires an explicit cast";
         return SRes {.pos = v.pos, .err = nmsg, .env = env};
     }
@@ -4688,15 +4718,14 @@ SRes check_bind_ref(Str s, Int pos, Str ty, Str ctext, Str name, List(Str) env, 
         // same int-width acceptance as plain integer bindings.
         Bool both_res = str_has_prefix(v.ty, "Result(") && res_expected;
         Bool ok_accept = res_elem_ok(ety) == "_" || res_elem_ok(v.ty) == res_elem_ok(ety)
-            || (is_int_ty(res_elem_ok(v.ty)) && is_int_ty(res_elem_ok(ety)) && int_adopt_ok(res_elem_ok(v.ty), res_elem_ok(ety), "0"));
+            || (is_int_ty(res_elem_ok(v.ty)) && is_int_ty(res_elem_ok(ety)) && int_adopt_ok(res_elem_ok(v.ty), res_elem_ok(ety), ""));
         Bool er_accept = res_elem_err(ety) == "_" || res_elem_err(v.ty) == res_elem_err(ety)
-            || (is_int_ty(res_elem_err(v.ty)) && is_int_ty(res_elem_err(ety)) && int_adopt_ok(res_elem_err(v.ty), res_elem_err(ety), "0"));
+            || (is_int_ty(res_elem_err(v.ty)) && is_int_ty(res_elem_err(ety)) && int_adopt_ok(res_elem_err(v.ty), res_elem_err(ety), ""));
         Bool res_bind_accept = both_res && ok_accept && er_accept;
         // Spec v3.2 §6.1a/§6.4: integer literal adoption + implicit
         // value-preserving widening at bindings.
         Bool intpair = is_int_ty(ety) && is_int_ty(v.ty);
-        Tok first_tok = lex_tok(s, pos);
-        Bool iok = int_adopt_ok(v.ty, ety, first_tok.text);
+        Bool iok = int_adopt_ok(v.ty, ety, whole_text);
         Bool bind_ok = if (intpair) { iok } else { false };
         if (!coerce && !bind_ok && !opt_ok && !res_bind_ok && !res_bind_accept) {
             Str msg = "binding " + name + ": expected " + ty + ", got " + v.ty;
@@ -4748,14 +4777,7 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
             // Spec v3.2 §6.4: value-preserving widening is implicit;
             // narrowing requires literal adoption.
             Bool inrange = is_int_ty(ret) && is_int_ty(v.ty);
-            Bool widen = ty_bits(v.ty) <= ty_bits(ret);
-            Tok first = lex_tok(s, t.pos);
-            Bool adopt = int_adopt_ok(v.ty, ret, first.text);
-            Bool riok = if (!inrange) {
-                false
-            } else {
-                if (widen) { true } else { adopt }
-            };
+            Bool riok = inrange && int_adopt_ok(v.ty, ret, whole_int_literal(s, t.pos, v.pos));
             // return None; in an Option(Int) function — the hole adopts
             // the declared return type.
             Bool opt_hole = v.ty == "Option(_)";
@@ -4778,12 +4800,12 @@ SRes check_stmt(Str s, Int pos, List(Str) env, Funcs fs, Str ret) {
             Bool want_ok_hole = res_elem_ok(ret) == "_";
             Bool ok_same = vok == res_elem_ok(ret);
             Bool ok_int = is_int_ty(vok) && is_int_ty(res_elem_ok(ret));
-            Bool ok_accept = want_ok_hole || ok_same || (ok_int && int_adopt_ok(vok, res_elem_ok(ret), "0"));
+            Bool ok_accept = want_ok_hole || ok_same || (ok_int && int_adopt_ok(vok, res_elem_ok(ret), ""));
             Str ver = res_elem_err(v.ty);
             Bool want_err_hole = res_elem_err(ret) == "_";
             Bool er_same = ver == res_elem_err(ret);
             Bool er_int = is_int_ty(ver) && is_int_ty(res_elem_err(ret));
-            Bool er_accept = want_err_hole || er_same || (er_int && int_adopt_ok(ver, res_elem_err(ret), "0"));
+            Bool er_accept = want_err_hole || er_same || (er_int && int_adopt_ok(ver, res_elem_err(ret), ""));
             Bool res_ret_ok = both_res && ok_accept && er_accept;
             if (!riok && !opt_ret_ok && !empty_ret_ok && !res_ok_ret_ok && !res_err_ret_ok && !res_ret_ok) {
                 Str msg = "return type " + v.ty + " does not match " + ret;
@@ -6668,7 +6690,7 @@ EV gr_unary(Str op, Str v) {
     if (op == "-") {
         IP i = gr_ip(v);
         if (!i.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
-        return EV {.ok = true, .v = IntToString(0 - i.v), .pos = 0};
+        return gr_wide(0 - (Int(128))i.v);
     }
     if (op == "+") {
         return EV {.ok = true, .v = v, .pos = 0};
@@ -6681,9 +6703,16 @@ EV gr_unary(Str op, Str v) {
     if (op == "~") {
         IP i2 = gr_ip(v);
         if (!i2.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
-        return EV {.ok = true, .v = IntToString(0 - i2.v - 1), .pos = 0};
+        return EV {.ok = true, .v = IntToString(i2.v ^ -1), .pos = 0};
     }
     return EV {.ok = false, .v = "", .pos = 0};
+}
+
+// Int result of a folded Int op; not known when it overflows 64 bits (it traps).
+EV gr_wide(Int(128) v) {
+    Int(128) hi = 9223372036854775807;
+    if (v > hi || v < 0 - hi - 1) { return EV {.ok = false, .v = "", .pos = 0}; }
+    return EV {.ok = true, .v = IntToString(i64(v)), .pos = 0};
 }
 
 EV gr_plus(Str l, Str r) {
@@ -6691,7 +6720,7 @@ EV gr_plus(Str l, Str r) {
     if (li.ok) {
         IP ri = gr_ip(r);
         if (ri.ok) {
-            return EV {.ok = true, .v = IntToString(li.v + ri.v), .pos = 0};
+            return gr_wide((Int(128))li.v + ri.v);
         }
         return EV {.ok = false, .v = "", .pos = 0};
     }
@@ -6712,11 +6741,12 @@ EV gr_int2(Str op, Str l, Str r) {
     if (!li.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
     IP ri = gr_ip(r);
     if (!ri.ok) { return EV {.ok = false, .v = "", .pos = 0}; }
-    if (op == "-") { return EV {.ok = true, .v = IntToString(li.v - ri.v), .pos = 0}; }
-    if (op == "*") { return EV {.ok = true, .v = IntToString(li.v * ri.v), .pos = 0}; }
+    if (op == "-") { return gr_wide((Int(128))li.v - ri.v); }
+    Int(128) prod = (Int(128))li.v * ri.v;
+    if (op == "*") { return gr_wide(prod); }
     if (op == "/") {
         if (ri.v == 0) { return EV {.ok = false, .v = "", .pos = 0}; }
-        return EV {.ok = true, .v = IntToString(li.v / ri.v), .pos = 0};
+        return gr_wide((Int(128))li.v / ri.v);
     }
     if (op == "%") {
         if (ri.v == 0) { return EV {.ok = false, .v = "", .pos = 0}; }

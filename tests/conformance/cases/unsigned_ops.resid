@@ -1,0 +1,12 @@
+Int main() {
+    UInt(8) a = u8(rt 200);
+    UInt(8) b = u8(rt 3);
+    println(BoolToString(a > b));
+    println(UIntToString(u64(a / b)));
+    println(UIntToString(u64(a % b)));
+    UInt(64) c = u64(rt 1) << 63;
+    UInt(64) d = u64(rt 3);
+    println(BoolToString(c > d));
+    println(UIntToString(c / d));
+    return 0;
+}

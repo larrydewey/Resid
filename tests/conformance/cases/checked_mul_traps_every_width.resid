@@ -1,0 +1,6 @@
+Int main() {
+    Int(512) a = i512(rt 1) << 300;
+    Int(512) c = a * a;
+    println("unreachable");
+    return 0;
+}

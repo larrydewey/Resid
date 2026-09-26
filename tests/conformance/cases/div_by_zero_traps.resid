@@ -1,0 +1,1 @@
+Int main() { Int e = rt 5; Int f = e / (e - 5); println(IntToString(f)); return 0; }

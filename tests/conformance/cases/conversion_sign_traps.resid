@@ -1,0 +1,1 @@
+Int main() { Int x = rt(0 - 1); UInt(64) a = (UInt(64))x; println("unreachable"); return 0; }

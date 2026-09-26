@@ -351,7 +351,7 @@ pub Int(256) tm_be_acc(List(Int) b, Int idx, Int end, Int(256) v) {
     if (idx >= end) { return v; }
     Int byte = b[idx];
     Int(256) bv = (Int(256)) byte;
-    Int(256) shifted = v * 256;
+    Int(256) shifted = v << 8;
     Int(256) v2 = shifted | bv;
     Int ni = idx + 1;
     return tm_be_acc(b, ni, end, v2);

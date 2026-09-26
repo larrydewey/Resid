@@ -1,0 +1,8 @@
+Int main() {
+    Int(8) m = i8(rt(0 - 128));
+    Int(8) n = i8(rt(0 - 1));
+    println(IntToString(i64(m % n)));
+    Int(8) q = m / n;
+    println("unreachable");
+    return 0;
+}

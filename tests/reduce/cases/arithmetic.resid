@@ -18,7 +18,7 @@ Int pick(Int n) {
 Int deep(Int n) { return if (n == 0) { 0 } else { deep(n - 1) + 1 }; }
 Int main() {
     println(IntToString(sq(12)));
-    println(IntToString(big() + big() - 1));
+    println(IntToString(big() - 1 + big()));
     println(IntToString(maxv()));
     println(IntToString(minv()));
     println(IntToString(0 - 5));

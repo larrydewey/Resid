@@ -1,0 +1,1 @@
+Int main() { Str(2) w = "éé"; return 0; }

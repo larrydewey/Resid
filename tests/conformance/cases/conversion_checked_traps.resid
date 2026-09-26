@@ -1,0 +1,8 @@
+Int main() {
+    Int x = rt 255;
+    println(IntToString(i64(u8(x))));
+    Int y = rt 300;
+    UInt(8) a = u8(y);
+    println("unreachable");
+    return 0;
+}

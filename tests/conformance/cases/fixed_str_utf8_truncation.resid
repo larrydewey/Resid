@@ -1,0 +1,11 @@
+Int main() {
+    Str s = rt "éab";
+    Str(1) t = (Str(1))s;
+    println(IntToString(str_len((Str)t)));
+    Str(3) u = (Str(3))s;
+    println((Str)u);
+    Str(8) v = "héllo";
+    println(IntToString(v[1]));
+    println(IntToString(v[5]));
+    return 0;
+}

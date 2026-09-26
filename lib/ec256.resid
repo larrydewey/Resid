@@ -74,10 +74,10 @@ pub Bool ec_ge_scan(Int(256) a, Int(256) b, Int i) {
 
 pub Bool ec_ge512(Int(512) a, Int(512) b) {
     // split into 256-bit halves; compare high half, then low half
-    Int(256) ah = (Int(256)) (a >> 256);
-    Int(256) al = (Int(256)) a;
-    Int(256) bh = (Int(256)) (b >> 256);
-    Int(256) bl = (Int(256)) b;
+    Int(256) ah = wrapping_i256(a >> 256);
+    Int(256) al = wrapping_i256(a);
+    Int(256) bh = wrapping_i256(b >> 256);
+    Int(256) bl = wrapping_i256(b);
     Bool hgt = ec_ge(ah, bh);
     if (!hgt) { return false; }
     Bool hlt = ec_ge(bh, ah);
@@ -92,7 +92,7 @@ pub Int(256) ec_add(Int(256) a, Int(256) b) {
     Int(512) s = aa + bb;
     List(Int) drop1 = [0];
     Int(512) r = if (ec_ge512(s, pp)) { s - pp } else { s };
-    Int(256) rr = (Int(256)) r;
+    Int(256) rr = wrapping_i256(r);
     return rr;
 }
 
@@ -102,7 +102,7 @@ pub Int(256) ec_sub(Int(256) a, Int(256) b) {
     Int(512) bb = ec_zext(b);
     Bool ge = ec_ge512(aa, bb);
     Int(512) dp = if (ge) { aa - bb } else { (pp - bb) + aa };
-    Int(256) r = (Int(256)) dp;
+    Int(256) r = wrapping_i256(dp);
     return r;
 }
 
@@ -119,7 +119,7 @@ pub Int(256) ec_mul(Int(256) a, Int(256) b) {
     Int(512) aa = ec_zext(a);
     Int(512) bb = ec_zext(b);
     Int(512) pp = ec_p_wide();
-    Int(512) t = aa * bb;
+    Int(512) t = wrapping_mul(aa, bb);
     return ec_reduce(t);
 }
 
@@ -130,7 +130,7 @@ pub Int(512) ec_p_wide() {
 pub Int(256) ec_reduce(Int(512) t) {
     Int(512) pp = ec_p_wide();
     Int(512) rv = ec_mod_bits(t, pp, 511, 0);
-    Int(256) r = (Int(256)) rv;
+    Int(256) r = wrapping_i256(rv);
     return r;
 }
 
@@ -173,7 +173,7 @@ pub Int(256) ec_dbl_z(Int(256) y, Int(256) z) {
 
 pub Int(256) ec_unpack_x(Int(512) v) {
     Int(512) sh = v >> 256;
-    Int(256) r = (Int(256)) sh;
+    Int(256) r = wrapping_i256(sh);
     return r;
 }
 
@@ -193,7 +193,7 @@ pub Int(512) ec_mask_low() {
 pub Int(256) ec_unpack_y(Int(512) v) {
     Int(512) m = ec_mask_low();
     Int(512) yv = v & m;
-    Int(256) r = (Int(256)) yv;
+    Int(256) r = wrapping_i256(yv);
     return r;
 }
 
@@ -280,9 +280,10 @@ pub Int(512) ec_mul_packed(Int(256) k, Int(256) bx, Int(256) by) {
 pub Int(256) ec_be_val(List(Int) bytes, Int i, Int last, Int(256) acc) {
     if (i > last) { return acc; }
     Int byte = bytes[i];
-    Int(256) bv = (Int(256)) byte;
-    Int(256) acc8 = acc * 256;
-    Int(256) acc2 = acc8 + bv;
+    Int(256) bv = wrapping_i256(byte);
+    // Bit pattern of an unsigned 256-bit value: wraps by design.
+    Int(256) acc8 = acc << 8;
+    Int(256) acc2 = acc8 | bv;
     Int ni = i + 1;
     return ec_be_val(bytes, ni, last, acc2);
 }
@@ -324,9 +325,9 @@ pub Int(256) ec_muln(Int(256) a, Int(256) b) {
     Int(512) aa = ec_zext(a);
     Int(512) bb = ec_zext(b);
     Int(512) pp = ec_n_wide();
-    Int(512) tv = aa * bb;
+    Int(512) tv = wrapping_mul(aa, bb);
     Int(512) rv = ec_mod_bits(tv, pp, 511, 0);
-    Int(256) r = (Int(256)) rv;
+    Int(256) r = wrapping_i256(rv);
     return r;
 }
 

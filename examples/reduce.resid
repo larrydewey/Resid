@@ -21,7 +21,9 @@
 //   - calls to user functions whose arguments are all known and whose body
 //     reduces completely (β-reduction), memoized, under step and depth
 //     budgets so non-terminating or very deep recursion falls back to the
-//     residual call.
+//     residual call (an identical call re-entering itself stops at once);
+//   - calls with some known arguments: specialized to f__rsN (see
+//     rd_specialize), terminating by a homeomorphic-embedding whistle.
 //
 // Soundness is by construction: anything the evaluator does not model —
 // an effect (println, providers), a value type it does not represent, an
@@ -38,8 +40,11 @@
 // (lex_tok, Tok), parse_type/PRes and is_known_type_cg.
 
 // cts: constraint types (spec §12) as "name\x1fbase\x1fconstraint text".
-type RdT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; List(Str) cts; };
-type RdS = { Int steps; Int depth; Int fuel; Map(Str, Str) memo; };
+// fann: names of annotated (`@requires`, ...) functions, never specialized.
+type RdT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; List(Str) cts; List(Str) fann; };
+// specs: emitted specialized functions; hist: active specialization chain;
+// notes: "note: ..." lines for residual work left by a budget.
+type RdS = { Int steps; Int depth; Int fuel; Map(Str, Str) memo; Str specs; Int nspec; List(Str) hist; Str notes; };
 type RdE = { List(Str) ns; List(Str) vs; List(Str) ts; };
 // sx/px: a residual Str concatenation `px + <literal sx>` whose literal
 // tail may absorb further known strings (Str `+` is pure and associative).
@@ -516,7 +521,7 @@ RdN rd_sub(Int a, Int b) {
 }
 
 RdN rd_mul(Int a, Int b) {
-    Int(128) p = a * b;
+    Int(128) p = (Int(128))a * b;
     Int(128) hi = (Int(128))rd_i64_max();
     Int(128) lo = (Int(128))rd_i64_min();
     if (p > hi) { return rd_n(false, 0); }
@@ -539,8 +544,7 @@ Bool rd_shift_ok(Int b) {
     return true;
 }
 
-// `wsum` is the sum of the operand widths (the multiplication rule).
-RdV rd_fold_int(Str op, Int a, Int b, Int wsum, Str resty, Str orig, Int pos, RdS st) {
+RdV rd_fold_int(Str op, Int a, Int b, Str resty, Str orig, Int pos, RdS st) {
     Bool wide = resty != "Int";
     if (op == "+") {
         RdN x = rd_add(a, b);
@@ -553,12 +557,9 @@ RdV rd_fold_int(Str op, Int a, Int b, Int wsum, Str resty, Str orig, Int pos, Rd
         return rd_folded(rd_itoa(x2.v), resty, orig, true, pos, st);
     }
     if (op == "*") {
-        // The product is typed with the operand widths' sum rounded up the
-        // ladder (spec §6.1): Int(64) * Int(64) -> Int(128), and so on.
         RdN x3 = rd_mul(a, b);
         if (!x3.ok) { return rd_unk(orig, true, pos, st); }
-        Int pw = if (wsum <= 128) { 128 } else if (wsum <= 256) { 256 } else { 512 };
-        return rd_folded(rd_itoa(x3.v), rd_ity(pw), orig, true, pos, st);
+        return rd_folded(rd_itoa(x3.v), resty, orig, true, pos, st);
     }
     if (op == "/" || op == "%") {
         RdN x4 = rd_div(a, b, op == "%");
@@ -570,11 +571,10 @@ RdV rd_fold_int(Str op, Int a, Int b, Int wsum, Str resty, Str orig, Int pos, Rd
         return rd_folded(rd_itoa(a << b), resty, orig, true, pos, st);
     }
     if (op == ">>") {
-        // The generator emits a logical shift; over 128 bits that only
-        // matches the 64-bit result for non-negative values.
+        // Arithmetic shift, built from shifts of non-negative values only.
         if (!rd_shift_ok(b)) { return rd_unk(orig, true, pos, st); }
-        if (wide && a < 0) { return rd_unk(orig, true, pos, st); }
-        return rd_folded(rd_itoa(a >> b), resty, orig, true, pos, st);
+        Int sh = if (a < 0) { 0 - ((0 - (a + 1)) >> b) - 1 } else { a >> b };
+        return rd_folded(rd_itoa(sh), resty, orig, true, pos, st);
     }
     if (op == "&") { return rd_folded(rd_itoa(a & b), resty, orig, true, pos, st); }
     if (op == "|") { return rd_folded(rd_itoa(a | b), resty, orig, true, pos, st); }
@@ -619,7 +619,7 @@ RdV rd_fold(Str op, RdV l, RdV r, Str orig, Int pos, RdS st) {
         Int lw = rd_iw(lt);
         Int rw = rd_iw(rt);
         Int wmax = if (lw > rw) { lw } else { rw };
-        return rd_fold_int(op, rd_atoi(l.v), rd_atoi(r.v), lw + rw, rd_ity(wmax), orig, pos, st);
+        return rd_fold_int(op, rd_atoi(l.v), rd_atoi(r.v), rd_ity(wmax), orig, pos, st);
     }
     return rd_unk(orig, true, pos, st);
 }
@@ -1050,6 +1050,10 @@ RdV rd_ident(Str s, Int pos, Tok t, Str orig, RdE env, RdT ft, RdS st) {
         Str co = str_slice(s, pos, a.pos);
         Str cr = if (a.ch) { rd_lead(s, pos, t) + t.text + "(" + rd_join(a.rs, 0, ", ", "") + ")" } else { co };
         if (ei >= 0) { return rd_unk(cr, a.ch, a.pos, a.st); }
+        Int ufi = ft.fidx.get(t.text) else { -1 };
+        if (!a.allk && !a.named && ufi >= 0 && a.st.depth == 0) {
+            return rd_specialize(s, ufi, a, cr, co, rd_lead(s, pos, t), ft);
+        }
         if (!a.allk || a.named) { return rd_unk(cr, a.ch, a.pos, a.st); }
         if (t.text == "Some") {
             List(Str) sts0 = a.ts;
@@ -1482,7 +1486,7 @@ Str rd_memo_args(List(Str) ts, List(Str) vs, Int i, Str sep, Str acc) {
 
 RdS rd_st_memo(RdS st, Str key, Str val) {
     Map(Str, Str) m = st.memo;
-    return RdS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = m.insert(key, val)};
+    return RdS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = m.insert(key, val), .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes};
 }
 
 // Bind parameters to known arguments; "" names mark an unusable call.
@@ -1510,8 +1514,8 @@ RdV rd_call_user(Str s, Int fi, RdA a, Str orig, RdT ft) {
     Str key = rd_memo_key(name, a);
     Map(Str, Str) memo = st.memo;
     Str hit = memo.get(key) else { "" };
-    if (hit == "!") { return none; }
-    if (hit != "") {
+    if (hit == "!" || hit == "?") { return none; }
+    if (hit != "" && hit != "~") {
         Int sp = str_find_char(hit, 31, 0);
         Int hl = str_len(hit);
         Int sp1 = sp + 1;
@@ -1532,18 +1536,209 @@ RdV rd_call_user(Str s, Int fi, RdA a, Str orig, RdT ft) {
     Str rty = rd_norm_ty(frets[fi]);
     Int steps0 = if (st.depth == 0) { 0 } else { st.steps };
     Int d1 = st.depth + 1;
-    RdS inner = RdS {.steps = steps0, .depth = d1, .fuel = st.fuel, .memo = st.memo};
+    // "?" marks the call in progress: a pure call that re-enters itself with
+    // identical arguments never terminates, so it stays residual at once.
+    RdS inner0 = rd_st_memo(st, key, "?");
+    RdS inner = RdS {.steps = steps0, .depth = d1, .fuel = st.fuel, .memo = inner0.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes};
     RdR res = rd_stmts(s, bpos, env, ft, inner);
-    RdS after = RdS {.steps = res.st.steps, .depth = st.depth, .fuel = res.st.fuel, .memo = res.st.memo};
+    RdS after = RdS {.steps = res.st.steps, .depth = st.depth, .fuel = res.st.fuel, .memo = res.st.memo, .specs = res.st.specs, .nspec = res.st.nspec, .hist = st.hist, .notes = res.st.notes};
     Bool fits = res.st.steps <= rd_max_steps();
     Str cty = if (res.ret) { rd_coerce(res.rty, rty) } else { "" };
     if (!res.ok || !res.ret || res.bad || !fits || cty == "") {
-        // Out of budget is not a property of the call: do not remember it.
-        RdS after2 = if (fits) { rd_st_memo(after, key, "!") } else { after };
+        // Out of budget is not a property of the call: "~" allows a retry.
+        RdS after1 = if (fits) { rd_st_memo(after, key, "!") } else { rd_st_memo(after, key, "~") };
+        Bool spent = !fits || res.st.fuel <= 0;
+        RdS after2 = if (spent && st.depth == 0) { rd_note(after1, "reduction budget exhausted evaluating " + name + "(...); the call stays residual") } else { after1 };
         return rd_unk(orig, a.ch, a.pos, after2);
     }
     RdS after3 = rd_st_memo(after, key, cty + str_from_code(31) + res.rv);
     return rd_folded(res.rv, cty, orig, a.ch, a.pos, after3);
+}
+
+// ─── Specialization on partly-known arguments ───────────────────
+// A residual call f(k, x) with k known becomes f__rsN(x), where f__rsN is
+// f's body reduced with k bound; it is kept only when that shrinks the body.
+
+Int rd_max_specs() { return 400; }
+Int rd_max_specs_per_fn() { return 8; }
+
+// Pattern of a call: which arguments are specialized, their values, and
+// the pieces needed to emit the specialized function and call.
+type RdSp = { Str mask; Str vals; Int nk; List(Str) kvs; List(Str) kts; List(Str) dargs; List(Str) dparams; List(Str) knames; List(Str) kbind; RdE env; };
+
+RdS rd_note(RdS st, Str msg) {
+    Str line = "note: reduce: " + msg + "\n";
+    if (str_contains(st.notes, line)) { return st; }
+    return RdS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes + line};
+}
+
+RdS rd_st_spec(RdS st, Str specs, Int nspec, List(Str) hist) {
+    return RdS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo, .specs = specs, .nspec = nspec, .hist = hist, .notes = st.notes};
+}
+
+// Build the pattern; `keep` ("" = all) restricts which positions ("K"/"D"
+// per parameter) may stay known, for generalization.
+RdSp rd_sp_pat(List(Str) pns, List(Str) pts, RdA a, Str keep, Int i, RdSp acc) {
+    if (i >= pns.len()) { return acc; }
+    List(Str) vs = a.vs;
+    List(Str) ts = a.ts;
+    List(Str) rs = a.rs;
+    Str cty = if (ts[i] == "") { "" } else { rd_coerce(ts[i], pts[i]) };
+    Str lit = if (cty == "") { "" } else { rd_render(vs[i], cty) };
+    Bool allowed = keep == "" || str_slice(keep, i, i + 1) == "K";
+    Bool kn = lit != "" && allowed;
+    Str sep = str_from_code(29);
+    if (kn) {
+        RdSp nk = RdSp {.mask = acc.mask + "K", .vals = acc.vals + cty + sep + vs[i] + sep, .nk = acc.nk + 1, .kvs = acc.kvs.concat([vs[i]]), .kts = acc.kts.concat([cty]), .dargs = acc.dargs, .dparams = acc.dparams, .knames = acc.knames.concat([pns[i]]), .kbind = acc.kbind.concat([pts[i] + " " + pns[i] + " = " + lit + ";"]), .env = rd_env_add(acc.env, pns[i], vs[i], cty)};
+        return rd_sp_pat(pns, pts, a, keep, i + 1, nk);
+    }
+    RdSp nd = RdSp {.mask = acc.mask + "D", .vals = acc.vals, .nk = acc.nk, .kvs = acc.kvs, .kts = acc.kts, .dargs = acc.dargs.concat([rs[i]]), .dparams = acc.dparams.concat([pts[i] + " " + pns[i]]), .knames = acc.knames, .kbind = acc.kbind, .env = rd_env_add(acc.env, pns[i], "", "")};
+    return rd_sp_pat(pns, pts, a, keep, i + 1, nd);
+}
+
+// Well-quasi-order on known values: same-sign integers by magnitude,
+// strings by length, anything else by equality.
+Bool rd_embeds(Str ty, Str a, Str b) {
+    if (rd_is_int_ty(ty)) {
+        Int x = rd_atoi(a);
+        Int y = rd_atoi(b);
+        if (x >= 0 && y >= 0) { return x <= y; }
+        if (x < 0 && y < 0) { return x >= y; }
+        return false;
+    }
+    if (ty == "Str") { return str_len(a) <= str_len(b); }
+    return a == b;
+}
+
+Bool rd_embeds_all(List(Str) ts, List(Str) avs, List(Str) bvs, Int i) {
+    if (i >= ts.len()) { return true; }
+    if (!rd_embeds(ts[i], avs[i], bvs[i])) { return false; }
+    return rd_embeds_all(ts, avs, bvs, i + 1);
+}
+
+// Keep mask for generalizing `p` against ancestor values `avs`: a position
+// stays known only when its value is unchanged.
+Str rd_sp_keep(Str mask, List(Str) kvs, List(Str) avs, Int i, Int k, Str acc) {
+    if (i >= str_len(mask)) { return acc; }
+    if (str_slice(mask, i, i + 1) == "D") { return rd_sp_keep(mask, kvs, avs, i + 1, k, acc + "D"); }
+    Str m = if (kvs[k] == avs[k]) { "K" } else { "D" };
+    return rd_sp_keep(mask, kvs, avs, i + 1, k + 1, acc + m);
+}
+
+// Most recent active specialization of `fname` with the same mask whose
+// values embed in `p`'s (the whistle), as its value list; [] when none.
+List(Str) rd_whistle(List(Str) hist, Str fname, RdSp p, Int i) {
+    List(Str) none = [];
+    if (i < 0) { return none; }
+    Str sep = str_from_code(30);
+    List(Str) parts = str_split(hist[i] + sep, sep);
+    if (parts.len() >= 3 && parts[0] == fname && parts[1] == p.mask) {
+        List(Str) avs = rd_split(parts[2], str_from_code(28));
+        List(Str) avs2 = if (parts[2] == "" && p.nk == 1) { [""] } else { avs };
+        if (avs2.len() == p.nk && rd_embeds_all(p.kts, avs2, p.kvs, 0)) { return avs2; }
+    }
+    return rd_whistle(hist, fname, p, i - 1);
+}
+
+Int rd_tok_count(Str t, Int pos, Int acc) {
+    Tok k = lex_tok(t, pos);
+    if (k.kind == "eof") { return acc; }
+    return rd_tok_count(t, k.pos, acc + 1);
+}
+
+Str rd_bind_used(List(Str) names, List(Str) binds, Str body, Int i, Str acc) {
+    if (i >= names.len()) { return acc; }
+    Str a2 = if (rd_uses(body, names[i])) { acc + " " + binds[i] } else { acc };
+    return rd_bind_used(names, binds, body, i + 1, a2);
+}
+
+RdV rd_specialize(Str s, Int fi, RdA a, Str cr, Str co, Str lead, RdT ft) {
+    RdS st = a.st;
+    RdV none = rd_unk(cr, a.ch, a.pos, st);
+    List(Int) fb = ft.fbody;
+    Int bpos = fb[fi];
+    if (bpos < 0) { return none; }
+    List(Str) fnames = ft.fnames;
+    Str name = fnames[fi];
+    List(Str) fann = ft.fann;
+    if (rd_list_has(fann, name, 0)) { return none; }
+    List(Str) fpns = ft.fpns;
+    List(Str) fpts = ft.fpts;
+    List(Str) pns = rd_split(fpns[fi], ",");
+    List(Str) pts = rd_split(fpts[fi], "|");
+    List(Str) ats = a.ts;
+    if (pns.len() != ats.len() || pns.len() == 0) { return none; }
+    RdSp p0 = rd_sp_pat(pns, pts, a, "", 0, rd_sp_empty());
+    if (p0.nk == 0) { return none; }
+    // Termination: generalize against an embedded ancestor on the chain.
+    List(Str) hist = st.hist;
+    List(Str) anc = rd_whistle(hist, name, p0, hist.len() - 1);
+    if (anc.len() > 0) {
+        Str keep = rd_sp_keep(p0.mask, p0.kvs, anc, 0, 0, "");
+        RdSp pg = rd_sp_pat(pns, pts, a, keep, 0, rd_sp_empty());
+        if (pg.nk == 0) { return none; }
+        return rd_spec_with(s, fi, name, pns, pts, pg, a, cr, co, lead, ft);
+    }
+    return rd_spec_with(s, fi, name, pns, pts, p0, a, cr, co, lead, ft);
+}
+
+RdV rd_spec_with(Str s, Int fi, Str name, List(Str) pns, List(Str) pts, RdSp p, RdA a, Str cr, Str co, Str lead, RdT ft) {
+    RdS st = a.st;
+    RdV none = rd_unk(cr, a.ch, a.pos, st);
+    List(Int) fb = ft.fbody;
+    Int bpos = fb[fi];
+    List(Str) hist = st.hist;
+    Str key = str_from_code(2) + "sp" + str_from_code(1) + name + str_from_code(1) + p.mask + str_from_code(1) + p.vals;
+    Map(Str, Str) memo = st.memo;
+    Str hit = memo.get(key) else { "" };
+    if (hit == "!") { return none; }
+    if (hit != "") { return rd_sp_call(hit, p, lead, co, a, st); }
+    if (st.nspec >= rd_max_specs()) {
+        return rd_unk(cr, a.ch, a.pos, rd_note(st, "specialization attempt limit (" + IntToString(rd_max_specs()) + ") reached; further calls stay general"));
+    }
+    Str sname = name + "__rs" + IntToString(st.nspec + 1);
+    Str ckey = str_from_code(2) + "cnt" + str_from_code(1) + name;
+    Str cnt0 = memo.get(ckey) else { "0" };
+    Int cnt = str_parse_int(cnt0);
+    if (cnt >= rd_max_specs_per_fn()) { return none; }
+    Str hent = name + str_from_code(30) + p.mask + str_from_code(30) + rd_join(p.kvs, 0, str_from_code(28), "");
+    RdS st1 = rd_st_spec(rd_st_memo(rd_st_memo(st, ckey, IntToString(cnt + 1)), key, sname), st.specs, st.nspec + 1, hist.concat([hent]));
+    RdR body = rd_stmts(s, bpos, p.env, ft, st1);
+    Int fend = rd_skip_group(s, bpos, 1);
+    Tok close = lex_tok(s, body.pos);
+    RdS st2 = rd_st_spec(body.st, body.st.specs, body.st.nspec, hist);
+    Bool parsed = !body.bad && close.text == "}" && close.pos == fend;
+    // Unparsed body: the original text with every known parameter bound.
+    Str btext = if (parsed) { body.out + str_slice(s, body.pos, fend) } else { str_slice(s, bpos, fend) };
+    Str binds = rd_bind_used(p.knames, p.kbind, btext, 0, "");
+    Str full = binds + btext;
+    Int orig_n = rd_tok_count(str_slice(s, bpos, fend), 0, 0);
+    Int new_n = rd_tok_count(full, 0, 0);
+    Bool gain = new_n * 4 <= orig_n * 3;
+    Bool needed = rd_uses(st2.specs, sname);
+    if ((!parsed || !gain) && !needed) {
+        RdS st3 = rd_st_memo(st2, key, "!");
+        return rd_unk(cr, a.ch, a.pos, st3);
+    }
+    List(Str) frets = ft.frets;
+    Str decl = "\n" + frets[fi] + " " + sname + "(" + rd_join(p.dparams, 0, ", ", "") + ") {" + full + "\n";
+    RdS st4 = rd_st_spec(st2, st2.specs + decl, st2.nspec, hist);
+    return rd_sp_call(sname, p, lead, co, a, st4);
+}
+
+RdV rd_sp_call(Str sname, RdSp p, Str lead, Str co, RdA a, RdS st) {
+    Str txt = rd_nl_pad(lead + sname + "(" + rd_join(p.dargs, 0, ", ", "") + ")", co);
+    return rd_unk(txt, true, a.pos, st);
+}
+
+RdSp rd_sp_empty() {
+    return RdSp {.mask = "", .vals = "", .nk = 0, .kvs = [], .kts = [], .dargs = [], .dparams = [], .knames = [], .kbind = [], .env = rd_env_empty()};
+}
+
+Bool rd_list_has(List(Str) xs, Str x, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == x) { return true; }
+    return rd_list_has(xs, x, i + 1);
 }
 
 List(Str) rd_split(Str csv, Str sep) {
@@ -1661,7 +1856,7 @@ RdS rd_tick(RdS st) {
     // Over the memory budget: the fuel is spent, for the rest of the
     // program.
     Int f1 = if (resid_mem_since_mark() > rd_max_mem()) { 0 } else { st.fuel - 1 };
-    return RdS {.steps = s1, .depth = st.depth, .fuel = f1, .memo = st.memo};
+    return RdS {.steps = s1, .depth = st.depth, .fuel = f1, .memo = st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes};
 }
 
 // One statement's text followed by the rest of the block.
@@ -2156,7 +2351,7 @@ Int rd_fn_idx(RdT ft, Str name) {
 
 RdT rd_table_empty() {
     Map(Str, Int) e = {"__EMPTY__": -1};
-    return RdT {.fnames = [], .fpns = [], .fpts = [], .frets = [], .fbody = [], .sts = [], .sfs = [], .fidx = e, .cts = []};
+    return RdT {.fnames = [], .fpns = [], .fpts = [], .frets = [], .fbody = [], .sts = [], .sfs = [], .fidx = e, .cts = [], .fann = []};
 }
 
 // Parameters from after `(`: names, types, and whether the list is usable
@@ -2233,7 +2428,7 @@ RdT rd_collect(Str s, Int pos, RdT ft) {
             List(Str) sts = ft.sts;
             List(Str) sfs = ft.sfs;
             Str flds = rd_struct_fields(s, tb.pos, "");
-            RdT ft2 = RdT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = sts.concat([tn.text]), .sfs = sfs.concat([flds]), .fidx = ft.fidx, .cts = ft.cts};
+            RdT ft2 = RdT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = sts.concat([tn.text]), .sfs = sfs.concat([flds]), .fidx = ft.fidx, .cts = ft.cts, .fann = ft.fann};
             return rd_collect(s, tend, ft2);
         }
         // `type N = Base[expr];` / `type N = Base where expr;`
@@ -2243,14 +2438,21 @@ RdT rd_collect(Str s, Int pos, RdT ft) {
             Str ctext = if (ck.text == "[") { str_slice(s, ck.pos, rd_skip_group(s, ck.pos, 1) - 1) } else { if (ck.text == "where") { str_slice(s, ck.pos, tend - 1) } else { "" } };
             if (ctext != "") {
                 Str ent = tn.text + str_from_code(31) + cb.ty + str_from_code(31) + str_trim(ctext);
-                RdT ftc = RdT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts.concat([ent])};
+                RdT ftc = RdT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts.concat([ent]), .fann = ft.fann};
                 return rd_collect(s, tend, ftc);
             }
         }
         return rd_collect(s, tend, ft);
     }
     if (t.text == "pub") { return rd_collect(s, t.pos, ft); }
-    if (t.text == "@") { return rd_collect(s, rd_annot_end(s, t.pos), ft); }
+    if (t.text == "@") {
+        Int ae = rd_annot_end(s, t.pos);
+        PRes aty = parse_type(s, ae);
+        Tok an = lex_tok(s, aty.pos);
+        List(Str) fa = ft.fann;
+        RdT fta = RdT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts, .fann = fa.concat([an.text])};
+        return rd_collect(s, ae, fta);
+    }
     if (t.kind == "ident") {
         PRes rty = parse_type(s, pos);
         if (rty.err == "") {
@@ -2269,7 +2471,7 @@ RdT rd_collect(Str s, Int pos, RdT ft) {
                     List(Str) fpts = ft.fpts;
                     List(Str) frets = ft.frets;
                     List(Int) fbody = ft.fbody;
-                    RdT ft3 = RdT {.fnames = fnames.concat([name.text]), .fpns = fpns.concat([rd_join(ps.pns, 0, ",", "")]), .fpts = fpts.concat([rd_join(ps.pts, 0, "|", "")]), .frets = frets.concat([rty.ty]), .fbody = fbody.concat([bpos]), .sts = ft.sts, .sfs = ft.sfs, .fidx = fidx.insert(name.text, idx), .cts = ft.cts};
+                    RdT ft3 = RdT {.fnames = fnames.concat([name.text]), .fpns = fpns.concat([rd_join(ps.pns, 0, ",", "")]), .fpts = fpts.concat([rd_join(ps.pts, 0, "|", "")]), .frets = frets.concat([rty.ty]), .fbody = fbody.concat([bpos]), .sts = ft.sts, .sfs = ft.sfs, .fidx = fidx.insert(name.text, idx), .cts = ft.cts, .fann = ft.fann};
                     return rd_collect(s, fend, ft3);
                 }
             }
@@ -2353,14 +2555,14 @@ RdG rd_prog_fn(Str s, Int pos, Tok ob, RdT ft, RdG g) {
     return rd_prog(s, fend, ft, RdG {.sb = sbf, .st = body.st, .nred = n2});
 }
 
-type RdOut = { Str text; Int nred; Str err; };
+type RdOut = { Str text; Int nred; Str err; Str notes; };
 
 pub RdOut rd_reduce_program(Str s) {
     Int _mm = resid_mem_mark();
     RdT ft = rd_collect(s, 0, rd_table_empty());
     Map(Str, Str) memo = {"__EMPTY__": "!"};
-    RdS st = RdS {.steps = 0, .depth = 0, .fuel = rd_max_fuel(), .memo = memo};
+    RdS st = RdS {.steps = 0, .depth = 0, .fuel = rd_max_fuel(), .memo = memo, .specs = "", .nspec = 0, .hist = [], .notes = ""};
     RdG g = rd_prog(s, 0, ft, RdG {.sb = str_sb_new(), .st = st, .nred = 0});
     Str err = g.st.memo.get("__ERR__") else { "" };
-    return RdOut {.text = str_sb_finish(g.sb), .nred = g.nred, .err = err};
+    return RdOut {.text = str_sb_finish(g.sb) + g.st.specs, .nred = g.nred, .err = err, .notes = g.st.notes};
 }

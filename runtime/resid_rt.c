@@ -1085,7 +1085,7 @@ char* resid_sacc_append_int(char* d, int64_t v) {
 }
 
 /* Copy a NUL-terminated string into a fixed-capacity stack buffer
- * (Str(N) = N chars + NUL, cap = N + 1). Copies at most cap - 1 bytes,
+ * (Str(N) = N UTF-8 bytes + NUL, cap = N + 1). Copies at most cap - 1 bytes,
  * truncating on overflow (a NUL terminator is always written). Returns
  * the number of bytes stored (excluding the terminator). Used to
  * materialize stack-allocated Str(N) values without any heap use. */
@@ -1095,6 +1095,10 @@ size_t resid_str_to_fixed(char* dst, const char* src, size_t cap) {
     while (n < cap - 1 && src[n] != 0) {
         dst[n] = src[n];
         n++;
+    }
+    /* Never split a codepoint: back off to its lead byte when truncated. */
+    if (src[n] != 0 && (src[n] & 0xC0) == 0x80) {
+        while (n > 0 && (src[n] & 0xC0) == 0x80) n--;
     }
     dst[n] = 0;
     return n;
@@ -3036,6 +3040,12 @@ uint64_t usize(uint64_t v) { return v; }
  * overflow flag here, so no extra basic block is needed at the use site. */
 void resid_overflow_check(int8_t overflowed) {
     if (overflowed) resid_abort("integer overflow in checked arithmetic");
+}
+void resid_div_check(int8_t zero) {
+    if (zero) resid_abort("integer division by zero");
+}
+void resid_conv_check(int8_t bad) {
+    if (bad) resid_abort("numeric conversion out of range");
 }
 
 /* ── Wrapping operations (C integer overflow is well-defined: wrap) ─ */
