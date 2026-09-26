@@ -245,6 +245,12 @@ the test harnesses create a throwaway key when none is configured.
 `tests/provenance/run.sh` covers tamper detection, keys, concealment and
 reproducibility. Self-compile time is unchanged.
 
+### 0m. Types on graph nodes (G2 complete, 2026-09-26)
+
+The graph checker now records a type for every expression node, plus def
+edges for field and method uses (`gk_analyze`, `--graph-types`). Every
+checked expression in the compiler and the in-repo programs gets a type.
+
 ### 0l. Type checking on the graph (G2, 2026-09-26)
 
 `examples/gcheck.resid` replaces the text checker in the driver

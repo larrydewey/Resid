@@ -1,0 +1,51 @@
+7 param v : Int
+8 ref v : Int -> 7 param v
+9 lit 2 : Int
+10 bin * : Int(64)
+16 param a : Int
+17 ty P :  -> 4 struct_t P
+18 param p : P
+20 ref a : Int -> 16 param a
+21 ref p : P -> 18 param p
+22 field x : Int -> 1 sfield x
+23 bin + : Int(64)
+24 bind b : Int
+26 lit 3 : Int(8)
+27 bind small : Int(8)
+29 ref b : Int -> 24 bind b
+30 call Some : Option(Int)
+31 bind o : Option(Int)
+33 ref o : Option(Int) -> 31 bind o
+34 lit 0 : Int
+35 bexpr  : Int
+36 orelse  : Int
+37 bind c : Int
+39 lit "a" : Str
+40 lit "b" : Str
+41 list  : List(Str)
+42 bind xs : List(Str)
+44 ref xs : List(Str) -> 42 bind xs
+45 ref s : Str -> 52 for s
+46 ref small : Int(8) -> 27 bind small
+47 call IntToString : Str
+48 bin + : Str
+49 call println : Bool
+52 for s : Str
+54 ref o : Option(Int) -> 31 bind o
+55 paren  : Option(Int)
+56 ref q : Int -> 58 arm Some
+57 mcall twice : Int -> 13 fn twice
+58 arm Some : Int
+59 lit 0 : Int
+61 match  : Int
+62 bind d : Int
+63 ref d : Int -> 62 bind d
+64 ref c : Int -> 37 bind c
+65 bin + : Int(64)
+70 lit 2 : Int(64)
+71 lit 1 : Int(64)
+72 finit x :  -> 1 sfield x
+73 lit 2 : Int(64)
+74 finit y :  -> 3 sfield y
+75 struct P : P -> 4 struct_t P
+76 call f : Int -> 68 fn f
