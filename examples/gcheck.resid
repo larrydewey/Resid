@@ -734,7 +734,8 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
         if (m == "write_all" || m == "close" || m == "exists" || m == "write_bytes" || m == "is_dir" || m == "create_dir") { return gt(k, "Bool", id); }
         if (m == "open") { return gt(k, "File", id); }
         if (m == "list_dir") { return gt(k, "List(Str)", id); }
-        if (m == "read_bytes") { return gt(k, "List(Int)", id); }
+        if (m == "read_bytes" || m == "sha256") { return gt(k, "List(Int)", id); }
+        if (m == "append_bytes") { return gt(k, "Bool", id); }
     }
     if (fam == "args" && m == "count") { return gt(k, "Int", id); }
     if (fam == "args" && m == "get") { return gt(k, "Str", id); }

@@ -3308,6 +3308,84 @@ int8_t resid_fs_write_bytes(const char* path, void* list_box) {
     return (written == (size_t)n && closed) ? 1 : 0;
 }
 
+/* SHA-256 (FIPS 180-4) for filesystem.sha256: hashes a file in C so the
+ * bytes are never boxed into a List(Int). */
+static const uint32_t sha256_k[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
+#define SHA_ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
+static void sha256_block(uint32_t h[8], const unsigned char* p) {
+    uint32_t w[64];
+    for (int i = 0; i < 16; i++) w[i] = (uint32_t)p[4*i] << 24 | (uint32_t)p[4*i+1] << 16 | (uint32_t)p[4*i+2] << 8 | p[4*i+3];
+    for (int i = 16; i < 64; i++) {
+        uint32_t s0 = SHA_ROR(w[i-15], 7) ^ SHA_ROR(w[i-15], 18) ^ (w[i-15] >> 3);
+        uint32_t s1 = SHA_ROR(w[i-2], 17) ^ SHA_ROR(w[i-2], 19) ^ (w[i-2] >> 10);
+        w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+    for (int i = 0; i < 64; i++) {
+        uint32_t t1 = hh + (SHA_ROR(e, 6) ^ SHA_ROR(e, 11) ^ SHA_ROR(e, 25)) + ((e & f) ^ (~e & g)) + sha256_k[i] + w[i];
+        uint32_t t2 = (SHA_ROR(a, 2) ^ SHA_ROR(a, 13) ^ SHA_ROR(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+        hh = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+}
+
+/* filesystem.sha256(path): the file's SHA-256 as a 32-byte List(Int), or an
+ * empty list when it cannot be read. */
+void* resid_fs_sha256(const char* path) {
+    if (!resid_path_is_safe(path)) return resid_list_new(0, NULL, "List(Int(64))");
+    FILE* f = fopen(path, "rb");
+    if (!f) return resid_list_new(0, NULL, "List(Int(64))");
+    uint32_t h[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+    unsigned char buf[65536];
+    unsigned char tail[128];
+    uint64_t total = 0;
+    size_t keep = 0;
+    for (;;) {
+        size_t n = fread(buf + keep, 1, sizeof buf - keep, f);
+        size_t have = keep + n;
+        size_t full = have & ~(size_t)63;
+        for (size_t i = 0; i < full; i += 64) sha256_block(h, buf + i);
+        total += n;
+        keep = have - full;
+        memmove(buf, buf + full, keep);
+        if (n == 0) break;
+    }
+    fclose(f);
+    memcpy(tail, buf, keep);
+    tail[keep] = 0x80;
+    size_t tl = keep + 1 <= 56 ? 64 : 128;
+    memset(tail + keep + 1, 0, tl - keep - 1);
+    uint64_t bits = total * 8;
+    for (int i = 0; i < 8; i++) tail[tl - 1 - i] = (unsigned char)(bits >> (8 * i));
+    for (size_t i = 0; i < tl; i += 64) sha256_block(h, tail + i);
+    void* slots[32];
+    for (int i = 0; i < 32; i++) slots[i] = resid_box_i64((int64_t)((h[i / 4] >> (24 - 8 * (i % 4))) & 0xFF));
+    return resid_list_new(32, slots, "List(Int(64))");
+}
+
+/* filesystem.append_bytes(path, bytes): append raw bytes to an existing
+ * file. Returns 1 on success, 0 on failure. */
+int8_t resid_fs_append_bytes(const char* path, void* list_box) {
+    if (!resid_path_is_safe(path)) return 0;
+    int64_t n = resid_list_len(list_box);
+    unsigned char* buf = (unsigned char*)malloc((size_t)(n > 0 ? n : 1));
+    for (int64_t i = 0; i < n; i++) buf[i] = (unsigned char)(resid_unbox_i64(resid_list_get(list_box, i)) & 0xFF);
+    FILE* f = fopen(path, "ab");
+    if (!f) { free(buf); return 0; }
+    size_t written = fwrite(buf, 1, (size_t)n, f);
+    int closed = fclose(f) == 0;
+    free(buf);
+    return (written == (size_t)n && closed) ? 1 : 0;
+}
+
 /* print_bytes(List(Int)): each element's low 8 bits, as raw bytes, to
  * stdout (the stream print writes; no NUL or UTF-8 restrictions). */
 int8_t resid_print_bytes(void* list_box) {

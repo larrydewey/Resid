@@ -1,0 +1,20 @@
+// filesystem.sha256 and filesystem.append_bytes (spec §32).
+Str hex2(Int b) {
+    Str d = "0123456789abcdef";
+    return str_slice(d, b / 16, b / 16 + 1) + str_slice(d, b % 16, b % 16 + 1);
+}
+
+Str hex_all(List(Int) bs, Int i, Str acc) {
+    if (i >= bs.len()) { return acc; }
+    return hex_all(bs, i + 1, acc + hex2(bs[i]));
+}
+
+Int main() {
+    Str p = "@TMP@/sha.txt";
+    Bool w = filesystem.write_all(p, "ab");
+    Bool a = filesystem.append_bytes(p, [99]);
+    println(filesystem.read_all(p));
+    println(hex_all(filesystem.sha256(p), 0, ""));
+    println(IntToString(filesystem.sha256("@TMP@/missing").len()));
+    return 0;
+}

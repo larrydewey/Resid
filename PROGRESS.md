@@ -245,6 +245,17 @@ the test harnesses create a throwaway key when none is configured.
 `tests/provenance/run.sh` covers tamper detection, keys, concealment and
 reproducibility. Self-compile time is unchanged.
 
+### 0o. Self-compile peak memory 1470MB -> 411MB (2026-09-26)
+
+A DHAT profile of the self-compile showed signed provenance (commit
+46fbdd5) had pushed the peak from ~350MB to 1470MB. It read the output binary
+as a boxed `List(Int)` and hashed it with the Resid-level SHA-256, whose
+per-block boxes the arena did not release. New provider verbs
+`filesystem.sha256` (C, streaming) and `filesystem.append_bytes` (trailer
+only) replace that path. The same profile showed string concatenation is
+about 1% of allocation. About 78% of all bytes allocated are token text
+from `lex_tok` in the text passes, which G3/G4 remove.
+
 ### 0n. Linear builders StrBuf / ListBuf(T) (G2b, spec v3.6 §45, 2026-09-26)
 
 `StrBuf` and `ListBuf(T)` append in place; each value must be used exactly
