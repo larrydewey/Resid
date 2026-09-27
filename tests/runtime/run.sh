@@ -19,11 +19,14 @@ done
 # sources) with --runtime-internals.
 ROOT="$(cd ../.. && pwd)"
 COMPILER="${COMPILER:-$ROOT/build/boot/stage2.bin}"
-if (cd "$ROOT" && "$COMPILER" tests/runtime/rt/primitives.resid -o "$W/prim" --runtime-internals) > "$W/prim.log" 2>&1 && "$W/prim" > "$W/prim.out" 2>&1 && cmp -s "$W/prim.out" rt/primitives.out; then
-    pass=$((pass + 1))
-else
-    fail=$((fail + 1)); echo "FAIL rt/primitives: $(grep -m1 -i error "$W/prim.log")"
-fi
+for t in rt/*.out; do
+    n="$(basename "$t" .out)"
+    if (cd "$ROOT" && "$COMPILER" "tests/runtime/rt/$n.resid" -o "$W/rt_$n" --runtime-internals) > "$W/rt_$n.log" 2>&1 && "$W/rt_$n" > "$W/rt_$n.out" 2>&1 && cmp -s "$W/rt_$n.out" "$t"; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL rt/$n: $(grep -m1 -i error "$W/rt_$n.log")"
+    fi
+done
 # A lib/ file imported by an allowed entry still may not use internals.
 (cd "$ROOT" && "$COMPILER" tests/runtime/rt/uses_lib.resid -o "$W/ul" --runtime-internals) > "$W/ul.log" 2>&1
 if grep -q "E0220.*resid_raw_load64" "$W/ul.log"; then

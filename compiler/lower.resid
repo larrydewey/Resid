@@ -1309,6 +1309,28 @@ RA lw_raw_args(LW w, Int id, Int i, List(Str) env, RA a) {
     return lw_raw_args(w, id, i + 1, env, RA {.g = v, .vals = a.vals.concat([v.val])});
 }
 
+// "i64 a, i64 b, ..." of a list literal of Int constants (maybe negated).
+Str lw_table_items(LW w, Int ln, Int i, Str acc) {
+    if (i >= w.g.ns[ln].nk) { return acc; }
+    Str v = lw_table_item(w, lw_kid(w, ln, i));
+    return lw_table_items(w, ln, i + 1, if (acc == "") { "i64 " + v } else { acc + ", i64 " + v });
+}
+
+Str lw_table_item(LW w, Int e) {
+    if (lw_text(w, e) == "-" && w.g.ns[e].nk == 1) { return "-" + lw_table_item(w, lw_kid(w, e, 0)); }
+    if (lw_kind(w, e) == "paren") { return lw_table_item(w, lw_kid(w, e, 0)); }
+    Str t = lw_text(w, e);
+    return if (str_starts_with(t, "0x") || str_starts_with(t, "0X")) { IntToString(lw_hex(t, 2, 0)) } else { str_replace(t, "_", "") };
+}
+
+Int lw_hex(Str t, Int i, Int acc) {
+    if (i >= str_len(t)) { return acc; }
+    Int c = str_char_at(t, i);
+    Int d = if (c >= 48 && c <= 57) { c - 48 } else { if (c >= 97 && c <= 102) { c - 87 } else { if (c >= 65 && c <= 70) { c - 55 } else { -1 } } };
+    if (d < 0) { return lw_hex(t, i + 1, acc); }
+    return lw_hex(t, i + 1, acc * 16 + d);
+}
+
 Int lw_raw_width(Str n) {
     if (str_ends_with(n, "8")) { return 8; }
     if (str_ends_with(n, "16")) { return 16; }
@@ -1318,6 +1340,15 @@ Int lw_raw_width(Str n) {
 
 GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
     Str op = str_slice(n, 10, str_len(n));
+    // A constant table: the address of `[i64 ...]` read-only data.
+    if (op == "table") {
+        Int ln = lw_kid(w, id, 0);
+        Int t0 = c.tmp + 1;
+        Str r0 = "%t" + IntToString(t0);
+        Str gn = "@rtt." + IntToString(ln);
+        Str gl = gn + " = private unnamed_addr constant [" + IntToString(w.g.ns[ln].nk) + " x i64] [" + lw_table_items(w, ln, 0, "") + "], align 16";
+        return GT {.pos = 0, .val = r0, .ty = "Int", .cnt = 0, .err = "", .glines = c.glines.concat([gl]), .lines = c.lines.concat([r0 + " = ptrtoint ptr " + gn + " to i64"]), .tmp = t0, .lbl = c.lbl, .tail = false};
+    }
     // Static storage and function addresses take literal names.
     if (op == "global" || op == "tls" || op == "fn") {
         Str nm0 = lw_text(w, lw_kid(w, id, 0));
