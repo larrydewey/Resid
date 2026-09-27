@@ -7,8 +7,8 @@ pub Int rt_str_concat(Int a, Int b) {
     Int la = c_strlen(a);
     Int lb = c_strlen(b);
     Int p = ralloc(la + lb + 1);
-    Int _a = mcopy(p, a, la);
-    Int _b = mcopy(p + la, b, lb + 1);
+    _ = mcopy(p, a, la);
+    _ = mcopy(p + la, b, lb + 1);
     return p;
 }
 
@@ -23,9 +23,9 @@ pub Int rt_str_eq(Int a, Int b) { return if (c_strcmp(a, b) == 0) { 1 } else { 0
 Int sacc_alloc(Int cap) {
     Int a = cur_arena();
     Int h = if (a != 0) { arena_alloc(a, 24 + cap + 1) } else { xmalloc(24 + cap + 1) };
-    Int _a = st64(h, a);
-    Int _l = st64(h + 8, 0);
-    Int _c = st64(h + 16, cap);
+    _ = st64(h, a);
+    _ = st64(h + 8, 0);
+    _ = st64(h + 16, cap);
     return h + 24;
 }
 
@@ -33,8 +33,8 @@ Int sacc_alloc(Int cap) {
 pub Int rt_sacc_from(Int s) {
     Int n = c_strlen(s);
     Int d = sacc_alloc(if (n < 32) { 64 } else { n * 2 });
-    Int _c = mcopy(d, s, n + 1);
-    Int _l = st64(d - 16, n);
+    _ = mcopy(d, s, n + 1);
+    _ = st64(d - 16, n);
     return d;
 }
 
@@ -43,11 +43,11 @@ Int sacc_reserve(Int d, Int n) {
     Int cap = ld64(d - 8);
     if (len + n <= cap) { return d; }
     Int c2 = if (cap * 2 < len + n) { len + n } else { cap * 2 };
-    Int _f = str_index_forget(d);
+    _ = str_index_forget(d);
     Int a = ld64(d - 24);
     Int h = if (a != 0) { arena_alloc(a, 24 + c2 + 1) } else { xrealloc(d - 24, 24 + c2 + 1) };
-    Int _m = if (a != 0) { mcopy(h, d - 24, 24 + len + 1) } else { 0 };
-    Int _c = st64(h + 16, c2);
+    _ = if (a != 0) { mcopy(h, d - 24, 24 + len + 1) } else { 0 };
+    _ = st64(h + 16, c2);
     return h + 24;
 }
 
@@ -56,7 +56,7 @@ pub Int rt_sacc_append(Int d0, Int s) {
     Int n = c_strlen(s);
     Int d = sacc_reserve(d0, n);
     Int len = ld64(d - 16);
-    Int _c = mcopy(d + len, s, n + 1);
+    _ = mcopy(d + len, s, n + 1);
     return st64(d - 16, len + n) + d;
 }
 
@@ -66,8 +66,8 @@ pub Int rt_sacc_append_int(Int d0, Int v) {
     Int n = itoa_into(tmp, v);
     Int d = sacc_reserve(d0, n);
     Int len = ld64(d - 16);
-    Int _c = mcopy(d + len, tmp, n);
-    Int _z = st8(d + len + n, 0);
+    _ = mcopy(d + len, tmp, n);
+    _ = st8(d + len + n, 0);
     return st64(d - 16, len + n) + d;
 }
 
@@ -78,7 +78,7 @@ pub Int itoa_into(Int buf, Int v) {
     Int mag = if (neg) { 0 - v } else { v };
     Int nd = udigits(mag, 1);
     Int start = if (neg) { st8(buf, 45) + 1 } else { 0 };
-    Int _w = uput(buf + start + nd - 1, mag);
+    _ = uput(buf + start + nd - 1, mag);
     return start + nd;
 }
 
@@ -92,7 +92,7 @@ Int udiv10(Int m) { return udiv(m, 10); }
 
 pub Int uput(Int at, Int m) {
     Int q = udiv10(m);
-    Int _s = st8(at, 48 + (m - q * 10));
+    _ = st8(at, 48 + (m - q * 10));
     if (q == 0) { return 0; }
     return uput(at - 1, q);
 }
@@ -105,7 +105,7 @@ pub Int rt_str_to_fixed(Int dst, Int src, Int cap) {
     Int n0 = fixed_copy(dst, src, 0, cap - 1);
     Bool cut = ld8(src + n0) != 0 && (ld8(src + n0) & 192) == 128;
     Int n = if (cut) { fixed_back(src, n0) } else { n0 };
-    Int _z = st8(dst + n, 0);
+    _ = st8(dst + n, 0);
     return n;
 }
 
@@ -113,7 +113,7 @@ Int fixed_copy(Int dst, Int src, Int n, Int limit) {
     if (n >= limit) { return n; }
     Int b = ld8(src + n);
     if (b == 0) { return n; }
-    Int _s = st8(dst + n, b);
+    _ = st8(dst + n, b);
     return fixed_copy(dst, src, n + 1, limit);
 }
 
@@ -163,17 +163,17 @@ pub Int utf8_decode(Int p, Int len) {
 pub Int utf8_encode(Int cp, Int buf) {
     if (cp < 128) { return st8(buf, cp) + 1; }
     if (cp < 2048) {
-        Int _a = st8(buf, 192 | (cp >> 6));
+        _ = st8(buf, 192 | (cp >> 6));
         return st8(buf + 1, 128 | (cp & 63)) + 2;
     }
     if (cp < 65536) {
-        Int _b = st8(buf, 224 | (cp >> 12));
-        Int _c = st8(buf + 1, 128 | ((cp >> 6) & 63));
+        _ = st8(buf, 224 | (cp >> 12));
+        _ = st8(buf + 1, 128 | ((cp >> 6) & 63));
         return st8(buf + 2, 128 | (cp & 63)) + 3;
     }
-    Int _d = st8(buf, 240 | (cp >> 18));
-    Int _e = st8(buf + 1, 128 | ((cp >> 12) & 63));
-    Int _f = st8(buf + 2, 128 | ((cp >> 6) & 63));
+    _ = st8(buf, 240 | (cp >> 18));
+    _ = st8(buf + 1, 128 | ((cp >> 12) & 63));
+    _ = st8(buf + 2, 128 | ((cp >> 6) & 63));
     return st8(buf + 3, 128 | (cp & 63)) + 4;
 }
 
@@ -194,7 +194,7 @@ Int ascii_strs() {
 
 Int fill_ascii(Int t, Int c) {
     if (c >= 128) { return t; }
-    Int _s = st8(t + c * 2, c) + st8(t + c * 2 + 1, 0);
+    _ = st8(t + c * 2, c) + st8(t + c * 2 + 1, 0);
     return fill_ascii(t, c + 1);
 }
 
@@ -249,37 +249,37 @@ Int fill_off(Int s, Int off, Int p, Int i, Int n) {
         if ((n & 15) == 0) { return st64(off + (n >> 4) * 8, p - s); }
         return 0;
     }
-    Int _w = if ((i & 15) == 0) { st64(off + (i >> 4) * 8, p - s) } else { 0 };
+    _ = if ((i & 15) == 0) { st64(off + (i >> 4) * 8, p - s) } else { 0 };
     return fill_off(s, off, p + utf8_len_at(p), i + 1, n);
 }
 
 Int idx_build(Int s, Int sl) {
     Int old = sl_off(sl);
-    Int _f = if (old != 0) { c_free(old) + st64(sl + 16, 0) } else { 0 };
+    _ = if (old != 0) { c_free(old) + st64(sl + 16, 0) } else { 0 };
     Int blen = c_strlen(s);
-    Int _b = st64(sl + 32, blen);
-    Int _s0 = st64(sl, s);
+    _ = st64(sl + 32, blen);
+    _ = st64(sl, s);
     if (!any_high(s, 0, blen, 0)) { return st64(sl + 8, blen); }
     Int n = cp_count(s, 0);
-    Int _l = st64(sl + 8, n);
+    _ = st64(sl + 8, n);
     Int off = xmalloc(((n >> 4) + 1) * 8);
-    Int _o = fill_off(s, off, s, 0, n);
+    _ = fill_off(s, off, s, 0, n);
     return st64(sl + 16, off);
 }
 
 Int idx_ready() {
     if (ld64(idx_state() + 8) != 0) { return 0; }
-    Int _i = idx_clear_all(0);
+    _ = idx_clear_all(0);
     return st64(idx_state() + 8, 1);
 }
 
 Int idx_clear_all(Int k) {
     if (k >= 16) { return 0; }
     Int sl = idx_slots() + k * 40;
-    Int _a = st64(sl, 0);
-    Int _b = st64(sl + 8, 0 - 1);
-    Int _c = st64(sl + 16, 0);
-    Int _d = st64(sl + 24, 0);
+    _ = st64(sl, 0);
+    _ = st64(sl + 8, 0 - 1);
+    _ = st64(sl + 16, 0);
+    _ = st64(sl + 24, 0);
     return idx_clear_all(k + 1);
 }
 
@@ -306,22 +306,22 @@ Int idx_victim(Int k, Int best) {
 
 @noinline
 Int idx_slot_slow(Int s) {
-    Int _r = idx_ready();
+    _ = idx_ready();
     if (sl_s(idx_small()) == s) { return idx_small(); }
     if (str_short(s, 0)) { return idx_build(s, idx_small()) * 0 + idx_small(); }
     Int st = idx_state();
     Int clock = ld64(st) + 1;
-    Int _c = st64(st, clock);
+    _ = st64(st, clock);
     Int mru = ld64(st + 16);
-    Int _m = if (mru != 0) { st64(mru + 24, clock) } else { 0 };
+    _ = if (mru != 0) { st64(mru + 24, clock) } else { 0 };
     Int hit = idx_find(s, 0);
     if (hit != 0) { return st64(hit + 24, clock) * 0 + hit; }
     Int v = idx_victim(1, idx_slots());
     Int f = idx_region() + (v - idx_slots()) / 40 * 8;
     Int rg = region_kind(s);
-    Int _n = st64(idx_region() + 128, ld64(idx_region() + 128) + (if (rg != 0) { 1 } else { 0 }) - (if (ld64(f) != 0) { 1 } else { 0 }));
-    Int _g = st64(f, rg);
-    Int _v = idx_build(s, v);
+    _ = st64(idx_region() + 128, ld64(idx_region() + 128) + (if (rg != 0) { 1 } else { 0 }) - (if (ld64(f) != 0) { 1 } else { 0 }));
+    _ = st64(f, rg);
+    _ = idx_build(s, v);
     return st64(v + 24, clock) * 0 + v;
 }
 
@@ -335,8 +335,8 @@ pub Int idx_slot(Int s) {
 @noinline
 Int idx_slot_miss(Int s, Int st) {
     Int sl = idx_slot_slow(s);
-    Int _m = st64(st + 16, sl);
-    Int _f = if (sl_off(sl) == 0) { st64(st + 24, s) + st64(st + 32, sl_len(sl)) } else { 0 };
+    _ = st64(st + 16, sl);
+    _ = if (sl_off(sl) == 0) { st64(st + 24, s) + st64(st + 32, sl_len(sl)) } else { 0 };
     return sl;
 }
 
@@ -344,16 +344,16 @@ Int idx_slot_miss(Int s, Int st) {
 // scratch slots may name a string in it (the LRU never holds one).
 @export("resid_str_index_popped", "void()")
 pub Int rt_str_index_popped() {
-    Int _a = st64(idx_state() + 24, 0);
-    Int _b = st64(idx_small(), 0);
+    _ = st64(idx_state() + 24, 0);
+    _ = st64(idx_small(), 0);
     if (ld64(idx_region() + 128) == 0) { return 0; }
     return idx_clear_region(0, 1);
 }
 
 // A scalar scope is being freed: only strings in scopes can go.
 pub Int str_index_scope_popped() {
-    Int _a = st64(idx_state() + 24, 0);
-    Int _b = st64(idx_small(), 0);
+    _ = st64(idx_state() + 24, 0);
+    _ = st64(idx_small(), 0);
     if (ld64(idx_region() + 128) == 0) { return 0; }
     return idx_clear_region(0, 2);
 }
@@ -363,15 +363,15 @@ Int idx_clear_region(Int k, Int kind) {
     if (k >= 16) { return 0; }
     Int f = idx_region() + k * 8;
     Int n = idx_region() + 128;
-    Int _c = if (ld64(f) >= kind) { st64(f, 0) + st64(idx_slots() + k * 40, 0) + st64(n, ld64(n) - 1) } else { 0 };
+    _ = if (ld64(f) >= kind) { st64(f, 0) + st64(idx_slots() + k * 40, 0) + st64(n, ld64(n) - 1) } else { 0 };
     return idx_clear_region(k + 1, kind);
 }
 
 // Drop every cached index of `s` (about to be freed or moved).
 pub Int str_index_forget(Int s) {
     Int st = idx_state();
-    Int _a = if (ld64(st + 24) == s) { st64(st + 24, 0) } else { 0 };
-    Int _b = if (sl_s(idx_small()) == s) { st64(idx_small(), 0) } else { 0 };
+    _ = if (ld64(st + 24) == s) { st64(st + 24, 0) } else { 0 };
+    _ = if (sl_s(idx_small()) == s) { st64(idx_small(), 0) } else { 0 };
     if (ld64(st + 8) == 0) { return 0; }
     return idx_forget_at(s, 0);
 }
@@ -379,7 +379,7 @@ pub Int str_index_forget(Int s) {
 Int idx_forget_at(Int s, Int k) {
     if (k >= 16) { return 0; }
     Int sl = idx_slots() + k * 40;
-    Int _f = if (sl_s(sl) == s) { st64(sl, 0) + st64(sl + 24, 0) } else { 0 };
+    _ = if (sl_s(sl) == s) { st64(sl, 0) + st64(sl + 24, 0) } else { 0 };
     return idx_forget_at(s, k + 1);
 }
 
@@ -496,23 +496,23 @@ Int sb_grow(Int r, Int n) {
     Int cap = ld64(r + 16);
     Int c0 = if (cap == 0) { 64 } else { cap * 2 };
     Int c1 = if (c0 < len + n) { len + n } else { c0 };
-    Int _b = st64(r, xrealloc(ld64(r), c1 + 1));
+    _ = st64(r, xrealloc(ld64(r), c1 + 1));
     return st64(r + 16, c1);
 }
 
 pub Int sb_bytes(Int r, Int s, Int n) {
-    Int _g = if (ld64(r + 16) - ld64(r + 8) < n) { sb_grow(r, n) } else { 0 };
+    _ = if (ld64(r + 16) - ld64(r + 8) < n) { sb_grow(r, n) } else { 0 };
     Int len = ld64(r + 8);
-    Int _c = mcopy(ld64(r) + len, s, n);
+    _ = mcopy(ld64(r) + len, s, n);
     return st64(r + 8, len + n);
 }
 
 @export("str_sb_new", "ptr()")
 pub Int rt_sb_new() {
     Int r = xmalloc(24);
-    Int _a = st64(r, 0);
-    Int _b = st64(r + 8, 0);
-    Int _c = st64(r + 16, 0);
+    _ = st64(r, 0);
+    _ = st64(r + 8, 0);
+    _ = st64(r + 16, 0);
     return r;
 }
 
@@ -523,7 +523,7 @@ pub Int rt_sb_append(Int r, Int s) { return sb_bytes(r, s, c_strlen(s)) * 0 + r;
 pub Int rt_sb_append_cp(Int r, Int cp) {
     Int len = ld64(r + 8);
     if (ult(cp, 128) && len < ld64(r + 16)) {
-        Int _s = st8(ld64(r) + len, cp);
+        _ = st8(ld64(r) + len, cp);
         return st64(r + 8, len + 1) * 0 + r;
     }
     return sb_cp_slow(r, cp);
@@ -541,12 +541,12 @@ pub Int rt_sb_finish(Int r) {
     Int b = ld64(r);
     Int len = ld64(r + 8);
     Int cap = ld64(r + 16);
-    Int _f = c_free(r);
+    _ = c_free(r);
     // Inside an arena the text goes with it.
     Int a = cur_arena();
     if (a != 0 && ag_scope_depth() == 0) {
         Int out = arena_alloc(a, len + 1);
-        Int _c = if (b != 0) { mcopy(out, b, len) + c_free(b) } else { 0 };
+        _ = if (b != 0) { mcopy(out, b, len) + c_free(b) } else { 0 };
         return st8(out + len, 0) * 0 + out;
     }
     Int out0 = if (b == 0) { xmalloc(1) } else { b };
@@ -565,19 +565,20 @@ pub Bool rt_sb_print(Int r, Int nl) {
     Int b = ld64(r);
     Int len = ld64(r + 8);
     Bool ok = if (nl != 0) { write_line(1, if (b == 0) { resid_raw_addr("") } else { b }, len) } else { b == 0 || write_all(1, b, len) };
-    Int _a = c_free(b);
-    Int _b = c_free(r);
+    _ = c_free(b);
+    _ = c_free(r);
     return ok;
 }
 
-// A Str from a List(Int) of codepoints (UTF-8 encoded, malloc'd).
+// A Str from a List(Int) of codepoints (UTF-8 encoded).
 @export("resid_str_from_codepoints", "ptr(ptr)")
 pub Int rt_str_from_codepoints(Int l) {
     Int n = lcount(l);
-    if (n <= 0) { return cstr_dup(resid_raw_addr("")); }
+    if (n <= 0) { return rdup(resid_raw_addr("")); }
     Int buf = xmalloc(4 * n + 1);
     Int e = cps_out(l, buf, 0, 0, n);
-    return st8(buf + e, 0) * 0 + buf;
+    _ = st8(buf + e, 0);
+    return arena_adopt(buf, e);
 }
 
 Int cps_out(Int l, Int buf, Int k, Int i, Int n) {

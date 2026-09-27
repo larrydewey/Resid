@@ -1,0 +1,650 @@
+// lsp.resid — `residc lsp`: a language server over stdio (JSON-RPC with
+// Content-Length framing).
+//
+// It runs the compiler's own front end in process on the editor's buffer:
+// import resolution, desugaring, parsing, resolution and checking. That
+// gives diagnostics (published on open, change and save), hover (the
+// node's type, the definition's signature and doc comment), go to
+// definition, document symbols and completion of top-level names.
+//
+// The protocol goes out on a duplicate of the original stdout; fd 1 and,
+// while the checker runs, fd 2 point at an in-memory file, so compiler
+// diagnostics are captured as text and nothing stray reaches the client.
+// Each message is handled in a bulk arena; open documents live in memfds,
+// so the heap does not grow with edits.
+//
+// This file is imported by compiler/driver.resid.
+
+// ─── System calls and buffers ─────────────────────────────────────────
+
+Int ls_sys(Int n, Int a, Int b, Int c) { return resid_raw_syscall(n, a, b, c, 0, 0, 0); }
+
+// fds: protocol out, stderr copy, capture memfd.
+Int ls_fds() { return resid_raw_global("lsp_fds", 24); }
+Int ls_out() { return resid_raw_load64(ls_fds()); }
+Int ls_err() { return resid_raw_load64(ls_fds() + 8); }
+Int ls_cap() { return resid_raw_load64(ls_fds() + 16); }
+
+// Message bodies and captured text: one 64 MB buffer (untouched pages
+// cost nothing).
+Int ls_buf() { return resid_raw_global("lsp_buf", 67108864); }
+Int ls_buf_max() { return 67108863; }
+
+Int ls_setup() {
+    _ = resid_raw_store64(ls_fds(), ls_sys(32, 1, 0, 0));        // dup(1)
+    _ = resid_raw_store64(ls_fds() + 8, ls_sys(32, 2, 0, 0));    // dup(2)
+    Int mfd = ls_sys(319, resid_raw_addr("resid-lsp"), 0, 0);    // memfd_create
+    _ = resid_raw_store64(ls_fds() + 16, mfd);
+    return ls_sys(33, mfd, 1, 0);                                // fd 1 -> capture
+}
+
+// Read exactly n bytes of fd into buf; the count read.
+Int ls_read_exact(Int fd, Int buf, Int got, Int n) {
+    if (got >= n) { return got; }
+    Int r = ls_sys(0, fd, buf + got, n - got);
+    if (r <= 0) { return got; }
+    return ls_read_exact(fd, buf, got + r, n);
+}
+
+// Bytes [buf, buf + n) as a fresh Str.
+Str ls_str_at(Int buf, Int n) {
+    _ = resid_raw_store8(buf + n, 0);
+    return StrBuf().push(resid_raw_str(buf)).finish();
+}
+
+// ─── Framing ───────────────────────────────────────────────────────────
+
+// The header block's Content-Length, or -1 at end of input.
+Int ls_read_header(Int len, Int k) {
+    Int b = ls_buf();
+    Int r = ls_sys(0, 0, b + k, 1);
+    if (r <= 0) { return -1; }
+    Int c = resid_raw_load8(b + k);
+    if (c != 10) { return ls_read_header(len, if (k < 4000) { k + 1 } else { k }); }
+    // A full line in b[0..k]: blank ends the headers.
+    Int n = if (k > 0 && resid_raw_load8(b + k - 1) == 13) { k - 1 } else { k };
+    if (n == 0) { return len; }
+    Str line = ls_str_at(b, n);
+    Bool cl = str_starts_with(str_to_lower(line), "content-length:");
+    Int len2 = if (cl) { str_parse_int(str_trim(str_slice(line, 15, str_len(line)))) } else { len };
+    return ls_read_header(len2, 0);
+}
+
+Str ls_read_body(Int n) {
+    Int m = min(n, ls_buf_max());
+    Int got = ls_read_exact(0, ls_buf(), 0, m);
+    return ls_str_at(ls_buf(), got);
+}
+
+// UTF-8 length of s.
+Int ls_bytes(Str s) { return ls_nul(resid_raw_addr(s), 0); }
+Int ls_nul(Int p, Int i) { return if (resid_raw_load8(p + i) == 0) { i } else { ls_nul(p, i + 1) }; }
+
+Int ls_write_all(Int fd, Int p, Int n) {
+    if (n <= 0) { return 0; }
+    Int w = ls_sys(1, fd, p, n);
+    if (w <= 0) { return 0; }
+    return ls_write_all(fd, p + w, n - w);
+}
+
+Int ls_send(Str json) {
+    Str head = f"Content-Length: {ls_bytes(json)}\r\n\r\n";
+    _ = ls_write_all(ls_out(), resid_raw_addr(head), ls_bytes(head));
+    return ls_write_all(ls_out(), resid_raw_addr(json), ls_bytes(json));
+}
+
+// Pending input on stdin (FIONREAD): a newer edit is already waiting.
+Bool ls_pending() {
+    Int w = resid_raw_global("lsp_nread", 8);
+    _ = resid_raw_store64(w, 0);
+    _ = ls_sys(16, 0, 21531, w);
+    return resid_raw_load64(w) > 0;
+}
+
+// ─── Capturing compiler output ─────────────────────────────────────────
+
+Int ls_cap_begin() {
+    _ = ls_sys(77, ls_cap(), 0, 0);          // ftruncate
+    _ = ls_sys(8, ls_cap(), 0, 0);           // lseek 0
+    return ls_sys(33, ls_cap(), 2, 0);       // fd 2 -> capture
+}
+
+Str ls_cap_end() {
+    _ = ls_sys(33, ls_err(), 2, 0);
+    Int size = min(ls_sys(8, ls_cap(), 0, 1), 1048576);   // lseek CUR
+    _ = ls_sys(8, ls_cap(), 0, 0);
+    Int got = ls_read_exact(ls_cap(), ls_buf(), 0, max(size, 0));
+    return ls_str_at(ls_buf(), got);
+}
+
+// ─── Documents (one memfd each) ────────────────────────────────────────
+
+Int ls_doc_store(Int fd, Str text) {
+    _ = ls_sys(77, fd, 0, 0);
+    _ = ls_sys(8, fd, 0, 0);
+    return ls_write_all(fd, resid_raw_addr(text), ls_bytes(text));
+}
+
+Str ls_doc_load(Int fd) {
+    Int size = min(ls_sys(8, fd, 0, 2), ls_buf_max());    // lseek END
+    _ = ls_sys(8, fd, 0, 0);
+    Int got = ls_read_exact(fd, ls_buf(), 0, max(size, 0));
+    return ls_str_at(ls_buf(), got);
+}
+
+// ─── JSON ──────────────────────────────────────────────────────────────
+
+Int js_ws(Str s, Int i) {
+    Int c = str_char_at(s, i);
+    return if (c == 32 || c == 9 || c == 10 || c == 13) { js_ws(s, i + 1) } else { i };
+}
+
+// Index just past the string whose opening quote is at i.
+Int js_str_end(Str s, Int i) {
+    Int c = str_char_at(s, i);
+    if (c < 0) { return i; }
+    if (c == 92) { return js_str_end(s, i + 2); }
+    if (c == 34) { return i + 1; }
+    return js_str_end(s, i + 1);
+}
+
+// Index just past the value starting at i (whitespace skipped first).
+Int js_skip(Str s, Int i0) {
+    Int i = js_ws(s, i0);
+    Int c = str_char_at(s, i);
+    if (c == 34) { return js_str_end(s, i + 1); }
+    if (c == 123 || c == 91) { return js_skip_nest(s, i + 1, 1); }
+    return js_skip_atom(s, i);
+}
+
+Int js_skip_nest(Str s, Int i, Int depth) {
+    if (depth == 0) { return i; }
+    Int c = str_char_at(s, i);
+    if (c < 0) { return i; }
+    if (c == 34) { return js_skip_nest(s, js_str_end(s, i + 1), depth); }
+    if (c == 123 || c == 91) { return js_skip_nest(s, i + 1, depth + 1); }
+    if (c == 125 || c == 93) { return js_skip_nest(s, i + 1, depth - 1); }
+    return js_skip_nest(s, i + 1, depth);
+}
+
+Int js_skip_atom(Str s, Int i) {
+    Int c = str_char_at(s, i);
+    if (c < 0 || c == 44 || c == 125 || c == 93 || c == 32 || c == 10 || c == 13 || c == 9) { return i; }
+    return js_skip_atom(s, i + 1);
+}
+
+// Start of member `key`'s value in the object at i, or -1.
+Int js_key(Str s, Int i0, Str key) {
+    Int i = js_ws(s, i0);
+    if (str_char_at(s, i) != 123) { return -1; }
+    return js_members(s, js_ws(s, i + 1), key);
+}
+
+Int js_members(Str s, Int i, Str key) {
+    if (str_char_at(s, i) != 34) { return -1; }
+    Int ke = js_str_end(s, i + 1);
+    Str k = str_slice(s, i + 1, ke - 1);
+    Int colon = js_ws(s, ke);
+    Int vs = js_ws(s, colon + 1);
+    if (k == key) { return vs; }
+    Int after = js_ws(s, js_skip(s, vs));
+    if (str_char_at(s, after) != 44) { return -1; }
+    return js_members(s, js_ws(s, after + 1), key);
+}
+
+Int js_path(Str s, Int i, List(Str) keys, Int k) {
+    if (i < 0 || k >= keys.len()) { return i; }
+    return js_path(s, js_key(s, i, keys[k]), keys, k + 1);
+}
+
+// Element `n` of the array at i, or -1.
+Int js_elem(Str s, Int i0, Int n) {
+    Int i = js_ws(s, i0);
+    if (str_char_at(s, i) != 91) { return -1; }
+    return js_elem_at(s, js_ws(s, i + 1), n);
+}
+
+Int js_elem_at(Str s, Int i, Int n) {
+    Int c = str_char_at(s, i);
+    if (c == 93 || c < 0) { return -1; }
+    if (n == 0) { return i; }
+    Int after = js_ws(s, js_skip(s, i));
+    if (str_char_at(s, after) != 44) { return -1; }
+    return js_elem_at(s, js_ws(s, after + 1), n - 1);
+}
+
+// The raw text of the value at i ("" when absent).
+Str js_raw(Str s, Int i) {
+    if (i < 0) { return ""; }
+    return str_slice(s, i, js_skip(s, i));
+}
+
+Int js_int(Str s, Int i) {
+    Str r = js_raw(s, i);
+    return if (r != "" && str_is_int(r)) { str_parse_int(r) } else { 0 };
+}
+
+// The string value at i, unescaped ("" when absent or not a string).
+Str js_str(Str s, Int i) {
+    if (i < 0 || str_char_at(s, i) != 34) { return ""; }
+    return js_unesc(s, i + 1, StrBuf());
+}
+
+Str js_unesc(Str s, Int i, StrBuf acc) {
+    Int c = str_char_at(s, i);
+    if (c < 0 || c == 34) { return acc.finish(); }
+    if (c != 92) { return js_unesc(s, i + 1, acc.push_char(c)); }
+    Int e = str_char_at(s, i + 1);
+    if (e == 117) {
+        Int u = js_hex4(s, i + 2);
+        Bool hi = u >= 55296 && u < 56320 && str_char_at(s, i + 6) == 92 && str_char_at(s, i + 7) == 117;
+        Int lo = if (hi) { js_hex4(s, i + 8) } else { 0 };
+        if (hi && lo >= 56320 && lo < 57344) {
+            return js_unesc(s, i + 12, acc.push_char(65536 + (u - 55296) * 1024 + (lo - 56320)));
+        }
+        return js_unesc(s, i + 6, acc.push_char(u));
+    }
+    Int ch = if (e == 110) { 10 } else { if (e == 116) { 9 } else { if (e == 114) { 13 } else { if (e == 98) { 8 } else { if (e == 102) { 12 } else { e } } } } };
+    return js_unesc(s, i + 2, acc.push_char(ch));
+}
+
+Int js_hex4(Str s, Int i) { return js_hexd(s, i, 0, 0); }
+
+Int js_hexd(Str s, Int i, Int k, Int acc) {
+    if (k >= 4) { return acc; }
+    return js_hexd(s, i, k + 1, acc * 16 + ls_hexc(str_char_at(s, i + k)));
+}
+
+Int ls_hexc(Int c) { return if (c >= 48 && c <= 57) { c - 48 } else { if (c >= 97 && c <= 102) { c - 87 } else { if (c >= 65 && c <= 70) { c - 55 } else { 0 } } }; }
+
+// A JSON string literal for s.
+Str js_q(Str s) { return js_esc(s, 0, str_len(s), StrBuf().push_char(34)).push_char(34).finish(); }
+
+StrBuf js_esc(Str s, Int i, Int n, StrBuf acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(s, i);
+    StrBuf a2 = if (c == 34) { acc.push("\\\"") } else { if (c == 92) { acc.push("\\\\") } else { if (c == 10) { acc.push("\\n") } else { if (c == 13) { acc.push("\\r") } else { if (c == 9) { acc.push("\\t") } else { if (c < 32) { acc.push(f"\\u00{js_hex2(c)}") } else { acc.push_char(c) } } } } } };
+    return js_esc(s, i + 1, n, a2);
+}
+
+Str js_hex2(Int c) {
+    Str d = "0123456789abcdef";
+    return str_slice(d, c / 16, c / 16 + 1) + str_slice(d, c % 16, c % 16 + 1);
+}
+
+// ─── URIs and paths ────────────────────────────────────────────────────
+
+Str ls_uri_path(Str uri) {
+    Str p = if (str_starts_with(uri, "file://")) { str_slice(uri, 7, str_len(uri)) } else { uri };
+    return ls_pct(p, 0, StrBuf());
+}
+
+Str ls_pct(Str s, Int i, StrBuf acc) {
+    if (i >= str_len(s)) { return acc.finish(); }
+    Int c = str_char_at(s, i);
+    if (c == 37 && i + 2 < str_len(s)) { return ls_pct(s, i + 3, acc.push_char(ls_hexc(str_char_at(s, i + 1)) * 16 + ls_hexc(str_char_at(s, i + 2)))); }
+    return ls_pct(s, i + 1, acc.push_char(c));
+}
+
+Str ls_path_uri(Str path) { return "file://" + ls_upct(ls_norm(path), 0, StrBuf()); }
+
+Str ls_upct(Str s, Int i, StrBuf acc) {
+    if (i >= str_len(s)) { return acc.finish(); }
+    Int c = str_char_at(s, i);
+    Bool plain = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 47 || c == 45 || c == 46 || c == 95 || c == 126 || c > 127;
+    return ls_upct(s, i + 1, if (plain) { acc.push_char(c) } else { acc.push("%" + str_to_upper(js_hex2(c))) });
+}
+
+// "/a/b/../c/./d" -> "/a/c/d".
+Str ls_norm(Str path) {
+    List(Str) parts = str_split(path, "/");
+    List(Str) kept = ls_norm_at(parts, 0, ListBuf());
+    Str j = str_join(kept, "/");
+    return if (str_starts_with(path, "/")) { "/" + j } else { j };
+}
+
+List(Str) ls_norm_at(List(Str) ps, Int i, ListBuf(Str) acc) {
+    if (i >= ps.len()) { return acc.finish(); }
+    Str p = ps[i];
+    if (p == "" || p == ".") { return ls_norm_at(ps, i + 1, acc); }
+    if (p == ".." ) {
+        List(Str) cur = acc.finish();
+        List(Str) up = if (cur.len() > 0 && cur[cur.len() - 1] != "..") { cur[0..cur.len() - 1] } else { cur.concat([".."]) };
+        return ls_norm_at(ps, i + 1, ls_lb(up, 0, ListBuf()));
+    }
+    return ls_norm_at(ps, i + 1, acc.push(p));
+}
+
+ListBuf(Str) ls_lb(List(Str) xs, Int i, ListBuf(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return ls_lb(xs, i + 1, acc.push(xs[i]));
+}
+
+Bool ls_internal_path(Str p) { return str_contains(p, "/compiler/") || str_contains(p, "/runtime/rt/"); }
+
+// ─── Analysis ──────────────────────────────────────────────────────────
+
+// A checked program: the merged source, its source map and newline
+// offsets, the graph, the type and def columns (the resolver's when not
+// checked), and captured diagnostics.
+type LsA = { Str path; Int flines; Str src; Str smap; List(Int) nls; Kg g; Int unit; Bool parsed; List(Str) ty; List(Int) def; Str diag; };
+
+@requires(filesystem)
+LsA ls_analyze(Str path, Str text, Bool check) {
+    _ = resid_internals_set(ls_internal_path(path));
+    _ = resid_quiet_set(true);
+    Str src0 = loc_rewrite(text, path);
+    List(Str) lines = str_split(src0, "\n");
+    Str dir = imp_dir_of(path, str_len(path) - 1);
+    _ = ls_cap_begin();
+    RRes rr = imp_resolve_lines(lines, 0, lines.len() - 1, dir, str_sb_new(), ";" + path + ";", 0, "", path, 1);
+    Str src = ds_desugar(with_builtin_types(rr.text));
+    KP p = kg_parse(src);
+    List(Int) nls = ls_newlines(src, 0, ListBuf());
+    List(Str) es = [];
+    List(Int) ei = [];
+    if (p.err != "") {
+        _ = gk_run_parsed(p, src, rr.map);
+        return LsA {.path = path, .flines = lines.len(), .src = src, .smap = rr.map, .nls = nls, .g = p.g, .unit = p.id, .parsed = false, .ty = es, .def = ei, .diag = ls_cap_end()};
+    }
+    if (!check) {
+        RS rs = kg_resolve(p.g, p.id);
+        return LsA {.path = path, .flines = lines.len(), .src = src, .smap = rr.map, .nls = nls, .g = p.g, .unit = p.id, .parsed = true, .ty = es, .def = rs.def, .diag = ls_cap_end()};
+    }
+    GKR r = gk_analyze(p.g, p.id, src, rr.map, true);
+    // A failed check has no columns: fall back to the resolver's edges.
+    List(Int) def = if (r.def.len() > 0) { r.def } else { r.rs.def };
+    return LsA {.path = path, .flines = lines.len(), .src = src, .smap = rr.map, .nls = nls, .g = p.g, .unit = p.id, .parsed = true, .ty = r.ty, .def = def, .diag = ls_cap_end()};
+}
+
+List(Int) ls_newlines(Str s, Int from, ListBuf(Int) acc) {
+    Int nl = str_find_char(s, 10, from);
+    if (nl < 0) { return acc.finish(); }
+    return ls_newlines(s, nl + 1, acc.push(nl));
+}
+
+// How many of nls[lo..hi] lie before pos.
+Int ls_count_before(List(Int) nls, Int pos, Int lo, Int hi) {
+    if (lo >= hi) { return lo; }
+    Int mid = (lo + hi) / 2;
+    return if (nls[mid] < pos) { ls_count_before(nls, pos, mid + 1, hi) } else { ls_count_before(nls, pos, lo, mid) };
+}
+
+// Merged offset -> (file path, 0-based line, 0-based column).
+type LsPos = { Str path; Int line; Int col; };
+
+LsPos ls_pos_of(LsA a, Int off) {
+    Int k = ls_count_before(a.nls, off, 0, a.nls.len());
+    Int start = if (k == 0) { 0 } else { a.nls[k - 1] + 1 };
+    DiagAt w = diag_where(a.smap, k + 1);
+    return LsPos {.path = w.path, .line = w.line - 1, .col = off - start};
+}
+
+// (file line 0-based, column) in a.path -> merged offset, or -1.
+Int ls_off_of(LsA a, Int line, Int col) {
+    Int ml = ls_merged_line(str_split(a.smap, "\n"), 0, a.path, line + 1, -1);
+    if (ml < 1) { return -1; }
+    Int start = if (ml == 1) { 0 } else { if (ml - 2 < a.nls.len()) { a.nls[ml - 2] + 1 } else { -1 } };
+    return if (start < 0) { -1 } else { start + col };
+}
+
+// Segments "ml fl path": the merged line of path's line `fl0`.
+Int ls_merged_line(List(Str) es, Int i, Str path, Int fl0, Int best) {
+    if (i >= es.len()) { return best; }
+    List(Str) f = str_split(es[i], " ");
+    if (f.len() < 3) { return ls_merged_line(es, i + 1, path, fl0, best); }
+    Int ml = str_parse_int(f[0]);
+    Int fl = str_parse_int(f[1]);
+    Str p = str_slice(es[i], str_len(f[0]) + str_len(f[1]) + 2, str_len(es[i]));
+    Int cand = ml + fl0 - fl;
+    Int next = ls_next_ml(es, i + 1);
+    Bool inside = p == path && fl0 >= fl && (next < 0 || cand < next);
+    return ls_merged_line(es, i + 1, path, fl0, if (inside) { cand } else { best });
+}
+
+Int ls_next_ml(List(Str) es, Int i) {
+    if (i >= es.len()) { return -1; }
+    List(Str) f = str_split(es[i], " ");
+    if (f.len() < 3) { return ls_next_ml(es, i + 1); }
+    return str_parse_int(f[0]);
+}
+
+// The smallest node at off that has a type or a definition.
+Int ls_node_at(LsA a, Int off, Int id, Int best, Int bw) {
+    if (id >= kg_count(a.g)) { return best; }
+    KN n = a.g.ns[id];
+    Int w = n.ep - n.sp;
+    Bool useful = (id < a.ty.len() && a.ty[id] != "") || ls_def(a, id) >= 0;
+    Bool take = n.sp <= off && off < n.ep && w < bw && useful;
+    return ls_node_at(a, off, id + 1, if (take) { id } else { best }, if (take) { w } else { bw });
+}
+
+Int ls_def(LsA a, Int id) { return if (id < a.def.len()) { a.def[id] } else { -1 }; }
+
+// ─── Responses ─────────────────────────────────────────────────────────
+
+Str ls_result(Str id, Str result) { return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + result + "}"; }
+
+Str ls_range(Int line, Int c0, Int c1) {
+    Str l = f"{line}";
+    return "{\"start\":{\"line\":" + l + ",\"character\":" + f"{c0}" + "},\"end\":{\"line\":" + l + ",\"character\":" + f"{c1}" + "}}";
+}
+
+Str ls_capabilities() {
+    return "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"documentSymbolProvider\":true,\"completionProvider\":{\"triggerCharacters\":[]}},\"serverInfo\":{\"name\":\"residc lsp\",\"version\":\"1\"}}";
+}
+
+// Diagnostics for every file the captured text names, and an empty set
+// for `path` when it names none there.
+Str ls_publish(Str path, Str diag) {
+    List(Str) ls = str_split(diag, "\n");
+    List(Str) items = ls_diags(ls, 0, path, ListBuf());
+    Str msg = if (items.len() > 0) { items[0] } else { "" };
+    Str file = if (items.len() > 1) { items[1] } else { path };
+    Str body = if (msg == "") { "[]" } else { "[" + msg + "]" };
+    Str main = ls_notify_diags(path, if (file == path) { body } else { "[]" });
+    Str other = if (msg != "" && file != path) { "\n" + ls_notify_diags(file, body) } else { "" };
+    return main + other;
+}
+
+Str ls_notify_diags(Str path, Str arr) {
+    return "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":" + js_q(ls_path_uri(path)) + ",\"diagnostics\":" + arr + "}}";
+}
+
+// The first "error[CODE]: message" / "--> path:line:col" pair as
+// [diagnostic JSON, path], or [].
+List(Str) ls_diags(List(Str) ls, Int i, Str path, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    if (!str_starts_with(l, "error[")) { return ls_diags(ls, i + 1, path, acc); }
+    Int rb = str_find_char(l, 93, 0);
+    Str code = str_slice(l, 6, rb);
+    Str msg = str_trim(str_slice(l, rb + 2, str_len(l)));
+    Str loc = if (i + 1 < ls.len() && str_starts_with(str_trim(ls[i + 1]), "-->")) { str_trim(str_slice(str_trim(ls[i + 1]), 3, str_len(str_trim(ls[i + 1])))) } else { "" };
+    List(Str) parts = str_split(loc, ":");
+    Int np = parts.len();
+    Bool has = np >= 3 && str_is_int(parts[np - 1]) && str_is_int(parts[np - 2]);
+    Str file = if (has) { str_join(parts[0..np - 2], ":") } else { path };
+    Int line = if (has) { max(str_parse_int(parts[np - 2]) - 1, 0) } else { 0 };
+    Int col = if (has) { max(str_parse_int(parts[np - 1]) - 1, 0) } else { 0 };
+    Str d = "{\"range\":" + ls_range(line, col, col + 1) + ",\"severity\":1,\"source\":\"resid\",\"code\":" + js_q(code) + ",\"message\":" + js_q(msg) + "}";
+    return acc.push(d).push(if (file == "<merged>" || file == "") { path } else { file }).finish();
+}
+
+Str ls_hover(LsA a, Int line, Int col) {
+    Int off = ls_off_of(a, line, col);
+    if (off < 0) { return "null"; }
+    Int id = ls_node_at(a, off, 0, -1, 1000000000);
+    if (id < 0) { return "null"; }
+    Str ty = if (id < a.ty.len()) { a.ty[id] } else { "" };
+    Int d = ls_def(a, id);
+    Str sig = if (d >= 0) { ls_signature(a, d) } else { "" };
+    Str doc = if (d >= 0) { a.g.docs.get(d) else { "" } } else { "" };
+    Str s1 = if (sig != "") { "```resid\n" + sig + "\n```\n" } else { "" };
+    Str s2 = if (ty != "" && !str_contains(sig, ty)) { s1 + "\n`" + ty + "`\n" } else { s1 };
+    Str s3 = if (doc != "") { s2 + "\n" + doc } else { s2 };
+    if (s3 == "") { return "null"; }
+    return "{\"contents\":{\"kind\":\"markdown\",\"value\":" + js_q(s3) + "}}";
+}
+
+// The declaration's first line up to its body.
+Str ls_signature(LsA a, Int d) {
+    KN n = a.g.ns[d];
+    Int k = ls_count_before(a.nls, n.sp, 0, a.nls.len());
+    Int start = if (k == 0) { 0 } else { a.nls[k - 1] + 1 };
+    Int end = if (k < a.nls.len()) { a.nls[k] } else { str_len(a.src) };
+    Str line = str_trim(str_slice(a.src, start, end));
+    Int brace = str_find_char(line, 123, 0);
+    Str cut = if (brace > 0 && (n.kind == "fn" || n.kind == "behavior")) { str_trim(str_slice(line, 0, brace)) } else { line };
+    return if (str_ends_with(cut, ";")) { str_slice(cut, 0, str_len(cut) - 1) } else { cut };
+}
+
+Str ls_definition(LsA a, Int line, Int col) {
+    Int off = ls_off_of(a, line, col);
+    if (off < 0) { return "null"; }
+    Int id = ls_node_at(a, off, 0, -1, 1000000000);
+    Int d = if (id >= 0) { ls_def(a, id) } else { -1 };
+    if (d < 0) { return "null"; }
+    LsPos p = ls_pos_of(a, a.g.ns[d].sp);
+    if (p.path == "" || p.path == "<merged>") { return "null"; }
+    return "{\"uri\":" + js_q(ls_path_uri(p.path)) + ",\"range\":" + ls_range(p.line, p.col, p.col) + "}";
+}
+
+// Top-level declarations: kind name -> LSP SymbolKind.
+Int ls_symkind(Str k) {
+    if (k == "fn") { return 12; }
+    if (k == "behavior") { return 11; }
+    if (k == "sum_t") { return 10; }
+    if (k == "test") { return 24; }
+    return 23;
+}
+
+Bool ls_decl(Str k) { return k == "fn" || k == "behavior" || k == "struct_t" || k == "sum_t" || k == "alias_t" || k == "ctype_t" || k == "cwhere_t" || k == "test"; }
+
+Str ls_symbols(LsA a) {
+    if (!a.parsed) { return "[]"; }
+    List(Str) xs = ls_syms_at(a, 0, a.g.ns[a.unit].nk, true, ListBuf());
+    return "[" + str_join(xs, ",") + "]";
+}
+
+List(Str) ls_syms_at(LsA a, Int i, Int n, Bool here, ListBuf(Str) acc) {
+    if (i >= n) { return acc.finish(); }
+    Int id = kg_kid(a.g, a.unit, i);
+    KN kn = a.g.ns[id];
+    LsPos p = ls_pos_of(a, kn.sp);
+    // Builtin declarations appended after the file map past its last line.
+    Bool take = ls_decl(kn.kind) && kn.text != "" && (!here || (p.path == a.path && p.line < a.flines));
+    Str name = if (kn.kind == "test") { "test " + kn.text } else { kn.text };
+    Str s = "{\"name\":" + js_q(name) + ",\"kind\":" + f"{ls_symkind(kn.kind)}" + ",\"location\":{\"uri\":" + js_q(ls_path_uri(p.path)) + ",\"range\":" + ls_range(p.line, p.col, p.col) + "}}";
+    return ls_syms_at(a, i + 1, n, here, if (take) { acc.push(s) } else { acc });
+}
+
+Str ls_completion(LsA a) {
+    List(Str) kws = ["if", "else", "match", "return", "for", "in", "while", "break", "continue", "type", "import", "true", "false", "Int", "Float", "Bool", "Str", "Dec", "List", "Map", "Set", "Option", "Result", "Some", "None", "Ok", "Err", "StrBuf", "ListBuf", "test", "sandbox", "spawn", "with"];
+    List(Str) ks = ls_kw_items(kws, 0, ListBuf());
+    List(Str) ds = if (a.parsed) { ls_decl_items(a, 0, a.g.ns[a.unit].nk, ListBuf()) } else { [] };
+    return "{\"isIncomplete\":false,\"items\":[" + str_join(ks.concat(ds), ",") + "]}";
+}
+
+List(Str) ls_kw_items(List(Str) ks, Int i, ListBuf(Str) acc) {
+    if (i >= ks.len()) { return acc.finish(); }
+    return ls_kw_items(ks, i + 1, acc.push("{\"label\":" + js_q(ks[i]) + ",\"kind\":14}"));
+}
+
+List(Str) ls_decl_items(LsA a, Int i, Int n, ListBuf(Str) acc) {
+    if (i >= n) { return acc.finish(); }
+    KN kn = a.g.ns[kg_kid(a.g, a.unit, i)];
+    Bool take = ls_decl(kn.kind) && kn.kind != "test" && kn.text != "" && !str_starts_with(kn.text, "__");
+    Int kind = if (kn.kind == "fn") { 3 } else { if (kn.kind == "behavior") { 8 } else { 22 } };
+    Str item = "{\"label\":" + js_q(kn.text) + ",\"kind\":" + f"{kind}" + ",\"detail\":" + js_q(ls_signature(a, kg_kid(a.g, a.unit, i))) + "}";
+    return ls_decl_items(a, i + 1, n, if (take) { acc.push(item) } else { acc });
+}
+
+// ─── The server loop ───────────────────────────────────────────────────
+
+// Open documents: uri -> memfd; handled messages report a new one.
+type LsSt = { Map(Str, Int) docs; Bool down; };
+type LsOut = { List(Str) msgs; Str newuri; Int newfd; Bool exit; Bool down; };
+
+@requires(filesystem)
+pub Int lsp_main() {
+    _ = ls_setup();
+    Map(Str, Int) docs = {"": -1};
+    return ls_loop(LsSt {.docs = docs, .down = false});
+}
+
+@requires(filesystem)
+Int ls_loop(LsSt st) {
+    // rt: a known counter would let the reducer unroll the byte loop.
+    Int n = ls_read_header(rt (0 - 1), rt 0);
+    if (n < 0) { return if (st.down) { 0 } else { 1 }; }
+    Int _in = resid_bulk_push();
+    Str body = ls_read_body(n);
+    LsOut o = ls_handle(st, body);
+    List(Str) keep = resid_list_str_persist_copy(o.msgs.concat([o.newuri]));
+    Int nfd = o.newfd;
+    Bool ex = o.exit;
+    Bool dn = o.down || st.down;
+    Int _out = resid_bulk_pop();
+    Int _s = ls_send_all(keep, 0, keep.len() - 1);
+    if (ex) { return if (dn) { 0 } else { 1 }; }
+    Str nu = keep[keep.len() - 1];
+    Map(Str, Int) docs2 = if (nu != "") { st.docs.insert(nu, nfd) } else { st.docs };
+    return ls_loop(LsSt {.docs = docs2, .down = dn});
+}
+
+Int ls_send_all(List(Str) ms, Int i, Int n) {
+    if (i >= n) { return 0; }
+    List(Str) parts = str_split(ms[i], "\n{\"jsonrpc\"");
+    Int _s = ls_send_parts(parts, 0);
+    return ls_send_all(ms, i + 1, n);
+}
+
+// Several messages joined by "\n" (publish for two files) go out one by one.
+Int ls_send_parts(List(Str) ps, Int i) {
+    if (i >= ps.len()) { return 0; }
+    Str m = if (i == 0) { ps[i] } else { "{\"jsonrpc\"" + ps[i] };
+    Int _s = if (m != "") { ls_send(m) } else { 0 };
+    return ls_send_parts(ps, i + 1);
+}
+
+LsOut ls_out_of(List(Str) msgs) { return LsOut {.msgs = msgs, .newuri = "", .newfd = -1, .exit = false, .down = false}; }
+
+@requires(filesystem)
+LsOut ls_handle(LsSt st, Str body) {
+    Str method = js_str(body, js_key(body, 0, "method"));
+    Str id = js_raw(body, js_key(body, 0, "id"));
+    Int params = js_key(body, 0, "params");
+    Str uri = js_str(body, js_path(body, params, ["textDocument", "uri"], 0));
+    Int line = js_int(body, js_path(body, params, ["position", "line"], 0));
+    Int col = js_int(body, js_path(body, params, ["position", "character"], 0));
+    List(Str) none = [];
+    if (method == "initialize") { return ls_out_of([ls_result(id, ls_capabilities())]); }
+    if (method == "shutdown") { return LsOut {.msgs = [ls_result(id, "null")], .newuri = "", .newfd = -1, .exit = false, .down = true}; }
+    if (method == "exit") { return LsOut {.msgs = none, .newuri = "", .newfd = -1, .exit = true, .down = st.down}; }
+    Int known = st.docs.get(uri) else { -1 };
+    if (method == "textDocument/didOpen" || method == "textDocument/didChange") {
+        Str text = if (method == "textDocument/didOpen") { js_str(body, js_path(body, params, ["textDocument", "text"], 0)) } else { js_str(body, js_key(body, js_elem(body, js_key(body, params, "contentChanges"), 0), "text")) };
+        Int fd = if (known >= 0) { known } else { ls_sys(319, resid_raw_addr("resid-doc"), 0, 0) };
+        _ = ls_doc_store(fd, text);
+        Bool skip = method == "textDocument/didChange" && ls_pending();
+        List(Str) msgs = if (skip) { none } else { [ls_publish(ls_uri_path(uri), ls_analyze(ls_uri_path(uri), text, true).diag)] };
+        return LsOut {.msgs = msgs, .newuri = if (known >= 0) { "" } else { uri }, .newfd = fd, .exit = false, .down = false};
+    }
+    if (method == "textDocument/didSave") {
+        if (known < 0) { return ls_out_of(none); }
+        return ls_out_of([ls_publish(ls_uri_path(uri), ls_analyze(ls_uri_path(uri), ls_doc_load(known), true).diag)]);
+    }
+    if (method == "textDocument/didClose") { return ls_out_of([ls_notify_diags(ls_uri_path(uri), "[]")]); }
+    Bool query = method == "textDocument/hover" || method == "textDocument/definition" || method == "textDocument/documentSymbol" || method == "textDocument/completion";
+    if (query) {
+        if (known < 0) { return ls_out_of([ls_result(id, "null")]); }
+        Bool full = method == "textDocument/hover" || method == "textDocument/definition";
+        LsA a = ls_analyze(ls_uri_path(uri), ls_doc_load(known), full);
+        Str r = if (method == "textDocument/hover") { ls_hover(a, line, col) } else { if (method == "textDocument/definition") { ls_definition(a, line, col) } else { if (method == "textDocument/documentSymbol") { ls_symbols(a) } else { ls_completion(a) } } };
+        return ls_out_of([ls_result(id, r)]);
+    }
+    // Other requests are answered "method not found"; notifications ignored.
+    if (id != "") { return ls_out_of(["{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":-32601,\"message\":\"unsupported: " + method + "\"}}"]); }
+    return ls_out_of(none);
+}

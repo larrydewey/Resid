@@ -30,8 +30,8 @@ pub Int read_file_all(Int path) {
     if (fd < 0) { return 0; }
     Int buf = xmalloc(65536);
     Int n = read_to(fd, buf, 0, 65536);
-    Int _c = sys_close(fd);
-    Int _l = st64(resid_raw_tls("env_len", 8), n);
+    _ = sys_close(fd);
+    _ = st64(resid_raw_tls("env_len", 8), n);
     return st8(buf + n, 0) * 0 + buf;
 }
 
@@ -50,7 +50,7 @@ Int count_nuls(Int b, Int i, Int n, Int acc) {
 Int fill_env(Int b, Int i, Int n, Int arr, Int k, Int start) {
     if (i >= n) { return k; }
     if (ld8(b + i) != 0) { return fill_env(b, i + 1, n, arr, k, start); }
-    Int _s = st64(arr + k * 8, b + start);
+    _ = st64(arr + k * 8, b + start);
     return fill_env(b, i + 1, n, arr, k + 1, i + 1);
 }
 
@@ -77,7 +77,7 @@ pub Int c_execvp(Int file, Int argv) {
     Int path = c_getenv(resid_raw_addr("PATH"));
     Int dirs = if (path == 0 || ld8(path) == 0) { resid_raw_addr("/usr/local/bin:/usr/bin:/bin") } else { path };
     Int buf = xmalloc(4096);
-    Int _t = try_dirs(dirs, file, argv, buf);
+    _ = try_dirs(dirs, file, argv, buf);
     return c_free(buf) * 0 - 1;
 }
 
@@ -86,16 +86,16 @@ Int try_dirs(Int d, Int file, Int argv, Int buf) {
     Int e = dir_end(d);
     Int dl = e - d;
     Int fl = c_strlen(file);
-    Int _x = if (dl > 0 && dl + fl + 2 < 4096) { exec_in(d, dl, file, fl, argv, buf) } else { 0 };
+    _ = if (dl > 0 && dl + fl + 2 < 4096) { exec_in(d, dl, file, fl, argv, buf) } else { 0 };
     return if (ld8(e) == 58) { try_dirs(e + 1, file, argv, buf) } else { 0 };
 }
 
 Int dir_end(Int d) { return if (ld8(d) == 0 || ld8(d) == 58) { d } else { dir_end(d + 1) }; }
 
 Int exec_in(Int d, Int dl, Int file, Int fl, Int argv, Int buf) {
-    Int _a = mcopy(buf, d, dl);
-    Int _s = st8(buf + dl, 47);
-    Int _f = mcopy(buf + dl + 1, file, fl + 1);
+    _ = mcopy(buf, d, dl);
+    _ = st8(buf + dl, 47);
+    _ = mcopy(buf + dl + 1, file, fl + 1);
     return c_execv(buf, argv);
 }
 
@@ -107,20 +107,20 @@ pub Int shell_line(Int cmd) {
     Int rd = ld32(fds);
     Int wr = ld32(fds + 4);
     Int argv = xmalloc(32);
-    Int _a = st64(argv, resid_raw_addr("sh")) + st64(argv + 8, resid_raw_addr("-c")) + st64(argv + 16, cmd) + st64(argv + 24, 0);
+    _ = st64(argv, resid_raw_addr("sh")) + st64(argv + 8, resid_raw_addr("-c")) + st64(argv + 16, cmd) + st64(argv + 24, 0);
     Int pid = c_fork();
     if (pid == 0) {
         // Child: the pipe as standard output, then the shell.
-        Int _d = resid_raw_syscall(33, wr, 1, 0, 0, 0, 0);
-        Int _e = c_execv(resid_raw_addr("/bin/sh"), argv);
+        _ = resid_raw_syscall(33, wr, 1, 0, 0, 0, 0);
+        _ = c_execv(resid_raw_addr("/bin/sh"), argv);
         return resid_raw_syscall(231, 127, 0, 0, 0, 0, 0);
     }
-    Int _cw = sys_close(wr);
+    _ = sys_close(wr);
     Int line = xmalloc(256);
     Int n = if (pid > 0) { read_line_fd(rd, line, 0) } else { 0 };
-    Int _cr = sys_close(rd);
-    Int _w = if (pid > 0) { wait_pid(pid, 0) } else { 0 };
-    Int _f = c_free(argv);
+    _ = sys_close(rd);
+    _ = if (pid > 0) { wait_pid(pid, 0) } else { 0 };
+    _ = c_free(argv);
     return st8(line + n, 0) * 0 + line;
 }
 

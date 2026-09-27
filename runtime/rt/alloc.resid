@@ -31,14 +31,14 @@ Int scope_chunk_size() { return 1048576; }
 
 Int arena_new(Int prev) {
     Int a = xmalloc(24);
-    Int _h = st64(a, 0) + st64(a + 8, 0);
+    _ = st64(a, 0) + st64(a + 8, 0);
     return st64(a + 16, prev) * 0 + a;
 }
 
 Int free_chunks(Int c) {
     if (c == 0) { return 0; }
     Int next = ld64(c + 16);
-    Int _f = c_free(c);
+    _ = c_free(c);
     return free_chunks(next);
 }
 
@@ -49,9 +49,9 @@ pub Int rt_arena_push() { return as_(0, arena_new(ag(0))) * 0; }
 pub Int rt_arena_pop() {
     Int a = ag(0);
     if (a == 0) { return rt_abort("resid_arena_pop: no active arena"); }
-    Int _p = rt_str_index_popped();
-    Int _f = free_chunks(ld64(a));
-    Int _c = as_(0, ld64(a + 16));
+    _ = rt_str_index_popped();
+    _ = free_chunks(ld64(a));
+    _ = as_(0, ld64(a + 16));
     return c_free(a) * 0;
 }
 
@@ -62,8 +62,8 @@ Int arena_bump(Int a, Int size0) {
     if (cur == 0 || ld64(cur + 8) + size > ld64(cur)) {
         Int cs = max(arena_chunk_size(), size);
         Int c = xmalloc(24 + cs);
-        Int _h = st64(c, cs) + st64(c + 8, 0) + st64(c + 16, ld64(a));
-        Int _s = st64(a, c) + st64(a + 8, c);
+        _ = st64(c, cs) + st64(c + 8, 0) + st64(c + 16, ld64(a));
+        _ = st64(a, c) + st64(a + 8, c);
         return bump_in(c, size);
     }
     return bump_in(cur, size);
@@ -74,6 +74,16 @@ Int arena_bump(Int a, Int size0) {
 pub Int cur_arena() { return ag(0); }
 pub Int arena_alloc(Int a, Int size) { return arena_bump(a, size); }
 pub Int ag_scope_depth() { return ag(4); }
+
+// A heap string of n bytes (plus NUL) made inside an arena goes with the
+// arena: copied into it, the heap block freed.
+pub Int arena_adopt(Int p, Int n) {
+    Int a = ag(0);
+    if (a == 0 || ag(4) != 0 || p == 0) { return p; }
+    Int out = arena_bump(a, n + 1);
+    _ = mcopy(out, p, n + 1);
+    return c_free(p) * 0 + out;
+}
 
 // Bulk arenas by depth (1 = outermost): the current depth, and a block
 // with a free-proof header (class 63: c_free leaves it) in the arena at d.
@@ -91,7 +101,7 @@ pub Int bulk_block(Int d, Int n) {
 
 Int bump_in(Int c, Int size) {
     Int used = ld64(c + 8);
-    Int _u = st64(c + 8, used + size);
+    _ = st64(c + 8, used + size);
     return c + 24 + used;
 }
 
@@ -128,19 +138,19 @@ pub Int region_kind(Int p) {
 
 @export("resid_bulk_push", "i64()")
 pub Int rt_bulk_push() {
-    Int _b = as_(1, arena_new(ag(1)));
+    _ = as_(1, arena_new(ag(1)));
     return rt_arena_push();
 }
 
 @export("resid_bulk_pop", "i64()")
 pub Int rt_bulk_pop() {
-    Int _a = rt_arena_pop();
+    _ = rt_arena_pop();
     Int a = ag(1);
     if (a == 0) { return rt_abort("resid_bulk_pop: no active bulk arena"); }
-    Int _p = rt_str_index_popped();
-    Int _f = free_chunks(ld64(a));
-    Int _c = as_(1, ld64(a + 16));
-    Int _x = c_free(a);
+    _ = rt_str_index_popped();
+    _ = free_chunks(ld64(a));
+    _ = as_(1, ld64(a + 16));
+    _ = c_free(a);
     // A phase just released its heap footprint: hand it back.
     return if (ag(1) == 0) { c_malloc_trim(0) * 0 } else { 0 };
 }
@@ -150,38 +160,38 @@ pub Int rt_bulk_pop() {
 // Thread exit: hand the reuse pool back (chunks in use stay: an unpopped
 // region may hold a value the thread returned).
 pub Int scope_thread_exit(Int unused) {
-    Int _p = free_pool(ag(10));
-    Int _n = as_(10, 0) + as_(11, 0);
-    Int _m = c_free(ag(8));
+    _ = free_pool(ag(10));
+    _ = as_(10, 0) + as_(11, 0);
+    _ = c_free(ag(8));
     return as_(8, 0) + as_(9, 0);
 }
 
 Int free_pool(Int c) {
     if (c == 0) { return 0; }
     Int prev = ld64(c);
-    Int _f = c_free(c);
+    _ = c_free(c);
     return free_pool(prev);
 }
 
 @noinline
 Int marks_grow() {
     Int cap = if (ag(9) != 0) { ag(9) * 2 } else { 64 };
-    Int _m = as_(8, xrealloc(ag(8), cap * 16));
+    _ = as_(8, xrealloc(ag(8), cap * 16));
     return as_(9, cap);
 }
 
 @export("resid_scope_push", "i64()")
 pub Int rt_scope_push() {
     Int d = ag(4);
-    Int _g = if (d == ag(9)) { marks_grow() } else { 0 };
+    _ = if (d == ag(9)) { marks_grow() } else { 0 };
     Int m = ag(8) + d * 16;
-    Int _a = st64(m, ag(5)) + st64(m + 8, ag(6));
+    _ = st64(m, ag(5)) + st64(m + 8, ag(6));
     return as_(4, d + 1) * 0 + d;
 }
 
 Int chunk_release(Int c) {
     if (ld64(c + 8) == scope_chunk_size() && ag(11) < 16) {
-        Int _p = st64(c, ag(10));
+        _ = st64(c, ag(10));
         return as_(10, c) + as_(11, ag(11) + 1);
     }
     return c_free(c);
@@ -190,8 +200,8 @@ Int chunk_release(Int c) {
 Int release_to(Int target) {
     if (ag(5) == target) { return 0; }
     Int c = ag(5);
-    Int _p = as_(5, ld64(c));
-    Int _r = chunk_release(c);
+    _ = as_(5, ld64(c));
+    _ = chunk_release(c);
     return release_to(target);
 }
 
@@ -201,11 +211,11 @@ pub Int rt_scope_pop(Int d) {
     Int m = ag(8) + d * 16;
     Int mchunk = ld64(m);
     Int mptr = ld64(m + 8);
-    Int _d = as_(4, d);
+    _ = as_(4, d);
     if (ag(6) == mptr) { return 0; }
-    Int _r = release_to(mchunk);
-    Int _p = as_(6, mptr);
-    Int _e = as_(7, if (mchunk != 0) { mchunk + 16 + ld64(mchunk + 8) } else { 0 });
+    _ = release_to(mchunk);
+    _ = as_(6, mptr);
+    _ = as_(7, if (mchunk != 0) { mchunk + 16 + ld64(mchunk + 8) } else { 0 });
     // A pointer-keyed string cache entry may name freed region memory.
     return str_index_scope_popped();
 }
@@ -213,10 +223,10 @@ pub Int rt_scope_pop(Int d) {
 @noinline
 Int scope_alloc_slow(Int size) {
     Int c = if (size > scope_chunk_size() / 4) { own_chunk(size) } else { if (ag(10) != 0) { pool_chunk() } else { own_chunk(scope_chunk_size()) } };
-    Int _p = st64(c, ag(5));
-    Int _c = as_(5, c);
-    Int _b = as_(6, c + 16 + size);
-    Int _e = as_(7, c + 16 + ld64(c + 8));
+    _ = st64(c, ag(5));
+    _ = as_(5, c);
+    _ = as_(6, c + 16 + size);
+    _ = as_(7, c + 16 + ld64(c + 8));
     return c + 16;
 }
 
@@ -227,7 +237,7 @@ Int own_chunk(Int cap) {
 
 Int pool_chunk() {
     Int c = ag(10);
-    Int _p = as_(10, ld64(c));
+    _ = as_(10, ld64(c));
     return as_(11, ag(11) - 1) * 0 + c;
 }
 
@@ -238,7 +248,7 @@ pub Int scope_alloc(Int size0) {
     Int p = ag(6);
     Int pad = if ((size & 8) != 0) { 0 } else { p & 8 };
     if (p != 0 && ag(7) - p >= size + pad) {
-        Int _b = as_(6, p + pad + size);
+        _ = as_(6, p + pad + size);
         return p + pad;
     }
     return scope_alloc_slow((size + 15) & (0 - 16));
@@ -247,7 +257,7 @@ pub Int scope_alloc(Int size0) {
 // Heap allocation for a write into an older object: no arena, no scope.
 // The three saved words go to `save`.
 pub Int suspend(Int save) {
-    Int _a = st64(save, ag(0)) + st64(save + 8, ag(1)) + st64(save + 16, ag(4));
+    _ = st64(save, ag(0)) + st64(save + 8, ag(1)) + st64(save + 16, ag(4));
     return as_(0, 0) + as_(1, 0) + as_(4, 0);
 }
 
@@ -259,7 +269,7 @@ pub Int resume(Int save) { return as_(0, ld64(save)) + as_(1, ld64(save + 8)) + 
 // heap are out of line.
 @export("resid_gmalloc", "ptr(i64)")
 pub Int rt_gmalloc(Int size) {
-    Int _b = as_(2, ag(2) + size);
+    _ = as_(2, ag(2) + size);
     if (ag(4) != 0) { return scope_alloc(size); }
     return gmalloc_slow(size);
 }
@@ -281,7 +291,7 @@ pub Int rt_gfree(Int p) {
 // resid_alloc: scope, then arena, then heap.
 @export("resid_rt_alloc", "ptr(i64)")
 pub Int rt_alloc_x(Int size) {
-    Int _b = as_(2, ag(2) + size);
+    _ = as_(2, ag(2) + size);
     if (ag(4) != 0) { return scope_alloc(size); }
     return alloc_slow(size);
 }
@@ -296,7 +306,7 @@ Int alloc_slow(Int size) {
 @export("resid_rt_outer_alloc", "ptr(i64)")
 pub Int rt_outer_alloc(Int n) {
     Int d = ag(4);
-    Int _z = as_(4, 0);
+    _ = as_(4, 0);
     Int p = rt_alloc_x(n);
     return as_(4, d) * 0 + p;
 }
@@ -339,7 +349,7 @@ Int rec_tag() { return 1380303070 << 32; }   // 0x5245C0DE
 @export("resid_rec_new", "ptr(i64,i8)")
 pub Int rt_rec_new(Int size, Int unique) {
     Int h = rt_gmalloc(size + 8);
-    Int _s = st64(h, rec_tag() | (size << 1) | (if (unique != 0) { 1 } else { 0 }));
+    _ = st64(h, rec_tag() | (size << 1) | (if (unique != 0) { 1 } else { 0 }));
     return h + 8;
 }
 
@@ -365,11 +375,11 @@ pub Int rt_list_str_persist_copy(Int l) {
     Int n = lcount(l);
     Int flat = rt_list_to_array(l);
     Int saved = ag(0);
-    Int _t = as_(0, if (saved != 0) { ld64(saved + 16) } else { 0 });
+    _ = as_(0, if (saved != 0) { ld64(saved + 16) } else { 0 });
     Int copies = xmalloc(max(n, 1) * 8);
-    Int _c = copy_strs(flat, copies, 0, n);
+    _ = copy_strs(flat, copies, 0, n);
     Int out = rt_list_new(n, copies, ltype(l));
-    Int _f = c_free(copies) + c_free(flat);
+    _ = c_free(copies) + c_free(flat);
     return as_(0, saved) * 0 + out;
 }
 
@@ -378,8 +388,8 @@ Int copy_strs(Int flat, Int copies, Int i, Int n) {
     Int src = ld64(flat + i * 8);
     Int len = c_strlen(src);
     Int dst = rt_alloc_x(len + 1);
-    Int _m = mcopy(dst, src, len + 1);
-    Int _s = st64(copies + i * 8, dst);
+    _ = mcopy(dst, src, len + 1);
+    _ = st64(copies + i * 8, dst);
     return copy_strs(flat, copies, i + 1, n);
 }
 
@@ -390,7 +400,7 @@ pub Int rt_decp_persist(Int v) {
     Int b = ag(1);
     if (b == 0) { return v; }
     Int sz = 24 + dn(v) * 8;
-    Int _c = as_(2, ag(2) + sz);
+    _ = as_(2, ag(2) + sz);
     Int r = if (ld64(b + 16) != 0) { arena_bump(ld64(b + 16), sz) } else { xmalloc(sz) };
     return mcopy(r, v, sz) * 0 + r;
 }
@@ -401,20 +411,20 @@ Int const_list(Int cache, Int n, Int data, Int ty, Int kind) {
     Int hit = ld64(cache);
     if (hit != 0) { return hit; }
     Int saved = xmalloc(24);
-    Int _s = suspend(saved);
+    _ = suspend(saved);
     Int boxes = if (kind == 2) { data } else { xmalloc(max(n, 1) * 8) };
-    Int _b = if (kind == 2) { 0 } else { const_boxes(boxes, data, 0, n, kind) };
+    _ = if (kind == 2) { 0 } else { const_boxes(boxes, data, 0, n, kind) };
     Int list = rt_list_new(n, boxes, ty);
-    Int _f = if (kind == 2) { 0 } else { c_free(boxes) };
-    Int _r = resume(saved);
-    Int _x = c_free(saved);
+    _ = if (kind == 2) { 0 } else { c_free(boxes) };
+    _ = resume(saved);
+    _ = c_free(saved);
     return st64(cache, list) * 0 + list;
 }
 
 Int const_boxes(Int boxes, Int data, Int i, Int n, Int kind) {
     if (i >= n) { return 0; }
     Int b = if (kind == 0) { rt_box_i64(ld64(data + i * 8)) } else { rt_box_bool(if (ld8(data + i) != 0) { 1 } else { 0 }) };
-    Int _s = st64(boxes + i * 8, b);
+    _ = st64(boxes + i * 8, b);
     return const_boxes(boxes, data, i + 1, n, kind);
 }
 
@@ -443,14 +453,14 @@ Int interned() { return resid_raw_global("box_interned", 96); }
 
 Int intern_init() {
     Int g = interned();
-    Int _a = intern_one(g, resid_raw_addr("bool"), 0);
-    Int _b = intern_one(g + 32, resid_raw_addr("bool"), 1);
-    Int _c = intern_one(g + 64, resid_raw_addr("f64"), 0);
+    _ = intern_one(g, resid_raw_addr("bool"), 0);
+    _ = intern_one(g + 32, resid_raw_addr("bool"), 1);
+    _ = intern_one(g + 64, resid_raw_addr("f64"), 0);
     return g;
 }
 
 Int intern_one(Int b, Int ty, Int payload) {
-    Int _h = st32(b, 0 - 1) + st32(b + 4, 1) + st64(b + 16, b + 24) + st64(b + 24, payload);
+    _ = st32(b, 0 - 1) + st32(b + 4, 1) + st64(b + 16, b + 24) + st64(b + 24, payload);
     return st64(b + 8, ty);
 }
 
@@ -469,7 +479,7 @@ pub Int rt_box_interned_x(Int p) { return if (box_interned(p)) { 1 } else { 0 };
 
 Int scalar_box(Int ty, Int payload_size) {
     Int b = rt_alloc_x(24 + ((payload_size + 7) & (0 - 8)));
-    Int _h = st32(b, 0 - 1) + st32(b + 4, 1) + st64(b + 8, ty);
+    _ = st32(b, 0 - 1) + st32(b + 4, 1) + st64(b + 8, ty);
     return st64(b + 16, b + 24) * 0 + b;
 }
 
@@ -509,7 +519,7 @@ pub Int rt_unbox_bool(Int p) { return ld8(p + 24); }
 @export("resid_box_i128", "ptr(i128)")
 pub Int rt_box_i128(Int(128) v) {
     Int b = scalar_box(resid_raw_addr("i128"), 16);
-    Int _l = st64(b + 24, (Int)v);
+    _ = st64(b + 24, (Int)v);
     return st64(b + 32, (Int)(v >> (Int(128))64)) * 0 + b;
 }
 
@@ -522,7 +532,7 @@ pub Int(128) rt_unbox_i128(Int p) {
 @export("resid_box_u128", "ptr(i128)")
 pub Int rt_box_u128(Int(128) v) {
     Int b = scalar_box(resid_raw_addr("u128"), 16);
-    Int _l = st64(b + 24, (Int)v);
+    _ = st64(b + 24, (Int)v);
     return st64(b + 32, (Int)(v >> (Int(128))64)) * 0 + b;
 }
 
@@ -536,9 +546,9 @@ pub Int check_address_space() {
     Int heap = xmalloc(1);
     Int big = xmalloc(1048576);
     Int top = local | heap | big | interned() | resid_raw_addr("x");
-    Int _f = c_free(heap) + c_free(big);
+    _ = c_free(heap) + c_free(big);
     if (!ult(top, 281474976710656)) {
-        Bool _w = write_all(2, resid_raw_addr("resid: address space above 2^48 is not supported\n"), 50);
+        _ = write_all(2, resid_raw_addr("resid: address space above 2^48 is not supported\n"), 50);
         return c_libc_abort();
     }
     return 0;

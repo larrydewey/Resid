@@ -1,8 +1,8 @@
 {
   "name": "resid-lang",
   "displayName": "Resid Language Support",
-  "description": "Syntax highlighting, snippets, bracket matching, language configuration, and LSP support (diagnostics + hover for residual notes) for the Resid language.",
-  "version": "0.2.0",
+  "description": "Syntax highlighting, snippets, bracket matching, language configuration, and a language server (diagnostics, hover, go to definition, symbols, completion) for the Resid language.",
+  "version": "0.3.0",
   "publisher": "resid",
   "license": "MIT",
   "engines": {
@@ -21,7 +21,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/larry/resid"
+    "url": "https://github.com/larrydewey/Resid"
   },
   "contributes": {
     "languages": [
@@ -67,12 +67,12 @@
         "resid.lsp.enable": {
           "type": "boolean",
           "default": true,
-          "description": "Enable the Resid LSP server (resid-lsp) for diagnostics and hover."
+          "description": "Run the Resid language server (`residc lsp`): diagnostics, hover, go to definition, symbols and completion."
         },
-        "resid.lsp.serverPath": {
+        "resid.compilerPath": {
           "type": "string",
           "default": "",
-          "description": "Path or command to the resid-lsp binary. When empty, use target/release or target/debug in the workspace, then PATH."
+          "description": "Path to the Resid compiler. When empty: build/boot/stage2.bin in the workspace, then `residc` on PATH."
         }
       }
     }

@@ -17,8 +17,8 @@ pub Int rt_cap_enter(Int caps, Int n) {
     if (d >= cap_max_depth()) { return rt_abort("capability: sandbox nesting exceeds RESID_CAP_MAX_DEPTH"); }
     Int m0 = if (caps != 0 && n > 0) { n } else { 0 };
     Int m = if (m0 > cap_max_set()) { cap_max_set() } else { m0 };
-    Int _c = mcopy(cap_stack() + d * 512, caps, m * 8);
-    Int _n = st64(cap_ns() + d * 8, m);
+    _ = mcopy(cap_stack() + d * 512, caps, m * 8);
+    _ = st64(cap_ns() + d * 8, m);
     return st64(cap_depth_at(), d + 1);
 }
 
@@ -87,8 +87,8 @@ pub Int rt_cap_check(Int cap) {
     Int np = c_strlen(pre);
     Int ns = c_strlen(suf);
     Int buf = xmalloc(np + fam + ns + 1);
-    Int _a = mcopy(buf, pre, np);
-    Int _b = mcopy(buf + np, cap, fam);
-    Int _c = mcopy(buf + np + fam, suf, ns + 1);
+    _ = mcopy(buf, pre, np);
+    _ = mcopy(buf + np, cap, fam);
+    _ = mcopy(buf + np + fam, suf, ns + 1);
     return rt_abort_at(buf);
 }

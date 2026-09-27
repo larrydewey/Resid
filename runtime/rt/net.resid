@@ -5,12 +5,12 @@
 @export("resid_crypto_random_byte", "i64()")
 pub Int rt_crypto_random_byte() {
     Int b = resid_raw_tls("rand_byte", 8);
-    Int _z = st64(b, 0);
+    _ = st64(b, 0);
     if (sc(318, b, 1, 0) == 1) { return ld8(b); }
     Int fd = sys_open(resid_raw_addr("/dev/urandom"), o_rdonly(), 0);
     if (fd < 0) { return rt_abort("crypto_random_byte: no entropy source"); }
     Int n = sc(0, fd, b, 1);
-    Int _c = sys_close(fd);
+    _ = sys_close(fd);
     if (n != 1) { return rt_abort("crypto_random_byte: read failed"); }
     return ld8(b);
 }
@@ -23,12 +23,12 @@ pub Int rt_cpu_has_aesni() { return (resid_raw_cpuid(1, 0) >> 57) & 1; }
 @export("resid_index_abort", "void(i64,i64,ptr)")
 pub Int rt_index_abort(Int idx, Int len, Int at) {
     Int sb = rt_sb_new();
-    Int _a = sb_lit(sb, resid_raw_addr("list index out of bounds: index "));
-    Int _b = sb_word(sb, idx);
-    Int _c = sb_lit(sb, resid_raw_addr(", length "));
-    Int _d = sb_word(sb, len);
+    _ = sb_lit(sb, resid_raw_addr("list index out of bounds: index "));
+    _ = sb_word(sb, idx);
+    _ = sb_lit(sb, resid_raw_addr(", length "));
+    _ = sb_word(sb, len);
     Bool has = at != 0 && ld8(at) != 0;
-    Int _e = if (has) { sb_lit(sb, resid_raw_addr(" (")) + sb_lit(sb, at) + sb_lit(sb, resid_raw_addr(")")) } else { 0 };
+    _ = if (has) { sb_lit(sb, resid_raw_addr(" (")) + sb_lit(sb, at) + sb_lit(sb, resid_raw_addr(")")) } else { 0 };
     return rt_abort_at(rt_sb_finish(sb));
 }
 
@@ -49,22 +49,22 @@ pub Int rt_tcp_connect(Int host, Int port) {
     Int ip = resolve4(host);
     if (ip < 0) { return 0 - 1; }
     Int sa = resid_raw_tls("sa_in", 16);
-    Int _z = resid_raw_fill(sa, 0, 16);
-    Int _f = st8(sa, 2);                                   // AF_INET
-    Int _p = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
-    Int _a = st32(sa + 4, ip);                             // network order
+    _ = resid_raw_fill(sa, 0, 16);
+    _ = st8(sa, 2);                                   // AF_INET
+    _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
+    _ = st32(sa + 4, ip);                             // network order
     Int fd = resid_raw_syscall(41, 2, 1, 0, 0, 0, 0);      // SOCK_STREAM
     if (fd < 0) { return 0 - 1; }
     Int cr = resid_raw_syscall(42, fd, sa, 16, 0, 0, 0);
     if (cr != 0) { return sys_close(fd) * 0 - 1; }
-    Int _t = set_timeout(fd, 30);
+    _ = set_timeout(fd, 30);
     return fd;
 }
 
 Int set_timeout(Int fd, Int secs) {
     Int tv = resid_raw_tls("ai_tv", 16);
-    Int _a = st64(tv, secs);
-    Int _b = st64(tv + 8, 0);
+    _ = st64(tv, secs);
+    _ = st64(tv + 8, 0);
     return resid_raw_syscall(54, fd, 1, 20, tv, 16, 0);   // SO_RCVTIMEO
 }
 
@@ -166,14 +166,14 @@ Int dns_ask(Int server, Int host) {
     if (qn < 0) { return c_free(q) * 0 - 1; }
     Int fd = resid_raw_syscall(41, 2, 2, 0, 0, 0, 0);    // SOCK_DGRAM
     if (fd < 0) { return c_free(q) * 0 - 1; }
-    Int _t = set_timeout(fd, 3);
+    _ = set_timeout(fd, 3);
     Int sa = resid_raw_tls("sa_dns", 16);
-    Int _z = resid_raw_fill(sa, 0, 16);
-    Int _a = st8(sa, 2) + st8(sa + 2, 0) + st8(sa + 3, 53) + st32(sa + 4, server);
+    _ = resid_raw_fill(sa, 0, 16);
+    _ = st8(sa, 2) + st8(sa + 2, 0) + st8(sa + 3, 53) + st32(sa + 4, server);
     Int sent = resid_raw_syscall(44, fd, q, qn, 16384, sa, 16);
     Int resp = xmalloc(1500);
     Int n = if (sent == qn) { resid_raw_syscall(45, fd, resp, 1500, 0, 0, 0) } else { 0 - 1 };
-    Int _c = sys_close(fd);
+    _ = sys_close(fd);
     Int r = if (n >= 12 && ld8(resp) == ld8(q) && ld8(resp + 1) == ld8(q + 1)) { dns_answer(resp, n) } else { 0 - 1 };
     return c_free(q) * 0 + c_free(resp) * 0 + r;
 }
@@ -181,11 +181,11 @@ Int dns_ask(Int server, Int host) {
 // A standard query for host's A record: its length, or -1.
 Int dns_query(Int q, Int host) {
     Int id = rt_crypto_random_byte() * 256 + rt_crypto_random_byte();
-    Int _h = st8(q, id >> 8) + st8(q + 1, id & 255) + st8(q + 2, 1) + st8(q + 3, 0);
-    Int _c = st8(q + 4, 0) + st8(q + 5, 1) + resid_raw_fill(q + 6, 0, 6);
+    _ = st8(q, id >> 8) + st8(q + 1, id & 255) + st8(q + 2, 1) + st8(q + 3, 0);
+    _ = st8(q + 4, 0) + st8(q + 5, 1) + resid_raw_fill(q + 6, 0, 6);
     Int k = dns_name(q, 12, host, host);
     if (k < 0) { return 0 - 1; }
-    Int _t = st8(q + k, 0) + st8(q + k + 1, 1) + st8(q + k + 2, 0) + st8(q + k + 3, 1);
+    _ = st8(q + k, 0) + st8(q + k + 1, 1) + st8(q + k + 2, 0) + st8(q + k + 3, 1);
     return k + 4;
 }
 
@@ -195,8 +195,8 @@ Int dns_name(Int q, Int k, Int p, Int host) {
     Int e = label_end(p);
     Int n = e - p;
     if (n == 0 || n > 63) { return if (n == 0 && ld8(p) == 0 && p != host) { st8(q + k, 0) * 0 + k + 1 } else { 0 - 1 }; }
-    Int _l = st8(q + k, n);
-    Int _c = mcopy(q + k + 1, p, n);
+    _ = st8(q + k, n);
+    _ = mcopy(q + k + 1, p, n);
     if (ld8(e) == 0) { return st8(q + k + 1 + n, 0) * 0 + k + 2 + n; }
     return dns_name(q, k + 1 + n, e + 1, host);
 }
@@ -276,15 +276,15 @@ pub Int rt_tcp_send_bin(Int fd, Int l) {
     if (n <= 0) { return 1; }
     if (n > 1048576) { return 0; }
     Int buf = xmalloc(n);
-    Int _f = bytes_of(l, buf, 0, n);
+    _ = bytes_of(l, buf, 0, n);
     Bool ok = send_all(fd, buf, n);
-    Int _x = c_free(buf);
+    _ = c_free(buf);
     return if (ok) { 1 } else { 0 };
 }
 
 Int bytes_of(Int l, Int buf, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int _s = st8(buf + i, unbox_word(c_list_get(l, i)) & 255);
+    _ = st8(buf + i, unbox_word(c_list_get(l, i)) & 255);
     return bytes_of(l, buf, i + 1, n);
 }
 
@@ -294,12 +294,12 @@ Int bytes_of(Int l, Int buf, Int i, Int n) {
 pub Int rt_tcp_recv_bin(Int fd, Int n0) {
     Int n = clamp(n0, 0, 1048576);
     Int buf = xmalloc(n);
-    Int _z = resid_raw_fill(buf, 0, n);
-    Int _g = recv_exact(fd, buf, 0, n);
+    _ = resid_raw_fill(buf, 0, n);
+    _ = recv_exact(fd, buf, 0, n);
     Int slots = xmalloc(n * 8);
-    Int _b = byte_boxes(buf, slots, 0, n);
+    _ = byte_boxes(buf, slots, 0, n);
     Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    Int _f = c_free(buf) + c_free(slots);
+    _ = c_free(buf) + c_free(slots);
     return out;
 }
 
@@ -313,6 +313,6 @@ Int recv_exact(Int fd, Int buf, Int got, Int n) {
 // Small Ints are immediate boxes (value + IMM_OFF).
 Int byte_boxes(Int buf, Int slots, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int _s = st64(slots + i * 8, ld8(buf + i) + 18295873486192640);
+    _ = st64(slots + i * 8, ld8(buf + i) + 18295873486192640);
     return byte_boxes(buf, slots, i + 1, n);
 }

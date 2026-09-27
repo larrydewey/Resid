@@ -48,7 +48,7 @@ pub Int rt_fs_create_dir_all(Int path) {
     Bool ok = mkdir_parents(buf, 1, len) && mkdir_ok(buf);
     Int b = stat_buf();
     Bool dir = ok && sc(4, buf, b, 0) == 0 && mode_dir(ld32(b + 24));
-    Int _f = c_free(buf);
+    _ = c_free(buf);
     return if (dir) { 1 } else { 0 };
 }
 
@@ -60,9 +60,9 @@ Bool mkdir_ok(Int p) {
 Bool mkdir_parents(Int buf, Int i, Int len) {
     if (i >= len) { return true; }
     if (ld8(buf + i) != 47) { return mkdir_parents(buf, i + 1, len); }
-    Int _z = st8(buf + i, 0);
+    _ = st8(buf + i, 0);
     Bool ok = ld8(buf) == 0 || mkdir_ok(buf);
-    Int _s = st8(buf + i, 47);
+    _ = st8(buf + i, 47);
     return ok && mkdir_parents(buf, i + 1, len);
 }
 
@@ -115,11 +115,12 @@ pub Int rt_fs_read_all(Int path) {
     Int fd = sys_open(path, o_rdonly(), 0);
     if (fd < 0) { return xempty(); }
     Int p = read_fd_all(fd);
-    return sys_close(fd) * 0 + p;
+    _ = sys_close(fd);
+    return arena_adopt(p, c_strlen(p));
 }
 
 pub Int xempty() {
-    Int p = xmalloc(1);
+    Int p = ralloc(1);
     return st8(p, 0) + p;
 }
 
@@ -141,20 +142,20 @@ pub Int rt_fs_write_all(Int path, Int contents) { return b8(put_file(path, o_wri
 Int list_bytes(Int l) {
     Int n = c_list_len(l);
     Int buf = xmalloc(n);
-    Int _f = list_bytes_at(l, buf, 0, n);
+    _ = list_bytes_at(l, buf, 0, n);
     return buf;
 }
 
 Int list_bytes_at(Int l, Int buf, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int _s = st8(buf + i, c_unbox_i64(c_list_get(l, i)));
+    _ = st8(buf + i, c_unbox_i64(c_list_get(l, i)));
     return list_bytes_at(l, buf, i + 1, n);
 }
 
 Bool put_list(Int path, Int flags, Int mode, Int l) {
     Int buf = list_bytes(l);
     Bool ok = put_file(path, flags, mode, buf, c_list_len(l));
-    Int _f = c_free(buf);
+    _ = c_free(buf);
     return ok;
 }
 
@@ -173,7 +174,7 @@ pub Int rt_fs_write_secret(Int path, Int l) {
     Bool mode = sc(91, fd, 384, 0) == 0;
     Int buf = list_bytes(l);
     Bool ok = mode && write_all(fd, buf, c_list_len(l));
-    Int _f = c_free(buf);
+    _ = c_free(buf);
     return b8(sys_close(fd) == 0 && ok);
 }
 
@@ -190,7 +191,7 @@ Bool unhex(Int hex, Int buf, Int i, Int n) {
     Int a = hex_val(ld8(hex + 2 * i));
     Int b = hex_val(ld8(hex + 2 * i + 1));
     if (a < 0 || b < 0) { return false; }
-    Int _s = st8(buf + i, a * 16 + b);
+    _ = st8(buf + i, a * 16 + b);
     return unhex(hex, buf, i + 1, n);
 }
 
@@ -200,7 +201,7 @@ Int put_hex(Int path, Int hex, Int flags) {
     if (n % 2 != 0) { return 0; }
     Int buf = xmalloc(n / 2 + 1);
     Bool ok = unhex(hex, buf, 0, n / 2) && put_file(path, flags, 438, buf, n / 2);
-    Int _f = c_free(buf);
+    _ = c_free(buf);
     return b8(ok);
 }
 
@@ -213,14 +214,14 @@ pub Int rt_fs_append_hex(Int path, Int hex) { return put_hex(path, hex, o_append
 // A List(Int) of bytes.
 Int bytes_list(Int p, Int n) {
     Int slots = xmalloc(n * 8);
-    Int _f = box_bytes(p, slots, 0, n);
+    _ = box_bytes(p, slots, 0, n);
     Int out = c_list_new(n, slots, resid_raw_addr("List(Int(64))"));
     return c_free(slots) * 0 + out;
 }
 
 Int box_bytes(Int p, Int slots, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int _s = st64(slots + i * 8, c_box_i64(ld8(p + i)));
+    _ = st64(slots + i * 8, c_box_i64(ld8(p + i)));
     return box_bytes(p, slots, i + 1, n);
 }
 
@@ -235,7 +236,7 @@ pub Int rt_fs_read_bytes(Int path) {
     Int sz = if (sc(5, fd, b, 0) == 0) { ld64(b + 48) } else { 0 };
     Int buf = xmalloc(if (sz > 0) { sz } else { 1 });
     Int n = read_n(fd, buf, 0, sz);
-    Int _c = sys_close(fd);
+    _ = sys_close(fd);
     Int out = bytes_list(buf, n);
     return c_free(buf) * 0 + out;
 }
@@ -252,7 +253,7 @@ Int read_n(Int fd, Int buf, Int n, Int want) {
 pub Int rt_print_bytes(Int l) {
     Int buf = list_bytes(l);
     Bool ok = write_all(1, buf, c_list_len(l));
-    Int _f = c_free(buf);
+    _ = c_free(buf);
     return b8(ok);
 }
 
@@ -266,8 +267,8 @@ pub Int rt_fs_list_dir(Int path) {
     Int arr = dir_entries(fd, buf, xmalloc(64 * 8), 0, 64);
     Int n = ld64(buf);
     Int out = c_list_new(n, arr, ty);
-    Int _c = sys_close(fd);
-    Int _a = c_free(arr);
+    _ = sys_close(fd);
+    _ = c_free(arr);
     return c_free(buf) * 0 + out;
 }
 
@@ -286,7 +287,7 @@ Int dir_chunk(Int fd, Int buf, Int p, Int end, Int arr0, Int n, Int cap) {
     if (dot) { return dir_chunk(fd, buf, p + reclen, end, arr0, n, cap); }
     Int arr = if (n >= cap) { xrealloc(arr0, cap * 16) } else { arr0 };
     Int cap2 = if (n >= cap) { cap * 2 } else { cap };
-    Int _s = st64(arr + n * 8, cstr_dup(name));
+    _ = st64(arr + n * 8, cstr_dup(name));
     return dir_chunk(fd, buf, p + reclen, end, arr, n + 1, cap2);
 }
 
@@ -299,9 +300,9 @@ Int file_tag() { return 12; }
 pub Int rt_fs_open(Int path) {
     Int fd = if (path_ok(path)) { sys_open(path, o_rdonly(), 0) } else { 0 - 1 };
     Int h = xmalloc(24);
-    Int _t = st32(h, file_tag());
-    Int _n = st32(h + 4, 1);
-    Int _y = st64(h + 8, resid_raw_addr("File"));
+    _ = st32(h, file_tag());
+    _ = st32(h + 4, 1);
+    _ = st64(h + 8, resid_raw_addr("File"));
     return st64(h + 16, if (fd < 0) { 0 - 1 } else { fd }) * 0 + h;
 }
 
@@ -319,14 +320,15 @@ pub Int rt_fs_read_handle(Int h) {
     if (sz < 0 || sc(8, fd, 0, 0) < 0) { return xempty(); }
     Int p = xmalloc(sz + 1);
     Int n = read_n(fd, p, 0, sz);
-    return st8(p + n, 0) + p;
+    _ = st8(p + n, 0);
+    return arena_adopt(p, n);
 }
 
 @export("resid_fs_close", "i8(ptr)")
 pub Int rt_fs_close(Int h) {
     if (h == 0) { return 0; }
     Int fd = handle_fd(h);
-    Int _c = if (fd >= 0) { sys_close(fd) } else { 0 };
+    _ = if (fd >= 0) { sys_close(fd) } else { 0 };
     return c_free(h) + 1;
 }
 
@@ -338,7 +340,7 @@ pub Int rt_handle_release(Int h) { return if (h == 0) { 0 } else { rt_fs_close(h
 @export("resid_env_get", "ptr(ptr)")
 pub Int rt_env_get(Int name) {
     Int v = c_getenv(name);
-    return if (v == 0) { xempty() } else { cstr_dup(v) };
+    return if (v == 0) { xempty() } else { rdup(v) };
 }
 
 @export("resid_env_has", "i8(ptr)")
@@ -355,9 +357,9 @@ Int args_load() {
     Int len = cmdline_len(resid_raw_addr("/proc/self/cmdline"));
     Int n = count_nuls(buf, 0, len, 0);
     Int idx = xmalloc((n + 1) * 8);
-    Int _i = index_nuls(buf, idx, 0, len, 0, 0);
-    Int _a = st64(st, n);
-    Int _b = st64(st + 16, idx);
+    _ = index_nuls(buf, idx, 0, len, 0, 0);
+    _ = st64(st, n);
+    _ = st64(st + 16, idx);
     return st64(st + 8, buf);
 }
 
@@ -367,7 +369,7 @@ Int cmdline_len(Int path) {
     if (fd < 0) { return 0; }
     Int buf = xmalloc(65536);
     Int n = count_read(fd, buf, 0);
-    Int _c = sys_close(fd);
+    _ = sys_close(fd);
     return c_free(buf) * 0 + n;
 }
 
@@ -385,7 +387,7 @@ Int count_nuls(Int p, Int i, Int len, Int n) {
 Int index_nuls(Int p, Int idx, Int i, Int len, Int start, Int k) {
     if (i >= len) { return 0; }
     if (ld8(p + i) != 0) { return index_nuls(p, idx, i + 1, len, start, k); }
-    Int _s = st64(idx + k * 8, p + start);
+    _ = st64(idx + k * 8, p + start);
     return index_nuls(p, idx, i + 1, len, i + 1, k + 1);
 }
 
@@ -394,10 +396,10 @@ pub Int rt_args_count() { return args_load() * 0 + ld64(args_state()); }
 
 @export("resid_args_get", "ptr(i64)")
 pub Int rt_args_get(Int i) {
-    Int _l = args_load();
+    _ = args_load();
     Int st = args_state();
     if (i < 0 || i >= ld64(st)) { return xempty(); }
-    return cstr_dup(ld64(ld64(st + 16) + i * 8));
+    return rdup(ld64(ld64(st + 16) + i * 8));
 }
 
 // cmd split on spaces into argv (at most 64 words) in a fresh buffer:
@@ -406,7 +408,7 @@ Int split_argv(Int cmd) {
     Int buf = cstr_dup(cmd);
     Int argv = xmalloc(65 * 8);
     Int n = argv_at(buf, argv, 0);
-    Int _z = st64(argv + n * 8, 0);
+    _ = st64(argv + n * 8, 0);
     if (n == 0) { return c_free(buf) + c_free(argv); }
     return argv;
 }
@@ -426,10 +428,10 @@ Int argv_at(Int p0, Int argv, Int n) {
     if (n >= 64) { return n; }
     Int p = skip_sp(p0);
     if (ld8(p) == 0) { return n; }
-    Int _a = st64(argv + n * 8, p);
+    _ = st64(argv + n * 8, p);
     Int e = word_end(p);
     if (ld8(e) == 0) { return n + 1; }
-    Int _z = st8(e, 0);
+    _ = st8(e, 0);
     return argv_at(e + 1, argv, n + 1);
 }
 
@@ -438,7 +440,7 @@ Int free_argv(Int argv) { return c_free(ld64(argv)) + c_free(argv); }
 // wait4 for pid; the raw status, or -1.
 pub Int wait_pid(Int pid, Int flags) {
     Int stp = resid_raw_tls("wait_status", 8);
-    Int _z = st64(stp, 0);
+    _ = st64(stp, 0);
     Int r = sc4(61, pid, stp, flags, 0);
     if (r < 0) { return 0 - 1; }
     return ld32(stp);
@@ -455,11 +457,11 @@ pub Int rt_process_run(Int cmd) {
     Int pid = c_fork();
     if (pid < 0) { return free_argv(argv) - 1; }
     if (pid == 0) {
-        Int _e = c_execvp(ld64(argv), argv);
+        _ = c_execvp(ld64(argv), argv);
         return resid_raw_syscall(231, 127, 0, 0, 0, 0, 0);
     }
     Int st = wait_pid(pid, 0);
-    Int _f = free_argv(argv);
+    _ = free_argv(argv);
     if (st < 0) { return 0 - 1; }
     return exit_code(st);
 }
@@ -482,7 +484,7 @@ pub Int rt_git_rev(Int r) {
 @export("resid_git_branch", "ptr()")
 pub Int rt_git_branch() {
     Int line = shell_line(resid_raw_addr("git rev-parse --abbrev-ref HEAD 2>/dev/null"));
-    Int _s = sanitize_ref(line);
+    _ = sanitize_ref(line);
     return line;
 }
 
@@ -490,7 +492,7 @@ Int sanitize_ref(Int p) {
     Int c = ld8(p);
     if (c == 0) { return 0; }
     Bool ok = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 45 || c == 95 || c == 47 || c == 46;
-    Int _s = if (ok) { 0 } else { st8(p, 95) };
+    _ = if (ok) { 0 } else { st8(p, 95) };
     return sanitize_ref(p + 1);
 }
 
@@ -515,16 +517,16 @@ Int ror32(Int x, Int n) { return m32((x >> n) | (x << (32 - n))); }
 // The state h (8 words at h) absorbs the 64-byte block at p; w is a
 // 64-word scratch.
 Int sha_block(Int h, Int p, Int w) {
-    Int _a = sha_load(w, p, 0);
-    Int _b = sha_expand(w, 16);
-    Int _c = sha_rounds(h, w, 0, ld64(h), ld64(h + 8), ld64(h + 16), ld64(h + 24), ld64(h + 32), ld64(h + 40), ld64(h + 48), ld64(h + 56));
+    _ = sha_load(w, p, 0);
+    _ = sha_expand(w, 16);
+    _ = sha_rounds(h, w, 0, ld64(h), ld64(h + 8), ld64(h + 16), ld64(h + 24), ld64(h + 32), ld64(h + 40), ld64(h + 48), ld64(h + 56));
     return 0;
 }
 
 Int sha_load(Int w, Int p, Int i) {
     if (i >= 16) { return 0; }
     Int v = (ld8(p + 4 * i) << 24) | (ld8(p + 4 * i + 1) << 16) | (ld8(p + 4 * i + 2) << 8) | ld8(p + 4 * i + 3);
-    Int _s = st64(w + i * 8, v);
+    _ = st64(w + i * 8, v);
     return sha_load(w, p, i + 1);
 }
 
@@ -534,19 +536,19 @@ Int sha_expand(Int w, Int i) {
     Int w2 = ld64(w + (i - 2) * 8);
     Int s0 = ror32(w15, 7) ^ ror32(w15, 18) ^ (w15 >> 3);
     Int s1 = ror32(w2, 17) ^ ror32(w2, 19) ^ (w2 >> 10);
-    Int _s = st64(w + i * 8, m32(ld64(w + (i - 16) * 8) + s0 + ld64(w + (i - 7) * 8) + s1));
+    _ = st64(w + i * 8, m32(ld64(w + (i - 16) * 8) + s0 + ld64(w + (i - 7) * 8) + s1));
     return sha_expand(w, i + 1);
 }
 
 Int sha_rounds(Int h, Int w, Int i, Int a, Int b, Int c, Int d, Int e, Int f, Int g, Int hh) {
     if (i >= 64) {
-        Int _0 = st64(h, m32(ld64(h) + a));
-        Int _1 = st64(h + 8, m32(ld64(h + 8) + b));
-        Int _2 = st64(h + 16, m32(ld64(h + 16) + c));
-        Int _3 = st64(h + 24, m32(ld64(h + 24) + d));
-        Int _4 = st64(h + 32, m32(ld64(h + 32) + e));
-        Int _5 = st64(h + 40, m32(ld64(h + 40) + f));
-        Int _6 = st64(h + 48, m32(ld64(h + 48) + g));
+        _ = st64(h, m32(ld64(h) + a));
+        _ = st64(h + 8, m32(ld64(h + 8) + b));
+        _ = st64(h + 16, m32(ld64(h + 16) + c));
+        _ = st64(h + 24, m32(ld64(h + 24) + d));
+        _ = st64(h + 32, m32(ld64(h + 32) + e));
+        _ = st64(h + 40, m32(ld64(h + 40) + f));
+        _ = st64(h + 48, m32(ld64(h + 48) + g));
         return st64(h + 56, m32(ld64(h + 56) + hh));
     }
     Int t1 = m32(hh + (ror32(e, 6) ^ ror32(e, 11) ^ ror32(e, 25)) + ((e & f) ^ (m32(~e) & g)) + ld64(sha_k() + i * 8) + ld64(w + i * 8));
@@ -565,30 +567,30 @@ Int sha_new() {
 // the message's full length).
 Int sha_bytes(Int s, Int p, Int n) {
     Int full = n & (0 - 64);
-    Int _b = sha_blocks(s, p, 0, full);
+    _ = sha_blocks(s, p, 0, full);
     return full;
 }
 
 Int sha_blocks(Int s, Int p, Int i, Int full) {
     if (i >= full) { return 0; }
-    Int _b = sha_block(s, p + i, s + 64);
+    _ = sha_block(s, p + i, s + 64);
     return sha_blocks(s, p, i + 64, full);
 }
 
 Int sha_finish(Int s, Int rest, Int keep, Int total) {
     Int tail = s + 576;
-    Int _c = mcopy(tail, rest, keep);
-    Int _p = st8(tail + keep, 128);
+    _ = mcopy(tail, rest, keep);
+    _ = st8(tail + keep, 128);
     Int tl = if (keep + 1 <= 56) { 64 } else { 128 };
-    Int _z = resid_raw_fill(tail + keep + 1, 0, tl - keep - 1);
+    _ = resid_raw_fill(tail + keep + 1, 0, tl - keep - 1);
     Int bits = total * 8;
-    Int _l = sha_len(tail + tl - 8, bits, 0);
+    _ = sha_len(tail + tl - 8, bits, 0);
     return sha_blocks(s, tail, 0, tl);
 }
 
 Int sha_len(Int at, Int bits, Int i) {
     if (i >= 8) { return 0; }
-    Int _s = st8(at + 7 - i, lshr(bits, 8 * i));
+    _ = st8(at + 7 - i, lshr(bits, 8 * i));
     return sha_len(at, bits, i + 1);
 }
 
@@ -603,11 +605,11 @@ pub Int rt_fs_sha256(Int path) {
     Int s = sha_new();
     Int buf = xmalloc(65536);
     Int total = sha_file(fd, s, buf, 0, 0);
-    Int _c = sys_close(fd);
+    _ = sys_close(fd);
     Int keep = total % 64;
-    Int _f = sha_finish(s, buf, keep, total);
+    _ = sha_finish(s, buf, keep, total);
     Int out = xmalloc(32);
-    Int _o = sha_out(s, out, 0);
+    _ = sha_out(s, out, 0);
     Int l = bytes_list(out, 32);
     return c_free(out) + c_free(buf) + c_free(s) + l;
 }
@@ -619,13 +621,13 @@ Int sha_file(Int fd, Int s, Int buf, Int keep, Int total) {
     Int have = keep + r;
     Int full = sha_bytes(s, buf, have);
     Int k2 = have - full;
-    Int _m = mcopy(buf, buf + full, k2);
+    _ = mcopy(buf, buf + full, k2);
     return sha_file(fd, s, buf, k2, total + r);
 }
 
 Int sha_out(Int s, Int out, Int i) {
     if (i >= 32) { return 0; }
-    Int _s = st8(out + i, sha_byte(s, i));
+    _ = st8(out + i, sha_byte(s, i));
     return sha_out(s, out, i + 1);
 }
 
@@ -635,10 +637,10 @@ pub Int rt_str_sha256(Int str) {
     Int n = c_strlen(str);
     Int s = sha_new();
     Int full = sha_bytes(s, str, n);
-    Int _f = sha_finish(s, str + full, n - full, n);
+    _ = sha_finish(s, str + full, n - full, n);
     Int p = xmalloc(65);
-    Int _h = sha_hex(s, p, 0);
-    Int _z = st8(p + 64, 0);
+    _ = sha_hex(s, p, 0);
+    _ = st8(p + 64, 0);
     return c_free(s) + p;
 }
 
@@ -646,8 +648,8 @@ Int sha_hex(Int s, Int p, Int i) {
     if (i >= 32) { return 0; }
     Int b = sha_byte(s, i);
     Int hx = resid_raw_addr("0123456789abcdef");
-    Int _a = st8(p + 2 * i, ld8(hx + (b >> 4)));
-    Int _b = st8(p + 2 * i + 1, ld8(hx + (b & 15)));
+    _ = st8(p + 2 * i, ld8(hx + (b >> 4)));
+    _ = st8(p + 2 * i + 1, ld8(hx + (b & 15)));
     return sha_hex(s, p, i + 1);
 }
 
@@ -668,7 +670,7 @@ Bool dbg_known(Int t, Int i) {
 Int dbg_add(Int t) {
     Int n = ld64(dbg() + 8);
     if (dbg_known(t, 0) || n >= 1024) { return 0; }
-    Int _s = st64(dbg() + 32 + n * 8, t);
+    _ = st64(dbg() + 32 + n * 8, t);
     return st64(dbg() + 8, n + 1);
 }
 
@@ -678,7 +680,7 @@ Int dbg_remove_at(Int t, Int i) {
     Int n = ld64(dbg() + 8);
     if (i >= n) { return 0; }
     if (ld64(dbg() + 32 + i * 8) != t) { return dbg_remove_at(t, i + 1); }
-    Int _s = st64(dbg() + 32 + i * 8, ld64(dbg() + 32 + (n - 1) * 8));
+    _ = st64(dbg() + 32 + i * 8, ld64(dbg() + 32 + (n - 1) * 8));
     return st64(dbg() + 8, n - 1);
 }
 
@@ -691,18 +693,18 @@ pub Int rt_dbg_spawn(Int cmd) {
     Int pid = c_fork();
     if (pid < 0) { return free_argv(argv) - 1; }
     if (pid == 0) {
-        Int _t = ptrace(0, 0, 0, 0);
-        Int _p = resid_raw_syscall(135, 262144, 0, 0, 0, 0, 0);
-        Int _e = c_execv(ld64(argv), argv);
+        _ = ptrace(0, 0, 0, 0);
+        _ = resid_raw_syscall(135, 262144, 0, 0, 0, 0, 0);
+        _ = c_execv(ld64(argv), argv);
         return resid_raw_syscall(231, 127, 0, 0, 0, 0, 0);
     }
-    Int _f = free_argv(argv);
+    _ = free_argv(argv);
     Int st = wait_pid(pid, 0);
     if (st < 0 || (st & 255) != 127) { return 0 - 1; }
     // PTRACE_SETOPTIONS: TRACECLONE | EXITKILL.
-    Int _o = ptrace(16896, pid, 0, 8 | 1048576);
-    Int _l = st64(dbg(), pid);
-    Int _n = st64(dbg() + 8, 0);
+    _ = ptrace(16896, pid, 0, 8 | 1048576);
+    _ = st64(dbg(), pid);
+    _ = st64(dbg() + 8, 0);
     return dbg_add(pid) * 0 + pid;
 }
 
@@ -720,14 +722,14 @@ Int dbg_status(Int st) { return if (st_exited(st)) { (st >> 8) & 255 } else { 12
 @export("resid_dbg_wait", "i64()")
 pub Int rt_dbg_wait() {
     Int stp = resid_raw_tls("dbg_status", 8);
-    Int _z = st64(stp, 0);
+    _ = st64(stp, 0);
     Int t = sc4(61, 0 - 1, stp, 1073741824, 0);
     if (t < 0) { return 0 - 1; }
     Int st = ld32(stp);
     if (st_exited(st) || st_signaled(st)) {
-        Int _r = dbg_remove(t);
+        _ = dbg_remove(t);
         if (t == ld64(dbg())) {
-            Int _e = st64(dbg() + 24, dbg_status(st));
+            _ = st64(dbg() + 24, dbg_status(st));
             return st64(dbg(), 0 - 1) - 1;
         }
         return rt_dbg_wait();
@@ -737,21 +739,21 @@ pub Int rt_dbg_wait() {
     Int ev = st >> 16;
     if (sig == 5 && ev == 3) {
         Int msg = resid_raw_tls("dbg_msg", 8);
-        Int _g = ptrace(16897, t, 0, msg);
-        Int _a = dbg_add(ld64(msg));
-        Int _c = ptrace(7, t, 0, 0);
+        _ = ptrace(16897, t, 0, msg);
+        _ = dbg_add(ld64(msg));
+        _ = ptrace(7, t, 0, 0);
         return rt_dbg_wait();
     }
     if (sig == 19 && !dbg_known(t, 0)) {
-        Int _a2 = dbg_add(t);
-        Int _c2 = ptrace(7, t, 0, 0);
+        _ = dbg_add(t);
+        _ = ptrace(7, t, 0, 0);
         return rt_dbg_wait();
     }
     if (sig == 19 && ev == 0 && t != ld64(dbg())) {
-        Int _c3 = ptrace(7, t, 0, 0);
+        _ = ptrace(7, t, 0, 0);
         return rt_dbg_wait();
     }
-    Int _s = st64(dbg() + 16, if (sig == 5) { 0 } else { sig });
+    _ = st64(dbg() + 16, if (sig == 5) { 0 } else { sig });
     return t;
 }
 
@@ -767,8 +769,8 @@ pub Int rt_dbg_step(Int tid) {
     Int st = wait_pid(tid, 1073741824);
     if (st < 0) { return 0; }
     if (st_exited(st) || st_signaled(st)) {
-        Int _r = dbg_remove(tid);
-        Int _e = if (tid == ld64(dbg())) { st64(dbg() + 24, dbg_status(st)) + st64(dbg(), 0 - 1) } else { 0 };
+        _ = dbg_remove(tid);
+        _ = if (tid == ld64(dbg())) { st64(dbg() + 24, dbg_status(st)) + st64(dbg(), 0 - 1) } else { 0 };
         return 0;
     }
     return 1;
@@ -778,8 +780,8 @@ pub Int rt_dbg_step(Int tid) {
 @export("resid_dbg_peek", "i64(i64,i64)")
 pub Int rt_dbg_peek(Int tid, Int addr) {
     Int out = resid_raw_tls("dbg_peek", 8);
-    Int _z = st64(out, 0);
-    Int _p = ptrace(2, tid, addr, out);
+    _ = st64(out, 0);
+    _ = ptrace(2, tid, addr, out);
     return ld64(out);
 }
 
@@ -804,7 +806,7 @@ pub Int rt_dbg_reg(Int tid, Int n) {
 pub Int rt_dbg_set_pc(Int tid, Int pc) {
     Int r = resid_raw_tls("dbg_regs", 256);
     if (ptrace(12, tid, 0, r) != 0) { return 0; }
-    Int _s = st64(r + 128, pc);
+    _ = st64(r + 128, pc);
     return b8(ptrace(13, tid, 0, r) == 0);
 }
 
@@ -812,9 +814,9 @@ pub Int rt_dbg_set_pc(Int tid, Int pc) {
 pub Int rt_dbg_kill() {
     Int leader = ld64(dbg());
     if (leader <= 0) { return 0; }
-    Int _k = resid_raw_syscall(62, leader, 9, 0, 0, 0, 0);
-    Int _w = reap_all();
-    Int _l = st64(dbg(), 0 - 1);
+    _ = resid_raw_syscall(62, leader, 9, 0, 0, 0, 0);
+    _ = reap_all();
+    _ = st64(dbg(), 0 - 1);
     return st64(dbg() + 8, 0) + 1;
 }
 
@@ -846,9 +848,9 @@ Int stack_mb() {
 
 @export("resid_run_main", "i32(ptr)")
 pub Int rt_run_main(Int f) {
-    Int _c = check_address_space();
+    _ = check_address_space();
     Int slot = xmalloc(16);
-    Int _s = st64(slot, f);
+    _ = st64(slot, f);
     Int t = thread_spawn(resid_raw_fn("main_thread"), slot, stack_mb() * 1048576);
     if (t == 0) { return resid_raw_call2(f, 0, 0) & 4294967295; }
     return thread_join(t);

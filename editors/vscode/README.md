@@ -1,6 +1,6 @@
 # Resid Language Support for VS Code
 
-Syntax highlighting, snippets, language configuration, and **LSP support** (diagnostics + hover for residual notes) for the
+Syntax highlighting, snippets, language configuration, and a **language server** (`residc lsp`) for the
 [Resid](../../../resid_specification.txt) language (v3.x).
 
 ## Features
@@ -23,39 +23,31 @@ Syntax highlighting, snippets, language configuration, and **LSP support** (diag
   match, if-let, for-in, `with` handles, `spawn` regions, sandboxes, imports.
 - **Language configuration**: bracket matching/auto-closing, comment toggling,
   folding markers.
-- **LSP (`resid-lsp`)**: Parse/type diagnostics, completions, hover, symbols,
-  go-to-definition, and references
+- **Language server (`residc lsp`)**: diagnostics, hover, go to definition,
+  document symbols and completion
 
-## LSP Setup
+## Language server
 
-The extension includes an LSP client for a `resid-lsp` server. The Rust
-server (`tools/resid-lsp-full/`) was deleted on 2026-09-26 with the Rust
-pipeline it was built on; it is in git history, and a Resid replacement
-does not exist yet.
+The server is the compiler itself: `residc lsp` runs the compiler's front
+end (import resolution, parsing, resolution and checking) in process on the
+editor's buffer, so unsaved edits are checked too. It provides:
 
-### Prerequisites
+- diagnostics on open, change and save (the compiler's own errors, with
+  their codes)
+- hover: the definition's signature, its `///` doc comment and the type
+- go to definition, across imports
+- document symbols (functions, types, behaviors, tests)
+- completion of keywords and top-level names
 
-1. Build the LSP server:
-   ```sh
-   cargo build -p resid-lsp --release
-   ```
-   This produces `target/release/resid-lsp`.
-
-2. Ensure `resid-lsp` is in your `PATH`, or configure the path in settings.
+The extension looks for `build/boot/stage2.bin` in the workspace (when the
+workspace is the Resid repository), then `residc` on `PATH`.
 
 ### Settings
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `resid.lsp.enable` | Enable the Resid LSP server | `true` |
-| `resid.lsp.serverPath` | Path or command to the `resid-lsp` binary. Empty auto-detects `target/release` or `target/debug` in the workspace, then PATH. | `""` |
-
-### How it works
-
-1. Run `residc build` on your Resid project — this produces `.resid-notes.cbor` sidecars.
-2. Open a `.resid` file in VS Code.
-3. The LSP client finds sidecars in the same directory (and `target/` sibling) and publishes diagnostics.
-4. Hover a line with a residual (lightbulb/squiggly) to see what knowledge is missing.
+| `resid.lsp.enable` | Run the language server | `true` |
+| `resid.compilerPath` | Path to the Resid compiler; empty auto-detects | `""` |
 
 ## Install locally
 
@@ -64,7 +56,7 @@ cd editors/vscode
 npm install
 npm run compile
 npx @vscode/vsce package
-code --install-extension resid-lang-0.2.0.vsix
+code --install-extension resid-lang-0.3.0.vsix
 ```
 
 Or run the extension in development:

@@ -16,59 +16,47 @@ export function activate(context: vscode.ExtensionContext) {
         return;
     }
 
-    const configuredPath = config.get<string>('lsp.serverPath', '').trim();
-    const serverPath = configuredPath || findWorkspaceServer();
-    if (!serverPath) {
-        output.appendLine('Unable to find resid-lsp. Build it with: cargo build -p resid-lsp');
-        output.appendLine('Then set resid.lsp.serverPath to the resulting target binary.');
-        output.show(true);
-        return;
-    }
-    output.appendLine(`Starting resid-lsp: ${serverPath}`);
-    
+    // The server is the compiler itself: `residc lsp` (compiler/lsp.resid).
+    const configuredPath = config.get<string>('compilerPath', '').trim();
+    const compiler = configuredPath || findCompiler();
+    output.appendLine(`Starting the Resid language server: ${compiler} lsp`);
+
     const serverOptions: ServerOptions = {
-        command: serverPath,
-        transport: TransportKind.stdio,
-        options: { env: { ...process.env, RUST_BACKTRACE: '1' } }
+        command: compiler,
+        args: ['lsp'],
+        transport: TransportKind.stdio
     };
 
     const clientOptions: LanguageClientOptions = {
-        documentSelector: [
-            { scheme: 'file', language: 'resid' },
-            { scheme: 'file', language: 'resid-manifest' }
-        ],
-        synchronize: {
-            fileEvents: vscode.workspace.createFileSystemWatcher('**/*.resid-notes.cbor')
-        },
-        initializationOptions: {},
+        documentSelector: [{ scheme: 'file', language: 'resid' }],
         outputChannelName: 'Resid LSP',
         traceOutputChannel: output
     };
 
     client = new LanguageClient(
-        'resid-lsp',
-        'Resid LSP',
+        'resid',
+        'Resid Language Server',
         serverOptions,
         clientOptions
     );
 
     client.start().catch((error: unknown) => {
-        output.appendLine(`Failed to start resid-lsp: ${error instanceof Error ? error.message : String(error)}`);
+        output.appendLine(`Failed to start the Resid language server: ${error instanceof Error ? error.message : String(error)}`);
         output.show(true);
     });
     context.subscriptions.push(client);
 }
 
-function findWorkspaceServer(): string | undefined {
+// A workspace that is the Resid repository has its own compiler; otherwise
+// `residc` on PATH.
+function findCompiler(): string {
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
-        for (const profile of ['release', 'debug']) {
-            const candidate = path.join(folder.uri.fsPath, 'target', profile, process.platform === 'win32' ? 'resid-lsp.exe' : 'resid-lsp');
-            if (fs.existsSync(candidate)) {
-                return candidate;
-            }
+        const candidate = path.join(folder.uri.fsPath, 'build', 'boot', 'stage2.bin');
+        if (fs.existsSync(candidate)) {
+            return candidate;
         }
     }
-    return 'resid-lsp';
+    return 'residc';
 }
 
 export function deactivate(): Thenable<void> | undefined {

@@ -1,0 +1,6 @@
+type Point = { Int x; Int y; };
+
+/// Squared distance from the origin.
+pub Int norm2(Point p) {
+    return p.x * p.x + p.y * p.y;
+}

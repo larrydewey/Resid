@@ -61,7 +61,7 @@ Int mem_lim() { return resid_raw_global("rt_mem_limit", 8); }   // 0 unread, -1 
 Int limit_bytes() {
     Int l = ld64(mem_lim());
     if (l != 0) { return l; }
-    Int _n = st64(mem_lim(), 0 - 1);           // no recursion while reading
+    _ = st64(mem_lim(), 0 - 1);           // no recursion while reading
     Int e = c_getenv(resid_raw_addr("RESID_MEM_LIMIT"));
     Int mb = if (e != 0 && is_int(e)) { rt_str_parse_int(e) } else { 0 };
     return st64(mem_lim(), if (mb > 0) { mb * 1048576 } else { 0 - 1 }) * 0 + ld64(mem_lim());
@@ -85,19 +85,19 @@ Int mem_take(Int n) {
 @noinline
 Int over_budget(Int lim) {
     Int sb = rt_sb_new();
-    Int _a = sb_lit(sb, resid_raw_addr("memory budget exceeded ("));
-    Int _b = sb_word(sb, lim / 1048576);
-    Int _c = sb_lit(sb, resid_raw_addr(" MB); set RESID_MEM_LIMIT (MB) to raise it"));
+    _ = sb_lit(sb, resid_raw_addr("memory budget exceeded ("));
+    _ = sb_word(sb, lim / 1048576);
+    _ = sb_lit(sb, resid_raw_addr(" MB); set RESID_MEM_LIMIT (MB) to raise it"));
     return rt_abort_msg(rt_sb_finish(sb));
 }
 
 Int heap_map(Int n) {
-    Int _t = mem_take(n);
+    _ = mem_take(n);
     return sys_mmap(n);
 }
 
 Int heap_unmap(Int p, Int n) {
-    Int _f = resid_raw_fetch_add(mem_used(), 0 - n);
+    _ = resid_raw_fetch_add(mem_used(), 0 - n);
     return sys_munmap(p, n);
 }
 
@@ -119,8 +119,8 @@ Int carve(Int c) {
     Int end = ld64(t + 392);
     Int p = if (bp != 0 && end - bp >= need) { bp } else { new_slab(t, need) };
     if (p == 0) { return 0; }
-    Int _b = st64(t + 384, p + need);
-    Int _h = st64(p, c);
+    _ = st64(t + 384, p + need);
+    _ = st64(p, c);
     return p + 16;
 }
 
@@ -132,7 +132,7 @@ Int new_slab(Int t, Int need) {
     Int sz = if (c != 0) { ld64(c) } else { want };
     Int s = if (c != 0) { c } else { heap_map(sz) };
     if (s == 0) { return 0; }
-    Int _e = st64(t + 392, s + sz);
+    _ = st64(t + 392, s + sz);
     return s;
 }
 
@@ -146,7 +146,7 @@ Int big_alloc(Int n) {
     Int hit = cache_take(t, sz);
     if (hit != 0) { return hit + 16; }
     // A miss: the cached sizes are not the ones in use; give them back.
-    Int _f = cache_flush(t);
+    _ = cache_flush(t);
     Int p = heap_map(sz);
     if (p == 0) { return 0; }
     return st64(p, sz) * 0 + p + 16;
@@ -158,7 +158,7 @@ pub Int c_free(Int p) {
     if (h == 63) { return 0; }   // an arena block (bulk_block)
     if (h < 64) {
         Int head = heap_tls() + h * 8;
-        Int _n = st64(p, ld64(head));
+        _ = st64(p, ld64(head));
         return st64(head, p);
     }
     return big_free(p - 16, h);
@@ -167,19 +167,19 @@ pub Int c_free(Int p) {
 Int big_free(Int b, Int h) {
     Int t = heap_tls();
     if (ld64(t + 408) >= 256 || ld64(t + 416) + h > 67108864) { return heap_unmap(b, h); }
-    Int _n = st64(b + 8, ld64(t + 400));
-    Int _l = st64(t + 400, b);
-    Int _c = st64(t + 408, ld64(t + 408) + 1);
+    _ = st64(b + 8, ld64(t + 400));
+    _ = st64(t + 400, b);
+    _ = st64(t + 408, ld64(t + 408) + 1);
     return st64(t + 416, ld64(t + 416) + h);
 }
 
 Int cache_flush(Int t) {
     Int b = ld64(t + 400);
     if (b == 0) { return 0; }
-    Int _u = st64(t + 400, ld64(b + 8));
-    Int _c = st64(t + 408, ld64(t + 408) - 1);
-    Int _s = st64(t + 416, ld64(t + 416) - ld64(b));
-    Int _m = heap_unmap(b, ld64(b));
+    _ = st64(t + 400, ld64(b + 8));
+    _ = st64(t + 408, ld64(t + 408) - 1);
+    _ = st64(t + 416, ld64(t + 416) - ld64(b));
+    _ = heap_unmap(b, ld64(b));
     return cache_flush(t);
 }
 
@@ -191,9 +191,9 @@ Int cache_scan(Int t, Int link, Int sz) {
     if (b == 0) { return 0; }
     Int h = ld64(b);
     if (h >= sz && h <= sz * 2) {
-        Int _u = st64(link, ld64(b + 8));
-        Int _c = st64(t + 408, ld64(t + 408) - 1);
-        Int _s = st64(t + 416, ld64(t + 416) - h);
+        _ = st64(link, ld64(b + 8));
+        _ = st64(t + 408, ld64(t + 408) - 1);
+        _ = st64(t + 416, ld64(t + 416) - h);
         return b;
     }
     return cache_scan(t, b + 8, sz);
@@ -212,14 +212,14 @@ pub Int c_realloc(Int p, Int n) {
     if (h >= 64) {
         // A big block moves with its mapping.
         Int sz = (n + 16 + 4095) & (0 - 4096);
-        Int _t = mem_take(sz - h);
+        _ = mem_take(sz - h);
         Int q = resid_raw_syscall(25, p - 16, h, sz, 1, 0, 0);   // mremap MAYMOVE
         if (q < 0 && q > 0 - 4096) { return 0; }
         return st64(q, sz) * 0 + q + 16;
     }
     Int q = c_malloc(n);
     if (q == 0) { return 0; }
-    Int _c = mcopy(q, p, block_room(p));
+    _ = mcopy(q, p, block_room(p));
     return c_free(p) * 0 + q;
 }
 

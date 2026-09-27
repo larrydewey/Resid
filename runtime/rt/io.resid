@@ -19,10 +19,10 @@ pub Bool rt_print(Int s) { return write_cstr(1, s); }
 // A line in one system call (writev of the text and "\n").
 pub Bool write_line(Int fd, Int p, Int n) {
     Int iov = resid_raw_tls("iov", 32);
-    Int _a = st64(iov, p);
-    Int _b = st64(iov + 8, n);
-    Int _c = st64(iov + 16, resid_raw_addr("\n"));
-    Int _d = st64(iov + 24, 1);
+    _ = st64(iov, p);
+    _ = st64(iov + 8, n);
+    _ = st64(iov + 16, resid_raw_addr("\n"));
+    _ = st64(iov + 24, 1);
     Int w = resid_raw_syscall(20, fd, iov, 2, 0, 0, 0);
     if (w == n + 1) { return true; }
     // Short or interrupted: finish with plain writes.

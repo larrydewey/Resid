@@ -4469,9 +4469,15 @@ List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(
 List(Str) main_entry_ir() {
     // The process entry (no C library): resid_start sets up the process,
     // main runs, its result is the exit status.
+    return ["define i32 @main() {", "entry:", "  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"].concat(start_entry_ir());
+}
+
+// The process entry alone, around whichever @main the program defines (a
+// test binary's is generated).
+List(Str) start_entry_ir() {
     Str nl = "\\0A";
     Str st = "xor %ebp, %ebp" + nl + "mov %rsp, %rdi" + nl + "lea _DYNAMIC(%rip), %rsi" + nl + "and $$-16, %rsp" + nl + "call resid_start" + nl + "call main" + nl + "mov %eax, %edi" + nl + "mov $$231, %eax" + nl + "syscall" + nl + "hlt";
-    return ["define i32 @main() {", "entry:", "  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}", "declare void @resid_start(ptr, ptr)", "define void @_start() naked noinline nounwind {", "  call void asm sideeffect \"" + st + "\", \"~{memory}\"()", "  unreachable", "}", "@llvm.compiler.used = appending global [2 x ptr] [ptr @main, ptr @resid_start], section \"llvm.metadata\""];
+    return ["declare void @resid_start(ptr, ptr)", "define void @_start() naked noinline nounwind {", "  call void asm sideeffect \"" + st + "\", \"~{memory}\"()", "  unreachable", "}", "@llvm.compiler.used = appending global [2 x ptr] [ptr @main, ptr @resid_start], section \"llvm.metadata\""];
 }
 
 // %mag is divided as an UNSIGNED value: for INT64_MIN, `0 - v` is INT64_MIN
@@ -7103,6 +7109,7 @@ import "reduce.resid";
 import "greduce.resid";
 import "gart.resid";
 import "desugar.resid";
+import "lsp.resid";
 
 // ─── `<out>.resid-notes.cbor` sidecar (spec §27/§34) ───────────────
 // Byte-exact with the Rust pipeline's `resid_notes`/`resid_cache::cbor`
@@ -7535,11 +7542,13 @@ Int main() {
     Int argc  =  args.count();
     if (argc < 2) {
         println("usage: driver <source.res> [-o out] [-rt resid_rt.c] [-O0|-O1|-O2|-O3|-Os|-Oz]");
-        println("       driver keygen [dir] | driver verify <binary> [--pub HEX]");
+        println("       driver keygen [dir] | driver verify <binary> [--pub HEX] | driver lsp");
         println("       driver test <file.resid> [--filter RE] [--format pretty|tap|json]");
         return 1;
     }
     Str arg1  =  args.get(1);
+    // `residc lsp`: the language server (compiler/lsp.resid) on stdio.
+    if (arg1 == "lsp") { return lsp_main(); }
     if (arg1 == "keygen") {
         return cmd_keygen(if (argc >= 3) { args.get(2) } else { "keys" });
     }
@@ -7760,7 +7769,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     List(Str) mid = ol.concat(res.hlines);
     List(Str) all0 = mid.concat(rtg_dedupe(res.glines, 0, [], ListBuf()));
     List(Str) all1 = if (fn_index(fs, "main") >= 0) { all0.concat(main_entry_ir()) } else { all0 };
-    List(Str) all2 = if (testmode) { all1.concat(td_main_ir(td.names, td.syms, td_module_name(path))) } else { all1 };
+    List(Str) all2 = if (testmode) { all1.concat(td_main_ir(td.names, td.syms, td_module_name(path))).concat(start_entry_ir()) } else { all1 };
     List(Str) all = if (gdbg) { all2.concat(dbg_unit_ir(gdf.paths)) } else { all2 };
     Str doc  =  str_join(if (rtmod) { rt_clean(all.concat(rt_asm_defs())) } else { all }, "\n") + "\n";
     // Debug builds record each runtime check for the artifact's facts.

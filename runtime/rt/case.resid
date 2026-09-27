@@ -78,7 +78,7 @@ Int lower_at(Int s, Int p, Int w) {
 pub Int rt_str_to_lower(Int s) {
     Int out = ralloc(rt_str_len(s) * 4 + 8);
     Int e = lower_at(s, s, out);
-    Int _z = st8(e, 0);
+    _ = st8(e, 0);
     return out;
 }
 
@@ -93,13 +93,13 @@ Int upper_at(Int p, Int w) {
 
 // Bytes stored one per word at src, to dst; returns the count.
 Int copy_words(Int dst, Int src, Int n) {
-    Int _k = copy_words_at(dst, src, 0, n);
+    _ = copy_words_at(dst, src, 0, n);
     return n;
 }
 
 Int copy_words_at(Int dst, Int src, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int _s = st8(dst + i, ld64(src + i * 8));
+    _ = st8(dst + i, ld64(src + i * 8));
     return copy_words_at(dst, src, i + 1, n);
 }
 
@@ -108,7 +108,7 @@ pub Int rt_str_to_upper(Int s) {
     // An expansion is at most 9 bytes for a 1-4 byte codepoint.
     Int out = ralloc(rt_str_len(s) * 9 + 8);
     Int e = upper_at(s, out);
-    Int _z = st8(e, 0);
+    _ = st8(e, 0);
     return out;
 }
 

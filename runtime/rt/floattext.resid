@@ -24,9 +24,9 @@ Bool bn_zero(Int b) { return bn_len(b) == 0; }
 Int mask32() { return 4294967295; }
 
 Int bn_from(Int b, Int v) {
-    Int _a = bn_set(b, 0, v & mask32());
-    Int _b = bn_set(b, 1, lshr(v, 32));
-    Int _l = st64(b, 2);
+    _ = bn_set(b, 0, v & mask32());
+    _ = bn_set(b, 1, lshr(v, 32));
+    _ = st64(b, 2);
     return bn_trim(b);
 }
 
@@ -37,14 +37,14 @@ pub Int bn_muladd(Int b, Int m, Int a) {
     Int c = muladd_at(b, m, 0, bn_len(b), a);
     if (c == 0) { return 0; }
     Int n = bn_len(b);
-    Int _s = bn_set(b, n, c);
+    _ = bn_set(b, n, c);
     return st64(b, n + 1);
 }
 
 Int muladd_at(Int b, Int m, Int i, Int n, Int c) {
     if (i >= n) { return c; }
     Int t = bn_l(b, i) * m + c;       // < 2^64 as unsigned
-    Int _s = bn_set(b, i, t & mask32());
+    _ = bn_set(b, i, t & mask32());
     return muladd_at(b, m, i + 1, n, lshr(t, 32));
 }
 
@@ -58,7 +58,7 @@ Int divsmall_at(Int b, Int d, Int i, Int r) {
     if (i < 0) { return r; }
     Int cur = (r << 32) | bn_l(b, i);
     Int q = (Int)((UInt(64))cur / (UInt(64))d);
-    Int _s = bn_set(b, i, q);
+    _ = bn_set(b, i, q);
     return divsmall_at(b, d, i - 1, cur - q * d);
 }
 
@@ -74,10 +74,10 @@ Int bn_shl(Int b, Int k) {
     Int ws = k / 32;
     Int bs = k % 32;
     Int n = bn_len(b);
-    Int _t = bn_set(b, n + ws, 0);
-    Int _m = shl_limbs(b, n - 1, ws, bs);
-    Int _z = zero_limbs(b, 0, ws);
-    Int _l = st64(b, n + ws + 1);
+    _ = bn_set(b, n + ws, 0);
+    _ = shl_limbs(b, n - 1, ws, bs);
+    _ = zero_limbs(b, 0, ws);
+    _ = st64(b, n + ws + 1);
     return bn_trim(b);
 }
 
@@ -85,14 +85,14 @@ Int shl_limbs(Int b, Int i, Int ws, Int bs) {
     if (i < 0) { return 0; }
     Int v = bn_l(b, i);
     Int hi = if (bs == 0) { 0 } else { lshr(v, 32 - bs) };
-    Int _h = bn_set(b, i + ws + 1, bn_l(b, i + ws + 1) | hi);
-    Int _l = bn_set(b, i + ws, (v << bs) & mask32());
+    _ = bn_set(b, i + ws + 1, bn_l(b, i + ws + 1) | hi);
+    _ = bn_set(b, i + ws, (v << bs) & mask32());
     return shl_limbs(b, i - 1, ws, bs);
 }
 
 Int zero_limbs(Int b, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int _z = bn_set(b, i, 0);
+    _ = bn_set(b, i, 0);
     return zero_limbs(b, i + 1, n);
 }
 
@@ -102,8 +102,8 @@ Int bn_shr(Int b, Int k) {
     Int bs = k % 32;
     Int n = bn_len(b);
     if (ws >= n) { return st64(b, 0); }
-    Int _m = shr_limbs(b, 0, n - ws, ws, bs, n);
-    Int _l = st64(b, n - ws);
+    _ = shr_limbs(b, 0, n - ws, ws, bs, n);
+    _ = st64(b, n - ws);
     return bn_trim(b);
 }
 
@@ -111,7 +111,7 @@ Int shr_limbs(Int b, Int i, Int m, Int ws, Int bs, Int n) {
     if (i >= m) { return 0; }
     Int lo = lshr(bn_l(b, i + ws), bs);
     Int hi = if (bs != 0 && i + ws + 1 < n) { (bn_l(b, i + ws + 1) << (32 - bs)) & mask32() } else { 0 };
-    Int _s = bn_set(b, i, lo | hi);
+    _ = bn_set(b, i, lo | hi);
     return shr_limbs(b, i + 1, m, ws, bs, n);
 }
 
@@ -120,8 +120,8 @@ Int bn_lowbits(Int b, Int k) {
     Int ws = k / 32;
     Int bs = k % 32;
     if (ws >= bn_len(b)) { return 0; }
-    Int _m = bn_set(b, ws, bn_l(b, ws) & ((1 << bs) - 1));
-    Int _l = st64(b, ws + 1);
+    _ = bn_set(b, ws, bn_l(b, ws) & ((1 << bs) - 1));
+    _ = st64(b, ws + 1);
     return bn_trim(b);
 }
 
@@ -142,7 +142,7 @@ Int cmp_limbs(Int a, Int b, Int i) {
 
 // a -= b (a >= b).
 Int bn_sub(Int a, Int b) {
-    Int _s = sub_limbs(a, b, 0, bn_len(a), bn_len(b), 0);
+    _ = sub_limbs(a, b, 0, bn_len(a), bn_len(b), 0);
     return bn_trim(a);
 }
 
@@ -150,13 +150,13 @@ Int sub_limbs(Int a, Int b, Int i, Int na, Int nb, Int br) {
     if (i >= na) { return 0; }
     Int y = if (i < nb) { bn_l(b, i) } else { 0 };
     Int t = bn_l(a, i) - y - br;
-    Int _s = bn_set(a, i, t & mask32());
+    _ = bn_set(a, i, t & mask32());
     return sub_limbs(a, b, i + 1, na, nb, if (t < 0) { 1 } else { 0 });
 }
 
 // b = 10^e (e >= 0).
 Int bn_pow10(Int b, Int e) {
-    Int _o = bn_from(b, 1);
+    _ = bn_from(b, 1);
     return pow10_at(b, e);
 }
 
@@ -202,13 +202,13 @@ pub Float c_strtod(Int s, Int endp) {
     if (inf == 3) {
         Int full = word_at(p, resid_raw_addr("infinity"));
         Int e = p + (if (full == 8) { 8 } else { 3 });
-        Int _s = set_end(endp, e);
+        _ = set_end(endp, e);
         return signed_f(neg, bits_f(2047 << 52));
     }
     if (word_at(p, resid_raw_addr("nan")) == 3) {
         Int q = p + 3;
         Int e = if (ld8(q) == 40) { nan_close(q + 1, q) } else { q };
-        Int _s = set_end(endp, e);
+        _ = set_end(endp, e);
         return bits_f((if (neg) { 4095 << 51 } else { 4095 << 51 }) | (if (neg) { 1 << 63 } else { 0 }));
     }
     if (ld8(p) == 48 && lower(ld8(p + 1)) == 120 && (hexval(ld8(p + 2)) >= 0 || (ld8(p + 2) == 46 && hexval(ld8(p + 3)) >= 0))) {
@@ -240,32 +240,32 @@ Int dset(Int i, Int v) { return st64(ds() + i * 8, v); }
 // Up to 800 significant digits enter the mantissa; later ones only set
 // sticky (and shift the exponent when before the point).
 Int take_digit(Int d, Bool frac) {
-    Int _seen = dset(4, dg(4) + 1);
+    _ = dset(4, dg(4) + 1);
     Bool lead = dg(1) == 0 && d == 0;
     if (lead) { return if (frac) { dset(3, dg(3) - 1) } else { 0 }; }
     if (dg(1) < 800) {
-        Int _m = bn_muladd(dg(0), 10, d);
-        Int _k = dset(1, dg(1) + 1);
+        _ = bn_muladd(dg(0), 10, d);
+        _ = dset(1, dg(1) + 1);
         return if (frac) { dset(3, dg(3) - 1) } else { 0 };
     }
-    Int _s = if (d != 0) { dset(2, 1) } else { 0 };
+    _ = if (d != 0) { dset(2, 1) } else { 0 };
     return if (frac) { 0 } else { dset(3, dg(3) + 1) };
 }
 
 Int scan_digits(Int p, Bool frac) {
     Int c = ld8(p);
     if (c < 48 || c > 57) { return p; }
-    Int _t = take_digit(c - 48, frac);
+    _ = take_digit(c - 48, frac);
     return scan_digits(p + 1, frac);
 }
 
 Float dec_float(Int p, Int s, Int endp) {
     Int m = bn_new();
-    Int _i = dset(0, m) + dset(1, 0) + dset(2, 0) + dset(3, 0) + dset(4, 0);
+    _ = dset(0, m) + dset(1, 0) + dset(2, 0) + dset(3, 0) + dset(4, 0);
     Int p1 = scan_digits(p, false);
     Int p2 = if (ld8(p1) == 46) { scan_digits(p1 + 1, true) } else { p1 };
     if (dg(4) == 0) {
-        Int _s = set_end(endp, s) + c_free(m);
+        _ = set_end(endp, s) + c_free(m);
         return 0.0;
     }
     Int ec = lower(ld8(p2));
@@ -274,10 +274,10 @@ Float dec_float(Int p, Int s, Int endp) {
     Bool hase = ec == 101 && ld8(pd) >= 48 && ld8(pd) <= 57;
     Int ev = if (hase) { exp_digits(pd, 0) } else { 0 };
     Int pe = if (hase) { ld64(ds() + 40) } else { p2 };
-    Int _e = set_end(endp, pe);
+    _ = set_end(endp, pe);
     Int e10 = dg(3) + (if (hase && es == 45) { 0 - ev } else { ev });
     Float r = decimal_to_double(m, e10, dg(2) != 0);
-    Int _f = c_free(m);
+    _ = c_free(m);
     return r;
 }
 
@@ -305,18 +305,18 @@ pub Float decimal_to_double(Int m, Int e10, Bool sticky) {
     if ((bl - 1) * 30103 / 100000 + e10 > 330) { return bits_f(2047 << 52); }
     if (bl * 30103 / 100000 + 1 + e10 < 0 - 350) { return 0.0; }
     if (e10 >= 0) {
-        Int _p = mul_pow10(m, e10);
+        _ = mul_pow10(m, e10);
         return big_to_double(m, 0, sticky);
     }
     // m / 10^-e10: a quotient of at least 66 bits, the remainder sticky.
     Int q = bn_new();
-    Int _p = bn_pow10(q, 0 - e10);
+    _ = bn_pow10(q, 0 - e10);
     Int k = max(0, bn_bitlen(q) - bn_bitlen(m) + 66);
-    Int _s = bn_shl(m, k);
+    _ = bn_shl(m, k);
     Int quo = bn_new();
     Bool rem = bn_divmod(m, q, quo);
     Float r = big_to_double(quo, 0 - k, sticky || rem);
-    Int _f = c_free(q) + c_free(quo);
+    _ = c_free(q) + c_free(quo);
     return r;
 }
 
@@ -329,7 +329,7 @@ Int mul_pow10(Int m, Int e) {
     if (e <= 0) { return 0; }
     Int step = min(e, 9);
     Int f = ld64(resid_raw_table([1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000]) + step * 8);
-    Int _m = bn_muladd(m, f, 0);
+    _ = bn_muladd(m, f, 0);
     return mul_pow10(m, e - step);
 }
 
@@ -337,22 +337,22 @@ Int mul_pow10(Int m, Int e) {
 Bool bn_divmod(Int n, Int d, Int q) {
     Int dn = bn_len(d);
     if (dn == 1) {
-        Int _c = bn_copy(q, n);
+        _ = bn_copy(q, n);
         return bn_divsmall(q, bn_l(d, 0)) != 0;
     }
     if (bn_cmp(n, d) < 0) { return st64(q, 0) * 0 + 1 == 1 && !bn_zero(n); }
     // Normalize: the divisor's top limb gets its high bit set.
     Int sh = 32 - bitlen(bn_l(d, dn - 1));
     Int dd = bn_new();
-    Int _c = bn_copy(dd, d);
-    Int _s1 = bn_shl(dd, sh);
-    Int _s2 = bn_shl(n, sh);
+    _ = bn_copy(dd, d);
+    _ = bn_shl(dd, sh);
+    _ = bn_shl(n, sh);
     Int nn = bn_len(n);
-    Int _x = bn_set(n, nn, 0);            // one spare top limb
+    _ = bn_set(n, nn, 0);            // one spare top limb
     Int m = nn - dn;
-    Int _q = zero_limbs(q, 0, m + 1) + st64(q, m + 1);
-    Int _d = knuth_steps(n, dd, q, dn, m, bn_l(dd, dn - 1), bn_l(dd, dn - 2));
-    Int _t = bn_trim(q);
+    _ = zero_limbs(q, 0, m + 1) + st64(q, m + 1);
+    _ = knuth_steps(n, dd, q, dn, m, bn_l(dd, dn - 1), bn_l(dd, dn - 2));
+    _ = bn_trim(q);
     Bool rem = limbs_nz(n, 0, dn);
     return c_free(dd) == 0 && rem;
 }
@@ -366,10 +366,10 @@ Int knuth_steps(Int u, Int v, Int q, Int n, Int j, Int vt, Int vs) {
     // u[j..j+n] -= qh * v.
     Int br = mulsub(u, v, qh, j, 0, n, 0, 0);
     Int top = bn_l(u, j + n) - br;
-    Int _t = bn_set(u, j + n, top & mask32());
+    _ = bn_set(u, j + n, top & mask32());
     Bool neg = top < 0;
-    Int _a = if (neg) { addback(u, v, j, 0, n, 0) } else { 0 };
-    Int _q = bn_set(q, j, if (neg) { qh - 1 } else { qh });
+    _ = if (neg) { addback(u, v, j, 0, n, 0) } else { 0 };
+    _ = bn_set(q, j, if (neg) { qh - 1 } else { qh });
     return knuth_steps(u, v, q, n, j - 1, vt, vs);
 }
 
@@ -385,14 +385,14 @@ Int mulsub(Int u, Int v, Int qh, Int j, Int i, Int n, Int carry, Int br) {
     if (i >= n) { return carry + br; }
     Int p = qh * bn_l(v, i) + carry;               // < 2^64 unsigned
     Int t = bn_l(u, i + j) - (p & mask32()) - br;
-    Int _s = bn_set(u, i + j, t & mask32());
+    _ = bn_set(u, i + j, t & mask32());
     return mulsub(u, v, qh, j, i + 1, n, lshr(p, 32), if (t < 0) { 1 } else { 0 });
 }
 
 Int addback(Int u, Int v, Int j, Int i, Int n, Int c) {
     if (i >= n) { return bn_set(u, j + n, (bn_l(u, j + n) + c) & mask32()); }
     Int t = bn_l(u, i + j) + bn_l(v, i) + c;
-    Int _s = bn_set(u, i + j, t & mask32());
+    _ = bn_set(u, i + j, t & mask32());
     return addback(u, v, j, i + 1, n, lshr(t, 32));
 }
 
@@ -442,15 +442,15 @@ Bool limbs_nz(Int q, Int i, Int n) {
 // q >> drop (or q << -drop), which fits in 64 bits.
 Int top_bits(Int q, Int drop) {
     Int t = bn_new();
-    Int _c = bn_copy(t, q);
-    Int _s = if (drop > 0) { bn_shr(t, drop) } else { bn_shl(t, 0 - drop) };
+    _ = bn_copy(t, q);
+    _ = if (drop > 0) { bn_shr(t, drop) } else { bn_shl(t, 0 - drop) };
     Int v = bn_w(t, 0) | (bn_w(t, 1) << 32);
     return c_free(t) * 0 + v;
 }
 
 Float hex_float(Int p, Int endp) {
     Int m = bn_new();
-    Int _i = dset(0, 0) + dset(1, 0) + dset(2, 0) + dset(3, 0);   // 2: sticky, 3: binary exponent
+    _ = dset(0, 0) + dset(1, 0) + dset(2, 0) + dset(3, 0);   // 2: sticky, 3: binary exponent
     Int p1 = hex_digits(m, p, false);
     Int p2 = if (ld8(p1) == 46) { hex_digits(m, p1 + 1, true) } else { p1 };
     Int es = ld8(p2 + 1);
@@ -458,10 +458,10 @@ Float hex_float(Int p, Int endp) {
     Bool hasp = lower(ld8(p2)) == 112 && ld8(pd) >= 48 && ld8(pd) <= 57;
     Int ev = if (hasp) { exp_digits(pd, 0) } else { 0 };
     Int pe = if (hasp) { ld64(ds() + 40) } else { p2 };
-    Int _e = set_end(endp, pe);
+    _ = set_end(endp, pe);
     Int e2 = dg(3) + (if (hasp && es == 45) { 0 - ev } else { ev });
     Float r = if (bn_zero(m)) { 0.0 } else { big_to_double(m, e2, dg(2) != 0) };
-    Int _f = c_free(m);
+    _ = c_free(m);
     return r;
 }
 
@@ -470,8 +470,8 @@ Int hex_digits(Int m, Int p, Bool frac) {
     Int v = hexval(ld8(p));
     if (v < 0) { return p; }
     Bool keep = bn_bitlen(m) < 256;
-    Int _a = if (keep) { bn_muladd(m, 16, v) } else { if (v != 0) { dset(2, 1) } else { 0 } };
-    Int _e = if (frac && keep) { dset(3, dg(3) - 4) } else { if (!frac && !keep) { dset(3, dg(3) + 4) } else { 0 } };
+    _ = if (keep) { bn_muladd(m, 16, v) } else { if (v != 0) { dset(2, 1) } else { 0 } };
+    _ = if (frac && keep) { dset(3, dg(3) - 4) } else { if (!frac && !keep) { dset(3, dg(3) + 4) } else { 0 } };
     return hex_digits(m, p + 1, frac);
 }
 
@@ -486,20 +486,20 @@ Int fx() { return resid_raw_tls("ffmt_st", 24); }
 Int expand(Int m, Int e2, Int dbuf, Int need) {
     Int ip = bn_new();
     Int fr = bn_new();
-    Int _a = bn_from(ip, m);
-    Int _b = if (e2 >= 0) { bn_shl(ip, e2) + st64(fr, 0) } else { bn_copy(fr, ip) + bn_shr(ip, 0 - e2) + bn_lowbits(fr, 0 - e2) };
+    _ = bn_from(ip, m);
+    _ = if (e2 >= 0) { bn_shl(ip, e2) + st64(fr, 0) } else { bn_copy(fr, ip) + bn_shr(ip, 0 - e2) + bn_lowbits(fr, 0 - e2) };
     Int fbits = if (e2 >= 0) { 0 } else { 0 - e2 };
     // Integer digits, most significant first.
     Int tmp = xmalloc(360);
     Int il = int_digits(ip, tmp, 0);
     Int kept = min(il, need);
-    Int _r = rev_into(tmp, il, dbuf, kept);
+    _ = rev_into(tmp, il, dbuf, kept);
     Bool isticky = digits_nz(tmp, 0, il - kept);
-    Int _x = st64(fx(), il) + st64(fx() + 8, kept) + st64(fx() + 16, if (isticky) { 1 } else { 0 });
-    Int _f = if (il == 0) { lead_zeros(fr, fbits) } else { 0 };
+    _ = st64(fx(), il) + st64(fx() + 8, kept) + st64(fx() + 16, if (isticky) { 1 } else { 0 });
+    _ = if (il == 0) { lead_zeros(fr, fbits) } else { 0 };
     Int n = frac_digits(fr, fbits, dbuf, kept, need);
-    Int _c = st64(fx() + 8, n);
-    Int _s = if (!bn_zero(fr)) { st64(fx() + 16, 1) } else { 0 };
+    _ = st64(fx() + 8, n);
+    _ = if (!bn_zero(fr)) { st64(fx() + 16, 1) } else { 0 };
     return c_free(ip) + c_free(fr) + c_free(tmp);
 }
 
@@ -515,7 +515,7 @@ Int rev_into(Int tmp, Int il, Int dbuf, Int kept) { return rev_at(tmp, il, dbuf,
 
 Int rev_at(Int tmp, Int il, Int dbuf, Int j, Int kept) {
     if (j >= kept) { return 0; }
-    Int _s = st8(dbuf + j, ld8(tmp + il - 1 - j));
+    _ = st8(dbuf + j, ld8(tmp + il - 1 - j));
     return rev_at(tmp, il, dbuf, j + 1, kept);
 }
 
@@ -528,23 +528,23 @@ Bool digits_nz(Int tmp, Int i, Int n) {
 Int lead_zeros(Int fr, Int fbits) {
     if (bn_zero(fr)) { return 0; }
     Int t = bn_new();
-    Int _c = bn_copy(t, fr);
-    Int _m = bn_muladd(t, 10, 0);
-    Int _s = bn_shr(t, fbits);
+    _ = bn_copy(t, fr);
+    _ = bn_muladd(t, 10, 0);
+    _ = bn_shr(t, fbits);
     Bool z = bn_zero(t);
-    Int _f = c_free(t);
+    _ = c_free(t);
     if (!z) { return 0; }
-    Int _n = bn_muladd(fr, 10, 0);
-    Int _x = st64(fx(), ld64(fx()) - 1);
+    _ = bn_muladd(fr, 10, 0);
+    _ = st64(fx(), ld64(fx()) - 1);
     return lead_zeros(fr, fbits);
 }
 
 Int frac_digits(Int fr, Int fbits, Int dbuf, Int n, Int need) {
     if (n >= need || bn_zero(fr)) { return n; }
-    Int _m = bn_muladd(fr, 10, 0);
+    _ = bn_muladd(fr, 10, 0);
     Int d = digit_above(fr, fbits);
-    Int _l = bn_lowbits(fr, fbits);
-    Int _s = st8(dbuf + n, d);
+    _ = bn_lowbits(fr, fbits);
+    _ = st8(dbuf + n, d);
     return frac_digits(fr, fbits, dbuf, n + 1, need);
 }
 
@@ -561,18 +561,18 @@ Int digit_above(Int fr, Int fbits) {
 // digit count becomes keep (padding with zeros).
 Int round_digits(Int dbuf, Int keep) {
     Int n = ld64(fx() + 8);
-    Int _p = if (n < keep + 1) { resid_raw_fill(dbuf + n, 0, keep + 1 - n) } else { 0 };
+    _ = if (n < keep + 1) { resid_raw_fill(dbuf + n, 0, keep + 1 - n) } else { 0 };
     if (keep < 0) { return st64(fx() + 8, 0); }
     Int rd = ld8(dbuf + keep);
     Bool rest = ld64(fx() + 16) != 0 || digits_nz(dbuf, keep + 1, max(n, keep + 1));
     Bool odd = keep > 0 && (ld8(dbuf + keep - 1) & 1) == 1;
     Bool up = rd > 5 || (rd == 5 && (rest || odd));
-    Int _c = st64(fx() + 8, keep);
+    _ = st64(fx() + 8, keep);
     if (!up) { return 0; }
     if (keep == 0) {
         // Everything rounds up to a single 1 one place higher.
-        Int _o = st8(dbuf, 1);
-        Int _x = st64(fx(), ld64(fx()) + 1);
+        _ = st8(dbuf, 1);
+        _ = st64(fx(), ld64(fx()) + 1);
         return st64(fx() + 8, 1);
     }
     return carry_up(dbuf, keep - 1, keep);
@@ -581,13 +581,13 @@ Int round_digits(Int dbuf, Int keep) {
 Int carry_up(Int dbuf, Int i, Int keep) {
     if (i < 0) {
         // All nines: 1 followed by zeros, one place higher.
-        Int _o = st8(dbuf, 1);
-        Int _z = resid_raw_fill(dbuf + 1, 0, keep - 1);
+        _ = st8(dbuf, 1);
+        _ = resid_raw_fill(dbuf + 1, 0, keep - 1);
         return st64(fx(), ld64(fx()) + 1);
     }
     Int d = ld8(dbuf + i);
     if (d < 9) { return st8(dbuf + i, d + 1); }
-    Int _z = st8(dbuf + i, 0);
+    _ = st8(dbuf + i, 0);
     return carry_up(dbuf, i - 1, keep);
 }
 
@@ -628,8 +628,8 @@ pub Int c_strfromd(Int buf, Int n, Int fmt, Float v) {
     Int out = xmalloc(2048);
     Int len = format_double(out, v, pv, conv == 102);
     Int k = min(len, n - 1);
-    Int _c = mcopy(buf, out, k);
-    Int _z = st8(buf + k, 0);
+    _ = mcopy(buf, out, k);
+    _ = st8(buf + k, 0);
     return c_free(out) * 0 + len;
 }
 
@@ -666,9 +666,9 @@ Int fmt_f(Int o, Int k0, Int m, Int e2, Int prec, Int dbuf) {
     Int x = if (m == 0) { 1 } else { expand_x(m, e2) };
     // Digits needed: those before the point plus prec.
     Int need = max(x + prec, 0);
-    Int _e = if (m == 0) { st64(fx(), 1) + st64(fx() + 8, 0) + st64(fx() + 16, 0) } else { expand(m, e2, dbuf, need + 1) };
+    _ = if (m == 0) { st64(fx(), 1) + st64(fx() + 8, 0) + st64(fx() + 16, 0) } else { expand(m, e2, dbuf, need + 1) };
     Int xx = ld64(fx());
-    Int _r = round_digits(dbuf, xx + prec);
+    _ = round_digits(dbuf, xx + prec);
     Int x2 = ld64(fx());
     Int n = ld64(fx() + 8);
     Int k1 = if (x2 > 0) { put_digits_from(o, k0, dbuf, 0, x2, n) } else { put(o, k0, 48) };
@@ -683,14 +683,14 @@ Int fmt_f(Int o, Int k0, Int m, Int e2, Int prec, Int dbuf) {
 // X for |v| = m * 2^e2 (the decimal exponent, value = 0.d... * 10^X).
 Int expand_x(Int m, Int e2) {
     Int d = xmalloc(4);
-    Int _e = expand(m, e2, d, 1);
+    _ = expand(m, e2, d, 1);
     return c_free(d) * 0 + ld64(fx());
 }
 
 Int fmt_g(Int o, Int k0, Int m, Int e2, Int prec, Int dbuf) {
     if (m == 0) { return put(o, k0, 48); }
-    Int _e = expand(m, e2, dbuf, prec + 1);
-    Int _r = round_digits(dbuf, prec);
+    _ = expand(m, e2, dbuf, prec + 1);
+    _ = round_digits(dbuf, prec);
     Int x = ld64(fx());
     Int e = x - 1;
     Int n = ld64(fx() + 8);

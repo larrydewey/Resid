@@ -306,6 +306,40 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0zo. Language server, residc test, more arena leaks (2026-09-27)
+
+- `residc lsp` (`compiler/lsp.resid`): a language server over stdio that
+  runs the compiler's own front end in process on the editor's buffer.
+  It publishes diagnostics on open, change and save, and answers hover
+  (signature, `///` doc, type), definition (across imports), document
+  symbols and completion. Compiler output is captured through a memfd
+  on fds 1 and 2, and the protocol goes out on a duplicate of stdout.
+  Each message runs in a bulk arena, and open documents live in memfds.
+  `tests/lsp/run.sh` drives it over a two-file project and checks that
+  memory stays flat across edits. The VS Code extension (0.3.0)
+  launches `residc lsp`. The Rust `tools/resid-lsp`, `resid-notes` and
+  `resid-cache` and the Cargo workspace are deleted.
+- More heap memory escaped phase arenas; the long-running server
+  exposed it:
+  - `filesystem.read_all` results;
+  - `str_split`'s last piece and other `cstr_dup` values;
+  - evacuated maps (`resid_map_evac`), whose later in-place updates then
+    also went to the heap;
+  - tries cached on frozen maps (`map_root`).
+  These now live where their owner does: `arena_adopt` for strings,
+  `rdup` for arena-aware copies, `evac_obj` to the current bulk arena,
+  and `map_home` for caches.
+- A reducer hazard: a function called with constant arguments that
+  recurses on a known counter (a byte-reading loop) was unrolled up to
+  the specialization limit, costing about 150MB at compile time. The LSP
+  marks those arguments `rt`. The reducer itself should stop
+  specializing through effects; that is still open.
+- `residc test` had no `_start` since the C library went away (the test
+  entry point is generated): `start_entry_ir` now serves both entry
+  points, and `tests/runtime/run.sh` runs `examples/math_test.resid`.
+- The runtime uses `_ = expr;` for discarded results: 888 former
+  `Int _x = ...;` bindings, with equivalent IR.
+
 ### 0zn. Self-compile memory 420MB -> 272MB, time 1.6s -> 1.0s (2026-09-27)
 
 Most of the peak was memory a phase arena should have freed but that went

@@ -28,16 +28,19 @@ pub Int ralloc(Int n) { return rt_alloc(n); }
 pub Int cstr_dup(Int s) {
     Int n = c_strlen(s);
     Int p = xmalloc(n + 1);
-    Int _c = mcopy(p, s, n + 1);
+    _ = mcopy(p, s, n + 1);
     return p;
 }
+
+// An arena-aware copy of C string `s` (a value, never freed by hand).
+pub Int rdup(Int s) { return cstr_from(s, c_strlen(s), 1); }
 
 // Bytes [p, p + n) as a new NUL-terminated string from `alloc_kind`
 // (0 heap, 1 arena-aware).
 pub Int cstr_from(Int p, Int n, Int kind) {
     Int d = if (kind == 0) { xmalloc(n + 1) } else { ralloc(n + 1) };
-    Int _c = mcopy(d, p, n);
-    Int _z = st8(d + n, 0);
+    _ = mcopy(d, p, n);
+    _ = st8(d + n, 0);
     return d;
 }
 

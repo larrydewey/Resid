@@ -11,7 +11,7 @@ pub Int rt_int_to_string(Int v) {
 // Digits of an unsigned 64-bit value.
 pub Int utoa_into(Int buf, Int v) {
     Int nd = udigits(v, 1);
-    Int _w = uput(buf + nd - 1, v);
+    _ = uput(buf + nd - 1, v);
     return nd;
 }
 
@@ -33,7 +33,7 @@ pub Int rt_uint128_to_string(Int(128) v) { return limbs_to_str(limbs_i128(v), 2,
 Int limbs_negate(Int w, Int k, Int count, Int carry) {
     if (k >= count) { return 0; }
     Int inv = ~ld64(w + k * 8);
-    Int _s = st64(w + k * 8, inv + carry);
+    _ = st64(w + k * 8, inv + carry);
     Int c2 = if (carry == 1 && inv == 0 - 1) { 1 } else { 0 };
     return limbs_negate(w, k + 1, count, c2);
 }
@@ -49,19 +49,19 @@ Int limbs_div10(Int w, Int k, Int r) {
     if (k < 0) { return r; }
     UInt(128) cur = ((UInt(128))r << (UInt(128))64) | ((UInt(128))ld64(w + k * 8) & (UInt(128))18446744073709551615);
     UInt(128) q = cur / (UInt(128))10;
-    Int _s = st64(w + k * 8, (Int)q);
+    _ = st64(w + k * 8, (Int)q);
     return limbs_div10(w, k - 1, (Int)(cur - q * (UInt(128))10));
 }
 
 Int limbs_digits(Int w, Int count, Int at) {
     Int r = limbs_div10(w, count - 1, 0);
-    Int _s = st8(at - 1, 48 + r);
+    _ = st8(at - 1, 48 + r);
     if (limbs_zero(w, 0, count)) { return at - 1; }
     return limbs_digits(w, count, at - 1);
 }
 
 pub Int limbs_to_str(Int w, Int count, Bool neg) {
-    Int _n = if (neg) { limbs_negate(w, 0, count, 1) } else { 0 };
+    _ = if (neg) { limbs_negate(w, 0, count, 1) } else { 0 };
     Int buf = resid_raw_tls("limb_buf", 208);
     Int p = limbs_digits(w, count, buf + 204);
     Int start = if (neg) { st8(p - 1, 45) + p - 1 } else { p };
@@ -70,30 +70,30 @@ pub Int limbs_to_str(Int w, Int count, Bool neg) {
 
 Int limbs_i128(Int(128) v) {
     Int w = resid_raw_tls("limbs", 64);
-    Int _a = st64(w, (Int)v);
+    _ = st64(w, (Int)v);
     return st64(w + 8, (Int)(v >> (Int(128))64)) * 0 + w;
 }
 
 // The 16-byte payload of an Int(128) / UInt(128) scalar box.
 pub Int limbs2(Int p) {
     Int w = resid_raw_tls("limbs", 64);
-    Int _a = st64(w, ld64(p + 24));
+    _ = st64(w, ld64(p + 24));
     return st64(w + 8, ld64(p + 32)) * 0 + w;
 }
 
 Int limbs4(Int l0, Int l1, Int l2, Int l3) {
     Int w = resid_raw_tls("limbs", 64);
-    Int _a = st64(w, l0);
-    Int _b = st64(w + 8, l1);
-    Int _c = st64(w + 16, l2);
+    _ = st64(w, l0);
+    _ = st64(w + 8, l1);
+    _ = st64(w + 16, l2);
     return st64(w + 24, l3) * 0 + w;
 }
 
 Int limbs8(Int l0, Int l1, Int l2, Int l3, Int l4, Int l5, Int l6, Int l7) {
     Int w = limbs4(l0, l1, l2, l3);
-    Int _a = st64(w + 32, l4);
-    Int _b = st64(w + 40, l5);
-    Int _c = st64(w + 48, l6);
+    _ = st64(w + 32, l4);
+    _ = st64(w + 40, l5);
+    _ = st64(w + 48, l6);
     return st64(w + 56, l7) * 0 + w;
 }
 
@@ -118,7 +118,7 @@ pub Int rt_float_to_string(Float v) {
 }
 
 @export("BoolToString", "ptr(i8)")
-pub Int rt_bool_to_string(Int v) { return cstr_dup(if (v != 0) { resid_raw_addr("true") } else { resid_raw_addr("false") }); }
+pub Int rt_bool_to_string(Int v) { return rdup(if (v != 0) { resid_raw_addr("true") } else { resid_raw_addr("false") }); }
 
 // ─── Float(128) ────────────────────────────────────────────────────────
 // IEEE quadruple printed like %.36g (round-trip) through a binary bignum
@@ -129,15 +129,15 @@ Int f128_zero(Int w) { return resid_raw_fill(w, 0, 2080); }
 Bool f128_is_zero(Int w) { return limbs_zero(w, 0, 260); }
 
 Int f128_load(Int w, UInt(128) v) {
-    Int _z = f128_zero(w);
-    Int _a = st64(w, (Int)v);
+    _ = f128_zero(w);
+    _ = st64(w, (Int)v);
     return st64(w + 8, (Int)(v >> (UInt(128))64));
 }
 
 Int f128_shl(Int w, Int bits) {
     Int ws = bits / 64;
     Int bs = bits % 64;
-    Int _m = shl_words(w, 259, ws, bs);
+    _ = shl_words(w, 259, ws, bs);
     return resid_raw_fill(w, 0, ws * 8);
 }
 
@@ -145,14 +145,14 @@ Int shl_words(Int w, Int i, Int ws, Int bs) {
     if (i < ws) { return 0; }
     Int src = ld64(w + (i - ws) * 8);
     Int hi = if (bs != 0 && i - ws - 1 >= 0) { lshr(ld64(w + (i - ws - 1) * 8), 64 - bs) } else { 0 };
-    Int _s = st64(w + i * 8, if (bs == 0) { src } else { (src << bs) | hi });
+    _ = st64(w + i * 8, if (bs == 0) { src } else { (src << bs) | hi });
     return shl_words(w, i - 1, ws, bs);
 }
 
 Int f128_shr(Int w, Int bits) {
     Int ws = bits / 64;
     Int bs = bits % 64;
-    Int _m = shr_words(w, 0, ws, bs);
+    _ = shr_words(w, 0, ws, bs);
     Int from = if (260 - ws < 0) { 0 } else { 260 - ws };
     return resid_raw_fill(w + from * 8, 0, (260 - from) * 8);
 }
@@ -161,14 +161,14 @@ Int shr_words(Int w, Int i, Int ws, Int bs) {
     if (i + ws >= 260) { return 0; }
     Int src = ld64(w + (i + ws) * 8);
     Int lo = if (bs != 0 && i + ws + 1 < 260) { ld64(w + (i + ws + 1) * 8) << (64 - bs) } else { 0 };
-    Int _s = st64(w + i * 8, if (bs == 0) { src } else { lshr(src, bs) | lo });
+    _ = st64(w + i * 8, if (bs == 0) { src } else { lshr(src, bs) | lo });
     return shr_words(w, i + 1, ws, bs);
 }
 
 Int f128_mul10(Int w, Int i, Int carry) {
     if (i >= 260) { return 0; }
     UInt(128) t = ((UInt(128))ld64(w + i * 8) & (UInt(128))18446744073709551615) * (UInt(128))10 + (UInt(128))carry;
-    Int _s = st64(w + i * 8, (Int)t);
+    _ = st64(w + i * 8, (Int)t);
     return f128_mul10(w, i + 1, (Int)(t >> (UInt(128))64));
 }
 
@@ -178,14 +178,14 @@ Int f128_div10(Int w) { return limbs_div10(w, 259, 0); }
 Int f128_mask(Int w, Int nb) {
     Int widx = nb / 64;
     Int rem = nb % 64;
-    Int _z = if (widx + 1 < 260) { resid_raw_fill(w + (widx + 1) * 8, 0, (259 - widx) * 8) } else { 0 };
+    _ = if (widx + 1 < 260) { resid_raw_fill(w + (widx + 1) * 8, 0, (259 - widx) * 8) } else { 0 };
     return if (rem != 0 && widx < 260) { st64(w + widx * 8, ld64(w + widx * 8) & ((1 << rem) - 1)) } else { 0 };
 }
 
 // Integer digits of w (destroyed), reversed into ib; returns the count.
 Int int_digits(Int w, Int ib, Int n) {
     if (f128_is_zero(w) || n >= 5000) { return n; }
-    Int _s = st8(ib + n, 48 + f128_div10(w));
+    _ = st8(ib + n, 48 + f128_div10(w));
     return int_digits(w, ib, n + 1);
 }
 
@@ -193,17 +193,17 @@ Int int_digits(Int w, Int ib, Int n) {
 // `skip`, leading zeros are only counted, in the word at `lead`.
 Int frac_digits(Int m, Int nb, Int fd, Int k, Bool skip, Int lead) {
     if (k >= 44 || f128_is_zero(m)) { return k; }
-    Int _m = f128_mul10(m, 0, 0);
+    _ = f128_mul10(m, 0, 0);
     Int widx = nb / 64;
     Int rem = nb % 64;
     Int hi = if (rem == 0) { ld64(m + widx * 8) } else { lshr(ld64(m + widx * 8), rem) | (ld64(m + (widx + 1) * 8) << (64 - rem)) };
     Int d = hi & 15;
-    Int _k = f128_mask(m, nb);
+    _ = f128_mask(m, nb);
     if (skip && k == 0 && d == 0) {
-        Int _l = st64(lead, ld64(lead) + 1);
+        _ = st64(lead, ld64(lead) + 1);
         return frac_digits(m, nb, fd, 0, skip, lead);
     }
-    Int _s = st8(fd + k, 48 + d);
+    _ = st8(fd + k, 48 + d);
     return frac_digits(m, nb, fd, k + 1, skip, lead);
 }
 
@@ -215,7 +215,7 @@ pub Int rt_float128_to_string(Float(128) v) {
     UInt(128) mask = ((UInt(128))1 << (UInt(128))112) - (UInt(128))1;
     UInt(128) frac = u & mask;
     if (expf == 32767) {
-        return cstr_dup(if (frac != (UInt(128))0) { resid_raw_addr("nan") } else { if (neg) { resid_raw_addr("-inf") } else { resid_raw_addr("inf") } });
+        return rdup(if (frac != (UInt(128))0) { resid_raw_addr("nan") } else { if (neg) { resid_raw_addr("-inf") } else { resid_raw_addr("inf") } });
     }
     UInt(128) mm = if (expf == 0) { frac } else { ((UInt(128))1 << (UInt(128))112) | frac };
     Int e = if (expf == 0) { 0 - 16382 - 112 } else { expf - 16383 - 112 };
@@ -223,28 +223,28 @@ pub Int rt_float128_to_string(Float(128) v) {
     Int ip = resid_raw_tls("f128_ip", 2080);
     Int ib = resid_raw_tls("f128_ib", 5000);
     Int fd = resid_raw_tls("f128_fd", 64);
-    Int _l = f128_load(m, mm);
+    _ = f128_load(m, mm);
     return f128_text(m, ip, ib, fd, mm, e, neg);
 }
 
 Int f128_text(Int m, Int ip, Int ib, Int fd, UInt(128) mm, Int e, Bool neg) {
     if (e >= 0) {
-        Int _s = f128_shl(m, e);
-        if (f128_is_zero(m)) { return cstr_dup(resid_raw_addr("0")); }
+        _ = f128_shl(m, e);
+        if (f128_is_zero(m)) { return rdup(resid_raw_addr("0")); }
         Int ilen = int_digits(m, ib, 0);
         return f128_assemble(ib, ilen, fd, 0, ilen - 1, neg);
     }
     Int nb = 0 - e;
-    Int _l = f128_load(ip, mm);
-    Int _r = f128_shr(ip, nb);
+    _ = f128_load(ip, mm);
+    _ = f128_shr(ip, nb);
     Int ilen = int_digits(ip, ib, 0);
-    Int _l2 = f128_load(m, mm);
-    Int _k = f128_mask(m, nb);
+    _ = f128_load(m, mm);
+    _ = f128_mask(m, nb);
     Int lead = resid_raw_tls("f128_lead", 8);
-    Int _z = st64(lead, 0);
+    _ = st64(lead, 0);
     Int flen = frac_digits(m, nb, fd, 0, ilen == 0, lead);
     if (ilen > 0) { return f128_assemble(ib, ilen, fd, flen, ilen - 1, neg); }
-    if (flen == 0) { return cstr_dup(if (neg) { resid_raw_addr("-0") } else { resid_raw_addr("0") }); }
+    if (flen == 0) { return rdup(if (neg) { resid_raw_addr("-0") } else { resid_raw_addr("0") }); }
     return f128_assemble(ib, 0, fd, flen, 0 - ld64(lead) - 1, neg);
 }
 
@@ -255,7 +255,7 @@ Int f128_assemble(Int ib, Int ilen, Int fd, Int flen, Int dec_exp0, Bool neg) {
     Int n1 = copy_rev(ib, ilen, dg, 0, 37);
     Int nd0 = copy_fwd(fd, flen, dg, n1, 37, 0);
     Bool carry_all = nd0 > 36 && ld8(dg + 36) >= 53 && round_up(dg, 35);
-    Int _c = if (carry_all) { st8(dg, 49) + resid_raw_fill(dg + 1, 48, 35) } else { 0 };
+    _ = if (carry_all) { st8(dg, 49) + resid_raw_fill(dg + 1, 48, 35) } else { 0 };
     Int dec_exp = if (carry_all) { dec_exp0 + 1 } else { dec_exp0 };
     Int nd1 = if (nd0 > 36) { 36 } else { nd0 };
     Int nd = strip_zeros(dg, nd1);
@@ -267,13 +267,13 @@ Int f128_assemble(Int ib, Int ilen, Int fd, Int flen, Int dec_exp0, Bool neg) {
 
 Int copy_rev(Int ib, Int ilen, Int dg, Int n, Int max) {
     if (n >= ilen || n >= max) { return n; }
-    Int _s = st8(dg + n, ld8(ib + ilen - 1 - n));
+    _ = st8(dg + n, ld8(ib + ilen - 1 - n));
     return copy_rev(ib, ilen, dg, n + 1, max);
 }
 
 Int copy_fwd(Int fd, Int flen, Int dg, Int n, Int max, Int k) {
     if (k >= flen || n >= max) { return n; }
-    Int _s = st8(dg + n, ld8(fd + k));
+    _ = st8(dg + n, ld8(fd + k));
     return copy_fwd(fd, flen, dg, n + 1, max, k + 1);
 }
 
@@ -281,10 +281,10 @@ Int copy_fwd(Int fd, Int flen, Int dg, Int n, Int max, Int k) {
 Bool round_up(Int dg, Int k) {
     if (k < 0) { return true; }
     if (ld8(dg + k) == 57) {
-        Int _z = st8(dg + k, 48);
+        _ = st8(dg + k, 48);
         return round_up(dg, k - 1);
     }
-    Int _i = st8(dg + k, ld8(dg + k) + 1);
+    _ = st8(dg + k, ld8(dg + k) + 1);
     return false;
 }
 

@@ -28,7 +28,7 @@ pub Int rt_list_contains_str(Int l, Int v) { return if (list_has(l, 2, v, 0, c_l
 pub Int rt_list_reverse(Int l) {
     Int n = c_list_len(l);
     Int items = c_list_to_array(l);
-    Int _r = rev_at(items, 0, n - 1);
+    _ = rev_at(items, 0, n - 1);
     Int out = c_list_new(n, items, c_list_type(l));
     return c_free(items) * 0 + out;
 }
@@ -36,8 +36,8 @@ pub Int rt_list_reverse(Int l) {
 Int rev_at(Int a, Int i, Int j) {
     if (i >= j) { return 0; }
     Int x = ld64(a + i * 8);
-    Int _a = st64(a + i * 8, ld64(a + j * 8));
-    Int _b = st64(a + j * 8, x);
+    _ = st64(a + i * 8, ld64(a + j * 8));
+    _ = st64(a + j * 8, x);
     return rev_at(a, i + 1, j - 1);
 }
 
@@ -80,13 +80,13 @@ Int merge_run(Int k, Int f, Int src, Int dst, Int i, Int mid, Int j, Int hi, Int
     if (i < mid && j < hi) {
         // <= keeps the left run first: stability.
         if (slot_cmp(k, f, src + i * 8, src + j * 8) <= 0) {
-            Int _a = st64(dst + o * 8, ld64(src + i * 8));
+            _ = st64(dst + o * 8, ld64(src + i * 8));
             return merge_run(k, f, src, dst, i + 1, mid, j, hi, o + 1);
         }
-        Int _b = st64(dst + o * 8, ld64(src + j * 8));
+        _ = st64(dst + o * 8, ld64(src + j * 8));
         return merge_run(k, f, src, dst, i, mid, j + 1, hi, o + 1);
     }
-    Int _l = if (i < mid) { mcopy(dst + o * 8, src + i * 8, (mid - i) * 8) } else { 0 };
+    _ = if (i < mid) { mcopy(dst + o * 8, src + i * 8, (mid - i) * 8) } else { 0 };
     return if (j < hi) { mcopy(dst + (o + mid - i) * 8, src + j * 8, (hi - j) * 8) } else { 0 };
 }
 
@@ -94,14 +94,14 @@ Int merge_pass(Int k, Int f, Int src, Int dst, Int n, Int width, Int lo) {
     if (lo >= n) { return 0; }
     Int mid = min(lo + width, n);
     Int hi = min(lo + 2 * width, n);
-    Int _m = merge_run(k, f, src, dst, lo, mid, mid, hi, lo);
+    _ = merge_run(k, f, src, dst, lo, mid, mid, hi, lo);
     return merge_pass(k, f, src, dst, n, width, lo + 2 * width);
 }
 
 // Sorted slots end up in `a` (b is scratch).
 Int merge_sort(Int k, Int f, Int a, Int b, Int n, Int width) {
     if (width >= n) { return a; }
-    Int _p = merge_pass(k, f, a, b, n, width, 0);
+    _ = merge_pass(k, f, a, b, n, width, 0);
     return merge_sort(k, f, b, a, n, width * 2);
 }
 
@@ -111,7 +111,7 @@ Int sorted_copy(Int l, Int k, Int f) {
     Int scratch = xmalloc(n * 8);
     Int res = merge_sort(k, f, items, scratch, n, 1);
     Int out = c_list_new(n, res, c_list_type(l));
-    Int _f = c_free(items) + c_free(scratch);
+    _ = c_free(items) + c_free(scratch);
     return out;
 }
 

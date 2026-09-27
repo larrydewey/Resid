@@ -43,13 +43,13 @@ pub Int rt_str_repeat(Int s, Int times0) {
     Int p = c_malloc(ls * times + 1);
     if (p == 0) { return cstr_from(s, 0, 1); }
     Int e = repeat_at(p, s, ls, times);
-    Int _z = st8(e, 0);
+    _ = st8(e, 0);
     return p;
 }
 
 Int repeat_at(Int w, Int s, Int ls, Int k) {
     if (k <= 0) { return w; }
-    Int _c = mcopy(w, s, ls);
+    _ = mcopy(w, s, ls);
     return repeat_at(w + ls, s, ls, k - 1);
 }
 
@@ -79,8 +79,8 @@ Int replace_at(Int w, Int q, Int from, Int lf, Int to, Int lt) {
         Int n = c_strlen(q);
         return mcopy(w, q, n + 1) + w + n;
     }
-    Int _a = mcopy(w, q, h - q);
-    Int _b = mcopy(w + (h - q), to, lt);
+    _ = mcopy(w, q, h - q);
+    _ = mcopy(w + (h - q), to, lt);
     return replace_at(w + (h - q) + lt, h + lf, from, lf, to, lt);
 }
 
@@ -91,21 +91,21 @@ pub Int rt_str_split(Int s, Int sep) {
     Int lsep = c_strlen(sep);
     if (lsep == 0) {
         Int one = resid_raw_tls("split_one", 8);
-        Int _o = st64(one, s);
+        _ = st64(one, s);
         return c_list_new(1, one, ty);
     }
     Int parts = count_hits(s, sep, lsep, 0) + 1;
     Int arr = xmalloc(parts * 8);
-    Int _f = split_at(arr, 0, s, sep, lsep);
+    _ = split_at(arr, 0, s, sep, lsep);
     Int out = c_list_new(parts, arr, ty);
-    Int _x = c_free(arr);
+    _ = c_free(arr);
     return out;
 }
 
 Int split_at(Int arr, Int i, Int q, Int sep, Int lsep) {
     Int h = c_strstr(q, sep);
-    if (h == 0) { return st64(arr + i * 8, cstr_dup(q)); }
-    Int _p = st64(arr + i * 8, cstr_from(q, h - q, 1));
+    if (h == 0) { return st64(arr + i * 8, rdup(q)); }
+    _ = st64(arr + i * 8, cstr_from(q, h - q, 1));
     return split_at(arr, i + 1, h + lsep, sep, lsep);
 }
 
@@ -118,8 +118,8 @@ pub Int rt_str_join(Int list, Int sep) {
     Int total = join_len(items, 0, n, 0) + (if (n > 0) { lsep * (n - 1) } else { 0 });
     Int p = ralloc(total + 1);
     Int e = join_at(p, items, 0, n, sep, lsep);
-    Int _z = st8(e, 0);
-    Int _f = c_free(items);
+    _ = st8(e, 0);
+    _ = c_free(items);
     return p;
 }
 
@@ -133,7 +133,7 @@ Int join_at(Int w, Int items, Int i, Int n, Int sep, Int lsep) {
     Int w1 = if (i > 0) { mcopy(w, sep, lsep) + w + lsep } else { w };
     Int it = ld64(items + i * 8);
     Int li = c_strlen(it);
-    Int _c = mcopy(w1, it, li);
+    _ = mcopy(w1, it, li);
     return join_at(w1 + li, items, i + 1, n, sep, lsep);
 }
 
@@ -182,7 +182,7 @@ Int neg_digits(Int p, Int acc) {
 Bool is_float(Int s) {
     if (ld8(s) == 0) { return false; }
     Int endp = resid_raw_tls("strtod_end", 8);
-    Float _v = c_strtod(s, endp);
+    _ = c_strtod(s, endp);
     Int e = ld64(endp);
     Int t = skip_tabs(e);
     return ld8(t) == 0 && e != s;
@@ -214,8 +214,8 @@ pub Int rt_str_count(Int s, Int needle) {
 pub Int rt_str_reverse(Int s) {
     Int n = c_strlen(s);
     Int out = ralloc(n + 1);
-    Int _r = rev_at(s, out + n);
-    Int _z = st8(out + n, 0);
+    _ = rev_at(s, out + n);
+    _ = st8(out + n, 0);
     return out;
 }
 
@@ -224,6 +224,6 @@ pub Int rt_str_reverse(Int s) {
 Int rev_at(Int p, Int w) {
     if (ld8(p) == 0) { return 0; }
     Int len = utf8_len_at(p);
-    Int _c = mcopy(w - len, p, len);
+    _ = mcopy(w - len, p, len);
     return rev_at(p + len, w - len);
 }

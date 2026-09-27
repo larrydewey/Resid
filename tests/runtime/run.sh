@@ -41,5 +41,11 @@ if grep -nE 'resid_raw_|resid_(arena|bulk)_(push|pop)|resid_list_str_persist_cop
 else
     pass=$((pass + 1))
 fi
+# `residc test`: the generated test entry point is a complete process.
+if (cd "$ROOT" && "$COMPILER" test examples/math_test.resid) > "$W/tm.log" 2>&1 && grep -q "Failures: 0 | Passed: 4" "$W/tm.log"; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL residc test: $(grep -v '^OK' "$W/tm.log" | tail -2 | tr '\n' ' ')"
+fi
 echo "runtime: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

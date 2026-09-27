@@ -223,7 +223,7 @@ The compiler emits target-neutral LLVM IR text (no `target triple`; clang picks 
     ├── examples/            # demo programs
     │   └── stack_types.resid  # fixed-capacity Str(N)/Bytes(N)/List(T,N)
     ├── tools/               # fmt, graph, why, pkg, manifest, cose — all self-hosted
-    │                        #   .resid tools; resid-notes/resid-cache/resid-lsp are Rust
+    │                        #   .resid tools (the language server is `residc lsp`)
     └── PROGRESS.md          # Full build log, status, roadmap
 
 ---

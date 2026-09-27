@@ -14,18 +14,18 @@ pub Bool under_catch(Int fn, Int arg) { return resid_raw_catch(catch_slot(), fn,
 Int rt_fail(Int msg, Int at) {
     Int jb = ld64(catch_slot());
     if (jb != 0) {
-        Int _m = st64(catch_msg(), if (msg != 0) { msg } else { resid_raw_addr("region abort") });
+        _ = st64(catch_msg(), if (msg != 0) { msg } else { resid_raw_addr("region abort") });
         return c_longjmp(jb, 1);
     }
     Int sb = rt_sb_new();
     Bool hasmsg = msg != 0 && ld8(msg) != 0;
     Bool hasat = at != 0 && ld8(at) != 0;
-    Int _a = sb_lit(sb, resid_raw_addr("resid: abort"));
-    Int _b = if (hasat) { sb_lit(sb, resid_raw_addr(": ")) + sb_lit(sb, if (hasmsg) { msg } else { resid_raw_addr("abort") }) + sb_lit(sb, resid_raw_addr(" (")) + sb_lit(sb, at) + sb_lit(sb, resid_raw_addr(")")) } else { 0 };
-    Int _c = if (!hasat && hasmsg) { sb_lit(sb, resid_raw_addr(": ")) + sb_lit(sb, msg) } else { 0 };
-    Int _n = sb_lit(sb, resid_raw_addr("\n"));
+    _ = sb_lit(sb, resid_raw_addr("resid: abort"));
+    _ = if (hasat) { sb_lit(sb, resid_raw_addr(": ")) + sb_lit(sb, if (hasmsg) { msg } else { resid_raw_addr("abort") }) + sb_lit(sb, resid_raw_addr(" (")) + sb_lit(sb, at) + sb_lit(sb, resid_raw_addr(")")) } else { 0 };
+    _ = if (!hasat && hasmsg) { sb_lit(sb, resid_raw_addr(": ")) + sb_lit(sb, msg) } else { 0 };
+    _ = sb_lit(sb, resid_raw_addr("\n"));
     Int text = rt_sb_finish(sb);
-    Bool _w = write_all(2, text, c_strlen(text));
+    _ = write_all(2, text, c_strlen(text));
     return c_libc_abort();
 }
 
@@ -45,22 +45,22 @@ pub Int spawn_entry(Int a) {
     if (!under_catch(resid_raw_fn("spawn_run"), a)) { return ld64(a + 16); }
     Int m = ld64(catch_msg());
     Int region = xmalloc(8);
-    Int _r = st64(region, cstr_dup(if (m != 0) { m } else { resid_raw_addr("child region aborted") }));
+    _ = st64(region, cstr_dup(if (m != 0) { m } else { resid_raw_addr("child region aborted") }));
     Int slots = resid_raw_tls("spawn_slot", 8);
-    Int _s = st64(slots, region);
+    _ = st64(slots, region);
     return c_box_new(2, 1, slots, resid_raw_addr("Result"));
 }
 
 @export("resid_spawn", "ptr(ptr,ptr)")
 pub Int rt_spawn(Int worker, Int captures) {
     Int a = xmalloc(24);
-    Int _w = st64(a, worker);
-    Int _c = st64(a + 8, captures);
-    Int _z = st64(a + 16, 0);
+    _ = st64(a, worker);
+    _ = st64(a + 8, captures);
+    _ = st64(a + 16, 0);
     Int t = thread_spawn(resid_raw_fn("spawn_entry"), a, 8388608);
     if (t == 0) { return c_free(a) * 0; }
     Int ret = thread_join(t);
-    Int _f = c_free(a);
+    _ = c_free(a);
     return ret;
 }
 
@@ -68,7 +68,7 @@ pub Int rt_spawn(Int worker, Int captures) {
 @export("resid_ok_box", "ptr(ptr)")
 pub Int rt_ok_box(Int payload) {
     Int slots = resid_raw_tls("spawn_slot", 8);
-    Int _s = st64(slots, payload);
+    _ = st64(slots, payload);
     return c_box_new(1, 1, slots, resid_raw_addr("Result"));
 }
 
@@ -85,7 +85,7 @@ Int fail_buf() { return resid_raw_global("rt_test_fail", 1024); }
 // Copy the C string s into dst (cap bytes, NUL included), truncating.
 Int cstr_copy_cap(Int dst, Int s, Int cap) {
     Int n = min(c_strlen(s), cap - 1);
-    Int _c = mcopy(dst, s, n);
+    _ = mcopy(dst, s, n);
     return st8(dst + n, 0);
 }
 
@@ -96,14 +96,14 @@ Int fmt_init() {
     if (fmt_read()) { return tget(6); }
     Int f = c_getenv(resid_raw_addr("RESID_TEST_FORMAT"));
     Int v = if (f != 0 && c_strcmp(f, resid_raw_addr("tap")) == 0) { 1 } else { if (f != 0 && c_strcmp(f, resid_raw_addr("json")) == 0) { 2 } else { 0 } };
-    Int _s = st8(resid_raw_global("rt_test_fmt_read", 8), 1);
-    Int _j = tset(7, 1);
+    _ = st8(resid_raw_global("rt_test_fmt_read", 8), 1);
+    _ = tset(7, 1);
     return tset(6, v) * 0 + v;
 }
 
 Int out_sb(Int sb) {
     Int text = rt_sb_finish(sb);
-    Bool _w = write_all(1, text, c_strlen(text));
+    _ = write_all(1, text, c_strlen(text));
     return c_free(text);
 }
 
@@ -121,14 +121,14 @@ Int module_name() { return if (tget(8) == 0) { resid_raw_addr("") } else { tget(
 @export("resid_expect_fail", "void(ptr,ptr,ptr)")
 pub Int rt_expect_fail(Int method, Int actual, Int expected) {
     Int sb = rt_sb_new();
-    Int _a = sb_lit(sb, resid_raw_addr("expectation failed: "));
-    Int _m = sb_lit(sb, if (method != 0) { method } else { resid_raw_addr("?") });
-    Int _b = if (actual != 0) { sb_lit(sb, resid_raw_addr("\n    actual:   ")) + sb_lit(sb, actual) } else { 0 };
-    Int _c = if (actual != 0 && expected != 0) { sb_lit(sb, resid_raw_addr("\n    expected: ")) + sb_lit(sb, expected) } else { 0 };
+    _ = sb_lit(sb, resid_raw_addr("expectation failed: "));
+    _ = sb_lit(sb, if (method != 0) { method } else { resid_raw_addr("?") });
+    _ = if (actual != 0) { sb_lit(sb, resid_raw_addr("\n    actual:   ")) + sb_lit(sb, actual) } else { 0 };
+    _ = if (actual != 0 && expected != 0) { sb_lit(sb, resid_raw_addr("\n    expected: ")) + sb_lit(sb, expected) } else { 0 };
     Int full = rt_sb_finish(sb);
     Int buf = resid_raw_tls("expect_buf", 1024);
-    Int _t = cstr_copy_cap(buf, full, 1024);
-    Int _x = if (tget(0) != 0) { cstr_copy_cap(fail_buf(), buf, 1024) } else { 0 };
+    _ = cstr_copy_cap(buf, full, 1024);
+    _ = if (tget(0) != 0) { cstr_copy_cap(fail_buf(), buf, 1024) } else { 0 };
     return rt_fail(buf, 0);
 }
 
@@ -137,15 +137,15 @@ pub Int rt_expect_fail(Int method, Int actual, Int expected) {
 pub Int rt_expect_throws(Int clo) {
     if (clo == 0 || ld64(clo) == 0) { return 0; }
     Int saved = xmalloc(1024);
-    Int _s = mcopy(saved, fail_buf(), 1024);
+    _ = mcopy(saved, fail_buf(), 1024);
     Int prev_in = tget(0);
     Int prev_msg = ld64(catch_msg());
-    Int _i = tset(0, 1);
+    _ = tset(0, 1);
     Bool threw = under_catch(ld64(clo), clo);
-    Int _m = st64(catch_msg(), prev_msg);
-    Int _p = tset(0, prev_in);
-    Int _r = mcopy(fail_buf(), saved, 1024);
-    Int _f = c_free(saved);
+    _ = st64(catch_msg(), prev_msg);
+    _ = tset(0, prev_in);
+    _ = mcopy(fail_buf(), saved, 1024);
+    _ = c_free(saved);
     return if (threw) { 1 } else { 0 };
 }
 
@@ -161,13 +161,13 @@ pub Int rt_test_selected(Int name) {
 
 @export("resid_test_plan", "i8(i64,ptr)")
 pub Int rt_test_plan(Int n, Int module) {
-    Int _m = tset(8, if (module != 0) { module } else { resid_raw_addr("") });
+    _ = tset(8, if (module != 0) { module } else { resid_raw_addr("") });
     Int fmt = fmt_init();
     Int sb = rt_sb_new();
-    Int _a = if (fmt == 1) { sb_lit(sb, resid_raw_addr("TAP version 13\n1..")) + sb_word(sb, n) + sb_lit(sb, resid_raw_addr("\n")) } else { 0 };
-    Int _b = if (fmt == 2) { sb_lit(sb, resid_raw_addr("{\"module\":\"")) + sb_lit(sb, module_name()) + sb_lit(sb, resid_raw_addr("\",\"tests\":[")) } else { 0 };
-    Int _c = if (fmt == 0) { sb_lit(sb, resid_raw_addr("\n")) + sb_lit(sb, module_name()) + sb_lit(sb, resid_raw_addr("\n")) } else { 0 };
-    Int _o = out_sb(sb);
+    _ = if (fmt == 1) { sb_lit(sb, resid_raw_addr("TAP version 13\n1..")) + sb_word(sb, n) + sb_lit(sb, resid_raw_addr("\n")) } else { 0 };
+    _ = if (fmt == 2) { sb_lit(sb, resid_raw_addr("{\"module\":\"")) + sb_lit(sb, module_name()) + sb_lit(sb, resid_raw_addr("\",\"tests\":[")) } else { 0 };
+    _ = if (fmt == 0) { sb_lit(sb, resid_raw_addr("\n")) + sb_lit(sb, module_name()) + sb_lit(sb, resid_raw_addr("\n")) } else { 0 };
+    _ = out_sb(sb);
     return 1;
 }
 
@@ -176,9 +176,9 @@ Int sb_lines(Int sb, Int p, Int ind) {
     if (ld8(p) == 0) { return 0; }
     Int e = c_strchr(p, 10);
     Int len = if (e == 0) { c_strlen(p) } else { e - p };
-    Int _i = sb_lit(sb, ind);
-    Int _l = sb_bytes(sb, p, len);
-    Int _n = sb_lit(sb, resid_raw_addr("\n"));
+    _ = sb_lit(sb, ind);
+    _ = sb_bytes(sb, p, len);
+    _ = sb_lit(sb, resid_raw_addr("\n"));
     if (e == 0) { return 0; }
     return sb_lines(sb, e + 1, ind);
 }
@@ -186,39 +186,39 @@ Int sb_lines(Int sb, Int p, Int ind) {
 Int test_report(Int name, Bool failed, Bool skipped, Float ms) {
     Int fmt = fmt_init();
     Int sb = rt_sb_new();
-    Int _r = if (fmt == 1) { report_tap(sb, name, failed, skipped) } else { if (fmt == 2) { report_json(sb, name, failed, skipped, ms) } else { report_pretty(sb, name, failed, skipped, ms) } };
+    _ = if (fmt == 1) { report_tap(sb, name, failed, skipped) } else { if (fmt == 2) { report_json(sb, name, failed, skipped, ms) } else { report_pretty(sb, name, failed, skipped, ms) } };
     return out_sb(sb);
 }
 
 Int report_tap(Int sb, Int name, Bool failed, Bool skipped) {
-    Int _a = sb_lit(sb, if (failed && !skipped) { resid_raw_addr("not ok ") } else { resid_raw_addr("ok ") });
-    Int _b = sb_word(sb, tget(4)) + sb_lit(sb, resid_raw_addr(" ")) + sb_lit(sb, module_name()) + sb_lit(sb, resid_raw_addr(".")) + sb_lit(sb, name);
+    _ = sb_lit(sb, if (failed && !skipped) { resid_raw_addr("not ok ") } else { resid_raw_addr("ok ") });
+    _ = sb_word(sb, tget(4)) + sb_lit(sb, resid_raw_addr(" ")) + sb_lit(sb, module_name()) + sb_lit(sb, resid_raw_addr(".")) + sb_lit(sb, name);
     if (skipped) { return sb_lit(sb, resid_raw_addr(" # SKIP filtered\n")); }
-    Int _n = sb_lit(sb, resid_raw_addr("\n"));
+    _ = sb_lit(sb, resid_raw_addr("\n"));
     if (!failed) { return 0; }
-    Int _h = sb_lit(sb, resid_raw_addr("  ---\n  message: |\n"));
-    Int _l = sb_lines(sb, fail_buf(), resid_raw_addr("    "));
+    _ = sb_lit(sb, resid_raw_addr("  ---\n  message: |\n"));
+    _ = sb_lines(sb, fail_buf(), resid_raw_addr("    "));
     return sb_lit(sb, resid_raw_addr("  ...\n"));
 }
 
 Int report_json(Int sb, Int name, Bool failed, Bool skipped, Float ms) {
-    Int _c = if (tget(7) != 0) { 0 } else { sb_lit(sb, resid_raw_addr(",")) };
-    Int _a = sb_lit(sb, resid_raw_addr("{\"name\":\"")) + sb_lit(sb, name) + sb_lit(sb, resid_raw_addr("\",\"status\":\""));
-    Int _s = sb_lit(sb, if (skipped) { resid_raw_addr("skipped") } else { if (failed) { resid_raw_addr("failed") } else { resid_raw_addr("passed") } });
-    Int _d = sb_lit(sb, resid_raw_addr("\",\"duration_ms\":")) + sb_ms(sb, ms, resid_raw_addr("%.3f")) + sb_lit(sb, resid_raw_addr("}"));
+    _ = if (tget(7) != 0) { 0 } else { sb_lit(sb, resid_raw_addr(",")) };
+    _ = sb_lit(sb, resid_raw_addr("{\"name\":\"")) + sb_lit(sb, name) + sb_lit(sb, resid_raw_addr("\",\"status\":\""));
+    _ = sb_lit(sb, if (skipped) { resid_raw_addr("skipped") } else { if (failed) { resid_raw_addr("failed") } else { resid_raw_addr("passed") } });
+    _ = sb_lit(sb, resid_raw_addr("\",\"duration_ms\":")) + sb_ms(sb, ms, resid_raw_addr("%.3f")) + sb_lit(sb, resid_raw_addr("}"));
     return tset(7, 0);
 }
 
 Int report_pretty(Int sb, Int name, Bool failed, Bool skipped, Float ms) {
     if (skipped) { return sb_lit(sb, resid_raw_addr("  - ")) + sb_lit(sb, name) + sb_lit(sb, resid_raw_addr(" (skipped)\n")); }
-    Int _m = sb_lit(sb, if (failed) { resid_raw_addr("  ✗ ") } else { resid_raw_addr("  ✓ ") });
-    Int _a = sb_lit(sb, name) + sb_lit(sb, resid_raw_addr(" (")) + sb_ms(sb, ms, resid_raw_addr("%.0f")) + sb_lit(sb, resid_raw_addr("ms)\n"));
+    _ = sb_lit(sb, if (failed) { resid_raw_addr("  ✗ ") } else { resid_raw_addr("  ✓ ") });
+    _ = sb_lit(sb, name) + sb_lit(sb, resid_raw_addr(" (")) + sb_ms(sb, ms, resid_raw_addr("%.0f")) + sb_lit(sb, resid_raw_addr("ms)\n"));
     return if (failed) { sb_lines(sb, fail_buf(), resid_raw_addr("    ")) } else { 0 };
 }
 
 Float now_ms() {
     Int t = resid_raw_tls("test_clock", 16);
-    Int _c = resid_raw_syscall(228, 1, t, 0, 0, 0, 0);
+    _ = resid_raw_syscall(228, 1, t, 0, 0, 0, 0);
     return (Float)ld64(t) * 1000.0 + (Float)ld64(t + 8) / 1000000.0;
 }
 
@@ -227,30 +227,30 @@ Float now_ms() {
 @export("resid_test_run", "i64(ptr,ptr)")
 pub Int rt_test_run(Int body, Int name0) {
     Int name = if (name0 != 0) { name0 } else { resid_raw_addr("<unnamed>") };
-    Int _i = tset(4, tget(4) + 1);
+    _ = tset(4, tget(4) + 1);
     Int cfn = tget(10);
     Int cenv = tget(9);
-    Int _a = tset(10, 0);
-    Int _b = tset(9, 0);
+    _ = tset(10, 0);
+    _ = tset(9, 0);
     if (rt_test_selected(name) == 0) {
-        Int _s = tset(3, tget(3) + 1);
+        _ = tset(3, tget(3) + 1);
         return test_report(name, false, true, 0.0) * 0;
     }
-    Int _f = st8(fail_buf(), 0);
-    Int _t = tset(0, 1);
+    _ = st8(fail_buf(), 0);
+    _ = tset(0, 1);
     Int prev_msg = ld64(catch_msg());
     Float t0 = now_ms();
     Int fnp = if (body != 0) { body } else { cfn };
     Bool failed = fnp != 0 && under_catch(fnp, if (body != 0) { 0 } else { cenv });
     Int m = ld64(catch_msg());
-    Int _d = if (failed && ld8(fail_buf()) == 0) { cstr_copy_cap(fail_buf(), if (m != 0) { m } else { resid_raw_addr("aborted") }, 1024) } else { 0 };
-    Int _m = st64(catch_msg(), prev_msg);
-    Int _u = tset(0, 0);
+    _ = if (failed && ld8(fail_buf()) == 0) { cstr_copy_cap(fail_buf(), if (m != 0) { m } else { resid_raw_addr("aborted") }, 1024) } else { 0 };
+    _ = st64(catch_msg(), prev_msg);
+    _ = tset(0, 0);
     Float ms = now_ms() - t0;
     Float tot = resid_raw_bits_f64(tget(5)) + ms;
-    Int _ms = tset(5, resid_raw_f64_bits(tot));
-    Int _c = if (failed) { tset(2, tget(2) + 1) } else { tset(1, tget(1) + 1) };
-    Int _r = test_report(name, failed, false, ms);
+    _ = tset(5, resid_raw_f64_bits(tot));
+    _ = if (failed) { tset(2, tget(2) + 1) } else { tset(1, tget(1) + 1) };
+    _ = test_report(name, failed, false, ms);
     return if (failed) { 1 } else { 0 };
 }
 
@@ -258,8 +258,8 @@ pub Int rt_test_run(Int body, Int name0) {
 @export("resid_test_run_closure", "i64(ptr,ptr)")
 pub Int rt_test_run_closure(Int clo, Int name) {
     if (clo == 0 || ld64(clo) == 0) { return 1; }
-    Int _e = tset(9, clo);
-    Int _f = tset(10, ld64(clo));
+    _ = tset(9, clo);
+    _ = tset(10, ld64(clo));
     return rt_test_run(0, name);
 }
 
@@ -269,14 +269,14 @@ pub Int rt_test_summary() {
     Int fmt = fmt_init();
     Float total = resid_raw_bits_f64(tget(5));
     Int sb = rt_sb_new();
-    Int _j = if (fmt == 2) { sb_lit(sb, resid_raw_addr("],\"passed\":")) + sb_word(sb, tget(1)) + sb_lit(sb, resid_raw_addr(",\"failed\":")) + sb_word(sb, tget(2)) + sb_lit(sb, resid_raw_addr(",\"skipped\":")) + sb_word(sb, tget(3)) + sb_lit(sb, resid_raw_addr(",\"duration_ms\":")) + sb_ms(sb, total, resid_raw_addr("%.3f")) + sb_lit(sb, resid_raw_addr("}\n")) } else { 0 };
-    Int _p = if (fmt == 0) { summary_pretty(sb, total) } else { 0 };
-    Int _o = out_sb(sb);
+    _ = if (fmt == 2) { sb_lit(sb, resid_raw_addr("],\"passed\":")) + sb_word(sb, tget(1)) + sb_lit(sb, resid_raw_addr(",\"failed\":")) + sb_word(sb, tget(2)) + sb_lit(sb, resid_raw_addr(",\"skipped\":")) + sb_word(sb, tget(3)) + sb_lit(sb, resid_raw_addr(",\"duration_ms\":")) + sb_ms(sb, total, resid_raw_addr("%.3f")) + sb_lit(sb, resid_raw_addr("}\n")) } else { 0 };
+    _ = if (fmt == 0) { summary_pretty(sb, total) } else { 0 };
+    _ = out_sb(sb);
     return if (tget(2) != 0) { 1 } else { 0 };
 }
 
 Int summary_pretty(Int sb, Float total) {
-    Int _a = sb_lit(sb, resid_raw_addr("\nFailures: ")) + sb_word(sb, tget(2)) + sb_lit(sb, resid_raw_addr(" | Passed: ")) + sb_word(sb, tget(1));
-    Int _s = if (tget(3) != 0) { sb_lit(sb, resid_raw_addr(" | Skipped: ")) + sb_word(sb, tget(3)) } else { 0 };
+    _ = sb_lit(sb, resid_raw_addr("\nFailures: ")) + sb_word(sb, tget(2)) + sb_lit(sb, resid_raw_addr(" | Passed: ")) + sb_word(sb, tget(1));
+    _ = if (tget(3) != 0) { sb_lit(sb, resid_raw_addr(" | Skipped: ")) + sb_word(sb, tget(3)) } else { 0 };
     return sb_lit(sb, resid_raw_addr(" | Duration: ")) + sb_ms(sb, total, resid_raw_addr("%.0f")) + sb_lit(sb, resid_raw_addr("ms\n"));
 }

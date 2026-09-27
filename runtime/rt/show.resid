@@ -53,15 +53,15 @@ Int sb_elem(Int sb, Int p) {
 
 Int sb_slots(Int sb, Int p, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int _c = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
-    Int _e = sb_elem(sb, box_slot(p, i));
+    _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
+    _ = sb_elem(sb, box_slot(p, i));
     return sb_slots(sb, p, i + 1, n);
 }
 
 Int sb_items(Int sb, Int l, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int _c = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
-    Int _e = sb_elem(sb, c_list_get(l, i));
+    _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
+    _ = sb_elem(sb, c_list_get(l, i));
     return sb_items(sb, l, i + 1, n);
 }
 
@@ -69,7 +69,7 @@ Int sb_items(Int sb, Int l, Int i, Int n) {
 pub Int rt_to_string(Int p) {
     if (box_imm(p)) { return rt_int_to_string(imm_val(p)); }
     if (box_fimm(p)) { return rt_float_to_string(unbox_float(p)); }
-    if (p == 0 || box_count(p) <= 0) { return cstr_dup(resid_raw_addr("null")); }
+    if (p == 0 || box_count(p) <= 0) { return rdup(resid_raw_addr("null")); }
     Int tag = box_tag(p);
     Int ty = box_type(p);
     if (tag == 0 - 1) {
@@ -77,24 +77,24 @@ pub Int rt_to_string(Int p) {
         if (ty != 0 && c_strcmp(ty, resid_raw_addr("u128")) == 0) { return limbs_to_str(limbs2(p), 2, false); }
         Int k = if (ty == 0) { 0 } else { ld8(ty) };
         Int sb = rt_sb_new();
-        Int _s = sb_scalar(sb, p, if (k == 102 || k == 98) { k } else { 105 });
+        _ = sb_scalar(sb, p, if (k == 102 || k == 98) { k } else { 105 });
         return rt_sb_finish(sb);
     }
     if (tag == 1 && box_count(p) == 1 && box_slot(p, 0) != 0) {
         Int inner = box_slot(p, 0);
         Int k = scalar_kind(inner);
         Int sb = rt_sb_new();
-        Int _o = sb_lit(sb, if (k != 0) { resid_raw_addr("Some(") } else { resid_raw_addr("Some<") });
-        Int _v = if (k != 0) { sb_scalar(sb, inner, k) } else { sb_lit(sb, ty) };
-        Int _c = sb_lit(sb, if (k != 0) { resid_raw_addr(")") } else { resid_raw_addr(">") });
+        _ = sb_lit(sb, if (k != 0) { resid_raw_addr("Some(") } else { resid_raw_addr("Some<") });
+        _ = if (k != 0) { sb_scalar(sb, inner, k) } else { sb_lit(sb, ty) };
+        _ = sb_lit(sb, if (k != 0) { resid_raw_addr(")") } else { resid_raw_addr(">") });
         return rt_sb_finish(sb);
     }
-    if (tag == 2) { return cstr_dup(resid_raw_addr("None")); }
+    if (tag == 2) { return rdup(resid_raw_addr("None")); }
     Int sb = rt_sb_new();
-    Int _t = sb_lit(sb, ty);
-    Int _o = sb_lit(sb, resid_raw_addr("("));
-    Int _s = sb_slots(sb, p, 0, box_count(p));
-    Int _c = sb_lit(sb, resid_raw_addr(")"));
+    _ = sb_lit(sb, ty);
+    _ = sb_lit(sb, resid_raw_addr("("));
+    _ = sb_slots(sb, p, 0, box_count(p));
+    _ = sb_lit(sb, resid_raw_addr(")"));
     return rt_sb_finish(sb);
 }
 
@@ -102,19 +102,19 @@ pub Int rt_to_string(Int p) {
 // `strs`: the elements are Str.
 @export("resid_list_show", "ptr(ptr,i64)")
 pub Int rt_list_show(Int l, Int strs) {
-    if (l == 0) { return cstr_dup(resid_raw_addr("null")); }
+    if (l == 0) { return rdup(resid_raw_addr("null")); }
     Int sb = rt_sb_new();
-    Int _t = sb_lit(sb, ld64(l + 24));
-    Int _o = sb_lit(sb, resid_raw_addr("("));
-    Int _s = if (strs != 0) { sb_strs(sb, l, 0, ld64(l)) } else { sb_items(sb, l, 0, ld64(l)) };
-    Int _c = sb_lit(sb, resid_raw_addr(")"));
+    _ = sb_lit(sb, ld64(l + 24));
+    _ = sb_lit(sb, resid_raw_addr("("));
+    _ = if (strs != 0) { sb_strs(sb, l, 0, ld64(l)) } else { sb_items(sb, l, 0, ld64(l)) };
+    _ = sb_lit(sb, resid_raw_addr(")"));
     return rt_sb_finish(sb);
 }
 
 Int sb_strs(Int sb, Int l, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int _c = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
-    Int _e = sb_lit(sb, c_list_get(l, i));
+    _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
+    _ = sb_lit(sb, c_list_get(l, i));
     return sb_strs(sb, l, i + 1, n);
 }
 

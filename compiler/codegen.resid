@@ -4469,9 +4469,15 @@ List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(
 List(Str) main_entry_ir() {
     // The process entry (no C library): resid_start sets up the process,
     // main runs, its result is the exit status.
+    return ["define i32 @main() {", "entry:", "  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"].concat(start_entry_ir());
+}
+
+// The process entry alone, around whichever @main the program defines (a
+// test binary's is generated).
+List(Str) start_entry_ir() {
     Str nl = "\\0A";
     Str st = "xor %ebp, %ebp" + nl + "mov %rsp, %rdi" + nl + "lea _DYNAMIC(%rip), %rsi" + nl + "and $$-16, %rsp" + nl + "call resid_start" + nl + "call main" + nl + "mov %eax, %edi" + nl + "mov $$231, %eax" + nl + "syscall" + nl + "hlt";
-    return ["define i32 @main() {", "entry:", "  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}", "declare void @resid_start(ptr, ptr)", "define void @_start() naked noinline nounwind {", "  call void asm sideeffect \"" + st + "\", \"~{memory}\"()", "  unreachable", "}", "@llvm.compiler.used = appending global [2 x ptr] [ptr @main, ptr @resid_start], section \"llvm.metadata\""];
+    return ["declare void @resid_start(ptr, ptr)", "define void @_start() naked noinline nounwind {", "  call void asm sideeffect \"" + st + "\", \"~{memory}\"()", "  unreachable", "}", "@llvm.compiler.used = appending global [2 x ptr] [ptr @main, ptr @resid_start], section \"llvm.metadata\""];
 }
 
 // %mag is divided as an UNSIGNED value: for INT64_MIN, `0 - v` is INT64_MIN
