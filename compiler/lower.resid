@@ -1571,8 +1571,8 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
     if (n == "str_contains" || n == "str_starts_with" || n == "str_ends_with") { return lw_externb(w, id, n, l2s("Str", "Str"), env, c); }
     if (n == "str_repeat") { return lw_extern(w, id, n, l2s("Str", "Int"), "Str", env, c); }
     if (n == "str_replace") { return lw_extern(w, id, n, l3s("Str", "Str", "Str"), "Str", env, c); }
-    if (n == "str_split") { return lw_extern(w, id, "bl_str_split", l2s("Str", "Str"), "List(Str)", env, c); }
-    if (n == "str_join") { return lw_extern(w, id, "bl_str_join", l2s("List(Str)", "Str"), "Str", env, c); }
+    if (n == "str_split") { return lw_extern(w, id, "str_split", l2s("Str", "Str"), "List(Str)", env, c); }
+    if (n == "str_join") { return lw_extern(w, id, "str_join", l2s("List(Str)", "Str"), "Str", env, c); }
     if (n == "str_is_int" || n == "str_is_float") { return lw_externb(w, id, n, l1s("Str"), env, c); }
     if (n == "str_parse_int") { return lw_extern(w, id, n, l1s("Str"), "Int", env, c); }
     if (n == "str_parse_float") { return lw_extern(w, id, n, l1s("Str"), "Float", env, c); }
@@ -2389,7 +2389,7 @@ GT lw_sort(LW w, Int id, List(Str) env, GT c) {
         Bool frev = depth % 2 == 1;
         Bool flt = is_float_cg(param);
         Str sfn = if (flt) { "list_sort_floats" } else { if (param == "Str") { "list_sort_strs" } else { "list_sort_ints" } };
-        Str rfn = if (flt) { "list_reverse_floats" } else { "list_reverse_ints" };
+        Str rfn = "list_reverse_ints";
         Int n1 = v.tmp + 1;
         Str r1 = f"%t{n1}";
         Str r2 = f"%t{n1 + 1}";

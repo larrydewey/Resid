@@ -1,0 +1,129 @@
+// List verbs, by element representation: word (integers), Float bits, Str.
+// Lists are the C runtime's persistent lists; verbs flatten, work on the
+// slot array and rebuild.
+
+// Element kinds: 0 word, 1 Float, 2 Str.
+Bool elem_eq(Int k, Int e, Int v) {
+    if (k == 2) { return c_strcmp(e, v) == 0; }
+    if (k == 1) { return unbox_float(e) == resid_raw_bits_f64(v); }
+    return unbox_word(e) == v;
+}
+
+Bool list_has(Int l, Int k, Int v, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (elem_eq(k, c_list_get(l, i), v)) { return true; }
+    return list_has(l, k, v, i + 1, n);
+}
+
+@export("list_contains_int", "i8(ptr,i64)")
+pub Int rt_list_contains_int(Int l, Int v) { return if (list_has(l, 0, v, 0, c_list_len(l))) { 1 } else { 0 }; }
+
+@export("list_contains_float", "i8(ptr,double)")
+pub Int rt_list_contains_float(Int l, Float v) { return if (list_has(l, 1, resid_raw_f64_bits(v), 0, c_list_len(l))) { 1 } else { 0 }; }
+
+@export("list_contains_str", "i8(ptr,ptr)")
+pub Int rt_list_contains_str(Int l, Int v) { return if (list_has(l, 2, v, 0, c_list_len(l))) { 1 } else { 0 }; }
+
+@export("list_reverse_ints", "ptr(ptr)")
+pub Int rt_list_reverse(Int l) {
+    Int n = c_list_len(l);
+    Int items = c_list_to_array(l);
+    Int _r = rev_at(items, 0, n - 1);
+    Int out = c_list_new(n, items, c_list_type(l));
+    return c_free(items) * 0 + out;
+}
+
+Int rev_at(Int a, Int i, Int j) {
+    if (i >= j) { return 0; }
+    Int x = ld64(a + i * 8);
+    Int _a = st64(a + i * 8, ld64(a + j * 8));
+    Int _b = st64(a + j * 8, x);
+    return rev_at(a, i + 1, j - 1);
+}
+
+@export("list_sum", "i64(ptr)")
+pub Int rt_list_sum(Int l) { return sum_words(l, 0, c_list_len(l), 0); }
+
+Int sum_words(Int l, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return sum_words(l, i + 1, n, acc + unbox_word(c_list_get(l, i)));
+}
+
+@export("list_sumf", "double(ptr)")
+pub Float rt_list_sumf(Int l) { return sum_floats(l, 0, c_list_len(l), 0.0); }
+
+Float sum_floats(Int l, Int i, Int n, Float acc) {
+    if (i >= n) { return acc; }
+    return sum_floats(l, i + 1, n, acc + unbox_float(c_list_get(l, i)));
+}
+
+// ─── Stable merge sort over a slot array ───────────────────────────────
+// cmp kinds: 0 word, 1 Float, 2 Str, 3 a comparator thunk
+// `i32 (ptr slot_a, ptr slot_b)` at `f` (sort by a behavior instance).
+
+Int slot_cmp(Int k, Int f, Int pa, Int pb) {
+    if (k == 3) { return sx32(resid_raw_call2(f, pa, pb)); }
+    Int a = ld64(pa);
+    Int b = ld64(pb);
+    if (k == 2) { return c_strcmp(a, b); }
+    if (k == 1) {
+        Float x = unbox_float(a);
+        Float y = unbox_float(b);
+        return if (x < y) { 0 - 1 } else { if (x > y) { 1 } else { 0 } };
+    }
+    Int x = unbox_word(a);
+    Int y = unbox_word(b);
+    return if (x < y) { 0 - 1 } else { if (x > y) { 1 } else { 0 } };
+}
+
+Int merge_run(Int k, Int f, Int src, Int dst, Int i, Int mid, Int j, Int hi, Int o) {
+    if (i < mid && j < hi) {
+        // <= keeps the left run first: stability.
+        if (slot_cmp(k, f, src + i * 8, src + j * 8) <= 0) {
+            Int _a = st64(dst + o * 8, ld64(src + i * 8));
+            return merge_run(k, f, src, dst, i + 1, mid, j, hi, o + 1);
+        }
+        Int _b = st64(dst + o * 8, ld64(src + j * 8));
+        return merge_run(k, f, src, dst, i, mid, j + 1, hi, o + 1);
+    }
+    Int _l = if (i < mid) { mcopy(dst + o * 8, src + i * 8, (mid - i) * 8) } else { 0 };
+    return if (j < hi) { mcopy(dst + (o + mid - i) * 8, src + j * 8, (hi - j) * 8) } else { 0 };
+}
+
+Int merge_pass(Int k, Int f, Int src, Int dst, Int n, Int width, Int lo) {
+    if (lo >= n) { return 0; }
+    Int mid = min(lo + width, n);
+    Int hi = min(lo + 2 * width, n);
+    Int _m = merge_run(k, f, src, dst, lo, mid, mid, hi, lo);
+    return merge_pass(k, f, src, dst, n, width, lo + 2 * width);
+}
+
+// Sorted slots end up in `a` (b is scratch).
+Int merge_sort(Int k, Int f, Int a, Int b, Int n, Int width) {
+    if (width >= n) { return a; }
+    Int _p = merge_pass(k, f, a, b, n, width, 0);
+    return merge_sort(k, f, b, a, n, width * 2);
+}
+
+Int sorted_copy(Int l, Int k, Int f) {
+    Int n = c_list_len(l);
+    Int items = c_list_to_array(l);
+    Int scratch = xmalloc(n * 8);
+    Int res = merge_sort(k, f, items, scratch, n, 1);
+    Int out = c_list_new(n, res, c_list_type(l));
+    Int _f = c_free(items) + c_free(scratch);
+    return out;
+}
+
+@export("list_sort_ints", "ptr(ptr)")
+pub Int rt_list_sort_ints(Int l) { return sorted_copy(l, 0, 0); }
+
+@export("list_sort_floats", "ptr(ptr)")
+pub Int rt_list_sort_floats(Int l) { return sorted_copy(l, 1, 0); }
+
+@export("list_sort_strs", "ptr(ptr)")
+pub Int rt_list_sort_strs(Int l) { return sorted_copy(l, 2, 0); }
+
+@export("list_sort_by", "ptr(ptr,ptr)")
+pub Int rt_list_sort_by(Int l, Int cmp) { return sorted_copy(l, 3, cmp); }
+

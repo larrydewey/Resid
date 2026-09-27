@@ -114,3 +114,6 @@ pub Int c_pthread_attr_destroy(Int a) { return 0; }
 
 @import("strfromd", "i32(ptr,i64,ptr,double)")
 pub Int c_strfromd(Int buf, Int n, Int fmt, Float v) { return 0; }
+
+@import("resid_list_type", "ptr(ptr)")
+pub Int c_list_type(Int l) { return 0; }

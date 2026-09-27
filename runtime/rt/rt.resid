@@ -16,3 +16,4 @@ import "strutil.resid";
 import "sys.resid";
 import "numfmt.resid";
 import "show.resid";
+import "lists.resid";

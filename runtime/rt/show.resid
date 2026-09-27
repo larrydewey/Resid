@@ -6,7 +6,7 @@
 Bool box_imm(Int p) { return ult(p - 281474976710656, 36028797018963968); }
 Bool box_fimm(Int p) { return !ult(p, 72057594037927936); }
 Int imm_val(Int p) { return p - 18295873486192640; }
-Int sx32(Int v) { return (v << 32) >> 32; }
+pub Int sx32(Int v) { return (v << 32) >> 32; }
 Int box_tag(Int p) { return sx32(ld32(p)); }
 Int box_count(Int p) { return sx32(ld32(p + 4)); }
 Int box_type(Int p) { return ld64(p + 8); }
