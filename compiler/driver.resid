@@ -7460,6 +7460,33 @@ Int cmd_verify(Str bin_path, Str pub_given) {
     return 0;
 }
 
+// The runtime module defines runtime symbols the header declares: drop
+// every declaration of a defined symbol, and repeated declarations.
+List(Str) rt_clean(List(Str) ls) {
+    return rt_clean_at(ls, 0, rt_defined(ls, 0, []), [], ListBuf());
+}
+
+Str rt_sym(Str l) {
+    Int at = str_find_char(l, 64, 0);
+    Int lp = str_find_char(l, 40, at);
+    if (at < 0 || lp < 0) { return ""; }
+    return str_slice(l, at + 1, lp);
+}
+
+List(Str) rt_defined(List(Str) ls, Int i, List(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    return rt_defined(ls, i + 1, if (str_starts_with(ls[i], "define ")) { acc.concat([rt_sym(ls[i])]) } else { acc });
+}
+
+List(Str) rt_clean_at(List(Str) ls, Int i, List(Str) defd, List(Str) seen, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    Bool dcl = str_starts_with(l, "declare ");
+    Str nm = if (dcl) { rt_sym(l) } else { "" };
+    if (dcl && (list_contains_str(defd, nm) || list_contains_str(seen, nm))) { return rt_clean_at(ls, i + 1, defd, seen, acc); }
+    return rt_clean_at(ls, i + 1, defd, if (dcl) { seen.concat([nm]) } else { seen }, acc.push(l));
+}
+
 // A runtime primitive's static storage (`@rtg.name`) is emitted by every
 // function that names it; the module keeps the first.
 List(Str) rtg_dedupe(List(Str) ls, Int i, List(Str) seen, ListBuf(Str) acc) {
@@ -7556,7 +7583,10 @@ Int main() {
     // Building the compiler itself: its runtime memory internals check.
     // The flag is honored only for the compiler's entry file and the
     // runtime; every file using an internal is checked again (E0220).
-    Bool rflag  =  pick_flag(argc, "--runtime-internals");
+    // --runtime-module: lower the runtime (runtime/rt/) to IR only.
+    Bool rtmod  =  pick_flag(argc, "--runtime-module");
+    Bool rtm  =  resid_rtmod_set(rtmod);
+    Bool rflag  =  pick_flag(argc, "--runtime-internals") || rtmod;
     Bool rentry  =  str_ends_with(arg1, "compiler/driver.resid") || str_contains(arg1, "runtime/rt/");
     if (rflag && !rentry) {
         println("error: --runtime-internals is only for building the compiler (compiler/driver.resid) or the runtime (runtime/rt/)");
@@ -7741,12 +7771,16 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     List(Str) all1 = if (fn_index(fs, "main") >= 0) { all0.concat(main_entry_ir()) } else { all0 };
     List(Str) all2 = if (testmode) { all1.concat(td_main_ir(td.names, td.syms, td_module_name(path))) } else { all1 };
     List(Str) all = if (gdbg) { all2.concat(dbg_unit_ir(gdf.paths)) } else { all2 };
-    Str doc  =  str_join(all, "\n") + "\n";
+    Str doc  =  str_join(if (rtmod) { rt_clean(all) } else { all }, "\n") + "\n";
     // Debug builds record each runtime check for the artifact's facts.
     List(Str) chk = resid_list_str_persist_copy([if (gdbg) { ga_check_lines(all, 0, StrBuf()) } else { "" }]);
     Str ll0  =  out + ".ll";
     filesystem.write_all(ll0, doc);
     Int _cg_out = resid_bulk_pop();
+    if (rtmod) {
+        println("wrote " + ll0);
+        return 0;
+    }
     // (Strings made in the arena are gone with it.)
     Str ll  =  out + ".ll";
     // The graph artifact (spec §33), after code generation's arena is
@@ -7761,7 +7795,10 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // Optimized builds compile the program and the runtime as one LTO unit,
     // so hot runtime helpers (list indexing, unboxing) inline into user loops.
     Str lto  =  if (olevel == "-O0") { "" } else { " -flto -fuse-ld=lld" };
-    Str cmd  =  "clang " + olevel + lto + " " + ll + " " + rtc + " -Wno-override-module -pthread -o " + out;
+    // The Resid runtime's IR (runtime/rt/, lowered by boot.sh).
+    Str rhome  =  environment.get("RESID_HOME");
+    Str rtr  =  pick_opt(argc, "-rtr", if (rhome == "") { "build/boot/rt.ll" } else { rhome + "/rt.ll" });
+    Str cmd  =  "clang " + olevel + lto + " " + ll + " " + rtc + " " + rtr + " -Wno-override-module -pthread -o " + out;
     Int rc  =  process.run(cmd);
     if (rc != 0) {
         println("clang failed");

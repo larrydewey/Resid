@@ -306,6 +306,29 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0zj. The Resid runtime: infrastructure and first module (2026-09-26)
+
+- `runtime/rt/` holds the runtime written in Resid. `residc
+  runtime/rt/rt.resid --runtime-module -o build/boot/rt` lowers it to IR
+  only (`resid_rtmod`): integer + - * wrap as in C, no scalar scopes or
+  loop regions, and declarations of symbols the module defines are
+  dropped (`rt_clean`). `boot.sh` rebuilds it with each stage and
+  requires it to match the committed `build/boot/rt.ll` (like the seed);
+  `--bootstrap-from-self` re-lowers it every round. Every program links
+  `build/boot/rt.ll` (`-rtr`, default `$RESID_HOME/rt.ll`) next to what
+  is left of `runtime/resid_rt.c`.
+- `@export("sym", "ret(args)")` gives a Resid function a C-ABI entry
+  `sym`; `@import("sym", "ret(args)[ noreturn]")` calls a C-ABI function
+  (`lw_export_lines`, `lw_import`; wrappers carry the program's target
+  features so LTO inlines them).
+- Ported: the checked-arithmetic traps and the wrapping / saturating /
+  checked builtins, abs/min/max/clamp (`runtime/rt/arith.resid`).
+- Found on the way: resid-debug's return-address scan overflowed on
+  stack words near INT64_MIN (now `wrapping_sub`).
+- The benchmark suite is unchanged except spectral-norm, 1.10s -> 1.35s
+  with the same instructions: its loop's code alignment moved (with
+  `-align-loops=32` both builds run 1.16-1.18s).
+
 ### 0zi. The compiler moves to compiler/; internals locked by file (2026-09-26)
 
 - The compiler's sources moved from `examples/` to `compiler/` (entry

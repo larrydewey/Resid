@@ -1144,8 +1144,17 @@ GT lw_bin(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     if (ints && w.facts && lw_discharged(w, op, l, r, lhs2.ty, more2.ty)) {
         return lw_noted(w, id, check, true, bin_arith_nc(lw_ins(op), lhs2, more2));
     }
+    // The runtime (--runtime-module) wraps like C: plain add / sub / mul.
+    if (ints && (op == "+" || op == "-" || op == "*") && resid_rtmod()) { return lw_wrap_arith(bin_arith_nc(lw_ins(op), lhs2, more2)); }
     GT res = bin_apply(op, lhs2, more2);
     return if (ints) { lw_noted(w, id, check, false, res) } else { res };
+}
+
+GT lw_wrap_arith(GT g) {
+    if (g.err != "" || g.lines.len() == 0) { return g; }
+    Int n = g.lines.len();
+    Str last = str_replace(str_replace(g.lines[n - 1], " nsw ", " "), " nuw ", " ");
+    return GT {.pos = g.pos, .val = g.val, .ty = g.ty, .cnt = g.cnt, .err = "", .glines = g.glines, .lines = g.lines[0..n - 1].concat([last]), .tmp = g.tmp, .lbl = g.lbl, .tail = g.tail};
 }
 
 Str lw_ins(Str op) {
@@ -1802,7 +1811,7 @@ ST lw_bind(LW w, Int id, List(Str) env, ST g) {
         return ST {.pos = 0, .dead = g.dead, .err = "", .env = env_add(env, name + ":" + reg + ":" + dtyb), .glines = g1, .hlines = g.hlines, .lines = z1, .tmp = t1, .lbl = g.lbl, .rety = g.rety};
     }
     SW sw = lw_scope_wants(w, ve, SW {.found = false, .no = false});
-    Bool scoped = scal_ll(ll_ty(dtyb)) && sw.found && !sw.no;
+    Bool scoped = scal_ll(ll_ty(dtyb)) && sw.found && !sw.no && !resid_rtmod();
     Int sct = g.tmp + 1;
     Str screg = "%t" + IntToString(sct);
     GT g0 = gt_of_st(g);
@@ -2339,7 +2348,144 @@ PG pg_with_err(PG g, Str err) {
 }
 
 // pg_func_one, with the body lowered from the graph.
+// ─── Runtime ABI (--runtime-module): @export / @import ──────────────
+// `@export("sym", "ret(args)")` adds a C-ABI function `sym` calling this
+// one; `@import("sym", "ret(args)")` replaces the body with a call of the
+// C-ABI function `sym`. ABI types: ptr, i1, i8, i16, i32, i64, double,
+// void (a result only). Pointers travel as Int addresses.
 PG lw_fn(LW w0, Int d, PG g) {
+    Str aux = w0.g.ns[d].aux;
+    Str imp = lw_annot(aux, "@import(");
+    if (imp != "") { return lw_import(w0, d, g, imp); }
+    PG r = lw_fn_body(w0, d, g);
+    Str exp = lw_annot(aux, "@export(");
+    if (exp == "" || r.err != "") { return r; }
+    return PG {.pos = r.pos, .err = r.err, .glines = r.glines, .hlines = r.hlines, .lines = r.lines.concat(lw_export_lines(w0, d, exp)), .tmp = r.tmp, .lbl = r.lbl};
+}
+
+// "sym|sig" of an annotation `key"sym", "sig")`, or "".
+Str lw_annot(Str aux, Str key) {
+    Int at = str_find(aux, key);
+    if (at < 0) { return ""; }
+    Int q1 = str_find_char(aux, 34, at);
+    Int q2 = str_find_char(aux, 34, q1 + 1);
+    Int q3 = str_find_char(aux, 34, q2 + 1);
+    Int q4 = str_find_char(aux, 34, q3 + 1);
+    if (q1 < 0 || q2 < 0 || q3 < 0 || q4 < 0) { return ""; }
+    return str_slice(aux, q1 + 1, q2) + "|" + str_slice(aux, q3 + 1, q4);
+}
+
+// "ret(a,b)" -> [ret, a, b] ("ret(a) noreturn": a call never returns).
+List(Str) abi_sig(Str sig0) {
+    Str sig = abi_strip_nr(sig0);
+    Int lp = str_find_char(sig, 40, 0);
+    Str inner = str_slice(sig, lp + 1, str_len(sig) - 1);
+    List(Str) none = [];
+    List(Str) args = if (str_trim(inner) == "") { none } else { abi_trim_all(str_split(inner, ","), 0, ListBuf()) };
+    return [str_trim(str_slice(sig, 0, lp))].concat(args);
+}
+
+List(Str) abi_trim_all(List(Str) xs, Int i, ListBuf(Str) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return abi_trim_all(xs, i + 1, acc.push(str_trim(xs[i])));
+}
+
+// A wrapper's attributes match the functions it calls, so it inlines.
+Str abi_attrs() { return "\"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\""; }
+
+Str abi_strip_nr(Str sig) { return if (str_ends_with(sig, " noreturn")) { str_slice(sig, 0, str_len(sig) - 9) } else { sig }; }
+
+type CV = { List(Str) lines; Str val; };
+
+Int abi_bits(Str t) { return if (t == "i1") { 1 } else { if (t == "i8") { 8 } else { if (t == "i16") { 16 } else { if (t == "i32") { 32 } else { 64 } } } }; }
+
+// Value `v` of LLVM type `from` as type `to` (register names from `r`).
+CV abi_conv(Str from, Str to, Str v, Str r) {
+    if (from == to) { return CV {.lines = [], .val = v}; }
+    if (from == "ptr") {
+        CV x = CV {.lines = [r + "i = ptrtoint ptr " + v + " to i64"], .val = r + "i"};
+        return abi_join(x, abi_conv("i64", to, r + "i", r + "j"));
+    }
+    if (to == "ptr") {
+        CV x = abi_conv(from, "i64", v, r + "k");
+        return CV {.lines = x.lines.concat([r + " = inttoptr i64 " + x.val + " to ptr"]), .val = r};
+    }
+    Int fb = abi_bits(from);
+    Int tb = abi_bits(to);
+    if (to == "i1") { return CV {.lines = [r + " = icmp ne " + from + " " + v + ", 0"], .val = r}; }
+    if (tb < fb) { return CV {.lines = [r + " = trunc " + from + " " + v + " to " + to], .val = r}; }
+    Str ext = if (fb <= 8) { "zext" } else { "sext" };
+    return CV {.lines = [r + " = " + ext + " " + from + " " + v + " to " + to], .val = r};
+}
+
+CV abi_join(CV a, CV b) { return CV {.lines = a.lines.concat(b.lines), .val = b.val}; }
+
+// Convert argument list `vs` from types `fs` to `ts`; `pre` names registers.
+CV abi_args(List(Str) vs, List(Str) fs, List(Str) ts, Int i, Str pre, CV acc) {
+    if (i >= vs.len()) { return acc; }
+    CV c = abi_conv(fs[i], ts[i], vs[i], "%" + pre + IntToString(i));
+    Str part = ts[i] + " " + c.val;
+    Str s2 = if (acc.val == "") { part } else { acc.val + ", " + part };
+    return abi_args(vs, fs, ts, i + 1, pre, CV {.lines = acc.lines.concat(c.lines), .val = s2});
+}
+
+List(Str) abi_regs(Str pre, Int n, Int i, ListBuf(Str) acc) {
+    if (i >= n) { return acc.finish(); }
+    return abi_regs(pre, n, i + 1, acc.push("%" + pre + IntToString(i)));
+}
+
+Str abi_params(List(Str) ts, List(Str) rs, Int i, Str acc) {
+    if (i >= ts.len()) { return acc; }
+    Str p = ts[i] + " " + rs[i];
+    return abi_params(ts, rs, i + 1, if (acc == "") { p } else { acc + ", " + p });
+}
+
+List(Str) abi_impl_tys(LW w, Int d) {
+    Int n = w.g.ns[d].nk;
+    return ll_ty_list(ct_erase_list(w.fs, lw_param_tys(w, d, 1, n - 1, ListBuf()), 0, nil_list()), 0, nil_list());
+}
+
+Str abi_impl_ret(LW w, Int d) { return ll_ty(ct_base_of(w.fs.ctn, w.fs.ctb, lw_text(w, lw_kid(w, d, 0)))); }
+
+// A function body calling `callee` of types (cret, cts) from a function
+// of types (fret, fts), converting both ways.
+List(Str) abi_body(Str fret, List(Str) fts, Str cret, List(Str) cts, Str callee) {
+    return abi_body_nr(fret, fts, cret, cts, callee, false);
+}
+
+List(Str) abi_body_nr(Str fret, List(Str) fts, Str cret, List(Str) cts, Str callee, Bool nr) {
+    List(Str) ps = abi_regs("a", fts.len(), 0, ListBuf());
+    CV args = abi_args(ps, fts, cts, 0, "x", CV {.lines = [], .val = ""});
+    List(Str) call = if (cret == "void") { ["call void @" + callee + "(" + args.val + ")"] } else { ["%r = call " + cret + " @" + callee + "(" + args.val + ")"] };
+    CV back = if (cret == "void" || fret == "void") { CV {.lines = [], .val = "0"} } else { abi_conv(cret, fret, "%r", "%rv") };
+    Str ret = if (nr) { "unreachable" } else { if (fret == "void") { "ret void" } else { "ret " + fret + " " + back.val } };
+    return ["entry:"].concat(args.lines).concat(call).concat(back.lines).concat([ret, "}"]);
+}
+
+List(Str) lw_export_lines(LW w, Int d, Str exp) {
+    List(Str) q = str_split(exp, "|");
+    List(Str) sig = abi_sig(q[1]);
+    List(Str) cts = sig[1..sig.len()];
+    List(Str) ps = abi_regs("a", cts.len(), 0, ListBuf());
+    Str head = "define " + sig[0] + " @" + q[0] + "(" + abi_params(cts, ps, 0, "") + ") " + abi_attrs() + " {";
+    return [head].concat(abi_body(sig[0], cts, abi_impl_ret(w, d), abi_impl_tys(w, d), lw_text(w, d)));
+}
+
+PG lw_import(LW w, Int d, PG g, Str imp) {
+    List(Str) q = str_split(imp, "|");
+    List(Str) sig = abi_sig(q[1]);
+    List(Str) cts = sig[1..sig.len()];
+    List(Str) its = abi_impl_tys(w, d);
+    Str iret = abi_impl_ret(w, d);
+    List(Str) ps = abi_regs("a", its.len(), 0, ListBuf());
+    Str head = "define " + iret + " @" + lw_text(w, d) + "(" + abi_params(its, ps, 0, "") + ") " + abi_attrs() + " {";
+    Bool nr = str_ends_with(q[1], " noreturn");
+    Str decl = "declare " + sig[0] + " @" + q[0] + "(" + list_join(cts, 0, ", ", "") + ")" + (if (nr) { " noreturn" } else { "" });
+    List(Str) body = [head].concat(abi_body_nr(iret, its, sig[0], cts, q[0], nr));
+    return PG {.pos = g.pos, .err = "", .glines = g.glines.concat([decl]), .hlines = g.hlines, .lines = g.lines.concat(body), .tmp = g.tmp, .lbl = g.lbl};
+}
+
+PG lw_fn_body(LW w0, Int d, PG g) {
     Funcs fs = w0.fs;
     Int n = w0.g.ns[d].nk;
     Str rty = lw_text(w0, lw_kid(w0, d, 0));
@@ -2422,6 +2568,8 @@ List(Str) cap_rename_to(List(Str) ls, Str to, Int i, ListBuf(Str) acc) {
 // or a loop parameter, so the region pops there too.
 
 Bool lr_region_ok(LW w, Int d, List(Str) ls, List(Str) tyl) {
+    // The runtime manages its own memory: no regions inside it.
+    if (resid_rtmod()) { return false; }
     if (lg_closure(w.g, lw_kid(w, d, w.g.ns[d].nk - 1))) { return false; }
     Int h = lw_find_line(ls, "tco.head:", 1);
     return lr_phis_ok(ls, h + 1, tyl) && lr_exits_ok(ls, h + 1) && lr_allocates(w, ls, h + 1);

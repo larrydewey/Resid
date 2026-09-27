@@ -1,0 +1,7 @@
+// C-ABI functions the Resid runtime calls (still in runtime/resid_rt.c).
+
+@import("resid_abort", "void(ptr) noreturn")
+pub Int c_abort(Int msg) { return 0; }
+
+// Abort with a message: `msg` is a string literal.
+pub Int rt_abort(Str msg) { return c_abort(resid_raw_addr(msg)); }

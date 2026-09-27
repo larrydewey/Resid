@@ -32,6 +32,10 @@ SRC="${SCRIPT_DIR}/compiler/driver.resid"
 OUT="${SCRIPT_DIR}/build/boot"
 RUNTIME_C="${SCRIPT_DIR}/runtime/resid_rt.c"
 SEED_LL="${OUT}/seed.ll"
+# The Resid runtime (runtime/rt/), lowered to IR by the compiler itself;
+# committed like the seed and linked into every binary.
+RT_SRC="runtime/rt/rt.resid" # relative: symbol names follow the import path
+RT_LL="${OUT}/rt.ll"
 
 # Force stdlib resolution to this checkout's freshly-synced build/boot/
 export RESID_HOME="${OUT}"
@@ -53,7 +57,11 @@ die()  { echo -e "  \033[0;31m✗\033[0m $*"; exit 1; }
 RESID_OPT="${RESID_OPT:--O2}"
 
 link_clang() { # link_clang <ll> <out-bin>
-    clang "$RESID_OPT" -no-pie "$1" "$RUNTIME_C" -o "$2" -Wno-override-module -pthread
+    clang "$RESID_OPT" -no-pie "$1" "$RUNTIME_C" "$RT_LL" -o "$2" -Wno-override-module -pthread
+}
+
+build_rt() { # build_rt <compiler> <out-base>: runtime IR to <out-base>.ll
+    timeout 600 "$1" "$RT_SRC" --runtime-module -o "$2" > /dev/null || die "runtime module failed to compile"
 }
 
 # Release builds must be signed (spec §33.1). Without a configured key,
@@ -85,17 +93,23 @@ if [ "$BOOTSTRAP_SELF" -eq 1 ]; then
         NEXT_BIN="${OUT}/reseed_round${i}.bin"
         NEXT_LL="${NEXT_BIN}.ll"
         ensure_key "$PREV_BIN"
+        # The runtime first: the round's binary links the runtime its
+        # compiler lowers.
+        build_rt "$PREV_BIN" "${OUT}/reseed_rt${i}"
+        RT_SAME=0
+        cmp -s "${OUT}/reseed_rt${i}.ll" "$RT_LL" && RT_SAME=1
+        cp "${OUT}/reseed_rt${i}.ll" "$RT_LL"
         timeout 600 "$PREV_BIN" "$SRC" -o "$NEXT_BIN" --runtime-internals
         [ -f "$NEXT_LL" ] || die "round $i produced no output"
-        if cmp -s "$PREV_LL" "$NEXT_LL"; then
+        if cmp -s "$PREV_LL" "$NEXT_LL" && [ "$RT_SAME" -eq 1 ]; then
             ok "converged after $i round$([ "$i" -eq 1 ] && echo "" || echo "s")"
             cp "$NEXT_LL" "$SEED_LL"
             link_clang "$SEED_LL" "${OUT}/stage2.bin"
-            rm -f "${OUT}"/reseed_round*.ll "${OUT}"/reseed_round*.bin
+            rm -f "${OUT}"/reseed_round*.ll "${OUT}"/reseed_round*.bin "${OUT}"/reseed_rt*.ll
             ok "stage2 seeded from the self-hosted compiler"
             echo ""
             echo "Verify with a clean ./boot.sh (no args) and commit the new seed:"
-            echo "  git add -f build/boot/seed.ll build/boot/stage2.bin && git commit"
+            echo "  git add -f build/boot/seed.ll build/boot/rt.ll build/boot/stage2.bin && git commit"
             exit 0
         fi
         PREV_LL="$NEXT_LL"
@@ -130,6 +144,11 @@ step "stage1: clang from committed seed.ll"
 [ -f "$SEED_LL" ] || die "missing committed seed $SEED_LL — run ./boot.sh --bootstrap-from-rust first"
 link_clang "$SEED_LL" "${OUT}/stage1.bin"
 ok "stage1 linked"
+
+step "runtime: stage1 lowers runtime/rt/ (must byte-match build/boot/rt.ll)"
+build_rt "${OUT}/stage1.bin" "${OUT}/rt_check"
+cmp -s "${OUT}/rt_check.ll" "$RT_LL" || die "runtime IR differs from build/boot/rt.ll — runtime or compiler source changed; re-seed with --bootstrap-from-self"
+ok "runtime IR reproduced"
 
 # ── 2. stage1 -> stage2 (must reproduce the committed seed) ──────────────
 # The compiler links to -o itself and writes its IR to <out>.ll, so each

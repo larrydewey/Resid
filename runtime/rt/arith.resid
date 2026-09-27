@@ -1,0 +1,148 @@
+// Arithmetic helpers: the checked-arithmetic traps, and the wrapping,
+// saturating and checked builtins (spec §6.5).
+
+@export("resid_overflow_check", "void(i8)")
+pub Int rt_overflow_check(Int flag) {
+    if (flag != 0) { return rt_abort("integer overflow in checked arithmetic"); }
+    return 0;
+}
+
+@export("resid_div_check", "void(i8)")
+pub Int rt_div_check(Int flag) {
+    if (flag != 0) { return rt_abort("integer division by zero"); }
+    return 0;
+}
+
+@export("resid_conv_check", "void(i8)")
+pub Int rt_conv_check(Int flag) {
+    if (flag != 0) { return rt_abort("numeric conversion out of range"); }
+    return 0;
+}
+
+Int imax() { return 9223372036854775807; }
+Int imin() { return 0 - 9223372036854775807 - 1; }
+
+@export("wrapping_add", "i64(i64,i64)")
+pub Int rt_wrapping_add(Int a, Int b) { return a + b; }
+
+@export("wrapping_sub", "i64(i64,i64)")
+pub Int rt_wrapping_sub(Int a, Int b) { return a - b; }
+
+@export("wrapping_mul", "i64(i64,i64)")
+pub Int rt_wrapping_mul(Int a, Int b) { return a * b; }
+
+@export("wrapping_div", "i64(i64,i64)")
+pub Int rt_wrapping_div(Int a, Int b) {
+    if (b == 0) { return rt_abort("wrapping_div: division by zero"); }
+    if (b == 0 - 1) { return 0 - a; }
+    return a / b;
+}
+
+@export("wrapping_uadd", "i64(i64,i64)")
+pub Int rt_wrapping_uadd(Int a, Int b) { return a + b; }
+
+@export("wrapping_usub", "i64(i64,i64)")
+pub Int rt_wrapping_usub(Int a, Int b) { return a - b; }
+
+@export("wrapping_umul", "i64(i64,i64)")
+pub Int rt_wrapping_umul(Int a, Int b) { return a * b; }
+
+@export("wrapping_udiv", "i64(i64,i64)")
+pub Int rt_wrapping_udiv(Int a, Int b) {
+    if (b == 0) { return rt_abort("wrapping_udiv: division by zero"); }
+    return rt_udiv(a, b);
+}
+
+// Unsigned a / b (b != 0) on the bit patterns.
+Int rt_udiv(Int a, Int b) {
+    UInt(64) ua = (UInt(64))a;
+    UInt(64) ub = (UInt(64))b;
+    return (Int)(ua / ub);
+}
+
+// Unsigned a < b on the bit patterns.
+Bool rt_ult(Int a, Int b) { return (a ^ imin()) < (b ^ imin()); }
+
+@export("saturating_add", "i64(i64,i64)")
+pub Int rt_saturating_add(Int a, Int b) {
+    if (b > 0 && a > imax() - b) { return imax(); }
+    if (b < 0 && a < imin() - b) { return imin(); }
+    return a + b;
+}
+
+@export("saturating_sub", "i64(i64,i64)")
+pub Int rt_saturating_sub(Int a, Int b) {
+    if (b < 0 && a > imax() + b) { return imax(); }
+    if (b > 0 && a < imin() + b) { return imin(); }
+    return a - b;
+}
+
+@export("saturating_mul", "i64(i64,i64)")
+pub Int rt_saturating_mul(Int a, Int b) {
+    Int r = a * b;
+    Bool over = (a != 0 && (r / a != b || (a == 0 - 1 && b == imin()))) || (b == 0 - 1 && a == imin());
+    if (!over) { return r; }
+    return if ((a > 0) == (b > 0)) { imax() } else { imin() };
+}
+
+@export("saturating_uadd", "i64(i64,i64)")
+pub Int rt_saturating_uadd(Int a, Int b) {
+    Int r = a + b;
+    return if (rt_ult(r, a)) { 0 - 1 } else { r };
+}
+
+@export("saturating_usub", "i64(i64,i64)")
+pub Int rt_saturating_usub(Int a, Int b) { return if (rt_ult(a, b)) { 0 } else { a - b }; }
+
+@export("saturating_umul", "i64(i64,i64)")
+pub Int rt_saturating_umul(Int a, Int b) {
+    if (a == 0 || b == 0) { return 0; }
+    Int r = a * b;
+    return if (rt_udiv(r, a) != b) { 0 - 1 } else { r };
+}
+
+@export("checked_add", "i64(i64,i64)")
+pub Int rt_checked_add(Int a, Int b) { return a + b; }
+
+@export("checked_sub", "i64(i64,i64)")
+pub Int rt_checked_sub(Int a, Int b) { return a - b; }
+
+@export("checked_mul", "i64(i64,i64)")
+pub Int rt_checked_mul(Int a, Int b) { return a * b; }
+
+@export("checked_div", "i64(i64,i64)")
+pub Int rt_checked_div(Int a, Int b) {
+    if (b == 0) { return rt_abort("checked_div: division by zero"); }
+    return a / b;
+}
+
+@export("checked_uadd", "i64(i64,i64)")
+pub Int rt_checked_uadd(Int a, Int b) { return a + b; }
+
+@export("checked_usub", "i64(i64,i64)")
+pub Int rt_checked_usub(Int a, Int b) { return a - b; }
+
+@export("checked_umul", "i64(i64,i64)")
+pub Int rt_checked_umul(Int a, Int b) { return a * b; }
+
+@export("checked_udiv", "i64(i64,i64)")
+pub Int rt_checked_udiv(Int a, Int b) {
+    if (b == 0) { return rt_abort("checked_udiv: division by zero"); }
+    return rt_udiv(a, b);
+}
+
+@export("abs_i64", "i64(i64)")
+pub Int rt_abs_i64(Int x) { return if (x < 0) { 0 - x } else { x }; }
+
+@export("min_i64", "i64(i64,i64)")
+pub Int rt_min_i64(Int a, Int b) { return if (a < b) { a } else { b }; }
+
+@export("max_i64", "i64(i64,i64)")
+pub Int rt_max_i64(Int a, Int b) { return if (a > b) { a } else { b }; }
+
+@export("clamp_i64", "i64(i64,i64,i64)")
+pub Int rt_clamp_i64(Int x, Int lo, Int hi) {
+    if (x < lo) { return lo; }
+    if (x > hi) { return hi; }
+    return x;
+}

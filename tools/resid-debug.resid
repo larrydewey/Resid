@@ -666,7 +666,7 @@ Int db_caller(DB d, NT n, Int t) {
 @requires(process)
 Int db_scan_ret(DB d, NT n, Int t, Int sp, Int i) {
     if (i >= 4096) { return -1; }
-    Int w = resid_dbg_peek(t, sp + i * 8) - n.bias;
+    Int w = wrapping_sub(resid_dbg_peek(t, sp + i * 8), n.bias); // any stack word
     Int k = el_fn_at(d.dfs, w, 0);
     if (k >= 0 && w > d.dfs[k].lo) { return w; }
     return db_scan_ret(d, n, t, sp, i + 1);

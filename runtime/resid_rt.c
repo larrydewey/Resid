@@ -3228,85 +3228,8 @@ uint64_t usize(uint64_t v) { return v; }
  * They are callable from Resid source (e.g. `wrapping_add(a, b)`).
  */
 
-/* Default-operator checked arithmetic trap (spec §6.5): codegen computes
- * narrow add/sub with llvm.{s,u}{add,sub}.with.overflow and passes the
- * overflow flag here, so no extra basic block is needed at the use site. */
-void resid_overflow_check(int8_t overflowed) {
-    if (overflowed) resid_abort("integer overflow in checked arithmetic");
-}
-void resid_div_check(int8_t zero) {
-    if (zero) resid_abort("integer division by zero");
-}
-void resid_conv_check(int8_t bad) {
-    if (bad) resid_abort("numeric conversion out of range");
-}
-
-/* ── Wrapping operations (two's complement, computed unsigned: signed
- * overflow is undefined in C) ─ */
-int64_t wrapping_add(int64_t a, int64_t b) { return (int64_t)((uint64_t)a + (uint64_t)b); }
-int64_t wrapping_sub(int64_t a, int64_t b) { return (int64_t)((uint64_t)a - (uint64_t)b); }
-int64_t wrapping_mul(int64_t a, int64_t b) { return (int64_t)((uint64_t)a * (uint64_t)b); }
-int64_t wrapping_div(int64_t a, int64_t b) {
-    if (b == 0) resid_abort("wrapping_div: division by zero");
-    if (b == -1) return (int64_t)(0u - (uint64_t)a);
-    return a / b;
-}
-uint64_t wrapping_uadd(uint64_t a, uint64_t b) { return a + b; }
-uint64_t wrapping_usub(uint64_t a, uint64_t b) { return a - b; }
-uint64_t wrapping_umul(uint64_t a, uint64_t b) { return a * b; }
-uint64_t wrapping_udiv(uint64_t a, uint64_t b) {
-    if (b == 0) resid_abort("wrapping_udiv: division by zero");
-    return a / b;
-}
-
-/* ── Saturating operations ─────────────────────────────────────── */
-int64_t saturating_add(int64_t a, int64_t b) {
-    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
-    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
-    return a + b;
-}
-int64_t saturating_sub(int64_t a, int64_t b) {
-    if (b < 0 && a > INT64_MAX + b) return INT64_MAX;
-    if (b > 0 && a < INT64_MIN + b) return INT64_MIN;
-    return a - b;
-}
-int64_t saturating_mul(int64_t a, int64_t b) {
-    int64_t r;
-    if (__builtin_mul_overflow(a, b, &r)) return (a > 0) == (b > 0) ? INT64_MAX : INT64_MIN;
-    return r;
-}
-uint64_t saturating_uadd(uint64_t a, uint64_t b) {
-    if (b > 0 && a > UINT64_MAX - b) return UINT64_MAX;
-    return a + b;
-}
-uint64_t saturating_usub(uint64_t a, uint64_t b) {
-    if (b > a) return 0;
-    return a - b;
-}
-uint64_t saturating_umul(uint64_t a, uint64_t b) {
-    if (a == 0 || b == 0) return 0;
-    uint64_t r = a * b;
-    if (a != 0 && r / a != b) return UINT64_MAX;
-    return r;
-}
-
-/* ── Checked operations (returns result; caller checks via overflow flag) ─ */
-/* These return the computation result; the caller must have emitted an
-   overflow check before calling. For division by zero, resid_abort is called. */
-int64_t checked_add(int64_t a, int64_t b) { return wrapping_add(a, b); }
-int64_t checked_sub(int64_t a, int64_t b) { return wrapping_sub(a, b); }
-int64_t checked_mul(int64_t a, int64_t b) { return wrapping_mul(a, b); }
-int64_t checked_div(int64_t a, int64_t b) {
-    if (b == 0) resid_abort("checked_div: division by zero");
-    return a / b;
-}
-uint64_t checked_uadd(uint64_t a, uint64_t b) { return a + b; }
-uint64_t checked_usub(uint64_t a, uint64_t b) { return a - b; }
-uint64_t checked_umul(uint64_t a, uint64_t b) { return a * b; }
-uint64_t checked_udiv(uint64_t a, uint64_t b) {
-    if (b == 0) resid_abort("checked_udiv: division by zero");
-    return a / b;
-}
+/* The checked-arithmetic traps and the wrapping / saturating / checked
+ * builtins are in the Resid runtime (runtime/rt/arith.resid). */
 /*
  * Range and Slice runtime support (spec §15).
  *
@@ -6216,15 +6139,7 @@ int64_t str_parse_int(const char* s) {
     return (int64_t)strtoll(s, NULL, 10);
 }
 
-int64_t abs_i64(int64_t x) { return x < 0 ? -x : x; }
-int64_t min_i64(int64_t a, int64_t b) { return a < b ? a : b; }
-int64_t max_i64(int64_t a, int64_t b) { return a > b ? a : b; }
-
-int64_t clamp_i64(int64_t x, int64_t lo, int64_t hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
-    return x;
-}
+/* abs_i64 / min_i64 / max_i64 / clamp_i64: runtime/rt/arith.resid. */
 
 /* ─── Stdlib v1.2: float parsing + misc string helpers ─── */
 
