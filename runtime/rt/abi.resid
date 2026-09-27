@@ -50,3 +50,19 @@ pub Int rt_alloc(Int n) { return 0; }
 
 @import("resid_rt_arena_contains", "i8(ptr)")
 pub Int rt_arena_contains(Int p) { return 0; }
+
+@import("strtod", "double(ptr,ptr)")
+pub Float c_strtod(Int s, Int endp) { return 0.0; }
+
+@import("strncmp", "i32(ptr,ptr,i64)")
+pub Int c_strncmp(Int a, Int b, Int n) { return 0; }
+
+// The persistent-list API of runtime/resid_rt.c.
+@import("resid_list_new", "ptr(i64,ptr,ptr)")
+pub Int c_list_new(Int n, Int items, Int ty) { return 0; }
+
+@import("resid_list_len", "i64(ptr)")
+pub Int c_list_len(Int l) { return 0; }
+
+@import("resid_list_to_array", "ptr(ptr)")
+pub Int c_list_to_array(Int l) { return 0; }

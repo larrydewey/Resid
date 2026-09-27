@@ -1,0 +1,229 @@
+// String verbs (spec §14, codepoint-based): trim, contains, prefixes,
+// repeat, replace, split, join, integer and float parsing, count, reverse.
+
+Bool is_space(Int c) { return c == 32 || c == 9 || c == 10 || c == 13 || c == 11 || c == 12; }
+
+Int skip_space(Int b, Int e) {
+    if (b < e && is_space(ld8(b))) { return skip_space(b + 1, e); }
+    return b;
+}
+
+Int back_space(Int b, Int e) {
+    if (e > b && is_space(ld8(e - 1))) { return back_space(b, e - 1); }
+    return e;
+}
+
+@export("str_trim", "ptr(ptr)")
+pub Int rt_str_trim(Int s) {
+    Int b = skip_space(s, s + c_strlen(s));
+    Int e = back_space(b, s + c_strlen(s));
+    return cstr_from(b, e - b, 0);
+}
+
+@export("str_contains", "i8(ptr,ptr)")
+pub Int rt_str_contains(Int s, Int needle) { return if (c_strstr(s, needle) != 0) { 1 } else { 0 }; }
+
+@export("str_starts_with", "i8(ptr,ptr)")
+pub Int rt_str_starts_with(Int s, Int pre) { return if (c_strncmp(s, pre, c_strlen(pre)) == 0) { 1 } else { 0 }; }
+
+@export("str_ends_with", "i8(ptr,ptr)")
+pub Int rt_str_ends_with(Int s, Int suf) {
+    Int ls = c_strlen(s);
+    Int lf = c_strlen(suf);
+    if (lf > ls) { return 0; }
+    return if (c_strcmp(s + ls - lf, suf) == 0) { 1 } else { 0 };
+}
+
+// `times` copies of s (none for times <= 0).
+@export("str_repeat", "ptr(ptr,i64)")
+pub Int rt_str_repeat(Int s, Int times0) {
+    Int times = if (times0 < 0) { 0 } else { times0 };
+    Int ls = c_strlen(s);
+    if (ls > 0 && times > 9223372036854775807 / ls) { return cstr_from(s, 0, 0); }
+    Int p = c_malloc(ls * times + 1);
+    if (p == 0) { return cstr_from(s, 0, 0); }
+    Int e = repeat_at(p, s, ls, times);
+    Int _z = st8(e, 0);
+    return p;
+}
+
+Int repeat_at(Int w, Int s, Int ls, Int k) {
+    if (k <= 0) { return w; }
+    Int _c = mcopy(w, s, ls);
+    return repeat_at(w + ls, s, ls, k - 1);
+}
+
+// Non-overlapping occurrences of needle (length ln > 0) from q.
+Int count_hits(Int q, Int needle, Int ln, Int n) {
+    Int h = c_strstr(q, needle);
+    if (h == 0) { return n; }
+    return count_hits(h + ln, needle, ln, n + 1);
+}
+
+@export("str_replace", "ptr(ptr,ptr,ptr)")
+pub Int rt_str_replace(Int s, Int from, Int to) {
+    Int lf = c_strlen(from);
+    Int lt = c_strlen(to);
+    if (lf == 0) { return cstr_dup(s); }
+    Int hits = count_hits(s, from, lf, 0);
+    Int ls = c_strlen(s);
+    Int add = if (lt > lf) { hits * (lt - lf) } else { 0 };
+    Int p = xmalloc(ls + add + 1);
+    Int e = replace_at(p, s, from, lf, to, lt);
+    return p;
+}
+
+Int replace_at(Int w, Int q, Int from, Int lf, Int to, Int lt) {
+    Int h = c_strstr(q, from);
+    if (h == 0) {
+        Int n = c_strlen(q);
+        return mcopy(w, q, n + 1) + w + n;
+    }
+    Int _a = mcopy(w, q, h - q);
+    Int _b = mcopy(w + (h - q), to, lt);
+    return replace_at(w + (h - q) + lt, h + lf, from, lf, to, lt);
+}
+
+// Split s on sep into a List(Str); an empty sep gives [s].
+@export("str_split", "ptr(ptr,ptr)")
+pub Int rt_str_split(Int s, Int sep) {
+    Int ty = resid_raw_addr("List(Str)");
+    Int lsep = c_strlen(sep);
+    if (lsep == 0) {
+        Int one = resid_raw_tls("split_one", 8);
+        Int _o = st64(one, s);
+        return c_list_new(1, one, ty);
+    }
+    Int parts = count_hits(s, sep, lsep, 0) + 1;
+    Int arr = xmalloc(parts * 8);
+    Int _f = split_at(arr, 0, s, sep, lsep);
+    Int out = c_list_new(parts, arr, ty);
+    Int _x = c_free(arr);
+    return out;
+}
+
+Int split_at(Int arr, Int i, Int q, Int sep, Int lsep) {
+    Int h = c_strstr(q, sep);
+    if (h == 0) { return st64(arr + i * 8, cstr_dup(q)); }
+    Int _p = st64(arr + i * 8, cstr_from(q, h - q, 0));
+    return split_at(arr, i + 1, h + lsep, sep, lsep);
+}
+
+// Join a List(Str) with sep.
+@export("str_join", "ptr(ptr,ptr)")
+pub Int rt_str_join(Int list, Int sep) {
+    Int n = c_list_len(list);
+    Int items = c_list_to_array(list);
+    Int lsep = c_strlen(sep);
+    Int total = join_len(items, 0, n, 0) + (if (n > 0) { lsep * (n - 1) } else { 0 });
+    Int p = xmalloc(total + 1);
+    Int e = join_at(p, items, 0, n, sep, lsep);
+    Int _z = st8(e, 0);
+    Int _f = c_free(items);
+    return p;
+}
+
+Int join_len(Int items, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return join_len(items, i + 1, n, acc + c_strlen(ld64(items + i * 8)));
+}
+
+Int join_at(Int w, Int items, Int i, Int n, Int sep, Int lsep) {
+    if (i >= n) { return w; }
+    Int w1 = if (i > 0) { mcopy(w, sep, lsep) + w + lsep } else { w };
+    Int it = ld64(items + i * 8);
+    Int li = c_strlen(it);
+    Int _c = mcopy(w1, it, li);
+    return join_at(w1 + li, items, i + 1, n, sep, lsep);
+}
+
+Bool all_digits(Int p) {
+    Int c = ld8(p);
+    if (c == 0) { return true; }
+    if (c < 48 || c > 57) { return false; }
+    return all_digits(p + 1);
+}
+
+Bool is_int(Int s) {
+    Int c = ld8(s);
+    if (c == 0) { return false; }
+    Int p = if (c == 45 || c == 43) { s + 1 } else { s };
+    return ld8(p) != 0 && all_digits(p);
+}
+
+@export("str_is_int", "i8(ptr)")
+pub Int rt_str_is_int(Int s) { return if (is_int(s)) { 1 } else { 0 }; }
+
+// Digits as strtoll reads them: saturating at the Int range.
+@export("str_parse_int", "i64(ptr)")
+pub Int rt_str_parse_int(Int s) {
+    if (!is_int(s)) { return 0; }
+    Bool neg = ld8(s) == 45;
+    Int p = if (ld8(s) == 45 || ld8(s) == 43) { s + 1 } else { s };
+    // Accumulate the negative magnitude: it reaches INT64_MIN exactly.
+    Int m = neg_digits(p, 0);
+    if (m == 1) { return if (neg) { 0 - 9223372036854775807 - 1 } else { 9223372036854775807 }; }
+    if (neg) { return m; }
+    if (m == 0 - 9223372036854775807 - 1) { return 9223372036854775807; }
+    return 0 - m;
+}
+
+// -value of the digits, or 1 on overflow past INT64_MIN.
+Int neg_digits(Int p, Int acc) {
+    Int c = ld8(p);
+    if (c == 0) { return acc; }
+    Int d = c - 48;
+    Int lim = 0 - 922337203685477580;
+    if (acc < lim || (acc == lim && d > 8)) { return 1; }
+    return neg_digits(p + 1, acc * 10 - d);
+}
+
+// strtod reads a float and the rest is spaces or tabs.
+Bool is_float(Int s) {
+    if (ld8(s) == 0) { return false; }
+    Int endp = resid_raw_tls("strtod_end", 8);
+    Float _v = c_strtod(s, endp);
+    Int e = ld64(endp);
+    Int t = skip_tabs(e);
+    return ld8(t) == 0 && e != s;
+}
+
+Int skip_tabs(Int p) {
+    Int c = ld8(p);
+    if (c == 32 || c == 9) { return skip_tabs(p + 1); }
+    return p;
+}
+
+@export("str_is_float", "i8(ptr)")
+pub Int rt_str_is_float(Int s) { return if (is_float(s)) { 1 } else { 0 }; }
+
+@export("str_parse_float", "double(ptr)")
+pub Float rt_str_parse_float(Int s) {
+    if (!is_float(s)) { return 0.0; }
+    return c_strtod(s, 0);
+}
+
+@export("str_count", "i64(ptr,ptr)")
+pub Int rt_str_count(Int s, Int needle) {
+    Int ln = c_strlen(needle);
+    if (ln == 0) { return 0; }
+    return count_hits(s, needle, ln, 0);
+}
+
+@export("str_reverse", "ptr(ptr)")
+pub Int rt_str_reverse(Int s) {
+    Int n = c_strlen(s);
+    Int out = xmalloc(n + 1);
+    Int _r = rev_at(s, out + n);
+    Int _z = st8(out + n, 0);
+    return out;
+}
+
+// Copy each codepoint of p to just before w (the output is filled from
+// its end).
+Int rev_at(Int p, Int w) {
+    if (ld8(p) == 0) { return 0; }
+    Int len = utf8_len_at(p);
+    Int _c = mcopy(w - len, p, len);
+    return rev_at(p + len, w - len);
+}

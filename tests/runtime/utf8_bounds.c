@@ -2,6 +2,10 @@
  * invalid UTF-8 (each test string sits at the very end of a page, so an
  * over-read faults). */
 #include "../../runtime/resid_rt.c"
+/* In runtime/rt/ (Resid). */
+char* str_reverse(const char* s);
+char* str_to_lower(const char* s);
+char* str_to_upper(const char* s);
 #include <sys/mman.h>
 
 static const char* at_page_end(const char* s) {

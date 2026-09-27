@@ -1,0 +1,116 @@
+// Unicode simple case mapping (tables: case_tables.resid, generated) with
+// SpecialCasing's unconditional uppercase expansions and Final_Sigma.
+
+// Binary search of a (from, to) pair table; 0 when absent.
+Int case_lookup(Int tab, Int n, Int cp) { return case_bs(tab, cp, 0, n - 1); }
+
+Int case_bs(Int tab, Int cp, Int lo, Int hi) {
+    if (lo > hi) { return 0; }
+    Int mid = lo + (hi - lo) / 2;
+    Int from = ld64(tab + mid * 16);
+    if (cp == from) { return ld64(tab + mid * 16 + 8); }
+    if (cp < from) { return case_bs(tab, cp, lo, mid - 1); }
+    return case_bs(tab, cp, mid + 1, hi);
+}
+
+pub Int case_simple(Int cp, Bool to_lower) {
+    Int m = if (to_lower) { case_lookup(case_lower_tab(), case_lower_n(), cp) } else { case_lookup(case_upper_tab(), case_upper_n(), cp) };
+    return if (m != 0) { m } else { cp };
+}
+
+// The special uppercase entry of cp (its address), or 0.
+Int special_upper(Int cp) { return special_bs(case_special_tab(), cp, 0, case_special_n() - 1); }
+
+Int special_bs(Int tab, Int cp, Int lo, Int hi) {
+    if (lo > hi) { return 0; }
+    Int mid = lo + (hi - lo) / 2;
+    Int e = tab + mid * 88;
+    Int from = ld64(e);
+    if (cp == from) { return e; }
+    if (cp < from) { return special_bs(tab, cp, lo, mid - 1); }
+    return special_bs(tab, cp, mid + 1, hi);
+}
+
+Bool is_cased(Int cp) {
+    return case_lookup(case_lower_tab(), case_lower_n(), cp) != 0 || case_lookup(case_upper_tab(), case_upper_n(), cp) != 0;
+}
+
+// Transparent when scanning for a cased neighbour: combining marks in the
+// common ranges.
+Bool is_ignorable(Int cp) {
+    if (is_cased(cp)) { return false; }
+    return (cp >= 768 && cp <= 879) || (cp >= 1155 && cp <= 1161) || (cp >= 1425 && cp <= 1469) || (cp >= 1552 && cp <= 1562) || (cp >= 1611 && cp <= 1631) || (cp >= 3633 && cp <= 3642) || (cp >= 8204 && cp <= 8207) || (cp >= 65024 && cp <= 65039);
+}
+
+// Is the first non-ignorable codepoint before q (not before s) cased?
+Bool prev_cased(Int s, Int q) {
+    if (q <= s) { return false; }
+    Int r = back_lead(s, q - 1);
+    Int cp = utf8_decode(r, q - r);
+    if (!is_ignorable(cp)) { return is_cased(cp); }
+    return prev_cased(s, r);
+}
+
+// The lead byte of the sequence ending at r.
+Int back_lead(Int s, Int r) {
+    if ((ld8(r) & 128) == 0) { return r; }
+    if (r > s && (ld8(r - 1) & 192) == 128) { return back_lead(s, r - 1); }
+    return if (r > s && (ld8(r) & 192) == 128) { r - 1 } else { r };
+}
+
+Bool next_cased(Int nx) {
+    if (ld8(nx) == 0) { return false; }
+    Int nl = utf8_len_at(nx);
+    Int cp = utf8_decode(nx, nl);
+    if (!is_ignorable(cp)) { return is_cased(cp); }
+    return next_cased(nx + nl);
+}
+
+Int lower_at(Int s, Int p, Int w) {
+    if (ld8(p) == 0) { return w; }
+    Int len = utf8_len_at(p);
+    Int cp = utf8_decode(p, len);
+    Int m = if (cp == 931) { if (prev_cased(s, p) && !next_cased(p + len)) { 962 } else { 963 } } else { case_simple(cp, true) };
+    return lower_at(s, p + len, w + utf8_encode(m, w));
+}
+
+@export("str_to_lower", "ptr(ptr)")
+pub Int rt_str_to_lower(Int s) {
+    Int out = xmalloc(rt_str_len(s) * 4 + 8);
+    Int e = lower_at(s, s, out);
+    Int _z = st8(e, 0);
+    return out;
+}
+
+Int upper_at(Int p, Int w) {
+    if (ld8(p) == 0) { return w; }
+    Int len = utf8_len_at(p);
+    Int cp = utf8_decode(p, len);
+    Int sp = special_upper(cp);
+    Int n = if (sp != 0) { copy_words(w, sp + 16, ld64(sp + 8)) } else { utf8_encode(case_simple(cp, false), w) };
+    return upper_at(p + len, w + n);
+}
+
+// Bytes stored one per word at src, to dst; returns the count.
+Int copy_words(Int dst, Int src, Int n) {
+    Int _k = copy_words_at(dst, src, 0, n);
+    return n;
+}
+
+Int copy_words_at(Int dst, Int src, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _s = st8(dst + i, ld64(src + i * 8));
+    return copy_words_at(dst, src, i + 1, n);
+}
+
+@export("str_to_upper", "ptr(ptr)")
+pub Int rt_str_to_upper(Int s) {
+    // An expansion is at most 9 bytes for a 1-4 byte codepoint.
+    Int out = xmalloc(rt_str_len(s) * 9 + 8);
+    Int e = upper_at(s, out);
+    Int _z = st8(e, 0);
+    return out;
+}
+
+@export("resid_case_simple", "i32(i32,i32)")
+pub Int rt_case_simple(Int cp, Int to_lower) { return case_simple(cp, to_lower != 0); }
