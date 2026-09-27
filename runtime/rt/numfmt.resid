@@ -21,36 +21,13 @@ pub Int rt_uint_to_string(Int v) {
     return cstr_from(buf, utoa_into(buf, v), 0);
 }
 
-// Digits of an unsigned 128-bit value, written backwards from `end`;
-// returns the first digit's address.
-Int u128_digits(UInt(128) u, Int end) {
-    UInt(128) ten = 10;
-    UInt(128) q = u / ten;
-    Int d = (Int)(u - q * ten);
-    Int at = end - 1;
-    Int _s = st8(at, 48 + d);
-    if (q == (UInt(128))0) { return at; }
-    return u128_digits(q, at);
-}
-
 @export("Int128ToString", "ptr(i128)")
-pub Int rt_int128_to_string(Int(128) v) {
-    Int buf = resid_raw_tls("wide_buf", 64);
-    Bool neg = v < (Int(128))0;
-    UInt(128) mag = if (neg) { (UInt(128))((Int(128))0 - v) } else { (UInt(128))v };
-    Int p = u128_digits(mag, buf + 60);
-    Int start = if (neg) { st8(p - 1, 45) + p - 1 } else { p };
-    return cstr_from(start, buf + 60 - start, 0);
-}
+pub Int rt_int128_to_string(Int(128) v) { return limbs_to_str(limbs_i128(v), 2, v < (Int(128))0); }
 
 @export("UInt128ToString", "ptr(i128)")
-pub Int rt_uint128_to_string(UInt(128) u) {
-    Int buf = resid_raw_tls("wide_buf", 64);
-    Int p = u128_digits(u, buf + 60);
-    return cstr_from(p, buf + 60 - p, 0);
-}
+pub Int rt_uint128_to_string(Int(128) v) { return limbs_to_str(limbs_i128(v), 2, false); }
 
-// ─── 256 / 512-bit values as u64 limbs (little-endian) ────────────────
+// ─── Wider values as u64 limbs (little-endian), any count ─────────────
 
 // Two's complement negation of `count` limbs at w.
 Int limbs_negate(Int w, Int k, Int count, Int carry) {
@@ -83,12 +60,25 @@ Int limbs_digits(Int w, Int count, Int at) {
     return limbs_digits(w, count, at - 1);
 }
 
-Int limbs_to_str(Int w, Int count, Bool neg) {
+pub Int limbs_to_str(Int w, Int count, Bool neg) {
     Int _n = if (neg) { limbs_negate(w, 0, count, 1) } else { 0 };
     Int buf = resid_raw_tls("limb_buf", 208);
     Int p = limbs_digits(w, count, buf + 204);
     Int start = if (neg) { st8(p - 1, 45) + p - 1 } else { p };
     return cstr_from(start, buf + 204 - start, 0);
+}
+
+Int limbs_i128(Int(128) v) {
+    Int w = resid_raw_tls("limbs", 64);
+    Int _a = st64(w, (Int)v);
+    return st64(w + 8, (Int)(v >> (Int(128))64)) * 0 + w;
+}
+
+// The 16-byte payload of an Int(128) / UInt(128) scalar box.
+pub Int limbs2(Int p) {
+    Int w = resid_raw_tls("limbs", 64);
+    Int _a = st64(w, ld64(p + 24));
+    return st64(w + 8, ld64(p + 32)) * 0 + w;
 }
 
 Int limbs4(Int l0, Int l1, Int l2, Int l3) {
