@@ -149,9 +149,12 @@ before `runtime/` existed — see "Provenance" above.)
 
 ## Rebuilding stage0 for a new host architecture
 
-The Rust pipeline that built this binary (`bootstrap/rust-stage0/`) was
-deleted on 2026-09-26. To cover a new architecture, recover it from git
-history (the last commit containing `bootstrap/rust-stage0/`) or port the
-committed IR seed (`build/boot/seed.ll`), then add the new binary here
-following the `residc-seed-<os>-<arch>` naming convention with its own
-`.sha256` file.
+No Rust is needed (the Rust pipeline that built this binary was deleted
+on 2026-09-26). The compiler emits target-neutral LLVM IR text, so a new
+64-bit architecture is reached by cross-compiling `compiler/driver.resid`
+on an existing host and linking with `clang --target=<triple>`. First the
+x86_64-specific pieces must become per-target: the `target-features`
+string in `compiler/lower.resid`, the `resid_raw_syscall` lowering and the
+system call numbers in `runtime/rt/`, and the debugger's register layout
+in `runtime/rt/sys.resid`. Add the new binary here following the
+`residc-seed-<os>-<arch>` naming convention with its own `.sha256` file.

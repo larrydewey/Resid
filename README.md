@@ -199,7 +199,7 @@ Once you have a self-hosted `residc` (or any later generation):
 
 ### Rebuilding stage0 for a new host architecture
 
-The Rust pipeline that built the first stage0 was deleted on 2026-09-26. To bootstrap on a new architecture, recover it from git history (the last commit containing `bootstrap/rust-stage0/`), or port the committed IR seed (`build/boot/seed.ll`) to the new target. Add the resulting binary and its `.sha256` to `bootstrap/stage0/`.
+The compiler emits target-neutral LLVM IR text (no `target triple`; clang picks the target), so a new 64-bit architecture needs no Rust: cross-compile `compiler/driver.resid` on an existing host, link the IR with `clang --target=<triple>`, and check that `./boot.sh` reaches its fixed point on the new machine. Three things still tie the output to x86_64 and must become per-target first: the `target-features` string in `compiler/lower.resid`, the `resid_raw_syscall` lowering (x86 `syscall` inline asm) and the system call numbers in `runtime/rt/`, and the debugger's register layout in `runtime/rt/sys.resid`. Add the resulting binary and its `.sha256` to `bootstrap/stage0/`.
 
 ---
 
