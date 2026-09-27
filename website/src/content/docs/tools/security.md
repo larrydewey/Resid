@@ -1,0 +1,64 @@
+---
+title: Security model
+description: What Resid guarantees, how each guarantee is enforced, and what it does not guarantee.
+---
+
+Resid's security claims are kept in a ledger, `SECURITY.md` in the
+repository, where every guarantee names the code that enforces it and the
+tests that fail if it breaks. This page summarizes it.
+
+## Threat model
+
+- **Untrusted library code** must not gain capabilities the program did
+  not grant it, or reach the runtime's memory internals.
+- **Untrusted package sources** must deliver exactly what a trusted key
+  signed, and the package that was asked for.
+- **Untrusted input data** must not cause out-of-bounds memory access.
+- Out of scope: an attacker who can write the build tree, side channels,
+  and denial of service (malformed input may abort the process).
+
+## Guarantees
+
+**Authority.**
+- *No ambient authority:* every capability a function uses, directly or
+  through calls, closures and behaviors, is granted by its `@requires` or
+  its sandbox (`E0219`).
+- *Only narrowing:* sandboxes and attenuated imports only narrow authority,
+  and manifest ceilings bound dependencies.
+- *Regions:* a `spawn` region gets only its listed capabilities.
+- *Checked twice:* every provider call is checked again before it runs,
+  against the thread's sandbox frames, and a read-only grant never covers
+  a write.
+
+**Internals.** The runtime's memory primitives are not part of the
+language. They are accepted only in the compiler's own sources and the
+runtime, under a driver flag that is honored only for those entry files
+(`E0220`). A test keeps `lib/` and `tools/` free of them.
+
+**Memory safety.**
+- Indexing is bounds-checked unless the compiler proves the index in range.
+- Arithmetic and conversions are checked unless provably safe.
+- String functions never read past the end of a string.
+- There is no FFI and no `extern`: a program reaches the operating system
+  only through providers and builtins.
+
+**Packages.** Content-hashed archives, Ed25519 signatures, registry index
+signatures, pinned keys and keyrings. The package must match the request,
+and extraction cannot escape its directory.
+
+**Provenance.** Every release binary carries a signed record binding
+source, code and sidecars; `residc verify` checks it.
+
+**Bootstrap.** The committed seed must reproduce itself byte for byte
+through two rebuilds from source.
+
+## Not guaranteed
+
+- The TLS 1.3 client does not authenticate servers (no trust store). Do
+  not use it where an active attacker matters.
+- Constant-time behavior of compiled code is not verified.
+- DER, X.509 and HPACK parsers abort on malformed input instead of
+  returning an error.
+- The runtime and the compiler's in-place updates are tested, not proven.
+- A seed that reproduces itself while miscompiling ("trusting trust") is
+  not ruled out; no independent second compiler is maintained.

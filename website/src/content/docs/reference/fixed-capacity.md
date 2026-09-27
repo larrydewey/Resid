@@ -1,0 +1,47 @@
+---
+title: Fixed-capacity types
+description: Str(N), Bytes(N) and List(T, N), their literals, casts and access rules.
+---
+
+`Str(N)`, `Bytes(N)` and `List(T, N)` have a statically known extent, so
+the compiler may keep them inline in the activation frame; they never need
+a heap allocation. Every `N` is a distinct nominal type.
+
+| Type | Holds | Storage |
+|---|---|---|
+| `Str(N)` | a UTF-8 string of at most N bytes | N + 1 bytes, NUL-terminated |
+| `Bytes(N)` | at most N bytes | N bytes |
+| `List(T, N)` | exactly N elements | N × size of T |
+
+## Literals
+
+```resid
+Int main() {
+    Str(8) s = "abc";
+    List(Int, 5) xs = [10, 20, 30];       // slots 3 and 4 are zero
+    println(f"{s} {xs.len()} {xs[1]} {xs[4]}");
+    return 0;
+}
+```
+
+```text title="Output"
+abc 5 20 0
+```
+
+A literal larger than the capacity is a compile-time error; nothing is
+ever silently truncated except by an explicit cast.
+
+## Casts
+
+- `Str(N)` → `Str` and `Bytes(N)` → `Bytes`: a view, no copy.
+- `Str` → `Str(N)`, `Str(N)` → `Str(M)`, and the `Bytes` equivalents: a
+  bounded copy that keeps the longest prefix of whole code points that fits.
+- `List(T, N)` → `List(T)`: copies all N elements.
+
+## Access
+
+Indexing is bounds-checked against the capacity (`Str(N)` against its
+content) and aborts when out of range. `.len()` of a `List(T, N)` is N.
+Fixed strings and byte arrays can be passed to the built-in functions that
+take `Str` or `Bytes`; a user function needs the exact type, so convert
+with a cast. `Eq`, `Ord` and `Hash` do not extend to fixed-capacity types.

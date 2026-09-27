@@ -1,0 +1,73 @@
+---
+title: Resid
+description: An eager compile-time programming language. What remains is what matters.
+template: splash
+hero:
+  tagline: An eager compile-time language. The compiler reduces everything it can prove; only the residue runs.
+  image:
+    html: '<img src="/Resid/mascot.png" alt="Rezzi the Residual, the Resid mascot" class="rezzi-hero" />'
+  actions:
+    - text: Learn Resid
+      link: /Resid/learn/
+      icon: right-arrow
+    - text: Behaviors
+      link: /Resid/behaviors/
+      variant: minimal
+    - text: Reference
+      link: /Resid/reference/
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## What remains is what matters
+
+```resid
+Int fib(Int n) { return if (n < 2) { n } else { fib(n - 1) + fib(n - 2) }; }
+
+Int main() {
+    // Every argument is known, so the compiler computes this while it builds.
+    println(f"fib(25) = {fib(25)}");
+    return 0;
+}
+```
+
+```text title="Output"
+fib(25) = 75025
+```
+
+Resid treats compilation as **reduction of knowledge**. Anything the compiler
+can prove, it computes at build time; what stays is the *residual* program,
+lowered to native code through LLVM. Every reduction is recorded in a
+knowledge graph that the debugger and tools read, so you can always ask
+*why* something ran at runtime.
+
+<CardGrid>
+	<Card title="Values, not variables" icon="seti:lock">
+		Immutable bindings, no null, no shadowing. Maps, lists and strings
+		are values, yet updated in place when the compiler proves nobody else
+		can see them.
+	</Card>
+	<Card title="Authority is explicit" icon="approve-check">
+		No ambient authority. Every function that touches the filesystem, the
+		network or processes says so with `@requires`, checked transitively,
+		and libraries can be sandboxed.
+	</Card>
+	<Card title="Numbers that don't lie" icon="seti:calculator">
+		Int(8) to Int(512), Float(16) to Float(128), exact Dec(N). Arithmetic
+		is checked at every width; nothing wraps or truncates silently.
+	</Card>
+	<Card title="Self-hosted, no C" icon="rocket">
+		The compiler is written in Resid and compiles itself in about a
+		second. The runtime is Resid too: binaries need no C library.
+	</Card>
+</CardGrid>
+
+## Four books
+
+<CardGrid>
+	<LinkCard title="Learn Resid" href="/Resid/learn/" description="A tour from installing the compiler to capabilities, concurrency and testing." />
+	<LinkCard title="Behaviors" href="/Resid/behaviors/" description="Ordering, showing and generic verbs, and how to behavioralize your code." />
+	<LinkCard title="Reference" href="/Resid/reference/" description="The language, section by section, distilled from the specification." />
+	<LinkCard title="Stdlib & Tools" href="/Resid/tools/" description="The compiler, providers, the standard library, the editor, the debugger and the benchmarks." />
+</CardGrid>

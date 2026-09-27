@@ -1,0 +1,53 @@
+/* Resid branding: black and white, Inter for text, JetBrains Mono for code. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root {
+	--sl-font: 'Inter', system-ui, sans-serif;
+	--sl-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+	--sl-color-accent-low: #1a1a1a;
+	--sl-color-accent: #ffffff;
+	--sl-color-accent-high: #ffffff;
+	--sl-color-white: #ffffff;
+	--sl-color-black: #000000;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #e8e8e8;
+	--sl-color-accent: #000000;
+	--sl-color-accent-high: #000000;
+}
+
+/* The logo is black on transparent: white in dark mode. */
+:root[data-theme='dark'] .site-title img,
+:root[data-theme='dark'] .rezzi,
+:root[data-theme='dark'] .hero img {
+	filter: invert(1);
+}
+
+.site-title img {
+	height: 2rem;
+	width: auto;
+}
+
+h1, h2, h3 {
+	font-weight: 800;
+	letter-spacing: -0.01em;
+}
+
+.rezzi {
+	float: right;
+	width: 110px;
+	margin: 0 0 1rem 1.5rem;
+}
+
+/* Rezzi stands whole in the hero. */
+.rezzi-hero {
+	display: block;
+	margin: 0 auto;
+	width: auto;
+	height: min(26rem, 60vw);
+}
+
+:root[data-theme='dark'] .rezzi-hero {
+	filter: invert(1);
+}

@@ -1,0 +1,42 @@
+---
+title: Learn Resid
+description: A guided tour of the Resid language, from the first program to capabilities, concurrency and testing.
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+<img src="/Resid/mascot.svg" alt="Rezzi" class="rezzi" />
+
+Resid is a statically typed, compiled language whose compiler is obliged to
+**compute everything it can prove** before it emits code. A program is
+reduced, step by step, until only computation that truly depends on runtime
+information is left. That remainder, the *residual* program, is what your
+binary runs.
+
+This book is a tour. Each chapter builds on the previous one, and every
+complete example on these pages is compiled and run by the documentation
+build, with its output checked, so what you read is what the compiler does.
+
+## The ideas in one page
+
+- **Values are immutable.** A binding never changes, and nothing can be
+  reassigned or shadowed. Lists, maps and strings are values too; the
+  compiler updates them in place only when it can prove no one else sees the
+  old version.
+- **Everything starts out compile-time.** A call whose arguments are known is
+  evaluated while compiling. A call with some known arguments is specialized.
+  Runtime work enters only through unknown inputs: arguments, files, the
+  network, `rt`.
+- **Authority is explicit.** A function that reads files, runs processes or
+  opens sockets declares it with `@requires(...)`, and so does every
+  function that calls it, all the way up to `main`.
+- **Numbers are exact about their width.** `Int(8)` through `Int(512)`,
+  `UInt(...)`, `Float(16)` through `Float(128)` and decimal `Dec(N)`. All
+  arithmetic is checked; nothing overflows or truncates silently.
+- **Behaviors instead of interfaces.** How a type is ordered or printed is a
+  value you name (`Ord(Point) = by_x;`), not an interface it implements.
+
+<CardGrid>
+	<LinkCard title="Install the compiler" href="/Resid/learn/install/" />
+	<LinkCard title="Your first program" href="/Resid/learn/hello/" />
+</CardGrid>
