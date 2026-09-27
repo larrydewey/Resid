@@ -19,3 +19,4 @@ import "show.resid";
 import "lists.resid";
 import "net.resid";
 import "ctl.resid";
+import "dec.resid";

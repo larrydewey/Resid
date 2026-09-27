@@ -1,0 +1,772 @@
+// Dec(N) exact decimals (spec §6.6a).
+//
+// A value is an immutable block {i8 sign @0, i32 prec @4, i32 exp @8,
+// i32 n @12, i32 nd @16, u64 limbs[n] @24}: value = sign * coef * 10^exp,
+// coef in n little-endian limbs of base B = 10^19 (no zero top limb; zero
+// is n == 0, sign == 0) with nd digits, nd <= prec. The spec's form pads
+// coef with prec - nd trailing zeros, so E = exp - (prec - nd) must lie in
+// [-1_000_000, 1_000_000]. Narrowing rounds half away from zero; + - *
+// round the exact result once; / truncates to prec + 2 digits, then
+// rounds once. Results come from resid_gmalloc; temporaries are malloc'd.
+
+UInt(64) bb() { return 10000000000000000000; }
+UInt(64) binv() { return 15581492618384294730; }  // floor((2^128-1)/B) - 2^64
+Int ld_() { return 19; }                           // digits per limb
+Int max_exp() { return 1000000; }
+
+UInt(64) p10(Int i) {
+    if (i == 19) { return bb(); }
+    return (UInt(64))ld64(resid_raw_table([1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000, 10000000000, 100000000000, 1000000000000, 10000000000000, 100000000000000, 1000000000000000, 10000000000000000, 100000000000000000, 1000000000000000000, 0]) + i * 8); }
+
+UInt(64) lu(Int p) { return (UInt(64))ld64(p); }
+Int su(Int p, UInt(64) v) { return st64(p, (Int)v); }
+Int li(Int l, Int i) { return l + i * 8; }
+
+Int sx8(Int v) { return (v << 56) >> 56; }
+Int dsign(Int v) { return sx8(ld8(v)); }
+Int dprec(Int v) { return ld32(v + 4); }
+Int dexp(Int v) { return sx32(ld32(v + 8)); }
+Int dn(Int v) { return ld32(v + 12); }
+Int dnd(Int v) { return ld32(v + 16); }
+Int dl(Int v) { return v + 24; }
+
+// A second result of the multi-result helpers (a limb count).
+Int r2() { return resid_raw_tls("dec_r2", 8); }
+
+// v / B for v < B^2 (Moller-Granlund, normalized invariant B > 2^63); the
+// remainder is the low word of v - q * B.
+UInt(64) div_b(UInt(128) v) {
+    UInt(64) u1 = (UInt(64))(v >> (UInt(128))64);
+    UInt(64) u0 = (UInt(64))v;
+    UInt(128) q = (UInt(128))binv() * (UInt(128))u1 + v;
+    UInt(64) q1 = (UInt(64))(q >> (UInt(128))64) + (UInt(64))1;
+    UInt(64) q0 = (UInt(64))q;
+    UInt(64) r = u0 - q1 * bb();
+    Bool back = r > q0;
+    UInt(64) q2 = if (back) { q1 - (UInt(64))1 } else { q1 };
+    UInt(64) rr = if (back) { r + bb() } else { r };
+    return if (rr >= bb()) { q2 + (UInt(64))1 } else { q2 };
+}
+
+Int ndig64(UInt(64) x) { return ndig64_at(x, 1); }
+
+Int ndig64_at(UInt(64) x, Int d) {
+    if (d < 20 && x >= p10(d)) { return ndig64_at(x, d + 1); }
+    return d;
+}
+
+Int ndig(Int l, Int n) {
+    if (n == 0) { return 0; }
+    return ld_() * (n - 1) + ndig64(lu(li(l, n - 1)));
+}
+
+Int tmp_limbs(Int n) { return xmalloc(if (n > 0) { n * 8 } else { 8 }); }
+
+Int dalloc(Int cap) {
+    if (cap < 0 || cap > 1099511627776) { return rt_abort("dec: value too large"); }
+    return c_gmalloc(24 + cap * 8);
+}
+
+Int dzero(Int prec) {
+    Int v = dalloc(0);
+    Int _s = st8(v, 0);
+    Int _p = st32(v + 4, prec);
+    Int _e = st32(v + 8, 0);
+    Int _n = st32(v + 12, 0);
+    return st32(v + 16, 0) * 0 + v;
+}
+
+Int top(Int l, Int n) {
+    if (n > 0 && lu(li(l, n - 1)) == (UInt(64))0) { return top(l, n - 1); }
+    return n;
+}
+
+Int set_hdr(Int r, Int sign, Int prec, Int exp, Int n, Int nd) {
+    Int _s = st8(r, sign);
+    Int _p = st32(r + 4, prec);
+    Int _e = st32(r + 8, exp);
+    Int _n = st32(r + 12, n);
+    return st32(r + 16, nd) * 0 + r;
+}
+
+// Finish r in place: strip top zero limbs, round the coefficient to prec
+// digits (half away from zero), check the exponent range.
+Int finish(Int r, Int sign, Int n0, Int exp0, Int prec) {
+    if (prec < 1 || prec > 1073741823) { return rt_abort("dec: precision out of range"); }
+    Int l = dl(r);
+    Int n1 = top(l, n0);
+    if (n1 == 0 || sign == 0) { return set_hdr(r, 0, prec, 0, 0, 0); }
+    Int nd1 = ndig(l, n1);
+    if (nd1 <= prec) { return finish_hdr(r, sign, n1, exp0, nd1, prec); }
+    Int k = nd1 - prec;
+    Int rp = k - 1;
+    Bool up = (lu(li(l, rp / ld_())) / p10(rp % ld_())) % (UInt(64))10 >= (UInt(64))5;
+    Int q = k / ld_();
+    Int s = k % ld_();
+    Int on = n1 - q;
+    Int _sh = if (s == 0) { mcopy(l, li(l, q), on * 8) } else { shift_down(l, n1, q, p10(s), p10(ld_() - s), 0, on) };
+    Int n2 = top(l, on);
+    Int exp1 = exp0 + k;
+    Int n3 = if (up) { round_up(l, 0, n2) } else { n2 };
+    Int nd3 = ndig(l, n3);
+    if (nd3 > prec) {
+        // 99..9 rounded up to 10^prec: one digit, prec zeros.
+        Int _o = su(l, (UInt(64))1);
+        return finish_hdr(r, sign, 1, exp1 + prec, 1, prec);
+    }
+    return finish_hdr(r, sign, n3, exp1, nd3, prec);
+}
+
+Int finish_hdr(Int r, Int sign, Int n, Int exp, Int nd, Int prec) {
+    Int e = exp - (prec - nd);
+    if (e > max_exp() || e < 0 - max_exp()) { return rt_abort("dec: exponent out of range"); }
+    return set_hdr(r, if (sign < 0) { 0 - 1 } else { 1 }, prec, exp, n, nd);
+}
+
+Int shift_down(Int l, Int n, Int q, UInt(64) dv, UInt(64) mu, Int i, Int on) {
+    if (i >= on) { return 0; }
+    UInt(64) lo = lu(li(l, i + q)) / dv;
+    UInt(64) hi = if (i + q + 1 < n) { (lu(li(l, i + q + 1)) % dv) * mu } else { (UInt(64))0 };
+    Int _s = su(li(l, i), lo + hi);
+    return shift_down(l, n, q, dv, mu, i + 1, on);
+}
+
+// Add one to limbs l[i..n); the new count (a carry out grows it).
+Int round_up(Int l, Int i, Int n) {
+    if (i >= n) { return su(li(l, n), (UInt(64))1) * 0 + n + 1; }
+    UInt(64) x = lu(li(l, i));
+    if (x + (UInt(64))1 < bb()) { return su(li(l, i), x + (UInt(64))1) * 0 + n; }
+    Int _z = su(li(l, i), (UInt(64))0);
+    return round_up(l, i + 1, n);
+}
+
+// A fresh value from limbs l[0..n) (copied), rounded to prec.
+Int from_limbs(Int sign, Int l, Int n0, Int exp, Int prec) {
+    Int n = top(l, n0);
+    if (n == 0 || sign == 0) { return dzero(prec); }
+    Int r = dalloc(n + 1);
+    Int _c = mcopy(dl(r), l, n * 8);
+    return finish(r, sign, n, exp, prec);
+}
+
+// r[0..n+1) = a[0..n) * m (m < B); the limb count. r may be a.
+@noinline
+Int mul1(Int r, Int a, Int n, UInt(64) m) {
+    if (m < (UInt(64))4294967296) {
+        // hi = floor(a*m / B) < 2^32 estimated in double precision, biased
+        // low by 2^-15: exact or one short, fixed by one rare correction.
+        Float mb = (Float)(Int)m * 2.0 / 10000000000000000000.0;
+        UInt(64) h = mul1_small(r, a, a + n * 8, m, mb, (UInt(64))0);
+        return su(li(r, n), h) * 0 + n + 1;
+    }
+    UInt(64) h = mul1_big(r, a, n, m, 0, (UInt(64))0);
+    return su(li(r, n), h) * 0 + n + 1;
+}
+
+// Walks a from pa to pe, writing r from pr.
+UInt(64) mul1_small(Int pr, Int pa, Int pe, UInt(64) m, Float mb, UInt(64) hprev) {
+    if (pa >= pe) { return hprev; }
+    UInt(64) ai = lu(pa);
+    UInt(64) hi0 = (UInt(64))(Int)((Float)(Int)(ai >> (UInt(64))1) * mb - 0.000030517578125);
+    UInt(64) s0 = ai * m - hi0 * bb() + hprev;
+    // The correction stays a (rarely taken) branch, off the carried path.
+    if (s0 >= bb()) { return mul1_fix(pr, pa, pe, m, mb, s0, hi0); }
+    Int _s = su(pr, s0);
+    return mul1_small(pr + 8, pa + 8, pe, m, mb, hi0);
+}
+
+@noinline
+UInt(64) mul1_fix(Int pr, Int pa, Int pe, UInt(64) m, Float mb, UInt(64) s0, UInt(64) hi0) {
+    Int _s = su(pr, s0 - bb());
+    return mul1_small(pr + 8, pa + 8, pe, m, mb, hi0 + (UInt(64))1);
+}
+
+UInt(64) mul1_big(Int r, Int a, Int n, UInt(64) m, Int i, UInt(64) hprev) {
+    if (i >= n) { return hprev; }
+    UInt(128) p = (UInt(128))lu(li(a, i)) * (UInt(128))m;
+    UInt(64) hi = div_b(p);
+    UInt(64) lo = (UInt(64))p - hi * bb();
+    UInt(64) t = bb() - hprev;
+    Bool c = lo >= t;
+    Int _s = su(li(r, i), if (c) { lo - t } else { lo + hprev });
+    return mul1_big(r, a, n, m, i + 1, if (c) { hi + (UInt(64))1 } else { hi });
+}
+
+// a * 10^k as fresh malloc'd limbs; the count in r2().
+Int scale(Int a, Int n, Int k) {
+    Int q = k / ld_();
+    Int s = k % ld_();
+    Int r = tmp_limbs(n + q + 1);
+    Int _z = resid_raw_fill(r, 0, q * 8);
+    Int _m = if (s == 0) { mcopy(li(r, q), a, n * 8) + su(li(r, q + n), (UInt(64))0) } else { mul1(li(r, q), a, n, p10(s)) };
+    Int _c = st64(r2(), top(r, n + q + 1));
+    return r;
+}
+
+Int cmp_n(Int a, Int na0, Int b, Int nb0) {
+    Int na = top(a, na0);
+    Int nb = top(b, nb0);
+    if (na != nb) { return if (na > nb) { 1 } else { 0 - 1 }; }
+    return cmp_from(a, b, na - 1);
+}
+
+Int cmp_from(Int a, Int b, Int i) {
+    if (i < 0) { return 0; }
+    UInt(64) x = lu(li(a, i));
+    UInt(64) y = lu(li(b, i));
+    if (x != y) { return if (x > y) { 1 } else { 0 - 1 }; }
+    return cmp_from(a, b, i - 1);
+}
+
+// |a| * 10^ea vs |b| * 10^eb (both coefficients nonzero, digits given).
+Int cmp_mag(Int a, Int na, Int nda, Int ea, Int b, Int nb, Int ndb, Int eb) {
+    Int ma = ea + nda;
+    Int mb = eb + ndb;
+    if (ma != mb) { return if (ma > mb) { 1 } else { 0 - 1 }; }
+    if (ea == eb) { return cmp_n(a, na, b, nb); }
+    if (ea > eb) {
+        Int s = scale(a, na, ea - eb);
+        Int c = cmp_n(s, ld64(r2()), b, nb);
+        return c_free(s) * 0 + c;
+    }
+    Int s = scale(b, nb, eb - ea);
+    Int c = cmp_n(a, na, s, ld64(r2()));
+    return c_free(s) * 0 + c;
+}
+
+// r = a + b (na >= nb); room for na + 1 limbs; the count.
+Int add_n(Int r, Int a, Int na, Int b, Int nb) {
+    UInt(64) c = add_lo(r, a, b, b + nb * 8, (UInt(64))0);
+    UInt(64) c2 = add_carry(r, a, nb, na, c);
+    return su(li(r, na), c2) * 0 + na + 1;
+}
+
+UInt(64) add_lo(Int pr, Int pa, Int pb, Int pe, UInt(64) c) {
+    if (pb + 8 < pe) {
+        // a[i] + b[i] can pass 2^64 (2B > 2^64): compare against B - b[i].
+        UInt(64) bi = lu(pb);
+        UInt(64) x = lu(pa) + c;
+        UInt(64) t = bb() - bi;
+        Bool cc = x >= t;
+        Int _s = su(pr, if (cc) { x - t } else { x + bi });
+        UInt(64) bi2 = lu(pb + 8);
+        UInt(64) x2 = lu(pa + 8) + (if (cc) { (UInt(64))1 } else { (UInt(64))0 });
+        UInt(64) t2 = bb() - bi2;
+        Bool cc2 = x2 >= t2;
+        Int _t = su(pr + 8, if (cc2) { x2 - t2 } else { x2 + bi2 });
+        return add_lo(pr + 16, pa + 16, pb + 16, pe, if (cc2) { (UInt(64))1 } else { (UInt(64))0 });
+    }
+    if (pb >= pe) { return c; }
+    UInt(64) bi = lu(pb);
+    UInt(64) x = lu(pa) + c;
+    UInt(64) t = bb() - bi;
+    Bool cc = x >= t;
+    Int _s = su(pr, if (cc) { x - t } else { x + bi });
+    return if (cc) { (UInt(64))1 } else { (UInt(64))0 };
+}
+
+UInt(64) add_carry(Int r, Int a, Int i, Int na, UInt(64) c) {
+    if (i >= na) { return c; }
+    if (c == (UInt(64))0) {
+        Int _m = if (r != a) { mcopy(li(r, i), li(a, i), (na - i) * 8) } else { 0 };
+        return c;
+    }
+    UInt(64) s = lu(li(a, i)) + (UInt(64))1;
+    Bool full = s == bb();
+    Int _s = su(li(r, i), if (full) { (UInt(64))0 } else { s });
+    return add_carry(r, a, i + 1, na, if (full) { (UInt(64))1 } else { (UInt(64))0 });
+}
+
+// r = a - b, a >= b as integers; room for na limbs; the count.
+Int sub_n(Int r, Int a, Int na, Int b, Int nb) {
+    UInt(64) br = sub_lo(r, a, b, b + nb * 8, (UInt(64))0);
+    Int _b = sub_borrow(r, a, nb, na, br);
+    return na;
+}
+
+// Walks b from pb to pe (a and r in step); two limbs per step.
+UInt(64) sub_lo(Int pr, Int pa, Int pb, Int pe, UInt(64) br) {
+    if (pb + 8 < pe) {
+        UInt(64) x = lu(pa);
+        UInt(64) y = lu(pb) + br;
+        Bool bw = x < y;
+        Int _s = su(pr, if (bw) { x + (bb() - y) } else { x - y });
+        UInt(64) x2 = lu(pa + 8);
+        UInt(64) y2 = lu(pb + 8) + (if (bw) { (UInt(64))1 } else { (UInt(64))0 });
+        Bool bw2 = x2 < y2;
+        Int _t = su(pr + 8, if (bw2) { x2 + (bb() - y2) } else { x2 - y2 });
+        return sub_lo(pr + 16, pa + 16, pb + 16, pe, if (bw2) { (UInt(64))1 } else { (UInt(64))0 });
+    }
+    if (pb >= pe) { return br; }
+    UInt(64) x = lu(pa);
+    UInt(64) y = lu(pb) + br;
+    Bool bw = x < y;
+    Int _s = su(pr, if (bw) { x + (bb() - y) } else { x - y });
+    return if (bw) { (UInt(64))1 } else { (UInt(64))0 };
+}
+
+Int sub_borrow(Int r, Int a, Int i, Int na, UInt(64) br) {
+    if (i >= na) { return 0; }
+    if (br == (UInt(64))0) { return if (r != a) { mcopy(li(r, i), li(a, i), (na - i) * 8) } else { 0 }; }
+    UInt(64) x = lu(li(a, i));
+    Bool z = x == (UInt(64))0;
+    Int _s = su(li(r, i), if (z) { bb() - (UInt(64))1 } else { x - (UInt(64))1 });
+    return sub_borrow(r, a, i + 1, na, if (z) { (UInt(64))1 } else { (UInt(64))0 });
+}
+
+Int round_v(Int v, Int prec, Bool negate) {
+    Int s = if (negate) { 0 - dsign(v) } else { dsign(v) };
+    if (dsign(v) == 0) { return dzero(prec); }
+    if (dnd(v) <= prec) {
+        // Exact: keep the coefficient, only the precision changes.
+        Int r = dalloc(dn(v));
+        Int _c = mcopy(dl(r), dl(v), dn(v) * 8);
+        return finish(r, s, dn(v), dexp(v), prec);
+    }
+    // Only the limbs from the one holding the rounding digit upward matter.
+    Int q0 = (dnd(v) - prec - 1) / ld_();
+    return from_limbs(s, li(dl(v), q0), dn(v) - q0, dexp(v) + ld_() * q0, prec);
+}
+
+// a + (negb ? -b : b), rounded once to prec.
+Int addsub(Int a, Int b, Bool negb, Int prec) {
+    Int sb = if (negb) { 0 - dsign(b) } else { dsign(b) };
+    if (dsign(a) == 0) { return round_v(b, prec, negb); }
+    if (dsign(b) == 0) { return round_v(a, prec, false); }
+    Int ea = dexp(a);
+    Int eb = dexp(b);
+    Int mxa = ea + dnd(a) - 1;
+    Int mxb = eb + dnd(b) - 1;
+    // An operand two or more places below the other's guard digit cannot
+    // change the rounded result.
+    if (mxb <= mxa - prec - 2) { return round_v(a, prec, false); }
+    if (mxa <= mxb - prec - 2) { return round_v(b, prec, negb); }
+    Int e = min(ea, eb);
+    Int ta = if (ea > e) { scale(dl(a), dn(a), ea - e) } else { 0 };
+    Int na = if (ea > e) { ld64(r2()) } else { dn(a) };
+    Int tb = if (eb > e) { scale(dl(b), dn(b), eb - e) } else { 0 };
+    Int nb = if (eb > e) { ld64(r2()) } else { dn(b) };
+    Int pa = if (ta != 0) { ta } else { dl(a) };
+    Int pb = if (tb != 0) { tb } else { dl(b) };
+    Int out = addsub_n(dsign(a), sb, pa, na, pb, nb, e, prec);
+    Int _f = c_free(ta) + c_free(tb);
+    return out;
+}
+
+Int addsub_n(Int sa, Int sb, Int pa, Int na, Int pb, Int nb, Int e, Int prec) {
+    Int cap = max(na, nb) + 1;
+    if (sa == sb) {
+        Int r = dalloc(cap);
+        Int rn = if (na >= nb) { add_n(dl(r), pa, na, pb, nb) } else { add_n(dl(r), pb, nb, pa, na) };
+        return finish(r, sa, rn, e, prec);
+    }
+    Int c = cmp_n(pa, na, pb, nb);
+    if (c == 0) { return dzero(prec); }
+    Int r = dalloc(cap);
+    if (c > 0) { return finish(r, sa, sub_n(dl(r), pa, na, pb, nb), e, prec); }
+    return finish(r, sb, sub_n(dl(r), pb, nb, pa, na), e, prec);
+}
+
+Int mul_v(Int a, Int b, Int prec) {
+    if (dsign(a) == 0 || dsign(b) == 0) { return dzero(prec); }
+    Int sign = if (dsign(a) == dsign(b)) { 1 } else { 0 - 1 };
+    Int exp = dexp(a) + dexp(b);
+    Int na = dn(a);
+    Int nb = dn(b);
+    Int r = dalloc(na + nb + 1);
+    if (nb == 1) { return finish(r, sign, mul1(dl(r), dl(a), na, lu(dl(b))), exp, prec); }
+    if (na == 1) { return finish(r, sign, mul1(dl(r), dl(b), nb, lu(dl(a))), exp, prec); }
+    Int _z = resid_raw_fill(dl(r), 0, (na + nb) * 8);
+    Int _m = mul_rows(dl(r), dl(a), na, dl(b), nb, 0);
+    return finish(r, sign, na + nb, exp, prec);
+}
+
+Int mul_rows(Int r, Int x, Int na, Int y, Int nb, Int i) {
+    if (i >= na) { return 0; }
+    UInt(64) xi = lu(li(x, i));
+    Int _row = if (xi != (UInt(64))0) { mul_row(li(r, i), xi, y, nb) } else { 0 };
+    return mul_rows(r, x, na, y, nb, i + 1);
+}
+
+// ri[0..nb] += xi * y, carries split as in mul1.
+Int mul_row(Int ri, UInt(64) xi, Int y, Int nb) {
+    return mul_row_at(ri, xi, y, nb, 0, (UInt(64))0, (UInt(64))0);
+}
+
+Int mul_row_at(Int ri, UInt(64) xi, Int y, Int nb, Int j, UInt(64) hprev, UInt(64) cb) {
+    if (j >= nb) { return su(li(ri, nb), hprev + cb); }
+    UInt(128) p = (UInt(128))xi * (UInt(128))lu(li(y, j)) + (UInt(128))lu(li(ri, j));
+    UInt(64) hi = div_b(p);
+    UInt(64) lo = (UInt(64))p - hi * bb();
+    UInt(64) xx = lo + cb;
+    UInt(64) t = bb() - hprev;
+    Bool c = xx >= t;
+    Int _s = su(li(ri, j), if (c) { xx - t } else { xx + hprev });
+    return mul_row_at(ri, xi, y, nb, j + 1, hi, if (c) { (UInt(64))1 } else { (UInt(64))0 });
+}
+
+// q = floor(u / v) for multi-limb v (Knuth 4.3.1 D, base 10^19). u has
+// un limbs (room for un + 1), v has n >= 2 limbs, v[n-1] != 0; q gets
+// un - n + 1 limbs. u and v are normalized in place.
+Int divmod_n(Int u, Int un, Int v, Int n, Int q) {
+    UInt(64) f = bb() / (lu(li(v, n - 1)) + (UInt(64))1);
+    Int _n = if (f > (UInt(64))1) { mul1(u, u, un, f) + norm_v(v, n, f) } else { su(li(u, un), (UInt(64))0) };
+    return div_steps(u, v, n, q, un - n, lu(li(v, n - 1)), lu(li(v, n - 2)));
+}
+
+Int norm_v(Int v, Int n, UInt(64) f) {
+    Int tv = tmp_limbs(n + 1);
+    Int _m = mul1(tv, v, n, f);
+    Int _c = mcopy(v, tv, n * 8);
+    return c_free(tv);
+}
+
+Int div_steps(Int u, Int v, Int n, Int q, Int j, UInt(64) vt, UInt(64) vs) {
+    if (j < 0) { return 0; }
+    UInt(128) num = (UInt(128))lu(li(u, j + n)) * (UInt(128))bb() + (UInt(128))lu(li(u, j + n - 1));
+    UInt(128) qh0 = num / (UInt(128))vt;
+    UInt(128) rh0 = num - qh0 * (UInt(128))vt;
+    UInt(64) qd0 = (UInt(64))qhat_fix(qh0, rh0, vt, vs, lu(li(u, j + n - 2)));
+    UInt(64) c = sub_mul(u, v, n, j, qd0, 0, (UInt(64))0, (UInt(64))0);
+    UInt(64) br = (UInt(64))ld64(r2());
+    UInt(64) x = lu(li(u, j + n));
+    UInt(64) y = c + br;
+    Bool neg = x < y;
+    Int _t = su(li(u, j + n), if (neg) { x + (bb() - y) } else { x - y });
+    Int _ab = if (neg) { add_back(u, v, n, j) } else { 0 };
+    UInt(64) qd = if (neg) { qd0 - (UInt(64))1 } else { qd0 };
+    Int _q = su(li(q, j), qd);
+    return div_steps(u, v, n, q, j - 1, vt, vs);
+}
+
+UInt(128) qhat_fix(UInt(128) qh, UInt(128) rh, UInt(64) vt, UInt(64) vs, UInt(64) u2) {
+    Bool big = qh >= (UInt(128))bb() || qh * (UInt(128))vs > rh * (UInt(128))bb() + (UInt(128))u2;
+    if (!big) { return qh; }
+    UInt(128) rh2 = rh + (UInt(128))vt;
+    if (rh2 >= (UInt(128))bb()) { return qh - (UInt(128))1; }
+    return qhat_fix(qh - (UInt(128))1, rh2, vt, vs, u2);
+}
+
+// u[j..j+n) -= qd * v; the carry out (the final borrow in r2()).
+UInt(64) sub_mul(Int u, Int v, Int n, Int j, UInt(64) qd, Int i, UInt(64) c, UInt(64) br) {
+    if (i >= n) {
+        Int _b = st64(r2(), (Int)br);
+        return c;
+    }
+    UInt(128) p = (UInt(128))qd * (UInt(128))lu(li(v, i)) + (UInt(128))c;
+    UInt(64) c2 = div_b(p);
+    UInt(64) lo = (UInt(64))p - c2 * bb();
+    UInt(64) x = lu(li(u, i + j));
+    UInt(64) y = lo + br;
+    Bool ok = x >= y;
+    Int _s = su(li(u, i + j), if (ok) { x - y } else { x + (bb() - y) });
+    return sub_mul(u, v, n, j, qd, i + 1, c2, if (ok) { (UInt(64))0 } else { (UInt(64))1 });
+}
+
+// The step went negative: add v back once.
+Int add_back(Int u, Int v, Int n, Int j) {
+    UInt(64) cc = add_back_at(u, v, n, j, 0, (UInt(64))0);
+    return su(li(u, j + n), (lu(li(u, j + n)) + cc) % bb());
+}
+
+UInt(64) add_back_at(Int u, Int v, Int n, Int j, Int i, UInt(64) cc) {
+    if (i >= n) { return cc; }
+    UInt(64) vi = lu(li(v, i));
+    UInt(64) x2 = lu(li(u, i + j)) + cc;
+    UInt(64) t = bb() - vi;
+    Bool c = x2 >= t;
+    Int _s = su(li(u, i + j), if (c) { x2 - t } else { x2 + vi });
+    return add_back_at(u, v, n, j, i + 1, if (c) { (UInt(64))1 } else { (UInt(64))0 });
+}
+
+// a / b: the quotient truncated to prec + 2 digits, rounded once.
+Int div_v(Int a, Int b, Int prec) {
+    if (dsign(b) == 0) { return rt_abort("dec: division by zero"); }
+    if (dsign(a) == 0) { return dzero(prec); }
+    Int k = prec + 2;
+    Int da = dnd(a);
+    Int db = dnd(b);
+    // P = floor(log10(coef_a / coef_b)).
+    Int c = cmp_mag(dl(a), dn(a), da, 0, dl(b), dn(b), db, da - db);
+    Int p = da - db - (if (c < 0) { 1 } else { 0 });
+    Int s = k - 1 - p;
+    Int bu = if (s >= 0) { scale(dl(a), dn(a), s) } else { copy_limbs(dl(a), dn(a), dn(a) + 1) };
+    Int un = if (s >= 0) { ld64(r2()) } else { dn(a) };
+    Int bv = if (s >= 0) { copy_limbs(dl(b), dn(b), dn(b)) } else { scale(dl(b), dn(b), 0 - s) };
+    Int vn = if (s >= 0) { dn(b) } else { ld64(r2()) };
+    Int qn = max(un - vn + 1, 1);
+    Int r = dalloc(qn + 1);
+    Int _z = resid_raw_fill(dl(r), 0, (qn + 1) * 8);
+    if (un < vn) { return rt_abort("dec: internal"); }
+    Int _d = if (vn == 1) { div_small(dl(r), bu, un - 1, lu(bv), (UInt(128))0) } else { div_big(bu, un, bv, vn, dl(r)) };
+    Int _f = c_free(bu) + c_free(bv);
+    Int sign = if (dsign(a) == dsign(b)) { 1 } else { 0 - 1 };
+    return finish(r, sign, qn + 1, dexp(a) - dexp(b) - s, prec);
+}
+
+Int copy_limbs(Int l, Int n, Int cap) {
+    Int t = tmp_limbs(cap);
+    return mcopy(t, l, n * 8) * 0 + t;
+}
+
+Int div_small(Int q, Int u, Int i, UInt(64) d, UInt(128) rem) {
+    if (i < 0) { return 0; }
+    UInt(128) t = rem * (UInt(128))bb() + (UInt(128))lu(li(u, i));
+    UInt(128) qq = t / (UInt(128))d;
+    Int _s = su(li(q, i), (UInt(64))qq);
+    return div_small(q, u, i - 1, d, t - qq * (UInt(128))d);
+}
+
+Int div_big(Int u, Int un, Int v, Int vn, Int q) {
+    Int u2 = tmp_limbs(un + 1);
+    Int _c = mcopy(u2, u, un * 8);
+    Int _z = su(li(u2, un), (UInt(64))0);
+    Int _d = divmod_n(u2, un, v, vn, q);
+    return c_free(u2);
+}
+
+// The coefficient's digits, most significant first (malloc'd, nd chars).
+Int coef_digits(Int v) {
+    Int k = dnd(v);
+    Int s = xmalloc(k + 1);
+    Int _z = st8(s + k, 0);
+    Int _d = digits_limbs(v, s, 0, k);
+    return s;
+}
+
+Int digits_limbs(Int v, Int s, Int i, Int k) {
+    if (i >= dn(v)) { return 0; }
+    UInt(64) x = lu(li(dl(v), i));
+    Int w = if (i == dn(v) - 1) { ndig64(x) } else { ld_() };
+    Int k2 = digits_one(s, x, w, k);
+    return digits_limbs(v, s, i + 1, k2);
+}
+
+Int digits_one(Int s, UInt(64) x, Int w, Int k) {
+    if (w == 0) { return k; }
+    Int _s = st8(s + k - 1, 48 + (Int)(x % (UInt(64))10));
+    return digits_one(s, x / (UInt(64))10, w - 1, k - 1);
+}
+
+// Digits d[0..len) (leading zeros allowed) as fresh limbs; count in r2().
+Int parse_digits(Int d, Int len) {
+    Int n = (len + ld_() - 1) / ld_();
+    Int l = tmp_limbs(n + 1);
+    Int _p = parse_limbs(d, l, 0, n, len);
+    Int _c = st64(r2(), top(l, n));
+    return l;
+}
+
+Int parse_limbs(Int d, Int l, Int i, Int n, Int end) {
+    if (i >= n) { return 0; }
+    Int st = max(end - ld_(), 0);
+    Int _s = su(li(l, i), digits_value(d, st, end, (UInt(64))0));
+    return parse_limbs(d, l, i + 1, n, st);
+}
+
+UInt(64) digits_value(Int d, Int j, Int end, UInt(64) x) {
+    if (j >= end) { return x; }
+    return digits_value(d, j + 1, end, x * (UInt(64))10 + (UInt(64))(ld8(d + j) - 48));
+}
+
+Bool is_dig(Int c) { return c >= 48 && c <= 57; }
+
+// Copy the digit run at p to buf+n; the new count (position in r2()).
+Int take_digits(Int p, Int buf, Int n) {
+    if (!is_dig(ld8(p))) { return st64(r2(), p) * 0 + n; }
+    Int _s = st8(buf + n, ld8(p));
+    return take_digits(p + 1, buf, n + 1);
+}
+
+Int exp_value(Int p, Int ev) {
+    if (!is_dig(ld8(p))) { return st64(r2(), p) * 0 + ev; }
+    if (ev > max_exp() / 10) { return rt_abort("dec: exponent out of range"); }
+    return exp_value(p + 1, ev * 10 + ld8(p) - 48);
+}
+
+// Exact parse of a plain or e-notation decimal string, rounded to prec.
+Int from_str(Int s, Int prec) {
+    Int c0 = ld8(s);
+    Int sign = if (c0 == 45) { 0 - 1 } else { 1 };
+    Int p0 = if (c0 == 45 || c0 == 43) { s + 1 } else { s };
+    Int digs = xmalloc(c_strlen(p0) + 1);
+    Int dn1 = take_digits(p0, digs, 0);
+    Int p1 = ld64(r2());
+    Bool dot = ld8(p1) == 46;
+    Int dn2 = if (dot) { take_digits(p1 + 1, digs, dn1) } else { dn1 };
+    Int p2 = if (dot) { ld64(r2()) } else { p1 };
+    Int exp0 = 0 - (dn2 - dn1);
+    Int ce = ld8(p2);
+    Bool hase = ce == 101 || ce == 69;
+    Int pe = p2 + 1;
+    Int es = if (hase && ld8(pe) == 45) { 0 - 1 } else { 1 };
+    Int pd = if (hase && (ld8(pe) == 45 || ld8(pe) == 43)) { pe + 1 } else { pe };
+    Int ev = if (hase) { exp_value(pd, 0) } else { 0 };
+    Int p3 = if (hase) { ld64(r2()) } else { p2 };
+    if (dn2 == 0 || ld8(p3) != 0) { return rt_abort("dec: bad decimal string"); }
+    Int l = parse_digits(digs, dn2);
+    Int n = ld64(r2());
+    Int _f = c_free(digs);
+    Int r = from_limbs(sign, l, n, exp0 + es * ev, prec);
+    return c_free(l) * 0 + r;
+}
+
+Int from_i64(Int v, Int prec) {
+    if (v == 0) { return dzero(prec); }
+    Int l = resid_raw_tls("dec_one", 8);
+    Int _s = st64(l, if (v < 0) { 0 - v } else { v });   // |INT64_MIN| reads as 2^63
+    return from_limbs(if (v < 0) { 0 - 1 } else { 1 }, l, 1, 0, prec);
+}
+
+Int cmp_v(Int a, Int b) {
+    if (dsign(a) != dsign(b)) { return if (dsign(a) > dsign(b)) { 1 } else { 0 - 1 }; }
+    if (dsign(a) == 0) { return 0; }
+    Int c = cmp_mag(dl(a), dn(a), dnd(a), dexp(a), dl(b), dn(b), dnd(b), dexp(b));
+    return if (dsign(a) < 0) { 0 - c } else { c };
+}
+
+// Fixed notation with all N significant digits, or (trim) without the
+// trailing fractional zeros and a bare '.'.
+Int format(Int v, Bool trim) {
+    Int n = dprec(v);
+    if (dsign(v) == 0) {
+        if (trim) { return cstr_dup(resid_raw_addr("0")); }
+        Int z = xmalloc(n + 3);
+        Int _a = st8(z, 48) + st8(z + 1, 46) + resid_raw_fill(z + 2, 48, n);
+        return st8(z + n + 2, 0) * 0 + z;
+    }
+    Int cd = coef_digits(v);
+    Int nd = dnd(v);
+    Int ipos = nd + dexp(v);
+    Int m = trail_zeros(cd, nd);
+    Int last = if (trim && ipos < n) { if (m > ipos) { m } else { if (ipos > 0) { ipos } else { m } } } else { n };
+    Int len = 1 + max(ipos, 1) + 1 + max(0 - ipos, 0) + max(last, 0) + 1;
+    Int t = xmalloc(len + 1);
+    Int k0 = if (dsign(v) < 0) { st8(t, 45) + 1 } else { 0 };
+    Int k = if (ipos > 0) { fmt_int(t, k0, cd, nd, ipos, last) } else { fmt_frac(t, k0, cd, nd, ipos, last) };
+    Int _z = st8(t + k, 0);
+    return c_free(cd) * 0 + t;
+}
+
+Int trail_zeros(Int cd, Int m) {
+    if (m > 0 && ld8(cd + m - 1) == 48) { return trail_zeros(cd, m - 1); }
+    return m;
+}
+
+Int dig_at(Int cd, Int nd, Int i) { return if (i < nd) { ld8(cd + i) } else { 48 }; }
+
+Int put_digits(Int t, Int k, Int cd, Int nd, Int i, Int end) {
+    if (i >= end) { return k; }
+    Int _s = st8(t + k, dig_at(cd, nd, i));
+    return put_digits(t, k + 1, cd, nd, i + 1, end);
+}
+
+Int fmt_int(Int t, Int k, Int cd, Int nd, Int ipos, Int last) {
+    Int k1 = put_digits(t, k, cd, nd, 0, ipos);
+    if (ipos >= last) { return k1; }
+    Int _d = st8(t + k1, 46);
+    return put_digits(t, k1 + 1, cd, nd, ipos, last);
+}
+
+Int fmt_frac(Int t, Int k, Int cd, Int nd, Int ipos, Int last) {
+    Int _a = st8(t + k, 48) + st8(t + k + 1, 46) + resid_raw_fill(t + k + 2, 48, 0 - ipos);
+    return put_digits(t, k + 2 - ipos, cd, nd, 0, last);
+}
+
+// An integral value in the Int range, else an error.
+Int to_int(Int v) {
+    if (dsign(v) == 0) { return 0; }
+    Int l = dl(v);
+    Int f = if (dexp(v) < 0) { 0 - dexp(v) } else { 0 };
+    Bool frac_ok = f == 0 || (f < dnd(v) && limbs_zero_to(l, 0, f / ld_()) && lu(li(l, f / ld_())) % p10(f % ld_()) == (UInt(64))0);
+    if (!frac_ok) { return rt_abort("dec: non-integer to Int"); }
+    if (dnd(v) + dexp(v) > 20) { return rt_abort("dec: value out of range for Int"); }
+    Int cd = coef_digits(v);
+    UInt(128) r0 = digits128(cd, 0, dnd(v) - f, (UInt(128))0);
+    Int _f = c_free(cd);
+    UInt(128) r = times10(r0, dexp(v));
+    UInt(128) lim = if (dsign(v) < 0) { (UInt(128))9223372036854775807 + (UInt(128))1 } else { (UInt(128))9223372036854775807 };
+    if (r > lim) { return rt_abort("dec: value out of range for Int"); }
+    Int out = (Int)r;
+    return if (dsign(v) < 0) { 0 - out } else { out };
+}
+
+Bool limbs_zero_to(Int l, Int i, Int n) {
+    if (i >= n) { return true; }
+    return lu(li(l, i)) == (UInt(64))0 && limbs_zero_to(l, i + 1, n);
+}
+
+UInt(128) digits128(Int cd, Int i, Int n, UInt(128) r) {
+    if (i >= n) { return r; }
+    return digits128(cd, i + 1, n, r * (UInt(128))10 + (UInt(128))(ld8(cd + i) - 48));
+}
+
+UInt(128) times10(UInt(128) r, Int k) {
+    if (k <= 0) { return r; }
+    return times10(r * (UInt(128))10, k - 1);
+}
+
+// The nearest double: strtod of the leading 40 digits.
+Float to_f64(Int v) {
+    if (dsign(v) == 0) { return 0.0; }
+    Int cd = coef_digits(v);
+    Int nd = dnd(v);
+    Int keep = min(nd, 40);
+    Int buf = resid_raw_tls("dec_f64", 96);
+    Int k0 = if (dsign(v) < 0) { st8(buf, 45) + 1 } else { 0 };
+    Int _c = mcopy(buf + k0, cd, keep);
+    Int k1 = k0 + keep;
+    Int _e = st8(buf + k1, 101);
+    Int k2 = k1 + 1 + itoa_into(buf + k1 + 1, dexp(v) + (nd - keep));
+    Int _z = st8(buf + k2, 0);
+    Int _f = c_free(cd);
+    return c_strtod(buf, 0);
+}
+
+// ─── The compiler's entry points ───────────────────────────────────────
+// `prec` is the static N of the result; binary operators round to
+// max(N, M) of the operands first (spec §6.6a).
+
+Int opprec(Int a, Int b) { return max(dprec(a), dprec(b)); }
+
+Int fit(Int r, Int prec) { return if (dprec(r) == prec) { r } else { round_v(r, prec, false) }; }
+
+@export("resid_decp_from_str", "ptr(ptr,i64)")
+pub Int rt_decp_from_str(Int s, Int prec) { return from_str(s, prec); }
+
+@export("resid_decp_from_i64", "ptr(i64,i64)")
+pub Int rt_decp_from_i64(Int v, Int prec) { return from_i64(v, prec); }
+
+@export("resid_decp_round", "ptr(ptr,i64)")
+pub Int rt_decp_round(Int v, Int prec) { return round_v(v, prec, false); }
+
+@export("resid_decp_add", "ptr(ptr,ptr,i64)")
+pub Int rt_decp_add(Int a, Int b, Int prec) { return fit(addsub(a, b, false, opprec(a, b)), prec); }
+
+@export("resid_decp_sub", "ptr(ptr,ptr,i64)")
+pub Int rt_decp_sub(Int a, Int b, Int prec) { return fit(addsub(a, b, true, opprec(a, b)), prec); }
+
+@export("resid_decp_mul", "ptr(ptr,ptr,i64)")
+pub Int rt_decp_mul(Int a, Int b, Int prec) { return fit(mul_v(a, b, opprec(a, b)), prec); }
+
+@export("resid_decp_div", "ptr(ptr,ptr,i64)")
+pub Int rt_decp_div(Int a, Int b, Int prec) { return fit(div_v(a, b, opprec(a, b)), prec); }
+
+@export("resid_decp_neg", "ptr(ptr)")
+pub Int rt_decp_neg(Int a) {
+    Int r = dalloc(dn(a));
+    Int _c = mcopy(r, a, 24 + dn(a) * 8);
+    return st8(r, 0 - dsign(a)) * 0 + r;
+}
+
+@export("resid_decp_cmp", "i64(ptr,ptr)")
+pub Int rt_decp_cmp(Int a, Int b) { return cmp_v(a, b); }
+
+@export("resid_decp_to_str", "ptr(ptr,i8)")
+pub Int rt_decp_to_str(Int v, Int trim) { return format(v, trim != 0); }
+
+@export("resid_decp_to_i64", "i64(ptr)")
+pub Int rt_decp_to_i64(Int v) { return to_int(v); }
+
+@export("resid_decp_to_f64", "double(ptr)")
+pub Float rt_decp_to_f64(Int v) { return to_f64(v); }

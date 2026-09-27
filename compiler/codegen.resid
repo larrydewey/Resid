@@ -3074,7 +3074,8 @@ GT float_int_checked(GT v, Str vt, Str tt, Str toty) {
     Str lo_line = if (ts) { lo + " = fcmp oge " + fl + " " + v.val + ", " + fpow2_const(fb, tw - 1, true) } else { lo + " = fcmp ogt " + fl + " " + v.val + ", " + fpow2_const(fb, 0, true) };
     Str op = pick_str(ts, "fptosi", "fptoui");
     List(Str) p0 = v.lines;
-    List(Str) p1 = p0.concat([lo_line, hi + " = fcmp olt " + fl + " " + v.val + ", " + fpow2_const(fb, hk, false), ok + " = and i1 " + lo + ", " + hi, bad + " = xor i1 " + ok + ", true", bb + " = zext i1 " + bad + " to i8", "call void @resid_conv_check(i8 " + bb + ")", r + " = " + op + " " + fl + " " + v.val + " to " + ll_ty(tt)]);
+    // The runtime module converts unchecked, as C does.
+    List(Str) p1 = if (resid_rtmod()) { p0.concat([r + " = " + op + " " + fl + " " + v.val + " to " + ll_ty(tt)]) } else { p0.concat([lo_line, hi + " = fcmp olt " + fl + " " + v.val + ", " + fpow2_const(fb, hk, false), ok + " = and i1 " + lo + ", " + hi, bad + " = xor i1 " + ok + ", true", bb + " = zext i1 " + bad + " to i8", "call void @resid_conv_check(i8 " + bb + ")", r + " = " + op + " " + fl + " " + v.val + " to " + ll_ty(tt)]) };
     return GT {.pos = v.pos, .val = r, .ty = toty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = p1, .tmp = b + 6, .lbl = v.lbl, .tail = false};
 }
 
