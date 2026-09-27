@@ -1517,6 +1517,7 @@ GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
         return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 asm sideeffect \"syscall\", \"={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}\"(" + args + ")"]), t);
     }
     if (op == "addr") { return lw_step(g, r, "Int", g.lines.concat([r + " = ptrtoint ptr " + v[0] + " to i64"]), t); }
+    if (op == "catch") { return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 @e.catch(i64 " + v[0] + ", i64 " + v[1] + ", i64 " + v[2] + ")"]), t); }
     // cpuid(leaf, subleaf): ecx in the high 32 bits, edx in the low.
     if (op == "cpuid") {
         List(Str) cl = [r + "a = trunc i64 " + v[0] + " to i32", r + "b = trunc i64 " + v[1] + " to i32", r + "s = call { i32, i32, i32, i32 } asm \"cpuid\", \"={ax},={bx},={cx},={dx},{ax},{cx}\"(i32 " + r + "a, i32 " + r + "b)", r + "c = extractvalue { i32, i32, i32, i32 } " + r + "s, 2", r + "d = extractvalue { i32, i32, i32, i32 } " + r + "s, 3", r + "h = zext i32 " + r + "c to i64", r + "l = zext i32 " + r + "d to i64", r + "k = shl i64 " + r + "h, 32", r + " = or i64 " + r + "k, " + r + "l"];

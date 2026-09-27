@@ -123,3 +123,15 @@ pub Int c_getaddrinfo(Int host, Int port, Int hints, Int res) { return 0; }
 
 @import("freeaddrinfo", "void(ptr)")
 pub Int c_freeaddrinfo(Int res) { return 0; }
+
+@import("abort", "void() noreturn")
+pub Int c_libc_abort() { return 0; }
+
+@import("longjmp", "void(ptr,i32) noreturn")
+pub Int c_longjmp(Int jb, Int v) { return 0; }
+
+@import("resid_box_new", "ptr(i64,i64,ptr,ptr)")
+pub Int c_box_new(Int tag, Int n, Int slots, Int ty) { return 0; }
+
+@import("strchr", "ptr(ptr,i32)")
+pub Int c_strchr(Int s, Int c) { return 0; }

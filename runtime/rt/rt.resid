@@ -18,3 +18,4 @@ import "numfmt.resid";
 import "show.resid";
 import "lists.resid";
 import "net.resid";
+import "ctl.resid";
