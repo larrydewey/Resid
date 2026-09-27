@@ -27,8 +27,10 @@ Point { x: 3, y: 4 } 200
 7
 ```
 
-Records are values: to "change" a field, build a new record. Compare
-records by their fields; `==` is defined on numbers, `Bool` and `Str`.
+Records are values: to "change" a field, build a new record. `==` is
+defined on numbers, `Bool` and `Str`; give a record an `Eq` instance to
+compare it with `==` (see [your own behaviors](/Resid/behaviors/defining/)),
+or compare its fields.
 
 ## Sums
 

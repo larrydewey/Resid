@@ -48,6 +48,18 @@ The call on line 5 was replaced by the constant 144 (rule `beta`); the one
 on line 7 stayed residual because its argument depends on `n`, which comes
 from `args`. `--summary` counts residual notes by kind.
 
+A generic function shows the copies made for its types, and an instance
+replaced by a higher-level one shows what replaced it:
+
+```text
+$ resid-why prog first
+#8 fn first known @ prog.resid:2:1
+  instantiated as #375 fn first__g_Int_64_ residual <- instantiate #8 @ prog.resid:2:1
+$ resid-why prog Show
+#10 behavior Show known @ lib/coin.resid:4:1
+  replaced by #32 behavior Show known <- replaces #10 @ prog.resid:6:1
+```
+
 ## resid-graph
 
 `resid-graph <file.resid> [--dot]` prints the call graph of a file.
