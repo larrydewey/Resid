@@ -1,0 +1,28 @@
+// Runtime primitives (compiler-only; this case is built with
+// --runtime-internals): raw memory, atomics, a system call, static and
+// thread-local storage, bit casts and a function address.
+Int add2(Int a, Int b) { return a + b; }
+
+Int write_out(Str s) {
+    return resid_raw_syscall(1, 1, resid_raw_addr(s), str_len(s), 0, 0, 0);
+}
+
+Int main() {
+    Int g = resid_raw_global("scratch", 64);
+    Int _a = resid_raw_store64(g, 81985529216486895);
+    Int _b = resid_raw_store8(g + 8, 300);
+    Int _c = resid_raw_copy(g + 16, g, 8);
+    Int _d = resid_raw_fill(g + 24, 7, 4);
+    Bool swapped = resid_raw_cas(g + 32, 0, 5);
+    Int old = resid_raw_fetch_add(g + 32, 10);
+    Int t = resid_raw_tls("slot", 8);
+    Int _e = resid_raw_store32(t, 4294967299);
+    Int bits = resid_raw_f64_bits(1.5);
+    Float back = resid_raw_bits_f64(bits);
+    Int f = resid_raw_fn("add2");
+    Str msg = resid_raw_str(resid_raw_addr("raw ok\n"));
+    Int w = write_out(msg);
+    println(IntToString(resid_raw_load64(g)) + " " + IntToString(resid_raw_load8(g + 8)) + " " + IntToString(resid_raw_load64(g + 16)) + " " + IntToString(resid_raw_load32(g + 24)));
+    println(BoolToString(swapped) + " " + IntToString(old) + " " + IntToString(resid_raw_load64(g + 32)) + " " + IntToString(resid_raw_load32(t)) + " " + IntToString(bits) + " " + FloatToString(back) + " " + IntToString(resid_raw_call2(f, 40, 2)) + " " + IntToString(w));
+    return 0;
+}

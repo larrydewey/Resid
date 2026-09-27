@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  187, reduce 14, provenance 20, graph 417, pkg 17, runtime 3. The archived Rust workspace
+  188, reduce 14, provenance 20, graph 418, pkg 17, runtime 3. The archived Rust workspace
   (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
   821 tests; its e2e now has 128 after removing tests of the retired text
   paths); see `AGENTS.md` for its slow-test table.
@@ -305,6 +305,29 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 619MB (606MB without facts). The artifact carries a RESIDUAL node's range
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
+
+### 0zh. Runtime primitives for a Resid runtime (2026-09-26)
+
+Compiler-only builtins (E0220 without `--runtime-internals`) for writing
+the runtime in Resid instead of C, lowered straight to LLVM IR by
+`lw_raw` in `examples/lower.resid` (types: `raw_sig` in typecheck.resid):
+
+- `resid_raw_load8/16/32/64(addr)`, `resid_raw_store8/16/32/64(addr, v)`,
+  `resid_raw_copy(dst, src, n)` (memmove), `resid_raw_fill(dst, b, n)`;
+- `resid_raw_cas(addr, expect, new)`, `resid_raw_fetch_add(addr, v)`
+  (sequentially consistent);
+- `resid_raw_syscall(n, a1..a6)` (x86-64 Linux, inline asm: no libc);
+- `resid_raw_global("name", size)`, `resid_raw_tls("name", size)`:
+  zeroed static / thread-local storage, one per name per module;
+- `resid_raw_addr(v)` (any heap value), `resid_raw_str(addr)`,
+  `resid_raw_f64_bits(x)`, `resid_raw_bits_f64(bits)`,
+  `resid_raw_fn("name")`, `resid_raw_call2(fn, a, b)`.
+
+Addresses and words are Ints. These bypass capabilities and bounds
+checks by design, which is why they are compiler-only. Not yet ported:
+`runtime/resid_rt.c` itself; a libc-free build also needs a process
+entry point (`_start`, a naked-asm primitive) and TLS setup.
+Test: `runtime_primitives`.
 
 ### 0zg. Runtime internals are compiler-only; carried Decs are freed (2026-09-26)
 

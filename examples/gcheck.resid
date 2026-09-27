@@ -1611,7 +1611,7 @@ Str gk_builtin_family(Str n) {
 // (spec §5: storage is never exposed). Only the compiler's own source may
 // call them, checked with --runtime-internals (E0220).
 Bool gk_internal(Str n) {
-    return n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_list_str_persist_copy" || n == "resid_dec_persist" || n == "resid_internals_set";
+    return str_starts_with(n, "resid_raw_") || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_list_str_persist_copy" || n == "resid_dec_persist" || n == "resid_internals_set";
 }
 
 Bool gk_internals_at(GK k, Int id, Bool acc) {

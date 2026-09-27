@@ -1287,8 +1287,90 @@ List(Str) l1s(Str a) { return [a]; }
 List(Str) l2s(Str a, Str b) { return [a, b]; }
 List(Str) l3s(Str a, Str b, Str c) { return [a, b, c]; }
 
+// ─── Runtime primitives (compiler-only, E0220) ──────────────────────
+// What the runtime needs to be written in Resid: raw memory at Int
+// addresses, atomics, Linux system calls, static storage, bit casts and
+// function addresses. Every value is an Int (an address or a word).
+type RA = { GT g; List(Str) vals; };
+
+RA lw_raw_args(LW w, Int id, Int i, List(Str) env, RA a) {
+    if (i >= w.g.ns[id].nk) { return a; }
+    GT v = lw_expr(w, lw_kid(w, id, i), env, a.g);
+    if (v.err != "") { return RA {.g = v, .vals = a.vals}; }
+    return lw_raw_args(w, id, i + 1, env, RA {.g = v, .vals = a.vals.concat([v.val])});
+}
+
+Int lw_raw_width(Str n) {
+    if (str_ends_with(n, "8")) { return 8; }
+    if (str_ends_with(n, "16")) { return 16; }
+    if (str_ends_with(n, "32")) { return 32; }
+    return 64;
+}
+
+GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
+    Str op = str_slice(n, 10, str_len(n));
+    // Static storage and function addresses take literal names.
+    if (op == "global" || op == "tls" || op == "fn") {
+        Str nm0 = lw_text(w, lw_kid(w, id, 0));
+        Str nm = if (str_starts_with(nm0, "\"")) { str_slice(nm0, 1, str_len(nm0) - 1) } else { nm0 };
+        Int t = c.tmp + 1;
+        Str r = "%t" + IntToString(t);
+        if (op == "fn") { return lw_step(c, r, "Int", c.lines.concat([r + " = ptrtoint ptr @" + nm + " to i64"]), t); }
+        Str sz = lw_text(w, lw_kid(w, id, 1));
+        Str tl = if (op == "tls") { "thread_local " } else { "" };
+        Str gl = "@rtg." + nm + " = internal " + tl + "global [" + sz + " x i8] zeroinitializer, align 16";
+        Str addr = if (op == "tls") { "call ptr @llvm.threadlocal.address.p0(ptr @rtg." + nm + ")" } else { "getelementptr i8, ptr @rtg." + nm + ", i64 0" };
+        GT g1 = GT {.pos = 0, .val = r, .ty = "Int", .cnt = 0, .err = "", .glines = c.glines.concat([gl]), .lines = c.lines.concat([r + "p = " + addr, r + " = ptrtoint ptr " + r + "p to i64"]), .tmp = t, .lbl = c.lbl, .tail = false};
+        return g1;
+    }
+    RA a = lw_raw_args(w, id, 0, env, RA {.g = c, .vals = []});
+    if (a.g.err != "") { return a.g; }
+    List(Str) v = a.vals;
+    GT g = a.g;
+    Int t = g.tmp + 1;
+    Str r = "%t" + IntToString(t);
+    Str p = r + "p";
+    if (str_starts_with(op, "load")) {
+        Int wd = lw_raw_width(op);
+        Str it = "i" + IntToString(wd);
+        Str ext = if (wd == 64) { r + " = add i64 " + r + "w, 0" } else { r + " = zext " + it + " " + r + "w to i64" };
+        return lw_step(g, r, "Int", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", r + "w = load " + it + ", ptr " + p + ", align 1", ext]), t);
+    }
+    if (str_starts_with(op, "store")) {
+        Int wd = lw_raw_width(op);
+        Str it = "i" + IntToString(wd);
+        Str tr = if (wd == 64) { r + "w = add i64 " + v[1] + ", 0" } else { r + "w = trunc i64 " + v[1] + " to " + it };
+        return lw_step(g, r, "Int", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", tr, "store " + it + " " + r + "w, ptr " + p + ", align 1", r + " = add i64 0, 0"]), t);
+    }
+    if (op == "copy" || op == "fill") {
+        Str q = r + "q";
+        Str src = if (op == "copy") { q + " = inttoptr i64 " + v[1] + " to ptr" } else { q + " = trunc i64 " + v[1] + " to i8" };
+        Str call = if (op == "copy") { "call void @llvm.memmove.p0.p0.i64(ptr " + p + ", ptr " + q + ", i64 " + v[2] + ", i1 false)" } else { "call void @llvm.memset.p0.i64(ptr " + p + ", i8 " + q + ", i64 " + v[2] + ", i1 false)" };
+        return lw_step(g, r, "Int", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", src, call, r + " = add i64 0, 0"]), t);
+    }
+    if (op == "cas") {
+        return lw_step(g, r, "Bool", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", r + "x = cmpxchg ptr " + p + ", i64 " + v[1] + ", i64 " + v[2] + " seq_cst seq_cst", r + " = extractvalue {i64, i1} " + r + "x, 1"]), t);
+    }
+    if (op == "fetch_add") {
+        return lw_step(g, r, "Int", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", r + " = atomicrmw add ptr " + p + ", i64 " + v[1] + " seq_cst"]), t);
+    }
+    if (op == "syscall") {
+        Str args = "i64 " + v[0] + ", i64 " + v[1] + ", i64 " + v[2] + ", i64 " + v[3] + ", i64 " + v[4] + ", i64 " + v[5] + ", i64 " + v[6];
+        return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 asm sideeffect \"syscall\", \"={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}\"(" + args + ")"]), t);
+    }
+    if (op == "addr") { return lw_step(g, r, "Int", g.lines.concat([r + " = ptrtoint ptr " + v[0] + " to i64"]), t); }
+    if (op == "str") { return lw_step(g, r, "Str", g.lines.concat([r + " = inttoptr i64 " + v[0] + " to ptr"]), t); }
+    if (op == "f64_bits") { return lw_step(g, r, "Int", g.lines.concat([r + " = bitcast double " + v[0] + " to i64"]), t); }
+    if (op == "bits_f64") { return lw_step(g, r, "Float", g.lines.concat([r + " = bitcast i64 " + v[0] + " to double"]), t); }
+    if (op == "call2") {
+        return lw_step(g, r, "Int", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", r + " = call i64 " + p + "(i64 " + v[1] + ", i64 " + v[2] + ")"]), t);
+    }
+    return lw_gerr("builtin " + n, c);
+}
+
 // The builtin table of cg_primary, for calls that are not user functions.
 GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
+    if (str_starts_with(n, "resid_raw_")) { return lw_raw(w, id, n, env, c); }
     if (n == "str_char_at") { return lw_extern(w, id, "str_char_at", l2s("Str", "Int"), "Int", env, c); }
     if (n == "str_from_code") { return lw_extern(w, id, "str_from_code", l1s("Int"), "Str", env, c); }
     if (n == "str_len") { return lw_extern(w, id, "str_len", l1s("Str"), "Int", env, c); }
@@ -1350,7 +1432,7 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
 
 // Names the builtin table covers.
 Bool lw_is_builtin(Str n) {
-    return n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_internals" || n == "resid_internals_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count" || n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64" || n == "list_sort_ints" || n == "list_reverse_ints" || n == "list_sort_strs" || n == "list_reverse_strs" || n == "list_sort_floats" || n == "list_reverse_floats" || n == "list_contains_int" || n == "list_contains_str" || n == "list_contains_float" || n == "list_sum" || n == "list_sumf";
+    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_internals" || n == "resid_internals_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count" || n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64" || n == "list_sort_ints" || n == "list_reverse_ints" || n == "list_sort_strs" || n == "list_reverse_strs" || n == "list_sort_floats" || n == "list_reverse_floats" || n == "list_contains_int" || n == "list_contains_str" || n == "list_contains_float" || n == "list_sum" || n == "list_sumf";
 }
 
 // cg_print: `print(str_sb_finish(b))` fuses into resid_sb_print.
