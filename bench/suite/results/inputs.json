@@ -1,0 +1,26 @@
+{
+  "2500000": {
+    "bytes": 25416745,
+    "generator": "st/fasta/c",
+    "generator_sha256": "42498795f97df3694b2de230112c1cb0de22149a4398cd76b7b2410e2a1cdeba",
+    "sha256": "e3600e481ef68b6cd9ac155f93f40ff06a4094128f62895eb37b28ebad7cab72"
+  },
+  "25000000": {
+    "bytes": 254166745,
+    "generator": "st/fasta/c",
+    "generator_sha256": "42498795f97df3694b2de230112c1cb0de22149a4398cd76b7b2410e2a1cdeba",
+    "sha256": "3fcf4f78104c8a65ef210fe1d469f4e473456c791225f2f1f9114f4986aa09fa"
+  },
+  "500000": {
+    "bytes": 5083411,
+    "generator": "st/fasta/c",
+    "generator_sha256": "42498795f97df3694b2de230112c1cb0de22149a4398cd76b7b2410e2a1cdeba",
+    "sha256": "1dc21045102d2131a8ad4ee8cc426053b17bde4fe108539af7da33eb317fca93"
+  },
+  "5000000": {
+    "bytes": 50833411,
+    "generator": "st/fasta/c",
+    "generator_sha256": "42498795f97df3694b2de230112c1cb0de22149a4398cd76b7b2410e2a1cdeba",
+    "sha256": "97197f5957a12f8a859ba7edff6d97994daa18afacd77db21fa68c6f2e447e38"
+  }
+}
