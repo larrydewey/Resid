@@ -131,7 +131,7 @@ version = "0.2.0"
 
 Build + run:
 
-    residc tools/resid-manifest.resid run -- build resid.toml residc runtime/resid_rt.c
+    residc tools/resid-manifest.resid run -- build resid.toml residc
 
 This resolves dependencies (local `path =` or versioned from a registry),
 generates an import depmap, and invokes the compiler. The `resid.lock` file
@@ -180,11 +180,14 @@ pins resolved versions. See `tools/resid-manifest.resid` for all commands
 
 The frozen stage-0 seed binary lives at `bootstrap/stage0/residc-seed-linux-x86_64` (with `.sha256` checksum). It was built from `compiler/driver.resid` by the archived Rust pipeline and is the root of the self-hosting chain:
 
-    # 1. Compile the self-hosted driver (D2) using the frozen seed
-    ./bootstrap/stage0/residc-seed-linux-x86_64 compiler/driver.resid -o residc -rt runtime/resid_rt.c
+    # 1. Compile the self-hosted driver (D2) using the frozen seed. The seed
+    #    predates the Resid runtime and links the old C runtime, which is in
+    #    git history (runtime/resid_rt.c at commit 1878e16, before the port).
+    ./bootstrap/stage0/residc-seed-linux-x86_64 compiler/driver.resid -o residc -rt resid_rt.c
 
-    # 2. Use the self-hosted driver to compile programs
-    ./residc hello.resid -o hello -rt runtime/resid_rt.c
+    # 2. Use the self-hosted driver to compile programs (it links
+    #    build/boot/rt.ll, or $RESID_HOME/rt.ll)
+    ./residc hello.resid -o hello
     ./residc hello.resid run         # build + run
     ./residc hello.resid emit-ir     # print LLVM IR
 
@@ -192,7 +195,7 @@ The frozen stage-0 seed binary lives at `bootstrap/stage0/residc-seed-linux-x86_
 
 Once you have a self-hosted `residc` (or any later generation):
 
-    residc hello.resid build [-o out]   # build native binary (clang + C runtime)
+    residc hello.resid build [-o out]   # build native binary (clang + the Resid runtime)
     residc hello.resid run              # build and run it
     residc hello.resid emit-ir          # print LLVM IR
     residc hello.resid                  # type-check only
@@ -206,8 +209,8 @@ The compiler emits target-neutral LLVM IR text (no `target triple`; clang picks 
 ## Project Structure
 
     resid/
-    ├── runtime/             # rt/: the runtime in Resid (lowered to build/boot/rt.ll);
-    │                        #   resid_rt.c: the part not yet ported
+    ├── runtime/rt/          # the runtime, written in Resid (lowered to
+    │                        #   build/boot/rt.ll, linked into every binary)
     ├── bootstrap/
     │   └── stage0/          # frozen, versioned seed binary — the bootstrap root
     │                        #   (see PLAN-resid-only.md Phase D)

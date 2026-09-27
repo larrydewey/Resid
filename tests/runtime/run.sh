@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runtime unit tests: each C file includes runtime/resid_rt.c and checks one
-# property directly (immediate boxes, the capability guard, UTF-8 bounds);
+# Runtime unit tests: each C file links the Resid runtime (build/boot/rt.ll)
+# and checks one property directly (immediate boxes, the capability guard, UTF-8 bounds);
 # rt/primitives.resid checks the runtime primitives; and lib/ and tools/
 # must not use any compiler internal.
 set -uo pipefail

@@ -17,7 +17,7 @@
 ///   residc tools/resid-manifest.resid run -- lock <resid.lock>
 ///   residc tools/resid-manifest.resid run -- deps <resid.toml>
 ///   residc tools/resid-manifest.resid run -- depmap <resid.toml> <out>
-///   residc tools/resid-manifest.resid run -- build <resid.toml> <driver-binary> [resid_rt.c]
+///   residc tools/resid-manifest.resid run -- build <resid.toml> <driver-binary> [extra C file]
 ///
 /// `deps` resolves this manifest's `[dependencies.*]` transitively —
 /// both `path =` (local directory) and `version =` (fetched from the
@@ -1143,7 +1143,8 @@ Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
     filesystem.write_all(depmap_path, depmap_text(r.deps));
     Str root = pkg_dir + "/" + m.root;
     Str out = out_dir + "/" + m.name;
-    Str cmd = driver_bin + " " + root + " -o " + out + " -rt " + rtc + " -depmap " + depmap_path;
+    Str rtx = if (rtc == "") { "" } else { " -rt " + rtc };
+    Str cmd = driver_bin + " " + root + " -o " + out + rtx + " -depmap " + depmap_path;
     Int rc = process.run(cmd);
     if (rc != 0) {
         eprintln("error: build failed");
@@ -1184,10 +1185,10 @@ Int main() {
     }
     if (a1 == "build") {
         if (argc < 4) {
-            eprintln("usage: resid-manifest build <resid.toml> <driver-binary> [resid_rt.c]");
+            eprintln("usage: resid-manifest build <resid.toml> <driver-binary> [extra C file]");
             return 2;
         }
-        Str rtc = if (argc >= 5) { args.get(4) } else { "runtime/resid_rt.c" };
+        Str rtc = if (argc >= 5) { args.get(4) } else { "" };
         return cmd_build(args.get(2), args.get(3), rtc);
     }
     return cmd_manifest(a1);

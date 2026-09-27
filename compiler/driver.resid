@@ -7547,7 +7547,9 @@ Int main() {
     Str path  =  if (testmode) { args.get(2) } else { arg1 };
     Str defout  =  if (testmode) { path + ".testbin" } else { "a.out" };
     Str out  =  pick_opt(argc, "-o", defout);
-    Str rtc  =  pick_opt(argc, "-rt", "runtime/resid_rt.c");
+    // The whole runtime is Resid (runtime/rt/, linked as rt.ll); -rt adds
+    // an extra C file to the link.
+    Str rtc  =  pick_opt(argc, "-rt", "");
     Str depmap_path  =  pick_opt(argc, "-depmap", "");
     Str depmap  =  if (depmap_path == "") { "" } else { filesystem.read_all(depmap_path) };
     // Import resolution: the merged compilation text is the importing

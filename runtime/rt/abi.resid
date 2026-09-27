@@ -171,3 +171,15 @@ pub Int c_resume(Int save) { return 0; }
 
 @import("resid_rt_in_arenas", "i8(ptr)")
 pub Int c_in_arenas(Int p) { return 0; }
+
+@import("malloc_trim", "i32(i64)")
+pub Int c_malloc_trim(Int pad) { return 0; }
+
+@import("pthread_key_create", "i32(ptr,ptr)")
+pub Int c_pthread_key_create(Int key, Int dtor) { return 0; }
+
+@import("pthread_once", "i32(ptr,ptr)")
+pub Int c_pthread_once(Int once, Int f) { return 0; }
+
+@import("pthread_setspecific", "i32(i32,ptr)")
+pub Int c_pthread_setspecific(Int key, Int v) { return 0; }

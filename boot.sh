@@ -26,7 +26,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="${SCRIPT_DIR}/compiler/driver.resid"
 OUT="${SCRIPT_DIR}/build/boot"
-RUNTIME_C="${SCRIPT_DIR}/runtime/resid_rt.c"
 SEED_LL="${OUT}/seed.ll"
 # The Resid runtime (runtime/rt/), lowered to IR by the compiler itself;
 # committed like the seed and linked into every binary.
@@ -51,7 +50,7 @@ die()  { echo -e "  \033[0;31m✗\033[0m $*"; exit 1; }
 RESID_OPT="${RESID_OPT:--O2}"
 
 link_clang() { # link_clang <ll> <out-bin>
-    clang "$RESID_OPT" -no-pie "$1" "$RUNTIME_C" "$RT_LL" -o "$2" -Wno-override-module -pthread
+    clang "$RESID_OPT" -no-pie "$1" "$RT_LL" -o "$2" -Wno-override-module -pthread
 }
 
 build_rt() { # build_rt <compiler> <out-base>: runtime IR to <out-base>.ll
@@ -177,21 +176,14 @@ ok "smoke output correct"
 ok "smoke binary provenance verified"
 
 step "Generating build/boot/residc wrapper"
-rm -rf "${OUT}/runtime"
-mkdir -p "${OUT}/runtime"
-cp "$RUNTIME_C" "${OUT}/runtime/resid_rt.c"
 cat > "${OUT}/residc" <<'WRAPPER_EOF'
 #!/usr/bin/env bash
 # Cargo-free CLI wrapper: passes arguments straight to the self-hosted
-# stage2 compiler, which handles compilation and linking itself.
-#
-# The compiler resolves its default `-rt runtime/resid_rt.c` against the
-# current directory, so the wrapper appends its own copy. pick_opt in the
-# driver lets the FIRST occurrence win, so an explicit -rt from the caller
-# still takes precedence over the one appended here.
+# stage2 compiler, which links the Resid runtime (rt.ll next to it).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-exec "$SCRIPT_DIR/stage2.bin" "$@" -rt "$SCRIPT_DIR/runtime/resid_rt.c"
+export RESID_HOME="${RESID_HOME:-$SCRIPT_DIR}"
+exec "$SCRIPT_DIR/stage2.bin" "$@"
 WRAPPER_EOF
 chmod +x "${OUT}/residc"
 ok "residc wrapper written"

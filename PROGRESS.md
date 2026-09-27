@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  189, reduce 14, provenance 20, graph 418, pkg 17, runtime 7. The Rust
+  192, reduce 14, provenance 20, graph 426, pkg 17, runtime 8. The Rust
   pipeline (`bootstrap/rust-stage0/`) and `tools/resid-lsp-full`, which
   was built on its crates, were deleted on 2026-09-26; both are in git
   history.
@@ -305,6 +305,40 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 619MB (606MB without facts). The artifact carries a RESIDUAL node's range
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
+
+### 0zl. The runtime is Resid; runtime/resid_rt.c is gone (2026-09-26)
+
+- Everything the C runtime did now lives in `runtime/rt/` (lowered to
+  `build/boot/rt.ll`, linked with LTO into every program): output and
+  flags, arithmetic, regex, capabilities, strings and case mapping, the
+  providers and handles, processes, SHA-256, the debugger backend, the
+  entry trampoline, number formatting and `ToString`, list verbs, TCP and
+  entropy, aborts and catchable failure, structured spawn, expectations
+  and the test runner (output byte-identical in all three formats), Dec
+  arithmetic, boxes and the persistent list, maps and sets with their
+  transients and table mode, loop-region evacuation, and the allocator
+  (arenas, bulk arenas, scalar scopes, records, scalar boxes). Layouts and
+  algorithms are the C ones; the C library (malloc, pthread, getaddrinfo,
+  strtod/strfromd, setjmp/longjmp) is still used — dropping it is the
+  next phase.
+- New compiler-only primitives: `resid_raw_catch` (a linkonce IR helper
+  around `_setjmp`; aborts `longjmp` to the innermost published buffer),
+  `resid_raw_cpuid`, `resid_raw_popcount`, `resid_raw_f128_bits` /
+  `resid_raw_bits_f128`. In a runtime module every numeric conversion is
+  an unchecked cast, as in C. `resid_map_find` returns its {value, found}
+  pair as an i128.
+- Found on the way: `lib/http.resid` did not compile (an unknown builtin
+  and missing `@requires(network)`); the binary TCP externs are builtins
+  now. Float(128) below 1e-44 printed 0. A Map or Set in an f-string
+  printed "null" (conformance case `interpolate_map_set`).
+- Benchmarks: unchanged except binary-trees 2.47s -> 2.15s (the allocator
+  fast path inlines at each allocation site with its constant size) and
+  pidigits 0.42s -> 0.44s (the limb loops keep three pointer induction
+  variables where C used one indexed counter). reverse-complement moves
+  with loop alignment (0.50-0.58s, the same code). Self-compile peak
+  414MB.
+- The archived Rust pipeline and `tools/resid-lsp-full` were deleted
+  (they embedded the C runtime); both are in git history.
 
 ### 0zk. One way to show a value: f-strings (2026-09-26)
 

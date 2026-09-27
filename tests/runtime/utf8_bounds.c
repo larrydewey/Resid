@@ -1,8 +1,15 @@
 /* String walkers never step past the terminating NUL on truncated or
  * invalid UTF-8 (each test string sits at the very end of a page, so an
  * over-read faults). */
-#include "../../runtime/resid_rt.c"
-/* In runtime/rt/ (Resid). */
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+/* In runtime/rt/ (Resid, linked as rt.ll). */
+int64_t str_len(const char* s);
+int64_t str_char_at(const char* s, int64_t i);
+char* str_slice(const char* s, int64_t start, int64_t end);
 char* str_reverse(const char* s);
 char* str_to_lower(const char* s);
 char* str_to_upper(const char* s);

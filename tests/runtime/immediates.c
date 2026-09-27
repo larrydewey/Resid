@@ -2,7 +2,24 @@
  * round-trips through box/unbox, hashing and key equality agree with the
  * heap-box path (checked through sets, runtime/rt/map.resid), and no
  * pointer is ever read as an immediate. */
-#include "../../runtime/resid_rt.c"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* The box layout and the scalar boxes (runtime/rt/alloc.resid). */
+typedef struct { int32_t tag; int32_t count; const char* type; } ResidVal;
+#define IMM_LO ((uint64_t)1 << 48)
+#define FIMM_LO ((uint64_t)1 << 56)
+#define IMM_MIN (-((int64_t)1 << 54))
+#define IMM_MAX (((int64_t)1 << 54) - 1)
+static int box_imm(const void* p) { return (uint64_t)(uintptr_t)p - IMM_LO < ((uint64_t)1 << 55); }
+static int box_fimm(const void* p) { return (uint64_t)(uintptr_t)p >= FIMM_LO; }
+void* resid_box_i64(int64_t v);
+int64_t resid_unbox_i64(void* p);
+void* resid_box_f64(double v);
+double resid_unbox_f64(void* p);
+__int128 resid_unbox_i128(void* p);
 
 void* resid_set_new(void);
 void* resid_set_insert(void* set, void* elem);

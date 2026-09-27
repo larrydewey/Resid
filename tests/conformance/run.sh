@@ -59,7 +59,7 @@ run_case() {
     sed "s#@TMP@#$dir#g" "$CASES/$name.resid" > "$dir/$name.resid"
     local args=""
     [ -f "$CASES/$name.args" ] && args="$(sed "s#@TMP@#$dir#g" "$CASES/$name.args")"
-    # The compiler resolves runtime/resid_rt.c relative to the cwd.
+    # Run from the repo root, as a user of the checkout would.
     (cd "$ROOT" && timeout 600 "$COMPILER" "$dir/$name.resid" ${COMPILER_SUBCMD:-} -o "$dir/bin" $args) \
         > "$dir/compile.log" 2>&1
     local crc=$?

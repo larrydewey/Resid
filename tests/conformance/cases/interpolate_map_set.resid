@@ -1,0 +1,7 @@
+// A Map or Set in an f-string hole prints its entries in canonical order.
+Int main() {
+    Map(Str, Int) m = {"a": 1, "b": 2};
+    Set(Int) s = {3, 4};
+    println(f"{m} {s}");
+    return 0;
+}

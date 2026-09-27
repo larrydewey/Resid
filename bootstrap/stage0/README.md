@@ -132,6 +132,15 @@ sha256sum -c residc-seed-linux-x86_64.sha256
 
 ## Using it to bootstrap on a machine with no Rust
 
+The runtime has since been rewritten in Resid (`runtime/rt/`, 2026-09-26)
+and `runtime/resid_rt.c` deleted. This binary predates that: link what it
+builds against the C runtime from git history (`runtime/resid_rt.c` at
+commit `1878e16`), and use the result to compile the current
+`compiler/driver.resid`, which links the Resid runtime from then on. The
+committed `build/boot/seed.ll` (LLVM IR) is the everyday bootstrap root
+(`./boot.sh`).
+
+
 ```sh
 # Compile driver.resid itself with the frozen seed, producing a fresh D2:
 ./residc-seed-linux-x86_64 examples/driver.resid -o residc -rt runtime/resid_rt.c

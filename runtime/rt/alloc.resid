@@ -1,0 +1,527 @@
+// Allocation: arenas, bulk arenas, scalar scopes, records, scalar boxes.
+//
+// Values are never freed piecemeal (no GC, no refcounts). Three region
+// kinds bound the garbage, each bulk-freed at a boundary the compiler (or
+// the compiler's own source) proves nothing inside survives:
+//   - an arena (resid_arena_push/pop): runtime allocations (resid_alloc),
+//     not compiler-generated values;
+//   - a bulk arena (resid_bulk_push/pop): both kinds, for whole compiler
+//     phases whose results are copied out (resid_list_str_persist_copy);
+//   - a scalar scope (resid_scope_push/pop): everything allocated while an
+//     expression with a scalar result is evaluated; one thread-local bump
+//     region that pop rewinds (chunks of 1 MB, a few kept for reuse).
+// Runtime writes that attach new memory to an older object allocate on the
+// plain heap (suspend / resume).
+//
+// Thread-local state words: 0 arena, 1 bulk arena, 2 bytes requested,
+// 3 mark, 4 scope depth, 5 scope chunk, 6 scope bump pointer, 7 scope end,
+// 8 marks, 9 marks capacity, 10 chunk pool, 11 pool size, 12 exit hook set.
+// An arena is {head, current, prev}; its chunks {cap, used, next, data}.
+// A scope chunk is {prev, cap, data}; a mark {chunk, ptr}.
+
+Int ast() { return resid_raw_tls("rt_alloc", 104); }
+Int ag(Int i) { return ld64(ast() + i * 8); }
+Int as_(Int i, Int v) { return st64(ast() + i * 8, v); }
+
+Int arena_chunk_size() { return 4194304; }
+Int scope_chunk_size() { return 1048576; }
+
+// ─── Arenas ────────────────────────────────────────────────────────────
+
+Int arena_new(Int prev) {
+    Int a = xmalloc(24);
+    Int _h = st64(a, 0) + st64(a + 8, 0);
+    return st64(a + 16, prev) * 0 + a;
+}
+
+Int free_chunks(Int c) {
+    if (c == 0) { return 0; }
+    Int next = ld64(c + 16);
+    Int _f = c_free(c);
+    return free_chunks(next);
+}
+
+@export("resid_arena_push", "i64()")
+pub Int rt_arena_push() { return as_(0, arena_new(ag(0))) * 0; }
+
+@export("resid_arena_pop", "i64()")
+pub Int rt_arena_pop() {
+    Int a = ag(0);
+    if (a == 0) { return rt_abort("resid_arena_pop: no active arena"); }
+    Int _p = rt_str_index_popped();
+    Int _f = free_chunks(ld64(a));
+    Int _c = as_(0, ld64(a + 16));
+    return c_free(a) * 0;
+}
+
+// A 16-byte-aligned block from arena a.
+Int arena_bump(Int a, Int size0) {
+    Int size = (size0 + 15) & (0 - 16);
+    Int cur = ld64(a + 8);
+    if (cur == 0 || ld64(cur + 8) + size > ld64(cur)) {
+        Int cs = max(arena_chunk_size(), size);
+        Int c = xmalloc(24 + cs);
+        Int _h = st64(c, cs) + st64(c + 8, 0) + st64(c + 16, ld64(a));
+        Int _s = st64(a, c) + st64(a + 8, c);
+        return bump_in(c, size);
+    }
+    return bump_in(cur, size);
+}
+
+Int bump_in(Int c, Int size) {
+    Int used = ld64(c + 8);
+    Int _u = st64(c + 8, used + size);
+    return c + 24 + used;
+}
+
+// p lies in a chunk of arena a or an enclosing one.
+Bool chain_contains(Int a, Int p) {
+    if (a == 0) { return false; }
+    return chunks_contain(ld64(a), p) || chain_contains(ld64(a + 16), p);
+}
+
+Bool chunks_contain(Int c, Int p) {
+    if (c == 0) { return false; }
+    if (!ult(p, c + 24) && ult(p, c + 24 + ld64(c))) { return true; }
+    return chunks_contain(ld64(c + 16), p);
+}
+
+Bool scope_contains(Int p) { return scope_chunks_contain(ag(5), p); }
+
+Bool scope_chunks_contain(Int c, Int p) {
+    if (c == 0) { return false; }
+    if (!ult(p, c + 16) && ult(p, c + 16 + ld64(c + 8))) { return true; }
+    return scope_chunks_contain(ld64(c), p);
+}
+
+// Any active arena, bulk arena or scope region (a string there must not
+// enter a pointer-keyed cache).
+@export("resid_rt_arena_contains", "i8(ptr)")
+pub Int rt_arena_contains_x(Int p) { return if (chain_contains(ag(0), p) || chain_contains(ag(1), p) || scope_contains(p)) { 1 } else { 0 }; }
+
+@export("resid_bulk_push", "i64()")
+pub Int rt_bulk_push() {
+    Int _b = as_(1, arena_new(ag(1)));
+    return rt_arena_push();
+}
+
+@export("resid_bulk_pop", "i64()")
+pub Int rt_bulk_pop() {
+    Int _a = rt_arena_pop();
+    Int a = ag(1);
+    if (a == 0) { return rt_abort("resid_bulk_pop: no active bulk arena"); }
+    Int _p = rt_str_index_popped();
+    Int _f = free_chunks(ld64(a));
+    Int _c = as_(1, ld64(a + 16));
+    Int _x = c_free(a);
+    // A phase just released its heap footprint: hand it back.
+    return if (ag(1) == 0) { c_malloc_trim(0) * 0 } else { 0 };
+}
+
+// ─── Scalar scopes ─────────────────────────────────────────────────────
+
+Int sc_once() { return resid_raw_global("rt_sc_once", 8); }
+Int sc_key() { return resid_raw_global("rt_sc_key", 8); }
+
+// Thread exit: hand the reuse pool back (chunks in use stay: an unpopped
+// region may hold a value the thread returned).
+pub Int scope_thread_exit(Int unused) {
+    Int _p = free_pool(ag(10));
+    Int _n = as_(10, 0) + as_(11, 0);
+    Int _m = c_free(ag(8));
+    return as_(8, 0) + as_(9, 0);
+}
+
+Int free_pool(Int c) {
+    if (c == 0) { return 0; }
+    Int prev = ld64(c);
+    Int _f = c_free(c);
+    return free_pool(prev);
+}
+
+pub Int scope_key_init() { return c_pthread_key_create(sc_key(), resid_raw_fn("scope_thread_exit")); }
+
+@noinline
+Int marks_grow() {
+    Int cap = if (ag(9) != 0) { ag(9) * 2 } else { 64 };
+    Int _m = as_(8, xrealloc(ag(8), cap * 16));
+    Int _c = as_(9, cap);
+    if (ag(12) != 0) { return 0; }
+    Int _o = c_pthread_once(sc_once(), resid_raw_fn("scope_key_init"));
+    Int _s = c_pthread_setspecific(ld32(sc_key()), 1);
+    return as_(12, 1);
+}
+
+@export("resid_scope_push", "i64()")
+pub Int rt_scope_push() {
+    Int d = ag(4);
+    Int _g = if (d == ag(9)) { marks_grow() } else { 0 };
+    Int m = ag(8) + d * 16;
+    Int _a = st64(m, ag(5)) + st64(m + 8, ag(6));
+    return as_(4, d + 1) * 0 + d;
+}
+
+Int chunk_release(Int c) {
+    if (ld64(c + 8) == scope_chunk_size() && ag(11) < 16) {
+        Int _p = st64(c, ag(10));
+        return as_(10, c) + as_(11, ag(11) + 1);
+    }
+    return c_free(c);
+}
+
+Int release_to(Int target) {
+    if (ag(5) == target) { return 0; }
+    Int c = ag(5);
+    Int _p = as_(5, ld64(c));
+    Int _r = chunk_release(c);
+    return release_to(target);
+}
+
+@export("resid_scope_pop", "void(i64)")
+pub Int rt_scope_pop(Int d) {
+    if (d < 0 || d >= ag(4)) { return 0; }
+    Int m = ag(8) + d * 16;
+    Int mchunk = ld64(m);
+    Int mptr = ld64(m + 8);
+    Int _d = as_(4, d);
+    if (ag(6) == mptr) { return 0; }
+    Int _r = release_to(mchunk);
+    Int _p = as_(6, mptr);
+    Int _e = as_(7, if (mchunk != 0) { mchunk + 16 + ld64(mchunk + 8) } else { 0 });
+    // A pointer-keyed string cache entry may name freed region memory.
+    return rt_str_index_popped();
+}
+
+@noinline
+Int scope_alloc_slow(Int size) {
+    Int c = if (size > scope_chunk_size() / 4) { own_chunk(size) } else { if (ag(10) != 0) { pool_chunk() } else { own_chunk(scope_chunk_size()) } };
+    Int _p = st64(c, ag(5));
+    Int _c = as_(5, c);
+    Int _b = as_(6, c + 16 + size);
+    Int _e = as_(7, c + 16 + ld64(c + 8));
+    return c + 16;
+}
+
+Int own_chunk(Int cap) {
+    Int c = xmalloc(16 + cap);
+    return st64(c + 8, cap) * 0 + c;
+}
+
+Int pool_chunk() {
+    Int c = ag(10);
+    Int _p = as_(10, ld64(c));
+    return as_(11, ag(11) - 1) * 0 + c;
+}
+
+// Blocks whose size is an odd multiple of 8 sit on an 8-byte boundary;
+// every other block is 16-byte aligned, as malloc gives.
+pub Int scope_alloc(Int size0) {
+    Int size = (size0 + 7) & (0 - 8);
+    Int p = ag(6);
+    Int pad = if ((size & 8) != 0) { 0 } else { p & 8 };
+    if (p != 0 && ag(7) - p >= size + pad) {
+        Int _b = as_(6, p + pad + size);
+        return p + pad;
+    }
+    return scope_alloc_slow((size + 15) & (0 - 16));
+}
+
+// Heap allocation for a write into an older object: no arena, no scope.
+// The three saved words go to `save`.
+pub Int suspend(Int save) {
+    Int _a = st64(save, ag(0)) + st64(save + 8, ag(1)) + st64(save + 16, ag(4));
+    return as_(0, 0) + as_(1, 0) + as_(4, 0);
+}
+
+pub Int resume(Int save) { return as_(0, ld64(save)) + as_(1, ld64(save + 8)) + as_(4, ld64(save + 16)); }
+
+// ─── The allocators ────────────────────────────────────────────────────
+
+// The scope bump is the fast path (inlined at each call); arenas and the
+// heap are out of line.
+@export("resid_gmalloc", "ptr(i64)")
+pub Int rt_gmalloc(Int size) {
+    Int _b = as_(2, ag(2) + size);
+    if (ag(4) != 0) { return scope_alloc(size); }
+    return gmalloc_slow(size);
+}
+
+@noinline
+Int gmalloc_slow(Int size) {
+    if (ag(1) != 0) { return arena_bump(ag(1), size); }
+    return xmalloc(size);
+}
+
+// Inside a scope the block may be region memory (the pop covers it); at
+// depth 0 no region memory is live.
+@export("resid_gfree", "void(ptr)")
+pub Int rt_gfree(Int p) {
+    if (ag(4) != 0 || chain_contains(ag(1), p)) { return 0; }
+    return c_free(p);
+}
+
+// resid_alloc: scope, then arena, then heap.
+@export("resid_rt_alloc", "ptr(i64)")
+pub Int rt_alloc_x(Int size) {
+    Int _b = as_(2, ag(2) + size);
+    if (ag(4) != 0) { return scope_alloc(size); }
+    return alloc_slow(size);
+}
+
+@noinline
+Int alloc_slow(Int size) {
+    if (ag(0) != 0) { return arena_bump(ag(0), size); }
+    return xmalloc(size);
+}
+
+// Allocation as outside every scope region.
+@export("resid_rt_outer_alloc", "ptr(i64)")
+pub Int rt_outer_alloc(Int n) {
+    Int d = ag(4);
+    Int _z = as_(4, 0);
+    Int p = rt_alloc_x(n);
+    return as_(4, d) * 0 + p;
+}
+
+@export("resid_mem_mark", "i64()")
+pub Int rt_mem_mark() { return as_(3, ag(2)) * 0; }
+
+@export("resid_mem_since_mark", "i64()")
+pub Int rt_mem_since_mark() { return ag(2) - ag(3); }
+
+// The maps' view of the allocator state.
+@export("resid_rt_sc_depth", "i64()")
+pub Int rt_sc_depth_x() { return ag(4); }
+
+@export("resid_rt_sc_depth_set", "void(i64)")
+pub Int rt_sc_depth_set_x(Int d) { return as_(4, d); }
+
+@export("resid_rt_in_scope", "i8(ptr)")
+pub Int rt_in_scope_x(Int p) { return if (scope_contains(p)) { 1 } else { 0 }; }
+
+@export("resid_rt_scope_alloc", "ptr(i64)")
+pub Int rt_scope_alloc_x(Int n) { return scope_alloc(n); }
+
+@export("resid_rt_suspend", "void(ptr)")
+pub Int rt_suspend_x(Int s) { return suspend(s); }
+
+@export("resid_rt_resume", "void(ptr)")
+pub Int rt_resume_x(Int s) { return resume(s); }
+
+@export("resid_rt_in_arenas", "i8(ptr)")
+pub Int rt_in_arenas_x(Int p) { return rt_arena_contains_x(p); }
+
+// ─── Records ───────────────────────────────────────────────────────────
+// A header word before the fields: tag << 32 | size << 1 | UNIQUE, UNIQUE
+// while the compiler's ownership analysis proved one referrer; a returned
+// literal may then take over a dead unique record (resid_rec_reuse).
+
+Int rec_tag() { return 1380303070 << 32; }   // 0x5245C0DE
+
+@export("resid_rec_new", "ptr(i64,i8)")
+pub Int rt_rec_new(Int size, Int unique) {
+    Int h = rt_gmalloc(size + 8);
+    Int _s = st64(h, rec_tag() | (size << 1) | (if (unique != 0) { 1 } else { 0 }));
+    return h + 8;
+}
+
+@export("resid_rec_reuse", "ptr(ptr,i64)")
+pub Int rt_rec_reuse(Int old, Int size) {
+    if (ld64(old - 8) == (rec_tag() | (size << 1) | 1)) { return old; }
+    return rt_rec_new(size, 1);
+}
+
+@export("resid_rec_share", "void(ptr)")
+pub Int rt_rec_share(Int rec) {
+    Int v = ld64(rec - 8);
+    if ((v >> 32) == 1380303070 && (v & 1) != 0) { return st64(rec - 8, v & (0 - 2)); }
+    return 0;
+}
+
+// ─── Copies that outlive a region ──────────────────────────────────────
+
+// A List(Str) copied, structure and strings, into the enclosing arena (or
+// the heap), before the current arena is popped.
+@export("resid_list_str_persist_copy", "ptr(ptr)")
+pub Int rt_list_str_persist_copy(Int l) {
+    Int n = lcount(l);
+    Int flat = rt_list_to_array(l);
+    Int saved = ag(0);
+    Int _t = as_(0, if (saved != 0) { ld64(saved + 16) } else { 0 });
+    Int copies = xmalloc(max(n, 1) * 8);
+    Int _c = copy_strs(flat, copies, 0, n);
+    Int out = rt_list_new(n, copies, ltype(l));
+    Int _f = c_free(copies) + c_free(flat);
+    return as_(0, saved) * 0 + out;
+}
+
+Int copy_strs(Int flat, Int copies, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int src = ld64(flat + i * 8);
+    Int len = c_strlen(src);
+    Int dst = rt_alloc_x(len + 1);
+    Int _m = mcopy(dst, src, len + 1);
+    Int _s = st64(copies + i * 8, dst);
+    return copy_strs(flat, copies, i + 1, n);
+}
+
+// resid_dec_persist(x): x copied out of the innermost bulk scope into the
+// enclosing one (or the heap).
+@export("resid_decp_persist", "ptr(ptr)")
+pub Int rt_decp_persist(Int v) {
+    Int b = ag(1);
+    if (b == 0) { return v; }
+    Int sz = 24 + dn(v) * 8;
+    Int _c = as_(2, ag(2) + sz);
+    Int r = if (ld64(b + 16) != 0) { arena_bump(ld64(b + 16), sz) } else { xmalloc(sz) };
+    return mcopy(r, v, sz) * 0 + r;
+}
+
+// Constant list literals: built once, outside every region, and published
+// in the literal's cache slot (a race builds it twice, equally valid).
+Int const_list(Int cache, Int n, Int data, Int ty, Int kind) {
+    Int hit = ld64(cache);
+    if (hit != 0) { return hit; }
+    Int saved = xmalloc(24);
+    Int _s = suspend(saved);
+    Int boxes = if (kind == 2) { data } else { xmalloc(max(n, 1) * 8) };
+    Int _b = if (kind == 2) { 0 } else { const_boxes(boxes, data, 0, n, kind) };
+    Int list = rt_list_new(n, boxes, ty);
+    Int _f = if (kind == 2) { 0 } else { c_free(boxes) };
+    Int _r = resume(saved);
+    Int _x = c_free(saved);
+    return st64(cache, list) * 0 + list;
+}
+
+Int const_boxes(Int boxes, Int data, Int i, Int n, Int kind) {
+    if (i >= n) { return 0; }
+    Int b = if (kind == 0) { rt_box_i64(ld64(data + i * 8)) } else { rt_box_bool(if (ld8(data + i) != 0) { 1 } else { 0 }) };
+    Int _s = st64(boxes + i * 8, b);
+    return const_boxes(boxes, data, i + 1, n, kind);
+}
+
+@export("resid_list_const_i64", "ptr(ptr,i64,ptr,ptr)")
+pub Int rt_list_const_i64(Int cache, Int n, Int data, Int ty) { return const_list(cache, n, data, ty, 0); }
+
+@export("resid_list_const_bool", "ptr(ptr,i64,ptr,ptr)")
+pub Int rt_list_const_bool(Int cache, Int n, Int data, Int ty) { return const_list(cache, n, data, ty, 1); }
+
+// Elements are pointers to static data (string literals).
+@export("resid_list_const_ptr", "ptr(ptr,i64,ptr,ptr)")
+pub Int rt_list_const_ptr(Int cache, Int n, Int data, Int ty) { return const_list(cache, n, data, ty, 2); }
+
+// ─── Scalar boxes ──────────────────────────────────────────────────────
+// {tag -1, count 1, type, slot -> payload, payload @24}. Ints in
+// [-2^54, 2^54) are immediate words (v + IMM_OFF, IMM_LO = 2^48), Floats
+// with bits >= 2^56 their own bits; user pointers stay below 2^48
+// (checked at startup, resid_run_main). False, True and 0.0 are three
+// static boxes, set up on first use.
+
+Int imm_off() { return 18295873486192640; }
+Int imm_min() { return 0 - 18014398509481984; }
+Int imm_max() { return 18014398509481983; }
+
+Int interned() { return resid_raw_global("box_interned", 96); }
+
+Int intern_init() {
+    Int g = interned();
+    Int _a = intern_one(g, resid_raw_addr("bool"), 0);
+    Int _b = intern_one(g + 32, resid_raw_addr("bool"), 1);
+    Int _c = intern_one(g + 64, resid_raw_addr("f64"), 0);
+    return g;
+}
+
+Int intern_one(Int b, Int ty, Int payload) {
+    Int _h = st32(b, 0 - 1) + st32(b + 4, 1) + st64(b + 16, b + 24) + st64(b + 24, payload);
+    return st64(b + 8, ty);
+}
+
+Int interned_ready() {
+    Int g = interned();
+    return if (ld64(g + 72) == 0) { intern_init() } else { g };
+}
+
+pub Bool box_interned(Int p) {
+    Int g = interned();
+    return box_imm(p) || box_fimm(p) || (!ult(p, g) && ult(p, g + 64)) || p == g + 64;
+}
+
+@export("resid_rt_box_interned", "i8(ptr)")
+pub Int rt_box_interned_x(Int p) { return if (box_interned(p)) { 1 } else { 0 }; }
+
+Int scalar_box(Int ty, Int payload_size) {
+    Int b = rt_alloc_x(24 + ((payload_size + 7) & (0 - 8)));
+    Int _h = st32(b, 0 - 1) + st32(b + 4, 1) + st64(b + 8, ty);
+    return st64(b + 16, b + 24) * 0 + b;
+}
+
+@export("resid_box_i64", "ptr(i64)")
+pub Int rt_box_i64(Int v) {
+    if (v >= imm_min() && v <= imm_max()) { return v + imm_off(); }
+    Int b = scalar_box(resid_raw_addr("i64"), 8);
+    return st64(b + 24, v) * 0 + b;
+}
+
+@export("resid_unbox_i64", "i64(ptr)")
+pub Int rt_unbox_i64(Int p) { return unbox_word(p); }
+
+@export("resid_box_f64", "ptr(double)")
+pub Int rt_box_f64(Float v) {
+    Int bits = resid_raw_f64_bits(v);
+    if (!ult(bits, 72057594037927936)) { return bits; }
+    if (bits == 0) { return interned_ready() + 64; }
+    Int b = scalar_box(resid_raw_addr("f64"), 8);
+    return st64(b + 24, bits) * 0 + b;
+}
+
+@export("resid_unbox_f64", "double(ptr)")
+pub Float rt_unbox_f64(Int p) { return unbox_float(p); }
+
+@export("resid_box_bool", "ptr(i8)")
+pub Int rt_box_bool(Int v0) {
+    Int v = sx8(v0);
+    if (v == 0 || v == 1) { return interned_ready() + v * 32; }
+    Int b = scalar_box(resid_raw_addr("bool"), 1);
+    return st8(b + 24, v) * 0 + b;
+}
+
+@export("resid_unbox_bool", "i8(ptr)")
+pub Int rt_unbox_bool(Int p) { return ld8(p + 24); }
+
+@export("resid_box_i128", "ptr(i128)")
+pub Int rt_box_i128(Int(128) v) {
+    Int b = scalar_box(resid_raw_addr("i128"), 16);
+    Int _l = st64(b + 24, (Int)v);
+    return st64(b + 32, (Int)(v >> (Int(128))64)) * 0 + b;
+}
+
+@export("resid_unbox_i128", "i128(ptr)")
+pub Int(128) rt_unbox_i128(Int p) {
+    if (box_imm(p)) { return (Int(128))imm_val(p); }
+    return ((Int(128))ld64(p + 32) << (Int(128))64) | ((Int(128))ld64(p + 24) & (Int(128))18446744073709551615);
+}
+
+@export("resid_box_u128", "ptr(i128)")
+pub Int rt_box_u128(Int(128) v) {
+    Int b = scalar_box(resid_raw_addr("u128"), 16);
+    Int _l = st64(b + 24, (Int)v);
+    return st64(b + 32, (Int)(v >> (Int(128))64)) * 0 + b;
+}
+
+@export("resid_unbox_u128", "i128(ptr)")
+pub Int(128) rt_unbox_u128(Int p) { return rt_unbox_i128(p); }
+
+// Immediate boxes need every pointer below 2^48: abort at startup on a
+// system that maps the stack, heap or program above it.
+pub Int check_address_space() {
+    Int local = resid_raw_tls("addr_probe", 8);
+    Int heap = xmalloc(1);
+    Int big = xmalloc(1048576);
+    Int top = local | heap | big | interned() | resid_raw_addr("x");
+    Int _f = c_free(heap) + c_free(big);
+    if (!ult(top, 281474976710656)) {
+        Bool _w = write_all(2, resid_raw_addr("resid: address space above 2^48 is not supported\n"), 50);
+        return c_libc_abort();
+    }
+    return 0;
+}

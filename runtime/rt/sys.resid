@@ -858,6 +858,7 @@ Int stack_mb() {
 
 @export("resid_run_main", "i32(ptr)")
 pub Int rt_run_main(Int f) {
+    Int _c = check_address_space();
     Int attr = xmalloc(64);
     Int slot = xmalloc(16);
     Int _s = st64(slot, f);

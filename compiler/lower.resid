@@ -452,6 +452,8 @@ GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
         Bool strs = num_norm_cg(str_slice(t, 5, str_len(t) - 1)) == "Str";
         return lw_rt1(vt, "ptr", "@resid_list_show(ptr " + v.val + ", i64 " + pick_str(strs, "1", "0") + ")", "Str");
     }
+    if (is_map_type_cg(t)) { return lw_rt1(vt, "ptr", "@resid_map_format(ptr " + v.val + ")", "Str"); }
+    if (is_set_type_cg(t)) { return lw_rt1(vt, "ptr", "@resid_set_format(ptr " + v.val + ")", "Str"); }
     Int si = struct_index(w.fs, t);
     if (si >= 0) { return lw_struct_ts(w, vt, w.fs.stf[si], env); }
     if (ll_ty(t) != "ptr") { return gt_err("cannot interpolate a value of type " + t, v); }

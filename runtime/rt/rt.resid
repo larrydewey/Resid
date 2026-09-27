@@ -1,6 +1,6 @@
 // The Resid runtime: compiled with `--runtime-module` into
-// build/boot/rt.ll and linked into every program with what is still in
-// runtime/resid_rt.c. Runtime code may use the compiler-only primitives
+// build/boot/rt.ll and linked into every program; it is the whole runtime
+// (the C library aside). Runtime code may use the compiler-only primitives
 // (resid_raw_*) and @export / @import; integer + - * wrap, as in C. Only
 // @export entries are visible outside the module.
 import "abi.resid";
@@ -22,3 +22,4 @@ import "ctl.resid";
 import "dec.resid";
 import "list.resid";
 import "map.resid";
+import "alloc.resid";

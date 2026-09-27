@@ -124,10 +124,10 @@ mkpkg "$W/reader" reader 1.0.0 $'@requires(filesystem(readonly))\npub Bool etc_e
 mkdir -p "$W/ceil/src"
 printf '[package]\nname = "ceil"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["filesystem"]\n\n[dependencies.reader]\npath = "../reader"\ncapabilities = []\n' > "$W/ceil/resid.toml"
 printf 'import "reader";\n@requires(filesystem(readonly))\nInt main() { if (etc_exists()) { println("yes"); } return 0; }\n' > "$W/ceil/src/main.resid"
-(cd "$ROOT" && "$MAN" build "$W/ceil/resid.toml" "$COMPILER" runtime/resid_rt.c) > "$W/ceil.out" 2>&1
+(cd "$ROOT" && "$MAN" build "$W/ceil/resid.toml" "$COMPILER") > "$W/ceil.out" 2>&1
 if [ $? -ne 0 ] && grep -q "E0212" "$W/ceil.out"; then ok; else bad "ceiling not enforced: $(grep -m1 -i error "$W/ceil.out")"; fi
 sed -i 's/capabilities = \[\]/capabilities = ["filesystem(readonly)"]/' "$W/ceil/resid.toml"
-(cd "$ROOT" && "$MAN" build "$W/ceil/resid.toml" "$COMPILER" runtime/resid_rt.c) > "$W/ceil2.out" 2>&1
+(cd "$ROOT" && "$MAN" build "$W/ceil/resid.toml" "$COMPILER") > "$W/ceil2.out" 2>&1
 if [ $? -eq 0 ] && [ "$("$W/ceil/target/resid/ceil")" = yes ]; then ok; else bad "ceiling grant: $(grep -m1 -i error "$W/ceil2.out")"; fi
 
 echo "pkg: $pass passed, $fail failed"
