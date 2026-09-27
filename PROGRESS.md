@@ -323,6 +323,15 @@ boundaries, ending in a MIN / -1 that must still trap.
   features so LTO inlines them).
 - Ported: the checked-arithmetic traps and the wrapping / saturating /
   checked builtins, abs/min/max/clamp (`runtime/rt/arith.resid`).
+- Since ported (`runtime/rt/`): output and process flags, regex, the
+  capability guard, the string core and verbs, case mapping, providers,
+  File handles, processes, SHA-256, the debugger, the entry trampoline and
+  number formatting (`numfmt.resid`, via `strfromd` for Float). Integer
+  conversions in a runtime module are unchecked bit casts, and
+  `resid_raw_f128_bits` / `resid_raw_bits_f128` expose Float(128) bits.
+  Float128ToString no longer prints 0 below 1e-44 (the C version counted
+  leading fraction zeros against its 44-digit budget); conformance case
+  `number_to_string_edges`.
 - Found on the way: resid-debug's return-address scan overflowed on
   stack words near INT64_MIN (now `wrapping_sub`).
 - The benchmark suite is unchanged except spectral-norm, 1.10s -> 1.35s

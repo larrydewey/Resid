@@ -3034,7 +3034,8 @@ GT int_conv_checked(GT v, Str vt, Str tt, Str toty) {
     Str l3 = if (tw < w) { back + " = " + text + " " + tl + " " + t + " to " + wl } else { copy_line(back, wl, t) };
     Str l5 = if (ss && !ts) { neg + " = icmp slt " + sl + " " + v.val + ", 0" } else if (!ss && ts) { neg + " = icmp slt " + tl + " " + t + ", 0" } else { neg + " = icmp eq i8 0, 1" };
     List(Str) p0 = v.lines;
-    List(Str) p1 = p0.concat([l1, l2, l3, ne + " = icmp ne " + wl + " " + back + ", " + vw, l5, bad + " = or i1 " + ne + ", " + neg, bb + " = zext i1 " + bad + " to i8", "call void @resid_conv_check(i8 " + bb + ")"]);
+    // The runtime converts like C: the bits, extended or truncated.
+    List(Str) p1 = if (resid_rtmod()) { p0.concat([l1, l2]) } else { p0.concat([l1, l2, l3, ne + " = icmp ne " + wl + " " + back + ", " + vw, l5, bad + " = or i1 " + ne + ", " + neg, bb + " = zext i1 " + bad + " to i8", "call void @resid_conv_check(i8 " + bb + ")"]) };
     return GT {.pos = v.pos, .val = t, .ty = toty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = p1, .tmp = b + 7, .lbl = v.lbl, .tail = false};
 }
 

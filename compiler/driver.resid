@@ -3034,7 +3034,8 @@ GT int_conv_checked(GT v, Str vt, Str tt, Str toty) {
     Str l3 = if (tw < w) { back + " = " + text + " " + tl + " " + t + " to " + wl } else { copy_line(back, wl, t) };
     Str l5 = if (ss && !ts) { neg + " = icmp slt " + sl + " " + v.val + ", 0" } else if (!ss && ts) { neg + " = icmp slt " + tl + " " + t + ", 0" } else { neg + " = icmp eq i8 0, 1" };
     List(Str) p0 = v.lines;
-    List(Str) p1 = p0.concat([l1, l2, l3, ne + " = icmp ne " + wl + " " + back + ", " + vw, l5, bad + " = or i1 " + ne + ", " + neg, bb + " = zext i1 " + bad + " to i8", "call void @resid_conv_check(i8 " + bb + ")"]);
+    // The runtime converts like C: the bits, extended or truncated.
+    List(Str) p1 = if (resid_rtmod()) { p0.concat([l1, l2]) } else { p0.concat([l1, l2, l3, ne + " = icmp ne " + wl + " " + back + ", " + vw, l5, bad + " = or i1 " + ne + ", " + neg, bb + " = zext i1 " + bad + " to i8", "call void @resid_conv_check(i8 " + bb + ")"]) };
     return GT {.pos = v.pos, .val = t, .ty = toty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = p1, .tmp = b + 7, .lbl = v.lbl, .tail = false};
 }
 
@@ -5719,8 +5720,8 @@ pub Str wide_tostr_arg(Str name) {
 
 // Runtime primitives (compiler-only): argument and result types.
 ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
-    Str want = if (str_starts_with(op, "load")) { "Int" } else { if (str_starts_with(op, "store") || op == "fetch_add") { "Int,Int" } else { if (op == "copy" || op == "fill" || op == "cas") { "Int,Int,Int" } else { if (op == "syscall") { "Int,Int,Int,Int,Int,Int,Int" } else { if (op == "str" || op == "bits_f64") { "Int" } else { if (op == "f64_bits") { "Float" } else { if (op == "global" || op == "tls") { "Str,Int" } else { if (op == "fn") { "Str" } else { if (op == "call2") { "Int,Int,Int" } else { if (op == "addr") { "*" } else { if (op == "table") { "List(Int)" } else { "?" } } } } } } } } } } };
-    Str rty = if (op == "cas") { "Bool" } else { if (op == "str") { "Str" } else { if (op == "bits_f64") { "Float" } else { "Int" } } };
+    Str want = if (str_starts_with(op, "load")) { "Int" } else { if (str_starts_with(op, "store") || op == "fetch_add") { "Int,Int" } else { if (op == "copy" || op == "fill" || op == "cas") { "Int,Int,Int" } else { if (op == "syscall") { "Int,Int,Int,Int,Int,Int,Int" } else { if (op == "str" || op == "bits_f64") { "Int" } else { if (op == "f64_bits") { "Float" } else { if (op == "global" || op == "tls") { "Str,Int" } else { if (op == "fn") { "Str" } else { if (op == "call2") { "Int,Int,Int" } else { if (op == "addr") { "*" } else { if (op == "table") { "List(Int)" } else { if (op == "f128_bits") { "Float(128)" } else { if (op == "bits_f128") { "Int(128)" } else { "?" } } } } } } } } } } } } };
+    Str rty = if (op == "cas") { "Bool" } else { if (op == "str") { "Str" } else { if (op == "bits_f64") { "Float" } else { if (op == "f128_bits") { "Int(128)" } else { if (op == "bits_f128") { "Float(128)" } else { "Int" } } } } };
     if (want == "?") { return ERes {.pos = pos, .ty = "", .err = "unknown runtime primitive " + name}; }
     Bool scalar = argtys == "Int" || argtys == "Float" || argtys == "Bool";
     Bool ok = if (want == "*") { argc == 1 && !scalar } else { argtys == want || (want == "List(Int)" && str_starts_with(argtys, "List(")) };

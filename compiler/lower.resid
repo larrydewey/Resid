@@ -1400,6 +1400,8 @@ GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
     }
     if (op == "addr") { return lw_step(g, r, "Int", g.lines.concat([r + " = ptrtoint ptr " + v[0] + " to i64"]), t); }
     if (op == "str") { return lw_step(g, r, "Str", g.lines.concat([r + " = inttoptr i64 " + v[0] + " to ptr"]), t); }
+    if (op == "f128_bits") { return lw_step(g, r, "Int(128)", g.lines.concat([r + " = bitcast fp128 " + v[0] + " to i128"]), t); }
+    if (op == "bits_f128") { return lw_step(g, r, "Float(128)", g.lines.concat([r + " = bitcast i128 " + v[0] + " to fp128"]), t); }
     if (op == "f64_bits") { return lw_step(g, r, "Int", g.lines.concat([r + " = bitcast double " + v[0] + " to i64"]), t); }
     if (op == "bits_f64") { return lw_step(g, r, "Float", g.lines.concat([r + " = bitcast i64 " + v[0] + " to double"]), t); }
     if (op == "call2") {

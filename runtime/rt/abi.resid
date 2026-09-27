@@ -111,3 +111,6 @@ pub Int c_pthread_attr_setstacksize(Int a, Int n) { return 0; }
 
 @import("pthread_attr_destroy", "i32(ptr)")
 pub Int c_pthread_attr_destroy(Int a) { return 0; }
+
+@import("strfromd", "i32(ptr,i64,ptr,double)")
+pub Int c_strfromd(Int buf, Int n, Int fmt, Float v) { return 0; }

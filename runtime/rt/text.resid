@@ -77,7 +77,7 @@ pub Int itoa_into(Int buf, Int v) {
     return start + nd;
 }
 
-Int udigits(Int m, Int n) {
+pub Int udigits(Int m, Int n) {
     Int q = udiv10(m);
     if (q == 0) { return n; }
     return udigits(q, n + 1);
@@ -85,7 +85,7 @@ Int udigits(Int m, Int n) {
 
 Int udiv10(Int m) { return udiv(m, 10); }
 
-Int uput(Int at, Int m) {
+pub Int uput(Int at, Int m) {
     Int q = udiv10(m);
     Int _s = st8(at, 48 + (m - q * 10));
     if (q == 0) { return 0; }
