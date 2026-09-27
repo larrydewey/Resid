@@ -45,13 +45,13 @@ Int main() { Bool b = "a" < 5; return 0; }
 cannot mix Dec with a non-Dec operand: Dec + Int (convert explicitly with dN / iN / fN)
 Int main() { Dec d = 1.5m; Int y = 2; Dec z = d + y; return 0; }
 === destr
-unknown field z in P
-type P = { Int x; Int y; };
-Int main() { P p = P {.x = 1, .y = 2}; P { x, z } = p; return 0; }
+unknown field z in Pt
+type Pt = { Int x; Int y; };
+Int main() { Pt p = Pt {.x = 1, .y = 2}; Pt { x, z } = p; return 0; }
 === destrty
-destructuring P from Int
-type P = { Int x; Int y; };
-Int main() { Int p = 1; P { x, y } = p; return 0; }
+destructuring Pt from Int
+type Pt = { Int x; Int y; };
+Int main() { Int p = 1; Pt { x, y } = p; return 0; }
 === discard
 undefined variable nope
 Int main() { _ = nope; return 0; }
@@ -97,9 +97,9 @@ Int main() { 5 + "s"; return 0; }
 call toEqual expects (Int), got (Str)
 Int main() { expect(5).toEqual("a"); return 0; }
 === field
-field z not found in P
-type P = { Int x; };
-Int main() { P p = P {.x = 1}; Int y = p.z; return 0; }
+field z not found in Pt
+type Pt = { Int x; };
+Int main() { Pt p = Pt {.x = 1}; Int y = p.z; return 0; }
 === fnvalue
 undefined variable f
 Int f() { return 1; }
@@ -160,27 +160,27 @@ map values differ: Int vs Str
 Int main() { Map(Str, Int) xs = {"a": 1, "b": "c"}; return 0; }
 === matcharms
 match arms disagree: Int vs Str
-type C = Red | Green;
-Int main() { C c = Red; Int b = match (c) { Red => 1, Green => "a" }; return 0; }
+type Color = Red | Green;
+Int main() { Color c = Red; Int b = match (c) { Red => 1, Green => "a" }; return 0; }
 === matchbad
 match arm pattern Blue is not a variant of this sum type
-type C = Red | Green;
-Int main() { C c = Red; Int b = match (c) { Blue => 1, _ => 2 }; return 0; }
+type Color = Red | Green;
+Int main() { Color c = Red; Int b = match (c) { Blue => 1, _ => 2 }; return 0; }
 === matchdup
 duplicate match arm for variant Red
-type C = Red | Green;
-Int main() { C c = Red; Int b = match (c) { Red => 1, Red => 2, Green => 3 }; return 0; }
+type Color = Red | Green;
+Int main() { Color c = Red; Int b = match (c) { Red => 1, Red => 2, Green => 3 }; return 0; }
 === matchnoex
 match is not exhaustive: not every variant is covered (add the missing arm(s) or a trailing `_ => ...`)
-type C = Red | Green;
-Int main() { C c = Red; Int b = match (c) { Red => 1 }; return 0; }
+type Color = Red | Green;
+Int main() { Color c = Red; Int b = match (c) { Red => 1 }; return 0; }
 === matchsc
 match scrutinee must be an Option or a declared sum type, got Int
 Int main() { Int a = 5; Int b = match (a) { _ => 1 }; return 0; }
 === matchwild
 the `_` wildcard arm must be the last match arm
-type C = Red | Green;
-Int main() { C c = Red; Int b = match (c) { _ => 1, Red => 2 }; return 0; }
+type Color = Red | Green;
+Int main() { Color c = Red; Int b = match (c) { _ => 1, Red => 2 }; return 0; }
 === methsugar
 call dbl expects (Int), got (Str)
 Int dbl(Int a) { return a * 2; }
@@ -250,13 +250,13 @@ Int main() { Set(Int) s = {1, 2}; Bool v = s.contains("a"); return 0; }
 set element type mismatch: Int vs Str
 Int main() { Set(Int) xs = {1, "a"}; return 0; }
 === sfield
-unknown field y in P
-type P = { Int x; };
-Int main() { P p = P {.y = 1}; return 0; }
+unknown field y in Pt
+type Pt = { Int x; };
+Int main() { Pt p = Pt {.y = 1}; return 0; }
 === sfieldty
 field x: expected Int, got Str
-type P = { Int x; };
-Int main() { P p = P {.x = "s"}; return 0; }
+type Pt = { Int x; };
+Int main() { Pt p = Pt {.x = "s"}; return 0; }
 === shadow
 shadowing: `a` is already bound in this scope
 Int main() { Int a = 1; if (true) { Int a = 2; } return 0; }
@@ -317,12 +317,12 @@ unsupported method frob
 Int main() { Int a = 5; Int b = a.frob(); return 0; }
 === variantnp
 variant Empty takes no payload (write it without parentheses)
-type B = Full(Int) | Empty;
-Int main() { B b = Empty(1); return 0; }
+type Bx = Full(Int) | Empty;
+Int main() { Bx b = Empty(1); return 0; }
 === variant
 variant Full expects Int, got Str
-type B = Full(Int) | Empty;
-Int main() { B b = Full("a"); return 0; }
+type Bx = Full(Int) | Empty;
+Int main() { Bx b = Full("a"); return 0; }
 === whilecond
 while condition must be Bool, got Str
 Int main() { while ("x") { return 1; } return 0; }
@@ -365,7 +365,7 @@ check: ok
 Int main() { StrBuf b = StrBuf(); Option(Int) o = Some(1); Str s = match (o) { Some(v) => b.push(f"{v}").finish(), None => b.finish() }; println(s); return 0; }
 === lin_nested_field
 error[E0404]: builder type StrBuf cannot be a struct field (spec §45.1)
-type P = { StrBuf b; };
+type Pt = { StrBuf b; };
 Int main() { return 0; }
 === lin_nested_param
 error[E0404]: builder type cannot appear inside Option(StrBuf) (spec §45.1)
@@ -393,5 +393,5 @@ Int main() { return 0; }
 error[E0401]: builder `b` is not consumed before this return (spec §45.1)
 Int main() { StrBuf b = StrBuf(); return 0; }
 === showbad
-behavior Show(M): impl must have signature (M) -> Str
-type M = { Int c; }; Int bad(M m) { return 1; } Show(M) = bad; Int main() { return 0; }
+behavior Show(Mt): impl must have signature (Mt) -> Str
+type Mt = { Int c; }; Int bad(Mt m) { return 1; } Show(Mt) = bad; Int main() { return 0; }

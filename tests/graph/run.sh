@@ -181,7 +181,7 @@ if [ -x "$CK/why" ] && "$COMPILER" tests/graph/cases/facts_sample.resid -o "$CK/
         fail=$((fail + 1)); echo "FAIL facts_sample: $got"
     fi
     got="$("$CK/why" "$CK/facts" p 2>&1)"
-    if [[ "$got" == *"bind p: P"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL facts_sample p: $got"; fi
+    if [[ "$got" == *"bind p: Pt"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL facts_sample p: $got"; fi
 else
     fail=$((fail + 1)); echo "FAIL facts_sample build"
 fi

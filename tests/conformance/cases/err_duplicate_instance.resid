@@ -1,6 +1,6 @@
-type P = { Int x; Int y; };
-Int by_x(P a, P b) { return a.x - b.x; }
-Int by_y(P a, P b) { return a.y - b.y; }
-Ord(P) = by_x;
-Ord(P) = by_y;
+type Pt = { Int x; Int y; };
+Int by_x(Pt a, Pt b) { return a.x - b.x; }
+Int by_y(Pt a, Pt b) { return a.y - b.y; }
+Ord(Pt) = by_x;
+Ord(Pt) = by_y;
 Int main() { return 0; }

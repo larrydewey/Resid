@@ -1,0 +1,3 @@
+pub Int f() { return 2; }
+type Node = { Str s; };
+pub Node mk2() { return Node {.s = "b"}; }

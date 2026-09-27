@@ -1,4 +1,4 @@
-type P = { Int x; };
-Int same(P a, P b) { return a.x - b.x; }
-Eq(P) = same;
+type Pt = { Int x; };
+Int same(Pt a, Pt b) { return a.x - b.x; }
+Eq(Pt) = same;
 Int main() { return 0; }

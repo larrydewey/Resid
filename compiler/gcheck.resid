@@ -2289,9 +2289,83 @@ Int gk_skip_id(List(Int) ms, Int i, Int id) {
     return i;
 }
 
+// ─── Naming case (E0222) ────────────────────────────────────────────
+// Types, behaviors and variants start uppercase; values, functions,
+// parameters and fields start lowercase. A single uppercase letter is a
+// type parameter, so no type may be named with one.
+
+Bool gk_upper_name(Str n) {
+    Int c = str_char_at(n, 0);
+    return c >= 65 && c <= 90;
+}
+
+Bool gk_lower_name(Str n) {
+    Int c = str_char_at(n, 0);
+    return (c >= 97 && c <= 122) || c == 95;
+}
+
+// The naming complaint for node `id`, or "".
+Str gk_case_msg(Kg g, Int id) {
+    KN n = g.ns[id];
+    Str k = n.kind;
+    Bool ty = k == "struct_t" || k == "sum_t" || k == "alias_t" || k == "ctype_t" || k == "cwhere_t" || k == "bdecl";
+    if (ty && !gk_upper_name(n.text)) { return "type name `" + n.text + "` must start with an uppercase letter"; }
+    if (ty && str_len(n.text) == 1) { return "`" + n.text + "`: single uppercase letters are reserved for type parameters; give the type a longer name"; }
+    if ((k == "variant" || k == "behavior") && !gk_upper_name(n.text)) { return "`" + n.text + "` must start with an uppercase letter (variants and behaviors are type-level names)"; }
+    // Runtime entry points keep their ABI spellings.
+    Bool abi = str_contains(n.aux, "@export(") || str_contains(n.aux, "@import(");
+    if ((k == "fn" || k == "proto") && !abi && !gk_lower_name(n.text)) { return "function name `" + n.text + "` must start with a lowercase letter; uppercase names are types"; }
+    Bool val = k == "param" || k == "bind" || k == "rbind" || k == "for" || k == "lparam" || k == "name" || k == "sfield";
+    if (val && n.text != "" && !gk_lower_name(n.text)) { return "value name `" + n.text + "` must start with a lowercase letter; uppercase names are types"; }
+    Bool pat = k == "letpat" || k == "pat" || k == "arm";
+    if (pat && n.aux != "" && !gk_lower_name(n.aux)) { return "value name `" + n.aux + "` must start with a lowercase letter; uppercase names are types"; }
+    return "";
+}
+
+// Report every naming violation; true when there was one.
+Bool gk_case_all(Kg g, Int id, Str src, Str smap, Bool acc) {
+    if (id >= kg_count(g)) { return acc; }
+    Str m = gk_case_msg(g, id);
+    Bool bad = m != "";
+    if (bad) { gk_diag("E0222", m, g, id, src, smap); }
+    return gk_case_all(g, id + 1, src, smap, acc || bad);
+}
+
+// ─── Ambiguous imports (E0223) ──────────────────────────────────────
+// Import resolution spells a name that two imported modules export
+// `__ambig__name` in the importing file (spec §22); a use of it that no
+// local binds is an error.
+
+Str gk_ambig_name(Str t) {
+    Int at = str_find(t, "__ambig__");
+    if (at < 0) { return ""; }
+    Int e = scan_ident(t, at + 9, str_len(t));
+    return str_slice(t, at + 9, e);
+}
+
+Bool gk_ambig_all(Kg g, RS rs, Int id, Str src, Str smap, Bool acc) {
+    if (id >= kg_count(g)) { return acc; }
+    KN n = g.ns[id];
+    Str nm = gk_ambig_name(n.text + " " + n.aux);
+    Int d = if (n.kind == "ref" || n.kind == "call") { kg_def(rs, id) } else { -1 };
+    Bool use = n.kind == "ref" || n.kind == "call" || n.kind == "ty" || n.kind == "struct" || n.kind == "destr" || n.kind == "arm" || n.kind == "behavior";
+    // Calling a local of that name is the ambiguous function, unless the local is a closure.
+    Bool clo = d >= 0 && g.ns[d].nk > 0 && str_contains(g.ns[kg_kid(g, d, 0)].text, "closure");
+    Bool bad = nm != "" && use && (d < 0 || (n.kind == "call" && !clo));
+    if (bad) { gk_diag("E0223", "`" + nm + "` is ambiguous: more than one imported module exports it; qualify the use (import \"m\" as m; then m." + nm + ") or import only one of them", g, id, src, smap); }
+    return gk_ambig_all(g, rs, id + 1, src, smap, acc || bad);
+}
+
 // Check a parsed program (diagnostics printed) and collect its columns.
 pub GKR gk_analyze(Kg g, Int unit, Str src, Str smap, Bool log) {
+    List(Int) e0 = [];
+    List(Str) es0 = [];
+    RS rs0 = rs_empty();
+    // The runtime keeps its C-era ABI names.
+    Bool miscase = !resid_rtmod() && gk_case_all(g, 0, src, smap, false);
+    if (miscase) { return GKR {.status = 1, .ty = es0, .def = e0, .rs = rs0, .fs = sigs_empty()}; }
     RS rs = kg_resolve(g, unit);
+    if (gk_ambig_all(g, rs, 0, src, smap, false)) { return GKR {.status = 1, .ty = es0, .def = e0, .rs = rs, .fs = sigs_empty()}; }
     GKSig sg = gk_sigs(g, unit);
     List(Int) e = [];
     List(Str) es = [];

@@ -4879,27 +4879,32 @@ pub Str imp_unalias_fs(Str t, Int i, Int n, Str aliases, Str acc) {
 // Top-level function names of `s` with their visibility: "+name" / "-name"
 // entries, comma-joined.
 pub Str imp_fn_decls(Str s, Int pos, Int depth, Bool sawpub, Str acc) {
+    return imp_fn_decls_p(s, pos, depth, sawpub, acc, "");
+}
+
+// `prev`: the token before; `behavior Name(..) {` declares no function.
+pub Str imp_fn_decls_p(Str s, Int pos, Int depth, Bool sawpub, Str acc, Str prev) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return acc; }
-    if (t.text == "{") { return imp_fn_decls(s, t.pos, depth + 1, sawpub, acc); }
+    if (t.text == "{") { return imp_fn_decls_p(s, t.pos, depth + 1, sawpub, acc, t.text); }
     if (t.text == "}") {
         Bool reset = depth == 1;
-        return imp_fn_decls(s, t.pos, depth - 1, sawpub && !reset, acc);
+        return imp_fn_decls_p(s, t.pos, depth - 1, sawpub && !reset, acc, t.text);
     }
-    if (depth == 0 && t.text == ";") { return imp_fn_decls(s, t.pos, depth, false, acc); }
-    if (depth == 0 && t.text == "pub") { return imp_fn_decls(s, t.pos, depth, true, acc); }
-    if (depth == 0 && t.kind == "ident") {
+    if (depth == 0 && t.text == ";") { return imp_fn_decls_p(s, t.pos, depth, false, acc, t.text); }
+    if (depth == 0 && t.text == "pub") { return imp_fn_decls_p(s, t.pos, depth, true, acc, t.text); }
+    if (depth == 0 && t.kind == "ident" && prev != "behavior") {
         Tok o = lex_tok(s, t.pos);
         if (o.text == "(") {
             Int cl = imp_close_paren(s, o.pos, 0);
             Tok b = lex_tok(s, cl);
             if (b.text == "{") {
                 Str mark = if (sawpub) { "+" } else { "-" };
-                return imp_fn_decls(s, cl, depth, sawpub, acc + "," + mark + t.text);
+                return imp_fn_decls_p(s, cl, depth, sawpub, acc + "," + mark + t.text, ")");
             }
         }
     }
-    return imp_fn_decls(s, t.pos, depth, sawpub, acc);
+    return imp_fn_decls_p(s, t.pos, depth, sawpub, acc, t.text);
 }
 
 pub Int imp_close_paren(Str s, Int pos, Int depth) {
@@ -4974,6 +4979,292 @@ pub Str imp_apply_vis(Str src, Str vis, Str path) {
     return str_sb_finish(imp_rename(src, 0, hidden, prefix, str_sb_new(), 0, ""));
 }
 
+// ─── Module namespaces (spec §22) ───────────────────────────────
+// A name that two modules export collides. Each exporting module's copy
+// (the program's own file excepted) is renamed to a module-private
+// spelling; a use resolves to the copy of a module the file imports
+// (`alias.name` names one), and a file importing two copies gets
+// `__ambig__name`, reported at a use (E0223). The table rides in the
+// dependency map as "@ns::name::p|q" and "@imp::path::alias=target,..."
+// lines.
+
+// Names `s` exports as ",a,b,": functions `vis` exposes, types, variants,
+// behaviors and their verbs.
+pub Str imp_exports(Str s, Str vis) {
+    List(Str) ds = str_split(imp_fn_decls(s, 0, 0, false, ""), ",");
+    return imp_type_names(s, 0, 0, "", imp_exported_fns(ds, 0, vis, ","));
+}
+
+pub Str imp_exported_fns(List(Str) ds, Int i, Str vis, Str acc) {
+    if (i >= ds.len()) { return acc; }
+    Str d = ds[i];
+    if (d == "") { return imp_exported_fns(ds, i + 1, vis, acc); }
+    Str nm = str_slice(d, 1, str_len(d));
+    Bool shown = vis == "" || (vis == "*" && str_starts_with(d, "+")) || (vis != "*" && str_contains(vis, "," + nm + ","));
+    Bool dup = str_contains(acc, "," + nm + ",");
+    return imp_exported_fns(ds, i + 1, vis, if (shown && !dup && nm != "main") { acc + nm + "," } else { acc });
+}
+
+// Type, variant, behavior and verb names declared at depth 0 (and verbs
+// inside a behavior block).
+pub Str imp_type_names(Str s, Int pos, Int depth, Str prev, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return acc; }
+    if (depth == 0 && t.text == "type") {
+        Tok nm = lex_tok(s, t.pos);
+        Int end = skip_decl(s, nm.pos, 0);
+        Str body = str_slice(s, nm.pos, end);
+        Str vs = if (imp_has_bar(body, 0, 0)) { imp_variants(body, 0, 0, "=", "") } else { "" };
+        return imp_type_names(s, end, 0, ";", imp_add_name(acc, nm.text) + vs);
+    }
+    if (depth == 0 && t.text == "behavior") {
+        Tok nm = lex_tok(s, t.pos);
+        Tok o = lex_tok(s, nm.pos);
+        Int cl = if (o.text == "(") { imp_close_paren(s, o.pos, 0) } else { nm.pos };
+        Tok b = lex_tok(s, cl);
+        if (b.text != "{") { return imp_type_names(s, t.pos, depth, t.text, acc); }
+        Int end = skip_decl(s, cl, 0);
+        Str verbs = imp_verbs(str_slice(s, b.pos, end - 1), 0, "", "");
+        return imp_type_names(s, end, 0, "}", imp_add_name(acc, nm.text) + verbs);
+    }
+    Int d2 = if (t.text == "{") { depth + 1 } else { if (t.text == "}") { depth - 1 } else { depth } };
+    return imp_type_names(s, t.pos, d2, t.text, acc);
+}
+
+pub Str imp_add_name(Str acc, Str n) {
+    if (n == "" || str_contains(acc, "," + n + ",")) { return acc; }
+    return if (acc == "") { "," + n + "," } else { acc + n + "," };
+}
+
+// A `|` outside parentheses: the declaration is a sum type.
+pub Bool imp_has_bar(Str s, Int pos, Int depth) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return false; }
+    if (depth == 0 && t.text == "|") { return true; }
+    Int d2 = if (t.text == "(") { depth + 1 } else { if (t.text == ")") { depth - 1 } else { depth } };
+    return imp_has_bar(s, t.pos, d2);
+}
+
+// Variant names of a sum body: idents after `=` or `|` at depth 0.
+pub Str imp_variants(Str s, Int pos, Int depth, Str prev, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return acc; }
+    Bool head = depth == 0 && t.kind == "ident" && (prev == "=" || prev == "|");
+    Str acc2 = if (head) { acc + t.text + "," } else { acc };
+    Int d2 = if (t.text == "(") { depth + 1 } else { if (t.text == ")") { depth - 1 } else { depth } };
+    return imp_variants(s, t.pos, d2, t.text, acc2);
+}
+
+// Verb names of a behavior block: `Ret verb(params);`.
+pub Str imp_verbs(Str s, Int pos, Str prev, Str acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return acc; }
+    Tok o = lex_tok(s, t.pos);
+    Bool verb = t.kind == "ident" && o.text == "(" && prev != "(" && prev != "," && prev != "";
+    if (verb) {
+        Int cl = imp_close_paren(s, o.pos, 0);
+        return imp_verbs(s, cl, ")", acc + t.text + ",");
+    }
+    return imp_verbs(s, t.pos, if (t.text == ";") { "" } else { t.text }, acc);
+}
+
+// ── The namespace table ──
+
+// One scanned module: its path, exported names and direct imports
+// ("alias=target" entries, alias "" for a plain import).
+type IMs = { List(Str) paths; List(Str) exps; List(Str) imps; Str done; };
+
+// Scan `path` (text `src0`) and its imports, depth-first, once each.
+@requires(filesystem(readonly))
+pub IMs imp_scan(Str path, Str src0, Str vis, Int depth, Str depmap, IMs acc) {
+    if (depth > 8 || str_contains(acc.done, ";" + path + ";")) { return acc; }
+    Str src = if (vis == "") { src0 } else { imp_apply_vis(src0, vis, path) };
+    Str dir = imp_dir_of(path, str_len(path) - 1);
+    List(Str) lines = str_split(src, "\n");
+    Str ims = imp_scan_imports(lines, 0, dir, depmap, "");
+    IMs a1 = IMs {.paths = acc.paths.concat([path]), .exps = acc.exps.concat([imp_exports(src0, vis)]), .imps = acc.imps.concat([ims]), .done = acc.done + path + ";"};
+    return imp_scan_subs(lines, 0, dir, depth, depmap, a1);
+}
+
+// "alias=target," for each import line.
+@requires(filesystem(readonly))
+pub Str imp_scan_imports(List(Str) lines, Int i, Str dir, Str depmap, Str acc) {
+    if (i >= lines.len()) { return acc; }
+    Str line = lines[i];
+    Str name = if (ck_str_starts_with(line, "import ")) { imp_target(line) } else { "" };
+    if (name == "") { return imp_scan_imports(lines, i + 1, dir, depmap, acc); }
+    Str clause = imp_clause(line);
+    Str alias = if (ck_str_starts_with(clause, "as ")) { str_trim(str_slice(clause, 3, str_len(clause))) } else { "" };
+    return imp_scan_imports(lines, i + 1, dir, depmap, acc + alias + "=" + imp_resolve_target(dir, name, depmap) + ",");
+}
+
+@requires(filesystem(readonly))
+pub IMs imp_scan_subs(List(Str) lines, Int i, Str dir, Int depth, Str depmap, IMs acc) {
+    if (i >= lines.len()) { return acc; }
+    Str line = lines[i];
+    Str name = if (ck_str_starts_with(line, "import ")) { imp_target(line) } else { "" };
+    if (name == "") { return imp_scan_subs(lines, i + 1, dir, depth, depmap, acc); }
+    Str full = imp_resolve_target(dir, name, depmap);
+    Str clause = imp_clause(line);
+    Str sel = if (ck_str_starts_with(clause, "(")) { imp_sel_list(clause) } else { "*" };
+    Bool can = !str_contains(acc.done, ";" + full + ";") && filesystem.exists(full);
+    IMs a2 = if (can) { imp_scan(full, filesystem.read_all(full), sel, depth + 1, depmap, acc) } else { acc };
+    return imp_scan_subs(lines, i + 1, dir, depth, depmap, a2);
+}
+
+// The table lines for a program rooted at `path` with text `src`: every
+// colliding name with its exporting modules, and every module's imports.
+@requires(filesystem(readonly))
+pub Str imp_ns_table(Str path, Str src, Str depmap) {
+    List(Str) e = [];
+    IMs m = imp_scan(path, src, "", 0, depmap, IMs {.paths = e, .exps = e, .imps = e, .done = ";"});
+    Map(Str, Str) owners = imp_owners(m, 0, {});
+    Str coll = imp_collisions(owners.keys(), owners, 0, StrBuf());
+    if (coll == "") { return ""; }
+    return coll + imp_imp_lines(m, 0, StrBuf()) + "@root::" + path + "\n";
+}
+
+// name -> "p|q|" of the modules exporting it.
+pub Map(Str, Str) imp_owners(IMs m, Int i, Map(Str, Str) acc) {
+    if (i >= m.paths.len()) { return acc; }
+    return imp_owners(m, i + 1, imp_owners_one(str_split(m.exps[i], ","), 0, m.paths[i], acc));
+}
+
+pub Map(Str, Str) imp_owners_one(List(Str) ns, Int j, Str p, Map(Str, Str) acc) {
+    if (j >= ns.len()) { return acc; }
+    Str n = ns[j];
+    if (n == "") { return imp_owners_one(ns, j + 1, p, acc); }
+    Str cur = acc.get(n) else { "" };
+    return imp_owners_one(ns, j + 1, p, acc.insert(n, cur + p + "|"));
+}
+
+pub Str imp_collisions(List(Str) names, Map(Str, Str) owners, Int i, StrBuf acc) {
+    if (i >= names.len()) { return acc.finish(); }
+    Str o = owners.get(names[i]) else { "" };
+    Bool many = str_count(o, "|") > 1;
+    return imp_collisions(names, owners, i + 1, if (many) { acc.push("@ns::" + names[i] + "::" + o + "\n") } else { acc });
+}
+
+pub Str imp_imp_lines(IMs m, Int i, StrBuf acc) {
+    if (i >= m.paths.len()) { return acc.finish(); }
+    return imp_imp_lines(m, i + 1, acc.push("@imp::" + m.paths[i] + "::" + m.imps[i] + "\n"));
+}
+
+// ── Applying the table to one module ──
+
+// "@key::" lines of the table, as (rest) strings.
+pub List(Str) imp_tab_lines(Str depmap, Str key) {
+    return imp_tab_at(str_split(depmap, "\n"), 0, "@" + key + "::", ListBuf());
+}
+
+pub List(Str) imp_tab_at(List(Str) ls, Int i, Str pre, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Bool hit = str_starts_with(ls[i], pre);
+    return imp_tab_at(ls, i + 1, pre, if (hit) { acc.push(str_slice(ls[i], str_len(pre), str_len(ls[i]))) } else { acc });
+}
+
+// The imports entry ("alias=target,...") of module `path`.
+pub Str imp_tab_imps(List(Str) ims, Int i, Str path) {
+    if (i >= ims.len()) { return ""; }
+    Int c = imp_find_dcolon(ims[i], 0);
+    if (c >= 0 && str_slice(ims[i], 0, c) == path) { return str_slice(ims[i], c + 2, str_len(ims[i])); }
+    return imp_tab_imps(ims, i + 1, path);
+}
+
+// The spelling module `owner` gives colliding name `n` (the root keeps it).
+pub Str imp_spelling(Str owner, Str n, Str root) {
+    if (owner == root) { return n; }
+    return n + "__ns_" + imp_mangle(owner);
+}
+
+// Renames for module `path`: unqualified name -> spelling, and
+// "alias.name" -> spelling.
+type INs = { Map(Str, Str) plain; Map(Str, Str) qual; };
+
+pub INs imp_ns_for(Str depmap, Str path, Str root) {
+    List(Str) cs = imp_tab_lines(depmap, "ns");
+    Map(Str, Str) e = {};
+    if (cs.len() == 0) { return INs {.plain = e, .qual = e}; }
+    Str ims = imp_tab_imps(imp_tab_lines(depmap, "imp"), 0, path);
+    return imp_ns_each(cs, 0, path, root, str_split(ims, ","), INs {.plain = e, .qual = e});
+}
+
+pub INs imp_ns_each(List(Str) cs, Int i, Str path, Str root, List(Str) ims, INs acc) {
+    if (i >= cs.len()) { return acc; }
+    Int c = imp_find_dcolon(cs[i], 0);
+    Str n = str_slice(cs[i], 0, c);
+    Str owners = str_slice(cs[i], c + 2, str_len(cs[i]));
+    Bool mine = str_contains("|" + owners, "|" + path + "|");
+    Str direct = imp_direct_owners(ims, 0, owners, "");
+    Int nd = str_count(direct, "|");
+    Str plain = if (mine) { imp_spelling(path, n, root) } else { if (nd == 1) { imp_spelling(str_slice(direct, 0, str_len(direct) - 1), n, root) } else { if (nd > 1) { "__ambig__" + n } else { "" } } };
+    Map(Str, Str) p2 = if (plain == "" || plain == n) { acc.plain } else { acc.plain.insert(n, plain) };
+    Map(Str, Str) q2 = imp_ns_qual(ims, 0, owners, n, root, acc.qual);
+    return imp_ns_each(cs, i + 1, path, root, ims, INs {.plain = p2, .qual = q2});
+}
+
+// The directly imported modules among `owners`, as "p|q|".
+pub Str imp_direct_owners(List(Str) ims, Int i, Str owners, Str acc) {
+    if (i >= ims.len()) { return acc; }
+    Int eq = str_find_char(ims[i], 61, 0);
+    Str tgt = if (eq < 0) { "" } else { str_slice(ims[i], eq + 1, str_len(ims[i])) };
+    Bool hit = tgt != "" && str_contains("|" + owners, "|" + tgt + "|") && !str_contains(acc, tgt + "|");
+    return imp_direct_owners(ims, i + 1, owners, if (hit) { acc + tgt + "|" } else { acc });
+}
+
+pub Map(Str, Str) imp_ns_qual(List(Str) ims, Int i, Str owners, Str n, Str root, Map(Str, Str) acc) {
+    if (i >= ims.len()) { return acc; }
+    Int eq = str_find_char(ims[i], 61, 0);
+    Str alias = if (eq <= 0) { "" } else { str_slice(ims[i], 0, eq) };
+    Str tgt = if (eq < 0) { "" } else { str_slice(ims[i], eq + 1, str_len(ims[i])) };
+    Bool hit = alias != "" && str_contains("|" + owners, "|" + tgt + "|");
+    return imp_ns_qual(ims, i + 1, owners, n, root, if (hit) { acc.insert(alias + "." + n, imp_spelling(tgt, n, root)) } else { acc });
+}
+
+// Apply a module's renames to its text: `alias.name` first (so the
+// qualifier is gone), then unqualified names (not after `.`).
+pub Str imp_ns_apply(Str s, INs ns) {
+    if (ns.plain.len() == 0 && ns.qual.len() == 0) { return s; }
+    return str_sb_finish(imp_ns_walk(s, 0, ns, str_sb_new(), 0, ""));
+}
+
+pub Str imp_ns_walk(Str s, Int pos, INs ns, Str sb, Int copied, Str prev) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return str_sb_append(sb, str_slice(s, copied, str_len(s))); }
+    Int st = t.pos - str_len(t.text);
+    if (t.kind == "ident" && prev != ".") {
+        Tok dot = lex_tok(s, t.pos);
+        Tok nm = lex_tok(s, dot.pos);
+        Str q = if (dot.text == "." && nm.kind == "ident") { ns.qual.get(t.text + "." + nm.text) else { "" } } else { "" };
+        if (q != "") {
+            Str sb2 = str_sb_append(str_sb_append(sb, str_slice(s, copied, st)), q);
+            return imp_ns_walk(s, nm.pos, ns, sb2, nm.pos, nm.text);
+        }
+        Str r = ns.plain.get(t.text) else { "" };
+        if (r != "") {
+            Str sb3 = str_sb_append(str_sb_append(sb, str_slice(s, copied, st)), r);
+            return imp_ns_walk(s, t.pos, ns, sb3, t.pos, t.text);
+        }
+    }
+    if (t.kind == "fstring" && str_contains(t.text, "{")) {
+        Str sb4 = str_sb_append(str_sb_append(sb, str_slice(s, copied, st)), imp_ns_holes(t.text, 0, ns, ""));
+        return imp_ns_walk(s, t.pos, ns, sb4, t.pos, t.text);
+    }
+    return imp_ns_walk(s, t.pos, ns, sb, copied, t.text);
+}
+
+pub Str imp_ns_holes(Str t, Int i, INs ns, Str acc) {
+    Int n = str_len(t);
+    if (i >= n) { return acc; }
+    Int c = str_char_at(t, i);
+    if (c == 92) { return imp_ns_holes(t, i + 2, ns, acc + str_slice(t, i, i + 2)); }
+    if (c != 123) { return imp_ns_holes(t, i + 1, ns, acc + str_from_code(c)); }
+    Int e = fstring_hole_end(t, i + 1, n, 1);
+    if (e < 0) { return acc + str_slice(t, i, n); }
+    Str hole = imp_ns_apply(str_slice(t, i + 1, e), ns);
+    return imp_ns_holes(t, e + 1, ns, acc + "{" + hole + "}");
+}
+
 // `#location` (spec §25) becomes a SourceLoc literal for its own file,
 // line and column, before the file is merged with its imports.
 pub Str loc_rewrite(Str src, Str path) {
@@ -5026,7 +5317,9 @@ RRes imp_resolve_file(Str path, Str done, Int depth, Str depmap) {
 RRes imp_resolve_file_vis(Str path, Str done, Int depth, Str depmap, Str vis, Int ml) {
     if (depth > 8) { return RRes {.text = "", .done = done, .map = "", .nl = 0}; }
     Str src0 = loc_rewrite(filesystem.read_all(path), path);
-    Str src = if (vis == "") { src0 } else { imp_apply_vis(src0, vis, path) };
+    Str src1 = if (vis == "") { src0 } else { imp_apply_vis(src0, vis, path) };
+    List(Str) roots = imp_tab_lines(depmap, "root");
+    Str src = if (roots.len() == 0) { src1 } else { imp_ns_apply(src1, imp_ns_for(depmap, path, roots[0])) };
     List(Str) lines = str_split(src, "\n");
     Int n = lines.len() - 1;
     Int plen = str_len(path);
@@ -7654,7 +7947,9 @@ Int main() {
     Str rtc  =  pick_opt(argc, "-rt", "");
     Str depmap_path  =  pick_opt(argc, "-depmap", "");
     Str depmap0  =  if (depmap_path == "") { "" } else { filesystem.read_all(depmap_path) };
-    Str depmap  =  depmap0 + "\n@stdlib::" + stdlib_dir();
+    Str depmap1  =  depmap0 + "\n@stdlib::" + stdlib_dir();
+    // Names two modules export are renamed per module (spec §22).
+    Str depmap  =  depmap1 + "\n" + imp_ns_table(path, filesystem.read_all(path), depmap1);
     // Import resolution: the merged compilation text is the importing
     // file (its own import lines replaced) followed by each import's body.
     // A bare `import "pkgname";` that has no relative file falls back to

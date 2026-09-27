@@ -1179,19 +1179,19 @@ pub List(Int) sha512_round_flat(List(Int) st, List(Int) w, Int i) {
     List(Int) hh = fw_pair(st, 7);
     List(Int) wi = fw_pair(w, i);
     List(Int) kk = k512_limb_at(i);
-    List(Int) S1 = big_sig1(e);
+    List(Int) bs1 = big_sig1(e);
     List(Int) not_e = w64_not(e);
     List(Int) ef = w64_and(e, f);
     List(Int) ng = w64_and(not_e, g);
     List(Int) chv = w64_xor(ef, ng);
-    List(Int) ta = w64_add(hh, S1);
+    List(Int) ta = w64_add(hh, bs1);
     List(Int) tb = w64_add(ta, chv);
     List(Int) tc = w64_add(tb, kk);
     List(Int) td = w64_add(tc, wi);
     List(Int) t1 = td;
-    List(Int) S0 = big_sig0(a);
+    List(Int) bs0 = big_sig0(a);
     List(Int) mjv = maj64(a, b, c);
-    List(Int) t2 = w64_add(S0, mjv);
+    List(Int) t2 = w64_add(bs0, mjv);
     List(Int) na = w64_add(t1, t2);
     List(Int) nd = w64_add(d, t1);
     // Build the next state directly (see sha_round for why).

@@ -333,11 +333,13 @@ type LsA = { Str path; Int flines; Str src; Str smap; List(Int) nls; Kg g; Int u
 LsA ls_analyze(Str path, Str text, Bool check) {
     _ = resid_internals_set(ls_internal_path(path));
     _ = resid_quiet_set(true);
-    Str src0 = loc_rewrite(text, path);
+    Str dm0 = "@stdlib::" + stdlib_dir();
+    Str dm = dm0 + "\n" + imp_ns_table(path, text, dm0);
+    Str src0 = imp_ns_apply(loc_rewrite(text, path), imp_ns_for(dm, path, path));
     List(Str) lines = str_split(src0, "\n");
     Str dir = imp_dir_of(path, str_len(path) - 1);
     _ = ls_cap_begin();
-    RRes rr = imp_resolve_lines(lines, 0, lines.len() - 1, dir, str_sb_new(), ";" + path + ";", 0, "@stdlib::" + stdlib_dir(), path, 1);
+    RRes rr = imp_resolve_lines(lines, 0, lines.len() - 1, dir, str_sb_new(), ";" + path + ";", 0, dm, path, 1);
     Str src = ds_desugar(with_builtin_types(rr.text));
     KP p = kg_parse(src);
     List(Int) nls = ls_newlines(src, 0, ListBuf());

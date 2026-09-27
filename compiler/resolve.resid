@@ -23,7 +23,7 @@ Map(Str, Int) rs_noenv() {
     return m;
 }
 
-RS rs_empty() {
+pub RS rs_empty() {
     Map(Int, Int) d = {};
     List(Int) u = [];
     return RS {.pairs = u, .def = u, .unres = u, .uses = 0, .shadow = d};

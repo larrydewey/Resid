@@ -557,7 +557,7 @@ pub List(Int) sign_msg_bytes(List(Int) seed, List(Int) mb) {
     List(Int) axb = smul_x_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
     List(Int) ayb = smul_y_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
     Int(256) axi = bytes_to_int(axb);
-    List(Int) Aenc = encode_pt_bytes(axi, ayb);
+    List(Int) a_enc = encode_pt_bytes(axi, ayb);
     // r = SHA-512(prefix || M) mod L
     List(Int) rmac = concat_bytes(hhi, mb);
     Int(256) rv = mod_l(sha512_bytes(rmac));
@@ -565,9 +565,9 @@ pub List(Int) sign_msg_bytes(List(Int) seed, List(Int) mb) {
     List(Int) rxb = smul_x_acc(rv, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
     List(Int) ryb = smul_y_acc(rv, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
     Int(256) rxi = bytes_to_int(rxb);
-    List(Int) Renc = encode_pt_bytes(rxi, ryb);
+    List(Int) r_enc = encode_pt_bytes(rxi, ryb);
     // k = SHA-512(R || A || M) mod L
-    List(Int) ra = concat_bytes(Renc, Aenc);
+    List(Int) ra = concat_bytes(r_enc, a_enc);
     List(Int) ram = concat_bytes(ra, mb);
     Int(256) kv = mod_l(sha512_bytes(ram));
     // S = (r + k*a) mod L
@@ -577,7 +577,7 @@ pub List(Int) sign_msg_bytes(List(Int) seed, List(Int) mb) {
     Int(512) rvx = (Int(512)) rv;
     Int(512) sum = pr + rvx;
     Int(256) sv = mod_l_w(sum);
-    return concat_bytes(Renc, int_to_bytes(sv));
+    return concat_bytes(r_enc, int_to_bytes(sv));
 }
 pub List(Int) sign_msg(List(Int) seed, Str msg) {
     return sign_msg_bytes(seed, bytes_of(msg));

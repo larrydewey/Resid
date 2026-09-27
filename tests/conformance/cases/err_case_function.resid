@@ -1,0 +1,2 @@
+Int Twice(Int x) { return x * 2; }
+Int main() { return Twice(0); }

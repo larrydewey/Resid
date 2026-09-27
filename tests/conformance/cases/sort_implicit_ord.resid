@@ -1,15 +1,15 @@
 // A type's unique Ord instance is inserted by sort(xs); instances may name
 // parameterized types.
-type P = { Int x; Str n; };
-Int by_x(P a, P b) { return a.x - b.x; }
-Ord(P) = by_x;
+type Pt = { Int x; Str n; };
+Int by_x(Pt a, Pt b) { return a.x - b.x; }
+Ord(Pt) = by_x;
 Int desc32(Int(32) a, Int(32) b) { return (Int)b - (Int)a; }
 Ord(Int(32)) = desc32;
 
 
 Int main() {
-    List(P) ps = [P {.x = 3, .n = "c"}, P {.x = 1, .n = "a"}, P {.x = 2, .n = "b"}];
-    List(P) s = sort(ps);
+    List(Pt) ps = [Pt {.x = 3, .n = "c"}, Pt {.x = 1, .n = "a"}, Pt {.x = 2, .n = "b"}];
+    List(Pt) s = sort(ps);
     List(Int(32)) ys = [(Int(32))1, (Int(32))5, (Int(32))3];
     List(Int(32)) d = sort(ys, using = Ord(Int(32)));
     println(f"{s[0].n}{s[1].n}{s[2].n} {d[0]} {d[2]}");

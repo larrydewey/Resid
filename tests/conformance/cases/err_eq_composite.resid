@@ -1,7 +1,7 @@
-type P = { Int x; };
+type Pt = { Int x; };
 Int main() {
-    P a = P {.x = 1};
-    P b = P {.x = 1};
+    Pt a = Pt {.x = 1};
+    Pt b = Pt {.x = 1};
     Bool same = a == b;
     return 0;
 }

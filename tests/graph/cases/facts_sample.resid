@@ -1,5 +1,5 @@
 // Facts in the graph artifact: nonzero, discharged checks, length, tag, fields.
-type P = { Int x; Int y; };
+type Pt = { Int x; Int y; };
 type Shape = Circle(Int) | Square(Int);
 
 Int div_nz(Int a, Int d) {
@@ -22,7 +22,7 @@ Int area(Shape s) {
 }
 
 @requires(args) Int main() {
-    P p = P {.x = args.count(), .y = 2};
+    Pt p = Pt {.x = args.count(), .y = 2};
     println(f"{div_nz(args.count() + 7, args.count())}");
     println(f"{total([1, 2, 3])}");
     println(f"{p.x + p.y}");

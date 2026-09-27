@@ -6,38 +6,38 @@
 import "rsa.resid";
 import "crypto.resid";
 
-pub Int(256) EC_P() {
+pub Int(256) ec_p() {
     return 115792089210356248762697446949407573530086143415290314195533631308867097853951;
 }
 
-pub Int(256) EC_N() {
+pub Int(256) ec_n() {
     return 115792089210356248762697446949407573529996955224135760342422259061068512044369;
 }
 
-pub Int(256) EC_GX() {
+pub Int(256) ec_gx() {
     return 48439561293906451759052585252797914202762949526041747995844080717082404635286;
 }
 
-pub Int(256) EC_GY() {
+pub Int(256) ec_gy() {
     return 36134250956749795798585127919587881956611106672985015071877198253568414405109;
 }
 
-pub Int(256) EC_B() {
+pub Int(256) ec_b() {
     return 41058363725152142129326129780047268409114441015993725554835256314039467401291;
 }
 pub Int(256) ec_a() {
     Int(256) three = 3;
-    Int(256) r = EC_P() - three;
+    Int(256) r = ec_p() - three;
     return r;
 }
 pub Int(256) ec_pm2() {
     Int(256) two = 2;
-    Int(256) r = EC_P() - two;
+    Int(256) r = ec_p() - two;
     return r;
 }
 pub Int(256) ec_nm2() {
     Int(256) two = 2;
-    Int(256) r = EC_N() - two;
+    Int(256) r = ec_n() - two;
     return r;
 }
 
@@ -124,7 +124,7 @@ pub Int(256) ec_mul(Int(256) a, Int(256) b) {
 }
 
 pub Int(512) ec_p_wide() {
-    return ec_zext(EC_P());
+    return ec_zext(ec_p());
 }
 
 pub Int(256) ec_reduce(Int(512) t) {
@@ -327,7 +327,7 @@ pub Int(256) ec_addx_gen(Int(256) x1, Int(256) y1, Int(256) x2, Int(256) y2) {
 // digest/r/s scalars and public key Q. 0 marker on degenerate input.
 
 pub Int(512) ec_n_wide() {
-    return ec_zext(EC_N());
+    return ec_zext(ec_n());
 }
 
 pub Int(256) ec_muln(Int(256) a, Int(256) b) {
@@ -344,7 +344,7 @@ pub Int(256) ec_subn(Int(256) a, Int(256) b) {
     if (ec_ge(a, b)) {
         return a - b;
     }
-    Int(256) nb = EC_N() - b;
+    Int(256) nb = ec_n() - b;
     Int(256) r = a + nb;
     return r;
 }
@@ -364,7 +364,7 @@ pub Int(256) ec_pown_rec(Int(256) base, Int(256) e, Int i, Int(256) acc) {
 
 pub Int(256) ec_inv_n(Int(256) a) {
     Int(256) two = 2;
-    Int(256) e = EC_N() - two;
+    Int(256) e = ec_n() - two;
     return ec_pown_rec(a, e, 255, 1);
 }
 
@@ -378,9 +378,9 @@ pub Int(256) ec_dbl_x(Int(256) x, Int(256) y) {
 
 // Is (x, y) a point of P-256 (both coordinates below P)?
 pub Bool ec_on_curve(Int(256) x, Int(256) y) {
-    Int(256) p = EC_P();
+    Int(256) p = ec_p();
     if (ec_ge(x, p) || ec_ge(y, p)) { return false; }
-    Int(256) rhs = ec_add(ec_add(ec_mul(ec_mul(x, x), x), ec_mul(ec_a(), x)), EC_B());
+    Int(256) rhs = ec_add(ec_add(ec_mul(ec_mul(x, x), x), ec_mul(ec_a(), x)), ec_b());
     return ec_mul(y, y) == rhs;
 }
 
@@ -388,14 +388,14 @@ pub Bool ec_on_curve(Int(256) x, Int(256) y) {
 // check returns r ^ 1, which never equals r: r or s outside [1, N-1], Q
 // not a curve point, or the sum at infinity (SEC 1 §4.1.4).
 pub Int(256) ecdsa_vx(Int(256) digest, Int(256) r, Int(256) s, Int(256) qx, Int(256) qy) {
-    Int(256) n = EC_N();
+    Int(256) n = ec_n();
     Int(256) bad = r ^ 1;
     if (r == 0 || s == 0 || ec_ge(r, n) || ec_ge(s, n)) { return bad; }
     if (!ec_on_curve(qx, qy)) { return bad; }
     Int(256) sinv = ec_inv_n(s);
     Int(256) u1 = ec_muln(digest, sinv);
     Int(256) u2 = ec_muln(r, sinv);
-    Int(512) p1 = ec_mul_packed(u1, EC_GX(), EC_GY());
+    Int(512) p1 = ec_mul_packed(u1, ec_gx(), ec_gy());
     Int(512) p2 = ec_mul_packed(u2, qx, qy);
     if (p1 == 0 && p2 == 0) { return bad; }
     if (p1 == 0) { return ec_subn(ec_unpack_x(p2), n); }

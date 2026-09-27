@@ -1,0 +1,4 @@
+pub Int f() { return 1; }
+pub Int g() { return 10; }
+type Node = { Int v; };
+pub Node mk() { return Node {.v = f()}; }

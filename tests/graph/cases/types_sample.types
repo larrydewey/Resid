@@ -3,10 +3,10 @@
 9 lit 2 : Int
 10 bin * : Int(64)
 16 param a : Int
-17 ty P :  -> 4 struct_t P
-18 param p : P
+17 ty Pt :  -> 4 struct_t Pt
+18 param p : Pt
 20 ref a : Int -> 16 param a
-21 ref p : P -> 18 param p
+21 ref p : Pt -> 18 param p
 22 field x : Int -> 1 sfield x
 23 bin + : Int(64)
 24 bind b : Int
@@ -47,5 +47,5 @@
 74 finit x :  -> 1 sfield x
 75 lit 2 : Int(64)
 76 finit y :  -> 3 sfield y
-77 struct P : P -> 4 struct_t P
+77 struct Pt : Pt -> 4 struct_t Pt
 78 call f : Int -> 70 fn f

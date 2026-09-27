@@ -19,6 +19,8 @@ own), with the offending source line.
 | `E0219` | a function uses a capability it is not granted (no ambient authority) |
 | `E0220` | a compiler-internal primitive used outside the compiler's own sources |
 | `E0221` | an imported module cannot be found |
+| `E0222` | a name in the wrong case: types, behaviors and variants start uppercase, values and functions lowercase; single uppercase letters are reserved for type parameters |
+| `E0223` | an unqualified use of a name that two imported modules both export |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |
 | `E0402` | a builder is used twice |

@@ -1,0 +1,12 @@
+// Two modules export f and Node: each use names its module.
+import "_ns_a.resid" as a;
+import "_ns_b.resid" as b;
+
+// The program's own name wins over imported ones.
+Int g() { return 7; }
+
+Int main() {
+    a.Node n = a.mk();
+    println(f"{a.f()} {b.f()} {g()} {n} {b.mk2()}");
+    return 0;
+}

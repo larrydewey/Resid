@@ -1,0 +1,2 @@
+type point = { Int x; };
+Int main() { return 0; }

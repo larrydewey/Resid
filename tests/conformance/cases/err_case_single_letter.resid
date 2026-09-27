@@ -1,0 +1,2 @@
+type T = { Int x; };
+Int main() { return 0; }

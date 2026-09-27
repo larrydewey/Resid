@@ -1,0 +1,8 @@
+import "_ns_a.resid";
+import "_ns_b.resid";
+
+Int main() {
+    // A local of the same name is fine; calling f is ambiguous.
+    Int f = 5;
+    return f();
+}
