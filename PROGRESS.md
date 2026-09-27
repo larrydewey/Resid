@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  186, reduce 14, provenance 20, graph 416, pkg 17, runtime 3. The archived Rust workspace
+  187, reduce 14, provenance 20, graph 417, pkg 17, runtime 3. The archived Rust workspace
   (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
   821 tests; its e2e now has 128 after removing tests of the retired text
   paths); see `AGENTS.md` for its slow-test table.
@@ -305,6 +305,30 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 619MB (606MB without facts). The artifact carries a RESIDUAL node's range
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
+
+### 0zf. In-place list appends on maps of lists (2026-09-26)
+
+- `List(T) l = m.get(k) else { d }; ... m.insert(k, l.concat([e]))`, with
+  that concat as l's only use (outside loops and closures), T a word
+  type and d a plain value, lowers to one `resid_map_list_push`
+  (`lp_fusible` / `lw_list_push` in `examples/lower.resid`): the list is
+  never bound, and the element is appended to the map's list.
+- In place when safe: a header whose `stamp` equals the owned transient
+  map's `own` is held by that map slot alone and is appended in place (no
+  new header; the buffer grows by doubling, a new list starts with room
+  for 4). Every way a value word can leave a transient map (lookups,
+  entry lists, persistent updates, copies) gives the map a fresh `own`
+  (`map_exit`), so a list the program holds is never changed. Stamps are
+  32-bit and unique process-wide (thread-local blocks); after 2^32 of
+  them appends stop being in place. The stamp fills header padding, so a
+  list header stays 32 bytes.
+- Measured: BFS with adjacency lists 0.13s/60MB -> 0.07s/34MB (Rust
+  0.04s/21MB: the rest is the half-full hash table and a separate header
+  and buffer per list). The benchmark suite is unchanged; self-compile
+  peak 402MB.
+- Test: `map_list_push` (in-place growth, and a snapshot held across
+  iterations, a second key, values(), an older map and a shared default
+  keeping their values; removing `map_exit` makes it fail).
 
 ### 0ze. Security review and hardening (2026-09-26)
 

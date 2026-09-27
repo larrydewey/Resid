@@ -1,0 +1,80 @@
+// Fused list appends on maps of lists (resid_map_list_push): an owned map
+// appends to a list it alone holds in place. Every other holder of a list
+// (a snapshot taken by get, a second key, values(), an older map, a shared
+// default) keeps its own value.
+Str show(List(Int) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc + "]"; }
+    Str sep = if (i == 0) { "[" } else { " " };
+    return show(xs, i + 1, acc + sep + IntToString(xs[i]));
+}
+
+Str showl(List(Int) xs) { return if (xs.len() == 0) { "[]" } else { show(xs, 0, "") }; }
+
+Map(Int, List(Int)) grow(Map(Int, List(Int)) m, Int i, Int n) {
+    if (i >= n) { return m; }
+    List(Int) nil = [];
+    List(Int) cur = m.get(i % 3) else { nil };
+    return grow(m.insert(i % 3, cur.concat([i])), i + 1, n);
+}
+
+// Appends onto key 1 after a snapshot of it was taken.
+Map(Int, List(Int)) after_snapshot(Map(Int, List(Int)) m, Int i, Int n) {
+    if (i >= n) { return m; }
+    List(Int) nil = [];
+    List(Int) cur = m.get(1) else { nil };
+    return after_snapshot(m.insert(1, cur.concat([100 + i])), i + 1, n);
+}
+
+// The default is a shared, non-empty list.
+Map(Str, List(Int)) with_base(Map(Str, List(Int)) m, List(Int) base, Int i, Int n) {
+    if (i >= n) { return m; }
+    List(Int) cur = m.get("k") else { base };
+    return with_base(m.insert("k", cur.concat([i])), base, i + 1, n);
+}
+
+// A list read by a plain get this iteration is still held next iteration:
+// the in-place append must not reach it.
+Int carry(Map(Int, List(Int)) m, Int i, Int n, List(Int) keep, Int acc) {
+    if (i >= n) { return acc * 1000 + keep.len(); }
+    List(Int) peek = m.get(5) else { keep };
+    List(Int) nil = [];
+    List(Int) cur = m.get(5) else { nil };
+    return carry(m.insert(5, cur.concat([i])), i + 1, n, peek, acc + keep.len());
+}
+
+Map(Str, List(Str)) words(Map(Str, List(Str)) m, Int i, Int n) {
+    if (i >= n) { return m; }
+    Str k = "g" + IntToString(i % 2);
+    List(Str) nil = [];
+    List(Str) cur = m.get(k) else { nil };
+    return words(m.insert(k, cur.concat(["w" + IntToString(i)])), i + 1, n);
+}
+
+Int main() {
+    List(Int) nil = [];
+    List(Str) nils = [];
+    Map(Int, List(Int)) e = {};
+    Map(Int, List(Int)) m = grow(e, 0, 20);
+    println(showl(m.get(0) else { nil }) + " " + showl(m.get(1) else { nil }) + " " + showl(m.get(2) else { nil }));
+    List(Int) snap = m.get(1) else { nil };
+    List(List(Int)) vals = m.values();
+    Map(Int, List(Int)) m2 = after_snapshot(m, 0, 30);
+    println("snapshot " + showl(snap));
+    println("values " + IntToString(vals[0].len() + vals[1].len() + vals[2].len()));
+    println("older map " + showl(m.get(1) else { nil }));
+    println("grown " + IntToString((m2.get(1) else { nil }).len()));
+    List(Int) shared = [7, 8];
+    Map(Int, List(Int)) two = e.insert(1, shared).insert(2, shared);
+    Map(Int, List(Int)) two2 = after_snapshot(two, 0, 3);
+    println("second key " + showl(two2.get(2) else { nil }) + " first " + showl(two2.get(1) else { nil }) + " shared " + showl(shared));
+    List(Int) base = [1, 2];
+    Map(Str, List(Int)) se = {};
+    Map(Str, List(Int)) b = with_base(se, base, 0, 4);
+    println("base " + showl(base) + " grown " + showl(b.get("k") else { nil }));
+    Map(Str, List(Str)) we = {};
+    Map(Str, List(Str)) w = words(we, 0, 7);
+    List(Str) g0 = w.get("g0") else { nils };
+    println("words " + IntToString(g0.len()) + " " + g0[0] + " " + g0[3]);
+    println("carry " + IntToString(carry(e, 0, 50, nil, 0)));
+    return 0;
+}

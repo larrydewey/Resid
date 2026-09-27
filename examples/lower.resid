@@ -659,6 +659,111 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     return lw_gerr("method " + m, c);
 }
 
+// ─── Fused list append on a map (resid_map_list_push) ──────────────
+// `List(T) l = m.get(k) else { d }; ... m.insert(k, l.concat([e]))`, where
+// that concat is l's only use, T is a word type, and d is a plain value:
+// no header is made for the looked-up list, and an owned map appends to
+// its own list in place.
+
+Int lp_fuse_sid(List(Str) env, Str name) {
+    Str e = env_lookup(env, "__fuse_" + name);
+    if (e == "") { return -1; }
+    return str_parse_int(str_slice(e, str_find_char(e, 58, 0) + 1, str_len(e)));
+}
+
+// A default with nothing to evaluate: a name or `[]`, maybe in a block.
+Bool lp_plain(Kg g, Int id) {
+    Str k = g.ns[id].kind;
+    if (k == "ref") { return true; }
+    if (k == "list") { return g.ns[id].nk == 0; }
+    if (k == "bexpr" || k == "estmt" || k == "paren") { return g.ns[id].nk == 1 && lp_plain(g, kg_kid(g, id, 0)); }
+    return false;
+}
+
+Bool lp_same(Kg g, Int a, Int b) {
+    Str k = g.ns[a].kind;
+    if (k != g.ns[b].kind || g.ns[a].text != g.ns[b].text) { return false; }
+    return k == "ref" || (k == "lit" && g.ns[a].aux == g.ns[b].aux);
+}
+
+// References named `v` under `id`; -1 once one sits in a loop or closure.
+Int lp_refs(Kg g, Int id, Str v, Bool deep) {
+    Str k = g.ns[id].kind;
+    Int own = if (k == "ref" && g.ns[id].text == v) { if (deep) { -1000000 } else { 1 } } else { 0 };
+    Bool d2 = deep || k == "lambda" || k == "spawn" || k == "while" || k == "for";
+    return own + lp_refs_kids(g, id, 0, v, d2);
+}
+
+Int lp_refs_kids(Kg g, Int id, Int i, Str v, Bool deep) {
+    if (i >= g.ns[id].nk) { return 0; }
+    return lp_refs(g, kg_kid(g, id, i), v, deep) + lp_refs_kids(g, id, i + 1, v, deep);
+}
+
+// An insert on map `mref` at key `key` whose value is `v.concat([e])`.
+Bool lp_has_push(Kg g, Int id, Str v, Int mref, Int key) {
+    if (g.ns[id].kind == "mcall" && g.ns[id].text == "insert" && g.ns[id].nk == 3) {
+        Int cv = kg_kid(g, id, 2);
+        Bool cat = g.ns[cv].kind == "mcall" && g.ns[cv].text == "concat" && g.ns[cv].nk == 2;
+        Int rv = if (cat) { kg_kid(g, cv, 0) } else { -1 };
+        Int lv = if (cat) { kg_kid(g, cv, 1) } else { -1 };
+        if (cat && g.ns[rv].kind == "ref" && g.ns[rv].text == v && g.ns[lv].kind == "list" && g.ns[lv].nk == 1 && lp_same(g, kg_kid(g, id, 0), mref) && lp_same(g, kg_kid(g, id, 1), key)) { return true; }
+    }
+    return lp_has_push_kids(g, id, 0, v, mref, key);
+}
+
+Bool lp_has_push_kids(Kg g, Int id, Int i, Str v, Int mref, Int key) {
+    if (i >= g.ns[id].nk) { return false; }
+    if (lp_has_push(g, kg_kid(g, id, i), v, mref, key)) { return true; }
+    return lp_has_push_kids(g, id, i + 1, v, mref, key);
+}
+
+Int lp_refs_from(Kg g, Int blk, Int i, Str v) {
+    if (i >= g.ns[blk].nk) { return 0; }
+    return lp_refs(g, kg_kid(g, blk, i), v, false) + lp_refs_from(g, blk, i + 1, v);
+}
+
+Bool lp_push_from(Kg g, Int blk, Int i, Str v, Int mref, Int key) {
+    if (i >= g.ns[blk].nk) { return false; }
+    if (lp_has_push(g, kg_kid(g, blk, i), v, mref, key)) { return true; }
+    return lp_push_from(g, blk, i + 1, v, mref, key);
+}
+
+// Statement `i` of block `blk` binds such a list.
+Bool lp_fusible(Kg g, Int blk, Int i) {
+    Int s = kg_kid(g, blk, i);
+    if (g.ns[s].kind != "bind" || g.ns[s].nk != 2) { return false; }
+    if (!lr_list_word(g.ns[kg_kid(g, s, 0)].text)) { return false; }
+    Int ini = kg_kid(g, s, 1);
+    if (g.ns[ini].kind != "orelse") { return false; }
+    Int get = kg_kid(g, ini, 0);
+    if (g.ns[get].kind != "mcall" || g.ns[get].text != "get" || g.ns[get].nk != 2) { return false; }
+    Int mref = kg_kid(g, get, 0);
+    Int key = kg_kid(g, get, 1);
+    if (g.ns[mref].kind != "ref" || (g.ns[key].kind != "ref" && g.ns[key].kind != "lit") || !lp_plain(g, kg_kid(g, ini, 1))) { return false; }
+    Str v = g.ns[s].text;
+    return lp_refs_from(g, blk, i + 1, v) == 1 && lp_push_from(g, blk, i + 1, v, mref, key);
+}
+
+GT lw_list_push(LW w, Int id, GT base, GT ka, Int cv, Int sid, Str kt, Str vt, Bool owned, List(Str) env) {
+    Funcs fs = w.fs;
+    Str et = str_slice(vt, 5, str_len(vt) - 1);
+    Int kk = lo_put_kind(lin_kk(kt), kt);
+    GT kw = lin_word("", ka, kk, env, fs);
+    GT e0 = lw_expr(w, lw_kid(w, lw_kid(w, cv, 1), 0), env, kw);
+    if (e0.err != "") { return e0; }
+    Bool num = int_fam(et) || str_has_prefix_cg(et, "Float") || et == "Float";
+    GT e = if (num) { widen_val(e0, et) } else { e0 };
+    Int tb = e.tmp + 1;
+    Str bx = lst_box_reg(et, e.val, tb);
+    GT eb = lw_step(e, bx, et, e.lines.concat(lst_box_lines(et, e.val, tb)), tb + 3);
+    GT d = lw_arm(w, lw_kid(w, lw_kid(w, sid, 1), 1), env, eb);
+    if (d.err != "") { return d; }
+    Int t = d.tmp + 1;
+    Str r = "%t" + IntToString(t);
+    Str own = if (owned) { "1" } else { "0" };
+    return lw_step(d, r, base.ty, d.lines.concat([r + " = call ptr @resid_map_list_push(ptr " + base.val + ", i8 " + own + ", i8 " + IntToString(kk) + ", i64 " + kw.val + ", ptr " + bx + ", ptr " + d.val + ")"]), t);
+}
+
 // cg_builder_method.
 GT lw_builder(LW w, Int id, GT base, Str m, List(Str) env) {
     Bool sb = base.ty == "StrBuf";
@@ -718,6 +823,9 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
         GT raw = GT {.pos = 0, .val = reg, .ty = "", .cnt = 0, .err = "", .glines = arg.glines, .lines = kb.lines.concat([reg + " = call ptr @resid_map_get(ptr " + base.val + ", ptr " + kb.val + ")"]), .tmp = t1, .lbl = arg.lbl, .tail = false};
         return wrap_map_get_option(reg, vt, raw);
     }
+    Int fv = if (m == "insert") { lw_kid(w, id, 2) } else { -1 };
+    Int fsid = if (fv >= 0 && lw_kind(w, fv) == "mcall" && lw_text(w, fv) == "concat" && lw_kind(w, lw_kid(w, fv, 0)) == "ref") { lp_fuse_sid(env, lw_text(w, lw_kid(w, fv, 0))) } else { -1 };
+    if (fsid >= 0) { return lw_list_push(w, id, base, arg, fv, fsid, kt, vt, m_owned, env); }
     if (m == "insert" && (m_owned || lin_kk(kt) == 1 || lin_vk(vt) != 0 || kt == "Str" || vt == "Str" || lr_list_word(vt))) {
         GT kw = lin_word(src, arg, lo_put_kind(lin_kk(kt), kt), env, fs);
         GT tva = lw_marg(w, id, 1, env, kw);
@@ -1686,7 +1794,10 @@ ST lw_stmts(LW w, Int id, Int i, List(Str) env, Bool in_main, ST g) {
     // A `;@dbg node` marker starts each statement's lines (lw_dbg_fn).
     ST g2 = if (w.dbg) { ST {.pos = 0, .dead = g.dead, .err = "", .env = g.env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines.concat([";@dbg " + IntToString(lw_kid(w, id, i))]), .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety} } else { g };
     Int sid = lw_kid(w, id, i);
-    ST r0 = lw_stmt(w, sid, env, in_main, g2);
+    // A list looked up only to be appended and put back (lp_fusible) is
+    // not bound: the insert does all three (resid_map_list_push).
+    Bool fused = lp_fusible(w.g, id, i);
+    ST r0 = if (fused) { ST {.pos = 0, .dead = g2.dead, .err = "", .env = env_add(env, "__fuse_" + lw_text(w, sid) + ":" + IntToString(sid)), .glines = g2.glines, .hlines = g2.hlines, .lines = g2.lines, .tmp = g2.tmp, .lbl = g2.lbl, .rety = g2.rety} } else { lw_stmt(w, sid, env, in_main, g2) };
     if (r0.err != "" || r0.dead) { return r0; }
     ST r = if (w.dbg) { lw_dbv(w, sid, r0) } else { r0 };
     return lw_stmts(w, id, i + 1, r.env, in_main, r);

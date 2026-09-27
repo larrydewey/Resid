@@ -1841,9 +1841,20 @@ typedef struct PVecNode {
 typedef struct {
     int64_t count;
     int32_t shift;
+    /* Nonzero: the `own` stamp of the one transient map slot holding this
+     * header, which may then append to it in place (resid_map_list_push).
+     * It fills the padding, so a header stays 32 bytes. */
+    uint32_t stamp;
     PVecNode* root;
     const char* type;
 } ResidList;
+
+static ResidList* list_hdr(void) {
+    ResidList* l = (ResidList*)resid_alloc(sizeof(ResidList));
+    if (!l) resid_abort("list: out of memory");
+    l->stamp = 0;
+    return l;
+}
 
 static PVecNode* pvec_node_new(int64_t cap) {
     PVecNode* n = (PVecNode*)resid_alloc(sizeof(PVecNode) + (size_t)cap * sizeof(void*));
@@ -1933,7 +1944,15 @@ static PVecNode* pvec_set_leaf(PVecNode* node, int32_t level, int64_t leaf_idx, 
  * untouched (only the root-to-leaf paths are copied). */
 static ResidList* trie_from_items(void** items, int64_t n, const char* type);
 
+static ResidList* pvec_append_into(ResidList* into, ResidList* v, void** elems, int64_t m);
+
 static ResidList* pvec_append(ResidList* v, void** elems, int64_t m) {
+    return pvec_append_into(NULL, v, elems, m);
+}
+
+/* `v` with `m` elements appended, written into the header `into` (which
+ * may be `v` itself: an append in place), or a new header when NULL. */
+static ResidList* pvec_append_into(ResidList* into, ResidList* v, void** elems, int64_t m) {
     if (v->shift == FLAT_SHIFT || v->root == NULL) {
         FlatBuf* f = (FlatBuf*)v->root;
         int64_t n = v->count;
@@ -1959,8 +1978,7 @@ static ResidList* pvec_append(ResidList* v, void** elems, int64_t m) {
         if (dst) {
             memcpy(dst->items + n, elems, (size_t)m * sizeof(void*));
             if (dst != f) dst->used = n + m;
-            ResidList* out = (ResidList*)resid_alloc(sizeof(ResidList));
-            if (!out) resid_abort("pvec_append: out of memory");
+            ResidList* out = into ? into : list_hdr();
             out->type = v->type;
             out->count = n + m;
             out->shift = FLAT_SHIFT;
@@ -1968,12 +1986,13 @@ static ResidList* pvec_append(ResidList* v, void** elems, int64_t m) {
             return out;
         }
     }
-    ResidList* out = (ResidList*)resid_alloc(sizeof(ResidList));
-    if (!out) resid_abort("pvec_append: out of memory");
-    out->type = v->type;
-    out->count = v->count;
-    out->shift = v->shift;
-    out->root = v->root;
+    ResidList* out = into ? into : list_hdr();
+    if (out != v) {
+        out->type = v->type;
+        out->count = v->count;
+        out->shift = v->shift;
+        out->root = v->root;
+    }
     int64_t done = 0;
     while (done < m) {
         int64_t idx = out->count;
@@ -2016,8 +2035,7 @@ static ResidList* pvec_push_raw(ResidList* v, void* elem) {
 /* Build a trie-backed list holding `items` (used when a large flat list is
  * branched: see the flat-list comment above). */
 static ResidList* trie_from_items(void** items, int64_t n, const char* type) {
-    ResidList* out = (ResidList*)resid_alloc(sizeof(ResidList));
-    if (!out) resid_abort("trie_from_items: out of memory");
+    ResidList* out = list_hdr();
     out->count = 0;
     out->shift = 0;
     out->root = NULL;
@@ -2036,10 +2054,9 @@ static ResidList* trie_from_items(void** items, int64_t n, const char* type) {
 /* Build a new persistent list from a flat array of `count` element
  * pointers (scalar slots are boxes, as with the old ResidVal lists). */
 void* resid_list_new(int64_t count, void** src, const char* type) {
-    ResidList v = { 0, 0, NULL, type };
+    ResidList v = { 0, 0, 0, NULL, type };
     if (count == 0) {
-        ResidList* e = (ResidList*)resid_alloc(sizeof(ResidList));
-        if (!e) resid_abort("resid_list_new: out of memory");
+        ResidList* e = list_hdr();
         *e = v;
         return e;
     }
@@ -2206,8 +2223,7 @@ void* resid_list_concat(void* a, void* b) {
  * place. The checker guarantees each builder value is used once, so no
  * other header ever sees the buffer while it grows. */
 void* resid_listbuf_new(void) {
-    ResidList* l = (ResidList*)resid_alloc(sizeof(ResidList));
-    if (!l) resid_abort("resid_listbuf_new: out of memory");
+    ResidList* l = list_hdr();
     l->count = 0;
     l->shift = FLAT_SHIFT;
     l->root = NULL;
@@ -6726,6 +6742,7 @@ typedef struct {
     MapTab* tab;
     int64_t transient;
     uint64_t edit;  /* transient trie: its token */
+    uint32_t own;   /* transient: stamp of the list headers only it holds */
     int8_t kk;      /* trie mode: key / value kinds */
     int8_t vk;
 } HMTrie;
@@ -7325,6 +7342,7 @@ static HMTrie* trie_new(int64_t count, HMNode* root, int8_t kk, int8_t vk) {
     t->tab = NULL;
     t->transient = 0;
     t->edit = 0;
+    t->own = 0;
     t->kk = kk;
     t->vk = vk;
     return t;
@@ -7714,7 +7732,10 @@ static HMNode* map_root(HMTrie* m) {
  * it is rebuilt). */
 typedef struct { HMNode* root; int8_t kk; int8_t vk; } TrieBase;
 
+static void map_exit(HMTrie* m);
+
 static TrieBase map_base(HMTrie* m) {
+    map_exit(m);
     TrieBase b = { NULL, map_kk(m), map_vk(m) };
     if (m->tab || !m->transient) { b.root = map_root(m); return b; }
     int64_t n = m->count;
@@ -7788,8 +7809,38 @@ static HMTrie* map_remove_p(HMTrie* m, int8_t rk, uint64_t kb) {
     return trie_new(m->count - 1, root, b.kk, b.vk);
 }
 
-/* The value word (of the map's value kind) of a request key, or NULL. */
+/* Stamps are unique process-wide: each thread takes blocks of them from
+ * a global counter. Once 2^32 are used up, new stamps are 0 and appends
+ * are never in place again (a stamp is never reused). */
+static uint64_t g_own_seq = 0;
+static _Thread_local uint64_t g_own_next = 0, g_own_end = 0;
+
+static uint32_t new_own(void) {
+    if (g_own_next == g_own_end) {
+        g_own_next = __atomic_fetch_add(&g_own_seq, 65536, __ATOMIC_RELAXED) + 1;
+        g_own_end = g_own_next + 65535;
+    }
+    if (g_own_next > 0xFFFFFFFFu) return 0;
+    return (uint32_t)g_own_next++;
+}
+
+/* A value word may leave a transient map (a lookup, an entry list, a
+ * persistent update sharing its words): no list header it holds is its
+ * alone any more. */
+static inline void map_exit(HMTrie* m) {
+    /* Raw Int, Float or Bool values are never list headers. */
+    if (m->transient && (m->tab ? m->tab->vkind : m->vk) <= 0) m->own = new_own();
+}
+
+static uint64_t* map_vref_raw(HMTrie* m, int8_t rk, uint64_t kb);
+
 static uint64_t* map_vref(HMTrie* m, int8_t rk, uint64_t kb) {
+    map_exit(m);
+    return map_vref_raw(m, rk, kb);
+}
+
+/* The value word (of the map's value kind) of a request key, or NULL. */
+static uint64_t* map_vref_raw(HMTrie* m, int8_t rk, uint64_t kb) {
     if (m->count == 0) return NULL;
     if (m->tab) return mt_vref(m->tab, rk, kb);
     uint64_t k;
@@ -7812,10 +7863,14 @@ void* resid_map_transient(void* map) {
         HMTrie* m = trie_new(n, map_root(src), map_kk(src), map_vk(src));
         m->transient = 1;
         m->edit = new_edit_token();
+        m->own = new_own();
         return m;
     }
+    /* A transient source keeps its words too. */
+    map_exit(src);
     HMTrie* m = trie_new(n, NULL, -1, -1);
     m->transient = 1;
+    m->own = new_own();
     if (src->tab) {
         MapTab* s = src->tab;
         MapTab* t = (MapTab*)map_obj(sizeof(MapTab));
@@ -7926,6 +7981,59 @@ __attribute__((always_inline)) void* resid_map_put(void* map, int8_t owned, int8
     return map_put_slow(m, owned, kk, kb, vk, vb);
 }
 
+static void* elem_keep(void* p);
+
+/* `m.insert(k, (m.get(k) else { d }).concat([e]))` for a map of lists
+ * (value kind 5), fused by the compiler when the looked-up list has no
+ * other use. On an owned transient map whose slot holds a header stamped
+ * with the map's current `own`, the element is appended in place: no new
+ * header, and the buffer grows by doubling. Otherwise it is exactly the
+ * lookup, append and insert, and the stored header is stamped. */
+void* resid_map_list_push(void* map, int8_t owned, int8_t kk, int64_t kb, void* elem, void* dflt) {
+    HMTrie* m = (HMTrie*)map;
+    int8_t lk = kk == 4 ? 0 : kk;
+    int heap = !in_region(m);
+    if (owned && m->transient && m->own) {
+        uint64_t* at = map_vref_raw(m, lk, (uint64_t)kb);
+        ResidList* h = at ? (ResidList*)(uintptr_t)*at : NULL;
+        if (h && h->stamp == m->own) {
+            /* Allocate and keep as the map does: outside the region. */
+            int64_t d = g_sc_depth;
+            void* e = heap ? elem_keep(elem) : elem;
+            if (heap) g_sc_depth = 0;
+            pvec_append_into(h, h, &e, 1);
+            g_sc_depth = d;
+            return m;
+        }
+    }
+    /* The looked-up header only seeds the new one: it does not leave. */
+    uint64_t* at = map_vref_raw(m, lk, (uint64_t)kb);
+    ResidList* base = at ? (ResidList*)(uintptr_t)word_out(map_vk(m), 0, *at) : (ResidList*)dflt;
+    ResidList* nv;
+    if (base->count == 0) {
+        /* A new list gets room for a few appends. */
+        int64_t d = g_sc_depth;
+        if (heap && owned) g_sc_depth = 0;
+        FlatBuf* f = flatbuf_new(4);
+        f->items[0] = heap ? elem_keep(elem) : elem;
+        f->used = 1;
+        nv = list_hdr();
+        nv->type = base->type;
+        nv->count = 1;
+        nv->shift = FLAT_SHIFT;
+        nv->root = (PVecNode*)f;
+        g_sc_depth = d;
+    } else {
+        nv = pvec_push_raw(base, elem);
+    }
+    HMTrie* r = (HMTrie*)resid_map_put(m, owned, kk, kb, 5, (int64_t)(uintptr_t)nv);
+    if (owned && r->transient && r->own) {
+        uint64_t* slot = map_vref_raw(r, lk, (uint64_t)kb);
+        if (slot) ((ResidList*)(uintptr_t)*slot)->stamp = r->own;
+    }
+    return r;
+}
+
 void* resid_map_del(void* map, int8_t owned, int8_t kk, int64_t kb) {
     HMTrie* m = (HMTrie*)map;
     if (kk == 4) kk = 0;
@@ -7987,6 +8095,7 @@ __attribute__((always_inline)) MapFind resid_map_find(void* map, int8_t kk, int6
      * loop's transient table goes through the last-probe cache. */
     if (m->transient && t && kk == 1 && t->kkind == 1 && t->vkind == vk && (k >> 1) != (MT_RAW_EMPTY >> 1)) {
         MapFind r = { 0, 0 };
+        map_exit(m);
         int64_t at = mt_probe_raw_cached(t, k);
         if (at >= 0) { r.val = t->vals ? (int64_t)t->vals[at] : 1; r.found = 1; }
         return r;
@@ -8043,6 +8152,7 @@ static int64_t map_boxed_entries(HMTrie* m, void*** ks, void*** vs) {
     int64_t n = m->count;
     uint64_t* kw = (uint64_t*)map_tmp((size_t)(n ? n : 1) * 8);
     uint64_t* vw = (uint64_t*)map_tmp((size_t)(n ? n : 1) * 8);
+    map_exit(m);
     map_entries(m, kw, vw);
     int8_t kk = map_kk(m), vk = map_vk(m);
     for (int64_t i = 0; i < n; i++) {
