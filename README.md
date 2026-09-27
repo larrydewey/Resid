@@ -85,7 +85,7 @@ Tooling shipped today:
 - `tools/resid-fmt.resid`: canonical formatter, self-hosted (`residc tools/resid-fmt.resid run -- <file>`)
 - `tools/resid-graph.resid`, `tools/resid-why.resid`, `tools/resid-pkg.resid`, `tools/resid-manifest.resid`, `tools/resid-cose.resid`: call-graph, provenance query, and package-manager tooling, all self-hosted
 - The self-hosted compiler in `compiler/` (graph parser, resolver, checker, reducer, lowering, codegen; `compiler/driver.resid` is the entry), written in Resid. It enforces capabilities (§19–21) statically and with a runtime force-time guard.
-- The Rust pipeline (`bootstrap/rust-stage0/crates/`) is archived, not actively developed — see `PLAN-resid-only.md` Phase D and `PROGRESS.md` §6. A frozen stage-0 seed binary (`bootstrap/stage0/`) is the actual bootstrap root going forward.
+- The Rust pipeline that built the first seed was deleted on 2026-09-26 (it is in git history). A frozen stage-0 seed binary (`bootstrap/stage0/`) and the committed `build/boot/seed.ll` are the bootstrap roots.
 
 ---
 
@@ -199,26 +199,18 @@ Once you have a self-hosted `residc` (or any later generation):
 
 ### Rebuilding stage0 for a new host architecture
 
-The archived Rust pipeline lives at `bootstrap/rust-stage0/` (not actively maintained). To build a fresh stage0 binary for a new architecture:
-
-    cd bootstrap/rust-stage0
-    cargo run -p residc -- ../../compiler/driver.resid build -o residc-seed-<os>-<arch> -rt ../../runtime/resid_rt.c
-
-Add the resulting binary + `.sha256` to `bootstrap/stage0/`.
+The Rust pipeline that built the first stage0 was deleted on 2026-09-26. To bootstrap on a new architecture, recover it from git history (the last commit containing `bootstrap/rust-stage0/`), or port the committed IR seed (`build/boot/seed.ll`) to the new target. Add the resulting binary and its `.sha256` to `bootstrap/stage0/`.
 
 ---
 
 ## Project Structure
 
     resid/
-    ├── runtime/             # resid_rt.c — permanent C runtime, linked into every
-    │                        #   compiled Resid binary (Rust-built or self-hosted)
+    ├── runtime/             # rt/: the runtime in Resid (lowered to build/boot/rt.ll);
+    │                        #   resid_rt.c: the part not yet ported
     ├── bootstrap/
-    │   ├── stage0/          # frozen, versioned seed binary — the actual bootstrap
-    │   │                    #   root now (see PLAN-resid-only.md Phase D)
-    │   └── rust-stage0/     # archived Rust pipeline (crates/), not actively
-    │       └── crates/      #   developed — kept only to rebuild stage0 for a new
-    │                        #   host architecture
+    │   └── stage0/          # frozen, versioned seed binary — the bootstrap root
+    │                        #   (see PLAN-resid-only.md Phase D)
     ├── lib/                 # Standard library written in Resid
     │   ├── crypto.resid       # SHA-256/512, HMAC, PBKDF2, Base64, random
     │   ├── ed25519.resid      # Ed25519 sign/verify
@@ -228,7 +220,7 @@ Add the resulting binary + `.sha256` to `bootstrap/stage0/`.
     ├── examples/            # demo programs
     │   └── stack_types.resid  # fixed-capacity Str(N)/Bytes(N)/List(T,N)
     ├── tools/               # fmt, graph, why, pkg, manifest, cose — all self-hosted
-    │                        #   .resid tools now; resid-lsp/resid-lsp-full stay Rust
+    │                        #   .resid tools; resid-notes/resid-cache/resid-lsp are Rust
     └── PROGRESS.md          # Full build log, status, roadmap
 
 ---

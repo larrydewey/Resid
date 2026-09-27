@@ -21,10 +21,6 @@
 #                                    MAX_SELF_ROUNDS, comparing consecutive
 #                                    outputs, until two consecutive rounds
 #                                    match.
-#   ./boot.sh --bootstrap-from-rust  the old path, via the archived Rust
-#                                    bootstrap (see bootstrap/rust-stage0)
-#                                    -- kept only as a fallback for the case
-#                                    above; not part of the normal workflow.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -39,9 +35,7 @@ RT_LL="${OUT}/rt.ll"
 
 # Force stdlib resolution to this checkout's freshly-synced build/boot/
 export RESID_HOME="${OUT}"
-BOOTSTRAP=0
 BOOTSTRAP_SELF=0
-[ "${1:-}" = "--bootstrap-from-rust" ] && BOOTSTRAP=1
 [ "${1:-}" = "--bootstrap-from-self" ] && BOOTSTRAP_SELF=1
 
 mkdir -p "$OUT"
@@ -82,7 +76,7 @@ ensure_key() { # ensure_key <compiler>
 MAX_SELF_ROUNDS=10
 if [ "$BOOTSTRAP_SELF" -eq 1 ]; then
     step "Bootstrap: reseeding from the self-hosted compiler (no Rust)"
-    [ -f "$SEED_LL" ] || die "missing committed seed $SEED_LL — need a first seed via --bootstrap-from-rust"
+    [ -f "$SEED_LL" ] || die "missing committed seed $SEED_LL (restore it from git)"
     link_clang "$SEED_LL" "${OUT}/stage1.bin"
     PREV_LL="${OUT}/seed.ll"
     PREV_BIN="${OUT}/stage1.bin"
@@ -117,31 +111,12 @@ if [ "$BOOTSTRAP_SELF" -eq 1 ]; then
         i=$((i + 1))
     done
     rm -f "${OUT}"/reseed_round*.ll "${OUT}"/reseed_round*.bin
-    die "did not converge after ${MAX_SELF_ROUNDS} rounds — likely a genuinely new language construct the old seed can't parse at all (not just new behavior); fall back to --bootstrap-from-rust"
-fi
-
-# ── Re-seed path: Rust bootstrap -> fresh stage2 (fallback only) ───
-if [ "$BOOTSTRAP" -eq 1 ]; then
-    step "Bootstrap: rebuilding stage2 seed from the archived Rust bootstrap"
-    [ -f "${SCRIPT_DIR}/bootstrap/rust-stage0/Cargo.toml" ] || die "archived Rust bootstrap not found"
-    cargo build --release --quiet --manifest-path "${SCRIPT_DIR}/bootstrap/rust-stage0/Cargo.toml" --target-dir "${SCRIPT_DIR}/bootstrap/rust-stage0/target"
-    RUST_SEED="${SCRIPT_DIR}/bootstrap/rust-stage0/target/release/residc"
-    [ -x "$RUST_SEED" ] || die "Rust bootstrap not found at $RUST_SEED"
-    step "stage1: Rust bootstrap compiles driver -> seed.ll"
-    timeout 600 "$RUST_SEED" "$SRC" -o "${OUT}/rust_stage1.bin"
-    [ -f "${OUT}/rust_stage1.bin.ll" ] || die "Rust bootstrap produced no output"
-    cp "${OUT}/rust_stage1.bin.ll" "$SEED_LL"
-    link_clang "$SEED_LL" "${OUT}/stage2.bin"
-    ok "stage2 seeded from Rust bootstrap"
-    echo ""
-    echo "Verify with a clean ./boot.sh (no args) and commit the new seed:"
-    echo "  git add -f build/boot/seed.ll build/boot/stage2.bin && git commit"
-    exit 0
+    die "did not converge after ${MAX_SELF_ROUNDS} rounds — likely a genuinely new language construct the old seed can't parse at all (not just new behavior); reseed in two steps (old source first)"
 fi
 
 # ── 1. stage1 from committed seed ────────────────────────────────────────
 step "stage1: clang from committed seed.ll"
-[ -f "$SEED_LL" ] || die "missing committed seed $SEED_LL — run ./boot.sh --bootstrap-from-rust first"
+[ -f "$SEED_LL" ] || die "missing committed seed $SEED_LL (restore it from git)"
 link_clang "$SEED_LL" "${OUT}/stage1.bin"
 ok "stage1 linked"
 

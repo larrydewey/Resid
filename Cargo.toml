@@ -1,16 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "bootstrap/rust-stage0/crates/resid-lexer",
-    "bootstrap/rust-stage0/crates/resid-parser",
-    "bootstrap/rust-stage0/crates/resid-diag",
-    "bootstrap/rust-stage0/crates/resid-ir",
-    "bootstrap/rust-stage0/crates/resid-type",
-    "bootstrap/rust-stage0/crates/resid-codegen",
-    "bootstrap/rust-stage0/crates/resid-build",
-    "bootstrap/rust-stage0/crates/residc",
     "tools/resid-notes",
     "tools/resid-cache",
     "tools/resid-lsp",
-    "tools/resid-lsp-full",
 ]

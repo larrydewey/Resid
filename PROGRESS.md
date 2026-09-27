@@ -13,10 +13,10 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  188, reduce 14, provenance 20, graph 418, pkg 17, runtime 3. The archived Rust workspace
-  (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
-  821 tests; its e2e now has 128 after removing tests of the retired text
-  paths); see `AGENTS.md` for its slow-test table.
+  189, reduce 14, provenance 20, graph 418, pkg 17, runtime 7. The Rust
+  pipeline (`bootstrap/rust-stage0/`) and `tools/resid-lsp-full`, which
+  was built on its crates, were deleted on 2026-09-26; both are in git
+  history.
 
 ### 0a. Self-compile performance fix (2026-09-19): ~3h -> ~101s
 

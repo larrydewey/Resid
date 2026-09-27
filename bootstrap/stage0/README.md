@@ -149,10 +149,9 @@ before `runtime/` existed — see "Provenance" above.)
 
 ## Rebuilding stage0 for a new host architecture
 
-`crates/` (the Rust pipeline) is archived under `bootstrap/rust-stage0/`
-(not actively maintained — see `PROGRESS.md` §6) specifically so a new
-stage0 binary can still be built for a host architecture this one
-doesn't cover. From `bootstrap/rust-stage0/`, run the same build command
-shown above against that architecture's Rust/clang toolchain, then add
-the new binary here following the `residc-seed-<os>-<arch>` naming convention
-with its own `.sha256` file.
+The Rust pipeline that built this binary (`bootstrap/rust-stage0/`) was
+deleted on 2026-09-26. To cover a new architecture, recover it from git
+history (the last commit containing `bootstrap/rust-stage0/`) or port the
+committed IR seed (`build/boot/seed.ll`), then add the new binary here
+following the `residc-seed-<os>-<arch>` naming convention with its own
+`.sha256` file.

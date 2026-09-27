@@ -28,8 +28,10 @@ Syntax highlighting, snippets, language configuration, and **LSP support** (diag
 
 ## LSP Setup
 
-The extension includes an LSP client that connects to the full `resid-lsp`
-server (the binary source is in `tools/resid-lsp-full/`).
+The extension includes an LSP client for a `resid-lsp` server. The Rust
+server (`tools/resid-lsp-full/`) was deleted on 2026-09-26 with the Rust
+pipeline it was built on; it is in git history, and a Resid replacement
+does not exist yet.
 
 ### Prerequisites
 
