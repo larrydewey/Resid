@@ -5,7 +5,7 @@
 Str show(List(Int) xs, Int i, Str acc) {
     if (i >= xs.len()) { return acc + "]"; }
     Str sep = if (i == 0) { "[" } else { " " };
-    return show(xs, i + 1, acc + sep + IntToString(xs[i]));
+    return show(xs, i + 1, acc + sep + f"{xs[i]}");
 }
 
 Str showl(List(Int) xs) { return if (xs.len() == 0) { "[]" } else { show(xs, 0, "") }; }
@@ -44,10 +44,10 @@ Int carry(Map(Int, List(Int)) m, Int i, Int n, List(Int) keep, Int acc) {
 
 Map(Str, List(Str)) words(Map(Str, List(Str)) m, Int i, Int n) {
     if (i >= n) { return m; }
-    Str k = "g" + IntToString(i % 2);
+    Str k = f"g{i % 2}";
     List(Str) nil = [];
     List(Str) cur = m.get(k) else { nil };
-    return words(m.insert(k, cur.concat(["w" + IntToString(i)])), i + 1, n);
+    return words(m.insert(k, cur.concat([f"w{i}"])), i + 1, n);
 }
 
 Int main() {
@@ -60,9 +60,10 @@ Int main() {
     List(List(Int)) vals = m.values();
     Map(Int, List(Int)) m2 = after_snapshot(m, 0, 30);
     println("snapshot " + showl(snap));
-    println("values " + IntToString(vals[0].len() + vals[1].len() + vals[2].len()));
+    println(f"values {vals[0].len() + vals[1].len() + vals[2].len()}");
     println("older map " + showl(m.get(1) else { nil }));
-    println("grown " + IntToString((m2.get(1) else { nil }).len()));
+    Int shown14 = (m2.get(1) else { nil }).len();
+    println(f"grown {shown14}");
     List(Int) shared = [7, 8];
     Map(Int, List(Int)) two = e.insert(1, shared).insert(2, shared);
     Map(Int, List(Int)) two2 = after_snapshot(two, 0, 3);
@@ -74,7 +75,7 @@ Int main() {
     Map(Str, List(Str)) we = {};
     Map(Str, List(Str)) w = words(we, 0, 7);
     List(Str) g0 = w.get("g0") else { nils };
-    println("words " + IntToString(g0.len()) + " " + g0[0] + " " + g0[3]);
-    println("carry " + IntToString(carry(e, 0, 50, nil, 0)));
+    println(f"words {g0.len()} " + g0[0] + " " + g0[3]);
+    println(f"carry {carry(e, 0, 50, nil, 0)}");
     return 0;
 }

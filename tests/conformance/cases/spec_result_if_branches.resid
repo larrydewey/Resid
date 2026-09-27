@@ -4,7 +4,7 @@ Result(Int, Str) f(Int x) {
 Int main() {
     Int v = match f(3) { Ok(n) => n, Err(e) => 0 };
     Int w = match f(-1) { Ok(n) => n, Err(e) => 0 };
-    println(IntToString(v));
-    println(IntToString(w));
+    println(f"{v}");
+    println(f"{w}");
     return 0;
 }

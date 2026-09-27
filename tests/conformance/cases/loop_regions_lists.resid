@@ -16,15 +16,15 @@ List(Int) grow(Int i, Int n, List(Int) acc) {
 
 List(Str) words(Int i, Int n, List(Str) acc) {
     if (i >= n) { return acc; }
-    return words(i + 1, n, acc.concat(["w" + IntToString(i)]));
+    return words(i + 1, n, acc.concat([f"w{i}"]));
 }
 
 Map(Str, List(Str)) groups(Int i, Int n, Map(Str, List(Str)) g) {
     if (i >= n) { return g; }
-    Str k = "g" + IntToString(i % 7);
+    Str k = f"g{i % 7}";
     List(Str) nil = [];
     List(Str) cur = g.get(k) else { nil };
-    return groups(i + 1, n, g.insert(k, cur.concat(["m" + IntToString(i)])));
+    return groups(i + 1, n, g.insert(k, cur.concat([f"m{i}"])));
 }
 
 // Dead set algebra results inside a read-only loop.

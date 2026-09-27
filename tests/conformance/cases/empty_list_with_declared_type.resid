@@ -1,7 +1,7 @@
 Int main() {
     List(Int) empty = [];
     List(Str) words = [];
-    println(IntToString(empty.len()));
-    println(IntToString(words.len()));
+    println(f"{empty.len()}");
+    println(f"{words.len()}");
     return 0;
 }

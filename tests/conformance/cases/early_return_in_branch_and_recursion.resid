@@ -9,9 +9,9 @@ Int sum(Int n) {
     return n + sum(m);
 }
 Int main() {
-    println(IntToString(f(-5)));
-    println(IntToString(f(5)));
-    println(IntToString(sum(5)));
-    println(IntToString(sum(10)));
+    println(f"{f(-5)}");
+    println(f"{f(5)}");
+    println(f"{sum(5)}");
+    println(f"{sum(10)}");
     return 0;
 }

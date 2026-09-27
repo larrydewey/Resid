@@ -152,6 +152,11 @@ Str ds_rewrite(Str s, Int pos, Int end, Int depth, DsSig sg, Str sb, Int copied)
     }
     if (t.text == "{") { return ds_rewrite(s, t.pos, end, depth + 1, sg, sb, copied); }
     if (t.text == "}") { return ds_rewrite(s, t.pos, end, depth - 1, sg, sb, copied); }
+    if (t.kind == "fstring" && str_contains(t.text, "{")) {
+        Int fs = ds_start(t);
+        Str sbf = str_sb_append(str_sb_append(sb, str_slice(s, copied, fs)), ds_fholes(t.text, 0, sg, ""));
+        return ds_rewrite(s, t.pos, end, depth, sg, sbf, t.pos);
+    }
     if (t.kind == "ident" && sg.pnames.contains(t.text)) {
         Tok o = lex_tok(s, t.pos);
         if (o.text == "(") {
@@ -174,6 +179,20 @@ Str ds_rewrite(Str s, Int pos, Int end, Int depth, DsSig sg, Str sb, Int copied)
         }
     }
     return ds_rewrite(s, t.pos, end, depth, sg, sb, copied);
+}
+
+// An f-string token with calls in its holes rewritten.
+Str ds_fholes(Str t, Int i, DsSig sg, Str acc) {
+    Int n = str_len(t);
+    if (i >= n) { return acc; }
+    Int c = str_char_at(t, i);
+    if (c == 92) { return ds_fholes(t, i + 2, sg, acc + str_slice(t, i, i + 2)); }
+    if (c != 123) { return ds_fholes(t, i + 1, sg, acc + str_from_code(c)); }
+    Int e = fstring_hole_end(t, i + 1, n, 1);
+    if (e < 0) { return acc + str_slice(t, i, n); }
+    Str h = str_slice(t, i + 1, e);
+    Str hole = str_sb_finish(ds_rewrite(h, 0, str_len(h), 1, sg, str_sb_new(), 0));
+    return ds_fholes(t, e + 1, sg, acc + "{" + hole + "}");
 }
 
 // Parameter list text (after `(`, through `)`) with each default blanked.

@@ -1,7 +1,7 @@
 // str_index_of(s, needle, from): code point index of the first occurrence
 // of `needle` at or after code point `from`, or -1.
 
-Str show(Int v) { return IntToString(v); }
+Str show(Int v) { return f"{v}"; }
 
 // Every match position of `needle` in `s`, found by repeated searches.
 Str all_hits(Str s, Str needle, Int from, Str acc) {

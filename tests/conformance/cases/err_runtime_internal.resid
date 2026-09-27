@@ -3,7 +3,7 @@
 // rejected unless the compiler itself is being built (--runtime-internals).
 Int main() {
     Int a = resid_arena_push();
-    Str s = "x" + IntToString(1);
+    Str s = f"x{1}";
     Int b = resid_arena_pop();
     Int c = resid_raw_load64(a);
     println(s);

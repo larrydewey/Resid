@@ -1,6 +1,6 @@
 // resid_raw_table: read-only i64 data from a list literal of constants.
 Int main() {
     Int t = resid_raw_table([3, -7, 0x1F, 9000]);
-    println(IntToString(resid_raw_load64(t)) + " " + IntToString(resid_raw_load64(t + 8)) + " " + IntToString(resid_raw_load64(t + 16)) + " " + IntToString(resid_raw_load64(t + 24)));
+    println(f"{resid_raw_load64(t)} {resid_raw_load64(t + 8)} {resid_raw_load64(t + 16)} {resid_raw_load64(t + 24)}");
     return 0;
 }

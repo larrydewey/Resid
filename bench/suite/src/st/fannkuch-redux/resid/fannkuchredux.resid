@@ -93,6 +93,6 @@ Int main() {
     Int res = run(n, identity(0, n, 0), 0, n, 0, 0, 0);
     Int maxflips = res & 255;
     Int checksum = (res - maxflips) / 256;
-    println(IntToString(checksum) + "\nPfannkuchen(" + IntToString(n) + ") = " + IntToString(maxflips));
+    println(f"{checksum}\nPfannkuchen({n}) = {maxflips}");
     return 0;
 }

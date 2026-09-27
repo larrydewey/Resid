@@ -152,7 +152,7 @@ pub Int der_int_acc(List(Int) c, Int i, Int n, Int acc) {
 pub Str oid_rest(List(Int) c, Int i, Int n, Str acc, Int accv, Bool inarc) {
     if (i > n) {
         if (inarc) {
-            Str s = IntToString(accv);
+            Str s = f"{accv}";
             return acc + "." + s;
         }
         return acc;
@@ -165,7 +165,7 @@ pub Str oid_rest(List(Int) c, Int i, Int n, Str acc, Int accv, Bool inarc) {
     if (cont > 0) {
         return oid_rest(c, ni, n, acc, v, true);
     }
-    Str arc = IntToString(v);
+    Str arc = f"{v}";
     Str joined = acc + "." + arc;
     return oid_rest(c, ni, n, joined, 0, false);
 }
@@ -187,6 +187,6 @@ pub Str der_oid_str(List(Int) data, Int pos) {
     Bool big = raw1 > 2;
     Int arc1 = if (big) { 2 } else { raw1 };
     Int rem = if (big) { sub40 } else { rem0 };
-    Str head = IntToString(arc1) + "." + IntToString(rem);
+    Str head = f"{arc1}.{rem}";
     return oid_rest(c, 1, n, head, 0, false);
 }

@@ -1302,9 +1302,9 @@ Str fmt_program(Str s) {
     Bool moduleHeader = afterDocs.text == "import";
     Int importsStart = if (moduleHeader) { headDocs.pos } else { 0 };
     FR imports = fmt_imports(s, importsStart);
-    if (imports.err != "") { return "ERROR: " + imports.err + " at " + IntToString(imports.pos) + " near [" + str_slice(s, imports.pos, imports.pos + 30) + "]"; }
+    if (imports.err != "") { return "ERROR: " + imports.err + f" at {imports.pos} near [" + str_slice(s, imports.pos, imports.pos + 30) + "]"; }
     FR decls = fmt_decls(s, imports.pos, 0);
-    if (decls.err != "") { return "ERROR: " + decls.err + " at " + IntToString(decls.pos) + " near [" + str_slice(s, decls.pos, decls.pos + 30) + "]"; }
+    if (decls.err != "") { return "ERROR: " + decls.err + f" at {decls.pos} near [" + str_slice(s, decls.pos, decls.pos + 30) + "]"; }
     Str headText = if (moduleHeader) { fmt_doc_lines(headDocs.lines, 0) + "\n" } else { "" };
     Bool bothNonEmpty = imports.text != "" && decls.text != "";
     Str blank = if (bothNonEmpty) { "\n" } else { "" };

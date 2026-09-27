@@ -7,7 +7,7 @@ Int f(Int a, P p) {
     Option(Int) o = Some(b);
     Int c = o else { 0 };
     List(Str) xs = ["a", "b"];
-    for (Str s in xs) { println(s + IntToString(small)); }
+    for (Str s in xs) { println(s + f"{small}"); }
     Int d = match (o) { Some(q) => q.twice(), None => 0 };
     return d + c;
 }

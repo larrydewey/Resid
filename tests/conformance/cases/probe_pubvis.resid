@@ -1,2 +1,2 @@
 pub Int f() { return 1; }
-Int main() { println(IntToString(f())); return 0; }
+Int main() { println(f"{f()}"); return 0; }

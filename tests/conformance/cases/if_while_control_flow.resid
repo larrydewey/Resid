@@ -1,9 +1,9 @@
 Int main() {
     Int x = if (1 < 2) { 10; } else { 20; };
-    println(IntToString(x));
+    println(f"{x}");
 
     Int y = if (1 > 2) { 100; };
-    println(IntToString(y));
+    println(f"{y}");
 
     while (true) {
         break;

@@ -5,13 +5,13 @@ Int main() {
     // Frame header: SETTINGS len=12 stream 263.
     List(Int) f = [0, 0, 0, 12, 4, 0, 0, 0, 1, 7];
     H2FrameHdr h = h2_frame_hdr(f, 1);
-    println("hdr=" + IntToString(h.length) + "," + IntToString(h.stype) + "," + IntToString(h.sid));
+    println(f"hdr={h.length},{h.stype},{h.sid}");
     // HPACK integers (RFC 7541 C.1): 10 with 5-bit prefix; 1337 multi-byte.
     List(Int) i1 = [0, 10];
     HpInt r1 = hp_read_int(i1, 1, 10, 31);
     List(Int) i2 = [0, 31, 154, 10];
     HpInt r2 = hp_read_int(i2, 1, 31, 31);
-    println("int=" + IntToString(r1.val) + " " + IntToString(r2.val));
+    println(f"int={r1.val} {r2.val}");
     // C.3.1 block.
     List(Int) b1 = [0, 130, 134, 132, 65, 15, 119, 119, 119, 46, 101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109];
     Int e1 = b1.len() - 1;

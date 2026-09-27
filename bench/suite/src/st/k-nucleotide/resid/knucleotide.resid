@@ -58,8 +58,8 @@ Int encode(Str s, Int i, Int n, Int acc) {
 Str percent(Int cnt, Int total) {
     Int milli = i64((200000 * cnt + total) / (2 * total));
     Int frac = milli % 1000;
-    Str fs = if (frac < 10) { "00" + IntToString(frac) } else { if (frac < 100) { "0" + IntToString(frac) } else { IntToString(frac) } };
-    return IntToString(milli / 1000) + "." + fs;
+    Str fs = if (frac < 10) { f"00{frac}" } else { if (frac < 100) { f"0{frac}" } else { f"{frac}" } };
+    return f"{milli / 1000}." + fs;
 }
 
 Int sum_counts(Map(Int, Int) m, Int c, Int nkeys, Int acc) {
@@ -99,7 +99,7 @@ Str count_line(Str t, Int lo, Int end, Str frag) {
     Int k = str_len(frag);
     Map(Int, Int) m = table(t, lo, end, k);
     Int c = m.get(encode(frag, 0, k, 0)) else { 0 };
-    return IntToString(c) + "\t" + frag + "\n";
+    return f"{c}\t" + frag + "\n";
 }
 
 // Position of the ">THREE" header line.

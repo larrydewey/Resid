@@ -1,5 +1,5 @@
 Int noisy(Int x) {
-    println("noisy " + IntToString(x));
+    println(f"noisy {x}");
     return x + 1;
 }
 Int pure2(Int x) { return x * 0 + 2; }
@@ -11,13 +11,13 @@ Int loopish(Int n, Int acc) {
 Int main() {
     Int a = noisy(1);
     Int b = pure2(a);
-    println(IntToString(b));
+    println(f"{b}");
     Bool z = false && side("rhs evaluated");
     if (z) { println("never"); }
     Bool y = side("lhs") || true;
     if (y) { println("y"); }
-    println(IntToString(loopish(10, 0)));
-    println(IntToString(loopish(100000, 0)));
+    println(f"{loopish(10, 0)}");
+    println(f"{loopish(100000, 0)}");
     if (false) {
         println("dead");
     }
@@ -27,6 +27,6 @@ Int main() {
         println("dead2");
     }
     Int q = if (1 > 2) { noisy(5) } else { 9 };
-    println(IntToString(q));
+    println(f"{q}");
     return 0;
 }

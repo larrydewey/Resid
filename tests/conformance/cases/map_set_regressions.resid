@@ -3,11 +3,12 @@
 Int main() {
     Set(Int) s = {};
     Set(Int) s2 = s.insert(4).insert(2);
-    println(IntToString(s2.len()));
+    println(f"{s2.len()}");
     Map(Int, Bool) m = {7: true};
     println("x " + (if (m.get(7) else { false }) { "t" } else { "f" }) + (if (m.get(8) else { false }) { "t" } else { "f" }));
     Map(Str, Int) e = {};
     Map(Str, Int) e2 = e.insert("k", 1);
-    println(IntToString(e2.get("k") else { 0 }));
+    Int shown15 = e2.get("k") else { 0 };
+    println(f"{shown15}");
     return 0;
 }

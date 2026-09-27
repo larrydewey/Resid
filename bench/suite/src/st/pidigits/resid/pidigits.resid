@@ -70,8 +70,8 @@ Int digit(Dec(1000000) n2, Dec(1000000) a, Dec(1000000) d) {
 }
 
 Bool print_line(Int line, Int i) {
-    Str ds = IntToString(line);
-    return print(str_slice(ds, 1, str_len(ds)) + "\t:" + IntToString(i) + "\n");
+    Str ds = f"{line}";
+    return print(str_slice(ds, 1, str_len(ds)) + f"\t:{i}\n");
 }
 
 // The digit line in progress when `total` digits are out.
@@ -109,9 +109,9 @@ Int main() {
     Int total = str_parse_int(args.get(1));
     Int line = iter(big(2), big(0), big(1), 1, 0, 0, 1, total);
     if (total % 10 != 0) {
-        Str ds = IntToString(line);
+        Str ds = f"{line}";
         Str digits = str_slice(ds, 1, str_len(ds));
-        print(digits + spaces(10 - str_len(digits)) + "\t:" + IntToString(total) + "\n");
+        print(digits + spaces(10 - str_len(digits)) + f"\t:{total}\n");
     }
     return 0;
 }

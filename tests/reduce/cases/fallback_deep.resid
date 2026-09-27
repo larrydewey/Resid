@@ -4,7 +4,7 @@ Int count(Int n) {
 
 Int main() {
     // Within the depth budget: reduced. Beyond it: left to run time.
-    println(IntToString(count(5000)));
-    println(IntToString(count(100000)));
+    println(f"{count(5000)}");
+    println(f"{count(100000)}");
     return 0;
 }

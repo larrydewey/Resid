@@ -4,7 +4,7 @@
 // would not finish.
 Str build(Int i, Int n, Str acc) {
     if (i >= n) { return acc; }
-    return build(i + 1, n, acc + IntToString(i) + ",");
+    return build(i + 1, n, acc + f"{i},");
 }
 
 // The accumulator is read by its own piece: must not be rewritten.
@@ -17,7 +17,7 @@ Str doubling(Int i, Str acc) {
 Str fizz(Int i, Str acc, Int n) {
     if (i > n) { return acc; }
     if (i % 3 == 0) { return fizz(i + 1, acc + "F", n); }
-    return fizz(i + 1, acc + IntToString(i), n);
+    return fizz(i + 1, acc + f"{i}", n);
 }
 
 // Non-tail use of the recursive result.
@@ -46,7 +46,7 @@ Int main() {
     println(wrapped(3, "["));
     println(suffixed(3, ""));
     Str big = build(0, 200000, "");
-    println(IntToString(str_len(big)));
+    println(f"{str_len(big)}");
     println(str_slice(big, 0, 10));
     return 0;
 }

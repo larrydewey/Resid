@@ -8,6 +8,6 @@ Bool has_etc() { return filesystem.is_dir("/etc"); }
 @requires(args, filesystem(readonly))
 Int main() {
     Int n = count_args();
-    if (has_etc()) { println("etc " + IntToString(n)); }
+    if (has_etc()) { println(f"etc {n}"); }
     return 0;
 }

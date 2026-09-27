@@ -5,4 +5,4 @@ sandbox (filesystem) {
     }
 }
 @requires(filesystem(readonly))
-Int main() { println(IntToString(read_demo())); return 0; }
+Int main() { println(f"{read_demo()}"); return 0; }

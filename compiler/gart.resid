@@ -520,7 +520,7 @@ Str ga_note_sym(Str src, Int pos) {
 }
 
 Str ga_pad(Int n, Int w) {
-    Str s = IntToString(n);
+    Str s = f"{n}";
     return if (str_len(s) >= w) { s } else { str_repeat("0", w - str_len(s)) + s };
 }
 
@@ -529,7 +529,7 @@ GNW ga_note_add(GNW acc, GAF f, Str src, Str kind, Int pos) {
     Str place = ga_pad(at[0], 4) + ":" + ga_pad(at[1], 8) + ":" + ga_pad(at[2], 6);
     Str key = place + "\x1f" + kind;
     if (acc.seen.contains(key)) { return acc; }
-    Str ent = key + "\x1f" + ga_note_sym(src, pos) + "\x1f" + IntToString(at[1]) + "\x1f" + IntToString(at[2] - 1) + "\x1f" + IntToString(at[0]);
+    Str ent = key + "\x1f" + ga_note_sym(src, pos) + f"\x1f{at[1]}\x1f{at[2] - 1}\x1f{at[0]}";
     return GNW {.keys = acc.keys.concat([ent]), .seen = acc.seen.insert(key, true)};
 }
 

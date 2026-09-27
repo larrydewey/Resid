@@ -4,7 +4,8 @@ Int main() {
         Float f = str_parse_float("3.5") + str_parse_float("-1.25");
         println(f"sum={f}");
     }
-    println(IntToString(str_count("banana", "an")));
+    Int shown17 = str_count("banana", "an");
+    println(f"{shown17}");
     println(str_reverse("héllo"));
     return 0;
 }

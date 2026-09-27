@@ -3,7 +3,7 @@ Int main() {
     Range(Int) r = 0..5;
     Range(Int) rc = 0..=4;
     for (Int i in 0..3) {
-        println(IntToString(i));
+        println(f"{i}");
     }
 
     // Slice construction + indexing back into the list.
@@ -12,7 +12,7 @@ Int main() {
     Slice(Int) po1 = xs[..4];
     Slice(Int) po2 = xs[1..];
     Slice(Int) po3 = xs[..];
-    println(IntToString(xs[1]));
-    println(IntToString(xs[3]));
+    println(f"{xs[1]}");
+    println(f"{xs[3]}");
     return 0;
 }

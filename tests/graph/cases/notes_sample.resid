@@ -3,6 +3,6 @@
     Int a = rt(0 - 1);
     Int n = args.count();
     Str s = "rt args.count()";
-    println(IntToString(a + n) + s);
+    println(f"{a + n}" + s);
     return 0;
 }

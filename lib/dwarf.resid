@@ -321,7 +321,7 @@ pub Str el_hex(Int n) {
 pub Str el_hex_at(Int n, Str acc) {
     if (n == 0) { return acc; }
     Int d = n % 16;
-    Str c = if (d < 10) { IntToString(d) } else { str_from_code(87 + d) };
+    Str c = if (d < 10) { f"{d}" } else { str_from_code(87 + d) };
     return el_hex_at(n / 16, c + acc);
 }
 
@@ -514,14 +514,14 @@ pub DW el_dies(DX x, AB ab, DU u, Int pos, Int end, DW w) {
         return el_dies(x, ab, u, d.pos, end, DW {.fs = w.fs.concat([f]), .tys = w.tys});
     }
     if ((tag == 5 || tag == 52) && w.fs.len() > 0) {
-        DV v = DV {.name = d.name, .param = tag == 5, .ty = IntToString(d.ty), .expr = d.expr, .list = d.list, .base = u.lo, .addrbase = u.abase};
+        DV v = DV {.name = d.name, .param = tag == 5, .ty = f"{d.ty}", .expr = d.expr, .list = d.list, .base = u.lo, .addrbase = u.abase};
         Int li = w.fs.len() - 1;
         DF f = w.fs[li];
         DF f2 = DF {.name = f.name, .lo = f.lo, .hi = f.hi, .fb = f.fb, .vars = f.vars.concat([v])};
         return el_dies(x, ab, u, d.pos, end, DW {.fs = w.fs[0..li].concat([f2]), .tys = w.tys});
     }
     if (tag == 36) { return el_dies(x, ab, u, d.pos, end, DW {.fs = w.fs, .tys = w.tys.insert(die, d.name)}); }
-    if (tag == 15) { return el_dies(x, ab, u, d.pos, end, DW {.fs = w.fs, .tys = w.tys.insert(die, "*" + IntToString(d.ty))}); }
+    if (tag == 15) { return el_dies(x, ab, u, d.pos, end, DW {.fs = w.fs, .tys = w.tys.insert(die, f"*{d.ty}")}); }
     return el_dies(x, ab, u, d.pos, end, w);
 }
 

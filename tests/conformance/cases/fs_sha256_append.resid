@@ -16,6 +16,7 @@ Int main() {
     Bool a = filesystem.append_bytes(p, [99]);
     println(filesystem.read_all(p));
     println(hex_all(filesystem.sha256(p), 0, ""));
-    println(IntToString(filesystem.sha256("@TMP@/missing").len()));
+    Int shown2 = filesystem.sha256("@TMP@/missing").len();
+    println(f"{shown2}");
     return 0;
 }

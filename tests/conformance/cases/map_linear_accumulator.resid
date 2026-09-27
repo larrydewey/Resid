@@ -25,17 +25,20 @@ Int main() {
     Map(Int, Int) e = {};
     Map(Int, Int) m = count(0, 100000, e);
     Map(Int, Int) m2 = m.insert(5, -1);
-    println(IntToString(m.len()));
-    println(IntToString(m.get(5) else { 0 }));
-    println(IntToString(m2.get(5) else { 0 }));
-    println(IntToString(e.len()));
+    println(f"{m.len()}");
+    Int shown11 = m.get(5) else { 0 };
+    println(f"{shown11}");
+    Int shown12 = m2.get(5) else { 0 };
+    println(f"{shown12}");
+    println(f"{e.len()}");
     Set(Int) es = {};
     Set(Int) s = evens(0, 20, es);
-    println(IntToString(s.len()));
+    println(f"{s.len()}");
     println(if (s.contains(4)) { "yes" } else { "no" });
     Map(Str, Int) we = {};
     Map(Str, Int) w = words(["a", "b", "a", "c", "a"], 0, we);
-    println(IntToString(w.get("a") else { 0 }));
-    println(IntToString(w.len()));
+    Int shown13 = w.get("a") else { 0 };
+    println(f"{shown13}");
+    println(f"{w.len()}");
     return 0;
 }

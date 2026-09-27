@@ -3,28 +3,28 @@ Int main() {
     Option(Int) b = None;
 
     if (Some(v) = a) {
-        println(IntToString(v));
+        println(f"{v}");
     } else {
         println("none");
     }
 
     if (Some(v) = b) {
-        println(IntToString(v));
+        println(f"{v}");
     } else {
         println("none");
     }
 
     // else-if chain: first arm fails (None), second matches.
     if (Some(v) = b) {
-        println(IntToString(v));
+        println(f"{v}");
     } else if (Some(w) = a) {
-        println(IntToString(w));
+        println(f"{w}");
     } else {
         println("none");
     }
 
     while (Some(n) = b) {
-        println(IntToString(n));
+        println(f"{n}");
     }
     println("done");
 

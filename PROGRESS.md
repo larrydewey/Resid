@@ -306,6 +306,33 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0zk. One way to show a value: f-strings (2026-09-26)
+
+- The per-type conversion builtins (`IntToString`, `UIntToString`,
+  `FloatToString`, `BoolToString`, the 128/256/512-bit and Float(128)
+  variants and `ToString`) are gone from the language; `f"{x}"` is how a
+  value becomes a Str (spec §14). A hole takes any type: scalars and Dec by
+  representation, lists and records structurally (nested records are now
+  printed in full), other boxes through the runtime (`lw_show`). About
+  1,100 calls across `lib/`, `compiler/`, `tools/`, the tests and the
+  benchmarks were rewritten, and `"text " + f"{x}"` chains merged into
+  single f-strings. The runtime entry points keep their names as ABI
+  symbols only.
+- The accumulator rewrite appends an f-string part by part, integers
+  straight into the buffer (`lw_sacc_fstr`), replacing its IntToString
+  special case.
+- Fixed on the way, all text passes that treated an f-string as one
+  opaque token: module-private names inside holes were not mangled
+  (`imp_rename_holes`), named arguments inside holes were not desugared
+  (`ds_fholes`), `import ... as M` qualifiers inside holes were not
+  dropped (`imp_unalias_fs`), and range facts and scope inference did not
+  look into holes (a bounds check inside a hole was kept).
+- Self-compile, benchmarks and output unchanged.
+- Next: a `Show(T)` behavior (spec §11), built in for the numeric family,
+  Bool and Str, user instances `Show(P) = show_p;`, structural instances
+  for records and sums; the per-type list verbs (`list_contains_int`,
+  `list_reverse_strs`, ...) become generic.
+
 ### 0zj. The Resid runtime: infrastructure and first module (2026-09-26)
 
 - `runtime/rt/` holds the runtime written in Resid. `residc

@@ -8,7 +8,7 @@ Int unbox(Box(Int) b) {
 Int main() {
     Box(Int) a = Full(3);
     Box(Int) b = Nothing;
-    println(IntToString(unbox(a)));
-    println(IntToString(unbox(b)));
+    println(f"{unbox(a)}");
+    println(f"{unbox(b)}");
     return 0;
 }

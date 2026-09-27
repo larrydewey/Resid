@@ -4,12 +4,12 @@
 // negative zero, NaN and extreme Floats round-trip through every container.
 Str ints_str(List(Int) xs, Int i, Str acc) {
     if (i >= xs.len()) { return acc; }
-    return ints_str(xs, i + 1, acc + " " + IntToString(xs[i]));
+    return ints_str(xs, i + 1, acc + f" {xs[i]}");
 }
 
 Str floats_str(List(Float) xs, Int i, Str acc) {
     if (i >= xs.len()) { return acc; }
-    return floats_str(xs, i + 1, acc + " " + FloatToString(xs[i]));
+    return floats_str(xs, i + 1, acc + f" {xs[i]}");
 }
 
 Float scale(Float x, Float f, Int n) {
@@ -30,14 +30,17 @@ Int main() {
     List(Int) xs = [0, one, 0 - one, big - 1, 0 - big, big, 0 - big - 1, imax, imin, 4096, 0 - 257];
     println("ints" + ints_str(xs, 0, ""));
     println("sorted" + ints_str(list_sort_ints(xs), 0, ""));
-    println(IntToString(list_sum([big, 0 - big, big - 1, 1])));
+    println(f"{list_sum([big, 0 - big, big - 1, 1])}");
     if (list_contains_int(xs, big) && list_contains_int(xs, 0 - big - 1) && !list_contains_int(xs, 7)) { println("contains ok"); }
     Map(Int, Int) m0 = {};
     Map(Int, Int) m = squares(xs, 0, m0);
-    println(IntToString(m.len()) + " " + IntToString(m.get(big) else { -9 }) + " " + IntToString(m.get(big - 1) else { -9 }) + " " + IntToString(m.get(imax) else { -9 }));
+    Int shown3 = m.get(big) else { -9 };
+    Int shown4 = m.get(big - 1) else { -9 };
+    Int shown5 = m.get(imax) else { -9 };
+    println(f"{m.len()} {shown3} {shown4} {shown5}");
     Set(Int) s0 = {};
     Set(Int) s = s0.insert(big).insert(big - 1).insert(big).insert(0 - big - 1).insert(0 - big - 1);
-    println(IntToString(s.len()));
+    println(f"{s.len()}");
     Float tiny = scale(1.0, 0.1, 300);
     Float huge = scale(1.0, 10.0, 300);
     Float zero = 0.0;
@@ -52,6 +55,9 @@ Int main() {
     if (back != back) { println("nan ok"); }
     Map(Int, Float) fm0 = {};
     Map(Int, Float) fm = fm0.insert(1, tiny).insert(2, nz).insert(3, 2.5);
-    println(FloatToString(fm.get(1) else { 9.0 }) + " " + FloatToString(fm.get(2) else { 9.0 }) + " " + FloatToString(fm.get(3) else { 9.0 }));
+    Float shown6 = fm.get(1) else { 9.0 };
+    Float shown7 = fm.get(2) else { 9.0 };
+    Float shown8 = fm.get(3) else { 9.0 };
+    println(f"{shown6} {shown7} {shown8}");
     return 0;
 }

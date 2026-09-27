@@ -426,15 +426,15 @@ Str kg_dot_node(GA a, GN n) {
     Str v = if (n.value == "") { "" } else { " = " + n.value };
     Str r = if (n.reason == "") { "" } else { "\\n" + n.reason };
     Str f = if (n.facts == "") { "" } else { "\\n" + n.facts };
-    Str lab = "#" + IntToString(n.id) + " " + n.kind + v + "\\n" + n.ty + "\\n" + n.know + r + f + "\\n" + gn_where(a, n);
-    return "  n" + IntToString(n.id) + " [label=\"" + kg_dot_q(lab) + "\", fillcolor=" + kg_dot_color(n.know) + "];";
+    Str lab = f"#{n.id} " + n.kind + v + "\\n" + n.ty + "\\n" + n.know + r + f + "\\n" + gn_where(a, n);
+    return f"  n{n.id} [label=\"" + kg_dot_q(lab) + "\", fillcolor=" + kg_dot_color(n.know) + "];";
 }
 
 // Drawn nodes, edges with their targets, and the next level's ids.
 type KD = { List(Str) nodes; List(Str) edges; List(Int) to; Map(Int, Bool) seen; List(Int) next; };
 
 KD kg_edge(KD k, Int from, Int to, Str attr) {
-    return KD {.nodes = k.nodes, .edges = k.edges.concat(["  n" + IntToString(from) + " -> n" + IntToString(to) + attr + ";"]), .to = k.to.concat([to]), .seen = k.seen, .next = k.next.concat([to])};
+    return KD {.nodes = k.nodes, .edges = k.edges.concat([f"  n{from} -> n{to}" + attr + ";"]), .to = k.to.concat([to]), .seen = k.seen, .next = k.next.concat([to])};
 }
 
 KD kg_dot_deps(GN n, Int i, KD acc) {
@@ -477,7 +477,7 @@ Int kg_dot_main(Str artifact, Int id, Int depth) {
     }
     GA a = ga_load(filesystem.read_bytes(path));
     if (id < 0 || id >= a.offs.len()) {
-        eprintln("resid-graph: no node " + IntToString(id));
+        eprintln(f"resid-graph: no node {id}");
         return 1;
     }
     Map(Int, Bool) s0 = {};
@@ -536,7 +536,7 @@ Bool kc_to_source(GA a, Int id, Int n0, Int fuel) {
 KC kc_nodes(GA a, Int id, Int n0, Map(Int, Bool) reach, Map(Int, Bool) repl, KC k) {
     if (id >= a.offs.len()) { return k; }
     GN n = gn_read(a, id);
-    Str at = "#" + IntToString(id) + " " + n.kind;
+    Str at = f"#{id} " + n.kind;
     KC k1 = if (kc_deps_ok(n.deps, 0, id)) { k } else { kc_fail(k, at + ": an operand is not an earlier node") };
     KC k2 = if (n.know != "known" && n.reason == "") { kc_fail(k1, at + ": " + n.know + " without a reason") } else { k1 };
     Bool r = reach.contains(id);
@@ -567,7 +567,7 @@ Int kc_main(Str artifact) {
     Map(Int, Bool) repl = kc_reach(a, a.offs.len() - 1, kc_replaced(a, 0, r0));
     KC k = kc_nodes(a, 0, n0, reach, repl, KC {.bad = 0, .msgs = []});
     Int _m = kc_print(k.msgs, 0);
-    println("graph check: " + IntToString(a.offs.len()) + " nodes (" + IntToString(n0) + " source, " + IntToString(reach.len()) + " residual), " + IntToString(k.bad) + " violation(s)");
+    println(f"graph check: {a.offs.len()} nodes ({n0} source, {reach.len()} residual), {k.bad} violation(s)");
     return if (k.bad == 0) { 0 } else { 1 };
 }
 

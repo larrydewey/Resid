@@ -15,20 +15,20 @@ Int main() {
     }
     Option(Int) o = Some(k);
     while (Some(v) = o) {
-        println(IntToString(v + sq(2)));
+        println(f"{v + sq(2)}");
         break;
     }
     if (Some(v) = o) {
-        println(IntToString(v));
+        println(f"{v}");
     }
     Point p = Point { .x = sq(3), .y = 1 };
     Point { x, y } = p;
-    println(IntToString(x + y + t + u + w));
+    println(f"{x + y + t + u + w}");
     Int r = lim;
     for (Int i in 0..10) {
         if (i == 2) { continue; }
         if (i == r) { break; }
-        println(IntToString(i + sq(5)));
+        println(f"{i + sq(5)}");
     }
     return 0;
 }

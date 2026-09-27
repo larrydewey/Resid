@@ -45,7 +45,7 @@ for f in compiler/*.resid lib/*.resid tools/*.resid examples/*.resid tests/confo
 done
 # Resolution must reject every out-of-scope use in the scopes case.
 got="$("$COMPILER" tests/graph/cases/resolve_scopes.resid --graph-resolve 2>&1 | grep -E ':11: |^graph-resolve' | sed 's/.*:11: //' | tr '\n' ' ')"
-if [ "$got" = "q v i z inner nope graph-resolve: 34 uses, 6 unresolved " ]; then
+if [ "$got" = "q v i z inner nope graph-resolve: 31 uses, 6 unresolved " ]; then
     pass=$((pass + 1))
 else
     fail=$((fail + 1))

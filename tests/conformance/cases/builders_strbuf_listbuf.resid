@@ -1,7 +1,7 @@
 // Builds with StrBuf and ListBuf in recursive accumulators.
 StrBuf join_digits(Int i, Int n, StrBuf acc) {
     if (i >= n) { return acc; }
-    StrBuf a2 = acc.push(IntToString(i));
+    StrBuf a2 = acc.push(f"{i}");
     return join_digits(i + 1, n, a2.push_char(','));
 }
 
@@ -24,18 +24,18 @@ Int main() {
     println(join_digits(0, 5, StrBuf()).finish());
     ListBuf(Int) l0 = ListBuf();
     List(Int) xs = l0.push(1).push(2).push(3).finish();
-    println(IntToString(xs.len()) + " " + IntToString(xs[0]) + " " + IntToString(xs[2]));
+    println(f"{xs.len()} {xs[0]} {xs[2]}");
     ListBuf(Int) q0 = ListBuf();
     List(Int) qs = squares(0, 100000, q0).finish();
-    println(IntToString(qs.len()) + " " + IntToString(qs[99999]) + " " + IntToString(sum(qs, 0, 0)));
+    println(f"{qs.len()} {qs[99999]} {sum(qs, 0, 0)}");
     ListBuf(Str) w0 = ListBuf();
     List(Str) ws = w0.push("x").push("yz").finish();
-    println(ws[1] + IntToString(ws.len()));
+    println(ws[1] + f"{ws.len()}");
     ListBuf(Int(8)) e0 = ListBuf();
     List(Int(8)) es = e0.push(7).finish();
-    println(IntToString(es[0]));
+    println(f"{es[0]}");
     ListBuf(Bool) f0 = ListBuf();
     List(Bool) fs = f0.finish();
-    println(IntToString(fs.len()));
+    println(f"{fs.len()}");
     return 0;
 }

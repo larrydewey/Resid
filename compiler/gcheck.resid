@@ -170,14 +170,14 @@ GKT gk_lit(GK k, Int id, Str exp) {
         Int len = if (lk == "str") { str_literal_bytes(t) } else { raw_literal_bytes(t) };
         if (len <= cap) { return gt(k, exp, id); }
         Str what = if (lk == "str") { "string literal is " } else { "raw string is " };
-        return gterr(k, what + IntToString(len) + " bytes, exceeds Str(" + IntToString(cap) + ") capacity", id);
+        return gterr(k, what + f"{len} bytes, exceeds Str({cap}) capacity", id);
     }
     if (lk == "bytes") {
         if (!is_bytes_fixed(exp)) { return gt(k, "Bytes", id); }
         Int cap = fixed_cap(exp);
         Int len = bytes_literal_len(t);
         if (len <= cap) { return gt(k, exp, id); }
-        return gterr(k, "byte string length " + IntToString(len) + " exceeds Bytes(" + IntToString(cap) + ") capacity", id);
+        return gterr(k, f"byte string length {len} exceeds Bytes({cap}) capacity", id);
     }
     return gterr(k, "unknown literal " + t, id);
 }
@@ -375,7 +375,7 @@ GKT gk_list_at(GK k, Int id, Int i, Str want, Str elem, Str exp) {
         Int count = k.g.ns[id].nk;
         if (is_list_fixed(exp) && num_norm(fixed_elem(exp)) == num_norm(elem)) {
             Int cap = fixed_cap(exp);
-            if (count > cap) { return gterr(k, "list literal has " + IntToString(count) + " elements, exceeds List(" + elem + ", " + IntToString(cap) + ") capacity", id); }
+            if (count > cap) { return gterr(k, f"list literal has {count} elements, exceeds List(" + elem + f", {cap}) capacity", id); }
             return gt(k, exp, id);
         }
         return gt(k, "List(" + elem + ")", id);
@@ -653,7 +653,7 @@ GKT gk_lambda(GK k, Int id, Str exp) {
     Str ret = fn_ret(exp);
     Bool num_adopt = is_num(body.ty) && is_num(ret) && int_adopt_ok(body.ty, ret, "");
     if (!ty_same(body.ty, ret) && !num_adopt) { return gterr(kb, "closure body returns " + body.ty + ", expected " + ret, id); }
-    if (np != pl.len()) { return gterr(kb, "closure has " + IntToString(np) + " parameter(s), expected " + IntToString(pl.len()), id); }
+    if (np != pl.len()) { return gterr(kb, f"closure has {np} parameter(s), expected {pl.len()}", id); }
     return gt(kb, exp, id);
 }
 
@@ -2070,7 +2070,7 @@ pub GKC gk_run_cols(KP p, Str src, Str smap, Bool cols) {
 
 Str gk_def_text(List(Int) d, Int i, StrBuf acc) {
     if (i >= d.len()) { return acc.finish(); }
-    return gk_def_text(d, i + 1, acc.push(IntToString(d[i])).push_char(','));
+    return gk_def_text(d, i + 1, acc.push(f"{d[i]}").push_char(','));
 }
 
 // ─── Type coverage (tests/graph) ────────────────────────────────────
@@ -2105,7 +2105,7 @@ pub Str gk_dump_types(Kg g, GKR r, Int id, Str sb) {
     if (id >= g.ns.len()) { return str_sb_finish(sb); }
     Str t = r.ty[id];
     Int d = r.def[id];
-    Str dn = if (d >= 0) { " -> " + IntToString(d) + " " + g.ns[d].kind + " " + g.ns[d].text } else { "" };
-    Str line = if (t == "" && dn == "") { "" } else { IntToString(id) + " " + g.ns[id].kind + " " + g.ns[id].text + " : " + t + dn + "\n" };
+    Str dn = if (d >= 0) { f" -> {d} " + g.ns[d].kind + " " + g.ns[d].text } else { "" };
+    Str line = if (t == "" && dn == "") { "" } else { f"{id} " + g.ns[id].kind + " " + g.ns[id].text + " : " + t + dn + "\n" };
     return gk_dump_types(g, r, id + 1, str_sb_append(sb, line));
 }

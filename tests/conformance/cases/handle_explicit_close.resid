@@ -4,6 +4,6 @@ Int main() {
     Bool wok = filesystem.write_all(p, "data");
     File h = filesystem.open(p);
     Bool closed = filesystem.close(h);
-    println(BoolToString(closed));
+    println(f"{closed}");
     return 0;
 }

@@ -10,15 +10,15 @@ Int sq_plus(Int n, Int k) {
 Int main() {
     Int big = 9223372036854775807;
     Int low = 0 - big - 1;
-    println(IntToString(saturating_mul(big, big)));
-    println(IntToString(saturating_mul(low, big)));
-    println(IntToString(saturating_mul(low, low)));
-    println(IntToString(saturating_mul(3037000500, 3037000500)));
-    println(IntToString(wrapping_mul(big, big)));
-    println(IntToString(wrapping_add(big, 1)));
-    println(IntToString(wrapping_sub(low, 1)));
-    println(IntToString(wrapping_div(low, 0 - 1)));
-    println(IntToString(sq_plus(args.count() + 3, 5)));
-    println(IntToString(sq_plus(args.count() + 3, big)));
+    println(f"{saturating_mul(big, big)}");
+    println(f"{saturating_mul(low, big)}");
+    println(f"{saturating_mul(low, low)}");
+    println(f"{saturating_mul(3037000500, 3037000500)}");
+    println(f"{wrapping_mul(big, big)}");
+    println(f"{wrapping_add(big, 1)}");
+    println(f"{wrapping_sub(low, 1)}");
+    println(f"{wrapping_div(low, 0 - 1)}");
+    println(f"{sq_plus(args.count() + 3, 5)}");
+    println(f"{sq_plus(args.count() + 3, big)}");
     return 0;
 }

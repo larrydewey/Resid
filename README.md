@@ -49,8 +49,8 @@ Int main() {
     Bytes(4) b = b"abcd";
     List(Int, 3) xs = [10, 20, 30];
     println(s);                  // hello
-    println(IntToString(xs[2])); // 30
-    println(IntToString(xs.len())); // 3
+    println(f"{xs[2]}"); // 30
+    println(f"{xs.len()}"); // 3
     return 0;
 }
 ```

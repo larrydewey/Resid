@@ -10,7 +10,7 @@ Int main() {
     Dec(1000) f300 = fact(300, d1000(1));
     Dec(1000) f298 = fact(298, d1000(1));
     println(f"{f300:.}");
-    println(IntToString(i64(f300 / f298)));
+    println(f"{i64(f300 / f298)}");
     Dec(520) r = d520(f300);
     println(f"{r}");
     Dec(1000) back = d1000(r);
@@ -33,7 +33,7 @@ Int main() {
     Dec(599) n599 = d599(nines);
     Str s599 = f"{n599:.}";
     Bool carried = n599 == nines + d600(1);
-    println(IntToString(str_len(s599)) + f" {carried}");
+    println(f"{str_len(s599)} {carried}");
     Dec(700) tiny = d700("1e-999000");
     Dec(700) sum = d700(1) + tiny;
     Bool s1 = sum == d700(1);

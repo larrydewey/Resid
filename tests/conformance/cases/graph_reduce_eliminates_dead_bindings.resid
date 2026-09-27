@@ -8,6 +8,6 @@ Int main() {
     Int live = 40 + 2;
     Int dead_b = live * 2;
     Bool unused = println("side-effect");
-    println(IntToString(inc(live)));
+    println(f"{inc(live)}");
     return 0;
 }

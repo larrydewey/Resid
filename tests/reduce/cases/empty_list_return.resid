@@ -11,6 +11,6 @@ Int main() {
     List(Str) a = parts("");
     List(Str) b = parts("x,y");
     List(Int) c = nums(true);
-    println(IntToString(a.len()) + " " + b[1] + " " + IntToString(c.len() + nums(false).len()));
+    println(f"{a.len()} " + b[1] + f" {c.len() + nums(false).len()}");
     return 0;
 }

@@ -7,7 +7,7 @@ Str who(Int n) { return f"#{n}:{"x" + "y"}"; }
     Int big = 1000000;
     Int(128) sq = big * big;
     println(f"{sq}");
-    Str dyn = IntToString(args.count());
+    Str dyn = f"{args.count()}";
     println(f"prog {str_len(dyn)} {a} {dyn}");
     println(f"tab\tq\"{b}\"");
     return 0;

@@ -1,26 +1,26 @@
 Int main() {
     // i32 from Int(64) literal (default)
     Int(32) a = i32(42);
-    println(IntToString(a));
+    println(f"{a}");
 
     // u16 from Int(64) literal
     UInt(16) b = u16(256);
-    println(UIntToString(b));
+    println(f"{b}");
 
     // f32 from Float(64) literal (default)
     Float(32) c = f32(3.14);
-    println(FloatToString(c));
+    println(f"{c}");
 
     // f64 identity
     Float(64) d = f64(2.71);
-    println(FloatToString(d));
+    println(f"{d}");
 
     // isize / usize
     Int(64) e = 99;
-    println(IntToString(isize(e)));
+    println(f"{isize(e)}");
 
     UInt(64) f = 123;
-    println(UIntToString(usize(f)));
+    println(f"{usize(f)}");
 
     return 0;
 }

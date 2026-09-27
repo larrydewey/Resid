@@ -3,12 +3,12 @@ Int f(Int a) {
     if (a > 0) {
         Int inner = 1;
     }
-    for (Int i in 0..3) { println(IntToString(i)); }
+    for (Int i in 0..3) { println(f"{i}"); }
     Option(Int) o = Some(1);
-    if (Some(v) = o) { println(IntToString(v)); }
+    if (Some(v) = o) { println(f"{v}"); }
     Int w = match (o) { Some(q) => q, None => 0 };
     Int k = lambda(z) { z + 1 }(2);
-    println(IntToString(q + v + i + z + inner + nope));
+    println(f"{q + v + i + z + inner + nope}");
     return a;
 }
 Int main() { return f(1); }

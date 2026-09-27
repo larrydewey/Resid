@@ -213,8 +213,8 @@ Str explain(Str kind) {
 }
 
 Str location(Note n) {
-    if (n.file == "") { return "line " + IntToString(n.line); }
-    return n.file + ":" + IntToString(n.line) + ":" + IntToString(n.col + 1);
+    if (n.file == "") { return f"line {n.line}"; }
+    return n.file + f":{n.line}:{n.col + 1}";
 }
 
 Str render_text_note(Note n) {
@@ -276,7 +276,7 @@ List(KindCount) sort_kindcounts_acc(List(KindCount) xs, Int i, List(KindCount) a
 }
 List(Str) summary_lines_acc(List(KindCount) xs, Int i, List(Str) acc) {
     if (i >= xs.len()) { return acc; }
-    return summary_lines_acc(xs, i + 1, acc.concat(["  " + xs[i].kind + ": " + IntToString(xs[i].count)]));
+    return summary_lines_acc(xs, i + 1, acc.concat(["  " + xs[i].kind + f": {xs[i].count}"]));
 }
 Str render_summary(List(Note) notes) {
     List(KindCount) sorted = sort_kindcounts_acc(count_kinds_acc(notes, 0, []), 0, []);
@@ -319,8 +319,8 @@ Str lsp_item(Note n) {
     Int line0 = if (n.line > 0) { n.line - 1 } else { n.line - 0 };
     Int col0 = if (n.file == "") { 0 } else { n.col };
     Str msg = n.symbol + " @ " + location(n) + ": " + explain(n.kind);
-    Str body = "\"range\":{\"start\":{\"line\":" + IntToString(line0) + ",\"character\":" + IntToString(col0)
-        + "},\"end\":{\"line\":" + IntToString(line0) + ",\"character\":" + IntToString(col0)
+    Str body = "\"range\":{\"start\":{\"line\":" + f"{line0},\"character\":{col0}"
+        + "},\"end\":{\"line\":" + f"{line0},\"character\":{col0}"
         + "}},\"severity\":4,\"code\":\"" + json_escape(n.kind) + "\",\"source\":\"resid-why\",\"message\":\""
         + json_escape(msg) + "\"}";
     if (n.file == "") { return "{" + body; }
@@ -349,7 +349,7 @@ Int graph_main(Str artifact, Str node, Str at, Int max) {
     if (node != "") {
         Int id = parse_int_or(node, -1);
         if (id < 0 || id >= a.offs.len()) {
-            eprintln("resid-why: no node " + node + " (" + IntToString(a.offs.len()) + " nodes)");
+            eprintln("resid-why: no node " + node + f" ({a.offs.len()} nodes)");
             return 1;
         }
         return gn_chain(a, id, 0);
@@ -475,12 +475,12 @@ Int main() {
     Int _p = print_notes_text(shown, 0);
     if (shown.len() == 0) {
         if (total > 0) {
-            println("no residual notes match the query (" + IntToString(total) + " total scanned)");
+            println(f"no residual notes match the query ({total} total scanned)");
         } else {
             println("fully reduced: no residual notes");
         }
     } else {
-        println(IntToString(shown.len()) + "/" + IntToString(total) + " residual notes shown");
+        println(f"{shown.len()}/{total} residual notes shown");
     }
     return 0;
 }

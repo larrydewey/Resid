@@ -3,7 +3,7 @@ Int fact(Int n) {
 }
 
 Int main() {
-    println(IntToString(fact(10)));
-    println(IntToString(fact(20)));
+    println(f"{fact(10)}");
+    println(f"{fact(20)}");
     return 0;
 }

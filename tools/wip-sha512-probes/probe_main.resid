@@ -6,9 +6,9 @@ Str rep(Str acc, Int n) {
 }
 Int main() {
     List(Int) m = bytes_of(rep("", 100));
-    println(IntToString(m.len()));
+    println(f"{m.len()}");
     List(Int) p = pad512(m);
-    println(IntToString(p.len()));
+    println(f"{p.len()}");
     List(Int) st = digest_block512f(p, 0, h512_state());
     println("b0");
     List(Int) st2 = digest_block512f(p, 128, st);

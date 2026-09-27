@@ -353,6 +353,6 @@ Int main() {
 
     List(Str) out = base.concat(banner).concat(chunk_t).concat([""]).concat(tail);
     filesystem.write_all("compiler/driver.resid", str_join(out, "\n") + "\n");
-    println("wrote compiler/driver.resid (" + IntToString(out.len()) + " lines)");
+    println(f"wrote compiler/driver.resid ({out.len()} lines)");
     return 0;
 }

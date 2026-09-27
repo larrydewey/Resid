@@ -77,7 +77,7 @@ Str fmt9(Float v) {
     Int ip2 = if (q2 >= 1000000000) { ip + 1 } else { ip };
     Int q3 = if (q2 >= 1000000000) { q2 - 1000000000 } else { q2 };
     Str sign = if (neg) { "-" } else { "" };
-    return sign + IntToString(ip2) + "." + pad_digits(IntToString(q3), 9);
+    return sign + f"{ip2}." + pad_digits(f"{q3}", 9);
 }
 
 // ---- simulation ---------------------------------------------------------

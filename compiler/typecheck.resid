@@ -574,7 +574,7 @@ Str imp_resolve_target(Str dir, Str name, Str depmap) {
 // function ever returns.
 @requires(filesystem(readonly))
 RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done, Int depth, Str depmap, Str path, Int ml) {
-    Str m0 = IntToString(ml) + " 1 " + path + "\n";
+    Str m0 = f"{ml} 1 " + path + "\n";
     return imp_resolve_lines_a(lines, i, n, dir, sb, done, depth, depmap, "", path, ml, ml, m0);
 }
 
@@ -619,7 +619,7 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         Str sb2 = str_sb_append(sb, sub.text);
         Str al2 = if (alias == "") { aliases } else { aliases + ";" + alias + ";" };
         Int ml2 = ml + sub.nl;
-        Str map2 = map + sub.map + IntToString(ml2) + " " + IntToString(i + 2) + " " + path + "\n";
+        Str map2 = map + sub.map + f"{ml2} {i + 2} " + path + "\n";
         return imp_resolve_lines_a(lines, ni2, n, dir, sb2, sub.done, depth, depmap, al2, path, ml0, ml2, map2);
     }
     Int ni3 = i + 1;
@@ -668,6 +668,8 @@ pub Str imp_unalias_at(Str t, Int i, Int n, Str aliases, Bool inq, Str acc) {
         if (c == 92 && i + 1 < n) { return imp_unalias_at(t, i + 2, n, aliases, true, acc + str_slice(t, i, i + 2)); }
         return imp_unalias_at(t, i + 1, n, aliases, c != 34, acc + str_from_code(c));
     }
+    Bool fq = c == 34 && i > 0 && str_char_at(t, i - 1) == 102 && (i < 2 || !is_alnum(str_char_at(t, i - 2)));
+    if (fq) { return imp_unalias_fs(t, i + 1, n, aliases, acc + "\""); }
     if (c == 34) { return imp_unalias_at(t, i + 1, n, aliases, true, acc + "\""); }
     Bool prev_ident = i > 0 && (is_alnum(str_char_at(t, i - 1)) || str_char_at(t, i - 1) == 46);
     if (is_alpha(c) && !prev_ident) {
@@ -678,6 +680,19 @@ pub Str imp_unalias_at(Str t, Int i, Int n, Str aliases, Bool inq, Str acc) {
         return imp_unalias_at(t, e, n, aliases, false, acc + w);
     }
     return imp_unalias_at(t, i + 1, n, aliases, false, acc + str_from_code(c));
+}
+
+// The rest of an f-string: qualifiers dropped inside its holes.
+pub Str imp_unalias_fs(Str t, Int i, Int n, Str aliases, Str acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(t, i);
+    if (c == 92 && i + 1 < n) { return imp_unalias_fs(t, i + 2, n, aliases, acc + str_slice(t, i, i + 2)); }
+    if (c == 34) { return imp_unalias_at(t, i + 1, n, aliases, false, acc + "\""); }
+    if (c != 123) { return imp_unalias_fs(t, i + 1, n, aliases, acc + str_from_code(c)); }
+    Int e = fstring_hole_end(t, i + 1, n, 1);
+    if (e < 0) { return acc + str_slice(t, i, n); }
+    Str hole = imp_unalias(str_slice(t, i + 1, e), aliases);
+    return imp_unalias_fs(t, e + 1, n, aliases, acc + "{" + hole + "}");
 }
 
 // ─── Module visibility (spec §22) ───────────────────────────────
@@ -755,7 +770,25 @@ pub Str imp_rename(Str s, Int pos, Str hidden, Str prefix, Str sb, Int copied, S
         Str sb2 = str_sb_append(str_sb_append(sb, str_slice(s, copied, st)), prefix + t.text);
         return imp_rename(s, t.pos, hidden, prefix, sb2, t.pos, t.text);
     }
+    if (t.kind == "fstring" && str_contains(t.text, "{")) {
+        Int fs = t.pos - str_len(t.text);
+        Str sb3 = str_sb_append(str_sb_append(sb, str_slice(s, copied, fs)), imp_rename_holes(t.text, 0, hidden, prefix, ""));
+        return imp_rename(s, t.pos, hidden, prefix, sb3, t.pos, t.text);
+    }
     return imp_rename(s, t.pos, hidden, prefix, sb, copied, t.text);
+}
+
+// An f-string token with hidden identifiers in its holes renamed.
+pub Str imp_rename_holes(Str t, Int i, Str hidden, Str prefix, Str acc) {
+    Int n = str_len(t);
+    if (i >= n) { return acc; }
+    Int c = str_char_at(t, i);
+    if (c == 92) { return imp_rename_holes(t, i + 2, hidden, prefix, acc + str_slice(t, i, i + 2)); }
+    if (c != 123) { return imp_rename_holes(t, i + 1, hidden, prefix, acc + str_from_code(c)); }
+    Int e = fstring_hole_end(t, i + 1, n, 1);
+    if (e < 0) { return acc + str_slice(t, i, n); }
+    Str hole = str_sb_finish(imp_rename(str_slice(t, i + 1, e), 0, hidden, prefix, str_sb_new(), 0, ""));
+    return imp_rename_holes(t, e + 1, hidden, prefix, acc + "{" + hole + "}");
 }
 
 pub Str imp_apply_vis(Str src, Str vis, Str path) {
@@ -780,7 +813,7 @@ pub Str loc_rewrite_at(List(Str) parts, Int i, Str path, Str orig, Str acc) {
     List(Str) ls = str_split(orig, "\n");
     Int col = str_len(ls[ls.len() - 1]) + 1;
     Str esc = str_replace(str_replace(path, "\\", "\\\\"), "\"", "\\\"");
-    Str lit = "SourceLoc { .file = \"" + esc + "\", .line = " + IntToString(line) + ", .col = " + IntToString(col) + " }";
+    Str lit = "SourceLoc { .file = \"" + esc + f"\", .line = {line}, .col = {col}" + " }";
     Str orig2 = orig + "#location" + parts[i];
     // Inside a string literal or after `//` on its line it is just text.
     Str cur = ls[ls.len() - 1];
@@ -887,7 +920,7 @@ Str render_caret(Str s, Int line, Int gl, Int col_start, Int col_end, Str label)
     Int n = str_len(s);
     Str src_line = get_line_at(s, 0, 1, line);
     if (src_line == "") { return ""; }
-    Str gutter = IntToString(gl) + " | ";
+    Str gutter = f"{gl} | ";
     Int(64) one = 1;
     Int caret_len = if (col_end > col_start) { col_end - col_start } else { one };
     Str carets = diag_str_repeat("^", caret_len);
@@ -928,7 +961,7 @@ Void diag_error(Str code, Str msg, Int pos, Int col_len, Str s, Str smap, Int lb
     Int col = pi.col;
     println("error[" + code + "]: " + msg);
     DiagAt at = diag_where(smap, line + lbase);
-    if (line > 0 && at.path != "") { println("  --> " + at.path + ":" + IntToString(at.line) + ":" + IntToString(col)); }
+    if (line > 0 && at.path != "") { println("  --> " + at.path + f":{at.line}:{col}"); }
     Int gl = if (at.path == "") { line } else { at.line };
     if (line > 0) {
         Str caret = render_caret(s, line, gl, col, col + col_len, "");
@@ -982,7 +1015,7 @@ Funcs funcs_empty() {
 
 // Build a "funcname:paramidx" lookup key for the `growable` map.
 Str growable_key(Str fname, Int paramidx) {
-    return fname + ":" + IntToString(paramidx);
+    return fname + f":{paramidx}";
 }
 
 // Behavior declaration probe: `Ord(Point) = by_y;` starting at an ident
@@ -1334,7 +1367,7 @@ pub Str int_bin_result(Str op, Str a, Str b) {
     Int mx = if (aw > bw) { aw } else { bw };
     Str fam = if (signed_ty(a)) { "Int(" } else { "UInt(" };
     // Every operator yields the widest operand width; overflow traps (§6.1).
-    return fam + IntToString(mx) + ")";
+    return fam + f"{mx})";
 }
 
 // Value-preserving integer widening (spec §6.4): same signedness and no
@@ -1377,7 +1410,7 @@ Str float_bin_result(Str a, Str b) {
     Int fa = float_bits(a);
     Int fb = float_bits(b);
     Int w = if (fa > fb) { fa } else { fb };
-    return "Float(" + IntToString(w) + ")";
+    return f"Float({w})";
 }
 
 Bool is_dec_ty(Str t) {
@@ -1443,7 +1476,7 @@ Str bin_type(Str op, Str a, Str b) {
         Int pa = dec_prec(a);
         Int pb = dec_prec(b);
         Int pm = if (pa > pb) { pa } else { pb };
-        return "Dec(" + IntToString(pm) + ")";
+        return f"Dec({pm})";
     }
     if (op == "==" || op == "!=") {
         Bool sam = ty_same(a, b);
@@ -1807,18 +1840,6 @@ pub Str conv_helper_type(Str name) {
     return "";
 }
 
-// Widest argument type accepted by a wide display builtin, or "".
-pub Str wide_tostr_arg(Str name) {
-    if (name == "Int128ToString") { return "Int(128)"; }
-    if (name == "Int256ToString") { return "Int(256)"; }
-    if (name == "Int512ToString") { return "Int(512)"; }
-    if (name == "UInt128ToString") { return "UInt(128)"; }
-    if (name == "UInt256ToString") { return "UInt(256)"; }
-    if (name == "UInt512ToString") { return "UInt(512)"; }
-    if (name == "Float128ToString") { return "Float(128)"; }
-    return "";
-}
-
 // Runtime primitives (compiler-only): argument and result types.
 ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
     Str want = if (str_starts_with(op, "load")) { "Int" } else { if (str_starts_with(op, "store") || op == "fetch_add") { "Int,Int" } else { if (op == "copy" || op == "fill" || op == "cas") { "Int,Int,Int" } else { if (op == "syscall") { "Int,Int,Int,Int,Int,Int,Int" } else { if (op == "str" || op == "bits_f64") { "Int" } else { if (op == "f64_bits") { "Float" } else { if (op == "global" || op == "tls") { "Str,Int" } else { if (op == "fn") { "Str" } else { if (op == "call2") { "Int,Int,Int" } else { if (op == "addr") { "*" } else { if (op == "table") { "List(Int)" } else { if (op == "f128_bits") { "Float(128)" } else { if (op == "bits_f128") { "Int(128)" } else { "?" } } } } } } } } } } } } };
@@ -1873,38 +1894,6 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
             return ERes {.pos = pos, .ty = "", .err = "eprintln expects Str, got " + argtys};
         }
         return ERes {.pos = pos, .ty = "", .err = "eprintln expects 1 argument"};
-    }
-    if (name == "IntToString") {
-        if (argc == 1) {
-            if (argtys == "Int" || str_has_prefix(argtys, "Int(")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
-            return ERes {.pos = pos, .ty = "", .err = "IntToString expects Int, got " + argtys};
-        }
-        return ERes {.pos = pos, .ty = "", .err = "IntToString expects 1 argument"};
-    }
-    if (name == "UIntToString") {
-        if (argc == 1) {
-            if (argtys == "UInt" || str_has_prefix(argtys, "UInt(")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
-            return ERes {.pos = pos, .ty = "", .err = "UIntToString expects UInt, got " + argtys};
-        }
-        return ERes {.pos = pos, .ty = "", .err = "UIntToString expects 1 argument"};
-    }
-    if (name == "FloatToString") {
-        if (argc == 1) {
-            if (argtys == "Float" || str_has_prefix(argtys, "Float(")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
-            return ERes {.pos = pos, .ty = "", .err = "FloatToString expects Float, got " + argtys};
-        }
-        return ERes {.pos = pos, .ty = "", .err = "FloatToString expects 1 argument"};
-    }
-    if (name == "BoolToString") {
-        if (argc == 1) {
-            if (argtys == "Bool") { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
-            return ERes {.pos = pos, .ty = "", .err = "BoolToString expects Bool, got " + argtys};
-        }
-        return ERes {.pos = pos, .ty = "", .err = "BoolToString expects 1 argument"};
-    }
-    if (name == "ToString") {
-        if (argc == 1) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "ToString expects 1 argument"};
     }
     if (name == "str_len") {
         if (argc == 1) {
@@ -2267,17 +2256,6 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         Bool num_arg = dec_arg || (argc == 1 && !to_dec && is_num(ca));
         if (num_arg) { return ERes {.pos = pos, .ty = conv_to, .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects one numeric argument, got (" + rawtys + ")"};
-    }
-    // Wide-integer display builtins (spec §32).
-    Str wts = wide_tostr_arg(name);
-    if (wts != "") {
-        Str wa1 = num_norm(str_trim(rawtys));
-        Bool want_f = is_float_ty(wts);
-        Bool f_ok = want_f && is_float_ty(wa1);
-        Bool i_ok = !want_f && is_int_ty(wa1) && signed_ty(wa1) == signed_ty(wts);
-        Bool w_ok = argc == 1 && (f_ok || i_ok);
-        if (w_ok) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = name + " expects " + wts + ", got " + rawtys};
     }
     // ── Option constructors (spec §10) ─────────────────────────────
     // `Some(v)` carries its payload type: `Some(42)` -> Option(Int).

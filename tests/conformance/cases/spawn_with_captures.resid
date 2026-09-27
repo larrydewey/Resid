@@ -8,6 +8,6 @@ Int main() {
         Ok(n) => n,
         Err(e) => 0,
     };
-    println(IntToString(out));
+    println(f"{out}");
     return 0;
 }

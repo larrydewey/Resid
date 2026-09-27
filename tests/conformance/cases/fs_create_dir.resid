@@ -1,7 +1,8 @@
 @requires(filesystem)
 Int main() {
     Bool ok = filesystem.create_dir("@TMP@/newdir");
-    println(BoolToString(ok));
-    println(BoolToString(filesystem.is_dir("@TMP@/newdir")));
+    println(f"{ok}");
+    Bool shown1 = filesystem.is_dir("@TMP@/newdir");
+    println(f"{shown1}");
     return 0;
 }

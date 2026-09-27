@@ -13,10 +13,10 @@ Str greet(Str who, Bool loud) {
 Int forever(Int a) { return forever(a); }
 Int main() {
     Int x = rt 3;
-    println(IntToString(power(x, 5)));
-    println(IntToString(count_up(0, x, 0)));
+    println(f"{power(x, 5)}");
+    println(f"{count_up(0, x, 0)}");
     println(greet(rt "bob", true));
     println(greet(rt "amy", false));
-    if (x > 100) { println(IntToString(forever(1))); }
+    if (x > 100) { println(f"{forever(1)}"); }
     return 0;
 }

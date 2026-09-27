@@ -1,7 +1,7 @@
 // Loop regions (lr_region in lower.resid): a tail-call loop frees each
 // iteration's allocations when the next starts. Strings stored in the
 // maps and sets it carries must survive (they are copied out).
-Str word(Int i) { return "w" + IntToString((i * 7919) % 50) + "-" + IntToString(i % 3); }
+Str word(Int i) { return f"w{(i * 7919) % 50}-{i % 3}"; }
 
 Map(Str, Int) count(Int i, Int n, Map(Str, Int) m) {
     if (i >= n) { return m; }
@@ -13,7 +13,7 @@ Map(Str, Int) count(Int i, Int n, Map(Str, Int) m) {
 // String values, overwritten across iterations.
 Map(Int, Str) names(Int i, Int n, Map(Int, Str) m) {
     if (i >= n) { return m; }
-    return names(i + 1, n, m.insert(i % 10, "v" + IntToString(i)));
+    return names(i + 1, n, m.insert(i % 10, f"v{i}"));
 }
 
 Map(Str, Str) pairs(Int i, Int n, Map(Str, Str) m) {
@@ -24,13 +24,13 @@ Map(Str, Str) pairs(Int i, Int n, Map(Str, Str) m) {
 // Big: past the table-copy size, and a shared start (trie transient).
 Set(Str) many(Int i, Int n, Set(Str) s) {
     if (i >= n) { return s; }
-    return many(i + 1, n, s.insert("k" + IntToString(i)));
+    return many(i + 1, n, s.insert(f"k{i}"));
 }
 
 // A read-only loop over a map, allocating temporaries.
 Int hits(Set(Str) s, Int i, Int n, Int acc) {
     if (i >= n) { return acc; }
-    Int h = if (s.contains("k" + IntToString(i * 3))) { 1 } else { 0 };
+    Int h = if (s.contains(f"k{i * 3}")) { 1 } else { 0 };
     return hits(s, i + 1, n, acc + h);
 }
 
@@ -43,7 +43,7 @@ Map(Str, Int) outer(Int i, Int n, Map(Str, Int) m) {
 // Changed Str parameter: no region (the string lives on).
 Str join(Int i, Int n, Str acc) {
     if (i >= n) { return acc; }
-    return join(i + 1, n, acc + IntToString(i));
+    return join(i + 1, n, acc + f"{i}");
 }
 
 Str keys_str(List(Str) ks, Int i, Str acc) {

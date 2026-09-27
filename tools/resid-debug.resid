@@ -42,12 +42,12 @@ DB db_with(DB d, List(Str) brk, Int stops, Int steps, Str backend) {
 // "file:line:col" of a span start.
 Str db_key(GA a, List(Int) sp) {
     Str f = if (sp[0] < a.paths.len()) { a.paths[sp[0]] } else { "?" };
-    return f + ":" + IntToString(sp[1]) + ":" + IntToString(sp[2]);
+    return f + f":{sp[1]}:{sp[2]}";
 }
 
 Str db_line_key(GA a, List(Int) sp) {
     Str f = if (sp[0] < a.paths.len()) { a.paths[sp[0]] } else { "?" };
-    return f + ":" + IntToString(sp[1]);
+    return f + f":{sp[1]}";
 }
 
 // The node lowered at each place: the latest node starting there (parents
@@ -72,11 +72,11 @@ Str db_path(GA a, Str f) {
 Int db_row_node(DB d, LRow r) {
     if (r.line == 0 || r.end) { return -1; }
     Str f = db_path(d.a, r.file);
-    Str k = f + ":" + IntToString(r.line) + ":" + IntToString(r.col);
+    Str k = f + f":{r.line}:{r.col}";
     if (d.at.contains(k)) { return d.at.get(k) else { -1 }; }
-    Str k1 = f + ":" + IntToString(r.line) + ":1";
+    Str k1 = f + f":{r.line}:1";
     if (r.col == 0 && d.at.contains(k1)) { return d.at.get(k1) else { -1 }; }
-    return d.at.get(f + ":" + IntToString(r.line)) else { -1 };
+    return d.at.get(f + f":{r.line}") else { -1 };
 }
 
 // The node at a code address: its row's, or the nearest earlier row's in
@@ -126,7 +126,7 @@ Int db_say(Str s, Int rc) {
 Int db_node(DB d, Str arg) {
     Int id = if (str_is_int(arg)) { str_parse_int(arg) } else { -1 };
     if (id < 0 || id >= d.a.offs.len()) {
-        println("no node " + arg + " (" + IntToString(d.a.offs.len()) + " nodes)");
+        println("no node " + arg + f" ({d.a.offs.len()} nodes)");
         return 1;
     }
     return gn_chain(d.a, id, 0);
@@ -145,7 +145,7 @@ Int db_kids(DB d, Str arg) {
 
 Int db_kids_at(DB d, List(Int) ks, Int i) {
     if (i >= ks.len()) { return 0; }
-    println("  " + IntToString(i) + ": " + gn_line(d.a, gn_read(d.a, ks[i])));
+    println(f"  {i}: " + gn_line(d.a, gn_read(d.a, ks[i])));
     return db_kids_at(d, ks, i + 1);
 }
 
@@ -175,7 +175,7 @@ Int db_last_colon(Str s, Int i) {
 // `lowered [FN]`: the lowered table, rows merged while the node repeats.
 Int db_lowered(DB d, Str only) {
     Int n = db_low_at(d, only, 0, -1, -1, "");
-    println(IntToString(n) + " range(s)");
+    println(f"{n} range(s)");
     return 0;
 }
 
@@ -183,7 +183,7 @@ Str db_low_row(DB d, Int node, Int lo, Int hi) {
     Int k = el_func_at(d.ys, lo, 0);
     Str sym = if (k < 0) { "?" } else { d.ys[k].name };
     Int base = if (k < 0) { 0 } else { d.ys[k].value };
-    return "#" + IntToString(node) + " " + db_demangle(sym) + " [" + el_hex(lo - base) + ", " + el_hex(hi - base) + ")";
+    return f"#{node} " + db_demangle(sym) + " [" + el_hex(lo - base) + ", " + el_hex(hi - base) + ")";
 }
 
 Bool db_in_fn(DB d, Int addr, Str only) {
@@ -207,7 +207,7 @@ Int db_low_at(DB d, Str only, Int i, Int node, Int lo, Str acc) {
 // `check`: rows with a source line that map to no node.
 Int db_check(DB d) {
     Int bad = db_check_at(d, 0, 0, 0);
-    println("lowered check: " + IntToString(d.rows.len()) + " row(s), " + IntToString(bad) + " without a node");
+    println(f"lowered check: {d.rows.len()} row(s), {bad} without a node");
     return if (bad == 0) { 0 } else { 1 };
 }
 
@@ -215,7 +215,7 @@ Int db_check_at(DB d, Int i, Int bad, Int shown) {
     if (i >= d.rows.len()) { return bad; }
     LRow r = d.rows[i];
     Bool miss = !r.end && r.line > 0 && db_row_node(d, r) < 0;
-    Int _p = if (miss && shown < 10) { db_say("  no node for " + r.file + ":" + IntToString(r.line) + ":" + IntToString(r.col) + " at " + el_hex(r.addr), 0) } else { 0 };
+    Int _p = if (miss && shown < 10) { db_say("  no node for " + r.file + f":{r.line}:{r.col} at " + el_hex(r.addr), 0) } else { 0 };
     return db_check_at(d, i + 1, if (miss) { bad + 1 } else { bad }, if (miss) { shown + 1 } else { shown });
 }
 
@@ -250,8 +250,8 @@ Int db_info(DB d) {
     Str want = if (k < 0) { "" } else { ga_hex(el_read_addr(d.b, d.ss, d.ys[k].value, 32), 0, StrBuf()) };
     Str got = ga_hex(filesystem.sha256(d.bin + ".resid-graph.cbor"), 0, StrBuf());
     Str hs = if (want == "") { "no resid_graph_hash in the binary" } else if (want == got) { "matches the binary" } else { "MISMATCH (binary " + str_slice(want, 0, 16) + ", artifact " + str_slice(got, 0, 16) + ")" };
-    println("binary " + d.bin + ": " + IntToString(d.ys.len()) + " symbols, " + IntToString(d.rows.len()) + " line rows");
-    println("graph " + IntToString(d.a.offs.len()) + " nodes over " + IntToString(d.a.paths.len()) + " file(s); hash " + hs);
+    println("binary " + d.bin + f": {d.ys.len()} symbols, {d.rows.len()} line rows");
+    println(f"graph {d.a.offs.len()} nodes over {d.a.paths.len()} file(s); hash " + hs);
     return if (want != "" && want != got) { 1 } else { 0 };
 }
 
@@ -348,7 +348,7 @@ Int db_folded(DB d, List(Int) at, Int i, Int shown) {
 
 Int db_report(DB d, ST s, Int k) {
     Int n = db_pc_node(d, s.pc);
-    println("stop " + IntToString(k) + " at " + db_fn_at(d, s.pc) + " (" + el_hex(s.pc) + ")");
+    println(f"stop {k} at " + db_fn_at(d, s.pc) + " (" + el_hex(s.pc) + ")");
     if (n < 0) {
         println("  no node (runtime or compiler-made code)");
         return 0;
@@ -399,7 +399,7 @@ Int db_run(DB d, Str args) {
     Int bias = if (mk < 0) { 0 } else { db_main_at(ls, 0) - d.ys[mk].value };
     List(ST) ss = db_unbias(db_parse_log(ls, 0, -1, nb, false, ns), bias, 0, ListBuf());
     if (ss.len() == 0) {
-        println("the program did not stop (gdb exit " + IntToString(rc) + ")");
+        println(f"the program did not stop (gdb exit {rc})");
     }
     Int n = db_reports(d, ss, 0, 0, -2);
     Str out = filesystem.read_all(d.bin + ".rdbg.out");
@@ -416,7 +416,7 @@ type NT = { Int pid; Int bias; List(Int) bps; Map(Int, Int) saved; Int shown; In
 // Where the binary is mapped (its first mapping, file offset 0).
 @requires(filesystem(readonly))
 Int db_bias(Str bin, Int pid) {
-    List(Str) ls = str_split(filesystem.read_all("/proc/" + IntToString(pid) + "/maps"), "\n");
+    List(Str) ls = str_split(filesystem.read_all(f"/proc/{pid}/maps"), "\n");
     Int sl = db_last_slash(bin, str_len(bin) - 1);
     Str base = str_slice(bin, sl + 1, str_len(bin));
     return db_bias_at(ls, "/" + base, 0);
@@ -483,7 +483,7 @@ List(Int) db_line_rows(DB d, Str f, Int line, Int i, Int fn, ListBuf(Int) acc) {
 List(Int) db_all_bps(DB d, Int i, List(Int) acc) {
     if (i >= d.brk.len()) { return acc; }
     List(Int) as = db_bp_addrs(d, d.brk[i]);
-    Int _w = if (as.len() == 0) { db_say("breakpoint " + IntToString(i + 1) + ": no code for " + d.brk[i], 0) } else { 0 };
+    Int _w = if (as.len() == 0) { db_say(f"breakpoint {i + 1}: no code for " + d.brk[i], 0) } else { 0 };
     return db_all_bps(d, i + 1, acc.concat(as));
 }
 
@@ -609,7 +609,7 @@ Str db_cstr(Int t, Int p, Int i, StrBuf acc) {
 Str db_render(Int t, Str ty, DL l) {
     if (l.kind == 0) { return "<optimized out>"; }
     Int w = if (l.kind == 1) { resid_dbg_peek(t, l.v) } else { l.v };
-    if (ty == "Int") { return IntToString(w); }
+    if (ty == "Int") { return f"{w}"; }
     if (ty == "Bool") { return if ((w & 255) != 0) { "true" } else { "false" }; }
     if (ty == "Float") { return resid_dbg_f64(w); }
     if (ty == "char *") { return if (w == 0) { "0x0" } else { db_cstr(t, w, 0, StrBuf().push_char(34)) }; }
@@ -741,11 +741,11 @@ NT db_nsteps(DB d, NT n, Int t, Int k) {
 @requires(process)
 Int db_nloop(DB d, NT n) {
     Int t = resid_dbg_wait();
-    if (t < 0) { return db_say("program exited with code " + IntToString(resid_dbg_exit_code()), 0); }
+    if (t < 0) { return db_say(f"program exited with code {resid_dbg_exit_code()}", 0); }
     Int pc = resid_dbg_reg(t, 16);
     Int sig = resid_dbg_signal();
     if (sig != 0) {
-        println("program received signal " + IntToString(sig));
+        println(f"program received signal {sig}");
         NT ns = db_nreport(d, n, t, pc, false);
         Bool c = resid_dbg_cont(t, sig);
         return db_nloop(d, ns);
@@ -805,7 +805,7 @@ CR db_cmd(DB d, Str line0) {
     if (c == "" || str_starts_with(c, "#")) { return CR {.d = d, .rc = 0, .quit = false}; }
     if (c == "quit" || c == "q") { return CR {.d = d, .rc = 0, .quit = true}; }
     if (c == "break" || c == "b") {
-        println("breakpoint " + IntToString(d.brk.len() + 1) + " at " + arg);
+        println(f"breakpoint {d.brk.len() + 1} at " + arg);
         return CR {.d = db_with(d, d.brk.concat([arg]), d.stops, d.steps, d.backend), .rc = 0, .quit = false};
     }
     if (c == "stops" || c == "step") {

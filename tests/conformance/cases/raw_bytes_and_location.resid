@@ -5,7 +5,7 @@ Int main() {
     Bytes b = b"bytes";
     SourceLoc loc = #location;
     println(loc.file);
-    println(IntToString(loc.line));
-    println(IntToString(loc.col));
+    println(f"{loc.line}");
+    println(f"{loc.col}");
     return 0;
 }

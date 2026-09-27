@@ -52,7 +52,7 @@ Bool rows(Int y, Int w, Float fw) {
 Int main() {
     Int w = str_parse_int(args.get(1));
     Float fw = (Float)w;
-    print("P4\n" + IntToString(w) + " " + IntToString(w) + "\n");
+    print(f"P4\n{w} {w}\n");
     Bool ok = rows(0, w, fw);
     return if (ok) { 0 } else { 1 };
 }

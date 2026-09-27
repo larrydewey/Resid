@@ -382,7 +382,7 @@ H2Result h2_collect(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) acc,
     List(Int) rd = rr.data;
     Int rl = rd.len();
     Int rc = rr.ctype;
-    println("COLLECT seq=" + IntToString(seq) + " len=" + IntToString(rl) + " ct=" + IntToString(rc));
+    println(f"COLLECT seq={seq} len={rl} ct={rc}");
     if (rr.eof || rr.alert) {
         return H2Result {.status = "", .body = ""};
     }
@@ -585,7 +585,7 @@ Int main() {
     H2Scan scan = h2_scan(fd, s_ap_key, s_ap_iv, 0, [], 8);
     if (scan.eof) { println("H2-EOF"); return 1; }
     if (!scan.found) { println("NO-SERVER-SETTINGS"); return 1; }
-    println("SERVER-SETTINGS n=" + IntToString(scan.scount));
+    println(f"SERVER-SETTINGS n={scan.scount}");
 
     // ACK the server settings: empty SETTINGS with ACK flag 0x01.
     List(Int) ack = h2_frame(h2_t_settings(), 1, 0, []);
@@ -632,7 +632,7 @@ Int main() {
     Bool hasbody = str_len(body) > 0;
     Int hflags = h2_pick(hasbody, 0, 1);
     Int blkl = blk.len();
-    println("REQ method=" + method + " path=" + path + " blklen=" + IntToString(blkl) + " bodylen=" + IntToString(str_len(body)));
+    println("REQ method=" + method + " path=" + path + f" blklen={blkl} bodylen={str_len(body)}");
     List(Int) hdrs = h2_headers_cont_frames(1, hflags, blk);
     List(Int) payb = str_to_bytes(body);
     List(Int) dframes = h2_data_frames(1, payb, true);

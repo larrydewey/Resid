@@ -1,9 +1,9 @@
 Int main() {
     Int(32) d = i32(rt 70000);
     Int(64) e = (Int(64))d * d;
-    println(IntToString(e));
+    println(f"{e}");
     Int(32) f = d * 2;
-    println(IntToString(i64(f)));
+    println(f"{i64(f)}");
     Int(32) g = d * d;
     println("unreachable");
     return 0;

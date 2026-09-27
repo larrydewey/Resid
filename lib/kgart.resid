@@ -100,7 +100,7 @@ pub List(Str) ch_texts_at(List(Int) b, Int pos, Int n, ListBuf(Str) acc) {
 // A value (for a node's `value`) rendered as text.
 pub Str ch_show(List(Int) b, Int pos) {
     CH h = ch_read(b, pos);
-    if (h.major == 0 || h.major == 1) { return IntToString(ch_int(b, pos)); }
+    if (h.major == 0 || h.major == 1) { return f"{ch_int(b, pos)}"; }
     if (h.major == 3) { return "\"" + ch_text(b, pos) + "\""; }
     if (h.major == 7) { return if (h.arg == 21) { "true" } else { if (h.arg == 20) { "false" } else { "?" } }; }
     return "...";
@@ -140,7 +140,7 @@ pub Str gn_reason(List(Int) b, Int p) {
     Int dp = ch_field(b, p, "dep");
     Int tp = ch_field(b, p, "detail");
     Str d = if (tp < 0) { "" } else { "(" + ch_text(b, tp) + ")" };
-    Str dep = if (dp < 0) { "" } else { " on #" + IntToString(ch_int(b, dp)) };
+    Str dep = if (dp < 0) { "" } else { f" on #{ch_int(b, dp)}" };
     return k + d + dep;
 }
 
@@ -159,7 +159,7 @@ pub Str gn_facts_at(List(Int) b, Int pos, Int n, Str acc) {
     Int hi = ch_field(b, pos, "hi");
     Int tg = ch_field(b, pos, "tag");
     Int ns = ch_field(b, pos, "nodes");
-    Str r = if (lo >= 0 && hi >= 0) { " [" + IntToString(ch_int(b, lo)) + ", " + IntToString(ch_int(b, hi)) + "]" } else { "" };
+    Str r = if (lo >= 0 && hi >= 0) { f" [{ch_int(b, lo)}, {ch_int(b, hi)}]" } else { "" };
     Str t = if (tg >= 0) { " " + ch_text(b, tg) } else { "" };
     List(Int) ids = if (ns >= 0) { ch_ints(b, ns) } else { [] };
     Str word = if (k == "discharged") { " using" } else if (k == "check") { " lacking" } else { "" };
@@ -170,7 +170,7 @@ pub Str gn_facts_at(List(Int) b, Int pos, Int n, Str acc) {
 
 pub Str gn_ids(List(Int) ids, Int i, Str acc) {
     if (i >= ids.len()) { return acc; }
-    return gn_ids(ids, i + 1, acc + " #" + IntToString(ids[i]));
+    return gn_ids(ids, i + 1, acc + f" #{ids[i]}");
 }
 
 pub GN gn_read(GA a, Int id) {
@@ -185,7 +185,7 @@ pub GN gn_read(GA a, Int id) {
 pub Str gn_where(GA a, GN n) {
     Int fi = n.span[0];
     Str f = if (fi < a.paths.len()) { a.paths[fi] } else { "?" };
-    return f + ":" + IntToString(n.span[1]) + ":" + IntToString(n.span[2]);
+    return f + f":{n.span[1]}:{n.span[2]}";
 }
 
 // `#id kind: Type knowledge [= value] [because ...] [facts ...]`.
@@ -195,9 +195,9 @@ pub Str gn_line(GA a, GN n) {
     Str r = if (n.reason == "") { "" } else { ", " + n.reason };
     Str f = if (n.facts == "") { "" } else { ", " + n.facts };
     Str e = if (n.effects.len() == 0) { "" } else { " effects " + str_join(n.effects, ",") };
-    Str d = if (n.from < 0) { "" } else { " <- " + n.rule + " #" + IntToString(n.from) };
+    Str d = if (n.from < 0) { "" } else { " <- " + n.rule + f" #{n.from}" };
     Str nm = if (n.name == "") { "" } else { " " + n.name };
-    return "#" + IntToString(n.id) + " " + n.kind + nm + ty + " " + n.know + v + r + f + e + d + " @ " + gn_where(a, n);
+    return f"#{n.id} " + n.kind + nm + ty + " " + n.know + v + r + f + e + d + " @ " + gn_where(a, n);
 }
 
 // The node, then each node it derives from back to a source node.
@@ -292,7 +292,7 @@ pub Int ga_sym_at(GA a, List(GI) ix, Str name, List(Int) ds, Int i, Int max) {
 
 pub Int ga_use_lines(GA a, List(Int) us, Int i, Int kn, Int shown, Int max) {
     if (i >= us.len()) {
-        println("  " + IntToString(us.len()) + " use(s): " + IntToString(kn) + " known, " + IntToString(us.len() - kn) + " residual or effect");
+        println(f"  {us.len()} use(s): {kn} known, {us.len() - kn} residual or effect");
         return 0;
     }
     GN n = gn_read(a, us[i]);

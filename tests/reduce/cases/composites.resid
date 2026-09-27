@@ -13,7 +13,7 @@ List(Int) upto(Int n, List(Int) acc) {
     Int m = n - 1;
     return upto(m, acc.concat([n]));
 }
-P mk(Int a) { return P {.x = a, .y = a + 1, .name = "p" + IntToString(a)}; }
+P mk(Int a) { return P {.x = a, .y = a + 1, .name = f"p{a}"}; }
 Int norm1(P p) { return p.x + p.y; }
 Option(Int) find(List(Int) xs, Int want, Int i) {
     if (i >= xs.len()) { return None; }
@@ -26,7 +26,7 @@ Int find_or(List(Int) xs, Int want) {
     return r else { -1 };
 }
 Str describe(Option(Int) o) {
-    return match o { Some(v) => "some " + IntToString(v), None => "none" };
+    return match o { Some(v) => f"some {v}", None => "none" };
 }
 Int first_big(List(Int) xs) {
     for (Int x in xs) {
@@ -41,20 +41,20 @@ Int tri(Int n) {
     return -1;
 }
 Int main() {
-    println(IntToString(k_at(2)));
-    println(IntToString(sum_list([1, 2, 3, 4], 0, 0)));
-    println(IntToString(sum_list(upto(10, []), 0, 0)));
+    println(f"{k_at(2)}");
+    println(f"{sum_list([1, 2, 3, 4], 0, 0)}");
+    println(f"{sum_list(upto(10, []), 0, 0)}");
     List(Int) u = upto(3, []);
-    println(IntToString(u.len()));
-    println(IntToString(u[0]));
-    println(IntToString(norm1(mk(5))));
+    println(f"{u.len()}");
+    println(f"{u[0]}");
+    println(f"{norm1(mk(5))}");
     println(mk(7).name);
-    println(IntToString(find_or([5, 6, 7], 7)));
-    println(IntToString(find_or([5, 6, 7], 9)));
+    println(f"{find_or([5, 6, 7], 7)}");
+    println(f"{find_or([5, 6, 7], 9)}");
     println(describe(find([1, 2], 2, 0)));
     println(describe(find([1, 2], 3, 0)));
-    println(IntToString(first_big([1, 30, 50])));
-    println(IntToString(tri(50)));
+    println(f"{first_big([1, 30, 50])}");
+    println(f"{tri(50)}");
     List(Str) names = ["a", "b"];
     println(names[1] + names[0]);
     return 0;

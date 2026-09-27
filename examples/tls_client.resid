@@ -205,7 +205,7 @@ Int read_app(Int fd, List(Int) key, List(Int) iv, Int seq, Int tries) {
         if (alv == 0 || alv == 80) {
             println("ALERT-CLOSE-NOTIFY");
         } else {
-            println("ALERT-DESC=" + IntToString(alv));
+            println(f"ALERT-DESC={alv}");
         }
         return 0;
     }

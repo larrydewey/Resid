@@ -41,7 +41,7 @@ Str depths(Int d, Int max_depth, Str acc) {
     if (d > max_depth) { return acc; }
     Int iters = 1 << (max_depth - d + 4);
     Int c = batch(d, iters, 0);
-    return depths(d + 2, max_depth, acc + IntToString(iters) + "\t trees of depth " + IntToString(d) + "\t check: " + IntToString(c) + "\n");
+    return depths(d + 2, max_depth, acc + f"{iters}\t trees of depth {d}\t check: {c}\n");
 }
 
 @requires(args)
@@ -51,9 +51,9 @@ Int main() {
     Int max_depth = if (min_depth + 2 > n) { min_depth + 2 } else { n };
     Int stretch = max_depth + 1;
     Int sc = check(bottom_up(stretch, Leaf));
-    println("stretch tree of depth " + IntToString(stretch) + "\t check: " + IntToString(sc));
+    println(f"stretch tree of depth {stretch}\t check: {sc}");
     Tree long_lived = bottom_up(max_depth, Leaf);
     print(depths(min_depth, max_depth, ""));
-    println("long lived tree of depth " + IntToString(max_depth) + "\t check: " + IntToString(check(long_lived)));
+    println(f"long lived tree of depth {max_depth}\t check: {check(long_lived)}");
     return 0;
 }

@@ -350,7 +350,7 @@ error[E0403]: builder `b` is bound outside this loop or lambda and cannot be use
 Int main() { StrBuf b = StrBuf(); Int i = 0; while (i < 1) { println(b.finish()); break; } return 0; }
 === lin_match_ok
 check: ok
-Int main() { StrBuf b = StrBuf(); Option(Int) o = Some(1); Str s = match (o) { Some(v) => b.push(IntToString(v)).finish(), None => b.finish() }; println(s); return 0; }
+Int main() { StrBuf b = StrBuf(); Option(Int) o = Some(1); Str s = match (o) { Some(v) => b.push(f"{v}").finish(), None => b.finish() }; println(s); return 0; }
 === lin_nested_field
 error[E0404]: builder type StrBuf cannot be a struct field (spec §45.1)
 type P = { StrBuf b; };

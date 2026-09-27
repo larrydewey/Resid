@@ -14,6 +14,6 @@ Int sum(Int acc, Int i) {
 @requires(args) Int main() {
     Int a = sq(args.count() + 3, "hi");
     Int b = sum(0, a);
-    println(IntToString(b));
+    println(f"{b}");
     return 0;
 }

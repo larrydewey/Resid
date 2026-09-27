@@ -4,12 +4,12 @@ type Natural = Int where value >= 0;
 
 Int main() {
     Positive p = 5;
-    println(IntToString(p));
+    println(f"{p}");
     Even e = 10;
-    println(IntToString(e));
+    println(f"{e}");
     Natural n = 0;
-    println(IntToString(n));
+    println(f"{n}");
     Int y = p * e;
-    println(IntToString(y));
+    println(f"{y}");
     return 0;
 }

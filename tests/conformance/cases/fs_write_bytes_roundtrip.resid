@@ -2,13 +2,13 @@
 Int main() {
     List(Int) bytes = [0, 128, 153, 255, 65];
     Bool ok = filesystem.write_bytes("@TMP@/out.bin", bytes);
-    println(BoolToString(ok));
+    println(f"{ok}");
     List(Int) back = filesystem.read_bytes("@TMP@/out.bin");
-    println(IntToString(back.len()));
-    println(IntToString(back[0]));
-    println(IntToString(back[1]));
-    println(IntToString(back[2]));
-    println(IntToString(back[3]));
-    println(IntToString(back[4]));
+    println(f"{back.len()}");
+    println(f"{back[0]}");
+    println(f"{back[1]}");
+    println(f"{back[2]}");
+    println(f"{back[3]}");
+    println(f"{back[4]}");
     return 0;
 }

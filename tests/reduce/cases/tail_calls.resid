@@ -18,10 +18,11 @@ Str build(Int n, Str acc) {
     return build(n - 1, str_join(parts, ""));
 }
 @requires(args) Int main() {
-    Int n = str_len(IntToString(args.count())) * 50000000;
-    println(IntToString(count(n, 0)));
+    Int n = str_len(f"{args.count()}") * 50000000;
+    println(f"{count(n, 0)}");
     Bool e = is_even(n);
     println(if (e) { "even" } else { "odd" });
-    println(IntToString(str_len(build(100000, ""))));
+    Int shown24 = str_len(build(100000, ""));
+    println(f"{shown24}");
     return 0;
 }

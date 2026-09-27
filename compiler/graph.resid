@@ -919,7 +919,7 @@ KP kg_decl_at(Str s, Kg g, Int pos) {
         if (ds.err != "") { return kg_fail(ds.g, ds.pos, ds.err); }
         // The text is where the body starts: lowering numbers lambda and
         // assertion symbols by position within it.
-        return kg_add(ds.g, "sandbox", IntToString(lb.pos), caps, ds.ids, sp, ds.pos);
+        return kg_add(ds.g, "sandbox", f"{lb.pos}", caps, ds.ids, sp, ds.pos);
     }
     if (t.text == "type") { return kg_typedecl(s, g, t.pos, prefix, sp); }
     Tok tn = lex_tok(s, t.pos);
@@ -1181,7 +1181,7 @@ pub Str kg_tokdiff(Str a, Int pa, Str b, Int pb, Int n) {
     Str nb = kg_tok_norm(tb);
     if (na != nb) {
         PosInfo li = pos_to_line_col(a, kg_tstart(ta));
-        return "token " + IntToString(n) + " (source line " + IntToString(li.line) + "): `" + na + "` vs `" + nb + "`";
+        return f"token {n} (source line {li.line}): `" + na + "` vs `" + nb + "`";
     }
     return kg_tokdiff(a, ta.pos, b, tb.pos, n + 1);
 }
@@ -1191,7 +1191,7 @@ pub Str kg_roundtrip(Str s) {
     KP p = kg_parse(s);
     if (p.err != "") {
         PosInfo li = pos_to_line_col(s, p.pos);
-        return "parse error at line " + IntToString(li.line) + ": " + p.err;
+        return f"parse error at line {li.line}: " + p.err;
     }
     return kg_tokdiff(s, 0, kg_print(p.g, p.id), 0, 0);
 }
@@ -1274,6 +1274,6 @@ Int kg_seg(KgMap m, Int line, Int i, Int best) {
 // "path:line" for a merged line; "<builtin>:n" past the last file.
 pub Str kg_where(KgMap m, Int line) {
     Int k = kg_seg(m, line, 0, -1);
-    if (k < 0) { return "<merged>:" + IntToString(line); }
-    return m.path[k] + ":" + IntToString(m.fl[k] + line - m.ml[k]);
+    if (k < 0) { return f"<merged>:{line}"; }
+    return m.path[k] + f":{m.fl[k] + line - m.ml[k]}";
 }

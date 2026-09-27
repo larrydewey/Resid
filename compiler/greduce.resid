@@ -168,7 +168,7 @@ GS gx_st_memo(GS st, Str key, Str val) {
 // Why a call at depth 0 stays residual (spec §3.4 reasons), as "id,why;".
 GS gx_reason(GS st, Int id, Str why) {
     if (st.depth > 0) { return st; }
-    return GS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr, .rs = st.rs.concat([IntToString(id) + "," + why + ";"])};
+    return GS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr, .rs = st.rs.concat([f"{id}," + why + ";"])};
 }
 
 GS gx_note(GS st, Str msg) {
@@ -922,14 +922,14 @@ GV gx_spec_with(GXT ft, Int fi, Str name, GXP p, GXA a, Int cr, Int co, GS st) {
     if (hit == "!") { return none; }
     if (hit != "") { return gx_sp_call(hit, p, co, st); }
     if (st.nspec >= rd_max_specs()) {
-        return gx_unk(cr, a.ch, gx_reason(gx_note(st, "specialization attempt limit (" + IntToString(rd_max_specs()) + ") reached; further calls stay general"), co, "budget(specs)"));
+        return gx_unk(cr, a.ch, gx_reason(gx_note(st, f"specialization attempt limit ({rd_max_specs()}) reached; further calls stay general"), co, "budget(specs)"));
     }
-    Str sname = name + "__rs" + IntToString(st.nspec + 1);
+    Str sname = name + f"__rs{st.nspec + 1}";
     Str ckey = str_from_code(2) + "cnt" + str_from_code(1) + name;
     Int cnt = str_parse_int(st.memo.get(ckey) else { "0" });
     if (cnt >= rd_max_specs_per_fn()) { return none; }
     Str hent = name + str_from_code(30) + p.mask + str_from_code(30) + rd_join(p.kvs, 0, str_from_code(28), "");
-    GS st1 = gx_st_spec(gx_st_memo(gx_st_memo(st, ckey, IntToString(cnt + 1)), key, sname), st.specs, st.nspec + 1, hist.concat([hent]));
+    GS st1 = gx_st_spec(gx_st_memo(gx_st_memo(st, ckey, f"{cnt + 1}"), key, sname), st.specs, st.nspec + 1, hist.concat([hent]));
     Int nsp0 = st1.specs.len();
     GXR body = gx_stmts(ft, bk, 0, p.env, st1);
     GS st2 = gx_st_spec(body.st, body.st.specs, body.st.nspec, hist);
@@ -1146,7 +1146,7 @@ GXR gx_known(GXT ft, Int blk, Int i, Int ek, RdE env, GS st) {
     Str what = str_trim(str_slice(src, st.g.ns[ak].sp, st.g.ns[ak].ep));
     Str prev = v.st.memo.get("__ERR__") else { "" };
     GS st2 = if (v.k || prev != "") { v.st } else {
-        gx_st_memo(v.st, "__ERR__", "error[E0901]: known(" + what + "): the value is residual (not known at compile time) at line " + IntToString(line))
+        gx_st_memo(v.st, "__ERR__", "error[E0901]: known(" + what + f"): the value is residual (not known at compile time) at line {line}")
     };
     return gx_then(gx_none(), v.k, gx_stmts(ft, blk, i + 1, env, st2));
 }
@@ -1188,7 +1188,7 @@ GS gx_ct_check(GXT ft, Int id, Str name, Str ty, Int ci, GV v) {
     Tok nm = lex_tok(src, v.st.g.ns[gx_kid(v.st, id, 0)].ep);
     Tok eq = lex_tok(src, nm.pos);
     Int line = str_count(str_slice(src, 0, eq.pos), "\n") + 1;
-    Str msg = "error[E0301]: constraint of " + ty + " (" + parts[2] + ") does not hold for " + name + " = " + rd_render(v.v, v.ty) + " at line " + IntToString(line);
+    Str msg = "error[E0301]: constraint of " + ty + " (" + parts[2] + ") does not hold for " + name + " = " + rd_render(v.v, v.ty) + f" at line {line}";
     return gx_st_memo(r.st, "__ERR__", msg);
 }
 
@@ -1592,14 +1592,11 @@ KP gs_add(Kg g, Str kind, Str text, List(Int) ks, Int like) {
     return kg_add(g, kind, text, "", ks, g.ns[like].sp, g.ns[like].ep);
 }
 
-// The accumulator argument as nested appends; `IntToString(e)` is
-// formatted straight into the buffer.
+// The accumulator argument as nested appends; an f-string is appended part
+// by part (lw_sacc_fstr).
 KP gs_nest(Kg g, List(Int) ls, Int i, Int acc, Int like) {
     if (i >= ls.len()) { return KP {.g = g, .id = acc, .pos = 0, .err = ""}; }
-    Int l = ls[i];
-    KN ln = g.ns[l];
-    Bool its = ln.kind == "call" && ln.text == "IntToString";
-    KP c = if (its) { gs_add(g, "call", "resid_sacc_append_int", [acc].concat(gx_kids(g, l)), like) } else { gs_add(g, "call", "resid_sacc_append", [acc, l], like) };
+    KP c = gs_add(g, "call", "resid_sacc_append", [acc, ls[i]], like);
     return gs_nest(c.g, ls, i + 1, c.id, like);
 }
 
@@ -1684,7 +1681,7 @@ pub GSR gs_program(Kg g, Int unit) {
     if (o.n == 0) { return GSR {.g = g, .id = unit, .dv = ""}; }
     KN u = o.g.ns[unit];
     KP r = kg_add(o.g, "unit", "", "", o.decls.concat(o.tail), u.sp, u.ep);
-    return GSR {.g = r.g, .id = r.id, .dv = o.dv + IntToString(r.id) + "," + IntToString(unit) + ",rebuild;"};
+    return GSR {.g = r.g, .id = r.id, .dv = o.dv + f"{r.id},{unit},rebuild;"};
 }
 
 // The residual of a parsed program (as parsed with `--no-reduce`).

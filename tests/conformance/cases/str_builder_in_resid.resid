@@ -13,7 +13,7 @@ Int main() {
     Str a3 = str_sb_append_cp(a2, 33);
     Str out1 = str_sb_finish(a3);
     println(out1);
-    println(IntToString(str_len(out1)));
+    println(f"{str_len(out1)}");
     Str out2 = rope_repeat(0, 3, str_sb_new());
     println(out2);
     return 0;

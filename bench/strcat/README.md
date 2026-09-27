@@ -12,7 +12,7 @@ immutable-string semantics: every concatenation allocates and copies.
 `TIMEOUT` seconds (default 30).
 
 Results on 2026-09-25 (`>30s` = cut off; the resid row is after the
-`IntToString` pieces were formatted straight into the buffer):
+integer pieces were formatted straight into the buffer):
 
 | impl          | 10k          | 100k          | 1M            | 10M           |
 |---------------|--------------|---------------|---------------|---------------|

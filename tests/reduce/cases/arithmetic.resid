@@ -17,33 +17,33 @@ Int pick(Int n) {
 }
 Int deep(Int n) { return if (n == 0) { 0 } else { deep(n - 1) + 1 }; }
 Int main() {
-    println(IntToString(sq(12)));
-    println(IntToString(big() - 1 + big()));
-    println(IntToString(maxv()));
-    println(IntToString(minv()));
-    println(IntToString(0 - 5));
-    println(IntToString(-17 / 5));
-    println(IntToString(-17 % 5));
-    println(IntToString(dv(100, 7)));
-    println(IntToString(md(100, -7)));
-    println(IntToString(shl(1, 62)));
-    println(IntToString(shl(1, 63)));
-    println(IntToString(shr(-1, 60)));
-    println(IntToString(shr(256, 4)));
-    println(IntToString(7 & 3));
-    println(IntToString(7 | 8));
-    println(IntToString(7 ^ 2));
-    println(IntToString(pick(10)));
-    println(IntToString(pick(3)));
-    println(IntToString(pick(0)));
-    println(IntToString(deep(50)));
-    println(IntToString(deep(500)));
+    println(f"{sq(12)}");
+    println(f"{big() - 1 + big()}");
+    println(f"{maxv()}");
+    println(f"{minv()}");
+    println(f"{0 - 5}");
+    println(f"{-17 / 5}");
+    println(f"{-17 % 5}");
+    println(f"{dv(100, 7)}");
+    println(f"{md(100, -7)}");
+    println(f"{shl(1, 62)}");
+    println(f"{shl(1, 63)}");
+    println(f"{shr(-1, 60)}");
+    println(f"{shr(256, 4)}");
+    println(f"{7 & 3}");
+    println(f"{7 | 8}");
+    println(f"{7 ^ 2}");
+    println(f"{pick(10)}");
+    println(f"{pick(3)}");
+    println(f"{pick(0)}");
+    println(f"{deep(50)}");
+    println(f"{deep(500)}");
     if (both(true, false)) { println("yes"); } else { println("no"); }
     if (3 < 4 && 5 >= 5) { println("cmp ok"); }
     if (!(1 == 2)) { println("neq ok"); }
     Int(128) w = 3 * 4;
-    println(IntToString((Int)(w * 2)));
-    println(IntToString(1000000000000000000));
-    println(IntToString(-1000000000000000000));
+    println(f"{(Int)(w * 2)}");
+    println(f"{1000000000000000000}");
+    println(f"{-1000000000000000000}");
     return 0;
 }

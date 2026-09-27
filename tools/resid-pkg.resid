@@ -396,7 +396,7 @@ Int cmd_verify(Str out, Str pubkey_hex) {
     Str hash_hex = hex_encode(content_hash(archive));
     Bool ok = verify_sig(hash_hex, sig, pubk);
     if (ok) {
-        println("ok: signature valid (" + IntToString(hdr.count) + " file(s))");
+        println(f"ok: signature valid ({hdr.count} file(s))");
         return 0;
     }
     println("FAIL: signature invalid");
@@ -406,7 +406,7 @@ Int cmd_verify(Str out, Str pubkey_hex) {
 @requires(filesystem)
 Int cmd_extract(Str out, Str dir) {
     Int n = extract_archive(out + ".resid-pkg", dir);
-    println("extracted " + IntToString(n) + " file(s) to " + dir);
+    println(f"extracted {n} file(s) to " + dir);
     return 0;
 }
 

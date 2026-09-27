@@ -664,6 +664,12 @@ if-let / while-let:
   r"C:\path\file"
   b"bytes"
 
+An f-string hole takes a value of any type: numbers and
+Bool as decimal text (Float round-trips), Str as is, Dec at
+its precision, lists and records structurally. `f"{x}"` is
+how a value becomes a Str; there are no per-type conversion
+functions.
+
 Literals default to Int / Float / Dec (for m-suffix
 decimals); integer literals follow 6.1a. There is no null
 literal: absence is Option's None. Width is otherwise

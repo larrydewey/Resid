@@ -15,6 +15,6 @@ Int main() {
     Option(Int) o = nxt(i);
     Int ov = o else { 0 };
     List(List(Int)) ll = [[i + 1], [i]];
-    println(IntToString(p.xs[1] + p.n + s + w + ws[0] + mv + ov + ll[0][0]));
+    println(f"{p.xs[1] + p.n + s + w + ws[0] + mv + ov + ll[0][0]}");
     return 0;
 }

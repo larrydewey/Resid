@@ -25,27 +25,27 @@
 41 list  : List(Str)
 42 bind xs : List(Str)
 44 ref xs : List(Str) -> 42 bind xs
-45 ref s : Str -> 52 for s
-46 ref small : Int(8) -> 27 bind small
-47 call IntToString : Str
-48 bin + : Str
-49 call println : Bool
-52 for s : Str
-54 ref o : Option(Int) -> 31 bind o
-55 paren  : Option(Int)
-56 ref q : Int -> 58 arm Some
-57 mcall twice : Int -> 13 fn twice
-58 arm Some : Int
-59 lit 0 : Int
-61 match  : Int
-62 bind d : Int
-63 ref d : Int -> 62 bind d
-64 ref c : Int -> 37 bind c
-65 bin + : Int(64)
-70 lit 2 : Int(64)
-71 lit 1 : Int(64)
-72 finit x :  -> 1 sfield x
-73 lit 2 : Int(64)
-74 finit y :  -> 3 sfield y
-75 struct P : P -> 4 struct_t P
-76 call f : Int -> 68 fn f
+45 ref s : Str -> 54 for s
+47 ref small : Int(8) -> 27 bind small
+49 fstr  : Str
+50 bin + : Str
+51 call println : Bool
+54 for s : Str
+56 ref o : Option(Int) -> 31 bind o
+57 paren  : Option(Int)
+58 ref q : Int -> 60 arm Some
+59 mcall twice : Int -> 13 fn twice
+60 arm Some : Int
+61 lit 0 : Int
+63 match  : Int
+64 bind d : Int
+65 ref d : Int -> 64 bind d
+66 ref c : Int -> 37 bind c
+67 bin + : Int(64)
+72 lit 2 : Int(64)
+73 lit 1 : Int(64)
+74 finit x :  -> 1 sfield x
+75 lit 2 : Int(64)
+76 finit y :  -> 3 sfield y
+77 struct P : P -> 4 struct_t P
+78 call f : Int -> 70 fn f

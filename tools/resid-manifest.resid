@@ -872,7 +872,7 @@ List(Str) split_ws(Str s) {
 type LockParseResult = { Bool ok; Str err; List(LockEntry) entries; };
 
 Str lock_line_err(Int lineno) {
-    return "resid.lock line " + IntToString(lineno) + ": expected '<name> <version> sha256:<hex>'";
+    return f"resid.lock line {lineno}: expected '<name> <version> sha256:<hex>'";
 }
 
 LockParseResult lock_reject(LockParseResult acc, Int lineno) {
@@ -1059,7 +1059,7 @@ Int cmd_deps(Str manifest_path) {
         return 1;
     }
     Int _p = print_resolved_deps(r.deps, 0);
-    println("ok: " + IntToString(r.deps.len()) + " dependency/ies resolved");
+    println(f"ok: {r.deps.len()} dependency/ies resolved");
     return 0;
 }
 
@@ -1102,7 +1102,7 @@ Int cmd_depmap(Str manifest_path, Str out_path) {
     }
     Str text = depmap_text(r.deps);
     Bool _w = filesystem.write_all(out_path, text);
-    println("wrote " + out_path + " (" + IntToString(r.deps.len()) + " dependency/ies)");
+    println("wrote " + out_path + f" ({r.deps.len()} dependency/ies)");
     return 0;
 }
 

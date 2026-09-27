@@ -1,12 +1,12 @@
 Int main() {
     for (Int i in 0..3) {
-        println(IntToString(i));
+        println(f"{i}");
     }
     for (Int j in 0..=2) {
-        println(IntToString(j));
+        println(f"{j}");
     }
     for (Int k in 2..5) {
-        println(IntToString(k));
+        println(f"{k}");
     }
     return 0;
 }

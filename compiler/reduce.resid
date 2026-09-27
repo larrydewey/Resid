@@ -191,7 +191,7 @@ pub Str rd_itoa(Int v) {
     // callee's stack frame otherwise. INT64_MIN is spelled out for the same
     // reason (older e.itoa printed it wrongly).
     if (v == rd_i64_min()) { return "-9223372036854775808"; }
-    return "" + IntToString(v);
+    return f"{v}";
 }
 
 // Built from 18-digit literals: a literal of 19+ digits is typed Int(128).
@@ -636,12 +636,6 @@ pub RdV rd_builtin(Str name, RdA a, Str orig, Int pos, RdS st) {
         if (cp < 1 || cp > 1114111) { return none; }
         if (cp >= 55296 && cp <= 57343) { return none; }
         return rd_folded(str_from_code(cp), "Str", orig, a.ch, pos, st);
-    }
-    if (name == "IntToString") {
-        List(Str) ts = a.ts;
-        if (ts.len() != 1) { return none; }
-        if (!rd_is_int_ty(rd_norm_ty(ts[0]))) { return none; }
-        return rd_folded(v[0], "Str", orig, a.ch, pos, st);
     }
     if (name == "str_contains") {
         if (!rd_args_are(a, ["Str", "Str"])) { return none; }

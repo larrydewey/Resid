@@ -1,22 +1,22 @@
 type Point = { Int x; Int y; };
     Int main() {
-    // IntToString with narrowing i8 value
+    // f-string of a narrowing i8 value
     Int(8) a = 42;
-    println(IntToString(a));
+    println(f"{a}");
 
-    // FloatToString
+    // f-string of a Float
     Float(64) pi = 3.14;
-    println(FloatToString(pi));
+    println(f"{pi}");
 
-    // BoolToString
+    // f-string of a Bool
     Bool t = true;
     Bool f = false;
-    println(BoolToString(t));
-    println(BoolToString(f));
+    println(f"{t}");
+    println(f"{f}");
 
-    // IntToString with narrowing i32 value
+    // f-string of a narrowing i32 value
     Int(32) c = 100;
-    println(IntToString(c));
+    println(f"{c}");
 
     // Composite: Option
     Option(Int) mx = Some(7);
@@ -24,19 +24,19 @@ type Point = { Int x; Int y; };
         Some(n) => n,
         None => 0,
     };
-    println(IntToString(out));
+    println(f"{out}");
 
-    // Composite: List with ToString
+    // Composite: List in an f-string
     List(Int) xs = [1, 2, 3];
-    println(ToString(xs));
+    println(f"{xs}");
 
-    // Composite: Struct with ToString
+    // Composite: Struct in an f-string
     Point p = Point { .x = 3, .y = 4 };
-    println(ToString(p));
+    println(f"{p}");
 
-    // Composite: None with ToString
+    // Composite: None in an f-string
     Option(Int) nothing = None;
-    println(ToString(nothing));
+    println(f"{nothing}");
 
     return 0;
 }

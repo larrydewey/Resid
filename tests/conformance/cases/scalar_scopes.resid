@@ -93,38 +93,38 @@ Int unbox(Box(Pair) b) {
 
 @requires(filesystem)
 Int main() {
-    println(IntToString(loop(0, 20000, 0)));
+    println(f"{loop(0, 20000, 0)}");
 
     List(Int) base = grow([], 0, 10);
     Int a = tip_sum(base);
     List(Int) after = base.concat([7]);
-    println(IntToString(a) + " " + IntToString(total(after, 0, 0)) + " " + IntToString(after.len()));
+    println(f"{a} {total(after, 0, 0)} {after.len()}");
 
     Map(Int, Int) m = fill({}, 0, 100);
     Int ks = keys_total(m);
     Int ms = map_sum(m, m.keys(), 0, 0);
-    println(IntToString(ks) + " " + IntToString(ms) + " " + IntToString(m.len()));
+    println(f"{ks} {ms} {m.len()}");
 
     Int c1 = long_count(5000);
     Str big = repeat_to("", 5000);
     Int c2 = count_c(big, 0, 0);
     Int c3 = long_count(3000);
-    println(IntToString(c1) + " " + IntToString(c2) + " " + IntToString(c3));
+    println(f"{c1} {c2} {c3}");
 
     Option(Int) d1 = doubled_big([1, 60, 3]);
     Option(Int) d2 = doubled_big([1, 2, 3]);
     Int e1 = d1 else { -1 };
     Int e2 = d2 else { -1 };
-    println(IntToString(e1) + " " + IntToString(e2));
+    println(f"{e1} {e2}");
 
     Tree kept = build(3);
     Pair p = Pair {.l = Leaf, .r = kept, .v = 100};
     Tree t2 = Node(p);
-    println(IntToString(sum(t2)) + " " + IntToString(sum(kept)));
+    println(f"{sum(t2)} {sum(kept)}");
 
     Box(Pair) bx = Full(Pair {.l = Leaf, .r = Leaf, .v = 9});
     Box(Pair) be = Empty;
-    println(IntToString(unbox(bx)) + " " + IntToString(unbox(be)));
+    println(f"{unbox(bx)} {unbox(be)}");
 
     Result(Int, RegionError) r = spawn () {
         Int inner = sum(build(4));
@@ -134,7 +134,7 @@ Int main() {
         Ok(n) => n,
         Err(e) => -1
     };
-    println(IntToString(rv));
+    println(f"{rv}");
 
     Str sb = str_sb_append(str_sb_append(str_sb_new(), "built "), "line");
     Bool ok1 = println(str_sb_finish(sb));
