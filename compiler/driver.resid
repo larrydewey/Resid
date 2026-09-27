@@ -7725,7 +7725,8 @@ Int main() {
     // buffers (gs_program). It runs in an arena; the reachable residual
     // nodes are copied out packed, with the notes, error, derive edges and
     // reasons. `--no-reduce` skips reduction.
-    Bool noreduce  =  pick_flag(argc, "--no-reduce");
+    // The runtime is not reduced: an @import stub's body is not its value.
+    Bool noreduce  =  pick_flag(argc, "--no-reduce") || rtmod;
     Int _gr_in = resid_bulk_push();
     GXO grd = gx_run(gx_unpack(ckpk[0]), rsrc, !noreduce);
     GSR gsa0 = if (grd.err != "") { GSR {.g = grd.g, .id = -1, .dv = ""} } else { gs_program(grd.g, grd.root) };

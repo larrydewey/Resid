@@ -144,7 +144,7 @@ Bool all_digits(Int p) {
     return all_digits(p + 1);
 }
 
-Bool is_int(Int s) {
+pub Bool is_int(Int s) {
     Int c = ld8(s);
     if (c == 0) { return false; }
     Int p = if (c == 45 || c == 43) { s + 1 } else { s };

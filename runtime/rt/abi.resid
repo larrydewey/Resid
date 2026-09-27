@@ -66,3 +66,48 @@ pub Int c_list_len(Int l) { return 0; }
 
 @import("resid_list_to_array", "ptr(ptr)")
 pub Int c_list_to_array(Int l) { return 0; }
+
+@import("resid_list_get", "ptr(ptr,i64)")
+pub Int c_list_get(Int l, Int i) { return 0; }
+
+@import("resid_box_i64", "ptr(i64)")
+pub Int c_box_i64(Int v) { return 0; }
+
+@import("resid_unbox_i64", "i64(ptr)")
+pub Int c_unbox_i64(Int p) { return 0; }
+
+@import("FloatToString", "ptr(double)")
+pub Int c_float_to_string(Float d) { return 0; }
+
+@import("fork", "i32()")
+pub Int c_fork() { return 0; }
+
+@import("execvp", "i32(ptr,ptr)")
+pub Int c_execvp(Int file, Int argv) { return 0; }
+
+@import("execv", "i32(ptr,ptr)")
+pub Int c_execv(Int file, Int argv) { return 0; }
+
+@import("popen", "ptr(ptr,ptr)")
+pub Int c_popen(Int cmd, Int mode) { return 0; }
+
+@import("pclose", "i32(ptr)")
+pub Int c_pclose(Int f) { return 0; }
+
+@import("fgets", "ptr(ptr,i32,ptr)")
+pub Int c_fgets(Int buf, Int n, Int f) { return 0; }
+
+@import("pthread_create", "i32(ptr,ptr,ptr,ptr)")
+pub Int c_pthread_create(Int t, Int attr, Int f, Int arg) { return 0; }
+
+@import("pthread_join", "i32(i64,ptr)")
+pub Int c_pthread_join(Int t, Int ret) { return 0; }
+
+@import("pthread_attr_init", "i32(ptr)")
+pub Int c_pthread_attr_init(Int a) { return 0; }
+
+@import("pthread_attr_setstacksize", "i32(ptr,i64)")
+pub Int c_pthread_attr_setstacksize(Int a, Int n) { return 0; }
+
+@import("pthread_attr_destroy", "i32(ptr)")
+pub Int c_pthread_attr_destroy(Int a) { return 0; }

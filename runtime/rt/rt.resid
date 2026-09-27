@@ -13,3 +13,4 @@ import "text.resid";
 import "case_tables.resid";
 import "case.resid";
 import "strutil.resid";
+import "sys.resid";
