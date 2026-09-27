@@ -1,0 +1,4 @@
+Int main() {
+    Result(Int, RegionError) r = spawn () { return "text"; };
+    return 0;
+}

@@ -1272,6 +1272,14 @@ GT lw_ref(LW w, Int id, List(Str) env, GT c) {
     Str n = lw_text(w, id);
     if (n == "None") { return cg_none_con("Option(_)", 0, c.tmp + 1, c); }
     Str ent = env_lookup(env, n);
+    // A running region: wait for it (again, harmlessly, on later uses).
+    Str fut = if (ent == "") { env_lookup(env, "__fut_" + n) } else { "" };
+    if (fut != "") {
+        List(Str) fp = str_split(fut, ":");
+        Int tw = c.tmp + 1;
+        Str wr = f"%t{tw}";
+        return GT {.pos = 0, .val = wr, .ty = str_slice(fut, str_len(fp[0]) + str_len(fp[1]) + 2, str_len(fut)), .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat([wr + " = call ptr @resid_spawn_wait(ptr " + fp[1] + ")"]), .tmp = tw, .lbl = c.lbl, .tail = false};
+    }
     if (ent == "") {
         VOwnCg vo0 = find_variant_cg(w.fs, n);
         if (vo0.ok && vo0.payload == "") { return cg_variant_unit_con(vo0.sumty, vo0.vidx, 0, c.tmp + 1, c); }
@@ -2018,6 +2026,13 @@ ST lw_bind(LW w, Int id, List(Str) env, ST g) {
         List(Str) z1 = g.lines.concat([reg + " = call ptr @resid_list_new(i64 0, ptr null, ptr " + tsym + ")"]);
         return ST {.pos = 0, .dead = g.dead, .err = "", .env = env_add(env, name + ":" + reg + ":" + dtyb), .glines = g1, .hlines = g.hlines, .lines = z1, .tmp = t1, .lbl = g.lbl, .rety = g.rety};
     }
+    // `R r = spawn (...) { ... };`: the region runs while the function goes
+    // on; `r` names the running region until its first use waits for it.
+    if (vk == "spawn") {
+        GT sp = lw_spawn_mode(w, ve, env, gt_of_st(g), true);
+        if (sp.err != "") { return st_err(sp.err, g); }
+        return ST {.pos = 0, .dead = g.dead, .err = "", .env = env_add(env, "__fut_" + name + ":" + sp.val + ":" + dtyb), .glines = sp.glines, .hlines = g.hlines, .lines = sp.lines, .tmp = sp.tmp, .lbl = sp.lbl, .rety = g.rety};
+    }
     SW sw = lw_scope_wants(w, ve, SW {.found = false, .no = false});
     Bool scoped = scal_ll(ll_ty(dtyb)) && sw.found && !sw.no && !resid_rtmod();
     Int sct = g.tmp + 1;
@@ -2071,7 +2086,7 @@ Int lw_ct_at(Funcs fs, Str ty, Int i) {
 // sg_stmt `return`.
 ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     if (w.g.ns[id].nk == 0) {
-        if (in_main) { return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines.concat(["ret i32 0"]), .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety}; }
+        if (in_main) { return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines.concat(lw_fut_waits(env, env.len() - 1, 0, nil_list())).concat(["ret i32 0"]), .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety}; }
         return st_err("return without a value", g);
     }
     Int rv = lw_kid(w, id, 0);
@@ -2082,7 +2097,7 @@ ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
         GT hb = box_heap_("", v, env, w.fs);
         Int tk = hb.tmp + 1;
         Str okr = f"%t{tk}";
-        return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = hb.glines, .hlines = g.hlines, .lines = hb.lines.concat([okr + " = call ptr @resid_ok_box(ptr " + hb.val + ")", "ret ptr " + okr]), .tmp = tk, .lbl = hb.lbl, .rety = g.rety};
+        return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = hb.glines, .hlines = g.hlines, .lines = hb.lines.concat(lw_fut_waits(env, env.len() - 1, 0, nil_list())).concat([okr + " = call ptr @resid_ok_box(ptr " + hb.val + ")", "ret ptr " + okr]), .tmp = tk, .lbl = hb.lbl, .rety = g.rety};
     }
     Str rwant = num_norm_cg(g.rety);
     Bool rw_int = int_fam(g.rety) && int_fam(v.ty);
@@ -2101,7 +2116,7 @@ ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     Str reg = f"%t{t1}";
     List(Str) wrel = with_release_lines(env, env.len() - 1, 0, []);
     Bool im = in_main && num_norm_cg(vty) == "Int(64)" && fam_head(vty) == "Int";
-    List(Str) lv0 = v2.lines.concat(wrel);
+    List(Str) lv0 = v2.lines.concat(wrel).concat(lw_fut_waits(env, env.len() - 1, 0, nil_list()));
     List(Str) base = if (im) { lv0.concat([reg + " = trunc i64 " + v2.val + " to i32"]) } else { lv0 };
     Str rn_main = if (in_main) { "ret i32 0" } else { "ret " + ll_ty(vty) + " " + v2.val };
     List(Str) lns = if (im) { base.concat(["ret i32 " + reg]) } else { base.concat([rn_main]) };
@@ -2109,12 +2124,22 @@ ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = v.glines, .hlines = g.hlines, .lines = lns, .tmp = ut, .lbl = v.lbl, .rety = g.rety};
 }
 
+// Waits for the running regions bound in env[lo..i] (spawn futures).
+List(Str) lw_fut_waits(List(Str) env, Int i, Int lo, List(Str) acc) {
+    if (i < lo || i < 0) { return acc; }
+    Str e = env[i];
+    List(Str) a2 = if (str_starts_with(e, "__fut_")) { acc.concat(["call ptr @resid_spawn_wait(ptr " + str_split(e, ":")[1] + ")"]) } else { acc };
+    return lw_fut_waits(env, i - 1, lo, a2);
+}
+
 // sg_block / sg_stmts: statements after a dead one are not emitted.
 ST lw_block(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     ST g1 = ST {.pos = 0, .dead = false, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines, .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety};
     ST r = lw_stmts(w, id, 0, env, in_main, g1);
     if (r.err != "") { return r; }
-    return ST {.pos = 0, .dead = r.dead, .err = "", .env = env, .glines = r.glines, .hlines = r.hlines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .rety = r.rety};
+    // Regions started in this block finish before it does.
+    List(Str) fw = if (r.dead) { nil_list() } else { lw_fut_waits(r.env, r.env.len() - 1, env.len(), nil_list()) };
+    return ST {.pos = 0, .dead = r.dead, .err = "", .env = env, .glines = r.glines, .hlines = r.hlines, .lines = r.lines.concat(fw), .tmp = r.tmp, .lbl = r.lbl, .rety = r.rety};
 }
 
 ST lw_stmts(LW w, Int id, Int i, List(Str) env, Bool in_main, ST g) {
@@ -2291,7 +2316,7 @@ ST lw_stmt(LW w, Int id, List(Str) env, Bool in_main, ST g) {
         if (le == "") { return st_err("break or continue outside a loop", g); }
         List(Str) lp = str_split(le, ":");
         Str target = if (k == "brk") { lp[2] } else { lp[1] };
-        return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines.concat(["br label %" + target]), .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety};
+        return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines.concat(lw_fut_waits(env, env.len() - 1, 0, nil_list())).concat(["br label %" + target]), .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety};
     }
     if (k == "letpat") { return lw_letpat(w, id, env, g); }
     if (k == "with") { return lw_with_binds(w, id, 0, env, env, in_main, g); }
@@ -2430,12 +2455,15 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Str retline = if (ret == "Void") { "ret i1 " + rv0 } else { "ret " + rlt + " " + bodyw.val };
     List(Str) clo_lines = [("define " + rlt + " " + clo + "(" + sig + ") {"), "entry:"];
     Str clo_text = str_join(clo_lines.concat(pr0.lines).concat(bodyw.lines).concat([retline, "}"]), "\n");
-    Int tf0 = imax(c.tmp, bodyw.tmp) + 1;
+    // A closure may be called after its captures' owner changes: they are
+    // shared from here.
+    LSC sc0 = lw_share_caps(w, cap0.vals, cap0.tys, 0, LSC {.g = lw_step(c, "", "", c.lines, imax(c.tmp, bodyw.tmp)), .vals = nil_list()});
+    Int tf0 = sc0.g.tmp + 1;
     Str arr = f"%t{tf0}";
     Str fpreg = f"%t{tf0 + 1}";
     Str g0 = f"%t{tf0 + 2}";
-    List(Str) cl4 = c.lines.concat([arr + f" = call ptr @resid_gmalloc(i64 {(ncap + 1) * 8})", fpreg + " = ptrtoint ptr " + clo + " to i64", g0 + " = getelementptr i64, ptr " + arr + ", i64 0", "store i64 " + fpreg + ", ptr " + g0]);
-    List(Str) cl5 = clos_store_lines(cap0.vals, cap0.tys, ncap, 0, arr, tf0 + 3, cl4);
+    List(Str) cl4 = sc0.g.lines.concat([arr + f" = call ptr @resid_gmalloc(i64 {(ncap + 1) * 8})", fpreg + " = ptrtoint ptr " + clo + " to i64", g0 + " = getelementptr i64, ptr " + arr + ", i64 0", "store i64 " + fpreg + ", ptr " + g0]);
+    List(Str) cl5 = clos_store_lines(sc0.vals, cap0.tys, ncap, 0, arr, tf0 + 3, cl4);
     return GT {.pos = 0, .val = arr, .ty = fnty, .cnt = 0, .err = "", .glines = bodyw.glines.concat([clo_text]), .lines = cl5, .tmp = tf0 + 3 + ncap * 2, .lbl = c.lbl, .tail = false};
 }
 
@@ -2450,7 +2478,11 @@ List(Str) lw_lam_env(LW w, Int id, Int i, Int n, List(Str) pl, List(Str) acc) {
 }
 
 // cg_spawn: the body becomes a worker function run on its own thread.
-GT lw_spawn(LW w, Int id, List(Str) env, GT c) {
+GT lw_spawn(LW w, Int id, List(Str) env, GT c) { return lw_spawn_mode(w, id, env, c, false); }
+
+// A spawn bound to a name starts its region and yields the running region
+// (a future); anywhere else the region is started and joined at once.
+GT lw_spawn_mode(LW w, Int id, List(Str) env, GT c, Bool start) {
     LamC cap0 = lam_captured_at(env, 0, LamC {.ids = nil_list(), .tys = nil_list(), .vals = nil_list(), .n = 0});
     Int ncap = cap0.n;
     Str fnm = f"@spw{w.g.ns[id].sp + 5 - w.base}";
@@ -2467,12 +2499,25 @@ GT lw_spawn(LW w, Int id, List(Str) env, GT c) {
     CapPP pi = capinject_at(b1, 0, true, CapPP {.lines = nil_list(), .glines = pe.glines, .n = pe.n});
     Str cpre = "@resid.cap." + str_slice(fnm, 1, str_len(fnm));
     List(Str) fl = cap_rename_to(["define ptr " + fnm + "(ptr %envp) {", "entry:"].concat(pr0.lines).concat(pe.lines).concat(pi.lines).concat(["}"]).concat(pi.glines), cpre, 0, ListBuf());
-    Int tf0 = body.tmp + 1;
+    // The region may run while this function goes on: what it captures is
+    // shared from here (no in-place update or record reuse may touch it).
+    LSC sc0 = lw_share_caps(w, cap0.vals, cap0.tys, 0, LSC {.g = lw_step(c, "", "", c.lines, imax(c.tmp, body.tmp)), .vals = nil_list()});
+    Int tf0 = sc0.g.tmp + 1;
     Str arr = f"%t{tf0}";
-    List(Str) cl5 = clos_store_lines(cap0.vals, cap0.tys, ncap, 0, arr, tf0 + 1, c.lines.concat([arr + f" = call ptr @resid_gmalloc(i64 {(ncap + 1) * 8})"]));
+    List(Str) cl5 = clos_store_lines(sc0.vals, cap0.tys, ncap, 0, arr, tf0 + 1, sc0.g.lines.concat([arr + f" = call ptr @resid_gmalloc(i64 {(ncap + 1) * 8})"]));
     Int tn = tf0 + 1 + ncap * 2;
     Str r = f"%t{tn}";
-    return GT {.pos = 0, .val = r, .ty = "Result(_, RegionError)", .cnt = 0, .err = "", .glines = body.glines.concat([str_join(fl, "\n")]), .lines = cl5.concat([r + " = call ptr @resid_spawn(ptr " + fnm + ", ptr " + arr + ")"]), .tmp = tn, .lbl = body.lbl, .tail = false};
+    Str rtf = if (start) { "@resid_spawn_start" } else { "@resid_spawn" };
+    return GT {.pos = 0, .val = r, .ty = "Result(_, RegionError)", .cnt = 0, .err = "", .glines = body.glines.concat([str_join(fl, "\n")]), .lines = cl5.concat([r + " = call ptr " + rtf + "(ptr " + fnm + ", ptr " + arr + ")"]), .tmp = tn, .lbl = body.lbl, .tail = false};
+}
+
+// Captured values made shared (frozen maps, shared records), in order.
+type LSC = { GT g; List(Str) vals; };
+
+LSC lw_share_caps(LW w, List(Str) vals, List(Str) tys, Int i, LSC acc) {
+    if (i >= vals.len()) { return acc; }
+    GT f = lo_freeze(w, -1, lw_step(acc.g, vals[i], tys[i], acc.g.lines, acc.g.tmp));
+    return lw_share_caps(w, vals, tys, i + 1, LSC {.g = f, .vals = acc.vals.concat([f.val])});
 }
 
 // read_instance's text of a behavior instance node.

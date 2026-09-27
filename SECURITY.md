@@ -38,6 +38,7 @@ them with:
 | `import "m" @requires(caps)` compiles `m` and its imports inside `sandbox (caps)`; re-importing an unattenuated module attenuated is an error. | `imp_resolve_lines_a` | `err_import_attenuated`, `import_attenuated_ok` |
 | A manifest dependency compiles inside the `capabilities` its consumer's manifest lists for it. | depmap `name::root::caps` + `imp_resolve_lines_a` | `err_manifest_ceiling`, `manifest_ceiling_ok`, `tests/pkg` (ceiling) |
 | A `spawn`'s child, and everything it calls, gets only the spawn's listed capabilities. | E0214 in `gk_auth_spawns`; the worker runs in its own runtime frame | `err_spawn_body_provider`, `err_spawn_*` |
+| A running `spawn` region shares nothing mutable with its parent: captured maps are frozen and captured records marked shared at capture, a captured handle is moved (the parent may not use it again), and every region is joined before the scope that started it ends. | `lw_share_caps`, `gk_moved_use`, `lw_fut_waits` | `spawn_concurrent`, `err_spawn_handle_moved` |
 | Force-time guard (defense in depth): every provider call is checked *before* it runs against the thread's sandbox frames; writes need a grant that is not read-only. | `resid_cap_check`, `capinject_at` | `tests/runtime/cap_guard.c`, `sandbox_force_time_guard_present` |
 
 Effects that are **not** capabilities (ambient by design): writing to

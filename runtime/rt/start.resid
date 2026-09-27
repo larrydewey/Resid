@@ -168,9 +168,11 @@ pub Int thread_spawn(Int fn, Int arg, Int stack) {
 
 // A thread's body: fn(arg), its result kept, the exit hooks run.
 pub Int thread_main(Int rec) {
+    _ = heap_adopt();
     Int res = resid_raw_call2(ld64(rec), ld64(rec + 8), 0);
     _ = st64(rec + 16, res);
-    return scope_thread_exit(0);
+    _ = scope_thread_exit(0);
+    return heap_retire();
 }
 
 // Wait for the thread to finish; its result. The record goes.

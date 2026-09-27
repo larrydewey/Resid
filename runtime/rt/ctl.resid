@@ -64,6 +64,36 @@ pub Int rt_spawn(Int worker, Int captures) {
     return ret;
 }
 
+// A running region: {worker, captures, result, thread, joined}. The child
+// starts at once; the parent waits for it on the result's first use and,
+// at the latest, before leaving the scope that bound it (spec §19:
+// completion is structured).
+@export("resid_spawn_start", "ptr(ptr,ptr)")
+pub Int rt_spawn_start(Int worker, Int captures) {
+    // Lazily loaded process state is loaded here, before any child can race.
+    _ = args_load();
+    Int a = xmalloc(40);
+    _ = st64(a, worker);
+    _ = st64(a + 8, captures);
+    _ = st64(a + 16, 0);
+    _ = st64(a + 32, 0);
+    Int t = thread_spawn(resid_raw_fn("spawn_entry"), a, 8388608);
+    // No thread (resources exhausted): run the region here, now.
+    _ = st64(a + 24, t);
+    _ = if (t == 0) { st64(a + 16, spawn_entry(a)) + st64(a + 32, 1) } else { 0 };
+    return a;
+}
+
+// The region's Result, waiting for it the first time.
+@export("resid_spawn_wait", "ptr(ptr)")
+pub Int rt_spawn_wait(Int a) {
+    if (ld64(a + 32) != 0) { return ld64(a + 16); }
+    Int ret = thread_join(ld64(a + 24));
+    _ = st64(a + 16, ret);
+    _ = st64(a + 32, 1);
+    return ret;
+}
+
 // Ok(payload) as a Result box (tag 1).
 @export("resid_ok_box", "ptr(ptr)")
 pub Int rt_ok_box(Int payload) {

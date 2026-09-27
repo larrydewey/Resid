@@ -148,9 +148,16 @@ pub GKT gk_expr(GK k, Int id, Str exp) {
     }
     if (kind == "callv") { return gk_callv(k, id); }
     if (kind == "spawn") {
-        GKS b = gk_stmt(k, gk_kid(k, id, 0), "__spawn");
+        // The region's value type comes from where its Result goes (a
+        // binding or a return): its returns are checked against it.
+        Bool has = str_has_prefix(exp, "Result(") && str_ends_with(exp, ", RegionError)");
+        if (!has) { return gterr(k, "a spawn's Result needs a declared type: Result(T, RegionError) r = spawn (...) { ... };", id); }
+        Str vt = str_slice(exp, 7, str_len(exp) - 14);
+        if (vt == "File") { return gterr(k, "a spawn region returns values, not handles (spec §19)", id); }
+        GKS b = gk_stmt(k, gk_kid(k, id, 0), vt);
         if (b.err != "") { return gt_of(b); }
-        return gt(gk_scope(k, b.k), "Result(_, RegionError)", id);
+        if (!gk_returns(k.g, gk_kid(k, id, 0))) { return gterr(b.k, "a spawn region can reach its end without a return (it returns " + vt + ")", id); }
+        return gt(gk_scope(k, b.k), exp, id);
     }
     if (kind == "named") { return gterr(k, "undefined variable " + t, id); }
     return gterr(k, "unexpected expression " + kind, id);
@@ -1281,8 +1288,57 @@ GKS gk_fn(GK k, Int d) {
     if (falls) { return gs_err(b.k, "function " + k.g.ns[d].text + " can reach its end without a return (it returns " + rbase + ")", d); }
     LS lin = lin_fn(k, d);
     if (lin.err != "") { return gs_err(b.k, lin.err, lin.at); }
+    Int mv = gk_moved_use(b.k, gk_kid(k, d, n - 1), gk_kid(k, d, n - 1));
+    if (mv >= 0) { return gs_err(b.k, "handle " + k.g.ns[mv].text + " was moved into a spawn region and cannot be used after it (spec §19: mutable handles are moved)", mv); }
     if (!resid_quiet()) { println("OK func " + k.g.ns[d].text); }
     return gs_ok(gk_scope(k, b.k));
+}
+
+// A use, after a spawn, of a handle that spawn captured (moved), or -1.
+Int gk_moved_use(GK k, Int root, Int id) {
+    Kg g = k.g;
+    Int here = if (g.ns[id].kind == "spawn") { gk_moved_by(k, root, id, id) } else { -1 };
+    if (here >= 0) { return here; }
+    return gk_moved_kids(k, root, id, 0, g.ns[id].nk);
+}
+
+Int gk_moved_kids(GK k, Int root, Int id, Int i, Int n) {
+    if (i >= n) { return -1; }
+    Int r = gk_moved_use(k, root, kg_kid(k.g, id, i));
+    return if (r >= 0) { r } else { gk_moved_kids(k, root, id, i + 1, n) };
+}
+
+// For each handle the spawn `s` captures (a ref inside it to a handle bound
+// outside), a later use of that handle in root.
+Int gk_moved_by(GK k, Int root, Int s, Int id) {
+    Kg g = k.g;
+    KN n = g.ns[id];
+    Int d = if (n.kind == "ref") { kg_def(k.rs, id) } else { -1 };
+    Bool outside = d >= 0 && (g.ns[d].sp < g.ns[s].sp || g.ns[d].sp > g.ns[s].ep);
+    // A handle binding or parameter declares its type as its first kid.
+    Bool handle = outside && g.ns[d].nk > 0 && g.ns[kg_kid(g, d, 0)].text == "File";
+    Int later = if (handle) { gk_use_after(k, root, d, g.ns[s].ep) } else { -1 };
+    if (later >= 0) { return later; }
+    return gk_moved_by_kids(k, root, s, id, 0, n.nk);
+}
+
+Int gk_moved_by_kids(GK k, Int root, Int s, Int id, Int i, Int n) {
+    if (i >= n) { return -1; }
+    Int r = gk_moved_by(k, root, s, kg_kid(k.g, id, i));
+    return if (r >= 0) { r } else { gk_moved_by_kids(k, root, s, id, i + 1, n) };
+}
+
+// A reference to d starting after position `after`, or -1.
+Int gk_use_after(GK k, Int id, Int d, Int after) {
+    KN n = k.g.ns[id];
+    if (n.kind == "ref" && n.sp > after && kg_def(k.rs, id) == d) { return id; }
+    return gk_use_after_kids(k, id, d, after, 0, n.nk);
+}
+
+Int gk_use_after_kids(GK k, Int id, Int d, Int after, Int i, Int n) {
+    if (i >= n) { return -1; }
+    Int r = gk_use_after(k, kg_kid(k.g, id, i), d, after);
+    return if (r >= 0) { r } else { gk_use_after_kids(k, id, d, after, i + 1, n) };
 }
 
 // A `?` in the function's own body (not inside a lambda or spawn), or -1.

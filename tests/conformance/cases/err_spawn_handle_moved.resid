@@ -1,0 +1,7 @@
+@requires(filesystem)
+Int main() {
+    File f = filesystem.open("/etc/hostname");
+    Result(Int, RegionError) r = spawn (filesystem) { return str_len(filesystem.read_handle(f)); };
+    Bool c = filesystem.close(f);
+    return 0;
+}

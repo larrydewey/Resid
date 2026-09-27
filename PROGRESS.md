@@ -306,6 +306,34 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0zq. spawn is concurrent (2026-09-27)
+
+Until now `spawn` started a thread and joined it at once, so no work ever
+ran in parallel. Spec §19 says work may run in parallel and completion is
+structured; the implementation now does both:
+
+- `Result(T, RegionError) r = spawn (...) { ... };` starts the region
+  (`resid_spawn_start`) and binds a running region. The first use of `r`
+  waits for it (`resid_spawn_wait`, idempotent). Every region is joined
+  before the block that bound it ends, and before a return, break or
+  continue leaves it (`lw_fut_waits`, like `with` releases). A spawn in any
+  other position is started and joined at once.
+- What a region or a lambda captures is shared at capture (`lo_freeze`:
+  transient maps are frozen, unique records marked shared), so no in-place
+  update races with a reader.
+- A handle captured by a region is moved: the parent may not use it
+  afterwards (a compile-time check).
+- The checker had never compared a region's returns with the declared
+  `T` (a Str could come back as an Int): the Result type now comes from the
+  binding or return, the body is checked against it, every path must
+  return, and a region cannot return a handle.
+- A finished thread's heap state is saved and adopted by the next thread
+  (`heap_retire` / `heap_adopt`), so programs spawning thousands of
+  regions reuse memory. argv is loaded before any child starts.
+- Four regions of CPU work run in 0.73 s against 2.88 s sequentially.
+  Conformance cases: `spawn_concurrent`, `err_spawn_return_type`,
+  `err_spawn_handle_moved`.
+
 ### 0zp. Correctness sweep, value display, stdlib imports (2026-09-27)
 
 An LLM writing a Resid skill found these; each has a conformance case now.

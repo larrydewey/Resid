@@ -350,7 +350,7 @@ pub Int rt_env_has(Int name) { return b8(c_getenv(name) != 0); }
 // then the index of string starts.
 Int args_state() { return resid_raw_global("rt_args", 24); }
 
-Int args_load() {
+pub Int args_load() {
     Int st = args_state();
     if (ld64(st + 8) != 0) { return 0; }
     Int buf = rt_fs_read_all(resid_raw_addr("/proc/self/cmdline"));

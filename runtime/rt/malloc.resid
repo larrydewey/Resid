@@ -228,6 +228,43 @@ pub Int c_calloc(Int n, Int size) {
     return if (p != 0) { resid_raw_fill(p, 0, n * size) * 0 + p } else { 0 };
 }
 
+// ─── Heaps of finished threads ─────────────────────────────────────────
+// A thread's heap state (free lists, slab, big-block cache) outlives it:
+// on exit it is saved on a stack, and the next thread to start adopts it,
+// so a program that spawns many regions reuses their memory. The stack is
+// guarded by a spin lock (pushes and pops are a few instructions).
+
+Int orphans() { return resid_raw_global("rt_heap_orphans", 16); }   // lock, top
+
+Int orphan_lock() {
+    if (resid_raw_cas(orphans(), 0, 1)) { return 0; }
+    return orphan_lock();
+}
+
+Int orphan_unlock() { return st64(orphans(), 0); }
+
+// At thread exit (after its last allocation).
+pub Int heap_retire() {
+    Int node = sys_mmap(4096);
+    if (node == 0) { return 0; }
+    _ = mcopy(node + 8, heap_tls(), 424);
+    _ = orphan_lock();
+    _ = st64(node, ld64(orphans() + 8));
+    _ = st64(orphans() + 8, node);
+    return orphan_unlock();
+}
+
+// At thread start (before its first allocation).
+pub Int heap_adopt() {
+    _ = orphan_lock();
+    Int node = ld64(orphans() + 8);
+    _ = if (node != 0) { st64(orphans() + 8, ld64(node)) } else { 0 };
+    _ = orphan_unlock();
+    if (node == 0) { return 0; }
+    _ = mcopy(heap_tls(), node + 8, 424);
+    return sys_munmap(node, 4096);
+}
+
 // Freed memory is kept for reuse; nothing to trim.
 pub Int c_malloc_trim(Int pad) { return 0; }
 

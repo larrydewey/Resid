@@ -1,0 +1,46 @@
+// Regions start at once, run while the parent goes on, and are waited for
+// on first use; a function leaving early, a loop and an unused region all
+// join before their scope ends; failures and nesting as before.
+Int boom(Int i) { List(Int) xs = [1]; return xs[i]; }
+
+Int early(Int k) {
+    Result(Int, RegionError) r = spawn () { return k * 2; };
+    if (k > 5) { return 0; }
+    Int v = r else { -1 };
+    return v;
+}
+
+Int in_loop(Int i, Int acc) {
+    if (i >= 3) { return acc; }
+    Result(Int, RegionError) r = spawn () { return i * 10; };
+    Int v = r else { 0 };
+    return in_loop(i + 1, acc + v);
+}
+
+Int work(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return work(i + 1, n, (acc + i * i) % 1000003);
+}
+
+@requires(args)
+Int main() {
+    Int x = 7;
+    Map(Str, Int) m = {"a": 1};
+    Result(Int, RegionError) ok = spawn () { return x + m.len(); };
+    Result(Int, RegionError) bad = spawn () { return boom(5); };
+    Result(Str, RegionError) nested = spawn () {
+        Result(Int, RegionError) inner = spawn () { return 40; };
+        Int iv = inner else { 0 };
+        return f"inner {iv + 2}";
+    };
+    Map(Str, Int) m2 = m.insert("b", 2);
+    Str b = match bad { Ok(n) => f"ok {n}", Err(e) => "failed" };
+    println(f"{ok} {b} {nested} {m2.len()}");
+    println(f"{early(3)} {early(9)} {in_loop(0, 0)}");
+    Int n = 2000000 + args.count();
+    Result(Int, RegionError) p = spawn () { return work(0, n, 0); };
+    Result(Int, RegionError) q = spawn () { return work(1, n, 0); };
+    println(f"{(p else { 0 }) == work(0, n, 0)} {(q else { 0 }) == work(1, n, 0)}");
+    Result(Int, RegionError) unused = spawn (args) { return args.count(); };
+    return 0;
+}
