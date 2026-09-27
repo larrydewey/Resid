@@ -644,6 +644,12 @@ static int resid_quiet_flag = 0;
 int8_t resid_quiet_set(int8_t on) { resid_quiet_flag = on ? 1 : 0; return 1; }
 int8_t resid_quiet(void) { return (int8_t)resid_quiet_flag; }
 
+/* The compiler's --runtime-internals: while checking, calls of the
+ * runtime's memory internals are accepted (building the compiler). */
+static int resid_internals_flag = 0;
+int8_t resid_internals_set(int8_t on) { resid_internals_flag = on ? 1 : 0; return 1; }
+int8_t resid_internals(void) { return (int8_t)resid_internals_flag; }
+
 /* ── Tiny regex (subset) ────────────────────────────────────────────────
  * Supports `^` `$` `.` `*` `+` `?` and `[...]` classes (with `^` negation
  * and `a-z` ranges). Deliberately NOT a full regex engine: it is what
@@ -8472,6 +8478,27 @@ void* resid_list_keep(void* l) {
 }
 
 void* resid_list_evac(void* l) { return resid_list_keep(l); }
+
+/* A loop-carried copy the loop replaced and nothing else holds (the
+ * compiler's lr_frees); memory of a region or an arena is left alone. */
+void resid_carry_free(int8_t dead, void* p) {
+    if (!dead || !p || scope_contains(p) || arena_chain_contains(g_bulk_arena, p) || arena_chain_contains(g_current_arena, p)) return;
+    free(p);
+}
+
+/* A pointer-form Dec a loop carries: copied out of the region it was made
+ * in (a Dec holds no pointers). */
+void* resid_dec_evac(void* p) {
+    DecV* v = (DecV*)p;
+    if (!v || !in_region(v)) return p;
+    size_t sz = sizeof(DecV) + (size_t)v->n * sizeof(uint64_t);
+    int64_t d = g_sc_depth;
+    g_sc_depth = 0;
+    DecV* r = (DecV*)resid_gmalloc((int64_t)sz); /* as resid_gfree expects */
+    g_sc_depth = d;
+    memcpy(r, v, sz);
+    return r;
+}
 
 static HMNode* hnode_evac(HMNode* n, int kf, int vf) {
     if (!n || !in_region(n)) return n;

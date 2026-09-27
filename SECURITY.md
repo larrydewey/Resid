@@ -14,8 +14,9 @@ them with:
 ## Threat model
 
 - **Untrusted library code** compiled into a program: it must not gain
-  capabilities (file system, processes, environment, arguments, network,
-  memory-unsafe runtime internals) that the program did not grant it.
+  capabilities (file system, processes, environment, arguments, network)
+  that the program did not grant it, or reach the runtime's memory
+  internals at all.
 - **Untrusted package sources** (a registry, a mirror, a copied archive):
   a dependency must be exactly what a trusted key signed, and must be the
   package that was asked for.
@@ -30,7 +31,8 @@ them with:
 | Guarantee | Enforcement | Tests |
 |---|---|---|
 | No ambient authority: every capability family a function uses, directly or through anything it calls, wraps in a closure, or runs as a `sort` behavior, is granted by its own `@requires` or its enclosing sandbox. Authority enters a program only where `main` (or a `test` block) declares it. | E0219, `gk_authority` in `examples/gcheck.resid` | `err_authority_*` (provider, builtin, call, closure, lambda, method sugar, behavior, test block), `authority_granted` |
-| Effectful runtime builtins are capabilities too: TCP is `network`, the ptrace debugger is `process`, and arena/bulk push/pop and the persist copies (which can free live memory) are `unsafe`. | `gk_builtin_family` | `err_authority_ambient_builtin`, `err_authority_unsafe_builtin` |
+| Effectful runtime builtins are capabilities too: TCP is `network`, the ptrace debugger is `process`. | `gk_builtin_family` | `err_authority_ambient_builtin` |
+| The runtime's memory internals (arena and bulk push/pop, persist copies), which can free memory a program still sees, are not part of the language: calling one is E0220 unless the compiler itself is being built (`--runtime-internals`, passed only by `boot.sh`). | `gk_internals_at` | `err_runtime_internal` |
 | Read-only grants cover reads only, including a write reached through a callee. | E0219 modes | `err_authority_readonly_write` |
 | Sandboxes only narrow: nested sandboxes meet, and `sandbox ()` grants nothing. | `ceil_enter`, `meet_caps` in `examples/typecheck.resid` | `err_sandbox_empty`, `err_sandbox_nested_meet` |
 | `import "m" @requires(caps)` compiles `m` and its imports inside `sandbox (caps)`; re-importing an unattenuated module attenuated is an error. | `imp_resolve_lines_a` | `err_import_attenuated`, `import_attenuated_ok` |

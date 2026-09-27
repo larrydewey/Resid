@@ -208,7 +208,6 @@ type GAX = { Kg g; Int n0; List(Str) tys; List(Int) defs; GAD d; GAC c; GAF f; M
 
 // Range facts (lr_facts) of every function under a unit, as "id=lo,hi;"
 // text; a node shared by several functions keeps the join.
-@requires(unsafe)
 StrBuf ga_facts(Kg g, Int unit, Int i, StrBuf acc) {
     if (unit < 0 || i >= g.ns[unit].nk) { return acc; }
     Int d = kg_kid(g, unit, i);
@@ -453,7 +452,7 @@ StrBuf ga_sources(StrBuf b, List(Str) ps, Int i) {
 
 // Nodes id..n in chunks, each built in its own arena and appended, so only
 // one chunk of CBOR is in memory at a time.
-@requires(unsafe, filesystem)
+@requires(filesystem)
 Bool ga_stream(Str path, GAX x, Int id, Int n) {
     if (id >= n) { return true; }
     Int e = min_i64(id + 2048, n);
@@ -485,7 +484,7 @@ pub List(Int) ga_where(GAF f, Int pos) {
 // Write the artifact for graph p (root p.id) whose source nodes are
 // 0..n0-1; with `resid`, p.id is the residual root. The file's SHA-256 as
 // hex, or "" when it could not be written.
-@requires(filesystem, unsafe)
+@requires(filesystem)
 pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, Str rs, List(Str) tys, Str defs, Str src, Str smap, Str main, Str checks) {
     Kg g = p.g;
     Int n = kg_count(g);

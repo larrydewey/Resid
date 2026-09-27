@@ -233,6 +233,11 @@ The compiler decides storage. The implementation may use
 any target ISA extensions (AVX-512, NEON, SVE, …) for
 optimization; raw intrinsics are not exposed.
 
+The runtime's own memory management (arenas, persist
+copies) is not part of the language: a program that calls
+it is rejected (E0220). Only the compiler's own source is
+built with it (--runtime-internals).
+
 Fixed-capacity value types (§44) carry a statically known
 extent, so the compiler may place them inline in the
 activation frame; they never require heap allocation.
@@ -783,8 +788,6 @@ verbs, process.run). Families:
   filesystem, environment, args, process   (providers)
   network      TCP builtins
   process      also the native debugger builtins
-  unsafe       runtime internals that free or pin memory
-               (arena and bulk push/pop, persist copies)
 
 Writing to stdout/stderr, reading stdin and OS randomness
 are not capabilities.

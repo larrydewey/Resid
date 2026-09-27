@@ -1,0 +1,10 @@
+// The runtime's memory internals (popping an arena frees what it holds)
+// are not part of the language (spec §5): a program calling one is
+// rejected unless the compiler itself is being built (--runtime-internals).
+Int main() {
+    Int a = resid_arena_push();
+    Str s = "x" + IntToString(1);
+    Int b = resid_arena_pop();
+    println(s);
+    return 0;
+}

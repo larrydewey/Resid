@@ -1318,6 +1318,8 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
     if (n == "resid_test_summary") { return lw_extern0(w, id, n, "i64", "Int", c); }
     if (n == "resid_quiet") { return lw_extern0b(w, id, n, c); }
     if (n == "resid_quiet_set") { return lw_externb(w, id, n, l1s("Bool"), env, c); }
+    if (n == "resid_internals") { return lw_extern0b(w, id, n, c); }
+    if (n == "resid_internals_set") { return lw_externb(w, id, n, l1s("Bool"), env, c); }
     if (n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "str_sha256") { return lw_extern(w, id, n, l1s("Str"), "Str", env, c); }
     if (n == "resid_sacc_append_int") { return lw_extern(w, id, n, l2s("Str", "Int"), "Str", env, c); }
     if (n == "resid_sacc_append") { return lw_extern(w, id, n, l2s("Str", "Str"), "Str", env, c); }
@@ -1348,7 +1350,7 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
 
 // Names the builtin table covers.
 Bool lw_is_builtin(Str n) {
-    return n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count" || n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64" || n == "list_sort_ints" || n == "list_reverse_ints" || n == "list_sort_strs" || n == "list_reverse_strs" || n == "list_sort_floats" || n == "list_reverse_floats" || n == "list_contains_int" || n == "list_contains_str" || n == "list_contains_float" || n == "list_sum" || n == "list_sumf";
+    return n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_internals" || n == "resid_internals_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count" || n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64" || n == "list_sort_ints" || n == "list_reverse_ints" || n == "list_sort_strs" || n == "list_reverse_strs" || n == "list_sort_floats" || n == "list_reverse_floats" || n == "list_contains_int" || n == "list_contains_str" || n == "list_contains_float" || n == "list_sum" || n == "list_sumf";
 }
 
 // cg_print: `print(str_sb_finish(b))` fuses into resid_sb_print.
@@ -2253,7 +2255,6 @@ PG pg_with_err(PG g, Str err) {
 }
 
 // pg_func_one, with the body lowered from the graph.
-@requires(unsafe)
 PG lw_fn(LW w0, Int d, PG g) {
     Funcs fs = w0.fs;
     Int n = w0.g.ns[d].nk;
@@ -2425,6 +2426,7 @@ Str lr_evac_fn(Str ty) {
         return "@resid_map_evac(ptr %V, i8 " + IntToString(lr_kind(map_key_type_cg(ty))) + ", i8 " + IntToString(lr_kind(map_val_type_cg(ty))) + ")";
     }
     if (lr_list_word(ty)) { return "@resid_list_evac(ptr %V)"; }
+    if (is_dec_cg(ty) && ll_ty(ty) == "ptr") { return "@resid_dec_evac(ptr %V)"; }
     return "";
 }
 
@@ -2503,8 +2505,74 @@ List(Str) lr_region_at(List(Str) ls, Int i, Int h, Int b, List(Str) mv, ListBuf(
     Bool ret = i > b && str_starts_with(l, "ret ");
     // A back edge's block starts with its label; its moves go after it.
     Str lab = if (back && i > 0 && str_ends_with(ls[i - 1], ":")) { str_slice(ls[i - 1], 0, str_len(ls[i - 1]) - 1) } else { "" };
-    ListBuf(Str) a1 = if (back) { lr_move_lines(mv, lab, 0, a0).push("call void @resid_scope_pop(i64 %lsc)") } else { if (ret) { a0.push("call void @resid_scope_pop(i64 %lsc)") } else { a0 } };
-    return lr_region_at(ls, i + 1, h, b, mv, a1.push(if (phi) { lr_phi(l, mv) } else { l }));
+    List(Str) fl = lr_flat(mv, 0, []);
+    ListBuf(Str) a1 = if (back) { lr_frees(fl, 0, mv, lab, lr_move_lines(mv, lab, 0, a0).push("call void @resid_scope_pop(i64 %lsc)")) } else { if (ret) { a0.push("call void @resid_scope_pop(i64 %lsc)") } else { a0 } };
+    Str preg = if (phi) { str_slice(l, 0, str_find_char(l, 32, 0)) } else { "" };
+    ListBuf(Str) a2 = a1.push(if (phi) { lr_phi(l, mv) } else { l });
+    ListBuf(Str) a3 = if (phi && list_contains_str(fl, preg)) { a2.push(lr_own_phi(l, preg, mv)) } else { a2 };
+    return lr_region_at(ls, i + 1, h, b, mv, a3);
+}
+
+// ─── Flat carried values (Dec) ──────────────────────────────────────
+// A carried Dec is copied out of the region at each back edge. Its copy
+// from the previous edge is then dead, unless another carried value is
+// that same pointer: `%pJ.own` says the loop made the current value (it
+// is not an argument or a value passed through), and the old copy is
+// freed when it is replaced and no new carried value equals it. Nothing
+// else can hold it: the region is gone, and a loop carrying a Dec carries
+// nothing that could contain one.
+List(Str) lr_flat(List(Str) mv, Int i, List(Str) acc) {
+    if (i >= mv.len()) { return acc; }
+    List(Str) q = str_split(mv[i], "|");
+    Bool f = str_contains(q[3], "resid_dec_evac") && !list_contains_str(acc, q[1]);
+    return lr_flat(mv, i + 1, if (f) { acc.concat([q[1]]) } else { acc });
+}
+
+// `%pJ.own`: false on entry, on a move whether it copied, else unchanged.
+Str lr_own_phi(Str l, Str reg, List(Str) mv) {
+    List(Str) parts = str_split(l, "[ ");
+    return lr_own_at(parts, 1, reg, mv, reg + ".own = phi i1 ");
+}
+
+Str lr_own_at(List(Str) parts, Int k, Str reg, List(Str) mv, Str acc) {
+    if (k >= parts.len()) { return acc; }
+    Str p = parts[k];
+    Int c = str_find_char(p, 44, 0);
+    Str lab = str_slice(p, c + 3, str_find_char(p, 32, c + 2));
+    Str v = if (k == 1) { "false" } else { if (lr_has_move(mv, lab, reg, 0)) { reg + ".own." + lab } else { reg + ".own" } };
+    Str sep = if (k == 1) { "" } else { ", " };
+    return lr_own_at(parts, k + 1, reg, mv, acc + sep + "[ " + v + ", %" + lab + " ]");
+}
+
+// The new value of flat param `r` on back edge `lab`.
+Str lr_new(List(Str) mv, Str r, Str lab) { return if (lr_has_move(mv, lab, r, 0)) { lr_moved(r, lab) } else { r }; }
+
+ListBuf(Str) lr_frees(List(Str) fl, Int i, List(Str) mv, Str lab, ListBuf(Str) acc) {
+    if (i >= fl.len()) { return acc; }
+    Str r = fl[i];
+    if (!lr_has_move(mv, lab, r, 0)) { return lr_frees(fl, i + 1, mv, lab, acc); }
+    Str own = r + ".own." + lab;
+    Str src = lr_move_src(mv, lab, r, 0);
+    ListBuf(Str) a1 = acc.push(own + " = icmp ne ptr " + lr_moved(r, lab) + ", " + src);
+    ListBuf(Str) a2 = lr_free_cond(fl, 0, mv, lab, r, r + ".own", a1);
+    Str fz = r + ".fz." + lab;
+    return lr_frees(fl, i + 1, mv, lab, a2.push(fz + " = zext i1 " + r + ".fc." + lab + " to i8").push("call void @resid_carry_free(i8 " + fz + ", ptr " + r + ")"));
+}
+
+Str lr_move_src(List(Str) mv, Str lab, Str reg, Int i) {
+    List(Str) q = str_split(mv[i], "|");
+    if (q[0] == lab && q[1] == reg) { return q[2]; }
+    return lr_move_src(mv, lab, reg, i + 1);
+}
+
+// `%r.fc.lab`: r's value is the loop's and no new carried value is it.
+ListBuf(Str) lr_free_cond(List(Str) fl, Int j, List(Str) mv, Str lab, Str r, Str c, ListBuf(Str) acc) {
+    Str out = r + ".fc." + lab;
+    if (j >= fl.len()) { return acc.push(out + " = and i1 " + c + ", true"); }
+    Str ne = r + ".ne" + IntToString(j) + "." + lab;
+    Str cj = r + ".c" + IntToString(j) + "." + lab;
+    ListBuf(Str) a1 = acc.push(ne + " = icmp ne ptr " + r + ", " + lr_new(mv, fl[j], lab)).push(cj + " = and i1 " + c + ", " + ne);
+    return lr_free_cond(fl, j + 1, mv, lab, r, cj, a1);
 }
 
 // ─── Debug info ─────────────────────────────────────────────────────
@@ -3364,7 +3432,6 @@ Int lw_digits(Str s, Int i, Int acc) {
     return lw_digits(s, i + 1, acc * 10 + c - 48);
 }
 
-@requires(unsafe)
 PG lw_decls(LW w, Int id, Int i, PG acc) {
     if (acc.err != "" || i >= w.g.ns[id].nk) { return acc; }
     Int d = kg_kid(w.g, id, i);
@@ -3380,7 +3447,6 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
 }
 
 // Lower the reducer's residual graph.
-@requires(unsafe)
 pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
     LOP lo = lo_program(g, unit, fs);
     LW w = LW {.g = g, .fs = fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
@@ -4161,12 +4227,10 @@ LRS lr_stmt(Kg g, Int id, LRS st) {
 
 // The walk's intermediate values are compiler-generated allocations, so it
 // runs in a bulk arena and its map comes out as text ("id=lo,hi;").
-@requires(unsafe)
 pub Map(Int, Str) lr_facts_kept(Kg g, Int d) {
     return lr_facts_read(lr_facts_kept_text(g, d), 0, lr_nof());
 }
 
-@requires(unsafe)
 pub Str lr_facts_kept_text(Kg g, Int d) {
     Int _in = resid_bulk_push();
     Map(Int, Str) f = lr_facts(g, d);

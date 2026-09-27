@@ -85,7 +85,7 @@ if [ "$BOOTSTRAP_SELF" -eq 1 ]; then
         NEXT_BIN="${OUT}/reseed_round${i}.bin"
         NEXT_LL="${NEXT_BIN}.ll"
         ensure_key "$PREV_BIN"
-        timeout 600 "$PREV_BIN" "$SRC" -o "$NEXT_BIN"
+        timeout 600 "$PREV_BIN" "$SRC" -o "$NEXT_BIN" --runtime-internals
         [ -f "$NEXT_LL" ] || die "round $i produced no output"
         if cmp -s "$PREV_LL" "$NEXT_LL"; then
             ok "converged after $i round$([ "$i" -eq 1 ] && echo "" || echo "s")"
@@ -136,7 +136,7 @@ ok "stage1 linked"
 # stage yields both a ready-to-run binary and the IR to compare.
 step "stage2: stage1 compiles the driver source"
 ensure_key "${OUT}/stage1.bin"
-timeout 600 "${OUT}/stage1.bin" "$SRC" -o "${OUT}/stage2.bin"
+timeout 600 "${OUT}/stage1.bin" "$SRC" -o "${OUT}/stage2.bin" --runtime-internals
 [ -f "${OUT}/stage2.bin.ll" ] || die "stage1 produced no output"
 if cmp -s "${OUT}/stage2.bin.ll" "$SEED_LL"; then
     HASH=$(sha256sum "$SEED_LL" | cut -c1-16)
@@ -151,7 +151,7 @@ ok "stage2 linked"
 # ── 3+4. stage2 -> stage3, fixed-point check ─────────────────────────────
 step "stage3: stage2 compiles the driver source"
 ensure_key "${OUT}/stage2.bin"
-timeout 600 "${OUT}/stage2.bin" "$SRC" -o "${OUT}/stage3.bin"
+timeout 600 "${OUT}/stage2.bin" "$SRC" -o "${OUT}/stage3.bin" --runtime-internals
 [ -f "${OUT}/stage3.bin.ll" ] || die "stage2 produced no output"
 ok "stage3 emitted"
 

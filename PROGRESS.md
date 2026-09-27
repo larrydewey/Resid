@@ -306,6 +306,22 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0zg. Runtime internals are compiler-only; carried Decs are freed (2026-09-26)
+
+- The `unsafe` capability family is gone: arena and bulk push/pop and
+  the persist copies free memory a program may still see, which spec §5
+  rules out. Calling one is E0220 (`gk_internals_at`) unless the driver
+  runs with `--runtime-internals`, which `boot.sh` passes to build the
+  compiler (the flag sets `resid_internals`, itself internal).
+- pidigits no longer uses bulk arenas: `iter` is a plain tail-call loop,
+  and loop regions now carry pointer-form Decs (`resid_dec_evac`). The
+  previous iteration's copy is freed at the back edge when the loop made
+  it and no new carried value is that pointer (`lr_frees`, `%pJ.own`).
+  pidigits 10000: 0.40s/23MB (bulk arenas) -> 0.41s/12MB.
+- Bootstrap note: removing the old annotations and adding
+  `resid_internals` needed a stage built from a variant source (old
+  annotations, check off), then seeding from the real source's IR.
+
 ### 0zf. In-place list appends on maps of lists (2026-09-26)
 
 - `List(T) l = m.get(k) else { d }; ... m.insert(k, l.concat([e]))`, with

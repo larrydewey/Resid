@@ -16,10 +16,9 @@
 // checked exactly when the estimate is within 1e-9 of an integer; the
 // numer > accum test is decided the same way.
 //
-// Memory: Resid never frees, so iterations run in blocks of 16 inside
-// runtime arenas (resid_bulk_push / resid_bulk_pop), 32 blocks per outer
-// arena; resid_dec_persist copies the three numbers into the enclosing
-// scope before each pop.
+// Memory: `iter` is a tail-call loop, so each iteration runs in a region
+// the compiler frees at the next one, moving the three carried numbers
+// out (loop regions, resid_dec_evac).
 
 // State: n2 = 2*numer, a = accum, d = denom, all Dec(1000000) integers;
 // p = pending factor (1 or 10) that numer and accum still owe from the
@@ -75,12 +74,9 @@ Bool print_line(Int line, Int i) {
     return print(str_slice(ds, 1, str_len(ds)) + "\t:" + IntToString(i) + "\n");
 }
 
-type St = { Dec(1000000) n2; Dec(1000000) a; Dec(1000000) d; Int p; Int k; Int i; Int line; };
-
-St iter(Dec(1000000) n2, Dec(1000000) a, Dec(1000000) d, Int p, Int k, Int i, Int line, Int total, Int left) {
-    if (i >= total || left <= 0) {
-        return St {.n2 = n2, .a = a, .d = d, .p = p, .k = k, .i = i, .line = line};
-    }
+// The digit line in progress when `total` digits are out.
+Int iter(Dec(1000000) n2, Dec(1000000) a, Dec(1000000) d, Int p, Int k, Int i, Int line, Int total) {
+    if (i >= total) { return line; }
     Int k1 = k + 1;
     Int k2 = 2 * k1 + 1;
     // next_term, with the pending factor p folded into the multipliers:
@@ -90,9 +86,9 @@ St iter(Dec(1000000) n2, Dec(1000000) a, Dec(1000000) d, Int p, Int k, Int i, In
     Dec(1000000) a1 = (a + n2) * big(pk2);
     Dec(1000000) d1 = d * big(k2);
     Dec(1000000) n21 = n2 * big(pk1);
-    if (n_gt_a(n21, a1)) { return iter(n21, a1, d1, 1, k1, i, line, total, left - 1); }
+    if (n_gt_a(n21, a1)) { return iter(n21, a1, d1, 1, k1, i, line, total); }
     Int q = digit(n21, a1, d1);
-    if (q < 0) { return iter(n21, a1, d1, 1, k1, i, line, total, left - 1); }
+    if (q < 0) { return iter(n21, a1, d1, 1, k1, i, line, total); }
     Int i1 = i + 1;
     Int line1 = line * 10 + q;
     Bool _p = if (i1 % 10 == 0) { print_line(line1, i1) } else { true };
@@ -100,52 +96,7 @@ St iter(Dec(1000000) n2, Dec(1000000) a, Dec(1000000) d, Int p, Int k, Int i, In
     // eliminate_digit: accum = 10 * (accum - denom*q); numer *= 10 (the
     // factor 10 is left pending)
     Dec(1000000) a2 = if (q == 0) { a1 } else { a1 - d1 * big(q) };
-    return iter(n21, a2, d1, 10, k1, i1, line2, total, left - 1);
-}
-
-// One block of `m` iterations in its own bulk scope; the three numbers
-// are copied out of it (resid_dec_persist) before it is popped.
-@requires(unsafe)
-St block(St s, Int total, Int m) {
-    Int _in = resid_bulk_push();
-    St r = iter(s.n2, s.a, s.d, s.p, s.k, s.i, s.line, total, m);
-    Dec(1000000) n2 = resid_dec_persist(r.n2);
-    Dec(1000000) a = resid_dec_persist(r.a);
-    Dec(1000000) d = resid_dec_persist(r.d);
-    Int p = r.p;
-    Int k = r.k;
-    Int i = r.i;
-    Int line = r.line;
-    Int _out = resid_bulk_pop();
-    return St {.n2 = n2, .a = a, .d = d, .p = p, .k = k, .i = i, .line = line};
-}
-
-@requires(unsafe)
-St blocks(St s, Int total, Int m, Int g) {
-    if (g <= 0 || s.i >= total) { return s; }
-    return blocks(block(s, total, m), total, m, g - 1);
-}
-
-// A group of `g` blocks in an outer bulk scope, copied out once.
-@requires(unsafe)
-St group(St s, Int total, Int m, Int g) {
-    Int _in = resid_bulk_push();
-    St r = blocks(s, total, m, g);
-    Dec(1000000) n2 = resid_dec_persist(r.n2);
-    Dec(1000000) a = resid_dec_persist(r.a);
-    Dec(1000000) d = resid_dec_persist(r.d);
-    Int p = r.p;
-    Int k = r.k;
-    Int i = r.i;
-    Int line = r.line;
-    Int _out = resid_bulk_pop();
-    return St {.n2 = n2, .a = a, .d = d, .p = p, .k = k, .i = i, .line = line};
-}
-
-@requires(unsafe)
-St run(St s, Int total, Int m, Int g) {
-    if (s.i >= total) { return s; }
-    return run(group(s, total, m, g), total, m, g);
+    return iter(n21, a2, d1, 10, k1, i1, line2, total);
 }
 
 Str spaces(Int n) {
@@ -153,13 +104,12 @@ Str spaces(Int n) {
     return " " + spaces(n - 1);
 }
 
-@requires(args, unsafe)
+@requires(args)
 Int main() {
     Int total = str_parse_int(args.get(1));
-    St s0 = St {.n2 = big(2), .a = big(0), .d = big(1), .p = 1, .k = 0, .i = 0, .line = 1};
-    St r = run(s0, total, 16, 32);
+    Int line = iter(big(2), big(0), big(1), 1, 0, 0, 1, total);
     if (total % 10 != 0) {
-        Str ds = IntToString(r.line);
+        Str ds = IntToString(line);
         Str digits = str_slice(ds, 1, str_len(ds));
         print(digits + spaces(10 - str_len(digits)) + "\t:" + IntToString(total) + "\n");
     }

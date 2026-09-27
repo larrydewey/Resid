@@ -882,7 +882,7 @@ Str fam_head(Str ty) {
 // precision, 34 for a bare `Dec` or an `m` literal) is static.
 // Typed and linear-accumulator map/set entry points (see lin_* below).
 List(Str) hdr_map_typed() {
-    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare {i64, i64} @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)"];
+    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare {i64, i64} @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare void @resid_carry_free(i8, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)"];
 }
 
 // Runtime declarations added after the long hdr_core lists; both mains

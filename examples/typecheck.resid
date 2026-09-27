@@ -2183,6 +2183,14 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_quiet expects no arguments"};
     }
+    if (name == "resid_internals") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_internals expects no arguments"};
+    }
+    if (name == "resid_internals_set") {
+        if (argtys == "Bool") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_internals_set expects (Bool), got (" + argtys + ")"};
+    }
     if (name == "resid_quiet_set") {
         if (argtys == "Bool") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_quiet_set expects (Bool), got (" + argtys + ")"};

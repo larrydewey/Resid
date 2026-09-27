@@ -1604,9 +1604,22 @@ Str gk_prov_family(GK k, Int id) {
 Str gk_builtin_family(Str n) {
     if (str_starts_with(n, "resid_tcp_")) { return "network"; }
     if (str_starts_with(n, "resid_dbg_")) { return "process"; }
-    if (n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop") { return "unsafe"; }
-    if (n == "resid_list_str_persist_copy" || n == "resid_dec_persist") { return "unsafe"; }
     return "";
+}
+
+// Runtime internals that free or move memory the program may still see
+// (spec §5: storage is never exposed). Only the compiler's own source may
+// call them, checked with --runtime-internals (E0220).
+Bool gk_internal(Str n) {
+    return n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_list_str_persist_copy" || n == "resid_dec_persist" || n == "resid_internals_set";
+}
+
+Bool gk_internals_at(GK k, Int id, Bool acc) {
+    if (id >= k.g.ns.len()) { return acc; }
+    Bool bad = if (k.g.ns[id].kind == "call" && gk_internal(k.g.ns[id].text) && !gk_user_call(k, id)) {
+        eprintln("error[E0220]: `" + k.g.ns[id].text + "` is a runtime internal of the compiler, not part of the language (spec §5); only a build with --runtime-internals may call it")
+    } else { false };
+    return gk_internals_at(k, id + 1, acc || bad);
 }
 
 // Family of a builtin call node (not a user function of that name), or "".
@@ -1960,7 +1973,8 @@ Int gk_finish(GK k, List(Int) fnode) {
     Bool err3 = e0218_check_all(fs, eff, facts.pcsv, 0);
     Bool err4 = gk_spawn_all(k, fnode, eff, 0);
     Bool err5 = gk_authority(k, fnode, facts);
-    if (err1 || err2 || err3 || err4 || err5) { return 1; }
+    Bool err6 = if (resid_internals()) { false } else { gk_internals_at(k, 0, false) };
+    if (err1 || err2 || err3 || err4 || err5 || err6) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
     return 0;
 }
