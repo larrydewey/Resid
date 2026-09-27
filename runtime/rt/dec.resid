@@ -706,21 +706,43 @@ UInt(128) times10(UInt(128) r, Int k) {
     return times10(r * (UInt(128))10, k - 1);
 }
 
-// The nearest double: strtod of the leading 40 digits.
+// The nearest double to the leading 40 digits (as strtod of them would
+// give), straight from the limbs.
 Float to_f64(Int v) {
     if (dsign(v) == 0) { return 0.0; }
-    Int cd = coef_digits(v);
-    Int nd = dnd(v);
-    Int keep = min(nd, 40);
-    Int buf = resid_raw_tls("dec_f64", 96);
-    Int k0 = if (dsign(v) < 0) { st8(buf, 45) + 1 } else { 0 };
-    Int _c = mcopy(buf + k0, cd, keep);
-    Int k1 = k0 + keep;
-    Int _e = st8(buf + k1, 101);
-    Int k2 = k1 + 1 + itoa_into(buf + k1 + 1, dexp(v) + (nd - keep));
-    Int _z = st8(buf + k2, 0);
-    Int _f = c_free(cd);
-    return c_strtod(buf, 0);
+    // Only the top four limbs (58+ digits) can hold the first 40.
+    Int k = min(dn(v), 4);
+    Int low = dn(v) - k;
+    Int m = bn_new();
+    Int _z = st64(m, 0);
+    Int _b = limbs_to_bn(m, dl(v), dn(v) - 1, low);
+    Int kept = dnd(v) - 19 * low;
+    Int drop = max(kept - 40, 0);
+    Int _d = drop_digits(m, drop);
+    Float r = decimal_to_double(m, dexp(v) + 19 * low + drop, false);
+    Int _f = c_free(m);
+    return if (dsign(v) < 0) { 0.0 - r } else { r };
+}
+
+// m = m * 10^19 + limb for limbs i down to low.
+Int limbs_to_bn(Int m, Int l, Int i, Int low) {
+    if (i < low) { return 0; }
+    UInt(64) x = lu(li(l, i));
+    Int hi = (Int)(x / (UInt(64))1000000000);
+    Int lo = (Int)(x % (UInt(64))1000000000);
+    // x = hh * 10^18 + hl * 10^9 + lo with hh < 10.
+    Int _a = bn_muladd(m, 10, hi / 1000000000);
+    Int _b = bn_muladd(m, 1000000000, hi % 1000000000);
+    Int _c = bn_muladd(m, 1000000000, lo);
+    return limbs_to_bn(m, l, i - 1, low);
+}
+
+Int drop_digits(Int m, Int k) {
+    if (k <= 0) { return 0; }
+    Int step = min(k, 9);
+    Int d = ld64(resid_raw_table([1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000]) + step * 8);
+    Int _r = bn_divsmall(m, d);
+    return drop_digits(m, k - step);
 }
 
 // ─── The compiler's entry points ───────────────────────────────────────

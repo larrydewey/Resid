@@ -4,6 +4,11 @@
 // (resid_raw_*) and @export / @import; integer + - * wrap, as in C. Only
 // @export entries are visible outside the module.
 import "abi.resid";
+import "libc.resid";
+import "malloc.resid";
+import "floattext.resid";
+import "proc.resid";
+import "start.resid";
 import "mem.resid";
 import "io.resid";
 import "arith.resid";

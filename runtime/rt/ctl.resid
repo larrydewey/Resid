@@ -57,12 +57,11 @@ pub Int rt_spawn(Int worker, Int captures) {
     Int _w = st64(a, worker);
     Int _c = st64(a + 8, captures);
     Int _z = st64(a + 16, 0);
-    Int t = xmalloc(16);
-    if (c_pthread_create(t, 0, resid_raw_fn("spawn_entry"), a) != 0) { return c_free(a) * 0; }
-    Int ret = resid_raw_tls("spawn_ret", 8);
-    Int _j = c_pthread_join(ld64(t), ret);
-    Int _f = c_free(a) + c_free(t);
-    return ld64(ret);
+    Int t = thread_spawn(resid_raw_fn("spawn_entry"), a, 8388608);
+    if (t == 0) { return c_free(a) * 0; }
+    Int ret = thread_join(t);
+    Int _f = c_free(a);
+    return ret;
 }
 
 // Ok(payload) as a Result box (tag 1).

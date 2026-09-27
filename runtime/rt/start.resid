@@ -1,0 +1,200 @@
+// Process entry, thread-local storage and threads, without libc.
+//
+// _start (emitted by the compiler with main) passes the initial stack
+// pointer to resid_start, which records argv / envp, installs the main
+// thread's TLS block and returns; _start then calls main and exits with
+// its result. Threads are clone(2) threads with their own stack and TLS
+// block, joined through the kernel's CLONE_CHILD_CLEARTID futex.
+//
+// TLS (x86-64 variant II): the thread pointer %fs points at a small TCB
+// whose first word is the pointer itself; the block (the PT_TLS image,
+// then zeros) sits right below it.
+
+// The PT_TLS image: address, file size, memory size, alignment (words).
+Int tls_img() { return resid_raw_global("rt_tls_img", 32); }
+
+pub Int argv_w() { return resid_raw_global("rt_argv", 16); }
+
+// A static PIE relocates itself first (dyn: its _DYNAMIC); nothing here
+// may read a relocated pointer before that, or touch TLS or the allocator
+// before the block is in.
+@export("resid_start", "void(ptr,ptr)")
+pub Int rt_start(Int sp, Int dyn) {
+    Int argc = ld64(sp);
+    Int argv = sp + 8;
+    Int envp = argv + (argc + 1) * 8;
+    Int auxv = skip_env(envp);
+    Int _b = st64(bias_w(), load_bias(auxv, dyn));
+    Int _r = self_relocate(ld64(bias_w()), dyn);
+    Int _a = st64(argv_w(), argc) + st64(argv_w() + 8, argv);
+    Int _e = set_envp(envp);
+    Int _t = find_tls(auxv);
+    Int tp = tls_block();
+    return arch_set_fs(tp);
+}
+
+// The load bias: from PT_PHDR (6), else from where _DYNAMIC (PT_DYNAMIC,
+// 2) actually is (a static PIE has no PT_PHDR).
+Int bias_w() { return resid_raw_global("rt_load_bias", 8); }
+
+Int load_bias(Int auxv, Int dyn) {
+    Int ph = auxv_get(auxv, 3);
+    Int n = auxv_get(auxv, 5);
+    Int b = phdr_bias(ph, 0, n, ph);
+    if (b != 0 || dyn == 0) { return b; }
+    return dyn - ph_vaddr(ph, 0, n, 2);
+}
+
+Int ph_vaddr(Int ph, Int i, Int n, Int ty) {
+    if (i >= n) { return 0; }
+    Int h = ph + i * 56;
+    if (ld32(h) == ty) { return ld64(h + 16); }
+    return ph_vaddr(ph, i + 1, n, ty);
+}
+
+// R_X86_64_RELATIVE entries of DT_RELA (7) / DT_RELASZ (8): *(base + off)
+// = base + addend.
+Int self_relocate(Int base, Int dyn) {
+    if (dyn == 0) { return 0; }
+    Int rela = dyn_get(dyn, 7);
+    Int sz = dyn_get(dyn, 8);
+    if (rela == 0 || base == 0) { return 0; }
+    return apply_rela(base, base + rela, base + rela + sz);
+}
+
+Int dyn_get(Int d, Int tag) {
+    Int t = ld64(d);
+    if (t == 0) { return 0; }
+    if (t == tag) { return ld64(d + 8); }
+    return dyn_get(d + 16, tag);
+}
+
+Int apply_rela(Int base, Int r, Int end) {
+    if (r >= end) { return 0; }
+    Int _s = if ((ld64(r + 8) & 4294967295) == 8) { st64(base + ld64(r), base + ld64(r + 16)) } else { 0 };
+    return apply_rela(base, r + 24, end);
+}
+
+Int skip_env(Int e) { return if (ld64(e) == 0) { e + 8 } else { skip_env(e + 8) }; }
+
+Int auxv_get(Int a, Int key) {
+    Int k = ld64(a);
+    if (k == 0) { return 0; }
+    if (k == key) { return ld64(a + 8); }
+    return auxv_get(a + 16, key);
+}
+
+// AT_PHDR (3) / AT_PHNUM (5): the program headers; PT_PHDR (6) gives the
+// load bias, PT_TLS (7) the image.
+Int find_tls(Int auxv) {
+    Int ph = auxv_get(auxv, 3);
+    Int n = auxv_get(auxv, 5);
+    Int bias = if (ld64(bias_w()) != 0) { ld64(bias_w()) } else { phdr_bias(ph, 0, n, ph) };
+    return tls_scan(ph, 0, n, bias);
+}
+
+Int phdr_bias(Int ph, Int i, Int n, Int at) {
+    if (i >= n) { return 0; }
+    Int h = ph + i * 56;
+    if (ld32(h) == 6) { return at - ld64(h + 16); }
+    return phdr_bias(ph, i + 1, n, at);
+}
+
+Int tls_scan(Int ph, Int i, Int n, Int bias) {
+    if (i >= n) { return 0; }
+    Int h = ph + i * 56;
+    if (ld32(h) == 7) {
+        Int g = tls_img();
+        Int _v = st64(g, ld64(h + 16) + bias) + st64(g + 8, ld64(h + 32)) + st64(g + 16, ld64(h + 40));
+        return st64(g + 24, max(ld64(h + 48), 16));
+    }
+    return tls_scan(ph, i + 1, n, bias);
+}
+
+// Under another process entry (a C main), the image is found once through
+// /proc/self/auxv.
+Int ensure_tls() {
+    if (ld64(tls_img() + 24) != 0) { return 0; }
+    Int blk = read_file_all(resid_raw_addr("/proc/self/auxv"));
+    if (blk == 0) { return 0; }
+    Int _f = find_tls(blk);
+    return c_free(blk);
+}
+
+Int tls_size() {
+    Int g = tls_img();
+    Int al = ld64(g + 24);
+    return (ld64(g + 16) + al - 1) & (0 - al);
+}
+
+// A fresh TLS block with its TCB; the thread pointer.
+pub Int tls_block() {
+    Int g = tls_img();
+    Int al = max(ld64(g + 24), 16);
+    Int ts = tls_size();
+    Int total = ts + al + 256;
+    Int base = sys_mmap(total);
+    Int tp = (base + ts + al - 1) & (0 - al);
+    Int blk = tp - ts;
+    Int _c = if (ld64(g + 8) > 0) { mcopy(blk, ld64(g), ld64(g + 8)) } else { 0 };
+    Int _s = st64(tp, tp);
+    return tp;
+}
+
+Int arch_set_fs(Int tp) { return resid_raw_syscall(158, 4098, tp, 0, 0, 0, 0); }   // ARCH_SET_FS
+
+// ─── Threads ───────────────────────────────────────────────────────────
+// A thread record {fn, arg, result, tid (futex), stack, stack size}.
+
+Int clone_flags() { return 4001536; }   // VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|CHILD_CLEARTID
+
+// fn(arg) on a new thread with a stack of `stack` bytes; the record, or 0.
+pub Int thread_spawn(Int fn, Int arg, Int stack) {
+    Int rec = xmalloc(48);
+    Int _r = st64(rec, fn) + st64(rec + 8, arg) + st64(rec + 16, 0) + st64(rec + 24, 0);
+    Int stk = sys_mmap(stack);
+    if (stk == 0) { return c_free(rec) * 0; }
+    Int _s = st64(rec + 32, stk) + st64(rec + 40, stack);
+    // The child pops its entry and argument off its new stack.
+    Int top = (stk + stack) & (0 - 16);
+    Int sp = top - 16;
+    Int _p = st64(sp, resid_raw_fn("thread_main")) + st64(sp + 8, rec);
+    Int _i = ensure_tls();
+    Int tp = tls_block();
+    Int r = c_clone(clone_flags(), sp, rec + 24, rec + 24, tp);
+    if (r < 0) { return sys_munmap(stk, stack) * 0 + c_free(rec) * 0; }
+    return rec;
+}
+
+// A thread's body: fn(arg), its result kept, the exit hooks run.
+pub Int thread_main(Int rec) {
+    Int res = resid_raw_call2(ld64(rec), ld64(rec + 8), 0);
+    Int _r = st64(rec + 16, res);
+    return scope_thread_exit(0);
+}
+
+// Wait for the thread to finish; its result. The record goes.
+pub Int thread_join(Int rec) {
+    Int _w = futex_wait_zero(rec + 24);
+    Int res = ld64(rec + 16);
+    Int _u = sys_munmap(ld64(rec + 32), ld64(rec + 40));
+    return c_free(rec) * 0 + res;
+}
+
+Int futex_wait_zero(Int addr) {
+    Int v = ld32(addr);
+    if (v == 0) { return 0; }
+    Int _f = resid_raw_syscall(202, addr, 0, v, 0, 0, 0);   // FUTEX_WAIT
+    return futex_wait_zero(addr);
+}
+
+// abort(): SIGABRT (unblocked first), and if that returns, exit 134.
+pub Int c_libc_abort() {
+    Int set = resid_raw_tls("abort_set", 8);
+    Int _s = st64(set, 32);                                 // 1 << (6 - 1)
+    Int _u = resid_raw_syscall(14, 1, set, 0, 8, 0, 0);     // SIG_UNBLOCK
+    Int pid = resid_raw_syscall(39, 0, 0, 0, 0, 0, 0);
+    Int tid = resid_raw_syscall(186, 0, 0, 0, 0, 0, 0);
+    Int _k = resid_raw_syscall(234, pid, tid, 6, 0, 0, 0);
+    return resid_raw_syscall(231, 134, 0, 0, 0, 0, 0);
+}

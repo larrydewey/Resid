@@ -433,7 +433,10 @@ Int db_bias_at(List(Str) ls, Str suffix, Int i) {
     Str l = ls[i];
     List(Str) f = str_split(l, " ");
     Bool hit = str_ends_with(l, suffix) && f.len() > 2 && db_hex_val(f[2], 0, 0) == 0;
-    if (hit) { return db_hex_val(str_slice(l, 0, db_find(l, "-", 0)), 0, 0); }
+    // A fixed-address (non-PIE) binary sits at its link address, below
+    // 4 GiB, where Linux never maps a PIE: no bias.
+    Int start = if (hit) { db_hex_val(str_slice(l, 0, db_find(l, "-", 0)), 0, 0) } else { 0 };
+    if (hit) { return if (start < 4294967296) { 0 } else { start }; }
     return db_bias_at(ls, suffix, i + 1);
 }
 

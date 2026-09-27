@@ -4467,7 +4467,11 @@ List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(
 // stack (runtime/resid_rt.c resid_run_main). Resid loops are recursion, and
 // both user programs and the compiler's own evaluator recurse deeply.
 List(Str) main_entry_ir() {
-    return ["define i32 @main() {", "entry:", "  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"];
+    // The process entry (no C library): resid_start sets up the process,
+    // main runs, its result is the exit status.
+    Str nl = "\\0A";
+    Str st = "xor %ebp, %ebp" + nl + "mov %rsp, %rdi" + nl + "lea _DYNAMIC(%rip), %rsi" + nl + "and $$-16, %rsp" + nl + "call resid_start" + nl + "call main" + nl + "mov %eax, %edi" + nl + "mov $$231, %eax" + nl + "syscall" + nl + "hlt";
+    return ["define i32 @main() {", "entry:", "  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}", "declare void @resid_start(ptr, ptr)", "define void @_start() naked noinline nounwind {", "  call void asm sideeffect \"" + st + "\", \"~{memory}\"()", "  unreachable", "}", "@llvm.compiler.used = appending global [2 x ptr] [ptr @main, ptr @resid_start], section \"llvm.metadata\""];
 }
 
 // %mag is divided as an UNSIGNED value: for INT64_MIN, `0 - v` is INT64_MIN
@@ -4476,7 +4480,25 @@ List(Str) main_entry_ir() {
 // resid_raw_catch(slot, fn, arg): fn(arg) with a jump buffer published in
 // the word at `slot` (restored after); 1 if an abort longjmp'd back.
 Str rt_catch_def() {
-    return "declare i64 @llvm.ctpop.i64(i64)\ndeclare i32 @_setjmp(ptr) returns_twice\ndefine linkonce_odr i64 @e.catch(i64 %slot, i64 %fn, i64 %arg) noinline {\nentry:\n  %jb = alloca [256 x i8], align 16\n  %sp = inttoptr i64 %slot to ptr\n  %prev = load volatile i64, ptr %sp\n  %jbi = ptrtoint ptr %jb to i64\n  store volatile i64 %jbi, ptr %sp\n  %r = call i32 @_setjmp(ptr %jb) returns_twice\n  %z = icmp eq i32 %r, 0\n  br i1 %z, label %run, label %caught\nrun:\n  %f = inttoptr i64 %fn to ptr\n  %x = call i64 %f(i64 %arg)\n  store volatile i64 %prev, ptr %sp\n  ret i64 0\ncaught:\n  store volatile i64 %prev, ptr %sp\n  ret i64 1\n}";
+    return "declare i64 @llvm.ctpop.i64(i64)\ndefine linkonce_odr i64 @e.catch(i64 %slot, i64 %fn, i64 %arg) noinline {\nentry:\n  %jb = alloca [256 x i8], align 16\n  %sp = inttoptr i64 %slot to ptr\n  %prev = load volatile i64, ptr %sp\n  %jbi = ptrtoint ptr %jb to i64\n  store volatile i64 %jbi, ptr %sp\n  %r = call i32 @resid_setjmp(ptr %jb) returns_twice\n  %z = icmp eq i32 %r, 0\n  br i1 %z, label %run, label %caught\nrun:\n  %f = inttoptr i64 %fn to ptr\n  %x = call i64 %f(i64 %arg)\n  store volatile i64 %prev, ptr %sp\n  ret i64 0\ncaught:\n  store volatile i64 %prev, ptr %sp\n  ret i64 1\n}";
+}
+
+// The runtime module's assembly helpers (x86-64 Linux): memcpy / memmove /
+// memset (which LLVM itself emits calls to), setjmp / longjmp for catchable
+// aborts, and clone for threads.
+Str asm_fn(Str name, Str sig, Str params, Str body) {
+    return "define " + sig + " @" + name + "(" + params + ") naked noinline nounwind {\n  call void asm sideeffect \"" + body + "\", \"~{memory}\"()\n  unreachable\n}";
+}
+
+List(Str) rt_asm_defs() {
+    Str nl = "\\0A";
+    Str cpy = "mov %rdi, %rax" + nl + "cmp $$32, %rdx" + nl + "ja 2f" + nl + "test %rdx, %rdx" + nl + "jz 3f" + nl + "1:" + nl + "movzbl (%rsi), %ecx" + nl + "mov %cl, (%rdi)" + nl + "inc %rsi" + nl + "inc %rdi" + nl + "dec %rdx" + nl + "jnz 1b" + nl + "3:" + nl + "ret" + nl + "2:" + nl + "mov %rdx, %rcx" + nl + "rep movsb" + nl + "ret";
+    Str mov = "mov %rdi, %rax" + nl + "cmp %rsi, %rdi" + nl + "jbe 1f" + nl + "lea (%rsi,%rdx), %r8" + nl + "cmp %r8, %rdi" + nl + "jae 1f" + nl + "lea -1(%rdi,%rdx), %rdi" + nl + "lea -1(%rsi,%rdx), %rsi" + nl + "mov %rdx, %rcx" + nl + "std" + nl + "rep movsb" + nl + "cld" + nl + "ret" + nl + "1:" + nl + "mov %rdx, %rcx" + nl + "rep movsb" + nl + "ret";
+    Str set = "mov %rdi, %r9" + nl + "mov %esi, %eax" + nl + "mov %rdx, %rcx" + nl + "rep stosb" + nl + "mov %r9, %rax" + nl + "ret";
+    Str sj = "mov %rbx, (%rdi)" + nl + "mov %rbp, 8(%rdi)" + nl + "mov %r12, 16(%rdi)" + nl + "mov %r13, 24(%rdi)" + nl + "mov %r14, 32(%rdi)" + nl + "mov %r15, 40(%rdi)" + nl + "lea 8(%rsp), %rdx" + nl + "mov %rdx, 48(%rdi)" + nl + "mov (%rsp), %rdx" + nl + "mov %rdx, 56(%rdi)" + nl + "xor %eax, %eax" + nl + "ret";
+    Str lj = "mov %esi, %eax" + nl + "test %eax, %eax" + nl + "jnz 1f" + nl + "inc %eax" + nl + "1:" + nl + "mov (%rdi), %rbx" + nl + "mov 8(%rdi), %rbp" + nl + "mov 16(%rdi), %r12" + nl + "mov 24(%rdi), %r13" + nl + "mov 32(%rdi), %r14" + nl + "mov 40(%rdi), %r15" + nl + "mov 48(%rdi), %rsp" + nl + "jmp *56(%rdi)";
+    Str cl = "mov %rcx, %r10" + nl + "mov $$56, %eax" + nl + "syscall" + nl + "test %rax, %rax" + nl + "jnz 1f" + nl + "xor %ebp, %ebp" + nl + "pop %rax" + nl + "pop %rdi" + nl + "call *%rax" + nl + "mov $$60, %eax" + nl + "xor %edi, %edi" + nl + "syscall" + nl + "hlt" + nl + "1:" + nl + "ret";
+    return [asm_fn("memcpy", "ptr", "ptr, ptr, i64", cpy), asm_fn("memmove", "ptr", "ptr, ptr, i64", mov), asm_fn("memset", "ptr", "ptr, i32, i64", set), asm_fn("resid_setjmp", "i32", "ptr", sj), asm_fn("resid_longjmp", "void", "ptr, i32", lj), asm_fn("resid_clone", "i64", "i64, ptr, ptr, ptr, ptr", cl), "@llvm.compiler.used = appending global [3 x ptr] [ptr @memcpy, ptr @memmove, ptr @memset], section \"llvm.metadata\""];
 }
 
 Str rt_itoa_def() {

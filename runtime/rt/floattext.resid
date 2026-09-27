@@ -1,0 +1,721 @@
+// Float text without libc: strtod and snprintf's %.<P>g / %.<P>f, exact
+// (round-to-nearest-even on the exact decimal value, as glibc does).
+//
+// Big integers: {i64 len, u32 limbs[cap] in 64-bit words}, little-endian,
+// in fixed 8 KB blocks (65536 bits), enough for any double scaled by the
+// largest power of ten either direction needs.
+
+Int bn_cap() { return 1020; }
+pub Int bn_new() {
+    Int b = xmalloc(8 + 1024 * 8);
+    return st64(b, 0) * 0 + b;
+}
+Int bn_len(Int b) { return ld64(b); }
+Int bn_l(Int b, Int i) { return ld64(b + 8 + i * 8); }
+// Limb i, or 0 past the end.
+Int bn_w(Int b, Int i) { return if (i < bn_len(b)) { bn_l(b, i) } else { 0 }; }
+Int bn_set(Int b, Int i, Int v) { return st64(b + 8 + i * 8, v); }
+Int bn_trim(Int b) {
+    Int n = ld64(b);
+    if (n > 0 && bn_l(b, n - 1) == 0) { return st64(b, n - 1) * 0 + bn_trim(b); }
+    return 0;
+}
+Bool bn_zero(Int b) { return bn_len(b) == 0; }
+Int mask32() { return 4294967295; }
+
+Int bn_from(Int b, Int v) {
+    Int _a = bn_set(b, 0, v & mask32());
+    Int _b = bn_set(b, 1, lshr(v, 32));
+    Int _l = st64(b, 2);
+    return bn_trim(b);
+}
+
+Int bn_copy(Int d, Int s) { return mcopy(d, s, 8 + bn_len(s) * 8); }
+
+// b = b * m + a (m, a < 2^32).
+pub Int bn_muladd(Int b, Int m, Int a) {
+    Int c = muladd_at(b, m, 0, bn_len(b), a);
+    if (c == 0) { return 0; }
+    Int n = bn_len(b);
+    Int _s = bn_set(b, n, c);
+    return st64(b, n + 1);
+}
+
+Int muladd_at(Int b, Int m, Int i, Int n, Int c) {
+    if (i >= n) { return c; }
+    Int t = bn_l(b, i) * m + c;       // < 2^64 as unsigned
+    Int _s = bn_set(b, i, t & mask32());
+    return muladd_at(b, m, i + 1, n, lshr(t, 32));
+}
+
+// b = b / d (d < 2^32); the remainder.
+pub Int bn_divsmall(Int b, Int d) {
+    Int r = divsmall_at(b, d, bn_len(b) - 1, 0);
+    return bn_trim(b) * 0 + r;
+}
+
+Int divsmall_at(Int b, Int d, Int i, Int r) {
+    if (i < 0) { return r; }
+    Int cur = (r << 32) | bn_l(b, i);
+    Int q = (Int)((UInt(64))cur / (UInt(64))d);
+    Int _s = bn_set(b, i, q);
+    return divsmall_at(b, d, i - 1, cur - q * d);
+}
+
+Int bn_bitlen(Int b) {
+    Int n = bn_len(b);
+    if (n == 0) { return 0; }
+    return (n - 1) * 32 + bitlen(bn_l(b, n - 1));
+}
+
+// b <<= k.
+Int bn_shl(Int b, Int k) {
+    if (bn_zero(b)) { return 0; }
+    Int ws = k / 32;
+    Int bs = k % 32;
+    Int n = bn_len(b);
+    Int _t = bn_set(b, n + ws, 0);
+    Int _m = shl_limbs(b, n - 1, ws, bs);
+    Int _z = zero_limbs(b, 0, ws);
+    Int _l = st64(b, n + ws + 1);
+    return bn_trim(b);
+}
+
+Int shl_limbs(Int b, Int i, Int ws, Int bs) {
+    if (i < 0) { return 0; }
+    Int v = bn_l(b, i);
+    Int hi = if (bs == 0) { 0 } else { lshr(v, 32 - bs) };
+    Int _h = bn_set(b, i + ws + 1, bn_l(b, i + ws + 1) | hi);
+    Int _l = bn_set(b, i + ws, (v << bs) & mask32());
+    return shl_limbs(b, i - 1, ws, bs);
+}
+
+Int zero_limbs(Int b, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _z = bn_set(b, i, 0);
+    return zero_limbs(b, i + 1, n);
+}
+
+// b >>= k.
+Int bn_shr(Int b, Int k) {
+    Int ws = k / 32;
+    Int bs = k % 32;
+    Int n = bn_len(b);
+    if (ws >= n) { return st64(b, 0); }
+    Int _m = shr_limbs(b, 0, n - ws, ws, bs, n);
+    Int _l = st64(b, n - ws);
+    return bn_trim(b);
+}
+
+Int shr_limbs(Int b, Int i, Int m, Int ws, Int bs, Int n) {
+    if (i >= m) { return 0; }
+    Int lo = lshr(bn_l(b, i + ws), bs);
+    Int hi = if (bs != 0 && i + ws + 1 < n) { (bn_l(b, i + ws + 1) << (32 - bs)) & mask32() } else { 0 };
+    Int _s = bn_set(b, i, lo | hi);
+    return shr_limbs(b, i + 1, m, ws, bs, n);
+}
+
+// b mod 2^k.
+Int bn_lowbits(Int b, Int k) {
+    Int ws = k / 32;
+    Int bs = k % 32;
+    if (ws >= bn_len(b)) { return 0; }
+    Int _m = bn_set(b, ws, bn_l(b, ws) & ((1 << bs) - 1));
+    Int _l = st64(b, ws + 1);
+    return bn_trim(b);
+}
+
+Int bn_cmp(Int a, Int b) {
+    Int na = bn_len(a);
+    Int nb = bn_len(b);
+    if (na != nb) { return if (na > nb) { 1 } else { 0 - 1 }; }
+    return cmp_limbs(a, b, na - 1);
+}
+
+Int cmp_limbs(Int a, Int b, Int i) {
+    if (i < 0) { return 0; }
+    Int x = bn_l(a, i);
+    Int y = bn_l(b, i);
+    if (x != y) { return if (x > y) { 1 } else { 0 - 1 }; }
+    return cmp_limbs(a, b, i - 1);
+}
+
+// a -= b (a >= b).
+Int bn_sub(Int a, Int b) {
+    Int _s = sub_limbs(a, b, 0, bn_len(a), bn_len(b), 0);
+    return bn_trim(a);
+}
+
+Int sub_limbs(Int a, Int b, Int i, Int na, Int nb, Int br) {
+    if (i >= na) { return 0; }
+    Int y = if (i < nb) { bn_l(b, i) } else { 0 };
+    Int t = bn_l(a, i) - y - br;
+    Int _s = bn_set(a, i, t & mask32());
+    return sub_limbs(a, b, i + 1, na, nb, if (t < 0) { 1 } else { 0 });
+}
+
+// b = 10^e (e >= 0).
+Int bn_pow10(Int b, Int e) {
+    Int _o = bn_from(b, 1);
+    return pow10_at(b, e);
+}
+
+Int pow10_at(Int b, Int e) {
+    if (e <= 0) { return 0; }
+    if (e >= 9) { return bn_muladd(b, 1000000000, 0) * 0 + pow10_at(b, e - 9); }
+    Int m = ld64(resid_raw_table([1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000]) + e * 8);
+    return bn_muladd(b, m, 0) * 0 + pow10_at(b, 0);
+}
+
+// ─── strtod ─────────────────────────────────────────────────────────────
+
+pub Bool is_space(Int c) { return c == 32 || (c >= 9 && c <= 13); }
+pub Int lower(Int c) { return if (c >= 65 && c <= 90) { c + 32 } else { c }; }
+
+// p's bytes match the lowercase word w (ignoring case); its length or 0.
+Int word_at(Int p, Int w) {
+    Int c = ld8(w);
+    if (c == 0) { return 0; }
+    if (lower(ld8(p)) != c) { return 0 - 1000000; }
+    return 1 + word_at(p + 1, w + 1);
+}
+
+Int hexval(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    Int l = lower(c);
+    if (l >= 97 && l <= 102) { return l - 87; }
+    return 0 - 1;
+}
+
+Float bits_f(Int b) { return resid_raw_bits_f64(b); }
+Float signed_f(Bool neg, Float v) { return if (neg) { resid_raw_bits_f64(resid_raw_f64_bits(v) ^ (1 << 63)) } else { v }; }
+
+// C strtod: leading white space, a sign, then inf / infinity / nan[(...)],
+// a hex float, or a decimal float. *endp (when endp != 0) is set past the
+// text read, or to s when nothing was.
+pub Float c_strtod(Int s, Int endp) {
+    Int p0 = skip_space(s);
+    Int c0 = ld8(p0);
+    Bool neg = c0 == 45;
+    Int p = if (c0 == 45 || c0 == 43) { p0 + 1 } else { p0 };
+    Int inf = word_at(p, resid_raw_addr("inf"));
+    if (inf == 3) {
+        Int full = word_at(p, resid_raw_addr("infinity"));
+        Int e = p + (if (full == 8) { 8 } else { 3 });
+        Int _s = set_end(endp, e);
+        return signed_f(neg, bits_f(2047 << 52));
+    }
+    if (word_at(p, resid_raw_addr("nan")) == 3) {
+        Int q = p + 3;
+        Int e = if (ld8(q) == 40) { nan_close(q + 1, q) } else { q };
+        Int _s = set_end(endp, e);
+        return bits_f((if (neg) { 4095 << 51 } else { 4095 << 51 }) | (if (neg) { 1 << 63 } else { 0 }));
+    }
+    if (ld8(p) == 48 && lower(ld8(p + 1)) == 120 && (hexval(ld8(p + 2)) >= 0 || (ld8(p + 2) == 46 && hexval(ld8(p + 3)) >= 0))) {
+        return signed_f(neg, hex_float(p + 2, endp));
+    }
+    Float r = dec_float(p, s, endp);
+    // No digits: no conversion, and a plain zero.
+    return if (dg(4) == 0) { 0.0 } else { signed_f(neg, r) };
+}
+
+Int skip_space(Int p) { return if (is_space(ld8(p))) { skip_space(p + 1) } else { p }; }
+
+Int set_end(Int endp, Int e) { return if (endp != 0) { st64(endp, e) } else { 0 }; }
+
+Int nan_close(Int q, Int open) {
+    Int c = ld8(q);
+    if (c == 41) { return q + 1; }
+    Bool ok = (c >= 48 && c <= 57) || (lower(c) >= 97 && lower(c) <= 122) || c == 95;
+    if (!ok) { return open; }
+    return nan_close(q + 1, open);
+}
+
+// Digit scan state (TLS): 0 mantissa bignum, 1 kept digits, 2 sticky,
+// 3 decimal exponent adjustment, 4 digits seen, 5 position.
+Int ds() { return resid_raw_tls("strtod_st", 48); }
+Int dg(Int i) { return ld64(ds() + i * 8); }
+Int dset(Int i, Int v) { return st64(ds() + i * 8, v); }
+
+// Up to 800 significant digits enter the mantissa; later ones only set
+// sticky (and shift the exponent when before the point).
+Int take_digit(Int d, Bool frac) {
+    Int _seen = dset(4, dg(4) + 1);
+    Bool lead = dg(1) == 0 && d == 0;
+    if (lead) { return if (frac) { dset(3, dg(3) - 1) } else { 0 }; }
+    if (dg(1) < 800) {
+        Int _m = bn_muladd(dg(0), 10, d);
+        Int _k = dset(1, dg(1) + 1);
+        return if (frac) { dset(3, dg(3) - 1) } else { 0 };
+    }
+    Int _s = if (d != 0) { dset(2, 1) } else { 0 };
+    return if (frac) { 0 } else { dset(3, dg(3) + 1) };
+}
+
+Int scan_digits(Int p, Bool frac) {
+    Int c = ld8(p);
+    if (c < 48 || c > 57) { return p; }
+    Int _t = take_digit(c - 48, frac);
+    return scan_digits(p + 1, frac);
+}
+
+Float dec_float(Int p, Int s, Int endp) {
+    Int m = bn_new();
+    Int _i = dset(0, m) + dset(1, 0) + dset(2, 0) + dset(3, 0) + dset(4, 0);
+    Int p1 = scan_digits(p, false);
+    Int p2 = if (ld8(p1) == 46) { scan_digits(p1 + 1, true) } else { p1 };
+    if (dg(4) == 0) {
+        Int _s = set_end(endp, s) + c_free(m);
+        return 0.0;
+    }
+    Int ec = lower(ld8(p2));
+    Int es = ld8(p2 + 1);
+    Int pd = if (es == 45 || es == 43) { p2 + 2 } else { p2 + 1 };
+    Bool hase = ec == 101 && ld8(pd) >= 48 && ld8(pd) <= 57;
+    Int ev = if (hase) { exp_digits(pd, 0) } else { 0 };
+    Int pe = if (hase) { ld64(ds() + 40) } else { p2 };
+    Int _e = set_end(endp, pe);
+    Int e10 = dg(3) + (if (hase && es == 45) { 0 - ev } else { ev });
+    Float r = decimal_to_double(m, e10, dg(2) != 0);
+    Int _f = c_free(m);
+    return r;
+}
+
+// The exponent's value, capped at 10^6 (far past any double); position in
+// the scan state.
+Int exp_digits(Int p, Int acc) {
+    Int c = ld8(p);
+    if (c < 48 || c > 57) { return dset(5, p) * 0 + acc; }
+    return exp_digits(p + 1, min(acc * 10 + c - 48, 1000000));
+}
+
+// m * 10^e10 rounded to the nearest double (ties to even); `sticky`:
+// nonzero digits were dropped past m.
+pub Float decimal_to_double(Int m, Int e10, Bool sticky) {
+    if (bn_zero(m)) { return 0.0; }
+    // Clinger's fast path: both operands exact, one rounding.
+    if (!sticky && bn_bitlen(m) <= 53 && e10 >= 0 - 22 && e10 <= 22) {
+        Float fm = (Float)(bn_w(m, 0) | (bn_w(m, 1) << 32));
+        Float p = pow10_f(if (e10 < 0) { 0 - e10 } else { e10 });
+        return if (e10 < 0) { fm / p } else { fm * p };
+    }
+    // Out of range for certain (digit counts bounded by the bit length);
+    // anything closer is decided exactly below.
+    Int bl = bn_bitlen(m);
+    if ((bl - 1) * 30103 / 100000 + e10 > 330) { return bits_f(2047 << 52); }
+    if (bl * 30103 / 100000 + 1 + e10 < 0 - 350) { return 0.0; }
+    if (e10 >= 0) {
+        Int _p = mul_pow10(m, e10);
+        return big_to_double(m, 0, sticky);
+    }
+    // m / 10^-e10: a quotient of at least 66 bits, the remainder sticky.
+    Int q = bn_new();
+    Int _p = bn_pow10(q, 0 - e10);
+    Int k = max(0, bn_bitlen(q) - bn_bitlen(m) + 66);
+    Int _s = bn_shl(m, k);
+    Int quo = bn_new();
+    Bool rem = bn_divmod(m, q, quo);
+    Float r = big_to_double(quo, 0 - k, sticky || rem);
+    Int _f = c_free(q) + c_free(quo);
+    return r;
+}
+
+Float pow10_f(Int e) {
+    if (e == 0) { return 1.0; }
+    return 10.0 * pow10_f(e - 1);
+}
+
+Int mul_pow10(Int m, Int e) {
+    if (e <= 0) { return 0; }
+    Int step = min(e, 9);
+    Int f = ld64(resid_raw_table([1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000]) + step * 8);
+    Int _m = bn_muladd(m, f, 0);
+    return mul_pow10(m, e - step);
+}
+
+// n = q * d + r (Knuth D, base 2^32; n is consumed); true when r != 0.
+Bool bn_divmod(Int n, Int d, Int q) {
+    Int dn = bn_len(d);
+    if (dn == 1) {
+        Int _c = bn_copy(q, n);
+        return bn_divsmall(q, bn_l(d, 0)) != 0;
+    }
+    if (bn_cmp(n, d) < 0) { return st64(q, 0) * 0 + 1 == 1 && !bn_zero(n); }
+    // Normalize: the divisor's top limb gets its high bit set.
+    Int sh = 32 - bitlen(bn_l(d, dn - 1));
+    Int dd = bn_new();
+    Int _c = bn_copy(dd, d);
+    Int _s1 = bn_shl(dd, sh);
+    Int _s2 = bn_shl(n, sh);
+    Int nn = bn_len(n);
+    Int _x = bn_set(n, nn, 0);            // one spare top limb
+    Int m = nn - dn;
+    Int _q = zero_limbs(q, 0, m + 1) + st64(q, m + 1);
+    Int _d = knuth_steps(n, dd, q, dn, m, bn_l(dd, dn - 1), bn_l(dd, dn - 2));
+    Int _t = bn_trim(q);
+    Bool rem = limbs_nz(n, 0, dn);
+    return c_free(dd) == 0 && rem;
+}
+
+Int knuth_steps(Int u, Int v, Int q, Int n, Int j, Int vt, Int vs) {
+    if (j < 0) { return 0; }
+    UInt(64) num = ((UInt(64))bn_l(u, j + n) << (UInt(64))32) | (UInt(64))bn_l(u, j + n - 1);
+    UInt(64) qh0 = num / (UInt(64))vt;
+    UInt(64) rh0 = num - qh0 * (UInt(64))vt;
+    Int qh = (Int)qhat_adjust(qh0, rh0, (UInt(64))vt, (UInt(64))vs, (UInt(64))bn_l(u, j + n - 2));
+    // u[j..j+n] -= qh * v.
+    Int br = mulsub(u, v, qh, j, 0, n, 0, 0);
+    Int top = bn_l(u, j + n) - br;
+    Int _t = bn_set(u, j + n, top & mask32());
+    Bool neg = top < 0;
+    Int _a = if (neg) { addback(u, v, j, 0, n, 0) } else { 0 };
+    Int _q = bn_set(q, j, if (neg) { qh - 1 } else { qh });
+    return knuth_steps(u, v, q, n, j - 1, vt, vs);
+}
+
+UInt(64) qhat_adjust(UInt(64) qh, UInt(64) rh, UInt(64) vt, UInt(64) vs, UInt(64) u2) {
+    UInt(64) b = (UInt(64))4294967296;
+    Bool big = qh >= b || (rh < b && qh * vs > ((rh << (UInt(64))32) | u2));
+    if (!big) { return qh; }
+    return qhat_adjust(qh - (UInt(64))1, rh + vt, vt, vs, u2);
+}
+
+// u[j..j+n) -= qh * v (limbwise); the borrow into u[j+n].
+Int mulsub(Int u, Int v, Int qh, Int j, Int i, Int n, Int carry, Int br) {
+    if (i >= n) { return carry + br; }
+    Int p = qh * bn_l(v, i) + carry;               // < 2^64 unsigned
+    Int t = bn_l(u, i + j) - (p & mask32()) - br;
+    Int _s = bn_set(u, i + j, t & mask32());
+    return mulsub(u, v, qh, j, i + 1, n, lshr(p, 32), if (t < 0) { 1 } else { 0 });
+}
+
+Int addback(Int u, Int v, Int j, Int i, Int n, Int c) {
+    if (i >= n) { return bn_set(u, j + n, (bn_l(u, j + n) + c) & mask32()); }
+    Int t = bn_l(u, i + j) + bn_l(v, i) + c;
+    Int _s = bn_set(u, i + j, t & mask32());
+    return addback(u, v, j, i + 1, n, lshr(t, 32));
+}
+
+// q * 2^s rounded to a double (ties to even); sticky: bits below q.
+Float big_to_double(Int q, Int s, Bool sticky) {
+    Int l = bn_bitlen(q);
+    Int lead = l - 1 + s;                 // exponent of the leading bit
+    if (lead >= 1024) { return bits_f(2047 << 52); }
+    Bool normal = lead >= 0 - 1022;
+    // Normal: a 53-bit M (value M * 2^(lead - 52)); subnormal: M * 2^-1074.
+    Int drop = if (normal) { l - 53 } else { 0 - (s + 1074) };
+    if (drop - 1 >= l) { return 0.0; }
+    Int mm = round_shift(q, drop, sticky);
+    if (!normal) { return bits_f(mm); }   // 2^52 is the smallest normal
+    Bool carry = mm == 9007199254740992;
+    Int m2 = if (carry) { 4503599627370496 } else { mm };
+    Int e2 = if (carry) { lead + 1 } else { lead };
+    if (e2 >= 1024) { return bits_f(2047 << 52); }
+    return bits_f(((e2 + 1023) << 52) | (m2 & 4503599627370495));
+}
+
+// q >> drop rounded half to even (sticky: more bits below q), or q << -drop.
+Int round_shift(Int q, Int drop, Bool sticky) {
+    Int top = top_bits(q, drop);
+    if (drop <= 0) { return top; }
+    Int half = bit_at(q, drop - 1);
+    Bool below = sticky || (drop > 1 && low_nonzero(q, drop - 1));
+    Bool up = half == 1 && (below || (top & 1) == 1);
+    return if (up) { top + 1 } else { top };
+}
+
+Int bit_at(Int q, Int i) { return if (i / 32 < bn_len(q)) { (bn_l(q, i / 32) >> (i % 32)) & 1 } else { 0 }; }
+
+Bool low_nonzero(Int q, Int n) {
+    Int ws = n / 32;
+    Int bs = n % 32;
+    Int full = min(ws, bn_len(q));
+    if (limbs_nz(q, 0, full)) { return true; }
+    return ws < bn_len(q) && (bn_l(q, ws) & ((1 << bs) - 1)) != 0;
+}
+
+Bool limbs_nz(Int q, Int i, Int n) {
+    if (i >= n) { return false; }
+    return bn_l(q, i) != 0 || limbs_nz(q, i + 1, n);
+}
+
+// q >> drop (or q << -drop), which fits in 64 bits.
+Int top_bits(Int q, Int drop) {
+    Int t = bn_new();
+    Int _c = bn_copy(t, q);
+    Int _s = if (drop > 0) { bn_shr(t, drop) } else { bn_shl(t, 0 - drop) };
+    Int v = bn_w(t, 0) | (bn_w(t, 1) << 32);
+    return c_free(t) * 0 + v;
+}
+
+Float hex_float(Int p, Int endp) {
+    Int m = bn_new();
+    Int _i = dset(0, 0) + dset(1, 0) + dset(2, 0) + dset(3, 0);   // 2: sticky, 3: binary exponent
+    Int p1 = hex_digits(m, p, false);
+    Int p2 = if (ld8(p1) == 46) { hex_digits(m, p1 + 1, true) } else { p1 };
+    Int es = ld8(p2 + 1);
+    Int pd = if (es == 45 || es == 43) { p2 + 2 } else { p2 + 1 };
+    Bool hasp = lower(ld8(p2)) == 112 && ld8(pd) >= 48 && ld8(pd) <= 57;
+    Int ev = if (hasp) { exp_digits(pd, 0) } else { 0 };
+    Int pe = if (hasp) { ld64(ds() + 40) } else { p2 };
+    Int _e = set_end(endp, pe);
+    Int e2 = dg(3) + (if (hasp && es == 45) { 0 - ev } else { ev });
+    Float r = if (bn_zero(m)) { 0.0 } else { big_to_double(m, e2, dg(2) != 0) };
+    Int _f = c_free(m);
+    return r;
+}
+
+// Up to 256 significant bits of hex digits; later nonzero ones are sticky.
+Int hex_digits(Int m, Int p, Bool frac) {
+    Int v = hexval(ld8(p));
+    if (v < 0) { return p; }
+    Bool keep = bn_bitlen(m) < 256;
+    Int _a = if (keep) { bn_muladd(m, 16, v) } else { if (v != 0) { dset(2, 1) } else { 0 } };
+    Int _e = if (frac && keep) { dset(3, dg(3) - 4) } else { if (!frac && !keep) { dset(3, dg(3) + 4) } else { 0 } };
+    return hex_digits(m, p + 1, frac);
+}
+
+// ─── snprintf("%.<P>g" / "%.<P>f", v) ───────────────────────────────────
+
+// The exact decimal expansion of |v|, digit by digit: digits into dbuf
+// (up to `need` of them after the leading zeros), the decimal exponent X
+// (value = 0.d1d2... * 10^X) and a sticky flag for anything past them.
+// State (TLS): 0 X, 1 count, 2 sticky.
+Int fx() { return resid_raw_tls("ffmt_st", 24); }
+
+Int expand(Int m, Int e2, Int dbuf, Int need) {
+    Int ip = bn_new();
+    Int fr = bn_new();
+    Int _a = bn_from(ip, m);
+    Int _b = if (e2 >= 0) { bn_shl(ip, e2) + st64(fr, 0) } else { bn_copy(fr, ip) + bn_shr(ip, 0 - e2) + bn_lowbits(fr, 0 - e2) };
+    Int fbits = if (e2 >= 0) { 0 } else { 0 - e2 };
+    // Integer digits, most significant first.
+    Int tmp = xmalloc(360);
+    Int il = int_digits(ip, tmp, 0);
+    Int kept = min(il, need);
+    Int _r = rev_into(tmp, il, dbuf, kept);
+    Bool isticky = digits_nz(tmp, 0, il - kept);
+    Int _x = st64(fx(), il) + st64(fx() + 8, kept) + st64(fx() + 16, if (isticky) { 1 } else { 0 });
+    Int _f = if (il == 0) { lead_zeros(fr, fbits) } else { 0 };
+    Int n = frac_digits(fr, fbits, dbuf, kept, need);
+    Int _c = st64(fx() + 8, n);
+    Int _s = if (!bn_zero(fr)) { st64(fx() + 16, 1) } else { 0 };
+    return c_free(ip) + c_free(fr) + c_free(tmp);
+}
+
+Int int_digits(Int ip, Int tmp, Int n) {
+    if (bn_zero(ip)) { return n; }
+    Int d = bn_divsmall(ip, 10);
+    return st8(tmp + n, d) * 0 + int_digits(ip, tmp, n + 1);
+}
+
+// tmp holds the digits least significant first; the top `kept` go to
+// dbuf, most significant first.
+Int rev_into(Int tmp, Int il, Int dbuf, Int kept) { return rev_at(tmp, il, dbuf, 0, kept); }
+
+Int rev_at(Int tmp, Int il, Int dbuf, Int j, Int kept) {
+    if (j >= kept) { return 0; }
+    Int _s = st8(dbuf + j, ld8(tmp + il - 1 - j));
+    return rev_at(tmp, il, dbuf, j + 1, kept);
+}
+
+Bool digits_nz(Int tmp, Int i, Int n) {
+    if (i >= n) { return false; }
+    return ld8(tmp + i) != 0 || digits_nz(tmp, i + 1, n);
+}
+
+// Skip the leading zero fraction digits (X goes down by one each).
+Int lead_zeros(Int fr, Int fbits) {
+    if (bn_zero(fr)) { return 0; }
+    Int t = bn_new();
+    Int _c = bn_copy(t, fr);
+    Int _m = bn_muladd(t, 10, 0);
+    Int _s = bn_shr(t, fbits);
+    Bool z = bn_zero(t);
+    Int _f = c_free(t);
+    if (!z) { return 0; }
+    Int _n = bn_muladd(fr, 10, 0);
+    Int _x = st64(fx(), ld64(fx()) - 1);
+    return lead_zeros(fr, fbits);
+}
+
+Int frac_digits(Int fr, Int fbits, Int dbuf, Int n, Int need) {
+    if (n >= need || bn_zero(fr)) { return n; }
+    Int _m = bn_muladd(fr, 10, 0);
+    Int d = digit_above(fr, fbits);
+    Int _l = bn_lowbits(fr, fbits);
+    Int _s = st8(dbuf + n, d);
+    return frac_digits(fr, fbits, dbuf, n + 1, need);
+}
+
+// fr >> fbits (fr < 10 * 2^fbits): one decimal digit.
+Int digit_above(Int fr, Int fbits) {
+    Int ws = fbits / 32;
+    Int bs = fbits % 32;
+    Int lo = if (ws < bn_len(fr)) { lshr(bn_l(fr, ws), bs) } else { 0 };
+    Int hi = if (bs != 0 && ws + 1 < bn_len(fr)) { (bn_l(fr, ws + 1) << (32 - bs)) & mask32() } else { 0 };
+    return (lo | hi) & 15;
+}
+
+// Round the digits to `keep` (ties to even); X may go up by one. The
+// digit count becomes keep (padding with zeros).
+Int round_digits(Int dbuf, Int keep) {
+    Int n = ld64(fx() + 8);
+    Int _p = if (n < keep + 1) { resid_raw_fill(dbuf + n, 0, keep + 1 - n) } else { 0 };
+    if (keep < 0) { return st64(fx() + 8, 0); }
+    Int rd = ld8(dbuf + keep);
+    Bool rest = ld64(fx() + 16) != 0 || digits_nz(dbuf, keep + 1, max(n, keep + 1));
+    Bool odd = keep > 0 && (ld8(dbuf + keep - 1) & 1) == 1;
+    Bool up = rd > 5 || (rd == 5 && (rest || odd));
+    Int _c = st64(fx() + 8, keep);
+    if (!up) { return 0; }
+    if (keep == 0) {
+        // Everything rounds up to a single 1 one place higher.
+        Int _o = st8(dbuf, 1);
+        Int _x = st64(fx(), ld64(fx()) + 1);
+        return st64(fx() + 8, 1);
+    }
+    return carry_up(dbuf, keep - 1, keep);
+}
+
+Int carry_up(Int dbuf, Int i, Int keep) {
+    if (i < 0) {
+        // All nines: 1 followed by zeros, one place higher.
+        Int _o = st8(dbuf, 1);
+        Int _z = resid_raw_fill(dbuf + 1, 0, keep - 1);
+        return st64(fx(), ld64(fx()) + 1);
+    }
+    Int d = ld8(dbuf + i);
+    if (d < 9) { return st8(dbuf + i, d + 1); }
+    Int _z = st8(dbuf + i, 0);
+    return carry_up(dbuf, i - 1, keep);
+}
+
+Int put(Int o, Int k, Int c) { return st8(o + k, c) * 0 + k + 1; }
+
+Int put_digits_from(Int o, Int k, Int dbuf, Int i, Int end, Int n) {
+    if (i >= end) { return k; }
+    Int d = if (i < n) { ld8(dbuf + i) } else { 0 };
+    return put_digits_from(o, put(o, k, 48 + d), dbuf, i + 1, end, n);
+}
+
+Int put_zeros(Int o, Int k, Int n) {
+    if (n <= 0) { return k; }
+    return put_zeros(o, put(o, k, 48), n - 1);
+}
+
+// Drop trailing zeros after a '.', and the '.' itself when bare.
+Int strip_frac(Int o, Int start, Int k) {
+    if (!has_dot(o, start, k)) { return k; }
+    Int k2 = trim_zeros(o, start, k);
+    return if (ld8(o + k2 - 1) == 46) { k2 - 1 } else { k2 };
+}
+
+Bool has_dot(Int o, Int i, Int k) {
+    if (i >= k) { return false; }
+    return ld8(o + i) == 46 || has_dot(o, i + 1, k);
+}
+
+Int trim_zeros(Int o, Int start, Int k) {
+    if (k > start && ld8(o + k - 1) == 48) { return trim_zeros(o, start, k - 1); }
+    return k;
+}
+
+// snprintf(buf, n, fmt, v) for fmt "%.<P>g" or "%.<P>f"; the length.
+pub Int c_strfromd(Int buf, Int n, Int fmt, Float v) {
+    Int pv = fmt_prec(fmt + 2, 0);
+    Int conv = ld8(fmt + 2 + prec_len(fmt + 2));
+    Int out = xmalloc(2048);
+    Int len = format_double(out, v, pv, conv == 102);
+    Int k = min(len, n - 1);
+    Int _c = mcopy(buf, out, k);
+    Int _z = st8(buf + k, 0);
+    return c_free(out) * 0 + len;
+}
+
+Int fmt_prec(Int p, Int acc) {
+    Int c = ld8(p);
+    if (c < 48 || c > 57) { return acc; }
+    return fmt_prec(p + 1, acc * 10 + c - 48);
+}
+
+Int prec_len(Int p) {
+    Int c = ld8(p);
+    if (c < 48 || c > 57) { return 0; }
+    return 1 + prec_len(p + 1);
+}
+
+pub Int format_double(Int o, Float v, Int prec, Bool fixed) {
+    Int b = resid_raw_f64_bits(v);
+    Bool neg = b < 0;
+    Int ef = lshr(b, 52) & 2047;
+    Int f = b & 4503599627370495;
+    Int k0 = if (neg) { put(o, 0, 45) } else { 0 };
+    if (ef == 2047) {
+        Int s = if (f != 0) { resid_raw_addr("nan") } else { resid_raw_addr("inf") };
+        return mcopy(o + k0, s, 3) * 0 + k0 + 3;
+    }
+    Int m = if (ef == 0) { f } else { f | 4503599627370496 };
+    Int e2 = (if (ef == 0) { 1 } else { ef }) - 1075;
+    Int dbuf = xmalloc(1200);
+    Int k = if (fixed) { fmt_f(o, k0, m, e2, prec, dbuf) } else { fmt_g(o, k0, m, e2, max(prec, 1), dbuf) };
+    return c_free(dbuf) * 0 + k;
+}
+
+Int fmt_f(Int o, Int k0, Int m, Int e2, Int prec, Int dbuf) {
+    Int x = if (m == 0) { 1 } else { expand_x(m, e2) };
+    // Digits needed: those before the point plus prec.
+    Int need = max(x + prec, 0);
+    Int _e = if (m == 0) { st64(fx(), 1) + st64(fx() + 8, 0) + st64(fx() + 16, 0) } else { expand(m, e2, dbuf, need + 1) };
+    Int xx = ld64(fx());
+    Int _r = round_digits(dbuf, xx + prec);
+    Int x2 = ld64(fx());
+    Int n = ld64(fx() + 8);
+    Int k1 = if (x2 > 0) { put_digits_from(o, k0, dbuf, 0, x2, n) } else { put(o, k0, 48) };
+    if (prec == 0) { return k1; }
+    Int k2 = put(o, k1, 46);
+    // Fraction: digits from index x2 on (negative x2: leading zeros).
+    Int lz = min(max(0 - x2, 0), prec);
+    Int k3 = put_zeros(o, k2, lz);
+    return put_digits_from(o, k3, dbuf, max(x2, 0), max(x2, 0) + prec - lz, n);
+}
+
+// X for |v| = m * 2^e2 (the decimal exponent, value = 0.d... * 10^X).
+Int expand_x(Int m, Int e2) {
+    Int d = xmalloc(4);
+    Int _e = expand(m, e2, d, 1);
+    return c_free(d) * 0 + ld64(fx());
+}
+
+Int fmt_g(Int o, Int k0, Int m, Int e2, Int prec, Int dbuf) {
+    if (m == 0) { return put(o, k0, 48); }
+    Int _e = expand(m, e2, dbuf, prec + 1);
+    Int _r = round_digits(dbuf, prec);
+    Int x = ld64(fx());
+    Int e = x - 1;
+    Int n = ld64(fx() + 8);
+    if (e >= 0 - 4 && e < prec) {
+        Int start = k0;
+        Int k1 = if (e >= 0) { put_digits_from(o, k0, dbuf, 0, e + 1, n) } else { put(o, k0, 48) };
+        Int k2 = put(o, k1, 46);
+        Int k3 = if (e < 0) { put_zeros(o, k2, 0 - e - 1) } else { k2 };
+        Int k4 = put_digits_from(o, k3, dbuf, max(e + 1, 0), prec, n);
+        return strip_frac(o, start, k4);
+    }
+    Int k1 = put(o, k0, 48 + ld8(dbuf));
+    Int k2 = put(o, k1, 46);
+    Int k3 = put_digits_from(o, k2, dbuf, 1, prec, n);
+    Int k4 = strip_frac(o, k0, k3);
+    Int k5 = put(o, k4, 101);
+    Int k6 = put(o, k5, if (e < 0) { 45 } else { 43 });
+    Int ae = if (e < 0) { 0 - e } else { e };
+    Int k7 = if (ae < 10) { put(o, k6, 48) } else { k6 };
+    return k7 + itoa_into(o + k7, ae);
+}
+
+// For tests/runtime/float_text.c, which checks both against glibc.
+@export("resid_ft_strtod", "double(ptr,ptr)")
+pub Float rt_ft_strtod(Int s, Int e) { return c_strtod(s, e); }
+
+@export("resid_ft_strfromd", "i32(ptr,i64,ptr,double)")
+pub Int rt_ft_strfromd(Int b, Int n, Int f, Float v) { return c_strfromd(b, n, f, v); }

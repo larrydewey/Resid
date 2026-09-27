@@ -1,0 +1,98 @@
+// The C-library layer the runtime needs, written in Resid on Linux system
+// calls (the c_* names): strings and memory here; allocation, processes,
+// threads, float text and name lookup in their own modules.
+
+// ─── Strings and memory ────────────────────────────────────────────────
+
+Int ones8() { return 72340172838076673; }       // 0x0101010101010101
+Int highs8() { return 0 - 9187201950435737472; } // 0x8080808080808080
+
+// Bits set at the high bit of each zero byte of w (lowest one exact).
+Int zero_bytes(Int w) { return (w - ones8()) & ~w & highs8(); }
+
+// Index of the lowest set bit (x != 0).
+Int ctz(Int x) { return resid_raw_popcount((x & (0 - x)) - 1); }
+
+// Length of a NUL-terminated string, a word at a time: aligned 8-byte
+// reads never cross a page the string does not reach.
+@noinline
+pub Int c_strlen(Int s) {
+    Int a = s & (0 - 8);
+    Int sh = (s - a) * 8;
+    Int w = ld64(a) | (if (sh == 0) { 0 } else { (1 << sh) - 1 });
+    Int z = zero_bytes(w);
+    if (z != 0) { return a + ctz(z) / 8 - s; }
+    return strlen_words(a + 8, s);
+}
+
+Int strlen_words(Int a, Int s) {
+    Int z = zero_bytes(ld64(a));
+    if (z != 0) { return a + ctz(z) / 8 - s; }
+    return strlen_words(a + 8, s);
+}
+
+@noinline
+pub Int c_strcmp(Int a, Int b) {
+    Int x = ld8(a);
+    Int y = ld8(b);
+    if (x != y) { return x - y; }
+    if (x == 0) { return 0; }
+    return c_strcmp(a + 1, b + 1);
+}
+
+@noinline
+pub Int c_strncmp(Int a, Int b, Int n) {
+    if (n <= 0) { return 0; }
+    Int x = ld8(a);
+    Int y = ld8(b);
+    if (x != y) { return x - y; }
+    if (x == 0) { return 0; }
+    return c_strncmp(a + 1, b + 1, n - 1);
+}
+
+@noinline
+pub Int c_strchr(Int s, Int c) {
+    Int x = ld8(s);
+    if (x == (c & 255)) { return s; }
+    if (x == 0) { return 0; }
+    return c_strchr(s + 1, c);
+}
+
+@noinline
+pub Int c_memchr(Int p, Int c, Int n) {
+    if (n <= 0) { return 0; }
+    if (ld8(p) == (c & 255)) { return p; }
+    return c_memchr(p + 1, c, n - 1);
+}
+
+@noinline
+pub Int c_memcmp(Int a, Int b, Int n) {
+    if (n >= 8 && ld64(a) == ld64(b)) { return c_memcmp(a + 8, b + 8, n - 8); }
+    return memcmp_bytes(a, b, n);
+}
+
+Int memcmp_bytes(Int a, Int b, Int n) {
+    if (n <= 0) { return 0; }
+    Int x = ld8(a);
+    Int y = ld8(b);
+    if (x != y) { return x - y; }
+    return memcmp_bytes(a + 1, b + 1, n - 1);
+}
+
+// First occurrence of nd[0..nn) in h[0..hn), or 0.
+@noinline
+pub Int c_memmem(Int h, Int hn, Int nd, Int nn) {
+    if (nn == 0) { return h; }
+    if (hn < nn) { return 0; }
+    Int first = ld8(nd);
+    Int cand = c_memchr(h, first, hn - nn + 1);
+    if (cand == 0) { return 0; }
+    if (c_memcmp(cand + 1, nd + 1, nn - 1) == 0) { return cand; }
+    return c_memmem(cand + 1, hn - (cand + 1 - h), nd, nn);
+}
+
+@noinline
+pub Int c_strstr(Int h, Int nd) {
+    Int nn = c_strlen(nd);
+    return c_memmem(h, c_strlen(h), nd, nn);
+}

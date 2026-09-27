@@ -13,6 +13,7 @@ char* str_slice(const char* s, int64_t start, int64_t end);
 char* str_reverse(const char* s);
 char* str_to_lower(const char* s);
 char* str_to_upper(const char* s);
+void resid_free(void* p);
 #include <sys/mman.h>
 
 static const char* at_page_end(const char* s) {
@@ -34,9 +35,9 @@ int main(void) {
         int64_t n = str_len(s);
         if (n != want[i]) { bad++; printf("len %d: %lld\n", i, (long long)n); }
         for (int64_t k = 0; k < n; k++) (void)str_char_at(s, k);
-        free(str_reverse(s));
-        free(str_to_lower(s));
-        free(str_to_upper(s));
+        resid_free(str_reverse(s));
+        resid_free(str_to_lower(s));
+        resid_free(str_to_upper(s));
         (void)str_slice(s, 0, n);
     }
     printf("utf8_bounds: %s\n", bad ? "FAIL" : "ok");

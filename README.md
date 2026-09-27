@@ -173,7 +173,7 @@ pins resolved versions. See `tools/resid-manifest.resid` for all commands
 ## Installation & Build
 
 ### Prerequisites
-- LLVM 22+ (clang for final linking)
+- LLVM 22+ (clang and lld for code generation and linking; libgcc for 128-bit division and Float(128) arithmetic). Binaries are static PIEs with no C library: the Resid runtime makes the Linux system calls itself.
 - No Rust toolchain required for normal use
 
 ### Bootstrapping (from zero-Rust machine)
@@ -202,7 +202,7 @@ Once you have a self-hosted `residc` (or any later generation):
 
 ### Rebuilding stage0 for a new host architecture
 
-The compiler emits target-neutral LLVM IR text (no `target triple`; clang picks the target), so a new 64-bit architecture needs no Rust: cross-compile `compiler/driver.resid` on an existing host, link the IR with `clang --target=<triple>`, and check that `./boot.sh` reaches its fixed point on the new machine. Three things still tie the output to x86_64 and must become per-target first: the `target-features` string in `compiler/lower.resid`, the `resid_raw_syscall` lowering (x86 `syscall` inline asm) and the system call numbers in `runtime/rt/`, and the debugger's register layout in `runtime/rt/sys.resid`. Add the resulting binary and its `.sha256` to `bootstrap/stage0/`.
+The compiler emits target-neutral LLVM IR text (no `target triple`; clang picks the target), so a new 64-bit architecture needs no Rust (nor a C library: add the system call numbers and the assembly helpers in `compiler/codegen.resid` for the target): cross-compile `compiler/driver.resid` on an existing host, link the IR with `clang --target=<triple>`, and check that `./boot.sh` reaches its fixed point on the new machine. Three things still tie the output to x86_64 and must become per-target first: the `target-features` string in `compiler/lower.resid`, the `resid_raw_syscall` lowering (x86 `syscall` inline asm) and the system call numbers in `runtime/rt/`, and the debugger's register layout in `runtime/rt/sys.resid`. Add the resulting binary and its `.sha256` to `bootstrap/stage0/`.
 
 ---
 

@@ -306,6 +306,41 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0zm. No C library (2026-09-27)
+
+- Programs and the compiler are static PIEs linked with `-static-pie
+  -nostdlib` and libgcc only. The compiler emits `_start` with `main`;
+  it calls `resid_start`, which applies the binary's own
+  R_X86_64_RELATIVE relocations, records argv / envp and installs the
+  main thread's TLS block (the PT_TLS image below a self-pointing TCB).
+- The runtime replaced every C library call: strings and memory
+  (`libc.resid`; strlen a word at a time), malloc / free / realloc
+  (`malloc.resid`: 48 size classes, per-thread lists and slabs, big
+  blocks as mappings with a reuse cache), float text (`floattext.resid`:
+  strtod and %.<P>g / %.<P>f, exact; `tests/runtime/float_text.c`
+  compares both with glibc), getenv, fork / execvp and the git
+  provider's shell line (`proc.resid`), IPv4 name lookup (literal,
+  localhost, /etc/hosts, DNS), threads on clone with futex joins and
+  abort (`start.resid`), and naked assembly the compiler emits into the
+  runtime module for memcpy / memmove / memset, setjmp / longjmp and
+  clone.
+- Position-independent code matters: a non-PIE static build reached
+  thread-local allocator state with a %fs override on every access and
+  ran binary-trees 10% slower; static PIE loads the thread pointer once.
+  Optimized builds also align loops to 32 bytes (placement alone moved
+  binary-trees, spectral-norm and pidigits by up to 10%).
+- A memory budget replaces `ulimit -v`: heap mappings are counted, and
+  going past the budget aborts with "memory budget exceeded (N MB); set
+  RESID_MEM_LIMIT (MB) to raise it". The compiler sets 4 GB
+  (`resid_mem_limit_set`, compiler-only); `RESID_MEM_LIMIT` overrides.
+- Fixed on the way: an if statement took its labels before lowering its
+  condition (a condition holding an if-expression, as `min(...)` lowers
+  to, produced duplicate labels); resid-debug assumed a PIE's load bias.
+- Benchmarks: nbody 2.80s, fannkuch-redux 7.90s, spectral-norm 1.13s,
+  mandelbrot 11.2s, binary-trees 2.05s, fasta 2.50s, k-nucleotide 5.69s,
+  reverse-complement 0.50-0.58s, pidigits 0.44s; small programs' peak RSS
+  12MB.
+
 ### 0zl. The runtime is Resid; runtime/resid_rt.c is gone (2026-09-26)
 
 - Everything the C runtime did now lives in `runtime/rt/` (lowered to

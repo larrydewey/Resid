@@ -41,33 +41,203 @@ Bool host_ok(Int p) {
     return ok && host_ok(p + 1);
 }
 
-// A connected stream socket (first address getaddrinfo returns, 30 s
-// receive timeout), or -1.
+// A connected stream socket (IPv4, 30 s receive timeout), or -1.
 @export("resid_tcp_connect", "i64(ptr,i64)")
 pub Int rt_tcp_connect(Int host, Int port) {
     if (host == 0 || ld8(host) == 0 || !host_ok(host)) { return 0 - 1; }
     if (port <= 0 || port > 65535) { return 0 - 1; }
-    Int hints = resid_raw_tls("ai_hints", 48);
-    Int _z = resid_raw_fill(hints, 0, 48);
-    Int _t = st32(hints + 8, 1);
-    Int ps = resid_raw_tls("ai_port", 24);
-    Int _p = st8(ps + itoa_into(ps, port), 0);
-    Int resp = resid_raw_tls("ai_res", 8);
-    Int _r = st64(resp, 0);
-    if (c_getaddrinfo(host, ps, hints, resp) != 0 || ld64(resp) == 0) { return 0 - 1; }
-    Int res = ld64(resp);
-    Int fd = resid_raw_syscall(41, ld32(res + 4), ld32(res + 8), ld32(res + 12), 0, 0, 0);
-    if (fd < 0) { return c_freeaddrinfo(res) * 0 - 1; }
-    Int cr = resid_raw_syscall(42, fd, ld64(res + 24), ld32(res + 16), 0, 0, 0);
-    Int _f = c_freeaddrinfo(res);
+    Int ip = resolve4(host);
+    if (ip < 0) { return 0 - 1; }
+    Int sa = resid_raw_tls("sa_in", 16);
+    Int _z = resid_raw_fill(sa, 0, 16);
+    Int _f = st8(sa, 2);                                   // AF_INET
+    Int _p = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
+    Int _a = st32(sa + 4, ip);                             // network order
+    Int fd = resid_raw_syscall(41, 2, 1, 0, 0, 0, 0);      // SOCK_STREAM
+    if (fd < 0) { return 0 - 1; }
+    Int cr = resid_raw_syscall(42, fd, sa, 16, 0, 0, 0);
     if (cr != 0) { return sys_close(fd) * 0 - 1; }
-    Int tv = resid_raw_tls("ai_tv", 16);
-    Int _a = st64(tv, 30);
-    Int _b = st64(tv + 8, 0);
-    Int _s = resid_raw_syscall(54, fd, 1, 20, tv, 16, 0);
+    Int _t = set_timeout(fd, 30);
     return fd;
 }
 
+Int set_timeout(Int fd, Int secs) {
+    Int tv = resid_raw_tls("ai_tv", 16);
+    Int _a = st64(tv, secs);
+    Int _b = st64(tv + 8, 0);
+    return resid_raw_syscall(54, fd, 1, 20, tv, 16, 0);   // SO_RCVTIMEO
+}
+
+// ─── IPv4 name lookup: a literal, localhost, /etc/hosts, then DNS ──────
+// Addresses are the 4 bytes in network order, read as a u32; -1 when not
+// found.
+
+Int resolve4(Int host) {
+    Int lit = parse_ip4(host);
+    if (lit >= 0) { return lit; }
+    if (lower_eq(host, resid_raw_addr("localhost"))) { return 16777343; }   // 127.0.0.1
+    Int h = hosts_lookup(host);
+    if (h >= 0) { return h; }
+    return dns_lookup(host);
+}
+
+// a.b.c.d with each part 0..255.
+pub Int parse_ip4(Int p) { return ip4_part(p, 0, 0, 0); }
+
+Int ip4_part(Int p, Int k, Int acc, Int shift) {
+    Int e = digits_end(p);
+    if (e == p || e - p > 3) { return 0 - 1; }
+    Int v = dec_value(p, e, 0);
+    if (v > 255) { return 0 - 1; }
+    Int acc2 = acc | (v << shift);
+    Int c = ld8(e);
+    if (k == 3) { return if (c == 0 || is_space(c)) { acc2 } else { 0 - 1 }; }
+    if (c != 46) { return 0 - 1; }
+    return ip4_part(e + 1, k + 1, acc2, shift + 8);
+}
+
+Int digits_end(Int p) { return if (ld8(p) >= 48 && ld8(p) <= 57) { digits_end(p + 1) } else { p }; }
+Int dec_value(Int p, Int e, Int acc) { return if (p >= e) { acc } else { dec_value(p + 1, e, acc * 10 + ld8(p) - 48) }; }
+
+Bool lower_eq(Int a, Int b) {
+    Int x = lower(ld8(a));
+    if (x != lower(ld8(b))) { return false; }
+    if (x == 0) { return true; }
+    return lower_eq(a + 1, b + 1);
+}
+
+// /etc/hosts: "address name alias..." lines; the first IPv4 match.
+Int hosts_lookup(Int host) {
+    Int blk = read_file_all(resid_raw_addr("/etc/hosts"));
+    if (blk == 0) { return 0 - 1; }
+    Int r = hosts_lines(blk, host);
+    return c_free(blk) * 0 + r;
+}
+
+Int hosts_lines(Int p, Int host) {
+    if (ld8(p) == 0) { return 0 - 1; }
+    Int e = line_end(p);
+    Int ip = if (ld8(p) != 35) { parse_ip4(p) } else { 0 - 1 };
+    Bool hit = ip >= 0 && line_has_name(skip_word(p, e), e, host);
+    if (hit) { return ip; }
+    return hosts_lines(if (ld8(e) == 0) { e } else { e + 1 }, host);
+}
+
+Int line_end(Int p) { return if (ld8(p) == 0 || ld8(p) == 10) { p } else { line_end(p + 1) }; }
+Int skip_word(Int p, Int e) { return if (p < e && !is_space(ld8(p))) { skip_word(p + 1, e) } else { p }; }
+Int skip_blank(Int p, Int e) { return if (p < e && is_space(ld8(p))) { skip_blank(p + 1, e) } else { p }; }
+
+Bool line_has_name(Int p0, Int e, Int host) {
+    Int p = skip_blank(p0, e);
+    if (p >= e || ld8(p) == 35) { return false; }
+    Int w = skip_word(p, e);
+    if (w - p == c_strlen(host) && prefix_ci(p, host, w - p)) { return true; }
+    return line_has_name(w, e, host);
+}
+
+Bool prefix_ci(Int a, Int b, Int n) {
+    if (n == 0) { return true; }
+    return lower(ld8(a)) == lower(ld8(b)) && prefix_ci(a + 1, b + 1, n - 1);
+}
+
+// DNS: an A query to each "nameserver" IPv4 line of /etc/resolv.conf in
+// turn (3 s each), answers read from the reply (CNAMEs are followed by
+// the server's own answer records).
+Int dns_lookup(Int host) {
+    Int blk = read_file_all(resid_raw_addr("/etc/resolv.conf"));
+    if (blk == 0) { return dns_ask(16777343, host); }
+    Int r = ns_lines(blk, host);
+    return c_free(blk) * 0 + r;
+}
+
+Int ns_lines(Int p, Int host) {
+    if (ld8(p) == 0) { return 0 - 1; }
+    Int e = line_end(p);
+    Bool ns = prefix_ci(p, resid_raw_addr("nameserver"), 10) && is_space(ld8(p + 10));
+    Int ip = if (ns) { parse_ip4(skip_blank(p + 10, e)) } else { 0 - 1 };
+    Int r = if (ip >= 0) { dns_ask(ip, host) } else { 0 - 1 };
+    if (r >= 0) { return r; }
+    return ns_lines(if (ld8(e) == 0) { e } else { e + 1 }, host);
+}
+
+Int dns_ask(Int server, Int host) {
+    Int q = xmalloc(600);
+    Int qn = dns_query(q, host);
+    if (qn < 0) { return c_free(q) * 0 - 1; }
+    Int fd = resid_raw_syscall(41, 2, 2, 0, 0, 0, 0);    // SOCK_DGRAM
+    if (fd < 0) { return c_free(q) * 0 - 1; }
+    Int _t = set_timeout(fd, 3);
+    Int sa = resid_raw_tls("sa_dns", 16);
+    Int _z = resid_raw_fill(sa, 0, 16);
+    Int _a = st8(sa, 2) + st8(sa + 2, 0) + st8(sa + 3, 53) + st32(sa + 4, server);
+    Int sent = resid_raw_syscall(44, fd, q, qn, 16384, sa, 16);
+    Int resp = xmalloc(1500);
+    Int n = if (sent == qn) { resid_raw_syscall(45, fd, resp, 1500, 0, 0, 0) } else { 0 - 1 };
+    Int _c = sys_close(fd);
+    Int r = if (n >= 12 && ld8(resp) == ld8(q) && ld8(resp + 1) == ld8(q + 1)) { dns_answer(resp, n) } else { 0 - 1 };
+    return c_free(q) * 0 + c_free(resp) * 0 + r;
+}
+
+// A standard query for host's A record: its length, or -1.
+Int dns_query(Int q, Int host) {
+    Int id = rt_crypto_random_byte() * 256 + rt_crypto_random_byte();
+    Int _h = st8(q, id >> 8) + st8(q + 1, id & 255) + st8(q + 2, 1) + st8(q + 3, 0);
+    Int _c = st8(q + 4, 0) + st8(q + 5, 1) + resid_raw_fill(q + 6, 0, 6);
+    Int k = dns_name(q, 12, host, host);
+    if (k < 0) { return 0 - 1; }
+    Int _t = st8(q + k, 0) + st8(q + k + 1, 1) + st8(q + k + 2, 0) + st8(q + k + 3, 1);
+    return k + 4;
+}
+
+// host as length-prefixed labels at q + k; the end, or -1.
+Int dns_name(Int q, Int k, Int p, Int host) {
+    if (k > 270) { return 0 - 1; }
+    Int e = label_end(p);
+    Int n = e - p;
+    if (n == 0 || n > 63) { return if (n == 0 && ld8(p) == 0 && p != host) { st8(q + k, 0) * 0 + k + 1 } else { 0 - 1 }; }
+    Int _l = st8(q + k, n);
+    Int _c = mcopy(q + k + 1, p, n);
+    if (ld8(e) == 0) { return st8(q + k + 1 + n, 0) * 0 + k + 2 + n; }
+    return dns_name(q, k + 1 + n, e + 1, host);
+}
+
+Int label_end(Int p) { return if (ld8(p) == 0 || ld8(p) == 46) { p } else { label_end(p + 1) }; }
+
+Int be16(Int p) { return (ld8(p) << 8) | ld8(p + 1); }
+
+// The first A record among the answers, or -1.
+Int dns_answer(Int r, Int n) {
+    if ((ld8(r + 3) & 15) != 0) { return 0 - 1; }         // rcode
+    Int qd = be16(r + 4);
+    Int an = be16(r + 6);
+    Int p = skip_questions(r, n, 12, qd);
+    return answers(r, n, p, an);
+}
+
+Int skip_questions(Int r, Int n, Int p, Int k) {
+    if (k == 0 || p < 0) { return p; }
+    Int e = skip_name(r, n, p);
+    return skip_questions(r, n, if (e < 0) { e } else { e + 4 }, k - 1);
+}
+
+// Past a (possibly compressed) name at offset p, or -1.
+Int skip_name(Int r, Int n, Int p) {
+    if (p >= n) { return 0 - 1; }
+    Int c = ld8(r + p);
+    if (c == 0) { return p + 1; }
+    if ((c & 192) == 192) { return p + 2; }
+    return skip_name(r, n, p + 1 + c);
+}
+
+Int answers(Int r, Int n, Int p, Int k) {
+    if (k == 0 || p < 0) { return 0 - 1; }
+    Int e = skip_name(r, n, p);
+    if (e < 0 || e + 10 > n) { return 0 - 1; }
+    Int ty = be16(r + e);
+    Int len = be16(r + e + 8);
+    if (ty == 1 && len == 4 && e + 14 <= n) { return ld32(r + e + 10); }
+    return answers(r, n, e + 10 + len, k - 1);
+}
 // Write all n bytes at p (MSG_NOSIGNAL); false on error.
 Bool send_all(Int fd, Int p, Int n) {
     if (n <= 0) { return true; }

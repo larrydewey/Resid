@@ -50,7 +50,13 @@ die()  { echo -e "  \033[0;31m✗\033[0m $*"; exit 1; }
 RESID_OPT="${RESID_OPT:--O2}"
 
 link_clang() { # link_clang <ll> <out-bin>
-    clang "$RESID_OPT" -no-pie "$1" "$RT_LL" -o "$2" -Wno-override-module -pthread
+    # IR with its own process entry links without the C library; an older
+    # seed (before _start) still links against it.
+    if grep -q "^define void @_start" "$1"; then
+        clang "$RESID_OPT" -static-pie -nostdlib "$1" "$RT_LL" -lgcc -o "$2" -Wno-override-module
+    else
+        clang "$RESID_OPT" -no-pie "$1" "$RT_LL" -o "$2" -Wno-override-module -pthread
+    fi
 }
 
 build_rt() { # build_rt <compiler> <out-base>: runtime IR to <out-base>.ll

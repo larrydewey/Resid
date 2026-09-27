@@ -15,7 +15,8 @@
 //
 // Thread-local state words: 0 arena, 1 bulk arena, 2 bytes requested,
 // 3 mark, 4 scope depth, 5 scope chunk, 6 scope bump pointer, 7 scope end,
-// 8 marks, 9 marks capacity, 10 chunk pool, 11 pool size, 12 exit hook set.
+// 8 marks, 9 marks capacity, 10 chunk pool, 11 pool size. A thread's
+// exit runs scope_thread_exit (resid_start's thread_main).
 // An arena is {head, current, prev}; its chunks {cap, used, next, data}.
 // A scope chunk is {prev, cap, data}; a mark {chunk, ptr}.
 
@@ -120,9 +121,6 @@ pub Int rt_bulk_pop() {
 
 // ─── Scalar scopes ─────────────────────────────────────────────────────
 
-Int sc_once() { return resid_raw_global("rt_sc_once", 8); }
-Int sc_key() { return resid_raw_global("rt_sc_key", 8); }
-
 // Thread exit: hand the reuse pool back (chunks in use stay: an unpopped
 // region may hold a value the thread returned).
 pub Int scope_thread_exit(Int unused) {
@@ -139,17 +137,11 @@ Int free_pool(Int c) {
     return free_pool(prev);
 }
 
-pub Int scope_key_init() { return c_pthread_key_create(sc_key(), resid_raw_fn("scope_thread_exit")); }
-
 @noinline
 Int marks_grow() {
     Int cap = if (ag(9) != 0) { ag(9) * 2 } else { 64 };
     Int _m = as_(8, xrealloc(ag(8), cap * 16));
-    Int _c = as_(9, cap);
-    if (ag(12) != 0) { return 0; }
-    Int _o = c_pthread_once(sc_once(), resid_raw_fn("scope_key_init"));
-    Int _s = c_pthread_setspecific(ld32(sc_key()), 1);
-    return as_(12, 1);
+    return as_(9, cap);
 }
 
 @export("resid_scope_push", "i64()")

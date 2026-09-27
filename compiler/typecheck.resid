@@ -2160,6 +2160,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "Bool") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_internals_set expects (Bool), got (" + argtys + ")"};
     }
+    if (name == "resid_mem_limit_set") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_mem_limit_set expects (Int), got (" + argtys + ")"};
+    }
     if (name == "resid_quiet_set") {
         if (argtys == "Bool") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_quiet_set expects (Bool), got (" + argtys + ")"};

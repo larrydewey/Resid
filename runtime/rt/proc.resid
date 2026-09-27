@@ -1,0 +1,134 @@
+// The environment and process creation on system calls: getenv, fork,
+// execv / execvp (PATH search), and one line of a shell command's output
+// (the git provider).
+
+// The environment: envp from the process entry (resid_start), or else
+// read once from /proc/self/environ into a NUL-separated block and an
+// array of pointers.
+Int env_w() { return resid_raw_global("rt_envp", 8); }
+
+pub Int set_envp(Int envp) { return st64(env_w(), envp); }
+
+pub Int envp() {
+    Int e = ld64(env_w());
+    if (e != 0) { return e; }
+    return st64(env_w(), load_environ()) * 0 + ld64(env_w());
+}
+
+Int load_environ() {
+    Int blk = read_file_all(resid_raw_addr("/proc/self/environ"));
+    Int n = if (blk == 0) { 0 } else { ld64(resid_raw_tls("env_len", 8)) };
+    Int count = count_nuls(blk, 0, n, 0);
+    Int arr = xmalloc((count + 1) * 8);
+    Int k = fill_env(blk, 0, n, arr, 0, 0);
+    return st64(arr + k * 8, 0) * 0 + arr;
+}
+
+// The whole file at path (NUL-terminated; its length in env_len), or 0.
+pub Int read_file_all(Int path) {
+    Int fd = sys_open(path, o_rdonly(), 0);
+    if (fd < 0) { return 0; }
+    Int buf = xmalloc(65536);
+    Int n = read_to(fd, buf, 0, 65536);
+    Int _c = sys_close(fd);
+    Int _l = st64(resid_raw_tls("env_len", 8), n);
+    return st8(buf + n, 0) * 0 + buf;
+}
+
+Int read_to(Int fd, Int buf, Int n, Int cap) {
+    if (n >= cap - 1) { return n; }
+    Int r = sc(0, fd, buf + n, cap - 1 - n);
+    if (r <= 0) { return n; }
+    return read_to(fd, buf, n + r, cap);
+}
+
+Int count_nuls(Int b, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return count_nuls(b, i + 1, n, acc + (if (ld8(b + i) == 0) { 1 } else { 0 }));
+}
+
+Int fill_env(Int b, Int i, Int n, Int arr, Int k, Int start) {
+    if (i >= n) { return k; }
+    if (ld8(b + i) != 0) { return fill_env(b, i + 1, n, arr, k, start); }
+    Int _s = st64(arr + k * 8, b + start);
+    return fill_env(b, i + 1, n, arr, k + 1, i + 1);
+}
+
+// The value of NAME in the environment, or 0.
+pub Int c_getenv(Int name) {
+    Int nl = c_strlen(name);
+    return env_find(envp(), name, nl);
+}
+
+Int env_find(Int e, Int name, Int nl) {
+    Int s = ld64(e);
+    if (s == 0) { return 0; }
+    if (c_strncmp(s, name, nl) == 0 && ld8(s + nl) == 61) { return s + nl + 1; }
+    return env_find(e + 8, name, nl);
+}
+
+pub Int c_fork() { return resid_raw_syscall(57, 0, 0, 0, 0, 0, 0); }
+
+pub Int c_execv(Int path, Int argv) { return resid_raw_syscall(59, path, argv, envp(), 0, 0, 0); }
+
+// execvp: a name with '/' as is, else each PATH directory in turn.
+pub Int c_execvp(Int file, Int argv) {
+    if (c_strchr(file, 47) != 0) { return c_execv(file, argv); }
+    Int path = c_getenv(resid_raw_addr("PATH"));
+    Int dirs = if (path == 0 || ld8(path) == 0) { resid_raw_addr("/usr/local/bin:/usr/bin:/bin") } else { path };
+    Int buf = xmalloc(4096);
+    Int _t = try_dirs(dirs, file, argv, buf);
+    return c_free(buf) * 0 - 1;
+}
+
+Int try_dirs(Int d, Int file, Int argv, Int buf) {
+    if (ld8(d) == 0) { return 0; }
+    Int e = dir_end(d);
+    Int dl = e - d;
+    Int fl = c_strlen(file);
+    Int _x = if (dl > 0 && dl + fl + 2 < 4096) { exec_in(d, dl, file, fl, argv, buf) } else { 0 };
+    return if (ld8(e) == 58) { try_dirs(e + 1, file, argv, buf) } else { 0 };
+}
+
+Int dir_end(Int d) { return if (ld8(d) == 0 || ld8(d) == 58) { d } else { dir_end(d + 1) }; }
+
+Int exec_in(Int d, Int dl, Int file, Int fl, Int argv, Int buf) {
+    Int _a = mcopy(buf, d, dl);
+    Int _s = st8(buf + dl, 47);
+    Int _f = mcopy(buf + dl + 1, file, fl + 1);
+    return c_execv(buf, argv);
+}
+
+// The first line (at most 255 bytes, newline dropped) a `sh -c cmd` writes
+// to its standard output; empty when it writes nothing or cannot run.
+pub Int shell_line(Int cmd) {
+    Int fds = resid_raw_tls("pipe_fds", 8);
+    if (resid_raw_syscall(293, fds, 524288, 0, 0, 0, 0) != 0) { return xempty(); }   // pipe2 O_CLOEXEC
+    Int rd = ld32(fds);
+    Int wr = ld32(fds + 4);
+    Int argv = xmalloc(32);
+    Int _a = st64(argv, resid_raw_addr("sh")) + st64(argv + 8, resid_raw_addr("-c")) + st64(argv + 16, cmd) + st64(argv + 24, 0);
+    Int pid = c_fork();
+    if (pid == 0) {
+        // Child: the pipe as standard output, then the shell.
+        Int _d = resid_raw_syscall(33, wr, 1, 0, 0, 0, 0);
+        Int _e = c_execv(resid_raw_addr("/bin/sh"), argv);
+        return resid_raw_syscall(231, 127, 0, 0, 0, 0, 0);
+    }
+    Int _cw = sys_close(wr);
+    Int line = xmalloc(256);
+    Int n = if (pid > 0) { read_line_fd(rd, line, 0) } else { 0 };
+    Int _cr = sys_close(rd);
+    Int _w = if (pid > 0) { wait_pid(pid, 0) } else { 0 };
+    Int _f = c_free(argv);
+    return st8(line + n, 0) * 0 + line;
+}
+
+// Bytes up to a newline or 255, from fd.
+Int read_line_fd(Int fd, Int buf, Int n) {
+    if (n >= 255) { return n; }
+    Int r = sc(0, fd, buf + n, 1);
+    if (r <= 0) { return n; }
+    if (ld8(buf + n) == 10) { return n; }
+    return read_line_fd(fd, buf, n + 1);
+}

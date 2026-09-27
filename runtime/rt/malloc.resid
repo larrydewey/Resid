@@ -1,0 +1,234 @@
+// malloc / free / realloc / calloc on mmap, without locks.
+//
+// Blocks up to 128 KB come from 48 size classes (16..128 by 16, then four
+// classes per power of two); each thread keeps a free list per class and
+// carves new blocks from its own slabs (1 MB mappings, or eight blocks of
+// a big class). A block is preceded by a 16-byte header whose first word
+// is its class. A free pushes onto the freeing thread's list. Larger blocks
+// are their own mappings (header: the mapping size) and go back to the
+// kernel on free; realloc grows them with mremap.
+
+Int nclasses() { return 48; }
+Int small_max() { return 131072; }
+
+// Per thread: 48 list heads, the slab bump pointer and end, then the big
+// block cache: its list, count and bytes.
+Int heap_tls() { return resid_raw_tls("rt_heap", 424); }
+
+// Class sizes: 16..128 by 16, then (4 + i) * 2^k / 4 for k = 7...
+pub Int class_size(Int c) {
+    if (c < 8) { return (c + 1) * 16; }
+    Int k = (c - 8) / 4 + 7;
+    return ((4 + (c - 8) % 4 + 1) << k) / 4;
+}
+
+// Bit length of x > 0.
+pub Int bitlen(Int x) {
+    Int a = x | (x >> 1);
+    Int b = a | (a >> 2);
+    Int c = b | (b >> 4);
+    Int d = c | (c >> 8);
+    Int e = d | (d >> 16);
+    return resid_raw_popcount(e | (e >> 32));
+}
+
+// The class holding n bytes (0 < n <= 128 KB).
+pub Int class_of(Int n) {
+    if (n <= 128) { return (n + 15) / 16 - 1; }
+    Int k = bitlen(n - 1) - 1;            // 2^k < n <= 2^(k+1)
+    Int step = 1 << (k - 2);
+    Int sub = (n - 1 - (1 << k)) / step;  // 0..3
+    return 8 + (k - 7) * 4 + sub;
+}
+
+pub Int sys_mmap(Int n) {
+    Int p = resid_raw_syscall(9, 0, n, 3, 34, 0 - 1, 0);   // RW, PRIVATE|ANON
+    if (p < 0 && p > 0 - 4096) { return 0; }
+    return p;
+}
+
+pub Int sys_munmap(Int p, Int n) { return resid_raw_syscall(11, p, n, 0, 0, 0, 0); }
+
+// ─── The memory budget ─────────────────────────────────────────────────
+// Heap mappings (slabs and big blocks; not thread stacks) are counted
+// against a budget: RESID_MEM_LIMIT (MB) when set, else what the program
+// asked for with resid_mem_limit_set (the compiler does), else none. Going
+// past it aborts with a clear message instead of exhausting the machine.
+
+Int mem_used() { return resid_raw_global("rt_mem_used", 8); }
+Int mem_lim() { return resid_raw_global("rt_mem_limit", 8); }   // 0 unread, -1 none
+
+Int limit_bytes() {
+    Int l = ld64(mem_lim());
+    if (l != 0) { return l; }
+    Int _n = st64(mem_lim(), 0 - 1);           // no recursion while reading
+    Int e = c_getenv(resid_raw_addr("RESID_MEM_LIMIT"));
+    Int mb = if (e != 0 && is_int(e)) { rt_str_parse_int(e) } else { 0 };
+    return st64(mem_lim(), if (mb > 0) { mb * 1048576 } else { 0 - 1 }) * 0 + ld64(mem_lim());
+}
+
+@export("resid_mem_limit_set", "i64(i64)")
+pub Int rt_mem_limit_set(Int mb) {
+    Int e = c_getenv(resid_raw_addr("RESID_MEM_LIMIT"));
+    if (e != 0 && is_int(e)) { return 0; }
+    return st64(mem_lim(), if (mb > 0) { mb * 1048576 } else { 0 - 1 }) * 0;
+}
+
+// Count n more heap bytes; past the budget, abort.
+Int mem_take(Int n) {
+    Int now = resid_raw_fetch_add(mem_used(), n) + n;
+    Int lim = limit_bytes();
+    if (lim > 0 && now > lim) { return over_budget(lim); }
+    return 0;
+}
+
+@noinline
+Int over_budget(Int lim) {
+    Int sb = rt_sb_new();
+    Int _a = sb_lit(sb, resid_raw_addr("memory budget exceeded ("));
+    Int _b = sb_word(sb, lim / 1048576);
+    Int _c = sb_lit(sb, resid_raw_addr(" MB); set RESID_MEM_LIMIT (MB) to raise it"));
+    return rt_abort_msg(rt_sb_finish(sb));
+}
+
+Int heap_map(Int n) {
+    Int _t = mem_take(n);
+    return sys_mmap(n);
+}
+
+Int heap_unmap(Int p, Int n) {
+    Int _f = resid_raw_fetch_add(mem_used(), 0 - n);
+    return sys_munmap(p, n);
+}
+
+pub Int c_malloc(Int n0) {
+    Int n = if (n0 <= 0) { 1 } else { n0 };
+    if (n > small_max()) { return big_alloc(n); }
+    Int c = class_of(n);
+    Int head = heap_tls() + c * 8;
+    Int b = ld64(head);
+    if (b != 0) { return st64(head, ld64(b)) * 0 + b; }
+    return carve(c);
+}
+
+@noinline
+Int carve(Int c) {
+    Int t = heap_tls();
+    Int need = class_size(c) + 16;
+    Int bp = ld64(t + 384);
+    Int end = ld64(t + 392);
+    Int p = if (bp != 0 && end - bp >= need) { bp } else { new_slab(t, need) };
+    if (p == 0) { return 0; }
+    Int _b = st64(t + 384, p + need);
+    Int _h = st64(p, c);
+    return p + 16;
+}
+
+// A new slab: a cached big block when there is one (memory a popped
+// region gave back), else a fresh mapping.
+Int new_slab(Int t, Int need) {
+    Int want = max(1048576, need * 8);
+    Int c = cache_take(t, want);
+    Int sz = if (c != 0) { ld64(c) } else { want };
+    Int s = if (c != 0) { c } else { heap_map(sz) };
+    if (s == 0) { return 0; }
+    Int _e = st64(t + 392, s + sz);
+    return s;
+}
+
+// Freed big blocks are kept (up to 256 blocks / 64 MB per thread) and
+// reused by a request of at most their size and at least half of it:
+// region chunks come and go constantly, and a fresh mapping costs page
+// faults.
+Int big_alloc(Int n) {
+    Int sz = (n + 16 + 4095) & (0 - 4096);
+    Int t = heap_tls();
+    Int hit = cache_take(t, sz);
+    if (hit != 0) { return hit + 16; }
+    // A miss: the cached sizes are not the ones in use; give them back.
+    Int _f = cache_flush(t);
+    Int p = heap_map(sz);
+    if (p == 0) { return 0; }
+    return st64(p, sz) * 0 + p + 16;
+}
+
+pub Int c_free(Int p) {
+    if (p == 0) { return 0; }
+    Int h = ld64(p - 16);
+    if (h < 64) {
+        Int head = heap_tls() + h * 8;
+        Int _n = st64(p, ld64(head));
+        return st64(head, p);
+    }
+    return big_free(p - 16, h);
+}
+
+Int big_free(Int b, Int h) {
+    Int t = heap_tls();
+    if (ld64(t + 408) >= 256 || ld64(t + 416) + h > 67108864) { return heap_unmap(b, h); }
+    Int _n = st64(b + 8, ld64(t + 400));
+    Int _l = st64(t + 400, b);
+    Int _c = st64(t + 408, ld64(t + 408) + 1);
+    return st64(t + 416, ld64(t + 416) + h);
+}
+
+Int cache_flush(Int t) {
+    Int b = ld64(t + 400);
+    if (b == 0) { return 0; }
+    Int _u = st64(t + 400, ld64(b + 8));
+    Int _c = st64(t + 408, ld64(t + 408) - 1);
+    Int _s = st64(t + 416, ld64(t + 416) - ld64(b));
+    Int _m = heap_unmap(b, ld64(b));
+    return cache_flush(t);
+}
+
+// A cached block of sz..2*sz bytes (its header keeps its own size), or 0.
+Int cache_take(Int t, Int sz) { return cache_scan(t, t + 400, sz); }
+
+Int cache_scan(Int t, Int link, Int sz) {
+    Int b = ld64(link);
+    if (b == 0) { return 0; }
+    Int h = ld64(b);
+    if (h >= sz && h <= sz * 2) {
+        Int _u = st64(link, ld64(b + 8));
+        Int _c = st64(t + 408, ld64(t + 408) - 1);
+        Int _s = st64(t + 416, ld64(t + 416) - h);
+        return b;
+    }
+    return cache_scan(t, b + 8, sz);
+}
+
+// Usable bytes of a block.
+Int block_room(Int p) {
+    Int h = ld64(p - 16);
+    return if (h < 64) { class_size(h) } else { h - 16 };
+}
+
+pub Int c_realloc(Int p, Int n) {
+    if (p == 0) { return c_malloc(n); }
+    if (n <= block_room(p)) { return p; }
+    Int h = ld64(p - 16);
+    if (h >= 64) {
+        // A big block moves with its mapping.
+        Int sz = (n + 16 + 4095) & (0 - 4096);
+        Int _t = mem_take(sz - h);
+        Int q = resid_raw_syscall(25, p - 16, h, sz, 1, 0, 0);   // mremap MAYMOVE
+        if (q < 0 && q > 0 - 4096) { return 0; }
+        return st64(q, sz) * 0 + q + 16;
+    }
+    Int q = c_malloc(n);
+    if (q == 0) { return 0; }
+    Int _c = mcopy(q, p, block_room(p));
+    return c_free(p) * 0 + q;
+}
+
+pub Int c_calloc(Int n, Int size) {
+    Int p = c_malloc(n * size);
+    return if (p != 0) { resid_raw_fill(p, 0, n * size) * 0 + p } else { 0 };
+}
+
+// Freed memory is kept for reuse; nothing to trim.
+pub Int c_malloc_trim(Int pad) { return 0; }
+
+@export("resid_free", "void(ptr)")
+pub Int rt_free_x(Int p) { return c_free(p); }

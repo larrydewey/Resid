@@ -436,7 +436,7 @@ Int argv_at(Int p0, Int argv, Int n) {
 Int free_argv(Int argv) { return c_free(ld64(argv)) + c_free(argv); }
 
 // wait4 for pid; the raw status, or -1.
-Int wait_pid(Int pid, Int flags) {
+pub Int wait_pid(Int pid, Int flags) {
     Int stp = resid_raw_tls("wait_status", 8);
     Int _z = st64(stp, 0);
     Int r = sc4(61, pid, stp, flags, 0);
@@ -464,7 +464,7 @@ pub Int rt_process_run(Int cmd) {
     return exit_code(st);
 }
 
-// git rev-parse through popen (git provider).
+// git rev-parse through sh -c (git provider).
 Bool ref_ok(Int p) {
     Int c = ld8(p);
     if (c == 0) { return true; }
@@ -472,28 +472,16 @@ Bool ref_ok(Int p) {
     return ok && ref_ok(p + 1);
 }
 
-Int popen_line(Int cmd) {
-    Int f = c_popen(cmd, resid_raw_addr("r"));
-    if (f == 0) { return xempty(); }
-    Int line = xmalloc(256);
-    Int got = c_fgets(line, 256, f);
-    Int _c = c_pclose(f);
-    if (got == 0) { return st8(line, 0) + line; }
-    Int n = c_strlen(line);
-    Int _z = if (n > 0 && ld8(line + n - 1) == 10) { st8(line + n - 1, 0) } else { 0 };
-    return line;
-}
-
 @export("resid_git_rev", "ptr(ptr)")
 pub Int rt_git_rev(Int r) {
     if (r == 0 || ld8(r) == 0 || !ref_ok(r) || c_strlen(r) > 4000) { return xempty(); }
     Int cmd = rt_str_concat(rt_str_concat(resid_raw_addr("git rev-parse "), r), resid_raw_addr(" 2>/dev/null"));
-    return popen_line(cmd);
+    return shell_line(cmd);
 }
 
 @export("resid_git_branch", "ptr()")
 pub Int rt_git_branch() {
-    Int line = popen_line(resid_raw_addr("git rev-parse --abbrev-ref HEAD 2>/dev/null"));
+    Int line = shell_line(resid_raw_addr("git rev-parse --abbrev-ref HEAD 2>/dev/null"));
     Int _s = sanitize_ref(line);
     return line;
 }
@@ -859,16 +847,9 @@ Int stack_mb() {
 @export("resid_run_main", "i32(ptr)")
 pub Int rt_run_main(Int f) {
     Int _c = check_address_space();
-    Int attr = xmalloc(64);
     Int slot = xmalloc(16);
     Int _s = st64(slot, f);
-    if (c_pthread_attr_init(attr) != 0) { return resid_raw_call2(f, 0, 0); }
-    Int ok = c_pthread_attr_setstacksize(attr, stack_mb() * 1048576);
-    Int t = xmalloc(8);
-    Int made = if (ok == 0) { c_pthread_create(t, attr, resid_raw_fn("main_thread"), slot) } else { 1 };
-    Int _d = c_pthread_attr_destroy(attr);
-    if (made != 0) { return resid_raw_call2(f, 0, 0); }
-    Int ret = xmalloc(8);
-    Int _j = c_pthread_join(ld64(t), ret);
-    return ld64(ret);
+    Int t = thread_spawn(resid_raw_fn("main_thread"), slot, stack_mb() * 1048576);
+    if (t == 0) { return resid_raw_call2(f, 0, 0) & 4294967295; }
+    return thread_join(t);
 }

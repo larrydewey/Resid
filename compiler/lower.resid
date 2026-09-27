@@ -1569,6 +1569,7 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
     if (n == "resid_test_summary") { return lw_extern0(w, id, n, "i64", "Int", c); }
     if (n == "resid_quiet") { return lw_extern0b(w, id, n, c); }
     if (n == "resid_quiet_set") { return lw_externb(w, id, n, l1s("Bool"), env, c); }
+    if (n == "resid_mem_limit_set") { return lw_extern(w, id, n, l1s("Int"), "Int", env, c); }
     if (n == "resid_internals") { return lw_extern0b(w, id, n, c); }
     if (n == "resid_rtmod") { return lw_extern0b(w, id, n, c); }
     if (n == "resid_rtmod_set") { return lw_externb(w, id, n, l1s("Bool"), env, c); }
@@ -1593,7 +1594,7 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
 
 // Names the builtin table covers.
 Bool lw_is_builtin(Str n) {
-    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count";
+    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_mem_limit_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count";
 }
 
 // cg_print: `print(str_sb_finish(b))` fuses into resid_sb_print.
@@ -2039,9 +2040,11 @@ ST lw_if(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     GT cond = lc.cond;
     if (cond.err != "") { return st_err(cond.err, g); }
     if (cond.ty != "Bool") { return st_err("if condition must be Bool", g); }
-    Int l1 = g.lbl + 1;
-    Int l2 = g.lbl + 2;
-    Int l3 = g.lbl + 3;
+    // Labels after the condition's own (an if-expression there has some).
+    Int lb = max(g.lbl, cond.lbl);
+    Int l1 = lb + 1;
+    Int l2 = lb + 2;
+    Int l3 = lb + 3;
     Str lt = f"L{l1}";
     Str le = f"L{l2}";
     Str ld = f"L{l3}";
@@ -2114,7 +2117,7 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     if (!range) {
         if (str_find_char(a.ty, 40, 0) < 0) { return st_err("for-in over non-iterable " + a.ty, g); }
         Str n2s = f"{g.lbl + 1}";
-        Int nlbl2 = g.lbl + 3;
+        Int nlbl2 = max(g.lbl, a.lbl) + 3;
         Str LB2 = "LB" + n2s;
         Str LBODY2 = "LBODY" + n2s;
         Str LD2 = "LD" + n2s;
@@ -2140,7 +2143,7 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     if (vty != "Int") { return st_err("for-in var must be Int", g); }
     GT b = lw_expr(w, lw_kid(w, it, 1), env, a);
     if (b.err != "") { return st_err(b.err, g); }
-    Int newlbl = g.lbl + 3;
+    Int newlbl = max(g.lbl, b.lbl) + 3;
     Str lbs = f"{g.lbl + 1}";
     Str LB = "LB" + lbs;
     Str LBODY = "LBODY" + lbs;
