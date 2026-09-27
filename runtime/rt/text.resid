@@ -571,6 +571,10 @@ pub Bool rt_sb_print(Int r, Int nl) {
 }
 
 // A Str from a List(Int) of codepoints (UTF-8 encoded).
+// A byte string literal's length (Bytes).
+@export("resid_bytes_len", "i64(ptr)")
+pub Int rt_bytes_len(Int p) { return if (p == 0) { 0 } else { c_strlen(p) }; }
+
 @export("resid_str_from_codepoints", "ptr(ptr)")
 pub Int rt_str_from_codepoints(Int l) {
     Int n = lcount(l);

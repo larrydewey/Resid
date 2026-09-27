@@ -1331,10 +1331,10 @@ pub Int rt_map_values(Int m) {
     return c_free(vs) * 0 + r;
 }
 
-// An entry's text: a string as is, a scalar formatted.
+// An entry's text: a string quoted, a scalar formatted.
 Int sb_entry(Int sb, Int p) {
     Int st = if (is_boxed(p)) { stype(p) } else { 0 };
-    if (st == 0) { return sb_lit(sb, p); }
+    if (st == 0) { return sb_quoted(sb, p); }
     if (st == 2) { return sb_float(sb, unbox_float(p)); }
     if (st == 3) { return sb_lit(sb, if (ld8(p + 24) != 0) { resid_raw_addr("true") } else { resid_raw_addr("false") }); }
     return sb_word(sb, unbox_word(p));

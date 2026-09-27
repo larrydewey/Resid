@@ -2,7 +2,7 @@ Int main() {
     Int x = if (1 < 2) { 10; } else { 20; };
     println(f"{x}");
 
-    Int y = if (1 > 2) { 100; };
+    Int y = if (1 > 2) { 100; } else { 0; };
     println(f"{y}");
 
     while (true) {

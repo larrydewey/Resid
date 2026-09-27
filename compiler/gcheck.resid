@@ -330,6 +330,13 @@ GKT gk_sort(GK k0, Int id) {
     if (u < 0) {
         Bool dflt = (is_num(elem) && !is_dec_ty(elem)) || num_norm(elem) == "Str";
         if (dflt) { return gt(k, v.ty, id); }
+        // The element type's own Ord instance is inserted automatically.
+        Int oi = ck_b_index(k.fs, "Ord", elem);
+        if (oi >= 0) {
+            Int ofi = ck_fn_index(k.fs, k.fs.bfns[oi]);
+            if (ofi < 0 || k.fs.pts[ofi] != elem + "," + elem || k.fs.rets[ofi] != "Int") { return gterr(k, "behavior Ord(" + elem + "): impl must have signature (" + elem + ", " + elem + ") -> Int", id); }
+            return gt(k, v.ty, id);
+        }
         return gterr(k, "sort(xs) of " + elem + " needs a behavior: sort(xs, using = Ord(" + elem + "))", id);
     }
     if (g.ns[u].kind != "named" || g.ns[u].text != "using") { return gterr(k, "sort requires a behavior: sort(xs, using = Ord(T))", id); }
@@ -490,6 +497,7 @@ GKT gk_bin(GK k0, Int id, Str exp) {
     Str bt = bin_type(op, lty, rty);
     if (bt == "ERR_DEC") { return gterr(k, "cannot mix Dec with a non-Dec operand: " + lty + " " + op + " " + rty + " (convert explicitly with dN / iN / fN)", id); }
     if (bt == "ERR_SIGN") { return gterr(k, "cannot mix signed and unsigned operands in one operation: " + lty + " " + op + " " + rty + " (use an explicit cast)", id); }
+    if (bt == "ERR_EQ") { return gterr(k, "operator " + op + " compares numbers, Bool and Str; compare the parts of a " + lty + " (its fields, elements or variant)", id); }
     if (bt == "ERR") { return gterr(k, "operator " + op + " between " + lty + " and " + rty, id); }
     // An adopted literal operand takes the type it adopted.
     GK ka = if (lty != lt.ty) { gk_tl(k, tl_add(k.tl, l, lty)) } else { k };
@@ -544,7 +552,10 @@ GKT gk_ifx(GK k, Int id, Str exp) {
     if (c.ty != "Bool") { return gterr(c.k, "if condition must be Bool, got " + c.ty, c.at); }
     GKT th = gk_expr(c.k, gk_kid(k, id, 1), "");
     if (th.err != "") { return th; }
-    if (k.g.ns[id].nk < 3) { return gt(th.k, th.ty, id); }
+    if (k.g.ns[id].nk < 3) {
+        if (th.ty != "Void") { return gterr(th.k, "an if expression needs an else branch (it yields " + th.ty + ")", id); }
+        return gt(th.k, th.ty, id);
+    }
     Int el = gk_kid(k, id, 2);
     GKT et = gk_expr(th.k, el, if (k.g.ns[el].kind == "ifx") { exp } else { "" });
     if (et.err != "") { return et; }
@@ -658,7 +669,8 @@ GKT gk_lambda(GK k, Int id, Str exp) {
     GK kb = gk_scope(k, body.k);
     Str ret = fn_ret(exp);
     Bool num_adopt = is_num(body.ty) && is_num(ret) && int_adopt_ok(body.ty, ret, "");
-    if (!ty_same(body.ty, ret) && !num_adopt) { return gterr(kb, "closure body returns " + body.ty + ", expected " + ret, id); }
+    // A Void closure runs its body for effect and discards its value.
+    if (!ty_same(body.ty, ret) && !num_adopt && ret != "Void") { return gterr(kb, "closure body returns " + body.ty + ", expected " + ret, id); }
     if (np != pl.len()) { return gterr(kb, f"closure has {np} parameter(s), expected {pl.len()}", id); }
     return gt(kb, exp, id);
 }
@@ -725,15 +737,33 @@ Bool gk_is_provider(GK k, Int recv) {
     return kg_def(k.rs, recv) == rs_builtin();
 }
 
+// A provider verb's parameter types ("?" for a verb checked elsewhere).
+Str gk_provider_params(Str fam, Str m) {
+    if (fam == "environment" && m == "get") { return "Str"; }
+    if (fam == "args" && m == "get") { return "Int"; }
+    if (fam == "process" && m == "run") { return "Str"; }
+    if (fam != "filesystem") { return "?"; }
+    Bool path = m == "read_all" || m == "exists" || m == "is_dir" || m == "create_dir" || m == "open" || m == "list_dir" || m == "read_bytes" || m == "sha256";
+    if (path) { return "Str"; }
+    if (m == "read_handle" || m == "close") { return "File"; }
+    if (m == "write_all" || m == "write_hex" || m == "append_hex") { return "Str,Str"; }
+    if (m == "write_bytes" || m == "write_secret" || m == "append_bytes") { return "Str,List(Int)"; }
+    return "?";
+}
+
 GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     GK k0 = gk_tl(kp, tl_add(kp.tl, kg_kid(kp.g, id, 0), "Provider(" + fam + ")"));
     if (k0.g.ns[id].nk == 1) {
         if (fam == "args" && m == "count") { return gt(k0, "Int", id); }
         return gterr(k0, "unknown provider method " + fam + "." + m, id);
     }
-    GKA a = gk_args(k0, id, 1, gk_nopts(), 0, "", 0);
+    Str want = gk_provider_params(fam, m);
+    List(Str) wl = if (want == "") { gk_nopts() } else { str_split(want, ",") };
+    GKA a = gk_args(k0, id, 1, wl, 0, "", 0);
     if (a.err != "") { return gterr(a.k, a.err, a.at); }
     GK k = a.k;
+    Bool fits = want == "?" || a.tys == want || (a.count == wl.len() && params_accept(want, a.tys, a.count));
+    if (!fits) { return gterr(k, fam + "." + m + " expects (" + want + "), got (" + a.tys + ")", id); }
     if (fam == "environment" && m == "get") { return gt(k, "Str", id); }
     if (fam == "filesystem") {
         if (m == "read_all" || m == "read_handle") { return gt(k, "Str", id); }
@@ -1212,10 +1242,48 @@ GKS gk_fn(GK k, Int d) {
     GK k2 = gk_params(gk_with(k, gk_notys()), d, 1, n - 1);
     GKS b = gk_stmt(k2, gk_kid(k, d, n - 1), rbase);
     if (b.err != "") { return b; }
+    Bool falls = rbase != "Void" && !gk_returns(k.g, gk_kid(k, d, n - 1));
+    Bool opt_ret = str_has_prefix(rbase, "Option(") || str_has_prefix(rbase, "Result(");
+    Int tq = if (opt_ret) { -1 } else { gk_find_try(k.g, gk_kid(k, d, n - 1)) };
+    if (tq >= 0) { return gs_err(b.k, "`?` returns early, so it needs a function that returns an Option or Result; " + k.g.ns[d].text + " returns " + rbase + " (handle the value with else or match)", tq); }
+    if (falls) { return gs_err(b.k, "function " + k.g.ns[d].text + " can reach its end without a return (it returns " + rbase + ")", d); }
     LS lin = lin_fn(k, d);
     if (lin.err != "") { return gs_err(b.k, lin.err, lin.at); }
     if (!resid_quiet()) { println("OK func " + k.g.ns[d].text); }
     return gs_ok(gk_scope(k, b.k));
+}
+
+// A `?` in the function's own body (not inside a lambda or spawn), or -1.
+Int gk_find_try(Kg g, Int id) {
+    Str kd = g.ns[id].kind;
+    if (kd == "try") { return id; }
+    if (kd == "lambda" || kd == "spawn") { return -1; }
+    return gk_find_try_at(g, id, 0, g.ns[id].nk);
+}
+
+Int gk_find_try_at(Kg g, Int id, Int i, Int n) {
+    if (i >= n) { return -1; }
+    Int t = gk_find_try(g, kg_kid(g, id, i));
+    return if (t >= 0) { t } else { gk_find_try_at(g, id, i + 1, n) };
+}
+
+// Does every path through statement `id` return (or abort through todo /
+// unimplemented)?
+Bool gk_returns(Kg g, Int id) {
+    Str kd = g.ns[id].kind;
+    if (kd == "ret") { return true; }
+    if (kd == "block") { return gk_any_returns(g, id, 0, g.ns[id].nk); }
+    if (kd == "if") { return g.ns[id].nk == 3 && gk_returns(g, kg_kid(g, id, 1)) && gk_returns(g, kg_kid(g, id, 2)); }
+    if (kd == "estmt" && g.ns[id].nk == 1) {
+        KN e = g.ns[kg_kid(g, id, 0)];
+        return e.kind == "call" && (e.text == "todo" || e.text == "unimplemented");
+    }
+    return false;
+}
+
+Bool gk_any_returns(Kg g, Int id, Int i, Int n) {
+    if (i >= n) { return false; }
+    return gk_returns(g, kg_kid(g, id, i)) || gk_any_returns(g, id, i + 1, n);
 }
 
 // A graph diagnostic in the text checker's format, at node `at`.
@@ -1245,6 +1313,11 @@ GKS gk_decls(GK k, Int id, Int i, Str src, Str smap) {
         return gk_decls(r.k, id, i + 1, src, smap);
     }
     if (kind == "fn") {
+        Str rq = gk_requires_err(k.g.ns[d].aux);
+        if (rq != "") {
+            eprintln("error[E0213]: " + k.g.ns[d].text + ": " + rq);
+            return gs_err(k, "reported", d);
+        }
         GKS f = gk_fn(k, d);
         if (f.err != "") {
             gk_diag("E0001", "type error: " + f.err, k.g, f.at, src, smap);
@@ -1494,6 +1567,25 @@ List(Int) lin_params(GK k, Int d, Int i, Int n, List(Int) bs, ListBuf(Int) acc) 
 // ─── Signatures from the graph ──────────────────────────────────────
 
 // `@requires(a, b)` families in a declaration prefix, comma-joined.
+// A malformed @requires: an unknown mode or capability family, or "".
+Str gk_requires_err(Str prefix) {
+    Int at = str_find(prefix, "@requires");
+    if (at < 0) { return ""; }
+    Int lp = str_find_char(prefix, 40, at);
+    if (lp < 0) { return ""; }
+    PRes r = cap_list_at(prefix, lp + 1, true, "");
+    if (r.err != "") { return r.err; }
+    return gk_unknown_family(caps_families(str_split(r.ty, ","), 0, ListBuf()), 0);
+}
+
+Str gk_unknown_family(List(Str) fs, Int i) {
+    if (i >= fs.len()) { return ""; }
+    Str f = fs[i];
+    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "git";
+    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, git)"; }
+    return gk_unknown_family(fs, i + 1);
+}
+
 Str gk_requires(Str prefix) {
     Int at = str_find(prefix, "@requires");
     if (at < 0) { return ""; }
@@ -1727,10 +1819,22 @@ Str gk_sort_impl(GK k, Int id) {
     return if (bi < 0) { "" } else { k.fs.bfns[bi] };
 }
 
+// `sort(xs)` may insert any user Ord instance (the element type decides
+// which), so each is an authority edge of the call.
+GKF gk_sort_implicit(GK k, Int id, Int i, GKF f) {
+    Kg g = k.g;
+    if (g.ns[id].kind != "call" || g.ns[id].text != "sort" || g.ns[id].nk != 1) { return f; }
+    if (i >= k.fs.bnames.len()) { return f; }
+    Str p = k.fs.bparams[i];
+    Bool user = k.fs.bnames[i] == "Ord" && !is_num(p) && num_norm(p) != "Str";
+    return gk_sort_implicit(k, id, i + 1, if (user) { gf_add(f, "c", k.fs.bfns[i]) } else { f });
+}
+
 GKF gk_facts(GK k, Int id, GKF f) {
     GKF fu = if (gk_user_call(k, id) || gk_user_ref(k, id)) { gf_add(f, "c", k.g.ns[id].text) } else { f };
     Str bimpl = gk_sort_impl(k, id);
-    GKF f0 = if (bimpl == "") { fu } else { gf_add(fu, "c", bimpl) };
+    GKF f0a = if (bimpl == "") { fu } else { gf_add(fu, "c", bimpl) };
+    GKF f0 = gk_sort_implicit(k, id, 0, f0a);
     Str bfam = gk_call_family(k, id);
     GKF f1 = if (bfam == "") { f0 } else { gf_add(f0, "p", bfam) };
     Str fam = gk_prov_family(k, id);

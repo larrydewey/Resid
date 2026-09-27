@@ -1,0 +1,1 @@
+filesystem.write_secret expects (Str,List(Int))

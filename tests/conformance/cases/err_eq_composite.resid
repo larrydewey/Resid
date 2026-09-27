@@ -1,0 +1,7 @@
+type P = { Int x; };
+Int main() {
+    P a = P {.x = 1};
+    P b = P {.x = 1};
+    Bool same = a == b;
+    return 0;
+}

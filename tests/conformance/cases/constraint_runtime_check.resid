@@ -1,0 +1,11 @@
+// A constraint on a value known only at run time is checked when bound.
+type Positive = Int[value > 0];
+
+@requires(args)
+Int main() {
+    Positive ok = args.count();
+    println(f"{ok}");
+    Positive bad = args.count() - 5;
+    println(f"{bad}");
+    return 0;
+}

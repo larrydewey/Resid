@@ -1,0 +1,2 @@
+@requires(filesystem(sometimes))
+Int main() { return 0; }

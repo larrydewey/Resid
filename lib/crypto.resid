@@ -678,7 +678,7 @@ pub Str b64_enc(List(Int) bytes, Int i, Int end, Str acc) {
         Int m6 = (n >> 6) & 63;
         Str c2 = b64_char(m6);
         Str acc2 = ((acc + c0) + c1) + c2;
-        return acc2 + "==";
+        return acc2 + "=";
     }
     Int b0 = bytes[i];
     Int n = b0 << 16;
@@ -687,7 +687,7 @@ pub Str b64_enc(List(Int) bytes, Int i, Int end, Str acc) {
     Int m12 = (n >> 12) & 63;
     Str c1 = b64_char(m12);
     Str acc2 = (acc + c0) + c1;
-    return acc2 + "=";
+    return acc2 + "==";
 }
 
 // ─── PBKDF2-HMAC-SHA256 (RFC 2898 §5.2) ────────────────────────

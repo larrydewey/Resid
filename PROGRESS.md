@@ -306,6 +306,50 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0zp. Correctness sweep, value display, stdlib imports (2026-09-27)
+
+An LLM writing a Resid skill found these; each has a conformance case now.
+
+- A sum-type `match` whose arm branches (an if, `?:`, `&&`, a nested
+  match, `else`) produced invalid IR: the phi named each arm's entry block,
+  not the block the arm ends in.
+- New compile-time errors:
+  - a function that can reach its end without a return;
+  - `?` in a function that returns neither Option nor Result;
+  - an if expression without else;
+  - `==` on records, lists, options and sums, which used to reach clang;
+  - a missing import file (E0221), which used to be silently empty;
+  - an unknown capability mode or family in `@requires` (E0213);
+  - a provider argument of the wrong type
+    (`filesystem.write_secret(path, "text")` read a Str as a list).
+- A constraint type is checked at run time when the bound value is not
+  known: the predicate over `value`, else an abort naming the constraint.
+- Behaviors:
+  - instances may name parameterized types (`Ord(Int(32)) = f;`);
+  - `sort(xs)` inserts the element type's own Ord instance, and each such
+    impl is an authority edge (E0219);
+  - two instances sharing one impl no longer redefine its comparator.
+- Lambdas:
+  - a returned lambda takes the function's closure return type;
+  - lambdas capture closures, records and sums;
+  - a lambda body's temporaries continue the enclosing count, so its list
+    and string constants no longer collide;
+  - `Void` closures discard their body's value.
+- Other fixes: `rt` before any literal (`rt 1.5m`), `Bytes.len()`, and
+  `base64_encode` padding.
+- Value display (f-strings):
+  - lists print `[1, 2, 3]`, records `Point { x: 1, y: 2 }`, and variants
+    by name (`Circle(2)`, `Empty`); Option and Result show their payload
+    through its own format or `Show`;
+  - strings inside containers are quoted, and lists of records, options
+    or lists format each element through a compiler-made closure
+    (`resid_list_show_clo`);
+  - floats print the shortest text that reads back as the same value
+    (`3.14`, not `3.1400000000000001`), and `Float(32)` at its own width.
+- An import not found beside the importer falls back to the standard
+  library (`$RESID_HOME/../../lib`, else `lib/`), so `import "crypto.resid"`
+  works from any directory.
+
 ### 0zo. Language server, residc test, more arena leaks (2026-09-27)
 
 - `residc lsp` (`compiler/lsp.resid`): a language server over stdio that

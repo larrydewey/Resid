@@ -1,0 +1,22 @@
+// Arms that branch: the phi takes the block each arm ends in.
+type Cmd = Push(Int) | Pop | Bad(Str);
+
+Int f(Cmd c, Int k) {
+    return match c {
+        Push(v) => v > k ? v : k,
+        Pop => if (k > 0 && k < 10) { 1 } else { 2 },
+        Bad(s) => match Some(k) { Some(z) => z, None => 0 },
+    };
+}
+
+Int g(Option(Int) o, Option(Int) d) {
+    return match o {
+        Some(x) => d else { x },
+        None => 0,
+    };
+}
+
+Int main() {
+    println(f"{f(Push(5), 3)} {f(Pop, 3)} {f(Bad("x"), 7)} {g(Some(1), None)} {g(Some(1), Some(9))}");
+    return 0;
+}

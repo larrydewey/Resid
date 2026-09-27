@@ -173,7 +173,8 @@ KP kg_bin(Str s, KP lhs, Int sp, Int min_prec) {
 Bool kg_is_rt_prefix(Str s, Tok t) {
     if (t.text != "rt") { return false; }
     Tok nx = lex_tok(s, t.pos);
-    return nx.kind == "ident" || nx.kind == "int" || nx.kind == "float" || nx.kind == "str" || nx.text == "(" || nx.text == "[" || nx.text == "!";
+    Bool lit = nx.kind == "int" || nx.kind == "float" || nx.kind == "dec" || nx.kind == "str" || nx.kind == "char" || nx.kind == "raw" || nx.kind == "bytes" || nx.kind == "fstring";
+    return nx.kind == "ident" || lit || nx.text == "(" || nx.text == "[" || nx.text == "!" || nx.text == "-";
 }
 
 // `(Type)` at pos when it is a cast; the type text, or "".

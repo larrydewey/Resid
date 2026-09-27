@@ -1,0 +1,25 @@
+// f-string display: lists in brackets, records with field names, strings
+// quoted inside containers, variants by name, Show inside containers.
+type Point = { Int x; Int y; };
+type Named = { Str name; Option(Int) age; };
+type Shape = Circle(Int) | Square(Point) | Empty;
+type Money = { Int cents; };
+Str show_money(Money m) { return f"${m.cents / 100}.{m.cents % 100}"; }
+Show(Money) = show_money;
+
+Result(Int, Str) parse(Str s) { return if (str_is_int(s)) { Ok(str_parse_int(s)) } else { Err(f"not a number: {s}") }; }
+
+Int main() {
+    println(f"{[1, 2, 3]} {["a", "b"]} {[1.5, 2.0]} {[true]}");
+    println(f"{Point {.x = 3, .y = 4}}");
+    println(f"{Named {.name = "Rezzi", .age = Some(3)}}");
+    println(f"{[Point {.x = 1, .y = 2}]}");
+    println(f"{Circle(2)} {Square(Point {.x = 0, .y = 1})} {Empty}");
+    println(f"{Some("x")} {Some(Some(1))} {parse("12")} {parse("zz")}");
+    println(f"{[Money {.cents = 150}]} {Some(Money {.cents = 5})}");
+    List(List(Int)) grid = [[1, 2], [3]];
+    println(f"{grid}");
+    Map(Str, Int) m = {"k": 1};
+    println(f"{m}");
+    return 0;
+}

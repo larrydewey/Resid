@@ -1,0 +1,4 @@
+Int main() {
+    Int y = if (1 > 2) { 100 };
+    return y;
+}

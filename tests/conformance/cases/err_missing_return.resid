@@ -1,0 +1,5 @@
+Int f(Int x) {
+    if (x > 0) { return 1; }
+}
+
+Int main() { return f(1); }

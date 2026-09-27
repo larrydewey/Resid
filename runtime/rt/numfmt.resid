@@ -109,12 +109,53 @@ pub Int rt_int512_to_string(Int l0, Int l1, Int l2, Int l3, Int l4, Int l5, Int 
 @export("UInt512ToString", "ptr(i64,i64,i64,i64,i64,i64,i64,i64)")
 pub Int rt_uint512_to_string(Int l0, Int l1, Int l2, Int l3, Int l4, Int l5, Int l6, Int l7) { return limbs_to_str(limbs8(l0, l1, l2, l3, l4, l5, l6, l7), 8, false); }
 
-// "%.17g", which round-trips every Float.
+// A Float as the shortest text that reads back as the same value.
 @export("FloatToString", "ptr(double)")
 pub Int rt_float_to_string(Float v) {
     Int buf = resid_raw_tls("ftoa_buf", 64);
-    Int n = c_strfromd(buf, 64, resid_raw_addr("%.17g"), v);
+    Int n = float_short(buf, v);
     return cstr_from(buf, n, 1);
+}
+
+// A Float(32) or Float(16) value (widened): the shortest text that reads
+// back as the same Float(32).
+@export("Float32ToString", "ptr(double)")
+pub Int rt_float32_to_string(Float v) {
+    Int buf = resid_raw_tls("ftoa_buf", 64);
+    Int n = if (v != v) { c_strfromd(buf, 64, resid_raw_addr("%g"), v) } else { float32_short_at(buf, v, 1) };
+    return cstr_from(buf, n, 1);
+}
+
+Int float32_short_at(Int buf, Float v, Int p) {
+    Int n = c_strfromd(buf, 64, fmt_g(p), v);
+    Float(32) back = (Float(32))c_strtod(buf, 0);
+    if (p >= 9 || back == (Float(32))v) { return n; }
+    return float32_short_at(buf, v, p + 1);
+}
+
+// "%.<p>g" (p = 1..17) in a thread-local buffer.
+Int fmt_g(Int p) {
+    Int fmt = resid_raw_tls("ftoa_fmt", 8);
+    _ = st8(fmt, 37);
+    _ = st8(fmt + 1, 46);
+    _ = if (p >= 10) { st8(fmt + 2, 49) + st8(fmt + 3, 48 + p - 10) } else { st8(fmt + 2, 48 + p) };
+    Int k = if (p >= 10) { 4 } else { 3 };
+    _ = st8(fmt + k, 103);
+    _ = st8(fmt + k + 1, 0);
+    return fmt;
+}
+
+// The shortest %.<P>g text (P = 1..17) that reads back as exactly v, into
+// buf; its length. NaN and the infinities print as their names.
+pub Int float_short(Int buf, Float v) {
+    if (v != v) { return c_strfromd(buf, 64, resid_raw_addr("%g"), v); }
+    return float_short_at(buf, v, 1);
+}
+
+Int float_short_at(Int buf, Float v, Int p) {
+    Int n = c_strfromd(buf, 64, fmt_g(p), v);
+    if (p >= 17 || c_strtod(buf, 0) == v) { return n; }
+    return float_short_at(buf, v, p + 1);
 }
 
 @export("BoolToString", "ptr(i8)")

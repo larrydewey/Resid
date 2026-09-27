@@ -1,0 +1,22 @@
+// A returned lambda, a lambda capturing a closure and a record, a lambda
+// argument, and list literals in two lambdas of one function.
+type P = { Int x; };
+
+Int closure(Int) adder(Int k) {
+    return lambda(v) { v + k };
+}
+
+Int apply(Int closure(Int) f, Int x) { return f(x); }
+
+Int main() {
+    Int closure(Int) add5 = adder(5);
+    Int closure(Int) twice = lambda(v) { add5(add5(v)) };
+    P p = P {.x = 7};
+    Int closure(Int) plus_p = lambda(v) { v + p.x };
+    Int closure(Int) n2 = lambda(v) { [v, 1].len() };
+    Int closure(Int) n3 = lambda(v) { [v, 2, 3].len() };
+    Void closure(Str) say = lambda(s) { println(s) };
+    say("start");
+    println(f"{twice(1)} {plus_p(1)} {apply(lambda(z) { z * 3 }, 4)} {n2(0) + n3(0)}");
+    return 0;
+}

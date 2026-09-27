@@ -26,6 +26,8 @@ for f in compiler/*.resid lib/*.resid tools/*.resid examples/*.resid tests/confo
     # case mixes operators on purpose.
     case "$f" in
         tests/conformance/cases/err_assignment.resid|tests/conformance/cases/err_list_missing_comma.resid) continue ;;
+        # These resolve imports only with their -depmap (or not at all).
+        tests/conformance/cases/err_import_missing.resid|tests/conformance/cases/*manifest_ceiling*.resid) continue ;;
     esac
     want_lint="graph-lint: 0 mixed-precedence expression(s)"
     case "$f" in *operator_precedence_*|*logical_short_circuit*) want_lint="$("$COMPILER" "$f" --graph-lint 2>&1 | grep '^graph-lint' | tail -1)" ;; esac

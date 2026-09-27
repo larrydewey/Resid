@@ -329,7 +329,7 @@ Bool ls_internal_path(Str p) { return str_contains(p, "/compiler/") || str_conta
 // checked), and captured diagnostics.
 type LsA = { Str path; Int flines; Str src; Str smap; List(Int) nls; Kg g; Int unit; Bool parsed; List(Str) ty; List(Int) def; Str diag; };
 
-@requires(filesystem)
+@requires(filesystem, environment)
 LsA ls_analyze(Str path, Str text, Bool check) {
     _ = resid_internals_set(ls_internal_path(path));
     _ = resid_quiet_set(true);
@@ -337,7 +337,7 @@ LsA ls_analyze(Str path, Str text, Bool check) {
     List(Str) lines = str_split(src0, "\n");
     Str dir = imp_dir_of(path, str_len(path) - 1);
     _ = ls_cap_begin();
-    RRes rr = imp_resolve_lines(lines, 0, lines.len() - 1, dir, str_sb_new(), ";" + path + ";", 0, "", path, 1);
+    RRes rr = imp_resolve_lines(lines, 0, lines.len() - 1, dir, str_sb_new(), ";" + path + ";", 0, "@stdlib::" + stdlib_dir(), path, 1);
     Str src = ds_desugar(with_builtin_types(rr.text));
     KP p = kg_parse(src);
     List(Int) nls = ls_newlines(src, 0, ListBuf());
@@ -566,14 +566,14 @@ List(Str) ls_decl_items(LsA a, Int i, Int n, ListBuf(Str) acc) {
 type LsSt = { Map(Str, Int) docs; Bool down; };
 type LsOut = { List(Str) msgs; Str newuri; Int newfd; Bool exit; Bool down; };
 
-@requires(filesystem)
+@requires(filesystem, environment)
 pub Int lsp_main() {
     _ = ls_setup();
     Map(Str, Int) docs = {"": -1};
     return ls_loop(LsSt {.docs = docs, .down = false});
 }
 
-@requires(filesystem)
+@requires(filesystem, environment)
 Int ls_loop(LsSt st) {
     // rt: a known counter would let the reducer unroll the byte loop.
     Int n = ls_read_header(rt (0 - 1), rt 0);
@@ -610,7 +610,7 @@ Int ls_send_parts(List(Str) ps, Int i) {
 
 LsOut ls_out_of(List(Str) msgs) { return LsOut {.msgs = msgs, .newuri = "", .newfd = -1, .exit = false, .down = false}; }
 
-@requires(filesystem)
+@requires(filesystem, environment)
 LsOut ls_handle(LsSt st, Str body) {
     Str method = js_str(body, js_key(body, 0, "method"));
     Str id = js_raw(body, js_key(body, 0, "id"));

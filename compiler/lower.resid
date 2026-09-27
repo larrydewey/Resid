@@ -449,15 +449,62 @@ GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
     if (bi >= 0) { return lw_src_call(w, w.fs.bfns[bi], vt, env); }
     if (t == "Str" || tostr_fn_for(t) != "" || int_fam(t)) { return fst_tostr(vt); }
     if (str_has_prefix_cg(t, "List(")) {
-        Bool strs = num_norm_cg(str_slice(t, 5, str_len(t) - 1)) == "Str";
-        return lw_rt1(vt, "ptr", "@resid_list_show(ptr " + v.val + ", i64 " + pick_str(strs, "1", "0") + ")", "Str");
+        Str et = str_slice(t, 5, str_len(t) - 1);
+        Bool strs = num_norm_cg(et) == "Str";
+        Bool flat = strs || et == "Bool" || int_fam(et) || is_float_cg(et);
+        if (flat) { return lw_rt1(vt, "ptr", "@resid_list_show(ptr " + v.val + ", i64 " + pick_str(strs, "1", "0") + ")", "Str"); }
+        // Other elements are formatted by a closure over one element.
+        GT clo = lw_src_lambda(w, "lambda(__e) { __show_nested(__e) }", "Str closure(" + et + ")", vt, nil_list());
+        if (clo.err != "") { return clo; }
+        return lw_rt1(clo, "ptr", "@resid_list_show_clo(ptr " + v.val + ", ptr " + clo.val + ")", "Str");
     }
     if (is_map_type_cg(t)) { return lw_rt1(vt, "ptr", "@resid_map_format(ptr " + v.val + ")", "Str"); }
     if (is_set_type_cg(t)) { return lw_rt1(vt, "ptr", "@resid_set_format(ptr " + v.val + ")", "Str"); }
     Int si = struct_index(w.fs, t);
     if (si >= 0) { return lw_struct_ts(w, vt, w.fs.stf[si], env); }
+    // Option and Result show their variant and, through the payload's own
+    // format (or Show), its value.
+    Str pn = f"__sh{v.tmp}";
+    Str pv = f"__sp{v.tmp}";
+    if (str_has_prefix_cg(t, "Option(") && t != "Option(_)") { return lw_src_expr(w, "match " + pn + " { Some(" + pv + ") => \"Some(\" + __show_nested(" + pv + ") + \")\", None => \"None\" }", pn, vt, env); }
+    if (str_has_prefix_cg(t, "Result(") && res_elem_ok_cg(t) != "_") { return lw_src_expr(w, "match " + pn + " { Ok(" + pv + ") => \"Ok(\" + __show_nested(" + pv + ") + \")\", Err(" + pv + ") => \"Err(\" + __show_nested(" + pv + ") + \")\" }", pn, vt, env); }
+    Int sx = sumtype_index_cg(w.fs, t);
+    if (sx >= 0) { return lw_src_expr(w, "match " + pn + " {" + lw_sum_arms(sumv_names_cg(w.fs.suv[sx]), sum_payloads_cg(w.fs, sx, t), pv, 0, "") + " }", pn, vt, env); }
     if (ll_ty(t) != "ptr") { return gt_err("cannot interpolate a value of type " + t, v); }
     return lw_rt1(vt, "ptr", "@ToString(ptr " + v.val + ")", "Str");
+}
+
+// Show arms of a sum type: `V(p) => "V(" + text + ")"` or `V => "V"`.
+Str lw_sum_arms(List(Str) names, List(Str) pays, Str pv, Int i, Str acc) {
+    if (i >= names.len()) { return acc; }
+    Str v = names[i];
+    Bool has = i < pays.len() && pays[i] != "";
+    Str arm = if (has) { " " + v + "(" + pv + ") => \"" + v + "(\" + __show_nested(" + pv + ") + \")\"" } else { " " + v + " => \"" + v + "\"" };
+    return lw_sum_arms(names, pays, pv, i + 1, acc + (if (acc == "") { "" } else { "," }) + arm);
+}
+
+// A value's text inside a container: strings quoted, the rest as shown.
+GT lw_show_nested(LW w, GT v, List(Str) env) {
+    Str t = strip_owned_cg(v.ty);
+    if (num_norm_cg(t) == "Str" && b_index(w.fs, "Show", t) < 0) { return lw_rt1(v, "ptr", "@resid_str_quote(ptr " + v.val + ")", "Str"); }
+    return lw_show(w, v, false, env);
+}
+
+// A synthesized lambda (its closure value). Its function name must be
+// unique program-wide: its base is placed past any source offset.
+GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
+    KP e = kg_expr(src, kg_empty(), 0);
+    if (e.err != "") { return gt_err(e.err, c); }
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
+    return lw_lambda(ws, e.id, fnty, env, c);
+}
+
+// A Resid expression over an already lowered v (named `name` in it).
+GT lw_src_expr(LW w, Str src, Str name, GT v, List(Str) env) {
+    KP e = kg_expr(src, kg_empty(), 0);
+    if (e.err != "") { return gt_err(e.err, v); }
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
+    return lw_expr(ws, e.id, env_add(env, name + ":" + v.val + ":" + v.ty), v);
 }
 
 // `f(v)` for an already lowered v, through the ordinary call path.
@@ -632,7 +679,7 @@ GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(S
         GT body = lw_expr(w, lw_kid(w, a, 0), env, c1);
         if (body.err != "") { return body; }
         GT lastc = GT {.pos = 0, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = body.lines.concat(["br label %" + labm]), .tmp = body.tmp, .lbl = body.lbl, .tail = false};
-        return cg_match_finish2(lastc, labm, philist.concat([body.val + ":" + bodyLab]));
+        return cg_match_finish2(lastc, labm, philist.concat([body.val + ":" + arm_exit_label_cg(body.lines, bodyLab)]));
     }
     Int vi = variant_index_at_cg(vnames, v, 0);
     Str payload = vtypes[vi];
@@ -646,7 +693,8 @@ GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(S
     GT body = lw_expr(w, lw_kid(w, a, 0), env2, pv);
     if (body.err != "") { return body; }
     List(Str) y2 = body.lines.concat(["br label %" + labm, nextLab + ":"]);
-    List(Str) ph = philist.concat([body.val + ":" + bodyLab]);
+    // The phi's predecessor is the block the arm ends in, not its entry.
+    List(Str) ph = philist.concat([body.val + ":" + arm_exit_label_cg(body.lines, bodyLab)]);
     if (i + 1 >= n) {
         GT lastc = GT {.pos = 0, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = y2.concat(["unreachable"]), .tmp = body.tmp, .lbl = body.lbl, .tail = false};
         return cg_match_finish2(lastc, labm, ph);
@@ -734,6 +782,7 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     if (base.ty == "StrBuf" || str_has_prefix_cg(base.ty, "ListBuf(")) { return lw_builder(w, id, base, m, env); }
     if (is_map_type_cg(base.ty)) { return lw_map_method(w, id, base, m, env); }
     if (is_set_type_cg(base.ty)) { return lw_set_method(w, id, base, m, env); }
+    if (m == "len" && base.ty == "Bytes") { return lw_rt1(base, "i64", "@resid_bytes_len(ptr " + base.val + ")", "Int"); }
     if (m == "len") { return lw_rt1(base, "i64", "@resid_list_len(ptr " + base.val + ")", "Int"); }
     if (m == "concat") {
         GT arg = lw_marg(w, id, 0, env, base);
@@ -1624,6 +1673,12 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     Int na = w.g.ns[id].nk;
     Bool user_fn = fn_index(fs, n) >= 0;
     if (n == "println" || n == "print" || n == "eprintln") { return lw_print(w, id, n, env, c); }
+    // A value's text inside a container (synthesized by lw_show only).
+    if (n == "__show_nested" && na == 1) {
+        GT sv = lw_expr(w, lw_kid(w, id, 0), env, c);
+        if (sv.err != "") { return sv; }
+        return lw_show_nested(w, sv, env);
+    }
     if (is_debug_builtin(n) && !user_fn) { return lw_debug_builtin(w, id, n, env, c); }
     if (n == "comptime_print") {
         if (na != 1) { return lw_gerr("comptime_print arity", c); }
@@ -1947,7 +2002,7 @@ ST lw_bind(LW w, Int id, List(Str) env, ST g) {
     Bool fl_adopt = ((is_float_cg(dtyb) && is_float_cg(v.ty)) || (is_dec_cg(dtyb) && is_dec_cg(v.ty))) && dn != num_norm_cg(v.ty);
     GT cv = pick_widen(adoptable || fl_adopt, v, dn);
     Bool adopt = adoptable && cv.err == "";
-    GT v2 = cv;
+    GT v2 = lw_ct_guard(w, dty, cv, env);
     Str recty0 = pick_str(adopt, dn, pick_str(fl_adopt, dn, v.ty));
     Str recty = lw_bind_ty(dtyb, recty0);
     Str ent2 = name + ":" + v2.val + ":" + recty;
@@ -1961,13 +2016,38 @@ ST lw_bind(LW w, Int id, List(Str) env, ST g) {
     return ST {.pos = 0, .dead = g.dead, .err = "", .env = env_add(env, ent2g), .glines = v2.glines, .hlines = g.hlines, .lines = vlines, .tmp = v2.tmp, .lbl = v2.lbl, .rety = g.rety};
 }
 
+// A value bound to a constraint type is checked at run time: the
+// predicate over `value`, else an abort naming the constraint. (A known
+// value was already checked by reduction, E0301.)
+GT lw_ct_guard(LW w, Str ty, GT v, List(Str) env) {
+    Int ci = lw_ct_at(w.fs, ty, 0);
+    if (ci < 0 || str_trim(w.fs.ctc[ci]) == "") { return v; }
+    Str pred = str_trim(w.fs.ctc[ci]);
+    GT c = lw_src_expr(w, pred, "value", v, env);
+    if (c.err != "") { return v; }
+    Str msg = "constraint of " + ty + " (" + pred + ") does not hold";
+    GT m = fst_literal(msg, 0, str_len(msg), "", lw_step(c, c.val, c.ty, c.lines, c.tmp));
+    Str ok = f"L{m.lbl + 1}";
+    Str bad = f"L{m.lbl + 2}";
+    List(Str) ls = m.lines.concat(["br i1 " + c.val + ", label %" + ok + ", label %" + bad, bad + ":", "call void @resid_abort(ptr " + m.val + ")", "unreachable", ok + ":"]);
+    return GT {.pos = 0, .val = v.val, .ty = v.ty, .cnt = 0, .err = "", .glines = m.glines, .lines = ls, .tmp = m.tmp, .lbl = m.lbl + 2, .tail = false};
+}
+
+Int lw_ct_at(Funcs fs, Str ty, Int i) {
+    if (i >= fs.ctn.len()) { return -1; }
+    if (fs.ctn[i] == ty) { return i; }
+    return lw_ct_at(fs, ty, i + 1);
+}
+
 // sg_stmt `return`.
 ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     if (w.g.ns[id].nk == 0) {
         if (in_main) { return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines.concat(["ret i32 0"]), .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety}; }
         return st_err("return without a value", g);
     }
-    GT v = lw_expr(w, lw_kid(w, id, 0), env, gt_of_st(g));
+    Int rv = lw_kid(w, id, 0);
+    // A returned lambda takes the function's closure return type.
+    GT v = if (lw_kind(w, rv) == "lambda" && is_fn_type(g.rety)) { lw_lambda(w, rv, g.rety, env, gt_of_st(g)) } else { lw_expr(w, rv, env, gt_of_st(g)) };
     if (v.err != "") { return st_err(v.err, g); }
     if (g.rety == "__spawn") {
         GT hb = box_heap_("", v, env, w.fs);
@@ -2311,7 +2391,9 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Str clo = f"@clo{w.g.ns[id].sp + 6 - w.base}";
     CapPrel pr0 = cap_prelude(cap0.ids, cap0.tys, ncap, 0, CapPrel {.lines = ["%envbase = inttoptr i64 %env to ptr"], .benv = nil_list(), .idx = 0});
     List(Str) benv = pr0.benv.concat(penv);
-    GT c_l = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = c.glines, .lines = nil_list(), .tmp = 1, .lbl = 1, .tail = false};
+    // Temporaries continue the enclosing count: global names (@.lty, @.s)
+    // made from them must stay unique across lambdas.
+    GT c_l = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = c.glines, .lines = nil_list(), .tmp = c.tmp + 1, .lbl = 1, .tail = false};
     GT body = lw_arm(w, lw_kid(w, id, np), benv, c_l);
     if (body.err != "") { return body; }
     GT bodyw = if (ret != "Void" && body.ty != ret) { widen_val(body, ret) } else { body };
@@ -2319,7 +2401,7 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Str retline = if (ret == "Void") { "ret i1 " + rv0 } else { "ret " + rlt + " " + bodyw.val };
     List(Str) clo_lines = [("define " + rlt + " " + clo + "(" + sig + ") {"), "entry:"];
     Str clo_text = str_join(clo_lines.concat(pr0.lines).concat(bodyw.lines).concat([retline, "}"]), "\n");
-    Int tf0 = c.tmp + 1;
+    Int tf0 = imax(c.tmp, bodyw.tmp) + 1;
     Str arr = f"%t{tf0}";
     Str fpreg = f"%t{tf0 + 1}";
     Str g0 = f"%t{tf0 + 2}";
@@ -2384,6 +2466,10 @@ GT lw_sort(LW w, Int id, List(Str) env, GT c) {
     if (v.err != "") { return v; }
     if (nk == 1) {
         Str et = str_slice(v.ty, 5, str_len(v.ty) - 1);
+        // A type's own Ord instance is inserted when there is no built-in one.
+        Int ui = b_index(w.fs, "Ord", et);
+        Bool builtin = int_fam(et) || is_float_cg(et) || num_norm_cg(et) == "Str";
+        if (ui >= 0 && !builtin) { return lw_rt1(v, "ptr", "@list_sort_by(ptr " + v.val + ", ptr @__cmp_" + w.fs.bfns[ui] + ")", v.ty); }
         Str sf = if (is_float_cg(et)) { "list_sort_floats" } else { if (num_norm_cg(et) == "Str") { "list_sort_strs" } else { "list_sort_ints" } };
         return lw_rt1(v, "ptr", "@" + sf + "(ptr " + v.val + ")", v.ty);
     }
@@ -3066,13 +3152,25 @@ List(Str) lw_dbg_var(Str id, Str nm, Int arg, Str sp, Str file, Int line, Str ll
 GT lw_struct_ts(LW w, GT v, Str fields, List(Str) env) {
     Str tmpn = f"__ts{v.tmp}";
     List(Str) env2 = env_add(env, tmpn + ":" + v.val + ":" + v.ty);
-    Str src = "\"" + v.ty + "(\"" + ts_fields_src(tmpn, fields, 0, "") + " + \")\"";
+    Str src = "\"" + v.ty + " { \"" + lw_fields_src(tmpn, fields, 0, "") + " + \" }\"";
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
     LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
     GT r = lw_expr(ws, e.id, env2, v);
     if (r.err != "") { return r; }
     return GT {.pos = 0, .val = r.val, .ty = "Str", .cnt = 0, .err = "", .glines = r.glines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .tail = false};
+}
+
+// `name: text` for each field of a record literal's show source.
+Str lw_fields_src(Str v, Str fields, Int i, Str acc) {
+    Int n = str_len(fields);
+    if (i >= n) { return acc; }
+    Int cm = _find_comma_at_depth_cg(fields, i, 0, 0);
+    Int e = if (cm < 0) { n } else { cm };
+    Str ent = str_slice(fields, i, e);
+    Str fname = str_slice(ent, 0, str_find_char(ent, 58, 0));
+    Str sep = if (acc == "") { " + \"" } else { " + \", " };
+    return lw_fields_src(v, fields, e + 1, acc + sep + fname + ": \" + __show_nested(" + v + "." + fname + ")");
 }
 
 // ─── Linear ownership of Map/Set values ────────────────────────────

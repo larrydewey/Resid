@@ -1,0 +1,5 @@
+Option(Int) half(Int x) { return if (x % 2 == 0) { Some(x / 2) } else { None }; }
+Int main() {
+    Int h = half(4)?;
+    return h;
+}

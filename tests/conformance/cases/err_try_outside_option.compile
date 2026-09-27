@@ -1,0 +1,1 @@
+returns early, so it needs a function that returns an Option or Result

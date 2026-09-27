@@ -552,7 +552,18 @@ Str imp_resolve_target(Str dir, Str name, Str depmap) {
     if (filesystem.exists(full)) { return full; }
     Str dep = depmap_lookup(depmap, name);
     if (dep != "") { return dep; }
+    // Not beside the importer: the standard library (an `@stdlib::dir`
+    // line the driver adds to the dependency map).
+    Str sd = depmap_stdlib(str_split(depmap, "\n"), 0);
+    Str std = if (sd == "" || ck_str_starts_with(name, "/")) { "" } else { sd + "/" + name };
+    if (std != "" && filesystem.exists(std)) { return std; }
     return full;
+}
+
+Str depmap_stdlib(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return ""; }
+    if (ck_str_starts_with(ls[i], "@stdlib::")) { return str_slice(ls[i], 9, str_len(ls[i])); }
+    return depmap_stdlib(ls, i + 1);
 }
 
 // `done` is a ";path;path;..." sentinel-delimited string of resolved files.
@@ -603,11 +614,16 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         Bool att = ra >= 0;
         Bool clash = att && str_contains(done, key);
         Bool warned = if (clash) { eprintln("error[E0216]: `" + name + "` is imported with @requires after it was already imported without it; import it attenuated first (spec §21.2)") } else { false };
-        RRes sub0 = if (str_contains(done, key)) {
+        // A missing module is an error, not an empty module.
+        Bool missing = !str_contains(done, key) && !filesystem.exists(full);
+        Bool mwarned = if (missing) { eprintln("error[E0221]: cannot find module `" + name + "` imported by " + path + " (looked for " + full + ")") } else { false };
+        RRes sub0 = if (missing) {
+            RRes {.text = "import_not_found\n", .done = done, .map = "", .nl = 1}
+        } else { if (str_contains(done, key)) {
             RRes {.text = if (clash) { "import_attenuation_conflict\n" } else { "" }, .done = done, .map = "", .nl = if (clash) { 1 } else { 0 }}
         } else {
             imp_resolve_file_vis(full, done, depth, depmap, sel, ml)
-        };
+        } };
         RRes sub1 = if (att && !clash) { RRes {.text = "sandbox (" + imp_att_caps(clause, ra + 10, 1, ra + 10) + ") { " + sub0.text + "}\n", .done = sub0.done, .map = sub0.map, .nl = sub0.nl + 1} } else { sub0 };
         // A manifest dependency compiles inside its declared ceiling.
         Str dcaps = if (depmap == "" || sub1.text == "" || full == dir + "/" + name || full == name) { "\x01" } else { depmap_caps_lines(str_split(depmap, "\n"), 0, name) };
@@ -1031,9 +1047,10 @@ BRes behavior_decl_at(Str s, Int pos) {
     if (open.text != "(") {
         return BRes {.pos = head.pos, .name = "", .param = "", .impl = "", .err = "no paren"};
     }
-    Tok p1 = lex_tok(s, open.pos);
-    if (p1.kind != "ident") {
-        return BRes {.pos = p1.pos, .name = "", .param = "", .impl = "", .err = "no param"};
+    // The instance's type: a name or a parameterized type (Int(32)).
+    PRes p1 = parse_type(s, open.pos);
+    if (p1.err != "" || p1.ty == "") {
+        return BRes {.pos = open.pos, .name = "", .param = "", .impl = "", .err = "no param"};
     }
     Tok close = lex_tok(s, p1.pos);
     if (close.text != ")") {
@@ -1051,7 +1068,7 @@ BRes behavior_decl_at(Str s, Int pos) {
     if (semi.text != ";") {
         return BRes {.pos = semi.pos, .name = "", .param = "", .impl = "", .err = "no semi"};
     }
-    return BRes {.pos = semi.pos, .name = head.text, .param = p1.text, .impl = fnt.text, .err = ""};
+    return BRes {.pos = semi.pos, .name = head.text, .param = p1.ty, .impl = fnt.text, .err = ""};
 }
 
 // Index of behavior instance (head, param) in the tables; -1 when absent.
@@ -1481,7 +1498,12 @@ Str bin_type(Str op, Str a, Str b) {
     if (op == "==" || op == "!=") {
         Bool sam = ty_same(a, b);
         Bool intpair = is_int_ty(a) && is_int_ty(b);
-        if (sam || intpair || floatpair) { return "Bool"; }
+        if (intpair || floatpair) { return "Bool"; }
+        // Equality is defined on scalars and strings; composite values are
+        // compared by their parts.
+        Bool scal = is_num(a) || a == "Bool" || a == "Str" || str_has_prefix(a, "Str(");
+        if (sam && scal) { return "Bool"; }
+        if (sam) { return "ERR_EQ"; }
         return "ERR";
     }
     if (op == "<" || op == "<=" || op == ">" || op == ">=") {

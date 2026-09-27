@@ -491,9 +491,10 @@ BRes behavior_decl_at(Str s, Int pos) {
     if (open.text != "(") {
         return BRes {.pos = head.pos, .name = "", .param = "", .impl = "", .err = "no paren"};
     }
-    Tok p1 = lex_tok(s, open.pos);
-    if (p1.kind != "ident") {
-        return BRes {.pos = p1.pos, .name = "", .param = "", .impl = "", .err = "no param"};
+    // The instance's type: a name or a parameterized type (Int(32)).
+    PRes p1 = parse_type(s, open.pos);
+    if (p1.err != "" || p1.ty == "") {
+        return BRes {.pos = open.pos, .name = "", .param = "", .impl = "", .err = "no param"};
     }
     Tok close = lex_tok(s, p1.pos);
     if (close.text != ")") {
@@ -511,7 +512,7 @@ BRes behavior_decl_at(Str s, Int pos) {
     if (semi.text != ";") {
         return BRes {.pos = semi.pos, .name = "", .param = "", .impl = "", .err = "no semi"};
     }
-    return BRes {.pos = semi.pos, .name = head.text, .param = p1.text, .impl = fnt.text, .err = ""};
+    return BRes {.pos = semi.pos, .name = head.text, .param = p1.ty, .impl = fnt.text, .err = ""};
 }
 
 // Index of behavior instance (head, param) in the tables; -1 when absent.
@@ -1711,7 +1712,6 @@ Bool lambda_capturable(Str ent) {
     Str ty = cg_env_ty(ent);
     if (ty == "") { return false; }
     if (ty == "Void") { return false; }
-    if (is_fn_type(ty)) { return false; }
     if (str_has_prefix_cg(ty, "Expect(")) { return false; }
     if (str_has_prefix_cg(ty, "fn")) { return false; }
     return true;
@@ -1738,7 +1738,8 @@ Bool can_i64_store(Str ty) {
     if (str_has_prefix_cg(ty, "Set(")) { return true; }
     if (str_has_prefix_cg(ty, "Option(")) { return true; }
     if (str_has_prefix_cg(ty, "Result(")) { return true; }
-    return false;
+    // Records, sums and closures are pointers too.
+    return ll_ty(ty) == "ptr";
 }
 
 Bool is_str_fixed(Str t) {
@@ -3117,7 +3118,7 @@ GT tostr_call(GT v0, Str fnm, Str argty) {
 Str tostr_argty(Str name) {
     if (name == "UIntToString") { return "UInt(64)"; }
     if (name == "BoolToString") { return "Bool"; }
-    if (name == "FloatToString") { return "Float(64)"; }
+    if (name == "FloatToString" || name == "Float32ToString") { return "Float(64)"; }
     if (name == "Float128ToString") { return "Float(128)"; }
     if (name == "Int128ToString") { return "Int(128)"; }
     if (name == "UInt128ToString") { return "UInt(128)"; }
@@ -3133,6 +3134,8 @@ Str tostr_fn_for(Str ty) {
     if (ty == "Bool") { return "BoolToString"; }
     if (is_float_cg(ty)) {
         if (float_bits_cg(ty) == 128) { return "Float128ToString"; }
+        // Narrow floats print the shortest text that reads back at their width.
+        if (float_bits_cg(ty) < 64) { return "Float32ToString"; }
         return "FloatToString";
     }
     if (!int_fam(ty)) { return ""; }
@@ -4561,7 +4564,7 @@ Str cmp_def(Str f, Str pty, Bool rev) {
     return s7 + "  ret i32 %nz\n}";
 }
 
-// Emit both comparator variants for every collected behavior instance.
+// Emit both comparator variants for every collected Ord instance.
 List(Str) cmp_defs_all_at(Funcs fs, List(Str) out, Int i) {
     List(Str) bn = fs.bnames;
     Int n = bn.len();
@@ -4569,7 +4572,9 @@ List(Str) cmp_defs_all_at(Funcs fs, List(Str) out, Int i) {
     Str pty = fs.bparams[i];
     List(Str) bfl = fs.bfns;
     Str f = bfl[i];
-    List(Str) out2 = if (bn[i] == "Show") { out } else { out.concat([cmp_def(f, pty, false), cmp_def(f, pty, true)]) };
+    // Only an ordering is called through a comparator; an impl shared by
+    // another behavior's instance must not be emitted twice.
+    List(Str) out2 = if (bn[i] != "Ord") { out } else { out.concat([cmp_def(f, pty, false), cmp_def(f, pty, true)]) };
     Int k = i + 1;
     return cmp_defs_all_at(fs, out2, k);
 }
