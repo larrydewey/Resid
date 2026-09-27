@@ -1589,10 +1589,10 @@ Str fn_inner(Str t) {
 // Parameter types of a Fn type as a list (empty for `Fn() -> R`).
 List(Str) fn_param_list(Str fnty) {
     Str inner = fn_inner(fnty);
-    if (inner == "") { return funcs_empty().names; }
-    List(Str) parts = split_type_list(inner, 0, 0, 0, "", funcs_empty().names);
+    if (inner == "") { return nil_list(); }
+    List(Str) parts = split_type_list(inner, 0, 0, 0, "", nil_list());
     Int n = parts.len();
-    return if (parts[n - 1] == "") { re_drop_last(parts, 0, n - 1, funcs_empty().names) } else { parts };
+    return if (parts[n - 1] == "") { re_drop_last(parts, 0, n - 1, nil_list()) } else { parts };
 }
 
 // Result type helpers.

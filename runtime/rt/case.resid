@@ -76,7 +76,7 @@ Int lower_at(Int s, Int p, Int w) {
 
 @export("str_to_lower", "ptr(ptr)")
 pub Int rt_str_to_lower(Int s) {
-    Int out = xmalloc(rt_str_len(s) * 4 + 8);
+    Int out = ralloc(rt_str_len(s) * 4 + 8);
     Int e = lower_at(s, s, out);
     Int _z = st8(e, 0);
     return out;
@@ -106,7 +106,7 @@ Int copy_words_at(Int dst, Int src, Int i, Int n) {
 @export("str_to_upper", "ptr(ptr)")
 pub Int rt_str_to_upper(Int s) {
     // An expansion is at most 9 bytes for a 1-4 byte codepoint.
-    Int out = xmalloc(rt_str_len(s) * 9 + 8);
+    Int out = ralloc(rt_str_len(s) * 9 + 8);
     Int e = upper_at(s, out);
     Int _z = st8(e, 0);
     return out;

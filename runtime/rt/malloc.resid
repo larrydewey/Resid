@@ -155,6 +155,7 @@ Int big_alloc(Int n) {
 pub Int c_free(Int p) {
     if (p == 0) { return 0; }
     Int h = ld64(p - 16);
+    if (h == 63) { return 0; }   // an arena block (bulk_block)
     if (h < 64) {
         Int head = heap_tls() + h * 8;
         Int _n = st64(p, ld64(head));

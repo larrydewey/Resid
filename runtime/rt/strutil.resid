@@ -17,7 +17,7 @@ Int back_space(Int b, Int e) {
 pub Int rt_str_trim(Int s) {
     Int b = skip_space(s, s + c_strlen(s));
     Int e = back_space(b, s + c_strlen(s));
-    return cstr_from(b, e - b, 0);
+    return cstr_from(b, e - b, 1);
 }
 
 @export("str_contains", "i8(ptr,ptr)")
@@ -39,9 +39,9 @@ pub Int rt_str_ends_with(Int s, Int suf) {
 pub Int rt_str_repeat(Int s, Int times0) {
     Int times = if (times0 < 0) { 0 } else { times0 };
     Int ls = c_strlen(s);
-    if (ls > 0 && times > 9223372036854775807 / ls) { return cstr_from(s, 0, 0); }
+    if (ls > 0 && times > 9223372036854775807 / ls) { return cstr_from(s, 0, 1); }
     Int p = c_malloc(ls * times + 1);
-    if (p == 0) { return cstr_from(s, 0, 0); }
+    if (p == 0) { return cstr_from(s, 0, 1); }
     Int e = repeat_at(p, s, ls, times);
     Int _z = st8(e, 0);
     return p;
@@ -64,11 +64,11 @@ Int count_hits(Int q, Int needle, Int ln, Int n) {
 pub Int rt_str_replace(Int s, Int from, Int to) {
     Int lf = c_strlen(from);
     Int lt = c_strlen(to);
-    if (lf == 0) { return cstr_dup(s); }
+    if (lf == 0) { return cstr_from(s, c_strlen(s), 1); }
     Int hits = count_hits(s, from, lf, 0);
     Int ls = c_strlen(s);
     Int add = if (lt > lf) { hits * (lt - lf) } else { 0 };
-    Int p = xmalloc(ls + add + 1);
+    Int p = ralloc(ls + add + 1);
     Int e = replace_at(p, s, from, lf, to, lt);
     return p;
 }
@@ -105,7 +105,7 @@ pub Int rt_str_split(Int s, Int sep) {
 Int split_at(Int arr, Int i, Int q, Int sep, Int lsep) {
     Int h = c_strstr(q, sep);
     if (h == 0) { return st64(arr + i * 8, cstr_dup(q)); }
-    Int _p = st64(arr + i * 8, cstr_from(q, h - q, 0));
+    Int _p = st64(arr + i * 8, cstr_from(q, h - q, 1));
     return split_at(arr, i + 1, h + lsep, sep, lsep);
 }
 
@@ -116,7 +116,7 @@ pub Int rt_str_join(Int list, Int sep) {
     Int items = c_list_to_array(list);
     Int lsep = c_strlen(sep);
     Int total = join_len(items, 0, n, 0) + (if (n > 0) { lsep * (n - 1) } else { 0 });
-    Int p = xmalloc(total + 1);
+    Int p = ralloc(total + 1);
     Int e = join_at(p, items, 0, n, sep, lsep);
     Int _z = st8(e, 0);
     Int _f = c_free(items);
@@ -213,7 +213,7 @@ pub Int rt_str_count(Int s, Int needle) {
 @export("str_reverse", "ptr(ptr)")
 pub Int rt_str_reverse(Int s) {
     Int n = c_strlen(s);
-    Int out = xmalloc(n + 1);
+    Int out = ralloc(n + 1);
     Int _r = rev_at(s, out + n);
     Int _z = st8(out + n, 0);
     return out;

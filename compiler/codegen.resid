@@ -569,8 +569,8 @@ List(Str) ct_erase_list(Funcs fs, List(Str) tys, Int i, List(Str) acc) {
 }
 
 List(Str) nil_list() {
-    Funcs f = funcs_empty();
-    return f.names;
+    List(Str) e = [];
+    return e;
 }
 
 Int str_find_char(Str s, Int c, Int i) {
@@ -1674,8 +1674,8 @@ List(Str) fn_params_split(Str t, Int pos, Int depth, Str acc, List(Str) out) {
 // Parameter types of a Fn type as a list (empty for `Fn() -> R`).
 List(Str) fn_param_list(Str fnty) {
     Str inner = fn_inner(fnty);
-    if (inner == "") { return funcs_empty().names; }
-    return fn_params_split(inner, 0, 0, "", funcs_empty().names);
+    if (inner == "") { return nil_list(); }
+    return fn_params_split(inner, 0, 0, "", nil_list());
 }
 
 // env entry "<name> : <val> : <type>" pieces.
@@ -2358,7 +2358,7 @@ GT cg_expect_guard2(Str s, Str okreg, Str method, List(Str) faillines, Str astr,
 
 // Guard with no values to show (`toBeTrue`, `toHaveLength`, ...).
 GT cg_expect_guard(Str s, Str okreg, Str method, Int pos, GT c) {
-    return cg_expect_guard2(s, okreg, method, funcs_empty().names, "", "", pos, c);
+    return cg_expect_guard2(s, okreg, method, nil_list(), "", "", pos, c);
 }
 
 // `expect(actual).toEqual(expected)`: compare the boxed actual against the
@@ -2458,7 +2458,7 @@ GT cg_expect_assert(Str s, GT self, GT y, Str et, Str method, Int pos, List(Str)
         List(Str) m1 = m0.concat([r8 + " = call i8 @resid_str_eq(ptr " + self.val + ", ptr " + y.val + ")"]);
         List(Str) m2 = m1.concat([ok + " = icmp " + seq + " i8 " + r8 + ", 0"]);
         GT z = GT {.pos = pos, .val = ok, .ty = "Bool", .cnt = 0, .err = "", .glines = y.glines, .lines = m2, .tmp = t1 + 1, .lbl = y.lbl, .tail = false};
-        return cg_expect_guard2(s, ok, method, funcs_empty().names, self.val, y.val, pos, z);
+        return cg_expect_guard2(s, ok, method, nil_list(), self.val, y.val, pos, z);
     }
     Str sa = f"%t{t1}";
     Str sb = f"%t{t1 + 1}";
@@ -2470,7 +2470,7 @@ GT cg_expect_assert(Str s, GT self, GT y, Str et, Str method, Int pos, List(Str)
     List(Str) m3 = m2.concat([r8b + " = call i8 @resid_str_eq(ptr " + sa + ", ptr " + sb + ")"]);
     List(Str) m4 = m3.concat([okb + " = icmp " + seq + " i8 " + r8b + ", 0"]);
     GT z = GT {.pos = pos, .val = okb, .ty = "Bool", .cnt = 0, .err = "", .glines = y.glines, .lines = m4, .tmp = t1 + 3, .lbl = y.lbl, .tail = false};
-    return cg_expect_guard2(s, okb, method, funcs_empty().names, sa, sb, pos, z);
+    return cg_expect_guard2(s, okb, method, nil_list(), sa, sb, pos, z);
 }
 
 // `toBeTrue`/`toBeFalse`: unbox the Bool and compare against the literal.
@@ -2618,7 +2618,7 @@ GT cg_expect_match(Str s, GT self, GT pat, Int pos, List(Str) env, Funcs fs) {
     List(Str) m1 = m0.concat([cr + " = call i8 @resid_regex_match(ptr " + pat.val + ", ptr " + self.val + ")"]);
     List(Str) m2 = m1.concat([ok + " = icmp ne i8 " + cr + ", 0"]);
     GT z = GT {.pos = pos, .val = ok, .ty = "Bool", .cnt = 0, .err = "", .glines = pat.glines, .lines = m2, .tmp = t2, .lbl = pat.lbl, .tail = false};
-    return cg_expect_guard2(s, ok, "toMatch", funcs_empty().names, self.val, pat.val, pos, z);
+    return cg_expect_guard2(s, ok, "toMatch", nil_list(), self.val, pat.val, pos, z);
 }
 
 // `toThrow()`: hand the closure value to the runtime, which calls it under
@@ -2817,7 +2817,7 @@ TD td_scan(Str s, Int pos, Int copied, Str acc, List(Str) names, List(Str) syms)
 }
 
 TD td_desugar(Str s) {
-    return td_scan(s, 0, 0, "", funcs_empty().names, funcs_empty().names);
+    return td_scan(s, 0, 0, "", nil_list(), nil_list());
 }
 
 Str td_str_const(Str sym, Str text) {
@@ -2846,7 +2846,7 @@ List(Str) td_run_calls(List(Str) syms, Int i, List(Str) acc) {
 // each discovered test, then let the runtime print the summary and decide
 // the exit code (§7.2 — 0 all passed, 1 any failure).
 List(Str) td_main_ir(List(Str) names, List(Str) syms, Str module) {
-    List(Str) g0 = td_name_globals(names, 0, funcs_empty().names);
+    List(Str) g0 = td_name_globals(names, 0, nil_list());
     List(Str) g1 = g0.concat([td_str_const("@.tmod", module)]);
     List(Str) b0 = g1.concat(["define i64 @main() {", "entry:"]);
     List(Str) b1 = b0.concat([f"%tplan = call i8 @resid_test_plan(i64 {names.len()}, ptr @.tmod)"]);
@@ -2883,7 +2883,7 @@ CapPrel cap_prelude(List(Str) ids, List(Str) tys, Int n, Int idx, CapPrel acc) {
     Str l1 = g1 + f" = getelementptr i64, ptr %envbase, i64 {idx + 1}";
     Str l2 = g2 + " = load i64, ptr " + g1;
     Str reg = if (cap_is_i64_int(ty)) { g2 } else { g3 };
-    List(Str) cu = if (cap_is_i64_int(ty)) { funcs_empty().names } else if (ty == "Bool") { [g3 + " = trunc i64 " + g2 + " to i1"] } else if (ty == "Float" || ty == "Float(64)") { [g3 + " = bitcast i64 " + g2 + " to double"] } else { [g3 + " = inttoptr i64 " + g2 + " to ptr"] };
+    List(Str) cu = if (cap_is_i64_int(ty)) { nil_list() } else if (ty == "Bool") { [g3 + " = trunc i64 " + g2 + " to i1"] } else if (ty == "Float" || ty == "Float(64)") { [g3 + " = bitcast i64 " + g2 + " to double"] } else { [g3 + " = inttoptr i64 " + g2 + " to ptr"] };
     List(Str) ls1 = acc.lines.concat([l1]);
     List(Str) ls2 = ls1.concat([l2]);
     List(Str) ls3 = ls2.concat(cu);
@@ -2900,7 +2900,7 @@ List(Str) clos_store_lines(List(Str) vals, List(Str) tys, Int n, Int idx, Str sl
     Str ty = tys[idx];
     Str g1 = f"%t{tbase}";
     Str storeval = if (cap_is_i64_int(ty)) { val } else { g1 };
-    List(Str) conv = if (cap_is_i64_int(ty)) { funcs_empty().names } else if (ty == "Bool") { [g1 + " = zext i1 " + val + " to i64"] } else if (ty == "Float" || ty == "Float(64)") { [g1 + " = bitcast double " + val + " to i64"] } else { [g1 + " = ptrtoint ptr " + val + " to i64"] };
+    List(Str) conv = if (cap_is_i64_int(ty)) { nil_list() } else if (ty == "Bool") { [g1 + " = zext i1 " + val + " to i64"] } else if (ty == "Float" || ty == "Float(64)") { [g1 + " = bitcast double " + val + " to i64"] } else { [g1 + " = ptrtoint ptr " + val + " to i64"] };
     Str g2 = f"%t{tbase + 1}";
     Str offl = g2 + " = getelementptr i64, ptr " + sla + f", i64 {idx + 1}";
     Str stl = "store i64 " + storeval + ", ptr " + g2;

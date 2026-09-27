@@ -94,5 +94,15 @@ pub Int c_memmem(Int h, Int hn, Int nd, Int nn) {
 @noinline
 pub Int c_strstr(Int h, Int nd) {
     Int nn = c_strlen(nd);
-    return c_memmem(h, c_strlen(h), nd, nn);
+    if (nn == 0) { return h; }
+    return strstr_from(h, nd, nn);
+}
+
+// The haystack's length is never taken: a split walking a long text would
+// be quadratic.
+Int strstr_from(Int h, Int nd, Int nn) {
+    Int cand = c_strchr(h, ld8(nd));
+    if (cand == 0) { return 0; }
+    if (c_strncmp(cand, nd, nn) == 0) { return cand; }
+    return strstr_from(cand + 1, nd, nn);
 }

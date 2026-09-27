@@ -306,6 +306,36 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0zn. Self-compile memory 420MB -> 272MB, time 1.6s -> 1.0s (2026-09-27)
+
+Most of the peak was memory a phase arena should have freed but that went
+to the heap instead, and was never freed:
+- Import resolution and desugaring ran before the first phase arena and
+  left about 90MB of garbage; they now run in their own bulk scope and
+  keep only the merged text, source map, done list and test names.
+- `str_from_code` returned a new heap string per character (about 20MB
+  during checking). The 128 ASCII one-character strings are now shared
+  static strings; the rest are arena-aware.
+- `str_sb_finish` results and in-place string accumulators (`resid_sacc_*`)
+  were heap blocks. A finished builder inside an arena is copied into it;
+  an accumulator made inside an arena grows by copying within that arena
+  (its header records which one).
+- Maps made inside a bulk arena were heap blocks (about 30MB leaked across
+  lowering's per-function scopes). They now live in the arena. A handle
+  records the bulk depth it was made at (byte 46), and an in-place update
+  allocates at that depth. Arena map blocks carry a class-63 header that
+  `c_free` ignores.
+- The string codepoint index kept a single slot for arena strings, so two
+  arena strings read in turn rebuilt the index on every call. Now LRU slots
+  hold arena strings, marked by kind. An arena pop clears all marked
+  slots; a scalar scope pop clears only strings inside scopes.
+
+Time: `strstr` took the haystack's length on every call, so `str_split` of
+a long text was quadratic (a third of the compile). The E0220 check found
+each internal use's file by counting lines from the start of the source;
+it now uses a binary search over newline offsets. `nil_list()` built a
+whole `Funcs` record, with a map literal, to get an empty list.
+
 ### 0zm. No C library (2026-09-27)
 
 - Programs and the compiler are static PIEs linked with `-static-pie

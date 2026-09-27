@@ -16,14 +16,17 @@ pub Int rt_str_concat(Int a, Int b) {
 pub Int rt_str_eq(Int a, Int b) { return if (c_strcmp(a, b) == 0) { 1 } else { 0 }; }
 
 // ─── In-place string accumulators (resid_sacc_*) ──────────────────────
-// A NUL-terminated buffer preceded by a {len, cap} header; the compiler
-// proves it has no other reader while it grows.
+// A NUL-terminated buffer preceded by an {arena, len, cap} header; the
+// compiler proves it has no other reader while it grows. Made inside an
+// arena, it grows by copying within that arena and goes with it.
 
 Int sacc_alloc(Int cap) {
-    Int h = xmalloc(16 + cap + 1);
-    Int _l = st64(h, 0);
-    Int _c = st64(h + 8, cap);
-    return h + 16;
+    Int a = cur_arena();
+    Int h = if (a != 0) { arena_alloc(a, 24 + cap + 1) } else { xmalloc(24 + cap + 1) };
+    Int _a = st64(h, a);
+    Int _l = st64(h + 8, 0);
+    Int _c = st64(h + 16, cap);
+    return h + 24;
 }
 
 @export("resid_sacc_from", "ptr(ptr)")
@@ -41,9 +44,11 @@ Int sacc_reserve(Int d, Int n) {
     if (len + n <= cap) { return d; }
     Int c2 = if (cap * 2 < len + n) { len + n } else { cap * 2 };
     Int _f = str_index_forget(d);
-    Int h = xrealloc(d - 16, 16 + c2 + 1);
-    Int _c = st64(h + 8, c2);
-    return h + 16;
+    Int a = ld64(d - 24);
+    Int h = if (a != 0) { arena_alloc(a, 24 + c2 + 1) } else { xrealloc(d - 24, 24 + c2 + 1) };
+    Int _m = if (a != 0) { mcopy(h, d - 24, 24 + len + 1) } else { 0 };
+    Int _c = st64(h + 16, c2);
+    return h + 24;
 }
 
 @export("resid_sacc_append", "ptr(ptr,ptr)")
@@ -174,21 +179,37 @@ pub Int utf8_encode(Int cp, Int buf) {
 
 @export("str_from_code", "ptr(i64)")
 pub Int rt_str_from_code(Int cp) {
+    if (cp >= 0 && cp < 128) { return ascii_strs() + cp * 2; }
     Int buf = resid_raw_tls("from_code", 8);
     Int n = utf8_encode(cp, buf);
-    return cstr_from(buf, n, 0);
+    return cstr_from(buf, n, 1);
+}
+
+// The 128 one-character ASCII strings, shared and never freed.
+Int ascii_strs() {
+    Int t = resid_raw_global("rt_ascii_strs", 256);
+    if (ld8(t + 2) == 0) { return fill_ascii(t, 0); }
+    return t;
+}
+
+Int fill_ascii(Int t, Int c) {
+    if (c >= 128) { return t; }
+    Int _s = st8(t + c * 2, c) + st8(t + c * 2 + 1, 0);
+    return fill_ascii(t, c + 1);
 }
 
 // ─── The per-string codepoint index ───────────────────────────────────
 // A codepoint -> byte offset table per distinct string pointer (sparse:
 // one checkpoint every 16 codepoints; none for all-ASCII strings), kept in
-// a small LRU of 16 slots, plus one slot for short strings and one for
-// strings in arenas or scalar scopes (cleared when they are freed).
+// a small LRU of 16 slots, plus one slot for short strings. A slot holding
+// a string in an arena or scalar scope is marked and cleared when any of
+// them is freed.
 // A slot: s, len (codepoints; -1 empty), off (table or 0), touched, blen.
 
-Int idx_slots() { return resid_raw_tls("str_slots", 720); }
+Int idx_slots() { return resid_raw_tls("str_slots", 680); }
 Int idx_small() { return idx_slots() + 640; }
-Int idx_scratch() { return idx_slots() + 680; }
+// One mark per slot, then how many are set.
+Int idx_region() { return resid_raw_tls("str_region", 136); }
 // clock, ready, mru, fast_s, fast_len
 Int idx_state() { return resid_raw_tls("str_state", 40); }
 
@@ -295,12 +316,11 @@ Int idx_slot_slow(Int s) {
     Int _m = if (mru != 0) { st64(mru + 24, clock) } else { 0 };
     Int hit = idx_find(s, 0);
     if (hit != 0) { return st64(hit + 24, clock) * 0 + hit; }
-    if (sl_s(idx_scratch()) == s) { return idx_scratch(); }
-    if (rt_arena_contains(s) != 0) {
-        Int _b = idx_build(s, idx_scratch());
-        return st64(idx_scratch() + 24, clock) * 0 + idx_scratch();
-    }
     Int v = idx_victim(1, idx_slots());
+    Int f = idx_region() + (v - idx_slots()) / 40 * 8;
+    Int rg = region_kind(s);
+    Int _n = st64(idx_region() + 128, ld64(idx_region() + 128) + (if (rg != 0) { 1 } else { 0 }) - (if (ld64(f) != 0) { 1 } else { 0 }));
+    Int _g = st64(f, rg);
     Int _v = idx_build(s, v);
     return st64(v + 24, clock) * 0 + v;
 }
@@ -326,7 +346,25 @@ Int idx_slot_miss(Int s, Int st) {
 pub Int rt_str_index_popped() {
     Int _a = st64(idx_state() + 24, 0);
     Int _b = st64(idx_small(), 0);
-    return st64(idx_scratch(), 0);
+    if (ld64(idx_region() + 128) == 0) { return 0; }
+    return idx_clear_region(0, 1);
+}
+
+// A scalar scope is being freed: only strings in scopes can go.
+pub Int str_index_scope_popped() {
+    Int _a = st64(idx_state() + 24, 0);
+    Int _b = st64(idx_small(), 0);
+    if (ld64(idx_region() + 128) == 0) { return 0; }
+    return idx_clear_region(0, 2);
+}
+
+// Clear the slots marked at least `kind`.
+Int idx_clear_region(Int k, Int kind) {
+    if (k >= 16) { return 0; }
+    Int f = idx_region() + k * 8;
+    Int n = idx_region() + 128;
+    Int _c = if (ld64(f) >= kind) { st64(f, 0) + st64(idx_slots() + k * 40, 0) + st64(n, ld64(n) - 1) } else { 0 };
+    return idx_clear_region(k + 1, kind);
 }
 
 // Drop every cached index of `s` (about to be freed or moved).
@@ -334,7 +372,6 @@ pub Int str_index_forget(Int s) {
     Int st = idx_state();
     Int _a = if (ld64(st + 24) == s) { st64(st + 24, 0) } else { 0 };
     Int _b = if (sl_s(idx_small()) == s) { st64(idx_small(), 0) } else { 0 };
-    Int _c = if (sl_s(idx_scratch()) == s) { st64(idx_scratch(), 0) } else { 0 };
     if (ld64(st + 8) == 0) { return 0; }
     return idx_forget_at(s, 0);
 }
@@ -504,11 +541,17 @@ pub Int rt_sb_finish(Int r) {
     Int b = ld64(r);
     Int len = ld64(r + 8);
     Int cap = ld64(r + 16);
-    Int out0 = if (b == 0) { xmalloc(1) } else { b };
-    Int out = if (b != 0 && cap > len + len / 8 + 64) { sb_shrink(out0, len) } else { out0 };
-    Int _z = st8(out + len, 0);
     Int _f = c_free(r);
-    return out;
+    // Inside an arena the text goes with it.
+    Int a = cur_arena();
+    if (a != 0 && ag_scope_depth() == 0) {
+        Int out = arena_alloc(a, len + 1);
+        Int _c = if (b != 0) { mcopy(out, b, len) + c_free(b) } else { 0 };
+        return st8(out + len, 0) * 0 + out;
+    }
+    Int out0 = if (b == 0) { xmalloc(1) } else { b };
+    Int out1 = if (b != 0 && cap > len + len / 8 + 64) { sb_shrink(out0, len) } else { out0 };
+    return st8(out1 + len, 0) * 0 + out1;
 }
 
 Int sb_shrink(Int p, Int len) {

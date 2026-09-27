@@ -1657,9 +1657,23 @@ Bool gk_internal_file(Str p) {
     return str_contains(p, "runtime/rt/") || str_starts_with(p, "compiler/") || str_contains(p, "/compiler/");
 }
 
-// The source file node `id` came from (the import source map).
-Str gk_src_path(GK k, Int id, Str src, Str smap) {
-    return diag_where(smap, pos_to_line_col(src, k.g.ns[id].sp).line).path;
+// The source file node `id` came from (the import source map); nls: the
+// newline offsets of src.
+Str gk_src_path(GK k, Int id, List(Int) nls, Str smap) {
+    return diag_where(smap, gk_line_of(nls, k.g.ns[id].sp, 0, nls.len()) + 1).path;
+}
+
+List(Int) gk_newlines(Str src, Int from, ListBuf(Int) acc) {
+    Int nl = str_find_char(src, 10, from);
+    if (nl < 0) { return acc.finish(); }
+    return gk_newlines(src, nl + 1, acc.push(nl));
+}
+
+// How many of nls[lo..hi] lie before pos.
+Int gk_line_of(List(Int) nls, Int pos, Int lo, Int hi) {
+    if (lo >= hi) { return lo; }
+    Int mid = (lo + hi) / 2;
+    return if (nls[mid] < pos) { gk_line_of(nls, pos, mid + 1, hi) } else { gk_line_of(nls, pos, lo, mid) };
 }
 
 // A use of an internal: a call, or a runtime @export / @import annotation.
@@ -1670,14 +1684,14 @@ Str gk_internal_use(GK k, Int id) {
     return "";
 }
 
-Bool gk_internals_at(GK k, Int id, Str src, Str smap, Bool acc) {
+Bool gk_internals_at(GK k, Int id, List(Int) nls, Str smap, Bool acc) {
     if (id >= k.g.ns.len()) { return acc; }
     Str u = gk_internal_use(k, id);
-    Bool ok = u == "" || (resid_internals() && gk_internal_file(gk_src_path(k, id, src, smap)));
+    Bool ok = u == "" || (resid_internals() && gk_internal_file(gk_src_path(k, id, nls, smap)));
     Bool bad = if (ok) { false } else {
         eprintln("error[E0220]: " + u + " is a runtime internal of the compiler, not part of the language (spec §5); only the compiler's own sources and runtime/rt/, built with --runtime-internals, may use it (never the standard library)")
     };
-    return gk_internals_at(k, id + 1, src, smap, acc || bad);
+    return gk_internals_at(k, id + 1, nls, smap, acc || bad);
 }
 
 // Family of a builtin call node (not a user function of that name), or "".
@@ -2031,7 +2045,7 @@ Int gk_finish(GK k, List(Int) fnode, Str src, Str smap) {
     Bool err3 = e0218_check_all(fs, eff, facts.pcsv, 0);
     Bool err4 = gk_spawn_all(k, fnode, eff, 0);
     Bool err5 = gk_authority(k, fnode, facts);
-    Bool err6 = gk_internals_at(k, 0, src, smap, false);
+    Bool err6 = gk_internals_at(k, 0, gk_newlines(src, 0, ListBuf()), smap, false);
     if (err1 || err2 || err3 || err4 || err5 || err6) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
     return 0;

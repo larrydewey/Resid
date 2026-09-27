@@ -5,7 +5,7 @@
 pub Int rt_int_to_string(Int v) {
     Int buf = resid_raw_tls("numfmt_buf", 32);
     Int n = itoa_into(buf, v);
-    return cstr_from(buf, n, 0);
+    return cstr_from(buf, n, 1);
 }
 
 // Digits of an unsigned 64-bit value.
@@ -18,7 +18,7 @@ pub Int utoa_into(Int buf, Int v) {
 @export("UIntToString", "ptr(i64)")
 pub Int rt_uint_to_string(Int v) {
     Int buf = resid_raw_tls("numfmt_buf", 32);
-    return cstr_from(buf, utoa_into(buf, v), 0);
+    return cstr_from(buf, utoa_into(buf, v), 1);
 }
 
 @export("Int128ToString", "ptr(i128)")
@@ -65,7 +65,7 @@ pub Int limbs_to_str(Int w, Int count, Bool neg) {
     Int buf = resid_raw_tls("limb_buf", 208);
     Int p = limbs_digits(w, count, buf + 204);
     Int start = if (neg) { st8(p - 1, 45) + p - 1 } else { p };
-    return cstr_from(start, buf + 204 - start, 0);
+    return cstr_from(start, buf + 204 - start, 1);
 }
 
 Int limbs_i128(Int(128) v) {
@@ -114,7 +114,7 @@ pub Int rt_uint512_to_string(Int l0, Int l1, Int l2, Int l3, Int l4, Int l5, Int
 pub Int rt_float_to_string(Float v) {
     Int buf = resid_raw_tls("ftoa_buf", 64);
     Int n = c_strfromd(buf, 64, resid_raw_addr("%.17g"), v);
-    return cstr_from(buf, n, 0);
+    return cstr_from(buf, n, 1);
 }
 
 @export("BoolToString", "ptr(i8)")
@@ -262,7 +262,7 @@ Int f128_assemble(Int ib, Int ilen, Int fd, Int flen, Int dec_exp0, Bool neg) {
     Int o = resid_raw_tls("f128_out", 112);
     Int k = if (neg) { st8(o, 45) + 1 } else { 0 };
     Int e = if (dec_exp >= 0 - 6 && dec_exp <= 36) { fixed_text(o, k, dg, nd, dec_exp) } else { sci_text(o, k, dg, nd, dec_exp) };
-    return cstr_from(o, e, 0);
+    return cstr_from(o, e, 1);
 }
 
 Int copy_rev(Int ib, Int ilen, Int dg, Int n, Int max) {

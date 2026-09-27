@@ -41,20 +41,36 @@ Int mret() { return resid_raw_tls("map_ret", 8); }
 Int mflag() { return resid_raw_tls("map_flag", 8); }
 Int ret_word(Int w) { return st64(mret(), w) * 0 + 1; }
 
+// Where map memory goes: 0 the current region (scope, else the current
+// bulk arena, else the heap), 1 the heap, 2 + d the bulk arena at depth d.
 Int map_heap_w() { return resid_raw_tls("map_heap", 8); }
 Bool map_heap() { return ld64(map_heap_w()) != 0; }
+Int map_born_w() { return resid_raw_tls("map_born", 8); }
 
 Int sc_depth() { return c_sc_depth(); }
 Bool in_region(Int p) { return c_sc_depth() != 0 && c_in_scope(p) != 0; }
 
 // Map memory lives where its map does: a new map inside a scope region
-// lives in the region; an update into an older map allocates on the heap.
+// lives in the region, one in a bulk arena in that arena (a handle keeps
+// the arena's depth at byte 46); an in-place update of an older map
+// allocates where that map lives.
 Int map_obj(Int n) {
-    if (!map_heap() && sc_depth() != 0) { return c_scope_alloc(n); }
+    Int w = ld64(map_heap_w());
+    if (w == 0 && sc_depth() != 0) { return st64(map_born_w(), 0) * 0 + c_scope_alloc(n); }
+    Int d = if (w >= 2) { w - 2 } else { if (w == 0) { bulk_depth() } else { 0 } };
+    Int _b = st64(map_born_w(), d);
+    if (d > 0) { return bulk_block(d, n); }
     return xmalloc(n);
 }
 
-Int map_obj_free(Int p) { return if (p != 0 && !in_region(p)) { c_free(p) } else { 0 }; }
+// The target for an in-place update of m.
+Int map_home(Int m) {
+    if (in_region(m)) { return 0; }
+    Int d = ld8(m + 46);
+    return if (d > 0) { d + 2 } else { 1 };
+}
+
+Int map_obj_free(Int p) { return if (p != 0 && !in_region(p) && ld64(p - 16) != 63) { c_free(p) } else { 0 }; }
 
 Int raw_empty() { return 0 - 9223372036854775807 - 1; }
 Int raw_tomb() { return 0 - 9223372036854775807; }
@@ -511,7 +527,7 @@ Int mvk(Int m) { return ld_i8(m + 45); }
 Int trie_new(Int count, Int root, Int kk, Int vk) {
     Int t = map_obj(48);
     Int _a = st64(t, count) + st64(t + 8, root) + st64(t + 16, 0) + st64(t + 24, 0) + st64(t + 32, 0);
-    Int _b = st32(t + 40, 0) + st8(t + 44, kk) + st8(t + 45, vk);
+    Int _b = st32(t + 40, 0) + st8(t + 44, kk) + st8(t + 45, vk) + st8(t + 46, ld64(map_born_w())) + st8(t + 47, 0);
     return t;
 }
 
@@ -1091,7 +1107,7 @@ Int map_put_slow(Int m0, Int owned, Int kk0, Int kb, Int vk0, Int vb) {
     if (owned != 0 && mtrans(m)) {
         // In place: allocate where the map lives.
         Int saved = ld64(map_heap_w());
-        Int _h = st64(map_heap_w(), if (in_region(m)) { 0 } else { 1 });
+        Int _h = st64(map_heap_w(), map_home(m));
         Int _p = if (mtab(m) != 0) { tab_put_owned(m, kk, kb, vk, vb, ks, vs) } else { trie_put_owned(m, kk, word_keep(if (ks != 0) { 4 } else { 0 }, kb), vk, word_keep(vs, vb)) };
         return st64(map_heap_w(), saved) * 0 + m;
     }
@@ -1191,7 +1207,7 @@ pub Int rt_map_del(Int m0, Int owned, Int kk0, Int kb) {
     Int m = if (owned != 0 && !mtrans(m0) && mcount(m0) > 0) { rt_map_transient(m0) } else { m0 };
     if (owned != 0 && mtrans(m) && mtab(m) == 0) {
         Int saved = ld64(map_heap_w());
-        Int _h = st64(map_heap_w(), if (in_region(m)) { 0 } else { 1 });
+        Int _h = st64(map_heap_w(), map_home(m));
         Int _r = if (mcount(m) > 0 && key_lookup_word(mkk(m), kk, kb)) { trie_del_at(m, ld64(mret())) } else { 0 };
         return st64(map_heap_w(), saved) * 0 + m;
     }
@@ -1592,7 +1608,7 @@ pub Int rt_map_evac(Int m, Int kf, Int vf) {
     Int nr = if (t != 0) { mroot(m) } else { hnode_evac(mroot(m), kf, vf) };
     if (nt == t && nr == mroot(m) && !in_region(m)) { return m; }
     Int out = xmalloc(48);
-    Int _c = mcopy(out, m, 48);
+    Int _c = mcopy(out, m, 48) + st8(out + 46, 0);
     Int _t = st64(out + 16, nt);
     return st64(out + 8, nr) * 0 + out;
 }

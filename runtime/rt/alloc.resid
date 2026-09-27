@@ -69,6 +69,26 @@ Int arena_bump(Int a, Int size0) {
     return bump_in(cur, size);
 }
 
+// The innermost arena (0: none), a block in a given arena, and the scalar
+// scope depth.
+pub Int cur_arena() { return ag(0); }
+pub Int arena_alloc(Int a, Int size) { return arena_bump(a, size); }
+pub Int ag_scope_depth() { return ag(4); }
+
+// Bulk arenas by depth (1 = outermost): the current depth, and a block
+// with a free-proof header (class 63: c_free leaves it) in the arena at d.
+pub Int bulk_depth() { return chain_len(ag(1), 0); }
+
+Int chain_len(Int a, Int n) { return if (a == 0) { n } else { chain_len(ld64(a + 16), n + 1) }; }
+
+Int chain_up(Int a, Int k) { return if (k <= 0) { a } else { chain_up(ld64(a + 16), k - 1) }; }
+
+pub Int bulk_block(Int d, Int n) {
+    Int a = chain_up(ag(1), bulk_depth() - d);
+    Int p = arena_bump(a, n + 16);
+    return st64(p, 63) * 0 + p + 16;
+}
+
 Int bump_in(Int c, Int size) {
     Int used = ld64(c + 8);
     Int _u = st64(c + 8, used + size);
@@ -99,6 +119,12 @@ Bool scope_chunks_contain(Int c, Int p) {
 // enter a pointer-keyed cache).
 @export("resid_rt_arena_contains", "i8(ptr)")
 pub Int rt_arena_contains_x(Int p) { return if (chain_contains(ag(0), p) || chain_contains(ag(1), p) || scope_contains(p)) { 1 } else { 0 }; }
+
+// 2: p is in a scalar scope region, 1: in an arena or bulk arena, 0: neither.
+pub Int region_kind(Int p) {
+    if (scope_contains(p)) { return 2; }
+    return if (chain_contains(ag(0), p) || chain_contains(ag(1), p)) { 1 } else { 0 };
+}
 
 @export("resid_bulk_push", "i64()")
 pub Int rt_bulk_push() {
@@ -181,7 +207,7 @@ pub Int rt_scope_pop(Int d) {
     Int _p = as_(6, mptr);
     Int _e = as_(7, if (mchunk != 0) { mchunk + 16 + ld64(mchunk + 8) } else { 0 });
     // A pointer-keyed string cache entry may name freed region memory.
-    return rt_str_index_popped();
+    return str_index_scope_popped();
 }
 
 @noinline
