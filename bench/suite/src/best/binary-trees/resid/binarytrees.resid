@@ -1,7 +1,8 @@
 // The Computer Language Benchmarks Game: binary-trees, parallel.
 // https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/binarytrees.html
 //
-// The st program with each depth level run in its own `spawn` region.
+// The st program with each depth level run in its own `spawn` region, and
+// the stretch tree built and checked concurrently with the rest.
 
 type Tree = Node(Pair) | Leaf;
 type Pair = { Tree l; Tree r; };
@@ -45,10 +46,13 @@ Int main() {
     Int min_depth = 4;
     Int max_depth = if (min_depth + 2 > n) { min_depth + 2 } else { n };
     Int stretch = max_depth + 1;
-    Int sc = check(bottom_up(stretch, Leaf));
-    println(f"stretch tree of depth {stretch}\t check: {sc}");
+    // The stretch tree is built and checked alongside the rest.
+    Result(Int, RegionError) st = spawn () { return check(bottom_up(stretch, Leaf)); };
     Tree long_lived = bottom_up(max_depth, Leaf);
-    print(depths(min_depth, max_depth));
+    Str lines = depths(min_depth, max_depth);
+    Int sc = st else { 0 };
+    println(f"stretch tree of depth {stretch}\t check: {sc}");
+    print(lines);
     println(f"long lived tree of depth {max_depth}\t check: {check(long_lived)}");
     return 0;
 }

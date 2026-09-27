@@ -3,5 +3,5 @@ set -euo pipefail
 HERE="$(pwd)"
 ROOT="${RESID_ROOT:-$(git rev-parse --show-toplevel)}"
 mkdir -p out
-# The parallel program (a spawn region per top-level block), -O3.
-(cd "$ROOT" && build/boot/stage2.bin "$HERE/fannkuchredux.resid" -o "$HERE/out/fannkuchredux" -O3 >/dev/null)
+# The parallel program (a spawn region per top-level block), -O3 -march=native.
+(cd "$ROOT" && build/boot/stage2.bin "$HERE/fannkuchredux.resid" -o "$HERE/out/fannkuchredux" -O3 -march=native >/dev/null)

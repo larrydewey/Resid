@@ -3,5 +3,6 @@ set -euo pipefail
 HERE="$(pwd)"
 ROOT="${RESID_ROOT:-$(git rev-parse --show-toplevel)}"
 mkdir -p out
-# The parallel program (spawn regions over bands of rows), -O3.
-(cd "$ROOT" && build/boot/stage2.bin "$HERE/mandelbrot.resid" -o "$HERE/out/mandelbrot" -O3 >/dev/null)
+# The parallel 16-lane program (spawn regions over bands of rows),
+# -O3 -march=native like the other best cells.
+(cd "$ROOT" && build/boot/stage2.bin "$HERE/mandelbrot.resid" -o "$HERE/out/mandelbrot" -O3 -march=native >/dev/null)

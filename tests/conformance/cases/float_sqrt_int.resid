@@ -1,0 +1,5 @@
+Int main() {
+    Int x = 4;
+    println(f"{sqrt(x)}");
+    return 0;
+}

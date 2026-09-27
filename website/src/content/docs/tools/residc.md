@@ -38,6 +38,7 @@ static binary with clang. The default output is `a.out`.
 
 | Option | |
 |---|---|
+| `-march=CPU` | passed to clang, e.g. `-march=native` to use the host's vector units |
 | `--no-reduce` | skip compile-time reduction (for comparison) |
 | `--no-facts` | keep every runtime check (no range facts) |
 | `--dump-reduced PATH` | write the residual program as source text |

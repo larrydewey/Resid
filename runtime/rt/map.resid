@@ -539,6 +539,9 @@ Int ttombs(Int t) { return ld64(t + 16); }
 Int tkk(Int t) { return ld_i8(t + 24); }
 Int tvk(Int t) { return ld_i8(t + 25); }
 Bool tnov(Int t) { return ld8(t + 26) != 0; }
+// Slots are {key, value} pairs (16 bytes, so a probe touches one cache
+// line); tvals is the first value word (tkeys + 8), or 0 when a table
+// keeps no values.
 Int tkeys(Int t) { return ld64(t + 32); }
 Int tvals(Int t) { return ld64(t + 40); }
 Bool toob_has(Int t, Int o) { return ld8(t + 48 + o) != 0; }
@@ -565,15 +568,16 @@ Int t_oob(Int t, Int k) {
 
 Int t_alloc(Int t, Int cap) {
     _ = st64(t, cap);
-    Int keys = map_obj(cap * 8);
+    Int keys = map_obj(cap * 16);
     _ = st64(t + 32, keys);
-    _ = st64(t + 40, if (tnov(t)) { 0 } else { map_obj(cap * 8) });
+    _ = st64(t + 40, if (tnov(t)) { 0 } else { keys + 8 });
     return fill_words(keys, t_empty(t), 0, cap);
 }
 
+// Word w into every other word of p (n slots of 16 bytes).
 Int fill_words(Int p, Int w, Int i, Int n) {
     if (i >= n) { return 0; }
-    _ = st64(p + i * 8, w);
+    _ = st64(p + i * 16, w);
     return fill_words(p, w, i + 1, n);
 }
 
@@ -599,7 +603,7 @@ Int t_probe(Int t, Int k) {
 }
 
 Int probe_at(Int t, Int k, Int i, Int mask, Int e, Int tb, Int keys) {
-    Int s = ld64(keys + i * 8);
+    Int s = ld64(keys + i * 16);
     if (s == e) { return 0 - i - 1; }
     if (s != tb && t_keq(t, s, k)) { return i; }
     return probe_at(t, k, (i + 1) & mask, mask, e, tb, keys);
@@ -616,7 +620,7 @@ Int probe_raw_cached(Int t, Int k) {
 }
 
 Int probe_raw(Int keys, Int k, Int i, Int mask) {
-    Int s = ld64(keys + i * 8);
+    Int s = ld64(keys + i * 16);
     if (s == raw_empty()) { return 0 - i - 1; }
     if (s == k) { return i; }
     return probe_raw(keys, k, (i + 1) & mask, mask);
@@ -628,10 +632,10 @@ Int t_next(Int t, Int idx) {
     Int cap = tcap(t);
     if (idx < cap) {
         if (tkeys(t) == 0) { return t_next(t, cap); }
-        Int s = ld64(tkeys(t) + idx * 8);
+        Int s = ld64(tkeys(t) + idx * 16);
         if (s == t_empty(t) || s == t_tomb(t)) { return t_next(t, idx + 1); }
         _ = st64(mret(), s);
-        _ = st64(mflag(), if (tvals(t) != 0) { ld64(tvals(t) + idx * 8) } else { 1 });
+        _ = st64(mflag(), if (tvals(t) != 0) { ld64(tvals(t) + idx * 16) } else { 1 });
         return idx + 1;
     }
     if (idx < cap + 2) {
@@ -652,7 +656,7 @@ Int t_rebuild(Int t, Int cap, Int kk, Bool box_keys) {
     _ = st64(t + 8, 0) + st64(t + 16, 0) + st8(t + 48, 0) + st8(t + 49, 0) + st8(t + 72, 0);
     _ = t_alloc(t, cap);
     _ = rebuild_from(t, old, 0, box_keys);
-    _ = map_obj_free(tkeys(old)) + map_obj_free(tvals(old));
+    _ = map_obj_free(tkeys(old));
     return c_free(old);
 }
 
@@ -672,8 +676,8 @@ Int t_insert_new(Int t, Int k, Int v) {
     // Full: twice the slots, or the same number when tombstones dominate.
     _ = if (t_over(tlive(t) + ttombs(t) + 1, tcap(t))) { t_rebuild(t, if (tlive(t) * 4 > tcap(t)) { tcap(t) * 2 } else { tcap(t) }, tkk(t), false) } else { 0 };
     Int r = t_probe(t, k);
-    _ = st64(tkeys(t) + (0 - r - 1) * 8, k);
-    _ = if (tvals(t) != 0) { st64(tvals(t) + (0 - r - 1) * 8, v) } else { 0 };
+    _ = st64(tkeys(t) + (0 - r - 1) * 16, k);
+    _ = if (tvals(t) != 0) { st64(tvals(t) + (0 - r - 1) * 16, v) } else { 0 };
     _ = st64(t + 8, tlive(t) + 1);
     return st8(t + 72, 0);
 }
@@ -688,7 +692,7 @@ Int t_decide(Int t, Int kk, Int vk, Int vb) {
 }
 
 Int t_vals_make(Int t) {
-    Int vals = map_obj(tcap(t) * 8);
+    Int vals = tkeys(t) + 8;
     _ = fill_words(vals, 1, 0, tcap(t));
     _ = st64(t + 40, vals);
     return st8(t + 26, 0);
@@ -704,8 +708,8 @@ Int t_vals_boxed(Int t) {
 
 Int vals_box_at(Int t, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int s = ld64(tkeys(t) + i * 8);
-    _ = if (s != t_empty(t) && s != t_tomb(t)) { st64(tvals(t) + i * 8, mbox(tvk(t), ld64(tvals(t) + i * 8))) } else { 0 };
+    Int s = ld64(tkeys(t) + i * 16);
+    _ = if (s != t_empty(t) && s != t_tomb(t)) { st64(tvals(t) + i * 16, mbox(tvk(t), ld64(tvals(t) + i * 16))) } else { 0 };
     return vals_box_at(t, i + 1, n);
 }
 
@@ -747,7 +751,7 @@ Int t_vref(Int t, Int rk, Int kb) {
     if (o >= 0) { return if (toob_has(t, o)) { t + 56 + o * 8 } else { 0 }; }
     Int r = t_probe(t, k);
     if (r < 0) { return 0; }
-    if (tvals(t) != 0) { return tvals(t) + r * 8; }
+    if (tvals(t) != 0) { return tvals(t) + r * 16; }
     return st64(map_one(), 1) * 0 + map_one();
 }
 
@@ -780,7 +784,7 @@ Bool t_del(Int t, Int kk, Int kb) {
     }
     Int r = t_probe(t, k);
     if (r < 0) { return false; }
-    _ = st64(tkeys(t) + r * 8, t_tomb(t));
+    _ = st64(tkeys(t) + r * 16, t_tomb(t));
     _ = st64(t + 8, tlive(t) - 1);
     return st64(t + 16, ttombs(t) + 1) == 0;
 }
@@ -1060,13 +1064,10 @@ Int copy_tab(Int s) {
     _ = mcopy(t, s, 96);
     _ = st8(t + 72, 0);
     if (tkeys(s) == 0) { return t; }
-    Int keys = map_obj(tcap(s) * 8);
-    _ = mcopy(keys, tkeys(s), tcap(s) * 8);
+    Int keys = map_obj(tcap(s) * 16);
+    _ = mcopy(keys, tkeys(s), tcap(s) * 16);
     _ = st64(t + 32, keys);
-    if (tvals(s) == 0) { return t; }
-    Int vals = map_obj(tcap(s) * 8);
-    _ = mcopy(vals, tvals(s), tcap(s) * 8);
-    return st64(t + 40, vals) * 0 + t;
+    return st64(t + 40, if (tvals(s) != 0) { keys + 8 } else { 0 }) * 0 + t;
 }
 
 Int put_all(Int t, Int kk, Int vk, Int ks, Int vs, Int i, Int n) {
@@ -1130,16 +1131,17 @@ Int tab_put_owned(Int m, Int kk, Int kb, Int vk, Int vb, Int ks, Int vs) {
 // Typed insert; `owned` (from the compiler) marks an update nothing else
 // observes: in place on a transient, which a shared map first becomes.
 @export("resid_map_put", "ptr(ptr,i8,i8,i64,i8,i64)")
+@inline
 pub Int rt_map_put(Int m, Int owned, Int kk, Int kb, Int vk, Int vb) {
     Int t = mtab(m);
     Bool fast = owned != 0 && mtrans(m) && t != 0 && kk == 1 && tkk(t) == 1 && tvk(t) == vk && (tvals(t) != 0 || vb == 1) && lshr(kb, 1) != lshr(raw_empty(), 1);
     if (fast) {
         Int r = probe_raw_cached(t, kb);
-        if (r >= 0) { return if (tvals(t) != 0) { st64(tvals(t) + r * 8, vb) } else { 0 } * 0 + m; }
+        if (r >= 0) { return if (tvals(t) != 0) { st64(tvals(t) + r * 16, vb) } else { 0 } * 0 + m; }
         if (!t_over(tlive(t) + ttombs(t) + 1, tcap(t))) {
             Int slot = 0 - r - 1;
-            _ = st64(tkeys(t) + slot * 8, kb);
-            _ = if (tvals(t) != 0) { st64(tvals(t) + slot * 8, vb) } else { 0 };
+            _ = st64(tkeys(t) + slot * 16, kb);
+            _ = if (tvals(t) != 0) { st64(tvals(t) + slot * 16, vb) } else { 0 };
             _ = st64(t + 8, tlive(t) + 1);
             _ = st64(t + 88, slot);   // the cached key now lives there
             return st64(m, tlive(t)) * 0 + m;
@@ -1249,6 +1251,7 @@ Int(128) map_find_slow(Int m, Int kk, Int kb, Int vk) {
 Int(128) found_word(Int w) { return ((Int(128))1 << (Int(128))64) | ((Int(128))w & (Int(128))18446744073709551615); }
 
 @export("resid_map_find", "i128(ptr,i8,i64,i8)")
+@inline
 pub Int(128) rt_map_find(Int m, Int kk0, Int kb, Int vk0) {
     Int kk = if (kk0 == 4) { 0 } else { kk0 };
     Int vk = if (vk0 == 4) { 0 } else { vk0 };
@@ -1258,7 +1261,7 @@ pub Int(128) rt_map_find(Int m, Int kk0, Int kb, Int vk0) {
         _ = map_exit(m);
         Int at = probe_raw_cached(t, kb);
         if (at < 0) { return (Int(128))0; }
-        return found_word(if (tvals(t) != 0) { ld64(tvals(t) + at * 8) } else { 1 });
+        return found_word(if (tvals(t) != 0) { ld64(tvals(t) + at * 16) } else { 1 });
     }
     return map_find_slow(m, kk, kb, vk);
 }
@@ -1622,12 +1625,12 @@ pub Int rt_map_evac(Int m, Int kf, Int vf) {
 Int tab_evac(Int t, Int kf, Int vf) {
     Bool tt = in_region(t);
     Bool kt = tkeys(t) != 0 && in_region(tkeys(t));
-    Bool vt = tvals(t) != 0 && in_region(tvals(t));
-    if (!tt && !kt && !vt) { return t; }
+    Bool vt = kt && tvals(t) != 0;
+    if (!tt && !kt) { return t; }
     Int nt = evac_obj(96);
     _ = mcopy(nt, t, 96);
-    _ = if (kt) { st64(nt + 32, dup_words(tkeys(t), tcap(t))) } else { 0 };
-    _ = if (vt) { st64(nt + 40, dup_words(tvals(t), tcap(t))) } else { 0 };
+    _ = if (kt) { st64(nt + 32, dup_words(tkeys(t), tcap(t) * 2)) } else { 0 };
+    _ = if (vt) { st64(nt + 40, tkeys(nt) + 8) } else { 0 };
     // A table made in the region may hold region words.
     Bool fix = tkeys(nt) != 0 && (kf == 4 || (vf >= 4 && tvals(nt) != 0));
     _ = if (fix) { keep_slots(nt, 0, tcap(nt), kt && kf == 4, vt && vf >= 4, vf) } else { 0 };
@@ -1648,9 +1651,9 @@ Int dup_words(Int p, Int n) {
 
 Int keep_slots(Int t, Int i, Int n, Bool fk, Bool fv, Int vf) {
     if (i >= n) { return 0; }
-    Int k = ld64(tkeys(t) + i * 8);
+    Int k = ld64(tkeys(t) + i * 16);
     Bool live = k != t_empty(t) && k != t_tomb(t);
-    _ = if (live && fk) { st64(tkeys(t) + i * 8, word_keep(4, k)) } else { 0 };
-    _ = if (live && fv) { st64(tvals(t) + i * 8, word_keep(vf, ld64(tvals(t) + i * 8))) } else { 0 };
+    _ = if (live && fk) { st64(tkeys(t) + i * 16, word_keep(4, k)) } else { 0 };
+    _ = if (live && fv) { st64(tvals(t) + i * 16, word_keep(vf, ld64(tvals(t) + i * 16))) } else { 0 };
     return keep_slots(t, i + 1, n, fk, fv, vf);
 }

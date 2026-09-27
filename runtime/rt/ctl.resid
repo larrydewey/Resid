@@ -42,6 +42,7 @@ pub Int rt_abort_msg_at(Int msg, Int at) { return rt_fail(msg, at); }
 pub Int spawn_run(Int a) { return st64(a + 16, resid_raw_call2(ld64(a), ld64(a + 8), 0)); }
 
 pub Int spawn_entry(Int a) {
+    _ = str_fast_load(a + 40);
     if (!under_catch(resid_raw_fn("spawn_run"), a)) { return ld64(a + 16); }
     Int m = ld64(catch_msg());
     Int region = xmalloc(8);
@@ -52,46 +53,95 @@ pub Int spawn_entry(Int a) {
 }
 
 @export("resid_spawn", "ptr(ptr,ptr)")
-pub Int rt_spawn(Int worker, Int captures) {
-    Int a = xmalloc(24);
-    _ = st64(a, worker);
-    _ = st64(a + 8, captures);
-    _ = st64(a + 16, 0);
-    Int t = thread_spawn(resid_raw_fn("spawn_entry"), a, 8388608);
-    if (t == 0) { return c_free(a) * 0; }
-    Int ret = thread_join(t);
-    _ = c_free(a);
-    return ret;
+pub Int rt_spawn(Int worker, Int captures) { return rt_spawn_wait(rt_spawn_start(worker, captures)); }
+
+// ─── Worker pool ───────────────────────────────────────────────────────
+// Regions run on pooled threads: a worker that finishes its region waits
+// on its own futex word for the next one instead of exiting, so a spawn
+// costs a handoff, not a clone, stack and TLS setup. A worker record is
+// {next idle, job, wake word}; the pool is {lock, idle stack}.
+Int pool() { return resid_raw_global("rt_pool", 16); }
+
+Int pool_lock() {
+    if (resid_raw_cas(pool(), 0, 1)) { return 0; }
+    return pool_lock();
 }
 
-// A running region: {worker, captures, result, thread, joined}. The child
-// starts at once; the parent waits for it on the result's first use and,
-// at the latest, before leaving the scope that bound it (spec §19:
-// completion is structured).
+Int pool_pop() {
+    _ = pool_lock();
+    Int w = ld64(pool() + 8);
+    _ = if (w != 0) { st64(pool() + 8, ld64(w)) } else { 0 };
+    return st64(pool(), 0) * 0 + w;
+}
+
+Int pool_push(Int w) {
+    _ = pool_lock();
+    _ = st64(w, ld64(pool() + 8));
+    _ = st64(pool() + 8, w);
+    return st64(pool(), 0);
+}
+
+Int futex_wake(Int addr) { return resid_raw_syscall(202, addr, 129, 2147483647, 0, 0, 0); }   // FUTEX_WAKE_PRIVATE
+
+// Wait while the 32-bit word at addr is 0.
+Int futex_wait0(Int addr) {
+    if (ld32(addr) != 0) { return 0; }
+    _ = resid_raw_syscall(202, addr, 128, 0, 0, 0, 0);   // FUTEX_WAIT_PRIVATE
+    return futex_wait0(addr);
+}
+
+// Run region a: its Result at a + 16, then the done word a + 32.
+Int run_job(Int a) {
+    _ = st64(a + 16, spawn_entry(a));
+    _ = str_index_reset();
+    _ = resid_raw_fetch_add(a + 32, 1);
+    return futex_wake(a + 32);
+}
+
+pub Int pool_main(Int w) {
+    _ = run_job(ld64(w + 8));
+    _ = st64(w + 8, 0);
+    _ = st64(w + 16, 0);
+    _ = pool_push(w);
+    _ = futex_wait0(w + 16);
+    return pool_main(w);
+}
+
+// A running region: {worker, captures, result, -, done, the parent's
+// known string lengths (str_fast_save)}. The child starts at once; the
+// parent waits for it on the result's first use and, at the latest, before
+// leaving the scope that bound it (spec §19: completion is structured).
 @export("resid_spawn_start", "ptr(ptr,ptr)")
 pub Int rt_spawn_start(Int worker, Int captures) {
     // Lazily loaded process state is loaded here, before any child can race.
     _ = args_load();
-    Int a = xmalloc(40);
+    Int a = xmalloc(344);
     _ = st64(a, worker);
     _ = st64(a + 8, captures);
     _ = st64(a + 16, 0);
+    _ = st64(a + 24, 0);
     _ = st64(a + 32, 0);
-    Int t = thread_spawn(resid_raw_fn("spawn_entry"), a, 8388608);
+    _ = str_fast_save(a + 40);
+    Int idle = pool_pop();
+    if (idle != 0) {
+        _ = st64(idle + 8, a);
+        _ = resid_raw_fetch_add(idle + 16, 1);
+        _ = futex_wake(idle + 16);
+        return a;
+    }
+    Int w = xmalloc(24);
+    _ = st64(w, 0) + st64(w + 8, a) + st64(w + 16, 0);
+    Int t = thread_spawn(resid_raw_fn("pool_main"), w, 8388608);
     // No thread (resources exhausted): run the region here, now.
-    _ = st64(a + 24, t);
-    _ = if (t == 0) { st64(a + 16, spawn_entry(a)) + st64(a + 32, 1) } else { 0 };
+    _ = if (t == 0) { c_free(w) + st64(a + 16, spawn_entry(a)) + st64(a + 32, 1) } else { 0 };
     return a;
 }
 
 // The region's Result, waiting for it the first time.
 @export("resid_spawn_wait", "ptr(ptr)")
 pub Int rt_spawn_wait(Int a) {
-    if (ld64(a + 32) != 0) { return ld64(a + 16); }
-    Int ret = thread_join(ld64(a + 24));
-    _ = st64(a + 16, ret);
-    _ = st64(a + 32, 1);
-    return ret;
+    _ = futex_wait0(a + 32);
+    return ld64(a + 16);
 }
 
 // Ok(payload) as a Result box (tag 1).

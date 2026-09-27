@@ -23,8 +23,8 @@
 <rect x="303.3" y="86" width="1.5" height="16" fill="#2563eb"/>
 <text x="308.3" y="98.0" fill="#1f2937" font-size="11">1.00×</text>
 <text x="112" y="122.0" text-anchor="end" fill="#1f2937">Resid</text>
-<rect x="303.3" y="110" width="22.2" height="16" fill="#d97706"/>
-<text x="330.5" y="122.0" fill="#1f2937" font-size="11">1.32×</text>
+<rect x="303.3" y="110" width="26.6" height="16" fill="#d97706"/>
+<text x="335.0" y="122.0" fill="#1f2937" font-size="11">1.40×</text>
 <text x="112" y="146.0" text-anchor="end" fill="#1f2937">Rust</text>
 <rect x="303.3" y="134" width="31.0" height="16" fill="#94a3b8"/>
 <text x="339.3" y="146.0" fill="#1f2937" font-size="11">1.48×</text>
@@ -45,7 +45,7 @@
 <text x="475.6" y="266.0" fill="#1f2937" font-size="11">8.17×</text>
 <text x="112" y="290.0" text-anchor="end" fill="#1f2937">Java</text>
 <rect x="303.3" y="278" width="196.8" height="16" fill="#94a3b8"/>
-<text x="505.1" y="290.0" fill="#1f2937" font-size="11">11.8×</text>
+<text x="505.2" y="290.0" fill="#1f2937" font-size="11">11.8×</text>
 <text x="112" y="314.0" text-anchor="end" fill="#1f2937">JavaScript</text>
 <rect x="303.3" y="302" width="218.6" height="16" fill="#94a3b8"/>
 <text x="526.9" y="314.0" fill="#1f2937" font-size="11">15.6×</text>

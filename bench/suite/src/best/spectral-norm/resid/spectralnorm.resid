@@ -4,43 +4,11 @@
 // Parallel port: each matrix-vector product is cut into 16 row chunks
 // computed by concurrent `spawn` regions (`chunks` starts chunk c's region,
 // recurses to start the rest, and waits for its own chunk on the way back).
-// Every row is summed in the reference order, so the result is identical
-// to the single-threaded program's. Resid has no sqrt builtin and no printf, so both are
-// implemented below in pure Resid.
-
-// ---- correctly rounded square root in pure Resid ----------------------
-
-// Given x within ~1 ulp of sqrt(d), return the correctly rounded sqrt(d):
-// the residual d - x*x is computed exactly with Dekker's two-product
-// (Veltkamp split), then one Newton correction x + r / (2x) is applied.
-Float sqrt_fix(Float d, Float x) {
-    Float c = 134217729.0 * x;
-    Float xh = c - (c - x);
-    Float xl = x - xh;
-    Float p = x * x;
-    Float e = ((xh * xh - p) + 2.0 * xh * xl) + xl * xl;
-    Float r = (d - p) - e;
-    return x + r / (2.0 * x);
-}
-
-Float newton_iter(Float d, Float x, Int k) {
-    if (k <= 0) { return x; }
-    return newton_iter(d, 0.5 * (x + d / x), k - 1);
-}
-
-// Scale d into [1, 4) by powers of 4 (exact), tracking the matching
-// power of 2 for the root.
-Float sqrt_scaled(Float d, Float s) {
-    if (d >= 4.0) { return sqrt_scaled(d * 0.25, s * 2.0); }
-    if (d < 1.0) { return sqrt_scaled(d * 4.0, s * 0.5); }
-    Float x = newton_iter(d, 0.5 + 0.5 * d, 6);
-    return x * s;
-}
-
-Float sqrt_slow(Float d) {
-    if (d <= 0.0) { return 0.0; }
-    return sqrt_fix(d, sqrt_scaled(d, 1.0));
-}
+// Inside a chunk, 8 rows are computed at once as independent scalar sums
+// that clang's SLP vectorizer packs (-march=native); the A entries use
+// Float index arithmetic, exact at these sizes. Every row is summed in the
+// reference order, so the result is identical to the single-threaded
+// program's. Resid has no printf; it is implemented below in pure Resid.
 
 // ---- printf("%.9f") in pure Resid ---------------------------------------
 
@@ -90,13 +58,71 @@ Float row_at(Int i, Int j, Int n, List(Float) v, Float sum) {
 }
 
 // Rows lo .. hi - 1 of A v (at = false) or At v (at = true).
-ListBuf(Float) rows(Int i, Int hi, Int n, List(Float) v, Bool at, ListBuf(Float) acc) {
-    if (i >= hi) { return acc; }
-    Float r = if (at) { row_at(i, 0, n, v, 0.0) } else { row_a(i, 0, n, v, 0.0) };
-    return rows(i + 1, hi, n, v, at, acc.push(r));
+// Rows i .. i + 7 of A times v at once: 8 independent sums, each
+// in the reference order over j. Float index arithmetic is exact here
+// ((i + j + 1)^2 < 2^53), so every A entry equals the Int formula's.
+List(Float) lanes_a(Float fi, Int j, Float fj, Int n, List(Float) v, Float s0, Float s1, Float s2, Float s3, Float s4, Float s5, Float s6, Float s7) {
+    if (j >= n) { return [s0, s1, s2, s3, s4, s5, s6, s7]; }
+    Float vj = v[j];
+    Float q0 = (fi + 0.0) + fj;
+    Float d0 = q0 * (q0 + 1.0) * 0.5 + (fi + 0.0) + 1.0;
+    Float q1 = (fi + 1.0) + fj;
+    Float d1 = q1 * (q1 + 1.0) * 0.5 + (fi + 1.0) + 1.0;
+    Float q2 = (fi + 2.0) + fj;
+    Float d2 = q2 * (q2 + 1.0) * 0.5 + (fi + 2.0) + 1.0;
+    Float q3 = (fi + 3.0) + fj;
+    Float d3 = q3 * (q3 + 1.0) * 0.5 + (fi + 3.0) + 1.0;
+    Float q4 = (fi + 4.0) + fj;
+    Float d4 = q4 * (q4 + 1.0) * 0.5 + (fi + 4.0) + 1.0;
+    Float q5 = (fi + 5.0) + fj;
+    Float d5 = q5 * (q5 + 1.0) * 0.5 + (fi + 5.0) + 1.0;
+    Float q6 = (fi + 6.0) + fj;
+    Float d6 = q6 * (q6 + 1.0) * 0.5 + (fi + 6.0) + 1.0;
+    Float q7 = (fi + 7.0) + fj;
+    Float d7 = q7 * (q7 + 1.0) * 0.5 + (fi + 7.0) + 1.0;
+    return lanes_a(fi, j + 1, fj + 1.0, n, v, s0 + 1.0 / d0 * vj, s1 + 1.0 / d1 * vj, s2 + 1.0 / d2 * vj, s3 + 1.0 / d3 * vj, s4 + 1.0 / d4 * vj, s5 + 1.0 / d5 * vj, s6 + 1.0 / d6 * vj, s7 + 1.0 / d7 * vj);
 }
 
-// Chunks c .. nc - 1 (of `size` rows each), concurrently, in order.
+// Rows i .. i + 7 of At times v at once: 8 independent sums, each
+// in the reference order over j. Float index arithmetic is exact here
+// ((i + j + 1)^2 < 2^53), so every A entry equals the Int formula's.
+List(Float) lanes_at(Float fi, Int j, Float fj, Int n, List(Float) v, Float s0, Float s1, Float s2, Float s3, Float s4, Float s5, Float s6, Float s7) {
+    if (j >= n) { return [s0, s1, s2, s3, s4, s5, s6, s7]; }
+    Float vj = v[j];
+    Float q0 = fj + (fi + 0.0);
+    Float d0 = q0 * (q0 + 1.0) * 0.5 + fj + 1.0;
+    Float q1 = fj + (fi + 1.0);
+    Float d1 = q1 * (q1 + 1.0) * 0.5 + fj + 1.0;
+    Float q2 = fj + (fi + 2.0);
+    Float d2 = q2 * (q2 + 1.0) * 0.5 + fj + 1.0;
+    Float q3 = fj + (fi + 3.0);
+    Float d3 = q3 * (q3 + 1.0) * 0.5 + fj + 1.0;
+    Float q4 = fj + (fi + 4.0);
+    Float d4 = q4 * (q4 + 1.0) * 0.5 + fj + 1.0;
+    Float q5 = fj + (fi + 5.0);
+    Float d5 = q5 * (q5 + 1.0) * 0.5 + fj + 1.0;
+    Float q6 = fj + (fi + 6.0);
+    Float d6 = q6 * (q6 + 1.0) * 0.5 + fj + 1.0;
+    Float q7 = fj + (fi + 7.0);
+    Float d7 = q7 * (q7 + 1.0) * 0.5 + fj + 1.0;
+    return lanes_at(fi, j + 1, fj + 1.0, n, v, s0 + 1.0 / d0 * vj, s1 + 1.0 / d1 * vj, s2 + 1.0 / d2 * vj, s3 + 1.0 / d3 * vj, s4 + 1.0 / d4 * vj, s5 + 1.0 / d5 * vj, s6 + 1.0 / d6 * vj, s7 + 1.0 / d7 * vj);
+}
+// Rows lo .. hi - 1: 8 at a time, then one by one.
+ListBuf(Float) rows(Int i, Int hi, Int n, List(Float) v, Bool at, ListBuf(Float) acc) {
+    if (i >= hi) { return acc; }
+    if (i + 8 <= hi) {
+        List(Float) r = if (at) { lanes_at((Float)i, 0, 0.0, n, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0) } else { lanes_a((Float)i, 0, 0.0, n, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0) };
+        return rows(i + 8, hi, n, v, at, push_all(acc, r, 0));
+    }
+    Float r1 = if (at) { row_at(i, 0, n, v, 0.0) } else { row_a(i, 0, n, v, 0.0) };
+    return rows(i + 1, hi, n, v, at, acc.push(r1));
+}
+
+ListBuf(Float) push_all(ListBuf(Float) acc, List(Float) xs, Int k) {
+    if (k >= xs.len()) { return acc; }
+    return push_all(acc.push(xs[k]), xs, k + 1);
+}
+
 List(Float) chunks(Int c, Int nc, Int size, Int n, List(Float) v, Bool at) {
     if (c >= nc) {
         List(Float) none = [];
@@ -111,7 +137,7 @@ List(Float) chunks(Int c, Int nc, Int size, Int n, List(Float) v, Bool at) {
 }
 
 List(Float) mul(Int n, List(Float) v, Bool at) {
-    Int size = (n + 15) / 16;
+    Int size = (n + 16 - 1) / 16;
     return chunks(0, (n + size - 1) / size, size, n, v, at);
 }
 
@@ -136,7 +162,7 @@ Float power(Int k, Int n, List(Float) u) {
     if (k >= 9) {
         Float vbv = dot(0, n, u2, v, 0.0);
         Float vv = dot(0, n, v, v, 0.0);
-        return sqrt_slow(vbv / vv);
+        return sqrt(vbv / vv);
     }
     return power(k + 1, n, u2);
 }

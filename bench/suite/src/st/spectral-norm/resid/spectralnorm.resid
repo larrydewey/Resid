@@ -1,45 +1,13 @@
 // The Computer Language Benchmarks Game: spectral-norm.
 // https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/spectralnorm.html
 //
-// Straightforward single-threaded port: vectors are List(Float) built by
-// self-tail-recursive loops (the `acc.concat([x])` accumulator grows in
-// place), dot products are tail-recursive sums in the same order as the
-// reference program. Resid has no sqrt builtin and no printf, so both are
-// implemented below in pure Resid.
-
-// ---- correctly rounded square root in pure Resid ----------------------
-
-// Given x within ~1 ulp of sqrt(d), return the correctly rounded sqrt(d):
-// the residual d - x*x is computed exactly with Dekker's two-product
-// (Veltkamp split), then one Newton correction x + r / (2x) is applied.
-Float sqrt_fix(Float d, Float x) {
-    Float c = 134217729.0 * x;
-    Float xh = c - (c - x);
-    Float xl = x - xh;
-    Float p = x * x;
-    Float e = ((xh * xh - p) + 2.0 * xh * xl) + xl * xl;
-    Float r = (d - p) - e;
-    return x + r / (2.0 * x);
-}
-
-Float newton_iter(Float d, Float x, Int k) {
-    if (k <= 0) { return x; }
-    return newton_iter(d, 0.5 * (x + d / x), k - 1);
-}
-
-// Scale d into [1, 4) by powers of 4 (exact), tracking the matching
-// power of 2 for the root.
-Float sqrt_scaled(Float d, Float s) {
-    if (d >= 4.0) { return sqrt_scaled(d * 0.25, s * 2.0); }
-    if (d < 1.0) { return sqrt_scaled(d * 4.0, s * 0.5); }
-    Float x = newton_iter(d, 0.5 + 0.5 * d, 6);
-    return x * s;
-}
-
-Float sqrt_slow(Float d) {
-    if (d <= 0.0) { return 0.0; }
-    return sqrt_fix(d, sqrt_scaled(d, 1.0));
-}
+// Single-threaded port: vectors are List(Float); a matrix-vector product
+// computes 4 rows at a time (4 independent sums, each in the reference
+// order over j, like the C programs that do 2 rows per SSE register), and
+// the A entries use Float index arithmetic, exact at these sizes. Dot
+// products are tail-recursive sums in the reference order; `sqrt` is the
+// builtin IEEE square root. Resid has no printf, so it is implemented
+// below in pure Resid.
 
 // ---- printf("%.9f") in pure Resid ---------------------------------------
 
@@ -88,21 +56,55 @@ Float row_at(Int i, Int j, Int n, List(Float) v, Float sum) {
     return row_at(i, j + 1, n, v, sum + eval_a(j, i) * v[j]);
 }
 
-List(Float) mul_av(Int i, Int n, List(Float) v, List(Float) acc) {
-    if (i >= n) { return acc; }
-    return mul_av(i + 1, n, v, acc.concat([row_a(i, 0, n, v, 0.0)]));
+// Rows i .. i + 3 of A times v at once: 4 independent sums, each
+// in the reference order over j. Float index arithmetic is exact here
+// ((i + j + 1)^2 < 2^53), so every A entry equals the Int formula's.
+List(Float) lanes_a(Float fi, Int j, Float fj, Int n, List(Float) v, Float s0, Float s1, Float s2, Float s3) {
+    if (j >= n) { return [s0, s1, s2, s3]; }
+    Float vj = v[j];
+    Float q0 = (fi + 0.0) + fj;
+    Float d0 = q0 * (q0 + 1.0) * 0.5 + (fi + 0.0) + 1.0;
+    Float q1 = (fi + 1.0) + fj;
+    Float d1 = q1 * (q1 + 1.0) * 0.5 + (fi + 1.0) + 1.0;
+    Float q2 = (fi + 2.0) + fj;
+    Float d2 = q2 * (q2 + 1.0) * 0.5 + (fi + 2.0) + 1.0;
+    Float q3 = (fi + 3.0) + fj;
+    Float d3 = q3 * (q3 + 1.0) * 0.5 + (fi + 3.0) + 1.0;
+    return lanes_a(fi, j + 1, fj + 1.0, n, v, s0 + 1.0 / d0 * vj, s1 + 1.0 / d1 * vj, s2 + 1.0 / d2 * vj, s3 + 1.0 / d3 * vj);
 }
 
-List(Float) mul_atv(Int i, Int n, List(Float) v, List(Float) acc) {
+// Rows i .. i + 3 of At times v at once: 4 independent sums, each
+// in the reference order over j. Float index arithmetic is exact here
+// ((i + j + 1)^2 < 2^53), so every A entry equals the Int formula's.
+List(Float) lanes_at(Float fi, Int j, Float fj, Int n, List(Float) v, Float s0, Float s1, Float s2, Float s3) {
+    if (j >= n) { return [s0, s1, s2, s3]; }
+    Float vj = v[j];
+    Float q0 = fj + (fi + 0.0);
+    Float d0 = q0 * (q0 + 1.0) * 0.5 + fj + 1.0;
+    Float q1 = fj + (fi + 1.0);
+    Float d1 = q1 * (q1 + 1.0) * 0.5 + fj + 1.0;
+    Float q2 = fj + (fi + 2.0);
+    Float d2 = q2 * (q2 + 1.0) * 0.5 + fj + 1.0;
+    Float q3 = fj + (fi + 3.0);
+    Float d3 = q3 * (q3 + 1.0) * 0.5 + fj + 1.0;
+    return lanes_at(fi, j + 1, fj + 1.0, n, v, s0 + 1.0 / d0 * vj, s1 + 1.0 / d1 * vj, s2 + 1.0 / d2 * vj, s3 + 1.0 / d3 * vj);
+}
+// Rows i .. n - 1 appended to acc: 4 at a time, then one by one.
+List(Float) mul_rows(Int i, Int n, List(Float) v, Bool at, List(Float) acc) {
     if (i >= n) { return acc; }
-    return mul_atv(i + 1, n, v, acc.concat([row_at(i, 0, n, v, 0.0)]));
+    if (i + 4 <= n) {
+        List(Float) r = if (at) { lanes_at((Float)i, 0, 0.0, n, v, 0.0, 0.0, 0.0, 0.0) } else { lanes_a((Float)i, 0, 0.0, n, v, 0.0, 0.0, 0.0, 0.0) };
+        return mul_rows(i + 4, n, v, at, acc.concat(r));
+    }
+    Float r1 = if (at) { row_at(i, 0, n, v, 0.0) } else { row_a(i, 0, n, v, 0.0) };
+    return mul_rows(i + 1, n, v, at, acc.concat([r1]));
 }
 
 List(Float) mul_atav(Int n, List(Float) v) {
     List(Float) e0 = [];
     List(Float) e1 = [];
-    List(Float) t = mul_av(0, n, v, e0);
-    return mul_atv(0, n, t, e1);
+    List(Float) t = mul_rows(0, n, v, false, e0);
+    return mul_rows(0, n, t, true, e1);
 }
 
 List(Float) ones(Int i, Int n, List(Float) acc) {
@@ -122,7 +124,7 @@ Float power(Int k, Int n, List(Float) u) {
     if (k >= 9) {
         Float vbv = dot(0, n, u2, v, 0.0);
         Float vv = dot(0, n, v, v, 0.0);
-        return sqrt_slow(vbv / vv);
+        return sqrt(vbv / vv);
     }
     return power(k + 1, n, u2);
 }

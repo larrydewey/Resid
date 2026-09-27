@@ -1,6 +1,6 @@
-// The Computer Language Benchmarks Game: fannkuch-redux, parallel: the n
-// blocks of (n-1)! permutations (one per top-level rotation) run on
-// concurrent spawn regions; the rest is the st program.
+// The Computer Language Benchmarks Game: fannkuch-redux, parallel: the
+// n * (n-1) blocks of (n-2)! permutations (one per pair of top-level
+// rotations) run on concurrent spawn regions; the rest is the st program.
 // The Computer Language Benchmarks Game: fannkuch-redux.
 // https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/fannkuchredux.html
 //
@@ -98,25 +98,40 @@ Int rotations(Int p, Int k, Int n) {
 
 // Block k: the (n-1)! permutations after k top-level rotations. (n-1)! is
 // even, so a block's local index parity is its global one.
-Int block(Int n, Int k) {
-    return run(n, n - 1, rotations(identity(0, n, 0), k, n), 0, n - 1, 0, 0, 0);
+// Block (k1, k2): the first n rotated k1 times, then the first n - 1
+// rotated k2 times; its (n - 2)! permutations follow from there.
+Int block(Int n, Int k1, Int k2) {
+    Int p = rotations2(rotations(identity(0, n, 0), k1, n), k2, n - 1);
+    return run(n, n - 2, p, 0, n - 2, 0, 0, 0);
 }
 
-// Blocks k .. n - 1, each on its own concurrent region: checksum sum and
-// the largest flip count, packed.
-Int blocks(Int n, Int k) {
-    if (k >= n) { return 0; }
-    Result(Int, RegionError) mine = spawn () { return block(n, k); };
-    Int rest = blocks(n, k + 1);
-    Int r = mine else { 0 };
+Int rotations2(Int p, Int k, Int m) {
+    if (k <= 0) { return p; }
+    return rotations2(rotate_prefix(p, m - 1), k - 1, m);
+}
+
+// checksum * 256 + maxflips of two results combined.
+Int combine(Int r, Int rest) {
     Int mf = max(r & 255, rest & 255);
     return ((r - (r & 255)) / 256 + (rest - (rest & 255)) / 256) * 256 + mf;
 }
 
+// Blocks b .. nb - 1 (b = k1 * (n - 1) + k2), concurrently.
+Int blocks(Int n, Int b, Int nb) {
+    if (b >= nb) { return 0; }
+    Result(Int, RegionError) mine = spawn () { return block(n, b / (n - 1), b % (n - 1)); };
+    Int rest = blocks(n, b + 1, nb);
+    Int r = mine else { 0 };
+    return combine(r, rest);
+}
+
+// Small n: one block (the single-threaded walk).
+Int whole(Int n) { return run(n, n, identity(0, n, 0), 0, n, 0, 0, 0); }
+
 @requires(args)
 Int main() {
     Int n = str_parse_int(args.get(1));
-    Int res = blocks(n, 0);
+    Int res = if (n < 4) { whole(n) } else { blocks(n, 0, n * (n - 1)) };
     Int maxflips = res & 255;
     Int checksum = (res - maxflips) / 256;
     println(f"{checksum}\nPfannkuchen({n}) = {maxflips}");

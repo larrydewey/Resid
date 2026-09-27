@@ -4,10 +4,10 @@
 
 ## Abstract
 
-We compare the Resid compiler against 10 other languages (C, C++, Rust, Go, Java, C#, JavaScript, Python, Fortran, Pascal) on the 10 programs of the Computer Language Benchmarks Game, in two tracks: a single-threaded same-algorithm track (`st`) and a fastest-known-program track (`best`). The suite currently holds 218 runnable program cells and 2 cell(s) declared not applicable; 1070 timed process executions are recorded. Every program output is checked byte-for-byte against the C `st` reference. Times are wall-clock medians of cold process runs; languages are aggregated by the geometric mean of their time ratio to C.
+We compare the Resid compiler against 10 other languages (C, C++, Rust, Go, Java, C#, JavaScript, Python, Fortran, Pascal) on the 10 programs of the Computer Language Benchmarks Game, in two tracks: a single-threaded same-algorithm track (`st`) and a fastest-known-program track (`best`). The suite currently holds 218 runnable program cells and 2 cell(s) declared not applicable; 1305 timed process executions are recorded. Every program output is checked byte-for-byte against the C `st` reference. Times are wall-clock medians of cold process runs; languages are aggregated by the geometric mean of their time ratio to C.
 
-- **st, official**: Resid geometric-mean wall-time ratio to C is **1.03×** over its 9 completed benchmark(s); 1.03× over the 9 benchmark(s) all compared languages completed.
-- **best, official**: Resid geometric-mean wall-time ratio to C is **1.92×** over its 9 completed benchmark(s); 1.92× over the 9 benchmark(s) all compared languages completed.
+- **st, official**: Resid geometric-mean wall-time ratio to C is **0.87×** over its 9 completed benchmark(s); 0.87× over the 9 benchmark(s) all compared languages completed.
+- **best, official**: Resid geometric-mean wall-time ratio to C is **0.79×** over its 9 completed benchmark(s); 0.79× over the 9 benchmark(s) all compared languages completed.
 
 Contents: [Environment](#environment) · [Methodology](#methodology) · [Overall ranking](#overall-ranking) · [Matrices](#matrices) · [Resid versus other languages](#resid-versus-other-languages) · [Per-benchmark results](#per-benchmark-results) · [Coverage](#coverage) · [Appendix](#appendix-cell-notes-and-provenance)
 
@@ -60,7 +60,7 @@ The CPU is heterogeneous (per-CPU maximum clocks differ: 5090 MHz: CPUs 0,2,4,6,
 
 | Language | `st` policy | `st` example build | `best` example build |
 | --- | --- | --- | --- |
-| Resid | `stage2.bin -O2` (default) | `HERE="$(pwd)" ; ulimit -v 16000000 ; (cd "$ROOT" && build/boot/stage2.bin "$HERE/nbody.resid" -o "$HERE/out/nbody" -O2 >/dev/null)` (nbody) | `HERE="$(pwd)" ; ulimit -v 16000000 ; (cd "$ROOT" && build/boot/stage2.bin "$HERE/../../../st/nbody/resid/nbody.resid" -o "$HERE/out/nbody" -O3 >/dev/null)` (nbody) |
+| Resid | `stage2.bin -O2` (default) | `HERE="$(pwd)" ; ulimit -v 16000000 ; (cd "$ROOT" && build/boot/stage2.bin "$HERE/nbody.resid" -o "$HERE/out/nbody" -O2 >/dev/null)` (nbody) | `HERE="$(pwd)" ; ulimit -v 16000000 ; (cd "$ROOT" && build/boot/stage2.bin "$HERE/../../../st/nbody/resid/nbody.resid" -o "$HERE/out/nbody" -O3 -march=native >/d` (nbody) |
 | C | `gcc -O2` | `gcc -O2 -o out/nbody nbody.c -lm` (nbody) | `gcc -pipe -Wall -O3 -fomit-frame-pointer -march=native -o out/nbody nbody.c` (nbody) |
 | C++ | `g++ -O2` | `g++ -O2 -std=c++17 -o out/nbody nbody.cpp` (nbody) | `g++ -pipe -O3 -fomit-frame-pointer -march=native -std=c++17 -o out/nbody nbody.cpp` (nbody) |
 | Rust | `rustc -C opt-level=3` / cargo `--release` | `rustc --edition 2021 -C opt-level=3 -o out/nbody nbody.rs` (nbody) | `rustc -C opt-level=3 -C target-cpu=native -C codegen-units=1 -o out/nbody nbody.rs` (nbody) |
@@ -131,17 +131,17 @@ Exact commands for every cell are in its `build` script; the per-cell notes in t
 
 | # | Language | geomean (common set) | geomean (own set) | completed |
 | ---: | --- | ---: | ---: | ---: |
-| 1 | C | 1.00 | 1.00 | 10/10 |
-| 2 | Resid | 1.03 | 1.03 | 9/10 |
-| 3 | Fortran | 1.03 | 1.03 | 10/10 |
-| 4 | C++ | 1.13 | 1.43 | 10/10 |
-| 5 | Rust | 1.17 | 1.04 | 10/10 |
-| 6 | Go | 1.44 | 1.75 | 10/10 |
-| 7 | Java | 1.54 | 1.70 | 10/10 |
-| 8 | C# | 1.66 | 1.62 | 10/10 |
-| 9 | Pascal | 1.69 | 2.05 | 10/10 |
-| 10 | JavaScript | 2.18 | 2.04 | 10/10 |
-| 11 | Python | 21.9 | 18.4 | 10/10 |
+| 1 | Resid | 0.87 | 0.87 | 9/10 |
+| 2 | C | 1.00 | 1.00 | 10/10 |
+| 3 | Fortran | 1.05 | 1.04 | 10/10 |
+| 4 | C++ | 1.14 | 1.45 | 10/10 |
+| 5 | Rust | 1.19 | 1.05 | 10/10 |
+| 6 | Go | 1.45 | 1.77 | 10/10 |
+| 7 | Java | 1.56 | 1.72 | 10/10 |
+| 8 | C# | 1.68 | 1.64 | 10/10 |
+| 9 | Pascal | 1.71 | 2.07 | 10/10 |
+| 10 | JavaScript | 2.21 | 2.06 | 10/10 |
+| 11 | Python | 22.1 | 18.6 | 10/10 |
 
 ![geomean st official](benchmarks/geomean-st-official.svg)
 
@@ -149,17 +149,17 @@ Exact commands for every cell are in its `build` script; the per-cell notes in t
 
 | # | Language | geomean (common set) | geomean (own set) | completed |
 | ---: | --- | ---: | ---: | ---: |
-| 1 | C | 1.00 | 1.00 | 10/10 |
-| 2 | Resid | 1.03 | 1.03 | 9/10 |
-| 3 | Fortran | 1.03 | 1.03 | 10/10 |
-| 4 | C++ | 1.13 | 1.43 | 10/10 |
-| 5 | Rust | 1.17 | 1.04 | 10/10 |
-| 6 | Go | 1.44 | 1.75 | 10/10 |
-| 7 | Java | 1.54 | 1.70 | 10/10 |
-| 8 | C# | 1.66 | 1.62 | 10/10 |
-| 9 | Pascal | 1.69 | 2.05 | 10/10 |
-| 10 | JavaScript | 2.18 | 2.04 | 10/10 |
-| 11 | Python | 21.9 | 18.4 | 10/10 |
+| 1 | Resid | 0.87 | 0.87 | 9/10 |
+| 2 | C | 1.00 | 1.00 | 10/10 |
+| 3 | Fortran | 1.05 | 1.04 | 10/10 |
+| 4 | C++ | 1.14 | 1.45 | 10/10 |
+| 5 | Rust | 1.19 | 1.05 | 10/10 |
+| 6 | Go | 1.45 | 1.77 | 10/10 |
+| 7 | Java | 1.56 | 1.72 | 10/10 |
+| 8 | C# | 1.68 | 1.63 | 10/10 |
+| 9 | Pascal | 1.71 | 2.07 | 10/10 |
+| 10 | JavaScript | 2.21 | 2.06 | 10/10 |
+| 11 | Python | 22.2 | 18.6 | 10/10 |
 
 **Geometric mean of peak RSS ratio to C.** Common set (9 benchmark(s)): `nbody`, `fannkuch-redux`, `spectral-norm`, `mandelbrot`, `binary-trees`, `fasta`, `k-nucleotide`, `reverse-complement`, `pidigits`.
 
@@ -167,7 +167,7 @@ Exact commands for every cell are in its `build` script; the per-cell notes in t
 | ---: | --- | ---: | ---: | ---: |
 | 1 | Pascal | 0.84 | 0.90 | 10/10 |
 | 2 | C | 1.00 | 1.00 | 10/10 |
-| 3 | Resid | 1.32 | 1.32 | 9/10 |
+| 3 | Resid | 1.40 | 1.40 | 9/10 |
 | 4 | Rust | 1.48 | 1.42 | 10/10 |
 | 5 | Fortran | 1.90 | 1.71 | 10/10 |
 | 6 | C++ | 1.99 | 1.90 | 10/10 |
@@ -191,12 +191,12 @@ No completed runs yet.
 | ---: | --- | ---: | ---: | ---: |
 | 1 | Rust | 0.63 | 0.66 | 10/10 |
 | 2 | C++ | 0.69 | 0.72 | 10/10 |
-| 3 | C | 1.00 | 1.00 | 10/10 |
-| 4 | Fortran | 1.17 | 1.16 | 10/10 |
-| 5 | C# | 1.31 | 1.31 | 10/10 |
-| 6 | Java | 1.50 | 1.50 | 10/10 |
-| 7 | Go | 1.55 | 1.61 | 10/10 |
-| 8 | Resid | 1.92 | 1.92 | 9/10 |
+| 3 | Resid | 0.79 | 0.79 | 9/10 |
+| 4 | C | 1.00 | 1.00 | 10/10 |
+| 5 | Fortran | 1.17 | 1.16 | 10/10 |
+| 6 | C# | 1.31 | 1.31 | 10/10 |
+| 7 | Java | 1.50 | 1.50 | 10/10 |
+| 8 | Go | 1.55 | 1.61 | 10/10 |
 | 9 | Pascal | 1.97 | 2.18 | 10/10 |
 | 10 | JavaScript | 3.54 | 3.58 | 10/10 |
 | 11 | Python | 22.8 | 17.2 | 10/10 |
@@ -211,9 +211,9 @@ No completed runs yet.
 | 2 | C++ | 0.92 | 0.92 | 10/10 |
 | 3 | C | 1.00 | 1.00 | 10/10 |
 | 4 | Fortran | 1.08 | 1.08 | 10/10 |
-| 5 | C# | 1.32 | 1.28 | 10/10 |
-| 6 | Pascal | 1.93 | 1.82 | 10/10 |
-| 7 | Resid | 2.05 | 2.05 | 9/10 |
+| 5 | Resid | 1.26 | 1.26 | 9/10 |
+| 6 | C# | 1.32 | 1.28 | 10/10 |
+| 7 | Pascal | 1.93 | 1.82 | 10/10 |
 | 8 | Go | 2.07 | 1.95 | 10/10 |
 | 9 | Java | 2.24 | 2.09 | 10/10 |
 | 10 | JavaScript | 4.14 | 3.52 | 10/10 |
@@ -229,9 +229,9 @@ No completed runs yet.
 | 4 | C++ | 1.71 | 1.72 | 10/10 |
 | 5 | Fortran | 2.18 | 2.04 | 10/10 |
 | 6 | Go | 2.43 | 2.39 | 10/10 |
-| 7 | Resid | 4.00 | 4.00 | 9/10 |
-| 8 | Python | 4.57 | 3.96 | 10/10 |
-| 9 | C# | 5.70 | 5.26 | 10/10 |
+| 7 | Python | 4.57 | 3.96 | 10/10 |
+| 8 | C# | 5.70 | 5.26 | 10/10 |
+| 9 | Resid | 9.47 | 9.47 | 9/10 |
 | 10 | Java | 12.4 | 10.6 | 10/10 |
 | 11 | JavaScript | 20.9 | 19.0 | 10/10 |
 
@@ -251,17 +251,17 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 1.49 | 0.58 | 1.50 | 1.02 | 0.32 | 0.95 | 1.39 | 2.17 | 1.09 | — |
+| Resid | 0.77 | 0.58 | 0.67 | 1.02 | 0.32 | 0.94 | 1.15 | 2.37 | 1.09 | — |
 | C | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
-| C++ | 0.99 | 1.00 | 0.99 | 1.00 | 1.24 | 0.98 | 1.17 | 2.08 | 1.00 | 12.5 |
-| Rust | 0.71 | 1.02 | 1.30 | 1.05 | 1.55 | 0.91 | 2.62 | 1.10 | 1.05 | 0.36 |
-| Go | 1.03 | 0.92 | 1.31 | 1.03 | 1.83 | 0.97 | 5.37 | 1.05 | 2.06 | 10.4 |
-| Java | 1.05 | 0.89 | 1.35 | 1.05 | 0.24 | 1.18 | 11.3 | 2.58 | 4.47 | 4.11 |
-| C# | 1.02 | 1.00 | 1.32 | 1.02 | 1.40 | 1.05 | 4.21 | 1.81 | 6.20 | 1.30 |
-| JavaScript | 1.13 | 0.97 | 1.41 | 1.00 | 1.39 | 1.33 | 11.9 | 2.79 | 11.9 | 1.08 |
-| Python | 76.3 | 15.6 | 131 | 42.7 | 41.4 | 8.99 | 18.4 | 5.47 | 4.60 | 3.79 |
-| Fortran | 0.94 | 0.99 | 1.00 | 1.00 | 1.06 | 1.04 | 0.83 | 1.57 | 1.00 | 1.03 |
-| Pascal | 1.26 | 1.88 | 1.29 | 2.42 | 1.16 | 1.26 | 3.57 | 2.93 | 1.00 | 11.4 |
+| C++ | 1.00 | 1.01 | 0.99 | 1.00 | 1.26 | 0.99 | 1.16 | 2.26 | 1.00 | 12.5 |
+| Rust | 0.72 | 1.03 | 1.29 | 1.04 | 1.58 | 0.92 | 2.61 | 1.19 | 1.04 | 0.36 |
+| Go | 1.04 | 0.92 | 1.30 | 1.03 | 1.87 | 0.97 | 5.36 | 1.14 | 2.05 | 10.4 |
+| Java | 1.06 | 0.90 | 1.35 | 1.04 | 0.24 | 1.18 | 11.3 | 2.80 | 4.44 | 4.09 |
+| C# | 1.03 | 1.01 | 1.31 | 1.02 | 1.43 | 1.05 | 4.20 | 1.96 | 6.16 | 1.29 |
+| JavaScript | 1.14 | 0.98 | 1.41 | 1.00 | 1.42 | 1.33 | 11.8 | 3.02 | 11.8 | 1.08 |
+| Python | 77.1 | 15.7 | 131 | 42.7 | 42.2 | 9.01 | 18.4 | 5.92 | 4.57 | 3.78 |
+| Fortran | 0.95 | 0.99 | 1.00 | 1.00 | 1.08 | 1.05 | 0.83 | 1.70 | 0.99 | 1.03 |
+| Pascal | 1.27 | 1.89 | 1.29 | 2.42 | 1.18 | 1.27 | 3.56 | 3.17 | 0.99 | 11.4 |
 
 ![heatmap st official](benchmarks/heatmap-st-official.svg)
 
@@ -269,40 +269,40 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 1.49 | 0.58 | 1.50 | 1.02 | 0.32 | 0.95 | 1.39 | 2.17 | 1.09 | — |
+| Resid | 0.77 | 0.58 | 0.67 | 1.02 | 0.32 | 0.94 | 1.15 | 2.37 | 1.09 | — |
 | C | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
-| C++ | 0.99 | 1.00 | 1.00 | 1.00 | 1.24 | 0.99 | 1.17 | 2.08 | 1.00 | 12.5 |
-| Rust | 0.71 | 1.02 | 1.30 | 1.05 | 1.55 | 0.91 | 2.62 | 1.10 | 1.05 | 0.36 |
-| Go | 1.03 | 0.92 | 1.31 | 1.03 | 1.83 | 0.97 | 5.37 | 1.05 | 2.06 | 10.4 |
-| Java | 1.05 | 0.89 | 1.35 | 1.05 | 0.24 | 1.18 | 11.3 | 2.59 | 4.47 | 4.11 |
-| C# | 1.02 | 1.00 | 1.32 | 1.02 | 1.40 | 1.05 | 4.21 | 1.81 | 6.18 | 1.29 |
-| JavaScript | 1.13 | 0.97 | 1.41 | 1.00 | 1.39 | 1.33 | 11.9 | 2.79 | 11.9 | 1.08 |
-| Python | 76.3 | 15.6 | 132 | 42.7 | 41.4 | 8.99 | 18.4 | 5.47 | 4.60 | 3.79 |
-| Fortran | 0.94 | 0.99 | 1.00 | 1.00 | 1.06 | 1.04 | 0.84 | 1.57 | 1.00 | 1.03 |
-| Pascal | 1.26 | 1.88 | 1.30 | 2.42 | 1.16 | 1.26 | 3.57 | 2.93 | 1.00 | 11.4 |
+| C++ | 1.00 | 1.01 | 0.99 | 1.00 | 1.26 | 0.99 | 1.16 | 2.25 | 1.00 | 12.5 |
+| Rust | 0.72 | 1.03 | 1.29 | 1.05 | 1.58 | 0.92 | 2.61 | 1.19 | 1.04 | 0.36 |
+| Go | 1.04 | 0.92 | 1.30 | 1.03 | 1.87 | 0.97 | 5.36 | 1.14 | 2.05 | 10.4 |
+| Java | 1.06 | 0.90 | 1.35 | 1.05 | 0.24 | 1.18 | 11.3 | 2.80 | 4.44 | 4.09 |
+| C# | 1.03 | 1.01 | 1.31 | 1.02 | 1.42 | 1.05 | 4.20 | 1.97 | 6.15 | 1.29 |
+| JavaScript | 1.14 | 0.98 | 1.41 | 1.00 | 1.42 | 1.33 | 11.8 | 3.03 | 11.8 | 1.08 |
+| Python | 77.2 | 15.7 | 131 | 42.7 | 42.2 | 9.01 | 18.4 | 5.92 | 4.58 | 3.78 |
+| Fortran | 0.95 | 0.99 | 1.00 | 1.00 | 1.08 | 1.05 | 0.83 | 1.70 | 0.99 | 1.03 |
+| Pascal | 1.27 | 1.89 | 1.29 | 2.42 | 1.18 | 1.27 | 3.56 | 3.17 | 0.99 | 11.4 |
 
 **Peak-memory ratio to C** (peak RSS)
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 0.89 | 1.07 | 2.08 | 1.07 | 1.00 | 1.72 | 2.00 | 1.00 | 1.67 | — |
+| Resid | 0.86 | 1.07 | 3.59 | 1.07 | 1.00 | 1.72 | 1.99 | 1.00 | 1.67 | — |
 | C | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
-| C++ | 1.83 | 2.16 | 1.74 | 18.1 | 1.01 | 2.27 | 0.97 | 1.00 | 1.73 | 1.29 |
-| Rust | 1.01 | 1.23 | 1.01 | 17.2 | 1.00 | 1.31 | 1.02 | 1.00 | 1.16 | 1.00 |
-| Go | 1.54 | 1.84 | 2.23 | 1.84 | 1.08 | 3.05 | 2.78 | 1.40 | 3.69 | 1.79 |
-| Java | 20.2 | 23.5 | 18.2 | 23.6 | 2.28 | 25.7 | 6.24 | 3.06 | 20.1 | 6.24 |
-| C# | 12.0 | 14.4 | 10.1 | 16.3 | 2.11 | 16.1 | 5.71 | 2.03 | 14.4 | 5.13 |
-| JavaScript | 26.8 | 29.9 | 24.2 | 47.1 | 5.73 | 32.9 | 5.34 | 1.36 | 43.0 | 4.17 |
-| Python | 4.55 | 5.19 | 4.34 | 21.3 | 1.53 | 5.90 | 3.72 | 1.72 | 3.76 | 2.44 |
-| Fortran | 1.38 | 1.58 | 1.31 | 17.6 | 1.00 | 1.63 | 2.77 | 1.00 | 1.39 | 0.68 |
-| Pascal | 0.30 | 0.35 | 0.27 | 16.3 | 0.99 | 0.37 | 1.05 | 1.03 | 1.13 | 1.62 |
+| C++ | 1.77 | 2.16 | 1.81 | 18.1 | 1.01 | 2.27 | 0.97 | 1.00 | 1.73 | 1.29 |
+| Rust | 0.98 | 1.23 | 1.05 | 17.2 | 1.00 | 1.31 | 1.01 | 1.00 | 1.16 | 1.00 |
+| Go | 1.49 | 1.84 | 2.33 | 1.84 | 1.08 | 3.05 | 2.76 | 1.40 | 3.69 | 1.79 |
+| Java | 19.5 | 23.5 | 19.0 | 23.6 | 2.28 | 25.7 | 6.19 | 3.06 | 20.1 | 6.24 |
+| C# | 11.6 | 14.4 | 10.5 | 16.3 | 2.11 | 16.1 | 5.67 | 2.03 | 14.4 | 5.13 |
+| JavaScript | 25.9 | 29.9 | 25.3 | 47.1 | 5.73 | 32.9 | 5.30 | 1.36 | 43.0 | 4.17 |
+| Python | 4.40 | 5.19 | 4.52 | 21.3 | 1.53 | 5.90 | 3.69 | 1.72 | 3.76 | 2.44 |
+| Fortran | 1.33 | 1.58 | 1.37 | 17.6 | 1.00 | 1.63 | 2.75 | 1.00 | 1.39 | 0.68 |
+| Pascal | 0.29 | 0.35 | 0.28 | 16.3 | 0.99 | 0.37 | 1.04 | 1.03 | 1.13 | 1.62 |
 
 **Median wall time (s)**
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 2.807 | 15.23 | 1.165 | 11.17 | 2.133 | 2.290 | 5.793 | 0.441 | 0.434 | — |
-| C | 1.889 | 26.30 | 0.779 | 10.98 | 6.646 | 2.421 | 4.169 | 0.203 | 0.399 | 1.601 |
+| Resid | 1.443 | 15.18 | 0.520 | 11.20 | 2.099 | 2.276 | 4.789 | 0.445 | 0.437 | — |
+| C | 1.868 | 26.16 | 0.782 | 10.99 | 6.522 | 2.415 | 4.181 | 0.188 | 0.402 | 1.607 |
 | C++ | 1.867 | 26.34 | 0.775 | 10.95 | 8.216 | 2.384 | 4.862 | 0.423 | 0.400 | 20.04 |
 | Rust | 1.337 | 26.92 | 1.009 | 11.48 | 10.28 | 2.210 | 10.91 | 0.223 | 0.418 | 0.574 |
 | Go | 1.949 | 24.16 | 1.018 | 11.27 | 12.17 | 2.339 | 22.39 | 0.214 | 0.822 | 16.68 |
@@ -319,7 +319,7 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 2.77 | 0.94 | 2.48 | 5.57 | 0.20 | 4.43 | 1.93 | 4.64 | 1.23 | — |
+| Resid | 1.17 | 0.67 | 0.56 | 0.99 | 0.17 | 0.27 | 1.62 | 3.19 | 1.16 | — |
 | C | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
 | C++ | 0.96 | 0.59 | 0.96 | 0.71 | 0.12 | 1.14 | 0.55 | 1.16 | 1.08 | 1.03 |
 | Rust | 0.99 | 0.46 | 0.86 | 0.78 | 0.09 | 0.95 | 0.53 | 1.03 | 1.02 | 1.01 |
@@ -337,7 +337,7 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 2.77 | 2.42 | 1.74 | 4.55 | 0.17 | 4.43 | 2.49 | 5.25 | 1.23 | — |
+| Resid | 1.17 | 2.65 | 0.41 | 0.71 | 0.15 | 1.87 | 1.93 | 13.8 | 1.16 | — |
 | C | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
 | C++ | 0.96 | 1.60 | 0.96 | 0.66 | 0.23 | 4.65 | 0.50 | 0.86 | 1.09 | 0.94 |
 | Rust | 0.99 | 1.75 | 0.84 | 0.78 | 0.17 | 1.87 | 0.63 | 1.69 | 1.02 | 0.94 |
@@ -353,7 +353,7 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 1.14 | 13.7 | 21.5 | 16.3 | 0.91 | 1.71 | 2.22 | 8.02 | 1.71 | — |
+| Resid | 1.14 | 140 | 21.3 | 19.5 | 1.99 | 158 | 2.22 | 7.69 | 1.71 | — |
 | C | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
 | C++ | 2.34 | 2.40 | 2.03 | 1.06 | 1.70 | 2.97 | 1.20 | 0.96 | 1.75 | 1.79 |
 | Rust | 1.28 | 1.36 | 1.19 | 1.01 | 1.31 | 1.68 | 1.03 | 0.95 | 1.09 | 0.99 |
@@ -369,7 +369,7 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 2.801 | 2.000 | 0.247 | 1.372 | 0.554 | 2.317 | 2.077 | 0.397 | 0.458 | — |
+| Resid | 1.188 | 1.423 | 0.056 | 0.244 | 0.469 | 0.140 | 1.751 | 0.273 | 0.431 | — |
 | C | 1.011 | 2.121 | 0.099 | 0.246 | 2.802 | 0.523 | 1.077 | 0.085 | 0.372 | 0.404 |
 | C++ | 0.972 | 1.256 | 0.095 | 0.174 | 0.334 | 0.597 | 0.595 | 0.099 | 0.404 | 0.418 |
 | Rust | 1.001 | 0.983 | 0.085 | 0.192 | 0.261 | 0.495 | 0.570 | 0.088 | 0.379 | 0.407 |
@@ -387,7 +387,7 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 4,475 | 1,577 | 1,710 | 973 | 1,044 | 1,898 | 1,910 | 1,334 | 1,775 | — |
+| Resid | 3,534 | 1,577 | 1,786 | 973 | 1,044 | 1,898 | 1,910 | 1,334 | 1,775 | — |
 | C | 1,291 | 577 | 544 | 641 | 691 | 1,132 | 1,663 | 933 | 727 | 1,402 |
 | C++ | 1,323 | 563 | 553 | 607 | 681 | 1,179 | 1,163 | 895 | 869 | 717 |
 | Rust | 1,380 | 634 | 495 | 612 | 649 | 1,405 | 953 | 870 | 824 | 660 |
@@ -403,7 +403,7 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 1.738 | 1.722 | 1.750 | 1.727 | 1.684 | 1.748 | 1.939 | 1.729 | 1.905 | — |
+| Resid | 1.746 | 1.722 | 1.816 | 1.727 | 1.684 | 1.748 | 1.939 | 1.729 | 1.905 | — |
 | C | 0.063 | 0.041 | 0.059 | 0.037 | 0.101 | 0.050 | 0.077 | 0.051 | 0.040 | 0.055 |
 | C++ | 0.133 | 0.146 | 0.173 | 0.106 | 0.114 | 0.175 | 0.348 | 0.200 | 0.135 | 2.204 |
 | Rust | 0.097 | 0.105 | 0.098 | 0.096 | 0.080 | 0.120 | 0.177 | 0.113 | 1.783 | 3.357 |
@@ -419,7 +419,7 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 46.8 KiB | 20.0 KiB | 43.9 KiB | 24.6 KiB | 23.1 KiB | 28.6 KiB | 57.9 KiB | 24.3 KiB | 47.2 KiB | — |
+| Resid | 39.8 KiB | 20.0 KiB | 48.3 KiB | 24.6 KiB | 23.1 KiB | 28.6 KiB | 57.9 KiB | 24.3 KiB | 47.2 KiB | — |
 | C | 16.0 KiB | 15.7 KiB | 15.9 KiB | 15.8 KiB | 19.9 KiB | 16.3 KiB | 16.3 KiB | 16.2 KiB | 16.2 KiB | 16.8 KiB |
 | C++ | 15.8 KiB | 16.4 KiB | 16.5 KiB | 16.3 KiB | 20.3 KiB | 17.2 KiB | 27.6 KiB | 17.4 KiB | 16.8 KiB | 169.3 KiB |
 | Rust | 4.3 MiB | 4.3 MiB | 4.3 MiB | 4.3 MiB | 4.3 MiB | 4.3 MiB | 4.4 MiB | 4.3 MiB | 466.5 KiB | 2.7 MiB |
@@ -437,7 +437,7 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 0 | 1,898 | 2,025 | 1,291 | 890 | 0 | 2,065 | 1,367 | 0 | — |
+| Resid | 0 | 2,098 | 2,275 | 2,980 | 945 | 2,410 | 2,065 | 1,702 | 0 | — |
 | C | 1,889 | 1,905 | 1,689 | 1,659 | 1,055 | 2,717 | 2,619 | 7,321 | 675 | 2,488 |
 | C++ | 2,220 | 1,947 | 1,417 | 2,565 | 1,115 | 3,016 | 2,564 | 4,777 | 671 | 4,240 |
 | Rust | 2,161 | 1,555 | 1,634 | 1,441 | 958 | 2,741 | 1,660 | 3,250 | 1,032 | 2,887 |
@@ -453,7 +453,7 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 1.825 | 1.800 | 1.859 | 1.831 | 1.789 | 1.844 | 2.044 | 1.823 | 1.970 | — |
+| Resid | 1.957 | 1.940 | 2.026 | 2.003 | 1.938 | 2.023 | 2.289 | 2.047 | 2.189 | — |
 | C | 0.174 | 0.076 | 0.188 | 0.125 | 0.112 | 0.059 | 0.210 | 0.192 | 0.035 | 0.063 |
 | C++ | 0.291 | 0.453 | 0.201 | 0.271 | 0.335 | 0.452 | 1.966 | 0.364 | 0.260 | 0.757 |
 | Rust | 0.109 | 1.830 | 1.824 | 1.804 | 1.967 | 1.028 | 3.278 | 1.844 | 1.731 | 2.367 |
@@ -469,7 +469,7 @@ Rows are languages, columns benchmarks. `—` = no completed result (see [Covera
 
 | Language | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Resid | 47.1 KiB | 25.5 KiB | 54.9 KiB | 35.5 KiB | 26.2 KiB | 30.3 KiB | 71.1 KiB | 30.5 KiB | 53.4 KiB | — |
+| Resid | 40.8 KiB | 30.7 KiB | 61.3 KiB | 41.3 KiB | 31.6 KiB | 41.9 KiB | 85.3 KiB | 48.2 KiB | 66.8 KiB | — |
 | C | 15.8 KiB | 16.0 KiB | 16.0 KiB | 20.3 KiB | 24.2 KiB | 16.1 KiB | 24.5 KiB | 17.0 KiB | 16.2 KiB | 17.4 KiB |
 | C++ | 15.7 KiB | 20.6 KiB | 20.5 KiB | 16.3 KiB | 27.3 KiB | 41.1 KiB | 188.2 KiB | 22.2 KiB | 154.1 KiB | 89.8 KiB |
 | Rust | 4.3 MiB | 587.3 KiB | 612.4 KiB | 578.9 KiB | 608.1 KiB | 513.4 KiB | 739.7 KiB | 569.7 KiB | 453.0 KiB | 655.5 KiB |
@@ -489,39 +489,39 @@ Each entry is Resid median wall time divided by the other language's median wall
 
 | vs | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` | geomean | wins/losses |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| C | 1.49 | **0.58** | 1.50 | 1.02 | **0.32** | **0.95** | 1.39 | 2.17 | 1.09 | — | 1.03 | 3/6 |
-| C++ | 1.50 | **0.58** | 1.50 | 1.02 | **0.26** | **0.96** | 1.19 | 1.04 | 1.09 | — | 0.91 | 3/6 |
-| Rust | 2.10 | **0.57** | 1.15 | **0.97** | **0.21** | 1.04 | **0.53** | 1.98 | 1.04 | — | 0.88 | 4/5 |
-| Go | 1.44 | **0.63** | 1.14 | **0.99** | **0.18** | **0.98** | **0.26** | 2.06 | **0.53** | — | 0.72 | 6/3 |
-| Java | 1.42 | **0.65** | 1.11 | **0.97** | 1.34 | **0.80** | **0.12** | **0.84** | **0.24** | — | 0.67 | 6/3 |
-| C# | 1.46 | **0.58** | 1.14 | **1.00** | **0.23** | **0.90** | **0.33** | 1.20 | **0.18** | — | 0.62 | 6/3 |
-| JavaScript | 1.32 | **0.59** | 1.06 | 1.02 | **0.23** | **0.71** | **0.12** | **0.78** | **0.09** | — | 0.47 | 6/3 |
-| Python | **0.02** | **0.04** | **0.01** | **0.02** | **0.01** | **0.11** | **0.08** | **0.40** | **0.24** | — | 0.05 | 9/0 |
-| Fortran | 1.58 | **0.59** | 1.49 | 1.02 | **0.30** | **0.91** | 1.66 | 1.38 | 1.09 | — | 1.00 | 3/6 |
-| Pascal | 1.18 | **0.31** | 1.16 | **0.42** | **0.28** | **0.75** | **0.39** | **0.74** | 1.09 | — | 0.61 | 6/3 |
+| C | **0.77** | **0.58** | **0.67** | 1.02 | **0.32** | **0.94** | 1.15 | 2.37 | 1.09 | — | 0.87 | 5/4 |
+| C++ | **0.77** | **0.58** | **0.67** | 1.02 | **0.26** | **0.95** | **0.98** | 1.05 | 1.09 | — | 0.76 | 6/3 |
+| Rust | 1.08 | **0.56** | **0.52** | **0.98** | **0.20** | 1.03 | **0.44** | 1.99 | 1.05 | — | 0.73 | 5/4 |
+| Go | **0.74** | **0.63** | **0.51** | **0.99** | **0.17** | **0.97** | **0.21** | 2.08 | **0.53** | — | 0.60 | 8/1 |
+| Java | **0.73** | **0.65** | **0.49** | **0.98** | 1.31 | **0.80** | **0.10** | **0.85** | **0.25** | — | 0.56 | 8/1 |
+| C# | **0.75** | **0.58** | **0.51** | 1.00 | **0.23** | **0.90** | **0.27** | 1.21 | **0.18** | — | 0.52 | 7/2 |
+| JavaScript | **0.68** | **0.59** | **0.47** | 1.02 | **0.23** | **0.71** | **0.10** | **0.78** | **0.09** | — | 0.39 | 8/1 |
+| Python | **0.01** | **0.04** | **0.01** | **0.02** | **0.01** | **0.10** | **0.06** | **0.40** | **0.24** | — | 0.04 | 9/0 |
+| Fortran | **0.81** | **0.59** | **0.67** | 1.02 | **0.30** | **0.90** | 1.38 | 1.40 | 1.10 | — | 0.83 | 5/4 |
+| Pascal | **0.61** | **0.31** | **0.52** | **0.42** | **0.27** | **0.74** | **0.32** | **0.75** | 1.10 | — | 0.51 | 8/1 |
 
-Largest Resid wins: `binary-trees` vs Python (0.01×); `spectral-norm` vs Python (0.01×); `nbody` vs Python (0.02×); `mandelbrot` vs Python (0.02×); `fannkuch-redux` vs Python (0.04×).
+Largest Resid wins: `spectral-norm` vs Python (0.01×); `binary-trees` vs Python (0.01×); `nbody` vs Python (0.01×); `mandelbrot` vs Python (0.02×); `fannkuch-redux` vs Python (0.04×).
 
-Largest Resid losses: `reverse-complement` vs C (2.17×); `nbody` vs Rust (2.10×); `reverse-complement` vs Go (2.06×); `reverse-complement` vs Rust (1.98×); `k-nucleotide` vs Fortran (1.66×).
+Largest Resid losses: `reverse-complement` vs C (2.37×); `reverse-complement` vs Go (2.08×); `reverse-complement` vs Rust (1.99×); `reverse-complement` vs Fortran (1.40×); `k-nucleotide` vs Fortran (1.38×).
 
 ### best — official
 
 | vs | `nbody` | `fannkuch-redux` | `spectral-norm` | `mandelbrot` | `binary-trees` | `fasta` | `k-nucleotide` | `reverse-complement` | `pidigits` | `regex-redux` | geomean | wins/losses |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| C | 2.77 | **0.94** | 2.48 | 5.57 | **0.20** | 4.43 | 1.93 | 4.64 | 1.23 | — | 1.92 | 2/7 |
-| C++ | 2.88 | 1.59 | 2.59 | 7.89 | 1.66 | 3.88 | 3.49 | 4.01 | 1.13 | — | 2.77 | 0/9 |
-| Rust | 2.80 | 2.03 | 2.90 | 7.13 | 2.13 | 4.69 | 3.65 | 4.51 | 1.21 | — | 3.06 | 0/9 |
-| Go | 1.52 | **0.40** | **0.84** | 2.27 | **0.25** | 3.69 | 1.68 | 3.32 | 1.09 | — | 1.23 | 3/6 |
-| Java | 1.42 | **0.83** | **0.84** | 1.72 | **0.64** | 3.15 | 1.72 | 1.47 | 1.08 | — | 1.28 | 3/6 |
-| C# | 1.83 | 1.17 | **0.74** | 3.73 | **0.18** | 4.18 | 1.50 | 4.15 | 1.09 | — | 1.46 | 2/7 |
-| JavaScript | 1.36 | **0.83** | **0.70** | 1.62 | **0.23** | 2.16 | **0.32** | **0.21** | **0.10** | — | 0.54 | 6/3 |
-| Python | **0.02** | **0.03** | **0.01** | **0.02** | **0.06** | **0.20** | **0.18** | 1.13 | **0.83** | — | 0.08 | 8/1 |
-| Fortran | 1.62 | **0.73** | 2.70 | 2.39 | 1.91 | 3.48 | **0.91** | 1.57 | 1.15 | — | 1.64 | 2/7 |
-| Pascal | 1.47 | **0.51** | 1.32 | 1.52 | 1.41 | **0.97** | **0.27** | 1.23 | 1.14 | — | 0.97 | 3/6 |
+| C | 1.17 | **0.67** | **0.56** | **0.99** | **0.17** | **0.27** | 1.62 | 3.19 | 1.16 | — | 0.79 | 5/4 |
+| C++ | 1.22 | 1.13 | **0.59** | 1.41 | 1.41 | **0.23** | 2.94 | 2.76 | 1.07 | — | 1.14 | 2/7 |
+| Rust | 1.19 | 1.45 | **0.66** | 1.27 | 1.80 | **0.28** | 3.07 | 3.10 | 1.14 | — | 1.26 | 2/7 |
+| Go | **0.65** | **0.29** | **0.19** | **0.40** | **0.21** | **0.22** | 1.42 | 2.28 | 1.02 | — | 0.51 | 6/3 |
+| Java | **0.60** | **0.59** | **0.19** | **0.31** | **0.54** | **0.19** | 1.45 | 1.01 | 1.01 | — | 0.53 | 6/3 |
+| C# | **0.77** | **0.83** | **0.17** | **0.67** | **0.16** | **0.25** | 1.27 | 2.86 | 1.02 | — | 0.60 | 6/3 |
+| JavaScript | **0.58** | **0.59** | **0.16** | **0.29** | **0.19** | **0.13** | **0.27** | **0.14** | **0.09** | — | 0.22 | 9/0 |
+| Python | **0.01** | **0.02** | **0.00** | **0.00** | **0.05** | **0.01** | **0.15** | **0.78** | **0.78** | — | 0.03 | 9/0 |
+| Fortran | **0.69** | **0.52** | **0.61** | **0.43** | 1.62 | **0.21** | **0.76** | 1.08 | 1.08 | — | 0.67 | 6/3 |
+| Pascal | **0.62** | **0.36** | **0.30** | **0.27** | 1.20 | **0.06** | **0.23** | **0.85** | 1.08 | — | 0.40 | 7/2 |
 
-Largest Resid wins: `spectral-norm` vs Python (0.01×); `nbody` vs Python (0.02×); `mandelbrot` vs Python (0.02×); `fannkuch-redux` vs Python (0.03×); `binary-trees` vs Python (0.06×).
+Largest Resid wins: `spectral-norm` vs Python (0.00×); `mandelbrot` vs Python (0.00×); `nbody` vs Python (0.01×); `fasta` vs Python (0.01×); `fannkuch-redux` vs Python (0.02×).
 
-Largest Resid losses: `mandelbrot` vs C++ (7.89×); `mandelbrot` vs Rust (7.13×); `mandelbrot` vs C (5.57×); `fasta` vs Rust (4.69×); `reverse-complement` vs C (4.64×).
+Largest Resid losses: `reverse-complement` vs C (3.19×); `reverse-complement` vs Rust (3.10×); `k-nucleotide` vs Rust (3.07×); `k-nucleotide` vs C++ (2.94×); `reverse-complement` vs C# (2.86×).
 
 ### Resid cells without a result
 
@@ -537,15 +537,15 @@ Largest Resid losses: `mandelbrot` vs C++ (7.89×); `mandelbrot` vs Rust (7.13×
 | st | `reverse-complement` | small: not run | Port of the reverse-complement description (https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/revcomp.html): read the FASTA file from stdin; for each sequence write its header line and then the reverse complement (IUPAC table, upper- and lower-case input, upper-case output), 60 bases per line. |
 | st | `pidigits` | small: not run | Port of the pidigits description (https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/pidigits.html): the streaming spigot of the reference programs (numer/accum/denom; next_term, digit when extract_digit(3) == extract_digit(4), eliminate_digit), printed 10 digits per line with `\t:N`, the last line space-padded. |
 | st | `regex-redux` | official: N/A, small: N/A | Resid has no user-facing regular expressions: the only matcher in the runtime is the internal resid_regex_match used by the test runner's name filter, which supports neither alternation nor groups nor replacement, and the standard library has no regex module. regex-redux measures a language's standard/customary regex library, so writing a regex engine in Resid for this benchmark would measure that engine rather than Resid as it exists; the cell is N/A. |
-| best | `nbody` | small: not run | Same program as `../../../st/nbody/resid/nbody.resid` (see that cell's NOTES.md for the algorithm and every workaround), compiled with `-O3` (the Resid driver passes `-O3` to clang; it adds no `-march` flag). |
-| best | `fannkuch-redux` | small: not run | The single-threaded program (`../../../st/fannkuch-redux/resid/`, see its NOTES.md for the algorithm and every workaround) made parallel: the n blocks of (n-1)! permutations, one per top-level rotation, run on concurrent `spawn` regions; block k starts from the identity rotated k times, and since (n-1)! is even each block's local sign parity is the global one, so the checksums add and the flip co… |
-| best | `spectral-norm` | small: not run | The single-threaded program (`../../../st/spectral-norm/resid/`, see its NOTES.md for the algorithm and every workaround) made parallel: each matrix-vector product is cut into 16 row chunks computed by concurrent `spawn` regions; every row is summed in the reference order, so the result is identical to the single-threaded program. Compiled with `-O3` (the Resid driver adds no `-march` flag; Resid… |
-| best | `mandelbrot` | small: not run | The single-threaded program (`../../../st/mandelbrot/resid/`, see its NOTES.md for the algorithm and every workaround) made parallel: the image is cut into bands of 32 rows; waves of 16 bands (the host's hardware threads) are computed by concurrent `spawn` regions, started through a recursion that waits for each band on the way back so the bands are printed in order. Compiled with `-O3` (the Resi… |
-| best | `binary-trees` | small: not run | The single-threaded program (`../../../st/binary-trees/resid/`, see its NOTES.md for the algorithm and every workaround) made parallel: each depth level (all do about the same work) builds and checks its trees in its own concurrent `spawn` region; the lines come back in order. Compiled with `-O3` (the Resid driver adds no `-march` flag; Resid has no SIMD types or intrinsics). |
-| best | `fasta` | small: not run | Same program as `../../../st/fasta/resid/fasta.resid` (see that cell's NOTES.md for the algorithm and every workaround), compiled with `-O3` (the Resid driver passes `-O3` to clang; it adds no `-march` flag). |
-| best | `k-nucleotide` | small: not run | The single-threaded program (`../../../st/k-nucleotide/resid/`, see its NOTES.md for the algorithm and every workaround) made parallel: the seven tables (k = 1, 2 and the five fragments) are counted by seven concurrent `spawn` regions over the shared sequence text. Compiled with `-O3` (the Resid driver adds no `-march` flag; Resid has no SIMD types or intrinsics). |
-| best | `reverse-complement` | small: not run | The single-threaded program (`../../../st/reverse-complement/resid/`, see its NOTES.md for the algorithm and every workaround) made parallel: each sequence (header plus reverse complement) is built by its own concurrent `spawn` region; the input has three sequences, so the gain is small and the run stays dominated by reading and writing. Compiled with `-O3` (the Resid driver adds no `-march` flag… |
-| best | `pidigits` | small: not run | Same program as `../../../st/pidigits/resid/pidigits.resid` (see that cell's NOTES.md for the algorithm), compiled with `-O3` (the Resid driver passes `-O3` to clang; it adds no `-march` flag). N = 10000: 0.41 s, the same as the `-O2` st cell. |
+| best | `nbody` | small: not run | Same program as `../../../st/nbody/resid/nbody.resid` (see that cell's NOTES.md for the algorithm and every workaround), compiled with `-O3` `-O3 -march=native`, like the other languages' best cells. |
+| best | `fannkuch-redux` | small: not run | The single-threaded program (`../../../st/fannkuch-redux/resid/`, see its NOTES.md for the algorithm and every workaround) made parallel: the n * (n-1) blocks of (n-2)! permutations, one per pair of top-level rotations, run on concurrent `spawn` regions (132 at n = 12, so 16 hardware threads stay busy to the end); block (k1, k2) starts from the identity with the first n elements rotated k1 times… |
+| best | `spectral-norm` | small: not run | The single-threaded program's algorithm (`../../../st/spectral-norm/resid/`, see its NOTES.md), made parallel: each matrix-vector product is cut into 16 row chunks computed by concurrent `spawn` regions. Inside a chunk, 8 rows are computed at once as 8 independent sums (each in the reference order over j), which clang's SLP vectorizer packs into AVX-512 registers with `-march=native`, like the ot… |
+| best | `mandelbrot` | small: not run | The st program's algorithm (`../../../st/mandelbrot/resid/`, see its NOTES.md for the output workarounds), made data-parallel and parallel: |
+| best | `binary-trees` | small: not run | The single-threaded program (`../../../st/binary-trees/resid/`, see its NOTES.md for the algorithm and every workaround) made parallel: each depth level (all do about the same work) builds and checks its trees in its own concurrent `spawn` region, and the stretch tree is built and checked by another region while the long-lived tree and the levels run; the lines come back in order. Cutting levels… |
+| best | `fasta` | small: not run | The algorithm of the st cell (`../../../st/fasta/resid/`), with the two ideas of the fastest C programs: |
+| best | `k-nucleotide` | small: not run | The single-threaded program (`../../../st/k-nucleotide/resid/`, see its NOTES.md for the algorithm and every workaround) made parallel: the seven tables (k = 1, 2 and the five fragments) are counted by seven concurrent `spawn` regions over the shared sequence text. Compiled with `-O3 -march=native`, like the other languages' best cells (Resid has no SIMD types or intrinsics). |
+| best | `reverse-complement` | small: not run | The single-threaded program's per-character loop (`../../../st/reverse-complement/resid/`, see its NOTES.md), made parallel inside each sequence: |
+| best | `pidigits` | small: not run | Same program as `../../../st/pidigits/resid/pidigits.resid` (see that cell's NOTES.md for the algorithm), compiled with `-O3` (the Resid driver passes `-O3 -march=native` to clang). N = 10000: 0.41 s, the same as the `-O2` st cell. |
 | best | `regex-redux` | official: N/A, small: N/A | Resid has no user-facing regular expressions: the only matcher in the runtime is the internal resid_regex_match used by the test runner's name filter, which supports neither alternation nor groups nor replacement, and the standard library has no regex module. regex-redux measures a language's standard/customary regex library, so writing a regex engine in Resid for this benchmark would measure that engine rather than Resid as it exists; the cell is N/A (and Resid has no parallelism for a best-track variant either). |
 
 ## Per-benchmark results
@@ -558,17 +558,17 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | Rust | 1.337 [1.336–1.337] | 1.334 | 100% | 2.3 | 0.71 | 0% | 5/5 | ok |
-| 2 | Fortran | 1.777 [1.774–1.779] | 1.773 | 100% | 3.1 | 0.94 | 0% | 5/5 | ok |
-| 3 | C++ | 1.867 [1.860–1.869] | 1.863 | 100% | 4.2 | 0.99 | 0% | 5/5 | ok |
-| 4 | C | 1.889 [1.884–1.891] | 1.885 | 100% | 2.3 | 1.00 | 0% | 5/5 | ok |
-| 5 | C# | 1.928 [1.927–1.938] | 1.924 | 100% | 27.3 | 1.02 | 0% | 5/5 | ok |
-| 6 | Go | 1.949 [1.948–1.950] | 1.946 | 100% | 3.5 | 1.03 | 0% | 5/5 | ok |
-| 7 | Java | 1.975 [1.973–1.979] | 1.972 | 100% | 46.0 | 1.05 | 0% | 5/5 | ok |
-| 8 | JavaScript | 2.130 [2.127–2.131] | 2.125 | 100% | 61.0 | 1.13 | 0% | 5/5 | ok |
-| 9 | Pascal | 2.375 [2.375–2.376] | 2.371 | 100% | 0.7 | 1.26 | 0% | 5/5 | ok |
-| 10 | Resid | 2.807 [2.799–2.811] | 2.802 | 100% | 2.0 | 1.49 | 0% | 5/5 | ok |
-| 11 | Python | 144.1 [144.0–144.8] | 143.8 | 100% | 10.4 | 76.3 | 0% | 3/3 | ok |
+| 1 | Rust | 1.337 [1.336–1.337] | 1.334 | 100% | 2.3 | 0.72 | 0% | 5/5 | ok |
+| 2 | Resid | 1.443 [1.443–1.444] | 1.441 | 100% | 2.0 | 0.77 | 0% | 5/5 | ok |
+| 3 | Fortran | 1.777 [1.774–1.779] | 1.773 | 100% | 3.1 | 0.95 | 0% | 5/5 | ok |
+| 4 | C++ | 1.867 [1.860–1.869] | 1.863 | 100% | 4.2 | 1.00 | 0% | 5/5 | ok |
+| 5 | C | 1.868 [1.865–1.869] | 1.863 | 100% | 2.4 | 1.00 | 0% | 5/5 | ok |
+| 6 | C# | 1.928 [1.927–1.938] | 1.924 | 100% | 27.3 | 1.03 | 0% | 5/5 | ok |
+| 7 | Go | 1.949 [1.948–1.950] | 1.946 | 100% | 3.5 | 1.04 | 0% | 5/5 | ok |
+| 8 | Java | 1.975 [1.973–1.979] | 1.972 | 100% | 46.0 | 1.06 | 0% | 5/5 | ok |
+| 9 | JavaScript | 2.130 [2.127–2.131] | 2.125 | 100% | 61.0 | 1.14 | 0% | 5/5 | ok |
+| 10 | Pascal | 2.375 [2.375–2.376] | 2.371 | 100% | 0.7 | 1.27 | 0% | 5/5 | ok |
+| 11 | Python | 144.1 [144.0–144.8] | 143.8 | 100% | 10.4 | 77.1 | 0% | 3/3 | ok |
 
 ![nbody st official](benchmarks/wall-st-official-nbody.svg)
 
@@ -579,13 +579,13 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | 1 | C++ | 0.972 [0.969–0.974] | 0.970 | 100% | 4.2 | 0.96 | 0% | 5/5 | ok |
 | 2 | Rust | 1.001 [0.999–1.003] | 0.999 | 100% | 2.3 | 0.99 | 0% | 5/5 | ok |
 | 3 | C | 1.011 [1.008–1.014] | 1.010 | 100% | 1.8 | 1.00 | 0% | 5/5 | ok |
-| 4 | C# | 1.533 [1.532–1.539] | 1.532 | 100% | 28.0 | 1.52 | 0% | 5/5 | ok |
-| 5 | Fortran | 1.725 [1.723–1.728] | 1.723 | 100% | 3.2 | 1.71 | 0% | 5/5 | ok |
-| 6 | Go | 1.837 [1.825–1.839] | 1.836 | 100% | 5.6 | 1.82 | 0% | 5/5 | ok |
-| 7 | Pascal | 1.907 [1.904–1.907] | 1.903 | 100% | 0.7 | 1.89 | 0% | 5/5 | ok |
-| 8 | Java | 1.976 [1.962–1.984] | 1.993 | 101% | 47.0 | 1.95 | 0% | 5/5 | ok |
-| 9 | JavaScript | 2.063 [2.047–2.093] | 2.066 | 100% | 60.9 | 2.04 | 1% | 5/5 | ok |
-| 10 | Resid | 2.801 [2.795–2.812] | 2.797 | 100% | 2.0 | 2.77 | 0% | 5/5 | ok |
+| 4 | Resid | 1.188 [1.184–1.190] | 1.186 | 100% | 2.0 | 1.17 | 0% | 5/5 | ok |
+| 5 | C# | 1.533 [1.532–1.539] | 1.532 | 100% | 28.0 | 1.52 | 0% | 5/5 | ok |
+| 6 | Fortran | 1.725 [1.723–1.728] | 1.723 | 100% | 3.2 | 1.71 | 0% | 5/5 | ok |
+| 7 | Go | 1.837 [1.825–1.839] | 1.836 | 100% | 5.6 | 1.82 | 0% | 5/5 | ok |
+| 8 | Pascal | 1.907 [1.904–1.907] | 1.903 | 100% | 0.7 | 1.89 | 0% | 5/5 | ok |
+| 9 | Java | 1.976 [1.962–1.984] | 1.993 | 101% | 47.0 | 1.95 | 0% | 5/5 | ok |
+| 10 | JavaScript | 2.063 [2.047–2.093] | 2.066 | 100% | 60.9 | 2.04 | 1% | 5/5 | ok |
 | 11 | Python | 144.5 [144.1–146.5] | 144.3 | 100% | 10.9 | 143 | 1% | 3/3 | ok |
 
 ![nbody best official](benchmarks/wall-best-official-nbody.svg)
@@ -596,17 +596,17 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | Resid | 15.23 [15.21–15.27] | 15.20 | 100% | 2.0 | 0.58 | 0% | 5/5 | ok |
-| 2 | Java | 23.53 [23.42–25.21] | 23.49 | 100% | 44.8 | 0.89 | 3% | 5/5 | ok |
+| 1 | Resid | 15.18 [15.18–15.26] | 15.15 | 100% | 2.0 | 0.58 | 0% | 5/5 | ok |
+| 2 | Java | 23.53 [23.42–25.21] | 23.49 | 100% | 44.8 | 0.90 | 3% | 5/5 | ok |
 | 3 | Go | 24.16 [24.11–24.20] | 24.12 | 100% | 3.5 | 0.92 | 0% | 5/5 | ok |
-| 4 | JavaScript | 25.62 [25.58–25.65] | 25.58 | 100% | 56.9 | 0.97 | 0% | 5/5 | ok |
+| 4 | JavaScript | 25.62 [25.58–25.65] | 25.58 | 100% | 56.9 | 0.98 | 0% | 5/5 | ok |
 | 5 | Fortran | 25.92 [25.87–26.40] | 25.88 | 100% | 3.0 | 0.99 | 1% | 5/5 | ok |
-| 6 | C | 26.30 [26.19–26.34] | 26.25 | 100% | 1.9 | 1.00 | 0% | 5/5 | ok |
-| 7 | C# | 26.32 [26.19–26.43] | 26.28 | 100% | 27.5 | 1.00 | 0% | 5/5 | ok |
-| 8 | C++ | 26.34 [26.31–26.41] | 26.29 | 100% | 4.1 | 1.00 | 0% | 5/5 | ok |
-| 9 | Rust | 26.92 [26.91–26.96] | 26.87 | 100% | 2.3 | 1.02 | 0% | 5/5 | ok |
-| 10 | Pascal | 49.37 [49.35–49.47] | 49.29 | 100% | 0.7 | 1.88 | 0% | 5/5 | ok |
-| 11 | Python | 410.6 | 409.9 | 100% | 9.9 | 15.6 | 0% | 1/1 | ok |
+| 6 | C | 26.16 [26.14–26.40] | 26.10 | 100% | 1.9 | 1.00 | 0% | 5/5 | ok |
+| 7 | C# | 26.32 [26.19–26.43] | 26.28 | 100% | 27.5 | 1.01 | 0% | 5/5 | ok |
+| 8 | C++ | 26.34 [26.31–26.41] | 26.29 | 100% | 4.1 | 1.01 | 0% | 5/5 | ok |
+| 9 | Rust | 26.92 [26.91–26.96] | 26.87 | 100% | 2.3 | 1.03 | 0% | 5/5 | ok |
+| 10 | Pascal | 49.37 [49.35–49.47] | 49.29 | 100% | 0.7 | 1.89 | 0% | 5/5 | ok |
+| 11 | Python | 410.6 | 409.9 | 100% | 9.9 | 15.7 | 0% | 1/1 | ok |
 
 ![fannkuch-redux st official](benchmarks/wall-st-official-fannkuch-redux.svg)
 
@@ -616,8 +616,8 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 1 | Rust | 0.983 [0.965–0.986] | 14.65 | 1490% | 2.6 | 0.46 | 1% | 5/5 | ok |
 | 2 | C++ | 1.256 [1.251–1.286] | 13.45 | 1070% | 4.6 | 0.59 | 1% | 5/5 | ok |
-| 3 | C# | 1.709 [1.706–1.758] | 6.750 | 395% | 29.0 | 0.81 | 1% | 5/5 | ok |
-| 4 | Resid | 2.000 [1.975–2.045] | 20.33 | 1016% | 26.1 | 0.94 | 1% | 5/5 | ok |
+| 3 | Resid | 1.423 [1.415–1.436] | 22.26 | 1565% | 267 | 0.67 | 1% | 5/5 | ok |
+| 4 | C# | 1.709 [1.706–1.758] | 6.750 | 395% | 29.0 | 0.81 | 1% | 5/5 | ok |
 | 5 | C | 2.121 [2.118–2.125] | 8.390 | 396% | 1.9 | 1.00 | 0% | 5/5 | ok |
 | 6 | JavaScript | 2.416 [2.411–2.430] | 37.31 | 1544% | 291 | 1.14 | 0% | 5/5 | ok |
 | 7 | Java | 2.424 [2.373–2.476] | 36.19 | 1493% | 52.2 | 1.14 | 2% | 5/5 | ok |
@@ -634,16 +634,16 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | C++ | 0.775 [0.774–0.775] | 0.773 | 100% | 4.3 | 0.99 | 0% | 5/5 | ok |
-| 2 | C | 0.779 [0.778–0.780] | 0.777 | 100% | 2.5 | 1.00 | 0% | 5/5 | ok |
+| 1 | Resid | 0.520 [0.520–0.522] | 0.519 | 100% | 8.5 | 0.67 | 0% | 5/5 | ok |
+| 2 | C++ | 0.775 [0.774–0.775] | 0.773 | 100% | 4.3 | 0.99 | 0% | 5/5 | ok |
 | 3 | Fortran | 0.780 [0.780–0.781] | 0.778 | 100% | 3.3 | 1.00 | 0% | 5/5 | ok |
-| 4 | Pascal | 1.008 [1.005–1.010] | 1.006 | 100% | 0.7 | 1.29 | 0% | 5/5 | ok |
-| 5 | Rust | 1.009 [1.007–1.010] | 1.008 | 100% | 2.5 | 1.30 | 0% | 5/5 | ok |
-| 6 | Go | 1.018 [1.016–1.020] | 1.016 | 100% | 5.5 | 1.31 | 0% | 5/5 | ok |
-| 7 | C# | 1.025 [1.024–1.075] | 1.023 | 100% | 25.1 | 1.32 | 2% | 5/5 | ok |
-| 8 | Java | 1.054 [1.053–1.057] | 1.052 | 100% | 45.2 | 1.35 | 0% | 5/5 | ok |
-| 9 | JavaScript | 1.099 [1.083–1.114] | 1.097 | 100% | 60.1 | 1.41 | 1% | 5/5 | ok |
-| 10 | Resid | 1.165 [1.163–1.169] | 1.163 | 100% | 5.2 | 1.50 | 0% | 5/5 | ok |
+| 4 | C | 0.782 [0.781–0.788] | 0.780 | 100% | 2.4 | 1.00 | 0% | 5/5 | ok |
+| 5 | Pascal | 1.008 [1.005–1.010] | 1.006 | 100% | 0.7 | 1.29 | 0% | 5/5 | ok |
+| 6 | Rust | 1.009 [1.007–1.010] | 1.008 | 100% | 2.5 | 1.29 | 0% | 5/5 | ok |
+| 7 | Go | 1.018 [1.016–1.020] | 1.016 | 100% | 5.5 | 1.30 | 0% | 5/5 | ok |
+| 8 | C# | 1.025 [1.024–1.075] | 1.023 | 100% | 25.1 | 1.31 | 2% | 5/5 | ok |
+| 9 | Java | 1.054 [1.053–1.057] | 1.052 | 100% | 45.2 | 1.35 | 0% | 5/5 | ok |
+| 10 | JavaScript | 1.099 [1.083–1.114] | 1.097 | 100% | 60.1 | 1.41 | 1% | 5/5 | ok |
 | 11 | Python | 102.4 [102.3–104.3] | 102.3 | 100% | 10.8 | 131 | 1% | 3/3 | ok |
 
 ![spectral-norm st official](benchmarks/wall-st-official-spectral-norm.svg)
@@ -652,12 +652,12 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | Rust | 0.085 [0.084–0.125] | 1.303 | 1532% | 2.7 | 0.86 | 19% | 5/5 | ok |
-| 2 | Fortran | 0.091 [0.089–0.134] | 1.443 | 1579% | 3.6 | 0.92 | 20% | 5/5 | ok |
-| 3 | C++ | 0.095 [0.095–0.142] | 1.498 | 1574% | 4.6 | 0.96 | 20% | 5/5 | ok |
-| 4 | C | 0.099 [0.094–0.120] | 1.556 | 1565% | 2.3 | 1.00 | 11% | 5/5 | ok |
-| 5 | Pascal | 0.187 [0.186–0.190] | 2.916 | 1563% | 2.8 | 1.88 | 1% | 5/5 | ok |
-| 6 | Resid | 0.247 [0.229–0.260] | 2.709 | 1098% | 48.5 | 2.48 | 6% | 5/5 | ok |
+| 1 | Resid | 0.056 [0.055–0.059] | 0.633 | 1134% | 48.0 | 0.56 | 3% | 5/5 | ok |
+| 2 | Rust | 0.085 [0.084–0.125] | 1.303 | 1532% | 2.7 | 0.86 | 19% | 5/5 | ok |
+| 3 | Fortran | 0.091 [0.089–0.134] | 1.443 | 1579% | 3.6 | 0.92 | 20% | 5/5 | ok |
+| 4 | C++ | 0.095 [0.095–0.142] | 1.498 | 1574% | 4.6 | 0.96 | 20% | 5/5 | ok |
+| 5 | C | 0.099 [0.094–0.120] | 1.556 | 1565% | 2.3 | 1.00 | 11% | 5/5 | ok |
+| 6 | Pascal | 0.187 [0.186–0.190] | 2.916 | 1563% | 2.8 | 1.88 | 1% | 5/5 | ok |
 | 7 | Go | 0.292 [0.273–0.317] | 1.054 | 360% | 5.7 | 2.94 | 6% | 5/5 | ok |
 | 8 | Java | 0.294 [0.283–0.303] | 3.604 | 1224% | 48.8 | 2.96 | 3% | 5/5 | ok |
 | 9 | C# | 0.335 [0.271–0.338] | 4.607 | 1375% | 31.3 | 3.37 | 10% | 5/5 | ok |
@@ -673,14 +673,14 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 1 | C++ | 10.95 [10.94–10.95] | 10.93 | 100% | 34.5 | 1.00 | 0% | 5/5 | ok |
-| 2 | C | 10.98 [10.96–11.07] | 10.96 | 100% | 1.9 | 1.00 | 0% | 5/5 | ok |
-| 3 | Fortran | 10.99 [10.99–11.02] | 10.97 | 100% | 33.6 | 1.00 | 0% | 5/5 | ok |
+| 2 | Fortran | 10.99 [10.99–11.02] | 10.97 | 100% | 33.6 | 1.00 | 0% | 5/5 | ok |
+| 3 | C | 10.99 [10.98–11.05] | 10.97 | 100% | 1.9 | 1.00 | 0% | 5/5 | ok |
 | 4 | JavaScript | 11.00 [10.99–11.01] | 10.98 | 100% | 89.8 | 1.00 | 0% | 5/5 | ok |
-| 5 | Resid | 11.17 [11.17–11.18] | 11.16 | 100% | 2.0 | 1.02 | 0% | 5/5 | ok |
-| 6 | C# | 11.18 [11.17–11.19] | 11.15 | 100% | 31.2 | 1.02 | 0% | 5/5 | ok |
+| 5 | C# | 11.18 [11.17–11.19] | 11.15 | 100% | 31.2 | 1.02 | 0% | 5/5 | ok |
+| 6 | Resid | 11.20 [11.17–11.24] | 11.18 | 100% | 2.0 | 1.02 | 0% | 5/5 | ok |
 | 7 | Go | 11.27 [11.26–11.32] | 11.24 | 100% | 3.5 | 1.03 | 0% | 5/5 | ok |
-| 8 | Rust | 11.48 [11.47–11.48] | 11.46 | 100% | 32.8 | 1.05 | 0% | 5/5 | ok |
-| 9 | Java | 11.48 [11.47–11.48] | 11.46 | 100% | 45.1 | 1.05 | 0% | 5/5 | ok |
+| 8 | Rust | 11.48 [11.47–11.48] | 11.46 | 100% | 32.8 | 1.04 | 0% | 5/5 | ok |
+| 9 | Java | 11.48 [11.47–11.48] | 11.46 | 100% | 45.1 | 1.04 | 0% | 5/5 | ok |
 | 10 | Pascal | 26.55 [26.50–26.63] | 26.50 | 100% | 31.0 | 2.42 | 0% | 5/5 | ok |
 | 11 | Python | 469.1 | 468.3 | 100% | 40.7 | 42.7 | 0% | 1/1 | ok |
 
@@ -692,14 +692,14 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 1 | C++ | 0.174 [0.171–0.184] | 2.406 | 1385% | 35.0 | 0.71 | 3% | 5/5 | ok |
 | 2 | Rust | 0.192 [0.191–0.197] | 2.843 | 1477% | 33.4 | 0.78 | 1% | 5/5 | ok |
-| 3 | C | 0.246 [0.244–0.249] | 3.625 | 1472% | 33.1 | 1.00 | 1% | 5/5 | ok |
-| 4 | C# | 0.367 [0.293–0.399] | 5.050 | 1375% | 65.4 | 1.49 | 11% | 5/5 | ok |
-| 5 | Fortran | 0.573 [0.558–0.645] | 3.080 | 537% | 34.0 | 2.33 | 6% | 5/5 | ok |
-| 6 | Go | 0.605 [0.600–0.606] | 9.322 | 1542% | 48.8 | 2.45 | 0% | 5/5 | ok |
-| 7 | Java | 0.799 [0.784–0.823] | 12.14 | 1519% | 97.4 | 3.24 | 2% | 5/5 | ok |
-| 8 | JavaScript | 0.849 [0.832–0.856] | 11.78 | 1388% | 350 | 3.45 | 1% | 5/5 | ok |
-| 9 | Pascal | 0.902 [0.803–0.919] | 12.56 | 1392% | 32.9 | 3.66 | 6% | 5/5 | ok |
-| 10 | Resid | 1.372 [1.358–1.379] | 16.49 | 1202% | 540 | 5.57 | 1% | 5/5 | ok |
+| 3 | Resid | 0.244 [0.241–0.265] | 2.584 | 1057% | 646 | 0.99 | 4% | 5/5 | ok |
+| 4 | C | 0.246 [0.244–0.249] | 3.625 | 1472% | 33.1 | 1.00 | 1% | 5/5 | ok |
+| 5 | C# | 0.367 [0.293–0.399] | 5.050 | 1375% | 65.4 | 1.49 | 11% | 5/5 | ok |
+| 6 | Fortran | 0.573 [0.558–0.645] | 3.080 | 537% | 34.0 | 2.33 | 6% | 5/5 | ok |
+| 7 | Go | 0.605 [0.600–0.606] | 9.322 | 1542% | 48.8 | 2.45 | 0% | 5/5 | ok |
+| 8 | Java | 0.799 [0.784–0.823] | 12.14 | 1519% | 97.4 | 3.24 | 2% | 5/5 | ok |
+| 9 | JavaScript | 0.849 [0.832–0.856] | 11.78 | 1388% | 350 | 3.45 | 1% | 5/5 | ok |
+| 10 | Pascal | 0.902 [0.803–0.919] | 12.56 | 1392% | 32.9 | 3.66 | 6% | 5/5 | ok |
 | 11 | Python | 55.28 [51.05–56.05] | 872.4 | 1578% | 18.2 | 224 | 4% | 5/5 | ok |
 
 ![mandelbrot best official](benchmarks/wall-best-official-mandelbrot.svg)
@@ -711,16 +711,16 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 1 | Java | 1.598 [1.597–1.601] | 1.592 | 100% | 587 | 0.24 | 0% | 5/5 | ok |
-| 2 | Resid | 2.133 [2.089–2.157] | 2.127 | 100% | 259 | 0.32 | 1% | 5/5 | ok |
-| 3 | C | 6.646 [6.567–6.795] | 6.632 | 100% | 258 | 1.00 | 1% | 5/5 | ok |
-| 4 | Fortran | 7.071 [7.016–7.117] | 7.055 | 100% | 259 | 1.06 | 1% | 5/5 | ok |
-| 5 | Pascal | 7.688 [7.685–7.742] | 7.669 | 100% | 256 | 1.16 | 0% | 5/5 | ok |
-| 6 | C++ | 8.216 [8.114–8.298] | 8.199 | 100% | 260 | 1.24 | 1% | 5/5 | ok |
-| 7 | JavaScript | 9.249 [9.202–9.380] | 9.218 | 100% | 1478 | 1.39 | 1% | 5/5 | ok |
-| 8 | C# | 9.323 [9.238–9.480] | 9.266 | 99% | 544 | 1.40 | 1% | 5/5 | ok |
-| 9 | Rust | 10.28 [10.15–10.30] | 10.26 | 100% | 258 | 1.55 | 1% | 5/5 | ok |
-| 10 | Go | 12.17 [12.11–12.32] | 12.14 | 100% | 278 | 1.83 | 1% | 5/5 | ok |
-| 11 | Python | 275.3 [275.3–275.4] | 274.8 | 100% | 396 | 41.4 | 0% | 3/3 | ok |
+| 2 | Resid | 2.099 [2.091–2.186] | 2.093 | 100% | 259 | 0.32 | 2% | 5/5 | ok |
+| 3 | C | 6.522 [6.513–6.583] | 6.506 | 100% | 258 | 1.00 | 0% | 5/5 | ok |
+| 4 | Fortran | 7.071 [7.016–7.117] | 7.055 | 100% | 259 | 1.08 | 1% | 5/5 | ok |
+| 5 | Pascal | 7.688 [7.685–7.742] | 7.669 | 100% | 256 | 1.18 | 0% | 5/5 | ok |
+| 6 | C++ | 8.216 [8.114–8.298] | 8.199 | 100% | 260 | 1.26 | 1% | 5/5 | ok |
+| 7 | JavaScript | 9.249 [9.202–9.380] | 9.218 | 100% | 1478 | 1.42 | 1% | 5/5 | ok |
+| 8 | C# | 9.323 [9.238–9.480] | 9.266 | 99% | 544 | 1.43 | 1% | 5/5 | ok |
+| 9 | Rust | 10.28 [10.15–10.30] | 10.26 | 100% | 258 | 1.58 | 1% | 5/5 | ok |
+| 10 | Go | 12.17 [12.11–12.32] | 12.14 | 100% | 278 | 1.87 | 1% | 5/5 | ok |
+| 11 | Python | 275.3 [275.3–275.4] | 274.8 | 100% | 396 | 42.2 | 0% | 3/3 | ok |
 
 ![binary-trees st official](benchmarks/wall-st-official-binary-trees.svg)
 
@@ -732,7 +732,7 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | 2 | Fortran | 0.290 [0.283–0.311] | 1.836 | 634% | 132 | 0.10 | 4% | 5/5 | ok |
 | 3 | C++ | 0.334 [0.318–0.339] | 4.418 | 1323% | 583 | 0.12 | 2% | 5/5 | ok |
 | 4 | Pascal | 0.392 [0.320–0.404] | 1.883 | 480% | 130 | 0.14 | 9% | 5/5 | ok |
-| 5 | Resid | 0.554 [0.527–0.587] | 3.268 | 589% | 314 | 0.20 | 4% | 5/5 | ok |
+| 5 | Resid | 0.469 [0.458–0.480] | 3.001 | 640% | 683 | 0.17 | 2% | 5/5 | ok |
 | 6 | Java | 0.861 [0.824–0.885] | 6.822 | 792% | 5973 | 0.31 | 3% | 5/5 | ok |
 | 7 | Go | 2.218 [2.191–2.226] | 26.84 | 1210% | 620 | 0.79 | 1% | 5/5 | ok |
 | 8 | JavaScript | 2.423 [2.378–2.509] | 10.96 | 452% | 1163 | 0.86 | 2% | 5/5 | ok |
@@ -748,17 +748,17 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | Rust | 2.210 [2.206–2.215] | 2.206 | 100% | 2.3 | 0.91 | 0% | 5/5 | ok |
-| 2 | Resid | 2.290 [2.284–2.294] | 2.285 | 100% | 3.1 | 0.95 | 0% | 5/5 | ok |
+| 1 | Rust | 2.210 [2.206–2.215] | 2.206 | 100% | 2.3 | 0.92 | 0% | 5/5 | ok |
+| 2 | Resid | 2.276 [2.269–2.280] | 2.270 | 100% | 3.1 | 0.94 | 0% | 5/5 | ok |
 | 3 | Go | 2.339 [2.327–2.351] | 2.334 | 100% | 5.4 | 0.97 | 0% | 5/5 | ok |
-| 4 | C++ | 2.384 [2.376–2.391] | 2.380 | 100% | 4.0 | 0.98 | 0% | 5/5 | ok |
-| 5 | C | 2.421 [2.412–2.425] | 2.416 | 100% | 1.8 | 1.00 | 0% | 5/5 | ok |
-| 6 | Fortran | 2.524 [2.520–2.529] | 2.519 | 100% | 2.9 | 1.04 | 0% | 5/5 | ok |
+| 4 | C++ | 2.384 [2.376–2.391] | 2.380 | 100% | 4.0 | 0.99 | 0% | 5/5 | ok |
+| 5 | C | 2.415 [2.410–2.417] | 2.409 | 100% | 1.8 | 1.00 | 0% | 5/5 | ok |
+| 6 | Fortran | 2.524 [2.520–2.529] | 2.519 | 100% | 2.9 | 1.05 | 0% | 5/5 | ok |
 | 7 | C# | 2.541 [2.539–2.561] | 2.534 | 100% | 28.6 | 1.05 | 0% | 5/5 | ok |
 | 8 | Java | 2.855 [2.600–2.858] | 2.848 | 100% | 45.8 | 1.18 | 5% | 5/5 | ok |
-| 9 | Pascal | 3.061 [3.059–3.065] | 3.055 | 100% | 0.7 | 1.26 | 0% | 5/5 | ok |
+| 9 | Pascal | 3.061 [3.059–3.065] | 3.055 | 100% | 0.7 | 1.27 | 0% | 5/5 | ok |
 | 10 | JavaScript | 3.216 [3.206–3.255] | 3.209 | 100% | 58.6 | 1.33 | 1% | 5/5 | ok |
-| 11 | Python | 21.76 [21.41–21.96] | 21.72 | 100% | 10.5 | 8.99 | 1% | 5/5 | ok |
+| 11 | Python | 21.76 [21.41–21.96] | 21.72 | 100% | 10.5 | 9.01 | 1% | 5/5 | ok |
 
 ![fasta st official](benchmarks/wall-st-official-fasta.svg)
 
@@ -766,15 +766,15 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | Rust | 0.495 [0.492–0.546] | 0.978 | 198% | 3.0 | 0.95 | 5% | 5/5 | ok |
-| 2 | C | 0.523 [0.519–0.526] | 0.522 | 100% | 1.8 | 1.00 | 0% | 5/5 | ok |
-| 3 | C# | 0.555 [0.551–0.571] | 0.564 | 102% | 29.3 | 1.06 | 1% | 5/5 | ok |
-| 4 | C++ | 0.597 [0.577–0.600] | 2.426 | 406% | 5.3 | 1.14 | 2% | 5/5 | ok |
-| 5 | Go | 0.628 [0.606–0.642] | 2.260 | 360% | 16.1 | 1.20 | 2% | 5/5 | ok |
-| 6 | Fortran | 0.666 [0.657–0.692] | 0.664 | 100% | 3.0 | 1.27 | 2% | 5/5 | ok |
-| 7 | Java | 0.736 [0.727–0.788] | 2.758 | 375% | 56.6 | 1.41 | 3% | 5/5 | ok |
-| 8 | JavaScript | 1.071 [1.050–1.079] | 3.534 | 330% | 184 | 2.05 | 1% | 5/5 | ok |
-| 9 | Resid | 2.317 [2.315–2.324] | 2.313 | 100% | 3.1 | 4.43 | 0% | 5/5 | ok |
+| 1 | Resid | 0.140 [0.133–0.186] | 0.975 | 697% | 281 | 0.27 | 14% | 5/5 | ok |
+| 2 | Rust | 0.495 [0.492–0.546] | 0.978 | 198% | 3.0 | 0.95 | 5% | 5/5 | ok |
+| 3 | C | 0.523 [0.519–0.526] | 0.522 | 100% | 1.8 | 1.00 | 0% | 5/5 | ok |
+| 4 | C# | 0.555 [0.551–0.571] | 0.564 | 102% | 29.3 | 1.06 | 1% | 5/5 | ok |
+| 5 | C++ | 0.597 [0.577–0.600] | 2.426 | 406% | 5.3 | 1.14 | 2% | 5/5 | ok |
+| 6 | Go | 0.628 [0.606–0.642] | 2.260 | 360% | 16.1 | 1.20 | 2% | 5/5 | ok |
+| 7 | Fortran | 0.666 [0.657–0.692] | 0.664 | 100% | 3.0 | 1.27 | 2% | 5/5 | ok |
+| 8 | Java | 0.736 [0.727–0.788] | 2.758 | 375% | 56.6 | 1.41 | 3% | 5/5 | ok |
+| 9 | JavaScript | 1.071 [1.050–1.079] | 3.534 | 330% | 184 | 2.05 | 1% | 5/5 | ok |
 | 10 | Pascal | 2.385 [2.382–2.410] | 2.380 | 100% | 0.6 | 4.56 | 1% | 5/5 | ok |
 | 11 | Python | 11.39 [11.39–11.48] | 23.19 | 204% | 214 | 21.8 | 0% | 5/5 | ok |
 
@@ -787,15 +787,15 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 1 | Fortran | 3.480 [3.469–3.506] | 3.473 | 100% | 367 | 0.83 | 0% | 5/5 | ok |
-| 2 | C | 4.169 [4.130–4.177] | 4.160 | 100% | 132 | 1.00 | 0% | 5/5 | ok |
-| 3 | C++ | 4.862 [4.842–4.885] | 4.850 | 100% | 129 | 1.17 | 0% | 5/5 | ok |
-| 4 | Resid | 5.793 [5.703–5.809] | 5.781 | 100% | 265 | 1.39 | 1% | 5/5 | ok |
-| 5 | Rust | 10.91 [10.86–10.99] | 10.89 | 100% | 135 | 2.62 | 0% | 5/5 | ok |
-| 6 | Pascal | 14.89 [14.87–14.90] | 14.85 | 100% | 139 | 3.57 | 0% | 5/5 | ok |
-| 7 | C# | 17.56 [17.47–17.61] | 17.51 | 100% | 757 | 4.21 | 0% | 5/5 | ok |
-| 8 | Go | 22.39 [22.28–22.45] | 22.35 | 100% | 368 | 5.37 | 0% | 5/5 | ok |
+| 2 | C | 4.181 [4.171–4.212] | 4.169 | 100% | 133 | 1.00 | 0% | 5/5 | ok |
+| 3 | Resid | 4.789 [4.760–4.822] | 4.778 | 100% | 265 | 1.15 | 0% | 5/5 | ok |
+| 4 | C++ | 4.862 [4.842–4.885] | 4.850 | 100% | 129 | 1.16 | 0% | 5/5 | ok |
+| 5 | Rust | 10.91 [10.86–10.99] | 10.89 | 100% | 135 | 2.61 | 0% | 5/5 | ok |
+| 6 | Pascal | 14.89 [14.87–14.90] | 14.85 | 100% | 139 | 3.56 | 0% | 5/5 | ok |
+| 7 | C# | 17.56 [17.47–17.61] | 17.51 | 100% | 757 | 4.20 | 0% | 5/5 | ok |
+| 8 | Go | 22.39 [22.28–22.45] | 22.35 | 100% | 368 | 5.36 | 0% | 5/5 | ok |
 | 9 | Java | 47.12 [46.39–49.20] | 47.00 | 100% | 827 | 11.3 | 2% | 5/5 | ok |
-| 10 | JavaScript | 49.49 [49.19–50.88] | 49.39 | 100% | 707 | 11.9 | 2% | 5/5 | ok |
+| 10 | JavaScript | 49.49 [49.19–50.88] | 49.39 | 100% | 707 | 11.8 | 2% | 5/5 | ok |
 | 11 | Python | 76.81 [76.24–77.03] | 76.67 | 100% | 493 | 18.4 | 1% | 3/3 | ok |
 
 ![k-nucleotide st official](benchmarks/wall-st-official-k-nucleotide.svg)
@@ -810,7 +810,7 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | 4 | Java | 1.209 [1.146–1.275] | 11.38 | 941% | 518 | 1.12 | 4% | 5/5 | ok |
 | 5 | Go | 1.236 [1.225–1.243] | 15.68 | 1269% | 174 | 1.15 | 1% | 5/5 | ok |
 | 6 | C# | 1.382 [1.369–1.410] | 5.254 | 380% | 189 | 1.28 | 1% | 5/5 | ok |
-| 7 | Resid | 2.077 [1.967–2.190] | 9.005 | 433% | 284 | 1.93 | 4% | 5/5 | ok |
+| 7 | Resid | 1.751 [1.689–1.830] | 6.991 | 399% | 284 | 1.62 | 3% | 5/5 | ok |
 | 8 | Fortran | 2.290 [2.142–2.538] | 3.950 | 172% | 5245 | 2.13 | 6% | 5/5 | ok |
 | 9 | JavaScript | 6.479 [6.434–6.924] | 20.54 | 317% | 447 | 6.01 | 3% | 5/5 | ok |
 | 10 | Pascal | 7.557 [7.225–7.758] | 17.15 | 227% | 10656 | 7.01 | 3% | 5/5 | ok |
@@ -824,17 +824,17 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | C | 0.203 [0.188–0.208] | 0.202 | 100% | 487 | 1.00 | 5% | 5/5 | ok |
-| 2 | Go | 0.214 [0.211–0.220] | 0.213 | 100% | 683 | 1.05 | 2% | 5/5 | ok |
-| 3 | Rust | 0.223 [0.222–0.224] | 0.222 | 100% | 486 | 1.10 | 1% | 5/5 | ok |
-| 4 | Fortran | 0.319 [0.313–0.324] | 0.318 | 100% | 488 | 1.57 | 1% | 5/5 | ok |
-| 5 | C# | 0.368 [0.360–0.381] | 0.367 | 100% | 990 | 1.81 | 2% | 5/5 | ok |
-| 6 | C++ | 0.423 [0.419–0.497] | 0.421 | 99% | 488 | 2.08 | 8% | 5/5 | ok |
-| 7 | Resid | 0.441 [0.435–0.469] | 0.439 | 100% | 488 | 2.17 | 3% | 5/5 | ok |
-| 8 | Java | 0.525 [0.522–0.529] | 0.523 | 100% | 1488 | 2.58 | 0% | 5/5 | ok |
-| 9 | JavaScript | 0.567 [0.559–0.572] | 0.565 | 100% | 664 | 2.79 | 1% | 5/5 | ok |
-| 10 | Pascal | 0.595 [0.591–0.598] | 0.593 | 100% | 503 | 2.93 | 0% | 5/5 | ok |
-| 11 | Python | 1.111 [1.111–1.116] | 1.107 | 100% | 836 | 5.47 | 0% | 5/5 | ok |
+| 1 | C | 0.188 [0.184–0.202] | 0.187 | 100% | 487 | 1.00 | 5% | 5/5 | ok |
+| 2 | Go | 0.214 [0.211–0.220] | 0.213 | 100% | 683 | 1.14 | 2% | 5/5 | ok |
+| 3 | Rust | 0.223 [0.222–0.224] | 0.222 | 100% | 486 | 1.19 | 1% | 5/5 | ok |
+| 4 | Fortran | 0.319 [0.313–0.324] | 0.318 | 100% | 488 | 1.70 | 1% | 5/5 | ok |
+| 5 | C# | 0.368 [0.360–0.381] | 0.367 | 100% | 990 | 1.96 | 2% | 5/5 | ok |
+| 6 | C++ | 0.423 [0.419–0.497] | 0.421 | 99% | 488 | 2.26 | 8% | 5/5 | ok |
+| 7 | Resid | 0.445 [0.438–0.447] | 0.443 | 100% | 488 | 2.37 | 1% | 5/5 | ok |
+| 8 | Java | 0.525 [0.522–0.529] | 0.523 | 100% | 1488 | 2.80 | 0% | 5/5 | ok |
+| 9 | JavaScript | 0.567 [0.559–0.572] | 0.565 | 100% | 664 | 3.02 | 1% | 5/5 | ok |
+| 10 | Pascal | 0.595 [0.591–0.598] | 0.593 | 100% | 503 | 3.17 | 0% | 5/5 | ok |
+| 11 | Python | 1.111 [1.111–1.116] | 1.107 | 100% | 836 | 5.92 | 0% | 5/5 | ok |
 
 ![reverse-complement st official](benchmarks/wall-st-official-reverse-complement.svg)
 
@@ -849,9 +849,9 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | 5 | Go | 0.120 [0.117–0.124] | 0.362 | 303% | 160 | 1.40 | 2% | 5/5 | ok |
 | 6 | Fortran | 0.253 [0.248–0.257] | 0.252 | 100% | 244 | 2.95 | 1% | 5/5 | ok |
 | 7 | Java | 0.270 [0.269–0.277] | 0.354 | 131% | 538 | 3.15 | 1% | 5/5 | ok |
-| 8 | Pascal | 0.322 [0.316–0.335] | 0.321 | 100% | 129 | 3.77 | 3% | 5/5 | ok |
-| 9 | Python | 0.352 [0.345–0.375] | 0.507 | 144% | 378 | 4.12 | 3% | 5/5 | ok |
-| 10 | Resid | 0.397 [0.395–0.403] | 0.602 | 152% | 1049 | 4.64 | 1% | 5/5 | ok |
+| 8 | Resid | 0.273 [0.267–0.277] | 1.586 | 581% | 1005 | 3.19 | 1% | 5/5 | ok |
+| 9 | Pascal | 0.322 [0.316–0.335] | 0.321 | 100% | 129 | 3.77 | 3% | 5/5 | ok |
+| 10 | Python | 0.352 [0.345–0.375] | 0.507 | 144% | 378 | 4.12 | 3% | 5/5 | ok |
 | 11 | JavaScript | 1.924 [1.912–2.089] | 2.014 | 105% | 232 | 22.5 | 4% | 5/5 | ok |
 
 ![reverse-complement best official](benchmarks/wall-best-official-reverse-complement.svg)
@@ -862,17 +862,17 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | Fortran | 0.399 [0.398–0.399] | 0.398 | 100% | 4.0 | 1.00 | 0% | 5/5 | ok |
-| 2 | Pascal | 0.399 [0.398–0.400] | 0.398 | 100% | 3.2 | 1.00 | 0% | 5/5 | ok |
-| 3 | C | 0.399 [0.399–0.400] | 0.398 | 100% | 2.9 | 1.00 | 0% | 5/5 | ok |
-| 4 | C++ | 0.400 [0.399–0.400] | 0.399 | 100% | 5.0 | 1.00 | 0% | 5/5 | ok |
-| 5 | Rust | 0.418 [0.417–0.429] | 0.417 | 100% | 3.3 | 1.05 | 1% | 5/5 | ok |
-| 6 | Resid | 0.434 [0.433–0.436] | 0.433 | 100% | 4.8 | 1.09 | 0% | 5/5 | ok |
-| 7 | Go | 0.822 [0.820–0.823] | 0.819 | 100% | 10.5 | 2.06 | 0% | 5/5 | ok |
-| 8 | Java | 1.783 [1.780–1.792] | 1.778 | 100% | 57.5 | 4.47 | 0% | 5/5 | ok |
-| 9 | Python | 1.837 [1.836–1.839] | 1.833 | 100% | 10.7 | 4.60 | 0% | 5/5 | ok |
-| 10 | C# | 2.473 [2.451–2.515] | 2.462 | 100% | 41.3 | 6.20 | 1% | 5/5 | ok |
-| 11 | JavaScript | 4.754 [4.712–4.969] | 4.743 | 100% | 123 | 11.9 | 2% | 5/5 | ok |
+| 1 | Fortran | 0.399 [0.398–0.399] | 0.398 | 100% | 4.0 | 0.99 | 0% | 5/5 | ok |
+| 2 | Pascal | 0.399 [0.398–0.400] | 0.398 | 100% | 3.2 | 0.99 | 0% | 5/5 | ok |
+| 3 | C++ | 0.400 [0.399–0.400] | 0.399 | 100% | 5.0 | 1.00 | 0% | 5/5 | ok |
+| 4 | C | 0.402 [0.401–0.402] | 0.401 | 100% | 2.9 | 1.00 | 0% | 5/5 | ok |
+| 5 | Rust | 0.418 [0.417–0.429] | 0.417 | 100% | 3.3 | 1.04 | 1% | 5/5 | ok |
+| 6 | Resid | 0.437 [0.436–0.438] | 0.436 | 100% | 4.8 | 1.09 | 0% | 5/5 | ok |
+| 7 | Go | 0.822 [0.820–0.823] | 0.819 | 100% | 10.5 | 2.05 | 0% | 5/5 | ok |
+| 8 | Java | 1.783 [1.780–1.792] | 1.778 | 100% | 57.5 | 4.44 | 0% | 5/5 | ok |
+| 9 | Python | 1.837 [1.836–1.839] | 1.833 | 100% | 10.7 | 4.57 | 0% | 5/5 | ok |
+| 10 | C# | 2.473 [2.451–2.515] | 2.462 | 100% | 41.3 | 6.16 | 1% | 5/5 | ok |
+| 11 | JavaScript | 4.754 [4.712–4.969] | 4.743 | 100% | 123 | 11.8 | 2% | 5/5 | ok |
 
 ![pidigits st official](benchmarks/wall-st-official-pidigits.svg)
 
@@ -888,7 +888,7 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | 6 | Go | 0.421 [0.417–0.426] | 0.422 | 100% | 8.6 | 1.13 | 1% | 5/5 | ok |
 | 7 | C# | 0.421 [0.420–0.469] | 0.422 | 100% | 28.3 | 1.13 | 5% | 5/5 | ok |
 | 8 | Java | 0.425 [0.422–0.429] | 0.448 | 105% | 46.5 | 1.14 | 1% | 5/5 | ok |
-| 9 | Resid | 0.458 [0.455–0.461] | 0.456 | 100% | 4.8 | 1.23 | 1% | 5/5 | ok |
+| 9 | Resid | 0.431 [0.427–0.431] | 0.430 | 100% | 4.8 | 1.16 | 0% | 5/5 | ok |
 | 10 | Python | 0.549 [0.548–0.554] | 0.548 | 100% | 15.9 | 1.48 | 0% | 5/5 | ok |
 | 11 | JavaScript | 4.706 [4.613–4.806] | 4.719 | 100% | 127 | 12.7 | 2% | 5/5 | ok |
 
@@ -901,12 +901,12 @@ Wall time is the median with its 95% bootstrap CI in brackets; CPU is median use
 | # | Language | wall s [95% CI] | CPU s | util | RSS MiB | vs C | CV | runs | status |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 1 | Rust | 0.574 [0.573–0.589] | 0.572 | 100% | 153 | 0.36 | 1% | 5/5 | ok |
-| 2 | C | 1.601 [1.597–1.609] | 1.597 | 100% | 153 | 1.00 | 0% | 5/5 | ok |
+| 2 | C | 1.607 [1.605–1.615] | 1.603 | 100% | 153 | 1.00 | 0% | 5/5 | ok |
 | 3 | Fortran | 1.655 [1.653–1.658] | 1.651 | 100% | 104 | 1.03 | 0% | 5/5 | ok |
 | 4 | JavaScript | 1.733 [1.730–1.739] | 1.727 | 100% | 636 | 1.08 | 0% | 5/5 | ok |
-| 5 | C# | 2.075 [2.072–2.121] | 2.064 | 99% | 783 | 1.30 | 1% | 5/5 | ok |
-| 6 | Python | 6.067 [6.027–6.336] | 6.054 | 100% | 372 | 3.79 | 2% | 5/5 | ok |
-| 7 | Java | 6.576 [6.539–6.648] | 6.562 | 100% | 952 | 4.11 | 1% | 5/5 | ok |
+| 5 | C# | 2.075 [2.072–2.121] | 2.064 | 99% | 783 | 1.29 | 1% | 5/5 | ok |
+| 6 | Python | 6.067 [6.027–6.336] | 6.054 | 100% | 372 | 3.78 | 2% | 5/5 | ok |
+| 7 | Java | 6.576 [6.539–6.648] | 6.562 | 100% | 952 | 4.09 | 1% | 5/5 | ok |
 | 8 | Go | 16.68 [16.64–16.79] | 16.65 | 100% | 274 | 10.4 | 0% | 5/5 | ok |
 | 9 | Pascal | 18.29 [18.16–18.31] | 18.25 | 100% | 247 | 11.4 | 0% | 5/5 | ok |
 | 10 | C++ | 20.04 [20.02–20.13] | 20.00 | 100% | 197 | 12.5 | 0% | 5/5 | ok |
@@ -1052,14 +1052,8 @@ Deviations and workarounds:
   structs: Resid has no mutable records/arrays and a list or record per
   step would be allocated and never freed (50M steps). The ten pair
   interactions are unrolled mechanically in reference order (i < j).
-- Resid has no `sqrt`. `sqrt_fix` computes a correctly rounded square root
-  in pure Resid: Newton iteration to within ~1 ulp, then an exact residual
-  `d - x*x` via Dekker's two-product (Veltkamp split) and one final
-  correction. Verified bit-identical to C `sqrt` on 20000 random inputs.
-  In the hot loop Newton starts from the same pair's distance one step
-  earlier (carried as 10 extra scalar parameters), so two iterations
-  suffice; the setup and the energy reports use a general range-reduced
-  version.
+- `sqrt` is the builtin correctly rounded IEEE square root (one
+  `sqrtsd`), as in the C program.
 - Resid has no `printf`; `fmt9` formats `%.9f` exactly (fraction scaled by
   1e9 in `Float(128)`, round half to even on the exact binary value).
 
@@ -1080,8 +1074,9 @@ General Resid constraints that shape this port (see the source header too):
 - Compiled with the default `-O2` (`build/boot/stage2.bin`, which links the
   runtime with `clang -O2`).
 
-Measured (this host): size 5000000 0.32 s, 7.8 MB peak RSS; size
-50000000 3.06 s, 8.1 MB (output identical to C).
+Measured (this host, 2026-09-27): size 50000000 1.45 s pinned to CPU 2
+(C: 1.87 s), output identical to C. Before the `sqrt` builtin the program
+computed the root with Newton iterations and a Dekker correction: 2.81 s.
 
 </details>
 
@@ -1444,8 +1439,13 @@ Deviations and workarounds:
   fixed offset, both inlined into the loop by the LTO link. Each element is
   still a heap-boxed `Float`, and each of the 40 matrix-vector products
   allocates a fresh vector that is never freed.
-- No `sqrt` builtin: correctly rounded Newton + Dekker residual correction
-  in pure Resid (`sqrt_fix`, same helper as nbody).
+- Four rows at a time: `lanes_a`/`lanes_at` walk j once for rows
+  i .. i + 3, keeping four independent sums, each added in the reference
+  order (the C programs of the Benchmarks Game do the same with two rows
+  per SSE register). The A entries are computed with Float index
+  arithmetic, which is exact here ((i + j + 1)^2 < 2^53) and gives the same
+  values as the Int formula without per-operation overflow checks.
+- `sqrt` is the builtin IEEE square root.
 - No `printf`: `fmt9` formats `%.9f` exactly via `Float(128)`.
 
 General Resid constraints that shape this port (see the source header too):
@@ -1465,11 +1465,9 @@ General Resid constraints that shape this port (see the source header too):
 - Compiled with the default `-O2` (`build/boot/stage2.bin`, which links the
   runtime with `clang -O2`).
 
-Measured (this host), size 5500: 5.40 s and 116 MB peak RSS with the
-original trie-backed lists and a non-LTO link; 1.08 s and 47 MB after the
-LTO link and flat lists (C `-O2`: 0.78 s). The remaining gap is mostly
-that gcc vectorises the C inner loop's division (`divpd`) over a flat
-`double[]`, while Resid's loop reads boxed elements one at a time.
+Measured (this host, 2026-09-27), size 5500 pinned to CPU 2: 0.52 s
+(C `-O2`: 0.78 s; one row at a time with Int indices: 1.17 s). Output
+identical to C.
 
 </details>
 
@@ -2906,7 +2904,7 @@ Free Pascal 3.2.2 stands in for Delphi/Object Pascal. Single-threaded, no SIMD i
 
 Same program as `../../../st/nbody/resid/nbody.resid` (see that cell's
 NOTES.md for the algorithm and every workaround), compiled with `-O3`
-(the Resid driver passes `-O3` to clang; it adds no `-march` flag).
+`-O3 -march=native`, like the other languages' best cells.
 
 No parallel variant: the algorithm is a sequential time integration (each step depends on the last), so there is nothing for concurrent `spawn`
 regions to share. Resid has no SIMD types or intrinsics either.
@@ -3110,12 +3108,12 @@ Build: Benchmarks Game flags, `fpc -XXs -O3 -Ci- -Cr- -g- -CpCOREAVX -CfAVX -Tli
 #### fannkuch-redux (Resid, best)
 
 The single-threaded program (`../../../st/fannkuch-redux/resid/`, see its NOTES.md for
-the algorithm and every workaround) made parallel: the n blocks of (n-1)! permutations, one per top-level rotation, run on concurrent `spawn` regions; block k starts from the identity rotated k times, and since (n-1)! is even each block's local sign parity is the global one, so the checksums add and the flip counts take the maximum. Compiled with
-`-O3` (the Resid driver adds no `-march` flag; Resid has no SIMD types or
-intrinsics).
+the algorithm and every workaround) made parallel: the n * (n-1) blocks of (n-2)! permutations, one per pair of top-level rotations, run on concurrent `spawn` regions (132 at n = 12, so 16 hardware threads stay busy to the end); block (k1, k2) starts from the identity with the first n elements rotated k1 times and then the first n-1 rotated k2 times, and since (n-2)! is even each block's local sign parity is the global one, so the checksums add and the flip counts take the maximum. Compiled with
+`-O3 -march=native`, like the other languages' best cells (Resid has no
+SIMD types or intrinsics).
 
 `spawn` regions run concurrently and are joined before the scope that
-started them ends (spec §19). Measured on this host (2026-09-27): 15.4 s -> 2.2 s at 12
+started them ends (spec §19). Measured on this host (2026-09-27): 15.2 s -> 1.41 s at 12 (1.92 s with n blocks)
 (single-threaded -> this program). Output identical to C.
 
 </details>
@@ -3319,14 +3317,17 @@ Build: Benchmarks Game flags, `fpc -XXs -O3 -Ci- -Cr- -g- -CpCOREAVX -CfAVX -Tli
 
 #### spectral-norm (Resid, best)
 
-The single-threaded program (`../../../st/spectral-norm/resid/`, see its NOTES.md for
-the algorithm and every workaround) made parallel: each matrix-vector product is cut into 16 row chunks computed by concurrent `spawn` regions; every row is summed in the reference order, so the result is identical to the single-threaded program. Compiled with
-`-O3` (the Resid driver adds no `-march` flag; Resid has no SIMD types or
-intrinsics).
+The single-threaded program's algorithm (`../../../st/spectral-norm/resid/`,
+see its NOTES.md), made parallel: each matrix-vector product is cut into 16
+row chunks computed by concurrent `spawn` regions. Inside a chunk, 8 rows
+are computed at once as 8 independent sums (each in the reference order
+over j), which clang's SLP vectorizer packs into AVX-512 registers with
+`-march=native`, like the other languages' best cells; Resid has no SIMD
+types. Every row is summed in the reference order, so the result is
+identical to the single-threaded program.
 
-`spawn` regions run concurrently and are joined before the scope that
-started them ends (spec §19). Measured on this host (2026-09-27): 1.14 s -> 0.24 s at 5500
-(single-threaded -> this program). Output identical to C.
+Measured on this host (2026-09-27): 0.055 s at 5500 (was 0.24 s with one
+row at a time and Int indices). Output identical to C.
 
 </details>
 
@@ -3526,14 +3527,26 @@ Build: Benchmarks Game flags, `fpc -XXs -O3 -Ci- -Cr- -g- -CpCOREAVX -CfAVX -Tli
 
 #### mandelbrot (Resid, best)
 
-The single-threaded program (`../../../st/mandelbrot/resid/`, see its NOTES.md for
-the algorithm and every workaround) made parallel: the image is cut into bands of 32 rows; waves of 16 bands (the host's hardware threads) are computed by concurrent `spawn` regions, started through a recursion that waits for each band on the way back so the bands are printed in order. Compiled with
-`-O3` (the Resid driver adds no `-march` flag; Resid has no SIMD types or
-intrinsics).
+The st program's algorithm (`../../../st/mandelbrot/resid/`, see its
+NOTES.md for the output workarounds), made data-parallel and parallel:
 
-`spawn` regions run concurrently and are joined before the scope that
-started them ends (spec §19). Measured on this host (2026-09-27): 11.1 s -> 1.36 s at 16000
-(single-threaded -> this program). Output identical to C.
+- **16 pixels in lockstep.** `iterk` iterates 16 pixels of a row as 16
+  independent scalar chains in one tail-recursive loop; clang's SLP
+  vectorizer packs them into AVX-512/AVX2 registers (`-march=native`).
+  Resid has no SIMD types; the program only lays the work out so the
+  vectorizer can find it.
+- **No per-step escape test.** For |c| < 2 an orbit with |z| > 2 grows
+  without bound, so "escaped at some step" equals "not |z_50|^2 <= 4"
+  (an overflow to inf or NaN compares false), the test of the fastest C
+  programs. Every 5 steps the block stops once all 16 pixels have
+  escaped. Results are identical to the per-step test.
+- **Bands in parallel.** The image is cut into bands of 16 rows, computed
+  in waves of 64 concurrent `spawn` regions, started through a recursion
+  that waits for each band on the way back so the bands print in order.
+
+Output is byte-identical to the C st program (checked at 17, 203, 1000
+and 16000). Measured on this host (2026-09-27): 0.25 s at 16000 (was
+1.37 s with the scalar per-pixel loop).
 
 </details>
 
@@ -3737,12 +3750,12 @@ Build: Benchmarks Game flags, `fpc -XXs -O3 -Ci- -Cr- -g- -CpCOREAVX -CfAVX -Tli
 #### binary-trees (Resid, best)
 
 The single-threaded program (`../../../st/binary-trees/resid/`, see its NOTES.md for
-the algorithm and every workaround) made parallel: each depth level (all do about the same work) builds and checks its trees in its own concurrent `spawn` region; the lines come back in order. Compiled with
-`-O3` (the Resid driver adds no `-march` flag; Resid has no SIMD types or
-intrinsics).
+the algorithm and every workaround) made parallel: each depth level (all do about the same work) builds and checks its trees in its own concurrent `spawn` region, and the stretch tree is built and checked by another region while the long-lived tree and the levels run; the lines come back in order. Cutting levels further adds CPU time but no speed: the run is bound by memory traffic. Compiled with
+`-O3 -march=native`, like the other languages' best cells (Resid has no
+SIMD types or intrinsics).
 
 `spawn` regions run concurrently and are joined before the scope that
-started them ends (spec §19). Measured on this host (2026-09-27): 2.1 s -> 0.53 s at 21
+started them ends (spec §19). Measured on this host (2026-09-27): 2.1 s -> 0.45 s at 21
 (single-threaded -> this program). Output identical to C.
 
 </details>
@@ -3943,12 +3956,28 @@ Build: Benchmarks Game flags, `fpc -XXs -O3 -Ci- -Cr- -g- -CpCOREAVX -CfAVX -Tli
 
 #### fasta (Resid, best)
 
-Same program as `../../../st/fasta/resid/fasta.resid` (see that cell's
-NOTES.md for the algorithm and every workaround), compiled with `-O3`
-(the Resid driver passes `-O3` to clang; it adds no `-march` flag).
+The algorithm of the st cell (`../../../st/fasta/resid/`), with the two
+ideas of the fastest C programs:
 
-No parallel variant: the output is defined by one sequential random-number stream, so there is nothing for concurrent `spawn`
-regions to share. Resid has no SIMD types or intrinsics either.
+- **Lookup tables.** The generator has IM = 139968 states, so the code
+  picked for each state is precomputed once (a 139968-byte `Str` per
+  table) with the reference's cumulative comparison (first entry with
+  `r < cumulative p`, `r = state / IM`, the same Float operations as the
+  st cell). The inner loop is the generator step, one byte load and one
+  append.
+- **Jump-ahead, in parallel.** The generator `s -> (IA*s + IC) mod IM` is
+  affine, so its k-th iterate is computed in O(log k) by squaring the
+  map. Each section is cut into blocks of 8192 lines; each block starts
+  from its own generator state and is built by its own concurrent
+  `spawn` region (waves of 16, the host's hardware threads), and the
+  blocks are printed in order. The repeated ALU section is split the
+  same way (block offset mod 287).
+
+Output is byte-identical to the C st program (checked at N = 0, 7, 1000,
+2500000 and 25000000). Compiled with `-O3 -march=native`.
+
+Measured on this host (2026-09-27), N = 25000000: 0.13 s wall (0.80 s
+CPU).
 
 </details>
 
@@ -4154,8 +4183,8 @@ Build: Benchmarks Game flags, `fpc -XXs -O3 -Ci- -Cr- -g- -CpCOREAVX -CfAVX -Tli
 
 The single-threaded program (`../../../st/k-nucleotide/resid/`, see its NOTES.md for
 the algorithm and every workaround) made parallel: the seven tables (k = 1, 2 and the five fragments) are counted by seven concurrent `spawn` regions over the shared sequence text. Compiled with
-`-O3` (the Resid driver adds no `-march` flag; Resid has no SIMD types or
-intrinsics).
+`-O3 -march=native`, like the other languages' best cells (Resid has no
+SIMD types or intrinsics).
 
 `spawn` regions run concurrently and are joined before the scope that
 started them ends (spec §19). Measured on this host (2026-09-27): 5.9 s -> 2.0 s on the official input
@@ -4373,14 +4402,27 @@ Game Free Pascal flags). Ignores argv.
 
 #### reverse-complement (Resid, best)
 
-The single-threaded program (`../../../st/reverse-complement/resid/`, see its NOTES.md for
-the algorithm and every workaround) made parallel: each sequence (header plus reverse complement) is built by its own concurrent `spawn` region; the input has three sequences, so the gain is small and the run stays dominated by reading and writing. Compiled with
-`-O3` (the Resid driver adds no `-march` flag; Resid has no SIMD types or
-intrinsics).
+The single-threaded program's per-character loop
+(`../../../st/reverse-complement/resid/`, see its NOTES.md), made parallel
+inside each sequence:
 
-`spawn` regions run concurrently and are joined before the scope that
-started them ends (spec §19). Measured on this host (2026-09-27): 0.46 s -> 0.41 s on the official input
-(single-threaded -> this program). Output identical to C.
+- The body of each sequence is cut into 16 byte ranges. Concurrent
+  `spawn` regions slice their range and count its bases (`str_len` minus
+  `str_count` of newlines).
+- The bases after a range fix the output column it starts at, so a second
+  wave of 16 regions builds each range's reverse complement with its line
+  breaks independently; the ranges are printed last to first.
+- A spawned region inherits the parent's known lengths of all-ASCII
+  strings (runtime `str_fast_save`/`str_fast_load`), so slicing the shared
+  254 MB input does not rescan it in every thread.
+
+Compiled with `-O3 -march=native`, like the other languages' best cells
+(Resid has no SIMD types or intrinsics). Output identical to C (official
+and small inputs).
+
+Measured on this host (2026-09-27): 0.23 s on the official input (was
+0.40 s with one region per sequence); about 0.10 s of it is the serial
+read and first index of the input.
 
 </details>
 
@@ -4582,7 +4624,7 @@ Build: Benchmarks Game flags, `fpc -XXs -O3 -Ci- -Cr- -g- -CpCOREAVX -CfAVX -Tli
 
 Same program as `../../../st/pidigits/resid/pidigits.resid` (see that
 cell's NOTES.md for the algorithm), compiled with `-O3` (the Resid driver
-passes `-O3` to clang; it adds no `-march` flag). N = 10000: 0.41 s, the
+passes `-O3 -march=native` to clang). N = 10000: 0.41 s, the
 same as the `-O2` st cell.
 
 No parallel variant: each digit depends on the previous state of the spigot, so there is nothing for concurrent `spawn`
@@ -5009,4 +5051,4 @@ cd bench/suite
 ./bench.py run --track st --bench nbody --lang resid,c --size small --force
 ```
 
-Raw data: [`benchmarks/runs.csv`](benchmarks/runs.csv) (every run), [`benchmarks/results.csv`](benchmarks/results.csv) (aggregates). Git commits of the runs: `19e19925921f112b6d318368df76697f39f4428c`.
+Raw data: [`benchmarks/runs.csv`](benchmarks/runs.csv) (every run), [`benchmarks/results.csv`](benchmarks/results.csv) (aggregates). Git commits of the runs: `19e19925921f112b6d318368df76697f39f4428c`, `ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty`.

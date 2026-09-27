@@ -539,6 +539,9 @@ abs(x), min(a, b), max(a, b) and clamp(x, lo, hi) take
 arguments of one numeric type and return that type; abs
 of the most negative integer traps like any overflow.
 
+sqrt(x) takes a Float and returns its correctly rounded
+IEEE 754 square root (sqrt of a negative number is NaN).
+
 Wrapping conversions keep the low bits of the two's-
 complement representation, for bit-level code:
 

@@ -14,8 +14,13 @@ Deviations and workarounds:
   fixed offset, both inlined into the loop by the LTO link. Each element is
   still a heap-boxed `Float`, and each of the 40 matrix-vector products
   allocates a fresh vector that is never freed.
-- No `sqrt` builtin: correctly rounded Newton + Dekker residual correction
-  in pure Resid (`sqrt_fix`, same helper as nbody).
+- Four rows at a time: `lanes_a`/`lanes_at` walk j once for rows
+  i .. i + 3, keeping four independent sums, each added in the reference
+  order (the C programs of the Benchmarks Game do the same with two rows
+  per SSE register). The A entries are computed with Float index
+  arithmetic, which is exact here ((i + j + 1)^2 < 2^53) and gives the same
+  values as the Int formula without per-operation overflow checks.
+- `sqrt` is the builtin IEEE square root.
 - No `printf`: `fmt9` formats `%.9f` exactly via `Float(128)`.
 
 General Resid constraints that shape this port (see the source header too):
@@ -35,8 +40,6 @@ General Resid constraints that shape this port (see the source header too):
 - Compiled with the default `-O2` (`build/boot/stage2.bin`, which links the
   runtime with `clang -O2`).
 
-Measured (this host), size 5500: 5.40 s and 116 MB peak RSS with the
-original trie-backed lists and a non-LTO link; 1.08 s and 47 MB after the
-LTO link and flat lists (C `-O2`: 0.78 s). The remaining gap is mostly
-that gcc vectorises the C inner loop's division (`divpd`) over a flat
-`double[]`, while Resid's loop reads boxed elements one at a time.
+Measured (this host, 2026-09-27), size 5500 pinned to CPU 2: 0.52 s
+(C `-O2`: 0.78 s; one row at a time with Int indices: 1.17 s). Output
+identical to C.

@@ -60,6 +60,9 @@ Int main() {
 They are checked like any arithmetic: `abs` of the most negative integer
 traps.
 
+`sqrt(x)` takes a `Float` and returns its correctly rounded IEEE 754 square
+root, one machine instruction; `sqrt` of a negative number is NaN.
+
 ## Built-in behaviors of numbers
 
 Every width of `Int`, `UInt`, `Float` and `Dec` has built-in `Eq`, `Ord`

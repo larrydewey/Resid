@@ -1681,6 +1681,7 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
     if (n == "str_is_int" || n == "str_is_float") { return lw_externb(w, id, n, l1s("Str"), env, c); }
     if (n == "str_parse_int") { return lw_extern(w, id, n, l1s("Str"), "Int", env, c); }
     if (n == "str_parse_float") { return lw_extern(w, id, n, l1s("Str"), "Float", env, c); }
+    if (n == "sqrt") { return lw_extern(w, id, "llvm.sqrt.f64", l1s("Float"), "Float", env, c); }
     if (n == "print_bytes") { return lw_externb(w, id, "resid_print_bytes", l1s("List(Int)"), env, c); }
     if (n == "str_index_of") { return lw_extern(w, id, n, l3s("Str", "Str", "Int"), "Int", env, c); }
     if (n == "str_count") { return lw_extern(w, id, n, l2s("Str", "Str"), "Int", env, c); }
@@ -1689,7 +1690,7 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
 
 // Names the builtin table covers.
 Bool lw_is_builtin(Str n) {
-    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_mem_limit_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count";
+    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_mem_limit_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "sqrt" || n == "print_bytes" || n == "str_index_of" || n == "str_count";
 }
 
 // cg_print: `print(str_sb_finish(b))` fuses into resid_sb_print.
@@ -2790,7 +2791,8 @@ List(Str) lw_export_lines(LW w, Int d, Str exp) {
     List(Str) sig = abi_sig(q[1]);
     List(Str) cts = sig[1..sig.len()];
     List(Str) ps = abi_regs("a", cts.len(), 0, ListBuf());
-    Str head = "define " + sig[0] + " @" + q[0] + "(" + abi_params(cts, ps, 0, "") + ") " + abi_attrs() + " {";
+    Str inl = if (str_contains(w.g.ns[d].aux, "@inline")) { "alwaysinline " } else { "" };
+    Str head = "define " + sig[0] + " @" + q[0] + "(" + abi_params(cts, ps, 0, "") + ") " + inl + abi_attrs() + " {";
     return [head].concat(abi_body(sig[0], cts, abi_impl_ret(w, d), abi_impl_tys(w, d), lw_text(w, d)));
 }
 
@@ -2822,8 +2824,10 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Str pd = param_decl_at(tyl, 0, "");
     // Runtime functions are internal: only @export entries are visible.
     Str link = if (resid_rtmod()) { "internal " } else { "" };
-    // A runtime slow path (@noinline) keeps its callers small.
-    Str fattr = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@noinline")) { " noinline" } else { "" };
+    // A runtime slow path (@noinline) keeps its callers small; a fast path
+    // (@inline) goes into its callers, across the LTO link.
+    Str fattr0 = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@noinline")) { " noinline" } else { "" };
+    Str fattr = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@inline")) { fattr0 + " alwaysinline" } else { fattr0 };
     Str defline = if (is_main) { "define i32 @resid_user_main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + link + ll_ty(rbase) + " @" + name + "(" + pd + ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
     List(Str) nl = lw_param_names(w1, d, 1, n - 1, ListBuf());
     // Ownership: the node flags and record reuses the body's lowering reads.
@@ -2934,7 +2938,7 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
     // Appending a scalar to a list builds what the loop carries on (moved
     // out at the back edge anyway), not garbage.
     if (f == "resid_list_push" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
-    return !lo_has_str(["resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_get", "resid_list_get_nc", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
+    return !lo_has_str(["llvm.sqrt.f64", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_get", "resid_list_get_nc", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
 }
 
 // Every exit returns a scalar or a loop parameter (an older value, or a

@@ -12,14 +12,8 @@ Deviations and workarounds:
   structs: Resid has no mutable records/arrays and a list or record per
   step would be allocated and never freed (50M steps). The ten pair
   interactions are unrolled mechanically in reference order (i < j).
-- Resid has no `sqrt`. `sqrt_fix` computes a correctly rounded square root
-  in pure Resid: Newton iteration to within ~1 ulp, then an exact residual
-  `d - x*x` via Dekker's two-product (Veltkamp split) and one final
-  correction. Verified bit-identical to C `sqrt` on 20000 random inputs.
-  In the hot loop Newton starts from the same pair's distance one step
-  earlier (carried as 10 extra scalar parameters), so two iterations
-  suffice; the setup and the energy reports use a general range-reduced
-  version.
+- `sqrt` is the builtin correctly rounded IEEE square root (one
+  `sqrtsd`), as in the C program.
 - Resid has no `printf`; `fmt9` formats `%.9f` exactly (fraction scaled by
   1e9 in `Float(128)`, round half to even on the exact binary value).
 
@@ -40,5 +34,6 @@ General Resid constraints that shape this port (see the source header too):
 - Compiled with the default `-O2` (`build/boot/stage2.bin`, which links the
   runtime with `clang -O2`).
 
-Measured (this host): size 5000000 0.32 s, 7.8 MB peak RSS; size
-50000000 3.06 s, 8.1 MB (output identical to C).
+Measured (this host, 2026-09-27): size 50000000 1.45 s pinned to CPU 2
+(C: 1.87 s), output identical to C. Before the `sqrt` builtin the program
+computed the root with Newton iterations and a Dekker correction: 2.81 s.

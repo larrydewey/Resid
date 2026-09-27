@@ -210,8 +210,9 @@ Int idx_slots() { return resid_raw_tls("str_slots", 680); }
 Int idx_small() { return idx_slots() + 640; }
 // One mark per slot, then how many are set.
 Int idx_region() { return resid_raw_tls("str_region", 136); }
-// clock, ready, mru, fast_s, fast_len
-Int idx_state() { return resid_raw_tls("str_state", 40); }
+// clock, ready, mru, fast_s, fast_len, fast2_s, fast2_len: the two last
+// all-ASCII strings looked up, so a loop reading two strings stays fast.
+Int idx_state() { return resid_raw_tls("str_state", 56); }
 
 Int sl_s(Int sl) { return ld64(sl); }
 Int sl_len(Int sl) { return ld64(sl + 8); }
@@ -253,9 +254,20 @@ Int fill_off(Int s, Int off, Int p, Int i, Int n) {
     return fill_off(s, off, p + utf8_len_at(p), i + 1, n);
 }
 
+// The length of s when a fast entry (all ASCII) knows it, else -1.
+Int fast_len_of(Int s) {
+    Int st = idx_state();
+    if (s != 0 && s == ld64(st + 24)) { return ld64(st + 32); }
+    if (s != 0 && s == ld64(st + 40)) { return ld64(st + 48); }
+    if (s == 0 || ld64(idx_inh() + 304) == 0) { return 0 - 1; }
+    return inh_find(s, 0);
+}
+
 Int idx_build(Int s, Int sl) {
     Int old = sl_off(sl);
     _ = if (old != 0) { c_free(old) + st64(sl + 16, 0) } else { 0 };
+    Int known = fast_len_of(s);
+    if (known >= 0) { return st64(sl + 32, known) + st64(sl, s) + st64(sl + 8, known); }
     Int blen = c_strlen(s);
     _ = st64(sl + 32, blen);
     _ = st64(sl, s);
@@ -336,8 +348,65 @@ pub Int idx_slot(Int s) {
 Int idx_slot_miss(Int s, Int st) {
     Int sl = idx_slot_slow(s);
     _ = st64(st + 16, sl);
-    _ = if (sl_off(sl) == 0) { st64(st + 24, s) + st64(st + 32, sl_len(sl)) } else { 0 };
+    _ = if (sl_off(sl) == 0 && ld64(st + 24) != s) { st64(st + 40, ld64(st + 24)) + st64(st + 48, ld64(st + 32)) + st64(st + 24, s) + st64(st + 32, sl_len(sl)) } else { 0 };
     return sl;
+}
+
+// A spawned region starts knowing the lengths of its parent's all-ASCII
+// indexed strings (19 pairs: the two fast entries, the short slot and the
+// 16 LRU slots): they are immutable and shared, so it need not rescan them.
+// 19 pairs, then a word set when any were inherited.
+Int idx_inh() { return resid_raw_tls("str_inh", 312); }
+
+pub Int str_fast_save(Int a) {
+    Int st = idx_state();
+    _ = mcopy(a, st + 24, 32);
+    _ = inh_pair(a + 32, idx_small());
+    return inh_slots(a + 48, 0);
+}
+
+Int inh_slots(Int a, Int k) {
+    if (k >= 16) { return 0; }
+    _ = inh_pair(a + k * 16, idx_slots() + k * 40);
+    return inh_slots(a, k + 1);
+}
+
+// An empty pair unless the slot holds an all-ASCII string.
+Int inh_pair(Int a, Int sl) {
+    Bool ok = ld64(idx_state() + 8) != 0 && sl_s(sl) != 0 && sl_len(sl) >= 0 && sl_off(sl) == 0;
+    return st64(a, if (ok) { sl_s(sl) } else { 0 }) + st64(a + 8, if (ok) { sl_len(sl) } else { 0 });
+}
+
+pub Int str_fast_load(Int a) {
+    _ = mcopy(idx_state() + 24, a, 32);
+    _ = mcopy(idx_inh(), a, 304);
+    return st64(idx_inh() + 304, 1);
+}
+
+Int inh_find(Int s, Int k) {
+    if (k >= 19) { return 0 - 1; }
+    if (ld64(idx_inh() + k * 16) == s) { return ld64(idx_inh() + k * 16 + 8); }
+    return inh_find(s, k + 1);
+}
+
+// A pooled worker between regions: forget every index (the strings may be
+// gone), freeing the codepoint tables.
+pub Int str_index_reset() {
+    Int st = idx_state();
+    _ = st64(st + 16, 0) + st64(st + 24, 0) + st64(st + 40, 0);
+    _ = st64(idx_inh() + 304, 0);
+    _ = st64(idx_small(), 0);
+    if (ld64(st + 8) == 0) { return 0; }
+    _ = st64(st + 8, 0);
+    _ = idx_free_offs(0);
+    return resid_raw_fill(idx_region(), 0, 136);
+}
+
+Int idx_free_offs(Int k) {
+    if (k >= 16) { return 0; }
+    Int sl = idx_slots() + k * 40;
+    _ = if (sl_off(sl) != 0) { c_free(sl_off(sl)) + st64(sl + 16, 0) } else { 0 };
+    return idx_free_offs(k + 1);
 }
 
 // An arena, bulk arena or scalar scope is being freed: the short and
@@ -345,6 +414,7 @@ Int idx_slot_miss(Int s, Int st) {
 @export("resid_str_index_popped", "void()")
 pub Int rt_str_index_popped() {
     _ = st64(idx_state() + 24, 0);
+    _ = st64(idx_state() + 40, 0);
     _ = st64(idx_small(), 0);
     if (ld64(idx_region() + 128) == 0) { return 0; }
     return idx_clear_region(0, 1);
@@ -353,6 +423,7 @@ pub Int rt_str_index_popped() {
 // A scalar scope is being freed: only strings in scopes can go.
 pub Int str_index_scope_popped() {
     _ = st64(idx_state() + 24, 0);
+    _ = st64(idx_state() + 40, 0);
     _ = st64(idx_small(), 0);
     if (ld64(idx_region() + 128) == 0) { return 0; }
     return idx_clear_region(0, 2);
@@ -371,9 +442,17 @@ Int idx_clear_region(Int k, Int kind) {
 pub Int str_index_forget(Int s) {
     Int st = idx_state();
     _ = if (ld64(st + 24) == s) { st64(st + 24, 0) } else { 0 };
+    _ = if (ld64(st + 40) == s) { st64(st + 40, 0) } else { 0 };
+    _ = if (ld64(idx_inh() + 304) != 0) { inh_forget(s, 0) } else { 0 };
     _ = if (sl_s(idx_small()) == s) { st64(idx_small(), 0) } else { 0 };
     if (ld64(st + 8) == 0) { return 0; }
     return idx_forget_at(s, 0);
+}
+
+Int inh_forget(Int s, Int k) {
+    if (k >= 19) { return 0; }
+    _ = if (ld64(idx_inh() + k * 16) == s) { st64(idx_inh() + k * 16, 0) } else { 0 };
+    return inh_forget(s, k + 1);
 }
 
 Int idx_forget_at(Int s, Int k) {
@@ -387,6 +466,7 @@ Int idx_forget_at(Int s, Int k) {
 pub Int rt_str_len(Int s) {
     Int st = idx_state();
     if (s == ld64(st + 24)) { return ld64(st + 32); }
+    if (s == ld64(st + 40)) { return ld64(st + 48); }
     return sl_len(idx_slot(s));
 }
 
@@ -405,6 +485,7 @@ Int char_at_slow(Int s, Int i) {
 pub Int rt_str_char_at(Int s, Int i) {
     Int st = idx_state();
     if (s == ld64(st + 24)) { return if (ult(i, ld64(st + 32))) { ld8(s + i) } else { 0 - 1 }; }
+    if (s == ld64(st + 40)) { return if (ult(i, ld64(st + 48))) { ld8(s + i) } else { 0 - 1 }; }
     return char_at_slow(s, i);
 }
 

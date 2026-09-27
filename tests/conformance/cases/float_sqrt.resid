@@ -1,0 +1,15 @@
+// sqrt: the correctly rounded IEEE 754 square root of a Float.
+Float twice(Float x) { return 2.0 * x; }
+
+Int main() {
+    Float(64) q = 16.0;
+    println(f"{sqrt(2.0)}");
+    println(f"{sqrt(q)}");
+    println(f"{sqrt(twice(0.125))}");
+    println(f"{sqrt(0.0)}");
+    Float r = sqrt(1000000.0) * sqrt(0.000001);
+    println(f"{r}");
+    Bool nan = sqrt(0.0 - 1.0) != sqrt(0.0 - 1.0);
+    println(f"{nan}");
+    return 0;
+}

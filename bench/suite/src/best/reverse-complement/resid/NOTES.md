@@ -1,10 +1,23 @@
 # reverse-complement (Resid, best)
 
-The single-threaded program (`../../../st/reverse-complement/resid/`, see its NOTES.md for
-the algorithm and every workaround) made parallel: each sequence (header plus reverse complement) is built by its own concurrent `spawn` region; the input has three sequences, so the gain is small and the run stays dominated by reading and writing. Compiled with
-`-O3` (the Resid driver adds no `-march` flag; Resid has no SIMD types or
-intrinsics).
+The single-threaded program's per-character loop
+(`../../../st/reverse-complement/resid/`, see its NOTES.md), made parallel
+inside each sequence:
 
-`spawn` regions run concurrently and are joined before the scope that
-started them ends (spec §19). Measured on this host (2026-09-27): 0.46 s -> 0.41 s on the official input
-(single-threaded -> this program). Output identical to C.
+- The body of each sequence is cut into 16 byte ranges. Concurrent
+  `spawn` regions slice their range and count its bases (`str_len` minus
+  `str_count` of newlines).
+- The bases after a range fix the output column it starts at, so a second
+  wave of 16 regions builds each range's reverse complement with its line
+  breaks independently; the ranges are printed last to first.
+- A spawned region inherits the parent's known lengths of all-ASCII
+  strings (runtime `str_fast_save`/`str_fast_load`), so slicing the shared
+  254 MB input does not rescan it in every thread.
+
+Compiled with `-O3 -march=native`, like the other languages' best cells
+(Resid has no SIMD types or intrinsics). Output identical to C (official
+and small inputs).
+
+Measured on this host (2026-09-27): 0.23 s on the official input (was
+0.40 s with one region per sequence); about 0.10 s of it is the serial
+read and first index of the input.

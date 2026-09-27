@@ -3,5 +3,5 @@ set -euo pipefail
 HERE="$(pwd)"
 ROOT="${RESID_ROOT:-$(git rev-parse --show-toplevel)}"
 mkdir -p out
-# The parallel program (a spawn region per depth level), -O3.
-(cd "$ROOT" && build/boot/stage2.bin "$HERE/binarytrees.resid" -o "$HERE/out/binarytrees" -O3 >/dev/null)
+# The parallel program (a spawn region per depth level), -O3 -march=native.
+(cd "$ROOT" && build/boot/stage2.bin "$HERE/binarytrees.resid" -o "$HERE/out/binarytrees" -O3 -march=native >/dev/null)

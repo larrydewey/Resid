@@ -3,5 +3,5 @@ set -euo pipefail
 HERE="$(pwd)"
 ROOT="${RESID_ROOT:-$(git rev-parse --show-toplevel)}"
 mkdir -p out
-# The parallel program (spawn regions over row chunks), -O3.
-(cd "$ROOT" && build/boot/stage2.bin "$HERE/spectralnorm.resid" -o "$HERE/out/spectralnorm" -O3 >/dev/null)
+# The parallel program (spawn regions over row chunks), -O3 -march=native.
+(cd "$ROOT" && build/boot/stage2.bin "$HERE/spectralnorm.resid" -o "$HERE/out/spectralnorm" -O3 -march=native >/dev/null)
