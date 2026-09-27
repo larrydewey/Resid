@@ -448,6 +448,9 @@ GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
     Int bi = b_index(w.fs, "Show", t);
     if (bi >= 0) { return lw_src_call(w, w.fs.bfns[bi], vt, env); }
     if (t == "Str" || tostr_fn_for(t) != "" || int_fam(t)) { return fst_tostr(vt); }
+    // A fixed string is shown through its NUL-terminated view.
+    if (is_str_fixed(t)) { return lw_step(vt, v.val, "Str", v.lines, v.tmp); }
+    if (t == "Option(_)") { return fst_literal("None", 0, 4, "", vt); }
     if (str_has_prefix_cg(t, "List(")) {
         Str et = str_slice(t, 5, str_len(t) - 1);
         Bool strs = num_norm_cg(et) == "Str";
@@ -579,8 +582,11 @@ GT lw_minmax(LW w, Int id, Str n, List(Str) env, GT c) {
     Int want = if (n == "abs") { 1 } else { if (n == "clamp") { 3 } else { 2 } };
     if (na != want) { return lw_gerr(n + " arity", c); }
     List(Str) none = [];
-    LMM a = lw_mm_args(w, id, 0, na, env, LMM {.g = c, .names = none, .env = env});
-    if (a.g.err != "") { return a.g; }
+    LMM a0 = lw_mm_args(w, id, 0, na, env, LMM {.g = c, .names = none, .env = env});
+    if (a0.g.err != "") { return a0.g; }
+    // Integer literal arguments take the other arguments' type.
+    Str target = lw_mm_target(w, id, a0.env, a0.names, 0);
+    LMM a = if (target == "") { a0 } else { lw_mm_retype(w, id, a0, target, 0) };
     List(Str) x = a.names;
     Str src = if (n == "abs") { "if (" + x[0] + " < " + x[0] + " - " + x[0] + ") { " + x[0] + " - " + x[0] + " - " + x[0] + " } else { " + x[0] + " }" } else {
         if (n == "min") { "if (" + x[0] + " < " + x[1] + ") { " + x[0] + " } else { " + x[1] + " }" } else {
@@ -596,6 +602,29 @@ GT lw_minmax(LW w, Int id, Str n, List(Str) env, GT c) {
 }
 
 type LMM = { GT g; List(Str) names; List(Str) env; };
+
+// An integer literal, possibly negated.
+Bool lw_mm_lit(LW w, Int id) {
+    if (lw_bare_int(w, id)) { return true; }
+    return lw_kind(w, id) == "un" && lw_text(w, id) == "-" && lw_bare_int(w, lw_kid(w, id, 0));
+}
+
+Str lw_mm_target(LW w, Int id, List(Str) env, List(Str) names, Int i) {
+    if (i >= names.len()) { return ""; }
+    Str t = cg_env_ty(env_lookup(env, names[i]));
+    if (!lw_mm_lit(w, lw_kid(w, id, i)) && int_fam(t)) { return t; }
+    return lw_mm_target(w, id, env, names, i + 1);
+}
+
+// Each literal argument converted to the target type (it fits: checked).
+LMM lw_mm_retype(LW w, Int id, LMM a, Str target, Int i) {
+    if (i >= a.names.len()) { return a; }
+    if (!lw_mm_lit(w, lw_kid(w, id, i))) { return lw_mm_retype(w, id, a, target, i + 1); }
+    Str ent = env_lookup(a.env, a.names[i]);
+    GT cv = conv_checked(lw_step(a.g, cg_env_val(ent), cg_env_ty(ent), a.g.lines, a.g.tmp), target);
+    if (cv.err != "") { return LMM {.g = cv, .names = a.names, .env = a.env}; }
+    return lw_mm_retype(w, id, LMM {.g = cv, .names = a.names, .env = env_add(a.env, a.names[i] + ":" + cv.val + ":" + target)}, target, i + 1);
+}
 
 LMM lw_mm_args(LW w, Int id, Int i, Int n, List(Str) env, LMM acc) {
     if (i >= n) { return LMM {.g = acc.g, .names = acc.names, .env = env}; }
@@ -2458,6 +2487,12 @@ Str lw_inst_args(LW w, Int id, Int i, Str acc) {
     return lw_inst_args(w, id, i + 1, if (acc == "") { a } else { acc + ", " + a });
 }
 
+Bool lw_ord_impl(Funcs fs, Str f, Int i) {
+    if (i >= fs.bfns.len()) { return false; }
+    if (fs.bnames[i] == "Ord" && fs.bfns[i] == f) { return true; }
+    return lw_ord_impl(fs, f, i + 1);
+}
+
 // cg_sort.
 GT lw_sort(LW w, Int id, List(Str) env, GT c) {
     Int nk = w.g.ns[id].nk;
@@ -2479,7 +2514,18 @@ GT lw_sort(LW w, Int id, List(Str) env, GT c) {
     Str inner = stripped.ty;
     Int depth = stripped.pos;
     Int op = str_find_char(inner, 40, 0);
-    if (op < 0) { return gt_err("behavior instance must name a type: Ord(Int)", c); }
+    // `using = f`: a comparator for f, made at this use (one per function).
+    if (op < 0) {
+        Str et = str_slice(v.ty, 5, str_len(v.ty) - 1);
+        Bool rev = depth % 2 == 1;
+        Str cmp = cmp_def(inner, et, rev);
+        Str cname = if (rev) { "__cmp_" + inner + "_rev" } else { "__cmp_" + inner };
+        // An Ord instance's impl already has both comparators in the header.
+        Bool declared = lw_ord_impl(w.fs, inner, 0);
+        List(Str) gl = if (declared) { v.glines } else { v.glines.concat(["@rtg.cmpdef." + cname + " " + cmp]) };
+        GT vg = GT {.pos = 0, .val = v.val, .ty = v.ty, .cnt = 0, .err = "", .glines = gl, .lines = v.lines, .tmp = v.tmp, .lbl = v.lbl, .tail = false};
+        return lw_rt1(vg, "ptr", "@list_sort_by(ptr " + v.val + ", ptr @" + cname + ")", v.ty);
+    }
     Str head = str_slice(inner, 0, op);
     Str param = str_slice(inner, op + 1, str_len(inner) - 1);
     Int bi = b_index(w.fs, head, param);
@@ -2498,7 +2544,11 @@ GT lw_sort(LW w, Int id, List(Str) env, GT c) {
     if (bi < 0) { return gt_err("no behavior instance " + head + "(" + param + ") is defined", c); }
     Str f = w.fs.bfns[bi];
     Str tname = if (depth % 2 == 1) { "__cmp_" + f + "_rev" } else { "__cmp_" + f };
-    return lw_rt1(v, "ptr", "@list_sort_by(ptr " + v.val + ", ptr @" + tname + ")", v.ty);
+    // Only Ord instances have comparators in the header; another ordering
+    // behavior's gets one here.
+    List(Str) gl = if (lw_ord_impl(w.fs, f, 0)) { v.glines } else { v.glines.concat(["@rtg.cmpdef." + tname + " " + cmp_def(f, param, depth % 2 == 1)]) };
+    GT vg = GT {.pos = 0, .val = v.val, .ty = v.ty, .cnt = 0, .err = "", .glines = gl, .lines = v.lines, .tmp = v.tmp, .lbl = v.lbl, .tail = false};
+    return lw_rt1(vg, "ptr", "@list_sort_by(ptr " + v.val + ", ptr @" + tname + ")", v.ty);
 }
 
 // Expect(T) methods (SPEC-testing.md §5); `pos` names the assertion.

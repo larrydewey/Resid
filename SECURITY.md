@@ -7,7 +7,7 @@ them with:
 
     ./boot.sh                      # self-compile fixed point
     tests/conformance/run.sh       # language cases, including err_* rejections
-    tests/runtime/run.sh           # C-level runtime properties
+    tests/runtime/run.sh           # runtime properties (C harnesses over rt.ll)
     tests/pkg/run.sh               # package signing, trust and ceilings
     tests/provenance/run.sh        # signed provenance trailers
 
@@ -56,9 +56,11 @@ builtins above.
 | Immediate Int/Float words are never confused with pointers: they lie at or above 2^48, and the runtime checks at startup that the stack, the heap, mmap'd memory and its own data lie below it (aborting otherwise). | `tests/runtime/immediates.c`, `immediate_scalars` |
 | Arithmetic is checked (spec §6.5) unless the compiler proves it cannot overflow. | `saturating_corners`, `range_facts_discharge` |
 
-The runtime is C and the compiler performs in-place updates of values
-it proves unshared (ownership analysis, loop regions). These are covered
-by the conformance suite and the self-compile, not by a proof.
+The runtime is Resid (`runtime/rt/`), built on the compiler-only raw
+memory primitives, with no C library underneath; and the compiler performs
+in-place updates of values it proves unshared (ownership analysis, loop
+regions). Both are covered by the conformance suite and the self-compile,
+not by a proof.
 
 ## Packages (spec §28)
 

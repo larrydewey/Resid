@@ -29,3 +29,13 @@ test "strings and lists" {
     expect([1, 2, 3]).toContain(3);
     expect([1, 2, 3]).toHaveLength(3);
 }
+
+@requires(environment)
+test "annotated: reads the environment" {
+    expect(environment.get("RESID_NO_SUCH_VARIABLE")).toEqual("");
+}
+
+test "floats: close enough" {
+    expect(0.1 + 0.2).toBeCloseTo(0.3, 0.000001);
+    expect(3.14159).toBeCloseTo(3.1416, 3);
+}

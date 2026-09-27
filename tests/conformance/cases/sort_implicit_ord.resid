@@ -1,11 +1,11 @@
 // A type's unique Ord instance is inserted by sort(xs); instances may name
-// parameterized types; two behaviors may share one impl.
+// parameterized types.
 type P = { Int x; Str n; };
 Int by_x(P a, P b) { return a.x - b.x; }
 Ord(P) = by_x;
 Int desc32(Int(32) a, Int(32) b) { return (Int)b - (Int)a; }
 Ord(Int(32)) = desc32;
-Eq(Int(32)) = desc32;
+
 
 Int main() {
     List(P) ps = [P {.x = 3, .n = "c"}, P {.x = 1, .n = "a"}, P {.x = 2, .n = "b"}];

@@ -17,6 +17,8 @@ import os, re, subprocess, sys, tempfile
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 compiler = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "build", "boot", "stage2.bin")
 docs = sys.argv[2] if len(sys.argv) > 2 else os.path.join(root, "website", "src", "content", "docs")
+env = dict(os.environ)
+env.setdefault("RESID_HOME", os.path.dirname(os.path.abspath(compiler)))
 fence = re.compile(r"^```(\w+)[^\n]*\n(.*?)^```\s*$", re.M | re.S)
 
 passed, failed = 0, []
@@ -43,7 +45,7 @@ for dirpath, _, files in sorted(os.walk(docs)):
             open(src, "w").write(body)
             err = re.search(r"//\s*expect-error:\s*(E\d+)", body)
             profile = "check" if ("// check-only" in body or err) else "debug"
-            c = subprocess.run([compiler, src, "-o", out, "--profile", profile], capture_output=True, text=True, cwd=work, timeout=300)
+            c = subprocess.run([compiler, src, "-o", out, "--profile", profile], capture_output=True, text=True, cwd=work, timeout=300, env=env)
             log = c.stdout + c.stderr
             if err:
                 if c.returncode != 0 and err.group(1) in log:

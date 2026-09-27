@@ -346,6 +346,26 @@ An LLM writing a Resid skill found these; each has a conformance case now.
     (`resid_list_show_clo`);
   - floats print the shortest text that reads back as the same value
     (`3.14`, not `3.1400000000000001`), and `Float(32)` at its own width.
+- Behaviors, continued:
+  - `using = f` and `Reverse(f)` pass a comparator function directly;
+  - a type has one instance per behavior (a duplicate is an error);
+  - instance shapes follow the spec (`Eq` returns Bool, `Hash` and
+    `Serialize` take one value, `Allocator` none);
+  - `Show` is refused for numbers, Bool and Str, whose display is fixed;
+  - an ordering behavior other than `Ord` gets its comparator at the sort
+    that uses it.
+- Also:
+  - a duplicate function definition is an error;
+  - integer literal arguments of `min` / `max` / `clamp` adopt the other
+    arguments' type;
+  - `f"{None}"` and fixed strings in f-strings work;
+  - `toBeCloseTo` takes a Float tolerance or an Int number of digits;
+  - a `test` block may carry `@requires`;
+  - `@requires(git)` is refused (there is no git provider).
+- `resid-why` shows what reduction replaced a source node with
+  ("reduced to #47 lit: Int known = 144 <- beta").
+- `tools/check_doc_examples.py` compiles and runs every complete example in
+  the website docs and compares its output.
 - An import not found beside the importer falls back to the standard
   library (`$RESID_HOME/../../lib`, else `lib/`), so `import "crypto.resid"`
   works from any directory.

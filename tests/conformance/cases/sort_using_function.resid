@@ -1,0 +1,15 @@
+// using = f (and Reverse(f)) passes a comparator directly; the type's own
+// Ord instance stays the default for sort(xs).
+type P = { Int x; Int y; };
+Int by_x(P a, P b) { return a.x - b.x; }
+Int by_y(P a, P b) { return a.y - b.y; }
+Ord(P) = by_x;
+
+Int main() {
+    List(P) ps = [P {.x = 2, .y = 1}, P {.x = 1, .y = 3}, P {.x = 3, .y = 2}];
+    println(f"{sort(ps)}");
+    println(f"{sort(ps, using = by_y)}");
+    println(f"{sort(ps, using = Reverse(by_y))}");
+    println(f"{sort(ps, using = Reverse(Ord(P)))}");
+    return 0;
+}

@@ -42,7 +42,7 @@ else
     pass=$((pass + 1))
 fi
 # `residc test`: the generated test entry point is a complete process.
-if (cd "$ROOT" && "$COMPILER" test examples/math_test.resid) > "$W/tm.log" 2>&1 && grep -q "Failures: 0 | Passed: 4" "$W/tm.log"; then
+if (cd "$ROOT" && "$COMPILER" test examples/math_test.resid) > "$W/tm.log" 2>&1 && grep -q "Failures: 0 | Passed: 6" "$W/tm.log"; then
     pass=$((pass + 1))
 else
     fail=$((fail + 1)); echo "FAIL residc test: $(grep -v '^OK' "$W/tm.log" | tail -2 | tr '\n' ' ')"

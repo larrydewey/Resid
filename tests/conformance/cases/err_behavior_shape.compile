@@ -1,0 +1,1 @@
+behavior Eq(P): impl must have signature (P, P) -> Bool

@@ -200,12 +200,24 @@ pub Str gn_line(GA a, GN n) {
     return f"#{n.id} " + n.kind + nm + ty + " " + n.know + v + r + f + e + d + " @ " + gn_where(a, n);
 }
 
-// The node, then each node it derives from back to a source node.
+// The last node that derives from `id` (what reduction replaced it with),
+// or -1.
+pub Int gn_replaced(GA a, Int id, Int i, Int best) {
+    if (i >= a.offs.len()) { return best; }
+    Int dv = ch_field(a.b, a.offs[i], "derive");
+    Bool hit = dv >= 0 && ch_int(a.b, ch_field(a.b, dv, "from")) == id;
+    return gn_replaced(a, id, i + 1, if (hit) { i } else { best });
+}
+
+// The node, then each node it derives from back to a source node; a source
+// node that reduction replaced also shows its replacement.
 pub Int gn_chain(GA a, Int id, Int depth) {
     GN n = gn_read(a, id);
     Str pad = if (depth == 0) { "" } else { str_repeat("  ", depth) + "from " };
     println(pad + gn_line(a, n));
     if (n.def >= 0 && depth == 0) { println("  def " + gn_line(a, gn_read(a, n.def))); }
+    Int rep = if (depth == 0 && n.from < 0) { gn_replaced(a, id, 0, -1) } else { -1 };
+    if (rep >= 0) { println("  reduced to " + gn_line(a, gn_read(a, rep))); }
     if (n.from < 0 || depth > 64) { return 0; }
     return gn_chain(a, n.from, depth + 1);
 }
@@ -296,7 +308,8 @@ pub Int ga_use_lines(GA a, List(Int) us, Int i, Int kn, Int shown, Int max) {
         return 0;
     }
     GN n = gn_read(a, us[i]);
-    Bool k = n.know == "known";
+    Int rep = gn_replaced(a, us[i], 0, -1);
+    Bool k = n.know == "known" || (rep >= 0 && gn_read(a, rep).know == "known");
     Bool show = !k && (max < 0 || shown < max);
     Int _p = if (show) { ga_say("  use " + gn_line(a, n)) } else { 0 };
     return ga_use_lines(a, us, i + 1, if (k) { kn + 1 } else { kn }, if (show) { shown + 1 } else { shown }, max);

@@ -2565,15 +2565,25 @@ Int validate_behavior(Funcs fs, BRes bh) {
     List(Str) rtl = fs.rets;
     // Show(T) = f: f renders a T (an f-string hole of type T calls it).
     if (bh.name == "Show") {
+        // Built-in scalars have one fixed display.
+        Bool scalar = is_num(bh.param) || bh.param == "Bool" || bh.param == "Str";
+        if (scalar) {
+            println("type error: behavior Show(" + bh.param + "): numbers, Bool and Str have a fixed display; wrap the value in a record to give it its own format");
+            return 1;
+        }
         if (fi < 0 || ptsl[fi] != bh.param || rtl[fi] != "Str") {
             println("type error: behavior Show(" + bh.param + "): impl must have signature (" + bh.param + ") -> Str");
             return 1;
         }
         return 0;
     }
-    Str want = bh.param + "," + bh.param;
-    if (fi < 0 || ptsl[fi] != want || rtl[fi] != "Int") {
-        println("type error: behavior " + bh.name + "(" + bh.param + "): impl must have signature (" + bh.param + ", " + bh.param + ") -> Int");
+    // Spec §32: Ord (T, T) -> Int, Eq (T, T) -> Bool, Hash (T) -> Int,
+    // Serialize (T) -> Str, Allocator () -> T.
+    Str p = bh.param;
+    Str wp = if (bh.name == "Hash" || bh.name == "Serialize") { p } else { if (bh.name == "Allocator") { "" } else { p + "," + p } };
+    Str wr = if (bh.name == "Eq") { "Bool" } else { if (bh.name == "Serialize") { "Str" } else { if (bh.name == "Allocator") { p } else { "Int" } } };
+    if (fi < 0 || ptsl[fi] != wp || rtl[fi] != wr) {
+        println("type error: behavior " + bh.name + "(" + p + "): impl must have signature (" + str_replace(wp, ",", ", ") + ") -> " + wr);
         return 1;
     }
     return 0;

@@ -2532,7 +2532,9 @@ GT cg_expect_close(Str s, GT self, GT e, GT p, Int pos, List(Str) env, Funcs fs)
     List(Str) m0 = p.lines;
     List(Str) m1 = m0.concat([u + " = call double @resid_unbox_f64(ptr " + self.val + ")"]);
     List(Str) m2 = m1.concat([diff + " = fsub double " + u + ", " + e.val]);
-    List(Str) m3 = m2.concat([pf + " = sitofp i64 " + p.val + " to double"]);
+    // A Float tolerance is absolute; Int n digits means 10^-n / 2.
+    Bool digits = !is_float_cg(p.ty);
+    List(Str) m3 = m2.concat([if (digits) { pf + " = call double @resid_close_tol(i64 " + p.val + ")" } else { pf + " = fadd double " + p.val + ", 0.0" }]);
     List(Str) m4 = m3.concat([negp + " = fneg double " + pf]);
     List(Str) m5 = m4.concat([a1 + " = fcmp oge double " + diff + ", " + negp]);
     List(Str) m6 = m5.concat([a2 + " = fcmp ole double " + diff + ", " + pf]);
@@ -2813,8 +2815,25 @@ TD td_scan(Str s, Int pos, Int copied, Str acc, List(Str) names, List(Str) syms)
             }
         }
     }
+    // An annotation (`@requires(...)`) may precede a test block: step over
+    // it and keep scanning.
+    if (str_starts_with(t.text, "@")) {
+        Int apos = if (t.text == "@") { lex_tok(s, t.pos).pos } else { t.pos };
+        Tok op = lex_tok(s, apos);
+        Int next = if (op.text == "(") { td_skip_group(s, op.pos, 1) } else { apos };
+        return td_scan(s, next, copied, acc, names, syms);
+    }
     Int end = skip_decl(s, t.pos, 0);
     return td_scan(s, end, copied, acc, names, syms);
+}
+
+// Past the `)` that closes a group opened before pos.
+Int td_skip_group(Str s, Int pos, Int depth) {
+    if (depth == 0) { return pos; }
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return t.pos; }
+    Int d = if (t.text == "(") { depth + 1 } else { if (t.text == ")") { depth - 1 } else { depth } };
+    return td_skip_group(s, t.pos, d);
 }
 
 TD td_desugar(Str s) {

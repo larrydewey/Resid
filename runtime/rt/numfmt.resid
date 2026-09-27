@@ -117,6 +117,12 @@ pub Int rt_float_to_string(Float v) {
     return cstr_from(buf, n, 1);
 }
 
+// toBeCloseTo's tolerance for n decimal digits: 10^-n / 2.
+@export("resid_close_tol", "double(i64)")
+pub Float rt_close_tol(Int n) { return close_tol_at(0.5, n); }
+
+Float close_tol_at(Float t, Int n) { return if (n <= 0) { t } else { close_tol_at(t / 10.0, n - 1) }; }
+
 // A Float(32) or Float(16) value (widened): the shortest text that reads
 // back as the same Float(32).
 @export("Float32ToString", "ptr(double)")

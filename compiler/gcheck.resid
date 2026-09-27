@@ -246,6 +246,18 @@ GKT gk_call(GK k, Int id, Str exp) {
     Str lty = gk_local(k, id);
     if (lty != "" && is_fn_type(lty)) { return gk_fn_call(k, id, 0, lty); }
     if (n == "sort") { return gk_sort(k, id); }
+    // min / max / clamp: an integer literal argument adopts the type of the
+    // others (spec §6.1a), as an operand would.
+    if ((n == "min" || n == "max" || n == "clamp") && ck_fn_index(k.fs, n) < 0) {
+        GKA a = gk_args(k, id, 0, gk_nopts(), 0, "", 0);
+        if (a.err != "") { return gterr(a.k, a.err, a.at); }
+        List(Str) ts = str_split(a.tys, ",");
+        Str target = gk_mm_target(k.g, id, ts, 0);
+        Str tys = if (target == "") { a.tys } else { gk_mm_adopt(k.g, id, ts, target, 0, "") };
+        ERes b = check_builtin(n, tys, a.count, 0, exp, gk_nopts());
+        if (b.err != "") { return gterr(a.k, b.err, id); }
+        return gt(a.k, b.ty, id);
+    }
     if (n == "Ok" || n == "Err" || n == "Some" || n == "None") {
         GKA a = gk_args(k, id, 0, gk_nopts(), 0, "", 0);
         if (a.err != "") { return gterr(a.k, a.err, a.at); }
@@ -316,6 +328,19 @@ Str gk_inst_args(Kg g, Int id, Int i, Str acc) {
     return gk_inst_args(g, id, i + 1, if (acc == "") { a } else { acc + ", " + a });
 }
 
+// The first argument type that is not a bare integer literal's, or "".
+Str gk_mm_target(Kg g, Int id, List(Str) ts, Int i) {
+    if (i >= ts.len() || i >= g.ns[id].nk) { return ""; }
+    if (!gk_bare_int(g, kg_kid(g, id, i)) && is_int_ty(ts[i])) { return ts[i]; }
+    return gk_mm_target(g, id, ts, i + 1);
+}
+
+Str gk_mm_adopt(Kg g, Int id, List(Str) ts, Str target, Int i, Str acc) {
+    if (i >= ts.len()) { return acc; }
+    Str t = if (i < g.ns[id].nk && gk_bare_int(g, kg_kid(g, id, i))) { target } else { ts[i] };
+    return gk_mm_adopt(g, id, ts, target, i + 1, if (acc == "") { t } else { acc + "," + t });
+}
+
 // `sort(xs, using = Ord(T))` (spec §11).
 GKT gk_sort(GK k0, Int id) {
     Kg g = k0.g;
@@ -343,7 +368,13 @@ GKT gk_sort(GK k0, Int id) {
     PRes stripped = strip_reverse(gk_inst(g, kg_kid(g, u, 0)), 0);
     Str inner = stripped.ty;
     Int op = str_find_char(inner, 40, 0);
-    if (op < 0) { return gterr(k, "behavior instance must name a type: Ord(Int)", id); }
+    // `using = f` (or Reverse(f)): a comparator function used directly.
+    if (op < 0) {
+        Int cf = ck_fn_index(k.fs, inner);
+        if (cf < 0) { return gterr(k, "using = " + inner + ": expected a behavior instance such as Ord(" + elem + ") or a comparator function", id); }
+        if (k.fs.pts[cf] != elem + "," + elem || k.fs.rets[cf] != "Int") { return gterr(k, "comparator " + inner + " must have signature (" + elem + ", " + elem + ") -> Int", id); }
+        return gt(k, v.ty, id);
+    }
     Str head = str_slice(inner, 0, op);
     Str param = str_slice(inner, op + 1, str_len(inner) - 1);
     Int bi = ck_b_index(k.fs, head, param);
@@ -966,7 +997,8 @@ GKT gk_expect_method(GK k, Int id, Str bt, Str m, Int na) {
         if (p2.err != "") { return p2; }
         Bool etf = et == "Float" || str_has_prefix(et, "Float(");
         Bool e2f = e2.ty == "Float" || str_has_prefix(e2.ty, "Float(");
-        if (!etf || !e2f || p2.ty != "Int") { return gterr(p2.k, "toBeCloseTo expects Expect(Float), arg (Float, Int), got " + bt + " and (" + e2.ty + ", " + p2.ty + ")", id); }
+        Bool tol_ok = p2.ty == "Int" || is_float_ty(p2.ty);
+        if (!etf || !e2f || !tol_ok) { return gterr(p2.k, "toBeCloseTo expects Expect(Float), arg (Float, Float tolerance or Int digits), got " + bt + " and (" + e2.ty + ", " + p2.ty + ")", id); }
         if (na != 2) { return gterr(p2.k, "toBeCloseTo takes 2 arguments", id); }
         return gk_void(p2.k, id);
     }
@@ -1313,6 +1345,11 @@ GKS gk_decls(GK k, Int id, Int i, Str src, Str smap) {
         return gk_decls(r.k, id, i + 1, src, smap);
     }
     if (kind == "fn") {
+        Int self = ck_fn_index(k.fs, k.g.ns[d].text);
+        if (self >= 0 && self < k.fnode.len() && k.fnode[self] != d) {
+            gk_diag("E0001", "type error: function " + k.g.ns[d].text + " is defined more than once", k.g, d, src, smap);
+            return gs_err(k, "reported", d);
+        }
         Str rq = gk_requires_err(k.g.ns[d].aux);
         if (rq != "") {
             eprintln("error[E0213]: " + k.g.ns[d].text + ": " + rq);
@@ -1329,6 +1366,12 @@ GKS gk_decls(GK k, Int id, Int i, Str src, Str smap) {
         Str aux = k.g.ns[d].aux;
         BRes bh = BRes {.pos = 0, .name = k.g.ns[d].text, .param = kg_part(aux, 1), .impl = kg_part(aux, 2), .err = ""};
         if (validate_behavior(k.fs, bh) != 0) { return gs_err(k, "reported", d); }
+        Int first = ck_b_index(k.fs, bh.name, bh.param);
+        Bool dup = first >= 0 && gk_b_count(k.fs, bh.name, bh.param, 0, 0) > 1;
+        if (dup) {
+            gk_diag("E0001", "type error: " + bh.name + "(" + bh.param + ") is declared more than once; a type has one instance per behavior (pass another ordering with using = f)", k.g, d, src, smap);
+            return gs_err(k, "reported", d);
+        }
         if (!resid_quiet()) { println("OK behavior " + bh.name); }
         return gk_decls(k, id, i + 1, src, smap);
     }
@@ -1567,6 +1610,12 @@ List(Int) lin_params(GK k, Int d, Int i, Int n, List(Int) bs, ListBuf(Int) acc) 
 // ─── Signatures from the graph ──────────────────────────────────────
 
 // `@requires(a, b)` families in a declaration prefix, comma-joined.
+// How many instances name behavior b of type t.
+Int gk_b_count(Sigs fs, Str b, Str t, Int i, Int n) {
+    if (i >= fs.bnames.len()) { return n; }
+    return gk_b_count(fs, b, t, i + 1, if (fs.bnames[i] == b && fs.bparams[i] == t) { n + 1 } else { n });
+}
+
 // A malformed @requires: an unknown mode or capability family, or "".
 Str gk_requires_err(Str prefix) {
     Int at = str_find(prefix, "@requires");
@@ -1581,8 +1630,8 @@ Str gk_requires_err(Str prefix) {
 Str gk_unknown_family(List(Str) fs, Int i) {
     if (i >= fs.len()) { return ""; }
     Str f = fs[i];
-    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "git";
-    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, git)"; }
+    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network";
+    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network)"; }
     return gk_unknown_family(fs, i + 1);
 }
 
@@ -1815,6 +1864,7 @@ Str gk_sort_impl(GK k, Int id) {
     Str inner = strip_reverse(gk_inst(g, kg_kid(g, u, 0)), 0).ty;
     Int op = str_find_char(inner, 40, 0);
     if (op < 0) { return ""; }
+    if (op < 0) { return if (ck_fn_index(k.fs, inner) >= 0) { inner } else { "" }; }
     Int bi = ck_b_index(k.fs, str_slice(inner, 0, op), str_slice(inner, op + 1, str_len(inner) - 1));
     return if (bi < 0) { "" } else { k.fs.bfns[bi] };
 }
