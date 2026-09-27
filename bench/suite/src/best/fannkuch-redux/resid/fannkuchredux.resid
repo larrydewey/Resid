@@ -1,3 +1,6 @@
+// The Computer Language Benchmarks Game: fannkuch-redux, parallel: the n
+// blocks of (n-1)! permutations (one per top-level rotation) run on
+// concurrent spawn regions; the rest is the st program.
 // The Computer Language Benchmarks Game: fannkuch-redux.
 // https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/fannkuchredux.html
 //
@@ -67,31 +70,53 @@ Int identity(Int i, Int n, Int acc) {
 }
 
 // One outer step: count the flips of perm1, then advance perm1 to the
-// next permutation. `r` is the rotation level, `pc` the permutation
-// index. Returns checksum * 256 + maxflips, packed.
-Int run(Int n, Int perm1, Int count, Int r, Int pc, Int checksum, Int maxflips) {
+// next permutation. `r` is the rotation level, `pc` the permutation index
+// within the block; the block ends when the rotation reaches level `stop`.
+// Returns checksum * 256 + maxflips, packed.
+Int run(Int n, Int stop, Int perm1, Int count, Int r, Int pc, Int checksum, Int maxflips) {
     Int count1 = fill_count(count, r);
     Int flips = count_flips(perm1, 0);
     Int maxf2 = if (flips > maxflips) { flips } else { maxflips };
     Int cs2 = if (pc % 2 == 0) { checksum + flips } else { checksum - flips };
-    return next_perm(n, perm1, count1, 1, pc, cs2, maxf2);
+    return next_perm(n, stop, perm1, count1, 1, pc, cs2, maxf2);
 }
 
-// Inner "for (;;)" of the reference: rotate and decrement count[r]
-// until a level with remaining count is found, or r reaches n (done).
-Int next_perm(Int n, Int perm1, Int count, Int r, Int pc, Int checksum, Int maxflips) {
-    if (r == n) { return checksum * 256 + maxflips; }
+Int next_perm(Int n, Int stop, Int perm1, Int count, Int r, Int pc, Int checksum, Int maxflips) {
+    if (r == stop) { return checksum * 256 + maxflips; }
     Int p2 = rotate_prefix(perm1, r);
     Int cr = nib_get(count, r) - 1;
     Int c2 = nib_set(count, r, cr);
-    if (cr > 0) { return run(n, p2, c2, r, pc + 1, checksum, maxflips); }
-    return next_perm(n, p2, c2, r + 1, pc, checksum, maxflips);
+    if (cr > 0) { return run(n, stop, p2, c2, r, pc + 1, checksum, maxflips); }
+    return next_perm(n, stop, p2, c2, r + 1, pc, checksum, maxflips);
+}
+
+// perm rotated left k times over all n elements.
+Int rotations(Int p, Int k, Int n) {
+    if (k <= 0) { return p; }
+    return rotations(rotate_prefix(p, n - 1), k - 1, n);
+}
+
+// Block k: the (n-1)! permutations after k top-level rotations. (n-1)! is
+// even, so a block's local index parity is its global one.
+Int block(Int n, Int k) {
+    return run(n, n - 1, rotations(identity(0, n, 0), k, n), 0, n - 1, 0, 0, 0);
+}
+
+// Blocks k .. n - 1, each on its own concurrent region: checksum sum and
+// the largest flip count, packed.
+Int blocks(Int n, Int k) {
+    if (k >= n) { return 0; }
+    Result(Int, RegionError) mine = spawn () { return block(n, k); };
+    Int rest = blocks(n, k + 1);
+    Int r = mine else { 0 };
+    Int mf = max(r & 255, rest & 255);
+    return ((r - (r & 255)) / 256 + (rest - (rest & 255)) / 256) * 256 + mf;
 }
 
 @requires(args)
 Int main() {
     Int n = str_parse_int(args.get(1));
-    Int res = run(n, identity(0, n, 0), 0, n, 0, 0, 0);
+    Int res = blocks(n, 0);
     Int maxflips = res & 255;
     Int checksum = (res - maxflips) / 256;
     println(f"{checksum}\nPfannkuchen({n}) = {maxflips}");

@@ -1,0 +1,54 @@
+// The Computer Language Benchmarks Game: binary-trees, parallel.
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/binarytrees.html
+//
+// The st program with each depth level run in its own `spawn` region.
+
+type Tree = Node(Pair) | Leaf;
+type Pair = { Tree l; Tree r; };
+
+Tree bottom_up(Int d, Tree leaf) {
+    if (d <= 0) { return Node(Pair {.l = leaf, .r = leaf}); }
+    return Node(Pair {.l = bottom_up(d - 1, leaf), .r = bottom_up(d - 1, leaf)});
+}
+
+Int check(Tree t) {
+    return match t {
+        Node(p) => 1 + check(p.l) + check(p.r),
+        Leaf => 0
+    };
+}
+
+// k trees of depth d, summing their checks. Each tree is built and
+// checked inside one scalar binding, so the compiler releases it as soon
+// as its check is known (a scalar scope, see NOTES.md).
+Int batch(Int d, Int k, Int acc) {
+    if (k <= 0) { return acc; }
+    Int c = check(bottom_up(d, Leaf));
+    return batch(d, k - 1, acc + c);
+}
+
+// Depths d, d + 2, .. max_depth, each level's trees built and checked by
+// its own concurrent region (all levels do about the same work); the lines
+// come back in order.
+Str depths(Int d, Int max_depth) {
+    if (d > max_depth) { return ""; }
+    Int iters = 1 << (max_depth - d + 4);
+    Result(Int, RegionError) level = spawn () { return batch(d, iters, 0); };
+    Str rest = depths(d + 2, max_depth);
+    Int c = level else { 0 };
+    return f"{iters}\t trees of depth {d}\t check: {c}\n" + rest;
+}
+
+@requires(args)
+Int main() {
+    Int n = str_parse_int(args.get(1));
+    Int min_depth = 4;
+    Int max_depth = if (min_depth + 2 > n) { min_depth + 2 } else { n };
+    Int stretch = max_depth + 1;
+    Int sc = check(bottom_up(stretch, Leaf));
+    println(f"stretch tree of depth {stretch}\t check: {sc}");
+    Tree long_lived = bottom_up(max_depth, Leaf);
+    print(depths(min_depth, max_depth));
+    println(f"long lived tree of depth {max_depth}\t check: {check(long_lived)}");
+    return 0;
+}

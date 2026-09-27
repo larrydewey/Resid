@@ -1,0 +1,81 @@
+// The Computer Language Benchmarks Game: mandelbrot, parallel.
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/mandelbrot.html
+//
+// The same scalar algorithm as the st program (50 iterations, escape when
+// Zr^2 + Zi^2 > 4), with the image cut into horizontal bands computed by
+// concurrent `spawn` regions. The rows are processed in waves of `par`
+// bands; within a wave, `wave` starts band b's region, recurses to start
+// the others, and waits for its own band on the way back, so every region
+// of the wave runs at once and the bands come back in order.
+
+// True when c = (cr, ci) stays bounded for all 50 iterations.
+Bool inside(Float cr, Float ci, Float zr, Float zi, Float tr, Float ti, Int i) {
+    if (tr + ti > 4.0) { return false; }
+    if (i >= 50) { return true; }
+    Float zi2 = 2.0 * zr * zi + ci;
+    Float zr2 = tr - ti + cr;
+    return inside(cr, ci, zr2, zi2, zr2 * zr2, zi2 * zi2, i + 1);
+}
+
+// The bytes of one row, 8 pixels per byte, the last byte zero-padded.
+ListBuf(Int) row_bytes(Int x, Int w, Float fw, Float ci, Int bits, Int nbits, ListBuf(Int) acc) {
+    if (x >= w) {
+        if (nbits == 0) { return acc; }
+        return acc.push((bits << (8 - nbits)) & 255);
+    }
+    Float cr = 2.0 * (Float)x / fw - 1.5;
+    Int bit = if (inside(cr, ci, 0.0, 0.0, 0.0, 0.0, 0)) { 1 } else { 0 };
+    Int b2 = (bits << 1) | bit;
+    if (nbits == 7) { return row_bytes(x + 1, w, fw, ci, 0, 0, acc.push(b2)); }
+    return row_bytes(x + 1, w, fw, ci, b2, nbits + 1, acc);
+}
+
+// Rows y .. y1 - 1, appended.
+ListBuf(Int) band_rows(Int y, Int y1, Int w, Float fw, ListBuf(Int) acc) {
+    if (y >= y1) { return acc; }
+    Float ci = 2.0 * (Float)y / fw - 1.0;
+    return band_rows(y + 1, y1, w, fw, row_bytes(0, w, fw, ci, 0, 0, acc));
+}
+
+List(Int) band(Int b, Int rows, Int w, Float fw) {
+    Int y0 = b * rows;
+    Int y1 = min(y0 + rows, w);
+    return band_rows(y0, y1, w, fw, ListBuf()).finish();
+}
+
+// Bands b .. end - 1 of a wave, computed concurrently, in order.
+List(List(Int)) wave(Int b, Int end, Int rows, Int w, Float fw) {
+    if (b >= end) {
+        List(List(Int)) none = [];
+        return none;
+    }
+    Result(List(Int), RegionError) mine = spawn () { return band(b, rows, w, fw); };
+    List(List(Int)) rest = wave(b + 1, end, rows, w, fw);
+    List(Int) got = mine else { [] };
+    return [got].concat(rest);
+}
+
+Bool print_all(List(List(Int)) bs, Int i) {
+    if (i >= bs.len()) { return true; }
+    Bool ok = print_bytes(bs[i]);
+    return print_all(bs, i + 1);
+}
+
+Bool waves(Int b, Int nb, Int par, Int rows, Int w, Float fw) {
+    if (b >= nb) { return true; }
+    Int end = min(b + par, nb);
+    Bool ok = print_all(wave(b, end, rows, w, fw), 0);
+    return waves(end, nb, par, rows, w, fw);
+}
+
+@requires(args)
+Int main() {
+    Int w = str_parse_int(args.get(1));
+    Float fw = (Float)w;
+    print(f"P4\n{w} {w}\n");
+    // 16 regions per wave (the host's hardware threads), bands of 32 rows.
+    Int rows = 32;
+    Int nb = (w + rows - 1) / rows;
+    Bool ok = waves(0, nb, 16, rows, w, fw);
+    return if (ok) { 0 } else { 1 };
+}

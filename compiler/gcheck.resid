@@ -560,9 +560,11 @@ GKT gk_orelse(GK k, Int id, Str exp) {
     if (!is_opt && !is_res_ty(e.ty)) { return gterr(e.k, "`value else` requires an Option or Result, found " + e.ty, id); }
     Str pt = if (is_opt) { opt_elem(e.ty) } else { res_elem_ok(e.ty) };
     if (pt == "_") { return gterr(e.k, if (is_opt) { "cannot unwrap Option(_) with else" } else { "cannot unwrap Result(_, E) with else" }, id); }
-    GKT f = gk_expr(e.k, gk_kid(k, id, 1), "");
+    GKT f = gk_expr(e.k, gk_kid(k, id, 1), pt);
     if (f.err != "") { return f; }
-    if (!ty_same(f.ty, pt)) { return gterr(f.k, "`else` block yields " + f.ty + ", need payload " + pt, id); }
+    // An empty list adopts the payload's list type, as a binding would.
+    Bool empty_ok = f.ty == "List(Unknown)" && str_has_prefix(pt, "List(");
+    if (!ty_same(f.ty, pt) && !empty_ok) { return gterr(f.k, "`else` block yields " + f.ty + ", need payload " + pt, id); }
     return gt(f.k, pt, id);
 }
 

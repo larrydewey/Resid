@@ -30,12 +30,13 @@ General Resid constraints that shape this port (see the source header too):
   into a jump/`musttail`, so loops do not grow the stack.
 - No `free` and no garbage collector. The compiler releases everything a
   scalar binding's initializer allocates (`Int x = f(...)` runs in a
-  scalar scope, see `runtime/resid_rt.c`); anything else allocated per
+  scalar scope; the runtime's scope regions are in `runtime/rt/alloc.resid`); anything else allocated per
   iteration stays live for the rest of the run, so hot loops keep their
   state in scalar parameters.
-- `Int * Int` widens to `Int(128)`; products are narrowed with `i64(...)`.
-- `&&`/`||` evaluate both operands, so short-circuit conditions are
-  written as nested `if`s.
+- (Written when `Int * Int` widened to `Int(128)`; the `i64(...)` narrowings
+  it needed are now no-ops: every operator keeps the operand width, spec §6.1.)
+- (Written when `&&`/`||` evaluated both operands; they short-circuit now,
+  spec §30, so the nested `if`s are only a style.)
 - Compiled with the default `-O2` (`build/boot/stage2.bin`, which links the
   runtime with `clang -O2`).
 

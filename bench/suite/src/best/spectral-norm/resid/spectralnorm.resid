@@ -1,0 +1,151 @@
+// The Computer Language Benchmarks Game: spectral-norm.
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/spectralnorm.html
+//
+// Parallel port: each matrix-vector product is cut into 16 row chunks
+// computed by concurrent `spawn` regions (`chunks` starts chunk c's region,
+// recurses to start the rest, and waits for its own chunk on the way back).
+// Every row is summed in the reference order, so the result is identical
+// to the single-threaded program's. Resid has no sqrt builtin and no printf, so both are
+// implemented below in pure Resid.
+
+// ---- correctly rounded square root in pure Resid ----------------------
+
+// Given x within ~1 ulp of sqrt(d), return the correctly rounded sqrt(d):
+// the residual d - x*x is computed exactly with Dekker's two-product
+// (Veltkamp split), then one Newton correction x + r / (2x) is applied.
+Float sqrt_fix(Float d, Float x) {
+    Float c = 134217729.0 * x;
+    Float xh = c - (c - x);
+    Float xl = x - xh;
+    Float p = x * x;
+    Float e = ((xh * xh - p) + 2.0 * xh * xl) + xl * xl;
+    Float r = (d - p) - e;
+    return x + r / (2.0 * x);
+}
+
+Float newton_iter(Float d, Float x, Int k) {
+    if (k <= 0) { return x; }
+    return newton_iter(d, 0.5 * (x + d / x), k - 1);
+}
+
+// Scale d into [1, 4) by powers of 4 (exact), tracking the matching
+// power of 2 for the root.
+Float sqrt_scaled(Float d, Float s) {
+    if (d >= 4.0) { return sqrt_scaled(d * 0.25, s * 2.0); }
+    if (d < 1.0) { return sqrt_scaled(d * 4.0, s * 0.5); }
+    Float x = newton_iter(d, 0.5 + 0.5 * d, 6);
+    return x * s;
+}
+
+Float sqrt_slow(Float d) {
+    if (d <= 0.0) { return 0.0; }
+    return sqrt_fix(d, sqrt_scaled(d, 1.0));
+}
+
+// ---- printf("%.9f") in pure Resid ---------------------------------------
+
+Str pad_digits(Str s, Int width) {
+    if (str_len(s) >= width) { return s; }
+    return pad_digits("0" + s, width);
+}
+
+// Exact fixed-point formatting with 9 decimals, rounding half to even on
+// the exact binary value (as glibc printf does). The fraction times 1e9 is
+// exact in Float(128) (53-bit x 30-bit product fits the 113-bit mantissa).
+Str fmt9(Float v) {
+    Bool neg = v < 0.0;
+    Float a = if (neg) { 0.0 - v } else { v };
+    Int ip = (Int)a;
+    Float frac = a - (Float)ip;
+    Float(128) p = (Float(128))frac * (Float(128))1000000000.0;
+    Int q = (Int)p;
+    Float(128) rem = p - (Float(128))q;
+    Bool up = if (rem > (Float(128))0.5) { true } else { if (rem == (Float(128))0.5) { q % 2 == 1 } else { false } };
+    Int q2 = if (up) { q + 1 } else { q };
+    Int ip2 = if (q2 >= 1000000000) { ip + 1 } else { ip };
+    Int q3 = if (q2 >= 1000000000) { q2 - 1000000000 } else { q2 };
+    Str sign = if (neg) { "-" } else { "" };
+    return sign + f"{ip2}." + pad_digits(f"{q3}", 9);
+}
+
+// ---- spectral norm ------------------------------------------------------
+
+// A(i, j) = 1 / ((i + j) * (i + j + 1) / 2 + i + 1)
+Float eval_a(Int i, Int j) {
+    Int s = i + j;
+    Int t = i64(s * (s + 1));
+    return 1.0 / (Float)(t / 2 + i + 1);
+}
+
+// sum_j A(i, j) * v[j]
+Float row_a(Int i, Int j, Int n, List(Float) v, Float sum) {
+    if (j >= n) { return sum; }
+    return row_a(i, j + 1, n, v, sum + eval_a(i, j) * v[j]);
+}
+
+// sum_j A(j, i) * v[j]
+Float row_at(Int i, Int j, Int n, List(Float) v, Float sum) {
+    if (j >= n) { return sum; }
+    return row_at(i, j + 1, n, v, sum + eval_a(j, i) * v[j]);
+}
+
+// Rows lo .. hi - 1 of A v (at = false) or At v (at = true).
+ListBuf(Float) rows(Int i, Int hi, Int n, List(Float) v, Bool at, ListBuf(Float) acc) {
+    if (i >= hi) { return acc; }
+    Float r = if (at) { row_at(i, 0, n, v, 0.0) } else { row_a(i, 0, n, v, 0.0) };
+    return rows(i + 1, hi, n, v, at, acc.push(r));
+}
+
+// Chunks c .. nc - 1 (of `size` rows each), concurrently, in order.
+List(Float) chunks(Int c, Int nc, Int size, Int n, List(Float) v, Bool at) {
+    if (c >= nc) {
+        List(Float) none = [];
+        return none;
+    }
+    Result(List(Float), RegionError) mine = spawn () {
+        return rows(c * size, min((c + 1) * size, n), n, v, at, ListBuf()).finish();
+    };
+    List(Float) rest = chunks(c + 1, nc, size, n, v, at);
+    List(Float) got = mine else { [] };
+    return got.concat(rest);
+}
+
+List(Float) mul(Int n, List(Float) v, Bool at) {
+    Int size = (n + 15) / 16;
+    return chunks(0, (n + size - 1) / size, size, n, v, at);
+}
+
+List(Float) mul_atav(Int n, List(Float) v) {
+    return mul(n, mul(n, v, false), true);
+}
+
+List(Float) ones(Int i, Int n, List(Float) acc) {
+    if (i >= n) { return acc; }
+    return ones(i + 1, n, acc.concat([1.0]));
+}
+
+Float dot(Int i, Int n, List(Float) a, List(Float) b, Float sum) {
+    if (i >= n) { return sum; }
+    return dot(i + 1, n, a, b, sum + a[i] * b[i]);
+}
+
+// Ten rounds of v = AtA u; u = AtA v, then sqrt(u.v / v.v).
+Float power(Int k, Int n, List(Float) u) {
+    List(Float) v = mul_atav(n, u);
+    List(Float) u2 = mul_atav(n, v);
+    if (k >= 9) {
+        Float vbv = dot(0, n, u2, v, 0.0);
+        Float vv = dot(0, n, v, v, 0.0);
+        return sqrt_slow(vbv / vv);
+    }
+    return power(k + 1, n, u2);
+}
+
+@requires(args)
+Int main() {
+    Int n = str_parse_int(args.get(1));
+    List(Float) e = [];
+    List(Float) u = ones(0, n, e);
+    println(fmt9(power(0, n, u)));
+    return 0;
+}

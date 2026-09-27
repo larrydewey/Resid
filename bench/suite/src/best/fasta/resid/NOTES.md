@@ -4,8 +4,5 @@ Same program as `../../../st/fasta/resid/fasta.resid` (see that cell's
 NOTES.md for the algorithm and every workaround), compiled with `-O3`
 (the Resid driver passes `-O3` to clang; it adds no `-march` flag).
 
-No faster Resid variant exists: Resid has no usable parallelism.
-`resid_spawn` (spec §19 structured spawn) creates a thread and joins it
-immediately before returning (`runtime/resid_rt.c:1357`, `pthread_create`
-followed directly by `pthread_join`), so spawned work never runs
-concurrently. There are no SIMD types or intrinsics either.
+No parallel variant: the output is defined by one sequential random-number stream, so there is nothing for concurrent `spawn`
+regions to share. Resid has no SIMD types or intrinsics either.

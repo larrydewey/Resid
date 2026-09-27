@@ -331,6 +331,13 @@ structured; the implementation now does both:
   (`heap_retire` / `heap_adopt`), so programs spawning thousands of
   regions reuse memory. argv is loaded before any child starts.
 - Four regions of CPU work run in 0.73 s against 2.88 s sequentially.
+- The benchmark suite's Resid `best` cells use it: mandelbrot 11.1 -> 1.36 s,
+  spectral-norm 1.14 -> 0.24 s, binary-trees 2.1 -> 0.53 s, fannkuch-redux
+  15.4 -> 2.2 s, k-nucleotide 5.9 -> 2.0 s (nbody, fasta and pidigits are
+  sequential algorithms). The fannkuch-redux cells had been printing wrong
+  answers from n = 9 on since `>>` became arithmetic (v3.4): the
+  benchmark's nibble reversal now masks its last shift.
+- An empty list in an `else` block adopts the payload's list type.
   Conformance cases: `spawn_concurrent`, `err_spawn_return_type`,
   `err_spawn_handle_moved`.
 
