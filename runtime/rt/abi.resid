@@ -138,3 +138,6 @@ pub Int c_strchr(Int s, Int c) { return 0; }
 
 @import("resid_gmalloc", "ptr(i64)")
 pub Int c_gmalloc(Int n) { return 0; }
+
+@import("resid_rt_box_interned", "i8(ptr)")
+pub Int c_box_interned(Int p) { return 0; }

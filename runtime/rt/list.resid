@@ -1,0 +1,437 @@
+// Composite boxes and the persistent list.
+//
+// A composite box is {i32 tag, i32 count, ptr type} followed by `count`
+// slots. A list header is {i64 count, i32 shift, u32 stamp, ptr root,
+// ptr type} (32 bytes). shift == -1: root is a flat buffer {i64 used,
+// i64 cap, i64 kept, slots[cap]}; otherwise root is a 32-way trie of nodes
+// {i64 cap, slots[cap]} sized to the slots they hold, `shift` the root's
+// level. A flat list whose count equals the buffer's `used` is its tip: an
+// append that fits claims the next slots (atomically: spawned regions may
+// append to one shared list) and shares the buffer; any other append copies
+// (small lists) or moves to a trie (large branches). Old headers always
+// see exactly their own prefix. The stamp belongs to the map code
+// (resid_map_list_push).
+
+// ─── Composite boxes ───────────────────────────────────────────────────
+
+Int box_hdr(Int tag, Int count, Int ty) {
+    Int n = if (count > 0) { count } else { 0 };
+    Int v = ralloc(16 + n * 8);
+    Int _t = st32(v, tag);
+    Int _c = st32(v + 4, count);
+    return st64(v + 8, ty) * 0 + v;
+}
+
+@export("resid_box_new", "ptr(i64,i64,ptr,ptr)")
+pub Int rt_box_new(Int tag, Int count, Int src, Int ty) {
+    Int v = box_hdr(tag, count, ty);
+    Int _c = if (count > 0) { mcopy(v + 16, src, count * 8) } else { 0 };
+    return v;
+}
+
+// resid_box_new without the copy: the caller fills the slots.
+@export("resid_box_alloc", "ptr(i64,i64,ptr)")
+pub Int rt_box_alloc(Int tag, Int count, Int ty) { return box_hdr(tag, count, ty); }
+
+@export("resid_box_tag", "i64(ptr)")
+pub Int rt_box_tag(Int b) { return if (box_imm(b) || box_fimm(b)) { 0 - 1 } else { box_tag(b) }; }
+
+@export("resid_box_count", "i64(ptr)")
+pub Int rt_box_count(Int b) { return if (box_imm(b) || box_fimm(b)) { 1 } else { box_count(b) }; }
+
+@export("resid_box_slots", "ptr(ptr)")
+pub Int rt_box_slots(Int b) { return b + 16; }
+
+@export("resid_box_slot", "ptr(ptr,i64)")
+pub Int rt_box_slot(Int b, Int i) { return ld64(b + 16 + i * 8); }
+
+@export("resid_malloc", "ptr(i64)")
+pub Int rt_malloc(Int n) { return c_malloc(n); }
+
+// ─── List headers, nodes, flat buffers ─────────────────────────────────
+
+pub Int lcount(Int l) { return ld64(l); }
+pub Int lshift(Int l) { return sx32(ld32(l + 8)); }
+pub Int lroot(Int l) { return ld64(l + 16); }
+pub Int ltype(Int l) { return ld64(l + 24); }
+
+Int set_list(Int l, Int count, Int shift, Int root, Int ty) {
+    Int _c = st64(l, count);
+    Int _s = st32(l + 8, shift);
+    Int _r = st64(l + 16, root);
+    return st64(l + 24, ty) * 0 + l;
+}
+
+@export("resid_rt_list_hdr", "ptr()")
+pub Int list_hdr() {
+    Int l = ralloc(32);
+    return st32(l + 12, 0) * 0 + l;
+}
+
+Int node_new(Int cap) {
+    Int n = ralloc(8 + cap * 8);
+    Int _c = st64(n, cap);
+    return resid_raw_fill(n + 8, 0, cap * 8) * 0 + n;
+}
+
+@export("resid_rt_flatbuf_new", "ptr(i64)")
+pub Int flat_new(Int cap) {
+    Int f = ralloc(24 + cap * 8);
+    Int _u = st64(f, 0);
+    Int _c = st64(f + 8, cap);
+    return st64(f + 16, 0) * 0 + f;
+}
+
+Int pvec_get(Int node, Int level, Int i) {
+    if (level <= 0) { return ld64(node + 8 + (i & 31) * 8); }
+    return pvec_get(ld64(node + 8 + ((i >> level) & 31) * 8), level - 5, i);
+}
+
+pub Int list_at(Int l, Int i) {
+    if (lshift(l) == 0 - 1) { return ld64(lroot(l) + 24 + i * 8); }
+    return pvec_get(lroot(l), lshift(l), i);
+}
+
+// A copy of node (may be 0) with slot set to val, grown to cover it.
+Int node_with(Int node, Int slot, Int val) {
+    Int old = if (node != 0) { ld64(node) } else { 0 };
+    Int out = node_new(max(slot + 1, old));
+    Int _c = if (old > 0) { mcopy(out + 8, node + 8, old * 8) } else { 0 };
+    return st64(out + 8 + slot * 8, val) * 0 + out;
+}
+
+// node (at level) with leaf number leaf_idx replaced by leaf.
+Int set_leaf(Int node, Int level, Int leaf_idx, Int leaf) {
+    if (level == 0) { return leaf; }
+    Int slot = (leaf_idx >> (level - 5)) & 31;
+    Int child = if (node != 0 && slot < ld64(node)) { ld64(node + 8 + slot * 8) } else { 0 };
+    return node_with(node, slot, set_leaf(child, level - 5, leaf_idx, leaf));
+}
+
+// v with m elements appended, written into `into` (v itself for an
+// in-place append, or 0 for a new header).
+@export("resid_rt_pvec_append_into", "ptr(ptr,ptr,ptr,i64)")
+pub Int pvec_append_into(Int into, Int v, Int elems, Int m) {
+    if (lshift(v) == 0 - 1 || lroot(v) == 0) {
+        Int f = lroot(v);
+        Int n = lcount(v);
+        Bool tip = f != 0 && n + m <= ld64(f + 8) && resid_raw_cas(f, n, n + m);
+        if (tip) { return flat_fill(into, v, f, f, n, elems, m); }
+        if (f == 0 || ld64(f) == n || n <= 64) {
+            // Empty, full tip, or a small branch: copy, doubling so a run of
+            // appends stays amortized O(1); a fresh build is exact-size.
+            Int dst = flat_new(if (f != 0) { (n + m) * 2 } else { n + m });
+            Int _c = if (n > 0) { mcopy(dst + 24, f + 24, n * 8) } else { 0 };
+            Int _u = st64(dst, n);
+            return flat_fill(into, v, f, dst, n, elems, m);
+        }
+        // A large branch: continue as a trie.
+        return trie_append(into, trie_from_items(f + 24, n, ltype(v)), elems, m);
+    }
+    return trie_append(into, v, elems, m);
+}
+
+Int flat_fill(Int into, Int v, Int f, Int dst, Int n, Int elems, Int m) {
+    Int _c = mcopy(dst + 24 + n * 8, elems, m * 8);
+    Int _u = if (dst != f) { st64(dst, n + m) } else { 0 };
+    Int out = if (into != 0) { into } else { list_hdr() };
+    return set_list(out, n + m, 0 - 1, dst, ltype(v));
+}
+
+Int trie_append(Int into, Int v, Int elems, Int m) {
+    Int out = if (into != 0) { into } else { list_hdr() };
+    Int _o = if (out != v) { set_list(out, lcount(v), lshift(v), lroot(v), ltype(v)) } else { 0 };
+    return trie_fill(out, elems, m, 0);
+}
+
+// One leaf per step: the partial last leaf copied once and filled, then
+// each run of 32 elements a new leaf.
+Int trie_fill(Int out, Int elems, Int m, Int done) {
+    if (done >= m) { return out; }
+    Int idx = lcount(out);
+    Int leaf_idx = idx >> 5;
+    Int in_leaf = idx & 31;
+    Int take = min(32 - in_leaf, m - done);
+    Int leaf = node_new(in_leaf + take);
+    Int _o = if (in_leaf > 0) { mcopy(leaf + 8, leaf_of(lroot(out), lshift(out), idx) + 8, in_leaf * 8) } else { 0 };
+    Int _n = mcopy(leaf + 8 + in_leaf * 8, elems + done * 8, take * 8);
+    Int _r = if (lroot(out) == 0) { st64(out + 16, leaf) + st32(out + 8, 0) } else { place_leaf(out, idx, leaf_idx, leaf) };
+    Int _c = st64(out, idx + take);
+    return trie_fill(out, elems, m, done + take);
+}
+
+Int leaf_of(Int node, Int level, Int idx) {
+    if (level <= 0) { return node; }
+    return leaf_of(ld64(node + 8 + ((idx >> level) & 31) * 8), level - 5, idx);
+}
+
+Int place_leaf(Int out, Int idx, Int leaf_idx, Int leaf) {
+    Int shift = lshift(out);
+    Bool full = idx >= (1 << (shift + 5));
+    // A full tree grows a level; the old root becomes child 0.
+    Int _g = if (full) { grow_root(out) } else { 0 };
+    Int sh = lshift(out);
+    return st64(out + 16, if (sh == 0) { leaf } else { set_leaf(lroot(out), sh, leaf_idx, leaf) });
+}
+
+Int grow_root(Int out) {
+    Int nr = node_new(1);
+    Int _s = st64(nr + 8, lroot(out));
+    Int _r = st64(out + 16, nr);
+    return st32(out + 8, lshift(out) + 5);
+}
+
+@export("resid_rt_pvec_push", "ptr(ptr,ptr)")
+pub Int pvec_push(Int v, Int elem) {
+    Int one = resid_raw_tls("pvec_one", 8);
+    Int _s = st64(one, elem);
+    return pvec_append_into(0, v, one, 1);
+}
+
+// A trie-backed list of items[0..n) (a large flat list being branched).
+Int trie_from_items(Int items, Int n, Int ty) {
+    Int first = min(n, 32);
+    Int leaf = node_new(first);
+    Int _c = mcopy(leaf + 8, items, first * 8);
+    Int out = set_list(list_hdr(), first, 0, leaf, ty);
+    if (n > first) { return trie_append(0, out, items + first * 8, n - first); }
+    return out;
+}
+
+@export("resid_list_new", "ptr(i64,ptr,ptr)")
+pub Int rt_list_new(Int count, Int src, Int ty) {
+    Int v = set_list(resid_raw_tls("list_seed", 32), 0, 0, 0, ty);
+    if (count == 0) { return set_list(list_hdr(), 0, 0, 0, ty); }
+    return pvec_append_into(0, v, src, count);
+}
+
+@export("resid_list_len", "i64(ptr)")
+pub Int rt_list_len(Int l) { return lcount(l); }
+
+// Bounds-checked element read (an index out of range aborts, spec §24).
+@export("resid_list_get", "ptr(ptr,i64)")
+pub Int rt_list_get(Int l, Int i) {
+    if (!ult(i, lcount(l))) { return rt_index_abort(i, lcount(l), 0); }
+    return list_at(l, i);
+}
+
+// An element the compiler proved in bounds.
+@export("resid_list_get_nc", "ptr(ptr,i64)")
+pub Int rt_list_get_nc(Int l, Int i) { return list_at(l, i); }
+
+@export("resid_list_type", "ptr(ptr)")
+pub Int rt_list_type(Int l) { return ltype(l); }
+
+// The elements as a fresh malloc'd array (caller frees).
+@export("resid_list_to_array", "ptr(ptr)")
+pub Int rt_list_to_array(Int l) {
+    Int n = lcount(l);
+    if (n == 0) { return 0; }
+    Int out = xmalloc(n * 8);
+    Int _f = if (lshift(l) == 0 - 1) { mcopy(out, lroot(l) + 24, n * 8) } else { array_from_trie(l, out, 0, n) };
+    return out;
+}
+
+Int array_from_trie(Int l, Int out, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _s = st64(out + i * 8, list_at(l, i));
+    return array_from_trie(l, out, i + 1, n);
+}
+
+// Concatenate: push every element of b onto a.
+@export("resid_list_concat", "ptr(ptr,ptr)")
+pub Int rt_list_concat(Int a, Int b) {
+    Int m = lcount(b);
+    if (m == 0) { return a; }
+    if (m == 1) { return pvec_push(a, list_at(b, 0)); }
+    if (lshift(b) == 0 - 1) { return pvec_append_into(0, a, lroot(b) + 24, m); }
+    Int flat = rt_list_to_array(b);
+    Int out = pvec_append_into(0, a, flat, m);
+    return c_free(flat) * 0 + out;
+}
+
+// xs.concat([e]) without the one-element list.
+@export("resid_list_push", "ptr(ptr,ptr)")
+pub Int rt_list_push(Int a, Int elem) { return pvec_push(a, elem); }
+
+// ─── ListBuf(T) (spec §45): appended in place; the checker keeps each
+// builder value used once. ────────────────────────────────────────────
+
+@export("resid_listbuf_new", "ptr()")
+pub Int rt_listbuf_new() { return set_list(list_hdr(), 0, 0 - 1, 0, 0); }
+
+@export("resid_listbuf_push", "ptr(ptr,ptr)")
+pub Int rt_listbuf_push(Int l, Int elem) {
+    Int n = lcount(l);
+    Int f0 = lroot(l);
+    Int f = if (f0 == 0 || n >= ld64(f0 + 8)) { lb_grow(l, f0, n) } else { f0 };
+    Int _e = st64(f + 24 + n * 8, elem);
+    Int _c = st64(l, n + 1);
+    return st64(f, n + 1) * 0 + l;
+}
+
+@noinline
+Int lb_grow(Int l, Int f, Int n) {
+    Int nf = flat_new(if (n < 4) { 8 } else { n * 2 });
+    Int _c = if (n > 0) { mcopy(nf + 24, f + 24, n * 8) } else { 0 };
+    return st64(l + 16, nf) * 0 + nf;
+}
+
+@export("resid_listbuf_finish", "ptr(ptr,ptr)")
+pub Int rt_listbuf_finish(Int l, Int ty) {
+    Int _t = st64(l + 24, ty);
+    Int _s = if (lroot(l) == 0) { st32(l + 8, 0) } else { 0 };
+    return l;
+}
+
+// ─── Slices, ranges, assertions ────────────────────────────────────────
+
+// xs[lo..hi], bounds clamped to [0, count], empty when lo >= hi.
+@export("resid_list_slice", "ptr(ptr,i64,i64)")
+pub Int rt_list_slice(Int l, Int lo0, Int hi0) {
+    Int lo = max(lo0, 0);
+    Int hi = min(hi0, lcount(l));
+    Int n = max(hi - lo, 0);
+    if (n > 0 && lshift(l) == 0 - 1) { return rt_list_new(n, lroot(l) + 24 + lo * 8, ltype(l)); }
+    Int flat = xmalloc(max(n, 1) * 8);
+    Int _f = slice_fill(l, flat, lo, 0, n);
+    Int out = rt_list_new(n, flat, ltype(l));
+    return c_free(flat) * 0 + out;
+}
+
+Int slice_fill(Int l, Int flat, Int lo, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _s = st64(flat + i * 8, list_at(l, lo + i));
+    return slice_fill(l, flat, lo, i + 1, n);
+}
+
+// lo..hi (hi exclusive) as a List(Int).
+@export("resid_range_list", "ptr(i64,i64)")
+pub Int rt_range_list(Int lo, Int hi) {
+    Int n = if (hi > lo) { hi - lo } else { 0 };   // unsigned: may pass INT64_MAX
+    if (n < 0 || n > 1152921504606846975) { return rt_abort("range too large to materialize"); }
+    Int flat = xmalloc(max(n, 1) * 8);
+    Int _f = range_fill(flat, lo, 0, n);
+    Int out = rt_list_new(n, flat, resid_raw_addr("List(Int(64))"));
+    return c_free(flat) * 0 + out;
+}
+
+Int range_fill(Int flat, Int lo, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _s = st64(flat + i * 8, c_box_i64(lo + i));
+    return range_fill(flat, lo, i + 1, n);
+}
+
+// lo..=hi: hi + 1 would wrap at the top of Int.
+@export("resid_range_list_incl", "ptr(i64,i64)")
+pub Int rt_range_list_incl(Int lo, Int hi) {
+    if (hi == 9223372036854775807) { return rt_abort("range too large to materialize"); }
+    return rt_range_list(lo, hi + 1);
+}
+
+@export("resid_assert", "void(i8,ptr)")
+pub Int rt_assert(Int ok, Int msg) {
+    if (ok != 0) { return 0; }
+    Int sb = rt_sb_new();
+    Int _a = sb_lit(sb, resid_raw_addr("assertion failed"));
+    Int _m = if (msg != 0) { sb_lit(sb, resid_raw_addr(": ")) + sb_lit(sb, msg) } else { 0 };
+    return rt_abort_msg(rt_sb_finish(sb));
+}
+
+// todo(msg) (kind 0) / unimplemented(msg) (kind 1).
+@export("resid_todo", "void(i8,ptr)")
+pub Int rt_todo(Int kind, Int msg) {
+    Int sb = rt_sb_new();
+    Int _a = sb_lit(sb, if (kind != 0) { resid_raw_addr("not implemented") } else { resid_raw_addr("not yet implemented") });
+    Int _m = if (msg != 0) { sb_lit(sb, resid_raw_addr(": ")) + sb_lit(sb, msg) } else { 0 };
+    return rt_abort_msg(rt_sb_finish(sb));
+}
+
+// ─── Growable accumulator buffers ──────────────────────────────────────
+// {count, capacity, slots}: only for a self-recursive accumulator the
+// compiler proved unaliased, grown in place and wrapped once at the end.
+
+@export("resid_growbuf_from_list", "ptr(ptr)")
+pub Int rt_growbuf_from_list(Int src) {
+    Int n = lcount(src);
+    Int g = xmalloc(24);
+    Int cap = if (n < 4) { 4 } else { n * 2 };
+    Int slots = xmalloc(cap * 8);
+    Int flat = rt_list_to_array(src);
+    Int _c = if (n > 0) { mcopy(slots, flat, n * 8) } else { 0 };
+    Int _f = c_free(flat);
+    Int _a = st64(g, n);
+    Int _b = st64(g + 8, cap);
+    return st64(g + 16, slots) * 0 + g;
+}
+
+@export("resid_growbuf_push_list", "ptr(ptr,ptr)")
+pub Int rt_growbuf_push_list(Int g, Int src) {
+    Int n = lcount(src);
+    Int need = ld64(g) + n;
+    Int _g = if (need > ld64(g + 8)) { gb_grow(g, need) } else { 0 };
+    Int flat = rt_list_to_array(src);
+    Int _c = if (n > 0) { mcopy(ld64(g + 16) + ld64(g) * 8, flat, n * 8) } else { 0 };
+    Int _f = c_free(flat);
+    return st64(g, need) * 0 + g;
+}
+
+Int gb_grow(Int g, Int need) {
+    Int nc = max(ld64(g + 8) * 2, need);
+    Int _s = st64(g + 16, xrealloc(ld64(g + 16), nc * 8));
+    return st64(g + 8, nc);
+}
+
+@export("resid_growbuf_finish", "ptr(ptr,ptr)")
+pub Int rt_growbuf_finish(Int g, Int ty) {
+    Int out = rt_list_new(ld64(g), ld64(g + 16), ty);
+    Int _f = c_free(ld64(g + 16)) + c_free(g);
+    return out;
+}
+
+// ─── Precise frees at a tracked root's last unique use ─────────────────
+
+Int box_free_shallow(Int p) { return if (c_box_interned(p) != 0) { 0 } else { c_free(p) }; }
+
+Int free_node(Int node, Int shift) {
+    if (node == 0) { return 0; }
+    Int _k = free_kids(node, shift, 0, ld64(node));
+    return c_free(node);
+}
+
+Int free_kids(Int node, Int shift, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int s = ld64(node + 8 + i * 8);
+    Int _f = if (shift == 0) { if (s != 0) { box_free_shallow(s) } else { 0 } } else { free_node(s, shift - 5) };
+    return free_kids(node, shift, i + 1, n);
+}
+
+// A flat buffer may be shared by several headers: only the header goes.
+@export("resid_list_free", "void(ptr)")
+pub Int rt_list_free(Int l) {
+    if (l == 0) { return 0; }
+    Int _n = if (lroot(l) != 0 && lshift(l) != 0 - 1) { free_node(lroot(l), lshift(l)) } else { 0 };
+    return c_free(l);
+}
+
+Int free_slots(Int v, Int i, Int n, Bool deep) {
+    if (i >= n) { return 0; }
+    Int s = ld64(v + 16 + i * 8);
+    Int _f = if (s != 0 && c_box_interned(s) == 0) { c_free(s) } else { 0 };
+    return free_slots(v, i + 1, n, deep);
+}
+
+@export("resid_struct_free", "void(ptr)")
+pub Int rt_struct_free(Int v) {
+    if (v == 0) { return 0; }
+    Int _s = free_slots(v, 0, box_count(v), false);
+    return c_free(v);
+}
+
+// A scalar box (tag -1) is one allocation; a composite frees its slots.
+@export("resid_box_free", "void(ptr)")
+pub Int rt_box_free(Int v) {
+    if (v == 0 || c_box_interned(v) != 0) { return 0; }
+    Int _s = if (box_tag(v) != 0 - 1) { free_slots(v, 0, box_count(v), true) } else { 0 };
+    return c_free(v);
+}

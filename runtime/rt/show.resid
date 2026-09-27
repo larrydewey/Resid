@@ -3,14 +3,14 @@
 
 // Box layout: {tag i32, count i32, type ptr}, slots from +16; a scalar
 // box (tag -1) keeps its payload at +24.
-Bool box_imm(Int p) { return ult(p - 281474976710656, 36028797018963968); }
-Bool box_fimm(Int p) { return !ult(p, 72057594037927936); }
-Int imm_val(Int p) { return p - 18295873486192640; }
+pub Bool box_imm(Int p) { return ult(p - 281474976710656, 36028797018963968); }
+pub Bool box_fimm(Int p) { return !ult(p, 72057594037927936); }
+pub Int imm_val(Int p) { return p - 18295873486192640; }
 pub Int sx32(Int v) { return (v << 32) >> 32; }
-Int box_tag(Int p) { return sx32(ld32(p)); }
-Int box_count(Int p) { return sx32(ld32(p + 4)); }
-Int box_type(Int p) { return ld64(p + 8); }
-Int box_slot(Int p, Int i) { return ld64(p + 16 + i * 8); }
+pub Int box_tag(Int p) { return sx32(ld32(p)); }
+pub Int box_count(Int p) { return sx32(ld32(p + 4)); }
+pub Int box_type(Int p) { return ld64(p + 8); }
+pub Int box_slot(Int p, Int i) { return ld64(p + 16 + i * 8); }
 
 pub Int unbox_word(Int p) { return if (box_imm(p)) { imm_val(p) } else { ld64(p + 24) }; }
 pub Float unbox_float(Int p) { return resid_raw_bits_f64(if (box_fimm(p)) { p } else { ld64(p + 24) }); }
