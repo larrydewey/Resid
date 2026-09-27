@@ -383,7 +383,7 @@ GT lw_get_else(LW w, GT base, GT ka, Str kt, Str vt, Int fb, List(Str) env) {
     Str labf = f"L{l0 + 2}";
     Str labfe = f"L{l0 + 3}";
     Str labm = f"L{l0 + 4}";
-    List(Str) q = kw.lines.concat([fr + " = call {i64, i64} @resid_map_find(ptr " + base.val + f", i8 {kk}, i64 " + kw.val + f", i8 {lin_vk(vt)})", fnd + " = extractvalue {i64, i64} " + fr + ", 1", ok + " = icmp ne i64 " + fnd + ", 0", wv + " = extractvalue {i64, i64} " + fr + ", 0", lin_from_word(pv, wv, vt), "br i1 " + ok + ", label %" + labp + ", label %" + labf, labf + ":"]);
+    List(Str) q = kw.lines.concat([fr + " = call i128 @resid_map_find(ptr " + base.val + f", i8 {kk}, i64 " + kw.val + f", i8 {lin_vk(vt)})", fr + "h = lshr i128 " + fr + ", 64", fnd + " = trunc i128 " + fr + "h to i64", ok + " = icmp ne i64 " + fnd + ", 0", wv + " = trunc i128 " + fr + " to i64", lin_from_word(pv, wv, vt), "br i1 " + ok + ", label %" + labp + ", label %" + labf, labf + ":"]);
     GT fv0 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = kw.glines, .lines = q, .tmp = t1 + 4, .lbl = l0 + 4, .tail = false};
     GT fv = lw_arm(w, fb, env, fv0);
     if (fv.err != "") { return fv; }
@@ -932,7 +932,7 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
             Str fr = f"%t{tg}";
             Str wv = f"%t{tg + 1}";
             Str rawp = f"%t{tg + 2}";
-            GT rawg = lw_step(kw, rawp, "", kw.lines.concat([fr + " = call {i64, i64} @resid_map_find(ptr " + base.val + ", i8 1, i64 " + kw.val + ", i8 0)", wv + " = extractvalue {i64, i64} " + fr + ", 0", rawp + " = inttoptr i64 " + wv + " to ptr"]), tg + 2);
+            GT rawg = lw_step(kw, rawp, "", kw.lines.concat([fr + " = call i128 @resid_map_find(ptr " + base.val + ", i8 1, i64 " + kw.val + ", i8 0)", wv + " = trunc i128 " + fr + " to i64", rawp + " = inttoptr i64 " + wv + " to ptr"]), tg + 2);
             return wrap_map_get_option(rawp, vt, rawg);
         }
         GT kb = box_heap_(src, arg, env, fs);
@@ -1517,6 +1517,7 @@ GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
         return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 asm sideeffect \"syscall\", \"={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}\"(" + args + ")"]), t);
     }
     if (op == "addr") { return lw_step(g, r, "Int", g.lines.concat([r + " = ptrtoint ptr " + v[0] + " to i64"]), t); }
+    if (op == "popcount") { return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 @llvm.ctpop.i64(i64 " + v[0] + ")"]), t); }
     if (op == "catch") { return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 @e.catch(i64 " + v[0] + ", i64 " + v[1] + ", i64 " + v[2] + ")"]), t); }
     // cpuid(leaf, subleaf): ecx in the high 32 bits, edx in the low.
     if (op == "cpuid") {

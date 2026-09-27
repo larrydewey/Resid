@@ -141,3 +141,33 @@ pub Int c_gmalloc(Int n) { return 0; }
 
 @import("resid_rt_box_interned", "i8(ptr)")
 pub Int c_box_interned(Int p) { return 0; }
+
+@import("resid_box_f64", "ptr(double)")
+pub Int c_box_f64(Float v) { return 0; }
+
+@import("resid_box_bool", "ptr(i8)")
+pub Int c_box_bool(Int v) { return 0; }
+
+@import("resid_rt_sc_depth", "i64()")
+pub Int c_sc_depth() { return 0; }
+
+@import("resid_rt_sc_depth_set", "void(i64)")
+pub Int c_sc_depth_set(Int d) { return 0; }
+
+@import("resid_rt_in_scope", "i8(ptr)")
+pub Int c_in_scope(Int p) { return 0; }
+
+@import("resid_rt_scope_alloc", "ptr(i64)")
+pub Int c_scope_alloc(Int n) { return 0; }
+
+@import("resid_rt_outer_alloc", "ptr(i64)")
+pub Int c_outer_alloc(Int n) { return 0; }
+
+@import("resid_rt_suspend", "void(ptr)")
+pub Int c_suspend(Int save) { return 0; }
+
+@import("resid_rt_resume", "void(ptr)")
+pub Int c_resume(Int save) { return 0; }
+
+@import("resid_rt_in_arenas", "i8(ptr)")
+pub Int c_in_arenas(Int p) { return 0; }

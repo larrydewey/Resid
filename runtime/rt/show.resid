@@ -31,7 +31,7 @@ pub Int sb_word(Int sb, Int v) {
     return sb_bytes(sb, buf, itoa_into(buf, v));
 }
 
-Int sb_float(Int sb, Float v) {
+pub Int sb_float(Int sb, Float v) {
     Int buf = resid_raw_tls("show_buf", 64);
     return sb_bytes(sb, buf, c_strfromd(buf, 64, resid_raw_addr("%.17g"), v));
 }

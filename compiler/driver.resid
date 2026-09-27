@@ -882,7 +882,7 @@ Str fam_head(Str ty) {
 // precision, 34 for a bare `Dec` or an `m` literal) is static.
 // Typed and linear-accumulator map/set entry points (see lin_* below).
 List(Str) hdr_map_typed() {
-    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare {i64, i64} @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare void @resid_carry_free(i8, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)"];
+    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare i128 @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare void @resid_carry_free(i8, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)"];
 }
 
 // Runtime declarations added after the long hdr_core lists; both mains
@@ -4476,7 +4476,7 @@ List(Str) main_entry_ir() {
 // resid_raw_catch(slot, fn, arg): fn(arg) with a jump buffer published in
 // the word at `slot` (restored after); 1 if an abort longjmp'd back.
 Str rt_catch_def() {
-    return "declare i32 @_setjmp(ptr) returns_twice\ndefine linkonce_odr i64 @e.catch(i64 %slot, i64 %fn, i64 %arg) noinline {\nentry:\n  %jb = alloca [256 x i8], align 16\n  %sp = inttoptr i64 %slot to ptr\n  %prev = load volatile i64, ptr %sp\n  %jbi = ptrtoint ptr %jb to i64\n  store volatile i64 %jbi, ptr %sp\n  %r = call i32 @_setjmp(ptr %jb) returns_twice\n  %z = icmp eq i32 %r, 0\n  br i1 %z, label %run, label %caught\nrun:\n  %f = inttoptr i64 %fn to ptr\n  %x = call i64 %f(i64 %arg)\n  store volatile i64 %prev, ptr %sp\n  ret i64 0\ncaught:\n  store volatile i64 %prev, ptr %sp\n  ret i64 1\n}";
+    return "declare i64 @llvm.ctpop.i64(i64)\ndeclare i32 @_setjmp(ptr) returns_twice\ndefine linkonce_odr i64 @e.catch(i64 %slot, i64 %fn, i64 %arg) noinline {\nentry:\n  %jb = alloca [256 x i8], align 16\n  %sp = inttoptr i64 %slot to ptr\n  %prev = load volatile i64, ptr %sp\n  %jbi = ptrtoint ptr %jb to i64\n  store volatile i64 %jbi, ptr %sp\n  %r = call i32 @_setjmp(ptr %jb) returns_twice\n  %z = icmp eq i32 %r, 0\n  br i1 %z, label %run, label %caught\nrun:\n  %f = inttoptr i64 %fn to ptr\n  %x = call i64 %f(i64 %arg)\n  store volatile i64 %prev, ptr %sp\n  ret i64 0\ncaught:\n  store volatile i64 %prev, ptr %sp\n  ret i64 1\n}";
 }
 
 Str rt_itoa_def() {
@@ -5742,7 +5742,7 @@ pub Bool num_all_same(List(Str) ts, Int i, Str t) {
 
 // Runtime primitives (compiler-only): argument and result types.
 ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
-    Str want = if (op == "cpuid") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { want0(op) } };
+    Str want = if (op == "cpuid") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
     Str rty = if (op == "cas") { "Bool" } else { if (op == "str") { "Str" } else { if (op == "bits_f64") { "Float" } else { if (op == "f128_bits") { "Int(128)" } else { if (op == "bits_f128") { "Float(128)" } else { "Int" } } } } };
     if (want == "?") { return ERes {.pos = pos, .ty = "", .err = "unknown runtime primitive " + name}; }
     Bool scalar = argtys == "Int" || argtys == "Float" || argtys == "Bool";

@@ -1,0 +1,1627 @@
+// Immutable Map / Set (spec §32). A set is a map whose values are the
+// marker 1.
+//
+// A handle {i64 count @0, ptr root @8, ptr tab @16, i64 transient @24,
+// u64 edit @32, u32 own @40, i8 kk @44, i8 vk @45} (48 bytes) is either a
+// persistent 32-way hash trie (tab == 0; updates copy the root-to-leaf
+// path) or a flat open-addressing table (tab != 0). Either can be
+// TRANSIENT: owned by one place the compiler proved never sees an older
+// version, and updated in place (a table directly, a trie through edit
+// tokens: a node stamped with the handle's token is written in place, any
+// other is copied first). The first owned update of a shared map makes
+// the transient; freezing makes it an ordinary value again.
+//
+// Keys and values are words of a kind fixed per map: key kind 1 = raw Int,
+// 0 = boxed pointer; value kind 1 = raw Int, 2 = Float bits, 3 = Bool,
+// 0 = boxed (or a set's marker); -1 = undecided (the first update decides).
+// A request of another kind is converted: slower, never wrong. keys(),
+// values(), formatting and set algebra see the CANONICAL order: ascending
+// by the key hash's 5-bit chunks, lowest chunk first, equal full hashes in
+// insertion order.
+//
+// A trie node: {u32 dmap, u32 nmap, u32 ncoll, u32 cap (words), u64 edit,
+// words}: an index node's words are its entries' (key, value) pairs in slot
+// order, then its subnode pointers; a collision node (ncoll > 0) holds
+// ncoll pairs with equal full hashes.
+//
+// A table: {cap @0, live @8, tombs @16, i8 kkind @24, i8 vkind @25,
+// i8 nov @26, keys @32, vals @40, i8 oob_has[2] @48, oob_val[2] @56,
+// i8 lvalid @72, lkey @80, lres @88}: linear probing, at most half full;
+// free / deleted slots are sentinel keys (0 / 1 for pointers, INT64_MIN /
+// INT64_MIN + 1 for raw Ints, whose own entries live out of band). The
+// last raw-key probe is cached for the owning loop's transient table.
+
+// ─── Small helpers ─────────────────────────────────────────────────────
+
+Int ld_i8(Int p) { return sx8(ld8(p)); }
+Int popc(Int x) { return resid_raw_popcount(x); }
+
+// Secondary results (found flags, words).
+Int mret() { return resid_raw_tls("map_ret", 8); }
+Int mflag() { return resid_raw_tls("map_flag", 8); }
+Int ret_word(Int w) { return st64(mret(), w) * 0 + 1; }
+
+Int map_heap_w() { return resid_raw_tls("map_heap", 8); }
+Bool map_heap() { return ld64(map_heap_w()) != 0; }
+
+Int sc_depth() { return c_sc_depth(); }
+Bool in_region(Int p) { return c_sc_depth() != 0 && c_in_scope(p) != 0; }
+
+// Map memory lives where its map does: a new map inside a scope region
+// lives in the region; an update into an older map allocates on the heap.
+Int map_obj(Int n) {
+    if (!map_heap() && sc_depth() != 0) { return c_scope_alloc(n); }
+    return xmalloc(n);
+}
+
+Int map_obj_free(Int p) { return if (p != 0 && !in_region(p)) { c_free(p) } else { 0 }; }
+
+Int raw_empty() { return 0 - 9223372036854775807 - 1; }
+Int raw_tomb() { return 0 - 9223372036854775807; }
+
+// ─── Hashing and key equality ──────────────────────────────────────────
+
+Int fnv_off() { return 0 - 3750763034362895579; }
+Int fnv_p() { return 1099511628211; }
+
+Int fnv_str(Int s) { return fnv_from(fnv_off(), s); }
+
+Int fnv_from(Int h, Int p) {
+    Int c = ld8(p);
+    if (c == 0) { return h; }
+    return fnv_from((h ^ c) * fnv_p(), p + 1);
+}
+
+Int fnv_dec(Int h, Int mag) {
+    Int q = mag / 10;
+    Int h1 = if (q > 0) { fnv_dec(h, q) } else { h };
+    return (h1 ^ (48 + mag - q * 10)) * fnv_p();
+}
+
+// FNV-1a of v's decimal text.
+Int fnv_i64(Int v) {
+    Int h0 = if (v < 0) { (fnv_off() ^ 45) * fnv_p() } else { fnv_off() };
+    if (v == raw_empty()) { return (fnv_dec(h0, 922337203685477580) ^ 56) * fnv_p(); }
+    return fnv_dec(h0, if (v < 0) { 0 - v } else { v });
+}
+
+Int fnv_f64(Float d) {
+    Int buf = resid_raw_tls("map_fbuf", 64);
+    Int _n = c_strfromd(buf, 64, resid_raw_addr("%.17g"), d);
+    return fnv_str(buf);
+}
+
+// A bare string's first byte is never 0xFF; a box's tag -1 makes it so.
+Bool is_boxed(Int v) { return box_imm(v) || box_fimm(v) || ld8(v) == 255; }
+
+Bool type_is(Int t, Int s) { return t != 0 && c_strcmp(t, s) == 0; }
+
+// A boxed value's scalar type: 1 i64, 2 f64, 3 bool, 4 i128, 5 u128,
+// 6 another scalar, 0 not a scalar.
+Int stype(Int p) {
+    if (box_imm(p)) { return 1; }
+    if (box_fimm(p)) { return 2; }
+    if (box_tag(p) != 0 - 1) { return 0; }
+    Int t = box_type(p);
+    if (type_is(t, resid_raw_addr("i64"))) { return 1; }
+    if (type_is(t, resid_raw_addr("f64"))) { return 2; }
+    if (type_is(t, resid_raw_addr("bool"))) { return 3; }
+    if (type_is(t, resid_raw_addr("i128"))) { return 4; }
+    if (type_is(t, resid_raw_addr("u128"))) { return 5; }
+    return 6;
+}
+
+// Hash of a boxed key: strings by content, scalars by their canonical
+// text, other boxes by type name (agrees with key_eq).
+Int value_hash(Int v) {
+    if (!is_boxed(v)) { return fnv_str(v); }
+    if (box_imm(v)) { return fnv_i64(imm_val(v)); }
+    if (box_fimm(v)) { return fnv_f64(unbox_float(v)); }
+    Int t = box_type(v);
+    Int raw = ld64(v + 16);
+    if (box_tag(v) == 0 - 1) {
+        Int st = stype(v);
+        if (st == 1 || st == 4) { return fnv_i64(ld64(raw)); }
+        if (st == 2) { return fnv_f64(resid_raw_bits_f64(ld64(raw))); }
+        if (st == 3) { return fnv_str(if (ld8(raw) != 0) { resid_raw_addr("t") } else { resid_raw_addr("f") }); }
+        if (st == 5) {
+            Int buf = resid_raw_tls("map_ubuf", 32);
+            Int n = utoa_into(buf, ld64(raw));
+            return st8(buf + n, 0) * 0 + fnv_str(buf);
+        }
+        return fnv_str(if (t != 0) { t } else { resid_raw_addr("?") });
+    }
+    if (type_is(t, resid_raw_addr("Str"))) { return fnv_str(if (raw != 0) { raw } else { resid_raw_addr("") }); }
+    return fnv_str(if (t != 0) { t } else { resid_raw_addr("?") });
+}
+
+Bool value_eq(Int a, Int b) {
+    // Immediates first: a NaN Float is not equal to itself.
+    if (box_imm(a) || box_imm(b) || box_fimm(a) || box_fimm(b)) {
+        Int ta = if (is_boxed(a)) { stype(a) } else { 0 };
+        Int tb = if (is_boxed(b)) { stype(b) } else { 0 };
+        if (ta == 0 || ta != tb) { return false; }
+        if (ta == 1) { return unbox_word(a) == unbox_word(b); }
+        return ta == 2 && unbox_float(a) == unbox_float(b);
+    }
+    if (a == b) { return true; }
+    Bool ab = is_boxed(a);
+    Bool bb2 = is_boxed(b);
+    if (ab && bb2) { return boxed_eq(a, b); }
+    if (!ab && !bb2) { return c_strcmp(a, b) == 0; }
+    return false;
+}
+
+Bool boxed_eq(Int a, Int b) {
+    Int ta = box_type(a);
+    Int tb = box_type(b);
+    if (box_tag(a) == 0 - 1 && box_tag(b) == 0 - 1) {
+        if (ta == 0 || tb == 0 || c_strcmp(ta, tb) != 0) { return false; }
+        Int ra = ld64(a + 16);
+        Int rb = ld64(b + 16);
+        if (ra == rb) { return true; }
+        Int st = stype(a);
+        if (st == 1) { return ld64(ra) == ld64(rb); }
+        if (st == 2) { return resid_raw_bits_f64(ld64(ra)) == resid_raw_bits_f64(ld64(rb)); }
+        if (st == 3) { return ld8(ra) == ld8(rb); }
+        if (st == 4 || st == 5) { return ld64(ra) == ld64(rb) && ld64(ra + 8) == ld64(rb + 8); }
+        return false;
+    }
+    if (type_is(ta, resid_raw_addr("Str")) && type_is(tb, resid_raw_addr("Str"))) {
+        Int sa = ld64(a + 16);
+        Int sb = ld64(b + 16);
+        if (sa == 0 || sb == 0) { return sa == sb; }
+        return c_strcmp(sa, sb) == 0;
+    }
+    return a == b;
+}
+
+Int key_hash(Int kk, Int k) { return if (kk == 1) { fnv_i64(k) } else { value_hash(k) }; }
+Bool key_eq(Int kk, Int a, Int b) { return if (kk == 1) { a == b } else { value_eq(a, b) }; }
+
+// A hash as a number ordered canonically: the lowest 5-bit chunk most
+// significant (12 chunks, then the top 4 bits).
+Int canon_rank(Int h) { return (rank_at(h, 0, 0) << 4) | lshr(h, 60); }
+
+Int rank_at(Int h, Int l, Int r) {
+    if (l >= 12) { return r; }
+    return rank_at(h, l + 1, (r << 5) | ((h >> (l * 5)) & 31));
+}
+
+Int edit_seq() { return resid_raw_global("map_edit_seq", 8); }
+Int new_edit() { return resid_raw_fetch_add(edit_seq(), 1) + 1; }
+
+// ─── Words ─────────────────────────────────────────────────────────────
+
+Int box_any(Int k, Int w) {
+    if (k == 1) { return c_box_i64(w); }
+    if (k == 2) { return c_box_f64(resid_raw_bits_f64(w)); }
+    if (k == 3) { return c_box_bool(if (w != 0) { 1 } else { 0 }); }
+    return w;
+}
+
+// A box stored into an older map lives on the heap as the map does.
+Int mbox(Int k, Int w) {
+    if (k < 1 || k > 3 || !map_heap() || sc_depth() == 0) { return box_any(k, w); }
+    Int d = sc_depth();
+    Int _z = c_sc_depth_set(0);
+    Int r = box_any(k, w);
+    return c_sc_depth_set(d) * 0 + r;
+}
+
+// Unbox w to kind k (1/2/3) into mret(); false when it holds no such value.
+Bool unbox_k(Int k, Int w) {
+    if (ult(w, 4096) || !is_boxed(w)) { return false; }
+    Int st = stype(w);
+    if (k == 1 && st == 1) { return ret_word(unbox_word(w)) != 0; }
+    if (k == 2 && st == 2) { return ret_word(resid_raw_f64_bits(unbox_float(w))) != 0; }
+    if (k == 3 && st == 3) { return ret_word(ld8(w + 24)) != 0; }
+    return false;
+}
+
+// The kind a boxed value is best stored as; its word in mret().
+Int word_of_box(Int p, Bool for_key) {
+    Int st = if (!ult(p, 4096) && is_boxed(p)) { stype(p) } else { 0 };
+    if (st == 1) { return ret_word(unbox_word(p)); }
+    if (!for_key && st == 2) { return ret_word(resid_raw_f64_bits(unbox_float(p))) * 2; }
+    if (!for_key && st == 3) { return ret_word(ld8(p + 24)) * 3; }
+    return ret_word(p) * 0;
+}
+
+// A string about to be stored in a map, copied out of a scope region.
+@export("resid_str_keep", "ptr(ptr)")
+pub Int rt_str_keep(Int p) {
+    if (sc_depth() == 0 || c_in_scope(p) == 0) { return p; }
+    Int n = c_strlen(p) + 1;
+    Int q = c_outer_alloc(n);
+    return mcopy(q, p, n) * 0 + q;
+}
+
+// Kinds 4 and 5 (from the compiler): a string / a list of scalars or
+// strings, stored as kind 0 but moved out of any scope region.
+Int word_keep(Int k, Int w) {
+    if (k == 4) { return rt_str_keep(w); }
+    if (k == 5) { return rt_list_keep(w); }
+    return w;
+}
+
+// ─── Trie nodes ────────────────────────────────────────────────────────
+
+Int ndmap(Int n) { return ld32(n); }
+Int nnmap(Int n) { return ld32(n + 4); }
+Int nncoll(Int n) { return ld32(n + 8); }
+Int ncap(Int n) { return ld32(n + 12); }
+Int nedit(Int n) { return ld64(n + 16); }
+Int nw(Int n) { return n + 24; }
+Int wd(Int n, Int i) { return ld64(n + 24 + i * 8); }
+Int wset(Int n, Int i, Int v) { return st64(n + 24 + i * 8, v); }
+
+Int node_nd(Int n) { return if (nncoll(n) != 0) { nncoll(n) } else { popc(ndmap(n)) }; }
+Int node_nn(Int n) { return if (nncoll(n) != 0) { 0 } else { popc(nnmap(n)) }; }
+Int node_words(Int n) { return 2 * node_nd(n) + node_nn(n); }
+Int slot_bit(Int h, Int level) { return 1 << ((lshr(h, level * 5)) & 31); }
+
+Int node_new(Int capw, Int edit) {
+    Int n = map_obj(24 + capw * 8);
+    Int _a = st32(n, 0) + st32(n + 4, 0) + st32(n + 8, 0);
+    Int _c = st32(n + 12, capw);
+    return st64(n + 16, edit) * 0 + n;
+}
+
+// The node to write, with room for `add` more words: n itself when the
+// transient `edit` owns it and it has room, else a copy owned by edit.
+Int node_room(Int n, Int add, Int edit) {
+    Int used = node_words(n);
+    if (edit != 0 && nedit(n) == edit && used + add <= ncap(n)) { return n; }
+    Int extra = max(add, 0) + (if (edit != 0) { 4 } else { 0 });
+    Int m = node_new(used + extra, edit);
+    Int _a = st32(m, ndmap(n)) + st32(m + 4, nnmap(n)) + st32(m + 8, nncoll(n));
+    return mcopy(nw(m), nw(n), used * 8) * 0 + m;
+}
+
+Int node_leaf(Int level, Int h, Int k, Int v, Int edit) {
+    Int m = node_new(if (edit != 0) { 6 } else { 2 }, edit);
+    Int _d = st32(m, slot_bit(h, level));
+    Int _k = wset(m, 0, k);
+    return wset(m, 1, v) * 0 + m;
+}
+
+Int node_coll2(Int k1, Int v1, Int k2, Int v2, Int edit) {
+    Int m = node_new(if (edit != 0) { 8 } else { 4 }, edit);
+    Int _c = st32(m + 8, 2);
+    Int _w = wset(m, 0, k1) + wset(m, 1, v1) + wset(m, 2, k2) + wset(m, 3, v2);
+    return m;
+}
+
+// A node at `level` holding two keys; entry 1 is the older (first in a
+// collision).
+Int node_pair(Int level, Int h1, Int k1, Int v1, Int h2, Int k2, Int v2, Int edit) {
+    if (level > 12) { return node_coll2(k1, v1, k2, v2, edit); }
+    Int b1 = slot_bit(h1, level);
+    Int b2 = slot_bit(h2, level);
+    if (b1 == b2) {
+        Int sub = node_pair(level + 1, h1, k1, v1, h2, k2, v2, edit);
+        Int m = node_new(if (edit != 0) { 5 } else { 1 }, edit);
+        Int _n = st32(m + 4, b1);
+        return wset(m, 0, sub) * 0 + m;
+    }
+    Int m = node_new(if (edit != 0) { 8 } else { 4 }, edit);
+    Int _d = st32(m, b1 | b2);
+    Bool f1 = b1 < b2;
+    Int _w = wset(m, 0, if (f1) { k1 } else { k2 }) + wset(m, 1, if (f1) { v1 } else { v2 }) + wset(m, 2, if (f1) { k2 } else { k1 }) + wset(m, 3, if (f1) { v2 } else { v1 });
+    return m;
+}
+
+Int node_ins_data(Int n, Int bit, Int k, Int v, Int edit) {
+    Int di = popc(ndmap(n) & (bit - 1));
+    Int used = node_words(n);
+    Int m = node_room(n, 2, edit);
+    Int _mv = mcopy(nw(m) + (2 * di + 2) * 8, nw(m) + 2 * di * 8, (used - 2 * di) * 8);
+    Int _w = wset(m, 2 * di, k) + wset(m, 2 * di + 1, v);
+    return st32(m, ndmap(m) | bit) * 0 + m;
+}
+
+Int node_data_to_sub(Int n, Int bit, Int sub, Int edit) {
+    Int di = popc(ndmap(n) & (bit - 1));
+    Int nd = popc(ndmap(n));
+    Int nn = popc(nnmap(n));
+    Int ni = popc(nnmap(n) & (bit - 1));
+    Int m = node_room(n, 0, edit);
+    Int w = nw(m);
+    Int _a = mcopy(w + 2 * di * 8, w + (2 * di + 2) * 8, 2 * (nd - di - 1) * 8);
+    Int _b = mcopy(w + 2 * (nd - 1) * 8, w + 2 * nd * 8, ni * 8);
+    Int _c = mcopy(w + (2 * (nd - 1) + ni + 1) * 8, w + (2 * nd + ni) * 8, (nn - ni) * 8);
+    Int _s = st64(w + (2 * (nd - 1) + ni) * 8, sub);
+    Int _d = st32(m, ndmap(m) & ~bit);
+    return st32(m + 4, nnmap(m) | bit) * 0 + m;
+}
+
+Int node_sub_to_data(Int n, Int bit, Int k, Int v, Int edit) {
+    Int di = popc(ndmap(n) & (bit - 1));
+    Int nd = popc(ndmap(n));
+    Int nn = popc(nnmap(n));
+    Int ni = popc(nnmap(n) & (bit - 1));
+    Int m = node_room(n, 1, edit);
+    Int w = nw(m);
+    Int _a = mcopy(w + (2 * nd + 2 + ni) * 8, w + (2 * nd + ni + 1) * 8, (nn - ni - 1) * 8);
+    Int _b = mcopy(w + (2 * nd + 2) * 8, w + 2 * nd * 8, ni * 8);
+    Int _c = mcopy(w + (2 * di + 2) * 8, w + 2 * di * 8, 2 * (nd - di) * 8);
+    Int _w = st64(w + 2 * di * 8, k) + st64(w + (2 * di + 1) * 8, v);
+    Int _d = st32(m, ndmap(m) | bit);
+    return st32(m + 4, nnmap(m) & ~bit) * 0 + m;
+}
+
+// Insert into n (0: empty) at level: n itself when written in place (or
+// unchanged), else a new node. mflag() = 1 when the key was new.
+Int hn_insert(Int n, Int level, Int h, Int kk, Int k, Int v, Int edit) {
+    if (n == 0) { return st64(mflag(), 1) * 0 + node_leaf(level, h, k, v, edit); }
+    if (nncoll(n) != 0) { return coll_insert(n, kk, k, v, edit, 0, nncoll(n)); }
+    Int bit = slot_bit(h, level);
+    if ((nnmap(n) & bit) != 0) {
+        Int at = 2 * popc(ndmap(n)) + popc(nnmap(n) & (bit - 1));
+        Int c = wd(n, at);
+        Int c2 = hn_insert(c, level + 1, h, kk, k, v, edit);
+        if (c2 == c) { return n; }
+        Int m = node_room(n, 0, edit);
+        return wset(m, at, c2) * 0 + m;
+    }
+    if ((ndmap(n) & bit) != 0) {
+        Int di = popc(ndmap(n) & (bit - 1));
+        Int ok = wd(n, 2 * di);
+        Int ov = wd(n, 2 * di + 1);
+        if (key_eq(kk, ok, k)) {
+            Int _f = st64(mflag(), 0);
+            if (ov == v && ok == k) { return n; }
+            Int m = node_room(n, 0, edit);
+            return wset(m, 2 * di, k) * 0 + wset(m, 2 * di + 1, v) * 0 + m;
+        }
+        Int _f = st64(mflag(), 1);
+        Int sub = if (level >= 12) { node_coll2(ok, ov, k, v, edit) } else { node_pair(level + 1, key_hash(kk, ok), ok, ov, h, k, v, edit) };
+        return node_data_to_sub(n, bit, sub, edit);
+    }
+    Int _f = st64(mflag(), 1);
+    return node_ins_data(n, bit, k, v, edit);
+}
+
+Int coll_insert(Int n, Int kk, Int k, Int v, Int edit, Int i, Int cnt) {
+    if (i >= cnt) {
+        Int m = node_room(n, 2, edit);
+        Int _w = wset(m, 2 * cnt, k) + wset(m, 2 * cnt + 1, v);
+        Int _c = st32(m + 8, cnt + 1);
+        return st64(mflag(), 1) * 0 + m;
+    }
+    if (key_eq(kk, wd(n, 2 * i), k)) {
+        Int _f = st64(mflag(), 0);
+        if (wd(n, 2 * i + 1) == v && wd(n, 2 * i) == k) { return n; }
+        Int m = node_room(n, 0, edit);
+        return wset(m, 2 * i, k) * 0 + wset(m, 2 * i + 1, v) * 0 + m;
+    }
+    return coll_insert(n, kk, k, v, edit, i + 1, cnt);
+}
+
+// The address of key k's value word, or 0.
+Int hn_find(Int n, Int h, Int kk, Int k, Int level) {
+    if (n == 0) { return 0; }
+    if (nncoll(n) != 0) { return coll_find(n, kk, k, 0, nncoll(n)); }
+    Int bit = slot_bit(h, level);
+    if ((ndmap(n) & bit) != 0) {
+        Int di = popc(ndmap(n) & (bit - 1));
+        return if (key_eq(kk, wd(n, 2 * di), k)) { nw(n) + (2 * di + 1) * 8 } else { 0 };
+    }
+    if ((nnmap(n) & bit) == 0) { return 0; }
+    return hn_find(wd(n, 2 * popc(ndmap(n)) + popc(nnmap(n) & (bit - 1))), h, kk, k, level + 1);
+}
+
+Int coll_find(Int n, Int kk, Int k, Int i, Int cnt) {
+    if (i >= cnt) { return 0; }
+    if (key_eq(kk, wd(n, 2 * i), k)) { return nw(n) + (2 * i + 1) * 8; }
+    return coll_find(n, kk, k, i + 1, cnt);
+}
+
+// One entry and no subnodes: it folds into its parent's slot.
+Bool node_single(Int n) { return nncoll(n) == 1 || (nncoll(n) == 0 && nnmap(n) == 0 && popc(ndmap(n)) == 1); }
+
+// Remove k from n: 0 when the node empties, n itself when unchanged or
+// written in place. mflag() = 1 when removed.
+Int hn_remove(Int n, Int level, Int h, Int kk, Int k, Int edit) {
+    Int _f = st64(mflag(), 0);
+    if (n == 0) { return 0; }
+    if (nncoll(n) != 0) { return coll_remove(n, kk, k, edit, 0, nncoll(n)); }
+    Int bit = slot_bit(h, level);
+    if ((nnmap(n) & bit) != 0) {
+        Int nd = popc(ndmap(n));
+        Int nn = popc(nnmap(n));
+        Int ni = popc(nnmap(n) & (bit - 1));
+        Int c = wd(n, 2 * nd + ni);
+        Int c2 = hn_remove(c, level + 1, h, kk, k, edit);
+        if (ld64(mflag()) == 0) { return n; }
+        if (c2 == 0) {
+            if (nd == 0 && nn == 1) { return 0; }
+            Int m = node_room(n, 0, edit);
+            Int _mv = mcopy(nw(m) + (2 * nd + ni) * 8, nw(m) + (2 * nd + ni + 1) * 8, (nn - ni - 1) * 8);
+            return st32(m + 4, nnmap(m) & ~bit) * 0 + m;
+        }
+        if (node_single(c2)) { return node_sub_to_data(n, bit, wd(c2, 0), wd(c2, 1), edit); }
+        if (c2 == c) { return n; }
+        Int m = node_room(n, 0, edit);
+        return wset(m, 2 * nd + ni, c2) * 0 + m;
+    }
+    if ((ndmap(n) & bit) != 0) {
+        Int di = popc(ndmap(n) & (bit - 1));
+        if (!key_eq(kk, wd(n, 2 * di), k)) { return n; }
+        Int _d = st64(mflag(), 1);
+        if (ndmap(n) == bit && nnmap(n) == 0) { return 0; }
+        Int used = node_words(n);
+        Int m = node_room(n, 0, edit);
+        Int _mv = mcopy(nw(m) + 2 * di * 8, nw(m) + (2 * di + 2) * 8, (used - 2 * di - 2) * 8);
+        return st32(m, ndmap(m) & ~bit) * 0 + m;
+    }
+    return n;
+}
+
+Int coll_remove(Int n, Int kk, Int k, Int edit, Int i, Int cnt) {
+    if (i >= cnt) { return n; }
+    if (!key_eq(kk, wd(n, 2 * i), k)) { return coll_remove(n, kk, k, edit, i + 1, cnt); }
+    Int _d = st64(mflag(), 1);
+    if (cnt == 1) { return 0; }
+    Int m = node_room(n, 0, edit);
+    Int _mv = mcopy(nw(m) + 2 * i * 8, nw(m) + (2 * i + 2) * 8, 2 * (cnt - i - 1) * 8);
+    return st32(m + 8, cnt - 1) * 0 + m;
+}
+
+// Entries in canonical order into ks / vs (either may be 0) from index idx;
+// the next index.
+Int hn_collect(Int n, Int ks, Int vs, Int idx) {
+    if (n == 0) { return idx; }
+    if (nncoll(n) != 0) { return coll_collect(n, ks, vs, idx, 0, nncoll(n)); }
+    return slots_collect(n, ks, vs, idx, ndmap(n) | nnmap(n), popc(ndmap(n)));
+}
+
+Int coll_collect(Int n, Int ks, Int vs, Int idx, Int i, Int cnt) {
+    if (i >= cnt) { return idx; }
+    Int _k = if (ks != 0) { st64(ks + idx * 8, wd(n, 2 * i)) } else { 0 };
+    Int _v = if (vs != 0) { st64(vs + idx * 8, wd(n, 2 * i + 1)) } else { 0 };
+    return coll_collect(n, ks, vs, idx + 1, i + 1, cnt);
+}
+
+Int slots_collect(Int n, Int ks, Int vs, Int idx, Int all, Int nd) {
+    if (all == 0) { return idx; }
+    Int bit = all & (0 - all);
+    if ((ndmap(n) & bit) != 0) {
+        Int di = popc(ndmap(n) & (bit - 1));
+        Int _k = if (ks != 0) { st64(ks + idx * 8, wd(n, 2 * di)) } else { 0 };
+        Int _v = if (vs != 0) { st64(vs + idx * 8, wd(n, 2 * di + 1)) } else { 0 };
+        return slots_collect(n, ks, vs, idx + 1, all & (all - 1), nd);
+    }
+    Int idx2 = hn_collect(wd(n, 2 * nd + popc(nnmap(n) & (bit - 1))), ks, vs, idx);
+    return slots_collect(n, ks, vs, idx2, all & (all - 1), nd);
+}
+
+// ─── Handles ───────────────────────────────────────────────────────────
+
+Int mcount(Int m) { return ld64(m); }
+Int mroot(Int m) { return ld64(m + 8); }
+Int mtab(Int m) { return ld64(m + 16); }
+Bool mtrans(Int m) { return ld64(m + 24) != 0; }
+Int medit(Int m) { return ld64(m + 32); }
+Int mown(Int m) { return ld32(m + 40); }
+Int mkk(Int m) { return ld_i8(m + 44); }
+Int mvk(Int m) { return ld_i8(m + 45); }
+
+Int trie_new(Int count, Int root, Int kk, Int vk) {
+    Int t = map_obj(48);
+    Int _a = st64(t, count) + st64(t + 8, root) + st64(t + 16, 0) + st64(t + 24, 0) + st64(t + 32, 0);
+    Int _b = st32(t + 40, 0) + st8(t + 44, kk) + st8(t + 45, vk);
+    return t;
+}
+
+// ─── Table mode ────────────────────────────────────────────────────────
+
+Int tcap(Int t) { return ld64(t); }
+Int tlive(Int t) { return ld64(t + 8); }
+Int ttombs(Int t) { return ld64(t + 16); }
+Int tkk(Int t) { return ld_i8(t + 24); }
+Int tvk(Int t) { return ld_i8(t + 25); }
+Bool tnov(Int t) { return ld8(t + 26) != 0; }
+Int tkeys(Int t) { return ld64(t + 32); }
+Int tvals(Int t) { return ld64(t + 40); }
+Bool toob_has(Int t, Int o) { return ld8(t + 48 + o) != 0; }
+Int toob_val(Int t, Int o) { return ld64(t + 56 + o * 8); }
+
+Int t_empty(Int t) { return if (tkk(t) == 1) { raw_empty() } else { 0 }; }
+Int t_tomb(Int t) { return if (tkk(t) == 1) { raw_tomb() } else { 1 }; }
+
+Int mix(Int k0) {
+    Int k1 = k0 ^ lshr(k0, 33);
+    Int k2 = k1 * (0 - 49064778989728563);    // 0xff51afd7ed558ccd
+    return k2 ^ lshr(k2, 33);
+}
+
+Int t_hash(Int t, Int k) { return if (tkk(t) == 1) { mix(k) } else { value_hash(k) }; }
+Bool t_keq(Int t, Int a, Int b) { return if (tkk(t) == 1) { a == b } else { value_eq(a, b) }; }
+
+Int t_oob(Int t, Int k) {
+    if (tkk(t) != 1) { return 0 - 1; }
+    if (k == raw_empty()) { return 0; }
+    if (k == raw_tomb()) { return 1; }
+    return 0 - 1;
+}
+
+Int t_alloc(Int t, Int cap) {
+    Int _c = st64(t, cap);
+    Int keys = map_obj(cap * 8);
+    Int _k = st64(t + 32, keys);
+    Int _v = st64(t + 40, if (tnov(t)) { 0 } else { map_obj(cap * 8) });
+    return fill_words(keys, t_empty(t), 0, cap);
+}
+
+Int fill_words(Int p, Int w, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _s = st64(p + i * 8, w);
+    return fill_words(p, w, i + 1, n);
+}
+
+Int tab_new(Int cap, Int kk, Int vk, Bool nov) {
+    Int t = map_obj(96);
+    Int _z = resid_raw_fill(t, 0, 96);
+    Int _c = st64(t, cap);
+    Int _k = st8(t + 24, kk) + st8(t + 25, vk) + st8(t + 26, if (nov) { 1 } else { 0 });
+    Int _a = if (kk != 0 - 1) { t_alloc(t, cap) } else { 0 };
+    return t;
+}
+
+// Whether `used` slots overfill cap (half at most).
+Bool t_over(Int used, Int cap) { return used * 2 > cap; }
+
+Int cap_for(Int n) { return cap_for_at(n, 16); }
+Int cap_for_at(Int n, Int cap) { return if (t_over(n + 1, cap)) { cap_for_at(n, cap * 2) } else { cap }; }
+
+// Slot of key k (in the table's kind, not a sentinel), or -(free slot + 1).
+Int t_probe(Int t, Int k) {
+    Int mask = tcap(t) - 1;
+    return probe_at(t, k, t_hash(t, k) & mask, mask, t_empty(t), t_tomb(t), tkeys(t));
+}
+
+Int probe_at(Int t, Int k, Int i, Int mask, Int e, Int tb, Int keys) {
+    Int s = ld64(keys + i * 8);
+    if (s == e) { return 0 - i - 1; }
+    if (s != tb && t_keq(t, s, k)) { return i; }
+    return probe_at(t, k, (i + 1) & mask, mask, e, tb, keys);
+}
+
+// t_probe for a raw Int table, through the last-probe cache.
+Int probe_raw_cached(Int t, Int k) {
+    if (ld8(t + 72) != 0 && ld64(t + 80) == k) { return ld64(t + 88); }
+    Int mask = tcap(t) - 1;
+    Int r = probe_raw(tkeys(t), k, mix(k) & mask, mask);
+    Int _v = st8(t + 72, 1);
+    Int _k = st64(t + 80, k);
+    return st64(t + 88, r) * 0 + r;
+}
+
+Int probe_raw(Int keys, Int k, Int i, Int mask) {
+    Int s = ld64(keys + i * 8);
+    if (s == raw_empty()) { return 0 - i - 1; }
+    if (s == k) { return i; }
+    return probe_raw(keys, k, (i + 1) & mask, mask);
+}
+
+// Live entries: calls f-style iteration via an index; the next index after
+// a live entry (its key in mret(), value in mflag()), or -1 when done.
+Int t_next(Int t, Int idx) {
+    Int cap = tcap(t);
+    if (idx < cap) {
+        if (tkeys(t) == 0) { return t_next(t, cap); }
+        Int s = ld64(tkeys(t) + idx * 8);
+        if (s == t_empty(t) || s == t_tomb(t)) { return t_next(t, idx + 1); }
+        Int _k = st64(mret(), s);
+        Int _v = st64(mflag(), if (tvals(t) != 0) { ld64(tvals(t) + idx * 8) } else { 1 });
+        return idx + 1;
+    }
+    if (idx < cap + 2) {
+        Int o = idx - cap;
+        if (!toob_has(t, o)) { return t_next(t, idx + 1); }
+        Int _k = st64(mret(), if (o == 0) { raw_empty() } else { raw_tomb() });
+        Int _v = st64(mflag(), toob_val(t, o));
+        return idx + 1;
+    }
+    return 0 - 1;
+}
+
+// Rebuild into cap slots with key kind kk (keys boxed when box_keys).
+Int t_rebuild(Int t, Int cap, Int kk, Bool box_keys) {
+    Int old = xmalloc(96);
+    Int _c = mcopy(old, t, 96);
+    Int _k = st8(t + 24, kk);
+    Int _z = st64(t + 8, 0) + st64(t + 16, 0) + st8(t + 48, 0) + st8(t + 49, 0) + st8(t + 72, 0);
+    Int _a = t_alloc(t, cap);
+    Int _r = rebuild_from(t, old, 0, box_keys);
+    Int _f = map_obj_free(tkeys(old)) + map_obj_free(tvals(old));
+    return c_free(old);
+}
+
+Int rebuild_from(Int t, Int old, Int it, Bool box_keys) {
+    Int nx = t_next(old, it);
+    if (nx < 0) { return 0; }
+    Int k = ld64(mret());
+    Int v = ld64(mflag());
+    Int _i = t_insert_new(t, if (box_keys) { mbox(tkk(old), k) } else { k }, v);
+    return rebuild_from(t, old, nx, box_keys);
+}
+
+// Insert a key known to be absent.
+Int t_insert_new(Int t, Int k, Int v) {
+    Int o = t_oob(t, k);
+    if (o >= 0) { return st8(t + 48 + o, 1) + st64(t + 56 + o * 8, v) + st64(t + 8, tlive(t) + 1); }
+    // Full: twice the slots, or the same number when tombstones dominate.
+    Int _g = if (t_over(tlive(t) + ttombs(t) + 1, tcap(t))) { t_rebuild(t, if (tlive(t) * 4 > tcap(t)) { tcap(t) * 2 } else { tcap(t) }, tkk(t), false) } else { 0 };
+    Int r = t_probe(t, k);
+    Int _k = st64(tkeys(t) + (0 - r - 1) * 8, k);
+    Int _v = if (tvals(t) != 0) { st64(tvals(t) + (0 - r - 1) * 8, v) } else { 0 };
+    Int _l = st64(t + 8, tlive(t) + 1);
+    return st8(t + 72, 0);
+}
+
+// The first update decides the kinds and whether values are kept.
+Int t_decide(Int t, Int kk, Int vk, Int vb) {
+    Int _v = if (tvk(t) == 0 - 1) { st8(t + 25, vk) } else { 0 };
+    if (tkk(t) != 0 - 1) { return 0; }
+    Int _k = st8(t + 24, kk);
+    Int _n = st8(t + 26, if (vk == 0 && vb == 1) { 1 } else { 0 });
+    return t_alloc(t, tcap(t));
+}
+
+Int t_vals_make(Int t) {
+    Int vals = map_obj(tcap(t) * 8);
+    Int _f = fill_words(vals, 1, 0, tcap(t));
+    Int _s = st64(t + 40, vals);
+    return st8(t + 26, 0);
+}
+
+// Store every value boxed from now on.
+Int t_vals_boxed(Int t) {
+    Int _a = vals_box_at(t, 0, tcap(t));
+    Int _b = if (toob_has(t, 0)) { st64(t + 56, mbox(tvk(t), toob_val(t, 0))) } else { 0 };
+    Int _c = if (toob_has(t, 1)) { st64(t + 64, mbox(tvk(t), toob_val(t, 1))) } else { 0 };
+    return st8(t + 25, 0);
+}
+
+Int vals_box_at(Int t, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int s = ld64(tkeys(t) + i * 8);
+    Int _b = if (s != t_empty(t) && s != t_tomb(t)) { st64(tvals(t) + i * 8, mbox(tvk(t), ld64(tvals(t) + i * 8))) } else { 0 };
+    return vals_box_at(t, i + 1, n);
+}
+
+Int t_key_in(Int t, Int rk, Int kb) {
+    if (tkk(t) == rk) { return kb; }
+    if (tkk(t) == 0) { return mbox(rk, kb); }
+    if (unbox_k(tkk(t), kb)) { return ld64(mret()); }
+    // Keys of another type: go boxed.
+    Int _r = t_rebuild(t, tcap(t), 0, true);
+    return kb;
+}
+
+Int t_val_in(Int t, Int rk, Int vb) {
+    if (tvk(t) == rk) { return vb; }
+    if (tvk(t) == 0) { return mbox(rk, vb); }
+    if (rk == 0 && unbox_k(tvk(t), vb)) { return ld64(mret()); }
+    Int _b = t_vals_boxed(t);
+    return mbox(rk, vb);
+}
+
+// A stored value word of kind have as kind want.
+Int word_out(Int have, Int want, Int w) {
+    if (have == want || have == 0 - 1) { return w; }
+    if (want == 0) { return mbox(have, w); }
+    if (have == 0 && unbox_k(want, w)) { return ld64(mret()); }
+    return w;
+}
+
+Int map_one() { return resid_raw_global("map_one", 8); }
+
+// The address of a request key's value word, or 0. Never converts.
+Int t_vref(Int t, Int rk, Int kb) {
+    if (tlive(t) == 0 || tkeys(t) == 0) { return 0; }
+    Bool same = tkk(t) == rk;
+    Bool ok = same || (tkk(t) == 0 && rk == 1) || (tkk(t) != 0 && unbox_k(tkk(t), kb));
+    if (!ok) { return 0; }
+    Int k = if (same) { kb } else { if (tkk(t) == 0) { c_box_i64(kb) } else { ld64(mret()) } };
+    Int o = t_oob(t, k);
+    if (o >= 0) { return if (toob_has(t, o)) { t + 56 + o * 8 } else { 0 }; }
+    Int r = t_probe(t, k);
+    if (r < 0) { return 0; }
+    if (tvals(t) != 0) { return tvals(t) + r * 8; }
+    return st64(map_one(), 1) * 0 + map_one();
+}
+
+// ks / vs: the key / value is a string or list to keep out of any region.
+Int t_put_s(Int t, Int kk, Int kb, Int vk, Int vb, Int ks, Int vs) {
+    Int _d = t_decide(t, kk, vk, vb);
+    Int k = t_key_in(t, kk, kb);
+    Int v0 = t_val_in(t, vk, vb);
+    Int _m = if (tnov(t) && v0 != 1) { t_vals_make(t) } else { 0 };
+    Int at = t_vref(t, tkk(t), k);
+    Int v = if (vs != 0) { word_keep(vs, v0) } else { v0 };
+    if (at != 0) { return if (!tnov(t)) { st64(at, v) } else { 0 }; }
+    return t_insert_new(t, if (ks != 0) { word_keep(4, k) } else { k }, v);
+}
+
+Int t_put(Int t, Int kk, Int kb, Int vk, Int vb) { return t_put_s(t, kk, kb, vk, vb, 0, 0); }
+
+Bool t_del(Int t, Int kk, Int kb) {
+    if (tlive(t) == 0 || tkeys(t) == 0) { return false; }
+    Bool same = tkk(t) == kk;
+    Bool ok = same || tkk(t) == 0 || unbox_k(tkk(t), kb);
+    if (!ok) { return false; }
+    Int k = if (same) { kb } else { if (tkk(t) == 0) { mbox(kk, kb) } else { ld64(mret()) } };
+    Int _c = st8(t + 72, 0);
+    Int o = t_oob(t, k);
+    if (o >= 0) {
+        if (!toob_has(t, o)) { return false; }
+        Int _o = st8(t + 48 + o, 0);
+        return st64(t + 8, tlive(t) - 1) == 0;
+    }
+    Int r = t_probe(t, k);
+    if (r < 0) { return false; }
+    Int _k = st64(tkeys(t) + r * 8, t_tomb(t));
+    Int _l = st64(t + 8, tlive(t) - 1);
+    return st64(t + 16, ttombs(t) + 1) == 0;
+}
+
+// ─── Either mode ───────────────────────────────────────────────────────
+
+Int map_kk(Int m) { return if (mtab(m) != 0) { tkk(mtab(m)) } else { mkk(m) }; }
+Int map_vk(Int m) { return if (mtab(m) != 0) { tvk(mtab(m)) } else { mvk(m) }; }
+
+// A trie over ks / vs, built in place under a token never used again.
+Int trie_build(Int ks, Int vs, Int n, Int kk) { return build_at(ks, vs, n, kk, new_edit(), 0, 0); }
+
+Int build_at(Int ks, Int vs, Int n, Int kk, Int edit, Int i, Int root) {
+    if (i >= n) { return root; }
+    Int k = ld64(ks + i * 8);
+    Int r = hn_insert(root, 0, key_hash(kk, k), kk, k, if (vs != 0) { ld64(vs + i * 8) } else { 1 }, edit);
+    return build_at(ks, vs, n, kk, edit, i + 1, r);
+}
+
+// A table's entries in canonical order: entries {rank, k, v} sorted
+// stably by rank (equal full hashes keep table order).
+Int t_entries(Int t, Int ks, Int vs) {
+    Int n = tlive(t);
+    if (n == 0) { return 0; }
+    Int es = xmalloc(n * 24);
+    Int _f = ents_fill(t, es, 0, 0);
+    Int tmp = xmalloc(n * 24);
+    Int sorted = ent_sort(es, tmp, n, 1);
+    Int _o = ents_out(sorted, ks, vs, 0, n);
+    return c_free(es) + c_free(tmp);
+}
+
+Int ents_fill(Int t, Int es, Int it, Int j) {
+    Int nx = t_next(t, it);
+    if (nx < 0) { return j; }
+    Int k = ld64(mret());
+    Int e = es + j * 24;
+    Int _a = st64(e, canon_rank(key_hash(tkk(t), k))) + st64(e + 8, k) + st64(e + 16, ld64(mflag()));
+    return ents_fill(t, es, nx, j + 1);
+}
+
+Int ent_merge(Int src, Int dst, Int i, Int mid, Int j, Int hi, Int o) {
+    if (i < mid && j < hi) {
+        Bool left = !ult(ld64(src + j * 24), ld64(src + i * 24));
+        Int from = if (left) { i } else { j };
+        Int _c = mcopy(dst + o * 24, src + from * 24, 24);
+        return if (left) { ent_merge(src, dst, i + 1, mid, j, hi, o + 1) } else { ent_merge(src, dst, i, mid, j + 1, hi, o + 1) };
+    }
+    Int _l = if (i < mid) { mcopy(dst + o * 24, src + i * 24, (mid - i) * 24) } else { 0 };
+    return if (j < hi) { mcopy(dst + (o + mid - i) * 24, src + j * 24, (hi - j) * 24) } else { 0 };
+}
+
+Int ent_pass(Int src, Int dst, Int n, Int w, Int lo) {
+    if (lo >= n) { return 0; }
+    Int _m = ent_merge(src, dst, lo, min(lo + w, n), min(lo + w, n), min(lo + 2 * w, n), lo);
+    return ent_pass(src, dst, n, w, lo + 2 * w);
+}
+
+Int ent_sort(Int a, Int b, Int n, Int w) {
+    if (w >= n) { return a; }
+    Int _p = ent_pass(a, b, n, w, 0);
+    return ent_sort(b, a, n, w * 2);
+}
+
+Int ents_out(Int es, Int ks, Int vs, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _k = if (ks != 0) { st64(ks + i * 8, ld64(es + i * 24 + 8)) } else { 0 };
+    Int _v = if (vs != 0) { st64(vs + i * 8, ld64(es + i * 24 + 16)) } else { 0 };
+    return ents_out(es, ks, vs, i + 1, n);
+}
+
+// A map's entries as words of its kinds, in canonical order.
+Int map_entries(Int m, Int ks, Int vs) {
+    if (mtab(m) != 0) { return t_entries(mtab(m), ks, vs); }
+    return hn_collect(mroot(m), ks, vs, 0);
+}
+
+Int words_of(Int n) { return xmalloc(max(n, 1) * 8); }
+
+// The canonical trie of a map: cached on a frozen table (built on the
+// plain heap, since the table may outlive any region open now), built
+// afresh for a transient one.
+Int map_root(Int m) {
+    if (mtab(m) == 0) { return mroot(m); }
+    if (!mtrans(m)) {
+        Int c = mroot(m);
+        if (c != 0 || mcount(m) == 0) { return c; }
+    }
+    Int t = mtab(m);
+    Int n = tlive(t);
+    Bool cache = !mtrans(m);
+    Int saved = xmalloc(24);
+    Int _s = if (cache) { c_suspend(saved) } else { 0 };
+    Int ks = words_of(n);
+    Int vs = words_of(n);
+    Int _c = table_words(t, ks, vs, 0, 0);
+    Int root = trie_build(ks, vs, n, tkk(t));
+    Int _f = c_free(ks) + c_free(vs);
+    Int _r = if (cache) { c_resume(saved) } else { 0 };
+    Int _x = c_free(saved);
+    if (mtrans(m)) { return root; }
+    // Another thread may have cached an identical trie first.
+    if (resid_raw_cas(m + 8, 0, root)) { return root; }
+    return mroot(m);
+}
+
+Int table_words(Int t, Int ks, Int vs, Int it, Int j) {
+    Int nx = t_next(t, it);
+    if (nx < 0) { return j; }
+    Int _k = st64(ks + j * 8, ld64(mret()));
+    Int _v = st64(vs + j * 8, ld64(mflag()));
+    return table_words(t, ks, vs, nx, j + 1);
+}
+
+// A value word may leave a transient map: no list header it holds is its
+// alone any more (raw Int, Float or Bool values are never headers).
+Int map_exit(Int m) {
+    if (mtrans(m) && map_vk(m) <= 0) { return st32(m + 40, new_own()); }
+    return 0;
+}
+
+// Base of a persistent update: {root, kk, vk} in a TLS triple; a root no
+// transient will write.
+Int base_w() { return resid_raw_tls("map_base", 24); }
+Int base_set(Int root, Int kk, Int vk) { return st64(base_w(), root) + st64(base_w() + 8, kk) + st64(base_w() + 16, vk); }
+Int b_root() { return ld64(base_w()); }
+Int b_kk() { return ld64(base_w() + 8); }
+Int b_vk() { return ld64(base_w() + 16); }
+
+Int map_base(Int m) {
+    Int _e = map_exit(m);
+    if (mtab(m) != 0 || !mtrans(m)) { return base_set(map_root(m), map_kk(m), map_vk(m)); }
+    Int n = mcount(m);
+    Int ks = words_of(n);
+    Int vs = words_of(n);
+    Int _c = map_entries(m, ks, vs);
+    Int r = trie_build(ks, vs, n, map_kk(m));
+    Int _f = c_free(ks) + c_free(vs);
+    return base_set(r, map_kk(m), map_vk(m));
+}
+
+// The base with every key and/or value word boxed.
+Int base_boxed(Int n, Bool keys, Bool vals) {
+    Int ks = words_of(n);
+    Int vs = words_of(n);
+    Int _c = hn_collect(b_root(), ks, vs, 0);
+    Int kk = if (keys) { 0 } else { b_kk() };
+    Int vk = if (vals) { 0 } else { b_vk() };
+    Int _b = box_words(ks, vs, 0, n, keys, vals, b_kk(), b_vk());
+    Int r = trie_build(ks, vs, n, kk);
+    Int _f = c_free(ks) + c_free(vs);
+    return base_set(r, kk, vk);
+}
+
+Int box_words(Int ks, Int vs, Int i, Int n, Bool keys, Bool vals, Int kk, Int vk) {
+    if (i >= n) { return 0; }
+    Int _k = if (keys) { st64(ks + i * 8, mbox(kk, ld64(ks + i * 8))) } else { 0 };
+    Int _v = if (vals) { st64(vs + i * 8, mbox(vk, ld64(vs + i * 8))) } else { 0 };
+    return box_words(ks, vs, i + 1, n, keys, vals, kk, vk);
+}
+
+// A request word of kind rk as kind have (into mret()); false if it
+// cannot be.
+Bool word_in(Int have, Int rk, Int w) {
+    if (have == rk) { return ret_word(w) != 0; }
+    if (have == 0) { return ret_word(mbox(rk, w)) != 0; }
+    if (rk == 0) { return unbox_k(have, w); }
+    return false;
+}
+
+// Persistent insert: a new frozen trie-mode map.
+Int map_insert_p(Int m, Int rk, Int kb, Int rv, Int vb) {
+    Int _b = map_base(m);
+    Int _e = if (mcount(m) == 0) { base_set(0, rk, rv) } else { 0 };
+    Int _k = if (b_kk() == 0 - 1) { st64(base_w() + 8, rk) } else { 0 };
+    Int _v = if (b_vk() == 0 - 1) { st64(base_w() + 16, rv) } else { 0 };
+    Bool kin = word_in(b_kk(), rk, kb);
+    Int k = if (kin) { ld64(mret()) } else { base_boxed(mcount(m), true, false) * 0 + mbox(rk, kb) };
+    Bool vin = word_in(b_vk(), rv, vb);
+    Int v = if (vin) { ld64(mret()) } else { base_boxed(mcount(m), false, true) * 0 + mbox(rv, vb) };
+    Int kk = b_kk();
+    Int vk = b_vk();
+    Int root = hn_insert(b_root(), 0, key_hash(kk, k), kk, k, v, 0);
+    return trie_new(mcount(m) + ld64(mflag()), root, kk, vk);
+}
+
+// A request key as a word of the map's key kind (into mret()); false when
+// no entry can have it.
+Bool key_lookup_word(Int kk, Int rk, Int kb) {
+    if (kk == rk) { return ret_word(kb) != 0; }
+    if (kk == 0) { return ret_word(mbox(rk, kb)) != 0; }
+    return unbox_k(kk, kb);
+}
+
+// Persistent remove: m itself when the key is absent (unless transient).
+Int map_remove_p(Int m, Int rk, Int kb) {
+    if (mcount(m) == 0 || !key_lookup_word(map_kk(m), rk, kb)) {
+        if (!mtrans(m)) { return m; }
+        Int _b = map_base(m);
+        return trie_new(mcount(m), b_root(), map_kk(m), map_vk(m));
+    }
+    Int k = ld64(mret());
+    Int _b = map_base(m);
+    Int kk = b_kk();
+    Int vk = b_vk();
+    Int base = b_root();
+    Int root = hn_remove(base, 0, key_hash(kk, k), kk, k, 0);
+    if (ld64(mflag()) == 0) { return if (mtrans(m)) { trie_new(mcount(m), base, kk, vk) } else { m }; }
+    return trie_new(mcount(m) - 1, root, kk, vk);
+}
+
+// Stamps are unique process-wide: each thread takes blocks of 65536 from a
+// global counter; past 2^32 they are 0 (appends never in place again).
+Int own_w() { return resid_raw_tls("map_own", 16); }
+
+Int new_own() {
+    Int w = own_w();
+    Int _b = if (ld64(w) == ld64(w + 8)) { own_block(w) } else { 0 };
+    Int nx = ld64(w);
+    if (nx > 4294967295) { return 0; }
+    return st64(w, nx + 1) * 0 + nx;
+}
+
+Int own_block(Int w) {
+    Int start = resid_raw_fetch_add(resid_raw_global("map_own_seq", 8), 65536) + 1;
+    Int _a = st64(w, start);
+    return st64(w + 8, start + 65535);
+}
+
+Int map_vref(Int m, Int rk, Int kb) {
+    Int _e = map_exit(m);
+    return map_vref_raw(m, rk, kb);
+}
+
+Int map_vref_raw(Int m, Int rk, Int kb) {
+    if (mcount(m) == 0) { return 0; }
+    if (mtab(m) != 0) { return t_vref(mtab(m), rk, kb); }
+    if (!key_lookup_word(mkk(m), rk, kb)) { return 0; }
+    Int k = ld64(mret());
+    return hn_find(mroot(m), key_hash(mkk(m), k), mkk(m), k, 0);
+}
+
+// An exclusively owned copy of map for the first owned update of a shared
+// map: a small map into a table, a big one a transient trie sharing every
+// node until it writes it, a transient source copied in full.
+@export("resid_map_transient", "ptr(ptr)")
+pub Int rt_map_transient(Int src) {
+    Int n = mcount(src);
+    if (n > 64 && !mtrans(src)) {
+        Int m = trie_new(n, map_root(src), map_kk(src), map_vk(src));
+        Int _t = st64(m + 24, 1) + st64(m + 32, new_edit());
+        return st32(m + 40, new_own()) * 0 + m;
+    }
+    Int _e = map_exit(src);
+    Int m = trie_new(n, 0, 0 - 1, 0 - 1);
+    Int _t = st64(m + 24, 1) + st32(m + 40, new_own());
+    if (mtab(src) != 0) { return st64(m + 16, copy_tab(mtab(src))) * 0 + m; }
+    Int t = tab_new(cap_for(n), 0 - 1, 0 - 1, false);
+    Int _s = st64(m + 16, t);
+    if (n == 0) { return m; }
+    Int ks = words_of(n);
+    Int vs = words_of(n);
+    Int _c = map_entries(src, ks, vs);
+    Int _p = put_all(t, mkk(src), mvk(src), ks, vs, 0, n);
+    Int _f = c_free(ks) + c_free(vs);
+    return m;
+}
+
+Int copy_tab(Int s) {
+    Int t = map_obj(96);
+    Int _c = mcopy(t, s, 96);
+    Int _l = st8(t + 72, 0);
+    if (tkeys(s) == 0) { return t; }
+    Int keys = map_obj(tcap(s) * 8);
+    Int _k = mcopy(keys, tkeys(s), tcap(s) * 8);
+    Int _sk = st64(t + 32, keys);
+    if (tvals(s) == 0) { return t; }
+    Int vals = map_obj(tcap(s) * 8);
+    Int _v = mcopy(vals, tvals(s), tcap(s) * 8);
+    return st64(t + 40, vals) * 0 + t;
+}
+
+Int put_all(Int t, Int kk, Int vk, Int ks, Int vs, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _p = t_put(t, kk, ld64(ks + i * 8), vk, ld64(vs + i * 8));
+    return put_all(t, kk, vk, ks, vs, i + 1, n);
+}
+
+// The owner is done with it: an ordinary immutable map from here on.
+@export("resid_map_freeze", "ptr(ptr)")
+pub Int rt_map_freeze(Int m) { return st64(m + 24, 0) * 0 + m; }
+
+// An owned update of a transient trie, in place.
+Int trie_put_owned(Int m, Int rk, Int kb, Int rv, Int vb) {
+    Int _e = if (mcount(m) == 0) { st8(m + 44, rk) + st8(m + 45, rv) } else { 0 };
+    Bool kin = word_in(mkk(m), rk, kb);
+    Int k0 = ld64(mret());
+    Bool vin = kin && word_in(mvk(m), rv, vb);
+    Int v0 = ld64(mret());
+    if (!kin || !vin) {
+        // Words of another kind: go boxed (a fresh transient trie).
+        Int _s = base_set(mroot(m), mkk(m), mvk(m));
+        Int _b = base_boxed(mcount(m), true, true);
+        Int _r = st64(m + 8, b_root()) + st8(m + 44, 0) + st8(m + 45, 0) + st64(m + 32, new_edit());
+        return trie_put_at(m, mbox(rk, kb), mbox(rv, vb));
+    }
+    return trie_put_at(m, k0, v0);
+}
+
+Int trie_put_at(Int m, Int k, Int v) {
+    Int root = hn_insert(mroot(m), 0, key_hash(mkk(m), k), mkk(m), k, v, medit(m));
+    Int _r = st64(m + 8, root);
+    return st64(m, mcount(m) + ld64(mflag())) * 0 + m;
+}
+
+@noinline
+Int map_put_slow(Int m0, Int owned, Int kk0, Int kb, Int vk0, Int vb) {
+    Int ks = if (kk0 == 4) { 1 } else { 0 };
+    Int kk = if (kk0 == 4) { 0 } else { kk0 };
+    Int vs = if (vk0 == 4 || vk0 == 5) { vk0 } else { 0 };
+    Int vk = if (vk0 == 4 || vk0 == 5) { 0 } else { vk0 };
+    // The first owned update of a shared map takes a private copy.
+    Int m = if (owned != 0 && !mtrans(m0)) { rt_map_transient(m0) } else { m0 };
+    if (owned != 0 && mtrans(m)) {
+        // In place: allocate where the map lives.
+        Int saved = ld64(map_heap_w());
+        Int _h = st64(map_heap_w(), if (in_region(m)) { 0 } else { 1 });
+        Int _p = if (mtab(m) != 0) { tab_put_owned(m, kk, kb, vk, vb, ks, vs) } else { trie_put_owned(m, kk, word_keep(if (ks != 0) { 4 } else { 0 }, kb), vk, word_keep(vs, vb)) };
+        return st64(map_heap_w(), saved) * 0 + m;
+    }
+    return map_insert_p(m, kk, word_keep(if (ks != 0) { 4 } else { 0 }, kb), vk, word_keep(vs, vb));
+}
+
+Int tab_put_owned(Int m, Int kk, Int kb, Int vk, Int vb, Int ks, Int vs) {
+    Int t = mtab(m);
+    Int _l = st8(t + 72, 0);
+    Int _p = t_put_s(t, kk, kb, vk, vb, ks, vs);
+    return st64(m, tlive(t));
+}
+
+// Typed insert; `owned` (from the compiler) marks an update nothing else
+// observes: in place on a transient, which a shared map first becomes.
+@export("resid_map_put", "ptr(ptr,i8,i8,i64,i8,i64)")
+pub Int rt_map_put(Int m, Int owned, Int kk, Int kb, Int vk, Int vb) {
+    Int t = mtab(m);
+    Bool fast = owned != 0 && mtrans(m) && t != 0 && kk == 1 && tkk(t) == 1 && tvk(t) == vk && (tvals(t) != 0 || vb == 1) && lshr(kb, 1) != lshr(raw_empty(), 1);
+    if (fast) {
+        Int r = probe_raw_cached(t, kb);
+        if (r >= 0) { return if (tvals(t) != 0) { st64(tvals(t) + r * 8, vb) } else { 0 } * 0 + m; }
+        if (!t_over(tlive(t) + ttombs(t) + 1, tcap(t))) {
+            Int slot = 0 - r - 1;
+            Int _k = st64(tkeys(t) + slot * 8, kb);
+            Int _v = if (tvals(t) != 0) { st64(tvals(t) + slot * 8, vb) } else { 0 };
+            Int _l = st64(t + 8, tlive(t) + 1);
+            Int _r = st64(t + 88, slot);   // the cached key now lives there
+            return st64(m, tlive(t)) * 0 + m;
+        }
+    }
+    return map_put_slow(m, owned, kk, kb, vk, vb);
+}
+
+// A list element (a scalar box or a string) on the heap.
+Int elem_keep(Int p) {
+    if (p == 0 || ult(p, 4096) || !in_region(p)) { return p; }
+    if (!is_boxed(p)) { return rt_str_keep(p); }
+    Int k = word_of_box(p, false);
+    if (k == 0) { return p; }
+    Int raw = ld64(mret());
+    Int d = sc_depth();
+    Int _z = c_sc_depth_set(0);
+    Int r = box_any(k, raw);
+    return c_sc_depth_set(d) * 0 + r;
+}
+
+// m.insert(k, (m.get(k) else { d }).concat([e])) on a map of lists, fused:
+// on an owned transient whose slot holds a header stamped with the map's
+// own, the element is appended in place.
+@export("resid_map_list_push", "ptr(ptr,i8,i8,i64,ptr,ptr)")
+pub Int rt_map_list_push(Int m, Int owned, Int kk, Int kb, Int elem, Int dflt) {
+    Int lk = if (kk == 4) { 0 } else { kk };
+    Bool heap = !in_region(m);
+    if (owned != 0 && mtrans(m) && mown(m) != 0) {
+        Int at = map_vref_raw(m, lk, kb);
+        Int h = if (at != 0) { ld64(at) } else { 0 };
+        if (h != 0 && ld32(h + 12) == mown(m)) {
+            // Allocate and keep as the map does: outside the region.
+            Int d = sc_depth();
+            Int e = if (heap) { elem_keep(elem) } else { elem };
+            Int _z = if (heap) { c_sc_depth_set(0) } else { 0 };
+            Int one = resid_raw_tls("map_one_elem", 8);
+            Int _o = st64(one, e);
+            Int _a = pvec_append_into(h, h, one, 1);
+            return c_sc_depth_set(d) * 0 + m;
+        }
+    }
+    // The looked-up header only seeds the new one: it does not leave.
+    Int at = map_vref_raw(m, lk, kb);
+    Int base = if (at != 0) { word_out(map_vk(m), 0, ld64(at)) } else { dflt };
+    Int nv = if (lcount(base) == 0) { fresh_list(base, elem, heap, owned != 0) } else { pvec_push(base, elem) };
+    Int r = rt_map_put(m, owned, kk, kb, 5, nv);
+    if (owned != 0 && mtrans(r) && mown(r) != 0) {
+        Int slot = map_vref_raw(r, lk, kb);
+        Int _st = if (slot != 0) { st32(ld64(slot) + 12, mown(r)) } else { 0 };
+        return r;
+    }
+    return r;
+}
+
+// A new one-element list with room for a few appends.
+Int fresh_list(Int base, Int elem, Bool heap, Bool owned) {
+    Int d = sc_depth();
+    Int _z = if (heap && owned) { c_sc_depth_set(0) } else { 0 };
+    Int f = flat_new(4);
+    Int _e = st64(f + 24, if (heap) { elem_keep(elem) } else { elem });
+    Int _u = st64(f, 1);
+    Int nv = list_hdr();
+    Int _l = st64(nv, 1) + st32(nv + 8, 0 - 1) + st64(nv + 16, f) + st64(nv + 24, ltype(base));
+    return c_sc_depth_set(d) * 0 + nv;
+}
+
+@export("resid_map_del", "ptr(ptr,i8,i8,i64)")
+pub Int rt_map_del(Int m0, Int owned, Int kk0, Int kb) {
+    Int kk = if (kk0 == 4) { 0 } else { kk0 };
+    Int m = if (owned != 0 && !mtrans(m0) && mcount(m0) > 0) { rt_map_transient(m0) } else { m0 };
+    if (owned != 0 && mtrans(m) && mtab(m) == 0) {
+        Int saved = ld64(map_heap_w());
+        Int _h = st64(map_heap_w(), if (in_region(m)) { 0 } else { 1 });
+        Int _r = if (mcount(m) > 0 && key_lookup_word(mkk(m), kk, kb)) { trie_del_at(m, ld64(mret())) } else { 0 };
+        return st64(map_heap_w(), saved) * 0 + m;
+    }
+    if (owned != 0 && mtrans(m)) {
+        Bool _d = t_del(mtab(m), kk, kb);
+        return st64(m, tlive(mtab(m))) * 0 + m;
+    }
+    return map_remove_p(m, kk, kb);
+}
+
+Int trie_del_at(Int m, Int k) {
+    Int root = hn_remove(mroot(m), 0, key_hash(mkk(m), k), mkk(m), k, medit(m));
+    Int _r = st64(m + 8, root);
+    return st64(m, mcount(m) - ld64(mflag()));
+}
+
+@export("resid_set_put", "ptr(ptr,i8,i8,i64)")
+pub Int rt_set_put(Int s, Int owned, Int kk, Int kb) { return rt_map_put(s, owned, kk, kb, 0, 1); }
+
+// Typed lookup: found << 64 | value word of kind vk. No allocation on the
+// table path, so `m.get(k) else { d }` on an Int-keyed map is a probe.
+@noinline
+Int(128) map_find_slow(Int m, Int kk, Int kb, Int vk) {
+    Int at = map_vref(m, kk, kb);
+    if (at == 0) { return (Int(128))0; }
+    Int w0 = word_out(map_vk(m), vk, ld64(at));
+    Bool miss = vk != 0 && map_vk(m) == 0 && !unbox_k(vk, ld64(at));
+    if (miss) { return (Int(128))0; }
+    Int w = if (vk != 0 && map_vk(m) == 0) { ld64(mret()) } else { w0 };
+    return found_word(w);
+}
+
+Int(128) found_word(Int w) { return ((Int(128))1 << (Int(128))64) | ((Int(128))w & (Int(128))18446744073709551615); }
+
+@export("resid_map_find", "i128(ptr,i8,i64,i8)")
+pub Int(128) rt_map_find(Int m, Int kk0, Int kb, Int vk0) {
+    Int kk = if (kk0 == 4) { 0 } else { kk0 };
+    Int vk = if (vk0 == 4) { 0 } else { vk0 };
+    Int t = mtab(m);
+    // Only the owning loop's transient table uses the last-probe cache.
+    if (mtrans(m) && t != 0 && kk == 1 && tkk(t) == 1 && tvk(t) == vk && lshr(kb, 1) != lshr(raw_empty(), 1)) {
+        Int _e = map_exit(m);
+        Int at = probe_raw_cached(t, kb);
+        if (at < 0) { return (Int(128))0; }
+        return found_word(if (tvals(t) != 0) { ld64(tvals(t) + at * 8) } else { 1 });
+    }
+    return map_find_slow(m, kk, kb, vk);
+}
+
+@export("resid_map_has", "i8(ptr,i8,i64)")
+pub Int rt_map_has(Int m, Int kk, Int kb) { return if (map_vref(m, if (kk == 4) { 0 } else { kk }, kb) != 0) { 1 } else { 0 }; }
+
+// ─── Boxed-value API ───────────────────────────────────────────────────
+
+@export("resid_map_get", "ptr(ptr,ptr)")
+pub Int rt_map_get(Int m, Int key) {
+    Int rk = word_of_box(key, true);
+    Int at = map_vref(m, rk, ld64(mret()));
+    return if (at != 0) { word_out(map_vk(m), 0, ld64(at)) } else { 0 };
+}
+
+@export("resid_map_insert", "ptr(ptr,ptr,ptr)")
+pub Int rt_map_insert(Int m, Int key, Int val) {
+    Int rk = word_of_box(key, true);
+    Int kb = ld64(mret());
+    Int rv = word_of_box(val, false);
+    return map_insert_p(m, rk, kb, rv, ld64(mret()));
+}
+
+@export("resid_map_remove", "ptr(ptr,ptr)")
+pub Int rt_map_remove(Int m, Int key) {
+    Int rk = word_of_box(key, true);
+    return map_remove_p(m, rk, ld64(mret()));
+}
+
+@export("resid_map_contains", "i8(ptr,ptr)")
+pub Int rt_map_contains(Int m, Int key) {
+    Int rk = word_of_box(key, true);
+    return if (map_vref(m, rk, ld64(mret())) != 0) { 1 } else { 0 };
+}
+
+@export("resid_map_len", "i64(ptr)")
+pub Int rt_map_len(Int m) { return mcount(m); }
+
+@export("resid_map_free", "void(ptr)")
+pub Int rt_map_free(Int m) { return 0; }
+
+@export("resid_set_free", "void(ptr)")
+pub Int rt_set_free(Int m) { return 0; }
+
+// Keys (want_keys) or values as boxed pointers in canonical order, in a
+// fresh array (caller frees).
+Int boxed_entries(Int m, Bool want_keys) {
+    Int n = mcount(m);
+    Int kw = words_of(n);
+    Int vw = words_of(n);
+    Int _e = map_exit(m);
+    Int _c = map_entries(m, kw, vw);
+    Int _b = box_words(kw, vw, 0, n, want_keys, !want_keys, map_kk(m), map_vk(m));
+    if (want_keys) { return c_free(vw) * 0 + kw; }
+    return c_free(kw) * 0 + vw;
+}
+
+@export("resid_map_keys", "ptr(ptr)")
+pub Int rt_map_keys(Int m) {
+    Int ks = boxed_entries(m, true);
+    Int r = rt_list_new(mcount(m), ks, resid_raw_addr("list"));
+    return c_free(ks) * 0 + r;
+}
+
+@export("resid_map_values", "ptr(ptr)")
+pub Int rt_map_values(Int m) {
+    Int vs = boxed_entries(m, false);
+    Int r = rt_list_new(mcount(m), vs, resid_raw_addr("list"));
+    return c_free(vs) * 0 + r;
+}
+
+// An entry's text: a string as is, a scalar formatted.
+Int sb_entry(Int sb, Int p) {
+    Int st = if (is_boxed(p)) { stype(p) } else { 0 };
+    if (st == 0) { return sb_lit(sb, p); }
+    if (st == 2) { return sb_float(sb, unbox_float(p)); }
+    if (st == 3) { return sb_lit(sb, if (ld8(p + 24) != 0) { resid_raw_addr("true") } else { resid_raw_addr("false") }); }
+    return sb_word(sb, unbox_word(p));
+}
+
+Int sb_pairs(Int sb, Int ks, Int vs, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _c = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
+    Int _k = sb_entry(sb, ld64(ks + i * 8));
+    Int _v = if (vs != 0) { sb_lit(sb, resid_raw_addr(": ")) + sb_entry(sb, ld64(vs + i * 8)) } else { 0 };
+    return sb_pairs(sb, ks, vs, i + 1, n);
+}
+
+// {key1: val1, key2: val2}
+@export("resid_map_format", "ptr(ptr)")
+pub Int rt_map_format(Int m) {
+    Int sb = rt_sb_new();
+    Int n = mcount(m);
+    Int ks = if (n > 0) { boxed_entries(m, true) } else { 0 };
+    Int vs = if (n > 0) { boxed_entries(m, false) } else { 0 };
+    Int _o = sb_lit(sb, resid_raw_addr("{"));
+    Int _p = sb_pairs(sb, ks, vs, 0, n);
+    Int _c = sb_lit(sb, resid_raw_addr("}"));
+    Int _f = c_free(ks) + c_free(vs);
+    return rt_sb_finish(sb);
+}
+
+// ─── Sets (maps with value 1) ──────────────────────────────────────────
+
+@export("resid_set_new", "ptr()")
+pub Int rt_set_new() { return trie_new(0, 0, 0 - 1, 0 - 1); }
+
+@export("resid_set_insert", "ptr(ptr,ptr)")
+pub Int rt_set_insert(Int s, Int e) { return rt_map_insert(s, e, 1); }
+
+@export("resid_set_remove", "ptr(ptr,ptr)")
+pub Int rt_set_remove(Int s, Int e) { return rt_map_remove(s, e); }
+
+@export("resid_set_contains", "i8(ptr,ptr)")
+pub Int rt_set_contains(Int s, Int e) { return rt_map_contains(s, e); }
+
+@export("resid_set_len", "i64(ptr)")
+pub Int rt_set_len(Int s) { return mcount(s); }
+
+// A set's element words (of its key kind), unordered (caller frees).
+Int set_words(Int s) {
+    Int ks = words_of(mcount(s));
+    if (mtab(s) != 0) { return table_keys(mtab(s), ks, 0, 0) * 0 + ks; }
+    return hn_collect(mroot(s), ks, 0, 0) * 0 + ks;
+}
+
+Int table_keys(Int t, Int ks, Int it, Int j) {
+    Int nx = t_next(t, it);
+    if (nx < 0) { return j; }
+    Int _k = st64(ks + j * 8, ld64(mret()));
+    return table_keys(t, ks, nx, j + 1);
+}
+
+// A new frozen set (a table) of element words.
+Int set_of_words(Int ks, Int n, Int kk) {
+    Int r = trie_new(0, 0, 0 - 1, 0 - 1);
+    if (n == 0) { return r; }
+    Int t = tab_new(cap_for(n), kk, 0, true);
+    Int _s = st64(r + 16, t);
+    Int _i = insert_words(t, ks, 0, n);
+    return st64(r, tlive(t)) * 0 + r;
+}
+
+Int insert_words(Int t, Int ks, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _i = t_insert_new(t, ld64(ks + i * 8), 1);
+    return insert_words(t, ks, i + 1, n);
+}
+
+Int put_words(Int t, Int kk, Int ks, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _p = t_put(t, kk, ld64(ks + i * 8), 0, 1);
+    return put_words(t, kk, ks, i + 1, n);
+}
+
+// Every element of s put into the transient t (owned updates).
+Int set_put_all(Int t, Int s) {
+    Int ks = set_words(s);
+    Int r = put_owned_words(t, map_kk(s), ks, 0, mcount(s));
+    return c_free(ks) * 0 + r;
+}
+
+Int put_owned_words(Int t, Int kk, Int ks, Int i, Int n) {
+    if (i >= n) { return t; }
+    return put_owned_words(map_put_slow(t, 1, kk, ld64(ks + i * 8), 0, 1), kk, ks, i + 1, n);
+}
+
+@export("resid_set_union", "ptr(ptr,ptr)")
+pub Int rt_set_union(Int a, Int b) {
+    if (mcount(b) == 0) { return a; }
+    if (mcount(a) == 0) { return b; }
+    Int big = if (mcount(a) >= mcount(b)) { a } else { b };
+    Int small = if (big == a) { b } else { a };
+    if (mtab(big) == 0 && mcount(small) * 8 < mcount(big)) {
+        // A few more elements for a big trie: a transient sharing it.
+        return rt_map_freeze(set_put_all(rt_map_transient(big), small));
+    }
+    Int r = trie_new(0, 0, 0 - 1, 0 - 1);
+    Int t = tab_new(cap_for(mcount(big) + mcount(small)), map_kk(big), 0, true);
+    Int _s = st64(r + 16, t);
+    Int kb = set_words(big);
+    Int _i = insert_words(t, kb, 0, mcount(big));
+    Int ksm = set_words(small);
+    Int _p = put_words(t, map_kk(small), ksm, 0, mcount(small));
+    Int _f = c_free(kb) + c_free(ksm);
+    return st64(r, tlive(t)) * 0 + r;
+}
+
+@export("resid_set_difference", "ptr(ptr,ptr)")
+pub Int rt_set_difference(Int a, Int b) {
+    if (mcount(a) == 0 || mcount(b) == 0) { return a; }
+    if (mcount(b) * 4 < mcount(a)) {
+        // Few removals: a private copy of a without them.
+        Int ks = set_words(b);
+        Int t = del_words(rt_map_transient(a), map_kk(b), ks, 0, mcount(b));
+        return c_free(ks) * 0 + rt_map_freeze(t);
+    }
+    Int ks = set_words(a);
+    Int j = keep_words(ks, 0, 0, mcount(a), b, map_kk(a), false);
+    Int r = if (j == mcount(a)) { a } else { set_of_words(ks, j, map_kk(a)) };
+    return c_free(ks) * 0 + r;
+}
+
+Int del_words(Int t, Int kk, Int ks, Int i, Int n) {
+    if (i >= n) { return t; }
+    return del_words(rt_map_del(t, 1, kk, ld64(ks + i * 8)), kk, ks, i + 1, n);
+}
+
+// Compact ks[0..n) to the words whose presence in other is `want`.
+Int keep_words(Int ks, Int i, Int j, Int n, Int other, Int kk, Bool want) {
+    if (i >= n) { return j; }
+    Int w = ld64(ks + i * 8);
+    Bool has = map_vref(other, kk, w) != 0;
+    if (has == want) { return keep_words(ks, i + 1, st64(ks + j * 8, w) * 0 + j + 1, n, other, kk, want); }
+    return keep_words(ks, i + 1, j, n, other, kk, want);
+}
+
+@export("resid_set_intersection", "ptr(ptr,ptr)")
+pub Int rt_set_intersection(Int a, Int b) {
+    Int smaller = if (mcount(a) <= mcount(b)) { a } else { b };
+    Int larger = if (mcount(a) <= mcount(b)) { b } else { a };
+    if (mcount(smaller) == 0) { return smaller; }
+    Int ks = set_words(smaller);
+    Int j = keep_words(ks, 0, 0, mcount(smaller), larger, map_kk(smaller), true);
+    Int r = if (j == mcount(smaller)) { smaller } else { set_of_words(ks, j, map_kk(smaller)) };
+    return c_free(ks) * 0 + r;
+}
+
+@export("resid_set_to_list", "ptr(ptr)")
+pub Int rt_set_to_list(Int s) { return rt_map_keys(s); }
+
+// {elem1, elem2, ...}
+@export("resid_set_format", "ptr(ptr)")
+pub Int rt_set_format(Int s) {
+    Int sb = rt_sb_new();
+    Int n = mcount(s);
+    Int ks = if (n > 0) { boxed_entries(s, true) } else { 0 };
+    Int _o = sb_lit(sb, resid_raw_addr("{"));
+    Int _p = sb_pairs(sb, ks, 0, 0, n);
+    Int _c = sb_lit(sb, resid_raw_addr("}"));
+    Int _f = c_free(ks);
+    return rt_sb_finish(sb);
+}
+
+// ─── Moving loop-region values to the heap ─────────────────────────────
+// A loop region frees an iteration's memory at its back edge; values the
+// loop carries, and values stored into maps that outlive it, are first
+// moved out. Only parts in a region are copied (older parts are shared).
+
+Int pvec_keep(Int n, Int level) {
+    if (n == 0 || !in_region(n)) { return n; }
+    Int cap = ld64(n);
+    Int c = c_outer_alloc(8 + cap * 8);
+    Int _c = st64(c, cap);
+    return keep_items(n, c, 0, cap, level) * 0 + c;
+}
+
+Int keep_items(Int n, Int c, Int i, Int cap, Int level) {
+    if (i >= cap) { return 0; }
+    Int it = ld64(n + 8 + i * 8);
+    Int _s = st64(c + 8 + i * 8, if (level > 0) { pvec_keep(it, level - 5) } else { elem_keep(it) });
+    return keep_items(n, c, i + 1, cap, level);
+}
+
+// A list with no part in a scope region.
+@export("resid_list_keep", "ptr(ptr)")
+pub Int rt_list_keep(Int l) {
+    if (l == 0 || sc_depth() == 0) { return l; }
+    Int root = lroot(l);
+    Int n = lcount(l);
+    Int nroot = if (lshift(l) == 0 - 1 && root != 0) { flat_keep(root, n) } else { if (root != 0) { pvec_keep(root, lshift(l)) } else { root } };
+    if (nroot == root && !in_region(l)) { return l; }
+    Int out = c_outer_alloc(32);
+    Int _c = mcopy(out, l, 32);
+    return st64(out + 16, nroot) * 0 + out;
+}
+
+Int flat_keep(Int f, Int n) {
+    if (in_region(f)) {
+        // Same capacity: the next appends still fit in place.
+        Int cap = if (ld64(f + 8) > n) { ld64(f + 8) } else { max(n, 1) };
+        Int g = c_outer_alloc(24 + cap * 8);
+        Int _h = st64(g, n) + st64(g + 8, cap) + st64(g + 16, n);
+        return keep_elems(f, g, 0, n) * 0 + g;
+    }
+    // An older buffer: only slots appended since its last move can hold
+    // region elements, and no older list sees them.
+    Int kept = ld64(f + 16);
+    Int _k = if (kept < n) { keep_elems(f, f, kept, n) + st64(f + 16, n) } else { 0 };
+    return f;
+}
+
+Int keep_elems(Int f, Int g, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _s = st64(g + 24 + i * 8, elem_keep(ld64(f + 24 + i * 8)));
+    return keep_elems(f, g, i + 1, n);
+}
+
+@export("resid_list_evac", "ptr(ptr)")
+pub Int rt_list_evac(Int l) { return rt_list_keep(l); }
+
+// A loop-carried copy the loop replaced and nothing else holds; region
+// and arena memory is left alone.
+@export("resid_carry_free", "void(i8,ptr)")
+pub Int rt_carry_free(Int dead, Int p) {
+    if (dead == 0 || p == 0 || c_in_arenas(p) != 0) { return 0; }
+    return c_free(p);
+}
+
+// A pointer-form Dec a loop carries, copied out of its region.
+@export("resid_dec_evac", "ptr(ptr)")
+pub Int rt_dec_evac(Int v) {
+    if (v == 0 || !in_region(v)) { return v; }
+    Int sz = 24 + dn(v) * 8;
+    Int d = sc_depth();
+    Int _z = c_sc_depth_set(0);
+    Int r = c_gmalloc(sz);
+    Int _r = c_sc_depth_set(d);
+    return mcopy(r, v, sz) * 0 + r;
+}
+
+Int hnode_evac(Int n, Int kf, Int vf) {
+    if (n == 0 || !in_region(n)) { return n; }
+    Int nd = node_nd(n);
+    Int nn = node_nn(n);
+    Int c = xmalloc(24 + ncap(n) * 8);
+    Int _c = mcopy(c, n, 24 + (2 * nd + nn) * 8);
+    Int _d = evac_pairs(c, 0, nd, kf, vf);
+    return evac_subs(c, nd, 0, nn, kf, vf) * 0 + c;
+}
+
+Int evac_pairs(Int c, Int i, Int nd, Int kf, Int vf) {
+    if (i >= nd) { return 0; }
+    Int _k = wset(c, 2 * i, word_keep(kf, wd(c, 2 * i)));
+    Int _v = wset(c, 2 * i + 1, word_keep(vf, wd(c, 2 * i + 1)));
+    return evac_pairs(c, i + 1, nd, kf, vf);
+}
+
+Int evac_subs(Int c, Int nd, Int i, Int nn, Int kf, Int vf) {
+    if (i >= nn) { return 0; }
+    Int _s = wset(c, 2 * nd + i, hnode_evac(wd(c, 2 * nd + i), kf, vf));
+    return evac_subs(c, nd, i + 1, nn, kf, vf);
+}
+
+// A map a loop carries across its back edge, with no part in a region.
+// kf / vf: the kinds of its keys / values (4 strings, 5 lists).
+@export("resid_map_evac", "ptr(ptr,i8,i8)")
+pub Int rt_map_evac(Int m, Int kf, Int vf) {
+    if (m == 0 || sc_depth() == 0) { return m; }
+    Int t = mtab(m);
+    Int nt = if (t != 0) { tab_evac(t, kf, vf) } else { 0 };
+    Int nr = if (t != 0) { mroot(m) } else { hnode_evac(mroot(m), kf, vf) };
+    if (nt == t && nr == mroot(m) && !in_region(m)) { return m; }
+    Int out = xmalloc(48);
+    Int _c = mcopy(out, m, 48);
+    Int _t = st64(out + 16, nt);
+    return st64(out + 8, nr) * 0 + out;
+}
+
+Int tab_evac(Int t, Int kf, Int vf) {
+    Bool tt = in_region(t);
+    Bool kt = tkeys(t) != 0 && in_region(tkeys(t));
+    Bool vt = tvals(t) != 0 && in_region(tvals(t));
+    if (!tt && !kt && !vt) { return t; }
+    Int nt = xmalloc(96);
+    Int _c = mcopy(nt, t, 96);
+    Int _k = if (kt) { st64(nt + 32, dup_words(tkeys(t), tcap(t))) } else { 0 };
+    Int _v = if (vt) { st64(nt + 40, dup_words(tvals(t), tcap(t))) } else { 0 };
+    // A table made in the region may hold region words.
+    Bool fix = tkeys(nt) != 0 && (kf == 4 || (vf >= 4 && tvals(nt) != 0));
+    Int _f = if (fix) { keep_slots(nt, 0, tcap(nt), kt && kf == 4, vt && vf >= 4, vf) } else { 0 };
+    return nt;
+}
+
+Int dup_words(Int p, Int n) {
+    Int q = xmalloc(n * 8);
+    return mcopy(q, p, n * 8) * 0 + q;
+}
+
+Int keep_slots(Int t, Int i, Int n, Bool fk, Bool fv, Int vf) {
+    if (i >= n) { return 0; }
+    Int k = ld64(tkeys(t) + i * 8);
+    Bool live = k != t_empty(t) && k != t_tomb(t);
+    Int _k = if (live && fk) { st64(tkeys(t) + i * 8, word_keep(4, k)) } else { 0 };
+    Int _v = if (live && fv) { st64(tvals(t) + i * 8, word_keep(vf, ld64(tvals(t) + i * 8))) } else { 0 };
+    return keep_slots(t, i + 1, n, fk, fv, vf);
+}

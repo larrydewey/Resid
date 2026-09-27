@@ -526,3 +526,18 @@ pub Bool rt_sb_print(Int r, Int nl) {
     Int _b = c_free(r);
     return ok;
 }
+
+// A Str from a List(Int) of codepoints (UTF-8 encoded, malloc'd).
+@export("resid_str_from_codepoints", "ptr(ptr)")
+pub Int rt_str_from_codepoints(Int l) {
+    Int n = lcount(l);
+    if (n <= 0) { return cstr_dup(resid_raw_addr("")); }
+    Int buf = xmalloc(4 * n + 1);
+    Int e = cps_out(l, buf, 0, 0, n);
+    return st8(buf + e, 0) * 0 + buf;
+}
+
+Int cps_out(Int l, Int buf, Int k, Int i, Int n) {
+    if (i >= n) { return k; }
+    return cps_out(l, buf, k + utf8_encode(unbox_word(rt_list_get(l, i)), buf + k), i + 1, n);
+}

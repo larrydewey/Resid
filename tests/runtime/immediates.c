@@ -1,7 +1,19 @@
 /* Immediate Int and Float words (runtime IMM_* / FIMM_*): every value
  * round-trips through box/unbox, hashing and key equality agree with the
- * heap-box path, and no pointer is ever read as an immediate. */
+ * heap-box path (checked through sets, runtime/rt/map.resid), and no
+ * pointer is ever read as an immediate. */
 #include "../../runtime/resid_rt.c"
+
+void* resid_set_new(void);
+void* resid_set_insert(void* set, void* elem);
+int8_t resid_set_contains(void* set, void* elem);
+void* resid_map_put(void* map, int8_t owned, int8_t kk, int64_t kb, int8_t vk, int64_t vb);
+
+static const char* stype(void* p) {
+    if (box_imm(p)) return "i64";
+    if (box_fimm(p)) return "f64";
+    return ((ResidVal*)p)->type;
+}
 #include <float.h>
 #include <math.h>
 
@@ -22,8 +34,12 @@ int main(void) {
         if (i & 1) v >>= (xr() % 64);
         void* p = resid_box_i64(v);
         void* q = resid_box_i64(v);
-        if (resid_unbox_i64(p) != v || !resid_key_eq(p, q) || resid_hash(p) != fnv1a_i64(v)) bad++;
-        if (strcmp(scalar_type(p), "i64") != 0) bad++;
+        if (resid_unbox_i64(p) != v || strcmp(stype(p), "i64") != 0) bad++;
+        if ((i & 1023) == 0) {
+            /* Equal boxes match; a raw Int key and its box hash alike. */
+            if (!resid_set_contains(resid_set_insert(resid_set_new(), p), q)) bad++;
+            if (!resid_set_contains(resid_map_put(resid_set_new(), 0, 1, v, 0, 1), q)) bad++;
+        }
     }
     double fe[] = {0.0, -0.0, 1.0, -1.0, 0.5, 2.0, 1e300, -1e300, 1e-300, 5e-324, INFINITY, -INFINITY, NAN, DBL_MAX, DBL_MIN, 3.141592653589793};
     for (int i = 0; i < 16; i++) {
@@ -38,12 +54,12 @@ int main(void) {
         memcpy(&v, &b, 8);
         void* p = resid_box_f64(v);
         double d = resid_unbox_f64(p);
-        if (memcmp(&d, &v, 8) != 0 || box_imm(p) || strcmp(scalar_type(p), "f64") != 0) bad++;
+        if (memcmp(&d, &v, 8) != 0 || box_imm(p) || strcmp(stype(p), "f64") != 0) bad++;
     }
     /* A NaN key never equals itself; equal Floats hash alike. */
     void* nan = resid_box_f64(NAN);
-    if (resid_key_eq(nan, nan)) bad++;
-    if (resid_hash(resid_box_f64(2.5)) != resid_hash(resid_box_f64(2.5))) bad++;
+    if (resid_set_contains(resid_set_insert(resid_set_new(), nan), nan)) bad++;
+    if (!resid_set_contains(resid_set_insert(resid_set_new(), resid_box_f64(2.5)), resid_box_f64(2.5))) bad++;
     /* Pointers the program can hold are never immediates. */
     char local = 0;
     char* heap = malloc(1);

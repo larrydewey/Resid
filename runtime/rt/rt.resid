@@ -21,3 +21,4 @@ import "net.resid";
 import "ctl.resid";
 import "dec.resid";
 import "list.resid";
+import "map.resid";

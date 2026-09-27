@@ -22,11 +22,11 @@ UInt(64) lu(Int p) { return (UInt(64))ld64(p); }
 Int su(Int p, UInt(64) v) { return st64(p, (Int)v); }
 Int li(Int l, Int i) { return l + i * 8; }
 
-Int sx8(Int v) { return (v << 56) >> 56; }
+pub Int sx8(Int v) { return (v << 56) >> 56; }
 Int dsign(Int v) { return sx8(ld8(v)); }
 Int dprec(Int v) { return ld32(v + 4); }
 Int dexp(Int v) { return sx32(ld32(v + 8)); }
-Int dn(Int v) { return ld32(v + 12); }
+pub Int dn(Int v) { return ld32(v + 12); }
 Int dnd(Int v) { return ld32(v + 16); }
 Int dl(Int v) { return v + 24; }
 
