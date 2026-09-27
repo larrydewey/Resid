@@ -4532,7 +4532,7 @@ List(Str) cmp_defs_all_at(Funcs fs, List(Str) out, Int i) {
     Str pty = fs.bparams[i];
     List(Str) bfl = fs.bfns;
     Str f = bfl[i];
-    List(Str) out2 = out.concat([cmp_def(f, pty, false), cmp_def(f, pty, true)]);
+    List(Str) out2 = if (bn[i] == "Show") { out } else { out.concat([cmp_def(f, pty, false), cmp_def(f, pty, true)]) };
     Int k = i + 1;
     return cmp_defs_all_at(fs, out2, k);
 }

@@ -10483,13 +10483,13 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_to_string(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
+define internal i64 @rt_list_show(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
 %t4183 = icmp eq i64 %p0, 0
 br i1 %t4183, label %L1351, label %L1353
 L1351:
 %t4185 = ptrtoint ptr @.s4184 to i64
-%t4186 = tail call i64 @cstr_dup(i64 %t4185)
+%t4186 = call i64 @cstr_dup(i64 %t4185)
 ret i64 %t4186
 L1353:
 %t4187 = call i64 @rt_sb_new()
@@ -10498,12 +10498,64 @@ L1353:
 %t4190 = call i64 @__mruntime_rt_show_resid__sb_lit(i64 %t4187, i64 %t4189)
 %t4192 = ptrtoint ptr @.s4191 to i64
 %t4193 = call i64 @__mruntime_rt_show_resid__sb_lit(i64 %t4187, i64 %t4192)
-%t4194 = call i64 @ld64(i64 %p0)
-%t4195 = call i64 @__mruntime_rt_show_resid__sb_items(i64 %t4187, i64 %p0, i64 0, i64 %t4194)
-%t4197 = ptrtoint ptr @.s4196 to i64
-%t4198 = call i64 @__mruntime_rt_show_resid__sb_lit(i64 %t4187, i64 %t4197)
-%t4199 = tail call i64 @rt_sb_finish(i64 %t4187)
-ret i64 %t4199
+%t4194 = icmp ne i64 %p1, 0
+br i1 %t4194, label %L1354, label %L1355
+L1354:
+%t4195 = call i64 @ld64(i64 %p0)
+%t4196 = call i64 @__mruntime_rt_show_resid__sb_strs(i64 %t4187, i64 %p0, i64 0, i64 %t4195)
+br label %L1356
+L1355:
+%t4197 = call i64 @ld64(i64 %p0)
+%t4198 = call i64 @__mruntime_rt_show_resid__sb_items(i64 %t4187, i64 %p0, i64 0, i64 %t4197)
+br label %L1356
+L1356:
+%t4199 = phi i64 [ %t4196, %L1354 ], [ %t4198, %L1355 ]
+%t4201 = ptrtoint ptr @.s4200 to i64
+%t4202 = call i64 @__mruntime_rt_show_resid__sb_lit(i64 %t4187, i64 %t4201)
+%t4203 = call i64 @rt_sb_finish(i64 %t4187)
+ret i64 %t4203
+}
+define ptr @resid_list_show(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
+entry:
+%x0i = ptrtoint ptr %a0 to i64
+%r = call i64 @rt_list_show(i64 %x0i, i64 %a1)
+%rv = inttoptr i64 %r to ptr
+ret ptr %rv
+}
+define internal i64 @__mruntime_rt_show_resid__sb_strs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t4212, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t4204 = icmp sge i64 %p2, %p3
+br i1 %t4204, label %L1357, label %L1359
+L1357:
+ret i64 0
+L1359:
+%t4205 = icmp sgt i64 %p2, 0
+br i1 %t4205, label %L1360, label %L1361
+L1360:
+%t4207 = ptrtoint ptr @.s4206 to i64
+%t4208 = call i64 @__mruntime_rt_show_resid__sb_lit(i64 %p0, i64 %t4207)
+br label %L1362
+L1361:
+br label %L1362
+L1362:
+%t4209 = phi i64 [ %t4208, %L1360 ], [ 0, %L1361 ]
+%t4210 = call i64 @c_list_get(i64 %p1, i64 %p2)
+%t4211 = call i64 @__mruntime_rt_show_resid__sb_lit(i64 %p0, i64 %t4210)
+%t4212 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @rt_list_to_string(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
+entry:
+%t4214 = call i64 @rt_list_show(i64 %p0, i64 0)
+ret i64 %t4214
 }
 define ptr @resid_list_to_string(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" {
 entry:
@@ -10633,4 +10685,5 @@ declare i32 @strfromd(ptr, i64, ptr, double)
 @.s4179 = private unnamed_addr constant [2 x i8] c")\00"
 @.s4184 = private unnamed_addr constant [5 x i8] c"null\00"
 @.s4191 = private unnamed_addr constant [2 x i8] c"(\00"
-@.s4196 = private unnamed_addr constant [2 x i8] c")\00"
+@.s4200 = private unnamed_addr constant [2 x i8] c")\00"
+@.s4206 = private unnamed_addr constant [3 x i8] c", \00"

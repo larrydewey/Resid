@@ -2524,6 +2524,14 @@ Int validate_behavior(Funcs fs, BRes bh) {
     Int fi = fn_index(fs, bh.impl);
     List(Str) ptsl = fs.pts;
     List(Str) rtl = fs.rets;
+    // Show(T) = f: f renders a T (an f-string hole of type T calls it).
+    if (bh.name == "Show") {
+        if (fi < 0 || ptsl[fi] != bh.param || rtl[fi] != "Str") {
+            println("type error: behavior Show(" + bh.param + "): impl must have signature (" + bh.param + ") -> Str");
+            return 1;
+        }
+        return 0;
+    }
     Str want = bh.param + "," + bh.param;
     if (fi < 0 || ptsl[fi] != want || rtl[fi] != "Int") {
         println("type error: behavior " + bh.name + "(" + bh.param + "): impl must have signature (" + bh.param + ", " + bh.param + ") -> Int");

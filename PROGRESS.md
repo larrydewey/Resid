@@ -334,9 +334,12 @@ boundaries, ending in a MIN / -1 that must still trap.
   the numeric family, lowered as the Resid expressions they stand for
   (`lw_minmax`), so `abs(INT64_MIN)` traps. Conformance case
   `generic_list_numeric_verbs`.
-- Next: a `Show(T)` behavior (spec §11), built in for the numeric family,
-  Bool and Str, user instances `Show(P) = show_p;`, structural instances
-  for records, sums and list elements (lists of Str still print "…").
+- `Show(T) = f` (spec §11): f : (T) -> Str is checked like an Ord
+  instance, and an f-string hole of type T (also a record field) calls
+  it through the ordinary call path (`lw_src_call`). Lists of Str print
+  their strings (`resid_list_show`). Built-in formats are unchanged;
+  records nested in lists and sums still print through the runtime
+  ("…" for nested values). Conformance case `show_behavior`.
 
 ### 0zj. The Resid runtime: infrastructure and first module (2026-09-26)
 

@@ -445,12 +445,26 @@ GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
     if (is_dec_cg(v.ty)) { return dec_call(v, "ptr", "@resid_decp_to_str(ptr " + v.val + ", i8 " + pick_str(trim, "1", "0") + ")", "Str"); }
     Str t = strip_owned_cg(v.ty);
     GT vt = lw_step(v, v.val, t, v.lines, v.tmp);
+    Int bi = b_index(w.fs, "Show", t);
+    if (bi >= 0) { return lw_src_call(w, w.fs.bfns[bi], vt, env); }
     if (t == "Str" || tostr_fn_for(t) != "" || int_fam(t)) { return fst_tostr(vt); }
-    if (str_has_prefix_cg(t, "List(")) { return lw_rt1(vt, "ptr", "@resid_list_to_string(ptr " + v.val + ")", "Str"); }
+    if (str_has_prefix_cg(t, "List(")) {
+        Bool strs = num_norm_cg(str_slice(t, 5, str_len(t) - 1)) == "Str";
+        return lw_rt1(vt, "ptr", "@resid_list_show(ptr " + v.val + ", i64 " + pick_str(strs, "1", "0") + ")", "Str");
+    }
     Int si = struct_index(w.fs, t);
     if (si >= 0) { return lw_struct_ts(w, vt, w.fs.stf[si], env); }
     if (ll_ty(t) != "ptr") { return gt_err("cannot interpolate a value of type " + t, v); }
     return lw_rt1(vt, "ptr", "@ToString(ptr " + v.val + ")", "Str");
+}
+
+// `f(v)` for an already lowered v, through the ordinary call path.
+GT lw_src_call(LW w, Str f, GT v, List(Str) env) {
+    Str tmpn = f"__sh{v.tmp}";
+    KP e = kg_expr(f + "(" + tmpn + ")", kg_empty(), 0);
+    if (e.err != "") { return gt_err(e.err, v); }
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
+    return lw_expr(ws, e.id, env_add(env, tmpn + ":" + v.val + ":" + v.ty), v);
 }
 
 // `resid_sacc_append(acc, f"...")` (from the accumulator rewrite): each

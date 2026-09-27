@@ -1,0 +1,17 @@
+// Show(T) = f: an f-string hole of type T calls f, also for a record field
+// of type T; lists of Str print their strings.
+type Money = { Int cents; };
+type Line = { Str item; Money price; };
+
+Str show_money(Money m) { return f"${m.cents / 100}.{m.cents % 100}"; }
+Show(Money) = show_money;
+
+Int main() {
+    Money m = Money {.cents = 1250};
+    println(f"total {m}");
+    Line l = Line {.item = "tea", .price = m};
+    println(f"{l}");
+    List(Str) xs = ["a", "b"];
+    println(f"{xs}");
+    return 0;
+}

@@ -99,13 +99,24 @@ pub Int rt_to_string(Int p) {
 }
 
 // A List as "Type(e1, e2, ...)"; the list header keeps its type at +24.
-@export("resid_list_to_string", "ptr(ptr)")
-pub Int rt_list_to_string(Int l) {
+// `strs`: the elements are Str.
+@export("resid_list_show", "ptr(ptr,i64)")
+pub Int rt_list_show(Int l, Int strs) {
     if (l == 0) { return cstr_dup(resid_raw_addr("null")); }
     Int sb = rt_sb_new();
     Int _t = sb_lit(sb, ld64(l + 24));
     Int _o = sb_lit(sb, resid_raw_addr("("));
-    Int _s = sb_items(sb, l, 0, ld64(l));
+    Int _s = if (strs != 0) { sb_strs(sb, l, 0, ld64(l)) } else { sb_items(sb, l, 0, ld64(l)) };
     Int _c = sb_lit(sb, resid_raw_addr(")"));
     return rt_sb_finish(sb);
 }
+
+Int sb_strs(Int sb, Int l, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _c = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
+    Int _e = sb_lit(sb, c_list_get(l, i));
+    return sb_strs(sb, l, i + 1, n);
+}
+
+@export("resid_list_to_string", "ptr(ptr)")
+pub Int rt_list_to_string(Int l) { return rt_list_show(l, 0); }

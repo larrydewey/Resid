@@ -392,3 +392,6 @@ Int main() { return 0; }
 === lin_unused
 error[E0401]: builder `b` is not consumed before this return (spec §45.1)
 Int main() { StrBuf b = StrBuf(); return 0; }
+=== showbad
+behavior Show(M): impl must have signature (M) -> Str
+type M = { Int c; }; Int bad(M m) { return 1; } Show(M) = bad; Int main() { return 0; }

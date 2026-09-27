@@ -624,6 +624,11 @@ parameter takes precedence.
 Numeric Eq / Ord / Hash are supplied generically for
 the whole family (see §6.6).
 
+Show(T) = f, with f : (T) -> Str, is how a T is written:
+an f-string hole of type T calls f, including a record
+field of type T. Without an instance, numbers, Bool, Str,
+Dec, lists and records have built-in text (see §14).
+
 
 ==================================================
 12. TYPES
@@ -676,9 +681,9 @@ if-let / while-let:
 
 An f-string hole takes a value of any type: numbers and
 Bool as decimal text (Float round-trips), Str as is, Dec at
-its precision, lists and records structurally. `f"{x}"` is
-how a value becomes a Str; there are no per-type conversion
-functions.
+its precision, lists and records structurally, or through a Show(T)
+instance (§11). `f"{x}"` is how a value becomes a Str; there
+are no per-type conversion functions.
 
 Literals default to Int / Float / Dec (for m-suffix
 decimals); integer literals follow 6.1a. There is no null
