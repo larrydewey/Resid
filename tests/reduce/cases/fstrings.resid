@@ -1,5 +1,5 @@
 Str who(Int n) { return f"#{n}:{"x" + "y"}"; }
-Int main() {
+@requires(args) Int main() {
     Int a = 42;
     Str b = "bee";
     println(f"a={a} b={b} sum={a + 1}");

@@ -1,0 +1,9 @@
+// Nested sandboxes meet: inside filesystem then network, neither is left.
+sandbox (filesystem) {
+    sandbox (network) {
+        Str peek() { return filesystem.read_all("/etc/hostname"); }
+    }
+}
+
+@requires(filesystem)
+Int main() { println(peek()); return 0; }

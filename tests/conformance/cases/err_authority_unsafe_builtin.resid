@@ -1,0 +1,9 @@
+// Memory-unsafe runtime internals (popping an arena frees what it holds)
+// need the `unsafe` grant.
+Int main() {
+    resid_arena_push();
+    Str s = "x" + IntToString(1);
+    resid_arena_pop();
+    println(s);
+    return 0;
+}

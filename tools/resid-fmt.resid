@@ -1316,6 +1316,7 @@ Str fmt_program(Str s) {
 
 type Args = { Str path; Bool w; Bool check; };
 
+@requires(args)
 Args parse_args(Int i, Int n, Str path, Bool w, Bool check) {
     if (i >= n) { return Args {.path = path, .w = w, .check = check}; }
     Str a = args.get(i);
@@ -1325,6 +1326,7 @@ Args parse_args(Int i, Int n, Str path, Bool w, Bool check) {
     return parse_args(ni, n, a, w, check);
 }
 
+@requires(args, filesystem)
 Int main() {
     Int argc = args.count();
     Args a = parse_args(1, argc, "", false, false);

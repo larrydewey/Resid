@@ -11,7 +11,7 @@ Int sum(Int acc, Int i) {
     return sum(acc + i, i - 1);
 }
 
-Int main() {
+@requires(args) Int main() {
     Int a = sq(args.count() + 3, "hi");
     Int b = sum(0, a);
     println(IntToString(b));

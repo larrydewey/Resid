@@ -50,7 +50,7 @@ for f in "$CASES"/*.resid; do
         if [ -f "$CASES/$n.out" ] && ! cmp -s "$d/out.red" "$CASES/$n.out"; then
             why="${why:+$why; }stdout differs from $n.out"
         fi
-        sed -n '/^Int main()/,$p' "$d/reduced.resid" > "$d/main.resid"
+        sed -n '/^\(@requires([^)]*) \)\{0,1\}Int main()/,$p' "$d/reduced.resid" > "$d/main.resid"
         if [ -f "$CASES/$n.expect" ]; then
             while IFS= read -r line; do
                 case "$line" in

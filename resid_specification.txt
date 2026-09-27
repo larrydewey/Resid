@@ -741,7 +741,10 @@ Structured concurrency:
 Rules:
 
   - Capabilities listed explicitly; child ≤ parent.
-  - Child receives a fresh CapEnv.
+  - Child receives a fresh CapEnv: the spawn body and
+    everything it calls may use only the listed
+    capabilities (E0214), and the child thread runs in
+    its own force-time frame.
   - Residual forcing uses only the child’s CapEnv.
   - Returns pure values or residuals.
   - Mutable handles moved; immutable views shareable.
@@ -761,6 +764,30 @@ is monotonic within an execution / region.
 
 Authority may only be attenuated across trust boundaries;
 it may never be amplified.
+
+Every capability family a function uses must be granted
+to it (E0219): by its own @requires, or, when it has
+none, by its enclosing sandbox. A function uses what its
+provider calls and effectful builtins use, and what each
+function it calls, wraps in a closure, or runs as a sort
+behavior uses or declares. So authority enters a program
+only where `main` (or a `test` block) declares it:
+
+  @requires(args, filesystem(readonly))
+  Int main() { ... }
+
+@requires entries take the same modes as sandboxes; a
+read-only grant does not cover a write (filesystem write
+verbs, process.run). Families:
+
+  filesystem, environment, args, process   (providers)
+  network      TCP builtins
+  process      also the native debugger builtins
+  unsafe       runtime internals that free or pin memory
+               (arena and bulk push/pop, persist copies)
+
+Writing to stdout/stderr, reading stdin and OS randomness
+are not capabilities.
 
 
 ==================================================
@@ -799,6 +826,16 @@ an explicit sandbox:
       // see only the listed capabilities
   }
 
+An attenuated import compiles the module inside
+`sandbox (caps)`. A module already imported without that
+bound cannot take it afterwards (E0216): import it
+attenuated first. Nested sandboxes meet (only narrow),
+and `sandbox ()` grants nothing.
+
+A manifest dependency is compiled inside the ceiling its
+consumer's manifest lists (the driver's -depmap lines
+"name::root::caps").
+
 --------------------------------------------------
 21.3  Enforcement
 --------------------------------------------------
@@ -808,7 +845,9 @@ an explicit sandbox:
     hard error.
   - When the requirement is dynamic or residual, the
     call remains residual and fails at force time with
-    a capability error.
+    a capability error. Every provider call is checked
+    before it runs against the calling thread's sandbox
+    frames; a write needs a grant that is not read-only.
   - Transitive dependencies are closed under the same
     sandbox; attenuation applies to the entire closure.
   - A handle may enter a sandbox only when every
@@ -825,6 +864,9 @@ Sandboxed compilation may read the global knowledge
 cache. It may write cache entries only when the
 capabilities associated with those entries are ≤ the
 sandbox’s granted set.
+
+(Implementation status: the self-hosted toolchain has no
+knowledge cache, so there is nothing to read or write.)
 
 
 ==================================================
@@ -925,19 +967,18 @@ Distribution units are content-addressed archives.
 28.1  Package Signature
 --------------------------------------------------
 
-Every published package carries a cryptographic
-signature over:
+A package archive holds every .resid and .toml file of
+the package, sorted by path, so its SHA-256 content hash
+covers the source tree and the manifest (name, version,
+dependencies, declared capabilities) and resid.lock
+(dependency hashes).
 
-  - package name and version
-  - content hash of the entire source tree
-  - dependency hashes
-  - declared capability requirements
-  - provenance of any included knowledge-cache entries
-  - the public key identity of the publisher
-
-The signature is a COSE_Sign1 (§33.1) over a CBOR map of
-these fields, stored alongside the package
-(<package>.resid-sig) or inside the archive manifest.
+A published package carries an Ed25519 signature over the
+hex content hash (<name>-<version>.resid-sig beside the
+archive), and a signing registry also signs its index of
+name, version and content hash. A path dependency may be
+signed in place (<name>.resid-sig over the hash of its
+packed sources).
 
 --------------------------------------------------
 28.2  Verification
@@ -947,10 +988,14 @@ Before a package is accepted into a build:
 
   1. The content hash is recomputed and must match.
   2. The signature must verify against a trusted key
-     (project keyring or explicitly pinned keys).
-  3. All dependency hashes must match the resolved
+     (project keyring or explicitly pinned keys), or a
+     trusted registry's signed index must list the
+     content hash.
+  3. The archive's manifest must name the requested
+     package and version.
+  4. All dependency hashes must match the resolved
      artifacts.
-  4. Required capabilities must be grantable under the
+  5. Required capabilities must be grantable under the
      current manifest policy.
 
 Failure of any check rejects the package.
@@ -959,10 +1004,15 @@ Failure of any check rejects the package.
 28.3  Key Management
 --------------------------------------------------
 
-Projects maintain a keyring of trusted publisher keys.
-Keys may be pinned per dependency. Unsigned packages
+Projects maintain a keyring of trusted publisher keys
+([signing] keyring, a directory of hex .pub files). Keys
+may be pinned per dependency (pubkey). Unsigned packages
 are rejected unless the project explicitly allows them
-under a development profile.
+under a development profile ([signing] allow_unsigned =
+true). Path dependencies without a pinned key are local
+source and are not signature-checked. Secret keys are
+written readable by their owner only
+(filesystem.write_secret).
 
 
 ==================================================
@@ -1134,7 +1184,8 @@ Trusted providers: filesystem, environment, git, args, process
 (all volatile by default).
 
 filesystem verbs: read_all, write_all, read_bytes, write_bytes,
-append_bytes (write), write_hex and append_hex (write; the
+write_secret (write; owner-only mode 0600, no symlink
+follow), append_bytes (write), write_hex and append_hex (write; the
 bytes a hex string spells), sha256 (a file's SHA-256 as 32 bytes,
 computed without materializing its contents), exists, is_dir,
 list_dir, create_dir (write), open, read_handle, close.
@@ -1261,9 +1312,8 @@ no trailer and the compiler reports it as a note.
 
 `resid verify <binary>` checks the signature against the
 keyring (§28.3), the code hash, and the hash of each
-sidecar present. Debuggers and tools verify before
-trusting a graph or notes artifact, and report an
-unverified one as untrusted.
+sidecar present. (Implementation status: the graph tools
+do not verify on their own; run `residc verify` first.)
 
 The implementation may employ any target ISA extensions
 (AVX-512, NEON, SVE, etc.) for code generation and for
@@ -1709,6 +1759,8 @@ is what makes the in-place append unobservable.
     are ≤ the sandbox.
   - Knowledge-cache writes from a sandbox are limited
     to entries whose capabilities fit the sandbox.
+  - Every function's uses are granted by its @requires
+    or its sandbox; authority starts at main (§20).
 
 
 ==================================================

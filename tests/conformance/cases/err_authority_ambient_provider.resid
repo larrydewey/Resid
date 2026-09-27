@@ -1,0 +1,5 @@
+// No ambient authority (spec §20): a provider call needs a grant.
+Int main() {
+    Str d = filesystem.read_all("/etc/hostname");
+    return str_len(d);
+}

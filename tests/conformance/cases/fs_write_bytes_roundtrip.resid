@@ -1,3 +1,4 @@
+@requires(filesystem)
 Int main() {
     List(Int) bytes = [0, 128, 153, 255, 65];
     Bool ok = filesystem.write_bytes("@TMP@/out.bin", bytes);

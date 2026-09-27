@@ -1037,6 +1037,7 @@ Int parse_program(Str s, Int pos) {
     return parse_program(s, d.pos);
 }
 
+@requires(args, filesystem(readonly))
 Int main() {
     if (args.count() < 2) {
         println("usage: parser <source.res>");

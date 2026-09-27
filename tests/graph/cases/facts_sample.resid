@@ -7,7 +7,7 @@ Int div_nz(Int a, Int d) {
     return 0;
 }
 
-Int total(List(Int) xs) {
+@requires(args) Int total(List(Int) xs) {
     Int s = 0;
     for (Int i in 0..xs.len()) { println(IntToString(xs[i])); }
     List(Int) ys = [4, 5, 6];
@@ -21,7 +21,7 @@ Int area(Shape s) {
     };
 }
 
-Int main() {
+@requires(args) Int main() {
     P p = P {.x = args.count(), .y = 2};
     println(IntToString(div_nz(args.count() + 7, args.count())));
     println(IntToString(total([1, 2, 3])));

@@ -1,3 +1,4 @@
+@requires(filesystem)
 Int main() {
     Bool ok = filesystem.create_dir("@TMP@/newdir");
     println(BoolToString(ok));

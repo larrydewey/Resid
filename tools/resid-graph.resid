@@ -403,6 +403,7 @@ Str render_dot(List(Str) sorted_names, List(Str) names, List(Str) raws) {
 
 type CliArgs = { Str path; Bool dot; };
 
+@requires(args)
 CliArgs parse_args_acc(Int i, Int n, Str path, Bool dot) {
     if (i >= n) { return CliArgs {.path = path, .dot = dot}; }
     Str a = args.get(i);
@@ -467,6 +468,7 @@ List(Str) kg_dot_keep(KD k, Int i, List(Str) acc) {
     return kg_dot_keep(k, i + 1, if (k.seen.contains(k.to[i])) { acc.concat([k.edges[i]]) } else { acc });
 }
 
+@requires(filesystem(readonly))
 Int kg_dot_main(Str artifact, Int id, Int depth) {
     Str path = artifact + ".resid-graph.cbor";
     if (!filesystem.exists(path)) {
@@ -550,6 +552,7 @@ Bool kc_deps_ok(List(Int) ds, Int i, Int id) {
     return kc_deps_ok(ds, i + 1, id);
 }
 
+@requires(filesystem(readonly))
 Int kc_main(Str artifact) {
     Str path = artifact + ".resid-graph.cbor";
     if (!filesystem.exists(path)) {
@@ -574,12 +577,14 @@ Int kc_print(List(Str) ms, Int i) {
     return kc_print(ms, i + 1);
 }
 
+@requires(args)
 Str kg_arg_after(Int i, Int n, Str flag) {
     if (i + 1 >= n) { return ""; }
     if (args.get(i) == flag) { return args.get(i + 1); }
     return kg_arg_after(i + 1, n, flag);
 }
 
+@requires(args, filesystem(readonly))
 Int main() {
     if (args.count() > 2 && args.get(2) == "--check") { return kc_main(args.get(1)); }
     Str knode = kg_arg_after(1, args.count(), "--node");

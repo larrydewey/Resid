@@ -6,7 +6,7 @@ Int f(Int x, Float y, Bool z) {
     return big;
 }
 
-Int main() {
+@requires(args) Int main() {
     Float q = if (args.count() > 0) { 1.25 } else { 2.5 };
     Int r = f(args.count() + 6, q, args.count() > 0);
     println(IntToString(r));

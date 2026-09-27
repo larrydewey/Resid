@@ -1,0 +1,8 @@
+valid accept
+other message reject
+r=0 s=0 reject
+r=Qx s=0 reject
+s=n reject
+s+n reject
+key off curve reject
+short r accept

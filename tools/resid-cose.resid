@@ -12,6 +12,7 @@
 
 import "../lib/cose.resid";
 
+@requires(filesystem)
 Int cmd_sign1(Str payload_path, Str kid, Str keyfile, Str out) {
     List(Int) payload = filesystem.read_bytes(payload_path);
     Str keyhex = filesystem.read_all(keyfile);
@@ -21,6 +22,7 @@ Int cmd_sign1(Str payload_path, Str kid, Str keyfile, Str out) {
     println("wrote " + out + " (" + IntToString(cose.len()) + " bytes)");
     return 0;
 }
+@requires(filesystem(readonly))
 Int cmd_verify1(Str cose_path, Str pub_hex) {
     CoseSign1 c = cose_sign1_parse(filesystem.read_bytes(cose_path));
     if (!c.ok) {
@@ -34,6 +36,7 @@ Int cmd_verify1(Str cose_path, Str pub_hex) {
     println(cbe_ascii(c.payload, 0, ""));
     return 0;
 }
+@requires(filesystem)
 Int cmd_encrypt0(Str payload_path, Str kid, Str key_hex, Str out) {
     List(Int) payload = filesystem.read_bytes(payload_path);
     List(Int) blob = cose_encrypt0_seal(payload, cose_hex_decode(key_hex), kid);
@@ -41,6 +44,7 @@ Int cmd_encrypt0(Str payload_path, Str kid, Str key_hex, Str out) {
     println("wrote " + out + " (" + IntToString(blob.len()) + " bytes)");
     return 0;
 }
+@requires(filesystem(readonly))
 Int cmd_decrypt0(Str blob_path, Str key_hex) {
     CoseOpen r = cose_encrypt0_open(filesystem.read_bytes(blob_path), cose_hex_decode(key_hex));
     if (!r.ok) {
@@ -55,6 +59,7 @@ Str usage_text() {
     return "usage: resid-cose sign1 <payload> <kid> <keyfile> <out> | verify1 <cose> <pubkey-hex> | encrypt0 <payload> <kid> <keyhex> <out> | decrypt0 <blob> <keyhex>";
 }
 
+@requires(args, filesystem)
 Int main() {
     Int argc = args.count();
     if (argc < 2) {

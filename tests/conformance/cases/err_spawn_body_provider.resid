@@ -1,0 +1,9 @@
+// A spawn's child gets only its listed capabilities (spec §19), even when
+// the parent holds more.
+@requires(filesystem, process)
+Int main() {
+    Result(Int, RegionError) r = spawn (filesystem) {
+        return process.run("true");
+    };
+    return 0;
+}

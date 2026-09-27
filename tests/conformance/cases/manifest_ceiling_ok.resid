@@ -1,0 +1,8 @@
+// A dependency within its manifest ceiling compiles and runs.
+import "okpkg";
+
+@requires(filesystem(readonly))
+Int main() {
+    if (att_has_etc()) { println("etc"); }
+    return 0;
+}

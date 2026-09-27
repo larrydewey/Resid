@@ -1,0 +1,7 @@
+// A test block is granted only what its @requires lists.
+test "reads" {
+    Str d = filesystem.read_all("/etc/hostname");
+    expect(str_len(d) > 0).toEqual(true);
+}
+
+Int main() { return 0; }

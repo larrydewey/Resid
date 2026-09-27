@@ -1102,12 +1102,10 @@ GT lw_range_value(LW w, Int id, List(Str) env, GT c) {
     GT hi = lw_expr(w, lw_kid(w, id, 1), env, lo64);
     if (hi.err != "") { return hi; }
     GT hi64 = pick_widen(num_norm_cg(hi.ty) != "Int(64)", hi, "Int(64)");
-    Int t1 = hi64.tmp + 1;
-    Str hx = "%t" + IntToString(t1);
-    Str incl = if (lw_text(w, id) == "..=") { "1" } else { "0" };
-    Int t2 = t1 + 1;
+    Int t2 = hi64.tmp + 1;
+    Str rfn = if (lw_text(w, id) == "..=") { "@resid_range_list_incl" } else { "@resid_range_list" };
     Str reg = "%t" + IntToString(t2);
-    List(Str) l1 = hi64.lines.concat([hx + " = add i64 " + hi64.val + ", " + incl, reg + " = call ptr @resid_range_list(i64 " + lo64.val + ", i64 " + hx + ")"]);
+    List(Str) l1 = hi64.lines.concat([reg + " = call ptr " + rfn + "(i64 " + lo64.val + ", i64 " + hi64.val + ")"]);
     return GT {.pos = 0, .val = reg, .ty = "Range(Int)", .cnt = 0, .err = "", .glines = hi.glines, .lines = l1, .tmp = t2, .lbl = hi.lbl, .tail = false};
 }
 
@@ -2018,7 +2016,14 @@ GT lw_spawn(LW w, Int id, List(Str) env, GT c) {
     ST body = lw_block(w, lw_kid(w, id, 0), pr0.benv, false, g0);
     if (body.err != "") { return gt_err(body.err, c); }
     List(Str) b1 = if (body.dead) { body.lines } else { body.lines.concat(["ret ptr null"]) };
-    List(Str) fl = ["define ptr " + fnm + "(ptr %envp) {", "entry:"].concat(pr0.lines).concat(b1).concat(["}"]);
+    // The child runs in its own capability frame: only the spawn's list
+    // (spec §19), checked before each provider call on its thread.
+    PRes sc = cap_list_at(w.g.ns[id].aux + ")", 0, true, "");
+    Str scaps = if (sc.ty == "") { "_" } else { sc.ty };
+    CapPP pe = cap_enter_prologue(str_split(scaps, ","), CapPP {.lines = nil_list(), .glines = nil_list(), .n = 0});
+    CapPP pi = capinject_at(b1, 0, true, CapPP {.lines = nil_list(), .glines = pe.glines, .n = pe.n});
+    Str cpre = "@resid.cap." + str_slice(fnm, 1, str_len(fnm));
+    List(Str) fl = cap_rename_to(["define ptr " + fnm + "(ptr %envp) {", "entry:"].concat(pr0.lines).concat(pe.lines).concat(pi.lines).concat(["}"]).concat(pi.glines), cpre, 0, ListBuf());
     Int tf0 = body.tmp + 1;
     Str arr = "%t" + IntToString(tf0);
     List(Str) cl5 = clos_store_lines(cap0.vals, cap0.tys, ncap, 0, arr, tf0 + 1, c.lines.concat([arr + " = call ptr @resid_gmalloc(i64 " + IntToString((ncap + 1) * 8) + ")"]));
@@ -2137,6 +2142,7 @@ PG pg_with_err(PG g, Str err) {
 }
 
 // pg_func_one, with the body lowered from the graph.
+@requires(unsafe)
 PG lw_fn(LW w0, Int d, PG g) {
     Funcs fs = w0.fs;
     Int n = w0.g.ns[d].nk;
@@ -2188,10 +2194,24 @@ PG lw_fn(LW w0, Int d, PG g) {
     LDG dg = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos, tyl) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
     Int final_tmp = body.tmp;
     Int final_lbl = body.lbl;
-    List(Str) persisted_own_lines = resid_list_str_persist_copy(dg.lines);
-    List(Str) persisted_own_glines = resid_list_str_persist_copy(pp2.glines.concat(dg.meta));
+    // Capability strings are named per function (`@resid.cap.<fn>.N`).
+    List(Str) own_lines = if (pp2.n > 0) { cap_rename(dg.lines, name, 0, ListBuf()) } else { dg.lines };
+    List(Str) own_glines = if (pp2.n > 0) { cap_rename(pp2.glines, name, 0, ListBuf()) } else { pp2.glines };
+    List(Str) persisted_own_lines = resid_list_str_persist_copy(own_lines);
+    List(Str) persisted_own_glines = resid_list_str_persist_copy(own_glines.concat(dg.meta));
     Int _arena_out = resid_arena_pop();
     return PG {.pos = dg.next, .err = "", .glines = g.glines.concat(persisted_own_glines), .hlines = g.hlines, .lines = g.lines.concat(persisted_own_lines), .tmp = final_tmp, .lbl = final_lbl};
+}
+
+List(Str) cap_rename(List(Str) ls, Str name, Int i, ListBuf(Str) acc) {
+    return cap_rename_to(ls, "@resid.cap." + name, i, acc);
+}
+
+List(Str) cap_rename_to(List(Str) ls, Str to, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    Str l2 = if (str_contains(l, "@resid.cap")) { str_replace(l, "@resid.cap", to) } else { l };
+    return cap_rename_to(ls, to, i + 1, acc.push(l2));
 }
 
 // ─── Loop regions ───────────────────────────────────────────────────
@@ -3233,6 +3253,7 @@ Int lw_digits(Str s, Int i, Int acc) {
     return lw_digits(s, i + 1, acc * 10 + c - 48);
 }
 
+@requires(unsafe)
 PG lw_decls(LW w, Int id, Int i, PG acc) {
     if (acc.err != "" || i >= w.g.ns[id].nk) { return acc; }
     Int d = kg_kid(w.g, id, i);
@@ -3248,6 +3269,7 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
 }
 
 // Lower the reducer's residual graph.
+@requires(unsafe)
 pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
     LOP lo = lo_program(g, unit, fs);
     LW w = LW {.g = g, .fs = fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
@@ -3303,7 +3325,7 @@ LSG lsg_decl(Kg g, Int d, Str ceil, LSG st) {
     if (k == "sandbox") {
         PRes caps = cap_list_at(pre + ")", 0, true, "");
         if (caps.err != "") { return LSG {.fs = fs, .req = ""}; }
-        LSG inner = lsg_decls(g, d, 0, ceil_join(ceil, caps.ty), LSG {.fs = fs, .req = ""});
+        LSG inner = lsg_decls(g, d, 0, ceil_enter(ceil, caps.ty), LSG {.fs = fs, .req = ""});
         return LSG {.fs = inner.fs, .req = ""};
     }
     Str req0 = if (str_contains(pre, "@")) { lsg_req(pre, 0) } else { "" };
@@ -4028,10 +4050,12 @@ LRS lr_stmt(Kg g, Int id, LRS st) {
 
 // The walk's intermediate values are compiler-generated allocations, so it
 // runs in a bulk arena and its map comes out as text ("id=lo,hi;").
+@requires(unsafe)
 pub Map(Int, Str) lr_facts_kept(Kg g, Int d) {
     return lr_facts_read(lr_facts_kept_text(g, d), 0, lr_nof());
 }
 
+@requires(unsafe)
 pub Str lr_facts_kept_text(Kg g, Int d) {
     Int _in = resid_bulk_push();
     Map(Int, Str) f = lr_facts(g, d);

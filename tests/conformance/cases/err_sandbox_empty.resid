@@ -1,0 +1,8 @@
+// `sandbox ()` grants nothing (spec §21.2); it is not unrestricted.
+sandbox () {
+    @requires(filesystem(readonly))
+    Str peek() { return filesystem.read_all("/etc/hostname"); }
+}
+
+@requires(filesystem(readonly))
+Int main() { println(peek()); return 0; }

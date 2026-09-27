@@ -1,0 +1,8 @@
+// `import "m" @requires(caps)` compiles m inside sandbox (caps).
+import "_att_fs.resid" @requires(network);
+
+@requires(filesystem)
+Int main() {
+    if (att_has_etc()) { println("etc"); }
+    return 0;
+}

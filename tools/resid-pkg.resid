@@ -21,6 +21,7 @@
 ///   residc tools/resid-pkg.resid run -- keygen <secret.hex> <pub.hex>
 ///   residc tools/resid-pkg.resid run -- pack <dir> <out>
 ///   residc tools/resid-pkg.resid run -- sign <out> <keyfile>
+///   residc tools/resid-pkg.resid run -- sign-dir <dir> <keyfile>
 ///   residc tools/resid-pkg.resid run -- checksig <out> <pubkey-hex>
 ///   residc tools/resid-pkg.resid run -- extract <out> <dir>
 ///   residc tools/resid-pkg.resid run -- publish <dir> <registry> [keyfile]
@@ -164,10 +165,12 @@ List(FileRef) sort_filerefs(List(FileRef) xs) {
     return sort_filerefs_acc(xs, 0, []);
 }
 
+@requires(filesystem(readonly))
 List(Str) list_dir_sorted(Str path) {
     return list_sort_strs(filesystem.list_dir(path));
 }
 
+@requires(filesystem(readonly))
 List(FileRef) walk_dir(Str dir_abs, Str dir_rel) {
     return walk_dir_acc(dir_abs, dir_rel, list_dir_sorted(dir_abs), 0, []);
 }
@@ -178,6 +181,7 @@ List(FileRef) walk_dir(Str dir_abs, Str dir_rel) {
 // around in resid-why.resid's clamp_notes. Pulled the per-entry decision
 // out as an ordinary function body (plain if/return statements, not a
 // nested if-expression) to avoid it.
+@requires(filesystem(readonly))
 List(FileRef) entries_for_child(Str name, Str child_abs, Str child_rel, List(FileRef) acc) {
     if (filesystem.is_dir(child_abs)) {
         if (name == "target") { return acc; }
@@ -189,6 +193,7 @@ List(FileRef) entries_for_child(Str name, Str child_abs, Str child_rel, List(Fil
     return acc;
 }
 
+@requires(filesystem(readonly))
 List(FileRef) walk_dir_acc(Str dir_abs, Str dir_rel, List(Str) names, Int i, List(FileRef) acc) {
     if (i >= names.len()) { return acc; }
     Str name = names[i];
@@ -200,6 +205,7 @@ List(FileRef) walk_dir_acc(Str dir_abs, Str dir_rel, List(Str) names, Int i, Lis
 
 // ─── archive pack ───────────────────────────────────────────────────
 
+@requires(filesystem(readonly))
 List(Int) pack_file_entry(FileRef fr, List(Int) acc) {
     List(Int) rel_bytes = bytes_of(fr.rel);
     List(Int) content = filesystem.read_bytes(fr.abs);
@@ -207,11 +213,13 @@ List(Int) pack_file_entry(FileRef fr, List(Int) acc) {
     Int content_len = content.len();
     return acc.concat(le_u16(rel_len)).concat(rel_bytes).concat(le_u64(content_len)).concat(content);
 }
+@requires(filesystem(readonly))
 List(Int) pack_files_acc(List(FileRef) files, Int i, List(Int) acc) {
     if (i >= files.len()) { return acc; }
     return pack_files_acc(files, i + 1, pack_file_entry(files[i], acc));
 }
 
+@requires(filesystem(readonly))
 List(Int) build_archive(Str dir) {
     List(FileRef) files = sort_filerefs(walk_dir(dir, ""));
     Int nfiles = files.len();
@@ -291,6 +299,7 @@ Str dirname_of(Str path) {
     return str_slice(path, 0, idx);
 }
 
+@requires(filesystem)
 Int write_entry(Str out_dir, ArchiveEntry e) {
     if (is_unsafe_path(e.rel)) {
         eprintln("resid-pkg: unsafe path in archive: '" + e.rel + "'");
@@ -301,10 +310,12 @@ Int write_entry(Str out_dir, ArchiveEntry e) {
     filesystem.write_bytes(target, e.content);
     return 1;
 }
+@requires(filesystem)
 Int extract_entries_acc(Str out_dir, List(ArchiveEntry) entries, Int i, Int count) {
     if (i >= entries.len()) { return count; }
     return extract_entries_acc(out_dir, entries, i + 1, count + write_entry(out_dir, entries[i]));
 }
+@requires(filesystem)
 Int extract_archive(Str archive_path, Str out_dir) {
     return extract_entries_acc(out_dir, read_entries(filesystem.read_bytes(archive_path)), 0, 0);
 }
@@ -312,7 +323,7 @@ Int extract_archive(Str archive_path, Str out_dir) {
 // ─── CLI ────────────────────────────────────────────────────────────
 
 Str usage_text() {
-    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile]";
+    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | sign-dir <dir> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile]";
 }
 
 // Ed25519 keypair generation (mirrors `resid_build::archive::keygen`): a
@@ -320,16 +331,18 @@ Str usage_text() {
 // in lib/ed25519.resid, used by `sign`/`verify`) derives the public key
 // from it. Writes both as bare hex, no trailing newline, matching what
 // `sign`/`checksig` already read back.
+@requires(filesystem)
 Int cmd_keygen(Str secret_path, Str pub_path) {
     List(Int) seed = random_bytes(32);
     List(Int) pubk = pub_key(seed);
-    filesystem.write_bytes(secret_path, bytes_of(hex_encode(seed)));
+    filesystem.write_secret(secret_path, bytes_of(hex_encode(seed)));
     filesystem.write_bytes(pub_path, bytes_of(hex_encode(pubk)));
     println("wrote " + secret_path + " (keep secret!)");
     println("wrote " + pub_path);
     return 0;
 }
 
+@requires(filesystem)
 Int cmd_pack(Str dir, Str out) {
     List(Int) archive = build_archive(dir);
     filesystem.write_bytes(out + ".resid-pkg", archive);
@@ -337,6 +350,7 @@ Int cmd_pack(Str dir, Str out) {
     return 0;
 }
 
+@requires(filesystem)
 Int cmd_sign(Str out, Str keyfile) {
     Str keyhex = filesystem.read_all(keyfile);
     Str ktrim = str_trim(keyhex);
@@ -349,6 +363,25 @@ Int cmd_sign(Str out, Str keyfile) {
     return 0;
 }
 
+// `sign-dir <dir> <keyfile>`: sign a path dependency in place. Writes
+// `<dir>/<name>.resid-sig` over the hex SHA-256 of pack(<dir>), which
+// resid-manifest checks for a dependency with a pinned `pubkey`.
+@requires(filesystem)
+Int cmd_sign_dir(Str dir, Str keyfile) {
+    Str name = manifest_field(filesystem.read_all(dir + "/resid.toml"), "name");
+    if (name == "") {
+        eprintln("resid-pkg: cannot read [package] name from '" + dir + "/resid.toml'");
+        return 1;
+    }
+    List(Int) seed = hex_decode(str_trim(filesystem.read_all(keyfile)));
+    Str hash_hex = hex_encode(content_hash(build_archive(dir)));
+    List(Int) sig = sign_msg(seed, hash_hex);
+    filesystem.write_bytes(dir + "/" + name + ".resid-sig", bytes_of(hex_encode(sig)));
+    println("signed " + name + " (sha256 " + hash_hex + ")");
+    return 0;
+}
+
+@requires(filesystem(readonly))
 Int cmd_verify(Str out, Str pubkey_hex) {
     List(Int) archive = filesystem.read_bytes(out + ".resid-pkg");
     ArchiveHdr hdr = read_archive_header(archive);
@@ -370,6 +403,7 @@ Int cmd_verify(Str out, Str pubkey_hex) {
     return 1;
 }
 
+@requires(filesystem)
 Int cmd_extract(Str out, Str dir) {
     Int n = extract_archive(out + ".resid-pkg", dir);
     println("extracted " + IntToString(n) + " file(s) to " + dir);
@@ -521,6 +555,7 @@ List(IdxEntry) idx_remove_acc(List(IdxEntry) entries, Str name, Str version, Int
 // loses the element type: "List(IdxEntry) vs List(Unknown)") — same
 // family as the Int/Int(64) spelling issue elsewhere this session.
 // Pulled out as an ordinary function to avoid it.
+@requires(filesystem(readonly))
 List(IdxEntry) load_existing_index(Str idx_path) {
     if (filesystem.exists(idx_path)) { return parse_index_text(filesystem.read_all(idx_path)); }
     List(IdxEntry) empty = [];
@@ -529,6 +564,7 @@ List(IdxEntry) load_existing_index(Str idx_path) {
 
 // Load the existing index (if any), replace this package's entry,
 // write the new index + a fresh signature over its hash.
+@requires(filesystem)
 Int maintain_index(Str reg, Str name, Str version, Str hash_hex, List(Int) seed) {
     Str idx_path = reg + "/pkg/index.resid-idx";
     Str sig_path = reg + "/pkg/index.resid-sig";
@@ -542,6 +578,7 @@ Int maintain_index(Str reg, Str name, Str version, Str hash_hex, List(Int) seed)
     return 0;
 }
 
+@requires(filesystem)
 Int cmd_publish(Str dir, Str reg, Str keyfile) {
     Str manifest_text = filesystem.read_all(dir + "/resid.toml");
     Str name = manifest_field(manifest_text, "name");
@@ -574,6 +611,7 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
     return 0;
 }
 
+@requires(args, filesystem)
 Int main() {
     Int argc = args.count();
     if (argc < 2) {
@@ -592,6 +630,10 @@ Int main() {
     if (sub == "sign") {
         if (argc < 4) { eprintln(usage_text()); return 2; }
         return cmd_sign(args.get(2), args.get(3));
+    }
+    if (sub == "sign-dir") {
+        if (argc < 4) { eprintln(usage_text()); return 2; }
+        return cmd_sign_dir(args.get(2), args.get(3));
     }
     if (sub == "checksig") {
         if (argc < 4) { eprintln(usage_text()); return 2; }

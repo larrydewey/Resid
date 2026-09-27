@@ -56,11 +56,12 @@ Int main() {
 ```
 
 ### Sandboxing & Security
-- **No ambient authority**: Capabilities form a lattice and travel with effects.
-- **Policy ceiling**: The manifest defines the maximum capabilities for dependencies.
-- **Source-level attenuation**: Import-time or block-level capability narrowing.
-- **Transitive closure**: Attenuation applies to the entire dependency graph.
-- **Package integrity**: Cryptographic signatures over source, dependencies, and capability requirements.
+See `SECURITY.md` for the threat model, each guarantee's enforcing code and tests, and what is not guaranteed.
+- **No ambient authority**: every capability a function uses (directly, through calls, closures or behaviors) must be granted by its `@requires` or its sandbox, so authority starts at `main` (E0219).
+- **Policy ceiling**: The manifest's per-dependency `capabilities` bound the dependency's code at compile time.
+- **Source-level attenuation**: Import-time (`import "m" @requires(...)`) or block-level (`sandbox`) narrowing; nested sandboxes only narrow.
+- **Transitive closure**: Attenuation applies to everything a restricted function calls, checked statically and again before each provider call at run time.
+- **Package integrity**: Ed25519 signatures over the package archive's content hash (sources, manifest with dependencies and capabilities, lock file); unsigned packages are rejected outside a development profile.
 
 ### Concurrency
 - **Structured concurrency**: `spawn` requires explicit capability grants.
@@ -76,13 +77,14 @@ The compiler's primary performance goal is to:
 ### Self-Hosted Crypto & Tooling
 The standard crypto library is written **in Resid itself** and compiled to native code by the Resid compiler:
 - `lib/crypto.resid`: SHA-256, SHA-512, HMAC, PBKDF2, Base64, constant-time compare, OS randomness
-- `lib/ed25519.resid`: full RFC 8032 Ed25519 signing and verification on `Int(256)`/`Int(512)` arithmetic
+- `lib/ed25519.resid`: RFC 8032 Ed25519 signing and strict verification on `Int(256)`/`Int(512)` arithmetic
+- The TLS 1.3 client (`lib/tls*.resid`) does not authenticate servers against a trust store; see `SECURITY.md`
 
 Tooling shipped today:
 - `residc <file> [build|run|emit-ir]`: self-hosted compiler driver (default checks only). Built from `examples/driver.resid` via the stage0 seed.
 - `tools/resid-fmt.resid`: canonical formatter, self-hosted (`residc tools/resid-fmt.resid run -- <file>`)
 - `tools/resid-graph.resid`, `tools/resid-why.resid`, `tools/resid-pkg.resid`, `tools/resid-manifest.resid`, `tools/resid-cose.resid`: call-graph, provenance query, and package-manager tooling, all self-hosted
-- Stage-2 bootstrap compilers in `examples/` (lexer, parser, typechecker, codegen, driver — all written in Resid). The fused `examples/driver.resid` has full parity with the Rust `residc` pipeline, including sandbox/capability enforcement (§21) and its runtime force-time guard.
+- Stage-2 bootstrap compilers in `examples/` (lexer, parser, typechecker, codegen, driver — all written in Resid). The fused `examples/driver.resid` enforces capabilities (§19–21) statically and with a runtime force-time guard.
 - The Rust pipeline (`bootstrap/rust-stage0/crates/`) is archived, not actively developed — see `PLAN-resid-only.md` Phase D and `PROGRESS.md` §6. A frozen stage-0 seed binary (`bootstrap/stage0/`) is the actual bootstrap root going forward.
 
 ---

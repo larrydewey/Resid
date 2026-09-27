@@ -731,7 +731,7 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     if (fam == "environment" && m == "get") { return gt(k, "Str", id); }
     if (fam == "filesystem") {
         if (m == "read_all" || m == "read_handle") { return gt(k, "Str", id); }
-        if (m == "write_all" || m == "close" || m == "exists" || m == "write_bytes" || m == "is_dir" || m == "create_dir") { return gt(k, "Bool", id); }
+        if (m == "write_all" || m == "close" || m == "exists" || m == "write_bytes" || m == "write_secret" || m == "is_dir" || m == "create_dir") { return gt(k, "Bool", id); }
         if (m == "open") { return gt(k, "File", id); }
         if (m == "list_dir") { return gt(k, "List(Str)", id); }
         if (m == "read_bytes" || m == "sha256") { return gt(k, "List(Int)", id); }
@@ -1463,7 +1463,15 @@ Str gk_requires(Str prefix) {
     if (at < 0) { return ""; }
     Int lp = str_find_char(prefix, 40, at);
     if (lp < 0) { return ""; }
-    return cap_list_at(prefix, lp + 1, false, "").ty;
+    Str moded = cap_list_at(prefix, lp + 1, true, "").ty;
+    if (moded == "") { return ""; }
+    return list_join(caps_families(str_split(moded, ","), 0, ListBuf()), 0, ",", "");
+}
+
+// Families of a moded capability list (`filesystem:ro` -> `filesystem`).
+List(Str) caps_families(List(Str) cs, Int i, ListBuf(Str) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return caps_families(cs, i + 1, acc.push(cap_family(cs[i])));
 }
 
 Str gk_join_kids_ty(Kg g, Int id, Int from, Int to, Str acc) {
@@ -1516,7 +1524,7 @@ GKSig gk_sigs_at(Kg g, Int id, Int i, Str ceil, GKSig a) {
     Sigs fs = a.fs;
     if (kind == "sandbox") {
         PRes caps = cap_list_at(g.ns[d].aux + ")", 0, true, "");
-        GKSig inner = if (caps.err == "") { gk_sigs_at(g, d, 0, ceil_join(ceil, caps.ty), a) } else { a };
+        GKSig inner = if (caps.err == "") { gk_sigs_at(g, d, 0, ceil_enter(ceil, caps.ty), a) } else { a };
         return gk_sigs_at(g, id, i + 1, ceil, inner);
     }
     if (kind == "fn") {
@@ -1592,8 +1600,54 @@ Str gk_prov_family(GK k, Int id) {
     return fam;
 }
 
+// Capability family of an effectful runtime builtin, or "".
+Str gk_builtin_family(Str n) {
+    if (str_starts_with(n, "resid_tcp_")) { return "network"; }
+    if (str_starts_with(n, "resid_dbg_")) { return "process"; }
+    if (n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop") { return "unsafe"; }
+    if (n == "resid_list_str_persist_copy" || n == "resid_dec_persist") { return "unsafe"; }
+    return "";
+}
+
+// Family of a builtin call node (not a user function of that name), or "".
+Str gk_call_family(GK k, Int id) {
+    if (k.g.ns[id].kind != "call") { return ""; }
+    Int d = kg_def(k.rs, id);
+    if (d >= 0 && k.g.ns[d].kind == "fn") { return ""; }
+    return gk_builtin_family(k.g.ns[id].text);
+}
+
+// A user function named without a call (a function value), or through
+// method sugar `x.f(..)`: an authority edge like a direct call.
+Bool gk_user_ref(GK k, Int id) {
+    Str kd = k.g.ns[id].kind;
+    if (kd == "ref") {
+        Int d = kg_def(k.rs, id);
+        return d >= 0 && k.g.ns[d].kind == "fn";
+    }
+    if (kd != "mcall" || gk_is_provider(k, kg_kid(k.g, id, 0))) { return false; }
+    return ck_fn_index(k.fs, k.g.ns[id].text) >= 0;
+}
+
+// The user function a `sort(xs, using = B(T))` calls, or "".
+Str gk_sort_impl(GK k, Int id) {
+    Kg g = k.g;
+    if (g.ns[id].kind != "call" || g.ns[id].text != "sort" || g.ns[id].nk != 2) { return ""; }
+    Int u = kg_kid(g, id, 1);
+    if (g.ns[u].kind != "named" || g.ns[u].text != "using" || g.ns[u].nk < 1) { return ""; }
+    Str inner = strip_reverse(gk_inst(g, kg_kid(g, u, 0)), 0).ty;
+    Int op = str_find_char(inner, 40, 0);
+    if (op < 0) { return ""; }
+    Int bi = ck_b_index(k.fs, str_slice(inner, 0, op), str_slice(inner, op + 1, str_len(inner) - 1));
+    return if (bi < 0) { "" } else { k.fs.bfns[bi] };
+}
+
 GKF gk_facts(GK k, Int id, GKF f) {
-    GKF f1 = if (gk_user_call(k, id)) { gf_add(f, "c", k.g.ns[id].text) } else { f };
+    GKF fu = if (gk_user_call(k, id) || gk_user_ref(k, id)) { gf_add(f, "c", k.g.ns[id].text) } else { f };
+    Str bimpl = gk_sort_impl(k, id);
+    GKF f0 = if (bimpl == "") { fu } else { gf_add(fu, "c", bimpl) };
+    Str bfam = gk_call_family(k, id);
+    GKF f1 = if (bfam == "") { f0 } else { gf_add(f0, "p", bfam) };
     Str fam = gk_prov_family(k, id);
     GKF f2 = if (fam == "") { f1 } else { gf_add(f1, "p", fam) };
     GKF f3 = if (fam != "" && is_write_verb(fam, k.g.ns[id].text)) { gf_add(f2, "w", fam + "." + k.g.ns[id].text) } else { f2 };
@@ -1684,7 +1738,7 @@ Bool gk_enforce_all(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int i
 }
 
 // Spawn bounds (E0214, E0215) over a body; the first violation or "".
-Str gk_spawn_scan(GK k, Int id, Bool bounded, Str parent) {
+Str gk_spawn_scan(GK k, Int id, Bool bounded, Str parent, Bool insp) {
     Kg g = k.g;
     if (g.ns[id].kind == "spawn") {
         PRes caps = cap_list_at(g.ns[id].aux + ")", 0, true, "");
@@ -1693,28 +1747,205 @@ Str gk_spawn_scan(GK k, Int id, Bool bounded, Str parent) {
             Str over = if (caps.ty == "") { "" } else { spawn_cap_exceeds_at(str_split(caps.ty, ","), parent, 0) };
             if (over != "") { return "error[E0214]: spawn declares capability `" + over + "` which exceeds the parent's capability ceiling [" + fmt_caps(parent) + "] (child ≤ parent)"; }
         }
-        return gk_spawn_kids(k, id, 0, true, caps.ty);
+        return gk_spawn_kids(k, id, 0, true, caps.ty, true);
     }
     if (bounded && gk_user_call(k, id)) {
         Str m = spawn_call_check(k.fs, g.ns[id].text, parent);
         if (m != "") { return m; }
     }
-    return gk_spawn_kids(k, id, 0, bounded, parent);
+    return gk_spawn_kids(k, id, 0, bounded, parent, insp);
 }
 
-Str gk_spawn_kids(GK k, Int id, Int i, Bool bounded, Str parent) {
+Str gk_spawn_kids(GK k, Int id, Int i, Bool bounded, Str parent, Bool insp) {
     if (i >= k.g.ns[id].nk) { return ""; }
-    Str m = gk_spawn_scan(k, kg_kid(k.g, id, i), bounded, parent);
+    Str m = gk_spawn_scan(k, kg_kid(k.g, id, i), bounded, parent, insp);
     if (m != "") { return m; }
-    return gk_spawn_kids(k, id, i + 1, bounded, parent);
+    return gk_spawn_kids(k, id, i + 1, bounded, parent, insp);
 }
 
 Bool gk_spawn_all(GK k, List(Int) fnode, List(Str) eff, Int i) {
     if (i >= fnode.len()) { return false; }
-    Str m = gk_spawn_scan(k, fnode[i], eff[i] != "", eff[i]);
+    Str m = gk_spawn_scan(k, fnode[i], eff[i] != "", eff[i], false);
     Bool printed = if (m != "") { eprintln(m) } else { false };
     Bool rest = gk_spawn_all(k, fnode, eff, i + 1);
     return printed || rest;
+}
+
+// ─── Authority (spec §20: no ambient authority) ─────────────────────
+// Every capability family a function uses, directly (provider calls,
+// effectful builtins) or through a function it calls or names, must be
+// granted to it: by its own @requires, or by its enclosing sandbox when it
+// has none. So authority enters a program only where main declares it.
+
+// Function `i`'s own @requires list, with modes (`fam:ro` read-only).
+Str gk_cap_decl(GK k, List(Int) fnode, Int i) {
+    Str aux = k.g.ns[fnode[i]].aux;
+    Int at = str_find(aux, "@requires");
+    Int lp = if (at < 0) { -1 } else { str_find_char(aux, 40, at) };
+    if (lp < 0) { return ""; }
+    return cap_list_at(aux, lp + 1, true, "").ty;
+}
+
+// The capabilities granted to function `i`.
+Str gk_auth(Str decl, Str ceil) {
+    if (decl == "") { return ceil; }
+    if (ceil == "") { return decl; }
+    return meet_caps(decl, ceil);
+}
+
+// Needs are `fam` (full use) or `fam:ro` (reads only); full wins.
+Str need_add(Str a, Str e) {
+    Str f = cap_family(e);
+    if (f == "") { return a; }
+    if (!caps_contain_family(a, f)) { return if (a == "") { e } else { a + "," + e }; }
+    if (cap_readonly(e) || !grant_readonly_only(a, f)) { return a; }
+    return need_add(list_join(caps_drop_family(str_split(a, ","), f, 0, ListBuf()), 0, ",", ""), e);
+}
+
+List(Str) caps_drop_family(List(Str) cs, Str f, Int i, ListBuf(Str) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return caps_drop_family(cs, f, i + 1, if (cap_family(cs[i]) == f) { acc } else { acc.push(cs[i]) });
+}
+
+Str need_union(Str a, List(Str) b, Int i) {
+    if (i >= b.len()) { return a; }
+    return need_union(need_add(a, b[i]), b, i + 1);
+}
+
+// Own uses of one function: a provider family read-only unless it writes.
+Str gk_direct(GKF f, Int i, Str acc) {
+    if (i >= f.provs.len()) { return acc; }
+    Str fam = f.provs[i];
+    Bool ro = (is_prov_family(fam) && !gk_writes_fam(f.writes, fam, 0)) && fam != "process";
+    return gk_direct(f, i + 1, need_add(acc, if (ro) { fam + ":ro" } else { fam }));
+}
+
+Bool gk_writes_fam(List(Str) ws, Str fam, Int i) {
+    if (i >= ws.len()) { return false; }
+    if (str_starts_with(ws[i], fam + ".")) { return true; }
+    return gk_writes_fam(ws, fam, i + 1);
+}
+
+List(Str) gk_directs(List(GKF) fs, Int i, ListBuf(Str) acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    return gk_directs(fs, i + 1, acc.push(gk_direct(fs[i], 0, "")));
+}
+
+List(Str) gk_cap_decls(GK k, List(Int) fnode, Int i, ListBuf(Str) acc) {
+    if (i >= fnode.len()) { return acc.finish(); }
+    return gk_cap_decls(k, fnode, i + 1, acc.push(gk_cap_decl(k, fnode, i)));
+}
+
+// Families function `i` needs: its own uses, plus what each callee needs
+// or declares.
+Str gk_need_callees(Sigs fs, List(Str) need, List(Str) decl, List(Str) cs, Int j, Str acc) {
+    if (j >= cs.len()) { return acc; }
+    Int c = fs.fns.get(cs[j]) else { -1 };
+    Str acc2 = if (c < 0) { acc } else { need_union(need_union(acc, csv_split_or_empty(need[c]), 0), csv_split_or_empty(decl[c]), 0) };
+    return gk_need_callees(fs, need, decl, cs, j + 1, acc2);
+}
+
+type NeedRound = { List(Str) need; Bool changed; };
+
+NeedRound gk_need_round(Sigs fs, List(Str) need, List(Str) decl, List(Str) direct, List(Str) calls, Int i, ListBuf(Str) acc, Bool changed) {
+    if (i >= need.len()) { return NeedRound {.need = acc.finish(), .changed = changed}; }
+    Str n = gk_need_callees(fs, need, decl, csv_split_or_empty(calls[i]), 0, direct[i]);
+    return gk_need_round(fs, need, decl, direct, calls, i + 1, acc.push(n), changed || n != need[i]);
+}
+
+List(Str) gk_need_fix(Sigs fs, List(Str) need, List(Str) decl, List(Str) direct, List(Str) calls) {
+    NeedRound r = gk_need_round(fs, need, decl, direct, calls, 0, ListBuf(), false);
+    if (!r.changed) { return r.need; }
+    return gk_need_fix(fs, r.need, decl, direct, calls);
+}
+
+// The first need of function `i` its grant does not cover, or "".
+Str gk_uncovered(List(Str) need, Int j, Str auth) {
+    if (j >= need.len()) { return ""; }
+    Str f = cap_family(need[j]);
+    if (!caps_contain_family(auth, f)) { return need[j]; }
+    if (!cap_readonly(need[j]) && grant_readonly_only(auth, f)) { return need[j]; }
+    return gk_uncovered(need, j + 1, auth);
+}
+
+// Where function `i` gets need `e` from: "" (its own body) or a callee.
+Str gk_need_via(Sigs fs, List(Str) need, List(Str) decl, List(Str) cs, Int j, Str e) {
+    if (j >= cs.len()) { return ""; }
+    Int c = fs.fns.get(cs[j]) else { -1 };
+    Str got = if (c < 0) { "" } else { need_union(need[c], csv_split_or_empty(decl[c]), 0) };
+    if (c >= 0 && gk_uncovered([e], 0, got) == "") { return cs[j]; }
+    return gk_need_via(fs, need, decl, cs, j + 1, e);
+}
+
+// A need as @requires spells it (only filesystem grants have modes).
+Str cap_show(Str e) {
+    if (cap_readonly(e) && cap_family(e) == "filesystem") { return "filesystem(readonly)"; }
+    return cap_family(e);
+}
+
+// Every need of a function its grant does not cover, shown for @requires.
+Str gk_uncovered_all(List(Str) need, Int j, Str auth, Str acc) {
+    if (j >= need.len()) { return acc; }
+    Str u = gk_uncovered([need[j]], 0, auth);
+    Str acc2 = if (u == "") { acc } else { if (acc == "") { cap_show(u) } else { acc + ", " + cap_show(u) } };
+    return gk_uncovered_all(need, j + 1, auth, acc2);
+}
+
+Bool gk_auth_all(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str) direct, List(Str) calls, Int i) {
+    if (i >= fnode.len()) { return false; }
+    Str auth = gk_auth(decl[i], k.fs.ceils[i]);
+    Str miss = gk_uncovered(csv_split_or_empty(need[i]), 0, auth);
+    Str all = if (miss == "") { "" } else { gk_uncovered_all(csv_split_or_empty(need[i]), 0, auth, "") };
+    Bool own = miss != "" && gk_uncovered([miss], 0, direct[i]) == "";
+    Str via = if (miss == "" || own) { "" } else { gk_need_via(k.fs, need, decl, csv_split_or_empty(calls[i]), 0, miss) };
+    Str how = if (via == "") { "uses" } else { "uses (through `" + via + "`)" };
+    Str m = if (miss == "") { "" } else { "function `" + k.fs.names[i] + "` " + how + " capability `" + cap_show(miss) + "` but is not granted it: declare @requires(" + all + ") on it (no ambient authority, spec §20)" };
+    Bool printed = if (m != "") { eprintln("error[E0219]: " + m) } else { false };
+    Bool rest = gk_auth_all(k, fnode, need, decl, direct, calls, i + 1);
+    return printed || rest;
+}
+
+// A `test` block's body is checked like a function: its @requires prefix
+// is its grant.
+Bool gk_auth_tests(GK k, List(Str) need, List(Str) decl, Int id, Bool acc) {
+    if (id >= k.g.ns.len()) { return acc; }
+    Bool bad = if (k.g.ns[id].kind != "test") { false } else {
+        List(Str) e = [];
+        GKF f = gk_facts(k, id, GKF {.calls = e, .provs = e, .writes = e});
+        Str n = gk_need_callees(k.fs, need, decl, f.calls, 0, gk_direct(f, 0, ""));
+        Str aux = k.g.ns[id].aux;
+        Int at = str_find(aux, "@requires");
+        Int lp = if (at < 0) { -1 } else { str_find_char(aux, 40, at) };
+        Str auth = if (lp < 0) { "" } else { cap_list_at(aux, lp + 1, true, "").ty };
+        Str all = gk_uncovered_all(csv_split_or_empty(n), 0, auth, "");
+        if (all == "") { false } else { eprintln("error[E0219]: test " + k.g.ns[id].text + " uses capabilities it is not granted: declare @requires(" + all + ") on it (no ambient authority, spec §20)") }
+    };
+    return gk_auth_tests(k, need, decl, id + 1, acc || bad);
+}
+
+// A spawn body, with everything it calls, is granted only the spawn's
+// capability list (spec §19: child ≤ parent, a fresh CapEnv).
+Bool gk_auth_spawns(GK k, List(Str) need, List(Str) decl, Int id, Bool acc) {
+    if (id >= k.g.ns.len()) { return acc; }
+    Bool bad = if (k.g.ns[id].kind != "spawn") { false } else {
+        List(Str) e = [];
+        GKF f = gk_facts(k, id, GKF {.calls = e, .provs = e, .writes = e});
+        Str n = gk_need_callees(k.fs, need, decl, f.calls, 0, gk_direct(f, 0, ""));
+        PRes sc = cap_list_at(k.g.ns[id].aux + ")", 0, true, "");
+        Str all = gk_uncovered_all(csv_split_or_empty(n), 0, sc.ty, "");
+        if (all == "") { false } else { eprintln("error[E0214]: spawn body uses capabilities its list [" + fmt_caps(sc.ty) + "] does not grant: " + all + " (spec §19)") }
+    };
+    return gk_auth_spawns(k, need, decl, id + 1, acc || bad);
+}
+
+Bool gk_authority(GK k, List(Int) fnode, GKFs facts) {
+    List(Str) direct = gk_directs(facts.facts, 0, ListBuf());
+    List(Str) decl = gk_cap_decls(k, fnode, 0, ListBuf());
+    List(Str) need = gk_need_fix(k.fs, direct, decl, direct, facts.edges);
+    Bool fns = gk_auth_all(k, fnode, need, decl, direct, facts.edges, 0);
+    Bool tests = gk_auth_tests(k, need, decl, 0, false);
+    Bool spawns = gk_auth_spawns(k, need, decl, 0, false);
+    return fns || tests || spawns;
 }
 
 Int gk_finish(GK k, List(Int) fnode) {
@@ -1728,7 +1959,8 @@ Int gk_finish(GK k, List(Int) fnode) {
     Bool err2 = e0211_check_all(fs, eff, facts.edges, 0);
     Bool err3 = e0218_check_all(fs, eff, facts.pcsv, 0);
     Bool err4 = gk_spawn_all(k, fnode, eff, 0);
-    if (err1 || err2 || err3 || err4) { return 1; }
+    Bool err5 = gk_authority(k, fnode, facts);
+    if (err1 || err2 || err3 || err4 || err5) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
     return 0;
 }

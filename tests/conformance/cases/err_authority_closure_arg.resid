@@ -1,0 +1,11 @@
+// A closure passed elsewhere still counts against the function that
+// writes it: its call of `home` is an authority edge of main.
+@requires(environment)
+Str home(Str k) { return environment.get(k); }
+
+Str apply(Str closure(Str) f, Str x) { return f(x); }
+
+Int main() {
+    println(apply(lambda(k) { home(k) }, "HOME"));
+    return 0;
+}

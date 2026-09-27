@@ -1,0 +1,10 @@
+// A behavior's impl runs when `sort` uses it: an authority edge.
+@requires(process)
+Int by_run(Int a, Int b) { return process.run("true") + a - b; }
+
+Ord(Int) = by_run;
+
+Int main() {
+    List(Int) xs = sort([3, 1, 2], using = Ord(Int));
+    return xs.len();
+}

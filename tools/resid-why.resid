@@ -338,6 +338,7 @@ Str render_lsp_json(List(Note) notes) {
 // `--node ID` shows a node and its derive chain back to source; `--at
 // FILE:LINE` lists the nodes whose span starts on that line.
 
+@requires(filesystem(readonly))
 Int graph_main(Str artifact, Str node, Str at, Int max) {
     Str path = artifact + ".resid-graph.cbor";
     if (!filesystem.exists(path)) {
@@ -393,12 +394,14 @@ Int parse_int_or(Str s, Int fallback) {
 type Cli = { Str artifact; Str kind; Str symbol; Str file; Int max; Bool as_json; Bool summary; Bool help; };
 
 // `--node ID` / `--at FILE:LINE` anywhere in argv.
+@requires(args)
 Str arg_after(Int i, Int n, Str flag) {
     if (i + 1 >= n) { return ""; }
     if (args.get(i) == flag) { return args.get(i + 1); }
     return arg_after(i + 1, n, flag);
 }
 
+@requires(args)
 Cli parse_cli_acc(Int i, Int n, Str artifact, Str kind, Str symbol, Str file, Int max, Bool as_json, Bool summary, Bool help) {
     if (help) { return Cli {.artifact = artifact, .kind = kind, .symbol = symbol, .file = file, .max = max, .as_json = as_json, .summary = summary, .help = true}; }
     if (i >= n) { return Cli {.artifact = artifact, .kind = kind, .symbol = symbol, .file = file, .max = max, .as_json = as_json, .summary = summary, .help = help}; }
@@ -434,6 +437,7 @@ List(Note) clamp_notes(List(Note) sorted, Int max) {
     return take_first_acc(sorted, 0, cap, []);
 }
 
+@requires(args, filesystem(readonly))
 Int main() {
     Int argc = args.count();
     if (argc < 2) {

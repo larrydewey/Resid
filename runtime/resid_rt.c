@@ -28,6 +28,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <dirent.h>
 #include <libgen.h>
@@ -975,7 +976,8 @@ void resid_cap_enter(const char* const* caps, int64_t n) {
         return;
     }
     int64_t m = (caps && n > 0) ? n : 0;
-    for (int64_t i = 0; i < m && i < RESID_CAP_MAX_SET; i++) {
+    if (m > RESID_CAP_MAX_SET) m = RESID_CAP_MAX_SET;
+    for (int64_t i = 0; i < m; i++) {
         resid_cap_stack[resid_cap_depth][i] = caps[i];
     }
     resid_cap_ns[resid_cap_depth] = m;
@@ -989,7 +991,13 @@ void resid_cap_leave(void) {
 }
 
 static int resid_cap_term(char c) {
-    return c == '\0' || c == '(' || c == ':';
+    return c == '\0' || c == '(' || c == ':' || c == '!';
+}
+
+/* A grant entry encoded read-only ("filesystem:ro"). */
+static int resid_cap_ro(const char* g) {
+    const char* c = strchr(g, ':');
+    return c && strcmp(c, ":ro") == 0;
 }
 
 static int resid_cap_same_family(const char* a, const char* b) {
@@ -1001,12 +1009,14 @@ static int resid_cap_same_family(const char* a, const char* b) {
     return resid_cap_term(*a) && resid_cap_term(*b);
 }
 
+/* `cap` is a family, or "family!" for a write (read-only grants refuse). */
 static int resid_cap_granted(const char* cap) {
-    if (resid_cap_depth == 0) return 1; /* ambient: unrestricted */
+    if (resid_cap_depth == 0) return 1; /* outside every sandbox: the static check governs */
+    int write = cap && cap[0] && cap[strlen(cap) - 1] == '!';
     for (int d = 0; d < resid_cap_depth; d++) {
         int found = 0;
         for (int64_t i = 0; i < resid_cap_ns[d]; i++) {
-            if (resid_cap_same_family(resid_cap_stack[d][i], cap)) {
+            if (resid_cap_same_family(resid_cap_stack[d][i], cap) && !(write && resid_cap_ro(resid_cap_stack[d][i]))) {
                 found = 1;
                 break;
             }
@@ -1019,7 +1029,9 @@ static int resid_cap_granted(const char* cap) {
 void resid_cap_check(const char* cap) {
     if (!resid_cap_granted(cap)) {
         char buf[128];
-        snprintf(buf, sizeof(buf), "capability not granted: %s", cap ? cap : "?");
+        size_t n = cap ? strlen(cap) : 0;
+        int write = n && cap[n - 1] == '!';
+        snprintf(buf, sizeof(buf), "capability not granted: %.*s%s", (int)(write ? n - 1 : n), cap ? cap : "?", write ? " (write)" : "");
         resid_abort(buf);
     }
 }
@@ -1164,6 +1176,16 @@ static int utf8_seq_len(const unsigned char c) {
     return 1; /* invalid continuation byte — treat as 1 */
 }
 
+/* The length of the sequence at `p`, cut short at the first byte that is
+ * not a continuation byte: a truncated or invalid sequence (including one
+ * cut off by the terminating NUL) never steps past the string's end. */
+static inline int utf8_len_at(const unsigned char* p) {
+    int n = utf8_seq_len(p[0]);
+    for (int k = 1; k < n; k++)
+        if ((p[k] & 0xC0) != 0x80) return k;
+    return n;
+}
+
 static int64_t utf8_decode(const unsigned char* p, int len) {
     switch (len) {
         case 1: return p[0];
@@ -1252,7 +1274,7 @@ static _Thread_local StrIndexSlot g_str_scratch;
 static inline size_t str_slot_off(const StrIndexSlot* sl, int64_t i) {
     if (!sl->off) return (size_t)i;
     const unsigned char* p = (const unsigned char*)sl->s + sl->off[i >> STR_IDX_SHIFT];
-    for (int64_t k = i & (STR_IDX_STRIDE - 1); k > 0; k--) p += utf8_seq_len(*p);
+    for (int64_t k = i & (STR_IDX_STRIDE - 1); k > 0; k--) p += utf8_len_at(p);
     return (size_t)((const char*)p - sl->s);
 }
 
@@ -1287,7 +1309,7 @@ static void str_index_build(const char* s, StrIndexSlot* out) {
     const unsigned char* p = (const unsigned char*)s;
     while (*p) {
         n++;
-        p += utf8_seq_len(*p);
+        p += utf8_len_at(p);
     }
     out->s = s;
     out->len = n;
@@ -1298,7 +1320,7 @@ static void str_index_build(const char* s, StrIndexSlot* out) {
     p = (const unsigned char*)s;
     for (int64_t i = 0; i < n; i++) {
         if ((i & (STR_IDX_STRIDE - 1)) == 0) off[i >> STR_IDX_SHIFT] = (size_t)((const char*)p - s);
-        p += utf8_seq_len(*p);
+        p += utf8_len_at(p);
     }
     if ((n & (STR_IDX_STRIDE - 1)) == 0) off[n >> STR_IDX_SHIFT] = (size_t)((const char*)p - s);
     out->off = off;
@@ -1408,7 +1430,7 @@ static __attribute__((noinline)) int64_t str_char_at_slow(const char* s, int64_t
     if ((uint64_t)i >= (uint64_t)sl->len) return -1;
     if (!sl->off) return (unsigned char)s[i];   /* all-ASCII: byte i */
     const unsigned char* p = (const unsigned char*)(s + str_slot_off(sl, i));
-    return utf8_decode(p, utf8_seq_len(*p));
+    return utf8_decode(p, utf8_len_at(p));
 }
 
 /* Codepoint at index `i` (0-based), or -1 when out of bounds. The fast path
@@ -1631,7 +1653,7 @@ int64_t str_index_of(const char* s, const char* needle, int64_t from) {
     }
     int64_t idx = lo << STR_IDX_SHIFT;
     const unsigned char* p = (const unsigned char*)s + sl->off[lo];
-    while ((size_t)((const char*)p - s) < qb) { p += utf8_seq_len(*p); idx++; }
+    while ((size_t)((const char*)p - s) < qb) { p += utf8_len_at(p); idx++; }
     return idx;
 }
 
@@ -2253,13 +2275,22 @@ void* resid_list_slice(void* list, int64_t lo, int64_t hi) {
 
 /* lo..hi (hi exclusive) as a List(Int): Range(Int) values are materialized. */
 void* resid_range_list(int64_t lo, int64_t hi) {
-    int64_t n = hi > lo ? hi - lo : 0;
+    /* hi - lo in unsigned arithmetic: it may exceed INT64_MAX. */
+    uint64_t un = hi > lo ? (uint64_t)hi - (uint64_t)lo : 0;
+    if (un > (uint64_t)(SIZE_MAX / sizeof(void*)) / 2) resid_abort("range too large to materialize");
+    int64_t n = (int64_t)un;
     void** flat = (void**)malloc((size_t)(n > 0 ? n : 1) * sizeof(void*));
     if (!flat) resid_abort("resid_range_list: out of memory");
     for (int64_t i = 0; i < n; i++) flat[i] = resid_box_i64(lo + i);
     void* out = resid_list_new(n, flat, "List(Int(64))");
     free(flat);
     return out;
+}
+
+/* lo..=hi: hi + 1 would wrap at the top of Int. */
+void* resid_range_list_incl(int64_t lo, int64_t hi) {
+    if (hi == INT64_MAX) resid_abort("range too large to materialize");
+    return resid_range_list(lo, hi + 1);
 }
 
 /* ── Growable accumulator buffer (perf: O(1)-amortized self-recursive
@@ -3417,6 +3448,28 @@ int8_t resid_fs_write_bytes(const char* path, void* list_box) {
     int closed = fclose(f) == 0;
     free(buf);
     return (written == (size_t)n && closed) ? 1 : 0;
+}
+
+/* filesystem.write_secret: like write_bytes, but the file is created (or
+ * truncated) readable by its owner only, and a symlink is not followed. */
+int8_t resid_fs_write_secret(const char* path, void* list_box) {
+    if (!resid_path_is_safe(path)) return 0;
+    int64_t n = resid_list_len(list_box);
+    unsigned char* buf = (unsigned char*)malloc((size_t)(n > 0 ? n : 1));
+    if (!buf) return 0;
+    for (int64_t i = 0; i < n; i++)
+        buf[i] = (unsigned char)(resid_unbox_i64(resid_list_get(list_box, i)) & 0xFF);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) { free(buf); return 0; }
+    int ok = fchmod(fd, 0600) == 0;
+    size_t off = 0;
+    while (ok && off < (size_t)n) {
+        ssize_t w = write(fd, buf + off, (size_t)n - off);
+        if (w <= 0) ok = 0; else off += (size_t)w;
+    }
+    ok = close(fd) == 0 && ok;
+    free(buf);
+    return ok ? 1 : 0;
 }
 
 /* SHA-256 (FIPS 180-4) for filesystem.sha256: hashes a file in C so the
@@ -5875,7 +5928,7 @@ char* str_to_lower(const char* s) {
     /* Final_Sigma context: walk a lookahead pointer past the current
        character to find the next cased char (skipping ignorables). */
     while (*p) {
-        int len = utf8_seq_len(*p);
+        int len = utf8_len_at(p);
         uint32_t cp = utf8_decode(p, len);
         uint32_t mapped;
         if (cp == 0x03A3) { /* Σ */
@@ -5888,7 +5941,7 @@ char* str_to_lower(const char* s) {
                 int back = 1;
                 if (*r & 0x80) {
                     while (r > (const unsigned char*)s && (*(r - 1) & 0xC0) == 0x80) { r--; back++; }
-                    if (back < 4 && utf8_seq_len(*(q - back)) == back) { }
+                    if (back < 4 && utf8_len_at(q - back) == back) { }
                 }
                 uint32_t pcp = utf8_decode(r, back);
                 if (!resid_case_is_ignorable(pcp)) {
@@ -5902,7 +5955,7 @@ char* str_to_lower(const char* s) {
             int next_cased = 0;
             scanned = 0;
             while (*nx && !scanned) {
-                int nl = utf8_seq_len(*nx);
+                int nl = utf8_len_at(nx);
                 uint32_t ncp = utf8_decode(nx, nl);
                 if (!resid_case_is_ignorable(ncp)) {
                     next_cased = resid_case_is_cased(ncp);
@@ -5927,7 +5980,7 @@ char* str_to_upper(const char* s) {
     char* w = out;
     const unsigned char* p = (const unsigned char*)s;
     while (*p) {
-        int len = utf8_seq_len(*p);
+        int len = utf8_len_at(p);
         uint32_t cp = utf8_decode(p, len);
         const char* sp = special_upper_lookup(cp);
         if (sp) {
@@ -6177,7 +6230,7 @@ char* str_reverse(const char* s) {
     int64_t i = 0;
     while (*p) {
         off[i++] = (int64_t)((const char*)p - s);
-        p += utf8_seq_len(*p);
+        p += utf8_len_at(p);
     }
     off[i] = (int64_t)strlen(s);
     char* out = (char*)malloc(off[n] + 1);
@@ -6229,7 +6282,9 @@ double list_sumf(void* box) {
    prefixed bl_ so both conventions coexist. */
 
 static void* bl_alloc(int64_t n) {
+    if (n < 0 || (uint64_t)n > (SIZE_MAX - 8) / 8) resid_abort("list too large");
     int64_t* m = (int64_t*)malloc(8 + (size_t)n * 8);
+    if (!m) resid_abort("out of memory");
     m[0] = n;
     return m;
 }

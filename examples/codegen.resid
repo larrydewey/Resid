@@ -3409,6 +3409,7 @@ Str p_sym(Str pname, Str meth) {
         if (meth == "exists") { return "resid_fs_exists"; }
         if (meth == "read_bytes") { return "resid_fs_read_bytes"; }
         if (meth == "write_bytes") { return "resid_fs_write_bytes"; }
+        if (meth == "write_secret") { return "resid_fs_write_secret"; }
         if (meth == "sha256") { return "resid_fs_sha256"; }
         if (meth == "append_bytes") { return "resid_fs_append_bytes"; }
         if (meth == "write_hex") { return "resid_fs_write_hex"; }
@@ -3439,7 +3440,7 @@ Str p_rty(Str pname, Str meth) {
         if (meth == "close") { return "Bool"; }
         if (meth == "exists") { return "Bool"; }
         if (meth == "read_bytes") { return "List(Int)"; }
-        if (meth == "write_bytes") { return "Bool"; }
+        if (meth == "write_bytes" || meth == "write_secret") { return "Bool"; }
         if (meth == "sha256") { return "List(Int)"; }
         if (meth == "append_bytes") { return "Bool"; }
         if (meth == "write_hex" || meth == "append_hex") { return "Bool"; }
@@ -3468,7 +3469,7 @@ Int p_nargs(Str pname, Str meth) {
         if (meth == "close") { return 1; }
         if (meth == "exists") { return 1; }
         if (meth == "read_bytes") { return 1; }
-        if (meth == "write_bytes") { return 2; }
+        if (meth == "write_bytes" || meth == "write_secret") { return 2; }
         if (meth == "sha256") { return 1; }
         if (meth == "append_bytes") { return 2; }
         if (meth == "write_hex" || meth == "append_hex") { return 2; }
@@ -4094,9 +4095,10 @@ Str growable_key(Str fname, Int paramidx) {
     return fname + ":" + IntToString(paramidx);
 }
 
+// lw_fn makes these per-function: `@resid.cap.<fn>.N`.
 Str cap_str_name(Int n) {
-    if (n == 0) { return "@str"; }
-    return "@str." + IntToString(n);
+    if (n == 0) { return "@resid.cap"; }
+    return "@resid.cap." + IntToString(n);
 }
 
 Str cap_str_global(Str nm, Str payload) {
@@ -4108,8 +4110,14 @@ Str cap_str_global(Str nm, Str payload) {
 
 // Which capability family (if any) does this already-emitted LLVM line
 // invoke? Detected by the runtime symbol it calls.
+// The capability a call line needs; `fam!` marks a write, which a
+// read-only grant does not cover.
 Str provider_family_of_line(Str line) {
+    if (!str_contains(line, "call ")) { return ""; }
+    if (str_contains(line, "@resid_fs_write") || str_contains(line, "@resid_fs_append") || str_contains(line, "@resid_fs_create_dir")) { return "filesystem!"; }
     if (str_contains(line, "@resid_fs_")) { return "filesystem"; }
+    if (str_contains(line, "@resid_dbg_")) { return "process"; }
+    if (str_contains(line, "@resid_process_run")) { return "process!"; }
     if (str_contains(line, "@resid_env_")) { return "environment"; }
     if (str_contains(line, "@resid_args_")) { return "args"; }
     if (str_contains(line, "@resid_process_run")) { return "process"; }
@@ -4177,29 +4185,28 @@ List(Str) list_from_idx_acc(List(Str) l, Int i, Int n, List(Str) acc) {
     return list_from_idx_acc(l, i + 1, n, acc2);
 }
 
-// Walks the already-emitted body lines, inserting `resid_cap_leave()`
-// right before every `ret` and a `resid_cap_check` right after every
-// provider call that could touch a guarded capability family.
-CapPP cap_acc_next(Str fam, Str line, List(Str) l1, CapPP acc) {
+// Walks the already-emitted body lines, inserting a `resid_cap_check`
+// right before every provider call (so a denied call never runs) and, in
+// a sandboxed function, `resid_cap_leave()` right before every `ret`.
+CapPP cap_acc_next(Str fam, List(Str) l0, CapPP acc) {
     if (fam != "") {
         Str nm = cap_str_name(acc.n);
         Str gl = cap_str_global(nm, fam);
-        List(Str) l2 = l1.concat(["call void @resid_cap_check(ptr " + nm + ")"]);
+        List(Str) l2 = l0.concat(["call void @resid_cap_check(ptr " + nm + ")"]);
         return CapPP {.lines = l2, .glines = acc.glines.concat([gl]), .n = acc.n + 1};
     }
-    return CapPP {.lines = l1, .glines = acc.glines, .n = acc.n};
+    return CapPP {.lines = l0, .glines = acc.glines, .n = acc.n};
 }
 
-CapPP capinject_at(List(Str) lines, Int i, CapPP acc) {
+CapPP capinject_at(List(Str) lines, Int i, Bool sandboxed, CapPP acc) {
     if (i >= lines.len()) { return acc; }
     Str line = lines[i];
-    Bool is_ret = str_starts_with(line, "ret ");
+    Bool is_ret = sandboxed && str_starts_with(line, "ret ");
     List(Str) pre = if (is_ret) { acc.lines.concat(["call void @resid_cap_leave()"]) } else { acc.lines };
-    List(Str) l1 = pre.concat([line]);
-    Str fam = provider_family_of_line(line);
-    CapPP acc2 = cap_acc_next(fam, line, l1, acc);
+    CapPP acc2 = cap_acc_next(provider_family_of_line(line), pre, acc);
+    CapPP acc3 = CapPP {.lines = acc2.lines.concat([line]), .glines = acc2.glines, .n = acc2.n};
     Int k = i + 1;
-    return capinject_at(lines, k, acc2);
+    return capinject_at(lines, k, sandboxed, acc3);
 }
 
 CapPP cap_maybe_prologue(Bool sandboxed, List(Str) caps, CapPP pp0) {
@@ -4207,9 +4214,10 @@ CapPP cap_maybe_prologue(Bool sandboxed, List(Str) caps, CapPP pp0) {
     return pp0;
 }
 
+// Every function checks its provider calls: one outside any sandbox may
+// still run inside a sandboxed caller's region.
 CapPP cap_maybe_inject(Bool sandboxed, List(Str) lines, List(Str) glines, Int n) {
-    if (sandboxed) { return capinject_at(lines, 0, CapPP {.lines = nil_list(), .glines = glines, .n = n}); }
-    return CapPP {.lines = lines, .glines = glines, .n = n};
+    return capinject_at(lines, 0, sandboxed, CapPP {.lines = nil_list(), .glines = glines, .n = n});
 }
 
 // ─── Tail calls ─────────────────────────────────────────────────

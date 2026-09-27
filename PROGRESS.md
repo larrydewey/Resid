@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  166, reduce 14, provenance 20, graph 394. The archived Rust workspace
+  186, reduce 14, provenance 20, graph 416, pkg 17, runtime 3. The archived Rust workspace
   (`bootstrap/rust-stage0/`) keeps its `cargo test` suites (last full run:
   821 tests; its e2e now has 128 after removing tests of the retired text
   paths); see `AGENTS.md` for its slow-test table.
@@ -305,6 +305,60 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 619MB (606MB without facts). The artifact carries a RESIDUAL node's range
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
+
+### 0ze. Security review and hardening (2026-09-26)
+
+Every security claim in README.md and the spec was checked against the
+code; each is now enforced and tested, or corrected. `SECURITY.md` lists
+the threat model, each guarantee with its enforcing code and tests, and
+what is not guaranteed.
+
+- **No ambient authority was false**: `main` could read files, run
+  processes and read the environment without any grant. E0219
+  (`gk_authority` in `examples/gcheck.resid`) now requires every
+  capability a function uses, directly or through calls, closures,
+  method sugar or sort behaviors, to be granted by its `@requires` or
+  its sandbox; `test` blocks and `spawn` bodies are checked the same
+  way. Effectful builtins are capabilities: TCP `network`, the ptrace
+  debugger `process`, arena/bulk push/pop and persist copies `unsafe`.
+  Moded `@requires(filesystem(readonly))` is honored (it was silently
+  dropped). The compiler, tools, examples and tests now declare what
+  they use.
+- **Sandboxes amplified**: `sandbox ()` was unrestricted, nested
+  sandboxes took the union, and a meet of disjoint grants became
+  unrestricted. Ceilings now meet; "_" is the empty grant.
+- **Unenforced attenuation**: `import "m" @requires(...)` was ignored
+  and manifest dependency ceilings were never applied to dependency
+  code. Both now compile the module inside a sandbox (depmap lines
+  carry `::caps`); a late attenuated import of an already imported
+  module is E0216. A spawn child could use any parent capability; it
+  now gets only its list, statically and in its own runtime frame.
+- **Runtime guard**: checks ran after the provider call, only in
+  sandboxed functions, ignored read-only modes and read past a
+  64-entry frame. They now run before every provider call in every
+  function, refuse writes under read-only grants, and truncate safely.
+- **Memory safety**: UTF-8 walkers stepped past the NUL on truncated
+  sequences (out-of-bounds read); range materialization could overflow
+  its allocation size; `lo..=Int.max` wrapped to empty.
+- **Crypto**: ECDSA accepted `(r = Qx, s = 0)` for any message (and
+  aborted on DER integers shorter than 32 bytes); Ed25519 accepted
+  `S` with bit 255 set, off-curve points and non-canonical keys, and
+  aborted on short input; RSA accepted `s >= n`. All fixed with
+  Wycheproof-style tests. The TLS client's lack of server
+  authentication is documented, not fixed.
+- **Packages**: unsigned registry packages were accepted, a pinned key
+  checked a file unrelated to the compiled sources, the signed index's
+  hash was never compared, and a validly signed archive of another
+  package was accepted. Registry dependencies now need a signed index
+  entry, a pinned key or a keyring key (or `[signing] allow_unsigned`),
+  must be the requested name and version, and cache by content hash;
+  path dependencies with a pinned key must match `resid-pkg sign-dir`.
+  Secret keys are written 0600 (`filesystem.write_secret`).
+- **Spec corrections**: package signature format (§28.1), no knowledge
+  cache (§21.4), graph tools do not verify provenance (§33.1).
+- New suites: `tests/pkg/run.sh` (17), `tests/runtime/run.sh` (3);
+  conformance gains 20 cases. Benchmarks unchanged; self-compile peak
+  383MB -> 397MB (the authority pass).
 
 ### 0zd. Immediate Int and Float words (2026-09-26)
 

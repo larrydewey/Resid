@@ -9,6 +9,7 @@ Str hex_all(List(Int) bs, Int i, Str acc) {
     return hex_all(bs, i + 1, acc + hex2(bs[i]));
 }
 
+@requires(filesystem)
 Int main() {
     Str p = "@TMP@/sha.txt";
     Bool w = filesystem.write_all(p, "ab");

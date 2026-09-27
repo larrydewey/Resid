@@ -1,0 +1,13 @@
+// Authority declared where it is used, and by every caller up to main.
+@requires(args)
+Int count_args() { return args.count(); }
+
+@requires(filesystem(readonly))
+Bool has_etc() { return filesystem.is_dir("/etc"); }
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Int n = count_args();
+    if (has_etc()) { println("etc " + IntToString(n)); }
+    return 0;
+}

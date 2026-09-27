@@ -241,6 +241,9 @@ pub Bool rsa_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
     Int sstop = sc + 255;
     List(Int) sbytes = der_slice_seeded(sigb, sc, sstop);
     List(Int) sl = bn_from_be(sbytes, w);
+    // The signature representative must be below the modulus (RFC 8017
+    // §5.2.2), or s + n would verify as s.
+    if (bn_cmp(sl, nl, w) >= 0) { return false; }
     List(Int) rec = bn_montexp(sl, ev, nl, w);
     List(Int) digest = sha256_bytes(tbs);
     List(Int) em = pkcs1_em_sha256(digest, 256);

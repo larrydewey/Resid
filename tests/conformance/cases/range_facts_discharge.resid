@@ -34,6 +34,7 @@ Int edge(Int x) {
     return x;
 }
 
+@requires(args)
 Int main() {
     Int z = args.count() - 1;
     println(IntToString(below(z + 5, 10)));

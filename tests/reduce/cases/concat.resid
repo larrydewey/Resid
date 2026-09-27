@@ -1,5 +1,5 @@
 Str tag(Str x) { return "<" + x + ">" + "!" + "?"; }
-Int main() {
+@requires(args) Int main() {
     Str d = IntToString(args.count() + 6);
     Str n = "7";
     println(d + " = " + n + "," + "z");

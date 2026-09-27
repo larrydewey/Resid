@@ -1,0 +1,5 @@
+// Effectful runtime builtins need grants too: network for TCP.
+Int main() {
+    Int fd = resid_tcp_connect("127.0.0.1", 9);
+    return fd;
+}

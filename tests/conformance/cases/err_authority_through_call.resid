@@ -1,0 +1,5 @@
+// Authority is not laundered through a callee that declares it.
+@requires(process)
+Int run_it() { return process.run("true"); }
+
+Int main() { return run_it(); }

@@ -17,7 +17,7 @@ Str build(Int n, Str acc) {
     List(Str) parts = [acc, "x"];
     return build(n - 1, str_join(parts, ""));
 }
-Int main() {
+@requires(args) Int main() {
     Int n = str_len(IntToString(args.count())) * 50000000;
     println(IntToString(count(n, 0)));
     Bool e = is_even(n);

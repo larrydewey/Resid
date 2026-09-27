@@ -1,0 +1,9 @@
+// A read-only grant does not cover a callee that writes.
+@requires(filesystem)
+Bool save(Str path) { return filesystem.write_all(path, "x"); }
+
+@requires(filesystem(readonly))
+Int main() {
+    if (save("/tmp/resid_authority_readonly_write")) { return 1; }
+    return 0;
+}

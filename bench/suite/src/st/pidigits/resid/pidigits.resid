@@ -105,6 +105,7 @@ St iter(Dec(1000000) n2, Dec(1000000) a, Dec(1000000) d, Int p, Int k, Int i, In
 
 // One block of `m` iterations in its own bulk scope; the three numbers
 // are copied out of it (resid_dec_persist) before it is popped.
+@requires(unsafe)
 St block(St s, Int total, Int m) {
     Int _in = resid_bulk_push();
     St r = iter(s.n2, s.a, s.d, s.p, s.k, s.i, s.line, total, m);
@@ -119,12 +120,14 @@ St block(St s, Int total, Int m) {
     return St {.n2 = n2, .a = a, .d = d, .p = p, .k = k, .i = i, .line = line};
 }
 
+@requires(unsafe)
 St blocks(St s, Int total, Int m, Int g) {
     if (g <= 0 || s.i >= total) { return s; }
     return blocks(block(s, total, m), total, m, g - 1);
 }
 
 // A group of `g` blocks in an outer bulk scope, copied out once.
+@requires(unsafe)
 St group(St s, Int total, Int m, Int g) {
     Int _in = resid_bulk_push();
     St r = blocks(s, total, m, g);
@@ -139,6 +142,7 @@ St group(St s, Int total, Int m, Int g) {
     return St {.n2 = n2, .a = a, .d = d, .p = p, .k = k, .i = i, .line = line};
 }
 
+@requires(unsafe)
 St run(St s, Int total, Int m, Int g) {
     if (s.i >= total) { return s; }
     return run(group(s, total, m, g), total, m, g);
@@ -149,7 +153,7 @@ Str spaces(Int n) {
     return " " + spaces(n - 1);
 }
 
-@requires(args)
+@requires(args, unsafe)
 Int main() {
     Int total = str_parse_int(args.get(1));
     St s0 = St {.n2 = big(2), .a = big(0), .d = big(1), .p = 1, .k = 0, .i = 0, .line = 1};

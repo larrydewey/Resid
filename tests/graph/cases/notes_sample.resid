@@ -1,5 +1,5 @@
 // Notes come from the graph: this comment's rt and args.count() are text.
-Int main() {
+@requires(args) Int main() {
     Int a = rt(0 - 1);
     Int n = args.count();
     Str s = "rt args.count()";

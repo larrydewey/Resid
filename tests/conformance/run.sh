@@ -21,7 +21,8 @@
 # Each case is compiled in a fresh temp dir holding lib/*.resid and the helper
 # modules, so `import "crypto.resid"` and `import "_mod_a.resid"` resolve. The
 # token @TMP@ in a case source is replaced with that temp dir, and
-# @TMP@/in.txt is pre-created containing "hi".
+# @TMP@/in.txt is pre-created containing "hi". NAME.args and helper
+# `_*.depmap` files get the same @TMP@ substitution.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -53,10 +54,11 @@ run_case() {
     mkdir -p "$dir"
     cp "$ROOT"/lib/*.resid "$dir"/ 2>/dev/null
     cp "$CASES"/_*.resid "$dir"/ 2>/dev/null
+    for m in "$CASES"/_*.depmap; do [ -f "$m" ] && sed "s#@TMP@#$dir#g" "$m" > "$dir/$(basename "$m")"; done
     echo hi > "$dir/in.txt"
     sed "s#@TMP@#$dir#g" "$CASES/$name.resid" > "$dir/$name.resid"
     local args=""
-    [ -f "$CASES/$name.args" ] && args="$(cat "$CASES/$name.args")"
+    [ -f "$CASES/$name.args" ] && args="$(sed "s#@TMP@#$dir#g" "$CASES/$name.args")"
     # The compiler resolves runtime/resid_rt.c relative to the cwd.
     (cd "$ROOT" && timeout 600 "$COMPILER" "$dir/$name.resid" ${COMPILER_SUBCMD:-} -o "$dir/bin" $args) \
         > "$dir/compile.log" 2>&1

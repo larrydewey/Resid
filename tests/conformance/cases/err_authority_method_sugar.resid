@@ -1,0 +1,9 @@
+// Method-call sugar `x.f()` is a call of `f`.
+@requires(filesystem)
+Bool save(Str path) { return filesystem.write_all(path, "x"); }
+
+Int main() {
+    Str p = "/tmp/resid_authority_method_sugar";
+    if (p.save()) { return 1; }
+    return 0;
+}

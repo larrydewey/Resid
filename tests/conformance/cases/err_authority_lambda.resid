@@ -1,0 +1,5 @@
+// A lambda's provider calls belong to the function that writes it.
+Int main() {
+    Int closure(Int) f = lambda(z) { args.count() + z };
+    return f(1);
+}

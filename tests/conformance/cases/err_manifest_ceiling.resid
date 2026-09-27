@@ -1,0 +1,9 @@
+// A manifest dependency compiles inside its declared ceiling (spec §21.1):
+// the depmap line "attpkg::<root>::network" bounds attpkg to network.
+import "attpkg";
+
+@requires(filesystem)
+Int main() {
+    if (att_has_etc()) { println("etc"); }
+    return 0;
+}

@@ -470,6 +470,7 @@ Int lex_token(Str s, Int pos) {
     return lex_op(s, j, n);
 }
 
+@requires(args, filesystem(readonly))
 Int main() {
     if (args.count() < 2) {
         println("usage: lex <source.res>");

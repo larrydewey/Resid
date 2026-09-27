@@ -432,13 +432,32 @@ pub Int(256) mod_l(List(Int) dig) {
 // `bytes_of`'s Str round-trip would corrupt bytes ≥128 (same UTF-8-
 // encoding issue `filesystem.write_bytes` exists to solve — see
 // PLAN-resid-only.md).
+// RFC 8032 §5.1.3 point decoding succeeds: 32 bytes, y < p, a square
+// root exists, and x = 0 is not encoded with the sign bit set.
+pub Bool dec_ok(List(Int) bs) {
+    if (bs.len() != 32) { return false; }
+    Int(256) y = dec_y(bs);
+    if (y >= fe_p()) { return false; }
+    Int(256) x = dec_x(bs);
+    if (x == 0 && ((bs[31] >> 7) & 1) == 1) { return false; }
+    // -x^2 + y^2 == 1 + d x^2 y^2 (fails when no square root exists).
+    Int(256) x2 = fe_sq(x);
+    Int(256) y2 = fe_sq(y);
+    return fe_sub(y2, x2) == fe_add(1, fe_mul(fe_d(), fe_mul(x2, y2)));
+}
+
+// Strict verification (RFC 8032 §5.1.7): a malformed signature or key is
+// rejected, never an abort; S must be below L as a full 256-bit integer.
 pub Bool verify_sig_bytes(List(Int) mb, List(Int) sig, List(Int) pubk) {
+    if (sig.len() != 64 || pubk.len() != 32) { return false; }
+    if (sig[63] >= 128) { return false; }
     List(Int) rb = slice_bytes(sig, 0, 31);
     List(Int) sbB = slice_bytes(sig, 32, 63);
     Int(256) sv = bytes_to_int(sbB);
     if (sv >= fe_l()) {
         return false;
     }
+    if (!dec_ok(pubk) || !dec_ok(rb)) { return false; }
     Int(256) ax = dec_x(pubk);
     Int(256) ay = dec_y(pubk);
     Int(256) az = 1;

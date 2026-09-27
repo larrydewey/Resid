@@ -1,0 +1,8 @@
+valid accept
+other message reject
+S+L reject
+S high bit reject
+R off curve reject
+key non-canonical reject
+short sig reject
+short key reject

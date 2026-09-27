@@ -4,4 +4,5 @@ sandbox (filesystem) {
         return str_len(d);
     }
 }
+@requires(filesystem(readonly))
 Int main() { println(IntToString(read_demo())); return 0; }

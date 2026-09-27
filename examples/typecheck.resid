@@ -505,8 +505,24 @@ Str depmap_line_name(Str line, Int sep) {
     return str_slice(line, 0, sep);
 }
 
+// A line is "name::root", or "name::root::caps" when the manifest bounds
+// the dependency's capabilities (spec §21.1).
 Str depmap_line_path(Str line, Int sep) {
-    return str_slice(line, sep + 2, str_len(line));
+    Str rest = str_slice(line, sep + 2, str_len(line));
+    Int c = imp_find_dcolon(rest, 0);
+    return if (c < 0) { rest } else { str_slice(rest, 0, c) };
+}
+
+// The capability ceiling of dependency `name`, or "\x01" when unbounded.
+Str depmap_caps_lines(List(Str) lines, Int i, Str name) {
+    if (i >= lines.len()) { return "\x01"; }
+    Int sep = imp_find_dcolon(lines[i], 0);
+    if (sep >= 0 && depmap_line_name(lines[i], sep) == name) {
+        Str rest = str_slice(lines[i], sep + 2, str_len(lines[i]));
+        Int c = imp_find_dcolon(rest, 0);
+        return if (c < 0) { "\x01" } else { str_slice(rest, c + 2, str_len(rest)) };
+    }
+    return depmap_caps_lines(lines, i + 1, name);
 }
 
 Str depmap_match_line(Str line, Str name) {
@@ -530,6 +546,7 @@ Str depmap_lookup(Str depmap, Str name) {
     return depmap_lookup_lines(lines, 0, lines.len() - 1, name);
 }
 
+@requires(filesystem(readonly))
 Str imp_resolve_target(Str dir, Str name, Str depmap) {
     Str full = if (ck_str_starts_with(name, "/")) { name } else { dir + "/" + name };
     if (filesystem.exists(full)) { return full; }
@@ -555,6 +572,7 @@ Str imp_resolve_target(Str dir, Str name, Str depmap) {
 // amortized, not O(accumulated-so-far)) — str_sb_finish is called
 // exactly once, at the real base case, to produce the one flat Str this
 // function ever returns.
+@requires(filesystem(readonly))
 RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done, Int depth, Str depmap, Str path, Int ml) {
     Str m0 = IntToString(ml) + " 1 " + path + "\n";
     return imp_resolve_lines_a(lines, i, n, dir, sb, done, depth, depmap, "", path, ml, ml, m0);
@@ -563,6 +581,7 @@ RRes imp_resolve_lines(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done,
 // `aliases` is ";M;N;" for this file's `import "f" as M;` lines: `M.name`
 // in the rest of the file refers to the module's `name`.
 // ml0: merged line of this file's first line; ml: of the next line emitted.
+@requires(filesystem(readonly))
 RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str done, Int depth, Str depmap, Str aliases, Str path, Int ml0, Int ml, Str map) {
     if (i > n) { return RRes {.text = str_sb_finish(sb), .done = done, .map = map, .nl = ml - ml0}; }
     Str line = lines[i];
@@ -577,11 +596,22 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         Str sel = if (ck_str_starts_with(clause, "(")) { imp_sel_list(clause) } else { "*" };
         Str full = imp_resolve_target(dir, name, depmap);
         Str key = ";" + full + ";";
-        RRes sub = if (str_contains(done, key)) {
-            RRes {.text = "", .done = done, .map = "", .nl = 0}
+        // `import "m" @requires(caps)` (spec §21.2): the module and its
+        // imports compile inside `sandbox (caps)`. A module already
+        // imported without that bound cannot take it afterwards.
+        Int ra = str_find(clause, "@requires(");
+        Bool att = ra >= 0;
+        Bool clash = att && str_contains(done, key);
+        Bool warned = if (clash) { eprintln("error[E0216]: `" + name + "` is imported with @requires after it was already imported without it; import it attenuated first (spec §21.2)") } else { false };
+        RRes sub0 = if (str_contains(done, key)) {
+            RRes {.text = if (clash) { "import_attenuation_conflict\n" } else { "" }, .done = done, .map = "", .nl = if (clash) { 1 } else { 0 }}
         } else {
             imp_resolve_file_vis(full, done, depth, depmap, sel, ml)
         };
+        RRes sub1 = if (att && !clash) { RRes {.text = "sandbox (" + imp_att_caps(clause, ra + 10, 1, ra + 10) + ") { " + sub0.text + "}\n", .done = sub0.done, .map = sub0.map, .nl = sub0.nl + 1} } else { sub0 };
+        // A manifest dependency compiles inside its declared ceiling.
+        Str dcaps = if (depmap == "" || sub1.text == "" || full == dir + "/" + name || full == name) { "\x01" } else { depmap_caps_lines(str_split(depmap, "\n"), 0, name) };
+        RRes sub = if (dcaps != "\x01") { RRes {.text = "sandbox (" + dcaps + ") { " + sub1.text + "}\n", .done = sub1.done, .map = sub1.map, .nl = sub1.nl + 1} } else { sub1 };
         Int ni2 = i + 1;
         // Keep the importing file's line numbering: the module text goes
         // where the import line was, and the import line itself becomes
@@ -596,6 +626,16 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
     Str line2 = if (aliases == "") { line } else { imp_unalias(line, aliases) };
     Str sb3 = str_sb_append(str_sb_append(sb, line2), "\n");
     return imp_resolve_lines_a(lines, ni3, n, dir, sb3, done, depth, depmap, aliases, path, ml0, ml + 1, map);
+}
+
+// The capability list of an import's `@requires(...)`, from `from` to its
+// matching `)`.
+pub Str imp_att_caps(Str c, Int i, Int depth, Int from) {
+    if (i >= str_len(c)) { return str_slice(c, from, i); }
+    Int ch = str_char_at(c, i);
+    Int d = if (ch == 40) { depth + 1 } else { if (ch == 41) { depth - 1 } else { depth } };
+    if (d == 0) { return str_slice(c, from, i); }
+    return imp_att_caps(c, i + 1, d, from);
 }
 
 // Text after an import's quoted path, without the trailing `;`.
@@ -767,12 +807,14 @@ pub Str with_builtin_types(Str src) {
     return src + a + b + "\n";
 }
 
+@requires(filesystem(readonly))
 RRes imp_resolve_file(Str path, Str done, Int depth, Str depmap) {
     return imp_resolve_file_vis(path, done, depth, depmap, "", 1);
 }
 
 // `vis`: "" for the program's own file (nothing hidden), "*" for a plain
 // import (pub functions visible), ",a,b," for a selective import.
+@requires(filesystem(readonly))
 RRes imp_resolve_file_vis(Str path, Str done, Int depth, Str depmap, Str vis, Int ml) {
     if (depth > 8) { return RRes {.text = "", .done = done, .map = "", .nl = 0}; }
     Str src0 = loc_rewrite(filesystem.read_all(path), path);
@@ -2599,7 +2641,7 @@ Bool grant_readonly_only(Str caps_csv, Str family) {
 
 Bool is_write_verb(Str family, Str verb) {
     if (family == "filesystem" && verb == "write_all") { return true; }
-    if (family == "filesystem" && verb == "write_bytes") { return true; }
+    if (family == "filesystem" && (verb == "write_bytes" || verb == "write_secret")) { return true; }
     if (family == "filesystem" && verb == "append_bytes") { return true; }
     if (family == "filesystem" && (verb == "write_hex" || verb == "append_hex")) { return true; }
     if (family == "filesystem" && verb == "create_dir") { return true; }
@@ -2629,10 +2671,22 @@ Str meet_caps_at(List(Str) acaps, List(Str) bcaps, Int i, Str acc) {
     return meet_caps_at(acaps, bcaps, k, acc2);
 }
 
+// "" means unrestricted, so an empty meet of two grants is "_", the empty
+// grant (no capability family is named "_").
 Str meet_caps(Str a_csv, Str b_csv) {
     if (a_csv == "") { return ""; }
     if (b_csv == "") { return ""; }
-    return meet_caps_at(str_split(a_csv, ","), str_split(b_csv, ","), 0, "");
+    Str m = meet_caps_at(str_split(a_csv, ","), str_split(b_csv, ","), 0, "");
+    return if (m == "") { "_" } else { m };
+}
+
+// The ceiling inside `sandbox (caps)` within ceiling `outer` ("" outside
+// every sandbox): the meet, so nesting only narrows; `sandbox ()` grants
+// nothing.
+Str ceil_enter(Str outer, Str caps) {
+    Str c = if (caps == "") { "_" } else { caps };
+    if (outer == "") { return c; }
+    return meet_caps(outer, c);
 }
 
 // ─── Capability-list parsing: `(cap1, cap2(mode), ...)` ─────────
@@ -2895,7 +2949,7 @@ Str list_join(List(Str) xs, Int i, Str sep, Str acc) {
 }
 
 Str fmt_caps(Str csv) {
-    if (csv == "") { return ""; }
+    if (csv == "" || csv == "_") { return ""; }
     return list_join(str_split(csv, ","), 0, ", ", "");
 }
 
@@ -2968,7 +3022,7 @@ Bool is_prov_verb_filesystem(Str v) {
     if (v == "sha256") { return true; }
     if (v == "append_bytes") { return true; }
     if (v == "write_hex" || v == "append_hex") { return true; }
-    if (v == "write_bytes") { return true; }
+    if (v == "write_bytes" || v == "write_secret") { return true; }
     if (v == "is_dir") { return true; }
     if (v == "create_dir") { return true; }
     return false;

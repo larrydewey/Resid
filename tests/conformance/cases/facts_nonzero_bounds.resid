@@ -25,6 +25,7 @@ Int pick(List(Int) xs, Int i) {
     return -1;
 }
 
+@requires(args)
 Int main() {
     Int k = args.count();
     println(IntToString(div_nz(k + 7, k)));

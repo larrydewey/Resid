@@ -1,0 +1,2 @@
+E0219
+test "reads" uses capabilities it is not granted: declare @requires(filesystem(readonly))

@@ -1,0 +1,8 @@
+// An import bound that covers the module's needs compiles and runs.
+import "_att_fs.resid" @requires(filesystem(readonly));
+
+@requires(filesystem(readonly))
+Int main() {
+    if (att_has_etc()) { println("etc"); }
+    return 0;
+}

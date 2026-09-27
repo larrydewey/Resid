@@ -244,6 +244,7 @@ Int db_hex_val(Str s, Int i, Int acc) {
 
 // `info`: the binary, its artifact, and whether the artifact's hash matches
 // the one compiled into the binary (spec §33).
+@requires(filesystem(readonly))
 Int db_info(DB d) {
     Int k = el_sym(d.ys, "resid_graph_hash", 0);
     Str want = if (k < 0) { "" } else { ga_hex(el_read_addr(d.b, d.ss, d.ys[k].value, 32), 0, StrBuf()) };
@@ -378,6 +379,7 @@ Int db_reports(DB d, List(ST) ss, Int i, Int k, Int last) {
     return db_reports(d, ss, i + 1, if (show) { k + 1 } else { k }, n);
 }
 
+@requires(filesystem, process)
 Int db_run(DB d, Str args) {
     if (d.brk.len() == 0) {
         println("no breakpoints: add one with `break FILE:LINE` or `break FN`");
@@ -412,6 +414,7 @@ Int db_run(DB d, Str args) {
 type NT = { Int pid; Int bias; List(Int) bps; Map(Int, Int) saved; Int shown; Int last; };
 
 // Where the binary is mapped (its first mapping, file offset 0).
+@requires(filesystem(readonly))
 Int db_bias(Str bin, Int pid) {
     List(Str) ls = str_split(filesystem.read_all("/proc/" + IntToString(pid) + "/maps"), "\n");
     Int sl = db_last_slash(bin, str_len(bin) - 1);
@@ -485,6 +488,7 @@ List(Int) db_all_bps(DB d, Int i, List(Int) acc) {
 }
 
 // Plant int3 at each address, remembering the word it replaced.
+@requires(process)
 Map(Int, Int) db_plant(Int pid, List(Int) as, Int i, Map(Int, Int) saved) {
     if (i >= as.len()) { return saved; }
     Int a = as[i];
@@ -497,6 +501,7 @@ Map(Int, Int) db_plant(Int pid, List(Int) as, Int i, Map(Int, Int) saved) {
 Bool db_is_bp(NT n, Int a) { return n.saved.contains(a); }
 
 // Execute the instruction under a breakpoint with its original word back.
+@requires(process)
 Bool db_step_over(NT n, Int t, Int a) {
     if (!db_is_bp(n, a)) { return resid_dbg_step(t); }
     Int w = n.saved.get(a) else { 0 };
@@ -511,6 +516,7 @@ Bool db_step_over(NT n, Int t, Int a) {
 // A DWARF location: 0 none, 1 in memory at v, 2 the value v.
 type DL = { Int kind; Int v; };
 
+@requires(process)
 DL db_eval(DB d, Int t, NT n, List(Int) e, Int fb, Int i, List(Int) st, Bool isreg) {
     if (i >= e.len()) {
         if (st.len() == 0) { return DL {.kind = 0, .v = 0}; }
@@ -589,6 +595,7 @@ Int db_pow256(Int k) {
 }
 
 // The C string at p, quoted as gdb shows it.
+@requires(process)
 Str db_cstr(Int t, Int p, Int i, StrBuf acc) {
     if (i >= 512) { return acc.push("...\"").finish(); }
     Int w = resid_dbg_peek(t, p + i);
@@ -598,6 +605,7 @@ Str db_cstr(Int t, Int p, Int i, StrBuf acc) {
     return db_cstr(t, p, i + 1, a1);
 }
 
+@requires(process)
 Str db_render(Int t, Str ty, DL l) {
     if (l.kind == 0) { return "<optimized out>"; }
     Int w = if (l.kind == 1) { resid_dbg_peek(t, l.v) } else { l.v };
@@ -610,6 +618,7 @@ Str db_render(Int t, Str ty, DL l) {
 
 // "name = value" for each parameter, then each local, of the function at
 // pc (a link address).
+@requires(process)
 List(Str) db_nvars(DB d, Int t, NT n, Int pc) {
     Int k = el_fn_at(d.dfs, pc, 0);
     if (k < 0) { return []; }
@@ -621,6 +630,7 @@ List(Str) db_nvars(DB d, Int t, NT n, Int pc) {
     return ps.concat(db_nvars_at(d, t, n, f.vars, pc, fb, false, 0, ListBuf()));
 }
 
+@requires(process)
 List(Str) db_nvars_at(DB d, Int t, NT n, List(DV) vs, Int pc, Int fb, Bool params, Int i, ListBuf(Str) acc) {
     if (i >= vs.len()) { return acc.finish(); }
     DV v = vs[i];
@@ -632,6 +642,7 @@ List(Str) db_nvars_at(DB d, Int t, NT n, List(DV) vs, Int pc, Int fb, Bool param
 }
 
 // Report thread t's stop at runtime pc, unless stepping stays on one node.
+@requires(process)
 NT db_nreport(DB d, NT n, Int t, Int pc, Bool stepping) {
     Int lp = pc - n.bias;
     Int node = db_pc_node(d, lp);
@@ -643,6 +654,7 @@ NT db_nreport(DB d, NT n, Int t, Int pc, Bool stepping) {
 
 // Outside the program's code (the runtime, libc): the nearest return
 // address on the stack into the program names the call it is under.
+@requires(process)
 Int db_caller(DB d, NT n, Int t) {
     Int ra = db_scan_ret(d, n, t, resid_dbg_reg(t, 7), 0);
     if (ra < 0) { return 0; }
@@ -651,6 +663,7 @@ Int db_caller(DB d, NT n, Int t) {
     return 1;
 }
 
+@requires(process)
 Int db_scan_ret(DB d, NT n, Int t, Int sp, Int i) {
     if (i >= 4096) { return -1; }
     Int w = resid_dbg_peek(t, sp + i * 8) - n.bias;
@@ -660,6 +673,7 @@ Int db_scan_ret(DB d, NT n, Int t, Int sp, Int i) {
 }
 
 // Run to the return address ret of a call made with the stack at sp.
+@requires(process)
 Bool db_finish_call(NT n, Int t, Int ret, Int sp) {
     Bool had = db_is_bp(n, ret);
     Int w = resid_dbg_peek(t, ret);
@@ -669,6 +683,7 @@ Bool db_finish_call(NT n, Int t, Int ret, Int sp) {
     return ok;
 }
 
+@requires(process)
 Bool db_run_to(NT n, Int t, Int ret, Int sp, Int orig) {
     Bool c = resid_dbg_cont(t, 0);
     Int tt = resid_dbg_wait();
@@ -689,6 +704,7 @@ Bool db_run_to(NT n, Int t, Int ret, Int sp, Int orig) {
     return db_run_to(n, t, ret, sp, orig);
 }
 
+@requires(process)
 Bool db_run_to_wait(NT n, Int t, Int ret, Int sp, Int orig) {
     Int tt = resid_dbg_wait();
     if (tt < 0) { return false; }
@@ -696,6 +712,7 @@ Bool db_run_to_wait(NT n, Int t, Int ret, Int sp, Int orig) {
 }
 
 // Step a thread past the temporary int3 at a, whose word was orig.
+@requires(process)
 Bool db_past_temp(Int t, Int a, Int orig) {
     Bool r = resid_dbg_poke(t, a, orig);
     Bool ok = resid_dbg_step(t);
@@ -705,6 +722,7 @@ Bool db_past_temp(Int t, Int a, Int orig) {
 
 // `step N` from a stop: N instructions, stepping over calls, reporting
 // each change of node.
+@requires(process)
 NT db_nsteps(DB d, NT n, Int t, Int k) {
     if (k <= 0) { return n; }
     Int pc = resid_dbg_reg(t, 16);
@@ -720,6 +738,7 @@ NT db_nsteps(DB d, NT n, Int t, Int k) {
 }
 
 // The event loop: report breakpoint stops until `stops` are shown.
+@requires(process)
 Int db_nloop(DB d, NT n) {
     Int t = resid_dbg_wait();
     if (t < 0) { return db_say("program exited with code " + IntToString(resid_dbg_exit_code()), 0); }
@@ -752,6 +771,7 @@ Int db_nloop(DB d, NT n) {
     return db_nloop(d, n2);
 }
 
+@requires(process, filesystem(readonly))
 Int db_nrun(DB d, Str args) {
     if (d.brk.len() == 0) { return db_say("no breakpoints: add one with `break FILE:LINE` or `break FN`", 1); }
     if (d.dfs.len() == 0) { return db_say("no DWARF functions in " + d.bin + " (build with --profile debug)", 1); }
@@ -776,6 +796,7 @@ List(Int) db_add_all(List(Int) xs, Int k, Int i, ListBuf(Int) acc) {
 
 type CR = { DB d; Int rc; Bool quit; };
 
+@requires(filesystem, process)
 CR db_cmd(DB d, Str line0) {
     Str line = str_trim(line0);
     Int sp = db_find(line, " ", 0);
@@ -808,6 +829,7 @@ Int db_help() {
 }
 
 // -ex commands in order; the last status is the exit code.
+@requires(filesystem, process)
 Int db_script(DB d, List(Str) cs, Int i, Int rc) {
     if (i >= cs.len()) { return rc; }
     CR r = db_cmd(d, cs[i]);
@@ -815,6 +837,7 @@ Int db_script(DB d, List(Str) cs, Int i, Int rc) {
     return db_script(r.d, cs, i + 1, r.rc);
 }
 
+@requires(filesystem, process)
 Int db_repl(DB d) {
     print("(resid-debug) ");
     Str l = resid_read_line();
@@ -827,12 +850,14 @@ Int db_repl(DB d) {
     return db_repl(r.d);
 }
 
+@requires(args)
 List(Str) db_exs(Int i, Int n, ListBuf(Str) acc) {
     if (i + 1 >= n) { return acc.finish(); }
     if (args.get(i) == "-ex") { return db_exs(i + 2, n, acc.push(args.get(i + 1))); }
     return db_exs(i + 1, n, acc);
 }
 
+@requires(filesystem(readonly))
 DB db_open(Str bin) {
     GA a = ga_load(filesystem.read_bytes(bin + ".resid-graph.cbor"));
     List(GI) ix = ga_index(a);
@@ -847,6 +872,7 @@ DB db_open(Str bin) {
     return DB {.bin = bin, .a = a, .ix = ix, .b = b, .ss = ss, .ys = ys, .rows = rows, .at = db_places(a, ix, 0, m0), .brk = nb, .stops = 8, .steps = 0, .backend = "native", .dx = dx, .dfs = dfs};
 }
 
+@requires(args, filesystem, process)
 Int main() {
     Int argc = args.count();
     if (argc < 2 || args.get(1) == "--help") {

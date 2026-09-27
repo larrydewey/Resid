@@ -296,10 +296,12 @@ List(Str) chunk_kill_names() {
     ];
 }
 
+@requires(filesystem(readonly))
 List(Str) read_lines(Str path) {
     return str_split(filesystem.read_all(path), "\n");
 }
 
+@requires(filesystem)
 Int main() {
     List(Str) cg = read_lines("examples/codegen.resid");
     List(Str) tc = read_lines("examples/typecheck.resid");
