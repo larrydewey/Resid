@@ -6,7 +6,7 @@
 // are topologically ordered. Types, annotations and capability lists are
 // kept as text in `text`/`aux` until resolution (G2) gives them nodes.
 //
-// Imported by examples/driver.resid; shares its lexer (lex_tok, Tok),
+// Imported by compiler/driver.resid; shares its lexer (lex_tok, Tok),
 // parse_type/PRes, is_known_type, imp_close_paren and find_sqclose_d.
 
 // One node: kind, text, aux, child slice kids[a0 .. a0 + nk), source span.

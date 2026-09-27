@@ -20,7 +20,7 @@
 //
 // is rewritten to the declaration and literal forms the later stages use.
 //
-// This file is imported by examples/driver.resid and shares its lexer
+// This file is imported by compiler/driver.resid and shares its lexer
 // (lex_tok, Tok).
 
 type DsSig = { List(Str) names; Map(Str, Str) pnames; Map(Str, Str) pdefs; Bool any; };

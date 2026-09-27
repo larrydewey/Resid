@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate examples/driver.resid from examples/codegen.resid + examples/typecheck.resid.
+"""Regenerate compiler/driver.resid from compiler/codegen.resid + compiler/typecheck.resid.
 
 Recipe (M6 stage-2):
   base   = codegen.resid minus CLI bits (pick_out, Int main)
@@ -100,9 +100,9 @@ def cut_main(lines):
 
 
 def main():
-    cg = read('examples/codegen.resid')
-    tc = read('examples/typecheck.resid')
-    dv = read('examples/driver.resid')
+    cg = read('compiler/codegen.resid')
+    tc = read('compiler/typecheck.resid')
+    dv = read('compiler/driver.resid')
 
     # 1. base: codegen without CLI (original recipe)
     base = cut_main(cg)
@@ -180,8 +180,8 @@ def main():
               '// =====================================================================', '']
 
     out = base + banner + chunk_t + [''] + tail
-    open(f'{ROOT}/examples/driver.resid', 'w').write('\n'.join(out) + '\n')
-    print(f"wrote examples/driver.resid ({len(out)} lines)")
+    open(f'{ROOT}/compiler/driver.resid', 'w').write('\n'.join(out) + '\n')
+    print(f"wrote compiler/driver.resid ({len(out)} lines)")
 
 
 if __name__ == '__main__':

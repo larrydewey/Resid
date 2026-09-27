@@ -32,10 +32,10 @@ source length alone, before any real parsing/checking/codegen work. Fixed
 with a trivial pointer-keyed memo cache (no array, no eviction — sound
 because Str buffers are immutable and never freed by this runtime). A
 second, smaller O(n^2) (n = function count) survived in
-`examples/typecheck.resid`'s sandbox-enforcement pass even after the
+`compiler/typecheck.resid`'s sandbox-enforcement pass even after the
 earlier O(n^3) fixpoint fix (that fix cut the round *count*, not the
 per-round cost) — fixed via a reverse caller-index. A real, previously
-latent bug in `examples/codegen.resid`'s `value else { fallback }` codegen
+latent bug in `compiler/codegen.resid`'s `value else { fallback }` codegen
 (dropped the fallback branch's emitted globals) was found and fixed along
 the way — only triggered by a `Str`-default use of that sugar, which didn't
 exist anywhere in the codebase before this session. Full writeup, numbers,
@@ -48,7 +48,7 @@ byte-identical) was independently re-confirmed after this fix.
 `Set(Int).contains(2)` diverged between the Rust pipeline (`has-2`, correct)
 and the self-hosted driver (`no-2`, wrong); confirmed via `git stash` A/B
 testing to be a pre-existing bug, not caused by the performance work above.
-Root cause: `examples/codegen.resid`'s `.get`/`.remove`/`.contains` (Map)
+Root cause: `compiler/codegen.resid`'s `.get`/`.remove`/`.contains` (Map)
 and `.contains`/`.remove` (Set) methods, plus `m[key]` indexing, all boxed
 their key/element argument via `box_scalar` — a bare stack-alloca `ptr`
 (just `alloca T; store T val, ptr`) — instead of `box_heap_`, which
@@ -77,7 +77,7 @@ Two `runtime/resid_rt.c` fixes, full detail in `bootstrap/stage0/README.md`
    the runtime-hardening commit `ab4f9e7` (it closed a real `system(cmd)`
    shell-injection hole by disabling the primitive outright, rather than
    fixing it) — this broke *every* self-hosted compile, not just
-   `driver.resid`'s own: `examples/driver.resid`'s `main()` calls
+   `driver.resid`'s own: `compiler/driver.resid`'s `main()` calls
    `process.run(cmd)` as its final step to invoke `clang`. Fixed via
    `fork`+`execvp` on a whitespace-split `argv` (never a shell) — closes the
    same injection vector without disabling the primitive.
@@ -95,7 +95,7 @@ there, not a runtime patch.
 ### 0c. Eager compile-time reduction in the self-hosted compiler (2026-09-24)
 
 The self-hosted pipeline now reduces every program by default (spec §36):
-`examples/reduce.resid`, a source-to-source partial evaluator, runs after
+`compiler/reduce.resid`, a source-to-source partial evaluator, runs after
 type checking and before code generation (`--no-reduce` skips it,
 `--dump-reduced <path>` writes the reduced text). It folds operators with
 the generator's exact width/overflow behavior, propagates known locals and
@@ -151,7 +151,7 @@ passes 105). Spawn capability bounds (E0214/E0215) are enforced, and the
 reducer folds through the new control-flow syntax (ternary, `while`,
 `break`/`continue`, `with`, if-let/while-let, destructuring) rather than
 leaving such functions residual. Work-package details are in `PLAN-self-hosted-conformance.md`'s
-progress log. New source-level pass `examples/desugar.resid` (default and
+progress log. New source-level pass `compiler/desugar.resid` (default and
 named arguments, spec struct syntax); module visibility and aliases are
 applied during import resolution.
 
@@ -215,7 +215,7 @@ keep low bits; narrowing is rejected except whole fitting literals;
 `Str(N)` capacity is UTF-8 bytes and casts never split a codepoint.
 lib/ec256 and lib/tlsmsg use explicit wrapping/shift packing.
 
-`examples/reduce.resid` specializes calls with partly-known arguments
+`compiler/reduce.resid` specializes calls with partly-known arguments
 (`f__rsN`), terminating by a homeomorphic-embedding whistle with
 generalization; an identical re-entrant call stops evaluation at once;
 budget hits print `note: reduce: ...`. The compiler specializes 53 of its
@@ -242,7 +242,7 @@ reproducibility. Self-compile time is unchanged.
 ### 0r. Graph artifact and derive edges (G3/G4, 2026-09-26)
 
 Debug and check builds write `<out>.resid-graph.cbor` (spec §33, §34,
-`examples/gart.resid`): source and residual nodes in one graph with kind,
+`compiler/gart.resid`): source and residual nodes in one graph with kind,
 checked type, knowledge state, literal value, deps, def, effects and
 capabilities, span through the import source map, derive edge and a
 SHA-256 content hash; roots name the parse unit and the residual unit. The
@@ -274,7 +274,7 @@ module function is named without its `__m<module>__` prefix, so
 The driver's signature table (`Funcs`: functions, parameter types and
 names, requires and sandbox ceilings, structs, sum types, behaviors,
 constraint types) and the leaf-function analysis behind scalar scopes are
-built from the graph (`lw_sigs` in `examples/lower.resid`) instead of
+built from the graph (`lw_sigs` in `compiler/lower.resid`) instead of
 collecting them from the printed residual; the residual is no longer
 printed unless `--dump-reduced` asks. The leaf walk mirrors the text
 analysis over what the printer would emit. `--graph-sigs-check` compares
@@ -296,7 +296,7 @@ the call and inherited along derive edges. Self-compile: 2,517 budget and
 ### 0v. Range facts discharge checks (G3, 2026-09-26)
 
 Lowering computes range facts per function (spec §3.2a, `lr_facts` in
-`examples/lower.resid`): integer literals, + - * / % &, lengths, `for`
+`compiler/lower.resid`): integer literals, + - * / % &, lengths, `for`
 over a range and branch conditions, including the early-exit
 `if (i >= n) { return ...; }` pattern. A + - * / % whose operand ranges
 prove it cannot trap is emitted as a plain `add nsw` / `sdiv` etc.; the
@@ -306,11 +306,25 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0zi. The compiler moves to compiler/; internals locked by file (2026-09-26)
+
+- The compiler's sources moved from `examples/` to `compiler/` (entry
+  `compiler/driver.resid`); `examples/` now holds only demo programs.
+- `--runtime-internals` is refused unless the entry file is
+  `compiler/driver.resid` or under `runtime/rt/`. Every internal use
+  (runtime primitive, memory internal, `@export`/`@import`) must also
+  come from a file under `compiler/` or `runtime/rt/`, never `lib/`: the
+  import source map says which file a node came from, so a library file
+  imported by the compiler cannot borrow its permission (it could
+  before: the flag covered every file of the build). `tests/runtime`
+  checks the primitives, a lib/ import under an allowed entry, and that
+  `lib/` and `tools/` never name an internal.
+
 ### 0zh. Runtime primitives for a Resid runtime (2026-09-26)
 
 Compiler-only builtins (E0220 without `--runtime-internals`) for writing
 the runtime in Resid instead of C, lowered straight to LLVM IR by
-`lw_raw` in `examples/lower.resid` (types: `raw_sig` in typecheck.resid):
+`lw_raw` in `compiler/lower.resid` (types: `raw_sig` in typecheck.resid):
 
 - `resid_raw_load8/16/32/64(addr)`, `resid_raw_store8/16/32/64(addr, v)`,
   `resid_raw_copy(dst, src, n)` (memmove), `resid_raw_fill(dst, b, n)`;
@@ -350,7 +364,7 @@ Test: `runtime_primitives`.
 - `List(T) l = m.get(k) else { d }; ... m.insert(k, l.concat([e]))`, with
   that concat as l's only use (outside loops and closures), T a word
   type and d a plain value, lowers to one `resid_map_list_push`
-  (`lp_fusible` / `lw_list_push` in `examples/lower.resid`): the list is
+  (`lp_fusible` / `lw_list_push` in `compiler/lower.resid`): the list is
   never bound, and the element is appended to the map's list.
 - In place when safe: a header whose `stamp` equals the owned transient
   map's `own` is held by that map slot alone and is appended in place (no
@@ -378,7 +392,7 @@ what is not guaranteed.
 
 - **No ambient authority was false**: `main` could read files, run
   processes and read the environment without any grant. E0219
-  (`gk_authority` in `examples/gcheck.resid`) now requires every
+  (`gk_authority` in `compiler/gcheck.resid`) now requires every
   capability a function uses, directly or through calls, closures,
   method sugar or sort behaviors, to be granted by its `@requires` or
   its sandbox; `test` blocks and `spawn` bodies are checked the same
@@ -474,7 +488,7 @@ what is not guaranteed.
 
 Dead strings and struct records are reclaimed.
 
-- **Record reuse** (`lo_ret_reuse` in `examples/lower.resid`): ownership
+- **Record reuse** (`lo_ret_reuse` in `compiler/lower.resid`): ownership
   tracking covers every struct type. A `return T {..}` literal takes over
   the record of a field-wise linear variable of type T when that record
   is unique at run time (`resid_rec_reuse`). Records of types some
@@ -504,7 +518,7 @@ Dead strings and struct records are reclaimed.
 
 Map/Set programs no longer allocate far more than C/Rust.
 
-- **Linear ownership** (`lo_*` in `examples/lower.resid`, replacing the
+- **Linear ownership** (`lo_*` in `compiler/lower.resid`, replacing the
   self-tail-call-only `lg_mask`): a whole-program analysis marks Map/Set
   parameters and locals as linear when each mention is a read or one
   consuming use per path (return, a linear local's binding, `insert` /
@@ -619,7 +633,7 @@ the wrapping and `checked_*` helpers compute in unsigned arithmetic
 ### 0w. Residual notes from the graph (G5, 2026-09-26)
 
 `<out>.resid-notes.cbor` is projected from the residual graph
-(`ga_notes` in `examples/gart.resid`) instead of scanning the main file's
+(`ga_notes` in `compiler/gart.resid`) instead of scanning the main file's
 lines for `rt ` and provider prefixes: `rt` values (rt-binding), provider
 calls (provider-call) and the reducer's budget, loop and whistle reasons,
 at their real positions in any imported file, sorted by place. Across 140
@@ -643,7 +657,7 @@ whistles).
 
 ### 0q. Reduction on the knowledge graph (G3 step 1, 2026-09-26)
 
-`examples/greduce.resid` reduces the parsed graph instead of source text.
+`compiler/greduce.resid` reduces the parsed graph instead of source text.
 It makes the text reducer's decisions (folding, known bindings, dead arms,
 β-reduction, specialization with the whistle, budgets, notes) and builds
 the residual program as new nodes appended to the graph. Unchanged subtrees
@@ -667,7 +681,7 @@ Signatures (`collect_sigs`) still come from the residual graph printed.
 
 ### 0p. Lowering from the knowledge graph (G4, 2026-09-26)
 
-`examples/lower.resid` replaced the text codegen's walkers: every function
+`compiler/lower.resid` replaced the text codegen's walkers: every function
 of every in-repo program lowers from graph nodes, byte-identical to the
 text codegen (`--text-lower`), and the compiler reaches its fixed point with
 graph lowering as the default. It was ported with a per-function fallback
@@ -702,7 +716,7 @@ checked expression in the compiler and the in-repo programs gets a type.
 
 ### 0l. Type checking on the graph (G2, 2026-09-26)
 
-`examples/gcheck.resid` replaces the text checker in the driver
+`compiler/gcheck.resid` replaces the text checker in the driver
 (`--text-check` keeps the old one for differential runs). It matches the
 text checker on every in-repo program and on 91 rejection cases in
 `tests/graph/check_cases.txt`, and it closes four gaps the text checker
@@ -711,7 +725,7 @@ types, and adopted literals that do not fit.
 
 ### 0k. Graph name resolution (G2 step 1, 2026-09-26)
 
-`examples/resolve.resid` adds def edges: each use of a name points at the
+`compiler/resolve.resid` adds def edges: each use of a name points at the
 node that binds it. `--graph-resolve` reports unresolved uses. Every
 in-repo program resolves fully, and `tests/graph/cases/resolve_scopes`
 checks that block, branch, loop, pattern, arm and lambda scopes do not
@@ -719,7 +733,7 @@ leak. Field and method names wait for types.
 
 ### 0j. Knowledge graph parser (G1) and three silent-semantics fixes (2026-09-26)
 
-`examples/graph.resid` parses desugared programs into the §3 node store.
+`compiler/graph.resid` parses desugared programs into the §3 node store.
 It round-trips every in-repo program, compiler included (`tests/graph`).
 Building it exposed three bugs, now fixed. Precedence: codegen and the
 reducer ranked `& ^ |` equal and `&& ||` equal, so `t || f && f` gave
@@ -738,15 +752,15 @@ gutter shows the file's own line rather than the merged line.
 ### Major capabilities
 
 - **Stage-2 self-hosting proven, including full sandbox/capability parity**:
-  `examples/driver.resid` (~9930 lines) compiles programs identically to the
+  `compiler/driver.resid` (~9930 lines) compiles programs identically to the
   Rust pipeline (all `bootstrap_*` e2e green except `bootstrap_map_set_parity`,
   a pre-existing regression — see §0a), including sandbox enforcement
   (E0211 transitive attenuation, E0212 ceiling violation, E0213 unknown
   capability mode, handle-entry, value-provenance, read-only-write
   rejection) and the `resid_cap_enter`/`resid_cap_check`/`resid_cap_leave`
   force-time guard emitted around every sandboxed function body. Regenerated
-  by `tools/merge_driver.py` from `examples/typecheck.resid` +
-  `examples/codegen.resid`.
+  by `tools/merge_driver.py` from `compiler/typecheck.resid` +
+  `compiler/codegen.resid`.
 - **Stage-2 constraint types (§12)**: constraint type aliases
   (`Int[value > 0]`, `Int where value >= 0`) implemented in Rust pipeline
   with discharge on constant bindings (e2e `run_constraint_types`,
@@ -883,12 +897,12 @@ yield 0. Handle types: `with (Type h = expr) { … }` RAII.
 ### Self-hosting bootstrap (M1–M6 all done)
 
 - `examples/lexer.resid`, `examples/parser.resid` parse their own source.
-- `examples/typecheck.resid` (~1500 lines): signature collection + full
+- `compiler/typecheck.resid` (~1500 lines): signature collection + full
   expression walk; self-checks and accepts the other bootstrap tools.
-- `examples/codegen.resid` (~1250 lines): fused parse→LLVM-IR emitter;
+- `compiler/codegen.resid` (~1250 lines): fused parse→LLVM-IR emitter;
   compiles every bootstrap source into binaries whose outputs match
   stage-1 byte-for-byte.
-- `examples/driver.resid` (~2300 lines): fused checker+emitter pipeline,
+- `compiler/driver.resid` (~2300 lines): fused checker+emitter pipeline,
   regenerated by `tools/merge_driver.py` from typecheck.resid +
   codegen.resid (single source of truth). Stage-2 output identical to
   Rust pipeline (e2e `bootstrap_*` tests).
@@ -1105,8 +1119,8 @@ Remaining conformance gaps are minimal:
   `resid-fmt` and `resid-lsp` type printers cover the new forms.
   e2e `run_fixed_size_stack_types`, `run_fixed_size_index_oob_aborts`;
   7 new `resid-type` tests. Stage-1 complete (both intermediate paths);
-  **stage-2 driver parity complete** — `examples/typecheck.resid` +
-  `examples/codegen.resid` implement literal adoption, bounds-checked
+  **stage-2 driver parity complete** — `compiler/typecheck.resid` +
+  `compiler/codegen.resid` implement literal adoption, bounds-checked
   indexing (`resid_index_abort`), Str/Bytes/List casts (identity views +
   bounded `resid_str_to_fixed`/`resid_bytes_to_fixed` copies + List(T,N)→List(T)
   dense boxing), `.len()` = compile-time N, and builtin-argument view widening
@@ -1127,7 +1141,7 @@ Remaining conformance gaps are minimal:
   `i8*` change to existing Str consumers.
 - **Graph-reduce stage-2 parity (§11, §36)**: the `--graph-reduce` reduction
   pipeline now runs in the self-hosted driver as `--bootstrap-graph-reduce`.
-  Source-to-source reducer in `examples/typecheck.resid` (`examples/driver.resid`
+  Source-to-source reducer in `compiler/typecheck.resid` (`compiler/driver.resid`
   7694 lines): constant-fold bindings into `cenv`, β-reduce pure single-return
   calls with constant args, elide foldable unreferenced bindings (§36 DCE)
   while effectful bindings survive, then re-type-check the reduced program
@@ -1146,7 +1160,7 @@ Remaining conformance gaps are minimal:
   supported by the driver codegen (parity holds for the supported subset).
 - **0-based list migration**: All crypto/TLS libs (`lib/crypto.resid`, `der`, `x509`, `rsa`, `chain`, `tls`, `tlsmsg`, `aesgcm`, `chacha`, `ed25519`, `x25519`, `ec256`, `h2`) now use pure 0-based indexing (no phantom seed), with `list.len()` = real count, `slice_seed(b,start,count,[])`, `sconcat(a,b)=a.concat(b)`. All e2e green: `run_x509_in_resid`, `run_rsa_pkcs1_verify_in_resid` (stage-1+stage-2), `run_ecdsa_p256_verify_in_resid`, `run_chain_san_validity_in_resid`, `run_tls13_framing_in_resid`, full crypto suite (SHA/HMAC/Ed25519/ChaCha/AES/X25519).
 - **0-based migration completed for TLS/H2 clients + wide-ec e2e**: `examples/h2_client.resid` (framer: `read_one_record` plain-strip off-by-one, DATA-body truncation, `read_flight`/`read_app` 0-based slices, `hb`/`recv_exact`/`recv_loop` empty-seed) and `examples/tls_client.resid` (records, `open_if_app` marker, `read_app`, `verify_cv`, `safe_msg` `-1` sentinel, transcript slices) fully migrated. Live-network e2e green: `run_tls13_live_openssl_in_resid`, `run_h2_live_request_in_resid` (56s), `run_h2_post_and_continuation_in_resid` (129s); `run_ecge512_wide_prop_in_resid` green (623s — includes ECDSA-P256 verify via `tm_ecdsa_verify_sha256`). Supporting lib fixes: `tlsmsg` `tm_find_fin`/`tm_find_pos`/`tm_find_fin_last` not-found sentinel `-1`, `chain.resid` `eq_bytes`/`ci_eq_bytes`/RSA `der_content_pos` 0-based, `aesgcm` `e1_acc` `v[i]`, `ec256` `ecdsa_vx` `den==0` guard, `e2e.rs` `be512_acc` 0-based seed.
-- **Stage-2 empty-list parity**: Fixed driver's typechecker (`params_accept_at` empty-adopt for `List(Unknown)`) and codegen (`[]` → `resid_list_new(0,null,…)`) in `examples/typecheck.resid` + `examples/codegen.resid`; regenerated `examples/driver.resid` (6950 lines). Verified by `bootstrap_*` tests (12/12 green) and `run_rsa_pkcs1_verify_in_resid` stage-2 path.
+- **Stage-2 empty-list parity**: Fixed driver's typechecker (`params_accept_at` empty-adopt for `List(Unknown)`) and codegen (`[]` → `resid_list_new(0,null,…)`) in `compiler/typecheck.resid` + `compiler/codegen.resid`; regenerated `compiler/driver.resid` (6950 lines). Verified by `bootstrap_*` tests (12/12 green) and `run_rsa_pkcs1_verify_in_resid` stage-2 path.
 - **Knowledge cache subsystem (§34, §36)**: Expression-level reduction cache (`resid_cache::KnowledgeStore`) with content-addressed keys (expression hash + environment hash). CBOR schema for `KnowledgeEntry` (kind, expr_hash, env_hash, value, caps). Kinds: ReducedExpr, ProviderResult, TypeInfo, ConstraintProof, BehaviorResolution. Values: Int(i128), Bool, Str. Integrated with codegen's comptime β-reduction: cache checked before `reduce_call`, results stored after successful reduction. Capability-gated writes per §21.4 (`RESID_CAP_GRANT` env). 17 tests in `resid-cache` (8 new knowledge cache tests + 9 existing artifact cache tests). Persisted to `.resid-knowledge.cbor` in build output dir.
 - **Stage-2 cache hit fix**: `residc build` cache hit now copies cached artifact to `-o` output path (was returning success without copy, breaking `stage2_emitter_compiles_bootstrap_lexer`).
 - **Stage-2 provenance fix**: `prov_hex_seed` in `driver.resid` uses 0-based `[]` not seeded `[0]`; seeded list corrupted SHA-512 input → invalid Ed25519 signatures. Fixes `run_stage2_provenance_sidecar`.
@@ -1180,7 +1194,7 @@ NOT yet 100% spec-complete. This section is the curated work list; an
 item is DONE only when it ships in **both** pipelines (see policy).
 
 **Status: the curated list is now complete in both pipelines.** Every item
-has landed in stage-1, and stage-2 (`examples/driver.resid`) parity now
+has landed in stage-1, and stage-2 (`compiler/driver.resid`) parity now
 covers all of it too, including the §21 sandboxing items (transitive
 attenuation, force-time capability errors, handle-entry/value-provenance,
 mode lattice) that were previously stage-1-only — see "Stage-2 Parity:
@@ -1196,8 +1210,8 @@ ported to `.resid`, C.1-C.7) are both done, so the Rust pipeline is no
 longer required as an ongoing dual-implementation partner for new work.
 The replacement model:
 
-- **The self-hosted pipeline (`examples/typecheck.resid` +
-  `examples/codegen.resid` → `examples/driver.resid`) is the only actively
+- **The self-hosted pipeline (`compiler/typecheck.resid` +
+  `compiler/codegen.resid` → `compiler/driver.resid`) is the only actively
   developed compiler going forward.** New features are implemented
   directly there; there is no requirement to also implement them in
   `crates/resid-type`/`crates/resid-codegen` first or in parallel.
@@ -1220,9 +1234,9 @@ The original bootstrap-period rules below are preserved for history, not
 as current policy:
 
 - ~~The Rust pipeline is implemented first (single implementation cost);
-  the feature is then ported into `examples/typecheck.resid` +
-  `examples/codegen.resid`, and `tools/merge_driver.py` regenerates
-  `examples/driver.resid`.~~
+  the feature is then ported into `compiler/typecheck.resid` +
+  `compiler/codegen.resid`, and `tools/merge_driver.py` regenerates
+  `compiler/driver.resid`.~~
 - ~~Every conformance item must land with dual-pipeline e2e parity
   tests (`bootstrap_*`) proving byte-identical output through Rust
   residc AND the stage-2 driver before it counts as done.~~
@@ -1241,8 +1255,8 @@ tests pass): `run_sandbox_transitive_attenuation`, `run_sandbox_enforcement`,
 `run_sandbox_handle_entry_file_param`, `run_sandbox_handle_entry_file_argument`,
 `run_sandbox_capability_mode_readonly`.
 
-Stage-2 (self-hosted driver, `examples/typecheck.resid` +
-`examples/codegen.resid` → `examples/driver.resid`) now has full parity: 5
+Stage-2 (self-hosted driver, `compiler/typecheck.resid` +
+`compiler/codegen.resid` → `compiler/driver.resid`) now has full parity: 5
 new e2e tests (`bootstrap_driver_sandbox_enforcement`,
 `bootstrap_driver_sandbox_transitive_attenuation`,
 `bootstrap_driver_sandbox_handle_entry`, `bootstrap_driver_sandbox_readonly_mode`,
@@ -1278,7 +1292,7 @@ force-time guard around sandboxed bodies; (5) add the
 `filesystem.open`/`read_handle`/`close` provider methods to both files
 (missing from both checker and codegen dispatch tables); (6) update
 `tools/merge_driver.py`'s dedup list for the newly-shared `cap_list_at`/
-`ceil_join` helpers and regenerate `examples/driver.resid`.
+`ceil_join` helpers and regenerate `compiler/driver.resid`.
 
 **Known limitations of the stage-2 checker** (by design, not bugs):
 - *(A.1b, closed)* Provider calls are now checked for real. The checker
@@ -1305,7 +1319,7 @@ force-time guard around sandboxed bodies; (5) add the
 **Fixed-capacity stack types (§2 `Str(N)`/`Bytes(N)`/`List(T,N)`)** — **✅ DONE
 (stage-1 + stage-2)**: literal adoption, bounds-checked indexing, casts, builtin
 view widening, `.len()` all implemented in both the Rust pipeline and the
-self-hosted driver (`examples/typecheck.resid` + `examples/codegen.resid`),
+self-hosted driver (`compiler/typecheck.resid` + `compiler/codegen.resid`),
 byte-identical output and identical abort behavior (e2e
 `bootstrap_driver_fixed_size_stack_types`, `bootstrap_driver_fixed_builtin_widening`).
 
@@ -1335,7 +1349,7 @@ byte-identical output and identical abort behavior (e2e
    gating (✅ DONE — `caps_are_at_most` gates writes, CBOR entries carry caps
    through round-trip, e2e `run_cache_capability_gating`).
    **✅ Stage-2 parity DONE** (this session) — all of the above now also
-   holds through `examples/driver.resid` (see "Stage-2 Parity: Sandbox
+   holds through `compiler/driver.resid` (see "Stage-2 Parity: Sandbox
    (§21)" above for the writeup and known limitations); e2e
    `bootstrap_driver_sandbox_enforcement`,
    `bootstrap_driver_sandbox_transitive_attenuation`,
@@ -1789,7 +1803,7 @@ pipeline and its output is byte-identical to the plain one.
 
 ### Progress on item 1 — sandboxing: STAGE-2 PARITY ACHIEVED (self-hosted driver)
 
-Full sandbox/capability enforcement now runs through `examples/driver.resid`
+Full sandbox/capability enforcement now runs through `compiler/driver.resid`
 with output parity to the Rust `residc` pipeline — the last remaining §21
 stage-2 gap is closed. Plan document: `PLAN-sandbox-parity.md` (kept as a
 historical record of the phased design; marked complete at the top).
@@ -1853,7 +1867,7 @@ historical record of the phased design; marked complete at the top).
   already existed from the Rust-pipeline work and needed no changes.
 - **`tools/merge_driver.py`**: added `cap_list_at`/`ceil_join` (byte-identical
   in both source files) to the dedup drop-list so the merged driver keeps
-  only one copy; regenerated `examples/driver.resid`.
+  only one copy; regenerated `compiler/driver.resid`.
 - **Verification**: beyond the automated e2e tests below, manually verified
   the full compile→link→run round trip outside the test harness — a
   single-capability sandbox reading a file and printing its contents, a
@@ -1875,7 +1889,7 @@ historical record of the phased design; marked complete at the top).
   the emitted `.ll` contains `resid_cap_check`/`resid_cap_enter`/
   `resid_cap_leave`, and that a violation which passes stage-2 typecheck
   aborts at runtime with `capability not granted: process`). All drive
-  `examples/driver.resid` via `residc <driver.resid> run <sample.resid> -o
+  `compiler/driver.resid` via `residc <driver.resid> run <sample.resid> -o
   <bin> -rt resid_rt.c`, matching the existing `bootstrap_driver_*` test
   style.
 - **Known limitations** (see "Stage-2 Parity: Sandbox (§21)" above for the

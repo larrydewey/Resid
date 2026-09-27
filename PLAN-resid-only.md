@@ -9,7 +9,7 @@ Phase D.
 
 - **Effect-checker**: full rewrite (Phase A.1 "Option B"), not a patch. Thread
   real capability/effect types through `check_expr`/`check_stmt` in the
-  self-hosted `examples/typecheck.resid`, replacing the textual/substring
+  self-hosted `compiler/typecheck.resid`, replacing the textual/substring
   post-pass.
 - **resid-lsp / resid-lsp-full**: OUT OF SCOPE for "resid-only." Stays Rust
   permanently, same status as the VS Code TypeScript extension. Not ported.
@@ -48,7 +48,7 @@ Phase D.
 - Both pipelines shell out to `clang` on textual `.ll` IR; only the Rust side
   additionally uses `inkwell` to *build* that IR before printing it to text.
   Removing Rust does not remove the clang/LLVM dependency.
-- Stage-2 sandbox checker (`examples/typecheck.resid` lines ~3270-3799) is a
+- Stage-2 sandbox checker (`compiler/typecheck.resid` lines ~3270-3799) is a
   textual substring post-pass over captured function-body text, not a real
   effect-checker. Known gap: an unannotated provider call can pass stage-2
   typecheck and only get caught by the runtime `resid_cap_check` guard.
@@ -72,8 +72,8 @@ Phase D.
 
 1. **Effect-checker full rewrite** (largest item). Replace the substring
    post-pass with a real capability/effect type threaded through
-   `check_expr`/`check_stmt` in `examples/typecheck.resid`. Est. 2000-4000
-   changed lines + matching `examples/codegen.resid` changes. New parity e2e
+   `check_expr`/`check_stmt` in `compiler/typecheck.resid`. Est. 2000-4000
+   changed lines + matching `compiler/codegen.resid` changes. New parity e2e
    batch mirroring + extending every `bootstrap_driver_sandbox_*` test.
 2. **Diagnostics parity**: port caret/span rendering (`resid-diag` logic)
    into the self-hosted driver. Do alongside item 1.
@@ -367,9 +367,9 @@ otherwise allocate fresh (today's behavior, unconditionally safe).
   precedent). Sub-steps, each independently checkpoint-able:
   1. **Representation decision** — **DONE in Rust**. Implemented in
      `crates/resid-type/src/ownership.rs`, `liveness.rs`, `field_growable.rs`,
-     `growable.rs`. Self-hosted stubs in `examples/typecheck.resid` (analysis
+     `growable.rs`. Self-hosted stubs in `compiler/typecheck.resid` (analysis
      entry point `analyze_growable`, `collect_pnames`) and
-     `examples/codegen.resid` (`growable: List(Int)` in `Funcs`/`Sigs`,
+     `compiler/codegen.resid` (`growable: List(Int)` in `Funcs`/`Sigs`,
      `collect_pnames` in codegen).
   2. **Per-function shape check** — self-hosted port deferred. Rust version
      in `growable.rs`/`field_growable.rs`/`ownership.rs` is the reference.
@@ -445,7 +445,7 @@ in `crates/residc/tests/e2e.rs`) immediately proved its worth: self-hosting
 was **not** actually closed despite prior "self-hosting proven" claims —
 nobody had ever fed `driver.resid` to a `driver.resid`-produced binary
 before. Real, previously-undetected bugs found and fixed so far, all in
-`examples/typecheck.resid` + `examples/codegen.resid` (both, to keep the two
+`compiler/typecheck.resid` + `compiler/codegen.resid` (both, to keep the two
 pipelines' checker/codegen in sync):
 
 1. **`else if` chains mis-parsed** (both checker and codegen): after matching
@@ -498,7 +498,7 @@ not build a new runtime memory-management mechanism.
 **"If arms disagree" codegen bug — ROOT CAUSE FOUND AND FIXED (this session).**
 Confirming run (`d1new2`, `/tmp/opencode/repro/d2_r2.log`) captured the message:
 `codegen error: if arms disagree:  vs Bool` — the then-arm typed as empty string
-against an else-arm of `Bool`. Root cause: `cg_print` (`examples/codegen.resid:1836`)
+against an else-arm of `Bool`. Root cause: `cg_print` (`compiler/codegen.resid:1836`)
 — the codegen for all three output builtins `print`/`println`/`eprintln` —
 returned a `GT` with `val: ""` and `ty: ""` and emitted an i32 `@puts`/`@printf`
 (or a nonexistent void `@resid_eprintln`, itself a latent link bug), while the
@@ -512,7 +512,7 @@ checker *and* the Rust pipeline both type all three builtins as `(Str) -> Bool`
 `cg_print` (now emits `%tN = call i1 @<name>(ptr <arg>)`, returns
 `GT { val: <reg>, ty: "Bool", … }`) and `hdr_core` (replaced
 `declare i32 @printf` / `@puts` / `declare void @resid_eprintln` with
-`declare i1 @print/@println/@eprintln(ptr)`). Regenerated `examples/driver.resid`,
+`declare i1 @print/@println/@eprintln(ptr)`). Regenerated `compiler/driver.resid`,
 rebuilt D1 (`/tmp/opencode/repro/d1new3`), and verified byte-identical output
 vs the Rust pipeline on a minimal repro of the exact failing construct
 (`if (m != "") { eprintln(...) } else { false }` as an if-expression arm).
@@ -566,7 +566,7 @@ this entry is a pointer, not a repeat of that detail.
 
 Hand-verified structural (option a, typed AST/block-tree, no new IR) approach
 against the 3 real functions picked as the difficulty spread
-(`examples/codegen.resid`): `cap_enter_globals_at` (leaf, 4477-4484),
+(`compiler/codegen.resid`): `cap_enter_globals_at` (leaf, 4477-4484),
 `finish_ifexpr` (multi-struct merge, 3380-3396), `pg_func` (orchestrator,
 4542-4590). Structs: `GT` (1116), `ST` (3850). Verdict: **structural
 composes, no new IR needed** — decision made, not deferred.
@@ -641,7 +641,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
 - [x] A.1 Effect-checker full rewrite — all sub-items done (E.2b's env
       hash-map is the one deliberate, documented exception — linear-scan
       `env` remains, acceptable at current scale).
-  - [x] A.1a Real call graph (E.2b) — done in `examples/typecheck.resid`.
+  - [x] A.1a Real call graph (E.2b) — done in `compiler/typecheck.resid`.
         Replaced every `str_contains(body, name + "(")` call-graph edge with a
         lexer-derived edge: `scan_calls_tok` walks `Funcs.bods[i]` via
         `lex_tok`, recording an `ident (` pair only when the identifier names a
@@ -655,7 +655,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
         (`myfetch(` matching `fetch(`, names in strings/comments) — a real
         source of false E0211/E0212 rejections. f-strings keep a conservative
         substring fallback (their interpolation lexes as one token). Verified:
-        `examples/driver.resid` regenerated + `cargo run -p residc -- emit-ir`
+        `compiler/driver.resid` regenerated + `cargo run -p residc -- emit-ir`
         clean; all 12 `sandbox` e2e tests, both `bootstrap_typechecker_*`, and
         `bootstrap_driver_compiles_and_rejects` green.
   - [x] A.1b Real provider-effect sets + E0218 (decision: close the gap, match
@@ -697,7 +697,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
         for empty map/set literals (`{}` with expected `Map(K,V)`/`Set(T)`).
 - [x] A.2 Diagnostics parity (caret rendering in stage-2)
         Implemented `pos_to_line_col`, `render_caret`, `diag_error` in
-        `examples/typecheck.resid`. Type errors (E0001/E0020) now render
+        `compiler/typecheck.resid`. Type errors (E0001/E0020) now render
         `error[E0001]: message` with source line and `^` carets.
         Sandbox/effect errors (E0211/E0218/E0212/E0213) retain stderr `eprintln`.
 - [x] A.3 COSE_Encrypt0 AEAD — done. Replaced the experimental SHA-256
@@ -752,8 +752,8 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       clean.
 - [x] A.9 General sum-type `match` support — **DONE**. Surfaced by the user
       while auditing the resid-fmt port's match-formatting needs: the
-      self-hosted checker/codegen (`examples/typecheck.resid`'s
-      `check_match`/`ck_match_arms`, `examples/codegen.resid`'s
+      self-hosted checker/codegen (`compiler/typecheck.resid`'s
+      `check_match`/`ck_match_arms`, `compiler/codegen.resid`'s
       `cg_match`/`cg_match_arm`) only ever recognized the four
       compiler-intrinsic Option/Result forms (`Some`/`None`/`Ok`/`Err`,
       hardcoded by literal name) — any other `type Name = A(T) | B | ...;`
@@ -887,7 +887,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       fix from B.1 turned out to be necessary but not remotely sufficient:
       - **The dominant bug**: `resid_rt.c`'s `str_len(s)` walked the WHOLE
         string from byte 0 on every call — O(N), N = source length. The
-        self-hosted `lex_tok` (examples/typecheck.resid + codegen.resid)
+        self-hosted `lex_tok` (compiler/typecheck.resid + codegen.resid)
         calls `str_len(s)` as its literal first statement on EVERY token,
         always against the full top-level source (never the remaining
         suffix), so tokenizing an N-character file cost O(N) per token —
@@ -930,7 +930,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
         default (`-1`), which never touches `.glines` — the new
         `caller_index.get(name) else { "" }` code from the sandbox-pass fix
         above is the first `Str`-default use, and the first thing to ever
-        trigger it. One-line fix (`examples/codegen.resid`, the `else`
+        trigger it. One-line fix (`compiler/codegen.resid`, the `else`
         branch of `cg_bin_rest`).
       - **A matching pre-existing typecheck.resid bug**, found and fixed en
         route to the above: `ck_else_fallback`'s call to
@@ -958,7 +958,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
         (`git stash` A/B test) — confirmed pre-existing, unrelated to this
         work — **found and fixed same session, see B.4 below**.
 - [x] B.4 `bootstrap_map_set_parity` regression — **DONE**. Root cause:
-      `examples/codegen.resid`'s Map `.get`/`.remove`/`.contains` and Set
+      `compiler/codegen.resid`'s Map `.get`/`.remove`/`.contains` and Set
       `.contains`/`.remove`, plus `m[key]` indexing, boxed the key/element
       via `box_scalar` (a bare stack-alloca `ptr`) instead of `box_heap_`
       (a real `resid_box_i64`/etc. heap box). `resid_rt.c`'s
@@ -984,8 +984,8 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       memory fix; **a hard requirement to close B.1/B.2**, not just
       nice-to-have. **Rust implementation complete** (`ownership.rs`,
       `liveness.rs`, `field_growable.rs`, `growable.rs`); self-hosted
-      infrastructure in place (`examples/typecheck.resid` analysis stubs,
-      `examples/codegen.resid` `growable` field in `Funcs`/`Sigs`,
+      infrastructure in place (`compiler/typecheck.resid` analysis stubs,
+      `compiler/codegen.resid` `growable` field in `Funcs`/`Sigs`,
       `collect_pnames`). Full self-hosted port and codegen wiring
       remaining.
          concat-chain receiver, `.len()`/index, or an argument position
@@ -1027,7 +1027,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       calls for, uniform over List/Map/Set/struct and over parameter *and*
       local roots (`pg_func`'s `pp1`/`pp2` case from E.1-step-1 now
       recognized). Two real defects found and fixed while validating it
-      against the actual `examples/codegen.resid`:
+      against the actual `compiler/codegen.resid`:
       1. **Exponential blowup (hang + ~47GB RSS) in `check_block`/branch
          merging.** `Walk.terminals` was a `Vec<SiteKey>` re-extended with
          prior terminals at every `merge_branches`, so terminal bookkeeping
@@ -1142,8 +1142,8 @@ mechanism, not two), retire `growable.rs` into it, per plan.
 
   **Self-hosted bare-parameter port attempted (2026-09-21), measured NET
   REGRESSION, not committed — see `git stash list` for the parked diff
-  (`examples/typecheck.resid`, `examples/codegen.resid`,
-  `examples/driver.resid`, `runtime/resid_rt.c`).** Fixed a real,
+  (`compiler/typecheck.resid`, `compiler/codegen.resid`,
+  `compiler/driver.resid`, `runtime/resid_rt.c`).** Fixed a real,
   separate bug found along the way first (committed, `e1417f9`):
   `Funcs.growable` was `List(Int)` conflating whole-program function
   index with per-function parameter index — codegen read it per-function
@@ -1232,7 +1232,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       Verified byte-identical output against `tools/merge_driver.py` on the
       real `examples/{codegen,typecheck,driver}.resid` (fair A/B from the
       same pristine input; only diff is the intentional banner line naming
-      the new tool). Regenerated `examples/driver.resid` compiles clean
+      the new tool). Regenerated `compiler/driver.resid` compiles clean
       (`emit-ir`) and `bootstrap_driver_compiles_and_rejects` e2e passes.
       `tools/merge_driver.py` kept as reference/fallback, not deleted.
 - [x] C.2 Port `resid-notes` CBOR sidecar — **DONE, with a real new
@@ -1250,8 +1250,8 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       `crates/resid-type/src/lib.rs`; dispatch + `decl_rt` in
       `crates/resid-codegen/src/lib.rs`; mirrored in the self-hosted
       pipeline (`is_prov_verb_filesystem`/`is_write_verb`/
-      `check_readonly_writes` in `examples/typecheck.resid`; `p_sym`/
-      `p_rty`/`p_nargs` + `hdr_core` declares in `examples/codegen.resid`
+      `check_readonly_writes` in `compiler/typecheck.resid`; `p_sym`/
+      `p_rty`/`p_nargs` + `hdr_core` declares in `compiler/codegen.resid`
       — the `@resid_fs_` prefix already made `provider_family_of_line`'s
       capability-guard detection generic, no change needed there). Tests:
       `resid-type::check_program_filesystem_write_bytes_and_read_bytes`,
@@ -1260,7 +1260,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       (`crates/resid-cache/src/lib.rs`'s `cbor` module — uint/header/text,
       major types 0/3/4 only, the exact subset notes need) plus
       `collect_residual_notes`/`ResidualNote`/`to_cbor` as new functions
-      in `examples/driver.resid`'s tail (`cbor_write_*`, `Note`,
+      in `compiler/driver.resid`'s tail (`cbor_write_*`, `Note`,
       `collect_residual_notes`, `write_notes_cbor`, wired into `main()`
       alongside the existing `write_provenance`). **Verified byte-identical
       output against the real Rust `residc build` on multiple fixtures**
@@ -1321,7 +1321,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       formatting). Phase C's actual goal — the self-hosted pipeline having
       equivalent caret-rendering capability for its own diagnostics — was
       already delivered by A.2 (`pos_to_line_col`/`render_caret`/
-      `diag_error` in `examples/typecheck.resid`). Nothing further to port;
+      `diag_error` in `compiler/typecheck.resid`). Nothing further to port;
       `crates/resid-diag` itself is retired along with the rest of
       `crates/` at Phase D (it has no independent existence outside the
       Rust pipeline it serves).
@@ -1375,7 +1375,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       **Two real bugs found and fixed in the new self-hosted port itself
       while corpus-testing it** (both caught before commit, neither ever
       shipped): (1) the copied lexer skeleton (based on `tools/resid-
-      graph.resid`'s simpler copy, not `examples/typecheck.resid`'s fuller
+      graph.resid`'s simpler copy, not `compiler/typecheck.resid`'s fuller
       one) was missing `<<`, `>>`, `..=`, `~`, `^`, and — critically —
       `=>` as multi-char tokens, silently mis-tokenizing e.g. `x >> n` as
       three single-char tokens and `Circle(r) => expr` as `=` immediately
@@ -1396,7 +1396,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       confirmed clean afterward.
 
       **Verified**: every real `.resid` file in `tools/`, `lib/`, plus
-      `examples/typecheck.resid` and `examples/codegen.resid` themselves
+      `compiler/typecheck.resid` and `compiler/codegen.resid` themselves
       (the two largest files in the repo, ~5500 and ~5000 lines) format
       without error, reparse and rebuild cleanly through the Rust
       pipeline (confirmed identical `CGFN` function-emission trace
@@ -1423,7 +1423,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       reparse as a cast and surface as a downstream type error).
 - [x] C.6 Port `resid-graph` — **DONE**. `tools/resid-graph.resid`
       (residc pipeline). Single token-based forward scan built on the same
-      `Tok`/`lex_tok` model `examples/typecheck.resid` uses for its own
+      `Tok`/`lex_tok` model `compiler/typecheck.resid` uses for its own
       real call-graph (A.1a): walks brace/paren depth directly over the
       token stream (never slices out body substrings), records a
       candidate callee whenever an `ident` is immediately followed by `(`
@@ -1439,12 +1439,12 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       (`extracts_calls_and_recursion`, `extern_builtins_are_not_nodes`,
       `dot_output_is_wellformed`) transcribed as `.resid` fixtures — all
       pass byte-for-byte on the expected edges/self-recursion/DOT shape.
-      Stress-tested against the real ~9900-line `examples/driver.resid`
+      Stress-tested against the real ~9900-line `compiler/driver.resid`
       (473 functions, sub-second): cross-checked its function-name set
       against an independent line-anchored regex scan — the only 3
       discrepancies were real functions the naive line-anchored check
       missed because their signature line has a stray leading space
-      (`examples/driver.resid:3704` etc.), confirming the token-based
+      (`compiler/driver.resid:3704` etc.), confirming the token-based
       scan is strictly more robust than a line-based one, not buggy.
 - [x] C.7 Port `resid-build` (package manager) — **done**, with one
       deliberate drop: `serve_dir` (`resid-build serve`'s inbound TCP
@@ -1743,7 +1743,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       path relative to the importer (spec §35); it was just never
       exercised except through the soon-to-be-retired `resid-build` crate.
       The self-hosted driver had no such fallback at all — `imp_resolve_
-      file`/`imp_resolve_lines` in `examples/typecheck.resid` only ever
+      file`/`imp_resolve_lines` in `compiler/typecheck.resid` only ever
       tried `dir + "/" + name`. Ported the same two-tier resolution:
       added `imp_resolve_target(dir, name, depmap)` (relative path wins
       when `filesystem.exists` says so; otherwise looks the bare name up
@@ -1754,7 +1754,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       dependency, parsed with a new `imp_find_dcolon`/`depmap_lookup*`
       helper family (plain if/return throughout — no if-expression-with-
       preceding-local-binding, to dodge the by-now-familiar phi-node
-      codegen bug). The driver's CLI (`examples/driver.resid`'s `main()`,
+      codegen bug). The driver's CLI (`compiler/driver.resid`'s `main()`,
       which lives in the tail section `tools/merge_driver.resid` carries
       forward verbatim across regenerations, so this edit went directly
       into `driver.resid` rather than a generated-from source) gained a
@@ -1785,9 +1785,9 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       visibility and the self-hosted compiler does not (pre-existing,
       unrelated to this change — every tool ported this Phase already
       relies on the self-hosted compiler not enforcing `pub`). Both the
-      D1-built driver (`residc examples/driver.resid build`, then run
+      D1-built driver (`residc compiler/driver.resid build`, then run
       with `-depmap`) and the D2-built driver (that D1 binary compiling
-      `examples/driver.resid` again) resolved the same transitive
+      `compiler/driver.resid` again) resolved the same transitive
       dependency chain and produced identical `hello, world` / `wow!!!`
       output; their emitted `.ll` files diffed byte-identical. Re-ran
       `bootstrap_driver_self_compile_fixed_point` after the
@@ -1873,8 +1873,8 @@ mechanism, not two), retire `growable.rs` into it, per plan.
 - [x] D.1 Freeze stage-0 seed binary — **DONE**. `bootstrap/stage0/
       residc-seed-linux-x86_64` (+ `.sha256`, + `README.md` documenting
       provenance/verification/bootstrap-from-scratch usage), built from
-      `examples/driver.resid` at commit `d5c269f`. Sanity-checked: runs a
-      trivial program correctly, and compiles `examples/driver.resid`
+      `compiler/driver.resid` at commit `d5c269f`. Sanity-checked: runs a
+      trivial program correctly, and compiles `compiler/driver.resid`
       itself to a working D2 (self-compile still holds at this commit —
       see `bootstrap_driver_self_compile_fixed_point`). Committed as a
       binary blob per explicit user decision (vs. a GitHub release
@@ -1908,7 +1908,7 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       Relocated to a new top-level `runtime/resid_rt.c` (user decision)
       and fixed every reference: the two Rust `include_str!` embeds
       (`residc`'s and `resid-build`'s), the self-hosted defaults
-      (`examples/driver.resid`'s `-rt` default, `resid-manifest.resid`'s
+      (`compiler/driver.resid`'s `-rt` default, `resid-manifest.resid`'s
       `cmd_build` default), and `tools/gen_case_tables.py`.
       **The real cost of this phase, found by actually running the test
       suite (not caught by `cargo build`, which only checks that code

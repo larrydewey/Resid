@@ -1,5 +1,5 @@
 // reduce.resid — the value model of compile-time reduction (spec §36),
-// used by the graph reducer (examples/greduce.resid): known values as
+// used by the graph reducer (compiler/greduce.resid): known values as
 // (value, type) text pairs (Int / Int(128) as decimal text, Bool as
 // true/false, Str as the decoded contents), folding with the code
 // generator's exact semantics (an operation that would trap is left
@@ -7,7 +7,7 @@
 // function the program would call, environments, budgets, and the
 // homeomorphic-embedding whistle that ends specialization.
 //
-// Imported by examples/driver.resid; shares its lexer (lex_tok, Tok) and
+// Imported by compiler/driver.resid; shares its lexer (lex_tok, Tok) and
 // parse_type/PRes.
 
 // specs: emitted specialized functions; hist: active specialization chain;

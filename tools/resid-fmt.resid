@@ -299,7 +299,7 @@ Bool str_has_prefix(Str s, Str p) {
     return false;
 }
 
-// ─── Operator classification (mirrors examples/typecheck.resid's
+// ─── Operator classification (mirrors compiler/typecheck.resid's
 // is_bin_op exactly, deduped by convention not by import) ─────────
 
 Bool is_bin_op(Str op) {
@@ -541,7 +541,7 @@ FR fmt_list_lit_rest(Str s, Int pos, Str acc, Int depth) {
         if (nx.text == "]") { return FR {.pos = nx.pos, .text = acc2, .err = ""}; }
         return fmt_list_lit_rest(s, t.pos, acc2, depth);
     }
-    // Mirrors the checker's leniency (examples/typecheck.resid's
+    // Mirrors the checker's leniency (compiler/typecheck.resid's
     // check_list_lit_rest): a missing comma between elements is tolerated,
     // matching the Rust reference parser's own lenient behavior.
     return fmt_list_lit_rest(s, e.pos, acc2, depth);
@@ -633,7 +633,7 @@ FR fmt_primary(Str s, Int pos, Int depth) {
 
 // `{...}` used as a VALUE (if/else-if arms, `else { fallback }`): zero or
 // more `Type name = expr;` "chain of temporaries" bindings, then a tail
-// expression — mirrors examples/typecheck.resid's check_expr_block.
+// expression — mirrors compiler/typecheck.resid's check_expr_block.
 // Deliberately does not support the rarer fixed-size-type binding form
 // `Type[N] name = expr;` inside an expression block (zero real usage).
 FR fmt_expr_block(Str s, Int pos, Int depth) {
@@ -1036,7 +1036,7 @@ VER fmt_one_variant(Str s, Int pos) {
 // Requires >= 1 `|` to be recognized as a sum type at all — a single bare
 // variant with no pipe is syntactically identical to a parameterized-type
 // Base alias (`type X = List(Int);`) and is left to that path instead;
-// mirrors examples/typecheck.resid's parse_variant_list exactly (see
+// mirrors compiler/typecheck.resid's parse_variant_list exactly (see
 // PLAN-resid-only.md A.9).
 FR fmt_variant_list(Str s, Int pos, Str acc, Int nseen) {
     VER v = fmt_one_variant(s, pos);
@@ -1119,7 +1119,7 @@ FR fmt_type_decl(Str s, Int pos, Str name, Int depth) {
 }
 
 // ─── Behavior declarations ─────────────────────────────────────────
-// `Name(Param) = ImplIdent;` — mirrors examples/typecheck.resid's
+// `Name(Param) = ImplIdent;` — mirrors compiler/typecheck.resid's
 // behavior_decl_at exactly (a bare identifier impl only; the self-hosted
 // checker doesn't accept a general expression there, unlike the fuller
 // Rust grammar, and this codebase has zero real behavior declarations to
@@ -1197,7 +1197,7 @@ FR fmt_imports(Str s, Int pos) {
 // Raw-slice-and-trim, not re-formatted internally, for `@requires(...)`
 // and `sandbox (...)` capability lists — real usage is zero anywhere in
 // this repo's tools/lib.resid corpus, so investing in a full capability-
-// list pretty-printer (mirroring examples/typecheck.resid's cap_list_at)
+// list pretty-printer (mirroring compiler/typecheck.resid's cap_list_at)
 // wasn't worth the added surface; the raw text is still reprinted
 // byte-exact, never dropped or mangled.
 

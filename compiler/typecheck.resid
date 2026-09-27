@@ -1,8 +1,8 @@
 /// typecheck.resid — the type algebra the graph checker
-/// (examples/gcheck.resid) is built on: signature tables (Sigs), operator
+/// (compiler/gcheck.resid) is built on: signature tables (Sigs), operator
 /// and builtin typing (bin_type, check_builtin), numeric widening,
 /// constraint and fixed-capacity types, and capability lists. The part
-/// after the lexer is fused into examples/driver.resid by
+/// after the lexer is fused into compiler/driver.resid by
 /// tools/merge_driver.py (colliding names become ck_*); the lexer lets the
 /// file be read on its own.
 
@@ -1833,7 +1833,7 @@ ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
 ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) pt_list) {
     Str argtys = canon64(rawtys);
     // comptime_print(e) (spec §37): reports e's reduced value at compile
-    // time. The reduction pass (examples/reduce.resid) removes the call, so
+    // time. The reduction pass (compiler/reduce.resid) removes the call, so
     // it never reaches code generation.
     if (name == "known" || name == "rt_known") {
         if (argc == 1) { return ERes {.pos = pos, .ty = "Void", .err = ""}; }
@@ -2195,6 +2195,14 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         return ERes {.pos = pos, .ty = "", .err = "resid_quiet expects no arguments"};
     }
     if (str_starts_with(name, "resid_raw_")) { return raw_sig(name, str_slice(name, 10, str_len(name)), argtys, argc, pos); }
+    if (name == "resid_rtmod") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_rtmod expects no arguments"};
+    }
+    if (name == "resid_rtmod_set") {
+        if (argtys == "Bool") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_rtmod_set expects (Bool), got (" + argtys + ")"};
+    }
     if (name == "resid_internals") {
         if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_internals expects no arguments"};

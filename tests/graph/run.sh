@@ -20,7 +20,7 @@ cd "$ROOT"
 
 pass=0
 fail=0
-for f in examples/driver.resid lib/*.resid tools/*.resid examples/*.resid tests/conformance/cases/*.resid tests/reduce/cases/*.resid bench/suite/src/*/*/resid/*.resid; do
+for f in compiler/*.resid lib/*.resid tools/*.resid examples/*.resid tests/conformance/cases/*.resid tests/reduce/cases/*.resid bench/suite/src/*/*/resid/*.resid; do
     [ -f "$f" ] || continue
     # Cases that must fail to compile may be unparseable; the precedence
     # case mixes operators on purpose.

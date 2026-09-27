@@ -6,7 +6,7 @@
 // Every result carries the checker state forward, so the walk also logs each
 // node's type and the def edges of field and method uses (gk_analyze).
 //
-// Imported by examples/driver.resid, so typecheck names appear with their
+// Imported by compiler/driver.resid, so typecheck names appear with their
 // merged spellings (Sigs, ck_fn_index, ck_struct_index, ck_b_index).
 
 // Type log: `keys` holds id * 2^32 + index into `tys`; `mem` holds member
@@ -1611,15 +1611,37 @@ Str gk_builtin_family(Str n) {
 // (spec §5: storage is never exposed). Only the compiler's own source may
 // call them, checked with --runtime-internals (E0220).
 Bool gk_internal(Str n) {
-    return str_starts_with(n, "resid_raw_") || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_list_str_persist_copy" || n == "resid_dec_persist" || n == "resid_internals_set";
+    return str_starts_with(n, "resid_raw_") || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_list_str_persist_copy" || n == "resid_dec_persist" || n == "resid_internals_set" || n == "resid_rtmod_set";
 }
 
-Bool gk_internals_at(GK k, Int id, Bool acc) {
+// The files that may use internals: the compiler's own sources and the
+// runtime (runtime/rt/), never the standard library or a program.
+Bool gk_internal_file(Str p) {
+    if (str_starts_with(p, "lib/") || str_contains(p, "/lib/")) { return false; }
+    return str_contains(p, "runtime/rt/") || str_starts_with(p, "compiler/") || str_contains(p, "/compiler/");
+}
+
+// The source file node `id` came from (the import source map).
+Str gk_src_path(GK k, Int id, Str src, Str smap) {
+    return diag_where(smap, pos_to_line_col(src, k.g.ns[id].sp).line).path;
+}
+
+// A use of an internal: a call, or a runtime @export / @import annotation.
+Str gk_internal_use(GK k, Int id) {
+    Str kd = k.g.ns[id].kind;
+    if (kd == "call" && gk_internal(k.g.ns[id].text) && !gk_user_call(k, id)) { return "`" + k.g.ns[id].text + "`"; }
+    if (kd == "fn" && (str_contains(k.g.ns[id].aux, "@export(") || str_contains(k.g.ns[id].aux, "@import("))) { return "`@export` / `@import` on `" + k.g.ns[id].text + "`"; }
+    return "";
+}
+
+Bool gk_internals_at(GK k, Int id, Str src, Str smap, Bool acc) {
     if (id >= k.g.ns.len()) { return acc; }
-    Bool bad = if (k.g.ns[id].kind == "call" && gk_internal(k.g.ns[id].text) && !gk_user_call(k, id)) {
-        eprintln("error[E0220]: `" + k.g.ns[id].text + "` is a runtime internal of the compiler, not part of the language (spec §5); only a build with --runtime-internals may call it")
-    } else { false };
-    return gk_internals_at(k, id + 1, acc || bad);
+    Str u = gk_internal_use(k, id);
+    Bool ok = u == "" || (resid_internals() && gk_internal_file(gk_src_path(k, id, src, smap)));
+    Bool bad = if (ok) { false } else {
+        eprintln("error[E0220]: " + u + " is a runtime internal of the compiler, not part of the language (spec §5); only the compiler's own sources and runtime/rt/, built with --runtime-internals, may use it (never the standard library)")
+    };
+    return gk_internals_at(k, id + 1, src, smap, acc || bad);
 }
 
 // Family of a builtin call node (not a user function of that name), or "".
@@ -1961,7 +1983,7 @@ Bool gk_authority(GK k, List(Int) fnode, GKFs facts) {
     return fns || tests || spawns;
 }
 
-Int gk_finish(GK k, List(Int) fnode) {
+Int gk_finish(GK k, List(Int) fnode, Str src, Str smap) {
     Sigs fs = k.fs;
     List(Str) e = [];
     List(GKF) ef = [];
@@ -1973,7 +1995,7 @@ Int gk_finish(GK k, List(Int) fnode) {
     Bool err3 = e0218_check_all(fs, eff, facts.pcsv, 0);
     Bool err4 = gk_spawn_all(k, fnode, eff, 0);
     Bool err5 = gk_authority(k, fnode, facts);
-    Bool err6 = if (resid_internals()) { false } else { gk_internals_at(k, 0, false) };
+    Bool err6 = gk_internals_at(k, 0, src, smap, false);
     if (err1 || err2 || err3 || err4 || err5 || err6) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
     return 0;
@@ -2015,7 +2037,7 @@ pub GKR gk_analyze(Kg g, Int unit, Str src, Str smap, Bool log) {
     GK k = GK {.g = g, .rs = rs, .fs = sg.fs, .tys = gk_notys(), .tl = tl, .sd = sg.sd, .fnode = sg.fnode};
     GKS r = gk_decls(k, unit, 0, src, smap);
     if (r.err != "") { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs}; }
-    Int st = gk_finish(r.k, sg.fnode);
+    Int st = gk_finish(r.k, sg.fnode, src, smap);
     Int n = kg_count(g);
     List(Str) ty = gk_dense_ty(list_sort_ints(r.k.tl.keys), r.k.tl.tys, 0, 0, n, "", ListBuf());
     List(Int) def = gk_dense_def(list_sort_ints(r.k.tl.mem), rs, 0, 0, n, ListBuf());

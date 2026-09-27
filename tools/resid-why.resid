@@ -2,7 +2,7 @@
 /// PLAN-resid-only.md): residual provenance query (spec §37).
 ///
 /// Reads `<artifact>.resid-notes.cbor` (written by the self-hosted
-/// driver's `write_notes_cbor`, examples/driver.resid — byte-identical to
+/// driver's `write_notes_cbor`, compiler/driver.resid — byte-identical to
 /// the Rust pipeline's `resid_notes`/`resid_cache::cbor` format, verified
 /// by direct comparison) and explains why each residual remains.
 ///

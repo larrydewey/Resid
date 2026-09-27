@@ -12,7 +12,7 @@
 /// itself already lives under.
 ///
 /// Design: a single token-based forward scan (built on the same `Tok`/
-/// `lex_tok` model examples/typecheck.resid uses for its own real
+/// `lex_tok` model compiler/typecheck.resid uses for its own real
 /// call-graph, A.1a) — never slices out function-body substrings; it
 /// walks brace/paren depth directly over the token stream and records a
 /// candidate callee whenever an `ident` token is immediately followed by
@@ -34,8 +34,8 @@
 import "../lib/kgart.resid";
 
 // ─── Character classification / lexer primitives (self-contained copy —
-// same duplication convention examples/typecheck.resid and
-// examples/codegen.resid already use for shared lexer helpers) ────────
+// same duplication convention compiler/typecheck.resid and
+// compiler/codegen.resid already use for shared lexer helpers) ────────
 
 Bool is_ws(Int c) {
     if (c == 32) { return true; }

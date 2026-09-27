@@ -28,7 +28,7 @@
 ///
 /// `pack` writes `<out>.resid-pkg`. `sign` reads a hex signing key from
 /// `<keyfile>` (same trailing-newline-tolerant format `write_provenance`
-/// in examples/driver.resid already reads from `keys/resid-ed25519.key`)
+/// in compiler/driver.resid already reads from `keys/resid-ed25519.key`)
 /// and writes `<out>.resid-sig` (hex Ed25519 signature over the archive's
 /// SHA-256 hash, hex-encoded before signing — signing a raw hash directly
 /// as a `Str` would corrupt it, same UTF-8-encoding issue
@@ -88,7 +88,7 @@ Int read_le_u64(List(Int) b, Int pos) {
 }
 
 // ─── hex decode (crypto.resid only exports encode; mirrors
-// examples/driver.resid's own prov_hex_acc idiom) ───────────────────
+// compiler/driver.resid's own prov_hex_acc idiom) ───────────────────
 
 Int hex_nibble(Int c) {
     if (c >= 48) { if (c <= 57) { return c - 48; } }

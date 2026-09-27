@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compile-time reduction suite (spec §36, examples/reduce.resid).
+# Compile-time reduction suite (spec §36, compiler/reduce.resid).
 #
 # Usage: tests/reduce/run.sh [-c COMPILER] [FILTER...]
 #

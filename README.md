@@ -81,10 +81,10 @@ The standard crypto library is written **in Resid itself** and compiled to nativ
 - The TLS 1.3 client (`lib/tls*.resid`) does not authenticate servers against a trust store; see `SECURITY.md`
 
 Tooling shipped today:
-- `residc <file> [build|run|emit-ir]`: self-hosted compiler driver (default checks only). Built from `examples/driver.resid` via the stage0 seed.
+- `residc <file> [build|run|emit-ir]`: self-hosted compiler driver (default checks only). Built from `compiler/driver.resid` via the stage0 seed.
 - `tools/resid-fmt.resid`: canonical formatter, self-hosted (`residc tools/resid-fmt.resid run -- <file>`)
 - `tools/resid-graph.resid`, `tools/resid-why.resid`, `tools/resid-pkg.resid`, `tools/resid-manifest.resid`, `tools/resid-cose.resid`: call-graph, provenance query, and package-manager tooling, all self-hosted
-- Stage-2 bootstrap compilers in `examples/` (lexer, parser, typechecker, codegen, driver — all written in Resid). The fused `examples/driver.resid` enforces capabilities (§19–21) statically and with a runtime force-time guard.
+- The self-hosted compiler in `compiler/` (graph parser, resolver, checker, reducer, lowering, codegen; `compiler/driver.resid` is the entry), written in Resid. It enforces capabilities (§19–21) statically and with a runtime force-time guard.
 - The Rust pipeline (`bootstrap/rust-stage0/crates/`) is archived, not actively developed — see `PLAN-resid-only.md` Phase D and `PROGRESS.md` §6. A frozen stage-0 seed binary (`bootstrap/stage0/`) is the actual bootstrap root going forward.
 
 ---
@@ -178,10 +178,10 @@ pins resolved versions. See `tools/resid-manifest.resid` for all commands
 
 ### Bootstrapping (from zero-Rust machine)
 
-The frozen stage-0 seed binary lives at `bootstrap/stage0/residc-seed-linux-x86_64` (with `.sha256` checksum). It was built from `examples/driver.resid` by the archived Rust pipeline and is the root of the self-hosting chain:
+The frozen stage-0 seed binary lives at `bootstrap/stage0/residc-seed-linux-x86_64` (with `.sha256` checksum). It was built from `compiler/driver.resid` by the archived Rust pipeline and is the root of the self-hosting chain:
 
     # 1. Compile the self-hosted driver (D2) using the frozen seed
-    ./bootstrap/stage0/residc-seed-linux-x86_64 examples/driver.resid -o residc -rt runtime/resid_rt.c
+    ./bootstrap/stage0/residc-seed-linux-x86_64 compiler/driver.resid -o residc -rt runtime/resid_rt.c
 
     # 2. Use the self-hosted driver to compile programs
     ./residc hello.resid -o hello -rt runtime/resid_rt.c
@@ -202,7 +202,7 @@ Once you have a self-hosted `residc` (or any later generation):
 The archived Rust pipeline lives at `bootstrap/rust-stage0/` (not actively maintained). To build a fresh stage0 binary for a new architecture:
 
     cd bootstrap/rust-stage0
-    cargo run -p residc -- ../../examples/driver.resid build -o residc-seed-<os>-<arch> -rt ../../runtime/resid_rt.c
+    cargo run -p residc -- ../../compiler/driver.resid build -o residc-seed-<os>-<arch> -rt ../../runtime/resid_rt.c
 
 Add the resulting binary + `.sha256` to `bootstrap/stage0/`.
 
@@ -224,8 +224,8 @@ Add the resulting binary + `.sha256` to `bootstrap/stage0/`.
     │   ├── ed25519.resid      # Ed25519 sign/verify
     │   ├── der.resid          # DER parsing
     │   └── http.resid         # HTTP
-    ├── examples/            # Self-hosted stage-2 compilers + feature demos
-    │   ├── driver.resid       # fused self-hosted compiler (typecheck+codegen)
+    ├── compiler/            # the self-hosted compiler (driver.resid is the entry)
+    ├── examples/            # demo programs
     │   └── stack_types.resid  # fixed-capacity Str(N)/Bytes(N)/List(T,N)
     ├── tools/               # fmt, graph, why, pkg, manifest, cose — all self-hosted
     │                        #   .resid tools now; resid-lsp/resid-lsp-full stay Rust

@@ -1,0 +1,3 @@
+// A library file must never use a compiler internal, even when the build
+// that imports it may (E0220).
+pub Int sneaky(Int a) { return resid_raw_load64(a); }

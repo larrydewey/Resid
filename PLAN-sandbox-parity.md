@@ -3,7 +3,7 @@
 > **STATUS: ✅ COMPLETE.** All phases below shipped. Full sandbox/capability
 > enforcement (E0211/E0212/E0213, handle-entry, value-provenance, read-only
 > modes) plus force-time `resid_cap_enter`/`resid_cap_check`/`resid_cap_leave`
-> codegen now runs through `examples/driver.resid` with output parity to the
+> codegen now runs through `compiler/driver.resid` with output parity to the
 > Rust `residc` pipeline. Verified by 5 new `bootstrap_driver_sandbox_*` e2e
 > tests plus manual compile→link→run smoke tests (single-cap, multi-cap, and
 > runtime-abort-on-violation cases). See `PROGRESS.md` §6 ("Progress on item 1
@@ -166,7 +166,7 @@ driver must:
 ## 4. Implementation Plan
 
 ### Phase 0: Prerequisites (stderr + error formatting)
-**Files**: `crates/residc/resid_rt.c`, `examples/codegen.resid` (hdr_core), tests
+**Files**: `crates/residc/resid_rt.c`, `compiler/codegen.resid` (hdr_core), tests
 
 1. Add `resid_eprintln(const char*)` to `resid_rt.c`
 2. Add `declare void @resid_eprintln(ptr)` to hdr_core in codegen.resid
@@ -235,8 +235,8 @@ driver must:
 1. Add new shared helpers (cap_family, meet_caps, caps_contain_family,
    is_write_verb, etc.) to `drop_decls` list in merge script
 2. Ensure ck_ prefixes applied correctly to new Funcs fields
-3. Regenerate `examples/driver.resid`
-4. Verify driver compiles itself (`residc examples/driver.resid run examples/codegen.resid ...`)
+3. Regenerate `compiler/driver.resid`
+4. Verify driver compiles itself (`residc compiler/driver.resid run compiler/codegen.resid ...`)
 
 ### Phase 5: E2E Tests + Verification
 1. Add all `bootstrap_sandbox_*` tests to `crates/residc/tests/e2e.rs`
@@ -255,13 +255,13 @@ driver must:
 
 ### Source files to modify
 - `crates/residc/resid_rt.c` — add resid_eprintln C helper
-- `examples/typecheck.resid` (4142 lines) — checker half
+- `compiler/typecheck.resid` (4142 lines) — checker half
   - Funcs: line 3146 (DRes), need parallel sigs struct ~3100
   - collect_sigs_at: ~3252
   - check_params: 3148
   - check_func: 3184
   - graph-reduce sandbox rejection: 4072
-- `examples/codegen.resid` (4436 lines) — codegen half (merge base)
+- `compiler/codegen.resid` (4436 lines) — codegen half (merge base)
   - Funcs: line 463
   - funcs_empty: 465
   - collect_sigs_at: 911

@@ -28,7 +28,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SRC="${SCRIPT_DIR}/examples/driver.resid"
+SRC="${SCRIPT_DIR}/compiler/driver.resid"
 OUT="${SCRIPT_DIR}/build/boot"
 RUNTIME_C="${SCRIPT_DIR}/runtime/resid_rt.c"
 SEED_LL="${OUT}/seed.ll"

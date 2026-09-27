@@ -2,7 +2,7 @@
 // PLAN-graph-ir G4). Walks the residual graph's declarations in source
 // order and lowers each function from its nodes.
 //
-// Imported by examples/driver.resid; emitters (GT, ST, bin_apply,
+// Imported by compiler/driver.resid; emitters (GT, ST, bin_apply,
 // widen_val, ...) are the codegen half's.
 
 // Lowering context: graph, signatures, and where the innermost sandbox
@@ -1401,6 +1401,8 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
     if (n == "resid_quiet") { return lw_extern0b(w, id, n, c); }
     if (n == "resid_quiet_set") { return lw_externb(w, id, n, l1s("Bool"), env, c); }
     if (n == "resid_internals") { return lw_extern0b(w, id, n, c); }
+    if (n == "resid_rtmod") { return lw_extern0b(w, id, n, c); }
+    if (n == "resid_rtmod_set") { return lw_externb(w, id, n, l1s("Bool"), env, c); }
     if (n == "resid_internals_set") { return lw_externb(w, id, n, l1s("Bool"), env, c); }
     if (n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "str_sha256") { return lw_extern(w, id, n, l1s("Str"), "Str", env, c); }
     if (n == "resid_sacc_append_int") { return lw_extern(w, id, n, l2s("Str", "Int"), "Str", env, c); }
@@ -1432,7 +1434,7 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
 
 // Names the builtin table covers.
 Bool lw_is_builtin(Str n) {
-    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_internals" || n == "resid_internals_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count" || n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64" || n == "list_sort_ints" || n == "list_reverse_ints" || n == "list_sort_strs" || n == "list_reverse_strs" || n == "list_sort_floats" || n == "list_reverse_floats" || n == "list_contains_int" || n == "list_contains_str" || n == "list_contains_float" || n == "list_sum" || n == "list_sumf";
+    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count" || n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64" || n == "list_sort_ints" || n == "list_reverse_ints" || n == "list_sort_strs" || n == "list_reverse_strs" || n == "list_sort_floats" || n == "list_reverse_floats" || n == "list_contains_int" || n == "list_contains_str" || n == "list_contains_float" || n == "list_sum" || n == "list_sumf";
 }
 
 // cg_print: `print(str_sb_finish(b))` fuses into resid_sb_print.

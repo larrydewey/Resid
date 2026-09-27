@@ -650,6 +650,11 @@ static int resid_internals_flag = 0;
 int8_t resid_internals_set(int8_t on) { resid_internals_flag = on ? 1 : 0; return 1; }
 int8_t resid_internals(void) { return (int8_t)resid_internals_flag; }
 
+/* The compiler's --runtime-module: lowering the runtime itself. */
+static int resid_rtmod_flag = 0;
+int8_t resid_rtmod_set(int8_t on) { resid_rtmod_flag = on ? 1 : 0; return 1; }
+int8_t resid_rtmod(void) { return (int8_t)resid_rtmod_flag; }
+
 /* ── Tiny regex (subset) ────────────────────────────────────────────────
  * Supports `^` `$` `.` `*` `+` `?` and `[...]` classes (with `^` negation
  * and `a-z` ranges). Deliberately NOT a full regex engine: it is what

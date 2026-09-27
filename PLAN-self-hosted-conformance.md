@@ -7,8 +7,8 @@ Status: DONE (opened 2026-09-24, closed 2026-09-25: 117 / 117). Companion to `PR
 
 `PROGRESS.md` §6 marks the v3.3 conformance roadmap "complete in both
 pipelines". Measured against the compiler that is actually maintained
-(the self-hosted `examples/driver.resid`, built from
-`examples/typecheck.resid` + `examples/codegen.resid`), that is not true.
+(the self-hosted `compiler/driver.resid`, built from
+`compiler/typecheck.resid` + `compiler/codegen.resid`), that is not true.
 Many items landed only in the Rust pipeline ("stage-1"), and that pipeline
 has been archived under `bootstrap/rust-stage0/` since Phase D.
 
@@ -203,7 +203,7 @@ suite totals.)
     (runtime: `resid_decp_*` over the existing resid_dec core).
   - WP3: `break` / `continue`, `while`, block values ending in `;`, `if`
     without `else`, `c ? a : b`, default parameters and named arguments
-    (new pass `examples/desugar.resid`), raw strings and `b"..."`,
+    (new pass `compiler/desugar.resid`), raw strings and `b"..."`,
     `#location` / `SourceLoc`, `known` / `rt` / `rt_known` / `rt_assert` /
     `assert` / `todo` / `unimplemented` / `@residual`, shadowing error.
   - WP4: if-let / while-let, `match` on `Result`, `_`-hole unification

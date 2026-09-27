@@ -444,7 +444,7 @@ residc test --coverage
 ### Phase 1: Core (Week 1-2) — DONE
 - [x] Test syntax parsing (inline blocks, test files) — `test "name" { ... }`
       is rewritten to a plain declaration before any other pass runs
-      (`td_desugar`, examples/codegen.resid); the rewrite never adds or
+      (`td_desugar`, compiler/codegen.resid); the rewrite never adds or
       removes a newline, so diagnostics keep their line numbers.
 - [x] Explicit registration runtime — `TestCase`/`test_case`/`run_tests` in
       lib/testing.resid, bodies held as zero-argument closures. Registration

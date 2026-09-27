@@ -7,7 +7,7 @@
 // stayed residual are recorded for the artifact. Then gs_program turns
 // string accumulators into in-place buffers.
 //
-// Imported by examples/driver.resid; known values, budgets and the
+// Imported by compiler/driver.resid; known values, budgets and the
 // whistle are reduce.resid's (rd_render, rd_coerce, rd_fold, rd_builtin,
 // rd_env_*).
 

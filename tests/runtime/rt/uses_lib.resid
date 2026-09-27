@@ -1,0 +1,4 @@
+// A runtime entry importing a lib/ file: the library's internal use is
+// still rejected.
+import "lib/sneaky.resid";
+Int main() { return sneaky(0); }

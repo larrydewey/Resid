@@ -38,7 +38,7 @@ are imported the same way `reduce.resid` is.
 - [x] G0 Signed provenance (§33.1): COSE_Sign1 trailer, verify, keygen. The
   graph artifact's hash joins the payload when G4 emits it.
 
-- [x] G1 Graph core: `examples/graph.resid`.
+- [x] G1 Graph core: `compiler/graph.resid`.
   - [x] Nodes stored as parallel columns with id = index (kind, text, aux,
     child slice, span). Children come before parents.
   - [x] Parser from desugared source covering the whole accepted grammar,
@@ -62,13 +62,13 @@ are imported the same way `reduce.resid` is.
     - The checker accepted list literals without commas.
     - Three `:owned` stripping lines in codegen were dead assignments.
 - [x] G2 Resolution and type checking on the graph.
-  - [x] def edges: `examples/resolve.resid` links every ref, call, struct
+  - [x] def edges: `compiler/resolve.resid` links every ref, call, struct
     literal and type use to its binder (param, bind, for, with, pattern,
     arm, lambda parameter, fn or type declaration). `--graph-resolve`
     lists unresolved uses; `tests/graph` requires none in-repo, and a scope
     case requires every out-of-scope use to be caught. The compiler has
     61K uses, resolved in about 0.4s.
-  - [x] Type checking: `examples/gcheck.resid` is the driver's checker.
+  - [x] Type checking: `compiler/gcheck.resid` is the driver's checker.
     It walks nodes, resolves names by def edges, builds the signature
     table from declarations, and runs the capability passes (E0211-E0218)
     from def edges and provider-call nodes instead of token scans. The type
@@ -126,7 +126,7 @@ are imported the same way `reduce.resid` is.
   - Then migrate hand-threaded builder code and retire `examples/stracc.resid`'s
     pattern matching.
 - [x] G3 Reduction on the graph.
-  - [x] `examples/greduce.resid` reduces the graph, mirroring
+  - [x] `compiler/greduce.resid` reduces the graph, mirroring
     `reduce.resid`; until G7, `--graph-reduce-check` token-matched its
     printed residual against the text reducer on every program.
   - [x] The default pipeline lowers the residual graph directly, with
@@ -150,7 +150,7 @@ are imported the same way `reduce.resid` is.
   - Exit criterion met: `tests/reduce` passes, and the self-compile
     specializes as much as the text reducer did (the 400-attempt limit).
 - [x] G4 Lowering from the residual graph.
-  - [x] `examples/lower.resid` is the driver's lowering (`--text-lower`
+  - [x] `compiler/lower.resid` is the driver's lowering (`--text-lower`
     keeps the text codegen for differential runs). It mirrors the text
     codegen node for node, and every module of all 174 in-repo programs
     (9,631 functions) is byte-identical to the text pipeline's. While

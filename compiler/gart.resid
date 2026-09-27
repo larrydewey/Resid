@@ -4,7 +4,7 @@
 // The CBOR is built as hex, two digits per byte, and written with
 // filesystem.write_hex.
 //
-// Imported by examples/driver.resid (after graph.resid and greduce.resid).
+// Imported by compiler/driver.resid (after graph.resid and greduce.resid).
 
 // ─── Hex CBOR (RFC 8949 preferred serialization) ───────────────────
 
