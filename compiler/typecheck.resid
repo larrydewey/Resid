@@ -1840,6 +1840,13 @@ pub Str conv_helper_type(Str name) {
     return "";
 }
 
+// Every type in ts[i..] normalizes to t.
+pub Bool num_all_same(List(Str) ts, Int i, Str t) {
+    if (i >= ts.len()) { return true; }
+    if (num_norm(str_trim(ts[i])) != t) { return false; }
+    return num_all_same(ts, i + 1, t);
+}
+
 // Runtime primitives (compiler-only): argument and result types.
 ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
     Str want = if (str_starts_with(op, "load")) { "Int" } else { if (str_starts_with(op, "store") || op == "fetch_add") { "Int,Int" } else { if (op == "copy" || op == "fill" || op == "cas") { "Int,Int,Int" } else { if (op == "syscall") { "Int,Int,Int,Int,Int,Int,Int" } else { if (op == "str" || op == "bits_f64") { "Int" } else { if (op == "f64_bits") { "Float" } else { if (op == "global" || op == "tls") { "Str,Int" } else { if (op == "fn") { "Str" } else { if (op == "call2") { "Int,Int,Int" } else { if (op == "addr") { "*" } else { if (op == "table") { "List(Int)" } else { if (op == "f128_bits") { "Float(128)" } else { if (op == "bits_f128") { "Int(128)" } else { "?" } } } } } } } } } } } } };
@@ -2045,65 +2052,13 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_count expects (Str,Str), got (" + argtys + ")"};
     }
-    if (name == "abs_i64") {
-        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "abs_i64 expects (Int), got (" + argtys + ")"};
-    }
-    if (name == "min_i64") {
-        if (argtys == "Int,Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "min_i64 expects (Int,Int), got (" + argtys + ")"};
-    }
-    if (name == "max_i64") {
-        if (argtys == "Int,Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "max_i64 expects (Int,Int), got (" + argtys + ")"};
-    }
-    if (name == "clamp_i64") {
-        if (argtys == "Int,Int,Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "clamp_i64 expects (Int,Int,Int), got (" + argtys + ")"};
-    }
-    if (name == "list_sort_ints") {
-        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_sort_ints expects (List(Int)), got (" + argtys + ")"};
-    }
-    if (name == "list_sort_strs") {
-        if (argtys == "List(Str)") { return ERes {.pos = pos, .ty = "List(Str)", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_sort_strs expects (List(Str)), got (" + argtys + ")"};
-    }
-    if (name == "list_sort_floats") {
-        if (argtys == "List(Float)") { return ERes {.pos = pos, .ty = "List(Float)", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_sort_floats expects (List(Float)), got (" + argtys + ")"};
-    }
-    if (name == "list_reverse_ints") {
-        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_reverse_ints expects (List(Int)), got (" + argtys + ")"};
-    }
-    if (name == "list_reverse_strs") {
-        if (argtys == "List(Str)") { return ERes {.pos = pos, .ty = "List(Str)", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_reverse_strs expects (List(Str)), got (" + argtys + ")"};
-    }
-    if (name == "list_reverse_floats") {
-        if (argtys == "List(Float)") { return ERes {.pos = pos, .ty = "List(Float)", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_reverse_floats expects (List(Float)), got (" + argtys + ")"};
-    }
-    if (name == "list_contains_int") {
-        if (argtys == "List(Int),Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_contains_int expects (List(Int),Int), got (" + argtys + ")"};
-    }
-    if (name == "list_contains_str") {
-        if (builtin_args(argtys, "List(Str),Str")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_contains_str expects (List(Str),Str), got (" + argtys + ")"};
-    }
-    if (name == "list_contains_float") {
-        if (argtys == "List(Float),Float") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_contains_float expects (List(Float),Float), got (" + argtys + ")"};
-    }
-    if (name == "list_sum") {
-        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_sum expects (List(Int)), got (" + argtys + ")"};
-    }
-    if (name == "list_sumf") {
-        if (argtys == "List(Float)") { return ERes {.pos = pos, .ty = "Float", .err = ""}; }
-        return ERes {.pos = pos, .ty = "", .err = "list_sumf expects (List(Float)), got (" + argtys + ")"};
+    if (name == "abs" || name == "min" || name == "max" || name == "clamp") {
+        Int want = if (name == "abs") { 1 } else { if (name == "clamp") { 3 } else { 2 } };
+        List(Str) ats = if (argtys == "") { [] } else { str_split(argtys, ",") };
+        Str t0 = if (ats.len() > 0) { num_norm(str_trim(ats[0])) } else { "" };
+        Bool same = ats.len() == want && is_num(t0) && !is_dec_ty(t0) && num_all_same(ats, 1, t0);
+        if (same) { return ERes {.pos = pos, .ty = str_trim(ats[0]), .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects " + f"{want}" + " argument(s) of one numeric type, got (" + argtys + ")"};
     }
     if (name == "resid_crypto_random_byte") {
         if (argtys == "") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }

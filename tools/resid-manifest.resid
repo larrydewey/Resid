@@ -221,7 +221,7 @@ List(Str) dep_names_acc(List(TomlEntry) entries, Int i, List(Str) acc) {
     return dep_names_acc(entries, i + 1, acc2);
 }
 List(Str) dep_name_seen_or_add(List(Str) acc, Str nm) {
-    if (list_contains_str(acc, nm)) { return acc; }
+    if (acc.contains(nm)) { return acc; }
     return acc.concat([nm]);
 }
 List(Str) dep_names(List(TomlEntry) entries) {
@@ -495,7 +495,7 @@ Str version_trust(Str name, Str version, Str got, Str reg_dir, TrustPolicy tp) {
         return "";
     }
     if (tp.idx_required) { return ""; }
-    Bool kr = tp.keyring != "" && filesystem.is_dir(tp.keyring) && keyring_verifies(tp.keyring, list_sort_strs(filesystem.list_dir(tp.keyring)), 0, got, sig);
+    Bool kr = tp.keyring != "" && filesystem.is_dir(tp.keyring) && keyring_verifies(tp.keyring, sort(filesystem.list_dir(tp.keyring)), 0, got, sig);
     if (kr) { return ""; }
     if (tp.allow_unsigned) {
         eprintln("warning: dependency '" + id + "' is unsigned; accepted because [signing] allow_unsigned = true");
@@ -742,7 +742,7 @@ DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
 Str first_missing_cap(List(Str) caps, List(Str) granted, Int i) {
     if (i >= caps.len()) { return ""; }
     Str fam = cap_family(caps[i]);
-    if (!list_contains_str(granted, fam)) { return caps[i]; }
+    if (!granted.contains(fam)) { return caps[i]; }
     return first_missing_cap(caps, granted, i + 1);
 }
 Str check_dep_capabilities_at(List(ResolvedDep) deps, List(Str) granted, Int i) {
@@ -776,7 +776,7 @@ List(PkFile) pk_walk(Str dir_abs, Str dir_rel, List(Str) names, Int i, List(PkFi
     Str rel = if (dir_rel == "") { name } else { dir_rel + "/" + name };
     Bool dir = filesystem.is_dir(abs);
     Bool src = str_ends_with(name, ".resid") || str_ends_with(name, ".toml");
-    List(PkFile) acc2 = if (dir && name != "target") { pk_walk(abs, rel, list_sort_strs(filesystem.list_dir(abs)), 0, acc) } else { if (!dir && src) { acc.concat([PkFile {.abs = abs, .rel = rel}]) } else { acc } };
+    List(PkFile) acc2 = if (dir && name != "target") { pk_walk(abs, rel, sort(filesystem.list_dir(abs)), 0, acc) } else { if (!dir && src) { acc.concat([PkFile {.abs = abs, .rel = rel}]) } else { acc } };
     return pk_walk(dir_abs, dir_rel, names, i + 1, acc2);
 }
 
@@ -802,7 +802,7 @@ List(Int) pk_pack_files(List(PkFile) fs, Int i, List(Int) acc) {
 
 @requires(filesystem(readonly))
 List(Int) pk_pack_dir(Str dir) {
-    List(PkFile) fs = pk_sort(pk_walk(dir, "", list_sort_strs(filesystem.list_dir(dir)), 0, []), 0, []);
+    List(PkFile) fs = pk_sort(pk_walk(dir, "", sort(filesystem.list_dir(dir)), 0, []), 0, []);
     return pk_pack_files(fs, 0, bytes_of("RESIDPKG1").concat(pk_le(fs.len(), 4, [])));
 }
 

@@ -326,7 +326,13 @@ GKT gk_sort(GK k0, Int id) {
     if (!str_has_prefix(v.ty, "List(")) { return gterr(k, "sort expects a List, found " + v.ty, id); }
     Str elem = str_slice(v.ty, 5, str_len(v.ty) - 1);
     Int u = if (g.ns[id].nk == 2) { gk_kid(k, id, 1) } else { -1 };
-    if (u < 0 || g.ns[u].kind != "named" || g.ns[u].text != "using") { return gterr(k, "sort requires a behavior: sort(xs, using = Ord(T))", id); }
+    // Without `using`, the built-in Ord of a numeric or Str element (spec §11).
+    if (u < 0) {
+        Bool dflt = (is_num(elem) && !is_dec_ty(elem)) || num_norm(elem) == "Str";
+        if (dflt) { return gt(k, v.ty, id); }
+        return gterr(k, "sort(xs) of " + elem + " needs a behavior: sort(xs, using = Ord(" + elem + "))", id);
+    }
+    if (g.ns[u].kind != "named" || g.ns[u].text != "using") { return gterr(k, "sort requires a behavior: sort(xs, using = Ord(T))", id); }
     PRes stripped = strip_reverse(gk_inst(g, kg_kid(g, u, 0)), 0);
     Str inner = stripped.ty;
     Int op = str_find_char(inner, 40, 0);
@@ -334,7 +340,7 @@ GKT gk_sort(GK k0, Int id) {
     Str head = str_slice(inner, 0, op);
     Str param = str_slice(inner, op + 1, str_len(inner) - 1);
     Int bi = ck_b_index(k.fs, head, param);
-    Bool builtin_ord = bi < 0 && head == "Ord" && is_num(param) && !is_dec_ty(param);
+    Bool builtin_ord = bi < 0 && head == "Ord" && ((is_num(param) && !is_dec_ty(param)) || param == "Str");
     if (builtin_ord) {
         if (!ty_same(param, elem)) { return gterr(k, "behavior Ord(" + param + ") orders " + param + ", but the list holds " + elem, id); }
         return gt(k, v.ty, id);
@@ -766,6 +772,7 @@ GKT gk_mcall(GK k0, Int id) {
     if (is_set_type(bt)) { return gk_set_method(k, id, bt, m, na); }
     if (is_expect_type(bt)) { return gk_expect_method(k, id, bt, m, na); }
     Int mfidx = ck_fn_index(k.fs, m);
+    if (mfidx < 0 && gk_list_verb(m) && str_has_prefix(bt, "List(") && !is_list_fixed(bt)) { return gk_list_method(k, id, bt, m, na); }
     if (mfidx >= 0) {
         if (na == 0) { return gk_finish_call(k, id, m, bt, 1, true); }
         List(Str) mpl = split_type_list(k.fs.pts[mfidx], 0, 0, 0, "", gk_nopts());
@@ -776,6 +783,35 @@ GKT gk_mcall(GK k0, Int id) {
     Str cfty = struct_field_type(k.fs, bt, m);
     if (cfty != "" && is_fn_type(cfty)) { return gk_fn_call(gk_mem(k, id, gk_sfield(k, bt, m)), id, 1, cfty); }
     return gterr(k, "unsupported method " + m, id);
+}
+
+// List verbs, by element representation: a word (integers up to 64 bits),
+// a Float or a Str.
+pub Bool gk_list_verb(Str m) { return m == "contains" || m == "reverse" || m == "sum"; }
+
+pub Str list_rep(Str et) {
+    Str t = num_norm(et);
+    if (t == "Str") { return "str"; }
+    if (t == "Float(64)") { return "float"; }
+    Bool word = t == "Int(64)" || t == "Int(32)" || t == "Int(16)" || t == "Int(8)" || t == "UInt(64)" || t == "UInt(32)" || t == "UInt(16)" || t == "UInt(8)";
+    return if (word) { "int" } else { "" };
+}
+
+GKT gk_list_method(GK k, Int id, Str bt, Str m, Int na) {
+    Str et = str_slice(bt, 5, str_len(bt) - 1);
+    Str rep = list_rep(et);
+    if (m == "reverse") {
+        if (na != 0) { return gterr(k, ".reverse() takes no arguments", id); }
+        return gt(k, bt, id);
+    }
+    if (m == "sum") {
+        if (na != 0) { return gterr(k, ".sum() takes no arguments", id); }
+        Str t = num_norm(et);
+        if (t != "Int(64)" && t != "Float(64)") { return gterr(k, ".sum() needs List(Int) or List(Float), got " + bt, id); }
+        return gt(k, et, id);
+    }
+    if (rep == "") { return gterr(k, ".contains needs integer, Float or Str elements, got " + bt, id); }
+    return gk_marg_same(k, id, et, ".contains type mismatch: list has element ", "Bool");
 }
 
 // ─── Linear builders (spec §45) ─────────────────────────────────────
@@ -1277,7 +1313,7 @@ List(Int) lin_binders_kids(GK k, Int id, Int i, List(Int) acc) {
 // First builder in live[from..] not consumed on this path, or -1.
 Int lin_leak(LS l, Int from) {
     if (from >= l.live.len()) { return -1; }
-    if (!list_contains_int(l.used, l.live[from])) { return l.live[from]; }
+    if (!l.used.contains(l.live[from])) { return l.live[from]; }
     return lin_leak(l, from + 1);
 }
 
@@ -1292,7 +1328,7 @@ LS lin_close(GK k, LS l, Int n0, Int at) {
 Bool lin_same(List(Int) a, List(Int) b, Int i) {
     if (a.len() != b.len()) { return false; }
     if (i >= a.len()) { return true; }
-    if (!list_contains_int(b, a[i])) { return false; }
+    if (!b.contains(a[i])) { return false; }
     return lin_same(a, b, i + 1);
 }
 
@@ -1313,15 +1349,15 @@ LS lin_merge(GK k, LS base, LS a, LS b, Int at) {
 
 Int lin_diff(List(Int) a, List(Int) b, Int i) {
     if (i >= a.len()) { return -1; }
-    if (!list_contains_int(b, a[i])) { return a[i]; }
+    if (!b.contains(a[i])) { return a[i]; }
     return lin_diff(a, b, i + 1);
 }
 
 LS lin_use(GK k, LS l, Int use) {
     Int d = kg_def(k.rs, use);
-    if (d < 0 || !list_contains_int(l.bs, d)) { return l; }
-    if (list_contains_int(l.locked, d)) { return ls_err(l, "E0403: " + lin_name(k, d) + " is bound outside this loop or lambda and cannot be used inside it (spec §45.1)", use); }
-    if (list_contains_int(l.used, d)) { return ls_err(l, "E0402: " + lin_name(k, d) + " is used more than once (spec §45.1)", use); }
+    if (d < 0 || !l.bs.contains(d)) { return l; }
+    if (l.locked.contains(d)) { return ls_err(l, "E0403: " + lin_name(k, d) + " is bound outside this loop or lambda and cannot be used inside it (spec §45.1)", use); }
+    if (l.used.contains(d)) { return ls_err(l, "E0402: " + lin_name(k, d) + " is used more than once (spec §45.1)", use); }
     return ls_with(l, l.used.concat([d]), l.live, l.div);
 }
 
@@ -1408,7 +1444,7 @@ LS lin_stmt(GK k, Int id, LS l) {
     }
     if (kd == "bind" || kd == "rbind") {
         LS v = lin_expr(k, kg_kid(g, id, n - 1), l);
-        if (v.err != "" || !list_contains_int(l.bs, id)) { return v; }
+        if (v.err != "" || !l.bs.contains(id)) { return v; }
         return ls_with(v, v.used, v.live.concat([id]), false);
     }
     if (kd == "block") {
@@ -1452,7 +1488,7 @@ LS lin_fn(GK k, Int d) {
 List(Int) lin_params(GK k, Int d, Int i, Int n, List(Int) bs, ListBuf(Int) acc) {
     if (i >= n) { return acc.finish(); }
     Int p = kg_kid(k.g, d, i);
-    return lin_params(k, d, i + 1, n, bs, if (list_contains_int(bs, p)) { acc.push(p) } else { acc });
+    return lin_params(k, d, i + 1, n, bs, if (bs.contains(p)) { acc.push(p) } else { acc });
 }
 
 // ─── Signatures from the graph ──────────────────────────────────────
@@ -1572,14 +1608,14 @@ type GKF = { List(Str) calls; List(Str) provs; List(Str) writes; };
 
 GKF gf_add(GKF f, Str which, Str v) {
     if (which == "c") {
-        if (list_contains_str(f.calls, v)) { return f; }
+        if (f.calls.contains(v)) { return f; }
         return GKF {.calls = f.calls.concat([v]), .provs = f.provs, .writes = f.writes};
     }
     if (which == "p") {
-        if (list_contains_str(f.provs, v)) { return f; }
+        if (f.provs.contains(v)) { return f; }
         return GKF {.calls = f.calls, .provs = f.provs.concat([v]), .writes = f.writes};
     }
-    if (list_contains_str(f.writes, v)) { return f; }
+    if (f.writes.contains(v)) { return f; }
     return GKF {.calls = f.calls, .provs = f.provs, .writes = f.writes.concat([v])};
 }
 
@@ -1716,7 +1752,7 @@ List(Str) gk_file_params(Kg g, Int d, Int i, ListBuf(Str) acc) {
 Bool gk_file_passed(GK k, Int id, Int self, List(Str) fps) {
     if (gk_user_call(k, id) && kg_def(k.rs, id) != self && k.g.ns[id].nk == 1) {
         Int a = kg_kid(k.g, id, 0);
-        if (k.g.ns[a].kind == "ref" && list_contains_str(fps, k.g.ns[a].text)) { return true; }
+        if (k.g.ns[a].kind == "ref" && fps.contains(k.g.ns[a].text)) { return true; }
     }
     return gk_file_passed_kids(k, id, 0, self, fps);
 }
@@ -2039,8 +2075,8 @@ pub GKR gk_analyze(Kg g, Int unit, Str src, Str smap, Bool log) {
     if (r.err != "") { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs}; }
     Int st = gk_finish(r.k, sg.fnode, src, smap);
     Int n = kg_count(g);
-    List(Str) ty = gk_dense_ty(list_sort_ints(r.k.tl.keys), r.k.tl.tys, 0, 0, n, "", ListBuf());
-    List(Int) def = gk_dense_def(list_sort_ints(r.k.tl.mem), rs, 0, 0, n, ListBuf());
+    List(Str) ty = gk_dense_ty(sort(r.k.tl.keys), r.k.tl.tys, 0, 0, n, "", ListBuf());
+    List(Int) def = gk_dense_def(sort(r.k.tl.mem), rs, 0, 0, n, ListBuf());
     return GKR {.status = st, .ty = ty, .def = def, .rs = rs, .fs = sg.fs};
 }
 

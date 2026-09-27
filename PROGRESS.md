@@ -328,10 +328,15 @@ boundaries, ending in a MIN / -1 that must still trap.
   dropped (`imp_unalias_fs`), and range facts and scope inference did not
   look into holes (a bounds check inside a hole was kept).
 - Self-compile, benchmarks and output unchanged.
+- The per-type list and math verbs went the same way: `xs.contains(v)`,
+  `xs.reverse()`, `xs.sum()`, `sort(xs)` with the built-in Ord inserted
+  (spec §11, now also for Str), and `abs` / `min` / `max` / `clamp` over
+  the numeric family, lowered as the Resid expressions they stand for
+  (`lw_minmax`), so `abs(INT64_MIN)` traps. Conformance case
+  `generic_list_numeric_verbs`.
 - Next: a `Show(T)` behavior (spec §11), built in for the numeric family,
   Bool and Str, user instances `Show(P) = show_p;`, structural instances
-  for records and sums; the per-type list verbs (`list_contains_int`,
-  `list_reverse_strs`, ...) become generic.
+  for records, sums and list elements (lists of Str still print "…").
 
 ### 0zj. The Resid runtime: infrastructure and first module (2026-09-26)
 

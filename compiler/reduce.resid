@@ -700,19 +700,19 @@ pub RdV rd_builtin(Str name, RdA a, Str orig, Int pos, RdS st) {
         if (!rd_args_are(a, ["Int"])) { return none; }
         Int x = rd_atoi(v[0]);
         if (x == rd_i64_min()) { return none; }
-        return rd_folded(rd_itoa(abs_i64(x)), "Int", orig, a.ch, pos, st);
+        return rd_folded(rd_itoa(abs(x)), "Int", orig, a.ch, pos, st);
     }
     if (name == "min_i64") {
         if (!rd_args_are(a, ["Int", "Int"])) { return none; }
-        return rd_folded(rd_itoa(min_i64(rd_atoi(v[0]), rd_atoi(v[1]))), "Int", orig, a.ch, pos, st);
+        return rd_folded(rd_itoa(min(rd_atoi(v[0]), rd_atoi(v[1]))), "Int", orig, a.ch, pos, st);
     }
     if (name == "max_i64") {
         if (!rd_args_are(a, ["Int", "Int"])) { return none; }
-        return rd_folded(rd_itoa(max_i64(rd_atoi(v[0]), rd_atoi(v[1]))), "Int", orig, a.ch, pos, st);
+        return rd_folded(rd_itoa(max(rd_atoi(v[0]), rd_atoi(v[1]))), "Int", orig, a.ch, pos, st);
     }
     if (name == "clamp_i64") {
         if (!rd_args_are(a, ["Int", "Int", "Int"])) { return none; }
-        return rd_folded(rd_itoa(clamp_i64(rd_atoi(v[0]), rd_atoi(v[1]), rd_atoi(v[2]))), "Int", orig, a.ch, pos, st);
+        return rd_folded(rd_itoa(clamp(rd_atoi(v[0]), rd_atoi(v[1]), rd_atoi(v[2]))), "Int", orig, a.ch, pos, st);
     }
     return none;
 }

@@ -229,7 +229,7 @@ pub RS kg_resolve(Kg g, Int unit) {
     RSG gl = rs_globals(g, unit, 0, RSG {.fns = e, .tys = e, .vars = e});
     RS r = rs_decls(g, gl, unit, 0, rs_empty());
     List(Int) none = [];
-    List(Int) dense = rs_dense(list_sort_ints(r.pairs), 0, 0, kg_count(g), ListBuf());
+    List(Int) dense = rs_dense(sort(r.pairs), 0, 0, kg_count(g), ListBuf());
     return RS {.pairs = none, .def = dense, .unres = r.unres, .uses = r.uses, .shadow = r.shadow};
 }
 

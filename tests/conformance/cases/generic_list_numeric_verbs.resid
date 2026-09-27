@@ -1,0 +1,19 @@
+// The list verbs and abs/min/max/clamp work for every element or numeric
+// type they make sense for; a user function of the same name still wins.
+Int reverse(List(Int) xs) { return xs.len(); }
+
+Int main() {
+    List(Int) xs = [3, 1, 2];
+    List(Str) ss = ["pear", "fig"];
+    List(Float) fs = [2.5, 0.5];
+    List(UInt(8)) us = [(UInt(8))200, (UInt(8))7];
+    println(f"{xs.contains(2)} {ss.contains("fig")} {fs.contains(9.0)} {us.contains((UInt(8))200)}");
+    List(Str) so = sort(ss);
+    List(Int) xo = sort(xs, using = Reverse(Ord(Int)));
+    println(f"{so[0]} {xo[0]} {sort(fs)[0]} {xs.sum()} {fs.sum()}");
+    println(f"{xs.reverse()}");
+    Int(32) a = (Int(32))(0 - 9);
+    UInt(8) b = (UInt(8))250;
+    println(f"{abs(a)} {min(b, (UInt(8))3)} {max(1.25, 0.75)} {clamp(a, (Int(32))(0 - 5), (Int(32))5)}");
+    return 0;
+}

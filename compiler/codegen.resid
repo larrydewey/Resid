@@ -1249,7 +1249,7 @@ Bool scope_num_head(Str t) {
 }
 
 Bool scope_arith_builtin(Str n) {
-    if (n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64") { return true; }
+    if (n == "abs" || n == "min" || n == "max" || n == "clamp") { return true; }
     if (n == "str_char_at" || n == "str_len") { return true; }
     if (str_starts_with(n, "checked_") || str_starts_with(n, "wrapping_") || str_starts_with(n, "saturating_")) { return true; }
     Int c0 = str_char_at(n, 0);
@@ -4261,7 +4261,7 @@ Bool tco_args_match(List(Str) vals, List(Str) ptys, List(Str) frame, Int j) {
     if (!str_starts_with(v, pre)) { return false; }
     Str val = str_slice(v, str_len(pre), str_len(v));
     if (val == "" || str_find_char(val, 32, 0) >= 0) { return false; }
-    if (list_contains_str(frame, val)) { return false; }
+    if (frame.contains(val)) { return false; }
     return tco_args_match(vals, ptys, frame, j + 1);
 }
 

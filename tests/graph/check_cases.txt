@@ -270,11 +270,23 @@ Int main() { UInt u = 1; Int x = 2; Int y = x + u; return 0; }
 cannot index Int
 Int main() { Int a = 1; Int b = a[1..]; return 0; }
 === sortbeh
-no behavior instance Ord(Str) is defined
-Int main() { List(Int) a = [1]; List(Int) b = sort(a, using = Ord(Str)); return 0; }
+no behavior instance Ord(Bool) is defined
+Int main() { List(Bool) a = [true]; List(Bool) b = sort(a, using = Ord(Bool)); return 0; }
 === sortnobeh
-sort requires a behavior: sort(xs, using = Ord(T))
-Int main() { List(Int) a = [1]; List(Int) b = sort(a); return 0; }
+sort(xs) of Bool needs a behavior: sort(xs, using = Ord(Bool))
+Int main() { List(Bool) a = [true]; List(Bool) b = sort(a); return 0; }
+=== sortdefault
+check: ok
+Int main() { List(Str) a = ["b", "a"]; List(Str) b = sort(a); List(Int) c = sort([2, 1]); return 0; }
+=== listverbs
+check: ok
+Int main() { List(Int) a = [1]; Bool x = a.contains(1); Int s = a.sum(); List(Int) r = a.reverse(); Int m = max(abs(0 - 1), min(2, 3)); return 0; }
+=== listverbs_elem
+.contains needs integer, Float or Str elements, got List(Bool)
+Int main() { List(Bool) a = [true]; Bool x = a.contains(true); return 0; }
+=== minmax_types
+max expects 2 argument(s) of one numeric type, got (Int,Str)
+Int main() { Int m = max(1, "a"); return 0; }
 === sortnolist
 sort expects a List, found Int
 Int main() { Int a = 1; Int b = sort(a, using = Ord(Int)); return 0; }

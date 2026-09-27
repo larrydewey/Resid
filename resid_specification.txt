@@ -535,6 +535,10 @@ need to declare per-width instances.
 Plus the ordinary C-style cast (Type)expr. Both are checked
 (6.4).
 
+abs(x), min(a, b), max(a, b) and clamp(x, lo, hi) take
+arguments of one numeric type and return that type; abs
+of the most negative integer traps like any overflow.
+
 Wrapping conversions keep the low bits of the two's-
 complement representation, for bit-level code:
 
@@ -609,7 +613,13 @@ Behaviors are ordinary compile-time knowledge.
   sort(values, using = Reverse(Ord(Int)));
 
 Unique behaviors are inserted automatically; ambiguity
-requires explicit selection.
+requires explicit selection. sort(xs) on numeric or Str
+elements uses their built-in Ord.
+
+Lists: xs.contains(v) (integer, Float or Str elements),
+xs.reverse(), xs.sum() (List(Int) or List(Float)). A
+function of the same name taking the list as its first
+parameter takes precedence.
 
 Numeric Eq / Ord / Hash are supplied generically for
 the whole family (see §6.6).

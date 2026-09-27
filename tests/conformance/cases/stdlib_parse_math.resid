@@ -4,9 +4,9 @@ Int main() {
         Int shown18 = str_parse_int("-17");
         println(f"{shown18}");
     }
-    println(f"{abs_i64(-8)}");
-    println(f"{min_i64(3, 9)}");
-    println(f"{max_i64(3, 9)}");
-    println(f"{clamp_i64(15, 0, 10)}");
+    println(f"{abs(-8)}");
+    println(f"{min(3, 9)}");
+    println(f"{max(3, 9)}");
+    println(f"{clamp(15, 0, 10)}");
     return 0;
 }

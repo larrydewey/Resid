@@ -288,10 +288,10 @@ GT lw_ifx(LW w, Int id, List(Str) env, GT c) {
     GT tv = lw_arm(w, lw_kid(w, id, 1), env, ct);
     if (tv.err != "") { return tv; }
     List(Str) b2 = tv.lines.concat(["br label %" + ld, le + ":"]);
-    GT ce = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = tv.glines, .lines = b2, .tmp = tv.tmp, .lbl = max_i64(tv.lbl, l3), .tail = false};
+    GT ce = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = tv.glines, .lines = b2, .tmp = tv.tmp, .lbl = max(tv.lbl, l3), .tail = false};
     if (w.g.ns[id].nk < 3) {
         Str zv = default_zero_for(ll_ty(num_norm_cg(tv.ty)));
-        GT zg = GT {.pos = 0, .val = zv, .ty = tv.ty, .cnt = 0, .err = "", .glines = tv.glines, .lines = b2, .tmp = tv.tmp, .lbl = max_i64(tv.lbl, l3), .tail = false};
+        GT zg = GT {.pos = 0, .val = zv, .ty = tv.ty, .cnt = 0, .err = "", .glines = tv.glines, .lines = b2, .tmp = tv.tmp, .lbl = max(tv.lbl, l3), .tail = false};
         return finish_ifexpr(tv, lt, le, ld, l3, zg, 0);
     }
     Int el = lw_kid(w, id, 2);
@@ -357,7 +357,7 @@ GT lw_orelse(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     GT fv = lw_arm(w, fb, env, fv0);
     if (fv.err != "") { return fv; }
     List(Str) x2 = fv.lines.concat(["br label %" + labm, labp + ":"]);
-    GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = fv.glines, .lines = x2, .tmp = fv.tmp, .lbl = max_i64(fv.lbl, l3), .tail = false};
+    GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = fv.glines, .lines = x2, .tmp = fv.tmp, .lbl = max(fv.lbl, l3), .tail = false};
     GT pv = cg_match_payload(lhs, ety, c1);
     if (pv.err != "") { return pv; }
     Int tp = pv.tmp + 1;
@@ -365,7 +365,7 @@ GT lw_orelse(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     Str fexit = last_label_line_cg(fv.lines, labf);
     Str pexit = last_label_line_cg(pv.lines, labp);
     List(Str) y3 = pv.lines.concat(["br label %" + labm, labm + ":", pr + " = phi " + ll_ty(num_norm_cg(ety)) + " [ " + fv.val + ", %" + fexit + " ], [ " + pv.val + ", %" + pexit + " ]"]);
-    return GT {.pos = 0, .val = pr, .ty = ety, .cnt = 0, .err = "", .glines = pv.glines, .lines = y3, .tmp = tp, .lbl = max_i64(pv.lbl, l3), .tail = false};
+    return GT {.pos = 0, .val = pr, .ty = ety, .cnt = 0, .err = "", .glines = pv.glines, .lines = y3, .tmp = tp, .lbl = max(pv.lbl, l3), .tail = false};
 }
 
 // lin_get_else.
@@ -390,7 +390,7 @@ GT lw_get_else(LW w, GT base, GT ka, Str kt, Str vt, Int fb, List(Str) env) {
     Int tr = fv.tmp + 1;
     Str res = f"%t{tr}";
     List(Str) q2 = fv.lines.concat(["br label %" + labfe, labfe + ":", "br label %" + labm, labp + ":", "br label %" + labm, labm + ":", res + " = phi " + ll_ty(num_norm_cg(vt)) + " [ " + fv.val + ", %" + labfe + " ], [ " + pv + ", %" + labp + " ]"]);
-    return GT {.pos = 0, .val = res, .ty = vt, .cnt = 0, .err = "", .glines = fv.glines, .lines = q2, .tmp = tr, .lbl = max_i64(fv.lbl, l0 + 4), .tail = false};
+    return GT {.pos = 0, .val = res, .ty = vt, .cnt = 0, .err = "", .glines = fv.glines, .lines = q2, .tmp = tr, .lbl = max(fv.lbl, l0 + 4), .tail = false};
 }
 
 // cg_ternary: `c ? a : b` lowered like an if-expression.
@@ -405,7 +405,7 @@ GT lw_tern(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     GT ct = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = cond.glines, .lines = cond.lines.concat(["br i1 " + cond.val + ", label %" + lt + ", label %" + le, lt + ":"]), .tmp = cond.tmp, .lbl = l3, .tail = false};
     GT tv = lw_expr(w, lw_kid(w, id, 1), env, ct);
     if (tv.err != "") { return tv; }
-    GT ce = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = tv.glines, .lines = tv.lines.concat(["br label %" + ld, le + ":"]), .tmp = tv.tmp, .lbl = max_i64(tv.lbl, l3), .tail = false};
+    GT ce = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = tv.glines, .lines = tv.lines.concat(["br label %" + ld, le + ":"]), .tmp = tv.tmp, .lbl = max(tv.lbl, l3), .tail = false};
     GT ev = lw_expr(w, lw_kid(w, id, 2), env, ce);
     if (ev.err != "") { return ev; }
     return finish_ifexpr(tv, lt, le, ld, l3, ev, 0);
@@ -489,6 +489,57 @@ GT lw_sacc_parts(LW w, Int f, Int i, GT a, List(Str) env) {
     if (sv.err != "") { return sv; }
     GT r = lw_rt1(sv, "ptr", "@resid_sacc_append(ptr " + a.val + ", ptr " + sv.val + ")", "Str");
     return lw_sacc_parts(w, f, i + 1, r, env);
+}
+
+// xs.reverse() / xs.sum() / xs.contains(v), by element representation.
+GT lw_list_method(LW w, Int id, GT base, Str m, List(Str) env) {
+    Str lt = strip_owned_cg(base.ty);
+    Str et = str_slice(lt, 5, str_len(lt) - 1);
+    Str rep = list_rep(et);
+    if (m == "reverse") { return lw_rt1(base, "ptr", "@list_reverse_ints(ptr " + base.val + ")", lt); }
+    if (m == "sum") {
+        if (rep == "float") { return lw_rt1(base, "double", "@list_sumf(ptr " + base.val + ")", et); }
+        return lw_rt1(base, "i64", "@list_sum(ptr " + base.val + ")", et);
+    }
+    GT a = lw_marg(w, id, 0, env, base);
+    if (a.err != "") { return a; }
+    if (rep == "str") { return lw_rtb(a, "@list_contains_str(ptr " + base.val + ", ptr " + a.val + ")"); }
+    if (rep == "float") { return lw_rtb(a, "@list_contains_float(ptr " + base.val + ", double " + a.val + ")"); }
+    GT a64 = widen_val(a, "Int(64)");
+    return lw_rtb(a64, "@list_contains_int(ptr " + base.val + ", i64 " + a64.val + ")");
+}
+
+// abs / min / max / clamp over the numeric family, as the Resid
+// expressions they stand for (checked arithmetic included).
+GT lw_minmax(LW w, Int id, Str n, List(Str) env, GT c) {
+    Int na = w.g.ns[id].nk;
+    Int want = if (n == "abs") { 1 } else { if (n == "clamp") { 3 } else { 2 } };
+    if (na != want) { return lw_gerr(n + " arity", c); }
+    List(Str) none = [];
+    LMM a = lw_mm_args(w, id, 0, na, env, LMM {.g = c, .names = none, .env = env});
+    if (a.g.err != "") { return a.g; }
+    List(Str) x = a.names;
+    Str src = if (n == "abs") { "if (" + x[0] + " < " + x[0] + " - " + x[0] + ") { " + x[0] + " - " + x[0] + " - " + x[0] + " } else { " + x[0] + " }" } else {
+        if (n == "min") { "if (" + x[0] + " < " + x[1] + ") { " + x[0] + " } else { " + x[1] + " }" } else {
+            if (n == "max") { "if (" + x[0] + " > " + x[1] + ") { " + x[0] + " } else { " + x[1] + " }" } else {
+                "if (" + x[0] + " < " + x[1] + ") { " + x[1] + " } else { if (" + x[0] + " > " + x[2] + ") { " + x[2] + " } else { " + x[0] + " } }"
+            }
+        }
+    };
+    KP e = kg_expr(src, kg_empty(), 0);
+    if (e.err != "") { return gt_err(e.err, c); }
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
+    return lw_expr(ws, e.id, a.env, a.g);
+}
+
+type LMM = { GT g; List(Str) names; List(Str) env; };
+
+LMM lw_mm_args(LW w, Int id, Int i, Int n, List(Str) env, LMM acc) {
+    if (i >= n) { return LMM {.g = acc.g, .names = acc.names, .env = env}; }
+    GT v = lw_expr(w, lw_kid(w, id, i), env, acc.g);
+    if (v.err != "") { return LMM {.g = v, .names = acc.names, .env = env}; }
+    Str nm = f"__mm{v.tmp}_{i}";
+    return lw_mm_args(w, id, i + 1, n, env_add(env, nm + ":" + v.val + ":" + v.ty), LMM {.g = v, .names = acc.names.concat([nm]), .env = env});
 }
 
 // cg_match / cg_match_arm / cg_match_arms_g.
@@ -686,6 +737,7 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     }
     if (is_expect_type(base.ty)) { return lw_expect_method(w, id, base, m, env); }
     Int midx = fn_index(fs, m);
+    if (midx < 0 && gk_list_verb(m) && str_has_prefix_cg(strip_owned_cg(base.ty), "List(")) { return lw_list_method(w, id, base, m, env); }
     if (midx >= 0 && fs.pts[midx] != "") {
         List(Str) mpl = split_rest_depth(fs.pts[midx], ", ");
         GT basew = widen_val(base, mpl[0]);
@@ -1513,23 +1565,12 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
     if (n == "print_bytes") { return lw_externb(w, id, "resid_print_bytes", l1s("List(Int)"), env, c); }
     if (n == "str_index_of") { return lw_extern(w, id, n, l3s("Str", "Str", "Int"), "Int", env, c); }
     if (n == "str_count") { return lw_extern(w, id, n, l2s("Str", "Str"), "Int", env, c); }
-    if (n == "abs_i64") { return lw_extern(w, id, n, l1s("Int"), "Int", env, c); }
-    if (n == "min_i64" || n == "max_i64") { return lw_extern(w, id, n, l2s("Int", "Int"), "Int", env, c); }
-    if (n == "clamp_i64") { return lw_extern(w, id, n, l3s("Int", "Int", "Int"), "Int", env, c); }
-    if (n == "list_sort_ints" || n == "list_reverse_ints") { return lw_extern(w, id, n, l1s("List(Int)"), "List(Int)", env, c); }
-    if (n == "list_sort_strs" || n == "list_reverse_strs") { return lw_extern(w, id, n, l1s("List(Str)"), "List(Str)", env, c); }
-    if (n == "list_sort_floats" || n == "list_reverse_floats") { return lw_extern(w, id, n, l1s("List(Float)"), "List(Float)", env, c); }
-    if (n == "list_contains_int") { return lw_externb(w, id, n, l2s("List(Int)", "Int"), env, c); }
-    if (n == "list_contains_str") { return lw_externb(w, id, n, l2s("List(Str)", "Str"), env, c); }
-    if (n == "list_contains_float") { return lw_externb(w, id, n, l2s("List(Float)", "Float"), env, c); }
-    if (n == "list_sum") { return lw_extern(w, id, n, l1s("List(Int)"), "Int", env, c); }
-    if (n == "list_sumf") { return lw_extern(w, id, n, l1s("List(Float)"), "Float", env, c); }
     return lw_gerr("builtin " + n, c);
 }
 
 // Names the builtin table covers.
 Bool lw_is_builtin(Str n) {
-    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count" || n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64" || n == "list_sort_ints" || n == "list_reverse_ints" || n == "list_sort_strs" || n == "list_reverse_strs" || n == "list_sort_floats" || n == "list_reverse_floats" || n == "list_contains_int" || n == "list_contains_str" || n == "list_contains_float" || n == "list_sum" || n == "list_sumf";
+    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "print_bytes" || n == "str_index_of" || n == "str_count";
 }
 
 // cg_print: `print(str_sb_finish(b))` fuses into resid_sb_print.
@@ -1593,6 +1634,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
             return GT {.pos = 0, .val = cv.val, .ty = conv_to, .cnt = 0, .err = "", .glines = cv.glines, .lines = cv.lines, .tmp = cv.tmp, .lbl = cv.lbl, .tail = false};
         }
         if (cg_arith_family(n)) { return lw_arith(w, id, n, env, c); }
+        if (n == "abs" || n == "min" || n == "max" || n == "clamp") { return lw_minmax(w, id, n, env, c); }
     }
     if (n == "Some" || n == "Ok" || n == "Err") { return lw_con(w, id, n, env, c); }
     if (n == "expect") {
@@ -2027,7 +2069,7 @@ ST lw_while(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     if (cond.err != "") { return st_err(cond.err, g); }
     if (cond.ty != "Bool") { return st_err("while condition must be Bool", g); }
     List(Str) l2 = cond.lines.concat(["br i1 " + cond.val + ", label %" + LBODY + ", label %" + LD, LBODY + ":"]);
-    ST g2 = ST {.pos = 0, .dead = false, .err = "", .env = env, .glines = cond.glines, .hlines = g.hlines, .lines = l2, .tmp = cond.tmp, .lbl = max_i64(cond.lbl, lb), .rety = g.rety};
+    ST g2 = ST {.pos = 0, .dead = false, .err = "", .env = env, .glines = cond.glines, .hlines = g.hlines, .lines = l2, .tmp = cond.tmp, .lbl = max(cond.lbl, lb), .rety = g.rety};
     EnvGT eb = if (pat) { let_bind(LetHead {.ok = true, .variant = lw_text(w, ci), .name = w.g.ns[ci].aux, .epos = 0}, lc, env, g2) } else { EnvGT {.env = env, .g = gt_of_st(g2)} };
     List(Str) benv = env_add(eb.env, "__loop:" + LB + ":" + LD);
     ST g3 = ST {.pos = 0, .dead = false, .err = "", .env = benv, .glines = eb.g.glines, .hlines = g.hlines, .lines = eb.g.lines, .tmp = eb.g.tmp, .lbl = g2.lbl, .rety = g.rety};
@@ -2310,9 +2352,15 @@ Str lw_inst_args(LW w, Int id, Int i, Str acc) {
 
 // cg_sort.
 GT lw_sort(LW w, Int id, List(Str) env, GT c) {
-    if (w.g.ns[id].nk != 2) { return lw_gerr("sort arity", c); }
+    Int nk = w.g.ns[id].nk;
+    if (nk != 1 && nk != 2) { return lw_gerr("sort arity", c); }
     GT v = lw_expr(w, lw_kid(w, id, 0), env, c);
     if (v.err != "") { return v; }
+    if (nk == 1) {
+        Str et = str_slice(v.ty, 5, str_len(v.ty) - 1);
+        Str sf = if (is_float_cg(et)) { "list_sort_floats" } else { if (num_norm_cg(et) == "Str") { "list_sort_strs" } else { "list_sort_ints" } };
+        return lw_rt1(v, "ptr", "@" + sf + "(ptr " + v.val + ")", v.ty);
+    }
     Int u = lw_kid(w, id, 1);
     if (lw_kind(w, u) != "named") { return gt_err("sort requires a behavior: sort(xs, using = Ord(T))", c); }
     PRes stripped = strip_reverse(lw_inst(w, lw_kid(w, u, 0)), 0);
@@ -2323,10 +2371,10 @@ GT lw_sort(LW w, Int id, List(Str) env, GT c) {
     Str head = str_slice(inner, 0, op);
     Str param = str_slice(inner, op + 1, str_len(inner) - 1);
     Int bi = b_index(w.fs, head, param);
-    if (bi < 0 && head == "Ord" && (int_fam(param) || is_float_cg(param))) {
+    if (bi < 0 && head == "Ord" && (int_fam(param) || is_float_cg(param) || param == "Str")) {
         Bool frev = depth % 2 == 1;
         Bool flt = is_float_cg(param);
-        Str sfn = if (flt) { "list_sort_floats" } else { "list_sort_ints" };
+        Str sfn = if (flt) { "list_sort_floats" } else { if (param == "Str") { "list_sort_strs" } else { "list_sort_ints" } };
         Str rfn = if (flt) { "list_reverse_floats" } else { "list_reverse_ints" };
         Int n1 = v.tmp + 1;
         Str r1 = f"%t{n1}";
@@ -2803,7 +2851,7 @@ List(Str) lr_region_at(List(Str) ls, Int i, Int h, Int b, List(Str) mv, ListBuf(
     ListBuf(Str) a1 = if (back) { lr_frees(fl, 0, mv, lab, lr_move_lines(mv, lab, 0, a0).push("call void @resid_scope_pop(i64 %lsc)")) } else { if (ret) { a0.push("call void @resid_scope_pop(i64 %lsc)") } else { a0 } };
     Str preg = if (phi) { str_slice(l, 0, str_find_char(l, 32, 0)) } else { "" };
     ListBuf(Str) a2 = a1.push(if (phi) { lr_phi(l, mv) } else { l });
-    ListBuf(Str) a3 = if (phi && list_contains_str(fl, preg)) { a2.push(lr_own_phi(l, preg, mv)) } else { a2 };
+    ListBuf(Str) a3 = if (phi && fl.contains(preg)) { a2.push(lr_own_phi(l, preg, mv)) } else { a2 };
     return lr_region_at(ls, i + 1, h, b, mv, a3);
 }
 
@@ -2818,7 +2866,7 @@ List(Str) lr_region_at(List(Str) ls, Int i, Int h, Int b, List(Str) mv, ListBuf(
 List(Str) lr_flat(List(Str) mv, Int i, List(Str) acc) {
     if (i >= mv.len()) { return acc; }
     List(Str) q = str_split(mv[i], "|");
-    Bool f = str_contains(q[3], "resid_dec_evac") && !list_contains_str(acc, q[1]);
+    Bool f = str_contains(q[3], "resid_dec_evac") && !acc.contains(q[1]);
     return lr_flat(mv, i + 1, if (f) { acc.concat([q[1]]) } else { acc });
 }
 
@@ -4066,8 +4114,8 @@ pub LR lr_parse(Str s) {
     return LR {.lo = str_parse_int(str_slice(s, 0, c)), .hi = str_parse_int(str_slice(s, c + 1, he)), .nz = c2 >= 0};
 }
 
-LR lr_meet(LR a, LR b) { return LR {.lo = max_i64(a.lo, b.lo), .hi = min_i64(a.hi, b.hi), .nz = a.nz || b.nz}; }
-pub LR lr_join(LR a, LR b) { return LR {.lo = min_i64(a.lo, b.lo), .hi = max_i64(a.hi, b.hi), .nz = lr_nz(a) && lr_nz(b)}; }
+LR lr_meet(LR a, LR b) { return LR {.lo = max(a.lo, b.lo), .hi = min(a.hi, b.hi), .nz = a.nz || b.nz}; }
+pub LR lr_join(LR a, LR b) { return LR {.lo = min(a.lo, b.lo), .hi = max(a.hi, b.hi), .nz = lr_nz(a) && lr_nz(b)}; }
 
 // The values of an integer type, or ok = false for one wider than 63 bits
 // of magnitude (UInt(64), Int(128), ...), whose values a range cannot hold.
@@ -4132,8 +4180,8 @@ LRO lr_op(Str op, LR a, LR b) {
         LRV p3 = lr_mul(a.hi, b.lo);
         LRV p4 = lr_mul(a.hi, b.hi);
         Bool ok = p1.ok && p2.ok && p3.ok && p4.ok;
-        Int lo = min_i64(min_i64(p1.v, p2.v), min_i64(p3.v, p4.v));
-        Int hi = max_i64(max_i64(p1.v, p2.v), max_i64(p3.v, p4.v));
+        Int lo = min(min(p1.v, p2.v), min(p3.v, p4.v));
+        Int hi = max(max(p1.v, p2.v), max(p3.v, p4.v));
         return LRO {.exact = ok, .r = LR {.lo = lo, .hi = hi, .nz = lr_nz(a) && lr_nz(b)}};
     }
     if (op == "/") {
@@ -4142,7 +4190,7 @@ LRO lr_op(Str op, LR a, LR b) {
         Int q2 = a.lo / b.hi;
         Int q3 = a.hi / b.lo;
         Int q4 = a.hi / b.hi;
-        return LRO {.exact = true, .r = LR {.lo = min_i64(min_i64(q1, q2), min_i64(q3, q4)), .hi = max_i64(max_i64(q1, q2), max_i64(q3, q4)), .nz = false}};
+        return LRO {.exact = true, .r = LR {.lo = min(min(q1, q2), min(q3, q4)), .hi = max(max(q1, q2), max(q3, q4)), .nz = false}};
     }
     if (op == "%") {
         if (b.lo < 1) { return LRO {.exact = false, .r = lr_full()}; }
@@ -4150,10 +4198,10 @@ LRO lr_op(Str op, LR a, LR b) {
         Int lo = if (a.lo >= 0) { 0 } else { 0 - m };
         Int hi = if (a.hi <= 0) { 0 } else { m };
         LR r = LR {.lo = lo, .hi = hi, .nz = false};
-        return LRO {.exact = true, .r = if (a.lo >= 0) { LR {.lo = 0, .hi = min_i64(a.hi, m), .nz = false} } else { r }};
+        return LRO {.exact = true, .r = if (a.lo >= 0) { LR {.lo = 0, .hi = min(a.hi, m), .nz = false} } else { r }};
     }
     if (op == "&") {
-        if (a.lo >= 0 && b.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = min_i64(a.hi, b.hi), .nz = false}}; }
+        if (a.lo >= 0 && b.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = min(a.hi, b.hi), .nz = false}}; }
         if (a.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = a.hi, .nz = false}}; }
         if (b.lo >= 0) { return LRO {.exact = true, .r = LR {.lo = 0, .hi = b.hi, .nz = false}}; }
     }

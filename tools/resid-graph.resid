@@ -341,7 +341,7 @@ List(Str) dedupe_sorted_acc(List(Str) sorted, Int i, Str last, Bool have_last, L
 
 List(Str) callees_for(Str raw_csv, List(Str) defined) {
     List(Str) filtered = filter_defined_acc(csv_split_or_empty(raw_csv), 0, defined, []);
-    return dedupe_sorted_acc(list_sort_strs(filtered), 0, "", false, []);
+    return dedupe_sorted_acc(sort(filtered), 0, "", false, []);
 }
 
 Str raw_for_name(Str fname, List(Str) names, List(Str) raws, Int i) {
@@ -598,7 +598,7 @@ Int main() {
         return 1;
     }
     Scan sc = scan_file(filesystem.read_all(cli.path));
-    List(Str) sorted_names = list_sort_strs(sc.names);
+    List(Str) sorted_names = sort(sc.names);
     Str out = if (cli.dot) { render_dot(sorted_names, sc.names, sc.raws) } else { render_text(sorted_names, sc.names, sc.raws) };
     print(out);
     return 0;

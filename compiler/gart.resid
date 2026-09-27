@@ -455,7 +455,7 @@ StrBuf ga_sources(StrBuf b, List(Str) ps, Int i) {
 @requires(filesystem)
 Bool ga_stream(Str path, GAX x, Int id, Int n) {
     if (id >= n) { return true; }
-    Int e = min_i64(id + 2048, n);
+    Int e = min(id + 2048, n);
     Int _in = resid_bulk_push();
     Bool ok = filesystem.append_hex(path, ga_nodes(StrBuf(), x, id, e).finish());
     Int _out = resid_bulk_pop();

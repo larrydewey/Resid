@@ -167,7 +167,7 @@ List(FileRef) sort_filerefs(List(FileRef) xs) {
 
 @requires(filesystem(readonly))
 List(Str) list_dir_sorted(Str path) {
-    return list_sort_strs(filesystem.list_dir(path));
+    return sort(filesystem.list_dir(path));
 }
 
 @requires(filesystem(readonly))

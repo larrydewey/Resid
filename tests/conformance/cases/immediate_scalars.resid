@@ -29,9 +29,9 @@ Int main() {
     Int one = 1;
     List(Int) xs = [0, one, 0 - one, big - 1, 0 - big, big, 0 - big - 1, imax, imin, 4096, 0 - 257];
     println("ints" + ints_str(xs, 0, ""));
-    println("sorted" + ints_str(list_sort_ints(xs), 0, ""));
-    println(f"{list_sum([big, 0 - big, big - 1, 1])}");
-    if (list_contains_int(xs, big) && list_contains_int(xs, 0 - big - 1) && !list_contains_int(xs, 7)) { println("contains ok"); }
+    println("sorted" + ints_str(sort(xs), 0, ""));
+    println(f"{([big, 0 - big, big - 1, 1]).sum()}");
+    if (xs.contains(big) && xs.contains(0 - big - 1) && !xs.contains(7)) { println("contains ok"); }
     Map(Int, Int) m0 = {};
     Map(Int, Int) m = squares(xs, 0, m0);
     Int shown3 = m.get(big) else { -9 };
@@ -47,8 +47,8 @@ Int main() {
     Float nz = 0.0 - zero;
     List(Float) fs = [0.0, nz, 1.5, -2.25, tiny, 0.0 - tiny, huge, 0.0 - huge, 3.141592653589793];
     println("floats" + floats_str(fs, 0, ""));
-    println("sorted" + floats_str(list_sort_floats(fs), 0, ""));
-    if (list_contains_float(fs, tiny) && list_contains_float(fs, 0.0)) { println("float contains ok"); }
+    println("sorted" + floats_str(sort(fs), 0, ""));
+    if (fs.contains(tiny) && fs.contains(0.0)) { println("float contains ok"); }
     Float nan = zero / zero;
     List(Float) ns = [nan];
     Float back = ns[0];

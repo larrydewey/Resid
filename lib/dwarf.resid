@@ -488,7 +488,7 @@ pub List(DF) el_units_info(DX x, Int off, ListBuf(DF) acc) {
     Int k = ab.idx.get(code.v) else { -1 };
     if (k < 0) { return el_units_info(x, next, acc); }
     DI cu0 = el_die(x, ab, k, u0, code.pos);
-    DU u1 = DU {.cu = off, .sbase = max_i64(cu0.sbase, 0), .abase = max_i64(cu0.abase, 0), .lbase = max_i64(cu0.lbase, 0), .lo = 0};
+    DU u1 = DU {.cu = off, .sbase = max(cu0.sbase, 0), .abase = max(cu0.abase, 0), .lbase = max(cu0.lbase, 0), .lo = 0};
     DI cu = el_die(x, ab, k, u1, code.pos);
     DU u = DU {.cu = off, .sbase = u1.sbase, .abase = u1.abase, .lbase = u1.lbase, .lo = cu.lo};
     Map(Int, Str) tm = {};

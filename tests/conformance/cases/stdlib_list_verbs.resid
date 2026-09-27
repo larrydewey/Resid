@@ -1,18 +1,18 @@
 
 Int main() {
     List(Int) xs = [3, 1, 2];
-    List(Int) sorted = list_sort_ints(xs);
-    List(Int) rev = list_reverse_ints(sorted);
-    println(f"{list_sum(rev)}");
-    println(f"{list_sum(xs)}");
-    if (list_contains_int(xs, 2)) {
+    List(Int) sorted = sort(xs);
+    List(Int) rev = sorted.reverse();
+    println(f"{rev.sum()}");
+    println(f"{xs.sum()}");
+    if (xs.contains(2)) {
         println("has 2");
     }
-    List(Str) ss = list_sort_strs(["pear", "apple", "fig"]);
+    List(Str) ss = sort(["pear", "apple", "fig"]);
     println(str_join(ss, ","));
-    List(Str) rs = list_reverse_strs(ss);
+    List(Str) rs = ss.reverse();
     println(str_join(rs, ","));
-    if (list_contains_str(ss, "fig")) {
+    if (ss.contains("fig")) {
         println("has fig");
     }
     return 0;
