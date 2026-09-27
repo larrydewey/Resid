@@ -1,0 +1,5 @@
+behavior Area(T) { Float area(T s); }
+type Sq = { Float s; };
+Int f(Sq s) { return 1; }
+Area(Sq) = f;
+Int main() { return 0; }

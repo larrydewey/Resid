@@ -52,7 +52,9 @@ Int main() {
   truncates silently.
 - **Behaviors instead of interfaces.** How a type is ordered or shown is
   knowledge you name (`Ord(Task) = by_priority;`), not an interface it
-  implements.
+  implements. Declare your own (`behavior Area(T) { Float area(T s); }`)
+  and write generic functions and records (`T first(List(T) xs)`),
+  instantiated at compile time before reduction.
 - **Self-hosted, no C.** The compiler is written in Resid and compiles
   itself in about a second; the runtime is Resid too, and binaries are
   static executables with no C library.

@@ -1,0 +1,59 @@
+type Circle = { Float r; };
+type Square = { Float side; };
+type Pair(T) = { T a; T b; };
+type Celsius = { Float deg; };
+type Kelvin = { Float deg; };
+
+behavior Area(T) {
+    Float area(T shape);
+}
+behavior Shape(T) {
+    Float surface(T s);
+    Float perimeter(T s);
+}
+behavior Convert(A, B) {
+    B convert(A x);
+}
+
+Float circle_area(Circle c) { return 3.0 * c.r * c.r; }
+Float sq_area(Square s) { return s.side * s.side; }
+Float sq_perimeter(Square s) { return 4.0 * s.side; }
+Kelvin c_to_k(Celsius c) { return Kelvin {.deg = c.deg + 273.15}; }
+Area(Circle) = circle_area;
+Area(Square) = sq_area;
+Shape(Square) = { .surface = sq_area, .perimeter = sq_perimeter };
+Convert(Celsius, Kelvin) = c_to_k;
+
+@needs(Show(T))
+Str show_pair(Pair(T) p) { return f"<{p.a}|{p.b}>"; }
+Show(Pair(T)) = show_pair;
+
+@needs(Area(T))
+Float total(List(T) xs) { return total_at(xs, 0, 0.0); }
+@needs(Area(T))
+Float total_at(List(T) xs, Int i, Float acc) {
+    if (i >= xs.len()) { return acc; }
+    return total_at(xs, i + 1, acc + area(xs[i]));
+}
+
+@needs(Ord(T))
+T biggest(List(T) xs) { return sort(xs)[xs.len() - 1]; }
+
+@needs(Eq(T))
+Bool has(List(T) xs, T x, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == x) { return true; }
+    return has(xs, x, i + 1);
+}
+
+Int main() {
+    Circle c = Circle {.r = 2.0};
+    Square s = Square {.side = 3.0};
+    Kelvin k = convert(Celsius {.deg = 0.0});
+    List(Square) sqs = [s, Square {.side = 1.0}];
+    Pair(Int) p = Pair {.a = 1, .b = 2};
+    println(f"{area(c)} {area(s)} {surface(s)} {perimeter(s)} {k.deg}");
+    println(f"{total(sqs)} {biggest([3, 9, 4])} {biggest(["b", "a"])} {has([1, 2], 2, 0)}");
+    println(f"{p} {show(p)} {compare(1, 2)} {compare("b", "a")} {hash(5) == hash(5)} {show(7)}");
+    return 0;
+}

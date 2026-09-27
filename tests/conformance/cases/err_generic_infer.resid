@@ -1,0 +1,2 @@
+List(T) empty() { List(T) e = []; return e; }
+Int main() { println(f"{empty().len()}"); List(Int) z = empty(); return z.len(); }

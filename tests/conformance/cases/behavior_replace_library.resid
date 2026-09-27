@@ -1,0 +1,11 @@
+// The application's instance replaces a library's for its type,
+// everywhere, the library's own code included.
+import "repllib";
+
+Str my_show(Coin c) { return f"app {c.v}"; }
+Show(Coin) = my_show;
+
+Int main() {
+    println(f"{Coin {.v = 1}} {lib_label(Coin {.v = 2})}");
+    return 0;
+}

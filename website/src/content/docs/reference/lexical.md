@@ -19,8 +19,20 @@ language server shows them on hover and the knowledge graph records them.
 
 Identifiers are letters, digits and `_`, not starting with a digit.
 Keywords: `if else match for in while break continue return type import
-pub as with spawn sandbox test rt lambda true false`. Built-in type names
+pub as with spawn sandbox test rt lambda true false behavior`. Built-in type names
 (`Int`, `Str`, `List`, `Option`, …) are ordinary identifiers.
+
+## Names
+
+A name's case says what it is (`E0222`):
+
+- values, functions, parameters, fields and behavior verbs start with a
+  lowercase letter or `_`;
+- types, behaviors and sum variants start with an uppercase letter;
+- a single uppercase letter (`T`, `K`, `V`, `N`) is a type parameter and
+  never names a declared type.
+
+So a value never collides with a type, and `(T)x` is always a cast.
 
 ## Literals
 

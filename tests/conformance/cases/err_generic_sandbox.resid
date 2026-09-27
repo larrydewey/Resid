@@ -1,0 +1,15 @@
+sandbox () {
+    @needs(Show(T))
+    Str label(T x) { return "[" + show(x) + "]"; }
+}
+type Task = { Str path; };
+@requires(filesystem)
+Str show_task(Task t) { return filesystem.read_all(t.path); }
+Show(Task) = show_task;
+
+@requires(filesystem)
+Int main() {
+    println(label(Task {.path = "/etc/hostname"}));
+    println(label(3));
+    return 0;
+}

@@ -1,0 +1,2 @@
+T biggest(List(T) xs) { return sort(xs)[0]; }
+Int main() { return biggest([1]); }

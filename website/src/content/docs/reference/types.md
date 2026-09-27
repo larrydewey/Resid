@@ -34,6 +34,20 @@ type Shape = Circle(Int) | Rect(Point) | Empty;
 type Option(T) = Some(T) | None;         // generic
 ```
 
+## Generic types
+
+```text
+type Pair(T) = { T a; T b; };
+type Entry(K, V) = { K key; V value; Int hits; };
+type Tree(T) = Leaf | Node(T);
+```
+
+Type parameters are single uppercase letters. A generic record's literal
+takes its type arguments from the expected type or its field values
+(`Pair {.a = 1, .b = 2}` is a `Pair(Int)`); each concrete use gets its own
+layout. A record's display leaves out the type arguments
+(`Pair { a: 1, b: 2 }`). See [generic functions](/Resid/behaviors/generics/).
+
 A variant carries at most one payload (use a record for several values).
 Values are built by calling the variant (`Circle(2)`) or naming it
 (`Empty`) and taken apart with `match`.
@@ -57,5 +71,7 @@ constrained value is usable wherever its base type is.
 ## Equality
 
 `==` and `!=` compare numbers (with the numeric widening rules), `Bool` and
-`Str`. Records, lists, maps, sets, options and sums are compared by their
-parts; `==` on them is a compile-time error.
+`Str`. On a type with an `Eq` instance they call it, and `<`, `<=`, `>`,
+`>=` on a type with an `Ord` instance call it (`Str` has one). Other
+records, lists, maps, sets, options and sums are compared by their parts;
+`==` on them is a compile-time error.

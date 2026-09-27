@@ -1,0 +1,3 @@
+import "orphlib";
+
+Int main() { return 0; }

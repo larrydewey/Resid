@@ -306,6 +306,62 @@ rest keep their checks (`--no-facts` keeps all). Self-compile: 1,610 of
 as `facts`. Conformance case `range_facts_discharge` covers the
 boundaries, ending in a MIN / -1 that must still trap.
 
+### 0zr. Behaviors and generics, module namespaces, naming case (2026-09-27)
+
+User-defined behaviors and generic functions and records, designed with
+the user to stay clear of trait systems (spec §7, §8, §11, §12, §22, §38):
+
+- **Naming case (E0222).** Types, behaviors and variants start uppercase;
+  values, functions, parameters and fields lowercase; a single uppercase
+  letter is a type parameter and names no type. The repository's
+  uppercase value names and one-letter test types were renamed. An unknown
+  type name is now an error (it had been accepted silently), with a
+  did-you-mean hint.
+- **Namespaces (E0223).** Modules were one flat namespace and `import ...
+  as M` did not qualify anything ("function f is defined more than once").
+  Import resolution now renames a name two modules export per module
+  (`name__ns_<path>`); `M.name` picks one, a module's own names win, and an
+  unqualified use that could mean either is E0223 at that use. Displayed
+  names drop the suffix.
+- **Generics.** A one-letter type parameter makes a function or record
+  generic; `Int(N)` ranges over widths. `@needs(Ord(T), ...)` lists what a
+  body sorts, shows, compares or calls on a T (E0226). Calls infer type
+  parameters from arguments, then the expected type (E0227); lambdas and
+  builders passed to generic calls take their types from the other
+  arguments. Instantiation (`compiler/mono.resid`) runs during checking, in
+  rounds: the checker logs copies to make, calls and literals to respell,
+  and concrete instances display and sort need; mono adds them and checks
+  again until nothing new is logged, then drops the generic declarations
+  and lays out each generic record per concrete type. Reduction and
+  lowering see only concrete code. Polymorphic recursion stops (E0228).
+- **Behaviors.** `behavior Name(T, ...) { Ret verb(...); ... }` declares
+  verbs; instances give a function or a record of functions, for concrete,
+  partly concrete or generic types, over one or several types. Verb calls
+  resolve at compile time. `using =` overrides at a verb call or a generic
+  call (the copy is made with the override; `Reverse` swaps arguments).
+  `==`/`!=` call Eq and `<`... call Ord for types without built-in
+  comparison. Coherence: overlapping instances at one level are E0225;
+  levels app > library > prelude, a higher one replacing a lower one
+  program-wide (the replaced node leaves the program); a library declares
+  instances only of its own behaviors or types (E0224).
+- **Prelude.** Eq, Ord, Hash, Show, Serialize and Allocator are ordinary
+  declarations appended to every program (not the runtime), with generic
+  instances for the numeric family; unused prelude functions are dropped
+  after checking. Instance validation is generic (from the prototypes);
+  the special-case shapes are gone.
+- **Authority.** A generic function's copy takes its authority from its
+  caller (its own body is checked against its own @requires), E0219 names
+  the copy (`label(Task)`), and a copy of a generic declared in a sandbox
+  is placed in the same sandbox.
+- Fixes found on the way: float display printed 10.0 as `1e+01` (small
+  exponents now print positionally); an if-expression arm that is an
+  integer literal adopts a sized numeric arm; a missing source file was
+  compiled as an empty program; `"\x1f"` separators in the compiler were
+  the literal text `x1f` (Resid strings have no `\x` escape), which lost a
+  `pub` generic type's parameters.
+- The graph artifact counts generic declarations and the prelude as known
+  compile-time knowledge.
+
 ### 0zq. spawn is concurrent (2026-09-27)
 
 Until now `spawn` started a thread and joined it at once, so no work ever

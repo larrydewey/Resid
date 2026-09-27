@@ -111,3 +111,25 @@ the constraint.
 ## Type aliases
 
 `type Meters = Int;` names a type without adding a constraint.
+
+## Generic types
+
+A record or sum can take type parameters, single uppercase letters:
+
+```resid
+type Pair(T) = { T a; T b; };
+
+Int main() {
+    Pair(Int) p = Pair {.a = 1, .b = 2};
+    Pair(Str) q = Pair {.a = "x", .b = "y"};
+    println(f"{p.a + p.b} {q}");
+    return 0;
+}
+```
+
+```text title="Output"
+3 Pair { a: "x", b: "y" }
+```
+
+Functions can be generic too; see
+[Generic functions and records](/Resid/behaviors/generics/).

@@ -1359,8 +1359,8 @@ GXT gx_table_empty(Str src) {
 
 // The generic parameters of a type declaration ("" when none).
 Str gx_gparams(Str aux) {
-    if (!str_contains(aux, "\x1f")) { return aux; }
-    List(Str) ps = str_split(aux, "\x1f");
+    if (!str_contains(aux, kg_us())) { return aux; }
+    List(Str) ps = str_split(aux, kg_us());
     return ps[1];
 }
 

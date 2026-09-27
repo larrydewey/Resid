@@ -1,0 +1,23 @@
+type Task = { Str name; Int p; };
+Int by_p(Task a, Task b) { return a.p - b.p; }
+Int by_name(Task a, Task b) { return compare(a.name, b.name); }
+Ord(Task) = by_p;
+
+@needs(Ord(T))
+T top(List(T) xs) { return sort(xs)[0]; }
+
+@needs(Ord(T))
+Bool before(T a, T b) { return compare(a, b) < 0; }
+
+behavior Area(T) { Float area(T s); }
+type Sq = { Float side; };
+Float sq_area(Sq s) { return s.side * s.side; }
+Float half(Sq s) { return s.side * s.side / 2.0; }
+Area(Sq) = sq_area;
+
+Int main() {
+    List(Task) ts = [Task {.name = "b", .p = 1}, Task {.name = "a", .p = 2}];
+    println(f"{top(ts).name} {top(ts, using = by_name).name} {top([3, 1, 2])} {top([3, 1, 2], using = Reverse(Ord(Int)))}");
+    println(f"{before(1, 2)} {before(1, 2, using = Reverse(Ord(Int)))} {area(Sq {.side = 2.0})} {area(Sq {.side = 2.0}, using = half)}");
+    return 0;
+}

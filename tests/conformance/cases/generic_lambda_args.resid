@@ -1,0 +1,21 @@
+// Lambdas and builders passed to generic functions take their types
+// from the other arguments.
+type Score = { Str who; Int points; };
+
+List(T) keep_if(List(T) xs, Bool closure(T) ok, Int i, ListBuf(T) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return keep_if(xs, ok, i + 1, if (ok(xs[i])) { acc.push(xs[i]) } else { acc });
+}
+
+List(U) map_all(List(T) xs, U closure(T) f, Int i, ListBuf(U) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return map_all(xs, f, i + 1, acc.push(f(xs[i])));
+}
+
+Int main() {
+    List(Score) xs = [Score {.who = "ada", .points = 9}, Score {.who = "bob", .points = 4}, Score {.who = "cy", .points = 7}];
+    Int cut = 5;
+    List(Score) good = keep_if(xs, lambda(s) { s.points > cut }, 0, ListBuf());
+    println(f"{map_all(good, lambda(s) { s.who }, 0, ListBuf())}");
+    return 0;
+}

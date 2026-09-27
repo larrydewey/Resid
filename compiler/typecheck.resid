@@ -832,18 +832,66 @@ pub Str imp_apply_vis(Str src, Str vis, Str path) {
 // Names `s` exports as ",a,b,": functions `vis` exposes, types, variants,
 // behaviors and their verbs.
 pub Str imp_exports(Str s, Str vis) {
-    List(Str) ds = str_split(imp_fn_decls(s, 0, 0, false, ""), ",");
-    return imp_type_names(s, 0, 0, "", imp_exported_fns(ds, 0, vis, ","));
+    IDN d = imp_decl_names(s, 0, 0, false, "", "", ",");
+    List(Str) ds = str_split(d.fns, ",");
+    return imp_exported_fns(ds, 0, vis, d.tys);
+}
+
+// One pass over a module: its functions ("+name"/"-name" by `pub`) and
+// its type, variant, behavior and verb names (",a,b,").
+type IDN = { Str fns; Str tys; };
+
+pub IDN imp_decl_names(Str s, Int pos, Int depth, Bool sawpub, Str prev, Str fns, Str tys) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return IDN {.fns = fns, .tys = tys}; }
+    if (depth == 0 && t.text == "type") {
+        Tok nm = lex_tok(s, t.pos);
+        Int end = skip_decl(s, nm.pos, 0);
+        Str body = str_slice(s, nm.pos, end);
+        Str vs = if (imp_has_bar(body, 0, 0)) { imp_variants(body, 0, 0, "=", "") } else { "" };
+        return imp_decl_names(s, end, 0, false, ";", fns, imp_add_name(tys, nm.text) + vs);
+    }
+    if (depth == 0 && t.text == "behavior") {
+        Tok nm = lex_tok(s, t.pos);
+        Tok o = lex_tok(s, nm.pos);
+        Int cl = if (o.text == "(") { imp_close_paren(s, o.pos, 0) } else { nm.pos };
+        Tok b = lex_tok(s, cl);
+        if (b.text == "{") {
+            Int end = skip_decl(s, cl, 0);
+            Str verbs = imp_verbs(str_slice(s, b.pos, end - 1), 0, "", "");
+            return imp_decl_names(s, end, 0, false, "}", fns, imp_add_name(tys, nm.text) + verbs);
+        }
+    }
+    if (t.text == "{") { return imp_decl_names(s, t.pos, depth + 1, sawpub, t.text, fns, tys); }
+    if (t.text == "}") { return imp_decl_names(s, t.pos, depth - 1, sawpub && depth != 1, t.text, fns, tys); }
+    if (depth == 0 && t.text == ";") { return imp_decl_names(s, t.pos, depth, false, t.text, fns, tys); }
+    if (depth == 0 && t.text == "pub") { return imp_decl_names(s, t.pos, depth, true, t.text, fns, tys); }
+    if (depth == 0 && t.kind == "ident" && prev != "behavior") {
+        Tok o = lex_tok(s, t.pos);
+        if (o.text == "(") {
+            Int cl = imp_close_paren(s, o.pos, 0);
+            Tok b = lex_tok(s, cl);
+            if (b.text == "{") {
+                Str mark = if (sawpub) { "+" } else { "-" };
+                return imp_decl_names(s, cl, depth, sawpub, ")", fns + "," + mark + t.text, tys);
+            }
+        }
+    }
+    return imp_decl_names(s, t.pos, depth, sawpub, t.text, fns, tys);
 }
 
 pub Str imp_exported_fns(List(Str) ds, Int i, Str vis, Str acc) {
-    if (i >= ds.len()) { return acc; }
+    Map(Str, Bool) seen = {};
+    return imp_exported_at(ds, i, vis, seen, StrBuf().push(acc));
+}
+
+pub Str imp_exported_at(List(Str) ds, Int i, Str vis, Map(Str, Bool) seen, StrBuf acc) {
+    if (i >= ds.len()) { return acc.finish(); }
     Str d = ds[i];
-    if (d == "") { return imp_exported_fns(ds, i + 1, vis, acc); }
-    Str nm = str_slice(d, 1, str_len(d));
-    Bool shown = vis == "" || (vis == "*" && str_starts_with(d, "+")) || (vis != "*" && str_contains(vis, "," + nm + ","));
-    Bool dup = str_contains(acc, "," + nm + ",");
-    return imp_exported_fns(ds, i + 1, vis, if (shown && !dup && nm != "main") { acc + nm + "," } else { acc });
+    Str nm = if (d == "") { "" } else { str_slice(d, 1, str_len(d)) };
+    Bool shown = d != "" && (vis == "" || (vis == "*" && str_starts_with(d, "+")) || (vis != "*" && str_contains(vis, "," + nm + ",")));
+    Bool add = shown && !seen.contains(nm) && nm != "main";
+    return imp_exported_at(ds, i + 1, vis, if (add) { seen.insert(nm, true) } else { seen }, if (add) { acc.push(nm).push(",") } else { acc });
 }
 
 // Type, variant, behavior and verb names declared at depth 0 (and verbs
@@ -919,9 +967,8 @@ type IMs = { List(Str) paths; List(Str) exps; List(Str) imps; Str done; };
 @requires(filesystem(readonly))
 pub IMs imp_scan(Str path, Str src0, Str vis, Int depth, Str depmap, IMs acc) {
     if (depth > 8 || str_contains(acc.done, ";" + path + ";")) { return acc; }
-    Str src = if (vis == "") { src0 } else { imp_apply_vis(src0, vis, path) };
     Str dir = imp_dir_of(path, str_len(path) - 1);
-    List(Str) lines = str_split(src, "\n");
+    List(Str) lines = str_split(src0, "\n");
     Str ims = imp_scan_imports(lines, 0, dir, depmap, "");
     IMs a1 = IMs {.paths = acc.paths.concat([path]), .exps = acc.exps.concat([imp_exports(src0, vis)]), .imps = acc.imps.concat([ims]), .done = acc.done + path + ";"};
     return imp_scan_subs(lines, 0, dir, depth, depmap, a1);
@@ -1144,7 +1191,59 @@ pub Int loc_quotes(Str t, Int i, Int n) {
 pub Str with_builtin_types(Str src) {
     Str a = if (str_contains(src, "type SourceLoc ")) { "" } else { "\ntype SourceLoc = { Str file; Int line; Int col; };" };
     Str b = if (str_contains(src, "type RegionError ")) { "" } else { "\ntype RegionError = { Str message; };" };
-    return src + a + b + "\n";
+    // The runtime module implements the language, so it has no prelude.
+    Str p = if (resid_rtmod()) { "" } else { prelude_text() };
+    return src + a + b + "\n" + p;
+}
+
+// The core behaviors (spec §11, §32) as ordinary declarations, with the
+// instances of the built-in types; generic ones are copied only for the
+// types a program uses.
+pub Str prelude_text() {
+    List(Str) ls = [
+        "// resid prelude (spec 11)",
+        "behavior Eq(T) { Bool eq(T a, T b); }",
+        "behavior Ord(T) { Int compare(T a, T b); }",
+        "behavior Hash(T) { Int hash(T x); }",
+        "behavior Show(T) { Str show(T x); }",
+        "behavior Serialize(T) { Str serialize(T x); }",
+        "behavior Allocator(T) { T allocate(); }",
+        "Bool resid_eq_int(Int(N) a, Int(N) b) { return a == b; }",
+        "Bool resid_eq_uint(UInt(N) a, UInt(N) b) { return a == b; }",
+        "Bool resid_eq_float(Float(N) a, Float(N) b) { return a == b; }",
+        "Bool resid_eq_str(Str a, Str b) { return a == b; }",
+        "Bool resid_eq_bool(Bool a, Bool b) { return a == b; }",
+        "Eq(Int(N)) = resid_eq_int;",
+        "Eq(UInt(N)) = resid_eq_uint;",
+        "Eq(Float(N)) = resid_eq_float;",
+        "Eq(Str) = resid_eq_str;",
+        "Eq(Bool) = resid_eq_bool;",
+        "Int resid_ord_int(Int(N) a, Int(N) b) { return if (a < b) { -1 } else { if (a > b) { 1 } else { 0 } }; }",
+        "Int resid_ord_uint(UInt(N) a, UInt(N) b) { return if (a < b) { -1 } else { if (a > b) { 1 } else { 0 } }; }",
+        "Int resid_ord_float(Float(N) a, Float(N) b) { return if (a < b) { -1 } else { if (a > b) { 1 } else { 0 } }; }",
+        "Int resid_ord_str(Str a, Str b) { return resid_ord_str_at(a, b, 0, str_len(a), str_len(b)); }",
+        "Int resid_ord_str_at(Str a, Str b, Int i, Int na, Int nb) { if (i >= na || i >= nb) { return na - nb; } Int d = str_char_at(a, i) - str_char_at(b, i); return if (d != 0) { d } else { resid_ord_str_at(a, b, i + 1, na, nb) }; }",
+        "Ord(Int(N)) = resid_ord_int;",
+        "Ord(UInt(N)) = resid_ord_uint;",
+        "Ord(Float(N)) = resid_ord_float;",
+        "Ord(Str) = resid_ord_str;",
+        "Int resid_hash_str(Str s) { return resid_hash_at(s, 0, 1469598103934665603); }",
+        "Int resid_hash_at(Str s, Int i, Int h) { return if (i >= str_len(s)) { h } else { resid_hash_at(s, i + 1, wrapping_mul(h ^ str_char_at(s, i), 1099511628211)) }; }",
+        "Int resid_hash_int(Int(N) x) { return resid_hash_str(f\"{x}\"); }",
+        "Int resid_hash_uint(UInt(N) x) { return resid_hash_str(f\"{x}\"); }",
+        "Int resid_hash_bool(Bool b) { return if (b) { 1 } else { 0 }; }",
+        "Hash(Int(N)) = resid_hash_int;",
+        "Hash(UInt(N)) = resid_hash_uint;",
+        "Hash(Str) = resid_hash_str;",
+        "Hash(Bool) = resid_hash_bool;",
+        "@needs(Show(T))",
+        "Str resid_show(T x) { return f\"{x}\"; }",
+        "@needs(Show(T))",
+        "Str resid_serialize(T x) { return f\"{x}\"; }",
+        "Show(T) = resid_show;",
+        "Serialize(T) = resid_serialize;"
+    ];
+    return str_join(ls, "\n") + "\n";
 }
 
 @requires(filesystem(readonly))

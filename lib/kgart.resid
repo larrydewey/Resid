@@ -217,7 +217,9 @@ pub Int gn_chain(GA a, Int id, Int depth) {
     println(pad + gn_line(a, n));
     if (n.def >= 0 && depth == 0) { println("  def " + gn_line(a, gn_read(a, n.def))); }
     Int rep = if (depth == 0 && n.from < 0) { gn_replaced(a, id, 0, -1) } else { -1 };
-    if (rep >= 0) { println("  reduced to " + gn_line(a, gn_read(a, rep))); }
+    GN rn = if (rep >= 0) { gn_read(a, rep) } else { n };
+    Str how = if (rn.rule == "instantiate") { "  instantiated as " } else { if (rn.rule == "replaces") { "  replaced by " } else { "  reduced to " } };
+    if (rep >= 0) { println(how + gn_line(a, rn)); }
     if (n.from < 0 || depth > 64) { return 0; }
     return gn_chain(a, n.from, depth + 1);
 }
@@ -256,7 +258,7 @@ pub List(GI) ga_index_at(GA a, Int id, ListBuf(GI) acc) {
 
 // Declarations bind a name; uses (ref, call) point at one by def.
 pub Bool gi_decl(Str k) {
-    return k == "fn" || k == "param" || k == "bind" || k == "rbind" || k == "for" || k == "sfield" || k == "struct" || k == "lparam";
+    return k == "fn" || k == "param" || k == "bind" || k == "rbind" || k == "for" || k == "sfield" || k == "struct" || k == "lparam" || k == "behavior" || k == "bdecl";
 }
 
 // Ids of the declarations named `name`.

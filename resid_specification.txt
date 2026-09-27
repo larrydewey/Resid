@@ -558,6 +558,14 @@ complement representation, for bit-level code:
 Bindings are immutable. Shadowing is forbidden everywhere.
 There are no assignment operators.
 
+Names have a fixed case (E0222). Values, functions,
+parameters, fields and behavior verbs start with a
+lowercase letter or `_`; types, behaviors and sum variants
+start with an uppercase letter. A single uppercase letter
+(T, K, V, N) is a type parameter (§12) and never names a
+declared type, so a value can never collide with a type and
+`(T)x` is always a cast.
+
 Discard:
 
   _ = expression;
@@ -577,6 +585,33 @@ Named arguments are permitted:
   draw(x = 10, y = 20, color = red);
 
 Entry point: Int main().
+
+Generic functions. A function whose signature names a type
+parameter (§12) is generic:
+
+  T first(List(T) xs) { return xs[0]; }
+  Int(N) clamp_pos(Int(N) x) { return if (x < 0) { 0 } else { x }; }
+
+A call fixes each parameter from its arguments, else from
+the expected type of the call (E0227 when neither does),
+and calls a copy of the function made for those types.
+Copies are made at compile time, before reduction, so the
+reducer sees only concrete functions; every copy is
+recorded in the knowledge graph. A generic function that
+calls itself at ever larger types (polymorphic recursion)
+is rejected (E0228).
+
+A generic function states the behaviors it relies on:
+
+  @needs(Ord(T), Show(T))
+  Str top(List(T) xs) { return f"{sort(xs)[0]}"; }
+
+Inside its body, sorting, displaying, comparing (==, <) or
+calling a behavior's verb on a T requires the matching
+need (E0226); every call checks that each need is met for
+its types (an instance, or a built-in one). A call may
+override a need: `top(xs, using = Reverse(Ord(Int)))` or
+`top(tasks, using = by_deadline)`.
 
 
 ==================================================
@@ -607,14 +642,86 @@ capabilities (@requires) are the sole authorization surface.
 11. BEHAVIORS
 ==================================================
 
-Behaviors are ordinary compile-time knowledge.
+Behaviors are ordinary compile-time knowledge: a behavior
+names what can be done with a type, and an instance states
+how, for one type, from outside the type.
+
+A behavior declares one or more functions as prototypes;
+each prototype is a verb:
+
+  behavior Area(T) {
+      Float area(T shape);
+  }
+  behavior Shape(T) {
+      Float surface(T s);
+      Float perimeter(T s);
+  }
+  behavior Convert(A, B) {
+      B convert(A x);
+  }
+
+An instance gives the function (or, for several verbs, a
+record of functions):
+
+  Area(Circle) = circle_area;
+  Shape(Square) = { .surface = sq_area, .perimeter = sq_perimeter };
+  Convert(Celsius, Kelvin) = c_to_k;
+  Show(Pair(T)) = show_pair;      // every T; show_pair has @needs(Show(T))
+
+The instance's functions must have the prototypes'
+signatures for its types. A verb call picks the instance
+for its argument types (and the expected type, for a type
+that appears only in the result) at compile time and calls
+its function: `area(c)` is `circle_area(c)`. `using = f`,
+`using = B(T)` or `using = Reverse(..)` overrides the choice
+at one call.
+
+There are no default bodies: a type gets an instance only
+from a declaration, which may name a generic function
+(`Eq(Task) = eq_from_ord;` with eq_from_ord needing
+Ord(T)), so a derivation is explicit and recorded.
+
+Coherence. A program has at most one instance per behavior
+and type. Two instances at the same level whose types
+overlap (Show(Pair(T)) and Show(Pair(Int))) are an error
+(E0225): there is no specialization. Levels rank the
+application over a library over the prelude; a higher
+level's instance replaces a lower one for its type
+program-wide (recorded in the graph). A library may declare
+an instance only of its own behaviors or types (E0224); the
+application may declare any.
+
+Authority. An instance's function is called where the
+behavior is used. A generic function's authority is its
+own @requires plus what its instances need, checked at each
+concrete call: the caller of `label(task)` holds what
+Show(Task)'s function uses.
+
+Resid has no trait or interface system (§38). A type never
+declares what it implements; behaviors are not methods on a
+type; no value of an unknown type dispatches at run time
+(every instance is resolved at compile time); behaviors do
+not form hierarchies (a function lists each need); and a
+behavior contains no types of its own.
+
+Core behaviors. Eq, Ord, Hash, Show, Serialize and
+Allocator are ordinary behaviors declared in the prelude
+(§32), with instances for the built-in types:
+
+  behavior Eq(T) { Bool eq(T a, T b); }
+  behavior Ord(T) { Int compare(T a, T b); }
+  behavior Hash(T) { Int hash(T x); }
+  behavior Show(T) { Str show(T x); }
+  behavior Serialize(T) { Str serialize(T x); }
+  behavior Allocator(T) { T allocate(); }
 
   Ord(Int) = ... ;
   sort(values, using = Reverse(Ord(Int)));
 
-Unique behaviors are inserted automatically; ambiguity
-requires explicit selection. sort(xs) on numeric or Str
-elements uses their built-in Ord.
+sort(xs) on numeric or Str elements uses their built-in
+order; on other types, the element type's Ord instance.
+== and != on a type with an Eq instance, and < <= > >= on a
+type with an Ord instance, call it.
 
 Lists: xs.contains(v) (integer, Float or Str elements),
 xs.reverse(), xs.sum() (List(Int) or List(Float)). A
@@ -627,7 +734,8 @@ the whole family (see §6.6).
 Show(T) = f, with f : (T) -> Str, is how a T is written:
 an f-string hole of type T calls f, including a record
 field of type T. Without an instance, numbers, Bool, Str,
-Dec, lists and records have built-in text (see §14).
+Dec, lists and records have built-in text (see §14);
+numbers, Bool and Str cannot take a Show instance.
 
 
 ==================================================
@@ -636,6 +744,16 @@ Dec, lists and records have built-in text (see §14).
 
 Product:  type Point = { x: Int, y: Int };
 Sum:      type Option(T) = Some(T) | None;
+Generic:  type Pair(T) = { T a; T b; };
+          type Entry(K, V) = { K key; V value; Int hits; };
+
+Type parameters are single uppercase letters (§7). In a
+width position (`Int(N)`, `UInt(N)`, `Float(N)`) a
+parameter ranges over widths. A generic record's literal
+takes its type arguments from the expected type or from its
+field values (`Pair {.a = 1, .b = 2}` is a Pair(Int)); each
+generic record used at concrete types is laid out per type.
+An unknown type name of more than one letter is an error.
 Constraint: type Positive = Int[value > 0];
             type Positive = Int where value > 0;
 
@@ -903,6 +1021,14 @@ knowledge cache, so there is nothing to read or write.)
 
 Default private; `pub` exports.
 
+Each module has its own namespace. A name two imported
+modules both export is qualified with the module's alias
+(`import "a.resid" as a;` then `a.f()`, `a.Node`); a
+module's own declarations win over imported ones; and an
+unqualified use that could mean either import is an error
+(E0223) at that use. A local binding of the same name is not
+a use.
+
 
 ==================================================
 23. RESULT / OPTION SUGAR
@@ -1071,6 +1197,14 @@ written readable by their owner only
   // concurrency
   spawn (cap1, cap2) { body }
 
+  // generics and behaviors
+  T first(List(T) xs) { … }
+  @needs(Ord(T)) T biggest(List(T) xs) { … }
+  behavior Area(T) { Float area(T shape); }
+  Area(Circle) = circle_area;
+  Shape(Square) = { .surface = f, .perimeter = g };
+  biggest(xs, using = Reverse(Ord(Int)))
+
   // types
   type T = { f: Type };
   type T = A(Type) | B;
@@ -1158,7 +1292,23 @@ Numeric operators obey the interoperability rules of §6.
                    compound-statement
 
   declaration ::= [ "pub" ] (function-def | type-def
-                  | behavior-def | capability-annotation declaration)
+                  | behavior-def | instance-def
+                  | annotation declaration)
+
+  annotation   ::= capability-annotation
+                 | "@needs" "(" instance { "," instance } ")"
+
+  behavior-def ::= "behavior" Identifier "(" type-param-list ")"
+                   "{" prototype { prototype } "}"
+
+  prototype    ::= type identifier "(" [ parameter-list ] ")" ";"
+
+  instance-def ::= Identifier "(" type-list ")" "="
+                   ( identifier
+                   | "{" "." identifier "=" identifier
+                     { "," "." identifier "=" identifier } "}" ) ";"
+
+  instance     ::= Identifier "(" type-list ")"
 
   function-def ::= type identifier "(" [ parameter-list ] ")"
                    compound-statement
@@ -1231,7 +1381,10 @@ Checked arithmetic (default) + wrapping_* + saturating_*
 for every width.
 
 Core behaviors: Eq, Ord, Hash (generic over the numeric
-family), Serialize, Allocator, Reverse.
+family), Show, Serialize and Allocator, declared in the
+prelude (§11) with the verbs eq, compare, hash, show,
+serialize and allocate; Reverse inverts an ordering. A
+program's own function of a verb's name wins over the verb.
 
 
 ==================================================
@@ -1575,7 +1728,10 @@ Normative tooling expectations:
   - null references
   - ambient authority
   - hidden identity
-  - trait / interface systems
+  - trait / interface systems (behaviors are compile-time
+    knowledge stated from outside a type: no methods, no
+    run-time dispatch, no hierarchies, no associated types;
+    see §11)
   - programmer-controlled allocation (fixed-capacity
     types §44 are still compiler-decided storage whose
     size is statically known — no manual heap, stack, or

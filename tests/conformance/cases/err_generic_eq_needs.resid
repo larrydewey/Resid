@@ -1,0 +1,2 @@
+Bool same(T a, T b) { return a == b; }
+Int main() { return 0; }

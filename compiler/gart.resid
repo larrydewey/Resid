@@ -169,10 +169,39 @@ StrBuf ga_kid_hashes(Kg g, Int id, Int i, List(Str) hs, StrBuf acc) {
 
 type GAC = { List(Bool) kn; List(Str) hs; };
 
-GAC ga_cols(Kg g, Int id, Int n, GAC acc) {
+GAC ga_cols(Kg g, Int id, Int n, GAC acc, Int lim) {
+    Map(Int, Bool) e = {};
+    return ga_cols_ct(g, id, n, ga_ctime(g, 0, n, lim, e), acc);
+}
+
+GAC ga_cols_ct(Kg g, Int id, Int n, Map(Int, Bool) ct, GAC acc) {
     if (id >= n) { return acc; }
-    GAC a2 = GAC {.kn = acc.kn.concat([ga_known(g, id, acc.kn)]), .hs = acc.hs.concat([ga_hash(g, id, acc.hs)])};
-    return ga_cols(g, id + 1, n, a2);
+    GAC a2 = GAC {.kn = acc.kn.concat([ct.contains(id) || ga_known(g, id, acc.kn)]), .hs = acc.hs.concat([ga_hash(g, id, acc.hs)])};
+    return ga_cols_ct(g, id + 1, n, ct, a2);
+}
+
+// Generic declarations (behaviors, generic functions, records and
+// instances) are compile-time knowledge: instantiation consumed them
+// (compiler/mono.resid), so their whole subtrees are known.
+// So is the prelude (from `lim`), which the compiler supplies.
+Map(Int, Bool) ga_ctime(Kg g, Int id, Int n, Int lim, Map(Int, Bool) acc) {
+    if (id >= n) { return acc; }
+    // Instances are compile-time knowledge too.
+    Bool gen = !acc.contains(id) && (gm_generic_decl(g, id) || g.ns[id].sp >= lim || g.ns[id].kind == "behavior");
+    // Instantiation replaces the unit node; an earlier one is structure
+    // (only itself: its declarations live on in the last one).
+    Bool unit = g.ns[id].kind == "unit";
+    Map(Int, Bool) a2 = if (gen) { ga_subtree(g, id, acc) } else { if (unit) { acc.insert(id, true) } else { acc } };
+    return ga_ctime(g, id + 1, n, lim, a2);
+}
+
+Map(Int, Bool) ga_subtree(Kg g, Int id, Map(Int, Bool) acc) {
+    return ga_subtree_kids(g, id, 0, acc.insert(id, true));
+}
+
+Map(Int, Bool) ga_subtree_kids(Kg g, Int id, Int i, Map(Int, Bool) acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return ga_subtree_kids(g, id, i + 1, ga_subtree(g, kg_kid(g, id, i), acc));
 }
 
 // Derive edges `id,from,rule;` as dense columns (from -1: none).
@@ -395,7 +424,7 @@ StrBuf ga_deps(StrBuf b, Kg g, Int id, Int i) {
 // Declarations and uses carry their name, for queries by symbol.
 Bool ga_named(KN n) {
     Str k = n.kind;
-    Bool nk = k == "fn" || k == "param" || k == "bind" || k == "rbind" || k == "ref" || k == "call" || k == "mcall" || k == "field" || k == "for" || k == "sfield" || k == "struct" || k == "lparam" || k == "test";
+    Bool nk = k == "fn" || k == "param" || k == "bind" || k == "rbind" || k == "ref" || k == "call" || k == "mcall" || k == "field" || k == "for" || k == "sfield" || k == "struct" || k == "lparam" || k == "test" || k == "behavior" || k == "bdecl" || k == "proto";
     return nk && n.text != "";
 }
 
@@ -463,6 +492,8 @@ Bool ga_stream(Str path, GAX x, Int id, Int n) {
     return ga_stream(path, x, e, n);
 }
 
+Int ga_prelude_at(Str src) { return gm_prelude_pos(src); }
+
 // Line starts and the file table of a program's merged source.
 pub GAF ga_fileinfo(Str src, Str smap, Str main) {
     KgMap m = kg_srcmap(smap);
@@ -492,7 +523,7 @@ pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, Str rs, List(Str) t
     List(Bool) nb = [];
     List(Str) ns = [];
     Map(Int, Str) r0 = {};
-    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}), .f = f, .rs = ga_reasons(rs, 0, r0), .rf = ga_facts_read(ga_facts(g, p.id, 0, StrBuf()).finish(), 0, r0), .ck = ga_checks(checks, 0, r0)};
+    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}, ga_prelude_at(src)), .f = f, .rs = ga_reasons(rs, 0, r0), .rf = ga_facts_read(ga_facts(g, p.id, 0, StrBuf()).finish(), 0, r0), .ck = ga_checks(checks, 0, r0)};
     StrBuf h0 = ga_int(ga_key(ga_head(StrBuf(), 5, 4), "version"), 1);
     StrBuf h1 = ga_sources(ga_head(ga_key(h0, "source"), 4, f.paths.len()), f.paths, 0);
     if (!filesystem.write_hex(path, ga_head(ga_key(h1, "nodes"), 4, n).finish())) { return ""; }

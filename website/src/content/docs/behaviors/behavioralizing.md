@@ -108,16 +108,55 @@ Int total(List(Int) xs, Int i, Int acc) { ... }
 After: `xs.contains(v)`, `xs.sum()`, `xs.reverse()`, `min`, `max`, `abs`,
 `clamp`. They work for every width and float type.
 
-## 4. Parameterize an algorithm with a closure
+## 4. Write it once: generic functions and your own behaviors
 
-Resid has no user-written generic functions, and `sort`'s `using` names a
-comparator known at compile time. When an algorithm needs a caller-chosen
-step at run time, take a closure:
+Code that repeats for several types becomes one generic function, and an
+operation each type does its own way becomes a behavior:
+
+```resid
+type Circle = { Float r; };
+type Square = { Float side; };
+
+behavior Area(T) {
+    Float area(T shape);
+}
+
+Float circle_area(Circle c) { return 3.0 * c.r * c.r; }
+Float square_area(Square s) { return s.side * s.side; }
+Area(Circle) = circle_area;
+Area(Square) = square_area;
+
+@needs(Area(T))
+Float total(List(T) xs, Int i, Float acc) {
+    if (i >= xs.len()) { return acc; }
+    return total(xs, i + 1, acc + area(xs[i]));
+}
+
+Int main() {
+    List(Square) sqs = [Square {.side = 3.0}, Square {.side = 1.0}];
+    List(Circle) cs = [Circle {.r = 1.0}];
+    println(f"{total(sqs, 0, 0.0)} {total(cs, 0, 0.0)}");
+    return 0;
+}
+```
+
+```text title="Output"
+10 3
+```
+
+See [your own behaviors](/Resid/behaviors/defining/) and
+[generic functions](/Resid/behaviors/generics/).
+
+## 5. Parameterize an algorithm with a closure
+
+`sort`'s `using` names a comparator known at compile time. When an
+algorithm needs a caller-chosen step at run time, take a closure (and make
+the function generic when it works for any element type):
 
 ```resid
 type Score = { Str who; Int points; };
 
-List(Score) keep_if(List(Score) xs, Bool closure(Score) ok, Int i, ListBuf(Score) acc) {
+List(T) keep_if(List(T) xs, Bool closure(T) ok, Int i, ListBuf(T) acc) {
     if (i >= xs.len()) { return acc.finish(); }
     return keep_if(xs, ok, i + 1, if (ok(xs[i])) { acc.push(xs[i]) } else { acc });
 }
@@ -141,9 +180,9 @@ Int main() {
 [Score { who: "ada", points: 9 }, Score { who: "cy", points: 7 }]
 ```
 
-The algorithm is written once for the element type it works on. When a
-call's closure is known, the compiler specializes the function for it, so
-the indirection usually disappears.
+The algorithm is written once. When a call's closure is known, the
+compiler specializes the function for it, so the indirection usually
+disappears.
 
 ## Checklist
 
@@ -153,5 +192,9 @@ the indirection usually disappears.
   `using = Reverse(cmp)`.
 - A loop over a list that checks membership, sums, reverses or finds a
   min/max → the generic verb.
+- The same function written for several types → one generic function,
+  with `@needs` for what it sorts, shows or compares.
+- An operation each type does its own way → `behavior Name(T) { ... }` and
+  an instance per type.
 - A comparator or `Show` function that reads files or the environment →
   reconsider; it makes every caller need that capability.

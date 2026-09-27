@@ -1,0 +1,5 @@
+// A library type with its own Show; the application replaces it.
+type Coin = { Int v; };
+pub Str coin_show(Coin c) { return "lib"; }
+Show(Coin) = coin_show;
+pub Str lib_label(Coin c) { return f"{c}"; }

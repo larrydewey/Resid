@@ -1,0 +1,8 @@
+// resid-why follows a generic function to its copies.
+T first(List(T) xs) { return xs[0]; }
+
+@requires(args)
+Int main() {
+    List(Int) xs = [args.count(), 2];
+    return first(xs);
+}

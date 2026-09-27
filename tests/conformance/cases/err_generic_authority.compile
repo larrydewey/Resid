@@ -1,0 +1,1 @@
+error[E0219]: function `main` uses (through `label(Task)`) capability `filesystem`

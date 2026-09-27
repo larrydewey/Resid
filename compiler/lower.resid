@@ -2419,7 +2419,8 @@ ST lw_bind_fixed_list(LW w, Int ln, Str name, Str dtyb, List(Str) env, ST g) {
     Str arrty = ll_ty(dtyb);
     Int t1 = g.tmp + 1;
     Str reg = f"%t{t1}";
-    GT c0 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = g.glines, .lines = g.lines.concat([reg + " = alloca " + arrty]), .tmp = t1, .lbl = g.lbl, .tail = false};
+    // Slots the literal leaves unset read as zero (spec §44).
+    GT c0 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = g.glines, .lines = g.lines.concat([reg + " = alloca " + arrty, "store " + arrty + " zeroinitializer, ptr " + reg]), .tmp = t1, .lbl = g.lbl, .tail = false};
     GT f = lw_fixed_elems(w, ln, 0, arrty, ety, reg, cap, env, c0);
     if (f.err != "") { return st_err(f.err, g); }
     return ST {.pos = 0, .dead = g.dead, .err = "", .env = env_add(env, name + ":" + reg + ":" + dtyb), .glines = f.glines, .hlines = g.hlines, .lines = f.lines, .tmp = f.tmp, .lbl = f.lbl, .rety = g.rety};
@@ -4107,7 +4108,7 @@ LSG lsg_decl(Kg g, Int d, Str ceil, LSG st) {
 // Generic parameters of a type declaration's aux ("prefix\x1f(T, U)"), no
 // parentheses or spaces.
 Str lsg_gparams(Str aux) {
-    List(Str) ps = str_split(aux, "\x1f");
+    List(Str) ps = str_split(aux, kg_us());
     Str gen = if (ps.len() > 1) { ps[1] } else { aux };
     if (!str_starts_with(gen, "(")) { return ""; }
     return str_replace(str_slice(gen, 1, str_len(gen) - 1), " ", "");

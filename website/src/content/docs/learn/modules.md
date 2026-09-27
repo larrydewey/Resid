@@ -24,6 +24,11 @@ import "geometry.resid" (dist2);     // only these
 import "geometry.resid" as G;        // qualified: G.dist2(a, b)
 ```
 
+Each module keeps its own names. If two modules you import both export a
+`parse`, import them `as` and qualify the use: `json.parse(s)`,
+`toml.parse(s)`. A plain `parse(s)` would be ambiguous and is an error
+(`E0223`); a function of your own named `parse` wins over both.
+
 An import that is not found beside the importing file is looked up in the
 **standard library** (`lib/` of the Resid installation), so
 `import "crypto.resid";` works anywhere. A missing module is an error

@@ -135,8 +135,15 @@ pub Int rt_float32_to_string(Float v) {
 Int float32_short_at(Int buf, Float v, Int p) {
     Int n = c_strfromd(buf, 64, fmt_g(p), v);
     Float(32) back = (Float(32))c_strtod(buf, 0);
-    if (p >= 9 || back == (Float(32))v) { return n; }
+    if (p >= 9 || back == (Float(32))v) { return float32_positional(buf, v, n, p); }
     return float32_short_at(buf, v, p + 1);
+}
+
+// As float_short: small exponents print positionally.
+Int float32_positional(Int buf, Float v, Int n, Int p) {
+    Int x = g_exponent(buf, 0, n);
+    if (x < 1 || x > 8) { return n; }
+    return c_strfromd(buf, 64, fmt_g(x + 1), v);
 }
 
 // "%.<p>g" (p = 1..17) in a thread-local buffer.
@@ -155,7 +162,25 @@ Int fmt_g(Int p) {
 // buf; its length. NaN and the infinities print as their names.
 pub Int float_short(Int buf, Float v) {
     if (v != v) { return c_strfromd(buf, 64, resid_raw_addr("%g"), v); }
-    return float_short_at(buf, v, 1);
+    Int n = float_short_at(buf, v, 1);
+    // %g writes 10.0 as 1e+01 when one digit suffices; below 10^16 the
+    // same digits print positionally.
+    Int x = g_exponent(buf, 0, n);
+    if (x < 1 || x > 15) { return n; }
+    return c_strfromd(buf, 64, fmt_g(x + 1), v);
+}
+
+// The decimal exponent after an `e+` in buf[0..n), or 0 when there is none
+// (or it is negative).
+Int g_exponent(Int buf, Int i, Int n) {
+    if (i >= n) { return 0; }
+    if (ld8(buf + i) == 101 && i + 1 < n && ld8(buf + i + 1) == 43) { return g_digits(buf, i + 2, n, 0); }
+    return g_exponent(buf, i + 1, n);
+}
+
+Int g_digits(Int buf, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return g_digits(buf, i + 1, n, acc * 10 + ld8(buf + i) - 48);
 }
 
 Int float_short_at(Int buf, Float v, Int p) {

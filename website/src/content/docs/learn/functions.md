@@ -120,6 +120,27 @@ Int main() {
 Whatever authority a closure's body needs belongs to the function that
 writes it (see [Capabilities](/Resid/learn/capabilities/)).
 
+## Generic functions
+
+A single uppercase letter in a signature is a type parameter, so one
+function works for every type:
+
+```resid
+T last(List(T) xs) { return xs[xs.len() - 1]; }
+
+Int main() {
+    println(f"{last([1, 2, 3])} {last(["a", "b"])}");
+    return 0;
+}
+```
+
+```text title="Output"
+3 b
+```
+
+A generic function that sorts, shows or compares its `T` says so with
+`@needs(Ord(T))`; see [Generic functions and records](/Resid/behaviors/generics/).
+
 ## Entry point
 
 `Int main()` is the program. Its return value is the exit status.

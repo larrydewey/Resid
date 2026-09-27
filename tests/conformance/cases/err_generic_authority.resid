@@ -1,0 +1,16 @@
+// A generic function reaching a capability through an instance: the
+// concrete caller holds it.
+type Task = { Str path; };
+
+@requires(filesystem)
+Str show_task(Task t) { return if (filesystem.exists(t.path)) { "exists" } else { "missing" }; }
+Show(Task) = show_task;
+
+@needs(Show(T))
+Str label(T x) { return "[" + show(x) + "]"; }
+
+Int main() {
+    println(label(Task {.path = "/"}));
+    println(label(3));
+    return 0;
+}

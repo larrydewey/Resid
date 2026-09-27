@@ -1,0 +1,1 @@
+behavior Area(Sq): impl must have signature (Sq) -> Float

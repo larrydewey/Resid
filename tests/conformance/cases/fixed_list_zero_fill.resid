@@ -1,0 +1,12 @@
+// Slots a fixed list's literal leaves unset read as zero (spec §44).
+Int main() {
+    Str(8) s = "abc";
+    List(Int, 4) xs = [10, 20];
+    Str(3) cut = (Str(3))"abcdef";
+    println(s);
+    println(f"{xs[1]} {xs[3]} {xs.len()}");
+    println((Str)cut + "!");
+    List(Int) heap = (List(Int))xs;
+    println(f"{heap.len()}");
+    return 0;
+}

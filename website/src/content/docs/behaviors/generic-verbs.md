@@ -1,12 +1,12 @@
 ---
 title: Generic verbs
-description: The operations that work across element and numeric types without generics.
+description: The built-in operations that work across element and numeric types.
 ---
 
-Resid has no generic functions you write yourself (see
-[Behavioralizing](/Resid/behaviors/behavioralizing/) for how to share code
-across types). Instead, the operations that make sense for many types are
-built in, and resolved for each concrete type at compile time.
+Some operations that make sense for many types are built in, and resolved
+for each concrete type at compile time. For your own, write a
+[generic function](/Resid/behaviors/generics/) or
+[declare a behavior](/Resid/behaviors/defining/).
 
 ## List verbs
 

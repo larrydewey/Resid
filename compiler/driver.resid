@@ -803,6 +803,8 @@ Str ll_ty(Str ty) {
     if (ty == "Void") { return "i1"; }
     if (ty == "Float") { return "double"; }
     if (ty == "Str") { return "ptr"; }
+    // A closure is a pointer, whatever its result type (`Int(64) closure(Int)`).
+    if (is_fn_type(ty)) { return "ptr"; }
     // width-parameterized numerics: Int(256) -> i256 etc.
     Bool si = str_has_prefix_cg(ty, "Int(");
     Bool ui = str_has_prefix_cg(ty, "UInt(");
@@ -1629,7 +1631,7 @@ Str expect_elem(Str t) {
 // captured outer values. Calling a Fn-value is an indirect call passing the
 // array pointer as an `i64 %env` first parameter.
 Bool is_fn_type(Str t) {
-    return str_find(t, " closure(") >= 0;
+    return str_contains(t, " closure(");
 }
 
 // "Int closure(A, B)" -> "Int" (return type before " closure(").
@@ -3682,19 +3684,36 @@ GT finish_ifexpr(GT tv, Str lt, Str le, Str ld, Int l3, GT ev, Int retpos) {
     if (ev.err != "") { return ev; }
     // Spec v3.2 S6.4: arms agree when their NORMALIZED types match
     // (bare Int is an alias of Int(64)).
-    Str uty = if (ty_same_cg(ev.ty, tv.ty)) { tv.ty } else { ty_unify_cg(tv.ty, ev.ty) };
+    Str uty0 = if (ty_same_cg(ev.ty, tv.ty)) { tv.ty } else { ty_unify_cg(tv.ty, ev.ty) };
+    // An integer literal arm takes the other arm's integer type.
+    Bool ints = int_fam(tv.ty) && int_fam(ev.ty);
+    Str uty = if (uty0 != "" || !ints) { uty0 } else { if (lit_int_val(tv.val)) { ev.ty } else { if (lit_int_val(ev.val)) { tv.ty } else { "" } } };
     if (uty == "") { return gt_err("if arms disagree: " + tv.ty + " vs " + ev.ty, ev); }
     Str pt = last_label_line_cg(tv.lines, lt);
     Str pe = last_label_line_cg(ev.lines, le);
     Int tp = ev.tmp + 1;
     Str pr = f"%t{tp}";
-    Str phi = pr + " = phi " + ll_ty(num_norm_cg(tv.ty)) + " [ " + tv.val + ", %" + pt + " ], [ " + ev.val + ", %" + pe + " ]";
+    Str phi = pr + " = phi " + ll_ty(num_norm_cg(uty)) + " [ " + tv.val + ", %" + pt + " ], [ " + ev.val + ", %" + pe + " ]";
     List(Str) d0 = ev.lines;
     List(Str) d05 = d0.concat(["br label %" + ld]);
     List(Str) d1 = d05.concat([ld + ":"]);
     List(Str) d2 = d1.concat([phi]);
     Int lb4 = if (ev.lbl > l3) { ev.lbl } else { l3 };
     return GT {.pos = retpos, .val = pr, .ty = uty, .cnt = 0, .err = "", .glines = ev.glines, .lines = d2, .tmp = tp, .lbl = lb4, .tail = false};
+}
+
+// A lowered value that is an integer constant (`-12`, `0`).
+Bool lit_int_val(Str v) {
+    Int n = str_len(v);
+    if (n == 0) { return false; }
+    Int st = if (str_char_at(v, 0) == 45) { 1 } else { 0 };
+    return n > st && lit_digits_from(v, st);
+}
+
+Bool lit_digits_from(Str v, Int i) {
+    if (i >= str_len(v)) { return true; }
+    Int c = str_char_at(v, i);
+    return c >= 48 && c <= 57 && lit_digits_from(v, i + 1);
 }
 
 GT gt_tmp(GT v, Int t) {
@@ -4991,18 +5010,66 @@ pub Str imp_apply_vis(Str src, Str vis, Str path) {
 // Names `s` exports as ",a,b,": functions `vis` exposes, types, variants,
 // behaviors and their verbs.
 pub Str imp_exports(Str s, Str vis) {
-    List(Str) ds = str_split(imp_fn_decls(s, 0, 0, false, ""), ",");
-    return imp_type_names(s, 0, 0, "", imp_exported_fns(ds, 0, vis, ","));
+    IDN d = imp_decl_names(s, 0, 0, false, "", "", ",");
+    List(Str) ds = str_split(d.fns, ",");
+    return imp_exported_fns(ds, 0, vis, d.tys);
+}
+
+// One pass over a module: its functions ("+name"/"-name" by `pub`) and
+// its type, variant, behavior and verb names (",a,b,").
+type IDN = { Str fns; Str tys; };
+
+pub IDN imp_decl_names(Str s, Int pos, Int depth, Bool sawpub, Str prev, Str fns, Str tys) {
+    Tok t = lex_tok(s, pos);
+    if (t.kind == "eof") { return IDN {.fns = fns, .tys = tys}; }
+    if (depth == 0 && t.text == "type") {
+        Tok nm = lex_tok(s, t.pos);
+        Int end = skip_decl(s, nm.pos, 0);
+        Str body = str_slice(s, nm.pos, end);
+        Str vs = if (imp_has_bar(body, 0, 0)) { imp_variants(body, 0, 0, "=", "") } else { "" };
+        return imp_decl_names(s, end, 0, false, ";", fns, imp_add_name(tys, nm.text) + vs);
+    }
+    if (depth == 0 && t.text == "behavior") {
+        Tok nm = lex_tok(s, t.pos);
+        Tok o = lex_tok(s, nm.pos);
+        Int cl = if (o.text == "(") { imp_close_paren(s, o.pos, 0) } else { nm.pos };
+        Tok b = lex_tok(s, cl);
+        if (b.text == "{") {
+            Int end = skip_decl(s, cl, 0);
+            Str verbs = imp_verbs(str_slice(s, b.pos, end - 1), 0, "", "");
+            return imp_decl_names(s, end, 0, false, "}", fns, imp_add_name(tys, nm.text) + verbs);
+        }
+    }
+    if (t.text == "{") { return imp_decl_names(s, t.pos, depth + 1, sawpub, t.text, fns, tys); }
+    if (t.text == "}") { return imp_decl_names(s, t.pos, depth - 1, sawpub && depth != 1, t.text, fns, tys); }
+    if (depth == 0 && t.text == ";") { return imp_decl_names(s, t.pos, depth, false, t.text, fns, tys); }
+    if (depth == 0 && t.text == "pub") { return imp_decl_names(s, t.pos, depth, true, t.text, fns, tys); }
+    if (depth == 0 && t.kind == "ident" && prev != "behavior") {
+        Tok o = lex_tok(s, t.pos);
+        if (o.text == "(") {
+            Int cl = imp_close_paren(s, o.pos, 0);
+            Tok b = lex_tok(s, cl);
+            if (b.text == "{") {
+                Str mark = if (sawpub) { "+" } else { "-" };
+                return imp_decl_names(s, cl, depth, sawpub, ")", fns + "," + mark + t.text, tys);
+            }
+        }
+    }
+    return imp_decl_names(s, t.pos, depth, sawpub, t.text, fns, tys);
 }
 
 pub Str imp_exported_fns(List(Str) ds, Int i, Str vis, Str acc) {
-    if (i >= ds.len()) { return acc; }
+    Map(Str, Bool) seen = {};
+    return imp_exported_at(ds, i, vis, seen, StrBuf().push(acc));
+}
+
+pub Str imp_exported_at(List(Str) ds, Int i, Str vis, Map(Str, Bool) seen, StrBuf acc) {
+    if (i >= ds.len()) { return acc.finish(); }
     Str d = ds[i];
-    if (d == "") { return imp_exported_fns(ds, i + 1, vis, acc); }
-    Str nm = str_slice(d, 1, str_len(d));
-    Bool shown = vis == "" || (vis == "*" && str_starts_with(d, "+")) || (vis != "*" && str_contains(vis, "," + nm + ","));
-    Bool dup = str_contains(acc, "," + nm + ",");
-    return imp_exported_fns(ds, i + 1, vis, if (shown && !dup && nm != "main") { acc + nm + "," } else { acc });
+    Str nm = if (d == "") { "" } else { str_slice(d, 1, str_len(d)) };
+    Bool shown = d != "" && (vis == "" || (vis == "*" && str_starts_with(d, "+")) || (vis != "*" && str_contains(vis, "," + nm + ",")));
+    Bool add = shown && !seen.contains(nm) && nm != "main";
+    return imp_exported_at(ds, i + 1, vis, if (add) { seen.insert(nm, true) } else { seen }, if (add) { acc.push(nm).push(",") } else { acc });
 }
 
 // Type, variant, behavior and verb names declared at depth 0 (and verbs
@@ -5078,9 +5145,8 @@ type IMs = { List(Str) paths; List(Str) exps; List(Str) imps; Str done; };
 @requires(filesystem(readonly))
 pub IMs imp_scan(Str path, Str src0, Str vis, Int depth, Str depmap, IMs acc) {
     if (depth > 8 || str_contains(acc.done, ";" + path + ";")) { return acc; }
-    Str src = if (vis == "") { src0 } else { imp_apply_vis(src0, vis, path) };
     Str dir = imp_dir_of(path, str_len(path) - 1);
-    List(Str) lines = str_split(src, "\n");
+    List(Str) lines = str_split(src0, "\n");
     Str ims = imp_scan_imports(lines, 0, dir, depmap, "");
     IMs a1 = IMs {.paths = acc.paths.concat([path]), .exps = acc.exps.concat([imp_exports(src0, vis)]), .imps = acc.imps.concat([ims]), .done = acc.done + path + ";"};
     return imp_scan_subs(lines, 0, dir, depth, depmap, a1);
@@ -5303,7 +5369,59 @@ pub Int loc_quotes(Str t, Int i, Int n) {
 pub Str with_builtin_types(Str src) {
     Str a = if (str_contains(src, "type SourceLoc ")) { "" } else { "\ntype SourceLoc = { Str file; Int line; Int col; };" };
     Str b = if (str_contains(src, "type RegionError ")) { "" } else { "\ntype RegionError = { Str message; };" };
-    return src + a + b + "\n";
+    // The runtime module implements the language, so it has no prelude.
+    Str p = if (resid_rtmod()) { "" } else { prelude_text() };
+    return src + a + b + "\n" + p;
+}
+
+// The core behaviors (spec §11, §32) as ordinary declarations, with the
+// instances of the built-in types; generic ones are copied only for the
+// types a program uses.
+pub Str prelude_text() {
+    List(Str) ls = [
+        "// resid prelude (spec 11)",
+        "behavior Eq(T) { Bool eq(T a, T b); }",
+        "behavior Ord(T) { Int compare(T a, T b); }",
+        "behavior Hash(T) { Int hash(T x); }",
+        "behavior Show(T) { Str show(T x); }",
+        "behavior Serialize(T) { Str serialize(T x); }",
+        "behavior Allocator(T) { T allocate(); }",
+        "Bool resid_eq_int(Int(N) a, Int(N) b) { return a == b; }",
+        "Bool resid_eq_uint(UInt(N) a, UInt(N) b) { return a == b; }",
+        "Bool resid_eq_float(Float(N) a, Float(N) b) { return a == b; }",
+        "Bool resid_eq_str(Str a, Str b) { return a == b; }",
+        "Bool resid_eq_bool(Bool a, Bool b) { return a == b; }",
+        "Eq(Int(N)) = resid_eq_int;",
+        "Eq(UInt(N)) = resid_eq_uint;",
+        "Eq(Float(N)) = resid_eq_float;",
+        "Eq(Str) = resid_eq_str;",
+        "Eq(Bool) = resid_eq_bool;",
+        "Int resid_ord_int(Int(N) a, Int(N) b) { return if (a < b) { -1 } else { if (a > b) { 1 } else { 0 } }; }",
+        "Int resid_ord_uint(UInt(N) a, UInt(N) b) { return if (a < b) { -1 } else { if (a > b) { 1 } else { 0 } }; }",
+        "Int resid_ord_float(Float(N) a, Float(N) b) { return if (a < b) { -1 } else { if (a > b) { 1 } else { 0 } }; }",
+        "Int resid_ord_str(Str a, Str b) { return resid_ord_str_at(a, b, 0, str_len(a), str_len(b)); }",
+        "Int resid_ord_str_at(Str a, Str b, Int i, Int na, Int nb) { if (i >= na || i >= nb) { return na - nb; } Int d = str_char_at(a, i) - str_char_at(b, i); return if (d != 0) { d } else { resid_ord_str_at(a, b, i + 1, na, nb) }; }",
+        "Ord(Int(N)) = resid_ord_int;",
+        "Ord(UInt(N)) = resid_ord_uint;",
+        "Ord(Float(N)) = resid_ord_float;",
+        "Ord(Str) = resid_ord_str;",
+        "Int resid_hash_str(Str s) { return resid_hash_at(s, 0, 1469598103934665603); }",
+        "Int resid_hash_at(Str s, Int i, Int h) { return if (i >= str_len(s)) { h } else { resid_hash_at(s, i + 1, wrapping_mul(h ^ str_char_at(s, i), 1099511628211)) }; }",
+        "Int resid_hash_int(Int(N) x) { return resid_hash_str(f\"{x}\"); }",
+        "Int resid_hash_uint(UInt(N) x) { return resid_hash_str(f\"{x}\"); }",
+        "Int resid_hash_bool(Bool b) { return if (b) { 1 } else { 0 }; }",
+        "Hash(Int(N)) = resid_hash_int;",
+        "Hash(UInt(N)) = resid_hash_uint;",
+        "Hash(Str) = resid_hash_str;",
+        "Hash(Bool) = resid_hash_bool;",
+        "@needs(Show(T))",
+        "Str resid_show(T x) { return f\"{x}\"; }",
+        "@needs(Show(T))",
+        "Str resid_serialize(T x) { return f\"{x}\"; }",
+        "Show(T) = resid_show;",
+        "Serialize(T) = resid_serialize;"
+    ];
+    return str_join(ls, "\n") + "\n";
 }
 
 @requires(filesystem(readonly))
@@ -7452,6 +7570,7 @@ import "../lib/cose.resid";
 import "graph.resid";
 import "resolve.resid";
 import "gcheck.resid";
+import "mono.resid";
 import "lower.resid";
 import "reduce.resid";
 import "greduce.resid";
@@ -7885,6 +8004,19 @@ Int kg_print_hits(Str src, KgMap sm, Kg g, List(Int) hits, Int i) {
     return kg_print_hits(src, sm, g, hits, i + 1);
 }
 
+// Package roots for the checker (instance ownership): "@dep::name::root" lines.
+Str gm_pkg_lines(Str depmap) {
+    return gm_pkg_at(str_split(depmap, "\n"), 0, "");
+}
+
+Str gm_pkg_at(List(Str) ls, Int i, Str acc) {
+    if (i >= ls.len()) { return acc; }
+    Int sep = imp_find_dcolon(ls[i], 0);
+    Bool ok = sep > 0 && !str_starts_with(ls[i], "@");
+    Str root = if (ok) { depmap_line_path(ls[i], sep) } else { "" };
+    return gm_pkg_at(ls, i + 1, if (ok && root != "") { acc + "@dep::" + str_slice(ls[i], 0, sep) + "::" + root + "\n" } else { acc });
+}
+
 // The standard library: beside the runtime ($RESID_HOME/../../lib), else
 // lib/ under the current directory (the repository).
 @requires(environment)
@@ -7940,6 +8072,10 @@ Int main() {
     }
     Bool ri  =  resid_internals_set(rflag);
     Str path  =  if (testmode) { args.get(2) } else { arg1 };
+    if (!filesystem.exists(path)) {
+        println("error: cannot read " + path + ": no such file");
+        return 1;
+    }
     Str defout  =  if (testmode) { path + ".testbin" } else { "a.out" };
     Str out  =  pick_opt(argc, "-o", defout);
     // The whole runtime is Resid (runtime/rt/, linked as rt.ll); -rt adds
@@ -7948,8 +8084,6 @@ Int main() {
     Str depmap_path  =  pick_opt(argc, "-depmap", "");
     Str depmap0  =  if (depmap_path == "") { "" } else { filesystem.read_all(depmap_path) };
     Str depmap1  =  depmap0 + "\n@stdlib::" + stdlib_dir();
-    // Names two modules export are renamed per module (spec §22).
-    Str depmap  =  depmap1 + "\n" + imp_ns_table(path, filesystem.read_all(path), depmap1);
     // Import resolution: the merged compilation text is the importing
     // file (its own import lines replaced) followed by each import's body.
     // A bare `import "pkgname";` that has no relative file falls back to
@@ -7957,6 +8091,8 @@ Int main() {
     // `resid-manifest depmap`).
     // Resolution and desugaring run in an arena; only their texts stay.
     Int _rs_in = resid_bulk_push();
+    // Names two modules export are renamed per module (spec §22).
+    Str depmap  =  depmap1 + "\n" + imp_ns_table(path, filesystem.read_all(path), depmap1);
     RRes rra = imp_resolve_file(path, ";", 0, depmap);
     Str rtext = ds_desugar(with_builtin_types(rra.text));
     // Comptime discovery: rewrite each `test "..." { }` into a plain
@@ -8028,7 +8164,7 @@ Int main() {
         List(Int) un = gk_untyped(kgt.g, gr.ty, kgt.id, none);
         Int nu = kg_print_hits(src, kg_srcmap(rr.map), kgt.g, un[0..min(un.len(), 10)], 0);
         Str tpath  =  pick_opt(argc, "--graph-types", "");
-        Bool tw = if (tpath != "" && !str_starts_with(tpath, "-")) { filesystem.write_all(tpath, gk_dump_types(kgt.g, gr, 0, str_sb_new())) } else { false };
+        Bool tw = if (tpath != "" && !str_starts_with(tpath, "-")) { filesystem.write_all(tpath, gk_dump_types_src(kgt.g, gr, src)) } else { false };
         println(f"graph-types: {un.len()} untyped, {gk_count_members(kgt.g, gr, 0, 0)} member edges");
         return if (un.len() == 0) { 0 } else { 1 };
     }
@@ -8057,10 +8193,13 @@ Int main() {
     Str profile  =  pick_opt(argc, "--profile", "release");
     Bool gart = profile != "release";
     Int _tc_in = resid_bulk_push();
-    KP ckp = kg_parse(rsrc);
-    GKC ckc = gk_run_cols(ckp, rsrc, rr.map, gart);
+    KP ckp0 = kg_parse(rsrc);
+    // Generic functions and records are instantiated (compiler/mono.resid).
+    GMO gmo = gm_run(ckp0, rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir(), gart);
+    KP ckp = gmo.kp;
+    GKC ckc = gmo.c;
     Int tc  =  ckc.status;
-    List(Str) ckpk = resid_list_str_persist_copy([if (tc != 0) { "" } else { gx_pack(ckp.g, ckp.id) }, ckc.def, f"{kg_count(ckp.g)}"]);
+    List(Str) ckpk = resid_list_str_persist_copy([if (tc != 0) { "" } else { gx_pack(ckp.g, ckp.id) }, ckc.def, f"{kg_count(ckp.g)}", gmo.dv]);
     List(Str) cktys = resid_list_str_persist_copy(ckc.ty);
     Int _tc_out = resid_bulk_pop();
     if (tc != 0) { return tc; }
@@ -8068,7 +8207,7 @@ Int main() {
     // `release` profile is the default -O2 build; `debug` builds at -O0.
     if (profile == "check") {
         Int _ga_in = resid_bulk_push();
-        Str gh = ga_write(out + ".resid-graph.cbor", gx_unpack(ckpk[0]), str_parse_int(ckpk[2]), false, "", "", cktys, ckpk[1], rsrc, rr.map, path, "");
+        Str gh = ga_write(out + ".resid-graph.cbor", gx_unpack(ckpk[0]), str_parse_int(ckpk[2]), false, ckpk[3], "", cktys, ckpk[1], rsrc, rr.map, path, "");
         Int _ga_out = resid_bulk_pop();
         println("check: ok");
         return 0;
@@ -8147,7 +8286,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // The graph artifact (spec §33), after code generation's arena is
     // freed, from the persisted residual pack; its hash goes into the binary.
     Int _ga_in = resid_bulk_push();
-    List(Str) ghk = resid_list_str_persist_copy([if (gart) { ga_write(out + ".resid-graph.cbor", gx_unpack(gpk[2]), str_parse_int(ckpk[2]), true, gpk[3], gpk[4], cktys, ckpk[1], rsrc, rr.map, path, chk[0]) } else { "" }]);
+    List(Str) ghk = resid_list_str_persist_copy([if (gart) { ga_write(out + ".resid-graph.cbor", gx_unpack(gpk[2]), str_parse_int(ckpk[2]), true, ckpk[3] + gpk[3], gpk[4], cktys, ckpk[1], rsrc, rr.map, path, chk[0]) } else { "" }]);
     Int _ga_out = resid_bulk_pop();
     // A stale artifact from an earlier build must not be signed as this one's.
     Bool gclr = if (!gart && filesystem.exists(out + ".resid-graph.cbor")) { filesystem.write_all(out + ".resid-graph.cbor", "") } else { false };

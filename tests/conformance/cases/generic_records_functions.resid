@@ -1,0 +1,24 @@
+type Pair(T) = { T a; T b; };
+type Entry(K, V) = { K key; V value; Int hits; };
+
+T first(List(T) xs) { return xs[0]; }
+Pair(T) twin(T x) { return Pair {.a = x, .b = x}; }
+Int(N) clamp_pos(Int(N) x) { return if (x < 0) { 0 } else { x }; }
+List(V) values(List(Entry(K, V)) es) {
+    ListBuf(V) b = ListBuf();
+    return vals_at(es, 0, b);
+}
+List(V) vals_at(List(Entry(K, V)) es, Int i, ListBuf(V) acc) {
+    if (i >= es.len()) { return acc.finish(); }
+    return vals_at(es, i + 1, acc.push(es[i].value));
+}
+
+Int main() {
+    Pair(Int) p = Pair {.a = 1, .b = 2};
+    Pair(Str) q = twin("hi");
+    Int(8) s = -3;
+    List(Entry(Str, Int)) es = [Entry {.key = "a", .value = 1, .hits = 0}, Entry {.key = "b", .value = 2, .hits = 5}];
+    println(f"{p} {p.a + p.b} {q} {first([7, 8])} {first(["x"])} {clamp_pos(s)} {clamp_pos(9)}");
+    println(f"{values(es)} {es[1]}");
+    return 0;
+}

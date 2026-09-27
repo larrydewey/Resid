@@ -1,0 +1,7 @@
+type Pair(T) = { T a; };
+Str f(Pair(T) p) { return "x"; }
+Str g(Pair(Int) p) { return "y"; }
+behavior Label(T) { Str label(T x); }
+Label(Pair(T)) = f;
+Label(Pair(Int)) = g;
+Int main() { return 0; }

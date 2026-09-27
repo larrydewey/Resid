@@ -15,7 +15,12 @@
 type TL = { Bool on; List(Int) keys; List(Str) tys; List(Int) mem; };
 // Checker state: graph, def edges, signatures, binder id -> type, the log,
 // struct declaration ids by name, and fn declaration ids by signature index.
-type GK = { Kg g; RS rs; Sigs fs; Map(Int, Str) tys; TL tl; Map(Str, Int) sd; List(Int) fnode; };
+type GK = { Kg g; RS rs; Sigs fs; Map(Int, Str) tys; TL tl; Map(Str, Int) sd; List(Int) fnode; GX gx; };
+// Generics and behaviors: generic functions (by signature index), each
+// function's @needs, behavior declarations and their verbs, instance
+// nodes with their levels, the current function's needs and type
+// variables, and the instantiation log for compiler/mono.resid.
+type GX = { Map(Str, Str) needs; Map(Str, Int) bdecls; Map(Str, Int) verbs; List(Int) insts; List(Int) ilev; Str ctx; Str cvars; List(Str) log; Str uses; };
 // An expression's type, or an error at node `at`, with the state after it.
 type GKT = { Str ty; Str err; Int at; GK k; };
 // A statement's result: the state after it (binder types included).
@@ -26,11 +31,44 @@ TL tl_add(TL t, Int id, Str ty) {
     return TL {.on = true, .keys = t.keys.concat([id * 4294967296 + t.tys.len()]), .tys = t.tys.concat([ty]), .mem = t.mem};
 }
 
-GK gk_tl(GK k, TL tl) { return GK {.g = k.g, .rs = k.rs, .fs = k.fs, .tys = k.tys, .tl = tl, .sd = k.sd, .fnode = k.fnode}; }
-GK gk_with(GK k, Map(Int, Str) tys) { return GK {.g = k.g, .rs = k.rs, .fs = k.fs, .tys = tys, .tl = k.tl, .sd = k.sd, .fnode = k.fnode}; }
-// The outer scope's binders with the inner walk's log.
-GK gk_scope(GK outer, GK inner) { return gk_tl(outer, inner.tl); }
-GK gk_bind(GK k, Int id, Str ty) { return GK {.g = k.g, .rs = k.rs, .fs = k.fs, .tys = k.tys.insert(id, ty), .tl = tl_add(k.tl, id, ty), .sd = k.sd, .fnode = k.fnode}; }
+GK gk_tl(GK k, TL tl) { return GK {.g = k.g, .rs = k.rs, .fs = k.fs, .tys = k.tys, .tl = tl, .sd = k.sd, .fnode = k.fnode, .gx = k.gx}; }
+GK gk_with(GK k, Map(Int, Str) tys) { return GK {.g = k.g, .rs = k.rs, .fs = k.fs, .tys = tys, .tl = k.tl, .sd = k.sd, .fnode = k.fnode, .gx = k.gx}; }
+GK gk_gx(GK k, GX gx) { return GK {.g = k.g, .rs = k.rs, .fs = k.fs, .tys = k.tys, .tl = k.tl, .sd = k.sd, .fnode = k.fnode, .gx = gx}; }
+// The outer scope's binders with the inner walk's logs.
+GK gk_scope(GK outer, GK inner) { return GK {.g = outer.g, .rs = outer.rs, .fs = outer.fs, .tys = outer.tys, .tl = inner.tl, .sd = outer.sd, .fnode = outer.fnode, .gx = inner.gx}; }
+GK gk_bind(GK k, Int id, Str ty) { return GK {.g = k.g, .rs = k.rs, .fs = k.fs, .tys = k.tys.insert(id, ty), .tl = tl_add(k.tl, id, ty), .sd = k.sd, .fnode = k.fnode, .gx = k.gx}; }
+
+// Append an instantiation-log entry.
+GK gk_log(GK k, Str e) {
+    GX x = k.gx;
+    if (x.log.contains(e)) { return k; }
+    return gk_gx(k, GX {.needs = x.needs, .bdecls = x.bdecls, .verbs = x.verbs, .insts = x.insts, .ilev = x.ilev, .ctx = x.ctx, .cvars = x.cvars, .log = x.log.concat([e]), .uses = x.uses});
+}
+
+GK gk_ctx(GK k, Str ctx, Str cvars, Str uses) {
+    GX x = k.gx;
+    return gk_gx(k, GX {.needs = x.needs, .bdecls = x.bdecls, .verbs = x.verbs, .insts = x.insts, .ilev = x.ilev, .ctx = ctx, .cvars = cvars, .log = x.log, .uses = uses});
+}
+
+// The override a copy was made with for behavior b (`using =` at the
+// generic call), or "".
+Str gm_use(GK k, Str b) {
+    if (k.gx.uses == "") { return ""; }
+    return gm_use_at(str_split(k.gx.uses, gm_rs()), 0, b + "=");
+}
+
+Str gm_use_at(List(Str) us, Int i, Str pre) {
+    if (i >= us.len()) { return ""; }
+    if (str_starts_with(us[i], pre)) { return str_slice(us[i], str_len(pre), str_len(us[i])); }
+    return gm_use_at(us, i + 1, pre);
+}
+
+// The `@using(...)` entries of a copy's prefix.
+Str gm_uses_of(Str aux) {
+    Int at = str_find(aux, "@using(");
+    if (at < 0) { return ""; }
+    return str_slice(aux, at + 7, imp_close_paren(aux, at + 7, 0) - 1);
+}
 
 // A member def edge from `use` to declaration node `def`.
 GK gk_mem(GK k, Int use, Int def) {
@@ -81,9 +119,31 @@ Bool gk_lit_flag(Kg g, Int id) {
 
 // The sfield node `f` of struct type `ty`, or -1.
 Int gk_sfield(GK k, Str ty, Str f) {
-    Int d = k.sd.get(ty) else { -1 };
+    Int d0 = k.sd.get(ty) else { -1 };
+    Int d = if (d0 >= 0) { d0 } else { k.sd.get(ty_head(ty)) else { -1 } };
     if (d < 0) { return -1; }
     return gk_sfield_at(k.g, d, 0, f);
+}
+
+// The type parameters of generic record declaration `name` ("" if none).
+List(Str) gk_rparams(GK k, Str name) {
+    Int d = k.sd.get(name) else { -1 };
+    if (d < 0) { return gk_nopts(); }
+    Str ps = gk_type_params(k.g.ns[d].aux);
+    return if (ps == "") { gk_nopts() } else { str_split(ps, ",") };
+}
+
+// Field `f` of record type `ty`, through a generic record's type
+// arguments (`Pair(Int)`.a is Int for `type Pair(T) = { T a; ... }`).
+pub Str gk_field_type(GK k, Str ty, Str f) {
+    Str direct = struct_field_type(k.fs, ty, f);
+    if (direct != "") { return direct; }
+    Str h = ty_head(ty);
+    List(Str) ps = gk_rparams(k, h);
+    if (ps.len() == 0 || h == ty) { return ""; }
+    Str ft = struct_field_type(k.fs, h, f);
+    if (ft == "") { return ""; }
+    return ty_subst(ft, ps, ty_args(ty));
 }
 
 Int gk_sfield_at(Kg g, Int d, Int i, Str f) {
@@ -91,6 +151,658 @@ Int gk_sfield_at(Kg g, Int d, Int i, Str f) {
     Int c = kg_kid(g, d, i);
     if (g.ns[c].text == f) { return c; }
     return gk_sfield_at(g, d, i + 1, f);
+}
+
+// ─── Type parameters ────────────────────────────────────────────────
+// A type parameter is one uppercase letter (E0222 keeps real types
+// longer). In a width slot (`Int(N)`) it ranges over widths.
+
+pub Bool gm_is_var(Str w) {
+    if (str_len(w) != 1) { return false; }
+    Int c = str_char_at(w, 0);
+    return c >= 65 && c <= 90;
+}
+
+// The type parameters of a type text, in first-use order, as ",T,N,".
+pub Str gm_vars(Str t, Int i, Str acc) {
+    Int n = str_len(t);
+    if (i >= n) { return acc; }
+    Int c = str_char_at(t, i);
+    if (is_alpha(c) || c == 95) {
+        Int e = scan_ident(t, i, n);
+        Str w = str_slice(t, i, e);
+        Bool add = gm_is_var(w) && !str_contains(acc, "," + w + ",");
+        Str acc2 = if (!add) { acc } else { if (acc == "") { "," + w + "," } else { acc + w + "," } };
+        return gm_vars(t, e, acc2);
+    }
+    return gm_vars(t, i + 1, acc);
+}
+
+pub Bool gm_has_var(Str t) { return gm_vars(t, 0, "") != ""; }
+
+// Canonical spelling for comparison and mangling (no spaces, explicit widths).
+pub Str gm_norm(Str t) { return str_replace(ty_canon(str_trim(t)), " ", ""); }
+
+// A unifier: type parameters bound so far and their types.
+type GU = { Bool ok; List(Str) ps; List(Str) vs; Str why; };
+
+pub GU gu_new() {
+    List(Str) e = [];
+    return GU {.ok = true, .ps = e, .vs = e, .why = ""};
+}
+
+GU gu_fail(GU u, Str why) { return GU {.ok = false, .ps = u.ps, .vs = u.vs, .why = why}; }
+
+pub Str gu_get(GU u, Str p) {
+    Int i = variant_index_at(u.ps, p, 0);
+    return if (i < 0) { "" } else { u.vs[i] };
+}
+
+// Match pattern `pat` (with type parameters) against type `conc`. Holes
+// (`_`, `Unknown`) in `conc` match anything and bind nothing.
+pub GU gm_unify(Str pat, Str conc, GU u) {
+    if (!u.ok) { return u; }
+    Str p = str_trim(pat);
+    Str c = str_trim(conc);
+    Bool hole = c == "_" || c == "Unknown" || c == "";
+    if (gm_is_var(p)) {
+        if (hole) { return u; }
+        Str b = gu_get(u, p);
+        if (b == "") { return GU {.ok = true, .ps = u.ps.concat([p]), .vs = u.vs.concat([c]), .why = ""}; }
+        if (ty_same(b, c) || gm_norm(b) == gm_norm(c)) { return u; }
+        return gu_fail(u, p + " is " + b + " and " + c);
+    }
+    if (hole) { return u; }
+    // Closure types: `R closure(P, ...)` by result and parameters.
+    if (is_fn_type(p) && is_fn_type(c)) {
+        List(Str) pp = fn_param_list(p);
+        List(Str) cp = fn_param_list(c);
+        if (pp.len() != cp.len()) { return gu_fail(u, pat + " does not match " + conc); }
+        return gm_unify_args(pp, cp, 0, gm_unify(fn_ret(p), fn_ret(c), u), pat, conc);
+    }
+    Str pn = num_norm(p);
+    Str cn = num_norm(c);
+    if (ty_head(pn) != ty_head(cn)) { return gu_fail(u, pat + " does not match " + conc); }
+    List(Str) ap = ty_args(pn);
+    List(Str) ac = ty_args(cn);
+    if (ap.len() != ac.len()) { return gu_fail(u, pat + " does not match " + conc); }
+    return gm_unify_args(ap, ac, 0, u, pat, conc);
+}
+
+GU gm_unify_args(List(Str) ap, List(Str) ac, Int i, GU u, Str pat, Str conc) {
+    if (i >= ap.len() || !u.ok) { return u; }
+    GU u2 = gm_unify(ap[i], ac[i], u);
+    if (!u2.ok) { return gu_fail(u2, pat + " does not match " + conc); }
+    return gm_unify_args(ap, ac, i + 1, u2, pat, conc);
+}
+
+pub Str gm_subst(Str t, GU u) {
+    if (u.ps.len() == 0) { return t; }
+    return ty_subst(t, u.ps, u.vs);
+}
+
+// A function's @needs list, normalized, as ",Ord(T),Show(T),".
+pub Str gm_needs_of(Str aux) {
+    Int at = str_find(aux, "@needs(");
+    if (at < 0) { return ""; }
+    Int e = imp_close_paren(aux, at + 7, 0);
+    List(Str) ns = ty_args("N(" + str_slice(aux, at + 7, e - 1) + ")");
+    return gm_join_norm(ns, 0, ",");
+}
+
+Str gm_join_norm(List(Str) ns, Int i, Str acc) {
+    if (i >= ns.len()) { return if (acc == ",") { "" } else { acc }; }
+    return gm_join_norm(ns, i + 1, acc + gm_norm(ns[i]) + ",");
+}
+
+// The name of the copy of `name` for type arguments `vals`.
+pub Str gm_inst_name(Str name, List(Str) vals, Int i, Str acc) {
+    if (i >= vals.len()) { return acc; }
+    return gm_inst_name(name, vals, i + 1, acc + "_" + imp_mangle(gm_norm(vals[i])));
+}
+
+// The type parameters of fn signature `idx`, in order.
+List(Str) gm_sig_vars(Sigs fs, Int idx) {
+    Str vs = gm_vars(fs.pts[idx] + "," + fs.rets[idx], 0, "");
+    if (vs == "") { return gk_nopts(); }
+    return str_split(str_slice(vs, 1, str_len(vs) - 1), ",");
+}
+
+Bool gm_generic_fn(Sigs fs, Int idx) { return gm_has_var(fs.pts[idx] + "," + fs.rets[idx]); }
+
+List(Str) gm_vals(List(Str) vars, GU u, Int i, ListBuf(Str) acc) {
+    if (i >= vars.len()) { return acc.finish(); }
+    return gm_vals(vars, u, i + 1, acc.push(gu_get(u, vars[i])));
+}
+
+// ─── Needs (behaviors a generic function relies on) ─────────────────
+
+// Is need `nd` (normalized "B(args)") met here? Inside a generic body a
+// need over its type parameters must be in the function's @needs; a
+// concrete need needs an instance (or a built-in one).
+Str gm_need_err(GK k, Str nd) {
+    if (gm_has_var(nd)) {
+        if (str_contains(k.gx.ctx, "," + nd + ",")) { return ""; }
+        return "this needs " + nd + ": add @needs(" + nd + ") to the function";
+    }
+    Str b = ty_head(nd);
+    List(Str) args = ty_args(nd);
+    if (gm_builtin_inst(b, args)) { return ""; }
+    if (gm_find_inst(k, b, args) >= 0) { return ""; }
+    return "no behavior instance " + nd + " (declare " + b + "(" + list_join(args, 0, ", ", "") + ") = f;)";
+}
+
+// Behaviors the language supplies for built-in types.
+Bool gm_builtin_inst(Str b, List(Str) args) {
+    if (args.len() != 1) { return false; }
+    Str t = num_norm(args[0]);
+    Bool num = is_num(t) && !is_dec_ty(t);
+    if (b == "Show" || b == "Serialize") { return true; }
+    if (b == "Ord") { return num || t == "Str"; }
+    if (b == "Eq") { return is_num(t) || t == "Str" || t == "Bool"; }
+    if (b == "Hash") { return is_int_ty(t) || t == "Str" || t == "Bool"; }
+    return false;
+}
+
+// Every need in `needs` (",B(T),...") after substitution, or the first error.
+Str gm_needs_err(GK k, List(Str) ns, Int i, GU u) {
+    if (i >= ns.len()) { return ""; }
+    if (ns[i] == "") { return gm_needs_err(k, ns, i + 1, u); }
+    Str e = gm_need_err(k, gm_norm(gm_subst(ns[i], u)));
+    if (e != "") { return e; }
+    return gm_needs_err(k, ns, i + 1, u);
+}
+
+// ─── Instances ──────────────────────────────────────────────────────
+
+// Instance node `n`'s behavior types.
+pub List(Str) gm_inst_types(Kg g, Int n) { return ty_args("B(" + kg_part(g.ns[n].aux, 1) + ")"); }
+
+// The instance of behavior `b` for types `args`: the highest-level match
+// (application over library over prelude), or -1.
+pub Int gm_find_inst(GK k, Str b, List(Str) args) {
+    return gm_find_inst_at(k, b, args, 0, -1, 0);
+}
+
+Int gm_find_inst_at(GK k, Str b, List(Str) args, Int i, Int best, Int blev) {
+    if (i >= k.gx.insts.len()) { return best; }
+    Int n = k.gx.insts[i];
+    Int lev = k.gx.ilev[i];
+    List(Str) ts = gm_inst_types(k.g, n);
+    Bool hit = lev > blev && k.g.ns[n].text == b && ts.len() == args.len() && gm_unify_args(ts, args, 0, gu_new(), b, b).ok;
+    return gm_find_inst_at(k, b, args, i + 1, if (hit) { n } else { best }, if (hit) { lev } else { blev });
+}
+
+// ─── Generic tables (per checking round) ────────────────────────────
+
+// Declarations walked for the tables: behavior declarations, verbs and
+// instance nodes.
+type GXW = { Map(Str, Int) bdecls; Map(Str, Int) verbs; List(Int) insts; };
+
+GXW gm_walk(Kg g, Int id, Int i, GXW w) {
+    if (i >= g.ns[id].nk) { return w; }
+    Int d = kg_kid(g, id, i);
+    Str k = g.ns[d].kind;
+    if (k == "sandbox") { return gm_walk(g, id, i + 1, gm_walk(g, d, 0, w)); }
+    if (k == "bdecl") {
+        Map(Str, Int) vs = gm_add_verbs(g, d, 0, w.verbs);
+        return gm_walk(g, id, i + 1, GXW {.bdecls = w.bdecls.insert(g.ns[d].text, d), .verbs = vs, .insts = w.insts});
+    }
+    if (k == "behavior") { return gm_walk(g, id, i + 1, GXW {.bdecls = w.bdecls, .verbs = w.verbs, .insts = w.insts.concat([d])}); }
+    return gm_walk(g, id, i + 1, w);
+}
+
+Map(Str, Int) gm_add_verbs(Kg g, Int d, Int i, Map(Str, Int) m) {
+    if (i >= g.ns[d].nk) { return m; }
+    return gm_add_verbs(g, d, i + 1, m.insert(g.ns[kg_kid(g, d, i)].text, d));
+}
+
+Map(Str, Str) gm_needs_map(Kg g, List(Int) fnode, Int i, Map(Str, Str) m) {
+    if (i >= fnode.len()) { return m; }
+    Str nd = gm_needs_of(g.ns[fnode[i]].aux);
+    return gm_needs_map(g, fnode, i + 1, if (nd == "") { m } else { m.insert(g.ns[fnode[i]].text, nd) });
+}
+
+// The marker the built-in prelude starts with (with_builtin_types).
+pub Str gm_prelude_mark() { return "// resid prelude (spec 11)"; }
+
+// Where the prelude starts in merged source src (past its end when
+// absent): it is appended last, unchanged (with_builtin_types).
+pub Int gm_prelude_pos(Str src) {
+    Str p = prelude_text();
+    Int n = str_len(src);
+    return if (str_ends_with(src, p)) { n - str_len(p) } else { n + 1 };
+}
+
+// The package a source path belongs to: a manifest dependency, the
+// standard library, or the application. `pk` holds the driver's
+// "@dep::name::root" and "@stdroot::dir" lines.
+Str gm_pkg(Str path, List(Str) pk, Int i) {
+    if (i >= pk.len()) { return "app"; }
+    Str l = pk[i];
+    if (str_starts_with(l, "@stdroot::")) {
+        Str r = str_slice(l, 10, str_len(l));
+        if (r != "" && str_starts_with(path, r)) { return "std"; }
+    }
+    if (str_starts_with(l, "@dep::")) {
+        Str rest = str_slice(l, 6, str_len(l));
+        Int c = imp_find_dcolon(rest, 0);
+        Str r = if (c < 0) { "" } else { str_slice(rest, c + 2, str_len(rest)) };
+        if (r != "" && str_starts_with(path, r)) { return "dep:" + str_slice(rest, 0, c); }
+    }
+    return gm_pkg(path, pk, i + 1);
+}
+
+// Package of node `n` ("prelude" past the prelude marker).
+Str gm_pkg_of(Kg g, Int n, List(Int) nls, Str smap, Int prel, List(Str) pk) {
+    if (g.ns[n].sp >= prel) { return "prelude"; }
+    return gm_pkg(diag_where(smap, gk_line_of(nls, g.ns[n].sp, 0, nls.len()) + 1).path, pk, 0);
+}
+
+Int gm_level(Str pkg) {
+    if (pkg == "app") { return 3; }
+    if (pkg == "prelude") { return 1; }
+    return 2;
+}
+
+List(Int) gm_levels(Kg g, List(Int) insts, Int i, List(Int) nls, Str smap, Int prel, List(Str) pk, ListBuf(Int) acc) {
+    if (i >= insts.len()) { return acc.finish(); }
+    return gm_levels(g, insts, i + 1, nls, smap, prel, pk, acc.push(gm_level(gm_pkg_of(g, insts[i], nls, smap, prel, pk))));
+}
+
+// The instance's key: behavior and normalized types.
+Str gm_inst_key(Kg g, Int n) { return g.ns[n].text + "(" + gm_norm(kg_part(g.ns[n].aux, 1)) + ")"; }
+
+// A higher level replaces an identical lower-level instance program-wide:
+// the replaced one's level becomes 0.
+List(Int) gm_replace(Kg g, List(Int) insts, List(Int) lev, Int i, ListBuf(Int) acc) {
+    if (i >= insts.len()) { return acc.finish(); }
+    Bool beaten = gm_beaten(g, insts, lev, i, 0);
+    return gm_replace(g, insts, lev, i + 1, acc.push(if (beaten) { 0 } else { lev[i] }));
+}
+
+Bool gm_beaten(Kg g, List(Int) insts, List(Int) lev, Int i, Int j) {
+    if (j >= insts.len()) { return false; }
+    if (j != i && lev[j] > lev[i] && gm_inst_key(g, insts[j]) == gm_inst_key(g, insts[i])) { return true; }
+    return gm_beaten(g, insts, lev, i, j + 1);
+}
+
+// Split "names\x1dextra": the source map and the driver's package lines.
+pub Str gm_smap(Str smap) {
+    Int c = str_find_char(smap, 29, 0);
+    return if (c < 0) { smap } else { str_slice(smap, 0, c) };
+}
+
+List(Str) gm_pk(Str smap) {
+    Int c = str_find_char(smap, 29, 0);
+    if (c < 0) { return gk_nopts(); }
+    return str_split(str_slice(smap, c + 1, str_len(smap)), "\n");
+}
+
+GX gm_gx_init(Kg g, Int unit, GKSig sg, Str src, Str smap) {
+    Map(Str, Int) mi = {};
+    List(Int) ni = [];
+    GXW w = gm_walk(g, unit, 0, GXW {.bdecls = mi, .verbs = mi, .insts = ni});
+    Map(Str, Str) ms = {};
+    Map(Str, Str) needs = gm_needs_map(g, sg.fnode, 0, ms);
+    List(Str) e = [];
+    if (w.insts.len() == 0) { return GX {.needs = needs, .bdecls = w.bdecls, .verbs = w.verbs, .insts = ni, .ilev = ni, .ctx = "", .cvars = "", .log = e, .uses = ""}; }
+    List(Int) nls = gk_newlines(src, 0, ListBuf());
+    Int prel = gm_prelude_pos(src);
+    List(Int) lev0 = gm_levels(g, w.insts, 0, nls, gm_smap(smap), prel, gm_pk(smap), ListBuf());
+    List(Int) lev = gm_replace(g, w.insts, lev0, 0, ListBuf());
+    return GX {.needs = needs, .bdecls = w.bdecls, .verbs = w.verbs, .insts = w.insts, .ilev = lev, .ctx = "", .cvars = "", .log = e, .uses = ""};
+}
+
+// A replaced instance (level 0) leaves the program ("X|n"), so every use,
+// lowering's included, sees the one that replaced it.
+GK gm_log_beaten(GK k, Int i) {
+    if (i >= k.gx.insts.len()) { return k; }
+    GK k2 = if (k.gx.ilev[i] == 0) { gk_log(k, f"X|{k.gx.insts[i]}|{gm_winner(k, i, 0)}") } else { k };
+    return gm_log_beaten(k2, i + 1);
+}
+
+// The instance that replaced instance i (same key, higher level).
+Int gm_winner(GK k, Int i, Int j) {
+    if (j >= k.gx.insts.len()) { return k.gx.insts[i]; }
+    Bool w = k.gx.ilev[j] > 0 && gm_inst_key(k.g, k.gx.insts[j]) == gm_inst_key(k.g, k.gx.insts[i]);
+    return if (w) { k.gx.insts[j] } else { gm_winner(k, i, j + 1) };
+}
+
+// ─── Instance checks ────────────────────────────────────────────────
+
+// The behavior parameters of bdecl `bd` ("T,U" in its aux).
+pub List(Str) gm_bparams(Kg g, Int bd) {
+    List(Str) ap = str_split(g.ns[bd].aux, kg_us());
+    return str_split(ap[ap.len() - 1], ",");
+}
+
+// Proto `verb` of bdecl `bd`, or -1.
+pub Int gm_proto(Kg g, Int bd, Str verb) { return gk_sfield_at(g, bd, 0, verb); }
+
+// The function an instance gives `verb`: its single function, or the
+// bundle's entry.
+pub Str gm_impl_for(Kg g, Int inst, Str verb) {
+    Str impl = kg_part(g.ns[inst].aux, 2);
+    if (!str_contains(impl, "=")) { return impl; }
+    return gm_bundle_get(str_split(impl, ","), 0, verb);
+}
+
+Str gm_bundle_get(List(Str) es, Int i, Str verb) {
+    if (i >= es.len()) { return ""; }
+    if (str_starts_with(es[i], verb + "=")) { return str_slice(es[i], str_len(verb) + 1, str_len(es[i])); }
+    return gm_bundle_get(es, i + 1, verb);
+}
+
+// Proto parameter types (kids 1..) joined by ",".
+pub Str gm_proto_pts(Kg g, Int pr) { return gk_join_kids_ty(g, pr, 1, g.ns[pr].nk, ""); }
+
+// The declared type of each package-owned name: struct/sum declarations.
+Str gm_type_pkg(GK k, Str t, List(Int) nls, Str smap, Int prel, List(Str) pk) {
+    Str h = ty_head(num_norm(t));
+    Int d = k.sd.get(h) else { -1 };
+    Int d2 = if (d >= 0) { d } else { gm_sum_decl(k.g, h) };
+    if (d2 < 0) { return "prelude"; }
+    return gm_pkg_of(k.g, d2, nls, smap, prel, pk);
+}
+
+Int gm_sum_decl(Kg g, Str h) { return gm_sum_decl_at(g, h, 0); }
+
+Int gm_sum_decl_at(Kg g, Str h, Int i) {
+    if (i >= kg_count(g)) { return -1; }
+    if ((g.ns[i].kind == "sum_t" || g.ns[i].kind == "alias_t") && g.ns[i].text == h) { return i; }
+    return gm_sum_decl_at(g, h, i + 1);
+}
+
+Bool gm_owns_type(GK k, List(Str) ts, Int i, Str pkg, List(Int) nls, Str smap, Int prel, List(Str) pk) {
+    if (i >= ts.len()) { return false; }
+    if (!gm_is_var(ts[i]) && gm_type_pkg(k, ts[i], nls, smap, prel, pk) == pkg) { return true; }
+    return gm_owns_type(k, ts, i + 1, pkg, nls, smap, prel, pk);
+}
+
+// A problem with instance node `n` (index i of gx.insts), or "".
+Str gm_inst_err(GK k, Int i, List(Int) nls, Str smap, Int prel, List(Str) pk) {
+    Kg g = k.g;
+    Int n = k.gx.insts[i];
+    Str b = g.ns[n].text;
+    List(Str) ts = gm_inst_types(g, n);
+    Str inst = b + "(" + list_join(ts, 0, ", ", "") + ")";
+    Int bd = k.gx.bdecls.get(b) else { -1 };
+    if (bd < 0) { return "no behavior " + b + " is declared (behavior " + b + "(T) { ... })"; }
+    List(Str) bps = gm_bparams(g, bd);
+    if (bps.len() != ts.len()) { return "behavior " + b + f" takes {bps.len()} type(s), " + inst + f" gives {ts.len()}"; }
+    Int lev = k.gx.ilev[i];
+    Bool scalar = b == "Show" && ts.len() == 1 && (is_num(ts[0]) || ts[0] == "Bool" || ts[0] == "Str");
+    if (scalar && lev == 3) { return "behavior Show(" + ts[0] + "): numbers, Bool and Str have a fixed display; wrap the value in a record to give it its own format"; }
+    Str dup = gm_dup_err(k, i, 0, inst);
+    if (dup != "") { return dup; }
+    // Orphans (E0224): a library declares instances of its own behaviors or types.
+    Str ipkg = if (lev == 2) { gm_pkg_of(g, n, nls, smap, prel, pk) } else { "" };
+    Bool own = lev != 2 || gm_pkg_of(g, bd, nls, smap, prel, pk) == ipkg || gm_owns_type(k, ts, 0, ipkg, nls, smap, prel, pk);
+    if (!own) { return "E0224: " + inst + ": a library may declare instances only of its own behaviors or types; only the application may declare this one"; }
+    GU u = gm_bind_list(bps, ts, 0, gu_new());
+    Bool single = g.ns[bd].nk == 1;
+    Str impl = kg_part(g.ns[n].aux, 2);
+    if (single && str_contains(impl, "=")) { return inst + ": behavior " + b + " has one function; give it directly: " + b + "(...) = f;"; }
+    if (!single && !str_contains(impl, "=")) { return inst + ": behavior " + b + " has several functions; give a record { .verb = f, ... }"; }
+    return gm_protos_err(k, n, bd, 0, u, inst, single);
+}
+
+GU gm_bind_list(List(Str) ps, List(Str) vs, Int i, GU u) {
+    if (i >= ps.len() || i >= vs.len()) { return u; }
+    return gm_bind_list(ps, vs, i + 1, GU {.ok = true, .ps = u.ps.concat([ps[i]]), .vs = u.vs.concat([vs[i]]), .why = ""});
+}
+
+// Each proto of bdecl `bd` against the instance's function for it.
+Str gm_protos_err(GK k, Int n, Int bd, Int j, GU u, Str inst, Bool single) {
+    Kg g = k.g;
+    if (j >= g.ns[bd].nk) { return gm_extra_verbs(g, n, bd, inst); }
+    Int pr = kg_kid(g, bd, j);
+    Str verb = g.ns[pr].text;
+    Str f = gm_impl_for(g, n, verb);
+    Str wpts = gm_subst(gm_proto_pts(g, pr), u);
+    Str wret = gm_subst(g.ns[kg_kid(g, pr, 0)].text, u);
+    Str what = if (single) { "impl" } else { verb };
+    Str sig = what + " must have signature (" + str_replace(wpts, ",", ", ") + ") -> " + wret;
+    if (f == "") { return inst + ": the record gives no function for " + verb; }
+    Int fi = ck_fn_index(k.fs, f);
+    if (fi < 0) { return "behavior " + inst + ": " + f + " is not a function; " + sig; }
+    Bool fits = if (gm_generic_fn(k.fs, fi)) { gm_sig_fits(k.fs, fi, wpts, wret) } else { gm_same_list(k.fs.pts[fi], wpts) && ty_same(k.fs.rets[fi], wret) };
+    if (!fits) { return "behavior " + inst + ": " + sig; }
+    return gm_protos_err(k, n, bd, j + 1, u, inst, single);
+}
+
+// A bundle entry naming no verb of the behavior.
+Str gm_extra_verbs(Kg g, Int n, Int bd, Str inst) {
+    Str impl = kg_part(g.ns[n].aux, 2);
+    if (!str_contains(impl, "=")) { return ""; }
+    return gm_extra_at(g, str_split(impl, ","), 0, bd, inst);
+}
+
+Str gm_extra_at(Kg g, List(Str) es, Int i, Int bd, Str inst) {
+    if (i >= es.len()) { return ""; }
+    Str v = str_slice(es[i], 0, str_find_char(es[i], 61, 0));
+    if (gm_proto(g, bd, v) < 0) { return inst + ": " + v + " is not a function of behavior " + g.ns[bd].text; }
+    return gm_extra_at(g, es, i + 1, bd, inst);
+}
+
+Bool gm_same_list(Str a, Str b) {
+    if (a == b) { return true; }
+    List(Str) al = split_type_list(a, 0, 0, 0, "", gk_nopts());
+    List(Str) bl = split_type_list(b, 0, 0, 0, "", gk_nopts());
+    return al.len() == bl.len() && gm_same_at(al, bl, 0);
+}
+
+Bool gm_same_at(List(Str) a, List(Str) b, Int i) {
+    if (i >= a.len()) { return true; }
+    return (ty_same(a[i], b[i]) || gm_norm(a[i]) == gm_norm(b[i])) && gm_same_at(a, b, i + 1);
+}
+
+// Does generic fn `fi`'s signature specialize to (wpts) -> wret?
+Bool gm_sig_fits(Sigs fs, Int fi, Str wpts, Str wret) {
+    List(Str) fp = split_type_list(fs.pts[fi], 0, 0, 0, "", gk_nopts());
+    List(Str) wp = split_type_list(wpts, 0, 0, 0, "", gk_nopts());
+    if (fp.len() != wp.len()) { return false; }
+    GU u = gm_unify(fs.rets[fi], wret, gm_unify_args(fp, wp, 0, gu_new(), "", ""));
+    return u.ok;
+}
+
+// Duplicates (E0001) and overlaps (E0225) at the same level.
+Str gm_dup_err(GK k, Int i, Int j, Str inst) {
+    if (j >= i) { return ""; }
+    Int a = k.gx.insts[i];
+    Int b = k.gx.insts[j];
+    Int la = k.gx.ilev[i];
+    Bool synth = str_starts_with(k.g.ns[a].aux, "@synth") || str_starts_with(k.g.ns[b].aux, "@synth");
+    Bool same = !synth && la > 0 && la == k.gx.ilev[j] && k.g.ns[a].text == k.g.ns[b].text;
+    if (same && gm_inst_key(k.g, a) == gm_inst_key(k.g, b)) { return inst + " is declared more than once; a type has one instance per behavior (pass another ordering with using = f)"; }
+    List(Str) ta = gm_inst_types(k.g, a);
+    List(Str) tb = gm_inst_types(k.g, b);
+    Bool ov = same && ta.len() == tb.len() && (gm_unify_args(ta, tb, 0, gu_new(), "", "").ok || gm_unify_args(tb, ta, 0, gu_new(), "", "").ok);
+    if (ov) { return "E0225: overlapping instances: " + inst + " and " + k.g.ns[b].text + "(" + kg_part(k.g.ns[b].aux, 1) + ") both cover some type; give each type one instance (no specialization)"; }
+    return gm_dup_err(k, i, j + 1, inst);
+}
+
+// Report every bad instance; true when there was one.
+Bool gm_inst_checks(GK k, Int i, Str src, Str smap, Bool acc) {
+    if (k.gx.insts.len() == 0) { return false; }
+    return gm_inst_checks_at(k, 0, src, gm_smap(smap), gk_newlines(src, 0, ListBuf()), gm_prelude_pos(src), gm_pk(smap), false);
+}
+
+Bool gm_inst_checks_at(GK k, Int i, Str src, Str sm, List(Int) nls, Int prel, List(Str) pk, Bool acc) {
+    if (i >= k.gx.insts.len()) { return acc; }
+    Str m = gm_inst_err(k, i, nls, sm, prel, pk);
+    if (m != "") { gk_diag("E0001", "type error: " + m, k.g, k.gx.insts[i], src, sm); }
+    return gm_inst_checks_at(k, i + 1, src, sm, nls, prel, pk, acc || m != "");
+}
+
+// The function behavior `b`'s instance for type `t` calls (a copy, logged,
+// when the instance is generic), or "".
+type GKI = { GK k; Str f; };
+
+GKI gm_inst_fn(GK k, Str b, Str t) {
+    Str ov = gm_use(k, b);
+    Int fo = if (ov == "" || str_contains(ov, "(")) { -1 } else { ck_fn_index(k.fs, ov) };
+    if (fo >= 0) { return GKI {.k = k, .f = ov}; }
+    List(Str) ts = [t];
+    Int n = gm_find_inst(k, b, ts);
+    if (n < 0) { return GKI {.k = k, .f = ""}; }
+    Str f = kg_part(k.g.ns[n].aux, 2);
+    Int fi = ck_fn_index(k.fs, f);
+    if (fi < 0 || str_contains(f, "=")) { return GKI {.k = k, .f = ""}; }
+    if (!gm_generic_fn(k.fs, fi)) { return GKI {.k = k, .f = f}; }
+    List(Str) fp = split_type_list(k.fs.pts[fi], 0, 0, 0, "", gk_nopts());
+    GU u = gm_unify_all(fp, t, 0, gu_new());
+    List(Str) vars = gm_sig_vars(k.fs, fi);
+    List(Str) vals = gm_vals(vars, u, 0, ListBuf());
+    if (!u.ok || variant_index_at(vals, "", 0) >= 0) { return GKI {.k = k, .f = ""}; }
+    Str inst = gm_inst_name(f, vals, 0, f + "__g");
+    return GKI {.k = gk_log(k, "I|" + f + "|" + inst + "|" + list_join(vars, 0, ",", "") + "|" + list_join(vals, 0, gm_rs(), "")), .f = inst};
+}
+
+// Every parameter pattern matched against the one type t.
+GU gm_unify_all(List(Str) ps, Str t, Int i, GU u) {
+    if (i >= ps.len()) { return u; }
+    return gm_unify_all(ps, t, i + 1, gm_unify(ps[i], t, u));
+}
+
+// ─── Synthesized instances ──────────────────────────────────────────
+// Display and sorting look instances up by exact type. A generic
+// instance (Show(Pair(T)) = show_pair) that covers a concrete type is
+// logged as a copy of its function and a concrete instance naming it
+// ("B|Show|Pair(Int)|show_pair__g_Int"), which mono.resid adds.
+
+GK gm_synth_inst(GK k, Str b, Str t) {
+    if (gm_has_var(t) || ck_b_index(k.fs, b, t) >= 0) { return k; }
+    List(Str) ts = [t];
+    Int n = gm_find_inst(k, b, ts);
+    if (n < 0 || gm_inst_level(k, n) <= 1) { return k; }
+    Str f = kg_part(k.g.ns[n].aux, 2);
+    Int fi = ck_fn_index(k.fs, f);
+    if (fi < 0 || !gm_generic_fn(k.fs, fi)) { return k; }
+    List(Str) fp = split_type_list(k.fs.pts[fi], 0, 0, 0, "", gk_nopts());
+    if (fp.len() == 0) { return k; }
+    GU u = gm_unify(fp[0], t, gu_new());
+    List(Str) vars = gm_sig_vars(k.fs, fi);
+    List(Str) vals = gm_vals(vars, u, 0, ListBuf());
+    if (!u.ok || variant_index_at(vals, "", 0) >= 0) { return k; }
+    Str inst = gm_inst_name(f, vals, 0, f + "__g");
+    GK k1 = gk_log(k, "I|" + f + "|" + inst + "|" + list_join(vars, 0, ",", "") + "|" + list_join(vals, 0, gm_rs(), ""));
+    return gk_log(k1, f"B|{n}|" + b + "|" + t + "|" + inst);
+}
+
+Int gm_inst_level(GK k, Int n) {
+    Int i = gm_index_of(k.gx.insts, n, 0);
+    return if (i < 0) { 0 } else { k.gx.ilev[i] };
+}
+
+Int gm_index_of(List(Int) xs, Int v, Int i) {
+    if (i >= xs.len()) { return -1; }
+    if (xs[i] == v) { return i; }
+    return gm_index_of(xs, v, i + 1);
+}
+
+// The types a value of type `t` is displayed through: elements,
+// payloads and fields.
+List(Str) gm_components(GK k, Str t) {
+    Str h = ty_head(t);
+    List(Str) as = ty_args(t);
+    if (h == "List" && as.len() > 0) { return [as[0]]; }
+    if (h == "Option" || h == "Result" || h == "Map" || h == "Set") { return as; }
+    Int sd = k.sd.get(h) else { -1 };
+    if (sd >= 0) { return gm_field_types(k, t, sd, 0, ListBuf()); }
+    Int si = sumtype_index(k.fs, t);
+    if (si >= 0) { return sum_payloads(k.fs, si, t); }
+    return gk_nopts();
+}
+
+List(Str) gm_field_types(GK k, Str t, Int sd, Int i, ListBuf(Str) acc) {
+    if (i >= k.g.ns[sd].nk) { return acc.finish(); }
+    Str ft = gk_field_type(k, t, k.g.ns[kg_kid(k.g, sd, i)].text);
+    return gm_field_types(k, t, sd, i + 1, if (ft == "") { acc } else { acc.push(ft) });
+}
+
+GK gm_show_insts(GK k, Str t, Int depth) {
+    if (depth > 6 || k.gx.insts.len() == 0 || gm_has_var(t) || t == "") { return k; }
+    GK k1 = gm_synth_inst(k, "Show", t);
+    return gm_show_list(k1, gm_components(k1, t), 0, depth + 1);
+}
+
+GK gm_show_list(GK k, List(Str) ts, Int i, Int depth) {
+    if (i >= ts.len()) { return k; }
+    return gm_show_list(gm_show_insts(k, ts[i], depth), ts, i + 1, depth);
+}
+
+// ─── Verbs ──────────────────────────────────────────────────────────
+
+// A call of behavior verb `verb`: the behavior's types from the
+// arguments (and the expected type), then the instance's function for
+// it, called in place of the verb (logged for mono.resid).
+GKT gk_vcall(GK k0, Int id, Str verb, Str exp) {
+    Kg g = k0.g;
+    Int bd = k0.gx.verbs.get(verb) else { -1 };
+    Int pr = gm_proto(g, bd, verb);
+    Int uk = gm_using_kid(g, id);
+    GKA a = if (uk >= 0) { gk_args_to(k0, id, 0, g.ns[id].nk - 1, gk_nopts(), 0, "", 0) } else { gk_args(k0, id, 0, gk_nopts(), 0, "", 0) };
+    if (a.err != "") { return gterr(a.k, a.err, a.at); }
+    // The verb's use points at its prototype (editor definition, hover).
+    GK k = gk_mem(a.k, id, pr);
+    List(Str) pl = if (gm_proto_pts(g, pr) == "") { gk_nopts() } else { split_type_list(gm_proto_pts(g, pr), 0, 0, 0, "", gk_nopts()) };
+    List(Str) al = if (a.tys == "") { gk_nopts() } else { split_type_list(a.tys, 0, 0, 0, "", gk_nopts()) };
+    Str b = g.ns[bd].text;
+    if (pl.len() != a.count) { return gterr(k, verb + " (behavior " + b + ") expects (" + gm_proto_pts(g, pr) + "), got (" + a.tys + ")", id); }
+    GU u1 = gm_unify_nonlit(g, id, pl, al, 0, 0, false, gu_new());
+    GU u2 = gm_unify_lits(g, id, pl, al, 0, 0, false, u1);
+    Str ret = g.ns[kg_kid(g, pr, 0)].text;
+    GU u = if (u2.ok && exp != "" && gm_has_var(gm_subst(ret, u2))) { gm_unify(ret, exp, u2) } else { u2 };
+    if (!u.ok) { return gterr(k, verb + " (behavior " + b + "): " + u.why, id); }
+    List(Str) bps = gm_bparams(g, bd);
+    List(Str) bvals = gm_vals(bps, u, 0, ListBuf());
+    Int miss = variant_index_at(bvals, "", 0);
+    if (miss >= 0) { return gterr(k, "E0227: cannot infer " + bps[miss] + " of behavior " + b + " for " + verb + "; give the result a declared type", id); }
+    Str nd = gm_norm(b + "(" + list_join(bvals, 0, ",", "") + ")");
+    Str rty = gm_subst(ret, u);
+    if (gm_has_var(nd)) {
+        if (!str_contains(k.gx.ctx, "," + nd + ",")) { return gterr(k, "E0226: " + verb + " needs " + nd + ": add @needs(" + nd + ") to the function", id); }
+        return gt(k, rty, id);
+    }
+    // An override: this call's `using = O`, else the copy's.
+    Str ov0 = if (uk >= 0) { gk_inst(g, kg_kid(g, uk, 0)) } else { gm_use(k, b) };
+    if (ov0 != "") { return gm_vcall_over(k, id, verb, b, bvals, ov0, a); }
+    Int inst = gm_find_inst(k, b, bvals);
+    if (inst < 0) { return gterr(k, "E0226: " + verb + ": no behavior instance " + nd + " (declare " + b + "(" + list_join(bvals, 0, ", ", "") + ") = f;)", id); }
+    Str f = gm_impl_for(g, inst, verb);
+    Int fi = ck_fn_index(k.fs, f);
+    if (fi < 0) { return gterr(k, verb + ": instance function " + f + " is missing", id); }
+    if (gm_generic_fn(k.fs, fi)) { return gk_gcall(k, id, f, fi, a.tys, a.count, false, exp); }
+    if (!params_accept(k.fs.pts[fi], a.tys, a.count) && k.fs.pts[fi] != a.tys) { return gterr(k, verb + " via " + f + " expects (" + k.fs.pts[fi] + "), got (" + a.tys + ")", id); }
+    return gt(gk_log(k, f"C|{id}|" + f), k.fs.rets[fi], id);
+}
+
+// A verb call through override O: a function, an instance B(..), or
+// Reverse(..) of either for a two-argument verb (its arguments swapped).
+GKT gm_vcall_over(GK k, Int id, Str verb, Str b, List(Str) bvals, Str ov, GKA a) {
+    PRes st = strip_reverse(ov, 0);
+    Bool rev = st.ty != ov;
+    Str inner = st.ty;
+    Int op = str_find_char(inner, 40, 0);
+    Int inst = if (op < 0) { -1 } else { gm_find_inst(k, str_slice(inner, 0, op), ty_args(inner)) };
+    Str f = if (op < 0) { inner } else { if (inst < 0) { "" } else { gm_impl_for(k.g, inst, verb) } };
+    Int fi = ck_fn_index(k.fs, f);
+    if (fi < 0) { return gterr(k, verb + ": using = " + ov + " names no function or instance for it", id); }
+    if (rev && a.count != 2) { return gterr(k, verb + ": Reverse applies to two-argument functions", id); }
+    List(Str) al = split_type_list(a.tys, 0, 0, 0, "", gk_nopts());
+    Str tys = if (rev) { al[1] + "," + al[0] } else { a.tys };
+    if (gm_generic_fn(k.fs, fi)) {
+        GKT gc = gk_gcall(k, id, f, fi, tys, a.count, false, "");
+        if (gc.err != "") { return gc; }
+        GK kr = if (rev) { gk_log(gc.k, f"R|{id}") } else { gc.k };
+        return gt(if (gm_using_kid(k.g, id) >= 0) { gk_log(kr, f"D|{id}") } else { kr }, gc.ty, id);
+    }
+    if (!params_accept(k.fs.pts[fi], tys, a.count) && k.fs.pts[fi] != tys) { return gterr(k, verb + " via " + f + " expects (" + k.fs.pts[fi] + "), got (" + tys + ")", id); }
+    GK k1 = gk_log(k, f"C|{id}|" + f);
+    GK k2 = if (rev) { gk_log(k1, f"R|{id}") } else { k1 };
+    return gt(if (gm_using_kid(k.g, id) >= 0) { gk_log(k2, f"D|{id}") } else { k2 }, k.fs.rets[fi], id);
 }
 
 // ─── Expressions ────────────────────────────────────────────────────
@@ -103,7 +815,7 @@ pub GKT gk_expr(GK k, Int id, Str exp) {
     if (kind == "fstr") { return gk_fstr(k, id, 0); }
     if (kind == "ref") { return gk_ref(k, id); }
     if (kind == "call") { return gk_call(k, id, exp); }
-    if (kind == "struct") { return gk_struct(k, id, t, 0); }
+    if (kind == "struct") { return gk_struct_lit(k, id, t, exp); }
     if (kind == "paren") {
         GKT e = gk_expr(k, gk_kid(k, id, 0), "");
         if (e.err != "") { return e; }
@@ -130,7 +842,7 @@ pub GKT gk_expr(GK k, Int id, Str exp) {
     if (kind == "orelse") { return gk_orelse(k, id, exp); }
     if (kind == "tern") { return gk_tern(k, id, exp); }
     if (kind == "ifx") { return gk_ifx(k, id, exp); }
-    if (kind == "bexpr") { return gk_bexpr(k, k, id, 0); }
+    if (kind == "bexpr") { return gk_bexpr(k, k, id, 0, exp); }
     if (kind == "match") { return gk_match(k, id); }
     if (kind == "lambda") { return gk_lambda(k, id, exp); }
     if (kind == "mcall") { return gk_mcall(k, id); }
@@ -197,7 +909,9 @@ GKT gk_fstr(GK k, Int id, Int i) {
     if (ck == "fpart" || ck == "fspec") { return gk_fstr(k, id, i + 1); }
     GKT h = gk_expr(k, c, "");
     if (h.err != "") { return h; }
-    return gk_fstr(h.k, id, i + 1);
+    Str nd = gm_need_vars(h.k, "Show", str_split(gm_tvars(h.ty), ","), 0);
+    if (nd != "") { return gterr(h.k, "E0226: showing a " + h.ty + " needs " + nd + ": add @needs(" + nd + ") to the function", c); }
+    return gk_fstr(gm_show_insts(h.k, h.ty, 0), id, i + 1);
 }
 
 GKT gk_ref(GK k, Int id) {
@@ -224,15 +938,88 @@ GKA gk_args(GK k, Int id, Int i, List(Str) pts, Int pi, Str acc, Int count) {
     return gk_args(a.k, id, i + 1, pts, pi + 1, acc2, count + 1);
 }
 
-List(Str) gk_nopts() {
+// Arguments before a trailing `using = ...` (generic calls and verbs).
+GKA gk_args_to(GK k, Int id, Int i, Int end, List(Str) pts, Int pi, Str acc, Int count) {
+    if (i >= end) { return GKA {.tys = acc, .count = count, .err = "", .at = id, .k = k}; }
+    Str exp = if (pi < pts.len()) { pts[pi] } else { "" };
+    GKT a = gk_expr(k, gk_kid(k, id, i), exp);
+    if (a.err != "") { return GKA {.tys = acc, .count = count, .err = a.err, .at = a.at, .k = a.k}; }
+    Str acc2 = if (acc == "") { a.ty } else { acc + "," + a.ty };
+    return gk_args_to(a.k, id, i + 1, end, pts, pi + 1, acc2, count + 1);
+}
+
+// Does argument node `a` take its type from where it goes?
+Bool gm_needs_exp(Kg g, Int a) {
+    KN n = g.ns[a];
+    if (n.kind == "lambda" || n.kind == "emptyb") { return true; }
+    if (n.kind == "list" && n.nk == 0) { return true; }
+    return n.kind == "call" && n.nk == 0 && (n.text == "ListBuf" || n.text == "StrBuf");
+}
+
+// Arguments of a generic call: those that need an expected type
+// (lambdas, ListBuf(), [], {}) are typed after the others fix the type
+// parameters, with the parameter's type so far.
+GKA gk_gargs(GK k, Int id, Int end, List(Str) pl) {
+    GKA a1 = gk_gargs_pass(k, id, 0, end, pl, gu_new(), false, ListBuf());
+    if (a1.err != "") { return a1; }
+    List(Str) t1 = str_split(a1.tys, gm_rs());
+    GU u = gm_unify_typed(pl, t1, 0, gu_new());
+    return gk_gargs_fill(a1.k, id, 0, end, pl, u, t1, "", 0);
+}
+
+// The first pass: gm_rs()-joined types, "" for deferred arguments.
+GKA gk_gargs_pass(GK k, Int id, Int i, Int end, List(Str) pl, GU u, Bool unused, ListBuf(Str) acc) {
+    if (i >= end) { return GKA {.tys = list_join(acc.finish(), 0, gm_rs(), ""), .count = end, .err = "", .at = id, .k = k}; }
+    Int c = gk_kid(k, id, i);
+    if (gm_needs_exp(k.g, c)) { return gk_gargs_pass(k, id, i + 1, end, pl, u, unused, acc.push("")); }
+    GKT t = gk_expr(k, c, "");
+    if (t.err != "") {
+        List(Str) dropped = acc.finish();
+        return GKA {.tys = "", .count = 0, .err = t.err, .at = t.at, .k = t.k};
+    }
+    return gk_gargs_pass(t.k, id, i + 1, end, pl, u, unused, acc.push(t.ty));
+}
+
+GU gm_unify_typed(List(Str) pl, List(Str) ts, Int i, GU u) {
+    if (i >= pl.len() || i >= ts.len()) { return u; }
+    GU u2 = if (ts[i] == "") { u } else { gm_unify(pl[i], ts[i], u) };
+    return gm_unify_typed(pl, ts, i + 1, if (u2.ok) { u2 } else { u });
+}
+
+// The second pass: deferred arguments typed against their parameters.
+GKA gk_gargs_fill(GK k, Int id, Int i, Int end, List(Str) pl, GU u, List(Str) ts, Str acc, Int count) {
+    if (i >= end) { return GKA {.tys = acc, .count = count, .err = "", .at = id, .k = k}; }
+    Str t0 = if (i < ts.len()) { ts[i] } else { "" };
+    Str want = if (i < pl.len()) { gm_subst(pl[i], u) } else { "" };
+    // A lambda may leave its result type open: its body fixes it.
+    Bool open_ret = is_fn_type(want) && !gm_has_var(fn_inner(want)) && gm_is_var(str_trim(fn_ret(want)));
+    Str wexp = if (!gm_has_var(want) || open_ret) { want } else { "" };
+    GKT t = if (t0 != "") { GKT {.ty = t0, .err = "", .at = id, .k = k} } else { gk_expr(k, gk_kid(k, id, i), wexp) };
+    if (t.err != "") { return GKA {.tys = acc, .count = count, .err = t.err, .at = t.at, .k = t.k}; }
+    // What this argument fixes helps the ones after it (a lambda's result
+    // type, then a ListBuf of it).
+    GU u2 = if (t0 == "" && i < pl.len()) { gm_unify(pl[i], t.ty, u) } else { u };
+    return gk_gargs_fill(t.k, id, i + 1, end, pl, if (u2.ok) { u2 } else { u }, ts, if (acc == "") { t.ty } else { acc + "," + t.ty }, count + 1);
+}
+
+// A call's trailing `using = ...` argument node, or -1.
+Int gm_using_kid(Kg g, Int id) {
+    Int n = g.ns[id].nk;
+    if (n == 0) { return -1; }
+    Int c = kg_kid(g, id, n - 1);
+    return if (g.ns[c].kind == "named" && g.ns[c].text == "using") { c } else { -1 };
+}
+
+pub List(Str) gk_nopts() {
     List(Str) e = [];
     return e;
 }
 
 // A call to a user function or builtin once its arguments are typed; a
 // method-sugar call also gets a member edge to the fn declaration.
-GKT gk_finish_call(GK k, Int id, Str name, Str argtys, Int argc, Bool method) {
+GKT gk_finish_call(GK k, Int id, Str name, Str argtys, Int argc, Bool method, Str exp) {
     Int idx = ck_fn_index(k.fs, name);
+    if (idx >= 0 && gm_generic_fn(k.fs, idx)) { return gk_gcall(k, id, name, idx, argtys, argc, method, exp); }
     if (idx >= 0) {
         Str pts = k.fs.pts[idx];
         Int np = if (pts == "") { 0 } else { split_type_list(pts, 0, 0, 0, "", gk_nopts()).len() };
@@ -252,6 +1039,7 @@ GKT gk_call(GK k, Int id, Str exp) {
     Int argn = k.g.ns[id].nk;
     Str lty = gk_local(k, id);
     if (lty != "" && is_fn_type(lty)) { return gk_fn_call(k, id, 0, lty); }
+    if (ck_fn_index(k.fs, n) < 0 && k.gx.verbs.contains(n)) { return gk_vcall(k, id, n, exp); }
     if (n == "sort") { return gk_sort(k, id); }
     // min / max / clamp: an integer literal argument adopts the type of the
     // others (spec §6.1a), as an operand would.
@@ -283,12 +1071,98 @@ GKT gk_call(GK k, Int id, Str exp) {
     }
     VOwn vo = find_variant(k.fs, n);
     if (vo.ok) { return gk_variant_call(k, id, n, vo); }
-    if (argn == 0) { return gk_finish_call(k, id, n, "", 0, false); }
+    if (argn == 0) { return gk_finish_call(k, id, n, "", 0, false, exp); }
     Int idx = ck_fn_index(k.fs, n);
-    List(Str) pl = if (idx >= 0) { split_type_list(k.fs.pts[idx], 0, 0, 0, "", gk_nopts()) } else { gk_nopts() };
-    GKA a = gk_args(k, id, 0, pl, 0, "", 0);
+    Bool gen = idx >= 0 && gm_generic_fn(k.fs, idx);
+    List(Str) pl = if (idx >= 0 && !gen) { split_type_list(k.fs.pts[idx], 0, 0, 0, "", gk_nopts()) } else { gk_nopts() };
+    Int uk = if (gen) { gm_using_kid(k.g, id) } else { -1 };
+    GKA a = if (gen) { gk_gargs(k, id, if (uk >= 0) { argn - 1 } else { argn }, split_type_list(k.fs.pts[idx], 0, 0, 0, "", gk_nopts())) } else { gk_args(k, id, 0, pl, 0, "", 0) };
     if (a.err != "") { return gterr(a.k, a.err, a.at); }
-    return gk_finish_call(a.k, id, n, a.tys, a.count, false);
+    return gk_finish_call(a.k, id, n, a.tys, a.count, false, exp);
+}
+
+// A call of generic function `idx`: its type parameters from the
+// arguments (and the expected type), its needs met, and, when every
+// parameter is concrete, the copy it calls (logged for mono.resid).
+GKT gk_gcall(GK k, Int id, Str name, Int idx, Str argtys, Int argc, Bool method, Str exp) {
+    List(Str) pl = if (k.fs.pts[idx] == "") { gk_nopts() } else { split_type_list(k.fs.pts[idx], 0, 0, 0, "", gk_nopts()) };
+    List(Str) al = if (argtys == "") { gk_nopts() } else { split_type_list(argtys, 0, 0, 0, "", gk_nopts()) };
+    if (pl.len() != argc) { return gterr(k, "call " + name + " expects (" + k.fs.pts[idx] + "), got (" + argtys + ")", id); }
+    Int a0 = if (method) { 1 } else { 0 };
+    GU u1 = gm_unify_nonlit(k.g, id, pl, al, 0, a0, method, gu_new());
+    if (!u1.ok) { return gterr(k, "call " + name + ": " + u1.why, id); }
+    GU u2 = gm_unify_lits(k.g, id, pl, al, 0, a0, method, u1);
+    Str ret = k.fs.rets[idx];
+    GU u = if (exp != "" && gm_has_var(gm_subst(ret, u2))) { gm_unify(ret, exp, u2) } else { u2 };
+    if (!u.ok) { return gterr(k, "call " + name + ": " + u.why, id); }
+    List(Str) vars = gm_sig_vars(k.fs, idx);
+    List(Str) vals = gm_vals(vars, u, 0, ListBuf());
+    Int miss = variant_index_at(vals, "", 0);
+    if (miss >= 0) { return gterr(k, "E0227: cannot infer type parameter " + vars[miss] + " of " + name + "; give the result a declared type", id); }
+    Str want = gm_subst(k.fs.pts[idx], u);
+    if (!params_accept(want, argtys, argc) && want != argtys) { return gterr(k, "call " + name + " expects (" + want + "), got (" + argtys + ")", id); }
+    Str nd = gm_needs_err(k, str_split(k.gx.needs.get(name) else { "" }, ","), 0, u);
+    if (nd != "") { return gterr(k, "E0226: " + name + "(" + list_join(vals, 0, ", ", "") + "): " + nd, id); }
+    Str rty = gm_subst(ret, u);
+    // `using = O`: the copy uses O for the behavior O names (or, for a
+    // plain function, the one behavior the function needs).
+    Int uk = if (method) { -1 } else { gm_using_kid(k.g, id) };
+    Str ov = if (uk >= 0) { gk_inst(k.g, kg_kid(k.g, uk, 0)) } else { "" };
+    Str ob = if (ov == "") { "" } else { gm_override_behavior(ov, k.gx.needs.get(name) else { "" }) };
+    if (ov != "" && ob == "") { return gterr(k, "using = " + ov + ": " + name + " does not rely on that behavior (its @needs: " + (k.gx.needs.get(name) else { "none" }) + ")", id); }
+    if (gm_has_var(list_join(vals, 0, ",", ""))) { return gt(k, rty, id); }
+    Str inst0 = gm_inst_name(name, vals, 0, name + "__g");
+    Str inst = if (ov == "") { inst0 } else { inst0 + "__u_" + imp_mangle(ov) };
+    Str use = if (ov == "") { "" } else { "|" + ob + "=" + ov };
+    GK k1 = gk_log(k, "I|" + name + "|" + inst + "|" + list_join(vars, 0, ",", "") + "|" + list_join(vals, 0, gm_rs(), "") + use);
+    GK k2 = gk_log(k1, f"C|{id}|" + inst);
+    // The copy has the override built in: the call drops its `using`.
+    GK k3 = if (ov == "") { k2 } else { gk_log(k2, f"D|{id}") };
+    return gt(k3, rty, id);
+}
+
+// The behavior an override names: `B(..)` / `Reverse(B(..))`, or for a
+// plain function the only behavior in `needs`; "" when it fits none.
+Str gm_override_behavior(Str ov, Str needs) {
+    Str inner = strip_reverse(ov, 0).ty;
+    Int op = str_find_char(inner, 40, 0);
+    List(Str) ns = gm_need_list(needs);
+    if (op >= 0) {
+        Str b = str_slice(inner, 0, op);
+        return if (gm_need_named(ns, b, 0)) { b } else { "" };
+    }
+    return if (ns.len() == 1) { ty_head(ns[0]) } else { "" };
+}
+
+List(Str) gm_need_list(Str needs) {
+    if (str_len(needs) < 2) { return gk_nopts(); }
+    return ty_args("N(" + str_slice(needs, 1, str_len(needs) - 1) + ")");
+}
+
+Bool gm_need_named(List(Str) ns, Str b, Int i) {
+    if (i >= ns.len()) { return false; }
+    if (ty_head(ns[i]) == b) { return true; }
+    return gm_need_named(ns, b, i + 1);
+}
+
+// Unify the parameters with the argument types, integer literals last
+// (a literal takes a width another argument fixed, else Int).
+GU gm_unify_nonlit(Kg g, Int id, List(Str) pl, List(Str) al, Int i, Int a0, Bool method, GU u) {
+    if (i >= pl.len() || !u.ok) { return u; }
+    Int ai = i - a0;
+    Bool lit = !(method && i == 0) && ai + a0 < g.ns[id].nk && gk_bare_int(g, kg_kid(g, id, ai + a0));
+    GU u2 = if (lit || i >= al.len()) { u } else { gm_unify(pl[i], al[i], u) };
+    return gm_unify_nonlit(g, id, pl, al, i + 1, a0, method, u2);
+}
+
+GU gm_unify_lits(Kg g, Int id, List(Str) pl, List(Str) al, Int i, Int a0, Bool method, GU u) {
+    if (i >= pl.len() || !u.ok) { return u; }
+    Int ai = i - a0;
+    Bool lit = !(method && i == 0) && ai + a0 < g.ns[id].nk && gk_bare_int(g, kg_kid(g, id, ai + a0));
+    Str p = pl[i];
+    Bool free = lit && gm_has_var(gm_subst(p, u));
+    GU u2 = if (free) { gm_unify(p, al[i], u) } else { u };
+    return gm_unify_lits(g, id, pl, al, i + 1, a0, method, u2);
 }
 
 GKT gk_variant_call(GK k, Int id, Str n, VOwn vo) {
@@ -358,11 +1232,22 @@ GKT gk_sort(GK k0, Int id) {
     if (!str_has_prefix(v.ty, "List(")) { return gterr(k, "sort expects a List, found " + v.ty, id); }
     Str elem = str_slice(v.ty, 5, str_len(v.ty) - 1);
     Int u = if (g.ns[id].nk == 2) { gk_kid(k, id, 1) } else { -1 };
+    if (u < 0 && gm_has_var(elem)) {
+        Str nd = gm_need_vars(k, "Ord", str_split(elem + ",", ","), 0);
+        if (!gm_is_var(elem) || nd != "") { return gterr(k, "E0226: sort of " + elem + " needs Ord(" + elem + "): add @needs(Ord(" + elem + ")) to the function", id); }
+        return gt(k, v.ty, id);
+    }
+    // Inside a copy made with `using = O` for Ord, a plain sort uses O.
+    Str ov = if (u < 0) { gm_use(k, "Ord") } else { "" };
+    if (ov != "") { return gk_sort_inst(gk_log(k, f"U|{id}|" + ov), id, v.ty, elem, ov); }
     // Without `using`, the built-in Ord of a numeric or Str element (spec §11).
     if (u < 0) {
         Bool dflt = (is_num(elem) && !is_dec_ty(elem)) || num_norm(elem) == "Str";
         if (dflt) { return gt(k, v.ty, id); }
-        // The element type's own Ord instance is inserted automatically.
+        // The element type's own Ord instance is inserted automatically;
+        // a generic one (Ord(Pair(T))) through a synthesized copy.
+        GK kg = gm_synth_inst(k, "Ord", elem);
+        if (kg.gx.log.len() != k.gx.log.len()) { return gt(kg, v.ty, id); }
         Int oi = ck_b_index(k.fs, "Ord", elem);
         if (oi >= 0) {
             Int ofi = ck_fn_index(k.fs, k.fs.bfns[oi]);
@@ -372,8 +1257,14 @@ GKT gk_sort(GK k0, Int id) {
         return gterr(k, "sort(xs) of " + elem + " needs a behavior: sort(xs, using = Ord(" + elem + "))", id);
     }
     if (g.ns[u].kind != "named" || g.ns[u].text != "using") { return gterr(k, "sort requires a behavior: sort(xs, using = Ord(T))", id); }
-    PRes stripped = strip_reverse(gk_inst(g, kg_kid(g, u, 0)), 0);
+    return gk_sort_inst(k, id, v.ty, elem, gk_inst(g, kg_kid(g, u, 0)));
+}
+
+// `sort(xs, using = O)` for instance text O (Ord(T), Reverse(..), or f).
+GKT gk_sort_inst(GK k, Int id, Str lty, Str elem, Str o) {
+    PRes stripped = strip_reverse(o, 0);
     Str inner = stripped.ty;
+    GKT v = GKT {.ty = lty, .err = "", .at = id, .k = k};
     Int op = str_find_char(inner, 40, 0);
     // `using = f` (or Reverse(f)): a comparator function used directly.
     if (op < 0) {
@@ -401,11 +1292,45 @@ GKT gk_sort(GK k0, Int id) {
 
 // ─── Literals and aggregates ────────────────────────────────────────
 
+// A record literal; a generic record's type arguments come from the
+// expected type or from the field values, and the literal is respelled
+// with them (logged for mono.resid).
+GKT gk_struct_lit(GK k, Int id, Str t, Str exp) {
+    List(Str) ps = gk_rparams(k, ty_head(t));
+    if (ps.len() == 0) { return gk_struct(k, id, t, 0); }
+    Bool applied = str_contains(t, "(");
+    Str ety = ct_base_of(k.fs.ctn, k.fs.ctb, exp);
+    Str ty0 = if (applied) { t } else { if (ty_head(ety) == t && str_contains(ety, "(")) { ety } else { "" } };
+    GKT r = if (ty0 != "") { gk_struct(k, id, ty0, 0) } else { gk_struct_infer(k, id, t, ps) };
+    if (r.err != "" || r.ty == t) { return r; }
+    return gt(gk_log(r.k, f"C|{id}|" + r.ty), r.ty, id);
+}
+
+// Type arguments of a generic record literal from its field values.
+GKT gk_struct_infer(GK k, Int id, Str t, List(Str) ps) {
+    GU u = gk_struct_unify(k, id, t, 0, gu_new());
+    if (!u.ok) { return gterr(k, "record " + t + ": " + u.why, id); }
+    List(Str) vals = gm_vals(ps, u, 0, ListBuf());
+    Int miss = variant_index_at(vals, "", 0);
+    if (miss >= 0) { return gterr(k, "E0227: cannot infer type parameter " + ps[miss] + " of " + t + "; give the binding a declared type (" + t + "(...) x = ...)", id); }
+    return gk_struct(k, id, t + "(" + list_join(vals, 0, ", ", "") + ")", 0);
+}
+
+GU gk_struct_unify(GK k, Int id, Str t, Int i, GU u) {
+    if (i >= k.g.ns[id].nk || !u.ok) { return u; }
+    Int fi = gk_kid(k, id, i);
+    Str ft = struct_field_type(k.fs, t, k.g.ns[fi].text);
+    if (ft == "") { return gu_fail(u, "unknown field " + k.g.ns[fi].text); }
+    GKT v = gk_expr(k, kg_kid(k.g, fi, 0), "");
+    if (v.err != "") { return gu_fail(u, v.err); }
+    return gk_struct_unify(k, id, t, i + 1, gm_unify(ft, v.ty, u));
+}
+
 GKT gk_struct(GK k, Int id, Str ty, Int i) {
     if (i >= k.g.ns[id].nk) { return gt(k, ty, id); }
     Int fi = gk_kid(k, id, i);
     Str f = k.g.ns[fi].text;
-    Str ft = struct_field_type(k.fs, ty, f);
+    Str ft = gk_field_type(k, ty, f);
     if (ft == "") { return gterr(k, "unknown field " + f + " in " + ty, fi); }
     GKT v = gk_expr(k, kg_kid(k.g, fi, 0), ft);
     if (v.err != "") { return v; }
@@ -526,21 +1451,71 @@ GKT gk_bin(GK k0, Int id, Str exp) {
     Str lty = if (lhs_lit && !rhs_lit && !shift && is_int_ty(rt.ty)) { rt.ty } else { lt.ty };
     Str rty = if (rhs_lit && !lhs_lit && !shift && is_int_ty(lt.ty)) { lt.ty } else { rt.ty };
     // An adopted literal must fit the type it adopts (spec §6.1a).
-    Str lfit = if (lhs_lit && lty != lt.ty && gk_bare_int(g, l)) { lit_range_err(g.ns[l].text, false, num_norm(lty)) } else { "" };
-    Str rfit = if (rhs_lit && rty != rt.ty) { lit_range_err(g.ns[r].text, false, num_norm(rty)) } else { "" };
+    Str lfit = if (lhs_lit && lty != lt.ty && gk_bare_int(g, l) && !gm_has_var(lty)) { lit_range_err(g.ns[l].text, false, num_norm(lty)) } else { "" };
+    Str rfit = if (rhs_lit && rty != rt.ty && !gm_has_var(rty)) { lit_range_err(g.ns[r].text, false, num_norm(rty)) } else { "" };
     if (lfit != "") { return gterr(k, lfit, id); }
     if (rfit != "") { return gterr(k, rfit, id); }
+    if (gm_has_var(lty) || gm_has_var(rty)) { return gm_bin(k, id, op, lty, rty, l, r, lt.ty, rt.ty); }
     Bool range = op == ".." || op == "..=";
     if (range && (!is_int_ty(lt.ty) || !is_int_ty(rt.ty))) { return gterr(k, "range bounds must be integers, got " + lt.ty + " " + op + " " + rt.ty, id); }
     Str bt = bin_type(op, lty, rty);
     if (bt == "ERR_DEC") { return gterr(k, "cannot mix Dec with a non-Dec operand: " + lty + " " + op + " " + rty + " (convert explicitly with dN / iN / fN)", id); }
     if (bt == "ERR_SIGN") { return gterr(k, "cannot mix signed and unsigned operands in one operation: " + lty + " " + op + " " + rty + " (use an explicit cast)", id); }
-    if (bt == "ERR_EQ") { return gterr(k, "operator " + op + " compares numbers, Bool and Str; compare the parts of a " + lty + " (its fields, elements or variant)", id); }
+    // A comparison of a type with an Eq / Ord instance calls it.
+    Bool eqop = op == "==" || op == "!=";
+    Bool relop = op == "<" || op == "<=" || op == ">" || op == ">=";
+    GKI via = if ((bt == "ERR_EQ" || bt == "ERR") && (eqop || relop) && ty_same(lty, rty)) { gm_inst_fn(k, if (eqop) { "Eq" } else { "Ord" }, lty) } else { GKI {.k = k, .f = ""} };
+    if (via.f != "") { return gt(gk_log(via.k, f"E|{id}|" + op + "|" + via.f), "Bool", id); }
+    if (bt == "ERR_EQ") { return gterr(k, "operator " + op + " compares numbers, Bool and Str; compare the parts of a " + lty + " (its fields, elements or variant), or declare Eq(" + lty + ") = f", id); }
     if (bt == "ERR") { return gterr(k, "operator " + op + " between " + lty + " and " + rty, id); }
     // An adopted literal operand takes the type it adopted.
     GK ka = if (lty != lt.ty) { gk_tl(k, tl_add(k.tl, l, lty)) } else { k };
     GK kb = if (rty != rt.ty) { gk_tl(ka, tl_add(ka.tl, r, rty)) } else { ka };
     return gt(kb, bt, id);
+}
+
+// An operator over type parameters (inside a generic body): a width
+// parameter's numbers work as numbers of one width; a type parameter
+// compares only through the Eq / Ord its function needs.
+GKT gm_bin(GK k, Int id, Str op, Str lty, Str rty, Int l, Int r, Str l0, Str r0) {
+    Bool same = ty_same(lty, rty) || gm_norm(lty) == gm_norm(rty);
+    Bool eq = op == "==" || op == "!=";
+    Bool rel = op == "<" || op == "<=" || op == ">" || op == ">=";
+    Bool logic = op == "&&" || op == "||";
+    if (!same || logic) { return gterr(k, "operator " + op + " between " + lty + " and " + rty, id); }
+    GK ka = if (lty != l0) { gk_tl(k, tl_add(k.tl, l, lty)) } else { k };
+    GK kb = if (rty != r0) { gk_tl(ka, tl_add(ka.tl, r, rty)) } else { ka };
+    if (is_num(lty)) { return gt(kb, if (eq || rel) { "Bool" } else { lty }, id); }
+    if (!gm_is_var(lty) || !(eq || rel)) { return gterr(k, "operator " + op + " between " + lty + " and " + rty, id); }
+    Str nd = if (eq) { "Eq(" + lty + ")" } else { "Ord(" + lty + ")" };
+    if (!str_contains(k.gx.ctx, "," + nd + ",")) { return gterr(k, "E0226: " + op + " on " + lty + " needs " + nd + ": add @needs(" + nd + ") to the function", id); }
+    return gt(kb, "Bool", id);
+}
+
+// The type parameters of `t` that stand for types (not widths).
+pub Str gm_tvars(Str t) {
+    Str c = str_trim(t);
+    if (gm_is_var(c)) { return c + ","; }
+    Str h = ty_head(c);
+    List(Str) as = ty_args(c);
+    Bool widths = h == "Int" || h == "UInt" || h == "Float" || h == "Dec" || h == "Str" || h == "Bytes";
+    if (widths || as.len() == 0) { return ""; }
+    Int n = if (h == "List") { 1 } else { as.len() };
+    return gm_tvars_at(as, 0, n, "");
+}
+
+Str gm_tvars_at(List(Str) as, Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    return gm_tvars_at(as, i + 1, n, acc + gm_tvars(as[i]));
+}
+
+// Behavior `b` of every type parameter in `t` is in the function's needs,
+// or the first missing need.
+Str gm_need_vars(GK k, Str b, List(Str) vs, Int i) {
+    if (i >= vs.len()) { return ""; }
+    Str nd = b + "(" + vs[i] + ")";
+    if (vs[i] != "" && !str_contains(k.gx.ctx, "," + nd + ",")) { return nd; }
+    return gm_need_vars(k, b, vs, i + 1);
 }
 
 GKT gk_try(GK k, Int id, Str exp) {
@@ -570,6 +1545,10 @@ GKT gk_orelse(GK k, Int id, Str exp) {
 
 Str gk_unify(Str a, Str b) {
     if (ty_same(a, b)) { return a; }
+    // A width parameter's number meets a plain literal's type.
+    Bool va = gm_has_var(a);
+    Bool vb = gm_has_var(b);
+    if ((va || vb) && ((is_int_ty(a) && is_int_ty(b)) || (is_float_ty(a) && is_float_ty(b)))) { return if (va) { a } else { b }; }
     return ty_unify(a, b);
 }
 
@@ -590,14 +1569,17 @@ GKT gk_ifx(GK k, Int id, Str exp) {
     GKT c = gk_expr(k, gk_kid(k, id, 0), "");
     if (c.err != "") { return c; }
     if (c.ty != "Bool") { return gterr(c.k, "if condition must be Bool, got " + c.ty, c.at); }
-    GKT th = gk_expr(c.k, gk_kid(k, id, 1), "");
+    // An expected sized number reaches the branches, so a literal arm
+    // adopts it (`Int(8) y = if (c) { 0 } else { x }`).
+    Str bexp = if (is_num(exp) && num_norm(exp) != exp) { "" } else { if (is_num(exp)) { exp } else { "" } };
+    GKT th = gk_expr(c.k, gk_kid(k, id, 1), bexp);
     if (th.err != "") { return th; }
     if (k.g.ns[id].nk < 3) {
         if (th.ty != "Void") { return gterr(th.k, "an if expression needs an else branch (it yields " + th.ty + ")", id); }
         return gt(th.k, th.ty, id);
     }
     Int el = gk_kid(k, id, 2);
-    GKT et = gk_expr(th.k, el, if (k.g.ns[el].kind == "ifx") { exp } else { "" });
+    GKT et = gk_expr(th.k, el, if (k.g.ns[el].kind == "ifx") { exp } else { bexp });
     if (et.err != "") { return et; }
     Str u = gk_unify(th.ty, et.ty);
     if (u == "") { return gterr(et.k, "if branches differ: " + th.ty + " vs " + et.ty, id); }
@@ -606,17 +1588,18 @@ GKT gk_ifx(GK k, Int id, Str exp) {
 
 // `{ T a = e; ...; tail }`: bindings in order, then the tail's type. The
 // bindings are scoped to the block (`outer` keeps the enclosing binders).
-GKT gk_bexpr(GK outer, GK k, Int id, Int i) {
+GKT gk_bexpr(GK outer, GK k, Int id, Int i, Str exp) {
     Int n = k.g.ns[id].nk;
     Int c = gk_kid(k, id, i);
     if (i >= n - 1) {
-        GKT t = gk_expr(k, c, "");
+        // Only a sized number reaches the tail (a literal adopts it).
+        GKT t = gk_expr(k, c, if (is_num(exp) && num_norm(exp) == exp) { exp } else { "" });
         if (t.err != "") { return t; }
         return gt(gk_scope(outer, t.k), t.ty, id);
     }
     GKS b = gk_stmt(k, c, "");
     if (b.err != "") { return gt_of(b); }
-    return gk_bexpr(outer, b.k, id, i + 1);
+    return gk_bexpr(outer, b.k, id, i + 1, exp);
 }
 
 // ─── match ──────────────────────────────────────────────────────────
@@ -707,6 +1690,10 @@ GKT gk_lambda(GK k, Int id, Str exp) {
     GKT body = gk_expr(k2, gk_kid(k, id, np), "");
     if (body.err != "") { return body; }
     GK kb = gk_scope(k, body.k);
+    // An open result type (a generic call's parameter) is the body's.
+    Str ret0 = str_trim(fn_ret(exp));
+    Bool open = gm_is_var(ret0) && !is_fn_type(body.ty);
+    if (open) { return gt(kb, body.ty + " closure(" + fn_inner(exp) + ")", id); }
     Str ret = fn_ret(exp);
     Bool num_adopt = is_num(body.ty) && is_num(ret) && int_adopt_ok(body.ty, ret, "");
     // A Void closure runs its body for effect and discards its value.
@@ -726,7 +1713,7 @@ GKT gk_field(GK k, Int id) {
     GKT b = gk_expr(k, gk_kid(k, id, 0), "");
     if (b.err != "") { return b; }
     Str f = k.g.ns[id].text;
-    Str fty = struct_field_type(k.fs, b.ty, f);
+    Str fty = gk_field_type(k, b.ty, f);
     if (fty == "") { return gterr(b.k, "field " + f + " not found in " + b.ty, id); }
     return gt(gk_mem(b.k, id, gk_sfield(k, b.ty, f)), fty, id);
 }
@@ -844,13 +1831,13 @@ GKT gk_mcall(GK k0, Int id) {
     Int mfidx = ck_fn_index(k.fs, m);
     if (mfidx < 0 && gk_list_verb(m) && str_has_prefix(bt, "List(") && !is_list_fixed(bt)) { return gk_list_method(k, id, bt, m, na); }
     if (mfidx >= 0) {
-        if (na == 0) { return gk_finish_call(k, id, m, bt, 1, true); }
-        List(Str) mpl = split_type_list(k.fs.pts[mfidx], 0, 0, 0, "", gk_nopts());
+        if (na == 0) { return gk_finish_call(k, id, m, bt, 1, true, ""); }
+        List(Str) mpl = if (gm_generic_fn(k.fs, mfidx)) { gk_nopts() } else { split_type_list(k.fs.pts[mfidx], 0, 0, 0, "", gk_nopts()) };
         GKA a = gk_args(k, id, 1, mpl, 1, "", 1);
         if (a.err != "") { return gterr(a.k, a.err, a.at); }
-        return gk_finish_call(a.k, id, m, bt + "," + a.tys, a.count, true);
+        return gk_finish_call(a.k, id, m, bt + "," + a.tys, a.count, true, "");
     }
-    Str cfty = struct_field_type(k.fs, bt, m);
+    Str cfty = gk_field_type(k, bt, m);
     if (cfty != "" && is_fn_type(cfty)) { return gk_fn_call(gk_mem(k, id, gk_sfield(k, bt, m)), id, 1, cfty); }
     return gterr(k, "unsupported method " + m, id);
 }
@@ -1158,7 +2145,7 @@ GKS gk_bindst(GK k, Int id) {
     Str whole = gk_whole_lit(g, ve);
     Bool neg = str_has_prefix(whole, "-");
     Str digits = if (neg) { str_slice(whole, 1, str_len(whole)) } else { whole };
-    Str lrerr = if (whole != "" && is_int_ty(ety)) { lit_range_err(digits, neg, num_norm(ety)) } else { "" };
+    Str lrerr = if (whole != "" && is_int_ty(ety) && !gm_has_var(ety)) { lit_range_err(digits, neg, num_norm(ety)) } else { "" };
     if (lrerr != "") { return gs_err(v.k, "binding " + name + ": " + lrerr, id); }
     if (is_int_ty(ety) && is_int_ty(v.ty) && !int_adopt_ok(v.ty, num_norm(ety), whole)) {
         return gs_err(v.k, "binding " + name + ": implicit narrowing from " + v.ty + " to " + ty + " requires an explicit cast", id);
@@ -1195,7 +2182,7 @@ GKS gk_destr_names(GK k, Int id, Int i, Int n, Str ty) {
     if (i >= n) { return gs_ok(k); }
     Int nm = gk_kid(k, id, i);
     Str f = k.g.ns[nm].text;
-    Str fty = struct_field_type(k.fs, ty, f);
+    Str fty = gk_field_type(k, ty, f);
     if (fty == "") { return gs_err(k, "unknown field " + f + " in " + ty, id); }
     if (kg_shadows(k.rs, nm)) { return gk_shadow_err(k, id, f); }
     return gk_destr_names(gk_mem(gk_bind(k, nm, fty), nm, gk_sfield(k, ty, f)), id, i + 1, n, ty);
@@ -1275,7 +2262,11 @@ GKS gk_nested_kids(GK k, Int d, Int from, Int to, Bool field) {
     return gk_nested_kids(k, d, from + 1, to, field);
 }
 
-GKS gk_fn(GK k, Int d) {
+GKS gk_fn(GK k0, Int d) {
+    Str fnm = k0.g.ns[d].text;
+    Int fi = ck_fn_index(k0.fs, fnm);
+    Str cvars = if (fi >= 0) { gm_vars(k0.fs.pts[fi] + "," + k0.fs.rets[fi], 0, "") } else { "" };
+    GK k = gk_ctx(k0, k0.gx.needs.get(fnm) else { "" }, cvars, gm_uses_of(k0.g.ns[d].aux));
     Int n = k.g.ns[d].nk;
     GKS nb = gk_nested_kids(k, d, 0, n - 1, false);
     if (nb.err != "") { return nb; }
@@ -1380,7 +2371,7 @@ Bool gk_any_returns(Kg g, Int id, Int i, Int n) {
 // A message "E04xx: text" carries its own code.
 Void gk_diag(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
     Int pos = if (at >= 0) { g.ns[at].ep } else { 0 };
-    Int c = str_find(msg, ": E04");
+    Int c = str_find(msg, ": E0");
     Bool own = c >= 0 && str_slice(msg, c + 7, c + 9) == ": ";
     Str code2 = if (own) { str_slice(msg, c + 2, c + 7) } else { code };
     Str msg2 = if (own) { str_slice(msg, c + 9, str_len(msg)) } else { msg };
@@ -1421,16 +2412,12 @@ GKS gk_decls(GK k, Int id, Int i, Str src, Str smap) {
         return gk_decls(f.k, id, i + 1, src, smap);
     }
     if (kind == "behavior") {
-        Str aux = k.g.ns[d].aux;
-        BRes bh = BRes {.pos = 0, .name = k.g.ns[d].text, .param = kg_part(aux, 1), .impl = kg_part(aux, 2), .err = ""};
-        if (validate_behavior(k.fs, bh) != 0) { return gs_err(k, "reported", d); }
-        Int first = ck_b_index(k.fs, bh.name, bh.param);
-        Bool dup = first >= 0 && gk_b_count(k.fs, bh.name, bh.param, 0, 0) > 1;
-        if (dup) {
-            gk_diag("E0001", "type error: " + bh.name + "(" + bh.param + ") is declared more than once; a type has one instance per behavior (pass another ordering with using = f)", k.g, d, src, smap);
-            return gs_err(k, "reported", d);
-        }
-        if (!resid_quiet()) { println("OK behavior " + bh.name); }
+        // Instances were checked up front (gm_inst_checks).
+        if (!resid_quiet()) { println("OK behavior " + k.g.ns[d].text); }
+        return gk_decls(k, id, i + 1, src, smap);
+    }
+    if (kind == "bdecl") {
+        if (!resid_quiet()) { println("OK behavior declaration " + k.g.ns[d].text); }
         return gk_decls(k, id, i + 1, src, smap);
     }
     if (kind == "test") {
@@ -1709,7 +2696,7 @@ List(Str) caps_families(List(Str) cs, Int i, ListBuf(Str) acc) {
     return caps_families(cs, i + 1, acc.push(cap_family(cs[i])));
 }
 
-Str gk_join_kids_ty(Kg g, Int id, Int from, Int to, Str acc) {
+pub Str gk_join_kids_ty(Kg g, Int id, Int from, Int to, Str acc) {
     if (from >= to) { return acc; }
     Str t = g.ns[kg_kid(g, kg_kid(g, id, from), 0)].text;
     return gk_join_kids_ty(g, id, from + 1, to, if (from == 1) { t } else { acc + "," + t });
@@ -1742,7 +2729,7 @@ Str gk_variant_types(Kg g, Int id, Int i, Str acc) {
 }
 
 // Generic parameters of a type declaration as "T,U" ("" when none).
-Str gk_type_params(Str aux) {
+pub Str gk_type_params(Str aux) {
     Int us = str_find_char(aux, 31, 0);
     Str gp = if (us >= 0) { str_slice(aux, us + 1, str_len(aux)) } else { aux };
     if (!str_has_prefix(gp, "(")) { return ""; }
@@ -2188,14 +3175,28 @@ Str gk_uncovered_all(List(Str) need, Int j, Str auth, Str acc) {
     return gk_uncovered_all(need, j + 1, auth, acc2);
 }
 
+// A generic function's copy shows as its instantiation, `label(Task)`.
+Str gk_fn_label(GK k, List(Int) fnode, Str name) {
+    Int fi = ck_fn_index(k.fs, name);
+    if (fi < 0 || fi >= fnode.len()) { return name; }
+    Str aux = k.g.ns[fnode[fi]].aux;
+    Int at = str_find(aux, "@inst(");
+    if (at < 0) { return name; }
+    return str_slice(aux, at + 6, imp_close_paren(aux, at + 6, 0) - 1);
+}
+
 Bool gk_auth_all(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str) direct, List(Str) calls, Int i) {
     if (i >= fnode.len()) { return false; }
-    Str auth = gk_auth(decl[i], k.fs.ceils[i]);
+    // A generic function's authority is its own @requires (checked on the
+    // generic itself) plus what its instances need, which the concrete
+    // caller must hold (through the copy's call edges).
+    Bool copy = str_contains(k.g.ns[fnode[i]].aux, "@inst(");
+    Str auth = if (copy) { need[i] } else { gk_auth(decl[i], k.fs.ceils[i]) };
     Str miss = gk_uncovered(csv_split_or_empty(need[i]), 0, auth);
     Str all = if (miss == "") { "" } else { gk_uncovered_all(csv_split_or_empty(need[i]), 0, auth, "") };
     Bool own = miss != "" && gk_uncovered([miss], 0, direct[i]) == "";
     Str via = if (miss == "" || own) { "" } else { gk_need_via(k.fs, need, decl, csv_split_or_empty(calls[i]), 0, miss) };
-    Str how = if (via == "") { "uses" } else { "uses (through `" + via + "`)" };
+    Str how = if (via == "") { "uses" } else { "uses (through `" + gk_fn_label(k, fnode, via) + "`)" };
     Str m = if (miss == "") { "" } else { "function `" + k.fs.names[i] + "` " + how + " capability `" + cap_show(miss) + "` but is not granted it: declare @requires(" + all + ") on it (no ambient authority, spec §20)" };
     Bool printed = if (m != "") { eprintln("error[E0219]: " + m) } else { false };
     Bool rest = gk_auth_all(k, fnode, need, decl, direct, calls, i + 1);
@@ -2264,7 +3265,7 @@ Int gk_finish(GK k, List(Int) fnode, Str src, Str smap) {
 }
 
 // Types and member def edges of a checked program, as columns by node id.
-type GKR = { Int status; List(Str) ty; List(Int) def; RS rs; Sigs fs; };
+type GKR = { Int status; List(Str) ty; List(Int) def; RS rs; Sigs fs; List(Str) log; };
 
 // Sorted log keys to one type per node id (the last one logged wins).
 List(Str) gk_dense_ty(List(Int) ks, List(Str) tys, Int i, Int id, Int n, Str cur, ListBuf(Str) acc) {
@@ -2331,6 +3332,65 @@ Bool gk_case_all(Kg g, Int id, Str src, Str smap, Bool acc) {
     return gk_case_all(g, id + 1, src, smap, acc || bad);
 }
 
+// ─── Unknown type names ─────────────────────────────────────────────
+// A type name is built in, declared, or a type parameter (one letter);
+// anything else is a mistake, never an implicit parameter.
+
+Bool gm_builtin_type(Str w) {
+    return w == "Int" || w == "UInt" || w == "Float" || w == "Dec" || w == "Bool" || w == "Str" || w == "Bytes" || w == "List" || w == "Map" || w == "Set" || w == "Option" || w == "Result" || w == "ListBuf" || w == "StrBuf" || w == "Void" || w == "File" || w == "Range" || w == "Expect" || w == "ISize" || w == "USize" || w == "closure" || w == "rt" || w == "Unknown" || w == "Slice" || w == "Provider";
+}
+
+// The first unknown type name in type text t, or "".
+Str gm_unknown_in(Str t, Int i, Map(Str, Int) known) {
+    Int n = str_len(t);
+    if (i >= n) { return ""; }
+    Int c = str_char_at(t, i);
+    if (is_alpha(c) || c == 95) {
+        Int e = scan_ident(t, i, n);
+        Str w = str_slice(t, i, e);
+        Bool ok = gm_is_var(w) || gm_builtin_type(w) || known.contains(w) || str_contains(w, "__");
+        if (!ok) { return w; }
+        return gm_unknown_in(t, e, known);
+    }
+    return gm_unknown_in(t, i + 1, known);
+}
+
+// A declared name within two edits of w, for the hint, or "".
+Str gm_near(List(Str) names, Int i, Str w) {
+    if (i >= names.len()) { return ""; }
+    if (gm_edits_within(names[i], w, 2)) { return names[i]; }
+    return gm_near(names, i + 1, w);
+}
+
+Bool gm_edits_within(Str a, Str b, Int k) {
+    if (k < 0) { return false; }
+    Int na = str_len(a);
+    Int nb = str_len(b);
+    if (na == 0 || nb == 0) { return na + nb <= k; }
+    if (str_char_at(a, 0) == str_char_at(b, 0)) { return gm_edits_within(str_slice(a, 1, na), str_slice(b, 1, nb), k); }
+    Str a1 = str_slice(a, 1, na);
+    Str b1 = str_slice(b, 1, nb);
+    return gm_edits_within(a1, b1, k - 1) || gm_edits_within(a1, b, k - 1) || gm_edits_within(a, b1, k - 1);
+}
+
+Map(Str, Int) gm_known_types(GKSig sg, Map(Str, Int) m) {
+    return gm_add_names(sg.fs.ctn, 0, gm_add_names(sg.fs.sun, 0, gm_add_names(sg.fs.stn, 0, m)));
+}
+
+Map(Str, Int) gm_add_names(List(Str) ns, Int i, Map(Str, Int) m) {
+    if (i >= ns.len()) { return m; }
+    return gm_add_names(ns, i + 1, m.insert(ty_head(ns[i]), 1));
+}
+
+Bool gm_unknown_types(Kg g, Int id, Map(Str, Int) known, Str src, Str smap, Bool acc) {
+    if (id >= kg_count(g)) { return acc; }
+    Str u = if (g.ns[id].kind == "ty") { gm_unknown_in(g.ns[id].text, 0, known) } else { "" };
+    Str near = if (u == "") { "" } else { gm_near(known.keys(), 0, u) };
+    Str hint = if (near != "") { " (did you mean `" + near + "`?)" } else { "; a type parameter is a single uppercase letter (T, K, V)" };
+    if (u != "") { gk_diag("E0001", "type error: unknown type `" + u + "`" + hint, g, id, src, smap); }
+    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "");
+}
+
 // ─── Ambiguous imports (E0223) ──────────────────────────────────────
 // Import resolution spells a name that two imported modules export
 // `__ambig__name` in the importing file (spec §22); a use of it that no
@@ -2358,26 +3418,40 @@ Bool gk_ambig_all(Kg g, RS rs, Int id, Str src, Str smap, Bool acc) {
 
 // Check a parsed program (diagnostics printed) and collect its columns.
 pub GKR gk_analyze(Kg g, Int unit, Str src, Str smap, Bool log) {
+    return gk_analyze_m(g, unit, src, smap, log, true);
+}
+
+// One checking round. Unless `fin`, a round whose walk logged
+// instantiations stops before the whole-program passes: mono.resid
+// applies the log and checks again.
+pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin) {
+    Str smap = gm_smap(smap0);
     List(Int) e0 = [];
     List(Str) es0 = [];
     RS rs0 = rs_empty();
     // The runtime keeps its C-era ABI names.
     Bool miscase = !resid_rtmod() && gk_case_all(g, 0, src, smap, false);
-    if (miscase) { return GKR {.status = 1, .ty = es0, .def = e0, .rs = rs0, .fs = sigs_empty()}; }
+    if (miscase) { return GKR {.status = 1, .ty = es0, .def = e0, .rs = rs0, .fs = sigs_empty(), .log = es0}; }
     RS rs = kg_resolve(g, unit);
-    if (gk_ambig_all(g, rs, 0, src, smap, false)) { return GKR {.status = 1, .ty = es0, .def = e0, .rs = rs, .fs = sigs_empty()}; }
+    if (gk_ambig_all(g, rs, 0, src, smap, false)) { return GKR {.status = 1, .ty = es0, .def = e0, .rs = rs, .fs = sigs_empty(), .log = es0}; }
     GKSig sg = gk_sigs(g, unit);
+
     List(Int) e = [];
     List(Str) es = [];
     TL tl = TL {.on = log, .keys = e, .tys = es, .mem = e};
-    GK k = GK {.g = g, .rs = rs, .fs = sg.fs, .tys = gk_notys(), .tl = tl, .sd = sg.sd, .fnode = sg.fnode};
-    GKS r = gk_decls(k, unit, 0, src, smap);
-    if (r.err != "") { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs}; }
+    Map(Str, Int) m0 = {};
+    if (gm_unknown_types(g, 0, gm_known_types(sg, m0), src, smap, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
+    GX gx = gm_gx_init(g, unit, sg, src, smap0);
+    GK k = GK {.g = g, .rs = rs, .fs = sg.fs, .tys = gk_notys(), .tl = tl, .sd = sg.sd, .fnode = sg.fnode, .gx = gx};
+    if (gm_inst_checks(k, 0, src, smap0, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
+    GKS r = gk_decls(gm_log_beaten(k, 0), unit, 0, src, smap);
+    if (r.err != "") { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
+    if (!fin && r.k.gx.log.len() > 0) { return GKR {.status = 0, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = r.k.gx.log}; }
     Int st = gk_finish(r.k, sg.fnode, src, smap);
     Int n = kg_count(g);
     List(Str) ty = gk_dense_ty(sort(r.k.tl.keys), r.k.tl.tys, 0, 0, n, "", ListBuf());
     List(Int) def = gk_dense_def(sort(r.k.tl.mem), rs, 0, 0, n, ListBuf());
-    return GKR {.status = st, .ty = ty, .def = def, .rs = rs, .fs = sg.fs};
+    return GKR {.status = st, .ty = ty, .def = def, .rs = rs, .fs = sg.fs, .log = r.k.gx.log};
 }
 
 pub Int gk_check_program(Kg g, Int unit, Str src, Str smap) {
@@ -2404,7 +3478,7 @@ pub GKC gk_run_cols(KP p, Str src, Str smap, Bool cols) {
     return GKC {.status = r.status, .ty = r.ty, .def = gk_def_text(r.def, 0, StrBuf())};
 }
 
-Str gk_def_text(List(Int) d, Int i, StrBuf acc) {
+pub Str gk_def_text(List(Int) d, Int i, StrBuf acc) {
     if (i >= d.len()) { return acc.finish(); }
     return gk_def_text(d, i + 1, acc.push(f"{d[i]}").push_char(','));
 }
@@ -2437,11 +3511,17 @@ pub Int gk_count_members(Kg g, GKR r, Int id, Int n) {
 }
 
 // "id kind text : type -> def" for every typed node.
-pub Str gk_dump_types(Kg g, GKR r, Int id, Str sb) {
+// The program's own typed nodes (the prelude's left out).
+pub Str gk_dump_types_src(Kg g, GKR r, Str src) {
+    return gk_dump_types(g, r, 0, str_sb_new(), gm_prelude_pos(src));
+}
+
+pub Str gk_dump_types(Kg g, GKR r, Int id, Str sb, Int lim) {
     if (id >= g.ns.len()) { return str_sb_finish(sb); }
+    if (g.ns[id].sp >= lim) { return gk_dump_types(g, r, id + 1, sb, lim); }
     Str t = r.ty[id];
     Int d = r.def[id];
     Str dn = if (d >= 0) { f" -> {d} " + g.ns[d].kind + " " + g.ns[d].text } else { "" };
     Str line = if (t == "" && dn == "") { "" } else { f"{id} " + g.ns[id].kind + " " + g.ns[id].text + " : " + t + dn + "\n" };
-    return gk_dump_types(g, r, id + 1, str_sb_append(sb, line));
+    return gk_dump_types(g, r, id + 1, str_sb_append(sb, line), lim);
 }

@@ -1,0 +1,2 @@
+Pair { a: 1, b: 2 } 3 Pair { a: "hi", b: "hi" } 7 x 0 9
+[1, 2] Entry { key: "b", value: 2, hits: 5 }

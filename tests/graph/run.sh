@@ -27,7 +27,7 @@ for f in compiler/*.resid lib/*.resid tools/*.resid examples/*.resid tests/confo
     case "$f" in
         tests/conformance/cases/err_assignment.resid|tests/conformance/cases/err_list_missing_comma.resid) continue ;;
         # These resolve imports only with their -depmap (or not at all).
-        tests/conformance/cases/err_import_missing.resid|tests/conformance/cases/*manifest_ceiling*.resid) continue ;;
+        tests/conformance/cases/err_import_missing.resid|tests/conformance/cases/*manifest_ceiling*.resid|tests/conformance/cases/behavior_replace_library.resid|tests/conformance/cases/err_instance_orphan.resid) continue ;;
     esac
     want_lint="graph-lint: 0 mixed-precedence expression(s)"
     case "$f" in *operator_precedence_*|*logical_short_circuit*) want_lint="$("$COMPILER" "$f" --graph-lint 2>&1 | grep '^graph-lint' | tail -1)" ;; esac
@@ -47,7 +47,8 @@ for f in compiler/*.resid lib/*.resid tools/*.resid examples/*.resid tests/confo
 done
 # Resolution must reject every out-of-scope use in the scopes case.
 got="$("$COMPILER" tests/graph/cases/resolve_scopes.resid --graph-resolve 2>&1 | grep -E ':11: |^graph-resolve' | sed 's/.*:11: //' | tr '\n' ' ')"
-if [ "$got" = "q v i z inner nope graph-resolve: 31 uses, 6 unresolved " ]; then
+# (The use count includes the prelude's; the unresolved names are the case.)
+if [[ "$got" == "q v i z inner nope graph-resolve: "*" uses, 6 unresolved " ]]; then
     pass=$((pass + 1))
 else
     fail=$((fail + 1))
@@ -215,5 +216,14 @@ for c in tests/graph/cases/debug_locals.resid tests/graph/cases/notes_sample.res
         fail=$((fail + 1)); echo "FAIL lowered check $c: $got"
     fi
 done
+# resid-why shows a generic function instantiated as its copy.
+if [ -x "$CK/why" ] && "$COMPILER" tests/graph/cases/generic_why.resid -o "$CK/gw" --profile debug >/dev/null 2>&1; then
+    got="$("$CK/why" "$CK/gw" first 2>&1)"
+    if [[ "$got" == *"instantiated as"*"fn first__g_Int"*"<- instantiate"* ]]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL resid-why generic: $got"
+    fi
+fi
 echo "graph: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

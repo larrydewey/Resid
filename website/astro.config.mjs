@@ -54,6 +54,8 @@ export default defineConfig({
 							'behaviors',
 							'behaviors/ord',
 							'behaviors/show',
+							'behaviors/defining',
+							'behaviors/generics',
 							'behaviors/generic-verbs',
 							'behaviors/behavioralizing',
 							'behaviors/reference',

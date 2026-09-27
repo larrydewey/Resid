@@ -12,6 +12,18 @@ import "path/file.resid" as M;                // qualified: M.name
 import "path/file.resid" @requires(caps);     // attenuated
 ```
 
+## Namespaces
+
+Each module has its own names. When two imported modules export the same
+name:
+
+- `import "a.resid" as a;` qualifies it: `a.f()`, `a.Node`;
+- a module's own declaration wins over imported ones;
+- an unqualified use that could mean either import is an error at that use
+  (`E0223`). A local binding of the same name is not a use.
+
+A displayed type or variant keeps its plain name.
+
 ## Resolution
 
 1. The path relative to the importing file.

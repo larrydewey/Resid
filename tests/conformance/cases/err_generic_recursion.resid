@@ -1,0 +1,3 @@
+type Box(T) = { T v; };
+Int deep(T x, Int n) { if (n == 0) { return 0; } return deep(Box {.v = x}, n - 1); }
+Int main() { return deep(1, 3); }

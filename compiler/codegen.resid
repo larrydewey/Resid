@@ -803,6 +803,8 @@ Str ll_ty(Str ty) {
     if (ty == "Void") { return "i1"; }
     if (ty == "Float") { return "double"; }
     if (ty == "Str") { return "ptr"; }
+    // A closure is a pointer, whatever its result type (`Int(64) closure(Int)`).
+    if (is_fn_type(ty)) { return "ptr"; }
     // width-parameterized numerics: Int(256) -> i256 etc.
     Bool si = str_has_prefix_cg(ty, "Int(");
     Bool ui = str_has_prefix_cg(ty, "UInt(");
@@ -1629,7 +1631,7 @@ Str expect_elem(Str t) {
 // captured outer values. Calling a Fn-value is an indirect call passing the
 // array pointer as an `i64 %env` first parameter.
 Bool is_fn_type(Str t) {
-    return str_find(t, " closure(") >= 0;
+    return str_contains(t, " closure(");
 }
 
 // "Int closure(A, B)" -> "Int" (return type before " closure(").
@@ -3682,19 +3684,36 @@ GT finish_ifexpr(GT tv, Str lt, Str le, Str ld, Int l3, GT ev, Int retpos) {
     if (ev.err != "") { return ev; }
     // Spec v3.2 S6.4: arms agree when their NORMALIZED types match
     // (bare Int is an alias of Int(64)).
-    Str uty = if (ty_same_cg(ev.ty, tv.ty)) { tv.ty } else { ty_unify_cg(tv.ty, ev.ty) };
+    Str uty0 = if (ty_same_cg(ev.ty, tv.ty)) { tv.ty } else { ty_unify_cg(tv.ty, ev.ty) };
+    // An integer literal arm takes the other arm's integer type.
+    Bool ints = int_fam(tv.ty) && int_fam(ev.ty);
+    Str uty = if (uty0 != "" || !ints) { uty0 } else { if (lit_int_val(tv.val)) { ev.ty } else { if (lit_int_val(ev.val)) { tv.ty } else { "" } } };
     if (uty == "") { return gt_err("if arms disagree: " + tv.ty + " vs " + ev.ty, ev); }
     Str pt = last_label_line_cg(tv.lines, lt);
     Str pe = last_label_line_cg(ev.lines, le);
     Int tp = ev.tmp + 1;
     Str pr = f"%t{tp}";
-    Str phi = pr + " = phi " + ll_ty(num_norm_cg(tv.ty)) + " [ " + tv.val + ", %" + pt + " ], [ " + ev.val + ", %" + pe + " ]";
+    Str phi = pr + " = phi " + ll_ty(num_norm_cg(uty)) + " [ " + tv.val + ", %" + pt + " ], [ " + ev.val + ", %" + pe + " ]";
     List(Str) d0 = ev.lines;
     List(Str) d05 = d0.concat(["br label %" + ld]);
     List(Str) d1 = d05.concat([ld + ":"]);
     List(Str) d2 = d1.concat([phi]);
     Int lb4 = if (ev.lbl > l3) { ev.lbl } else { l3 };
     return GT {.pos = retpos, .val = pr, .ty = uty, .cnt = 0, .err = "", .glines = ev.glines, .lines = d2, .tmp = tp, .lbl = lb4, .tail = false};
+}
+
+// A lowered value that is an integer constant (`-12`, `0`).
+Bool lit_int_val(Str v) {
+    Int n = str_len(v);
+    if (n == 0) { return false; }
+    Int st = if (str_char_at(v, 0) == 45) { 1 } else { 0 };
+    return n > st && lit_digits_from(v, st);
+}
+
+Bool lit_digits_from(Str v, Int i) {
+    if (i >= str_len(v)) { return true; }
+    Int c = str_char_at(v, i);
+    return c >= 48 && c <= 57 && lit_digits_from(v, i + 1);
 }
 
 GT gt_tmp(GT v, Int t) {

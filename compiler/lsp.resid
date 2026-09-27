@@ -515,13 +515,13 @@ Str ls_definition(LsA a, Int line, Int col) {
 // Top-level declarations: kind name -> LSP SymbolKind.
 Int ls_symkind(Str k) {
     if (k == "fn") { return 12; }
-    if (k == "behavior") { return 11; }
+    if (k == "behavior" || k == "bdecl") { return 11; }
     if (k == "sum_t") { return 10; }
     if (k == "test") { return 24; }
     return 23;
 }
 
-Bool ls_decl(Str k) { return k == "fn" || k == "behavior" || k == "struct_t" || k == "sum_t" || k == "alias_t" || k == "ctype_t" || k == "cwhere_t" || k == "test"; }
+Bool ls_decl(Str k) { return k == "fn" || k == "behavior" || k == "bdecl" || k == "struct_t" || k == "sum_t" || k == "alias_t" || k == "ctype_t" || k == "cwhere_t" || k == "test"; }
 
 Str ls_symbols(LsA a) {
     if (!a.parsed) { return "[]"; }
@@ -542,7 +542,7 @@ List(Str) ls_syms_at(LsA a, Int i, Int n, Bool here, ListBuf(Str) acc) {
 }
 
 Str ls_completion(LsA a) {
-    List(Str) kws = ["if", "else", "match", "return", "for", "in", "while", "break", "continue", "type", "import", "true", "false", "Int", "Float", "Bool", "Str", "Dec", "List", "Map", "Set", "Option", "Result", "Some", "None", "Ok", "Err", "StrBuf", "ListBuf", "test", "sandbox", "spawn", "with"];
+    List(Str) kws = ["if", "else", "match", "return", "for", "in", "while", "break", "continue", "type", "import", "behavior", "using", "true", "false", "Int", "Float", "Bool", "Str", "Dec", "List", "Map", "Set", "Option", "Result", "Some", "None", "Ok", "Err", "StrBuf", "ListBuf", "test", "sandbox", "spawn", "with"];
     List(Str) ks = ls_kw_items(kws, 0, ListBuf());
     List(Str) ds = if (a.parsed) { ls_decl_items(a, 0, a.g.ns[a.unit].nk, ListBuf()) } else { [] };
     return "{\"isIncomplete\":false,\"items\":[" + str_join(ks.concat(ds), ",") + "]}";
@@ -555,11 +555,25 @@ List(Str) ls_kw_items(List(Str) ks, Int i, ListBuf(Str) acc) {
 
 List(Str) ls_decl_items(LsA a, Int i, Int n, ListBuf(Str) acc) {
     if (i >= n) { return acc.finish(); }
-    KN kn = a.g.ns[kg_kid(a.g, a.unit, i)];
-    Bool take = ls_decl(kn.kind) && kn.kind != "test" && kn.text != "" && !str_starts_with(kn.text, "__");
+    Int d = kg_kid(a.g, a.unit, i);
+    KN kn = a.g.ns[d];
+    // The prelude's declarations are not the program's, but its verbs are
+    // there to call.
+    Bool prelude = kn.sp >= gm_prelude_pos(a.src);
+    if (kn.kind == "bdecl") { return ls_decl_items(a, i + 1, n, ls_verb_items(a, d, 0, acc)); }
+    Bool take = !prelude && ls_decl(kn.kind) && kn.kind != "test" && kn.text != "" && !str_starts_with(kn.text, "__");
     Int kind = if (kn.kind == "fn") { 3 } else { if (kn.kind == "behavior") { 8 } else { 22 } };
-    Str item = "{\"label\":" + js_q(kn.text) + ",\"kind\":" + f"{kind}" + ",\"detail\":" + js_q(ls_signature(a, kg_kid(a.g, a.unit, i))) + "}";
+    Str item = "{\"label\":" + js_q(kn.text) + ",\"kind\":" + f"{kind}" + ",\"detail\":" + js_q(ls_signature(a, d)) + "}";
     return ls_decl_items(a, i + 1, n, if (take) { acc.push(item) } else { acc });
+}
+
+// A behavior's verbs, with their prototypes as detail.
+ListBuf(Str) ls_verb_items(LsA a, Int bd, Int j, ListBuf(Str) acc) {
+    if (j >= a.g.ns[bd].nk) { return acc; }
+    Int pr = kg_kid(a.g, bd, j);
+    Str detail = a.g.ns[kg_kid(a.g, pr, 0)].text + " " + a.g.ns[pr].text + "(" + gk_join_kids_ty(a.g, pr, 1, a.g.ns[pr].nk, "") + ")  behavior " + a.g.ns[bd].text;
+    Str item = "{\"label\":" + js_q(a.g.ns[pr].text) + ",\"kind\":3,\"detail\":" + js_q(detail) + "}";
+    return ls_verb_items(a, bd, j + 1, acc.push(item));
 }
 
 // ─── The server loop ───────────────────────────────────────────────────

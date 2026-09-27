@@ -1,0 +1,4 @@
+type Task = { Int p; };
+@needs(Ord(T))
+T biggest(List(T) xs) { return sort(xs)[0]; }
+Int main() { Task t = biggest([Task {.p = 1}]); return t.p; }

@@ -1,0 +1,19 @@
+type Task = { Str name; Int p; };
+Bool same_name(Task a, Task b) { return a.name == b.name; }
+Int by_p(Task a, Task b) { return a.p - b.p; }
+Eq(Task) = same_name;
+Ord(Task) = by_p;
+
+@needs(Eq(T))
+Bool has(List(T) xs, T x, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == x) { return true; }
+    return has(xs, x, i + 1);
+}
+
+Int main() {
+    Task a = Task {.name = "a", .p = 1};
+    Task b = Task {.name = "b", .p = 2};
+    println(f"{a == b} {a != b} {a < b} {b <= a} {has([a, b], Task {.name = "b", .p = 9}, 0)} {"apple" < "banana"}");
+    return 0;
+}

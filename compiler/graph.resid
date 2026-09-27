@@ -25,6 +25,11 @@ pub Kg kg_empty() {
 
 pub Int kg_count(Kg g) { return g.ns.len(); }
 
+// Field separators inside node text (Resid strings have no \x escape).
+pub Str kg_us() { return str_from_code(31); }
+pub Str gm_rs() { return str_from_code(30); }
+pub Str gm_gs() { return str_from_code(29); }
+
 pub Int kg_kid(Kg g, Int id, Int i) { return g.kids[g.ns[id].a0 + i]; }
 
 // Append a node; its id is the node count before the append.
@@ -835,7 +840,7 @@ KP kg_typedecl(Str s, Kg g, Int pos, Str prefix, Int sp) {
     Tok gen = lex_tok(s, nm.pos);
     Int gclose = if (gen.text == "(") { imp_close_paren(s, gen.pos, 0) } else { nm.pos };
     Str gparams = if (gen.text == "(") { str_slice(s, kg_tstart(gen), gclose) } else { "" };
-    Str aux = if (prefix == "") { gparams } else { prefix + "\x1f" + gparams };
+    Str aux = if (prefix == "") { gparams } else { prefix + kg_us() + gparams };
     Tok eq = lex_tok(s, gclose);
     if (eq.text != "=") { return kg_fail(g, eq.pos, "expected = in type declaration"); }
     Tok br = lex_tok(s, eq.pos);
@@ -929,9 +934,98 @@ KP kg_decl_at(Str s, Kg g, Int pos) {
         if (body.err != "") { return body; }
         return kg_add(body.g, "test", tn.text, prefix, [body.id], sp, body.pos);
     }
-    BRes bh = behavior_decl_at(s, pe);
-    if (bh.err == "") { return kg_add(g, "behavior", bh.name, prefix + "|" + bh.param + "|" + bh.impl, none, sp, bh.pos); }
+    if (t.text == "behavior" && tn.kind == "ident") { return kg_bdecl(s, g, tn, prefix, sp); }
+    KP inst = kg_instance(s, g, pe, prefix, sp);
+    if (inst.err == "") { return inst; }
+    if (inst.id == -2) { return kg_fail(g, inst.pos, inst.err); }
     return kg_fn(s, g, pe, prefix, sp);
+}
+
+// `behavior Name(T, U) { Ret verb(P a); ... }`: a bdecl node (aux: prefix,
+// then `\x1f` and the parameters) with one proto node per verb.
+KP kg_bdecl(Str s, Kg g, Tok nm, Str prefix, Int sp) {
+    Tok open = lex_tok(s, nm.pos);
+    if (open.text != "(") { return kg_fail(g, open.pos, "expected ( after behavior name"); }
+    Int cl = imp_close_paren(s, open.pos, 0);
+    Str ps = str_replace(str_replace(str_slice(s, open.pos, cl - 1), " ", ""), "\t", "");
+    Tok lb = lex_tok(s, cl);
+    if (lb.text != "{") { return kg_fail(g, lb.pos, "expected { after behavior parameters"); }
+    KL pr = kg_protos(s, g, lb.pos, ListBuf());
+    if (pr.err != "") { return kg_fail(pr.g, pr.pos, pr.err); }
+    if (pr.ids.len() == 0) { return kg_fail(pr.g, pr.pos, "a behavior declares at least one function"); }
+    return kg_add(pr.g, "bdecl", nm.text, prefix + kg_us() + ps, pr.ids, sp, pr.pos);
+}
+
+// Prototypes `Ret verb(params);` up to `}`.
+KL kg_protos(Str s, Kg g, Int pos, ListBuf(Int) acc) {
+    Tok t = lex_tok(s, pos);
+    if (t.text == "}") { return KL {.g = g, .ids = acc.finish(), .pos = t.pos, .err = ""}; }
+    KP rty = kg_type(s, g, pos);
+    if (rty.err != "") { return kl_fail_b(acc, rty.g, rty.pos, rty.err); }
+    Tok nm = lex_tok(s, rty.pos);
+    Tok open = lex_tok(s, nm.pos);
+    if (nm.kind != "ident" || open.text != "(") { return kl_fail_b(acc, rty.g, open.pos, "expected `Ret verb(params);` in a behavior"); }
+    KL ps = kg_params(s, rty.g, open.pos, [rty.id]);
+    if (ps.err != "") { return kl_fail_b(acc, ps.g, ps.pos, ps.err); }
+    Tok semi = lex_tok(s, ps.pos);
+    if (semi.text != ";") { return kl_fail_b(acc, ps.g, semi.pos, "a behavior's functions are prototypes: expected ; after the parameters (no body)"); }
+    KP p = kg_add(ps.g, "proto", nm.text, "", ps.ids, kg_tstart(t), semi.pos);
+    return kg_protos(s, p.g, semi.pos, acc.push(p.id));
+}
+
+// An instance `B(T) = f;`, `B(A, C) = f;` or `B(T) = { .verb = f, ... };`
+// (a behavior node; aux: prefix|types|impl, a bundle's impl as
+// "verb=f,verb=g"). err "no" when the text is not an instance; id -2 with
+// an error when it is one but malformed.
+KP kg_instance(Str s, Kg g, Int pos, Str prefix, Int sp) {
+    Tok head = lex_tok(s, pos);
+    Tok open = lex_tok(s, head.pos);
+    KP no = KP {.g = g, .id = -1, .pos = pos, .err = "no"};
+    if (head.kind != "ident" || open.text != "(") { return no; }
+    Int cl = imp_close_paren(s, open.pos, 0);
+    Tok eq = lex_tok(s, cl);
+    if (eq.text != "=") { return no; }
+    PRes tys = kg_type_list(s, open.pos, "");
+    if (tys.err != "") { return KP {.g = g, .id = -2, .pos = tys.pos, .err = tys.err}; }
+    Tok v = lex_tok(s, eq.pos);
+    List(Int) none = [];
+    if (v.kind == "ident") {
+        Tok semi = lex_tok(s, v.pos);
+        if (semi.text != ";") { return KP {.g = g, .id = -2, .pos = semi.pos, .err = "expected ; after the instance's function"}; }
+        return kg_add(g, "behavior", head.text, prefix + "|" + tys.ty + "|" + v.text, none, sp, semi.pos);
+    }
+    if (v.text != "{") { return KP {.g = g, .id = -2, .pos = v.pos, .err = "an instance names a function, or a record of functions `{ .verb = f, ... }`"}; }
+    PRes fs = kg_inst_fields(s, v.pos, "");
+    if (fs.err != "") { return KP {.g = g, .id = -2, .pos = fs.pos, .err = fs.err}; }
+    Tok semi = lex_tok(s, fs.pos);
+    if (semi.text != ";") { return KP {.g = g, .id = -2, .pos = semi.pos, .err = "expected ; after the instance"}; }
+    return kg_add(g, "behavior", head.text, prefix + "|" + tys.ty + "|" + fs.ty, none, sp, semi.pos);
+}
+
+// Types up to `)`, joined by ", "; pos is after `(`.
+PRes kg_type_list(Str s, Int pos, Str acc) {
+    PRes t = parse_type(s, pos);
+    if (t.err != "") { return t; }
+    Str acc2 = if (acc == "") { t.ty } else { acc + ", " + t.ty };
+    Tok sep = lex_tok(s, t.pos);
+    if (sep.text == ",") { return kg_type_list(s, sep.pos, acc2); }
+    if (sep.text == ")") { return PRes {.pos = sep.pos, .ty = acc2, .err = ""}; }
+    return PRes {.pos = sep.pos, .ty = "", .err = "expected , or ) in the instance's types"};
+}
+
+// `.verb = f, ...}` as "verb=f,verb=g"; pos is after `{`.
+PRes kg_inst_fields(Str s, Int pos, Str acc) {
+    Tok d = lex_tok(s, pos);
+    if (d.text == "}") { return PRes {.pos = d.pos, .ty = acc, .err = ""}; }
+    Tok f = lex_tok(s, d.pos);
+    Tok eq = lex_tok(s, f.pos);
+    Tok fnt = lex_tok(s, eq.pos);
+    if (d.text != "." || f.kind != "ident" || eq.text != "=" || fnt.kind != "ident") { return PRes {.pos = d.pos, .ty = "", .err = "expected `.verb = function` in the instance record"}; }
+    Str acc2 = if (acc == "") { f.text + "=" + fnt.text } else { acc + "," + f.text + "=" + fnt.text };
+    Tok sep = lex_tok(s, fnt.pos);
+    if (sep.text == ",") { return kg_inst_fields(s, sep.pos, acc2); }
+    if (sep.text == "}") { return PRes {.pos = sep.pos, .ty = acc2, .err = ""}; }
+    return PRes {.pos = sep.pos, .ty = "", .err = "expected , or } in the instance record"};
 }
 
 // Parse a whole (desugared) program into a graph rooted at a `unit` node.
@@ -967,8 +1061,8 @@ pub Str kg_part(Str s, Int i) {
 
 Str kg_pr_type_head(Kg g, Int id, Str sb) {
     Str aux = g.ns[id].aux;
-    Bool hasp = str_contains(aux, "\x1f");
-    List(Str) ps = str_split(aux, "\x1f");
+    Bool hasp = str_contains(aux, kg_us());
+    List(Str) ps = str_split(aux, kg_us());
     Str prefix = if (hasp) { ps[0] } else { "" };
     Str gen = if (hasp) { ps[1] } else { aux };
     Str p1 = if (prefix == "") { "" } else { prefix + " " };
@@ -1001,7 +1095,20 @@ Str kg_pr_decl(Kg g, Int id, Str k, Str sb) {
     if (k == "behavior") {
         Str bp = kg_part(g.ns[id].aux, 0);
         Str bpre = if (bp == "") { "" } else { bp + " " };
-        return kg_ap(sb, bpre + g.ns[id].text + "(" + kg_part(g.ns[id].aux, 1) + ") = " + kg_part(g.ns[id].aux, 2) + ";");
+        Str impl = kg_part(g.ns[id].aux, 2);
+        Str rhs = if (str_contains(impl, "=")) { "{ ." + str_replace(str_replace(impl, ",", ", ."), "=", " = ") + " }" } else { impl };
+        return kg_ap(sb, bpre + g.ns[id].text + "(" + kg_part(g.ns[id].aux, 1) + ") = " + rhs + ";");
+    }
+    if (k == "bdecl") {
+        List(Str) ap = str_split(g.ns[id].aux, kg_us());
+        Str bpre = if (ap[0] == "") { "" } else { ap[0] + " " };
+        Str s1 = kg_ap(sb, bpre + "behavior " + g.ns[id].text + "(" + str_replace(ap[1], ",", ", ") + ") {\n");
+        return kg_ap(kg_pr_all(g, id, "\n", s1), "\n}");
+    }
+    if (k == "proto") {
+        Int n = g.ns[id].nk;
+        Str s1 = kg_ap(kg_pr_k(g, id, 0, sb), " " + g.ns[id].text + "(");
+        return kg_ap(kg_pr_list(g, id, 1, n, ", ", s1), ");");
     }
     if (k == "test") { return kg_pr_k(g, id, 0, kg_ap(sb, pre + "test " + g.ns[id].text + " ")); }
     if (k == "sandbox") { return kg_ap(kg_pr_all(g, id, "\n", kg_ap(sb, "sandbox (" + g.ns[id].aux + ") {\n")), "\n}"); }

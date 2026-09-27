@@ -53,21 +53,36 @@ automatically or is told which one to use with `using =`.
   function, so if it needs a capability, every function that sorts with it
   must be granted that capability too.
 
-## The behaviors
+## The core behaviors
 
-| Behavior | Instance signature | Used by |
-|---|---|---|
-| `Ord(T)` | `Int f(T a, T b)`: negative, zero or positive | `sort`, `Reverse` |
-| `Show(T)` | `Str f(T v)` | f-string holes, including inside records, lists and options |
-| `Eq(T)` | `Bool f(T a, T b)` | declared and checked; reserved for equality |
-| `Hash(T)` | `Int f(T v)` | declared and checked; reserved for hashing |
-| `Serialize(T)` | `Str f(T v)` | declared and checked; reserved |
-| `Allocator(T)` | `T f()` | declared and checked; reserved |
+The prelude declares these as ordinary behaviors, so they follow the same
+rules as [your own](/Resid/behaviors/defining/):
 
-Numbers and `Str` come with a built-in ordering, so `sort(xs)` on them
-needs no instance, and the numeric family has built-in `Eq`, `Ord` and
-`Hash` at every width.
+```text
+behavior Eq(T)        { Bool eq(T a, T b); }
+behavior Ord(T)       { Int compare(T a, T b); }
+behavior Hash(T)      { Int hash(T x); }
+behavior Show(T)      { Str show(T x); }
+behavior Serialize(T) { Str serialize(T x); }
+behavior Allocator(T) { T allocate(); }
+```
+
+| Behavior | Used by |
+|---|---|
+| `Ord(T)` | `sort`, `Reverse`, `<` `<=` `>` `>=`, the verb `compare` |
+| `Show(T)` | f-string holes, including inside records, lists and options; the verb `show` |
+| `Eq(T)` | `==` and `!=` on types without a built-in equality; the verb `eq` |
+| `Hash(T)` | the verb `hash` |
+| `Serialize(T)` | the verb `serialize` |
+| `Allocator(T)` | the verb `allocate` |
+
+Numbers and `Str` come with built-in instances, so `sort(xs)` on them
+needs nothing, and the numeric family has `Eq`, `Ord` and `Hash` at every
+width. A function of your own named like a verb (`show`, `hash`) wins
+over the verb.
 
 The chapters that follow cover [Ord](/Resid/behaviors/ord/),
-[Show](/Resid/behaviors/show/), the [generic verbs](/Resid/behaviors/generic-verbs/),
-and how to [behavioralize](/Resid/behaviors/behavioralizing/) existing code.
+[Show](/Resid/behaviors/show/), [your own behaviors](/Resid/behaviors/defining/),
+[generic functions](/Resid/behaviors/generics/), the
+[generic verbs](/Resid/behaviors/generic-verbs/), and how to
+[behavioralize](/Resid/behaviors/behavioralizing/) existing code.

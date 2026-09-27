@@ -1,0 +1,1 @@
+error[E0224]: Ord(Str): a library may declare instances only of its own behaviors or types

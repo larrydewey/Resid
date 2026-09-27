@@ -1,0 +1,3 @@
+// A library instance for types and a behavior it does not own.
+pub Int rev_cmp(Str a, Str b) { return 0; }
+Ord(Str) = rev_cmp;
