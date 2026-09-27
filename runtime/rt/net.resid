@@ -1,0 +1,148 @@
+// OS entropy, the AES-NI query, the bounds-check trap, and blocking TCP
+// sockets for lib/http.resid and the TLS transport.
+
+// One byte of OS entropy (getrandom, else /dev/urandom).
+@export("resid_crypto_random_byte", "i64()")
+pub Int rt_crypto_random_byte() {
+    Int b = resid_raw_tls("rand_byte", 8);
+    Int _z = st64(b, 0);
+    if (sc(318, b, 1, 0) == 1) { return ld8(b); }
+    Int fd = sys_open(resid_raw_addr("/dev/urandom"), o_rdonly(), 0);
+    if (fd < 0) { return rt_abort("crypto_random_byte: no entropy source"); }
+    Int n = sc(0, fd, b, 1);
+    Int _c = sys_close(fd);
+    if (n != 1) { return rt_abort("crypto_random_byte: read failed"); }
+    return ld8(b);
+}
+
+// CPUID leaf 1, ECX bit 25.
+@export("resid_cpu_has_aesni", "i8()")
+pub Int rt_cpu_has_aesni() { return (resid_raw_cpuid(1, 0) >> 57) & 1; }
+
+// An out-of-range list index; `at` is "file:line:col" or empty.
+@export("resid_index_abort", "void(i64,i64,ptr)")
+pub Int rt_index_abort(Int idx, Int len, Int at) {
+    Int sb = rt_sb_new();
+    Int _a = sb_lit(sb, resid_raw_addr("list index out of bounds: index "));
+    Int _b = sb_word(sb, idx);
+    Int _c = sb_lit(sb, resid_raw_addr(", length "));
+    Int _d = sb_word(sb, len);
+    Bool has = at != 0 && ld8(at) != 0;
+    Int _e = if (has) { sb_lit(sb, resid_raw_addr(" (")) + sb_lit(sb, at) + sb_lit(sb, resid_raw_addr(")")) } else { 0 };
+    return rt_abort_at(rt_sb_finish(sb));
+}
+
+// ─── TCP ───────────────────────────────────────────────────────────────
+
+Bool host_ok(Int p) {
+    Int c = ld8(p);
+    if (c == 0) { return true; }
+    Bool ok = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 45 || c == 46 || c == 58;
+    return ok && host_ok(p + 1);
+}
+
+// A connected stream socket (first address getaddrinfo returns, 30 s
+// receive timeout), or -1.
+@export("resid_tcp_connect", "i64(ptr,i64)")
+pub Int rt_tcp_connect(Int host, Int port) {
+    if (host == 0 || ld8(host) == 0 || !host_ok(host)) { return 0 - 1; }
+    if (port <= 0 || port > 65535) { return 0 - 1; }
+    Int hints = resid_raw_tls("ai_hints", 48);
+    Int _z = resid_raw_fill(hints, 0, 48);
+    Int _t = st32(hints + 8, 1);
+    Int ps = resid_raw_tls("ai_port", 24);
+    Int _p = st8(ps + itoa_into(ps, port), 0);
+    Int resp = resid_raw_tls("ai_res", 8);
+    Int _r = st64(resp, 0);
+    if (c_getaddrinfo(host, ps, hints, resp) != 0 || ld64(resp) == 0) { return 0 - 1; }
+    Int res = ld64(resp);
+    Int fd = resid_raw_syscall(41, ld32(res + 4), ld32(res + 8), ld32(res + 12), 0, 0, 0);
+    if (fd < 0) { return c_freeaddrinfo(res) * 0 - 1; }
+    Int cr = resid_raw_syscall(42, fd, ld64(res + 24), ld32(res + 16), 0, 0, 0);
+    Int _f = c_freeaddrinfo(res);
+    if (cr != 0) { return sys_close(fd) * 0 - 1; }
+    Int tv = resid_raw_tls("ai_tv", 16);
+    Int _a = st64(tv, 30);
+    Int _b = st64(tv + 8, 0);
+    Int _s = resid_raw_syscall(54, fd, 1, 20, tv, 16, 0);
+    return fd;
+}
+
+// Write all n bytes at p (MSG_NOSIGNAL); false on error.
+Bool send_all(Int fd, Int p, Int n) {
+    if (n <= 0) { return true; }
+    Int w = resid_raw_syscall(44, fd, p, n, 16384, 0, 0);
+    if (w <= 0) { return false; }
+    return send_all(fd, p + w, n - w);
+}
+
+@export("resid_tcp_send", "i8(i64,ptr)")
+pub Int rt_tcp_send(Int fd, Int data) { return if (send_all(fd, data, c_strlen(data))) { 1 } else { 0 }; }
+
+// Everything until the peer closes, capped at 4 MB.
+@export("resid_tcp_recv_all", "ptr(i64)")
+pub Int rt_tcp_recv_all(Int fd) {
+    Int out = xmalloc(65536);
+    return recv_loop(fd, out, 65536, 0);
+}
+
+Int recv_loop(Int fd, Int out, Int cap, Int len) {
+    if (len + 4096 > cap) {
+        if (cap >= 4194304) { return st8(out + len, 0) * 0 + out; }
+        return recv_loop(fd, xrealloc(out, cap * 2), cap * 2, len);
+    }
+    Int n = resid_raw_syscall(45, fd, out + len, cap - len - 1, 0, 0, 0);
+    if (n <= 0) { return st8(out + len, 0) * 0 + out; }
+    return recv_loop(fd, out, cap, len + n);
+}
+
+@export("resid_tcp_close", "i8(i64)")
+pub Int rt_tcp_close(Int fd) { return if (sys_close(fd) == 0) { 1 } else { 0 }; }
+
+// A List(Int) of byte values (each truncated to 8 bits), at most 1 MB.
+@export("resid_tcp_send_bin", "i8(i64,ptr)")
+pub Int rt_tcp_send_bin(Int fd, Int l) {
+    Int n = c_list_len(l);
+    if (n <= 0) { return 1; }
+    if (n > 1048576) { return 0; }
+    Int buf = xmalloc(n);
+    Int _f = bytes_of(l, buf, 0, n);
+    Bool ok = send_all(fd, buf, n);
+    Int _x = c_free(buf);
+    return if (ok) { 1 } else { 0 };
+}
+
+Int bytes_of(Int l, Int buf, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _s = st8(buf + i, unbox_word(c_list_get(l, i)) & 255);
+    return bytes_of(l, buf, i + 1, n);
+}
+
+// Exactly n bytes (at most 1 MB) as a List(Int); bytes after EOF or an
+// error are 0.
+@export("resid_tcp_recv_bin", "ptr(i64,i64)")
+pub Int rt_tcp_recv_bin(Int fd, Int n0) {
+    Int n = clamp(n0, 0, 1048576);
+    Int buf = xmalloc(n);
+    Int _z = resid_raw_fill(buf, 0, n);
+    Int _g = recv_exact(fd, buf, 0, n);
+    Int slots = xmalloc(n * 8);
+    Int _b = byte_boxes(buf, slots, 0, n);
+    Int out = c_list_new(n, slots, resid_raw_addr("List"));
+    Int _f = c_free(buf) + c_free(slots);
+    return out;
+}
+
+Int recv_exact(Int fd, Int buf, Int got, Int n) {
+    if (got >= n) { return got; }
+    Int r = resid_raw_syscall(45, fd, buf + got, n - got, 0, 0, 0);
+    if (r <= 0) { return got; }
+    return recv_exact(fd, buf, got + r, n);
+}
+
+// Small Ints are immediate boxes (value + IMM_OFF).
+Int byte_boxes(Int buf, Int slots, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _s = st64(slots + i * 8, ld8(buf + i) + 18295873486192640);
+    return byte_boxes(buf, slots, i + 1, n);
+}

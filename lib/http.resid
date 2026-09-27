@@ -59,6 +59,7 @@ pub Url http_parse_url(Str url) {
 
 // Perform a GET; returns the full raw response. Empty string on any
 // transport failure (connect refused, send failed, ...).
+@requires(network)
 pub Str http_get_raw(Str url) {
     Url u = http_parse_url(url);
     if (u.port <= 0) { return ""; }
@@ -103,6 +104,7 @@ pub HttpResponse http_parse_response(Str raw) {
 }
 
 // Convenience: GET and return just the body ("" on failure).
+@requires(network)
 pub Str http_get_body(Str url) {
     HttpResponse r = http_parse_response(http_get_raw(url));
     if (r.status != 200) { return ""; }
@@ -110,6 +112,7 @@ pub Str http_get_body(Str url) {
 }
 
 // Convenience: GET and return just the numeric status code (0 on failure).
+@requires(network)
 pub Int http_get_status(Str url) {
     HttpResponse r = http_parse_response(http_get_raw(url));
     return r.status;
@@ -118,6 +121,7 @@ pub Int http_get_status(Str url) {
 // ─── HTTP/1.1 v2: keep-alive requests, Content-Length + chunked ──────
 
 // Read a single byte from fd as an Int code (0 - 1 on EOF).
+@requires(network)
 pub Int http_recv_byte(Int fd) {
     List(Int) one = resid_tcp_recv_bin(fd, 1);
     if (one.len() < 1) { return 0 - 1; }
@@ -125,6 +129,7 @@ pub Int http_recv_byte(Int fd) {
 }
 
 // Accumulate bytes until `term` (a \r\n-terminated line end) seen.
+@requires(network)
 pub Str http_recv_line_acc(Int fd, Str acc, Int depth) {
     if (depth <= 0) { return acc; }
     Int b = http_recv_byte(fd);
@@ -142,11 +147,13 @@ pub Str http_recv_line_acc(Int fd, Str acc, Int depth) {
     return http_recv_line_acc(fd, acc2, d2);
 }
 
+@requires(network)
 pub Str http_recv_line(Int fd) {
     return http_recv_line_acc(fd, "", 8192);
 }
 
 // Read exactly n body bytes.
+@requires(network)
 pub Str http_recv_count_acc(Int fd, Int n, Int got, Str acc) {
     if (got >= n) { return acc; }
     Int b = http_recv_byte(fd);
@@ -157,6 +164,7 @@ pub Str http_recv_count_acc(Int fd, Int n, Int got, Str acc) {
     return http_recv_count_acc(fd, n, g2, acc2);
 }
 
+@requires(network)
 pub Str http_recv_count(Int fd, Int n) {
     return http_recv_count_acc(fd, n, 0, "");
 }
@@ -197,6 +205,7 @@ pub Str http_header_value(Str head, Str name) {
 // Chunked decoding: reads size-line/chunks straight off the socket.
 // `first` is the first chunk-size line already consumed by the caller
 // ("" when the chunked stream starts fresh).
+@requires(network)
 pub Str http_read_chunked_acc(Int fd, Str pending_line, Str acc) {
     Str line = if (pending_line == "") { http_recv_line(fd) } else { pending_line };
     // strip trailing CRLF and any ";ext"
@@ -222,6 +231,7 @@ pub Str http_read_chunked_acc(Int fd, Str pending_line, Str acc) {
     return http_read_chunked_acc(fd, "", acc2);
 }
 
+@requires(network)
 pub Str http_drain_trailers(Int fd, Str line, Str acc) {
     Int l = str_len(line);
     Bool blank = l < 3;
@@ -232,6 +242,7 @@ pub Str http_drain_trailers(Int fd, Str line, Str acc) {
 
 // Read header lines until the blank CRLF line; returns the whole head
 // block including the terminating CRLF.
+@requires(network)
 pub Str http_recv_head_acc(Int fd, Str acc, Int depth) {
     if (depth <= 0) { return acc; }
     Str line = http_recv_line(fd);
@@ -243,12 +254,14 @@ pub Str http_recv_head_acc(Int fd, Str acc, Int depth) {
     return http_recv_head_acc(fd, acc2, d2);
 }
 
+@requires(network)
 pub Str http_recv_head(Int fd) {
     return http_recv_head_acc(fd, "", 256);
 }
 
 // Perform one HTTP/1.1 request on an open connection and consume the
 // response according to Content-Length / chunked / read-to-close.
+@requires(network)
 pub HttpResponse http_call(Int fd, Str method, Str path, Str hostport, Str extra) {
     Str req = http_build_request(method, path, hostport, extra, "keep-alive");
     Bool sent = resid_tcp_send(fd, req);
@@ -283,6 +296,7 @@ pub HttpResponse http_call(Int fd, Str method, Str path, Str hostport, Str extra
 
 // One-shot GET (opens its own connection, Connection: close semantics
 // via read-to-close when no framing present).
+@requires(network)
 pub HttpResponse http_get(Str hostport_url_parts_host, Int port, Str path) {
     Int fd = resid_tcp_connect(hostport_url_parts_host, port);
     if (fd < 0) { return HttpResponse { .status = 0, .headers = "", .body = "" }; }

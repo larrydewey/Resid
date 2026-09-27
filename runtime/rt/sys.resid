@@ -4,7 +4,7 @@
 // program entry trampoline.
 
 // A system call retried while interrupted (EINTR).
-Int sc(Int n, Int a, Int b, Int c) {
+pub Int sc(Int n, Int a, Int b, Int c) {
     Int r = resid_raw_syscall(n, a, b, c, 0, 0, 0);
     if (r == 0 - 4) { return sc(n, a, b, c); }
     return r;
@@ -18,7 +18,7 @@ Int sc4(Int n, Int a, Int b, Int c, Int d) {
 
 Bool path_ok(Int p) { return p != 0 && ld8(p) != 0; }
 
-Int o_rdonly() { return 524288; }                 // O_CLOEXEC
+pub Int o_rdonly() { return 524288; }                 // O_CLOEXEC
 Int o_write() { return 524288 | 1 | 64 | 512; }  // O_WRONLY | O_CREAT | O_TRUNC
 Int o_append() { return 524288 | 1 | 64 | 1024; }
 

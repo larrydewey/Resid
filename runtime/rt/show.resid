@@ -24,9 +24,9 @@ Int scalar_kind(Int p) {
     return ld8(box_type(p));
 }
 
-Int sb_lit(Int sb, Int s) { return sb_bytes(sb, s, c_strlen(s)); }
+pub Int sb_lit(Int sb, Int s) { return sb_bytes(sb, s, c_strlen(s)); }
 
-Int sb_word(Int sb, Int v) {
+pub Int sb_word(Int sb, Int v) {
     Int buf = resid_raw_tls("show_buf", 64);
     return sb_bytes(sb, buf, itoa_into(buf, v));
 }

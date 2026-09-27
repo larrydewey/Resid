@@ -1849,13 +1849,18 @@ pub Bool num_all_same(List(Str) ts, Int i, Str t) {
 
 // Runtime primitives (compiler-only): argument and result types.
 ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
-    Str want = if (str_starts_with(op, "load")) { "Int" } else { if (str_starts_with(op, "store") || op == "fetch_add") { "Int,Int" } else { if (op == "copy" || op == "fill" || op == "cas") { "Int,Int,Int" } else { if (op == "syscall") { "Int,Int,Int,Int,Int,Int,Int" } else { if (op == "str" || op == "bits_f64") { "Int" } else { if (op == "f64_bits") { "Float" } else { if (op == "global" || op == "tls") { "Str,Int" } else { if (op == "fn") { "Str" } else { if (op == "call2") { "Int,Int,Int" } else { if (op == "addr") { "*" } else { if (op == "table") { "List(Int)" } else { if (op == "f128_bits") { "Float(128)" } else { if (op == "bits_f128") { "Int(128)" } else { "?" } } } } } } } } } } } } };
+    Str want = if (op == "cpuid") { "Int,Int" } else { want0(op) };
     Str rty = if (op == "cas") { "Bool" } else { if (op == "str") { "Str" } else { if (op == "bits_f64") { "Float" } else { if (op == "f128_bits") { "Int(128)" } else { if (op == "bits_f128") { "Float(128)" } else { "Int" } } } } };
     if (want == "?") { return ERes {.pos = pos, .ty = "", .err = "unknown runtime primitive " + name}; }
     Bool scalar = argtys == "Int" || argtys == "Float" || argtys == "Bool";
     Bool ok = if (want == "*") { argc == 1 && !scalar } else { argtys == want || (want == "List(Int)" && str_starts_with(argtys, "List(")) };
     if (ok) { return ERes {.pos = pos, .ty = rty, .err = ""}; }
     return ERes {.pos = pos, .ty = "", .err = name + " expects (" + want + "), got (" + argtys + ")"};
+}
+
+Str want0(Str op) {
+    Str want = if (str_starts_with(op, "load")) { "Int" } else { if (str_starts_with(op, "store") || op == "fetch_add") { "Int,Int" } else { if (op == "copy" || op == "fill" || op == "cas") { "Int,Int,Int" } else { if (op == "syscall") { "Int,Int,Int,Int,Int,Int,Int" } else { if (op == "str" || op == "bits_f64") { "Int" } else { if (op == "f64_bits") { "Float" } else { if (op == "global" || op == "tls") { "Str,Int" } else { if (op == "fn") { "Str" } else { if (op == "call2") { "Int,Int,Int" } else { if (op == "addr") { "*" } else { if (op == "table") { "List(Int)" } else { if (op == "f128_bits") { "Float(128)" } else { if (op == "bits_f128") { "Int(128)" } else { "?" } } } } } } } } } } } } };
+    return want;
 }
 
 ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) pt_list) {
@@ -2174,6 +2179,14 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "resid_tcp_recv_all") {
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_recv_all expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_tcp_send_bin") {
+        if (builtin_args(argtys, "Int,List(Int)")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_tcp_send_bin expects (Int, List(Int)), got (" + argtys + ")"};
+    }
+    if (name == "resid_tcp_recv_bin") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_tcp_recv_bin expects (Int, Int), got (" + argtys + ")"};
     }
     if (name == "resid_tcp_close") {
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }

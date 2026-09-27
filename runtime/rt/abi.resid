@@ -117,3 +117,9 @@ pub Int c_strfromd(Int buf, Int n, Int fmt, Float v) { return 0; }
 
 @import("resid_list_type", "ptr(ptr)")
 pub Int c_list_type(Int l) { return 0; }
+
+@import("getaddrinfo", "i32(ptr,ptr,ptr,ptr)")
+pub Int c_getaddrinfo(Int host, Int port, Int hints, Int res) { return 0; }
+
+@import("freeaddrinfo", "void(ptr)")
+pub Int c_freeaddrinfo(Int res) { return 0; }

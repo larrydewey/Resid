@@ -1,0 +1,9 @@
+// resid_raw_cpuid: leaf 0 names the vendor in ebx/edx/ecx; leaf 1's
+// feature bits are what the AES-NI query reads.
+Int main() {
+    Int v = resid_raw_cpuid(0, 0);
+    Int edx = v & 4294967295;
+    Bool vendor = edx != 0;
+    println(f"vendor {vendor}");
+    return 0;
+}
