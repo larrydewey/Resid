@@ -4346,7 +4346,9 @@ TcoAcc tco_scan(List(Str) ls, Int i, Str fname, Str rty, List(Str) ptys, List(St
         return tco_scan(ls, i + 2, fname, rty, ptys, frame, a2);
     }
     if (args_ok && tco_reg_ty(rty) && tco_reg_tys(ptys, 0)) {
-        List(Str) l3 = acc.lines.concat([st.reg + " = musttail " + st.call]);
+        // The runtime uses plain tail calls: a musttail keeps its
+        // function from inlining into callers.
+        List(Str) l3 = acc.lines.concat([st.reg + (if (resid_rtmod()) { " = tail " } else { " = musttail " }) + st.call]);
         TcoAcc a3 = TcoAcc {.lines = l3, .allocas = acc.allocas, .inc = acc.inc, .n = acc.n, .nmust = acc.nmust + 1};
         return tco_scan(ls, i + 1, fname, rty, ptys, frame, a3);
     }

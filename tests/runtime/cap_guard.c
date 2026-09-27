@@ -2,8 +2,12 @@
  * listed families, nested regions meet, a read-only grant refuses a write
  * ("family!"), and the empty grant "_" refuses everything. */
 #include "../../runtime/resid_rt.c"
+/* The guard lives in runtime/rt/caps.resid. */
+int8_t resid_cap_granted(const char* cap);
+void resid_cap_enter(const char* const* caps, int64_t n);
+void resid_cap_leave(void);
 
-static int granted(const char* cap) { return resid_cap_granted(cap); }
+static int granted(const char* cap) { return resid_cap_granted(cap) != 0; }
 
 int main(void) {
     int bad = 0;

@@ -1,7 +1,52 @@
-// C-ABI functions the Resid runtime calls (still in runtime/resid_rt.c).
+// C-ABI functions the Resid runtime calls: the C library, and what is
+// still in runtime/resid_rt.c. Pointers travel as Int addresses.
 
 @import("resid_abort", "void(ptr) noreturn")
 pub Int c_abort(Int msg) { return 0; }
 
 // Abort with a message: `msg` is a string literal.
+@noinline
 pub Int rt_abort(Str msg) { return c_abort(resid_raw_addr(msg)); }
+
+// Abort with a message at a runtime address.
+pub Int rt_abort_at(Int msg) { return c_abort(msg); }
+
+@import("malloc", "ptr(i64)")
+pub Int c_malloc(Int n) { return 0; }
+
+@import("calloc", "ptr(i64,i64)")
+pub Int c_calloc(Int n, Int size) { return 0; }
+
+@import("realloc", "ptr(ptr,i64)")
+pub Int c_realloc(Int p, Int n) { return 0; }
+
+@import("free", "void(ptr)")
+pub Int c_free(Int p) { return 0; }
+
+@import("strlen", "i64(ptr)")
+pub Int c_strlen(Int s) { return 0; }
+
+@import("memcmp", "i32(ptr,ptr,i64)")
+pub Int c_memcmp(Int a, Int b, Int n) { return 0; }
+
+@import("memchr", "ptr(ptr,i32,i64)")
+pub Int c_memchr(Int p, Int c, Int n) { return 0; }
+
+@import("memmem", "ptr(ptr,i64,ptr,i64)")
+pub Int c_memmem(Int h, Int hn, Int nd, Int nn) { return 0; }
+
+@import("strcmp", "i32(ptr,ptr)")
+pub Int c_strcmp(Int a, Int b) { return 0; }
+
+@import("strstr", "ptr(ptr,ptr)")
+pub Int c_strstr(Int h, Int nd) { return 0; }
+
+@import("getenv", "ptr(ptr)")
+pub Int c_getenv(Int name) { return 0; }
+
+// The allocators of runtime/resid_rt.c (arenas and scalar scopes).
+@import("resid_rt_alloc", "ptr(i64)")
+pub Int rt_alloc(Int n) { return 0; }
+
+@import("resid_rt_arena_contains", "i8(ptr)")
+pub Int rt_arena_contains(Int p) { return 0; }

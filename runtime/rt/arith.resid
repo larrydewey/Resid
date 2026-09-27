@@ -53,15 +53,9 @@ pub Int rt_wrapping_udiv(Int a, Int b) {
     return rt_udiv(a, b);
 }
 
-// Unsigned a / b (b != 0) on the bit patterns.
-Int rt_udiv(Int a, Int b) {
-    UInt(64) ua = (UInt(64))a;
-    UInt(64) ub = (UInt(64))b;
-    return (Int)(ua / ub);
-}
+Int rt_udiv(Int a, Int b) { return udiv(a, b); }
 
-// Unsigned a < b on the bit patterns.
-Bool rt_ult(Int a, Int b) { return (a ^ imin()) < (b ^ imin()); }
+Bool rt_ult(Int a, Int b) { return ult(a, b); }
 
 @export("saturating_add", "i64(i64,i64)")
 pub Int rt_saturating_add(Int a, Int b) {

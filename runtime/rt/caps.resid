@@ -1,0 +1,94 @@
+// Force-time capability guard (spec §21.3): each sandboxed region pushes
+// its granted set on a thread-local stack; a provider call is checked,
+// before it runs, against every frame (attenuation only shrinks). An
+// entry "family:ro" grants reads; a "family!" request is a write.
+
+Int cap_max_depth() { return 32; }
+Int cap_max_set() { return 64; }
+
+// Frames: 32 x 64 entry pointers, then 32 counts, then the depth.
+Int cap_stack() { return resid_raw_tls("cap_stack", 16384); }
+Int cap_ns() { return resid_raw_tls("cap_ns", 256); }
+Int cap_depth_at() { return resid_raw_tls("cap_depth", 8); }
+
+@export("resid_cap_enter", "void(ptr,i64)")
+pub Int rt_cap_enter(Int caps, Int n) {
+    Int d = ld64(cap_depth_at());
+    if (d >= cap_max_depth()) { return rt_abort("capability: sandbox nesting exceeds RESID_CAP_MAX_DEPTH"); }
+    Int m0 = if (caps != 0 && n > 0) { n } else { 0 };
+    Int m = if (m0 > cap_max_set()) { cap_max_set() } else { m0 };
+    Int _c = mcopy(cap_stack() + d * 512, caps, m * 8);
+    Int _n = st64(cap_ns() + d * 8, m);
+    return st64(cap_depth_at(), d + 1);
+}
+
+@export("resid_cap_leave", "void()")
+pub Int rt_cap_leave() {
+    Int d = ld64(cap_depth_at());
+    return if (d > 0) { st64(cap_depth_at(), d - 1) } else { 0 };
+}
+
+Bool cap_term(Int c) { return c == 0 || c == 40 || c == 58 || c == 33; }
+
+// Grant entry g is read-only ("family:ro").
+Bool cap_ro(Int g) {
+    Int c = cap_find(g, 58);
+    return c != 0 && ld8(c + 1) == 114 && ld8(c + 2) == 111 && ld8(c + 3) == 0;
+}
+
+Int cap_find(Int s, Int ch) {
+    Int b = ld8(s);
+    if (b == ch) { return s; }
+    if (b == 0) { return 0; }
+    return cap_find(s + 1, ch);
+}
+
+Bool cap_same_family(Int a, Int b) {
+    if (a == 0 || b == 0) { return false; }
+    Int x = ld8(a);
+    Int y = ld8(b);
+    if (x != 0 && y != 0 && !cap_term(x) && !cap_term(y) && x == y) { return cap_same_family(a + 1, b + 1); }
+    return cap_term(x) && cap_term(y);
+}
+
+Bool cap_in_frame(Int d, Int i, Int cap, Bool write) {
+    if (i >= ld64(cap_ns() + d * 8)) { return false; }
+    Int g = ld64(cap_stack() + d * 512 + i * 8);
+    if (cap_same_family(g, cap) && !(write && cap_ro(g))) { return true; }
+    return cap_in_frame(d, i + 1, cap, write);
+}
+
+Bool cap_all_frames(Int d, Int depth, Int cap, Bool write) {
+    if (d >= depth) { return true; }
+    if (!cap_in_frame(d, 0, cap, write)) { return false; }
+    return cap_all_frames(d + 1, depth, cap, write);
+}
+
+Bool cap_granted(Int cap) {
+    Int depth = ld64(cap_depth_at());
+    if (depth == 0) { return true; }
+    Int n = c_strlen(cap);
+    Bool write = n > 0 && ld8(cap + n - 1) == 33;
+    return cap_all_frames(0, depth, cap, write);
+}
+
+// The query itself (tests/runtime/cap_guard.c).
+@export("resid_cap_granted", "i8(ptr)")
+pub Int rt_cap_granted(Int cap) { return if (cap_granted(cap)) { 1 } else { 0 }; }
+
+@export("resid_cap_check", "void(ptr)")
+pub Int rt_cap_check(Int cap) {
+    if (cap_granted(cap)) { return 0; }
+    Int n = c_strlen(cap);
+    Bool write = n > 0 && ld8(cap + n - 1) == 33;
+    Int fam = if (write) { n - 1 } else { n };
+    Int pre = resid_raw_addr("capability not granted: ");
+    Int suf = if (write) { resid_raw_addr(" (write)") } else { resid_raw_addr("") };
+    Int np = c_strlen(pre);
+    Int ns = c_strlen(suf);
+    Int buf = xmalloc(np + fam + ns + 1);
+    Int _a = mcopy(buf, pre, np);
+    Int _b = mcopy(buf + np, cap, fam);
+    Int _c = mcopy(buf + np + fam, suf, ns + 1);
+    return rt_abort_at(buf);
+}

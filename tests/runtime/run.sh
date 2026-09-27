@@ -7,9 +7,11 @@ set -uo pipefail
 cd "$(dirname "$0")"
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 pass=0; fail=0
+ROOT="$(cd ../.. && pwd)"
 for t in *.c; do
     n="${t%.c}"
-    if cc -O2 -w "$t" -o "$W/$n" -lm -lpthread 2> "$W/$n.log" && "$W/$n" > "$W/$n.out" 2>&1; then
+    # With the Resid runtime's IR: part of the runtime lives there.
+    if clang -O2 -w "$t" "$ROOT/build/boot/rt.ll" -Wno-override-module -o "$W/$n" -lm -lpthread 2> "$W/$n.log" && "$W/$n" > "$W/$n.out" 2>&1; then
         pass=$((pass + 1))
     else
         fail=$((fail + 1)); echo "FAIL $n: $(tail -2 "$W/$n.log" "$W/$n.out" 2>/dev/null | tr '\n' ' ')"
@@ -17,7 +19,6 @@ for t in *.c; do
 done
 # Runtime primitives compile only in runtime/rt/ (or the compiler's own
 # sources) with --runtime-internals.
-ROOT="$(cd ../.. && pwd)"
 COMPILER="${COMPILER:-$ROOT/build/boot/stage2.bin}"
 for t in rt/*.out; do
     n="$(basename "$t" .out)"

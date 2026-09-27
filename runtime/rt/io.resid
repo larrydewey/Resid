@@ -1,0 +1,61 @@
+// Standard output and error, and the compiler's process flags.
+
+// Write all of [p, p + n) to file descriptor fd; false on an error.
+pub Bool write_all(Int fd, Int p, Int n) {
+    if (n <= 0) { return true; }
+    Int w = resid_raw_syscall(1, fd, p, n, 0, 0, 0);
+    if (w == 0 - 4) { return write_all(fd, p, n); }
+    if (w <= 0) { return false; }
+    return write_all(fd, p + w, n - w);
+}
+
+pub Bool write_cstr(Int fd, Int s) { return write_all(fd, s, c_strlen(s)); }
+
+pub Bool write_nl(Int fd) { return write_all(fd, resid_raw_addr("\n"), 1); }
+
+@export("print", "i1(ptr)")
+pub Bool rt_print(Int s) { return write_cstr(1, s); }
+
+// A line in one system call (writev of the text and "\n").
+pub Bool write_line(Int fd, Int p, Int n) {
+    Int iov = resid_raw_tls("iov", 32);
+    Int _a = st64(iov, p);
+    Int _b = st64(iov + 8, n);
+    Int _c = st64(iov + 16, resid_raw_addr("\n"));
+    Int _d = st64(iov + 24, 1);
+    Int w = resid_raw_syscall(20, fd, iov, 2, 0, 0, 0);
+    if (w == n + 1) { return true; }
+    // Short or interrupted: finish with plain writes.
+    if (w < 0 && w != 0 - 4) { return false; }
+    Int done = if (w < 0) { 0 } else { w };
+    if (done >= n) { return write_nl(fd); }
+    return write_all(fd, p + done, n - done) && write_nl(fd);
+}
+
+@export("println", "i1(ptr)")
+pub Bool rt_println(Int s) { return write_line(1, s, c_strlen(s)); }
+
+@export("eprintln", "i1(ptr)")
+pub Bool rt_eprintln(Int s) { return write_line(2, s, c_strlen(s)); }
+
+// Progress-chatter suppression (`residc test`), --runtime-internals and
+// --runtime-module.
+Int flags() { return resid_raw_global("rt_flags", 24); }
+
+@export("resid_quiet_set", "i8(i1)")
+pub Int rt_quiet_set(Int on) { return st64(flags(), on) + 1; }
+
+@export("resid_quiet", "i8()")
+pub Int rt_quiet() { return ld64(flags()); }
+
+@export("resid_internals_set", "i8(i1)")
+pub Int rt_internals_set(Int on) { return st64(flags() + 8, on) + 1; }
+
+@export("resid_internals", "i8()")
+pub Int rt_internals() { return ld64(flags() + 8); }
+
+@export("resid_rtmod_set", "i8(i1)")
+pub Int rt_rtmod_set(Int on) { return st64(flags() + 16, on) + 1; }
+
+@export("resid_rtmod", "i8()")
+pub Int rt_rtmod() { return ld64(flags() + 16); }

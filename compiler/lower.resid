@@ -2509,7 +2509,7 @@ PG lw_import(LW w, Int d, PG g, Str imp) {
     List(Str) its = abi_impl_tys(w, d);
     Str iret = abi_impl_ret(w, d);
     List(Str) ps = abi_regs("a", its.len(), 0, ListBuf());
-    Str head = "define " + iret + " @" + lw_text(w, d) + "(" + abi_params(its, ps, 0, "") + ") " + abi_attrs() + " {";
+    Str head = "define internal " + iret + " @" + lw_text(w, d) + "(" + abi_params(its, ps, 0, "") + ") " + abi_attrs() + " {";
     Bool nr = str_ends_with(q[1], " noreturn");
     Str decl = "declare " + sig[0] + " @" + q[0] + "(" + list_join(cts, 0, ", ", "") + ")" + (if (nr) { " noreturn" } else { "" });
     List(Str) body = [head].concat(abi_body_nr(iret, its, sig[0], cts, q[0], nr));
@@ -2528,7 +2528,11 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     List(Str) tyl0 = lw_param_tys(w1, d, 1, n - 1, ListBuf());
     List(Str) tyl = ct_erase_list(fs, tyl0, 0, nil_list());
     Str pd = param_decl_at(tyl, 0, "");
-    Str defline = if (is_main) { "define i32 @resid_user_main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + ll_ty(rbase) + " @" + name + "(" + pd + ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
+    // Runtime functions are internal: only @export entries are visible.
+    Str link = if (resid_rtmod()) { "internal " } else { "" };
+    // A runtime slow path (@noinline) keeps its callers small.
+    Str fattr = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@noinline")) { " noinline" } else { "" };
+    Str defline = if (is_main) { "define i32 @resid_user_main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + link + ll_ty(rbase) + " @" + name + "(" + pd + ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
     List(Str) nl = lw_param_names(w1, d, 1, n - 1, ListBuf());
     // Ownership: the node flags and record reuses the body's lowering reads.
     LOF lf = lo_fn_flags(w1.g, d, w1.lo, fs);
@@ -2556,8 +2560,8 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     List(Str) ptys_ll = ll_ty_list(tyl, 0, nil_list());
     Bool growbuf_params = eb.lines.len() != pp1.lines.len();
     Bool tco_ok = !is_main && !sandboxed && !growbuf_params;
-    Str defpre = "define " + ll_ty(rbase) + " @" + name + "(";
-    Str defpost = ") \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
+    Str defpre = "define " + link + ll_ty(rbase) + " @" + name + "(";
+    Str defpost = ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
     List(Str) fn_lines0 = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, "") } else { pp1.lines.concat(pp2.lines) };
     // A loop whose iterations carry nothing they allocate frees each
     // iteration's allocations when the next one starts (lr_region).

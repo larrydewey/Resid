@@ -1,0 +1,65 @@
+// Memory words and C strings for the Resid runtime.
+
+pub Int ld8(Int a) { return resid_raw_load8(a); }
+pub Int ld32(Int a) { return resid_raw_load32(a); }
+pub Int ld64(Int a) { return resid_raw_load64(a); }
+pub Int st8(Int a, Int v) { return resid_raw_store8(a, v); }
+pub Int st32(Int a, Int v) { return resid_raw_store32(a, v); }
+pub Int st64(Int a, Int v) { return resid_raw_store64(a, v); }
+pub Int mcopy(Int d, Int s, Int n) { return resid_raw_copy(d, s, n); }
+
+// A heap block that must not fail.
+pub Int xmalloc(Int n) {
+    Int p = c_malloc(if (n > 0) { n } else { 1 });
+    if (p == 0) { return rt_abort("out of memory"); }
+    return p;
+}
+
+pub Int xrealloc(Int p, Int n) {
+    Int q = c_realloc(p, if (n > 0) { n } else { 1 });
+    if (q == 0) { return rt_abort("out of memory"); }
+    return q;
+}
+
+// An arena / scalar-scope aware block (resid_alloc).
+pub Int ralloc(Int n) { return rt_alloc(n); }
+
+// A fresh heap copy of C string `s`.
+pub Int cstr_dup(Int s) {
+    Int n = c_strlen(s);
+    Int p = xmalloc(n + 1);
+    Int _c = mcopy(p, s, n + 1);
+    return p;
+}
+
+// Bytes [p, p + n) as a new NUL-terminated string from `alloc_kind`
+// (0 heap, 1 arena-aware).
+pub Int cstr_from(Int p, Int n, Int kind) {
+    Int d = if (kind == 0) { xmalloc(n + 1) } else { ralloc(n + 1) };
+    Int _c = mcopy(d, p, n);
+    Int _z = st8(d + n, 0);
+    return d;
+}
+
+// Unsigned a / b (b != 0) and a % b on the bit patterns.
+pub Int udiv(Int a, Int b) {
+    if (b < 0) { return if (ult(a, b)) { 0 } else { 1 }; }
+    if (a >= 0) { return a / b; }
+    Int q = (((a >> 1) & 9223372036854775807) / b) << 1;
+    Int r = a - q * b;
+    return if (ult(r, b)) { q } else { q + 1 };
+}
+
+pub Int urem(Int a, Int b) { return a - udiv(a, b) * b; }
+
+// Logical right shift.
+pub Int lshr(Int a, Int k) {
+    if (k == 0) { return a; }
+    return (a >> k) & (9223372036854775807 >> (k - 1));
+}
+
+// Unsigned a < b on the bit patterns.
+pub Bool ult(Int a, Int b) {
+    Int m = 0 - 9223372036854775807 - 1;
+    return (a ^ m) < (b ^ m);
+}

@@ -200,7 +200,8 @@ int64_t resid_arena_push(void) {
  * previous current arena (NULL at top level). Anything the caller needed
  * from this arena's memory must already have been deep-copied out —
  * see resid_list_str_persist_copy below. */
-static void str_index_arena_popped(void);
+void resid_str_index_popped(void);
+#define str_index_arena_popped resid_str_index_popped
 
 int64_t resid_arena_pop(void) {
     Arena* a = g_current_arena;
@@ -253,12 +254,15 @@ static int scope_contains(const void* p) {
     return 0;
 }
 
+int8_t resid_rt_arena_contains(const void* p);
 static int arena_contains(const void* p) {
     /* Every active arena, not just the innermost (a string from an outer
      * arena must not enter the persistent cache either), the bulk arenas,
      * and the scalar-scope region. */
     return arena_chain_contains(g_current_arena, p) || arena_chain_contains(g_bulk_arena, p) || scope_contains(p);
 }
+
+int8_t resid_rt_arena_contains(const void* p) { return (int8_t)arena_contains(p); }
 
 int64_t resid_bulk_push(void) {
     Arena* a = (Arena*)malloc(sizeof(Arena));
@@ -487,6 +491,10 @@ static void* resid_alloc(size_t size) {
     return p;
 }
 
+/* resid_alloc and the arena test for the Resid runtime. */
+void* resid_rt_alloc(int64_t n) { return resid_alloc((size_t)n); }
+int8_t resid_rt_arena_contains(const void* p);
+
 static void* resid_calloc(size_t n, size_t size) {
     size_t total = n * size;
     g_alloc_bytes += total;
@@ -535,25 +543,7 @@ static int resid_path_is_safe(const char* path) {
     return path && path[0] != '\0';
 }
 
-bool print(const char* s) {
-    if (fputs(s, stdout) == EOF) return false;
-    if (fflush(stdout) == EOF) return false;
-    return true;
-}
-
-bool println(const char* s) {
-    if (fputs(s, stdout) == EOF) return false;
-    if (putchar('\n') == EOF) return false;
-    if (fflush(stdout) == EOF) return false;
-    return true;
-}
-
-bool eprintln(const char* s) {
-    if (fputs(s, stderr) == EOF) return false;
-    if (putc('\n', stderr) == EOF) return false;
-    if (fflush(stderr) == EOF) return false;
-    return true;
-}
+/* print / println / eprintln: runtime/rt/io.resid. */
 
 /* Abort with a message: `todo(...)`/`unimplemented(...)` trap here.
  *
@@ -634,109 +624,10 @@ static int resid_test_format(void) {
     return resid_test_fmt;
 }
 
-/* Progress-chatter suppression. The compiler prints an `OK <decl>` line per
- * declaration, which is useful on a normal build and fatal to a machine-read
- * test report — stray lines before `TAP version 13` break every TAP parser.
- * `residc test` raises this flag before type checking, and the checker's
- * progress prints consult it. */
-static int resid_quiet_flag = 0;
+/* The quiet / internals / runtime-module flags: runtime/rt/io.resid. */
+int8_t resid_regex_match(const char* pattern, const char* text);
 
-int8_t resid_quiet_set(int8_t on) { resid_quiet_flag = on ? 1 : 0; return 1; }
-int8_t resid_quiet(void) { return (int8_t)resid_quiet_flag; }
-
-/* The compiler's --runtime-internals: while checking, calls of the
- * runtime's memory internals are accepted (building the compiler). */
-static int resid_internals_flag = 0;
-int8_t resid_internals_set(int8_t on) { resid_internals_flag = on ? 1 : 0; return 1; }
-int8_t resid_internals(void) { return (int8_t)resid_internals_flag; }
-
-/* The compiler's --runtime-module: lowering the runtime itself. */
-static int resid_rtmod_flag = 0;
-int8_t resid_rtmod_set(int8_t on) { resid_rtmod_flag = on ? 1 : 0; return 1; }
-int8_t resid_rtmod(void) { return (int8_t)resid_rtmod_flag; }
-
-/* ── Tiny regex (subset) ────────────────────────────────────────────────
- * Supports `^` `$` `.` `*` `+` `?` and `[...]` classes (with `^` negation
- * and `a-z` ranges). Deliberately NOT a full regex engine: it is what
- * `toMatch` (SPEC-testing.md §2.1) and `--filter` (§7.1) need, and nothing
- * in the runtime should grow a backtracking engine for them. Alternation and
- * capture groups are unsupported; a pattern using them will not match. */
-static int resid_rx_class(const char** pp, char c) {
-    const char* p = *pp + 1;            /* past '[' */
-    int neg = 0, hit = 0;
-    if (*p == '^') { neg = 1; p++; }
-    for (; *p && *p != ']'; p++) {
-        if (p[1] == '-' && p[2] && p[2] != ']') {
-            if (c >= p[0] && c <= p[2]) hit = 1;
-            p += 2;
-        } else if (*p == c) {
-            hit = 1;
-        }
-    }
-    if (*p == ']') p++;
-    *pp = p;
-    return neg ? !hit : hit;
-}
-
-/* Length of the single-character matcher starting at p. */
-static int resid_rx_atom_len(const char* p) {
-    if (*p == '[') {
-        const char* q = p + 1;
-        if (*q == '^') q++;
-        if (*q == ']') q++;             /* a literal ']' first in the class */
-        while (*q && *q != ']') q++;
-        return (int)((*q == ']' ? q + 1 : q) - p);
-    }
-    if (*p == '\\' && p[1]) return 2;
-    return 1;
-}
-
-static int resid_rx_one(const char* p, char c) {
-    if (*p == '[') { const char* q = p; return resid_rx_class(&q, c); }
-    if (*p == '\\' && p[1]) return p[1] == c;
-    if (*p == '.') return c != '\0';
-    return *p == c;
-}
-
-static int resid_rx_here(const char* p, const char* s);
-
-/* `atom*` / `atom+` / `atom?` against s, then the rest of the pattern. */
-static int resid_rx_rep(const char* atom, char op, const char* rest, const char* s) {
-    if (op == '?') {
-        if (resid_rx_here(rest, s)) return 1;
-        if (*s && resid_rx_one(atom, *s)) return resid_rx_here(rest, s + 1);
-        return 0;
-    }
-    if (op == '+') {
-        if (!*s || !resid_rx_one(atom, *s)) return 0;
-        s++;
-    }
-    for (;;) {
-        if (resid_rx_here(rest, s)) return 1;
-        if (!*s || !resid_rx_one(atom, *s)) return 0;
-        s++;
-    }
-}
-
-static int resid_rx_here(const char* p, const char* s) {
-    if (p[0] == '\0') return 1;
-    if (p[0] == '$' && p[1] == '\0') return *s == '\0';
-    int alen = resid_rx_atom_len(p);
-    char op = p[alen];
-    if (op == '*' || op == '+' || op == '?') return resid_rx_rep(p, op, p + alen + 1, s);
-    if (*s && resid_rx_one(p, *s)) return resid_rx_here(p + alen, s + 1);
-    return 0;
-}
-
-/* Unanchored search unless the pattern starts with '^'. */
-int8_t resid_regex_match(const char* pattern, const char* text) {
-    if (!pattern || !text) return 0;
-    if (pattern[0] == '^') return (int8_t)(resid_rx_here(pattern + 1, text) != 0);
-    do {
-        if (resid_rx_here(pattern, text)) return 1;
-    } while (*text++);
-    return 0;
-}
+/* The regex subset (resid_regex_match): runtime/rt/regex.resid. */
 
 /* ── Expectation failure ────────────────────────────────────────────────
  * `actual`/`expected` are already-rendered strings (ToString output, or the
@@ -958,94 +849,7 @@ int64_t resid_test_summary(void) {
     return resid_test_failed ? 1 : 0;
 }
 
-/* ── Force-time capability enforcement (spec §21.3) ──────────────────────
- * The compile-time checker rejects every statically-apparent capability
- * violation, but a requirement that is dynamic or residual must also fail
- * at FORCE TIME with a capability error. Each sandboxed region pushes its
- * granted capability set onto a thread-local stack; a residual provider call
- * verifies its required capability against every frame (attenuation only
- * shrinks, so a capability must be present in ALL frames — the transitive
- * closure). An empty stack means the ambient grant is unrestricted.
- *
- * Bypassing resid_cap_check fires resid_abort: at top level that aborts the
- * process (spec §24); inside a spawned region it unwinds and is delivered to
- * the parent as Err(RegionError). */
-#define RESID_CAP_MAX_DEPTH 32
-#define RESID_CAP_MAX_SET 64
-
-static _Thread_local const char* resid_cap_stack[RESID_CAP_MAX_DEPTH][RESID_CAP_MAX_SET];
-static _Thread_local int64_t resid_cap_ns[RESID_CAP_MAX_DEPTH];
-static _Thread_local int resid_cap_depth = 0;
-static _Thread_local int resid_cap_active = 0;
-
-/* Push a granted set `caps` of length `n` for the current region. n < 0
- * (or n == 0 with a NULL caps array) pushes a marker frame that grants
- * nothing. */
-void resid_cap_enter(const char* const* caps, int64_t n) {
-    if (resid_cap_depth >= RESID_CAP_MAX_DEPTH) {
-        resid_abort("capability: sandbox nesting exceeds RESID_CAP_MAX_DEPTH");
-        return;
-    }
-    int64_t m = (caps && n > 0) ? n : 0;
-    if (m > RESID_CAP_MAX_SET) m = RESID_CAP_MAX_SET;
-    for (int64_t i = 0; i < m; i++) {
-        resid_cap_stack[resid_cap_depth][i] = caps[i];
-    }
-    resid_cap_ns[resid_cap_depth] = m;
-    resid_cap_depth++;
-    resid_cap_active = 1;
-}
-
-void resid_cap_leave(void) {
-    if (resid_cap_depth > 0) resid_cap_depth--;
-    if (resid_cap_depth == 0) resid_cap_active = 0;
-}
-
-static int resid_cap_term(char c) {
-    return c == '\0' || c == '(' || c == ':' || c == '!';
-}
-
-/* A grant entry encoded read-only ("filesystem:ro"). */
-static int resid_cap_ro(const char* g) {
-    const char* c = strchr(g, ':');
-    return c && strcmp(c, ":ro") == 0;
-}
-
-static int resid_cap_same_family(const char* a, const char* b) {
-    if (!a || !b) return 0;
-    while (*a && *b && !resid_cap_term(*a) && !resid_cap_term(*b) && *a == *b) {
-        a++;
-        b++;
-    }
-    return resid_cap_term(*a) && resid_cap_term(*b);
-}
-
-/* `cap` is a family, or "family!" for a write (read-only grants refuse). */
-static int resid_cap_granted(const char* cap) {
-    if (resid_cap_depth == 0) return 1; /* outside every sandbox: the static check governs */
-    int write = cap && cap[0] && cap[strlen(cap) - 1] == '!';
-    for (int d = 0; d < resid_cap_depth; d++) {
-        int found = 0;
-        for (int64_t i = 0; i < resid_cap_ns[d]; i++) {
-            if (resid_cap_same_family(resid_cap_stack[d][i], cap) && !(write && resid_cap_ro(resid_cap_stack[d][i]))) {
-                found = 1;
-                break;
-            }
-        }
-        if (!found) return 0; /* attenuation only shrinks: must be in every frame */
-    }
-    return 1;
-}
-
-void resid_cap_check(const char* cap) {
-    if (!resid_cap_granted(cap)) {
-        char buf[128];
-        size_t n = cap ? strlen(cap) : 0;
-        int write = n && cap[n - 1] == '!';
-        snprintf(buf, sizeof(buf), "capability not granted: %.*s%s", (int)(write ? n - 1 : n), cap ? cap : "?", write ? " (write)" : "");
-        resid_abort(buf);
-    }
-}
+/* The force-time capability guard: runtime/rt/caps.resid. */
 
 static char* resid_box_str(const char* s) {
     size_t n = strlen(s);
@@ -1055,128 +859,16 @@ static char* resid_box_str(const char* s) {
     return p;
 }
 
-/*
- * Runtime string concatenation: f-string interpolation and `Str + Str`
- * (spec §32) build string values out of parts that aren't constant-foldable.
- */
-char* resid_str_concat(const char* a, const char* b) {
-    size_t la = strlen(a);
-    size_t lb = strlen(b);
-    if (la > SIZE_MAX - lb) resid_abort("resid_str_concat: size overflow");
-    char* p = (char*)resid_alloc(la + lb + 1);
-    if (!p) resid_abort("resid_str_concat: out of memory");
-    memcpy(p, a, la);
-    memcpy(p + la, b, lb + 1);
-    return p;
-}
-
-/*
- * In-place string accumulators (examples/stracc.resid). The compiler
- * rewrites a Str accumulator threaded through a self tail call so that
- * `acc + piece` becomes resid_sacc_append(acc, piece) on a buffer made by
- * resid_sacc_from at entry; it proves the buffer has no other reader while
- * it grows. The buffer is an ordinary NUL-terminated string preceded by a
- * {len, cap} header, so it can be returned and used as any other Str.
- *
- * Growth reallocates. The old block has no other reader, but the
- * string-index caches are keyed by pointer, so its address is evicted
- * from them first (a freed-then-reused address must not hit a stale
- * entry).
- */
-static void str_index_forget(const char* s);
-typedef struct {
-    size_t len;
-    size_t cap;
-} SaccHdr;
-
-static char* sacc_alloc(size_t cap) {
-    SaccHdr* h = (SaccHdr*)malloc(sizeof(SaccHdr) + cap + 1);
-    if (!h) resid_abort("resid_sacc: out of memory");
-    h->len = 0;
-    h->cap = cap;
-    return (char*)(h + 1);
-}
-
-char* resid_sacc_from(const char* s) {
-    size_t n = strlen(s);
-    size_t cap = n < 32 ? 64 : n * 2;
-    char* d = sacc_alloc(cap);
-    memcpy(d, s, n + 1);
-    ((SaccHdr*)d - 1)->len = n;
-    return d;
-}
-
-static char* sacc_reserve(char* d, size_t n) {
-    SaccHdr* h = (SaccHdr*)d - 1;
-    if (h->len > SIZE_MAX / 2 - n) resid_abort("resid_sacc_append: size overflow");
-    if (h->len + n <= h->cap) return d;
-    size_t cap = h->cap * 2;
-    if (cap < h->len + n) cap = h->len + n;
-    str_index_forget(d);
-    h = (SaccHdr*)realloc(h, sizeof(SaccHdr) + cap + 1);
-    if (!h) resid_abort("resid_sacc: out of memory");
-    h->cap = cap;
-    return (char*)(h + 1);
-}
-
-char* resid_sacc_append(char* d, const char* s) {
-    size_t n = strlen(s);
-    d = sacc_reserve(d, n);
-    SaccHdr* h = (SaccHdr*)d - 1;
-    memcpy(d + h->len, s, n + 1);
-    h->len += n;
-    return d;
-}
-
-/* acc + IntToString(v), formatted straight into the buffer. */
-char* resid_sacc_append_int(char* d, int64_t v) {
-    char tmp[24];
-    int n = snprintf(tmp, sizeof tmp, "%lld", (long long)v);
-    d = sacc_reserve(d, (size_t)n);
-    SaccHdr* h = (SaccHdr*)d - 1;
-    memcpy(d + h->len, tmp, (size_t)n + 1);
-    h->len += (size_t)n;
-    return d;
-}
-
-/* Copy a NUL-terminated string into a fixed-capacity stack buffer
- * (Str(N) = N UTF-8 bytes + NUL, cap = N + 1). Copies at most cap - 1 bytes,
- * truncating on overflow (a NUL terminator is always written). Returns
- * the number of bytes stored (excluding the terminator). Used to
- * materialize stack-allocated Str(N) values without any heap use. */
-size_t resid_str_to_fixed(char* dst, const char* src, size_t cap) {
-    if (cap == 0) return 0;
-    size_t n = 0;
-    while (n < cap - 1 && src[n] != 0) {
-        dst[n] = src[n];
-        n++;
-    }
-    /* Never split a codepoint: back off to its lead byte when truncated. */
-    if (src[n] != 0 && (src[n] & 0xC0) == 0x80) {
-        while (n > 0 && (src[n] & 0xC0) == 0x80) n--;
-    }
-    dst[n] = 0;
-    return n;
-}
-
-/* Copy a raw byte buffer into a fixed-capacity stack buffer
- * (Bytes(N) = exactly N bytes, cap = N). Copies at most cap bytes,
- * truncating on overflow. Returns the number of bytes stored. Used to
- * materialize stack-allocated Bytes(N) values without any heap use. */
-size_t resid_bytes_to_fixed(unsigned char* dst, const unsigned char* src, size_t cap) {
-    if (cap == 0) return 0;
-    size_t n = 0;
-    while (n < cap && src[n] != 0) {
-        dst[n] = src[n];
-        n++;
-    }
-    return n;
-}
-
-/* Str == Str / Str != Str. Returns 1 when equal (C ABI Bool = i8). */
-int8_t resid_str_eq(const char* a, const char* b) {
-    return strcmp(a, b) == 0;
-}
+/* resid_str_concat, the resid_sacc_* accumulators, resid_str_to_fixed,
+ * resid_bytes_to_fixed and resid_str_eq: runtime/rt/text.resid. */
+char* resid_str_concat(const char* a, const char* b);
+int64_t str_len(const char* s);
+int64_t str_char_at(const char* s, int64_t i);
+char* str_slice(const char* s, int64_t start, int64_t end);
+int64_t str_index_of(const char* s, const char* needle, int64_t from);
+char* str_from_code(int64_t cp);
+void resid_str_index_popped(void);
+#define str_index_arena_popped resid_str_index_popped
 
 /* UTF-8 decoding helpers for the string introspection functions. */
 static int utf8_seq_len(const unsigned char c) {
@@ -1207,466 +899,9 @@ static int64_t utf8_decode(const unsigned char* p, int len) {
     }
 }
 
-/* ── Per-string byte-offset index (true O(1) random access) ──
- *
- * str_len/str_char_at/str_slice used to walk from byte 0 of `s` on
- * EVERY call, decoding UTF-8 the whole way — O(N) per call regardless
- * of what's being asked for. The self-hosted lexer's `lex_tok` calls
- * `str_len(s)` as its very first statement on EVERY token, with `s`
- * always the WHOLE source file (not the remaining suffix), so
- * tokenizing an N-character file cost O(N) per token from str_len
- * alone — O(N^2) just to lex the file once. str_char_at/str_slice add
- * a further O(position) per call on top. Worse still: a hand-rolled
- * recursive-descent parser re-lexes the same/nearby positions from
- * many different call sites for lookahead (no token memoization), so
- * access is NOT purely forward — a single-entry "resume from last
- * position" cursor thrashes (full reset) on every backward step and
- * only recovers a constant factor, not the complexity class (measured:
- * ~3.7x faster, still O(n^2) — see git history for that attempt).
- *
- * Str values are immutable and this runtime's allocator never frees a
- * string's backing buffer once created (see the "allocator never
- * frees" design note above), so caching derived data by pointer
- * identity is permanently sound: an address can never later denote
- * different content, so there is no ABA staleness hazard.
- *
- * Fix: build a codepoint-index -> byte-offset array per distinct
- * string pointer (O(N), first touch only), then every str_len/
- * str_char_at/str_slice call is a genuine O(1) array lookup — correct
- * and fast regardless of access direction/pattern, not just the
- * forward case.
- *
- * A single slot is NOT enough: helpers like `str_has_prefix` build a
- * short-lived probe string via `str_slice` and test it against a
- * handful of literal patterns ("List(", "Map(", "Set(", ...), so real
- * traffic ping-pongs between a small working set of distinct strings
- * (the big source string plus a few small literals/probes), not one
- * string at a time. A direct-mapped (1-slot) cache thrashes on that —
- * every switch is a miss, so it rebuilds the O(N)-sized source index
- * over and over (measured: ~225 rebuilds per checked function, ~n/4,
- * i.e. still O(n^2) rebuilds — worse than before in leaked memory even
- * though each hit was O(1)). A small set-associative cache (any of the
- * last STR_IDX_SLOTS distinct strings stays resident, LRU-evicted)
- * fully absorbs a working set that size, same as an L1 cache beating
- * direct-mapped for a cyclic access pattern. Thread-local to stay safe
- * under `spawn`, matching resid_cap_stack/resid_spawn_catch above. An
- * evicted slot's array is intentionally leaked — matches this
- * runtime's established never-free allocator policy. */
-#define STR_IDX_SLOTS 16
-typedef struct {
-    const char* s;
-    int64_t len;       /* codepoint count; -1 = empty slot */
-    size_t* off;        /* NULL for ASCII; else off[k] = byte offset of codepoint k*STR_IDX_STRIDE */
-    uint64_t touched;   /* LRU clock value at last use */
-    size_t blen;        /* byte length */
-} StrIndexSlot;
-static _Thread_local StrIndexSlot g_str_slots[STR_IDX_SLOTS];
-#define STR_IDX_SMALL 256
-static _Thread_local StrIndexSlot g_str_small = { NULL, -1, NULL, 0 };
-static _Thread_local uint64_t g_str_clock = 0;
-static _Thread_local int g_str_slots_ready = 0;
-
-/* Scratch slot for arena-scoped strings — never inserted into the
- * persistent cache above (see arena_contains use below): a string built
- * while an arena is active is freed in bulk on resid_arena_pop(), and
- * this cache is keyed by pointer identity with no eviction notification,
- * so caching such a key would leave it dangling — and worse,
- * address-reusable (ABA) — the moment the arena pops. It holds the most
- * recent arena-scoped string instead, and resid_arena_pop clears it. */
-static _Thread_local StrIndexSlot g_str_scratch;
-
-/* Byte offset of codepoint `i` in the slot's string (i in [0, len]). An
- * all-ASCII string needs no table: codepoint i is byte i. Otherwise the
- * table is sparse — one checkpoint every STR_IDX_STRIDE codepoints — and
- * the remainder is walked (at most STR_IDX_STRIDE - 1 steps), which keeps
- * the table 16x smaller than one entry per codepoint. */
-#define STR_IDX_SHIFT 4
-#define STR_IDX_STRIDE (1 << STR_IDX_SHIFT)
-static inline size_t str_slot_off(const StrIndexSlot* sl, int64_t i) {
-    if (!sl->off) return (size_t)i;
-    const unsigned char* p = (const unsigned char*)sl->s + sl->off[i >> STR_IDX_SHIFT];
-    for (int64_t k = i & (STR_IDX_STRIDE - 1); k > 0; k--) p += utf8_len_at(p);
-    return (size_t)((const char*)p - sl->s);
-}
-
-static void str_index_build(const char* s, StrIndexSlot* out) {
-    /* The slot owns its previous table (if any): release it rather than
-     * leak one table per rebuild. */
-    if (out->off) { free(out->off); out->off = NULL; }
-    /* Pure-ASCII strings (the common case) need only their byte length:
-     * strlen plus a word-at-a-time high-bit test, both at memory speed. */
-    size_t blen = strlen(s);
-    {
-        const unsigned char* q = (const unsigned char*)s;
-        size_t k = 0;
-        uint64_t hi = 0;
-        for (; k + 32 <= blen; k += 32) {
-            uint64_t w0, w1, w2, w3;
-            memcpy(&w0, q + k, 8);
-            memcpy(&w1, q + k + 8, 8);
-            memcpy(&w2, q + k + 16, 8);
-            memcpy(&w3, q + k + 24, 8);
-            hi |= w0 | w1 | w2 | w3;
-        }
-        for (; k < blen; k++) hi |= q[k];
-        if ((hi & 0x8080808080808080ULL) == 0) {
-            out->s = s;
-            out->len = (int64_t)blen;
-            out->blen = blen;
-            return;
-        }
-    }
-    int64_t n = 0;
-    const unsigned char* p = (const unsigned char*)s;
-    while (*p) {
-        n++;
-        p += utf8_len_at(p);
-    }
-    out->s = s;
-    out->len = n;
-    out->blen = blen;
-    int64_t nck = (n >> STR_IDX_SHIFT) + 1;
-    size_t* off = (size_t*)malloc((size_t)nck * sizeof(size_t));
-    if (!off) resid_abort("str_index_slot: out of memory");
-    p = (const unsigned char*)s;
-    for (int64_t i = 0; i < n; i++) {
-        if ((i & (STR_IDX_STRIDE - 1)) == 0) off[i >> STR_IDX_SHIFT] = (size_t)((const char*)p - s);
-        p += utf8_len_at(p);
-    }
-    if ((n & (STR_IDX_STRIDE - 1)) == 0) off[n >> STR_IDX_SHIFT] = (size_t)((const char*)p - s);
-    out->off = off;
-}
-
-/* The slot that answered the previous lookup. A scan over one string
- * (str_char_at in a loop) hits here without touching the LRU or measuring
- * the string again. Always checked against the slot's current key, which
- * every rebuild and eviction updates, so it can never name a stale entry. */
-static _Thread_local StrIndexSlot* g_str_mru = NULL;
-
-/* The last all-ASCII string looked up, and its length: str_char_at and
- * str_len on it are a compare and a byte load. Cleared wherever a cached
- * string's address can be freed (str_index_forget, arena pops). */
-static _Thread_local const char* g_str_fast_s = NULL;
-static _Thread_local int64_t g_str_fast_len = 0;
-
-static StrIndexSlot* str_index_slot_slow(const char* s);
-
-static inline StrIndexSlot* str_index_slot(const char* s) {
-    StrIndexSlot* m = g_str_mru;
-    if (m && m->s == s) return m;
-    StrIndexSlot* sl = str_index_slot_slow(s);
-    g_str_mru = sl;
-    if (!sl->off) {
-        g_str_fast_s = s;
-        g_str_fast_len = sl->len;
-    }
-    return sl;
-}
-
-static __attribute__((noinline)) StrIndexSlot* str_index_slot_slow(const char* s) {
-    if (!g_str_slots_ready) {
-        for (int k = 0; k < STR_IDX_SLOTS; k++) {
-            g_str_slots[k].s = NULL;
-            g_str_slots[k].len = -1;
-            g_str_slots[k].off = NULL;
-            g_str_slots[k].touched = 0;
-        }
-        g_str_slots_ready = 1;
-    }
-    /* Short strings (type names, tokens, identifiers) never enter the LRU:
-     * a burst of them used to evict the big source text's index, so the
-     * next lex step rebuilt it by walking the whole program again. Their
-     * own index is cheap to build and is kept in one dedicated slot. */
-    /* resid_arena_pop clears this slot and the scratch slot, so a pointer
-     * match always names the live string it was built from. */
-    if (g_str_small.s == s) return &g_str_small;
-    if (strnlen(s, STR_IDX_SMALL) < STR_IDX_SMALL) {
-        str_index_build(s, &g_str_small);
-        return &g_str_small;
-    }
-    g_str_clock++;
-    /* MRU hits skip the clock; credit the last string used now so a hot
-     * string is not the one evicted. */
-    if (g_str_mru) g_str_mru->touched = g_str_clock;
-    for (int k = 0; k < STR_IDX_SLOTS; k++) {
-        if (g_str_slots[k].s == s) {
-            g_str_slots[k].touched = g_str_clock;
-            return &g_str_slots[k];
-        }
-    }
-    if (g_str_scratch.s == s) return &g_str_scratch;
-    if (arena_contains(s)) {
-        str_index_build(s, &g_str_scratch);
-        g_str_scratch.touched = g_str_clock;
-        return &g_str_scratch;
-    }
-    int victim = 0;
-    for (int k = 1; k < STR_IDX_SLOTS; k++) {
-        if (g_str_slots[k].touched < g_str_slots[victim].touched) victim = k;
-    }
-    str_index_build(s, &g_str_slots[victim]);
-    g_str_slots[victim].touched = g_str_clock;
-    return &g_str_slots[victim];
-}
-
-/* An arena is about to be freed: the small-string and scratch slots may
- * be keyed by a string inside it, and malloc may hand that address out
- * again, so neither may survive the pop. (The LRU never holds arena
- * strings.) */
-static void str_index_arena_popped(void) {
-    g_str_fast_s = NULL;
-    g_str_small.s = NULL;
-    g_str_scratch.s = NULL;
-}
-
-/* Drop every cached index keyed by `s` (about to be freed). */
-static void str_index_forget(const char* s) {
-    if (g_str_fast_s == s) g_str_fast_s = NULL;
-    if (g_str_small.s == s) g_str_small.s = NULL;
-    if (g_str_scratch.s == s) g_str_scratch.s = NULL;
-    if (!g_str_slots_ready) return;
-    for (int k = 0; k < STR_IDX_SLOTS; k++) {
-        if (g_str_slots[k].s == s) { g_str_slots[k].s = NULL; g_str_slots[k].touched = 0; }
-    }
-}
-
-/* Number of Unicode codepoints in a UTF-8 string. */
-int64_t str_len(const char* s) {
-    if (s == g_str_fast_s) return g_str_fast_len;
-    return str_index_slot(s)->len;
-}
-
-static __attribute__((noinline)) int64_t str_char_at_slow(const char* s, int64_t i) {
-    StrIndexSlot* sl = str_index_slot(s);
-    if ((uint64_t)i >= (uint64_t)sl->len) return -1;
-    if (!sl->off) return (unsigned char)s[i];   /* all-ASCII: byte i */
-    const unsigned char* p = (const unsigned char*)(s + str_slot_off(sl, i));
-    return utf8_decode(p, utf8_len_at(p));
-}
-
-/* Codepoint at index `i` (0-based), or -1 when out of bounds. The fast path
- * — the string answered the previous lookup and is all ASCII — is small
- * enough to inline into user loops under LTO. */
-int64_t str_char_at(const char* s, int64_t i) {
-    if (__builtin_expect(s == g_str_fast_s, 1)) {
-        return (uint64_t)i < (uint64_t)g_str_fast_len ? (int64_t)(unsigned char)s[i] : -1;
-    }
-    return str_char_at_slow(s, i);
-}
-
-/* UTF-8 encode one codepoint into `buf` (≥4 bytes); returns bytes written. */
-static int utf8_encode_cp(int64_t cp, char* buf) {
-    if (cp < 0x80) {
-        buf[0] = (char)cp;
-        return 1;
-    } else if (cp < 0x800) {
-        buf[0] = (char)(0xC0 | (cp >> 6));
-        buf[1] = (char)(0x80 | (cp & 0x3F));
-        return 2;
-    } else if (cp < 0x10000) {
-        buf[0] = (char)(0xE0 | (cp >> 12));
-        buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        buf[2] = (char)(0x80 | (cp & 0x3F));
-        return 3;
-    } else {
-        buf[0] = (char)(0xF0 | (cp >> 18));
-        buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
-        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        buf[3] = (char)(0x80 | (cp & 0x3F));
-        return 4;
-    }
-}
-
-/* Build a 1-codepoint string from a Unicode codepoint. */
-char* str_from_code(int64_t cp) {
-    char buf[4];
-    int n = utf8_encode_cp(cp, buf);
-    char* p = (char*)malloc((size_t)n + 1);
-    if (!p) resid_abort("str_from_code: out of memory");
-    memcpy(p, buf, (size_t)n);
-    p[n] = '\0';
-    return p;
-}
-
-/*
- * String builders.
- *
- * `acc + piece` inside a loop materializes a fresh NUL-terminated buffer on
- * every step — O(total^2) bytes copied for a byte-at-a-time accumulator (the
- * lib/h2.resid h2_bs_acc pattern). A builder accumulates into one flat,
- * geometrically grown byte buffer (amortized O(1) appends; large blocks grow
- * by realloc, which glibc services with mremap, so the bytes are not copied)
- * and `str_sb_finish` hands that same buffer back, shrunk to fit, as the
- * finished NUL-terminated Str — no second copy of the whole output.
- *
- * The handle is an opaque pointer carried by Resid as a `Str`-typed value.
- * It stays at a fixed address while the buffer behind it moves, so a stale
- * handle never dangles; appending to a finished builder is undefined, as
- * before. A builder is used linearly by one thread (each append returns the
- * handle it was given).
- */
-typedef struct {
-    char* buf;
-    size_t len;              /* bytes appended */
-    size_t cap;              /* bytes allocated in buf, excluding the NUL slot */
-} StrSb;
-
-static __attribute__((noinline)) void sb_grow(StrSb* r, size_t n) {
-    if (r->len > SIZE_MAX / 2 - n) resid_abort("str_sb: size overflow");
-    size_t cap = r->cap ? r->cap * 2 : 64;
-    if (cap < r->len + n) cap = r->len + n;
-    char* nb = (char*)realloc(r->buf, cap + 1);
-    if (!nb) resid_abort("str_sb: out of memory");
-    r->buf = nb;
-    r->cap = cap;
-}
-
-static inline void sb_append_bytes(StrSb* r, const char* s, size_t n) {
-    if (r->cap - r->len < n) sb_grow(r, n);
-    memcpy(r->buf + r->len, s, n);
-    r->len += n;
-}
-
-void* str_sb_new(void) {
-    StrSb* r = (StrSb*)malloc(sizeof(StrSb));
-    if (!r) resid_abort("str_sb_new: out of memory");
-    r->buf = NULL;
-    r->len = 0;
-    r->cap = 0;
-    return r;
-}
-
-void* str_sb_append(void* b, const char* s) {
-    sb_append_bytes((StrSb*)b, s, strlen(s));
-    return b;
-}
-
-static __attribute__((noinline)) void sb_append_cp_slow(StrSb* r, int64_t cp) {
-    char buf[4];
-    int n = utf8_encode_cp(cp, buf);
-    sb_append_bytes(r, buf, (size_t)n);
-}
-
-void* str_sb_append_cp(void* b, int64_t cp) {
-    StrSb* r = (StrSb*)b;
-    if (__builtin_expect((uint64_t)cp < 0x80 && r->len < r->cap, 1)) {
-        r->buf[r->len++] = (char)cp;
-        return b;
-    }
-    sb_append_cp_slow(r, cp);
-    return b;
-}
-
-char* str_sb_finish(void* b) {
-    StrSb* r = (StrSb*)b;
-    char* out = r->buf;
-    if (!out) {
-        out = (char*)malloc(1);
-        if (!out) resid_abort("str_sb_finish: out of memory");
-    } else if (r->cap > r->len + r->len / 8 + 64) {
-        char* shrunk = (char*)realloc(out, r->len + 1);
-        if (shrunk) out = shrunk;
-    }
-    out[r->len] = '\0';
-    free(r);
-    return out;
-}
-
-/* `print(str_sb_finish(b))` / `println(...)`: the finished string is a
- * temporary no other expression can see, so the compiler fuses the pair
- * and the buffer is written, then freed, instead of being kept forever. */
-bool resid_sb_print(void* b, int8_t nl) {
-    StrSb* r = (StrSb*)b;
-    bool ok = true;
-    if (r->buf) {
-        r->buf[r->len] = '\0';
-        if (fputs(r->buf, stdout) == EOF) ok = false;
-    }
-    if (ok && nl && putchar('\n') == EOF) ok = false;
-    if (ok && fflush(stdout) == EOF) ok = false;
-    free(r->buf);
-    free(r);
-    return ok;
-}
-
-/* Half-open substring `s[start..end]` by codepoint index (clamped).
- * O(1) endpoint lookup via the byte-offset index above, O(slice length)
- * for the copy itself (unavoidable — the result is a fresh string). */
-char* str_slice(const char* s, int64_t start, int64_t end) {
-    if (start < 0) start = 0;
-    if (end < start) end = start;
-    StrIndexSlot* sl = str_index_slot(s);
-    int64_t len = sl->len;
-    if (start > len) start = len;
-    if (end > len) end = len;
-    size_t bstart = str_slot_off(sl, start);
-    size_t bend = str_slot_off(sl, end);
-    size_t n = bend - bstart;
-    char* out = (char*)resid_alloc(n + 1);
-    if (!out) resid_abort("str_slice: out of memory");
-    memcpy(out, s + bstart, n);
-    out[n] = '\0';
-    return out;
-}
-
-/* Codepoint index of the first occurrence of `needle` in `s` at or after
- * codepoint `from`, or -1 when there is none. `from` below 0 is taken as 0;
- * past the end of `s` there is no match. An empty needle matches at `from`.
- * The byte search is strstr; for an all-ASCII `s` the byte offset is the
- * codepoint index, otherwise it is converted through the sparse index. */
-/* Rough frequency class of a byte in text (higher = more common), used to
- * pick the needle byte str_index_of hands to memchr. */
-static int byte_commonness(unsigned char c) {
-    if ((c >= 'a' && c <= 'z') || c == ' ' || c == '\n') return 3;
-    if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return 2;
-    return 1;
-}
-
-/* First occurrence of needle[0..m) in h[0..n). memchr on the needle's
- * rarest byte finds candidates at memory speed; if candidates keep failing
- * (a pathological needle), the rest goes to memmem's linear-time search. */
-static const char* find_bytes(const char* h, size_t n, const char* nd, size_t m) {
-    if (m == 0) return h;
-    if (m > n) return NULL;
-    size_t r = 0;
-    for (size_t k = 1; k < m; k++)
-        if (byte_commonness((unsigned char)nd[k]) < byte_commonness((unsigned char)nd[r])) r = k;
-    const char* end = h + n;
-    const char* p = h + r;               /* next place nd[r] may sit */
-    size_t misses = 0;
-    while (p < end - (m - 1 - r)) {
-        const char* hit = (const char*)memchr(p, nd[r], (size_t)(end - (m - 1 - r) - p));
-        if (!hit) return NULL;
-        const char* cand = hit - r;
-        if (memcmp(cand, nd, m) == 0) return cand;
-        p = hit + 1;
-        if (++misses > 64 && (size_t)(p - h) < misses * 16) {
-            return (const char*)memmem(cand + 1, (size_t)(end - cand - 1), nd, m);
-        }
-    }
-    return NULL;
-}
-
-int64_t str_index_of(const char* s, const char* needle, int64_t from) {
-    StrIndexSlot* sl = str_index_slot(s);
-    int64_t len = sl->len;
-    if (from < 0) from = 0;
-    if (from > len) return -1;
-    size_t b = str_slot_off(sl, from);
-    const char* q = find_bytes(s + b, sl->blen - b, needle, strlen(needle));
-    if (!q) return -1;
-    size_t qb = (size_t)(q - s);
-    if (!sl->off) return (int64_t)qb;
-    int64_t lo = 0, hi = len >> STR_IDX_SHIFT;   /* last checkpoint <= qb */
-    while (lo < hi) {
-        int64_t mid = (lo + hi + 1) / 2;
-        if (sl->off[mid] <= qb) lo = mid; else hi = mid - 1;
-    }
-    int64_t idx = lo << STR_IDX_SHIFT;
-    const unsigned char* p = (const unsigned char*)s + sl->off[lo];
-    while ((size_t)((const char*)p - s) < qb) { p += utf8_len_at(p); idx++; }
-    return idx;
-}
+/* The per-string codepoint index, str_len, str_char_at, str_from_code,
+ * the str_sb_* builders, resid_sb_print, str_slice and str_index_of:
+ * runtime/rt/text.resid. */
 
 /*
  * Boxed value objects.
