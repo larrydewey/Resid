@@ -69,9 +69,7 @@ Bool mkdir_parents(Int buf, Int i, Int len) {
 @export("resid_fs_exists", "i8(ptr)")
 pub Int rt_fs_exists(Int path) {
     if (!path_ok(path)) { return 0; }
-    Int fd = sys_open(path, o_rdonly(), 0);
-    if (fd < 0) { return 0; }
-    return sys_close(fd) * 0 + 1;
+    return b8(sc(4, path, stat_buf(), 0) == 0);   // stat: opening a FIFO would block
 }
 
 // One line of standard input with its newline; "" at end of input.
@@ -261,6 +259,7 @@ pub Int rt_print_bytes(Int l) {
 @export("resid_fs_list_dir", "ptr(ptr)")
 pub Int rt_fs_list_dir(Int path) {
     Int ty = resid_raw_addr("List(Str)");
+    if (!path_ok(path)) { return c_list_new(0, 0, ty); }
     Int fd = sys_open(path, o_rdonly() | 65536, 0);
     if (fd < 0) { return c_list_new(0, 0, ty); }
     Int buf = xmalloc(32768);
@@ -324,16 +323,17 @@ pub Int rt_fs_read_handle(Int h) {
     return arena_adopt(p, n);
 }
 
+// Never freed: a closed handle keeps fd -1, so reuse cannot reach freed memory or a reused fd.
 @export("resid_fs_close", "i8(ptr)")
 pub Int rt_fs_close(Int h) {
-    if (h == 0) { return 0; }
     Int fd = handle_fd(h);
-    _ = if (fd >= 0) { sys_close(fd) } else { 0 };
-    return c_free(h) + 1;
+    if (fd < 0) { return 0; }
+    _ = st64(h + 16, 0 - 1);
+    return if (sys_close(fd) == 0) { 1 } else { 0 };
 }
 
 @export("resid_handle_release", "void(ptr)")
-pub Int rt_handle_release(Int h) { return if (h == 0) { 0 } else { rt_fs_close(h) }; }
+pub Int rt_handle_release(Int h) { return rt_fs_close(h); }
 
 // ─── Environment, arguments, processes ────────────────────────────────
 
@@ -476,7 +476,7 @@ Bool ref_ok(Int p) {
 
 @export("resid_git_rev", "ptr(ptr)")
 pub Int rt_git_rev(Int r) {
-    if (r == 0 || ld8(r) == 0 || !ref_ok(r) || c_strlen(r) > 4000) { return xempty(); }
+    if (r == 0 || ld8(r) == 0 || ld8(r) == 45 || !ref_ok(r) || c_strlen(r) > 4000) { return xempty(); }   // no leading '-': not an option
     Int cmd = rt_str_concat(rt_str_concat(resid_raw_addr("git rev-parse "), r), resid_raw_addr(" 2>/dev/null"));
     return shell_line(cmd);
 }

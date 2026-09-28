@@ -1,0 +1,6 @@
+// A repeat whose byte size is exactly Int.max must not wrap the allocation.
+Int main() {
+    Str r = str_repeat(rt "abcdefg", rt 1317624576693539401);
+    println(f"{str_len(r)}");
+    return 0;
+}

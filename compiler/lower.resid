@@ -2168,7 +2168,8 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     Funcs fs = w.fs;
     Int na = w.g.ns[id].nk;
     Bool user_fn = fn_index(fs, n) >= 0;
-    if (n == "println" || n == "print" || n == "eprintln") { return lw_print(w, id, n, env, c); }
+    // A user function of a builtin's name is what the checker typed the call as.
+    if ((n == "println" || n == "print" || n == "eprintln") && !user_fn) { return lw_print(w, id, n, env, c); }
     // A value's text inside a container (synthesized by lw_show only).
     if (n == "__show_nested" && na == 1) {
         GT sv = lw_expr(w, lw_kid(w, id, 0), env, c);
@@ -2176,7 +2177,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
         return lw_show_nested(w, sv, env);
     }
     if (is_debug_builtin(n) && !user_fn) { return lw_debug_builtin(w, id, n, env, c); }
-    if (n == "comptime_print") {
+    if (n == "comptime_print" && !user_fn) {
         if (na != 1) { return lw_gerr("comptime_print arity", c); }
         GT cpv = lw_expr(w, lw_kid(w, id, 0), env, c);
         if (cpv.err != "") { return cpv; }
@@ -2191,18 +2192,18 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
         return lw_step(c, reg, "StrBuf", c.lines.concat(sbv_make(reg, "null", "null")), t1);
     }
     if (mk_lb) { return lw_extern0(w, id, "resid_listbuf_new", "ptr", "ListBuf(Unknown)", c); }
-    if (n == "resid_dec_persist") {
+    if (n == "resid_dec_persist" && !user_fn) {
         if (na != 1) { return lw_gerr("resid_dec_persist arity", c); }
         GT pa = lw_expr(w, lw_kid(w, id, 0), env, c);
         if (pa.err != "") { return pa; }
         GT pr = dec_call(pa, "ptr", "@resid_decp_persist(ptr " + pa.val + ")", pa.ty);
         return GT {.pos = 0, .val = pr.val, .ty = pr.ty, .cnt = 0, .err = "", .glines = pr.glines, .lines = pr.lines, .tmp = pr.tmp, .lbl = pr.lbl, .tail = false};
     }
-    if (n == "aesni_enc_round" || n == "aesni_enc_last_round") { return lw_aesni(w, id, n, env, c); }
-    if (n == "resid_test_run_closure") { return lw_extern(w, id, n, l2s("Void closure()", "Str"), "Int", env, c); }
+    if ((n == "aesni_enc_round" || n == "aesni_enc_last_round") && !user_fn) { return lw_aesni(w, id, n, env, c); }
+    if (n == "resid_test_run_closure" && !user_fn) { return lw_extern(w, id, n, l2s("Void closure()", "Str"), "Int", env, c); }
     if (n == "sort") { return lw_sort(w, id, env, c); }
     if (n == "select" && fn_index(w.fs, n) < 0) { return lv_select(w, id, "", env, c); }
-    if (lw_is_builtin(n)) { return lw_builtin(w, id, n, env, c); }
+    if (lw_is_builtin(n) && !user_fn) { return lw_builtin(w, id, n, env, c); }
     Str pent = env_lookup(env, n);
     if (pent != "" && is_fn_type(cg_env_ty(pent))) { return lw_fn_call(w, id, 0, cg_env_val(pent), cg_env_ty(pent), env, c); }
     if (!user_fn) {
@@ -2218,7 +2219,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
         if (n == "abs" || n == "min" || n == "max" || n == "clamp") { return lw_minmax(w, id, n, env, c); }
     }
     if (n == "Some" || n == "Ok" || n == "Err") { return lw_con(w, id, n, env, c); }
-    if (n == "expect") {
+    if (n == "expect" && !user_fn) {
         if (na != 1) { return lw_gerr("expect arity", c); }
         GT p = lw_expr(w, lw_kid(w, id, 0), env, c);
         if (p.err != "") { return p; }

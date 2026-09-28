@@ -1,0 +1,11 @@
+// Closing twice, or reading after close, is safe: the handle stays a valid box.
+@requires(filesystem)
+Int main() {
+    Bool w = filesystem.write_all("@TMP@/h.txt", "hello\n");
+    File g = filesystem.open("@TMP@/h.txt");
+    Bool c1 = filesystem.close(g);
+    Bool c2 = filesystem.close(g);
+    Str s = filesystem.read_handle(g);
+    println(f"{w} {c1} {c2} [{s}]");
+    return 0;
+}

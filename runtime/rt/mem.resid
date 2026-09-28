@@ -10,12 +10,14 @@ pub Int mcopy(Int d, Int s, Int n) { return resid_raw_copy(d, s, n); }
 
 // A heap block that must not fail.
 pub Int xmalloc(Int n) {
+    if (n < 0) { return rt_abort("allocation size out of range"); }
     Int p = c_malloc(if (n > 0) { n } else { 1 });
     if (p == 0) { return rt_abort("out of memory"); }
     return p;
 }
 
 pub Int xrealloc(Int p, Int n) {
+    if (n < 0) { return rt_abort("allocation size out of range"); }
     Int q = c_realloc(p, if (n > 0) { n } else { 1 });
     if (q == 0) { return rt_abort("out of memory"); }
     return q;

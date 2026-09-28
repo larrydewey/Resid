@@ -1,0 +1,8 @@
+// A user function named like a builtin is the one called.
+Str expect(Int i) { return f"value {i}"; }
+Str sqrt(Int x) { return f"root {x}"; }
+Int main() {
+    println(expect(rt 5));
+    println(sqrt(rt 9));
+    return 0;
+}

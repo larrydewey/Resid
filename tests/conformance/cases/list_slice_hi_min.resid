@@ -1,0 +1,7 @@
+// A slice bound near Int.min is empty, not a wrapped huge length.
+Int main() {
+    List(Int) xs = [rt 1, 2, 3, 4, 5, 6, 7, 8];
+    List(Int) ys = xs[rt 5..rt (0 - 9223372036854775807 - 1)];
+    println(f"{ys.len()}");
+    return 0;
+}

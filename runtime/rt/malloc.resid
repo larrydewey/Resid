@@ -9,6 +9,7 @@
 // kernel on free; realloc grows them with mremap.
 
 Int nclasses() { return 48; }
+Int big_max() { return 70368744177664; }   // 2^46: past any real mapping
 Int small_max() { return 131072; }
 
 // Per thread: 48 list heads, the slab bump pointer and end, then the big
@@ -146,6 +147,7 @@ Int new_slab(Int t, Int need) {
 // region chunks come and go constantly, and a fresh mapping costs page
 // faults.
 Int big_alloc(Int n) {
+    if (n > big_max()) { return 0; }   // the page rounding below must not wrap
     Int sz = (n + 16 + 4095) & (0 - 4096);
     Int t = heap_tls();
     Int hit = cache_take(t, sz);
@@ -216,6 +218,7 @@ pub Int c_realloc(Int p, Int n) {
     Int h = ld64(p - 16);
     if (h >= 64) {
         // A big block moves with its mapping.
+        if (n > big_max()) { return 0; }
         Int sz = (n + 16 + 4095) & (0 - 4096);
         _ = mem_take(sz - h);
         _ = resid_raw_fetch_add(unmap_epoch(), 1);
@@ -230,6 +233,7 @@ pub Int c_realloc(Int p, Int n) {
 }
 
 pub Int c_calloc(Int n, Int size) {
+    if (n < 0 || size < 0 || (size != 0 && n > big_max() / size)) { return 0; }
     Int p = c_malloc(n * size);
     return if (p != 0) { resid_raw_fill(p, 0, n * size) * 0 + p } else { 0 };
 }

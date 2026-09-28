@@ -7738,6 +7738,19 @@ List(Int) prov_file_hash(Str p) {
     return h;
 }
 
+// Every function probes its stack page by page: a frame past the guard page faults, never lands in a mapping below.
+Str probe_stack(Str doc) { return probe_lines(str_split(doc, "\n"), 0, StrBuf()); }
+
+Str probe_lines(List(Str) ls, Int i, StrBuf acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    Bool def = str_starts_with(l, "define ") && str_ends_with(l, " {") && !str_contains(l, " naked ") && !str_contains(l, "probe-stack");
+    Int dk = str_index_of(l, " !dbg ", 0);
+    Int at = if (dk >= 0) { dk } else { str_len(l) - 2 };
+    StrBuf a1 = if (def) { acc.push(str_slice(l, 0, at)).push(" \"probe-stack\"=\"inline-asm\"").push(str_slice(l, at, str_len(l))) } else { acc.push(l) };
+    return probe_lines(ls, i + 1, if (i + 1 < ls.len()) { a1.push("\n") } else { a1 });
+}
+
 // The debug-info unit: compile unit !1, flags !2 !3, subroutine type !4,
 // and a DIFile !10+k per source.
 List(Str) dbg_unit_ir(List(Str) paths) {
@@ -7913,10 +7926,10 @@ Int vf_fail(Str msg) {
     return 1;
 }
 
-// A sidecar check: "" when it matches or is absent, else the failure.
+// A sidecar check: "" when it matches, or is absent and unsigned; else the failure.
 @requires(filesystem(readonly))
 Str vf_sidecar(Str path, List(Int) want) {
-    if (!filesystem.exists(path)) { return ""; }
+    if (!filesystem.exists(path)) { return if (want.len() == 0) { "" } else { path + " is missing (the signature covers it)" }; }
     if (want.len() == 0) { return path + " is not covered by the signature"; }
     if (hex_encode(filesystem.sha256(path)) != hex_encode(want)) { return path + " does not match its signed hash"; }
     return "";
@@ -8330,7 +8343,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     List(Str) all1 = if (fn_index(fs, "main") >= 0) { all0.concat(main_entry_ir()) } else { all0 };
     List(Str) all2 = if (testmode) { all1.concat(td_main_ir(td.names, td.syms, td_module_name(path))).concat(start_entry_ir()) } else { all1 };
     List(Str) all = if (gdbg) { all2.concat(dbg_unit_ir(gdf.paths)) } else { all2 };
-    Str doc  =  str_join(if (rtmod) { rt_clean(all.concat(rt_asm_defs())) } else { all }, "\n") + "\n";
+    Str doc  =  probe_stack(str_join(if (rtmod) { rt_clean(all.concat(rt_asm_defs())) } else { all }, "\n") + "\n");
     // Debug builds record each runtime check for the artifact's facts.
     List(Str) chk = resid_list_str_persist_copy([if (gdbg) { ga_check_lines(all, 0, StrBuf()) } else { "" }]);
     Str ll0  =  out + ".ll";

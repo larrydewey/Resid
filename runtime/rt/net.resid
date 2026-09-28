@@ -170,7 +170,9 @@ Int dns_ask(Int server, Int host) {
     Int sa = resid_raw_tls("sa_dns", 16);
     _ = resid_raw_fill(sa, 0, 16);
     _ = st8(sa, 2) + st8(sa + 2, 0) + st8(sa + 3, 53) + st32(sa + 4, server);
-    Int sent = resid_raw_syscall(44, fd, q, qn, 16384, sa, 16);
+    // Connected: the kernel drops replies from any other address.
+    Int cn = resid_raw_syscall(42, fd, sa, 16, 0, 0, 0);
+    Int sent = if (cn == 0) { resid_raw_syscall(44, fd, q, qn, 16384, 0, 0) } else { 0 - 1 };
     Int resp = xmalloc(1500);
     Int n = if (sent == qn) { resid_raw_syscall(45, fd, resp, 1500, 0, 0, 0) } else { 0 - 1 };
     _ = sys_close(fd);
@@ -246,12 +248,20 @@ Bool send_all(Int fd, Int p, Int n) {
     return send_all(fd, p + w, n - w);
 }
 
+// A TCP fd is a plain Int: only a socket is used, so a network grant cannot touch files or stdio.
+Bool sock_ok(Int fd) {
+    if (fd < 0) { return false; }
+    Int b = resid_raw_tls("sock_stat", 144);
+    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + 24) & 61440) == 49152;
+}
+
 @export("resid_tcp_send", "i8(i64,ptr)")
-pub Int rt_tcp_send(Int fd, Int data) { return if (send_all(fd, data, c_strlen(data))) { 1 } else { 0 }; }
+pub Int rt_tcp_send(Int fd, Int data) { return if (sock_ok(fd) && send_all(fd, data, c_strlen(data))) { 1 } else { 0 }; }
 
 // Everything until the peer closes, capped at 4 MB.
 @export("resid_tcp_recv_all", "ptr(i64)")
 pub Int rt_tcp_recv_all(Int fd) {
+    if (!sock_ok(fd)) { return xempty(); }
     Int out = xmalloc(65536);
     return recv_loop(fd, out, 65536, 0);
 }
@@ -267,12 +277,13 @@ Int recv_loop(Int fd, Int out, Int cap, Int len) {
 }
 
 @export("resid_tcp_close", "i8(i64)")
-pub Int rt_tcp_close(Int fd) { return if (sys_close(fd) == 0) { 1 } else { 0 }; }
+pub Int rt_tcp_close(Int fd) { return if (sock_ok(fd) && sys_close(fd) == 0) { 1 } else { 0 }; }
 
 // A List(Int) of byte values (each truncated to 8 bits), at most 1 MB.
 @export("resid_tcp_send_bin", "i8(i64,ptr)")
 pub Int rt_tcp_send_bin(Int fd, Int l) {
     Int n = c_list_len(l);
+    if (!sock_ok(fd)) { return 0; }
     if (n <= 0) { return 1; }
     if (n > 1048576) { return 0; }
     Int buf = xmalloc(n);
@@ -292,7 +303,7 @@ Int bytes_of(Int l, Int buf, Int i, Int n) {
 // error are 0.
 @export("resid_tcp_recv_bin", "ptr(i64,i64)")
 pub Int rt_tcp_recv_bin(Int fd, Int n0) {
-    Int n = clamp(n0, 0, 1048576);
+    Int n = if (sock_ok(fd)) { clamp(n0, 0, 1048576) } else { 0 };
     Int buf = xmalloc(n);
     _ = resid_raw_fill(buf, 0, n);
     _ = recv_exact(fd, buf, 0, n);

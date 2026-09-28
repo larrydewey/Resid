@@ -291,7 +291,7 @@ pub Int rt_listbuf_finish(Int l, Int ty) {
 pub Int rt_list_slice(Int l, Int lo0, Int hi0) {
     Int lo = max(lo0, 0);
     Int hi = min(hi0, lcount(l));
-    Int n = max(hi - lo, 0);
+    Int n = if (hi > lo) { hi - lo } else { 0 };   // hi - lo may wrap for hi near Int.min
     if (n > 0 && lshift(l) == 0 - 1) { return rt_list_new(n, lroot(l) + 24 + lo * 8, ltype(l)); }
     Int flat = xmalloc(max(n, 1) * 8);
     _ = slice_fill(l, flat, lo, 0, n);

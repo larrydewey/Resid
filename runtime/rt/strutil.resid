@@ -39,7 +39,7 @@ pub Int rt_str_ends_with(Int s, Int suf) {
 pub Int rt_str_repeat(Int s, Int times0) {
     Int times = if (times0 < 0) { 0 } else { times0 };
     Int ls = c_strlen(s);
-    if (ls > 0 && times > 9223372036854775807 / ls) { return cstr_from(s, 0, 1); }
+    if (ls > 0 && times > 9223372036854775806 / ls) { return cstr_from(s, 0, 1); }
     Int p = c_malloc(ls * times + 1);
     if (p == 0) { return cstr_from(s, 0, 1); }
     Int e = repeat_at(p, s, ls, times);
