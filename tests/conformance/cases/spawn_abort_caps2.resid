@@ -1,0 +1,13 @@
+// A region that aborts, then a region granted filesystem on the same worker.
+Int boom(Int i) { List(Int) xs = [1]; return xs[i]; }
+@requires(filesystem)
+Bool probe() { return filesystem.is_dir("/etc"); }
+@requires(filesystem)
+Int main() {
+    Result(Int, RegionError) a = spawn () { return boom(5); };
+    Int av = a else { -1 };
+    Result(Int, RegionError) b = spawn (filesystem) { Bool d = probe(); return if (d) { 1 } else { 0 }; };
+    Str s = match b { Ok(n) => f"ok {n}", Err(e) => "err " + e.message };
+    println(s);
+    return 0;
+}

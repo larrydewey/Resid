@@ -1,0 +1,5 @@
+Int main() {
+    Vec(Int, 4) v = splat(1);
+    Int k = match Some(v) { Some(x) => x[1], None => 0 };
+    return 0;
+}

@@ -1,0 +1,13 @@
+// A region that overflows its stack faults on the guard page (SIGSEGV)
+// instead of running into memory mapped below it.
+Int deep(Int n) {
+    if (n == 0) { return 0; }
+    return 1 + deep(n - 1);
+}
+
+Int main() {
+    Result(Int, RegionError) r = spawn () { return deep(rt 100000000); };
+    Int v = r else { -1 };
+    println(f"{v}");
+    return 0;
+}

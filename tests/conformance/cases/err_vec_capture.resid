@@ -1,0 +1,5 @@
+Int main() {
+    Vec(Int, 4) v = splat(1);
+    Int closure(Int) f = lambda(i) { v[i] + 1 };
+    return 0;
+}

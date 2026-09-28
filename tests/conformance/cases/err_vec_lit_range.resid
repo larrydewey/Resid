@@ -1,0 +1,4 @@
+Int main() {
+    Vec(Int(8), 4) v = [-200, 1, 2, 3];
+    return 0;
+}

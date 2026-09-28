@@ -1,0 +1,23 @@
+// A region that aborts inside a scalar scope: the pooled worker's scope
+// depth is put back, so the next region's allocations are freed as usual.
+Int boom(Int i) { List(Int) xs = [1]; return xs[i]; }
+
+Int churn(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Str s = str_repeat("abcdefgh", 2000 + i % 3);
+    return churn(i + 1, n, acc + str_len(s));
+}
+
+Int main() {
+    Result(Int, RegionError) a = spawn () {
+        Str t = str_repeat("x", 10);
+        Int k = str_len(t + f"{boom(rt 7)}");
+        return k;
+    };
+    Int av = a else { -1 };
+    println(f"a {av}");
+    Result(Int, RegionError) b = spawn () { return churn(0, 3000, 0); };
+    Int bv = b else { -1 };
+    println(f"b {bv}");
+    return 0;
+}

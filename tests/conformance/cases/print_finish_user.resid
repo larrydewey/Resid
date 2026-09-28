@@ -1,0 +1,11 @@
+// print(x.finish()) with a user function named finish (not a builder).
+type Doc = { Str title; List(Str) lines; };
+Str finish(Doc d) { return d.title + ": " + str_join(d.lines, ","); }
+Int main() {
+    Doc d = Doc {.title = "t", .lines = ["a", "b", "c"]};
+    print(d.finish());
+    println(d.finish());
+    Str s = d.finish();
+    println(s);
+    return 0;
+}

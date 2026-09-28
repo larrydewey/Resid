@@ -1,0 +1,2 @@
+type Vec = { Int x; };
+Int main() { return 0; }

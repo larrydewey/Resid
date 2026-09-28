@@ -1,0 +1,20 @@
+// A specialization keeps its known parameters under names no program can
+// write, so user parameters named like them are not confused.
+Int power(Int rs_known_1, Int n) {
+    if (n == 0) { return 1; }
+    return rs_known_1 * power(rs_known_1, n - 1);
+}
+
+Int lines(Int i, Int n, Int rs_known_4, Int acc, Int col) {
+    if (i >= n) { return acc * 100 + rs_known_4; }
+    if (col == 9) { return lines(i + 1, n, rs_known_4 + 1, acc + 1, 0); }
+    return lines(i + 1, n, rs_known_4, acc, col + 1);
+}
+
+Int main() {
+    Int x = rt 3;
+    println(f"{power(x, 5)}");
+    Int n = str_len("abcdefghijklmnopqrstuvwxy") * 4;
+    println(f"{lines(0, n, 0, 0, 0)}");
+    return 0;
+}

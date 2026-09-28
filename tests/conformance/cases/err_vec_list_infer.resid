@@ -1,0 +1,5 @@
+Int main() {
+    Vec(Int, 4) v = splat(1);
+    Int k = [v, v].len();
+    return 0;
+}

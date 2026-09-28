@@ -1,0 +1,16 @@
+// Lane reads after a for loop and after scalar casts (block labels stay
+// unique), and Float(32) lanes boxed into lists.
+Int main() {
+    Vec(Int, 4) a = lanes();
+    for (Int i in 0..4) { println(f"{a[i]}"); }
+    Int y = a[3];
+    println(f"{y}");
+    Vec(Float(32), 4) b = lanes();
+    println(f"{(Float)b[3]}");
+    Vec(Float, 4) w = (Vec(Float, 4))b;
+    println(f"{w[1]} {b.to_list()}");
+    Float(32) x = 1.5;
+    List(Float(32)) l = [x, x];
+    println(f"{l}");
+    return 0;
+}

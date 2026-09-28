@@ -1,0 +1,19 @@
+// An aborted sandboxed region must not leave its sandbox frame on the
+// pooled worker: the next region there keeps the authority it was granted.
+sandbox (filesystem) {
+    Int boom_in_sandbox(Int i) {
+        List(Int) xs = [1];
+        return xs[i];
+    }
+}
+
+@requires(filesystem, args)
+Int main() {
+    Result(Int, RegionError) a = spawn (filesystem) { return boom_in_sandbox(5); };
+    Str sa = match a { Ok(n) => f"ok {n}", Err(e) => "a failed" };
+    println(sa);
+    Result(Int, RegionError) b = spawn (args) { return args.count(); };
+    Str sb = match b { Ok(n) => f"b ok {n}", Err(e) => f"b failed: {e.message}" };
+    println(sb);
+    return 0;
+}
