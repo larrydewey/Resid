@@ -1,0 +1,14 @@
+// Shuffle indices are taken modulo the lane count; the wrapping_* methods
+// wrap where + - * trap.
+Int main() {
+    Vec(Int(8), 16) p = lanes();
+    Vec(Int(8), 16) q = p.shuffle(p.wrapping_add(17));
+    println(f"{q.to_list()}");
+    Vec(Int(32), 4) i = [0, 1, 2, 3];
+    Vec(Float, 4) f = [10.0, 20.0, 30.0, 40.0];
+    Vec(Int(32), 4) back = [-1, 6, 3, 2];
+    println(f"{f.shuffle(back).to_list()}");
+    Vec(Int(8), 4) big = [127, -128, 100, 0];
+    println(f"{big.wrapping_add(1).to_list()} {big.wrapping_sub(big).to_list()} {big.wrapping_mul(2).to_list()}");
+    return 0;
+}

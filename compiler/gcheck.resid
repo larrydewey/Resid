@@ -909,6 +909,7 @@ GKT gk_fstr(GK k, Int id, Int i) {
     if (ck == "fpart" || ck == "fspec") { return gk_fstr(k, id, i + 1); }
     GKT h = gk_expr(k, c, "");
     if (h.err != "") { return h; }
+    if (gv_is(h.ty)) { return gterr(h.k, "a vector is not shown directly; interpolate v.to_list() (spec §46)", c); }
     Str nd = gm_need_vars(h.k, "Show", str_split(gm_tvars(h.ty), ","), 0);
     if (nd != "") { return gterr(h.k, "E0226: showing a " + h.ty + " needs " + nd + ": add @needs(" + nd + ") to the function", c); }
     return gk_fstr(gm_show_insts(h.k, h.ty, 0), id, i + 1);
@@ -1041,9 +1042,18 @@ GKT gk_call(GK k, Int id, Str exp) {
     if (lty != "" && is_fn_type(lty)) { return gk_fn_call(k, id, 0, lty); }
     if (ck_fn_index(k.fs, n) < 0 && k.gx.verbs.contains(n)) { return gk_vcall(k, id, n, exp); }
     if (n == "sort") { return gk_sort(k, id); }
+    if (gv_call_is(k, n)) { return gv_call(k, id, n, exp); }
     // min / max / clamp: an integer literal argument adopts the type of the
     // others (spec §6.1a), as an operand would.
     if ((n == "min" || n == "max" || n == "clamp") && ck_fn_index(k.fs, n) < 0) {
+        // Vectors, lanewise (spec §46); the first operand decides.
+        GKT v0 = if (argn == 2 && n != "clamp") { gk_expr(k, gk_kid(k, id, 0), exp) } else { gt(k, "", id) };
+        if (v0.err == "" && gv_is(v0.ty)) {
+            GKT v1 = gk_expr(v0.k, gk_kid(k, id, 1), v0.ty);
+            if (v1.err != "") { return v1; }
+            if (!ty_same(v0.ty, v1.ty) || gv_is_mask(v0.ty)) { return gterr(v1.k, n + " expects 2 numeric vectors of one type, got (" + v0.ty + ", " + v1.ty + ")", id); }
+            return gt(v1.k, v0.ty, id);
+        }
         GKA a = gk_args(k, id, 0, gk_nopts(), 0, "", 0);
         if (a.err != "") { return gterr(a.k, a.err, a.at); }
         List(Str) ts = str_split(a.tys, ",");
@@ -1341,6 +1351,7 @@ GKT gk_struct(GK k, Int id, Str ty, Int i) {
 }
 
 GKT gk_list(GK k, Int id, Str exp) {
+    if (gv_is(exp)) { return gv_list(k, id, exp, 0); }
     if (k.g.ns[id].nk == 0) { return gt(k, if (is_list_fixed(exp)) { exp } else { "List(Unknown)" }, id); }
     Str want = if (is_list_fixed(exp)) { fixed_elem(exp) } else { "" };
     return gk_list_at(k, id, 0, want, "", exp);
@@ -1360,6 +1371,23 @@ GKT gk_list_at(GK k, Int id, Int i, Str want, Str elem, Str exp) {
     if (e.err != "") { return e; }
     if (elem != "" && !ty_same(elem, e.ty)) { return gterr(e.k, "list element type mismatch: " + elem + " vs " + e.ty, e.at); }
     return gk_list_at(e.k, id, i + 1, want, if (elem == "") { e.ty } else { elem }, exp);
+}
+
+// A vector literal: exactly N elements of the lane type (literals adopt it).
+GKT gv_list(GK k, Int id, Str vt, Int i) {
+    Int n = k.g.ns[id].nk;
+    if (i == 0 && !gv_slot_ok(k, id)) { return gterr(k, "E0412: a vector literal takes its type from a binding, a return or a function argument; bind it first (spec §46)", id); }
+    if (i >= n) {
+        if (n != gv_lanes(vt)) { return gterr(k, f"vector literal has {n} elements, " + vt + f" has {gv_lanes(vt)} lanes", id); }
+        return gt(k, vt, id);
+    }
+    Int en = gk_kid(k, id, i);
+    GKT e = gk_expr(k, en, gv_elem(vt));
+    if (e.err != "") { return e; }
+    Str es = if (gv_is_mask(vt)) { if (e.ty == "Bool") { "Bool" } else { "" } } else { gv_scalar(e.k.g, en, e.ty, vt) };
+    if (es == "") { return gterr(e.k, "vector literal element: expected " + gv_elem(vt) + ", got " + e.ty, en); }
+    GK ke = if (es != e.ty) { gk_tl(e.k, tl_add(e.k.tl, en, es)) } else { e.k };
+    return gv_list(ke, id, vt, i + 1);
 }
 
 GKT gk_emptyb(GK k, Int id, Str exp) {
@@ -1412,6 +1440,11 @@ GKT gk_un(GK k0, Int id) {
     GKT e = gk_expr(k0, gk_kid(k0, id, 0), "");
     if (e.err != "") { return e; }
     GK k = e.k;
+    if (gv_is(e.ty)) {
+        Bool ok = if (gv_is_mask(e.ty)) { op == "!" } else { op == "-" || op == "+" || (op == "~" && !gv_is_float(e.ty)) };
+        if (ok) { return gt(k, e.ty, id); }
+        return gterr(k, "unary " + op + " is not defined on " + e.ty + " (spec §46)", id);
+    }
     if (op == "-" || op == "+") {
         if (is_num(e.ty)) { return gt(k, e.ty, id); }
         return gterr(k, "unary " + op + " requires a number, got " + e.ty, id);
@@ -1431,7 +1464,8 @@ GKT gk_cast(GK k0, Int id) {
     Bool bothint = is_int_ty(to) && is_int_ty(e.ty);
     Bool bothnum = is_num(to) && is_num(e.ty) && !is_dec_ty(to) && !is_dec_ty(e.ty);
     Bool todec = is_dec_ty(to) && (is_int_ty(e.ty) || is_dec_ty(e.ty));
-    if (bothint || bothnum || todec || ty_same(to, e.ty) || is_fixed_cast_pair(e.ty, to)) { return gt(e.k, to, id); }
+    Bool vcast = gv_is(to) && gv_is(e.ty) && gv_type_err(to, false) == "" && gv_cast_ok(e.ty, to);
+    if (bothint || bothnum || todec || vcast || ty_same(to, e.ty) || is_fixed_cast_pair(e.ty, to)) { return gt(e.k, to, id); }
     return gterr(e.k, "cast from " + e.ty + " to " + to + " not supported", id);
 }
 
@@ -1456,6 +1490,7 @@ GKT gk_bin(GK k0, Int id, Str exp) {
     if (lfit != "") { return gterr(k, lfit, id); }
     if (rfit != "") { return gterr(k, rfit, id); }
     if (gm_has_var(lty) || gm_has_var(rty)) { return gm_bin(k, id, op, lty, rty, l, r, lt.ty, rt.ty); }
+    if (gv_is(lt.ty) || gv_is(rt.ty)) { return gv_bin(k, id, op, l, r, lt.ty, rt.ty); }
     Bool range = op == ".." || op == "..=";
     if (range && (!is_int_ty(lt.ty) || !is_int_ty(rt.ty))) { return gterr(k, "range bounds must be integers, got " + lt.ty + " " + op + " " + rt.ty, id); }
     Str bt = bin_type(op, lty, rty);
@@ -1725,6 +1760,10 @@ GKT gk_index(GK k0, Int id) {
     if (ix.err != "") { return ix; }
     GK k = ix.k;
     Str bt = b.ty;
+    if (gv_is(bt)) {
+        if (!is_int_ty(ix.ty)) { return gterr(k, "vector lane index must be an integer, found " + ix.ty, id); }
+        return gt(k, gv_elem(bt), id);
+    }
     if (is_str_fixed(bt) || is_bytes_fixed(bt)) {
         if (!is_int_ty(ix.ty)) { return gterr(k, "fixed string/bytes index must be numeric, found " + ix.ty, id); }
         return gt(k, "Int", id);
@@ -1816,6 +1855,7 @@ GKT gk_mcall(GK k0, Int id) {
     GK k = b.k;
     Str bt = b.ty;
     if (gk_is_builder(bt)) { return gk_builder_method(k, id, bt, m, na); }
+    if (gv_is(bt)) { return gv_method(k, id, bt, m, na); }
     if (m == "len") {
         if (na != 0) { return gterr(k, ".len() takes no arguments", id); }
         return gt(k, "Int", id);
@@ -1872,6 +1912,222 @@ GKT gk_list_method(GK k, Int id, Str bt, Str m, Int na) {
 }
 
 // ─── Linear builders (spec §45) ─────────────────────────────────────
+
+// ─── Vectors (spec §46) ─────────────────────────────────────────────
+// Vec(T, N): N lanes of an Int, UInt or Float width T, in registers.
+// Lane masks are Vec(Bool, N). A vector never appears inside another
+// type (E0411).
+
+pub Bool gv_is(Str t) { return str_has_prefix(t, "Vec("); }
+
+pub Str gv_elem(Str t) {
+    Int c = str_find_char(t, 44, 4);
+    return if (c < 0) { "" } else { str_trim(str_slice(t, 4, c)) };
+}
+
+pub Int gv_lanes(Str t) {
+    Int c = str_find_char(t, 44, 4);
+    return if (c < 0) { 0 } else { str_parse_int(str_trim(str_slice(t, c + 1, str_len(t) - 1))) };
+}
+
+pub Str gv_of(Str elem, Int n) { return "Vec(" + elem + f", {n})"; }
+
+Bool gv_lane_ok(Int n) { return n == 2 || n == 4 || n == 8 || n == 16 || n == 32 || n == 64; }
+
+// A lane type: a numeric width other than Dec (Bool only for masks).
+Bool gv_elem_ok(Str e) { return e == "Bool" || (is_num(e) && !is_dec_ty(e) && num_norm(e) != "Float(16)" && num_norm(e) != "Float(128)" && gv_bits(e) <= 64); }
+
+Int gv_bits(Str e) {
+    Str n = num_norm(e);
+    if (n == "Bool") { return 1; }
+    Int p = str_find_char(n, 40, 0);
+    return if (p < 0) { 64 } else { str_parse_int(str_slice(n, p + 1, str_len(n) - 1)) };
+}
+
+Bool gv_is_float(Str t) { return is_float_ty(gv_elem(t)); }
+Bool gv_is_mask(Str t) { return gv_elem(t) == "Bool"; }
+
+// E0410 / E0411 for type text t, or "".
+Str gv_type_err(Str t, Bool field) {
+    if (!str_contains(t, "Vec(")) { return ""; }
+    if (!gv_is(t)) { return "E0411: a vector type cannot appear inside " + t + " (spec §46)"; }
+    if (field) { return "E0411: vector type " + t + " cannot be a struct field (spec §46)"; }
+    Str e = gv_elem(t);
+    if (str_contains(e, "Vec(")) { return "E0411: a vector type cannot appear inside " + t + " (spec §46)"; }
+    if (!gv_elem_ok(e)) { return "E0410: " + t + ": lanes are Int, UInt or Float widths up to 64 bits (spec §46)"; }
+    if (!gv_lane_ok(gv_lanes(t))) { return "E0410: " + t + ": the lane count is 2, 4, 8, 16, 32 or 64 (spec §46)"; }
+    return "";
+}
+
+// The lane type a scalar operand has against vector type vt: its own when
+// it matches, the lanes' when it is a literal of the same family, or "".
+// A numeric literal, possibly negated.
+Bool gv_lit(Kg g, Int n) {
+    KN x = g.ns[n];
+    if (x.kind == "lit") { return x.aux == "int" || x.aux == "float"; }
+    if (x.kind == "un" && x.text == "-" && x.nk == 1) { return gv_lit(g, kg_kid(g, n, 0)); }
+    if (x.kind == "paren" && x.nk == 1) { return gv_lit(g, kg_kid(g, n, 0)); }
+    return false;
+}
+
+Str gv_scalar(Kg g, Int node, Str st, Str vt) {
+    Str e = gv_elem(vt);
+    if (ty_same(num_norm(st), num_norm(e))) { return e; }
+    Bool lit = gv_lit(g, node);
+    Bool neg_u = g.ns[node].kind == "un" && str_has_prefix(num_norm(e), "UInt");
+    Bool fits = !neg_u && (!gk_bare_int(g, node) || lit_range_err(g.ns[node].text, false, num_norm(e)) == "");
+    if (lit && is_int_ty(st) && is_int_ty(e) && fits) { return e; }
+    if (lit && is_float_ty(st) && is_float_ty(e)) { return e; }
+    return "";
+}
+
+GKT gv_bin(GK k, Int id, Str op, Int l, Int r, Str lt, Str rt) {
+    Bool lv = gv_is(lt);
+    Bool rv = gv_is(rt);
+    Str vt = if (lv) { lt } else { rt };
+    Str ls = if (lv) { "" } else { gv_scalar(k.g, l, lt, vt) };
+    Str rs = if (rv) { "" } else { gv_scalar(k.g, r, rt, vt) };
+    Bool shapes = (lv && rv && ty_same(lt, rt)) || (lv && !rv && rs != "") || (rv && !lv && ls != "");
+    if (!shapes) { return gterr(k, "operator " + op + " between " + lt + " and " + rt + " (vectors combine with the same vector type or a scalar of its lane type)", id); }
+    Bool mask = gv_is_mask(vt);
+    Bool arith = op == "+" || op == "-" || op == "*" || op == "/";
+    Bool bits = op == "&" || op == "|" || op == "^";
+    Bool cmp = op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=";
+    Str res = if (cmp) { gv_of("Bool", gv_lanes(vt)) } else { vt };
+    Bool ok = if (mask) { bits || op == "==" || op == "!=" } else { (arith && (op != "/" || gv_is_float(vt))) || (bits && !gv_is_float(vt)) || cmp };
+    if (!ok) { return gterr(k, "operator " + op + " is not defined on " + vt + " (spec §46)", id); }
+    GK ka = if (ls != "" && ls != lt) { gk_tl(k, tl_add(k.tl, l, ls)) } else { k };
+    GK kb = if (rs != "" && rs != rt) { gk_tl(ka, tl_add(ka.tl, r, rs)) } else { ka };
+    return gt(kb, res, id);
+}
+
+// Vector casts that cannot fail: Int or UInt to Float, Float to Float,
+// and integer widening that keeps every value (spec §46).
+Bool gv_cast_ok(Str from, Str to) {
+    if (gv_lanes(from) != gv_lanes(to) || gv_is_mask(from) || gv_is_mask(to)) { return false; }
+    Str a = gv_elem(from);
+    Str b = gv_elem(to);
+    if (is_float_ty(b)) { return true; }
+    if (is_float_ty(a)) { return false; }
+    Bool su = str_has_prefix(num_norm(a), "Int(");
+    Bool tu = str_has_prefix(num_norm(b), "Int(");
+    Bool wider = gv_bits(b) > gv_bits(a) || (gv_bits(b) == gv_bits(a) && su == tu);
+    return wider && (su == tu || (!su && tu && gv_bits(b) > gv_bits(a)));
+}
+
+GKT gv_method(GK k, Int id, Str bt, Str m, Int na) {
+    Str e = gv_elem(bt);
+    Bool mask = gv_is_mask(bt);
+    if (m == "any" || m == "all" || m == "bits") {
+        if (!mask) { return gterr(k, "." + m + "() is defined on lane masks Vec(Bool, N), not " + bt, id); }
+        if (na != 0) { return gterr(k, "." + m + "() takes no arguments", id); }
+        return gt(k, if (m == "bits") { "Int" } else { "Bool" }, id);
+    }
+    if (m == "sum") {
+        if (mask || na != 0) { return gterr(k, ".sum() takes no arguments and needs a numeric vector, got " + bt, id); }
+        return gt(k, e, id);
+    }
+    if (m == "to_list") {
+        if (na != 0) { return gterr(k, ".to_list() takes no arguments", id); }
+        return gt(k, "List(" + e + ")", id);
+    }
+    if (m == "with") {
+        if (na != 2) { return gterr(k, ".with(i, x) takes 2 arguments", id); }
+        GKT i = gk_expr(k, gk_kid(k, id, 1), "Int");
+        if (i.err != "") { return i; }
+        if (!is_int_ty(i.ty)) { return gterr(i.k, ".with index must be an integer, got " + i.ty, id); }
+        Int xn = gk_kid(k, id, 2);
+        GKT x = gk_expr(i.k, xn, e);
+        if (x.err != "") { return x; }
+        Str xs = if (mask) { if (x.ty == "Bool") { "Bool" } else { "" } } else { gv_scalar(x.k.g, xn, x.ty, bt) };
+        if (xs == "") { return gterr(x.k, ".with value must be " + e + ", got " + x.ty, id); }
+        GK kx = if (xs != x.ty) { gk_tl(x.k, tl_add(x.k.tl, xn, xs)) } else { x.k };
+        return gt(kx, bt, id);
+    }
+    if (m == "wrapping_add" || m == "wrapping_sub" || m == "wrapping_mul") {
+        if (mask || gv_is_float(bt) || na != 1) { return gterr(k, "." + m + "(w) takes one argument and needs an integer vector, got " + bt, id); }
+        Int wn = gk_kid(k, id, 1);
+        GKT wv = gk_expr(k, wn, bt);
+        if (wv.err != "") { return wv; }
+        Str ws = if (gv_is(wv.ty)) { if (ty_same(wv.ty, bt)) { bt } else { "" } } else { gv_scalar(wv.k.g, wn, wv.ty, bt) };
+        if (ws == "") { return gterr(wv.k, "." + m + " expects " + bt + " or its lane type, got " + wv.ty, id); }
+        GK kw = if (!gv_is(wv.ty) && ws != wv.ty) { gk_tl(wv.k, tl_add(wv.k.tl, wn, ws)) } else { wv.k };
+        return gt(kw, bt, id);
+    }
+    if (m == "shuffle") {
+        if (na != 1) { return gterr(k, ".shuffle(idx) takes 1 argument", id); }
+        GKT ix = gk_expr(k, gk_kid(k, id, 1), "");
+        if (ix.err != "") { return ix; }
+        Bool ok = gv_is(ix.ty) && is_int_ty(gv_elem(ix.ty)) && gv_lanes(ix.ty) == gv_lanes(bt);
+        if (!ok) { return gterr(ix.k, f".shuffle expects an integer Vec with {gv_lanes(bt)} lanes, got " + ix.ty, id); }
+        return gt(ix.k, bt, id);
+    }
+    return gterr(k, "unsupported method " + m + " on " + bt + " (spec §46)", id);
+}
+
+// splat(x) / lanes() / select(m, a, b) (sqrt / min / max on vectors are
+// check_builtin's).
+GKT gv_call(GK k, Int id, Str n, Str exp) {
+    Int na = k.g.ns[id].nk;
+    if (n == "splat" || n == "lanes") {
+        if (gv_is(exp) && !gv_slot_ok(k, id)) { return gterr(k, "E0412: " + n + "() takes its type from a binding, a return or a function argument; bind it first (spec §46)", id); }
+        Bool num = gv_is(exp) && !gv_is_mask(exp);
+        if (!gv_is(exp) || (n == "lanes" && !num)) { return gterr(k, "E0412: " + n + "() needs a vector type from its context (a Vec binding, return or function argument; spec §46)", id); }
+        if (n == "lanes") {
+            if (na != 0) { return gterr(k, "lanes() takes no arguments", id); }
+            return gt(k, exp, id);
+        }
+        if (na != 1) { return gterr(k, "splat(x) takes 1 argument", id); }
+        Int xn = gk_kid(k, id, 0);
+        GKT x = gk_expr(k, xn, gv_elem(exp));
+        if (x.err != "") { return x; }
+        Str xs = if (gv_is_mask(exp)) { if (x.ty == "Bool") { "Bool" } else { "" } } else { gv_scalar(x.k.g, xn, x.ty, exp) };
+        if (xs == "") { return gterr(x.k, "splat of " + x.ty + " for " + exp, id); }
+        GK kx = if (xs != x.ty) { gk_tl(x.k, tl_add(x.k.tl, xn, xs)) } else { x.k };
+        return gt(kx, exp, id);
+    }
+    if (n == "select") {
+        if (na != 3) { return gterr(k, "select(m, a, b) takes 3 arguments", id); }
+        GKT m = gk_expr(k, gk_kid(k, id, 0), "");
+        if (m.err != "") { return m; }
+        GKT a = gk_expr(m.k, gk_kid(k, id, 1), exp);
+        if (a.err != "") { return a; }
+        GKT b = gk_expr(a.k, gk_kid(k, id, 2), a.ty);
+        if (b.err != "") { return b; }
+        Bool ok = gv_is(m.ty) && gv_is_mask(m.ty) && gv_is(a.ty) && ty_same(a.ty, b.ty) && gv_lanes(a.ty) == gv_lanes(m.ty);
+        if (!ok) { return gterr(b.k, "select expects (Vec(Bool, N), Vec(T, N), Vec(T, N)), got (" + m.ty + ", " + a.ty + ", " + b.ty + ")", id); }
+        return gt(b.k, a.ty, id);
+    }
+    return gterr(k, "unknown vector builtin " + n, id);
+}
+
+// A vector constructor at id sits where its type comes from the context
+// the lowering sees: a binding's value, a return, an argument of a user
+// function, or an operand of select.
+Bool gv_slot_ok(GK k, Int id) {
+    Int p = gv_parent(k.g, id, 0);
+    if (p < 0) { return false; }
+    KN n = k.g.ns[p];
+    if (n.kind == "bind" || n.kind == "ret") { return true; }
+    if (n.kind != "call") { return false; }
+    if (ck_fn_index(k.fs, n.text) >= 0) { return true; }
+    return n.text == "select" && kg_kid(k.g, p, 0) != id;
+}
+
+Int gv_parent(Kg g, Int id, Int p) {
+    if (p >= kg_count(g)) { return -1; }
+    if (gv_has_kid(g, p, id, 0)) { return p; }
+    return gv_parent(g, id, p + 1);
+}
+
+Bool gv_has_kid(Kg g, Int p, Int id, Int i) {
+    if (i >= g.ns[p].nk) { return false; }
+    if (kg_kid(g, p, i) == id) { return true; }
+    return gv_has_kid(g, p, id, i + 1);
+}
+
+// Whether call `n` is a vector builtin (a user function of the name wins).
+Bool gv_call_is(GK k, Str n) { return ck_fn_index(k.fs, n) < 0 && (n == "splat" || n == "lanes" || n == "select"); }
 
 pub Bool gk_is_builder(Str t) { return t == "StrBuf" || str_has_prefix(t, "ListBuf("); }
 
@@ -2136,7 +2392,8 @@ GKS gk_bindst(GK k, Int id) {
     Str name = g.ns[id].text;
     if (kg_shadows(k.rs, id)) { return gk_shadow_err(k, id, name); }
     Str ty = g.ns[kg_kid(g, id, 0)].text;
-    Str nb = gk_nested_builder(ty);
+    Str nb0 = gk_nested_builder(ty);
+    Str nb = if (nb0 == "") { gv_type_err(ty, false) } else { nb0 };
     if (nb != "") { return gs_err(k, nb, id); }
     Int ve = kg_kid(g, id, g.ns[id].nk - 1);
     GKT v = gk_expr(k, ve, ty);
@@ -2257,7 +2514,8 @@ GKS gk_nested_kids(GK k, Int d, Int from, Int to, Bool field) {
     Int tn = if (k.g.ns[c].kind == "ty") { c } else { kg_kid(k.g, c, 0) };
     Str t = k.g.ns[tn].text;
     Str nb0 = gk_nested_builder(t);
-    Str nb = if (nb0 == "" && field && gk_is_builder(t)) { "E0404: builder type " + t + " cannot be a struct field (spec §45.1)" } else { nb0 };
+    Str nb1 = if (nb0 == "" && field && gk_is_builder(t)) { "E0404: builder type " + t + " cannot be a struct field (spec §45.1)" } else { nb0 };
+    Str nb = if (nb1 == "") { gv_type_err(t, field) } else { nb1 };
     if (nb != "") { return gs_err(k, nb, c); }
     return gk_nested_kids(k, d, from + 1, to, field);
 }
@@ -3337,7 +3595,7 @@ Bool gk_case_all(Kg g, Int id, Str src, Str smap, Bool acc) {
 // anything else is a mistake, never an implicit parameter.
 
 Bool gm_builtin_type(Str w) {
-    return w == "Int" || w == "UInt" || w == "Float" || w == "Dec" || w == "Bool" || w == "Str" || w == "Bytes" || w == "List" || w == "Map" || w == "Set" || w == "Option" || w == "Result" || w == "ListBuf" || w == "StrBuf" || w == "Void" || w == "File" || w == "Range" || w == "Expect" || w == "ISize" || w == "USize" || w == "closure" || w == "rt" || w == "Unknown" || w == "Slice" || w == "Provider";
+    return w == "Int" || w == "UInt" || w == "Float" || w == "Dec" || w == "Bool" || w == "Str" || w == "Bytes" || w == "List" || w == "Map" || w == "Set" || w == "Option" || w == "Result" || w == "ListBuf" || w == "StrBuf" || w == "Void" || w == "File" || w == "Range" || w == "Expect" || w == "ISize" || w == "USize" || w == "closure" || w == "rt" || w == "Unknown" || w == "Slice" || w == "Provider" || w == "Vec";
 }
 
 // The first unknown type name in type text t, or "".

@@ -1,0 +1,8 @@
+// Lane indices are checked: v[i] outside 0 .. N-1 aborts.
+Int pick(Vec(Float, 4) v, Int i) { return (Int)v[i]; }
+Int main() {
+    Vec(Float, 4) v = [1.0, 2.0, 3.0, 4.0];
+    println(f"{pick(v, 3)}");
+    println(f"{pick(v, 4)}");
+    return 0;
+}

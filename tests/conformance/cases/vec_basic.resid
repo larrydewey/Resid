@@ -1,0 +1,25 @@
+// Vec(T, N) (spec §46): literals, splat, lanes, lanewise arithmetic with a
+// scalar broadcast, masks, select, lane reads and writes, sums, sqrt,
+// min, shuffles and casts.
+Vec(Float, 4) axpy(Float a, Vec(Float, 4) x, Vec(Float, 4) y) { return x * a + y; }
+
+Int main() {
+    Vec(Float, 4) x = [1.0, 2.0, 3.0, 4.0];
+    Vec(Float, 4) y = splat(0.5);
+    Vec(Float, 4) z = axpy(2.0, x, y);
+    println(f"{z.to_list()} {z.sum()} {z[2]}");
+    Vec(Bool, 4) m = z > 4.0;
+    println(f"{m.to_list()} {m.any()} {m.all()} {m.bits()}");
+    Vec(Float, 4) s = select(m, z, splat(0.0));
+    println(f"{s.to_list()} {sqrt(x).to_list()}");
+    Vec(Int(32), 8) i = lanes();
+    Vec(Int(32), 8) j = i * 3 - 1;
+    println(f"{j.to_list()} {j.sum()} {min(i, j).to_list()}");
+    Vec(Int(8), 16) p = lanes();
+    Vec(Int(8), 16) rev = splat(15);
+    Vec(Int(8), 16) r = p.shuffle(rev - p);
+    println(f"{r.to_list()}");
+    Vec(Float, 8) f = (Vec(Float, 8))j;
+    println(f"{f.with(0, 100.0).to_list()} {(-f)[1]}");
+    return 0;
+}

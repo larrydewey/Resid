@@ -1,0 +1,4 @@
+Int main() {
+    Vec(Float, 3) v = splat(1.0);
+    return 0;
+}

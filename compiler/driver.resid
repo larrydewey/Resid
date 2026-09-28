@@ -803,6 +803,11 @@ Str ll_ty(Str ty) {
     if (ty == "Void") { return "i1"; }
     if (ty == "Float") { return "double"; }
     if (ty == "Str") { return "ptr"; }
+    // Vec(T, N) is an LLVM vector <N x T> in registers (spec §46).
+    if (str_has_prefix_cg(ty, "Vec(")) {
+        Int c = str_find_char(ty, 44, 4);
+        return "<" + str_trim(str_slice(ty, c + 1, str_len(ty) - 1)) + " x " + ll_ty(str_trim(str_slice(ty, 4, c))) + ">";
+    }
     // A linear StrBuf travels by value (lower.resid sbv_ty).
     if (ty == "StrBuf") { return "{ptr,ptr}"; }
     // A closure is a pointer, whatever its result type (`Int(64) closure(Int)`).
@@ -848,7 +853,7 @@ Str ll_ty(Str ty) {
 Str default_zero_for(Str llty) {
     if (llty == "double") { return "0.0"; }
     if (llty == "ptr") { return "null"; }
-    if (str_has_prefix_cg(llty, "[") || str_has_prefix_cg(llty, "{")) { return "zeroinitializer"; }
+    if (str_has_prefix_cg(llty, "[") || str_has_prefix_cg(llty, "{") || str_has_prefix_cg(llty, "<")) { return "zeroinitializer"; }
     return "0";
 }
 
@@ -1245,17 +1250,21 @@ Int sum_inline_fields(Funcs fs, Str sumty, Int vidx) {
 
 Bool scal_ll(Str t) {
     if (t == "double" || t == "float" || t == "half" || t == "fp128") { return true; }
+    // A vector (spec §46) is a register value holding no heap reference.
+    if (str_has_prefix_cg(t, "<")) { return true; }
     if (str_len(t) < 2 || str_char_at(t, 0) != 105) { return false; }
     return str_is_int(str_slice(t, 1, str_len(t)));
 }
 
 Bool scope_num_head(Str t) {
-    return t == "Int" || t == "UInt" || t == "Float" || t == "Bool" || t == "ISize" || t == "USize";
+    return t == "Int" || t == "UInt" || t == "Float" || t == "Bool" || t == "ISize" || t == "USize" || t == "Vec";
 }
 
 Bool scope_arith_builtin(Str n) {
     if (n == "abs" || n == "min" || n == "max" || n == "clamp") { return true; }
     if (n == "str_char_at" || n == "str_len" || n == "sqrt") { return true; }
+    // Vectors live in registers (spec §46).
+    if (n == "splat" || n == "lanes" || n == "select") { return true; }
     if (str_starts_with(n, "checked_") || str_starts_with(n, "wrapping_") || str_starts_with(n, "saturating_")) { return true; }
     Int c0 = str_char_at(n, 0);
     Bool conv = (c0 == 105 || c0 == 117 || c0 == 102) && str_len(n) >= 2 && str_is_int(str_slice(n, 1, str_len(n)));
@@ -1285,8 +1294,11 @@ List(Str) leaf_calls(Str s, Int pos, Int end, List(Str) ptrs, Str prev, Bool pdo
         Tok f2 = lex_tok(s, f.pos);
         if (f.kind != "ident") { return ["!"]; }
         if (f2.text == "(") {
-            // The only method a leaf may call is `.len()`.
+            // A leaf may call `.len()` and the vector methods that stay in
+            // registers (a misjudged leaf only goes without a scope).
             Tok f3 = lex_tok(s, f2.pos);
+            Bool vm = f.text == "any" || f.text == "all" || f.text == "bits" || f.text == "sum" || f.text == "with" || f.text == "shuffle" || str_starts_with(f.text, "wrapping_");
+            if (vm) { return leaf_calls(s, f2.pos, end, ptrs, f.text, false, acc); }
             if (f.text != "len" || f3.text != ")") { return ["!"]; }
             return leaf_calls(s, f3.pos, end, ptrs, ")", false, acc);
         }
@@ -4332,7 +4344,18 @@ Bool tco_frame_ok(List(Str) ls, Int i) {
 // musttail needs the value in registers: wide integers (i128 and up) are
 // returned through memory and the backend then cannot emit the jump.
 Bool tco_reg_ty(Str t) {
-    return t == "ptr" || t == "i1" || t == "i8" || t == "i16" || t == "i32" || t == "i64" || t == "double" || t == "float" || t == "{ptr,ptr}";
+    return t == "ptr" || t == "i1" || t == "i8" || t == "i16" || t == "i32" || t == "i64" || t == "double" || t == "float" || t == "{ptr,ptr}" || tco_small_vec(t);
+}
+
+// A vector of at most 128 bits travels in one SSE register (larger ones go
+// through memory without AVX, where musttail cannot jump).
+Bool tco_small_vec(Str t) {
+    if (!str_has_prefix_cg(t, "<")) { return false; }
+    Int x = str_find(t, " x ");
+    Int n = str_parse_int(str_slice(t, 1, x));
+    Str e = str_slice(t, x + 3, str_len(t) - 1);
+    Int bits = if (e == "double") { 64 } else { if (e == "float") { 32 } else { if (e == "i1") { 8 } else { str_parse_int(str_slice(e, 1, str_len(e))) } } };
+    return n * bits <= 128;
 }
 
 Bool tco_reg_tys(List(Str) ts, Int i) {
@@ -5697,6 +5720,9 @@ Bool is_num(Str t) {
 // ─── Numeric width helpers (spec v3.2 §6.1/§6.1a) ───────────────
 
 // Normalize bare family aliases to explicit widths.
+// Vec(Float(32|64), N).
+Bool vec_float_ty(Str t) { return str_has_prefix(t, "Vec(Float,") || str_has_prefix(t, "Vec(Float(32),") || str_has_prefix(t, "Vec(Float(64),"); }
+
 pub Str num_norm(Str ty) {
     if (ty == "Int") { return "Int(64)"; }
     if (ty == "UInt") { return "UInt(64)"; }
@@ -6427,6 +6453,8 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "sqrt") {
         Str t0 = num_norm(str_trim(argtys));
         if (t0 == "Float" || t0 == "Float(64)") { return ERes {.pos = pos, .ty = "Float", .err = ""}; }
+        // A Float vector, lanewise (spec §46).
+        if (vec_float_ty(t0)) { return ERes {.pos = pos, .ty = str_trim(argtys), .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "sqrt expects (Float), got (" + argtys + ")"};
     }
     if (name == "print_bytes") {
@@ -6776,7 +6804,7 @@ pub Bool is_known_type(Str ty) {
     if (ty == "Bytes") { return true; }
     Bool w = str_has_prefix(ty, "Int(") || str_has_prefix(ty, "UInt(");
     Bool wf = str_has_prefix(ty, "Float(") || str_has_prefix(ty, "Dec(");
-    Bool wl = str_has_prefix(ty, "List(");
+    Bool wl = str_has_prefix(ty, "List(") || str_has_prefix(ty, "Vec(");
     if (w || wf || wl) { return true; }
     return is_fixed_type(ty);
 }

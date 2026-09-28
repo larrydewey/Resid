@@ -15,7 +15,7 @@ inside each sequence:
   254 MB input does not rescan it in every thread.
 
 Compiled with `-O3 -march=native`, like the other languages' best cells
-(Resid has no SIMD types or intrinsics). Output identical to C (official
+(the program uses no vector types). Output identical to C (official
 and small inputs).
 
 Measured on this host (2026-09-27): 0.23 s on the official input (was

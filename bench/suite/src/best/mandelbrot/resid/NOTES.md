@@ -3,11 +3,9 @@
 The st program's algorithm (`../../../st/mandelbrot/resid/`, see its
 NOTES.md for the output workarounds), made data-parallel and parallel:
 
-- **16 pixels in lockstep.** `iterk` iterates 16 pixels of a row as 16
-  independent scalar chains in one tail-recursive loop; clang's SLP
-  vectorizer packs them into AVX-512/AVX2 registers (`-march=native`).
-  Resid has no SIMD types; the program only lays the work out so the
-  vectorizer can find it.
+- **32 pixels in lockstep.** `iterv` iterates 32 pixels of a row as four
+  `Vec(Float, 8)` (spec §46), AVX-512 registers with `-march=native`; the
+  inside/outside byte comes from a lane mask (`bits()`, bit-reversed).
 - **No per-step escape test.** For |c| < 2 an orbit with |z| > 2 grows
   without bound, so "escaped at some step" equals "not |z_50|^2 <= 4"
   (an overflow to inf or NaN compares false), the test of the fastest C
@@ -17,6 +15,6 @@ NOTES.md for the output workarounds), made data-parallel and parallel:
   in waves of 64 concurrent `spawn` regions, started through a recursion
   that waits for each band on the way back so the bands print in order.
 
-Output is byte-identical to the C st program (checked at 17, 203, 1000
-and 16000). Measured on this host (2026-09-27): 0.25 s at 16000 (was
-1.37 s with the scalar per-pixel loop).
+Output is byte-identical to the C st program (checked at 17, 40, 203, 1000
+and 16000). Measured on this host (2026-09-27): 0.18 s at 16000 (0.25 s
+with 16 scalar lanes, 1.37 s with the scalar per-pixel loop).

@@ -1644,6 +1644,9 @@ Bool is_num(Str t) {
 // ─── Numeric width helpers (spec v3.2 §6.1/§6.1a) ───────────────
 
 // Normalize bare family aliases to explicit widths.
+// Vec(Float(32|64), N).
+Bool vec_float_ty(Str t) { return str_has_prefix(t, "Vec(Float,") || str_has_prefix(t, "Vec(Float(32),") || str_has_prefix(t, "Vec(Float(64),"); }
+
 pub Str num_norm(Str ty) {
     if (ty == "Int") { return "Int(64)"; }
     if (ty == "UInt") { return "UInt(64)"; }
@@ -2462,6 +2465,8 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "sqrt") {
         Str t0 = num_norm(str_trim(argtys));
         if (t0 == "Float" || t0 == "Float(64)") { return ERes {.pos = pos, .ty = "Float", .err = ""}; }
+        // A Float vector, lanewise (spec §46).
+        if (vec_float_ty(t0)) { return ERes {.pos = pos, .ty = str_trim(argtys), .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "sqrt expects (Float), got (" + argtys + ")"};
     }
     if (name == "print_bytes") {
@@ -2819,7 +2824,7 @@ pub Bool is_known_type(Str ty) {
     if (ty == "Bytes") { return true; }
     Bool w = str_has_prefix(ty, "Int(") || str_has_prefix(ty, "UInt(");
     Bool wf = str_has_prefix(ty, "Float(") || str_has_prefix(ty, "Dec(");
-    Bool wl = str_has_prefix(ty, "List(");
+    Bool wl = str_has_prefix(ty, "List(") || str_has_prefix(ty, "Vec(");
     if (w || wf || wl) { return true; }
     return is_fixed_type(ty);
 }

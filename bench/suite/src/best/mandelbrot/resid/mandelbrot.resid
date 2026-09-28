@@ -2,9 +2,9 @@
 // https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/mandelbrot.html
 //
 // The st program's iteration (50 steps, escape when Zr^2 + Zi^2 > 4) on 16
-// pixels in lockstep, as 16 independent scalar chains that clang's SLP
-// vectorizer packs into AVX-512 registers (-march=native), with the image
-// cut into horizontal bands computed by concurrent `spawn` regions. The rows are processed in waves of `par`
+// pixels in lockstep, as two Vec(Float, 8) (AVX-512 registers with
+// -march=native), with the image cut into horizontal bands computed by
+// concurrent `spawn` regions. The rows are processed in waves of `par`
 // bands; within a wave, `wave` starts band b's region, recurses to start
 // the others, and waits for its own band on the way back, so every region
 // of the wave runs at once and the bands come back in order.
@@ -31,123 +31,53 @@ ListBuf(Int) row_bytes(Int x, Int w, Float fw, Float ci, Int bits, Int nbits, Li
     return row_bytes(x + 1, w, fw, ci, b2, nbits + 1, acc);
 }
 
-// 16 pixels in lockstep, 50 iterations; the result has bit 15-k set when
-// pixel k is inside. For |c| < 2 an orbit with |z| > 2 grows without
-// bound, so "escaped at some step" equals "not |z_50|^2 <= 4" (overflow
-// to inf or NaN included), as in the fastest C programs; every 5 steps
-// (c counts down) the block stops early once all 16 have escaped.
-Int iterk(Int i, Int c, Float ci, Float cr0, Float cr1, Float cr2, Float cr3, Float cr4, Float cr5, Float cr6, Float cr7, Float cr8, Float cr9, Float cr10, Float cr11, Float cr12, Float cr13, Float cr14, Float cr15, Float zr0, Float zr1, Float zr2, Float zr3, Float zr4, Float zr5, Float zr6, Float zr7, Float zr8, Float zr9, Float zr10, Float zr11, Float zr12, Float zr13, Float zr14, Float zr15, Float zi0, Float zi1, Float zi2, Float zi3, Float zi4, Float zi5, Float zi6, Float zi7, Float zi8, Float zi9, Float zi10, Float zi11, Float zi12, Float zi13, Float zi14, Float zi15) {
-    Float tr0 = zr0 * zr0;
-    Float ti0 = zi0 * zi0;
-    Float tr1 = zr1 * zr1;
-    Float ti1 = zi1 * zi1;
-    Float tr2 = zr2 * zr2;
-    Float ti2 = zi2 * zi2;
-    Float tr3 = zr3 * zr3;
-    Float ti3 = zi3 * zi3;
-    Float tr4 = zr4 * zr4;
-    Float ti4 = zi4 * zi4;
-    Float tr5 = zr5 * zr5;
-    Float ti5 = zi5 * zi5;
-    Float tr6 = zr6 * zr6;
-    Float ti6 = zi6 * zi6;
-    Float tr7 = zr7 * zr7;
-    Float ti7 = zi7 * zi7;
-    Float tr8 = zr8 * zr8;
-    Float ti8 = zi8 * zi8;
-    Float tr9 = zr9 * zr9;
-    Float ti9 = zi9 * zi9;
-    Float tr10 = zr10 * zr10;
-    Float ti10 = zi10 * zi10;
-    Float tr11 = zr11 * zr11;
-    Float ti11 = zi11 * zi11;
-    Float tr12 = zr12 * zr12;
-    Float ti12 = zi12 * zi12;
-    Float tr13 = zr13 * zr13;
-    Float ti13 = zi13 * zi13;
-    Float tr14 = zr14 * zr14;
-    Float ti14 = zi14 * zi14;
-    Float tr15 = zr15 * zr15;
-    Float ti15 = zi15 * zi15;
-    if (i == 50) {
-        Int o0 = if (tr0 + ti0 <= 4.0) { 32768 } else { 0 };
-        Int o1 = if (tr1 + ti1 <= 4.0) { 16384 } else { 0 };
-        Int o2 = if (tr2 + ti2 <= 4.0) { 8192 } else { 0 };
-        Int o3 = if (tr3 + ti3 <= 4.0) { 4096 } else { 0 };
-        Int o4 = if (tr4 + ti4 <= 4.0) { 2048 } else { 0 };
-        Int o5 = if (tr5 + ti5 <= 4.0) { 1024 } else { 0 };
-        Int o6 = if (tr6 + ti6 <= 4.0) { 512 } else { 0 };
-        Int o7 = if (tr7 + ti7 <= 4.0) { 256 } else { 0 };
-        Int o8 = if (tr8 + ti8 <= 4.0) { 128 } else { 0 };
-        Int o9 = if (tr9 + ti9 <= 4.0) { 64 } else { 0 };
-        Int o10 = if (tr10 + ti10 <= 4.0) { 32 } else { 0 };
-        Int o11 = if (tr11 + ti11 <= 4.0) { 16 } else { 0 };
-        Int o12 = if (tr12 + ti12 <= 4.0) { 8 } else { 0 };
-        Int o13 = if (tr13 + ti13 <= 4.0) { 4 } else { 0 };
-        Int o14 = if (tr14 + ti14 <= 4.0) { 2 } else { 0 };
-        Int o15 = if (tr15 + ti15 <= 4.0) { 1 } else { 0 };
-        return o0 | o1 | o2 | o3 | o4 | o5 | o6 | o7 | o8 | o9 | o10 | o11 | o12 | o13 | o14 | o15;
-    }
+// 32 pixels in lockstep as four Vec(Float, 8), 50 iterations. For |c| < 2
+// an orbit with |z| > 2 grows without bound, so "escaped at some step"
+// equals "not |z_50|^2 <= 4" (overflow to inf or NaN included), as in the
+// fastest C programs; every 5 steps (c counts down) the block stops early
+// once all 32 have escaped. The result has bit 31-k set when pixel k is
+// inside.
+Int iterv(Int i, Int c, Float ci, Vec(Float, 8) cr0, Vec(Float, 8) cr1, Vec(Float, 8) cr2, Vec(Float, 8) cr3, Vec(Float, 8) zr0, Vec(Float, 8) zi0, Vec(Float, 8) zr1, Vec(Float, 8) zi1, Vec(Float, 8) zr2, Vec(Float, 8) zi2, Vec(Float, 8) zr3, Vec(Float, 8) zi3) {
+    Vec(Float, 8) tr0 = zr0 * zr0;
+    Vec(Float, 8) ti0 = zi0 * zi0;
+    Vec(Float, 8) tr1 = zr1 * zr1;
+    Vec(Float, 8) ti1 = zi1 * zi1;
+    Vec(Float, 8) tr2 = zr2 * zr2;
+    Vec(Float, 8) ti2 = zi2 * zi2;
+    Vec(Float, 8) tr3 = zr3 * zr3;
+    Vec(Float, 8) ti3 = zi3 * zi3;
+    if (i == 50) { return (byte_of(tr0 + ti0 <= 4.0) << 24) | (byte_of(tr1 + ti1 <= 4.0) << 16) | (byte_of(tr2 + ti2 <= 4.0) << 8) | (byte_of(tr3 + ti3 <= 4.0) << 0); }
     if (c == 0) {
-        Int q0 = if (tr0 + ti0 > 4.0) { 1 } else { 0 };
-        Int q1 = if (tr1 + ti1 > 4.0) { 1 } else { 0 };
-        Int q2 = if (tr2 + ti2 > 4.0) { 1 } else { 0 };
-        Int q3 = if (tr3 + ti3 > 4.0) { 1 } else { 0 };
-        Int q4 = if (tr4 + ti4 > 4.0) { 1 } else { 0 };
-        Int q5 = if (tr5 + ti5 > 4.0) { 1 } else { 0 };
-        Int q6 = if (tr6 + ti6 > 4.0) { 1 } else { 0 };
-        Int q7 = if (tr7 + ti7 > 4.0) { 1 } else { 0 };
-        Int q8 = if (tr8 + ti8 > 4.0) { 1 } else { 0 };
-        Int q9 = if (tr9 + ti9 > 4.0) { 1 } else { 0 };
-        Int q10 = if (tr10 + ti10 > 4.0) { 1 } else { 0 };
-        Int q11 = if (tr11 + ti11 > 4.0) { 1 } else { 0 };
-        Int q12 = if (tr12 + ti12 > 4.0) { 1 } else { 0 };
-        Int q13 = if (tr13 + ti13 > 4.0) { 1 } else { 0 };
-        Int q14 = if (tr14 + ti14 > 4.0) { 1 } else { 0 };
-        Int q15 = if (tr15 + ti15 > 4.0) { 1 } else { 0 };
-        if (q0 + q1 + q2 + q3 + q4 + q5 + q6 + q7 + q8 + q9 + q10 + q11 + q12 + q13 + q14 + q15 == 16) { return 0; }
+        if ((tr0 + ti0 > 4.0).all() && (tr1 + ti1 > 4.0).all() && (tr2 + ti2 > 4.0).all() && (tr3 + ti3 > 4.0).all()) { return 0; }
     }
-    Float nzi0 = 2.0 * zr0 * zi0 + ci;
-    Float nzr0 = tr0 - ti0 + cr0;
-    Float nzi1 = 2.0 * zr1 * zi1 + ci;
-    Float nzr1 = tr1 - ti1 + cr1;
-    Float nzi2 = 2.0 * zr2 * zi2 + ci;
-    Float nzr2 = tr2 - ti2 + cr2;
-    Float nzi3 = 2.0 * zr3 * zi3 + ci;
-    Float nzr3 = tr3 - ti3 + cr3;
-    Float nzi4 = 2.0 * zr4 * zi4 + ci;
-    Float nzr4 = tr4 - ti4 + cr4;
-    Float nzi5 = 2.0 * zr5 * zi5 + ci;
-    Float nzr5 = tr5 - ti5 + cr5;
-    Float nzi6 = 2.0 * zr6 * zi6 + ci;
-    Float nzr6 = tr6 - ti6 + cr6;
-    Float nzi7 = 2.0 * zr7 * zi7 + ci;
-    Float nzr7 = tr7 - ti7 + cr7;
-    Float nzi8 = 2.0 * zr8 * zi8 + ci;
-    Float nzr8 = tr8 - ti8 + cr8;
-    Float nzi9 = 2.0 * zr9 * zi9 + ci;
-    Float nzr9 = tr9 - ti9 + cr9;
-    Float nzi10 = 2.0 * zr10 * zi10 + ci;
-    Float nzr10 = tr10 - ti10 + cr10;
-    Float nzi11 = 2.0 * zr11 * zi11 + ci;
-    Float nzr11 = tr11 - ti11 + cr11;
-    Float nzi12 = 2.0 * zr12 * zi12 + ci;
-    Float nzr12 = tr12 - ti12 + cr12;
-    Float nzi13 = 2.0 * zr13 * zi13 + ci;
-    Float nzr13 = tr13 - ti13 + cr13;
-    Float nzi14 = 2.0 * zr14 * zi14 + ci;
-    Float nzr14 = tr14 - ti14 + cr14;
-    Float nzi15 = 2.0 * zr15 * zi15 + ci;
-    Float nzr15 = tr15 - ti15 + cr15;
-    return iterk(i + 1, if (c == 0) { 4 } else { c - 1 }, ci, cr0, cr1, cr2, cr3, cr4, cr5, cr6, cr7, cr8, cr9, cr10, cr11, cr12, cr13, cr14, cr15, nzr0, nzr1, nzr2, nzr3, nzr4, nzr5, nzr6, nzr7, nzr8, nzr9, nzr10, nzr11, nzr12, nzr13, nzr14, nzr15, nzi0, nzi1, nzi2, nzi3, nzi4, nzi5, nzi6, nzi7, nzi8, nzi9, nzi10, nzi11, nzi12, nzi13, nzi14, nzi15);
+    Vec(Float, 8) nzi0 = zr0 * zi0 * 2.0 + ci;
+    Vec(Float, 8) nzr0 = tr0 - ti0 + cr0;
+    Vec(Float, 8) nzi1 = zr1 * zi1 * 2.0 + ci;
+    Vec(Float, 8) nzr1 = tr1 - ti1 + cr1;
+    Vec(Float, 8) nzi2 = zr2 * zi2 * 2.0 + ci;
+    Vec(Float, 8) nzr2 = tr2 - ti2 + cr2;
+    Vec(Float, 8) nzi3 = zr3 * zi3 * 2.0 + ci;
+    Vec(Float, 8) nzr3 = tr3 - ti3 + cr3;
+    return iterv(i + 1, if (c == 0) { 4 } else { c - 1 }, ci, cr0, cr1, cr2, cr3, nzr0, nzi0, nzr1, nzi1, nzr2, nzi2, nzr3, nzi3);
 }
 
-// Row bytes: 16 pixels at a time, then the short tail pixel by pixel as in
+// Lane k of m at bit 7-k (pixel order in the output byte): the lane bits
+// reversed by the multiply-and-mask trick.
+Int byte_of(Vec(Bool, 8) m) { return ((m.bits() * 8623620610) & 1136090292240) % 1023; }
+
+// cr for pixels x .. x + 7.
+Vec(Float, 8) crs(Int x, Float fw) {
+    Vec(Float, 8) k = lanes();
+    return (k + (Float)x) * 2.0 / fw - 1.5;
+}
+
+// Row bytes: 32 pixels at a time, then the short tail pixel by pixel as in
 // the st program.
 ListBuf(Int) row_bytesk(Int x, Int w, Float fw, Float ci, ListBuf(Int) acc) {
-    if (x + 16 > w) { return row_bytes(x, w, fw, ci, 0, 0, acc); }
-    Int e = iterk(0, 0, ci, 2.0 * (Float)(x + 0) / fw - 1.5, 2.0 * (Float)(x + 1) / fw - 1.5, 2.0 * (Float)(x + 2) / fw - 1.5, 2.0 * (Float)(x + 3) / fw - 1.5, 2.0 * (Float)(x + 4) / fw - 1.5, 2.0 * (Float)(x + 5) / fw - 1.5, 2.0 * (Float)(x + 6) / fw - 1.5, 2.0 * (Float)(x + 7) / fw - 1.5, 2.0 * (Float)(x + 8) / fw - 1.5, 2.0 * (Float)(x + 9) / fw - 1.5, 2.0 * (Float)(x + 10) / fw - 1.5, 2.0 * (Float)(x + 11) / fw - 1.5, 2.0 * (Float)(x + 12) / fw - 1.5, 2.0 * (Float)(x + 13) / fw - 1.5, 2.0 * (Float)(x + 14) / fw - 1.5, 2.0 * (Float)(x + 15) / fw - 1.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-    return row_bytesk(x + 16, w, fw, ci, acc.push((e >> 8) & 255).push((e >> 0) & 255));
+    if (x + 32 > w) { return row_bytes(x, w, fw, ci, 0, 0, acc); }
+    Vec(Float, 8) z = splat(0.0);
+    Int e = iterv(0, 0, ci, crs(x, fw), crs(x + 8, fw), crs(x + 16, fw), crs(x + 24, fw), z, z, z, z, z, z, z, z);
+    return row_bytesk(x + 32, w, fw, ci, acc.push((e >> 24) & 255).push((e >> 16) & 255).push((e >> 8) & 255).push(e & 255));
 }
 
 // Rows y .. y1 - 1, appended.

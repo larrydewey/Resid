@@ -79,6 +79,7 @@ export default defineConfig({
 							'reference/concurrency',
 							'reference/fixed-capacity',
 							'reference/builders',
+							'reference/vectors',
 							'reference/reduction',
 							'reference/knowledge-graph',
 							'reference/provenance',

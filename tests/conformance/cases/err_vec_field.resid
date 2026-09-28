@@ -1,0 +1,2 @@
+type Pair2 = { Vec(Float, 2) v; };
+Int main() { return 0; }

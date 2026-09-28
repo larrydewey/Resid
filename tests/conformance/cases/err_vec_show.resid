@@ -1,0 +1,5 @@
+Int main() {
+    Vec(Float, 2) v = splat(1.0);
+    println(f"{v}");
+    return 0;
+}

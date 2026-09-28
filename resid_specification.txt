@@ -539,8 +539,9 @@ abs(x), min(a, b), max(a, b) and clamp(x, lo, hi) take
 arguments of one numeric type and return that type; abs
 of the most negative integer traps like any overflow.
 
-sqrt(x) takes a Float and returns its correctly rounded
-IEEE 754 square root (sqrt of a negative number is NaN).
+sqrt(x) takes a Float (or a Float vector, lanewise, §46)
+and returns its correctly rounded IEEE 754 square root (sqrt
+of a negative number is NaN).
 
 Wrapping conversions keep the low bits of the two's-
 complement representation, for bit-level code:
@@ -1892,6 +1893,12 @@ is what makes the in-place append unobservable.
     artifact's knowledge states, effect names and derive
     rules, and the `resid_graph_hash` global (§33).
 
+v3.7: vector types (§46). Vec(T, N) holds N lanes of a
+numeric width in registers, with lanewise arithmetic,
+comparisons to lane masks Vec(Bool, N), select, shuffles and
+lane-order reductions. The builtin sqrt (§6.7) also takes a
+Float vector.
+
 
 ==================================================
 42. NUMERIC INTEROPERABILITY SUMMARY
@@ -2127,6 +2134,70 @@ consume a builder bound outside it.
 
 A builder that is only passed along (`return b;`, or an
 argument to a function taking a builder) counts as one use.
+
+==================================================
+46. VECTOR TYPES
+==================================================
+
+  Vec(T, N)      N lanes of T, held in registers
+
+T is an Int, UInt or Float width of at most 64 bits (Int,
+Int(8) … Int(64), UInt …, Float(32), Float), and N is 2, 4,
+8, 16, 32 or 64 (E0410). A comparison yields a lane mask
+Vec(Bool, N). A vector is a value like a number: it is
+immutable and never shared, and it has no heap part.
+
+  Vec(Float, 4) v = [1.0, 2.0, 3.0, 4.0];   // exactly N
+  Vec(Float, 4) h = splat(0.5);             // every lane
+  Vec(Int(32), 8) k = lanes();              // 0, 1, .., 7
+  Vec(Float, 4) w = v * 2.0 + h;            // lanewise
+  Vec(Bool, 4) m = w > 4.0;                 // lane mask
+  Float s = select(m, w, h).sum();          // 20.0
+
+A list literal of exactly N elements, splat(x) and lanes()
+build a vector; they take its type from the slot they are
+written in: a binding's value, a return value or an argument
+of a user function (and select's operands). Anywhere else
+the vector is bound first (E0412). Numeric literals adopt
+the lane type, and must fit it.
+
+--------------------------------------------------
+46.1  Operations
+--------------------------------------------------
+
+  a + b, a - b, a * b    lanewise; a / b for Float lanes
+  a & b, a | b, a ^ b    integer lanes and masks
+  ==, !=, <, <=, >, >=   lanewise, a Vec(Bool, N)
+  -v, ~v (integers), !m (masks)
+  v[i]                   lane i, checked like a list index
+  v.with(i, x)           v with lane i replaced (checked)
+  v.sum()                lanes added in lane order
+  v.shuffle(idx)         lane j is v[idx[j] mod N]
+  v.wrapping_add(w), wrapping_sub, wrapping_mul
+                         integer lanes, wrapping (two's
+                         complement)
+  m.any(), m.all()       some lane / every lane is true
+  m.bits()               an Int with bit i = lane i
+  select(m, a, b)        a where m is true, else b
+  sqrt(v), min(a, b), max(a, b)
+                         lanewise (min is a < b ? a : b)
+  v.to_list()            the lanes as a List(T)
+  (Vec(U, N))v           Int or UInt to Float, Float to
+                         Float, or a widening integer
+                         conversion (never fails)
+
+The two operands of a binary operator have the same vector
+type, or one is a scalar of its lane type (broadcast to
+every lane). Integer lanes are checked like integers
+(§6.4): +, - and * abort on overflow in any lane; the
+wrapping_* methods wrap instead. Integer division is not
+defined on vectors. A Float sum adds from lane 0 upward
+(-0.0 + v[0] + v[1] + …), so it rounds like the scalar loop
+it replaces; an integer sum is checked.
+
+A vector cannot appear inside another type: a List, Map,
+Option, Result, struct field or closure type (E0411). An
+f-string does not show one directly; interpolate v.to_list().
 
 ==================================================
 END OF DOCUMENT

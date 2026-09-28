@@ -1,0 +1,4 @@
+Int main() {
+    List(Vec(Float, 2)) v = [];
+    return 0;
+}

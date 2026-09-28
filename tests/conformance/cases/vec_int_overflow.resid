@@ -1,0 +1,9 @@
+// Integer lanes are checked like scalars: one lane overflowing traps.
+Int main() {
+    Vec(Int(8), 4) a = [100, 20, 30, 40];
+    Vec(Int(8), 4) b = a + 27;
+    println(f"{b.to_list()}");
+    Vec(Int(8), 4) c = b + a;
+    println(f"{c.to_list()}");
+    return 0;
+}

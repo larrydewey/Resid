@@ -1,0 +1,4 @@
+Int main() {
+    Vec(Str, 4) v = splat("a");
+    return 0;
+}

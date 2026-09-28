@@ -1,6 +1,8 @@
 // The Computer Language Benchmarks Game: fannkuch-redux, parallel: the
 // n * (n-1) blocks of (n-2)! permutations (one per pair of top-level
-// rotations) run on concurrent spawn regions; the rest is the st program.
+// rotations) run on concurrent spawn regions. Within a block the
+// permutation is a Vec(Int(8), 16), so each flip and each rotation is one
+// byte shuffle (pshufb); the count[] rotation scheme is the st program's.
 // The Computer Language Benchmarks Game: fannkuch-redux.
 // https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/fannkuchredux.html
 //
@@ -73,17 +75,48 @@ Int identity(Int i, Int n, Int acc) {
 // next permutation. `r` is the rotation level, `pc` the permutation index
 // within the block; the block ends when the rotation reaches level `stop`.
 // Returns checksum * 256 + maxflips, packed.
-Int run(Int n, Int stop, Int perm1, Int count, Int r, Int pc, Int checksum, Int maxflips) {
+// ─── The permutation as a vector (spec §46) ────────────────────────────
+// Lanes 0 .. n-1 hold the permutation (16 x Int(8), one SSE register);
+// a flip or a rotation is one byte shuffle.
+
+// Reverse lanes 0 .. k (a pancake flip of the first k + 1 elements).
+Vec(Int(8), 16) flip(Vec(Int(8), 16) p, Int k) {
+    Vec(Int(8), 16) l = lanes();
+    Vec(Int(8), 16) kk = splat(i8(k));
+    return p.shuffle(select(l <= kk, kk.wrapping_sub(l), l));
+}
+
+Int count_flips_v(Vec(Int(8), 16) p, Int flips) {
+    Int k = (Int)p[0];
+    if (k == 0) { return flips; }
+    return count_flips_v(flip(p, k), flips + 1);
+}
+
+// Rotate lanes 0 .. r left by one: element 0 moves to position r.
+Vec(Int(8), 16) rotate_v(Vec(Int(8), 16) p, Int r) {
+    Vec(Int(8), 16) l = lanes();
+    Vec(Int(8), 16) rr = splat(i8(r));
+    Vec(Int(8), 16) zero = splat(0);
+    return p.shuffle(select(l < rr, l.wrapping_add(1), select(l == rr, zero, l)));
+}
+
+// The nibble-packed permutation p as a vector.
+Vec(Int(8), 16) vec_of(Int p, Int i, Vec(Int(8), 16) acc) {
+    if (i >= 16) { return acc; }
+    return vec_of(p, i + 1, acc.with(i, i8(nib_get(p, i))));
+}
+
+Int run(Int n, Int stop, Vec(Int(8), 16) perm1, Int count, Int r, Int pc, Int checksum, Int maxflips) {
     Int count1 = fill_count(count, r);
-    Int flips = count_flips(perm1, 0);
+    Int flips = count_flips_v(perm1, 0);
     Int maxf2 = if (flips > maxflips) { flips } else { maxflips };
     Int cs2 = if (pc % 2 == 0) { checksum + flips } else { checksum - flips };
     return next_perm(n, stop, perm1, count1, 1, pc, cs2, maxf2);
 }
 
-Int next_perm(Int n, Int stop, Int perm1, Int count, Int r, Int pc, Int checksum, Int maxflips) {
+Int next_perm(Int n, Int stop, Vec(Int(8), 16) perm1, Int count, Int r, Int pc, Int checksum, Int maxflips) {
     if (r == stop) { return checksum * 256 + maxflips; }
-    Int p2 = rotate_prefix(perm1, r);
+    Vec(Int(8), 16) p2 = rotate_v(perm1, r);
     Int cr = nib_get(count, r) - 1;
     Int c2 = nib_set(count, r, cr);
     if (cr > 0) { return run(n, stop, p2, c2, r, pc + 1, checksum, maxflips); }
@@ -96,13 +129,12 @@ Int rotations(Int p, Int k, Int n) {
     return rotations(rotate_prefix(p, n - 1), k - 1, n);
 }
 
-// Block k: the (n-1)! permutations after k top-level rotations. (n-1)! is
-// even, so a block's local index parity is its global one.
 // Block (k1, k2): the first n rotated k1 times, then the first n - 1
 // rotated k2 times; its (n - 2)! permutations follow from there.
 Int block(Int n, Int k1, Int k2) {
     Int p = rotations2(rotations(identity(0, n, 0), k1, n), k2, n - 1);
-    return run(n, n - 2, p, 0, n - 2, 0, 0, 0);
+    Vec(Int(8), 16) z = splat(0);
+    return run(n, n - 2, vec_of(p, 0, z), 0, n - 2, 0, 0, 0);
 }
 
 Int rotations2(Int p, Int k, Int m) {
@@ -126,7 +158,10 @@ Int blocks(Int n, Int b, Int nb) {
 }
 
 // Small n: one block (the single-threaded walk).
-Int whole(Int n) { return run(n, n, identity(0, n, 0), 0, n, 0, 0, 0); }
+Int whole(Int n) {
+    Vec(Int(8), 16) z = splat(0);
+    return run(n, n, vec_of(identity(0, n, 0), 0, z), 0, n, 0, 0, 0);
+}
 
 @requires(args)
 Int main() {

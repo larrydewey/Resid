@@ -31,6 +31,9 @@ own), with the offending source line.
 | `E0402` | a builder is used twice |
 | `E0403` | a builder is used inside a loop or lambda it was not created in |
 | `E0404` | a builder type nested inside another type |
+| `E0410` | a vector's lane type or lane count is not allowed |
+| `E0411` | a vector type nested inside another type |
+| `E0412` | a vector literal, `splat` or `lanes` without a vector slot to take its type from |
 | `E0901` | `known(x)` on a residual value |
 
 Runtime failures (overflow, division by zero, index out of range, a failed

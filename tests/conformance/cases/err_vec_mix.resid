@@ -1,0 +1,6 @@
+Int main() {
+    Vec(Float, 2) v = splat(1.0);
+    Vec(Float, 4) w = splat(1.0);
+    Vec(Float, 2) x = v + w;
+    return 0;
+}

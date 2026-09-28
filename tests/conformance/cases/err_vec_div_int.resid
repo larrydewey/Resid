@@ -1,0 +1,5 @@
+Int main() {
+    Vec(Int, 2) v = splat(4);
+    Vec(Int, 2) w = v / v;
+    return 0;
+}

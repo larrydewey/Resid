@@ -588,6 +588,14 @@ GT lw_list_method(LW w, Int id, GT base, Str m, List(Str) env) {
 // expressions they stand for (checked arithmetic included).
 GT lw_minmax(LW w, Int id, Str n, List(Str) env, GT c) {
     Int na = w.g.ns[id].nk;
+    // Vectors (spec §46): the operands are values, so lowering the first
+    // to learn its type and discarding it otherwise is not observable.
+    GT va = if (na == 2 && n != "abs") { lw_expr(w, lw_kid(w, id, 0), env, c) } else { c };
+    if (na == 2 && n != "abs" && va.err == "" && lv_is(va.ty)) {
+        GT vb = lw_expr_as(w, lw_kid(w, id, 1), va.ty, env, va);
+        if (vb.err != "") { return vb; }
+        return lv_minmax(n, va, vb);
+    }
     Int want = if (n == "abs") { 1 } else { if (n == "clamp") { 3 } else { 2 } };
     if (na != want) { return lw_gerr(n + " arity", c); }
     List(Str) none = [];
@@ -746,6 +754,7 @@ GT lw_cast(LW w, Int id, List(Str) env, GT c) {
     Str to = lw_text(w, lw_kid(w, id, 0));
     GT inner = lw_expr(w, lw_kid(w, id, 1), env, c);
     if (inner.err != "") { return inner; }
+    if (lv_is(to)) { return lv_cast(inner, to); }
     if (is_dec_cg(to) || is_dec_cg(inner.ty)) { return widen_val(inner, to); }
     if (is_fixed_type(to) || is_fixed_type(inner.ty)) {
         GT fx = cg_cast_fixed(inner, to, c);
@@ -818,6 +827,7 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     Funcs fs = w.fs;
     if (is_list_fixed(base.ty) && m == "len") { return lw_step(base, f"{fixed_cap(base.ty)}", "Int", base.lines, base.tmp); }
     if (base.ty == "StrBuf" || str_has_prefix_cg(base.ty, "ListBuf(")) { return lw_builder(w, id, base, m, env); }
+    if (lv_is(base.ty)) { return lv_method(w, id, base, m, env); }
     if (is_map_type_cg(base.ty)) { return lw_map_method(w, id, base, m, env); }
     if (is_set_type_cg(base.ty)) { return lw_set_method(w, id, base, m, env); }
     if (m == "len" && base.ty == "Bytes") { return lw_rt1(base, "i64", "@resid_bytes_len(ptr " + base.val + ")", "Int"); }
@@ -969,6 +979,368 @@ GT lw_list_push(LW w, Int id, GT base, GT ka, Int cv, Int sid, Str kt, Str vt, B
     Str r = f"%t{t}";
     Str own = if (owned) { "1" } else { "0" };
     return lw_step(d, r, base.ty, d.lines.concat([r + " = call ptr @resid_map_list_push(ptr " + base.val + ", i8 " + own + f", i8 {kk}, i64 " + kw.val + ", ptr " + bx + ", ptr " + d.val + ")"]), t);
+}
+
+// ─── Vectors (spec §46) ─────────────────────────────────────────────
+// Vec(T, N) is <N x T> in registers; masks are <N x i1>. Integer lanes
+// are checked like scalars: one overflow test per vector operation.
+
+Bool lv_is(Str t) { return str_has_prefix_cg(t, "Vec("); }
+Str lv_elem(Str t) { return str_trim(str_slice(t, 4, str_find_char(t, 44, 4))); }
+Int lv_lanes(Str t) { return str_parse_int(str_trim(str_slice(t, str_find_char(t, 44, 4) + 1, str_len(t) - 1))); }
+Str lv_ell(Str t) { return ll_ty(lv_elem(t)); }
+Bool lv_flt(Str t) { return is_float_cg(lv_elem(t)); }
+Bool lv_mask(Str t) { return lv_elem(t) == "Bool"; }
+Bool lv_signed(Str t) { return ll_is_signed(num_norm_cg(lv_elem(t))); }
+
+// The intrinsic suffix: v4f64, v16i8, v8i1.
+Str lv_sfx(Str t) {
+    Str e = lv_ell(t);
+    Str s = if (e == "double") { "f64" } else { if (e == "float") { "f32" } else { e } };
+    return f"v{lv_lanes(t)}" + s;
+}
+
+// A module-level declaration, once per module (rtg_dedupe).
+List(Str) lv_decl(List(Str) gl, Str name, Str decl) { return gl.concat(["@rtg.cmpdef." + name + " " + decl]); }
+
+// The value of `id` for a slot of type `want`: vector literals, splat(x)
+// and lanes() take their vector type from it.
+GT lw_expr_as(LW w, Int id, Str want, List(Str) env, GT c) {
+    if (!lv_is(want)) { return lw_expr(w, id, env, c); }
+    Str k = lw_kind(w, id);
+    Str n = lw_text(w, id);
+    Bool builtin = k == "call" && fn_index(w.fs, n) < 0;
+    if (k == "list") { return lv_lit(w, id, want, 0, "poison", env, c); }
+    if (builtin && n == "splat") { return lv_splat_of(w, id, want, env, c); }
+    if (builtin && n == "lanes") { return lv_lanes_of(want, c); }
+    if (builtin && n == "select") { return lv_select(w, id, want, env, c); }
+    return lw_expr(w, id, env, c);
+}
+
+// A scalar as the lane type of vt.
+GT lv_lane_val(GT s, Str vt) {
+    Str e = lv_elem(vt);
+    if (e == "Bool" || num_norm_cg(s.ty) == num_norm_cg(e)) { return s; }
+    return widen_val(s, e);
+}
+
+GT lv_lit(LW w, Int id, Str vt, Int i, Str prev, List(Str) env, GT c) {
+    if (i >= w.g.ns[id].nk) { return lw_step(c, prev, vt, c.lines, c.tmp); }
+    GT e0 = lw_expr(w, lw_kid(w, id, i), env, c);
+    if (e0.err != "") { return e0; }
+    GT e = lv_lane_val(e0, vt);
+    Int t = e.tmp + 1;
+    Str reg = f"%t{t}";
+    List(Str) ls = e.lines.concat([reg + " = insertelement " + ll_ty(vt) + " " + prev + ", " + lv_ell(vt) + " " + e.val + f", i64 {i}"]);
+    return lv_lit(w, id, vt, i + 1, reg, env, lw_step(e, reg, vt, ls, t));
+}
+
+// Scalar s (already of the lane type) in every lane, as reg.
+List(Str) lv_splat_lines(Str reg, Str vt, Str sval) {
+    Str v = ll_ty(vt);
+    return [reg + "i = insertelement " + v + " poison, " + lv_ell(vt) + " " + sval + ", i64 0", reg + " = shufflevector " + v + " " + reg + "i, " + v + f" poison, <{lv_lanes(vt)} x i32> zeroinitializer"];
+}
+
+GT lv_splat_val(GT s0, Str vt) {
+    GT s = lv_lane_val(s0, vt);
+    Int t = s.tmp + 1;
+    Str reg = f"%t{t}";
+    return lw_step(s, reg, vt, s.lines.concat(lv_splat_lines(reg, vt, s.val)), t);
+}
+
+GT lv_splat_of(LW w, Int id, Str vt, List(Str) env, GT c) {
+    GT x = lw_expr(w, lw_kid(w, id, 0), env, c);
+    if (x.err != "") { return x; }
+    return lv_splat_val(x, vt);
+}
+
+Str lv_consts(Str vt, Int i, Str acc) {
+    if (i >= lv_lanes(vt)) { return acc; }
+    Str e = lv_ell(vt);
+    Str v = if (lv_flt(vt)) { f"{i}.0" } else { f"{i}" };
+    return lv_consts(vt, i + 1, acc + (if (i > 0) { ", " } else { "" }) + e + " " + v);
+}
+
+// <0, 1, .., N-1>.
+GT lv_lanes_of(Str vt, GT c) {
+    Int t = c.tmp + 1;
+    Str reg = f"%t{t}";
+    Str v = ll_ty(vt);
+    return lw_step(c, reg, vt, c.lines.concat([reg + " = bitcast " + v + " <" + lv_consts(vt, 0, "") + "> to " + v]), t);
+}
+
+Bool lv_ctor(LW w, Int id) {
+    Str k = lw_kind(w, id);
+    Str n = lw_text(w, id);
+    return k == "list" || (k == "call" && fn_index(w.fs, n) < 0 && (n == "splat" || n == "lanes"));
+}
+
+// select(m, a, b): a or b per lane; a context-typed operand takes the
+// other's type (or the slot's).
+GT lv_select(LW w, Int id, Str want, List(Str) env, GT c) {
+    GT m = lw_expr(w, lw_kid(w, id, 0), env, c);
+    if (m.err != "") { return m; }
+    Int an = lw_kid(w, id, 1);
+    Int bn = lw_kid(w, id, 2);
+    Bool actor = lv_ctor(w, an);
+    // The operand that knows its type goes first (its code first too:
+    // both are values, so the order is not observable).
+    GT first = if (actor && !lv_ctor(w, bn)) { lw_expr(w, bn, env, m) } else { lw_expr_as(w, an, want, env, m) };
+    if (first.err != "") { return first; }
+    Str vt = if (lv_is(first.ty)) { first.ty } else { want };
+    GT second = if (actor && !lv_ctor(w, bn)) { lw_expr_as(w, an, vt, env, first) } else { lw_expr_as(w, bn, vt, env, first) };
+    if (second.err != "") { return second; }
+    Str av = if (actor && !lv_ctor(w, bn)) { second.val } else { first.val };
+    Str bv = if (actor && !lv_ctor(w, bn)) { first.val } else { second.val };
+    Int t = second.tmp + 1;
+    Str reg = f"%t{t}";
+    Str v = ll_ty(vt);
+    return lw_step(second, reg, vt, second.lines.concat([reg + " = select " + ll_ty(m.ty) + " " + m.val + ", " + v + " " + av + ", " + v + " " + bv]), t);
+}
+
+// An overflow flag vector reduced and checked (skipped in the runtime,
+// which wraps like C).
+List(Str) lv_ovf_check(Str reg, Str vt, Str flags) {
+    Int n = lv_lanes(vt);
+    return [reg + "o = call i1 @llvm.vector.reduce.or.v" + f"{n}" + "i1(<" + f"{n}" + " x i1> " + flags + ")", reg + "z = zext i1 " + reg + "o to i8", "call void @resid_overflow_check(i8 " + reg + "z)"];
+}
+
+List(Str) lv_ovf_decls(List(Str) gl, Str vt, Str fam) {
+    Str v = ll_ty(vt);
+    Int n = lv_lanes(vt);
+    Str mk = f"<{n} x i1>";
+    List(Str) g1 = lv_decl(gl, "llvm." + fam + ".with.overflow." + lv_sfx(vt), "declare {" + v + ", " + mk + "} @llvm." + fam + ".with.overflow." + lv_sfx(vt) + "(" + v + ", " + v + ")");
+    return lv_decl(g1, f"llvm.vector.reduce.or.v{n}i1", f"declare i1 @llvm.vector.reduce.or.v{n}i1(" + mk + ")");
+}
+
+// l op r with at least one vector operand (the other a scalar of its lane
+// type, broadcast).
+GT lv_bin(Str op, GT l0, GT r0) {
+    Str vt = if (lv_is(l0.ty)) { l0.ty } else { r0.ty };
+    // r0 carries l0's code too: both operands are values in its context.
+    GT l = if (lv_is(l0.ty)) { lw_step(r0, l0.val, l0.ty, r0.lines, r0.tmp) } else { lv_splat_val(lw_step(r0, l0.val, l0.ty, r0.lines, r0.tmp), vt) };
+    GT r = if (lv_is(r0.ty)) { lw_step(l, r0.val, r0.ty, l.lines, l.tmp) } else { lv_splat_val(lw_step(l, r0.val, r0.ty, l.lines, l.tmp), vt) };
+    Int t = r.tmp + 1;
+    Str reg = f"%t{t}";
+    Str v = ll_ty(vt);
+    Str a = l.val;
+    Str b = r.val;
+    Bool cmp = op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=";
+    Str mt = "Vec(Bool, " + f"{lv_lanes(vt)})";
+    if (cmp && lv_flt(vt)) { return lw_step(r, reg, mt, r.lines.concat([reg + " = fcmp " + fcmp_cc(op) + " " + v + " " + a + ", " + b]), t); }
+    if (cmp) {
+        Bool s = lv_signed(vt);
+        Str cc = if (op == "==") { "eq" } else { if (op == "!=") { "ne" } else { (if (s) { "s" } else { "u" }) + (if (op == "<") { "lt" } else { if (op == "<=") { "le" } else { if (op == ">") { "gt" } else { "ge" } } }) } };
+        return lw_step(r, reg, mt, r.lines.concat([reg + " = icmp " + cc + " " + v + " " + a + ", " + b]), t);
+    }
+    if (op == "&" || op == "|" || op == "^") {
+        Str ins = if (op == "&") { "and" } else { if (op == "|") { "or" } else { "xor" } };
+        return lw_step(r, reg, vt, r.lines.concat([reg + " = " + ins + " " + v + " " + a + ", " + b]), t);
+    }
+    if (lv_flt(vt)) { return lw_step(r, reg, vt, r.lines.concat([reg + " = " + farith_ins(op) + " " + v + " " + a + ", " + b]), t); }
+    Str ins = if (op == "+") { "add" } else { if (op == "-") { "sub" } else { "mul" } };
+    if (resid_rtmod()) { return lw_step(r, reg, vt, r.lines.concat([reg + " = " + ins + " " + v + " " + a + ", " + b]), t); }
+    Str fam = (if (lv_signed(vt)) { "s" } else { "u" }) + ins;
+    Str nm = "llvm." + fam + ".with.overflow." + lv_sfx(vt);
+    Str pair = "{" + v + ", <" + f"{lv_lanes(vt)}" + " x i1>}";
+    List(Str) ls = r.lines.concat([reg + "p = call " + pair + " @" + nm + "(" + v + " " + a + ", " + v + " " + b + ")", reg + " = extractvalue " + pair + " " + reg + "p, 0", reg + "f = extractvalue " + pair + " " + reg + "p, 1"]).concat(lv_ovf_check(reg, vt, reg + "f"));
+    return GT {.pos = 0, .val = reg, .ty = vt, .cnt = 0, .err = "", .glines = lv_ovf_decls(r.glines, vt, fam), .lines = ls, .tmp = t, .lbl = r.lbl, .tail = false};
+}
+
+// -v, ~v, !m.
+GT lv_un(Str op, GT e) {
+    Str vt = e.ty;
+    Str v = ll_ty(vt);
+    Int t = e.tmp + 1;
+    Str reg = f"%t{t}";
+    if (op == "+") { return e; }
+    if (op == "!" || op == "~") { return lw_step(e, reg, vt, e.lines.concat(lv_splat_lines(reg + "m", vt, "-1")).concat([reg + " = xor " + v + " " + e.val + ", " + reg + "m"]), t); }
+    if (lv_flt(vt)) { return lw_step(e, reg, vt, e.lines.concat([reg + " = fneg " + v + " " + e.val]), t); }
+    return lv_bin("-", lw_step(e, "0", lv_elem(vt), e.lines, e.tmp), e);
+}
+
+// Lane i (checked, as fixed lists are), or the vector with lane i = x.
+List(Str) lv_bounds(Str reg, Str ix, Int n, Int l1, Int l2) {
+    Str okl = f"L{l1}";
+    Str oobl = f"L{l2}";
+    return [reg + "k = icmp ult i64 " + ix + f", {n}", "br i1 " + reg + "k, label %" + okl + ", label %" + oobl, oobl + ":", "call void @resid_index_abort(i64 " + ix + f", i64 {n}, ptr @.fixedidx)", "unreachable", okl + ":"];
+}
+
+GT lv_index(GT base, GT ix0) {
+    GT ix = pick_widen(num_norm_cg(ix0.ty) != "Int(64)", ix0, "Int(64)");
+    Int t = ix.tmp + 1;
+    Str reg = f"%t{t}";
+    List(Str) ls = ix.lines.concat(lv_bounds(reg, ix.val, lv_lanes(base.ty), ix.lbl + 1, ix.lbl + 2)).concat([reg + " = extractelement " + ll_ty(base.ty) + " " + base.val + ", i64 " + ix.val]);
+    return GT {.pos = 0, .val = reg, .ty = lv_elem(base.ty), .cnt = 0, .err = "", .glines = ix.glines, .lines = ls, .tmp = t, .lbl = ix.lbl + 2, .tail = false};
+}
+
+GT lv_method(LW w, Int id, GT base, Str m, List(Str) env) {
+    Str vt = base.ty;
+    Str v = ll_ty(vt);
+    Int n = lv_lanes(vt);
+    if (m == "any" || m == "all") {
+        Int t = base.tmp + 1;
+        Str reg = f"%t{t}";
+        Str f = if (m == "any") { "or" } else { "and" };
+        List(Str) gl = lv_decl(base.glines, f"llvm.vector.reduce.{f}.v{n}i1", f"declare i1 @llvm.vector.reduce.{f}.v{n}i1(<{n} x i1>)");
+        return GT {.pos = 0, .val = reg, .ty = "Bool", .cnt = 0, .err = "", .glines = gl, .lines = base.lines.concat([reg + f" = call i1 @llvm.vector.reduce.{f}.v{n}i1(" + v + " " + base.val + ")"]), .tmp = t, .lbl = base.lbl, .tail = false};
+    }
+    if (m == "bits") {
+        Int t = base.tmp + 1;
+        Str reg = f"%t{t}";
+        List(Str) ls = [reg + "b = bitcast " + v + " " + base.val + f" to i{n}", if (n == 64) { reg + " = add i64 " + reg + "b, 0" } else { reg + f" = zext i{n} " + reg + "b to i64" }];
+        return lw_step(base, reg, "Int", base.lines.concat(ls), t);
+    }
+    if (m == "sum" && lv_flt(vt)) {
+        Int t = base.tmp + 1;
+        Str reg = f"%t{t}";
+        Str e = lv_ell(vt);
+        Str nm = "llvm.vector.reduce.fadd." + lv_sfx(vt);
+        // Without fast-math flags the reduction is sequential: ((-0 + v0) + v1) + ...
+        List(Str) gl = lv_decl(base.glines, nm, "declare " + e + " @" + nm + "(" + e + ", " + v + ")");
+        return GT {.pos = 0, .val = reg, .ty = lv_elem(vt), .cnt = 0, .err = "", .glines = gl, .lines = base.lines.concat([reg + " = call " + e + " @" + nm + "(" + e + " -0.0, " + v + " " + base.val + ")"]), .tmp = t, .lbl = base.lbl, .tail = false};
+    }
+    if (m == "sum") { return lv_isum(base, 1, lv_lane(base, 0)); }
+    if (m == "to_list") { return lv_to_list(base); }
+    if (m == "with") {
+        GT ix0 = lw_expr(w, lw_kid(w, id, 1), env, base);
+        if (ix0.err != "") { return ix0; }
+        GT ix = pick_widen(num_norm_cg(ix0.ty) != "Int(64)", ix0, "Int(64)");
+        GT x0 = lw_expr(w, lw_kid(w, id, 2), env, ix);
+        if (x0.err != "") { return x0; }
+        GT x = lv_lane_val(x0, vt);
+        Int t = x.tmp + 1;
+        Str reg = f"%t{t}";
+        List(Str) ls = x.lines.concat(lv_bounds(reg, ix.val, n, x.lbl + 1, x.lbl + 2)).concat([reg + " = insertelement " + v + " " + base.val + ", " + lv_ell(vt) + " " + x.val + ", i64 " + ix.val]);
+        return GT {.pos = 0, .val = reg, .ty = vt, .cnt = 0, .err = "", .glines = x.glines, .lines = ls, .tmp = t, .lbl = x.lbl + 2, .tail = false};
+    }
+    if (m == "wrapping_add" || m == "wrapping_sub" || m == "wrapping_mul") {
+        GT wv0 = lw_expr(w, lw_kid(w, id, 1), env, base);
+        if (wv0.err != "") { return wv0; }
+        GT wv = if (lv_is(wv0.ty)) { wv0 } else { lv_splat_val(wv0, vt) };
+        Int t = wv.tmp + 1;
+        Str reg = f"%t{t}";
+        Str ins = if (m == "wrapping_add") { "add" } else { if (m == "wrapping_sub") { "sub" } else { "mul" } };
+        return lw_step(wv, reg, vt, wv.lines.concat([reg + " = " + ins + " " + v + " " + base.val + ", " + wv.val]), t);
+    }
+    if (m == "shuffle") {
+        GT ix = lw_expr(w, lw_kid(w, id, 1), env, base);
+        if (ix.err != "") { return ix; }
+        return lv_shuffle(base, ix);
+    }
+    return gt_err("unsupported method " + m + " on " + vt, base);
+}
+
+// Lane i of v as a register (i constant).
+GT lv_lane(GT v, Int i) {
+    Int t = v.tmp + 1;
+    Str reg = f"%t{t}";
+    return lw_step(v, reg, lv_elem(v.ty), v.lines.concat([reg + " = extractelement " + ll_ty(v.ty) + " " + v.val + f", i64 {i}"]), t);
+}
+
+// Integer sum, lane by lane with checked adds.
+GT lv_isum(GT base, Int i, GT acc) {
+    if (i >= lv_lanes(base.ty)) { return acc; }
+    GT x = lv_lane(lw_step(acc, base.val, base.ty, acc.lines, acc.tmp), i);
+    GT s = bin_apply("+", lw_step(x, acc.val, acc.ty, x.lines, x.tmp), lw_step(x, x.val, x.ty, x.lines, x.tmp));
+    return lv_isum(base, i + 1, s);
+}
+
+// A List of the lanes (boxed like list literal elements).
+GT lv_to_list(GT base) {
+    Str vt = base.ty;
+    Int n = lv_lanes(vt);
+    Str et = lv_elem(vt);
+    Int t = base.tmp + 1;
+    Str arr = f"%t{t}";
+    GT g0 = lw_step(base, arr, vt, base.lines.concat([arr + f" = alloca [{n} x ptr]"]), t);
+    GT g = lv_to_list_at(base, arr, 0, g0);
+    Int t2 = g.tmp + 1;
+    Str reg = f"%t{t2}";
+    Str body = esc_ll(ty_canon_cg("List(" + et + ")"), 0, "");
+    Str tsym = f"@.lty{t2}";
+    List(Str) gl = g.glines.concat([tsym + f" = private unnamed_addr constant [{ll_bytes(body, 0, 0) + 1} x i8] c\"" + body + "\\00\""]);
+    return GT {.pos = 0, .val = reg, .ty = "List(" + et + ")", .cnt = 0, .err = "", .glines = gl, .lines = g.lines.concat([reg + f" = call ptr @resid_list_new(i64 {n}, ptr " + arr + ", ptr " + tsym + ")"]), .tmp = t2, .lbl = g.lbl, .tail = false};
+}
+
+GT lv_to_list_at(GT base, Str arr, Int i, GT g) {
+    if (i >= lv_lanes(base.ty)) { return g; }
+    GT x = lv_lane(lw_step(g, base.val, base.ty, g.lines, g.tmp), i);
+    Str et = lv_elem(base.ty);
+    Int tb = x.tmp + 1;
+    Str bx = lst_box_reg(et, x.val, tb);
+    Str slot = f"%t{tb + 3}";
+    List(Str) ls = x.lines.concat(lst_box_lines(et, x.val, tb)).concat([slot + " = getelementptr [" + f"{lv_lanes(base.ty)}" + " x ptr], ptr " + arr + f", i64 0, i64 {i}", "store ptr " + bx + ", ptr " + slot]);
+    return lv_to_list_at(base, arr, i + 1, lw_step(x, x.val, x.ty, ls, tb + 3));
+}
+
+// v.shuffle(idx): lane j of the result is v[idx[j] mod N] (N is a power
+// of two: the index is masked, so every shuffle is in range).
+GT lv_shuffle(GT v, GT ix) {
+    Str vt = v.ty;
+    Int n = lv_lanes(vt);
+    Str it = ll_ty(ix.ty);
+    Int t = ix.tmp + 1;
+    Str reg = f"%t{t}";
+    List(Str) pre = ix.lines.concat(lv_splat_lines(reg + "n", ix.ty, f"{n - 1}")).concat([reg + "m = and " + it + " " + ix.val + ", " + reg + "n"]);
+    // 16 bytes: one pshufb (SSSE3, part of the baseline target).
+    Bool byte16 = lv_ell(vt) == "i8" && n == 16;
+    if (byte16) {
+        Str i8 = if (lv_ell(ix.ty) == "i8") { reg + "m" } else { reg + "t" };
+        List(Str) cv = if (lv_ell(ix.ty) == "i8") { nil_list() } else { [reg + "t = trunc " + it + " " + reg + "m to <16 x i8>"] };
+        List(Str) gl = lv_decl(ix.glines, "llvm.x86.ssse3.pshuf.b.128", "declare <16 x i8> @llvm.x86.ssse3.pshuf.b.128(<16 x i8>, <16 x i8>)");
+        List(Str) ls = pre.concat(cv).concat([reg + " = call <16 x i8> @llvm.x86.ssse3.pshuf.b.128(<16 x i8> " + v.val + ", <16 x i8> " + i8 + ")"]);
+        return GT {.pos = 0, .val = reg, .ty = vt, .cnt = 0, .err = "", .glines = gl, .lines = ls, .tmp = t, .lbl = ix.lbl, .tail = false};
+    }
+    List(Str) body = lv_shuffle_at(reg, vt, v.val, ix.ty, reg + "m", 0, "poison", nil_list());
+    return GT {.pos = 0, .val = reg + f"r{n - 1}", .ty = vt, .cnt = 0, .err = "", .glines = ix.glines, .lines = pre.concat(body), .tmp = t, .lbl = ix.lbl, .tail = false};
+}
+
+List(Str) lv_shuffle_at(Str reg, Str vt, Str v, Str ity, Str ix, Int j, Str prev, List(Str) acc) {
+    Int n = lv_lanes(vt);
+    if (j >= n) { return acc; }
+    Str it = lv_ell(ity);
+    Str k = reg + f"k{j}";
+    Str w = reg + f"w{j}";
+    Str x = reg + f"x{j}";
+    Str r = reg + f"r{j}";
+    Str wide = if (it == "i64") { w + " = add i64 " + k + ", 0" } else { w + " = zext " + it + " " + k + " to i64" };
+    List(Str) ls = [k + " = extractelement " + ll_ty(ity) + " " + ix + f", i64 {j}", wide, x + " = extractelement " + ll_ty(vt) + " " + v + ", i64 " + w, r + " = insertelement " + ll_ty(vt) + " " + prev + ", " + lv_ell(vt) + " " + x + f", i64 {j}"];
+    return lv_shuffle_at(reg, vt, v, ity, ix, j + 1, r, acc.concat(ls));
+}
+
+// (Vec(U, N))v: to Float lanes, between Float widths, or a widening
+// integer conversion (all exact or rounding, never failing).
+GT lv_cast(GT e, Str to) {
+    Str from = e.ty;
+    Str fe = lv_ell(from);
+    Str te = lv_ell(to);
+    Int t = e.tmp + 1;
+    Str reg = f"%t{t}";
+    if (fe == te) { return lw_step(e, e.val, to, e.lines, e.tmp); }
+    Bool fflt = lv_flt(from);
+    Bool tflt = lv_flt(to);
+    Str ins = if (tflt && fflt) { if (te == "double") { "fpext" } else { "fptrunc" } } else { if (tflt) { if (lv_signed(from)) { "sitofp" } else { "uitofp" } } else { if (lv_signed(from)) { "sext" } else { "zext" } } };
+    return lw_step(e, reg, to, e.lines.concat([reg + " = " + ins + " " + ll_ty(from) + " " + e.val + " to " + ll_ty(to)]), t);
+}
+
+// sqrt(v) lanewise.
+GT lv_sqrt(GT e) {
+    Int t = e.tmp + 1;
+    Str reg = f"%t{t}";
+    Str v = ll_ty(e.ty);
+    Str nm = "llvm.sqrt." + lv_sfx(e.ty);
+    List(Str) gl = lv_decl(e.glines, nm, "declare " + v + " @" + nm + "(" + v + ")");
+    return GT {.pos = 0, .val = reg, .ty = e.ty, .cnt = 0, .err = "", .glines = gl, .lines = e.lines.concat([reg + " = call " + v + " @" + nm + "(" + v + " " + e.val + ")"]), .tmp = t, .lbl = e.lbl, .tail = false};
+}
+
+// min / max lanewise: a < b ? a : b (and a > b ? a : b), as for scalars.
+GT lv_minmax(Str n, GT a, GT b) {
+    GT c = lv_bin(if (n == "min") { "<" } else { ">" }, a, b);
+    Int t = c.tmp + 1;
+    Str reg = f"%t{t}";
+    Str v = ll_ty(a.ty);
+    return lw_step(c, reg, a.ty, c.lines.concat([reg + " = select " + ll_ty(c.ty) + " " + c.val + ", " + v + " " + a.val + ", " + v + " " + b.val]), t);
 }
 
 // A StrBuf is {cur, lim} by value (spec §45: linear, so no handle; see
@@ -1166,6 +1538,11 @@ GT lw_index(LW w, Int id, List(Str) env, GT c) {
     GT base = lw_expr(w, lw_kid(w, id, 0), env, c);
     if (base.err != "") { return base; }
     Int ixn = lw_kid(w, id, 1);
+    if (lv_is(base.ty)) {
+        GT vix = lw_expr(w, ixn, env, base);
+        if (vix.err != "") { return vix; }
+        return lv_index(base, vix);
+    }
     if (is_fixed_type(base.ty)) { return lw_index_fixed(w, ixn, base, env); }
     if (is_map_type_cg(base.ty)) {
         Str vt = map_val_type_cg(base.ty);
@@ -1337,6 +1714,7 @@ GT lw_un(LW w, Int id, List(Str) env, GT c) {
     Str op = lw_text(w, id);
     GT e = lw_expr(w, lw_kid(w, id, 0), env, c);
     if (e.err != "") { return e; }
+    if (lv_is(e.ty)) { return lv_un(op, e); }
     Int t1 = e.tmp + 1;
     Str reg = f"%t{t1}";
     if (op == "!") { return GT {.pos = 0, .val = reg, .ty = "Bool", .cnt = 0, .err = "", .glines = e.glines, .lines = e.lines.concat([reg + " = xor i1 " + e.val + ", true"]), .tmp = t1, .lbl = e.lbl, .tail = false}; }
@@ -1378,6 +1756,7 @@ GT lw_bin(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     if (op == "&&" || op == "||") { return lw_short_circuit(w, op, r, lhs, env); }
     GT more = lw_expr_s(w, r, env, lhs, true);
     if (more.err != "") { return more; }
+    if (lv_is(lhs.ty) || lv_is(more.ty)) { return lv_bin(op, lhs, more); }
     Bool lhs_lit = lw_lit_flag(w, l, start_ok);
     Bool rlit = lw_bare_int(w, r);
     Bool shift = op == "<<" || op == ">>";
@@ -1481,9 +1860,9 @@ GT lw_args(LW w, Int id, Int i, Str acc, Int count, List(Str) env, GT c, List(St
     if (i >= w.g.ns[id].nk) { return GT {.pos = 0, .val = acc, .ty = "", .cnt = count, .err = "", .glines = c.glines, .lines = c.lines, .tmp = c.tmp, .lbl = c.lbl, .tail = false}; }
     Int a = lw_kid(w, id, i);
     Str want = if (count < ptys.len()) { ptys[count] } else { "" };
-    GT v0 = if (lw_kind(w, a) == "lambda" && is_fn_type(want)) { lw_lambda(w, a, want, env, c) } else { lw_expr(w, a, env, c) };
+    GT v0 = if (lw_kind(w, a) == "lambda" && is_fn_type(want)) { lw_lambda(w, a, want, env, c) } else { lw_expr_as(w, a, want, env, c) };
     if (v0.err != "") { return v0; }
-    GT v = if (want == "" || want == v0.ty) { v0 } else { widen_val(v0, want) };
+    GT v = if (want == "" || want == v0.ty || lv_is(want)) { v0 } else { widen_val(v0, want) };
     Str sep = if (acc != "") { ", " } else { "" };
     Str acc2 = acc + sep + ll_ty(v.ty) + " " + v.val;
     GT cs = GT {.pos = 0, .val = acc2, .ty = "", .cnt = count + 1, .err = "", .glines = v.glines, .lines = v.lines, .tmp = v.tmp, .lbl = v.lbl, .tail = false};
@@ -1714,7 +2093,15 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
     if (n == "str_is_int" || n == "str_is_float") { return lw_externb(w, id, n, l1s("Str"), env, c); }
     if (n == "str_parse_int") { return lw_extern(w, id, n, l1s("Str"), "Int", env, c); }
     if (n == "str_parse_float") { return lw_extern(w, id, n, l1s("Str"), "Float", env, c); }
-    if (n == "sqrt") { return lw_extern(w, id, "llvm.sqrt.f64", l1s("Float"), "Float", env, c); }
+    if (n == "sqrt") {
+        if (w.g.ns[id].nk != 1) { return lw_gerr("sqrt arity", c); }
+        GT sa = lw_expr(w, lw_kid(w, id, 0), env, c);
+        if (sa.err != "") { return sa; }
+        if (lv_is(sa.ty)) { return lv_sqrt(sa); }
+        Int st1 = sa.tmp + 1;
+        Str sreg = f"%t{st1}";
+        return lw_step(sa, sreg, "Float", sa.lines.concat([sreg + " = call double @llvm.sqrt.f64(double " + sa.val + ")"]), st1);
+    }
     if (n == "print_bytes") { return lw_externb(w, id, "resid_print_bytes", l1s("List(Int)"), env, c); }
     if (n == "str_index_of") { return lw_extern(w, id, n, l3s("Str", "Str", "Int"), "Int", env, c); }
     if (n == "str_count") { return lw_extern(w, id, n, l2s("Str", "Str"), "Int", env, c); }
@@ -1796,6 +2183,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     if (n == "aesni_enc_round" || n == "aesni_enc_last_round") { return lw_aesni(w, id, n, env, c); }
     if (n == "resid_test_run_closure") { return lw_extern(w, id, n, l2s("Void closure()", "Str"), "Int", env, c); }
     if (n == "sort") { return lw_sort(w, id, env, c); }
+    if (n == "select" && fn_index(w.fs, n) < 0) { return lv_select(w, id, "", env, c); }
     if (lw_is_builtin(n)) { return lw_builtin(w, id, n, env, c); }
     Str pent = env_lookup(env, n);
     if (pent != "" && is_fn_type(cg_env_ty(pent))) { return lw_fn_call(w, id, 0, cg_env_val(pent), cg_env_ty(pent), env, c); }
@@ -2098,7 +2486,7 @@ ST lw_bind(LW w, Int id, List(Str) env, ST g) {
     Str screg = f"%t{sct}";
     GT g0 = gt_of_st(g);
     GT gs = if (scoped) { GT {.pos = 0, .val = g0.val, .ty = g0.ty, .cnt = g0.cnt, .err = "", .glines = g0.glines, .lines = g0.lines.concat([screg + " = call i64 @resid_scope_push()"]), .tmp = sct, .lbl = g0.lbl, .tail = false} } else { g0 };
-    GT v = if (vk == "lambda" && is_fn_type(dtyb)) { lw_lambda(w, ve, dtyb, env, gs) } else { lw_expr(w, ve, env, gs) };
+    GT v = if (vk == "lambda" && is_fn_type(dtyb)) { lw_lambda(w, ve, dtyb, env, gs) } else { lw_expr_as(w, ve, dtyb, env, gs) };
     if (v.err != "") { return st_err(v.err, g); }
     Str dn = num_norm_cg(dtyb);
     Bool adoptable = int_fam(dtyb) && int_fam(v.ty);
@@ -2150,7 +2538,7 @@ ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     }
     Int rv = lw_kid(w, id, 0);
     // A returned lambda takes the function's closure return type.
-    GT v = if (lw_kind(w, rv) == "lambda" && is_fn_type(g.rety)) { lw_lambda(w, rv, g.rety, env, gt_of_st(g)) } else { lw_expr(w, rv, env, gt_of_st(g)) };
+    GT v = if (lw_kind(w, rv) == "lambda" && is_fn_type(g.rety)) { lw_lambda(w, rv, g.rety, env, gt_of_st(g)) } else { lw_expr_as(w, rv, g.rety, env, gt_of_st(g)) };
     if (v.err != "") { return st_err(v.err, g); }
     if (g.rety == "__spawn") {
         GT hb = box_heap_("", v, env, w.fs);
@@ -4344,6 +4732,10 @@ List(Str) lf_node(Kg g, Int id, List(Str) ptrs, List(Str) acc) {
         return lf_kids(g, id, 1, n, ptrs, a1);
     }
     if (k == "mcall") {
+        // Vector methods stay in registers (a misjudged leaf only goes
+        // without a scope).
+        Bool vm = t == "any" || t == "all" || t == "bits" || t == "sum" || t == "with" || t == "shuffle" || str_starts_with(t, "wrapping_");
+        if (vm) { return lf_kids(g, id, 0, n, ptrs, acc); }
         if (t != "len" || n > 1) { return lf_no(); }
         return lf_node(g, kg_kid(g, id, 0), ptrs, acc);
     }
