@@ -11,6 +11,9 @@ Int cap_stack() { return resid_raw_tls("cap_stack", 16384); }
 Int cap_ns() { return resid_raw_tls("cap_ns", 256); }
 Int cap_depth_at() { return resid_raw_tls("cap_depth", 8); }
 
+pub Int cap_depth_get() { return ld64(cap_depth_at()); }
+pub Int cap_depth_set(Int d) { return st64(cap_depth_at(), d); }
+
 @export("resid_cap_enter", "void(ptr,i64)")
 pub Int rt_cap_enter(Int caps, Int n) {
     Int d = ld64(cap_depth_at());

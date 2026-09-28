@@ -880,10 +880,11 @@ GXP gx_sp_pat(List(Str) pns, List(Str) pts, GXA a, Str keep, Int i, GXP acc) {
     Bool allowed = keep == "" || str_slice(keep, i, i + 1) == "K";
     Str sep = str_from_code(29);
     if (lit != "" && allowed) {
-        // A known parameter stays in the signature (under a name the body
-        // does not use), so the specialization and its original have the
-        // same one and tail calls between them stay jumps (musttail).
-        GXP nk = GXP {.mask = acc.mask + "K", .vals = acc.vals + cty + sep + a.vs[i] + sep, .nk = acc.nk + 1, .kvs = acc.kvs.concat([a.vs[i]]), .kts = acc.kts.concat([cty]), .dargs = acc.dargs.concat([a.rs[i]]), .dptys = acc.dptys.concat([pts[i]]), .dpns = acc.dpns.concat([f"rs_known_{i}"]), .knames = acc.knames.concat([pns[i]]), .kbty = acc.kbty.concat([pts[i]]), .klit = acc.klit.concat([lit]), .env = rd_env_add(acc.env, pns[i], a.vs[i], cty)};
+        // A known parameter stays in the signature, so the specialization
+        // and its original have the same one and tail calls between them
+        // stay jumps (musttail). Its name has a `#`, which no identifier
+        // can: it never meets a name of the program.
+        GXP nk = GXP {.mask = acc.mask + "K", .vals = acc.vals + cty + sep + a.vs[i] + sep, .nk = acc.nk + 1, .kvs = acc.kvs.concat([a.vs[i]]), .kts = acc.kts.concat([cty]), .dargs = acc.dargs.concat([a.rs[i]]), .dptys = acc.dptys.concat([pts[i]]), .dpns = acc.dpns.concat([f"rs#known{i}"]), .knames = acc.knames.concat([pns[i]]), .kbty = acc.kbty.concat([pts[i]]), .klit = acc.klit.concat([lit]), .env = rd_env_add(acc.env, pns[i], a.vs[i], cty)};
         return gx_sp_pat(pns, pts, a, keep, i + 1, nk);
     }
     GXP nd = GXP {.mask = acc.mask + "D", .vals = acc.vals, .nk = acc.nk, .kvs = acc.kvs, .kts = acc.kts, .dargs = acc.dargs.concat([a.rs[i]]), .dptys = acc.dptys.concat([pts[i]]), .dpns = acc.dpns.concat([pns[i]]), .knames = acc.knames, .kbty = acc.kbty, .klit = acc.klit, .env = rd_env_add(acc.env, pns[i], "", "")};

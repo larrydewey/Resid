@@ -12,9 +12,9 @@ confidence intervals, build commands and per-program notes, is
 the suite is in [`bench/suite`](https://github.com/larrydewey/Resid/tree/master/bench/suite).
 
 **In one line:** written the same way as the C program, Resid is the
-fastest of the eleven languages overall (0.86× C); against each language's
-fastest hand-tuned program it is 0.77× C, third behind Rust and C++, whose
-programs use SIMD intrinsics that Resid does not have.
+fastest of the eleven languages overall (0.93× C) and uses the least memory
+(0.73× C); against each language's fastest hand-tuned program it is 0.68× C,
+second behind Rust and ahead of C++.
 
 ## How it was measured
 
@@ -22,8 +22,8 @@ programs use SIMD intrinsics that Resid does not have.
   single-threaded, no SIMD or `-march=native`, pinned to one core. `best`:
   the fastest known program per language (Benchmarks Game, 3-clause BSD);
   threads, SIMD and `-O3 -march=native` allowed. Resid's `best` programs
-  are its `st` programs made parallel with `spawn`, some laid out so that
-  clang's vectorizer can use SIMD registers; Resid has no SIMD types.
+  are its `st` programs made parallel with `spawn`, several using vector
+  types (`Vec(T, N)`) for SIMD.
 - **Timing.** Wall-clock median of 5 cold process runs (fewer for runs
   over 60 s), CPU time and peak RSS from `wait4`. Every output is checked
   byte for byte against the C program's; every run passed.
@@ -42,7 +42,7 @@ programs use SIMD intrinsics that Resid does not have.
 
 | Language | `st` time (× C) | `best` time (× C) | `st` memory (× C) | `best` memory (× C) |
 | --- | ---: | ---: | ---: | ---: |
-| **Resid** | **0.86** | **0.77** | **1.40** | **9.44** |
+| **Resid** | **0.93** | **0.68** | **0.73** | **3.98** |
 | C | 1.00 | 1.00 | 1.00 | 1.00 |
 | Fortran | 1.05 | 1.17 | 1.90 | 2.18 |
 | C++ | 1.14 | 0.69 | 1.99 | 1.71 |
@@ -62,15 +62,15 @@ Wall-time ratio to C (below 1.00, Resid is faster):
 
 | Program | `st` | `best` | What decides it |
 | --- | ---: | ---: | --- |
-| `binary-trees` | **0.32** | **0.17** | allocation: see below |
-| `fannkuch-redux` | **0.58** | **0.69** | a packed permutation: see below |
-| `spectral-norm` | **0.67** | **0.56** | several rows per pass; vectorized in `best` |
-| `nbody` | **0.77** | 1.18 | the `sqrt` builtin; C's `best` is SIMD |
-| `fasta` | **0.94** | **0.27** | a lookup table and a jump-ahead generator in `best` |
-| `mandelbrot` | 1.02 | **0.99** | 16 pixels in lockstep, vectorized in `best` |
-| `pidigits` | 1.09 | 1.16 | exact decimals against GMP |
-| `k-nucleotide` | 1.14 | 1.59 | Resid's hash map against hand-written tables |
-| `reverse-complement` | 2.19 | 2.40 | a byte-at-a-time loop against C's bulk in-place reversal |
+| `binary-trees` | **0.33** | **0.17** | allocation: see below |
+| `fannkuch-redux` | **0.58** | **0.47** | a packed permutation; byte shuffles in `best` |
+| `nbody` | **0.77** | 1.06 | the `sqrt` builtin; vector pair distances in `best` |
+| `fasta` | **0.95** | **0.26** | a lookup table and a jump-ahead generator in `best` |
+| `mandelbrot` | 1.02 | **0.75** | 32 pixels in four `Vec(Float, 8)` in `best` |
+| `pidigits` | 1.09 | 1.17 | exact decimals against GMP |
+| `k-nucleotide` | 1.14 | 1.23 | Resid's hash map against hand-written tables |
+| `spectral-norm` | 1.43 | **0.55** | one row at a time in `st`; 8 rows per pass, vectorized, in `best` |
+| `reverse-complement` | 2.03 | 2.38 | a byte-at-a-time loop against C's bulk in-place reversal |
 
 ## Where Resid is strong
 
@@ -84,28 +84,27 @@ Wall-time ratio to C (below 1.00, Resid is faster):
   nothing else can see it), where C calls `malloc` and `free` per node. It
   beats every language on the `st` track and the C, Go, C#, Java and
   JavaScript `best` programs.
-- **Memory.** On the `st` track Resid uses 1.32× C's memory, less than
-  every language except C and Pascal. Values are unboxed and updated in
-  place when the compiler proves they are unshared.
+- **Memory.** On the `st` track Resid uses 0.73× C's memory, the least of
+  all eleven. Values are unboxed and updated in place when the compiler
+  proves they are unshared.
 - **`spawn` scales.** Regions run on a pool of reused threads (a spawn
   costs under a microsecond). The `best` programs are the `st` programs
-  with `spawn`: fannkuch-redux 15.2 s → 1.42 s, binary-trees 2.1 s →
-  0.47 s, spectral-norm 0.52 s → 0.056 s (the fastest of all languages),
-  fasta 2.3 s → 0.14 s (the fastest by 3.5×).
+  with `spawn`: fannkuch-redux 15.2 s → 0.99 s, binary-trees 2.1 s →
+  0.48 s, spectral-norm 1.12 s → 0.055 s (the fastest of all languages),
+  fasta 2.3 s → 0.13 s (the fastest by 3.7×).
 
 ## Where Resid is weak
 
-- **No SIMD types.** Resid's `best` programs reach vector registers only
-  through clang's vectorizer (independent lanes written as scalars). The
-  fastest C++ and Rust programs for mandelbrot, nbody and fannkuch-redux
-  use intrinsics and stay 1.2–1.5× ahead.
+- **SIMD on par, not ahead.** With vector types, mandelbrot, fannkuch-redux
+  and nbody `best` are within 0–10% of the fastest C++ and Rust programs,
+  not ahead of them.
 - **Byte-at-a-time text.** `reverse-complement` builds 250 MB of output
   one character at a time. The builder lives in registers and each read
   is a bounds test and a load, but C reverses the buffer in place with
-  bulk operations; Resid is 2.2× C on `st` and 2.4× on `best`.
+  bulk operations; Resid is 2.0× C on `st` and 2.4× on `best`.
 - **Memory on the `best` track.** Parallel Resid programs keep a heap per
   worker and build their outputs as lists and strings, so peak memory
-  rises with parallelism (9.5× C, still below Java and JavaScript).
+  rises with parallelism (4.0× C, below Python, C#, Java and JavaScript).
 - **Hashing.** `k-nucleotide` uses Resid's general `Map`; the fastest
   programs use specialized tables.
 - **Binaries.** Resid executables are static and 20–70 KB against C's
@@ -120,11 +119,13 @@ Wall-time ratio to C (below 1.00, Resid is faster):
   element by element. The algorithm (which permutations, in which order,
   how flips are counted) is the benchmark's, but the representation is
   unusual, and the 0.58× owes much to it.
-- **Lanes.** The spectral-norm and mandelbrot programs compute several
-  rows or pixels in one loop as independent scalars, each in the
-  reference order, so results are identical; in `best` clang packs them
-  into vector registers. The Benchmarks Game C programs do the same with
-  intrinsics.
+- **Vector programs.** The `best` spectral-norm, mandelbrot, nbody and
+  fannkuch-redux programs keep every floating-point operation in the
+  reference's order, so their output is byte-identical; the `st` programs
+  use no vector types and no loop restructuring beyond the reference.
+- **Target.** Resid binaries on both tracks target x86-64 with SSSE3,
+  SSE4.1 and AES-NI (its runtime needs them); the other languages' `st`
+  builds use the plain x86-64 baseline.
 - **`binary-trees`.** Resid's win comes from its memory model (a
   short-lived tree is released as a whole), not from faster per-node code;
   a C program using an arena allocator would close the gap, and the

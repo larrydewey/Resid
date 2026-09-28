@@ -588,18 +588,22 @@ GT lw_list_method(LW w, Int id, GT base, Str m, List(Str) env) {
 // expressions they stand for (checked arithmetic included).
 GT lw_minmax(LW w, Int id, Str n, List(Str) env, GT c) {
     Int na = w.g.ns[id].nk;
-    // Vectors (spec §46): the operands are values, so lowering the first
-    // to learn its type and discarding it otherwise is not observable.
-    GT va = if (na == 2 && n != "abs") { lw_expr(w, lw_kid(w, id, 0), env, c) } else { c };
-    if (na == 2 && n != "abs" && va.err == "" && lv_is(va.ty)) {
+    // The first operand is lowered once: a vector takes the lanewise path
+    // (spec §46), a number the scalar one below.
+    if (na < 1) { return lw_gerr(n + " arity", c); }
+    GT va = lw_expr(w, lw_kid(w, id, 0), env, c);
+    if (va.err != "") { return va; }
+    if (na == 2 && n != "abs" && lv_is(va.ty)) {
         GT vb = lw_expr_as(w, lw_kid(w, id, 1), va.ty, env, va);
         if (vb.err != "") { return vb; }
         return lv_minmax(n, va, vb);
     }
+    Str nm0 = f"__mm{va.tmp}_0";
+    List(Str) env1 = env_add(env, nm0 + ":" + va.val + ":" + va.ty);
     Int want = if (n == "abs") { 1 } else { if (n == "clamp") { 3 } else { 2 } };
     if (na != want) { return lw_gerr(n + " arity", c); }
     List(Str) none = [];
-    LMM a0 = lw_mm_args(w, id, 0, na, env, LMM {.g = c, .names = none, .env = env});
+    LMM a0 = lw_mm_args(w, id, 1, na, env1, LMM {.g = va, .names = [nm0], .env = env1});
     if (a0.g.err != "") { return a0.g; }
     // Integer literal arguments take the other arguments' type.
     Str target = lw_mm_target(w, id, a0.env, a0.names, 0);
@@ -761,7 +765,7 @@ GT lw_cast(LW w, Int id, List(Str) env, GT c) {
         if (fx.err != "unsupported fixed cast") { return fx; }
     }
     Bool numeric = (int_fam(num_norm_cg(inner.ty)) || is_float_cg(inner.ty)) && int_fam(num_norm_cg(to));
-    GT conv = pick_gt(numeric, conv_checked(gt_tmp(inner, imax(inner.tmp, c.tmp)), to), cg_convert(inner, ll_ty(inner.ty), ll_ty(to), ll_is_signed(inner.ty), c));
+    GT conv = pick_gt(numeric, conv_checked(gt_tmp(inner, imax(inner.tmp, c.tmp)), to), cg_convert(inner, ll_ty(inner.ty), ll_ty(to), ll_is_signed(inner.ty), inner));
     return GT {.pos = 0, .val = conv.val, .ty = to, .cnt = 0, .err = "", .glines = conv.glines, .lines = conv.lines, .tmp = conv.tmp, .lbl = conv.lbl, .tail = false};
 }
 
@@ -1166,8 +1170,16 @@ List(Str) lv_bounds(Str reg, Str ix, Int n, Int l1, Int l2) {
     return [reg + "k = icmp ult i64 " + ix + f", {n}", "br i1 " + reg + "k, label %" + okl + ", label %" + oobl, oobl + ":", "call void @resid_index_abort(i64 " + ix + f", i64 {n}, ptr @.fixedidx)", "unreachable", okl + ":"];
 }
 
+// A lane index as Int(64); a wider one is narrowed checked (never wraps).
+GT lv_ix(GT ix0) {
+    Str n = num_norm_cg(ix0.ty);
+    if (n == "Int(64)") { return ix0; }
+    Bool wide = ll_width_of(n) > 64 || (ll_width_of(n) == 64 && str_has_prefix_cg(n, "UInt"));
+    return if (wide) { conv_checked(ix0, "Int(64)") } else { widen_val(ix0, "Int(64)") };
+}
+
 GT lv_index(GT base, GT ix0) {
-    GT ix = pick_widen(num_norm_cg(ix0.ty) != "Int(64)", ix0, "Int(64)");
+    GT ix = lv_ix(ix0);
     Int t = ix.tmp + 1;
     Str reg = f"%t{t}";
     List(Str) ls = ix.lines.concat(lv_bounds(reg, ix.val, lv_lanes(base.ty), ix.lbl + 1, ix.lbl + 2)).concat([reg + " = extractelement " + ll_ty(base.ty) + " " + base.val + ", i64 " + ix.val]);
@@ -1205,7 +1217,7 @@ GT lv_method(LW w, Int id, GT base, Str m, List(Str) env) {
     if (m == "with") {
         GT ix0 = lw_expr(w, lw_kid(w, id, 1), env, base);
         if (ix0.err != "") { return ix0; }
-        GT ix = pick_widen(num_norm_cg(ix0.ty) != "Int(64)", ix0, "Int(64)");
+        GT ix = lv_ix(ix0);
         GT x0 = lw_expr(w, lw_kid(w, id, 2), env, ix);
         if (x0.err != "") { return x0; }
         GT x = lv_lane_val(x0, vt);
@@ -1265,8 +1277,11 @@ GT lv_to_list(GT base) {
 
 GT lv_to_list_at(GT base, Str arr, Int i, GT g) {
     if (i >= lv_lanes(base.ty)) { return g; }
-    GT x = lv_lane(lw_step(g, base.val, base.ty, g.lines, g.tmp), i);
-    Str et = lv_elem(base.ty);
+    GT x0 = lv_lane(lw_step(g, base.val, base.ty, g.lines, g.tmp), i);
+    // Lanes box as their scalar type does (a Float(32) lane as a Float).
+    Str et0 = lv_elem(base.ty);
+    GT x = if (lv_ell(base.ty) == "float") { widen_val(x0, "Float") } else { x0 };
+    Str et = if (lv_ell(base.ty) == "float") { "Float" } else { et0 };
     Int tb = x.tmp + 1;
     Str bx = lst_box_reg(et, x.val, tb);
     Str slot = f"%t{tb + 3}";
@@ -2137,7 +2152,10 @@ GT lw_print(LW w, Int id, Str n, List(Str) env, GT c) {
         List(Str) ls = fr.lines.concat(sbv_parts(fr.val, freg)).concat([freg + " = call i1 @resid_sb2_print(ptr " + freg + "b, ptr " + freg + "l, i8 " + fnl + ")"]);
         return GT {.pos = 0, .val = freg, .ty = "Bool", .cnt = 0, .err = "", .glines = fr.glines, .lines = ls, .tmp = ft, .lbl = fr.lbl, .tail = false};
     }
-    GT v = if (fin) { lw_builder(w, a, fr, "finish", env) } else { lw_expr(w, a, env, c) };
+    // Any other `.finish()` (a ListBuf, or a user function called with
+    // method syntax) is lowered afresh: the receiver's code above was only
+    // looked at.
+    GT v = if (fin && str_has_prefix_cg(fr.ty, "ListBuf(")) { lw_builder(w, a, fr, "finish", env) } else { lw_expr(w, a, env, c) };
     if (v.err != "") { return v; }
     Int t1 = v.tmp + 1;
     Str reg = f"%t{t1}";
@@ -2741,7 +2759,7 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     if (body.err != "") { return body; }
     List(Str) bo1 = if (!body.dead) { body.lines.concat(["br label %" + lbl_c]) } else { body.lines };
     List(Str) t4 = bo1.concat([lbl_c + ":", k2 + " = add i64 " + kreg + ", 1", "store i64 " + k2 + ", ptr " + kaddr, "br label %" + lbl_b, lbl_d + ":"]);
-    return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = body.glines, .hlines = body.hlines, .lines = t4, .tmp = body.tmp, .lbl = newlbl, .rety = g.rety};
+    return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = body.glines, .hlines = body.hlines, .lines = t4, .tmp = body.tmp, .lbl = imax(newlbl, body.lbl), .rety = g.rety};
 }
 
 // sg_stmt.
@@ -3264,7 +3282,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     // A runtime slow path (@noinline) keeps its callers small; a fast path
     // (@inline) goes into its callers, across the LTO link.
     Str fattr0 = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@noinline")) { " noinline" } else { "" };
-    Str fattr = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@inline")) { fattr0 + " alwaysinline" } else { fattr0 };
+    Str fattr = if (resid_rtmod() && fattr0 == "" && str_contains(w0.g.ns[d].aux, "@inline")) { " alwaysinline" } else { fattr0 };
     Str defline = if (is_main) { "define i32 @resid_user_main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + link + ll_ty(rbase) + " @" + name + "(" + pd + ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
     List(Str) nl = lw_param_names(w1, d, 1, n - 1, ListBuf());
     // Ownership: the node flags and record reuses the body's lowering reads.

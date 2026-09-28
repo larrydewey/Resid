@@ -43,7 +43,7 @@ Int ret_word(Int w) { return st64(mret(), w) * 0 + 1; }
 
 // Where map memory goes: 0 the current region (scope, else the current
 // bulk arena, else the heap), 1 the heap, 2 + d the bulk arena at depth d.
-Int map_heap_w() { return resid_raw_tls("map_heap", 8); }
+pub Int map_heap_w() { return resid_raw_tls("map_heap", 8); }
 Bool map_heap() { return ld64(map_heap_w()) != 0; }
 Int map_born_w() { return resid_raw_tls("map_born", 8); }
 

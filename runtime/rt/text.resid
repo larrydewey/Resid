@@ -260,6 +260,7 @@ Int fast_len_of(Int s) {
     if (s != 0 && s == ld64(st + 24)) { return ld64(st + 32); }
     if (s != 0 && s == ld64(st + 40)) { return ld64(st + 48); }
     if (s == 0 || ld64(idx_inh() + 304) == 0) { return 0 - 1; }
+    if (ld64(idx_inh() + 312) != ld64(unmap_epoch())) { return 0 - 1; }
     return inh_find(s, 0);
 }
 
@@ -355,11 +356,13 @@ Int idx_slot_miss(Int s, Int st) {
 // A spawned region starts knowing the lengths of its parent's all-ASCII
 // indexed strings (19 pairs: the two fast entries, the short slot and the
 // 16 LRU slots): they are immutable and shared, so it need not rescan them.
-// 19 pairs, then a word set when any were inherited.
-Int idx_inh() { return resid_raw_tls("str_inh", 312); }
+// 19 pairs, a word set when any were inherited, and the unmap epoch they
+// were taken at (a big block unmapped or moved since may have been reused).
+Int idx_inh() { return resid_raw_tls("str_inh", 320); }
 
 pub Int str_fast_save(Int a) {
     Int st = idx_state();
+    _ = st64(a + 304, ld64(unmap_epoch()));
     _ = mcopy(a, st + 24, 32);
     _ = inh_pair(a + 32, idx_small());
     return inh_slots(a + 48, 0);
@@ -380,6 +383,7 @@ Int inh_pair(Int a, Int sl) {
 pub Int str_fast_load(Int a) {
     _ = mcopy(idx_state() + 24, a, 32);
     _ = mcopy(idx_inh(), a, 304);
+    _ = st64(idx_inh() + 312, ld64(a + 304));
     return st64(idx_inh() + 304, 1);
 }
 

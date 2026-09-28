@@ -152,17 +152,21 @@ Int clone_flags() { return 4001536; }   // VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SE
 pub Int thread_spawn(Int fn, Int arg, Int stack) {
     Int rec = xmalloc(48);
     _ = st64(rec, fn) + st64(rec + 8, arg) + st64(rec + 16, 0) + st64(rec + 24, 0);
-    Int stk = sys_mmap(stack);
+    // A 64 KB guard below the stack: an overflow faults instead of running
+    // into whatever the kernel mapped next (the heap, another stack).
+    Int guard = 65536;
+    Int stk = sys_mmap(stack + guard);
     if (stk == 0) { return c_free(rec) * 0; }
-    _ = st64(rec + 32, stk) + st64(rec + 40, stack);
+    _ = resid_raw_syscall(10, stk, guard, 0, 0, 0, 0);   // mprotect PROT_NONE
+    _ = st64(rec + 32, stk) + st64(rec + 40, stack + guard);
     // The child pops its entry and argument off its new stack.
-    Int top = (stk + stack) & (0 - 16);
+    Int top = (stk + guard + stack) & (0 - 16);
     Int sp = top - 16;
     _ = st64(sp, resid_raw_fn("thread_main")) + st64(sp + 8, rec);
     _ = ensure_tls();
     Int tp = tls_block();
     Int r = c_clone(clone_flags(), sp, rec + 24, rec + 24, tp);
-    if (r < 0) { return sys_munmap(stk, stack) * 0 + c_free(rec) * 0; }
+    if (r < 0) { return sys_munmap(stk, stack + guard) * 0 + c_free(rec) * 0; }
     return rec;
 }
 

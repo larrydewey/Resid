@@ -1438,6 +1438,10 @@ def cmd_report(args):
       "with different amounts of tuning effort, and `st` ports may be more or less idiomatic.")
     W("- Output files are written to a temporary directory (tmpfs on this host), so I/O-heavy "
       "benchmarks (fasta, reverse-complement, mandelbrot) measure memory-backed writes.")
+    W("- The Resid compiler targets x86-64 with SSSE3, SSE4.1 and AES-NI on every track (its "
+      "runtime needs them, and code only inlines between functions of one target), while the "
+      "other languages' `st` builds use the plain x86-64 baseline; `-march=native` is used on "
+      "the `best` track only, as for every language.")
     W("")
 
     # ---------------- overall ranking

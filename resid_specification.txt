@@ -541,7 +541,13 @@ of the most negative integer traps like any overflow.
 
 sqrt(x) takes a Float (or a Float vector, lanewise, §46)
 and returns its correctly rounded IEEE 754 square root (sqrt
-of a negative number is NaN).
+of a negative number is NaN, which prints as `nan` whatever
+its sign bit).
+
+These names (abs, min, max, clamp, sqrt, and splat, lanes
+and select of §46) are builtins only where the program
+declares no function of that name: a user function of the
+same name is called instead, everywhere in the program.
 
 Wrapping conversions keep the low bits of the two's-
 complement representation, for bit-level code:
@@ -2141,9 +2147,10 @@ argument to a function taking a builder) counts as one use.
 
   Vec(T, N)      N lanes of T, held in registers
 
-T is an Int, UInt or Float width of at most 64 bits (Int,
-Int(8) … Int(64), UInt …, Float(32), Float), and N is 2, 4,
-8, 16, 32 or 64 (E0410). A comparison yields a lane mask
+T is Int(8), Int(16), Int(32), Int (Int(64)), the same UInt
+widths, Float(32) or Float, and N is 2, 4, 8, 16, 32 or 64
+(E0410). `Vec` is a builtin type name: a program cannot
+declare a type of that name. A comparison yields a lane mask
 Vec(Bool, N). A vector is a value like a number: it is
 immutable and never shared, and it has no heap part.
 
@@ -2159,7 +2166,9 @@ build a vector; they take its type from the slot they are
 written in: a binding's value, a return value or an argument
 of a user function (and select's operands). Anywhere else
 the vector is bound first (E0412). Numeric literals adopt
-the lane type, and must fit it.
+the lane type, and must fit it; as for scalars, an integer
+literal operand of an operator also meets Float lanes
+(v * 2).
 
 --------------------------------------------------
 46.1  Operations
@@ -2172,12 +2181,14 @@ the lane type, and must fit it.
   v[i]                   lane i, checked like a list index
   v.with(i, x)           v with lane i replaced (checked)
   v.sum()                lanes added in lane order
-  v.shuffle(idx)         lane j is v[idx[j] mod N]
+  v.shuffle(idx)         lane j is v[idx[j] mod N] (the
+                         floor modulo, so -1 is N-1)
   v.wrapping_add(w), wrapping_sub, wrapping_mul
                          integer lanes, wrapping (two's
                          complement)
   m.any(), m.all()       some lane / every lane is true
-  m.bits()               an Int with bit i = lane i
+  m.bits()               an Int with bit i = lane i (for
+                         64 lanes, lane 63 is the sign bit)
   select(m, a, b)        a where m is true, else b
   sqrt(v), min(a, b), max(a, b)
                          lanewise (min is a < b ? a : b)
@@ -2189,15 +2200,18 @@ the lane type, and must fit it.
 The two operands of a binary operator have the same vector
 type, or one is a scalar of its lane type (broadcast to
 every lane). Integer lanes are checked like integers
-(§6.4): +, - and * abort on overflow in any lane; the
+(§6.5): +, - and * abort on overflow in any lane; the
 wrapping_* methods wrap instead. Integer division is not
 defined on vectors. A Float sum adds from lane 0 upward
 (-0.0 + v[0] + v[1] + …), so it rounds like the scalar loop
 it replaces; an integer sum is checked.
 
 A vector cannot appear inside another type: a List, Map,
-Option, Result, struct field or closure type (E0411). An
-f-string does not show one directly; interpolate v.to_list().
+Option, Result, struct field, variant payload or closure
+type, written or inferred ([v, v], Some(v)) (E0411), and a
+lambda or spawn region cannot capture one (E0411); pass it
+as an argument instead. An f-string does not show one
+directly; interpolate v.to_list().
 
 ==================================================
 END OF DOCUMENT

@@ -13,22 +13,22 @@
 <text x="739.0" y="84" text-anchor="start" fill="#1f2937" transform="rotate(-30 739.0 84)">pidigits</text>
 <text x="813.0" y="84" text-anchor="start" fill="#1f2937" transform="rotate(-30 813.0 84)">regex-redux</text>
 <text x="102" y="109.0" text-anchor="end" fill="#1f2937" font-size="12">Resid</text>
-<rect x="110" y="92" width="72" height="24" fill="#dce5ee"/>
+<rect x="110" y="92" width="72" height="24" fill="#dce5ed"/>
 <text x="146.0" y="108.0" text-anchor="middle" fill="#1f2937">0.77</text>
 <rect x="184" y="92" width="72" height="24" fill="#bfd1e3"/>
 <text x="220.0" y="108.0" text-anchor="middle" fill="#1f2937">0.58</text>
-<rect x="258" y="92" width="72" height="24" fill="#cddbe8"/>
-<text x="294.0" y="108.0" text-anchor="middle" fill="#1f2937">0.67</text>
+<rect x="258" y="92" width="72" height="24" fill="#f2e7e8"/>
+<text x="294.0" y="108.0" text-anchor="middle" fill="#1f2937">1.43</text>
 <rect x="332" y="92" width="72" height="24" fill="#f7f6f6"/>
 <text x="368.0" y="108.0" text-anchor="middle" fill="#1f2937">1.02</text>
-<rect x="406" y="92" width="72" height="24" fill="#82a8ce"/>
-<text x="442.0" y="108.0" text-anchor="middle" fill="#1f2937">0.32</text>
+<rect x="406" y="92" width="72" height="24" fill="#85aacf"/>
+<text x="442.0" y="108.0" text-anchor="middle" fill="#1f2937">0.33</text>
 <rect x="480" y="92" width="72" height="24" fill="#f1f3f5"/>
-<text x="516.0" y="108.0" text-anchor="middle" fill="#1f2937">0.94</text>
+<text x="516.0" y="108.0" text-anchor="middle" fill="#1f2937">0.95</text>
 <rect x="554" y="92" width="72" height="24" fill="#f5f1f1"/>
 <text x="590.0" y="108.0" text-anchor="middle" fill="#1f2937">1.14</text>
-<rect x="628" y="92" width="72" height="24" fill="#ecd3d6"/>
-<text x="664.0" y="108.0" text-anchor="middle" fill="#1f2937">2.19</text>
+<rect x="628" y="92" width="72" height="24" fill="#edd6d9"/>
+<text x="664.0" y="108.0" text-anchor="middle" fill="#1f2937">2.03</text>
 <rect x="702" y="92" width="72" height="24" fill="#f6f3f3"/>
 <text x="738.0" y="108.0" text-anchor="middle" fill="#1f2937">1.09</text>
 <rect x="776" y="92" width="72" height="24" fill="#f3f4f6"/>

@@ -19,7 +19,7 @@ Notes:
   (`comp_table`, the table of `complement` spelled out); other codes go
   through `complement`.
 - Output goes to one `StrBuf`. The compiler keeps a StrBuf in registers
-  ({buf, len, cap}; it is linear, so it needs no handle), so an ASCII
+  ({cur, lim}; it is linear, so it needs no handle), so an ASCII
   `push_char` is a bounds test and a byte store; `print(sb.finish())`
   writes the buffer without measuring it again. The whole output is
   printed once (`print` flushes on every call).

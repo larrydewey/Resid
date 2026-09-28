@@ -3347,6 +3347,9 @@ List(Str) lst_box_lines(Str ety, Str ev, Int tb) {
         return [cnv, box];
     }
     if (ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+        // A narrower float is boxed as a double (lst_read_reg narrows back).
+        Str lt = ll_ty(ety);
+        if (lt != "double") { return [r + "e = fpext " + lt + " " + ev + " to double", r + " = call ptr @resid_box_f64(double " + r + "e)"]; }
         return [r + " = call ptr @resid_box_f64(double " + ev + ")"];
     }
     if (int_fam(ety)) {
@@ -3382,6 +3385,8 @@ List(Str) lst_read_lines(Str ety, Str slot, Int tr, List(Str) acc) {
         return acc.concat([z + " = call i8 @resid_unbox_bool(ptr " + slot + ")", r + " = trunc i8 " + z + " to i1"]);
     }
     if (ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+        Str lt = ll_ty(ety);
+        if (lt != "double") { return acc.concat([r + "d = call double @resid_unbox_f64(ptr " + slot + ")", r + " = fptrunc double " + r + "d to " + lt]); }
         return acc.concat([r + " = call double @resid_unbox_f64(ptr " + slot + ")"]);
     }
     if (int_fam(ety)) {
@@ -6454,7 +6459,9 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         Str t0 = num_norm(str_trim(argtys));
         if (t0 == "Float" || t0 == "Float(64)") { return ERes {.pos = pos, .ty = "Float", .err = ""}; }
         // A Float vector, lanewise (spec §46).
-        if (vec_float_ty(t0)) { return ERes {.pos = pos, .ty = str_trim(argtys), .err = ""}; }
+        Str vt0 = str_trim(argtys);
+        Str vt1 = if (str_ends_with(vt0, ",")) { str_trim(str_slice(vt0, 0, str_len(vt0) - 1)) } else { vt0 };
+        if (vec_float_ty(vt1)) { return ERes {.pos = pos, .ty = vt1, .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "sqrt expects (Float), got (" + argtys + ")"};
     }
     if (name == "print_bytes") {

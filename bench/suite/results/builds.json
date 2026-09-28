@@ -495,27 +495,27 @@
     "track": "best"
   },
   "best/fannkuch-redux/resid": {
-    "artifact_bytes": 65395,
+    "artifact_bytes": 72873,
     "bench": "fannkuch-redux",
-    "build_s": 1.9401,
+    "build_s": 1.9735,
     "cmd": [
       "./out/fannkuchredux"
     ],
-    "exe_bytes": 31463,
+    "exe_bytes": 32983,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "cc7e649e5e123b68ceb3e3c7982cf1b5cec2ea16-dirty",
     "key": "best/fannkuch-redux/resid",
     "lang": "resid",
     "log": "logs/build-best-fannkuch-redux-resid.log",
     "ok": true,
-    "source_bytes": 5304,
+    "source_bytes": 6634,
     "source_files": [
       "fannkuchredux.resid"
     ],
-    "source_gzip_bytes": 2098,
-    "source_lines": 139,
-    "source_sha256": "f79dbe0d2d722b19ae750f5dcc44c61e115d2834237fb30c321b3aa2f46d8a37",
-    "timestamp": "2026-09-27T23:46:59Z",
+    "source_gzip_bytes": 2418,
+    "source_lines": 174,
+    "source_sha256": "b63c79abb0fbf5268f04452ad1c34c527a95ec110eea03dd5dc07deeef75519e",
+    "timestamp": "2026-09-28T02:06:14Z",
     "track": "best"
   },
   "best/fannkuch-redux/rust": {
@@ -1306,27 +1306,27 @@
     "track": "best"
   },
   "best/mandelbrot/resid": {
-    "artifact_bytes": 109198,
+    "artifact_bytes": 84650,
     "bench": "mandelbrot",
-    "build_s": 2.0031,
+    "build_s": 1.9935,
     "cmd": [
       "./out/mandelbrot"
     ],
-    "exe_bytes": 42297,
+    "exe_bytes": 42505,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "cc7e649e5e123b68ceb3e3c7982cf1b5cec2ea16-dirty",
     "key": "best/mandelbrot/resid",
     "lang": "resid",
     "log": "logs/build-best-mandelbrot-resid.log",
     "ok": true,
-    "source_bytes": 9803,
+    "source_bytes": 5770,
     "source_files": [
       "mandelbrot.resid"
     ],
-    "source_gzip_bytes": 2980,
-    "source_lines": 201,
-    "source_sha256": "632c2b0669fef0d690e32ae588029e55322c08c028dde0e92274774f398da643",
-    "timestamp": "2026-09-27T23:11:56Z",
+    "source_gzip_bytes": 2180,
+    "source_lines": 131,
+    "source_sha256": "2820f40584c68ae1e34cff791bbe75c57d86f0357a169668a8d19fb6d14c886d",
+    "timestamp": "2026-09-28T02:07:25Z",
     "track": "best"
   },
   "best/mandelbrot/rust": {
@@ -1576,25 +1576,27 @@
     "track": "best"
   },
   "best/nbody/resid": {
-    "artifact_bytes": 84186,
+    "artifact_bytes": 88773,
     "bench": "nbody",
-    "build_s": 1.9567,
+    "build_s": 1.9614,
     "cmd": [
       "./out/nbody"
     ],
-    "exe_bytes": 41829,
+    "exe_bytes": 43541,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "cc7e649e5e123b68ceb3e3c7982cf1b5cec2ea16-dirty",
     "key": "best/nbody/resid",
     "lang": "resid",
     "log": "logs/build-best-nbody-resid.log",
     "ok": true,
-    "source_bytes": 0,
-    "source_files": [],
-    "source_gzip_bytes": 0,
-    "source_lines": 0,
-    "source_sha256": "1ea66b09b63391eb752eb67fba0020cfac1bc6a3dc7001667c41d2b1cb676d1a",
-    "timestamp": "2026-09-27T23:06:05Z",
+    "source_bytes": 12670,
+    "source_files": [
+      "nbody.resid"
+    ],
+    "source_gzip_bytes": 3619,
+    "source_lines": 324,
+    "source_sha256": "59bfcb2ee6ef23e9e04433c907541b13d21b7d32b5695ad9869081865b0a52af",
+    "timestamp": "2026-09-28T02:04:50Z",
     "track": "best"
   },
   "best/nbody/rust": {
@@ -5302,27 +5304,27 @@
     "track": "st"
   },
   "st/spectral-norm/resid": {
-    "artifact_bytes": 90167,
+    "artifact_bytes": 73488,
     "bench": "spectral-norm",
-    "build_s": 1.8164,
+    "build_s": 1.7832,
     "cmd": [
       "./out/spectralnorm"
     ],
-    "exe_bytes": 49487,
+    "exe_bytes": 45527,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "cc7e649e5e123b68ceb3e3c7982cf1b5cec2ea16-dirty",
     "key": "st/spectral-norm/resid",
     "lang": "resid",
     "log": "logs/build-st-spectral-norm-resid.log",
     "ok": true,
-    "source_bytes": 5582,
+    "source_bytes": 3535,
     "source_files": [
       "spectralnorm.resid"
     ],
-    "source_gzip_bytes": 1786,
-    "source_lines": 139,
-    "source_sha256": "cc280d4abf67d6554273af68241447c70b1f6669286fbb0a53dde38cfe05b551",
-    "timestamp": "2026-09-27T23:47:08Z",
+    "source_gzip_bytes": 1300,
+    "source_lines": 103,
+    "source_sha256": "dc386c5a6fafaa4bf28e4622f31de04b4f896f883011861f939ad0e505ad0ef8",
+    "timestamp": "2026-09-28T02:06:21Z",
     "track": "st"
   },
   "st/spectral-norm/rust": {

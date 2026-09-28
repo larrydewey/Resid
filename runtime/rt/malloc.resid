@@ -96,7 +96,12 @@ Int heap_map(Int n) {
     return sys_mmap(n);
 }
 
+// Bumped whenever big-block memory goes back to the kernel or moves: an
+// address seen before may now hold something else (text.resid inh_ok).
+pub Int unmap_epoch() { return resid_raw_global("rt_unmap_epoch", 8); }
+
 Int heap_unmap(Int p, Int n) {
+    _ = resid_raw_fetch_add(unmap_epoch(), 1);
     _ = resid_raw_fetch_add(mem_used(), 0 - n);
     return sys_munmap(p, n);
 }
@@ -213,6 +218,7 @@ pub Int c_realloc(Int p, Int n) {
         // A big block moves with its mapping.
         Int sz = (n + 16 + 4095) & (0 - 4096);
         _ = mem_take(sz - h);
+        _ = resid_raw_fetch_add(unmap_epoch(), 1);
         Int q = resid_raw_syscall(25, p - 16, h, sz, 1, 0, 0);   // mremap MAYMOVE
         if (q < 0 && q > 0 - 4096) { return 0; }
         return st64(q, sz) * 0 + q + 16;

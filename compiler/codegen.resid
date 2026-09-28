@@ -3347,6 +3347,9 @@ List(Str) lst_box_lines(Str ety, Str ev, Int tb) {
         return [cnv, box];
     }
     if (ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+        // A narrower float is boxed as a double (lst_read_reg narrows back).
+        Str lt = ll_ty(ety);
+        if (lt != "double") { return [r + "e = fpext " + lt + " " + ev + " to double", r + " = call ptr @resid_box_f64(double " + r + "e)"]; }
         return [r + " = call ptr @resid_box_f64(double " + ev + ")"];
     }
     if (int_fam(ety)) {
@@ -3382,6 +3385,8 @@ List(Str) lst_read_lines(Str ety, Str slot, Int tr, List(Str) acc) {
         return acc.concat([z + " = call i8 @resid_unbox_bool(ptr " + slot + ")", r + " = trunc i8 " + z + " to i1"]);
     }
     if (ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+        Str lt = ll_ty(ety);
+        if (lt != "double") { return acc.concat([r + "d = call double @resid_unbox_f64(ptr " + slot + ")", r + " = fptrunc double " + r + "d to " + lt]); }
         return acc.concat([r + " = call double @resid_unbox_f64(ptr " + slot + ")"]);
     }
     if (int_fam(ety)) {

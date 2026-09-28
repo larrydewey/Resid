@@ -60,8 +60,10 @@ Int main() {
 They are checked like any arithmetic: `abs` of the most negative integer
 traps.
 
-`sqrt(x)` takes a `Float` and returns its correctly rounded IEEE 754 square
-root, one machine instruction; `sqrt` of a negative number is NaN.
+`sqrt(x)` takes a `Float` (or a `Float` vector, lane by lane; see
+[Vector types](/Resid/reference/vectors/)) and returns its correctly rounded
+IEEE 754 square root, one machine instruction; `sqrt` of a negative number
+is NaN.
 
 ## Built-in behaviors of numbers
 

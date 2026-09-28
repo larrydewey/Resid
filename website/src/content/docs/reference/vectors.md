@@ -5,9 +5,10 @@ description: Vec(T, N) lanes in registers, lanewise operations, lane masks, shuf
 
 `Vec(T, N)` holds `N` lanes of a number type `T` in registers, and its
 operators work on every lane at once, which the compiler maps to the
-machine's vector instructions. `T` is an `Int`, `UInt` or `Float` width of
-at most 64 bits; `N` is 2, 4, 8, 16, 32 or 64. Comparisons give lane masks,
-`Vec(Bool, N)`.
+machine's vector instructions. `T` is `Int(8)`, `Int(16)`, `Int(32)`,
+`Int`, the same `UInt` widths, `Float(32)` or `Float`; `N` is 2, 4, 8, 16,
+32 or 64. Comparisons give lane masks, `Vec(Bool, N)`. `Vec` is a builtin
+type name.
 
 ```resid
 Vec(Float, 4) scale(Vec(Float, 4) v, Float k) { return v * k; }
@@ -34,8 +35,9 @@ Int main() {
 A list literal of exactly `N` elements, `splat(x)` (every lane `x`) and
 `lanes()` (0, 1, …, N−1) build a vector. They take the vector type from
 where they are written: a binding's value, a return value, an argument of
-a function, or an operand of `select`. Elsewhere, bind the vector first
-(`E0412`). Numeric literals adopt the lane type and must fit it.
+a user function, or an operand of `select`. Elsewhere, bind the vector
+first (`E0412`). Numeric literals adopt the lane type and must fit it; an
+integer literal operand of an operator also meets `Float` lanes (`v * 2`).
 
 ## Operations
 
@@ -47,9 +49,9 @@ a function, or an operand of `select`. Elsewhere, bind the vector first
 | `-v`, `~v`, `!m` | negation, integer complement, mask not |
 | `v[i]`, `v.with(i, x)` | read or replace lane `i` (checked like a list index) |
 | `v.sum()` | the lanes added in lane order |
-| `v.shuffle(idx)` | lane `j` of the result is `v[idx[j] mod N]` |
+| `v.shuffle(idx)` | lane `j` of the result is `v[idx[j] mod N]` (floor modulo: -1 is N-1) |
 | `v.wrapping_add(w)`, `wrapping_sub`, `wrapping_mul` | integer lanes, wrapping |
-| `m.any()`, `m.all()`, `m.bits()` | some lane, every lane, the lanes as bits of an `Int` |
+| `m.any()`, `m.all()`, `m.bits()` | some lane, every lane, the lanes as bits of an `Int` (with 64 lanes, lane 63 is the sign bit) |
 | `select(m, a, b)` | `a` where the mask is true, else `b` |
 | `sqrt(v)`, `min(a, b)`, `max(a, b)` | lanewise |
 | `v.to_list()` | the lanes as a `List(T)` |
@@ -66,7 +68,9 @@ so it rounds exactly like the loop it replaces.
 | Code | |
 |---|---|
 | `E0410` | the lane type is not a number width up to 64 bits, or `N` is not 2, 4, 8, 16, 32 or 64 |
-| `E0411` | a vector type appears inside another type (a list, map, option, result, field or closure type) |
+| `E0411` | a vector type appears inside another type (a list, map, option, result, field, variant payload or closure type, written or inferred), or a lambda or `spawn` captures a vector |
 | `E0412` | a vector literal, `splat` or `lanes` is not in a place that gives its type |
 
 An f-string does not show a vector directly; interpolate `v.to_list()`.
+A user function named `splat`, `lanes`, `select`, `sqrt`, `min` or `max`
+replaces the builtin everywhere in the program.
