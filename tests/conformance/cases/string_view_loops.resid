@@ -1,0 +1,29 @@
+// str_char_at in tail-recursive loops over strings passed back unchanged
+// (the loop reads a precomputed view): ASCII, non-ASCII, two strings at
+// once, out-of-range indices, and a string that changes every iteration.
+Int sum(Str s, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return sum(s, i + 1, n, acc + str_char_at(s, i));
+}
+
+// Reads both strings each step, including one index past each end.
+Int pair(Str a, Str b, Int i, Int n, Int acc) {
+    if (i > n) { return acc; }
+    return pair(a, b, i + 1, n, acc * 31 % 1000003 + str_char_at(a, i) + 2 * str_char_at(b, i));
+}
+
+// The string shrinks each step: not loop-invariant.
+Int shrink(Str s, Int acc) {
+    if (str_len(s) == 0) { return acc; }
+    return shrink(str_slice(s, 1, str_len(s)), acc + str_char_at(s, 0));
+}
+
+Int main() {
+    Str ascii = "The quick brown fox";
+    Str wide = "héllo wörld ∑ 🙂";
+    println(f"{sum(ascii, 0, str_len(ascii), 0)} {sum(wide, 0, str_len(wide), 0)}");
+    println(f"{pair(ascii, wide, 0, 20, 7)} {pair(wide, ascii, 0, 20, 7)}");
+    println(f"{sum(ascii, -3, 2, 0)} {sum(wide, 14, 18, 0)}");
+    println(f"{shrink(wide, 0)} {shrink(ascii, 0)}");
+    return 0;
+}

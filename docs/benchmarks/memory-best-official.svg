@@ -41,8 +41,8 @@
 <rect x="120.0" y="230" width="207.9" height="16" fill="#94a3b8"/>
 <text x="332.9" y="242.0" fill="#1f2937" font-size="11">5.70×</text>
 <text x="112" y="266.0" text-anchor="end" fill="#1f2937">Resid</text>
-<rect x="120.0" y="254" width="268.5" height="16" fill="#d97706"/>
-<text x="393.5" y="266.0" fill="#1f2937" font-size="11">9.47×</text>
+<rect x="120.0" y="254" width="268.1" height="16" fill="#d97706"/>
+<text x="393.1" y="266.0" fill="#1f2937" font-size="11">9.44×</text>
 <text x="112" y="290.0" text-anchor="end" fill="#1f2937">Java</text>
 <rect x="120.0" y="278" width="301.0" height="16" fill="#94a3b8"/>
 <text x="426.0" y="290.0" fill="#1f2937" font-size="11">12.4×</text>

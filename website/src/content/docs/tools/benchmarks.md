@@ -12,8 +12,8 @@ confidence intervals, build commands and per-program notes, is
 the suite is in [`bench/suite`](https://github.com/larrydewey/Resid/tree/master/bench/suite).
 
 **In one line:** written the same way as the C program, Resid is the
-fastest of the eleven languages overall (0.87× C); against each language's
-fastest hand-tuned program it is 0.79× C, third behind Rust and C++, whose
+fastest of the eleven languages overall (0.86× C); against each language's
+fastest hand-tuned program it is 0.77× C, third behind Rust and C++, whose
 programs use SIMD intrinsics that Resid does not have.
 
 ## How it was measured
@@ -42,7 +42,7 @@ programs use SIMD intrinsics that Resid does not have.
 
 | Language | `st` time (× C) | `best` time (× C) | `st` memory (× C) | `best` memory (× C) |
 | --- | ---: | ---: | ---: | ---: |
-| **Resid** | **0.87** | **0.79** | **1.40** | **9.47** |
+| **Resid** | **0.86** | **0.77** | **1.40** | **9.44** |
 | C | 1.00 | 1.00 | 1.00 | 1.00 |
 | Fortran | 1.05 | 1.17 | 1.90 | 2.18 |
 | C++ | 1.14 | 0.69 | 1.99 | 1.71 |
@@ -63,14 +63,14 @@ Wall-time ratio to C (below 1.00, Resid is faster):
 | Program | `st` | `best` | What decides it |
 | --- | ---: | ---: | --- |
 | `binary-trees` | **0.32** | **0.17** | allocation: see below |
-| `fannkuch-redux` | **0.58** | **0.67** | a packed permutation: see below |
+| `fannkuch-redux` | **0.58** | **0.69** | a packed permutation: see below |
 | `spectral-norm` | **0.67** | **0.56** | several rows per pass; vectorized in `best` |
-| `nbody` | **0.77** | 1.17 | the `sqrt` builtin; C's `best` is SIMD |
+| `nbody` | **0.77** | 1.18 | the `sqrt` builtin; C's `best` is SIMD |
 | `fasta` | **0.94** | **0.27** | a lookup table and a jump-ahead generator in `best` |
 | `mandelbrot` | 1.02 | **0.99** | 16 pixels in lockstep, vectorized in `best` |
 | `pidigits` | 1.09 | 1.16 | exact decimals against GMP |
-| `k-nucleotide` | 1.15 | 1.62 | Resid's hash map against hand-written tables |
-| `reverse-complement` | 2.37 | 3.19 | byte-at-a-time output through a string builder |
+| `k-nucleotide` | 1.14 | 1.59 | Resid's hash map against hand-written tables |
+| `reverse-complement` | 2.19 | 2.40 | a byte-at-a-time loop against C's bulk in-place reversal |
 
 ## Where Resid is strong
 
@@ -99,9 +99,10 @@ Wall-time ratio to C (below 1.00, Resid is faster):
   through clang's vectorizer (independent lanes written as scalars). The
   fastest C++ and Rust programs for mandelbrot, nbody and fannkuch-redux
   use intrinsics and stay 1.2–1.5× ahead.
-- **Byte-oriented output.** `reverse-complement` builds 250 MB of output
-  one character at a time through a string builder whose state goes
-  through memory on every append; it is 2.4× C on `st` and 3.2× on `best`.
+- **Byte-at-a-time text.** `reverse-complement` builds 250 MB of output
+  one character at a time. The builder lives in registers and each read
+  is a bounds test and a load, but C reverses the buffer in place with
+  bulk operations; Resid is 2.2× C on `st` and 2.4× on `best`.
 - **Memory on the `best` track.** Parallel Resid programs keep a heap per
   worker and build their outputs as lists and strings, so peak memory
   rises with parallelism (9.5× C, still below Java and JavaScript).

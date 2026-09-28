@@ -14,21 +14,21 @@
 <text x="813.0" y="84" text-anchor="start" fill="#1f2937" transform="rotate(-30 813.0 84)">regex-redux</text>
 <text x="102" y="109.0" text-anchor="end" fill="#1f2937" font-size="12">Resid</text>
 <rect x="110" y="92" width="72" height="24" fill="#f5f0f0"/>
-<text x="146.0" y="108.0" text-anchor="middle" fill="#1f2937">1.17</text>
-<rect x="184" y="92" width="72" height="24" fill="#cedbe9"/>
-<text x="220.0" y="108.0" text-anchor="middle" fill="#1f2937">0.67</text>
+<text x="146.0" y="108.0" text-anchor="middle" fill="#1f2937">1.18</text>
+<rect x="184" y="92" width="72" height="24" fill="#d1ddea"/>
+<text x="220.0" y="108.0" text-anchor="middle" fill="#1f2937">0.69</text>
 <rect x="258" y="92" width="72" height="24" fill="#bccfe2"/>
 <text x="294.0" y="108.0" text-anchor="middle" fill="#1f2937">0.56</text>
 <rect x="332" y="92" width="72" height="24" fill="#f6f6f7"/>
 <text x="368.0" y="108.0" text-anchor="middle" fill="#1f2937">0.99</text>
-<rect x="406" y="92" width="72" height="24" fill="#3f7ab7"/>
+<rect x="406" y="92" width="72" height="24" fill="#427cb7"/>
 <text x="442.0" y="108.0" text-anchor="middle" fill="#ffffff">0.17</text>
-<rect x="480" y="92" width="72" height="24" fill="#6f9bc7"/>
+<rect x="480" y="92" width="72" height="24" fill="#709cc8"/>
 <text x="516.0" y="108.0" text-anchor="middle" fill="#1f2937">0.27</text>
-<rect x="554" y="92" width="72" height="24" fill="#f0e1e3"/>
-<text x="590.0" y="108.0" text-anchor="middle" fill="#1f2937">1.62</text>
-<rect x="628" y="92" width="72" height="24" fill="#e6c2c6"/>
-<text x="664.0" y="108.0" text-anchor="middle" fill="#1f2937">3.19</text>
+<rect x="554" y="92" width="72" height="24" fill="#f0e2e3"/>
+<text x="590.0" y="108.0" text-anchor="middle" fill="#1f2937">1.59</text>
+<rect x="628" y="92" width="72" height="24" fill="#ebcfd2"/>
+<text x="664.0" y="108.0" text-anchor="middle" fill="#1f2937">2.40</text>
 <rect x="702" y="92" width="72" height="24" fill="#f5f0f1"/>
 <text x="738.0" y="108.0" text-anchor="middle" fill="#1f2937">1.16</text>
 <rect x="776" y="92" width="72" height="24" fill="#f3f4f6"/>

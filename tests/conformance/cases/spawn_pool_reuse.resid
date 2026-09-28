@@ -1,0 +1,40 @@
+// Regions on reused worker threads: every wave hands the workers fresh
+// strings (the previous wave's are gone), some ASCII and some not, a
+// region that aborts, and regions that spawn their own.
+Int boom(Int i) { List(Int) xs = [1]; return xs[i]; }
+
+Int weight(Str s, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return weight(s, i + 1, n, (acc * 7 + str_char_at(s, i)) % 1000003);
+}
+
+Str text(Int w, Int k) {
+    Str base = if (k % 2 == 0) { "ab" } else { "é∑" };
+    return str_repeat(base + f"{w}-{k}", 50 + w + k);
+}
+
+// One region per k; region 3 of every fifth wave aborts.
+Int wave(Int w, Int k, Int n) {
+    if (k >= n) { return 0; }
+    Str t = text(w, k);
+    Result(Int, RegionError) mine = spawn () {
+        Int extra = if (k == 3 && w % 5 == 0) { boom(9) } else { 0 };
+        Result(Int, RegionError) inner = spawn () { return str_len(str_slice(t, 1, 40)); };
+        Int il = inner else { -1 };
+        return weight(t, 0, str_len(t), 0) + il + extra;
+    };
+    Int rest = wave(w, k + 1, n);
+    Int got = mine else { -1000 };
+    return (got + rest) % 1000003;
+}
+
+Int waves(Int w, Int nw, Int acc) {
+    if (w >= nw) { return acc; }
+    Int x = wave(w, 0, 6);
+    return waves(w + 1, nw, (acc * 3 + x) % 1000003);
+}
+
+Int main() {
+    println(f"{waves(0, 60, 0)}");
+    return 0;
+}

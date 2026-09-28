@@ -39,18 +39,22 @@ Int bases(Str t, Int k, Int hi, Int acc) {
     return bases(t, k + 1, hi, if (c == 10) { acc } else { acc + 1 });
 }
 
+// complement(c) of each printable ASCII code c at index c - 32 (the same
+// table as `complement`, spelled out).
+Str comp_table() { return " !\"#$%&'()*+,-./0123456789:;<=>?@TVGHEFCDIJMLKNOPQYSAABWXRZ[\\]^_`TVGHefCDijMlKNopqYSAABWxRz{|}~"; }
+
 // Reverse complement of t[lo .. k], walking down from k, starting at
 // output column col; a short last line gets its newline when last.
-Str rc(Str t, Int lo, Int k, Int col, Bool last, Str sb) {
+StrBuf rc(Str tab, Str t, Int lo, Int k, Int col, Bool last, StrBuf sb) {
     if (k < lo) {
-        if (col > 0 && last) { return str_sb_append_cp(sb, 10); }
+        if (col > 0 && last) { return sb.push_char(10); }
         return sb;
     }
     Int c = str_char_at(t, k);
-    if (c == 10) { return rc(t, lo, k - 1, col, last, sb); }
-    Str sb1 = str_sb_append_cp(sb, complement(c));
-    if (col == 59) { return rc(t, lo, k - 1, 0, last, str_sb_append_cp(sb1, 10)); }
-    return rc(t, lo, k - 1, col + 1, last, sb1);
+    if (c == 10) { return rc(tab, t, lo, k - 1, col, last, sb); }
+    StrBuf sb1 = sb.push_char(if (c >= 32 && c < 127) { str_char_at(tab, c - 32) } else { complement(c) });
+    if (col == 59) { return rc(tab, t, lo, k - 1, 0, last, sb1.push_char(10)); }
+    return rc(tab, t, lo, k - 1, col + 1, last, sb1);
 }
 
 Int part_lo(Int body, Int end, Int p, Int np) { return body + (end - body) * p / np; }
@@ -86,7 +90,7 @@ List(Str) parts(Str t, Int body, Int end, List(Int) cs, Int p, Int np) {
     Int col = after(cs, p, 0) % 60;
     Result(Str, RegionError) mine = spawn () {
         Str part = str_slice(t, part_lo(body, end, p, np), part_lo(body, end, p + 1, np));
-        return str_sb_finish(rc(part, 0, str_len(part) - 1, col, p == 0, str_sb_new()));
+        return rc(comp_table(), part, 0, str_len(part) - 1, col, p == 0, StrBuf()).finish();
     };
     List(Str) rest = parts(t, body, end, cs, p + 1, np);
     Str got = mine else { "" };

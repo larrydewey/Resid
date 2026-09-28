@@ -1,0 +1,39 @@
+// Map/Set tables through many rebuilds: inserts, updates, removals
+// (tombstones), a shared copy left unchanged, and ordered checks.
+Map(Int, Int) fill(Int i, Int n, Map(Int, Int) m) {
+    if (i >= n) { return m; }
+    Int k = (i * 7919) % 100003;
+    Int v = m.get(k) else { 0 };
+    return fill(i + 1, n, m.insert(k, v + i));
+}
+
+Map(Int, Int) drop(Int i, Int n, Map(Int, Int) m) {
+    if (i >= n) { return m; }
+    return drop(i + 3, n, m.remove((i * 7919) % 100003));
+}
+
+Int total(Map(Int, Int) m, List(Int) ks, Int i, Int acc) {
+    if (i >= ks.len()) { return acc; }
+    Int v = m.get(ks[i]) else { 0 };
+    return total(m, ks, i + 1, (acc * 31 + ks[i] + v) % 1000003);
+}
+
+Set(Int) evens(Int i, Int n, Set(Int) s) {
+    if (i >= n) { return s; }
+    return evens(i + 1, n, if (i % 2 == 0) { s.insert(i * 13) } else { s.remove((i - 1) * 13) });
+}
+
+Int main() {
+    Map(Int, Int) e = {};
+    Map(Int, Int) a = fill(0, 150000, e);
+    Map(Int, Int) b = drop(0, 150000, a);
+    Map(Int, Int) c = fill(0, 20000, b);
+    List(Int) ka = sort(a.keys());
+    List(Int) kc = sort(c.keys());
+    println(f"{a.len()} {b.len()} {c.len()}");
+    println(f"{total(a, ka, 0, 0)} {total(c, kc, 0, 0)}");
+    Set(Int) s0 = {};
+    Set(Int) s = evens(0, 5001, s0);
+    println(f"{s.len()} {s.contains(5000 * 13)} {s.contains(0)}");
+    return 0;
+}

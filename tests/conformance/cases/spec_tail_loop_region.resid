@@ -1,0 +1,16 @@
+// A loop that passes a literal back into itself (`col` restarts at 0) is
+// specialized by the reducer; the specialization and the original call
+// each other in tail position, which must stay a jump even on a spawned
+// region's smaller stack.
+Int lines(Int i, Int n, Int col, Int acc, StrBuf b) {
+    if (i >= n) { return acc + str_len(b.finish()); }
+    if (col == 9) { return lines(i + 1, n, 0, acc + 1, b); }
+    return lines(i + 1, n, col + 1, acc, b);
+}
+
+Int main() {
+    Result(Int, RegionError) r = spawn () { return lines(0, 5000000, 0, 0, StrBuf().push("x")); };
+    Int v = r else { -1 };
+    println(f"{v}");
+    return 0;
+}

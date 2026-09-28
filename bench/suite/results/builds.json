@@ -2365,27 +2365,27 @@
     "track": "best"
   },
   "best/reverse-complement/resid": {
-    "artifact_bytes": 86283,
+    "artifact_bytes": 92805,
     "bench": "reverse-complement",
-    "build_s": 2.0467,
+    "build_s": 2.0828,
     "cmd": [
       "./out/revcomp"
     ],
-    "exe_bytes": 49307,
+    "exe_bytes": 50819,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "da2a9ec43215936e476316eaebff08caabc850fd-dirty",
     "key": "best/reverse-complement/resid",
     "lang": "resid",
     "log": "logs/build-best-reverse-complement-resid.log",
     "ok": true,
-    "source_bytes": 4810,
+    "source_bytes": 5129,
     "source_files": [
       "revcomp.resid"
     ],
-    "source_gzip_bytes": 1702,
-    "source_lines": 131,
-    "source_sha256": "ee522c8a25dc9675933d3c14ee730394199879c5646bd746a2d7f4756c81841f",
-    "timestamp": "2026-09-27T23:14:21Z",
+    "source_gzip_bytes": 1888,
+    "source_lines": 135,
+    "source_sha256": "56103dee713f996678a985e984b34967a8cfbbadea98d2cb72e780d670c2fa10",
+    "timestamp": "2026-09-28T00:38:51Z",
     "track": "best"
   },
   "best/reverse-complement/rust": {
@@ -5033,27 +5033,27 @@
     "track": "st"
   },
   "st/reverse-complement/resid": {
-    "artifact_bytes": 48307,
+    "artifact_bytes": 59283,
     "bench": "reverse-complement",
-    "build_s": 1.7292,
+    "build_s": 1.7807,
     "cmd": [
       "./out/revcomp"
     ],
-    "exe_bytes": 24919,
+    "exe_bytes": 26663,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "da2a9ec43215936e476316eaebff08caabc850fd-dirty",
     "key": "st/reverse-complement/resid",
     "lang": "resid",
     "log": "logs/build-st-reverse-complement-resid.log",
     "ok": true,
-    "source_bytes": 3189,
+    "source_bytes": 3557,
     "source_files": [
       "revcomp.resid"
     ],
-    "source_gzip_bytes": 1334,
-    "source_lines": 77,
-    "source_sha256": "4e0b323facca4e18ce545aafe1d34f5e7958dd6b208ad0964734010ea3faf3cf",
-    "timestamp": "2026-09-27T16:47:51Z",
+    "source_gzip_bytes": 1518,
+    "source_lines": 82,
+    "source_sha256": "a6bdf20bd1291c89e27be8d6855b97dba2e12250e57484b2c607bb32e46b92b0",
+    "timestamp": "2026-09-28T00:38:46Z",
     "track": "st"
   },
   "st/reverse-complement/rust": {

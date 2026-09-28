@@ -26,9 +26,23 @@ pub Int c_strlen(Int s) {
 }
 
 Int strlen_words(Int a, Int s) {
+    if ((a & 31) == 0) { return strlen_blocks(a, s); }
     Int z = zero_bytes(ld64(a));
     if (z != 0) { return a + ctz(z) / 8 - s; }
     return strlen_words(a + 8, s);
+}
+
+// 32 bytes at a time from a 32-byte boundary (a block never crosses a page).
+Int strlen_blocks(Int a, Int s) {
+    Int z = zero_bytes(ld64(a)) | zero_bytes(ld64(a + 8)) | zero_bytes(ld64(a + 16)) | zero_bytes(ld64(a + 24));
+    if (z != 0) { return strlen_words_end(a, s); }
+    return strlen_blocks(a + 32, s);
+}
+
+Int strlen_words_end(Int a, Int s) {
+    Int z = zero_bytes(ld64(a));
+    if (z != 0) { return a + ctz(z) / 8 - s; }
+    return strlen_words_end(a + 8, s);
 }
 
 @noinline
@@ -60,9 +74,29 @@ pub Int c_strchr(Int s, Int c) {
 
 @noinline
 pub Int c_memchr(Int p, Int c, Int n) {
+    if (n >= 8) { return memchr_words(p, c & 255, ones8() * (c & 255), n); }
+    return memchr_bytes(p, c, n);
+}
+
+Int memchr_bytes(Int p, Int c, Int n) {
     if (n <= 0) { return 0; }
     if (ld8(p) == (c & 255)) { return p; }
-    return c_memchr(p + 1, c, n - 1);
+    return memchr_bytes(p + 1, c, n - 1);
+}
+
+// Words of p[0 .. n) (32 bytes a step while they last) against the byte
+// c repeated in pat; the first match, or 0.
+Int memchr_words(Int p, Int c, Int pat, Int n) {
+    if (n >= 32) {
+        Int z = zero_bytes(ld64(p) ^ pat) | zero_bytes(ld64(p + 8) ^ pat) | zero_bytes(ld64(p + 16) ^ pat) | zero_bytes(ld64(p + 24) ^ pat);
+        if (z == 0) { return memchr_words(p + 32, c, pat, n - 32); }
+    }
+    if (n >= 8) {
+        Int z1 = zero_bytes(ld64(p) ^ pat);
+        if (z1 != 0) { return p + ctz(z1) / 8; }
+        return memchr_words(p + 8, c, pat, n - 8);
+    }
+    return memchr_bytes(p, c, n);
 }
 
 @noinline

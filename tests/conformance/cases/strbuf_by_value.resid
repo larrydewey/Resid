@@ -1,0 +1,30 @@
+// StrBuf values carried in registers: ASCII and multi-byte pushes, growth
+// past several capacities, branches, calls and a fused print.
+StrBuf fill(Int i, Int n, StrBuf b) {
+    if (i >= n) { return b; }
+    StrBuf b1 = if (i % 7 == 0) { b.push_char(233) } else { b.push_char(97 + i % 26) };
+    return fill(i + 1, n, b1);
+}
+
+StrBuf words(Int i, Int n, StrBuf b) {
+    if (i >= n) { return b; }
+    return words(i + 1, n, b.push(f"w{i}").push_char(32));
+}
+
+Int count(Str s, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return count(s, i + 1, n, if (str_char_at(s, i) == 233) { acc + 1 } else { acc });
+}
+
+Int main() {
+    Str e = StrBuf().finish();
+    println(f"[{e}] {str_len(e)}");
+    Str a = fill(0, 10000, StrBuf()).finish();
+    println(f"{str_len(a)} {count(a, 0, str_len(a), 0)} {str_slice(a, 0, 9)}");
+    Str w = words(0, 1000, StrBuf()).finish();
+    println(f"{str_len(w)} {str_slice(w, 0, 12)}");
+    StrBuf big = fill(0, 70000, StrBuf().push("head:").push_char(8364));
+    print(big.push_char(10).finish());
+    println(StrBuf().push("fused ").push_char(955).finish());
+    return 0;
+}

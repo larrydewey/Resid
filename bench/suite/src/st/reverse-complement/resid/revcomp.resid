@@ -5,9 +5,11 @@
 // writes its header followed by the reverse complement of the sequence,
 // 60 bases per line. The input is never split into lines: sequence
 // boundaries are found with str_index_of, and the body is walked backwards
-// in place with str_char_at (O(1) on an all-ASCII string), skipping the
-// newlines. The output is accumulated in one string builder and written
-// once (print flushes on every call).
+// in place with str_char_at (a bounds test and a byte load in the loop,
+// on an all-ASCII string), skipping the newlines. The complement is a
+// lookup string over the printable ASCII codes. The output is
+// accumulated in one StrBuf, which the compiler keeps in registers, and
+// written once (print flushes on every call).
 
 // IUPAC complement (upper and lower case in, upper case out); anything
 // else passes through unchanged.
@@ -32,22 +34,25 @@ Int complement(Int c) {
     return c;
 }
 
+// complement(c) of each printable ASCII code c at index c - 32 (the same
+// table as `complement`, spelled out).
+Str comp_table() { return " !\"#$%&'()*+,-./0123456789:;<=>?@TVGHEFCDIJMLKNOPQYSAABWXRZ[\\]^_`TVGHefCDijMlKNopqYSAABWxRz{|}~"; }
+
 // Reverse complement of t[lo..=k], walking backwards over the text and
 // skipping its line breaks, 60 bases per output line.
-Str rc(Str t, Int lo, Int k, Int col, Str sb) {
+StrBuf rc(Str tab, Str t, Int lo, Int k, Int col, StrBuf sb) {
     if (k < lo) {
-        if (col > 0) { return str_sb_append_cp(sb, 10); }
+        if (col > 0) { return sb.push_char(10); }
         return sb;
     }
     Int c = str_char_at(t, k);
-    if (c == 10) { return rc(t, lo, k - 1, col, sb); }
-    Str sb1 = str_sb_append_cp(sb, complement(c));
-    if (col == 59) { return rc(t, lo, k - 1, 0, str_sb_append_cp(sb1, 10)); }
-    return rc(t, lo, k - 1, col + 1, sb1);
+    if (c == 10) { return rc(tab, t, lo, k - 1, col, sb); }
+    StrBuf sb1 = sb.push_char(if (c >= 32 && c < 127) { str_char_at(tab, c - 32) } else { complement(c) });
+    if (col == 59) { return rc(tab, t, lo, k - 1, 0, sb1.push_char(10)); }
+    return rc(tab, t, lo, k - 1, col + 1, sb1);
 }
 
-// End (exclusive) of the text from `from` up to the next occurrence of
-// `needle`, or n when there is none.
+
 Int upto(Str t, Str needle, Int from, Int n) {
     Int j = str_index_of(t, needle, from);
     return if (j < 0) { n } else { j };
@@ -56,14 +61,14 @@ Int upto(Str t, Str needle, Int from, Int n) {
 // The sequence whose header line starts at h: copy the header, then emit
 // the reverse complement of the body, which runs up to the next line that
 // starts with '>'.
-Str seqs(Str t, Int h, Int n, Str sb) {
+StrBuf seqs(Str tab, Str t, Int h, Int n, StrBuf sb) {
     if (h >= n) { return sb; }
     Int eol = upto(t, "\n", h, n);
-    Str sb1 = str_sb_append_cp(str_sb_append(sb, str_slice(t, h, eol)), 10);
+    StrBuf sb1 = sb.push(str_slice(t, h, eol)).push_char(10);
     Int body = if (eol < n) { eol + 1 } else { n };
     Int nh = upto(t, "\n>", eol, n);
-    Str sb2 = rc(t, body, nh - 1, 0, sb1);
-    return seqs(t, if (nh < n) { nh + 1 } else { n }, n, sb2);
+    StrBuf sb2 = rc(tab, t, body, nh - 1, 0, sb1);
+    return seqs(tab, t, if (nh < n) { nh + 1 } else { n }, n, sb2);
 }
 
 @requires(filesystem)
@@ -71,7 +76,7 @@ Int main() {
     Str text = filesystem.read_all("/dev/stdin");
     Int n = str_len(text);
     Int first = if (str_char_at(text, 0) == 62) { 0 } else { upto(text, "\n>", 0, n) + 1 };
-    Str sb = seqs(text, if (first > n) { n } else { first }, n, str_sb_new());
-    print(str_sb_finish(sb));
+    StrBuf sb = seqs(comp_table(), text, if (first > n) { n } else { first }, n, StrBuf());
+    print(sb.finish());
     return 0;
 }

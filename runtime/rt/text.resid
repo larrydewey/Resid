@@ -489,6 +489,31 @@ pub Int rt_str_char_at(Int s, Int i) {
     return char_at_slow(s, i);
 }
 
+// A loop's view of a string it reads with str_char_at (lower.resid
+// sv_apply): its length when all ASCII, else 0.
+@export("resid_str_ascii_len", "i64(ptr)")
+@inline
+pub Int rt_str_ascii_len(Int s) {
+    Int st = idx_state();
+    if (s == ld64(st + 24)) { return ld64(st + 32); }
+    if (s == ld64(st + 40)) { return ld64(st + 48); }
+    return ascii_len_slow(s);
+}
+
+@noinline
+Int ascii_len_slow(Int s) {
+    Int sl = idx_slot(s);
+    return if (sl_off(sl) == 0) { sl_len(sl) } else { 0 };
+}
+
+// str_char_at given that view: in bounds of an all-ASCII string, a byte.
+@export("resid_char_at_n", "i64(ptr,i64,i64)")
+@inline
+pub Int rt_char_at_n(Int s, Int i, Int n) {
+    if (ult(i, n)) { return ld8(s + i); }
+    return char_at_slow(s, i);
+}
+
 // Half-open substring by codepoint index, clamped.
 @export("str_slice", "ptr(ptr,i64,i64)")
 pub Int rt_str_slice(Int s, Int start0, Int end0) {
@@ -588,6 +613,69 @@ pub Int sb_bytes(Int r, Int s, Int n) {
     return st64(r + 8, len + n);
 }
 
+// ─── Linear builders by value (StrBuf) ─────────────────────────────────
+// A StrBuf is {cur, lim} in registers (spec §45: it is never shared, so
+// it needs no handle): the next byte goes to cur while cur < lim, which the
+// compiler inlines for ASCII push_char. The buffer's start is stored just
+// past lim (a NUL byte, then 8 bytes); an empty builder is {0, 0}. The slow
+// paths return the new cur and leave the new lim here.
+Int sbv_out() { return resid_raw_tls("sbv_out", 8); }
+
+@export("resid_sb2_lim", "ptr()")
+@inline
+pub Int rt_sbv_lim() { return ld64(sbv_out()); }
+
+Int sbv_base(Int lim) { return if (lim == 0) { 0 } else { ld64(lim + 1) }; }
+
+// A buffer holding base[0 .. len) with room for n more bytes: the new cur.
+Int sbv_room(Int cur, Int lim, Int n) {
+    Int base = sbv_base(lim);
+    Int len = cur - base;
+    Int cap = lim - base;
+    if (cap - len >= n) { return st64(sbv_out(), lim) * 0 + cur; }
+    Int c0 = if (cap == 0) { 64 } else { cap * 2 };
+    Int c1 = if (c0 < len + n) { len + n } else { c0 };
+    Int nb = xrealloc(base, c1 + 9);
+    _ = st64(nb + c1 + 1, nb);
+    _ = st64(sbv_out(), nb + c1);
+    return nb + len;
+}
+
+Int sbv_bytes(Int cur, Int lim, Int s, Int n) {
+    Int c = sbv_room(cur, lim, n);
+    return mcopy(c, s, n) * 0 + c + n;
+}
+
+@export("resid_sb2_push", "ptr(ptr,ptr,ptr)")
+@noinline
+pub Int rt_sbv_push(Int cur, Int lim, Int s) { return sbv_bytes(cur, lim, s, c_strlen(s)); }
+
+@export("resid_sb2_push_cp", "ptr(ptr,ptr,i64)")
+@noinline
+pub Int rt_sbv_push_cp(Int cur, Int lim, Int cp) {
+    Int tmp = resid_raw_tls("sbv_cp", 8);
+    Int n = utf8_encode(cp, tmp);
+    return sbv_bytes(cur, lim, tmp, n);
+}
+
+// The finished string: the buffer itself, shrunk to fit (or copied into
+// the current arena, as str_sb_finish does).
+@export("resid_sb2_finish", "ptr(ptr,ptr)")
+pub Int rt_sbv_finish(Int cur, Int lim) {
+    Int b = sbv_base(lim);
+    Int len = cur - b;
+    Int cap = lim - b;
+    Int a = cur_arena();
+    if (a != 0 && ag_scope_depth() == 0) {
+        Int out = arena_alloc(a, len + 1);
+        _ = if (b != 0) { mcopy(out, b, len) + c_free(b) } else { 0 };
+        return st8(out + len, 0) * 0 + out;
+    }
+    Int out0 = if (b == 0) { xmalloc(1) } else { b };
+    Int out1 = if (b != 0 && cap > len + len / 8 + 64) { sb_shrink(out0, len) } else { out0 };
+    return st8(out1 + len, 0) * 0 + out1;
+}
+
 @export("str_sb_new", "ptr()")
 pub Int rt_sb_new() {
     Int r = xmalloc(24);
@@ -648,6 +736,16 @@ pub Bool rt_sb_print(Int r, Int nl) {
     Bool ok = if (nl != 0) { write_line(1, if (b == 0) { resid_raw_addr("") } else { b }, len) } else { b == 0 || write_all(1, b, len) };
     _ = c_free(b);
     _ = c_free(r);
+    return ok;
+}
+
+// print(b.finish()) on a StrBuf {cur, lim}: written and freed.
+@export("resid_sb2_print", "i1(ptr,ptr,i8)")
+pub Bool rt_sbv_print(Int cur, Int lim, Int nl) {
+    Int b = sbv_base(lim);
+    Int len = cur - b;
+    Bool ok = if (nl != 0) { write_line(1, if (b == 0) { resid_raw_addr("") } else { b }, len) } else { b == 0 || write_all(1, b, len) };
+    _ = c_free(b);
     return ok;
 }
 

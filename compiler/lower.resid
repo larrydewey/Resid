@@ -971,6 +971,43 @@ GT lw_list_push(LW w, Int id, GT base, GT ka, Int cv, Int sid, Str kt, Str vt, B
     return lw_step(d, r, base.ty, d.lines.concat([r + " = call ptr @resid_map_list_push(ptr " + base.val + ", i8 " + own + f", i8 {kk}, i64 " + kw.val + ", ptr " + bx + ", ptr " + d.val + ")"]), t);
 }
 
+// A StrBuf is {cur, lim} by value (spec §45: linear, so no handle; see
+// runtime text.resid). Two words come back in registers, so functions
+// passing one along still make musttail calls.
+Str sbv_ty() { return "{ptr,ptr}"; }
+
+// reg + "b" / "l": the cur and lim of StrBuf value v.
+List(Str) sbv_parts(Str v, Str reg) {
+    Str t = sbv_ty();
+    return [reg + "b = extractvalue " + t + " " + v + ", 0", reg + "l = extractvalue " + t + " " + v + ", 1"];
+}
+
+// The StrBuf {b, l} as register reg (through reg + "x").
+List(Str) sbv_make(Str reg, Str b, Str l) {
+    Str t = sbv_ty();
+    return [reg + "x = insertvalue " + t + " zeroinitializer, ptr " + b + ", 0", reg + " = insertvalue " + t + " " + reg + "x, ptr " + l + ", 1"];
+}
+
+// b.push(s) / b.push_char(c): an ASCII code point with room is stored
+// inline; everything else goes through the runtime slow path, which
+// returns the new cur and leaves the new lim for resid_sb2_lim.
+GT lw_sbv_push(Str bv, GT a, Bool ch, Int t1) {
+    Str reg = f"%t{t1}";
+    List(Str) parts = sbv_parts(bv, reg);
+    Str slow = if (ch) { "@resid_sb2_push_cp(ptr " + reg + "b, ptr " + reg + "l, i64 " + a.val + ")" } else { "@resid_sb2_push(ptr " + reg + "b, ptr " + reg + "l, ptr " + a.val + ")" };
+    List(Str) sl = [reg + "nb = call ptr " + slow, reg + "nl = call ptr @resid_sb2_lim()"];
+    if (!ch) { return lw_step(a, reg, "StrBuf", a.lines.concat(parts).concat(sl).concat(sbv_make(reg, reg + "nb", reg + "nl")), t1); }
+    Str lf = f"L{a.lbl + 1}";
+    Str ls = f"L{a.lbl + 2}";
+    Str lm = f"L{a.lbl + 3}";
+    List(Str) test = [reg + "a = icmp ult i64 " + a.val + ", 128", reg + "r = icmp ult ptr " + reg + "b, " + reg + "l", reg + "k = and i1 " + reg + "a, " + reg + "r", "br i1 " + reg + "k, label %" + lf + ", label %" + ls];
+    List(Str) fast = [lf + ":", reg + "v = trunc i64 " + a.val + " to i8", "store i8 " + reg + "v, ptr " + reg + "b, align 1", reg + "q = getelementptr i8, ptr " + reg + "b, i64 1", reg + "f = insertvalue " + sbv_ty() + " " + bv + ", ptr " + reg + "q, 0", "br label %" + lm];
+    List(Str) sp = [ls + ":"].concat(sl).concat(sbv_make(reg + "s", reg + "nb", reg + "nl")).concat(["br label %" + lm]);
+    List(Str) join = [lm + ":", reg + " = phi " + sbv_ty() + " [ " + reg + "f, %" + lf + " ], [ " + reg + "s, %" + ls + " ]"];
+    List(Str) all = a.lines.concat(parts).concat(test).concat(fast).concat(sp).concat(join);
+    return GT {.pos = 0, .val = reg, .ty = "StrBuf", .cnt = 0, .err = "", .glines = a.glines, .lines = all, .tmp = t1, .lbl = a.lbl + 3, .tail = false};
+}
+
 // cg_builder_method.
 GT lw_builder(LW w, Int id, GT base, Str m, List(Str) env) {
     Bool sb = base.ty == "StrBuf";
@@ -978,7 +1015,7 @@ GT lw_builder(LW w, Int id, GT base, Str m, List(Str) env) {
     if (m == "finish") {
         Int t1 = base.tmp + 1;
         Str reg = f"%t{t1}";
-        if (sb) { return lw_step(base, reg, "Str", base.lines.concat([reg + " = call ptr @str_sb_finish(ptr " + base.val + ")"]), t1); }
+        if (sb) { return lw_step(base, reg, "Str", base.lines.concat(sbv_parts(base.val, reg).concat([reg + " = call ptr @resid_sb2_finish(ptr " + reg + "b, ptr " + reg + "l)"])), t1); }
         Str body = esc_ll(ty_canon_cg("List(" + et + ")"), 0, "");
         Str tsym = f"@.lty{t1}";
         List(Str) g1 = base.glines.concat([tsym + f" = private unnamed_addr constant [{ll_bytes(body, 0, 0) + 1} x i8] c\"" + body + "\\00\""]);
@@ -991,11 +1028,7 @@ GT lw_builder(LW w, Int id, GT base, Str m, List(Str) env) {
     Str want = if (sb && m == "push_char") { "Int(64)" } else { et };
     GT a = if (num || (sb && m == "push_char")) { widen_val(a0, want) } else { a0 };
     Int t1 = a.tmp + 1;
-    if (sb) {
-        Str reg = f"%t{t1}";
-        Str call = if (m == "push") { "@str_sb_append(ptr " + base.val + ", ptr " + a.val + ")" } else { "@str_sb_append_cp(ptr " + base.val + ", i64 " + a.val + ")" };
-        return lw_step(a, reg, base.ty, a.lines.concat([reg + " = call ptr " + call]), t1);
-    }
+    if (sb) { return lw_sbv_push(base.val, a, m == "push_char", t1); }
     Str bx = lst_box_reg(et, a.val, t1);
     List(Str) l1 = a.lines.concat(lst_box_lines(et, a.val, t1));
     Int t2 = t1 + 3;
@@ -1706,7 +1739,18 @@ GT lw_print(LW w, Int id, Str n, List(Str) env, GT c) {
         Str fnl = if (n == "println") { "1" } else { "0" };
         return GT {.pos = 0, .val = freg, .ty = "Bool", .cnt = 0, .err = "", .glines = fb.glines, .lines = fb.lines.concat([freg + " = call i1 @resid_sb_print(ptr " + fb.val + ", i8 " + fnl + ")"]), .tmp = ft, .lbl = fb.lbl, .tail = false};
     }
-    GT v = lw_expr(w, a, env, c);
+    // `print(b.finish())` on a StrBuf writes the buffer as it stands.
+    Bool fin = n != "eprintln" && lw_kind(w, a) == "mcall" && lw_text(w, a) == "finish" && w.g.ns[a].nk == 1;
+    GT fr = if (fin) { lw_expr(w, lw_kid(w, a, 0), env, c) } else { c };
+    if (fin && fr.err != "") { return fr; }
+    if (fin && fr.ty == "StrBuf") {
+        Int ft = fr.tmp + 1;
+        Str freg = f"%t{ft}";
+        Str fnl = if (n == "println") { "1" } else { "0" };
+        List(Str) ls = fr.lines.concat(sbv_parts(fr.val, freg)).concat([freg + " = call i1 @resid_sb2_print(ptr " + freg + "b, ptr " + freg + "l, i8 " + fnl + ")"]);
+        return GT {.pos = 0, .val = freg, .ty = "Bool", .cnt = 0, .err = "", .glines = fr.glines, .lines = ls, .tmp = ft, .lbl = fr.lbl, .tail = false};
+    }
+    GT v = if (fin) { lw_builder(w, a, fr, "finish", env) } else { lw_expr(w, a, env, c) };
     if (v.err != "") { return v; }
     Int t1 = v.tmp + 1;
     Str reg = f"%t{t1}";
@@ -1735,7 +1779,12 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     }
     Bool mk_sb = n == "StrBuf" && !user_fn;
     Bool mk_lb = n == "ListBuf" && !user_fn;
-    if (mk_sb) { return lw_extern0(w, id, "str_sb_new", "ptr", "StrBuf", c); }
+    if (mk_sb) {
+        if (w.g.ns[id].nk != 0) { return lw_gerr("StrBuf arity", c); }
+        Int t1 = c.tmp + 1;
+        Str reg = f"%t{t1}";
+        return lw_step(c, reg, "StrBuf", c.lines.concat(sbv_make(reg, "null", "null")), t1);
+    }
     if (mk_lb) { return lw_extern0(w, id, "resid_listbuf_new", "ptr", "ListBuf(Unknown)", c); }
     if (n == "resid_dec_persist") {
         if (na != 1) { return lw_gerr("resid_dec_persist arity", c); }
@@ -2858,7 +2907,8 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Bool tco_ok = !is_main && !sandboxed && !growbuf_params;
     Str defpre = "define " + link + ll_ty(rbase) + " @" + name + "(";
     Str defpost = ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
-    List(Str) fn_lines0 = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, "") } else { pp1.lines.concat(pp2.lines) };
+    List(Str) fn_lines00 = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, "") } else { pp1.lines.concat(pp2.lines) };
+    List(Str) fn_lines0 = if (tco_ok && !resid_rtmod()) { sv_apply(fn_lines00, tyl) } else { fn_lines00 };
     // A loop whose iterations carry nothing they allocate frees each
     // iteration's allocations when the next one starts (lr_region).
     Bool region = tco_ok && lw_find_line(fn_lines0, "tco.head:", 1) >= 0 && lr_region_ok(w, d, fn_lines0, tyl);
@@ -2901,6 +2951,8 @@ List(Str) cap_rename_to(List(Str) ls, Str to, Int i, ListBuf(Str) acc) {
 Bool lr_region_ok(LW w, Int d, List(Str) ls, List(Str) tyl) {
     // The runtime manages its own memory: no regions inside it.
     if (resid_rtmod()) { return false; }
+    // A builder carried by value holds a heap buffer the region must not free.
+    if (tyl.contains("StrBuf")) { return false; }
     if (lg_closure(w.g, lw_kid(w, d, w.g.ns[d].nk - 1))) { return false; }
     Int h = lw_find_line(ls, "tco.head:", 1);
     return lr_phis_ok(ls, h + 1, tyl) && lr_exits_ok(ls, h + 1) && lr_allocates(w, ls, h + 1);
@@ -2938,7 +2990,7 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
     // Appending a scalar to a list builds what the loop carries on (moved
     // out at the back edge anyway), not garbage.
     if (f == "resid_list_push" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
-    return !lo_has_str(["llvm.sqrt.f64", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_get", "resid_list_get_nc", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
+    return !lo_has_str(["llvm.sqrt.f64", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_get", "resid_list_get_nc", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
 }
 
 // Every exit returns a scalar or a loop parameter (an older value, or a
@@ -2965,6 +3017,52 @@ Bool lr_phis_ok(List(Str) ls, Int i, List(Str) tyl) {
     Bool ok = !str_contains(l, " = phi ptr ") || lr_evac_fn(ty) != "" || lr_same_in(str_split(l, "[ "), 2, reg);
     if (!ok) { return false; }
     return lr_phis_ok(ls, i + 1, tyl);
+}
+
+// ─── String views in loops ─────────────────────────────────────────────
+// A Str parameter a tail-recursive loop passes back unchanged has its
+// all-ASCII length read once, at entry (0 when it is not all ASCII); each
+// str_char_at of it in the loop is then an unsigned bounds test and a byte
+// load (resid_char_at_n), with the general path only when that fails.
+List(Str) sv_apply(List(Str) ls, List(Str) tyl) {
+    Int h = lw_find_line(ls, "tco.head:", 1);
+    if (h < 0) { return ls; }
+    return sv_params(ls, h + 1, tyl);
+}
+
+List(Str) sv_params(List(Str) ls, Int i, List(Str) tyl) {
+    if (i >= ls.len() || !str_contains(ls[i], " = phi ")) { return ls; }
+    Str l = ls[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
+    Bool str = j >= 0 && j < tyl.len() && tyl[j] == "Str" && str_starts_with(l, reg + " = phi ptr ");
+    Str key = "@str_char_at(ptr " + reg + ", ";
+    Bool used = str && lr_same_in(str_split(l, "[ "), 2, reg) && sv_uses(ls, i + 1, key);
+    List(Str) ls2 = if (used) { sv_rewrite(ls, reg, key) } else { ls };
+    // The entry line (if added) sits before the phis: the index moves by one.
+    return sv_params(ls2, i + (if (used) { 2 } else { 1 }), tyl);
+}
+
+Bool sv_uses(List(Str) ls, Int i, Str key) {
+    if (i >= ls.len()) { return false; }
+    if (str_contains(ls[i], key)) { return true; }
+    return sv_uses(ls, i + 1, key);
+}
+
+List(Str) sv_rewrite(List(Str) ls, Str reg, Str key) {
+    Int b = lw_find_line(ls, "br label %tco.head", 1);
+    List(Str) out = sv_lines(ls, 0, reg, key, ListBuf()).finish();
+    List(Str) pre = out[0..b];
+    List(Str) post = out[b..out.len()];
+    return pre.concat([reg + ".alen = call i64 @resid_str_ascii_len(ptr " + reg + ".in)"]).concat(post);
+}
+
+ListBuf(Str) sv_lines(List(Str) ls, Int i, Str reg, Str key, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Bool hit = str_contains(l, key) && str_ends_with(l, ")");
+    Str l2 = if (hit) { str_replace(str_slice(l, 0, str_len(l) - 1), key, "@resid_char_at_n(ptr " + reg + ", ") + ", i64 " + reg + ".alen)" } else { l };
+    return sv_lines(ls, i + 1, reg, key, acc.push(l2));
 }
 
 // Every incoming value after the entry's is the phi itself.
