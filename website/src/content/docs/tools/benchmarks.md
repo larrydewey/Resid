@@ -13,8 +13,8 @@ the suite is in [`bench/suite`](https://github.com/larrydewey/Resid/tree/master/
 
 **In one line:** written the same way as the C program, Resid is the
 fastest of the eleven languages overall (0.93× C) and uses the least memory
-(0.73× C); against each language's fastest hand-tuned program it is 0.68× C,
-second behind Rust and ahead of C++.
+(0.73× C); against each language's fastest hand-tuned program it is 0.71× C,
+level with C++ and behind Rust (0.62×).
 
 ## How it was measured
 
@@ -42,17 +42,17 @@ second behind Rust and ahead of C++.
 
 | Language | `st` time (× C) | `best` time (× C) | `st` memory (× C) | `best` memory (× C) |
 | --- | ---: | ---: | ---: | ---: |
-| **Resid** | **0.93** | **0.68** | **0.73** | **3.98** |
+| **Resid** | **0.93** | **0.71** | **0.73** | **3.93** |
 | C | 1.00 | 1.00 | 1.00 | 1.00 |
-| Fortran | 1.05 | 1.17 | 1.90 | 2.18 |
-| C++ | 1.14 | 0.69 | 1.99 | 1.71 |
-| Rust | 1.19 | 0.63 | 1.48 | 1.20 |
-| Go | 1.45 | 1.55 | 2.01 | 2.43 |
-| Java | 1.56 | 1.50 | 11.8 | 12.4 |
-| C# | 1.68 | 1.31 | 8.17 | 5.70 |
-| Pascal | 1.71 | 1.97 | 0.84 | 1.24 |
-| JavaScript | 2.21 | 3.54 | 15.6 | 20.9 |
-| Python | 22.1 | 22.8 | 4.27 | 4.57 |
+| Fortran | 1.04 | 1.21 | 1.90 | 2.16 |
+| C++ | 1.15 | 0.71 | 2.00 | 1.69 |
+| Rust | 1.20 | 0.62 | 1.49 | 1.16 |
+| Go | 1.47 | 1.54 | 1.98 | 2.19 |
+| Java | 1.57 | 1.57 | 11.9 | 12.3 |
+| C# | 1.70 | 1.31 | 8.30 | 5.65 |
+| Pascal | 1.74 | 1.94 | 0.85 | 1.23 |
+| JavaScript | 2.26 | 3.58 | 15.7 | 20.8 |
+| Python | 22.4 | 23.5 | 4.30 | 4.51 |
 
 ![Geometric mean of wall time ratio to C, best track](/Resid/benchmarks/geomean-best-official.svg)
 
@@ -62,15 +62,15 @@ Wall-time ratio to C (below 1.00, Resid is faster):
 
 | Program | `st` | `best` | What decides it |
 | --- | ---: | ---: | --- |
-| `binary-trees` | **0.33** | **0.17** | allocation: see below |
-| `fannkuch-redux` | **0.58** | **0.47** | a packed permutation; byte shuffles in `best` |
-| `nbody` | **0.77** | 1.06 | the `sqrt` builtin; vector pair distances in `best` |
+| `binary-trees` | **0.34** | **0.21** | allocation: see below |
+| `fannkuch-redux` | **0.58** | **0.46** | a packed permutation; byte shuffles in `best` |
+| `nbody` | **0.77** | 1.07 | the `sqrt` builtin; vector pair distances in `best` |
 | `fasta` | **0.95** | **0.26** | a lookup table and a jump-ahead generator in `best` |
-| `mandelbrot` | 1.02 | **0.75** | 32 pixels in four `Vec(Float, 8)` in `best` |
+| `mandelbrot` | 1.02 | **0.77** | 32 pixels in four `Vec(Float, 8)` in `best` |
 | `pidigits` | 1.09 | 1.17 | exact decimals against GMP |
-| `k-nucleotide` | 1.14 | 1.23 | Resid's hash map against hand-written tables |
-| `spectral-norm` | 1.43 | **0.55** | one row at a time in `st`; 8 rows per pass, vectorized, in `best` |
-| `reverse-complement` | 2.03 | 2.38 | a byte-at-a-time loop against C's bulk in-place reversal |
+| `k-nucleotide` | 1.14 | 1.25 | Resid's hash map against hand-written tables |
+| `spectral-norm` | 1.44 | **0.62** | one row at a time in `st`; 8 rows per pass, vectorized, in `best` |
+| `reverse-complement` | 2.01 | 2.44 | a byte-at-a-time loop against C's bulk in-place reversal |
 
 ## Where Resid is strong
 
@@ -89,9 +89,9 @@ Wall-time ratio to C (below 1.00, Resid is faster):
   proves they are unshared.
 - **`spawn` scales.** Regions run on a pool of reused threads (a spawn
   costs under a microsecond). The `best` programs are the `st` programs
-  with `spawn`: fannkuch-redux 15.2 s → 0.99 s, binary-trees 2.1 s →
-  0.48 s, spectral-norm 1.12 s → 0.055 s (the fastest of all languages),
-  fasta 2.3 s → 0.13 s (the fastest by 3.7×).
+  with `spawn`: fannkuch-redux 15.2 s → 0.98 s, binary-trees 2.3 s →
+  0.56 s, spectral-norm 1.12 s → 0.054 s (the fastest of all languages),
+  fasta 2.3 s → 0.14 s (the fastest by 3.6×).
 
 ## Where Resid is weak
 
@@ -104,7 +104,7 @@ Wall-time ratio to C (below 1.00, Resid is faster):
   bulk operations; Resid is 2.0× C on `st` and 2.4× on `best`.
 - **Memory on the `best` track.** Parallel Resid programs keep a heap per
   worker and build their outputs as lists and strings, so peak memory
-  rises with parallelism (4.0× C, below Python, C#, Java and JavaScript).
+  rises with parallelism (3.9× C, below Python, C#, Java and JavaScript).
 - **Hashing.** `k-nucleotide` uses Resid's general `Map`; the fastest
   programs use specialized tables.
 - **Binaries.** Resid executables are static and 20–70 KB against C's

@@ -17,38 +17,38 @@
 <line x1="670.0" y1="54" x2="670.0" y2="322" stroke="#d1d5db" stroke-width="1"/>
 <text x="670.0" y="338" text-anchor="middle" fill="#6b7280" font-size="11">100×</text>
 <text x="112" y="74.0" text-anchor="end" fill="#1f2937">Rust</text>
-<rect x="266.1" y="62" width="37.2" height="16" fill="#94a3b8"/>
-<text x="308.3" y="74.0" fill="#1f2937" font-size="11">0.63×</text>
-<text x="112" y="98.0" text-anchor="end" fill="#1f2937">Resid</text>
-<rect x="272.6" y="86" width="30.8" height="16" fill="#d97706"/>
-<text x="308.3" y="98.0" fill="#1f2937" font-size="11">0.68×</text>
-<text x="112" y="122.0" text-anchor="end" fill="#1f2937">C++</text>
-<rect x="274.0" y="110" width="29.3" height="16" fill="#94a3b8"/>
-<text x="308.3" y="122.0" fill="#1f2937" font-size="11">0.69×</text>
+<rect x="265.8" y="62" width="37.5" height="16" fill="#94a3b8"/>
+<text x="308.3" y="74.0" fill="#1f2937" font-size="11">0.62×</text>
+<text x="112" y="98.0" text-anchor="end" fill="#1f2937">C++</text>
+<rect x="275.6" y="86" width="27.8" height="16" fill="#94a3b8"/>
+<text x="308.3" y="98.0" fill="#1f2937" font-size="11">0.71×</text>
+<text x="112" y="122.0" text-anchor="end" fill="#1f2937">Resid</text>
+<rect x="276.2" y="110" width="27.1" height="16" fill="#d97706"/>
+<text x="308.3" y="122.0" fill="#1f2937" font-size="11">0.71×</text>
 <text x="112" y="146.0" text-anchor="end" fill="#1f2937">C</text>
 <rect x="303.3" y="134" width="1.5" height="16" fill="#2563eb"/>
 <text x="308.3" y="146.0" fill="#1f2937" font-size="11">1.00×</text>
 <text x="112" y="170.0" text-anchor="end" fill="#1f2937">Fortran</text>
-<rect x="303.3" y="158" width="12.6" height="16" fill="#94a3b8"/>
-<text x="321.0" y="170.0" fill="#1f2937" font-size="11">1.17×</text>
+<rect x="303.3" y="158" width="15.0" height="16" fill="#94a3b8"/>
+<text x="323.3" y="170.0" fill="#1f2937" font-size="11">1.21×</text>
 <text x="112" y="194.0" text-anchor="end" fill="#1f2937">C#</text>
-<rect x="303.3" y="182" width="21.5" height="16" fill="#94a3b8"/>
+<rect x="303.3" y="182" width="21.6" height="16" fill="#94a3b8"/>
 <text x="329.9" y="194.0" fill="#1f2937" font-size="11">1.31×</text>
-<text x="112" y="218.0" text-anchor="end" fill="#1f2937">Java</text>
-<rect x="303.3" y="206" width="32.1" height="16" fill="#94a3b8"/>
-<text x="340.4" y="218.0" fill="#1f2937" font-size="11">1.50×</text>
-<text x="112" y="242.0" text-anchor="end" fill="#1f2937">Go</text>
-<rect x="303.3" y="230" width="35.1" height="16" fill="#94a3b8"/>
-<text x="343.4" y="242.0" fill="#1f2937" font-size="11">1.55×</text>
+<text x="112" y="218.0" text-anchor="end" fill="#1f2937">Go</text>
+<rect x="303.3" y="206" width="34.4" height="16" fill="#94a3b8"/>
+<text x="342.8" y="218.0" fill="#1f2937" font-size="11">1.54×</text>
+<text x="112" y="242.0" text-anchor="end" fill="#1f2937">Java</text>
+<rect x="303.3" y="230" width="35.8" height="16" fill="#94a3b8"/>
+<text x="344.1" y="242.0" fill="#1f2937" font-size="11">1.57×</text>
 <text x="112" y="266.0" text-anchor="end" fill="#1f2937">Pascal</text>
-<rect x="303.3" y="254" width="53.8" height="16" fill="#94a3b8"/>
-<text x="362.2" y="266.0" fill="#1f2937" font-size="11">1.97×</text>
+<rect x="303.3" y="254" width="52.6" height="16" fill="#94a3b8"/>
+<text x="361.0" y="266.0" fill="#1f2937" font-size="11">1.94×</text>
 <text x="112" y="290.0" text-anchor="end" fill="#1f2937">JavaScript</text>
-<rect x="303.3" y="278" width="100.6" height="16" fill="#94a3b8"/>
-<text x="408.9" y="290.0" fill="#1f2937" font-size="11">3.54×</text>
+<rect x="303.3" y="278" width="101.5" height="16" fill="#94a3b8"/>
+<text x="409.8" y="290.0" fill="#1f2937" font-size="11">3.58×</text>
 <text x="112" y="314.0" text-anchor="end" fill="#1f2937">Python</text>
-<rect x="303.3" y="302" width="248.9" height="16" fill="#94a3b8"/>
-<text x="557.2" y="314.0" fill="#1f2937" font-size="11">22.8×</text>
+<rect x="303.3" y="302" width="251.4" height="16" fill="#94a3b8"/>
+<text x="559.7" y="314.0" fill="#1f2937" font-size="11">23.5×</text>
 <line x1="303.3" y1="52" x2="303.3" y2="324" stroke="#1f2937" stroke-width="1.5"/>
 <text x="395.0" y="356" text-anchor="middle" fill="#6b7280">ratio to C (C = 1)</text>
 </svg>
