@@ -112,6 +112,7 @@ GT lw_list_at(LW w, Int id, Int i, Str ety, List(Str) vals, List(Str) env, GT c)
 // csl_value: a field initializer, given the field's type.
 GT lw_field_value(LW w, Int v, Str fty, List(Str) env, GT c) {
     if (lw_kind(w, v) == "lambda" && is_fn_type(fty)) { return lw_lambda(w, v, fty, env, c); }
+    if (is_fixed_type(fty)) { return lw_fixed_as(w, v, fty, env, c); }
     if (lw_kind(w, v) == "list" && w.g.ns[v].nk == 0) {
         Int te = c.tmp + 1;
         Str re = f"%t{te}";
@@ -185,18 +186,24 @@ GT lw_map_lit(LW w, Int id, List(Str) env, GT c) {
     Int e0 = lw_kid(w, id, 0);
     GT first = lw_expr(w, lw_kid(w, e0, 0), env, c);
     if (first.err != "") { return first; }
-    GT kbox = box_heap_("", lo_keep(first, first.ty), env, w.fs);
-    GT val = lw_expr(w, lw_kid(w, e0, 1), env, kbox);
+    GT kw = lin_word("", first, lin_key_kind(first.ty), env, w.fs);
+    GT val = lw_expr(w, lw_kid(w, e0, 1), env, kw);
     if (val.err != "") { return val; }
-    GT vbox = box_heap_("", lo_keep(val, val.ty), env, w.fs);
     Str kt = first.ty;
     Str vt = val.ty;
-    Int t1 = vbox.tmp + 1;
-    Str m0 = f"%t{t1}";
-    Int t2 = t1 + 1;
-    Str m1 = f"%t{t2}";
-    GT mt = GT {.pos = 0, .val = m1, .ty = "Map(" + kt + ", " + vt + ")", .cnt = 0, .err = "", .glines = vbox.glines, .lines = vbox.lines.concat([m0 + " = call ptr @resid_set_new()", m1 + " = call ptr @resid_map_insert(ptr " + m0 + ", ptr " + kbox.val + ", ptr " + vbox.val + ")"]), .tmp = t2, .lbl = vbox.lbl, .tail = false};
-    return lw_map_rest(w, id, 1, kt, vt, env, mt);
+    Int t0 = val.tmp + 1;
+    Str m0 = f"%t{t0}";
+    GT e = lw_step(val, val.val, vt, val.lines.concat([m0 + " = call ptr @resid_set_new()"]), t0);
+    return lw_map_rest(w, id, 1, kt, vt, env, lw_map_lit_put(w, m0, kw.val, e, kt, vt, env));
+}
+
+// One literal entry: the key word kw, the value in v, into the map m.
+GT lw_map_lit_put(LW w, Str m, Str kw, GT v, Str kt, Str vt, List(Str) env) {
+    Int vk = lo_put_kind(lin_vk(vt), vt);
+    GT vw = lin_word("", v, vk, env, w.fs);
+    Int t1 = vw.tmp + 1;
+    Str reg = f"%t{t1}";
+    return lw_step(vw, reg, "Map(" + kt + ", " + vt + ")", vw.lines.concat([reg + " = call ptr @resid_map_put(ptr " + m + f", i8 0, i8 {lin_key_kind(kt)}, i64 " + kw + f", i8 {vk}, i64 " + vw.val + ")"]), t1);
 }
 
 GT lw_map_rest(LW w, Int id, Int i, Str kt, Str vt, List(Str) env, GT m) {
@@ -204,27 +211,28 @@ GT lw_map_rest(LW w, Int id, Int i, Str kt, Str vt, List(Str) env, GT m) {
     Int en = lw_kid(w, id, i);
     GT k = lw_expr(w, lw_kid(w, en, 0), env, m);
     if (k.err != "") { return k; }
-    GT kbox = box_heap_("", lo_keep(k, k.ty), env, w.fs);
-    GT v = lw_expr(w, lw_kid(w, en, 1), env, kbox);
+    GT kw = lin_word("", k, lin_key_kind(kt), env, w.fs);
+    GT v = lw_expr(w, lw_kid(w, en, 1), env, kw);
     if (v.err != "") { return v; }
-    GT vbox = box_heap_("", lo_keep(v, v.ty), env, w.fs);
-    Int t1 = vbox.tmp + 1;
-    Str reg = f"%t{t1}";
-    GT m2 = GT {.pos = 0, .val = reg, .ty = "Map(" + kt + ", " + vt + ")", .cnt = 0, .err = "", .glines = vbox.glines, .lines = vbox.lines.concat([reg + " = call ptr @resid_map_insert(ptr " + m.val + ", ptr " + kbox.val + ", ptr " + vbox.val + ")"]), .tmp = t1, .lbl = vbox.lbl, .tail = false};
-    return lw_map_rest(w, id, i + 1, kt, vt, env, m2);
+    return lw_map_rest(w, id, i + 1, kt, vt, env, lw_map_lit_put(w, m.val, kw.val, v, kt, vt, env));
 }
 
 // cg_map_or_set_lit (set forms) and cg_set_lit_rest.
 GT lw_set_lit(LW w, Int id, List(Str) env, GT c) {
     GT first = lw_expr(w, lw_kid(w, id, 0), env, c);
     if (first.err != "") { return first; }
-    GT fbox = box_heap_("", lo_keep(first, first.ty), env, w.fs);
-    Int t1 = fbox.tmp + 1;
+    Int t1 = first.tmp + 1;
     Str s0 = f"%t{t1}";
-    Int t2 = t1 + 1;
-    Str s1 = f"%t{t2}";
-    GT st = GT {.pos = 0, .val = s1, .ty = "Set(" + first.ty + ")", .cnt = 0, .err = "", .glines = fbox.glines, .lines = fbox.lines.concat([s0 + " = call ptr @resid_set_new()", s1 + " = call ptr @resid_set_insert(ptr " + s0 + ", ptr " + fbox.val + ")"]), .tmp = t2, .lbl = fbox.lbl, .tail = false};
-    return lw_set_rest(w, id, 1, first.ty, env, st);
+    GT e = lw_step(first, first.val, first.ty, first.lines.concat([s0 + " = call ptr @resid_set_new()"]), t1);
+    return lw_set_rest(w, id, 1, first.ty, env, lw_set_lit_put(w, s0, e, first.ty, env));
+}
+
+GT lw_set_lit_put(LW w, Str s, GT e, Str et, List(Str) env) {
+    Int kk = lin_key_kind(et);
+    GT kw = lin_word("", e, kk, env, w.fs);
+    Int t1 = kw.tmp + 1;
+    Str reg = f"%t{t1}";
+    return lw_step(kw, reg, "Set(" + et + ")", kw.lines.concat([reg + " = call ptr @resid_set_put(ptr " + s + f", i8 0, i8 {kk}, i64 " + kw.val + ")"]), t1);
 }
 
 GT lw_set_rest(LW w, Int id, Int i, Str et, List(Str) env, GT sv) {
@@ -232,11 +240,7 @@ GT lw_set_rest(LW w, Int id, Int i, Str et, List(Str) env, GT sv) {
     GT e = lw_expr(w, lw_kid(w, id, i), env, sv);
     if (e.err != "") { return e; }
     if (e.ty != et) { return gt_err("set element type mismatch: " + et + " vs " + e.ty, e); }
-    GT ebox = box_heap_("", lo_keep(e, et), env, w.fs);
-    Int t1 = ebox.tmp + 1;
-    Str reg = f"%t{t1}";
-    GT m = GT {.pos = 0, .val = reg, .ty = "Set(" + et + ")", .cnt = 0, .err = "", .glines = ebox.glines, .lines = ebox.lines.concat([reg + " = call ptr @resid_set_insert(ptr " + sv.val + ", ptr " + ebox.val + ")"]), .tmp = t1, .lbl = ebox.lbl, .tail = false};
-    return lw_set_rest(w, id, i + 1, et, env, m);
+    return lw_set_rest(w, id, i + 1, et, env, lw_set_lit_put(w, sv.val, e, et, env));
 }
 
 // ─── if-expressions and expression blocks ───────────────────────────
@@ -370,7 +374,7 @@ GT lw_orelse(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
 
 // lin_get_else.
 GT lw_get_else(LW w, GT base, GT ka, Str kt, Str vt, Int fb, List(Str) env) {
-    Int kk = lin_kk(kt);
+    Int kk = lin_key_kind(kt);
     GT kw = lin_word("", ka, kk, env, w.fs);
     Int t1 = kw.tmp + 1;
     Str fr = f"%t{t1}";
@@ -461,7 +465,11 @@ GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
         if (clo.err != "") { return clo; }
         return lw_rt1(clo, "ptr", "@resid_list_show_clo(ptr " + v.val + ", ptr " + clo.val + ")", "Str");
     }
-    if (is_map_type_cg(t)) { return lw_rt1(vt, "ptr", "@resid_map_format(ptr " + v.val + ")", "Str"); }
+    if (is_map_type_cg(t)) {
+        Str ks = if (map_key_type_cg(t) == "Str") { "1" } else { "0" };
+        Str vs = if (map_val_type_cg(t) == "Str") { "1" } else { "0" };
+        return lw_rt1(vt, "ptr", "@resid_map_format_k(ptr " + v.val + ", i8 " + ks + ", i8 " + vs + ")", "Str");
+    }
     if (is_set_type_cg(t)) { return lw_rt1(vt, "ptr", "@resid_set_format(ptr " + v.val + ")", "Str"); }
     Int si = struct_index(w.fs, t);
     if (si >= 0) { return lw_struct_ts(w, vt, w.fs.stf[si], env); }
@@ -1010,6 +1018,7 @@ List(Str) lv_decl(List(Str) gl, Str name, Str decl) { return gl.concat(["@rtg.cm
 // The value of `id` for a slot of type `want`: vector literals, splat(x)
 // and lanes() take their vector type from it.
 GT lw_expr_as(LW w, Int id, Str want, List(Str) env, GT c) {
+    if (is_fixed_type(want)) { return lw_fixed_as(w, id, want, env, c); }
     if (!lv_is(want)) { return lw_expr(w, id, env, c); }
     Str k = lw_kind(w, id);
     Str n = lw_text(w, id);
@@ -1019,6 +1028,21 @@ GT lw_expr_as(LW w, Int id, Str want, List(Str) env, GT c) {
     if (builtin && n == "lanes") { return lv_lanes_of(want, c); }
     if (builtin && n == "select") { return lv_select(w, id, want, env, c); }
     return lw_expr(w, id, env, c);
+}
+
+// A value where a fixed-capacity type is expected: a literal of another type gets its own storage.
+GT lw_fixed_as(LW w, Int id, Str want, List(Str) env, GT c) {
+    if (is_list_fixed(want) && lw_kind(w, id) == "list") {
+        Int t1 = c.tmp + 1;
+        Str reg = f"%t{t1}";
+        GT c0 = lw_step(c, "", "", c.lines.concat(fixed_alloc(reg, want)), t1);
+        GT f = lw_fixed_elems(w, id, 0, fixed_arr_ty(want), fixed_elem(want), reg, fixed_cap(want), env, c0);
+        if (f.err != "") { return f; }
+        return lw_step(f, reg, want, f.lines, f.tmp);
+    }
+    GT v = lw_expr(w, id, env, c);
+    if (v.err != "" || v.ty == want) { return v; }
+    return cg_cast_fixed(v, want, c);
 }
 
 // A scalar as the lane type of vt.
@@ -1423,6 +1447,35 @@ GT lw_builder(LW w, Int id, GT base, Str m, List(Str) env) {
     return lw_step(a, reg, base.ty, l1.concat([reg + " = call ptr @resid_listbuf_push(ptr " + base.val + ", ptr " + bx + ")"]), t2);
 }
 
+// Int and Str keys cross as words of their kind (1 / 4); others boxed.
+Bool lin_typed_key(Str kt) { return lin_kk(kt) == 1 || kt == "Str"; }
+Int lin_key_kind(Str kt) { return if (kt == "Str") { 4 } else { lin_kk(kt) }; }
+
+// m.get(k) / m[k]: the stored value boxed, as an Option.
+GT lw_map_get(GT base, GT arg, Str kt, Str vt, List(Str) env, Funcs fs) {
+    if (lin_typed_key(kt)) {
+        Int kk = lin_key_kind(kt);
+        GT kw = lin_word("", arg, kk, env, fs);
+        Int tg = kw.tmp + 1;
+        Str fr = f"%t{tg}";
+        Str wv = f"%t{tg + 1}";
+        Str rawp = f"%t{tg + 2}";
+        GT rawg = lw_step(kw, rawp, "", kw.lines.concat([fr + " = call i128 @resid_map_find(ptr " + base.val + f", i8 {kk}, i64 " + kw.val + ", i8 0)", wv + " = trunc i128 " + fr + " to i64", rawp + " = inttoptr i64 " + wv + " to ptr"]), tg + 2);
+        return wrap_map_get_option(rawp, vt, rawg);
+    }
+    GT kb = box_heap_("", arg, env, fs);
+    Int t1 = kb.tmp + 1;
+    Str reg = f"%t{t1}";
+    GT raw = GT {.pos = 0, .val = reg, .ty = "", .cnt = 0, .err = "", .glines = arg.glines, .lines = kb.lines.concat([reg + " = call ptr @resid_map_get(ptr " + base.val + ", ptr " + kb.val + ")"]), .tmp = t1, .lbl = arg.lbl, .tail = false};
+    return wrap_map_get_option(reg, vt, raw);
+}
+
+GT lw_map_has(GT base, GT arg, Str kt, List(Str) env, Funcs fs) {
+    Int kk = lin_key_kind(kt);
+    GT kw = lin_word("", arg, kk, env, fs);
+    return lw_rtb(kw, "@resid_map_has(ptr " + base.val + f", i8 {kk}, i64 " + kw.val + ")");
+}
+
 GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
     Str kt = map_key_type_cg(base.ty);
     Str vt = map_val_type_cg(base.ty);
@@ -1434,22 +1487,7 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
     GT arg = lw_marg(w, id, 0, env, base);
     if (arg.err != "") { return arg; }
     Bool m_owned = lo_is(w, id, 1);
-    if (m == "get") {
-        if (lin_kk(kt) == 1) {
-            GT kw = lin_word(src, arg, 1, env, fs);
-            Int tg = kw.tmp + 1;
-            Str fr = f"%t{tg}";
-            Str wv = f"%t{tg + 1}";
-            Str rawp = f"%t{tg + 2}";
-            GT rawg = lw_step(kw, rawp, "", kw.lines.concat([fr + " = call i128 @resid_map_find(ptr " + base.val + ", i8 1, i64 " + kw.val + ", i8 0)", wv + " = trunc i128 " + fr + " to i64", rawp + " = inttoptr i64 " + wv + " to ptr"]), tg + 2);
-            return wrap_map_get_option(rawp, vt, rawg);
-        }
-        GT kb = box_heap_(src, arg, env, fs);
-        Int t1 = kb.tmp + 1;
-        Str reg = f"%t{t1}";
-        GT raw = GT {.pos = 0, .val = reg, .ty = "", .cnt = 0, .err = "", .glines = arg.glines, .lines = kb.lines.concat([reg + " = call ptr @resid_map_get(ptr " + base.val + ", ptr " + kb.val + ")"]), .tmp = t1, .lbl = arg.lbl, .tail = false};
-        return wrap_map_get_option(reg, vt, raw);
-    }
+    if (m == "get") { return lw_map_get(base, arg, kt, vt, env, fs); }
     Int fv = if (m == "insert") { lw_kid(w, id, 2) } else { -1 };
     Int fsid = if (fv >= 0 && lw_kind(w, fv) == "mcall" && lw_text(w, fv) == "concat" && lw_kind(w, lw_kid(w, fv, 0)) == "ref") { lp_fuse_sid(env, lw_text(w, lw_kid(w, fv, 0))) } else { -1 };
     if (fsid >= 0) { return lw_list_push(w, id, base, arg, fv, fsid, kt, vt, m_owned, env); }
@@ -1474,19 +1512,19 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
         Str reg = f"%t{t1}";
         return GT {.pos = 0, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = va.glines, .lines = vb.lines.concat([reg + " = call ptr @resid_map_insert(ptr " + base.val + ", ptr " + kb.val + ", ptr " + vb.val + ")"]), .tmp = t1, .lbl = va.lbl, .tail = false};
     }
-    if (m == "remove" && (m_owned || lin_kk(kt) == 1)) {
-        GT kw = lin_word(src, arg, lin_kk(kt), env, fs);
+    if (m == "remove" && (m_owned || lin_typed_key(kt))) {
+        GT kw = lin_word(src, arg, lin_key_kind(kt), env, fs);
         Int ti = kw.tmp + 1;
         Str treg = f"%t{ti}";
         Str own = if (m_owned) { "1" } else { "0" };
-        return lw_step(kw, treg, base.ty, kw.lines.concat([treg + " = call ptr @resid_map_del(ptr " + base.val + ", i8 " + own + f", i8 {lin_kk(kt)}, i64 " + kw.val + ")"]), ti);
+        return lw_step(kw, treg, base.ty, kw.lines.concat([treg + " = call ptr @resid_map_del(ptr " + base.val + ", i8 " + own + f", i8 {lin_key_kind(kt)}, i64 " + kw.val + ")"]), ti);
     }
     if (m == "remove") {
         GT kb = box_heap_(src, arg, env, fs);
         GT r = lw_rt1(kb, "ptr", "@resid_map_remove(ptr " + base.val + ", ptr " + kb.val + ")", base.ty);
         return GT {.pos = 0, .val = r.val, .ty = r.ty, .cnt = 0, .err = "", .glines = arg.glines, .lines = r.lines, .tmp = r.tmp, .lbl = arg.lbl, .tail = false};
     }
-    if (m == "contains" && lin_kk(kt) == 1) { return lw_rtb(arg, "@resid_map_has(ptr " + base.val + ", i8 1, i64 " + arg.val + ")"); }
+    if (m == "contains" && lin_typed_key(kt)) { return lw_map_has(base, arg, kt, env, fs); }
     if (m == "contains") {
         GT kb = box_heap_(src, arg, env, fs);
         GT r = lw_rtb(kb, "@resid_map_contains(ptr " + base.val + ", ptr " + kb.val + ")");
@@ -1505,9 +1543,9 @@ GT lw_set_method(LW w, Int id, GT base, Str m, List(Str) env) {
     Bool s_owned = lo_is(w, id, 1);
     GT arg = lw_marg(w, id, 0, env, base);
     if (arg.err != "") { return arg; }
-    if (m == "contains" && lin_kk(set_et) == 1) { return lw_rtb(arg, "@resid_map_has(ptr " + base.val + ", i8 1, i64 " + arg.val + ")"); }
-    if ((m == "insert" || m == "remove") && (s_owned || lin_kk(set_et) == 1 || set_et == "Str")) {
-        Int sk = if (m == "insert") { lo_put_kind(lin_kk(set_et), set_et) } else { lin_kk(set_et) };
+    if (m == "contains" && lin_typed_key(set_et)) { return lw_map_has(base, arg, set_et, env, fs); }
+    if ((m == "insert" || m == "remove") && (s_owned || lin_typed_key(set_et))) {
+        Int sk = if (m == "insert") { lo_put_kind(lin_kk(set_et), set_et) } else { lin_key_kind(set_et) };
         GT kw = lin_word(src, arg, sk, env, fs);
         Int ti = kw.tmp + 1;
         Str treg = f"%t{ti}";
@@ -1563,11 +1601,7 @@ GT lw_index(LW w, Int id, List(Str) env, GT c) {
         Str vt = map_val_type_cg(base.ty);
         GT ix = lw_expr(w, ixn, env, base);
         if (ix.err != "") { return ix; }
-        GT kb = box_heap_("", ix, env, w.fs);
-        Int t1 = kb.tmp + 1;
-        Str reg = f"%t{t1}";
-        GT b5 = GT {.pos = 0, .val = reg, .ty = "", .cnt = 0, .err = "", .glines = ix.glines, .lines = kb.lines.concat([reg + " = call ptr @resid_map_get(ptr " + base.val + ", ptr " + kb.val + ")"]), .tmp = t1, .lbl = ix.lbl, .tail = false};
-        return wrap_map_get_option(reg, vt, b5);
+        return lw_map_get(base, ix, map_key_type_cg(base.ty), vt, env, w.fs);
     }
     if (str_find_char(base.ty, 40, 0) < 0) { return gt_err("indexing non-list " + base.ty, base); }
     Str ety = elem_type(base.ty);
@@ -1652,7 +1686,7 @@ GT lw_index_fixed(LW w, Int ixn, GT base, List(Str) env) {
     Str ety = fixed_elem(base.ty);
     Str gp = f"%t{tn}";
     Str lda = f"%t{tn + 1}";
-    return GT {.pos = 0, .val = lda, .ty = ety, .cnt = 0, .err = "", .glines = ixx.glines, .lines = lf.concat([gp + " = getelementptr inbounds " + ll_ty(base.ty) + ", ptr " + base.val + ", i64 0, i64 " + ixx.val, lda + " = load " + ll_ty(ety) + ", ptr " + gp]), .tmp = tn + 1, .lbl = l2, .tail = false};
+    return GT {.pos = 0, .val = lda, .ty = ety, .cnt = 0, .err = "", .glines = ixx.glines, .lines = lf.concat([gp + " = getelementptr inbounds " + fixed_arr_ty(base.ty) + ", ptr " + base.val + ", i64 0, i64 " + ixx.val, lda + " = load " + ll_ty(ety) + ", ptr " + gp]), .tmp = tn + 1, .lbl = l2, .tail = false};
 }
 
 // cg_primary literal cases.
@@ -2865,7 +2899,7 @@ ST lw_bind_fixed_bytes(LW w, Str name, Str dtyb, Str lit, Str lk, List(Str) env,
     Int t1 = g.tmp + 1;
     Str reg = f"%t{t1}";
     Str cst = if (lk == "bytes") { f"[{fixed_cap(dtyb)} x i8] c\"" + body + zeros_ll(fixed_cap(dtyb) - bl) + "\"" } else { fixed_str_const(body, bl, fixed_cap(dtyb) + 1) };
-    List(Str) l2 = g.lines.concat([reg + " = alloca " + ll_ty(dtyb), "store " + cst + ", ptr " + reg]);
+    List(Str) l2 = g.lines.concat([reg + f" = call ptr @resid_gmalloc(i64 {fixed_bytes(dtyb)})", "store " + cst + ", ptr " + reg]);
     return ST {.pos = 0, .dead = g.dead, .err = "", .env = env_add(env, name + ":" + reg + ":" + dtyb), .glines = g.glines, .hlines = g.hlines, .lines = l2, .tmp = t1, .lbl = g.lbl, .rety = g.rety};
 }
 
@@ -2873,11 +2907,11 @@ ST lw_bind_fixed_bytes(LW w, Str name, Str dtyb, Str lit, Str lk, List(Str) env,
 ST lw_bind_fixed_list(LW w, Int ln, Str name, Str dtyb, List(Str) env, ST g) {
     Str ety = fixed_elem(dtyb);
     Int cap = fixed_cap(dtyb);
-    Str arrty = ll_ty(dtyb);
+    Str arrty = fixed_arr_ty(dtyb);
     Int t1 = g.tmp + 1;
     Str reg = f"%t{t1}";
     // Slots the literal leaves unset read as zero (spec §44).
-    GT c0 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = g.glines, .lines = g.lines.concat([reg + " = alloca " + arrty, "store " + arrty + " zeroinitializer, ptr " + reg]), .tmp = t1, .lbl = g.lbl, .tail = false};
+    GT c0 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = g.glines, .lines = g.lines.concat(fixed_alloc(reg, dtyb)), .tmp = t1, .lbl = g.lbl, .tail = false};
     GT f = lw_fixed_elems(w, ln, 0, arrty, ety, reg, cap, env, c0);
     if (f.err != "") { return st_err(f.err, g); }
     return ST {.pos = 0, .dead = g.dead, .err = "", .env = env_add(env, name + ":" + reg + ":" + dtyb), .glines = f.glines, .hlines = g.hlines, .lines = f.lines, .tmp = f.tmp, .lbl = f.lbl, .rety = g.rety};

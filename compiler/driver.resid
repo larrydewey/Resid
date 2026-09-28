@@ -828,7 +828,12 @@ Str ll_ty(Str ty) {
         Str digits = str_slice(ty, skip, str_len(ty) - 1);
         return "i" + digits;
     }
-    // Fixed-capacity stack types (spec §44): inline arrays, never heap.
+    // A fixed-capacity value (spec §44) is a pointer to its storage (fixed_arr_ty).
+    return "ptr";
+}
+
+// The storage layout of a fixed-capacity type: an inline array.
+Str fixed_arr_ty(Str ty) {
     if (is_str_fixed(ty)) {
         Int cap1 = fixed_cap(ty) + 1;
         return f"[{cap1} x i8]";
@@ -836,11 +841,31 @@ Str ll_ty(Str ty) {
     if (is_bytes_fixed(ty)) {
         return f"[{fixed_cap(ty)} x i8]";
     }
-    if (is_list_fixed(ty)) {
-        Str inner = ll_ty(fixed_elem(ty));
-        return f"[{fixed_cap(ty)} x " + inner + "]";
-    }
-    return "ptr";
+    Str inner = ll_ty(fixed_elem(ty));
+    return f"[{fixed_cap(ty)} x " + inner + "]";
+}
+
+// Bytes of one LLVM scalar of type t.
+Int ll_size(Str t) {
+    if (t == "i1" || t == "i8") { return 1; }
+    if (t == "i16" || t == "half") { return 2; }
+    if (t == "i32" || t == "float") { return 4; }
+    if (t == "i128" || t == "fp128") { return 16; }
+    if (t == "i256") { return 32; }
+    if (t == "i512") { return 64; }
+    return 8;
+}
+
+Int fixed_bytes(Str ty) {
+    if (is_str_fixed(ty)) { return fixed_cap(ty) + 1; }
+    if (is_bytes_fixed(ty)) { return fixed_cap(ty); }
+    return fixed_cap(ty) * ll_size(ll_ty(fixed_elem(ty)));
+}
+
+// Zeroed storage for a fixed value: region memory like any value, so it may be returned or stored.
+List(Str) fixed_alloc(Str reg, Str ty) {
+    Int n = fixed_bytes(ty);
+    return [reg + f" = call ptr @resid_gmalloc(i64 {n})", "call void @llvm.memset.p0.i64(ptr " + reg + f", i8 0, i64 {n}, i1 false)"];
 }
 
 // The LLVM zero literal for an `ll_ty`-produced type string — used to
@@ -892,7 +917,7 @@ Str fam_head(Str ty) {
 // precision, 34 for a bare `Dec` or an `m` literal) is static.
 // Typed and linear-accumulator map/set entry points (see lin_* below).
 List(Str) hdr_map_typed() {
-    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare i128 @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare void @resid_carry_free(i8, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)"];
+    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare i128 @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare void @resid_carry_free(i8, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)", "declare ptr @resid_map_format_k(ptr, i8, i8)"];
 }
 
 // Runtime declarations added after the long hdr_core lists; both mains
@@ -2593,7 +2618,9 @@ GT cg_expect_null(Str s, GT self, Int pos, List(Str) env, Funcs fs) {
 GT cg_expect_contains(Str s, GT self, GT item, Str et, Int pos, List(Str) env, Funcs fs) {
     Bool cset = is_set_type_cg(et);
     if (cset) {
-        GT eb = box_heap_(s, item, env, fs);
+        // Str elements cross as kind 4 words: a boxed string is guessed by its first byte.
+        Bool sk = lin_set_elem(et) == "Str";
+        GT eb = if (sk) { lin_word(s, item, 4, env, fs) } else { box_heap_(s, item, env, fs) };
         if (eb.err != "") { return eb; }
         Int t1 = eb.tmp + 1;
         Int t2 = t1 + 1;
@@ -2602,7 +2629,8 @@ GT cg_expect_contains(Str s, GT self, GT item, Str et, Int pos, List(Str) env, F
         Str ok = f"%t{t2}";
         Str fa = f"%t{t3}";
         List(Str) m0 = eb.lines;
-        List(Str) m1 = m0.concat([cr + " = call i8 @resid_set_contains(ptr " + self.val + ", ptr " + eb.val + ")"]);
+        Str call = if (sk) { "@resid_map_has(ptr " + self.val + ", i8 4, i64 " + eb.val + ")" } else { "@resid_set_contains(ptr " + self.val + ", ptr " + eb.val + ")" };
+        List(Str) m1 = m0.concat([cr + " = call i8 " + call]);
         List(Str) m2 = m1.concat([ok + " = icmp ne i8 " + cr + ", 0"]);
         List(Str) fl = [fa + " = call ptr @ToString(ptr " + self.val + ")"];
         GT z = GT {.pos = pos, .val = ok, .ty = "Bool", .cnt = 0, .err = "", .glines = eb.glines, .lines = m2, .tmp = t3, .lbl = eb.lbl, .tail = false};
@@ -3252,7 +3280,7 @@ GT cg_cast_fixed(GT inner, Str toty, GT c) {
         Int t1 = inner.tmp + 1;
         Str dst = f"%t{t1}";
         List(Str) l0 = inner.lines;
-        List(Str) l1 = l0.concat([dst + " = alloca " + ll_ty(toty)]);
+        List(Str) l1 = l0.concat(fixed_alloc(dst, toty));
         Int t2 = t1 + 1;
         Str rc = f"%t{t2}";
         List(Str) l2 = l1.concat([rc + " = call i64 @resid_str_to_fixed(ptr " + dst + ", ptr " + inner.val + f", i64 {cap})"]);
@@ -3263,7 +3291,7 @@ GT cg_cast_fixed(GT inner, Str toty, GT c) {
         Int t1 = inner.tmp + 1;
         Str dst = f"%t{t1}";
         List(Str) l0 = inner.lines;
-        List(Str) l1 = l0.concat([dst + " = alloca " + ll_ty(toty)]);
+        List(Str) l1 = l0.concat(fixed_alloc(dst, toty));
         Int t2 = t1 + 1;
         Str rc = f"%t{t2}";
         List(Str) l2 = l1.concat([rc + " = call i64 @resid_bytes_to_fixed(ptr " + dst + ", ptr " + inner.val + f", i64 {cap})"]);
@@ -3303,7 +3331,7 @@ List(Str) fxbox_stores(Str arrty, Str base, Str ety, Str sla, Int i, Int n, Int 
 // list, using the same [n x ptr] staging + resid_list_new pattern as an
 // ordinary list literal (lst_emit).
 GT cg_box_fixed_list(GT inner, Str ety, Int n, GT c) {
-    Str arrty = ll_ty("List(" + ety + f", {n})");
+    Str arrty = fixed_arr_ty("List(" + ety + f", {n})");
     Int t1 = inner.tmp + 1;
     Str sla = f"%t{t1}";
     List(Str) l0 = inner.lines;

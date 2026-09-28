@@ -12,7 +12,7 @@
 // the transient; freezing makes it an ordinary value again.
 //
 // Keys and values are words of a kind fixed per map: key kind 1 = raw Int,
-// 0 = boxed pointer; value kind 1 = raw Int, 2 = Float bits, 3 = Bool,
+// 4 = bare string (hashed as kind 0 hashes one), 0 = boxed pointer; value kind 1 = raw Int, 2 = Float bits, 3 = Bool,
 // 0 = boxed (or a set's marker); -1 = undecided (the first update decides).
 // A request of another kind is converted: slower, never wrong. keys(),
 // values(), formatting and set algebra see the CANONICAL order: ascending
@@ -192,8 +192,15 @@ Bool boxed_eq(Int a, Int b) {
     return a == b;
 }
 
-Int key_hash(Int kk, Int k) { return if (kk == 1) { fnv_i64(k) } else { value_hash(k) }; }
-Bool key_eq(Int kk, Int a, Int b) { return if (kk == 1) { a == b } else { value_eq(a, b) }; }
+Int key_hash(Int kk, Int k) { return if (kk == 1) { fnv_i64(k) } else { if (kk == 4) { fnv_str(k) } else { value_hash(k) } }; }
+Bool key_eq(Int kk, Int a, Int b) { return if (kk == 1) { a == b } else { if (kk == 4) { str_key_eq(a, b) } else { value_eq(a, b) } }; }
+
+// Kind 4 keys are strings by type: no is_boxed guess (a string may start with 0xFF).
+Bool str_key_eq(Int a, Int b) {
+    if (a == b) { return true; }
+    if (a == 0 || b == 0) { return false; }
+    return c_strcmp(a, b) == 0;
+}
 
 // A hash as a number ordered canonically: the lowest 5-bit chunk most
 // significant (12 chunks, then the top 4 bits).
@@ -226,7 +233,9 @@ Int mbox(Int k, Int w) {
 }
 
 // Unbox w to kind k (1/2/3) into mret(); false when it holds no such value.
+// A kind 0 word for a kind 4 map is the string itself.
 Bool unbox_k(Int k, Int w) {
+    if (k == 4) { return ret_word(w) != 0; }
     if (ult(w, 4096) || !is_boxed(w)) { return false; }
     Int st = stype(w);
     if (k == 1 && st == 1) { return ret_word(unbox_word(w)) != 0; }
@@ -556,8 +565,8 @@ Int mix(Int k0) {
     return k2 ^ lshr(k2, 33);
 }
 
-Int t_hash(Int t, Int k) { return if (tkk(t) == 1) { mix(k) } else { value_hash(k) }; }
-Bool t_keq(Int t, Int a, Int b) { return if (tkk(t) == 1) { a == b } else { value_eq(a, b) }; }
+Int t_hash(Int t, Int k) { return if (tkk(t) == 1) { mix(k) } else { key_hash(tkk(t), k) }; }
+Bool t_keq(Int t, Int a, Int b) { return key_eq(tkk(t), a, b); }
 
 Int t_oob(Int t, Int k) {
     if (tkk(t) != 1) { return 0 - 1; }
@@ -744,9 +753,9 @@ Int map_one() { return resid_raw_global("map_one", 8); }
 Int t_vref(Int t, Int rk, Int kb) {
     if (tlive(t) == 0 || tkeys(t) == 0) { return 0; }
     Bool same = tkk(t) == rk;
-    Bool ok = same || (tkk(t) == 0 && rk == 1) || (tkk(t) != 0 && unbox_k(tkk(t), kb));
+    Bool ok = same || (tkk(t) == 0 && (rk == 1 || rk == 4)) || (tkk(t) != 0 && unbox_k(tkk(t), kb));
     if (!ok) { return 0; }
-    Int k = if (same) { kb } else { if (tkk(t) == 0) { c_box_i64(kb) } else { ld64(mret()) } };
+    Int k = if (same) { kb } else { if (tkk(t) == 0) { box_any(rk, kb) } else { ld64(mret()) } };
     Int o = t_oob(t, k);
     if (o >= 0) { return if (toob_has(t, o)) { t + 56 + o * 8 } else { 0 }; }
     Int r = t_probe(t, k);
@@ -1106,7 +1115,7 @@ Int trie_put_at(Int m, Int k, Int v) {
 @noinline
 Int map_put_slow(Int m0, Int owned, Int kk0, Int kb, Int vk0, Int vb) {
     Int ks = if (kk0 == 4) { 1 } else { 0 };
-    Int kk = if (kk0 == 4) { 0 } else { kk0 };
+    Int kk = kk0;
     Int vs = if (vk0 == 4 || vk0 == 5) { vk0 } else { 0 };
     Int vk = if (vk0 == 4 || vk0 == 5) { 0 } else { vk0 };
     // The first owned update of a shared map takes a private copy.
@@ -1168,10 +1177,9 @@ Int elem_keep(Int p) {
 // own, the element is appended in place.
 @export("resid_map_list_push", "ptr(ptr,i8,i8,i64,ptr,ptr)")
 pub Int rt_map_list_push(Int m, Int owned, Int kk, Int kb, Int elem, Int dflt) {
-    Int lk = if (kk == 4) { 0 } else { kk };
     Bool heap = !in_region(m);
     if (owned != 0 && mtrans(m) && mown(m) != 0) {
-        Int at = map_vref_raw(m, lk, kb);
+        Int at = map_vref_raw(m, kk, kb);
         Int h = if (at != 0) { ld64(at) } else { 0 };
         if (h != 0 && ld32(h + 12) == mown(m)) {
             // Allocate and keep as the map does: outside the region.
@@ -1185,12 +1193,12 @@ pub Int rt_map_list_push(Int m, Int owned, Int kk, Int kb, Int elem, Int dflt) {
         }
     }
     // The looked-up header only seeds the new one: it does not leave.
-    Int at = map_vref_raw(m, lk, kb);
+    Int at = map_vref_raw(m, kk, kb);
     Int base = if (at != 0) { word_out(map_vk(m), 0, ld64(at)) } else { dflt };
     Int nv = if (lcount(base) == 0) { fresh_list(base, elem, heap, owned != 0) } else { pvec_push(base, elem) };
     Int r = rt_map_put(m, owned, kk, kb, 5, nv);
     if (owned != 0 && mtrans(r) && mown(r) != 0) {
-        Int slot = map_vref_raw(r, lk, kb);
+        Int slot = map_vref_raw(r, kk, kb);
         _ = if (slot != 0) { st32(ld64(slot) + 12, mown(r)) } else { 0 };
         return r;
     }
@@ -1210,8 +1218,7 @@ Int fresh_list(Int base, Int elem, Bool heap, Bool owned) {
 }
 
 @export("resid_map_del", "ptr(ptr,i8,i8,i64)")
-pub Int rt_map_del(Int m0, Int owned, Int kk0, Int kb) {
-    Int kk = if (kk0 == 4) { 0 } else { kk0 };
+pub Int rt_map_del(Int m0, Int owned, Int kk, Int kb) {
     Int m = if (owned != 0 && !mtrans(m0) && mcount(m0) > 0) { rt_map_transient(m0) } else { m0 };
     if (owned != 0 && mtrans(m) && mtab(m) == 0) {
         Int saved = ld64(map_heap_w());
@@ -1252,8 +1259,7 @@ Int(128) found_word(Int w) { return ((Int(128))1 << (Int(128))64) | ((Int(128))w
 
 @export("resid_map_find", "i128(ptr,i8,i64,i8)")
 @inline
-pub Int(128) rt_map_find(Int m, Int kk0, Int kb, Int vk0) {
-    Int kk = if (kk0 == 4) { 0 } else { kk0 };
+pub Int(128) rt_map_find(Int m, Int kk, Int kb, Int vk0) {
     Int vk = if (vk0 == 4) { 0 } else { vk0 };
     Int t = mtab(m);
     // Only the owning loop's transient table uses the last-probe cache.
@@ -1267,7 +1273,7 @@ pub Int(128) rt_map_find(Int m, Int kk0, Int kb, Int vk0) {
 }
 
 @export("resid_map_has", "i8(ptr,i8,i64)")
-pub Int rt_map_has(Int m, Int kk, Int kb) { return if (map_vref(m, if (kk == 4) { 0 } else { kk }, kb) != 0) { 1 } else { 0 }; }
+pub Int rt_map_has(Int m, Int kk, Int kb) { return if (map_vref(m, kk, kb) != 0) { 1 } else { 0 }; }
 
 // ─── Boxed-value API ───────────────────────────────────────────────────
 
@@ -1343,23 +1349,30 @@ Int sb_entry(Int sb, Int p) {
     return sb_word(sb, unbox_word(p));
 }
 
-Int sb_pairs(Int sb, Int ks, Int vs, Int i, Int n) {
+// kstr / vstr: the keys / values are strings (never guessed from a first byte).
+Int sb_pairs(Int sb, Int ks, Int vs, Int i, Int n, Bool kstr, Bool vstr) {
     if (i >= n) { return 0; }
     _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
-    _ = sb_entry(sb, ld64(ks + i * 8));
-    _ = if (vs != 0) { sb_lit(sb, resid_raw_addr(": ")) + sb_entry(sb, ld64(vs + i * 8)) } else { 0 };
-    return sb_pairs(sb, ks, vs, i + 1, n);
+    _ = sb_str_entry(sb, ld64(ks + i * 8), kstr);
+    _ = if (vs != 0) { sb_lit(sb, resid_raw_addr(": ")) + sb_str_entry(sb, ld64(vs + i * 8), vstr) } else { 0 };
+    return sb_pairs(sb, ks, vs, i + 1, n, kstr, vstr);
 }
+
+Int sb_str_entry(Int sb, Int p, Bool str) { return if (str) { sb_quoted(sb, p) } else { sb_entry(sb, p) }; }
 
 // {key1: val1, key2: val2}
 @export("resid_map_format", "ptr(ptr)")
-pub Int rt_map_format(Int m) {
+pub Int rt_map_format(Int m) { return rt_map_format_k(m, 0, 0); }
+
+// kstr / vstr (from the compiler): the key / value type is Str.
+@export("resid_map_format_k", "ptr(ptr,i8,i8)")
+pub Int rt_map_format_k(Int m, Int kstr, Int vstr) {
     Int sb = rt_sb_new();
     Int n = mcount(m);
     Int ks = if (n > 0) { boxed_entries(m, true) } else { 0 };
     Int vs = if (n > 0) { boxed_entries(m, false) } else { 0 };
     _ = sb_lit(sb, resid_raw_addr("{"));
-    _ = sb_pairs(sb, ks, vs, 0, n);
+    _ = sb_pairs(sb, ks, vs, 0, n, kstr != 0 || map_kk(m) == 4, vstr != 0);
     _ = sb_lit(sb, resid_raw_addr("}"));
     _ = c_free(ks) + c_free(vs);
     return rt_sb_finish(sb);
@@ -1501,7 +1514,7 @@ pub Int rt_set_format(Int s) {
     Int n = mcount(s);
     Int ks = if (n > 0) { boxed_entries(s, true) } else { 0 };
     _ = sb_lit(sb, resid_raw_addr("{"));
-    _ = sb_pairs(sb, ks, 0, 0, n);
+    _ = sb_pairs(sb, ks, 0, 0, n, map_kk(s) == 4, false);
     _ = sb_lit(sb, resid_raw_addr("}"));
     _ = c_free(ks);
     return rt_sb_finish(sb);

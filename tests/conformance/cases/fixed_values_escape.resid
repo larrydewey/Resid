@@ -1,0 +1,15 @@
+// Fixed-capacity values as parameters, results, fields and captures (spec §44).
+type Tag = { Str(8) name; Int n; };
+Int flen(Str(8) s) { return str_len((Str)s); }
+Str(8) cut(Str x) { return (Str(8))x; }
+Int second(List(Int, 4) xs) { return xs[1] + xs[3]; }
+Int deep(Int n, Str(8) s) { if (n == 0) { return flen(s); } return deep(n - 1, s); }
+Int main() {
+    Str(8) a = cut(rt "hello world");
+    Tag t = Tag {.name = a, .n = rt 2};
+    Bytes(8) b = (Bytes(8))(rt "ab");
+    Int closure(Int) f = lambda(q) { flen(a) + q };
+    println((Str)a + " " + (Str)t.name);
+    println(f"{flen("abc")} {second([rt 1, 2])} {b[1]} {b[7]} {f(1)} {deep(rt 1000, a)}");
+    return 0;
+}

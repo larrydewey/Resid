@@ -64,6 +64,8 @@ cp s s_notes; cp s.resid-notes.cbor s_notes.resid-notes.cbor; flip s_notes.resid
 check "tampered notes" 1 "does not match its signed hash" "$COMPILER" verify s_notes
 cp s s_ok; cp s.resid-notes.cbor s_ok.resid-notes.cbor
 check "matching notes" 0 "verify: ok" "$COMPILER" verify s_ok
+cp s s_gone   # the signed notes sidecar removed
+check "missing signed sidecar" 1 "is missing (the signature covers it)" "$COMPILER" verify s_gone
 
 K=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
 check "concealed needs key" 1 "needs RESID_PROV_KEY" env RESID_PROV_ENCRYPT=1 "$COMPILER" p.resid -o c

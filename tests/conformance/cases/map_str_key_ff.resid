@@ -1,0 +1,38 @@
+// Str keys whose bytes start with 0xFF (a box's first byte) stay strings.
+@requires(filesystem)
+Str raw(List(Int) bs) {
+    Str p = "@TMP@/ff.bin";
+    Bool ok = filesystem.write_bytes(p, bs);
+    return filesystem.read_all(p);
+}
+
+Map(Str, Int) fill(Map(Str, Int) m, Str k, Int i, Int n) {
+    if (i >= n) { return m; }
+    return fill(m.insert(k + f"{i}", i), k, i + 1, n);
+}
+
+@requires(filesystem)
+Int main() {
+    Str k = raw([255, 255, 255, 255, 65, 65, 65, 65, 65, 65, 65, 65, 65]);
+    Str k2 = raw([255, 255, 255, 255, 0]);
+    Map(Str, Int) m = {"x": 1, k: 2};
+    Map(Str, Int) m2 = m.insert(k2, 3);
+    Int g = m2.get(k) else { 0 };
+    Int g2 = m2[k2] else { 0 };
+    println(f"{m2.len()} {g} {g2} {m2.contains(k)} {m2.contains("y")}");
+    Map(Str, Int) m3 = m2.remove(k);
+    println(f"{m3.len()} {m3.contains(k)} {m3.keys().len()}");
+    Set(Str) s = {"y", k};
+    Set(Str) t = {k2, k};
+    println(f"{s.contains(k)} {s.union(t).len()} {s.intersection(t).len()} {s.difference(t).len()}");
+    Set(Str) s2 = s.insert(k2).remove("y");
+    println(f"{s2.len()} {s2.contains(k2)} {s2.contains("y")}");
+    Map(Str, Int) big = fill({"x": 0}, k, 0, 100);
+    Int sum = big.get(k + "42") else { 0 - 1 };
+    println(f"{big.len()} {sum} {big.contains(k + "99")} {big.contains(k + "100")}");
+    Str shown = f"{m3}";
+    Map(Int, Str) mv = {1: k2};
+    Str shown2 = f"{mv}";
+    println(f"{str_len(shown)} {str_len(shown2)}");
+    return 0;
+}
