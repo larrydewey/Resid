@@ -28,6 +28,7 @@ Int rt_fail(Int msg, Int at) {
         _ = st64(catch_msg(), if (msg != 0) { msg } else { resid_raw_addr("region abort") });
         return c_longjmp(jb, 1);
     }
+    _ = term_exit();
     Int sb = rt_sb_new();
     Bool hasmsg = msg != 0 && ld8(msg) != 0;
     Bool hasat = at != 0 && ld8(at) != 0;

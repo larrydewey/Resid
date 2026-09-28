@@ -91,6 +91,7 @@ r = query("textDocument/completion")
 labels = [i["label"] for i in (r.get("result") or {}).get("items", [])]
 check("completion", "norm2" in labels and "Point" in labels and "match" in labels, r)
 # Behavior verbs complete; the prelude's own functions do not.
+check("completion builtins", "resid_read_byte" in labels and "resid_term_raw" in labels, r)
 check("completion verbs", "compare" in labels and "show" in labels and "resid_ord_int" not in labels, r)
 
 # Memory stays flat across edits (each message runs in its own arena).

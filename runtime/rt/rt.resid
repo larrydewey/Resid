@@ -19,6 +19,7 @@ import "case_tables.resid";
 import "case.resid";
 import "strutil.resid";
 import "sys.resid";
+import "term.resid";
 import "numfmt.resid";
 import "show.resid";
 import "lists.resid";

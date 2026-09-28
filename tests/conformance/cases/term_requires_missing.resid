@@ -1,0 +1,2 @@
+// A terminal builtin needs the `terminal` capability.
+Int main() { println(f"{resid_term_cols()}"); return 0; }

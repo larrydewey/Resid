@@ -29,29 +29,40 @@ byte-identical (the *fixed point*). It takes a few seconds for the compiler
 and about fifteen for clang's optimizing link. The result is
 `build/boot/stage2.bin`: that is `residc`, the Resid compiler.
 
-## Put it on your PATH
-
-The compiler finds its runtime (`rt.ll`) through `RESID_HOME`:
+## Install it
 
 ```sh
-mkdir -p ~/.local/bin
-ln -s "$PWD/build/boot/stage2.bin" ~/.local/bin/residc
-export RESID_HOME="$PWD/build/boot"     # add this to your shell profile
+./install.sh
+source ~/.resid/env        # add this line to your shell profile
 ```
 
-Inside the repository no variable is needed.
+`install.sh` copies the compiler, the runtime (`rt.ll`) and the standard
+library into `~/.resid` (`RESID_INSTALL` picks another directory) and puts
+`residc` in `~/.resid/bin`. `residc` then works from any directory with no
+environment variables. It also creates a signing key in `~/.resid/keys` the
+first time, which release builds use and reinstalls keep.
+
+After a later `./boot.sh` (including `--bootstrap-from-self`), an existing
+install is refreshed automatically, so it never lags the checkout
+(`RESID_NO_INSTALL_REFRESH=1` skips that). `./uninstall.sh` removes the
+install but keeps the key; `./uninstall.sh --purge` removes everything.
+
+Inside the repository no install is needed: `build/boot/residc` runs the
+freshly built compiler.
 
 ## Signing keys
 
 Release builds are signed (every binary carries signed provenance; see
-[Provenance](/Resid/reference/provenance/)). Create a key once per project:
+[Provenance](/Resid/reference/provenance/)). The key is looked up in
+`RESID_SIGNING_KEY`, then `keys/resid-ed25519.key` in the current
+directory, then the install's `~/.resid/keys`. For a per-project key:
 
 ```sh
 residc keygen          # writes keys/resid-ed25519.key and .pub
 ```
 
-or point `RESID_SIGNING_KEY` at an existing key. Debug and check builds
-need no key.
+`residc verify` trusts `keys/*.pub` and the install's `keys/*.pub`. Debug
+and check builds need no key.
 
 ## Editor support
 

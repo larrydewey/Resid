@@ -1,0 +1,116 @@
+// Buffered standard input (free, like printing) and the terminal
+// builtins (capability `terminal`): TTY queries, window size, raw mode.
+
+// Standard input: one 64 KB buffer for the process, {pos, len}.
+Int in_st() { return resid_raw_global("rt_stdin", 16); }
+Int in_buf() { return resid_raw_global("rt_stdin_buf", 65536); }
+Int in_cap() { return 65536; }
+
+// Bounds kept in range even if two threads race on the buffer.
+Int in_len() { Int n = ld64(in_st() + 8); return if (n < 0) { 0 } else { if (n > in_cap()) { in_cap() } else { n } }; }
+Int in_pos() { Int p = ld64(in_st()); Int n = in_len(); return if (p < 0) { 0 } else { if (p > n) { n } else { p } }; }
+
+// Refills a drained buffer; false at end of input or on an error.
+Bool in_fill() {
+    if (in_pos() < in_len()) { return true; }
+    Int r = resid_raw_syscall(0, 0, in_buf(), in_cap(), 0, 0, 0);
+    if (r == 0 - 4) { return in_fill(); }
+    Int n = if (r > 0) { r } else { 0 };
+    _ = st64(in_st(), 0) + st64(in_st() + 8, n);
+    return n > 0;
+}
+
+// The next byte of standard input, or -1 at end of input.
+@export("resid_read_byte", "i64()")
+pub Int rt_read_byte() {
+    if (!in_fill()) { return 0 - 1; }
+    Int p = in_pos();
+    _ = st64(in_st(), p + 1);
+    return ld8(in_buf() + p);
+}
+
+// One line of standard input with its newline; "" at end of input.
+@export("resid_read_line", "ptr()")
+pub Int rt_read_line() { return in_line(xmalloc(256), 0, 256); }
+
+Int in_line(Int p, Int n, Int cap) {
+    if (!in_fill()) { return st8(p + n, 0) + p; }
+    Int pos = in_pos();
+    Int e = in_scan_nl(in_buf(), pos, in_len());
+    Int k = e - pos;
+    Int cap2 = in_grow(cap, n + k + 1);
+    Int q = if (cap2 != cap) { xrealloc(p, cap2) } else { p };
+    _ = mcopy(q + n, in_buf() + pos, k);
+    _ = st64(in_st(), e);
+    if (ld8(q + n + k - 1) == 10) { return st8(q + n + k, 0) + q; }
+    return in_line(q, n + k, cap2);
+}
+
+// Index just past the first newline in [i, n), or n.
+Int in_scan_nl(Int b, Int i, Int n) {
+    if (i >= n) { return n; }
+    if (ld8(b + i) == 10) { return i + 1; }
+    return in_scan_nl(b, i + 1, n);
+}
+
+Int in_grow(Int cap, Int need) { return if (need <= cap) { cap } else { in_grow(cap * 2, need) }; }
+
+// ─── Terminal ──────────────────────────────────────────────────────────
+// Linux termios (TCGETS 0x5401, TCSETSW 0x5403) and TIOCGWINSZ (0x5413).
+// rt_term: {raw flag, saved termios of stdin}.
+Int tm() { return resid_raw_global("rt_term", 64); }
+Int tm_tmp() { return resid_raw_tls("term_tmp", 64); }
+
+Int tm_b8(Bool b) { return if (b) { 1 } else { 0 }; }
+
+Bool tm_tty(Int fd) { return fd >= 0 && fd <= 2 && resid_raw_syscall(16, fd, 21505, tm_tmp(), 0, 0, 0) == 0; }
+
+@export("resid_term_is_tty", "i8(i64)")
+pub Int rt_term_is_tty(Int fd) { return tm_b8(tm_tty(fd)); }
+
+// The window size of stdout (else stdin): columns (hi = false) or rows.
+Int tm_size(Bool rows, Int dflt) {
+    Int w = tm_tmp();
+    Bool ok = resid_raw_syscall(16, 1, 21523, w, 0, 0, 0) == 0 || resid_raw_syscall(16, 0, 21523, w, 0, 0, 0) == 0;
+    Int v = if (!ok) { 0 } else { if (rows) { ld32(w) & 65535 } else { (ld32(w) >> 16) & 65535 } };
+    return if (v > 0) { v } else { dflt };
+}
+
+@export("resid_term_cols", "i64()")
+pub Int rt_term_cols() { return tm_size(false, 80); }
+
+@export("resid_term_rows", "i64()")
+pub Int rt_term_rows() { return tm_size(true, 24); }
+
+// Stdin to raw mode (no echo, no line discipline, no signal keys, bytes
+// as typed); the original settings are kept for resid_term_restore.
+@export("resid_term_raw", "i8()")
+pub Int rt_term_raw() {
+    Int t = tm();
+    if (ld64(t) != 0) { return 1; }
+    if (resid_raw_syscall(16, 0, 21505, t + 8, 0, 0, 0) != 0) { return 0; }
+    Int w = tm_tmp();
+    _ = mcopy(w, t + 8, 36);
+    Int ifl = ld32(w);
+    Int ofl = ld32(w + 4);
+    Int lfl = ld32(w + 12);
+    _ = st32(w, ifl - (ifl & 1330));            // BRKINT ICRNL INPCK ISTRIP IXON
+    _ = st32(w + 4, ofl - (ofl & 1));           // OPOST
+    _ = st32(w + 8, ld32(w + 8) | 48);          // CS8
+    _ = st32(w + 12, lfl - (lfl & 32779));      // ECHO ICANON IEXTEN ISIG
+    _ = st8(w + 22, 0) + st8(w + 23, 1);        // VTIME 0, VMIN 1
+    if (resid_raw_syscall(16, 0, 21507, w, 0, 0, 0) != 0) { return 0; }
+    return st64(t, 1) + 1;
+}
+
+// Stdin back to the settings resid_term_raw saved; true when not raw.
+@export("resid_term_restore", "i8()")
+pub Int rt_term_restore() {
+    Int t = tm();
+    if (ld64(t) == 0) { return 1; }
+    if (resid_raw_syscall(16, 0, 21507, t + 8, 0, 0, 0) != 0) { return 0; }
+    return st64(t, 0) + 1;
+}
+
+// Process exit and uncaught aborts leave the terminal as they found it.
+pub Int term_exit() { return rt_term_restore(); }

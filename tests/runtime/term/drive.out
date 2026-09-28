@@ -1,0 +1,11 @@
+raw during call: True
+got [aXbc]
+got [hél]
+got [aXbc]
+got [fooZ bar ]
+got [2354]
+help  hello
+got [hello]
+interrupted
+eof
+exit: 0

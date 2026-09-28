@@ -1,0 +1,7 @@
+import "readline.resid";
+
+// readline needs `terminal`, through the library.
+Int main() {
+    ReadResult r = readline("> ", history_new(10));
+    return 0;
+}

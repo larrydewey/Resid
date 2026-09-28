@@ -14,7 +14,8 @@ them with:
 ## Threat model
 
 - **Untrusted library code** compiled into a program: it must not gain
-  capabilities (file system, processes, environment, arguments, network)
+  capabilities (file system, processes, environment, arguments, network,
+  terminal)
   that the program did not grant it, or reach the runtime's memory
   internals at all.
 - **Untrusted package sources** (a registry, a mirror, a copied archive):
@@ -31,7 +32,9 @@ them with:
 | Guarantee | Enforcement | Tests |
 |---|---|---|
 | No ambient authority: every capability family a function uses, directly or through anything it calls, wraps in a closure, or runs as a `sort` behavior, is granted by its own `@requires` or its enclosing sandbox. Authority enters a program only where `main` (or a `test` block) declares it. | E0219, `gk_authority` in `compiler/gcheck.resid` | `err_authority_*` (provider, builtin, call, closure, lambda, method sugar, behavior, test block), `authority_granted` |
-| Effectful runtime builtins are capabilities too: TCP is `network`, the ptrace debugger is `process`. | `gk_builtin_family` | `err_authority_ambient_builtin` |
+| Effectful runtime builtins are capabilities too: TCP is `network`, the ptrace debugger is `process`, TTY queries and raw mode are `terminal`. | `gk_builtin_family` | `err_authority_ambient_builtin`, `term_requires_missing`, `readline_requires_terminal` |
+| `terminal(readonly)` covers the TTY and window-size queries only; raw mode and restoring it are writes, at compile time and in the force-time guard (`terminal!`). | `gk_builtin_write`, `provider_family_of_line` | `term_readonly_write`, `term_readonly_query` |
+| A program never leaves the terminal in raw mode: the runtime restores the saved settings when `main` returns and on an uncaught abort. | `term_exit` in `runtime/rt/term.resid` | `tests/runtime` (readline on a pty) |
 | Generics and behaviors add no authority. A behavior's function runs where the behavior is used, so its capabilities flow to the caller. A generic function's own body is checked against its own `@requires`; each copy made for concrete types is granted exactly what it and the instances it calls need, and the concrete caller must hold that (E0219 names the copy, e.g. `label(Task)`). A copy of a generic declared inside a `sandbox` is placed inside the same sandbox, so the ceiling still bounds it (E0211, E0218). | `gk_auth_all` (copies), `gm_wrap` in `compiler/mono.resid` | `err_generic_authority`, `err_generic_sandbox`, `generic_authority_granted` |
 | The runtime's memory internals (arena and bulk push/pop, persist copies) and the `resid_raw_*` runtime primitives (raw memory, atomics, system calls, static storage, function addresses), which bypass every check above, are not part of the language. Two locks: the driver honors `--runtime-internals` only when the entry file is `compiler/driver.resid` or under `runtime/rt/`; and every use (a call, or an `@export`/`@import` annotation) must come from a file under `compiler/` or `runtime/rt/`, never `lib/`, found through the import source map (E0220). A lint test keeps `lib/` and `tools/` free of internal names. | `gk_internals_at`, `gk_internal_file`, driver `rentry` | `err_runtime_internal`, `err_runtime_internal_outside`, `tests/runtime` (primitives, lib/ import, lint) |
 | Read-only grants cover reads only, including a write reached through a callee. | E0219 modes | `err_authority_readonly_write` |
@@ -43,7 +46,7 @@ them with:
 | Force-time guard (defense in depth): every provider call is checked *before* it runs against the thread's sandbox frames; writes need a grant that is not read-only. | `resid_cap_check`, `capinject_at` | `tests/runtime/cap_guard.c`, `sandbox_force_time_guard_present` |
 
 Effects that are **not** capabilities (ambient by design): writing to
-stdout/stderr, reading stdin (`resid_read_line`), OS randomness, and the runtime's own
+stdout/stderr, reading stdin (`resid_read_line`, `resid_read_byte`), OS randomness, and the runtime's own
 allocation and aborts. There is no FFI or
 `extern`: a program can reach the OS only through providers and the
 builtins above.

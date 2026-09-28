@@ -1,0 +1,2 @@
+@requires(termnal)
+Int main() { return 0; }

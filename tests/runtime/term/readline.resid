@@ -1,0 +1,38 @@
+import "../../../lib/readline.resid";
+
+// Driven through a pty by drive.py.
+
+Str cmds(Str s) {
+    List(Str) all = ["help", "hello", "history", "quit"];
+    List(Str) none = [];
+    return str_join(pick(all, s, 0, none), "\n");
+}
+
+List(Str) pick(List(Str) xs, Str p, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return pick(xs, p, i + 1, if (str_starts_with(xs[i], p)) { acc.concat([xs[i]]) } else { acc });
+}
+
+@requires(terminal)
+Int got(History h, Str s) {
+    println(f"got [{s}]");
+    if (s == "quit") { return 0; }
+    return repl(history_add(h, s));
+}
+
+@requires(terminal)
+Int repl(History h) {
+    return match readline_with("> ", h, lambda(s) { cmds(s) }) {
+        Line(s) => got(h, s),
+        Interrupted => intr(h),
+        Eof => eof(),
+    };
+}
+
+@requires(terminal)
+Int intr(History h) { println("interrupted"); return repl(h); }
+
+Int eof() { println("eof"); return 0; }
+
+@requires(terminal)
+Int main() { return repl(history_new(100)); }

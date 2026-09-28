@@ -544,8 +544,20 @@ List(Str) ls_syms_at(LsA a, Int i, Int n, Bool here, ListBuf(Str) acc) {
 Str ls_completion(LsA a) {
     List(Str) kws = ["if", "else", "match", "return", "for", "in", "while", "break", "continue", "type", "import", "behavior", "using", "true", "false", "Int", "Float", "Bool", "Str", "Dec", "List", "Map", "Set", "Option", "Result", "Some", "None", "Ok", "Err", "StrBuf", "ListBuf", "test", "sandbox", "spawn", "with"];
     List(Str) ks = ls_kw_items(kws, 0, ListBuf());
+    List(Str) bs = ls_builtin_items(ls_builtins(), 0, ListBuf());
     List(Str) ds = if (a.parsed) { ls_decl_items(a, 0, a.g.ns[a.unit].nk, ListBuf()) } else { [] };
-    return "{\"isIncomplete\":false,\"items\":[" + str_join(ks.concat(ds), ",") + "]}";
+    return "{\"isIncomplete\":false,\"items\":[" + str_join(ks.concat(bs).concat(ds), ",") + "]}";
+}
+
+// Input and terminal builtins as "name|signature".
+List(Str) ls_builtins() {
+    return ["print|Bool print(Str)", "println|Bool println(Str)", "eprintln|Bool eprintln(Str)", "resid_read_line|Str resid_read_line()  stdin line with its newline, \"\" at end", "resid_read_byte|Int resid_read_byte()  stdin byte, -1 at end", "resid_term_is_tty|Bool resid_term_is_tty(Int fd)  @requires(terminal(readonly))", "resid_term_cols|Int resid_term_cols()  @requires(terminal(readonly))", "resid_term_rows|Int resid_term_rows()  @requires(terminal(readonly))", "resid_term_raw|Bool resid_term_raw()  @requires(terminal)", "resid_term_restore|Bool resid_term_restore()  @requires(terminal)"];
+}
+
+List(Str) ls_builtin_items(List(Str) bs, Int i, ListBuf(Str) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    List(Str) p = str_split(bs[i], "|");
+    return ls_builtin_items(bs, i + 1, acc.push("{\"label\":" + js_q(p[0]) + ",\"kind\":3,\"detail\":" + js_q(p[1]) + "}"));
 }
 
 List(Str) ls_kw_items(List(Str) ks, Int i, ListBuf(Str) acc) {

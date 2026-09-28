@@ -44,6 +44,18 @@ step() { echo -e "\033[1;34m==>\033[0m $*"; }
 ok()   { echo -e "  \033[0;32m✓\033[0m $*"; }
 die()  { echo -e "  \033[0;31m✗\033[0m $*"; exit 1; }
 
+# An install (install.sh) that already exists is refreshed after every
+# successful build or reseed, so ~/.resid never runs a stale compiler or
+# runtime; RESID_NO_INSTALL_REFRESH=1 skips it.
+refresh_install() {
+    local target="${RESID_INSTALL:-$HOME/.resid}"
+    [ "${RESID_NO_INSTALL_REFRESH:-0}" = "1" ] && return 0
+    [ -x "$target/bin/residc" ] || return 0
+    step "Refreshing the install in $target"
+    "${SCRIPT_DIR}/install.sh" > "${OUT}/install.log" 2>&1 || die "install refresh failed (see build/boot/install.log)"
+    ok "install refreshed"
+}
+
 # Optimization level for linking the compiler binaries (RESID_OPT=-O0 for a
 # fast, unoptimized bootstrap). Programs the compiler builds take -O<n> on
 # its own command line instead, also defaulting to -O2.
@@ -106,6 +118,7 @@ if [ "$BOOTSTRAP_SELF" -eq 1 ]; then
             link_clang "$SEED_LL" "${OUT}/stage2.bin"
             rm -f "${OUT}"/reseed_round*.ll "${OUT}"/reseed_round*.bin "${OUT}"/reseed_rt*.ll
             ok "stage2 seeded from the self-hosted compiler"
+            refresh_install
             echo ""
             echo "Verify with a clean ./boot.sh (no args) and commit the new seed:"
             echo "  git add -f build/boot/seed.ll build/boot/rt.ll build/boot/stage2.bin && git commit"
@@ -193,6 +206,7 @@ exec "$SCRIPT_DIR/stage2.bin" "$@"
 WRAPPER_EOF
 chmod +x "${OUT}/residc"
 ok "residc wrapper written"
+refresh_install
 
 echo ""
 echo "Self-hosting verified: fixed point holds (no Rust in the build path)."

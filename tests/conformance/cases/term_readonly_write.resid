@@ -1,0 +1,3 @@
+// Raw mode changes terminal state: a read-only grant does not cover it.
+@requires(terminal(readonly))
+Int main() { Bool r = resid_term_raw(); return 0; }

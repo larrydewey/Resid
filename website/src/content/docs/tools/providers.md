@@ -43,7 +43,24 @@ The TCP builtins (`resid_tcp_connect(host, port)`, `resid_tcp_send`,
 `resid_tcp_recv_all`, `resid_tcp_close` and their byte variants) need
 `network`. `lib/http.resid` and `lib/tls.resid` are built on them.
 
+## terminal
+
+| Builtin | Returns | Mode |
+|---|---|---|
+| `resid_term_is_tty(fd)` | `Bool`: fd 0, 1 or 2 is a terminal | read |
+| `resid_term_cols()`, `resid_term_rows()` | the window size (80 x 24 when unknown) | read |
+| `resid_term_raw()` | `Bool`: stdin in raw mode (no echo, no line editing, no signal keys) | write |
+| `resid_term_restore()` | `Bool`: stdin back to the settings `resid_term_raw` saved | write |
+
+`terminal(readonly)` grants the queries only. The runtime restores the
+terminal when `main` returns and on an uncaught abort. `lib/readline.resid`
+is built on these builtins.
+
 ## Not capabilities
 
-Printing (`print`, `println`, `eprintln`), reading a line from stdin
-(`resid_read_line()`), and OS randomness are available to every function.
+Printing (`print`, `println`, `eprintln`), reading standard input
+(`resid_read_line()` for a line with its newline, `""` at end of input;
+`resid_read_byte()` for one byte, `-1` at end of input), and OS randomness
+are available to every function. Standard input is read through one 64 KB
+buffer, so the two builtins can be mixed; reading `/dev/stdin` through
+`filesystem` bypasses it.

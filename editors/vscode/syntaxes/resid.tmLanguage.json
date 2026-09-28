@@ -257,6 +257,10 @@
           "match": "\\b(?:wrapping_[a-z0-9_]+|saturating_[a-z0-9_]+)\\b"
         },
         {
+          "name": "support.function.builtin.io.resid",
+          "match": "\\bresid_(?:read_line|read_byte|term_[a-z_]+)\\b(?=\\s*\\()"
+        },
+        {
           "name": "support.function.builtin.str.resid",
           "match": "\\bstr_[a-zA-Z0-9_]+\\b(?=\\s*\\()"
         }
@@ -266,7 +270,7 @@
       "patterns": [
         {
           "name": "entity.other.capability.resid",
-          "match": "\\b(filesystem|environment|git|args|process|network)(?=\\s*[(,)])",
+          "match": "\\b(filesystem|environment|git|args|process|network|terminal)(?=\\s*[(,)])",
           "captures": { "1": { "name": "entity.other.capability.name.resid" } }
         },
         {

@@ -4200,6 +4200,8 @@ Str provider_family_of_line(Str line) {
     if (str_contains(line, "@resid_process_run")) { return "process"; }
     if (str_contains(line, "@resid_git_")) { return "git"; }
     if (str_contains(line, "@resid_tcp_")) { return "network"; }
+    if (str_contains(line, "@resid_term_raw") || str_contains(line, "@resid_term_restore")) { return "terminal!"; }
+    if (str_contains(line, "@resid_term_")) { return "terminal"; }
     return "";
 }
 

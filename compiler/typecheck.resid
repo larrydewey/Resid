@@ -2548,6 +2548,18 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "") { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_read_line expects no arguments"};
     }
+    if (name == "resid_read_byte" || name == "resid_term_cols" || name == "resid_term_rows") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects no arguments"};
+    }
+    if (name == "resid_term_raw" || name == "resid_term_restore") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects no arguments"};
+    }
+    if (name == "resid_term_is_tty") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_term_is_tty expects (Int), got (" + argtys + ")"};
+    }
     if (name == "resid_cpu_has_aesni") {
         if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_cpu_has_aesni expects no arguments"};

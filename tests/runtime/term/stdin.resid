@@ -1,0 +1,16 @@
+// Buffered stdin: bytes and lines interleave, lines cross the 64 KB buffer.
+Int lines(Int n) {
+    Str l = resid_read_line();
+    if (l == "") { return n; }
+    println(f"{str_len(l)}");
+    return lines(n + 1);
+}
+
+Int main() {
+    Int a = resid_read_byte();
+    Int b = resid_read_byte();
+    println(f"{a} {b}");
+    Int n = lines(0);
+    println(f"{n} {resid_read_byte()}");
+    return 0;
+}

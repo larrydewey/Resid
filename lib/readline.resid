@@ -1,0 +1,350 @@
+// lib/readline.resid — interactive line editing (capability `terminal`).
+//
+//     import "readline.resid";
+//
+//     @requires(terminal)
+//     Int repl(History h) {
+//         return match readline("> ", h) {
+//             Line(s) => { println(s); repl(history_add(h, s)) },
+//             Interrupted => repl(h),
+//             Eof => 0,
+//         };
+//     }
+//
+// On a terminal, stdin goes to raw mode for the call and is restored before
+// it returns (and by the runtime at exit or abort). When stdin is not a
+// terminal, the prompt is printed and one line is read unedited.
+//
+// Keys: Left/Right, Ctrl-B/F; Home/End, Ctrl-A/E; Alt-B/F and Ctrl-Left/
+// Right move by word; Backspace, Delete, Ctrl-D (Eof on an empty line),
+// Ctrl-H; Ctrl-K/U kill to the end/start; Ctrl-W and Alt-Backspace delete
+// the word before, Alt-D the word after; Ctrl-T transposes; Ctrl-L clears
+// the screen; Up/Down, Ctrl-P/N walk the history; Tab completes; Ctrl-C
+// gives Interrupted. The prompt should be plain text: its width is its
+// code point count, as is each character's.
+
+type History = { List(Str) items; Int max; };
+type ReadResult = Line(Str) | Eof | Interrupted;
+
+// An empty history keeping at most `max` lines (at least 1).
+pub History history_new(Int max) {
+    List(Str) none = [];
+    return History {.items = none, .max = if (max < 1) { 1 } else { max }};
+}
+
+// `line` appended, unless blank or equal to the newest entry; the oldest
+// entries go past `max`.
+pub History history_add(History h, Str line) {
+    Int n = h.items.len();
+    if (str_trim(line) == "" || (n > 0 && h.items[n - 1] == line)) { return h; }
+    List(Str) all = h.items.concat([line]);
+    Int drop = all.len() - h.max;
+    List(Str) none = [];
+    List(Str) kept = if (drop > 0) { rl_from(all, drop, none) } else { all };
+    return History {.items = kept, .max = h.max};
+}
+
+List(Str) rl_from(List(Str) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return rl_from(xs, i + 1, acc.concat([xs[i]]));
+}
+
+// A line read with editing and history.
+@requires(terminal)
+pub ReadResult readline(Str prompt, History h) {
+    return readline_with(prompt, h, lambda(s) { rl_no_completions(s) });
+}
+
+// As readline, with Tab completing the whole line through `complete`, which
+// returns the candidates one per line ("" for none). One candidate replaces
+// the line; several extend it to their common prefix, or, when that adds
+// nothing, are listed below it.
+@requires(terminal)
+pub ReadResult readline_with(Str prompt, History h, Str closure(Str) complete) {
+    if (!resid_term_is_tty(0) || !resid_term_raw()) { return rl_plain(prompt); }
+    Ed e = Ed {.prompt = prompt, .buf = "", .pos = 0, .hist = h.items, .hi = h.items.len(), .draft = ""};
+    ReadResult r = rl_loop(e, complete);
+    Bool restored = resid_term_restore();
+    return r;
+}
+
+Str rl_no_completions(Str s) { return ""; }
+
+// Without a terminal: the prompt, then one unedited line.
+ReadResult rl_plain(Str prompt) {
+    Bool shown = print(prompt);
+    Str l = resid_read_line();
+    if (l == "") { return Eof; }
+    Str a = if (str_ends_with(l, "\n")) { str_slice(l, 0, str_len(l) - 1) } else { l };
+    Str b = if (str_ends_with(a, "\r")) { str_slice(a, 0, str_len(a) - 1) } else { a };
+    return Line(b);
+}
+
+// ─── Keys ──────────────────────────────────────────────────────────────
+// A key is a code point, or one of these negative codes (-1: end of input).
+
+Int k_eof() { return 0 - 1; }
+Int k_none() { return 0 - 2; }
+Int k_up() { return 0 - 3; }
+Int k_down() { return 0 - 4; }
+Int k_left() { return 0 - 5; }
+Int k_right() { return 0 - 6; }
+Int k_home() { return 0 - 7; }
+Int k_end() { return 0 - 8; }
+Int k_del() { return 0 - 9; }
+Int k_word_left() { return 0 - 10; }
+Int k_word_right() { return 0 - 11; }
+Int k_kill_word() { return 0 - 12; }
+Int k_rub_word() { return 0 - 13; }
+
+Int rl_key() {
+    Int b = resid_read_byte();
+    if (b < 0) { return k_eof(); }
+    if (b == 27) { return rl_esc(); }
+    if (b < 128) { return b; }
+    return rl_utf8(b);
+}
+
+// A UTF-8 sequence from its lead byte; U+FFFD when malformed.
+Int rl_utf8(Int b) {
+    Int n = if (b >= 240 && b < 248) { 3 } else { if (b >= 224) { 2 } else { if (b >= 194) { 1 } else { 0 } } };
+    if (n == 0 || b >= 248) { return 65533; }
+    Int init = if (n == 3) { b & 7 } else { if (n == 2) { b & 15 } else { b & 31 } };
+    Int cp = rl_utf8_more(init, n);
+    Bool ok = cp >= 0 && cp <= 1114111 && !(cp >= 55296 && cp <= 57343) && cp >= rl_utf8_min(n);
+    return if (ok) { cp } else { 65533 };
+}
+
+Int rl_utf8_min(Int n) { return if (n == 1) { 128 } else { if (n == 2) { 2048 } else { 65536 } }; }
+
+Int rl_utf8_more(Int acc, Int n) {
+    if (n == 0) { return acc; }
+    Int c = resid_read_byte();
+    if (c < 0 || (c & 192) != 128) { return 0 - 1; }
+    return rl_utf8_more(acc * 64 + (c & 63), n - 1);
+}
+
+Int rl_esc() {
+    Int b = resid_read_byte();
+    if (b < 0) { return k_eof(); }
+    if (b == 91) { return rl_csi(0, 0, false, 0); }
+    if (b == 79) { return rl_ss3(resid_read_byte()); }
+    if (b == 98) { return k_word_left(); }
+    if (b == 102) { return k_word_right(); }
+    if (b == 100) { return k_kill_word(); }
+    if (b == 127 || b == 8) { return k_rub_word(); }
+    return k_none();
+}
+
+Int rl_ss3(Int b) {
+    if (b == 72) { return k_home(); }
+    if (b == 70) { return k_end(); }
+    return rl_arrow(b, 1);
+}
+
+// ESC [ p1 ; p2 ... final: p1 is the first parameter, cur the one being
+// read (the modifier, once a `;` was seen). Gives up after 16 bytes.
+Int rl_csi(Int p1, Int cur, Bool semi, Int n) {
+    if (n > 16) { return k_none(); }
+    Int b = resid_read_byte();
+    if (b < 0) { return k_eof(); }
+    if (b >= 48 && b <= 57) { return rl_csi(p1, cur * 10 + (b - 48), semi, n + 1); }
+    if (b == 59) { return rl_csi(if (semi) { p1 } else { cur }, 0, true, n + 1); }
+    if (b < 64 || b > 126) { return rl_csi(p1, cur, semi, n + 1); }
+    Int first = if (semi) { p1 } else { cur };
+    Int modifier = if (semi) { cur } else { 1 };
+    if (b == 126) { return rl_tilde(first); }
+    if (b == 72) { return k_home(); }
+    if (b == 70) { return k_end(); }
+    return rl_arrow(b, modifier);
+}
+
+// Arrows; with Ctrl (5) or Alt (3), Left/Right move by word.
+Int rl_arrow(Int b, Int modifier) {
+    Bool word = modifier == 5 || modifier == 3;
+    if (b == 65) { return k_up(); }
+    if (b == 66) { return k_down(); }
+    if (b == 67) { return if (word) { k_word_right() } else { k_right() }; }
+    if (b == 68) { return if (word) { k_word_left() } else { k_left() }; }
+    return k_none();
+}
+
+Int rl_tilde(Int p) {
+    if (p == 1 || p == 7) { return k_home(); }
+    if (p == 4 || p == 8) { return k_end(); }
+    if (p == 3) { return k_del(); }
+    return k_none();
+}
+
+// ─── Editing ───────────────────────────────────────────────────────────
+// buf and pos count code points; hi indexes hist, hist.len() being the
+// line under edit (kept in draft while browsing).
+
+type Ed = { Str prompt; Str buf; Int pos; List(Str) hist; Int hi; Str draft; };
+
+Str esc() { return str_from_code(27); }
+Str crlf() { return str_from_code(13) + "\n"; }
+
+Ed ed_set(Ed e, Str buf, Int pos) {
+    return Ed {.prompt = e.prompt, .buf = buf, .pos = pos, .hist = e.hist, .hi = e.hi, .draft = e.draft};
+}
+
+Ed ed_move(Ed e, Int pos) { return ed_set(e, e.buf, pos); }
+
+// The visible slice scrolls so the cursor stays on screen.
+@requires(terminal(readonly))
+Str rl_render(Ed e) {
+    Int cols = resid_term_cols();
+    Int pl = str_len(e.prompt);
+    Int avail = max(cols - pl - 1, 1);
+    Int start = if (e.pos >= avail) { e.pos - avail + 1 } else { 0 };
+    Int end = min(str_len(e.buf), start + avail);
+    Int col = pl + e.pos - start;
+    Str to_col = if (col > 0) { esc() + f"[{col}C" } else { "" };
+    return str_from_code(13) + e.prompt + str_slice(e.buf, start, end) + esc() + "[0K" + str_from_code(13) + to_col;
+}
+
+@requires(terminal(readonly))
+ReadResult rl_loop(Ed e, Str closure(Str) complete) {
+    Bool shown = print(rl_render(e));
+    Int k = rl_key();
+    Int n = str_len(e.buf);
+    if (k == k_eof()) {
+        Bool nl = print(crlf());
+        return if (n == 0) { Eof } else { Line(e.buf) };
+    }
+    if (k == 13 || k == 10) {
+        Bool nl = print(crlf());
+        return Line(e.buf);
+    }
+    if (k == 3) {
+        Bool nl = print("^C" + crlf());
+        return Interrupted;
+    }
+    if (k == 4 && n == 0) {
+        Bool nl = print(crlf());
+        return Eof;
+    }
+    if (k == 9) { return rl_loop(rl_complete(e, rl_lines(complete(e.buf))), complete); }
+    return rl_loop(rl_edit(e, k), complete);
+}
+
+Ed rl_edit(Ed e, Int k) {
+    Int n = str_len(e.buf);
+    Str before = str_slice(e.buf, 0, e.pos);
+    Str after = str_slice(e.buf, e.pos, n);
+    if (k == k_left() || k == 2) { return ed_move(e, max(e.pos - 1, 0)); }
+    if (k == k_right() || k == 6) { return ed_move(e, min(e.pos + 1, n)); }
+    if (k == k_home() || k == 1) { return ed_move(e, 0); }
+    if (k == k_end() || k == 5) { return ed_move(e, n); }
+    if (k == k_word_left()) { return ed_move(e, rl_word_start(e.buf, e.pos)); }
+    if (k == k_word_right()) { return ed_move(e, rl_word_end(e.buf, e.pos, n)); }
+    if (k == 127 || k == 8) {
+        if (e.pos == 0) { return e; }
+        return ed_set(e, str_slice(e.buf, 0, e.pos - 1) + after, e.pos - 1);
+    }
+    if (k == k_del() || k == 4) {
+        if (e.pos >= n) { return e; }
+        return ed_set(e, before + str_slice(e.buf, e.pos + 1, n), e.pos);
+    }
+    if (k == 11) { return ed_set(e, before, e.pos); }
+    if (k == 21) { return ed_set(e, after, 0); }
+    if (k == 23 || k == k_rub_word()) {
+        Int s = rl_word_start(e.buf, e.pos);
+        return ed_set(e, str_slice(e.buf, 0, s) + after, s);
+    }
+    if (k == k_kill_word()) { return ed_set(e, before + str_slice(e.buf, rl_word_end(e.buf, e.pos, n), n), e.pos); }
+    if (k == 20) { return rl_transpose(e, n); }
+    if (k == 12) {
+        Bool cleared = print(esc() + "[H" + esc() + "[2J");
+        return e;
+    }
+    if (k == k_up() || k == 16) { return rl_hist(e, e.hi - 1); }
+    if (k == k_down() || k == 14) { return rl_hist(e, e.hi + 1); }
+    if (k < 32 || k == 127) { return e; }
+    return ed_set(e, before + str_from_code(k) + after, e.pos + 1);
+}
+
+// Ctrl-T: swap the two characters before the cursor (at the end), or the
+// ones around it, moving right.
+Ed rl_transpose(Ed e, Int n) {
+    if (n < 2 || e.pos == 0) { return e; }
+    Int p = if (e.pos >= n) { n - 1 } else { e.pos };
+    Str a = str_slice(e.buf, p - 1, p);
+    Str b = str_slice(e.buf, p, p + 1);
+    return ed_set(e, str_slice(e.buf, 0, p - 1) + b + a + str_slice(e.buf, p + 1, n), p + 1);
+}
+
+Bool rl_word_char(Str s, Int i) {
+    Int c = str_char_at(s, i);
+    return c != 32 && c != 9;
+}
+
+// Start of the word before position p (spaces skipped first).
+Int rl_word_start(Str s, Int p) {
+    Int q = rl_skip_back(s, p, false);
+    return rl_skip_back(s, q, true);
+}
+
+Int rl_skip_back(Str s, Int p, Bool word) {
+    if (p <= 0 || rl_word_char(s, p - 1) != word) { return p; }
+    return rl_skip_back(s, p - 1, word);
+}
+
+// End of the word after position p.
+Int rl_word_end(Str s, Int p, Int n) {
+    Int q = rl_skip_fwd(s, p, n, false);
+    return rl_skip_fwd(s, q, n, true);
+}
+
+Int rl_skip_fwd(Str s, Int p, Int n, Bool word) {
+    if (p >= n || rl_word_char(s, p) != word) { return p; }
+    return rl_skip_fwd(s, p + 1, n, word);
+}
+
+// History entry i (hist.len() = the line under edit), cursor at the end.
+Ed rl_hist(Ed e, Int i) {
+    Int n = e.hist.len();
+    if (i < 0 || i > n || i == e.hi) { return e; }
+    Str draft = if (e.hi == n) { e.buf } else { e.draft };
+    Str line = if (i == n) { draft } else { e.hist[i] };
+    return Ed {.prompt = e.prompt, .buf = line, .pos = str_len(line), .hist = e.hist, .hi = i, .draft = draft};
+}
+
+// ─── Completion ────────────────────────────────────────────────────────
+
+// The non-empty lines of s.
+List(Str) rl_lines(Str s) {
+    List(Str) none = [];
+    if (s == "") { return none; }
+    return rl_nonempty(str_split(s, "\n"), 0, none);
+}
+
+List(Str) rl_nonempty(List(Str) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return rl_nonempty(xs, i + 1, if (xs[i] == "") { acc } else { acc.concat([xs[i]]) });
+}
+
+Ed rl_complete(Ed e, List(Str) cands) {
+    Int m = cands.len();
+    if (m == 0) {
+        Bool bell = print(str_from_code(7));
+        return e;
+    }
+    if (m == 1) { return ed_set(e, cands[0], str_len(cands[0])); }
+    Str pre = rl_common(cands, 1, cands[0]);
+    if (str_len(pre) > str_len(e.buf) && str_starts_with(pre, e.buf)) { return ed_set(e, pre, str_len(pre)); }
+    Bool listed = print(crlf() + str_join(cands, "  ") + crlf());
+    return e;
+}
+
+// Longest common prefix of cands[i..] and acc.
+Str rl_common(List(Str) cands, Int i, Str acc) {
+    if (i >= cands.len()) { return acc; }
+    return rl_common(cands, i + 1, str_slice(acc, 0, rl_common_len(acc, cands[i], 0, min(str_len(acc), str_len(cands[i])))));
+}
+
+Int rl_common_len(Str a, Str b, Int i, Int n) {
+    if (i >= n || str_char_at(a, i) != str_char_at(b, i)) { return i; }
+    return rl_common_len(a, b, i + 1, n);
+}

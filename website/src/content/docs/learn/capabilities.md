@@ -53,9 +53,12 @@ capabilities.
 | `args` | `args.count()`, `args.get(i)` |
 | `process` | `process.run(cmd)` and the native debugger builtins |
 | `network` | the TCP builtins |
+| `terminal` | the terminal builtins (`resid_term_*`) and `lib/readline.resid` |
 
 A family can be narrowed with a mode: `filesystem(readonly)` covers the
 reading verbs only; a write needs `filesystem` or `filesystem(readwrite)`.
+`terminal(readonly)` covers the TTY and window-size queries but not raw
+mode.
 
 ## Sandboxes
 

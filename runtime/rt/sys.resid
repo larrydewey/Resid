@@ -1,5 +1,5 @@
 // The trusted providers (spec §32) on Linux system calls: filesystem
-// (with File handles), environment, args, process, git; stdin lines,
+// (with File handles), environment, args, process, git;
 // raw byte output, SHA-256, the native debugger's ptrace backend, and the
 // program entry trampoline.
 
@@ -70,22 +70,6 @@ Bool mkdir_parents(Int buf, Int i, Int len) {
 pub Int rt_fs_exists(Int path) {
     if (!path_ok(path)) { return 0; }
     return b8(sc(4, path, stat_buf(), 0) == 0);   // stat: opening a FIFO would block
-}
-
-// One line of standard input with its newline; "" at end of input.
-@export("resid_read_line", "ptr()")
-pub Int rt_read_line() {
-    Int p = xmalloc(256);
-    return read_line_at(p, 0, 256);
-}
-
-Int read_line_at(Int p0, Int n, Int cap) {
-    Int p = if (n + 2 > cap) { xrealloc(p0, cap * 2) } else { p0 };
-    Int cap2 = if (n + 2 > cap) { cap * 2 } else { cap };
-    Int r = sc(0, 0, p + n, 1);
-    if (r <= 0) { return st8(p + n, 0) + p; }
-    if (ld8(p + n) == 10) { return st8(p + n + 1, 0) + p; }
-    return read_line_at(p, n + 1, cap2);
 }
 
 // All of fd from its offset, NUL-terminated ("" when unreadable).
@@ -852,6 +836,6 @@ pub Int rt_run_main(Int f) {
     Int slot = xmalloc(16);
     _ = st64(slot, f);
     Int t = thread_spawn(resid_raw_fn("main_thread"), slot, stack_mb() * 1048576);
-    if (t == 0) { return resid_raw_call2(f, 0, 0) & 4294967295; }
-    return thread_join(t);
+    Int code = if (t == 0) { resid_raw_call2(f, 0, 0) & 4294967295 } else { thread_join(t) };
+    return term_exit() * 0 + code;
 }

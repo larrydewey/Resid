@@ -1,0 +1,6 @@
+// TTY and window-size queries need only a read-only grant.
+@requires(terminal(readonly))
+Int main() {
+    println(f"{resid_term_is_tty(7)} {resid_term_is_tty(0 - 1)} {resid_term_cols() > 0} {resid_term_rows() > 0}");
+    return 0;
+}

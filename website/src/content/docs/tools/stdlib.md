@@ -39,6 +39,7 @@ aGk=
 | `cose.resid` | CBOR (preferred serialization) and COSE Sign1 / Encrypt0 |
 | `dwarf.resid` | reading an ELF64 binary's symbols and DWARF 5 line table |
 | `kgart.resid` | reading the knowledge-graph artifact |
+| `readline.resid` | interactive line editing with history and completion (`readline`, `readline_with`, `history_new`, `history_add`) |
 | `testing.resid` | explicit test registration and property tests |
 
 Everything above is plain Resid: the cryptography uses the language's wide

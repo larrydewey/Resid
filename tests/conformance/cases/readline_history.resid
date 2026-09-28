@@ -1,0 +1,10 @@
+import "readline.resid";
+
+// History keeps the newest `max` lines, skipping blanks and repeats.
+Int main() {
+    History h = history_add(history_add(history_add(history_add(history_add(history_new(2), "a"), "a"), "  "), "b"), "c");
+    println(f"{h.items}");
+    History one = history_add(history_add(history_new(0), "x"), "y");
+    println(f"{one.items}");
+    return 0;
+}
