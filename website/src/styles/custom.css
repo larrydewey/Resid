@@ -4,17 +4,45 @@
 :root {
 	--sl-font: 'Inter', system-ui, sans-serif;
 	--sl-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* Dark: neutral grays on black. Scoped so it never leaks into light mode
+   (unlayered custom CSS beats Starlight's layered light palette). */
+:root[data-theme='dark'] {
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #ededed;
+	--sl-color-gray-2: #c4c4c4;
+	--sl-color-gray-3: #8e8e8e;
+	--sl-color-gray-4: #5c5c5c;
+	--sl-color-gray-5: #3a3a3a;
+	--sl-color-gray-6: #1c1c1c;
+	--sl-color-black: #000000;
 	--sl-color-accent-low: #1a1a1a;
 	--sl-color-accent: #ffffff;
 	--sl-color-accent-high: #ffffff;
-	--sl-color-white: #ffffff;
-	--sl-color-black: #000000;
 }
 
+/* Light: black ink on white paper, same neutral scale inverted. */
 :root[data-theme='light'] {
+	--sl-color-white: #000000;
+	--sl-color-gray-1: #141414;
+	--sl-color-gray-2: #2b2b2b;
+	--sl-color-gray-3: #555555;
+	--sl-color-gray-4: #8a8a8a;
+	--sl-color-gray-5: #d4d4d4;
+	--sl-color-gray-6: #f0f0f0;
+	--sl-color-gray-7: #f7f7f7;
+	--sl-color-black: #ffffff;
 	--sl-color-accent-low: #e8e8e8;
 	--sl-color-accent: #000000;
 	--sl-color-accent-high: #000000;
+	--sl-color-text: #1f1f1f;
+	--sl-color-bg-nav: #ffffff;
+	--sl-color-bg-sidebar: #fafafa;
+	--sl-color-bg-inline-code: #efefef;
+	--sl-color-hairline-light: #e2e2e2;
+	--sl-color-hairline: #e2e2e2;
+	--sl-color-hairline-shade: #d0d0d0;
 }
 
 /* The logo is black on transparent: white in dark mode. */
