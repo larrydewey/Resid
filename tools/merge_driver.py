@@ -116,7 +116,7 @@ def main():
     chunk = cut_main(chunk)
     chunk = drop_decls(chunk, {
         'PRes', 'parse_type', 'parse_type_arg',
-        'parse_type_args_rest', 'skip_body', 'skip_decl',
+        'parse_type_args_rest', 'parse_closure_tail', 'skip_body', 'skip_decl',
         'str_find_char',
         # Constraint-type helpers (spec §12): identical copies
         # in both halves; keep the codegen (base) versions.

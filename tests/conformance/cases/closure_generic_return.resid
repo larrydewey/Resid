@@ -1,0 +1,15 @@
+// A closure type may return a constructed type: List(Str) closure(Str).
+type Comp = { List(Str) closure(Str) f; };
+List(Str) closure(Str) mk(Str tail) { return lambda(s) { [s, tail] }; }
+Option(Int) closure(Int) half() { return lambda(n) { if (n % 2 == 0) { Some(n / 2) } else { None } }; }
+Int use(List(Str) closure(Str) g) { return g("x").len(); }
+Int main() {
+    List(Str) closure(Str) g = mk("!");
+    Comp c = Comp {.f = g};
+    println(f"{g("a")} {c.f("b")} {use(g)} {use(lambda(s) { str_split(s, ",") })}");
+    Option(Int) closure(Int) h = half();
+    println(f"{h(4)} {h(3)}");
+    Map(Str, Int) closure() m = lambda() { {"k": 1} };
+    println(f"{m()}");
+    return 0;
+}

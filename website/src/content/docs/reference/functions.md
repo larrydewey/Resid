@@ -21,7 +21,8 @@ constant stack space.
 
 ## Closures
 
-A closure type is written `R closure(P1, P2)`; a lambda builds one:
+A closure type is written `R closure(P1, P2)`, where `R` may be any type
+(`List(Str) closure(Str)`); a lambda builds one:
 
 ```text
 Int closure(Int, Int) add = lambda(a, b) { a + b };

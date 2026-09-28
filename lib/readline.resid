@@ -55,12 +55,11 @@ pub ReadResult readline(Str prompt, History h) {
     return readline_with(prompt, h, lambda(s) { rl_no_completions(s) });
 }
 
-// As readline, with Tab completing the whole line through `complete`, which
-// returns the candidates one per line ("" for none). One candidate replaces
-// the line; several extend it to their common prefix, or, when that adds
-// nothing, are listed below it.
+// As readline, with Tab completing the whole line through `complete`: one
+// candidate replaces the line; several extend it to their common prefix,
+// or, when that adds nothing, are listed below it.
 @requires(terminal)
-pub ReadResult readline_with(Str prompt, History h, Str closure(Str) complete) {
+pub ReadResult readline_with(Str prompt, History h, List(Str) closure(Str) complete) {
     if (!resid_term_is_tty(0) || !resid_term_raw()) { return rl_plain(prompt); }
     Ed e = Ed {.prompt = prompt, .buf = "", .pos = 0, .hist = h.items, .hi = h.items.len(), .draft = ""};
     ReadResult r = rl_loop(e, complete);
@@ -68,7 +67,10 @@ pub ReadResult readline_with(Str prompt, History h, Str closure(Str) complete) {
     return r;
 }
 
-Str rl_no_completions(Str s) { return ""; }
+List(Str) rl_no_completions(Str s) {
+    List(Str) none = [];
+    return none;
+}
 
 // Without a terminal: the prompt, then one unedited line.
 ReadResult rl_plain(Str prompt) {
@@ -205,7 +207,7 @@ Str rl_render(Ed e) {
 }
 
 @requires(terminal(readonly))
-ReadResult rl_loop(Ed e, Str closure(Str) complete) {
+ReadResult rl_loop(Ed e, List(Str) closure(Str) complete) {
     Bool shown = print(rl_render(e));
     Int k = rl_key();
     Int n = str_len(e.buf);
@@ -225,7 +227,7 @@ ReadResult rl_loop(Ed e, Str closure(Str) complete) {
         Bool nl = print(crlf());
         return Eof;
     }
-    if (k == 9) { return rl_loop(rl_complete(e, rl_lines(complete(e.buf))), complete); }
+    if (k == 9) { return rl_loop(rl_complete(e, complete(e.buf)), complete); }
     return rl_loop(rl_edit(e, k), complete);
 }
 
@@ -312,18 +314,6 @@ Ed rl_hist(Ed e, Int i) {
 }
 
 // ─── Completion ────────────────────────────────────────────────────────
-
-// The non-empty lines of s.
-List(Str) rl_lines(Str s) {
-    List(Str) none = [];
-    if (s == "") { return none; }
-    return rl_nonempty(str_split(s, "\n"), 0, none);
-}
-
-List(Str) rl_nonempty(List(Str) xs, Int i, List(Str) acc) {
-    if (i >= xs.len()) { return acc; }
-    return rl_nonempty(xs, i + 1, if (xs[i] == "") { acc } else { acc.concat([xs[i]]) });
-}
 
 Ed rl_complete(Ed e, List(Str) cands) {
     Int m = cands.len();

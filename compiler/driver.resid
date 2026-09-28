@@ -627,33 +627,38 @@ PRes parse_type(Str s, Int pos) {
         PRes rest = parse_type_args_rest(s, first.pos, first.ty);
         if (rest.err != "") { return rest; }
         Str ty = t.text + "(" + rest.ty + ")";
+        // A constructed return type: `List(Str) closure(Str)`.
+        Tok after = lex_tok(s, rest.pos);
+        if (after.text == "closure") { return parse_closure_tail(s, ty, after.pos); }
         return PRes {.pos = rest.pos, .ty = ty, .err = ""};
     }
-    if (t2.text == "closure") {
-        // Closure type: Ret closure(Param1, Param2, ...)
-        Tok t3 = lex_tok(s, t2.pos);
-        if (t3.text != "(") {
-            return PRes {.pos = t3.pos, .ty = "", .err = "expected ( after closure"};
-        }
-        // `Void closure()` — no parameter types at all.
-        Tok empty = lex_tok(s, t3.pos);
-        if (empty.text == ")") {
-            return PRes {.pos = empty.pos, .ty = t.text + " closure()", .err = ""};
-        }
-        PRes first = parse_type_arg(s, t3.pos);
-        if (first.err != "") { return first; }
-        // `parse_type_args_rest` consumes the closing `)` itself and hands
-        // back the position AFTER it, exactly as the generic `Name(...)`
-        // branch above relies on — so there is no separate `)` to lex here.
-        // Re-lexing one produced "expected ) in closure parameter list" for
-        // every well-formed closure type, which in turn left the parameter
-        // TYPE list one entry short of the parameter NAME list.
-        PRes rest = parse_type_args_rest(s, first.pos, first.ty);
-        if (rest.err != "") { return rest; }
-        Str ty = t.text + " closure(" + rest.ty + ")";
-        return PRes {.pos = rest.pos, .ty = ty, .err = ""};
-    }
+    if (t2.text == "closure") { return parse_closure_tail(s, t.text, t2.pos); }
     return PRes {.pos = t.pos, .ty = t.text, .err = ""};
+}
+
+// Closure type `Ret closure(Param1, Param2, ...)` from just after `closure`.
+PRes parse_closure_tail(Str s, Str ret, Int pos) {
+    Tok t3 = lex_tok(s, pos);
+    if (t3.text != "(") {
+        return PRes {.pos = t3.pos, .ty = "", .err = "expected ( after closure"};
+    }
+    // `Void closure()` — no parameter types at all.
+    Tok empty = lex_tok(s, t3.pos);
+    if (empty.text == ")") {
+        return PRes {.pos = empty.pos, .ty = ret + " closure()", .err = ""};
+    }
+    PRes first = parse_type_arg(s, t3.pos);
+    if (first.err != "") { return first; }
+    // `parse_type_args_rest` consumes the closing `)` itself and hands
+    // back the position AFTER it, exactly as the generic `Name(...)`
+    // branch above relies on — so there is no separate `)` to lex here.
+    // Re-lexing one produced "expected ) in closure parameter list" for
+    // every well-formed closure type, which in turn left the parameter
+    // TYPE list one entry short of the parameter NAME list.
+    PRes rest = parse_type_args_rest(s, first.pos, first.ty);
+    if (rest.err != "") { return rest; }
+    Str ty = ret + " closure(" + rest.ty + ")";
+    return PRes {.pos = rest.pos, .ty = ty, .err = ""};
 }
 
 Bool str_has_prefix_cg(Str s, Str p) {
@@ -5735,6 +5740,8 @@ type PRes = { Int pos; Str ty; Str err; };
 // Comma-separated tail of a type's parameter list, e.g. the ", 8" in
 // List(Int, 8). Recursive — no reassignment.
 
+
+// Closure type `Ret closure(Param1, Param2, ...)` from just after `closure`.
 
 // ─── Expression checking ────────────────────────────────────────
 

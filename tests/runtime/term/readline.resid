@@ -2,10 +2,10 @@ import "../../../lib/readline.resid";
 
 // Driven through a pty by drive.py.
 
-Str cmds(Str s) {
+List(Str) cmds(Str s) {
     List(Str) all = ["help", "hello", "history", "quit"];
     List(Str) none = [];
-    return str_join(pick(all, s, 0, none), "\n");
+    return pick(all, s, 0, none);
 }
 
 List(Str) pick(List(Str) xs, Str p, Int i, List(Str) acc) {
