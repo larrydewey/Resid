@@ -24,10 +24,10 @@ Contents: [Environment](#environment) · [Methodology](#methodology) · [Overall
 | Kernel | Linux 7.2.5-3-omarchy |
 | CPU governor | performance |
 | Transparent huge pages | [always] madvise never |
-| Resid commit | `19e19925921f112b6d318368df76697f39f4428c` |
-| stage2.bin sha256 | `f4b83390993f11b420ef72ce6747bf12ded299dc16f9be678113e84c52d0e085` |
-| Environment id | `a42531566e9b` |
-| Captured | 2026-09-27T16:46:41Z |
+| Resid commit | `8d73ae1becf5ccddc72aa530a213ee5f9d6502f5` |
+| stage2.bin sha256 | `ba6f22ed45b0b3efe1bfef3e554fb93bd6a8b59c85a222f08f35d51b1fe139fb` |
+| Environment id | `f8a736a252bd` |
+| Captured | 2026-09-28T00:41:06Z |
 
 The CPU is heterogeneous (per-CPU maximum clocks differ: 5090 MHz: CPUs 0,2,4,6,8,10,12,14; 3506 MHz: CPUs 1,3,5,7,9,11,13,15). The `st` track is pinned to CPU 2; `best` programs run on all CPUs, mixing core types.
 
