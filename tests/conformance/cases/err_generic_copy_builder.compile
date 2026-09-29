@@ -1,0 +1,2 @@
+error[E0402]: builder `b` is used more than once
+(in the copy dup(StrBuf))

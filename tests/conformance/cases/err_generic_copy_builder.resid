@@ -1,0 +1,4 @@
+// A generic body that treats T as a plain value is checked again in each
+// copy: T = StrBuf makes it a second use of a builder, named by its copy.
+T dup(T b) { T x = b; T y = b; return y; }
+Int main() { StrBuf s = StrBuf(); StrBuf r = dup(s); println(r.finish()); return 0; }

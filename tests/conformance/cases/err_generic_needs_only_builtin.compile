@@ -1,0 +1,1 @@
+error[E0227]: cannot infer type parameter T of nothing

@@ -404,7 +404,7 @@ pub Bool gm_generic_decl(Kg g, Int d) {
     if (n.kind == "bdecl") { return true; }
     if (n.kind == "struct_t") { return gk_type_params(n.aux) != ""; }
     if (n.kind == "behavior") { return gm_has_var(kg_part(n.aux, 1)); }
-    if (n.kind == "fn") { return gm_has_var(g.ns[kg_kid(g, d, 0)].text + "," + gk_join_kids_ty(g, d, 1, n.nk - 1, "")); }
+    if (n.kind == "fn") { return gm_has_var(g.ns[kg_kid(g, d, 0)].text + "," + gk_join_kids_ty(g, d, 1, n.nk - 1, "")) || gm_has_var(gm_needs_of(n.aux)); }
     return false;
 }
 

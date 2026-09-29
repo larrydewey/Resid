@@ -1,0 +1,15 @@
+// A literal in large fixed storage stores its own bytes only, and block
+// tails and if branches adopt an expected fixed type.
+Int main() {
+    Str(200000) big = "abc";
+    Bytes(100000) bb = b"xy";
+    Result(Str(4), Int) r = Err(1);
+    Str(4) f = r else { "fb" };
+    Option(Str(4)) o = None;
+    Str(4) z = o else { "zz" };
+    List(Int, 3) l = if (str_len(big) > 1) { [1] } else { [2, 3] };
+    List(Int, 2) m = match (o) { Some(x) => [1], None => [2, 3] };
+    Str(8) p = (if (true) { ("pp") } else { "q" });
+    println(f"{str_len(big)} {big.capacity()} {bb[1]} {bb[99999]} {bb.len()} {f} {z} {l} {m} {p} {p.capacity()}");
+    return 0;
+}

@@ -1,0 +1,4 @@
+// A behavior with built-in instances (Show) has no one fitting instance.
+@needs(Show(T))
+Str nothing() { return "x"; }
+Int main() { println(nothing()); return 0; }

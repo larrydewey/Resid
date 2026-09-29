@@ -271,6 +271,14 @@ List(Str) gm_sig_vars(Sigs fs, Int idx) {
 
 Bool gm_generic_fn(Sigs fs, Int idx) { return gm_has_var(fs.pts[idx] + "," + fs.rets[idx]); }
 
+// Generic also when a type parameter is named only in its @needs
+// (@needs(Config(T)) with T in no parameter): calls fix T from the one
+// fitting instance, or report E0227, and use a copy.
+Bool gm_generic_fn_k(GK k, Int idx) {
+    if (gm_generic_fn(k.fs, idx)) { return true; }
+    return gm_has_var(k.gx.needs.get(k.fs.names[idx]) else { "" });
+}
+
 List(Str) gm_vals(List(Str) vars, GU u, Int i, ListBuf(Str) acc) {
     if (i >= vars.len()) { return acc.finish(); }
     return gm_vals(vars, u, i + 1, acc.push(gu_get(u, vars[i])));
@@ -340,6 +348,8 @@ Bool gm_needs_covered(GK k, List(Str) ns, Int i, GU ui, Int depth) {
     return gm_needs_covered(k, ns, i + 1, ui, depth);
 }
 
+Bool gm_builtin_behavior(Str b) { return b == "Show" || b == "Serialize" || b == "Eq" || b == "Ord" || b == "Hash"; }
+
 // Behaviors the language supplies for built-in types.
 Bool gm_builtin_inst(Str b, List(Str) args) {
     if (args.len() != 1) { return false; }
@@ -395,6 +405,9 @@ pub GU gm_improve(GK k, Str b, List(Str) pats, GU u) {
     GIM none = GIM {.u = u, .n = 0, .key = ""};
     GIM c = gm_imp_ctx(gm_need_list(k.gx.ctx), b, pats, u, free, 0, none);
     if (c.n == 1) { return c.u; }
+    // A behavior the language supplies for built-in types has more
+    // candidates than its declared instances: none of them is "the one".
+    if (gm_builtin_behavior(b)) { return u; }
     GIM d = gm_imp_insts(k, b, pats, u, free, 0, none);
     return if (d.n == 1) { d.u } else { u };
 }
@@ -699,7 +712,7 @@ Str gm_protos_err(GK k, Int n, Int bd, Int j, GU u, Str inst, Bool single) {
     if (f == "") { return inst + ": the record gives no function for " + verb; }
     Int fi = ck_fn_index(k.fs, f);
     if (fi < 0) { return "behavior " + inst + ": " + f + " is not a function; " + sig; }
-    Bool fits = if (gm_generic_fn(k.fs, fi)) { gm_sig_fits(k.fs, fi, wpts, wret) } else { gm_same_list(k.fs.pts[fi], wpts) && ty_same(k.fs.rets[fi], wret) };
+    Bool fits = if (gm_generic_fn_k(k, fi)) { gm_sig_fits(k.fs, fi, wpts, wret) } else { gm_same_list(k.fs.pts[fi], wpts) && ty_same(k.fs.rets[fi], wret) };
     if (!fits) { return "behavior " + inst + ": " + sig; }
     return gm_protos_err(k, n, bd, j + 1, u, inst, single);
 }
@@ -782,7 +795,7 @@ GKI gm_inst_fn(GK k, Str b, Str t) {
     Str f = kg_part(k.g.ns[n].aux, 2);
     Int fi = ck_fn_index(k.fs, f);
     if (fi < 0 || str_contains(f, "=")) { return GKI {.k = k, .f = ""}; }
-    if (!gm_generic_fn(k.fs, fi)) { return GKI {.k = k, .f = f}; }
+    if (!gm_generic_fn_k(k, fi)) { return GKI {.k = k, .f = f}; }
     List(Str) fp = split_type_list(k.fs.pts[fi], 0, 0, 0, "", gk_nopts());
     GU u = gm_unify_all(fp, t, 0, gu_new());
     List(Str) vars = gm_sig_vars(k.fs, fi);
@@ -811,7 +824,7 @@ GK gm_synth_inst(GK k, Str b, Str t) {
     if (n < 0 || gm_inst_level(k, n) <= 1) { return k; }
     Str f = kg_part(k.g.ns[n].aux, 2);
     Int fi = ck_fn_index(k.fs, f);
-    if (fi < 0 || !gm_generic_fn(k.fs, fi)) { return k; }
+    if (fi < 0 || !gm_generic_fn_k(k, fi)) { return k; }
     List(Str) fp = split_type_list(k.fs.pts[fi], 0, 0, 0, "", gk_nopts());
     if (fp.len() == 0) { return k; }
     GU u = gm_unify(fp[0], t, gu_new());
@@ -908,7 +921,7 @@ GKT gk_vcall(GK k0, Int id, Str verb, Str exp) {
     Str f = gm_impl_for(g, inst, verb);
     Int fi = ck_fn_index(k.fs, f);
     if (fi < 0) { return gterr(k, verb + ": instance function " + f + " is missing", id); }
-    if (gm_generic_fn(k.fs, fi)) { return gk_gcall(k, id, f, fi, a.tys, a.count, false, exp); }
+    if (gm_generic_fn_k(k, fi)) { return gk_gcall(k, id, f, fi, a.tys, a.count, false, exp); }
     if (!params_accept(k.fs.pts[fi], a.tys, a.count) && k.fs.pts[fi] != a.tys) { return gterr(k, verb + " via " + f + " expects (" + k.fs.pts[fi] + "), got (" + a.tys + ")", id); }
     return gt(gk_log(k, f"C|{id}|" + f), k.fs.rets[fi], id);
 }
@@ -927,7 +940,7 @@ GKT gm_vcall_over(GK k, Int id, Str verb, Str b, List(Str) bvals, Str ov, GKA a)
     if (rev && a.count != 2) { return gterr(k, verb + ": Reverse applies to two-argument functions", id); }
     List(Str) al = split_type_list(a.tys, 0, 0, 0, "", gk_nopts());
     Str tys = if (rev) { al[1] + "," + al[0] } else { a.tys };
-    if (gm_generic_fn(k.fs, fi)) {
+    if (gm_generic_fn_k(k, fi)) {
         GKT gc = gk_gcall(k, id, f, fi, tys, a.count, false, "");
         if (gc.err != "") { return gc; }
         GK kr = if (rev) { gk_log(gc.k, f"R|{id}") } else { gc.k };
@@ -959,7 +972,10 @@ GKT gk_expr0(GK k, Int id, Str exp) {
     if (kind == "call") { return gk_call(k, id, exp); }
     if (kind == "struct") { return gk_struct_lit(k, id, t, exp); }
     if (kind == "paren") {
-        GKT e = gk_expr(k, gk_kid(k, id, 0), "");
+        // As a block tail: the expected type passes through the parentheses
+        // (a plain number type does not, so literals keep their spelling).
+        Bool pass = if (is_num(exp)) { num_norm(exp) == exp } else { true };
+        GKT e = gk_expr(k, gk_kid(k, id, 0), if (pass) { exp } else { "" });
         if (e.err != "") { return e; }
         return gt(e.k, e.ty, id);
     }
@@ -1168,7 +1184,7 @@ pub List(Str) gk_nopts() {
 // method-sugar call also gets a member edge to the fn declaration.
 GKT gk_finish_call(GK k, Int id, Str name, Str argtys, Int argc, Bool method, Str exp) {
     Int idx = ck_fn_index(k.fs, name);
-    if (idx >= 0 && gm_generic_fn(k.fs, idx)) { return gk_gcall(k, id, name, idx, argtys, argc, method, exp); }
+    if (idx >= 0 && gm_generic_fn_k(k, idx)) { return gk_gcall(k, id, name, idx, argtys, argc, method, exp); }
     if (idx >= 0) {
         Str pts = k.fs.pts[idx];
         Int np = if (pts == "") { 0 } else { split_type_list(pts, 0, 0, 0, "", gk_nopts()).len() };
@@ -1236,7 +1252,7 @@ GKT gk_call(GK k, Int id, Str exp) {
     if (vo.ok) { return gk_variant_call(k, id, n, vo); }
     if (argn == 0) { return gk_finish_call(k, id, n, "", 0, false, exp); }
     Int idx = ck_fn_index(k.fs, n);
-    Bool gen = idx >= 0 && gm_generic_fn(k.fs, idx);
+    Bool gen = idx >= 0 && gm_generic_fn_k(k, idx);
     List(Str) pl = if (idx >= 0 && !gen) { split_type_list(k.fs.pts[idx], 0, 0, 0, "", gk_nopts()) } else { gk_nopts() };
     Int uk = if (gen) { gm_using_kid(k.g, id) } else { -1 };
     List(Str) gneeds = if (gen) { gm_need_list(k.gx.needs.get(n) else { "" }) } else { gk_nopts() };
@@ -1822,8 +1838,10 @@ GKT gk_ifx(GK k, Int id, Str exp) {
     if (c.err != "") { return c; }
     if (c.ty != "Bool") { return gterr(c.k, "if condition must be Bool, got " + c.ty, c.at); }
     // An expected sized number reaches the branches, so a literal arm
-    // adopts it (`Int(8) y = if (c) { 0 } else { x }`).
-    Str bexp = if (is_num(exp) && num_norm(exp) != exp) { "" } else { if (is_num(exp)) { exp } else { "" } };
+    // adopts it (`Int(8) y = if (c) { 0 } else { x }`), and so does any
+    // other expected type (fixed-capacity literals, generic calls); a
+    // plain number type is not passed.
+    Str bexp = if (is_num(exp) && num_norm(exp) != exp) { "" } else { exp };
     GKT th = gk_expr(c.k, gk_kid(k, id, 1), bexp);
     if (th.err != "") { return th; }
     if (k.g.ns[id].nk < 3) {
@@ -1844,8 +1862,12 @@ GKT gk_bexpr(GK outer, GK k, Int id, Int i, Str exp) {
     Int n = k.g.ns[id].nk;
     Int c = gk_kid(k, id, i);
     if (i >= n - 1) {
-        // Only a sized number reaches the tail (a literal adopts it).
-        GKT t = gk_expr(k, c, if (is_num(exp) && num_norm(exp) == exp) { exp } else { "" });
+        // The tail gets the block's expected type: a sized number (a
+        // literal adopts it), or any other type (a fixed-capacity literal
+        // adopts it, a generic call infers from it); a plain number type
+        // is not passed, so literals keep their default spelling.
+        Bool pass = if (is_num(exp)) { num_norm(exp) == exp } else { true };
+        GKT t = gk_expr(k, c, if (pass) { exp } else { "" });
         if (t.err != "") { return t; }
         return gt(gk_scope(outer, t.k), t.ty, id);
     }
@@ -2107,7 +2129,7 @@ GKT gk_mcall(GK k0, Int id) {
     if (mfidx < 0 && gk_list_verb(m) && str_has_prefix(bt, "List(") && !is_list_fixed(bt)) { return gk_list_method(k, id, bt, m, na); }
     if (mfidx >= 0) {
         if (na == 0) { return gk_finish_call(k, id, m, bt, 1, true, ""); }
-        List(Str) mpl = if (gm_generic_fn(k.fs, mfidx)) { gk_nopts() } else { split_type_list(k.fs.pts[mfidx], 0, 0, 0, "", gk_nopts()) };
+        List(Str) mpl = if (gm_generic_fn_k(k, mfidx)) { gk_nopts() } else { split_type_list(k.fs.pts[mfidx], 0, 0, 0, "", gk_nopts()) };
         GKA a = gk_args(k, id, 1, mpl, 1, "", 1);
         if (a.err != "") { return gterr(a.k, a.err, a.at); }
         return gk_finish_call(a.k, id, m, bt + "," + a.tys, a.count, true, "");
@@ -2884,7 +2906,19 @@ GKS gk_nested_kids(GK k, Int d, Int from, Int to, Bool field) {
     return gk_nested_kids(k, d, from + 1, to, field);
 }
 
+// A function's checks. An error in a generic function's copy names the
+// instantiation, `(in the copy dup(StrBuf))`: it holds only for those
+// types (a builder where the generic body treats T as a plain value).
 GKS gk_fn(GK k0, Int d) {
+    GKS r = gk_fn_body(k0, d);
+    Str aux = k0.g.ns[d].aux;
+    Int at = str_find(aux, "@inst(");
+    if (r.err == "" || at < 0) { return r; }
+    Str label = str_slice(aux, at + 6, imp_close_paren(aux, at + 6, 0) - 1);
+    return gs_err(r.k, r.err + " (in the copy " + label + ")", r.at);
+}
+
+GKS gk_fn_body(GK k0, Int d) {
     Str fnm = k0.g.ns[d].text;
     Int fi = ck_fn_index(k0.fs, fnm);
     Str cvars = if (fi >= 0) { gm_vars(k0.fs.pts[fi] + "," + k0.fs.rets[fi], 0, "") } else { "" };

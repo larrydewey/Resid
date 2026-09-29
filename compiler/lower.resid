@@ -15,7 +15,9 @@
 // lo: the program's linear Map/Set parameters; lof: the function's
 // ownership flags by node (lo_fn_flags); lor: returned struct literals
 // reusing a variable's record (lo_reuse).
-type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; Map(Int, Str) lor; };
+// want: the type the branches of the construct being lowered must have
+// (set by lw_expr_as for if / match / ternary bodies, "" otherwise).
+type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; Map(Int, Str) lor; Str want; };
 
 Str lw_unsup(Str what) { return "unsupported: " + what; }
 Bool lw_is_unsup(Str err) { return str_starts_with(err, "unsupported"); }
@@ -46,7 +48,7 @@ GT lw_expr_s(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     if (k == "bin") { return lw_bin(w, id, env, c, start_ok); }
     if (k == "lit") { return lw_lit(w, id, c); }
     if (k == "ref") { return lw_ref(w, id, env, c); }
-    if (k == "paren") { return lw_expr(w, lw_kid(w, id, 0), env, c); }
+    if (k == "paren") { return lw_branch(w, lw_kid(w, id, 0), env, c); }
     if (k == "un") { return lw_un(w, id, env, c); }
     if (k == "rt") { return lw_expr_s(w, lw_kid(w, id, 0), env, c, start_ok); }
     if (k == "call") { return lw_call(w, id, env, c); }
@@ -267,12 +269,13 @@ GT lw_set_rest(LW w, Int id, Int i, Str et, List(Str) env, GT sv) {
 GT lw_bexpr(LW w, Int id, Int i, List(Str) env, GT c) {
     Int n = w.g.ns[id].nk;
     Int k = lw_kid(w, id, i);
-    if (i >= n - 1) { return lw_expr(w, k, env, c); }
+    if (i >= n - 1) { return lw_branch(w, k, env, c); }
     if (lw_kind(w, k) != "bind") { return lw_gerr("block binding " + lw_kind(w, k), c); }
     Str name = lw_text(w, k);
     Str dtyb = ct_base_of(w.fs.ctn, w.fs.ctb, lw_text(w, lw_kid(w, k, 0)));
     Int ve = lw_kid(w, k, w.g.ns[k].nk - 1);
-    GT v = if (lw_kind(w, ve) == "lambda" && is_fn_type(dtyb)) { lw_lambda(w, ve, dtyb, env, c) } else { lw_expr(w, ve, env, c) };
+    LW wv = lw_wanting(w, "");
+    GT v = if (lw_kind(w, ve) == "lambda" && is_fn_type(dtyb)) { lw_lambda(wv, ve, dtyb, env, c) } else { lw_expr(wv, ve, env, c) };
     if (v.err != "") { return v; }
     Str dn = num_norm_cg(dtyb);
     Bool adoptable = int_fam(dtyb) && int_fam(v.ty);
@@ -289,15 +292,24 @@ GT lw_bexpr(LW w, Int id, Int i, List(Str) env, GT c) {
     return lw_bexpr(w, id, i + 1, env_add(env, ent2g), c2);
 }
 
+LW lw_wanting(LW w, Str want) { return LW {.g = w.g, .fs = w.fs, .base = w.base, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = want}; }
+
+// A branch body: for the wanted type when one is set (not for what the
+// body contains).
+GT lw_branch(LW w, Int id, List(Str) env, GT c) {
+    if (w.want == "") { return lw_expr(w, id, env, c); }
+    return lw_expr_as(lw_wanting(w, ""), id, w.want, env, c);
+}
+
 // cg_expr_block on an arm node (a bexpr, or any expression).
 GT lw_arm(LW w, Int id, List(Str) env, GT c) {
     if (lw_kind(w, id) == "bexpr") { return lw_bexpr(w, id, 0, env, c); }
-    return lw_expr(w, id, env, c);
+    return lw_branch(w, id, env, c);
 }
 
 // cg_ifexpr / finish_ifexpr.
 GT lw_ifx(LW w, Int id, List(Str) env, GT c) {
-    GT cond = lw_expr(w, lw_kid(w, id, 0), env, c);
+    GT cond = lw_expr(lw_wanting(w, ""), lw_kid(w, id, 0), env, c);
     if (cond.err != "") { return cond; }
     if (cond.ty != "Bool") { return gt_err("if condition must be Bool", cond); }
     // Labels after the condition's own (an `else` fallback there has some).
@@ -375,7 +387,9 @@ GT lw_orelse(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     Str g3 = f"%t{lhs.tmp + 3}";
     List(Str) q5 = lhs.lines.concat([g1 + " = getelementptr {i32, i32, ptr}, ptr " + lhs.val + ", i32 0, i32 0", g2 + "w = load i32, ptr " + g1, g2 + " = sext i32 " + g2 + "w to i64", g3 + " = icmp eq i64 " + g2 + ", 1", "br i1 " + g3 + ", label %" + labp + ", label %" + labf, labf + ":"]);
     GT fv0 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = lhs.glines, .lines = q5, .tmp = lhs.tmp + 3, .lbl = l3, .tail = false};
-    GT fv = lw_arm(w, fb, env, fv0);
+    // The fallback is for the payload's type (a fixed-capacity literal
+    // gets its own storage).
+    GT fv = lw_arm(lw_wanting(w, if (is_fixed_type(ety)) { ety } else { "" }), fb, env, fv0);
     if (fv.err != "") { return fv; }
     List(Str) x2 = fv.lines.concat(["br label %" + labm, labp + ":"]);
     GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = fv.glines, .lines = x2, .tmp = fv.tmp, .lbl = max(fv.lbl, l3), .tail = false};
@@ -416,7 +430,7 @@ GT lw_get_else(LW w, GT base, GT ka, Str kt, Str vt, Int fb, List(Str) env) {
 
 // cg_ternary: `c ? a : b` lowered like an if-expression.
 GT lw_tern(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
-    GT cond = lw_expr_s(w, lw_kid(w, id, 0), env, c, start_ok);
+    GT cond = lw_expr_s(lw_wanting(w, ""), lw_kid(w, id, 0), env, c, start_ok);
     if (cond.err != "") { return cond; }
     if (cond.ty != "Bool") { return gt_err("`?` requires an Option or Result, found " + cond.ty, cond); }
     Int l3 = cond.lbl + 3;
@@ -424,10 +438,10 @@ GT lw_tern(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     Str le = f"L{cond.lbl + 2}";
     Str ld = f"L{l3}";
     GT ct = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = cond.glines, .lines = cond.lines.concat(["br i1 " + cond.val + ", label %" + lt + ", label %" + le, lt + ":"]), .tmp = cond.tmp, .lbl = l3, .tail = false};
-    GT tv = lw_expr(w, lw_kid(w, id, 1), env, ct);
+    GT tv = lw_branch(w, lw_kid(w, id, 1), env, ct);
     if (tv.err != "") { return tv; }
     GT ce = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = tv.glines, .lines = tv.lines.concat(["br label %" + ld, le + ":"]), .tmp = tv.tmp, .lbl = max(tv.lbl, l3), .tail = false};
-    GT ev = lw_expr(w, lw_kid(w, id, 2), env, ce);
+    GT ev = lw_branch(w, lw_kid(w, id, 2), env, ce);
     if (ev.err != "") { return ev; }
     return finish_ifexpr(tv, lt, le, ld, l3, ev, 0);
 }
@@ -540,18 +554,70 @@ GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
         return lw_rt1(vt, "ptr", "@resid_map_format_k(ptr " + v.val + ", i8 " + ks + ", i8 " + vs + ")", "Str");
     }
     if (is_set_type_cg(t)) { return lw_rt1(vt, "ptr", "@resid_set_format(ptr " + v.val + ")", "Str"); }
-    Int si = struct_index(w.fs, t);
-    if (si >= 0) { return lw_struct_ts(w, vt, w.fs.stf[si], env); }
+    // Records and sum types show through one function per type, so a
+    // recursive type (a tree of itself) is a recursive call, not an
+    // endless expansion.
+    if (struct_index(w.fs, t) >= 0 || sumtype_index_cg(w.fs, t) >= 0) { return lw_show_fn(w, vt, t); }
     // Option and Result show their variant and, through the payload's own
     // format (or Show), its value.
     Str pn = f"__sh{v.tmp}";
     Str pv = f"__sp{v.tmp}";
     if (str_has_prefix_cg(t, "Option(") && t != "Option(_)") { return lw_src_expr(w, "match " + pn + " { Some(" + pv + ") => \"Some(\" + __show_nested(" + pv + ") + \")\", None => \"None\" }", pn, vt, env); }
     if (str_has_prefix_cg(t, "Result(") && res_elem_ok_cg(t) != "_") { return lw_src_expr(w, "match " + pn + " { Ok(" + pv + ") => \"Ok(\" + __show_nested(" + pv + ") + \")\", Err(" + pv + ") => \"Err(\" + __show_nested(" + pv + ") + \")\" }", pn, vt, env); }
-    Int sx = sumtype_index_cg(w.fs, t);
-    if (sx >= 0) { return lw_src_expr(w, "match " + pn + " {" + lw_sum_arms(sumv_names_cg(w.fs.suv[sx]), sum_payloads_cg(w.fs, sx, t), pv, 0, "") + " }", pn, vt, env); }
     if (ll_ty(t) != "ptr") { return gt_err("cannot interpolate a value of type " + t, v); }
     return lw_rt1(vt, "ptr", "@ToString(ptr " + v.val + ")", "Str");
+}
+
+// The show function of record or sum type t: generated once per module
+// (keyed @rtg.cmpdef), its body the structural text of the value. While
+// the body is being made, a marker in glines stands for it, so the body's
+// own shows of t become calls.
+GT lw_show_fn(LW w, GT v, Str t) {
+    Str name = "resid.show." + show_mangle(t, 0, "");
+    Str key = "@rtg.cmpdef." + name + " ";
+    Str mark = "@rtg.cmpdef." + name + ".making ";
+    Bool have = lw_has_gline(v.glines, key, 0) || lw_has_gline(v.glines, mark, 0);
+    GT made = if (have) { v } else { lw_show_fn_def(w, v, t, name, key, mark) };
+    if (made.err != "") { return made; }
+    Int t1 = imax(v.tmp, made.tmp) + 1;
+    Str r = f"%t{t1}";
+    return GT {.pos = 0, .val = r, .ty = "Str", .cnt = 0, .err = "", .glines = made.glines, .lines = v.lines.concat([r + " = call ptr @" + name + "(ptr " + v.val + ")"]), .tmp = t1, .lbl = v.lbl, .tail = false};
+}
+
+GT lw_show_fn_def(LW w, GT v, Str t, Str name, Str key, Str mark) {
+    // Temporaries continue the caller's count: global names made from
+    // them (@.s, @.lty) stay unique in the module, as in lambdas.
+    GT p = GT {.pos = 0, .val = "%sv", .ty = t, .cnt = 0, .err = "", .glines = v.glines.concat([mark]), .lines = nil_list(), .tmp = v.tmp + 1, .lbl = 1, .tail = false};
+    GT body = lw_show_structural(w, p, t);
+    if (body.err != "") { return body; }
+    Str text = str_join(["define ptr @" + name + "(ptr %sv) {", "entry:"].concat(body.lines).concat(["ret ptr " + body.val, "}"]), "\n");
+    return GT {.pos = 0, .val = v.val, .ty = v.ty, .cnt = 0, .err = "", .glines = body.glines.concat([key + text]), .lines = v.lines, .tmp = body.tmp, .lbl = v.lbl, .tail = false};
+}
+
+// A record's fields or a sum's variant, as text.
+GT lw_show_structural(LW w, GT vt, Str t) {
+    List(Str) env = [];
+    Int si = struct_index(w.fs, t);
+    if (si >= 0) { return lw_struct_ts(w, vt, w.fs.stf[si], env); }
+    Int sx = sumtype_index_cg(w.fs, t);
+    Str pn = f"__sh{vt.tmp}";
+    Str pv = f"__sp{vt.tmp}";
+    return lw_src_expr(w, "match " + pn + " {" + lw_sum_arms(sumv_names_cg(w.fs.suv[sx]), sum_payloads_cg(w.fs, sx, t), pv, 0, "") + " }", pn, vt, env);
+}
+
+Bool lw_has_gline(List(Str) gl, Str prefix, Int i) {
+    if (i >= gl.len()) { return false; }
+    if (str_starts_with(gl[i], prefix)) { return true; }
+    return lw_has_gline(gl, prefix, i + 1);
+}
+
+// A type as a symbol-name part: letters and digits kept, `_` doubled,
+// `(` `)` `,` spelled _L _R _C, spaces dropped.
+Str show_mangle(Str t, Int i, Str acc) {
+    if (i >= str_len(t)) { return acc; }
+    Int c = str_char_at(t, i);
+    Str part = if (c == 40) { "_L" } else { if (c == 41) { "_R" } else { if (c == 44) { "_C" } else { if (c == 95) { "__" } else { if (c == 32) { "" } else { str_from_code(c) } } } } };
+    return show_mangle(t, i + 1, acc + part);
 }
 
 // Show arms of a sum type: `V(p) => "V(" + text + ")"` or `V => "V"`.
@@ -586,7 +652,7 @@ GT lw_show_nested(LW w, GT v, List(Str) env) {
 GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, c); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = ""};
     return lw_lambda(ws, e.id, fnty, env, c);
 }
 
@@ -594,7 +660,7 @@ GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
 GT lw_src_expr(LW w, Str src, Str name, GT v, List(Str) env) {
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = ""};
     return lw_expr(ws, e.id, env_add(env, name + ":" + v.val + ":" + v.ty), v);
 }
 
@@ -603,7 +669,7 @@ GT lw_src_call(LW w, Str f, GT v, List(Str) env) {
     Str tmpn = f"__sh{v.tmp}";
     KP e = kg_expr(f + "(" + tmpn + ")", kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = ""};
     return lw_expr(ws, e.id, env_add(env, tmpn + ":" + v.val + ":" + v.ty), v);
 }
 
@@ -697,7 +763,7 @@ GT lw_minmax(LW w, Int id, Str n, List(Str) env, GT c) {
     };
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, c); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = ""};
     return lw_expr(ws, e.id, a.env, a.g);
 }
 
@@ -736,7 +802,7 @@ LMM lw_mm_args(LW w, Int id, Int i, Int n, List(Str) env, LMM acc) {
 
 // cg_match / cg_match_arm / cg_match_arms_g.
 GT lw_match(LW w, Int id, List(Str) env, GT c) {
-    GT sc = lw_expr(w, lw_kid(w, id, 0), env, c);
+    GT sc = lw_expr(lw_wanting(w, ""), lw_kid(w, id, 0), env, c);
     if (sc.err != "") { return sc; }
     Bool is_opt = str_has_prefix_cg(sc.ty, "Option(") || sc.ty == "Option(_)";
     Bool is_res = str_has_prefix_cg(sc.ty, "Result(");
@@ -783,7 +849,7 @@ GT lw_match_arm(LW w, Int a, List(Str) env, GT sc, Str ety, GT c, Str lab, Str l
     Str nm = w.g.ns[a].aux;
     GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat([lab + ":"]), .tmp = c.tmp, .lbl = c.lbl, .tail = false};
     if (v == "None") {
-        GT body = lw_expr(w, lw_kid(w, a, 0), env, c1);
+        GT body = lw_branch(w, lw_kid(w, a, 0), env, c1);
         if (body.err != "") { return body; }
         return lw_step(body, body.val, body.ty, body.lines.concat(["br label %" + labm]), body.tmp);
     }
@@ -791,7 +857,7 @@ GT lw_match_arm(LW w, Int a, List(Str) env, GT sc, Str ety, GT c, Str lab, Str l
     Str pty = if (v == "Err") { res_elem_err_cg(sc.ty) } else { ety };
     GT pv = cg_match_payload(sc, pty, c1);
     if (pv.err != "") { return pv; }
-    GT body = lw_expr(w, lw_kid(w, a, 0), env_add(env, nm + ":" + pv.val + ":" + pty), pv);
+    GT body = lw_branch(w, lw_kid(w, a, 0), env_add(env, nm + ":" + pv.val + ":" + pty), pv);
     if (body.err != "") { return body; }
     return GT {.pos = 0, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = body.lines.concat(["br label %" + labm]), .tmp = body.tmp, .lbl = body.lbl, .tail = false};
 }
@@ -808,7 +874,7 @@ GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(S
         Int lb = c.lbl + 1;
         Str bodyLab = f"L{lb}";
         GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat(["br label %" + bodyLab, bodyLab + ":"]), .tmp = c.tmp, .lbl = lb, .tail = false};
-        GT body = lw_expr(w, lw_kid(w, a, 0), env, c1);
+        GT body = lw_branch(w, lw_kid(w, a, 0), env, c1);
         if (body.err != "") { return body; }
         GT lastc = GT {.pos = 0, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = body.lines.concat(["br label %" + labm]), .tmp = body.tmp, .lbl = body.lbl, .tail = false};
         return cg_match_finish2(lastc, labm, philist.concat([body.val + ":" + arm_exit_label_cg(body.lines, bodyLab)]));
@@ -822,7 +888,7 @@ GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(S
     GT pv = if (payload == "") { c1 } else { if (sum_inline_fields(w.fs, sc.ty, vi) >= 0) { cg_inline_payload(sc, payload, c1) } else { cg_match_payload(sc, payload, c1) } };
     if (pv.err != "") { return pv; }
     List(Str) env2 = if (payload == "") { env } else { env_add(env, w.g.ns[a].aux + ":" + pv.val + ":" + payload) };
-    GT body = lw_expr(w, lw_kid(w, a, 0), env2, pv);
+    GT body = lw_branch(w, lw_kid(w, a, 0), env2, pv);
     if (body.err != "") { return body; }
     List(Str) y2 = body.lines.concat(["br label %" + labm, nextLab + ":"]);
     // The phi's predecessor is the block the arm ends in, not its entry.
@@ -1096,6 +1162,11 @@ List(Str) lv_decl(List(Str) gl, Str name, Str decl) { return gl.concat(["@rtg.cm
 // The value of `id` for a slot of type `want`: vector literals, splat(x)
 // and lanes() take their vector type from it.
 GT lw_expr_as(LW w, Int id, Str want, List(Str) env, GT c) {
+    // A branching expression passes a fixed-capacity type on to its
+    // branches (a literal there gets its own storage).
+    Str bk = lw_kind(w, id);
+    Bool branches = bk == "ifx" || bk == "match" || bk == "tern" || bk == "bexpr" || bk == "paren";
+    if (branches && (is_fixed_type(want) || lw_fixed_bkind(want))) { return lw_expr(lw_wanting(w, want), id, env, c); }
     if (is_fixed_type(want)) { return lw_fixed_as(w, id, want, env, c); }
     // A fresh builder where a fixed-capacity one is expected: no storage
     // yet (fb_block allocates it on first use).
@@ -3134,8 +3205,10 @@ ST lw_bind_fixed_bytes(LW w, Str name, Str dtyb, Str lit, Str lk, List(Str) env,
     Int bl = ll_bytes(body, 0, 0);
     Int t1 = g.tmp + 1;
     Str reg = f"%t{t1}";
-    Str cst = if (lk == "bytes") { f"[{fixed_cap(dtyb)} x i8] c\"" + body + zeros_ll(fixed_cap(dtyb) - bl) + "\"" } else { fixed_str_const(body, bl, fixed_cap(dtyb) + 1) };
-    List(Str) l2 = g.lines.concat([reg + f" = call ptr @resid_gmalloc(i64 {fixed_bytes(dtyb)})", "store " + cst + ", ptr " + reg]);
+    // Zeroed storage, then only the literal's own bytes: a large capacity
+    // must not become a constant of its full size.
+    List(Str) store = if (bl == 0) { [] } else { [f"store [{bl} x i8] c\"" + body + "\", ptr " + reg + ", align 1"] };
+    List(Str) l2 = g.lines.concat(fixed_alloc(reg, dtyb)).concat(store);
     return ST {.pos = 0, .dead = g.dead, .err = "", .env = env_add(env, name + ":" + reg + ":" + dtyb), .glines = g.glines, .hlines = g.hlines, .lines = l2, .tmp = t1, .lbl = g.lbl, .rety = g.rety};
 }
 
@@ -3543,7 +3616,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Int n = w0.g.ns[d].nk;
     Str rty = lw_text(w0, lw_kid(w0, d, 0));
     Int _arena_in = resid_arena_push();
-    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof, .lor = w0.lor} } else { w0 };
+    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof, .lor = w0.lor, .want = ""} } else { w0 };
     Str rbase = ct_base_of(fs.ctn, fs.ctb, rty);
     Str name = lw_text(w1, d);
     Bool is_main = name == "main";
@@ -3560,7 +3633,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     List(Str) nl = lw_param_names(w1, d, 1, n - 1, ListBuf());
     // Ownership: the node flags and record reuses the body's lowering reads.
     LOF lf = lo_fn_flags(w1.g, d, w1.lo, fs);
-    LW w = LW {.g = w1.g, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = lf.ro};
+    LW w = LW {.g = w1.g, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = lf.ro, .want = ""};
     List(Str) dl2 = [defline, "entry:"];
     Int fi = fn_index(fs, name);
     Str ceiling = if (fi >= 0) { fs.ceils[fi] } else { "" };
@@ -4041,7 +4114,7 @@ GT lw_struct_ts(LW w, GT v, Str fields, List(Str) env) {
     Str src = "\"" + lw_label(v.ty) + " { \"" + lw_fields_src(tmpn, fields, 0, "") + " + \" }\"";
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = ""};
     GT r = lw_expr(ws, e.id, env2, v);
     if (r.err != "") { return r; }
     return GT {.pos = 0, .val = r.val, .ty = "Str", .cnt = 0, .err = "", .glines = r.glines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .tail = false};
@@ -4789,19 +4862,19 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
     Int d = kg_kid(w.g, id, i);
     Str kind = w.g.ns[d].kind;
     if (kind == "sandbox") {
-        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor};
+        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = ""};
         return lw_decls(w, id, i + 1, lw_decls(wi, d, 0, acc));
     }
     if (kind != "fn") { return lw_decls(w, id, i + 1, acc); }
     Int off = if (w.rg) { lw_spec_off(w.g.ns[d].text) } else { 0 };
-    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor};
+    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = ""};
     return lw_decls(w, id, i + 1, lw_fn(wf, d, acc));
 }
 
 // Lower the reducer's residual graph.
 pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
     LOP lo = lo_program(g, unit, fs);
-    LW w = LW {.g = g, .fs = fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is()};
+    LW w = LW {.g = g, .fs = fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = ""};
     return lw_decls(w, unit, 0, g0);
 }
 

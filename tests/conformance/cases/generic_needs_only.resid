@@ -1,0 +1,9 @@
+// A type parameter named only in @needs is fixed by the one instance
+// that fits (the function is generic, a copy is made).
+behavior Config(T) { T config(); }
+type Port = { Int n; };
+Port default_port() { return Port {.n = 80}; }
+Config(Port) = default_port;
+@needs(Config(T), Show(T))
+Str describe() { T c = config(); return f"{c}"; }
+Int main() { println(describe()); return 0; }

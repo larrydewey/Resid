@@ -1,0 +1,17 @@
+// Records and sums show through one function per type, so recursive and
+// mutually recursive types show without expanding forever.
+type Tree = Leaf(Int) | Node(List(Tree));
+type Gen(T) = GLeaf(T) | GNode(List(Gen(T)));
+type Dept = { Str name; List(Emp) staff; };
+type Emp = { Str who; Option(Dept) runs; };
+@needs(Show(T))
+Str show_it(T x) { return f"{x}"; }
+Int main() {
+    Tree t = Node([Leaf(1), Node([Leaf(2), Node([])])]);
+    Gen(Str) g = GNode([GLeaf("a"), GNode([])]);
+    Dept d = Dept {.name = "eng", .staff = [Emp {.who = "ann", .runs = Some(Dept {.name = "ops", .staff = []})}, Emp {.who = "bo", .runs = None}]};
+    println(f"{t}");
+    println(show_it(g));
+    println(f"{d}");
+    return 0;
+}
