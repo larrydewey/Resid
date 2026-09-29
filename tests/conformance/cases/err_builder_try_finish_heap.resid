@@ -1,0 +1,2 @@
+// try_finish is for builders that can overflow.
+Int main() { StrBuf b = StrBuf(); Result(Str, Int) r = b.try_finish(); return 0; }

@@ -1,0 +1,3 @@
+// A fixed-capacity builder cannot sit inside another type either.
+Result(StrBuf(4), Int) f() { return Err(1); }
+Int main() { return 0; }

@@ -1,0 +1,2 @@
+i1;sa;n2;i2;i3;
+Ok(5) Ok(4) Err("not an int: x") 9

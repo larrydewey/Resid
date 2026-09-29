@@ -1,0 +1,17 @@
+// Types that differ only by holes agree on the more specific one: match
+// arms, list and map literal elements, struct fields.
+type Tag = TStr(Str) | TInt(Int) | TBig(UInt(64));
+type Rec = { Option(Int) o; List(Int) xs; };
+Option(Str) as_str(Tag t) { return match t { TStr(s) => Some(s), _ => None }; }
+Result(Int, Str) as_int(Tag t) { return match t { TInt(i) => Ok(i), TStr(s) => Err(s), TBig(u) => Err(f"{u}") }; }
+UInt(64) big(Tag t) { return match t { TBig(u) => u, _ => u64(0) }; }
+Int main() {
+    List(Option(Int)) xs = [Some(1), None, Some(3)];
+    List(Option(Int)) ys = [None, Some(2)];
+    Map(Str, List(Int)) m = {"a": [1], "b": []};
+    List(Int) none = [];
+    Rec r = Rec {.o = None, .xs = []};
+    println(f"{as_str(TStr("s"))} {as_str(TInt(1))} {as_int(TInt(2))} {as_int(TStr("e"))} {big(TBig(u64(18446744073709551615)))}");
+    println(f"{xs} {ys} {m.get("b") else { none }} {m.get("a") else { none }} {r.o} {r.xs.len()}");
+    return 0;
+}

@@ -1,0 +1,3 @@
+Ok(30) Some(Got { value: "x", rest: Cursor { pos: 0 } }) Err(Got { value: 7, rest: Cursor { pos: 2 } })
+Ok(3) -3 200 Some(1.5) -7
+250

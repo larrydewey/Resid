@@ -1,0 +1,8 @@
+// One file imported along two spellings of its path ("_norm_lib.resid"
+// here, "./_norm_lib.resid" in _norm_mid.resid) is one module.
+import "_norm_lib.resid";
+import "_norm_mid.resid";
+Int main() {
+    println(describe("abc") + " / " + label(thing("de")));
+    return 0;
+}

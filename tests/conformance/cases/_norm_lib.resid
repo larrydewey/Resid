@@ -1,0 +1,6 @@
+behavior Named(T) { Str label(T x); Int weight(T x); }
+type Thing = { Str n; };
+Str thing_label(Thing t) { return "thing " + t.n; }
+Int thing_weight(Thing t) { return str_len(t.n); }
+Named(Thing) = { .label = thing_label, .weight = thing_weight };
+pub Thing thing(Str n) { return Thing {.n = n}; }

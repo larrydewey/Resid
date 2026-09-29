@@ -1,0 +1,14 @@
+// 128-bit fields take two 8-byte slots: records, inline sum payloads and
+// list elements keep every bit of them and of the fields after them.
+type Wide = { UInt(128) u; Int(128) i; Int n; Float(128) f; Int m; };
+type Holder = HasWide(Wide) | NoWide;
+Wide mk(UInt(128) u) { return Wide {.u = u, .i = i128(0) - (Int(128))(u / u128(2)), .n = 9, .f = f128(1.5), .m = -3}; }
+Int main() {
+    Wide w = rt mk(u128(340282366920938463463374607431768211455) / u128(3));
+    println(f"{w.u} {w.i} {w.n} {w.m}");
+    Holder h = rt HasWide(w);
+    match h { HasWide(x) => println(f"{x.u} {x.n} {x.m}"), NoWide => println("none") };
+    List(Wide) ws = rt [w, mk(u128(10))];
+    println(f"{ws[1].u} {ws[1].i} {ws[0].m}");
+    return 0;
+}

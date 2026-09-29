@@ -1,0 +1,19 @@
+// Fixed lists show from their slots (nested, with quoted strings), fixed
+// lists of fixed lists hold their own storage, byte strings show as their
+// literal, and capacity() is the static N.
+type Rec = { List(Int, 2) pair; Str(4) tag; };
+Int lcap(List(T, N) xs) { return xs.capacity(); }
+List(T, N) zeroed() { List(T, N) z = []; return z; }
+Int main() {
+    List(Int, 3) a = [1, 2];
+    List(Str, 2) b = ["x", "y"];
+    List(List(Int, 2), 2) c = [[1, 2], [3, 4]];
+    List(Int, 0) e = [];
+    List(Option(Int), 2) o = [Some(1), None];
+    Bytes(3) by = b"x\"";
+    Bytes h = b"hi";
+    List(Int, 5) z = zeroed();
+    println(f"{a} {b} {c} {c[1][0]} {e} {o} {Rec {.pair = [5, 6], .tag = "t"}}");
+    println(f"{by} {by.len()} {by.capacity()} {h} {h.len()} {lcap(a)} {z}");
+    return 0;
+}

@@ -680,6 +680,54 @@ pub Int rt_sbv_finish(Int cur, Int lim) {
     return st8(out1 + len, 0) * 0 + out1;
 }
 
+// Give up a StrBuf without finishing it: its buffer is freed.
+@export("resid_sb2_discard", "void(ptr,ptr)")
+pub Int rt_sbv_discard(Int cur, Int lim) {
+    Int b = sbv_base(lim);
+    return if (b != 0) { c_free(b) } else { 0 };
+}
+
+// ─── Fixed-capacity builders (StrBuf(N), BytesBuf(N)) ─────────────────
+// The compiler allocates the block {len, want, bytes[cap + 1]} (zeroed)
+// and passes the capacity. A push adds its length to `want`; it writes
+// only while want stays within the capacity, so the bytes are always a
+// whole prefix of what was pushed and stay NUL-terminated.
+Int fb_bytes(Int blk, Int cap, Int s, Int n) {
+    Int want = ld64(blk + 8) + n;
+    _ = st64(blk + 8, want);
+    if (want > cap) { return blk; }
+    Int len = ld64(blk);
+    _ = mcopy(blk + 16 + len, s, n);
+    return st64(blk, len + n) * 0 + blk;
+}
+
+@export("resid_fsb_push", "ptr(ptr,i64,ptr)")
+pub Int rt_fsb_push(Int blk, Int cap, Int s) { return fb_bytes(blk, cap, s, c_strlen(s)); }
+
+@export("resid_fsb_push_cp", "ptr(ptr,i64,i64)")
+pub Int rt_fsb_push_cp(Int blk, Int cap, Int cp) {
+    Int tmp = resid_raw_tls("fsb_cp", 8);
+    Int n = utf8_encode(cp, tmp);
+    return fb_bytes(blk, cap, tmp, n);
+}
+
+@export("resid_fbb_push", "ptr(ptr,i64,i64)")
+pub Int rt_fbb_push(Int blk, Int cap, Int b) {
+    if (b < 0 || b > 255) { return rt_abort("BytesBuf.push: not a byte (0..255)"); }
+    Int tmp = resid_raw_tls("fbb_b", 8);
+    _ = st8(tmp, b);
+    return fb_bytes(blk, cap, tmp, 1);
+}
+
+// finish() on a fixed builder that overflowed: a bug, like a bad index.
+@export("resid_fb_overflow", "void(i64,i64)")
+pub Int rt_fb_overflow(Int want, Int cap) {
+    Int m = rt_sb_new();
+    _ = sb_lit(m, resid_raw_addr("fixed-capacity builder overflow: pushed ")) + sb_word(m, want);
+    _ = sb_lit(m, resid_raw_addr(" bytes or elements, capacity ")) + sb_word(m, cap);
+    return rt_abort_at(rt_sb_finish(m));
+}
+
 @export("str_sb_new", "ptr()")
 pub Int rt_sb_new() {
     Int r = xmalloc(24);
@@ -754,6 +802,27 @@ pub Bool rt_sbv_print(Int cur, Int lim, Int nl) {
 }
 
 // A Str from a List(Int) of codepoints (UTF-8 encoded).
+// The text of a byte string, as its literal: b"ab\x00\xff" (n < 0: up to
+// the NUL of a heap Bytes; else exactly n bytes of a Bytes(N)).
+@export("resid_bytes_show", "ptr(ptr,i64)")
+pub Int rt_bytes_show(Int p, Int n) {
+    Int len = if (n >= 0) { n } else { if (p == 0) { 0 } else { c_strlen(p) } };
+    Int sb = rt_sb_new();
+    _ = sb_lit(sb, resid_raw_addr("b\""));
+    _ = bytes_show_at(sb, p, 0, len);
+    _ = sb_lit(sb, resid_raw_addr("\""));
+    return rt_sb_finish(sb);
+}
+
+Int bytes_show_at(Int sb, Int p, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int c = ld8(p + i) & 255;
+    _ = if (c == 34 || c == 92) { sb_lit(sb, resid_raw_addr("\\")) + rt_sb_append_cp(sb, c) } else { if (c >= 32 && c < 127) { rt_sb_append_cp(sb, c) } else { sb_lit(sb, resid_raw_addr("\\x")) + rt_sb_append_cp(sb, hex_digit(c >> 4)) + rt_sb_append_cp(sb, hex_digit(c & 15)) } };
+    return bytes_show_at(sb, p, i + 1, n);
+}
+
+Int hex_digit(Int d) { return if (d < 10) { 48 + d } else { 87 + d }; }
+
 // A byte string literal's length (Bytes).
 @export("resid_bytes_len", "i64(ptr)")
 pub Int rt_bytes_len(Int p) { return if (p == 0) { 0 } else { c_strlen(p) }; }

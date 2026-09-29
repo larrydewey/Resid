@@ -1,0 +1,40 @@
+// Some/Ok/Err payloads keep their own type: a multi-parameter generic
+// record (no stray list element from its inner comma), a narrow integer or
+// float (not folded into Int), and `?` over a behavior verb whose result
+// still names the caller's type variable.
+type Got(T, F) = { T value; F rest; };
+type Cursor = { Int pos; };
+behavior Source(F) { Result(Got(Int, F), Str) take(F s); }
+Result(Got(Int, Cursor), Str) cursor_take(Cursor c) {
+    Got(Int, Cursor) g = Got {.value = c.pos * 10, .rest = Cursor {.pos = c.pos + 1}};
+    return Ok(g);
+}
+Source(Cursor) = cursor_take;
+@needs(Source(F))
+Result(Int, Str) take_two(F s) {
+    Got(Int, F) a = take(s)?;
+    Got(Int, F) b = take(a.rest)?;
+    return Ok(a.value + b.value);
+}
+Option(Got(Str, Cursor)) some_got() {
+    Got(Str, Cursor) g = Got {.value = "x", .rest = Cursor {.pos = 0}};
+    return Some(g);
+}
+Result(Int, Got(Int, Cursor)) err_got() {
+    Got(Int, Cursor) g = Got {.value = 7, .rest = Cursor {.pos = 2}};
+    return Err(g);
+}
+Result(Int(32), Str) ok32(Int(32) x) { return Ok(x); }
+Option(UInt(8)) some8(UInt(8) x) { return Some(x); }
+Option(Float(32)) somef32(Float(32) x) { return Some(x); }
+Result(Int(16), Str) via_try(Int(16) x) { Int(16) y = ok16(x)?; return Ok(y); }
+Result(Int(16), Str) ok16(Int(16) x) { return Ok(x); }
+Int main() {
+    println(f"{take_two(Cursor {.pos = 1})} {some_got()} {err_got()}");
+    Int(32) a = ok32(rt i32(-3)) else { i32(0) };
+    UInt(8) b = some8(rt u8(200)) else { u8(0) };
+    Int(16) c = via_try(rt i16(-7)) else { i16(0) };
+    println(f"{ok32(i32(3))} {a} {b} {somef32(rt f32(1.5))} {c}");
+    match some8(rt u8(250)) { Some(v) => println(f"{v}"), None => println("none") };
+    return 0;
+}

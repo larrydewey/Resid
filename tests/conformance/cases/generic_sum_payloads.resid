@@ -1,0 +1,20 @@
+// A generic sum's constructor binds its parameters from any payload that
+// mentions them (Cell(T), List(Tree(T))), also inside generic functions.
+type Chain(T) = ChainNil | ChainCons(Cell(T));
+type Cell(T) = { T head; Chain(T) tail; };
+type Tree(T) = Leaf(T) | Node(List(Tree(T)));
+Chain(T) push(Chain(T) c, T x) { return ChainCons(Cell {.head = x, .tail = c}); }
+List(T) collect(Chain(T) c, List(T) acc) {
+    return match c { ChainNil => acc, ChainCons(cell) => collect(cell.tail, acc.concat([cell.head])) };
+}
+Int count(Tree(T) t) { return match t { Leaf(x) => 1, Node(ks) => count_all(ks, 0, 0) }; }
+Int count_all(List(Tree(T)) ks, Int i, Int acc) { if (i >= ks.len()) { return acc; } return count_all(ks, i + 1, acc + count(ks[i])); }
+Tree(T) pair(T a, T b) { return Node([Leaf(a), Leaf(b)]); }
+Int main() {
+    Chain(Str) e = ChainNil;
+    List(Str) none = [];
+    println(f"{collect(push(push(e, "a"), "b"), none)}");
+    Tree(Int) t = Node([pair(1, 2), Leaf(3)]);
+    println(f"{count(t)} {count(pair("x", "y"))}");
+    return 0;
+}

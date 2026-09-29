@@ -1,0 +1,1 @@
+error[E0401]: builder `b` (a StrBuf) is not consumed before this `?`

@@ -928,7 +928,7 @@ List(Str) hdr_map_typed() {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_spawn_start(ptr, ptr)", "declare ptr @resid_spawn_wait(ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @str_sha256(ptr)", "declare i8 @resid_fs_write_hex(ptr, ptr)", "declare i8 @resid_fs_append_hex(ptr, ptr)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)", "declare ptr @resid_sb2_push(ptr, ptr, ptr)", "declare ptr @resid_sb2_push_cp(ptr, ptr, i64)", "declare ptr @resid_sb2_finish(ptr, ptr)", "declare ptr @resid_sb2_lim()", "declare i1 @resid_sb2_print(ptr, ptr, i8)", "declare i64 @resid_str_ascii_len(ptr)", "declare i64 @resid_char_at_n(ptr, i64, i64)", "declare double @llvm.sqrt.f64(double)"];
+    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_spawn_start(ptr, ptr)", "declare ptr @resid_spawn_wait(ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @str_sha256(ptr)", "declare i8 @resid_fs_write_hex(ptr, ptr)", "declare i8 @resid_fs_append_hex(ptr, ptr)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)", "declare ptr @resid_sb2_push(ptr, ptr, ptr)", "declare ptr @resid_sb2_push_cp(ptr, ptr, i64)", "declare ptr @resid_sb2_finish(ptr, ptr)", "declare ptr @resid_sb2_lim()", "declare i1 @resid_sb2_print(ptr, ptr, i8)", "declare void @resid_sb2_discard(ptr, ptr)", "declare ptr @resid_fsb_push(ptr, i64, ptr)", "declare ptr @resid_fsb_push_cp(ptr, i64, i64)", "declare ptr @resid_fbb_push(ptr, i64, i64)", "declare void @resid_fb_overflow(i64, i64)", "declare ptr @resid_bytes_show(ptr, i64)", "declare i64 @resid_str_ascii_len(ptr)", "declare i64 @resid_char_at_n(ptr, i64, i64)", "declare double @llvm.sqrt.f64(double)"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -1544,8 +1544,29 @@ Int field_slot_at(Str fields, Str fname, Int i, Int slot) {
     Str nm = str_slice(ent, 0, co);
     Int nxt = end + 1;
     if (nm == fname) { return slot; }
-    Int sl1 = slot + 1;
+    Int sl1 = slot + field_words(str_slice(ent, co + 1, str_len(ent)));
     return field_slot_at(fields, fname, nxt, sl1);
+}
+
+// The 8-byte slots a field of type `ty` takes in a record: two for a
+// 128-bit number, four for 256, eight for 512, else one (pointers and
+// narrower scalars).
+Int field_words(Str ty) {
+    Str lt = ll_ty(str_trim(ty));
+    if (lt == "i128" || lt == "fp128") { return 2; }
+    if (lt == "i256") { return 4; }
+    if (lt == "i512") { return 8; }
+    return 1;
+}
+
+Int struct_words_at(Str fields, Int i, Int acc) {
+    Int fl = str_len_1(fields);
+    if (i >= fl) { return acc; }
+    Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
+    Int end = if (ce >= 0) { ce } else { fl };
+    Str ent = str_slice(fields, i, end);
+    Int co = str_find_char(ent, 58, 0);
+    return struct_words_at(fields, end + 1, acc + field_words(str_slice(ent, co + 1, str_len(ent))));
 }
 
 Int field_slot(Str fields, Str fname) {
@@ -1574,10 +1595,11 @@ Str field_ty(Str fields, Str fname) {
     return field_ty_at(fields, fname, 0);
 }
 
+// A record's size in 8-byte slots (field_words per field); every field
+// offset comes from field_slot, so the two agree.
 Int struct_nfields(Str fields) {
     if (fields == "") { return 0; }
-    Int n = count_seps(fields, 0, ",");
-    return n + 1;
+    return struct_words_at(fields, 0, 0);
 }
 
 Str elem_type(Str ty) {
@@ -2292,6 +2314,21 @@ GT box_heap_(Str s, GT v, List(Str) env, Funcs fs) {
         return GT {.pos = v.pos, .val = reg, .ty = v.ty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = zl2, .tmp = t2, .lbl = v.lbl, .tail = false};
     }
     Bool flt = str_has_prefix_cg(v.ty, "Float") || v.ty == "Float";
+    // A narrower integer or float is widened to the i64/double slot first
+    // (payload reads truncate it back), as list elements are.
+    Str nlt = ll_ty(v.ty);
+    Bool narrow_int = int_fam(v.ty) && ll_width_of(v.ty) < 64;
+    Bool narrow_flt = flt && nlt != "double";
+    if (narrow_int || narrow_flt) {
+        Int tw = v.tmp + 1;
+        Str wreg = f"%t{tw}";
+        Str op = if (narrow_flt) { "fpext" } else { if (ll_is_signed(v.ty)) { "sext" } else { "zext" } };
+        Str wty = if (narrow_flt) { "double" } else { "i64" };
+        List(Str) wl = v.lines.concat([wreg + " = " + op + " " + nlt + " " + v.val + " to " + wty]);
+        Str wide = if (narrow_flt) { "Float" } else { "Int" };
+        GT wv = box_heap_(s, GT {.pos = v.pos, .val = wreg, .ty = wide, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = wl, .tmp = tw, .lbl = v.lbl, .tail = false}, env, fs);
+        return GT {.pos = wv.pos, .val = wv.val, .ty = v.ty, .cnt = wv.cnt, .err = "", .glines = wv.glines, .lines = wv.lines, .tmp = wv.tmp, .lbl = wv.lbl, .tail = false};
+    }
     Bool is128 = str_has_prefix_cg(v.ty, "Int(128)") || str_has_prefix_cg(v.ty, "UInt(128)");
     Bool isu128 = str_has_prefix_cg(v.ty, "UInt(128)");
     Str bfn = if (isu128) { "@resid_box_u128" } else { "@resid_box_i128" };
@@ -3842,7 +3879,7 @@ GT cg_match_payload(GT sc, Str ety, GT c) {
     List(Str) z3 = z2.concat([p3 + " = getelementptr ptr, ptr " + p2 + ", i32 0"]);
     List(Str) z4 = z3.concat([p4 + " = load ptr, ptr " + p3]);
     Str typ = num_norm_cg(ety);
-    if (typ == "Int" || typ == "Int(64)") {
+    if (typ == "Int" || typ == "Int(64)" || typ == "UInt" || typ == "UInt(64)") {
         Int t5 = c.tmp + 5;
         Str p5 = f"%t{t5}";
         List(Str) z5 = z4.concat([p5 + " = call i64 @resid_unbox_i64(ptr " + p4 + ")"]);
@@ -3854,6 +3891,20 @@ GT cg_match_payload(GT sc, Str ety, GT c) {
         Str fn = if (str_has_prefix_cg(typ, "UInt")) { "@resid_unbox_u128" } else { "@resid_unbox_i128" };
         List(Str) z5 = z4.concat([p5 + " = call " + ll_ty(typ) + " " + fn + "(ptr " + p4 + ")"]);
         return GT {.pos = sc.pos, .val = p5, .ty = ety, .cnt = 0, .err = "", .glines = c.glines, .lines = z5, .tmp = t5, .lbl = c.lbl, .tail = false};
+    }
+    // A narrower integer or float was widened into its slot (box_heap_):
+    // read the i64/double back and narrow it.
+    Bool narrow_int = int_fam(typ) && ll_width_of(typ) < 64;
+    Bool narrow_flt = str_has_prefix_cg(typ, "Float(") && ll_ty(typ) != "double";
+    if (narrow_int || narrow_flt) {
+        Int t5 = c.tmp + 5;
+        Int t6 = c.tmp + 6;
+        Str p5 = f"%t{t5}";
+        Str p6 = f"%t{t6}";
+        Str rd = if (narrow_flt) { p5 + " = call double @resid_unbox_f64(ptr " + p4 + ")" } else { p5 + " = call i64 @resid_unbox_i64(ptr " + p4 + ")" };
+        Str nr = if (narrow_flt) { p6 + " = fptrunc double " + p5 + " to " + ll_ty(typ) } else { p6 + " = trunc i64 " + p5 + " to " + ll_ty(typ) };
+        List(Str) z6 = z4.concat([rd, nr]);
+        return GT {.pos = sc.pos, .val = p6, .ty = ety, .cnt = 0, .err = "", .glines = c.glines, .lines = z6, .tmp = t6, .lbl = c.lbl, .tail = false};
     }
     if (typ == "Float" || typ == "Float(64)") {
         Int t5 = c.tmp + 5;

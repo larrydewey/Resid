@@ -1,0 +1,4 @@
+[abcdé] 5 8 Err(5) Ok("éB")
+b"\x01\xff\x00" 3 [7, 8, 0, 0] 4
+Ok([1, 2, 0]) Err("bad x") Err("too many: 4")
+stopped went

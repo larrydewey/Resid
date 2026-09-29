@@ -1,0 +1,46 @@
+// Fixed-capacity builders (spec §45.2): StrBuf(N), BytesBuf(N) and
+// ListBuf(T, N) fill their value in place; an overflowing push writes
+// nothing, try_finish reports the length asked for, a `?` may leave with
+// one unconsumed, discard gives one up.
+StrBuf(N) add_all(StrBuf(N) b, List(Str) xs, Int i) {
+    if (i >= xs.len()) { return b; }
+    return add_all(b.push(xs[i]), xs, i + 1);
+}
+ListBuf(T, N) fill(ListBuf(T, N) b, List(T) xs, Int i) {
+    if (i >= xs.len()) { return b; }
+    return fill(b.push(xs[i]), xs, i + 1);
+}
+Result(Int, Str) parse1(Str s) { return if (str_is_int(s)) { Ok(str_parse_int(s)) } else { Err("bad " + s) }; }
+Result(List(Int, 3), Str) parse3(List(Str) xs, Int i, ListBuf(Int, 3) b) {
+    if (i >= xs.len()) { return match (b.try_finish()) { Ok(v) => Ok(v), Err(n) => Err(f"too many: {n}") }; }
+    Int v = parse1(xs[i])?;
+    return parse3(xs, i + 1, b.push(v));
+}
+Str heap_early(Bool stop) {
+    StrBuf b = StrBuf();
+    if (stop) { b.discard(); return "stopped"; }
+    return b.push("went").finish();
+}
+Int main() {
+    StrBuf(8) s0 = StrBuf();
+    Str(8) s = add_all(s0, ["ab", "cdé"], 0).finish();
+    StrBuf(4) t0 = StrBuf();
+    StrBuf(4) u0 = StrBuf();
+    println(f"[{s}] {str_len(s)} {s.capacity()} {t0.push("abc").push("de").try_finish()} {u0.push_char(233).push_char(66).try_finish()}");
+    BytesBuf(3) y0 = BytesBuf();
+    Bytes(3) y = y0.push(1).push(255).finish();
+    ListBuf(Int, 4) l0 = ListBuf();
+    List(Int, 4) l = fill(l0, [7, 8], 0).finish();
+    println(f"{y} {y.len()} {l} {l.len()}");
+    ListBuf(Int, 3) p0 = ListBuf();
+    ListBuf(Int, 3) p1 = ListBuf();
+    ListBuf(Int, 3) p2 = ListBuf();
+    println(f"{parse3(["1", "2"], 0, p0)} {parse3(["1", "x"], 0, p1)} {parse3(["1", "2", "3", "4"], 0, p2)}");
+    ListBuf(Int) h0 = ListBuf();
+    h0.push(1).discard();
+    println(heap_early(true) + " " + heap_early(false));
+    StrBuf(2) o0 = StrBuf();
+    Str(2) o = o0.push("abc").finish();
+    println("unreachable");
+    return 0;
+}

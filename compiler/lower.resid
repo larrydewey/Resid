@@ -101,12 +101,29 @@ GT lw_list(LW w, Int id, List(Str) env, GT c) {
     return lw_list_at(w, id, 1, e0.ty, v0, env, e0);
 }
 
+// Two element types that name one type: equal up to holes, or a generic
+// sum written bare by a variant constructor (`Tree`) and with its
+// arguments (`Tree(Int)`); the more specific one wins.
+Str lw_elem_unify(Str a, Str b) {
+    Str u = ty_unify_cg(a, b);
+    if (u != "") { return u; }
+    Int pa = str_find_char(a, 40, 0);
+    Int pb = str_find_char(b, 40, 0);
+    if (pa < 0 && pb > 0 && str_slice(b, 0, pb) == a) { return b; }
+    if (pb < 0 && pa > 0 && str_slice(a, 0, pa) == b) { return a; }
+    return "";
+}
+
 GT lw_list_at(LW w, Int id, Int i, Str ety, List(Str) vals, List(Str) env, GT c) {
     if (i >= w.g.ns[id].nk) { return lst_emit(ety, vals.len(), vals, 0, c); }
     GT v = lw_expr(w, lw_kid(w, id, i), env, c);
     if (v.err != "") { return v; }
-    if (num_norm_cg(v.ty) != num_norm_cg(ety)) { return gt_err("mixed list element types", v); }
-    return lw_list_at(w, id, i + 1, ety, vals.concat([v.val]), env, v);
+    if (num_norm_cg(v.ty) == num_norm_cg(ety)) { return lw_list_at(w, id, i + 1, ety, vals.concat([v.val]), env, v); }
+    // Elements that differ only by holes (`[Some(1), None]`) share one
+    // representation; the list takes the more specific type.
+    Str u = lw_elem_unify(ety, v.ty);
+    if (u == "") { return gt_err("mixed list element types", v); }
+    return lw_list_at(w, id, i + 1, u, vals.concat([v.val]), env, v);
 }
 
 // csl_value: a field initializer, given the field's type.
@@ -149,7 +166,7 @@ List(Str) lw_fstores(Str reg, List(Str) st, Int i, List(Str) acc) {
     if (i >= st.len()) { return acc; }
     List(Str) p = str_split(st[i], "|");
     Str sr = reg + ".f" + p[0];
-    return lw_fstores(reg, st, i + 1, acc.concat([sr + " = getelementptr i8, ptr " + reg + f", i64 {str_parse_int(p[0]) * 8}", "store " + p[1] + " " + p[2] + ", ptr " + sr]));
+    return lw_fstores(reg, st, i + 1, acc.concat([sr + " = getelementptr i8, ptr " + reg + f", i64 {str_parse_int(p[0]) * 8}", "store " + p[1] + " " + p[2] + ", ptr " + sr + ", align 8"]));
 }
 
 // cg_struct_lit. A record of a type some literal may reuse carries a
@@ -443,6 +460,54 @@ GT lw_fstr(LW w, Int id, Int i, Str acc, List(Str) env, GT c) {
     return lw_fstr(w, id, i + 1, joined.val, env, joined);
 }
 
+// A fixed list's text, "[e0, e1, ...]", read from its slots in a loop
+// (spec §44: it is never copied to a heap list).
+GT lw_show_fixed_list(LW w, GT v, Bool trim, List(Str) env) {
+    Str t = v.ty;
+    Int n = fixed_cap(t);
+    if (n == 0) { return fst_literal("[]", 0, 2, "", v); }
+    Str ety = fixed_elem(t);
+    GT lo = fst_literal("[", 0, 1, "", v);
+    GT sp = fst_literal(", ", 0, 2, "", lo);
+    GT cl = fst_literal("]", 0, 1, "", sp);
+    GT no = fst_literal("", 0, 0, "", cl);
+    Str from = last_label_line_cg(no.lines, "entry");
+    Str lh = f"L{no.lbl + 1}";
+    Str lb = f"L{no.lbl + 2}";
+    Str le = f"L{no.lbl + 3}";
+    Int t1 = no.tmp + 1;
+    Str ix = f"%t{t1}";
+    Str acc = f"%t{t1 + 1}";
+    Str done = f"%t{t1 + 2}";
+    Str gp = f"%t{t1 + 3}";
+    Str ev = f"%t{t1 + 4}";
+    List(Str) none = [];
+    List(Str) b0 = [lb + ":", gp + " = getelementptr inbounds " + fixed_arr_ty(t) + ", ptr " + v.val + ", i64 0, i64 " + ix, ev + " = load " + ll_ty(ety) + ", ptr " + gp];
+    GT elem = GT {.pos = 0, .val = ev, .ty = ety, .cnt = 0, .err = "", .glines = no.glines, .lines = b0, .tmp = t1 + 4, .lbl = no.lbl + 3, .tail = false};
+    GT es = lw_show_nested(w, elem, env);
+    if (es.err != "") { return es; }
+    Int t2 = es.tmp + 1;
+    Str first = f"%t{t2}";
+    Str sep = f"%t{t2 + 1}";
+    Str a1 = f"%t{t2 + 2}";
+    Str a2 = f"%t{t2 + 3}";
+    Str i1 = f"%t{t2 + 4}";
+    Str r = f"%t{t2 + 5}";
+    Str be = last_label_line_cg(es.lines, lb);
+    List(Str) body = es.lines.concat([
+        first + " = icmp eq i64 " + ix + ", 0", sep + " = select i1 " + first + ", ptr " + no.val + ", ptr " + sp.val,
+        a1 + " = call ptr @resid_str_concat(ptr " + acc + ", ptr " + sep + ")", a2 + " = call ptr @resid_str_concat(ptr " + a1 + ", ptr " + es.val + ")",
+        i1 + " = add i64 " + ix + ", 1", "br label %" + lh
+    ]);
+    List(Str) head = ["br label %" + lh, lh + ":",
+        ix + " = phi i64 [ 0, %" + from + " ], [ " + i1 + ", %" + be + " ]",
+        acc + " = phi ptr [ " + lo.val + ", %" + from + " ], [ " + a2 + ", %" + be + " ]",
+        done + f" = icmp eq i64 " + ix + f", {n}", "br i1 " + done + ", label %" + le + ", label %" + lb];
+    List(Str) tail = [le + ":", r + " = call ptr @resid_str_concat(ptr " + acc + ", ptr " + cl.val + ")"];
+    List(Str) all = no.lines.concat(head).concat(body).concat(tail);
+    return GT {.pos = 0, .val = r, .ty = "Str", .cnt = 0, .err = "", .glines = es.glines, .lines = all, .tmp = t2 + 5, .lbl = es.lbl, .tail = false};
+}
+
 // A value's text (Show): scalars and Dec by representation, lists and
 // records structurally, other boxes through the runtime's ToString.
 GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
@@ -455,6 +520,10 @@ GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
     // A fixed string is shown through its NUL-terminated view.
     if (is_str_fixed(t)) { return lw_step(vt, v.val, "Str", v.lines, v.tmp); }
     if (t == "Option(_)") { return fst_literal("None", 0, 4, "", vt); }
+    if (is_list_fixed(t)) { return lw_show_fixed_list(w, vt, trim, env); }
+    // Byte strings show as their literal: b"xy\x00".
+    if (t == "Bytes") { return lw_rt1(vt, "ptr", "@resid_bytes_show(ptr " + v.val + ", i64 -1)", "Str"); }
+    if (is_bytes_fixed(t)) { return lw_rt1(vt, "ptr", "@resid_bytes_show(ptr " + v.val + f", i64 {fixed_cap(t)})", "Str"); }
     if (str_has_prefix_cg(t, "List(")) {
         Str et = str_slice(t, 5, str_len(t) - 1);
         Bool strs = num_norm_cg(et) == "Str";
@@ -506,7 +575,9 @@ Str lw_label(Str t) {
 // A value's text inside a container: strings quoted, the rest as shown.
 GT lw_show_nested(LW w, GT v, List(Str) env) {
     Str t = strip_owned_cg(v.ty);
-    if (num_norm_cg(t) == "Str" && b_index(w.fs, "Show", t) < 0) { return lw_rt1(v, "ptr", "@resid_str_quote(ptr " + v.val + ")", "Str"); }
+    // A nested string is quoted, a fixed one through its NUL-terminated view.
+    Bool strish = num_norm_cg(t) == "Str" || is_str_fixed(t);
+    if (strish && b_index(w.fs, "Show", t) < 0) { return lw_rt1(v, "ptr", "@resid_str_quote(ptr " + v.val + ")", "Str"); }
     return lw_show(w, v, false, env);
 }
 
@@ -695,13 +766,16 @@ GT lw_match(LW w, Int id, List(Str) env, GT c) {
     if (arm1.err != "") { return arm1; }
     GT arm2 = lw_match_arm(w, lw_kid(w, id, 2), env, sc, ety, arm1, labb, labm);
     if (arm2.err != "") { return arm2; }
-    if (!ty_same_cg(arm1.ty, arm2.ty)) { return gt_err("match arms disagree", arm2); }
+    // Arms that differ only by holes (`Ok(v)` / `Err(e)` built separately)
+    // share one representation; the match takes the more specific type.
+    Str mty = if (ty_same_cg(arm1.ty, arm2.ty)) { arm1.ty } else { lw_elem_unify(arm1.ty, arm2.ty) };
+    if (mty == "") { return gt_err("match arms disagree", arm2); }
     Int tp = arm2.tmp + 1;
     Str pr = f"%t{tp}";
     Str pa = arm_exit_label_cg(arm1.lines, laba);
     Str pb = arm_exit_label_cg(arm2.lines, labb);
-    List(Str) d2 = arm2.lines.concat([labm + ":", pr + " = phi " + ll_ty(num_norm_cg(arm1.ty)) + " [ " + arm1.val + ", %" + pa + " ], [ " + arm2.val + ", %" + pb + " ]"]);
-    return GT {.pos = 0, .val = pr, .ty = arm1.ty, .cnt = 0, .err = "", .glines = arm2.glines, .lines = d2, .tmp = tp, .lbl = arm2.lbl, .tail = false};
+    List(Str) d2 = arm2.lines.concat([labm + ":", pr + " = phi " + ll_ty(num_norm_cg(mty)) + " [ " + arm1.val + ", %" + pa + " ], [ " + arm2.val + ", %" + pb + " ]"]);
+    return GT {.pos = 0, .val = pr, .ty = mty, .cnt = 0, .err = "", .glines = arm2.glines, .lines = d2, .tmp = tp, .lbl = arm2.lbl, .tail = false};
 }
 
 GT lw_match_arm(LW w, Int a, List(Str) env, GT sc, Str ety, GT c, Str lab, Str labm) {
@@ -802,7 +876,9 @@ GT lw_field_of(LW w, GT base, Str f) {
     Int t2 = base.tmp + 2;
     Str gp = f"%t{t1}";
     Str ld = f"%t{t2}";
-    return lw_step(base, ld, fty, base.lines.concat([gp + " = getelementptr i8, ptr " + base.val + f", i64 {slot * 8}", ld + " = load " + ll_ty(fty) + ", ptr " + gp]), t2);
+    // Slots are 8-aligned: a 16-byte field (i128, fp128) needs the explicit
+    // alignment, or LLVM assumes 16 and emits aligned vector moves.
+    return lw_step(base, ld, fty, base.lines.concat([gp + " = getelementptr i8, ptr " + base.val + f", i64 {slot * 8}", ld + " = load " + ll_ty(fty) + ", ptr " + gp + ", align 8"]), t2);
 }
 
 // Method argument `i` (kid i + 1) lowered after `c`.
@@ -838,7 +914,9 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     Int na = w.g.ns[id].nk - 1;
     Funcs fs = w.fs;
     if (is_list_fixed(base.ty) && m == "len") { return lw_step(base, f"{fixed_cap(base.ty)}", "Int", base.lines, base.tmp); }
-    if (base.ty == "StrBuf" || str_has_prefix_cg(base.ty, "ListBuf(")) { return lw_builder(w, id, base, m, env); }
+    if (is_bytes_fixed(base.ty) && m == "len") { return lw_step(base, f"{fixed_cap(base.ty)}", "Int", base.lines, base.tmp); }
+    if (is_fixed_type(base.ty) && m == "capacity" && fn_index(w.fs, m) < 0) { return lw_step(base, f"{fixed_cap(base.ty)}", "Int", base.lines, base.tmp); }
+    if (lw_bkind(base.ty) != "") { return lw_builder(w, id, base, m, env); }
     if (lv_is(base.ty)) { return lv_method(w, id, base, m, env); }
     if (is_map_type_cg(base.ty)) { return lw_map_method(w, id, base, m, env); }
     if (is_set_type_cg(base.ty)) { return lw_set_method(w, id, base, m, env); }
@@ -881,7 +959,7 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
             Int coff = field_slot(cfields, m) * 8;
             Str cgp = f"%t{base.tmp + 1}";
             Str cld = f"%t{base.tmp + 2}";
-            GT cbase = lw_step(base, cld, cfty, base.lines.concat([cgp + " = getelementptr i8, ptr " + base.val + f", i64 {coff}", cld + " = load " + ll_ty(cfty) + ", ptr " + cgp]), base.tmp + 2);
+            GT cbase = lw_step(base, cld, cfty, base.lines.concat([cgp + " = getelementptr i8, ptr " + base.val + f", i64 {coff}", cld + " = load " + ll_ty(cfty) + ", ptr " + cgp + ", align 8"]), base.tmp + 2);
             return lw_fn_call(w, id, 1, cld, cfty, env, cbase);
         }
     }
@@ -1019,6 +1097,12 @@ List(Str) lv_decl(List(Str) gl, Str name, Str decl) { return gl.concat(["@rtg.cm
 // and lanes() take their vector type from it.
 GT lw_expr_as(LW w, Int id, Str want, List(Str) env, GT c) {
     if (is_fixed_type(want)) { return lw_fixed_as(w, id, want, env, c); }
+    // A fresh builder where a fixed-capacity one is expected: no storage
+    // yet (fb_block allocates it on first use).
+    if (lw_fixed_bkind(want) && lw_kind(w, id) == "call" && w.g.ns[id].nk == 0 && fn_index(w.fs, lw_text(w, id)) < 0) {
+        Str cn = lw_text(w, id);
+        if (cn == "StrBuf" || cn == "ListBuf" || cn == "BytesBuf") { return lw_step(c, "null", want, c.lines, c.tmp); }
+    }
     if (!lv_is(want)) { return lw_expr(w, id, env, c); }
     Str k = lw_kind(w, id);
     Str n = lw_text(w, id);
@@ -1419,9 +1503,152 @@ GT lw_sbv_push(Str bv, GT a, Bool ch, Int t1) {
     return GT {.pos = 0, .val = reg, .ty = "StrBuf", .cnt = 0, .err = "", .glines = a.glines, .lines = all, .tmp = t1, .lbl = a.lbl + 3, .tail = false};
 }
 
+// The kind of a builder type (as gcheck.resid gk_builder_kind): "sb",
+// "lb", or fixed-capacity "fsb" StrBuf(N), "fbb" BytesBuf(N), "flb"
+// ListBuf(T, N); "" for other types.
+Str lw_bkind(Str t) {
+    if (t == "StrBuf") { return "sb"; }
+    if (str_has_prefix_cg(t, "StrBuf(")) { return "fsb"; }
+    if (str_has_prefix_cg(t, "BytesBuf(")) { return "fbb"; }
+    if (!str_has_prefix_cg(t, "ListBuf(")) { return ""; }
+    return if (_find_comma_at_depth_cg(t, 8, 0, 0) >= 0) { "flb" } else { "lb" };
+}
+
+Bool lw_fixed_bkind(Str t) {
+    Str k = lw_bkind(t);
+    return k == "fsb" || k == "fbb" || k == "flb";
+}
+
+// The value a fixed builder finishes to (Str(N), Bytes(N), List(T, N)).
+Str fb_result(Str t) {
+    Str k = lw_bkind(t);
+    if (k == "fsb") { return "Str" + str_slice(t, 6, str_len(t)); }
+    if (k == "fbb") { return "Bytes" + str_slice(t, 8, str_len(t)); }
+    return "List" + str_slice(t, 7, str_len(t));
+}
+
+// ─── Fixed-capacity builders (spec §45.2) ───────────────────────────
+// A block {len, want, value}: `len` bytes (or elements) written, `want`
+// the total the pushes asked for, then the finished value's storage,
+// zeroed (fixed_arr_ty of the result). A push that would pass the
+// capacity writes nothing and only raises `want`, so a builder never
+// holds a partial string, and finish / try_finish see the overflow. A
+// fresh builder is null until something needs its block.
+
+// The block of builder value `v`: v itself, or a new zeroed block.
+GT fb_block(GT v) {
+    Str res = fb_result(v.ty);
+    Int t1 = v.tmp + 1;
+    Str isn = f"%t{t1}";
+    Str mk = f"%t{t1 + 1}";
+    Str blk = f"%t{t1 + 2}";
+    Int n = 16 + fixed_bytes(res);
+    Str la = f"L{v.lbl + 1}";
+    Str lh = f"L{v.lbl + 2}";
+    Str lj = f"L{v.lbl + 3}";
+    Str from = last_label_line_cg(v.lines, "entry");
+    List(Str) ls = v.lines.concat([
+        isn + " = icmp eq ptr " + v.val + ", null", "br i1 " + isn + ", label %" + la + ", label %" + lj,
+        la + ":", mk + f" = call ptr @resid_gmalloc(i64 {n})", "call void @llvm.memset.p0.i64(ptr " + mk + f", i8 0, i64 {n}, i1 false)", "br label %" + lj,
+        lj + ":", blk + " = phi ptr [ " + mk + ", %" + la + " ], [ " + v.val + ", %" + from + " ]"
+    ]);
+    return GT {.pos = 0, .val = blk, .ty = v.ty, .cnt = 0, .err = "", .glines = v.glines, .lines = ls, .tmp = t1 + 2, .lbl = v.lbl + 3, .tail = false};
+}
+
+// push on a ListBuf(T, N): the element into slot len when want < N.
+GT fb_push_elem(GT b, GT a) {
+    Str res = fb_result(b.ty);
+    Int cap = fixed_cap(res);
+    Str ety = fixed_elem(res);
+    Int t1 = a.tmp + 1;
+    Str wp = f"%t{t1}";
+    Str w0 = f"%t{t1 + 1}";
+    Str w1 = f"%t{t1 + 2}";
+    Str fits = f"%t{t1 + 3}";
+    Str ln = f"%t{t1 + 4}";
+    Str sl = f"%t{t1 + 5}";
+    Str l1 = f"%t{t1 + 6}";
+    Str arr = f"%t{t1 + 7}";
+    Str ls = f"L{a.lbl + 1}";
+    Str lj = f"L{a.lbl + 2}";
+    List(Str) out = a.lines.concat([
+        wp + " = getelementptr i8, ptr " + b.val + ", i64 8", w0 + " = load i64, ptr " + wp, w1 + " = add i64 " + w0 + ", 1", "store i64 " + w1 + ", ptr " + wp,
+        fits + " = icmp sle i64 " + w1 + f", {cap}", "br i1 " + fits + ", label %" + ls + ", label %" + lj,
+        ls + ":", ln + " = load i64, ptr " + b.val, arr + " = getelementptr i8, ptr " + b.val + ", i64 16",
+        sl + " = getelementptr inbounds " + fixed_arr_ty(res) + ", ptr " + arr + ", i64 0, i64 " + ln, "store " + ll_ty(ety) + " " + a.val + ", ptr " + sl,
+        l1 + " = add i64 " + ln + ", 1", "store i64 " + l1 + ", ptr " + b.val, "br label %" + lj, lj + ":"
+    ]);
+    return GT {.pos = 0, .val = b.val, .ty = b.ty, .cnt = 0, .err = "", .glines = a.glines, .lines = out, .tmp = t1 + 7, .lbl = a.lbl + 2, .tail = false};
+}
+
+// finish: the value (aborting if a push overflowed); try_finish: Ok(value)
+// or Err(the length the pushes asked for).
+GT fb_finish(GT b, Bool as_result, Funcs fs) {
+    Str res = fb_result(b.ty);
+    Int cap = fixed_cap(res);
+    Int t1 = b.tmp + 1;
+    Str wp = f"%t{t1}";
+    Str wv = f"%t{t1 + 1}";
+    Str over = f"%t{t1 + 2}";
+    Str val = f"%t{t1 + 3}";
+    Str lo = f"L{b.lbl + 1}";
+    Str lk = f"L{b.lbl + 2}";
+    List(Str) head = b.lines.concat([
+        wp + " = getelementptr i8, ptr " + b.val + ", i64 8", wv + " = load i64, ptr " + wp,
+        over + " = icmp sgt i64 " + wv + f", {cap}", val + " = getelementptr i8, ptr " + b.val + ", i64 16",
+        "br i1 " + over + ", label %" + lo + ", label %" + lk
+    ]);
+    if (!as_result) {
+        List(Str) ab = head.concat([lo + ":", "call void @resid_fb_overflow(i64 " + wv + f", i64 {cap})", "unreachable", lk + ":"]);
+        return GT {.pos = 0, .val = val, .ty = res, .cnt = 0, .err = "", .glines = b.glines, .lines = ab, .tmp = t1 + 3, .lbl = b.lbl + 2, .tail = false};
+    }
+    Str rty = "Result(" + res + ", Int)";
+    Str lj = f"L{b.lbl + 3}";
+    GT errc = GT {.pos = 0, .val = wv, .ty = "Int", .cnt = 0, .err = "", .glines = b.glines, .lines = head.concat([lo + ":"]), .tmp = t1 + 3, .lbl = b.lbl + 3, .tail = false};
+    GT eb = lw_box_one(errc, rty, "2", fs);
+    Str ef = last_label_line_cg(eb.lines, lo);
+    GT okc = GT {.pos = 0, .val = val, .ty = res, .cnt = 0, .err = "", .glines = eb.glines, .lines = eb.lines.concat(["br label %" + lj, lk + ":"]), .tmp = eb.tmp, .lbl = eb.lbl, .tail = false};
+    GT ob = lw_box_one(okc, rty, "1", fs);
+    Str of = last_label_line_cg(ob.lines, lk);
+    Int tr = ob.tmp + 1;
+    Str r = f"%t{tr}";
+    List(Str) out = ob.lines.concat(["br label %" + lj, lj + ":", r + " = phi ptr [ " + eb.val + ", %" + ef + " ], [ " + ob.val + ", %" + of + " ]"]);
+    return GT {.pos = 0, .val = r, .ty = rty, .cnt = 0, .err = "", .glines = ob.glines, .lines = out, .tmp = tr, .lbl = ob.lbl, .tail = false};
+}
+
+GT lw_fixed_builder(LW w, Int id, GT base, Str m, List(Str) env) {
+    Str k = lw_bkind(base.ty);
+    if (m == "discard") { return lw_step(base, "false", "Void", base.lines, base.tmp); }
+    GT b = fb_block(base);
+    if (m == "finish" || m == "try_finish") { return fb_finish(b, m == "try_finish", w.fs); }
+    Bool okm = m == "push" || (k == "fsb" && m == "push_char");
+    if (!okm) { return gt_err("unsupported method " + m + " on " + base.ty, base); }
+    GT a0 = lw_marg(w, id, 0, env, b);
+    if (a0.err != "") { return a0; }
+    Int cap = fixed_cap(fb_result(base.ty));
+    if (k == "flb") {
+        Str ety = fixed_elem(fb_result(base.ty));
+        Bool num = int_fam(ety) || str_has_prefix_cg(ety, "Float") || ety == "Float";
+        GT a = if (num) { widen_val(a0, ety) } else { a0 };
+        return fb_push_elem(b, a);
+    }
+    Bool str = k == "fsb" && m == "push";
+    GT a1 = if (str) { a0 } else { widen_val(a0, "Int(64)") };
+    Str f = if (str) { "@resid_fsb_push" } else { if (k == "fsb") { "@resid_fsb_push_cp" } else { "@resid_fbb_push" } };
+    Str at = if (str) { "ptr" } else { "i64" };
+    return lw_rt1(a1, "ptr", f + "(ptr " + b.val + f", i64 {cap}, " + at + " " + a1.val + ")", base.ty);
+}
+
 // cg_builder_method.
 GT lw_builder(LW w, Int id, GT base, Str m, List(Str) env) {
+    if (lw_fixed_bkind(base.ty)) { return lw_fixed_builder(w, id, base, m, env); }
     Bool sb = base.ty == "StrBuf";
+    if (m == "discard") {
+        if (!sb) { return lw_step(base, "false", "Void", base.lines, base.tmp); }
+        Int td = base.tmp + 1;
+        Str rd = f"%t{td}";
+        return lw_step(base, "false", "Void", base.lines.concat(sbv_parts(base.val, rd).concat(["call void @resid_sb2_discard(ptr " + rd + "b, ptr " + rd + "l)"])), td);
+    }
     Str et = if (sb) { "" } else { str_slice(base.ty, 8, str_len(base.ty) - 1) };
     if (m == "finish") {
         Int t1 = base.tmp + 1;
@@ -2424,15 +2651,21 @@ GT lw_con(LW w, Int id, Str n, List(Str) env, GT c) {
     if (w.g.ns[id].nk != 1) { return lw_gerr(n + " arity", c); }
     GT p = lw_expr(w, lw_kid(w, id, 0), env, c);
     if (p.err != "") { return p; }
-    GT hb = box_heap_("", p, env, w.fs);
+    Str ty = if (n == "Some") { "Option(" + p.ty + ")" } else { if (n == "Ok") { "Result(" + p.ty + ", _)" } else { "Result(_, " + p.ty + ")" } };
+    Str tag = if (n == "Err") { "2" } else { "1" };
+    return lw_box_one(p, ty, tag, w.fs);
+}
+
+// The one-slot tagged box of payload p (tag 1 Some/Ok, 2 Err) of type ty.
+GT lw_box_one(GT p, Str ty, Str tag, Funcs fs) {
+    List(Str) nenv = [];
+    GT hb = box_heap_("", p, nenv, fs);
     Int t1 = hb.tmp + 1;
     Int t2 = hb.tmp + 2;
     Int t3 = hb.tmp + 3;
     Str sa = f"%t{t1}";
     Str gi = f"%t{t2}";
     Str reg = f"%t{t3}";
-    Str ty = if (n == "Some") { "Option(" + p.ty + ")" } else { if (n == "Ok") { "Result(" + p.ty + ", _)" } else { "Result(_, " + p.ty + ")" } };
-    Str tag = if (n == "Err") { "2" } else { "1" };
     Str body = esc_ll(ty, 0, "");
     Str tsym = f"@.oty{t1}";
     List(Str) gl2 = hb.glines.concat([tsym + f" = private unnamed_addr constant [{ll_bytes(body, 0, 0) + 1} x i8] c\"" + body + "\\00\""]);
@@ -2923,7 +3156,9 @@ ST lw_bind_fixed_list(LW w, Int ln, Str name, Str dtyb, List(Str) env, ST g) {
 GT lw_fixed_elems(LW w, Int ln, Int i, Str arrty, Str ety, Str base, Int cap, List(Str) env, GT c) {
     if (i >= w.g.ns[ln].nk) { return c; }
     if (i >= cap) { return gt_err("list literal exceeds List(" + ety + f", {cap}) capacity", c); }
-    GT v = lw_expr(w, lw_kid(w, ln, i), env, c);
+    // Each element for its slot's type: a nested fixed value gets its own
+    // storage, whose pointer the slot holds.
+    GT v = lw_expr_as(w, lw_kid(w, ln, i), ety, env, c);
     if (v.err != "") { return v; }
     GT vw = pick_widen(int_fam(ety) && int_fam(v.ty), v, num_norm_cg(ety));
     Int t1 = vw.tmp + 1;

@@ -1,0 +1,8 @@
+// A `?` may not leave with a growing StrBuf unconsumed: it owns heap memory.
+Result(Int, Str) p(Str s) { return Ok(1); }
+Result(Str, Str) f(Str s) {
+    StrBuf b = StrBuf();
+    Int v = p(s)?;
+    return Ok(b.push(s).finish());
+}
+Int main() { return 0; }

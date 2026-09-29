@@ -1,0 +1,48 @@
+// A need over a generic function's type parameters that an instance
+// covers for every choice of them needs no @needs of its own: Enc(Int, F)
+// = enc_int covers Enc(Int, F) whatever F is, given enc_int's Sink(F).
+// `?` and `else` hand their operand the wrapped expected type, so a verb
+// or generic call whose result names a type only there infers it.
+behavior Sink(F) { F put(F s, Str x); }
+behavior Enc(T, F) { F enc(T x, F s); }
+behavior Dec(T) { Result(T, Str) dec(Str s); }
+type Buf = { Str out; };
+Buf buf_put(Buf b, Str x) { return Buf {.out = b.out + x + ";"}; }
+Sink(Buf) = buf_put;
+@needs(Sink(F))
+F enc_int(Int x, F s) { return put(s, f"i{x}"); }
+Enc(Int, F) = enc_int;
+@needs(Sink(F))
+F enc_str(Str x, F s) { return put(s, "s" + x); }
+Enc(Str, F) = enc_str;
+@needs(Sink(F), Enc(T, F))
+F enc_list(List(T) xs, F s) { return enc_list_at(xs, 0, put(s, f"n{xs.len()}")); }
+@needs(Sink(F), Enc(T, F))
+F enc_list_at(List(T) xs, Int i, F s) {
+    if (i >= xs.len()) { return s; }
+    return enc_list_at(xs, i + 1, enc(xs[i], s));
+}
+Enc(List(T), F) = enc_list;
+type Pt = { Int x; Str n; List(Int) ks; };
+// No Enc(Int, F), Enc(Str, F) or Enc(List(Int), F) in @needs.
+@needs(Sink(F))
+F enc_pt(Pt p, F s) { return enc(p.ks, enc(p.n, enc(p.x, s))); }
+Enc(Pt, F) = enc_pt;
+Result(Int, Str) dec_int(Str s) { return if (str_is_int(s)) { Ok(str_parse_int(s)) } else { Err("not an int: " + s) }; }
+Dec(Int) = dec_int;
+@needs(Dec(T))
+Result(T, Str) parse_twice(Str a, Str b) {
+    T x = dec(a)?;
+    T y = dec(b) else { x };
+    return Ok(y);
+}
+Int main() {
+    Buf b = enc(Pt {.x = 1, .n = "a", .ks = [2, 3]}, Buf {.out = ""});
+    println(b.out);
+    Result(Int, Str) r1 = parse_twice("4", "5");
+    Result(Int, Str) r2 = parse_twice("4", "x");
+    Result(Int, Str) r3 = parse_twice("x", "5");
+    Int z = dec("9") else { -1 };
+    println(f"{r1} {r2} {r3} {z}");
+    return 0;
+}

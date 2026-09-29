@@ -1,0 +1,2 @@
+import "./_norm_lib.resid";
+pub Str describe(Str n) { Thing t = thing(n); return label(t) + f" {weight(t)}"; }

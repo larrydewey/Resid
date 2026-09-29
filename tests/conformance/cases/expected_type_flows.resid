@@ -1,0 +1,24 @@
+// The expected type reaches match arms, empty literals and variant
+// payloads, and a callee's @needs fix a lambda argument's type.
+type Box = Full(List(Int)) | Empty;
+type Cell = { Option(List(Int)) o; };
+behavior Dec(T) { Result(T, Str) dec(Str s); }
+Result(Int, Str) dec_int(Str s) { return if (str_is_int(s)) { Ok(str_parse_int(s)) } else { Err("bad " + s) }; }
+Dec(Int) = dec_int;
+behavior Seq(C, T) { Int size(C c); T at(C c, Int i); }
+Int lsize(List(T) xs) { return xs.len(); }
+T lat(List(T) xs, Int i) { return xs[i]; }
+Seq(List(T), T) = { .size = lsize, .at = lat };
+@needs(Seq(C, T))
+A fold(C c, A init, A closure(A, T) f) { return fold_at(c, f, 0, init); }
+@needs(Seq(C, T))
+A fold_at(C c, A closure(A, T) f, Int i, A acc) { if (i >= size(c)) { return acc; } return fold_at(c, f, i + 1, f(acc, at(c, i))); }
+Int main() {
+    Result(Str, Str) a = Ok("7");
+    Result(Int, Str) c = match a { Ok(s) => dec(s), Err(e) => Err(e) };
+    Box x = Full([]);
+    Cell cl = Cell {.o = Some([])};
+    List(Box) xs = [Full([1]), Empty, Full([])];
+    println(f"{c} {x} {cl.o} {xs} {fold([1, 2, 3], 10, lambda(t, v) { t + v })}");
+    return 0;
+}

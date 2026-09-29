@@ -548,16 +548,39 @@ Str depmap_lookup(Str depmap, Str name) {
 
 @requires(filesystem(readonly))
 Str imp_resolve_target(Str dir, Str name, Str depmap) {
-    Str full = if (ck_str_starts_with(name, "/")) { name } else { dir + "/" + name };
+    // Normalized, so one file reached along two relative paths
+    // ("../a/../lib/x.resid" and "../lib/x.resid") is one module.
+    Str full = imp_normalize(if (ck_str_starts_with(name, "/")) { name } else { dir + "/" + name });
     if (filesystem.exists(full)) { return full; }
     Str dep = depmap_lookup(depmap, name);
     if (dep != "") { return dep; }
     // Not beside the importer: the standard library (an `@stdlib::dir`
     // line the driver adds to the dependency map).
     Str sd = depmap_stdlib(str_split(depmap, "\n"), 0);
-    Str std = if (sd == "" || ck_str_starts_with(name, "/")) { "" } else { sd + "/" + name };
+    Str std = if (sd == "" || ck_str_starts_with(name, "/")) { "" } else { imp_normalize(sd + "/" + name) };
     if (std != "" && filesystem.exists(std)) { return std; }
     return full;
+}
+
+// A path with its `.` and `name/..` segments folded away (leading `..`
+// kept; "a/b/../c" is "a/c", "./x" is "x", "/p/./q" is "/p/q").
+pub Str imp_normalize(Str path) {
+    Bool abs = ck_str_starts_with(path, "/");
+    List(Str) none = [];
+    List(Str) segs = imp_norm_segs(str_split(path, "/"), 0, none);
+    Str body = str_join(segs, "/");
+    if (abs) { return "/" + body; }
+    return if (body == "") { "." } else { body };
+}
+
+List(Str) imp_norm_segs(List(Str) parts, Int i, List(Str) acc) {
+    if (i >= parts.len()) { return acc; }
+    Str p = parts[i];
+    if (p == "" || p == ".") { return imp_norm_segs(parts, i + 1, acc); }
+    Int n = acc.len();
+    Bool can_pop = n > 0 && acc[n - 1] != "..";
+    if (p == ".." && can_pop) { return imp_norm_segs(parts, i + 1, acc[0..n - 1]); }
+    return imp_norm_segs(parts, i + 1, acc.concat([p]));
 }
 
 Str depmap_stdlib(List(Str) ls, Int i) {
@@ -2195,6 +2218,10 @@ pub Str canon64_acc(Str tys, Int i, Str acc) {
     Int total = str_count(tys, ",");
     if (i > total) { return acc; }
     Str elem = canon64_at(tys, i);
+    // str_count also counts commas nested inside a type's parentheses
+    // (`Got(Int, Toks)`), so indexes past the last top-level element
+    // come back empty: stop there instead of appending an empty element.
+    if (elem == "") { return acc; }
     Str sep = if (acc == "") { "" } else { "," };
     Str acc2 = acc + sep + elem;
     Int ni = i + 1;
@@ -2673,9 +2700,13 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         return ERes {.pos = pos, .ty = "", .err = name + " expects one numeric argument, got (" + rawtys + ")"};
     }
     // ── Option constructors (spec §10) ─────────────────────────────
-    // `Some(v)` carries its payload type: `Some(42)` -> Option(Int).
+    // `Some(v)` carries its payload type: `Some(42)` -> Option(Int). The
+    // raw type, not argtys: argtys is canonical for builtin checks (every
+    // integer width up to 64 bits reads `Int`), which would turn `Ok(x)`
+    // with an Int(32) x into Result(Int, _).
+    Str payty = str_trim(rawtys);
     if (name == "Some") {
-        if (argc == 1) { return ERes {.pos = pos, .ty = "Option(" + argtys + ")", .err = ""}; }
+        if (argc == 1) { return ERes {.pos = pos, .ty = "Option(" + payty + ")", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "Some expects 1 argument"};
     }
     if (name == "None") {
@@ -2691,8 +2722,8 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argc == 1) {
             Str eerr = res_elem_err(exp);
             Bool hasres = str_has_prefix(exp, "Result(") && eerr != "";
-            if (hasres) { return ERes {.pos = pos, .ty = "Result(" + argtys + ", " + eerr + ")", .err = ""}; }
-            return ERes {.pos = pos, .ty = "Result(" + argtys + ", _)", .err = ""};
+            if (hasres) { return ERes {.pos = pos, .ty = "Result(" + payty + ", " + eerr + ")", .err = ""}; }
+            return ERes {.pos = pos, .ty = "Result(" + payty + ", _)", .err = ""};
         }
         return ERes {.pos = pos, .ty = "", .err = "Ok expects 1 argument"};
     }
@@ -2700,8 +2731,8 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argc == 1) {
             Str eok = res_elem_ok(exp);
             Bool hasres = str_has_prefix(exp, "Result(") && eok != "";
-            if (hasres) { return ERes {.pos = pos, .ty = "Result(" + eok + ", " + argtys + ")", .err = ""}; }
-            return ERes {.pos = pos, .ty = "Result(_, " + argtys + ")", .err = ""};
+            if (hasres) { return ERes {.pos = pos, .ty = "Result(" + eok + ", " + payty + ")", .err = ""}; }
+            return ERes {.pos = pos, .ty = "Result(_, " + payty + ")", .err = ""};
         }
         return ERes {.pos = pos, .ty = "", .err = "Err expects 1 argument"};
     }

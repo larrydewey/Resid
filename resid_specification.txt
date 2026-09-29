@@ -621,7 +621,15 @@ A generic function states the behaviors it relies on:
 Inside its body, sorting, displaying, comparing (==, <) or
 calling a behavior's verb on a T requires the matching
 need (E0226); every call checks that each need is met for
-its types (an instance, or a built-in one). A call may
+its types (an instance, or a built-in one). A need over the
+function's type parameters is also met, without listing it,
+by an instance that covers it for every choice of them whose
+own needs are met there: with `Encode(Int, F) = enc_int` and
+enc_int needing Encoder(F), a body with @needs(Encoder(F))
+may encode an Int to any F. Each copy then uses that
+instance. When the arguments leave a parameter open, the
+callee's needs fix it before a lambda argument is typed
+(`fold(xs, 0, lambda(a, x) { a + x })`). A call may
 override a need: `top(xs, using = Reverse(Ord(Int)))` or
 `top(tasks, using = by_deadline)`.
 
@@ -1911,6 +1919,17 @@ comparisons to lane masks Vec(Bool, N), select, shuffles and
 lane-order reductions. The builtin sqrt (§6.7) also takes a
 Float vector.
 
+v3.8: fixed-capacity builders (§45.2). StrBuf(N), BytesBuf(N)
+and ListBuf(T, N) fill a Str(N), Bytes(N) or List(T, N) in
+its own storage; overflow is recorded and try_finish reports
+it as a value.
+  - b.discard() gives a builder up; a `?` may leave with
+    region-backed builders unconsumed, never with a StrBuf
+    (§45.1).
+  - .capacity() on fixed-capacity values, Bytes(N).len() is
+    N, fixed lists and byte strings display as values, and
+    `[]` adopts an expected List(T, N) (§44.3).
+
 
 ==================================================
 42. NUMERIC INTEROPERABILITY SUMMARY
@@ -2059,8 +2078,16 @@ identically to heap lists (§17):
           // against the capacity N
   xs[i]   // List(T, N): T, checked against N
 
-`.len()` on a List(T, N) is the statically known capacity
-N; a fixed-capacity list carries no dynamic length.
+`.len()` on a List(T, N) or a Bytes(N) is the statically
+known capacity N; they carry no dynamic length.
+`.capacity()` on any fixed-capacity value is N, a
+compile-time constant (also in a generic body, where N is a
+type parameter).
+
+A List(T, N) displays as its N elements, `[1, 2, 0]`, read
+from its storage; a Bytes(N) (and a Bytes) as its literal,
+`b"ab\x00"`. An empty literal `[]` adopts an expected
+List(T, N), zero-filled, also when N is a type parameter.
 
 --------------------------------------------------
 44.4  Interoperability
@@ -2111,6 +2138,8 @@ Operations:
   b.push(x)              ListBuf(T): appends x (T, with the
                          usual literal adoption and widening)
   b.finish()             StrBuf -> Str, ListBuf(T) -> List(T)
+  b.discard()            gives the builder up (Void); a
+                         StrBuf's buffer is freed
 
 --------------------------------------------------
 45.1  Linearity
@@ -2146,6 +2175,56 @@ consume a builder bound outside it.
 
 A builder that is only passed along (`return b;`, or an
 argument to a function taking a builder) counts as one use.
+`b.discard()` is a use: it ends a builder on purpose, e.g.
+before an early `return`.
+
+A `?` (§14) that returns early leaves the builders still
+live on its path unconsumed; they are given up. That is
+allowed for builders whose storage the regions reclaim
+(ListBuf and the fixed-capacity builders of §45.2). A
+StrBuf owns heap memory, so a `?` that could return early
+while a StrBuf is live is E0401: finish or discard it
+first.
+
+--------------------------------------------------
+45.2  Fixed-Capacity Builders
+--------------------------------------------------
+
+The fixed-capacity types of §44 have builders that fill
+the value in its own storage, with no heap list or string
+on the way:
+
+  StrBuf(N)      builds a Str(N)
+  BytesBuf(N)    builds a Bytes(N)
+  ListBuf(T, N)  builds a List(T, N)
+
+  StrBuf(8) b0 = StrBuf();     // N from the expected type
+  Str(8) s = b0.push("ab").push_char(233).finish();
+
+The constructors are StrBuf(), BytesBuf() and ListBuf(),
+taking N (and T) from the expected type; BytesBuf() needs
+one. Operations:
+
+  b.push(s)              StrBuf(N): appends a Str or Str(M)
+  b.push_char(c)         StrBuf(N): appends codepoint c
+  b.push(x)              BytesBuf(N): appends byte x
+                         (0..255; another value aborts)
+  b.push(x)              ListBuf(T, N): appends x
+  b.finish()             the value; unfilled storage is
+                         zero, as for a literal (§44.1)
+  b.try_finish()         Result(V, Int): Ok(the value), or
+                         Err(the length the pushes asked
+                         for) when they did not fit
+  b.discard()            gives the builder up
+
+A push that would pass the capacity writes nothing (a
+Str(N) always holds whole codepoints of what fit) and only
+records the length asked for. finish() on a builder that
+overflowed aborts, like an out-of-range index;
+try_finish() reports it as a value, so input that does not
+fit is an error rather than a crash. Capacity is in UTF-8
+bytes for StrBuf(N) and BytesBuf(N), in elements for
+ListBuf(T, N). The rules of §45.1 apply unchanged.
 
 ==================================================
 46. VECTOR TYPES

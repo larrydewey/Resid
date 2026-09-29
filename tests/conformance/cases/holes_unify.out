@@ -1,0 +1,2 @@
+Some("s") None Ok(2) Err("e") 18446744073709551615
+[Some(1), None, Some(3)] [None, Some(2)] [] [1] None 0
