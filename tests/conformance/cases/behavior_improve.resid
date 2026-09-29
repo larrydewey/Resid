@@ -1,0 +1,26 @@
+// Behavior types fixed by the one instance or need that fits: E of
+// Container(C, E) from C, and B named only in @needs.
+type Stack(T) = { List(T) items; };
+type Pair(T) = { T a; T b; };
+behavior Container(C, E) {
+    List(E) elems(C c);
+    Int count(C c);
+}
+behavior Convert(A, B) { B convert(A x); }
+List(T) stack_elems(Stack(T) s) { return s.items; }
+Int stack_count(Stack(T) s) { return s.items.len(); }
+Container(Stack(T), T) = { .elems = stack_elems, .count = stack_count };
+Pair(Int) to_pair(Int x) { return Pair {.a = x, .b = x}; }
+Convert(Int, Pair(Int)) = to_pair;
+@needs(Container(C, E), Show(E))
+Str describe(C c) { return f"{count(c)}:{elems(c)}"; }
+@needs(Convert(A, Pair(B)), Show(B))
+Str conv_show(A x) { Pair(B) p = convert(x); return f"{p.a}/{p.b}"; }
+@needs(Container(C, E), Show(E))
+Str twice(C c) { return describe(c) + " " + describe(c); }
+Int main() {
+    Stack(Str) s = Stack {.items = ["a", "b"]};
+    println(f"{count(s)} {elems(s)} {describe(s)} {conv_show(3)}");
+    println(f"{twice(Stack {.items = [1, 2, 3]})}");
+    return 0;
+}

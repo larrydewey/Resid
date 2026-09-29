@@ -603,8 +603,10 @@ parameter (§12) is generic:
   Int(N) clamp_pos(Int(N) x) { return if (x < 0) { 0 } else { x }; }
 
 A call fixes each parameter from its arguments, else from
-the expected type of the call (E0227 when neither does),
-and calls a copy of the function made for those types.
+the expected type of the call, else from the one instance
+(or enclosing need) that fits one of its needs, which also
+fixes a parameter named only in @needs (E0227 when none
+does), and calls a copy of the function made for those types.
 Copies are made at compile time, before reduction, so the
 reducer sees only concrete functions; every copy is
 recorded in the knowledge graph. A generic function that
@@ -682,7 +684,11 @@ The instance's functions must have the prototypes'
 signatures for its types. A verb call picks the instance
 for its argument types (and the expected type, for a type
 that appears only in the result) at compile time and calls
-its function: `area(c)` is `circle_area(c)`. `using = f`,
+its function: `area(c)` is `circle_area(c)`. A behavior type
+fixed by neither comes from the one enclosing @needs, else
+the one instance, that fits the known types: with
+Container(Stack(T), T), `count(s)` on a Stack(Str) has E =
+Str (E0227 when none or several fit). `using = f`,
 `using = B(T)` or `using = Reverse(..)` overrides the choice
 at one call.
 

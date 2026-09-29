@@ -333,6 +333,90 @@ Int gm_find_inst_at(GK k, Str b, List(Str) args, Int i, Int best, Int blev) {
     return gm_find_inst_at(k, b, args, i + 1, if (hit) { n } else { best }, if (hit) { lev } else { blev });
 }
 
+// ─── Improvement ────────────────────────────────────────────────────
+// A need B(pats) whose known types fix the rest: parameters left unbound
+// in u take their types from the one candidate that fits, a need of the
+// enclosing function, else the instances (every fitting one agreeing).
+
+// Candidates that fit so far: the unifier, how many, and their key.
+type GIM = { GU u; Int n; Str key; };
+
+pub GU gm_improve(GK k, Str b, List(Str) pats, GU u) {
+    List(Str) free = gm_free_vars(list_join(pats, 0, ",", ""), u);
+    if (free.len() == 0 || !u.ok) { return u; }
+    GIM none = GIM {.u = u, .n = 0, .key = ""};
+    GIM c = gm_imp_ctx(gm_need_list(k.gx.ctx), b, pats, u, free, 0, none);
+    if (c.n == 1) { return c.u; }
+    GIM d = gm_imp_insts(k, b, pats, u, free, 0, none);
+    return if (d.n == 1) { d.u } else { u };
+}
+
+// The type parameters of `t` that u leaves unbound.
+List(Str) gm_free_vars(Str t, GU u) {
+    Str vs = gm_vars(t, 0, "");
+    if (vs == "") { return gk_nopts(); }
+    return gm_unbound(str_split(str_slice(vs, 1, str_len(vs) - 1), ","), u, 0, ListBuf());
+}
+
+List(Str) gm_unbound(List(Str) vs, GU u, Int i, ListBuf(Str) acc) {
+    if (i >= vs.len()) { return acc.finish(); }
+    return gm_unbound(vs, u, i + 1, if (gu_get(u, vs[i]) == "") { acc.push(vs[i]) } else { acc });
+}
+
+// Improvement over a callee's needs, repeated while one fixes another.
+GU gm_improve_needs(GK k, List(Str) ns, GU u, Int i, Int rounds) {
+    if (i >= ns.len()) {
+        if (rounds <= 1) { return u; }
+        return gm_improve_needs(k, ns, u, 0, rounds - 1);
+    }
+    return gm_improve_needs(k, ns, gm_improve(k, ty_head(ns[i]), ty_args(ns[i]), u), i + 1, rounds);
+}
+
+// Add a fitting candidate's unifier; a second with other types makes n 2.
+GIM gm_imp_add(GIM m, GU u, List(Str) free) {
+    if (!u.ok || gm_free_vars(list_join(free, 0, ",", ""), u).len() > 0) { return m; }
+    Str key = list_join(gm_vals(free, u, 0, ListBuf()), 0, gm_rs(), "");
+    if (m.n == 0) { return GIM {.u = u, .n = 1, .key = key}; }
+    return if (m.n == 1 && key == m.key) { m } else { GIM {.u = m.u, .n = 2, .key = m.key} };
+}
+
+GIM gm_imp_ctx(List(Str) ns, Str b, List(Str) pats, GU u, List(Str) free, Int i, GIM m) {
+    if (i >= ns.len()) { return m; }
+    List(Str) as = ty_args(ns[i]);
+    Bool fit = ty_head(ns[i]) == b && as.len() == pats.len();
+    GIM m2 = if (fit) { gm_imp_add(m, gm_unify_args(pats, as, 0, u, b, b), free) } else { m };
+    return gm_imp_ctx(ns, b, pats, u, free, i + 1, m2);
+}
+
+GIM gm_imp_insts(GK k, Str b, List(Str) pats, GU u, List(Str) free, Int i, GIM m) {
+    if (i >= k.gx.insts.len()) { return m; }
+    Int n = k.gx.insts[i];
+    List(Str) ts = gm_inst_types(k.g, n);
+    Bool fit = k.g.ns[n].text == b && ts.len() == pats.len();
+    GIM m2 = if (fit) { gm_imp_add(m, gm_imp_inst(ts, pats, u), free) } else { m };
+    return gm_imp_insts(k, b, pats, u, free, i + 1, m2);
+}
+
+// Instance types ts against pats: the known ones bind the instance's
+// parameters (ui), which then fix the others.
+GU gm_imp_inst(List(Str) ts, List(Str) pats, GU u) {
+    GU ui = gm_imp_known(ts, pats, u, 0, gu_new());
+    return if (ui.ok) { gm_imp_rest(ts, pats, u, u, ui, 0) } else { gu_fail(u, "") };
+}
+
+GU gm_imp_known(List(Str) ts, List(Str) pats, GU u, Int i, GU ui) {
+    if (i >= ts.len() || !ui.ok) { return ui; }
+    Bool known = gm_free_vars(pats[i], u).len() == 0;
+    return gm_imp_known(ts, pats, u, i + 1, if (known) { gm_unify(ts[i], gm_subst(pats[i], u), ui) } else { ui });
+}
+
+GU gm_imp_rest(List(Str) ts, List(Str) pats, GU u0, GU u, GU ui, Int i) {
+    if (i >= ts.len() || !u.ok) { return u; }
+    if (gm_free_vars(pats[i], u0).len() == 0) { return gm_imp_rest(ts, pats, u0, u, ui, i + 1); }
+    if (gm_free_vars(ts[i], ui).len() > 0) { return gu_fail(u, ""); }
+    return gm_imp_rest(ts, pats, u0, gm_unify(pats[i], gm_subst(ts[i], ui), u), ui, i + 1);
+}
+
 // ─── Generic tables (per checking round) ────────────────────────────
 
 // Declarations walked for the tables: behavior declarations, verbs and
@@ -754,9 +838,11 @@ GKT gk_vcall(GK k0, Int id, Str verb, Str exp) {
     GU u1 = gm_unify_nonlit(g, id, pl, al, 0, 0, false, gu_new());
     GU u2 = gm_unify_lits(g, id, pl, al, 0, 0, false, u1);
     Str ret = g.ns[kg_kid(g, pr, 0)].text;
-    GU u = if (u2.ok && exp != "" && gm_has_var(gm_subst(ret, u2))) { gm_unify(ret, exp, u2) } else { u2 };
-    if (!u.ok) { return gterr(k, verb + " (behavior " + b + "): " + u.why, id); }
+    GU u3 = if (u2.ok && exp != "" && gm_has_var(gm_subst(ret, u2))) { gm_unify(ret, exp, u2) } else { u2 };
+    if (!u3.ok) { return gterr(k, verb + " (behavior " + b + "): " + u3.why, id); }
     List(Str) bps = gm_bparams(g, bd);
+    // Types still open come from the one need or instance that fits.
+    GU u = gm_improve(k, b, bps, u3);
     List(Str) bvals = gm_vals(bps, u, 0, ListBuf());
     Int miss = variant_index_at(bvals, "", 0);
     if (miss >= 0) { return gterr(k, "E0227: cannot infer " + bps[miss] + " of behavior " + b + " for " + verb + "; give the result a declared type", id); }
@@ -1112,11 +1198,16 @@ GKT gk_gcall(GK k, Int id, Str name, Int idx, Str argtys, Int argc, Bool method,
     if (!u1.ok) { return gterr(k, "call " + name + ": " + u1.why, id); }
     GU u2 = gm_unify_lits(k.g, id, pl, al, 0, a0, method, u1);
     Str ret = k.fs.rets[idx];
-    GU u = if (exp != "" && gm_has_var(gm_subst(ret, u2))) { gm_unify(ret, exp, u2) } else { u2 };
-    if (!u.ok) { return gterr(k, "call " + name + ": " + u.why, id); }
-    List(Str) vars = gm_sig_vars(k.fs, idx);
+    GU u3 = if (exp != "" && gm_has_var(gm_subst(ret, u2))) { gm_unify(ret, exp, u2) } else { u2 };
+    if (!u3.ok) { return gterr(k, "call " + name + ": " + u3.why, id); }
+    List(Str) ns = gm_need_list(k.gx.needs.get(name) else { "" });
+    GU u = gm_improve_needs(k, ns, u3, 0, ns.len());
+    List(Str) sv = gm_sig_vars(k.fs, idx);
+    // Parameters named only in @needs come from the needs' instances.
+    List(Str) vars = sv.concat(gm_free_vars(list_join(ns, 0, ",", ""), GU {.ok = true, .ps = sv, .vs = sv, .why = ""}));
     List(Str) vals = gm_vals(vars, u, 0, ListBuf());
     Int miss = variant_index_at(vals, "", 0);
+    if (miss >= sv.len()) { return gterr(k, "E0227: cannot infer type parameter " + vars[miss] + " of " + name + ": it appears only in its @needs, and no one instance fixes it", id); }
     if (miss >= 0) { return gterr(k, "E0227: cannot infer type parameter " + vars[miss] + " of " + name + "; give the result a declared type", id); }
     Str want = gm_subst(k.fs.pts[idx], u);
     if (!params_accept(want, argtys, argc) && want != argtys) { return gterr(k, "call " + name + " expects (" + want + "), got (" + argtys + ")", id); }

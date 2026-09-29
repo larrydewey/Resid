@@ -102,7 +102,7 @@ copy of a generic declared in a `sandbox` stays under that ceiling.
 | `E0225 overlapping instances` | two instances at one level cover some type |
 | `E0226 ... needs B(T): add @needs(B(T))` | a generic body uses a behavior it does not list |
 | `E0226 ... no behavior instance B(X)` | a call's need, or a verb call, has no instance |
-| `E0227 cannot infer ...` | a type parameter fixed by neither arguments nor expected type |
+| `E0227 cannot infer ...` | a type parameter fixed by neither arguments, expected type nor one fitting instance |
 | `E0228` | polymorphic recursion |
 | `sort(xs) of T needs a behavior` | no built-in order and no instance |
 | `E0219 ... (through f(T))` | an instance needs a capability the caller lacks |

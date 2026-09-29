@@ -1,0 +1,11 @@
+// Two instances fit Convert(Int, _): the result type must be declared.
+type Pair(T) = { T a; T b; };
+behavior Convert(A, B) { B convert(A x); }
+Pair(Int) to_pair(Int x) { return Pair {.a = x, .b = x}; }
+Str to_str(Int x) { return f"{x}"; }
+Convert(Int, Pair(Int)) = to_pair;
+Convert(Int, Str) = to_str;
+Int main() {
+    println(f"{convert(3)}");
+    return 0;
+}

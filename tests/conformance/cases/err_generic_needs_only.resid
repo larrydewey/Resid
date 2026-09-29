@@ -1,0 +1,11 @@
+// B appears only in @needs and no instance fixes it.
+type Pair(T) = { T a; T b; };
+behavior Convert(A, B) { B convert(A x); }
+Str to_str(Int x) { return f"{x}"; }
+Convert(Int, Str) = to_str;
+@needs(Convert(A, Pair(B)), Show(B))
+Str conv_show(A x) { Pair(B) p = convert(x); return f"{p.a}"; }
+Int main() {
+    println(f"{conv_show(3)}");
+    return 0;
+}

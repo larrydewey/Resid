@@ -24,7 +24,7 @@ own), with the offending source line.
 | `E0224` | a library declares an instance of a behavior and a type it owns neither of |
 | `E0225` | two instances of one behavior overlap at the same level (no specialization) |
 | `E0226` | a generic function uses a behavior it does not list in `@needs`, or a call's needs have no instance |
-| `E0227` | a type parameter cannot be inferred from the arguments or the expected type |
+| `E0227` | a type parameter cannot be inferred from the arguments, the expected type or one fitting instance |
 | `E0228` | a generic function calls itself at ever larger types (instantiation does not terminate) |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |

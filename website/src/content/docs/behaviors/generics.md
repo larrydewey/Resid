@@ -108,8 +108,11 @@ Int main() {
 ## Inference
 
 Each type parameter comes from the arguments, else from the type the
-result is bound to. When neither fixes it, the call is an error
-(`E0227`):
+result is bound to, else from the one instance that fits one of the
+function's needs. That last step lets a parameter appear only in
+`@needs`: with `@needs(Convert(A, Pair(B)))` and the instance
+`Convert(Int, Pair(Int))`, a call on an `Int` has `B = Int`. When none
+fixes it, the call is an error (`E0227`):
 
 ```resid
 List(T) empty() {

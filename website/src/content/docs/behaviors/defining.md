@@ -95,8 +95,12 @@ Int main() {
 273.15
 ```
 
-If a behavior's type can be fixed neither by the arguments nor by the
-expected type, the call is an error (`E0227`).
+A behavior type that neither fixes comes from the one instance that fits
+the known types: with `Container(Stack(T), T)`, a verb of `Container`
+called on a `Stack(Str)` has `E = Str`, even when `E` is not in the
+verb's signature. Inside a generic function, the function's own
+`@needs` are tried first. When no instance fits, or several with
+different types do, the call is an error (`E0227`).
 
 ## Instances for every type argument
 
