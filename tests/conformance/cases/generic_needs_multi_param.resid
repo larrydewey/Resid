@@ -1,0 +1,24 @@
+// A need whose behavior takes several types (commas inside @needs), and
+// a deferred argument ([]) ahead of the one that fixes T.
+type Stack(T) = { List(T) items; };
+type Pair(T) = { T a; T b; };
+behavior Container(C, E) {
+    List(E) elems(C c);
+}
+behavior Convert(A, B) { B convert(A x); }
+List(T) stack_elems(Stack(T) s) { return s.items; }
+Container(Stack(T), T) = stack_elems;
+Pair(Int) to_pair(Int x) { return Pair {.a = x, .b = x}; }
+Convert(Int, Pair(Int)) = to_pair;
+@needs(Container(C, E))
+List(E) all_of(C c) { List(E) r = elems(c); return r; }
+@needs(Convert(A, Pair(B)))
+Pair(B) conv_pair(A x) { Pair(B) p = convert(x); return p; }
+T first_or(List(T) xs, T d) { if (xs.len() == 0) { return d; } return xs[0]; }
+Int main() {
+    Stack(Str) s = Stack {.items = ["a", "b"]};
+    List(Str) xs = all_of(s);
+    Pair(Int) p = conv_pair(3);
+    println(f"{xs} {p} {first_or([], 7)} {first_or(xs, "z")}");
+    return 0;
+}

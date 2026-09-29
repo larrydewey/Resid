@@ -980,7 +980,7 @@ GKA gk_gargs(GK k, Int id, Int end, List(Str) pl) {
 
 // The first pass: gm_rs()-joined types, "" for deferred arguments.
 GKA gk_gargs_pass(GK k, Int id, Int i, Int end, List(Str) pl, GU u, Bool unused, ListBuf(Str) acc) {
-    if (i >= end) { return GKA {.tys = list_join(acc.finish(), 0, gm_rs(), ""), .count = end, .err = "", .at = id, .k = k}; }
+    if (i >= end) { return GKA {.tys = str_join(acc.finish(), gm_rs()), .count = end, .err = "", .at = id, .k = k}; }
     Int c = gk_kid(k, id, i);
     if (gm_needs_exp(k.g, c)) { return gk_gargs_pass(k, id, i + 1, end, pl, u, unused, acc.push("")); }
     GKT t = gk_expr(k, c, "");
@@ -1120,7 +1120,7 @@ GKT gk_gcall(GK k, Int id, Str name, Int idx, Str argtys, Int argc, Bool method,
     if (miss >= 0) { return gterr(k, "E0227: cannot infer type parameter " + vars[miss] + " of " + name + "; give the result a declared type", id); }
     Str want = gm_subst(k.fs.pts[idx], u);
     if (!params_accept(want, argtys, argc) && want != argtys) { return gterr(k, "call " + name + " expects (" + want + "), got (" + argtys + ")", id); }
-    Str nd = gm_needs_err(k, str_split(k.gx.needs.get(name) else { "" }, ","), 0, u);
+    Str nd = gm_needs_err(k, gm_need_list(k.gx.needs.get(name) else { "" }), 0, u);
     if (nd != "") { return gterr(k, "E0226: " + name + "(" + list_join(vals, 0, ", ", "") + "): " + nd, id); }
     Str rty = gm_subst(ret, u);
     // `using = O`: the copy uses O for the behavior O names (or, for a
