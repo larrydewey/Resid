@@ -1,0 +1,34 @@
+// A width parameter read in a value position (spec §12) is the width,
+// comptime-known in every copy. Here a Bounded instance is derived for
+// every width of a signed integer at once, so max(Int(8)) needs no
+// hand-written per-width function.
+behavior Bounded(T) {
+    T min();
+    T max();
+}
+
+Int(N) int_min() { Int(N) h = 1; Int(N) two = 2; return wrapping_mul(h << (N - 2), two); }
+Int(N) int_max() { Int(N) m = int_min(); Int(N) one = 1; return wrapping_sub(m, one); }
+Bounded(Int(N)) = { .min = int_min, .max = int_max };
+
+// The same parameter in two slots at once, and under other letters. A
+// float width and a capacity have no value.
+UInt(M) bits() { UInt(M) w = M; return w; }
+UInt(N) halve(UInt(N) x) { UInt(N) two = 2; return x / two; }
+
+Int main() {
+    Int(8) lo8 = min();
+    Int(8) hi8 = max();
+    Int(16) lo16 = min();
+    Int(16) hi16 = max();
+    Int(64) lo64 = min();
+    Int(64) hi64 = max();
+    UInt(8) uw8 = bits();
+    UInt(16) half = halve(u16(1000));
+    println(f"Int(8) {lo8} {hi8}");
+    println(f"Int(16) {lo16} {hi16}");
+    println(f"Int(64) {lo64} {hi64}");
+    println(f"bits {uw8}");
+    println(f"half {half}");
+    return 0;
+}

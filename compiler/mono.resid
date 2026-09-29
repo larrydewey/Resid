@@ -377,9 +377,25 @@ KP gm_clone(Kg g, Int root, Int id, GU u, Str name, Str label, Str use) {
     Bool isroot = id == root;
     Bool sub = n.kind == "ty" || n.kind == "struct" || (n.kind == "ref" && gm_is_var(n.text));
     Str text = if (isroot) { name } else { if (sub) { gm_subst(n.text, u) } else { n.text } };
+    // A width parameter read as a value (spec §12) substitutes to the width
+    // itself, so the copy takes a literal and the body reduces on it.
+    Bool wv = sub && gm_all_digits(text);
     Str uses = if (use == "") { "" } else { " @using(" + use + ")" };
-    Str aux = if (isroot) { gm_strip_needs(n.aux) + " @inst(" + label + ")" + uses } else { n.aux };
-    return kg_add(ks.g, n.kind, text, aux, ks.ids, n.sp, n.ep);
+    Str kind = if (wv) { "lit" } else { n.kind };
+    Str aux = if (wv) { "int" } else if (isroot) { gm_strip_needs(n.aux) + " @inst(" + label + ")" + uses } else { n.aux };
+    return kg_add(ks.g, kind, text, aux, ks.ids, n.sp, n.ep);
+}
+
+Bool gm_all_digits(Str t) {
+    if (str_len(t) == 0) { return false; }
+    return gm_digit_at(t, 0, str_len(t), 0);
+}
+
+Bool gm_digit_at(Str t, Int i, Int n, Int seen) {
+    if (i >= n) { return seen > 0; }
+    Int c = str_char_at(t, i);
+    if (c < 48 || c > 57) { return false; }
+    return gm_digit_at(t, i + 1, n, seen + 1);
 }
 
 GN gm_clone_kids(Kg g, Int root, Int id, Int i, GU u, Str name, Str label, Str use, ListBuf(Int) acc) {

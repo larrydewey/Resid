@@ -200,6 +200,51 @@ pub RS rs_expr(Kg g, RSG gl, Int id, Map(Str, Int) env, RS r) {
     return rs_kids(g, gl, id, 0, n, env, r);
 }
 
+// ─── Width parameters (spec §12) ─────────────────────────────────────
+// A signature binds the parameters it puts in a width slot, and the body may
+// read the width, so they scope the body like a param does and the def edge
+// of such a read is the `ty` node that binds it. Only an integer width
+// carries such a value.
+
+Bool rs_wfam(Str w) { return w == "Int" || w == "UInt"; }
+
+// The single uppercase letter a width slot binds, or "".
+Str rs_warg(Str t) {
+    Int p = str_find_char(t, 40, 0);
+    if (p <= 0) { return ""; }
+    if (!rs_wfam(str_trim(str_slice(t, 0, p)))) { return ""; }
+    Int q = rs_wclose(t, p + 1, str_len(t), 0);
+    if (q < 0) { return ""; }
+    Str a = str_trim(str_slice(t, p + 1, q));
+    if (str_len(a) != 1) { return ""; }
+    Int c = str_char_at(a, 0);
+    if (c < 65 || c > 90) { return ""; }
+    return a;
+}
+
+// The ')' closing the slot opened before `i`, or -1.
+Int rs_wclose(Str t, Int i, Int n, Int d) {
+    if (i >= n) { return -1; }
+    Int c = str_char_at(t, i);
+    if (c == 40) { return rs_wclose(t, i + 1, n, d + 1); }
+    if (c == 41) { if (d == 0) { return i; } return rs_wclose(t, i + 1, n, d - 1); }
+    return rs_wclose(t, i + 1, n, d);
+}
+
+Map(Str, Int) rs_wslot(Kg g, Int c, Map(Str, Int) env) {
+    Int t = if (g.ns[c].kind == "ty") { c } else { kg_kid(g, c, 0) };
+    Str a = rs_warg(g.ns[t].text);
+    if (a == "") { return env; }
+    return env.insert(a, t);
+}
+
+// The width parameters of kids from..to (the trailing kid is the body).
+Map(Str, Int) rs_wslots(Kg g, Int id, Int from, Map(Str, Int) env) {
+    if (from >= g.ns[id].nk - 1) { return env; }
+    Int c = kg_kid(g, id, from);
+    return rs_wslots(g, id, from + 1, rs_wslot(g, c, env));
+}
+
 // A declaration: params scope the body; type declarations resolve their types.
 RS rs_decl(Kg g, RSG gl, Int d, RS r) {
     Str k = g.ns[d].kind;
@@ -207,7 +252,7 @@ RS rs_decl(Kg g, RSG gl, Int d, RS r) {
     if (k == "sandbox") { return rs_decls(g, gl, d, 0, r); }
     if (k == "fn") {
         RS r1 = rs_kids(g, gl, d, 0, n - 1, rs_noenv(), r);
-        Map(Str, Int) env = rs_bind_kids(g, d, 1, n - 1, rs_noenv());
+        Map(Str, Int) env = rs_wslots(g, d, 0, rs_bind_kids(g, d, 1, n - 1, rs_noenv()));
         return rs_expr(g, gl, kg_kid(g, d, n - 1), env, r1);
     }
     if (k == "ctype_t" || k == "cwhere_t") {

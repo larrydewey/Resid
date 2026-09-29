@@ -773,7 +773,14 @@ Generic:  type Pair(T) = { T a; T b; };
 
 Type parameters are single uppercase letters (§7). In a
 width position (`Int(N)`, `UInt(N)`, `Float(N)`) a
-parameter ranges over widths. A generic record's literal
+parameter ranges over widths. An integer width is a
+value too: read in a value position it denotes the width,
+so `Int(N) f() { ... N ... }` reads N as an `Int(N)` that
+reduction fixes to a literal in every copy. Only `Int` and
+`UInt` carry such a value. A float or decimal width, a
+capacity (`Str(N)`, `Bytes(N)`), and a parameter that
+stands for a type have no value and stay an error there. A
+generic record's literal
 takes its type arguments from the expected type or from its
 field values (`Pair {.a = 1, .b = 2}` is a Pair(Int)); each
 generic record used at concrete types is laid out per type.
