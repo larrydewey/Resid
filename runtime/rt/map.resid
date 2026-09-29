@@ -1378,6 +1378,40 @@ pub Int rt_map_format_k(Int m, Int kstr, Int vstr) {
     return rt_sb_finish(sb);
 }
 
+// {key: val, ...} with the key and value kinds the compiler knows: 0 a
+// scalar (formatted by its box), 1 a string, 2 a UInt(64), 3 an
+// Int(128), 4 a UInt(128), 5 a composite formatted by closure kclo /
+// vclo (fn(env, entry)).
+@export("resid_map_format_t", "ptr(ptr,i8,i8,ptr,ptr)")
+pub Int rt_map_format_t(Int m, Int kk, Int vk, Int kclo, Int vclo) {
+    Int sb = rt_sb_new();
+    Int n = mcount(m);
+    Int ks = if (n > 0) { boxed_entries(m, true) } else { 0 };
+    Int vs = if (n > 0) { boxed_entries(m, false) } else { 0 };
+    _ = sb_lit(sb, resid_raw_addr("{"));
+    _ = sb_pairs_t(sb, ks, vs, 0, n, kk, vk, kclo, vclo);
+    _ = sb_lit(sb, resid_raw_addr("}"));
+    _ = c_free(ks) + c_free(vs);
+    return rt_sb_finish(sb);
+}
+
+Int sb_pairs_t(Int sb, Int ks, Int vs, Int i, Int n, Int kk, Int vk, Int kclo, Int vclo) {
+    if (i >= n) { return 0; }
+    _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
+    _ = sb_kind_entry(sb, ld64(ks + i * 8), kk, kclo);
+    _ = sb_lit(sb, resid_raw_addr(": ")) + sb_kind_entry(sb, ld64(vs + i * 8), vk, vclo);
+    return sb_pairs_t(sb, ks, vs, i + 1, n, kk, vk, kclo, vclo);
+}
+
+Int sb_kind_entry(Int sb, Int p, Int k, Int clo) {
+    if (k == 1) { return sb_quoted(sb, p); }
+    if (k == 2) { return sb_lit(sb, rt_uint_to_string(unbox_word(p))); }
+    if (k == 3) { return sb_lit(sb, rt_int128_to_string(rt_unbox_i128(p))); }
+    if (k == 4) { return sb_lit(sb, rt_uint128_to_string(rt_unbox_u128(p))); }
+    if (k == 5) { return sb_lit(sb, resid_raw_call2(ld64(clo), clo, p)); }
+    return sb_entry(sb, p);
+}
+
 // ─── Sets (maps with value 1) ──────────────────────────────────────────
 
 @export("resid_set_new", "ptr()")
@@ -1518,6 +1552,45 @@ pub Int rt_set_format(Int s) {
     _ = sb_lit(sb, resid_raw_addr("}"));
     _ = c_free(ks);
     return rt_sb_finish(sb);
+}
+
+// [elem, ...] of a list whose elements are wide or unsigned integers
+// (resid_map_format_t's kinds 2 to 4).
+@export("resid_list_show_t", "ptr(ptr,i8)")
+pub Int rt_list_show_t(Int l, Int k) {
+    Int sb = rt_sb_new();
+    _ = sb_lit(sb, resid_raw_addr("["));
+    _ = if (l != 0) { sb_list_t(sb, l, 0, ld64(l), k) } else { 0 };
+    _ = sb_lit(sb, resid_raw_addr("]"));
+    return rt_sb_finish(sb);
+}
+
+Int sb_list_t(Int sb, Int l, Int i, Int n, Int k) {
+    if (i >= n) { return 0; }
+    _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
+    _ = sb_kind_entry(sb, c_list_get(l, i), k, 0);
+    return sb_list_t(sb, l, i + 1, n, k);
+}
+
+// {elem, ...} with the element kind the compiler knows (as
+// resid_map_format_t's kinds; clo formats kind 5).
+@export("resid_set_format_t", "ptr(ptr,i8,ptr)")
+pub Int rt_set_format_t(Int s, Int k, Int clo) {
+    Int sb = rt_sb_new();
+    Int n = mcount(s);
+    Int ks = if (n > 0) { boxed_entries(s, true) } else { 0 };
+    _ = sb_lit(sb, resid_raw_addr("{"));
+    _ = sb_elems_t(sb, ks, 0, n, k, clo);
+    _ = sb_lit(sb, resid_raw_addr("}"));
+    _ = c_free(ks);
+    return rt_sb_finish(sb);
+}
+
+Int sb_elems_t(Int sb, Int ks, Int i, Int n, Int k, Int clo) {
+    if (i >= n) { return 0; }
+    _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
+    _ = sb_kind_entry(sb, ld64(ks + i * 8), k, clo);
+    return sb_elems_t(sb, ks, i + 1, n, k, clo);
 }
 
 // ─── Moving loop-region values to the heap ─────────────────────────────

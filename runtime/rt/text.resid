@@ -728,6 +728,16 @@ pub Int rt_fb_overflow(Int want, Int cap) {
     return rt_abort_at(rt_sb_finish(m));
 }
 
+// finish() on a ListBuf(T, N) left short when T has no zero value.
+@export("resid_fb_underfill", "void(i64,i64)")
+pub Int rt_fb_underfill(Int len, Int cap) {
+    Int m = rt_sb_new();
+    _ = sb_lit(m, resid_raw_addr("fixed-capacity builder underfilled: pushed ")) + sb_word(m, len);
+    _ = sb_lit(m, resid_raw_addr(" of ")) + sb_word(m, cap);
+    _ = sb_lit(m, resid_raw_addr(" elements, and the element type has no zero value"));
+    return rt_abort_at(rt_sb_finish(m));
+}
+
 @export("str_sb_new", "ptr()")
 pub Int rt_sb_new() {
     Int r = xmalloc(24);

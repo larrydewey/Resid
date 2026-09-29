@@ -1,0 +1,24 @@
+// Fixed-capacity values passed to builder and container methods get their
+// own storage from the slot's type (spec §44.1), including a fixed builder
+// whose element is itself fixed.
+Int main() {
+    ListBuf(List(Int, 2), 2) b = ListBuf();
+    List(Int, 2) e = [1];
+    println(f"{b.push(e).push([3, 4]).finish()}");
+    ListBuf(List(Str(4), 2), 3) u = ListBuf();
+    println(f"{u.push(["ab"]).finish()}");
+    ListBuf(Str(3), 1) t = ListBuf();
+    println(f"{t.push("ab").push("c").try_finish()}");
+    ListBuf(List(Str(2), 2)) h = ListBuf();
+    println(f"{h.push(["a"]).push(["b", "c"]).finish()}");
+    Map(Str, List(Int, 2)) m = {};
+    println(f"{m.insert("a", [7])}");
+    Map(Str(4), Int) k = {};
+    Map(Str(4), Int) k2 = k.insert("ab", 1);
+    println(f"{k2} {k2.contains("ab")} {k2.get("ab")} {k2.remove("ab")}");
+    Set(List(Int)) s = {};
+    println(f"{s.insert([]).len()}");
+    List(Str(3)) a = ["x"];
+    println(f"{a.concat(["yz", "w"])}");
+    return 0;
+}
