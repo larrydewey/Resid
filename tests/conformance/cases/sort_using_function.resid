@@ -5,7 +5,7 @@ Int by_x(Pt a, Pt b) { return a.x - b.x; }
 Int by_y(Pt a, Pt b) { return a.y - b.y; }
 Pt pt_min_by_x(Pt a, Pt b) { return if (by_x(a, b) <= 0) { a } else { b }; }
 Pt pt_max_by_x(Pt a, Pt b) { return if (by_x(a, b) >= 0) { a } else { b }; }
-Ord(Pt) = { .compare = by_x, .min = pt_min_by_x, .max = pt_max_by_x };
+Ord(Pt) = { .compare = by_x, .least = pt_min_by_x, .greatest = pt_max_by_x };
 
 Int main() {
     List(Pt) ps = [Pt {.x = 2, .y = 1}, Pt {.x = 1, .y = 3}, Pt {.x = 3, .y = 2}];

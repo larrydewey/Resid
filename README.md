@@ -51,7 +51,7 @@ Int main() {
   `Float(128)`, exact `Dec(N)`. All arithmetic is checked; nothing wraps or
   truncates silently.
 - **Behaviors instead of interfaces.** How a type is ordered or shown is
-  knowledge you name (`Ord(Task) = { .compare = by_priority, .min = lo, .max = hi };`),
+  knowledge you name (`Ord(Task) = { .compare = by_priority, .least = lo, .greatest = hi };`),
   not an interface it implements. Declare your own
   (`behavior Area(T) { Float area(T s); }`) and write generic functions and
   records (`T first(List(T) xs)`), instantiated at compile time before

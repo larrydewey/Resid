@@ -6,7 +6,7 @@ Int main() { Bool b = true && 5; return 0; }
 === behavior
 type error: behavior Ord(Int): compare must have signature (Int, Int) -> Int
 Int cmpx(Str a, Str b) { return 0; }
-Ord(Int) = { .compare = cmpx, .min = cmpx, .max = cmpx };
+Ord(Int) = { .compare = cmpx, .least = cmpx, .greatest = cmpx };
 Int main() { return 0; }
 === bexprbind
 binding t: expected Int, got Str

@@ -4,7 +4,7 @@ Int by_p(Task a, Task b) { return a.p - b.p; }
 Eq(Task) = same_name;
 Task task_min_by_p(Task a, Task b) { return if (by_p(a, b) <= 0) { a } else { b }; }
 Task task_max_by_p(Task a, Task b) { return if (by_p(a, b) >= 0) { a } else { b }; }
-Ord(Task) = { .compare = by_p, .min = task_min_by_p, .max = task_max_by_p };
+Ord(Task) = { .compare = by_p, .least = task_min_by_p, .greatest = task_max_by_p };
 
 @needs(Eq(T))
 Bool has(List(T) xs, T x, Int i) {

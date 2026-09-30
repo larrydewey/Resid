@@ -697,7 +697,7 @@ error, and so is one for a verb the behavior does not
 declare. Ord is now such a behavior, so an ordering for a
 user type gives all three:
 
-  Ord(Task) = { .compare = by_priority, .min = lo_prio, .max = hi_prio };
+  Ord(Task) = { .compare = by_priority, .least = lo_prio, .greatest = hi_prio };
 
 The instance's functions must have the prototypes'
 signatures for its types. A verb call picks the instance
@@ -727,17 +727,18 @@ A verb name belongs to one behavior. Where two behaviors
 declare it, the one declared last owns the name, and the
 prelude is appended last of all: a behavior of the program's
 own that redeclares a prelude verb's name is not reachable
-by that name. With both Ord and Bounded declaring max,
-`x.max()` and `max()` are Bounded's, and `max(x, y)` is
-Ord's.
+by that name. The core behaviors are named so that they do not
+collide: Ord takes least and greatest where Bounded takes
+min and max, and the numeric builtins keep min, max and
+clamp for two arguments.
 
 A name is a verb or a function, never both (E0231). Were
 both possible, `show(m)` would not say which one it meant. A
 function may therefore not reuse a verb's name, which takes
-`min`, `max`, `show`, `hash`, `eq`, `compare` and
-`serialize` out of circulation program-wide. Overriding a
-behavior is done through an instance or `using`, never by
-defining a function of a verb's name.
+`min`, `max`, `least`, `greatest`, `show`, `hash`, `eq`,
+`compare` and `serialize` out of circulation program-wide.
+Overriding a behavior is done through an instance or `using`,
+never by defining a function of a verb's name.
 
 There are no default bodies: a type gets an instance only
 from a declaration, which may name a generic function
@@ -774,8 +775,8 @@ prelude (§32), with instances for the built-in types:
   behavior Eq(T) { Bool eq(T a, T b); }
   behavior Ord(T) {
       Int compare(T a, T b);
-      T min(T a, T b);
-      T max(T a, T b);
+      T least(T a, T b);
+      T greatest(T a, T b);
   }
   behavior Bounded(T) { T min(); T max(); }
   behavior Hash(T) { Int hash(T x); }
@@ -801,9 +802,9 @@ Int(N) and UInt(N), covering every width:
   Bounded(UInt(N))// 0, 2^N-1
 
 Since Bounded's verbs take no argument, it is the one
-behavior for which the zero-argument form differs: its
-min/max are the two's complement bounds, while Ord's
-`a.min(x, y)` is the lesser of two values.
+behavior read purely as a method: its min/max are the
+two's complement bounds, while Ord's `a.least(b)` is the
+lesser of two values and is reached by name.
 
 Lists: xs.contains(v) (integer, Float or Str elements),
 xs.reverse(), xs.sum() (List(Int) or List(Float)). A
@@ -812,10 +813,9 @@ parameter takes precedence.
 
 min, max and clamp are also builtins: min(a, b) and max(a,
 b) are the builtins, with an integer literal argument
-adopting the type of the others (§6.1a). A verb name
-belongs to one behavior, so with both Ord and Bounded
-declaring max, `x.max()` is Bounded's and `max(x, y)` is
-Ord's. A bare `max()` is Bounded's as well, but with no
+adopting the type of the others (§6.1a). They want numbers,
+so a `T` of your own uses Ord's `a.least(b)` instead. A
+bare `max()` with no argument is Bounded's, but with no
 receiver to fix the type it takes the expected type, so
 give it one: `Int(8) hi = max();`.
 

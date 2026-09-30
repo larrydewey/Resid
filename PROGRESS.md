@@ -1289,17 +1289,16 @@ free function on a type.
 - `Bounded(T) { T min(); T max(); }` is new in the prelude, with
   instances for `Bool`, `Int(N)` and `UInt(N)`, so `x.max()`
   works at every width.
-- `Ord` gained `min` and `max`, which makes it a three-verb
+- `Ord` gained two more verbs, which makes it a three-verb
   behavior: its instances are now records, and an instance that
-  names some but not all verbs is an error.
+  names some but not all verbs is an error. They are spelled
+  `least` and `greatest`, not `min` and `max` — see 0c.
 - A verb name belongs to one behavior, and the prelude is
   appended last of all, so a program's own behavior redeclaring
-  a prelude verb's name is not reachable by that name. With
-  `Ord` and `Bounded` both declaring `max`, `x.max()` and
-  `max()` are `Bounded`'s and `max(x, y)` is `Ord`'s.
+  a prelude verb's name is not reachable by that name.
 - `min`, `max` and `clamp` are also builtins, and the builtin
   wins a bare call, so `max(a, b)` is unchanged; a bare
-  `max()` with no argument is the verb.
+  `max()` with no argument is `Bounded`'s verb.
 - **E0231**: a name is a verb or a function, never both. The
   baseline let a generic function named `show` answer for a
   `Show` instance it had no business answering for. The check is
@@ -1321,6 +1320,35 @@ free function on a type.
 
 Suites: conformance 308, reduce 14, provenance 21, graph 556,
 pkg 17, runtime 12, lsp 15. Fixed point `29479079b22dd298`.
+
+---
+
+## 0c. `Ord` is `compare`, `least`, `greatest` (2026-09-29)
+
+Three things wanted the names `min` and `max`: the numeric
+builtins, `Bounded`'s zero-argument bounds, and the two
+`Ord` verbs added in 0b. A verb name belongs to one behavior,
+so the third claimant lost: `Bounded` took the name, which left
+`Ord`'s pair unreachable — `a.max(b)` was `Bounded`'s and
+errored, and `min(a, b)` on a user type was the numeric builtin.
+The only way through was a wrapper declaring `@needs(Ord(T))`
+at every call site.
+
+`Ord` is now `{ .compare, .least, .greatest }`. `Bounded`
+keeps `min`/`max`, so `x.max()` is unchanged and the zero-arg
+form still reads as a method, and the builtins keep the
+two-argument `min(a, b)`/`max(a, b)`. Nothing was lost: no call
+site in `lib/` or `examples/` ever reached `Ord`'s pair by name,
+because it could not be reached. The rename is what makes
+`a.least(b)` work directly, with no wrapper in the caller.
+
+Same lessons as 0b: a name is a verb or a function and not both
+(E0231), and a verb name belongs to one behavior. A new verb
+on a core behavior needs a name that no other core behavior
+and no builtin already has.
+
+Suites: conformance 308, reduce 14, provenance 21, graph 556,
+pkg 17, runtime 12, lsp 15.
 
 ---
 
@@ -1426,9 +1454,12 @@ in mind for ANY nontrivial `.resid` work:
 13. **A multi-verb instance must be a complete record** (`,`-separated,
     trailing `;`). `Ord` is three verbs now, so `Ord(X) = f;` is an error.
 14. **A verb name belongs to one behavior**, and the prelude is walked
-    last, so `x.max()` is `Bounded`'s (zero-arg) while `max(x, y)` is
-    `Ord`'s. A bare `max()` has no receiver to fix the type and needs an
-    expected type: `Int(8) hi = max();`.
+    last. The core behaviors therefore do not collide: `Bounded` owns
+    `min`/`max` (so `x.max()` is the type's bound), `Ord` owns
+    `least`/`greatest` (so `a.least(b)` is the lesser of two), and the
+    numeric builtins own the two-argument `min(a, b)`/`max(a, b)`. A bare
+    `max()` has no receiver to fix the type and needs an expected type:
+    `Int(8) hi = max();`.
 15. **A `Int(N)` value position with a width the reducer leaves open
     reaches LLVM as `iN`.** Bind a concrete width when the value escapes.
 
