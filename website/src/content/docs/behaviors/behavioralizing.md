@@ -40,7 +40,11 @@ becomes one comparator and one instance:
 type Job = { Str name; Int cost; };
 
 Int by_cost(Job a, Job b) { return a.cost - b.cost; }
-Ord(Job) = by_cost;
+@needs(Ord(T))
+T lo(T a, T b) { return if (compare(a, b) <= 0) { a } else { b }; }
+@needs(Ord(T))
+T hi(T a, T b) { return if (compare(a, b) >= 0) { a } else { b }; }
+Ord(Job) = { .compare = by_cost, .least = lo, .greatest = hi };
 
 Int main() {
     List(Job) js = [Job {.name = "b", .cost = 3}, Job {.name = "a", .cost = 1}];
@@ -186,7 +190,7 @@ disappears.
 
 ## Checklist
 
-- A type with a natural order → `Ord(T) = cmp;`
+- A type with a natural order → `Ord(T) = { .compare = cmp, .least = lo, .greatest = hi };`
 - A type people print → `Show(T) = show;`
 - Any other order → a named comparator, `using = cmp` or
   `using = Reverse(cmp)`.

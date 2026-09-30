@@ -137,7 +137,11 @@ and recorded in the knowledge graph.
 type Task = { Str name; Int p; };
 
 Int by_p(Task a, Task b) { return a.p - b.p; }
-Ord(Task) = by_p;
+@needs(Ord(T))
+T lo(T a, T b) { return if (compare(a, b) <= 0) { a } else { b }; }
+@needs(Ord(T))
+T hi(T a, T b) { return if (compare(a, b) >= 0) { a } else { b }; }
+Ord(Task) = { .compare = by_p, .least = lo, .greatest = hi };
 
 @needs(Ord(T))
 Bool eq_from_ord(T a, T b) { return compare(a, b) == 0; }

@@ -34,7 +34,7 @@ build, with its output checked, so what you read is what the compiler does.
   `UInt(...)`, `Float(16)` through `Float(128)` and decimal `Dec(N)`. All
   arithmetic is checked; nothing overflows or truncates silently.
 - **Behaviors instead of interfaces.** How a type is ordered or printed is a
-  value you name (`Ord(Point) = by_x;`), not an interface it implements.
+  value you name (`Ord(Point) = { .compare = by_x, .least = lo, .greatest = hi };`), not an interface it implements.
 
 <CardGrid>
 	<LinkCard title="Install the compiler" href="/Resid/learn/install/" />

@@ -29,9 +29,9 @@ Int main() {
 
 ## Ordering your own types
 
-An `Ord(T)` instance is a comparator: `Int f(T a, T b)` returns a negative
-number when `a` comes first, zero when they are equal and a positive
-number when `b` comes first.
+An `Ord(T)` instance is a complete record of three verbs: `compare`
+orders two values, `least` returns the lesser of two, and `greatest`
+returns the greater of two. The `sort` function uses `compare`.
 
 ```resid
 type Version = { Int major; Int minor; };
@@ -39,7 +39,11 @@ type Version = { Int major; Int minor; };
 Int newer_last(Version a, Version b) {
     return if (a.major != b.major) { a.major - b.major } else { a.minor - b.minor };
 }
-Ord(Version) = newer_last;
+@needs(Ord(T))
+T lo(T a, T b) { return if (compare(a, b) <= 0) { a } else { b }; }
+@needs(Ord(T))
+T hi(T a, T b) { return if (compare(a, b) >= 0) { a } else { b }; }
+Ord(Version) = { .compare = newer_last, .least = lo, .greatest = hi };
 
 Int main() {
     List(Version) vs = [
@@ -70,7 +74,7 @@ type City = { Str name; Int population; };
 
 Int by_population(City a, City b) { return a.population - b.population; }
 Int by_name_length(City a, City b) { return str_len(a.name) - str_len(b.name); }
-Ord(City) = by_population;
+Ord(City) = { .compare = by_population, .least = lo, .greatest = hi };
 
 Int main() {
     List(City) cs = [

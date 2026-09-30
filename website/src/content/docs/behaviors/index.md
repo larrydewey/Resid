@@ -12,7 +12,11 @@ do something with a type, and you name it where it applies:
 type Task = { Str title; Int priority; };
 
 Int by_priority(Task a, Task b) { return a.priority - b.priority; }
-Ord(Task) = by_priority;                  // how Tasks are ordered
+@needs(Ord(T))
+T lo(T a, T b) { return if (compare(a, b) <= 0) { a } else { b }; }
+@needs(Ord(T))
+T hi(T a, T b) { return if (compare(a, b) >= 0) { a } else { b }; }
+Ord(Task) = { .compare = by_priority, .least = lo, .greatest = hi };
 
 Str show_task(Task t) { return f"[{t.priority}] {t.title}"; }
 Show(Task) = show_task;                   // how a Task is written
@@ -60,7 +64,7 @@ rules as [your own](/Resid/behaviors/defining/):
 
 ```text
 behavior Eq(T)        { Bool eq(T a, T b); }
-behavior Ord(T)       { Int compare(T a, T b); }
+behavior Ord(T)       { Int compare(T a, T b); T least(T a, T b); T greatest(T a, T b); }
 behavior Hash(T)      { Int hash(T x); }
 behavior Show(T)      { Str show(T x); }
 behavior Serialize(T) { Str serialize(T x); }

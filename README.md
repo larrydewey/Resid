@@ -16,7 +16,11 @@ native code through LLVM.
 type Task = { Str title; Int priority; };
 
 Int by_priority(Task a, Task b) { return a.priority - b.priority; }
-Ord(Task) = by_priority;
+@needs(Ord(T))
+T lo(T a, T b) { return if (compare(a, b) <= 0) { a } else { b }; }
+@needs(Ord(T))
+T hi(T a, T b) { return if (compare(a, b) >= 0) { a } else { b }; }
+Ord(Task) = { .compare = by_priority, .least = lo, .greatest = hi };
 
 @requires(args)
 Int main() {
