@@ -787,6 +787,13 @@ Bool gm_inst_checks_at(GK k, Int i, Str src, Str sm, List(Int) nls, Int prel, Li
 // One name answering to both would leave `verb(x)` and `x.verb()` meaning
 // two different things in one program, so the function is reported: use
 // the verb with an instance, or rename the function.
+//
+// The name is taken program-wide, not per module, so a function may not
+// reuse a verb's name even where no instance routes a verb call to it. That
+// reserves `min`, `max`, `show`, `hash`, `eq`, `compare` and `serialize`.
+// The check is still worth having: a generic function of the same name
+// otherwise wins every `verb(x)` call silently, answering for an instance
+// the program never asked about.
 Bool gm_verb_clash(GK k, Int i, Str src, Str sm, Bool acc) {
     if (i >= k.fs.names.len()) { return acc; }
     Str nm = k.fs.names[i];
