@@ -588,7 +588,7 @@ GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
     Str t = strip_owned_cg(v.ty);
     GT vt = lw_step(v, v.val, t, v.lines, v.tmp);
     Int bi = b_index(w.fs, "Show", t);
-    if (bi >= 0) { return lw_src_call(w, w.fs.bfns[bi], vt, env); }
+    if (bi >= 0) { return lw_src_call(w, bfns_verb(w.fs.bfns[bi], "show"), vt, env); }
     if (t == "Str" || tostr_fn_for(t) != "" || int_fam(t)) { return fst_tostr(vt); }
     // A fixed string is shown through its NUL-terminated view.
     if (is_str_fixed(t)) { return lw_step(vt, v.val, "Str", v.lines, v.tmp); }
@@ -3556,7 +3556,7 @@ Str lw_inst_args(LW w, Int id, Int i, Str acc) {
 
 Bool lw_ord_impl(Funcs fs, Str f, Int i) {
     if (i >= fs.bfns.len()) { return false; }
-    if (fs.bnames[i] == "Ord" && fs.bfns[i] == f) { return true; }
+    if (fs.bnames[i] == "Ord" && bfns_verb(fs.bfns[i], "compare") == f) { return true; }
     return lw_ord_impl(fs, f, i + 1);
 }
 
@@ -3571,7 +3571,7 @@ GT lw_sort(LW w, Int id, List(Str) env, GT c) {
         // A type's own Ord instance is inserted when there is no built-in one.
         Int ui = b_index(w.fs, "Ord", et);
         Bool builtin = int_fam(et) || is_float_cg(et) || num_norm_cg(et) == "Str";
-        if (ui >= 0 && !builtin) { return lw_rt1(v, "ptr", "@list_sort_by(ptr " + v.val + ", ptr @__cmp_" + w.fs.bfns[ui] + ")", v.ty); }
+        if (ui >= 0 && !builtin) { return lw_rt1(v, "ptr", "@list_sort_by(ptr " + v.val + ", ptr @__cmp_" + bfns_verb(w.fs.bfns[ui], "compare") + ")", v.ty); }
         Str sf = if (is_float_cg(et)) { "list_sort_floats" } else { if (num_norm_cg(et) == "Str") { "list_sort_strs" } else { "list_sort_ints" } };
         return lw_rt1(v, "ptr", "@" + sf + "(ptr " + v.val + ")", v.ty);
     }
@@ -3609,7 +3609,7 @@ GT lw_sort(LW w, Int id, List(Str) env, GT c) {
         return lw_step(v, if (frev) { r2 } else { r1 }, v.ty, sl2, n1 + 1);
     }
     if (bi < 0) { return gt_err("no behavior instance " + head + "(" + param + ") is defined", c); }
-    Str f = w.fs.bfns[bi];
+    Str f = bfns_verb(w.fs.bfns[bi], "compare");
     Str tname = if (depth % 2 == 1) { "__cmp_" + f + "_rev" } else { "__cmp_" + f };
     // Only Ord instances have comparators in the header; another ordering
     // behavior's gets one here.

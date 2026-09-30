@@ -2,9 +2,13 @@
 // parameterized types.
 type Pt = { Int x; Str n; };
 Int by_x(Pt a, Pt b) { return a.x - b.x; }
-Ord(Pt) = by_x;
+Pt pt_min_by_x(Pt a, Pt b) { return if (by_x(a, b) <= 0) { a } else { b }; }
+Pt pt_max_by_x(Pt a, Pt b) { return if (by_x(a, b) >= 0) { a } else { b }; }
+Ord(Pt) = { .compare = by_x, .min = pt_min_by_x, .max = pt_max_by_x };
 Int desc32(Int(32) a, Int(32) b) { return (Int)b - (Int)a; }
-Ord(Int(32)) = desc32;
+Int(32) min32(Int(32) a, Int(32) b) { return if (desc32(a, b) <= 0) { a } else { b }; }
+Int(32) max32(Int(32) a, Int(32) b) { return if (desc32(a, b) >= 0) { a } else { b }; }
+Ord(Int(32)) = { .compare = desc32, .min = min32, .max = max32 };
 
 
 Int main() {

@@ -3,19 +3,19 @@
 // non-canonical key and truncated inputs are rejected, never aborted.
 import "ed25519.resid";
 
-Str show(Bool b) { return if (b) { "accept" } else { "reject" }; }
+Str verdict(Bool b) { return if (b) { "accept" } else { "reject" }; }
 
 Int main() {
     List(Int) pk = [3, 161, 7, 191, 243, 206, 16, 190, 29, 112, 221, 24, 231, 75, 192, 153, 103, 228, 214, 48, 155, 165, 13, 95, 29, 220, 134, 100, 18, 85, 49, 184];
     List(Int) sig = [114, 79, 219, 29, 238, 236, 118, 188, 27, 216, 88, 219, 190, 133, 114, 226, 3, 234, 119, 106, 145, 155, 117, 222, 102, 33, 220, 22, 221, 245, 244, 230, 146, 148, 216, 244, 121, 151, 31, 167, 224, 134, 233, 242, 103, 199, 169, 181, 137, 59, 155, 206, 96, 117, 8, 165, 210, 56, 199, 203, 234, 92, 29, 1];
-    println("valid " + show(verify_sig("resid strict verify", sig, pk)));
-    println("other message " + show(verify_sig("resid strict verifY", sig, pk)));
-    println("S+L " + show(verify_sig("resid strict verify", [114, 79, 219, 29, 238, 236, 118, 188, 27, 216, 88, 219, 190, 133, 114, 226, 3, 234, 119, 106, 145, 155, 117, 222, 102, 33, 220, 22, 221, 245, 244, 230, 127, 104, 206, 81, 148, 250, 49, 255, 182, 35, 225, 149, 70, 193, 136, 202, 137, 59, 155, 206, 96, 117, 8, 165, 210, 56, 199, 203, 234, 92, 29, 17], pk)));
-    println("S high bit " + show(verify_sig("resid strict verify", [114, 79, 219, 29, 238, 236, 118, 188, 27, 216, 88, 219, 190, 133, 114, 226, 3, 234, 119, 106, 145, 155, 117, 222, 102, 33, 220, 22, 221, 245, 244, 230, 146, 148, 216, 244, 121, 151, 31, 167, 224, 134, 233, 242, 103, 199, 169, 181, 137, 59, 155, 206, 96, 117, 8, 165, 210, 56, 199, 203, 234, 92, 29, 129], pk)));
-    println("R off curve " + show(verify_sig("resid strict verify", [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 146, 148, 216, 244, 121, 151, 31, 167, 224, 134, 233, 242, 103, 199, 169, 181, 137, 59, 155, 206, 96, 117, 8, 165, 210, 56, 199, 203, 234, 92, 29, 1], pk)));
-    println("key non-canonical " + show(verify_sig("resid strict verify", sig, [238, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 127])));
+    println("valid " + verdict(verify_sig("resid strict verify", sig, pk)));
+    println("other message " + verdict(verify_sig("resid strict verifY", sig, pk)));
+    println("S+L " + verdict(verify_sig("resid strict verify", [114, 79, 219, 29, 238, 236, 118, 188, 27, 216, 88, 219, 190, 133, 114, 226, 3, 234, 119, 106, 145, 155, 117, 222, 102, 33, 220, 22, 221, 245, 244, 230, 127, 104, 206, 81, 148, 250, 49, 255, 182, 35, 225, 149, 70, 193, 136, 202, 137, 59, 155, 206, 96, 117, 8, 165, 210, 56, 199, 203, 234, 92, 29, 17], pk)));
+    println("S high bit " + verdict(verify_sig("resid strict verify", [114, 79, 219, 29, 238, 236, 118, 188, 27, 216, 88, 219, 190, 133, 114, 226, 3, 234, 119, 106, 145, 155, 117, 222, 102, 33, 220, 22, 221, 245, 244, 230, 146, 148, 216, 244, 121, 151, 31, 167, 224, 134, 233, 242, 103, 199, 169, 181, 137, 59, 155, 206, 96, 117, 8, 165, 210, 56, 199, 203, 234, 92, 29, 129], pk)));
+    println("R off curve " + verdict(verify_sig("resid strict verify", [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 146, 148, 216, 244, 121, 151, 31, 167, 224, 134, 233, 242, 103, 199, 169, 181, 137, 59, 155, 206, 96, 117, 8, 165, 210, 56, 199, 203, 234, 92, 29, 1], pk)));
+    println("key non-canonical " + verdict(verify_sig("resid strict verify", sig, [238, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 127])));
     List(Int) short = [1, 2, 3];
-    println("short sig " + show(verify_sig("resid strict verify", short, pk)));
-    println("short key " + show(verify_sig("resid strict verify", sig, short)));
+    println("short sig " + verdict(verify_sig("resid strict verify", short, pk)));
+    println("short key " + verdict(verify_sig("resid strict verify", sig, short)));
     return 0;
 }

@@ -631,15 +631,14 @@ pub Int gm_proto(Kg g, Int bd, Str verb) { return gk_sfield_at(g, bd, 0, verb); 
 // The function an instance gives `verb`: its single function, or the
 // bundle's entry.
 pub Str gm_impl_for(Kg g, Int inst, Str verb) {
-    Str impl = kg_part(g.ns[inst].aux, 2);
-    if (!str_contains(impl, "=")) { return impl; }
-    return gm_bundle_get(str_split(impl, ","), 0, verb);
+    return bfns_verb(kg_part(g.ns[inst].aux, 2), verb);
 }
 
-Str gm_bundle_get(List(Str) es, Int i, Str verb) {
-    if (i >= es.len()) { return ""; }
-    if (str_starts_with(es[i], verb + "=")) { return str_slice(es[i], str_len(verb) + 1, str_len(es[i])); }
-    return gm_bundle_get(es, i + 1, verb);
+// The function an instance signature entry gives for `verb`: the entry is
+// a bare name for a one-verb behavior, `verb=f,...` for a record.
+pub Str gm_bfn_for(Sigs fs, Int bi, Str verb) {
+    if (bi < 0 || bi >= fs.bfns.len()) { return ""; }
+    return bfns_verb(fs.bfns[bi], verb);
 }
 
 // Proto parameter types (kids 1..) joined by ",".
@@ -784,20 +783,36 @@ Bool gm_inst_checks_at(GK k, Int i, Str src, Str sm, List(Int) nls, Int prel, Li
     return gm_inst_checks_at(k, i + 1, src, sm, nls, prel, pk, acc || m != "");
 }
 
+// A name is either a behavior verb or a function, never both (spec §11).
+// One name answering to both would leave `verb(x)` and `x.verb()` meaning
+// two different things in one program, so the function is reported: use
+// the verb with an instance, or rename the function.
+Bool gm_verb_clash(GK k, Int i, Str src, Str sm, Bool acc) {
+    if (i >= k.fs.names.len()) { return acc; }
+    Str nm = k.fs.names[i];
+    Int fd = k.fs.fns.get(nm) else { -1 };
+    Int bd = k.gx.verbs.get(nm) else { -1 };
+    if (bd >= 0 && fd >= 0) {
+        gk_diag("E0231", "`" + nm + "` is a verb of behavior " + k.g.ns[bd].text + "; a name is either a verb or a function, not both — call `" + nm + "(x)` with an instance of " + k.g.ns[bd].text + ", or rename the function", k.g, fd, src, sm);
+        return gm_verb_clash(k, i + 1, src, sm, true);
+    }
+    return gm_verb_clash(k, i + 1, src, sm, acc);
+}
+
 // The function behavior `b`'s instance for type `t` calls (a copy, logged,
 // when the instance is generic), or "".
 type GKI = { GK k; Str f; };
 
-GKI gm_inst_fn(GK k, Str b, Str t) {
+GKI gm_inst_fn_v(GK k, Str b, Str t, Str verb) {
     Str ov = gm_use(k, b);
     Int fo = if (ov == "" || str_contains(ov, "(")) { -1 } else { ck_fn_index(k.fs, ov) };
     if (fo >= 0) { return GKI {.k = k, .f = ov}; }
     List(Str) ts = [t];
     Int n = gm_find_inst(k, b, ts);
     if (n < 0) { return GKI {.k = k, .f = ""}; }
-    Str f = kg_part(k.g.ns[n].aux, 2);
+    Str f = gm_impl_for(k.g, n, verb);
     Int fi = ck_fn_index(k.fs, f);
-    if (fi < 0 || str_contains(f, "=")) { return GKI {.k = k, .f = ""}; }
+    if (fi < 0) { return GKI {.k = k, .f = ""}; }
     if (!gm_generic_fn_k(k, fi)) { return GKI {.k = k, .f = f}; }
     List(Str) fp = split_type_list(k.fs.pts[fi], 0, 0, 0, "", gk_nopts());
     GU u = gm_unify_all(fp, t, 0, gu_new());
@@ -806,6 +821,10 @@ GKI gm_inst_fn(GK k, Str b, Str t) {
     if (!u.ok || variant_index_at(vals, "", 0) >= 0) { return GKI {.k = k, .f = ""}; }
     Str inst = gm_inst_name(f, vals, 0, f + "__g");
     return GKI {.k = gk_log(k, "I|" + f + "|" + inst + "|" + list_join(vars, 0, ",", "") + "|" + list_join(vals, 0, gm_rs(), "")), .f = inst};
+}
+
+GKI gm_inst_fn(GK k, Str b, Str t) {
+    return gm_inst_fn_v(k, b, t, if (b == "Ord") { "compare" } else { "eq" });
 }
 
 // Every parameter pattern matched against the one type t.
@@ -883,19 +902,80 @@ GK gm_show_list(GK k, List(Str) ts, Int i, Int depth) {
 
 // ─── Verbs ──────────────────────────────────────────────────────────
 
+// A zero-argument verb written as a method: the receiver only anchored the
+// behavior's types, so the resolved call drops it (M|id, in mono.resid).
+// The type was already recorded by the resolution, so the type list is kept.
+GKT gk_mcall0(GKT t, Int id) {
+    if (t.err != "") { return t; }
+    return GKT {.ty = t.ty, .err = "", .at = t.at, .k = gk_log(t.k, f"M|{id}")};
+}
+
 // A call of behavior verb `verb`: the behavior's types from the
 // arguments (and the expected type), then the instance's function for
 // it, called in place of the verb (logged for mono.resid).
 GKT gk_vcall(GK k0, Int id, Str verb, Str exp) {
+    return gk_vcall_r(k0, id, verb, exp, "");
+}
+
+// A verb call, with `recv` the already-typed receiver's type when the call
+// was written as a method `recv.verb(..)`: the receiver is the verb's
+// first argument and its node is typed once, by the caller.
+GKT gk_vcall_r(GK k0, Int id, Str verb, Str exp, Str recv) {
     Kg g = k0.g;
     Int bd = k0.gx.verbs.get(verb) else { -1 };
     Int pr = gm_proto(g, bd, verb);
     Int uk = gm_using_kid(g, id);
-    GKA a = if (uk >= 0) { gk_args_to(k0, id, 0, g.ns[id].nk - 1, gk_nopts(), 0, "", 0) } else { gk_args(k0, id, 0, gk_nopts(), 0, "", 0) };
+    Int first = if (recv == "") { 0 } else { 1 };
+    Int cnt = if (recv == "") { 0 } else { 1 };
+    // For zero-arg verb with receiver: receiver anchors type params, not passed as arg.
+    Bool dot0 = recv != "";
+    List(Str) pl = if (gm_proto_pts(g, pr) == "") { gk_nopts() } else { split_type_list(gm_proto_pts(g, pr), 0, 0, 0, "", gk_nopts()) };
+    if (dot0 && pl.len() == 0) {
+        // Receiver type unifies with return type to infer behavior type params.
+        Str ret = g.ns[kg_kid(g, pr, 0)].text;
+        GU u0 = gm_unify(ret, recv, gu_new());
+        if (!u0.ok) { return gterr(k0, verb + " (behavior " + g.ns[bd].text + "): receiver type " + recv + " does not match verb return type " + ret, id); }
+        // Collect remaining explicit args (none for dot0).
+        GKA a = if (uk >= 0) { gk_args_to(k0, id, first, g.ns[id].nk - 1, gk_nopts(), 0, "", 0) } else { gk_args(k0, id, first, gk_nopts(), 0, "", 0) };
+        if (a.err != "") { return gterr(a.k, a.err, a.at); }
+        GK k = gk_mem(a.k, id, pr);
+        GU u1 = gm_unify_nonlit(g, id, pl, gk_nopts(), 0, 0, false, u0);
+        GU u2 = gm_unify_lits(g, id, pl, gk_nopts(), 0, 0, false, u1);
+        GU u3 = if (u2.ok && exp != "" && gm_has_var(gm_subst(ret, u2))) { gm_unify(ret, exp, u2) } else { u2 };
+        if (!u3.ok) { return gterr(k, verb + " (behavior " + g.ns[bd].text + "): " + u3.why, id); }
+        List(Str) bps = gm_bparams(g, bd);
+        GU u = gm_improve(k, g.ns[bd].text, bps, u3);
+        List(Str) bvals = gm_vals(bps, u, 0, ListBuf());
+        Int miss = variant_index_at(bvals, "", 0);
+        if (miss >= 0) { return gterr(k, "E0227: cannot infer " + bps[miss] + " of behavior " + g.ns[bd].text + " for " + verb + "; give the result a declared type", id); }
+        Str nd = gm_norm(g.ns[bd].text + "(" + list_join(bvals, 0, ",", "") + ")");
+        Str rty = gm_subst(ret, u);
+        if (gm_has_var(nd)) {
+            if (!gm_inst_covers(k, nd, 0)) { return gterr(k, "E0226: " + verb + " needs " + nd + ": add @needs(" + nd + ") to the function", id); }
+            return gt(gk_log(k, f"M|{id}"), rty, id);
+        }
+        Str ov0 = if (uk >= 0) { gk_inst(g, kg_kid(g, uk, 0)) } else { gm_use(k, g.ns[bd].text) };
+        if (ov0 != "") {
+            // For zero-arg verbs with override, the override must also be zero-arg.
+            Int fi = ck_fn_index(k.fs, ov0);
+            if (fi < 0) { return gterr(k, verb + ": using = " + ov0 + " names no function for it", id); }
+            if (k.fs.pts[fi] != "") { return gterr(k, verb + ": zero-arg verb override must take no parameters", id); }
+            return gk_mcall0(gk_gcall(k, id, ov0, fi, "", 0, false, rty), id);
+        }
+        Int inst = gm_find_inst(k, g.ns[bd].text, bvals);
+        if (inst < 0) { return gterr(k, "E0226: " + verb + ": no behavior instance " + nd + " (declare " + g.ns[bd].text + "(" + list_join(bvals, 0, ", ", "") + ") = f;)", id); }
+        Str f = gm_impl_for(g, inst, verb);
+        Int fi = ck_fn_index(k.fs, f);
+        if (fi < 0) { return gterr(k, verb + ": instance function " + f + " is missing", id); }
+        if (gm_generic_fn_k(k, fi)) { return gk_mcall0(gk_gcall(k, id, f, fi, "", 0, false, rty), id); }
+        if (!params_accept(k.fs.pts[fi], "", 0) && k.fs.pts[fi] != "") { return gterr(k, verb + " via " + f + " expects (" + k.fs.pts[fi] + "), got ()", id); }
+        return gk_mcall0(gt(gk_log(k, f"C|{id}|" + f), k.fs.rets[fi], id), id);
+    }
+    // Normal path (receiver-taking verb or bare call).
+    GKA a = if (uk >= 0) { gk_args_to(k0, id, first, g.ns[id].nk - 1, gk_nopts(), 0, recv, cnt) } else { gk_args(k0, id, first, gk_nopts(), 0, recv, cnt) };
     if (a.err != "") { return gterr(a.k, a.err, a.at); }
     // The verb's use points at its prototype (editor definition, hover).
     GK k = gk_mem(a.k, id, pr);
-    List(Str) pl = if (gm_proto_pts(g, pr) == "") { gk_nopts() } else { split_type_list(gm_proto_pts(g, pr), 0, 0, 0, "", gk_nopts()) };
     List(Str) al = if (a.tys == "") { gk_nopts() } else { split_type_list(a.tys, 0, 0, 0, "", gk_nopts()) };
     Str b = g.ns[bd].text;
     if (pl.len() != a.count) { return gterr(k, verb + " (behavior " + b + ") expects (" + gm_proto_pts(g, pr) + "), got (" + a.tys + ")", id); }
@@ -1006,7 +1086,7 @@ GKT gk_expr0(GK k, Int id, Str exp) {
     if (kind == "bexpr") { return gk_bexpr(k, k, id, 0, exp); }
     if (kind == "match") { return gk_match(k, id, exp); }
     if (kind == "lambda") { return gk_lambda(k, id, exp); }
-    if (kind == "mcall") { return gk_mcall(k, id); }
+    if (kind == "mcall") { return gk_mcall(k, id, exp); }
     if (kind == "field") { return gk_field(k, id); }
     if (kind == "index") { return gk_index(k, id); }
     if (kind == "slice") {
@@ -1256,12 +1336,12 @@ GKT gk_call(GK k, Int id, Str exp) {
     Int argn = k.g.ns[id].nk;
     Str lty = gk_local(k, id);
     if (lty != "" && is_fn_type(lty)) { return gk_fn_call(k, id, 0, lty); }
-    if (ck_fn_index(k.fs, n) < 0 && k.gx.verbs.contains(n)) { return gk_vcall(k, id, n, exp); }
     if (n == "sort") { return gk_sort(k, id); }
     if (gv_call_is(k, n)) { return gv_call(k, id, n, exp); }
     // min / max / clamp: an integer literal argument adopts the type of the
-    // others (spec §6.1a), as an operand would.
-    if ((n == "min" || n == "max" || n == "clamp") && ck_fn_index(k.fs, n) < 0) {
+    // others (spec §6.1a), as an operand would. With no argument the name is
+    // the verb of a zero-argument behavior (`max()`), not the builtin.
+    if ((n == "min" || n == "max" || n == "clamp") && ck_fn_index(k.fs, n) < 0 && argn >= 2) {
         GKA a = gk_args(k, id, 0, gk_nopts(), 0, "", 0);
         // Vectors, lanewise (spec §46): two operands of one numeric vector type.
         if (a.err == "" && str_has_prefix(a.tys, "Vec(")) {
@@ -1278,6 +1358,9 @@ GKT gk_call(GK k, Int id, Str exp) {
         if (b.err != "") { return gterr(a.k, b.err, id); }
         return gt(a.k, b.ty, id);
     }
+    // A verb named like a builtin keeps the builtin for a bare call; the
+    // receiver form `x.verb()` is the verb (spec §11).
+    if (ck_fn_index(k.fs, n) < 0 && k.gx.verbs.contains(n)) { return gk_vcall(k, id, n, exp); }
     if (n == "Ok" || n == "Err" || n == "Some" || n == "None") {
         // The payload gets its expected type: Some(x) for an Option(T), Ok /
         // Err for a Result(T, E).
@@ -1514,7 +1597,7 @@ GKT gk_sort(GK k0, Int id) {
         if (kg.gx.log.len() != k.gx.log.len()) { return gt(kg, v.ty, id); }
         Int oi = ck_b_index(k.fs, "Ord", elem);
         if (oi >= 0) {
-            Int ofi = ck_fn_index(k.fs, k.fs.bfns[oi]);
+            Int ofi = ck_fn_index(k.fs, gm_bfn_for(k.fs, oi, "compare"));
             if (ofi < 0 || k.fs.pts[ofi] != elem + "," + elem || k.fs.rets[ofi] != "Int") { return gterr(k, "behavior Ord(" + elem + "): impl must have signature (" + elem + ", " + elem + ") -> Int", id); }
             return gt(k, v.ty, id);
         }
@@ -1547,7 +1630,7 @@ GKT gk_sort_inst(GK k, Int id, Str lty, Str elem, Str o) {
     }
     if (bi < 0) { return gterr(k, "no behavior instance " + head + "(" + param + ") is defined", id); }
     if (!ty_same(param, elem)) { return gterr(k, "behavior " + head + "(" + param + ") orders " + param + ", but the list holds " + elem, id); }
-    Int fidx = ck_fn_index(k.fs, k.fs.bfns[bi]);
+    Int fidx = ck_fn_index(k.fs, gm_bfn_for(k.fs, bi, "compare"));
     if (fidx < 0 || k.fs.pts[fidx] != param + "," + param || k.fs.rets[fidx] != "Int") {
         return gterr(k, "behavior " + head + "(" + param + "): impl must have signature (" + param + ", " + param + ") -> Int", id);
     }
@@ -2188,7 +2271,7 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     return gterr(k, "unknown provider method " + fam + "." + m, id);
 }
 
-GKT gk_mcall(GK k0, Int id) {
+GKT gk_mcall(GK k0, Int id, Str exp) {
     Int recv = gk_kid(k0, id, 0);
     Str m = k0.g.ns[id].text;
     Int na = k0.g.ns[id].nk - 1;
@@ -2216,6 +2299,8 @@ GKT gk_mcall(GK k0, Int id) {
     if (is_map_type(bt)) { return gk_map_method(k, id, bt, m, na); }
     if (is_set_type(bt)) { return gk_set_method(k, id, bt, m, na); }
     if (is_expect_type(bt)) { return gk_expect_method(k, id, bt, m, na); }
+    // Behavior verbs take precedence over free functions (spec §11).
+    if (k.gx.verbs.contains(m)) { return gk_vcall_r(k, id, m, exp, bt); }
     Int mfidx = ck_fn_index(k.fs, m);
     if (mfidx < 0 && gk_list_verb(m) && str_has_prefix(bt, "List(") && !is_list_fixed(bt)) { return gk_list_method(k, id, bt, m, na); }
     if (mfidx >= 0) {
@@ -3708,7 +3793,7 @@ Str gk_sort_impl(GK k, Int id) {
     if (op < 0) { return ""; }
     if (op < 0) { return if (ck_fn_index(k.fs, inner) >= 0) { inner } else { "" }; }
     Int bi = ck_b_index(k.fs, str_slice(inner, 0, op), str_slice(inner, op + 1, str_len(inner) - 1));
-    return if (bi < 0) { "" } else { k.fs.bfns[bi] };
+    return if (bi < 0) { "" } else { gm_bfn_for(k.fs, bi, "compare") };
 }
 
 // `sort(xs)` may insert any user Ord instance (the element type decides
@@ -3719,7 +3804,7 @@ GKF gk_sort_implicit(GK k, Int id, Int i, GKF f) {
     if (i >= k.fs.bnames.len()) { return f; }
     Str p = k.fs.bparams[i];
     Bool user = k.fs.bnames[i] == "Ord" && !is_num(p) && num_norm(p) != "Str";
-    return gk_sort_implicit(k, id, i + 1, if (user) { gf_add(f, "c", k.fs.bfns[i]) } else { f });
+    return gk_sort_implicit(k, id, i + 1, if (user) { gf_add(f, "c", gm_bfn_for(k.fs, i, "compare")) } else { f });
 }
 
 GKF gk_facts(GK k, Int id, GKF f) {
@@ -4244,6 +4329,7 @@ pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin) {
     GX gx = gm_gx_init(g, unit, sg, src, smap0);
     GK k = GK {.g = g, .rs = rs, .fs = sg.fs, .tys = gk_notys(), .tl = tl, .sd = sg.sd, .fnode = sg.fnode, .gx = gx};
     if (gm_inst_checks(k, 0, src, smap0, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
+    if (gm_verb_clash(k, 0, src, smap0, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     GKS r = gk_decls(gm_log_beaten(k, 0), unit, 0, src, smap);
     if (r.err != "") { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     if (!fin && r.k.gx.log.len() > 0) { return GKR {.status = 0, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = r.k.gx.log}; }

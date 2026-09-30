@@ -2,13 +2,13 @@
 // appends to a list it alone holds in place. Every other holder of a list
 // (a snapshot taken by get, a second key, values(), an older map, a shared
 // default) keeps its own value.
-Str show(List(Int) xs, Int i, Str acc) {
+Str show_acc(List(Int) xs, Int i, Str acc) {
     if (i >= xs.len()) { return acc + "]"; }
     Str sep = if (i == 0) { "[" } else { " " };
-    return show(xs, i + 1, acc + sep + f"{xs[i]}");
+    return show_acc(xs, i + 1, acc + sep + f"{xs[i]}");
 }
 
-Str showl(List(Int) xs) { return if (xs.len() == 0) { "[]" } else { show(xs, 0, "") }; }
+Str show_list(List(Int) xs) { return if (xs.len() == 0) { "[]" } else { show_acc(xs, 0, "") }; }
 
 Map(Int, List(Int)) grow(Map(Int, List(Int)) m, Int i, Int n) {
     if (i >= n) { return m; }
@@ -55,23 +55,23 @@ Int main() {
     List(Str) nils = [];
     Map(Int, List(Int)) e = {};
     Map(Int, List(Int)) m = grow(e, 0, 20);
-    println(showl(m.get(0) else { nil }) + " " + showl(m.get(1) else { nil }) + " " + showl(m.get(2) else { nil }));
+    println(show_list(m.get(0) else { nil }) + " " + show_list(m.get(1) else { nil }) + " " + show_list(m.get(2) else { nil }));
     List(Int) snap = m.get(1) else { nil };
     List(List(Int)) vals = m.values();
     Map(Int, List(Int)) m2 = after_snapshot(m, 0, 30);
-    println("snapshot " + showl(snap));
+    println("snapshot " + show_list(snap));
     println(f"values {vals[0].len() + vals[1].len() + vals[2].len()}");
-    println("older map " + showl(m.get(1) else { nil }));
+    println("older map " + show_list(m.get(1) else { nil }));
     Int shown14 = (m2.get(1) else { nil }).len();
     println(f"grown {shown14}");
     List(Int) shared = [7, 8];
     Map(Int, List(Int)) two = e.insert(1, shared).insert(2, shared);
     Map(Int, List(Int)) two2 = after_snapshot(two, 0, 3);
-    println("second key " + showl(two2.get(2) else { nil }) + " first " + showl(two2.get(1) else { nil }) + " shared " + showl(shared));
+    println("second key " + show_list(two2.get(2) else { nil }) + " first " + show_list(two2.get(1) else { nil }) + " shared " + show_list(shared));
     List(Int) base = [1, 2];
     Map(Str, List(Int)) se = {};
     Map(Str, List(Int)) b = with_base(se, base, 0, 4);
-    println("base " + showl(base) + " grown " + showl(b.get("k") else { nil }));
+    println("base " + show_list(base) + " grown " + show_list(b.get("k") else { nil }));
     Map(Str, List(Str)) we = {};
     Map(Str, List(Str)) w = words(we, 0, 7);
     List(Str) g0 = w.get("g0") else { nils };

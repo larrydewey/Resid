@@ -2,7 +2,11 @@
 @requires(process)
 Int by_run(Int a, Int b) { return process.run("true") + a - b; }
 
-Ord(Int) = by_run;
+@requires(process)
+Int min_run(Int a, Int b) { return process.run("true") + a - b; }
+@requires(process)
+Int max_run(Int a, Int b) { return process.run("true") + a - b; }
+Ord(Int) = { .compare = by_run, .min = min_run, .max = max_run };
 
 Int main() {
     List(Int) xs = sort([3, 1, 2], using = Ord(Int));

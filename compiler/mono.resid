@@ -249,10 +249,16 @@ GE gm_ops(Kg g, List(Str) log, Int i, Map(Int, KN) acc) {
 // swap (Reverse); "D|id": a call drops its trailing `using = ...`. Each
 // applies to the node as already respelled.
 GE gm_ops_more(Kg g, List(Str) log, Int i, List(Str) f, Map(Int, KN) acc) {
-    Int id = if (f.len() >= 2 && (f[0] == "U" || f[0] == "R" || f[0] == "D")) { str_parse_int(f[1]) } else { -1 };
+    Int id = if (f.len() >= 2 && (f[0] == "U" || f[0] == "R" || f[0] == "D" || f[0] == "M")) { str_parse_int(f[1]) } else { -1 };
     if (id < 0 || id >= kg_count(g)) { return gm_ops(g, log, i + 1, acc); }
     KN n = acc.get(id) else { g.ns[id] };
     if (f[0] == "D") { return gm_ops(g, log, i + 1, acc.insert(id, KN {.kind = n.kind, .text = n.text, .aux = n.aux, .a0 = n.a0, .nk = n.nk - 1, .sp = n.sp, .ep = n.ep})); }
+    if (f[0] == "M" && n.kind == "mcall" && n.nk >= 1) {
+        List(Int) nk = g.kids[n.a0 + 1 .. n.a0 + n.nk];
+        Int a0 = g.kids.len();
+        Kg g2 = Kg {.ns = g.ns, .kids = g.kids.concat(nk), .docs = g.docs};
+        return gm_ops(g2, log, i + 1, acc.insert(id, KN {.kind = "call", .text = n.text, .aux = n.aux, .a0 = a0, .nk = n.nk - 1, .sp = n.sp, .ep = n.ep}));
+    }
     if (f[0] == "R" && n.nk >= 2) {
         Int a0 = g.kids.len();
         Kg g2 = Kg {.ns = g.ns, .kids = g.kids.concat([g.kids[n.a0 + 1], g.kids[n.a0]]), .docs = g.docs};

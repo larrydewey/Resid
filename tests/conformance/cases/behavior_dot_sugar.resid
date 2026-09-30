@@ -1,0 +1,21 @@
+// A behavior verb is callable as a method: `x.verb(a, b)` is
+// `verb(x, a, b)` (spec §11). A zero-argument verb takes its behavior's
+// types from the receiver, which is not passed on.
+type Sq = { Float side; };
+Float sq_area(Sq s) { return s.side * s.side; }
+Float sq_perimeter(Sq s) { return s.side * 4.0; }
+behavior Shape(T) { Float area(T s); Float perimeter(T s); }
+Shape(Sq) = { .area = sq_area, .perimeter = sq_perimeter };
+
+Int main() {
+    Sq s = Sq {.side = 3.0};
+    // The method form and the verb form agree.
+    println(f"{s.area()} {area(s)} {s.perimeter()} {perimeter(s)}");
+    // The prelude's zero-argument Bounded, through the receiver, at
+    // several widths, both folded and not.
+    Int(8) a = 100;
+    Int(4) b = 3;
+    UInt(8) u = 7;
+    println(f"{a.min()} {a.max()} {b.min()} {b.max()} {u.min()} {u.max()}");
+    return 0;
+}

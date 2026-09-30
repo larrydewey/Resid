@@ -4718,6 +4718,20 @@ Str cmp_def(Str f, Str pty, Bool rev) {
     return s7 + "  ret i32 %nz\n}";
 }
 
+// An instance entry is a bare function name for a one-verb behavior, or
+// `verb=f,...` for a record: the function this entry gives for `verb`.
+Str bfns_verb(Str impl, Str verb) {
+    if (!str_contains(impl, "=")) { return impl; }
+    List(Str) es = str_split(impl, ",");
+    return bfns_verb_at(es, 0, verb);
+}
+
+Str bfns_verb_at(List(Str) es, Int i, Str verb) {
+    if (i >= es.len()) { return ""; }
+    if (str_starts_with(es[i], verb + "=")) { return str_slice(es[i], str_len(verb) + 1, str_len(es[i])); }
+    return bfns_verb_at(es, i + 1, verb);
+}
+
 // Emit both comparator variants for every collected Ord instance.
 List(Str) cmp_defs_all_at(Funcs fs, List(Str) out, Int i) {
     List(Str) bn = fs.bnames;
@@ -4725,7 +4739,7 @@ List(Str) cmp_defs_all_at(Funcs fs, List(Str) out, Int i) {
     if (i >= n) { return out; }
     Str pty = fs.bparams[i];
     List(Str) bfl = fs.bfns;
-    Str f = bfl[i];
+    Str f = bfns_verb(bfl[i], "compare");
     // Only an ordering is called through a comparator; an impl shared by
     // another behavior's instance must not be emitted twice.
     List(Str) out2 = if (bn[i] != "Ord") { out } else { out.concat([cmp_def(f, pty, false), cmp_def(f, pty, true)]) };

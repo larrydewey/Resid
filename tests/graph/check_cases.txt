@@ -4,9 +4,9 @@
 operator && between Bool and Int
 Int main() { Bool b = true && 5; return 0; }
 === behavior
-type error: behavior Ord(Int): impl must have signature (Int, Int) -> Int
+type error: behavior Ord(Int): compare must have signature (Int, Int) -> Int
 Int cmpx(Str a, Str b) { return 0; }
-Ord(Int) = cmpx;
+Ord(Int) = { .compare = cmpx, .min = cmpx, .max = cmpx };
 Int main() { return 0; }
 === bexprbind
 binding t: expected Int, got Str
@@ -395,3 +395,6 @@ Int main() { StrBuf b = StrBuf(); return 0; }
 === showbad
 behavior Show(Mt): impl must have signature (Mt) -> Str
 type Mt = { Int c; }; Int bad(Mt m) { return 1; } Show(Mt) = bad; Int main() { return 0; }
+=== verbclash
+error[E0231]: `area` is a verb of behavior Shape; a name is either a verb or a function, not both
+type Sq = { Float side; }; Float area(Sq s) { return s.side * s.side; } behavior Shape(T) { Float area(T s); Float perimeter(T s); } Shape(Sq) = { .area = area, .perimeter = area }; Int main() { return 0; }
