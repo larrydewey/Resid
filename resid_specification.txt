@@ -1813,10 +1813,24 @@ Normative tooling expectations:
   resid debug     – graph-aware debugger (static and
                     live)
   resid verify    – package signature verification
+  resid test      – test runner: one file, or every
+                    *_test.resid under a root
   LSP surface     – residual status, capabilities,
                     knowledge state, doc comments,
                     exhaustiveness diagnostics,
                     sandbox attenuation view
+
+A `test` block is an entry point, like `main`: the
+compiler discovers it at compile time, generates the
+entry point that runs it, and the file is built as its
+own program (SPEC-testing.md §1.1). `residc test` runs
+one file, or with no file every `*_test.resid` under a
+root; its exit status is 0 when every test passed, 1
+when a test ran and failed, and 2 when a file did not
+compile, so a broken file is never read as a failing
+test. A test declares the capabilities it uses with
+`@requires` on the block, and is bound by the same
+ceiling as any other function (§20).
 
 
 ==================================================
@@ -1868,6 +1882,15 @@ Conformance includes all prior rules plus:
   - for-in, destructuring, if-let/while-let, ranges,
     slicing, known/rt_known, comptime_print, raw/byte
     strings, #location, discard binding
+  - the test surface (SPEC-testing.md): `test` blocks are
+    discovered at compile time and their entry point is
+    generated; a test file defines no `main`; a file with
+    no test block is rejected; `expect`'s matchers are
+    typed against the payload type, so a mismatched
+    matcher is a compile error; a tree run discovers
+    `*_test.resid` and reports a file that does not
+    compile separately from one whose test failed (§7.2
+    of that document)
   - the normative tooling surface
 
 

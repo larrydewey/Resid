@@ -26,6 +26,9 @@ for t in resid-pkg resid-manifest; do
     (cd "$ROOT" && "$COMPILER" "tools/$t.resid" -o "$W/$t") > "$W/$t.log" 2>&1 || { echo "FAIL build $t"; cat "$W/$t.log" | grep -i error | head -3; exit 1; }
 done
 PKG="$W/resid-pkg"; MAN="$W/resid-manifest"
+# The driver finds the standard library and the runtime IR under RESID_HOME;
+# without it they resolve relative to the current directory.
+export RESID_HOME="${RESID_HOME:-$ROOT/build/boot}"
 
 # A package: greet 1.0.0, and a second one to substitute for it.
 mkpkg() {  # dir name version body
@@ -129,6 +132,86 @@ if [ $? -ne 0 ] && grep -q "E0212" "$W/ceil.out"; then ok; else bad "ceiling not
 sed -i 's/capabilities = \[\]/capabilities = ["filesystem(readonly)"]/' "$W/ceil/resid.toml"
 (cd "$ROOT" && "$MAN" build "$W/ceil/resid.toml" "$COMPILER") > "$W/ceil2.out" 2>&1
 if [ $? -eq 0 ] && [ "$("$W/ceil/target/resid/ceil")" = yes ]; then ok; else bad "ceiling grant: $(grep -m1 -i error "$W/ceil2.out")"; fi
+
+# `resid-manifest test` resolves dependencies, writes the depmap, then hands
+# discovery to the driver's own `test` mode (SPEC-testing.md §7.1).
+mkpkg "$W/mathlib" mathlib 1.0.0 'pub Int triple(Int a) { return a * 3; }'
+mkdir -p "$W/tsuite/src"
+printf '[package]\nname = "tsuite"\nversion = "0.1.0"\n\n[dependencies.mathlib]\npath = "../mathlib"\ncapabilities = []\n' > "$W/tsuite/resid.toml"
+printf 'import "mathlib";\nInt main() { return 0; }\n' > "$W/tsuite/src/main.resid"
+printf 'test "arithmetic" {\n    expect(2 + 2).toEqual(4);\n}\n' > "$W/tsuite/src/math_test.resid"
+printf 'test "strings" {\n    expect("resid").toHaveLength(5);\n}\n' > "$W/tsuite/src/str_test.resid"
+printf 'import "mathlib";\ntest "a bare dependency import resolves in a test file" {\n    expect(triple(5)).toEqual(15);\n}\n' > "$W/tsuite/src/dep_test.resid"
+(cd "$ROOT" && "$MAN" test "$W/tsuite/resid.toml" "$COMPILER") > "$W/tsuite.out" 2>&1
+if [ $? -eq 0 ] && grep -q "3 file/s passed, 0 failed, 0 did not compile" "$W/tsuite.out"; then ok; else bad "manifest test: $(tail -3 "$W/tsuite.out" | tr '\n' '|')"; fi
+
+# A failing test fails only its own file; the rest still run, exit is 1.
+printf 'test "arithmetic" {\n    expect(2 + 2).toEqual(5);\n}\n' > "$W/tsuite/src/math_test.resid"
+(cd "$ROOT" && "$MAN" test "$W/tsuite/resid.toml" "$COMPILER") > "$W/tsuite2.out" 2>&1
+rc=$?
+if [ $rc -eq 1 ] && grep -q "2 file/s passed, 1 failed, 0 did not compile" "$W/tsuite2.out" && grep -q "a bare dependency import resolves" "$W/tsuite2.out"; then ok; else bad "manifest test failure isolation (rc $rc)"; fi
+
+# `residc test` with no file discovers and runs a whole tree (SPEC-testing.md
+# §7.1 "Run all tests"). It needs the depmap, as any build does: one of these
+# files imports a dependency by bare name.
+printf 'test "arithmetic" {\n    expect(2 + 2).toEqual(4);\n}\n' > "$W/tsuite/src/math_test.resid"
+(cd "$W/tsuite/src" && "$COMPILER" test -depmap "$W/tsuite/target/resid/depmap.txt") > "$W/drv1.out" 2>&1
+rc=$?
+if [ $rc -eq 0 ] && grep -q "3 file/s passed, 0 failed, 0 did not compile" "$W/drv1.out"; then ok; else bad "driver bare test: $(tail -3 "$W/drv1.out" | tr '\n' '|')"; fi
+(cd "$W/tsuite/src" && "$COMPILER" test math_test.resid) >/dev/null 2>&1
+[ $? -eq 0 ] && ok || bad "driver single test file, passing"
+printf 'test "arithmetic" {\n    expect(2 + 2).toEqual(5);\n}\n' > "$W/tsuite/src/math_test.resid"
+(cd "$W/tsuite/src" && "$COMPILER" test math_test.resid) >/dev/null 2>&1
+[ $? -eq 1 ] && ok || bad "driver single test file, assertion failure must exit 1"
+printf 'test "nope" {\n    expect(1).toEqual("str");\n}\n' > "$W/tsuite/src/broken_test.resid"
+(cd "$W/tsuite/src" && "$COMPILER" test broken_test.resid) >/dev/null 2>&1
+[ $? -eq 2 ] && ok || bad "driver single test file, compile error must exit 2 (not 1)"
+# A plain (non-test) compile error keeps its own status.
+"$COMPILER" "$W/tsuite/src/broken_test.resid" -o "$W/plain" >/dev/null 2>&1
+[ $? -eq 1 ] && ok || bad "non-test compile error must stay 1"
+rm -f "$W/tsuite/src/broken_test.resid"
+
+# A test file that does not compile is counted apart from a failing one, and
+# §7.2 makes the compile error dominate: exit 2, not 1. Its own package, so
+# the check does not depend on the state the steps above left behind.
+mkdir -p "$W/badpkg/src"
+printf '[package]\nname = "badpkg"\nversion = "0.1.0"\n' > "$W/badpkg/resid.toml"
+printf 'Int main() { return 0; }\n' > "$W/badpkg/src/main.resid"
+printf 'test "fine" {\n    expect(1).toEqual(1);\n}\n' > "$W/badpkg/src/ok_test.resid"
+printf 'test "does not compile" {\n    expect(1).toEqual("str");\n}\n' > "$W/badpkg/src/broken_test.resid"
+(cd "$ROOT" && "$MAN" test "$W/badpkg/resid.toml" "$COMPILER") > "$W/tsuite3.out" 2>&1
+rc=$?
+if [ $rc -eq 2 ] && grep -q "1 file/s passed, 0 failed, 1 did not compile" "$W/tsuite3.out" && grep -q "E0001" "$W/tsuite3.out"; then ok; else bad "manifest test compile error (rc $rc): $(tail -3 "$W/tsuite3.out" | tr '\n' '|')"; fi
+
+# A package with no test files succeeds and says so.
+mkdir -p "$W/notest/src"
+printf '[package]\nname = "notest"\nversion = "0.1.0"\n' > "$W/notest/resid.toml"
+printf 'Int main() { return 0; }\n' > "$W/notest/src/main.resid"
+(cd "$ROOT" && "$MAN" test "$W/notest/resid.toml" "$COMPILER") > "$W/notest.out" 2>&1
+if [ $? -eq 0 ] && grep -q "no test files" "$W/notest.out"; then ok; else bad "manifest test with no tests: $(tail -2 "$W/notest.out" | tr '\n' '|')"; fi
+
+# `target` is build output, not source: a test file there is not run.
+mkdir -p "$W/tsuite/target/resid"
+printf 'test "not a real test" {\n    expect(1).toEqual(2);\n}\n' > "$W/tsuite/target/resid/stale_test.resid"
+(cd "$ROOT" && "$MAN" test "$W/tsuite/resid.toml" "$COMPILER") > "$W/tsuite4.out" 2>&1
+if grep -q "stale_test" "$W/tsuite4.out"; then bad "manifest test walked target/"; else ok; fi
+rm -rf "$W/tsuite/target"
+
+# process.run splits its command on byte 32 and execs the words directly, so a
+# path with a space is refused rather than silently split into two arguments.
+mkdir -p "$W/sp ace/src"
+printf '[package]\nname = "sp"\nversion = "0.1.0"\n' > "$W/sp ace/resid.toml"
+printf 'Int main() { return 0; }\n' > "$W/sp ace/src/main.resid"
+printf 'test "t" {\n    expect(1).toEqual(1);\n}\n' > "$W/sp ace/src/a_test.resid"
+(cd "$ROOT" && "$MAN" test "$W/sp ace/resid.toml" "$COMPILER") > "$W/sp.out" 2>&1
+rc=$?
+if [ $rc -eq 2 ] && grep -q "contains a space" "$W/sp.out"; then ok; else bad "space in package path not refused (rc $rc)"; fi
+(cd "$ROOT" && "$COMPILER" test --root "$W/sp ace/src") > "$W/sp2.out" 2>&1
+rc=$?
+if [ $rc -eq 2 ] && grep -q "contains a space" "$W/sp2.out"; then ok; else bad "space in --root not refused (rc $rc)"; fi
+(cd "$ROOT" && "$COMPILER" "$W/sp ace/src/a_test.resid" -o "$W/sp ace/out") > "$W/sp3.out" 2>&1
+rc=$?
+if [ $rc -eq 2 ] && grep -q "contains a space" "$W/sp3.out"; then ok; else bad "space in -o not refused (rc $rc)"; fi
 
 echo "pkg: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

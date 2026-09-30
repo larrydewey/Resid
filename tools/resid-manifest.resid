@@ -18,6 +18,7 @@
 ///   residc tools/resid-manifest.resid run -- deps <resid.toml>
 ///   residc tools/resid-manifest.resid run -- depmap <resid.toml> <out>
 ///   residc tools/resid-manifest.resid run -- build <resid.toml> <driver-binary> [extra C file]
+///   residc tools/resid-manifest.resid run -- test <resid.toml> <driver-binary> [extra C file]
 ///
 /// `deps` resolves this manifest's `[dependencies.*]` transitively —
 /// both `path =` (local directory) and `version =` (fetched from the
@@ -308,6 +309,21 @@ Str dirname_of(Str path) {
     Int idx = last_slash_idx(path, 0, str_len(path), 0 - 1);
     if (idx < 0) { return "."; }
     return str_slice(path, 0, idx);
+}
+
+// process.run splits its command on byte 32 and execs the words directly,
+// with no shell to re-join them, so a path containing a space cannot be
+// passed as one argument. The driver refuses such a path for the commands it
+// builds; this is the same guard for the command this tool builds.
+Bool has_space(Str s, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (str_char_at(s, i) == 32) { return true; }
+    return has_space(s, i + 1, n);
+}
+Str first_space_path(List(Str) ps, Int i) {
+    if (i >= ps.len()) { return ""; }
+    if (has_space(ps[i], 0, str_len(ps[i]))) { return ps[i]; }
+    return first_space_path(ps, i + 1);
 }
 
 Int hex_nibble_val(Int c) {
@@ -1106,6 +1122,57 @@ Int cmd_depmap(Str manifest_path, Str out_path) {
     return 0;
 }
 
+// `test`: run the package's tests (SPEC-testing.md §7.1). Resolves
+// dependencies and writes the depmap sidecar exactly as `build` does, then
+// hands discovery to the driver's own `test` mode, which finds every
+// `*_test.resid` under the root's directory and runs it. The driver owns
+// discovery, naming and the exit-code contract, so there is one
+// implementation of them rather than one per tool; this command's job is
+// only to supply the resolved dependency map and the capability ceilings
+// that go with it. The driver's exit code is this command's.
+@requires(filesystem, process)
+Int cmd_test(Str manifest_path, Str driver_bin, Str rtc) {
+    Manifest m = load_manifest(filesystem.read_all(manifest_path));
+    if (m.name == "") {
+        eprintln("error: invalid resid.toml (missing [package] name)");
+        return 1;
+    }
+    Str pkg_dir = dirname_of(manifest_path);
+    DepResolveResult r = resolve_all_deps(m, pkg_dir);
+    if (!r.ok) {
+        eprintln(r.err);
+        return 1;
+    }
+    Str cap_err = check_dep_capabilities(r.deps, grant_families(m.grant));
+    if (cap_err != "") {
+        eprintln(cap_err);
+        return 1;
+    }
+    Str key_err = verify_all_pinned_keys(r.deps);
+    if (key_err != "") {
+        eprintln(key_err);
+        return 1;
+    }
+    Str out_dir = pkg_dir + "/target/resid";
+    filesystem.create_dir(out_dir);
+    Str depmap_path = out_dir + "/depmap.txt";
+    filesystem.write_all(depmap_path, depmap_text(r.deps));
+    // The package's own sources only — a dependency's tests are its own, and
+    // `target` holds build output.
+    Str src_dir = dirname_of(pkg_dir + "/" + m.root);
+    Str rtx = if (rtc == "") { "" } else { " -rt " + rtc };
+    Str cmd = driver_bin + " test --root " + src_dir + " --testbin-dir " + out_dir + " -depmap " + depmap_path + rtx;
+    Str sp = first_space_path([driver_bin, src_dir, out_dir, depmap_path, rtc], 0);
+    if (sp != "") {
+        eprintln("error: this path contains a space, which process.run cannot pass as one argument:");
+        eprintln("  " + sp);
+        eprintln("  (commands are split on spaces and exec'd directly, with no shell to re-join them)");
+        eprintln("  move it to a path without spaces");
+        return 2;
+    }
+    return process.run(cmd);
+}
+
 // `build`: the compiler-facing half of `resid-build build` (spec §35) —
 // resolve deps (same checks as `deps`/`depmap`), write the depmap sidecar
 // under `<pkg_dir>/target/resid/`, then shell out to a self-hosted driver
@@ -1143,6 +1210,14 @@ Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
     filesystem.write_all(depmap_path, depmap_text(r.deps));
     Str root = pkg_dir + "/" + m.root;
     Str out = out_dir + "/" + m.name;
+    Str sp = first_space_path([driver_bin, root, out, depmap_path, rtc], 0);
+    if (sp != "") {
+        eprintln("error: this path contains a space, which process.run cannot pass as one argument:");
+        eprintln("  " + sp);
+        eprintln("  (commands are split on spaces and exec'd directly, with no shell to re-join them)");
+        eprintln("  move it to a path without spaces");
+        return 2;
+    }
     Str rtx = if (rtc == "") { "" } else { " -rt " + rtc };
     Str cmd = driver_bin + " " + root + " -o " + out + rtx + " -depmap " + depmap_path;
     Int rc = process.run(cmd);
@@ -1158,7 +1233,7 @@ Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
 Int main() {
     Int argc = args.count();
     if (argc < 2) {
-        eprintln("usage: resid-manifest <resid.toml> | resid-manifest lock <resid.lock> | resid-manifest deps <resid.toml> | resid-manifest depmap <resid.toml> <out> | resid-manifest build <resid.toml> <driver-binary> [resid_rt.c]");
+        eprintln("usage: resid-manifest <resid.toml> | resid-manifest lock <resid.lock> | resid-manifest deps <resid.toml> | resid-manifest depmap <resid.toml> <out> | resid-manifest build <resid.toml> <driver-binary> [resid_rt.c] | resid-manifest test <resid.toml> <driver-binary> [resid_rt.c]");
         return 2;
     }
     Str a1 = args.get(1);
@@ -1190,6 +1265,14 @@ Int main() {
         }
         Str rtc = if (argc >= 5) { args.get(4) } else { "" };
         return cmd_build(args.get(2), args.get(3), rtc);
+    }
+    if (a1 == "test") {
+        if (argc < 4) {
+            eprintln("usage: resid-manifest test <resid.toml> <driver-binary> [extra C file]");
+            return 2;
+        }
+        Str rtc = if (argc >= 5) { args.get(4) } else { "" };
+        return cmd_test(args.get(2), args.get(3), rtc);
     }
     return cmd_manifest(a1);
 }

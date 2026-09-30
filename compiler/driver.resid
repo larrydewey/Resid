@@ -8273,6 +8273,147 @@ pub Str stdlib_dir() {
     return if (filesystem.is_dir(home + "/lib")) { home + "/lib" } else { home + "/../../lib" };
 }
 
+// ─── `residc test` over a whole tree (SPEC-testing.md §7.1) ───────────
+// A `test` block is an entry point like `main`, so each test file is its own
+// test binary: discovery runs the driver over the files it finds and
+// aggregates their exit codes (0 passed, 1 a test failed, 2 the file did not
+// compile). Byte 32 splits a process.run command into separate arguments and
+// there is no shell to re-join them, so a path containing a space cannot be
+// passed as one argument; that is refused below rather than silently split.
+
+// Byte 32 anywhere in `s`?
+Bool has_space(Str s, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (str_char_at(s, i) == 32) { return true; }
+    return has_space(s, i + 1, n);
+}
+
+// The first path that process.run could not pass as a single argument, or ""
+Str bad_space_path(List(Str) ps, Int i) {
+    if (i >= ps.len()) { return ""; }
+    if (has_space(ps[i], 0, str_len(ps[i]))) { return ps[i]; }
+    return bad_space_path(ps, i + 1);
+}
+Int guard_no_space(List(Str) ps) {
+    Str bad = bad_space_path(ps, 0);
+    if (bad == "") { return 0; }
+    println("error: this path contains a space, which process.run cannot pass as one argument:");
+    println("  " + bad);
+    println("  (commands are split on spaces and exec'd directly, with no shell to re-join them)");
+    println("  move it to a path without spaces");
+    return 2;
+}
+
+// Build output, VCS metadata and vendored trees are not the package's sources.
+Bool skip_test_dir(Str name) {
+    if (name == "target") { return true; }
+    if (name == "node_modules") { return true; }
+    if (str_starts_with(name, ".")) { return true; }
+    return false;
+}
+
+// Every `*_test.resid` under `dir`, recursively, in sorted order so the run
+// order is deterministic.
+@requires(filesystem(readonly))
+List(Str) find_tests(Str dir, List(Str) names, Int i, List(Str) acc) {
+    if (i >= names.len()) { return acc; }
+    Str name = names[i];
+    Str abs = dir + "/" + name;
+    Bool is_dir = filesystem.is_dir(abs);
+    List(Str) acc2 = if (is_dir) {
+        if (skip_test_dir(name)) { acc } else { find_tests(abs, sort(filesystem.list_dir(abs)), 0, acc) }
+    } else {
+        if (str_ends_with(name, "_test.resid")) { acc.concat([abs]) } else { acc }
+    };
+    return find_tests(dir, names, i + 1, acc2);
+}
+
+// `path` as it reads under `root`, for display.
+Str rel_under(Str path, Str root) {
+    Str pre = if (str_ends_with(root, "/")) { root } else { root + "/" };
+    if (str_starts_with(path, pre)) { return str_slice(path, str_len(pre), str_len(path)); }
+    return path;
+}
+
+// A file's binary name, flattened: `src/net/http_test.resid` becomes
+// `src_net_http_test`, so every test binary is a sibling in one directory.
+Str flat_seg(Str rel, Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Str c = str_slice(rel, i, i + 1);
+    return flat_seg(rel, i + 1, n, if (c == "/") { acc + "_" } else { acc + c });
+}
+Str flat_name(Str rel) {
+    return flat_seg(rel, 0, str_len(rel), "");
+}
+
+// ` --flag value`, or nothing when the value is empty: an empty value would
+// otherwise swallow the next argument.
+Str opt_arg(Str flag, Str v) {
+    if (v == "") { return ""; }
+    return " " + flag + " " + v;
+}
+
+type TestFiles = { Int pass; Int fail; Int broken; };
+
+// Compile and run one test file, forwarding this run's depmap, runtime IR,
+// filter and format so the child resolves imports and reports the same way.
+@requires(process)
+Int run_one_test(Str self, Str file, Str root, Str bindir, Str depmap, Str rtr, Str rtc, Str fmt, Str flt) {
+    Str rel = rel_under(file, root);
+    Str stem = str_slice(rel, 0, str_len(rel) - 6);
+    Str out = bindir + "/test_" + flat_name(stem) + ".testbin";
+    Str cmd = exec_path(self) + " test " + file + " --profile debug -o " + out + " -rtr " + rtr
+        + opt_arg("-rt", rtc) + opt_arg("-depmap", depmap)
+        + opt_arg("--format", fmt) + opt_arg("--filter", flt);
+    return process.run(cmd);
+}
+
+@requires(process)
+TestFiles run_tests_at(Str self, List(Str) files, Str root, Str bindir, Str depmap, Str rtr, Str rtc, Str fmt, Str flt, Int i, TestFiles acc) {
+    if (i >= files.len()) { return acc; }
+    Str rel = rel_under(files[i], root);
+    println(rel);
+    Int rc = run_one_test(self, files[i], root, bindir, depmap, rtr, rtc, fmt, flt);
+    TestFiles nx = if (rc == 0) { TestFiles {.pass = acc.pass + 1, .fail = acc.fail, .broken = acc.broken} }
+        else { if (rc == 2) { TestFiles {.pass = acc.pass, .fail = acc.fail, .broken = acc.broken + 1} }
+        else { TestFiles {.pass = acc.pass, .fail = acc.fail + 1, .broken = acc.broken} } };
+    return run_tests_at(self, files, root, bindir, depmap, rtr, rtc, fmt, flt, i + 1, nx);
+}
+
+// `residc test` with no source file: discover and run every test under --root.
+@requires(args, filesystem, process, environment)
+Int test_all(Int argc) {
+    Str root  =  pick_opt(argc, "--root", ".");
+    Str self  =  args.get(0);
+    Str rtc  =  pick_opt(argc, "-rt", "");
+    Str depmap  =  pick_opt(argc, "-depmap", "");
+    Str fmt  =  pick_opt(argc, "--format", "pretty");
+    Str flt  =  pick_opt(argc, "--filter", "");
+    Str bindir  =  pick_opt(argc, "--testbin-dir", "target/resid");
+    Str rhome  =  environment.get("RESID_HOME");
+    Str rtr  =  pick_opt(argc, "-rtr", if (rhome == "") { "build/boot/rt.ll" } else { rhome + "/rt.ll" });
+    Int g  =  guard_no_space([self, root, bindir, depmap, rtr, rtc, fmt, flt]);
+    if (g != 0) { return g; }
+    if (!filesystem.is_dir(root)) {
+        println("error: not a directory: " + root);
+        return 2;
+    }
+    List(Str) files  =  find_tests(root, sort(filesystem.list_dir(root)), 0, []);
+    println(f"test: {files.len()} test file/s under {root}");
+    if (files.len() == 0) {
+        println("no test files (looked for *_test.resid)");
+        return 0;
+    }
+    filesystem.create_dir(bindir);
+    TestFiles acc0  =  TestFiles {.pass = 0, .fail = 0, .broken = 0};
+    TestFiles r  =  run_tests_at(self, files, root, bindir, depmap, rtr, rtc, fmt, flt, 0, acc0);
+    println("---");
+    println(f"{r.pass} file/s passed, {r.fail} failed, {r.broken} did not compile");
+    // §7.2: a compile error outranks a test failure - the run is not complete.
+    if (r.broken > 0) { return 2; }
+    return if (r.fail > 0) { 1 } else { 0 };
+}
+
 @requires(args, filesystem, process, environment)
 Int main() {
     // A runaway compile stops at a memory budget (RESID_MEM_LIMIT overrides).
@@ -8281,7 +8422,7 @@ Int main() {
     if (argc < 2) {
         println("usage: driver <source.res> [-o out] [-rt resid_rt.c] [-O0|-O1|-O2|-O3|-Os|-Oz]");
         println("       driver keygen [dir] | driver verify <binary> [--pub HEX] | driver lsp");
-        println("       driver test <file.resid> [--filter RE] [--format pretty|tap|json]");
+        println("       driver test [<file.resid>] [--root DIR] [--filter RE] [--format pretty|tap|json]");
         return 1;
     }
     Str arg1  =  args.get(1);
@@ -8299,12 +8440,14 @@ Int main() {
     }
     // `residc test <file>` (SPEC-testing.md §7.1): discover the file's
     // `test "..." { }` blocks, generate an entry point that runs them, then
-    // execute the result and forward its exit code.
+    // execute the result and forward its exit code. With no positional file,
+    // run every `*_test.resid` under --root (the current directory by
+    // default); `residc test --root src` is discovery, not a file named
+    // "--root" (a file whose name begins with `-` needs a `./` prefix).
     Bool testmode  =  arg1 == "test";
-    if (testmode && argc < 3) {
-        println("usage: driver test <file.resid> [--filter RE] [--format pretty|tap|json]");
-        return 2;
-    }
+    Str tfile  =  if (argc >= 3) { args.get(2) } else { "" };
+    Bool testall  =  testmode && (tfile == "" || str_starts_with(tfile, "-"));
+    if (testall) { return test_all(argc); }
     Bool q0  =  if (testmode) { resid_quiet_set(true) } else { false };
     // Building the compiler itself: its runtime memory internals check.
     // The flag is honored only for the compiler's entry file and the
@@ -8329,6 +8472,10 @@ Int main() {
     // The whole runtime is Resid (runtime/rt/, linked as rt.ll); -rt adds
     // an extra C file to the link.
     Str rtc  =  pick_opt(argc, "-rt", "");
+    // `out` names the .ll and the binary, both interpolated into the link
+    // command; refuse a space here rather than after checking the program.
+    Int _gsp0  =  guard_no_space([out, rtc]);
+    if (_gsp0 != 0) { return _gsp0; }
     Str depmap_path  =  pick_opt(argc, "-depmap", "");
     Str depmap0  =  if (depmap_path == "") { "" } else { filesystem.read_all(depmap_path) };
     Str depmap1  =  depmap0 + "\n@stdlib::" + stdlib_dir();
@@ -8450,7 +8597,9 @@ Int main() {
     List(Str) ckpk = resid_list_str_persist_copy([if (tc != 0) { "" } else { gx_pack(ckp.g, ckp.id) }, ckc.def, f"{kg_count(ckp.g)}", gmo.dv]);
     List(Str) cktys = resid_list_str_persist_copy(ckc.ty);
     Int _tc_out = resid_bulk_pop();
-    if (tc != 0) { return tc; }
+    // §7.2: under `test`, a file that does not compile exits 2, so it is not
+    // mistaken for a test that ran and failed (1).
+    if (tc != 0) { return if (testmode) { 2 } else { tc }; }
     // `--profile check` (spec §35): type checking only, no binary. The
     // `release` profile is the default -O2 build; `debug` builds at -O0.
     if (profile == "check") {
@@ -8552,6 +8701,9 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // libgcc (128-bit division, Float(128) arithmetic). Position-independent
     // code reaches thread-local state through one thread-pointer load.
     Str march  =  pick_march(argc, "");
+    // The link command interpolates these, and process.run splits on byte 32.
+    Int _gsp  =  guard_no_space([ll, out, rtc, rtr]);
+    if (_gsp != 0) { return _gsp; }
     Str cmd  =  "clang " + olevel + march + lto + " " + ll + " " + rtc + " " + rtr + " -static-pie -nostdlib -lgcc -Wno-override-module -o " + out;
     Int rc  =  process.run(cmd);
     if (rc != 0) {
