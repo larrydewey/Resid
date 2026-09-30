@@ -515,10 +515,12 @@ Display:
 6.6  Behaviors
 --------------------------------------------------
 
-Eq, Ord and Hash are supplied for the entire numeric
-family by generic behavior definitions. The compiler
-instantiates them for every concrete width. Users never
-need to declare per-width instances.
+Eq, Ord, Hash and Bounded are supplied for the entire
+numeric family by generic behavior definitions. The
+compiler instantiates them for every concrete width. Users
+never need to declare per-width instances. Bounded's verbs
+take no argument, so a width's bounds are read as `x.min()`
+and `x.max()`.
 
 
 --------------------------------------------------
@@ -681,12 +683,21 @@ each prototype is a verb:
   }
 
 An instance gives the function (or, for several verbs, a
-record of functions):
+record of functions, one per verb, comma-separated):
 
   Area(Circle) = circle_area;
   Shape(Square) = { .surface = sq_area, .perimeter = sq_perimeter };
   Convert(Celsius, Kelvin) = c_to_k;
   Show(Pair(T)) = show_pair;      // every T; show_pair has @needs(Show(T))
+
+A behavior of one function takes the function directly; one
+of several takes a record naming every verb. An instance
+that names some but not all of a multi-verb behavior is an
+error, and so is one for a verb the behavior does not
+declare. Ord is now such a behavior, so an ordering for a
+user type gives all three:
+
+  Ord(Task) = { .compare = by_priority, .min = lo_prio, .max = hi_prio };
 
 The instance's functions must have the prototypes'
 signatures for its types. A verb call picks the instance
@@ -699,6 +710,34 @@ Container(Stack(T), T), `count(s)` on a Stack(Str) has E =
 Str (E0227 when none or several fit). `using = f`,
 `using = B(T)` or `using = Reverse(..)` overrides the choice
 at one call.
+
+Method syntax. A verb may also be called on its receiver:
+`c.area()` is `area(c)`, and `s.compare(t)` is
+`compare(s, t)`. The receiver is the verb's first
+parameter, so the call is the same one. A verb that takes
+no parameter takes its types from the receiver and is not
+passed one: `x.min()` passes no argument, and the types come
+from x, from the expected type in a value position, or from
+the enclosing @needs.
+
+  Int(8) a = 100;
+  Int(8) lo = a.min();     // lo = -128, from Bounded(Int(8))
+
+A verb name belongs to one behavior. Where two behaviors
+declare it, the one declared last owns the name, and the
+prelude is appended last of all: a behavior of the program's
+own that redeclares a prelude verb's name is not reachable
+by that name. With both Ord and Bounded declaring max,
+`x.max()` and `max()` are Bounded's, and `max(x, y)` is
+Ord's.
+
+A name is a verb or a function, never both (E0231). Were
+both possible, `show(m)` would not say which one it meant. A
+function may therefore not reuse a verb's name, which takes
+`min`, `max`, `show`, `hash`, `eq`, `compare` and
+`serialize` out of circulation program-wide. Overriding a
+behavior is done through an instance or `using`, never by
+defining a function of a verb's name.
 
 There are no default bodies: a type gets an instance only
 from a declaration, which may name a generic function
@@ -728,12 +767,17 @@ type; no value of an unknown type dispatches at run time
 not form hierarchies (a function lists each need); and a
 behavior contains no types of its own.
 
-Core behaviors. Eq, Ord, Hash, Show, Serialize and
-Allocator are ordinary behaviors declared in the prelude
-(§32), with instances for the built-in types:
+Core behaviors. Eq, Ord, Hash, Show, Serialize, Bounded
+and Allocator are ordinary behaviors declared in the
+prelude (§32), with instances for the built-in types:
 
   behavior Eq(T) { Bool eq(T a, T b); }
-  behavior Ord(T) { Int compare(T a, T b); }
+  behavior Ord(T) {
+      Int compare(T a, T b);
+      T min(T a, T b);
+      T max(T a, T b);
+  }
+  behavior Bounded(T) { T min(); T max(); }
   behavior Hash(T) { Int hash(T x); }
   behavior Show(T) { Str show(T x); }
   behavior Serialize(T) { Str serialize(T x); }
@@ -747,10 +791,33 @@ order; on other types, the element type's Ord instance.
 == and != on a type with an Eq instance, and < <= > >= on a
 type with an Ord instance, call it.
 
+Bounded gives a type's least and greatest value, and takes
+no parameter, so it reads as a method on the receiver:
+`x.min()`, `x.max()`, or `min(x)`. It is declared for Bool,
+Int(N) and UInt(N), covering every width:
+
+  Bounded(Bool)   // false, true
+  Bounded(Int(N)) // -2^(N-1), 2^(N-1)-1
+  Bounded(UInt(N))// 0, 2^N-1
+
+Since Bounded's verbs take no argument, it is the one
+behavior for which the zero-argument form differs: its
+min/max are the two's complement bounds, while Ord's
+`a.min(x, y)` is the lesser of two values.
+
 Lists: xs.contains(v) (integer, Float or Str elements),
 xs.reverse(), xs.sum() (List(Int) or List(Float)). A
 function of the same name taking the list as its first
 parameter takes precedence.
+
+min, max and clamp are also builtins: min(a, b) and max(a,
+b) are the builtins, with an integer literal argument
+adopting the type of the others (§6.1a). A verb name
+belongs to one behavior, so with both Ord and Bounded
+declaring max, `x.max()` is Bounded's and `max(x, y)` is
+Ord's. A bare `max()` is Bounded's as well, but with no
+receiver to fix the type it takes the expected type, so
+give it one: `Int(8) hi = max();`.
 
 Numeric Eq / Ord / Hash are supplied generically for
 the whole family (see §6.6).
@@ -1412,10 +1479,13 @@ Checked arithmetic (default) + wrapping_* + saturating_*
 for every width.
 
 Core behaviors: Eq, Ord, Hash (generic over the numeric
-family), Show, Serialize and Allocator, declared in the
-prelude (§11) with the verbs eq, compare, hash, show,
-serialize and allocate; Reverse inverts an ordering. A
-program's own function of a verb's name wins over the verb.
+family), Show, Serialize, Bounded and Allocator, declared
+in the prelude (§11) with the verbs eq, compare, min, max,
+hash, show, serialize and allocate; Reverse inverts an
+ordering. Bounded takes no argument and is read as a method
+on its receiver (`x.max()`). A name is a verb or a function,
+never both (E0231), so overriding a behavior goes through
+an instance or `using =`, not a function of the same name.
 
 
 ==================================================

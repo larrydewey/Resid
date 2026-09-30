@@ -1,7 +1,7 @@
 # Resid — Project Status
 
 **Specification**: `resid_specification.txt` v3.3 (Production Ready; v3.2 base + fixed-capacity value types §44; some items still in flux — see audit below)
-**Implementation**: Rust stable + LLVM (inkwell), monorepo Cargo workspace
+**Implementation**: self-hosted — the compiler and runtime are written in Resid; no Rust, no C library
 **Interpreter**: None — direct LLVM
 **Wide numerics**: `Int(128)..Int(512)` / `UInt(N)` via LLVM arbitrary-width integers, `Float` capped at 128, `Dec(N)` exact decimals
 
@@ -13,8 +13,8 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  192, reduce 14, provenance 20, graph 426, pkg 17, runtime 8. The Rust
-  pipeline (`bootstrap/rust-stage0/`) and `tools/resid-lsp-full`, which
+  308, reduce 14, provenance 21, graph 556, pkg 17, runtime 12, lsp 15.
+  The Rust pipeline (`bootstrap/rust-stage0/`) and `tools/resid-lsp-full`, which
   was built on its crates, were deleted on 2026-09-26; both are in git
   history.
 
@@ -1269,6 +1269,61 @@ yield 0. Handle types: `with (Type h = expr) { … }` RAII.
 
 ---
 
+## 0b. Method syntax for behavior verbs, and `Bounded` (2026-09-29)
+
+A verb may now be called on its receiver: `c.area()` is
+`area(c)`, and `s.compare(t)` is `compare(s, t)`. A verb that
+takes no parameter takes its types from the receiver and is not
+passed one, so it reads as a method on a value rather than a
+free function on a type.
+
+- The zero-argument case was a lowering bug, not a resolution
+  one: `int_max` is generic, so it resolved through `gk_gcall`,
+  which logs only `C|id|f`. The node stayed an `mcall` with the
+  receiver as kid 0, so the next pass read the name `m` and
+  passed the receiver on — `expects (), got (Int(8))`. The op
+  that drops a receiver already existed (`M|id` in
+  `compiler/mono.resid`), the zero-argument path just never
+  logged it. `gk_mcall0` now emits it on all three resolution
+  paths (instance, generic, override).
+- `Bounded(T) { T min(); T max(); }` is new in the prelude, with
+  instances for `Bool`, `Int(N)` and `UInt(N)`, so `x.max()`
+  works at every width.
+- `Ord` gained `min` and `max`, which makes it a three-verb
+  behavior: its instances are now records, and an instance that
+  names some but not all verbs is an error.
+- A verb name belongs to one behavior, and the prelude is
+  appended last of all, so a program's own behavior redeclaring
+  a prelude verb's name is not reachable by that name. With
+  `Ord` and `Bounded` both declaring `max`, `x.max()` and
+  `max()` are `Bounded`'s and `max(x, y)` is `Ord`'s.
+- `min`, `max` and `clamp` are also builtins, and the builtin
+  wins a bare call, so `max(a, b)` is unchanged; a bare
+  `max()` with no argument is the verb.
+- **E0231**: a name is a verb or a function, never both. The
+  baseline let a generic function named `show` answer for a
+  `Show` instance it had no business answering for. The check is
+  program-wide rather than per module, which reserves `min`,
+  `max`, `show`, `hash`, `eq`, `compare` and `serialize`;
+  overriding a behavior goes through an instance or `using`.
+  A module-qualified namespace would narrow this and is not
+  implemented.
+- The prelude's unsigned max was `(1 << N) - 1`, which
+  computes `0 - 1` in `Int` at N=64 and aborted on the checked
+  subtraction once it was no longer constant-folded.
+  `~((UInt(N))0)` is the same value at every width and cannot
+  overflow.
+- Reading an instance's function per verb (`bfns_verb`) was
+  needed to make any of this work: every site that read
+  `bfns[bi]` raw broke on a multi-verb record, including the
+  authority edge `sort` draws and the `__cmp_` symbol name
+  reaching LLVM.
+
+Suites: conformance 308, reduce 14, provenance 21, graph 556,
+pkg 17, runtime 12, lsp 15. Fixed point `29479079b22dd298`.
+
+---
+
 ## 1. Pure-Resid Library Stack (`lib/`)
 
 All in Resid itself, verified against RFC/NIST vectors and independent
@@ -1365,6 +1420,17 @@ in mind for ANY nontrivial `.resid` work:
     bits; every Poly1305 block gets the 0x01 terminator; GCM J0 =
     nonce||0^31||1; HkdfExpandLabel context is length-prefixed; "derived"
     steps hash the empty transcript.
+12. **A verb name cannot be a function name** (E0231), program-wide. This
+    reserves `min`, `max`, `show`, `hash`, `eq`, `compare`, `serialize`.
+    Override a behavior with an instance or `using =`, not a function.
+13. **A multi-verb instance must be a complete record** (`,`-separated,
+    trailing `;`). `Ord` is three verbs now, so `Ord(X) = f;` is an error.
+14. **A verb name belongs to one behavior**, and the prelude is walked
+    last, so `x.max()` is `Bounded`'s (zero-arg) while `max(x, y)` is
+    `Ord`'s. A bare `max()` has no receiver to fix the type and needs an
+    expected type: `Int(8) hi = max();`.
+15. **A `Int(N)` value position with a width the reducer leaves open
+    reaches LLVM as `iN`.** Bind a concrete width when the value escapes.
 
 ---
 
