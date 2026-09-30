@@ -1,0 +1,24 @@
+// A width with no instance of the need its body carries is not an instance
+// of the behavior at all: Int(256) has no place in this data model.
+behavior Carries(T) { Bool carried(); }
+Bool carried_yes() { return true; }
+Carries(Int(8)) = carried_yes;
+Carries(Int(64)) = carried_yes;
+
+behavior Enc(F) { Result(F, Str) write_int(F s, Int v); }
+behavior Encode(T, F) { Result(F, Str) enc(T x, F s); }
+
+@needs(Enc(F), Carries(Int(N)))
+Result(F, Str) enc_word(Int(N) x, F s) { return write_int(s, (Int)x); }
+Encode(Int(N), F) = enc_word;
+
+type Out = { Str text; };
+Result(Out, Str) out_write_int(Out s, Int v) { return Ok(Out {.text = f"i{v}"}); }
+Enc(Out) = out_write_int;
+
+Int main() {
+    Int(256) wide = 7;
+    Result(Out, Str) r = enc(wide, Out {.text = ""});
+    println(f"{r}");
+    return 0;
+}

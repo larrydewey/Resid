@@ -755,6 +755,20 @@ program-wide (recorded in the graph). A library may declare
 an instance only of its own behaviors or types (E0224); the
 application may declare any.
 
+Which widths an instance carries. An instance's head may
+be generic in a width (Encode(Int(N), F)), and the needs in
+its body decide which widths it carries: a need that holds
+for some widths and not others (a need over a type the
+width names, with instances for the widths that have it)
+excludes the rest, so one declaration covers exactly the
+widths its body serves and a call with another width is
+E0226, naming the width and the need left unmet. The
+coherence rule above reads the same way: two instances
+overlap only where both apply, so a generic instance and a
+specific one for one of its widths are not an E0225. A
+need left open by the substitution is not decided here: the
+copy made for the call resolves it.
+
 Authority. An instance's function is called where the
 behavior is used. A generic function's authority is its
 own @requires plus what its instances need, checked at each

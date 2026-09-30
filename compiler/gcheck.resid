@@ -302,7 +302,7 @@ Str gm_need_err(GK k, Str nd) {
     List(Str) args = ty_args(nd);
     if (gm_builtin_inst(b, args)) { return ""; }
     if (gm_find_inst(k, b, args) >= 0) { return ""; }
-    return "no behavior instance " + nd + " (declare " + b + "(" + list_join(args, 0, ", ", "") + ") = f;)";
+    return "no behavior instance " + nd + gm_inst_reject(k, b, args) + " (declare " + b + "(" + list_join(args, 0, ", ", "") + ") = f;)";
 }
 
 // A need over the enclosing function's type parameters that an instance
@@ -380,18 +380,106 @@ Str gm_needs_err(GK k, List(Str) ns, Int i, GU u) {
 pub List(Str) gm_inst_types(Kg g, Int n) { return ty_args("B(" + kg_part(g.ns[n].aux, 1) + ")"); }
 
 // The instance of behavior `b` for types `args`: the highest-level match
-// (application over library over prelude), or -1.
+// (application over library over prelude) whose own needs hold there, or
+// -1. A need left open by the substitution is not this pass's business:
+// the copy made for the call resolves it (instance-covered needs).
 pub Int gm_find_inst(GK k, Str b, List(Str) args) {
-    return gm_find_inst_at(k, b, args, 0, -1, 0);
+    return gm_find_inst_at(k, b, args, 0, -1, 0, 0);
 }
 
-Int gm_find_inst_at(GK k, Str b, List(Str) args, Int i, Int best, Int blev) {
+Int gm_find_inst_at(GK k, Str b, List(Str) args, Int i, Int best, Int blev, Int depth) {
     if (i >= k.gx.insts.len()) { return best; }
     Int n = k.gx.insts[i];
     Int lev = k.gx.ilev[i];
     List(Str) ts = gm_inst_types(k.g, n);
     Bool hit = lev > blev && k.g.ns[n].text == b && ts.len() == args.len() && gm_unify_args(ts, args, 0, gu_new(), b, b).ok;
-    return gm_find_inst_at(k, b, args, i + 1, if (hit) { n } else { best }, if (hit) { lev } else { blev });
+    if (hit && depth >= 8) { return gm_find_inst_at(k, b, args, i + 1, n, lev, depth); }
+    if (hit && !gm_inst_needs_met(k, n, args, b, depth)) { return gm_find_inst_at(k, b, args, i + 1, best, blev, depth); }
+    return gm_find_inst_at(k, b, args, i + 1, if (hit) { n } else { best }, if (hit) { lev } else { blev }, depth);
+}
+
+// The needs of an instance's impl, with the head's parameters bound to
+// `args` (a width in the head binds the width a need in the body names).
+Bool gm_inst_needs_met(GK k, Int inst, List(Str) args, Str b, Int depth) {
+    GU ui = gm_unify_args(gm_inst_types(k.g, inst), args, 0, gu_new(), b, b);
+    if (!ui.ok) { return false; }
+    return gm_inst_needs_met_u(k, inst, ui, depth);
+}
+
+Bool gm_inst_needs_met_u(GK k, Int inst, GU ui, Int depth) {
+    return gm_needs_definite(k, gm_impl_fns(kg_part(k.g.ns[inst].aux, 2)), 0, ui, depth);
+}
+
+Bool gm_needs_definite(GK k, List(Str) fns, Int i, GU ui, Int depth) {
+    if (i >= fns.len()) { return true; }
+    List(Str) ns = gm_need_list(k.gx.needs.get(fns[i]) else { "" });
+    if (!gm_needs_open_ok(k, ns, 0, ui, depth)) { return false; }
+    return gm_needs_definite(k, fns, i + 1, ui, depth);
+}
+
+// Do a generic head `gargs` and a specific head `cargs` share a type
+// both instances carry?
+Bool gm_overlap_ok(GK k, Int gen, List(Str) gargs, List(Str) cargs, Int depth) {
+    if (depth > 8) { return true; }
+    GU u = gm_unify_args(gargs, cargs, 0, gu_new(), "", "");
+    if (!u.ok) { return false; }
+    return gm_inst_needs_met_u(k, gen, u, depth);
+}
+
+// Every need in `ns` after substitution is met, or is still open for the
+// copy to resolve.
+Bool gm_needs_open_ok(GK k, List(Str) ns, Int i, GU ui, Int depth) {
+    if (i >= ns.len()) { return true; }
+    if (ns[i] == "") { return gm_needs_open_ok(k, ns, i + 1, ui, depth); }
+    Str nd = gm_norm(gm_subst(ns[i], ui));
+    if (gm_has_var(nd)) { return gm_needs_open_ok(k, ns, i + 1, ui, depth); }
+    if (gm_need_err(k, nd) == "") { return gm_needs_open_ok(k, ns, i + 1, ui, depth); }
+    return false;
+}
+
+// Why no instance applies: the highest-level match, and the need inside
+// its body that the types leave unmet ("" when there is no such match).
+Str gm_inst_reject(GK k, Str b, List(Str) args) {
+    Int best = -1;
+    Int blev = 0;
+    Int bi = gm_inst_best_at(k, b, args, 0, best, blev);
+    if (bi < 0) { return ""; }
+    Str r = gm_inst_reject_need(k, bi, args, b, 0);
+    if (r == "") { return ""; }
+    return "; the instance " + b + "(" + list_join(gm_inst_types(k.g, bi), 0, ", ", "") + ") needs " + r;
+}
+
+Int gm_inst_best_at(GK k, Str b, List(Str) args, Int i, Int best, Int blev) {
+    if (i >= k.gx.insts.len()) { return best; }
+    Int n = k.gx.insts[i];
+    Int lev = k.gx.ilev[i];
+    List(Str) ts = gm_inst_types(k.g, n);
+    Bool hit = lev > blev && k.g.ns[n].text == b && ts.len() == args.len() && gm_unify_args(ts, args, 0, gu_new(), b, b).ok;
+    return gm_inst_best_at(k, b, args, i + 1, if (hit) { n } else { best }, if (hit) { lev } else { blev });
+}
+
+Str gm_inst_reject_need(GK k, Int inst, List(Str) args, Str b, Int depth) {
+    if (depth > 8) { return ""; }
+    GU ui = gm_unify_args(gm_inst_types(k.g, inst), args, 0, gu_new(), b, b);
+    if (!ui.ok) { return ""; }
+    return gm_first_open_need(k, gm_impl_fns(kg_part(k.g.ns[inst].aux, 2)), 0, ui, depth);
+}
+
+Str gm_first_open_need(GK k, List(Str) fns, Int i, GU ui, Int depth) {
+    if (i >= fns.len()) { return ""; }
+    List(Str) ns = gm_need_list(k.gx.needs.get(fns[i]) else { "" });
+    Str r = gm_open_need_at(k, ns, 0, ui, depth);
+    if (r != "") { return r; }
+    return gm_first_open_need(k, fns, i + 1, ui, depth);
+}
+
+Str gm_open_need_at(GK k, List(Str) ns, Int i, GU ui, Int depth) {
+    if (i >= ns.len()) { return ""; }
+    if (ns[i] == "") { return gm_open_need_at(k, ns, i + 1, ui, depth); }
+    Str nd = gm_norm(gm_subst(ns[i], ui));
+    if (gm_has_var(nd)) { return gm_open_need_at(k, ns, i + 1, ui, depth); }
+    if (gm_need_err(k, nd) == "") { return gm_open_need_at(k, ns, i + 1, ui, depth); }
+    return nd;
 }
 
 // ─── Improvement ────────────────────────────────────────────────────
@@ -765,7 +853,10 @@ Str gm_dup_err(GK k, Int i, Int j, Str inst) {
     if (same && gm_inst_key(k.g, a) == gm_inst_key(k.g, b)) { return inst + " is declared more than once; a type has one instance per behavior (pass another ordering with using = f)"; }
     List(Str) ta = gm_inst_types(k.g, a);
     List(Str) tb = gm_inst_types(k.g, b);
-    Bool ov = same && ta.len() == tb.len() && (gm_unify_args(ta, tb, 0, gu_new(), "", "").ok || gm_unify_args(tb, ta, 0, gu_new(), "", "").ok);
+    // A generic head shares every type a specific one names, but an
+    // instance whose own needs do not hold for a type carries none of
+    // them, so the pair overlaps only where both apply.
+    Bool ov = same && ta.len() == tb.len() && (gm_overlap_ok(k, a, ta, tb, 0) || gm_overlap_ok(k, b, tb, ta, 0));
     if (ov) { return "E0225: overlapping instances: " + inst + " and " + k.g.ns[b].text + "(" + kg_part(k.g.ns[b].aux, 1) + ") both cover some type; give each type one instance (no specialization)"; }
     return gm_dup_err(k, i, j + 1, inst);
 }
@@ -970,7 +1061,7 @@ GKT gk_vcall_r(GK k0, Int id, Str verb, Str exp, Str recv) {
             return gk_mcall0(gk_gcall(k, id, ov0, fi, "", 0, false, rty), id);
         }
         Int inst = gm_find_inst(k, g.ns[bd].text, bvals);
-        if (inst < 0) { return gterr(k, "E0226: " + verb + ": no behavior instance " + nd + " (declare " + g.ns[bd].text + "(" + list_join(bvals, 0, ", ", "") + ") = f;)", id); }
+        if (inst < 0) { return gterr(k, "E0226: " + verb + ": no behavior instance " + nd + gm_inst_reject(k, g.ns[bd].text, bvals) + " (declare " + g.ns[bd].text + "(" + list_join(bvals, 0, ", ", "") + ") = f;)", id); }
         Str f = gm_impl_for(g, inst, verb);
         Int fi = ck_fn_index(k.fs, f);
         if (fi < 0) { return gterr(k, verb + ": instance function " + f + " is missing", id); }
@@ -1007,7 +1098,7 @@ GKT gk_vcall_r(GK k0, Int id, Str verb, Str exp, Str recv) {
     Str ov0 = if (uk >= 0) { gk_inst(g, kg_kid(g, uk, 0)) } else { gm_use(k, b) };
     if (ov0 != "") { return gm_vcall_over(k, id, verb, b, bvals, ov0, a); }
     Int inst = gm_find_inst(k, b, bvals);
-    if (inst < 0) { return gterr(k, "E0226: " + verb + ": no behavior instance " + nd + " (declare " + b + "(" + list_join(bvals, 0, ", ", "") + ") = f;)", id); }
+    if (inst < 0) { return gterr(k, "E0226: " + verb + ": no behavior instance " + nd + gm_inst_reject(k, b, bvals) + " (declare " + b + "(" + list_join(bvals, 0, ", ", "") + ") = f;)", id); }
     Str f = gm_impl_for(g, inst, verb);
     Int fi = ck_fn_index(k.fs, f);
     if (fi < 0) { return gterr(k, verb + ": instance function " + f + " is missing", id); }

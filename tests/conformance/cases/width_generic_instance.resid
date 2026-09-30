@@ -1,0 +1,29 @@
+// An instance over a width parameter covers every width its body carries:
+// one declaration serves Int(8) to Int(64), and the widths past that have
+// an instance of their own.
+behavior Carries(T) { Bool carried(); }
+Bool carried_yes() { return true; }
+Carries(Int(8)) = carried_yes;
+Carries(Int(16)) = carried_yes;
+Carries(Int(32)) = carried_yes;
+Carries(Int(64)) = carried_yes;
+
+behavior Enc(F) { Result(F, Str) write_int(F s, Int v); }
+behavior Encode(T, F) { Result(F, Str) enc(T x, F s); }
+
+@needs(Enc(F), Carries(Int(N)))
+Result(F, Str) enc_word(Int(N) x, F s) { return write_int(s, (Int)x); }
+Encode(Int(N), F) = enc_word;
+
+type Out = { Str text; };
+Result(Out, Str) out_write_int(Out s, Int v) { return Ok(Out {.text = f"i{v}"}); }
+Enc(Out) = out_write_int;
+
+Result(Out, Str) one(Int(8) x) { return enc(x, Out {.text = ""}); }
+Result(Out, Str) two(Int(32) x) { return enc(x, Out {.text = ""}); }
+
+Int main() {
+    println(f"{one(i8(7))} {two(i32(70000))}");
+    // A generic body with only @needs(Enc(F)) is covered by the instance.
+    return 0;
+}

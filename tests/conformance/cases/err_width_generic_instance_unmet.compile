@@ -1,0 +1,3 @@
+E0226
+no behavior instance Encode(Int(256),Out)
+the instance Encode(Int(N), F) needs Carries(Int(256))

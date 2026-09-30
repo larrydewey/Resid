@@ -349,7 +349,9 @@ GV gx_cast(GXT ft, Int id, RdE env, GS st) {
     if (e.bad) { return e; }
     GXN o = if (e.ch) { gx_re(e.st, id, [tk, e.r]) } else { gx_n(e.st, id) };
     Str want = rd_norm_ty(ty);
-    if (e.k && rd_is_int_ty(rd_norm_ty(e.ty)) && rd_is_int_ty(want)) { return gx_folded(e.v, want, o.id, true, o.st); }
+    // A conversion of a known integer folds only when the value fits the
+    // target width: one that would trap stays residual, as it would run.
+    if (e.k && rd_is_int_ty(rd_norm_ty(e.ty)) && rd_is_int_ty(want) && rd_int_fits(e.v, want)) { return gx_folded(e.v, want, o.id, true, o.st); }
     return gx_unk(o.id, e.ch, o.st);
 }
 
@@ -656,7 +658,7 @@ GV gx_eblock(GXT ft, Int bx, Int i, RdE env, GS st) {
     Str name = st.g.ns[kid].text;
     GV v = gx_expr(ft, gx_kid(st, kid, 1), env, st);
     if (v.bad) { return v; }
-    Str cty = if (v.k) { rd_coerce(v.ty, ty) } else { "" };
+    Str cty = if (v.k) { rd_coerce_v(v.ty, ty, v.v) } else { "" };
     RdE env2 = if (cty != "") { rd_env_add(env, name, v.v, cty) } else { rd_env_add(env, name, "", "") };
     GV rest = gx_eblock(ft, bx, i + 1, env2, v.st);
     if (rest.bad) { return rest; }
@@ -851,7 +853,7 @@ GV gx_call_user(GXT ft, Int fi, GXA a, Int orig, GS st) {
     // would make the next append copy it).
     GS after = GS {.steps = res.st.steps, .depth = st.depth, .fuel = res.st.fuel, .memo = res.st.memo, .specs = res.st.specs, .nspec = res.st.nspec, .hist = st.hist, .notes = res.st.notes, .g = res.st.g, .dn = res.st.dn, .df = res.st.df, .dr = res.st.dr, .rs = res.st.rs};
     Bool fits = res.st.steps <= rd_max_steps();
-    Str cty = if (res.ret) { rd_coerce(res.rty, rty) } else { "" };
+    Str cty = if (res.ret) { rd_coerce_v(res.rty, rty, res.rv) } else { "" };
     if (!res.ok || !res.ret || res.bad || !fits || cty == "") {
         // Out of budget is not a property of the call: "~" allows a retry.
         GS after1 = if (fits) { gx_st_memo(after, key, "!") } else { gx_st_memo(after, key, "~") };
@@ -875,7 +877,7 @@ GXP gx_sp_empty() {
 
 GXP gx_sp_pat(List(Str) pns, List(Str) pts, GXA a, Str keep, Int i, GXP acc) {
     if (i >= pns.len()) { return acc; }
-    Str cty = if (a.ts[i] == "") { "" } else { rd_coerce(a.ts[i], pts[i]) };
+    Str cty = if (a.ts[i] == "") { "" } else { rd_coerce_v(a.ts[i], pts[i], a.vs[i]) };
     Str lit = if (cty == "") { "" } else { rd_render(a.vs[i], cty) };
     Bool allowed = keep == "" || str_slice(keep, i, i + 1) == "K";
     Str sep = str_from_code(29);
@@ -1165,7 +1167,7 @@ GXR gx_bind(GXT ft, Int blk, Int i, Int id, RdE env, GS st) {
     // now: false is error E0301.
     Int ci = gx_ct_idx(ft.cts, ty, 0);
     GV v = if (ci >= 0 && v0.k) { gx_with_st(v0, gx_ct_check(ft, id, name, ty, ci, v0)) } else { v0 };
-    Str cty = if (v.k) { rd_coerce(v.ty, ty) } else { "" };
+    Str cty = if (v.k) { rd_coerce_v(v.ty, ty, v.v) } else { "" };
     RdE env2 = if (cty != "") { rd_env_add(env, name, v.v, cty) } else { rd_env_add(env, name, "", "") };
     GXR rest = gx_stmts(ft, blk, i + 1, env2, v.st);
     if (rest.bad) { return rest; }
@@ -1182,7 +1184,7 @@ Int gx_ct_idx(List(Str) cts, Str ty, Int i) {
 
 GS gx_ct_check(GXT ft, Int id, Str name, Str ty, Int ci, GV v) {
     List(Str) parts = str_split(ft.cts[ci], str_from_code(31));
-    RdE cenv = rd_env_add(rd_env_empty(), "value", v.v, rd_coerce(v.ty, parts[1]));
+    RdE cenv = rd_env_add(rd_env_empty(), "value", v.v, rd_coerce_v(v.ty, parts[1], v.v));
     GV r = gx_expr(ft, ft.cpred[ci], cenv, v.st);
     if (r.bad || !r.k || r.v != "false") { return r.st; }
     Str prev = r.st.memo.get("__ERR__") else { "" };

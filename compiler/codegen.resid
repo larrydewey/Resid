@@ -3062,6 +3062,27 @@ Str lit_dec_cg(Str text) {
     return text;
 }
 
+// Does a whole integer literal fit an integer type? The literal is
+// within the 64-bit range here (a longer one is left to the conversion
+// path), so its bounds are plain arithmetic.
+Bool int_lit_fits_cg(Str lit, Str t) {
+    Str n = num_norm_cg(t);
+    if (!int_fam(n)) { return false; }
+    Str mag = lit_dec_cg(lit);
+    Bool neg = str_has_prefix(mag, "-");
+    Str digits = if (neg) { str_slice(mag, 1, str_len(mag)) } else { mag };
+    if (str_len(digits) > 18) { return false; }
+    Bool uns = str_has_prefix(n, "UInt");
+    if (uns && neg) { return false; }
+    Int w = ll_width_of(n);
+    if (w >= 64) { return true; }
+    Int half = ((Int)1) << (w - 1);
+    Int v = str_parse_int(digits);
+    if (uns) { return v <= 2 * half - 1; }
+    if (neg) { return v <= half; }
+    return v <= half - 1;
+}
+
 // 2^k as a decimal string.
 Str dec_pow2_cg(Int k, Str acc) {
     if (k <= 0) { return acc; }

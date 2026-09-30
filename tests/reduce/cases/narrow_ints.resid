@@ -1,0 +1,22 @@
+// Values of every integer width reduce: a narrow literal is its own
+// constant, an unsigned one is known too, and a width read in a
+// width-generic body folds per copy.
+Int(8) lo8() { Int(8) h = 1; return h - 2; }
+Int(8) sum8() { Int(8) a = 3; Int(8) b = 4; Int(8) c = a + b; return c; }
+UInt(16) maxu16() { UInt(16) m = 0; return m + 65535; }
+UInt(8) wide_shift() { UInt(8) h = 1; return h << 9; }
+Str name_u16() { UInt(16) n = 16; return f"UInt({n})"; }
+Str name_i8() { Int(8) n = 8; return f"Int({n})"; }
+Int(16) from_literal() { return 300; }
+Int(32) narrowed() { Int v = 100000; return (Int(32))v; }
+Int main() {
+    println(f"{lo8()}");
+    println(f"{sum8()}");
+    println(f"{maxu16()}");
+    println(f"{wide_shift()}");
+    println(f"{name_u16()}");
+    println(f"{name_i8()}");
+    println(f"{from_literal()}");
+    println(f"{narrowed()}");
+    return 0;
+}

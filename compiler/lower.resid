@@ -963,7 +963,13 @@ GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(S
 // cg_unary's cast `(T) e`.
 GT lw_cast(LW w, Int id, List(Str) env, GT c) {
     Str to = lw_text(w, lw_kid(w, id, 0));
-    GT inner = lw_expr(w, lw_kid(w, id, 1), env, c);
+    Int in = lw_kid(w, id, 1);
+    // A whole literal that fits is the constant itself: there is nothing
+    // to convert and nothing to check.
+    if (int_fam(num_norm_cg(to)) && lw_bare_int(w, in) && int_lit_fits_cg(w.g.ns[in].text, to)) {
+        return lw_with(c, lit_dec_cg(w.g.ns[in].text), to, c.lines, c.tmp);
+    }
+    GT inner = lw_expr(w, in, env, c);
     if (inner.err != "") { return inner; }
     if (lv_is(to)) { return lv_cast(inner, to); }
     if (is_dec_cg(to) || is_dec_cg(inner.ty)) { return widen_val(inner, to); }

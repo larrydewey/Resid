@@ -98,30 +98,57 @@ pub Str rd_join(List(Str) xs, Int i, Str sep, Str acc) {
 
 pub Str rd_norm_ty(Str t) {
     if (t == "Int(64)") { return "Int"; }
+    if (t == "UInt(64)") { return "UInt"; }
     if (!str_contains(t, "(")) { return t; }
     return str_replace(t, "Int(64)", "Int");
 }
 
-// Signed integer types the evaluator carries. Values are always within
-// the 64-bit range; the type records the generator's width for them.
-pub Bool rd_is_int_ty(Str t) {
-    if (t == "Int") { return true; }
-    if (t == "Int(128)") { return true; }
-    if (t == "Int(256)") { return true; }
-    if (t == "Int(512)") { return true; }
-    return false;
+// ─── Integer types ───────────────────────────────────────────────
+//
+// The whole family is carried: Int and UInt at every width. A value is
+// always within the 64-bit range, so the width a type names says how
+// much of it may be relied on, and a value that does not fit its type
+// is not known (rd_int_fits).
+
+// "Int" or "UInt" for an integer type name; "" for anything else.
+pub Str rd_int_head(Str t) {
+    if (t == "Int" || t == "UInt") { return t; }
+    if (!str_ends_with(t, ")")) { return ""; }
+    if (str_starts_with(t, "Int(")) { return "Int"; }
+    if (str_starts_with(t, "UInt(")) { return "UInt"; }
+    return "";
 }
+
+pub Bool rd_is_int_ty(Str t) { return rd_int_head(t) != ""; }
+
+pub Bool rd_int_signed(Str t) { return rd_int_head(t) == "Int"; }
 
 Int rd_iw(Str t) {
-    if (t == "Int(128)") { return 128; }
-    if (t == "Int(256)") { return 256; }
-    if (t == "Int(512)") { return 512; }
-    return 64;
+    Str h = rd_int_head(t);
+    if (h == "") { return 0; }
+    Str n = rd_norm_ty(t);
+    if (n == "Int" || n == "UInt") { return 64; }
+    Int skip = if (h == "UInt") { 5 } else { 4 };
+    return str_parse_int(str_slice(n, skip, str_len(n) - 1));
 }
 
-Str rd_ity(Int w) {
-    if (w <= 64) { return "Int"; }
-    return "Int(" + rd_itoa(w) + ")";
+Str rd_ity(Str head, Int w) {
+    if (w == 64) { return head; }
+    return head + "(" + rd_itoa(w) + ")";
+}
+
+// Does a known integer value's text fit an integer type? A width of 64
+// bits or more carries every value the evaluator holds.
+pub Bool rd_int_fits(Str v, Str t) {
+    Str h = rd_int_head(t);
+    if (h == "") { return false; }
+    Bool neg = str_starts_with(v, "-");
+    if (h == "UInt") { return !neg; }
+    Int w = rd_iw(t);
+    if (w >= 64) { return true; }
+    Int x = rd_atoi(v);
+    Int half = ((Int)1) << (w - 1);
+    return if (neg) { x >= 0 - half } else { x < half };
 }
 
 // Inner type of "Head(T)" ("" when `t` is not that constructor).
@@ -137,14 +164,31 @@ pub Str rd_inner(Str t, Str head) {
 // (binding, parameter, return). "" when the value cannot be carried.
 // Composite values are built only by the evaluator itself, so their type
 // strings are exact; an empty list / None literal adopts the slot's type.
+// An integer only crosses a width or a signedness by widening: narrowing
+// is a checked conversion the program writes, not a flow this decides.
 pub Str rd_coerce(Str have, Str want) {
     Str h = rd_norm_ty(have);
     Str w = rd_norm_ty(want);
     if (h == "" || w == "") { return ""; }
     if (h == w) { return w; }
-    if (rd_is_int_ty(h) && rd_is_int_ty(w)) { return w; }
+    if (rd_is_int_ty(h) && rd_is_int_ty(w)) {
+        if (rd_int_signed(h) != rd_int_signed(w)) { return ""; }
+        if (rd_iw(w) < rd_iw(h)) { return ""; }
+        return w;
+    }
     if (h == "List(?)" && str_starts_with(w, "List(")) { return w; }
     if (h == "Option(_)" && str_starts_with(w, "Option(")) { return w; }
+    return "";
+}
+
+// As rd_coerce, where the value's text is at hand: a value that fits a
+// narrower width, or a non-negative one in an unsigned slot, flows in.
+pub Str rd_coerce_v(Str have, Str want, Str v) {
+    Str c = rd_coerce(have, want);
+    if (c != "") { return c; }
+    Str h = rd_norm_ty(have);
+    Str w = rd_norm_ty(want);
+    if (rd_is_int_ty(h) && rd_is_int_ty(w) && rd_int_fits(v, w)) { return w; }
     return "";
 }
 
@@ -437,47 +481,48 @@ Bool rd_shift_ok(Int b) {
     return true;
 }
 
-RdV rd_fold_int(Str op, Int a, Int b, Str resty, Str orig, Int pos, RdS st) {
-    Bool wide = resty != "Int";
-    if (op == "+") {
-        RdN x = rd_add(a, b);
-        if (!x.ok) { return rd_unk(orig, true, pos, st); }
-        return rd_folded(rd_itoa(x.v), resty, orig, true, pos, st);
-    }
-    if (op == "-") {
-        RdN x2 = rd_sub(a, b);
-        if (!x2.ok) { return rd_unk(orig, true, pos, st); }
-        return rd_folded(rd_itoa(x2.v), resty, orig, true, pos, st);
-    }
-    if (op == "*") {
-        RdN x3 = rd_mul(a, b);
-        if (!x3.ok) { return rd_unk(orig, true, pos, st); }
-        return rd_folded(rd_itoa(x3.v), resty, orig, true, pos, st);
-    }
-    if (op == "/" || op == "%") {
-        RdN x4 = rd_div(a, b, op == "%");
-        if (!x4.ok) { return rd_unk(orig, true, pos, st); }
-        return rd_folded(rd_itoa(x4.v), resty, orig, true, pos, st);
-    }
+// A folded integer result, when the value stays inside the result type:
+// an operation that would overflow or trap stays residual, which is what
+// the code generator would leave for it.
+RdV rd_fold_fit(RdN x, Str resty, Str orig, Int pos, RdS st) {
+    if (!x.ok) { return rd_unk(orig, true, pos, st); }
+    Str t = rd_itoa(x.v);
+    if (!rd_int_fits(t, resty)) { return rd_unk(orig, true, pos, st); }
+    return rd_folded(t, resty, orig, true, pos, st);
+}
+
+RdV rd_fold_cmp(Str op, Bool b, Str orig, Int pos, RdS st) { return rd_folded(rd_bool(b), "Bool", orig, true, pos, st); }
+
+// `lw` and `rw` are the operand widths: a shift folds at the left one's
+// width, and a count that reaches it shifts the value out (spec §6.1).
+RdV rd_fold_int(Str op, Int a, Int b, Str resty, Int lw, Int rw, Str orig, Int pos, RdS st) {
+    Bool wide = rd_iw(resty) > 64;
+    Bool unsigned = !rd_int_signed(resty);
+    if (unsigned && (a < 0 || b < 0)) { return rd_unk(orig, true, pos, st); }
+    if (op == "+") { return rd_fold_fit(rd_add(a, b), resty, orig, pos, st); }
+    if (op == "-") { return rd_fold_fit(rd_sub(a, b), resty, orig, pos, st); }
+    if (op == "*") { return rd_fold_fit(rd_mul(a, b), resty, orig, pos, st); }
+    if (op == "/" || op == "%") { return rd_fold_fit(rd_div(a, b, op == "%"), resty, orig, pos, st); }
     if (op == "<<") {
         if (wide || !rd_shift_ok(b)) { return rd_unk(orig, true, pos, st); }
-        return rd_folded(rd_itoa(a << b), resty, orig, true, pos, st);
+        Int sh = if (b >= lw) { 0 } else { a << b };
+        return rd_fold_fit(rd_n(true, sh), resty, orig, pos, st);
     }
     if (op == ">>") {
         // Arithmetic shift, built from shifts of non-negative values only.
-        if (!rd_shift_ok(b)) { return rd_unk(orig, true, pos, st); }
-        Int sh = if (a < 0) { 0 - ((0 - (a + 1)) >> b) - 1 } else { a >> b };
-        return rd_folded(rd_itoa(sh), resty, orig, true, pos, st);
+        if (wide || !rd_shift_ok(b)) { return rd_unk(orig, true, pos, st); }
+        Int sh = if (b >= lw) { if (a < 0) { 0 - 1 } else { 0 } } else { if (a < 0) { 0 - ((0 - (a + 1)) >> b) - 1 } else { a >> b } };
+        return rd_fold_fit(rd_n(true, sh), resty, orig, pos, st);
     }
-    if (op == "&") { return rd_folded(rd_itoa(a & b), resty, orig, true, pos, st); }
-    if (op == "|") { return rd_folded(rd_itoa(a | b), resty, orig, true, pos, st); }
-    if (op == "^") { return rd_folded(rd_itoa(a ^ b), resty, orig, true, pos, st); }
-    if (op == "<") { return rd_folded(rd_bool(a < b), "Bool", orig, true, pos, st); }
-    if (op == "<=") { return rd_folded(rd_bool(a <= b), "Bool", orig, true, pos, st); }
-    if (op == ">") { return rd_folded(rd_bool(a > b), "Bool", orig, true, pos, st); }
-    if (op == ">=") { return rd_folded(rd_bool(a >= b), "Bool", orig, true, pos, st); }
-    if (op == "==") { return rd_folded(rd_bool(a == b), "Bool", orig, true, pos, st); }
-    if (op == "!=") { return rd_folded(rd_bool(a != b), "Bool", orig, true, pos, st); }
+    if (op == "&") { return rd_fold_fit(rd_n(true, a & b), resty, orig, pos, st); }
+    if (op == "|") { return rd_fold_fit(rd_n(true, a | b), resty, orig, pos, st); }
+    if (op == "^") { return rd_fold_fit(rd_n(true, a ^ b), resty, orig, pos, st); }
+    if (op == "<") { return rd_fold_cmp(op, a < b, orig, pos, st); }
+    if (op == "<=") { return rd_fold_cmp(op, a <= b, orig, pos, st); }
+    if (op == ">") { return rd_fold_cmp(op, a > b, orig, pos, st); }
+    if (op == ">=") { return rd_fold_cmp(op, a >= b, orig, pos, st); }
+    if (op == "==") { return rd_fold_cmp(op, a == b, orig, pos, st); }
+    if (op == "!=") { return rd_fold_cmp(op, a != b, orig, pos, st); }
     return rd_unk(orig, true, pos, st);
 }
 
@@ -509,10 +554,22 @@ pub RdV rd_fold(Str op, RdV l, RdV r, Str orig, Int pos, RdS st) {
         return rd_unk(orig, true, pos, st);
     }
     if (rd_is_int_ty(lt) && rd_is_int_ty(rt)) {
+        // An integer literal takes the type of the operand it meets, so a
+        // plain Int beside a UInt is a literal that becomes one (any
+        // other mix the checker has already refused). The fold follows
+        // it, and a value that does not fit stays residual.
+        if (rd_int_head(lt) != rd_int_head(rt)) {
+            Str ot = if (lt == "Int") { rt } else { lt };
+            Int ow = rd_iw(ot);
+            Int lw = if (lt == "Int") { ow } else { rd_iw(lt) };
+            Int rw = if (lt == "Int") { rd_iw(rt) } else { ow };
+            Int wm = if (lw > rw) { lw } else { rw };
+            return rd_fold_int(op, rd_atoi(l.v), rd_atoi(r.v), rd_ity(rd_int_head(ot), wm), lw, rw, orig, pos, st);
+        }
         Int lw = rd_iw(lt);
         Int rw = rd_iw(rt);
         Int wmax = if (lw > rw) { lw } else { rw };
-        return rd_fold_int(op, rd_atoi(l.v), rd_atoi(r.v), rd_ity(wmax), orig, pos, st);
+        return rd_fold_int(op, rd_atoi(l.v), rd_atoi(r.v), rd_ity(rd_int_head(lt), wmax), lw, rw, orig, pos, st);
     }
     return rd_unk(orig, true, pos, st);
 }
@@ -578,7 +635,7 @@ pub List(Str) rd_field_order(List(Str) dfs, List(Str) nvs, List(Str) nts, Int i,
     Int nsep = str_find_char(nv, 30, 0);
     Int ns1 = nsep + 1;
     Str val = str_slice(nv, ns1, str_len(nv));
-    if (rd_coerce(nts[j], fty) == "") { return acc; }
+    if (rd_coerce_v(nts[j], fty, val) == "") { return acc; }
     Int k = i + 1;
     return rd_field_order(dfs, nvs, nts, k, acc.concat([val]));
 }
@@ -738,7 +795,7 @@ pub RdE rd_bind_params(List(Str) pns, List(Str) pts, RdA a, Int i, RdE env) {
     List(Str) ts = a.ts;
     List(Str) vs = a.vs;
     if (i >= pns.len()) { return env; }
-    Str ty = rd_coerce(ts[i], pts[i]);
+    Str ty = rd_coerce_v(ts[i], pts[i], vs[i]);
     if (ty == "") { return RdE {.ns = [""], .vs = [], .ts = []}; }
     RdE e2 = rd_env_add(env, pns[i], vs[i], ty);
     Int k = i + 1;

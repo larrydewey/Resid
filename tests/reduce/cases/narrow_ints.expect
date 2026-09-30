@@ -1,0 +1,14 @@
+has: println("-1");
+has: println("7");
+has: println("65535");
+has: println("0");
+has: println("UInt(16)");
+has: println("Int(8)");
+lacks: lo8()
+lacks: sum8()
+lacks: maxu16()
+lacks: wide_shift()
+lacks: name_u16()
+lacks: name_i8()
+lacks: from_literal()
+lacks: narrowed()
