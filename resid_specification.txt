@@ -1743,6 +1743,18 @@ can be traced after the build.
 The implementation shall eliminate every residual that
 is dischargeable under current knowledge and capabilities.
 
+Integer reduction works at the width the operands are
+written at: a shift is a bit operation at its left
+operand's width (§6.1), a literal takes the type of the
+operand beside it (§6.1a), and the wrapping, saturating
+and checked families (§6.5) reduce on known operands of
+one integer type. What the evaluator cannot carry stays
+residual: a bound past 64 bits (so Bounded's bound for
+Int(128) is a call, not a constant), the sum of two
+64-bit values, an operation that would overflow or trap,
+and a complement above the carried range. Reduced and
+unreduced builds therefore agree, value for value.
+
 Specialization is part of the reduction relation: a call
 whose arguments are partly known is replaced by a call to a
 copy of the callee reduced under the known arguments (only

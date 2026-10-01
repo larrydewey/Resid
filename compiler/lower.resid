@@ -2204,6 +2204,13 @@ GT lw_un(LW w, Int id, List(Str) env, GT c) {
 // integer literal; && / ||, `?` and `else` reset it.
 Bool lw_bare_int(LW w, Int id) { return lw_kind(w, id) == "lit" && w.g.ns[id].aux == "int"; }
 
+// Does the literal at `id` fit `t`? A chain of literals is read as the
+// checker typed it, which it has already made in range.
+Bool lw_lit_fits(LW w, Int id, Str t) {
+    if (lw_bare_int(w, id)) { return int_lit_fits_cg(w.g.ns[id].text, t); }
+    return true;
+}
+
 Bool lw_lit_flag(LW w, Int id, Bool start_ok) {
     Str k = lw_kind(w, id);
     if (k == "bin") {
@@ -2230,8 +2237,12 @@ GT lw_bin(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     Bool lhs_lit = lw_lit_flag(w, l, start_ok);
     Bool rlit = lw_bare_int(w, r);
     Bool shift = op == "<<" || op == ">>";
-    Bool adopt_l = lhs_lit && !rlit && !shift && int_fam(more.ty);
-    Bool adopt_r = rlit && !lhs_lit && !shift && int_fam(lhs.ty);
+    // A literal takes the type of the operand it is written beside
+    // (§6.1a), and only when it is inside that type's range: the
+    // checker rejects a literal that is not, so one left here by a
+    // reduction is read at the wider type rather than narrowed into it.
+    Bool adopt_l = lhs_lit && !rlit && !shift && int_fam(more.ty) && lw_lit_fits(w, l, more.ty);
+    Bool adopt_r = rlit && !lhs_lit && !shift && int_fam(lhs.ty) && lw_lit_fits(w, r, lhs.ty);
     GT lhs2 = if (adopt_l) { gt_retype(lhs, more.ty) } else { lhs };
     GT more2 = if (adopt_r) { gt_retype(more, lhs.ty) } else { more };
     // Range facts discharge the overflow / division check (spec §3.2a).

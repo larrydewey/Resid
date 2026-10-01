@@ -1,0 +1,26 @@
+// The explicit arithmetic families reduce at the width they are written
+// at: wrapping wraps, saturating stops at the bound, checked stays when
+// it would trap. A shift is a bit operation at the left operand's
+// width, and the prelude's Bounded folds where its bound is a value the
+// evaluator carries.
+Int main() {
+    Int(8) a = 100;
+    Int(8) b = 100;
+    Int(8) w = wrapping_add(a, b);
+    Int(8) s = saturating_add(a, b);
+    Int(8) c = checked_add(a, (Int(8))20);
+    Int(8) m = wrapping_mul((Int(8))64, (Int(8))2);
+    Int(8) d = wrapping_sub((Int(8))-128, (Int(8))1);
+    UInt(8) u = 250;
+    UInt(8) uw = wrapping_uadd(u, (UInt(8))10);
+    Int(8) sh = (Int(8))64 << 1;
+    UInt(8) ush = (UInt(8))128 << 1;
+    Int(8) sarlike = (Int(8))-64 >> 2;
+    println(f"{w} {s} {c} {m} {d} {uw} {sh} {ush} {sarlike}");
+    Int(8) bmin = min();
+    Int(16) bmax = max();
+    UInt(16) umin = min();
+    UInt(32) umax = max();
+    println(f"{bmin} {bmax} {umin} {umax}");
+    return 0;
+}

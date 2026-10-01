@@ -1,0 +1,33 @@
+// A narrow value beside a wider one keeps the wider one's type: the
+// literal beside it is read at the width the operation is done in, never
+// narrowed into the narrow one, and a literal of nineteen digits is still
+// read as 64 bits so the arithmetic is checked there.
+Int mixed() {
+    Int(8) a = 0;
+    Int y = 32767;
+    return a + y;
+}
+
+Int mixed_first() {
+    Int z = 32767;
+    Int(8) b = 1;
+    return z + b;
+}
+
+Int wide_lit() {
+    Int(8) c = 0;
+    Int w = 9223372036854775801;
+    return c + w;
+}
+
+Int min_lit() {
+    Int(8) d = 0;
+    Int m = -9223372036854775807;
+    return d - m;
+}
+
+Int main() {
+    println(f"{mixed()} {mixed_first()}");
+    println(f"{wide_lit()} {min_lit()}");
+    return 0;
+}

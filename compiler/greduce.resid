@@ -310,8 +310,7 @@ GV gx_parenv(GXT ft, Int id, RdE env, GS st) {
 
 GV gx_un(GXT ft, Int id, RdE env, GS st) {
     Str op = st.g.ns[id].text;
-    // `+e` / `~e` are not operands the text reducer parses.
-    if (op != "!" && op != "-") { return gx_badv(st); }
+    if (op != "!" && op != "-" && op != "+" && op != "~") { return gx_badv(st); }
     GV e = gx_expr(ft, gx_kid(st, id, 0), env, st);
     if (e.bad) { return e; }
     GXN nr = if (e.ch) { gx_re(e.st, id, [e.r]) } else { gx_n(e.st, id) };
@@ -322,10 +321,24 @@ GV gx_un(GXT ft, Int id, RdE env, GS st) {
         }
         return gx_unk(nr.id, e.ch, nr.st);
     }
+    // `+e` is e.
+    if (op == "+") { return gx_with_r(gx_with_st(e, nr.st), nr.id, e.ch); }
     if (e.k && rd_is_int_ty(e.ty)) {
         Int iv = rd_atoi(e.v);
+        if (op == "~") {
+            // The complement is a width's worth of bits: above the
+            // values the evaluator carries it is not one, so it stays
+            // residual there.
+            if (rd_iw(e.ty) > 64 || iv == rd_i64_min()) { return gx_unk(nr.id, e.ch, nr.st); }
+            Int comp = wrapping_sub(wrapping_sub(0, iv), 1);
+            Str ct = rd_bits_ty(comp, e.ty);
+            if (ct == "") { return gx_unk(nr.id, e.ch, nr.st); }
+            return gx_folded(ct, e.ty, nr.id, true, nr.st);
+        }
+        // A negation that does not fit is a trap, and stays one.
         if (iv == rd_i64_min()) { return gx_unk(nr.id, e.ch, nr.st); }
         Int neg = 0 - iv;
+        if (!rd_int_fits(rd_itoa(neg), e.ty)) { return gx_unk(nr.id, e.ch, nr.st); }
         // A negated literal is already a literal: keep its text.
         if (!e.ch) { return gx_kv(rd_itoa(neg), e.ty, id, false, nr.st); }
         return gx_folded(rd_itoa(neg), e.ty, nr.id, true, nr.st);
@@ -376,11 +389,29 @@ GXN gx_pbin(GS st, Str op, Int l, Int r, Int like) {
     return gx_paren(b.st, b.id, like);
 }
 
+// Is the expression at `id` written in integer literals only: a whole
+// literal, or arithmetic over them, which the code generator reads as one
+// literal (§6.1a). Read from the graph rather than from the reduced node,
+// since a folded value keeps its own node inside a call.
+Bool gx_lit_expr(GS st, Int id) {
+    Str k = gx_kind(st, id);
+    if (k == "lit") { return st.g.ns[id].aux == "int"; }
+    if (k == "paren") { return gx_lit_expr(st, gx_kid(st, id, 0)); }
+    if (k != "bin") { return false; }
+    Str op = st.g.ns[id].text;
+    if (op != "+" && op != "-" && op != "*" && op != "/" && op != "%") { return false; }
+    return gx_lit_expr(st, gx_kid(st, id, 0)) && gx_lit_expr(st, gx_kid(st, id, 1));
+}
+
 GV gx_apply(GXT ft, Str op, Int id, GV l, GV r) {
     Bool och = l.ch || r.ch;
     GXN rb = if (och) { gx_pbin(r.st, op, l.r, r.r, id) } else { gx_n(r.st, id) };
     if (l.k && r.k) {
-        RdV x = rd_fold(op, gx_rdv(l, ft.rds), gx_rdv(r, ft.rds), "", 0, ft.rds);
+        // A literal operand is written where it is read, so it takes the
+        // type of the operand beside it; a named value does not.
+        Bool llit = gx_lit_expr(r.st, l.r);
+        Bool rlit = gx_lit_expr(r.st, r.r);
+        RdV x = rd_fold(op, gx_rdv(l, ft.rds), gx_rdv(r, ft.rds), llit, rlit, "", 0, ft.rds);
         if (x.k) { return gx_folded_r(x.v, x.ty, rb.id, true, rb.st, "select"); }
         return gx_unk(rb.id, true, rb.st);
     }

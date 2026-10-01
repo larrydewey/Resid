@@ -1,0 +1,10 @@
+has: println("-56 127 120 -128 127 4 -128 0 -16");
+has: println("-128 32767 0 4294967295");
+lacks: wrapping_add
+lacks: saturating_add
+lacks: checked_add
+lacks: wrapping_mul
+lacks: wrapping_sub
+lacks: wrapping_uadd
+lacks: min()
+lacks: max()
