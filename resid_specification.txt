@@ -1122,10 +1122,12 @@ only where `main` (or a `test` block) declares it:
 
 @requires entries take the same modes as sandboxes; a
 read-only grant does not cover a write (filesystem write
-verbs, process.run). Families:
+verbs, process.run, clock.sleep_ns). Families:
 
   filesystem, environment, args, process   (providers)
+  clock                                   (provider)
   network      TCP builtins
+  terminal     TTY and raw-mode builtins
   process      also the native debugger builtins
 
 Writing to stdout/stderr, reading stdin and OS randomness
@@ -1574,8 +1576,8 @@ Numeric operators obey the interoperability rules of §6.
 32. STANDARD LIBRARY (v1)
 ==================================================
 
-Trusted providers: filesystem, environment, git, args, process
-(all volatile by default).
+Trusted providers: filesystem, environment, git, args, process,
+clock (all volatile by default).
 
 filesystem verbs: read_all, write_all, read_bytes, write_bytes,
 write_secret (write; owner-only mode 0600, no symlink
@@ -1583,6 +1585,26 @@ follow), append_bytes (write), write_hex and append_hex (write; the
 bytes a hex string spells), sha256 (a file's SHA-256 as 32 bytes,
 computed without materializing its contents), exists, is_dir,
 list_dir, create_dir (write), open, read_handle, close.
+
+clock verbs: now_ns (nanoseconds since the Unix epoch, as one
+Int, so 1677-09-21 to 2262-04-11), now_sec (whole seconds,
+over the whole range of Int), monotonic_ns (nanoseconds from
+an unspecified monotonic origin, immune to a wall-clock step),
+sleep_ns (write; returns the part still unslept when a signal
+interrupted it). Reading the clock is covered by a read-only
+grant; sleeping is not.
+
+Date and time: lib/calendar.resid (proleptic Gregorian
+arithmetic), lib/duration.resid (fixed-length spans),
+lib/instant.resid (points on the timeline, and the UTC leap
+second table), lib/zone.resid (TZif and POSIX TZ strings,
+including ambiguous and non-existent local times),
+lib/datetime.resid (strftime, ISO 8601 and RFC 3339), and
+lib/clock.resid (the only module needing a `clock` grant).
+Everything but the last needs no capability at all:
+converting, formatting and zone-resolving a timestamp you
+already hold is arithmetic, and only asking what time it *is*
+is an effect.
 
 Linear builders (see §45): StrBuf, ListBuf(T).
 

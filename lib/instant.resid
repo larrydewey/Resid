@@ -1,0 +1,247 @@
+// --- lib/instant.resid - a point on the timeline -----------------------
+// An Instant is a moment: seconds since 1970-01-01T00:00:00Z plus
+// nanoseconds, the same normalized shape as a Span (lib/duration.resid)
+// but a different idea -- a length is not a moment. Converting between
+// them is explicit, instant_span / instant_of_span.
+//
+// Nothing here reads the clock. Deciding *what time it is now* is
+// lib/clock.resid and needs the `clock` capability; knowing what a
+// timestamp means, converting it, and comparing it needs no grant at all.
+//
+// POSIX time has no leap seconds, and neither does an Instant: the second
+// before a leap is followed directly by the second after it. The leap
+// table is still here, in full, because "TAI - UTC" is part of what a
+// complete date and time library knows; see leap_seconds_count and
+// instant_to_tai.
+
+import "calendar.resid";
+import "duration.resid";
+
+// A moment on the UTC timeline, normalized: 0 <= nanoseconds < 1e9.
+type Instant = { Int seconds; Int nanoseconds; };
+
+// -- Constructing --------------------------------------------------------
+
+pub Instant instant_zero() { return Instant {.seconds = 0, .nanoseconds = 0}; }
+
+pub Instant instant_of_seconds(Int s) { return Instant {.seconds = s, .nanoseconds = 0}; }
+
+pub Instant instant_of_nanos(Int n) { return floor_to_instant(0, n); }
+
+pub Instant floor_to_instant(Int sec, Int ns) {
+    Span s = floor_to_span(sec, ns);
+    return Instant {.seconds = s.seconds, .nanoseconds = s.nanoseconds};
+}
+
+pub Instant instant_of_span(Span s) {
+    return Instant {.seconds = s.seconds, .nanoseconds = s.nanoseconds};
+}
+
+pub Span instant_span(Instant i) { return Span {.seconds = i.seconds, .nanoseconds = i.nanoseconds}; }
+
+// The moment `n` units after the epoch.
+pub Instant instant_after(Unit u, Int n) { return instant_of_span(span_of(u, n)); }
+
+// -- Inspection ----------------------------------------------------------
+
+pub Int instant_compare(Instant a, Instant b) { return span_compare(instant_span(a), instant_span(b)); }
+
+pub Bool instant_eq(Instant a, Instant b) { return span_eq(instant_span(a), instant_span(b)); }
+
+pub Bool instant_lt(Instant a, Instant b) { return instant_compare(a, b) < 0; }
+
+pub Bool instant_le(Instant a, Instant b) { return instant_compare(a, b) <= 0; }
+
+pub Bool instant_gt(Instant a, Instant b) { return instant_compare(a, b) > 0; }
+
+pub Bool instant_ge(Instant a, Instant b) { return instant_compare(a, b) >= 0; }
+
+// The total in nanoseconds. Exact only inside ~292 years of the epoch.
+pub Int instant_total_nanos(Instant i) { return span_total_nanos(instant_span(i)); }
+
+// -- Arithmetic ----------------------------------------------------------
+// Adding a Span is the only thing that moves an Instant; the calendar
+// does not get a say, because a moment plus a fixed length is another
+// moment. For "same wall-clock time, next month", go through
+// cal_add_months on a Date instead -- that is a different operation.
+
+pub Instant instant_add(Instant i, Span d) { return instant_of_span(span_add(instant_span(i), d)); }
+
+pub Instant instant_sub(Instant i, Span d) { return instant_of_span(span_sub(instant_span(i), d)); }
+
+pub Span instant_diff(Instant a, Instant b) { return span_sub(instant_span(a), instant_span(b)); }
+
+// How long from `a` to `b`, as a count of `u`.
+pub Int instant_elapsed(Instant a, Instant b, Unit u) { return span_count(instant_diff(a, b), u); }
+
+// -- Rounding ------------------------------------------------------------
+// Every unit here divides an epoch day exactly, so snapping the offset
+// from the epoch is the same as snapping the instant: flooring to days
+// lands on midnight UTC, flooring to hours on the hour.
+
+pub Instant instant_floor_to(Instant i, Unit u) { return instant_of_span(span_floor_to(instant_span(i), u)); }
+
+pub Instant instant_ceil_to(Instant i, Unit u) { return instant_of_span(span_ceil_to(instant_span(i), u)); }
+
+pub Instant instant_round_to(Instant i, Unit u) { return instant_of_span(span_round_to(instant_span(i), u)); }
+
+// The next midnight UTC strictly after `i`, or `i` itself when it is
+// already one.
+pub Instant instant_next_day(Instant i) { return instant_ceil_to(i, Days); }
+
+pub Instant instant_prev_day(Instant i) { return instant_floor_to(i, Days); }
+
+// -- Civil time in UTC ---------------------------------------------------
+
+// The day number and time of day of an instant, in UTC.
+pub DateTime instant_to_utc(Instant i) {
+    Int z = cal_floor_div(i.seconds, cal_sec_per_day());
+    Int rem = cal_floor_mod(i.seconds, cal_sec_per_day());
+    return DateTime {.date = cal_civil_from_days(z), .time = cal_time_of_seconds(rem, i.nanoseconds)};
+}
+
+pub Int instant_day_number(Instant i) { return cal_floor_div(i.seconds, cal_sec_per_day()); }
+
+pub Int instant_seconds_of_day(Instant i) { return cal_floor_mod(i.seconds, cal_sec_per_day()); }
+
+// The UTC moment a civil date and time names. The fields are taken as
+// given, so an invalid date silently normalizes through the day number;
+// check with cal_is_valid_datetime first when the input is not yours.
+pub Instant instant_from_utc(DateTime x) {
+    Int z = cal_days_from_date(x.date);
+    Int secs = z * cal_sec_per_day();
+    Int sod = cal_seconds_of_day(x.time);
+    return floor_to_instant(secs + sod, x.time.nanosecond);
+}
+
+pub Instant instant_from_civil(Date d, Time t) { return instant_from_utc(DateTime {.date = d, .time = t}); }
+
+// -- Leap seconds --------------------------------------------------------
+// TAI ran continuously from 1972-01-01 while UTC was stepped forward by a
+// second at each leap, so TAI - UTC is a growing offset: 10 s at the
+// start, 37 s since 2015-07-01, with none since. Every entry is a
+// January or a July 1st at 00:00 UTC, so the table is two short lists
+// rather than 28 magic numbers.
+//
+// The table is exposed, not hidden, because timekeeping code has to be
+// able to ask "was that a leap second" -- and because a table that has
+// silently gone stale is worse than none. Nothing predicts future leaps;
+// none have been announced.
+
+pub Int leap_seconds_count() { return 28; }
+
+// Year of leap entry `i`, 0-based, in ascending order.
+pub List(Int) leap_years() {
+    return [1972, 1972, 1973, 1974, 1975, 1976, 1977, 1977, 1978, 1979, 1980, 1981, 1982, 1983, 1985, 1988, 1990, 1991, 1992, 1993, 1994, 1996, 1997, 1999, 2006, 2009, 2012, 2015];
+}
+
+// Month of leap entry `i`: every one is 1 (January) or 7 (July).
+pub List(Int) leap_months() {
+    return [1, 7, 1, 1, 1, 1, 1, 7, 1, 1, 1, 7, 7, 7, 7, 1, 1, 1, 7, 7, 7, 1, 7, 1, 1, 1, 7, 7];
+}
+
+// TAI - UTC once leap entry `i` is in effect: 10 for the first, 37 for
+// the last.
+pub Int leap_offset_of(Int i) { return 10 + i; }
+
+// The UTC second at which entry `i` took effect.
+pub Int leap_utc_at(Int i) {
+    List(Int) ys = leap_years();
+    List(Int) ms = leap_months();
+    if (i < 0 || i >= ys.len()) { return 0; }
+    Int z = cal_days_from_civil(ys[i], ms[i], 1);
+    return z * cal_sec_per_day();
+}
+
+// The TAI second at which entry `i` took effect: the UTC boundary plus
+// whatever offset was already running.
+pub Int leap_tai_at(Int i) { return leap_utc_at(i) + leap_offset_before(i); }
+
+// TAI - UTC strictly before entry `i`: 0 for the first (UTC was stepped
+// to TAI then) and 10 + i - 1 after that.
+pub Int leap_offset_before(Int i) { return if (i <= 0) { 0 } else { 10 + i - 1 }; }
+
+// The largest entry whose UTC second is at or before `t`, or -1.
+Int leap_search_utc(Int lo, Int hi, Int t, Int found) {
+    if (lo >= hi) { return found; }
+    Int mid = lo + (hi - lo) / 2;
+    if (leap_utc_at(mid) <= t) { return leap_search_utc(mid + 1, hi, t, mid); }
+    return leap_search_utc(lo, mid, t, found);
+}
+
+// TAI - UTC in effect at UTC second `t`.
+pub Int leap_offset_at_utc(Int t) {
+    Int f = leap_search_utc(0, leap_seconds_count(), t, 0 - 1);
+    return if (f < 0) { 0 } else { leap_offset_of(f) };
+}
+
+// The largest entry whose TAI second is strictly before `t`, or -1.
+Int leap_search_tai(Int lo, Int hi, Int t, Int found) {
+    if (lo >= hi) { return found; }
+    Int mid = lo + (hi - lo) / 2;
+    if (leap_tai_at(mid) < t) { return leap_search_tai(mid + 1, hi, t, mid); }
+    return leap_search_tai(lo, mid, t, found);
+}
+
+// TAI - UTC in effect strictly before TAI second `t`. This is the one
+// the TAI -> POSIX mapping needs, because at the leap second itself the
+// old offset is what describes where it falls on the civil timeline.
+pub Int leap_offset_before_tai(Int t) {
+    Int f = leap_search_tai(0, leap_seconds_count(), t, 0 - 1);
+    return if (f < 0) { 0 } else { leap_offset_of(f) };
+}
+
+// The TAI second at which entry `i` inserted its leap second.
+pub Int leap_second_tai_at(Int i) { return leap_tai_at(i); }
+
+// True when TAI second `t` is one of the inserted leap seconds. This is
+// how a caller sees them at all, since an Instant cannot hold one.
+Int leap_search_is(Int lo, Int hi, Int t) {
+    if (lo >= hi) { return 0; }
+    Int mid = lo + (hi - lo) / 2;
+    Int at = leap_tai_at(mid);
+    if (t == at) { return 1; }
+    if (t < at) { return leap_search_is(lo, mid, t); }
+    return leap_search_is(mid + 1, hi, t);
+}
+
+pub Bool leap_is_leap_second(Int t) { return leap_search_is(0, leap_seconds_count(), t) != 0; }
+
+// The TAI second for a UTC instant. Before 1972 UTC was kept
+// independently of TAI; this reports the conventional 10 s floor, which
+// is what makes the two timelines line up at all.
+pub Int instant_to_tai(Instant i) { return i.seconds + leap_offset_at_utc(i.seconds); }
+
+// The POSIX instant a TAI second falls in. A leap second is skipped, as
+// POSIX requires, so it maps onto the second that starts the same civil
+// minute -- leap_is_leap_second is how a caller notices that happened.
+pub Instant instant_from_tai(Int t) { return instant_of_seconds(t - leap_offset_before_tai(t)); }
+
+// The TAI second a POSIX instant corresponds to, choosing which side of
+// a leap second to land on when the POSIX second contains one. There is
+// exactly one such POSIX second per leap: the one starting at the
+// transition, which contains both :59 and the leap second.
+pub Int instant_to_tai_at(Instant i, Bool after_leap) {
+    Int u = i.seconds;
+    Int next = leap_offset_at_utc(u + 1);
+    Int here = leap_offset_at_utc(u);
+    if (next != here && !after_leap) { return u + here; }
+    if (next != here && after_leap) { return u + next; }
+    return u + here;
+}
+
+// -- Text ----------------------------------------------------------------
+
+// RFC 3339 in UTC: "2026-10-01T12:30:05.000000007Z". The fraction is
+// written in full so no precision is implied away; use
+// cal_format_date / cal_format_time when you want the civil parts
+// separately.
+pub Str instant_format(Instant i) {
+    DateTime x = instant_to_utc(i);
+    StrBuf b0 = cal_pad_date_onto(StrBuf(), x.date).push("T");
+    StrBuf b1 = cal_pad_onto(b0, x.time.hour, 2, "0").push(":");
+    StrBuf b2 = cal_pad_onto(b1, x.time.minute, 2, "0").push(":");
+    StrBuf b3 = cal_pad_onto(b2, x.time.second, 2, "0").push(".");
+    StrBuf b4 = cal_pad_onto(b3, x.time.nanosecond, 9, "0");
+    return b4.push("Z").finish();
+}

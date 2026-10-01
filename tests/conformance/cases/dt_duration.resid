@@ -1,0 +1,148 @@
+import "duration.resid";
+import "calendar.resid";
+
+Str ck(Str name, Str got, Str want) {
+    if (got == want) { println(name + " OK"); } else { println(name + " BAD got=" + got + " want=" + want); }
+    return got;
+}
+Str ckb(Str name, Bool ok) { return ck(name, if (ok) { "true" } else { "false" }, "true"); }
+
+Str ss(Span s) { Int t = span_total_nanos(s); Bool neg = t < 0; Int m = if (neg) { 0 - t } else { t }; Str w = f"{m / 1000000000}"; Str fr = cal_pad_left(f"{m % 1000000000}", 9, "0"); Str z = if (fr == "000000000") { w } else { fraction(w, trim_zeros(fr)) };
+return if (neg) { "-" + z } else { z }; }
+Str fraction(Str w, Str fr) { return w + "." + trim_zeros(fr); }
+Str trim_zeros(Str f) { if (str_ends_with(f, "0")) { return trim_zeros(str_slice(f, 0, str_len(f) - 1)); } return f; }
+Str pi(Str t) { Span s = span_or_zero(span_parse_iso8601(t)); return ss(s); }
+Str ps(Str t) { Span s = span_or_zero(span_parse_short(t)); return ss(s); }
+Str pa(Str t) { Span s = span_or_zero(span_parse(t)); return ss(s); }
+Str pm(Str t) { return match span_parse_iso8601(t) { Parsed(s) => "ok", Malformed => "bad" }; }
+Str psm(Str t) { return match span_parse_short(t) { Parsed(s) => "ok", Malformed => "bad" }; }
+
+Int main() {
+    // Construction and normalization.
+    ck("ns", ss(span_of_nanos(1500000000)), "1.5");
+    ck("neg ns", ss(span_of_nanos(-1)), "-0.000000001");
+    ck("neg ns -1e9", ss(span_of_nanos(-1000000000)), "-1");
+    ck("ms", ss(span_of_millis(1500)), "1.5");
+    ck("us", ss(span_of_micros(1500000)), "1.5");
+    ck("min", ss(span_of_minutes(2)), "120");
+    ck("hour", ss(span_of_hours(2)), "7200");
+    ck("day", ss(span_of_days(2)), "172800");
+    ck("week", ss(span_of_weeks(2)), "1209600");
+    ck("unit days", ss(span_of(Days, 3)), "259200");
+    ckb("zero", span_is_zero(span_zero()));
+    ckb("neg", span_is_negative(span_of_seconds(-1)));
+    ckb("not neg", !span_is_negative(span_of_seconds(1)));
+    ckb("abs", ss(span_abs(span_of_seconds(-5))) == "5");
+    ck("cmp", f"{span_compare(span_of_seconds(1), span_of_seconds(2))}", "-1");
+    ck("cmp eq", f"{span_compare(span_of_seconds(2), span_of_seconds(2))}", "0");
+    ck("cmp gt", f"{span_compare(span_of_seconds(3), span_of_seconds(2))}", "1");
+    ckb("cmp ns field", span_compare(floor_to_span(1, 5), floor_to_span(1, 4)) == 1);
+    ckb("cmp neg field", span_compare(floor_to_span(-1, 5), floor_to_span(0, 0)) == -1);
+    // Arithmetic.
+    ck("add", ss(span_add(span_of_seconds(1), span_of_millis(500))), "1.5");
+    ck("add carry", ss(span_add(span_of_nanos(999999999), span_of_nanos(1))), "1");
+    ck("add neg", ss(span_add(span_of_nanos(-1), span_of_nanos(1))), "0");
+    ck("sub", ss(span_sub(span_of_seconds(2), span_of_millis(500))), "1.5");
+    ck("sub neg", ss(span_sub(span_of_seconds(1), span_of_seconds(2))), "-1");
+    ck("neg", ss(span_neg(span_of_millis(250))), "-0.25");
+    ck("mul", ss(span_mul(span_of_millis(250), 4)), "1");
+    ck("mul neg", ss(span_mul(span_of_seconds(2), -3)), "-6");
+    ck("div", ss(span_div(span_of_seconds(7), 2)), "3.5");
+    ck("div trunc neg", ss(span_div(span_of_seconds(-7), 2)), "-3.5");
+    ck("div neg pos", ss(span_div(span_of_seconds(7), -2)), "-3.5");
+    ck("count ms", f"{span_count(span_of_millis(1500), Millis)}", "1500");
+    ck("count floor neg", f"{span_count(span_of_millis(-1500), Seconds)}", "-2");
+    ck("total nanos", f"{span_total_nanos(span_of_millis(1500))}", "1500000000");
+    ck("total millis", f"{span_total_millis(span_of_millis(1500))}", "1500");
+    ck("total millis neg", f"{span_total_millis(span_of_millis(-1500))}", "-1500");
+    SpanQuot q = span_divmod(span_of_seconds(100), span_of_seconds(7));
+    ck("divmod", ss(q.quotient) + "/" + ss(q.remainder), "14/2");
+    SpanQuot q2 = span_divmod(span_of_seconds(7), span_of_seconds(100));
+    ck("divmod small", ss(q2.quotient) + "/" + ss(q2.remainder), "0/7");
+    SpanQuot q3 = span_divmod(span_of_seconds(-7), span_of_seconds(3));
+    ck("divmod neg", ss(q3.quotient) + "/" + ss(q3.remainder), "-2/-1");
+    SpanQuot q4 = span_divmod(span_of_millis(5500), span_of_seconds(2));
+    ck("divmod sub", ss(q4.quotient) + "/" + ss(q4.remainder), "2/1.5");
+    // Rounding.
+    ck("floor ms", ss(span_floor_to(span_of_millis(1500), Millis)), "1.5");
+    ck("floor s", ss(span_floor_to(span_of_millis(1500), Seconds)), "1");
+    ck("floor s neg", ss(span_floor_to(span_of_millis(-1500), Seconds)), "-2");
+    ck("ceil s", ss(span_ceil_to(span_of_millis(1500), Seconds)), "2");
+    ck("ceil s neg", ss(span_ceil_to(span_of_millis(-1500), Seconds)), "-1");
+    ck("round half up", ss(span_round_to(span_of_millis(1500), Seconds)), "2");
+    ck("round half down", ss(span_round_to(span_of_millis(1499), Seconds)), "1");
+    ck("round neg half away", ss(span_round_to(span_of_millis(-1500), Seconds)), "-2");
+    ck("round neg", ss(span_round_to(span_of_millis(-1499), Seconds)), "-1");
+    ck("floor h", ss(span_floor_to(span_of_minutes(90), Hours)), "3600");
+    ck("ceil h", ss(span_ceil_to(span_of_minutes(90), Hours)), "7200");
+    ck("floor us", ss(span_floor_to(span_of_nanos(1999), Micros)), "0.000001");
+    ck("round ns", ss(span_round_to(span_of_nanos(1500), Micros)), "0.000002");
+    ck("round ns exact", ss(span_round_to(span_of_nanos(500), Micros)), "0.000001");
+    ck("floor week", ss(span_floor_to(span_of_days(9), Weeks)), "604800");
+    // Formatting.
+    ck("fmt zero", span_format(span_zero()), "0s");
+    ck("fmt s", span_format(span_of_seconds(5)), "5s");
+    ck("fmt ms", span_format(span_of_millis(1500)), "1.5s");
+    ck("fmt h", span_format(span_of_hours(2)), "2h");
+    ck("fmt hms", span_format(span_of_millis(3723456)), "1h 2m 3.456s");
+    ck("fmt dhm", span_format(span_add(span_add(span_of_days(1), span_of_hours(2)), span_of_minutes(3))), "1d 2h 3m");
+    ck("fmt neg", span_format(span_of_seconds(-3600)), "-1h");
+    
+    ck("fmt iso zero", span_format_iso8601(span_zero()), "PT0S");
+    ck("fmt iso s", span_format_iso8601(span_of_seconds(5)), "PT5S");
+    ck("fmt iso d", span_format_iso8601(span_of_days(1)), "P1D");
+    ck("fmt iso hms", span_format_iso8601(span_add(span_add(span_of_hours(1), span_of_minutes(2)), span_of_seconds(3))), "PT1H2M3S");
+    ck("fmt iso dhms", span_format_iso8601(span_add(span_add(span_add(span_of_days(1), span_of_hours(2)), span_of_minutes(3)), span_of_seconds(4))), "P1DT2H3M4S");
+    ck("fmt iso ms", span_format_iso8601(span_of_millis(1500)), "PT1.5S");
+    ck("fmt iso neg", span_format_iso8601(span_of_days(-1)), "-P1D");
+    ck("fmt iso w", span_format_iso8601(span_of_weeks(2)), "P14D");
+    // Parsing: readable form.
+    ck("ps bare", ps("90"), "90");
+    ck("ps s", ps("90s"), "90");
+    ck("ps h", ps("2h"), "7200");
+    ck("ps h m", ps("1h30m"), "5400");
+    ck("ps d h m s", ps("1d2h3m4s"), "93784");
+    ck("ps neg", ps("-2d"), "-172800");
+    ck("ps plus", ps("+2d"), "172800");
+    ck("ps frac s", ps("1.5s"), "1.5");
+    ck("ps frac h", ps("0.5h"), "1800");
+    ck("ps frac ms", ps("0.0005s"), "0.0005");
+    ck("ps long", ps("1w2d3h4m5s6ms7us8ns"), "788645.006007008");
+    ck("ps spaces", ps(" 1h 30m "), "5400");
+    ck("ps full names", ps("1 hour 30 minutes"), "5400");
+    ck("ps sub-ns trunc", ps("0.0000000005s"), "0");
+    ck("psm empty", psm(""), "bad");
+    ck("psm unit only", psm("h"), "bad");
+    ck("psm junk", psm("abc"), "bad");
+    ck("psm repeat summed", psm("1h2h"), "ok");
+    ck("ps repeat value", ps("1h2h"), "10800");
+    ck("psm trailing", psm("1h!"), "bad");
+    // Parsing: ISO 8601.
+    ck("pi bare s", pi("PT5S"), "5");
+    ck("pi no T", pi("P1D"), "86400");
+    ck("pi dhms", pi("P1DT2H3M4S"), "93784");
+    ck("pi frac", pi("PT1.5S"), "1.5");
+    ck("pi neg", pi("-P1DT2H"), "-93600");
+    ck("pi w", pi("P2W"), "1209600");
+    ck("pi lower", pi("p1d"), "86400");
+    ck("pi zero", pi("PT0S"), "0");
+    ck("pm empty", pm(""), "bad");
+    ck("pm P alone", pm("P"), "bad");
+    ck("pm PT alone", pm("PT"), "bad");
+    ck("pm no P", pm("1D"), "bad");
+    ck("pm year", pm("P1Y"), "bad");
+    ck("pm month", pm("P1M"), "bad");
+    ck("pm hour in date", pm("P1H"), "bad");
+    ck("pm day in time", pm("PT1D"), "bad");
+    ck("pm double T", pm("PT1HT1M"), "bad");
+    ck("pm trailing junk", pm("P1D!"), "bad");
+    // Dispatch.
+    ck("pa iso", pa("P1D"), "86400");
+    ck("pa short", pa("1d"), "86400");
+    ck("pa bad", pa("zzz"), "0");
+    // Round trips through text.
+    ck("rt fmt/iso", span_format_iso8601(span_add(span_of_days(1), span_of_millis(1500))), "P1DT1.5S");
+    Span rt = span_or_zero(span_parse("P1DT1.5S"));
+    ck("rt parse back", span_format(rt), "1d 1.5s");
+    return 0;
+}

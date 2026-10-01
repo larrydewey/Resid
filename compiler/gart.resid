@@ -121,7 +121,7 @@ StrBuf ga_pos(StrBuf b, GAF f, Int pos, Bool first) {
 
 // ─── Per-node columns ───────────────────────────────────────────────
 
-Bool ga_provider(Str n) { return n == "filesystem" || n == "environment" || n == "args" || n == "process" || n == "git"; }
+Bool ga_provider(Str n) { return n == "filesystem" || n == "environment" || n == "args" || n == "process" || n == "git" || n == "clock"; }
 
 // The effect a node performs itself ("" when none); a provider is a name
 // with no local def.

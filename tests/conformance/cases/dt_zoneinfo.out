@@ -1,0 +1,24 @@
+Berlin loads OK
+Berlin is whole-hour OK
+Berlin shifts in summer OK
+Berlin summer is ahead OK
+Berlin names itself OK
+Berlin says daylight in summer OK
+Berlin says not in winter OK
+a summer reading is unique OK
+New York loads OK
+New York is west of Greenwich OK
+New York shifts in summer OK
+New York summer is ahead OK
+Kolkata loads OK
+Kolkata is +5:30 OK
+Kolkata does not shift OK
+Chatham loads OK
+Chatham is a quarter-hour oddity OK
+pre-transition time resolves OK
+pre-transition time is whole-hour OK
+unknown zone OK
+traversal refused OK
+absolute refused OK
+UTC loads OK
+UTC is zero OK

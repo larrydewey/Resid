@@ -3154,6 +3154,7 @@ Bool is_write_verb(Str family, Str verb) {
     if (family == "filesystem" && (verb == "write_hex" || verb == "append_hex")) { return true; }
     if (family == "filesystem" && verb == "create_dir") { return true; }
     if (family == "process" && verb == "run") { return true; }
+    if (family == "clock" && verb == "sleep_ns") { return true; }
     return false;
 }
 
@@ -3515,6 +3516,7 @@ Bool is_prov_family(Str f) {
     if (f == "git") { return true; }
     if (f == "args") { return true; }
     if (f == "process") { return true; }
+    if (f == "clock") { return true; }
     return false;
 }
 
@@ -3542,6 +3544,7 @@ Bool is_prov_verb(Str fam, Str v) {
     if (fam == "git") { if (v == "rev") { return true; } return v == "branch"; }
     if (fam == "args") { if (v == "count") { return true; } return v == "get"; }
     if (fam == "process") { return v == "run"; }
+    if (fam == "clock") { return v == "now_ns" || v == "now_sec" || v == "monotonic_ns" || v == "sleep_ns"; }
     return false;
 }
 

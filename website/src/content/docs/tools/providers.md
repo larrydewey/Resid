@@ -8,6 +8,21 @@ Calling one is an effect, needs its capability family, and is checked
 twice: at compile time (`E0219`) and again, before it runs, against the
 calling thread's sandbox frames.
 
+## clock
+
+| Verb | Signature | Mode |
+|---|---|---|
+| `now_ns()` | `Int`, nanoseconds since the Unix epoch (1677-09-21 … 2262-04-11) | read |
+| `now_sec()` | `Int`, whole seconds over the whole range of `Int` | read |
+| `monotonic_ns()` | `Int`, from an unspecified origin; immune to a clock step | read |
+| `sleep_ns(ns)` | `Int`, the part still unslept after an interruption, `-1` for a request that makes no sense | **write** |
+
+`lib/clock.resid` wraps these as `clock_now()`, `clock_monotonic_ns()`,
+`clock_sleep_ms()` and friends, and is the only place in the standard
+library that reads the clock. Reading it is an effect like any other: the
+answer to "what time is it" is knowledge the program does not have. See
+[capabilities](../reference/capabilities/).
+
 ## filesystem
 
 | Verb | Signature | Mode |

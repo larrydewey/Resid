@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  308, reduce 14, provenance 21, graph 556, pkg 17, runtime 12, lsp 15.
+  330, reduce 18, provenance 21, graph 607, pkg 30, runtime 12, lsp 18.
   The Rust pipeline (`bootstrap/rust-stage0/`) and `tools/resid-lsp-full`, which
   was built on its crates, were deleted on 2026-09-26; both are in git
   history.
@@ -880,6 +880,76 @@ what is not guaranteed.
   one tight List(Float) read loop, 1.08s -> 1.10s).
 - Test: `immediate_scalars` (boundary Ints, zero, -0.0, NaN, tiny and
   huge Floats through lists, maps, sets, sort, contains and sum).
+
+### 0zd. Date and time library, and the `clock` capability (2026-10-01)
+
+The standard library had no notion of time at all: `lib/chain.resid` parsed
+x509 validity timestamps with a caller-supplied "now" and nothing could
+produce one. Six modules now, and one new capability family.
+
+**`clock` is a new family** (`compiler/gcheck.resid` `gk_is_provider`,
+`gk_unknown_family`; `typecheck.resid` `is_prov_family`/`is_prov_verb`/
+`is_write_verb`; `codegen.resid` `p_sym`/`p_rty`/`p_nargs` and
+`provider_family_of_line`; `lower.resid`'s provider list; `gart.resid`
+`ga_provider`). `clock` was already a prelude value with no verbs, so the
+name was reserved and unfinished. Four verbs: `now_ns` (epoch nanoseconds
+as one Int), `now_sec` (whole seconds, the whole Int range), `monotonic_ns`,
+and `sleep_ns`. Reading time observes it; sleeping consumes it, so
+`@requires(clock(readonly))` covers the three reads and `clock` is needed
+for sleep — the same split `terminal` makes for TTY queries versus raw
+mode. The force-time guard sees it too: `resid_clock_sleep_ns` maps to
+`clock!` and the others to `clock` (`tests/runtime/cap_guard.c`).
+
+The runtime side is `runtime/rt/time.resid` (4 KB): `clock_gettime` (228)
+and `nanosleep` (35), no C. Two return widths on purpose — an i64 of epoch
+nanoseconds is only valid 1677-09-21 .. 2262-04-11, so `now_sec` exists
+beside it and `lib/clock.resid` composes the pair by remainder rather than
+by division, which would overflow past 2262.
+
+**`lib/clock.resid` is the only clock surface in the library**, and it is
+the only one of the six that needs a grant at all. Converting, formatting,
+comparing and zone-resolving a timestamp you already hold is arithmetic, so
+`calendar`, `duration`, `instant`, `zone` and `datetime` are pure. That
+split is the point: capability tracks authority to *learn* something, not
+the type of the data.
+
+- `lib/calendar.resid` — proleptic Gregorian, era-based day-number
+  conversions (Hinnant) exact over the whole Int range, leap rules, ISO
+  week dates, `%U`/`%W`, month arithmetic that clamps rather than rolls
+  over, and name tables a caller can replace. Division floors
+  (`cal_floor_div`), because Resid's `/` truncates toward zero and
+  pre-1970 day numbers are negative.
+- `lib/duration.resid` — `Span`, normalized so the field order is the
+  numeric order; total arithmetic, division truncating toward zero like
+  the language's own `/`, floor/ceil/nearest rounding (ties away from
+  zero), and both text forms: ISO 8601 (`P1DT2H3M4.5S`) and the readable
+  one (`1h30m`). Years and months are rejected rather than approximated.
+- `lib/instant.resid` — `Instant`, arithmetic against spans, rounding to
+  any unit (the epoch is on every unit boundary, so flooring to days is
+  midnight UTC), and the full UTC leap-second table with well-defined
+  TAI conversions. POSIX time skips leap seconds and this says so; the
+  table is exposed because timekeeping code has to be able to ask.
+- `lib/zone.resid` — TZif v1/v2/v3 parsed from bytes, so it is pure and
+  testable (`zone_parse_tzif`); POSIX TZ strings including the `Mm.w.d`,
+  `Jn` and `n` rules and quoted names; gap and fold resolution that
+  returns `Unique` / `Ambiguous(earlier, later)` / `Nonexistent` rather
+  than guessing. Loading the zoneinfo files is the capability-gated part
+  and takes `filesystem(readonly)`, not a new privilege — the zone
+  database is a file and should use the existing grant. Zone names are
+  validated before they reach a path (`..` and an empty component are
+  refused, not sanitized).
+- `lib/datetime.resid` — `Zoned` (a civil reading *and* the offset it was
+  read at), full strftime with the C flag set and a width, plus `%s`,
+  `%f`, `%N` and `%E`; ISO 8601 parsing in both the extended and basic
+  form, which covers RFC 3339.
+
+Verified: 329 conformance cases (up from 288) including eight new
+functional ones, and the TZif parser was checked against the host's real
+zoneinfo for seven zones — Berlin, New York, Kolkata, Chatham (+12:45),
+St_Johns (-3:30), Sydney and UTC — at instants from 1966 to 2038, so both
+TZif blocks and the POSIX footers are exercised, against Python's
+`zoneinfo`: 70 rows, no mismatches. The calendar and span arithmetic were
+separately differenced against Python over wide ranges.
 
 ### 0zc. Dead maps and list versions in loop regions (2026-09-26)
 

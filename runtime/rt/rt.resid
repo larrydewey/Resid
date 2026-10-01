@@ -20,6 +20,7 @@ import "case.resid";
 import "strutil.resid";
 import "sys.resid";
 import "term.resid";
+import "time.resid";
 import "numfmt.resid";
 import "fmt.resid";
 import "show.resid";

@@ -31,6 +31,25 @@ int main(void) {
     resid_cap_enter(rw, 2);
     if (!granted("filesystem!") || !granted("process!")) bad++;
     resid_cap_leave();
+    /* clock: reading time is observation, sleeping consumes it, so a
+     * read-only grant covers now_ns/now_sec/monotonic_ns but not the
+     * "clock!" the sleep verb asks for (spec §20). */
+    const char* clk_ro[] = {"clock:ro"};
+    resid_cap_enter(clk_ro, 1);
+    if (!granted("clock")) bad++;
+    if (granted("clock!")) bad++;
+    if (granted("filesystem")) bad++;
+    resid_cap_leave();
+    const char* clk[] = {"clock"};
+    resid_cap_enter(clk, 1);
+    if (!granted("clock") || !granted("clock!")) bad++;
+    resid_cap_leave();
+    /* clock meets to nothing with a frame that never grants it. */
+    resid_cap_enter(clk, 1);
+    resid_cap_enter(rw, 2);
+    if (granted("clock")) bad++;
+    resid_cap_leave();
+    resid_cap_leave();
     /* More entries than a frame holds are dropped (denied), not read past. */
     const char* many[70];
     for (int i = 0; i < 70; i++) many[i] = i == 69 ? "network" : "filesystem";

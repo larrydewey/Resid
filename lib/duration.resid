@@ -1,0 +1,607 @@
+// --- lib/duration.resid - fixed-length spans ---------------------------
+// A Span is an exact, unit-free length of time: nanoseconds to years and
+// out, with no calendar in it. Arithmetic on it is total and needs no
+// capability -- a Span is a measurement, not a reading.
+//
+// Normalized form: 0 <= nanoseconds < 1e9 and the sign lives entirely in
+// seconds. That makes field order the numeric order, makes the total in
+// nanoseconds well defined for a negative span, and makes equality plain
+// field equality. floor_to_span is the only place the shape is decided.
+//
+// A Span is an absolute length, so it is never negative -- but arithmetic
+// can produce one, and the accessors read that correctly rather than
+// pretending it cannot happen.
+//
+// There is deliberately no months or years unit: a month is not a fixed
+// length (28..31 days) and neither is a year. Those belong to calendar
+// arithmetic; see cal_add_months in lib/calendar.resid. A week is fixed
+// enough (7 days) to be a unit here.
+//
+// All lists are zero-based.
+
+import "calendar.resid";
+
+// An exact length of time, normalized: 0 <= nanoseconds < 1000000000.
+type Span = { Int seconds; Int nanoseconds; };
+
+// The units a Span can be counted, parsed and rounded in.
+type Unit = Nanos | Micros | Millis | Seconds | Minutes | Hours | Days | Weeks;
+
+// The outcome of reading a Span out of text: either the span, or text
+// that is not one.
+type SpanParse = Parsed(Span) | Malformed;
+
+// Whole units and what is left over, as span_divmod reports them.
+type SpanQuot = { Span quotient; Span remainder; };
+
+// A whole count of some unit plus what is left over. `rest` is a Span
+// rather than a nanosecond count, because a remainder can be longer than a
+// second (flooring 90 minutes to hours leaves 30 minutes, not 1800e9 ns).
+type SpanParts = { Int count; Span rest; };
+
+// -- Unit sizes ----------------------------------------------------------
+// In nanoseconds. Every value either divides a second or is a multiple of
+// it, which is what lets span_snap round without ever materializing a
+// total that could overflow.
+
+pub Int unit_nanos(Unit u) {
+    return match u {
+        Nanos => 1,
+        Micros => 1000,
+        Millis => 1000000,
+        Seconds => 1000000000,
+        Minutes => 60000000000,
+        Hours => 3600000000000,
+        Days => 86400000000000,
+        Weeks => 604800000000000,
+    };
+}
+
+// How many whole `u` fit in one second.
+pub Int unit_per_sec(Unit u) {
+    Int k = unit_nanos(u);
+    return 1000000000 / k;
+}
+
+// -- Constructing --------------------------------------------------------
+
+pub Span span_zero() { return Span {.seconds = 0, .nanoseconds = 0}; }
+
+// A span from seconds and nanoseconds, normalized by the floor so the
+// fields stay in range however they were written.
+pub Span floor_to_span(Int sec, Int ns) {
+    Int extra = cal_floor_div(ns, 1000000000);
+    Int rem = cal_floor_mod(ns, 1000000000);
+    Int s = sec + extra;
+    return Span {.seconds = s, .nanoseconds = rem};
+}
+
+pub Span span_of_nanos(Int n) { return floor_to_span(0, n); }
+pub Span span_of_seconds(Int n) { return floor_to_span(n, 0); }
+pub Span span_of_micros(Int n) { return floor_to_span(0, n * 1000); }
+pub Span span_of_millis(Int n) { return floor_to_span(0, n * 1000000); }
+pub Span span_of_minutes(Int n) { return floor_to_span(n * 60, 0); }
+pub Span span_of_hours(Int n) { return floor_to_span(n * 3600, 0); }
+pub Span span_of_days(Int n) { return floor_to_span(n * 86400, 0); }
+pub Span span_of_weeks(Int n) { return floor_to_span(n * 604800, 0); }
+
+// The span of `n` units.
+pub Span span_of(Unit u, Int n) {
+    return match u {
+        Nanos => span_of_nanos(n),
+        Micros => span_of_micros(n),
+        Millis => span_of_millis(n),
+        Seconds => span_of_seconds(n),
+        Minutes => span_of_minutes(n),
+        Hours => span_of_hours(n),
+        Days => span_of_days(n),
+        Weeks => span_of_weeks(n),
+    };
+}
+
+// -- Inspection ----------------------------------------------------------
+
+pub Bool span_is_zero(Span s) { return s.seconds == 0 && s.nanoseconds == 0; }
+
+pub Bool span_is_negative(Span s) { return s.seconds < 0; }
+
+pub Int span_compare(Span a, Span b) {
+    if (a.seconds != b.seconds) { return if (a.seconds < b.seconds) { -1 } else { 1 }; }
+    if (a.nanoseconds == b.nanoseconds) { return 0; }
+    return if (a.nanoseconds < b.nanoseconds) { -1 } else { 1 };
+}
+
+pub Bool span_eq(Span a, Span b) { return span_compare(a, b) == 0; }
+
+// The magnitude, as a duration.
+pub Span span_abs(Span s) { return if (s.seconds < 0) { span_neg(s) } else { s}; }
+
+// The number of whole `u` in `s`, floored: -1500ms is -2 whole seconds
+// and -500ms is -1, never 0. Uses the same two cases as span_snap, so
+// span_count(s, u) * u is always span_floor_to(s, u).
+pub Int span_count(Span s, Unit u) {
+    Int k = unit_nanos(u);
+    if (k <= 1) { return span_total_nanos(s); }
+    if (k < 1000000000) {
+        Int per = 1000000000 / k;
+        return s.seconds * per + s.nanoseconds / k;
+    }
+    Int unit_sec = k / 1000000000;
+    return cal_floor_div(s.seconds, unit_sec);
+}
+
+// The total in nanoseconds. Exact only while the span fits an Int (~292
+// years); past that the multiplication overflows and traps, which is
+// deliberate -- a silent wrap would be worse.
+pub Int span_total_nanos(Span s) {
+    Int total = s.seconds * 1000000000;
+    return total + s.nanoseconds;
+}
+
+// The total in whole milliseconds, floored. Cannot overflow for any span
+// an Int can hold, since it only multiplies seconds.
+pub Int span_total_millis(Span s) {
+    Int ms = s.seconds * 1000;
+    return ms + cal_floor_div(s.nanoseconds, 1000000);
+}
+
+// -- Arithmetic ----------------------------------------------------------
+
+pub Span span_neg(Span s) { return floor_to_span(0 - s.seconds, 0 - s.nanoseconds); }
+
+pub Span span_add(Span a, Span b) {
+    Int ns = a.nanoseconds + b.nanoseconds;
+    Int sec = a.seconds + b.seconds;
+    return floor_to_span(sec, ns);
+}
+
+pub Span span_sub(Span a, Span b) { return span_add(a, span_neg(b)); }
+
+// Times an integer. A zero multiplier reaches the runtime's own
+// division-by-zero trap rather than inventing an answer.
+pub Span span_mul(Span s, Int n) { return floor_to_span(s.seconds * n, s.nanoseconds * n); }
+
+// Both divisions truncate toward zero, exactly as the language's own `/`
+// and `%` do: 7s / 2 is 3.5s and -7s / 2 is -3.5s, never a floored -4s.
+// A zero divisor traps the way ordinary division does.
+
+pub Span span_div(Span s, Int n) {
+    // Dividing the seconds and the leftover separately avoids materializing
+    // a total nanosecond count, which would overflow past ~292 years.
+    Int q = s.seconds / n;
+    Int rem = s.seconds - q * n;
+    Int rest = rem * 1000000000 + s.nanoseconds;
+    Int qn = rest / n;
+    return floor_to_span(q, qn);
+}
+
+// Whole units and the rest, with the remainder carrying the sign of `s`.
+pub SpanQuot span_divmod(Span s, Span d) {
+    Int q = s.seconds / d.seconds;
+    Int rs = s.seconds - q * d.seconds;
+    Span left = floor_to_span(rs, s.nanoseconds);
+    if (d.nanoseconds == 0) {
+        return SpanQuot {.quotient = span_of_seconds(q), .remainder = left};
+    }
+    Int dn = span_total_nanos(d);
+    Int qn = span_total_nanos(left) / dn;
+    Int rn = span_total_nanos(left) - qn * dn;
+    return SpanQuot {.quotient = floor_to_span(q, qn), .remainder = floor_to_span(0, rn)};
+}
+
+// -- Rounding to a unit --------------------------------------------------
+// Snap a span to a multiple of `k` nanoseconds: floor, ceiling, or
+// nearest with halves going away from zero, so -1500ms rounds to -2000ms
+// and 1500ms to 2000ms.
+
+pub Span span_floor_to(Span s, Unit u) { return span_snap(s, unit_nanos(u), 0); }
+pub Span span_ceil_to(Span s, Unit u) { return span_snap(s, unit_nanos(u), 1); }
+pub Span span_round_to(Span s, Unit u) { return span_snap(s, unit_nanos(u), 2); }
+
+// mode: 0 floor, 1 ceiling, 2 nearest-half-away-from-zero.
+pub Span span_snap(Span s, Int k, Int mode) {
+    if (k <= 1) { return s; }
+    if (k < 1000000000) {
+        // A sub-second unit divides a second, so counting units across the
+        // whole second stays exact.
+        Int per = 1000000000 / k;
+        Int whole = s.seconds * per;
+        Int units = whole + s.nanoseconds / k;
+        Int rem = s.nanoseconds % k;
+        Int step = snap_step(rem, k, mode, s.seconds < 0);
+        Int snapped = units + step;
+        Int sec = snapped / per;
+        Int ns = (snapped - sec * per) * k;
+        return floor_to_span(sec, ns);
+    }
+    // A second or more: whole seconds, with the sub-second part only ever
+    // deciding a half-way rounding.
+    Int unit_sec = k / 1000000000;
+    Int q = cal_floor_div(s.seconds, unit_sec);
+    Int rem = s.seconds - q * unit_sec;
+    // rem is below a week, so scaling it to nanoseconds cannot overflow.
+    Int size = unit_sec * 1000000000;
+    Int step = snap_step(rem * 1000000000 + s.nanoseconds, size, mode, s.seconds < 0);
+    Int total = (q + step) * unit_sec;
+    return floor_to_span(total, 0);
+}
+
+// How many whole units of size `size` a non-negative remainder is worth.
+// mode: 0 floor, 1 ceiling, 2 nearest. The quotient these add to is
+// already the floor, so an exact half on a negative span stays put --
+// -1500ms rounds to -2000ms because -2 is the floor, not -1.
+Int snap_step(Int rem, Int size, Int mode, Bool neg) {
+    if (mode == 0) { return 0; }
+    if (mode == 1) { return if (rem > 0) { 1 } else { 0 }; }
+    if (neg) { return if (rem * 2 > size) { 1 } else { 0 }; }
+    return if (rem * 2 >= size) { 1 } else { 0 };
+}
+
+// Split a span into a whole count of `u` and the remainder, both floored.
+pub SpanParts span_split(Span s, Unit u) {
+    Span whole = span_snap(s, unit_nanos(u), 0);
+    Span rest = span_sub(s, whole);
+    return SpanParts {.count = span_count(whole, u), .rest = rest};
+}
+
+// -- Text ----------------------------------------------------------------
+// Rendering walks the span from the largest unit down and pushes each
+// non-zero part onto a StrBuf. Nothing is built by `+`: a formatter that
+// concatenates per field copies the whole prefix each time. The integers
+// still go through f"{v}", which reduces to a literal at compile time
+// whenever `v` is known.
+
+// Seconds with a fraction at the smallest precision that is exact: 4.5,
+// 4.05, 4.0005 or 4.000000005. Pushed onto `b`; `ns` is the signed total.
+StrBuf span_seconds_onto(StrBuf b, Int ns) {
+    Int whole = ns / 1000000000;
+    Int frac = ns % 1000000000;
+    StrBuf w = cal_pad_onto(b, whole, 1, "0");
+    if (frac == 0) { return w; }
+    if (frac % 1000000 == 0) { return span_fraction_onto(w.push("."), frac / 1000000, 3); }
+    if (frac % 1000 == 0) { return span_fraction_onto(w.push("."), frac / 1000, 3); }
+    return span_fraction_onto(w.push("."), frac, 9);
+}
+
+StrBuf span_fraction_onto(StrBuf b, Int frac, Int digits) {
+    return b.push(cal_trim_zeros(cal_pad_left(f"{frac}", digits, "0")));
+}
+
+// `n` and its unit suffix, pushed onto `b`.
+StrBuf span_count_onto(StrBuf b, Int n, Str suffix) {
+    StrBuf s = if (n < 0) { b.push("-") } else { b };
+    Int mag = if (n < 0) { 0 - n } else { n };
+    return cal_pad_onto(s, mag, 1, "0").push(suffix);
+}
+
+// Append `part` to the builder, space-separated when `started`. The flag
+// is a parameter rather than state because StrBuf is a handle and cannot
+// be a struct field (E0404), and StrBuf has no length query -- asking for
+// one would mean copying the string to find out.
+StrBuf span_put(StrBuf b, Bool started, Str part) {
+    if (part == "") { return b; }
+    return if (started) { b.push(" ").push(part) } else { b.push(part) };
+}
+
+// The readable form. Every non-zero unit from days down to the
+// sub-second part is shown, so nothing is discarded; a span under a
+// second uses the largest exact sub-second unit it fits. Zero is "0s".
+pub Str span_format(Span s) {
+    if (span_is_zero(s)) { return "0s"; }
+    Span mag = span_abs(s);
+    SpanParts days = span_split(mag, Days);
+    SpanParts hours = span_split(days.rest, Hours);
+    SpanParts mins = span_split(hours.rest, Minutes);
+    SpanParts secs = span_split(mins.rest, Seconds);
+    Str d = count_text(days.count, "d");
+    Str h = count_text(hours.count, "h");
+    Str m = count_text(mins.count, "m");
+    Str sub = subsecond_text(secs);
+    StrBuf b0 = if (span_is_negative(s)) { StrBuf().push("-") } else { StrBuf() };
+    StrBuf b1 = span_put(b0, false, d);
+    StrBuf b2 = span_put(b1, d != "", h);
+    StrBuf b3 = span_put(b2, d != "" || h != "", m);
+    StrBuf b4 = span_put(b3, d != "" || h != "" || m != "", sub);
+    return b4.finish();
+}
+
+// One "3h"-style component, or "" when there is none.
+Str count_text(Int n, Str suffix) {
+    if (n == 0) { return ""; }
+    return span_count_onto(StrBuf(), n, suffix).finish();
+}
+
+// The seconds-and-below tail of a readable span: whole seconds with
+// whatever fraction, or, when there is no whole second, the largest
+// exact sub-second unit ("5ms", "500us", "8ns").
+Str subsecond_text(SpanParts secs) {
+    Int ns = secs.rest.nanoseconds;
+    if (secs.count != 0) { return span_seconds_onto(StrBuf(), secs.count * 1000000000 + ns).push("s").finish(); }
+    if (ns == 0) { return ""; }
+    if (ns % 1000000 == 0) { return span_count_onto(StrBuf(), ns / 1000000, "ms").finish(); }
+    if (ns % 1000 == 0) { return span_count_onto(StrBuf(), ns / 1000, "us").finish(); }
+    return span_count_onto(StrBuf(), ns, "ns").finish();
+}
+
+// The "T" separator, once, before the first time component -- or as part
+// of the "PT" opener when there is no date half at all.
+StrBuf iso_time(StrBuf b, Bool date_part, Bool already) {
+    if (already) { return b; }
+    return if (date_part) { b.push("T") } else { b.push("PT") };
+}
+
+// "P1DT2H3M4.5S": the ISO 8601 duration. Weeks fold into days, which is
+// what the standard requires once days are present, and a fraction may
+// only sit on the seconds (the standard defines none for the others).
+// Zero is "PT0S".
+pub Str span_format_iso8601(Span s) {
+    if (span_is_zero(s)) { return "PT0S"; }
+    Span mag = span_abs(s);
+    SpanParts days = span_split(mag, Days);
+    SpanParts hours = span_split(days.rest, Hours);
+    SpanParts mins = span_split(hours.rest, Minutes);
+    SpanParts secs = span_split(mins.rest, Seconds);
+    Int ns = secs.count * 1000000000 + secs.rest.nanoseconds;
+    Str d = count_text(days.count, "D");
+    Str h = count_text(hours.count, "H");
+    Str m = count_text(mins.count, "M");
+    StrBuf b0 = if (span_is_negative(s)) { StrBuf().push("-") } else { StrBuf() };
+    StrBuf b1 = if (d != "") { b0.push("P").push(d) } else { b0 };
+    StrBuf b2 = if (h != "") { iso_time(b1, d != "", false).push(h) } else { b1 };
+    StrBuf b3 = if (m != "") { iso_time(b2, d != "", h != "").push(m) } else { b2 };
+    StrBuf b4 = if (ns != 0) { span_seconds_onto(iso_time(b3, d != "", h != "" || m != ""), ns).push("S") } else { b3 };
+    return b4.finish();
+}
+
+// -- Reading text --------------------------------------------------------
+// A scan is the text read so far: the integer digits, the fraction digits
+// kept in order (the fraction needs them one at a time, to stay exact),
+// whether the point was seen, the sign, and whether any digit was seen.
+
+type Scan = { Int whole; List(Int) frac; Bool dot; Bool neg; Bool any; };
+
+pub Scan scan_new() {
+    List(Int) empty = [];
+    return Scan {.whole = 0, .frac = empty, .dot = false, .neg = false, .any = false};
+}
+
+Scan scan_same(Scan s) { return Scan {.whole = s.whole, .frac = s.frac, .dot = s.dot, .neg = s.neg, .any = s.any}; }
+
+Scan scan_sign(Scan s) { return Scan {.whole = s.whole, .frac = s.frac, .dot = s.dot, .neg = true, .any = s.any}; }
+
+Scan scan_digit(Scan s, Int c) {
+    Int d = c - 48;
+    if (s.dot) {
+        List(Int) fs = s.frac.concat([d]);
+        return Scan {.whole = s.whole, .frac = fs, .dot = true, .neg = s.neg, .any = true};
+    }
+    Int w = s.whole * 10 + d;
+    return Scan {.whole = w, .frac = s.frac, .dot = s.dot, .neg = s.neg, .any = true};
+}
+
+Scan scan_point(Scan s) { return Scan {.whole = s.whole, .frac = s.frac, .dot = true, .neg = s.neg, .any = s.any}; }
+
+// A number is a digit run, optionally a point and more digits. Stops at
+// the first character that is neither; `end` reports where it stopped.
+Scan scan_number(Str s, Int i, Scan acc) {
+    Int n = str_len(s);
+    if (i >= n) { return acc; }
+    Int c = str_char_at(s, i);
+    if (c >= 48 && c <= 57) {
+        Int j = i + 1;
+        return scan_number(s, j, scan_digit(acc, c));
+    }
+    if (c == 46 && !acc.dot) {
+        Int j = i + 1;
+        return scan_number(s, j, scan_point(acc));
+    }
+    return acc;
+}
+
+// The span a scan denotes in `unit` nanoseconds. The fraction is applied
+// one digit at a time against a shrinking scale, so no intermediate ever
+// exceeds nine times the unit, and precision finer than a nanosecond
+// truncates rather than rounding up into a nanosecond that is not there.
+Span scan_span(Scan s, Int unit) {
+    Int whole = s.whole * unit;
+    Int part = frac_nanos(s.frac, 0, unit);
+    Int sum = whole + part;
+    return span_of_nanos(if (s.neg) { 0 - sum } else { sum });
+}
+
+Int frac_nanos(List(Int) digits, Int i, Int scale) {
+    if (i >= digits.len()) { return 0; }
+    Int step = scale / 10;
+    Int add = digits[i] * step;
+    Int rest = frac_nanos(digits, i + 1, step);
+    return add + rest;
+}
+
+// Unit suffixes, longest first within each family so the first match is
+// also the longest match. Calendar units are deliberately absent: a span
+// is a fixed length and "P1M" would be a lie about it.
+pub List(Str) span_unit_names() {
+    return ["nanoseconds", "nanosecond", "nanos", "nano", "ns",
+        "microseconds", "microsecond", "micros", "micro", "us",
+        "milliseconds", "millisecond", "millis", "milli", "ms",
+        "seconds", "second", "secs", "sec", "s",
+        "minutes", "minute", "mins", "min", "m",
+        "hours", "hour", "hrs", "hr", "h",
+        "days", "day", "d",
+        "weeks", "week", "wk", "w"];
+}
+
+pub List(Int) span_unit_sizes() {
+    return [1, 1, 1, 1, 1,
+        1000, 1000, 1000, 1000, 1000,
+        1000000, 1000000, 1000000, 1000000, 1000000,
+        1000000000, 1000000000, 1000000000, 1000000000, 1000000000,
+        60000000000, 60000000000, 60000000000, 60000000000, 60000000000,
+        3600000000000, 3600000000000, 3600000000000, 3600000000000, 3600000000000,
+        86400000000000, 86400000000000, 86400000000000,
+        604800000000000, 604800000000000, 604800000000000, 604800000000000];
+}
+
+Bool suffix_at(Str s, Int i, Str t) {
+    Int e = i + str_len(t);
+    if (e > str_len(s)) { return false; }
+    return str_slice(s, i, e) == t;
+}
+
+// The size in nanoseconds of the unit spelled at `i`, or 0 when none is.
+Int match_unit_at(Str s, Int i, List(Str) names, List(Int) sizes, Int k) {
+    if (k >= names.len()) { return 0; }
+    if (suffix_at(s, i, names[k])) { return sizes[k]; }
+    return match_unit_at(s, i, names, sizes, k + 1);
+}
+
+pub Int match_unit(Str s, Int i) { return match_unit_at(s, i, span_unit_names(), span_unit_sizes(), 0); }
+
+// -- The readable form ---------------------------------------------------
+// "1h30m", "-2d", "90", "0.5s", "1w2d3h4m5s6ms7us8ns", "1 hour 30
+// minutes": a sign, then number-and-unit pairs. A number with no unit
+// means seconds, whitespace between the parts is ignored, and repeated or
+// out-of-order units are summed, so "1h2h" is three hours.
+
+type ShortScan = { Span total; Bool any; Bool bad; Int pos; };
+
+ShortScan short_new(Int pos) { return ShortScan {.total = span_zero(), .any = false, .bad = false, .pos = pos}; }
+
+ShortScan short_bad(ShortScan st) { return ShortScan {.total = span_zero(), .any = true, .bad = true, .pos = st.pos}; }
+
+pub SpanParse span_parse_short(Str s) {
+    Int n = str_len(s);
+    Int i = scan_skip_space(s, 0);
+    Bool sign = i < n && (str_char_at(s, i) == 43 || str_char_at(s, i) == 45);
+    Int start = if (sign) { scan_skip_space(s, i + 1) } else { i };
+    ShortScan st = short_scan_pairs(s, start, short_new(i));
+    if (st.bad || !st.any) { return Malformed; }
+    Bool neg = sign && str_char_at(s, i) == 45;
+    Span total = if (neg) { span_neg(st.total) } else { st.total };
+    return Parsed(total);
+}
+
+ShortScan short_scan_pairs(Str s, Int i, ShortScan st) {
+    Int n = str_len(s);
+    if (i >= n) { return st; }
+    Scan num = scan_number(s, i, scan_new());
+    if (!num.any) { return short_bad(st); }
+    Int after = scan_skip_space(s, scan_number_end(s, i));
+    Int unit = match_unit(s, after);
+    Int next = if (unit == 0) { after } else { after + match_len(s, after) };
+    Int eff = if (unit == 0) { 1000000000 } else { unit };
+    ShortScan st2 = ShortScan {.total = span_add(st.total, scan_span(num, eff)), .any = true, .bad = false, .pos = st.pos};
+    Int j = scan_skip_space(s, next);
+    return short_scan_pairs(s, j, st2);
+}
+
+Int scan_skip_space(Str s, Int i) {
+    Int n = str_len(s);
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (c == 32 || c == 9) { return scan_skip_space(s, i + 1); }
+    return i;
+}
+
+// Where the digits and point of a number stop.
+Int scan_number_end(Str s, Int i) { return scan_number_end_at(s, i, false); }
+
+Int scan_number_end_at(Str s, Int i, Bool seen_point) {
+    Int n = str_len(s);
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (c >= 48 && c <= 57) { return scan_number_end_at(s, i + 1, seen_point); }
+    if (c == 46 && !seen_point) { return scan_number_end_at(s, i + 1, true); }
+    return i;
+}
+
+// How many characters the unit at `i` spelled.
+Int match_len(Str s, Int i) {
+    List(Str) names = span_unit_names();
+    return match_len_at(s, i, names, 0);
+}
+
+Int match_len_at(Str s, Int i, List(Str) names, Int k) {
+    if (k >= names.len()) { return 0; }
+    if (suffix_at(s, i, names[k])) { return str_len(names[k]); }
+    return match_len_at(s, i, names, k + 1);
+}
+
+// -- The ISO 8601 form ---------------------------------------------------
+// P[nD][T[nH][nM][nS]], plus the week form PnW. A leading '-' negates the
+// whole span. Years and months are rejected: they are not fixed lengths,
+// and reading "P1M" as 30 days would be quietly wrong.
+
+type IsoScan = { Span total; Bool in_time; Bool any; };
+
+IsoScan iso_new() { return IsoScan {.total = span_zero(), .in_time = false, .any = false}; }
+
+pub SpanParse span_parse_iso8601(Str s) {
+    Int n = str_len(s);
+    if (n == 0) { return Malformed; }
+    Bool neg = str_char_at(s, 0) == 45;
+    Int i = if (neg) { 1 } else { 0 };
+    if (i >= n) { return Malformed; }
+    Int p = str_char_at(s, i);
+    if (p != 80 && p != 112) { return Malformed; }
+    IsoScan st = span_parse_iso_at(s, i + 1, iso_new());
+    if (!st.any) { return Malformed; }
+    return Parsed(if (neg) { span_neg(st.total) } else { st.total });
+}
+
+IsoScan span_parse_iso_at(Str s, Int i, IsoScan st) {
+    Int n = str_len(s);
+    if (i >= n) { return st; }
+    Int c = str_char_at(s, i);
+    if (c == 84 || c == 116) {
+        if (st.in_time) { return IsoScan {.total = span_zero(), .in_time = false, .any = false}; }
+        return span_parse_iso_at(s, i + 1, IsoScan {.total = st.total, .in_time = true, .any = st.any});
+    }
+    Scan num = scan_number(s, i, scan_new());
+    if (!num.any) { return IsoScan {.total = span_zero(), .in_time = false, .any = false}; }
+    Int after = scan_number_end(s, i);
+    if (after >= n) { return IsoScan {.total = span_zero(), .in_time = false, .any = false}; }
+    Int d = str_char_at(s, after);
+    Int unit = iso_unit_size(d, st.in_time);
+    if (unit == 0) { return IsoScan {.total = span_zero(), .in_time = false, .any = false}; }
+    Span total = span_add(st.total, scan_span(num, unit));
+    Int j = after + 1;
+    return span_parse_iso_at(s, j, IsoScan {.total = total, .in_time = st.in_time, .any = true});
+}
+
+// The size in nanoseconds of an ISO designator, or 0 when it does not
+// belong in the half being read. D and W are date-half only and H, M and
+// S time-half only, which is the whole grammar. Y, and M before the T,
+// are calendar units and never appear -- see the header.
+Int iso_unit_size(Int d, Bool in_time) {
+    if (!in_time) {
+        if (d == 68 || d == 100) { return 86400000000000; }
+        if (d == 87 || d == 119) { return 604800000000000; }
+        return 0;
+    }
+    if (d == 72 || d == 104) { return 3600000000000; }
+    if (d == 77 || d == 109) { return 60000000000; }
+    if (d == 83 || d == 115) { return 1000000000; }
+    return 0;
+}
+
+// ISO 8601 when the text starts with P (as in "P1DT2H"), the readable
+// form otherwise.
+pub SpanParse span_parse(Str s) {
+    Int n = str_len(s);
+    if (n == 0) { return Malformed; }
+    Int i = if (str_char_at(s, 0) == 45) { 1 } else { 0 };
+    if (i < n) {
+        Int c = str_char_at(s, i);
+        if (c == 80 || c == 112) { return span_parse_iso8601(s); }
+    }
+    return span_parse_short(s);
+}
+
+// The span a Parsed carries, or zero when the text was not one.
+pub Span span_or_zero(SpanParse r) {
+    return match r {
+        Parsed(s) => s,
+        Malformed => span_zero(),
+    };
+}

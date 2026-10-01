@@ -3565,6 +3565,12 @@ Str p_sym(Str pname, Str meth) {
     if (pname == "environment") {
         if (meth == "get") { return "resid_env_get"; }
     }
+    if (pname == "clock") {
+        if (meth == "now_ns") { return "resid_clock_now_ns"; }
+        if (meth == "now_sec") { return "resid_clock_now_sec"; }
+        if (meth == "monotonic_ns") { return "resid_clock_monotonic_ns"; }
+        if (meth == "sleep_ns") { return "resid_clock_sleep_ns"; }
+    }
     return "";
 }
 
@@ -3595,6 +3601,7 @@ Str p_rty(Str pname, Str meth) {
     if (pname == "environment") {
         if (meth == "get") { return "Str"; }
     }
+    if (pname == "clock") { return "Int"; }
     return "";
 }
 
@@ -3623,6 +3630,10 @@ Int p_nargs(Str pname, Str meth) {
     }
     if (pname == "environment") {
         if (meth == "get") { return 1; }
+    }
+    if (pname == "clock") {
+        if (meth == "sleep_ns") { return 1; }
+        return 0;
     }
     return 0;
 }
@@ -4300,6 +4311,8 @@ Str provider_family_of_line(Str line) {
     if (str_contains(line, "@resid_tcp_")) { return "network"; }
     if (str_contains(line, "@resid_term_raw") || str_contains(line, "@resid_term_restore")) { return "terminal!"; }
     if (str_contains(line, "@resid_term_")) { return "terminal"; }
+    if (str_contains(line, "@resid_clock_sleep_ns")) { return "clock!"; }
+    if (str_contains(line, "@resid_clock_")) { return "clock"; }
     return "";
 }
 

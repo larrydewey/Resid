@@ -22,6 +22,7 @@ therefore enters a program only at `main` or a `test` block.
 | `process` | `process.run` and the native debugger builtins |
 | `network` | the TCP builtins |
 | `terminal` | the terminal builtins (`resid_term_*`) and `lib/readline.resid` |
+| `clock` | the `clock` provider and `lib/clock.resid` |
 
 Printing, reading stdin and OS randomness need no capability.
 
@@ -29,7 +30,7 @@ Printing, reading stdin and OS randomness need no capability.
 
 `@requires` entries take the same modes as sandboxes: `readonly` or
 `readwrite` (the default). A read-only grant does not cover a write
-(filesystem write verbs, `process.run`, terminal raw mode). An unknown family or mode is an
+(filesystem write verbs, `process.run`, terminal raw mode, `clock.sleep_ns`). An unknown family or mode is an
 error (`E0213`).
 
 ## Sandboxes and attenuation

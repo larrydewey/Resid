@@ -1,0 +1,402 @@
+// --- lib/calendar.resid - civil calendar arithmetic (proleptic) -------
+// The Gregorian calendar as a mathematical object: no clock, no
+// capability, no file. Everything here is a pure function of its
+// arguments, so a program that formats, compares or does arithmetic on
+// dates needs no grant at all -- only reading "now" does (see
+// lib/clock.resid, capability `clock`).
+//
+// Proleptic Gregorian: the rules extend unchanged in both directions, so
+// year 0 (1 BC) exists and is a leap year, and negative years count
+// backwards. That is ISO 8601's model, and it is what makes the
+// day-number conversions total instead of special-cased around 1970.
+//
+// Day numbers are days since 1970-01-01T00:00:00Z; the conversions are
+// Howard Hinnant's era-based algorithms, exact over the whole Int range
+// (~+-292 billion years). Note that Resid `/` and `%` truncate toward
+// zero like C, and that is what these algorithms are written against:
+// every division here has a non-negative divisor and either a
+// non-negative dividend or an explicitly adjusted one.
+//
+// All lists are zero-based (lib/ convention).
+
+// A calendar date. month is 1-12, day is 1-days_in_month(year, month).
+type Date = { Int year; Int month; Int day; };
+
+// A wall-clock time of day. Ranges: hour 0-23, minute 0-59, second 0-60
+// (60 only where a leap second makes it real), nanosecond 0-999999999.
+type Time = { Int hour; Int minute; Int second; Int nanosecond; };
+
+// A civil date and time, with no offset attached -- "what the clock in
+// that office said". Use an Instant (lib/instant.resid) or a Zoned
+// (lib/datetime.resid) when the offset matters.
+type DateTime = { Date date; Time time; };
+
+// An ISO 8601 week date: the week-numbering year, the week within it
+// (1-53) and the ISO weekday (1 = Monday .. 7 = Sunday). The
+// week-numbering year is not always the calendar year -- early January
+// can belong to week 52 or 53 of the previous one.
+type WeekDate = { Int year; Int week; Int weekday; };
+
+// Month and weekday names, so a program can supply its own instead of
+// the English defaults. months is 12 entries (index month - 1);
+// weekdays is 7 entries (index ISO weekday - 1).
+type Names = { List(Str) months; List(Str) months_abbr; List(Str) weekdays; List(Str) weekdays_abbr; };
+
+// -- Constants -----------------------------------------------------------
+
+pub Int cal_ns_per_sec() { return 1000000000; }
+pub Int cal_ns_per_min() { return 60000000000; }
+pub Int cal_ns_per_hour() { return 3600000000000; }
+pub Int cal_ns_per_day() { return 86400000000000; }
+pub Int cal_sec_per_min() { return 60; }
+pub Int cal_sec_per_hour() { return 3600; }
+pub Int cal_sec_per_day() { return 86400; }
+pub Int cal_sec_per_week() { return 604800; }
+
+// -- Division that floors ------------------------------------------------
+// Resid's / and % truncate toward zero, so -7 / 3 is -2 and -7 % 3 is -1.
+// Calendar math wants the floor throughout: days before 1970 are
+// negative, and the year/month split of a negative index must still
+// yield a 0-based month 0..11.
+
+pub Int cal_floor_div(Int a, Int b) {
+    Int q = a / b;
+    Int r = a % b;
+    Bool lost = (r != 0) && ((r < 0) != (b < 0));
+    return if (lost) { q - 1 } else { q };
+}
+
+pub Int cal_floor_mod(Int a, Int b) {
+    Int r = a % b;
+    Bool lost = (r != 0) && ((r < 0) != (b < 0));
+    return if (lost) { r + b } else { r };
+}
+
+// -- Calendar rules ------------------------------------------------------
+
+// True when `y` is a leap year: divisible by 4, except centuries
+// unless divisible by 400. Exact-divisor tests, so truncating % is fine
+// for negative years.
+pub Bool cal_is_leap(Int y) {
+    Bool by4 = y % 4 == 0;
+    if (!by4) { return false; }
+    Bool by100 = y % 100 == 0;
+    if (!by100) { return true; }
+    return y % 400 == 0;
+}
+
+// Days in month `m` of year `y`, or 0 when `m` is not 1..12.
+pub Int cal_days_in_month(Int y, Int m) {
+    if (m == 1 || m == 3 || m == 5 || m == 7 || m == 8 || m == 10 || m == 12) { return 31; }
+    if (m == 4 || m == 6 || m == 9 || m == 11) { return 30; }
+    if (m == 2) { return if (cal_is_leap(y)) { 29 } else { 28 }; }
+    return 0;
+}
+
+pub Int cal_days_in_year(Int y) { return if (cal_is_leap(y)) { 366 } else { 365 }; }
+
+// True when (y, m, d) names a day that exists.
+pub Bool cal_is_valid_date(Int y, Int m, Int d) {
+    if (m < 1 || m > 12) { return false; }
+    Int dim = cal_days_in_month(y, m);
+    if (dim == 0) { return false; }
+    return d >= 1 && d <= dim;
+}
+
+// True when the time fields are in range. `second` may be 60, which only
+// a leap second makes real; callers decide whether to accept it.
+pub Bool cal_is_valid_time(Int h, Int mi, Int s, Int ns) {
+    if (h < 0 || h > 23) { return false; }
+    if (mi < 0 || mi > 59) { return false; }
+    if (s < 0 || s > 60) { return false; }
+    return ns >= 0 && ns < 1000000000;
+}
+
+pub Bool cal_is_valid_datetime(Int y, Int mo, Int d, Int h, Int mi, Int s, Int ns) {
+    if (!cal_is_valid_date(y, mo, d)) { return false; }
+    return cal_is_valid_time(h, mi, s, ns);
+}
+
+// -- Day numbers ---------------------------------------------------------
+// days_from_civil and cal_civil_from_days are inverses on every Date that
+// exists. 1970-01-01 is day 0.
+
+pub Int cal_days_from_civil(Int y, Int m, Int d) {
+    // Shift the year so that March starts it: leap days land at the end
+    // and the month-length pattern repeats without a special case.
+    Int adj = if (m <= 2) { y - 1 } else { y };
+    // Truncating division would make era 0 for both 0 and -1, so bias the
+    // dividend into the era below before dividing.
+    Int era = if (adj >= 0) { adj / 400 } else { (adj - 399) / 400 };
+    Int prod = era * 400;
+    Int yoe = adj - prod;                                       // 0..399
+    Int shift = if (m > 2) { m - 3 } else { m + 9 };             // 0..11, March = 0
+    Int part = (153 * shift + 2) / 5;
+    Int doy = part + d - 1;                                      // 0..365
+    Int yr = yoe * 365;
+    Int doe = yr + yoe / 4 - yoe / 100 + doy;                   // 0..146096
+    Int era_days = era * 146097;
+    return era_days + doe - 719468;
+}
+
+pub Date cal_civil_from_days(Int z) {
+    Int shifted = z + 719468;
+    Int era = if (shifted >= 0) { shifted / 146097 } else { (shifted - 146096) / 146097 };
+    Int era_prod = era * 146097;
+    Int doe = shifted - era_prod;                                // 0..146096
+    Int c1 = doe - doe / 1460;
+    Int c2 = c1 + doe / 36524;
+    Int c3 = c2 - doe / 146096;
+    Int yoe = c3 / 365;                                          // 0..399
+    Int y365 = 365 * yoe;
+    Int rest = yoe / 4 - yoe / 100;
+    Int doy = doe - (y365 + rest);                               // 0..365
+    Int five = 5 * doy + 2;
+    Int mp = five / 153;                                         // 0..11, March = 0
+    Int mq = (153 * mp + 2) / 5;
+    Int d = doy - mq + 1;                                        // 1..31
+    Int m = if (mp < 10) { mp + 3 } else { mp - 9 };             // 1..12
+    Int yr = yoe + era * 400;
+    Int y = if (m <= 2) { yr + 1 } else { yr };
+    return Date {.year = y, .month = m, .day = d};
+}
+
+pub Int cal_days_from_date(Date dt) { return cal_days_from_civil(dt.year, dt.month, dt.day); }
+
+// -- Weekdays and weeks --------------------------------------------------
+
+// ISO weekday of day number `z`: 1 = Monday .. 7 = Sunday. Day 0 was a
+// Thursday, hence the +3.
+pub Int cal_weekday_iso(Int z) {
+    Int r = cal_floor_mod(z + 3, 7);
+    return r + 1;
+}
+
+// Weekday as C's %w spells it: 0 = Sunday .. 6 = Saturday.
+pub Int cal_weekday_sunday(Int z) { return cal_weekday_iso(z) % 7; }
+
+pub Int cal_weekday_of(Date dt) { return cal_weekday_iso(cal_days_from_date(dt)); }
+
+// Day of the year, 1..366.
+pub Int cal_day_of_year(Int y, Int m, Int d) {
+    Int jan1 = cal_days_from_civil(y, 1, 1);
+    Int z = cal_days_from_civil(y, m, d);
+    Int diff = z - jan1;
+    return diff + 1;
+}
+
+// The ISO 8601 week date of day number `z`. Week 1 is the week holding
+// the year's first Thursday, so stepping to that Thursday and asking
+// which year it lands in gives the week-numbering year directly.
+pub WeekDate cal_week_date(Int z) {
+    Int dow = cal_weekday_iso(z);
+    Int thursday = z + (4 - dow);
+    Date th = cal_civil_from_days(thursday);
+    Int jan1 = cal_days_from_civil(th.year, 1, 1);
+    Int diff = thursday - jan1;
+    Int week = diff / 7 + 1;
+    return WeekDate {.year = th.year, .week = week, .weekday = dow};
+}
+
+pub WeekDate cal_week_of(Date dt) { return cal_week_date(cal_days_from_date(dt)); }
+
+// Week of the year as C's %U spells it: Sunday starts the week, and the
+// days before the first Sunday are week 0.
+pub Int cal_week_sunday(Int y, Int m, Int d) {
+    Int z = cal_days_from_civil(y, m, d);
+    Int jan1 = cal_days_from_civil(y, 1, 1);
+    Int yday = z - jan1;
+    Int wday = cal_weekday_sunday(z);
+    return (yday + 7 - wday) / 7;
+}
+
+// Week of the year as C's %W spells it: Monday starts the week.
+pub Int cal_week_monday(Int y, Int m, Int d) {
+    Int z = cal_days_from_civil(y, m, d);
+    Int jan1 = cal_days_from_civil(y, 1, 1);
+    Int yday = z - jan1;
+    Int shifted = (cal_weekday_sunday(z) + 6) % 7;
+    return (yday + 7 - shifted) / 7;
+}
+
+// -- Arithmetic ----------------------------------------------------------
+// Calendar arithmetic clamps rather than rolls over: adding a month to
+// January 31 lands in February's last day, because "the same day next
+// month" has no answer when that day does not exist.
+
+pub Int cal_add_days(Int z, Int n) { return z + n; }
+
+pub Date cal_add_months(Date dt, Int n) {
+    Int total = dt.year * 12 + (dt.month - 1) + n;
+    Int ny = cal_floor_div(total, 12);
+    Int nm = cal_floor_mod(total, 12) + 1;
+    Int dim = cal_days_in_month(ny, nm);
+    Int nd = if (dt.day > dim) { dim } else { dt.day };
+    return Date {.year = ny, .month = nm, .day = nd};
+}
+
+pub Date cal_add_years(Date dt, Int n) { return cal_add_months(dt, n * 12); }
+
+// The first or last day of the month `dt` falls in.
+pub Date cal_first_of_month(Date dt) { return Date {.year = dt.year, .month = dt.month, .day = 1}; }
+
+pub Date cal_last_of_month(Date dt) {
+    Int dim = cal_days_in_month(dt.year, dt.month);
+    return Date {.year = dt.year, .month = dt.month, .day = dim};
+}
+
+// -- Names ---------------------------------------------------------------
+
+pub Names cal_default_names() {
+    return Names {
+        .months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+        .months_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        .weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+        .weekdays_abbr = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    };
+}
+
+// Month 1-12 out of `n`, or "" when the month is out of range.
+pub Str cal_month_name(Names n, Int m) {
+    Int i = m - 1;
+    if (i < 0 || i >= n.months.len()) { return ""; }
+    return n.months[i];
+}
+
+pub Str cal_month_abbr(Names n, Int m) {
+    Int i = m - 1;
+    if (i < 0 || i >= n.months_abbr.len()) { return ""; }
+    return n.months_abbr[i];
+}
+
+// ISO weekday 1-7 out of `n`, or "".
+pub Str cal_weekday_name(Names n, Int iso) {
+    Int i = iso - 1;
+    if (i < 0 || i >= n.weekdays.len()) { return ""; }
+    return n.weekdays[i];
+}
+
+pub Str cal_weekday_abbr(Names n, Int iso) {
+    Int i = iso - 1;
+    if (i < 0 || i >= n.weekdays_abbr.len()) { return ""; }
+    return n.weekdays_abbr[i];
+}
+
+// -- Rendering helpers ---------------------------------------------------
+// Every rendered string is built with a StrBuf, not by `+`: concatenating
+// in a loop copies the whole prefix each time, and a formatter does that
+// per field. The integers still go through f"{v}", which reduces to a
+// literal at compile time whenever `v` is known, so only the builder
+// pushes are ever residual.
+//
+// A width is a minimum, the way strftime's and printf's are, so a
+// five-digit year survives a width of 4 and a long value is never cut.
+
+pub StrBuf cal_fill(StrBuf b, Str fill, Int n) {
+    if (n <= 0) { return b; }
+    return cal_fill(b.push(fill), fill, n - 1);
+}
+
+// `v` rendered and padded on the left to at least `width`.
+pub StrBuf cal_pad_onto(StrBuf b, Int v, Int width, Str fill) {
+    Str s = f"{v}";
+    Int n = str_len(s);
+    if (n >= width) { return b.push(s); }
+    return cal_fill(b, fill, width - n).push(s);
+}
+
+// `s` padded on the left to at least `width`.
+pub Str cal_pad_left(Str s, Int width, Str fill) {
+    Int n = str_len(s);
+    if (n >= width) { return s; }
+    return cal_fill(StrBuf(), fill, width - n).push(s).finish();
+}
+
+pub Str cal_pad_right(Str s, Int width, Str fill) {
+    Int n = str_len(s);
+    if (n >= width) { return s; }
+    return s + cal_repeat(fill, width - n);
+}
+
+// Trailing zeros, and a trailing point with nothing left after it. Safe
+// on a fraction's digits, because they are positional: "100" after the
+// point means a tenth, so trimming it to "1" is the same value.
+pub Str cal_trim_zeros(Str s) {
+    if (str_ends_with(s, "0")) { return cal_trim_zeros(str_slice(s, 0, str_len(s) - 1)); }
+    return s;
+}
+
+pub Str cal_repeat(Str s, Int n) {
+    if (n <= 0 || s == "") { return ""; }
+    return cal_fill(StrBuf(), s, n).finish();
+}
+
+// A proleptic year may be negative, so ISO's expanded form is a sign
+// followed by at least four digits: "-0005", not "-5".
+pub StrBuf cal_pad_year(StrBuf b, Int y) {
+    if (y >= 0) { return cal_pad_onto(b, y, 4, "0"); }
+    Int mag = 0 - y;
+    return cal_pad_onto(b.push("-"), mag, 4, "0");
+}
+
+// -- Rendering -----------------------------------------------------------
+// Fixed-format civil rendering, no offset and no zone: "2026-10-01
+// 12:30:05.000000007". The date half is ISO 8601 extended, the time half
+// is the same order with the fractional part always written in full.
+
+pub Str cal_format_date(Date dt) {
+    StrBuf b0 = StrBuf();
+    StrBuf b1 = cal_pad_year(b0, dt.year).push("-");
+    StrBuf b2 = cal_pad_onto(b1, dt.month, 2, "0").push("-");
+    return cal_pad_onto(b2, dt.day, 2, "0").finish();
+}
+
+pub Str cal_format_time(Time t) {
+    StrBuf b0 = StrBuf();
+    StrBuf b1 = cal_pad_onto(b0, t.hour, 2, "0").push(":");
+    StrBuf b2 = cal_pad_onto(b1, t.minute, 2, "0").push(":");
+    StrBuf b3 = cal_pad_onto(b2, t.second, 2, "0").push(".");
+    return cal_pad_onto(b3, t.nanosecond, 9, "0").finish();
+}
+
+pub Str cal_format_datetime(DateTime x) {
+    StrBuf b0 = cal_pad_date_onto(StrBuf(), x.date).push("T");
+    return cal_pad_time_onto(b0, x.time).finish();
+}
+
+// The date and time halves onto an existing builder, for callers that
+// want one string from several pieces.
+pub StrBuf cal_pad_date_onto(StrBuf b, Date dt) {
+    StrBuf b1 = cal_pad_year(b, dt.year).push("-");
+    StrBuf b2 = cal_pad_onto(b1, dt.month, 2, "0").push("-");
+    return cal_pad_onto(b2, dt.day, 2, "0");
+}
+
+pub StrBuf cal_pad_time_onto(StrBuf b, Time t) {
+    StrBuf b1 = cal_pad_onto(b, t.hour, 2, "0").push(":");
+    StrBuf b2 = cal_pad_onto(b1, t.minute, 2, "0").push(":");
+    StrBuf b3 = cal_pad_onto(b2, t.second, 2, "0").push(".");
+    return cal_pad_onto(b3, t.nanosecond, 9, "0");
+}
+
+// Seconds since 1970-01-01T00:00:00 of day number `z` at time `t`.
+pub Int cal_seconds_of_day(Time t) {
+    Int h = t.hour * 3600;
+    Int m = t.minute * 60;
+    return h + m + t.second;
+}
+
+pub DateTime cal_datetime_at(Int z, Time t) {
+    return DateTime {.date = cal_civil_from_days(z), .time = t};
+}
+
+pub Time cal_time_of_seconds(Int secs, Int ns) {
+    Int rem = cal_floor_mod(secs, cal_sec_per_day());
+    Int h = rem / 3600;
+    Int m1 = (rem % 3600) / 60;
+    Int s = rem % 60;
+    return Time {.hour = h, .minute = m1, .second = s, .nanosecond = ns};
+}
+
+// A proleptic year on its own: "2026", "-0005".
+pub Str cal_format_year(Int y) { return cal_pad_year(StrBuf(), y).finish(); }

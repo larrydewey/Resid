@@ -1,0 +1,73 @@
+u8 OK
+u16 OK
+u32 OK
+i32 neg OK
+i32 min OK
+u8 oob OK
+i64 small OK
+i64 big OK
+i64 neg OK
+i64 neg1 OK
+i64 range OK
+v1 loaded OK
+v1 types OK
+v1 abbrev0 OK
+v1 abbrev4 OK
+v1 before OK
+v1 before edge OK
+v1 after OK
+v1 far after OK
+v1 offsets OK
+v1 local ok OK
+v1 local dst OK
+v1 local gap OK
+v1 local before gap OK
+v1 local first OK
+v1 local none OK
+v1 civil OK
+bad magic OK
+short file OK
+truncated OK
+utc zone OK
+fixed zone OK
+pz utc OK
+pz est OK
+pz est no dst OK
+pz dst no rules OK
+pz dst explicit off OK
+pz posix sign OK
+pz offset hhmm OK
+pz offset hhmmss OK
+pz negative OK
+pz quoted OK
+pz julian OK
+pz n OK
+pz empty OK
+pz short name OK
+pz no offset OK
+pz bad rule OK
+pz one rule OK
+us jan OK
+us jul OK
+us before start OK
+us at start OK
+us before end OK
+us at end OK
+us local ok OK
+us gap OK
+us fold OK
+us offsets OK
+safe UTC OK
+safe area OK
+safe underscore OK
+safe plus OK
+!safe dotdot OK
+!safe dotdot mid OK
+!safe abs OK
+!safe dots OK
+!safe empty comp OK
+!safe trailing OK
+!safe space OK
+!safe empty OK
+path OK
+path bad OK

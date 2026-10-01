@@ -1,0 +1,76 @@
+// The system zone database (capability `filesystem`, not `clock`): the
+// zoneinfo files the host ships, read through lib/zone.resid.
+//
+// The assertions are relative on purpose -- "January and July differ in
+// Berlin" holds for every tzdata release since 1980, while any particular
+// offset would not, and a conformance case has to pass on machines whose
+// zoneinfo is not this one's. What it does check is the whole path: the
+// TZif parse, both blocks, the POSIX footer, the abbreviation table, and
+// the round trip from a wall-clock reading back to instants.
+import "zone.resid";
+
+Str ck(Str name, Bool ok) {
+    if (ok) { println(name + " OK"); } else { println(name + " BAD"); }
+    return name;
+}
+
+Bool loaded(ZoneParse r) { return match r { Loaded(z) => true, BadZone => false }; }
+
+Zone of(ZoneParse r) { return match r { Loaded(z) => z, BadZone => zone_utc() }; }
+
+@requires(filesystem(readonly))
+Int main() {
+    // A zone whose offset is not a whole hour, and which changes it twice
+    // a year, from files rather than a rule string.
+    ZoneParse ber = zone_load("Europe/Berlin");
+    ck("Berlin loads", loaded(ber));
+    Zone b = of(ber);
+    Int jan = zone_offset_seconds(b, 1767225600);
+    Int jul = zone_offset_seconds(b, 1782864000);
+    ck("Berlin is whole-hour", jan % 3600 == 0);
+    ck("Berlin shifts in summer", jul != jan);
+    ck("Berlin summer is ahead", jul > jan);
+    ck("Berlin names itself", zone_offset_at(b, 1782864000).abbrev != "");
+    ck("Berlin says daylight in summer", zone_offset_at(b, 1782864000).isdst);
+    ck("Berlin says not in winter", !zone_offset_at(b, 1767225600).isdst);
+    // The same wall-clock reading has one instant in summer, and the
+    // winter reading is a different hour of the same day.
+    DateTime summer = DateTime {.date = Date {.year = 2026, .month = 7, .day = 1}, .time = Time {.hour = 12, .minute = 0, .second = 0, .nanosecond = 0}};
+    LocalPick sp = zone_local_pick(b, instant_from_utc(summer).seconds);
+    ck("a summer reading is unique", match sp { Unique(u) => true, Ambiguous(p) => false, Nonexistent => false });
+    // A western zone, so its offsets are negative all the way down.
+    ZoneParse ny = zone_load("America/New_York");
+    ck("New York loads", loaded(ny));
+    Zone n = of(ny);
+    Int nyjan = zone_offset_seconds(n, 1767225600);
+    Int nyjul = zone_offset_seconds(n, 1782864000);
+    ck("New York is west of Greenwich", nyjan < 0 && nyjul < 0);
+    ck("New York shifts in summer", nyjul != nyjan);
+    ck("New York summer is ahead", nyjul > nyjan);
+    // Half and quarter-hour offsets, which no hour-based rule can express.
+    ZoneParse kol = zone_load("Asia/Kolkata");
+    ck("Kolkata loads", loaded(kol));
+    Zone k = of(kol);
+    Int kin = zone_offset_seconds(k, 1767225600);
+    Int kjul = zone_offset_seconds(k, 1782864000);
+    ck("Kolkata is +5:30", kin == 19800);
+    ck("Kolkata does not shift", kin == kjul);
+    ZoneParse cha = zone_load("Pacific/Chatham");
+    ck("Chatham loads", loaded(cha));
+    Zone ch = of(cha);
+    Int cjan = zone_offset_seconds(ch, 1767225600);
+    ck("Chatham is a quarter-hour oddity", cjan == 45900 || cjan == 49500);
+    // Times long before the first recorded transition, where the type
+    // table's first non-daylight entry is what governs.
+    Int old = zone_offset_seconds(b, -100000000);
+    ck("pre-transition time resolves", old != 0);
+    ck("pre-transition time is whole-hour", old % 3600 == 0 || old % 900 == 0);
+    // A name that is not a zone, and a name that would escape the
+    // directory: both refused rather than read.
+    ck("unknown zone", !loaded(zone_load("No/Such/Zone")));
+    ck("traversal refused", !loaded(zone_load("../../etc/passwd")));
+    ck("absolute refused", !loaded(zone_load("/etc/passwd")));
+    ck("UTC loads", loaded(zone_load("UTC")));
+    ck("UTC is zero", zone_offset_seconds(of(zone_load("UTC")), 0) == 0);
+    return 0;
+}

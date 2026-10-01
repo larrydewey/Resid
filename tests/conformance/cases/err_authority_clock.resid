@@ -1,0 +1,8 @@
+// Reading the clock with no grant: no ambient authority (spec §20).
+import "clock.resid";
+
+Int main() {
+    Instant i = clock_now();
+    println(f"{i.seconds}");
+    return 0;
+}

@@ -1,0 +1,67 @@
+zero OK
+of secs OK
+of nanos OK
+of nanos neg OK
+after days OK
+epoch utc OK
+1 sec utc OK
+pre epoch OK
+day bk OK
+day bk neg OK
+day num OK
+day num neg OK
+sec of day OK
+utc roundtrip OK
+utc roundtrip ns OK
+utc roundtrip neg OK
+fmt OK
+fmt neg OK
+fmt negfrac OK
+cmp OK
+cmp eq OK
+lt OK
+ge OK
+not le OK
+add OK
+sub OK
+diff OK
+elapsed OK
+total nanos OK
+floor day OK
+ceil day OK
+floor hour OK
+round min OK
+next day OK
+next day exact OK
+prev day OK
+leap count OK
+leap off 0 OK
+leap off last OK
+leap utc 0 OK
+leap utc 1 OK
+leap utc last OK
+leap tai 0 OK
+leap tai 1 OK
+offset before 1972 OK
+offset at 1972jan OK
+offset at 1972jul OK
+offset just before OK
+offset at 2016 OK
+offset at 2012 OK
+offset now OK
+offset far future OK
+tai 1972 OK
+tai 1972jan OK
+tai now OK
+from tai OK
+from tai 9 OK
+is leap second OK
+not leap second OK
+not leap second 11 OK
+not leap second 0 OK
+tai_at before OK
+tai_at after OK
+tai_at 1972jan OK
+tai_at not leap OK
+tai_at ordinary OK
+civil roundtrip OK

@@ -1,0 +1,98 @@
+import "datetime.resid";
+Str ck(Str name, Str got, Str want) {
+    if (got == want) { println(name + " OK"); } else { println(name + " BAD got=[" + got + "] want=[" + want + "]"); }
+    return got;
+}
+Str dp(Str s) {
+    DateTimeParse r = datetime_parse(s);
+    return match r { ParsedZoned(w) => datetime_format_rfc3339(w), BadDateTime => "BAD" };
+}
+Str ci(Str s) {
+    DateTimeParse r = datetime_parse(s);
+    return match r { ParsedZoned(w) => datetime_format_iso8601(w), BadDateTime => "BAD" };
+}
+Zoned zw() { return zoned_of(DateTime {.date = Date {.year = 2026, .month = 10, .day = 1}, .time = Time {.hour = 13, .minute = 5, .second = 9, .nanosecond = 123456789}}, Offset {.seconds = 3600, .isdst = true, .abbrev = "CEST"}); }
+Str sf(Str fmt) { return datetime_strftime(zw(), fmt, cal_default_names()); }
+Int main() {
+    Zoned w = zw();
+    ck("iso", datetime_format_iso8601(w), "2026-10-01T13:05:09.123456789+01:00");
+    ck("rfc3339", datetime_format_rfc3339(w), "2026-10-01T13:05:09.123456789+01:00");
+    ck("second", datetime_format_second(w), "2026-10-01 13:05:09");
+    ck("off", datetime_format_offset(3600), "+01:00");
+    ck("off neg", datetime_format_offset(-9000), "-02:30");
+    ck("off zero", datetime_format_offset(0), "+00:00");
+    ck("off basic", datetime_format_offset_basic(19800), "+0530");
+    ck("local secs", f"{zoned_local_seconds(w)}", "1790859909");
+    ck("a", sf("%a"), "Thu");
+    ck("A", sf("%A"), "Thursday");
+    ck("b", sf("%b"), "Oct");
+    ck("B", sf("%B"), "October");
+    ck("c", sf("%c"), "Thu Oct  1 13:05:09 2026");
+    ck("C", sf("%C"), "20");
+    ck("d", sf("%d"), "01");
+    ck("e", sf("%e"), " 1");
+    ck("D", sf("%D"), "10/01/26");
+    ck("F", sf("%F"), "2026-10-01");
+    ck("G", sf("%G"), "2026");
+    ck("g", sf("%g"), "26");
+    ck("H", sf("%H"), "13");
+    ck("I", sf("%I"), "01");
+    ck("j", sf("%j"), "274");
+    ck("k", sf("%k"), "13");
+    ck("l", sf("%l"), " 1");
+    ck("m", sf("%m"), "10");
+    ck("M", sf("%M"), "05");
+    ck("p", sf("%p"), "PM");
+    ck("P", sf("%P"), "pm");
+    ck("r", sf("%r"), "01:05:09 PM");
+    ck("R", sf("%R"), "13:05");
+    ck("S", sf("%S"), "09");
+    ck("T", sf("%T"), "13:05:09");
+    ck("u", sf("%u"), "4");
+    ck("U", sf("%U"), "39");
+    ck("V", sf("%V"), "40");
+    ck("w", sf("%w"), "4");
+    ck("W", sf("%W"), "39");
+    ck("x", sf("%x"), "10/01/26");
+    ck("X", sf("%X"), "13:05:09");
+    ck("y", sf("%y"), "26");
+    ck("Y", sf("%Y"), "2026");
+    ck("z", sf("%z"), "+0100");
+    ck("Z", sf("%Z"), "CEST");
+    ck("s", sf("%s"), "1790856309");
+    ck("f", sf("%f"), "123456");
+    ck("N", sf("%N"), "123456789");
+    ck("pct", sf("100%%"), "100%");
+    ck("literal", sf("at %H:%M"), "at 13:05");
+    ck("dash", sf("%-d/%-m"), "1/10");
+    ck("space", sf("%_d"), " 1");
+    ck("zero", sf("%03d"), "001");
+    ck("wide", sf("%6Y"), "  2026");
+    ck("upper", sf("%^b"), "OCT");
+    ck("combo", sf("%Y-%m-%dT%H:%M:%S%z"), "2026-10-01T13:05:09+0100");
+    // Parsing.
+    ck("p rfc3339", dp("2026-10-01T13:05:09.123456789+01:00"), "2026-10-01T13:05:09.123456789+01:00");
+    ck("p Z", dp("2026-10-01T13:05:09Z"), "2026-10-01T13:05:09Z");
+    ck("p z", dp("2026-10-01T13:05:09z"), "2026-10-01T13:05:09Z");
+    ck("p space", dp("2026-10-01 13:05:09"), "2026-10-01T13:05:09Z");
+    ck("p no offset", dp("2026-10-01T13:05:09"), "2026-10-01T13:05:09Z");
+    ck("p no sec", dp("2026-10-01T13:05"), "2026-10-01T13:05:00Z");
+    ck("p frac ms", dp("2026-10-01T13:05:09.5"), "2026-10-01T13:05:09.500000000Z");
+    ck("p frac neg", dp("2026-10-01T13:05:09-05:00"), "2026-10-01T13:05:09-05:00");
+    ck("p frac off basic", dp("2026-10-01T13:05:09-0500"), "2026-10-01T13:05:09-05:00");
+    ck("p date only", ci("2026-10-01"), "2026-10-01T00:00:00+00:00");
+    ck("p year month", ci("2026-10"), "2026-10-01T00:00:00+00:00");
+    ck("p year", ci("2026"), "2026-01-01T00:00:00+00:00");
+    ck("p basic", dp("20261001T130509Z"), "2026-10-01T13:05:09Z");
+    ck("p basic date", dp("20261001"), "2026-10-01T00:00:00Z");
+    ck("p leap", dp("2024-02-29T00:00:00Z"), "2024-02-29T00:00:00Z");
+    ck("p neg off", dp("2026-10-01T13:05:09+05:30"), "2026-10-01T13:05:09+05:30");
+    ck("p bad", dp("not a date"), "BAD");
+    ck("p bad month", dp("2026-13-01T00:00:00Z"), "BAD");
+    ck("p bad day", dp("2026-02-30T00:00:00Z"), "BAD");
+    ck("p bad hour", dp("2026-10-01T25:00:00Z"), "BAD");
+    ck("p short", dp("2026-1"), "BAD");
+    // Round trip through text.
+    ck("rt", sf("%Y-%m-%dT%H:%M:%S.%N%z"), "2026-10-01T13:05:09.123456789+0100");
+    return 0;
+}

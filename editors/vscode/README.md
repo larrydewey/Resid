@@ -15,7 +15,7 @@ Syntax highlighting, snippets, language configuration, and a **language server**
   - Built-ins: `assert`, `rt_assert`, `known`, `rt_known`, `comptime_print`, `todo`,
     `unimplemented`, `wrapping_*` / `saturating_*`, `str_*`
   - Annotations `@requires(...)`, `@residual`, capability names
-    (`filesystem(readonly)`, `network`, …)
+    (`filesystem(readonly)`, `network`, `clock(readonly)`, …)
   - Literals: hex/octal/binary ints, floats, decimal `m`-suffix literals, char,
     string, raw `r"…"`, byte `b"…"`, interpolated `f"…{expr}"` with its format
     spec (`{n:group}`, `{f:precision 2}`, `{s:fill '.', center}`) and the

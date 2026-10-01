@@ -1,0 +1,10 @@
+// clock(readonly) is enough to read the clock.
+import "clock.resid";
+
+@requires(clock(readonly))
+Int main() {
+    Int s = clock_now_seconds();
+    println(f"after 2020 {if (s > 1577836800) { "yes" } else { "no" }}");
+    println(f"monotonic {if (clock_monotonic_ns() > 0) { "yes" } else { "no" }}");
+    return 0;
+}

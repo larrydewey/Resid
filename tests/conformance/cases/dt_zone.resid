@@ -1,0 +1,123 @@
+import "zone.resid";
+
+Str ck(Str name, Str got, Str want) {
+    if (got == want) { println(name + " OK"); } else { println(name + " BAD got=" + got + " want=" + want); }
+    return got;
+}
+Str cb(Str name, Bool ok) { return ck(name, if (ok) { "true" } else { "false" }, "true"); }
+
+List(Int) hx(Str s) { return hx_at(s, 0, ListBuf()); }
+List(Int) hx_at(Str s, Int i, ListBuf(Int) acc) {
+    if (i + 1 >= str_len(s)) { return acc.finish(); }
+    Int v = hv(str_slice(s, i, i + 1)) * 16 + hv(str_slice(s, i + 1, i + 2));
+    Int j = i + 2;
+    return hx_at(s, j, acc.push(v));
+}
+Int hv(Str c) {
+    Int x = str_char_at(c, 0);
+    if (x >= 48 && x <= 57) { return x - 48; }
+    if (x >= 97 && x <= 102) { return x - 87; }
+    return x - 55;
+}
+Str v1() { return "545a6966000000000000000000000000000000000000000000000000000000000000000100000002000000083b9aca000100000000000000000e1001045554430043455400"; }
+ZoneParse parse(Str hex, Str name) { return zone_parse_tzif(hx(hex), name); }
+Str pz(Str s) {
+    Option(PosixTz) r = posix_parse(s);
+    return match r {
+        Some(p) => p.std + "/" + f"{p.std_off}" + "/" + p.dst + "/" + f"{p.dst_off}" + "/" + (if (p.has_rule) { f"{p.start_rule.kind}:{p.start_rule.month}:{p.start_rule.week}:{p.start_rule.day}:{p.start_rule.time}" } else { "-" }) + "/" + (if (p.has_rule) { f"{p.end_rule.kind}:{p.end_rule.month}:{p.end_rule.week}:{p.end_rule.day}:{p.end_rule.time}" } else { "-" }),
+        None => "none",
+    };
+}
+Str offat(Zone z, Int t) { Offset o = zone_offset_at(z, t); return f"{o.seconds},{o.isdst},{o.abbrev}"; }
+Str pick(Zone z, Int t) {
+    LocalPick p = zone_local_pick(z, t);
+    return match p {
+        Unique(u) => "U" + f"{u.seconds}",
+        Ambiguous(pr) => f"A{pr.earlier.seconds},{pr.later.seconds}",
+        Nonexistent => "X",
+    };
+}
+
+Int main() {
+    List(Int) b = hx("0102ff7f");
+    ck("u8", f"{tz_u8(b, 0)}", "1");
+    ck("u16", f"{tz_u16(b, 0)}", "258");
+    ck("u32", f"{tz_u32(b, 0)}", "16973695");
+    ck("i32 neg", f"{tz_i32(hx("ff7fffff"), 0)}", "-8388609");
+    ck("i32 min", f"{tz_i32(hx("80000000"), 0)}", "-2147483648");
+    ck("u8 oob", f"{tz_u8(b, 99)}", "-1");
+    ck("i64 small", f"{tz_i64(hx("0000000000000064"), 0)}", "100");
+    ck("i64 big", f"{tz_i64(hx("0000000100000000"), 0)}", "4294967296");
+    ck("i64 neg", f"{tz_i64(hx("ffffffffffffff9c"), 0)}", "-100");
+    ck("i64 neg1", f"{tz_i64(hx("ffffffffffffffff"), 0)}", "-1");
+    ck("i64 range", f"{tz_i64(hx("7fffffffffffffff"), 0)}", "-1");
+    ZoneParse p1 = parse(v1(), "Test");
+    Zone z1 = match p1 { Loaded(z) => z, BadZone => zone_utc() };
+    ck("v1 loaded", (match p1 { Loaded(z) => "yes", BadZone => "no" }), "yes");
+    ck("v1 types", f"{z1.first.types.len()}", "2");
+    ck("v1 abbrev0", tz_abbrev_at(z1.first.abbrev, 0), "UTC");
+    ck("v1 abbrev4", tz_abbrev_at(z1.first.abbrev, 4), "CET");
+    ck("v1 before", offat(z1, 0), "0,false,UTC");
+    ck("v1 before edge", offat(z1, 999999999), "0,false,UTC");
+    ck("v1 after", offat(z1, 1000000000), "3600,true,CET");
+    ck("v1 far after", offat(z1, 9999999999), "3600,true,CET");
+    ck("v1 offsets", f"{zone_offsets(z1).len()}", "2");
+    ck("v1 local ok", pick(z1, 3600), "U3600");
+    ck("v1 local dst", pick(z1, 1000003600), "U1000000000");
+    ck("v1 local gap", pick(z1, 1000001800), "X");
+    ck("v1 local before gap", pick(z1, 999999900), "U999999900");
+    ck("v1 local first", (match zone_local_first(z1, 1000003600) { Some(u) => f"{u.seconds}", None => "none" }), "1000000000");
+    ck("v1 local none", (match zone_local_first(z1, 1000001800) { Some(u) => f"{u.seconds}", None => "none" }), "none");
+    ck("v1 civil", cal_format_date(zone_to_local(z1, instant_of_seconds(999993600)).date), "2001-09-09");
+    ck("bad magic", (match parse("00000000", "x") { Loaded(z) => "yes", BadZone => "no" }), "no");
+    ck("short file", (match parse("545a6966", "x") { Loaded(z) => "yes", BadZone => "no" }), "no");
+    ck("truncated", (match parse("545a6966000000000000000000000000000000000000000000000100000002000000083b9aca0001", "x") { Loaded(z) => "yes", BadZone => "no" }), "no");
+    ck("utc zone", offat(zone_utc(), 0), "0,false,UTC");
+    ck("fixed zone", offat(zone_fixed("X", 19800, "IST"), 0), "19800,false,IST");
+    ck("pz utc", pz("UTC0"), "UTC/0//0/-/-");
+    ck("pz est", pz("EST5EDT,M3.2.0,M11.1.0"), "EST/-18000/EDT/-14400/0:3:2:0:7200/0:11:1:0:7200");
+    ck("pz est no dst", pz("EST5"), "EST/-18000//0/-/-");
+    ck("pz dst no rules", pz("EST5EDT"), "EST/-18000/EDT/-14400/-/-");
+    ck("pz dst explicit off", pz("EST5EDT4"), "EST/-18000/EDT/-14400/-/-");
+    ck("pz posix sign", pz("GMT+5"), "GMT/-18000//0/-/-");
+    ck("pz offset hhmm", pz("IST5:30"), "IST/-19800//0/-/-");
+    ck("pz offset hhmmss", pz("XYZ5:30:15"), "XYZ/-19815//0/-/-");
+    ck("pz negative", pz("CET-1CEST,M3.5.0,M10.5.0/3"), "CET/3600/CEST/7200/0:3:5:0:7200/0:10:5:0:10800");
+    ck("pz quoted", pz("<+11>-11"), "+11/39600//0/-/-");
+    ck("pz julian", pz("XYZ3ABC,J60,J300"), "XYZ/-10800/ABC/-7200/1:0:0:60:7200/1:0:0:300:7200");
+    ck("pz n", pz("XYZ3ABC,70,200"), "XYZ/-10800/ABC/-7200/2:0:0:70:7200/2:0:0:200:7200");
+    ck("pz empty", pz(""), "none");
+    ck("pz short name", pz("UT"), "none");
+    ck("pz no offset", pz("EST"), "none");
+    ck("pz bad rule", pz("EST5EDT,M13.2.0,M11.1.0"), "none");
+    ck("pz one rule", pz("EST5EDT,M3.2.0"), "none");
+    Option(PosixTz) us = posix_parse("EST5EDT,M3.2.0,M11.1.0");
+    if (Some(p) = us) {
+        Zone zp = zone_from_posix("US", p);
+        ck("us jan", offat(zp, 1767225600), "-18000,false,EST");
+        ck("us jul", offat(zp, 1782864000), "-14400,true,EDT");
+        ck("us before start", offat(zp, 1772953199), "-18000,false,EST");
+        ck("us at start", offat(zp, 1772953200), "-14400,true,EDT");
+        ck("us before end", offat(zp, 1793512799), "-14400,true,EDT");
+        ck("us at end", offat(zp, 1793512800), "-18000,false,EST");
+        ck("us local ok", pick(zp, 1781510400), "U1781524800");
+        ck("us gap", pick(zp, 1772937000), "X");
+        ck("us fold", pick(zp, 1793496600), "A1793511000,1793514600");
+        ck("us offsets", f"{zone_offsets(zp).len()}", "2");
+    }
+    cb("safe UTC", zone_name_is_safe("UTC"));
+    cb("safe area", zone_name_is_safe("Europe/Berlin"));
+    cb("safe underscore", zone_name_is_safe("America/Argentina/Buenos_Aires"));
+    cb("safe plus", zone_name_is_safe("Etc/GMT+5"));
+    cb("!safe dotdot", !zone_name_is_safe("../etc/passwd"));
+    cb("!safe dotdot mid", !zone_name_is_safe("Europe/../etc"));
+    cb("!safe abs", !zone_name_is_safe("/etc/passwd"));
+    cb("!safe dots", !zone_name_is_safe(".."));
+    cb("!safe empty comp", !zone_name_is_safe("Europe//Berlin"));
+    cb("!safe trailing", !zone_name_is_safe("Europe/"));
+    cb("!safe space", !zone_name_is_safe("New York"));
+    cb("!safe empty", !zone_name_is_safe(""));
+    ck("path", zone_path_of("Europe/Berlin"), "/usr/share/zoneinfo/Europe/Berlin");
+    ck("path bad", zone_path_of("../x"), "");
+    return 0;
+}

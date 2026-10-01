@@ -1,0 +1,48 @@
+// The clock provider (capability `clock`) -- the one part of the date and
+// time library that needs a grant.
+//
+// The assertions here are deliberately about invariants rather than about
+// values: what time it is when this runs is not something a test can
+// predict, but "the wall clock is after 2020", "the monotonic clock
+// advances", and "a 5 ms sleep takes at least 4 ms" hold everywhere.
+import "clock.resid";
+import "datetime.resid";
+
+Str ck(Str name, Bool ok) {
+    if (ok) { println(name + " OK"); } else { println(name + " BAD"); }
+    return name;
+}
+
+@requires(clock)
+Int main() {
+    Instant i = clock_now();
+    ck("wall clock after 2020", i.seconds > 1577836800);
+    ck("wall clock has no stray fraction", i.nanoseconds >= 0 && i.nanoseconds < 1000000000);
+    ck("seconds reading agrees", clock_now_seconds() > 1577836800);
+    ck("nanoseconds reading agrees", clock_now_nanos() > 1577836800 * 1000000000);
+    Int m0 = clock_monotonic_ns();
+    ck("monotonic positive", m0 > 0);
+    Int m1 = clock_monotonic_ns();
+    ck("monotonic advances", m1 >= m0);
+    // Sleep about 5 ms and check the monotonic clock saw at least 4.
+    Int before = clock_monotonic_ns();
+    _ = clock_sleep_ms(5);
+    Int after = clock_monotonic_ns();
+    Int slept_ms = (after - before) / 1000000;
+    ck("slept at least 4ms", slept_ms >= 4);
+    ck("sleep_ns agrees", clock_sleep_ns(1000000) == 0);
+    ck("sleep_us agrees", clock_sleep_us(1000) == 0);
+    ck("sleep_seconds agrees", clock_sleep_seconds(0) == 0);
+    ck("negative sleep refused", clock_sleep_ns(-1) == -1);
+    ck("span sleep agrees", clock_sleep(span_of_millis(1)) == 0);
+    // The reading formats and parses back to itself.
+    Zoned w = zoned_utc(i);
+    Str text = datetime_format_rfc3339(w);
+    DateTimeParse back = datetime_parse(text);
+    Str again = match back {
+        ParsedZoned(q) => datetime_format_rfc3339(q),
+        BadDateTime => "BAD",
+    };
+    ck("round trips through text", again == text);
+    return 0;
+}

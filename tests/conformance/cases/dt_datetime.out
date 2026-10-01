@@ -1,0 +1,77 @@
+iso OK
+rfc3339 OK
+second OK
+off OK
+off neg OK
+off zero OK
+off basic OK
+local secs OK
+a OK
+A OK
+b OK
+B OK
+c OK
+C OK
+d OK
+e OK
+D OK
+F OK
+G OK
+g OK
+H OK
+I OK
+j OK
+k OK
+l OK
+m OK
+M OK
+p OK
+P OK
+r OK
+R OK
+S OK
+T OK
+u OK
+U OK
+V OK
+w OK
+W OK
+x OK
+X OK
+y OK
+Y OK
+z OK
+Z OK
+s OK
+f OK
+N OK
+pct OK
+literal OK
+dash OK
+space OK
+zero OK
+wide OK
+upper OK
+combo OK
+p rfc3339 OK
+p Z OK
+p z OK
+p space OK
+p no offset OK
+p no sec OK
+p frac ms OK
+p frac neg OK
+p frac off basic OK
+p date only OK
+p year month OK
+p year OK
+p basic OK
+p basic date OK
+p leap OK
+p neg off OK
+p bad OK
+p bad month OK
+p bad day OK
+p bad hour OK
+p short OK
+rt OK

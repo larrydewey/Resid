@@ -54,11 +54,13 @@ capabilities.
 | `process` | `process.run(cmd)` and the native debugger builtins |
 | `network` | the TCP builtins |
 | `terminal` | the terminal builtins (`resid_term_*`) and `lib/readline.resid` |
+| `clock` | `clock.now_ns()`, `clock.now_sec()`, `clock.monotonic_ns()`, `clock.sleep_ns(n)` and `lib/clock.resid` |
 
 A family can be narrowed with a mode: `filesystem(readonly)` covers the
 reading verbs only; a write needs `filesystem` or `filesystem(readwrite)`.
 `terminal(readonly)` covers the TTY and window-size queries but not raw
-mode.
+mode. `clock(readonly)` covers reading the clock but not sleeping: reading
+time observes it, sleeping consumes it.
 
 ## Sandboxes
 

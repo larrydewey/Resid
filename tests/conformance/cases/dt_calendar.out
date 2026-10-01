@@ -1,0 +1,73 @@
+epoch OK
+civil0 OK
+civil-1 OK
+civil1 OK
+2000-02-29 OK
+today OK
+today-num OK
+leap2000 OK
+!leap1900 OK
+!leap2023 OK
+leap2024 OK
+leap0 OK
+!leap-1 OK
+!leap-100 OK
+leap-400 OK
+feb1900 OK
+feb2000 OK
+apr OK
+badmonth OK
+!valid 2026-02-30 OK
+valid 2024-02-29 OK
+!valid m13 OK
+!valid d0 OK
+dow0 OK
+dow-1 OK
+dow1 OK
+dow-sun OK
+dow2026-10-01 OK
+doy jan1 OK
+doy dec31 OK
+doy dec31leap OK
+iso 2026-01-01 OK
+iso 2026-10-01 OK
+iso 2021-01-01 OK
+iso 2019-12-30 OK
+iso 2027-01-03 OK
+addm jan31 OK
+addm leap OK
+addm dec OK
+subm jan OK
+subm mar OK
+subm jun OK
+addy feb29 OK
+lastofmonth OK
+monthname OK
+monthabbr OK
+wdname OK
+wdabbr OK
+badmonthname OK
+padl OK
+padl space OK
+pad keeps long OK
+padr OK
+fmttime OK
+fmtyear neg OK
+fmtyear big OK
+fmtyear 0 OK
+fmtdateneg OK
+fmtfull OK
+U 2026-01-01 OK
+W 2026-01-01 OK
+U 2026-01-05 OK
+W 2026-01-05 OK
+W 2027-01-03 OK
+tod 3661 OK
+fromtod OK
+fromtod neg OK
+roundtrip OK
+roundtrip far OK
+civil of 1600-03-01 OK
+days of 1900-03-01 OK
+civil of -719162 OK
+roundtrip yr0 OK

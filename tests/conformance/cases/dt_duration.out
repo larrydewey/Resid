@@ -1,0 +1,112 @@
+ns OK
+neg ns OK
+neg ns -1e9 OK
+ms OK
+us OK
+min OK
+hour OK
+day OK
+week OK
+unit days OK
+zero OK
+neg OK
+not neg OK
+abs OK
+cmp OK
+cmp eq OK
+cmp gt OK
+cmp ns field OK
+cmp neg field OK
+add OK
+add carry OK
+add neg OK
+sub OK
+sub neg OK
+neg OK
+mul OK
+mul neg OK
+div OK
+div trunc neg OK
+div neg pos OK
+count ms OK
+count floor neg OK
+total nanos OK
+total millis OK
+total millis neg OK
+divmod OK
+divmod small OK
+divmod neg OK
+divmod sub OK
+floor ms OK
+floor s OK
+floor s neg OK
+ceil s OK
+ceil s neg OK
+round half up OK
+round half down OK
+round neg half away OK
+round neg OK
+floor h OK
+ceil h OK
+floor us OK
+round ns OK
+round ns exact OK
+floor week OK
+fmt zero OK
+fmt s OK
+fmt ms OK
+fmt h OK
+fmt hms OK
+fmt dhm OK
+fmt neg OK
+fmt iso zero OK
+fmt iso s OK
+fmt iso d OK
+fmt iso hms OK
+fmt iso dhms OK
+fmt iso ms OK
+fmt iso neg OK
+fmt iso w OK
+ps bare OK
+ps s OK
+ps h OK
+ps h m OK
+ps d h m s OK
+ps neg OK
+ps plus OK
+ps frac s OK
+ps frac h OK
+ps frac ms OK
+ps long OK
+ps spaces OK
+ps full names OK
+ps sub-ns trunc OK
+psm empty OK
+psm unit only OK
+psm junk OK
+psm repeat summed OK
+ps repeat value OK
+psm trailing OK
+pi bare s OK
+pi no T OK
+pi dhms OK
+pi frac OK
+pi neg OK
+pi w OK
+pi lower OK
+pi zero OK
+pm empty OK
+pm P alone OK
+pm PT alone OK
+pm no P OK
+pm year OK
+pm month OK
+pm hour in date OK
+pm day in time OK
+pm double T OK
+pm trailing junk OK
+pa iso OK
+pa short OK
+pa bad OK
+rt fmt/iso OK
+rt parse back OK

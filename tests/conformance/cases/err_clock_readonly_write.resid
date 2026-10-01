@@ -1,0 +1,10 @@
+// clock(readonly) covers reading the clock but not sleeping: observing
+// time is a read, consuming it is a write (spec §20).
+import "clock.resid";
+
+@requires(clock(readonly))
+Int main() {
+    Int leftover = clock_sleep_ms(1);
+    println(f"{leftover}");
+    return 0;
+}

@@ -1,0 +1,541 @@
+// --- lib/datetime.resid - civil date and time, with or without a zone ---
+// The façade over lib/calendar.resid, lib/instant.resid and
+// lib/zone.resid: a civil date and time, the offset it was read at, and
+// the two directions -- instant to wall clock and back.
+//
+// A Zoned is a *reading*, not a moment. The same wall clock can name two
+// instants (clocks went back) or none (clocks went forward past it), so
+// converting one back asks the zone rather than assuming: datetime_to_instant
+// answers Option(Instant), and zone_local_pick (lib/zone.resid) is there
+// when both readings are wanted.
+//
+// Formatting is strftime, in full: every conversion C defines, plus the
+// ones a date and time library is actually asked for -- %s, %f, %N, %:z,
+// %Ez and %E? -- with the flag set C uses ('-' '_' '0' '^' '#') and an
+// explicit field width. Parsing is ISO 8601 in both the extended and the
+// basic form, which covers RFC 3339 as a subset.
+//
+// Nothing here needs a capability. Formatting a timestamp is arithmetic;
+// only asking what time it *is* needs the `clock` grant (lib/clock.resid).
+
+import "calendar.resid";
+import "duration.resid";
+import "instant.resid";
+import "zone.resid";
+
+// A civil date and time together with the offset it was read at. The
+// offset is part of the value, not decoration: it is what makes the
+// reading convertible back to an instant.
+type Zoned = { DateTime civil; Offset offset; };
+
+// The outcome of reading a date and time out of text.
+type DateTimeParse = ParsedZoned(Zoned) | BadDateTime;
+
+// The civil part on its own, for a reading whose offset is not known yet.
+type CivilParse = ParsedCivil(DateTime) | BadCivil;
+
+// -- Building -----------------------------------------------------------
+
+pub Zoned zoned_of(DateTime civil, Offset offset) { return Zoned {.civil = civil, .offset = offset}; }
+
+// The reading the clocks in `z` give at `i`.
+pub Zoned zoned_from_instant(Zone z, Instant i) {
+    Offset o = zone_offset_at(z, i.seconds);
+    DateTime civ = instant_to_utc(floor_to_instant(i.seconds + o.seconds, i.nanoseconds));
+    return Zoned {.civil = civ, .offset = o};
+}
+
+pub Zoned zoned_at(Zone z, Int utc_seconds, Int nanosecond) {
+    Offset o = zone_offset_at(z, utc_seconds);
+    DateTime civ = instant_to_utc(floor_to_instant(utc_seconds + o.seconds, nanosecond));
+    return Zoned {.civil = civ, .offset = o};
+}
+
+// The instant a reading names. None when the wall clock never read that
+// time (clocks went forward across it); use zoned_to_instant_first or
+// zone_local_pick when a choice is wanted instead.
+pub Option(Instant) datetime_to_instant(Zone z, Zoned w) {
+    Int local = zoned_local_seconds(w);
+    return zone_local_first(z, local);
+}
+
+// The earlier of the two instants an ambiguous reading names, or None
+// when the reading never happened.
+pub Option(Instant) zoned_to_instant_first(Zone z, Zoned w) { return datetime_to_instant(z, w); }
+
+// The later of the two, for a reading that happened twice.
+pub Option(Instant) zoned_to_instant_last(Zone z, Zoned w) {
+    Int local = zoned_local_seconds(w);
+    LocalPick p = zone_local_pick(z, local);
+    return match p {
+        Unique(u) => Some(u),
+        Ambiguous(pr) => Some(pr.later),
+        Nonexistent => None,
+    };
+}
+
+// The reading in UTC, with a zero offset.
+pub Zoned zoned_utc(Instant i) { return Zoned {.civil = instant_to_utc(i), .offset = Offset {.seconds = 0, .isdst = false, .abbrev = "UTC"}}; }
+
+// The reading at a fixed offset, with no zone behind it.
+pub Zoned zoned_fixed(DateTime civil, Int offset_seconds) {
+    return Zoned {.civil = civil, .offset = Offset {.seconds = offset_seconds, .isdst = false, .abbrev = ""}};
+}
+
+// Seconds from the epoch to the reading, ignoring the offset -- which is
+// what a wall clock means before any zone is consulted.
+pub Int zoned_local_seconds(Zoned w) {
+    DateTime x = w.civil;
+    Int z = cal_days_from_date(x.date);
+    Int sod = cal_seconds_of_day(x.time);
+    Int total = z * cal_sec_per_day();
+    return total + sod;
+}
+
+// The instant, treating the reading as UTC.
+pub Instant zoned_as_utc_instant(Zoned w) { return floor_to_instant(zoned_local_seconds(w), w.civil.time.nanosecond); }
+
+// -- Offsets in text ----------------------------------------------------
+
+// "+02:00", "-0530", "+05" or "Z" for UTC.
+pub Str datetime_format_offset(Int seconds) {
+    Bool neg = seconds < 0;
+    Int mag = if (neg) { 0 - seconds } else { seconds };
+    StrBuf b0 = StrBuf().push(if (neg) { "-" } else { "+" });
+    StrBuf b1 = cal_pad_onto(b0, mag / 3600, 2, "0");
+    StrBuf b2 = b1.push(":");
+    Int mm = (mag % 3600) / 60;
+    return cal_pad_onto(b2, mm, 2, "0").finish();
+}
+
+// "+0200", the spelling %z uses.
+pub Str datetime_format_offset_basic(Int seconds) {
+    Str ext = datetime_format_offset(seconds);
+    return str_slice(ext, 0, 3) + str_slice(ext, 4, str_len(ext));
+}
+
+// A numeric stand-in for an unnamed zone, which is what %Z should print
+// when the zone spells no abbreviation.
+pub Str datetime_offset_name(Int seconds) {
+    if (seconds == 0) { return "UTC"; }
+    return "UTC" + datetime_format_offset(seconds);
+}
+
+// -- Rendering ----------------------------------------------------------
+// Everything goes onto one StrBuf: a formatter that concatenated per
+// field would copy the whole prefix each time. The integers go through
+// f"{v}", which reduces to a literal when the value is known.
+
+pub Str datetime_format_iso8601(Zoned w) {
+    StrBuf b0 = cal_pad_date_onto(StrBuf(), w.civil.date).push("T");
+    StrBuf b1 = datetime_time_onto(b0, w.civil.time, 9);
+    return b1.push(datetime_format_offset(w.offset.seconds)).finish();
+}
+
+// RFC 3339: the ISO 8601 profile with "Z" for UTC. The fraction is written
+// in full, so nothing implies a precision the value does not have.
+pub Str datetime_format_rfc3339(Zoned w) {
+    StrBuf b0 = cal_pad_date_onto(StrBuf(), w.civil.date).push("T");
+    StrBuf b1 = datetime_time_onto(b0, w.civil.time, 9);
+    if (w.offset.seconds == 0) { return b1.push("Z").finish(); }
+    return b1.push(datetime_format_offset(w.offset.seconds)).finish();
+}
+
+// The date and time with the nanosecond fraction dropped, which is what
+// almost every log line wants.
+pub Str datetime_format_second(Zoned w) {
+    StrBuf b0 = cal_pad_date_onto(StrBuf(), w.civil.date).push(" ");
+    return datetime_hms_onto(b0, w.civil.time).finish();
+}
+
+// hh:mm:ss with the fraction omitted.
+StrBuf datetime_hms_onto(StrBuf b, Time t) {
+    StrBuf b1 = cal_pad_onto(b, t.hour, 2, "0").push(":");
+    StrBuf b2 = cal_pad_onto(b1, t.minute, 2, "0").push(":");
+    return cal_pad_onto(b2, t.second, 2, "0");
+}
+
+// hh:mm:ss with `digits` of fraction, 0 writing none at all.
+StrBuf datetime_time_onto(StrBuf b, Time t, Int digits) {
+    StrBuf b1 = datetime_hms_onto(b, t);
+    if (digits <= 0 || t.nanosecond == 0) { return b1; }
+    return b1.push(".").push(cal_pad_left(f"{t.nanosecond}", 9, "0"));
+}
+
+// -- strftime -----------------------------------------------------------
+// A field is '%', then any of the flags C allows in any order, then an
+// optional width, then one conversion character.
+
+type FmtFlags = { Bool nopad; Bool space; Bool zero; Bool upper; Bool swap; Int width; };
+
+pub FmtFlags fmt_new() { return FmtFlags {.nopad = false, .space = false, .zero = false, .upper = false, .swap = false, .width = 0}; }
+
+pub FmtFlags fmt_flag(FmtFlags f, Int c) {
+    FmtFlags a = if (c == 45) { FmtFlags {.nopad = true, .space = f.space, .zero = f.zero, .upper = f.upper, .swap = f.swap, .width = f.width} } else { f };
+    FmtFlags b = if (c == 95) { FmtFlags {.nopad = a.nopad, .space = true, .zero = a.zero, .upper = a.upper, .swap = a.swap, .width = a.width} } else { a };
+    FmtFlags d = if (c == 48) { FmtFlags {.nopad = b.nopad, .space = b.space, .zero = true, .upper = b.upper, .swap = b.swap, .width = b.width} } else { b };
+    FmtFlags e = if (c == 94) { FmtFlags {.nopad = d.nopad, .space = d.space, .zero = d.zero, .upper = true, .swap = d.swap, .width = d.width} } else { d };
+    return if (c == 35) { FmtFlags {.nopad = e.nopad, .space = e.space, .zero = e.zero, .upper = e.upper, .swap = true, .width = e.width} } else { e };
+}
+
+// The hour as a 12-hour clock reads it, 0 for midnight and 12 for noon.
+pub Int datetime_hour12(Int h) {
+    Int m = h % 12;
+    return if (m == 0) { 12 } else { m };
+}
+
+// The year within its century, which is what %y prints and what its
+// zero-padding is measured against.
+pub Int cal_year_base(Int y) { return cal_floor_div(y, 100) * 100; }
+
+// The ISO week-numbering year, which the days around New Year can differ
+// from the calendar year by.
+pub Int cal_iso_year(Int y, Int z) { return cal_week_date(z).year; }
+
+// The fractional seconds at `digits` places, trimmed of trailing zeros.
+Str datetime_frac(Int ns, Int digits) {
+    Str pad = cal_pad_left(f"{ns}", 9, "0");
+    return cal_trim_zeros(str_slice(pad, 0, digits));
+}
+
+// The zone's abbreviation, or a numeric stand-in when it names none.
+Str datetime_zone_name(Zoned w) {
+    if (w.offset.abbrev != "") { return w.offset.abbrev; }
+    return datetime_offset_name(w.offset.seconds);
+}
+
+// A numeric field's text. The padding is applied here rather than baked
+// into each field, because that is what lets '%-d' drop the padding and
+// '%6Y' widen it -- strftime's flags act on the field, not on the number.
+pub Str datetime_num(FmtFlags f, Int v, Int natural, Str deffill) {
+    Str digits = if (v < 0) { f"{-v}" } else { f"{v}" };
+    Str sign = if (v < 0) { "-" } else { "" };
+    if (f.nopad) { return sign + digits; }
+    Int w = if (f.width > 0) { f.width } else { natural };
+    Str fill = if (f.space) { " " } else { if (f.zero) { "0" } else { deffill } };
+    // A sign goes in front of the padding, as printf does.
+    if (sign != "") { return cal_pad_left(digits, w - 1, fill) + sign; }
+    return cal_pad_left(digits, w, fill);
+}
+
+Str datetime_num2(FmtFlags f, Int v, Int natural) { return datetime_num(f, v, natural, "0"); }
+
+// A field's rendered text: its flags, its width, and the two flags that
+// act on letters rather than digits.
+pub Str datetime_field(Zoned w, FmtFlags f, Int conv, Names names) {
+    Str raw = datetime_field_raw(w, conv, names, f);
+    Str body = if (f.upper) { str_to_upper(raw) } else { raw };
+    Str swapped = if (f.swap) { str_to_lower(body) } else { body };
+    Int len = str_len(swapped);
+    if (f.width <= len || f.nopad) { return swapped; }
+    Str fill = if (f.zero) { "0" } else { " " };
+    return cal_pad_left(swapped, f.width, fill);
+}
+
+// Lower-case what is a letter, leave the rest: that is all "#" is asked to
+// do, and doing it here means it works on every field at once.
+Str datetime_swap_case(Str s) {
+    Int n = str_len(s);
+    return datetime_swap_at(s, 0, n, StrBuf());
+}
+
+Str datetime_swap_at(Str s, Int i, Int n, StrBuf b) {
+    if (i >= n) { return b.finish(); }
+    Int c = str_char_at(s, i);
+    Int lower = if (c >= 65 && c <= 90) { c + 32 } else { c };
+    return datetime_swap_at(s, i + 1, n, b.push_char(lower));
+}
+
+// The text of one conversion, padded per the flags. Every conversion C's
+// strftime defines is here, plus %s, %f, %N and %Ez, which a date and
+// time library is asked for often enough to be worth naming.
+pub Str datetime_field_raw(Zoned w, Int conv, Names names, FmtFlags f) {
+    DateTime x = w.civil;
+    Date d = x.date;
+    Time t = x.time;
+    Int z = cal_days_from_date(d);
+    Int dow = cal_weekday_iso(z);
+    Int h12 = datetime_hour12(t.hour);
+    Bool ampm = t.hour < 12;
+    Int sunday = cal_weekday_sunday(z);
+    Int iso = cal_iso_year(d.year, z);
+    if (conv == 97) { return cal_weekday_abbr(names, dow); }
+    if (conv == 65) { return cal_weekday_name(names, dow); }
+    if (conv == 98 || conv == 104) { return cal_month_abbr(names, d.month); }
+    if (conv == 66) { return cal_month_name(names, d.month); }
+    if (conv == 99) { return datetime_fmt_c(d, t); }
+    if (conv == 67) { return datetime_num2(f, cal_floor_div(d.year, 100), 2); }
+    if (conv == 100) { return datetime_num2(f, d.day, 2); }
+    if (conv == 101) { return datetime_num(f, d.day, 2, " "); }
+    if (conv == 68) { return datetime_num2(f, d.month, 2) + "/" + datetime_num2(f, d.day, 2) + "/" + datetime_num2(f, d.year - cal_year_base(d.year), 2); }
+    if (conv == 70) { return cal_format_date(d); }
+    if (conv == 103) { return datetime_num2(f, iso - cal_year_base(iso), 2); }
+    if (conv == 71) { return cal_format_year(iso); }
+    if (conv == 72) { return datetime_num2(f, t.hour, 2); }
+    if (conv == 73) { return datetime_num2(f, h12, 2); }
+    if (conv == 106) { return datetime_num2(f, cal_day_of_year(d.year, d.month, d.day), 3); }
+    if (conv == 107) { return datetime_num(f, t.hour, 2, " "); }
+    if (conv == 108) { return datetime_num(f, h12, 2, " "); }
+    if (conv == 109) { return datetime_num2(f, d.month, 2); }
+    if (conv == 77) { return datetime_num2(f, t.minute, 2); }
+    if (conv == 110) { return "\n"; }
+    if (conv == 112) { return if (ampm) { "AM" } else { "PM" }; }
+    if (conv == 80) { return if (ampm) { "am" } else { "pm" }; }
+    if (conv == 114) { return datetime_num2(f, h12, 2) + ":" + datetime_num2(f, t.minute, 2) + ":" + datetime_num2(f, t.second, 2) + " " + (if (ampm) { "AM" } else { "PM" }); }
+    if (conv == 82) { return datetime_num2(f, t.hour, 2) + ":" + datetime_num2(f, t.minute, 2); }
+    if (conv == 83) { return datetime_num2(f, t.second, 2); }
+    if (conv == 116) { return "\t"; }
+    if (conv == 84) { return datetime_num2(f, t.hour, 2) + ":" + datetime_num2(f, t.minute, 2) + ":" + datetime_num2(f, t.second, 2); }
+    if (conv == 117) { return datetime_num2(f, dow, 1); }
+    if (conv == 85) { return datetime_num2(f, cal_week_sunday(d.year, d.month, d.day), 2); }
+    if (conv == 86) { return datetime_num2(f, cal_week_date(z).week, 2); }
+    if (conv == 119) { return datetime_num2(f, sunday, 1); }
+    if (conv == 87) { return datetime_num2(f, cal_week_monday(d.year, d.month, d.day), 2); }
+    if (conv == 120) { return datetime_num2(f, d.month, 2) + "/" + datetime_num2(f, d.day, 2) + "/" + datetime_num2(f, d.year - cal_year_base(d.year), 2); }
+    if (conv == 88) { return datetime_num2(f, t.hour, 2) + ":" + datetime_num2(f, t.minute, 2) + ":" + datetime_num2(f, t.second, 2); }
+    if (conv == 121) { return datetime_num2(f, d.year - cal_year_base(d.year), 2); }
+    if (conv == 89) { return cal_format_year(d.year); }
+    if (conv == 122) { return datetime_format_offset_basic(w.offset.seconds); }
+    if (conv == 69) { return datetime_format_offset(w.offset.seconds); }
+    if (conv == 90) { return datetime_zone_name(w); }
+    if (conv == 115) { return f"{zoned_local_seconds(w) - w.offset.seconds}"; }
+    if (conv == 102) { return datetime_frac(t.nanosecond, 6); }
+    if (conv == 78) { return cal_pad_left(f"{t.nanosecond}", 9, "0"); }
+    if (conv == 37) { return "%"; }
+    return "";
+}
+
+Str datetime_pad(Int v, Int width, Str fill) { return cal_pad_left(f"{v}", width, fill); }
+
+// %c in the C locale's spelling: "Thu Oct  1 13:05:09 2026".
+Str datetime_fmt_c(Date d, Time t) {
+    Names n = cal_default_names();
+    Int dow = cal_weekday_of(d);
+    Str wd = cal_weekday_abbr(n, dow);
+    Str mo = cal_month_abbr(n, d.month);
+    Str day = cal_pad_left(f"{d.day}", 2, " ");
+    return wd + " " + mo + " " + day + " " + datetime_hms_onto(StrBuf(), t).finish() + " " + cal_format_year(d.year);
+}
+
+// The format-string driver: literal text is copied through and each field
+// is expanded, all onto one builder.
+pub Str datetime_strftime(Zoned w, Str fmt, Names names) {
+    return datetime_fmt_at(fmt, 0, StrBuf(), w, names).finish();
+}
+
+pub StrBuf datetime_fmt_at(Str fmt, Int i, StrBuf out, Zoned w, Names names) {
+    Int n = str_len(fmt);
+    if (i >= n) { return out; }
+    Int c = str_char_at(fmt, i);
+    if (c != 37) { return datetime_fmt_at(fmt, i + 1, out.push_char(c), w, names); }
+    FmtScan scan = datetime_scan_flags(fmt, i + 1, fmt_new());
+    Int j = scan.pos;
+    if (j >= n) { return out.push("%"); }
+    Int conv = str_char_at(fmt, j);
+    return datetime_fmt_at(fmt, j + 1, out.push(datetime_field(w, scan.flags, conv, names)), w, names);
+}
+
+// The flags a field carries, and where the conversion character starts.
+// Both come back together because the flags are only meaningful once the
+// conversion they belong to has been read.
+type FmtScan = { FmtFlags flags; Int pos; };
+
+// The flags and the width after a '%', in any order as C allows. '0' is
+// the zero-fill flag, not the start of a width, which is why it is tested
+// before the digits.
+pub FmtScan datetime_scan_flags(Str fmt, Int i, FmtFlags f) {
+    Int n = str_len(fmt);
+    if (i >= n) { return FmtScan {.flags = f, .pos = i}; }
+    Int c = str_char_at(fmt, i);
+    if (c == 45 || c == 95 || c == 48 || c == 94 || c == 35) { return datetime_scan_flags(fmt, i + 1, fmt_flag(f, c)); }
+    if (c >= 49 && c <= 57) {
+        FmtFlags w = FmtFlags {.nopad = f.nopad, .space = f.space, .zero = f.zero, .upper = f.upper, .swap = f.swap, .width = f.width * 10 + (c - 48)};
+        return datetime_scan_flags(fmt, i + 1, w);
+    }
+    return FmtScan {.flags = f, .pos = i};
+}
+
+// Just the position, for a caller that only needs to skip a field.
+pub Int datetime_fmt_flags(Str fmt, Int i, FmtFlags f) { return datetime_scan_flags(fmt, i, f).pos; }
+
+// strftime with the English defaults.
+pub Str datetime_format(Zoned w, Str fmt) { return datetime_strftime(w, fmt, cal_default_names()); }
+
+// -- Reading text -------------------------------------------------------
+
+// The offset a suffix names, in seconds east of UTC, or posix_no_offset()
+// when there is none. Accepts "Z", "z", "+hh:mm", "+hhmm", "+hh".
+pub Int datetime_offset_of(Str s, Int i) {
+    Int n = str_len(s);
+    if (i >= n) { return posix_no_offset(); }
+    Int c = str_char_at(s, i);
+    if (c == 90 || c == 122) { return 0; }
+    Bool neg = c == 45;
+    Int start = if (c == 45 || c == 43) { i + 1 } else { i };
+    Int hh = posix_digits(s, start, 2);
+    if (hh < 0) { return posix_no_offset(); }
+    Int hend = posix_skip_digits(s, start);
+    Int colon = posix_at_colon(s, hend);
+    Int mm = if (colon >= 0) { posix_digits(s, colon + 1, 2) } else { datetime_offset_minutes(s, start, hend) };
+    if (mm < 0) { return posix_no_offset(); }
+    Int total = hh * 3600 + mm * 60;
+    return if (neg) { 0 - total } else { total };
+}
+
+// "+hhmm" spells the minutes without a colon: four digits and no colon
+// means the last two are minutes, as RFC 3339 does allow.
+Int datetime_offset_minutes(Str s, Int start, Int hend) {
+    Int rest = hend - start;
+    if (rest == 4) { return posix_digits(s, hend - 2, 2); }
+    return 0;
+}
+
+pub DateTimeParse datetime_parse(Str s) {
+    DateTimeParse a = datetime_parse_extended(s);
+    if (match a { ParsedZoned(w) => true, BadDateTime => false }) { return a; }
+    return datetime_parse_basic(s);
+}
+
+pub DateTimeParse datetime_parse_rfc3339(Str s) { return datetime_parse_extended(s); }
+
+// "2026-10-01T12:30:05.123456789+02:00", "2026-10-01 12:30:05Z",
+// "2026-10-01", "2026-10" and "2026" all read; the parts left out are
+// zero, and a missing offset is taken as UTC.
+pub DateTimeParse datetime_parse_extended(Str s) {
+    Int n = str_len(s);
+    if (n == 4) { return datetime_year_only(s); }
+    if (n == 7) { return datetime_year_month(s); }
+    if (n < 10) { return BadDateTime; }
+    Int y = posix_digits(s, 0, 4);
+    Int m = posix_digits(s, 5, 2);
+    Int d = posix_digits(s, 8, 2);
+    if (y < 0 || m < 0 || d < 0) { return BadDateTime; }
+    if (str_char_at(s, 4) != 45 || str_char_at(s, 7) != 45) { return BadDateTime; }
+    if (!cal_is_valid_date(y, m, d)) { return BadDateTime; }
+    return datetime_parse_time(s, 10, Date {.year = y, .month = m, .day = d});
+}
+
+DateTimeParse datetime_year_only(Str s) {
+    Int y = posix_digits(s, 0, 4);
+    if (y < 0) { return BadDateTime; }
+    return ParsedZoned(datetime_finish(Date {.year = y, .month = 1, .day = 1}, 0, 0, 0, 0, 0));
+}
+
+DateTimeParse datetime_year_month(Str s) {
+    Int y = posix_digits(s, 0, 4);
+    Int m = posix_digits(s, 5, 2);
+    if (y < 0 || m < 0 || str_char_at(s, 4) != 45) { return BadDateTime; }
+    if (m < 1 || m > 12) { return BadDateTime; }
+    return ParsedZoned(datetime_finish(Date {.year = y, .month = m, .day = 1}, 0, 0, 0, 0, 0));
+}
+
+// The time half, from the separator onwards. What is left out stays
+// zero, and an offset that is absent or unread is taken as UTC.
+DateTimeParse datetime_parse_time(Str s, Int i, Date d) {
+    Int n = str_len(s);
+    if (i >= n) { return ParsedZoned(datetime_finish(d, 0, 0, 0, 0, 0)); }
+    Int sep = str_char_at(s, i);
+    if (sep != 84 && sep != 116 && sep != 32) { return BadDateTime; }
+    Int got = posix_digits(s, i + 1, 2);
+    if (got < 0) { return BadDateTime; }
+    Int h = got;
+    Int colon = posix_at_colon(s, i + 3);
+    if (colon < 0) { return BadDateTime; }
+    Int got2 = posix_digits(s, colon + 1, 2);
+    if (got2 < 0) { return BadDateTime; }
+    Int mi = got2;
+    Int c2 = posix_at_colon(s, colon + 3);
+    Int k = colon + 3;
+    Int sec = if (c2 >= 0) { posix_digits(s, c2 + 1, 2) } else { 0 };
+    Int secok = if (c2 < 0) { 0 } else { if (sec < 0) { 0 - 1 } else { 1 } };
+    if (secok < 0) { return BadDateTime; }
+    Int k2 = if (c2 >= 0) { c2 + 3 } else { k };
+    Bool has_frac = k2 < n && datetime_is_frac_at(s, k2);
+    Int ns = if (has_frac) { datetime_parse_frac(s, k2 + 1, 100000000) } else { 0 };
+    if (ns < 0) { return BadDateTime; }
+    Int k3 = if (has_frac) { datetime_frac_end(s, k2 + 1) } else { k2 };
+    Int read = datetime_offset_of(s, k3);
+    Int off = if (read == posix_no_offset()) { 0 } else { read };
+    Zoned w = datetime_finish(d, h, mi, sec, ns, off);
+    if (!datetime_fields_ok(w.civil)) { return BadDateTime; }
+    return ParsedZoned(w);
+}
+
+// Whether a "." or "," at `i` introduces a fraction.
+pub Bool datetime_is_frac_at(Str s, Int i) {
+    Int n = str_len(s);
+    if (i >= n) { return false; }
+    Int c = str_char_at(s, i);
+    return c == 46 || c == 44;
+}
+
+// Nanoseconds from a fraction, each digit scaled by its place value, so
+// ".5" is half a second and ".123" is 123 ms. Digits past the ninth have
+// no weight and are dropped.
+Int datetime_parse_frac(Str s, Int i, Int weight) {
+    Int n = str_len(s);
+    if (weight < 1 || i >= n) { return 0; }
+    Int c = str_char_at(s, i);
+    if (!posix_is_digit(c)) { return 0; }
+    Int step = (c - 48) * weight;
+    return step + datetime_parse_frac(s, i + 1, weight / 10);
+}
+
+Int datetime_frac_end(Str s, Int i) {
+    Int n = str_len(s);
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (!posix_is_digit(c)) { return i; }
+    return datetime_frac_end(s, i + 1);
+}
+
+Zoned datetime_finish(Date d, Int h, Int mi, Int sec, Int ns, Int off) {
+    Time t = Time {.hour = h, .minute = mi, .second = sec, .nanosecond = ns};
+    return zoned_fixed(DateTime {.date = d, .time = t}, off);
+}
+
+// Whether the fields name a real moment. A second of 60 is allowed: only
+// a leap second makes it real, and whether one is accepted is the caller's
+// call, not the parser's.
+pub Bool datetime_fields_ok(DateTime x) {
+    return cal_is_valid_datetime(x.date.year, x.date.month, x.date.day, x.time.hour, x.time.minute, x.time.second, x.time.nanosecond);
+}
+
+// "20261001T123005Z" and "20261001T123005.5+0200": the basic form, which
+// has no separators at all.
+pub DateTimeParse datetime_parse_basic(Str s) {
+    Int n = str_len(s);
+    if (n < 8) { return BadDateTime; }
+    Int y = posix_digits(s, 0, 4);
+    Int m = posix_digits(s, 4, 2);
+    Int d = posix_digits(s, 6, 2);
+    if (y < 0 || m < 0 || d < 0) { return BadDateTime; }
+    if (!cal_is_valid_date(y, m, d)) { return BadDateTime; }
+    Date dt = Date {.year = y, .month = m, .day = d};
+    if (n == 8) { return ParsedZoned(datetime_finish(dt, 0, 0, 0, 0, 0)); }
+    Int sep = str_char_at(s, 8);
+    if (sep != 84 && sep != 116 && sep != 32) { return BadDateTime; }
+    Int hh = posix_digits(s, 9, 2);
+    Int mm = posix_digits(s, 11, 2);
+    if (hh < 0 || mm < 0) { return BadDateTime; }
+    Int got_sec = if (n >= 15) { posix_digits(s, 13, 2) } else { 0 };
+    if (got_sec < 0) { return BadDateTime; }
+    Int sec = got_sec;
+    Int k = if (n >= 15) { 15 } else { 13 };
+    Bool has_frac = k < n && datetime_is_frac_at(s, k);
+    Int got = if (has_frac) { datetime_parse_frac(s, k + 1, 100000000) } else { 0 };
+    if (got < 0) { return BadDateTime; }
+    Int k2 = if (has_frac) { datetime_frac_end(s, k + 1) } else { k };
+    Int off = datetime_offset_of(s, k2);
+    Zoned w = datetime_finish(dt, hh, mm, sec, got, if (off == posix_no_offset()) { 0 } else { off });
+    if (!datetime_fields_ok(w.civil)) { return BadDateTime; }
+    return ParsedZoned(w);
+}
+
+// The reading out of text, or a zero UTC reading when the text was none.
+pub Zoned datetime_or_zero(DateTimeParse r) {
+    return match r {
+        ParsedZoned(w) => w,
+        BadDateTime => zoned_utc(instant_zero()),
+    };
+}

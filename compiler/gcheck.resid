@@ -2339,7 +2339,7 @@ GKT gk_marg_same(GK k, Int id, Str want, Str msg, Str ty) {
 Bool gk_is_provider(GK k, Int recv) {
     if (k.g.ns[recv].kind != "ref") { return false; }
     Str n = k.g.ns[recv].text;
-    if (n != "environment" && n != "filesystem" && n != "args" && n != "process") { return false; }
+    if (n != "environment" && n != "filesystem" && n != "args" && n != "process" && n != "clock") { return false; }
     return kg_def(k.rs, recv) == rs_builtin();
 }
 
@@ -2348,6 +2348,7 @@ Str gk_provider_params(Str fam, Str m) {
     if (fam == "environment" && m == "get") { return "Str"; }
     if (fam == "args" && m == "get") { return "Int"; }
     if (fam == "process" && m == "run") { return "Str"; }
+    if (fam == "clock") { if (m == "sleep_ns") { return "Int"; } return "?"; }
     if (fam != "filesystem") { return "?"; }
     Bool path = m == "read_all" || m == "exists" || m == "is_dir" || m == "create_dir" || m == "open" || m == "list_dir" || m == "read_bytes" || m == "sha256";
     if (path) { return "Str"; }
@@ -2361,6 +2362,7 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     GK k0 = gk_tl(kp, tl_add(kp.tl, kg_kid(kp.g, id, 0), "Provider(" + fam + ")"));
     if (k0.g.ns[id].nk == 1) {
         if (fam == "args" && m == "count") { return gt(k0, "Int", id); }
+        if (fam == "clock") { return gt(k0, "Int", id); }
         return gterr(k0, "unknown provider method " + fam + "." + m, id);
     }
     Str want = gk_provider_params(fam, m);
@@ -2382,6 +2384,7 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     if (fam == "args" && m == "count") { return gt(k, "Int", id); }
     if (fam == "args" && m == "get") { return gt(k, "Str", id); }
     if (fam == "process" && m == "run") { return gt(k, "Int", id); }
+    if (fam == "clock") { return gt(k, "Int", id); }
     return gterr(k, "unknown provider method " + fam + "." + m, id);
 }
 
@@ -3666,8 +3669,8 @@ Str gk_requires_err(Str prefix) {
 Str gk_unknown_family(List(Str) fs, Int i) {
     if (i >= fs.len()) { return ""; }
     Str f = fs[i];
-    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal";
-    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal)"; }
+    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock";
+    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock)"; }
     return gk_unknown_family(fs, i + 1);
 }
 
@@ -3818,11 +3821,12 @@ Str gk_builtin_family(Str n) {
     if (str_starts_with(n, "resid_tcp_")) { return "network"; }
     if (str_starts_with(n, "resid_dbg_")) { return "process"; }
     if (str_starts_with(n, "resid_term_")) { return "terminal"; }
+    if (str_starts_with(n, "resid_clock_")) { return "clock"; }
     return "";
 }
 
 // Builtins that change state a read-only grant does not cover.
-Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_restore"; }
+Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns"; }
 
 // Runtime internals that free or move memory the program may still see
 // (spec §5: storage is never exposed). Only the compiler's own source may
@@ -4166,9 +4170,10 @@ Str gk_need_via(Sigs fs, List(Str) need, List(Str) decl, List(Str) cs, Int j, St
     return gk_need_via(fs, need, decl, cs, j + 1, e);
 }
 
-// A need as @requires spells it (filesystem and terminal grants have modes).
+// A need as @requires spells it (filesystem, terminal and clock grants
+// have modes).
 Str cap_show(Str e) {
-    if (cap_readonly(e) && (cap_family(e) == "filesystem" || cap_family(e) == "terminal")) { return cap_family(e) + "(readonly)"; }
+    if (cap_readonly(e) && (cap_family(e) == "filesystem" || cap_family(e) == "terminal" || cap_family(e) == "clock")) { return cap_family(e) + "(readonly)"; }
     return cap_family(e);
 }
 

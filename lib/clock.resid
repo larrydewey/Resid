@@ -1,0 +1,107 @@
+// --- lib/clock.resid - reading the clock (capability `clock`) -----------
+// The one module that needs a grant. Everything else in the date and time
+// library is arithmetic over a value you already have: converting,
+// formatting, comparing and zone-resolving a timestamp need no authority
+// at all. Deciding *what time it is now* is different -- it is knowledge
+// the program does not have, and under Fundamental Laws 8 and 9 it arrives
+// only through an effect that has been authorized. So it gets its own
+// capability family, and this is the whole of it: grep "@requires" here to
+// see every clock reading in the standard library.
+//
+// The split inside the family is the same one `terminal` makes. Reading
+// time observes it; sleeping consumes it. So @requires(clock) is the full
+// grant and @requires(clock(readonly)) is enough to read a clock without
+// also being able to stall the thread, and E0219 says so when a read-only
+// grant reaches sleep.
+//
+// Note what is *not* here: no wall-clock arithmetic, no calendar, no zone.
+// A caller that wants the local time needs lib/zone.resid as well, which
+// is a separate and much larger grant (filesystem) for the zone database.
+
+import "calendar.resid";
+import "duration.resid";
+import "instant.resid";
+
+// -- Reading ------------------------------------------------------------
+
+// The moment, from the system wall clock.
+//
+// Two readings are needed for full nanosecond resolution and are taken one
+// after the other: `seconds` covers the whole of Int's range, while
+// `now_ns` carries the fraction within the second. Splitting a single
+// nanosecond reading into the two fields would overflow an Int outside
+// 1677-09-21 .. 2262-04-11, so the fraction is taken by remainder instead,
+// which is exact for every instant. The two reads can straddle a second
+// boundary, and a clock that steps between them can describe an instant
+// that never was; both are inherent to asking a wall clock what time it is.
+// clock_monotonic is immune to the stepping, and is what an interval should
+// be measured with.
+@requires(clock(readonly))
+pub Instant clock_now() {
+    Int frac = cal_floor_mod(clock.now_ns(), 1000000000);
+    Int sec = clock.now_sec();
+    return floor_to_instant(sec, frac);
+}
+
+// Nanoseconds since the Unix epoch, as one Int: convenient, and only
+// meaningful from 1677-09-21 to 2262-04-11.
+@requires(clock(readonly))
+pub Int clock_now_nanos() { return clock.now_ns(); }
+
+// Whole seconds since the Unix epoch, over the whole of Int's range.
+@requires(clock(readonly))
+pub Int clock_now_seconds() { return clock.now_sec(); }
+
+// Nanoseconds from an unspecified monotonic origin, never stepping. An
+// Int of them spans ~292 years, and two reads of it measure an interval.
+@requires(clock(readonly))
+pub Int clock_monotonic_ns() { return clock.monotonic_ns(); }
+
+// -- Waiting ------------------------------------------------------------
+
+// Sleep at least `ns` nanoseconds. Returns the part of `ns` still unslept
+// when a signal cut it short, which is 0 when the whole duration elapsed,
+// and -1 when the request made no sense. A read-only grant does not cover
+// this: reading the clock is observation, sleeping is consumption.
+@requires(clock)
+pub Int clock_sleep_ns(Int ns) { return clock.sleep_ns(ns); }
+
+@requires(clock)
+pub Int clock_sleep_us(Int us) { return clock_sleep_ns(us * 1000); }
+
+@requires(clock)
+pub Int clock_sleep_ms(Int ms) { return clock_sleep_ns(ms * 1000000); }
+
+@requires(clock)
+pub Int clock_sleep_seconds(Int s) { return clock_sleep_ns(s * 1000000000); }
+
+// Sleep for a length of time.
+@requires(clock)
+pub Int clock_sleep(Span d) { return clock_sleep_ns(span_total_nanos(d)); }
+
+// -- Measuring ----------------------------------------------------------
+
+// How long `body` takes, in nanoseconds, measured monotonically so a wall
+// clock step in the middle cannot make the answer negative or absurd. The
+// result is the reading *after* the body ran.
+@requires(clock(readonly))
+Int clock_measure(Void closure() body) {
+    Int t0 = clock_monotonic_ns();
+    _ = body();
+    return clock_monotonic_ns() - t0;
+}
+
+// -- Against the calendar -----------------------------------------------
+// Everything below is arithmetic over what clock_now returned, so it needs
+// no further grant: the clock was already read.
+
+// Today's date where the clocks are, at UTC.
+@requires(clock(readonly))
+pub Date clock_today_utc() { return instant_to_utc(clock_now()).date; }
+
+// The current civil time at UTC.
+@requires(clock(readonly))
+pub DateTime clock_now_utc() { return instant_to_utc(clock_now()); }
+
+// The Unix epoch as a constant, for code that wants to name it.
+pub Instant clock_epoch() { return instant_zero(); }

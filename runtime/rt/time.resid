@@ -1,0 +1,69 @@
+// The clock provider (capability `clock`): the system wall clock, a
+// monotonic counter, and sleep.
+//
+// Linux clock_gettime (228) and nanosleep (35). clockid 0 is
+// CLOCK_REALTIME (the wall clock, which steps and can jump), 1 is
+// CLOCK_MONOTONIC (never steps, from an unspecified boot-time origin).
+// A syscall result is negative errno: 4 is EINTR.
+//
+// Times are {i64 seconds; i64 nanoseconds}, the kernel's struct timespec.
+// Arithmetic here wraps like C: resid_clock_now_ns deliberately overflows
+// an i64 outside 1677-09-21 .. 2262-04-11, which is why the seconds form
+// exists alongside it.
+
+Int clk_ts() { return resid_raw_tls("clock_ts", 32); }
+
+// clock_gettime into ts_buf()'s first 16 bytes; the result, 0 on success.
+Int clk_gettime(Int id) { return resid_raw_syscall(228, id, clk_ts(), 0, 0, 0, 0); }
+
+// Nanoseconds since the Unix epoch, as one i64 (1677-09-21 .. 2262-04-11).
+// Wrapping past those bounds is defined, not a trap: the nanoseconds of the
+// era simply do not fit, and the seconds form does.
+@export("resid_clock_now_ns", "i64()")
+pub Int rt_clock_now_ns() {
+    if (clk_gettime(0) != 0) { return 0 - 1; }
+    Int t = clk_ts();
+    Int sec = ld64(t);
+    Int ns = ld64(t + 8);
+    return sec * 1000000000 + ns;
+}
+
+// Whole seconds since the Unix epoch: the full i64 range, ~+-292 billion
+// years, at one-second resolution.
+@export("resid_clock_now_sec", "i64()")
+pub Int rt_clock_now_sec() {
+    if (clk_gettime(0) != 0) { return 0 - 1; }
+    return ld64(clk_ts());
+}
+
+// Nanoseconds from an unspecified monotonic origin. Immune to wall-clock
+// steps, so it is what an interval should be measured with; an i64 of it
+// spans ~292 years.
+@export("resid_clock_monotonic_ns", "i64()")
+pub Int rt_clock_monotonic_ns() {
+    if (clk_gettime(1) != 0) { return 0 - 1; }
+    Int t = clk_ts();
+    Int sec = ld64(t);
+    Int ns = ld64(t + 8);
+    return sec * 1000000000 + ns;
+}
+
+// Sleep for `ns` nanoseconds. Returns 0 when the full duration elapsed,
+// the unslept remainder in nanoseconds when a signal interrupted it, and
+// -1 when the request was not sleepable (a negative span, or a syscall
+// error). This is the one `clock` verb a read-only grant does not cover:
+// reading time is observation, sleeping consumes it.
+@export("resid_clock_sleep_ns", "i64(i64)")
+pub Int rt_clock_sleep_ns(Int ns) {
+    if (ns < 0) { return 0 - 1; }
+    Int t = clk_ts();
+    Int sec = ns / 1000000000;
+    Int frac = ns % 1000000000;
+    _ = st64(t, sec) + st64(t + 8, frac);
+    Int r = resid_raw_syscall(35, t, t + 16, 0, 0, 0, 0);
+    if (r == 0) { return 0; }
+    // Interrupted: the kernel wrote the unslept remainder past our request.
+    Int rem = ld64(t + 16) * 1000000000 + ld64(t + 24);
+    if (r == 0 - 4) { return if (rem > 0) { rem } else { 1 }; }
+    return 0 - 1;
+}

@@ -1130,7 +1130,7 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     Int recv = lw_kid(w, id, 0);
     Str m = lw_text(w, id);
     Str rn = lw_text(w, recv);
-    Bool prov = lw_kind(w, recv) == "ref" && (rn == "args" || rn == "filesystem" || rn == "process" || rn == "environment" || rn == "git") && env_lookup(env, rn) == "";
+    Bool prov = lw_kind(w, recv) == "ref" && (rn == "args" || rn == "filesystem" || rn == "process" || rn == "environment" || rn == "git" || rn == "clock") && env_lookup(env, rn) == "";
     if (prov) { return lw_provider(w, id, rn, m, env, c); }
     GT base = lw_expr(w, recv, env, c);
     if (base.err != "") { return base; }

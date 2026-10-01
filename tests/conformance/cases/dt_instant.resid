@@ -1,0 +1,89 @@
+import "instant.resid";
+
+Str ck(Str name, Str got, Str want) {
+    if (got == want) { println(name + " OK"); } else { println(name + " BAD got=" + got + " want=" + want); }
+    return got;
+}
+Int main() {
+    ck("zero", f"{instant_zero().seconds}.{instant_zero().nanoseconds}", "0.0");
+    ck("of secs", f"{instant_of_seconds(5).seconds}", "5");
+    ck("of nanos", f"{instant_of_nanos(1500000000).seconds}.{instant_of_nanos(1500000000).nanoseconds}", "1.500000000");
+    ck("of nanos neg", f"{instant_of_nanos(-1).seconds}.{instant_of_nanos(-1).nanoseconds}", "-1.999999999");
+    ck("after days", f"{instant_after(Days, 2).seconds}", "172800");
+    ck("epoch utc", cal_format_datetime(instant_to_utc(instant_zero())), "1970-01-01T00:00:00.000000000");
+    ck("1 sec utc", cal_format_datetime(instant_to_utc(instant_of_seconds(1))), "1970-01-01T00:00:01.000000000");
+    ck("pre epoch", cal_format_datetime(instant_to_utc(instant_of_seconds(-1))), "1969-12-31T23:59:59.000000000");
+    ck("day bk", cal_format_date(instant_to_utc(instant_of_seconds(86400)).date), "1970-01-02");
+    ck("day bk neg", cal_format_date(instant_to_utc(instant_of_seconds(-86400)).date), "1969-12-31");
+    ck("day num", f"{instant_day_number(instant_of_seconds(3600))}", "0");
+    ck("day num neg", f"{instant_day_number(instant_of_seconds(-3600))}", "-1");
+    ck("sec of day", f"{instant_seconds_of_day(instant_of_seconds(3600 + 61))}", "3661");
+    ck("utc roundtrip", f"{instant_to_utc(instant_from_civil(Date {.year = 2026, .month = 10, .day = 1}, Time {.hour = 12, .minute = 30, .second = 5, .nanosecond = 7})).time.hour}", "12");
+    ck("utc roundtrip ns", f"{instant_from_utc(DateTime {.date = Date {.year = 1999, .month = 12, .day = 31 }, .time = Time {.hour = 23, .minute = 59, .second = 59, .nanosecond = 999999999}}).nanoseconds}", "999999999");
+    ck("utc roundtrip neg", f"{instant_from_civil(Date {.year = 1969, .month = 12, .day = 31}, Time {.hour = 23, .minute = 59, .second = 59, .nanosecond = 0}).seconds}", "-1");
+    ck("fmt", instant_format(instant_zero()), "1970-01-01T00:00:00.000000000Z");
+    ck("fmt neg", instant_format(instant_of_seconds(-1)), "1969-12-31T23:59:59.000000000Z");
+    ck("fmt negfrac", instant_format(instant_of_nanos(-1000000001)), "1969-12-31T23:59:58.999999999Z");
+    ck("cmp", f"{instant_compare(instant_of_seconds(1), instant_of_seconds(2))}", "-1");
+    ck("cmp eq", f"{instant_compare(instant_of_seconds(2), instant_of_seconds(2))}", "0");
+    ckb_ok("lt", instant_lt(instant_of_seconds(1), instant_of_seconds(2)));
+    ckb_ok("ge", instant_ge(instant_of_seconds(2), instant_of_seconds(2)));
+    ckb_ok("not le", !instant_le(instant_of_seconds(3), instant_of_seconds(2)));
+    ck("add", f"{instant_add(instant_of_seconds(1), span_of_millis(500)).nanoseconds}", "500000000");
+    ck("sub", f"{instant_sub(instant_of_seconds(1), span_of_seconds(2)).seconds}", "-1");
+    ck("diff", f"{span_total_nanos(instant_diff(instant_of_seconds(3), instant_of_seconds(1)))}", "2000000000");
+    ck("elapsed", f"{instant_elapsed(instant_of_seconds(7200), instant_of_seconds(0), Minutes)}", "120");
+    ck("total nanos", f"{instant_total_nanos(instant_of_seconds(2))}", "2000000000");
+    ck("floor day", f"{instant_floor_to(instant_of_seconds(3661), Days).seconds}", "0");
+    ck("ceil day", f"{instant_ceil_to(instant_of_seconds(1), Days).seconds}", "86400");
+    ck("floor hour", f"{instant_floor_to(instant_of_seconds(3661), Hours).seconds}", "3600");
+    ck("round min", f"{instant_round_to(instant_of_seconds(100), Minutes).seconds}", "120");
+    ck("next day", f"{instant_next_day(instant_of_seconds(1)).seconds}", "86400");
+    ck("next day exact", f"{instant_next_day(instant_of_seconds(86400)).seconds}", "86400");
+    ck("prev day", f"{instant_prev_day(instant_of_seconds(1)).seconds}", "0");
+    // Leap seconds.
+    ck("leap count", f"{leap_seconds_count()}", "28");
+    ck("leap off 0", f"{leap_offset_of(0)}", "10");
+    ck("leap off last", f"{leap_offset_of(27)}", "37");
+    ck("leap utc 0", f"{leap_utc_at(0)}", "63072000");
+    ck("leap utc 1", f"{leap_utc_at(1)}", "78796800");
+    ck("leap utc last", f"{leap_utc_at(27)}", "1435708800");
+    ck("leap tai 0", f"{leap_tai_at(0)}", "63072000");
+    ck("leap tai 1", f"{leap_tai_at(1)}", "78796810");
+    ck("offset before 1972", f"{leap_offset_at_utc(0)}", "0");
+    ck("offset at 1972jan", f"{leap_offset_at_utc(63072000)}", "10");
+    ck("offset at 1972jul", f"{leap_offset_at_utc(78796800)}", "11");
+    ck("offset just before", f"{leap_offset_at_utc(78796799)}", "10");
+    ck("offset at 2016", f"{leap_offset_at_utc(1470000000)}", "37");
+    ck("offset at 2012", f"{leap_offset_at_utc(1341100800)}", "36");
+    ck("offset now", f"{leap_offset_at_utc(1790000000)}", "37");
+    ck("offset far future", f"{leap_offset_at_utc(4000000000)}", "37");
+    ck("tai 1972", f"{instant_to_tai(instant_of_seconds(78796800))}", "78796811");
+    ck("tai 1972jan", f"{instant_to_tai(instant_of_seconds(63072000))}", "63072010");
+    ck("tai now", f"{instant_to_tai(instant_of_seconds(1790000000))}", "1790000037");
+    ck("from tai", f"{instant_from_tai(78796810).seconds}", "78796800");
+    ck("from tai 9", f"{instant_from_tai(78796809).seconds}", "78796799");
+    ckb_ok("is leap second", leap_is_leap_second(78796810));
+    ckb_ok("not leap second", !leap_is_leap_second(78796809));
+    ckb_ok("not leap second 11", !leap_is_leap_second(78796811));
+    ckb_ok("not leap second 0", !leap_is_leap_second(0));
+    ck("tai_at before", f"{instant_to_tai_at(instant_of_seconds(78796799), false)}", "78796809");
+    ck("tai_at after", f"{instant_to_tai_at(instant_of_seconds(78796799), true)}", "78796810");
+    ck("tai_at 1972jan", f"{instant_to_tai_at(instant_of_seconds(63072000), false)}", "63072010");
+    ck("tai_at not leap", f"{instant_to_tai_at(instant_of_seconds(78796800), true)}", "78796811");
+    ck("tai_at ordinary", f"{instant_to_tai_at(instant_of_seconds(1790000000), false)}", "1790000037");
+    // Round trip through civil for a wide span.
+    Int rt = rt_check(-1000000, 4000000, 0);
+    ck("civil roundtrip", f"{rt}", "0");
+    return 0;
+}
+Str ckb_ok(Str name, Bool ok) { return ck(name, if (ok) { "true" } else { "false" }, "true"); }
+Int rt_check(Int lo, Int hi, Int bad) {
+    if (lo > hi) { return bad; }
+    Instant i = instant_of_seconds(lo);
+    DateTime x = instant_to_utc(i);
+    Instant back = instant_from_utc(x);
+    if (back.seconds != lo || back.nanoseconds != 0) { println(f"rt broke at {lo}"); return bad + 1; }
+    if (!cal_is_valid_datetime(x.date.year, x.date.month, x.date.day, x.time.hour, x.time.minute, x.time.second, x.time.nanosecond)) { println(f"invalid civil at {lo}"); return bad + 1; }
+    return rt_check(lo + 1, hi, bad);
+}

@@ -1,0 +1,13 @@
+wall clock after 2020 OK
+wall clock has no stray fraction OK
+seconds reading agrees OK
+nanoseconds reading agrees OK
+monotonic positive OK
+monotonic advances OK
+slept at least 4ms OK
+sleep_ns agrees OK
+sleep_us agrees OK
+sleep_seconds agrees OK
+negative sleep refused OK
+span sleep agrees OK
+round trips through text OK
