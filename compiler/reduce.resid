@@ -25,9 +25,9 @@ type RdN = { Bool ok; Int v; };
 // recurses natively, ~16 KiB of stack per level, on the 1 GiB stack
 // resid_run_main gives the compiler). rd_max_fuel bounds the whole
 // program.
-pub Int rd_max_steps() { return 200000; }
+pub Int rd_max_steps() { return 2000000; }
 pub Int rd_max_depth() { return 20000; }
-pub Int rd_max_fuel() { return 20000000; }
+pub Int rd_max_fuel() { return 400000000; }
 Int rd_max_lit() { return 4096; }
 // Bytes the whole reduction may request (runtime allocation counter; see
 // resid_mem_mark). Evaluating something heavy at compile time — a
