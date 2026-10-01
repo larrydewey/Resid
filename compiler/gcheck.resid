@@ -1788,11 +1788,19 @@ GU gk_struct_unify(GK k, Int id, Str t, Int i, GU u) {
 }
 
 GKT gk_struct(GK k, Int id, Str ty, Int i) {
+    return gk_struct_seen(k, id, ty, i, "");
+}
+
+// A record literal may set a field once: setting it twice is one slot with
+// two values, which lowers to two stores of the same place and no
+// diagnostic.
+GKT gk_struct_seen(GK k, Int id, Str ty, Int i, Str seen) {
     if (i >= k.g.ns[id].nk) { return gt(k, ty, id); }
     Int fi = gk_kid(k, id, i);
     Str f = k.g.ns[fi].text;
     Str ft = gk_field_type(k, ty, f);
     if (ft == "") { return gterr(k, "unknown field " + f + " in " + ty, fi); }
+    if (gs_has_field(seen, f)) { return gterr(k, "field " + f + " is set twice in " + ty, fi); }
     GKT v = gk_expr(k, kg_kid(k.g, fi, 0), ft);
     if (v.err != "") { return v; }
     Bool vempty = v.ty == "List(Unknown)";
@@ -1800,7 +1808,38 @@ GKT gk_struct(GK k, Int id, Str ty, Int i) {
     // A value with holes (`None`, `Ok(x)`) fits a field it unifies with.
     Bool hok = !ty_same(v.ty, ft) && (str_contains(v.ty, "_") || str_contains(v.ty, "Unknown")) && gk_unify(ft, v.ty) != "";
     if (!vempty && !fok && !hok && !ty_same(v.ty, ft)) { return gterr(v.k, "field " + f + ": expected " + ft + ", got " + v.ty, fi); }
-    return gk_struct(gk_mem(v.k, fi, gk_sfield(k, ty, f)), id, ty, i + 1);
+    return gk_struct_seen(gk_mem(v.k, fi, gk_sfield(k, ty, f)), id, ty, i + 1, gs_add_field(seen, f));
+}
+
+// The field names a literal has set so far, as one text.
+Str gs_add_field(Str seen, Str f) { return if (seen == "") { f } else { seen + " " + f }; }
+
+Bool gs_has_field(Str seen, Str f) {
+    if (seen == "") { return false; }
+    return gs_has_field_at(seen, f, 0);
+}
+
+// One word of the list, then the rest of it.
+Bool gs_has_field_at(Str seen, Str f, Int i) {
+    if (i >= str_len(seen)) { return false; }
+    if (str_char_at(seen, i) == 32) { return gs_has_field_at(seen, f, i + 1); }
+    Int stop = gs_word_end(seen, i);
+    Bool same = if (stop - i == str_len(f)) { gs_same_at(seen, f, i, 0) } else { false };
+    if (same) { return true; }
+    return gs_has_field_at(seen, f, stop);
+}
+
+Int gs_word_end(Str seen, Int i) {
+    if (i >= str_len(seen)) { return i; }
+    if (str_char_at(seen, i) == 32) { return i; }
+    return gs_word_end(seen, i + 1);
+}
+
+Bool gs_same_at(Str seen, Str f, Int at, Int i) {
+    if (i >= str_len(f)) { return true; }
+    if (at + i >= str_len(seen)) { return false; }
+    if (str_char_at(seen, at + i) != str_char_at(f, i)) { return false; }
+    return gs_same_at(seen, f, at, i + 1);
 }
 
 GKT gk_list(GK k, Int id, Str exp) {

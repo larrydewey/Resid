@@ -1,0 +1,8 @@
+type Pt = { Int a; Int b; Int c; };
+
+// A record literal may set a field once. Setting it twice is one slot with
+// two values, which lowers to two stores of the same place.
+Int main() {
+    Pt p = Pt {.a = 1, .b = 2, .a = 3};
+    return p.a;
+}
