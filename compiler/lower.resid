@@ -27,6 +27,9 @@ GT lw_gerr(Str what, GT c) { return gt_err(lw_unsup(what), c); }
 ST lw_serr(Str what, ST g) { return st_err(lw_unsup(what), g); }
 
 Int lw_kid(LW w, Int id, Int i) { return kg_kid(w.g, id, i); }
+
+// The kid holding an arm's body: the last one, after its binding names.
+Int lw_arm_body(LW w, Int a) { return lw_kid(w, a, w.g.ns[a].nk - 1); }
 Str lw_kind(LW w, Int id) { return w.g.ns[id].kind; }
 Str lw_text(LW w, Int id) { return w.g.ns[id].text; }
 
@@ -378,7 +381,7 @@ GT lw_try(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     Str g3 = f"%t{lhs.tmp + 3}";
     List(Str) q7 = lhs.lines.concat([g1 + " = getelementptr {i32, i32, ptr}, ptr " + lhs.val + ", i32 0, i32 0", g2 + "w = load i32, ptr " + g1, g2 + " = sext i32 " + g2 + "w to i64", g3 + " = icmp eq i64 " + g2 + ", 2", "br i1 " + g3 + ", label %" + labn + ", label %" + labp, labn + ":", "ret ptr " + lhs.val, labp + ":"]);
     GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = lhs.glines, .lines = q7, .tmp = lhs.tmp + 3, .lbl = lhs.lbl + 2, .tail = false};
-    GT pv = cg_match_payload(lhs, ety, c1);
+    GT pv = cg_match_payload(lhs, ety, 0, c1);
     if (pv.err != "") { return pv; }
     return GT {.pos = 0, .val = pv.val, .ty = pv.ty, .cnt = 0, .err = "", .glines = pv.glines, .lines = pv.lines, .tmp = pv.tmp, .lbl = pv.lbl, .tail = false};
 }
@@ -421,7 +424,7 @@ GT lw_orelse(LW w, Int id, List(Str) env, GT c, Bool start_ok) {
     if (fv.err != "") { return fv; }
     List(Str) x2 = fv.lines.concat(["br label %" + labm, labp + ":"]);
     GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = fv.glines, .lines = x2, .tmp = fv.tmp, .lbl = max(fv.lbl, l3), .tail = false};
-    GT pv = cg_match_payload(lhs, ety, c1);
+    GT pv = cg_match_payload(lhs, ety, 0, c1);
     if (pv.err != "") { return pv; }
     Int tp = pv.tmp + 1;
     Str pr = f"%t{tp}";
@@ -753,13 +756,30 @@ Str show_mangle(Str t, Int i, Str acc) {
 }
 
 // Show arms of a sum type: `V(p) => "V(" + text + ")"` or `V => "V"`.
+// A variant with several payload positions shows each of them, joined
+// with ", ", so the text reads like the declaration.
 Str lw_sum_arms(List(Str) names, List(Str) pays, Str pv, Int i, Str acc) {
     if (i >= names.len()) { return acc; }
     Str v = names[i];
-    Bool has = i < pays.len() && pays[i] != "";
+    List(Str) p = if (i < pays.len()) { sum_payload_of_cg(pays[i]) } else { [] };
     Str lab = lw_label(v);
-    Str arm = if (has) { " " + v + "(" + pv + ") => \"" + lab + "(\" + __show_nested(" + pv + ") + \")\"" } else { " " + v + " => \"" + lab + "\"" };
-    return lw_sum_arms(names, pays, pv, i + 1, acc + (if (acc == "") { "" } else { "," }) + arm);
+    Str sep = if (acc == "") { "" } else { "," };
+    Str arm = if (p.len() == 0) { " " + v + " => \"" + lab + "\"" } else { " " + v + lw_sum_pat(p, pv, 0) + " => \"" + lab + "(\" + " + lw_sum_join(p, pv, 0) + " + \")\"" };
+    return lw_sum_arms(names, pays, pv, i + 1, acc + sep + arm);
+}
+
+// `(<pv>0, <pv>1, ...)` — one fresh name per payload position.
+Str lw_sum_pat(List(Str) p, Str pv, Int j) {
+    if (j >= p.len()) { return ")"; }
+    return (if (j == 0) { "(" } else { ", " }) + pv + f"{j}" + lw_sum_pat(p, pv, j + 1);
+}
+
+// `__show_nested(<pv>0) + ", " + __show_nested(<pv>1) + ...`, the
+// body of the arm's own concatenation; the caller opens and closes it.
+Str lw_sum_join(List(Str) p, Str pv, Int j) {
+    if (j >= p.len()) { return ""; }
+    Str pre = if (j == 0) { "" } else { " + \", \" + " };
+    return pre + "__show_nested(" + pv + f"{j}" + ")" + lw_sum_join(p, pv, j + 1);
 }
 
 // A type or variant name as displayed: no type arguments, no module suffix.
@@ -989,20 +1009,57 @@ GT lw_match(LW w, Int id, List(Str) env, GT c) {
 
 GT lw_match_arm(LW w, Int a, List(Str) env, GT sc, Str ety, GT c, Str lab, Str labm) {
     Str v = lw_text(w, a);
-    Str nm = w.g.ns[a].aux;
+    Int nb = w.g.ns[a].nk;
+    Int ab = lw_arm_body(w, a);
+    Str nm = if (nb > 1) { w.g.ns[lw_kid(w, a, 0)].text } else { "" };
     GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat([lab + ":"]), .tmp = c.tmp, .lbl = c.lbl, .tail = false};
     if (v == "None") {
-        GT body = lw_branch(w, lw_kid(w, a, 0), env, c1);
+        GT body = lw_branch(w, ab, env, c1);
         if (body.err != "") { return body; }
         return lw_step(body, body.val, body.ty, body.lines.concat(["br label %" + labm]), body.tmp);
     }
     if (v != "Some" && v != "Ok" && v != "Err") { return gt_err("match arm pattern must be Some(x), None, Ok(x), or Err(x)", c); }
     Str pty = if (v == "Err") { res_elem_err_cg(sc.ty) } else { ety };
-    GT pv = cg_match_payload(sc, pty, c1);
+    GT pv = cg_match_payload(sc, pty, 0, c1);
     if (pv.err != "") { return pv; }
-    GT body = lw_branch(w, lw_kid(w, a, 0), env_add(env, nm + ":" + pv.val + ":" + pty), pv);
+    GT body = lw_branch(w, ab, if (nm == "" || nm == "_") { env } else { env_add(env, nm + ":" + pv.val + ":" + pty) }, pv);
     if (body.err != "") { return body; }
     return GT {.pos = 0, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = body.lines.concat(["br label %" + labm]), .tmp = body.tmp, .lbl = body.lbl, .tail = false};
+}
+
+// One slot per payload position of a matched variant, read in order. A
+// variant whose single payload is a record reads that record's inline
+// slot array; anything else reads one boxed slot per position.
+type LWP = { GT g; List(Str) vals; List(Str) tys; Str err; };
+
+LWP lw_arm_payloads(LW w, GT sc, List(Str) pays, Int vi, GT c) {
+    List(Str) none = [];
+    if (pays.len() == 0) { return LWP {.g = c, .vals = none, .tys = none, .err = ""}; }
+    if (sum_inline_fields(w.fs, sc.ty, vi) >= 0) {
+        GT p = cg_inline_payload(sc, pays[0], c);
+        if (p.err != "") { return LWP {.g = c, .vals = none, .tys = none, .err = p.err}; }
+        return LWP {.g = p, .vals = [p.val], .tys = pays, .err = ""};
+    }
+    return lw_arm_slot(w, sc, pays, 0, c, ListBuf(), ListBuf());
+}
+
+LWP lw_arm_slot(LW w, GT sc, List(Str) pays, Int i, GT c, ListBuf(Str) vals, ListBuf(Str) tys) {
+    if (i >= pays.len()) { return LWP {.g = c, .vals = vals.finish(), .tys = tys.finish(), .err = ""}; }
+    GT p = cg_match_payload(sc, pays[i], i, c);
+    if (p.err != "") {
+        List(Str) dv = vals.finish();
+        List(Str) dt = tys.finish();
+        return LWP {.g = c, .vals = dv, .tys = dt, .err = p.err};
+    }
+    return lw_arm_slot(w, sc, pays, i + 1, p, vals.push(p.val), tys.push(pays[i]));
+}
+
+// Bind an arm's pattern names to its payload slots, in order. A name of
+// "_" binds nothing.
+List(Str) lw_arm_env(List(Str) env, Kg g, Int a, List(Str) vals, List(Str) tys, Int i) {
+    if (i >= vals.len() || i >= g.ns[a].nk - 1) { return env; }
+    Str nm = g.ns[kg_kid(g, a, i)].text;
+    return lw_arm_env(if (nm == "_") { env } else { env_add(env, nm + ":" + vals[i] + ":" + tys[i]) }, g, a, vals, tys, i + 1);
 }
 
 GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(Str) vtypes, Str tagreg, GT c, Str labm, List(Str) philist) {
@@ -1017,22 +1074,25 @@ GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(S
         Int lb = c.lbl + 1;
         Str bodyLab = f"L{lb}";
         GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat(["br label %" + bodyLab, bodyLab + ":"]), .tmp = c.tmp, .lbl = lb, .tail = false};
-        GT body = lw_branch(w, lw_kid(w, a, 0), env, c1);
+        GT body = lw_branch(w, lw_arm_body(w, a), env, c1);
         if (body.err != "") { return body; }
         GT lastc = GT {.pos = 0, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = body.lines.concat(["br label %" + labm]), .tmp = body.tmp, .lbl = body.lbl, .tail = false};
         return cg_match_finish2(lastc, labm, philist.concat([body.val + ":" + arm_exit_label_cg(body.lines, bodyLab)]));
     }
     Int vi = variant_index_at_cg(vnames, v, 0);
-    Str payload = vtypes[vi];
+    List(Str) pays = if (vi < 0) { [] } else { sum_payload_of_cg(vtypes[vi]) };
     Str bodyLab = f"L{c.lbl + 1}";
     Str nextLab = f"L{c.lbl + 2}";
     Str cmpreg = f"%t{c.tmp + 1}";
     GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat([cmpreg + " = icmp eq i64 " + tagreg + f", {vi}", "br i1 " + cmpreg + ", label %" + bodyLab + ", label %" + nextLab, bodyLab + ":"]), .tmp = c.tmp + 1, .lbl = c.lbl + 2, .tail = false};
-    GT pv = if (payload == "") { c1 } else { if (sum_inline_fields(w.fs, sc.ty, vi) >= 0) { cg_inline_payload(sc, payload, c1) } else { cg_match_payload(sc, payload, c1) } };
-    if (pv.err != "") { return pv; }
-    List(Str) env2 = if (payload == "") { env } else { env_add(env, w.g.ns[a].aux + ":" + pv.val + ":" + payload) };
-    GT body = lw_branch(w, lw_kid(w, a, 0), env2, pv);
+    // One slot per payload position, read in order; a variant whose single
+    // payload is a record reads that record's inline slot array instead.
+    LWP pvs = lw_arm_payloads(w, sc, pays, vi, c1);
+    if (pvs.err != "") { return gt_err(pvs.err, c1); }
+    List(Str) env2 = lw_arm_env(env, w.g, a, pvs.vals, pvs.tys, 0);
+    GT body = lw_branch(w, lw_arm_body(w, a), env2, pvs.g);
     if (body.err != "") { return body; }
+
     List(Str) y2 = body.lines.concat(["br label %" + labm, nextLab + ":"]);
     // The phi's predecessor is the block the arm ends in, not its entry.
     List(Str) ph = philist.concat([body.val + ":" + arm_exit_label_cg(body.lines, bodyLab)]);
@@ -2969,21 +3029,24 @@ GT lw_box_one(GT p, Str ty, Str tag, Funcs fs) {
     return GT {.pos = 0, .val = reg, .ty = ty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = t3, .lbl = p.lbl, .tail = false};
 }
 
-// cg_variant_con (with the inline-record paths).
+// cg_variant_con (with the inline-record paths). One argument per payload
+// position, in order (spec §12); the slots hold them in that order too.
 GT lw_variant_con(LW w, Int id, Str sumty, Int vidx, List(Str) env, GT c) {
-    if (w.g.ns[id].nk != 1) { return lw_gerr("variant arity", c); }
-    Int a = lw_kid(w, id, 0);
+    List(Str) pays = lw_variant_pays(w, sumty, vidx);
+    if (pays.len() == 0) { return lw_gerr("variant with no payload", c); }
+    if (w.g.ns[id].nk != pays.len()) { return lw_gerr("variant arity", c); }
+    Int a0 = lw_kid(w, id, 0);
     Int nif0 = sum_inline_fields(w.fs, sumty, vidx);
-    if (nif0 >= 0 && lw_kind(w, a) == "struct") {
-        Int si = struct_index(w.fs, lw_text(w, a));
+    if (nif0 >= 0 && lw_kind(w, a0) == "struct") {
+        Int si = struct_index(w.fs, lw_text(w, a0));
         if (si >= 0) {
             Int t1 = c.tmp + 1;
             Int t2 = c.tmp + 2;
             Str box = f"%t{t1}";
             Str slots = f"%t{t2}";
             Str tsym = f"@.oty{t1}";
-            GT c1 = GT {.pos = 0, .val = slots, .ty = lw_text(w, a), .cnt = 0, .err = "", .glines = c.glines.concat([oty_global(tsym, sumty)]), .lines = c.lines.concat([box + f" = call ptr @resid_box_alloc(i64 {vidx}, i64 {nif0}, ptr " + tsym + ")", slots + " = getelementptr {i32, i32, ptr}, ptr " + box + ", i32 1"]), .tmp = t2, .lbl = c.lbl, .tail = false};
-            LSF fv = lw_finits(w, a, 0, w.fs.stf[si], slots, env, LSF {.g = c1, .st = []});
+            GT c1 = GT {.pos = 0, .val = slots, .ty = lw_text(w, a0), .cnt = 0, .err = "", .glines = c.glines.concat([oty_global(tsym, sumty)]), .lines = c.lines.concat([box + f" = call ptr @resid_box_alloc(i64 {vidx}, i64 {nif0}, ptr " + tsym + ")", slots + " = getelementptr {i32, i32, ptr}, ptr " + box + ", i32 1"]), .tmp = t2, .lbl = c.lbl, .tail = false};
+            LSF fv = lw_finits(w, a0, 0, w.fs.stf[si], slots, env, LSF {.g = c1, .st = []});
             GT f = fv.g;
             if (f.err == "") { return GT {.pos = 0, .val = box, .ty = sumty, .cnt = 0, .err = "", .glines = f.glines, .lines = f.lines, .tmp = f.tmp, .lbl = f.lbl, .tail = false}; }
             if (lw_is_unsup(f.err)) { return f; }
@@ -2991,23 +3054,85 @@ GT lw_variant_con(LW w, Int id, Str sumty, Int vidx, List(Str) env, GT c) {
     }
     // A payload of a generic sum under the wanted arguments.
     Int wsx = sumtype_index_cg(w.fs, w.want);
-    List(Str) wps = if (wsx >= 0 && lw_label(w.want) == lw_label(sumty)) { sum_payloads_cg(w.fs, wsx, w.want) } else { [] };
-    GT p = lw_part(w, a, if (vidx < wps.len()) { wps[vidx] } else { "" }, env, c);
-    if (p.err != "") { return p; }
+    List(Str) wps = if (wsx >= 0 && lw_label(w.want) == lw_label(sumty)) { sum_variant_pays_cg(w.fs, wsx, vidx, w.want) } else { [] };
+    LVP ps = lw_variant_parts(w, id, pays, wps, 0, env, c, ListBuf(), ListBuf());
+    if (ps.err != "") { return lw_gerr(ps.err, c); }
     Int nif = sum_inline_fields(w.fs, sumty, vidx);
-    if (nif >= 0) { return cg_variant_con_inline("", 0, p, 0, sumty, vidx, nif); }
+    if (nif >= 0) { return cg_variant_con_inline("", 0, ps.g, 0, sumty, vidx, nif); }
+    return lw_box_n(ps, sumty, f"{vidx}", w.fs);
+}
+
+// The declared payload positions of variant `vidx` of `sumty`.
+List(Str) lw_variant_pays(LW w, Str sumty, Int vidx) {
+    Int sidx = sumtype_index_cg(w.fs, sumty);
+    if (sidx < 0) { return []; }
+    List(Str) vt = sumv_types_cg(w.fs.suv[sidx]);
+    if (vidx >= vt.len()) { return []; }
+    return sum_payload_of_cg(vt[vidx]);
+}
+
+// A generic sum's payload positions of variant `vidx`, as its wanted
+// arguments spell them.
+List(Str) sum_variant_pays_cg(Funcs fs, Int sidx, Int vidx, Str want) {
+    List(Str) vt = sumv_types_cg(fs.suv[sidx]);
+    if (vidx >= vt.len()) { return []; }
+    List(Str) one = sum_payload_of_cg(vt[vidx]);
+    Str ps = sumv_params_cg(fs.suv[sidx]);
+    if (ps == "") { return one; }
+    return sum_subst_all_cg(one, 0, str_split(ps, ","), ty_args_cg(want), []);
+}
+
+// A variant call's arguments, each heap-boxed into a slot value, left to
+// right so their evaluation order is the source order.
+type LVP = { GT g; List(Str) vals; List(Str) tys; Str err; };
+
+LVP lw_variant_parts(LW w, Int id, List(Str) pays, List(Str) wps, Int i, List(Str) env, GT c, ListBuf(Str) vals, ListBuf(Str) tys) {
+    if (i >= pays.len()) { return LVP {.g = c, .vals = vals.finish(), .tys = tys.finish(), .err = ""}; }
+    Str want = if (i < wps.len()) { wps[i] } else { "" };
+    GT p = lw_part(w, lw_kid(w, id, i), want, env, c);
+    if (p.err != "") {
+        List(Str) dv = vals.finish();
+        List(Str) dt = tys.finish();
+        return LVP {.g = p, .vals = dv, .tys = dt, .err = p.err};
+    }
     GT hb = box_heap_("", p, env, w.fs);
-    Int t1 = hb.tmp + 1;
-    Int t2 = hb.tmp + 2;
-    Int t3 = hb.tmp + 3;
+    if (hb.err != "") {
+        List(Str) dv = vals.finish();
+        List(Str) dt = tys.finish();
+        return LVP {.g = hb, .vals = dv, .tys = dt, .err = hb.err};
+    }
+    return lw_variant_parts(w, id, pays, wps, i + 1, env, hb, vals.push(hb.val), tys.push(pays[i]));
+}
+
+// The tagged box of `n` payload slots: one alloca, a store per value in
+// payload order, then the box that owns them.
+GT lw_box_n(LVP ps, Str ty, Str vidx, Funcs fs) {
+    Int np = ps.vals.len();
+    Int t1 = ps.g.tmp + 1;
+    Int t2 = ps.g.tmp + 2;
     Str sa = f"%t{t1}";
     Str gi = f"%t{t2}";
-    Str reg = f"%t{t3}";
-    Str body = esc_ll(sumty, 0, "");
+    Str body = esc_ll(ty, 0, "");
     Str tsym = f"@.oty{t1}";
-    List(Str) gl2 = hb.glines.concat([tsym + f" = private unnamed_addr constant [{ll_bytes(body, 0, 0) + 1} x i8] c\"" + body + "\\00\""]);
-    List(Str) l4 = hb.lines.concat([sa + " = alloca [1 x ptr]", gi + " = getelementptr [1 x ptr], ptr " + sa + ", i32 0, i32 0", "store ptr " + hb.val + ", ptr " + gi, reg + f" = call ptr @resid_box_new(i64 {vidx}, i64 1, ptr " + sa + ", ptr " + tsym + ")"]);
-    return GT {.pos = 0, .val = reg, .ty = sumty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = t3, .lbl = p.lbl, .tail = false};
+    List(Str) gl2 = ps.g.glines.concat([tsym + f" = private unnamed_addr constant [{ll_bytes(body, 0, 0) + 1} x i8] c\"" + body + "\\00\""]);
+    List(Str) pre = [sa + f" = alloca [{np} x ptr]", gi + f" = getelementptr [{np} x ptr], ptr " + sa + ", i32 0, i32 0"];
+    LBS b = lw_box_slots(np, sa, gi, t2, ps.vals, 0, pre);
+    Int tn = b.tmp + 1;
+    Str reg = f"%t{tn}";
+    List(Str) l4 = ps.g.lines.concat(b.lines).concat([reg + f" = call ptr @resid_box_new(i64 {vidx}, i64 {np}, ptr " + sa + ", ptr " + tsym + ")"]);
+    return GT {.pos = 0, .val = reg, .ty = ty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = tn, .lbl = ps.g.lbl, .tail = false};
+}
+
+// The alloca, its base pointer, and one store per payload value in
+// order. `t` is the running temp counter; each slot takes one.
+type LBS = { List(Str) lines; Int tmp; };
+
+LBS lw_box_slots(Int np, Str sa, Str gi, Int t, List(Str) vals, Int i, List(Str) acc) {
+    if (i >= np) { return LBS {.lines = acc, .tmp = t}; }
+    Int t1 = t + 1;
+    Str pp = f"%t{t1}";
+    List(Str) l2 = acc.concat([pp + f" = getelementptr ptr, ptr " + gi + f", i32 {i}", "store ptr " + vals[i] + ", ptr " + pp]);
+    return lw_box_slots(np, sa, gi, t1, vals, i + 1, l2);
 }
 
 // ─── Statements ─────────────────────────────────────────────────────
@@ -4575,11 +4700,20 @@ Bool lo_here(Kg g, Int id, Str v) {
     Str t = g.ns[id].text;
     if (k == "field" || k == "mcall" || k == "finit" || k == "lit" || k == "fpart" || k == "fspec") { return false; }
     if (k == "ty") { return str_contains(t, v) && lg_text_has(t, 0, v); }
-    if (k == "arm" || k == "letpat" || k == "pat" || k == "bind" || k == "rbind" || k == "spawn") {
+    if (k == "arm") { return lo_has_name(g, id, v, 0) || t == v; }
+    if (k == "letpat" || k == "pat" || k == "bind" || k == "rbind" || k == "spawn") {
         Str aux = g.ns[id].aux;
         return t == v || (str_contains(aux, v) && lg_text_has(aux, 0, v));
     }
     return t == v;
+}
+
+// Whether an arm's pattern names include `v`.
+Bool lo_has_name(Kg g, Int id, Str v, Int i) {
+    if (i >= g.ns[id].nk - 1) { return false; }
+    Str t = g.ns[kg_kid(g, id, i)].text;
+    if (t == v) { return true; }
+    return lo_has_name(g, id, v, i + 1);
 }
 
 // Whether a subtree mentions item V (f-string holes included).
@@ -5439,7 +5573,7 @@ List(Str) lf_node(Kg g, Int id, List(Str) ptrs, List(Str) acc) {
         return lf_kids(g, id, 0, n, ptrs, acc);
     }
     if (k == "arm" || k == "letpat" || k == "pat") {
-        Str pat = if (g.ns[id].aux == "" && k == "arm") { t } else { t + "(" + g.ns[id].aux + ")" };
+        Str pat = if (k == "arm") { kg_pr_pat(g, id, 0, n - 1) } else { t + "(" + g.ns[id].aux + ")" };
         return lf_kids(g, id, 0, n, ptrs, lf_text(pat, "", ptrs, acc));
     }
     if (k == "rbind") {
@@ -5798,11 +5932,12 @@ LRE lr_cond_kids(Kg g, Int id, Map(Str, Str) env, Map(Int, Str) f) {
 Map(Int, Str) lr_arms(Kg g, Int id, Int i, Map(Str, Str) env, Map(Int, Str) f) {
     if (i >= g.ns[id].nk) { return f; }
     Int a = kg_kid(g, id, i);
-    Map(Str, Str) e1 = lr_forget(env, g.ns[a].aux);
+    // The arm's bindings scope its body and hide anything of the same name.
+    Map(Str, Str) e1 = lr_unbind_kids(g, a, 0, g.ns[a].nk - 1, env);
     // Inside an arm, a ref scrutinee is that arm's variant.
     Int sc = lr_unparen(g, kg_kid(g, id, 0));
     Str v = g.ns[a].text;
-    Bool vt = g.ns[sc].kind == "ref" && v != "_" && v != "" && str_char_at(v, 0) >= 65 && str_char_at(v, 0) <= 90 && g.ns[a].aux != g.ns[sc].text;
+    Bool vt = g.ns[sc].kind == "ref" && v != "_" && v != "" && str_char_at(v, 0) >= 65 && str_char_at(v, 0) <= 90 && !lr_has_name(g, a, g.ns[sc].text);
     Map(Str, Str) e2 = if (vt) { e1.insert("#tag:" + g.ns[sc].text, v) } else { e1 };
     return lr_arms(g, id, i + 1, env, lr_kids(g, a, 0, e2, f).facts);
 }
@@ -5810,6 +5945,19 @@ Map(Int, Str) lr_arms(Kg g, Int id, Int i, Map(Str, Str) env, Map(Int, Str) f) {
 Map(Str, Str) lr_unbind_kids(Kg g, Int id, Int i, Int n, Map(Str, Str) env) {
     if (i >= n) { return env; }
     return lr_unbind_kids(g, id, i + 1, n, lr_forget(env, g.ns[kg_kid(g, id, i)].text));
+}
+
+// Whether an arm binds `name` (its old `aux != text` guard, over the
+// name kids an arm now carries).
+Bool lr_has_name(Kg g, Int a, Str name) {
+    if (name == "") { return false; }
+    return lr_has_name_at(g, a, 0, name);
+}
+
+Bool lr_has_name_at(Kg g, Int a, Int i, Str name) {
+    if (i >= g.ns[a].nk - 1) { return false; }
+    if (g.ns[kg_kid(g, a, i)].text == name) { return true; }
+    return lr_has_name_at(g, a, i + 1, name);
 }
 
 // ─── Conditions ─────────────────────────────────────────────────────

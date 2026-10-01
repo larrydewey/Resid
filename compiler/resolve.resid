@@ -192,8 +192,10 @@ pub RS rs_expr(Kg g, RSG gl, Int id, Map(Str, Int) env, RS r) {
         return rs_expr(g, gl, kg_kid(g, id, n - 1), w.env, w.r);
     }
     if (k == "arm") {
-        Map(Str, Int) aenv = if (g.ns[id].aux != "") { env.insert(g.ns[id].aux, id) } else { env };
-        return rs_kids(g, gl, id, 0, n, aenv, r);
+        // An arm's leading kids are its bindings (one per payload
+        // position, spec §13); the last kid is the body.
+        Int b = n - 1;
+        return rs_expr(g, gl, kg_kid(g, id, b), rs_bind_kids(g, id, 0, b, env), r);
     }
     if (k == "lambda") { return rs_expr(g, gl, kg_kid(g, id, n - 1), rs_bind_kids(g, id, 0, n - 1, env), r); }
     if (k == "named") { return rs_kids(g, gl, id, 0, n, env, r); }

@@ -3256,7 +3256,10 @@ Str ceil_join(Str a, Str b) {
 
 type VLRes = { Bool ok; Str vnames; Str vtypes; Int pos; };
 
-// One variant: bare `Ident` (no payload) or `Ident(Type)`. `ok=false`
+// One variant: bare `Ident` (no payload) or `Ident(T1, ... Tn)`. A
+// variant carries zero or more payload types (spec §12); they are kept
+// as one ","-joined string in `vtypes`, which is unambiguous because
+// every type's own commas sit inside its parentheses. `ok=false`
 // (not a fatal error, just "not a variant here") lets the caller fall
 // back to the existing Base/Constraint type-declaration path.
 VLRes parse_one_variant(Str s, Int pos) {
@@ -3266,11 +3269,22 @@ VLRes parse_one_variant(Str s, Int pos) {
     if (nxt.text != "(") {
         return VLRes {.ok = true, .vnames = nm.text, .vtypes = "", .pos = nm.pos};
     }
-    PRes pty = parse_type(s, nxt.pos);
+    PRes pty = parse_variant_payload(s, nxt.pos, "");
     if (pty.err != "") { return VLRes {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
-    Tok cp = lex_tok(s, pty.pos);
-    if (cp.text != ")") { return VLRes {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
-    return VLRes {.ok = true, .vnames = nm.text, .vtypes = pty.ty, .pos = cp.pos};
+    return VLRes {.ok = true, .vnames = nm.text, .vtypes = pty.ty, .pos = pty.pos};
+}
+
+// `(T1, T2, ... Tn)` -> "T1, T2, ... Tn", consuming the closing paren.
+// Each position is an ordinary `type`, so a nested `List(Int, 3)` is one
+// payload, not two.
+PRes parse_variant_payload(Str s, Int pos, Str acc) {
+    PRes pty = parse_type(s, pos);
+    if (pty.err != "") { return pty; }
+    Str acc2 = if (acc == "") { pty.ty } else { acc + ", " + pty.ty };
+    Tok t = lex_tok(s, pty.pos);
+    if (t.text == ",") { return parse_variant_payload(s, t.pos, acc2); }
+    if (t.text == ")") { return PRes {.pos = t.pos, .ty = acc2, .err = ""}; }
+    return PRes {.pos = t.pos, .ty = "", .err = "expected, or ) in variant payload"};
 }
 
 // `Variant1(T1) | Variant2 | ... ;` — requires at least one `|` (i.e. >= 2
@@ -3344,6 +3358,23 @@ pub List(Str) ty_args_at(Str t, Int i, Int end, List(Str) acc) {
     Int e = if (e0 > end) { end } else { e0 };
     List(Str) acc2 = acc.concat([str_trim(str_slice(t, i, e))]);
     return ty_args_at(t, e + 1, end, acc2);
+}
+
+// The payload types of one variant, from its entry in the types lane.
+// "" is a variant with no payload; "Int, Int" is two, and "List(Int, 3)"
+// is one, because a type's own commas are inside its parentheses.
+pub List(Str) sum_payload_of(Str entry) {
+    List(Str) none = [];
+    if (entry == "") { return none; }
+    return ty_args_at(entry, 0, str_len(entry), none);
+}
+
+// Every payload type a sum carries, flattened: one entry per payload
+// position, in variant order. A payload-free variant contributes
+// nothing, so the result is the types the sum actually holds.
+pub List(Str) sum_payloads_flat(List(Str) entries, Int i, List(Str) acc) {
+    if (i >= entries.len()) { return acc; }
+    return sum_payloads_flat(entries, i + 1, acc.concat(sum_payload_of(entries[i])));
 }
 
 // Replace each whole-word parameter name in `t` with its argument.

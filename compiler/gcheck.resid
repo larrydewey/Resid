@@ -184,6 +184,13 @@ pub Str gm_vars(Str t, Int i, Str acc) {
 
 pub Bool gm_has_var(Str t) { return gm_vars(t, 0, "") != ""; }
 
+// Whether any of a variant's payload positions mentions a parameter.
+Bool gm_has_var_list(List(Str) ts, Int i) {
+    if (i >= ts.len()) { return false; }
+    if (gm_has_var(ts[i])) { return true; }
+    return gm_has_var_list(ts, i + 1);
+}
+
 // Canonical spelling for comparison and mangling (no spaces, explicit widths).
 pub Str gm_norm(Str t) { return str_replace(ty_canon(str_trim(t)), " ", ""); }
 
@@ -977,7 +984,7 @@ List(Str) gm_components(GK k, Str t) {
     Int sd = k.sd.get(h) else { -1 };
     if (sd >= 0) { return gm_field_types(k, t, sd, 0, ListBuf()); }
     Int si = sumtype_index(k.fs, t);
-    if (si >= 0) { return sum_payloads(k.fs, si, t); }
+    if (si >= 0) { return sum_payloads_flat(sum_payloads(k.fs, si, t), 0, []); }
     return gk_nopts();
 }
 
@@ -1603,33 +1610,58 @@ GU gm_unify_lits(Kg g, Int id, List(Str) pl, List(Str) al, Int i, Int a0, Bool m
     return gm_unify_lits(g, id, pl, al, i + 1, a0, method, u2);
 }
 
+// A variant with a payload is called with one argument per payload
+// position, in order (spec §12). The generic routes (`Cell(T)`,
+// `Cell(List(T))`) unify every position together, so a sum's
+// parameters are fixed by all its arguments at once.
 GKT gk_variant_call(GK k, Int id, Str n, VOwn vo, Str exp) {
-    if (vo.payload == "") { return gterr(k, "variant " + n + " takes no payload (write it without parentheses)", id); }
-    if (k.g.ns[id].nk != 1) { return gterr(k, "expected ) after variant payload", id); }
+    List(Str) pays = sum_payload_of(vo.payload);
+    if (pays.len() == 0) { return gterr(k, "variant " + n + " takes no payload (write it without parentheses)", id); }
+    if (k.g.ns[id].nk != pays.len()) {
+        return gterr(k, "variant " + n + " takes " + gk_arity(pays.len()) + ", but the call passes " + gk_arity(k.g.ns[id].nk), id);
+    }
     Int vsi = sumtype_index(k.fs, vo.sumty);
     Str vps = if (vsi >= 0) { sumv_params(k.fs.suv[vsi]) } else { "" };
-    Bool gparam = vps != "" && str_contains("," + vps + ",", "," + vo.payload + ",");
-    // A payload that only mentions the parameters (`Cell(T)`, `List(T)`)
-    // binds them by unification; parameters it leaves out stay holes.
-    Bool gpat = vps != "" && !gparam && gm_has_var(vo.payload);
-    // With the sum's arguments expected (`Wrap(Str(4)) w = W("ab")`), the
+    List(Str) ps = if (vps == "") { [] } else { str_split(vps, ",") };
+    // A single position that is a bare parameter is filled from it.
+    Bool gparam = ps.len() == 1 && pays[0] == ps[0];
+    // Payloads that only mention the parameters (`Cell(T)`, `Cell(List(T))`)
+    // bind them by unification; parameters they leave out stay holes.
+    Bool gpat = ps.len() > 0 && !gparam && gm_has_var_list(pays, 0);
+    // With the sum's arguments expected (`Wrap(Str(4)) w = W("ab")`), each
     // payload is checked against its declared type under them.
-    Str gexp = if ((gparam || gpat) && ty_head(exp) == ty_head(vo.sumty) && !gm_has_var(exp) && !str_contains(exp, "_")) { ty_subst(vo.payload, str_split(vps, ","), ty_args(exp)) } else { "" };
-    GKT v = gk_expr(k, gk_kid(k, id, 0), if (gparam || gpat) { gexp } else { vo.payload });
-    if (v.err != "") { return v; }
-    if (gparam) { return gt(v.k, vo.sumty + "(" + sum_fill(str_split(vps, ","), 0, vo.payload, v.ty, "") + ")", id); }
-    if (gpat) {
-        GU u = gm_unify(vo.payload, v.ty, gu_new());
-        if (!u.ok) { return gterr(v.k, "variant " + n + " expects " + vo.payload + ", got " + v.ty, id); }
-        return gt(v.k, vo.sumty + "(" + gk_sum_args(str_split(vps, ","), u, 0, "") + ")", id);
-    }
-    Bool exact = ty_same(v.ty, vo.payload);
-    Bool intok = is_num(v.ty) && is_num(vo.payload) && int_adopt_ok(v.ty, vo.payload, "");
+    List(Str) want = if ((gparam || gpat) && ty_head(exp) == ty_head(vo.sumty) && !gm_has_var(exp) && !str_contains(exp, "_")) { sum_subst_all(pays, 0, ps, ty_args(exp), ListBuf()) } else { pays };
+    GKV v = gk_variant_args(k, id, n, want, 0, gu_new());
+    if (v.err != "") { return gterr(v.k, v.err, id); }
+    if (gparam) { return gt(v.k, vo.sumty + "(" + sum_fill(ps, 0, vo.payload, v.first, "") + ")", id); }
+    if (gpat) { return gt(v.k, vo.sumty + "(" + gk_sum_args(ps, v.u, 0, "") + ")", id); }
+    return gt(v.k, vo.sumty, id);
+}
+
+// A variant call checked against its payload positions: the unifier
+// after every position, and the first argument's type (which fills a
+// bare-parameter payload).
+type GKV = { GK k; GU u; Str first; Str err; };
+
+GKV gk_variant_args(GK k, Int id, Str n, List(Str) pays, Int i, GU u) {
+    if (i >= pays.len()) { return GKV {.k = k, .u = u, .first = "", .err = ""}; }
+    Str want = pays[i];
+    GKT v = gk_expr(k, kg_kid(k.g, id, i), want);
+    if (v.err != "") { return GKV {.k = k, .u = u, .first = "", .err = v.err}; }
+    Bool exact = ty_same(v.ty, want);
+    Bool intok = is_num(v.ty) && is_num(want) && int_adopt_ok(v.ty, want, "");
     // A payload with holes (`None`, `[]`) fits a declared type it unifies with.
     Bool holes = str_contains(v.ty, "_") || str_contains(v.ty, "Unknown");
-    Bool hok = !exact && holes && gk_unify(vo.payload, v.ty) != "";
-    if (!exact && !intok && !hok) { return gterr(v.k, "variant " + n + " expects " + vo.payload + ", got " + v.ty, id); }
-    return gt(v.k, vo.sumty, id);
+    Bool hok = !exact && holes && gk_unify(want, v.ty) != "";
+    // The position only matters when there is more than one to confuse.
+    Str pos = if (pays.len() > 1) { " in position " + gk_pos(i) } else { "" };
+    if (!exact && !intok && !hok) {
+        return GKV {.k = v.k, .u = u, .first = "", .err = "variant " + n + " expects " + want + pos + ", got " + v.ty};
+    }
+    GU u2 = gm_unify(want, v.ty, u);
+    if (!u2.ok) { return GKV {.k = v.k, .u = u, .first = "", .err = "variant " + n + ": " + u2.why}; }
+    GKV n1 = gk_variant_args(v.k, id, n, pays, i + 1, u2);
+    return GKV {.k = n1.k, .u = n1.u, .first = if (i == 0) { v.ty } else { n1.first }, .err = n1.err};
 }
 
 // A generic sum's type arguments from a payload unifier ("_" when unbound).
@@ -2210,12 +2242,34 @@ GKT gk_match(GK k0, Int id, Str exp0) {
     return gterr(k, "match scrutinee must be an Option or a declared sum type, got " + sc.ty, id);
 }
 
-// An arm body; its binding (aux) gets `bty` when it has one.
-GKT gk_arm_body(GK k, Int arm, Str bty, Str exp) {
-    GK k2 = if (k.g.ns[arm].aux != "") { gk_bind(k, arm, bty) } else { k };
-    GKT b = gk_expr(k2, kg_kid(k.g, arm, 0), exp);
+// An arm body; its binding names (the kids before the body) get one
+// payload type each, in order.
+GKT gk_arm_body(GK k, Int arm, List(Str) btys, Str exp) {
+    GK k2 = gk_arm_bind(k, arm, btys, 0);
+    GKT b = gk_expr(k2, kg_kid(k.g, arm, k.g.ns[arm].nk - 1), exp);
     if (b.err != "") { return b; }
     return GKT {.ty = b.ty, .err = "", .at = b.at, .k = gk_scope(k, b.k)};
+}
+
+// Bind names 0..n-1 of an arm to their payload types. A name of "_"
+// takes no type and binds nothing.
+GK gk_arm_bind(GK k, Int arm, List(Str) btys, Int i) {
+    if (i >= k.g.ns[arm].nk - 1 || i >= btys.len()) { return k; }
+    Int nm = kg_kid(k.g, arm, i);
+    GK k2 = if (k.g.ns[nm].text == "_") { k } else { gk_bind(k, nm, btys[i]) };
+    return gk_arm_bind(k2, arm, btys, i + 1);
+}
+
+// A payload position in a diagnostic, counting from one.
+Str gk_pos(Int i) { return if (i == 0) { "1" } else { if (i == 1) { "2" } else { if (i == 2) { "3" } else { "a later one" } } }; }
+
+// A count in words, for an arity diagnostic.
+Str gk_arity(Int n) {
+    if (n == 0) { return "no payload positions"; }
+    if (n == 1) { return "1 payload position"; }
+    if (n == 2) { return "2 payload positions"; }
+    if (n == 3) { return "3 payload positions"; }
+    return "several payload positions";
 }
 
 GKT gk_arm_merge(GKT body, Str acc) {
@@ -2235,16 +2289,20 @@ GKT gk_opt_arms(GK k, Int id, Int i, Str ety, Str acc, Str exp) {
     }
     Int a = gk_kid(k, id, i);
     Str v = k.g.ns[a].text;
-    Bool bound = k.g.ns[a].aux != "";
+    Int nb = k.g.ns[a].nk - 1;
+    Bool bound = nb > 0;
     if (v == "Some" && !bound) { return gterr(k, "expected ( in Some arm pattern", a); }
     if (v == "None" && bound) { return gterr(k, "expected => after None arm pattern", a); }
     if (v != "Some" && v != "None") { return gterr(k, "match arm pattern must be Some(x) or None", a); }
-    GKT b = gk_arm_merge(gk_arm_body(k, a, ety, exp), acc);
+    if (bound && nb != 1) { return gterr(k, "Some takes exactly one binding", a); }
+    GKT b = gk_arm_merge(gk_arm_body(k, a, [ety], exp), acc);
     if (b.err != "") { return b; }
     return gk_opt_arms(b.k, id, i + 1, ety, b.ty, exp);
 }
 
 // General sum arms; `seen` holds matched variant names (",*" after `_`).
+// A variant with n payload positions takes exactly n bindings, or none
+// when it has no payload (spec §13).
 GKT gk_arms(GK k, Int id, Int i, List(Str) vnames, List(Str) vtypes, Str seen, Str acc, Str exp) {
     Int n = k.g.ns[id].nk;
     if (i >= n) {
@@ -2256,20 +2314,24 @@ GKT gk_arms(GK k, Int id, Int i, List(Str) vnames, List(Str) vtypes, Str seen, S
     }
     Int a = gk_kid(k, id, i);
     Str v = k.g.ns[a].text;
-    Bool bound = k.g.ns[a].aux != "";
+    Int nb = k.g.ns[a].nk - 1;
+    Bool bound = nb > 0;
     if (v == "_") {
         if (i + 1 < n) { return gterr(k, "the `_` wildcard arm must be the last match arm", a); }
-        GKT b = gk_arm_merge(gk_arm_body(k, a, "", exp), acc);
+        if (bound) { return gterr(k, "the `_` wildcard arm takes no bindings", a); }
+        GKT b = gk_arm_merge(gk_arm_body(k, a, [], exp), acc);
         if (b.err != "") { return b; }
         return gt(b.k, b.ty, id);
     }
     Int vi = variant_index_at(vnames, v, 0);
     if (vi < 0) { return gterr(k, "match arm pattern " + v + " is not a variant of this sum type", a); }
     if (csv_has(seen, v)) { return gterr(k, "duplicate match arm for variant " + v, a); }
-    Str payload = vtypes[vi];
-    if (payload == "" && bound) { return gterr(k, "expected => after " + v + " arm pattern", a); }
-    if (payload != "" && !bound) { return gterr(k, "expected ( in " + v + " arm pattern", a); }
-    GKT b = gk_arm_merge(gk_arm_body(k, a, payload, exp), acc);
+    List(Str) pays = sum_payload_of(vtypes[vi]);
+    Int np = pays.len();
+    if (np == 0 && bound) { return gterr(k, "expected => after " + v + " arm pattern", a); }
+    if (np > 0 && !bound) { return gterr(k, "expected ( in " + v + " arm pattern", a); }
+    if (np != nb) { return gterr(k, "the " + v + " arm pattern must bind every payload position: the variant has " + gk_arity(np) + " and the pattern has " + gk_arity(nb), a); }
+    GKT b = gk_arm_merge(gk_arm_body(k, a, pays, exp), acc);
     if (b.err != "") { return b; }
     return gk_arms(b.k, id, i + 1, vnames, vtypes, seen + "," + v, b.ty, exp);
 }
@@ -3567,8 +3629,9 @@ LS lin_fenced(GK k, Int body, LS l, Bool stmt) {
 
 LS lin_arms(GK k, Int id, Int i, LS base, LS acc) {
     if (acc.err != "" || i >= k.g.ns[id].nk) { return acc; }
-    LS arm = lin_expr(k, kg_kid(k.g, kg_kid(k.g, id, i), 0), base);
-    return lin_arms(k, id, i + 1, base, lin_merge(k, base, acc, arm, kg_kid(k.g, id, i)));
+    Int a = kg_kid(k.g, id, i);
+    LS arm = lin_expr(k, kg_kid(k.g, a, k.g.ns[a].nk - 1), base);
+    return lin_arms(k, id, i + 1, base, lin_merge(k, base, acc, arm, a));
 }
 
 LS lin_expr(GK k, Int id, LS l) {
@@ -3597,7 +3660,7 @@ LS lin_expr(GK k, Int id, LS l) {
     if (kd == "match") {
         LS c = lin_expr(k, kg_kid(g, id, 0), l);
         if (c.err != "" || g.ns[id].nk < 2) { return c; }
-        LS first = lin_expr(k, kg_kid(g, kg_kid(g, id, 1), 0), c);
+        LS first = lin_expr(k, kg_kid(g, kg_kid(g, id, 1), g.ns[kg_kid(g, id, 1)].nk - 1), c);
         return lin_arms(k, id, 2, c, first);
     }
     if (kd == "lambda") { return lin_fenced(k, kg_kid(g, id, g.ns[id].nk - 1), l, false); }
@@ -4369,7 +4432,7 @@ Str gk_case_msg(Kg g, Int id) {
     if ((k == "fn" || k == "proto") && !abi && !gk_lower_name(n.text)) { return "function name `" + n.text + "` must start with a lowercase letter; uppercase names are types"; }
     Bool val = k == "param" || k == "bind" || k == "rbind" || k == "for" || k == "lparam" || k == "name" || k == "sfield";
     if (val && n.text != "" && !gk_lower_name(n.text)) { return "value name `" + n.text + "` must start with a lowercase letter; uppercase names are types"; }
-    Bool pat = k == "letpat" || k == "pat" || k == "arm";
+    Bool pat = k == "letpat" || k == "pat";
     if (pat && n.aux != "" && !gk_lower_name(n.aux)) { return "value name `" + n.aux + "` must start with a lowercase letter; uppercase names are types"; }
     return "";
 }

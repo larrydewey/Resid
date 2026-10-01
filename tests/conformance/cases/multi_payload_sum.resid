@@ -1,0 +1,37 @@
+// A sum variant carries zero or more payload types (spec §12): a variant
+// with n payload positions is constructed with n arguments and matched
+// with n bindings, both in order.
+type Shape = Circle(Int) | Rect(Int, Int) | Color(UInt(8), UInt(8), UInt(8)) | Empty;
+
+Int area(Shape s) {
+    return match s {
+        Circle(r) => 3 * r * r,
+        Rect(w, h) => w * h,
+        Color(r, g, b) => i64(r) + i64(g) * 10 + i64(b) * 100,
+        Empty => 0
+    };
+}
+
+Str label(Shape s) {
+    return match s {
+        Circle(r) => f"circle {r}",
+        Rect(w, h) => f"rect {w}x{h}",
+        Color(r, g, b) => f"color {r},{g},{b}",
+        Empty => "empty"
+    };
+}
+
+Int main() {
+    println(f"{area(Circle(2))} {area(Rect(3, 4))} {area(Color(1, 2, 3))} {area(Empty)}");
+    println(f"{label(Circle(2))} {label(Rect(3, 4))} {label(Color(1, 2, 3))} {label(Empty)}");
+    // A pattern binds every position, or none; `_` discards one.
+    Shape a = Rect(6, 7);
+    Int t = match a {
+        Rect(w, _) => w,
+        Circle(_) => 0 - 1,
+        Color(_, _, _) => 0 - 2,
+        Empty => 0 - 3
+    };
+    println(f"{t}");
+    return 0;
+}

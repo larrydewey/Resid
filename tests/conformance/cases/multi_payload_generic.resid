@@ -1,0 +1,44 @@
+// Payload positions are independent: each may be concrete or a type
+// parameter, and a sum's parameters are fixed by all of them at once
+// (spec §12).
+type Dim = { Int w; Int h; };
+type Pair(T) = Both(T, Int) | Left(T) | None2;
+type Tagged(K, V) = Tag(K, V, Int) | Bare(K) | Empty2;
+
+Dim mk(Int a, Int b) { return Dim {.w = a, .h = b}; }
+
+Int left(Pair(Int) p) {
+    return match p {
+        Both(a, b) => a - b,
+        Left(a) => a,
+        None2 => 0
+    };
+}
+
+Str leftS(Pair(Str) p) {
+    return match p {
+        Both(a, b) => a,
+        Left(a) => a + "!",
+        None2 => ""
+    };
+}
+
+Str tag(Tagged(Str, Int) t) {
+    return match t {
+        Tag(k, v, n) => f"{k}={v}#{n}",
+        Bare(k) => k,
+        Empty2 => "-"
+    };
+}
+
+Int main() {
+    println(f"{left(Both(10, 3))} {left(Left(4))} {left(None2)}");
+    println(f"{leftS(Both("s", 1))} {leftS(Left("t"))} {leftS(None2)}");
+    println(f"{tag(Tag("a", 7, 2))} {tag(Bare("b"))} {tag(Empty2)}");
+    // A record and an extra position in one variant.
+    Tagged(Str, Int) t = Tag("k", 1, 9);
+    Str r = match t { Tag(k, v, n) => f"{k}/{v}/{n}", Bare(_) => "b", Empty2 => "-" };
+    println(r);
+    _ = mk(1, 2);
+    return 0;
+}

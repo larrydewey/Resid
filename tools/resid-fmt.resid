@@ -749,15 +749,13 @@ FR fmt_match_arm(Str s, Int pos, Int depth) {
     if (a.kind != "ident") { return FR {.pos = a.pos, .text = "", .err = "match arm pattern must be a variant name or _"}; }
     Tok nxt = lex_tok(s, a.pos);
     if (nxt.text == "(") {
-        Tok nm = lex_tok(s, nxt.pos);
-        if (nm.kind != "ident") { return FR {.pos = nm.pos, .text = "", .err = "expected a binding name in match arm pattern"}; }
-        Tok cl = lex_tok(s, nm.pos);
-        if (cl.text != ")") { return FR {.pos = cl.pos, .text = "", .err = "expected ) in match arm pattern"}; }
-        Tok ar = lex_tok(s, cl.pos);
+        FR bs = fmt_arm_bindings(s, nxt.pos, "");
+        if (bs.err != "") { return bs; }
+        Tok ar = lex_tok(s, bs.pos);
         if (ar.text != "=>") { return FR {.pos = ar.pos, .text = "", .err = "expected => after arm pattern"}; }
         FR body = fmt_expr(s, ar.pos, depth + 1);
         if (body.err != "") { return body; }
-        Str line = indent(depth + 1) + a.text + "(" + nm.text + ") => " + body.text + ",\n";
+        Str line = indent(depth + 1) + a.text + "(" + bs.text + ") => " + body.text + ",\n";
         return FR {.pos = body.pos, .text = line, .err = ""};
     }
     Tok ar2 = lex_tok(s, a.pos);
@@ -766,6 +764,17 @@ FR fmt_match_arm(Str s, Int pos, Int depth) {
     if (body2.err != "") { return body2; }
     Str line2 = indent(depth + 1) + a.text + " => " + body2.text + ",\n";
     return FR {.pos = body2.pos, .text = line2, .err = ""};
+}
+
+// `(n)`, `(n, m)`, ... -> "n, m" — one binding per payload position.
+FR fmt_arm_bindings(Str s, Int pos, Str acc) {
+    Tok nm = lex_tok(s, pos);
+    if (nm.kind != "ident") { return FR {.pos = nm.pos, .text = "", .err = "expected a binding name in match arm pattern"}; }
+    Str acc2 = if (acc == "") { nm.text } else { acc + ", " + nm.text };
+    Tok t = lex_tok(s, nm.pos);
+    if (t.text == ",") { return fmt_arm_bindings(s, t.pos, acc2); }
+    if (t.text == ")") { return FR {.pos = t.pos, .text = acc2, .err = ""}; }
+    return FR {.pos = t.pos, .text = "", .err = "expected , or ) in match arm pattern"};
 }
 
 FR fmt_match_arms(Str s, Int pos, Int depth, Str acc) {
@@ -1021,16 +1030,25 @@ FR fmt_func(Str s, Int pos, Bool pubk, List(Str) docs, Int depth) {
 
 type VER = { Bool ok; Str text; Int pos; };
 
+// A variant: `V` or `V(T1, T2, ... Tn)` — zero or more payload types.
 VER fmt_one_variant(Str s, Int pos) {
     Tok nm = lex_tok(s, pos);
     if (nm.kind != "ident") { return VER {.ok = false, .text = "", .pos = pos}; }
     Tok nxt = lex_tok(s, nm.pos);
     if (nxt.text != "(") { return VER {.ok = true, .text = nm.text, .pos = nm.pos}; }
-    FR pty = fmt_type(s, nxt.pos);
-    if (pty.err != "") { return VER {.ok = false, .text = "", .pos = pos}; }
-    Tok cp = lex_tok(s, pty.pos);
-    if (cp.text != ")") { return VER {.ok = false, .text = "", .pos = pos}; }
-    return VER {.ok = true, .text = nm.text + "(" + pty.text + ")", .pos = cp.pos};
+    FR p = fmt_variant_payload(s, nxt.pos, "");
+    if (p.err != "") { return VER {.ok = false, .text = "", .pos = pos}; }
+    return VER {.ok = true, .text = nm.text + "(" + p.text + ")", .pos = p.pos};
+}
+
+FR fmt_variant_payload(Str s, Int pos, Str acc) {
+    FR pty = fmt_type(s, pos);
+    if (pty.err != "") { return pty; }
+    Str acc2 = if (acc == "") { pty.text } else { acc + ", " + pty.text };
+    Tok t = lex_tok(s, pty.pos);
+    if (t.text == ",") { return fmt_variant_payload(s, t.pos, acc2); }
+    if (t.text == ")") { return FR {.pos = t.pos, .text = acc2, .err = ""}; }
+    return FR {.pos = t.pos, .text = "", .err = "expected , or ) in variant payload"};
 }
 
 // Requires >= 1 `|` to be recognized as a sum type at all — a single bare

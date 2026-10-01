@@ -1,0 +1,6 @@
+// A variant with n payload positions is called with n arguments.
+type Shape = Rect(Int, Int) | Empty;
+Int main() {
+    Shape s = Rect(1);
+    return 0;
+}

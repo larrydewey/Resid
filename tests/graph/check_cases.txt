@@ -431,3 +431,12 @@ type Mt = { Int c; }; Int bad(Mt m) { return 1; } Show(Mt) = bad; Int main() { r
 === verbclash
 error[E0231]: `area` is a verb of behavior Shape; a name is either a verb or a function, not both
 type Sq = { Float side; }; Float area(Sq s) { return s.side * s.side; } behavior Shape(T) { Float area(T s); Float perimeter(T s); } Shape(Sq) = { .area = area, .perimeter = area }; Int main() { return 0; }
+=== multipayload_call
+error[E0001]: type error: variant Rect takes 2 payload positions, but the call passes 1 payload position
+type Sh = Rect(Int, Int) | Em; Int main() { Sh s = Rect(1); return 0; }
+=== multipayload_bind
+error[E0001]: type error: the Rect arm pattern must bind every payload position: the variant has 2 payload positions and the pattern has 1 payload position
+type Sh = Rect(Int, Int) | Em; Int f(Sh s) { return match s { Rect(w) => w, Em => 0 }; } Int main() { return f(Em); }
+=== multipayload_wildbind
+error[E0001]: type error: the `_` wildcard arm takes no bindings
+type Sh = Rect(Int, Int) | Em; Int f(Sh s) { return match s { Rect(w, h) => w, _(x) => 0 }; } Int main() { return f(Em); }

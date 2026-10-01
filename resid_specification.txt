@@ -852,8 +852,29 @@ numbers, Bool and Str cannot take a Show instance.
 
 Product:  type Point = { x: Int, y: Int };
 Sum:      type Option(T) = Some(T) | None;
+          type Shape = Circle(Int) | Rect(Int, Int) | Empty;
 Generic:  type Pair(T) = { T a; T b; };
           type Entry(K, V) = { K key; V value; Int hits; };
+
+A sum type is one or more variants separated by `|`. A variant
+carries zero or more payload types: `Empty` carries none,
+`Circle(Int)` carries one, and `Rect(Int, Int)` carries two. Each
+payload position is an ordinary type, so it may be concrete or a
+type parameter, and the positions are independent — `Cell(T, Int)`
+and `Cell(List(T), T)` are both well-formed. A payload list is not
+a tuple type; it is the variant's own ordered set of carried
+values, so the n positions of `Rect(Int, Int)` are read and
+matched by position and are unrelated to each other's types.
+
+A variant with a payload is constructed by calling it with one
+argument per payload position, in order: `Rect(3, 4)`, and a
+variant with no payload is written bare: `Empty`. Supplying the
+wrong number of arguments is an arity error.
+
+A pattern for a variant binds one name per payload position, or
+none at all: `Rect(w, h)` or `Empty`. A partial list is an error,
+so a pattern always takes the whole payload; to ignore a value,
+bind it to `_`. The rules are in §13 and the grammar in §31.
 
 Type parameters are single uppercase letters (§7). In a
 width position (`Int(N)`, `UInt(N)`, `Float(N)`) a
@@ -888,6 +909,22 @@ types whose storage is statically bounded (see §44).
       Some(x) => expression,
       None    => expression
   }
+
+A variant pattern takes one binding per payload position, in
+order, or none when the variant has no payload:
+
+  match shape {
+      Circle(r)     => ...,
+      Rect(w, h)    => ...,
+      Small         => ...,
+      Tagged(k, v)  => ...
+  }
+
+A binding list is all-or-nothing: `Rect(w)` against a two-payload
+`Rect` is an error, as is `Some()` or a bare `Some`. To discard a
+value, bind it to `_` (`Rect(_, h)`), which is not a binding and
+needs no name. The bindings of one arm shadow nothing and are
+visible only in that arm's body.
 
 Irrefutable destructuring:
 
@@ -1518,13 +1555,47 @@ Numeric operators obey the interoperability rules of §6.
 
   parameter    ::= type identifier [ "=" expression ]
 
-  type-def     ::= "type" identifier "=" type-body ";"
+  type-def     ::= "type" identifier [ "(" type-param-list ")" ]
+                   "=" type-body ";"
+
+  // The body of a type declaration is a product (a record), a sum (one
+  // or more variants), a constraint, or a single type (an alias).
+  type-body    ::= product-body | sum-body | constraint-body | type
+
+  product-body ::= "{" product-field { product-field } "}"
+  product-field ::= type identifier ";"
+
+  // A sum type's variant payload is ZERO or more types: a bare `V` carries
+  // none, `V(T)` carries one, and `V(T1, T2, ... Tn)` carries n. Every
+  // payload position is an ordinary `type`, so it may be concrete
+  // (`Int`, `UInt(8)`, `List(Str)`) or a generic parameter (`T`), and the
+  // positions are independent — `V(T, Int)` and `V(List(T), T)` are
+  // well-formed. There is no tuple type, so a variant with n > 1 payload
+  // is the way to carry several values of unrelated types as one.
+  sum-body     ::= variant { "|" variant }
+  variant      ::= identifier [ "(" type { "," type } ")" ]
+
+  // A constraint body refines one type with a predicate, written either
+  // after brackets or after `where`.
+  constraint-body ::= type [ "[" expression "]" | "where" expression ]
+
+  type-param-list ::= type-param { "," type-param }
+  type-param  ::= identifier | "rt" identifier
 
   spawn-expression ::= "spawn" "(" capability-list ")"
                        compound-statement
 
   match-expression ::= "match" expression
                        "{" match-arm { "," match-arm } "}"
+
+  // An arm pattern is a variant with a binding for EVERY payload position,
+  // or with none: `V(a, b, c)` or `V`. A partial list (`V(a)` on a
+  // two-payload `V`) is an error, so a pattern says which variant it is
+  // and never discards part of it. `_` is the wildcard arm and must be
+  // last; the arms must otherwise cover every variant.
+  match-arm    ::= pattern "=>" expression
+  pattern      ::= variant-pattern | "_"
+  variant-pattern ::= identifier [ "(" identifier { "," identifier } ")" ]
 
   for-in-statement ::= "for" "(" type identifier "in" expression ")"
                        statement

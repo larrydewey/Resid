@@ -192,7 +192,7 @@ Bool gx_uses_all(Kg g, List(Int) ids, Str name, Int i) {
 Bool gx_uses(Kg g, Int id, Str name) {
     KN n = g.ns[id];
     if (n.kind == "fstr") { return str_contains(str_sb_finish(kg_pr(g, id, str_sb_new())), name); }
-    if (gx_names(n, name)) { return true; }
+    if (gx_names(g, id, n, name)) { return true; }
     return gx_uses_kids(g, id, 0, name);
 }
 
@@ -203,18 +203,26 @@ Bool gx_uses_kids(Kg g, Int id, Int i, Str name) {
 }
 
 // Identifier tokens a node prints itself (not its kids).
-Bool gx_names(KN n, Str name) {
+Bool gx_names(Kg g, Int id, KN n, Str name) {
     Str k = n.kind;
     if (k == "lit") { return n.aux == "bool" && n.text == name; }
     if (k == "ty") { return rd_uses(n.text, name); }
     if (k == "spawn") { return name == "spawn" || rd_uses(n.aux, name); }
     if (k == "rt") { return name == "rt"; }
-    if (k == "arm" || k == "pat" || k == "letpat") { return n.text == name || n.aux == name; }
+    if (k == "pat" || k == "letpat") { return n.text == name || n.aux == name; }
+    if (k == "arm") { return n.text == name || gx_arm_name(g, id, name, 0) > 0; }
     if (k == "for") { return n.text == name || name == "in"; }
     if (k == "bind" || k == "rbind") { return n.text == name || (n.aux != "" && name == "residual"); }
     if (k == "ref" || k == "name" || k == "lparam" || k == "param" || k == "call" || k == "mcall" || k == "field") { return n.text == name; }
     if (k == "named" || k == "finit" || k == "struct" || k == "destr") { return n.text == name; }
     return false;
+}
+
+// Whether an arm's pattern names include `name` (the kids before its body).
+Int gx_arm_name(Kg g, Int id, Str name, Int i) {
+    if (i >= g.ns[id].nk - 1) { return 0; }
+    Int a = if (g.ns[kg_kid(g, id, i)].text == name) { 1 } else { 0 };
+    return a + gx_arm_name(g, id, name, i + 1);
 }
 
 // A node printed, for the token-level pattern helpers shared with
@@ -761,21 +769,24 @@ GV gx_match(GXT ft, Int id, RdE env, GS st) {
     return none2;
 }
 
-// One arm; known only when it is the one the scrutinee selects.
+// One arm; known only when it is the one the scrutinee selects. An arm's
+// kids are its binding names (one per payload position) then its body.
 GV gx_arm(GXT ft, Int arm, Bool issome, Str payload, Str et, RdE env, GS st) {
     KN an = st.g.ns[arm];
-    Int body = gx_kid(st, arm, 0);
+    Int nb = an.nk - 1;
+    Str bn = if (nb > 0) { st.g.ns[gx_kid(st, arm, 0)].text } else { "" };
+    Int body = gx_kid(st, arm, nb);
     if (an.text == "Some") {
-        if (an.aux == "") { return gx_badv(st); }
+        if (bn == "") { return gx_badv(st); }
         Bool usable = issome && et != "_";
-        RdE env2 = if (usable) { rd_env_add(env, an.aux, payload, et) } else { rd_env_add(env, an.aux, "", "") };
+        RdE env2 = if (usable) { rd_env_add(env, bn, payload, et) } else { rd_env_add(env, bn, "", "") };
         GV v = gx_expr(ft, body, env2, st);
         if (v.bad) { return gx_badv(v.st); }
         if (!usable) { return gx_unk(v.r, v.ch, v.st); }
         return v;
     }
     if (an.text == "None") {
-        if (an.aux != "") { return gx_badv(st); }
+        if (nb > 0) { return gx_badv(st); }
         GV v2 = gx_expr(ft, body, env, st);
         if (v2.bad) { return gx_badv(v2.st); }
         if (issome) { return gx_unk(v2.r, v2.ch, v2.st); }
@@ -1540,13 +1551,17 @@ type GSC = { Int uses; Int oks; Int sites; Bool bad; };
 
 GSC gs_c(Int uses, Int oks, Int sites, Bool bad) { return GSC {.uses = uses, .oks = oks, .sites = sites, .bad = bad}; }
 
-Int gs_hits(KN n, Str p) {
+Int gs_hits(Kg g, Int id, KN n, Str p) {
     Str k = n.kind;
     if (k == "ref" || k == "call" || k == "named" || k == "struct" || k == "destr" || k == "name" || k == "lparam" || k == "param" || k == "for") { return if (n.text == p) { 1 } else { 0 }; }
     if (k == "bind" || k == "rbind") { return if (n.text == p) { 1 } else { 0 }; }
-    if (k == "arm" || k == "pat" || k == "letpat") {
+    if (k == "pat" || k == "letpat") {
         Int a = if (n.text == p) { 1 } else { 0 };
         return if (n.aux == p) { a + 1 } else { a };
+    }
+    if (k == "arm") {
+        Int a = if (n.text == p) { 1 } else { 0 };
+        return a + gx_arm_name(g, id, p, 0);
     }
     if (k == "lit") { return if (n.aux == "bool" && n.text == p) { 1 } else { 0 }; }
     if (k == "ty") { return if (rd_uses(n.text, p)) { 1 } else { 0 }; }
@@ -1561,7 +1576,7 @@ GSC gs_count(Kg g, Int id, Str p, GSC acc) {
         if (str_contains(str_sb_finish(kg_pr(g, id, str_sb_new())), p)) { return gs_c(acc.uses, acc.oks, acc.sites, true); }
         return acc;
     }
-    return gs_count_kids(g, id, 0, p, gs_c(acc.uses + gs_hits(n, p), acc.oks, acc.sites, acc.bad));
+    return gs_count_kids(g, id, 0, p, gs_c(acc.uses + gs_hits(g, id, n, p), acc.oks, acc.sites, acc.bad));
 }
 
 GSC gs_count_kids(Kg g, Int id, Int i, Str p, GSC acc) {

@@ -1179,6 +1179,13 @@ List(Str) ty_args_at_cg(Str t, Int i, Int end, List(Str) acc) {
     return ty_args_at_cg(t, e + 1, end, acc2);
 }
 
+// The payload types of one variant, from its entry in the types lane.
+List(Str) sum_payload_of_cg(Str entry) {
+    List(Str) none = [];
+    if (entry == "") { return none; }
+    return ty_args_at_cg(entry, 0, str_len(entry), none);
+}
+
 Str ty_subst_at_cg(Str t, Int i, Int n, List(Str) params, List(Str) args, Str acc) {
     if (i >= n) { return acc; }
     Int c = str_char_at(t, i);
@@ -1245,18 +1252,21 @@ VOwnCg find_variant_cg(Funcs fs, Str vname) {
     return find_variant_at_cg(fs, vname, 0);
 }
 
-// A variant whose declared payload is a record stores the record's fields
-// inline as its own slots (one allocation instead of a box plus a separate
-// record), and a match binds the payload to that slot array, which has
-// exactly a record's layout. Decided from the declaration alone, so every
-// construction and every match of the variant agree. Returns the field
-// count, or -1 for a variant that keeps the one-slot form.
+// A variant whose declared payload is a single record stores the record's
+// fields inline as its own slots (one allocation instead of a box plus a
+// separate record), and a match binds the payload to that slot array,
+// which has exactly a record's layout. Decided from the declaration
+// alone, so every construction and every match of the variant agree.
+// A variant with zero or several payload positions keeps the general
+// slot-per-position form. Returns the field count, or -1.
 Int sum_inline_fields(Funcs fs, Str sumty, Int vidx) {
     Int sidx = sumtype_index_cg(fs, sumty);
     if (sidx < 0 || vidx < 0) { return -1; }
     List(Str) vt = sumv_types_cg(fs.suv[sidx]);
     if (vidx >= vt.len()) { return -1; }
-    Int si = struct_index(fs, vt[vidx]);
+    List(Str) pays = sum_payload_of_cg(vt[vidx]);
+    if (pays.len() != 1) { return -1; }
+    Int si = struct_index(fs, pays[0]);
     if (si < 0) { return -1; }
     List(Str) stfl = fs.stf;
     return struct_nfields(stfl[si]);
@@ -3912,9 +3922,9 @@ GT cg_inline_payload(GT sc, Str ety, GT c) {
     return GT {.pos = sc.pos, .val = p2, .ty = ety, .cnt = 0, .err = "", .glines = c.glines, .lines = z, .tmp = t2, .lbl = c.lbl, .tail = false};
 }
 
-// Unbox a tag-1 Option's single payload slot into a usable SSA register.
+// Unbox payload slot `slot` of a tagged box into a usable SSA register.
 // Scalars call resid_unbox_*; Str/composite payloads pass through as-is.
-GT cg_match_payload(GT sc, Str ety, GT c) {
+GT cg_match_payload(GT sc, Str ety, Int slot, GT c) {
     Int t1 = c.tmp + 1;
     Int t2 = c.tmp + 2;
     Int t3 = c.tmp + 3;
@@ -3926,7 +3936,7 @@ GT cg_match_payload(GT sc, Str ety, GT c) {
     List(Str) z0 = c.lines;
     List(Str) z1 = z0.concat([p1 + " = getelementptr {i32, i32, ptr}, ptr " + sc.val + ", i32 1"]);
     List(Str) z2 = z1.concat([p2 + " = getelementptr i8, ptr " + p1 + ", i64 0"]);
-    List(Str) z3 = z2.concat([p3 + " = getelementptr ptr, ptr " + p2 + ", i32 0"]);
+    List(Str) z3 = z2.concat([p3 + f" = getelementptr ptr, ptr " + p2 + f", i32 {slot}"]);
     List(Str) z4 = z3.concat([p4 + " = load ptr, ptr " + p3]);
     Str typ = num_norm_cg(ety);
     if (typ == "Int" || typ == "Int(64)" || typ == "UInt" || typ == "UInt(64)") {
@@ -4123,7 +4133,7 @@ type EnvGT = { List(Str) env; GT g; };
 // Bind a let head's payload at the start of the block it guards.
 EnvGT let_bind(LetHead lh, LetCond lc, List(Str) env, ST g) {
     GT c0 = gt_of_st(g);
-    GT pv = cg_match_payload(lc.sc, lc.ety, c0);
+    GT pv = cg_match_payload(lc.sc, lc.ety, 0, c0);
     List(Str) env2 = env_add(env, lh.name + ":" + pv.val + ":" + lc.ety);
     return EnvGT {.env = env2, .g = pv};
 }
@@ -7334,7 +7344,10 @@ Str ceil_enter(Str outer, Str caps) {
 
 type VLRes = { Bool ok; Str vnames; Str vtypes; Int pos; };
 
-// One variant: bare `Ident` (no payload) or `Ident(Type)`. `ok=false`
+// One variant: bare `Ident` (no payload) or `Ident(T1, ... Tn)`. A
+// variant carries zero or more payload types (spec §12); they are kept
+// as one ","-joined string in `vtypes`, which is unambiguous because
+// every type's own commas sit inside its parentheses. `ok=false`
 // (not a fatal error, just "not a variant here") lets the caller fall
 // back to the existing Base/Constraint type-declaration path.
 VLRes parse_one_variant(Str s, Int pos) {
@@ -7344,11 +7357,22 @@ VLRes parse_one_variant(Str s, Int pos) {
     if (nxt.text != "(") {
         return VLRes {.ok = true, .vnames = nm.text, .vtypes = "", .pos = nm.pos};
     }
-    PRes pty = parse_type(s, nxt.pos);
+    PRes pty = parse_variant_payload(s, nxt.pos, "");
     if (pty.err != "") { return VLRes {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
-    Tok cp = lex_tok(s, pty.pos);
-    if (cp.text != ")") { return VLRes {.ok = false, .vnames = "", .vtypes = "", .pos = pos}; }
-    return VLRes {.ok = true, .vnames = nm.text, .vtypes = pty.ty, .pos = cp.pos};
+    return VLRes {.ok = true, .vnames = nm.text, .vtypes = pty.ty, .pos = pty.pos};
+}
+
+// `(T1, T2, ... Tn)` -> "T1, T2, ... Tn", consuming the closing paren.
+// Each position is an ordinary `type`, so a nested `List(Int, 3)` is one
+// payload, not two.
+PRes parse_variant_payload(Str s, Int pos, Str acc) {
+    PRes pty = parse_type(s, pos);
+    if (pty.err != "") { return pty; }
+    Str acc2 = if (acc == "") { pty.ty } else { acc + ", " + pty.ty };
+    Tok t = lex_tok(s, pty.pos);
+    if (t.text == ",") { return parse_variant_payload(s, t.pos, acc2); }
+    if (t.text == ")") { return PRes {.pos = t.pos, .ty = acc2, .err = ""}; }
+    return PRes {.pos = t.pos, .ty = "", .err = "expected, or ) in variant payload"};
 }
 
 // `Variant1(T1) | Variant2 | ... ;` — requires at least one `|` (i.e. >= 2
@@ -7422,6 +7446,23 @@ pub List(Str) ty_args_at(Str t, Int i, Int end, List(Str) acc) {
     Int e = if (e0 > end) { end } else { e0 };
     List(Str) acc2 = acc.concat([str_trim(str_slice(t, i, e))]);
     return ty_args_at(t, e + 1, end, acc2);
+}
+
+// The payload types of one variant, from its entry in the types lane.
+// "" is a variant with no payload; "Int, Int" is two, and "List(Int, 3)"
+// is one, because a type's own commas are inside its parentheses.
+pub List(Str) sum_payload_of(Str entry) {
+    List(Str) none = [];
+    if (entry == "") { return none; }
+    return ty_args_at(entry, 0, str_len(entry), none);
+}
+
+// Every payload type a sum carries, flattened: one entry per payload
+// position, in variant order. A payload-free variant contributes
+// nothing, so the result is the types the sum actually holds.
+pub List(Str) sum_payloads_flat(List(Str) entries, Int i, List(Str) acc) {
+    if (i >= entries.len()) { return acc; }
+    return sum_payloads_flat(entries, i + 1, acc.concat(sum_payload_of(entries[i])));
 }
 
 // Replace each whole-word parameter name in `t` with its argument.

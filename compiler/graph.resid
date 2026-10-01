@@ -421,28 +421,40 @@ KP kg_ifx(Str s, Kg g, Int pos, Int sp) {
     return kg_add(ec.g, "ifx", "", "", [c.id, tb.id, eb.id], sp, ec.pos);
 }
 
-// Match arms after `{`: `_ => e`, `V => e`, `V(n) => e`, comma-separated.
+// Match arms after `{`: `_ => e`, `V => e`, `V(n) => e`,
+// `V(n, m) => e`, comma-separated. A variant with n payload positions
+// takes n bindings (spec §13). Each binding is its own `name` node, so
+// an arm carries the same kids shape as a `destr`: the names first, the
+// body last. A bare variant has no name kids.
 KL kg_arms(Str s, Kg g, Int pos, List(Int) acc) {
     Tok a = lex_tok(s, pos);
     if (a.text == "}") { return KL {.g = g, .ids = acc, .pos = a.pos, .err = ""}; }
     if (a.kind != "ident") { return kl_fail(g, a.pos, "match arm pattern must be a variant name or _"); }
     Tok o = lex_tok(s, a.pos);
-    Bool bound = o.text == "(";
-    Tok nm = lex_tok(s, o.pos);
-    Tok cp = lex_tok(s, nm.pos);
-    Int apos = if (bound) { cp.pos } else { a.pos };
-    Str bname = if (bound) { nm.text } else { "" };
-    if (bound && cp.text != ")") { return kl_fail(g, cp.pos, "expected ) in match arm pattern"); }
-    Tok ar = lex_tok(s, apos);
-    if (ar.text != "=>") { return kl_fail(g, ar.pos, "expected => in match arm"); }
-    KP body = kg_expr(s, g, ar.pos);
+    KL names = if (o.text == "(") { kg_arm_names(s, g, o.pos, ListBuf()) } else { KL {.g = g, .ids = [], .pos = a.pos, .err = ""} };
+    if (names.err != "") { return kl_fail(names.g, names.pos, names.err); }
+    Tok ar = lex_tok(s, names.pos);
+    if (ar.text != "=>") { return kl_fail(names.g, ar.pos, "expected => in match arm"); }
+    KP body = kg_expr(s, names.g, ar.pos);
     if (body.err != "") { return kl_fail(body.g, body.pos, body.err); }
-    KP arm = kg_add(body.g, "arm", a.text, bname, [body.id], kg_tstart(a), body.pos);
+    KP arm = kg_add(body.g, "arm", a.text, "", names.ids.concat([body.id]), kg_tstart(a), body.pos);
     List(Int) acc2 = acc.concat([arm.id]);
     Tok sep = lex_tok(s, body.pos);
     if (sep.text == ",") { return kg_arms(s, arm.g, sep.pos, acc2); }
     if (sep.text == "}") { return KL {.g = arm.g, .ids = acc2, .pos = sep.pos, .err = ""}; }
     return kl_fail(arm.g, sep.pos, "expected , or } after match arm");
+}
+
+// `(n)`, `(n, m)`, ... -> one `name` node per binding, consuming the
+// closing paren. A name may be `_`, which binds nothing.
+KL kg_arm_names(Str s, Kg g, Int pos, ListBuf(Int) acc) {
+    Tok nm = lex_tok(s, pos);
+    if (nm.kind != "ident") { return kl_fail_b(acc, g, nm.pos, "expected a binding name in match arm pattern"); }
+    KP nd = kg_leaf(g, "name", nm);
+    Tok t = lex_tok(s, nm.pos);
+    if (t.text == ",") { return kg_arm_names(s, nd.g, t.pos, acc.push(nd.id)); }
+    if (t.text == ")") { return KL {.g = nd.g, .ids = acc.push(nd.id).finish(), .pos = t.pos, .err = ""}; }
+    return kl_fail_b(acc, nd.g, t.pos, "expected , or ) in match arm pattern");
 }
 
 KP kg_match(Str s, Kg g, Int pos, Int sp) {
@@ -1071,6 +1083,14 @@ Str kg_pr_list(Kg g, Int id, Int from, Int to, Str sep, Str sb) {
 
 Str kg_pr_all(Kg g, Int id, Str sep, Str sb) { return kg_pr_list(g, id, 0, g.ns[id].nk, sep, sb); }
 
+// An arm or letpat pattern: the variant name, then its bindings in
+// parens when the kids from..to hold any.
+pub Str kg_pr_pat(Kg g, Int id, Int from, Int to) {
+    Str t = g.ns[id].text;
+    if (from >= to) { return t; }
+    return t + "(" + str_sb_finish(kg_pr_list(g, id, from, to, ", ", str_sb_new())) + ")";
+}
+
 Str kg_pr_k(Kg g, Int id, Int i, Str sb) { return kg_pr(g, kg_kid(g, id, i), sb); }
 
 Str kg_ap(Str sb, Str a) { return str_sb_append(sb, a); }
@@ -1248,8 +1268,8 @@ Str kg_pr_expr(Kg g, Int id, Str k, Str sb) {
     if (k == "bexpr") { return kg_ap(kg_pr_bexpr(g, id, 0, sb), g.ns[id].aux); }
     if (k == "match") { return kg_ap(kg_pr_list(g, id, 1, g.ns[id].nk, ",\n", kg_ap(kg_pr_k(g, id, 0, kg_ap(sb, "match ")), " {\n")), "\n}"); }
     if (k == "arm") {
-        Str pat = if (g.ns[id].aux == "") { g.ns[id].text } else { g.ns[id].text + "(" + g.ns[id].aux + ")" };
-        return kg_pr_k(g, id, 0, kg_ap(sb, pat + " => "));
+        Str pat = kg_pr_pat(g, id, 0, g.ns[id].nk - 1);
+        return kg_pr_k(g, id, g.ns[id].nk - 1, kg_ap(sb, pat + " => "));
     }
     if (k == "lambda") {
         Int n = g.ns[id].nk;

@@ -1,0 +1,1 @@
+error[E0001]: type error: the Rect arm pattern must bind every payload position: the variant has 2 payload positions and the pattern has 1 payload position

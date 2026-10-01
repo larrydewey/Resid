@@ -1,0 +1,9 @@
+// A pattern binds every payload position, or none.
+type Shape = Rect(Int, Int) | Empty;
+Int f(Shape s) {
+    return match s {
+        Rect(w) => w,
+        Empty => 0
+    };
+}
+Int main() { return f(Empty); }
