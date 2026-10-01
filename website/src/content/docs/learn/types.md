@@ -90,20 +90,20 @@ Int main() {
 A constraint type is a base type plus a predicate over `value`:
 
 ```resid
-type Percent = Int[value >= 0 && value <= 100];
+type Percent = Float[value >= 0 && value <= 1];
 type Even = Int where value % 2 == 0;
 
 @requires(args)
 Int main() {
-    Percent p = 42;              // checked while compiling
+    Percent p = 0.42;            // checked while compiling
     Even e = args.count() * 2;   // checked when bound, at run time
-    println(f"{p} {e}");
+    println(f"{p:percent} {e}");
     return 0;
 }
 ```
 
 ```text title="Output"
-42 2
+42% 2
 ```
 
 A known value that breaks the constraint is a compile-time error (`E0301`);

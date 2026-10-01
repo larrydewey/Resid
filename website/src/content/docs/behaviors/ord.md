@@ -33,6 +33,11 @@ An `Ord(T)` instance is a complete record of three verbs: `compare`
 orders two values, `least` returns the lesser of two, and `greatest`
 returns the greater of two. The `sort` function uses `compare`.
 
+`least` and `greatest` are reached by name, so a `T` of your own never
+collides with the `min(a, b)` and `max(a, b)` builtins, which want
+numbers, or with `Bounded(T)`'s `x.min()` and `x.max()`, which take no
+argument at all (see [Generic verbs](/Resid/behaviors/generic-verbs/)).
+
 ```resid
 type Version = { Int major; Int minor; };
 
@@ -74,6 +79,8 @@ type City = { Str name; Int population; };
 
 Int by_population(City a, City b) { return a.population - b.population; }
 Int by_name_length(City a, City b) { return str_len(a.name) - str_len(b.name); }
+City lo(City a, City b) { return if (by_population(a, b) <= 0) { a } else { b }; }
+City hi(City a, City b) { return if (by_population(a, b) >= 0) { a } else { b }; }
 Ord(City) = { .compare = by_population, .least = lo, .greatest = hi };
 
 Int main() {

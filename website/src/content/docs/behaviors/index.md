@@ -66,6 +66,7 @@ rules as [your own](/Resid/behaviors/defining/):
 behavior Eq(T)        { Bool eq(T a, T b); }
 behavior Ord(T)       { Int compare(T a, T b); T least(T a, T b); T greatest(T a, T b); }
 behavior Hash(T)      { Int hash(T x); }
+behavior Bounded(T)   { T min(); T max(); }
 behavior Show(T)      { Str show(T x); }
 behavior Serialize(T) { Str serialize(T x); }
 behavior Allocator(T) { T allocate(); }
@@ -73,10 +74,11 @@ behavior Allocator(T) { T allocate(); }
 
 | Behavior | Used by |
 |---|---|
-| `Ord(T)` | `sort`, `Reverse`, `<` `<=` `>` `>=`, the verb `compare` |
+| `Ord(T)` | `sort`, `Reverse`, `<` `<=` `>` `>=`, the verbs `compare`, `least`, `greatest` |
 | `Show(T)` | f-string holes, including inside records, lists and options; the verb `show` |
 | `Eq(T)` | `==` and `!=` on types without a built-in equality; the verb `eq` |
 | `Hash(T)` | the verb `hash` |
+| `Bounded(T)` | `x.min()` and `x.max()`, the type's lowest and highest value; declared for `Bool`, `Int(N)` and `UInt(N)` |
 | `Serialize(T)` | the verb `serialize` |
 | `Allocator(T)` | the verb `allocate` |
 

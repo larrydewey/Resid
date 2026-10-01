@@ -70,3 +70,10 @@ is NaN.
 Every width of `Int`, `UInt`, `Float` and `Dec` has built-in `Eq`, `Ord`
 and `Hash`, instantiated by the compiler for the concrete width. You never
 declare per-width instances.
+
+`Bool`, `Int(N)` and `UInt(N)` also have a built-in `Bounded(T)`, so
+`x.min()` and `x.max()` are the two's complement bounds and a bare
+`max()` takes the type from its expected type (`Int(8) top = max();`).
+`min(a, b)` and `max(a, b)` with two arguments are the numeric builtins
+above; a `T` of your own orders two values with `Ord`'s
+`a.least(b)` and `a.greatest(b)` instead.

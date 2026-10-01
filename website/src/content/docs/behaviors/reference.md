@@ -40,7 +40,11 @@ Name(Type, ...) = { .verb = function, ... };      // several verbs
 |---|---|---|
 | `Eq(T)` | `eq` | `Bool f(T a, T b)` |
 | `Ord(T)` | `compare` | `Int f(T a, T b)`: negative, zero or positive |
+| `Ord(T)` | `least` | `T f(T a, T b)`: the lesser of the two |
+| `Ord(T)` | `greatest` | `T f(T a, T b)`: the greater of the two |
 | `Hash(T)` | `hash` | `Int f(T x)` |
+| `Bounded(T)` | `min` | `T f()`: the type's lowest value |
+| `Bounded(T)` | `max` | `T f()`: the type's highest value |
 | `Show(T)` | `show` | `Str f(T x)` |
 | `Serialize(T)` | `serialize` | `Str f(T x)` |
 | `Allocator(T)` | `allocate` | `T f()` |
